@@ -60,6 +60,8 @@ type EncodeGroupConcat struct {
 	Groups         int
 }
 
+const argName = "group_concat"
+
 func (m *EncodeGroupConcat) MarshalBinary() ([]byte, error) {
 	return m.Marshal()
 }
@@ -403,6 +405,8 @@ func VectorToString(vec *vector.Vector, rowIndex int) (string, error) {
 			return "1", nil
 		}
 		return "0", nil
+	case types.T_bit:
+		return fmt.Sprintf("%v", vector.GetFixedAt[uint64](vec, rowIndex)), nil
 	case types.T_int8:
 		return fmt.Sprintf("%v", vector.GetFixedAt[int8](vec, rowIndex)), nil
 	case types.T_int16:

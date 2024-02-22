@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
+	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/prashantv/gostub"
@@ -127,7 +128,7 @@ func Test_gettingInfo(t *testing.T) {
 	requestMultipleCnStubs := gostub.Stub(&requestMultipleCn,
 		func(ctx context.Context,
 			nodes []string,
-			qs queryservice.QueryService,
+			qt qclient.QueryClient,
 			genRequest func() *query.Request,
 			handleValidResponse func(string, *query.Response),
 			handleInvalidResponse func(string)) error {
@@ -313,7 +314,7 @@ func Test_gettingInfo(t *testing.T) {
 						"hit_ratio",
 					},
 					Params:    nil,
-					Name:      "",
+					FuncName:  "",
 					retSchema: nil,
 				},
 			},
@@ -368,7 +369,7 @@ func Test_gettingInfo(t *testing.T) {
 						"user_txn",
 					},
 					Params:    nil,
-					Name:      "",
+					FuncName:  "",
 					retSchema: nil,
 				},
 			},
@@ -421,7 +422,7 @@ func Test_gettingInfo(t *testing.T) {
 						"lock_mode",
 					},
 					Params:    nil,
-					Name:      "",
+					FuncName:  "",
 					retSchema: nil,
 				},
 			},
@@ -581,7 +582,7 @@ func Test_moConfigurationsCall(t *testing.T) {
 						"default_value",
 					},
 					Params:    nil,
-					Name:      "",
+					FuncName:  "",
 					retSchema: nil,
 				},
 			},

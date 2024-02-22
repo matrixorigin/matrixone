@@ -15,6 +15,7 @@
 package insert
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -43,20 +44,42 @@ type Argument struct {
 	ToWriteS3    bool // mark if this insert's target is S3 or not.
 	InsertCtx    *InsertCtx
 
-	info     *vm.OperatorInfo
-	children []vm.Operator
+	vm.OperatorBase
 }
 
-func (arg *Argument) SetInfo(info *vm.OperatorInfo) {
-	arg.info = info
+func (arg *Argument) GetOperatorBase() *vm.OperatorBase {
+	return &arg.OperatorBase
 }
 
-func (arg *Argument) AppendChild(child vm.Operator) {
-	arg.children = append(arg.children, child)
+func init() {
+	reuse.CreatePool[Argument](
+		func() *Argument {
+			return &Argument{}
+		},
+		func(a *Argument) {
+			*a = Argument{}
+		},
+		reuse.DefaultOptions[Argument]().
+			WithEnableChecker(),
+	)
+}
+
+func (arg Argument) TypeName() string {
+	return argName
+}
+
+func NewArgument() *Argument {
+	return reuse.Alloc[Argument](nil)
+}
+
+func (arg *Argument) Release() {
+	if arg != nil {
+		reuse.Free[Argument](arg, nil)
+	}
 }
 
 type InsertCtx struct {
-	//insert data into Rel.
+	// insert data into Rel.
 	Rel                   engine.Relation
 	Ref                   *plan.ObjectRef
 	AddAffectedRows       bool

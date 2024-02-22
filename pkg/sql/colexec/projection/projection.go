@@ -25,9 +25,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+const argName = "projection"
+
 func (arg *Argument) String(buf *bytes.Buffer) {
+	buf.WriteString(argName)
 	n := arg
-	buf.WriteString("projection(")
+	buf.WriteString(": projection(")
 	for i, e := range n.Es {
 		if i > 0 {
 			buf.WriteString(",")
@@ -55,12 +58,12 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	result, err := arg.children[0].Call(proc)
+	result, err := arg.GetChildren(0).Call(proc)
 	if err != nil {
 		return result, err
 	}
 
-	anal := proc.GetAnalyze(arg.info.Idx, arg.info.ParallelIdx, arg.info.ParallelMajor)
+	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
 	anal.Start()
 	defer anal.Stop()
 
@@ -68,7 +71,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		return result, nil
 	}
 	bat := result.Batch
-	anal.Input(bat, arg.info.IsFirst)
+	anal.Input(bat, arg.GetIsFirst())
 
 	if arg.buf != nil {
 		proc.PutBatch(arg.buf)
@@ -94,7 +97,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	anal.Alloc(int64(newAlloc))
 	arg.buf.SetRowCount(bat.RowCount())
 
-	anal.Output(arg.buf, arg.info.IsLast)
+	anal.Output(arg.buf, arg.GetIsLast())
 	result.Batch = arg.buf
 	return result, nil
 }

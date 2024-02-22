@@ -16,12 +16,10 @@ package catalog
 
 import (
 	"strings"
-	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
@@ -35,17 +33,42 @@ const (
 
 	// MOAutoIncrTable mo auto increment table name
 	MOAutoIncrTable = "mo_increment_columns"
+	// TableTailAttr are attrs in table tail
+	TableTailAttrCommitTs = "__mo_%1_commit_time"
+	TableTailAttrAborted  = "__mo_%1_aborted"
+	TableTailAttrPKVal    = "__mo_%1_pk_val"
+
+	// MOVersionTable mo version table. This table records information about the
+	// versions of the MO cluster that have been upgraded. In other words, you can
+	// query this table to find out all the versions of the MO cluster that have
+	// been running.
+	MOVersionTable = "mo_version"
+	// MOUpgradeTable mo upgrade table. This table records the MO cluster version
+	// upgrade paths, including upgrade paths for intermediate versions that are
+	// upgraded across versions.
+	MOUpgradeTable = "mo_upgrade"
+	// MOUpgradeTenantTable MO is a cloud-native, multi-tenant database, and when
+	// versions are upgraded, it may be necessary to upgrade all tenant-related metadata.
+	// This table is used to record all the tenant records that need to be upgraded
+	MOUpgradeTenantTable = "mo_upgrade_tenant"
 )
 
 var InternalColumns = map[string]int8{
-	Row_ID:                   0,
-	PrefixPriColName:         0,
-	PrefixCBColName:          0,
-	PrefixIndexTableName:     0,
-	CPrimaryKeyColName:       0,
-	FakePrimaryKeyColName:    0,
-	IndexTableIndexColName:   0,
-	IndexTablePrimaryColName: 0,
+	Row_ID:                                     0,
+	PrefixPriColName:                           0,
+	PrefixCBColName:                            0,
+	PrefixIndexTableName:                       0,
+	CPrimaryKeyColName:                         0,
+	FakePrimaryKeyColName:                      0,
+	IndexTableIndexColName:                     0,
+	IndexTablePrimaryColName:                   0,
+	SystemSI_IVFFLAT_TblCol_Metadata_key:       0,
+	SystemSI_IVFFLAT_TblCol_Metadata_val:       0,
+	SystemSI_IVFFLAT_TblCol_Centroids_version:  0,
+	SystemSI_IVFFLAT_TblCol_Centroids_id:       0,
+	SystemSI_IVFFLAT_TblCol_Centroids_centroid: 0,
+	SystemSI_IVFFLAT_TblCol_Entries_version:    0,
+	SystemSI_IVFFLAT_TblCol_Entries_id:         0,
 }
 
 var InternalTableNames = map[string]int8{
@@ -89,6 +112,9 @@ const (
 
 	// MOStages if the table name of mo_stages table in mo_cataglog.
 	MO_STAGES = "mo_stages"
+
+	// MO_PUBS publication meta table
+	MO_PUBS = "mo_pubs"
 )
 
 const (
@@ -234,7 +260,12 @@ const (
 	// locks to the Lock operator in pessimistic transaction mode.
 	FakePrimaryKeyColName = "__mo_fake_pk_col"
 
-	/************ 1. IVF_FLAT Secondary Index ************/
+	/************ 1. Master Index  ************/
+
+	MasterIndexTableIndexColName   = IndexTableIndexColName
+	MasterIndexTablePrimaryColName = IndexTablePrimaryColName
+
+	/************ 2. IVF_FLAT Secondary Index ************/
 
 	// IVF_FLAT Table Types
 	SystemSI_IVFFLAT_TblType_Metadata  = "metadata"
@@ -340,56 +371,6 @@ const (
 
 	SKIP_ROWID_OFFSET = 1 //rowid is the 0th vector in the batch
 )
-
-type ObjectLocation [objectio.LocationLen]byte
-
-const (
-	BlockInfoSize = unsafe.Sizeof(BlockInfo{})
-)
-
-type BlockInfo struct {
-	BlockID    types.Blockid
-	EntryState bool
-	Sorted     bool
-	MetaLoc    ObjectLocation
-	DeltaLoc   ObjectLocation
-	CommitTs   types.TS
-	SegmentID  types.Uuid
-
-	//TODO:: putting them here is a bad idea, remove
-	//this block can be distributed to remote nodes.
-	CanRemote    bool
-	PartitionNum int
-}
-
-func (b *BlockInfo) MetaLocation() objectio.Location {
-	return b.MetaLoc[:]
-}
-
-func (b *BlockInfo) SetMetaLocation(metaLoc objectio.Location) {
-	b.MetaLoc = *(*[objectio.LocationLen]byte)(unsafe.Pointer(&metaLoc[0]))
-}
-
-func (b *BlockInfo) DeltaLocation() objectio.Location {
-	return b.DeltaLoc[:]
-}
-
-func (b *BlockInfo) SetDeltaLocation(deltaLoc objectio.Location) {
-	b.DeltaLoc = *(*[objectio.LocationLen]byte)(unsafe.Pointer(&deltaLoc[0]))
-}
-
-// XXX info is passed in by value.   The use of unsafe here will cost
-// an allocation and copy.  BlockInfo is not small therefore this is
-// not exactly cheap.   However, caller of this function will keep a
-// reference to the buffer.  See txnTable.rangesOnePart.
-// ranges is *[][]byte.
-func EncodeBlockInfo(info BlockInfo) []byte {
-	return unsafe.Slice((*byte)(unsafe.Pointer(&info)), BlockInfoSize)
-}
-
-func DecodeBlockInfo(buf []byte) *BlockInfo {
-	return (*BlockInfo)(unsafe.Pointer(&buf[0]))
-}
 
 // used for memengine and tae
 // tae and memengine do not make the catalog into a table

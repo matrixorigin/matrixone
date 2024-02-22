@@ -56,8 +56,16 @@ type memTxnExecutor struct {
 	mocker func(sql string) (Result, error)
 }
 
-func (te *memTxnExecutor) Exec(sql string) (Result, error) {
+func (te *memTxnExecutor) Exec(sql string, _ StatementOption) (Result, error) {
 	return te.mocker(sql)
+}
+
+func (te *memTxnExecutor) Use(db string) {
+
+}
+
+func (te *memTxnExecutor) LockTable(table string) error {
+	return nil
 }
 
 // MemResult used to test. Construct a Result from memory.

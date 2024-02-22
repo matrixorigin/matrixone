@@ -16,8 +16,10 @@ package top
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/compare"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -34,25 +36,59 @@ type container struct {
 	cmps  []compare.Compare
 
 	executorsForOrderColumn []colexec.ExpressionExecutor
-
-	bat *batch.Batch
+	desc                    bool
+	topValueZM              objectio.ZoneMap
+	bat                     *batch.Batch
 }
 
 type Argument struct {
-	Limit int64
-	ctr   *container
-	Fs    []*plan.OrderBySpec
+	Limit       int64
+	TopValueTag int32
+	ctr         *container
+	Fs          []*plan.OrderBySpec
 
-	info     *vm.OperatorInfo
-	children []vm.Operator
+	vm.OperatorBase
 }
 
-func (arg *Argument) SetInfo(info *vm.OperatorInfo) {
-	arg.info = info
+func (arg *Argument) GetOperatorBase() *vm.OperatorBase {
+	return &arg.OperatorBase
 }
 
-func (arg *Argument) AppendChild(child vm.Operator) {
-	arg.children = append(arg.children, child)
+func init() {
+	reuse.CreatePool[Argument](
+		func() *Argument {
+			return &Argument{}
+		},
+		func(a *Argument) {
+			*a = Argument{}
+		},
+		reuse.DefaultOptions[Argument]().
+			WithEnableChecker(),
+	)
+}
+
+func (arg Argument) TypeName() string {
+	return argName
+}
+
+func NewArgument() *Argument {
+	return reuse.Alloc[Argument](nil)
+}
+
+func (arg *Argument) WithLimit(limit int64) *Argument {
+	arg.Limit = limit
+	return arg
+}
+
+func (arg *Argument) WithFs(fs []*plan.OrderBySpec) *Argument {
+	arg.Fs = fs
+	return arg
+}
+
+func (arg *Argument) Release() {
+	if arg != nil {
+		reuse.Free[Argument](arg, nil)
+	}
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {

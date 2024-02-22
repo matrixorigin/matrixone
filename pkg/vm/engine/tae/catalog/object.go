@@ -76,13 +76,16 @@ func (entry *ObjectEntry) GetCompSize() int {
 	return int(stats.Size())
 }
 
-func (entry *ObjectEntry) StatsString(composeSortKey bool) string {
+func (entry *ObjectEntry) StatsString(zonemapKind common.ZonemapPrintKind) string {
 	zonemapStr := "nil"
 	if z := entry.GetSortKeyZonemap(); z != nil {
-		if composeSortKey {
-			zonemapStr = z.StringForCompose()
-		} else {
+		switch zonemapKind {
+		case common.ZonemapPrintKindNormal:
 			zonemapStr = z.String()
+		case common.ZonemapPrintKindCompose:
+			zonemapStr = z.StringForCompose()
+		case common.ZonemapPrintKindHex:
+			zonemapStr = z.StringForHex()
 		}
 	}
 	return fmt.Sprintf(
@@ -229,9 +232,11 @@ func (entry *ObjectEntry) NeedPrefetchObjectMetaForObjectInfo(nodes []*MVCCNode[
 	if blk == nil {
 		return false, nil
 	}
+	blk.RLock()
 	node := blk.SearchNode(&MVCCNode[*MetadataMVCCNode]{
 		TxnMVCCNode: &txnbase.TxnMVCCNode{Start: lastNode.Start},
 	})
+	blk.RUnlock()
 	// in some unit tests, node doesn't exist
 	if node == nil || node.BaseNode.MetaLoc == nil || node.BaseNode.MetaLoc.IsEmpty() {
 		return
@@ -239,6 +244,26 @@ func (entry *ObjectEntry) NeedPrefetchObjectMetaForObjectInfo(nodes []*MVCCNode[
 
 	needPrefetch = true
 	return
+}
+
+func (entry *ObjectEntry) SetObjectStatsForPreviousNode(nodes []*MVCCNode[*ObjectMVCCNode]) {
+	if entry.IsAppendable() || len(nodes) <= 1 {
+		return
+	}
+	lastNode := nodes[0]
+	for _, n := range nodes {
+		if n.Start.Greater(lastNode.Start) {
+			lastNode = n
+		}
+	}
+	stat := lastNode.BaseNode.ObjectStats
+	entry.Lock()
+	for _, n := range nodes {
+		if n.BaseNode.IsEmpty() {
+			n.BaseNode.ObjectStats = *stat.Clone()
+		}
+	}
+	entry.Unlock()
 }
 func (entry *ObjectEntry) LoadObjectInfoWithTxnTS(startTS types.TS) (objectio.ObjectStats, error) {
 	stats := *objectio.NewObjectStats()

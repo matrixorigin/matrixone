@@ -16,6 +16,7 @@ package gossip
 
 import (
 	"context"
+	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"io"
 	"net"
 	"strconv"
@@ -26,6 +27,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/query"
+	"github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"go.uber.org/zap"
 )
 
@@ -171,13 +174,20 @@ func (n *Node) Leave(timeout time.Duration) error {
 	return nil
 }
 
-func (n *Node) DistKeyCacheGetter() fileservice.KeyRouterFactory {
-	return func() fileservice.KeyRouter {
+func (n *Node) DistKeyCacheGetter() fileservice.KeyRouterFactory[query.CacheKey] {
+	return func() client.KeyRouter[query.CacheKey] {
 		if n.delegate != nil {
-			return n.delegate.getDistKeyCache()
+			return n.delegate.getDataCacheKey()
 		}
 		return nil
 	}
+}
+
+func (n *Node) StatsKeyRouter() client.KeyRouter[pb.StatsInfoKey] {
+	if n != nil && n.delegate != nil {
+		return n.delegate.statsInfoKey
+	}
+	return nil
 }
 
 func (n *Node) NumMembers() int {

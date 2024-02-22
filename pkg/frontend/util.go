@@ -408,6 +408,8 @@ func getValueFromVector(vec *vector.Vector, ses *Session, expr *plan2.Expr) (int
 	switch vec.GetType().Oid {
 	case types.T_bool:
 		return vector.MustFixedCol[bool](vec)[0], nil
+	case types.T_bit:
+		return vector.MustFixedCol[uint64](vec)[0], nil
 	case types.T_int8:
 		return vector.MustFixedCol[int8](vec)[0], nil
 	case types.T_int16:
@@ -601,6 +603,10 @@ func isCmdFieldListSql(sql string) bool {
 
 // makeCmdFieldListSql makes the internal CMD_FIELD_LIST sql
 func makeCmdFieldListSql(query string) string {
+	nullIdx := strings.IndexRune(query, rune(0))
+	if nullIdx != -1 {
+		query = query[:nullIdx]
+	}
 	return cmdFieldListSql + " " + query
 }
 
@@ -609,18 +615,8 @@ func parseCmdFieldList(ctx context.Context, sql string) (*InternalCmdFieldList, 
 	if !isCmdFieldListSql(sql) {
 		return nil, moerr.NewInternalError(ctx, "it is not the CMD_FIELD_LIST")
 	}
-	rest := strings.TrimSpace(sql[len(cmdFieldListSql):])
-	//find null
-	nullIdx := strings.IndexRune(rest, rune(0))
-	var tableName string
-	if nullIdx < len(rest) {
-		tableName = rest[:nullIdx]
-		//neglect wildcard
-		//wildcard := payload[nullIdx+1:]
-		return &InternalCmdFieldList{tableName: tableName}, nil
-	} else {
-		return nil, moerr.NewInternalError(ctx, "wrong format for COM_FIELD_LIST")
-	}
+	tableName := strings.TrimSpace(sql[len(cmdFieldListSql):])
+	return &InternalCmdFieldList{tableName: tableName}, nil
 }
 
 func getVariableValue(varDefault interface{}) string {
@@ -788,4 +784,60 @@ func makeExecuteSql(ses *Session, stmt tree.Statement) string {
 		return ""
 	}
 	return bb.String()
+}
+
+func mysqlColDef2PlanResultColDef(mr *MysqlResultSet) *plan.ResultColDef {
+	if mr == nil {
+		return nil
+	}
+
+	resultCols := make([]*plan.ColDef, len(mr.Columns))
+	for i, col := range mr.Columns {
+		resultCols[i] = &plan.ColDef{
+			Name: col.Name(),
+		}
+		switch col.ColumnType() {
+		case defines.MYSQL_TYPE_VAR_STRING:
+			resultCols[i].Typ = &plan.Type{
+				Id: int32(types.T_varchar),
+			}
+		case defines.MYSQL_TYPE_LONG:
+			resultCols[i].Typ = &plan.Type{
+				Id: int32(types.T_int32),
+			}
+		case defines.MYSQL_TYPE_LONGLONG:
+			resultCols[i].Typ = &plan.Type{
+				Id: int32(types.T_int64),
+			}
+		case defines.MYSQL_TYPE_DOUBLE:
+			resultCols[i].Typ = &plan.Type{
+				Id: int32(types.T_float64),
+			}
+		case defines.MYSQL_TYPE_FLOAT:
+			resultCols[i].Typ = &plan.Type{
+				Id: int32(types.T_float32),
+			}
+		case defines.MYSQL_TYPE_DATE:
+			resultCols[i].Typ = &plan.Type{
+				Id: int32(types.T_date),
+			}
+		case defines.MYSQL_TYPE_TIME:
+			resultCols[i].Typ = &plan.Type{
+				Id: int32(types.T_time),
+			}
+		case defines.MYSQL_TYPE_DATETIME:
+			resultCols[i].Typ = &plan.Type{
+				Id: int32(types.T_datetime),
+			}
+		case defines.MYSQL_TYPE_TIMESTAMP:
+			resultCols[i].Typ = &plan.Type{
+				Id: int32(types.T_timestamp),
+			}
+		default:
+			panic(fmt.Sprintf("unsupported mysql type %d", col.ColumnType()))
+		}
+	}
+	return &plan.ResultColDef{
+		ResultCols: resultCols,
+	}
 }

@@ -41,12 +41,10 @@ type mergeBlocksEntry struct {
 	droppedBlks   []*catalog.BlockEntry
 	createdBlks   []*catalog.BlockEntry
 	transMappings *BlkTransferBooking
-	mapping       []uint32
-	fromAddr      []uint32
-	toAddr        []uint32
 	skippedBlks   []int
 
-	rt *dbutils.Runtime
+	rt      *dbutils.Runtime
+	pageIds []*common.ID
 }
 
 func NewMergeBlocksEntry(
@@ -55,12 +53,11 @@ func NewMergeBlocksEntry(
 	droppedObjs, createdObjs []*catalog.ObjectEntry,
 	droppedBlks, createdBlks []*catalog.BlockEntry,
 	transMappings *BlkTransferBooking,
-	mapping, fromAddr, toAddr []uint32,
 	deletes []*nulls.Bitmap,
 	skipBlks []int,
 	rt *dbutils.Runtime,
 ) *mergeBlocksEntry {
-	return &mergeBlocksEntry{
+	entry := &mergeBlocksEntry{
 		txn:           txn,
 		relation:      relation,
 		createdObjs:   createdObjs,
@@ -68,17 +65,44 @@ func NewMergeBlocksEntry(
 		createdBlks:   createdBlks,
 		droppedBlks:   droppedBlks,
 		transMappings: transMappings,
-		mapping:       mapping,
-		fromAddr:      fromAddr,
-		toAddr:        toAddr,
 		deletes:       deletes,
 		skippedBlks:   skipBlks,
 		rt:            rt,
 	}
+	entry.prepareTransferPage()
+	return entry
+}
+
+func (entry *mergeBlocksEntry) prepareTransferPage() {
+	for i, blk := range entry.droppedBlks {
+		if entry.isSkipped(i) {
+			if len(entry.transMappings.Mappings[i]) != 0 {
+				panic("empty block do not match")
+			}
+			continue
+		}
+		mapping := entry.transMappings.Mappings[i]
+		if len(mapping) == 0 {
+			panic("cannot tranfer empty block")
+		}
+		tblEntry := blk.GetObject().GetTable()
+		isTransient := !tblEntry.GetLastestSchema().HasPK()
+		id := blk.AsCommonID()
+		page := model.NewTransferHashPage(id, time.Now(), isTransient)
+		for srcRow, dst := range mapping {
+			blkid := entry.createdBlks[dst.Idx].ID
+			page.Train(uint32(srcRow), *objectio.NewRowid(&blkid, uint32(dst.Row)))
+		}
+		entry.pageIds = append(entry.pageIds, id)
+		_ = entry.rt.TransferTable.AddPage(page)
+	}
 }
 
 func (entry *mergeBlocksEntry) PrepareRollback() (err error) {
-	// TODO: remove block file? (should be scheduled and executed async)
+	for _, id := range entry.pageIds {
+		_ = entry.rt.TransferTable.DeletePage(id)
+	}
+	entry.pageIds = nil
 	return
 }
 func (entry *mergeBlocksEntry) ApplyRollback() (err error) {
@@ -116,9 +140,6 @@ func (entry *mergeBlocksEntry) MakeCommand(csn uint32) (cmd txnif.TxnCmd, err er
 		createdObjs,
 		droppedBlks,
 		createdBlks,
-		entry.mapping,
-		entry.fromAddr,
-		entry.toAddr,
 		entry.txn,
 		csn)
 	return
@@ -146,17 +167,8 @@ func (entry *mergeBlocksEntry) transferBlockDeletes(
 	if len(mapping) == 0 {
 		panic("cannot tranfer empty block")
 	}
-	tblEntry := dropped.GetObject().GetTable()
-	isTransient := !tblEntry.GetLastestSchema().HasPK()
-	id := dropped.AsCommonID()
-	page := model.NewTransferHashPage(id, time.Now(), isTransient)
-	for srcRow, dst := range mapping {
-		blkid := blks[dst.Idx].ID()
-		page.Train(uint32(srcRow), *objectio.NewRowid(&blkid, uint32(dst.Row)))
-	}
-	_ = entry.rt.TransferTable.AddPage(page)
-
 	dataBlock := dropped.GetBlockData()
+	tblEntry := dropped.GetObject().GetTable()
 
 	bat, err := dataBlock.CollectDeleteInRange(
 		entry.txn.GetContext(),
@@ -229,7 +241,8 @@ func (entry *mergeBlocksEntry) PrepareCommit() (err error) {
 			dropped,
 			blks,
 			delTbls,
-			idx); err != nil {
+			idx,
+		); err != nil {
 			break
 		}
 		ids = append(ids, dropped.AsCommonID())

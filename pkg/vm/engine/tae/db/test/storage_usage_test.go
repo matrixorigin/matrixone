@@ -40,6 +40,9 @@ import (
 func Test_StorageUsageCache(t *testing.T) {
 	// new cache with no option
 	cache := logtail.NewStorageUsageCache(logtail.WithLazyThreshold(1))
+	cache.Lock()
+	defer cache.Unlock()
+
 	require.True(t, cache.IsExpired())
 
 	allocator := atomic.Uint64{}
@@ -47,7 +50,7 @@ func Test_StorageUsageCache(t *testing.T) {
 	accCnt, dbCnt, tblCnt := 10, 10, 10
 	usages := logtail.MockUsageData(accCnt, dbCnt, tblCnt, &allocator)
 	for idx := range usages {
-		cache.Update(usages[idx])
+		cache.SetOrReplace(usages[idx])
 	}
 
 	fmt.Println(cache.String())
@@ -241,13 +244,13 @@ func Test_FillUsageBatOfIncremental(t *testing.T) {
 	deletes, segDeletes, segInserts := mockDeletesAndInserts(
 		usages, delDbIds, delTblIds, delSegIdxes, insSegIdxes)
 
-	iCollector := logtail.NewIncrementalCollector(types.TS{}, types.MaxTs())
+	iCollector := logtail.NewIncrementalCollector(types.TS{}, types.MaxTs(), false)
 	iCollector.UsageMemo = memo
 	defer iCollector.Close()
 
 	iCollector.Usage.Deletes = deletes
-	iCollector.Usage.SegDeletes = segDeletes
-	iCollector.Usage.SegInserts = segInserts
+	iCollector.Usage.ObjDeletes = segDeletes
+	iCollector.Usage.ObjInserts = segInserts
 
 	logtail.FillUsageBatOfIncremental(iCollector)
 
@@ -347,7 +350,7 @@ func Test_FillUsageBatOfGlobal(t *testing.T) {
 	defer gCollector.Close()
 
 	for idx := range usages {
-		memo.Update(usages[idx], false)
+		memo.DeltaUpdate(usages[idx], false)
 		gCollector.Usage.ReservedAccIds[usages[idx].AccId] = struct{}{}
 	}
 
@@ -457,11 +460,11 @@ func Test_EstablishFromCheckpoints(t *testing.T) {
 
 	memoShadow := logtail.NewTNUsageMemo()
 	for idx := range usageIns {
-		memoShadow.Update(usageIns[idx], false)
+		memoShadow.DeltaUpdate(usageIns[idx], false)
 	}
 
 	for idx := range usageDel {
-		memoShadow.Update(usageDel[idx], true)
+		memoShadow.DeltaUpdate(usageDel[idx], true)
 	}
 
 	require.Equal(t, memo.CacheLen(), memoShadow.CacheLen())
@@ -491,7 +494,7 @@ func Test_RemoveStaleAccounts(t *testing.T) {
 	defer gCollector.Close()
 
 	for idx := range usages {
-		gCollector.UsageMemo.Update(usages[idx], false)
+		gCollector.UsageMemo.DeltaUpdate(usages[idx], false)
 		if rand.Int()%3 == 0 {
 			// mock the accounts deletion
 			continue
@@ -578,6 +581,7 @@ func Test_UpdateDataFromOldVersion(t *testing.T) {
 				db, err := ctlog.GetDatabaseByID(usages[xx][yy].DbId)
 				if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) || db == nil {
 					db, err = ctlog.CreateDBEntryWithID(usages[xx][yy].String(), "", "", usages[xx][yy].DbId, txn)
+					db.TestSetAccId(uint32(usages[xx][yy].AccId))
 				}
 
 				require.Nil(t, err)
@@ -639,7 +643,7 @@ func Test_UpdateDataFromOldVersion(t *testing.T) {
 
 			// double the size
 			obj := catalog.MockObjEntryWithTbl(tbl, usage.Size*2)
-			gCollector.Usage.SegInserts = append(gCollector.Usage.SegInserts, obj)
+			gCollector.Usage.ObjInserts = append(gCollector.Usage.ObjInserts, obj)
 		}
 
 		logtail.FillUsageBatOfGlobal(gCollector)
@@ -656,5 +660,4 @@ func Test_UpdateDataFromOldVersion(t *testing.T) {
 			require.Equal(t, uint64(0), size)
 		}
 	}
-
 }

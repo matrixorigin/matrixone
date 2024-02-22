@@ -38,6 +38,14 @@ const (
 	PPL3
 )
 
+type ZonemapPrintKind int
+
+const (
+	ZonemapPrintKindNormal ZonemapPrintKind = iota
+	ZonemapPrintKindCompose
+	ZonemapPrintKindHex
+)
+
 const DefaultMaxRowsToPrint = 3
 
 func RepeatStr(str string, times int) string {
@@ -103,6 +111,8 @@ func TypeStringValue(t types.Type, v any, isNull bool, opts ...TypePrintOpt) str
 	case types.T_bool, types.T_int8, types.T_int16, types.T_int32,
 		types.T_int64, types.T_uint8, types.T_uint16, types.T_uint32,
 		types.T_uint64, types.T_float32, types.T_float64:
+		return fmt.Sprintf("%v", v)
+	case types.T_bit:
 		return fmt.Sprintf("%v", v)
 	case types.T_char, types.T_varchar,
 		types.T_binary, types.T_varbinary, types.T_text, types.T_blob:

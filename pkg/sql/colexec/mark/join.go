@@ -28,8 +28,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+const argName = "mark_join"
+
 func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString(" mark join ")
+	buf.WriteString(argName)
+	buf.WriteString(": mark join ")
 }
 
 func (arg *Argument) Prepare(proc *process.Process) error {
@@ -82,7 +85,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(arg.info.Idx, arg.info.ParallelIdx, arg.info.ParallelMajor)
+	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
 	anal.Start()
 	defer anal.Stop()
 	ap := arg
@@ -111,13 +114,13 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 				continue
 			}
 			if ctr.bat == nil || ctr.bat.RowCount() == 0 {
-				if err = ctr.emptyProbe(bat, ap, proc, anal, ap.info.IsFirst, ap.info.IsLast, &result); err != nil {
+				if err = ctr.emptyProbe(bat, ap, proc, anal, ap.GetIsFirst(), ap.GetIsLast(), &result); err != nil {
 					bat.Clean(proc.Mp())
 					result.Status = vm.ExecStop
 					return result, err
 				}
 			} else {
-				if err = ctr.probe(bat, ap, proc, anal, ap.info.IsFirst, ap.info.IsLast, &result); err != nil {
+				if err = ctr.probe(bat, ap, proc, anal, ap.GetIsFirst(), ap.GetIsLast(), &result); err != nil {
 					bat.Clean(proc.Mp())
 					result.Status = vm.ExecStop
 					return result, err
@@ -134,14 +137,24 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 }
 
-func (ctr *container) build(ap *Argument, proc *process.Process, anal process.Analyze) error {
+func (ctr *container) receiveHashMap(proc *process.Process, anal process.Analyze) error {
 	bat, _, err := ctr.ReceiveFromSingleReg(1, anal)
 	if err != nil {
 		return err
 	}
+	if bat != nil && bat.AuxData != nil {
+		ctr.mp = bat.DupJmAuxData()
+		anal.Alloc(ctr.mp.Size())
+	}
+	return nil
+}
 
+func (ctr *container) receiveBatch(ap *Argument, proc *process.Process, anal process.Analyze) error {
+	bat, _, err := ctr.ReceiveFromSingleReg(1, anal)
+	if err != nil {
+		return err
+	}
 	if bat != nil {
-		var err error
 		ctr.evalNullSels(bat)
 		ctr.nullWithBatch, err = DumpBatch(bat, proc, ctr.nullSels)
 		if err != nil {
@@ -155,20 +168,20 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 			proc.PutBatch(ctr.bat)
 			ctr.bat = nil
 		}
-		if ctr.bat != nil {
-			proc.PutBatch(ctr.bat)
-			ctr.bat = nil
-		}
 		ctr.bat = bat
-		ctr.mp = bat.DupJmAuxData()
-		//ctr.bat = bat
-		//ctr.mp = bat.Ht.(*hashmap.JoinMap).Dup()
-		//anal.Alloc(ctr.mp.Map().Size())
 	}
 	return nil
 }
 
-func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool, result *vm.CallResult) error {
+func (ctr *container) build(ap *Argument, proc *process.Process, anal process.Analyze) error {
+	err := ctr.receiveHashMap(proc, anal)
+	if err != nil {
+		return err
+	}
+	return ctr.receiveBatch(ap, proc, anal)
+}
+
+func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool, result *vm.CallResult) (err error) {
 	anal.Input(bat, isFirst)
 	if ctr.rbat != nil {
 		proc.PutBatch(ctr.rbat)
@@ -178,15 +191,14 @@ func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.P
 	count := bat.RowCount()
 	for i, rp := range ap.Result {
 		if rp >= 0 {
-			// rbat.Vecs[i] = bat.Vecs[rp]
-			// bat.Vecs[rp] = nil
 			typ := *bat.Vecs[rp].GetType()
 			ctr.rbat.Vecs[i] = proc.GetVector(typ)
-			if err := vector.GetUnionAllFunction(typ, proc.Mp())(ctr.rbat.Vecs[i], bat.Vecs[rp]); err != nil {
-				return err
-			}
+			err = vector.GetUnionAllFunction(typ, proc.Mp())(ctr.rbat.Vecs[i], bat.Vecs[rp])
 		} else {
-			ctr.rbat.Vecs[i] = vector.NewConstFixed(types.T_bool.ToType(), false, count, proc.Mp())
+			ctr.rbat.Vecs[i], err = vector.NewConstFixed(types.T_bool.ToType(), false, count, proc.Mp())
+		}
+		if err != nil {
+			return err
 		}
 	}
 	ctr.rbat.AddRowCount(bat.RowCount())

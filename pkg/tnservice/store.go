@@ -441,6 +441,7 @@ func (s *store) initQueryService(inStandalone bool) {
 
 func (s *store) initQueryCommandHandler() {
 	s.queryService.AddHandleFunc(query.CmdMethod_GetCacheInfo, s.handleGetCacheInfo, false)
+	s.queryService.AddHandleFunc(query.CmdMethod_GetLatestBind, s.handleGetLatestBind, false)
 }
 
 func (s *store) handleGetCacheInfo(ctx context.Context, req *query.Request, resp *query.Response) error {
@@ -453,6 +454,16 @@ func (s *store) handleGetCacheInfo(ctx context.Context, req *query.Request, resp
 		}
 	})
 
+	return nil
+}
+
+func (s *store) handleGetLatestBind(ctx context.Context, req *query.Request, resp *query.Response) error {
+	resp.GetLatestBind = &query.GetLatestBindResponse{
+		Bind: s.lockTableAllocator.GetLatest(
+			req.GetLatestBind.GroupID,
+			req.GetLatestBind.TableID).
+			DebugString(),
+	}
 	return nil
 }
 

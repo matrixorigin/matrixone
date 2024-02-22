@@ -761,6 +761,8 @@ func (it IndexType) ToString() string {
 		return "zonemap"
 	case INDEX_TYPE_IVFFLAT:
 		return "ivfflat"
+	case INDEX_TYPE_MASTER:
+		return "master"
 	case INDEX_TYPE_INVALID:
 		return ""
 	default:
@@ -776,6 +778,7 @@ const (
 	INDEX_TYPE_BSI
 	INDEX_TYPE_ZONEMAP
 	INDEX_TYPE_IVFFLAT
+	INDEX_TYPE_MASTER
 )
 
 type VisibleType int
@@ -1293,8 +1296,8 @@ type TableOptionComment struct {
 }
 
 func (node *TableOptionComment) Format(ctx *FmtCtx) {
-	ctx.WriteString("comment = ")
-	ctx.WriteString(node.Comment)
+	ctx.WriteString("comment = '" + node.Comment + "'")
+	//ctx.WriteString(node.Comment + "'")
 }
 
 func NewTableOptionComment(c string) *TableOptionComment {
@@ -1969,6 +1972,7 @@ type ClusterByOption struct {
 }
 
 type PartitionOption struct {
+	statementImpl
 	PartBy     PartitionBy
 	SubPartBy  *PartitionBy
 	Partitions []*Partition

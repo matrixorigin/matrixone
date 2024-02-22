@@ -26,89 +26,31 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 const BlockNumForceOneCN = 200
-const blockNDVThreshHold = 100
 const blockSelectivityThreshHold = 0.95
 const highNDVcolumnThreshHold = 0.95
-const statsCacheInitSize = 128
-const statsCacheMaxSize = 8192
 
-// stats cache is small, no need to use LRU for now
-type StatsCache struct {
-	cachePool map[uint64]*StatsInfoMap
-}
-
-func NewStatsCache() *StatsCache {
-	return &StatsCache{
-		cachePool: make(map[uint64]*StatsInfoMap, statsCacheInitSize),
-	}
-}
-
-type StatsInfoMap struct {
-	NdvMap               map[string]float64
-	MinValMap            map[string]float64
-	MaxValMap            map[string]float64
-	DataTypeMap          map[string]types.T
-	NullCntMap           map[string]int64
-	ShuffleRangeMap      map[string]*ShuffleRange
-	BlockNumber          int
-	AccurateObjectNumber int
-	ApproxObjectNumber   int //detect if block number changes , update stats info map
-	TableCnt             float64
-	tableName            string
-}
-
-func NewStatsInfoMap() *StatsInfoMap {
-	return &StatsInfoMap{
+func NewStatsInfo() *pb.StatsInfo {
+	return &pb.StatsInfo{
 		NdvMap:             make(map[string]float64),
 		MinValMap:          make(map[string]float64),
 		MaxValMap:          make(map[string]float64),
-		DataTypeMap:        make(map[string]types.T),
-		NullCntMap:         make(map[string]int64),
-		ShuffleRangeMap:    make(map[string]*ShuffleRange),
+		DataTypeMap:        make(map[string]uint64),
+		NullCntMap:         make(map[string]uint64),
+		SizeMap:            make(map[string]uint64),
+		ShuffleRangeMap:    make(map[string]*pb.ShuffleRange),
 		BlockNumber:        0,
 		ApproxObjectNumber: 0,
 		TableCnt:           0,
-	}
-}
-
-func (sc *StatsInfoMap) NeedUpdate(currentApproxObjNum int) bool {
-	if sc.ApproxObjectNumber == 0 || sc.AccurateObjectNumber == 0 {
-		return true
-	}
-	if math.Abs(float64(sc.ApproxObjectNumber-currentApproxObjNum)) >= 10 {
-		return true
-	}
-	if float64(currentApproxObjNum)/float64(sc.ApproxObjectNumber) > 1.05 || float64(currentApproxObjNum)/float64(sc.ApproxObjectNumber) < 0.95 {
-		return true
-	}
-	return false
-}
-
-func (sc *StatsCache) GetStatsInfoMap(tableID uint64, create bool) *StatsInfoMap {
-	if sc == nil {
-		return nil
-	}
-	if s, ok := (sc.cachePool)[tableID]; ok {
-		return s
-	} else if create {
-		if len(sc.cachePool) > statsCacheMaxSize {
-			sc.cachePool = make(map[uint64]*StatsInfoMap, statsCacheInitSize)
-			logutil.Infof("statscache entries more than %v in long session, release memory and create new cachepool", statsCacheMaxSize)
-		}
-		s = NewStatsInfoMap()
-		(sc.cachePool)[tableID] = s
-		return s
-	} else {
-		return nil
 	}
 }
 
@@ -117,10 +59,11 @@ type InfoFromZoneMap struct {
 	DataTypes            []types.Type
 	ColumnNDVs           []float64
 	NullCnts             []int64
-	ShuffleRanges        []*ShuffleRange
-	BlockNumber          int
-	AccurateObjectNumber int
-	ApproxObjectNumber   int
+	ShuffleRanges        []*pb.ShuffleRange
+	ColumnSize           []uint32
+	BlockNumber          int32
+	AccurateObjectNumber int32
+	ApproxObjectNumber   int32
 	TableCnt             float64
 }
 
@@ -130,12 +73,13 @@ func NewInfoFromZoneMap(lenCols int) *InfoFromZoneMap {
 		DataTypes:     make([]types.Type, lenCols),
 		ColumnNDVs:    make([]float64, lenCols),
 		NullCnts:      make([]int64, lenCols),
-		ShuffleRanges: make([]*ShuffleRange, lenCols),
+		ColumnSize:    make([]uint32, lenCols),
+		ShuffleRanges: make([]*pb.ShuffleRange, lenCols),
 	}
 	return info
 }
 
-func UpdateStatsInfoMap(info *InfoFromZoneMap, tableDef *plan.TableDef, s *StatsInfoMap) {
+func UpdateStatsInfo(info *InfoFromZoneMap, tableDef *plan.TableDef, s *pb.StatsInfo) {
 	start := time.Now()
 	defer func() {
 		v2.TxnStatementUpdateStatsInfoMapHistogram.Observe(time.Since(start).Seconds())
@@ -144,14 +88,15 @@ func UpdateStatsInfoMap(info *InfoFromZoneMap, tableDef *plan.TableDef, s *Stats
 	s.AccurateObjectNumber = info.AccurateObjectNumber
 	s.BlockNumber = info.BlockNumber
 	s.TableCnt = info.TableCnt
-	s.tableName = tableDef.Name
+	s.TableName = tableDef.Name
 	//calc ndv with min,max,distinct value in zonemap, blocknumer and column type
-	//set info in statsInfoMap
+	//set info in statsInfo
 	for i, coldef := range tableDef.Cols[:len(tableDef.Cols)-1] {
 		colName := coldef.Name
 		s.NdvMap[colName] = info.ColumnNDVs[i]
-		s.DataTypeMap[colName] = info.DataTypes[i].Oid
-		s.NullCntMap[colName] = info.NullCnts[i]
+		s.DataTypeMap[colName] = uint64(info.DataTypes[i].Oid)
+		s.NullCntMap[colName] = uint64(info.NullCnts[i])
+		s.SizeMap[colName] = uint64(info.ColumnSize[i])
 
 		if !info.ColumnZMs[i].IsInited() {
 			s.MinValMap[colName] = 0
@@ -159,6 +104,9 @@ func UpdateStatsInfoMap(info *InfoFromZoneMap, tableDef *plan.TableDef, s *Stats
 			continue
 		}
 		switch info.DataTypes[i].Oid {
+		case types.T_bit:
+			s.MinValMap[colName] = float64(types.DecodeUint64(info.ColumnZMs[i].GetMinBuf()))
+			s.MaxValMap[colName] = float64(types.DecodeUint64(info.ColumnZMs[i].GetMaxBuf()))
 		case types.T_int8:
 			s.MinValMap[colName] = float64(types.DecodeInt8(info.ColumnZMs[i].GetMinBuf()))
 			s.MaxValMap[colName] = float64(types.DecodeInt8(info.ColumnZMs[i].GetMaxBuf()))
@@ -192,7 +140,11 @@ func UpdateStatsInfoMap(info *InfoFromZoneMap, tableDef *plan.TableDef, s *Stats
 		}
 
 		if info.ShuffleRanges[i] != nil {
-			if s.MinValMap[colName] != s.MaxValMap[colName] && s.TableCnt > HashMapSizeForShuffle && info.ColumnNDVs[i] >= ShuffleThreshHoldOfNDV && !util.JudgeIsCompositeClusterByColumn(colName) && colName != catalog.CPrimaryKeyColName {
+			if s.MinValMap[colName] != s.MaxValMap[colName] &&
+				s.TableCnt > HashMapSizeForShuffle &&
+				info.ColumnNDVs[i] >= ShuffleThreshHoldOfNDV &&
+				!util.JudgeIsCompositeClusterByColumn(colName) &&
+				colName != catalog.CPrimaryKeyColName {
 				info.ShuffleRanges[i].Eval()
 				s.ShuffleRangeMap[colName] = info.ShuffleRanges[i]
 			}
@@ -211,7 +163,7 @@ func isHighNdvCols(cols []int32, tableDef *TableDef, builder *QueryBuilder) bool
 		return true
 	}
 
-	s := getStatsInfoByTableID(tableDef.TblId, builder)
+	s := builder.getStatsInfoByTableID(tableDef.TblId)
 	if s == nil {
 		return false
 	}
@@ -222,7 +174,7 @@ func isHighNdvCols(cols []int32, tableDef *TableDef, builder *QueryBuilder) bool
 	return totalNDV > s.TableCnt*highNDVcolumnThreshHold
 }
 
-func getColNDVRatio(cols []int32, tableDef *TableDef, builder *QueryBuilder) float64 {
+func (builder *QueryBuilder) getColNDVRatio(cols []int32, tableDef *TableDef) float64 {
 	if tableDef == nil {
 		return 0
 	}
@@ -231,7 +183,7 @@ func getColNDVRatio(cols []int32, tableDef *TableDef, builder *QueryBuilder) flo
 		return 1
 	}
 
-	s := getStatsInfoByTableID(tableDef.TblId, builder)
+	s := builder.getStatsInfoByTableID(tableDef.TblId)
 	if s == nil {
 		return 0
 	}
@@ -246,23 +198,23 @@ func getColNDVRatio(cols []int32, tableDef *TableDef, builder *QueryBuilder) flo
 	return result
 }
 
-func getStatsInfoByTableID(tableID uint64, builder *QueryBuilder) *StatsInfoMap {
+func (builder *QueryBuilder) getStatsInfoByTableID(tableID uint64) *pb.StatsInfo {
 	if builder == nil {
 		return nil
 	}
-	sc := builder.compCtx.GetStatsCache()
-	if sc == nil {
+	obj, _ := builder.compCtx.ResolveById(tableID)
+	if obj == nil {
 		return nil
 	}
-	return sc.GetStatsInfoMap(tableID, false)
+	stats, err := builder.compCtx.Stats(obj)
+	if err != nil {
+		return nil
+	}
+	return stats
 }
 
-func getStatsInfoByCol(col *plan.ColRef, builder *QueryBuilder) *StatsInfoMap {
+func (builder *QueryBuilder) getStatsInfoByCol(col *plan.ColRef) *pb.StatsInfo {
 	if builder == nil {
-		return nil
-	}
-	sc := builder.compCtx.GetStatsCache()
-	if sc == nil {
 		return nil
 	}
 	tableDef, ok := builder.tag2Table[col.RelPos]
@@ -273,15 +225,38 @@ func getStatsInfoByCol(col *plan.ColRef, builder *QueryBuilder) *StatsInfoMap {
 	if len(col.Name) == 0 {
 		col.Name = tableDef.Cols[col.ColPos].Name
 	}
-	return sc.GetStatsInfoMap(tableDef.TblId, false)
+	return builder.getStatsInfoByTableID(tableDef.TblId)
 }
 
-func getColNdv(col *plan.ColRef, builder *QueryBuilder) float64 {
-	s := getStatsInfoByCol(col, builder)
+func (builder *QueryBuilder) getColNdv(col *plan.ColRef) float64 {
+	s := builder.getStatsInfoByCol(col)
 	if s == nil {
 		return -1
 	}
 	return s.NdvMap[col.Name]
+}
+
+func getNullSelectivity(arg *plan.Expr, builder *QueryBuilder, isnull bool) float64 {
+	switch exprImpl := arg.Expr.(type) {
+	case *plan.Expr_Col:
+		col := exprImpl.Col
+		s := builder.getStatsInfoByCol(col)
+		if s == nil {
+			break
+		}
+		nullCnt := float64(s.NullCntMap[col.Name])
+		if isnull {
+			return nullCnt / s.TableCnt
+		} else {
+			return 1 - (nullCnt / s.TableCnt)
+		}
+	}
+
+	if isnull {
+		return 0.1
+	} else {
+		return 0.9
+	}
 }
 
 // this function is used to calculate the ndv of expressions,
@@ -302,7 +277,7 @@ func getExprNdv(expr *plan.Expr, builder *QueryBuilder) float64 {
 			return getExprNdv(exprImpl.F.Args[0], builder)
 		}
 	case *plan.Expr_Col:
-		return getColNdv(exprImpl.Col, builder)
+		return builder.getColNdv(exprImpl.Col)
 	}
 	return -1
 }
@@ -310,8 +285,8 @@ func getExprNdv(expr *plan.Expr, builder *QueryBuilder) float64 {
 func estimateEqualitySelectivity(expr *plan.Expr, builder *QueryBuilder) float64 {
 	// only filter like func(col)=1 or col=? can estimate outcnt
 	// and only 1 colRef is allowd in the filter. otherwise, no good method to calculate
-	ret, _ := CheckFilter(expr)
-	if !ret {
+	col := extractColRefInFilter(expr)
+	if col == nil {
 		return 0.01
 	}
 	ndv := getExprNdv(expr, builder)
@@ -321,55 +296,111 @@ func estimateEqualitySelectivity(expr *plan.Expr, builder *QueryBuilder) float64
 	return 0.01
 }
 
-func calcSelectivityByMinMax(funcName string, min, max, val float64) float64 {
+func calcSelectivityByMinMax(funcName string, min, max float64, typ types.T, vals []*plan.Literal) float64 {
 	switch funcName {
 	case ">", ">=":
-		return (max - val) / (max - min)
+		if val, ok := getFloat64Value(typ, vals[0]); ok {
+			return (max - val + 1) / (max - min)
+		}
 	case "<", "<=":
-		return (val - min) / (max - min)
+		if val, ok := getFloat64Value(typ, vals[0]); ok {
+			return (val - min + 1) / (max - min)
+		}
+	case "between":
+		if lb, ok := getFloat64Value(typ, vals[0]); ok {
+			if ub, ok := getFloat64Value(typ, vals[1]); ok {
+				return (ub - lb + 1) / (max - min)
+			}
+		}
 	}
 	return -1 // never reach here
+}
+
+func getFloat64Value(typ types.T, lit *plan.Literal) (float64, bool) {
+	switch typ {
+	case types.T_float32:
+		if val, valOk := lit.Value.(*plan.Literal_Fval); valOk {
+			return float64(val.Fval), true
+		}
+	case types.T_float64:
+		if val, valOk := lit.Value.(*plan.Literal_Dval); valOk {
+			return val.Dval, true
+		}
+	case types.T_int8:
+		if val, valOk := lit.Value.(*plan.Literal_I8Val); valOk {
+			return float64(val.I8Val), true
+		}
+	case types.T_int16:
+		if val, valOk := lit.Value.(*plan.Literal_I16Val); valOk {
+			return float64(val.I16Val), true
+		}
+	case types.T_int32:
+		if val, valOk := lit.Value.(*plan.Literal_I32Val); valOk {
+			return float64(val.I32Val), true
+		}
+	case types.T_int64:
+		if val, valOk := lit.Value.(*plan.Literal_I64Val); valOk {
+			return float64(val.I64Val), true
+		}
+	case types.T_uint8:
+		if val, valOk := lit.Value.(*plan.Literal_U8Val); valOk {
+			return float64(val.U8Val), true
+		}
+	case types.T_uint16:
+		if val, valOk := lit.Value.(*plan.Literal_U16Val); valOk {
+			return float64(val.U16Val), true
+		}
+	case types.T_uint32:
+		if val, valOk := lit.Value.(*plan.Literal_U32Val); valOk {
+			return float64(val.U32Val), true
+		}
+	case types.T_uint64:
+		if val, valOk := lit.Value.(*plan.Literal_U64Val); valOk {
+			return float64(val.U64Val), true
+		}
+	case types.T_date:
+		if val, valOk := lit.Value.(*plan.Literal_Dateval); valOk {
+			return float64(val.Dateval), true
+		}
+	case types.T_datetime:
+		if val, valOk := lit.Value.(*plan.Literal_Datetimeval); valOk {
+			return float64(val.Datetimeval), true
+		}
+	}
+
+	return 0, false
 }
 
 func estimateNonEqualitySelectivity(expr *plan.Expr, funcName string, builder *QueryBuilder) float64 {
 	// only filter like func(col)>1 , or (col=1) or (col=2) can estimate outcnt
 	// and only 1 colRef is allowd in the filter. otherwise, no good method to calculate
-	ret, col := CheckFilter(expr)
-	if !ret {
+	col := extractColRefInFilter(expr)
+	if col == nil {
 		return 0.1
 	}
-	s := getStatsInfoByCol(col, builder)
+	s := builder.getStatsInfoByCol(col)
 	if s == nil {
 		return 0.1
 	}
 	//check strict filter, otherwise can not estimate outcnt by min/max val
-	ret, col, constExpr, _ := CheckStrictFilter(expr)
-	if ret {
-		switch s.DataTypeMap[col.Name] {
-		case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
-			if val, valOk := constExpr.Value.(*plan.Literal_I64Val); valOk {
-				return calcSelectivityByMinMax(funcName, s.MinValMap[col.Name], s.MaxValMap[col.Name], float64(val.I64Val))
-			}
-		case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
-			if val, valOk := constExpr.Value.(*plan.Literal_U64Val); valOk {
-				return calcSelectivityByMinMax(funcName, s.MinValMap[col.Name], s.MaxValMap[col.Name], float64(val.U64Val))
-			}
-		case types.T_date:
-			if val, valOk := constExpr.Value.(*plan.Literal_Dateval); valOk {
-				return calcSelectivityByMinMax(funcName, s.MinValMap[col.Name], s.MaxValMap[col.Name], float64(val.Dateval))
-			}
+	col, litType, literals, colFnName := extractColRefAndLiteralsInFilter(expr)
+	if col != nil && len(literals) > 0 {
+		typ := types.T(s.DataTypeMap[col.Name])
+		if !(typ.IsInteger() || typ.IsDateRelate()) {
+			return 0.1
 		}
-	}
 
-	//check strict filter, otherwise can not estimate outcnt by min/max val
-	ret, col, constExpr, leftFuncName := CheckFunctionFilter(expr)
-	if ret {
-		switch leftFuncName {
+		switch colFnName {
+		case "":
+			return calcSelectivityByMinMax(funcName, s.MinValMap[col.Name], s.MaxValMap[col.Name], typ, literals)
 		case "year":
-			if val, valOk := constExpr.Value.(*plan.Literal_I64Val); valOk {
+			switch typ {
+			case types.T_date:
 				minVal := types.Date(s.MinValMap[col.Name])
 				maxVal := types.Date(s.MaxValMap[col.Name])
-				return calcSelectivityByMinMax(funcName, float64(minVal.Year()), float64(maxVal.Year()), float64(val.I64Val))
+				return calcSelectivityByMinMax(funcName, float64(minVal.Year()), float64(maxVal.Year()), litType, literals)
+			case types.T_datetime:
+				// TODO
 			}
 		}
 	}
@@ -390,7 +421,7 @@ func estimateExprSelectivity(expr *plan.Expr, builder *QueryBuilder) float64 {
 			return estimateEqualitySelectivity(expr, builder)
 		case "!=", "<>":
 			return 0.9
-		case ">", "<", ">=", "<=":
+		case ">", "<", ">=", "<=", "between":
 			return estimateNonEqualitySelectivity(expr, funcName, builder)
 		case "and":
 			sel1 := estimateExprSelectivity(exprImpl.F.Args[0], builder)
@@ -428,6 +459,12 @@ func estimateExprSelectivity(expr *plan.Expr, builder *QueryBuilder) float64 {
 				return 10 * card / ndv
 			}
 			return 0.5
+		case "prefix_between":
+			return 0.1
+		case "isnull", "is_null":
+			return getNullSelectivity(exprImpl.F.Args[0], builder, true)
+		case "isnotnull", "is_not_null":
+			return getNullSelectivity(exprImpl.F.Args[0], builder, false)
 		default:
 			return 0.15
 		}
@@ -473,13 +510,16 @@ func estimateFilterWeight(expr *plan.Expr, w float64) float64 {
 }
 
 // harsh estimate of block selectivity, will improve it in the future
-func estimateFilterBlockSelectivity(ctx context.Context, expr *plan.Expr, tableDef *plan.TableDef, builder *QueryBuilder) float64 {
-	if !CheckExprIsZonemappable(ctx, expr) {
+func estimateFilterBlockSelectivity(ctx context.Context, expr *plan.Expr, tableDef *plan.TableDef) float64 {
+	if !ExprIsZonemappable(ctx, expr) {
 		return 1
 	}
-	ret, col := CheckFilter(expr)
-	if ret && col != nil {
-		switch GetSortOrder(tableDef, col.Name) {
+	if expr.Selectivity < 0.01 {
+		return expr.Selectivity * 100
+	}
+	col := extractColRefInFilter(expr)
+	if col != nil {
+		switch GetSortOrder(tableDef, col.ColPos) {
 		case 0:
 			return math.Min(expr.Selectivity, 0.5)
 		case 1:
@@ -488,11 +528,7 @@ func estimateFilterBlockSelectivity(ctx context.Context, expr *plan.Expr, tableD
 			return math.Min(expr.Selectivity*10, 0.5)
 		}
 	}
-	if getExprNdv(expr, builder) < blockNDVThreshHold {
-		return 1
-	}
-	// do not know selectivity for this expr, default 0.5
-	return 0.5
+	return 1
 }
 
 func rewriteFilterListByStats(ctx context.Context, nodeID int32, builder *QueryBuilder) {
@@ -702,23 +738,16 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 		node.Stats.HashmapStats.HashmapSize = rightStats.Outcnt
 
 	case plan.Node_VALUE_SCAN:
-		//do nothing and just return default stats, fix this in the future
-		/*
-			if node.RowsetData == nil {
-				node.Stats = DefaultStats()
-			} else {
-				colsData := node.RowsetData.Cols
-				rowCount := float64(len(colsData[0].Data))
-				blockNumber := rowCount/float64(options.DefaultBlockMaxRows) + 1
-				node.Stats = &plan.Stats{
-					TableCnt:    (rowCount),
-					BlockNum:    int32(blockNumber),
-					Outcnt:      rowCount,
-					Cost:        rowCount,
-					Selectivity: 1,
-				}
-			}
-		*/
+		if node.RowsetData != nil {
+			colsData := node.RowsetData.Cols
+			rowCount := float64(len(colsData[0].Data))
+			node.Stats.TableCnt = rowCount
+			node.Stats.BlockNum = int32(rowCount/float64(options.DefaultBlockMaxRows) + 1)
+			node.Stats.Cost = rowCount
+			node.Stats.Outcnt = rowCount
+			node.Stats.Selectivity = 1
+		}
+
 	case plan.Node_SINK_SCAN:
 		sourceNode := builder.qry.Steps[node.GetSourceStep()[0]]
 		node.Stats = builder.qry.Nodes[sourceNode].Stats
@@ -896,22 +925,18 @@ func recalcStatsByRuntimeFilter(node *plan.Node, runtimeFilterSel float64) {
 	if node.Stats.Cost < 1 {
 		node.Stats.Cost = 1
 	}
-	node.Stats.BlockNum = int32(float64(node.Stats.BlockNum)*runtimeFilterSel) + 1
+	node.Stats.BlockNum = int32(node.Stats.Outcnt/2) + 1
 }
 
 func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
-	if !needStats(node.TableDef) {
+	if !InternalTable(node.TableDef) {
 		return DefaultStats()
 	}
 	if shouldReturnMinimalStats(node) {
 		return DefaultMinimalStats()
 	}
-	if !builder.compCtx.Stats(node.ObjRef) {
-		return DefaultStats()
-	}
-	//get statsInfoMap from statscache
-	s := getStatsInfoByTableID(node.TableDef.TblId, builder)
-	if s == nil {
+	s, err := builder.compCtx.Stats(node.ObjRef)
+	if err != nil || s == nil {
 		return DefaultStats()
 	}
 
@@ -922,7 +947,7 @@ func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
 	var blockExprList []*plan.Expr
 	for i := range node.FilterList {
 		node.FilterList[i].Selectivity = estimateExprSelectivity(node.FilterList[i], builder)
-		currentBlockSel := estimateFilterBlockSelectivity(builder.GetContext(), node.FilterList[i], node.TableDef, builder)
+		currentBlockSel := estimateFilterBlockSelectivity(builder.GetContext(), node.FilterList[i], node.TableDef)
 		if currentBlockSel < blockSelectivityThreshHold {
 			copyOfExpr := DeepCopyExpr(node.FilterList[i])
 			copyOfExpr.Selectivity = currentBlockSel
@@ -943,16 +968,18 @@ func shouldReturnMinimalStats(node *plan.Node) bool {
 	return false
 }
 
-func needStats(tableDef *TableDef) bool {
+func InternalTable(tableDef *TableDef) bool {
 	switch tableDef.TblId {
 	case catalog.MO_DATABASE_ID, catalog.MO_TABLES_ID, catalog.MO_COLUMNS_ID:
 		return false
 	}
-	switch tableDef.Name {
-	case "sys_async_task", "sys_cron_task":
+	if strings.HasPrefix(tableDef.Name, "sys_") {
 		return false
 	}
-	return !strings.HasPrefix(tableDef.Name, "mo_")
+	if strings.HasPrefix(tableDef.Name, "mo_") {
+		return false
+	}
+	return true
 }
 
 func DefaultHugeStats() *plan.Stats {
@@ -995,11 +1022,11 @@ func resetHashMapStats(stats *plan.Stats) {
 	}
 }
 
-func (builder *QueryBuilder) applySwapRuleByStats(nodeID int32, recursive bool) {
+func (builder *QueryBuilder) determineBuildAndProbeSide(nodeID int32, recursive bool) {
 	node := builder.qry.Nodes[nodeID]
 	if recursive && len(node.Children) > 0 {
 		for _, child := range node.Children {
-			builder.applySwapRuleByStats(child, recursive)
+			builder.determineBuildAndProbeSide(child, recursive)
 		}
 	}
 	if node.NodeType != plan.Node_JOIN {
@@ -1021,7 +1048,7 @@ func (builder *QueryBuilder) applySwapRuleByStats(nodeID int32, recursive bool) 
 
 	case plan.Node_LEFT, plan.Node_SEMI, plan.Node_ANTI:
 		//right joins does not support non equal join for now
-		if builder.IsEquiJoin(node) && leftChild.Stats.Outcnt < rightChild.Stats.Outcnt && !builder.haveOnDuplicateKey {
+		if builder.IsEquiJoin(node) && leftChild.Stats.Outcnt*1.2 < rightChild.Stats.Outcnt && !builder.haveOnDuplicateKey {
 			node.BuildOnLeft = true
 		}
 	}

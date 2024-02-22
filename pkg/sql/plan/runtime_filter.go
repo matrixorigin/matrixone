@@ -15,16 +15,23 @@
 package plan
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
 const (
 	InFilterCardLimit    = 10000
 	BloomFilterCardLimit = 100 * InFilterCardLimit
-
-	MinProbeTableRows    = 8192 * 20 // Don't generate runtime filter for small tables
 	SelectivityThreshold = 0.5
 )
+
+func GetInFilterCardLimit() int64 {
+	v, ok := runtime.ProcessLevelRuntime().GetGlobalVariables("runtime_filter_limit_in")
+	if ok {
+		return v.(int64)
+	}
+	return InFilterCardLimit
+}
 
 func (builder *QueryBuilder) pushdownRuntimeFilters(nodeID int32) {
 	node := builder.qry.Nodes[nodeID]
@@ -72,12 +79,7 @@ func (builder *QueryBuilder) pushdownRuntimeFilters(nodeID int32) {
 	leftChild := builder.qry.Nodes[node.Children[0]]
 
 	// TODO: build runtime filters deeper than 1 level
-	if leftChild.NodeType != plan.Node_TABLE_SCAN || leftChild.Stats.Cost < MinProbeTableRows {
-		return
-	}
-
-	statsCache := builder.compCtx.GetStatsCache()
-	if statsCache == nil {
+	if leftChild.NodeType != plan.Node_TABLE_SCAN || leftChild.Limit != nil {
 		return
 	}
 
@@ -96,7 +98,7 @@ func (builder *QueryBuilder) pushdownRuntimeFilters(nodeID int32) {
 	for _, expr := range node.OnList {
 		if isEquiCond(expr, leftTags, rightTags) {
 			args := expr.GetF().Args
-			if !CheckExprIsZonemappable(builder.GetContext(), args[0]) {
+			if !ExprIsZonemappable(builder.GetContext(), args[0]) {
 				return
 			}
 			probeExprs = append(probeExprs, args[0])
@@ -127,8 +129,7 @@ func (builder *QueryBuilder) pushdownRuntimeFilters(nodeID int32) {
 				}
 				if binding, ok := ctx.bindingByTag[col.Col.RelPos]; ok {
 					tableDef := builder.qry.Nodes[binding.nodeId].TableDef
-					colName := tableDef.Cols[col.Col.ColPos].Name
-					if GetSortOrder(tableDef, colName) != 0 {
+					if GetSortOrder(tableDef, col.Col.ColPos) != 0 {
 						return
 					}
 				}
@@ -160,7 +161,6 @@ func (builder *QueryBuilder) pushdownRuntimeFilters(nodeID int32) {
 	}
 
 	tableDef := leftChild.TableDef
-
 	if tableDef.Pkey == nil || len(tableDef.Pkey.Names) < len(probeExprs) {
 		return
 	}

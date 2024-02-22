@@ -16,7 +16,6 @@ package semi
 
 import (
 	"bytes"
-
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -25,8 +24,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+const argName = "semi"
+
 func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString(" semi join ")
+	buf.WriteString(argName)
+	buf.WriteString(": semi join ")
 }
 
 func (arg *Argument) Prepare(proc *process.Process) (err error) {
@@ -55,7 +57,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(arg.info.Idx, arg.info.ParallelIdx, arg.info.ParallelMajor)
+	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
 	anal.Start()
 	defer anal.Stop()
 	ap := arg
@@ -64,7 +66,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	for {
 		switch ctr.state {
 		case Build:
-			if err := ctr.build(anal, proc); err != nil {
+			if err := ctr.build(proc, anal); err != nil {
 				return result, err
 			}
 			if ctr.mp == nil && !arg.IsShuffle {
@@ -73,6 +75,9 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 				ctr.state = End
 			} else {
 				ctr.state = Probe
+			}
+			if ctr.mp != nil && ctr.mp.PushedRuntimeFilterIn() && ap.Cond == nil {
+				ctr.skipProbe = true
 			}
 
 		case Probe:
@@ -89,11 +94,28 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 				proc.PutBatch(bat)
 				continue
 			}
-			if ctr.bat == nil || ctr.bat.IsEmpty() {
+			if ctr.skipProbe {
+				vecused := make([]bool, len(bat.Vecs))
+				newvecs := make([]*vector.Vector, len(ap.Result))
+				for i, pos := range ap.Result {
+					vecused[pos] = true
+					newvecs[i] = bat.Vecs[pos]
+				}
+				for i := range bat.Vecs {
+					if !vecused[i] {
+						bat.Vecs[i].Free(proc.Mp())
+					}
+				}
+				bat.Vecs = newvecs
+				result.Batch = bat
+				anal.Output(bat, arg.GetIsLast())
+				return result, nil
+			}
+			if ctr.mp == nil {
 				proc.PutBatch(bat)
 				continue
 			}
-			if err := ctr.probe(bat, ap, proc, anal, arg.info.IsFirst, arg.info.IsLast, &result); err != nil {
+			if err := ctr.probe(bat, ap, proc, anal, arg.GetIsFirst(), arg.GetIsLast(), &result); err != nil {
 				bat.Clean(proc.Mp())
 				return result, err
 			}
@@ -108,22 +130,45 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 }
 
-func (ctr *container) build(anal process.Analyze, proc *process.Process) error {
+func (ctr *container) receiveHashMap(proc *process.Process, anal process.Analyze) error {
 	bat, _, err := ctr.ReceiveFromSingleReg(1, anal)
 	if err != nil {
 		return err
 	}
-
-	if bat != nil {
-		if ctr.bat != nil {
-			proc.PutBatch(ctr.bat)
-			ctr.bat = nil
-		}
-		ctr.bat = bat
+	if bat != nil && bat.AuxData != nil {
 		ctr.mp = bat.DupJmAuxData()
 		anal.Alloc(ctr.mp.Size())
 	}
 	return nil
+}
+
+func (ctr *container) receiveBatch(proc *process.Process, anal process.Analyze) error {
+	for {
+		bat, _, err := ctr.ReceiveFromSingleReg(1, anal)
+		if err != nil {
+			return err
+		}
+		if bat != nil {
+			ctr.batchRowCount += bat.RowCount()
+			ctr.batches = append(ctr.batches, bat)
+		} else {
+			break
+		}
+	}
+	for i := 0; i < len(ctr.batches)-1; i++ {
+		if ctr.batches[i].RowCount() != colexec.DefaultBatchSize {
+			panic("wrong batch received for hash build!")
+		}
+	}
+	return nil
+}
+
+func (ctr *container) build(proc *process.Process, anal process.Analyze) error {
+	err := ctr.receiveHashMap(proc, anal)
+	if err != nil {
+		return err
+	}
+	return ctr.receiveBatch(proc, anal)
 }
 
 func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool, result *vm.CallResult) error {
@@ -144,8 +189,8 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 	if ctr.joinBat1 == nil {
 		ctr.joinBat1, ctr.cfs1 = colexec.NewJoinBatch(bat, proc.Mp())
 	}
-	if ctr.joinBat2 == nil {
-		ctr.joinBat2, ctr.cfs2 = colexec.NewJoinBatch(ctr.bat, proc.Mp())
+	if ctr.joinBat2 == nil && ctr.batchRowCount > 0 {
+		ctr.joinBat2, ctr.cfs2 = colexec.NewJoinBatch(ctr.batches[0], proc.Mp())
 	}
 	count := bat.RowCount()
 	mSels := ctr.mp.Sels()
@@ -167,11 +212,12 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 			if ap.Cond != nil {
 				matched := false // mark if any tuple satisfies the condition
 				if ap.HashOnPK {
+					idx1, idx2 := int64(vals[k]-1)/colexec.DefaultBatchSize, int64(vals[k]-1)%colexec.DefaultBatchSize
 					if err := colexec.SetJoinBatchValues(ctr.joinBat1, bat, int64(i+k),
 						1, ctr.cfs1); err != nil {
 						return err
 					}
-					if err := colexec.SetJoinBatchValues(ctr.joinBat2, ctr.bat, int64(vals[k]-1),
+					if err := colexec.SetJoinBatchValues(ctr.joinBat2, ctr.batches[idx1], idx2,
 						1, ctr.cfs2); err != nil {
 						return err
 					}
@@ -189,11 +235,12 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 				} else {
 					sels := mSels[vals[k]-1]
 					for _, sel := range sels {
+						idx1, idx2 := sel/colexec.DefaultBatchSize, sel%colexec.DefaultBatchSize
 						if err := colexec.SetJoinBatchValues(ctr.joinBat1, bat, int64(i+k),
 							1, ctr.cfs1); err != nil {
 							return err
 						}
-						if err := colexec.SetJoinBatchValues(ctr.joinBat2, ctr.bat, int64(sel),
+						if err := colexec.SetJoinBatchValues(ctr.joinBat2, ctr.batches[idx1], int64(idx2),
 							1, ctr.cfs2); err != nil {
 							return err
 						}

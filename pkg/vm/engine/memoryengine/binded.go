@@ -17,6 +17,7 @@ package memoryengine
 import (
 	"context"
 
+	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -62,7 +63,7 @@ func (b *BindedEngine) Hints() engine.Hints {
 }
 
 func (b *BindedEngine) NewBlockReader(_ context.Context, _ int, _ timestamp.Timestamp,
-	_ *plan.Expr, _ [][]byte, _ *plan.TableDef, _ any) ([]engine.Reader, error) {
+	_ *plan.Expr, _ []byte, _ *plan.TableDef, _ any) ([]engine.Reader, error) {
 	return nil, nil
 }
 
@@ -88,4 +89,16 @@ func (b *BindedEngine) GetRelationById(ctx context.Context, op client.TxnOperato
 
 func (b *BindedEngine) AllocateIDByKey(ctx context.Context, key string) (uint64, error) {
 	return b.engine.AllocateIDByKey(ctx, key)
+}
+
+func (b *BindedEngine) TryToSubscribeTable(ctx context.Context, dbID, tbID uint64) error {
+	return b.engine.TryToSubscribeTable(ctx, dbID, tbID)
+}
+
+func (b *BindedEngine) UnsubscribeTable(ctx context.Context, dbID, tbID uint64) error {
+	return b.engine.UnsubscribeTable(ctx, dbID, tbID)
+}
+
+func (b *BindedEngine) Stats(ctx context.Context, key pb.StatsInfoKey, sync bool) *pb.StatsInfo {
+	return b.engine.Stats(ctx, key, sync)
 }

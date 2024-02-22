@@ -16,6 +16,7 @@ package sample
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
+	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
@@ -39,6 +40,11 @@ type Argument struct {
 
 	// it determines which sample action (random sample by rows / percents, sample by order and so on) to take.
 	Type int
+	// UsingBlock is used to speed up the sample process but will cause centroids skewed.
+	// If true, the sample action will randomly stop the sample process after it has sampled enough rows.
+	UsingBlock bool
+	// NeedOutputRowSeen indicates whether the sample operator needs to output the count of row seen as the last column.
+	NeedOutputRowSeen bool
 
 	Rows     int
 	Percents float64
@@ -50,10 +56,13 @@ type Argument struct {
 	GroupExprs []*plan.Expr
 
 	IBucket, NBucket int
+	buf              *batch.Batch
 
-	info     *vm.OperatorInfo
-	children []vm.Operator
-	buf      *batch.Batch
+	vm.OperatorBase
+}
+
+func (arg *Argument) GetOperatorBase() *vm.OperatorBase {
+	return &arg.OperatorBase
 }
 
 type container struct {
@@ -81,7 +90,34 @@ type container struct {
 	strHashMap    *hashmap.StrHashMap
 }
 
-func NewMergeSample(rowSampleArg *Argument) *Argument {
+func init() {
+	reuse.CreatePool[Argument](
+		func() *Argument {
+			return &Argument{}
+		},
+		func(a *Argument) {
+			*a = Argument{}
+		},
+		reuse.DefaultOptions[Argument]().
+			WithEnableChecker(),
+	)
+}
+
+func (arg Argument) TypeName() string {
+	return argName
+}
+
+func NewArgument() *Argument {
+	return reuse.Alloc[Argument](nil)
+}
+
+func (arg *Argument) Release() {
+	if arg != nil {
+		reuse.Free[Argument](arg, nil)
+	}
+}
+
+func NewMergeSample(rowSampleArg *Argument, outputRowCount bool) *Argument {
 	if rowSampleArg.Type != sampleByRow {
 		panic("invalid sample type to merge")
 	}
@@ -111,44 +147,43 @@ func NewMergeSample(rowSampleArg *Argument) *Argument {
 		}
 	}
 
-	return &Argument{
-		Type:        mergeSampleByRow,
-		Rows:        rowSampleArg.Rows,
-		IBucket:     0,
-		NBucket:     0,
-		GroupExprs:  newGroupExpr,
-		SampleExprs: newSampleExpr,
-	}
+	rowSampleArg.NeedOutputRowSeen = true
+	arg := NewArgument()
+	arg.Type = mergeSampleByRow
+	arg.UsingBlock = rowSampleArg.UsingBlock
+	arg.NeedOutputRowSeen = outputRowCount
+	arg.Rows = rowSampleArg.Rows
+	arg.IBucket = 0
+	arg.NBucket = 0
+	arg.GroupExprs = newGroupExpr
+	arg.SampleExprs = newSampleExpr
+	return arg
 }
 
-func NewSampleByRows(rows int, sampleExprs, groupExprs []*plan.Expr) *Argument {
-	return &Argument{
-		Type:        sampleByRow,
-		Rows:        rows,
-		SampleExprs: sampleExprs,
-		GroupExprs:  groupExprs,
-		IBucket:     0,
-		NBucket:     0,
-	}
+func NewSampleByRows(rows int, sampleExprs, groupExprs []*plan.Expr, usingRow bool, outputRowCount bool) *Argument {
+	arg := NewArgument()
+	arg.Type = sampleByRow
+	arg.UsingBlock = !usingRow
+	arg.NeedOutputRowSeen = outputRowCount
+	arg.Rows = rows
+	arg.SampleExprs = sampleExprs
+	arg.GroupExprs = groupExprs
+	arg.IBucket = 0
+	arg.NBucket = 0
+	return arg
 }
 
 func NewSampleByPercent(percent float64, sampleExprs, groupExprs []*plan.Expr) *Argument {
-	return &Argument{
-		Type:        sampleByPercent,
-		Percents:    percent,
-		SampleExprs: sampleExprs,
-		GroupExprs:  groupExprs,
-		IBucket:     0,
-		NBucket:     0,
-	}
-}
-
-func (arg *Argument) SetInfo(info *vm.OperatorInfo) {
-	arg.info = info
-}
-
-func (arg *Argument) AppendChild(child vm.Operator) {
-	arg.children = append(arg.children, child)
+	arg := NewArgument()
+	arg.Type = sampleByPercent
+	arg.UsingBlock = false
+	arg.NeedOutputRowSeen = false
+	arg.Percents = percent
+	arg.SampleExprs = sampleExprs
+	arg.GroupExprs = groupExprs
+	arg.IBucket = 0
+	arg.NBucket = 0
+	return arg
 }
 
 func (arg *Argument) IsMergeSampleByRow() bool {
@@ -160,15 +195,17 @@ func (arg *Argument) IsByPercent() bool {
 }
 
 func (arg *Argument) SimpleDup() *Argument {
-	return &Argument{
-		Type:        arg.Type,
-		Rows:        arg.Rows,
-		Percents:    arg.Percents,
-		SampleExprs: arg.SampleExprs,
-		GroupExprs:  arg.GroupExprs,
-		IBucket:     arg.IBucket,
-		NBucket:     arg.NBucket,
-	}
+	a := NewArgument()
+	a.Type = arg.Type
+	a.UsingBlock = arg.UsingBlock
+	a.NeedOutputRowSeen = arg.NeedOutputRowSeen
+	a.Rows = arg.Rows
+	a.Percents = arg.Percents
+	a.SampleExprs = arg.SampleExprs
+	a.GroupExprs = arg.GroupExprs
+	a.IBucket = arg.IBucket
+	a.NBucket = arg.NBucket
+	return a
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
@@ -203,10 +240,15 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 
 func (arg *Argument) ConvertToPipelineOperator(in *pipeline.Instruction) {
 	in.Agg = &pipeline.Group{
-		Ibucket: uint64(arg.IBucket),
-		Nbucket: uint64(arg.NBucket),
-		Exprs:   arg.GroupExprs,
+		Ibucket:  uint64(arg.IBucket),
+		Nbucket:  uint64(arg.NBucket),
+		Exprs:    arg.GroupExprs,
+		NeedEval: arg.UsingBlock,
 	}
+	if arg.NeedOutputRowSeen {
+		in.Agg.PreAllocSize = 1
+	}
+
 	in.SampleFunc = &pipeline.SampleFunc{
 		SampleColumns: arg.SampleExprs,
 		SampleType:    pipeline.SampleFunc_Rows,
@@ -224,11 +266,15 @@ func (arg *Argument) ConvertToPipelineOperator(in *pipeline.Instruction) {
 func GenerateFromPipelineOperator(opr *pipeline.Instruction) *Argument {
 	s := opr.GetSampleFunc()
 	g := opr.GetAgg()
+	needOutputRowSeen := g.PreAllocSize == 1
+
 	if s.SampleType == pipeline.SampleFunc_Rows {
-		return NewSampleByRows(int(s.SampleRows), s.SampleColumns, g.Exprs)
-	} else if s.SampleType == pipeline.SampleFunc_Percent {
-		return NewSampleByPercent(s.SamplePercent, s.SampleColumns, g.Exprs)
-	} else {
-		return NewSampleByRows(int(s.SampleRows), s.SampleColumns, g.Exprs)
+		return NewSampleByRows(int(s.SampleRows), s.SampleColumns, g.Exprs, !g.NeedEval, needOutputRowSeen)
 	}
+	if s.SampleType == pipeline.SampleFunc_Percent {
+		return NewSampleByPercent(s.SamplePercent, s.SampleColumns, g.Exprs)
+	}
+	arg := NewSampleByRows(int(s.SampleRows), s.SampleColumns, g.Exprs, !g.NeedEval, needOutputRowSeen)
+	arg.Type = mergeSampleByRow
+	return arg
 }

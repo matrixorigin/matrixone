@@ -20,6 +20,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 )
@@ -41,7 +42,9 @@ type SQLExecutor interface {
 
 // TxnExecutor exec all sql in a transaction.
 type TxnExecutor interface {
-	Exec(sql string) (Result, error)
+	Use(db string)
+	LockTable(table string) error
+	Exec(sql string, options StatementOption) (Result, error)
 }
 
 // Options execute options.
@@ -54,10 +57,17 @@ type Options struct {
 	innerTxn                bool
 	waitCommittedLogApplied bool
 	timeZone                *time.Location
+	statementOptions        StatementOption
+}
+
+// StatementOption statement execute option.
+type StatementOption struct {
+	waitPolicy lock.WaitPolicy
 }
 
 // Result exec sql result
 type Result struct {
+	LastInsertID uint64
 	AffectedRows uint64
 	Batches      []*batch.Batch
 	mp           *mpool.MPool

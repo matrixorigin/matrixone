@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -269,7 +270,7 @@ func (e *testEngine) Hints() (h Hints) {
 }
 
 func (e *testEngine) NewBlockReader(_ context.Context, _ int, _ timestamp.Timestamp,
-	_ *plan.Expr, _ [][]byte, _ *plan.TableDef, proc any) ([]Reader, error) {
+	_ *plan.Expr, _ []byte, _ *plan.TableDef, proc any) ([]Reader, error) {
 	e.parent.step = e.parent.step + 1
 	if e.name == origin {
 		e.parent.state = e.parent.state + e.parent.step*e.parent.state
@@ -288,6 +289,26 @@ func (e *testEngine) GetRelationById(ctx context.Context, op client.TxnOperator,
 }
 
 func (e *testEngine) AllocateIDByKey(ctx context.Context, key string) (uint64, error) {
+	return 0, nil
+}
+
+func (e *testEngine) TryToSubscribeTable(ctx context.Context, dbID, tbID uint64) error {
+	return nil
+}
+
+func (e *testEngine) UnsubscribeTable(ctx context.Context, dbID, tbID uint64) error {
+	return nil
+}
+
+func (e *testEngine) Stats(ctx context.Context, key pb.StatsInfoKey, sync bool) *pb.StatsInfo {
+	return nil
+}
+
+func (e *testEngine) Rows(ctx context.Context, key pb.StatsInfoKey) uint64 {
+	return 0
+}
+
+func (e *testEngine) Size(ctx context.Context, key pb.StatsInfoKey, colName string) (uint64, error) {
 	return 0, nil
 }
 
@@ -328,6 +349,10 @@ func (o *testOperator) Snapshot() ([]byte, error) {
 
 func (o *testOperator) Txn() txn.TxnMeta {
 	return txn.TxnMeta{}
+}
+
+func (o *testOperator) PKDedupCount() int {
+	panic("should not call")
 }
 
 func (o *testOperator) SnapshotTS() timestamp.Timestamp {

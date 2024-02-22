@@ -21,6 +21,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -34,6 +37,11 @@ type CompilerContext struct {
 	defaultDB string
 	engine    *Engine
 	txnOp     client.TxnOperator
+}
+
+func (c *CompilerContext) ReplacePlan(execPlan *planpb.Execute) (*planpb.Plan, tree.Statement, error) {
+	//TODO implement me
+	panic("implement me")
 }
 
 func (c *CompilerContext) CheckSubscriptionValid(subName, accName string, pubName string) error {
@@ -78,12 +86,8 @@ func (c *CompilerContext) ResolveAccountIds(accountNames []string) ([]uint32, er
 	return []uint32{catalog.System_Account}, nil
 }
 
-func (*CompilerContext) Stats(obj *plan.ObjectRef) bool {
-	return false
-}
-
-func (*CompilerContext) GetStatsCache() *plan.StatsCache {
-	return nil
+func (*CompilerContext) Stats(obj *plan.ObjectRef) (*pb.StatsInfo, error) {
+	return nil, nil
 }
 
 func (c *CompilerContext) GetSubscriptionMeta(dbName string) (*plan.SubscriptionMeta, error) {
@@ -147,11 +151,8 @@ func (*CompilerContext) GetUserName() string {
 	return "root"
 }
 
-func (c *CompilerContext) GetAccountId() uint32 {
-	if v := c.ctx.Value(defines.TenantIDKey{}); v != nil {
-		return v.(uint32)
-	}
-	return 0
+func (c *CompilerContext) GetAccountId() (uint32, error) {
+	return defines.GetAccountId(c.ctx)
 }
 
 func (c *CompilerContext) GetContext() context.Context {

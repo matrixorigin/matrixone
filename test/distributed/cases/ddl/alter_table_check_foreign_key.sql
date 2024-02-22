@@ -27,7 +27,7 @@ create table emp(
                     comm decimal(7,2) COMMENT '奖金',
                     deptno int unsigned COMMENT '所在部门',
                     primary key(empno),
-                    FOREIGN KEY (deptno) REFERENCES dept(deptno)
+                    constraint `c1` FOREIGN KEY (deptno) REFERENCES dept(deptno)
 );
 
 
@@ -182,8 +182,8 @@ CREATE TABLE product_order (
         PRIMARY KEY (no),
         INDEX(product_category, product_id),
         INDEX(customer_id),
-        FOREIGN KEY (product_category, product_id) REFERENCES product (category, id) ON DELETE RESTRICT ON UPDATE CASCADE,
-        FOREIGN KEY (customer_id) REFERENCES customer (id)
+        constraint `c1` FOREIGN KEY (product_category, product_id) REFERENCES product (category, id) ON DELETE RESTRICT ON UPDATE CASCADE,
+        constraint `c2` FOREIGN KEY (customer_id) REFERENCES customer (id)
 );
 INSERT INTO product_order VALUES (1, 10, 1, 1, '2016-12-02 15:41:39');
 INSERT INTO product_order VALUES (2, 10, 2, 2, '2016-12-01 15:42:42');

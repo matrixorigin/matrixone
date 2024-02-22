@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -67,7 +68,7 @@ func (e *Engine) Rollback(_ context.Context, _ client.TxnOperator) error {
 }
 
 func (e *Engine) NewBlockReader(_ context.Context, _ int, _ timestamp.Timestamp,
-	_ *plan.Expr, _ [][]byte, _ *plan.TableDef, _ any) ([]engine.Reader, error) {
+	_ *plan.Expr, _ []byte, _ *plan.TableDef, _ any) ([]engine.Reader, error) {
 	return nil, nil
 }
 
@@ -78,6 +79,10 @@ func (e *Engine) Create(ctx context.Context, dbName string, txnOperator client.T
 		return err
 	}
 
+	access, err := getAccessInfo(ctx)
+	if err != nil {
+		return err
+	}
 	_, err = DoTxnRequest[CreateDatabaseResp](
 		ctx,
 		txnOperator,
@@ -86,7 +91,7 @@ func (e *Engine) Create(ctx context.Context, dbName string, txnOperator client.T
 		OpCreateDatabase,
 		&CreateDatabaseReq{
 			ID:         id,
-			AccessInfo: getAccessInfo(ctx),
+			AccessInfo: access,
 			Name:       dbName,
 		},
 	)
@@ -98,7 +103,10 @@ func (e *Engine) Create(ctx context.Context, dbName string, txnOperator client.T
 }
 
 func (e *Engine) Database(ctx context.Context, dbName string, txnOperator client.TxnOperator) (engine.Database, error) {
-
+	access, err := getAccessInfo(ctx)
+	if err != nil {
+		return nil, err
+	}
 	resps, err := DoTxnRequest[OpenDatabaseResp](
 		ctx,
 		txnOperator,
@@ -106,7 +114,7 @@ func (e *Engine) Database(ctx context.Context, dbName string, txnOperator client
 		e.anyShard,
 		OpOpenDatabase,
 		&OpenDatabaseReq{
-			AccessInfo: getAccessInfo(ctx),
+			AccessInfo: access,
 			Name:       dbName,
 		},
 	)
@@ -129,7 +137,10 @@ func (e *Engine) Database(ctx context.Context, dbName string, txnOperator client
 }
 
 func (e *Engine) Databases(ctx context.Context, txnOperator client.TxnOperator) ([]string, error) {
-
+	access, err := getAccessInfo(ctx)
+	if err != nil {
+		return nil, err
+	}
 	resps, err := DoTxnRequest[GetDatabasesResp](
 		ctx,
 		txnOperator,
@@ -137,7 +148,7 @@ func (e *Engine) Databases(ctx context.Context, txnOperator client.TxnOperator) 
 		e.anyShard,
 		OpGetDatabases,
 		&GetDatabasesReq{
-			AccessInfo: getAccessInfo(ctx),
+			AccessInfo: access,
 		},
 	)
 	if err != nil {
@@ -148,15 +159,18 @@ func (e *Engine) Databases(ctx context.Context, txnOperator client.TxnOperator) 
 }
 
 func (e *Engine) Delete(ctx context.Context, dbName string, txnOperator client.TxnOperator) error {
-
-	_, err := DoTxnRequest[DeleteDatabaseResp](
+	access, err := getAccessInfo(ctx)
+	if err != nil {
+		return err
+	}
+	_, err = DoTxnRequest[DeleteDatabaseResp](
 		ctx,
 		txnOperator,
 		false,
 		e.allShards,
 		OpDeleteDatabase,
 		&DeleteDatabaseReq{
-			AccessInfo: getAccessInfo(ctx),
+			AccessInfo: access,
 			Name:       dbName,
 		},
 	)
@@ -204,6 +218,18 @@ func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tab
 func (e *Engine) AllocateIDByKey(ctx context.Context, key string) (uint64, error) {
 	id, err := e.idGenerator.NewIDByKey(ctx, key)
 	return uint64(id), err
+}
+
+func (e *Engine) TryToSubscribeTable(ctx context.Context, dbID, tbID uint64) error {
+	return nil
+}
+
+func (e *Engine) UnsubscribeTable(ctx context.Context, dbID, tbID uint64) error {
+	return nil
+}
+
+func (e *Engine) Stats(ctx context.Context, key pb.StatsInfoKey, sync bool) *pb.StatsInfo {
+	return nil
 }
 
 func getTNServices(cluster clusterservice.MOCluster) []metadata.TNService {

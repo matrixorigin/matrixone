@@ -40,12 +40,11 @@ type serviceAddresses struct {
 }
 
 // newServiceAddresses constructs addresses for all services.
-func newServiceAddresses(t *testing.T, logServiceNum, tnServiceNum, cnServiceNum int, hostAddr string) serviceAddresses {
-	address := serviceAddresses{
+func newServiceAddresses(t *testing.T, logServiceNum, tnServiceNum, cnServiceNum int, hostAddr string) *serviceAddresses {
+	address := &serviceAddresses{
 		t:             t,
 		logServiceNum: logServiceNum,
 		tnServiceNum:  tnServiceNum,
-		cnServiceNum:  cnServiceNum,
 	}
 
 	// build log service addresses
@@ -68,16 +67,20 @@ func newServiceAddresses(t *testing.T, logServiceNum, tnServiceNum, cnServiceNum
 	}
 	address.tnAddresses = tnAddrs
 
-	cnBatch := address.cnServiceNum
-	cnAddrs := make([]cnServiceAddress, cnBatch)
+	address.buildCNAddress(t, cnServiceNum, hostAddr)
+	return address
+}
+
+func (a *serviceAddresses) buildCNAddress(
+	t *testing.T,
+	cnBatch int,
+	hostAddr string) {
 	for i := 0; i < cnBatch; i++ {
 		cnAddr, err := newCNServiceAddress(hostAddr)
 		require.NoError(t, err)
-		cnAddrs[i] = cnAddr
+		a.cnAddresses = append(a.cnAddresses, cnAddr)
+		a.cnServiceNum++
 	}
-	address.cnAddresses = cnAddrs
-
-	return address
 }
 
 // assertTNService asserts constructed address for tn service.
@@ -113,6 +116,33 @@ func (a serviceAddresses) getTnLogtailAddress(index int) string {
 		return ""
 	}
 	return a.tnAddresses[index].logtailAddr
+}
+
+func (a serviceAddresses) getTNLockListenAddress(index int) string {
+	a.assertTNService()
+
+	if index >= len(a.tnAddresses) || index < 0 {
+		return ""
+	}
+	return a.tnAddresses[index].lockAddr
+}
+
+func (a serviceAddresses) getCNLockListenAddress(index int) string {
+	a.assertTNService()
+
+	if index >= len(a.cnAddresses) || index < 0 {
+		return ""
+	}
+	return a.cnAddresses[index].lockAddr
+}
+
+func (a serviceAddresses) getCNQueryListenAddress(index int) string {
+	a.assertTNService()
+
+	if index >= len(a.cnAddresses) || index < 0 {
+		return ""
+	}
+	return a.cnAddresses[index].queryAddr
 }
 
 // getLogListenAddress gets log service address by its index.
@@ -272,16 +302,18 @@ func (la logServiceAddress) listAddresses() []string {
 type tnServiceAddress struct {
 	listenAddr  string
 	logtailAddr string
+	lockAddr    string
 }
 
 func newTNServiceAddress(host string) (tnServiceAddress, error) {
-	addrs, err := tests.GetAddressBatch(host, 2)
+	addrs, err := tests.GetAddressBatch(host, 3)
 	if err != nil {
 		return tnServiceAddress{}, err
 	}
 	return tnServiceAddress{
 		listenAddr:  addrs[0],
 		logtailAddr: addrs[1],
+		lockAddr:    addrs[2],
 	}, nil
 }
 
@@ -292,14 +324,20 @@ func (da tnServiceAddress) listAddresses() []string {
 
 type cnServiceAddress struct {
 	listenAddr string
+	lockAddr   string
+	queryAddr  string
 }
 
 func newCNServiceAddress(host string) (cnServiceAddress, error) {
-	addrs, err := tests.GetAddressBatch(host, 1)
+	addrs, err := tests.GetAddressBatch(host, 3)
 	if err != nil {
 		return cnServiceAddress{}, err
 	}
-	return cnServiceAddress{listenAddr: addrs[0]}, nil
+	return cnServiceAddress{
+		listenAddr: addrs[0],
+		lockAddr:   addrs[1],
+		queryAddr:  addrs[2],
+	}, nil
 }
 
 func (ca cnServiceAddress) listAddresses() []string {

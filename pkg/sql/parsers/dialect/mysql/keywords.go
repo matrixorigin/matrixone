@@ -64,6 +64,7 @@ func init() {
 		"cascade":                    CASCADE,
 		"case":                       CASE,
 		"cast":                       CAST,
+		"serial_extract":             SERIAL_EXTRACT,
 		"change":                     CHANGE,
 		"char":                       CHAR,
 		"character":                  CHARACTER,
@@ -584,7 +585,7 @@ func init() {
 		"table_values":               TABLE_VALUES,
 		"table_size":                 TABLE_SIZE,
 		"cluster_centers":            CLUSTER_CENTERS,
-		"spherical_kmeans":           SPHERICAL_KMEANS,
+		"kmeans":                     KMEANS,
 		"column_number":              COLUMN_NUMBER,
 		"returns":                    RETURNS,
 		"extension":                  EXTENSION,
@@ -616,5 +617,7 @@ func init() {
 		"handler":                    HANDLER,
 		"sample":                     SAMPLE,
 		"percent":                    PERCENT,
+		"master":                     MASTER,
+		"parallelism":                PARALLELISM,
 	}
 }

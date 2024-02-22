@@ -169,16 +169,13 @@ func AllocS3Writer(proc *process.Process, tableDef *plan.TableDef) (*S3Writer, e
 
 	if tableDef.ClusterBy != nil {
 		writer.isClusterBy = true
-		if util.JudgeIsCompositeClusterByColumn(tableDef.ClusterBy.Name) {
-			// the serialized clusterby col is located in the last of the bat.vecs
-			// When INSERT, the TableDef columns list in the table contains a rowid column, but the inserted data
-			// does not have a rowid column, so it needs to be excluded. Therefore, is `len(tableDef.Cols) - 2`
-			writer.sortIndex = len(tableDef.Cols) - 2
-		} else {
-			for idx, colDef := range tableDef.Cols {
-				if colDef.Name == tableDef.ClusterBy.Name {
-					writer.sortIndex = idx
-				}
+
+		// the `rowId` column has been excluded from target table's `TableDef` for insert statements (insert, load),
+		// link: `/pkg/sql/plan/build_constraint_util.go` -> func setTableExprToDmlTableInfo
+		// and the `sortIndex` position can be directly obtained using a name that matches the sorting key
+		for idx, colDef := range tableDef.Cols {
+			if colDef.Name == tableDef.ClusterBy.Name {
+				writer.sortIndex = idx
 			}
 		}
 	}
@@ -446,6 +443,8 @@ func (w *S3Writer) SortAndFlush(proc *process.Process) error {
 		switch w.Bats[0].Vecs[sortIdx].GetType().Oid {
 		case types.T_bool:
 			merge = NewMerge(len(w.Bats), sort.NewBoolLess(), getFixedCols[bool](w.Bats, pos), nulls)
+		case types.T_bit:
+			merge = NewMerge(len(w.Bats), sort.NewGenericCompLess[uint64](), getFixedCols[uint64](w.Bats, pos), nulls)
 		case types.T_int8:
 			merge = NewMerge(len(w.Bats), sort.NewGenericCompLess[int8](), getFixedCols[int8](w.Bats, pos), nulls)
 		case types.T_int16:
@@ -570,7 +569,7 @@ func (w *S3Writer) GenerateWriter(proc *process.Process) (objectio.ObjectName, e
 func (w *S3Writer) generateWriter(proc *process.Process) (objectio.ObjectName, error) {
 	// Use uuid as segment id
 	// TODO: multiple 64m file in one segment
-	obj := Srv.GenerateObject()
+	obj := Get().GenerateObject()
 	s3, err := fileservice.Get[fileservice.FileService](proc.FileService, defines.SharedFileServiceName)
 	if err != nil {
 		return nil, err
@@ -665,7 +664,7 @@ func (w *S3Writer) writeEndBlocks(proc *process.Process) error {
 		if err := vector.AppendBytes(
 			w.blockInfoBat.Vecs[1],
 			//[]byte(metaLoc),
-			catalog.EncodeBlockInfo(blkInfo),
+			objectio.EncodeBlockInfo(blkInfo),
 			false,
 			proc.GetMPool()); err != nil {
 			return err
@@ -691,13 +690,13 @@ func (w *S3Writer) writeEndBlocks(proc *process.Process) error {
 
 // WriteEndBlocks writes batches in buffer to fileservice(aka s3 in this feature) and get meta data about block on fileservice and put it into metaLocBat
 // For more information, please refer to the comment about func WriteEnd in Writer interface
-func (w *S3Writer) WriteEndBlocks(proc *process.Process) ([]catalog.BlockInfo, []objectio.ObjectStats, error) {
+func (w *S3Writer) WriteEndBlocks(proc *process.Process) ([]objectio.BlockInfo, []objectio.ObjectStats, error) {
 	blocks, _, err := w.writer.Sync(proc.Ctx)
 	logutil.Debugf("write s3 table %q: %v, %v", w.tablename, w.seqnums, w.attrs)
 	if err != nil {
 		return nil, nil, err
 	}
-	blkInfos := make([]catalog.BlockInfo, 0, len(blocks))
+	blkInfos := make([]objectio.BlockInfo, 0, len(blocks))
 	//TODO::block id ,segment id and location should be get from BlockObject.
 	for j := range blocks {
 		location := blockio.EncodeLocation(
@@ -711,7 +710,7 @@ func (w *S3Writer) WriteEndBlocks(proc *process.Process) ([]catalog.BlockInfo, [
 			return nil, nil, err
 		}
 		sid := location.Name().SegmentId()
-		blkInfo := catalog.BlockInfo{
+		blkInfo := objectio.BlockInfo{
 			BlockID: *objectio.NewBlockid(
 				&sid,
 				location.Name().Num(),

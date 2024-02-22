@@ -665,9 +665,13 @@ func (tbl *txnTable) AddBlksWithMetaLoc(ctx context.Context, stats containers.Ve
 }
 func (tbl *txnTable) addBlksWithMetaLoc(ctx context.Context, stats objectio.ObjectStats) (err error) {
 	var pkVecs []containers.Vector
+	var closeFuncs []func()
 	defer func() {
 		for _, v := range pkVecs {
 			v.Close()
+		}
+		for _, f := range closeFuncs {
+			f()
 		}
 	}()
 	if tbl.tableSpace != nil && tbl.tableSpace.isStatsExisted(stats) {
@@ -694,20 +698,26 @@ func (tbl *txnTable) addBlksWithMetaLoc(ctx context.Context, stats objectio.Obje
 		if dedupType == txnif.FullDedup {
 			//TODO::parallel load pk.
 			for _, loc := range metaLocs {
-				bat, err := blockio.LoadColumns(
+				var vectors []containers.Vector
+				var closeFunc func()
+				//Extend lifetime of vectors is within the function.
+				//No NeedCopy. closeFunc is required after use.
+				//VectorPool is nil.
+				vectors, closeFunc, err = blockio.LoadColumns2(
 					ctx,
 					[]uint16{uint16(tbl.schema.GetSingleSortKeyIdx())},
 					nil,
 					tbl.store.rt.Fs.Service,
 					loc,
-					nil,
 					fileservice.Policy(0),
+					false,
+					nil,
 				)
 				if err != nil {
 					return err
 				}
-				vec := containers.ToTNVector(bat.Vecs[0], common.WorkspaceAllocator)
-				pkVecs = append(pkVecs, vec)
+				closeFuncs = append(closeFuncs, closeFunc)
+				pkVecs = append(pkVecs, vectors[0])
 			}
 			for _, v := range pkVecs {
 				//do PK deduplication check against txn's work space.
@@ -970,7 +980,9 @@ func (tbl *txnTable) AlterTable(ctx context.Context, req *apipb.AlterTableReq) e
 		apipb.AlterKind_AddColumn,
 		apipb.AlterKind_DropColumn,
 		apipb.AlterKind_RenameTable,
-		apipb.AlterKind_UpdatePolicy:
+		apipb.AlterKind_UpdatePolicy,
+		apipb.AlterKind_AddPartition,
+		apipb.AlterKind_RenameColumn:
 	default:
 		return moerr.NewNYI(ctx, "alter table %s", req.Kind.String())
 	}
@@ -1230,20 +1242,24 @@ func (tbl *txnTable) DedupSnapByMetaLocs(ctx context.Context, metaLocs []objecti
 			//TODO::laod zm index first, then load pk column if necessary.
 			_, ok := loaded[i]
 			if !ok {
-				bat, err := blockio.LoadColumns(
+				//Extend lifetime of vectors is within the function.
+				//No NeedCopy. closeFunc is required after use.
+				//VectorPool is nil.
+				vectors, closeFunc, err := blockio.LoadColumns2(
 					ctx,
 					[]uint16{uint16(tbl.schema.GetSingleSortKeyIdx())},
 					nil,
 					tbl.store.rt.Fs.Service,
 					loc,
-					nil,
 					fileservice.Policy(0),
+					false,
+					nil,
 				)
 				if err != nil {
 					return err
 				}
-				vec := containers.ToTNVector(bat.Vecs[0], common.WorkspaceAllocator)
-				loaded[i] = vec
+				defer closeFunc()
+				loaded[i] = vectors[0]
 			}
 			if err = blkData.BatchDedup(
 				ctx,

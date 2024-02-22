@@ -69,6 +69,7 @@ var (
 	insertIntoSecondaryIndexTableWithPKeyFormat = "insert into  %s.`%s` select serial_full(%s), %s from %s.%s;"
 	insertIntoSingleIndexTableWithoutPKeyFormat = "insert into  %s.`%s` select (%s) from %s.%s where (%s) is not null;"
 	insertIntoIndexTableWithoutPKeyFormat       = "insert into  %s.`%s` select serial(%s) from %s.%s where serial(%s) is not null;"
+	insertIntoMasterIndexTableFormat            = "insert into  %s.`%s` select serial_full('%s', %s, %s), %s from %s.`%s`;"
 	createIndexTableForamt                      = "create table %s.`%s` (%s);"
 )
 
@@ -98,6 +99,8 @@ func genCreateIndexTableSql(indexTableDef *plan.TableDef, indexDef *plan.IndexDe
 		sql += planCol.Name + " "
 		typeId := types.T(planCol.Typ.Id)
 		switch typeId {
+		case types.T_bit:
+			sql += fmt.Sprintf("BIT(%d)", planCol.Typ.Width)
 		case types.T_char:
 			sql += fmt.Sprintf("CHAR(%d)", planCol.Typ.Width)
 		case types.T_varchar:
@@ -207,6 +210,36 @@ func genInsertIndexTableSql(originTableDef *plan.TableDef, indexDef *plan.IndexD
 		}
 	}
 	return insertSQL
+}
+
+// genInsertIndexTableSqlForMasterIndex: Create inserts for master index table
+func genInsertIndexTableSqlForMasterIndex(originTableDef *plan.TableDef, indexDef *plan.IndexDef, DBName string) []string {
+	// insert data into index table
+	var insertSQLs = make([]string, len(indexDef.Parts))
+
+	pkeyName := originTableDef.Pkey.PkeyColName
+	var pKeyMsg string
+	if pkeyName == catalog.CPrimaryKeyColName {
+		pKeyMsg = "serial("
+		for i, part := range originTableDef.Pkey.Names {
+			if i == 0 {
+				pKeyMsg += part
+			} else {
+				pKeyMsg += "," + part
+			}
+		}
+		pKeyMsg += ")"
+	} else {
+		pKeyMsg = pkeyName
+	}
+
+	for i, part := range indexDef.Parts {
+		insertSQLs[i] = fmt.Sprintf(insertIntoMasterIndexTableFormat,
+			DBName, indexDef.IndexTableName,
+			part, part, pKeyMsg, pKeyMsg, DBName, originTableDef.Name)
+	}
+
+	return insertSQLs
 }
 
 // genInsertMOIndexesSql: Generate an insert statement for insert index metadata into `mo_catalog.mo_indexes`
@@ -394,12 +427,13 @@ func makeInsertTablePartitionsSQL(eg engine.Engine, ctx context.Context, proc *p
 
 	for _, def := range tableDefs {
 		if partitionDef, ok := def.(*engine.PartitionDef); ok {
-			insertMoTablePartitionSql, err2 := genInsertMoTablePartitionsSql(eg, proc, databaseId, tableId, partitionDef)
-			if err2 != nil {
-				return "", err2
-			} else {
-				return insertMoTablePartitionSql, nil
+			partitionByDef := &plan2.PartitionByDef{}
+			if err = partitionByDef.UnMarshalPartitionInfo(([]byte)(partitionDef.Partition)); err != nil {
+				return "", nil
 			}
+
+			insertMoTablePartitionSql := genInsertMoTablePartitionsSql(databaseId, tableId, partitionByDef, partitionByDef.Partitions)
+			return insertMoTablePartitionSql, nil
 		}
 	}
 	return "", nil
@@ -461,7 +495,7 @@ func genNewUniqueIndexDuplicateCheck(c *Compile, database, table, cols string) e
 	}
 	defer res.Close()
 
-	res.ReadRows(func(colVecs []*vector.Vector) bool {
+	res.ReadRows(func(_ int, colVecs []*vector.Vector) bool {
 		if t, e := types.Unpack(colVecs[0].GetBytesAt(0)); e != nil {
 			err = e
 		} else {
@@ -499,19 +533,13 @@ func haveSinkScanInPlan(nodes []*plan.Node, curNodeIdx int32) bool {
 	return false
 }
 
-// genInsertMOIndexesSql: Generate an insert statement for insert index metadata into `mo_catalog.mo_indexes`
-func genInsertMoTablePartitionsSql(eg engine.Engine, proc *process.Process, databaseId string, tableId uint64, partitionDef *engine.PartitionDef) (string, error) {
+// genInsertMoTablePartitionsSql: Generate an insert statement for insert index metadata into `mo_catalog.mo_table_partitions`
+func genInsertMoTablePartitionsSql(databaseId string, tableId uint64, partitionByDef *plan2.PartitionByDef, partitions []*plan.PartitionItem) string {
 	buffer := bytes.NewBuffer(make([]byte, 0, 2048))
 	buffer.WriteString("insert into mo_catalog.mo_table_partitions values")
 
-	partitionByDef := &plan2.PartitionByDef{}
-	err := partitionByDef.UnMarshalPartitionInfo(([]byte)(partitionDef.Partition))
-	if err != nil {
-		return "", nil
-	}
-
 	isFirst := true
-	for _, partition := range partitionByDef.Partitions {
+	for _, partition := range partitions {
 		// 1. tableId
 		if isFirst {
 			fmt.Fprintf(buffer, "(%d, ", tableId)
@@ -548,5 +576,5 @@ func genInsertMoTablePartitionsSql(eg engine.Engine, proc *process.Process, data
 		fmt.Fprintf(buffer, "'%s')", partition.PartitionTableName)
 	}
 	buffer.WriteString(";")
-	return buffer.String(), nil
+	return buffer.String()
 }

@@ -28,8 +28,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+const argName = "insert"
+
 func (arg *Argument) String(buf *bytes.Buffer) {
-	buf.WriteString("insert")
+	buf.WriteString(argName)
+	buf.WriteString(": insert")
 }
 
 func (arg *Argument) Prepare(proc *process.Process) error {
@@ -62,7 +65,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	defer analyze(proc, arg.info.Idx, arg.info.ParallelIdx, arg.info.ParallelMajor)()
+	defer analyze(proc, arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())()
 	if arg.ToWriteS3 {
 		return arg.insert_s3(proc)
 	}
@@ -75,7 +78,7 @@ func (arg *Argument) insert_s3(proc *process.Process) (vm.CallResult, error) {
 		v2.TxnStatementInsertS3DurationHistogram.Observe(time.Since(start).Seconds())
 	}()
 
-	anal := proc.GetAnalyze(arg.info.Idx, arg.info.ParallelIdx, arg.info.ParallelMajor)
+	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
 	anal.Start()
 	defer func() {
 		anal.Stop()
@@ -83,7 +86,7 @@ func (arg *Argument) insert_s3(proc *process.Process) (vm.CallResult, error) {
 
 	if arg.ctr.state == vm.Build {
 		for {
-			result, err := vm.ChildrenCall(arg.children[0], proc, anal)
+			result, err := vm.ChildrenCall(arg.GetChildren(0), proc, anal)
 
 			if err != nil {
 				return result, err
@@ -179,11 +182,11 @@ func (arg *Argument) insert_s3(proc *process.Process) (vm.CallResult, error) {
 
 func (arg *Argument) insert_table(proc *process.Process) (vm.CallResult, error) {
 
-	anal := proc.GetAnalyze(arg.info.Idx, arg.info.ParallelIdx, arg.info.ParallelMajor)
+	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
 	anal.Start()
 	defer anal.Stop()
 
-	result, err := arg.children[0].Call(proc)
+	result, err := arg.GetChildren(0).Call(proc)
 	if err != nil {
 		return result, err
 	}

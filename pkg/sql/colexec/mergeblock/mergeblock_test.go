@@ -16,10 +16,11 @@ package mergeblock
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"reflect"
 	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
@@ -56,7 +57,7 @@ func TestMergeBlock(t *testing.T) {
 	loc3 := blockio.EncodeLocation(name3, objectio.Extent{}, 15, 0)
 
 	sid1 := loc1.Name().SegmentId()
-	blkInfo1 := catalog.BlockInfo{
+	blkInfo1 := objectio.BlockInfo{
 		BlockID: *objectio.NewBlockid(
 			&sid1,
 			loc1.Name().Num(),
@@ -68,7 +69,7 @@ func TestMergeBlock(t *testing.T) {
 	blkInfo1.SetMetaLocation(loc1)
 
 	sid2 := loc2.Name().SegmentId()
-	blkInfo2 := catalog.BlockInfo{
+	blkInfo2 := objectio.BlockInfo{
 		BlockID: *objectio.NewBlockid(
 			&sid2,
 			loc2.Name().Num(),
@@ -80,7 +81,7 @@ func TestMergeBlock(t *testing.T) {
 	blkInfo2.SetMetaLocation(loc2)
 
 	sid3 := loc3.Name().SegmentId()
-	blkInfo3 := catalog.BlockInfo{
+	blkInfo3 := objectio.BlockInfo{
 		BlockID: *objectio.NewBlockid(
 			&sid3,
 			loc3.Name().Num(),
@@ -96,9 +97,9 @@ func TestMergeBlock(t *testing.T) {
 		Vecs: []*vector.Vector{
 			testutil.MakeInt16Vector([]int16{0, 0, 0}, nil),
 			testutil.MakeTextVector([]string{
-				string(catalog.EncodeBlockInfo(blkInfo1)),
-				string(catalog.EncodeBlockInfo(blkInfo2)),
-				string(catalog.EncodeBlockInfo(blkInfo3))},
+				string(objectio.EncodeBlockInfo(blkInfo1)),
+				string(objectio.EncodeBlockInfo(blkInfo2)),
+				string(objectio.EncodeBlockInfo(blkInfo3))},
 				nil),
 			testutil.MakeTextVector([]string{
 				string(objectio.ZeroObjectStats[:]),
@@ -114,11 +115,14 @@ func TestMergeBlock(t *testing.T) {
 		Tbl: &mockRelation{},
 		//Unique_tbls:  []engine.Relation{&mockRelation{}, &mockRelation{}},
 		affectedRows: 0,
-		info: &vm.OperatorInfo{
-			Idx:     0,
-			IsFirst: false,
-			IsLast:  false,
+		OperatorBase: vm.OperatorBase{
+			OperatorInfo: vm.OperatorInfo{
+				Idx:     0,
+				IsFirst: false,
+				IsLast:  false,
+			},
 		},
+		AddAffectedRows: true,
 	}
 	resetChildren(&argument1, batch1)
 
@@ -160,23 +164,18 @@ func TestMergeBlock(t *testing.T) {
 	for k := range argument1.container.mp {
 		argument1.container.mp[k].Clean(proc.GetMPool())
 	}
-	argument1.children[0].Free(proc, false, nil)
+	argument1.GetChildren(0).Free(proc, false, nil)
 	proc.FreeVectors()
 	require.Equal(t, int64(0), proc.GetMPool().CurrNB())
 }
 
 func resetChildren(arg *Argument, bat *batch.Batch) {
-	if len(arg.children) == 0 {
-		arg.AppendChild(&value_scan.Argument{
-			Batchs: []*batch.Batch{bat},
+	arg.SetChildren(
+		[]vm.Operator{
+			&value_scan.Argument{
+				Batchs: []*batch.Batch{bat},
+			},
 		})
-
-	} else {
-		arg.children = arg.children[:0]
-		arg.AppendChild(&value_scan.Argument{
-			Batchs: []*batch.Batch{bat},
-		})
-	}
 }
 
 func mockBlockInfoBat(proc *process.Process, withStats bool) *batch.Batch {
@@ -193,7 +192,7 @@ func mockBlockInfoBat(proc *process.Process, withStats bool) *batch.Batch {
 	blockInfoBat.Vecs[1] = proc.GetVector(types.T_text.ToType())
 
 	if withStats {
-		blockInfoBat.Vecs[2] = vector.NewConstBytes(types.T_binary.ToType(),
+		blockInfoBat.Vecs[2], _ = vector.NewConstBytes(types.T_binary.ToType(),
 			objectio.ZeroObjectStats.Marshal(), 1, proc.GetMPool())
 	}
 
@@ -205,11 +204,14 @@ func TestArgument_GetMetaLocBat(t *testing.T) {
 		Tbl: &mockRelation{},
 		//Unique_tbls:  []engine.Relation{&mockRelation{}, &mockRelation{}},
 		affectedRows: 0,
-		info: &vm.OperatorInfo{
-			Idx:     0,
-			IsFirst: false,
-			IsLast:  false,
+		OperatorBase: vm.OperatorBase{
+			OperatorInfo: vm.OperatorInfo{
+				Idx:     0,
+				IsFirst: false,
+				IsLast:  false,
+			},
 		},
+		AddAffectedRows: true,
 	}
 
 	proc := testutil.NewProc()

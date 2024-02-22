@@ -185,24 +185,24 @@ func TestBasicSingleShardWithInternalSQLExecutor(t *testing.T) {
 			exec.ExecTxn(
 				ctx,
 				func(te executor.TxnExecutor) error {
-					res, err := te.Exec("create database zx")
+					res, err := te.Exec("create database zx", executor.StatementOption{})
 					require.NoError(t, err)
 					res.Close()
 
-					res, err = te.Exec("create table t1 (id int primary key, name varchar(255))")
+					res, err = te.Exec("create table t1 (id int primary key, name varchar(255))", executor.StatementOption{})
 					require.NoError(t, err)
 					res.Close()
 
-					res, err = te.Exec("insert into t1 values (1, 'a'),(2, 'b'),(3, 'c')")
+					res, err = te.Exec("insert into t1 values (1, 'a'),(2, 'b'),(3, 'c')", executor.StatementOption{})
 					require.NoError(t, err)
 					require.Equal(t, uint64(3), res.AffectedRows)
 					res.Close()
 
-					res, err = te.Exec("select id,name from t1 order by id")
+					res, err = te.Exec("select id,name from t1 order by id", executor.StatementOption{})
 					require.NoError(t, err)
 					var ids []int32
 					var names []string
-					res.ReadRows(func(cols []*vector.Vector) bool {
+					res.ReadRows(func(_ int, cols []*vector.Vector) bool {
 						ids = append(ids, executor.GetFixedRows[int32](cols[0])...)
 						names = append(names, executor.GetStringRows(cols[1])...)
 						return true
@@ -357,7 +357,7 @@ func checkWrite(t *testing.T, txn Txn, key, value string, expectError error, com
 
 func getBasicClusterOptions(opts ...func(opts service.Options) service.Options) service.Options {
 	basic := service.DefaultOptions().
-		WithTNShartnum(1).
+		WithTNShardNum(1).
 		WithLogShardNum(1).
 		WithTNServiceNum(1).
 		WithLogServiceNum(3).

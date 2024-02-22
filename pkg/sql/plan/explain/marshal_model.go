@@ -243,7 +243,7 @@ var nodeTypeToNameMap = map[plan2.Node_NodeType]string{
 	plan2.Node_PRE_INSERT_SK:    "Pre Insert 2nd Key",
 
 	plan2.Node_TIME_WINDOW:  "Time window",
-	plan2.Node_Fill:         "Fill",
+	plan2.Node_FILL:         "Fill",
 	plan2.Node_PARTITION:    "Partition",
 	plan2.Node_FUZZY_FILTER: "Fuzzy filter",
 }
@@ -280,15 +280,24 @@ const (
 	Label_Row_Number                = "Number of rows"
 	Label_Offset                    = "Offset"
 
-	Label_Time_Window      = "Time window"
-	Label_Partition        = "Partition"
-	Label_Fill             = "Fill"
-	Label_Boardcast        = "Boardcast"
-	Label_Split            = "Split"
-	Label_Gather           = "Gather"
-	Label_Assert           = "Assert"
-	Label_On_Duplicate_Key = "On duplicate key"
-	Label_Fuzzy_Filter     = "Fuzzy filter"
+	Label_Time_Window       = "Time window"
+	Label_Partition         = "Partition"
+	Label_Fill              = "Fill"
+	Label_Boardcast         = "Boardcast"
+	Label_Split             = "Split"
+	Label_Gather            = "Gather"
+	Label_Assert            = "Assert"
+	Label_On_Duplicate_Key  = "On duplicate key"
+	Label_Fuzzy_Filter      = "Fuzzy filter"
+	Label_External_Function = "External Function"
+	Label_Distinct          = "Distinct"
+	Label_Sample            = "Sample"
+	Label_Window            = "Window"
+	Label_Minus_All         = "Minus All"
+	Label_Unique            = "Unique"
+	Label_Replace           = "Replace"
+	Label_Unknown           = "Unknown"
+	Label_Meterial          = "Meterial"
 )
 
 const (

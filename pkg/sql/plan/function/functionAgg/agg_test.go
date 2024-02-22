@@ -15,6 +15,7 @@
 package functionAgg
 
 import (
+	"encoding/json"
 	"fmt"
 	"math"
 	"testing"
@@ -26,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionAgg/algos/kmeans"
 	"github.com/stretchr/testify/require"
 )
 
@@ -226,7 +228,7 @@ func TestMax(t *testing.T) {
 }
 
 func TestMin(t *testing.T) {
-	require.NoError(t, testUnaryAggSupported(NewAggMin, AggMinSupportedParameters, AggMinxReturnType))
+	require.NoError(t, testUnaryAggSupported(NewAggMin, AggMinSupportedParameters, AggMinReturnType))
 
 	s := &sAggMin[int32]{}
 	{
@@ -718,64 +720,66 @@ func TestGroupConcat(t *testing.T) {
 	}
 }
 
-//func TestClusterCenters(t *testing.T) {
-//	require.NoError(t, testUnaryAggSupported(NewAggClusterCenters, AggClusterCentersSupportedParameters, AggClusterCentersReturnType))
-//
-//	s1 := &sAggClusterCenters{
-//		clusterCnt: 2,
-//		distType:   kmeans.CosineDistance,
-//		arrType:    types.T_array_float64.ToType(),
-//	}
-//	// input vectors/arrays of 7 rows with 6th row as null
-//	var vecf64Input = [][]byte{
-//		types.ArrayToBytes[float64]([]float64{1, 2, 3, 4}),
-//		types.ArrayToBytes[float64]([]float64{1, 2, 4, 5}),
-//		types.ArrayToBytes[float64]([]float64{1, 2, 4, 5}),
-//		types.ArrayToBytes[float64]([]float64{10, 2, 4, 5}),
-//		types.ArrayToBytes[float64]([]float64{10, 3, 4, 5}),
-//		types.ArrayToBytes[float64]([]float64{0, 0, 0, 0}),
-//		types.ArrayToBytes[float64]([]float64{10, 5, 4, 5}),
-//	}
-//	nsp := nulls.NewWithSize(7)
-//	nsp.Add(5)
-//	wantVecf64Output := [][]float64{
-//		{0.15915269938161652, 0.31830539876323305, 0.5757527355814477, 0.7349054349630643}, // approx {1, 2, 3.6666666666666665, 4.666666666666666},
-//		{0.8077006350571528, 0.2663717322796547, 0.3230802540228611, 0.4038503175285764},   // approx {10, 3.333333333333333, 4, 5}
-//	}
-//
-//	{
-//		// Test aggFn
-//		tr := &simpleAggTester[[]byte, []byte]{
-//			source: s1,
-//			grow:   s1.Grows,
-//			free:   s1.Free,
-//			fill:   s1.Fill,
-//			merge:  s1.Merge,
-//			eval:   s1.Eval,
-//		}
-//		err := tr.testUnaryAgg(vecf64Input, nsp, func(result []byte, isEmpty bool) bool {
-//			var vecf64Output [][]float64
-//			err := json.Unmarshal(result, &vecf64Output)
-//			//t.Log(vecf64Output)
-//			return err == nil && !isEmpty && assertx.InEpsilonF64Slices(wantVecf64Output, vecf64Output)
-//		})
-//
-//		require.NoError(t, err)
-//	}
-//
-//	{
-//		// Test Marshall and Unmarshall
-//		data, err := s1.MarshalBinary()
-//		require.NoError(t, err)
-//		s2 := new(sAggClusterCenters)
-//		err = s2.UnmarshalBinary(data)
-//		require.NoError(t, err)
-//
-//		require.Equal(t, s1.arrType, s2.arrType)
-//		require.Equal(t, s1.clusterCnt, s2.clusterCnt)
-//		require.Equal(t, s1.distType, s2.distType)
-//		require.Equal(t, s1.initType, s2.initType)
-//		require.Equal(t, len(s1.groupedData), len(s2.groupedData))
-//		require.Equal(t, s1.groupedData, s2.groupedData)
-//	}
-//}
+func TestClusterCenters(t *testing.T) {
+	require.NoError(t, testUnaryAggSupported(NewAggClusterCenters, AggClusterCentersSupportedParameters, AggClusterCentersReturnType))
+
+	s1 := &sAggClusterCenters{
+		clusterCnt: 2,
+		distType:   kmeans.L2Distance,
+		arrType:    types.T_array_float64.ToType(),
+		normalize:  true, // <-- Spherical Kmeans UT
+	}
+	// input vectors/arrays of 7 rows with 6th row as null
+	var vecf64Input = [][]byte{
+		types.ArrayToBytes[float64]([]float64{1, 2, 3, 4}),
+		types.ArrayToBytes[float64]([]float64{1, 2, 4, 5}),
+		types.ArrayToBytes[float64]([]float64{1, 2, 4, 5}),
+		types.ArrayToBytes[float64]([]float64{10, 2, 4, 5}),
+		types.ArrayToBytes[float64]([]float64{10, 3, 4, 5}),
+		types.ArrayToBytes[float64]([]float64{0, 0, 0, 0}),
+		types.ArrayToBytes[float64]([]float64{10, 5, 4, 5}),
+	}
+	nsp := nulls.NewWithSize(7)
+	nsp.Add(5)
+	wantVecf64Output := [][]float64{
+		{0.15915269938161652, 0.31830539876323305, 0.5757527355814477, 0.7349054349630643}, // approx {1, 2, 3.6666666666666665, 4.666666666666666},
+		{0.8077006350571528, 0.2663717322796547, 0.3230802540228611, 0.4038503175285764},   // approx {10, 3.333333333333333, 4, 5}
+	}
+
+	{
+		// Test aggFn
+		tr := &simpleAggTester[[]byte, []byte]{
+			source: s1,
+			grow:   s1.Grows,
+			free:   s1.Free,
+			fill:   s1.Fill,
+			merge:  s1.Merge,
+			eval:   s1.Eval,
+		}
+		err := tr.testUnaryAgg(vecf64Input, nsp, func(result []byte, isEmpty bool) bool {
+			var vecf64Output [][]float64
+			err := json.Unmarshal(result, &vecf64Output)
+			//t.Log(vecf64Output)
+			return err == nil && !isEmpty && assertx.InEpsilonF64Slices(wantVecf64Output, vecf64Output)
+		})
+
+		require.NoError(t, err)
+	}
+
+	{
+		// Test Marshall and Unmarshall
+		data, err := s1.MarshalBinary()
+		require.NoError(t, err)
+		s2 := new(sAggClusterCenters)
+		err = s2.UnmarshalBinary(data)
+		require.NoError(t, err)
+
+		require.Equal(t, s1.arrType, s2.arrType)
+		require.Equal(t, s1.clusterCnt, s2.clusterCnt)
+		require.Equal(t, s1.distType, s2.distType)
+		require.Equal(t, s1.initType, s2.initType)
+		require.Equal(t, s1.normalize, s2.normalize)
+		require.Equal(t, len(s1.groupedData), len(s2.groupedData))
+		require.Equal(t, s1.groupedData, s2.groupedData)
+	}
+}

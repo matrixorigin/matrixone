@@ -2996,11 +2996,11 @@ func TestSegDelLogtail(t *testing.T) {
 
 	require.Equal(t, api.Entry_Insert, resp.Commands[0].EntryType)
 	require.True(t, strings.HasSuffix(resp.Commands[0].TableName, "meta"))
-	require.Equal(t, uint32(12), resp.Commands[0].Bat.Vecs[0].Len) /* 3 old ablks (create) + 3 new merged nblks(create) + 3 old ablks(delete) + 3 old nablks(delete)*/
+	require.Equal(t, uint32(1), resp.Commands[0].Bat.Vecs[0].Len) /* 1 delta location */
 
 	require.Equal(t, api.Entry_Delete, resp.Commands[1].EntryType)
 	require.True(t, strings.HasSuffix(resp.Commands[1].TableName, "meta"))
-	require.Equal(t, uint32(6), resp.Commands[1].Bat.Vecs[0].Len) /* 3 old ablks(delete) + 3 old nablks(delete) */
+	require.Equal(t, uint32(1), resp.Commands[1].Bat.Vecs[0].Len) /* 1 delta location */
 
 	require.Equal(t, api.Entry_Insert, resp.Commands[2].EntryType)
 	require.True(t, strings.HasSuffix(resp.Commands[2].TableName, "obj"))
@@ -3027,11 +3027,10 @@ func TestSegDelLogtail(t *testing.T) {
 		entry := ckpEntries[0]
 		ins, del, cnins, segdel, err := entry.GetByTableID(context.Background(), tae.Runtime.Fs, tid)
 		require.NoError(t, err)
-		require.Equal(t, uint32(6), ins.Vecs[0].Len)    // 6 nablk
-		require.Equal(t, uint32(6), del.Vecs[0].Len)    // 3 ablk + 3 nablk
-		require.Equal(t, uint32(6), cnins.Vecs[0].Len)  // 3 ablk + 3 nablk
+		require.Nil(t, ins)                             // 0 blk, skip blks without deltaloc
+		require.Equal(t, uint32(1), del.Vecs[0].Len)    // 1 deltaloc
+		require.Equal(t, uint32(1), cnins.Vecs[0].Len)  // 1 deltaloc
 		require.Equal(t, uint32(6), segdel.Vecs[0].Len) // 2 create + 4 update
-		require.Equal(t, 2, len(del.Vecs))
 		require.Equal(t, 12, len(segdel.Vecs))
 	}
 	check()
@@ -4957,7 +4956,7 @@ func TestBlockRead(t *testing.T) {
 
 	bid, sid := blkEntry.ID, blkEntry.GetObject().ID
 
-	info := &pkgcatalog.BlockInfo{
+	info := &objectio.BlockInfo{
 		BlockID:    bid,
 		SegmentID:  *sid.Segment(),
 		EntryState: true,
@@ -4979,8 +4978,8 @@ func TestBlockRead(t *testing.T) {
 	fs := tae.DB.Runtime.Fs.Service
 	pool, err := mpool.NewMPool("test", 0, mpool.NoFixed)
 	assert.NoError(t, err)
-	infos := make([][]*pkgcatalog.BlockInfo, 0)
-	infos = append(infos, []*pkgcatalog.BlockInfo{info})
+	infos := make([][]*objectio.BlockInfo, 0)
+	infos = append(infos, []*objectio.BlockInfo{info})
 	err = blockio.BlockPrefetch(colIdxs, fs, infos, false)
 	assert.NoError(t, err)
 	b1, err := blockio.BlockReadInner(
@@ -5241,17 +5240,16 @@ func TestReadCheckpoint(t *testing.T) {
 	}
 	tae.Restart(ctx)
 	entries = tae.BGCheckpointRunner.GetAllGlobalCheckpoints()
-	for _, entry := range entries {
-		for _, tid := range tids {
-			ins, del, _, _, err := entry.GetByTableID(context.Background(), tae.Runtime.Fs, tid)
-			assert.NoError(t, err)
-			t.Logf("table %d", tid)
-			if ins != nil {
-				t.Log(common.ApiBatchToString(ins, 3))
-			}
-			if del != nil {
-				t.Log(common.ApiBatchToString(del, 3))
-			}
+	entry := entries[len(entries)-1]
+	for _, tid := range tids {
+		ins, del, _, _, err := entry.GetByTableID(context.Background(), tae.Runtime.Fs, tid)
+		assert.NoError(t, err)
+		t.Logf("table %d", tid)
+		if ins != nil {
+			t.Log(common.ApiBatchToString(ins, 3))
+		}
+		if del != nil {
+			t.Log(common.ApiBatchToString(del, 3))
 		}
 	}
 }
@@ -6106,7 +6104,7 @@ func TestGCWithCheckpoint(t *testing.T) {
 	opts := config.WithQuickScanAndCKPAndGCOpts(nil)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
-	manager := gc.NewDiskCleaner(context.Background(), tae.Runtime.Fs, tae.BGCheckpointRunner, tae.Catalog)
+	manager := gc.NewDiskCleaner(context.Background(), tae.Runtime.Fs, tae.BGCheckpointRunner, tae.Catalog, false)
 	manager.Start()
 	defer manager.Stop()
 
@@ -6138,7 +6136,7 @@ func TestGCWithCheckpoint(t *testing.T) {
 		return entries[num-1].GetEnd().Equal(manager.GetMaxConsumed().GetEnd())
 	})
 	assert.True(t, entries[num-1].GetEnd().Equal(manager.GetMaxConsumed().GetEnd()))
-	manager2 := gc.NewDiskCleaner(context.Background(), tae.Runtime.Fs, tae.BGCheckpointRunner, tae.Catalog)
+	manager2 := gc.NewDiskCleaner(context.Background(), tae.Runtime.Fs, tae.BGCheckpointRunner, tae.Catalog, false)
 	manager2.Start()
 	defer manager2.Stop()
 	testutils.WaitExpect(5000, func() bool {
@@ -6160,7 +6158,7 @@ func TestGCDropDB(t *testing.T) {
 	opts := config.WithQuickScanAndCKPAndGCOpts(nil)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
-	manager := gc.NewDiskCleaner(context.Background(), tae.Runtime.Fs, tae.BGCheckpointRunner, tae.Catalog)
+	manager := gc.NewDiskCleaner(context.Background(), tae.Runtime.Fs, tae.BGCheckpointRunner, tae.Catalog, false)
 	manager.Start()
 	defer manager.Stop()
 	schema := catalog.MockSchemaAll(3, 1)
@@ -6195,7 +6193,7 @@ func TestGCDropDB(t *testing.T) {
 		return entries[num-1].GetEnd().Equal(manager.GetMaxConsumed().GetEnd())
 	})
 	assert.True(t, entries[num-1].GetEnd().Equal(manager.GetMaxConsumed().GetEnd()))
-	manager2 := gc.NewDiskCleaner(context.Background(), tae.Runtime.Fs, tae.BGCheckpointRunner, tae.Catalog)
+	manager2 := gc.NewDiskCleaner(context.Background(), tae.Runtime.Fs, tae.BGCheckpointRunner, tae.Catalog, false)
 	manager2.Start()
 	defer manager2.Stop()
 	testutils.WaitExpect(5000, func() bool {
@@ -6218,7 +6216,7 @@ func TestGCDropTable(t *testing.T) {
 	opts := config.WithQuickScanAndCKPAndGCOpts(nil)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
-	manager := gc.NewDiskCleaner(context.Background(), tae.Runtime.Fs, tae.BGCheckpointRunner, tae.Catalog)
+	manager := gc.NewDiskCleaner(context.Background(), tae.Runtime.Fs, tae.BGCheckpointRunner, tae.Catalog, false)
 	manager.Start()
 	defer manager.Stop()
 	schema := catalog.MockSchemaAll(3, 1)
@@ -6268,7 +6266,7 @@ func TestGCDropTable(t *testing.T) {
 		return entries[num-1].GetEnd().Equal(manager.GetMaxConsumed().GetEnd())
 	})
 	assert.True(t, entries[num-1].GetEnd().Equal(manager.GetMaxConsumed().GetEnd()))
-	manager2 := gc.NewDiskCleaner(context.Background(), tae.Runtime.Fs, tae.BGCheckpointRunner, tae.Catalog)
+	manager2 := gc.NewDiskCleaner(context.Background(), tae.Runtime.Fs, tae.BGCheckpointRunner, tae.Catalog, false)
 	manager2.Start()
 	defer manager2.Stop()
 	testutils.WaitExpect(5000, func() bool {
@@ -6780,7 +6778,7 @@ func TestAlterFakePk(t *testing.T) {
 	for _, v := range tnDelBat.Vecs {
 		require.Equal(t, 2, v.Length())
 	}
-	t.Log(tnDelBat.GetVectorByName(pkgcatalog.FakePrimaryKeyColName).PPString(10))
+	t.Log(tnDelBat.GetVectorByName(catalog.AttrPKVal).PPString(10))
 
 }
 

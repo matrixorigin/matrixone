@@ -24,12 +24,21 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+func plusOperatorSupportsVectorScalar(typ1, typ2 types.Type) bool {
+
+	if (typ1.Oid.IsArrayRelate() && typ2.IsNumeric()) || // Vec + Scalar
+		(typ1.IsNumeric() && typ2.Oid.IsArrayRelate()) { // Scalar + Vec
+		return true
+	}
+	return false
+}
+
 func plusOperatorSupports(typ1, typ2 types.Type) bool {
 	if typ1.Oid != typ2.Oid {
 		return false
 	}
 	switch typ1.Oid {
-	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
+	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64, types.T_bit:
 	case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
 	case types.T_float32, types.T_float64:
 	case types.T_decimal64, types.T_decimal128:
@@ -40,12 +49,19 @@ func plusOperatorSupports(typ1, typ2 types.Type) bool {
 	return true
 }
 
+func minusOperatorSupportsVectorScalar(typ1, typ2 types.Type) bool {
+	if typ1.Oid.IsArrayRelate() && typ2.IsNumeric() { // Vec - Scalar
+		return true
+	}
+	return false
+}
+
 func minusOperatorSupports(typ1, typ2 types.Type) bool {
 	if typ1.Oid != typ2.Oid {
 		return false
 	}
 	switch typ1.Oid {
-	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
+	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64, types.T_bit:
 	case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
 	case types.T_float32, types.T_float64:
 	case types.T_decimal64, types.T_decimal128:
@@ -56,13 +72,19 @@ func minusOperatorSupports(typ1, typ2 types.Type) bool {
 	}
 	return true
 }
-
+func multiOperatorSupportsVectorScalar(typ1, typ2 types.Type) bool {
+	if (typ1.Oid.IsArrayRelate() && typ2.IsNumeric()) || // Vec * Scalar
+		(typ1.IsNumeric() && typ2.Oid.IsArrayRelate()) { // Scalar * Vec
+		return true
+	}
+	return false
+}
 func multiOperatorSupports(typ1, typ2 types.Type) bool {
 	if typ1.Oid != typ2.Oid {
 		return false
 	}
 	switch typ1.Oid {
-	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
+	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64, types.T_bit:
 	case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
 	case types.T_float32, types.T_float64:
 	case types.T_decimal64, types.T_decimal128:
@@ -71,6 +93,13 @@ func multiOperatorSupports(typ1, typ2 types.Type) bool {
 		return false
 	}
 	return true
+}
+
+func divOperatorSupportsVectorScalar(typ1, typ2 types.Type) bool {
+	if typ1.Oid.IsArrayRelate() && typ2.IsNumeric() { // Vec / Scalar
+		return true
+	}
+	return false
 }
 
 func divOperatorSupports(typ1, typ2 types.Type) bool {
@@ -104,7 +133,7 @@ func modOperatorSupports(typ1, typ2 types.Type) bool {
 		return false
 	}
 	switch typ1.Oid {
-	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
+	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64, types.T_bit:
 	case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
 	case types.T_float32, types.T_float64:
 	case types.T_decimal128, types.T_decimal64:
@@ -114,9 +143,54 @@ func modOperatorSupports(typ1, typ2 types.Type) bool {
 	return true
 }
 
+func vectorScalarOp[T types.RealNumbers](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, op string) (err error) {
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	vs := vector.GenerateFunctionStrParameter(ivecs[0])
+	num := vector.GenerateFunctionFixedTypeParameter[T](ivecs[1])
+
+	for i := uint64(0); i < uint64(length); i++ {
+		vec, null1 := vs.GetStrValue(i)
+		sca, null2 := num.GetValue(i)
+
+		if null1 || null2 {
+			if err = rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+		} else {
+			out, err := moarray.ScalarOp[T](types.BytesToArray[T](vec), op, float64(sca))
+			if err != nil {
+				return err
+			}
+
+			if err = rs.AppendBytes(types.ArrayToBytes[T](out), false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func plusFnVectorScalar(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	vectorIdx, scalarIdx := 0, 1
+	if parameters[1].GetType().Oid.IsArrayRelate() {
+		vectorIdx, scalarIdx = 1, 0
+	}
+
+	vectorAndScalarParams := []*vector.Vector{parameters[vectorIdx], parameters[scalarIdx]}
+	if parameters[vectorIdx].GetType().Oid == types.T_array_float32 {
+		return vectorScalarOp[float32](vectorAndScalarParams, result, proc, length, "+")
+	} else {
+		return vectorScalarOp[float64](vectorAndScalarParams, result, proc, length, "+")
+	}
+}
+
 func plusFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	paramType := parameters[0].GetType()
 	switch paramType.Oid {
+	case types.T_bit:
+		return opBinaryFixedFixedToFixed[uint64, uint64, uint64](parameters, result, proc, length, func(v1, v2 uint64) uint64 {
+			return v1 + v2
+		})
 	case types.T_uint8:
 		return opBinaryFixedFixedToFixed[uint8, uint8, uint8](parameters, result, proc, length, func(v1, v2 uint8) uint8 {
 			return v1 + v2
@@ -173,9 +247,23 @@ func plusFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, pr
 	panic("unreached code")
 }
 
+func minusFnVectorScalar(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	vectorIdx, scalarIdx := 0, 1
+	vectorAndScalarParams := []*vector.Vector{parameters[vectorIdx], parameters[scalarIdx]}
+	if parameters[vectorIdx].GetType().Oid == types.T_array_float32 {
+		return vectorScalarOp[float32](vectorAndScalarParams, result, proc, length, "-")
+	} else {
+		return vectorScalarOp[float64](vectorAndScalarParams, result, proc, length, "-")
+	}
+}
+
 func minusFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	paramType := parameters[0].GetType()
 	switch paramType.Oid {
+	case types.T_bit:
+		return opBinaryFixedFixedToFixed[uint64, uint64, uint64](parameters, result, proc, length, func(v1, v2 uint64) uint64 {
+			return v1 - v2
+		})
 	case types.T_uint8:
 		return opBinaryFixedFixedToFixed[uint8, uint8, uint8](parameters, result, proc, length, func(v1, v2 uint8) uint8 {
 			return v1 - v2
@@ -240,9 +328,27 @@ func minusFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 	panic("unreached code")
 }
 
+func multiFnVectorScalar(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	vectorIdx, scalarIdx := 0, 1
+	if parameters[1].GetType().Oid.IsArrayRelate() {
+		vectorIdx, scalarIdx = 1, 0
+	}
+
+	vectorAndScalarParams := []*vector.Vector{parameters[vectorIdx], parameters[scalarIdx]}
+	if parameters[vectorIdx].GetType().Oid == types.T_array_float32 {
+		return vectorScalarOp[float32](vectorAndScalarParams, result, proc, length, "*")
+	} else {
+		return vectorScalarOp[float64](vectorAndScalarParams, result, proc, length, "*")
+	}
+}
+
 func multiFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	paramType := parameters[0].GetType()
 	switch paramType.Oid {
+	case types.T_bit:
+		return opBinaryFixedFixedToFixed[uint64, uint64, uint64](parameters, result, proc, length, func(v1, v2 uint64) uint64 {
+			return v1 * v2
+		})
 	case types.T_uint8:
 		return opBinaryFixedFixedToFixed[uint8, uint8, uint8](parameters, result, proc, length, func(v1, v2 uint8) uint8 {
 			return v1 * v2
@@ -299,6 +405,16 @@ func multiFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 	panic("unreached code")
 }
 
+func divFnVectorScalar(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	vectorIdx, scalarIdx := 0, 1
+	vectorAndScalarParams := []*vector.Vector{parameters[vectorIdx], parameters[scalarIdx]}
+	if parameters[vectorIdx].GetType().Oid == types.T_array_float32 {
+		return vectorScalarOp[float32](vectorAndScalarParams, result, proc, length, "/")
+	} else {
+		return vectorScalarOp[float64](vectorAndScalarParams, result, proc, length, "/")
+	}
+}
+
 func divFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	paramType := parameters[0].GetType()
 	switch paramType.Oid {
@@ -346,6 +462,10 @@ func integerDivFn(parameters []*vector.Vector, result vector.FunctionResultWrapp
 func modFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	paramType := parameters[0].GetType()
 	switch paramType.Oid {
+	case types.T_bit:
+		return specialTemplateForModFunction[uint64](parameters, result, proc, length, func(v1, v2 uint64) uint64 {
+			return v1 % v2
+		})
 	case types.T_uint8:
 		return specialTemplateForModFunction[uint8](parameters, result, proc, length, func(v1, v2 uint8) uint8 {
 			return v1 % v2

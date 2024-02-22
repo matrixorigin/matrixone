@@ -48,7 +48,7 @@ const (
 	cmdInitDB MySQLCmd = 0x02
 	// For stmt prepare and execute cmd from JDBC.
 	cmdStmtPrepare MySQLCmd = 0x16
-	cmdStmtExecute MySQLCmd = 0x17
+	cmdStmtClose   MySQLCmd = 0x19
 )
 
 // MySQLConn contains a buffer to save data which may be only part

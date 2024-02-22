@@ -46,6 +46,7 @@ import (
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"go.uber.org/zap"
+	"golang.org/x/exp/slices"
 )
 
 // DefaultCapability means default capabilities of the server
@@ -361,6 +362,12 @@ func (mp *MysqlProtocolImpl) GetCapability() uint32 {
 	return mp.capability
 }
 
+func (mp *MysqlProtocolImpl) SetCapability(cap uint32) {
+	mp.m.Lock()
+	defer mp.m.Unlock()
+	mp.capability = cap
+}
+
 func (mp *MysqlProtocolImpl) AddSequenceId(a uint8) {
 	mp.sequenceId.Add(uint32(a))
 }
@@ -651,6 +658,15 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(ctx context.Context, proc *process
 			case defines.MYSQL_TYPE_NULL:
 				err = util.SetAnyToStringVector(proc, nil, stmt.params, i)
 
+			case defines.MYSQL_TYPE_BIT:
+				val, newPos, ok := mp.io.ReadUint64(data, pos)
+				if !ok {
+					return moerr.NewInvalidInput(ctx, "mysql protocol error, malformed packet")
+				}
+
+				pos = newPos
+				err = util.SetAnyToStringVector(proc, val, stmt.params, i)
+
 			case defines.MYSQL_TYPE_TINY:
 				val, newPos, ok := mp.io.ReadUint8(data, pos)
 				if !ok {
@@ -725,7 +741,7 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(ctx context.Context, proc *process
 
 			// Binary/varbinary has mysql_type_varchar.
 			case defines.MYSQL_TYPE_VARCHAR, defines.MYSQL_TYPE_VAR_STRING, defines.MYSQL_TYPE_STRING, defines.MYSQL_TYPE_DECIMAL,
-				defines.MYSQL_TYPE_ENUM, defines.MYSQL_TYPE_SET, defines.MYSQL_TYPE_GEOMETRY, defines.MYSQL_TYPE_BIT:
+				defines.MYSQL_TYPE_ENUM, defines.MYSQL_TYPE_SET, defines.MYSQL_TYPE_GEOMETRY:
 				val, newPos, ok := mp.readStringLenEnc(data, pos)
 				if !ok {
 					return moerr.NewInvalidInput(ctx, "mysql protocol error, malformed packet")
@@ -1269,7 +1285,10 @@ func (mp *MysqlProtocolImpl) Authenticate(ctx context.Context) error {
 	if err := mp.authenticateUser(ctx, mp.authResponse); err != nil {
 		logutil.Errorf("authenticate user failed.error:%v", err)
 		errorCode, sqlState, msg := RewriteError(err, mp.username)
+		ses.timestampMap[TSSendErrPacketStart] = time.Now()
 		err2 := mp.sendErrPacket(errorCode, sqlState, msg)
+		ses.timestampMap[TSSendErrPacketEnd] = time.Now()
+		v2.SendErrPacketDurationHistogram.Observe(ses.timestampMap[TSSendErrPacketEnd].Sub(ses.timestampMap[TSSendErrPacketStart]).Seconds())
 		if err2 != nil {
 			logutil.Errorf("send err packet failed.error:%v", err2)
 			return err2
@@ -1279,7 +1298,10 @@ func (mp *MysqlProtocolImpl) Authenticate(ctx context.Context) error {
 
 	mp.incDebugCount(2)
 	logDebugf(mp.getDebugStringUnsafe(), "handle handshake end")
+	ses.timestampMap[TSSendOKPacketStart] = time.Now()
 	err := mp.sendOKPacket(0, 0, 0, 0, "")
+	ses.timestampMap[TSSendOKPacketEnd] = time.Now()
+	v2.SendOKPacketDurationHistogram.Observe(ses.timestampMap[TSSendOKPacketEnd].Sub(ses.timestampMap[TSSendOKPacketStart]).Seconds())
 	mp.incDebugCount(3)
 	logDebugf(mp.getDebugStringUnsafe(), "handle handshake response ok")
 	if err != nil {
@@ -1814,6 +1836,8 @@ func setCharacter(column *MysqlColumn) {
 	// blob type should use 0x3f to show the binary data
 	case defines.MYSQL_TYPE_VARCHAR, defines.MYSQL_TYPE_STRING, defines.MYSQL_TYPE_TEXT:
 		column.SetCharset(charsetVarchar)
+	case defines.MYSQL_TYPE_VAR_STRING:
+		column.SetCharset(charsetVarchar)
 	default:
 		column.SetCharset(charsetBinary)
 	}
@@ -2147,6 +2171,16 @@ func (mp *MysqlProtocolImpl) makeResultSetTextRow(data []byte, mrs *MysqlResultS
 			} else {
 				data = mp.appendStringLenEnc(data, value)
 			}
+		case defines.MYSQL_TYPE_BIT:
+			if value, err2 := mrs.GetUint64(ctx, r, i); err2 != nil {
+				return nil, err2
+			} else {
+				bitLength := mysqlColumn.ColumnImpl.Length()
+				byteLength := (bitLength + 7) / 8
+				b := types.EncodeUint64(&value)[:byteLength]
+				slices.Reverse(b)
+				data = mp.appendStringLenEnc(data, string(b))
+			}
 		case defines.MYSQL_TYPE_DECIMAL:
 			if value, err2 := mrs.GetString(ctx, r, i); err2 != nil {
 				return nil, err2
@@ -2285,11 +2319,8 @@ func (mp *MysqlProtocolImpl) SendResultSetTextBatchRowSpeedup(mrs *MysqlResultSe
 	defer mp.m.Unlock()
 	var err error = nil
 
-	binary := false
 	// XXX now we known COM_QUERY will use textRow, COM_STMT_EXECUTE use binaryRow
-	if CommandType(cmd) == COM_STMT_EXECUTE {
-		binary = true
-	}
+	useBinaryRow := cmd == COM_STMT_EXECUTE
 
 	//make rows into the batch
 	for i := uint64(0); i < cnt; i++ {
@@ -2298,7 +2329,7 @@ func (mp *MysqlProtocolImpl) SendResultSetTextBatchRowSpeedup(mrs *MysqlResultSe
 			return err
 		}
 		//begin1 := time.Now()
-		if binary {
+		if useBinaryRow {
 			_, err = mp.makeResultSetBinaryRow(nil, mrs, i)
 		} else {
 			_, err = mp.makeResultSetTextRow(nil, mrs, i)

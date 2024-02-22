@@ -768,9 +768,7 @@ func (h *Handle) HandleCreateDatabase(
 		})
 	}()
 
-	ctx = context.WithValue(ctx, defines.TenantIDKey{}, req.AccessInfo.AccountID)
-	ctx = context.WithValue(ctx, defines.UserIDKey{}, req.AccessInfo.UserID)
-	ctx = context.WithValue(ctx, defines.RoleIDKey{}, req.AccessInfo.RoleID)
+	ctx = defines.AttachAccount(ctx, req.AccessInfo.AccountID, req.AccessInfo.UserID, req.AccessInfo.RoleID)
 	ctx = context.WithValue(ctx, defines.DatTypKey{}, req.DatTyp)
 	if _, err = txn.CreateDatabaseWithCtx(
 		ctx,
@@ -822,9 +820,7 @@ func (h *Handle) HandleCreateRelation(
 		})
 	}()
 
-	ctx = context.WithValue(ctx, defines.TenantIDKey{}, req.AccessInfo.AccountID)
-	ctx = context.WithValue(ctx, defines.UserIDKey{}, req.AccessInfo.UserID)
-	ctx = context.WithValue(ctx, defines.RoleIDKey{}, req.AccessInfo.RoleID)
+	ctx = defines.AttachAccount(ctx, req.AccessInfo.AccountID, req.AccessInfo.UserID, req.AccessInfo.RoleID)
 	dbH, err := txn.GetDatabaseWithCtx(ctx, req.DatabaseName)
 	if err != nil {
 		return
@@ -983,7 +979,7 @@ func (h *Handle) HandleWrite(
 		// TODO: debug for #13342, remove me later
 		if IsDistrictTable(tb.Schema().(*catalog2.Schema).Name) {
 			for i := 0; i < req.Batch.Vecs[0].Length(); i++ {
-				pk, _, _ := types.DecodeTuple(req.Batch.Vecs[11].GetRawBytesAt(i))
+				pk, _, _, _ := types.DecodeTuple(req.Batch.Vecs[11].GetRawBytesAt(i))
 				logutil.Infof("op1 %v %v", txn.GetStartTS().ToString(), PrintTuple(pk))
 			}
 		}
@@ -1008,19 +1004,25 @@ func (h *Handle) HandleWrite(
 				return err
 			}
 			var ok bool
-			var bat *batch.Batch
-			bat, err = blockio.LoadTombstoneColumns(
+			var vectors []containers.Vector
+			var closeFunc func()
+			//Extend lifetime of vectors is within the function.
+			//No NeedCopy. closeFunc is required after use.
+			//closeFunc is not nil.
+			vectors, closeFunc, err = blockio.LoadTombstoneColumns2(
 				ctx,
 				[]uint16{uint16(rowidIdx), uint16(pkIdx)},
 				nil,
 				h.db.Runtime.Fs.Service,
 				location,
+				false,
 				nil,
 			)
 			if err != nil {
 				return
 			}
-			blkids := getBlkIDsFromRowids(bat.Vecs[0])
+			defer closeFunc()
+			blkids := getBlkIDsFromRowids(vectors[0].GetDownstreamVector())
 			id := tb.GetMeta().(*catalog2.TableEntry).AsCommonID()
 			if len(blkids) == 1 {
 				for blkID := range blkids {
@@ -1037,9 +1039,9 @@ func (h *Handle) HandleWrite(
 			} else {
 				logutil.Warnf("multiply blocks in one deltalocation")
 			}
-			rowIDVec := containers.ToTNVector(bat.Vecs[0], common.WorkspaceAllocator)
+			rowIDVec := vectors[0]
 			defer rowIDVec.Close()
-			pkVec := containers.ToTNVector(bat.Vecs[1], common.WorkspaceAllocator)
+			pkVec := vectors[1]
 			//defer pkVec.Close()
 			if err = tb.DeleteByPhyAddrKeys(rowIDVec, pkVec); err != nil {
 				return
@@ -1059,7 +1061,7 @@ func (h *Handle) HandleWrite(
 		for i := 0; i < rowIDVec.Length(); i++ {
 
 			rowID := objectio.HackBytes2Rowid(req.Batch.Vecs[0].GetRawBytesAt(i))
-			pk, _, _ := types.DecodeTuple(req.Batch.Vecs[1].GetRawBytesAt(i))
+			pk, _, _, _ := types.DecodeTuple(req.Batch.Vecs[1].GetRawBytesAt(i))
 			logutil.Infof("op2 %v %v %v", txn.GetStartTS().ToString(), PrintTuple(pk), rowID.String())
 		}
 	}
@@ -1174,7 +1176,9 @@ func (h *Handle) HandleStorageUsage(ctx context.Context, meta txn.TxnMeta,
 	memo := h.db.GetUsageMemo()
 
 	start := time.Now()
-	defer v2.TaskStorageUsageReqDurationHistogram.Observe(time.Since(start).Seconds())
+	defer func() {
+		v2.TaskStorageUsageReqDurationHistogram.Observe(time.Since(start).Seconds())
+	}()
 
 	memo.EnterProcessing()
 	defer func() {

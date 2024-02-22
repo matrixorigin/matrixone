@@ -58,7 +58,7 @@ func (s *sqlStore) NewTxnOperator(ctx context.Context) client.TxnOperator {
 func (s *sqlStore) SelectAll(
 	ctx context.Context,
 	tableID uint64,
-	txnOp client.TxnOperator) string {
+	txnOp client.TxnOperator) (string, error) {
 	fetchSQL := fmt.Sprintf(`select col_name, table_id from %s`, incrTableName)
 	opts := executor.Options{}.WithDatabase(database).WithTxn(txnOp)
 	if txnOp != nil {
@@ -66,19 +66,23 @@ func (s *sqlStore) SelectAll(
 	}
 	res, err := s.exec.Exec(ctx, fetchSQL, opts)
 	if err != nil {
-		return ""
+		return "", err
 	}
 	defer res.Close()
 
+	accountId, err := defines.GetAccountId(ctx)
+	if err != nil {
+		return "", err
+	}
 	str := fmt.Sprintf("Cannot find tableID %d in table %s, accountid %d, txn: %s", tableID, incrTableName,
-		ctx.Value(defines.TenantIDKey{}), txnOp.Txn().DebugString())
-	res.ReadRows(func(cols []*vector.Vector) bool {
+		accountId, txnOp.Txn().DebugString())
+	res.ReadRows(func(_ int, cols []*vector.Vector) bool {
 		str += fmt.Sprintf("\tcol_name: %s, table_id: %d\n",
 			executor.GetStringRows(cols[0])[0],
 			executor.GetFixedRows[uint64](cols[1])[0])
 		return true
 	})
-	return str
+	return str, nil
 }
 
 func (s *sqlStore) Create(
@@ -95,7 +99,7 @@ func (s *sqlStore) Create(
 		ctx,
 		func(te executor.TxnExecutor) error {
 			for _, col := range cols {
-				res, err := te.Exec(col.getInsertSQL())
+				res, err := te.Exec(col.getInsertSQL(), executor.StatementOption{})
 				if err != nil {
 					return err
 				}
@@ -139,12 +143,12 @@ func (s *sqlStore) Allocate(
 			ctx,
 			func(te executor.TxnExecutor) error {
 				start := time.Now()
-				res, err := te.Exec(fetchSQL)
+				res, err := te.Exec(fetchSQL, executor.StatementOption{})
 				if err != nil {
 					return err
 				}
 				rows := 0
-				res.ReadRows(func(cols []*vector.Vector) bool {
+				res.ReadRows(func(_ int, cols []*vector.Vector) bool {
 					current = executor.GetFixedRows[uint64](cols[0])[0]
 					step = executor.GetFixedRows[uint64](cols[1])[0]
 					rows++
@@ -153,14 +157,22 @@ func (s *sqlStore) Allocate(
 				res.Close()
 
 				if rows != 1 {
+					accountId, err := defines.GetAccountId(ctx)
+					if err != nil {
+						return err
+					}
+					selectAll, err := s.SelectAll(ctx, tableID, txnOp)
+					if err != nil {
+						return err
+					}
 					getLogger().Fatal("BUG: read incr record invalid",
 						zap.String("fetch-sql", fetchSQL),
-						zap.Any("account", ctx.Value(defines.TenantIDKey{})),
+						zap.Any("account", accountId),
 						zap.Uint64("table", tableID),
 						zap.String("col", colName),
 						zap.Int("rows", rows),
 						zap.Duration("cost", time.Since(start)),
-						zap.String("select-all", s.SelectAll(ctx, tableID, txnOp)),
+						zap.String("select-all", selectAll),
 						zap.Bool("ctx-done", ctxDone()))
 				}
 
@@ -173,7 +185,7 @@ func (s *sqlStore) Allocate(
 					colName,
 					current)
 				start = time.Now()
-				res, err = te.Exec(sql)
+				res, err = te.Exec(sql, executor.StatementOption{})
 				if err != nil {
 					return err
 				}
@@ -181,13 +193,21 @@ func (s *sqlStore) Allocate(
 				if res.AffectedRows == 1 {
 					ok = true
 				} else {
+					accountId, err := defines.GetAccountId(ctx)
+					if err != nil {
+						return err
+					}
+					selectAll, err := s.SelectAll(ctx, tableID, txnOp)
+					if err != nil {
+						return err
+					}
 					getLogger().Fatal("BUG: update incr record returns invalid affected rows",
 						zap.String("update-sql", sql),
-						zap.Any("account", ctx.Value(defines.TenantIDKey{})),
+						zap.Any("account", accountId),
 						zap.Uint64("table", tableID),
 						zap.String("col", colName),
 						zap.Uint64("affected-rows", res.AffectedRows),
-						zap.String("select-all", s.SelectAll(ctx, tableID, txnOp)),
+						zap.String("select-all", selectAll),
 						zap.Duration("cost", time.Since(start)),
 						zap.Bool("ctx-done", ctxDone()))
 				}
@@ -278,7 +298,7 @@ func (s *sqlStore) GetColumns(
 	var indexes []int32
 	var offsets []uint64
 	var steps []uint64
-	res.ReadRows(func(cols []*vector.Vector) bool {
+	res.ReadRows(func(_ int, cols []*vector.Vector) bool {
 		colNames = append(colNames, executor.GetStringRows(cols[0])...)
 		indexes = append(indexes, executor.GetFixedRows[int32](cols[1])...)
 		offsets = append(offsets, executor.GetFixedRows[uint64](cols[2])...)

@@ -17,10 +17,13 @@ package mergesort
 import (
 	"fmt"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
+
+/// sort things
 
 func sort[T any](col containers.Vector, lessFunc LessFunc[T], n int) SortSlice[T] {
 	dataWithIdx := NewSortSlice(n, lessFunc)
@@ -61,63 +64,6 @@ func Sort[T any](col containers.Vector, lessFunc LessFunc[T], idx []int32) (ret 
 	return
 }
 
-func Merge[T any](
-	col []containers.Vector,
-	src *[]uint32,
-	lessFunc LessFunc[T],
-	fromLayout,
-	toLayout []uint32,
-	pool *containers.VectorPool,
-) (ret []containers.Vector, mapping []uint32) {
-	ret = make([]containers.Vector, len(toLayout))
-	mapping = make([]uint32, len(*src))
-
-	offset := make([]uint32, len(fromLayout))
-	offset[0] = 0
-	for i := 1; i < len(fromLayout); i++ {
-		offset[i] = offset[i-1] + fromLayout[i-1]
-	}
-
-	for i := range toLayout {
-		ret[i] = pool.GetVector(col[0].GetType())
-	}
-
-	nBlk := len(col)
-	heap := NewHeapSlice(nBlk, lessFunc)
-
-	for i := 0; i < nBlk; i++ {
-		if col[i].IsNull(0) {
-			heap.Append(HeapElem[T]{isNull: true, src: uint32(i), next: 1})
-		} else {
-			heap.Append(HeapElem[T]{data: col[i].Get(0).(T), src: uint32(i), next: 1})
-		}
-	}
-	heapInit(heap)
-
-	k := 0
-	for i := 0; i < len(toLayout); i++ {
-		for j := 0; j < int(toLayout[i]); j++ {
-			top := heapPop(&heap)
-			(*src)[k] = top.src
-			if top.isNull {
-				ret[i].Append(nil, true)
-			} else {
-				ret[i].Append(top.data, false)
-			}
-			mapping[offset[top.src]+top.next-1] = uint32(k)
-			k++
-			if int(top.next) < int(fromLayout[top.src]) {
-				if col[top.src].IsNull(int(top.next)) {
-					heapPush(&heap, HeapElem[T]{isNull: true, src: top.src, next: top.next + 1})
-				} else {
-					heapPush(&heap, HeapElem[T]{data: col[top.src].Get(int(top.next)).(T), src: top.src, next: top.next + 1})
-				}
-			}
-		}
-	}
-	return
-}
-
 func Shuffle(
 	col containers.Vector, idx []int32, pool *containers.VectorPool,
 ) containers.Vector {
@@ -137,169 +83,336 @@ func Shuffle(
 	return ret
 }
 
-func multiplexVarlen(
-	cols []*vector.Vector, src []uint32, fromLayout, toLayout []uint32, pool *containers.VectorPool,
-) (ret []containers.Vector) {
-	ret = make([]containers.Vector, len(toLayout))
-	cursors := make([]int, len(fromLayout))
+/// merge things
 
-	k := 0
-	for i := 0; i < len(toLayout); i++ {
-		ret[i] = pool.GetVector(cols[0].GetType())
-		ret[i].PreExtend(int(toLayout[i]))
-		vec := ret[i].GetDownstreamVector()
-		mp := ret[i].GetAllocator()
-		for j := 0; j < int(toLayout[i]); j++ {
-			s := src[k]
-			if cols[s].IsNull(uint64(cursors[s])) {
-				vector.AppendBytes(vec, nil, true, mp)
-			} else {
-				vector.AppendBytes(vec, cols[s].GetBytesAt(cursors[s]), false, mp)
-			}
-			cursors[s]++
-			k++
-		}
+// mergeVarlen merge varlen column, and do not consider lifetime of `column` and `ret`
+func mergeVarlen(
+	col, ret []*vector.Vector,
+	sortidx, mapping []uint32,
+	fromLayout, toLayout []uint32,
+	m *mpool.MPool,
+) {
+	offset := make([]uint32, len(fromLayout))
+	offset[0] = 0
+	for i := 1; i < len(fromLayout); i++ {
+		offset[i] = offset[i-1] + fromLayout[i-1]
 	}
 
-	return
+	nBlk := len(col)
+	heap := NewHeapSlice(nBlk, bytesLess)
+	for i := 0; i < nBlk; i++ {
+		if col[i].IsNull(0) {
+			heap.Append(HeapElem[[]byte]{isNull: true, src: uint32(i), next: 1})
+		} else {
+			heap.Append(HeapElem[[]byte]{data: col[i].GetBytesAt(0), src: uint32(i), next: 1})
+		}
+	}
+	heapInit(heap)
+	k := 0
+	for i := 0; i < len(toLayout); i++ {
+		for j := 0; j < int(toLayout[i]); j++ {
+			top := heapPop(&heap)
+			// update sortidx and mapping for k-th sorted element
+			sortidx[k] = top.src
+			mapping[offset[top.src]+top.next-1] = uint32(k)
+			// bump k
+			k++
+			// insert value to ret
+			if top.isNull {
+				vector.AppendBytes(ret[i], nil, true, m)
+			} else {
+				vector.AppendBytes(ret[i], top.data, false, m)
+			}
+			// find next element to heap
+			if int(top.next) < int(fromLayout[top.src]) {
+				if col[top.src].IsNull(uint64(top.next)) {
+					heapPush(&heap, HeapElem[[]byte]{isNull: true, src: top.src, next: top.next + 1})
+				} else {
+					heapPush(&heap, HeapElem[[]byte]{data: col[top.src].GetBytesAt(int(top.next)), src: top.src, next: top.next + 1})
+				}
+			}
+		}
+	}
 }
 
-func multiplexFixed[T any](
-	cols []*vector.Vector, src []uint32, fromLayout, toLayout []uint32, pool *containers.VectorPool,
-) (ret []containers.Vector) {
-	ret = make([]containers.Vector, len(toLayout))
-	cursors := make([]int, len(fromLayout))
+// mergeVarlen merge fixed type column, and do not consider lifetime of `column` and `ret`
+func mergeFixed[T any](
+	col, ret []*vector.Vector,
+	sortidx, mapping []uint32,
+	lessFunc LessFunc[T],
+	fromLayout, toLayout []uint32,
+	m *mpool.MPool,
+) {
+	offset := make([]uint32, len(fromLayout))
+	offset[0] = 0
+	for i := 1; i < len(fromLayout); i++ {
+		offset[i] = offset[i-1] + fromLayout[i-1]
+	}
 
-	k := 0
+	nBlk := len(col)
+	heap := NewHeapSlice(nBlk, lessFunc)
+	for i := 0; i < nBlk; i++ {
+		if col[i].IsNull(0) {
+			heap.Append(HeapElem[T]{isNull: true, src: uint32(i), next: 1})
+		} else {
+			heap.Append(HeapElem[T]{data: vector.GetFixedAt[T](col[i], 0), src: uint32(i), next: 1})
+		}
+	}
+	heapInit(heap)
 	var nullVal T
+	k := 0
 	for i := 0; i < len(toLayout); i++ {
-		ret[i] = pool.GetVector(cols[0].GetType())
-		ret[i].PreExtend(int(toLayout[i]))
-		vec := ret[i].GetDownstreamVector()
-		mp := ret[i].GetAllocator()
 		for j := 0; j < int(toLayout[i]); j++ {
-			s := src[k]
-			if cols[s].IsNull(uint64(cursors[s])) {
-				vector.AppendFixed(vec, nullVal, true, mp)
-			} else {
-				vector.AppendFixed(vec, vector.GetFixedAt[T](cols[s], cursors[s]), false, mp)
-			}
-			cursors[s]++
+			top := heapPop(&heap)
+			// update sortidx and mapping for k-th sorted element
+			sortidx[k] = top.src
+			mapping[offset[top.src]+top.next-1] = uint32(k)
+			// bump k
 			k++
+			// insert value to ret
+			if top.isNull {
+				vector.AppendFixed(ret[i], nullVal, true, m)
+			} else {
+				vector.AppendFixed(ret[i], top.data, false, m)
+			}
+			// find next element to heap
+			if int(top.next) < int(fromLayout[top.src]) {
+				if col[top.src].IsNull(uint64(top.next)) {
+					heapPush(&heap, HeapElem[T]{isNull: true, src: top.src, next: top.next + 1})
+				} else {
+					heapPush(&heap, HeapElem[T]{data: vector.GetFixedAt[T](col[top.src], int(top.next)), src: top.src, next: top.next + 1})
+				}
+			}
 		}
 	}
-	return
 }
 
-func Multiplex(
-	col []containers.Vector, src []uint32, fromLayout, toLayout []uint32, pool *containers.VectorPool,
-) (ret []containers.Vector) {
-	if len(col) == 0 {
+// Merge merge column, and do not consider lifetime of `column` and `ret`
+//
+// ret, sortidx, mapping are output, they will be modified in this function.
+// Caller should initialize them properly.
+//
+// sortidx[k] means k-th element in the flatten toLayout array,
+// which is the merged outcome, is from sortedidx[k]-th column in fromLayout array
+// For fromLayout [5, 4] and toLayout [3, 3, 3], sortidx maybe like [0,0,0,1,1,0,1,1,0]
+//
+// mapping[k] means k-th element in the flatten fromLayout array is moved
+// to the mapping[k]-th element in the flatten toLayout array
+func Merge(
+	column, ret []*vector.Vector,
+	sortidx, mapping []uint32,
+	fromLayout, toLayout []uint32,
+	m *mpool.MPool,
+) {
+	if len(column) == 0 {
 		return
 	}
-	columns := make([]*vector.Vector, len(col))
-	for i := range col {
-		columns[i] = col[i].GetDownstreamVector()
-	}
 
-	typ := col[0].GetType()
+	typ := column[0].GetType()
 	if typ.IsVarlen() {
-		ret = multiplexVarlen(columns, src, fromLayout, toLayout, pool)
+		mergeVarlen(column, ret, sortidx, mapping, fromLayout, toLayout, m)
 	} else {
 		switch typ.Oid {
 		case types.T_bool:
-			ret = multiplexFixed[bool](columns, src, fromLayout, toLayout, pool)
+			mergeFixed[bool](column, ret, sortidx, mapping, boolLess, fromLayout, toLayout, m)
+		case types.T_bit:
+			mergeFixed[uint64](column, ret, sortidx, mapping, numericLess[uint64], fromLayout, toLayout, m)
 		case types.T_int8:
-			ret = multiplexFixed[int8](columns, src, fromLayout, toLayout, pool)
+			mergeFixed[int8](column, ret, sortidx, mapping, numericLess[int8], fromLayout, toLayout, m)
 		case types.T_int16:
-			ret = multiplexFixed[int16](columns, src, fromLayout, toLayout, pool)
+			mergeFixed[int16](column, ret, sortidx, mapping, numericLess[int16], fromLayout, toLayout, m)
 		case types.T_int32:
-			ret = multiplexFixed[int32](columns, src, fromLayout, toLayout, pool)
+			mergeFixed[int32](column, ret, sortidx, mapping, numericLess[int32], fromLayout, toLayout, m)
 		case types.T_int64:
-			ret = multiplexFixed[int64](columns, src, fromLayout, toLayout, pool)
+			mergeFixed[int64](column, ret, sortidx, mapping, numericLess[int64], fromLayout, toLayout, m)
 		case types.T_float32:
-			ret = multiplexFixed[float32](columns, src, fromLayout, toLayout, pool)
+			mergeFixed[float32](column, ret, sortidx, mapping, numericLess[float32], fromLayout, toLayout, m)
 		case types.T_float64:
-			ret = multiplexFixed[float64](columns, src, fromLayout, toLayout, pool)
+			mergeFixed[float64](column, ret, sortidx, mapping, numericLess[float64], fromLayout, toLayout, m)
 		case types.T_uint8:
-			ret = multiplexFixed[uint8](columns, src, fromLayout, toLayout, pool)
+			mergeFixed[uint8](column, ret, sortidx, mapping, numericLess[uint8], fromLayout, toLayout, m)
 		case types.T_uint16:
-			ret = multiplexFixed[uint16](columns, src, fromLayout, toLayout, pool)
+			mergeFixed[uint16](column, ret, sortidx, mapping, numericLess[uint16], fromLayout, toLayout, m)
 		case types.T_uint32:
-			ret = multiplexFixed[uint32](columns, src, fromLayout, toLayout, pool)
+			mergeFixed[uint32](column, ret, sortidx, mapping, numericLess[uint32], fromLayout, toLayout, m)
 		case types.T_uint64:
-			ret = multiplexFixed[uint64](columns, src, fromLayout, toLayout, pool)
+			mergeFixed[uint64](column, ret, sortidx, mapping, numericLess[uint64], fromLayout, toLayout, m)
 		case types.T_date:
-			ret = multiplexFixed[types.Date](columns, src, fromLayout, toLayout, pool)
+			mergeFixed[types.Date](column, ret, sortidx, mapping, numericLess[types.Date], fromLayout, toLayout, m)
 		case types.T_timestamp:
-			ret = multiplexFixed[types.Timestamp](columns, src, fromLayout, toLayout, pool)
+			mergeFixed[types.Timestamp](column, ret, sortidx, mapping, numericLess[types.Timestamp], fromLayout, toLayout, m)
 		case types.T_datetime:
-			ret = multiplexFixed[types.Datetime](columns, src, fromLayout, toLayout, pool)
+			mergeFixed[types.Datetime](column, ret, sortidx, mapping, numericLess[types.Datetime], fromLayout, toLayout, m)
 		case types.T_time:
-			ret = multiplexFixed[types.Time](columns, src, fromLayout, toLayout, pool)
+			mergeFixed[types.Time](column, ret, sortidx, mapping, numericLess[types.Time], fromLayout, toLayout, m)
 		case types.T_enum:
-			ret = multiplexFixed[types.Enum](columns, src, fromLayout, toLayout, pool)
+			mergeFixed[types.Enum](column, ret, sortidx, mapping, numericLess[types.Enum], fromLayout, toLayout, m)
 		case types.T_decimal64:
-			ret = multiplexFixed[types.Decimal64](columns, src, fromLayout, toLayout, pool)
+			mergeFixed[types.Decimal64](column, ret, sortidx, mapping, ltTypeLess[types.Decimal64], fromLayout, toLayout, m)
 		case types.T_decimal128:
-			ret = multiplexFixed[types.Decimal128](columns, src, fromLayout, toLayout, pool)
+			mergeFixed[types.Decimal128](column, ret, sortidx, mapping, ltTypeLess[types.Decimal128], fromLayout, toLayout, m)
 		case types.T_uuid:
-			ret = multiplexFixed[types.Uuid](columns, src, fromLayout, toLayout, pool)
+			mergeFixed[types.Uuid](column, ret, sortidx, mapping, ltTypeLess[types.Uuid], fromLayout, toLayout, m)
 		case types.T_TS:
-			ret = multiplexFixed[types.TS](columns, src, fromLayout, toLayout, pool)
+			mergeFixed[types.TS](column, ret, sortidx, mapping, tsLess, fromLayout, toLayout, m)
 		case types.T_Rowid:
-			ret = multiplexFixed[types.Rowid](columns, src, fromLayout, toLayout, pool)
+			mergeFixed[types.Rowid](column, ret, sortidx, mapping, rowidLess, fromLayout, toLayout, m)
 		case types.T_Blockid:
-			ret = multiplexFixed[types.Blockid](columns, src, fromLayout, toLayout, pool)
+			mergeFixed[types.Blockid](column, ret, sortidx, mapping, blockidLess, fromLayout, toLayout, m)
 		default:
 			panic(fmt.Sprintf("unsupported type %s", typ.String()))
 		}
 	}
 
-	for _, v := range col {
-		v.Close()
+}
+
+func multiplexVarlen(
+	cols, ret []*vector.Vector, src []uint32, fromLayout, toLayout []uint32, m *mpool.MPool,
+) {
+	cursors := make([]int, len(fromLayout))
+	k := 0
+	for i := 0; i < len(toLayout); i++ {
+		ret[i].PreExtend(int(toLayout[i]), m)
+		for j := 0; j < int(toLayout[i]); j++ {
+			s := src[k]
+			if cols[s].IsNull(uint64(cursors[s])) {
+				vector.AppendBytes(ret[i], nil, true, m)
+			} else {
+				vector.AppendBytes(ret[i], cols[s].GetBytesAt(cursors[s]), false, m)
+			}
+			cursors[s]++
+			k++
+		}
 	}
-	return
+
 }
 
-func ShuffleColumn(
-	column []containers.Vector, sortedIdx []uint32, fromLayout, toLayout []uint32, pool *containers.VectorPool,
-) (ret []containers.Vector) {
-	ret = Multiplex(column, sortedIdx, fromLayout, toLayout, pool)
-	return
+func multiplexFixed[T any](
+	cols, ret []*vector.Vector, src []uint32, fromLayout, toLayout []uint32, m *mpool.MPool,
+) {
+	cursors := make([]int, len(fromLayout))
+	k := 0
+	var nullVal T
+	for i := 0; i < len(toLayout); i++ {
+		ret[i].PreExtend(int(toLayout[i]), m)
+		for j := 0; j < int(toLayout[i]); j++ {
+			s := src[k]
+			if cols[s].IsNull(uint64(cursors[s])) {
+				vector.AppendFixed(ret[i], nullVal, true, m)
+			} else {
+				vector.AppendFixed(ret[i], vector.GetFixedAt[T](cols[s], cursors[s]), false, m)
+			}
+			cursors[s]++
+			k++
+		}
+	}
 }
 
-func Reshape(
-	column []containers.Vector, fromLayout, toLayout []uint32, pool *containers.VectorPool,
-) (ret []containers.Vector) {
-	ret = make([]containers.Vector, len(toLayout))
+// Multiplex do not consider lifetime of `column` and `ret`
+func Multiplex(
+	column, ret []*vector.Vector, src []uint32, fromLayout, toLayout []uint32, m *mpool.MPool,
+) {
+	if len(column) == 0 {
+		return
+	}
+
+	typ := column[0].GetType()
+	if typ.IsVarlen() {
+		multiplexVarlen(column, ret, src, fromLayout, toLayout, m)
+	} else {
+		switch typ.Oid {
+		case types.T_bool:
+			multiplexFixed[bool](column, ret, src, fromLayout, toLayout, m)
+		case types.T_bit:
+			multiplexFixed[uint64](column, ret, src, fromLayout, toLayout, m)
+		case types.T_int8:
+			multiplexFixed[int8](column, ret, src, fromLayout, toLayout, m)
+		case types.T_int16:
+			multiplexFixed[int16](column, ret, src, fromLayout, toLayout, m)
+		case types.T_int32:
+			multiplexFixed[int32](column, ret, src, fromLayout, toLayout, m)
+		case types.T_int64:
+			multiplexFixed[int64](column, ret, src, fromLayout, toLayout, m)
+		case types.T_float32:
+			multiplexFixed[float32](column, ret, src, fromLayout, toLayout, m)
+		case types.T_float64:
+			multiplexFixed[float64](column, ret, src, fromLayout, toLayout, m)
+		case types.T_uint8:
+			multiplexFixed[uint8](column, ret, src, fromLayout, toLayout, m)
+		case types.T_uint16:
+			multiplexFixed[uint16](column, ret, src, fromLayout, toLayout, m)
+		case types.T_uint32:
+			multiplexFixed[uint32](column, ret, src, fromLayout, toLayout, m)
+		case types.T_uint64:
+			multiplexFixed[uint64](column, ret, src, fromLayout, toLayout, m)
+		case types.T_date:
+			multiplexFixed[types.Date](column, ret, src, fromLayout, toLayout, m)
+		case types.T_timestamp:
+			multiplexFixed[types.Timestamp](column, ret, src, fromLayout, toLayout, m)
+		case types.T_datetime:
+			multiplexFixed[types.Datetime](column, ret, src, fromLayout, toLayout, m)
+		case types.T_time:
+			multiplexFixed[types.Time](column, ret, src, fromLayout, toLayout, m)
+		case types.T_enum:
+			multiplexFixed[types.Enum](column, ret, src, fromLayout, toLayout, m)
+		case types.T_decimal64:
+			multiplexFixed[types.Decimal64](column, ret, src, fromLayout, toLayout, m)
+		case types.T_decimal128:
+			multiplexFixed[types.Decimal128](column, ret, src, fromLayout, toLayout, m)
+		case types.T_uuid:
+			multiplexFixed[types.Uuid](column, ret, src, fromLayout, toLayout, m)
+		case types.T_TS:
+			multiplexFixed[types.TS](column, ret, src, fromLayout, toLayout, m)
+		case types.T_Rowid:
+			multiplexFixed[types.Rowid](column, ret, src, fromLayout, toLayout, m)
+		case types.T_Blockid:
+			multiplexFixed[types.Blockid](column, ret, src, fromLayout, toLayout, m)
+		default:
+			panic(fmt.Sprintf("unsupported type %s", typ.String()))
+		}
+	}
+}
+
+// Reshape do not consider lifetime of `column` and `ret`
+func Reshape(column []*vector.Vector, ret []*vector.Vector, fromLayout, toLayout []uint32, m *mpool.MPool) {
 	fromIdx := 0
 	fromOffset := 0
+	typ := column[0].GetType()
 	for i := 0; i < len(toLayout); i++ {
-		ret[i] = pool.GetVector(column[0].GetType())
 		toOffset := 0
 		for toOffset < int(toLayout[i]) {
-			fromLeft := fromLayout[fromIdx] - uint32(fromOffset)
+			// find offset to fill a full block
+			fromLeft := int(fromLayout[fromIdx]) - fromOffset
 			if fromLeft == 0 {
 				fromIdx++
 				fromOffset = 0
-				fromLeft = fromLayout[fromIdx]
+				fromLeft = int(fromLayout[fromIdx])
 			}
 			length := 0
-			if fromLeft < toLayout[i]-uint32(toOffset) {
-				length = int(fromLeft)
+			if fromLeft < int(toLayout[i])-toOffset {
+				length = fromLeft
 			} else {
 				length = int(toLayout[i]) - toOffset
 			}
-			cloned := column[fromIdx].CloneWindow(fromOffset, length)
-			defer cloned.Close()
-			ret[i].Extend(cloned)
+
+			// clone from src and append to dest
+			// FIXME: is clone necessary? can we just feed the original vector window to GetUnionAllFunction?
+			// TODO: use vector pool for the cloned vector
+			cloned, err := column[fromIdx].CloneWindow(fromOffset, fromOffset+length, m)
+			if err != nil {
+				panic(err)
+			}
+			err = vector.GetUnionAllFunction(*typ, m)(ret[i], cloned)
+			if err != nil {
+				panic(err)
+			}
+
+			// release temporary coloned vector
+			cloned.Free(m)
+
+			// update offset
 			fromOffset += length
 			toOffset += length
 		}
 	}
-	for _, v := range column {
-		v.Close()
-	}
-	return
 }

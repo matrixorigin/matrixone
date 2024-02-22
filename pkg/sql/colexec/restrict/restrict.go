@@ -29,7 +29,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+const argName = "restrict"
+
 func (arg *Argument) String(buf *bytes.Buffer) {
+	buf.WriteString(argName)
 	ap := arg
 	buf.WriteString(fmt.Sprintf("filter(%s)", ap.E))
 }
@@ -48,12 +51,12 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	result, err := arg.children[0].Call(proc)
+	result, err := arg.GetChildren(0).Call(proc)
 	if err != nil {
 		return result, err
 	}
 
-	anal := proc.GetAnalyze(arg.info.Idx, arg.info.ParallelIdx, arg.info.ParallelMajor)
+	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
 	anal.Start()
 	defer anal.Stop()
 
@@ -66,7 +69,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 	arg.buf = result.Batch
 
-	anal.Input(arg.buf, arg.info.IsFirst)
+	anal.Input(arg.buf, arg.GetIsFirst())
 
 	var sels []int64
 	for i := range arg.ctr.executors {
@@ -137,7 +140,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	if arg.IsEnd {
 		result.Batch = nil
 	} else {
-		anal.Output(arg.buf, arg.info.IsLast)
+		anal.Output(arg.buf, arg.GetIsLast())
 		if arg.buf == result.Batch {
 			arg.buf = nil
 		} else {

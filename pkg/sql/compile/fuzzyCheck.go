@@ -18,14 +18,16 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/reuse"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -76,7 +78,7 @@ func newFuzzyCheck(n *plan.Node) (*fuzzyCheck, error) {
 	return f, nil
 }
 
-func (f fuzzyCheck) Name() string {
+func (f fuzzyCheck) TypeName() string {
 	return "compile.fuzzyCheck"
 }
 
@@ -135,7 +137,7 @@ func (f *fuzzyCheck) fill(ctx context.Context, bat *batch.Batch) error {
 		var i int
 		var j int
 
-		var lastRow = len(pkeys[0]) - 1
+		lastRow := len(pkeys[0]) - 1
 
 		cAttrs := make([]string, len(f.compoundCols))
 		for k, c := range f.compoundCols {
@@ -180,7 +182,7 @@ func (f *fuzzyCheck) firstlyCheck(ctx context.Context, toCheck *vector.Vector) e
 	kcnt := make(map[string]int)
 
 	if !f.isCompound {
-		pkey, err := f.formatNonCompound(toCheck, true)
+		pkey, err := f.format(toCheck)
 		if err != nil {
 			return err
 		}
@@ -206,7 +208,12 @@ func (f *fuzzyCheck) firstlyCheck(ctx context.Context, toCheck *vector.Vector) e
 	// firstly check if contains duplicate
 	for k, cnt := range kcnt {
 		if cnt > 1 {
-			return moerr.NewDuplicateEntry(ctx, k, f.attr)
+			ds, e := strconv.Unquote(k)
+			if e != nil {
+				return moerr.NewDuplicateEntry(ctx, k, f.attr)
+			} else {
+				return moerr.NewDuplicateEntry(ctx, ds, f.attr)
+			}
 		}
 	}
 	return nil
@@ -215,7 +222,6 @@ func (f *fuzzyCheck) firstlyCheck(ctx context.Context, toCheck *vector.Vector) e
 // genCollsionKeys return [][]string to store the string of collsion keys, it will check if
 // collision keys are duplicates with each other, if do dup, no need to run background SQL
 func (f *fuzzyCheck) genCollsionKeys(toCheck *vector.Vector) ([][]string, error) {
-
 	var keys [][]string
 	if !f.isCompound {
 		keys = make([][]string, 1)
@@ -224,19 +230,23 @@ func (f *fuzzyCheck) genCollsionKeys(toCheck *vector.Vector) ([][]string, error)
 	}
 
 	if !f.isCompound {
-		pkey, err := f.formatNonCompound(toCheck, false)
+		pkey, err := f.format(toCheck)
 		if err != nil {
 			return nil, err
 		}
 		keys[0] = pkey
 	} else {
+		scales := make([]int32, len(f.compoundCols))
+		for i, c := range f.compoundCols {
+			scales[i] = c.Typ.Scale
+		}
 		for i := 0; i < toCheck.Length(); i++ {
 			b := toCheck.GetRawBytesAt(i)
 			t, err := types.Unpack(b)
 			if err != nil {
 				return nil, err
 			}
-			s := t.SQLStrings()
+			s := t.SQLStrings(scales)
 			for j := 0; j < len(s); j++ {
 				keys[j] = append(keys[j], s[j])
 			}
@@ -273,10 +283,15 @@ func (f *fuzzyCheck) backgroundSQLCheck(c *Compile) error {
 			toCheck := vs[0]
 			if !f.isCompound {
 				f.adjustDecimalScale(toCheck)
-				if dupKey, e := f.formatNonCompound(toCheck, true); e != nil {
+				if dupKey, e := f.format(toCheck); e != nil {
 					err = e
 				} else {
-					err = moerr.NewDuplicateEntry(c.ctx, dupKey[0], f.attr)
+					ds, e := strconv.Unquote(dupKey[0])
+					if e != nil {
+						err = moerr.NewDuplicateEntry(c.ctx, dupKey[0], f.attr)
+					} else {
+						err = moerr.NewDuplicateEntry(c.ctx, ds, f.attr)
+					}
 				}
 			} else {
 				if t, e := types.Unpack(toCheck.GetBytesAt(0)); e != nil {
@@ -316,108 +331,111 @@ func (f *fuzzyCheck) wrapup(name string) string {
 	return "`" + name + "`"
 }
 
-// for table that like CREATE TABLE t1( b CHAR(10), PRIMARY KEY);
-// with : insert into t1 values('ab'), ('ab');
-// background SQL condition should be b='ab' instead of b=ab
-// other time format such as bool, float, decimal
-func (f *fuzzyCheck) formatNonCompound(toCheck *vector.Vector, useInErr bool) ([]string, error) {
+// format format strings from vector
+func (f *fuzzyCheck) format(toCheck *vector.Vector) ([]string, error) {
 	var ss []string
-	s := strings.Trim(toCheck.String(), "[]")
 	typ := toCheck.GetType()
 
-	switch typ.Oid {
-	case types.T_datetime, types.T_timestamp:
-		ss = f.handletimesType(toCheck)
-	default:
-		ss = strings.Split(s, " ")
+	for i := 0; i < toCheck.Length(); i++ {
+		s, err := vectorToString(toCheck, i)
+		if err != nil {
+			return nil, err
+		}
+		ss = append(ss, s)
 	}
 
-	if useInErr {
-		switch typ.Oid {
-		// decimal
-		case types.T_decimal64:
-			ds := make([]string, 0)
-			for i := 0; i < toCheck.Length(); i++ {
-				val := vector.GetFixedAt[types.Decimal64](toCheck, i)
-				ds = append(ds, val.Format(typ.Scale))
-			}
-			return ds, nil
-		case types.T_decimal128:
-			ds := make([]string, 0)
-			for i := 0; i < toCheck.Length(); i++ {
-				val := vector.GetFixedAt[types.Decimal128](toCheck, i)
-				ds = append(ds, val.Format(typ.Scale))
-			}
-			return ds, nil
-		case types.T_decimal256:
-			ds := make([]string, 0)
-			for i := 0; i < toCheck.Length(); i++ {
-				val := vector.GetFixedAt[types.Decimal256](toCheck, i)
-				ds = append(ds, val.Format(typ.Scale))
-			}
-			return ds, nil
+	// for table that like CREATE TABLE t1( b CHAR(10), PRIMARY KEY);
+	// with : insert into t1 values('ab'), ('ab');
+	// background SQL condition should be b='ab' instead of b=ab, as well as time types
+	switch typ.Oid {
+	// date and time
+	case types.T_date, types.T_time, types.T_datetime, types.T_timestamp:
+		for i, str := range ss {
+			ss[i] = strconv.Quote(str)
 		}
 		return ss, nil
-	} else {
-		switch typ.Oid {
-		// date and time
-		case types.T_date, types.T_time, types.T_datetime, types.T_timestamp:
-			for i, str := range ss {
-				ss[i] = "'" + str + "'"
-			}
-			return ss, nil
 
-		// string family but not include binary
-		case types.T_char, types.T_varchar, types.T_varbinary, types.T_text, types.T_uuid, types.T_binary:
-			for i, str := range ss {
-				ss[i] = strconv.Quote(str)
-			}
-			return ss, nil
-
-		// case types.T_enum:
-		// 	enumValues := strings.Split(f.col.Typ.Enumvalues, ",")
-		// 	f.isEnum = true
-		// 	for i, str := range ss {
-		// 		num, err := strconv.Atoi(str)
-		// 		if err != nil {
-		// 			return nil, err
-		// 		}
-		// 		ss[i] = fmt.Sprintf("'%s'", enumValues[num-1])
-		// 	}
-		// 	return ss, nil
-		// decimal
-		case types.T_decimal64, types.T_decimal128, types.T_decimal256:
-			return ss, nil
-
-		// bool, int, float
-		case types.T_int8, types.T_int16, types.T_int32, types.T_int64, types.T_int128,
-			types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64, types.T_uint128,
-			types.T_float32, types.T_float64, types.T_bool:
-			return ss, nil
-		default:
-			return nil, moerr.NewInternalErrorNoCtx("fuzzy filter can not parse correct string for type id : %d", typ.Oid)
+	// string family but not include binary
+	case types.T_char, types.T_varchar, types.T_varbinary, types.T_text, types.T_uuid, types.T_binary:
+		for i, str := range ss {
+			ss[i] = strconv.Quote(str)
 		}
+		return ss, nil
+	default:
+		return ss, nil
 	}
 }
 
-// datime time and timestamp type can not split by space directly
-func (f *fuzzyCheck) handletimesType(toCheck *vector.Vector) []string {
-	result := make([]string, 0, toCheck.Length())
-	typ := toCheck.GetType()
-
-	if typ.Oid == types.T_timestamp {
-		loc := time.Local
-		for i := 0; i < toCheck.Length(); i++ {
-			ts := vector.GetFixedAt[types.Timestamp](toCheck, i)
-			result = append(result, ts.String2(loc, typ.Scale))
-		}
-	} else {
-		for i := 0; i < toCheck.Length(); i++ {
-			ts := vector.GetFixedAt[types.Datetime](toCheck, i)
-			result = append(result, ts.String2(typ.Scale))
-		}
+func vectorToString(vec *vector.Vector, rowIndex int) (string, error) {
+	if nulls.Any(vec.GetNulls()) {
+		return "", nil
 	}
-	return result
+	switch vec.GetType().Oid {
+	case types.T_bool:
+		flag := vector.GetFixedAt[bool](vec, rowIndex)
+		if flag {
+			return "true", nil
+		}
+		return "false", nil
+	case types.T_bit:
+		return fmt.Sprintf("%v", vector.GetFixedAt[uint64](vec, rowIndex)), nil
+	case types.T_int8:
+		return fmt.Sprintf("%v", vector.GetFixedAt[int8](vec, rowIndex)), nil
+	case types.T_int16:
+		return fmt.Sprintf("%v", vector.GetFixedAt[int16](vec, rowIndex)), nil
+	case types.T_int32:
+		return fmt.Sprintf("%v", vector.GetFixedAt[int32](vec, rowIndex)), nil
+	case types.T_int64:
+		return fmt.Sprintf("%v", vector.GetFixedAt[int64](vec, rowIndex)), nil
+	case types.T_uint8:
+		return fmt.Sprintf("%v", vector.GetFixedAt[uint8](vec, rowIndex)), nil
+	case types.T_uint16:
+		return fmt.Sprintf("%v", vector.GetFixedAt[uint16](vec, rowIndex)), nil
+	case types.T_uint32:
+		return fmt.Sprintf("%v", vector.GetFixedAt[uint32](vec, rowIndex)), nil
+	case types.T_uint64:
+		return fmt.Sprintf("%v", vector.GetFixedAt[uint64](vec, rowIndex)), nil
+	case types.T_float32:
+		return fmt.Sprintf("%v", vector.GetFixedAt[float32](vec, rowIndex)), nil
+	case types.T_float64:
+		return fmt.Sprintf("%v", vector.GetFixedAt[float64](vec, rowIndex)), nil
+	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_text, types.T_blob:
+		return vec.GetStringAt(rowIndex), nil
+	case types.T_array_float32:
+		return types.ArrayToString[float32](vector.GetArrayAt[float32](vec, rowIndex)), nil
+	case types.T_array_float64:
+		return types.ArrayToString[float64](vector.GetArrayAt[float64](vec, rowIndex)), nil
+	case types.T_decimal64:
+		val := vector.GetFixedAt[types.Decimal64](vec, rowIndex)
+		return val.Format(vec.GetType().Scale), nil
+	case types.T_decimal128:
+		val := vector.GetFixedAt[types.Decimal128](vec, rowIndex)
+		return val.Format(vec.GetType().Scale), nil
+	case types.T_json:
+		val := vec.GetBytesAt(rowIndex)
+		byteJson := types.DecodeJson(val)
+		return byteJson.String(), nil
+	case types.T_uuid:
+		val := vector.GetFixedAt[types.Uuid](vec, rowIndex)
+		return val.ToString(), nil
+	case types.T_date:
+		val := vector.GetFixedAt[types.Date](vec, rowIndex)
+		return val.String(), nil
+	case types.T_time:
+		val := vector.GetFixedAt[types.Time](vec, rowIndex)
+		return val.String(), nil
+	case types.T_timestamp:
+		loc := time.Local
+		val := vector.GetFixedAt[types.Timestamp](vec, rowIndex)
+		return val.String2(loc, vec.GetType().Scale), nil
+	case types.T_datetime:
+		val := vector.GetFixedAt[types.Datetime](vec, rowIndex)
+		return val.String2(vec.GetType().Scale), nil
+	case types.T_enum:
+		return fmt.Sprintf("%v", vector.GetFixedAt[uint16](vec, rowIndex)), nil
+	default:
+		return "", moerr.NewInternalErrorNoCtx("fuzzy filter can not parse correct string for type id : %d", vec.GetType().Oid)
+	}
 }
 
 // for decimal type in batch.vector that read from pipeline, its scale is empty

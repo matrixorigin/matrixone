@@ -17,6 +17,7 @@ package left
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -46,8 +47,9 @@ type container struct {
 
 	inBuckets []uint8
 
-	bat  *batch.Batch
-	rbat *batch.Batch
+	batches       []*batch.Batch
+	batchRowCount int
+	rbat          *batch.Batch
 
 	expr colexec.ExpressionExecutor
 
@@ -71,28 +73,51 @@ type Argument struct {
 	Typs       []types.Type
 	Cond       *plan.Expr
 	Conditions [][]*plan.Expr
+	bat        *batch.Batch
+	lastrow    int
 
 	HashOnPK           bool
 	IsShuffle          bool
 	RuntimeFilterSpecs []*plan.RuntimeFilterSpec
 
-	info     *vm.OperatorInfo
-	children []vm.Operator
+	vm.OperatorBase
 }
 
-func (arg *Argument) SetInfo(info *vm.OperatorInfo) {
-	arg.info = info
+func (arg *Argument) GetOperatorBase() *vm.OperatorBase {
+	return &arg.OperatorBase
 }
 
-func (arg *Argument) AppendChild(child vm.Operator) {
-	arg.children = append(arg.children, child)
+func init() {
+	reuse.CreatePool[Argument](
+		func() *Argument {
+			return &Argument{}
+		},
+		func(a *Argument) {
+			*a = Argument{}
+		},
+		reuse.DefaultOptions[Argument]().
+			WithEnableChecker(),
+	)
+}
+
+func (arg Argument) TypeName() string {
+	return argName
+}
+
+func NewArgument() *Argument {
+	return reuse.Alloc[Argument](nil)
+}
+
+func (arg *Argument) Release() {
+	if arg != nil {
+		reuse.Free[Argument](arg, nil)
+	}
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := arg.ctr
 	if ctr != nil {
-		mp := proc.Mp()
-		ctr.cleanBatch(mp)
+		ctr.cleanBatch(proc)
 		ctr.cleanHashMap()
 		ctr.cleanExprExecutor()
 		ctr.FreeAllReg()
@@ -105,21 +130,21 @@ func (ctr *container) cleanExprExecutor() {
 	}
 }
 
-func (ctr *container) cleanBatch(mp *mpool.MPool) {
-	if ctr.bat != nil {
-		ctr.bat.Clean(mp)
-		ctr.bat = nil
+func (ctr *container) cleanBatch(proc *process.Process) {
+	for i := range ctr.batches {
+		proc.PutBatch(ctr.batches[i])
 	}
+	ctr.batches = nil
 	if ctr.rbat != nil {
-		ctr.rbat.Clean(mp)
+		proc.PutBatch(ctr.rbat)
 		ctr.rbat = nil
 	}
 	if ctr.joinBat1 != nil {
-		ctr.joinBat1.Clean(mp)
+		proc.PutBatch(ctr.joinBat1)
 		ctr.joinBat1 = nil
 	}
 	if ctr.joinBat2 != nil {
-		ctr.joinBat2.Clean(mp)
+		proc.PutBatch(ctr.joinBat2)
 		ctr.joinBat2 = nil
 	}
 }

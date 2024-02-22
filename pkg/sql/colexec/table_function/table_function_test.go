@@ -24,17 +24,21 @@ import (
 )
 
 func TestString(t *testing.T) {
-	arg := Argument{Name: "unnest"}
+	arg := Argument{FuncName: "unnest"}
 	arg.String(bytes.NewBuffer(nil))
 }
 
 func TestCall(t *testing.T) {
-	arg := Argument{Name: "unnest",
-		info: &vm.OperatorInfo{
-			Idx:     0,
-			IsFirst: false,
-			IsLast:  false,
-		}}
+	arg := Argument{FuncName: "unnest",
+		OperatorBase: vm.OperatorBase{
+			OperatorInfo: vm.OperatorInfo{
+				Idx:     0,
+				IsFirst: false,
+				IsLast:  false,
+			},
+		},
+	}
+
 	resetChildren(&arg, nil)
 	end, err := arg.Call(testutil.NewProc())
 	require.NoError(t, err)
@@ -43,32 +47,35 @@ func TestCall(t *testing.T) {
 	// end, err = arg.Call(testutil.NewProc())
 	// require.NoError(t, err)
 	require.True(t, end.Status == vm.ExecStop)
-	arg.Name = "metadata_scan"
+	arg.FuncName = "metadata_scan"
 	end, err = arg.Call(testutil.NewProc())
 	require.NoError(t, err)
 	require.True(t, end.Status == vm.ExecStop)
-	arg.Name = "not_exist"
+	arg.FuncName = "not_exist"
 	end, err = arg.Call(testutil.NewProc())
 	require.Error(t, err)
 	require.True(t, end.Status == vm.ExecStop)
 }
 
 func TestPrepare(t *testing.T) {
-	arg := Argument{Name: "unnest",
-		info: &vm.OperatorInfo{
-			Idx:     0,
-			IsFirst: false,
-			IsLast:  false,
-		}}
+	arg := Argument{FuncName: "unnest",
+		OperatorBase: vm.OperatorBase{
+			OperatorInfo: vm.OperatorInfo{
+				Idx:     0,
+				IsFirst: false,
+				IsLast:  false,
+			},
+		},
+	}
 	err := arg.Prepare(testutil.NewProc())
 	require.Error(t, err)
-	arg.Name = "generate_series"
+	arg.FuncName = "generate_series"
 	err = arg.Prepare(testutil.NewProc())
 	require.NoError(t, err)
-	arg.Name = "metadata_scan"
+	arg.FuncName = "metadata_scan"
 	err = arg.Prepare(testutil.NewProc())
 	require.NoError(t, err)
-	arg.Name = "not_exist"
+	arg.FuncName = "not_exist"
 	err = arg.Prepare(testutil.NewProc())
 	require.Error(t, err)
 }

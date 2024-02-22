@@ -52,8 +52,13 @@ func NewConstFixed[T any](typ types.Type, val T, length int, opts ...Options) *v
 	if alloc == nil {
 		alloc = common.DefaultAllocator
 	}
+
+	vc, err := vector.NewConstFixed[T](typ, val, length, alloc)
+	if err != nil {
+		panic(err)
+	}
 	vec := &vectorWrapper{
-		wrapped: vector.NewConstFixed[T](typ, val, length, alloc),
+		wrapped: vc,
 	}
 	vec.mpool = alloc
 	return vec
@@ -69,8 +74,13 @@ func NewConstBytes(typ types.Type, val []byte, length int, opts ...Options) *vec
 	if alloc == nil {
 		alloc = common.DefaultAllocator
 	}
+
+	vc, err := vector.NewConstBytes(typ, val, length, alloc)
+	if err != nil {
+		panic(err)
+	}
 	vec := &vectorWrapper{
-		wrapped: vector.NewConstBytes(typ, val, length, alloc),
+		wrapped: vc,
 	}
 	vec.mpool = alloc
 	return vec
@@ -146,6 +156,9 @@ func (vec *vectorWrapper) ShallowGet(i int) any {
 }
 
 func (vec *vectorWrapper) Length() int {
+	if vec.wrapped == nil {
+		return 0
+	}
 	return vec.wrapped.Length()
 }
 

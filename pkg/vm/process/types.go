@@ -16,7 +16,6 @@ package process
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"io"
 	"sync"
 	"sync/atomic"
@@ -36,7 +35,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/incrservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
-	"github.com/matrixorigin/matrixone/pkg/queryservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/lock"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/udf"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -331,11 +332,15 @@ type Process struct {
 	resolveVariableFunc func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error)
 	prepareParams       *vector.Vector
 
-	QueryService queryservice.QueryService
+	QueryClient qclient.QueryClient
 
 	Hakeeper logservice.CNHAKeeperClient
 
 	UdfService udf.Service
+
+	WaitPolicy lock.WaitPolicy
+
+	MessageBoard *MessageBoard
 }
 
 type vectorPool struct {
@@ -349,6 +354,7 @@ type vectorPool struct {
 type sqlHelper interface {
 	GetCompilerContext() any
 	ExecSql(string) ([]interface{}, error)
+	GetSubscriptionMeta(string) (sub *plan.SubscriptionMeta, err error)
 }
 
 type WrapCs struct {

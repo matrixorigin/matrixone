@@ -16,7 +16,6 @@ package lockservice
 
 import (
 	"context"
-	"sync"
 
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 )
@@ -51,7 +50,7 @@ func (s *service) GetWaitingList(
 }
 
 func (s *service) ForceRefreshLockTableBinds(targets ...uint64) {
-	contains := func(id uint64) bool {
+	contains := func(id uint64, _ lockTable) bool {
 		if len(targets) == 0 {
 			return true
 		}
@@ -63,18 +62,7 @@ func (s *service) ForceRefreshLockTableBinds(targets ...uint64) {
 		return false
 	}
 
-	s.tableGroups.Range(func(_, v any) bool {
-		m := v.(*sync.Map)
-		m.Range(func(key, value any) bool {
-			id := key.(uint64)
-			if contains(id) {
-				value.(lockTable).close()
-				m.Delete(key)
-			}
-			return true
-		})
-		return true
-	})
+	s.tableGroups.removeWithFilter(contains)
 }
 
 func (s *service) GetLockTableBind(
@@ -91,30 +79,43 @@ func (s *service) GetLockTableBind(
 }
 
 func (s *service) IterLocks(fn func(tableID uint64, keys [][]byte, lock Lock) bool) {
-	s.tableGroups.Range(func(_, v any) bool {
-		m := v.(*sync.Map)
-		m.Range(func(key, value any) bool {
-			l, ok := value.(lockTable).(*localLockTable)
-			if !ok {
-				return true
-			}
-			keys := make([][]byte, 0, 2)
-			return func() bool {
-				stop := false
-				l.mu.Lock()
-				defer l.mu.Unlock()
-				l.mu.store.Iter(func(key []byte, lock Lock) bool {
-					keys = append(keys, key)
-					if lock.isLockRangeStart() {
-						return true
-					}
-					stop = !fn(l.bind.OriginTable, keys, lock)
-					keys = keys[:0]
-					return !stop
-				})
+	s.tableGroups.iter(func(_ uint64, v lockTable) bool {
+		l, ok := v.(*localLockTable)
+		if !ok {
+			return true
+		}
+		keys := make([][]byte, 0, 2)
+		return func() bool {
+			stop := false
+			l.mu.Lock()
+			defer l.mu.Unlock()
+			l.mu.store.Iter(func(key []byte, lock Lock) bool {
+				keys = append(keys, key)
+				if lock.isLockRangeStart() {
+					return true
+				}
+				stop = !fn(l.bind.OriginTable, keys, lock)
+				keys = keys[:0]
 				return !stop
-			}()
-		})
-		return true
+			})
+			return !stop
+		}()
 	})
+}
+
+func (s *service) CloseRemoteLockTable(
+	group uint32,
+	tableID uint64,
+	version uint64) (bool, error) {
+	removed := false
+	s.tableGroups.removeWithFilter(func(id uint64, lt lockTable) bool {
+		ok := id == tableID &&
+			lt.getBind().Version == version &&
+			lt.getBind().Group == group
+		if ok {
+			removed = ok
+		}
+		return ok
+	})
+	return removed, nil
 }

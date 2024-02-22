@@ -156,14 +156,19 @@ func newTNService(
 
 // buildTNConfig builds configuration for a tn service.
 func buildTNConfig(
-	index int, opt Options, address serviceAddresses,
+	index int, opt Options, address *serviceAddresses,
 ) *tnservice.Config {
+	uid, _ := uuid.NewV7()
 	cfg := &tnservice.Config{
-		UUID:          uuid.New().String(),
+		UUID:          uid.String(),
 		ListenAddress: address.getTnListenAddress(index),
 	}
 	cfg.ServiceAddress = cfg.ListenAddress
 	cfg.LogtailServer.ListenAddress = address.getTnLogtailAddress(index)
+	cfg.LogtailServer.ServiceAddress = cfg.LogtailServer.ListenAddress
+	cfg.LockService.ListenAddress = address.getTNLockListenAddress(index)
+	cfg.LockService.ServiceAddress = cfg.LockService.ListenAddress
+	cfg.LockService.KeepBindTimeout.Duration = time.Second * 30
 	cfg.DataDir = filepath.Join(opt.rootDataDir, cfg.UUID)
 	cfg.HAKeeper.ClientConfig.ServiceAddresses = address.listHAKeeperListenAddresses()
 	cfg.HAKeeper.HeatbeatInterval.Duration = opt.heartbeat.tn
