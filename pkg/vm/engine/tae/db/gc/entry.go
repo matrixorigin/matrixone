@@ -17,6 +17,7 @@ package gc
 import (
 	"bytes"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"sync/atomic"
 )
@@ -67,9 +68,16 @@ func (o *ObjectEntry) UnRefs(n int) {
 func (o *ObjectEntry) MergeEntry(entry *ObjectEntry) {
 	refs := len(entry.table.blocks)
 	unRefs := len(entry.table.delete)
+	if refs > 1 {
+		logutil.Errorf("refs > 1, %v", entry.table.blocks)
+	}
 	if refs > 0 {
-		o.table.blocks = append(o.table.blocks, entry.table.blocks...)
-		o.Refs(refs)
+		// Handle the creation and deletion of an object across checkpoints
+		if len(o.table.blocks) == 0 {
+			o.table.blocks = append(o.table.blocks, entry.table.blocks...)
+			o.Refs(refs)
+			logutil.Warnf("refs > 0 and o.table.blocks len is 0, %v", o.table.blocks)
+		}
 	}
 
 	if unRefs > 0 {
