@@ -33,6 +33,10 @@ import (
 
 type ObjectEntry struct {
 	commitTS types.TS
+	createTS types.TS
+	dropTS   types.TS
+	db       uint64
+	table    uint64
 }
 
 // GCTable is a data structure in memory after consuming checkpoint
@@ -48,15 +52,12 @@ func NewGCTable() *GCTable {
 	return &table
 }
 
-func (t *GCTable) addObject(name string, commitTS types.TS) {
+func (t *GCTable) addObject(name string, objEntry *ObjectEntry, commitTS types.TS) {
 	t.Lock()
 	defer t.Unlock()
 	object := t.objects[name]
 	if object == nil {
-		object = &ObjectEntry{
-			commitTS: commitTS,
-		}
-		t.objects[name] = object
+		t.objects[name] = objEntry
 		return
 	}
 	if object.commitTS.Less(commitTS) {
@@ -73,7 +74,7 @@ func (t *GCTable) deleteObject(name string) {
 // Merge can merge two GCTables
 func (t *GCTable) Merge(GCTable *GCTable) {
 	for name, entry := range GCTable.objects {
-		t.addObject(name, entry.commitTS)
+		t.addObject(name, entry, entry.commitTS)
 	}
 }
 
@@ -100,12 +101,26 @@ func (t *GCTable) SoftGC(table *GCTable, ts types.TS) []string {
 func (t *GCTable) UpdateTable(data *logtail.CheckpointData) {
 	ins := data.GetObjectBatchs()
 	insCommitTSVec := ins.GetVectorByName(txnbase.SnapshotAttr_CommitTS).GetDownstreamVector()
+	insDeleteTSVec := ins.GetVectorByName(catalog.EntryNode_DeleteAt).GetDownstreamVector()
+	insCreateTSVec := ins.GetVectorByName(catalog.EntryNode_CreateAt).GetDownstreamVector()
+	dbid := ins.GetVectorByName(catalog.SnapshotAttr_DBID).GetDownstreamVector()
+	tid := ins.GetVectorByName(catalog.SnapshotAttr_TID).GetDownstreamVector()
+
 	for i := 0; i < ins.Length(); i++ {
 		var objectStats objectio.ObjectStats
 		buf := ins.GetVectorByName(catalog.ObjectAttr_ObjectStats).Get(i).([]byte)
 		objectStats.UnMarshal(buf)
 		commitTS := vector.GetFixedAt[types.TS](insCommitTSVec, i)
-		t.addObject(objectStats.ObjectName().String(), commitTS)
+		deleteTS := vector.GetFixedAt[types.TS](insDeleteTSVec, i)
+		createTS := vector.GetFixedAt[types.TS](insCreateTSVec, i)
+		object := &ObjectEntry{
+			commitTS: commitTS,
+			createTS: createTS,
+			dropTS:   deleteTS,
+			db:       vector.GetFixedAt[uint64](dbid, i),
+			table:    vector.GetFixedAt[uint64](tid, i),
+		}
+		t.addObject(objectStats.ObjectName().String(), object, commitTS)
 	}
 }
 
@@ -179,7 +194,10 @@ func (t *GCTable) rebuildTable(bats []*containers.Batch) {
 		if t.objects[name] != nil {
 			continue
 		}
-		t.addObject(name, commitTS)
+		object := &ObjectEntry{
+			commitTS: commitTS,
+		}
+		t.addObject(name, object, commitTS)
 	}
 }
 
