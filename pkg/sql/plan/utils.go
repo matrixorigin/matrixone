@@ -1033,7 +1033,8 @@ func ExprIsZonemappable(ctx context.Context, expr *plan.Expr) bool {
 	}
 }
 
-func GetSortOrder(tableDef *plan.TableDef, colName string) int {
+// todo: remove this in the future
+func GetSortOrderByName(tableDef *plan.TableDef, colName string) int {
 	if tableDef.Pkey != nil {
 		pkNames := tableDef.Pkey.Names
 		for i := range pkNames {
@@ -1046,6 +1047,11 @@ func GetSortOrder(tableDef *plan.TableDef, colName string) int {
 		return util.GetClusterByColumnOrder(tableDef.ClusterBy.Name, colName)
 	}
 	return -1
+}
+
+func GetSortOrder(tableDef *plan.TableDef, colPos int32) int {
+	colName := tableDef.Cols[colPos].Name
+	return GetSortOrderByName(tableDef, colName)
 }
 
 // handle the filter list for Stats. rewrite and constFold
