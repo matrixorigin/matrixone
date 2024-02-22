@@ -44,6 +44,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
+	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
@@ -112,7 +113,7 @@ func NewService(
 		engine engine.Engine,
 		fService fileservice.FileService,
 		lockService lockservice.LockService,
-		queryService queryservice.QueryService,
+		queryClient qclient.QueryClient,
 		hakeeper logservice.CNHAKeeperClient,
 		udfService udf.Service,
 		cli client.TxnClient,
@@ -130,11 +131,11 @@ func NewService(
 	if _, err = srv.getHAKeeperClient(); err != nil {
 		return nil, err
 	}
-	srv.initQueryService()
-
-	if err := srv.initCacheServer(); err != nil {
+	if err := srv.initQueryService(); err != nil {
 		return nil, err
 	}
+
+	srv.stopper = stopper.NewStopper("cn-service", stopper.WithLogger(srv.logger))
 
 	if err := srv.initMetadata(); err != nil {
 		return nil, err
@@ -181,7 +182,7 @@ func NewService(
 	srv.pu = pu
 	srv.pu.LockService = srv.lockService
 	srv.pu.HAKeeperClient = srv._hakeeperClient
-	srv.pu.QueryService = srv.queryService
+	srv.pu.QueryClient = srv.queryClient
 	srv.pu.UdfService = srv.udfService
 	srv._txnClient = pu.TxnClient
 
@@ -210,6 +211,25 @@ func NewService(
 	srv.server = server
 	srv.storeEngine = pu.StorageEngine
 
+	srv.requestHandler = func(ctx context.Context,
+		cnAddr string,
+		message morpc.Message,
+		cs morpc.ClientSession,
+		engine engine.Engine,
+		fService fileservice.FileService,
+		lockService lockservice.LockService,
+		queryClient qclient.QueryClient,
+		hakeeper logservice.CNHAKeeperClient,
+		udfService udf.Service,
+		cli client.TxnClient,
+		aicm *defines.AutoIncrCacheManager,
+		messageAcquirer func() morpc.Message) error {
+		return nil
+	}
+	for _, opt := range options {
+		opt(srv)
+	}
+
 	// TODO: global client need to refactor
 	err = cnclient.NewCNClient(
 		srv.pipelineServiceServiceAddr(),
@@ -225,12 +245,6 @@ func (s *service) Start() error {
 
 	if err := s.queryService.Start(); err != nil {
 		return err
-	}
-
-	if s.cacheServer != nil {
-		if err := s.cacheServer.Start(); err != nil {
-			return err
-		}
 	}
 
 	err := s.runMoServer()
@@ -266,11 +280,6 @@ func (s *service) Close() error {
 		}
 	}
 
-	if s.cacheServer != nil {
-		if err := s.cacheServer.Close(); err != nil {
-			return err
-		}
-	}
 	if err := s.server.Close(); err != nil {
 		return err
 	}
@@ -329,6 +338,11 @@ func (s *service) stopRPCs() error {
 			return err
 		}
 	}
+	if s.queryClient != nil {
+		if err := s.queryClient.Close(); err != nil {
+			return err
+		}
+	}
 	s.timestampWaiter.Close()
 	return nil
 }
@@ -375,7 +389,7 @@ func (s *service) handleRequest(
 			s.storeEngine,
 			s.fileService,
 			s.lockService,
-			s.queryService,
+			s.queryClient,
 			s._hakeeperClient,
 			s.udfService,
 			s._txnClient,
@@ -715,7 +729,7 @@ func (s *service) initInternalSQlExecutor(mp *mpool.MPool) {
 		mp,
 		s._txnClient,
 		s.fileService,
-		s.queryService,
+		s.queryClient,
 		s._hakeeperClient,
 		s.udfService,
 		s.aicm)

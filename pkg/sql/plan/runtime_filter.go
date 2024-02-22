@@ -16,7 +16,9 @@ package plan
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
 const (
@@ -83,11 +85,6 @@ func (builder *QueryBuilder) pushdownRuntimeFilters(nodeID int32) {
 		return
 	}
 
-	statsCache := builder.compCtx.GetStatsCache()
-	if statsCache == nil {
-		return
-	}
-
 	leftTags := make(map[int32]emptyType)
 	for _, tag := range builder.enumerateTags(node.Children[0]) {
 		leftTags[tag] = emptyStruct
@@ -119,6 +116,16 @@ func (builder *QueryBuilder) pushdownRuntimeFilters(nodeID int32) {
 
 	rfTag := builder.genNewTag()
 
+	type_tuple := types.New(types.T_tuple, 0, 0)
+	for i := range probeExprs {
+		args := []types.Type{makeTypeByPlan2Expr(probeExprs[i]), type_tuple}
+		_, err := function.GetFunctionByName(builder.GetContext(), "in", args)
+		if err != nil {
+			//don't support this type
+			return
+		}
+	}
+
 	if len(probeExprs) == 1 {
 		probeNdv := getExprNdv(probeExprs[0], builder)
 		if probeNdv == -1 || node.Stats.HashmapStats.HashmapSize/probeNdv >= 0.1 {
@@ -134,8 +141,7 @@ func (builder *QueryBuilder) pushdownRuntimeFilters(nodeID int32) {
 				}
 				if binding, ok := ctx.bindingByTag[col.Col.RelPos]; ok {
 					tableDef := builder.qry.Nodes[binding.nodeId].TableDef
-					colName := tableDef.Cols[col.Col.ColPos].Name
-					if GetSortOrder(tableDef, colName) != 0 {
+					if GetSortOrder(tableDef, col.Col.ColPos) != 0 {
 						return
 					}
 				}

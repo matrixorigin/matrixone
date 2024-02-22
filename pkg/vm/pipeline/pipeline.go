@@ -49,7 +49,7 @@ func (p *Pipeline) String() string {
 	return buf.String()
 }
 
-func (p *Pipeline) Run(r engine.Reader, proc *process.Process) (end bool, err error) {
+func (p *Pipeline) Run(r engine.Reader, topValueMsgTag int32, proc *process.Process) (end bool, err error) {
 	// performance counter
 	perfCounterSet := new(perfcounter.CounterSet)
 	proc.Ctx = perfcounter.WithCounterSet(proc.Ctx, perfCounterSet)
@@ -67,9 +67,10 @@ func (p *Pipeline) Run(r engine.Reader, proc *process.Process) (end bool, err er
 	}
 
 	tableScanOperator := table_scan.Argument{
-		Reader:  r,
-		Attrs:   p.attrs,
-		TableID: p.tableID,
+		Reader:         r,
+		TopValueMsgTag: topValueMsgTag,
+		Attrs:          p.attrs,
+		TableID:        p.tableID,
 	}
 	p.instructions = append([]vm.Instruction{
 		{
