@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/restrict"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"hash/crc32"
 	goruntime "runtime"
@@ -312,7 +313,7 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 						break FOR_LOOP
 
 					case pbpipeline.RuntimeFilter_IN:
-						inExpr := plan2.MakeInExpr(spec.Expr, filter.Card, filter.Data)
+						inExpr := plan2.MakeInExpr(c.ctx, spec.Expr, filter.Card, filter.Data)
 						inExprList = append(inExprList, inExpr)
 
 						// TODO: implement BETWEEN expression
@@ -325,11 +326,22 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 	}
 
 	if len(inExprList) > 0 {
+		//put exprs in reader
 		newExprList := plan2.DeepCopyExprList(inExprList)
 		if s.DataSource.FilterExpr != nil {
 			newExprList = append(newExprList, s.DataSource.FilterExpr)
 		}
+		s.DataSource.node.FilterList = newExprList
 		s.DataSource.FilterExpr = colexec.RewriteFilterExprList(newExprList)
+
+		// put exprs in filter operator
+		ins := s.Instructions[0]
+		arg, ok := ins.Arg.(*restrict.Argument)
+		if !ok {
+			panic("missing instruction for runtime filter!")
+		}
+		arg.E = plan2.DeepCopyExpr(s.DataSource.FilterExpr)
+
 	}
 
 	if s.NodeInfo.NeedExpandRanges {
