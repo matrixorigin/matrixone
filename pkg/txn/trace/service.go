@@ -142,6 +142,9 @@ func NewService(
 	if err := s.stopper.RunTask(s.handleEntryEvents); err != nil {
 		panic(err)
 	}
+	if err := s.stopper.RunTask(s.watch); err != nil {
+		panic(err)
+	}
 	return s, nil
 }
 
@@ -390,7 +393,7 @@ func (s *service) AddTxnError(
 	}
 
 	sql := fmt.Sprintf("insert into %s (ts, txn_id, error_info) values (%d, '%x', '%s')",
-		EventTxnErrorTable,
+		eventErrorTable,
 		ts,
 		txnID,
 		escape(msg))
@@ -408,13 +411,13 @@ func (s *service) AddTxnError(
 			return nil
 		},
 		executor.Options{}.
-			WithDatabase(DebugDB).
+			WithDatabase(debugDB).
 			WithMinCommittedTS(now).
 			WithWaitCommittedLogApplied().
 			WithDisableLock().
 			WithDisableTrace())
 	if err != nil {
-		s.logger.Fatal("exec txn error trace failed",
+		s.logger.Error("exec txn error trace failed",
 			zap.String("sql", sql),
 			zap.Error(err))
 	}
@@ -464,19 +467,11 @@ func (s *service) ApplyLogtail(
 }
 
 func (s *service) Enable() error {
-	if err := s.RefreshFilters(); err != nil {
-		return err
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.atomic.enabled.Store(true)
-	return nil
+	return s.updateState(stateEnable)
 }
 
-func (s *service) Disable() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.atomic.enabled.Store(false)
+func (s *service) Disable() error {
+	return s.updateState(stateDisable)
 }
 
 func (s *service) AddEntryFilter(name string, columns []string) error {
@@ -503,7 +498,7 @@ func (s *service) AddEntryFilter(name string, columns []string) error {
 				return moerr.NewNoSuchTableNoCtx("", name)
 			}
 
-			txn.Use(DebugDB)
+			txn.Use(debugDB)
 			for _, id := range tables {
 				r, err := txn.Exec(getEntryFilterSQL(id, name, columns), executor.StatementOption{})
 				if err != nil {
@@ -533,10 +528,10 @@ func (s *service) ClearFilters() error {
 	err := s.executor.ExecTxn(
 		ctx,
 		func(txn executor.TxnExecutor) error {
-			txn.Use(DebugDB)
+			txn.Use(debugDB)
 			res, err := txn.Exec(
 				fmt.Sprintf("truncate table %s",
-					EventFilterTable),
+					traceTable),
 				executor.StatementOption{})
 			if err != nil {
 				return err
@@ -565,10 +560,10 @@ func (s *service) RefreshFilters() error {
 	err := s.executor.ExecTxn(
 		ctx,
 		func(txn executor.TxnExecutor) error {
-			txn.Use(DebugDB)
+			txn.Use(debugDB)
 			res, err := txn.Exec(
 				fmt.Sprintf("select table_id, columns from %s",
-					EventFilterTable),
+					traceTable),
 				executor.StatementOption{})
 			if err != nil {
 				return err
@@ -625,7 +620,7 @@ func (s *service) handleEntryEvents(ctx context.Context) {
 		ctx,
 		s.entryCSVFile,
 		9,
-		EventDataTable,
+		eventDataTable,
 		s.entryC,
 		s.entryBufC)
 }
@@ -635,7 +630,7 @@ func (s *service) handleTxnEvents(ctx context.Context) {
 		ctx,
 		s.txnCSVFile,
 		8,
-		EventTxnTable,
+		eventTxnTable,
 		s.txnC,
 		s.txnBufC)
 }
@@ -713,7 +708,7 @@ func (s *service) handleEvent(
 					return nil
 				},
 				executor.Options{}.
-					WithDatabase(DebugDB).
+					WithDatabase(debugDB).
 					WithDisableTrace().
 					WithDisableLock())
 		}
@@ -753,6 +748,102 @@ func (s *service) handleEvent(
 			buf.close()
 		}
 	}
+}
+
+func (s *service) watch(ctx context.Context) {
+	ticker := time.NewTicker(time.Second * 10)
+	defer ticker.Stop()
+
+	fetch := func() (string, error) {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second*30)
+		defer cancel()
+		state := "disable"
+		err := s.executor.ExecTxn(
+			ctx,
+			func(txn executor.TxnExecutor) error {
+				sql := fmt.Sprintf("select state from %s where name = '%s'",
+					featuresTables,
+					featureTraceTxn)
+				res, err := txn.Exec(sql, executor.StatementOption{})
+				if err != nil {
+					return err
+				}
+				defer res.Close()
+				res.ReadRows(func(rows int, cols []*vector.Vector) bool {
+					state = cols[0].GetStringAt(0)
+					return true
+				})
+				return nil
+			},
+			executor.Options{}.
+				WithDatabase(debugDB).
+				WithDisableTrace().
+				WithDisableLock())
+		return state, err
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			state, err := fetch()
+			if err != nil {
+				s.logger.Error("failed to fetch trace state",
+					zap.Error(err))
+				continue
+			}
+
+			if state == stateEnable {
+				s.active()
+			} else {
+				s.inactive()
+			}
+		}
+	}
+}
+
+func (s *service) updateState(state string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	now, _ := s.clock.Now()
+	return s.executor.ExecTxn(
+		ctx,
+		func(txn executor.TxnExecutor) error {
+			res, err := txn.Exec(
+				fmt.Sprintf("update %s set state = '%s'",
+					featuresTables,
+					state),
+				executor.StatementOption{})
+			if err != nil {
+				return err
+			}
+			res.Close()
+			return nil
+		},
+		executor.Options{}.
+			WithDatabase(debugDB).
+			WithMinCommittedTS(now).
+			WithWaitCommittedLogApplied().
+			WithDisableLock().
+			WithDisableTrace())
+}
+
+func (s *service) active() {
+	if s.atomic.enabled.Load() {
+		return
+	}
+
+	if err := s.RefreshFilters(); err != nil {
+		return
+	}
+	s.atomic.enabled.Store(true)
+}
+
+func (s *service) inactive() error {
+	s.atomic.enabled.Store(false)
+	return nil
 }
 
 // EntryData entry data
@@ -908,6 +999,9 @@ func (l *EntryData) writeToBuf(
 	for row := 0; row < rows; row++ {
 		idx := buf.buf.GetWriteIndex()
 		for col, name := range l.columns {
+			if _, ok := disableColumns[name]; ok {
+				continue
+			}
 			columnsData := l.vecs[col]
 			buf.buf.WriteString(name)
 			buf.buf.WriteString(":")
@@ -998,7 +1092,7 @@ func getEntryFilterSQL(
 	name string,
 	columns []string) string {
 	return fmt.Sprintf("insert into %s (table_id, table_name, columns) values (%d, '%s', '%s')",
-		EventFilterTable,
+		traceTable,
 		id,
 		name,
 		strings.Join(columns, ","))

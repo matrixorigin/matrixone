@@ -25,14 +25,24 @@ import (
 )
 
 var (
-	DebugDB            = "mo_debug"
-	EventTxnTable      = "txn_event"
-	EventDataTable     = "entry_event"
-	EventFilterTable   = "trace_filter"
-	EventTxnErrorTable = "txn_error"
+	debugDB         = "mo_debug"
+	featuresTables  = "trace_features"
+	traceTable      = "trace_tables"
+	eventTxnTable   = "trace_event_txn"
+	eventDataTable  = "trace_event_data"
+	eventErrorTable = "trace_event_error"
+
+	featureTraceTxn = "txn"
+	stateEnable     = "enable"
+	stateDisable    = "disable"
 
 	InitSQLs = []string{
-		fmt.Sprintf("create database %s", DebugDB),
+		fmt.Sprintf("create database %s", debugDB),
+
+		fmt.Sprintf(`create table %s.%s(
+			name    varchar(50) not null primary key,
+			state   varchar(20) not null
+		)`, debugDB, featuresTables),
 
 		fmt.Sprintf(`create table %s.%s(
 			ts 			          bigint       not null,
@@ -43,7 +53,7 @@ var (
 			snapshot_ts           varchar(50),
 			commit_ts             varchar(50),
 			check_changed		  varchar(100)
-		)`, DebugDB, EventTxnTable),
+		)`, debugDB, eventTxnTable),
 
 		fmt.Sprintf(`create table %s.%s(
 			ts 			          bigint       not null,
@@ -55,20 +65,26 @@ var (
 			row_data              varchar(500) not null, 
 			committed_ts          varchar(50),
 			snapshot_ts           varchar(50)
-		)`, DebugDB, EventDataTable),
+		)`, debugDB, eventDataTable),
 
 		fmt.Sprintf(`create table %s.%s(
 			id                    bigint UNSIGNED primary key auto_increment,
 			table_id			  bigint UNSIGNED not null,
 			table_name            varchar(50)     not null,
 			columns               varchar(200)
-		)`, DebugDB, EventFilterTable),
+		)`, debugDB, traceTable),
 
 		fmt.Sprintf(`create table %s.%s(
 			ts 			          bigint          not null,
 			txn_id                varchar(50)     not null,
 			error_info            varchar(1000)   not null
-		)`, DebugDB, EventTxnErrorTable),
+		)`, debugDB, eventErrorTable),
+
+		fmt.Sprintf(`insert into %s.%s (name, state) values ('%s', '%s')`,
+			debugDB,
+			featuresTables,
+			featureTraceTxn,
+			stateDisable),
 	}
 )
 
@@ -89,7 +105,7 @@ type Service interface {
 	AddTxnError(txnID []byte, err error)
 
 	Enable() error
-	Disable()
+	Disable() error
 
 	AddEntryFilter(name string, columns []string) error
 	RefreshFilters() error

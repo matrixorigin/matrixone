@@ -29,6 +29,15 @@ var (
 	completedPKColumnName = "__mo_cpkey_col"
 	rowIDColumn           = "__mo_rowid"
 	deletePKColumn        = "pk"
+	disableColumns        = map[string]struct{}{
+		"object_stats":        {},
+		"__mo_%1_commit_time": {},
+		"block_id":            {},
+		"%!%mo__meta_loc":     {},
+		"delta_loc":           {},
+		"segment_id":          {},
+		"trunc_pointt":        {},
+	}
 
 	txnCreateEvent         = "created"
 	txnActiveEvent         = "active"
