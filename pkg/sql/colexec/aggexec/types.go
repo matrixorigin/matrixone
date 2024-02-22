@@ -15,6 +15,7 @@
 package aggexec
 
 import (
+	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
@@ -69,3 +70,29 @@ var (
 	_ AggFuncExec = (*multiAggFuncExec1[int8])(nil)
 	_ AggFuncExec = (*multiAggFuncExec2)(nil)
 )
+
+// MakeAgg supports to create an aggregation function executor for single column.
+func MakeAgg(
+	aggID int64, param types.Type, result types.Type, private any) AggFuncExec {
+
+	// switch the param and result type
+	// or let the user deliver the correct implementation with [from, to].
+
+	panic(fmt.Sprintf("invalid implementation for single-column aggregation, agg id: %d, param is %s, result is %s", aggID, param.String(), result.String()))
+}
+
+// MakeMultiAgg supports to create an aggregation function executor for multiple columns.
+func MakeMultiAgg(
+	aggID int64, param []types.Type, result types.Type, private any) AggFuncExec {
+
+	// same as the above comment of MakeAgg.
+
+	panic(fmt.Sprintf("invalid implementation for multi-column aggregation, agg id: %d, param is %s, result is %s", aggID, param, result.String()))
+}
+
+// MakeGroupConcat is one special case of MakeMultiAgg.
+// it supports creating an aggregation function executor for special aggregation `group_concat()`.
+func MakeGroupConcat() AggFuncExec {
+	// todo : no implementation now.
+	return nil
+}
