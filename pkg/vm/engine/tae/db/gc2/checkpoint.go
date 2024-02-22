@@ -76,17 +76,21 @@ type checkpointCleaner struct {
 	// delWorker is a worker that deletes s3‘s objects or local
 	// files, and only one worker will run
 	delWorker *GCWorker
+
+	disableGC bool
 }
 
 func NewCheckpointCleaner(
 	ctx context.Context,
 	fs *objectio.ObjectFS,
 	ckpClient checkpoint.RunnerReader,
+	disableGC bool,
 ) Cleaner {
 	cleaner := &checkpointCleaner{
 		ctx:       ctx,
 		fs:        fs,
 		ckpClient: ckpClient,
+		disableGC: disableGC,
 	}
 	cleaner.delWorker = NewGCWorker(fs, cleaner)
 	cleaner.minMergeCount.count = MinMergeCount
@@ -307,7 +311,7 @@ func (c *checkpointCleaner) tryGC(data *logtail.CheckpointData, ts types.TS) err
 	gc := c.softGC(gcTable, ts)
 	// Delete files after softGC
 	// TODO:Requires Physical Removal Policy
-	err := c.delWorker.ExecDelete(c.ctx, gc)
+	err := c.delWorker.ExecDelete(c.ctx, gc, c.disableGC)
 	if err != nil {
 		return err
 	}

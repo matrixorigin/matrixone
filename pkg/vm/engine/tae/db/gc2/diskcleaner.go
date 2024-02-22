@@ -33,8 +33,7 @@ const MinMergeCount = 20
 // and provides "JobFactory" to let tae notify itself
 // to perform a gc
 type DiskCleaner struct {
-	cleaner   Cleaner
-	disableGC bool
+	cleaner Cleaner
 
 	processQueue sm.Queue
 
@@ -44,11 +43,9 @@ type DiskCleaner struct {
 
 func NewDiskCleaner(
 	diskCleaner Cleaner,
-	disableGC bool,
 ) *DiskCleaner {
 	cleaner := &DiskCleaner{
-		cleaner:   diskCleaner,
-		disableGC: disableGC,
+		cleaner: diskCleaner,
 	}
 	cleaner.processQueue = sm.NewSafeQueue(10000, 1000, cleaner.process)
 	return cleaner

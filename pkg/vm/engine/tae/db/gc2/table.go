@@ -23,9 +23,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"sync"
 
-	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
@@ -98,38 +98,14 @@ func (t *GCTable) SoftGC(table *GCTable, ts types.TS) []string {
 }
 
 func (t *GCTable) UpdateTable(data *logtail.CheckpointData) {
-	ins, _, del, delTxn := data.GetBlkBatchs()
-	insMetaObjectVec := ins.GetVectorByName(pkgcatalog.BlockMeta_MetaLoc).GetDownstreamVector()
-	insDeltaObjectVec := ins.GetVectorByName(pkgcatalog.BlockMeta_DeltaLoc).GetDownstreamVector()
-	insCommitTSVec := ins.GetVectorByName(pkgcatalog.BlockMeta_CommitTs).GetDownstreamVector()
-	for i := 0; i < insMetaObjectVec.Length(); i++ {
-		metaLoc := objectio.Location(insMetaObjectVec.GetBytesAt(i))
-		deltaLoc := objectio.Location(insDeltaObjectVec.GetBytesAt(i))
+	ins := data.GetObjectBatchs()
+	insCommitTSVec := ins.GetVectorByName(txnbase.SnapshotAttr_CommitTS).GetDownstreamVector()
+	for i := 0; i < ins.Length(); i++ {
+		var objectStats objectio.ObjectStats
+		buf := ins.GetVectorByName(catalog.ObjectAttr_ObjectStats).Get(i).([]byte)
+		objectStats.UnMarshal(buf)
 		commitTS := vector.GetFixedAt[types.TS](insCommitTSVec, i)
-		if !metaLoc.IsEmpty() {
-			t.addObject(metaLoc.Name().String(), commitTS)
-		}
-		if !deltaLoc.IsEmpty() {
-			t.addObject(deltaLoc.Name().String(), commitTS)
-		}
-	}
-
-	if del.Length() == 0 {
-		return
-	}
-	delMetaObjectVec := delTxn.GetVectorByName(pkgcatalog.BlockMeta_MetaLoc).GetDownstreamVector()
-	delDeltaObjectVec := delTxn.GetVectorByName(pkgcatalog.BlockMeta_DeltaLoc).GetDownstreamVector()
-	delCommitTSVec := del.GetVectorByName(catalog.AttrCommitTs).GetDownstreamVector()
-	for i := 0; i < del.Length(); i++ {
-		metaLoc := objectio.Location(delMetaObjectVec.GetBytesAt(i))
-		deltaLoc := objectio.Location(delDeltaObjectVec.GetBytesAt(i))
-		commitTS := vector.GetFixedAt[types.TS](delCommitTSVec, i)
-		if !metaLoc.IsEmpty() {
-			t.addObject(metaLoc.Name().String(), commitTS)
-		}
-		if !deltaLoc.IsEmpty() {
-			t.addObject(deltaLoc.Name().String(), commitTS)
-		}
+		t.addObject(objectStats.ObjectName().String(), commitTS)
 	}
 }
 
