@@ -31,7 +31,7 @@ type AggFuncExec interface {
 	// Init initialize the aggregation.
 	// Init()
 
-	// AggID() int64
+	AggID() int64
 
 	// TypesInfo return the argument types and return type of the function.
 	TypesInfo() ([]types.Type, types.Type)

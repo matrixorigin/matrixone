@@ -46,7 +46,8 @@ func (t *testSingleAggPrivate1) flush(getter aggGetter[int64], setter aggSetter[
 func TestSingleAggFuncExec1(t *testing.T) {
 	proc := testutil.NewProcess()
 
-	info := singleAggTypeInfo{
+	info := singleAggInfo{
+		aggID:   1,
 		argType: types.T_int32.ToType(),
 		retType: types.T_int64.ToType(),
 	}
@@ -149,7 +150,8 @@ func (t *testMultiAggPrivate1) flush(getter aggGetter[int64], setter aggSetter[i
 func TestMultiAggFuncExec1(t *testing.T) {
 	proc := testutil.NewProcess()
 
-	info := multiAggTypeInfo{
+	info := multiAggInfo{
+		aggID:    2,
 		argTypes: []types.Type{types.T_int64.ToType(), types.T_bool.ToType()},
 		retType:  types.T_int64.ToType(),
 	}

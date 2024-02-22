@@ -92,12 +92,17 @@ func initBytesAggFuncResult(proc *process.Process, typ types.Type) aggFuncBytesR
 }
 
 func (r *aggFuncBytesResult) grows(more int) error {
-	return r.res.PreExtend(r.res.Length()+more, r.mp)
+	newLen := r.res.Length() + more
+	if err := r.res.PreExtend(newLen, r.mp); err != nil {
+		return err
+	}
+	r.res.SetLength(newLen)
+	return nil
 }
 
 func (r *aggFuncBytesResult) aggGet() []byte {
-	// todo: we cannot do simple optimization here because the set method may change
-	//  the max length of the vector.
+	// todo: we cannot do simple optimization to get bytes here because result was not read-only.
+	//  the set method may change the max length of the vector.
 	//  if we want, we should add a flag to indicate that the vector item's length is <= types.VarlenaInlineSize.
 	return r.res.GetBytesAt(r.groupToSet)
 }

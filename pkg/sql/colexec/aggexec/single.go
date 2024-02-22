@@ -20,13 +20,18 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-// singleAggTypeInfo is the type info of single column agg.
-type singleAggTypeInfo struct {
+// singleAggInfo contains the basic information of single column agg.
+type singleAggInfo struct {
+	aggID   int64
 	argType types.Type
 	retType types.Type
 }
 
-func (info singleAggTypeInfo) TypesInfo() ([]types.Type, types.Type) {
+func (info singleAggInfo) AggID() int64 {
+	return info.aggID
+}
+
+func (info singleAggInfo) TypesInfo() ([]types.Type, types.Type) {
 	return []types.Type{info.argType}, info.retType
 }
 
@@ -51,7 +56,7 @@ func (optimized *singleAggExecOptimized) SetPreparedResult(partialResult any, gr
 // singleAggFuncExec3 receives a byte type and returns a fixed size type except string.
 // singleAggFuncExec4 receives a byte type and returns a byte type.
 type singleAggFuncExec1[from, to types.FixedSizeTExceptStrType] struct {
-	singleAggTypeInfo
+	singleAggInfo
 	singleAggOptimizedInfo
 	singleAggExecOptimized
 
@@ -63,7 +68,7 @@ type singleAggFuncExec1[from, to types.FixedSizeTExceptStrType] struct {
 	gGroup func() singleAggPrivateStructure1[from, to]
 }
 type singleAggFuncExec2[from types.FixedSizeTExceptStrType] struct {
-	singleAggTypeInfo
+	singleAggInfo
 	singleAggOptimizedInfo
 	singleAggExecOptimized
 
@@ -72,7 +77,7 @@ type singleAggFuncExec2[from types.FixedSizeTExceptStrType] struct {
 	groups []singleAggPrivateStructure2[from]
 }
 type singleAggFuncExec3[to types.FixedSizeTExceptStrType] struct {
-	singleAggTypeInfo
+	singleAggInfo
 	singleAggOptimizedInfo
 	singleAggExecOptimized
 
@@ -81,7 +86,7 @@ type singleAggFuncExec3[to types.FixedSizeTExceptStrType] struct {
 	groups []singleAggPrivateStructure3[to]
 }
 type singleAggFuncExec4 struct {
-	singleAggTypeInfo
+	singleAggInfo
 	singleAggOptimizedInfo
 	singleAggExecOptimized
 
@@ -92,11 +97,11 @@ type singleAggFuncExec4 struct {
 
 func (exec *singleAggFuncExec1[from, to]) Init(
 	proc *process.Process,
-	info singleAggTypeInfo,
+	info singleAggInfo,
 	opt singleAggOptimizedInfo,
 	nm func() singleAggPrivateStructure1[from, to]) {
 
-	exec.singleAggTypeInfo = info
+	exec.singleAggInfo = info
 	exec.singleAggOptimizedInfo = opt
 	exec.ret = initFixedAggFuncResult[to](proc, info.retType)
 	exec.groups = make([]singleAggPrivateStructure1[from, to], 0, 1)

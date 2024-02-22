@@ -20,12 +20,17 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-type multiAggTypeInfo struct {
+type multiAggInfo struct {
+	aggID    int64
 	argTypes []types.Type
 	retType  types.Type
 }
 
-func (info multiAggTypeInfo) TypesInfo() ([]types.Type, types.Type) {
+func (info multiAggInfo) AggID() int64 {
+	return info.aggID
+}
+
+func (info multiAggInfo) TypesInfo() ([]types.Type, types.Type) {
 	return info.argTypes, info.retType
 }
 
@@ -33,7 +38,7 @@ func (info multiAggTypeInfo) TypesInfo() ([]types.Type, types.Type) {
 // 1's return type is a fixed length type.
 // 2's return type is bytes.
 type multiAggFuncExec1[T types.FixedSizeTExceptStrType] struct {
-	multiAggTypeInfo
+	multiAggInfo
 
 	args   []mArg1[T]
 	ret    aggFuncResult[T]
@@ -43,7 +48,7 @@ type multiAggFuncExec1[T types.FixedSizeTExceptStrType] struct {
 	gGroup func() multiAggPrivateStructure1[T]
 }
 type multiAggFuncExec2 struct {
-	multiAggTypeInfo
+	multiAggInfo
 
 	args   []mArg2
 	ret    aggFuncBytesResult
@@ -52,10 +57,10 @@ type multiAggFuncExec2 struct {
 
 func (exec *multiAggFuncExec1[T]) Init(
 	proc *process.Process,
-	info multiAggTypeInfo,
+	info multiAggInfo,
 	nm func() multiAggPrivateStructure1[T]) {
 
-	exec.multiAggTypeInfo = info
+	exec.multiAggInfo = info
 	exec.args = make([]mArg1[T], len(info.argTypes))
 	exec.ret = initFixedAggFuncResult[T](proc, info.retType)
 	exec.groups = make([]multiAggPrivateStructure1[T], 0, 1)
