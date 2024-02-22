@@ -94,13 +94,13 @@ func (exec *singleAggFuncExec1[from, to]) Init(
 	proc *process.Process,
 	info singleAggTypeInfo,
 	opt singleAggOptimizedInfo,
-	newMethod func() singleAggPrivateStructure1[from, to]) {
+	nm func() singleAggPrivateStructure1[from, to]) {
 
 	exec.singleAggTypeInfo = info
 	exec.singleAggOptimizedInfo = opt
 	exec.ret = initFixedAggFuncResult[to](proc, info.retType)
 	exec.groups = make([]singleAggPrivateStructure1[from, to], 0, 1)
-	exec.gGroup = newMethod
+	exec.gGroup = nm
 }
 
 func (exec *singleAggFuncExec1[from, to]) GroupGrow(more int) error {

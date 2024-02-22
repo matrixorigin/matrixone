@@ -17,6 +17,7 @@ package aggexec
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 type multiAggTypeInfo struct {
@@ -37,6 +38,9 @@ type multiAggFuncExec1[T types.FixedSizeTExceptStrType] struct {
 	args   []mArg1[T]
 	ret    aggFuncResult[T]
 	groups []multiAggPrivateStructure1[T]
+
+	// method to new the private structure for group growing.
+	gGroup func() multiAggPrivateStructure1[T]
 }
 type multiAggFuncExec2 struct {
 	multiAggTypeInfo
@@ -44,6 +48,35 @@ type multiAggFuncExec2 struct {
 	args   []mArg2
 	ret    aggFuncBytesResult
 	groups []multiAggPrivateStructure2
+}
+
+func (exec *multiAggFuncExec1[T]) Init(
+	proc *process.Process,
+	info multiAggTypeInfo,
+	nm func() multiAggPrivateStructure1[T]) {
+
+	exec.multiAggTypeInfo = info
+	exec.args = make([]mArg1[T], len(info.argTypes))
+	exec.ret = initFixedAggFuncResult[T](proc, info.retType)
+	exec.groups = make([]multiAggPrivateStructure1[T], 0, 1)
+	exec.gGroup = nm
+	exec.args = make([]mArg1[T], len(info.argTypes))
+	for i := range exec.args {
+		exec.args[i] = newArgumentOfMultiAgg1[T](info.argTypes[i])
+
+		t := nm()
+		exec.args[i].cacheFill(t.getFillWhich(i), t.getFillNullWhich(i).(func(multiAggPrivateStructure1[T])))
+	}
+}
+
+func (exec *multiAggFuncExec1[T]) GroupGrow(more int) error {
+	moreGroups := make([]multiAggPrivateStructure1[T], more)
+	for i := range moreGroups {
+		moreGroups[i] = exec.gGroup()
+		moreGroups[i].init()
+	}
+	exec.groups = append(exec.groups, moreGroups...)
+	return exec.ret.grows(more)
 }
 
 func (exec *multiAggFuncExec1[T]) Fill(groupIndex int, row int, vectors []*vector.Vector) error {
@@ -148,6 +181,9 @@ func (exec *multiAggFuncExec2) BulkFill(groupIndex int, vectors []*vector.Vector
 	setter := exec.ret.aggSet
 	getter := exec.ret.aggGet
 	exec.ret.groupToSet = groupIndex
+
+	// todo: can do optimization here once all the vectors were constant.
+
 	for i, j := uint64(0), uint64(vectors[0].Length()); i < j; i++ {
 		for _, arg := range exec.args {
 			if err = arg.doRowFill(exec.groups[groupIndex], i); err != nil {

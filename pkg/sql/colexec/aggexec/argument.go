@@ -51,7 +51,7 @@ func (arg *sBytesArg) prepare(v *vector.Vector) {
 }
 func (arg *sBytesArg) collect() {}
 
-// mArg1 and mArg2 is the interface of multi columns aggregation's argument.
+// mArg1 and mArg2 are the interface of multi columns aggregation's argument.
 // mArg1 for agg whose return type is a fixed length type except string.
 // mArg2 for agg whose return type is a byte type.
 type mArg1[ret types.FixedSizeTExceptStrType] interface {
@@ -77,6 +77,50 @@ var (
 	_ = mArg2(&mArg2Fixed[int64]{})
 	_ = mArg2(&mArg2Bytes{})
 )
+
+func newArgumentOfMultiAgg1[ret types.FixedSizeTExceptStrType](paramType types.Type) mArg1[ret] {
+	if paramType.IsVarlen() {
+		return &mArg1Bytes[ret]{}
+	}
+
+	switch paramType.Oid {
+	case types.T_bool:
+		return &mArg1Fixed[ret, bool]{}
+	case types.T_int8:
+		return &mArg1Fixed[ret, int8]{}
+	case types.T_int16:
+		return &mArg1Fixed[ret, int16]{}
+	case types.T_int32:
+		return &mArg1Fixed[ret, int32]{}
+	case types.T_int64:
+		return &mArg1Fixed[ret, int64]{}
+	case types.T_uint8:
+		return &mArg1Fixed[ret, uint8]{}
+	case types.T_uint16:
+		return &mArg1Fixed[ret, uint16]{}
+	case types.T_uint32:
+		return &mArg1Fixed[ret, uint32]{}
+	case types.T_uint64:
+		return &mArg1Fixed[ret, uint64]{}
+	case types.T_float32:
+		return &mArg1Fixed[ret, float32]{}
+	case types.T_float64:
+		return &mArg1Fixed[ret, float64]{}
+	case types.T_decimal64:
+		return &mArg1Fixed[ret, types.Decimal64]{}
+	case types.T_decimal128:
+		return &mArg1Fixed[ret, types.Decimal128]{}
+	case types.T_date:
+		return &mArg1Fixed[ret, types.Date]{}
+	case types.T_datetime:
+		return &mArg1Fixed[ret, types.Datetime]{}
+	case types.T_time:
+		return &mArg1Fixed[ret, types.Time]{}
+	case types.T_timestamp:
+		return &mArg1Fixed[ret, types.Timestamp]{}
+	}
+	panic("unsupported parameter type for multiAggFuncExec1")
+}
 
 type mArg1Fixed[ret types.FixedSizeTExceptStrType, arg types.FixedSizeTExceptStrType] struct {
 	w vector.FunctionParameterWrapper[arg]
