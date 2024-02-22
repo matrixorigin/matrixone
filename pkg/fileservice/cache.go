@@ -21,12 +21,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/cacheservice/client"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/memorycache"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	pb "github.com/matrixorigin/matrixone/pkg/pb/cache"
 	"github.com/matrixorigin/matrixone/pkg/pb/gossip"
+	pb "github.com/matrixorigin/matrixone/pkg/pb/query"
+	"github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
 	"go.uber.org/zap"
 )
@@ -40,10 +40,10 @@ type CacheConfig struct {
 	RemoteCacheEnabled   bool           `toml:"remote-cache-enabled"`
 	RPC                  morpc.Config   `toml:"rpc"`
 
-	CacheClient      client.CacheClient `json:"-"`
-	KeyRouterFactory KeyRouterFactory   `json:"-"`
-	KeyRouter        KeyRouter          `json:"-"`
-	InitKeyRouter    *sync.Once         `json:"-"`
+	QueryClient      client.QueryClient            `json:"-"`
+	KeyRouterFactory KeyRouterFactory[pb.CacheKey] `json:"-"`
+	KeyRouter        client.KeyRouter[pb.CacheKey] `json:"-"`
+	InitKeyRouter    *sync.Once                    `json:"-"`
 	CacheCallbacks   `json:"-"`
 
 	enableDiskCacheForLocalFS bool // for testing only
@@ -91,7 +91,12 @@ func (c *CacheConfig) SetRemoteCacheCallback() {
 			if c.KeyRouter == nil {
 				return
 			}
-			c.KeyRouter.AddItem(key, gossip.Operation_Set)
+			c.KeyRouter.AddItem(gossip.CommonItem{
+				Operation: gossip.Operation_Set,
+				Key: &gossip.CommonItem_CacheKey{
+					CacheKey: &key,
+				},
+			})
 		},
 	)
 	c.CacheCallbacks.PostEvict = append(c.CacheCallbacks.PostEvict,
@@ -102,7 +107,12 @@ func (c *CacheConfig) SetRemoteCacheCallback() {
 			if c.KeyRouter == nil {
 				return
 			}
-			c.KeyRouter.AddItem(key, gossip.Operation_Delete)
+			c.KeyRouter.AddItem(gossip.CommonItem{
+				Operation: gossip.Operation_Delete,
+				Key: &gossip.CommonItem_CacheKey{
+					CacheKey: &key,
+				},
+			})
 		},
 	)
 }

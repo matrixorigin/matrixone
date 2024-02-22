@@ -4113,7 +4113,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, input *UserI
 		nil,
 		pu.FileService,
 		pu.LockService,
-		pu.QueryService,
+		pu.QueryClient,
 		pu.HAKeeperClient,
 		pu.UdfService,
 		ses.GetAutoIncrCacheManager())
@@ -4347,7 +4347,7 @@ func (mce *MysqlCmdExecutor) doComQueryInProgress(requestCtx context.Context, in
 		nil,
 		pu.FileService,
 		pu.LockService,
-		pu.QueryService,
+		pu.QueryClient,
 		pu.HAKeeperClient,
 		pu.UdfService,
 		ses.GetAutoIncrCacheManager())
