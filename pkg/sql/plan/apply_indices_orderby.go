@@ -239,7 +239,20 @@ func makeMetaTblScanWhereKeyEqVersionAndCastVersion(builder *QueryBuilder, bindC
 	metaTableScanId := makeHiddenTblScanWithBindingTag(builder, bindCtx, indexTableDefs[0], idxRefs[0], idxTags[prefix+".scan"],
 		[]*Expr{whereKeyEqVersion}, []*Expr{whereKeyEqVersion})
 
-	return metaTableScanId, nil
+	// 2. Project value column as BigInt
+	idxTags[prefix+".project"] = builder.genNewTag()
+	castMetaValueColToBigInt, err := makePlan2CastExpr(builder.GetContext(), scanCols[1], makePlan2Type(&bigIntType))
+	if err != nil {
+		return -1, err
+	}
+	metaProjectId := builder.appendNode(&Node{
+		NodeType:    plan.Node_PROJECT,
+		Children:    []int32{metaTableScanId},
+		ProjectList: []*plan.Expr{castMetaValueColToBigInt},
+		BindingTags: []int32{idxTags[prefix+".project"]},
+	}, bindCtx)
+
+	return metaProjectId, nil
 }
 
 func makeCentroidsSingleJoinMetaOnCurrVersionOrderByL2DistNormalizeL2(builder *QueryBuilder, bindCtx *BindContext,
@@ -252,22 +265,17 @@ func makeCentroidsSingleJoinMetaOnCurrVersionOrderByL2DistNormalizeL2(builder *Q
 		idxTags["centroids.scan"], []*Expr{}, []*Expr{})
 
 	//2. JOIN centroids and meta on version
-	castValExpr, err := makePlan2CastExpr(builder.GetContext(),
-		&Expr{
+	joinCond, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{
+		scanCols[0],
+		{
 			Typ: makePlan2Type(&bigIntType),
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
-					RelPos: idxTags["meta1.scan"],
-					ColPos: 1,
+					RelPos: idxTags["meta1.project"],
+					ColPos: 0,
 				},
 			},
-		}, makePlan2Type(&bigIntType))
-	if err != nil {
-		return -1, err
-	}
-	joinCond, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{
-		scanCols[0],
-		castValExpr,
+		},
 	})
 	if err != nil {
 		return -1, err
@@ -380,22 +388,17 @@ func makeEntriesCrossJoinMetaOnCurrVersion(builder *QueryBuilder, bindCtx *BindC
 		idxTags["entries.scan"], []*Expr{}, []*Expr{})
 
 	// 2. JOIN entries and meta on version + Project version, centroid_id_fk, origin_pk
-	castValExpr, err := makePlan2CastExpr(builder.GetContext(),
-		&Expr{
+	joinCond, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{
+		scanCols[0],
+		{
 			Typ: makePlan2Type(&bigIntType),
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
-					RelPos: idxTags["meta2.scan"],
-					ColPos: 1,
+					RelPos: idxTags["meta2.project"],
+					ColPos: 0,
 				},
 			},
-		}, makePlan2Type(&bigIntType))
-	if err != nil {
-		return -1, err
-	}
-	joinCond, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{
-		scanCols[0],
-		castValExpr,
+		},
 	})
 	if err != nil {
 		return -1, err
