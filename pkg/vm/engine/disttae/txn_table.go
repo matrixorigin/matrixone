@@ -1659,7 +1659,7 @@ func (tbl *txnTable) Write(ctx context.Context, bat *batch.Batch) error {
 		ibat.Clean(tbl.db.txn.proc.Mp())
 		return err
 	}
-	return tbl.db.txn.dumpBatch(tbl.writesOffset)
+	return tbl.db.txn.dumpBatch(tbl.db.txn.getWriteOffset())
 }
 
 func (tbl *txnTable) Update(ctx context.Context, bat *batch.Batch) error {
@@ -2397,11 +2397,4 @@ func (tbl *txnTable) readNewRowid(vec *vector.Vector, row int,
 
 func (tbl *txnTable) newPkFilter(pkExpr, constExpr *plan.Expr) (*plan.Expr, error) {
 	return plan2.BindFuncExprImplByPlanExpr(tbl.proc.Load().Ctx, "=", []*plan.Expr{pkExpr, constExpr})
-}
-
-// get the table's snapshot.
-func (tbl *txnTable) updateWriteOffset() {
-	if tbl.db.txn.statementID > 0 {
-		tbl.writesOffset = tbl.db.txn.statements[tbl.db.txn.statementID-1]
-	}
 }
