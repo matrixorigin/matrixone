@@ -329,23 +329,33 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 		}
 	}
 
-	if len(inExprList) > 0 {
-		//put exprs in reader
-		newExprList := plan2.DeepCopyExprList(inExprList)
-		if s.DataSource.FilterExpr != nil {
-			newExprList = append(newExprList, s.DataSource.FilterExpr)
-		}
-		s.DataSource.node.FilterList = newExprList
-		s.DataSource.FilterExpr = colexec.RewriteFilterExprList(newExprList)
-
-		// put exprs in filter operator
-		ins := s.Instructions[0]
-		arg, ok := ins.Arg.(*restrict.Argument)
+	for i := range inExprList {
+		funcimpl, _ := inExprList[i].Expr.(*plan.Expr_F)
+		col, ok := funcimpl.F.Args[0].Expr.(*plan.Expr_Col)
 		if !ok {
-			panic("missing instruction for runtime filter!")
+			panic("only support col in runtime filter's left child!")
 		}
-		arg.E = plan2.DeepCopyExpr(s.DataSource.FilterExpr)
-
+		newExpr := plan2.DeepCopyExpr(inExprList[i])
+		if s.DataSource.TableDef.Pkey != nil && col.Col.Name == s.DataSource.TableDef.Pkey.PkeyColName {
+			//put expr in reader
+			newExprList := []*plan.Expr{newExpr}
+			if s.DataSource.FilterExpr != nil {
+				newExprList = append(newExprList, s.DataSource.FilterExpr)
+			}
+			s.DataSource.FilterExpr = colexec.RewriteFilterExprList(newExprList)
+		} else {
+			// put expr in filter operator
+			ins := s.Instructions[0]
+			arg, ok := ins.Arg.(*restrict.Argument)
+			if !ok {
+				panic("missing instruction for runtime filter!")
+			}
+			newExprList := []*plan.Expr{newExpr}
+			if arg.E != nil {
+				newExprList = append(newExprList, arg.E)
+			}
+			arg.E = colexec.RewriteFilterExprList(newExprList)
+		}
 	}
 
 	if s.NodeInfo.NeedExpandRanges {
