@@ -229,17 +229,22 @@ func (builder *QueryBuilder) resolveTableScanWithIndexFromChildren(node *plan.No
 func makeMetaTblScanWhereKeyEqVersionAndCastVersion(builder *QueryBuilder, bindCtx *BindContext,
 	indexTableDefs []*TableDef, idxRefs []*ObjectRef, idxTags map[string]int32, prefix string) (int32, error) {
 
-	// 1. Scan key, value, row_id from meta table where  key == "version"
-	scanCols := makeScanCols(indexTableDefs[0], idxTags[prefix+".scan"])
+	// 1. Scan key, value, row_id from meta table
+	metaTableScanId, scanCols, _ := makeHiddenTblScanWithBindingTag(builder, bindCtx, indexTableDefs[0], idxRefs[0], idxTags[prefix+".scan"])
+
+	// 2. Filter key == "version"
 	whereKeyEqVersion, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{
 		scanCols[0], MakePlan2StringConstExprWithType("version")})
 	if err != nil {
 		return -1, err
 	}
-	metaTableScanId := makeHiddenTblScanWithBindingTag(builder, bindCtx, indexTableDefs[0], idxRefs[0], idxTags[prefix+".scan"],
-		[]*Expr{whereKeyEqVersion}, []*Expr{whereKeyEqVersion})
+	metaFilterId := builder.appendNode(&Node{
+		NodeType:   plan.Node_FILTER,
+		Children:   []int32{metaTableScanId},
+		FilterList: []*Expr{whereKeyEqVersion},
+	}, bindCtx)
 
-	// 2. Project value column as BigInt
+	// 3. Project value column as BigInt
 	idxTags[prefix+".project"] = builder.genNewTag()
 	castMetaValueColToBigInt, err := makePlan2CastExpr(builder.GetContext(), scanCols[1], makePlan2Type(&bigIntType))
 	if err != nil {
@@ -247,7 +252,7 @@ func makeMetaTblScanWhereKeyEqVersionAndCastVersion(builder *QueryBuilder, bindC
 	}
 	metaProjectId := builder.appendNode(&Node{
 		NodeType:    plan.Node_PROJECT,
-		Children:    []int32{metaTableScanId},
+		Children:    []int32{metaFilterId},
 		ProjectList: []*plan.Expr{castMetaValueColToBigInt},
 		BindingTags: []int32{idxTags[prefix+".project"]},
 	}, bindCtx)
@@ -260,9 +265,8 @@ func makeCentroidsSingleJoinMetaOnCurrVersionOrderByL2DistNormalizeL2(builder *Q
 	metaTableScanId int32, distFnExpr *plan.Function, sortDirection plan.OrderBySpec_OrderByFlag) (int32, error) {
 
 	// 1. Scan version, centroid_id, centroid from centroids table
-	scanCols := makeScanCols(indexTableDefs[1], idxTags["centroids.scan"])
-	centroidsScanId := makeHiddenTblScanWithBindingTag(builder, bindCtx, indexTableDefs[1], idxRefs[1],
-		idxTags["centroids.scan"], []*Expr{}, []*Expr{})
+	centroidsScanId, scanCols, _ := makeHiddenTblScanWithBindingTag(builder, bindCtx, indexTableDefs[1], idxRefs[1],
+		idxTags["centroids.scan"])
 
 	//2. JOIN centroids and meta on version
 	joinCond, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{
@@ -383,9 +387,8 @@ func makeEntriesCrossJoinMetaOnCurrVersion(builder *QueryBuilder, bindCtx *BindC
 	metaTableScanId int32) (int32, error) {
 
 	// 1. Scan version, centroid_id_fk, origin_pk from entries table
-	scanCols := makeScanCols(indexTableDefs[2], idxTags["entries.scan"])
-	entriesScanId := makeHiddenTblScanWithBindingTag(builder, bindCtx, indexTableDefs[2], idxRefs[2],
-		idxTags["entries.scan"], []*Expr{}, []*Expr{})
+	entriesScanId, scanCols, _ := makeHiddenTblScanWithBindingTag(builder, bindCtx, indexTableDefs[2], idxRefs[2],
+		idxTags["entries.scan"])
 
 	// 2. JOIN entries and meta on version + Project version, centroid_id_fk, origin_pk
 	joinCond, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{
@@ -519,7 +522,18 @@ func makeTblOrderByL2DistNormalizeL2(builder *QueryBuilder, bindCtx *BindContext
 	return sortTblByL2Distance
 }
 
-func makeScanCols(indexTableDef *TableDef, idxTag int32) []*Expr {
+func makeHiddenTblScanWithBindingTag(builder *QueryBuilder, bindCtx *BindContext,
+	indexTableDef *TableDef, idxObjRef *ObjectRef, idxTag int32) (int32, []*Expr, *Node) {
+
+	// 1. Create Scan
+	scanId := builder.appendNode(&Node{
+		NodeType:    plan.Node_TABLE_SCAN,
+		TableDef:    indexTableDef,
+		ObjRef:      idxObjRef,
+		BindingTags: []int32{idxTag},
+	}, bindCtx)
+
+	// 2. Create Scan Cols
 	scanCols := make([]*Expr, len(indexTableDef.Cols))
 	for colIdx, column := range indexTableDef.Cols {
 		scanCols[colIdx] = &plan.Expr{
@@ -533,22 +547,5 @@ func makeScanCols(indexTableDef *TableDef, idxTag int32) []*Expr {
 			},
 		}
 	}
-	return scanCols
-}
-
-func makeHiddenTblScanWithBindingTag(builder *QueryBuilder, bindCtx *BindContext,
-	indexTableDef *TableDef, idxObjRef *ObjectRef, idxTag int32,
-	filterList, blockFilterList []*Expr) int32 {
-
-	// 1. Create Scan
-	scanId := builder.appendNode(&Node{
-		NodeType:        plan.Node_TABLE_SCAN,
-		TableDef:        indexTableDef,
-		ObjRef:          idxObjRef,
-		BindingTags:     []int32{idxTag},
-		FilterList:      filterList,
-		BlockFilterList: blockFilterList,
-	}, bindCtx)
-
-	return scanId
+	return scanId, scanCols, nil
 }
