@@ -573,6 +573,7 @@ insert into tbl values(9, "[130,40,90]");
 --                                                  ->  Table Scan on vecdb3.__mo_index_secondary_018db491-b45f-724d-9dea-3bbf4d8104bf
 --              ->  Table Scan on vecdb3.tbl
 drop table if exists tbl;
+SET @PROBE_LIMIT=1;
 create table tbl(id int PRIMARY KEY, embedding vecf32(3));
 insert into tbl values(1, "[1,2,3]");
 insert into tbl values(2, "[1,2,4]");
@@ -603,7 +604,7 @@ SELECT id, embedding FROM tbl ORDER BY l2_distance(embedding,'[120,51,70]') ASC 
 
 -- 37. KNN using Vector Index (2 PK)
 drop table if exists tbl;
-create table tbl(id int, id2 int, embedding vecf32(3));
+create table tbl(id int, id2 int, embedding vecf32(3), primary key(id, id2));
 insert into tbl values(1, 0,"[1,2,3]");
 insert into tbl values(2, 0, "[1,2,4]");
 insert into tbl values(3, 0,"[1,2.4,4]");
@@ -612,7 +613,7 @@ insert into tbl values(5, 0, "[1,3,5]");
 insert into tbl values(6, 0, "[100,44,50]");
 insert into tbl values(7, 0, "[120,50,70]");
 insert into tbl values(8, 0, "[130,40,90]");
-SELECT id, embedding FROM tbl ORDER BY l2_distance(embedding,'[120,51,70]') ASC LIMIT 3;
+SELECT id,id2, embedding FROM tbl ORDER BY l2_distance(embedding,'[120,51,70]') ASC LIMIT 3;
 create index idx using ivfflat on tbl(embedding) lists=2 op_type "vector_l2_ops";
 SELECT id,id2, embedding FROM tbl ORDER BY l2_distance(embedding,'[120,51,70]') ASC LIMIT 3;
 

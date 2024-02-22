@@ -472,7 +472,7 @@ func makeTblCrossJoinEntriesCentroidOnPK(builder *QueryBuilder, bindCtx *BindCon
 			},
 		},
 		{
-			Typ: DeepCopyType(idxTableDefs[2].Cols[1].Typ),
+			Typ: DeepCopyType(idxTableDefs[2].Cols[2].Typ),
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: scanNode.BindingTags[0],
