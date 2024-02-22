@@ -18,7 +18,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/pb/cache"
+	cache "github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/stretchr/testify/require"
 )
 

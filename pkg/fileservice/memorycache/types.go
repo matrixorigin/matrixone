@@ -18,7 +18,7 @@ import (
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice/memorycache/lrucache"
-	"github.com/matrixorigin/matrixone/pkg/pb/cache"
+	cache "github.com/matrixorigin/matrixone/pkg/pb/query"
 )
 
 type CacheData interface {
