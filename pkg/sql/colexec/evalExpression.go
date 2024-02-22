@@ -1345,6 +1345,9 @@ func SplitAndExprs(list []*plan.Expr) []*plan.Expr {
 }
 
 func splitAndExpr(expr *plan.Expr) []*plan.Expr {
+	if expr == nil {
+		return nil
+	}
 	exprs := make([]*plan.Expr, 0, 1)
 	if e, ok := expr.Expr.(*plan.Expr_F); ok {
 		fid, _ := function.DecodeOverloadID(e.F.Func.GetObj())
