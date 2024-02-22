@@ -392,16 +392,7 @@ func makeEntriesCrossJoinMetaOnCurrVersion(builder *QueryBuilder, bindCtx *BindC
 		OnList:   []*Expr{joinCond},
 	}, bindCtx)
 
-	// 3. Project version, centroid_id_fk, origin_pk, meta.value
-	idxTags["entries.project"] = builder.genNewTag()
-	projectCols := builder.appendNode(&plan.Node{
-		NodeType:    plan.Node_PROJECT,
-		Children:    []int32{joinMetaAndEntriesId},
-		ProjectList: []*Expr{scanCols[0], scanCols[1], scanCols[2]},
-		BindingTags: []int32{idxTags["entries.project"]},
-	}, bindCtx)
-
-	return projectCols, nil
+	return joinMetaAndEntriesId, nil
 }
 
 func makeEntriesCrossJoinCentroidsOnCentroidId(builder *QueryBuilder, bindCtx *BindContext, idxTableDefs []*TableDef, idxTags map[string]int32, entriesForCurrVersion int32, centroidsForCurrVersion int32) int32 {
@@ -410,7 +401,7 @@ func makeEntriesCrossJoinCentroidsOnCentroidId(builder *QueryBuilder, bindCtx *B
 			Typ: DeepCopyType(idxTableDefs[2].Cols[1].Typ),
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
-					RelPos: idxTags["entries.project"],
+					RelPos: idxTags["entries.scan"],
 					ColPos: 1, // entries.__mo_index_centroid_fk_id
 				},
 			},
@@ -429,7 +420,7 @@ func makeEntriesCrossJoinCentroidsOnCentroidId(builder *QueryBuilder, bindCtx *B
 	// 1. Create JOIN entries and centroids on centroid_id_fk == centroid_id
 	joinEntriesAndCentroids := builder.appendNode(&plan.Node{
 		NodeType: plan.Node_JOIN,
-		JoinType: plan.Node_INNER,
+		JoinType: plan.Node_SEMI,
 		Children: []int32{entriesForCurrVersion, centroidsForCurrVersion},
 		OnList:   []*Expr{entriesCentroidIdEqCentroidId},
 	}, bindCtx)
@@ -445,7 +436,7 @@ func makeTblCrossJoinEntriesCentroidOnPK(builder *QueryBuilder, bindCtx *BindCon
 			Typ: DeepCopyType(idxTableDefs[2].Cols[2].Typ),
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
-					RelPos: idxTags["entries.project"],
+					RelPos: idxTags["entries.scan"],
 					ColPos: 2, // entries.origin_pk
 				},
 			},
