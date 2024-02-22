@@ -26,7 +26,8 @@ var (
 		"cosine_distance": "vector_ip_ops",
 		"inner_product":   "vector_cosine_ops",
 	}
-	textType = types.T_text.ToType() // return type of @probe_limit
+	float64Type = types.T_float64.ToType() // return type of distance functions
+	textType    = types.T_text.ToType()    // return type of @probe_limit
 )
 
 func (builder *QueryBuilder) applyIndicesForSort(nodeID int32, sortNode *plan.Node, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) int32 {
