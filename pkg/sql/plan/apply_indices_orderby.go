@@ -278,9 +278,7 @@ func makeCentroidsSingleJoinMetaOnCurrVersionOrderByL2DistNormalizeL2(builder *Q
 		OnList:   []*Expr{joinCond},
 	}, bindCtx)
 
-	// 3. Sort by l2_distance(normalize_l2(col), literal) limit @probe_limit
-
-	// 3.a.1
+	// 3. Project version, centroid_id, centroid, l2_distance(literal, normalize_l2(col))
 	centroidsCol := &plan.Expr{
 		Typ: DeepCopyType(indexTableDefs[1].Cols[2].Typ),
 		Expr: &plan.Expr_Col{
@@ -298,8 +296,17 @@ func makeCentroidsSingleJoinMetaOnCurrVersionOrderByL2DistNormalizeL2(builder *Q
 		centroidsCol,   // centroid
 		normalizeL2Lit, // normalize_l2(literal)
 	})
+	idxTags["centroids.project"] = builder.genNewTag()
+	projectCols := builder.appendNode(&plan.Node{
+		NodeType:    plan.Node_PROJECT,
+		Children:    []int32{joinMetaAndCentroidsId},
+		ProjectList: []*Expr{scanCols[0], scanCols[1], scanCols[2], l2DistanceLitNormalizeL2Col},
+		BindingTags: []int32{idxTags["centroids.project"]},
+	}, bindCtx)
 
-	// 3.b.1 @probe_limit is a system variable
+	// 4. Sort by l2_distance(normalize_l2(col), literal) limit @probe_limit
+
+	// 4.1 @probe_limit is a system variable
 	probeLimitValueExpr := &plan.Expr{
 		Typ: makePlan2Type(&textType), // T_text
 		Expr: &plan.Expr_V{
@@ -311,7 +318,7 @@ func makeCentroidsSingleJoinMetaOnCurrVersionOrderByL2DistNormalizeL2(builder *Q
 		},
 	}
 
-	//3.b.2 ISNULL(@var)
+	//4.2 ISNULL(@var)
 	arg0, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "isnull", []*plan.Expr{
 		probeLimitValueExpr,
 	})
@@ -319,10 +326,10 @@ func makeCentroidsSingleJoinMetaOnCurrVersionOrderByL2DistNormalizeL2(builder *Q
 		return -1, err
 	}
 
-	// 3.b.3 CAST( 1 AS BIGINT)
+	// 4.3 CAST( 1 AS BIGINT)
 	arg1 := makePlan2Int64ConstExprWithType(1)
 
-	// 3.b.4 CAST(@var AS BIGINT)
+	// 4.4 CAST(@var AS BIGINT)
 	targetType := types.T_int64.ToType()
 	planTargetType := makePlan2Type(&targetType)
 	arg2, err := appendCastBeforeExpr(builder.GetContext(), probeLimitValueExpr, planTargetType)
@@ -341,11 +348,19 @@ func makeCentroidsSingleJoinMetaOnCurrVersionOrderByL2DistNormalizeL2(builder *Q
 
 	sortCentroidsByL2DistanceId := builder.appendNode(&plan.Node{
 		NodeType: plan.Node_SORT,
-		Children: []int32{joinMetaAndCentroidsId},
+		Children: []int32{projectCols},
 		Limit:    ifNullLimitExpr,
 		OrderBy: []*OrderBySpec{
 			{
-				Expr: l2DistanceLitNormalizeL2Col,
+				Expr: &plan.Expr{
+					Typ: makePlan2Type(&float64Type),
+					Expr: &plan.Expr_Col{
+						Col: &plan.ColRef{
+							RelPos: idxTags["centroids.project"],
+							ColPos: 3,
+						},
+					},
+				},
 				Flag: sortDirection,
 			},
 		},
@@ -418,7 +433,7 @@ func makeEntriesCrossJoinCentroidsOnCentroidId(builder *QueryBuilder, bindCtx *B
 			Typ: DeepCopyType(idxTableDefs[1].Cols[1].Typ),
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
-					RelPos: idxTags["centroids.scan"],
+					RelPos: idxTags["centroids.project"],
 					ColPos: 1, // centroids.__mo_index_centroid_id
 				},
 			},
