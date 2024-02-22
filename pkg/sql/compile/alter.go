@@ -126,7 +126,10 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 	}
 	constraint := make([][]byte, 0)
 	constraint = append(constraint, tmp)
-	newRel.TableRenameInTxn(c.ctx, constraint)
+	err = newRel.TableRenameInTxn(c.ctx, constraint)
+	if err != nil {
+		return err
+	}
 	//--------------------------------------------------------------------------------------------------------------
 
 	{
@@ -185,13 +188,25 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 	return nil
 }
 
-func (s *Scope) AlterTable(c *Compile) error {
+func (s *Scope) AlterTable(c *Compile) (err error) {
 	qry := s.Plan.GetDdl().GetAlterTable()
 	if qry.AlgorithmType == plan.AlterTable_COPY {
-		return s.AlterTableCopy(c)
+		err = s.AlterTableCopy(c)
 	} else {
-		return s.AlterTableInplace(c)
+		err = s.AlterTableInplace(c)
 	}
+	if err != nil {
+		return err
+	}
+
+	//update the mo_foreign_keys
+	for _, sql := range qry.UpdateSqls {
+		err = c.runSql(sql)
+		if err != nil {
+			return err
+		}
+	}
+	return err
 }
 
 // updateTableForeignKeyColId update foreign key colid of child table references

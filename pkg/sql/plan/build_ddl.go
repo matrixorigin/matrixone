@@ -2815,7 +2815,7 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 					},
 				},
 			}
-			updateSqls = append(updateSqls, makeRenameFkSqlForAlterTable(databaseName, oldName, newName))
+			updateSqls = append(updateSqls, makeRenameTableFkSqlForAlterTable(databaseName, oldName, newName)...)
 		case *tree.AlterAddCol:
 			colType, err := getTypeFromAst(ctx.GetContext(), opt.Column.Type)
 			if err != nil {

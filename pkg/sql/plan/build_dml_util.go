@@ -3900,13 +3900,34 @@ func makeDeleteFkSqlForDropDatabase(db string) string {
 	return sb.String()
 }
 
-func makeRenameFkSqlForAlterTable(db, oldName, newName string) string {
+func makeRenameTableFkSqlForAlterTable(db, oldName, newName string) (ret []string) {
 	sb := strings.Builder{}
 	sb.WriteString("update `mo_catalog`.`mo_foreign_keys` ")
 	sb.WriteString(fmt.Sprintf("set table_name = '%s' ", newName))
 	sb.WriteString(fmt.Sprintf("where db_name = '%s' and table_name = '%s' ; ", db, oldName))
+	ret = append(ret, sb.String())
+
+	sb.Reset()
 	sb.WriteString("update `mo_catalog`.`mo_foreign_keys` ")
 	sb.WriteString(fmt.Sprintf("set refer_table_name = '%s' ", newName))
-	sb.WriteString(fmt.Sprintf("refer_db_name = '%s' and refer_table_name = '%s' ; ", db, oldName))
-	return sb.String()
+	sb.WriteString(fmt.Sprintf("where refer_db_name = '%s' and refer_table_name = '%s' ; ", db, oldName))
+	ret = append(ret, sb.String())
+	return
+}
+
+func makeRenameColumnFkSqlForAlterTable(db, table, oldName, newName string) (ret []string) {
+	sb := strings.Builder{}
+	sb.WriteString("update `mo_catalog`.`mo_foreign_keys` ")
+	sb.WriteString(fmt.Sprintf("set column_name = '%s' ", newName))
+	sb.WriteString(fmt.Sprintf("where db_name = '%s' and table_name = '%s' and column_name = '%s' ; ",
+		db, table, oldName))
+	ret = append(ret, sb.String())
+
+	sb.Reset()
+	sb.WriteString("update `mo_catalog`.`mo_foreign_keys` ")
+	sb.WriteString(fmt.Sprintf("set refer_column_name = '%s' ", newName))
+	sb.WriteString(fmt.Sprintf("where refer_db_name = '%s' and refer_table_name = '%s' and refer_column_name = '%s' ; ",
+		db, table, oldName))
+	ret = append(ret, sb.String())
+	return
 }
