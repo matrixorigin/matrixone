@@ -135,7 +135,7 @@ func (s *StorageTxnOperator) IsOpenLog() bool {
 	panic("unimplemented")
 }
 
-func (s *StorageTxnOperator) AppendEventCallback(event client.EventType, callbacks ...func(txn.TxnMeta)) {
+func (s *StorageTxnOperator) AppendEventCallback(event client.EventType, callbacks ...func(txn.TxnMeta, error)) {
 	panic("unimplemented")
 }
 

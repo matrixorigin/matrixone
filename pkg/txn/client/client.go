@@ -363,7 +363,9 @@ func (client *txnClient) getTxnMode() txn.TxnMode {
 	return txn.TxnMode_Pessimistic
 }
 
-func (client *txnClient) updateLastCommitTS(txn txn.TxnMeta) {
+func (client *txnClient) updateLastCommitTS(
+	txn txn.TxnMeta,
+	_ error) {
 	var old *timestamp.Timestamp
 	new := &txn.CommitTS
 	for {
@@ -427,7 +429,7 @@ func (client *txnClient) GetLatestCommitTS() timestamp.Timestamp {
 }
 
 func (client *txnClient) SyncLatestCommitTS(ts timestamp.Timestamp) {
-	client.updateLastCommitTS(txn.TxnMeta{CommitTS: ts})
+	client.updateLastCommitTS(txn.TxnMeta{CommitTS: ts}, nil)
 	if client.timestampWaiter != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second*30)
 		defer cancel()
@@ -483,7 +485,9 @@ func (client *txnClient) openTxn(op *txnOperator) error {
 	return nil
 }
 
-func (client *txnClient) closeTxn(txn txn.TxnMeta) {
+func (client *txnClient) closeTxn(
+	txn txn.TxnMeta,
+	_ error) {
 	client.mu.Lock()
 	defer func() {
 		v2.TxnActiveQueueSizeGauge.Set(float64(len(client.mu.activeTxns)))
@@ -515,8 +519,6 @@ func (client *txnClient) closeTxn(txn txn.TxnMeta) {
 				op.notifyActive()
 			}
 		}
-
-		// trace.GetService().TxnClosed(txn.ID, txn.Status, txn.CommitTS)
 	}
 }
 

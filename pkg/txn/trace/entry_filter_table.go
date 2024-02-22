@@ -74,8 +74,10 @@ func (f *tableEntryFilter) Filter(entry *EntryData) bool {
 		newColumns = append(newColumns, rowIDColumn)
 		newVecs = append(newVecs, entry.vecs[0])
 
-		newColumns = append(newColumns, deletePKColumn)
-		newVecs = append(newVecs, entry.vecs[2])
+		if len(entry.vecs) == 3 {
+			newColumns = append(newColumns, deletePKColumn)
+			newVecs = append(newVecs, entry.vecs[2])
+		}
 
 		entry.columns = newColumns
 		entry.vecs = newVecs

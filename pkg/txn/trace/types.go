@@ -25,10 +25,11 @@ import (
 )
 
 var (
-	DebugDB               = "mo_debug"
-	TxnTable              = "txn_event"
-	TxnEntryTable         = "txn_entry_event"
-	TraceEntryFilterTable = "trace_entry_filter"
+	DebugDB            = "mo_debug"
+	EventTxnTable      = "txn_event"
+	EventDataTable     = "entry_event"
+	EventFilterTable   = "trace_filter"
+	EventTxnErrorTable = "txn_error"
 
 	InitSQLs = []string{
 		fmt.Sprintf("create database %s", DebugDB),
@@ -42,7 +43,7 @@ var (
 			snapshot_ts           varchar(50),
 			commit_ts             varchar(50),
 			check_changed		  varchar(100)
-		)`, DebugDB, TxnTable),
+		)`, DebugDB, EventTxnTable),
 
 		fmt.Sprintf(`create table %s.%s(
 			ts 			          bigint       not null,
@@ -54,14 +55,20 @@ var (
 			row_data              varchar(500) not null, 
 			committed_ts          varchar(50),
 			snapshot_ts           varchar(50)
-		)`, DebugDB, TxnEntryTable),
+		)`, DebugDB, EventDataTable),
 
 		fmt.Sprintf(`create table %s.%s(
 			id                    bigint UNSIGNED primary key auto_increment,
 			table_id			  bigint UNSIGNED not null,
 			table_name            varchar(50)     not null,
 			columns               varchar(200)
-		)`, DebugDB, TraceEntryFilterTable),
+		)`, DebugDB, EventFilterTable),
+
+		fmt.Sprintf(`create table %s.%s(
+			ts 			          bigint          not null,
+			txn_id                varchar(50)     not null,
+			error_info            varchar(1000)   not null
+		)`, DebugDB, EventTxnErrorTable),
 	}
 )
 
@@ -79,6 +86,7 @@ type Service interface {
 	ApplyLogtail(logtail *api.Entry, commitTSIndex int)
 	TxnRead(txnID []byte, snapshotTS timestamp.Timestamp, tableID uint64, columns []string, bat *batch.Batch)
 	ChangedCheck(txnID []byte, tableID uint64, from, to timestamp.Timestamp, changed bool)
+	AddTxnError(txnID []byte, err error)
 
 	Enable() error
 	Disable()

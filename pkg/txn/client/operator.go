@@ -212,7 +212,7 @@ type txnOperator struct {
 		txn          txn.TxnMeta
 		cachedWrites map[uint64][]txn.TxnRequest
 		lockTables   []lock.LockTable
-		callbacks    map[EventType][]func(txn.TxnMeta)
+		callbacks    map[EventType][]func(txn.TxnMeta, error)
 		retry        bool
 		openlog      bool
 
@@ -287,7 +287,7 @@ func (tc *txnOperator) waitActive(ctx context.Context) error {
 	start := time.Now()
 	defer func() {
 		v2.TxnWaitActiveDurationHistogram.Observe(time.Since(start).Seconds())
-		tc.triggerEvent(ActiveEvent)
+		tc.triggerEvent(ActiveEvent, nil)
 	}()
 
 	if tc.waiter == nil {
@@ -394,7 +394,7 @@ func (tc *txnOperator) UpdateSnapshot(
 		return err
 	}
 	tc.mu.txn.SnapshotTS = lastSnapshotTS
-	tc.triggerEventLocked(SnapshotUpdatedEvent)
+	tc.triggerEventLocked(SnapshotUpdatedEvent, nil)
 	return nil
 }
 
@@ -874,10 +874,11 @@ func (tc *txnOperator) handleErrorResponse(resp txn.TxnResponse) error {
 			tc.option.lockService.ForceRefreshLockTableBinds(resp.CommitResponse.InvalidLockTables...)
 		}
 
-		v, ok := moruntime.ProcessLevelRuntime().GetGlobalVariables(moruntime.EnableCheckInvalidRCErrors)
-		if ok && v.(bool) {
-			if moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict) ||
-				moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry) {
+		if moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict) ||
+			moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry) {
+			tc.triggerEventLocked(CommitFailedEvent, err)
+			v, ok := moruntime.ProcessLevelRuntime().GetGlobalVariables(moruntime.EnableCheckInvalidRCErrors)
+			if ok && v.(bool) {
 				util.GetLogger().Fatal("failed",
 					zap.Error(err),
 					zap.String("txn", hex.EncodeToString(tc.txnID)))
@@ -1031,7 +1032,7 @@ func (tc *txnOperator) needUnlockLocked() bool {
 func (tc *txnOperator) closeLocked() {
 	if !tc.mu.closed {
 		tc.mu.closed = true
-		tc.triggerEventLocked(ClosedEvent)
+		tc.triggerEventLocked(ClosedEvent, nil)
 	}
 }
 

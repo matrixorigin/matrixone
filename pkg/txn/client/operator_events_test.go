@@ -46,7 +46,7 @@ func runClosedEventTests(
 		func(ctx context.Context, tc *txnOperator, _ *testTxnSender) {
 			cnt := 0
 			tc.AppendEventCallback(ClosedEvent,
-				func(tm txn.TxnMeta) {
+				func(tm txn.TxnMeta, _ error) {
 					cnt++
 					assert.Equal(t, status, tm.Status)
 				})

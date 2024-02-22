@@ -302,7 +302,9 @@ func (s *service) getCommittedTableCache(
 	return c, nil
 }
 
-func (s *service) txnClosed(txnMeta txn.TxnMeta) {
+func (s *service) txnClosed(
+	txnMeta txn.TxnMeta,
+	_ error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 

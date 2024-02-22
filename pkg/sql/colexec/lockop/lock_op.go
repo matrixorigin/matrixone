@@ -527,7 +527,7 @@ func doLock(
 	// is modified between [snapshotTS,prev.commits] and raise the SnapshotTS of
 	// the SI transaction to eliminate conflicts)
 	if !txnOp.Txn().IsRCIsolation() {
-		return false, false, timestamp.Timestamp{}, moerr.NewTxnWWConflict(ctx)
+		return false, false, timestamp.Timestamp{}, moerr.NewTxnWWConflict(ctx, tableID, "SI not support retry")
 	}
 
 	// forward rc's snapshot ts

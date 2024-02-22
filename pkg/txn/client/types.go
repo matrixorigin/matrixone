@@ -170,7 +170,7 @@ type TxnOperator interface {
 
 	// AppendEventCallback append callback. All append callbacks will be called sequentially
 	// if event happen.
-	AppendEventCallback(event EventType, callbacks ...func(txn.TxnMeta))
+	AppendEventCallback(event EventType, callbacks ...func(txn.TxnMeta, error))
 
 	// Debug send debug request to DN, after use, SendResult needs to call the Release
 	// method.

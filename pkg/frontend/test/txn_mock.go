@@ -16,6 +16,157 @@ import (
 	rpc "github.com/matrixorigin/matrixone/pkg/txn/rpc"
 )
 
+// MockTxnTimestampAware is a mock of TxnTimestampAware interface.
+type MockTxnTimestampAware struct {
+	ctrl     *gomock.Controller
+	recorder *MockTxnTimestampAwareMockRecorder
+}
+
+// MockTxnTimestampAwareMockRecorder is the mock recorder for MockTxnTimestampAware.
+type MockTxnTimestampAwareMockRecorder struct {
+	mock *MockTxnTimestampAware
+}
+
+// NewMockTxnTimestampAware creates a new mock instance.
+func NewMockTxnTimestampAware(ctrl *gomock.Controller) *MockTxnTimestampAware {
+	mock := &MockTxnTimestampAware{ctrl: ctrl}
+	mock.recorder = &MockTxnTimestampAwareMockRecorder{mock}
+	return mock
+}
+
+// EXPECT returns an object that allows the caller to indicate expected use.
+func (m *MockTxnTimestampAware) EXPECT() *MockTxnTimestampAwareMockRecorder {
+	return m.recorder
+}
+
+// GetLatestCommitTS mocks base method.
+func (m *MockTxnTimestampAware) GetLatestCommitTS() timestamp.Timestamp {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetLatestCommitTS")
+	ret0, _ := ret[0].(timestamp.Timestamp)
+	return ret0
+}
+
+// GetLatestCommitTS indicates an expected call of GetLatestCommitTS.
+func (mr *MockTxnTimestampAwareMockRecorder) GetLatestCommitTS() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetLatestCommitTS", reflect.TypeOf((*MockTxnTimestampAware)(nil).GetLatestCommitTS))
+}
+
+// GetSyncLatestCommitTSTimes mocks base method.
+func (m *MockTxnTimestampAware) GetSyncLatestCommitTSTimes() uint64 {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetSyncLatestCommitTSTimes")
+	ret0, _ := ret[0].(uint64)
+	return ret0
+}
+
+// GetSyncLatestCommitTSTimes indicates an expected call of GetSyncLatestCommitTSTimes.
+func (mr *MockTxnTimestampAwareMockRecorder) GetSyncLatestCommitTSTimes() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetSyncLatestCommitTSTimes", reflect.TypeOf((*MockTxnTimestampAware)(nil).GetSyncLatestCommitTSTimes))
+}
+
+// MinTimestamp mocks base method.
+func (m *MockTxnTimestampAware) MinTimestamp() timestamp.Timestamp {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "MinTimestamp")
+	ret0, _ := ret[0].(timestamp.Timestamp)
+	return ret0
+}
+
+// MinTimestamp indicates an expected call of MinTimestamp.
+func (mr *MockTxnTimestampAwareMockRecorder) MinTimestamp() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "MinTimestamp", reflect.TypeOf((*MockTxnTimestampAware)(nil).MinTimestamp))
+}
+
+// SyncLatestCommitTS mocks base method.
+func (m *MockTxnTimestampAware) SyncLatestCommitTS(arg0 timestamp.Timestamp) {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "SyncLatestCommitTS", arg0)
+}
+
+// SyncLatestCommitTS indicates an expected call of SyncLatestCommitTS.
+func (mr *MockTxnTimestampAwareMockRecorder) SyncLatestCommitTS(arg0 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SyncLatestCommitTS", reflect.TypeOf((*MockTxnTimestampAware)(nil).SyncLatestCommitTS), arg0)
+}
+
+// WaitLogTailAppliedAt mocks base method.
+func (m *MockTxnTimestampAware) WaitLogTailAppliedAt(ctx context.Context, ts timestamp.Timestamp) (timestamp.Timestamp, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "WaitLogTailAppliedAt", ctx, ts)
+	ret0, _ := ret[0].(timestamp.Timestamp)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// WaitLogTailAppliedAt indicates an expected call of WaitLogTailAppliedAt.
+func (mr *MockTxnTimestampAwareMockRecorder) WaitLogTailAppliedAt(ctx, ts interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "WaitLogTailAppliedAt", reflect.TypeOf((*MockTxnTimestampAware)(nil).WaitLogTailAppliedAt), ctx, ts)
+}
+
+// MockTxnAction is a mock of TxnAction interface.
+type MockTxnAction struct {
+	ctrl     *gomock.Controller
+	recorder *MockTxnActionMockRecorder
+}
+
+// MockTxnActionMockRecorder is the mock recorder for MockTxnAction.
+type MockTxnActionMockRecorder struct {
+	mock *MockTxnAction
+}
+
+// NewMockTxnAction creates a new mock instance.
+func NewMockTxnAction(ctrl *gomock.Controller) *MockTxnAction {
+	mock := &MockTxnAction{ctrl: ctrl}
+	mock.recorder = &MockTxnActionMockRecorder{mock}
+	return mock
+}
+
+// EXPECT returns an object that allows the caller to indicate expected use.
+func (m *MockTxnAction) EXPECT() *MockTxnActionMockRecorder {
+	return m.recorder
+}
+
+// AbortAllRunningTxn mocks base method.
+func (m *MockTxnAction) AbortAllRunningTxn() {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "AbortAllRunningTxn")
+}
+
+// AbortAllRunningTxn indicates an expected call of AbortAllRunningTxn.
+func (mr *MockTxnActionMockRecorder) AbortAllRunningTxn() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AbortAllRunningTxn", reflect.TypeOf((*MockTxnAction)(nil).AbortAllRunningTxn))
+}
+
+// Pause mocks base method.
+func (m *MockTxnAction) Pause() {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "Pause")
+}
+
+// Pause indicates an expected call of Pause.
+func (mr *MockTxnActionMockRecorder) Pause() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Pause", reflect.TypeOf((*MockTxnAction)(nil).Pause))
+}
+
+// Resume mocks base method.
+func (m *MockTxnAction) Resume() {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "Resume")
+}
+
+// Resume indicates an expected call of Resume.
+func (mr *MockTxnActionMockRecorder) Resume() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Resume", reflect.TypeOf((*MockTxnAction)(nil).Resume))
+}
+
 // MockTxnClient is a mock of TxnClient interface.
 type MockTxnClient struct {
 	ctrl     *gomock.Controller
@@ -311,7 +462,7 @@ func (mr *MockTxnOperatorMockRecorder) AddWorkspace(workspace interface{}) *gomo
 }
 
 // AppendEventCallback mocks base method.
-func (m *MockTxnOperator) AppendEventCallback(event client.EventType, callbacks ...func(txn.TxnMeta)) {
+func (m *MockTxnOperator) AppendEventCallback(event client.EventType, callbacks ...func(txn.TxnMeta, error)) {
 	m.ctrl.T.Helper()
 	varargs := []interface{}{event}
 	for _, a := range callbacks {

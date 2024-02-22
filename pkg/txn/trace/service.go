@@ -27,8 +27,10 @@ import (
 	"time"
 
 	"github.com/fagongzi/goetty/v2/buf"
+	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -40,6 +42,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"go.uber.org/zap"
 )
 
 func WithBufferSize(value int) Option {
@@ -72,6 +75,7 @@ type service struct {
 	entryBufC chan *buffer
 	seq       atomic.Uint64
 	dir       string
+	logger    *log.MOLogger
 
 	mu struct {
 		sync.RWMutex
@@ -98,7 +102,6 @@ func NewService(
 	clock clock.Clock,
 	executor executor.SQLExecutor,
 	opts ...Option) (Service, error) {
-	fmt.Println(dataDir)
 	if err := os.RemoveAll(dataDir); err != nil {
 		return nil, err
 	}
@@ -112,6 +115,7 @@ func NewService(
 		clock:    clock,
 		executor: executor,
 		dir:      dataDir,
+		logger:   runtime.ProcessLevelRuntime().Logger().Named("txn-trace"),
 	}
 	for _, opt := range opts {
 		opt(s)
@@ -121,7 +125,7 @@ func NewService(
 		s.options.flushDuration = 60 * time.Second
 	}
 	if s.options.flushBytes == 0 {
-		s.options.flushBytes = 64 * 1024 * 1024
+		s.options.flushBytes = 16 * 1024 * 1024
 	}
 	if s.options.bufferSize == 0 {
 		s.options.bufferSize = 100000
@@ -159,9 +163,13 @@ func (s *service) TxnCreated(op client.TxnOperator) {
 	op.AppendEventCallback(client.ActiveEvent, s.handleTxnActive)
 	op.AppendEventCallback(client.ClosedEvent, s.handleTxnClosed)
 	op.AppendEventCallback(client.SnapshotUpdatedEvent, s.handleTxnSnapshotUpdated)
+	op.AppendEventCallback(client.CommitFailedEvent, s.handleTxnCommitFailed)
+
 }
 
-func (s *service) handleTxnActive(meta txn.TxnMeta) {
+func (s *service) handleTxnActive(
+	meta txn.TxnMeta,
+	_ error) {
 	if !s.atomic.enabled.Load() {
 		return
 	}
@@ -175,7 +183,9 @@ func (s *service) handleTxnActive(meta txn.TxnMeta) {
 	s.txnC <- newTxnActive(meta)
 }
 
-func (s *service) handleTxnClosed(meta txn.TxnMeta) {
+func (s *service) handleTxnClosed(
+	meta txn.TxnMeta,
+	_ error) {
 	if !s.atomic.enabled.Load() {
 		return
 	}
@@ -189,7 +199,9 @@ func (s *service) handleTxnClosed(meta txn.TxnMeta) {
 	s.txnC <- newTxnClosed(meta)
 }
 
-func (s *service) handleTxnSnapshotUpdated(meta txn.TxnMeta) {
+func (s *service) handleTxnSnapshotUpdated(
+	meta txn.TxnMeta,
+	_ error) {
 	if !s.atomic.enabled.Load() {
 		return
 	}
@@ -201,6 +213,22 @@ func (s *service) handleTxnSnapshotUpdated(meta txn.TxnMeta) {
 	}
 
 	s.txnC <- newTxnSnapshotUpdated(meta)
+}
+
+func (s *service) handleTxnCommitFailed(
+	meta txn.TxnMeta,
+	err error) {
+	if !s.atomic.enabled.Load() {
+		return
+	}
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.mu.closed {
+		return
+	}
+
+	s.AddTxnError(meta.ID, err)
 }
 
 func (s *service) CommitEntries(
@@ -339,6 +367,59 @@ func (s *service) ChangedCheck(
 	s.txnC <- newTxnCheckChanged(txnID, from, to, changed)
 }
 
+func (s *service) AddTxnError(
+	txnID []byte,
+	value error) {
+	if !s.atomic.enabled.Load() {
+		return
+	}
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.mu.closed {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+
+	ts := time.Now().UnixNano()
+	msg := value.Error()
+	if me, ok := value.(*moerr.Error); ok {
+		msg += ": " + me.Detail()
+	}
+
+	sql := fmt.Sprintf("insert into %s (ts, txn_id, error_info) values (%d, '%x', '%s')",
+		EventTxnErrorTable,
+		ts,
+		txnID,
+		escape(msg))
+
+	now, _ := s.clock.Now()
+	err := s.executor.ExecTxn(
+		ctx,
+		func(txn executor.TxnExecutor) error {
+			res, err := txn.Exec(sql,
+				executor.StatementOption{})
+			if err != nil {
+				return err
+			}
+			res.Close()
+			return nil
+		},
+		executor.Options{}.
+			WithDatabase(DebugDB).
+			WithMinCommittedTS(now).
+			WithWaitCommittedLogApplied().
+			WithDisableLock().
+			WithDisableTrace())
+	if err != nil {
+		s.logger.Fatal("exec txn error trace failed",
+			zap.String("sql", sql),
+			zap.Error(err))
+	}
+}
+
 func (s *service) ApplyLogtail(
 	entry *api.Entry,
 	commitTSIndex int) {
@@ -455,7 +536,7 @@ func (s *service) ClearFilters() error {
 			txn.Use(DebugDB)
 			res, err := txn.Exec(
 				fmt.Sprintf("truncate table %s",
-					TraceEntryFilterTable),
+					EventFilterTable),
 				executor.StatementOption{})
 			if err != nil {
 				return err
@@ -487,7 +568,7 @@ func (s *service) RefreshFilters() error {
 			txn.Use(DebugDB)
 			res, err := txn.Exec(
 				fmt.Sprintf("select table_id, columns from %s",
-					TraceEntryFilterTable),
+					EventFilterTable),
 				executor.StatementOption{})
 			if err != nil {
 				return err
@@ -544,7 +625,7 @@ func (s *service) handleEntryEvents(ctx context.Context) {
 		ctx,
 		s.entryCSVFile,
 		9,
-		TxnEntryTable,
+		EventDataTable,
 		s.entryC,
 		s.entryBufC)
 }
@@ -554,7 +635,7 @@ func (s *service) handleTxnEvents(ctx context.Context) {
 		ctx,
 		s.txnCSVFile,
 		8,
-		TxnTable,
+		EventTxnTable,
 		s.txnC,
 		s.txnBufC)
 }
@@ -617,27 +698,36 @@ func (s *service) handleEvent(
 			panic(err)
 		}
 
-		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-		defer cancel()
-		err := s.executor.ExecTxn(
-			ctx,
-			func(txn executor.TxnExecutor) error {
-				sql := fmt.Sprintf("load data infile '%s' into table %s fields terminated by ','", current, tableName)
-				res, err := txn.Exec(sql, executor.StatementOption{})
-				if err != nil {
-					return err
-				}
-				res.Close()
-				return nil
-			},
-			executor.Options{}.
-				WithDatabase(DebugDB).
-				WithDisableTrace().
-				WithDisableLock())
-		if err != nil {
-			panic(err)
+		load := func() error {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+			defer cancel()
+			return s.executor.ExecTxn(
+				ctx,
+				func(txn executor.TxnExecutor) error {
+					sql := fmt.Sprintf("load data infile '%s' into table %s fields terminated by ','", current, tableName)
+					res, err := txn.Exec(sql, executor.StatementOption{})
+					if err != nil {
+						return err
+					}
+					res.Close()
+					return nil
+				},
+				executor.Options{}.
+					WithDatabase(DebugDB).
+					WithDisableTrace().
+					WithDisableLock())
 		}
 
+		for {
+			if err := load(); err != nil {
+				s.logger.Error("load trace data to table failed, retry later",
+					zap.String("table", tableName),
+					zap.Error(err))
+				time.Sleep(time.Second * 5)
+				continue
+			}
+			break
+		}
 		sum = 0
 		open()
 	}
@@ -908,8 +998,12 @@ func getEntryFilterSQL(
 	name string,
 	columns []string) string {
 	return fmt.Sprintf("insert into %s (table_id, table_name, columns) values (%d, '%s', '%s')",
-		TraceEntryFilterTable,
+		EventFilterTable,
 		id,
 		name,
 		strings.Join(columns, ","))
+}
+
+func escape(value string) string {
+	return strings.ReplaceAll(value, "'", "''")
 }

@@ -87,7 +87,6 @@ func writeValue(
 	row int,
 	buf *buffer,
 	dst []byte) {
-
 	t := vec.GetType()
 	switch t.Oid {
 	case types.T_bool:
