@@ -305,7 +305,6 @@ func (db *txnDatabase) Relation(ctx context.Context, name string, proc any) (eng
 		lastTS:        txn.op.SnapshotTS(),
 	}
 	tbl.proc.Store(p)
-	tbl.updateWriteOffset()
 
 	db.txn.tableCache.tableMap.Store(key, tbl)
 	return tbl, nil
