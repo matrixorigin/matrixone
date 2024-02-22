@@ -92,9 +92,12 @@ type singleAggFuncExec4 struct {
 
 func (exec *singleAggFuncExec1[from, to]) Init(
 	proc *process.Process,
-	info singleAggTypeInfo, newMethod func() singleAggPrivateStructure1[from, to]) {
+	info singleAggTypeInfo,
+	opt singleAggOptimizedInfo,
+	newMethod func() singleAggPrivateStructure1[from, to]) {
 
 	exec.singleAggTypeInfo = info
+	exec.singleAggOptimizedInfo = opt
 	exec.ret = initFixedAggFuncResult[to](proc, info.retType)
 	exec.groups = make([]singleAggPrivateStructure1[from, to], 0, 1)
 	exec.gGroup = newMethod
@@ -141,8 +144,9 @@ func (exec *singleAggFuncExec1[from, to]) BulkFill(groupIndex int, vectors []*ve
 
 	if vec.IsConst() {
 		if vec.IsConstNull() {
+			var value from
 			if exec.receiveNull {
-				exec.groups[groupIndex].fills(nil, true, length, getter, setter)
+				exec.groups[groupIndex].fills(value, true, length, getter, setter)
 			}
 		} else {
 			exec.groups[groupIndex].fills(vector.MustFixedCol[from](vec)[0], false, length, getter, setter)
@@ -309,8 +313,9 @@ func (exec *singleAggFuncExec2[from]) BulkFill(groupIndex int, vectors []*vector
 
 	if vec.IsConst() {
 		if vec.IsConstNull() {
+			var value from
 			if exec.receiveNull {
-				exec.groups[groupIndex].fills(nil, true, length, getter, setter)
+				exec.groups[groupIndex].fills(value, true, length, getter, setter)
 			}
 		} else {
 			exec.groups[groupIndex].fills(vector.MustFixedCol[from](vec)[0], false, length, getter, setter)

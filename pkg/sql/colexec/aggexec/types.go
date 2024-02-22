@@ -26,6 +26,7 @@ const (
 )
 
 // AggFuncExec is an interface to do execution for aggregation.
+// todo: use vector... to replace the []*vector.Vector may be better.
 type AggFuncExec interface {
 	// Init initialize the aggregation.
 	// Init()

@@ -50,9 +50,11 @@ func initFixedAggFuncResult[T types.FixedSizeTExceptStrType](proc *process.Proce
 }
 
 func (r *aggFuncResult[T]) grows(more int) error {
-	if err := r.res.PreExtend(r.res.Length()+more, r.mp); err != nil {
+	newLen := r.res.Length() + more
+	if err := r.res.PreExtend(newLen, r.mp); err != nil {
 		return err
 	}
+	r.res.SetLength(newLen)
 	r.values = vector.MustFixedCol[T](r.res)
 	return nil
 }
