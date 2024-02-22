@@ -616,6 +616,8 @@ insert into tbl values(8, 0, "[130,40,90]");
 SELECT id,id2, embedding FROM tbl ORDER BY l2_distance(embedding,'[120,51,70]') ASC LIMIT 3;
 create index idx using ivfflat on tbl(embedding) lists=2 op_type "vector_l2_ops";
 SELECT id,id2, embedding FROM tbl ORDER BY l2_distance(embedding,'[120,51,70]') ASC LIMIT 3;
+SET @test_limit = 3;
+SELECT id from tbl LIMIT @test_limit;
 
 -- post
 drop database vecdb2;

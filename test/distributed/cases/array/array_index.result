@@ -556,4 +556,10 @@ id    id2    embedding
 7    0    [120, 50, 70]
 8    0    [130, 40, 90]
 6    0    [100, 44, 50]
+SET @test_limit = 3;
+SELECT id from tbl LIMIT @test_limit;
+id
+1
+2
+3
 drop database vecdb2;
