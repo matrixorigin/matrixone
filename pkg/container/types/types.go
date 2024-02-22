@@ -920,10 +920,7 @@ func (t T) IsFloat() bool {
 
 // IsEnum return true if the types.T is Enum type
 func (t T) IsEnum() bool {
-	if t == T_enum {
-		return true
-	}
-	return false
+	return t == T_enum
 }
 
 // IsMySQLString return true if the types.T is a MySQL string type (https://dev.mysql.com/doc/refman/8.0/en/string-types.html)
