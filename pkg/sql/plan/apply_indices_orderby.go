@@ -451,6 +451,7 @@ func makeTblCrossJoinEntriesCentroidOnPK(builder *QueryBuilder, bindCtx *BindCon
 			},
 		},
 	})
+	// TODO: revisit this part to implement SEMI join
 	entriesJoinTbl := builder.appendNode(&plan.Node{
 		NodeType: plan.Node_JOIN,
 		JoinType: plan.Node_INNER,
