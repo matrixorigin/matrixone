@@ -80,7 +80,7 @@ func (l *LocalETLFS) Name() string {
 	return l.name
 }
 
-func (l *LocalETLFS) FlushCache() {
+func (l *LocalETLFS) Close() {
 }
 
 func (l *LocalETLFS) Write(ctx context.Context, vector IOVector) error {

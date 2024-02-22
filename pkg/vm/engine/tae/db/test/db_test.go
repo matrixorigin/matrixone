@@ -176,6 +176,7 @@ func TestAppend3(t *testing.T) {
 	opts := config.WithQuickScanAndCKPOpts(nil)
 	tae := testutil.InitTestDB(ctx, ModuleName, t, opts)
 	defer tae.Close()
+
 	schema := catalog.MockSchema(2, 0)
 	schema.BlockMaxRows = 10
 	schema.ObjectMaxBlocks = 2
@@ -203,6 +204,7 @@ func TestAppend4(t *testing.T) {
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := testutil.InitTestDB(ctx, ModuleName, t, opts)
 	defer tae.Close()
+
 	schema1 := catalog.MockSchemaAll(18, 14)
 	schema2 := catalog.MockSchemaAll(18, 15)
 	schema3 := catalog.MockSchemaAll(18, 16)
@@ -252,6 +254,7 @@ func TestAppend4(t *testing.T) {
 }
 
 func testCRUD(t *testing.T, tae *db.DB, schema *catalog.Schema) {
+
 	bat := catalog.MockBatch(schema, int(schema.BlockMaxRows*(uint32(schema.ObjectMaxBlocks)+1)-1))
 	defer bat.Close()
 	bats := bat.Split(4)
@@ -338,6 +341,7 @@ func TestCRUD(t *testing.T) {
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := testutil.InitTestDB(ctx, ModuleName, t, opts)
 	defer tae.Close()
+
 	testutil.CreateDB(t, tae, testutil.DefaultTestDB)
 	testutil.WithTestAllPKType(t, tae, testCRUD)
 }
@@ -401,6 +405,7 @@ func TestNonAppendableBlock(t *testing.T) {
 
 	db := testutil.InitTestDB(ctx, ModuleName, t, nil)
 	defer db.Close()
+
 	schema := catalog.MockSchemaAll(13, 1)
 	schema.BlockMaxRows = 10
 	schema.ObjectMaxBlocks = 2
@@ -489,6 +494,7 @@ func TestCreateObject(t *testing.T) {
 
 	tae := testutil.InitTestDB(ctx, ModuleName, t, nil)
 	defer tae.Close()
+
 	schema := catalog.MockSchemaAll(1, 0)
 	txn, _ := tae.StartTxn(nil)
 	db, err := txn.CreateDatabase("db", "", "")
@@ -524,6 +530,7 @@ func TestCompactBlock1(t *testing.T) {
 	opts := config.WithLongScanAndCKPOpts(nil)
 	db := testutil.InitTestDB(ctx, ModuleName, t, opts)
 	defer db.Close()
+
 	schema := catalog.MockSchemaAll(13, 2)
 	schema.BlockMaxRows = 10
 	schema.ObjectMaxBlocks = 4
@@ -1564,6 +1571,7 @@ func TestAutoCompactABlk1(t *testing.T) {
 	opts := config.WithQuickScanAndCKPOpts(nil)
 	tae := testutil.InitTestDB(ctx, ModuleName, t, opts)
 	defer tae.Close()
+
 	schema := catalog.MockSchemaAll(13, 3)
 	schema.BlockMaxRows = 1000
 	schema.ObjectMaxBlocks = 10
@@ -1670,6 +1678,7 @@ func TestCompactABlk(t *testing.T) {
 
 	tae := testutil.InitTestDB(ctx, ModuleName, t, nil)
 	defer tae.Close()
+
 	schema := catalog.MockSchemaAll(13, 3)
 	schema.BlockMaxRows = 1000
 	schema.ObjectMaxBlocks = 10
@@ -1708,6 +1717,7 @@ func TestRollback1(t *testing.T) {
 
 	db := testutil.InitTestDB(ctx, ModuleName, t, nil)
 	defer db.Close()
+
 	schema := catalog.MockSchema(2, 0)
 
 	testutil.CreateRelation(t, db, "db", schema, true)
@@ -1777,6 +1787,7 @@ func TestMVCC1(t *testing.T) {
 
 	db := testutil.InitTestDB(ctx, ModuleName, t, nil)
 	defer db.Close()
+
 	schema := catalog.MockSchemaAll(13, 2)
 	schema.BlockMaxRows = 40
 	schema.ObjectMaxBlocks = 2
@@ -1852,6 +1863,7 @@ func TestMVCC2(t *testing.T) {
 
 	db := testutil.InitTestDB(ctx, ModuleName, t, nil)
 	defer db.Close()
+
 	schema := catalog.MockSchemaAll(13, 2)
 	schema.BlockMaxRows = 100
 	schema.ObjectMaxBlocks = 2
@@ -2102,6 +2114,7 @@ func TestLogIndex1(t *testing.T) {
 
 	tae := testutil.InitTestDB(ctx, ModuleName, t, nil)
 	defer tae.Close()
+
 	schema := catalog.MockSchemaAll(13, 0)
 	schema.BlockMaxRows = 10
 	bat := catalog.MockBatch(schema, int(schema.BlockMaxRows))
@@ -2221,6 +2234,7 @@ func TestSystemDB1(t *testing.T) {
 
 	tae := testutil.InitTestDB(ctx, ModuleName, t, nil)
 	defer tae.Close()
+
 	schema := catalog.MockSchema(2, 0)
 	txn, _ := tae.StartTxn(nil)
 	_, err := txn.CreateDatabase(pkgcatalog.MO_CATALOG, "", "")
@@ -2405,6 +2419,7 @@ func TestSystemDB3(t *testing.T) {
 	ctx := context.Background()
 	tae := testutil.InitTestDB(ctx, ModuleName, t, nil)
 	defer tae.Close()
+
 	txn, _ := tae.StartTxn(nil)
 	schema := catalog.MockSchemaAll(13, 12)
 	schema.BlockMaxRows = 100
@@ -2472,6 +2487,7 @@ func TestScan2(t *testing.T) {
 
 	tae := testutil.InitTestDB(ctx, ModuleName, t, nil)
 	defer tae.Close()
+
 	schema := catalog.MockSchemaAll(13, 12)
 	schema.BlockMaxRows = 10
 	schema.ObjectMaxBlocks = 10
@@ -2517,6 +2533,7 @@ func TestADA(t *testing.T) {
 
 	tae := testutil.InitTestDB(ctx, ModuleName, t, nil)
 	defer tae.Close()
+
 	schema := catalog.MockSchemaAll(13, 3)
 	schema.BlockMaxRows = 1000
 	bat := catalog.MockBatch(schema, 1)
@@ -2622,6 +2639,7 @@ func TestUpdateByFilter(t *testing.T) {
 
 	tae := testutil.InitTestDB(ctx, ModuleName, t, nil)
 	defer tae.Close()
+
 	schema := catalog.MockSchemaAll(13, 3)
 	bat := catalog.MockBatch(schema, 100)
 	defer bat.Close()
@@ -2662,6 +2680,7 @@ func TestGetByFilter(t *testing.T) {
 
 	tae := testutil.InitTestDB(ctx, ModuleName, t, nil)
 	defer tae.Close()
+
 	schema := catalog.MockSchemaAll(13, 12)
 	bat := catalog.MockBatch(schema, 10)
 	defer bat.Close()
@@ -2712,6 +2731,7 @@ func TestChaos1(t *testing.T) {
 
 	tae := testutil.InitTestDB(ctx, ModuleName, t, nil)
 	defer tae.Close()
+
 	schema := catalog.MockSchemaAll(13, 12)
 	schema.BlockMaxRows = 100000
 	schema.ObjectMaxBlocks = 2
@@ -2796,6 +2816,7 @@ func TestSnapshotIsolation1(t *testing.T) {
 
 	tae := testutil.InitTestDB(ctx, ModuleName, t, nil)
 	defer tae.Close()
+
 	schema := catalog.MockSchemaAll(13, 12)
 	schema.BlockMaxRows = 100
 	bat := catalog.MockBatch(schema, 10)
@@ -2856,6 +2877,7 @@ func TestSnapshotIsolation2(t *testing.T) {
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := testutil.InitTestDB(ctx, ModuleName, t, opts)
 	defer tae.Close()
+
 	schema := catalog.MockSchemaAll(13, 12)
 	schema.BlockMaxRows = 100
 	bat := catalog.MockBatch(schema, 1)
@@ -2898,6 +2920,7 @@ func TestMergeBlocks(t *testing.T) {
 
 	tae := testutil.InitTestDB(ctx, ModuleName, t, nil)
 	defer tae.Close()
+
 	schema := catalog.MockSchemaAll(1, -1)
 	schema.BlockMaxRows = 10
 	schema.ObjectMaxBlocks = 3
@@ -2960,6 +2983,7 @@ func TestSegDelLogtail(t *testing.T) {
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
+
 	schema := catalog.MockSchemaAll(13, -1)
 	schema.BlockMaxRows = 10
 	schema.ObjectMaxBlocks = 3
@@ -3063,6 +3087,7 @@ func TestMergeblocks2(t *testing.T) {
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
+
 	schema := catalog.MockSchemaAll(1, 0)
 	schema.BlockMaxRows = 3
 	schema.ObjectMaxBlocks = 2
@@ -3157,6 +3182,7 @@ func TestMergeEmptyBlocks(t *testing.T) {
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
+
 	schema := catalog.MockSchemaAll(1, 0)
 	schema.BlockMaxRows = 3
 	schema.ObjectMaxBlocks = 2
@@ -3215,6 +3241,7 @@ func TestDelete2(t *testing.T) {
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
+
 	schema := catalog.MockSchemaAll(18, 11)
 	schema.BlockMaxRows = 10
 	schema.ObjectMaxBlocks = 2
@@ -3241,6 +3268,7 @@ func TestNull1(t *testing.T) {
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
+
 	schema := catalog.MockSchemaAll(18, 9)
 	schema.BlockMaxRows = 10
 	schema.ObjectMaxBlocks = 2
@@ -3361,6 +3389,7 @@ func TestTruncate(t *testing.T) {
 	opts := config.WithQuickScanAndCKPOpts(nil)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
+
 	schema := catalog.MockSchemaAll(18, 15)
 	schema.BlockMaxRows = 10
 	schema.ObjectMaxBlocks = 2
@@ -3409,6 +3438,7 @@ func TestGetColumnData(t *testing.T) {
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
+
 	schema := catalog.MockSchemaAll(18, 13)
 	schema.BlockMaxRows = 10
 	schema.ObjectMaxBlocks = 2
@@ -3470,6 +3500,7 @@ func TestCompactBlk1(t *testing.T) {
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
+
 	schema := catalog.MockSchemaAll(3, 1)
 	schema.BlockMaxRows = 5
 	schema.ObjectMaxBlocks = 2
@@ -3552,6 +3583,7 @@ func TestCompactBlk2(t *testing.T) {
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
+
 	schema := catalog.MockSchemaAll(3, 1)
 	schema.BlockMaxRows = 5
 	schema.ObjectMaxBlocks = 2
@@ -3647,6 +3679,7 @@ func TestCompactblk3(t *testing.T) {
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
+
 	schema := catalog.MockSchemaAll(3, 1)
 	schema.BlockMaxRows = 5
 	schema.ObjectMaxBlocks = 2
@@ -3702,6 +3735,7 @@ func TestImmutableIndexInAblk(t *testing.T) {
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
+
 	schema := catalog.MockSchemaAll(3, 1)
 	schema.BlockMaxRows = 5
 	schema.ObjectMaxBlocks = 2
@@ -4490,6 +4524,7 @@ func TestGetLastAppender(t *testing.T) {
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
+
 	schema := catalog.MockSchemaAll(1, -1)
 	schema.BlockMaxRows = 10
 	schema.ObjectMaxBlocks = 2
@@ -4523,6 +4558,7 @@ func TestCollectInsert(t *testing.T) {
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
+
 	schema := catalog.MockSchemaAll(1, -1)
 	schema.BlockMaxRows = 20
 	tae.BindSchema(schema)
@@ -4598,6 +4634,7 @@ func TestCollectDelete(t *testing.T) {
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
+
 	schema := catalog.MockSchemaAll(2, 1)
 	schema.BlockMaxRows = 20
 	tae.BindSchema(schema)
@@ -4723,6 +4760,7 @@ func TestAppendnode(t *testing.T) {
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
+
 	schema := catalog.MockSchemaAll(1, 0)
 	schema.BlockMaxRows = 10000
 	schema.ObjectMaxBlocks = 2
@@ -4801,6 +4839,7 @@ func TestWatchDirty(t *testing.T) {
 	opts := config.WithQuickScanAndCKPOpts(nil)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
+
 	logMgr := tae.LogtailMgr
 
 	visitor := &catalog.LoopProcessor{}
@@ -4922,6 +4961,7 @@ func TestBlockRead(t *testing.T) {
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	tsAlloc := types.NewTsAlloctor(opts.Clock)
 	defer tae.Close()
+
 	schema := catalog.MockSchemaAll(2, 1)
 	schema.BlockMaxRows = 20
 	schema.ObjectMaxBlocks = 2
@@ -5037,6 +5077,7 @@ func TestCompactDeltaBlk(t *testing.T) {
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
+
 	schema := catalog.MockSchemaAll(3, 1)
 	schema.BlockMaxRows = 6
 	schema.ObjectMaxBlocks = 2
@@ -5262,6 +5303,7 @@ func TestDelete4(t *testing.T) {
 	opts := config.WithQuickScanAndCKPOpts(nil)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
+
 	schema := catalog.NewEmptySchema("xx")
 	schema.AppendPKCol("name", types.T_varchar.ToType(), 0)
 	schema.AppendCol("offset", types.T_uint32.ToType())
@@ -5417,6 +5459,7 @@ func TestTransfer(t *testing.T) {
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
+
 	schema := catalog.MockSchemaAll(5, 3)
 	schema.BlockMaxRows = 100
 	schema.ObjectMaxBlocks = 10
@@ -5459,6 +5502,7 @@ func TestTransfer2(t *testing.T) {
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
+
 	schema := catalog.MockSchemaAll(5, 3)
 	schema.BlockMaxRows = 10
 	schema.ObjectMaxBlocks = 10
@@ -5498,6 +5542,7 @@ func TestMergeBlocks3(t *testing.T) {
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
+
 	schema := catalog.MockSchemaAll(5, 3)
 	schema.BlockMaxRows = 10
 	schema.ObjectMaxBlocks = 5
@@ -5600,6 +5645,7 @@ func TestCompactEmptyBlock(t *testing.T) {
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
+
 	schema := catalog.MockSchemaAll(1, 0)
 	schema.BlockMaxRows = 3
 	schema.ObjectMaxBlocks = 2
@@ -5646,6 +5692,7 @@ func TestTransfer3(t *testing.T) {
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
+
 	schema := catalog.MockSchemaAll(5, 3)
 	schema.BlockMaxRows = 100
 	schema.ObjectMaxBlocks = 10
@@ -6034,6 +6081,7 @@ func TestInsertPerf(t *testing.T) {
 	options.WithFlushInterval(time.Second * 10)(opts)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
+
 	schema := catalog.MockSchemaAll(10, 2)
 	schema.BlockMaxRows = 1000
 	schema.ObjectMaxBlocks = 5
@@ -6104,6 +6152,7 @@ func TestGCWithCheckpoint(t *testing.T) {
 	opts := config.WithQuickScanAndCKPAndGCOpts(nil)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
+
 	manager := gc.NewDiskCleaner(context.Background(), tae.Runtime.Fs, tae.BGCheckpointRunner, tae.Catalog, false)
 	manager.Start()
 	defer manager.Stop()
@@ -6158,6 +6207,7 @@ func TestGCDropDB(t *testing.T) {
 	opts := config.WithQuickScanAndCKPAndGCOpts(nil)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
+
 	manager := gc.NewDiskCleaner(context.Background(), tae.Runtime.Fs, tae.BGCheckpointRunner, tae.Catalog, false)
 	manager.Start()
 	defer manager.Stop()
@@ -6216,6 +6266,7 @@ func TestGCDropTable(t *testing.T) {
 	opts := config.WithQuickScanAndCKPAndGCOpts(nil)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
+
 	manager := gc.NewDiskCleaner(context.Background(), tae.Runtime.Fs, tae.BGCheckpointRunner, tae.Catalog, false)
 	manager.Start()
 	defer manager.Stop()
@@ -6685,6 +6736,7 @@ func TestAlterFakePk(t *testing.T) {
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
+
 	schema := catalog.MockSchemaAll(3, -1)
 	schema.BlockMaxRows = 10
 	schema.ObjectMaxBlocks = 2
@@ -6790,6 +6842,7 @@ func TestAlterColumnAndFreeze(t *testing.T) {
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
+
 	schema := catalog.MockSchemaAll(10, 5)
 	schema.BlockMaxRows = 10
 	schema.ObjectMaxBlocks = 2
@@ -6940,6 +6993,7 @@ func TestGlobalCheckpoint1(t *testing.T) {
 	options.WithGlobalVersionInterval(time.Millisecond * 10)(opts)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
+
 	schema := catalog.MockSchemaAll(10, 2)
 	schema.BlockMaxRows = 10
 	schema.ObjectMaxBlocks = 2
@@ -6971,6 +7025,7 @@ func TestAppendAndGC(t *testing.T) {
 	options.WithDisableGCCheckpoint()(opts)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
+
 	db := tae.DB
 	db.DiskCleaner.SetMinMergeCountForTest(2)
 
@@ -7050,6 +7105,7 @@ func TestGlobalCheckpoint2(t *testing.T) {
 	tae.BGCheckpointRunner.DisableCheckpoint()
 	tae.BGCheckpointRunner.CleanPenddingCheckpoint()
 	defer tae.Close()
+
 	schema := catalog.MockSchemaAll(10, 2)
 	schema.BlockMaxRows = 10
 	schema.ObjectMaxBlocks = 2
@@ -7124,6 +7180,7 @@ func TestGlobalCheckpoint3(t *testing.T) {
 	options.WithDisableGCCatalog()(opts)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
+
 	schema := catalog.MockSchemaAll(10, 2)
 	schema.BlockMaxRows = 10
 	schema.ObjectMaxBlocks = 2
@@ -7173,6 +7230,7 @@ func TestGlobalCheckpoint4(t *testing.T) {
 	opts := config.WithQuickScanAndCKPOpts(nil)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
+
 	tae.BGCheckpointRunner.DisableCheckpoint()
 	tae.BGCheckpointRunner.CleanPenddingCheckpoint()
 	globalCkpInterval := time.Second
@@ -7239,6 +7297,7 @@ func TestGlobalCheckpoint5(t *testing.T) {
 	opts := config.WithQuickScanAndCKPOpts(nil)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
+
 	tae.BGCheckpointRunner.DisableCheckpoint()
 	tae.BGCheckpointRunner.CleanPenddingCheckpoint()
 	globalCkpInterval := time.Duration(0)
@@ -7302,6 +7361,7 @@ func TestGlobalCheckpoint6(t *testing.T) {
 	opts := config.WithQuickScanAndCKPOpts(nil)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
+
 	tae.BGCheckpointRunner.DisableCheckpoint()
 	tae.BGCheckpointRunner.CleanPenddingCheckpoint()
 	globalCkpInterval := time.Duration(0)
@@ -7609,6 +7669,7 @@ func TestGCCatalog2(t *testing.T) {
 	options.WithCatalogGCInterval(10 * time.Millisecond)(opts)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
+
 	schema := catalog.MockSchema(3, 2)
 	schema.BlockMaxRows = 10
 	schema.ObjectMaxBlocks = 2
@@ -7646,6 +7707,7 @@ func TestGCCatalog3(t *testing.T) {
 	options.WithCatalogGCInterval(10 * time.Millisecond)(opts)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
+
 	schema := catalog.MockSchema(3, 2)
 	schema.BlockMaxRows = 10
 	schema.ObjectMaxBlocks = 2
@@ -7713,6 +7775,7 @@ func TestLogailAppend(t *testing.T) {
 	ctx := context.Background()
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, nil)
 	defer tae.Close()
+
 	tae.DB.LogtailMgr.RegisterCallback(logtail.MockCallback)
 	schema := catalog.MockSchemaAll(13, 2)
 	schema.BlockMaxRows = 10
@@ -8140,6 +8203,7 @@ func TestGCInMemoryDeletesByTS(t *testing.T) {
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
+
 	rows := 100
 	schema := catalog.MockSchemaAll(2, 1)
 	schema.BlockMaxRows = uint32(rows)
@@ -8228,6 +8292,7 @@ func TestRW(t *testing.T) {
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
+
 	rows := 10
 	schema := catalog.MockSchemaAll(5, 2)
 	schema.BlockMaxRows = uint32(rows)
@@ -8283,6 +8348,7 @@ func TestReplayDeletes(t *testing.T) {
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
+
 	rows := 250
 	schema := catalog.MockSchemaAll(2, 1)
 	schema.BlockMaxRows = 50
@@ -8342,6 +8408,7 @@ func TestApplyDeltalocation1(t *testing.T) {
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
+
 	rows := 10
 	schema := catalog.MockSchemaAll(2, 1)
 	schema.BlockMaxRows = 10
@@ -8402,6 +8469,7 @@ func TestApplyDeltalocation2(t *testing.T) {
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
+
 	rows := 10
 	schema := catalog.MockSchemaAll(2, 1)
 	schema.BlockMaxRows = 10
@@ -8466,6 +8534,7 @@ func TestApplyDeltalocation3(t *testing.T) {
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
+
 	rows := 10
 	schema := catalog.MockSchemaAll(2, 1)
 	schema.BlockMaxRows = 10
@@ -8536,6 +8605,7 @@ func TestApplyDeltalocation4(t *testing.T) {
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
+
 	rows := 10
 	schema := catalog.MockSchemaAll(2, 1)
 	schema.BlockMaxRows = 10
@@ -8577,6 +8647,7 @@ func TestReplayPersistedDelete(t *testing.T) {
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
+
 	rows := 10
 	schema := catalog.MockSchemaAll(2, 1)
 	schema.BlockMaxRows = 10
@@ -8700,6 +8771,7 @@ func TestEstimateMemSize(t *testing.T) {
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
+
 	schema := catalog.MockSchemaAll(2, 1)
 	schema.BlockMaxRows = 50
 	schemaBig := catalog.MockSchemaAll(14, 1)
@@ -8763,6 +8835,7 @@ func TestColumnCount(t *testing.T) {
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
+
 	schema := catalog.MockSchemaAll(2, 1)
 	schema.BlockMaxRows = 50
 	tae.BindSchema(schema)
@@ -8799,6 +8872,7 @@ func TestCollectDeletesInRange1(t *testing.T) {
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
+
 	schema := catalog.MockSchemaAll(2, 1)
 	schema.BlockMaxRows = 50
 	tae.BindSchema(schema)
@@ -8833,6 +8907,7 @@ func TestCollectDeletesInRange2(t *testing.T) {
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
+
 	schema := catalog.MockSchemaAll(2, 1)
 	schema.BlockMaxRows = 50
 	tae.BindSchema(schema)

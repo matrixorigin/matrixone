@@ -61,7 +61,7 @@ type FileService interface {
 	// PrefetchFile prefetches a file
 	PrefetchFile(ctx context.Context, filePath string) error
 
-	FlushCache()
+	Close()
 }
 
 type IOVector struct {

@@ -732,7 +732,7 @@ func testFileService(
 			assert.Equal(t, data, vec.Entries[0].CachedData.Bytes())
 		}
 		vec.Release()
-		fs.FlushCache()
+		fs.Close()
 	})
 
 	t.Run("ignore", func(t *testing.T) {

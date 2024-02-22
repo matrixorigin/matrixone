@@ -988,6 +988,10 @@ func (l *LocalFS) Replace(ctx context.Context, vector IOVector) error {
 
 var _ CachingFileService = new(LocalFS)
 
+func (l *LocalFS) Close() {
+	l.FlushCache()
+}
+
 func (l *LocalFS) FlushCache() {
 	if l.memCache != nil {
 		l.memCache.Flush()

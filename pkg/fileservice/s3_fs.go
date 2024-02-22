@@ -808,6 +808,10 @@ func (*S3FS) ETLCompatible() {}
 
 var _ CachingFileService = new(S3FS)
 
+func (s *S3FS) Close() {
+	s.FlushCache()
+}
+
 func (s *S3FS) FlushCache() {
 	if s.memCache != nil {
 		s.memCache.Flush()

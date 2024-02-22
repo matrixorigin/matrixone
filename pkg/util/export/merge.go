@@ -554,11 +554,12 @@ func newETLReader(ctx context.Context, tbl *table.Table, fs fileservice.FileServ
 			r.Close()
 			return nil, err
 		}
-		_, err = r.ReadAll(ctx)
+		_, release, err := r.ReadAll(ctx)
 		if err != nil {
 			r.Close()
 			return nil, err
 		}
+		defer release()
 		return r, nil
 	} else {
 		panic("NOT Implements")

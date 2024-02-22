@@ -337,13 +337,13 @@ func NewTaeReader(ctx context.Context, tbl *table.Table, filePath string, filesi
 	return r, nil
 }
 
-func (r *TAEReader) ReadAll(ctx context.Context) ([]*batch.Batch, error) {
-	ioVec, _, err := r.blockReader.LoadAllColumns(ctx, r.idxs, r.mp)
+func (r *TAEReader) ReadAll(ctx context.Context) ([]*batch.Batch, func(), error) {
+	ioVec, release, err := r.blockReader.LoadAllColumns(ctx, r.idxs, r.mp)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	r.batchs = append(r.batchs, ioVec...)
-	return r.batchs, nil
+	return r.batchs, release, nil
 }
 
 func (r *TAEReader) ReadLine() ([]string, error) {

@@ -92,8 +92,8 @@ func TestRemoteCache(t *testing.T) {
 		assert.NotNil(t, ioVec2.Entries[0].fromCache)
 		ioVec2.Release()
 
-		sf1.fs.FlushCache()
-		sf2.fs.FlushCache()
+		sf1.fs.Close()
+		sf2.fs.Close()
 	})
 }
 

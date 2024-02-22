@@ -457,6 +457,7 @@ func readBlockData(
 			// only read rowid column on non appendable block, return early
 			result = batch.NewWithSize(1)
 			// result.Vecs[0] = rowid
+			release = func() {}
 			return
 		}
 
