@@ -87,6 +87,7 @@ func (c *Cache) Set(ctx context.Context, key cache.CacheKey, value CacheData) er
 }
 
 func (c *Cache) Flush() {
+	c.l.Flush()
 }
 
 func (c *Cache) Size() int64 {

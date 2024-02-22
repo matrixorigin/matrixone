@@ -714,6 +714,8 @@ func testFileService(
 		assert.Equal(t, 1, len(m.M))
 		assert.Equal(t, int64(42), m.M[42])
 
+		vec.Release()
+
 		// ReadCache
 		vec = &IOVector{
 			FilePath: "foo",
@@ -729,7 +731,8 @@ func testFileService(
 		if vec.Entries[0].CachedData != nil {
 			assert.Equal(t, data, vec.Entries[0].CachedData.Bytes())
 		}
-
+		vec.Release()
+		fs.FlushCache()
 	})
 
 	t.Run("ignore", func(t *testing.T) {

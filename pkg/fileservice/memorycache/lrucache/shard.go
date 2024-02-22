@@ -104,6 +104,14 @@ func (s *shard[K, V]) Get(ctx context.Context, h uint64, key K) (value V, ok boo
 func (s *shard[K, V]) Flush() {
 	s.Lock()
 	defer s.Unlock()
+	for elem := s.evicts.Back(); elem != nil; elem = s.evicts.Back() {
+		s.kv.Delete(elem.h, elem.Key)
+		s.evicts.Remove(elem)
+		if s.postEvict != nil {
+			s.postEvict(elem.Key, elem.Value)
+		}
+		s.freeItem(elem)
+	}
 	s.size = 0
 	s.evicts = newList[K, V]()
 	s.kv = hashmap.New[K, lruItem[K, V]](int(s.capacity))

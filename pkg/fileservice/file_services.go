@@ -52,6 +52,9 @@ func (f *FileServices) Delete(ctx context.Context, filePaths ...string) error {
 	return nil
 }
 
+func (f *FileServices) FlushCache() {
+}
+
 func (f *FileServices) deleteSingle(ctx context.Context, filePath string) error {
 	path, err := ParsePathAtService(filePath, "")
 	if err != nil {

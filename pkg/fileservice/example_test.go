@@ -72,4 +72,6 @@ func TestCacheExample(t *testing.T) {
 	value := vec.Entries[0].CachedData
 	assert.Equal(t, []byte("42"), value.Bytes())
 
+	vec.Release()
+	fs.FlushCache()
 }

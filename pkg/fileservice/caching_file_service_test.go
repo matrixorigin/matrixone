@@ -88,6 +88,8 @@ func testCachingFileService(
 	assert.Equal(t, int64(0), counterSet.FileService.Cache.Read.Load())
 	assert.Equal(t, int64(0), counterSet.FileService.Cache.Hit.Load())
 
+	vec.Release()
+
 	// read, not hit
 	vec = makeVec()
 	err = fs.Read(ctx, vec)
@@ -99,6 +101,8 @@ func testCachingFileService(
 	assert.Equal(t, int64(1), counterSet.FileService.Cache.Read.Load())
 	assert.Equal(t, int64(0), counterSet.FileService.Cache.Hit.Load())
 
+	vec.Release()
+
 	// read again, hit cache
 	vec = makeVec()
 	err = fs.Read(ctx, vec)
@@ -109,6 +113,8 @@ func testCachingFileService(
 	assert.Equal(t, int64(42), m.M[42])
 	assert.Equal(t, int64(2), counterSet.FileService.Cache.Read.Load())
 	assert.Equal(t, int64(1), counterSet.FileService.Cache.Hit.Load())
+
+	vec.Release()
 
 	// flush
 	fs.FlushCache()
