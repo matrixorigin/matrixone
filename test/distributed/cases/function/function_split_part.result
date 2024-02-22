@@ -3,7 +3,7 @@ split_part(abc^123^ioo, ^, 1)
 abc
 SELECT split_part('efjq34','4r832r432094-3',2);
 split_part(efjq34, 4r832r432094-3, 2)
-null
+
 SELECT split_part('床前明月光，疑是地上霜，举头望明月，低头思故乡','，',4);
 split_part(床前明月光，疑是地上霜，举头望明月，低头思故乡, ，, 4)
 低头思故乡
@@ -15,7 +15,7 @@ split_part(fhew嗯嗯圣诞节chejwk嗯嗯__++__w嗯嗯, 嗯嗯, 2)
 圣诞节chejwk
 SELECT split_part('v23dnnr###ewjrfkjewm#vrewnvrenjvnewmvrdjvrnjerewmvrjenjwvewmvrrnenjvrenjvrejnvewvrevrjewvrnew','ewmvr',8);
 split_part(v23dnnr###ewjrfkjewm#vrewnvrenjvnewmvrdjvrnjerewmvrjenjwvewmvrrnenjvrenjvrejnvewvrevrjewvrnew, ewmvr, 8)
-null
+
 SELECT split_part('www.baidu.com','.',1);
 split_part(www.baidu.com, ., 1)
 www
@@ -30,16 +30,16 @@ split_part(12345*&+789*&dhejwfew2, *&, 2)
 +789
 SELECT split_part('.+0___=+. ','.',1);
 split_part(.+0___=+. , ., 1)
-null
+
 SELECT split_part('..','.',1);
 split_part(.., ., 1)
-null
+
 SELECT split_part('  ewfere..  ',' ',4);
 split_part(  ewfere..  ,  , 4)
-null
+
 SELECT split_part('','327832',1);
 split_part(, 327832, 1)
-null
+
 SELECT split_part(NULL,'.',6);
 split_part(null, ., 6)
 null
@@ -99,29 +99,29 @@ null
 SELECT split_part(s1,delim,count1) FROM split_part_01;
 split_part(s1, delim, count1)
 com
-null
-null
+
+
 73290302
-null
-null
+
+
 null
 null
 null
 SELECT split_part(s1,delim,count1) FROM split_part_01 WHERE count1 >= 2;
 split_part(s1, delim, count1)
 com
-null
-null
+
+
 73290302
-null
-null
+
+
 null
 null
 SELECT split_part(s1,delim,count1 + 3) FROM split_part_01 WHERE count1 < 0;
 split_part(s1, delim, count1 + 3)
 SELECT split_part(s1,delim,count1) FROM split_part_01 WHERE count1 = 3242;
 split_part(s1, delim, count1)
-null
+
 SELECT * FROM split_part_01 WHERE split_part(s1,'.',2) = 'com';
 id    s1    delim    count1
 1    abc.com.cn    .    2
@@ -141,7 +141,7 @@ SELECT * FROM split_part_01 WHERE split_part(s1, '.', 1 + 6) = 'com.cn';
 id    s1    delim    count1
 SELECT split_part(split_part(s1,'.',22),'.',1) FROM split_part_01 WHERE id = 1;
 split_part(split_part(s1, ., 22), ., 1)
-null
+
 SELECT * FROM split_part_01 WHERE LENGTH(split_part(s1,'*.',2)) = 6;
 id    s1    delim    count1
 4    123abc&*.jjkmm&*.73290302    &*.    3
@@ -158,64 +158,64 @@ id    s1    delim    count1
 4    123abc&*.jjkmm&*.73290302    &*.    3
 SELECT startswith(split_part(s1,'*.',3),'123') FROM split_part_01;
 startswith(split_part(s1, *., 3), 123)
-null
-null
-null
+false
+false
+false
+false
+false
+false
 false
 null
-null
-null
-null
-null
+false
 SELECT endswith(split_part(s1,'+',2),'62') FROM split_part_01;
 endswith(split_part(s1, +, 2), 62)
-null
-null
-null
-null
-null
-null
-null
+false
+false
+false
+false
+false
+false
+false
 null
 true
 SELECT * FROM split_part_01 WHERE find_in_set(split_part(s1,delim,count1),NULL) = NULL;
 id    s1    delim    count1
 SELECT CONCAT_WS(split_part(s1,delim,count1),'hehaha32789','ABCNSLK') FROM split_part_01 WHERE id = 2;
 concat_ws(split_part(s1, delim, count1), hehaha32789, ABCNSLK)
-null
+hehaha32789ABCNSLK
 SELECT empty(split_part(s1,delim,count1)) FROM split_part_01;
 empty(split_part(s1, delim, count1))
 false
-null
-null
+true
+true
 false
-null
-null
+true
+true
 null
 null
 null
 SELECT substring(split_part(s1,delim,count1),1,5) FROM split_part_01;
 substring(split_part(s1, delim, count1), 1, 5)
 com
-null
-null
+
+
 73290
-null
-null
+
+
 null
 null
 null
 SELECT REVERSE(split_part(s1,delim,3)) FROM split_part_01;
 reverse(split_part(s1, delim, 3))
 nc
-null
+
 ,39012348,哈
 20309237
 wkec  io23
 //s3cd54c2309909
 null
 null
-null
+
 SELECT * FROM split_part_01 WHERE s1 = (SELECT s1 FROM split_part_01 WHERE split_part(LTRIM(s1),'.',2) = '327hjfew');
 id    s1    delim    count1
 5      78829,.327hjfew.;,32oi  cekw    ,    22
@@ -253,21 +253,21 @@ null
 null
 SELECT split_part(s1,delim,count1) FROM split_part_02;
 split_part(s1, delim, count1)
-null
+
 iHHDIUWH*&*(UIJCSi
 null
 null
 +=--=
 SELECT split_part(s1,delim,3),split_part(s1,delim,4) FROM split_part_02;
 split_part(s1, delim, 3)    split_part(s1, delim, 4)
-null    null
+
 iHHDIUWH*&*(UIJCSi    f
 null    null
 null    null
-null    &&n e89__+&&
+    &&n e89__+&&
 SELECT split_part(s1,delim,count1) FROM split_part_02 WHERE count2 IS NOT NULL;
 split_part(s1, delim, count1)
-null
+
 iHHDIUWH*&*(UIJCSi
 null
 +=--=
@@ -294,21 +294,21 @@ id    s1    delim    count1    count2
 5      dhewjvrew  er&&***&&n e89__+&&**+=--=*(&&***&(&^*)(      *    6    83092302
 SELECT startswith(split_part(s1,delim,3),'SUB') FROM split_part_02;
 startswith(split_part(s1, delim, 3), SUB)
-null
+false
 false
 null
 null
-null
+false
 SELECT endswith(split_part(s1,delim,6),'h)') FROM split_part_02;
 endswith(split_part(s1, delim, 6), h))
-null
+false
 false
 null
 null
 false
 SELECT find_in_set(split_part(s1,delim,count1),'SUBSTRING函数的功能:用于从字符串的指定位置开始截取指定长度的字符串substring语法:SUBSTRING(string, start, length),dvuewinviecfjds439432094ie3jiHHDIUWH*&*(UIJCSijfje3iu2j9032^&(*&()(*)I)A&^%^*&') FROM split_part_02;
 find_in_set(split_part(s1, delim, count1), SUBSTRING函数的功能:用于从字符串的指定位置开始截取指定长度的字符串substring语法:SUBSTRING(string, start, length),dvuewinviecfjds439432094ie3jiHHDIUWH*&*(UIJCSijfje3iu2j9032^&(*&()(*)I)A&^%^*&)
-null
+0
 0
 null
 null
@@ -318,11 +318,11 @@ concat_ws(split_part(s1, delim, count1), hehaha32789, ABCNSLK)
 hehaha32789iHHDIUWH*&*(UIJCSiABCNSLK
 SELECT REVERSE(split_part(s1,delim,3)) FROM split_part_02;
 reverse(split_part(s1, delim, 3))
-null
+
 iSCJIU(*&*HWUIDHHi
 null
 null
-null
+
 DROP TABLE IF EXISTS split_part_03;
 DROP TABLE IF EXISTS split_part_04;
 CREATE TABLE split_part_03(
@@ -347,6 +347,12 @@ INSERT INTO split_part_04 VALUES(4, 6, '  hciuwejw^&*(*^GGHJjqmmqjJHGG');
 SELECT split_part_03.id AS id_3,split_part_04.str1 AS str1_4 FROM split_part_03,split_part_04 WHERE split_part(split_part_03.str1, ')', 2) = split_part(split_part_04.str1, ')', 2);
 id_3    str1_4
 1    78213)jji)JIJSC_  )dhej   
+2      hciuwejw^&*((*&
+2      hciuwejw^&*(*^GGHJjqmmqjJHGG
+4      hciuwejw^&*((*&
+4      hciuwejw^&*(*^GGHJjqmmqjJHGG
+5      hciuwejw^&*((*&
+5      hciuwejw^&*(*^GGHJjqmmqjJHGG
 SELECT split_part_03.str1 AS tmp,split_part_04.str1 AS temp FROM split_part_03 left join split_part_04 ON split_part(split_part_03.str1, '2', 1) = split_part(split_part_04.str1, '2', 1);
 tmp    temp
 78213)jji)JIJSC_)dhej    78213)jji)JIJSC_  )dhej   

@@ -26,6 +26,7 @@ import (
 var (
 	// variance() supported input type and output type.
 	AggVarianceSupportedParameters = []types.T{
+		types.T_bit,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_float32, types.T_float64,
@@ -45,6 +46,8 @@ var (
 
 func NewAggVarPop(overloadID int64, dist bool, inputTypes []types.Type, outputType types.Type, _ any) (agg.Agg[any], error) {
 	switch inputTypes[0].Oid {
+	case types.T_bit:
+		return newGenericVarPop[uint64](overloadID, inputTypes[0], outputType, dist)
 	case types.T_uint8:
 		return newGenericVarPop[uint8](overloadID, inputTypes[0], outputType, dist)
 	case types.T_uint16:
@@ -300,7 +303,7 @@ func (s *VarianceDecimal) Merge(groupNumber1 int64, groupNumber2 int64, result1 
 	var err error
 	s2 := priv2.(*VarianceDecimal)
 	s.Counts[groupNumber1] += s2.Counts[groupNumber2]
-	s.Sum[groupNumber1], err = s.Sum[groupNumber1].Add128(s.Sum[groupNumber2])
+	s.Sum[groupNumber1], err = s.Sum[groupNumber1].Add128(s2.Sum[groupNumber2])
 	if err != nil {
 		return result1, false, err
 	}

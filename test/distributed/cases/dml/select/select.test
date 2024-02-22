@@ -256,3 +256,10 @@ create table t11 (a int, b int, primary key (a));
 insert into t11 (select *,* from generate_series(1, 50000, 1)g);
 select count(*) from t11 where a=20000;
 select count(*) from t11 where a in (1,20000);
+
+drop table if exists t1;
+create table t1(a int primary key, b int);
+insert into t1 values (1,1),(2,2),(3,3);
+-- @separator:table
+select mo_ctl('dn', 'flush', 'select.t1');
+select * from t1 where a in (3,3,3,2,1);

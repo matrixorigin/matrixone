@@ -23,7 +23,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"math"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -38,7 +37,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorize/format"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/instr"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"golang.org/x/exp/constraints"
 )
@@ -1598,7 +1596,13 @@ func fieldCheck(overloads []overload, inputs []types.Type) checkResult {
 	if len(inputs) < 2 {
 		return newCheckResultWithFailure(failedFunctionParametersWrong)
 	}
-	returnType := [...]types.T{types.T_varchar, types.T_char, types.T_int8, types.T_int16, types.T_int32, types.T_int64, types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64, types.T_float32, types.T_float64}
+	returnType := [...]types.T{
+		types.T_varchar, types.T_char,
+		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+		types.T_float32, types.T_float64,
+		types.T_bit,
+	}
 	for i, r := range returnType {
 		if tc(inputs, r) {
 			if i < 2 {
@@ -2111,7 +2115,7 @@ func getCount[T number](typ types.Type, val T) int64 {
 		} else {
 			r = int64(v)
 		}
-	case types.T_uint64:
+	case types.T_uint64, types.T_bit:
 		v := uint64(val)
 		if v > uint64(math.MaxInt64) {
 			r = math.MaxInt64
@@ -2160,68 +2164,6 @@ func StartsWith(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 
 func EndsWith(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
 	return opBinaryBytesBytesToFixed[bool](ivecs, result, proc, length, bytes.HasSuffix)
-}
-
-func PrefixEq(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-	lvec := parameters[0]
-	rval := parameters[1].GetBytesAt(0)
-	res := vector.MustFixedCol[bool](result.GetResultVector())
-
-	if !lvec.GetSorted() {
-		return StartsWith(parameters, result, proc, length)
-	}
-
-	lcol, larea := vector.MustVarlenaRawData(lvec)
-	lowerBound := sort.Search(len(lcol), func(i int) bool {
-		return index.PrefixCompare(lcol[i].GetByteSlice(larea), rval) >= 0
-	})
-
-	upperBound := lowerBound
-	for upperBound < len(lcol) && bytes.HasPrefix(lcol[upperBound].GetByteSlice(larea), rval) {
-		upperBound++
-	}
-
-	for i := 0; i < lowerBound; i++ {
-		res[i] = false
-	}
-	for i := lowerBound; i < upperBound; i++ {
-		res[i] = true
-	}
-	for i := upperBound; i < len(res); i++ {
-		res[i] = false
-	}
-
-	return nil
-}
-
-func PrefixIn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-	lvec := parameters[0]
-	rvec := parameters[1]
-	res := vector.MustFixedCol[bool](result.GetResultVector())
-
-	lcol, larea := vector.MustVarlenaRawData(lvec)
-	rval := rvec.GetBytesAt(0)
-	rpos := 0
-	rlen := rvec.Length()
-
-	for i := 0; i < length; i++ {
-		lval := lcol[i].GetByteSlice(larea)
-		for index.PrefixCompare(lval, rval) > 0 {
-			rpos++
-			if rpos == rlen {
-				for j := i; j < length; j++ {
-					res[j] = false
-				}
-				return nil
-			}
-
-			rval = rvec.GetBytesAt(rpos)
-		}
-
-		res[i] = bytes.HasPrefix(lval, rval)
-	}
-
-	return nil
 }
 
 // https://dev.mysql.com/doc/refman/8.0/en/encryption-functions.html#function_sha2
@@ -2957,28 +2899,22 @@ func SplitPart(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 				return
 			}
 
-			res, isNull := SplitSingle(string(v1), string(v2), v3)
-			if isNull {
-				if err = rs.AppendBytes(nil, true); err != nil {
-					return err
-				}
-			} else {
-				if err = rs.AppendBytes([]byte(res), false); err != nil {
-					return err
-				}
+			res := SplitSingle(string(v1), string(v2), v3)
+			if err = rs.AppendBytes([]byte(res), false); err != nil {
+				return err
 			}
 		}
 	}
 	return nil
 }
 
-func SplitSingle(str, sep string, cnt uint32) (string, bool) {
+func SplitSingle(str, sep string, cnt uint32) string {
 	expectedLen := int(cnt + 1)
 	strSlice := strings.SplitN(str, sep, expectedLen)
-	if len(strSlice) < int(cnt) || strSlice[cnt-1] == "" {
-		return "", true
+	if len(strSlice) < int(cnt) {
+		return ""
 	}
-	return strSlice[cnt-1], false
+	return strSlice[cnt-1]
 }
 
 func InnerProductArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {

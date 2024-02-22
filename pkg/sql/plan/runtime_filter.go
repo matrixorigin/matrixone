@@ -16,14 +16,14 @@ package plan
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
 const (
 	InFilterCardLimit    = 10000
 	BloomFilterCardLimit = 100 * InFilterCardLimit
-
-	MinProbeTableRows    = 8192 * 20 // Don't generate runtime filter for small tables
 	SelectivityThreshold = 0.5
 )
 
@@ -81,12 +81,7 @@ func (builder *QueryBuilder) pushdownRuntimeFilters(nodeID int32) {
 	leftChild := builder.qry.Nodes[node.Children[0]]
 
 	// TODO: build runtime filters deeper than 1 level
-	if leftChild.NodeType != plan.Node_TABLE_SCAN || leftChild.Stats.Cost < MinProbeTableRows {
-		return
-	}
-
-	statsCache := builder.compCtx.GetStatsCache()
-	if statsCache == nil {
+	if leftChild.NodeType != plan.Node_TABLE_SCAN || leftChild.Limit != nil {
 		return
 	}
 
@@ -121,6 +116,16 @@ func (builder *QueryBuilder) pushdownRuntimeFilters(nodeID int32) {
 
 	rfTag := builder.genNewTag()
 
+	type_tuple := types.New(types.T_tuple, 0, 0)
+	for i := range probeExprs {
+		args := []types.Type{makeTypeByPlan2Expr(probeExprs[i]), type_tuple}
+		_, err := function.GetFunctionByName(builder.GetContext(), "in", args)
+		if err != nil {
+			//don't support this type
+			return
+		}
+	}
+
 	if len(probeExprs) == 1 {
 		probeNdv := getExprNdv(probeExprs[0], builder)
 		if probeNdv == -1 || node.Stats.HashmapStats.HashmapSize/probeNdv >= 0.1 {
@@ -136,8 +141,7 @@ func (builder *QueryBuilder) pushdownRuntimeFilters(nodeID int32) {
 				}
 				if binding, ok := ctx.bindingByTag[col.Col.RelPos]; ok {
 					tableDef := builder.qry.Nodes[binding.nodeId].TableDef
-					colName := tableDef.Cols[col.Col.ColPos].Name
-					if GetSortOrder(tableDef, colName) != 0 {
+					if GetSortOrder(tableDef, col.Col.ColPos) != 0 {
 						return
 					}
 				}
@@ -169,7 +173,6 @@ func (builder *QueryBuilder) pushdownRuntimeFilters(nodeID int32) {
 	}
 
 	tableDef := leftChild.TableDef
-
 	if tableDef.Pkey == nil || len(tableDef.Pkey.Names) < len(probeExprs) {
 		return
 	}

@@ -19,15 +19,15 @@ import (
 	"encoding/json"
 	"strings"
 
-	"github.com/matrixorigin/matrixone/pkg/testutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 type MockCompilerContext struct {
@@ -47,7 +47,7 @@ func (m *MockCompilerContext) HasFKsReferToMe(dbName string) (bool, error) {
 	panic("implement me")
 }
 
-func (m *MockCompilerContext) UpdateFKConstraint(dbName, tblName string, fkData []*FkData) error {
+func (m *MockCompilerContext) ReplacePlan(execPlan *plan.Execute) (*plan.Plan, tree.Statement, error) {
 	//TODO implement me
 	panic("implement me")
 }
@@ -862,12 +862,8 @@ func (m *MockCompilerContext) GetPrimaryKeyDef(dbName string, tableName string) 
 	return defs
 }
 
-func (m *MockCompilerContext) Stats(obj *ObjectRef) bool {
-	return false
-}
-
-func (m *MockCompilerContext) GetStatsCache() *StatsCache {
-	return nil
+func (m *MockCompilerContext) Stats(obj *ObjectRef) (*pb.StatsInfo, error) {
+	return nil, nil
 }
 
 func (m *MockCompilerContext) GetAccountId() (uint32, error) {

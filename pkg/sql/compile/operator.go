@@ -307,6 +307,7 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 		t := sourceIns.Arg.(*top.Argument)
 		arg := top.NewArgument()
 		arg.Limit = t.Limit
+		arg.TopValueTag = t.TopValueTag
 		arg.Fs = t.Fs
 		res.Arg = arg
 	case vm.Intersect:
@@ -784,6 +785,9 @@ func constructTop(n *plan.Node, topN int64) *top.Argument {
 	arg := top.NewArgument()
 	arg.Fs = n.OrderBy
 	arg.Limit = topN
+	if len(n.SendMsgList) > 0 {
+		arg.TopValueTag = n.SendMsgList[0].MsgTag
+	}
 	return arg
 }
 
@@ -1379,7 +1383,7 @@ func constructShuffleJoinArg(ss []*Scope, node *plan.Node, left bool) *shuffle.A
 	switch types.T(typ) {
 	case types.T_int64, types.T_int32, types.T_int16:
 		arg.ShuffleRangeInt64 = plan2.ShuffleRangeReEvalSigned(node.Stats.HashmapStats.Ranges, int(arg.AliveRegCnt), node.Stats.HashmapStats.Nullcnt, int64(node.Stats.TableCnt))
-	case types.T_uint64, types.T_uint32, types.T_uint16, types.T_varchar, types.T_char, types.T_text:
+	case types.T_uint64, types.T_uint32, types.T_uint16, types.T_varchar, types.T_char, types.T_text, types.T_bit:
 		arg.ShuffleRangeUint64 = plan2.ShuffleRangeReEvalUnsigned(node.Stats.HashmapStats.Ranges, int(arg.AliveRegCnt), node.Stats.HashmapStats.Nullcnt, int64(node.Stats.TableCnt))
 	}
 	return arg
@@ -1396,7 +1400,7 @@ func constructShuffleGroupArg(ss []*Scope, node *plan.Node) *shuffle.Argument {
 	switch types.T(typ) {
 	case types.T_int64, types.T_int32, types.T_int16:
 		arg.ShuffleRangeInt64 = plan2.ShuffleRangeReEvalSigned(node.Stats.HashmapStats.Ranges, int(arg.AliveRegCnt), node.Stats.HashmapStats.Nullcnt, int64(node.Stats.TableCnt))
-	case types.T_uint64, types.T_uint32, types.T_uint16, types.T_varchar, types.T_char, types.T_text:
+	case types.T_uint64, types.T_uint32, types.T_uint16, types.T_varchar, types.T_char, types.T_text, types.T_bit:
 		arg.ShuffleRangeUint64 = plan2.ShuffleRangeReEvalUnsigned(node.Stats.HashmapStats.Ranges, int(arg.AliveRegCnt), node.Stats.HashmapStats.Nullcnt, int64(node.Stats.TableCnt))
 	}
 	return arg

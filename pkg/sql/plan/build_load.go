@@ -35,6 +35,12 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 	defer func() {
 		v2.TxnStatementBuildLoadHistogram.Observe(time.Since(start).Seconds())
 	}()
+	tblName := string(stmt.Table.ObjectName)
+	tblInfo, err := getDmlTableInfo(ctx, tree.TableExprs{stmt.Table}, nil, nil, "insert")
+	if err != nil {
+		return nil, err
+	}
+
 	stmt.Param.Local = stmt.Local
 	fileName, err := checkFileExist(stmt.Param, ctx)
 	if err != nil {
@@ -42,11 +48,6 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 	}
 
 	if err := InitNullMap(stmt.Param, ctx); err != nil {
-		return nil, err
-	}
-	tblName := string(stmt.Table.ObjectName)
-	tblInfo, err := getDmlTableInfo(ctx, tree.TableExprs{stmt.Table}, nil, nil, "insert")
-	if err != nil {
 		return nil, err
 	}
 	tableDef := tblInfo.tableDefs[0]
@@ -152,7 +153,7 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 	// append hidden column to tableDef
 	newTableDef := DeepCopyTableDef(tableDef, true)
 	checkInsertPkDup := false
-	err = buildInsertPlans(ctx, builder, bindCtx, objRef, newTableDef, lastNodeId, checkInsertPkDup, nil, nil, isInsertWithoutAutoPkCol)
+	err = buildInsertPlans(ctx, builder, bindCtx, nil, objRef, newTableDef, lastNodeId, checkInsertPkDup, isInsertWithoutAutoPkCol)
 	if err != nil {
 		return nil, err
 	}

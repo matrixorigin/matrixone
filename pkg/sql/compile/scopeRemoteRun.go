@@ -37,7 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/queryservice"
+	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/anti"
@@ -111,7 +111,7 @@ func CnServerMessageHandler(
 	storeEngine engine.Engine,
 	fileService fileservice.FileService,
 	lockService lockservice.LockService,
-	queryService queryservice.QueryService,
+	queryClient qclient.QueryClient,
 	hakeeper logservice.CNHAKeeperClient,
 	udfService udf.Service,
 	cli client.TxnClient,
@@ -133,7 +133,7 @@ func CnServerMessageHandler(
 	}
 
 	receiver := newMessageReceiverOnServer(ctx, cnAddr, msg,
-		cs, messageAcquirer, storeEngine, fileService, lockService, queryService, hakeeper, udfService, cli, aicm)
+		cs, messageAcquirer, storeEngine, fileService, lockService, queryClient, hakeeper, udfService, cli, aicm)
 
 	// rebuild pipeline to run and send the query result back.
 	err = cnMessageHandle(&receiver)
@@ -508,7 +508,7 @@ func generatePipeline(s *Scope, ctx *scopeContext, ctxId int32) (*pipeline.Pipel
 			ColList:                s.DataSource.Attributes,
 			PushdownId:             s.DataSource.PushdownId,
 			PushdownAddr:           s.DataSource.PushdownAddr,
-			Expr:                   s.DataSource.Expr,
+			Expr:                   s.DataSource.FilterExpr,
 			TableDef:               s.DataSource.TableDef,
 			Timestamp:              &s.DataSource.Timestamp,
 			RuntimeFilterProbeList: s.DataSource.RuntimeFilterSpecs,
@@ -623,7 +623,7 @@ func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContex
 			Attributes:         dsc.ColList,
 			PushdownId:         dsc.PushdownId,
 			PushdownAddr:       dsc.PushdownAddr,
-			Expr:               dsc.Expr,
+			FilterExpr:         dsc.Expr,
 			TableDef:           dsc.TableDef,
 			Timestamp:          *dsc.Timestamp,
 			RuntimeFilterSpecs: dsc.RuntimeFilterProbeList,
@@ -1798,6 +1798,10 @@ func EncodeMergeGroup(merge *mergegroup.Argument, pipe *pipeline.Group) {
 			result := merge.PartialResults[i].(bool)
 			bytes := unsafe.Slice((*byte)(unsafe.Pointer(&result)), merge.PartialResultTypes[i].FixedLength())
 			pipe.PartialResults = append(pipe.PartialResults, bytes...)
+		case types.T_bit:
+			result := merge.PartialResults[i].(uint64)
+			bytes := unsafe.Slice((*byte)(unsafe.Pointer(&result)), merge.PartialResultTypes[i].FixedLength())
+			pipe.PartialResults = append(pipe.PartialResults, bytes...)
 		case types.T_int8:
 			result := merge.PartialResults[i].(int8)
 			bytes := unsafe.Slice((*byte)(unsafe.Pointer(&result)), merge.PartialResultTypes[i].FixedLength())
@@ -1897,6 +1901,10 @@ func DecodeMergeGroup(merge *mergegroup.Argument, pipe *pipeline.Group) {
 		switch merge.PartialResultTypes[i] {
 		case types.T_bool:
 			result := *(*bool)(unsafe.Pointer(&pipe.PartialResults[0]))
+			merge.PartialResults = append(merge.PartialResults, result)
+			pipe.PartialResults = pipe.PartialResults[merge.PartialResultTypes[i].FixedLength():]
+		case types.T_bit:
+			result := *(*uint64)(unsafe.Pointer(&pipe.PartialResults[0]))
 			merge.PartialResults = append(merge.PartialResults, result)
 			pipe.PartialResults = pipe.PartialResults[merge.PartialResultTypes[i].FixedLength():]
 		case types.T_int8:

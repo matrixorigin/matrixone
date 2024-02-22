@@ -114,8 +114,8 @@ func newTestCase() mergeTestCase {
 		arg:    new(Argument),
 		cancel: cancel,
 	}
-	cases.arg.info =
-		&vm.OperatorInfo{
+	cases.arg.OperatorBase.OperatorInfo =
+		vm.OperatorInfo{
 			Idx:     0,
 			IsFirst: false,
 			IsLast:  false,

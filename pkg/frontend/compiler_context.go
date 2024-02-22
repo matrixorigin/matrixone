@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"sort"
 	"strconv"
 	"strings"
@@ -31,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
@@ -50,7 +52,9 @@ type TxnCompilerContext struct {
 	buildAlterView       bool
 	dbOfView, nameOfView string
 	sub                  *plan.SubscriptionMeta
-	mu                   sync.Mutex
+	//for support explain analyze
+	tcw *TxnComputationWrapper
+	mu  sync.Mutex
 }
 
 var _ plan2.CompilerContext = &TxnCompilerContext{}
@@ -103,78 +107,8 @@ func (tcc *TxnCompilerContext) hasChildTables(ctx context.Context, fkRelation en
 	return false, nil
 }
 
-func (tcc *TxnCompilerContext) UpdateFKConstraint(dbName, tblName string,
-	fkDatas []*plan2.FkData) error {
-	txnCtx, relation, err := tcc.getRelation(dbName, tblName, nil)
-	if err != nil {
-		return err
-	}
-	tblId := relation.GetTableID(txnCtx)
-
-	newTableDef, err := relation.TableDefs(txnCtx)
-	if err != nil {
-		return err
-	}
-
-	var colNameToId = make(map[string]uint64)
-	var oldCt *engine.ConstraintDef
-	for _, def := range newTableDef {
-		if attr, ok := def.(*engine.AttributeDef); ok {
-			colNameToId[attr.Attr.Name] = attr.Attr.ID
-		}
-		if ct, ok := def.(*engine.ConstraintDef); ok {
-			oldCt = ct
-		}
-	}
-	newFkeys := make([]*plan.ForeignKeyDef, len(fkDatas))
-	for i, fkData := range fkDatas {
-		fkey := fkData.Def
-		newDef := &plan.ForeignKeyDef{
-			Name:        fkey.Name,
-			Cols:        make([]uint64, len(fkey.Cols)),
-			ForeignTbl:  fkey.ForeignTbl,
-			ForeignCols: make([]uint64, len(fkey.ForeignCols)),
-			OnDelete:    fkey.OnDelete,
-			OnUpdate:    fkey.OnUpdate,
-		}
-		copy(newDef.ForeignCols, fkey.ForeignCols)
-		for idx, colName := range fkData.Cols.Cols {
-			newDef.Cols[idx] = colNameToId[colName]
-		}
-		newFkeys[i] = newDef
-	}
-	// remove old fk settings
-	newCt, err := compile.MakeNewCreateConstraint(oldCt, &engine.ForeignKeyDef{
-		Fkeys: newFkeys,
-	})
-	if err != nil {
-		return err
-	}
-	err = relation.UpdateConstraint(txnCtx, newCt)
-	if err != nil {
-		return err
-	}
-
-	// need to append TableId to parent's TableDef.RefChildTbls
-	for _, fkData := range fkDatas {
-		fkDbName := fkData.ParentDbName
-		fkTableName := fkData.ParentTableName
-		txnCtx2, fkRelation, err := tcc.getRelation(fkDbName, fkTableName, nil)
-		if err != nil {
-			return err
-		}
-		err = compile.AddChildTblIdToParentTable(txnCtx2, fkRelation, tblId)
-		if err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (tcc *TxnCompilerContext) GetStatsCache() *plan2.StatsCache {
-	tcc.mu.Lock()
-	defer tcc.mu.Unlock()
-	return tcc.ses.statsCache
+func (tcc *TxnCompilerContext) ReplacePlan(execPlan *plan.Execute) (*plan.Plan, tree.Statement, error) {
+	return replacePlan(tcc.ses.GetRequestContext(), tcc.ses, tcc.tcw, execPlan)
 }
 
 func InitTxnCompilerContext(txn *TxnHandler, db string) *TxnCompilerContext {
@@ -724,7 +658,7 @@ func (tcc *TxnCompilerContext) GetPrimaryKeyDef(dbName string, tableName string)
 	return priDefs
 }
 
-func (tcc *TxnCompilerContext) Stats(obj *plan2.ObjectRef) bool {
+func (tcc *TxnCompilerContext) Stats(obj *plan2.ObjectRef) (*pb.StatsInfo, error) {
 	start := time.Now()
 	defer func() {
 		v2.TxnStatementStatsDurationHistogram.Observe(time.Since(start).Seconds())
@@ -737,7 +671,7 @@ func (tcc *TxnCompilerContext) Stats(obj *plan2.ObjectRef) bool {
 	}
 	dbName, sub, err := tcc.ensureDatabaseIsNotEmpty(dbName, checkSub)
 	if err != nil {
-		return false
+		return nil, err
 	}
 	if !checkSub {
 		sub = &plan.SubscriptionMeta{
@@ -748,39 +682,9 @@ func (tcc *TxnCompilerContext) Stats(obj *plan2.ObjectRef) bool {
 	tableName := obj.GetObjName()
 	ctx, table, err := tcc.getRelation(dbName, tableName, sub)
 	if err != nil {
-		return false
+		return nil, err
 	}
-
-	var partitionInfo *plan2.PartitionByDef
-	engineDefs, err := table.TableDefs(ctx)
-	if err != nil {
-		return false
-	}
-	for _, def := range engineDefs {
-		if partitionDef, ok := def.(*engine.PartitionDef); ok {
-			if partitionDef.Partitioned > 0 {
-				p := &plan2.PartitionByDef{}
-				err = p.UnMarshalPartitionInfo(([]byte)(partitionDef.Partition))
-				if err != nil {
-					return false
-				}
-				partitionInfo = p
-			}
-		}
-	}
-	var ptables []any
-	if partitionInfo != nil {
-		ptables = make([]any, len(partitionInfo.PartitionTableNames))
-		for i, PartitionTableName := range partitionInfo.PartitionTableNames {
-			_, ptable, _ := tcc.getRelation(dbName, PartitionTableName, nil)
-			ptables[i] = ptable
-		}
-	}
-	s := tcc.GetStatsCache().GetStatsInfoMap(table.GetTableID(ctx), true)
-	if s == nil {
-		return false
-	}
-	return table.Stats(ctx, ptables, s)
+	return table.Stats(ctx, true), nil
 }
 
 func (tcc *TxnCompilerContext) GetProcess() *process.Process {
@@ -855,6 +759,7 @@ func (tcc *TxnCompilerContext) SetQueryingSubscription(meta *plan.SubscriptionMe
 	defer tcc.mu.Unlock()
 	tcc.sub = meta
 }
+
 func (tcc *TxnCompilerContext) GetQueryingSubscription() *plan.SubscriptionMeta {
 	tcc.mu.Lock()
 	defer tcc.mu.Unlock()

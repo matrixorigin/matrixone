@@ -61,6 +61,8 @@ func GetFunctionTypeStrFromAst(typRef tree.ResolvableTypeReference) (string, err
 func getTypeFromAst(ctx context.Context, typ tree.ResolvableTypeReference) (*plan.Type, error) {
 	if n, ok := typ.(*tree.T); ok {
 		switch defines.MysqlType(n.InternalType.Oid) {
+		case defines.MYSQL_TYPE_BIT:
+			return &plan.Type{Id: int32(types.T_bit), Width: n.InternalType.DisplayWith, Scale: -1}, nil
 		case defines.MYSQL_TYPE_TINY:
 			if n.InternalType.Unsigned {
 				return &plan.Type{Id: int32(types.T_uint8), Width: n.InternalType.Width, Scale: -1}, nil

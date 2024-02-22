@@ -49,15 +49,24 @@ func getVal(val any) string {
 
 func HexToInt(hex string) (uint64, error) {
 	s := hex[2:]
-	if len(s)%2 != 0 {
-		s = string('0') + s
-	}
 	return strconv.ParseUint(s, 16, 64)
 }
 
 func BinaryToInt(b string) (uint64, error) {
 	s := b[2:]
 	return strconv.ParseUint(s, 2, 64)
+}
+
+func ScoreBinaryToInt(s string) (uint64, error) {
+	if len(s) > 8 {
+		return 0, moerr.NewInvalidInputNoCtx("s is too long, len(s) =  %v", len(s))
+	}
+
+	v := uint64(0)
+	for i := 0; i < len(s); i++ {
+		v = v<<8 | uint64(s[i])
+	}
+	return v, nil
 }
 
 func DecodeBinaryString(s string) ([]byte, error) {
@@ -116,6 +125,13 @@ func SetBytesToAnyVector(ctx context.Context, val string, row int,
 		v, err := types.ParseBool(val)
 		if err != nil {
 			return err
+		}
+		return vector.SetFixedAt(vec, row, v)
+	case types.T_bit:
+		width := int(vec.GetType().Width)
+		v, err := strconv.ParseUint(val, 0, width)
+		if err != nil {
+			return moerr.NewOutOfRange(ctx, fmt.Sprintf("bit(%d)", width), "value '%v'", val)
 		}
 		return vector.SetFixedAt(vec, row, v)
 	case types.T_int8:
@@ -245,6 +261,8 @@ func SetInsertValue(proc *process.Process, numVal *tree.NumVal, vec *vector.Vect
 	switch vec.GetType().Oid {
 	case types.T_bool:
 		return setInsertValueBool(proc, numVal, vec)
+	case types.T_bit:
+		return setInsertValueBit(proc, numVal, vec)
 	case types.T_int8:
 		return setInsertValueNumber[int8](proc, numVal, vec)
 	case types.T_int16:
@@ -823,9 +841,6 @@ func setInsertValueNumber[T constraints.Integer | constraints.Float](proc *proce
 		}
 		err = vector.AppendFixed(vec, T(val), false, proc.Mp())
 
-	case tree.P_decimal:
-		canInsert = false
-
 	case tree.P_float64:
 		val, ok := constant.Float64Val(numVal.Value)
 		if canInsert = ok; canInsert {
@@ -846,6 +861,7 @@ func setInsertValueNumber[T constraints.Integer | constraints.Float](proc *proce
 				return false, err
 			}
 		}
+
 	case tree.P_hexnum:
 		var val uint64
 		if val, err = HexToInt(numVal.OrigString()); err != nil {
@@ -1015,4 +1031,112 @@ func floatNumToFixFloat[T constraints.Float | constraints.Integer](
 		}
 	}
 	return T(v), nil
+}
+
+func setInsertValueBit(proc *process.Process, numVal *tree.NumVal, vec *vector.Vector) (canInsert bool, err error) {
+	var ok bool
+	canInsert = true
+	width := vec.GetType().Width
+
+	switch numVal.ValType {
+	case tree.P_null:
+		err = vector.AppendBytes(vec, nil, true, proc.Mp())
+
+	case tree.P_bool:
+		var val uint64
+		if constant.BoolVal(numVal.Value) {
+			val = 1
+		}
+		err = vector.AppendFixed(vec, val, false, proc.Mp())
+
+	case tree.P_char:
+		s := numVal.OrigString()
+		if len(s) > 8 {
+			err = moerr.NewInvalidInput(proc.Ctx, "data too long")
+			return
+		}
+
+		var val uint64
+		for i := 0; i < len(s); i++ {
+			val = (val << 8) | uint64(s[i])
+		}
+		if val > uint64(1<<width-1) {
+			err = moerr.NewInvalidInput(proc.Ctx, "data too long, type width = %d, val = %b", width, val)
+			return
+		}
+		err = vector.AppendFixed(vec, val, false, proc.Mp())
+
+	case tree.P_float64:
+		var val float64
+		if val, ok = constant.Float64Val(numVal.Value); !ok {
+			err = moerr.NewInvalidInput(proc.Ctx, "invalid float value '%s'", numVal.Value.String())
+			return
+		} else if val < 0 {
+			err = moerr.NewInvalidInput(proc.Ctx, "unsupported negative value %v", val)
+			return
+		} else if uint64(math.Round(val)) > uint64(1<<width-1) {
+			err = moerr.NewInvalidInput(proc.Ctx, "data too long, type width = %d, val = %b", width, val)
+			return
+		}
+		err = vector.AppendFixed(vec, uint64(math.Round(val)), false, proc.Mp())
+
+	case tree.P_int64:
+		var val int64
+		if val, ok = constant.Int64Val(numVal.Value); !ok {
+			err = moerr.NewInvalidInput(proc.Ctx, "invalid int value '%s'", numVal.Value.String())
+			return
+		} else if val < 0 {
+			err = moerr.NewInvalidInput(proc.Ctx, "unsupported negative value %d", val)
+			return
+		} else if uint64(val) > uint64(1<<width-1) {
+			err = moerr.NewInvalidInput(proc.Ctx, "data too long, type width = %d, val = %b", width, val)
+			return
+		}
+		err = vector.AppendFixed(vec, uint64(val), false, proc.Mp())
+
+	case tree.P_uint64:
+		var val uint64
+		if val, ok = constant.Uint64Val(numVal.Value); !ok {
+			err = moerr.NewInvalidInput(proc.Ctx, "invalid int value '%s'", numVal.Value.String())
+			return
+		} else if val > uint64(1<<width-1) {
+			err = moerr.NewInvalidInput(proc.Ctx, "data too long, type width = %d, val = %b", width, val)
+			return
+		}
+		err = vector.AppendFixed(vec, val, false, proc.Mp())
+
+	case tree.P_hexnum:
+		var val uint64
+		if val, err = HexToInt(numVal.OrigString()); err != nil {
+			return
+		} else if val > uint64(1<<width-1) {
+			err = moerr.NewInvalidInput(proc.Ctx, "data too long, type width = %d, val = %b", width, val)
+			return
+		}
+		err = vector.AppendFixed(vec, val, false, proc.Mp())
+
+	case tree.P_bit:
+		var val uint64
+		if val, err = BinaryToInt(numVal.OrigString()); err != nil {
+			return
+		} else if val > uint64(1<<width-1) {
+			err = moerr.NewInvalidInput(proc.Ctx, "data too long, type width = %d, val = %b", width, val)
+			return
+		}
+		err = vector.AppendFixed(vec, val, false, proc.Mp())
+
+	case tree.P_ScoreBinary:
+		var val uint64
+		if val, err = ScoreBinaryToInt(numVal.OrigString()); err != nil {
+			return
+		} else if val > uint64(1<<width-1) {
+			err = moerr.NewInvalidInput(proc.Ctx, "data too long, type width = %d, val = %b", width, val)
+			return
+		}
+		err = vector.AppendFixed(vec, val, false, proc.Mp())
+
+	default:
+		canInsert = false
+	}
+	return
 }

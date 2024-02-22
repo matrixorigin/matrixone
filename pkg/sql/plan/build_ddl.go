@@ -940,6 +940,14 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 					return moerr.NewInvalidInput(ctx.GetContext(), "vector width (%d) is too long", colType.GetWidth())
 				}
 			}
+			if colType.Id == int32(types.T_bit) {
+				if colType.Width == 0 {
+					colType.Width = 1
+				}
+				if colType.Width > types.MaxBitLen {
+					return moerr.NewInvalidInput(ctx.GetContext(), "bit width (%d) is too long (max = %d) ", colType.GetWidth(), types.MaxBitLen)
+				}
+			}
 			var pks []string
 			var comment string
 			var auto_incr bool
@@ -1511,6 +1519,8 @@ func buildSecondaryIndexDef(createTable *plan.CreateTable, indexInfos []*tree.In
 			indexDef, tableDef, err = buildRegularSecondaryIndexDef(ctx, indexInfo, colMap, pkeyName)
 		case tree.INDEX_TYPE_IVFFLAT:
 			indexDef, tableDef, err = buildIvfFlatSecondaryIndexDef(ctx, indexInfo, colMap, pkeyName)
+		case tree.INDEX_TYPE_MASTER:
+			indexDef, tableDef, err = buildMasterSecondaryIndexDef(ctx, indexInfo, colMap, pkeyName)
 		default:
 			return moerr.NewInvalidInputNoCtx("unsupported index type: %s", indexInfo.KeyType.ToString())
 		}
@@ -1523,6 +1533,100 @@ func buildSecondaryIndexDef(createTable *plan.CreateTable, indexInfos []*tree.In
 
 	}
 	return nil
+}
+
+func buildMasterSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, colMap map[string]*ColDef, pkeyName string) ([]*plan.IndexDef, []*TableDef, error) {
+	// 1. indexDef init
+	indexDef := &plan.IndexDef{}
+	indexDef.Unique = false
+
+	// 2. tableDef init
+	indexTableName, err := util.BuildIndexTableName(ctx.GetContext(), false)
+	if err != nil {
+		return nil, nil, err
+	}
+	tableDef := &TableDef{
+		Name: indexTableName,
+	}
+
+	nameCount := make(map[string]int)
+	indexParts := make([]string, 0)
+
+	for _, keyPart := range indexInfo.KeyParts {
+		name := keyPart.ColName.Parts[0]
+		if _, ok := colMap[name]; !ok {
+			return nil, nil, moerr.NewInvalidInput(ctx.GetContext(), "column '%s' is not exist", name)
+		}
+		if colMap[name].Typ.Id != int32(types.T_varchar) {
+			return nil, nil, moerr.NewNotSupported(ctx.GetContext(), fmt.Sprintf("column '%s' is not varchar type.", name))
+		}
+		indexParts = append(indexParts, name)
+	}
+
+	var keyName = catalog.MasterIndexTableIndexColName
+	colDef := &ColDef{
+		Name: keyName,
+		Alg:  plan.CompressType_Lz4,
+		Typ: &Type{
+			Id:    int32(types.T_varchar),
+			Width: types.MaxVarcharLen,
+		},
+		Default: &plan.Default{
+			NullAbility:  false,
+			Expr:         nil,
+			OriginString: "",
+		},
+	}
+	tableDef.Cols = append(tableDef.Cols, colDef)
+	tableDef.Pkey = &PrimaryKeyDef{
+		Names:       []string{keyName},
+		PkeyColName: keyName,
+	}
+	if pkeyName != "" {
+		colDef := &ColDef{
+			Name: catalog.MasterIndexTablePrimaryColName,
+			Alg:  plan.CompressType_Lz4,
+			Typ:  colMap[pkeyName].Typ,
+			Default: &plan.Default{
+				NullAbility:  false,
+				Expr:         nil,
+				OriginString: "",
+			},
+		}
+		tableDef.Cols = append(tableDef.Cols, colDef)
+	}
+	if indexInfo.Name == "" {
+		firstPart := indexInfo.KeyParts[0].ColName.Parts[0]
+		nameCount[firstPart]++
+		count := nameCount[firstPart]
+		indexName := firstPart
+		if count > 1 {
+			indexName = firstPart + "_" + strconv.Itoa(count)
+		}
+		indexDef.IndexName = indexName
+	} else {
+		indexDef.IndexName = indexInfo.Name
+	}
+
+	indexDef.IndexTableName = indexTableName
+	indexDef.Parts = indexParts
+	indexDef.TableExist = true
+	indexDef.IndexAlgo = indexInfo.KeyType.ToString()
+	indexDef.IndexAlgoTableType = ""
+
+	if indexInfo.IndexOption != nil {
+		indexDef.Comment = indexInfo.IndexOption.Comment
+
+		params, err := catalog.IndexParamsToJsonString(indexInfo)
+		if err != nil {
+			return nil, nil, err
+		}
+		indexDef.IndexAlgoParams = params
+	} else {
+		indexDef.Comment = ""
+		indexDef.IndexAlgoParams = ""
+	}
+	return []*plan.IndexDef{indexDef}, []*TableDef{tableDef}, nil
 }
 
 func buildRegularSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, colMap map[string]*ColDef, pkeyName string) ([]*plan.IndexDef, []*TableDef, error) {
@@ -1921,6 +2025,9 @@ func CreateIndexDef(indexInfo *tree.Index,
 		case catalog.MoIndexDefaultAlgo, catalog.MoIndexBTreeAlgo:
 			indexDef.Comment = ""
 			indexDef.IndexAlgoParams = ""
+		case catalog.MOIndexMasterAlgo:
+			indexDef.Comment = ""
+			indexDef.IndexAlgoParams = ""
 		case catalog.MoIndexIvfFlatAlgo:
 			var err error
 			indexDef.IndexAlgoParams, err = catalog.IndexParamsMapToJsonString(catalog.DefaultIvfIndexAlgoOptions())
@@ -2012,6 +2119,8 @@ func buildTruncateTable(stmt *tree.TruncateTable, ctx CompilerContext) (*Plan, e
 						// Ideally, after truncate the user is expected to run re-index.
 						truncateTable.IndexTableNames = append(truncateTable.IndexTableNames, indexdef.IndexTableName)
 					}
+				} else if indexdef.TableExist && catalog.IsMasterIndexAlgo(indexdef.IndexAlgo) {
+					truncateTable.IndexTableNames = append(truncateTable.IndexTableNames, indexdef.IndexTableName)
 				}
 			}
 		}

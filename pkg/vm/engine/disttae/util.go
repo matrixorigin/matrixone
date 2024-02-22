@@ -521,6 +521,8 @@ func getNonCompositePKSearchFuncByExpr(
 		vec.UnmarshalBinary(exprImpl.Vec.Data)
 
 		switch vec.GetType().Oid {
+		case types.T_bit:
+			searchPKFunc = vector.OrderedBinarySearchOffsetByValFactory(vector.MustFixedCol[uint64](vec))
 		case types.T_int8:
 			searchPKFunc = vector.OrderedBinarySearchOffsetByValFactory(vector.MustFixedCol[int8](vec))
 		case types.T_int16:
@@ -1247,7 +1249,7 @@ func UnfoldBlkInfoFromObjStats(stats *objectio.ObjectStats) (blks []objectio.Blo
 func ForeachBlkInObjStatsList(
 	next bool,
 	dataMeta objectio.ObjectDataMeta,
-	onBlock func(blk *objectio.BlockInfo, blkMeta objectio.BlockObject) bool,
+	onBlock func(blk objectio.BlockInfo, blkMeta objectio.BlockObject) bool,
 	objects ...objectio.ObjectStats,
 ) {
 	stop := false
@@ -1307,7 +1309,7 @@ func (i *StatsBlkIter) Next() bool {
 	return i.cur < int(i.blkCnt)
 }
 
-func (i *StatsBlkIter) Entry() *objectio.BlockInfo {
+func (i *StatsBlkIter) Entry() objectio.BlockInfo {
 	if i.cur == -1 {
 		i.cur = 0
 	}
@@ -1322,7 +1324,7 @@ func (i *StatsBlkIter) Entry() *objectio.BlockInfo {
 	}
 
 	loc := objectio.BuildLocation(i.name, i.extent, i.curBlkRows, uint16(i.cur))
-	blk := &objectio.BlockInfo{
+	blk := objectio.BlockInfo{
 		BlockID:   *objectio.BuildObjectBlockid(i.name, uint16(i.cur)),
 		SegmentID: i.name.SegmentId(),
 		MetaLoc:   objectio.ObjectLocation(loc),

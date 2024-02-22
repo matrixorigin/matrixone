@@ -91,7 +91,8 @@ func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *pla
 			}
 			defer vec.Free(proc.Mp())
 
-			vec.InplaceSort()
+			vec.InplaceSortAndCompact()
+
 			data, err := vec.MarshalBinary()
 			if err != nil {
 				return expr
@@ -227,6 +228,12 @@ func GetConstantValue(vec *vector.Vector, transAll bool, row uint64) *plan.Liter
 		return &plan.Literal{
 			Value: &plan.Literal_Bval{
 				Bval: vector.MustFixedCol[bool](vec)[row],
+			},
+		}
+	case types.T_bit:
+		return &plan.Literal{
+			Value: &plan.Literal_U64Val{
+				U64Val: vector.MustFixedCol[uint64](vec)[row],
 			},
 		}
 	case types.T_int8:

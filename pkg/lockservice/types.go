@@ -44,6 +44,9 @@ var (
 	ErrLockConflict = moerr.NewLockConflictNoCtx()
 )
 
+// Option lockservice option
+type Option func(s *service)
+
 // LockStorage the store that holds the locks, a storage instance is corresponding to
 // all the locks of a table. The LockStorage no need to be thread-safe.
 //

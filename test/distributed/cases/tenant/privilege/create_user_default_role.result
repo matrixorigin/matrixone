@@ -20,11 +20,13 @@ internal error: do not have privilege to execute the statement
 grant connect on account * to r1;
 use mo_catalog;
 show tables;
-tables_in_mo_catalog
+Tables_in_mo_catalog
 mo_indexes
+mo_database
+mo_tables
+mo_columns
 mo_table_partitions
 mo_user
-mo_account
 mo_role
 mo_user_grant
 mo_role_grant
@@ -34,15 +36,16 @@ mo_mysql_compatibility_mode
 mo_pubs
 mo_stored_procedure
 mo_stages
-mo_tables
-mo_columns
-mo_database
 mo_sessions
 mo_configurations
 mo_locks
 mo_variables
 mo_transactions
 mo_cache
+mo_version
+mo_upgrade
+mo_upgrade_tenant
+mo_account
 create database t;
 internal error: do not have privilege to execute the statement
 grant create database on account * to r1;

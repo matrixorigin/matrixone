@@ -115,6 +115,7 @@ func NewCompile(
 	c.uid = uid
 	c.sql = sql
 	c.proc = proc
+	c.proc.MessageBoard = c.MessageBoard
 	c.stmt = stmt
 	c.addr = addr
 	c.isInternal = isInternal
@@ -145,6 +146,8 @@ func (c *Compile) reset() {
 	for i := range c.createdFuzzy {
 		c.createdFuzzy[i].release()
 	}
+
+	c.MessageBoard.Messages = c.MessageBoard.Messages[:0]
 	c.createdFuzzy = c.createdFuzzy[:0]
 	c.scope = c.scope[:0]
 	c.proc.CleanValueScanBatchs()
@@ -814,10 +817,10 @@ func (c *Compile) getCNList() (engine.Nodes, error) {
 	}
 
 	// We should always make sure the current CN is contained in the cn list.
-	if c.proc == nil || c.proc.QueryService == nil {
+	if c.proc == nil || c.proc.QueryClient == nil {
 		return cnList, nil
 	}
-	cnID := c.proc.QueryService.ServiceID()
+	cnID := c.proc.QueryClient.ServiceID()
 	for _, node := range cnList {
 		if node.Id == cnID {
 			return cnList, nil
@@ -1105,9 +1108,13 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		if err != nil {
 			return nil, err
 		}
-
-		// RelationName
-		ss = c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, ss)))
+		ss = c.compileProjection(n, c.compileRestrict(n, ss))
+		if n.Offset != nil {
+			ss = c.compileOffset(n, ss)
+		}
+		if n.Limit != nil {
+			ss = c.compileLimit(n, ss)
+		}
 		return ss, nil
 	case plan.Node_SOURCE_SCAN:
 		ss, err = c.compileSourceScan(ctx, n)
@@ -2035,23 +2042,19 @@ func (c *Compile) compileTableScan(n *plan.Node) ([]*Scope, error) {
 	}
 	ss := make([]*Scope, 0, len(nodes))
 
-	filterExpr := colexec.RewriteFilterExprList(n.FilterList)
-	if filterExpr != nil {
-		filterExpr, err = plan2.ConstantFold(batch.EmptyForConstFoldBatch, plan2.DeepCopyExpr(filterExpr), c.proc, true)
+	for i := range nodes {
+		s, err := c.compileTableScanWithNode(n, nodes[i])
 		if err != nil {
 			return nil, err
 		}
-	}
-
-	for i := range nodes {
-		ss = append(ss, c.compileTableScanWithNode(n, nodes[i], filterExpr))
+		ss = append(ss, s)
 	}
 	ss[0].PartialResults = partialResults
 	ss[0].PartialResultTypes = partialResultTypes
 	return ss, nil
 }
 
-func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node, filterExpr *plan.Expr) *Scope {
+func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node) (*Scope, error) {
 	var err error
 	var s *Scope
 	var tblDef *plan.TableDef
@@ -2105,6 +2108,14 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node, filte
 		}
 	}
 
+	filterExpr := colexec.RewriteFilterExprList(n.FilterList)
+	if filterExpr != nil {
+		filterExpr, err = plan2.ConstantFold(batch.EmptyForConstFoldBatch, plan2.DeepCopyExpr(filterExpr), c.proc, true)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	s = newScope(Remote)
 	s.NodeInfo = node
 	s.DataSource = &Source{
@@ -2115,16 +2126,18 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node, filte
 		PartitionRelationNames: partitionRelNames,
 		SchemaName:             n.ObjRef.SchemaName,
 		AccountId:              n.ObjRef.GetPubInfo(),
-		Expr:                   plan2.DeepCopyExpr(filterExpr),
+		FilterExpr:             plan2.DeepCopyExpr(filterExpr),
+		node:                   n,
 		RuntimeFilterSpecs:     n.RuntimeFilterProbeList,
+		OrderBy:                n.OrderBy,
 	}
 	s.Proc = process.NewWithAnalyze(c.proc, c.ctx, 0, c.anal.Nodes())
 
-	return s
+	return s, nil
 }
 
 func (c *Compile) compileRestrict(n *plan.Node, ss []*Scope) []*Scope {
-	if len(n.FilterList) == 0 {
+	if len(n.FilterList) == 0 && len(n.RuntimeFilterProbeList) == 0 {
 		return ss
 	}
 	currentFirstFlag := c.anal.isFirst
@@ -3030,7 +3043,7 @@ func (c *Compile) newDeleteMergeScope(arg *deletion.Argument, ss []*Scope) *Scop
 		// use distributed delete
 		arg.RemoteDelete = true
 		// maybe just copy only once?
-		arg.SegmentMap = colexec.Srv.GetCnSegmentMap()
+		arg.SegmentMap = colexec.Get().GetCnSegmentMap()
 		arg.IBucket = uint32(i)
 		arg.Nbucket = uint32(len(rs))
 		rs[i].Instructions = append(
@@ -3479,6 +3492,103 @@ func (c *Compile) fillAnalyzeInfo() {
 	}
 }
 
+func (c *Compile) determinExpandRanges(n *plan.Node, rel engine.Relation) bool {
+	if c.pn.GetQuery().StmtType != plan.Query_SELECT {
+		return true
+	}
+	if plan2.InternalTable(n.TableDef) {
+		return true
+	}
+	if n.TableDef.Partition != nil {
+		return true
+	}
+	if len(n.RuntimeFilterProbeList) == 0 {
+		return true
+	}
+	if n.Stats.BlockNum > plan2.BlockNumForceOneCN && len(c.cnList) > 1 {
+		return true
+	}
+	if rel.GetEngineType() != engine.Disttae {
+		return true
+	}
+	if n.AggList != nil { //need to handle partial results
+		return true
+	}
+	return false
+}
+
+func (c *Compile) expandRanges(n *plan.Node, rel engine.Relation) (engine.Ranges, error) {
+	var err error
+	var db engine.Database
+	var ranges engine.Ranges
+	ctx := c.ctx
+	if util.TableIsClusterTable(n.TableDef.GetTableType()) {
+		ctx = defines.AttachAccountId(ctx, catalog.System_Account)
+	}
+	if n.ObjRef.PubInfo != nil {
+		ctx = defines.AttachAccountId(ctx, uint32(n.ObjRef.PubInfo.GetTenantId()))
+	}
+	if util.TableIsLoggingTable(n.ObjRef.SchemaName, n.ObjRef.ObjName) {
+		ctx = defines.AttachAccountId(ctx, catalog.System_Account)
+	}
+
+	db, err = c.e.Database(ctx, n.ObjRef.SchemaName, c.proc.TxnOperator)
+	if err != nil {
+		return nil, err
+	}
+	ranges, err = rel.Ranges(ctx, n.BlockFilterList)
+	if err != nil {
+		return nil, err
+	}
+
+	if n.TableDef.Partition != nil {
+		if n.PartitionPrune != nil && n.PartitionPrune.IsPruned {
+			for i, partitionItem := range n.PartitionPrune.SelectedPartitions {
+				partTableName := partitionItem.PartitionTableName
+				subrelation, err := db.Relation(ctx, partTableName, c.proc)
+				if err != nil {
+					return nil, err
+				}
+				subranges, err := subrelation.Ranges(ctx, n.BlockFilterList)
+				if err != nil {
+					return nil, err
+				}
+				// add partition number into objectio.BlockInfo.
+				blkSlice := subranges.(*objectio.BlockInfoSlice)
+				for j := 1; j < subranges.Len(); j++ {
+					blkInfo := blkSlice.Get(j)
+					blkInfo.PartitionNum = i
+					ranges.Append(blkSlice.GetBytes(j))
+				}
+			}
+		} else {
+			partitionInfo := n.TableDef.Partition
+			partitionNum := int(partitionInfo.PartitionNum)
+			partitionTableNames := partitionInfo.PartitionTableNames
+			for i := 0; i < partitionNum; i++ {
+				partTableName := partitionTableNames[i]
+				subrelation, err := db.Relation(ctx, partTableName, c.proc)
+				if err != nil {
+					return nil, err
+				}
+				subranges, err := subrelation.Ranges(ctx, n.BlockFilterList)
+				if err != nil {
+					return nil, err
+				}
+				// add partition number into objectio.BlockInfo.
+				blkSlice := subranges.(*objectio.BlockInfoSlice)
+				for j := 1; j < subranges.Len(); j++ {
+					blkInfo := blkSlice.Get(j)
+					blkInfo.PartitionNum = i
+					ranges.Append(blkSlice.GetBytes(j))
+				}
+			}
+		}
+	}
+
+	return ranges, nil
+}
+
 func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, error) {
 	var err error
 	var db engine.Database
@@ -3487,7 +3597,11 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 	var partialResults []any
 	var partialResultTypes []types.T
 	var nodes engine.Nodes
+
 	isPartitionTable := false
+	if n.TableDef.Partition != nil {
+		isPartitionTable = true
+	}
 
 	ctx := c.ctx
 	if util.TableIsClusterTable(n.TableDef.GetTableType()) {
@@ -3525,55 +3639,20 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 		}
 	}
 
-	ranges, err = rel.Ranges(ctx, n.BlockFilterList)
-	if err != nil {
-		return nil, nil, nil, err
-	}
-
-	if n.TableDef.Partition != nil {
-		isPartitionTable = true
-		if n.PartitionPrune != nil && n.PartitionPrune.IsPruned {
-			for i, partitionItem := range n.PartitionPrune.SelectedPartitions {
-				partTableName := partitionItem.PartitionTableName
-				subrelation, err := db.Relation(ctx, partTableName, c.proc)
-				if err != nil {
-					return nil, nil, nil, err
-				}
-				subranges, err := subrelation.Ranges(ctx, n.BlockFilterList)
-				if err != nil {
-					return nil, nil, nil, err
-				}
-				// add partition number into objectio.BlockInfo.
-				blkSlice := subranges.(*objectio.BlockInfoSlice)
-				for j := 1; j < subranges.Len(); j++ {
-					blkInfo := blkSlice.Get(j)
-					blkInfo.PartitionNum = i
-					ranges.Append(blkSlice.GetBytes(j))
-				}
-			}
-		} else {
-			partitionInfo := n.TableDef.Partition
-			partitionNum := int(partitionInfo.PartitionNum)
-			partitionTableNames := partitionInfo.PartitionTableNames
-			for i := 0; i < partitionNum; i++ {
-				partTableName := partitionTableNames[i]
-				subrelation, err := db.Relation(ctx, partTableName, c.proc)
-				if err != nil {
-					return nil, nil, nil, err
-				}
-				subranges, err := subrelation.Ranges(ctx, n.BlockFilterList)
-				if err != nil {
-					return nil, nil, nil, err
-				}
-				// add partition number into objectio.BlockInfo.
-				blkSlice := subranges.(*objectio.BlockInfoSlice)
-				for j := 1; j < subranges.Len(); j++ {
-					blkInfo := blkSlice.Get(j)
-					blkInfo.PartitionNum = i
-					ranges.Append(blkSlice.GetBytes(j))
-				}
-			}
+	if c.determinExpandRanges(n, rel) {
+		ranges, err = c.expandRanges(n, rel)
+		if err != nil {
+			return nil, nil, nil, err
 		}
+	} else {
+		// add current CN
+		nodes = append(nodes, engine.Node{
+			Addr: c.addr,
+			Rel:  rel,
+			Mcpu: c.generateCPUNumber(ncpu, int(n.Stats.BlockNum)),
+		})
+		nodes[0].NeedExpandRanges = true
+		return nodes, nil, nil, nil
 	}
 
 	if len(n.AggList) > 0 && ranges.Len() > 1 {
@@ -3674,6 +3753,11 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 									switch zm.GetType() {
 									case types.T_bool:
 										partialResults[i] = !partialResults[i].(bool) || !types.DecodeFixed[bool](zm.GetMinBuf())
+									case types.T_bit:
+										min := types.DecodeFixed[uint64](zm.GetMinBuf())
+										if min < partialResults[i].(uint64) {
+											partialResults[i] = min
+										}
 									case types.T_int8:
 										min := types.DecodeFixed[int8](zm.GetMinBuf())
 										if min < partialResults[i].(int8) {
@@ -3795,6 +3879,11 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 									switch zm.GetType() {
 									case types.T_bool:
 										partialResults[i] = partialResults[i].(bool) || types.DecodeFixed[bool](zm.GetMaxBuf())
+									case types.T_bit:
+										max := types.DecodeFixed[uint64](zm.GetMaxBuf())
+										if max > partialResults[i].(uint64) {
+											partialResults[i] = max
+										}
 									case types.T_int8:
 										max := types.DecodeFixed[int8](zm.GetMaxBuf())
 										if max > partialResults[i].(int8) {
@@ -3957,9 +4046,9 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 	if isPartitionTable {
 		rel = nil
 	}
-	// for multi cn in launch mode, put all payloads in current CN
-	// maybe delete this in the future
-	if isLaunchMode(c.cnList) {
+	// for multi cn in launch mode, put all payloads in current CN, maybe delete this in the future
+	// for an ordered scan, put all paylonds in current CN
+	if isLaunchMode(c.cnList) || len(n.OrderBy) > 0 {
 		return putBlocksInCurrentCN(c, ranges.GetAllBytes(), rel, n), partialResults, partialResultTypes, nil
 	}
 	// disttae engine
@@ -4141,7 +4230,7 @@ func shuffleBlocksByRange(c *Compile, ranges objectio.BlockInfoSlice, n *plan.No
 			switch zm.GetType() {
 			case types.T_int64, types.T_int32, types.T_int16:
 				shuffleRangeInt64 = plan2.ShuffleRangeReEvalSigned(n.Stats.HashmapStats.Ranges, len(c.cnList), n.Stats.HashmapStats.Nullcnt, int64(n.Stats.TableCnt))
-			case types.T_uint64, types.T_uint32, types.T_uint16, types.T_varchar, types.T_char, types.T_text:
+			case types.T_uint64, types.T_uint32, types.T_uint16, types.T_varchar, types.T_char, types.T_text, types.T_bit:
 				shuffleRangeUint64 = plan2.ShuffleRangeReEvalUnsigned(n.Stats.HashmapStats.Ranges, len(c.cnList), n.Stats.HashmapStats.Nullcnt, int64(n.Stats.TableCnt))
 			}
 		}

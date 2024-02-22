@@ -248,7 +248,8 @@ func restoreDDL(ctx CompilerContext, tableDef *TableDef, schemaName string, tblN
 			typeStr = fmt.Sprintf("DECIMAL(%d,%d)", col.Typ.Width, col.Typ.Scale)
 		}
 		if typ.Oid == types.T_varchar || typ.Oid == types.T_char ||
-			typ.Oid == types.T_binary || typ.Oid == types.T_varbinary || typ.Oid.IsArrayRelate() {
+			typ.Oid == types.T_binary || typ.Oid == types.T_varbinary ||
+			typ.Oid.IsArrayRelate() || typ.Oid == types.T_bit {
 			typeStr += fmt.Sprintf("(%d)", col.Typ.Width)
 		}
 		if typ.Oid.IsFloat() && col.Typ.Scale != -1 {
@@ -558,7 +559,7 @@ type AlterTableContext struct {
 	copyTableName   string
 	// key oldColId -> new ColDef
 	changColDefMap map[uint64]*ColDef
-	UpdateSqls []string
+	UpdateSqls     []string
 }
 
 type exprType int
@@ -744,7 +745,8 @@ func buildNotNullColumnVal(col *ColDef) string {
 		col.Typ.Id == int32(types.T_decimal64) ||
 		col.Typ.Id == int32(types.T_decimal128) ||
 		col.Typ.Id == int32(types.T_decimal256) ||
-		col.Typ.Id == int32(types.T_bool) {
+		col.Typ.Id == int32(types.T_bool) ||
+		col.Typ.Id == int32(types.T_bit) {
 		defaultValue = "0"
 	} else if col.Typ.Id == int32(types.T_varchar) ||
 		col.Typ.Id == int32(types.T_char) ||

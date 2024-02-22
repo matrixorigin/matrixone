@@ -131,7 +131,6 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 		return err
 	}
 	//--------------------------------------------------------------------------------------------------------------
-
 	{
 		// 8. invoke reindex for the new table, if it contains ivf index.
 		multiTableIndexes := make(map[string]*MultiTableIndex)
