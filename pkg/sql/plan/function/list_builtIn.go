@@ -2126,6 +2126,16 @@ var supportedMathBuiltIns = []FuncNew{
 			},
 			{
 				overloadId: 3,
+				args:       []types.T{types.T_decimal64},
+				retType: func(parameters []types.Type) types.Type {
+					return parameters[0]
+				},
+				newOp: func() executeLogicOfOverload {
+					return AbsDecimal64
+				},
+			},
+			{
+				overloadId: 4,
 				args:       []types.T{types.T_decimal128},
 				retType: func(parameters []types.Type) types.Type {
 					return parameters[0]
@@ -2135,7 +2145,7 @@ var supportedMathBuiltIns = []FuncNew{
 				},
 			},
 			{
-				overloadId: 4,
+				overloadId: 5,
 				args:       []types.T{types.T_array_float32},
 				retType: func(parameters []types.Type) types.Type {
 					return parameters[0]
@@ -2145,7 +2155,7 @@ var supportedMathBuiltIns = []FuncNew{
 				},
 			},
 			{
-				overloadId: 5,
+				overloadId: 6,
 				args:       []types.T{types.T_array_float64},
 				retType: func(parameters []types.Type) types.Type {
 					return parameters[0]

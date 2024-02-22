@@ -390,6 +390,22 @@ func (ndesc *NodeDescribeImpl) GetExtraInfo(ctx context.Context, options *Explai
 	//	}
 	//	lines = append(lines, "Set columns with("+updatedesc+")")
 	//}
+
+	if len(ndesc.Node.SendMsgList) > 0 {
+		msgInfo, err := ndesc.GetSendMessageInfo(ctx, options)
+		if err != nil {
+			return nil, err
+		}
+		lines = append(lines, msgInfo)
+	}
+
+	if len(ndesc.Node.RecvMsgList) > 0 {
+		msgInfo, err := ndesc.GetRecvMessageInfo(ctx, options)
+		if err != nil {
+			return nil, err
+		}
+		lines = append(lines, msgInfo)
+	}
 	return lines, nil
 }
 
@@ -566,6 +582,46 @@ func (ndesc *NodeDescribeImpl) GetRuntimeFilterBuildInfo(ctx context.Context, op
 			if err != nil {
 				return "", err
 			}
+		}
+	} else if options.Format == EXPLAIN_FORMAT_JSON {
+		return "", moerr.NewNYI(ctx, "explain format json")
+	} else if options.Format == EXPLAIN_FORMAT_DOT {
+		return "", moerr.NewNYI(ctx, "explain format dot")
+	}
+	return buf.String(), nil
+}
+
+func (ndesc *NodeDescribeImpl) GetSendMessageInfo(ctx context.Context, options *ExplainOptions) (string, error) {
+	buf := bytes.NewBuffer(make([]byte, 0, 300))
+	buf.WriteString("Send Message: ")
+	if options.Format == EXPLAIN_FORMAT_TEXT {
+		first := true
+		for _, v := range ndesc.Node.SendMsgList {
+			if !first {
+				buf.WriteString(", ")
+			}
+			first = false
+			describeMessage(v, buf)
+		}
+	} else if options.Format == EXPLAIN_FORMAT_JSON {
+		return "", moerr.NewNYI(ctx, "explain format json")
+	} else if options.Format == EXPLAIN_FORMAT_DOT {
+		return "", moerr.NewNYI(ctx, "explain format dot")
+	}
+	return buf.String(), nil
+}
+
+func (ndesc *NodeDescribeImpl) GetRecvMessageInfo(ctx context.Context, options *ExplainOptions) (string, error) {
+	buf := bytes.NewBuffer(make([]byte, 0, 300))
+	buf.WriteString("Recv Message: ")
+	if options.Format == EXPLAIN_FORMAT_TEXT {
+		first := true
+		for _, v := range ndesc.Node.RecvMsgList {
+			if !first {
+				buf.WriteString(", ")
+			}
+			first = false
+			describeMessage(v, buf)
 		}
 	} else if options.Format == EXPLAIN_FORMAT_JSON {
 		return "", moerr.NewNYI(ctx, "explain format json")

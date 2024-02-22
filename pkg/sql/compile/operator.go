@@ -307,6 +307,7 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 		t := sourceIns.Arg.(*top.Argument)
 		arg := top.NewArgument()
 		arg.Limit = t.Limit
+		arg.TopValueTag = t.TopValueTag
 		arg.Fs = t.Fs
 		res.Arg = arg
 	case vm.Intersect:
@@ -784,6 +785,9 @@ func constructTop(n *plan.Node, topN int64) *top.Argument {
 	arg := top.NewArgument()
 	arg.Fs = n.OrderBy
 	arg.Limit = topN
+	if len(n.SendMsgList) > 0 {
+		arg.TopValueTag = n.SendMsgList[0].MsgTag
+	}
 	return arg
 }
 

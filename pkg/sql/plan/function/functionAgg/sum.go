@@ -41,7 +41,7 @@ var (
 		case types.T_bit:
 			return types.T_uint64.ToType()
 		case types.T_decimal64:
-			return types.New(types.T_decimal64, 18, typs[0].Scale)
+			return types.New(types.T_decimal128, 38, typs[0].Scale)
 		case types.T_decimal128:
 			return types.New(types.T_decimal128, 38, typs[0].Scale)
 		}
@@ -132,22 +132,26 @@ func (s *sAggDecimal64Sum) Dup() agg.AggStruct {
 }
 func (s *sAggDecimal64Sum) Grows(_ int)         {}
 func (s *sAggDecimal64Sum) Free(_ *mpool.MPool) {}
-func (s *sAggDecimal64Sum) Fill(groupNumber int64, value types.Decimal64, lastResult types.Decimal64, count int64, isEmpty bool, isNull bool) (types.Decimal64, bool, error) {
+func (s *sAggDecimal64Sum) Fill(groupNumber int64, value types.Decimal64, lastResult types.Decimal128, count int64, isEmpty bool, isNull bool) (types.Decimal128, bool, error) {
 	var err error
 	if !isNull {
 		if count == 1 {
 			lastResult, err = lastResult.Add64(value)
 		} else {
-			value, err = value.Mul64(types.Decimal64(count))
+			newvalue := types.Decimal128{B0_63: uint64(value), B64_127: 0}
+			if value.Sign() {
+				newvalue.B64_127 = ^newvalue.B64_127
+			}
+			newvalue, err = newvalue.Mul128(types.Decimal128{B0_63: uint64(count), B64_127: 0})
 			if err == nil {
-				lastResult, err = lastResult.Add64(value)
+				lastResult, err = lastResult.Add128(newvalue)
 			}
 		}
 		return lastResult, false, err
 	}
 	return lastResult, isEmpty, err
 }
-func (s *sAggDecimal64Sum) BatchFill(results []types.Decimal64, values []types.Decimal64, offset int, length int, groupIndexs []uint64, nsp *nulls.Nulls) (err error) {
+func (s *sAggDecimal64Sum) BatchFill(results []types.Decimal128, values []types.Decimal64, offset int, length int, groupIndexs []uint64, nsp *nulls.Nulls) (err error) {
 	if nsp == nil || nsp.IsEmpty() {
 		for i := 0; i < length; i++ {
 			if groupIndexs[i] == agg.GroupNotMatch {
@@ -155,7 +159,7 @@ func (s *sAggDecimal64Sum) BatchFill(results []types.Decimal64, values []types.D
 			}
 
 			groupIndex := groupIndexs[i] - 1
-			results[groupIndex], _, err = results[groupIndex].Add(values[offset+i], 0, 0)
+			results[groupIndex], err = results[groupIndex].Add64(values[offset+i])
 			if err != nil {
 				return err
 			}
@@ -167,7 +171,7 @@ func (s *sAggDecimal64Sum) BatchFill(results []types.Decimal64, values []types.D
 			}
 
 			groupIndex := groupIndexs[i] - 1
-			results[groupIndex], _, err = results[groupIndex].Add(values[offset+i], 0, 0)
+			results[groupIndex], err = results[groupIndex].Add64(values[offset+i])
 			if err != nil {
 				return err
 			}
@@ -175,18 +179,18 @@ func (s *sAggDecimal64Sum) BatchFill(results []types.Decimal64, values []types.D
 	}
 	return nil
 }
-func (s *sAggDecimal64Sum) Merge(groupNumber1 int64, groupNumber2 int64, result1, result2 types.Decimal64, isEmpty1, isEmpty2 bool, _ any) (types.Decimal64, bool, error) {
+func (s *sAggDecimal64Sum) Merge(groupNumber1 int64, groupNumber2 int64, result1, result2 types.Decimal128, isEmpty1, isEmpty2 bool, _ any) (types.Decimal128, bool, error) {
 	if !isEmpty2 {
 		if !isEmpty1 {
 			var err error
-			result1, err = result1.Add64(result2)
+			result1, err = result1.Add128(result2)
 			return result1, false, err
 		}
 		return result2, false, nil
 	}
 	return result1, isEmpty1, nil
 }
-func (s *sAggDecimal64Sum) Eval(lastResult []types.Decimal64) ([]types.Decimal64, error) {
+func (s *sAggDecimal64Sum) Eval(lastResult []types.Decimal128) ([]types.Decimal128, error) {
 	return lastResult, nil
 }
 func (s *sAggDecimal64Sum) MarshalBinary() ([]byte, error) { return nil, nil }
