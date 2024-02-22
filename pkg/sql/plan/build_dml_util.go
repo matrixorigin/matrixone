@@ -1968,18 +1968,6 @@ func appendJoinNodeForParentFkCheck(ctx CompilerContext,
 		ProjectList: projectProjection,
 	}, bindCtx)
 
-	type ColInfo struct {
-		def *ColDef
-		pos int
-	}
-	tableCols := make(map[string]*ColInfo)
-	for i, def := range tableDef.Cols {
-		tableCols[def.Name] = &ColInfo{
-			def: def,
-			pos: i,
-		}
-	}
-
 	var filterConds []*Expr
 	for _, fk := range tableDef.Fkeys {
 		for _, colId := range fk.Cols {
@@ -2003,7 +1991,6 @@ func appendJoinNodeForParentFkCheck(ctx CompilerContext,
 			}
 		}
 	}
-
 	baseNodeId = builder.appendNode(&Node{
 		NodeType:   plan.Node_FILTER,
 		Children:   []int32{baseNodeId},

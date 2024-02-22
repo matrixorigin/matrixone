@@ -1320,28 +1320,6 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 		"mysql":
 		skip = true
 	}
-	//if createTable.Database == catalog.MO_CATALOG {
-	//	switch createTable.TableDef.Name {
-	//	case catalog.MO_INDEXES,
-	//		catalog.MO_TABLE_PARTITIONS,
-	//		catalog.MOAutoIncrTable,
-	//		"mo_foreign_keys",
-	//		"mo_user",
-	//		"mo_account",
-	//		"mo_role",
-	//		"mo_user_grant",
-	//		"mo_role_grant",
-	//		"mo_role_privs",
-	//		"mo_user_defined_function",
-	//		"mo_mysql_compatibility_mode",
-	//		"mo_pubs",
-	//		"mo_stored_procedure",
-	//		"mo_stages":
-	//		skip = true
-	//	}
-	//} else if createTable.Database == catalog.MO_SYSTEM {
-	//	skip = true
-	//}
 
 	if !skip {
 		fks, err := getAllRefered(ctx, createTable.Database, createTable.TableDef.Name)
@@ -3426,7 +3404,6 @@ func checkFkColsAreValid(ctx CompilerContext, fkData *FkData, parentTableDef *Ta
 	} else {
 		fkData.Def.ForeignCols = matchCol
 	}
-
 	return nil
 }
 

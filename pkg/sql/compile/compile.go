@@ -4501,8 +4501,3 @@ func runDetectSql(c *Compile, sql string) error {
 	}
 	return nil
 }
-
-// updateFk updates the fk relation
-func updateFk(c *Compile, sql string) error {
-	return c.runSql(sql)
-}
