@@ -19,6 +19,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"net/http"
 	"os"
 	"os/signal"
