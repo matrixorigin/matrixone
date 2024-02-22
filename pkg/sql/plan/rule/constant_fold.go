@@ -91,7 +91,8 @@ func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *pla
 			}
 			defer vec.Free(proc.Mp())
 
-			vec.InplaceSort()
+			vec.InplaceSortAndCompact()
+
 			data, err := vec.MarshalBinary()
 			if err != nil {
 				return expr
