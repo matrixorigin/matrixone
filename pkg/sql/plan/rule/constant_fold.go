@@ -91,7 +91,8 @@ func (r *ConstantFold) constantFold(e *plan.Expr, proc *process.Process) *plan.E
 			}
 			defer vec.Free(proc.Mp())
 
-			colexec.SortInFilter(vec)
+			vec.InplaceSortAndCompact()
+
 			data, err := vec.MarshalBinary()
 			if err != nil {
 				return e
