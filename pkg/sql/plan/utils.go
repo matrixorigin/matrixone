@@ -1904,11 +1904,12 @@ func MakeInExpr(ctx context.Context, left *Expr, length int32, data []byte) *Exp
 			},
 		},
 	}
-	// get function definition
+
+	fid := function.InFunctionEncodedID
 	args := []types.Type{makeTypeByPlan2Expr(left), makeTypeByPlan2Expr(rightArg)}
 	fGet, err := function.GetFunctionByName(ctx, "in", args)
-	if err != nil {
-		panic("wrong arg type for runtime filter!")
+	if err == nil {
+		fid = fGet.GetEncodedOverloadID()
 	}
 	inExpr := &plan.Expr{
 		Typ: &plan.Type{
@@ -1918,7 +1919,7 @@ func MakeInExpr(ctx context.Context, left *Expr, length int32, data []byte) *Exp
 		Expr: &plan.Expr_F{
 			F: &plan.Function{
 				Func: &plan.ObjectRef{
-					Obj:     fGet.GetEncodedOverloadID(),
+					Obj:     fid,
 					ObjName: function.InFunctionName,
 				},
 				Args: []*plan.Expr{
