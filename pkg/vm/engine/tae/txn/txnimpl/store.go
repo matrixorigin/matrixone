@@ -16,6 +16,8 @@ package txnimpl
 
 import (
 	"context"
+	"fmt"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"runtime/trace"
 	"sync"
 	"sync/atomic"
@@ -62,42 +64,59 @@ func putTracer(tracer *txnTracer) {
 type txnTracer struct {
 	state uint8
 	task  *trace.Task
+	stamp time.Time
 }
 
 func (tracer *txnTracer) Trigger(state uint8) {
 	switch state {
 	case 0: // start preparing wait
 		_, tracer.task = trace.NewTask(context.Background(), "1-PreparingWait")
+		tracer.stamp = time.Now()
 		tracer.state = 0
+
 	case 1: // end preparing wait and start preparing
 		if tracer.task != nil && tracer.state == 0 {
 			tracer.task.End()
+			v2.TxnPreparingWaitDurationHistogram.Observe(time.Since(tracer.stamp).Seconds())
 		}
 		_, tracer.task = trace.NewTask(context.Background(), "2-Preparing")
+		tracer.stamp = time.Now()
 		tracer.state = 1
+
 	case 2: // end preparing and start prepare wal wait
 		if tracer.task != nil && tracer.state == 1 {
 			tracer.task.End()
+			v2.TxnPreparingDurationHistogram.Observe(time.Since(tracer.stamp).Seconds())
 		}
 		_, tracer.task = trace.NewTask(context.Background(), "3-PrepareWalWait")
+		tracer.stamp = time.Now()
 		tracer.state = 2
+
 	case 3: // end prepare wal wait and start prepare wal
 		if tracer.task != nil && tracer.state == 2 {
 			tracer.task.End()
+			v2.TxnPrepareWalWaitDurationHistogram.Observe(time.Since(tracer.stamp).Seconds())
 		}
 		_, tracer.task = trace.NewTask(context.Background(), "4-PrepareWal")
+		tracer.stamp = time.Now()
 		tracer.state = 3
+
 	case 4: // end prepare wal and start prepared wait
 		if tracer.task != nil && tracer.state == 3 {
 			tracer.task.End()
+			v2.TxnPrepareWalDurationHistogram.Observe(time.Since(tracer.stamp).Seconds())
 		}
 		_, tracer.task = trace.NewTask(context.Background(), "5-PreparedWait")
+		tracer.stamp = time.Now()
 		tracer.state = 4
+
 	case 5: // end prepared wait and start prepared
 		if tracer.task != nil && tracer.state == 4 {
 			tracer.task.End()
+			v2.TxnPreparedWaitDurationHistogram.Observe(time.Since(tracer.stamp).Seconds())
 		}
 		_, tracer.task = trace.NewTask(context.Background(), "6-Prepared")
+		tracer.stamp = time.Now()
 		tracer.state = 5
 	}
 }
@@ -105,6 +124,8 @@ func (tracer *txnTracer) Trigger(state uint8) {
 func (tracer *txnTracer) Stop() {
 	if tracer.task != nil && tracer.state == 5 {
 		tracer.task.End()
+		v2.TxnPreparedDurationHistogram.Observe(time.Since(tracer.stamp).Seconds())
+		fmt.Println("Prepared")
 	}
 	tracer.task = nil
 	tracer.state = 0
