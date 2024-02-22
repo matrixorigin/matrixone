@@ -76,7 +76,6 @@ func (o *ObjectEntry) MergeEntry(entry *ObjectEntry) {
 		if len(o.table.blocks) == 0 {
 			o.table.blocks = append(o.table.blocks, entry.table.blocks...)
 			o.Refs(refs)
-			logutil.Warnf("refs > 0 and o.table.blocks len is 0, %v", o.table.blocks)
 		}
 	}
 
