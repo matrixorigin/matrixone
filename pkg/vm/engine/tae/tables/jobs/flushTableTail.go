@@ -277,7 +277,6 @@ func (task *flushTableTailTask) Execute(ctx context.Context) (err error) {
 		task.rt,
 		task.dirtyEndTs,
 	)
-	task.rel.GetDB()
 	readset := make([]*common.ID, 0, len(task.ablksMetas)+len(task.delSrcMetas))
 	for _, blk := range task.ablksMetas {
 		readset = append(readset, blk.AsCommonID())
