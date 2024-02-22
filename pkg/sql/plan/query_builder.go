@@ -1501,6 +1501,8 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		builder.pushdownRuntimeFilters(rootID)
 		ReCalcNodeStats(rootID, builder, true, false, false)
 
+		builder.handleMessgaes(rootID)
+
 		builder.rewriteStarApproxCount(rootID)
 
 		rootNode := builder.qry.Nodes[rootID]
@@ -3692,6 +3694,12 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 func (builder *QueryBuilder) genNewTag() int32 {
 	builder.nextTag++
 	return builder.nextTag
+}
+
+func (builder *QueryBuilder) genNewMsgTag() (ret int32) {
+	// start from 1, and 0 means do not handle with message
+	builder.nextMsgTag++
+	return builder.nextMsgTag
 }
 
 func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ctx *BindContext) error {

@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"fmt"
+	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"hash/crc32"
 	"runtime"
 	"sync/atomic"
@@ -40,7 +41,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
-	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/udf"
@@ -65,14 +65,14 @@ const (
 
 // cnInformation records service information to help handle messages.
 type cnInformation struct {
-	cnAddr       string
-	storeEngine  engine.Engine
-	fileService  fileservice.FileService
-	lockService  lockservice.LockService
-	queryService queryservice.QueryService
-	hakeeper     logservice.CNHAKeeperClient
-	udfService   udf.Service
-	aicm         *defines.AutoIncrCacheManager
+	cnAddr      string
+	storeEngine engine.Engine
+	fileService fileservice.FileService
+	lockService lockservice.LockService
+	queryClient qclient.QueryClient
+	hakeeper    logservice.CNHAKeeperClient
+	udfService  udf.Service
+	aicm        *defines.AutoIncrCacheManager
 }
 
 // processHelper records source process information to help
@@ -293,7 +293,7 @@ func newMessageReceiverOnServer(
 	storeEngine engine.Engine,
 	fileService fileservice.FileService,
 	lockService lockservice.LockService,
-	queryService queryservice.QueryService,
+	queryClient qclient.QueryClient,
 	hakeeper logservice.CNHAKeeperClient,
 	udfService udf.Service,
 	txnClient client.TxnClient,
@@ -309,14 +309,14 @@ func newMessageReceiverOnServer(
 		sequence:        0,
 	}
 	receiver.cnInformation = cnInformation{
-		cnAddr:       cnAddr,
-		storeEngine:  storeEngine,
-		fileService:  fileService,
-		lockService:  lockService,
-		queryService: queryService,
-		hakeeper:     hakeeper,
-		udfService:   udfService,
-		aicm:         aicm,
+		cnAddr:      cnAddr,
+		storeEngine: storeEngine,
+		fileService: fileService,
+		lockService: lockService,
+		queryClient: queryClient,
+		hakeeper:    hakeeper,
+		udfService:  udfService,
+		aicm:        aicm,
 	}
 
 	switch m.GetCmd() {
@@ -369,7 +369,7 @@ func (receiver *messageReceiverOnServer) newCompile() *Compile {
 		pHelper.txnOperator,
 		cnInfo.fileService,
 		cnInfo.lockService,
-		cnInfo.queryService,
+		cnInfo.queryClient,
 		cnInfo.hakeeper,
 		cnInfo.udfService,
 		cnInfo.aicm)
@@ -387,6 +387,7 @@ func (receiver *messageReceiverOnServer) newCompile() *Compile {
 
 	c := reuse.Alloc[Compile](nil)
 	c.proc = proc
+	c.proc.MessageBoard = c.MessageBoard
 	c.e = cnInfo.storeEngine
 	c.anal = newAnaylze()
 	c.anal.analInfos = proc.AnalInfos
