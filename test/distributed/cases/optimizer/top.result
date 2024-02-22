@@ -1,0 +1,180 @@
+drop database if exists d1;
+create database d1;
+use d1;
+drop table if exists t1;
+create table t1(c1 int primary key, c2 int, c3 int);
+create table t2(c1 int primary key, c2 int, c3 int);
+insert into t1 select *,*,* from generate_series(1000000) g;
+insert into t2 select *,*,* from generate_series(1000000) g;
+select mo_ctl('dn', 'flush', 'd1.t1');
+mo_ctl(dn, flush, d1.t1)
+{\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
+select mo_ctl('dn', 'flush', 'd1.t2');
+mo_ctl(dn, flush, d1.t2)
+{\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
+select Sleep(10);
+sleep(10)
+0
+explain select * from t1 order by c1 limit 100 offset 200;
+QUERY PLAN
+Project
+  ->  Sort
+        Sort Key: t1.c1 INTERNAL
+        Limit: 100, Offset: 200
+        Send Message: [tag 1 , type MsgTopValue]
+        ->  Table Scan on d1.t1
+              Sort Key: c1 INTERNAL
+              Recv Message: [tag 1 , type MsgTopValue]
+explain select * from t1,t2 where t1.c1=t2.c1 and t2.c2 between 33333 and 44444 order by t1.c1 limit 10 offset 10;
+QUERY PLAN
+Project
+  ->  Sort
+        Sort Key: t1.c1 INTERNAL
+        Limit: 10, Offset: 10
+        Send Message: [tag 1 , type MsgTopValue]
+        ->  Join
+              Join Type: INNER   hashOnPK
+              Join Cond: (t1.c1 = t2.c1)
+              Runtime Filter Build: #[-1,0]
+              ->  Table Scan on d1.t1
+                    Sort Key: c1 INTERNAL
+                    Runtime Filter Probe: t1.c1
+                    Recv Message: [tag 1 , type MsgTopValue]
+              ->  Table Scan on d1.t2
+                    Filter Cond: t2.c2 BETWEEN 33333 AND 44444
+select * from t1 order by c1 limit 10 ;
+c1    c2    c3
+1    1    1
+2    2    2
+3    3    3
+4    4    4
+5    5    5
+6    6    6
+7    7    7
+8    8    8
+9    9    9
+10    10    10
+select * from t1 order by c1 limit 10 offset 200;
+c1    c2    c3
+201    201    201
+202    202    202
+203    203    203
+204    204    204
+205    205    205
+206    206    206
+207    207    207
+208    208    208
+209    209    209
+210    210    210
+select * from t1 order by c1 desc limit 10 ;
+c1    c2    c3
+1000000    1000000    1000000
+999999    999999    999999
+999998    999998    999998
+999997    999997    999997
+999996    999996    999996
+999995    999995    999995
+999994    999994    999994
+999993    999993    999993
+999992    999992    999992
+999991    999991    999991
+select * from t1 order by c1 desc limit 10 offset 200;
+c1    c2    c3
+999800    999800    999800
+999799    999799    999799
+999798    999798    999798
+999797    999797    999797
+999796    999796    999796
+999795    999795    999795
+999794    999794    999794
+999793    999793    999793
+999792    999792    999792
+999791    999791    999791
+select * from t1,t2 where t1.c1=t2.c1 and t2.c2 between 22 and 44 order by t1.c1 limit 10;
+c1    c2    c3    c1    c2    c3
+22    22    22    22    22    22
+23    23    23    23    23    23
+24    24    24    24    24    24
+25    25    25    25    25    25
+26    26    26    26    26    26
+27    27    27    27    27    27
+28    28    28    28    28    28
+29    29    29    29    29    29
+30    30    30    30    30    30
+31    31    31    31    31    31
+select * from t1,t2 where t1.c1=t2.c1 and t2.c2 between 22 and 44 order by t1.c1 desc limit 10 offset 10;
+c1    c2    c3    c1    c2    c3
+34    34    34    34    34    34
+33    33    33    33    33    33
+32    32    32    32    32    32
+31    31    31    31    31    31
+30    30    30    30    30    30
+29    29    29    29    29    29
+28    28    28    28    28    28
+27    27    27    27    27    27
+26    26    26    26    26    26
+25    25    25    25    25    25
+select * from t1,t2 where t1.c1=t2.c1 and t2.c2 between 33333 and 44444 order by t1.c1 limit 10;
+c1    c2    c3    c1    c2    c3
+33333    33333    33333    33333    33333    33333
+33334    33334    33334    33334    33334    33334
+33335    33335    33335    33335    33335    33335
+33336    33336    33336    33336    33336    33336
+33337    33337    33337    33337    33337    33337
+33338    33338    33338    33338    33338    33338
+33339    33339    33339    33339    33339    33339
+33340    33340    33340    33340    33340    33340
+33341    33341    33341    33341    33341    33341
+33342    33342    33342    33342    33342    33342
+select * from t1,t2 where t1.c1=t2.c1 and t2.c2 between 33333 and 44444 order by t1.c1 desc limit 10 offset 10;
+c1    c2    c3    c1    c2    c3
+44434    44434    44434    44434    44434    44434
+44433    44433    44433    44433    44433    44433
+44432    44432    44432    44432    44432    44432
+44431    44431    44431    44431    44431    44431
+44430    44430    44430    44430    44430    44430
+44429    44429    44429    44429    44429    44429
+44428    44428    44428    44428    44428    44428
+44427    44427    44427    44427    44427    44427
+44426    44426    44426    44426    44426    44426
+44425    44425    44425    44425    44425    44425
+select * from t1,t2 where t1.c1=t2.c1 and t2.c2 between 33333 and 555555 order by t1.c1 limit 10;
+c1    c2    c3    c1    c2    c3
+33333    33333    33333    33333    33333    33333
+33334    33334    33334    33334    33334    33334
+33335    33335    33335    33335    33335    33335
+33336    33336    33336    33336    33336    33336
+33337    33337    33337    33337    33337    33337
+33338    33338    33338    33338    33338    33338
+33339    33339    33339    33339    33339    33339
+33340    33340    33340    33340    33340    33340
+33341    33341    33341    33341    33341    33341
+33342    33342    33342    33342    33342    33342
+explain select * from t1,t2 where t1.c1=t2.c1 and t2.c2 between 33333 and 555555 order by t1.c1 desc limit 10 offset 10;
+QUERY PLAN
+Project
+  ->  Sort
+        Sort Key: t1.c1 DESC
+        Limit: 10, Offset: 10
+        Send Message: [tag 1 , type MsgTopValue]
+        ->  Join
+              Join Type: INNER   hashOnPK
+              Join Cond: (t1.c1 = t2.c1) shuffle: range(t1.c1)
+              ->  Table Scan on d1.t1
+                    Sort Key: c1 DESC
+                    Recv Message: [tag 1 , type MsgTopValue]
+              ->  Table Scan on d1.t2
+                    Filter Cond: t2.c2 BETWEEN 33333 AND 555555
+select * from t1,t2 where t1.c1=t2.c1 and t2.c2 between 33333 and 555555 order by t1.c1 desc limit 10 offset 10;
+c1    c2    c3    c1    c2    c3
+555545    555545    555545    555545    555545    555545
+555544    555544    555544    555544    555544    555544
+555543    555543    555543    555543    555543    555543
+555542    555542    555542    555542    555542    555542
+555541    555541    555541    555541    555541    555541
+555540    555540    555540    555540    555540    555540
+555539    555539    555539    555539    555539    555539
+555538    555538    555538    555538    555538    555538
+555537    555537    555537    555537    555537    555537
+555536    555536    555536    555536    555536    555536
+drop database if exists d1;
