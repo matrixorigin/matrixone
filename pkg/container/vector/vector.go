@@ -17,9 +17,10 @@ package vector
 import (
 	"bytes"
 	"fmt"
-	"slices"
 	"sort"
 	"unsafe"
+
+	"golang.org/x/exp/slices"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
