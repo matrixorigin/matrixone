@@ -29,6 +29,7 @@ type RunnerReader interface {
 	GetGlobalCheckpointCount() int
 	CollectCheckpointsInRange(ctx context.Context, start, end types.TS) (ckpLoc string, lastEnd types.TS, err error)
 	ICKPSeekLT(ts types.TS, cnt int) []*CheckpointEntry
+	MaxGlobalCheckpoint() *CheckpointEntry
 	MaxLSN() uint64
 }
 
