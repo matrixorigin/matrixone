@@ -16,7 +16,6 @@ package txnimpl
 
 import (
 	"context"
-	"fmt"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"runtime/trace"
 	"sync"
@@ -125,7 +124,6 @@ func (tracer *txnTracer) Stop() {
 	if tracer.task != nil && tracer.state == 5 {
 		tracer.task.End()
 		v2.TxnPreparedDurationHistogram.Observe(time.Since(tracer.stamp).Seconds())
-		fmt.Println("Prepared")
 	}
 	tracer.task = nil
 	tracer.state = 0
