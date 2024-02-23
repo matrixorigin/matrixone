@@ -62,6 +62,7 @@ a    b
 1    1_1
 CREATE table t6 (a int unique) as select * from t1;
 Duplicate entry '1' for key '__mo_index_idx_col'
+drop table t6;
 CREATE table t6 as select max(a) from t1;
 desc t6;
 Field    Type    Null    Key    Default    Extra    Comment

@@ -28,6 +28,7 @@ select * from t5;
 insert into t1 values (1, '1_1');
 select * from t1;
 CREATE table t6 (a int unique) as select * from t1;
+drop table t6;
 
 CREATE table t6 as select max(a) from t1;
 desc t6;
