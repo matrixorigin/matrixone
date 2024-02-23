@@ -1098,6 +1098,7 @@ message DropDatabase {
 	string database 	= 2;
 	uint64 database_id	= 3;
 	string UpdateSql = 4;
+	string checkFKSql = 5;
 }
 
 message FkColName {

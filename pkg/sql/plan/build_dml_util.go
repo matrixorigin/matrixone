@@ -3900,3 +3900,10 @@ func makeRenameColumnFkSqlForAlterTable(db, table, oldName, newName string) (ret
 	ret = append(ret, sb.String())
 	return
 }
+
+func makeCheckFkRefersToMeForDropDatabase(db string) string {
+	sb := strings.Builder{}
+	sb.WriteString("select count(*) > 0 from `mo_catalog`.`mo_foreign_keys` ")
+	sb.WriteString(fmt.Sprintf("where refer_db_name = '%s' and db_name != '%s';", db, db))
+	return sb.String()
+}

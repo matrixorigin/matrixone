@@ -2334,14 +2334,18 @@ func buildDropDatabase(stmt *tree.DropDatabase, ctx CompilerContext) (*Plan, err
 			return nil, err
 		}
 		if enabled {
-			me, err := ctx.HasFKsReferToMe(dropDB.Database)
-			if err != nil {
-				return nil, err
-			}
-			if me {
-				return nil, moerr.NewInternalError(ctx.GetContext(), "can not drop database '%v' which has been referenced by foreign keys", dropDB.Database)
-			}
+			dropDB.CheckFKSql = makeCheckFkRefersToMeForDropDatabase(dropDB.Database)
 		}
+
+		//if enabled {
+		//	me, err := ctx.HasFKsReferToMe(dropDB.Database)
+		//	if err != nil {
+		//		return nil, err
+		//	}
+		//	if me {
+		//		return nil, moerr.NewInternalError(ctx.GetContext(), "can not drop database '%v' which has been referenced by foreign keys", dropDB.Database)
+		//	}
+		//}
 	}
 
 	dropDB.UpdateSql = makeDeleteFkSqlForDropDatabase(dropDB.Database)

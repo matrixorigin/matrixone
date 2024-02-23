@@ -81,6 +81,14 @@ func (s *Scope) DropDatabase(c *Compile) error {
 		return err
 	}
 
+	sql := s.Plan.GetDdl().GetDropDatabase().GetCheckFKSql()
+	if len(sql) != 0 {
+		err := runDetectFkReferToDBSql(c, sql)
+		if err != nil {
+			return err
+		}
+	}
+
 	// whether foreign_key_checks = 0 or 1
 	err := s.removeFkeysRelationships(c, dbName)
 	if err != nil {
