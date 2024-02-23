@@ -239,6 +239,9 @@ func (t *Table) TableDefs(ctx context.Context) ([]engine.TableDef, error) {
 	return defs, nil
 }
 
+func (t *Table) CopyTableDef(ctx context.Context) *plan.TableDef {
+	return t.GetTableDef(ctx)
+}
 func (t *Table) GetTableDef(ctx context.Context) *plan.TableDef {
 	engineDefs, err := t.TableDefs(ctx)
 	if err != nil {
