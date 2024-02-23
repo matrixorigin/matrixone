@@ -77,6 +77,9 @@ type handler[REQ, RESP MethodBasedMessage] struct {
 	pool     MessagePool[REQ, RESP]
 	handlers map[uint32]handleFuncCtx[REQ, RESP]
 
+	// respReleaseFunc is the function to release response.
+	respReleaseFunc func(Message)
+
 	options struct {
 		filter func(REQ) bool
 	}
@@ -87,6 +90,13 @@ type handler[REQ, RESP MethodBasedMessage] struct {
 func WithHandleMessageFilter[REQ, RESP MethodBasedMessage](filter func(REQ) bool) HandlerOption[REQ, RESP] {
 	return func(s *handler[REQ, RESP]) {
 		s.options.filter = filter
+	}
+}
+
+// WithHandlerRespReleaseFunc sets the respReleaseFunc of the handler.
+func WithHandlerRespReleaseFunc[REQ, RESP MethodBasedMessage](f func(message Message)) HandlerOption[REQ, RESP] {
+	return func(s *handler[REQ, RESP]) {
+		s.respReleaseFunc = f
 	}
 }
 
@@ -107,12 +117,18 @@ func NewMessageHandler[REQ, RESP MethodBasedMessage](
 		opt(s)
 	}
 
+	if s.respReleaseFunc == nil {
+		s.respReleaseFunc = func(m Message) {
+			pool.ReleaseResponse(m.(RESP))
+		}
+	}
+
 	rpc, err := s.cfg.NewServer(
 		name,
 		address,
 		getLogger().RawLogger(),
 		func() Message { return pool.AcquireRequest() },
-		func(m Message) { pool.ReleaseResponse(m.(RESP)) },
+		s.respReleaseFunc,
 		WithServerDisableAutoCancelContext())
 	if err != nil {
 		return nil, err
