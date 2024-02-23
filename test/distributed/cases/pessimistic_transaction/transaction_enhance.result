@@ -238,7 +238,7 @@ truncate table atomic_table_15;
 use transaction_enhance;
 drop table atomic_table_15;
 select * from atomic_table_15;
-c1    c2
+SQL parser error: table "atomic_table_15" does not exist
 commit;
 select * from atomic_table_15;
 SQL parser error: table "atomic_table_15" does not exist
@@ -249,6 +249,7 @@ insert into atomic_table_16 values (6,"a"),(7,"b");
 drop table atomic_table_16;
 use transaction_enhance;
 drop table atomic_table_16;
+SQL parser error: table "atomic_table_16" does not exist
 commit;
 select * from atomic_table_16;
 SQL parser error: table "atomic_table_16" does not exist
@@ -259,9 +260,10 @@ insert into atomic_table_17 values (6,"a"),(7,"b");
 drop table atomic_table_17;
 use transaction_enhance;
 alter table atomic_table_17 add constraint unique key (c1);
+SQL parser error: table "atomic_table_17" does not exist
 update atomic_table_17 set c1=8 where c2="b";
+no such table transaction_enhance.atomic_table_17
 commit;
-w-w conflict
 select * from atomic_table_17;
 SQL parser error: table "atomic_table_17" does not exist
 start transaction ;
@@ -315,7 +317,8 @@ truncate table atomic_table_18;
 use transaction_enhance;
 drop table atomic_table_18;
 select * from atomic_table_18;
-c1    c2
+SQL parser error: table "atomic_table_18" does not exist
+Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
 commit;
 select * from atomic_table_18;
 SQL parser error: table "atomic_table_18" does not exist
@@ -329,7 +332,7 @@ drop table atomic_table_18;
 
 use transaction_enhance;
 drop table atomic_table_18;
-no such table transaction_enhance.atomic_table_18
+SQL parser error: table "atomic_table_18" does not exist
 select * from atomic_table_18;
 SQL parser error: table "atomic_table_18" does not exist
 Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
