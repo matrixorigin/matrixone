@@ -871,6 +871,7 @@ message PreInsertCtx {
 message RuntimeFilterSpec {
 	int32 tag = 1;
 	Expr expr = 2;
+	int32 upperLimit = 3;
 }
 
 message IdList {
