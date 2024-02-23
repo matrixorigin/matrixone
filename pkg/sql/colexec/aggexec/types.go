@@ -113,7 +113,13 @@ func MakeMultiAgg(
 
 // MakeGroupConcat is one special case of MakeMultiAgg.
 // it supports creating an aggregation function executor for special aggregation `group_concat()`.
-func MakeGroupConcat() AggFuncExec {
-	// todo : no implementation now.
-	return nil
+func MakeGroupConcat(
+	proc *process.Process,
+	aggID int64, param []types.Type, result types.Type) AggFuncExec {
+	info := multiAggInfo{
+		aggID:    aggID,
+		argTypes: param,
+		retType:  result,
+	}
+	return newGroupConcatExec(proc, info)
 }
