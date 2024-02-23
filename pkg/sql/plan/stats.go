@@ -1162,3 +1162,11 @@ func DeepCopyStats(stats *plan.Stats) *plan.Stats {
 		HashmapStats: hashmapStats,
 	}
 }
+
+func CalcUpperLimitForRuntimeFilterOnPK(tableCnt float64) int32 {
+	upper := tableCnt * 0.05
+	if upper > HashMapSizeForShuffle {
+		upper = HashMapSizeForShuffle
+	}
+	return int32(upper)
+}
