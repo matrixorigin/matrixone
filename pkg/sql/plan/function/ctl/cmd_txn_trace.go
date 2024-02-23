@@ -22,7 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-// select mo_ctl('cn', 'txn-trace', 'enable|disable|refresh|clear|add')
+// select mo_ctl('cn', 'txn-trace', 'enable|disable|clear|add')
 func handleTxnTrace(
 	proc *process.Process,
 	service serviceType,
@@ -53,6 +53,7 @@ func handleTxnTrace(
 		}
 		return Result{Data: "OK"}, nil
 	case "add":
+		// add table [column1, column2, ...]
 		if len(params) < 2 {
 			return Result{}, moerr.NewInvalidInputNoCtx("invalid parameter %s", parameter)
 		}
