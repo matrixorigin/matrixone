@@ -1,5 +1,6 @@
-create database test;
-use test;
+drop database if exists fk_foreign_key_checks4;
+create database fk_foreign_key_checks4;
+use fk_foreign_key_checks4;
 
 create table t1(a int primary key);
 
@@ -334,3 +335,5 @@ drop table if exists t1;
 drop table if exists t2;
 drop table if exists t3;
 drop table if exists t4;
+
+drop database if exists fk_foreign_key_checks4;
