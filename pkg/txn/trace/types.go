@@ -25,7 +25,7 @@ import (
 )
 
 var (
-	debugDB         = "mo_debug"
+	DebugDB         = "mo_debug"
 	featuresTables  = "trace_features"
 	traceTable      = "trace_tables"
 	eventTxnTable   = "trace_event_txn"
@@ -37,12 +37,12 @@ var (
 	stateDisable    = "disable"
 
 	InitSQLs = []string{
-		fmt.Sprintf("create database %s", debugDB),
+		fmt.Sprintf("create database %s", DebugDB),
 
 		fmt.Sprintf(`create table %s.%s(
 			name    varchar(50) not null primary key,
 			state   varchar(20) not null
-		)`, debugDB, featuresTables),
+		)`, DebugDB, featuresTables),
 
 		fmt.Sprintf(`create table %s.%s(
 			ts 			          bigint       not null,
@@ -53,7 +53,7 @@ var (
 			snapshot_ts           varchar(50),
 			commit_ts             varchar(50),
 			check_changed		  varchar(100)
-		)`, debugDB, eventTxnTable),
+		)`, DebugDB, eventTxnTable),
 
 		fmt.Sprintf(`create table %s.%s(
 			ts 			          bigint       not null,
@@ -65,23 +65,23 @@ var (
 			row_data              varchar(500) not null, 
 			committed_ts          varchar(50),
 			snapshot_ts           varchar(50)
-		)`, debugDB, eventDataTable),
+		)`, DebugDB, eventDataTable),
 
 		fmt.Sprintf(`create table %s.%s(
 			id                    bigint UNSIGNED primary key auto_increment,
 			table_id			  bigint UNSIGNED not null,
 			table_name            varchar(50)     not null,
 			columns               varchar(200)
-		)`, debugDB, traceTable),
+		)`, DebugDB, traceTable),
 
 		fmt.Sprintf(`create table %s.%s(
 			ts 			          bigint          not null,
 			txn_id                varchar(50)     not null,
 			error_info            varchar(1000)   not null
-		)`, debugDB, eventErrorTable),
+		)`, DebugDB, eventErrorTable),
 
 		fmt.Sprintf(`insert into %s.%s (name, state) values ('%s', '%s')`,
-			debugDB,
+			DebugDB,
 			featuresTables,
 			featureTraceTxn,
 			stateDisable),

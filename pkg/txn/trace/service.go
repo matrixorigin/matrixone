@@ -411,7 +411,7 @@ func (s *service) AddTxnError(
 			return nil
 		},
 		executor.Options{}.
-			WithDatabase(debugDB).
+			WithDatabase(DebugDB).
 			WithMinCommittedTS(now).
 			WithWaitCommittedLogApplied().
 			WithDisableLock().
@@ -498,7 +498,7 @@ func (s *service) AddEntryFilter(name string, columns []string) error {
 				return moerr.NewNoSuchTableNoCtx("", name)
 			}
 
-			txn.Use(debugDB)
+			txn.Use(DebugDB)
 			for _, id := range tables {
 				r, err := txn.Exec(getEntryFilterSQL(id, name, columns), executor.StatementOption{})
 				if err != nil {
@@ -528,7 +528,7 @@ func (s *service) ClearFilters() error {
 	err := s.executor.ExecTxn(
 		ctx,
 		func(txn executor.TxnExecutor) error {
-			txn.Use(debugDB)
+			txn.Use(DebugDB)
 			res, err := txn.Exec(
 				fmt.Sprintf("truncate table %s",
 					traceTable),
@@ -560,7 +560,7 @@ func (s *service) RefreshFilters() error {
 	err := s.executor.ExecTxn(
 		ctx,
 		func(txn executor.TxnExecutor) error {
-			txn.Use(debugDB)
+			txn.Use(DebugDB)
 			res, err := txn.Exec(
 				fmt.Sprintf("select table_id, columns from %s",
 					traceTable),
@@ -708,7 +708,7 @@ func (s *service) handleEvent(
 					return nil
 				},
 				executor.Options{}.
-					WithDatabase(debugDB).
+					WithDatabase(DebugDB).
 					WithDisableTrace().
 					WithDisableLock())
 		}
@@ -776,7 +776,7 @@ func (s *service) watch(ctx context.Context) {
 				return nil
 			},
 			executor.Options{}.
-				WithDatabase(debugDB).
+				WithDatabase(DebugDB).
 				WithDisableTrace().
 				WithDisableLock())
 		return state, err
@@ -823,7 +823,7 @@ func (s *service) updateState(state string) error {
 			return nil
 		},
 		executor.Options{}.
-			WithDatabase(debugDB).
+			WithDatabase(DebugDB).
 			WithMinCommittedTS(now).
 			WithWaitCommittedLogApplied().
 			WithDisableLock().
