@@ -387,6 +387,7 @@ func (receiver *messageReceiverOnServer) newCompile() *Compile {
 
 	c := reuse.Alloc[Compile](nil)
 	c.proc = proc
+	c.proc.MessageBoard = c.MessageBoard
 	c.e = cnInfo.storeEngine
 	c.anal = newAnaylze()
 	c.anal.analInfos = proc.AnalInfos
