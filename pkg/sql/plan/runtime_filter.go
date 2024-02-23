@@ -16,7 +16,9 @@ package plan
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
 const (
@@ -113,6 +115,16 @@ func (builder *QueryBuilder) pushdownRuntimeFilters(nodeID int32) {
 	}
 
 	rfTag := builder.genNewTag()
+
+	type_tuple := types.New(types.T_tuple, 0, 0)
+	for i := range probeExprs {
+		args := []types.Type{makeTypeByPlan2Expr(probeExprs[i]), type_tuple}
+		_, err := function.GetFunctionByName(builder.GetContext(), "in", args)
+		if err != nil {
+			//don't support this type
+			return
+		}
+	}
 
 	if len(probeExprs) == 1 {
 		probeNdv := getExprNdv(probeExprs[0], builder)
