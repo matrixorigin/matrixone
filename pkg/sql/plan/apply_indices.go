@@ -400,7 +400,7 @@ END0:
 		joinNodeID := builder.appendNode(&plan.Node{
 			NodeType: plan.Node_JOIN,
 			Children: []int32{nodeID, idxTableNodeID},
-			JoinType: plan.Node_SEMI,
+			JoinType: plan.Node_INDEX,
 			OnList:   []*plan.Expr{joinCond},
 		}, builder.ctxByNode[nodeID])
 
@@ -524,7 +524,7 @@ END0:
 		joinNodeID := builder.appendNode(&plan.Node{
 			NodeType: plan.Node_JOIN,
 			Children: []int32{nodeID, idxTableNodeID},
-			JoinType: plan.Node_SEMI,
+			JoinType: plan.Node_INDEX,
 			OnList:   []*plan.Expr{joinCond},
 		}, builder.ctxByNode[nodeID])
 

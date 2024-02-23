@@ -60,6 +60,11 @@ func (builder *QueryBuilder) pushdownRuntimeFilters(nodeID int32) {
 		return
 	}
 
+	// if this node has already pushed runtime filter, just return
+	if len(node.RuntimeFilterProbeList) > 0 {
+		return
+	}
+
 	if node.JoinType == plan.Node_LEFT || node.JoinType == plan.Node_OUTER || node.JoinType == plan.Node_SINGLE || node.JoinType == plan.Node_MARK {
 		return
 	}

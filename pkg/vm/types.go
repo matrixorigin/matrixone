@@ -54,6 +54,7 @@ const (
 	LoopAnti
 	Mark
 	LoopMark
+	IndexJoin
 
 	Merge
 	MergeTop
