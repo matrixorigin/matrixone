@@ -1892,7 +1892,25 @@ func HasFkSelfReferOnly(tableDef *TableDef) bool {
 	return true
 }
 
-func MakeInExpr(left *Expr, length int32, data []byte) *Expr {
+func MakeInExpr(ctx context.Context, left *Expr, length int32, data []byte) *Expr {
+	rightArg := &plan.Expr{
+		Typ: &plan.Type{
+			Id: int32(types.T_tuple),
+		},
+		Expr: &plan.Expr_Vec{
+			Vec: &plan.LiteralVec{
+				Len:  length,
+				Data: data,
+			},
+		},
+	}
+
+	fid := function.InFunctionEncodedID
+	args := []types.Type{makeTypeByPlan2Expr(left), makeTypeByPlan2Expr(rightArg)}
+	fGet, err := function.GetFunctionByName(ctx, "in", args)
+	if err == nil {
+		fid = fGet.GetEncodedOverloadID()
+	}
 	inExpr := &plan.Expr{
 		Typ: &plan.Type{
 			Id:          int32(types.T_bool),
@@ -1901,22 +1919,12 @@ func MakeInExpr(left *Expr, length int32, data []byte) *Expr {
 		Expr: &plan.Expr_F{
 			F: &plan.Function{
 				Func: &plan.ObjectRef{
-					Obj:     function.InFunctionEncodedID,
+					Obj:     fid,
 					ObjName: function.InFunctionName,
 				},
 				Args: []*plan.Expr{
 					left,
-					{
-						Typ: &plan.Type{
-							Id: int32(types.T_tuple),
-						},
-						Expr: &plan.Expr_Vec{
-							Vec: &plan.LiteralVec{
-								Len:  length,
-								Data: data,
-							},
-						},
-					},
+					rightArg,
 				},
 			},
 		},
