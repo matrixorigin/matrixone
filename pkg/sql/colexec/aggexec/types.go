@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 const (
@@ -72,16 +73,37 @@ var (
 )
 
 // MakeAgg supports to create an aggregation function executor for single column.
+// todo: if we support some methods to register the param, result type and the implementation,
+//
+//	we can only use the aggID to create the aggregation function executor.
 func MakeAgg(
-	aggID int64, param types.Type, result types.Type, private any) AggFuncExec {
+	proc *process.Process,
+	aggID int64, param types.Type, result types.Type, implementationAllocator any) AggFuncExec {
+	info := singleAggInfo{
+		aggID:   aggID,
+		argType: param,
+		retType: result,
+	}
+	opt := singleAggOptimizedInfo{
+		receiveNull: true,
+	}
 
-	// switch the param and result type
-	// or let the user deliver the correct implementation with [from, to].
+	pIsVarLen, rIsVarLen := param.IsVarlen(), result.IsVarlen()
+	if pIsVarLen && rIsVarLen {
+		return newSingleAggFuncExec4(proc, info, opt, implementationAllocator)
+	}
 
-	panic(fmt.Sprintf("invalid implementation for single-column aggregation, agg id: %d, param is %s, result is %s", aggID, param.String(), result.String()))
+	if pIsVarLen && !rIsVarLen {
+		return newSingleAggFuncExec2(proc, info, opt, implementationAllocator)
+	}
+
+	if !pIsVarLen && rIsVarLen {
+		return newSingleAggFuncExec3(proc, info, opt, implementationAllocator)
+	}
+	return newSingleAggFuncExec1(proc, info, opt, implementationAllocator)
 }
 
-// MakeMultiAgg supports to create an aggregation function executor for multiple columns.
+// MakeMultiAgg supports creating an aggregation function executor for multiple columns.
 func MakeMultiAgg(
 	aggID int64, param []types.Type, result types.Type, private any) AggFuncExec {
 

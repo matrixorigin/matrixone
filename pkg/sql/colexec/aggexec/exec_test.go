@@ -51,11 +51,8 @@ func TestSingleAggFuncExec1(t *testing.T) {
 		argType: types.T_int32.ToType(),
 		retType: types.T_int64.ToType(),
 	}
-	opt := singleAggOptimizedInfo{
-		receiveNull: true,
-	}
-	executor := newSingleAggFuncExec1(info.argType, info.retType).(*singleAggFuncExec1[int32, int64])
-	executor.Init(proc, info, opt, gTesSingleAggPrivate1)
+	// this asserting should be removed later.
+	executor := MakeAgg(proc, info.aggID, info.argType, info.retType, gTesSingleAggPrivate1).(*singleAggFuncExec1[int32, int64])
 
 	// input first row of [3, null, 4, 5] - count 1
 	// input second row of [3, null, 4, 5] - count 1

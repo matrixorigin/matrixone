@@ -14,86 +14,176 @@
 
 package aggexec
 
-import "github.com/matrixorigin/matrixone/pkg/container/types"
+import (
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
+)
 
 // all the codes in this file were to new the single column aggregation executors.
 
-func newSingleAggFuncExec1(from, to types.Type) AggFuncExec {
-	switch to.Oid {
+func newSingleAggFuncExec1(
+	proc *process.Process, info singleAggInfo, opt singleAggOptimizedInfo, f any) AggFuncExec {
+	switch info.retType.Oid {
 	case types.T_bool:
-		return newSingleAggFuncExec1WithKnownResultType[bool](from)
+		return newSingleAggFuncExec1WithKnownResultType[bool](proc, info, opt, f)
 	case types.T_int8:
-		return newSingleAggFuncExec1WithKnownResultType[int8](from)
+		return newSingleAggFuncExec1WithKnownResultType[int8](proc, info, opt, f)
 	case types.T_int16:
-		return newSingleAggFuncExec1WithKnownResultType[int16](from)
+		return newSingleAggFuncExec1WithKnownResultType[int16](proc, info, opt, f)
 	case types.T_int32:
-		return newSingleAggFuncExec1WithKnownResultType[int32](from)
+		return newSingleAggFuncExec1WithKnownResultType[int32](proc, info, opt, f)
 	case types.T_int64:
-		return newSingleAggFuncExec1WithKnownResultType[int64](from)
+		return newSingleAggFuncExec1WithKnownResultType[int64](proc, info, opt, f)
 	case types.T_uint8:
-		return newSingleAggFuncExec1WithKnownResultType[uint8](from)
+		return newSingleAggFuncExec1WithKnownResultType[uint8](proc, info, opt, f)
 	case types.T_uint16:
-		return newSingleAggFuncExec1WithKnownResultType[uint16](from)
+		return newSingleAggFuncExec1WithKnownResultType[uint16](proc, info, opt, f)
 	case types.T_uint32:
-		return newSingleAggFuncExec1WithKnownResultType[uint32](from)
+		return newSingleAggFuncExec1WithKnownResultType[uint32](proc, info, opt, f)
 	case types.T_uint64:
-		return newSingleAggFuncExec1WithKnownResultType[uint64](from)
+		return newSingleAggFuncExec1WithKnownResultType[uint64](proc, info, opt, f)
 	case types.T_float32:
-		return newSingleAggFuncExec1WithKnownResultType[float32](from)
+		return newSingleAggFuncExec1WithKnownResultType[float32](proc, info, opt, f)
 	case types.T_float64:
-		return newSingleAggFuncExec1WithKnownResultType[float64](from)
+		return newSingleAggFuncExec1WithKnownResultType[float64](proc, info, opt, f)
 	case types.T_decimal64:
-		return newSingleAggFuncExec1WithKnownResultType[types.Decimal64](from)
+		return newSingleAggFuncExec1WithKnownResultType[types.Decimal64](proc, info, opt, f)
 	case types.T_decimal128:
-		return newSingleAggFuncExec1WithKnownResultType[types.Decimal128](from)
+		return newSingleAggFuncExec1WithKnownResultType[types.Decimal128](proc, info, opt, f)
 	case types.T_date:
-		return newSingleAggFuncExec1WithKnownResultType[types.Date](from)
+		return newSingleAggFuncExec1WithKnownResultType[types.Date](proc, info, opt, f)
 	case types.T_datetime:
-		return newSingleAggFuncExec1WithKnownResultType[types.Datetime](from)
+		return newSingleAggFuncExec1WithKnownResultType[types.Datetime](proc, info, opt, f)
 	case types.T_time:
-		return newSingleAggFuncExec1WithKnownResultType[types.Time](from)
+		return newSingleAggFuncExec1WithKnownResultType[types.Time](proc, info, opt, f)
 	case types.T_timestamp:
-		return newSingleAggFuncExec1WithKnownResultType[types.Timestamp](from)
+		return newSingleAggFuncExec1WithKnownResultType[types.Timestamp](proc, info, opt, f)
 	}
 	panic("unsupported result type for singleAggFuncExec1")
 }
 
-func newSingleAggFuncExec1WithKnownResultType[to types.FixedSizeTExceptStrType](from types.Type) AggFuncExec {
-	switch from.Oid {
+func newSingleAggFuncExec1WithKnownResultType[to types.FixedSizeTExceptStrType](
+	proc *process.Process, info singleAggInfo, opt singleAggOptimizedInfo, f any) AggFuncExec {
+	switch info.argType.Oid {
 	case types.T_bool:
-		return &singleAggFuncExec1[bool, to]{}
+		if g, ok := f.(func() singleAggPrivateStructure1[bool, to]); ok {
+			e := &singleAggFuncExec1[bool, to]{}
+			e.Init(proc, info, opt, g)
+			return e
+		}
 	case types.T_int8:
-		return &singleAggFuncExec1[int8, to]{}
+		if g, ok := f.(func() singleAggPrivateStructure1[int8, to]); ok {
+			e := &singleAggFuncExec1[int8, to]{}
+			e.Init(proc, info, opt, g)
+			return e
+		}
 	case types.T_int16:
-		return &singleAggFuncExec1[int16, to]{}
+		if g, ok := f.(func() singleAggPrivateStructure1[int16, to]); ok {
+			e := &singleAggFuncExec1[int16, to]{}
+			e.Init(proc, info, opt, g)
+			return e
+		}
 	case types.T_int32:
-		return &singleAggFuncExec1[int32, to]{}
+		if g, ok := f.(func() singleAggPrivateStructure1[int32, to]); ok {
+			e := &singleAggFuncExec1[int32, to]{}
+			e.Init(proc, info, opt, g)
+			return e
+		}
 	case types.T_int64:
-		return &singleAggFuncExec1[int64, to]{}
+		if g, ok := f.(func() singleAggPrivateStructure1[int64, to]); ok {
+			e := &singleAggFuncExec1[int64, to]{}
+			e.Init(proc, info, opt, g)
+			return e
+		}
 	case types.T_uint8:
-		return &singleAggFuncExec1[uint8, to]{}
+		if g, ok := f.(func() singleAggPrivateStructure1[uint8, to]); ok {
+			e := &singleAggFuncExec1[uint8, to]{}
+			e.Init(proc, info, opt, g)
+			return e
+		}
 	case types.T_uint16:
-		return &singleAggFuncExec1[uint16, to]{}
+		if g, ok := f.(func() singleAggPrivateStructure1[uint16, to]); ok {
+			e := &singleAggFuncExec1[uint16, to]{}
+			e.Init(proc, info, opt, g)
+			return e
+		}
 	case types.T_uint32:
-		return &singleAggFuncExec1[uint32, to]{}
+		if g, ok := f.(func() singleAggPrivateStructure1[uint32, to]); ok {
+			e := &singleAggFuncExec1[uint32, to]{}
+			e.Init(proc, info, opt, g)
+			return e
+		}
 	case types.T_uint64:
-		return &singleAggFuncExec1[uint64, to]{}
+		if g, ok := f.(func() singleAggPrivateStructure1[uint64, to]); ok {
+			e := &singleAggFuncExec1[uint64, to]{}
+			e.Init(proc, info, opt, g)
+			return e
+		}
 	case types.T_float32:
-		return &singleAggFuncExec1[float32, to]{}
+		if g, ok := f.(func() singleAggPrivateStructure1[float32, to]); ok {
+			e := &singleAggFuncExec1[float32, to]{}
+			e.Init(proc, info, opt, g)
+			return e
+		}
 	case types.T_float64:
-		return &singleAggFuncExec1[float64, to]{}
+		if g, ok := f.(func() singleAggPrivateStructure1[float64, to]); ok {
+			e := &singleAggFuncExec1[float64, to]{}
+			e.Init(proc, info, opt, g)
+			return e
+		}
 	case types.T_decimal64:
-		return &singleAggFuncExec1[types.Decimal64, to]{}
+		if g, ok := f.(func() singleAggPrivateStructure1[types.Decimal64, to]); ok {
+			e := &singleAggFuncExec1[types.Decimal64, to]{}
+			e.Init(proc, info, opt, g)
+			return e
+		}
 	case types.T_decimal128:
-		return &singleAggFuncExec1[types.Decimal128, to]{}
+		if g, ok := f.(func() singleAggPrivateStructure1[types.Decimal128, to]); ok {
+			e := &singleAggFuncExec1[types.Decimal128, to]{}
+			e.Init(proc, info, opt, g)
+			return e
+		}
 	case types.T_date:
-		return &singleAggFuncExec1[types.Date, to]{}
+		if g, ok := f.(func() singleAggPrivateStructure1[types.Date, to]); ok {
+			e := &singleAggFuncExec1[types.Date, to]{}
+			e.Init(proc, info, opt, g)
+			return e
+		}
 	case types.T_datetime:
-		return &singleAggFuncExec1[types.Datetime, to]{}
+		if g, ok := f.(func() singleAggPrivateStructure1[types.Datetime, to]); ok {
+			e := &singleAggFuncExec1[types.Datetime, to]{}
+			e.Init(proc, info, opt, g)
+			return e
+		}
 	case types.T_time:
-		return &singleAggFuncExec1[types.Time, to]{}
+		if g, ok := f.(func() singleAggPrivateStructure1[types.Time, to]); ok {
+			e := &singleAggFuncExec1[types.Time, to]{}
+			e.Init(proc, info, opt, g)
+			return e
+		}
 	case types.T_timestamp:
-		return &singleAggFuncExec1[types.Timestamp, to]{}
+		if g, ok := f.(func() singleAggPrivateStructure1[types.Timestamp, to]); ok {
+			e := &singleAggFuncExec1[types.Timestamp, to]{}
+			e.Init(proc, info, opt, g)
+			return e
+		}
+	default:
+		panic("unsupported parameter type for singleAggFuncExec1")
 	}
-	panic("unsupported parameter type for singleAggFuncExec1")
+	panic("unexpected parameter to init a singleAggFuncExec1")
+}
+
+func newSingleAggFuncExec2(
+	proc *process.Process, info singleAggInfo, opt singleAggOptimizedInfo, f any) AggFuncExec {
+	return nil
+}
+
+func newSingleAggFuncExec3(
+	proc *process.Process, info singleAggInfo, opt singleAggOptimizedInfo, f any) AggFuncExec {
+	return nil
+}
+
+func newSingleAggFuncExec4(
+	proc *process.Process, info singleAggInfo, opt singleAggOptimizedInfo, f any) AggFuncExec {
+	return nil
 }
