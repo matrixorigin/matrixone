@@ -284,7 +284,7 @@ func (arg *Argument) filterByRoaring(proc *process.Process, anal process.Analyze
 // utils functions
 
 func (arg *Argument) appendPassToRuntimeFilter(v *vector.Vector, proc *process.Process) {
-	if arg.pass2RuntimeFilter != nil {
+	if arg.pass2RuntimeFilter != nil && len(arg.RuntimeFilterSenders) > 0 {
 		el := arg.pass2RuntimeFilter.Length()
 		al := v.Length()
 
