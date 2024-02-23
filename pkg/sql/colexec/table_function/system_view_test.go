@@ -78,6 +78,9 @@ func (m *mockQueryService) Close() error {
 func (m *mockQueryService) AddHandleFunc(method query.CmdMethod, h func(context.Context, *query.Request, *query.Response) error, async bool) {
 }
 
+func (m *mockQueryService) AddReleaseFunc(method query.CmdMethod, f func()) {
+}
+
 func (m *mockQueryService) ServiceID() string {
 	return "mock_query_service"
 }
