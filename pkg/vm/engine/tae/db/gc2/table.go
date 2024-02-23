@@ -85,17 +85,32 @@ func (t *GCTable) getObjects() map[string]*ObjectEntry {
 }
 
 // SoftGC is to remove objectentry that can be deleted from GCTable
-func (t *GCTable) SoftGC(table *GCTable, ts types.TS) []string {
+func (t *GCTable) SoftGC(table *GCTable, ts types.TS, snapShotList []types.TS) []string {
 	gc := make([]string, 0)
 	objects := t.getObjects()
 	for name, entry := range objects {
 		objectEntry := table.objects[name]
-		if objectEntry == nil && entry.commitTS.Less(ts) {
+		if objectEntry == nil && entry.commitTS.Less(ts) && !isSnapshotRefers(entry, snapShotList) {
 			gc = append(gc, name)
 			t.deleteObject(name)
 		}
 	}
 	return gc
+}
+
+func isSnapshotRefers(obj *ObjectEntry, snapShotList []types.TS) bool {
+	left, right := 0, len(snapShotList)-1
+	for left <= right {
+		mid := left + (right-left)/2
+		if snapShotList[mid].GreaterEq(obj.createTS) && snapShotList[mid].Less(obj.dropTS) {
+			return true
+		} else if snapShotList[mid].Less(obj.createTS) {
+			left = mid + 1
+		} else {
+			right = mid - 1
+		}
+	}
+	return false
 }
 
 func (t *GCTable) UpdateTable(data *logtail.CheckpointData) {
