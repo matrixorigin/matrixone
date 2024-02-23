@@ -59,6 +59,8 @@ func NewQueryService(serviceID string, address string, cfg morpc.Config) (QueryS
 		serviceID: serviceID,
 	}
 
+	qs.mu.releaser = make(map[*pb.Response]func())
+
 	pool := morpc.NewMessagePool(
 		func() *pb.Request { return &pb.Request{} },
 		func() *pb.Response { return &pb.Response{} })
