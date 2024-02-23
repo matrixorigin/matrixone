@@ -91,7 +91,7 @@ var (
 func GetService() Service {
 	v, ok := runtime.ProcessLevelRuntime().GetGlobalVariables(runtime.TxnTraceService)
 	if !ok {
-		return nil
+		return &service{}
 	}
 	return v.(Service)
 }
