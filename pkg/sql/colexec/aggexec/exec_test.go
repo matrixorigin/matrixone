@@ -51,8 +51,7 @@ func TestSingleAggFuncExec1(t *testing.T) {
 		argType: types.T_int32.ToType(),
 		retType: types.T_int64.ToType(),
 	}
-	// this asserting should be removed later.
-	executor := MakeAgg(proc, info.aggID, info.argType, info.retType, gTesSingleAggPrivate1).(*singleAggFuncExec1[int32, int64])
+	executor := MakeAgg(proc, info.aggID, info.argType, info.retType, gTesSingleAggPrivate1)
 
 	// input first row of [3, null, 4, 5] - count 1
 	// input second row of [3, null, 4, 5] - count 1
@@ -152,8 +151,7 @@ func TestMultiAggFuncExec1(t *testing.T) {
 		argTypes: []types.Type{types.T_int64.ToType(), types.T_bool.ToType()},
 		retType:  types.T_int64.ToType(),
 	}
-	executor := newMultiAggFuncExec(info.retType).(*multiAggFuncExec1[int64])
-	executor.Init(proc, info, gTesMultiAggPrivate1)
+	executor := MakeMultiAgg(proc, 2, info.argTypes, info.retType, gTesMultiAggPrivate1)
 
 	// input first row of [{null, false}, {1, true}] - count 0
 	// input second row of [{null, false}, {1, true}] - count 1

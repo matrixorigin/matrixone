@@ -15,6 +15,7 @@
 package aggexec
 
 import (
+	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -68,109 +69,109 @@ func newSingleAggFuncExec1WithKnownResultType[to types.FixedSizeTExceptStrType](
 	case types.T_bool:
 		if g, ok := f.(func() singleAggPrivateStructure1[bool, to]); ok {
 			e := &singleAggFuncExec1[bool, to]{}
-			e.Init(proc, info, opt, g)
+			e.init(proc, info, opt, g)
 			return e
 		}
 	case types.T_int8:
 		if g, ok := f.(func() singleAggPrivateStructure1[int8, to]); ok {
 			e := &singleAggFuncExec1[int8, to]{}
-			e.Init(proc, info, opt, g)
+			e.init(proc, info, opt, g)
 			return e
 		}
 	case types.T_int16:
 		if g, ok := f.(func() singleAggPrivateStructure1[int16, to]); ok {
 			e := &singleAggFuncExec1[int16, to]{}
-			e.Init(proc, info, opt, g)
+			e.init(proc, info, opt, g)
 			return e
 		}
 	case types.T_int32:
 		if g, ok := f.(func() singleAggPrivateStructure1[int32, to]); ok {
 			e := &singleAggFuncExec1[int32, to]{}
-			e.Init(proc, info, opt, g)
+			e.init(proc, info, opt, g)
 			return e
 		}
 	case types.T_int64:
 		if g, ok := f.(func() singleAggPrivateStructure1[int64, to]); ok {
 			e := &singleAggFuncExec1[int64, to]{}
-			e.Init(proc, info, opt, g)
+			e.init(proc, info, opt, g)
 			return e
 		}
 	case types.T_uint8:
 		if g, ok := f.(func() singleAggPrivateStructure1[uint8, to]); ok {
 			e := &singleAggFuncExec1[uint8, to]{}
-			e.Init(proc, info, opt, g)
+			e.init(proc, info, opt, g)
 			return e
 		}
 	case types.T_uint16:
 		if g, ok := f.(func() singleAggPrivateStructure1[uint16, to]); ok {
 			e := &singleAggFuncExec1[uint16, to]{}
-			e.Init(proc, info, opt, g)
+			e.init(proc, info, opt, g)
 			return e
 		}
 	case types.T_uint32:
 		if g, ok := f.(func() singleAggPrivateStructure1[uint32, to]); ok {
 			e := &singleAggFuncExec1[uint32, to]{}
-			e.Init(proc, info, opt, g)
+			e.init(proc, info, opt, g)
 			return e
 		}
 	case types.T_uint64:
 		if g, ok := f.(func() singleAggPrivateStructure1[uint64, to]); ok {
 			e := &singleAggFuncExec1[uint64, to]{}
-			e.Init(proc, info, opt, g)
+			e.init(proc, info, opt, g)
 			return e
 		}
 	case types.T_float32:
 		if g, ok := f.(func() singleAggPrivateStructure1[float32, to]); ok {
 			e := &singleAggFuncExec1[float32, to]{}
-			e.Init(proc, info, opt, g)
+			e.init(proc, info, opt, g)
 			return e
 		}
 	case types.T_float64:
 		if g, ok := f.(func() singleAggPrivateStructure1[float64, to]); ok {
 			e := &singleAggFuncExec1[float64, to]{}
-			e.Init(proc, info, opt, g)
+			e.init(proc, info, opt, g)
 			return e
 		}
 	case types.T_decimal64:
 		if g, ok := f.(func() singleAggPrivateStructure1[types.Decimal64, to]); ok {
 			e := &singleAggFuncExec1[types.Decimal64, to]{}
-			e.Init(proc, info, opt, g)
+			e.init(proc, info, opt, g)
 			return e
 		}
 	case types.T_decimal128:
 		if g, ok := f.(func() singleAggPrivateStructure1[types.Decimal128, to]); ok {
 			e := &singleAggFuncExec1[types.Decimal128, to]{}
-			e.Init(proc, info, opt, g)
+			e.init(proc, info, opt, g)
 			return e
 		}
 	case types.T_date:
 		if g, ok := f.(func() singleAggPrivateStructure1[types.Date, to]); ok {
 			e := &singleAggFuncExec1[types.Date, to]{}
-			e.Init(proc, info, opt, g)
+			e.init(proc, info, opt, g)
 			return e
 		}
 	case types.T_datetime:
 		if g, ok := f.(func() singleAggPrivateStructure1[types.Datetime, to]); ok {
 			e := &singleAggFuncExec1[types.Datetime, to]{}
-			e.Init(proc, info, opt, g)
+			e.init(proc, info, opt, g)
 			return e
 		}
 	case types.T_time:
 		if g, ok := f.(func() singleAggPrivateStructure1[types.Time, to]); ok {
 			e := &singleAggFuncExec1[types.Time, to]{}
-			e.Init(proc, info, opt, g)
+			e.init(proc, info, opt, g)
 			return e
 		}
 	case types.T_timestamp:
 		if g, ok := f.(func() singleAggPrivateStructure1[types.Timestamp, to]); ok {
 			e := &singleAggFuncExec1[types.Timestamp, to]{}
-			e.Init(proc, info, opt, g)
+			e.init(proc, info, opt, g)
 			return e
 		}
 	default:
-		panic("unsupported parameter type for singleAggFuncExec1")
+		panic(fmt.Sprintf("unsupported parameter type for singleAggFuncExec1, aggInfo: %s", info))
 	}
-	panic("unexpected parameter to init a singleAggFuncExec1")
+	panic(fmt.Sprintf("unexpected parameter to init a singleAggFuncExec1, aggInfo: %s", info))
 }
 
 func newSingleAggFuncExec2(

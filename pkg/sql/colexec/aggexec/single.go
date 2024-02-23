@@ -15,6 +15,7 @@
 package aggexec
 
 import (
+	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -25,6 +26,10 @@ type singleAggInfo struct {
 	aggID   int64
 	argType types.Type
 	retType types.Type
+}
+
+func (info singleAggInfo) String() string {
+	return fmt.Sprintf("{aggID: %d, argType: %s, retType: %s}", info.aggID, info.argType.String(), info.retType.String())
 }
 
 func (info singleAggInfo) AggID() int64 {
@@ -75,6 +80,9 @@ type singleAggFuncExec2[from types.FixedSizeTExceptStrType] struct {
 	arg    sFixedArg[from]
 	ret    aggFuncBytesResult
 	groups []singleAggPrivateStructure2[from]
+
+	// method to new the private structure for group growing.
+	gGroup func() singleAggPrivateStructure2[from]
 }
 type singleAggFuncExec3[to types.FixedSizeTExceptStrType] struct {
 	singleAggInfo
@@ -84,6 +92,9 @@ type singleAggFuncExec3[to types.FixedSizeTExceptStrType] struct {
 	arg    sBytesArg
 	ret    aggFuncResult[to]
 	groups []singleAggPrivateStructure3[to]
+
+	// method to new the private structure for group growing.
+	gGroup func() singleAggPrivateStructure3[to]
 }
 type singleAggFuncExec4 struct {
 	singleAggInfo
@@ -93,9 +104,12 @@ type singleAggFuncExec4 struct {
 	arg    sBytesArg
 	ret    aggFuncBytesResult
 	groups []singleAggPrivateStructure4
+
+	// method to new the private structure for group growing.
+	gGroup func() singleAggPrivateStructure4
 }
 
-func (exec *singleAggFuncExec1[from, to]) Init(
+func (exec *singleAggFuncExec1[from, to]) init(
 	proc *process.Process,
 	info singleAggInfo,
 	opt singleAggOptimizedInfo,
@@ -288,6 +302,29 @@ func (exec *singleAggFuncExec1[from, to]) Free() {
 	exec.ret.free()
 }
 
+func (exec *singleAggFuncExec2[from]) init(
+	proc *process.Process,
+	info singleAggInfo,
+	opt singleAggOptimizedInfo,
+	nm func() singleAggPrivateStructure2[from]) {
+
+	exec.singleAggInfo = info
+	exec.singleAggOptimizedInfo = opt
+	exec.ret = initBytesAggFuncResult(proc, info.retType)
+	exec.groups = make([]singleAggPrivateStructure2[from], 0, 1)
+	exec.gGroup = nm
+}
+
+func (exec *singleAggFuncExec2[from]) GroupGrow(more int) error {
+	moreGroup := make([]singleAggPrivateStructure2[from], more)
+	for i := 0; i < more; i++ {
+		moreGroup[i] = exec.gGroup()
+		moreGroup[i].init()
+	}
+	exec.groups = append(exec.groups, moreGroup...)
+	return exec.ret.grows(more)
+}
+
 func (exec *singleAggFuncExec2[from]) Fill(groupIndex int, row int, vectors []*vector.Vector) error {
 	vec := vectors[0]
 	if vec.IsConst() {
@@ -453,6 +490,29 @@ func (exec *singleAggFuncExec2[from]) Free() {
 	exec.ret.free()
 }
 
+func (exec *singleAggFuncExec3[to]) init(
+	proc *process.Process,
+	info singleAggInfo,
+	opt singleAggOptimizedInfo,
+	nm func() singleAggPrivateStructure3[to]) {
+
+	exec.singleAggInfo = info
+	exec.singleAggOptimizedInfo = opt
+	exec.ret = initFixedAggFuncResult[to](proc, info.retType)
+	exec.groups = make([]singleAggPrivateStructure3[to], 0, 1)
+	exec.gGroup = nm
+}
+
+func (exec *singleAggFuncExec3[to]) GroupGrow(more int) error {
+	moreGroup := make([]singleAggPrivateStructure3[to], more)
+	for i := 0; i < more; i++ {
+		moreGroup[i] = exec.gGroup()
+		moreGroup[i].init()
+	}
+	exec.groups = append(exec.groups, moreGroup...)
+	return exec.ret.grows(more)
+}
+
 func (exec *singleAggFuncExec3[to]) Fill(groupIndex int, row int, vectors []*vector.Vector) error {
 	vec := vectors[0]
 	if vec.IsConst() {
@@ -615,6 +675,29 @@ func (exec *singleAggFuncExec3[to]) Flush() (*vector.Vector, error) {
 
 func (exec *singleAggFuncExec3[to]) Free() {
 	exec.ret.free()
+}
+
+func (exec *singleAggFuncExec4) init(
+	proc *process.Process,
+	info singleAggInfo,
+	opt singleAggOptimizedInfo,
+	nm func() singleAggPrivateStructure4) {
+
+	exec.singleAggInfo = info
+	exec.singleAggOptimizedInfo = opt
+	exec.ret = initBytesAggFuncResult(proc, info.retType)
+	exec.groups = make([]singleAggPrivateStructure4, 0, 1)
+	exec.gGroup = nm
+}
+
+func (exec *singleAggFuncExec4) GroupGrow(more int) error {
+	moreGroup := make([]singleAggPrivateStructure4, more)
+	for i := 0; i < more; i++ {
+		moreGroup[i] = exec.gGroup()
+		moreGroup[i].init()
+	}
+	exec.groups = append(exec.groups, moreGroup...)
+	return exec.ret.grows(more)
 }
 
 func (exec *singleAggFuncExec4) Fill(groupIndex int, row int, vectors []*vector.Vector) error {

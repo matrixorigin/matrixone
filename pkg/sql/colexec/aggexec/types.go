@@ -15,7 +15,6 @@
 package aggexec
 
 import (
-	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -30,15 +29,12 @@ const (
 // AggFuncExec is an interface to do execution for aggregation.
 // todo: use vector... to replace the []*vector.Vector may be better.
 type AggFuncExec interface {
-	// Init initialize the aggregation.
-	// Init()
-
 	AggID() int64
 
 	// TypesInfo return the argument types and return type of the function.
 	TypesInfo() ([]types.Type, types.Type)
 
-	// GrowGroup(more int) error
+	GroupGrow(more int) error
 
 	// Fill BulkFill and BatchFill add the value to the aggregation.
 	Fill(groupIndex int, row int, vectors []*vector.Vector) error
@@ -105,11 +101,14 @@ func MakeAgg(
 
 // MakeMultiAgg supports creating an aggregation function executor for multiple columns.
 func MakeMultiAgg(
-	aggID int64, param []types.Type, result types.Type, private any) AggFuncExec {
-
-	// same as the above comment of MakeAgg.
-
-	panic(fmt.Sprintf("invalid implementation for multi-column aggregation, agg id: %d, param is %s, result is %s", aggID, param, result.String()))
+	proc *process.Process,
+	aggID int64, param []types.Type, result types.Type, implementationAllocator any) AggFuncExec {
+	info := multiAggInfo{
+		aggID:    aggID,
+		argTypes: param,
+		retType:  result,
+	}
+	return newMultiAggFuncExec(proc, info, implementationAllocator)
 }
 
 // MakeGroupConcat is one special case of MakeMultiAgg.

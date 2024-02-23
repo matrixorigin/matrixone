@@ -15,6 +15,7 @@
 package aggexec
 
 import (
+	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -24,6 +25,15 @@ type multiAggInfo struct {
 	aggID    int64
 	argTypes []types.Type
 	retType  types.Type
+}
+
+func (info multiAggInfo) String() string {
+	args := "[" + info.argTypes[0].String()
+	for i := 1; i < len(info.argTypes); i++ {
+		args += ", " + info.argTypes[i].String()
+	}
+	args += "]"
+	return fmt.Sprintf("{aggID: %d, argTypes: %s, retType: %s}", info.aggID, args, info.retType.String())
 }
 
 func (info multiAggInfo) AggID() int64 {
@@ -55,7 +65,7 @@ type multiAggFuncExec2 struct {
 	groups []multiAggPrivateStructure2
 }
 
-func (exec *multiAggFuncExec1[T]) Init(
+func (exec *multiAggFuncExec1[T]) init(
 	proc *process.Process,
 	info multiAggInfo,
 	nm func() multiAggPrivateStructure1[T]) {
@@ -161,6 +171,18 @@ func (exec *multiAggFuncExec1[T]) Flush() (*vector.Vector, error) {
 
 func (exec *multiAggFuncExec1[T]) Free() {
 	exec.ret.free()
+}
+
+func (exec *multiAggFuncExec2) init(
+	proc *process.Process,
+	info multiAggInfo,
+	nm func() multiAggPrivateStructure2) {
+	// todo:
+}
+
+func (exec *multiAggFuncExec2) GroupGrow(more int) error {
+	// todo:
+	return nil
 }
 
 func (exec *multiAggFuncExec2) Fill(groupIndex int, row int, vectors []*vector.Vector) error {
