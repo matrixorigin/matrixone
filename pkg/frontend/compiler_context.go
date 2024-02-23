@@ -19,18 +19,20 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
@@ -59,12 +61,6 @@ var _ plan2.CompilerContext = &TxnCompilerContext{}
 
 func (tcc *TxnCompilerContext) ReplacePlan(execPlan *plan.Execute) (*plan.Plan, tree.Statement, error) {
 	return replacePlan(tcc.ses.GetRequestContext(), tcc.ses, tcc.tcw, execPlan)
-}
-
-func (tcc *TxnCompilerContext) GetStatsCache() *plan2.StatsCache {
-	tcc.mu.Lock()
-	defer tcc.mu.Unlock()
-	return tcc.ses.statsCache
 }
 
 func InitTxnCompilerContext(txn *TxnHandler, db string) *TxnCompilerContext {
@@ -291,7 +287,7 @@ func (tcc *TxnCompilerContext) ResolveById(tableId uint64) (*plan2.ObjectRef, *p
 		ObjName:    tableName,
 		Obj:        int64(tableId),
 	}
-	tableDef := table.GetTableDef(txnCtx)
+	tableDef := table.CopyTableDef(txnCtx)
 	return obj, tableDef
 }
 
@@ -309,7 +305,7 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 	if err != nil {
 		return nil, nil
 	}
-	tableDef := table.GetTableDef(ctx)
+	tableDef := table.CopyTableDef(ctx)
 	if tableDef.IsTemporary {
 		tableDef.Name = tableName
 	}
@@ -614,7 +610,7 @@ func (tcc *TxnCompilerContext) GetPrimaryKeyDef(dbName string, tableName string)
 	return priDefs
 }
 
-func (tcc *TxnCompilerContext) Stats(obj *plan2.ObjectRef) bool {
+func (tcc *TxnCompilerContext) Stats(obj *plan2.ObjectRef) (*pb.StatsInfo, error) {
 	start := time.Now()
 	defer func() {
 		v2.TxnStatementStatsDurationHistogram.Observe(time.Since(start).Seconds())
@@ -627,7 +623,7 @@ func (tcc *TxnCompilerContext) Stats(obj *plan2.ObjectRef) bool {
 	}
 	dbName, sub, err := tcc.ensureDatabaseIsNotEmpty(dbName, checkSub)
 	if err != nil {
-		return false
+		return nil, err
 	}
 	if !checkSub {
 		sub = &plan.SubscriptionMeta{
@@ -638,39 +634,9 @@ func (tcc *TxnCompilerContext) Stats(obj *plan2.ObjectRef) bool {
 	tableName := obj.GetObjName()
 	ctx, table, err := tcc.getRelation(dbName, tableName, sub)
 	if err != nil {
-		return false
+		return nil, err
 	}
-
-	var partitionInfo *plan2.PartitionByDef
-	engineDefs, err := table.TableDefs(ctx)
-	if err != nil {
-		return false
-	}
-	for _, def := range engineDefs {
-		if partitionDef, ok := def.(*engine.PartitionDef); ok {
-			if partitionDef.Partitioned > 0 {
-				p := &plan2.PartitionByDef{}
-				err = p.UnMarshalPartitionInfo(([]byte)(partitionDef.Partition))
-				if err != nil {
-					return false
-				}
-				partitionInfo = p
-			}
-		}
-	}
-	var ptables []any
-	if partitionInfo != nil {
-		ptables = make([]any, len(partitionInfo.PartitionTableNames))
-		for i, PartitionTableName := range partitionInfo.PartitionTableNames {
-			_, ptable, _ := tcc.getRelation(dbName, PartitionTableName, nil)
-			ptables[i] = ptable
-		}
-	}
-	s := tcc.GetStatsCache().GetStatsInfoMap(table.GetTableID(ctx), true)
-	if s == nil {
-		return false
-	}
-	return table.Stats(ctx, ptables, s)
+	return table.Stats(ctx, true), nil
 }
 
 func (tcc *TxnCompilerContext) GetProcess() *process.Process {
