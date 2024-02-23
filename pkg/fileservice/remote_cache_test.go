@@ -133,9 +133,15 @@ func runTestWithTwoFileServices(t *testing.T, fn func(sf1 *cacheFs, sf2 *cacheFs
 		assert.NoError(t, err)
 		qs.AddHandleFunc(query.CmdMethod_GetCacheData,
 			func(ctx context.Context, req *query.Request, resp *query.Response) error {
-				return HandleRemoteRead(ctx, fs, req, &query.WrappedResponse{
+				wr := &query.WrappedResponse{
 					Response: resp,
-				})
+				}
+				err = HandleRemoteRead(ctx, fs, req, wr)
+				if err != nil {
+					return err
+				}
+				qs.SetReleaseFunc(resp, wr.ReleaseFunc)
+				return nil
 			},
 			false,
 		)
