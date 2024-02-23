@@ -24,9 +24,9 @@ internal error: can not drop table 't2' referenced by some foreign key constrain
 drop table fk_foreign_key_checks3_db1.t3;
 internal error: can not drop table 't3' referenced by some foreign key constraint
 drop database fk_foreign_key_checks3_db0;
-internal error: can not drop database 'fk_foreign_key_checks3_db0' which has been referenced by foreign keys
+internal error: can not drop database. It has been referenced by foreign keys
 drop database fk_foreign_key_checks3_db1;
-internal error: can not drop database 'fk_foreign_key_checks3_db1' which has been referenced by foreign keys
+internal error: can not drop database. It has been referenced by foreign keys
 SET FOREIGN_KEY_CHECKS=0;
 drop database fk_foreign_key_checks3_db0;
 drop database fk_foreign_key_checks3_db1;
