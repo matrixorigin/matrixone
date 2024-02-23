@@ -181,6 +181,18 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 			typeStr += fmt.Sprintf("(%d,%d)", col.Typ.Width, col.Typ.Scale)
 		}
 
+		if typ.Oid.IsEnum() {
+			enums := strings.Split(col.Typ.GetEnumvalues(), ",")
+			typeStr += "("
+			for i, enum := range enums {
+				typeStr += fmt.Sprintf("'%s'", enum)
+				if i < len(enums)-1 {
+					typeStr += ","
+				}
+			}
+			typeStr += ")"
+		}
+
 		updateOpt := ""
 		if col.OnUpdate != nil && col.OnUpdate.Expr != nil {
 			updateOpt = " ON UPDATE " + col.OnUpdate.OriginString
