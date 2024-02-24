@@ -3811,20 +3811,29 @@ func convertIntoReferAction(s string) plan.ForeignKeyDef_RefAction {
 }
 
 func makeInsertSqlForFk(db, table string, data *FkData) string {
-	row := make([]string, 9)
+	row := make([]string, 16)
 	rows := 0
 	sb := strings.Builder{}
-	sb.WriteString("insert into `mo_catalog`.`mo_foreign_keys` values ")
+	sb.WriteString("insert into `mo_catalog`.`mo_foreign_keys`  ")
+	//sb.WriteString("(constraint_name, db_name, table_name, column_name, refer_db_name, refer_table_name, refer_column_name, on_delete, on_update) ")
+	sb.WriteString(" values ")
 	for childIdx, childCol := range data.Cols.Cols {
 		row[0] = data.Def.Name
-		row[1] = db
-		row[2] = table
-		row[3] = childCol
-		row[4] = data.ParentDbName
-		row[5] = data.ParentTableName
-		row[6] = data.ColsReferred.Cols[childIdx]
-		row[7] = data.Def.OnDelete.String()
-		row[8] = data.Def.OnUpdate.String()
+		row[1] = "0"
+		row[2] = db
+		row[3] = "0"
+		row[4] = table
+		row[5] = "0"
+		row[6] = childCol
+		row[7] = "0"
+		row[8] = data.ParentDbName
+		row[9] = "0"
+		row[10] = data.ParentTableName
+		row[11] = "0"
+		row[12] = data.ColsReferred.Cols[childIdx]
+		row[13] = "0"
+		row[14] = data.Def.OnDelete.String()
+		row[15] = data.Def.OnUpdate.String()
 		{
 			if rows > 0 {
 				sb.WriteByte(',')

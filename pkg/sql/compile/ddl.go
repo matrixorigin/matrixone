@@ -727,13 +727,13 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 		return err
 	}
 
-	//update foreign_key_checks
-	for _, sql := range qry.UpdateSqls {
-		err = c.runSql(sql)
-		if err != nil {
-			return err
-		}
-	}
+	////update foreign_key_checks
+	//for _, sql := range qry.UpdateSqls {
+	//	err = c.runSql(sql)
+	//	if err != nil {
+	//		return err
+	//	}
+	//}
 
 	// remove refChildTbls for drop foreign key clause
 	//remove the child table id -- tblId from the parent table -- fkTblId

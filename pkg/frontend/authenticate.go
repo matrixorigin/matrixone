@@ -901,14 +901,37 @@ var (
 
 	createMoForeignKeysSql = `create table mo_foreign_keys(
 				constraint_name varchar(5000) not null,
+				constraint_id BIGINT UNSIGNED not null,
 				db_name varchar(5000) not null,
+				db_id BIGINT UNSIGNED not null,
 				table_name varchar(5000) not null,
+				table_id BIGINT UNSIGNED not null,
 				column_name varchar(256) not null,
+				column_id BIGINT UNSIGNED not null,
 				refer_db_name varchar(5000) not null,
+				refer_db_id BIGINT UNSIGNED not null,
 				refer_table_name varchar(5000) not null,
+				refer_table_id BIGINT UNSIGNED not null,
 				refer_column_name varchar(256) not null,
+				refer_column_id BIGINT UNSIGNED not null,
 				on_delete varchar(128) not null,
-				on_update varchar(128) not null
+				on_update varchar(128) not null,
+		
+				primary key(
+					constraint_name,
+					constraint_id,
+					db_name,
+					db_id,
+					table_name,
+					table_id,
+					column_name,
+					column_id,
+					refer_db_name,
+					refer_db_id,
+					refer_table_name,
+					refer_table_id,
+					refer_column_name,
+					refer_column_id)
 			);`
 
 	createMoTablePartitionsSql = fmt.Sprintf(`CREATE TABLE %s (
