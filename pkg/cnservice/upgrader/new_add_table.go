@@ -84,12 +84,30 @@ var (
 			primary key(stage_id)
 		  );`, catalog.MO_CATALOG, catalog.MO_STAGES),
 	}
+
+	MoForeignKeys = &table.Table{
+		Account:  table.AccountAll,
+		Database: catalog.MO_CATALOG,
+		Table:    "mo_foreign_keys",
+		CreateTableSql: fmt.Sprintf(`create table %s.%s(
+				constraint_name varchar(5000) not null,
+				db_name varchar(5000) not null,
+				table_name varchar(5000) not null,
+				column_name varchar(256) not null,
+				refer_db_name varchar(5000) not null,
+				refer_table_name varchar(5000) not null,
+				refer_column_name varchar(256) not null,
+				on_delete varchar(128) not null,
+				on_update varchar(128) not null
+			);`, catalog.MO_CATALOG, "mo_foreign_keys"),
+	}
 )
 
 var needUpgradeNewTable = []*table.Table{
 	MoTablePartitionsTable,
 	SysDaemonTaskTable,
 	MoStagesTable,
+	MoForeignKeys,
 }
 
 var PARTITIONSView = &table.Table{
