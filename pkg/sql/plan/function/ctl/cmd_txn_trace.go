@@ -22,7 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-// select mo_ctl('cn', 'txn-trace', 'enable|disable|clear|add')
+// select mo_ctl('cn', 'txn-trace', 'enable|disable|clear|add|decode-complex')
 func handleTxnTrace(
 	proc *process.Process,
 	service serviceType,
@@ -68,6 +68,16 @@ func handleTxnTrace(
 			return Result{}, err
 		}
 		return Result{Data: "OK"}, nil
+	case "decode-complex":
+		// decode complex pk
+		if len(params) != 2 {
+			return Result{}, moerr.NewInvalidInputNoCtx("invalid parameter %s", parameter)
+		}
+		value, err := trace.GetService().DecodeHexComplexPK(params[1])
+		if err != nil {
+			return Result{}, err
+		}
+		return Result{Data: value}, nil
 	default:
 		return Result{}, moerr.NewInvalidInputNoCtx("invalid parameter %s", parameter)
 	}

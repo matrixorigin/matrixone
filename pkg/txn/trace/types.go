@@ -111,6 +111,8 @@ type Service interface {
 	RefreshFilters() error
 	ClearFilters() error
 
+	DecodeHexComplexPK(hex string) (string, error)
+
 	Close()
 }
 

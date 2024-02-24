@@ -23,11 +23,10 @@ import (
 )
 
 func writeCompletedValue(
-	vec *vector.Vector,
-	row int,
+	row []byte,
 	buf *buffer,
 	dst []byte) {
-	tuples, _, _, err := types.DecodeTuple(vec.GetBytesAt(row))
+	tuples, _, _, err := types.DecodeTuple(row)
 	if err != nil {
 		panic(err)
 	}

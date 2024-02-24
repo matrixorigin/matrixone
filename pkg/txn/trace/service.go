@@ -84,8 +84,8 @@ type service struct {
 	}
 
 	atomic struct {
-		enabled           atomic.Bool
-		completedPKTables sync.Map // uint64 -> bool
+		enabled         atomic.Bool
+		complexPKTables sync.Map // uint64 -> bool
 	}
 
 	options struct {
@@ -284,7 +284,7 @@ func (s *service) CommitEntries(
 			func(e entryEvent) {
 				s.entryC <- e
 			},
-			&s.atomic.completedPKTables)
+			&s.atomic.complexPKTables)
 		n++
 	}
 
@@ -334,7 +334,7 @@ func (s *service) TxnRead(
 		func(e entryEvent) {
 			s.entryC <- e
 		},
-		&s.atomic.completedPKTables)
+		&s.atomic.complexPKTables)
 	s.entryBufC <- buf
 }
 
@@ -462,7 +462,7 @@ func (s *service) ApplyLogtail(
 		func(e entryEvent) {
 			s.entryC <- e
 		},
-		&s.atomic.completedPKTables)
+		&s.atomic.complexPKTables)
 	s.entryBufC <- buf
 }
 
@@ -592,6 +592,21 @@ func (s *service) RefreshFilters() error {
 	defer s.mu.Unlock()
 	s.mu.entryFilters = filters
 	return nil
+}
+
+func (s *service) DecodeHexComplexPK(hexPK string) (string, error) {
+	v, err := hex.DecodeString(hexPK)
+	if err != nil {
+		return "", err
+	}
+
+	buf := reuse.Alloc[buffer](nil)
+	defer buf.close()
+
+	dst := buf.alloc(20)
+	idx := buf.buf.GetWriteIndex()
+	writeCompletedValue(v, buf, dst)
+	return string(buf.buf.RawSlice(idx, buf.buf.GetWriteIndex())), nil
 }
 
 func (s *service) Close() {
@@ -1005,8 +1020,11 @@ func (l *EntryData) writeToBuf(
 			columnsData := l.vecs[col]
 			buf.buf.WriteString(name)
 			buf.buf.WriteString(":")
-			if isCompletedPK(name) || (ok && l.entryType == api.Entry_Delete && isDeletePKColumn(name)) {
-				writeCompletedValue(columnsData, row, buf, dst)
+			if isComplexColumn(name) ||
+				(ok &&
+					l.entryType == api.Entry_Delete &&
+					isDeletePKColumn(name)) {
+				writeCompletedValue(columnsData.GetBytesAt(row), buf, dst)
 				isCompletedPKTable = true
 			} else {
 				writeValue(columnsData, row, buf, dst)

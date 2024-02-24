@@ -26,10 +26,10 @@ import (
 var (
 	// cannot import catalog, because cycle import
 
-	completedPKColumnName = "__mo_cpkey_col"
-	rowIDColumn           = "__mo_rowid"
-	deletePKColumn        = "pk"
-	disableColumns        = map[string]struct{}{
+	complexPKColumnName = "__mo_cpkey_col"
+	rowIDColumn         = "__mo_rowid"
+	deletePKColumn      = "pk"
+	disableColumns      = map[string]struct{}{
 		"object_stats":        {},
 		"__mo_%1_commit_time": {},
 		"block_id":            {},
@@ -50,8 +50,12 @@ var (
 	entryReadEvent   = "read"
 )
 
-func isCompletedPK(name string) bool {
-	return name == completedPKColumnName
+func isComplexColumn(name string) bool {
+	return name == complexPKColumnName
+}
+
+func isRowIDColumn(name string) bool {
+	return name == rowIDColumn
 }
 
 func isDeletePKColumn(name string) bool {

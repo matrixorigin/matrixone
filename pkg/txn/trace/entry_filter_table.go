@@ -57,7 +57,9 @@ func (f *tableEntryFilter) Filter(entry *EntryData) bool {
 		for i, attr := range entry.columns {
 			_, ok := f.columns[attr]
 			// keep row id and completed pk forever
-			if ok || attr == rowIDColumn || attr == completedPKColumnName {
+			if ok ||
+				isRowIDColumn(attr) ||
+				isComplexColumn(complexPKColumnName) {
 				newColumns = append(newColumns, attr)
 				newVecs = append(newVecs, entry.vecs[i])
 			}
