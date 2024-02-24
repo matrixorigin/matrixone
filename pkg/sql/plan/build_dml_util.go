@@ -21,7 +21,6 @@ import (
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
-	"os"
 	"strings"
 	"sync"
 
@@ -1948,8 +1947,7 @@ func appendPreDeleteNode(builder *QueryBuilder, bindCtx *BindContext, objRef *Ob
 	return builder.appendNode(preDeleteNode, bindCtx)
 }
 
-func appendJoinNodeForParentFkCheck(ctx CompilerContext,
-	builder *QueryBuilder, bindCtx *BindContext, objRef *ObjectRef, tableDef *TableDef, baseNodeId int32) (int32, error) {
+func appendJoinNodeForParentFkCheck(builder *QueryBuilder, bindCtx *BindContext, objRef *ObjectRef, tableDef *TableDef, baseNodeId int32) (int32, error) {
 	typMap := make(map[string]*plan.Type)
 	id2name := make(map[uint64]string)
 	name2pos := make(map[string]int)
@@ -2012,7 +2010,7 @@ func appendJoinNodeForParentFkCheck(ctx CompilerContext,
 
 		parentObjRef, parentTableDef := builder.compCtx.ResolveById(fk.ForeignTbl)
 		if parentTableDef == nil {
-			return -1, moerr.NewInternalError(ctx.GetContext(), "parent table %d not found", fk.ForeignTbl)
+			return -1, moerr.NewInternalError(builder.GetContext(), "parent table %d not found", fk.ForeignTbl)
 		}
 		newTableDef := DeepCopyTableDef(parentTableDef, false)
 		joinConds := make([]*plan.Expr, 0)
@@ -3720,7 +3718,7 @@ func (fk ReferDef) String() string {
 		fk.Db, fk.Tbl, fk.Name, fk.Col, fk.ReferCol)
 }
 
-func GetSqlOfAllReferred(db, table string) string {
+func GetSqlForFkReferredTo(db, table string) string {
 	return fmt.Sprintf(
 		"select "+
 			"db_name, "+
@@ -3740,14 +3738,13 @@ func GetSqlOfAllReferred(db, table string) string {
 		db, table, db, db, table)
 }
 
-func getAllRefered(ctx CompilerContext, db, table string) (map[ReferKey]map[string][]*ReferDef, error) {
+func GetFkReferredTo(ctx CompilerContext, db, table string) (map[ReferKey]map[string][]*ReferDef, error) {
 	//exclude fk self reference
-	sql := GetSqlOfAllReferred(db, table)
+	sql := GetSqlForFkReferredTo(db, table)
 	res, err := runSql(ctx, sql)
 	if err != nil {
 		return nil, err
 	}
-	fmt.Fprintf(os.Stderr, "refered sql: %v \n", sql)
 	defer res.Close()
 	ret := make(map[ReferKey]map[string][]*ReferDef)
 	const dbIdx = 0
@@ -3810,7 +3807,7 @@ func convertIntoReferAction(s string) plan.ForeignKeyDef_RefAction {
 	}
 }
 
-func makeInsertSqlForFk(db, table string, data *FkData) string {
+func getSqlForAddFk(db, table string, data *FkData) string {
 	row := make([]string, 16)
 	rows := 0
 	sb := strings.Builder{}
@@ -3854,7 +3851,7 @@ func makeInsertSqlForFk(db, table string, data *FkData) string {
 	return sb.String()
 }
 
-func makeDeleteFkSqlForDropTable(db, tbl string) string {
+func getSqlForDeleteTable(db, tbl string) string {
 	sb := strings.Builder{}
 	sb.WriteString("delete from `mo_catalog`.`mo_foreign_keys` where ")
 	sb.WriteString(fmt.Sprintf(
@@ -3862,7 +3859,7 @@ func makeDeleteFkSqlForDropTable(db, tbl string) string {
 	return sb.String()
 }
 
-func makeDeleteFkSqlForDropConstraint(db, tbl, constraint string) string {
+func getSqlForDeleteConstraint(db, tbl, constraint string) string {
 	sb := strings.Builder{}
 	sb.WriteString("delete from `mo_catalog`.`mo_foreign_keys` where ")
 	sb.WriteString(fmt.Sprintf(
@@ -3871,14 +3868,14 @@ func makeDeleteFkSqlForDropConstraint(db, tbl, constraint string) string {
 	return sb.String()
 }
 
-func makeDeleteFkSqlForDropDatabase(db string) string {
+func getSqlForDeleteDB(db string) string {
 	sb := strings.Builder{}
 	sb.WriteString("delete from `mo_catalog`.`mo_foreign_keys` where ")
 	sb.WriteString(fmt.Sprintf("db_name = '%s'", db))
 	return sb.String()
 }
 
-func makeRenameTableFkSqlForAlterTable(db, oldName, newName string) (ret []string) {
+func getSqlForRenameTable(db, oldName, newName string) (ret []string) {
 	sb := strings.Builder{}
 	sb.WriteString("update `mo_catalog`.`mo_foreign_keys` ")
 	sb.WriteString(fmt.Sprintf("set table_name = '%s' ", newName))
@@ -3893,7 +3890,7 @@ func makeRenameTableFkSqlForAlterTable(db, oldName, newName string) (ret []strin
 	return
 }
 
-func makeRenameColumnFkSqlForAlterTable(db, table, oldName, newName string) (ret []string) {
+func getSqlForRenameColumn(db, table, oldName, newName string) (ret []string) {
 	sb := strings.Builder{}
 	sb.WriteString("update `mo_catalog`.`mo_foreign_keys` ")
 	sb.WriteString(fmt.Sprintf("set column_name = '%s' ", newName))
@@ -3910,9 +3907,44 @@ func makeRenameColumnFkSqlForAlterTable(db, table, oldName, newName string) (ret
 	return
 }
 
-func makeCheckFkRefersToMeForDropDatabase(db string) string {
+func getSqlForCheckHasDBRefersTo(db string) string {
 	sb := strings.Builder{}
 	sb.WriteString("select count(*) > 0 from `mo_catalog`.`mo_foreign_keys` ")
 	sb.WriteString(fmt.Sprintf("where refer_db_name = '%s' and db_name != '%s';", db, db))
 	return sb.String()
+}
+
+var fkBannedDatabase = map[string]bool{
+	catalog.MO_CATALOG:        true,
+	catalog.MO_SYSTEM:         true,
+	catalog.MO_SYSTEM_METRICS: true,
+	catalog.MOTaskDB:          true,
+	"information_schema":      true,
+	"mysql":                   true,
+}
+
+// isFkBannedDatabase denotes the database should not have any
+// foreign keys
+func isFkBannedDatabase(db string) bool {
+	if _, has := fkBannedDatabase[db]; has {
+		return true
+	}
+	return false
+}
+
+func IsForeignKeyChecksEnabled(ctx CompilerContext) (bool, error) {
+	value, err := ctx.ResolveVariable("foreign_key_checks", true, false)
+	if err != nil {
+		return false, err
+	}
+	if value == nil {
+		return true, nil
+	}
+	if v, ok := value.(int64); ok {
+		return v == 1, nil
+	} else if v1, ok := value.(int8); ok {
+		return v1 == 1, nil
+	} else {
+		return false, moerr.NewInternalError(ctx.GetContext(), "invalid  %v ", value)
+	}
 }

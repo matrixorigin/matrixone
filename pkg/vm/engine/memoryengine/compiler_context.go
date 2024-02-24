@@ -39,11 +39,6 @@ type CompilerContext struct {
 	txnOp     client.TxnOperator
 }
 
-func (c *CompilerContext) HasFKsReferToMe(dbName string) (bool, error) {
-	//TODO implement me
-	panic("implement me")
-}
-
 func (c *CompilerContext) ReplacePlan(execPlan *planpb.Execute) (*planpb.Plan, tree.Statement, error) {
 	//TODO implement me
 	panic("implement me")

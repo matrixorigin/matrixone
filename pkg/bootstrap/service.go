@@ -85,7 +85,7 @@ var (
 			primary key(table_id, col_name)
 		);`, catalog.MO_CATALOG, catalog.MOAutoIncrTable),
 
-		fmt.Sprintf(`create table %s.mo_foreign_keys(
+		fmt.Sprintf(`create table %s.%s(
 			constraint_name varchar(5000) not null,
 			constraint_id BIGINT UNSIGNED not null default 0,
 			db_name varchar(5000) not null,
@@ -118,7 +118,7 @@ var (
 				refer_table_id,
 				refer_column_name,
 				refer_column_id)
-		);`, catalog.MO_CATALOG),
+		);`, catalog.MO_CATALOG, catalog.MOForeignKeys),
 	}
 
 	step2InitSQLs = []string{

@@ -899,7 +899,7 @@ var (
 				primary key(id, column_name)
 			);`, catalog.MO_INDEXES)
 
-	createMoForeignKeysSql = `create table mo_foreign_keys(
+	createMoForeignKeysSql = fmt.Sprintf(`create table %s(
 				constraint_name varchar(5000) not null,
 				constraint_id BIGINT UNSIGNED not null,
 				db_name varchar(5000) not null,
@@ -932,7 +932,7 @@ var (
 					refer_table_id,
 					refer_column_name,
 					refer_column_id)
-			);`
+			);`, catalog.MOForeignKeys)
 
 	createMoTablePartitionsSql = fmt.Sprintf(`CREATE TABLE %s (
 			  table_id bigint unsigned NOT NULL,

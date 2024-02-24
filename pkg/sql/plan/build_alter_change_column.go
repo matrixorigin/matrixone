@@ -57,7 +57,7 @@ func ChangeColumn(ctx CompilerContext, alterPlan *plan.AlterTable, spec *tree.Al
 
 		//change the name of the column in the foreign key constraint
 		alterCtx.UpdateSqls = append(alterCtx.UpdateSqls,
-			makeRenameColumnFkSqlForAlterTable(alterPlan.Database,
+			getSqlForRenameColumn(alterPlan.Database,
 				alterPlan.TableDef.Name,
 				originalColName,
 				newColName)...)

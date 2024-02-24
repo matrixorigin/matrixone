@@ -18,12 +18,10 @@ import (
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"os"
 )
 
 func (s *Scope) AlterTableCopy(c *Compile) error {
@@ -199,38 +197,7 @@ func (s *Scope) AlterTable(c *Compile) (err error) {
 	if err != nil {
 		return err
 	}
-
-	result, err := c.runSqlWithResult("select * from mo_catalog.mo_foreign_keys")
-	if err != nil {
-		return err
-	}
-	if result.Batches != nil {
-		vs := result.Batches[0].Vecs
-		if vs != nil && vs[0].Length() > 0 {
-			for row := 0; row < vs[0].Length(); row++ {
-				cols := make([]any, 16)
-				cols[0] = vs[0].GetStringAt(row)
-				cols[1] = vector.GetFixedAt[uint64](vs[1], row)
-				cols[2] = vs[2].GetStringAt(row)
-				cols[3] = vector.GetFixedAt[uint64](vs[3], row)
-				cols[4] = vs[4].GetStringAt(row)
-				cols[5] = vector.GetFixedAt[uint64](vs[5], row)
-				cols[6] = vs[6].GetStringAt(row)
-				cols[7] = vector.GetFixedAt[uint64](vs[7], row)
-				cols[8] = vs[8].GetStringAt(row)
-				cols[9] = vector.GetFixedAt[uint64](vs[9], row)
-				cols[10] = vs[10].GetStringAt(row)
-				cols[11] = vector.GetFixedAt[uint64](vs[11], row)
-				cols[12] = vs[12].GetStringAt(row)
-				cols[13] = vector.GetFixedAt[uint64](vs[13], row)
-				cols[14] = vs[14].GetStringAt(row)
-				cols[15] = vs[15].GetStringAt(row)
-				fmt.Fprintln(os.Stderr, cols)
-			}
-		}
-	}
-	defer result.Close()
-
+	
 	//update the mo_foreign_keys
 	for _, sql := range qry.UpdateSqls {
 		err = c.runSql(sql)

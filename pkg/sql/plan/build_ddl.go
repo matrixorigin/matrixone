@@ -18,7 +18,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 	"strconv"
 	"strings"
 
@@ -1069,6 +1068,9 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 			if createTable.Temporary {
 				return moerr.NewNYI(ctx.GetContext(), "add foreign key for temporary table")
 			}
+			if isFkBannedDatabase(createTable.Database) {
+				return moerr.NewInternalError(ctx.GetContext(), "can not create foreign keys in %s", createTable.Database)
+			}
 			err := adjustConstraintName(ctx.GetContext(), def)
 			if err != nil {
 				return err
@@ -1309,25 +1311,12 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 		}
 	}
 
-	//
-	skip := false
-	switch createTable.Database {
-	case catalog.MO_CATALOG,
-		catalog.MO_SYSTEM,
-		catalog.MO_SYSTEM_METRICS,
-		"mo_task",
-		"information_schema",
-		"mysql":
-		skip = true
-	}
-
+	skip := isFkBannedDatabase(createTable.Database)
 	if !skip {
-		fks, err := getAllRefered(ctx, createTable.Database, createTable.TableDef.Name)
+		fks, err := GetFkReferredTo(ctx, createTable.Database, createTable.TableDef.Name)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "db %s table %s\n", createTable.Database, createTable.TableDef.Name)
 			return err
 		}
-		fmt.Fprintf(os.Stderr, "create table fks refered: %v\n", fks)
 		//for fk forward reference. the column id of the tableDef is not ready.
 		//setup fake column id to distinguish the columns
 		for i, def := range createTable.TableDef.Cols {
@@ -2198,6 +2187,8 @@ func buildDropTable(stmt *tree.DropTable, ctx CompilerContext) (*Plan, error) {
 			}
 		}
 
+		// collect child tables that needs remove fk relationships
+		// with the table
 		if tableDef.RefChildTbls != nil {
 			for _, childTbl := range tableDef.RefChildTbls {
 				if childTbl == 0 {
@@ -2221,7 +2212,7 @@ func buildDropTable(stmt *tree.DropTable, ctx CompilerContext) (*Plan, error) {
 		}
 
 		dropTable.TableDef = tableDef
-		dropTable.DropSqls = []string{makeDeleteFkSqlForDropTable(dropTable.Database, dropTable.Table)}
+		dropTable.DropSqls = []string{getSqlForDeleteTable(dropTable.Database, dropTable.Table)}
 	}
 	return &Plan{
 		Plan: &plan.Plan_Ddl{
@@ -2334,21 +2325,11 @@ func buildDropDatabase(stmt *tree.DropDatabase, ctx CompilerContext) (*Plan, err
 			return nil, err
 		}
 		if enabled {
-			dropDB.CheckFKSql = makeCheckFkRefersToMeForDropDatabase(dropDB.Database)
+			dropDB.CheckFKSql = getSqlForCheckHasDBRefersTo(dropDB.Database)
 		}
-
-		//if enabled {
-		//	me, err := ctx.HasFKsReferToMe(dropDB.Database)
-		//	if err != nil {
-		//		return nil, err
-		//	}
-		//	if me {
-		//		return nil, moerr.NewInternalError(ctx.GetContext(), "can not drop database '%v' which has been referenced by foreign keys", dropDB.Database)
-		//	}
-		//}
 	}
 
-	dropDB.UpdateSql = makeDeleteFkSqlForDropDatabase(dropDB.Database)
+	dropDB.UpdateSql = getSqlForDeleteDB(dropDB.Database)
 
 	return &Plan{
 		Plan: &plan.Plan_Ddl{
@@ -2663,7 +2644,7 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 				for _, fk := range tableDef.Fkeys {
 					if fk.Name == constraintName {
 						name_not_found = false
-						updateSqls = append(updateSqls, makeDeleteFkSqlForDropConstraint(databaseName, tableName, constraintName))
+						updateSqls = append(updateSqls, getSqlForDeleteConstraint(databaseName, tableName, constraintName))
 						break
 					}
 				}
@@ -2906,7 +2887,7 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 					},
 				},
 			}
-			updateSqls = append(updateSqls, makeRenameTableFkSqlForAlterTable(databaseName, oldName, newName)...)
+			updateSqls = append(updateSqls, getSqlForRenameTable(databaseName, oldName, newName)...)
 		case *tree.AlterAddCol:
 			colType, err := getTypeFromAst(ctx.GetContext(), opt.Column.Type)
 			if err != nil {
@@ -3200,10 +3181,6 @@ func getForeignKeyData(ctx CompilerContext, dbName string, tableDef *TableDef, d
 		},
 	}
 
-	if len(def.KeyParts) != len(refer.KeyParts) {
-		//TODO: error
-	}
-
 	// get fk columns of create table
 	fkData.Cols = &plan.FkColName{
 		Cols: make([]string, len(def.KeyParts)),
@@ -3242,6 +3219,10 @@ func getForeignKeyData(ctx CompilerContext, dbName string, tableDef *TableDef, d
 		parentDbName = ctx.DefaultDatabase()
 	}
 
+	if isFkBannedDatabase(parentDbName) {
+		return nil, moerr.NewInternalError(ctx.GetContext(), "can not refer foreign keys in %s", parentDbName)
+	}
+
 	//foreign key reference to itself
 	if IsFkSelfRefer(parentDbName, parentTableName, dbName, tableDef.Name) {
 		//should be handled later for fk self reference
@@ -3262,7 +3243,7 @@ func getForeignKeyData(ctx CompilerContext, dbName string, tableDef *TableDef, d
 		fkData.ParentDbName = parentDbName
 		fkData.ParentTableName = parentTableName
 		fkData.Def.ForeignTbl = 0
-		fkData.UpdateSql = makeInsertSqlForFk(dbName, tableDef.Name, &fkData)
+		fkData.UpdateSql = getSqlForAddFk(dbName, tableDef.Name, &fkData)
 		return &fkData, nil
 	}
 
@@ -3270,7 +3251,7 @@ func getForeignKeyData(ctx CompilerContext, dbName string, tableDef *TableDef, d
 	fkData.ParentTableName = parentTableName
 
 	//make insert mo_foreign_keys
-	fkData.UpdateSql = makeInsertSqlForFk(dbName, tableDef.Name, &fkData)
+	fkData.UpdateSql = getSqlForAddFk(dbName, tableDef.Name, &fkData)
 
 	_, parentTableDef := ctx.Resolve(parentDbName, parentTableName)
 	if parentTableDef == nil {
@@ -3279,7 +3260,6 @@ func getForeignKeyData(ctx CompilerContext, dbName string, tableDef *TableDef, d
 			return nil, err
 		}
 		if !enabled {
-			//TODO:
 			fkData.ForwardRefer = true
 			return &fkData, nil
 		}
@@ -3411,6 +3391,8 @@ func checkFkColsAreValid(ctx CompilerContext, fkData *FkData, parentTableDef *Ta
 	return nil
 }
 
+// buildFkDataOfForwardRefer rebuilds the fk relationships based on
+// the mo_catalog.mo_foreign_keys.
 func buildFkDataOfForwardRefer(ctx CompilerContext,
 	constraintName string,
 	fkDefs []*ReferDef,

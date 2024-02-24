@@ -42,11 +42,6 @@ type MockCompilerContext struct {
 	ctx context.Context
 }
 
-func (m *MockCompilerContext) HasFKsReferToMe(dbName string) (bool, error) {
-	//TODO implement me
-	panic("implement me")
-}
-
 func (m *MockCompilerContext) ReplacePlan(execPlan *plan.Execute) (*plan.Plan, tree.Statement, error) {
 	//TODO implement me
 	panic("implement me")

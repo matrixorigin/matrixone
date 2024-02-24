@@ -492,26 +492,6 @@ func checkExprHasParamExpr(exprs []tree.Expr) bool {
 	return false
 }
 
-func IsForeignKeyChecksEnabled(ctx CompilerContext) (bool, error) {
-	value, err := ctx.ResolveVariable("foreign_key_checks", true, false)
-	if err != nil {
-		return false, err
-	}
-	//TODO: if null, it mean
-	if value == nil {
-		return true, nil
-	}
-	if v, ok := value.(int64); ok {
-		return v == 1, nil
-	} else if v1, ok := value.(int8); ok {
-		return v1 == 1, nil
-	} else {
-		return false, moerr.NewInternalError(ctx.GetContext(), "invalid  %v ", value)
-	}
-
-	return value != nil && value.(int64) == 0, nil
-}
-
 // makeSelectList forms SELECT Clause "Select t.a,t.b,... "
 func makeSelectList(table string, strs []string) string {
 	bb := strings.Builder{}

@@ -88,7 +88,7 @@ var (
 	MoForeignKeys = &table.Table{
 		Account:  table.AccountAll,
 		Database: catalog.MO_CATALOG,
-		Table:    "mo_foreign_keys",
+		Table: catalog.MOForeignKeys,
 		CreateTableSql: fmt.Sprintf(`create table %s.%s(
 			constraint_name varchar(5000) not null,
 			constraint_id BIGINT UNSIGNED not null default 0,
@@ -122,7 +122,7 @@ var (
 				refer_table_id,
 				refer_column_name,
 				refer_column_id)
-			);`, catalog.MO_CATALOG, "mo_foreign_keys"),
+			);`, catalog.MO_CATALOG, catalog.MOForeignKeys),
 	}
 )
 
