@@ -1304,7 +1304,7 @@ func (ses *Session) GetTxnCompileCtx() *TxnCompilerContext {
 		if conCtx == nil {
 			conCtx = context.Background()
 		}
-		proc.Ctx, _ = context.WithTimeout(conCtx,
+		proc.Ctx, proc.Cancel = context.WithTimeout(conCtx,
 			ses.GetParameterUnit().SV.SessionTimeout.Duration)
 		reqCtx := ses.GetRequestContext()
 		if reqCtx != nil {

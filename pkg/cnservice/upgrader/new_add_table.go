@@ -88,7 +88,7 @@ var (
 	MoForeignKeys = &table.Table{
 		Account:  table.AccountAll,
 		Database: catalog.MO_CATALOG,
-		Table: catalog.MOForeignKeys,
+		Table:    catalog.MOForeignKeys,
 		CreateTableSql: fmt.Sprintf(`create table %s.%s(
 			constraint_name varchar(5000) not null,
 			constraint_id BIGINT UNSIGNED not null default 0,

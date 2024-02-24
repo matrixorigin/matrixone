@@ -197,7 +197,7 @@ func (s *Scope) AlterTable(c *Compile) (err error) {
 	if err != nil {
 		return err
 	}
-	
+
 	//update the mo_foreign_keys
 	for _, sql := range qry.UpdateSqls {
 		err = c.runSql(sql)
