@@ -1304,6 +1304,9 @@ func (ses *Session) GetTxnCompileCtx() *TxnCompilerContext {
 		if conCtx == nil {
 			conCtx = context.Background()
 		}
+		if ses.GetParameterUnit().SV == nil {
+			panic("xxxx")
+		}
 		proc.Ctx, _ = context.WithTimeout(conCtx,
 			ses.GetParameterUnit().SV.SessionTimeout.Duration)
 		reqCtx := ses.GetRequestContext()
