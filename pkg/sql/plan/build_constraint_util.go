@@ -1371,7 +1371,8 @@ func appendPrimaryConstrantPlan(
 			if len(pkFilterExprs) == 0 {
 				fuzzyFilterNode.RuntimeFilterBuildList = []*plan.RuntimeFilterSpec{
 					{
-						Tag: rfTag,
+						Tag:        rfTag,
+						UpperLimit: GetInFilterCardLimitOnPK(scanNode.Stats.TableCnt),
 						Expr: &plan.Expr{
 							Typ: DeepCopyType(pkTyp),
 							Expr: &plan.Expr_Col{
@@ -1496,7 +1497,8 @@ func appendPrimaryConstrantPlan(
 					ProjectList: []*Expr{rowIdExpr, rightRowIdExpr, pkColExpr},
 					RuntimeFilterBuildList: []*plan.RuntimeFilterSpec{
 						{
-							Tag: rfTag,
+							Tag:        rfTag,
+							UpperLimit: GetInFilterCardLimitOnPK(scanNode.Stats.TableCnt),
 							Expr: &plan.Expr{
 								Typ: DeepCopyType(pkTyp),
 								Expr: &plan.Expr_Col{
