@@ -28,34 +28,52 @@ type aggFuncResult[T types.FixedSizeTExceptStrType] struct {
 	res    *vector.Vector
 	values []T // for quick get/set
 
-	groupToSet int // row index for aggGet() and aggSet()
+	groupToSet  int  // row index for aggGet() and aggSet()
+	emptyBeNull bool // indicate that if we should set null to the new row.
 }
 
 type aggFuncBytesResult struct {
-	proc       *process.Process
-	mp         *mpool.MPool
-	typ        types.Type
-	res        *vector.Vector
-	groupToSet int // row index for aggGet() and aggSet()
+	proc        *process.Process
+	mp          *mpool.MPool
+	typ         types.Type
+	res         *vector.Vector
+	groupToSet  int  // row index for aggGet() and aggSet()
+	emptyBeNull bool // indicate that if we should set null to the new row.
 }
 
-func initFixedAggFuncResult[T types.FixedSizeTExceptStrType](proc *process.Process, typ types.Type) aggFuncResult[T] {
+func initFixedAggFuncResult[T types.FixedSizeTExceptStrType](
+	proc *process.Process, typ types.Type,
+	emptyNull bool) aggFuncResult[T] {
 	return aggFuncResult[T]{
-		proc:       proc,
-		mp:         proc.Mp(),
-		typ:        typ,
-		res:        proc.GetVector(typ),
-		groupToSet: 0,
+		proc:        proc,
+		mp:          proc.Mp(),
+		typ:         typ,
+		res:         proc.GetVector(typ),
+		groupToSet:  0,
+		emptyBeNull: emptyNull,
 	}
 }
 
 func (r *aggFuncResult[T]) grows(more int) error {
-	newLen := r.res.Length() + more
+	oldLen, newLen := r.res.Length(), r.res.Length()+more
 	if err := r.res.PreExtend(newLen, r.mp); err != nil {
 		return err
 	}
 	r.res.SetLength(newLen)
 	r.values = vector.MustFixedCol[T](r.res)
+
+	// reset the new row.
+	{
+		var v T
+		for i, j := oldLen, newLen; i < j; i++ {
+			r.values[i] = v
+		}
+		if r.emptyBeNull {
+			for i, j := uint64(oldLen), uint64(newLen); i < j; i++ {
+				r.res.GetNulls().Set(i)
+			}
+		}
+	}
 	return nil
 }
 
@@ -81,22 +99,39 @@ func (r *aggFuncResult[T]) free() {
 	r.proc.PutVector(r.res)
 }
 
-func initBytesAggFuncResult(proc *process.Process, typ types.Type) aggFuncBytesResult {
+func initBytesAggFuncResult(
+	proc *process.Process, typ types.Type,
+	emptyNull bool) aggFuncBytesResult {
 	return aggFuncBytesResult{
-		proc:       proc,
-		mp:         proc.Mp(),
-		typ:        typ,
-		res:        proc.GetVector(typ),
-		groupToSet: 0,
+		proc:        proc,
+		mp:          proc.Mp(),
+		typ:         typ,
+		res:         proc.GetVector(typ),
+		groupToSet:  0,
+		emptyBeNull: emptyNull,
 	}
 }
 
 func (r *aggFuncBytesResult) grows(more int) error {
-	newLen := r.res.Length() + more
+	oldLen, newLen := r.res.Length(), r.res.Length()+more
 	if err := r.res.PreExtend(newLen, r.mp); err != nil {
 		return err
 	}
 	r.res.SetLength(newLen)
+
+	// reset the new row.
+	{
+		var v = []byte("")
+		for i, j := oldLen, newLen; i < j; i++ {
+			// this will never cause error.
+			_ = vector.SetBytesAt(r.res, i, v, r.mp)
+		}
+		if r.emptyBeNull {
+			for i, j := uint64(oldLen), uint64(newLen); i < j; i++ {
+				r.res.GetNulls().Set(i)
+			}
+		}
+	}
 	return nil
 }
 

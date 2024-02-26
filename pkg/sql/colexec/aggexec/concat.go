@@ -32,7 +32,7 @@ type groupConcatExec struct {
 func newGroupConcatExec(proc *process.Process, info multiAggInfo, separator string) AggFuncExec {
 	return &groupConcatExec{
 		multiAggInfo: info,
-		ret:          initBytesAggFuncResult(proc, info.retType),
+		ret:          initBytesAggFuncResult(proc, info.retType, info.emptyNull),
 		separator:    []byte(separator),
 	}
 }

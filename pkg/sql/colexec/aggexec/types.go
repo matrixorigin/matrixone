@@ -74,11 +74,13 @@ var (
 //	we can only use the aggID to create the aggregation function executor.
 func MakeAgg(
 	proc *process.Process,
-	aggID int64, param types.Type, result types.Type, implementationAllocator any) AggFuncExec {
+	aggID int64, emptyIsNull bool,
+	param types.Type, result types.Type, implementationAllocator any) AggFuncExec {
 	info := singleAggInfo{
-		aggID:   aggID,
-		argType: param,
-		retType: result,
+		aggID:     aggID,
+		argType:   param,
+		retType:   result,
+		emptyNull: emptyIsNull,
 	}
 	opt := singleAggOptimizedInfo{
 		receiveNull: true,
@@ -102,11 +104,13 @@ func MakeAgg(
 // MakeMultiAgg supports creating an aggregation function executor for multiple columns.
 func MakeMultiAgg(
 	proc *process.Process,
-	aggID int64, param []types.Type, result types.Type, implementationAllocator any) AggFuncExec {
+	aggID int64, emptyIsNull bool,
+	param []types.Type, result types.Type, implementationAllocator any) AggFuncExec {
 	info := multiAggInfo{
-		aggID:    aggID,
-		argTypes: param,
-		retType:  result,
+		aggID:     aggID,
+		argTypes:  param,
+		retType:   result,
+		emptyNull: emptyIsNull,
 	}
 	return newMultiAggFuncExec(proc, info, implementationAllocator)
 }
@@ -118,9 +122,10 @@ func MakeGroupConcat(
 	aggID int64, param []types.Type, result types.Type,
 	separator string) AggFuncExec {
 	info := multiAggInfo{
-		aggID:    aggID,
-		argTypes: param,
-		retType:  result,
+		aggID:     aggID,
+		argTypes:  param,
+		retType:   result,
+		emptyNull: true,
 	}
 	return newGroupConcatExec(proc, info, separator)
 }

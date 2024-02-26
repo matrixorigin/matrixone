@@ -25,6 +25,9 @@ type multiAggInfo struct {
 	aggID    int64
 	argTypes []types.Type
 	retType  types.Type
+
+	// emptyNull indicates that whether we should return null for a group without any input value.
+	emptyNull bool
 }
 
 func (info multiAggInfo) String() string {
@@ -72,7 +75,7 @@ func (exec *multiAggFuncExec1[T]) init(
 
 	exec.multiAggInfo = info
 	exec.args = make([]mArg1[T], len(info.argTypes))
-	exec.ret = initFixedAggFuncResult[T](proc, info.retType)
+	exec.ret = initFixedAggFuncResult[T](proc, info.retType, info.emptyNull)
 	exec.groups = make([]multiAggPrivateStructure1[T], 0, 1)
 	exec.gGroup = nm
 	exec.args = make([]mArg1[T], len(info.argTypes))

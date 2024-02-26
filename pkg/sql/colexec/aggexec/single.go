@@ -26,6 +26,9 @@ type singleAggInfo struct {
 	aggID   int64
 	argType types.Type
 	retType types.Type
+
+	// emptyNull indicates that whether we should return null for a group without any input value.
+	emptyNull bool
 }
 
 func (info singleAggInfo) String() string {
@@ -117,7 +120,7 @@ func (exec *singleAggFuncExec1[from, to]) init(
 
 	exec.singleAggInfo = info
 	exec.singleAggOptimizedInfo = opt
-	exec.ret = initFixedAggFuncResult[to](proc, info.retType)
+	exec.ret = initFixedAggFuncResult[to](proc, info.retType, info.emptyNull)
 	exec.groups = make([]singleAggPrivateStructure1[from, to], 0, 1)
 	exec.gGroup = nm
 }
@@ -289,12 +292,6 @@ func (exec *singleAggFuncExec1[from, to]) Flush() (*vector.Vector, error) {
 		exec.ret.groupToSet = i
 		group.flush(getter, setter)
 	}
-
-	// if it was ordered window, should clean the nulls.
-
-	// if it was count, should clean the nulls.
-	// todo: this can be a method of the agg like 'nullsIfEmpty' or something.
-
 	return exec.ret.flush(), nil
 }
 
@@ -310,7 +307,7 @@ func (exec *singleAggFuncExec2[from]) init(
 
 	exec.singleAggInfo = info
 	exec.singleAggOptimizedInfo = opt
-	exec.ret = initBytesAggFuncResult(proc, info.retType)
+	exec.ret = initBytesAggFuncResult(proc, info.retType, info.emptyNull)
 	exec.groups = make([]singleAggPrivateStructure2[from], 0, 1)
 	exec.gGroup = nm
 }
@@ -481,8 +478,6 @@ func (exec *singleAggFuncExec2[from]) Flush() (*vector.Vector, error) {
 		exec.ret.groupToSet = i
 		group.flush(getter, setter)
 	}
-
-	// copy from singleAggFuncExec1's Flush()
 	return exec.ret.flush(), nil
 }
 
@@ -498,7 +493,7 @@ func (exec *singleAggFuncExec3[to]) init(
 
 	exec.singleAggInfo = info
 	exec.singleAggOptimizedInfo = opt
-	exec.ret = initFixedAggFuncResult[to](proc, info.retType)
+	exec.ret = initFixedAggFuncResult[to](proc, info.retType, info.emptyNull)
 	exec.groups = make([]singleAggPrivateStructure3[to], 0, 1)
 	exec.gGroup = nm
 }
@@ -685,7 +680,7 @@ func (exec *singleAggFuncExec4) init(
 
 	exec.singleAggInfo = info
 	exec.singleAggOptimizedInfo = opt
-	exec.ret = initBytesAggFuncResult(proc, info.retType)
+	exec.ret = initBytesAggFuncResult(proc, info.retType, info.emptyNull)
 	exec.groups = make([]singleAggPrivateStructure4, 0, 1)
 	exec.gGroup = nm
 }
