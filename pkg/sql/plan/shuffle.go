@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"math/bits"
 	"unsafe"
 
@@ -282,6 +283,7 @@ func determinShuffleType(col *plan.ColRef, n *plan.Node, builder *QueryBuilder) 
 	n.Stats.HashmapStats.ShuffleColMin = int64(s.MinValMap[colName])
 	n.Stats.HashmapStats.ShuffleColMax = int64(s.MaxValMap[colName])
 	n.Stats.HashmapStats.Ranges = shouldUseShuffleRange(s.ShuffleRangeMap[colName])
+	logutil.Infof("colname %v uniform %v overlap %v", colName, s.ShuffleRangeMap[colName].Uniform, s.ShuffleRangeMap[colName].Overlap)
 	n.Stats.HashmapStats.Nullcnt = int64(s.NullCntMap[colName])
 }
 
