@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/stretchr/testify/require"
 )
 
@@ -26,17 +27,24 @@ func TestHandleGCCache(t *testing.T) {
 	expired := now.Add(-MAX_TXN_COMMIT_LATENCY).Add(-time.Second)
 
 	handle := Handle{}
-	handle.mu.txnCtxs = map[string]*txnContext{
-		"now": {
-			deadline: now,
-		},
-		"expired": {
-			deadline: expired,
-		},
-	}
+	handle.txnCtxs = common.NewMap[string, *txnContext](10)
+	handle.txnCtxs.Store("now", &txnContext{
+		deadline: now,
+	})
+	handle.txnCtxs.Store("expired", &txnContext{
+		deadline: expired,
+	})
 	handle.GCCache(now)
 
-	require.Equal(t, 1, len(handle.mu.txnCtxs))
-	require.Nil(t, handle.mu.txnCtxs["expired"])
-	require.NotNil(t, handle.mu.txnCtxs["now"])
+	cnt := 0
+	handle.txnCtxs.Range(func(key string, value *txnContext) bool {
+		cnt++
+		return true
+	})
+
+	require.Equal(t, 1, cnt)
+	_, ok := handle.txnCtxs.Load("expired")
+	require.False(t, ok)
+	_, ok = handle.txnCtxs.Load("now")
+	require.True(t, ok)
 }
