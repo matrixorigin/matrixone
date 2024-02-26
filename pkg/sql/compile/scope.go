@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/restrict"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"hash/crc32"
 	goruntime "runtime"
@@ -316,7 +317,7 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 						break FOR_LOOP
 
 					case pbpipeline.RuntimeFilter_IN:
-						inExpr := plan2.MakeInExpr(spec.Expr, filter.Card, filter.Data)
+						inExpr := plan2.MakeInExpr(c.ctx, spec.Expr, filter.Card, filter.Data)
 						inExprList = append(inExprList, inExpr)
 
 						// TODO: implement BETWEEN expression
@@ -328,12 +329,34 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 		}
 	}
 
-	if len(inExprList) > 0 {
-		newExprList := plan2.DeepCopyExprList(inExprList)
+	for i := range inExprList {
+		funcimpl, _ := inExprList[i].Expr.(*plan.Expr_F)
+		col, ok := funcimpl.F.Args[0].Expr.(*plan.Expr_Col)
+		if !ok {
+			panic("only support col in runtime filter's left child!")
+		}
+		newExpr := plan2.DeepCopyExpr(inExprList[i])
+		//put expr in reader
+		newExprList := []*plan.Expr{newExpr}
 		if s.DataSource.FilterExpr != nil {
 			newExprList = append(newExprList, s.DataSource.FilterExpr)
 		}
 		s.DataSource.FilterExpr = colexec.RewriteFilterExprList(newExprList)
+
+		isFilterOnPK := s.DataSource.TableDef.Pkey != nil && col.Col.Name == s.DataSource.TableDef.Pkey.PkeyColName
+		if !isFilterOnPK {
+			// put expr in filter instruction
+			ins := s.Instructions[0]
+			arg, ok := ins.Arg.(*restrict.Argument)
+			if !ok {
+				panic("missing instruction for runtime filter!")
+			}
+			newExprList := []*plan.Expr{newExpr}
+			if arg.E != nil {
+				newExprList = append(newExprList, arg.E)
+			}
+			arg.E = colexec.RewriteFilterExprList(newExprList)
+		}
 	}
 
 	if s.NodeInfo.NeedExpandRanges {

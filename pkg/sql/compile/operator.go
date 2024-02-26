@@ -513,7 +513,6 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 		arg.N = t.N
 		arg.PkName = t.PkName
 		arg.PkTyp = t.PkTyp
-		arg.RuntimeFilterSpecs = t.RuntimeFilterSpecs
 		res.Arg = arg
 	default:
 		panic(fmt.Sprintf("unexpected instruction type '%d' to dup", sourceIns.Op))
@@ -597,8 +596,6 @@ func constructFuzzyFilter(c *Compile, n, left, right *plan.Node) *fuzzyfilter.Ar
 	arg.PkName = pkName
 	arg.PkTyp = pkTyp
 	arg.N = right.Stats.Cost
-	arg.RuntimeFilterSpecs = n.RuntimeFilterBuildList
-
 	registerRuntimeFilters(arg, c, n.RuntimeFilterBuildList, 0)
 
 	return arg

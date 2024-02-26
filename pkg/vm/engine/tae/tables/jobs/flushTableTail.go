@@ -803,6 +803,7 @@ func relaseFlushDelTask(task *flushDeletesTask, err error) {
 func releaseFlushBlkTasks(subtasks []*flushBlkTask, err error) {
 	if err != nil {
 		logutil.Infof("[FlushTabletail] release flush ablk bat because of err %v", err)
+		// add a timeout to avoid WaitDone block the whole process
 		ictx, cancel := context.WithTimeout(
 			context.Background(),
 			10*time.Second, /*6*time.Minute,*/

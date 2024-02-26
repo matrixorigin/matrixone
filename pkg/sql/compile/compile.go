@@ -2137,7 +2137,7 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node) (*Sco
 }
 
 func (c *Compile) compileRestrict(n *plan.Node, ss []*Scope) []*Scope {
-	if len(n.FilterList) == 0 {
+	if len(n.FilterList) == 0 && len(n.RuntimeFilterProbeList) == 0 {
 		return ss
 	}
 	currentFirstFlag := c.anal.isFirst
@@ -3496,7 +3496,7 @@ func (c *Compile) determinExpandRanges(n *plan.Node, rel engine.Relation) bool {
 	if c.pn.GetQuery().StmtType != plan.Query_SELECT {
 		return true
 	}
-	if !plan2.InternalTable(n.TableDef) {
+	if plan2.InternalTable(n.TableDef) {
 		return true
 	}
 	if n.TableDef.Partition != nil {

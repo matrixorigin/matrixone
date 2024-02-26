@@ -60,10 +60,10 @@ type InfoFromZoneMap struct {
 	ColumnNDVs           []float64
 	NullCnts             []int64
 	ShuffleRanges        []*pb.ShuffleRange
-	ColumnSize           []uint32
-	BlockNumber          int32
-	AccurateObjectNumber int32
-	ApproxObjectNumber   int32
+	ColumnSize           []int64
+	BlockNumber          int64
+	AccurateObjectNumber int64
+	ApproxObjectNumber   int64
 	TableCnt             float64
 }
 
@@ -73,7 +73,7 @@ func NewInfoFromZoneMap(lenCols int) *InfoFromZoneMap {
 		DataTypes:     make([]types.Type, lenCols),
 		ColumnNDVs:    make([]float64, lenCols),
 		NullCnts:      make([]int64, lenCols),
-		ColumnSize:    make([]uint32, lenCols),
+		ColumnSize:    make([]int64, lenCols),
 		ShuffleRanges: make([]*pb.ShuffleRange, lenCols),
 	}
 	return info
@@ -929,7 +929,7 @@ func recalcStatsByRuntimeFilter(node *plan.Node, runtimeFilterSel float64) {
 }
 
 func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
-	if !InternalTable(node.TableDef) {
+	if InternalTable(node.TableDef) {
 		return DefaultStats()
 	}
 	if shouldReturnMinimalStats(node) {
@@ -971,15 +971,15 @@ func shouldReturnMinimalStats(node *plan.Node) bool {
 func InternalTable(tableDef *TableDef) bool {
 	switch tableDef.TblId {
 	case catalog.MO_DATABASE_ID, catalog.MO_TABLES_ID, catalog.MO_COLUMNS_ID:
-		return false
+		return true
 	}
 	if strings.HasPrefix(tableDef.Name, "sys_") {
-		return false
+		return true
 	}
 	if strings.HasPrefix(tableDef.Name, "mo_") {
-		return false
+		return true
 	}
-	return true
+	return false
 }
 
 func DefaultHugeStats() *plan.Stats {

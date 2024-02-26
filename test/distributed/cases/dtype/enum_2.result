@@ -62,3 +62,7 @@ insert into ces0010 values(default);
 select * from ces0010;
 cpbpvtyp
 E
+create table t_enum(a int,b enum('1','2','3','4','5'));
+show create table t_enum;
+Table    Create Table
+t_enum    CREATE TABLE `t_enum` (\n`a` INT DEFAULT NULL,\n`b` ENUM('1','2','3','4','5') DEFAULT NULL\n)

@@ -199,7 +199,6 @@ message FuzzyFilter {
   float N = 1;
   string PkName = 2;
   plan.Type PkTyp = 3;
-  repeated plan.RuntimeFilterSpec runtime_filter_build_list = 4;
 }
 
 message Join {
