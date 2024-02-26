@@ -25,12 +25,15 @@ import (
 type groupConcatExec struct {
 	multiAggInfo
 	ret aggFuncBytesResult
+
+	separator []byte
 }
 
-func newGroupConcatExec(proc *process.Process, info multiAggInfo) AggFuncExec {
+func newGroupConcatExec(proc *process.Process, info multiAggInfo, separator string) AggFuncExec {
 	return &groupConcatExec{
 		multiAggInfo: info,
 		ret:          initBytesAggFuncResult(proc, info.retType),
+		separator:    []byte(separator),
 	}
 }
 
@@ -55,14 +58,19 @@ func (exec *groupConcatExec) Fill(groupIndex int, row int, vectors []*vector.Vec
 	}
 
 	exec.ret.groupToSet = groupIndex
+	r := exec.ret.aggGet()
+	if len(r) > 0 {
+		r = append(r, exec.separator...)
+	}
 	for _, v := range vectors {
 		value := v.GetBytesAt(row)
 		if err := isValidGroupConcatUnit(value); err != nil {
 			return err
 		}
-		if err := exec.ret.aggSet(append(exec.ret.aggGet(), value...)); err != nil {
-			return err
-		}
+		r = append(r, value...)
+	}
+	if err := exec.ret.aggSet(r); err != nil {
+		return err
 	}
 	return nil
 }

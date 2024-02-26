@@ -217,3 +217,53 @@ func TestMultiAggFuncExec1(t *testing.T) {
 		require.Equal(t, int64(0), proc.Mp().CurrNB())
 	}
 }
+
+func TestGroupConcatExec(t *testing.T) {
+	proc := testutil.NewProcess()
+
+	info := multiAggInfo{
+		aggID: 3,
+		argTypes: []types.Type{
+			types.T_varchar.ToType(),
+			types.T_char.ToType(),
+		},
+		retType: types.T_text.ToType(),
+	}
+	executor := MakeGroupConcat(proc, info.aggID, info.argTypes, info.retType, ",")
+
+	// group concat the vector1 and vector2.
+	// vector1: ["a", "b", "c", "d"].
+	// vector2: ["d", "c", "b", "a"].
+	// the result is ["ad,bc,cb,da"].
+	inputs := make([]*vector.Vector, 2)
+	inputs[0] = testutil.NewStringVector(4, info.argTypes[0], proc.Mp(), false, []string{"a", "b", "c", "d"})
+	inputs[1] = testutil.NewStringVector(4, info.argTypes[1], proc.Mp(), false, []string{"d", "c", "b", "a"})
+	{
+		require.NoError(t, executor.GroupGrow(1))
+		// data fill.
+		require.NoError(t, executor.Fill(0, 0, inputs))
+		require.NoError(t, executor.Fill(0, 1, inputs))
+		require.NoError(t, executor.Fill(0, 2, inputs))
+		require.NoError(t, executor.Fill(0, 3, inputs))
+	}
+	{
+		// result check.
+		v, err := executor.Flush()
+		require.NoError(t, err)
+		{
+			require.NotNil(t, v)
+			require.Equal(t, 1, v.Length())
+			bs := vector.MustStrCol(v)
+			require.Equal(t, 1, len(bs))
+			require.Equal(t, "ad,bc,cb,da", bs[0])
+		}
+		v.Free(proc.Mp())
+	}
+	{
+		// memory check.
+		for _, v := range inputs {
+			v.Free(proc.Mp())
+		}
+		require.Equal(t, int64(0), proc.Mp().CurrNB())
+	}
+}

@@ -115,11 +115,12 @@ func MakeMultiAgg(
 // it supports creating an aggregation function executor for special aggregation `group_concat()`.
 func MakeGroupConcat(
 	proc *process.Process,
-	aggID int64, param []types.Type, result types.Type) AggFuncExec {
+	aggID int64, param []types.Type, result types.Type,
+	separator string) AggFuncExec {
 	info := multiAggInfo{
 		aggID:    aggID,
 		argTypes: param,
 		retType:  result,
 	}
-	return newGroupConcatExec(proc, info)
+	return newGroupConcatExec(proc, info, separator)
 }
