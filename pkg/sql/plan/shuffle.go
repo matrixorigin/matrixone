@@ -280,14 +280,12 @@ func determinShuffleType(col *plan.ColRef, n *plan.Node, builder *QueryBuilder) 
 		return
 	}
 	if shouldUseHashShuffle(s.ShuffleRangeMap[colName]) {
-		logutil.Infof("colname %v uniform %v overlap %v", colName, s.ShuffleRangeMap[colName].Uniform, s.ShuffleRangeMap[colName].Overlap)
 		return
 	}
 	n.Stats.HashmapStats.ShuffleType = plan.ShuffleType_Range
 	n.Stats.HashmapStats.ShuffleColMin = int64(s.MinValMap[colName])
 	n.Stats.HashmapStats.ShuffleColMax = int64(s.MaxValMap[colName])
 	n.Stats.HashmapStats.Ranges = shouldUseShuffleRanges(s.ShuffleRangeMap[colName])
-
 	n.Stats.HashmapStats.Nullcnt = int64(s.NullCntMap[colName])
 }
 
@@ -533,10 +531,10 @@ func shouldUseHashShuffle(s *pb.ShuffleRange) bool {
 	if s == nil {
 		return true
 	}
-	if s.Uniform > 0.5 {
+	if s.Uniform > 0.3 {
 		return false
 	}
-	if s.Overlap > 0.5 {
+	if s.Overlap > 0.6 {
 		return true
 	}
 	return true
