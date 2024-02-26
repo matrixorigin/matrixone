@@ -871,7 +871,16 @@ func (tc *txnOperator) handleErrorResponse(resp txn.TxnResponse) error {
 
 		// commit failed, refresh invalid lock tables
 		if err != nil && moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged) {
-			tc.option.lockService.ForceRefreshLockTableBinds(resp.CommitResponse.InvalidLockTables...)
+			tc.option.lockService.ForceRefreshLockTableBinds(
+				resp.CommitResponse.InvalidLockTables,
+				func(bind lock.LockTable) bool {
+					for _, hold := range tc.mu.lockTables {
+						if hold.Table == bind.Table && !hold.Changed(bind) {
+							return true
+						}
+					}
+					return false
+				})
 		}
 
 		if moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict) ||
