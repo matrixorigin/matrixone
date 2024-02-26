@@ -519,7 +519,7 @@ func estimateFilterBlockSelectivity(ctx context.Context, expr *plan.Expr, tableD
 	}
 	col := extractColRefInFilter(expr)
 	if col != nil {
-		switch GetSortOrder(tableDef, col.Name) {
+		switch GetSortOrder(tableDef, col.ColPos) {
 		case 0:
 			return math.Min(expr.Selectivity, 0.5)
 		case 1:
@@ -929,7 +929,7 @@ func recalcStatsByRuntimeFilter(node *plan.Node, runtimeFilterSel float64) {
 }
 
 func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
-	if !InternalTable(node.TableDef) {
+	if InternalTable(node.TableDef) {
 		return DefaultStats()
 	}
 	if shouldReturnMinimalStats(node) {
@@ -971,15 +971,15 @@ func shouldReturnMinimalStats(node *plan.Node) bool {
 func InternalTable(tableDef *TableDef) bool {
 	switch tableDef.TblId {
 	case catalog.MO_DATABASE_ID, catalog.MO_TABLES_ID, catalog.MO_COLUMNS_ID:
-		return false
+		return true
 	}
 	if strings.HasPrefix(tableDef.Name, "sys_") {
-		return false
+		return true
 	}
 	if strings.HasPrefix(tableDef.Name, "mo_") {
-		return false
+		return true
 	}
-	return true
+	return false
 }
 
 func DefaultHugeStats() *plan.Stats {
