@@ -103,6 +103,27 @@ func (exec *groupConcatExec) SetPreparedResult(partialResult any, groupIndex int
 	panic("partial result is not supported for group_concat")
 }
 
+func (exec *groupConcatExec) Merge(next AggFuncExec, groupIdx1, groupIdx2 int) error {
+	other := next.(*groupConcatExec)
+	exec.ret.groupToSet = groupIdx1
+	other.ret.groupToSet = groupIdx2
+
+	v1 := exec.ret.aggGet()
+	v2 := other.ret.aggGet()
+	if len(v1) == 0 && len(v2) == 0 {
+		return nil
+	}
+	if len(v1) > 0 && len(v2) > 0 {
+		v1 = append(v1, exec.separator...)
+		v1 = append(v1, v2...)
+		return exec.ret.aggSet(v1)
+	}
+	if len(v1) == 0 {
+		return exec.ret.aggSet(v2)
+	}
+	return exec.ret.aggSet(v1)
+}
+
 func (exec *groupConcatExec) Flush() (*vector.Vector, error) {
 	return exec.ret.flush(), nil
 }
