@@ -85,6 +85,7 @@ type service struct {
 
 	atomic struct {
 		enabled         atomic.Bool
+		loadCSV         atomic.Bool
 		complexPKTables sync.Map // uint64 -> bool
 	}
 
@@ -728,15 +729,17 @@ func (s *service) handleEvent(
 					WithDisableLock())
 		}
 
-		for {
-			if err := load(); err != nil {
-				s.logger.Error("load trace data to table failed, retry later",
-					zap.String("table", tableName),
-					zap.Error(err))
-				time.Sleep(time.Second * 5)
-				continue
+		if s.atomic.loadCSV.Load() {
+			for {
+				if err := load(); err != nil {
+					s.logger.Error("load trace data to table failed, retry later",
+						zap.String("table", tableName),
+						zap.Error(err))
+					time.Sleep(time.Second * 5)
+					continue
+				}
+				break
 			}
-			break
 		}
 		sum = 0
 		open()
