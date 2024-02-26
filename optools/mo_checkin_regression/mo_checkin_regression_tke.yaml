@@ -132,6 +132,10 @@ spec:
       metricUpdateStorageUsageInterval = "15m"
       enableStmtMerge = true
       enableMetricToProm = true
+      [cn.txn.trace]
+      buffer-size = 10000
+      flush-bytes = "4M"
+      force-flush-duration = "10s"
     replicas: 2
     nodeSelector:
       tke.matrixorigin.io/mo-checkin-regression: "true"
