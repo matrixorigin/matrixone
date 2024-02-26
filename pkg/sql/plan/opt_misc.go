@@ -1006,7 +1006,7 @@ func getHashColsNDVRatio(nodeID int32, builder *QueryBuilder) float64 {
 	for i := range hashCols {
 		hashColPos[i] = hashCols[i].ColPos
 	}
-	return getColNDVRatio(hashColPos, tableDef, builder) * result
+	return builder.getColNDVRatio(hashColPos, tableDef) * result
 }
 
 func checkExprInTags(expr *plan.Expr, tags []int32) bool {

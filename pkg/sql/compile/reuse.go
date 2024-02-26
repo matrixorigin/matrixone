@@ -35,6 +35,7 @@ func init() {
 				stepRegs:                 make(map[int32][][2]int32),
 				runtimeFilterReceiverMap: make(map[int32]*runtimeFilterReceiver),
 				metaTables:               make(map[string]struct{}),
+				MessageBoard:             process.NewMessageBoard(),
 			}
 		},
 		func(c *Compile) {

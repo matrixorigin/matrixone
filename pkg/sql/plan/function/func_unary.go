@@ -61,6 +61,19 @@ func AbsFloat64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 	})
 }
 
+func absDecimal64(v types.Decimal64) types.Decimal64 {
+	if v.Sign() {
+		v = v.Minus()
+	}
+	return v
+}
+
+func AbsDecimal64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	return opUnaryFixedToFixed[types.Decimal64, types.Decimal64](ivecs, result, proc, length, func(v types.Decimal64) types.Decimal64 {
+		return absDecimal64(v)
+	})
+}
+
 func absDecimal128(v types.Decimal128) types.Decimal128 {
 	if v.Sign() {
 		v = v.Minus()

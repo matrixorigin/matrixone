@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -288,6 +289,26 @@ func (e *testEngine) GetRelationById(ctx context.Context, op client.TxnOperator,
 }
 
 func (e *testEngine) AllocateIDByKey(ctx context.Context, key string) (uint64, error) {
+	return 0, nil
+}
+
+func (e *testEngine) TryToSubscribeTable(ctx context.Context, dbID, tbID uint64) error {
+	return nil
+}
+
+func (e *testEngine) UnsubscribeTable(ctx context.Context, dbID, tbID uint64) error {
+	return nil
+}
+
+func (e *testEngine) Stats(ctx context.Context, key pb.StatsInfoKey, sync bool) *pb.StatsInfo {
+	return nil
+}
+
+func (e *testEngine) Rows(ctx context.Context, key pb.StatsInfoKey) uint64 {
+	return 0
+}
+
+func (e *testEngine) Size(ctx context.Context, key pb.StatsInfoKey, colName string) (uint64, error) {
 	return 0, nil
 }
 
