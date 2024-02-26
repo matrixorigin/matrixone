@@ -15,7 +15,6 @@
 package plan
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"math/bits"
 	"unsafe"
 
@@ -408,7 +407,6 @@ func determinShuffleForGroupBy(n *plan.Node, builder *QueryBuilder) {
 	if hashCol == nil {
 		return
 	}
-	logutil.Infof("deciding groupby shuffle colname %v idx %v", hashCol.Name, idx)
 	//for now ,only support integer and string type
 	switch types.T(typ) {
 	case types.T_int64, types.T_int32, types.T_int16, types.T_uint64, types.T_uint32, types.T_uint16, types.T_varchar, types.T_char, types.T_text:
