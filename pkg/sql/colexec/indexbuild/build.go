@@ -105,6 +105,10 @@ func (ctr *container) collectBuildBatches(ap *Argument, proc *process.Process, a
 			return err
 		}
 		proc.PutBatch(currentBatch)
+		if ctr.batch.RowCount() > int(ap.RuntimeFilterSenders[0].Spec.UpperLimit) {
+			// for index build, can exit early
+			return nil
+		}
 	}
 	return nil
 }
