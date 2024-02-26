@@ -740,7 +740,7 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) (err error) {
 
 		allocator := s.allocator
 		if vector.Policy.Any(SkipMemoryCache) {
-			s.allocator = DefaultCacheDataAllocator
+			allocator = DefaultCacheDataAllocator
 		}
 
 		if err = entry.setCachedData(allocator); err != nil {
