@@ -95,10 +95,10 @@ func (v *versionHandle) createFrameworkTables(
 func handleCreateIndexesForTaskTables(ctx context.Context,
 	txn executor.TxnExecutor) error {
 	result, err := txn.Exec(`show indexes in mo_task.sys_async_task;`, executor.StatementOption{})
-	defer result.Close()
 	if err != nil {
 		return err
 	}
+	defer result.Close()
 	if len(result.Batches) != 0 {
 		return nil
 	}
