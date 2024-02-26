@@ -386,7 +386,9 @@ func (r *TAEReader) Close() {
 		r.batchs[idx] = nil
 	}
 	r.batchs = nil
-	r.release()
+	if r.release != nil {
+		r.release()
+	}
 }
 
 func GetVectorArrayLen(ctx context.Context, vec *vector.Vector) (int, error) {
