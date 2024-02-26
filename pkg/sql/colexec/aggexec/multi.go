@@ -162,6 +162,17 @@ func (exec *multiAggFuncExec1[T]) SetPreparedResult(_ any, _ int) {
 	panic("unimplemented SetPreparedResult for multiAggFuncExec1")
 }
 
+func (exec *multiAggFuncExec1[T]) Merge(next AggFuncExec, groupIdx1, groupIdx2 int) error {
+	other := next.(*multiAggFuncExec1[T])
+	exec.ret.groupToSet = groupIdx1
+	other.ret.groupToSet = groupIdx2
+	exec.groups[groupIdx1].merge(
+		other.groups[groupIdx2],
+		exec.ret.aggGet, other.ret.aggGet,
+		exec.ret.aggSet)
+	return nil
+}
+
 func (exec *multiAggFuncExec1[T]) Flush() (*vector.Vector, error) {
 	setter := exec.ret.aggSet
 	getter := exec.ret.aggGet
@@ -254,6 +265,17 @@ func (exec *multiAggFuncExec2) BatchFill(offset int, groups []uint64, vectors []
 
 func (exec *multiAggFuncExec2) SetPreparedResult(_ any, _ int) {
 	panic("unimplemented SetPreparedResult for multiAggFuncExec2")
+}
+
+func (exec *multiAggFuncExec2) Merge(next AggFuncExec, groupIdx1, groupIdx2 int) error {
+	other := next.(*multiAggFuncExec2)
+	exec.ret.groupToSet = groupIdx1
+	other.ret.groupToSet = groupIdx2
+	exec.groups[groupIdx1].merge(
+		other.groups[groupIdx2],
+		exec.ret.aggGet, other.ret.aggGet,
+		exec.ret.aggSet)
+	return nil
 }
 
 func (exec *multiAggFuncExec2) Flush() (*vector.Vector, error) {

@@ -280,6 +280,18 @@ func (exec *singleAggFuncExec1[from, to]) BatchFill(offset int, groups []uint64,
 	return nil
 }
 
+func (exec *singleAggFuncExec1[from, to]) Merge(next AggFuncExec, groupIdx1, groupIdx2 int) error {
+	other := next.(*singleAggFuncExec1[from, to])
+	exec.ret.groupToSet = groupIdx1
+	other.ret.groupToSet = groupIdx2
+
+	exec.groups[groupIdx1].merge(
+		other.groups[groupIdx2],
+		exec.ret.aggGet, other.ret.aggGet,
+		exec.ret.aggSet)
+	return nil
+}
+
 func (exec *singleAggFuncExec1[from, to]) Flush() (*vector.Vector, error) {
 	if exec.partialResult != nil {
 		exec.ret.groupToSet = exec.partialGroup
@@ -463,6 +475,18 @@ func (exec *singleAggFuncExec2[from]) BatchFill(offset int, groups []uint64, vec
 		}
 		idx++
 	}
+	return nil
+}
+
+func (exec *singleAggFuncExec2[from]) Merge(next AggFuncExec, groupIdx1, groupIdx2 int) error {
+	other := next.(*singleAggFuncExec2[from])
+	exec.ret.groupToSet = groupIdx1
+	other.ret.groupToSet = groupIdx2
+
+	exec.groups[groupIdx1].merge(
+		other.groups[groupIdx2],
+		exec.ret.aggGet, other.ret.aggGet,
+		exec.ret.aggSet)
 	return nil
 }
 
@@ -652,6 +676,18 @@ func (exec *singleAggFuncExec3[to]) BatchFill(offset int, groups []uint64, vecto
 	return nil
 }
 
+func (exec *singleAggFuncExec3[to]) Merge(next AggFuncExec, groupIdx1, groupIdx2 int) error {
+	other := next.(*singleAggFuncExec3[to])
+	exec.ret.groupToSet = groupIdx1
+	other.ret.groupToSet = groupIdx2
+
+	exec.groups[groupIdx1].merge(
+		other.groups[groupIdx2],
+		exec.ret.aggGet, other.ret.aggGet,
+		exec.ret.aggSet)
+	return nil
+}
+
 func (exec *singleAggFuncExec3[to]) Flush() (*vector.Vector, error) {
 	if exec.partialResult != nil {
 		exec.ret.groupToSet = exec.partialGroup
@@ -836,6 +872,18 @@ func (exec *singleAggFuncExec4) BatchFill(offset int, groups []uint64, vectors [
 		}
 		idx++
 	}
+	return nil
+}
+
+func (exec *singleAggFuncExec4) Merge(next AggFuncExec, groupIdx1, groupIdx2 int) error {
+	other := next.(*singleAggFuncExec4)
+	exec.ret.groupToSet = groupIdx1
+	other.ret.groupToSet = groupIdx2
+
+	exec.groups[groupIdx1].merge(
+		other.groups[groupIdx2],
+		exec.ret.aggGet, other.ret.aggGet,
+		exec.ret.aggSet)
 	return nil
 }
 

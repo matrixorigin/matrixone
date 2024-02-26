@@ -41,6 +41,9 @@ type AggFuncExec interface {
 	BulkFill(groupIndex int, vectors []*vector.Vector) error
 	BatchFill(offset int, groups []uint64, vectors []*vector.Vector) error
 
+	// Merge merges the aggregation result of two groups.
+	Merge(next AggFuncExec, groupIdx1, groupIdx2 int) error
+
 	// SetPreparedResult add a partial result to speed up.
 	SetPreparedResult(partialResult any, groupIndex int)
 

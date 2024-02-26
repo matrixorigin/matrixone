@@ -41,6 +41,9 @@ func (t *testSingleAggPrivate1) fillNull(getter aggGetter[int64], setter aggSett
 func (t *testSingleAggPrivate1) fills(value int32, isNull bool, count int, getter aggGetter[int64], setter aggSetter[int64]) {
 	setter(getter() + int64(count))
 }
+func (t *testSingleAggPrivate1) merge(other singleAggPrivateStructure1[int32, int64], getter1 aggGetter[int64], getter2 aggGetter[int64], setter aggSetter[int64]) {
+	setter(getter1() + getter2())
+}
 func (t *testSingleAggPrivate1) flush(getter aggGetter[int64], setter aggSetter[int64]) {}
 
 func TestSingleAggFuncExec1(t *testing.T) {
@@ -141,6 +144,9 @@ func (t *testMultiAggPrivate1) eval(getter aggGetter[int64], setter aggSetter[in
 		return
 	}
 	setter(getter() + 1)
+}
+func (t *testMultiAggPrivate1) merge(other multiAggPrivateStructure1[int64], getter1 aggGetter[int64], getter2 aggGetter[int64], setter aggSetter[int64]) {
+	setter(getter1() + getter2())
 }
 func (t *testMultiAggPrivate1) flush(getter aggGetter[int64], setter aggSetter[int64]) {}
 
