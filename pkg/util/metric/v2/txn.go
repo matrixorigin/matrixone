@@ -265,14 +265,15 @@ var (
 			Buckets:   getDurationBuckets(),
 		}, []string{"step"})
 
-	TxnOnPrepareWALPrepareWALDurationHistogram = txnTNSideDurationHistogram.WithLabelValues("on_prepare_wal_prepare_wal")
-	TxnOnPrepareWALEndPrepareDurationHistogram = txnTNSideDurationHistogram.WithLabelValues("on_prepare_wal_end_prepare")
-	TxnOnPrepareWALFlushQueueDurationHistogram = txnTNSideDurationHistogram.WithLabelValues("on_prepare_wal_flush_queue")
-	TxnOnPrepareWALTotalDurationHistogram      = txnTNSideDurationHistogram.WithLabelValues("on_prepare_wal_total")
+	TxnPreparingWaitDurationHistogram  = txnTNSideDurationHistogram.WithLabelValues("1-PreparingWait")
+	TxnPreparingDurationHistogram      = txnTNSideDurationHistogram.WithLabelValues("2-Preparing")
+	TxnPrepareWalWaitDurationHistogram = txnTNSideDurationHistogram.WithLabelValues("3-PrepareWalWait")
+	TxnPrepareWalDurationHistogram     = txnTNSideDurationHistogram.WithLabelValues("4-PrepareWal")
+	TxnPreparedWaitDurationHistogram   = txnTNSideDurationHistogram.WithLabelValues("5-PreparedWait")
+	TxnPreparedDurationHistogram       = txnTNSideDurationHistogram.WithLabelValues("6-Prepared")
 
-	TxnDequeuePreparingDurationHistogram = txnTNSideDurationHistogram.WithLabelValues("dequeue_preparing")
-	TxnDequeuePreparedDurationHistogram  = txnTNSideDurationHistogram.WithLabelValues("dequeue_prepared")
-	TxnBeforeCommitDurationHistogram     = txnTNSideDurationHistogram.WithLabelValues("before_txn_commit")
+	TxnDequeuePreparedDurationHistogram = txnTNSideDurationHistogram.WithLabelValues("dequeue_prepared")
+	TxnBeforeCommitDurationHistogram    = txnTNSideDurationHistogram.WithLabelValues("before_txn_commit")
 
 	txnMpoolDurationHistogram = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
