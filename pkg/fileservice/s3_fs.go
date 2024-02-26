@@ -114,10 +114,10 @@ func (s *S3FS) initCaches(ctx context.Context, config CacheConfig) error {
 
 	// Init the remote cache first, because the callback needs to be set for mem and disk cache.
 	if config.RemoteCacheEnabled {
-		if config.CacheClient == nil {
-			return moerr.NewInternalError(ctx, "cache client is nil")
+		if config.QueryClient == nil {
+			return moerr.NewInternalError(ctx, "query client is nil")
 		}
-		s.remoteCache = NewRemoteCache(config.CacheClient, config.KeyRouterFactory)
+		s.remoteCache = NewRemoteCache(config.QueryClient, config.KeyRouterFactory)
 		logutil.Info("fileservice: remote cache initialized",
 			zap.Any("fs-name", s.name),
 		)

@@ -51,3 +51,6 @@ CREATE TABLE ces0010 (
 desc ces0010;
 insert into ces0010 values(default);
 select * from ces0010;
+
+create table t_enum(a int,b enum('1','2','3','4','5'));
+show create table t_enum;

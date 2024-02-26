@@ -132,7 +132,7 @@ func (s *service) upgrade() {
 
 	ug := &upgrader.Upgrader{
 		IEFactory: func() ie.InternalExecutor {
-			return frontend.NewInternalExecutor(pu, s.mo.GetRoutineManager().GetAutoIncrCacheManager())
+			return frontend.NewInternalExecutor(pu, nil)
 		},
 	}
 	ug.Upgrade(moServerCtx)
@@ -327,30 +327,68 @@ func (s *service) registerExecutorsLocked() {
 	if !ok {
 		panic(moerr.NewInternalErrorNoCtx("task Service not ok"))
 	}
-	s.task.runner.RegisterExecutor(task.TaskCode_SystemInit,
-		func(ctx context.Context, t task.Task) error {
-			if err := frontend.InitSysTenant(moServerCtx, s.mo.GetRoutineManager().GetAutoIncrCacheManager()); err != nil {
-				return err
-			}
-			if err := sysview.InitSchema(moServerCtx, ieFactory); err != nil {
-				return err
-			}
-			if err := mometric.InitSchema(moServerCtx, ieFactory); err != nil {
-				return err
-			}
-			if err := motrace.InitSchema(moServerCtx, ieFactory); err != nil {
-				return err
-			}
-			// init metric/log merge task cron rule
-			if err := export.CreateCronTask(moServerCtx, task.TaskCode_MetricLogMerge, ts); err != nil {
-				return err
+	s.task.runner.RegisterExecutor(
+		task.TaskCode_SystemInit,
+		func(
+			ctx context.Context,
+			t task.Task) error {
+			// FIXME: use same txn to system init, it's too hack.
+			ready := 0
+			fn := func() error {
+				if ready == 0 {
+					if err := frontend.InitSysTenant(moServerCtx, s.mo.GetRoutineManager().GetAutoIncrCacheManager()); err != nil {
+						return err
+					}
+					ready++
+				}
+
+				if ready == 1 {
+					if err := sysview.InitSchema(moServerCtx, ieFactory); err != nil {
+						return err
+					}
+					ready++
+				}
+
+				if ready == 2 {
+					if err := mometric.InitSchema(moServerCtx, ieFactory); err != nil {
+						return err
+					}
+					ready++
+				}
+
+				if ready == 3 {
+					if err := motrace.InitSchema(moServerCtx, ieFactory); err != nil {
+						return err
+					}
+					ready++
+				}
+
+				if ready == 4 {
+					// init metric/log merge task cron rule
+					if err := export.CreateCronTask(moServerCtx, task.TaskCode_MetricLogMerge, ts); err != nil {
+						return err
+					}
+					ready++
+				}
+
+				if ready == 5 {
+					// init metric task
+					if err := mometric.CreateCronTask(moServerCtx, task.TaskCode_MetricStorageUsage, ts); err != nil {
+						return err
+					}
+					ready++
+				}
+				return nil
 			}
 
-			// init metric task
-			if err := mometric.CreateCronTask(moServerCtx, task.TaskCode_MetricStorageUsage, ts); err != nil {
-				return err
+			for {
+				err := fn()
+				if err == nil {
+					return nil
+				}
+				s.logger.Error("system init failed", zap.Error(err))
+				time.Sleep(time.Second)
 			}
-			return nil
 		})
 
 	// init metric/log merge task executor
