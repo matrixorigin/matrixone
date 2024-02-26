@@ -21,6 +21,8 @@ import (
 	cache "github.com/matrixorigin/matrixone/pkg/pb/query"
 )
 
+var EnableTracing = false
+
 type CacheData interface {
 	Bytes() []byte
 	Slice(length int) CacheData
