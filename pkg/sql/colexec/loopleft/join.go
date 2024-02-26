@@ -110,7 +110,7 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 		if bat == nil {
 			break
 		}
-		ctr.bat, err = ctr.bat.Append(proc.Ctx, proc.Mp(), bat)
+		ctr.bat, err = ctr.bat.AppendWithCopy(proc.Ctx, proc.Mp(), bat)
 		if err != nil {
 			return err
 		}

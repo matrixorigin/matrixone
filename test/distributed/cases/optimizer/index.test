@@ -1,0 +1,15 @@
+drop database if exists d1;
+create database d1;
+use d1;
+drop table if exists t1;
+create table t1(c1 int primary key, c2 int, c3 int, key(c2), unique key id1(c3));
+insert into t1 select *,*,* from generate_series(1,100000) g;
+insert into t1 select *,1111,* from generate_series(100001,150000) g;
+-- @separator:table
+select mo_ctl('dn', 'flush', 'd1.t1');
+select Sleep(5);
+select * from t1 where c2=1;
+select count(c3) from t1 where c2=1111;
+select * from t1 where c3=1234;
+select * from t1 where c3=5678;
+drop database if exists d1;
