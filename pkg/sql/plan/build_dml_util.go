@@ -117,22 +117,22 @@ func buildInsertPlans(
 	checkInsertPkDup bool, isInsertWithoutAutoPkCol bool) error {
 
 	var err error
-	var insertColsName []string
+	var insertColsNameFromStmt []string
 	var pkFilterExpr []*Expr
 	var newPartitionExpr *Expr
 	if stmt != nil {
-		insertColsName, err = getInsertColsFromStmt(ctx.GetContext(), stmt, tableDef)
+		insertColsNameFromStmt, err = getInsertColsFromStmt(ctx.GetContext(), stmt, tableDef)
 		if err != nil {
 			return err
 		}
 
 		// try to build pk filter epxr for origin table
-		if canUsePkFilter(builder, ctx, stmt, tableDef, insertColsName) {
-			pkPosInValues := getPkPosInValues(tableDef, insertColsName)
-			pkFilterExpr = getPkValueExpr(builder, ctx, tableDef, pkPosInValues)
+		if canUsePkFilter(builder, ctx, stmt, tableDef, insertColsNameFromStmt) {
+			pkLocationMap := NewPkLocationMap(tableDef)
 			// The insert statement subplan with a primary key has undergone manual column pruning in advance,
 			// so the partition expression needs to be remapped and judged whether partition pruning can be performed
-			newPartitionExpr = remapPartitionExpr(builder, tableDef, pkPosInValues)
+			newPartitionExpr = remapPartitionExpr(builder, tableDef, pkLocationMap.getPkOrderInValues(insertColsNameFromStmt))
+			pkFilterExpr = getPkValueExpr(builder, ctx, tableDef, pkLocationMap, insertColsNameFromStmt)
 		}
 	}
 
