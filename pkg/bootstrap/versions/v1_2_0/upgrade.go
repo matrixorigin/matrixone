@@ -17,6 +17,7 @@ package v1_2_0
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -99,7 +100,12 @@ func handleCreateIndexesForTaskTables(ctx context.Context,
 		return err
 	}
 	defer result.Close()
-	if len(result.Batches) != 0 {
+	hasIndex := false
+	result.ReadRows(func(rows int, cols []*vector.Vector) bool {
+		hasIndex = true
+		return false
+	})
+	if hasIndex {
 		return nil
 	}
 
