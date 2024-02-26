@@ -19,6 +19,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 )
 
+var (
+	buffSize = 1024 * 32
+)
+
 func init() {
 	reuse.CreatePool[EntryData](
 		func() *EntryData { return &EntryData{} },
@@ -30,7 +34,7 @@ func init() {
 
 	reuse.CreatePool[buffer](
 		func() *buffer {
-			return &buffer{buf: buf.NewByteBuf(1024*1024, buf.WithDisableCompactAfterGrow(true))}
+			return &buffer{buf: buf.NewByteBuf(buffSize, buf.WithDisableCompactAfterGrow(true))}
 		},
 		func(l *buffer) {
 			l.reset()
