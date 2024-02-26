@@ -207,7 +207,7 @@ func genAsSelectCols(ctx CompilerContext, stmt *tree.Select) ([]*ColDef, error) 
 		cols[idx] = &plan.ColDef{
 			Name: strings.ToLower(query.Headings[idx]),
 			Alg:  plan.CompressType_Lz4,
-			Typ:  expr.Typ,
+			Typ:  &expr.Typ,
 			Default: &plan.Default{
 				NullAbility:  !expr.Typ.NotNullable,
 				Expr:         nil,
