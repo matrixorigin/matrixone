@@ -158,6 +158,7 @@ type CreateTable struct {
 	AsSource        *Select
 	IsDynamicTable  bool
 	DTOptions       []TableOption
+	IsAsSelect      bool
 }
 
 func (node *CreateTable) Format(ctx *FmtCtx) {
@@ -208,6 +209,11 @@ func (node *CreateTable) Format(ctx *FmtCtx) {
 			def.Format(ctx)
 		}
 		ctx.WriteByte(')')
+	}
+
+	if node.IsAsSelect {
+		ctx.WriteString(" as ")
+		node.AsSource.Format(ctx)
 	}
 
 	if node.Options != nil && !node.IsDynamicTable {
