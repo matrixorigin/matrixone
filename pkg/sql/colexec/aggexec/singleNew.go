@@ -176,15 +176,230 @@ func newSingleAggFuncExec1WithKnownResultType[to types.FixedSizeTExceptStrType](
 
 func newSingleAggFuncExec2(
 	proc *process.Process, info singleAggInfo, opt singleAggOptimizedInfo, f any) AggFuncExec {
-	return nil
+	switch info.argType.Oid {
+	case types.T_bool:
+		if g, ok := f.(func() singleAggPrivateStructure2[bool]); ok {
+			e := &singleAggFuncExec2[bool]{}
+			e.init(proc, info, opt, g)
+			return e
+		}
+	case types.T_int8:
+		if g, ok := f.(func() singleAggPrivateStructure2[int8]); ok {
+			e := &singleAggFuncExec2[int8]{}
+			e.init(proc, info, opt, g)
+			return e
+		}
+	case types.T_int16:
+		if g, ok := f.(func() singleAggPrivateStructure2[int16]); ok {
+			e := &singleAggFuncExec2[int16]{}
+			e.init(proc, info, opt, g)
+			return e
+		}
+	case types.T_int32:
+		if g, ok := f.(func() singleAggPrivateStructure2[int32]); ok {
+			e := &singleAggFuncExec2[int32]{}
+			e.init(proc, info, opt, g)
+			return e
+		}
+	case types.T_int64:
+		if g, ok := f.(func() singleAggPrivateStructure2[int64]); ok {
+			e := &singleAggFuncExec2[int64]{}
+			e.init(proc, info, opt, g)
+			return e
+		}
+	case types.T_uint8:
+		if g, ok := f.(func() singleAggPrivateStructure2[uint8]); ok {
+			e := &singleAggFuncExec2[uint8]{}
+			e.init(proc, info, opt, g)
+			return e
+		}
+	case types.T_uint16:
+		if g, ok := f.(func() singleAggPrivateStructure2[uint16]); ok {
+			e := &singleAggFuncExec2[uint16]{}
+			e.init(proc, info, opt, g)
+			return e
+		}
+	case types.T_uint32:
+		if g, ok := f.(func() singleAggPrivateStructure2[uint32]); ok {
+			e := &singleAggFuncExec2[uint32]{}
+			e.init(proc, info, opt, g)
+			return e
+		}
+	case types.T_uint64:
+		if g, ok := f.(func() singleAggPrivateStructure2[uint64]); ok {
+			e := &singleAggFuncExec2[uint64]{}
+			e.init(proc, info, opt, g)
+			return e
+		}
+	case types.T_float32:
+		if g, ok := f.(func() singleAggPrivateStructure2[float32]); ok {
+			e := &singleAggFuncExec2[float32]{}
+			e.init(proc, info, opt, g)
+			return e
+		}
+	case types.T_float64:
+		if g, ok := f.(func() singleAggPrivateStructure2[float64]); ok {
+			e := &singleAggFuncExec2[float64]{}
+			e.init(proc, info, opt, g)
+			return e
+		}
+	case types.T_decimal64:
+		if g, ok := f.(func() singleAggPrivateStructure2[types.Decimal64]); ok {
+			e := &singleAggFuncExec2[types.Decimal64]{}
+			e.init(proc, info, opt, g)
+			return e
+		}
+	case types.T_decimal128:
+		if g, ok := f.(func() singleAggPrivateStructure2[types.Decimal128]); ok {
+			e := &singleAggFuncExec2[types.Decimal128]{}
+			e.init(proc, info, opt, g)
+			return e
+		}
+	case types.T_date:
+		if g, ok := f.(func() singleAggPrivateStructure2[types.Date]); ok {
+			e := &singleAggFuncExec2[types.Date]{}
+			e.init(proc, info, opt, g)
+			return e
+		}
+	case types.T_datetime:
+		if g, ok := f.(func() singleAggPrivateStructure2[types.Datetime]); ok {
+			e := &singleAggFuncExec2[types.Datetime]{}
+			e.init(proc, info, opt, g)
+			return e
+		}
+	case types.T_time:
+		if g, ok := f.(func() singleAggPrivateStructure2[types.Time]); ok {
+			e := &singleAggFuncExec2[types.Time]{}
+			e.init(proc, info, opt, g)
+			return e
+		}
+	case types.T_timestamp:
+		if g, ok := f.(func() singleAggPrivateStructure2[types.Timestamp]); ok {
+			e := &singleAggFuncExec2[types.Timestamp]{}
+			e.init(proc, info, opt, g)
+			return e
+		}
+	}
+	panic("unsupported parameter type for singleAggFuncExec2")
 }
 
 func newSingleAggFuncExec3(
 	proc *process.Process, info singleAggInfo, opt singleAggOptimizedInfo, f any) AggFuncExec {
-	return nil
+	switch info.retType.Oid {
+	case types.T_bool:
+		if g, ok := f.(func() singleAggPrivateStructure3[bool]); ok {
+			e := &singleAggFuncExec3[bool]{}
+			e.init(proc, info, opt, g)
+			return e
+		}
+	case types.T_int8:
+		if g, ok := f.(func() singleAggPrivateStructure3[int8]); ok {
+			e := &singleAggFuncExec3[int8]{}
+			e.init(proc, info, opt, g)
+			return e
+		}
+	case types.T_int16:
+		if g, ok := f.(func() singleAggPrivateStructure3[int16]); ok {
+			e := &singleAggFuncExec3[int16]{}
+			e.init(proc, info, opt, g)
+			return e
+		}
+	case types.T_int32:
+		if g, ok := f.(func() singleAggPrivateStructure3[int32]); ok {
+			e := &singleAggFuncExec3[int32]{}
+			e.init(proc, info, opt, g)
+			return e
+		}
+	case types.T_int64:
+		if g, ok := f.(func() singleAggPrivateStructure3[int64]); ok {
+			e := &singleAggFuncExec3[int64]{}
+			e.init(proc, info, opt, g)
+			return e
+		}
+	case types.T_uint8:
+		if g, ok := f.(func() singleAggPrivateStructure3[uint8]); ok {
+			e := &singleAggFuncExec3[uint8]{}
+			e.init(proc, info, opt, g)
+			return e
+		}
+	case types.T_uint16:
+		if g, ok := f.(func() singleAggPrivateStructure3[uint16]); ok {
+			e := &singleAggFuncExec3[uint16]{}
+			e.init(proc, info, opt, g)
+			return e
+		}
+	case types.T_uint32:
+		if g, ok := f.(func() singleAggPrivateStructure3[uint32]); ok {
+			e := &singleAggFuncExec3[uint32]{}
+			e.init(proc, info, opt, g)
+			return e
+		}
+	case types.T_uint64:
+		if g, ok := f.(func() singleAggPrivateStructure3[uint64]); ok {
+			e := &singleAggFuncExec3[uint64]{}
+			e.init(proc, info, opt, g)
+			return e
+		}
+	case types.T_float32:
+		if g, ok := f.(func() singleAggPrivateStructure3[float32]); ok {
+			e := &singleAggFuncExec3[float32]{}
+			e.init(proc, info, opt, g)
+			return e
+		}
+	case types.T_float64:
+		if g, ok := f.(func() singleAggPrivateStructure3[float64]); ok {
+			e := &singleAggFuncExec3[float64]{}
+			e.init(proc, info, opt, g)
+			return e
+		}
+	case types.T_decimal64:
+		if g, ok := f.(func() singleAggPrivateStructure3[types.Decimal64]); ok {
+			e := &singleAggFuncExec3[types.Decimal64]{}
+			e.init(proc, info, opt, g)
+			return e
+		}
+	case types.T_decimal128:
+		if g, ok := f.(func() singleAggPrivateStructure3[types.Decimal128]); ok {
+			e := &singleAggFuncExec3[types.Decimal128]{}
+			e.init(proc, info, opt, g)
+			return e
+		}
+	case types.T_date:
+		if g, ok := f.(func() singleAggPrivateStructure3[types.Date]); ok {
+			e := &singleAggFuncExec3[types.Date]{}
+			e.init(proc, info, opt, g)
+			return e
+		}
+	case types.T_datetime:
+		if g, ok := f.(func() singleAggPrivateStructure3[types.Datetime]); ok {
+			e := &singleAggFuncExec3[types.Datetime]{}
+			e.init(proc, info, opt, g)
+			return e
+		}
+	case types.T_time:
+		if g, ok := f.(func() singleAggPrivateStructure3[types.Time]); ok {
+			e := &singleAggFuncExec3[types.Time]{}
+			e.init(proc, info, opt, g)
+			return e
+		}
+	case types.T_timestamp:
+		if g, ok := f.(func() singleAggPrivateStructure3[types.Timestamp]); ok {
+			e := &singleAggFuncExec3[types.Timestamp]{}
+			e.init(proc, info, opt, g)
+			return e
+		}
+	}
+	panic("unsupported result type for singleAggFuncExec3")
 }
 
 func newSingleAggFuncExec4(
 	proc *process.Process, info singleAggInfo, opt singleAggOptimizedInfo, f any) AggFuncExec {
-	return nil
+	g, ok := f.(func() singleAggPrivateStructure4)
+	if !ok {
+		panic(fmt.Sprintf("unexpected parameter to init a singleAggFuncExec1, aggInfo: %s", info))
+	}
+
+	e := &singleAggFuncExec4{}
+	e.init(proc, info, opt, g)
+	return e
 }
