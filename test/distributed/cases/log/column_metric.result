@@ -1,2 +1,4 @@
 select metric_name, collecttime, value, `node`, role, account, type from system_metrics.metric limit 0;
 metric_name	collecttime	value	node	role	account	type
+select count(1) cnt, collecttime, `node`, role, account, type from system_metrics.metric group by collecttime, `node`, role, account, type having cnt > 1;
+cnt    collecttime    node    role    account    type
