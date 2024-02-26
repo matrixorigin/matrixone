@@ -203,6 +203,9 @@ func (ie *internalExecutor) newCmdSession(ctx context.Context, opts ie.SessionOv
 			UserID:        defines.GetUserId(ctx),
 			DefaultRoleID: defines.GetRoleId(ctx),
 		}
+		if accountId == sysAccountID {
+			t.Tenant = sysAccountName // fixme: fix empty tencent value, while do metric collection.
+		}
 	} else {
 		t, _ = GetTenantInfo(ctx, DefaultTenantMoAdmin)
 	}
