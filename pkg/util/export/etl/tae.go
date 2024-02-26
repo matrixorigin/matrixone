@@ -312,6 +312,8 @@ type TAEReader struct {
 	batchs   []*batch.Batch
 	batchIdx int
 	rowIdx   int
+
+	release func()
 }
 
 // NewTaeReader returns a TAEReader.
@@ -337,13 +339,17 @@ func NewTaeReader(ctx context.Context, tbl *table.Table, filePath string, filesi
 	return r, nil
 }
 
-func (r *TAEReader) ReadAll(ctx context.Context) ([]*batch.Batch, func(), error) {
+func (r *TAEReader) ReadAll(ctx context.Context) ([]*batch.Batch, error) {
+	if r.release != nil {
+		panic("can only call once")
+	}
 	ioVec, release, err := r.blockReader.LoadAllColumns(ctx, r.idxs, r.mp)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
+	r.release = release
 	r.batchs = append(r.batchs, ioVec...)
-	return r.batchs, release, nil
+	return r.batchs, nil
 }
 
 func (r *TAEReader) ReadLine() ([]string, error) {
@@ -380,6 +386,7 @@ func (r *TAEReader) Close() {
 		r.batchs[idx] = nil
 	}
 	r.batchs = nil
+	r.release()
 }
 
 func GetVectorArrayLen(ctx context.Context, vec *vector.Vector) (int, error) {

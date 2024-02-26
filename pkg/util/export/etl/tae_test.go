@@ -88,12 +88,12 @@ func TestTAEWriter_WriteElems(t *testing.T) {
 
 	r, err := NewTaeReader(context.TODO(), dummyAllTypeTable, filepath, file.Size, fs, mp)
 	require.Nil(t, err)
+	defer r.Close()
 
 	// read data
-	batchs, release, err := r.ReadAll(ctx)
+	batchs, err := r.ReadAll(ctx)
 	require.Nil(t, err)
 	require.Equal(t, (cnt+BatchSize)/BatchSize, len(batchs))
-	defer release()
 
 	_, err = r.ReadLine()
 	require.Nil(t, err)
@@ -294,9 +294,8 @@ func TestTaeReadFile(t *testing.T) {
 	require.Nil(t, err)
 
 	// read data
-	batchs, release, err := r.ReadAll(ctx)
+	batchs, err := r.ReadAll(ctx)
 	require.Nil(t, err)
-	defer release()
 
 	// read index
 	for _, bbs := range r.bs {
@@ -354,9 +353,8 @@ func TestTaeReadFile_ReadAll(t *testing.T) {
 		require.Nil(t, err)
 
 		// read data
-		batchs, release, err := r.ReadAll(ctx)
+		batchs, err := r.ReadAll(ctx)
 		require.Nil(t, err)
-		defer release()
 
 		// read index
 		for _, bbs := range r.bs {
