@@ -578,9 +578,10 @@ func TestSession_TxnCompilerContext(t *testing.T) {
 		table.EXPECT().Ranges(gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
 		table.EXPECT().TableDefs(gomock.Any()).Return(nil, nil).AnyTimes()
 		table.EXPECT().GetTableDef(gomock.Any()).Return(&plan.TableDef{}).AnyTimes()
+		table.EXPECT().CopyTableDef(gomock.Any()).Return(&plan.TableDef{}).AnyTimes()
 		table.EXPECT().GetPrimaryKeys(gomock.Any()).Return(nil, nil).AnyTimes()
 		table.EXPECT().GetHideKeys(gomock.Any()).Return(nil, nil).AnyTimes()
-		table.EXPECT().Stats(gomock.Any(), gomock.Any(), gomock.Any()).Return(false).AnyTimes()
+		table.EXPECT().Stats(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 		table.EXPECT().TableColumns(gomock.Any()).Return(nil, nil).AnyTimes()
 		table.EXPECT().GetTableID(gomock.Any()).Return(uint64(10)).AnyTimes()
 		table.EXPECT().GetEngineType().Return(engine.Disttae).AnyTimes()
@@ -610,8 +611,9 @@ func TestSession_TxnCompilerContext(t *testing.T) {
 		pkd := tcc.GetPrimaryKeyDef("abc", "t1")
 		convey.So(len(pkd), convey.ShouldBeZeroValue)
 
-		stats := tcc.Stats(&plan2.ObjectRef{SchemaName: "abc", ObjName: "t1"})
-		convey.So(stats, convey.ShouldBeFalse)
+		stats, err := tcc.Stats(&plan2.ObjectRef{SchemaName: "abc", ObjName: "t1"})
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(stats, convey.ShouldBeNil)
 	})
 }
 

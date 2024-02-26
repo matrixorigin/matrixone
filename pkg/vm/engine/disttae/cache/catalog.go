@@ -147,6 +147,22 @@ func (cc *CatalogCache) GetTableById(databaseId, tblId uint64) *TableItem {
 	return rel
 }
 
+// GetTableByName returns the table item whose name is tableName in the database.
+func (cc *CatalogCache) GetTableByName(databaseID uint64, tableName string) *TableItem {
+	var rel *TableItem
+	key := &TableItem{
+		DatabaseId: databaseID,
+	}
+	cc.tables.data.Ascend(key, func(item *TableItem) bool {
+		if item.Name == tableName {
+			rel = item
+			return false
+		}
+		return true
+	})
+	return rel
+}
+
 func (cc *CatalogCache) Databases(accountId uint32, ts timestamp.Timestamp) []string {
 	var rs []string
 
