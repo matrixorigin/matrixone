@@ -100,7 +100,7 @@ func (ctr *container) collectBuildBatches(ap *Argument, proc *process.Process, a
 		}
 		anal.Input(currentBatch, isFirst)
 		anal.Alloc(int64(currentBatch.Size()))
-		ctr.batch, err = ctr.batch.Append(proc.Ctx, proc.Mp(), currentBatch)
+		ctr.batch, err = ctr.batch.AppendWithCopy(proc.Ctx, proc.Mp(), currentBatch)
 		if err != nil {
 			return err
 		}

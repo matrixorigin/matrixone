@@ -343,20 +343,6 @@ END0:
 				},
 				rightArg,
 			})
-
-			hitFilterSet := make(map[int]emptyType)
-			for i := range filterIdx {
-				hitFilterSet[filterIdx[i]] = emptyStruct
-			}
-
-			newFilterList := make([]*plan.Expr, 0, len(node.FilterList)-len(filterIdx))
-			for i, filter := range node.FilterList {
-				if _, ok := hitFilterSet[i]; !ok {
-					newFilterList = append(newFilterList, filter)
-				}
-			}
-
-			node.FilterList = newFilterList
 		}
 
 		calcScanStats(node, builder)
@@ -426,7 +412,7 @@ END0:
 		}
 	}
 
-	for i, expr := range node.FilterList {
+	for _, expr := range node.FilterList {
 		fn := expr.GetF()
 		if fn == nil {
 			continue
@@ -481,8 +467,6 @@ END0:
 				idxFilter, _ = bindFuncExprAndConstFold(builder.GetContext(), builder.compCtx.GetProcess(), "prefix_between", fn.Args)
 			}
 		}
-
-		node.FilterList = append(node.FilterList[:i], node.FilterList[i+1:]...)
 		calcScanStats(node, builder)
 
 		idxTableNodeID := builder.appendNode(&plan.Node{
