@@ -941,9 +941,6 @@ func (txn *Transaction) Commit(ctx context.Context) ([]txn.TxnRequest, error) {
 	if err := txn.mergeTxnWorkspaceLocked(); err != nil {
 		return nil, err
 	}
-	//if err := txn.mergeCompactionLocked(); err != nil {
-	//	return nil, err
-	//}
 	if err := txn.dumpBatchLocked(0); err != nil {
 		return nil, err
 	}
