@@ -116,10 +116,7 @@ func NewTAEHandle(ctx context.Context, path string, opt *options.Options) *Handl
 func (h *Handle) GCCache(now time.Time) error {
 	logutil.Infof("GC rpc handle txn cache")
 	h.txnCtxs.DeleteIf(func(k string, v *txnContext) bool {
-		if v.deadline.Before(now) {
-			return true
-		}
-		return false
+		return v.deadline.Before(now)
 	})
 	return nil
 }
