@@ -1078,7 +1078,7 @@ func doShowVariables(ses *Session, proc *process.Process, sv *tree.ShowVariables
 		}
 		executor.Free()
 
-		bat.Shrink(sels)
+		bat.Shrink(sels, false)
 		proc.Mp().PutSels(sels)
 		v0 := vector.MustStrCol(bat.Vecs[0])
 		v1 := vector.MustStrCol(bat.Vecs[1])
@@ -1707,7 +1707,7 @@ func doShowCollation(ses *Session, proc *process.Process, sc *tree.ShowCollation
 		}
 		executor.Free()
 
-		bat.Shrink(sels)
+		bat.Shrink(sels, false)
 		proc.Mp().PutSels(sels)
 		v0 := vector.MustStrCol(bat.Vecs[0])
 		v1 := vector.MustStrCol(bat.Vecs[1])
@@ -3061,6 +3061,11 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 			*tree.BeginTransaction, *tree.CommitTransaction, *tree.RollbackTransaction,
 			*tree.LockTableStmt, *tree.UnLockTableStmt,
 			*tree.CreateStage, *tree.DropStage, *tree.AlterStage, *tree.CreateSource, *tree.AlterSequence:
+			// skip create table as select
+			if createTblStmt, ok := stmt.(*tree.CreateTable); ok && createTblStmt.IsAsSelect {
+				return nil
+			}
+
 			resp := mce.setResponse(i, len(cws), rspLen)
 			if _, ok := stmt.(*tree.Insert); ok {
 				resp.lastInsertId = proc.GetLastInsertID()
@@ -3964,6 +3969,15 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 			return
 		}
 
+		// execute insert sql if this is a `create table as select` stmt
+		if createTblStmt, ok := stmt.(*tree.CreateTable); ok && createTblStmt.IsAsSelect {
+			if txw, ok := cw.(*TxnComputationWrapper); ok {
+				insertSql := txw.plan.GetDdl().GetDefinition().(*plan.DataDefinition_CreateTable).CreateTable.CreateAsSelectSql
+				ses.createAsSelectSql = insertSql
+			}
+			return
+		}
+
 		// Start the dynamic table daemon task
 		if st, ok := cw.GetAst().(*tree.CreateTable); ok {
 			if st.IsDynamicTable {
@@ -4290,6 +4304,16 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, input *UserI
 		err = mce.executeStmt(requestCtx, ses, stmt, proc, cw, i, cws, proto, pu, tenant, userNameOnly, sqlRecord[i])
 		if err != nil {
 			return err
+		}
+
+		// TODO put in one txn
+		// insert data after create table in create table ... as select ... stmt
+		if ses.createAsSelectSql != "" {
+			sql := ses.createAsSelectSql
+			ses.createAsSelectSql = ""
+			if err = mce.doComQuery(requestCtx, &UserInput{sql: sql}); err != nil {
+				return err
+			}
 		}
 	} // end of for
 
