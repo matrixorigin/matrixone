@@ -17,7 +17,10 @@ package vector
 import (
 	"bytes"
 	"fmt"
+	"sort"
 	"unsafe"
+
+	"golang.org/x/exp/slices"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -3284,6 +3287,286 @@ func (v *Vector) GetMinMaxValue() (ok bool, minv, maxv []byte) {
 		panic(fmt.Sprintf("unsupported type %s", v.GetType().String()))
 	}
 	return
+}
+
+// InplaceSortAndCompact @todo optimization in the future
+func (v *Vector) InplaceSortAndCompact() {
+	switch v.GetType().Oid {
+	case types.T_bool:
+		col := MustFixedCol[bool](v)
+		sort.Slice(col, func(i, j int) bool {
+			return !col[i] && col[j]
+		})
+		newCol := slices.Compact(col)
+		if len(newCol) != len(col) {
+			v.CleanOnlyData()
+			v.SetSorted(true)
+			appendList(v, newCol, nil, nil)
+		}
+
+	case types.T_int8:
+		col := MustFixedCol[int8](v)
+		sort.Slice(col, func(i, j int) bool {
+			return col[i] < col[j]
+		})
+		newCol := slices.Compact(col)
+		if len(newCol) != len(col) {
+			v.CleanOnlyData()
+			v.SetSorted(true)
+			appendList(v, newCol, nil, nil)
+		}
+
+	case types.T_int16:
+		col := MustFixedCol[int16](v)
+		sort.Slice(col, func(i, j int) bool {
+			return col[i] < col[j]
+		})
+		newCol := slices.Compact(col)
+		if len(newCol) != len(col) {
+			v.CleanOnlyData()
+			v.SetSorted(true)
+			appendList(v, newCol, nil, nil)
+		}
+
+	case types.T_int32:
+		col := MustFixedCol[int32](v)
+		sort.Slice(col, func(i, j int) bool {
+			return col[i] < col[j]
+		})
+		newCol := slices.Compact(col)
+		if len(newCol) != len(col) {
+			v.CleanOnlyData()
+			v.SetSorted(true)
+			appendList(v, newCol, nil, nil)
+		}
+
+	case types.T_int64:
+		col := MustFixedCol[int64](v)
+		sort.Slice(col, func(i, j int) bool {
+			return col[i] < col[j]
+		})
+		newCol := slices.Compact(col)
+		if len(newCol) != len(col) {
+			v.CleanOnlyData()
+			v.SetSorted(true)
+			appendList(v, newCol, nil, nil)
+		}
+
+	case types.T_uint8:
+		col := MustFixedCol[uint8](v)
+		sort.Slice(col, func(i, j int) bool {
+			return col[i] < col[j]
+		})
+		newCol := slices.Compact(col)
+		if len(newCol) != len(col) {
+			v.CleanOnlyData()
+			v.SetSorted(true)
+			appendList(v, newCol, nil, nil)
+		}
+
+	case types.T_uint16:
+		col := MustFixedCol[uint16](v)
+		sort.Slice(col, func(i, j int) bool {
+			return col[i] < col[j]
+		})
+		newCol := slices.Compact(col)
+		if len(newCol) != len(col) {
+			v.CleanOnlyData()
+			v.SetSorted(true)
+			appendList(v, newCol, nil, nil)
+		}
+
+	case types.T_uint32:
+		col := MustFixedCol[uint32](v)
+		sort.Slice(col, func(i, j int) bool {
+			return col[i] < col[j]
+		})
+		newCol := slices.Compact(col)
+		if len(newCol) != len(col) {
+			v.CleanOnlyData()
+			v.SetSorted(true)
+			appendList(v, newCol, nil, nil)
+		}
+
+	case types.T_uint64:
+		col := MustFixedCol[uint64](v)
+		sort.Slice(col, func(i, j int) bool {
+			return col[i] < col[j]
+		})
+		newCol := slices.Compact(col)
+		if len(newCol) != len(col) {
+			v.CleanOnlyData()
+			v.SetSorted(true)
+			appendList(v, newCol, nil, nil)
+		}
+
+	case types.T_float32:
+		col := MustFixedCol[float32](v)
+		sort.Slice(col, func(i, j int) bool {
+			return col[i] < col[j]
+		})
+		newCol := slices.Compact(col)
+		if len(newCol) != len(col) {
+			v.CleanOnlyData()
+			v.SetSorted(true)
+			appendList(v, newCol, nil, nil)
+		}
+
+	case types.T_float64:
+		col := MustFixedCol[float64](v)
+		sort.Slice(col, func(i, j int) bool {
+			return col[i] < col[j]
+		})
+		newCol := slices.Compact(col)
+		if len(newCol) != len(col) {
+			v.CleanOnlyData()
+			v.SetSorted(true)
+			appendList(v, newCol, nil, nil)
+		}
+
+	case types.T_date:
+		col := MustFixedCol[types.Date](v)
+		sort.Slice(col, func(i, j int) bool {
+			return col[i] < col[j]
+		})
+		newCol := slices.Compact(col)
+		if len(newCol) != len(col) {
+			v.CleanOnlyData()
+			v.SetSorted(true)
+			appendList(v, newCol, nil, nil)
+		}
+
+	case types.T_datetime:
+		col := MustFixedCol[types.Datetime](v)
+		sort.Slice(col, func(i, j int) bool {
+			return col[i] < col[j]
+		})
+		newCol := slices.Compact(col)
+		if len(newCol) != len(col) {
+			v.CleanOnlyData()
+			v.SetSorted(true)
+			appendList(v, newCol, nil, nil)
+		}
+
+	case types.T_time:
+		col := MustFixedCol[types.Time](v)
+		sort.Slice(col, func(i, j int) bool {
+			return col[i] < col[j]
+		})
+		newCol := slices.Compact(col)
+		if len(newCol) != len(col) {
+			v.CleanOnlyData()
+			v.SetSorted(true)
+			appendList(v, newCol, nil, nil)
+		}
+
+	case types.T_timestamp:
+		col := MustFixedCol[types.Timestamp](v)
+		sort.Slice(col, func(i, j int) bool {
+			return col[i] < col[j]
+		})
+		newCol := slices.Compact(col)
+		if len(newCol) != len(col) {
+			v.CleanOnlyData()
+			v.SetSorted(true)
+			appendList(v, newCol, nil, nil)
+		}
+
+	case types.T_enum:
+		col := MustFixedCol[types.Enum](v)
+		sort.Slice(col, func(i, j int) bool {
+			return col[i] < col[j]
+		})
+		newCol := slices.Compact(col)
+		if len(newCol) != len(col) {
+			v.CleanOnlyData()
+			v.SetSorted(true)
+			appendList(v, newCol, nil, nil)
+		}
+
+	case types.T_decimal64:
+		col := MustFixedCol[types.Decimal64](v)
+		sort.Slice(col, func(i, j int) bool {
+			return col[i].Less(col[j])
+		})
+		newCol := slices.CompactFunc(col, func(a, b types.Decimal64) bool {
+			return a.Compare(b) == 0
+		})
+		if len(newCol) != len(col) {
+			v.CleanOnlyData()
+			v.SetSorted(true)
+			appendList(v, newCol, nil, nil)
+		}
+
+	case types.T_decimal128:
+		col := MustFixedCol[types.Decimal128](v)
+		sort.Slice(col, func(i, j int) bool {
+			return col[i].Less(col[j])
+		})
+		newCol := slices.CompactFunc(col, func(a, b types.Decimal128) bool {
+			return a.Compare(b) == 0
+		})
+		if len(newCol) != len(col) {
+			v.CleanOnlyData()
+			v.SetSorted(true)
+			appendList(v, newCol, nil, nil)
+		}
+
+	case types.T_TS:
+		col := MustFixedCol[types.TS](v)
+		sort.Slice(col, func(i, j int) bool {
+			return col[i].Less(col[j])
+		})
+		newCol := slices.CompactFunc(col, func(a, b types.TS) bool {
+			return a.Equal(b)
+		})
+		if len(newCol) != len(col) {
+			v.CleanOnlyData()
+			v.SetSorted(true)
+			appendList(v, newCol, nil, nil)
+		}
+
+	case types.T_uuid:
+		col := MustFixedCol[types.Uuid](v)
+		sort.Slice(col, func(i, j int) bool {
+			return col[i].Lt(col[j])
+		})
+		newCol := slices.CompactFunc(col, func(a, b types.Uuid) bool {
+			return a.Compare(b) == 0
+		})
+		if len(newCol) != len(col) {
+			v.CleanOnlyData()
+			v.SetSorted(true)
+			appendList(v, newCol, nil, nil)
+		}
+	case types.T_Rowid:
+		col := MustFixedCol[types.Rowid](v)
+		sort.Slice(col, func(i, j int) bool {
+			return col[i].Less(col[j])
+		})
+		newCol := slices.CompactFunc(col, func(a, b types.Rowid) bool {
+			return a.Equal(b)
+		})
+		if len(newCol) != len(col) {
+			v.CleanOnlyData()
+			v.SetSorted(true)
+			appendList(v, newCol, nil, nil)
+		}
+
+	case types.T_char, types.T_varchar, types.T_json, types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
+		col, area := MustVarlenaRawData(v)
+		sort.Slice(col, func(i, j int) bool {
+			return bytes.Compare(col[i].GetByteSlice(area), col[j].GetByteSlice(area)) < 0
+		})
+		newCol := slices.CompactFunc(col, func(a, b types.Varlena) bool {
+			return bytes.Equal(a.GetByteSlice(area), b.GetByteSlice(area))
+		})
+		if len(newCol) != len(col) {
+			v.CleanOnlyData()
+			v.SetSorted(true)
+			appendList(v, newCol, nil, nil)
+		}
+	}
 }
 
 func BuildVarlenaInline(v1, v2 *types.Varlena) {
