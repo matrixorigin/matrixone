@@ -370,6 +370,7 @@ type Binding struct {
 	refCnts        []uint
 	colIdByName    map[string]int32
 	isClusterTable bool
+	defaultVals    []string
 }
 
 const (

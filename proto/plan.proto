@@ -1147,11 +1147,12 @@ message CreateTable {
 	// we need column name when create table, but not in ForeignKeyDef
 	repeated FkColName fk_cols = 9;
 	repeated TableDef partition_tables = 10;// partition tables for partitions
+	string create_as_select_sql = 11;
 	// create table may insert fk records related to this table
 	// into mo_foreign_keys
-	repeated string updateFkSqls = 11;
+	repeated string updateFkSqls = 12;
 	// fks forward reference to me
-	repeated ForeignKeyInfo fksReferToMe = 12;
+	repeated ForeignKeyInfo fksReferToMe = 13;
 }
 
 message AlterTableDrop {
