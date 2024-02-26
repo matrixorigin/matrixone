@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -283,12 +284,16 @@ func (d *dirtyCollector) tryUpdateMerged(merged *DirtyTreeEntry) (updated bool) 
 
 func (d *dirtyCollector) findRange() (from, to types.TS) {
 	now := d.clock.Alloc()
+	// a deliberate lag is made here for flushing and checkpoint to
+	// avoid fierce competition on the very new ablock, whose PrepareCompact probably
+	// returns false
+	lag := types.BuildTS(now.Physical()-int64(2*time.Second), now.Logical())
 	d.storage.RLock()
 	defer d.storage.RUnlock()
-	if now.LessEq(d.storage.maxTs) {
+	if lag.LessEq(d.storage.maxTs) {
 		return
 	}
-	from, to = d.storage.maxTs.Next(), now
+	from, to = d.storage.maxTs.Next(), lag
 	return
 }
 
