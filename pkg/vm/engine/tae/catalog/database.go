@@ -233,7 +233,7 @@ func (e *DBEntry) StringWithlevelLocked(level common.PPLevel) string {
 		return fmt.Sprintf("DB[%d][name=%s][C@%s,D@%s]",
 			e.ID, e.GetFullName(), e.GetCreatedAtLocked().ToString(), e.GetDeleteAt().ToString())
 	}
-	return fmt.Sprintf("DB%s[name=%s]", e.BaseEntryImpl.StringLocked(), e.GetFullName())
+	return fmt.Sprintf("DB%s[name=%s, id=%d]", e.BaseEntryImpl.StringLocked(), e.GetFullName(), e.ID)
 }
 
 func (e *DBEntry) MakeTableIt(reverse bool) *common.GenericSortedDListIt[*TableEntry] {

@@ -759,9 +759,9 @@ func (blk *baseBlock) TryDeleteByDeltaloc(
 	if blk.meta.IsAppendable() {
 		return
 	}
-	blk.RLock()
+	blk.Lock()
+	defer blk.Unlock()
 	blkMVCC := blk.getOrCreateMVCC().GetOrCreateDeleteChain(blkID)
-	blk.RUnlock()
 	return blkMVCC.TryDeleteByDeltaloc(txn, deltaLoc, true)
 }
 
@@ -1064,6 +1064,8 @@ func (blk *baseBlock) CollectAppendInRange(
 }
 
 func (blk *baseBlock) UpdateDeltaLoc(txn txnif.TxnReader, blkID uint16, deltaLoc objectio.Location) (bool, txnif.TxnEntry, error) {
+	blk.Lock()
+	defer blk.Unlock()
 	mvcc := blk.getOrCreateMVCC().GetOrCreateDeleteChain(blkID)
 	return mvcc.UpdateDeltaLoc(txn, deltaLoc, false)
 }

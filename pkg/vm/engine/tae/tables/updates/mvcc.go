@@ -1019,8 +1019,6 @@ func (n *MVCCHandle) TryDeleteByDeltaloc(txn txnif.AsyncTxn, deltaLoc objectio.L
 	return
 }
 func (n *MVCCHandle) UpdateDeltaLoc(txn txnif.TxnReader, deltaloc objectio.Location, needCheckWhenCommit bool) (isNewNode bool, entry txnif.TxnEntry, err error) {
-	n.Lock()
-	defer n.Unlock()
 	needWait, txnToWait := n.deltaloc.NeedWaitCommitting(txn.GetStartTS())
 	if needWait {
 		n.Unlock()
