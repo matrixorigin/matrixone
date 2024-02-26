@@ -568,7 +568,7 @@ func (u *Upgrader) GetAllTenantInfo(ctx context.Context) ([]*frontend.TenantInfo
 	query := "SELECT ACCOUNT_ID, ACCOUNT_NAME, VERSION FROM `mo_catalog`.`mo_account`"
 	// Execute the query
 	sysAcc := &frontend.TenantInfo{
-		Tenant:        frontend.GetDefaultTenant(),
+		Tenant:        frontend.GetUserRoot(),
 		TenantID:      frontend.GetSysTenantId(),
 		User:          frontend.GetUserRoot(),
 		UserID:        frontend.GetUserRootId(),
