@@ -1,0 +1,114 @@
+create database test;
+use test;
+create table t1(a int default 123, b char(5));
+desc t1;
+Field    Type    Null    Key    Default    Extra    Comment
+a    INT(32)    YES        123        
+b    CHAR(5)    YES        null        
+INSERT INTO t1 values (1, '1');
+INSERT INTO t1 values (2, '2');
+INSERT INTO t1 values (0x7fffffff, 'max');
+select * from t1;
+a    b
+1    1
+2    2
+2147483647    max
+CREATE table t2 (c float) as select b, a from t1;
+desc t2;
+Field    Type    Null    Key    Default    Extra    Comment
+c    FLOAT(0)    YES        null        
+b    CHAR(5)    YES        null        
+a    INT(32)    YES        123        
+select * from t2;
+c    b    a
+null    1    1
+null    2    2
+null    max    2147483647
+CREATE table if not exists t2 (d float) as select b, a from t1;
+desc t2;
+Field    Type    Null    Key    Default    Extra    Comment
+c    FLOAT(0)    YES        null        
+b    CHAR(5)    YES        null        
+a    INT(32)    YES        123        
+CREATE table t3 (a bigint unsigned not null auto_increment primary key, c float) as select a, b from t1;
+desc t3;
+Field    Type    Null    Key    Default    Extra    Comment
+c    FLOAT(0)    YES        null        
+a    BIGINT UNSIGNED(64)    NO    PRI    null        
+b    CHAR(5)    YES        null        
+select * from t3;
+c    a    b
+null    1    1
+null    2    2
+null    2147483647    max
+CREATE table t4 (a tinyint) as select * from t1;
+Data truncation: data out of range: data type int8, value '2147483647'
+CREATE table t5 (a char(10)) as select * from t1;
+desc t5;
+Field    Type    Null    Key    Default    Extra    Comment
+a    CHAR(10)    YES        null        
+b    CHAR(5)    YES        null        
+select * from t5;
+a    b
+1    1
+2    2
+2147483647    max
+insert into t1 values (1, '1_1');
+select * from t1;
+a    b
+1    1
+2    2
+2147483647    max
+1    1_1
+CREATE table t6 (a int unique) as select * from t1;
+Duplicate entry '1' for key '__mo_index_idx_col'
+drop table t6;
+CREATE table t6 as select max(a) from t1;
+desc t6;
+Field    Type    Null    Key    Default    Extra    Comment
+max(a)    INT(32)    YES        null        
+select * from t6;
+max(a)
+2147483647
+CREATE table t7 as select * from (select * from t1) as t;
+desc t7;
+Field    Type    Null    Key    Default    Extra    Comment
+a    INT(32)    YES        null        
+b    CHAR(5)    YES        null        
+select * from t7;
+a    b
+1    1
+2    2
+2147483647    max
+1    1_1
+CREATE table t8 as select a as alias_a, 1 from t1;
+desc t8;
+Field    Type    Null    Key    Default    Extra    Comment
+alias_a    INT(32)    YES        123        
+1    BIGINT(0)    NO        null        
+select * from t8;
+alias_a    1
+1    1
+2    1
+2147483647    1
+1    1
+CREATE table t9 (index (a)) as select * from t1;
+desc t9;
+Field    Type    Null    Key    Default    Extra    Comment
+a    INT(32)    YES    MUL    123        
+b    CHAR(5)    YES        null        
+select * from t9;
+a    b
+1    1
+2    2
+2147483647    max
+1    1_1
+drop table t1;
+drop table t2;
+drop table t3;
+drop table t5;
+drop table t6;
+drop table t7;
+drop table t8;
+drop table t9;
+drop database test;

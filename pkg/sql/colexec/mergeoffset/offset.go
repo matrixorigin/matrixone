@@ -79,7 +79,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		if arg.ctr.seen+uint64(length) > arg.Offset {
 			sels := newSels(int64(arg.Offset-arg.ctr.seen), int64(length)-int64(arg.Offset-arg.ctr.seen), proc)
 			arg.ctr.seen += uint64(length)
-			arg.buf.Shrink(sels)
+			arg.buf.Shrink(sels, false)
 			proc.Mp().PutSels(sels)
 			anal.Output(arg.buf, arg.GetIsLast())
 			result.Batch = arg.buf
