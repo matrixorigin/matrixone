@@ -23,4 +23,49 @@ c1    c2    c3
 select * from t1 where c3=5678;
 c1    c2    c3
 5678    5678    5678
+select * from t1 where c2 between 1 and 3;
+c1    c2    c3
+1    1    1
+2    2    2
+3    3    3
+select * from t1 where c3 between 2 and 10;
+c1    c2    c3
+2    2    2
+3    3    3
+4    4    4
+5    5    5
+6    6    6
+7    7    7
+8    8    8
+9    9    9
+10    10    10
+select count(c3) from t1 where c2 between 1000 and 1100;
+count(c3)
+101
+select count(c3) from t1 where c2 between 1000 and 1200;
+count(c3)
+50201
+select count(c3) from t1 where c2 between 1000 and 2000;
+count(c3)
+51001
+select count(c3) from t1 where c2 between 1000 and 3000;
+count(c3)
+52001
+select count(c3) from t1 where c3 between 1000 and 1100;
+count(c3)
+101
+select count(c3) from t1 where c2 between 1000 and 2000;
+count(c3)
+51001
+select * from t1 where c2 in (1);
+c1    c2    c3
+1    1    1
+select * from t1 where c2 in (1,1000,2000);
+c1    c2    c3
+1    1    1
+1000    1000    1000
+2000    2000    2000
+select count(c3) from t1 where c2 in (1,1000,1111,2000);
+count(c3)
+50004
 drop database if exists d1;

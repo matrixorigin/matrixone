@@ -311,19 +311,16 @@ END0:
 		var idxFilter *plan.Expr
 		if numParts == 1 {
 			idx := filterIdx[0]
-
-			args := node.FilterList[idx].GetF().Args
+			idxFilter = DeepCopyExpr(node.FilterList[idx])
+			args := idxFilter.GetF().Args
 			col := args[0].GetCol()
 			col.RelPos = idxTag
 			col.ColPos = 0
 			col.Name = idxTableDef.Cols[0].Name
-
-			idxFilter = node.FilterList[idx]
-			node.FilterList = append(node.FilterList[:idx], node.FilterList[idx+1:]...)
 		} else {
 			serialArgs := make([]*plan.Expr, len(filterIdx))
 			for i := range filterIdx {
-				serialArgs[i] = node.FilterList[filterIdx[i]].GetF().Args[1]
+				serialArgs[i] = DeepCopyExpr(node.FilterList[filterIdx[i]].GetF().Args[1])
 			}
 			rightArg, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", serialArgs)
 
@@ -412,7 +409,8 @@ END0:
 		}
 	}
 
-	for _, expr := range node.FilterList {
+	for i, _ := range node.FilterList {
+		expr := DeepCopyExpr(node.FilterList[i])
 		fn := expr.GetF()
 		if fn == nil {
 			continue
