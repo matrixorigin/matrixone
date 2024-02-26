@@ -187,16 +187,18 @@ func NewMinioSDK(
 		zap.Any("arguments", args),
 	)
 
-	// validate
-	ok, err := client.BucketExists(ctx, args.Bucket)
-	if err != nil {
-		return nil, err
-	}
-	if !ok {
-		return nil, moerr.NewInternalErrorNoCtx(
-			"bad s3 config, no such bucket or no permissions: %v",
-			args.Bucket,
-		)
+	if !args.NoBucketValidation {
+		// validate
+		ok, err := client.BucketExists(ctx, args.Bucket)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			return nil, moerr.NewInternalErrorNoCtx(
+				"bad s3 config, no such bucket or no permissions: %v",
+				args.Bucket,
+			)
+		}
 	}
 
 	return &MinioSDK{
