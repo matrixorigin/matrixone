@@ -115,11 +115,11 @@ func NewTAEHandle(ctx context.Context, path string, opt *options.Options) *Handl
 // TODO: vast items within h.mu.txnCtxs would incur performance penality.
 func (h *Handle) GCCache(now time.Time) error {
 	logutil.Infof("GC rpc handle txn cache")
-	h.txnCtxs.Range(func(k string, v *txnContext) bool {
+	h.txnCtxs.DeleteIf(func(k string, v *txnContext) bool {
 		if v.deadline.Before(now) {
-			h.txnCtxs.Delete(k)
+			return true
 		}
-		return true
+		return false
 	})
 	return nil
 }

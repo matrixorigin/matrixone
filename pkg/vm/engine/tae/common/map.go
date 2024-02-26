@@ -35,6 +35,7 @@ func NewMap[K comparable, V any](shardCount int) *Map[K, V] {
 	for i := 0; i < shardCount; i++ {
 		m.shards[i] = &mapShard[K, V]{kv: make(map[K]V)}
 	}
+	m.hasher = maphash.NewHasher[K]()
 	return m
 }
 
@@ -86,5 +87,17 @@ func (m *Map[K, V]) Range(f func(key K, value V) bool) {
 			}
 		}
 		shard.RUnlock()
+	}
+}
+
+func (m *Map[K, V]) DeleteIf(f func(key K, value V) bool) {
+	for _, shard := range m.shards {
+		shard.Lock()
+		for k, v := range shard.kv {
+			if f(k, v) {
+				delete(shard.kv, k)
+			}
+		}
+		shard.Unlock()
 	}
 }
