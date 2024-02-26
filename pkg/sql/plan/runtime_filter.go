@@ -61,7 +61,7 @@ func (builder *QueryBuilder) pushdownRuntimeFilters(nodeID int32) {
 	}
 
 	// if this node has already pushed runtime filter, just return
-	if len(node.RuntimeFilterProbeList) > 0 {
+	if len(node.RuntimeFilterBuildList) > 0 {
 		return
 	}
 
