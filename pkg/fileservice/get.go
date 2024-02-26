@@ -102,13 +102,14 @@ func GetForETL(ctx context.Context, fs FileService, path string) (res ETLFileSer
 			res, err = NewS3FS(
 				ctx,
 				ObjectStorageArguments{
-					Endpoint:  endpoint,
-					Region:    region,
-					Bucket:    bucket,
-					KeyID:     accessKey,
-					KeySecret: accessSecret,
-					KeyPrefix: keyPrefix,
-					Name:      name,
+					NoBucketValidation: true,
+					Endpoint:           endpoint,
+					Region:             region,
+					Bucket:             bucket,
+					KeyID:              accessKey,
+					KeySecret:          accessSecret,
+					KeyPrefix:          keyPrefix,
+					Name:               name,
 				},
 				DisabledCacheConfig,
 				nil,
@@ -136,11 +137,12 @@ func GetForETL(ctx context.Context, fs FileService, path string) (res ETLFileSer
 			res, err = NewS3FS(
 				ctx,
 				ObjectStorageArguments{
-					Endpoint:  endpoint,
-					Region:    region,
-					Bucket:    bucket,
-					KeyPrefix: keyPrefix,
-					Name:      name,
+					NoBucketValidation: true,
+					Endpoint:           endpoint,
+					Region:             region,
+					Bucket:             bucket,
+					KeyPrefix:          keyPrefix,
+					Name:               name,
 				},
 				DisabledCacheConfig,
 				nil,
@@ -153,6 +155,7 @@ func GetForETL(ctx context.Context, fs FileService, path string) (res ETLFileSer
 			if err := args.SetFromString(fsPath.ServiceArguments); err != nil {
 				return nil, "", err
 			}
+			args.NoBucketValidation = true
 			res, err = NewS3FS(
 				ctx,
 				args,
@@ -185,14 +188,15 @@ func GetForETL(ctx context.Context, fs FileService, path string) (res ETLFileSer
 			res, err = NewS3FS(
 				ctx,
 				ObjectStorageArguments{
-					Endpoint:  endpoint,
-					Region:    region,
-					Bucket:    bucket,
-					KeyID:     accessKey,
-					KeySecret: accessSecret,
-					KeyPrefix: keyPrefix,
-					Name:      name,
-					IsMinio:   true,
+					NoBucketValidation: true,
+					Endpoint:           endpoint,
+					Region:             region,
+					Bucket:             bucket,
+					KeyID:              accessKey,
+					KeySecret:          accessSecret,
+					KeyPrefix:          keyPrefix,
+					Name:               name,
+					IsMinio:            true,
 				},
 				DisabledCacheConfig,
 				nil,
@@ -248,6 +252,7 @@ func GetForBackup(ctx context.Context, spec string) (res FileService, err error)
 			if err := args.SetFromString(fsPath.ServiceArguments); err != nil {
 				return nil, err
 			}
+			args.NoBucketValidation = true
 			res, err = NewS3FS(
 				ctx,
 				args,

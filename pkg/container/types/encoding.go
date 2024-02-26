@@ -309,6 +309,8 @@ func DecodeValue(val []byte, t T) any {
 	switch t {
 	case T_bool:
 		return DecodeFixed[bool](val)
+	case T_bit:
+		return DecodeFixed[uint64](val)
 	case T_int8:
 		return DecodeFixed[int8](val)
 	case T_int16:
@@ -360,6 +362,8 @@ func EncodeValue(val any, t T) []byte {
 	switch t {
 	case T_bool:
 		return EncodeFixed(val.(bool))
+	case T_bit:
+		return EncodeFixed(val.(uint64))
 	case T_int8:
 		return EncodeFixed(val.(int8))
 	case T_int16:

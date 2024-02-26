@@ -377,6 +377,8 @@ func vectorToString(vec *vector.Vector, rowIndex int) (string, error) {
 			return "true", nil
 		}
 		return "false", nil
+	case types.T_bit:
+		return fmt.Sprintf("%v", vector.GetFixedAt[uint64](vec, rowIndex)), nil
 	case types.T_int8:
 		return fmt.Sprintf("%v", vector.GetFixedAt[int8](vec, rowIndex)), nil
 	case types.T_int16:

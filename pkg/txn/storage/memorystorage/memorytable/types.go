@@ -162,6 +162,8 @@ func TypeMatch(v any, typ types.T) bool {
 	switch typ {
 	case types.T_bool:
 		_, ok = v.(bool)
+	case types.T_bit:
+		_, ok = v.(uint64)
 	case types.T_int8:
 		_, ok = v.(int8)
 	case types.T_int16:

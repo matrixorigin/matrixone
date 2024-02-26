@@ -235,13 +235,13 @@ drop table if exists foreign02;
 create table foreign02(col1 int,
 col2 int,
 col3 int primary key,
-foreign key(col1) references foreign01(col1));
+constraint `c1` foreign key(col1) references foreign01(col1));
 show create table foreign01;
 Table    Create Table
 foreign01    CREATE TABLE `foreign01` (\n`col1` INT NOT NULL,\n`col2` VARCHAR(20) DEFAULT NULL,\n`col3` INT DEFAULT NULL,\n`col4` BIGINT DEFAULT NULL,\nPRIMARY KEY (`col1`)\n)
 show create table foreign02;
 Table    Create Table
-foreign02    CREATE TABLE `foreign02` (\n`col1` INT DEFAULT NULL,\n`col2` INT DEFAULT NULL,\n`col3` INT NOT NULL,\nPRIMARY KEY (`col3`),\nCONSTRAINT `` FOREIGN KEY (`col1`) REFERENCES `foreign01` (`col1`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
+foreign02    CREATE TABLE `foreign02` (\n`col1` INT DEFAULT NULL,\n`col2` INT DEFAULT NULL,\n`col3` INT NOT NULL,\nPRIMARY KEY (`col3`),\nCONSTRAINT `c1` FOREIGN KEY (`col1`) REFERENCES `foreign01` (`col1`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
 insert into foreign01 values(1,'sfhuwe',1,1);
 insert into foreign01 values(2,'37829901k3d',2,2);
 insert into foreign02 values(1,1,1);

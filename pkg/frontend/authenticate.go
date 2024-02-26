@@ -837,6 +837,11 @@ var (
 		"query_result_timeout":   0,
 		"lower_case_table_names": 0,
 	}
+	sysAccountTables = map[string]struct{}{
+		catalog.MOVersionTable:       {},
+		catalog.MOUpgradeTable:       {},
+		catalog.MOUpgradeTenantTable: {},
+	}
 	//predefined tables of the database mo_catalog in every account
 	predefinedTables = map[string]int8{
 		"mo_database":                 0,
@@ -2035,6 +2040,10 @@ func isIndexTable(name string) bool {
 // isClusterTable decides a table is the cluster table or not
 func isClusterTable(dbName, name string) bool {
 	if dbName == moCatalog {
+		if _, ok := sysAccountTables[name]; ok {
+			return false
+		}
+
 		//if it is neither among the tables nor the index table,
 		//it is the cluster table.
 		if _, ok := predefinedTables[name]; !ok && !isIndexTable(name) {
@@ -4297,9 +4306,9 @@ func doDropAccount(ctx context.Context, ses *Session, da *tree.DropAccount) (err
 func postDropSuspendAccount(
 	ctx context.Context, ses *Session, accountName string, accountID int64, version uint64,
 ) (err error) {
-	qs := ses.GetParameterUnit().QueryService
-	if qs == nil {
-		return moerr.NewInternalError(ctx, "query service is not initialized")
+	qc := ses.GetParameterUnit().QueryClient
+	if qc == nil {
+		return moerr.NewInternalError(ctx, "query client is not initialized")
 	}
 	var nodes []string
 	currTenant := ses.GetTenantInfo().Tenant
@@ -4320,7 +4329,7 @@ func postDropSuspendAccount(
 
 	var retErr error
 	genRequest := func() *query.Request {
-		req := qs.NewRequest(query.CmdMethod_KillConn)
+		req := qc.NewRequest(query.CmdMethod_KillConn)
 		req.KillConnRequest = &query.KillConnRequest{
 			AccountID: accountID,
 			Version:   version,
@@ -4340,7 +4349,7 @@ func postDropSuspendAccount(
 			fmt.Sprintf("kill connection for account %s failed on node %s", accountName, nodeAddr))
 	}
 
-	err = queryservice.RequestMultipleCn(ctx, nodes, qs, genRequest, handleValidResponse, handleInvalidResponse)
+	err = queryservice.RequestMultipleCn(ctx, nodes, qc, genRequest, handleValidResponse, handleInvalidResponse)
 	return errors.Join(err, retErr)
 }
 
@@ -4505,6 +4514,7 @@ func doDropFunction(ctx context.Context, ses *Session, df *tree.DropFunction, rm
 	var bodyStr string
 	var checkDatabase string
 	var dbName string
+	var dbExists bool
 	var funcId int64
 	var erArray []ExecResult
 
@@ -4519,6 +4529,15 @@ func doDropFunction(ctx context.Context, ses *Session, df *tree.DropFunction, rm
 		dbName = ses.GetDatabaseName()
 	} else {
 		dbName = string(df.Name.Name.SchemaName)
+	}
+
+	// authticate db exists
+	dbExists, err = checkDatabaseExistsOrNot(ctx, ses.GetBackgroundExec(ctx), dbName)
+	if err != nil {
+		return err
+	}
+	if !dbExists {
+		return moerr.NewBadDB(ctx, dbName)
 	}
 
 	// validate database name and signature (name + args)
@@ -7745,6 +7764,33 @@ func checkTenantExistsOrNot(ctx context.Context, bh BackgroundExec, userName str
 	return false, nil
 }
 
+func checkDatabaseExistsOrNot(ctx context.Context, bh BackgroundExec, dbName string) (bool, error) {
+	var sqlForCheckDatabase string
+	var erArray []ExecResult
+	var err error
+	ctx, span := trace.Debug(ctx, "checkTenantExistsOrNot")
+	defer span.End()
+	sqlForCheckDatabase, err = getSqlForCheckDatabase(ctx, dbName)
+	if err != nil {
+		return false, err
+	}
+	bh.ClearExecResultSet()
+	err = bh.Exec(ctx, sqlForCheckDatabase)
+	if err != nil {
+		return false, err
+	}
+
+	erArray, err = getResultSet(ctx, bh)
+	if err != nil {
+		return false, err
+	}
+
+	if execResultArrayHasData(erArray) {
+		return true, nil
+	}
+	return false, nil
+}
+
 // InitGeneralTenant initializes the application level tenant
 func InitGeneralTenant(ctx context.Context, ses *Session, ca *tree.CreateAccount) (err error) {
 	var exists bool
@@ -8523,6 +8569,7 @@ func (mce *MysqlCmdExecutor) InitFunction(ctx context.Context, ses *Session, ten
 	var initMoUdf string
 	var retTypeStr string
 	var dbName string
+	var dbExists bool
 	var checkExistence string
 	var argsJson []byte
 	var argsCondition string
@@ -8539,6 +8586,15 @@ func (mce *MysqlCmdExecutor) InitFunction(ctx context.Context, ses *Session, ten
 		dbName = ses.GetDatabaseName()
 	} else {
 		dbName = string(cf.Name.Name.SchemaName)
+	}
+
+	// authticate db exists
+	dbExists, err = checkDatabaseExistsOrNot(ctx, ses.GetBackgroundExec(ctx), dbName)
+	if err != nil {
+		return err
+	}
+	if !dbExists {
+		return moerr.NewBadDB(ctx, dbName)
 	}
 
 	bh := ses.GetBackgroundExec(ctx)
@@ -9401,9 +9457,9 @@ func postAlterSessionStatus(
 	accountName string,
 	tenantId int64,
 	status string) error {
-	qs := ses.GetParameterUnit().QueryService
-	if qs == nil {
-		return moerr.NewInternalError(ctx, "query service is not initialized")
+	qc := ses.GetParameterUnit().QueryClient
+	if qc == nil {
+		return moerr.NewInternalError(ctx, "query client is not initialized")
 	}
 	currTenant := ses.GetTenantInfo().Tenant
 	currUser := ses.GetTenantInfo().User
@@ -9425,7 +9481,7 @@ func postAlterSessionStatus(
 	var retErr, err error
 
 	genRequest := func() *query.Request {
-		req := qs.NewRequest(query.CmdMethod_AlterAccount)
+		req := qc.NewRequest(query.CmdMethod_AlterAccount)
 		req.AlterAccountRequest = &query.AlterAccountRequest{
 			TenantId: tenantId,
 			Status:   status,
@@ -9445,6 +9501,6 @@ func postAlterSessionStatus(
 			fmt.Sprintf("alter account status for account %s failed on node %s", accountName, nodeAddr))
 	}
 
-	err = queryservice.RequestMultipleCn(ctx, nodes, qs, genRequest, handleValidResponse, handleInvalidResponse)
+	err = queryservice.RequestMultipleCn(ctx, nodes, qc, genRequest, handleValidResponse, handleInvalidResponse)
 	return errors.Join(err, retErr)
 }

@@ -297,7 +297,8 @@ type storageUsageHistoryArg struct {
 		accounts     map[uint64]struct{}
 	}
 
-	transfer bool
+	transfer        bool
+	eliminateErrors bool
 }
 
 func (c *storageUsageHistoryArg) PrepareCommand() *cobra.Command {
@@ -312,6 +313,7 @@ func (c *storageUsageHistoryArg) PrepareCommand() *cobra.Command {
 	// storage usage details in ckp
 	storageUsageCmd.Flags().StringP("detail", "d", "", "format: accId{.dbName{.tableName}}")
 	storageUsageCmd.Flags().StringP("transfer", "f", "", "format: *")
+	storageUsageCmd.Flags().StringP("eliminate_errors", "e", "", "format: *")
 	return storageUsageCmd
 }
 
@@ -353,6 +355,15 @@ func (c *storageUsageHistoryArg) FromCommand(cmd *cobra.Command) (err error) {
 		}
 	}
 
+	expr, _ = cmd.Flags().GetString("eliminate_errors")
+	if expr != "" {
+		if expr == "*" {
+			c.eliminateErrors = true
+		} else {
+			return moerr.NewInvalidArgNoCtx(expr, "`storage_usage -e *` expected")
+		}
+	}
+
 	return nil
 }
 
@@ -362,7 +373,9 @@ func (c *storageUsageHistoryArg) Run() (err error) {
 	} else if c.trace != nil {
 		return storageTrace(c)
 	} else if c.transfer {
-		return storageTransfer(c)
+		return storageUsageTransfer(c)
+	} else if c.eliminateErrors {
+		return storageUsageEliminateErrors(c)
 	}
 	return moerr.NewInvalidArgNoCtx("", c.ctx.args)
 }
@@ -482,6 +495,22 @@ func (c *infoArg) Run() error {
 		b.WriteString(fmt.Sprintf("prepareCompact: %v, %q\n", r, reason))
 		b.WriteString(fmt.Sprintf("left rows: %v\n", rows-dels))
 		b.WriteString(fmt.Sprintf("ppstring: %v\n", c.blk.GetBlockData().PPString(c.verbose, 0, "")))
+
+		schema := c.blk.GetSchema()
+		if schema.HasSortKey() {
+			zm, err := c.blk.GetPKZoneMap(context.Background(), c.blk.GetBlockData().GetFs().Service)
+			var zmstr string
+			if err != nil {
+				zmstr = err.Error()
+			} else if c.verbose <= common.PPL1 {
+				zmstr = zm.String()
+			} else if c.verbose == common.PPL2 {
+				zmstr = zm.StringForCompose()
+			} else {
+				zmstr = zm.StringForHex()
+			}
+			b.WriteString(fmt.Sprintf("sort key zm: %v\n", zmstr))
+		}
 	}
 	c.ctx.resp.Payload = b.Bytes()
 	return nil
@@ -1149,7 +1178,7 @@ func storageTrace(c *storageUsageHistoryArg) (err error) {
 	return nil
 }
 
-func storageTransfer(c *storageUsageHistoryArg) (err error) {
+func storageUsageTransfer(c *storageUsageHistoryArg) (err error) {
 	cnt, size, err := logtail.CorrectUsageWrongPlacement(c.ctx.db.Catalog)
 	if err != nil {
 		return err
@@ -1157,4 +1186,12 @@ func storageTransfer(c *storageUsageHistoryArg) (err error) {
 
 	c.ctx.out.Write([]byte(fmt.Sprintf("transferred %d tbl, %f mb; ", cnt, size)))
 	return
+}
+
+func storageUsageEliminateErrors(c *storageUsageHistoryArg) (err error) {
+	cnt := logtail.EliminateErrorsOnCache(c.ctx.db.Catalog)
+
+	c.ctx.out.Write([]byte(fmt.Sprintf("%d tables backed to the track. ", cnt)))
+
+	return nil
 }

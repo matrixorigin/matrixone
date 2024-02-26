@@ -523,6 +523,8 @@ func NewFunctionResultWrapper(
 	switch typ.Oid {
 	case types.T_bool:
 		return newResultFunc[bool](v, getVectorMethod, putVectorMethod, mp)
+	case types.T_bit:
+		return newResultFunc[uint64](v, getVectorMethod, putVectorMethod, mp)
 	case types.T_int8:
 		return newResultFunc[int8](v, getVectorMethod, putVectorMethod, mp)
 	case types.T_int16:

@@ -34,6 +34,11 @@ message Type {
 	string enumvalues = 7;
 };
 
+message	msgHeader {
+	int32 msg_tag = 1;
+	int32 msg_type =2;
+};
+
 // Literal: if a literal value can be reprensented by int64 or
 // double, use that, otherwise store a string representation.
 message Literal {
@@ -546,6 +551,7 @@ message WindowSpec {
 message SampleFuncSpec {
 	int32 Rows = 1;
 	double Percent = 2;
+	bool UsingRow = 3;
 }
 
 message FrameClause {
@@ -812,6 +818,10 @@ message Node {
 	int32 window_idx = 52;
 	repeated Expr onUpdateExprs = 53;
 	OriginTableMessageForFuzzy fuzzymessage = 54;
+
+	//for message
+	repeated msgHeader send_msg_list = 55;
+	repeated msgHeader recv_msg_list = 56;
 }
 
 message ExternScan {
@@ -861,6 +871,7 @@ message PreInsertCtx {
 message RuntimeFilterSpec {
 	int32 tag = 1;
 	Expr expr = 2;
+	int32 upperLimit = 3;
 }
 
 message IdList {
@@ -921,6 +932,9 @@ message Query {
 
 	// load Tag
 	bool loadTag = 6;
+
+	//detectSqls are sqls detect fk self refer constraint
+	repeated string detectSqls= 7;
 }
 
 message TransationControl {
@@ -1213,6 +1227,8 @@ message AlterTable {
 	string create_table_sql = 9;
 	string insert_data_sql = 10;
 	map<uint64, ColDef> change_tbl_colId_map = 11;
+	//detect fk self refer constraint
+	repeated string detectSqls= 12;
 }
 
 message DropTable {

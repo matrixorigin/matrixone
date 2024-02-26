@@ -29,11 +29,19 @@ import (
 
 // GetMOCluster get mo cluster from process level runtime
 func GetMOCluster() MOCluster {
-	v, ok := runtime.ProcessLevelRuntime().GetGlobalVariables(runtime.ClusterService)
-	if !ok {
-		panic("no mocluster service")
+	timeout := time.Second * 10
+	now := time.Now()
+	for {
+		v, ok := runtime.ProcessLevelRuntime().GetGlobalVariables(runtime.ClusterService)
+		if !ok {
+			if time.Since(now) > timeout {
+				panic("no mocluster service")
+			}
+			time.Sleep(time.Second)
+			continue
+		}
+		return v.(MOCluster)
 	}
-	return v.(MOCluster)
 }
 
 // Option options for create cluster
@@ -204,6 +212,20 @@ func (c *cluster) DebugUpdateCNLabel(uuid string, kvs map[string][]string) error
 		return err
 	}
 	return nil
+}
+
+func (c *cluster) RemoveCN(id string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	delete(c.mu.cnServices, id)
+}
+
+func (c *cluster) AddCN(s metadata.CNService) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.mu.cnServices[s.ServiceID] = s
 }
 
 func (c *cluster) waitReady() {

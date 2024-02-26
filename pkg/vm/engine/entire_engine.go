@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 )
@@ -85,4 +86,16 @@ func (e *EntireEngine) GetRelationById(ctx context.Context, op client.TxnOperato
 
 func (e *EntireEngine) AllocateIDByKey(ctx context.Context, key string) (uint64, error) {
 	return e.Engine.AllocateIDByKey(ctx, key)
+}
+
+func (e *EntireEngine) TryToSubscribeTable(ctx context.Context, dbID, tbID uint64) error {
+	return e.Engine.TryToSubscribeTable(ctx, dbID, tbID)
+}
+
+func (e *EntireEngine) UnsubscribeTable(ctx context.Context, dbID, tbID uint64) error {
+	return e.Engine.UnsubscribeTable(ctx, dbID, tbID)
+}
+
+func (e *EntireEngine) Stats(ctx context.Context, key pb.StatsInfoKey, sync bool) *pb.StatsInfo {
+	return e.Engine.Stats(ctx, key, sync)
 }
