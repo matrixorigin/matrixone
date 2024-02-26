@@ -182,6 +182,10 @@ func (o ObjectEntry) Less(than ObjectEntry) bool {
 	return bytes.Compare((*o.ObjectShortName())[:], (*than.ObjectShortName())[:]) < 0
 }
 
+func (o ObjectEntry) IsEmpty() bool {
+	return o.Size() == 0
+}
+
 func (o *ObjectEntry) Visible(ts types.TS) bool {
 	return o.CreateTime.LessEq(ts) &&
 		(o.DeleteTime.IsEmpty() || ts.Less(o.DeleteTime))
@@ -425,12 +429,16 @@ func (p *PartitionState) HandleObjectInsert(ctx context.Context, bat *api.Batch,
 			continue
 		}
 
-		if old, exist := p.dataObjects.Get(objEntry); exist {
+		old, exist := p.dataObjects.Get(objEntry)
+		if exist && !old.IsEmpty() {
 			objEntry.HasDeltaLoc = old.HasDeltaLoc
 			if !old.DeleteTime.IsEmpty() {
 				continue
 			}
 		} else {
+			if exist {
+				objEntry.HasDeltaLoc = old.HasDeltaLoc
+			}
 			e := ObjectIndexByTSEntry{
 				Time:         createTSCol[idx],
 				ShortObjName: *objEntry.ObjectShortName(),
@@ -778,11 +786,20 @@ func (p *PartitionState) HandleMetadataInsert(
 				}
 			}
 
-			//create object by block insert
+			//create object by block insert to set objEntry.HasDeltaLoc
+			//when lazy load, maybe deltalocation is consumed before object is created
 			{
 				objPivot := ObjectEntry{}
-				metaLoc := objectio.Location(metaLocationVector.GetBytesAt(i))
-				objectio.SetObjectStatsLocation(&objPivot.ObjectStats, metaLoc)
+				if metaLoc := objectio.Location(metaLocationVector.GetBytesAt(i)); !metaLoc.IsEmpty() {
+					objectio.SetObjectStatsLocation(&objPivot.ObjectStats, metaLoc)
+				} else {
+					// After block is removed,
+					// HandleMetadataInsert only handle deltaloc.
+					// Meta location is empty.
+					objID := blockID.Object()
+					objName := objectio.BuildObjectNameWithObjectID(objID)
+					objectio.SetObjectStatsObjectName(&objPivot.ObjectStats, objName)
+				}
 				objEntry, ok := p.dataObjects.Get(objPivot)
 				if ok {
 					// don't need to update objEntry, except for HasDeltaLoc and blkCnt
@@ -795,7 +812,13 @@ func (p *PartitionState) HandleMetadataInsert(
 						objectio.SetObjectStatsBlkCnt(&objEntry.ObjectStats, uint32(blkCnt))
 					}
 					p.dataObjects.Set(objEntry)
-					p.dataObjectsByCreateTS.Set(ObjectIndexByCreateTSEntry(objEntry))
+					// For deltaloc batch after block is removed,
+					// objEntry.CreateTime is empty.
+					// and it's temporary.
+					// Related dataObjectsByCreateTS will be set in HandleObjectInsert.
+					if !objEntry.CreateTime.IsEmpty() {
+						p.dataObjectsByCreateTS.Set(ObjectIndexByCreateTSEntry(objEntry))
+					}
 					return
 				}
 				objEntry = objPivot
@@ -805,7 +828,11 @@ func (p *PartitionState) HandleMetadataInsert(
 					objEntry.HasDeltaLoc = true
 				}
 				objEntry.CommitTS = commitTimeVector[i]
-				objEntry.CreateTime = createTimeVector[i]
+				createTS := createTimeVector[i]
+				// after blk is removed, create ts is empty
+				if !createTS.IsEmpty() {
+					objEntry.CreateTime = createTS
+				}
 
 				blkCnt := blockID.Sequence() + 1
 				if uint32(blkCnt) > objEntry.BlkCnt() {
@@ -819,7 +846,9 @@ func (p *PartitionState) HandleMetadataInsert(
 					logutil.Errorf("prefetch object meta failed. %v", err)
 				}
 
-				p.dataObjectsByCreateTS.Set(ObjectIndexByCreateTSEntry(objEntry))
+				if !objEntry.CreateTime.IsEmpty() {
+					p.dataObjectsByCreateTS.Set(ObjectIndexByCreateTSEntry(objEntry))
+				}
 
 				{
 					e := ObjectIndexByTSEntry{
