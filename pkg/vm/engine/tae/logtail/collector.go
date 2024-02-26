@@ -65,7 +65,7 @@ func init() {
 
 type Collector interface {
 	String() string
-	Run()
+	Run(lag time.Duration)
 	ScanInRange(from, to types.TS) (*DirtyTreeEntry, int)
 	ScanInRangePruned(from, to types.TS) *DirtyTreeEntry
 	IsCommitted(from, to types.TS) bool
@@ -171,8 +171,8 @@ func NewDirtyCollector(
 func (d *dirtyCollector) Init(maxts types.TS) {
 	d.storage.maxTs = maxts
 }
-func (d *dirtyCollector) Run() {
-	from, to := d.findRange()
+func (d *dirtyCollector) Run(lag time.Duration) {
+	from, to := d.findRange(lag)
 
 	// stale range found, skip this run
 	if to.IsEmpty() {
@@ -282,12 +282,12 @@ func (d *dirtyCollector) tryUpdateMerged(merged *DirtyTreeEntry) (updated bool) 
 	return
 }
 
-func (d *dirtyCollector) findRange() (from, to types.TS) {
+func (d *dirtyCollector) findRange(lagDuration time.Duration) (from, to types.TS) {
 	now := d.clock.Alloc()
 	// a deliberate lag is made here for flushing and checkpoint to
 	// avoid fierce competition on the very new ablock, whose PrepareCompact probably
 	// returns false
-	lag := types.BuildTS(now.Physical()-int64(2*time.Second), now.Logical())
+	lag := types.BuildTS(now.Physical()-int64(lagDuration), now.Logical())
 	d.storage.RLock()
 	defer d.storage.RUnlock()
 	if lag.LessEq(d.storage.maxTs) {
