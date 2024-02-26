@@ -409,7 +409,7 @@ END0:
 		}
 	}
 
-	for i, _ := range node.FilterList {
+	for i := range node.FilterList {
 		expr := DeepCopyExpr(node.FilterList[i])
 		fn := expr.GetF()
 		if fn == nil {
