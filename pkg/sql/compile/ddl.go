@@ -115,7 +115,7 @@ func (s *Scope) DropDatabase(c *Compile) error {
 	}
 
 	//3. delete fks
-	err = c.runSql(s.Plan.GetDdl().GetDropDatabase().GetUpdateSql())
+	err = c.runSql(s.Plan.GetDdl().GetDropDatabase().GetUpdateFkSql())
 	if err != nil {
 		return err
 	}
@@ -922,7 +922,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 	}
 
 	//update mo_foreign_keys
-	for _, sql := range qry.UpdateSqls {
+	for _, sql := range qry.UpdateFkSqls {
 		err = c.runSql(sql)
 		if err != nil {
 			return err
@@ -2045,8 +2045,8 @@ func (s *Scope) DropTable(c *Compile) error {
 		}
 	}
 
-	if len(qry.DropSqls) > 0 {
-		for _, sql := range qry.DropSqls {
+	if len(qry.UpdateFkSqls) > 0 {
+		for _, sql := range qry.UpdateFkSqls {
 			if err = c.runSql(sql); err != nil {
 				return err
 			}
@@ -2072,7 +2072,7 @@ func (s *Scope) DropTable(c *Compile) error {
 	}
 
 	//remove parent table id from the child table (when foreign_key_checks is disabled)
-	for _, childTblId := range qry.ChildTbls {
+	for _, childTblId := range qry.FkChildTblsReferToMe {
 		if childTblId == 0 {
 			continue
 		}

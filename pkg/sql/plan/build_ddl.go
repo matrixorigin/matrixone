@@ -1087,7 +1087,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 				createTable.TableDef.Fkeys = append(createTable.TableDef.Fkeys, fkData.Def)
 			}
 
-			createTable.UpdateSqls = append(createTable.UpdateSqls, fkData.UpdateSql)
+			createTable.UpdateFkSqls = append(createTable.UpdateFkSqls, fkData.UpdateSql)
 
 			//save self reference foreign keys
 			if fkData.IsSelfRefer {
@@ -2194,7 +2194,7 @@ func buildDropTable(stmt *tree.DropTable, ctx CompilerContext) (*Plan, error) {
 				if childTbl == 0 {
 					continue
 				}
-				dropTable.ChildTbls = append(dropTable.ChildTbls, childTbl)
+				dropTable.FkChildTblsReferToMe = append(dropTable.FkChildTblsReferToMe, childTbl)
 			}
 		}
 
@@ -2212,7 +2212,7 @@ func buildDropTable(stmt *tree.DropTable, ctx CompilerContext) (*Plan, error) {
 		}
 
 		dropTable.TableDef = tableDef
-		dropTable.DropSqls = []string{getSqlForDeleteTable(dropTable.Database, dropTable.Table)}
+		dropTable.UpdateFkSqls = []string{getSqlForDeleteTable(dropTable.Database, dropTable.Table)}
 	}
 	return &Plan{
 		Plan: &plan.Plan_Ddl{
@@ -2329,7 +2329,7 @@ func buildDropDatabase(stmt *tree.DropDatabase, ctx CompilerContext) (*Plan, err
 		}
 	}
 
-	dropDB.UpdateSql = getSqlForDeleteDB(dropDB.Database)
+	dropDB.UpdateFkSql = getSqlForDeleteDB(dropDB.Database)
 
 	return &Plan{
 		Plan: &plan.Plan_Ddl{
@@ -3058,7 +3058,7 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 		return nil, err
 	}
 	alterTable.DetectSqls = detectSqls
-	alterTable.UpdateSqls = updateSqls
+	alterTable.UpdateFkSqls = updateSqls
 	return &Plan{
 		Plan: &plan.Plan_Ddl{
 			Ddl: &plan.DataDefinition{
@@ -3395,7 +3395,7 @@ func checkFkColsAreValid(ctx CompilerContext, fkData *FkData, parentTableDef *Ta
 // the mo_catalog.mo_foreign_keys.
 func buildFkDataOfForwardRefer(ctx CompilerContext,
 	constraintName string,
-	fkDefs []*ReferDef,
+	fkDefs []*FkReferDef,
 	createTable *plan.CreateTable) (*FkData, error) {
 	fkData := FkData{
 		Def: &plan.ForeignKeyDef{

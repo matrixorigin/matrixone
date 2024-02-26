@@ -81,7 +81,7 @@ type dmlPlanCtx struct {
 	insertColPos           []int
 	updateColPosMap        map[string]int
 	allDelTableIDs         map[uint64]struct{}
-	allDelTables           map[ReferKey]struct{}
+	allDelTables           map[FkReferKey]struct{}
 	isFkRecursionCall      bool //if update plan was recursion called by parent table( ref foreign key), we do not check parent's foreign key contraint
 	lockTable              bool //we need lock table in stmt: delete from tbl
 	checkInsertPkDup       bool //if we need check for duplicate values in insert batch.  eg:insert into t values (1).  load data will not check
@@ -3667,19 +3667,6 @@ func adjustConstraintName(ctx context.Context, def *tree.ForeignKey) error {
 	return nil
 }
 
-type FkDef struct {
-	Name      string
-	Col       string
-	ParentDb  string
-	ParentTbl string
-	ParentCol string
-}
-
-func (fk FkDef) String() string {
-	return fmt.Sprintf(" %s: %s => %s.%s : %s",
-		fk.Name, fk.Col, fk.ParentDb, fk.ParentTbl, fk.ParentCol)
-}
-
 func runSql(ctx CompilerContext, sql string) (executor.Result, error) {
 	v, ok := moruntime.ProcessLevelRuntime().GetGlobalVariables(moruntime.InternalSQLExecutor)
 	if !ok {
@@ -3698,26 +3685,44 @@ func runSql(ctx CompilerContext, sql string) (executor.Result, error) {
 	return exec.Exec(proc.Ctx, sql, opts)
 }
 
-type ReferKey struct {
-	Db  string
-	Tbl string
+/*
+Example on FkReferKey and FkReferDef:
+
+	In database `test`:
+
+		create table t1(a int,primary key(a));
+
+		create table t2(b int, constraint c1 foreign key(b) references t1(a));
+
+	So, the structure FkReferDef below denotes such relationships : test.t2(b) -> test.t1(a)
+	FkReferKey holds : db = test, tbl = t2
+
+*/
+
+// FkReferKey holds the database and table name of the foreign key
+type FkReferKey struct {
+	Db  string //fk database name
+	Tbl string //fk table name
 }
 
-type ReferDef struct {
-	Db       string
-	Tbl      string
-	Name     string
-	Col      string
-	ReferCol string
-	OnDelete string
-	OnUpdate string
+// FkReferDef holds the definition & details of the foreign key
+type FkReferDef struct {
+	Db       string //fk database name
+	Tbl      string //fk table name
+	Name     string //fk constraint name
+	Col      string //fk column name
+	ReferCol string //referenced column name
+	OnDelete string //on delete action
+	OnUpdate string //on update action
 }
 
-func (fk ReferDef) String() string {
+func (fk FkReferDef) String() string {
 	return fmt.Sprintf("%s.%s %s %s => %s",
 		fk.Db, fk.Tbl, fk.Name, fk.Col, fk.ReferCol)
 }
 
+// GetSqlForFkReferredTo returns the query that retrieves the fk relationships
+// that refer to the table
 func GetSqlForFkReferredTo(db, table string) string {
 	return fmt.Sprintf(
 		"select "+
@@ -3738,7 +3743,8 @@ func GetSqlForFkReferredTo(db, table string) string {
 		db, table, db, db, table)
 }
 
-func GetFkReferredTo(ctx CompilerContext, db, table string) (map[ReferKey]map[string][]*ReferDef, error) {
+// GetFkReferredTo returns the foreign key relationships that refer to the table
+func GetFkReferredTo(ctx CompilerContext, db, table string) (map[FkReferKey]map[string][]*FkReferDef, error) {
 	//exclude fk self reference
 	sql := GetSqlForFkReferredTo(db, table)
 	res, err := runSql(ctx, sql)
@@ -3746,7 +3752,7 @@ func GetFkReferredTo(ctx CompilerContext, db, table string) (map[ReferKey]map[st
 		return nil, err
 	}
 	defer res.Close()
-	ret := make(map[ReferKey]map[string][]*ReferDef)
+	ret := make(map[FkReferKey]map[string][]*FkReferDef)
 	const dbIdx = 0
 	const tblIdx = 1
 	const nameIdx = 2
@@ -3760,7 +3766,7 @@ func GetFkReferredTo(ctx CompilerContext, db, table string) (map[ReferKey]map[st
 				batch.Vecs[0] != nil &&
 				batch.Vecs[0].Length() > 0 {
 				for i := 0; i < batch.Vecs[0].Length(); i++ {
-					fk := &ReferDef{
+					fk := &FkReferDef{
 						Db:       string(batch.Vecs[dbIdx].GetBytesAt(i)),
 						Tbl:      string(batch.Vecs[tblIdx].GetBytesAt(i)),
 						Name:     string(batch.Vecs[nameIdx].GetBytesAt(i)),
@@ -3769,11 +3775,11 @@ func GetFkReferredTo(ctx CompilerContext, db, table string) (map[ReferKey]map[st
 						OnDelete: string(batch.Vecs[deleteIdx].GetBytesAt(i)),
 						OnUpdate: string(batch.Vecs[updateIdx].GetBytesAt(i)),
 					}
-					key := ReferKey{Db: fk.Db, Tbl: fk.Tbl}
-					var constraint map[string][]*ReferDef
+					key := FkReferKey{Db: fk.Db, Tbl: fk.Tbl}
+					var constraint map[string][]*FkReferDef
 					var ok bool
 					if constraint, ok = ret[key]; !ok {
-						constraint = make(map[string][]*ReferDef)
+						constraint = make(map[string][]*FkReferDef)
 						ret[key] = constraint
 					}
 					constraint[fk.Name] = append(constraint[fk.Name], fk)
@@ -3807,12 +3813,13 @@ func convertIntoReferAction(s string) plan.ForeignKeyDef_RefAction {
 	}
 }
 
+// getSqlForAddFk returns the insert sql that adds a fk relationship
+// into the mo_foreign_keys table
 func getSqlForAddFk(db, table string, data *FkData) string {
 	row := make([]string, 16)
 	rows := 0
 	sb := strings.Builder{}
 	sb.WriteString("insert into `mo_catalog`.`mo_foreign_keys`  ")
-	//sb.WriteString("(constraint_name, db_name, table_name, column_name, refer_db_name, refer_table_name, refer_column_name, on_delete, on_update) ")
 	sb.WriteString(" values ")
 	for childIdx, childCol := range data.Cols.Cols {
 		row[0] = data.Def.Name
@@ -3851,6 +3858,8 @@ func getSqlForAddFk(db, table string, data *FkData) string {
 	return sb.String()
 }
 
+// getSqlForDeleteTable returns the delete sql that deletes all the fk relationships from mo_foreign_keys
+// on the table
 func getSqlForDeleteTable(db, tbl string) string {
 	sb := strings.Builder{}
 	sb.WriteString("delete from `mo_catalog`.`mo_foreign_keys` where ")
@@ -3859,6 +3868,8 @@ func getSqlForDeleteTable(db, tbl string) string {
 	return sb.String()
 }
 
+// getSqlForDeleteConstraint returns the delete sql that deletes the fk constraint from mo_foreign_keys
+// on the table
 func getSqlForDeleteConstraint(db, tbl, constraint string) string {
 	sb := strings.Builder{}
 	sb.WriteString("delete from `mo_catalog`.`mo_foreign_keys` where ")
@@ -3868,6 +3879,8 @@ func getSqlForDeleteConstraint(db, tbl, constraint string) string {
 	return sb.String()
 }
 
+// getSqlForDeleteDB returns the delete sql that deletes all the fk relationships from mo_foreign_keys
+// on the database
 func getSqlForDeleteDB(db string) string {
 	sb := strings.Builder{}
 	sb.WriteString("delete from `mo_catalog`.`mo_foreign_keys` where ")
@@ -3875,6 +3888,7 @@ func getSqlForDeleteDB(db string) string {
 	return sb.String()
 }
 
+// getSqlForRenameTable returns the sqls that rename the table of all fk relationships in mo_foreign_keys
 func getSqlForRenameTable(db, oldName, newName string) (ret []string) {
 	sb := strings.Builder{}
 	sb.WriteString("update `mo_catalog`.`mo_foreign_keys` ")
@@ -3890,6 +3904,7 @@ func getSqlForRenameTable(db, oldName, newName string) (ret []string) {
 	return
 }
 
+// getSqlForRenameColumn returns the sqls that rename the column of all fk relationships in mo_foreign_keys
 func getSqlForRenameColumn(db, table, oldName, newName string) (ret []string) {
 	sb := strings.Builder{}
 	sb.WriteString("update `mo_catalog`.`mo_foreign_keys` ")
@@ -3907,6 +3922,8 @@ func getSqlForRenameColumn(db, table, oldName, newName string) (ret []string) {
 	return
 }
 
+// getSqlForCheckHasDBRefersTo returns the sql that checks if the database has any foreign key relationships
+// that refer to it.
 func getSqlForCheckHasDBRefersTo(db string) string {
 	sb := strings.Builder{}
 	sb.WriteString("select count(*) > 0 from `mo_catalog`.`mo_foreign_keys` ")
@@ -3914,6 +3931,10 @@ func getSqlForCheckHasDBRefersTo(db string) string {
 	return sb.String()
 }
 
+// fkBannedDatabase denotes the databases that forbid the foreign keys
+// you can not define fk in these databases or
+// define fk refers to these databases.
+// for simplicity of the design
 var fkBannedDatabase = map[string]bool{
 	catalog.MO_CATALOG:        true,
 	catalog.MO_SYSTEM:         true,
@@ -3932,6 +3953,7 @@ func isFkBannedDatabase(db string) bool {
 	return false
 }
 
+// IsForeignKeyChecksEnabled returns the system variable foreign_key_checks is true or false
 func IsForeignKeyChecksEnabled(ctx CompilerContext) (bool, error) {
 	value, err := ctx.ResolveVariable("foreign_key_checks", true, false)
 	if err != nil {

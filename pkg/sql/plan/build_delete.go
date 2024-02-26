@@ -58,9 +58,9 @@ func buildDelete(stmt *tree.Delete, ctx CompilerContext, isPrepareStmt bool) (*P
 		allDelTableIDs[tableDef.TblId] = struct{}{}
 	}
 
-	allDelTables := make(map[ReferKey]struct{})
+	allDelTables := make(map[FkReferKey]struct{})
 	for i, tableDef := range tblInfo.tableDefs {
-		allDelTables[ReferKey{Db: tblInfo.objRef[i].SchemaName, Tbl: tableDef.Name}] = struct{}{}
+		allDelTables[FkReferKey{Db: tblInfo.objRef[i].SchemaName, Tbl: tableDef.Name}] = struct{}{}
 	}
 	// append delete plans
 	beginIdx := 0
