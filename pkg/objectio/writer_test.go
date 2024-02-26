@@ -74,6 +74,7 @@ func TestNewObjectWriter(t *testing.T) {
 		Name:    defines.LocalFileServiceName,
 		Backend: "DISK",
 		DataDir: dir,
+		Cache:   fileservice.DisabledCacheConfig,
 	}
 	service, err := fileservice.NewFileService(ctx, c, nil)
 	assert.Nil(t, err)
