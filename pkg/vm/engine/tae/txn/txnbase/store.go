@@ -30,6 +30,10 @@ var NoopStoreFactory = func() txnif.TxnStore { return new(NoopTxnStore) }
 
 type NoopTxnStore struct{}
 
+func (store *NoopTxnStore) StartTrace()        {}
+func (store *NoopTxnStore) TriggerTrace(uint8) {}
+func (store *NoopTxnStore) EndTrace()          {}
+
 func (store *NoopTxnStore) Freeze() error                                { return nil }
 func (store *NoopTxnStore) WaitPrepared(ctx context.Context) (err error) { return }
 func (store *NoopTxnStore) GetLSN() uint64                               { return 0 }

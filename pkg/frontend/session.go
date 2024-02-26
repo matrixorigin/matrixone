@@ -39,7 +39,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
@@ -217,8 +216,6 @@ type Session struct {
 
 	planCache *planCache
 
-	statsCache *plan2.StatsCache
-
 	autoIncrCacheManager *defines.AutoIncrCacheManager
 
 	seqCurValues map[uint64]string
@@ -289,6 +286,9 @@ type Session struct {
 
 	// timestampMap record timestamp for statistical purposes
 	timestampMap map[TS]time.Time
+
+	// insert sql for create table as select stmt
+	createAsSelectSql string
 }
 
 func (ses *Session) ClearStmtProfile() {
@@ -589,7 +589,6 @@ func NewSession(proto Protocol, mp *mpool.MPool, pu *config.ParameterUnit,
 		ses.sysVars = gSysVars.CopySysVarsToSession()
 		ses.userDefinedVars = make(map[string]*UserDefinedVar)
 		ses.prepareStmts = make(map[string]*PrepareStmt)
-		ses.statsCache = plan2.NewStatsCache()
 		// For seq init values.
 		ses.seqCurValues = make(map[uint64]string)
 		ses.seqLastValue = new(string)
@@ -623,7 +622,7 @@ func NewSession(proto Protocol, mp *mpool.MPool, pu *config.ParameterUnit,
 		nil,
 		pu.FileService,
 		pu.LockService,
-		pu.QueryService,
+		pu.QueryClient,
 		pu.HAKeeperClient,
 		pu.UdfService,
 		ses.GetAutoIncrCacheManager())
@@ -665,7 +664,6 @@ func (ses *Session) Close() {
 	ses.queryId = nil
 	ses.p = nil
 	ses.planCache = nil
-	ses.statsCache = nil
 	ses.seqCurValues = nil
 	ses.seqLastValue = nil
 	ses.sqlHelper = nil

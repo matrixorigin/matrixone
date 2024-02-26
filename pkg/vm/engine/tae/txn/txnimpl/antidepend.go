@@ -25,6 +25,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 )
 
+var ErrRWConflict = moerr.NewTxnRWConflictNoCtx()
+
 func readWriteConfilictCheck[T catalog.BaseNode[T]](entry *catalog.BaseEntryImpl[T], ts types.TS) (err error) {
 	entry.RLock()
 	defer entry.RUnlock()
@@ -39,7 +41,7 @@ func readWriteConfilictCheck[T catalog.BaseNode[T]](entry *catalog.BaseEntryImpl
 		entry.RLock()
 	}
 	if entry.DeleteBefore(ts) {
-		err = moerr.NewTxnRWConflictNoCtx()
+		err = ErrRWConflict
 	}
 	return
 }
@@ -124,7 +126,7 @@ func (checker *warChecker) checkOne(id *common.ID, ts types.TS) (err error) {
 	// 	logutil.Infof("checkOne blk=%s ts=%s err=%v", id.BlockString(), ts.ToString(), err)
 	// }()
 	if checker.HasConflict(id.BlockID) {
-		err = moerr.NewTxnRWConflictNoCtx()
+		err = ErrRWConflict
 		return
 	}
 	entry := checker.readSet[id.BlockID]

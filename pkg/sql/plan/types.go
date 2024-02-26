@@ -19,6 +19,7 @@ import (
 	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -88,7 +89,7 @@ type CompilerContext interface {
 	// get the definition of primary key
 	GetPrimaryKeyDef(dbName string, tableName string) []*ColDef
 	// get needed info for stats by table
-	Stats(obj *ObjectRef) bool
+	Stats(obj *ObjectRef) (*pb.StatsInfo, error)
 	// get origin sql string of the root
 	GetRootSql() string
 	// get username of current session
@@ -106,7 +107,6 @@ type CompilerContext interface {
 	// is building the alter view or not
 	// return: yes or no, dbName, viewName
 	GetBuildingAlterView() (bool, string, string)
-	GetStatsCache() *StatsCache
 	GetSubscriptionMeta(dbName string) (*SubscriptionMeta, error)
 	CheckSubscriptionValid(subName, accName string, pubName string) error
 	SetQueryingSubscription(meta *SubscriptionMeta)
@@ -168,7 +168,8 @@ type QueryBuilder struct {
 
 	tag2Table map[int32]*TableDef
 
-	nextTag int32
+	nextTag    int32
+	nextMsgTag int32
 
 	isPrepareStatement bool
 	mysqlCompatible    bool
@@ -369,6 +370,7 @@ type Binding struct {
 	refCnts        []uint
 	colIdByName    map[string]int32
 	isClusterTable bool
+	defaultVals    []string
 }
 
 const (
