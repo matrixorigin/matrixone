@@ -16,7 +16,6 @@ package indexjoin
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -34,7 +33,6 @@ const (
 type container struct {
 	colexec.ReceiverOperator
 	state int
-	rbat  *batch.Batch
 }
 
 type Argument struct {

@@ -2404,7 +2404,7 @@ func (c *Compile) compileBroadcastJoin(ctx context.Context, node, left, right *p
 			rs[i].appendInstruction(vm.Instruction{
 				Op:  vm.IndexJoin,
 				Idx: c.anal.curr,
-				Arg: constructProduct(node, rightTyps, c.proc),
+				Arg: constructIndexJoin(node, rightTyps, c.proc),
 			})
 		}
 
