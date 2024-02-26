@@ -728,8 +728,7 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 					Typ: colTyp,
 					Expr: &plan.Expr_Col{
 						Col: &ColRef{
-							// ColPos: int32(len(pkOrderInValues)),
-							ColPos: 0,
+							ColPos: int32(len(tableDef.Pkey.Names)),
 							Name:   tableDef.Pkey.PkeyColName,
 						},
 					},
