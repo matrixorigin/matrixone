@@ -133,7 +133,7 @@ func (db *DB) StartTxn(info []byte) (txnif.AsyncTxn, error) {
 }
 
 func (db *DB) StartTxnWithLatestTS(info []byte) (txnif.AsyncTxn, error) {
-	return db.TxnMgr.StartTxnWithLatestTS(info)
+	return db.TxnMgr.StartTxn(info)
 }
 
 func (db *DB) CommitTxn(txn txnif.AsyncTxn) (err error) {

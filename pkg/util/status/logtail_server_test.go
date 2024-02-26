@@ -96,7 +96,7 @@ func TestFillLogtail(t *testing.T) {
 	for i := 0; i < 10; i++ {
 		mgr.AddDeletedSession(uint64(i))
 	}
-	status.fillLogtail(logtailServer)
+	status.LogtailServerStatus.fill(logtailServer)
 	assert.Equal(t, 10, len(status.LogtailServerStatus.Sessions))
 	assert.Equal(t, 10, len(status.LogtailServerStatus.DeletedSessions))
 }

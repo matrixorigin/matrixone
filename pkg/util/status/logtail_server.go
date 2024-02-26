@@ -38,11 +38,14 @@ type LogtailServerStatus struct {
 	DeletedSessions []DeletedSession `json:"deleted_sessions"`
 }
 
-func (s *Status) fillLogtail(logtailServer *service.LogtailServer) {
+func (s *LogtailServerStatus) fill(logtailServer *service.LogtailServer) {
+	if logtailServer == nil {
+		return
+	}
 	sessions := logtailServer.SessionMgr().ListSession()
-	s.LogtailServerStatus.Sessions = make([]SessionStatus, 0, len(sessions))
+	s.Sessions = make([]SessionStatus, 0, len(sessions))
 	for _, session := range sessions {
-		s.LogtailServerStatus.Sessions = append(s.LogtailServerStatus.Sessions, SessionStatus{
+		s.Sessions = append(s.Sessions, SessionStatus{
 			ClientAddress:    session.RemoteAddress(),
 			LastBeforeSend:   session.LastBeforeSend(),
 			LastAfterSend:    session.LastAfterSend(),
@@ -52,9 +55,9 @@ func (s *Status) fillLogtail(logtailServer *service.LogtailServer) {
 	}
 
 	deleted := logtailServer.SessionMgr().DeletedSessions()
-	s.LogtailServerStatus.DeletedSessions = make([]DeletedSession, 0, len(deleted))
+	s.DeletedSessions = make([]DeletedSession, 0, len(deleted))
 	for _, session := range deleted {
-		s.LogtailServerStatus.DeletedSessions = append(s.LogtailServerStatus.DeletedSessions, DeletedSession{
+		s.DeletedSessions = append(s.DeletedSessions, DeletedSession{
 			Address:   session.RemoteAddress(),
 			DeletedAt: session.DeletedAt(),
 		})

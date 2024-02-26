@@ -19,29 +19,27 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
-	"github.com/matrixorigin/matrixone/pkg/pb/cache"
+	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/stretchr/testify/assert"
 )
 
-func testCreateCacheClient(t *testing.T) CacheClient {
-	ct, err := NewCacheClient(ClientConfig{
-		RPC: morpc.Config{},
-	})
+func testCreateQueryClient(t *testing.T) QueryClient {
+	ct, err := NewQueryClient("", morpc.Config{})
 	assert.NoError(t, err)
 	return ct
 }
 
 func TestNewCacheClient(t *testing.T) {
-	ct := testCreateCacheClient(t)
+	ct := testCreateQueryClient(t)
 	assert.NotNil(t, ct)
 }
 
 func TestUnwrapResponseError(t *testing.T) {
-	ct := testCreateCacheClient(t)
+	ct := testCreateQueryClient(t)
 	assert.NotNil(t, ct)
-	client, ok := ct.(*cacheClient)
+	client, ok := ct.(*queryClient)
 	assert.True(t, ok)
-	resp1 := &cache.CacheResponse{Response: cache.Response{Error: nil}}
+	resp1 := &query.Response{Error: nil}
 	resp2, err := client.unwrapResponseError(resp1)
 	assert.Nil(t, err)
 	assert.Equal(t, resp2, resp1)
@@ -49,7 +47,7 @@ func TestUnwrapResponseError(t *testing.T) {
 	e := moerr.NewInternalErrorNoCtx("test")
 	moe, err := e.MarshalBinary()
 	assert.NoError(t, err)
-	resp1 = &cache.CacheResponse{Response: cache.Response{Error: moe}}
+	resp1 = &query.Response{Error: moe}
 	resp2, err = client.unwrapResponseError(resp1)
 	assert.Equal(t, "internal error: test", err.Error())
 	assert.Nil(t, resp2)

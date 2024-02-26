@@ -169,16 +169,13 @@ func AllocS3Writer(proc *process.Process, tableDef *plan.TableDef) (*S3Writer, e
 
 	if tableDef.ClusterBy != nil {
 		writer.isClusterBy = true
-		if util.JudgeIsCompositeClusterByColumn(tableDef.ClusterBy.Name) {
-			// the serialized clusterby col is located in the last of the bat.vecs
-			// When INSERT, the TableDef columns list in the table contains a rowid column, but the inserted data
-			// does not have a rowid column, so it needs to be excluded. Therefore, is `len(tableDef.Cols) - 2`
-			writer.sortIndex = len(tableDef.Cols) - 2
-		} else {
-			for idx, colDef := range tableDef.Cols {
-				if colDef.Name == tableDef.ClusterBy.Name {
-					writer.sortIndex = idx
-				}
+
+		// the `rowId` column has been excluded from target table's `TableDef` for insert statements (insert, load),
+		// link: `/pkg/sql/plan/build_constraint_util.go` -> func setTableExprToDmlTableInfo
+		// and the `sortIndex` position can be directly obtained using a name that matches the sorting key
+		for idx, colDef := range tableDef.Cols {
+			if colDef.Name == tableDef.ClusterBy.Name {
+				writer.sortIndex = idx
 			}
 		}
 	}
