@@ -1505,6 +1505,7 @@ func constructIndexJoin(n *plan.Node, typs []types.Type, proc *process.Process) 
 	arg := indexjoin.NewArgument()
 	arg.Typs = typs
 	arg.Result = result
+	arg.RuntimeFilterSpecs = n.RuntimeFilterBuildList
 	return arg
 }
 
