@@ -1218,9 +1218,12 @@ func (tbl *txnTable) GetTableDef(ctx context.Context) *plan.TableDef {
 			Version:       tbl.version,
 		}
 	}
-	tableDef := plan2.DeepCopyTableDef(tbl.tableDef, true)
-	tableDef.IsTemporary = tbl.GetEngineType() == engine.Memory
-	return tableDef
+	return tbl.tableDef
+}
+
+func (tbl *txnTable) CopyTableDef(ctx context.Context) *plan.TableDef {
+	tbl.GetTableDef(ctx)
+	return plan2.DeepCopyTableDef(tbl.tableDef, true)
 }
 
 func (tbl *txnTable) UpdateConstraint(ctx context.Context, c *engine.ConstraintDef) error {
@@ -1390,7 +1393,7 @@ func (tbl *txnTable) TableRenameInTxn(ctx context.Context, constraint [][]byte) 
 	newtbl.defs = tbl.defs
 	newtbl.tableName = tbl.tableName
 	newtbl.tableId = tbl.tableId
-	newtbl.GetTableDef(ctx)
+	newtbl.CopyTableDef(ctx)
 
 	{
 		sql := getSql(ctx)
@@ -1483,6 +1486,7 @@ func (tbl *txnTable) Write(ctx context.Context, bat *batch.Batch) error {
 	// for writing S3 Block
 	if bat.Attrs[0] == catalog.BlockMeta_BlockInfo {
 		tbl.db.txn.hasS3Op.Store(true)
+		//bocks maybe come from different S3 object, here we just need to make sure fileName is not Nil.
 		fileName := objectio.DecodeBlockInfo(bat.Vecs[0].GetBytesAt(0)).MetaLocation().Name().String()
 		return tbl.db.txn.WriteFile(
 			INSERT,
@@ -1514,7 +1518,7 @@ func (tbl *txnTable) Write(ctx context.Context, bat *batch.Batch) error {
 		ibat.Clean(tbl.db.txn.proc.Mp())
 		return err
 	}
-	return tbl.db.txn.dumpBatch(tbl.writesOffset)
+	return tbl.db.txn.dumpBatch(tbl.db.txn.getWriteOffset())
 }
 
 func (tbl *txnTable) Update(ctx context.Context, bat *batch.Batch) error {
@@ -2268,11 +2272,4 @@ func (tbl *txnTable) readNewRowid(vec *vector.Vector, row int,
 
 func (tbl *txnTable) newPkFilter(pkExpr, constExpr *plan.Expr) (*plan.Expr, error) {
 	return plan2.BindFuncExprImplByPlanExpr(tbl.proc.Load().Ctx, "=", []*plan.Expr{pkExpr, constExpr})
-}
-
-// get the table's snapshot.
-func (tbl *txnTable) updateWriteOffset() {
-	if tbl.db.txn.statementID > 0 {
-		tbl.writesOffset = tbl.db.txn.offsets[tbl.db.txn.statementID-1]
-	}
 }

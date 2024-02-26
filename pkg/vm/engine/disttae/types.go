@@ -563,8 +563,6 @@ type txnTable struct {
 	lastTS timestamp.Timestamp
 	//entries belong to this table,and come from txn.writes.
 	writes []Entry
-	// offset of the writes in workspace
-	writesOffset int
 
 	// this should be the statement id
 	// but seems that we're not maintaining it at the moment

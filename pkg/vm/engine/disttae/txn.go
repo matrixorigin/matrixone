@@ -540,6 +540,7 @@ func (txn *Transaction) WriteFileLocked(
 			blkInfo := *objectio.DecodeBlockInfo(blkInfosVec.GetBytesAt(idx))
 			vector.AppendBytes(newBat.Vecs[0], []byte(blkInfo.MetaLocation().String()),
 				false, txn.proc.Mp())
+			colexec.Get().PutCnSegment(&blkInfo.SegmentID, colexec.CnBlockIdType)
 		}
 
 		// append obj stats, may multiple
@@ -641,6 +642,7 @@ func (txn *Transaction) deleteBatch(bat *batch.Batch,
 	return bat
 }
 
+// Delete rows belongs to uncommitted raw data batch in txn's workspace.
 func (txn *Transaction) deleteTableWrites(
 	databaseId uint64,
 	tableId uint64,
@@ -1020,4 +1022,13 @@ func (txn *Transaction) clearTableCache() {
 		txn.tableCache.tableMap.Delete(key)
 		return true
 	})
+}
+
+func (txn *Transaction) getWriteOffset() int {
+	if txn.statementID > 0 {
+		txn.Lock()
+		defer txn.Unlock()
+		return txn.statements[txn.statementID-1]
+	}
+	return 0
 }

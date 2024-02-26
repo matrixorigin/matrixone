@@ -254,7 +254,7 @@ func determinShuffleType(col *plan.ColRef, n *plan.Node, builder *QueryBuilder) 
 	// should use complex shuffle type
 	if n.NodeType == plan.Node_JOIN {
 		leftSorted := true
-		if GetSortOrder(tableDef, colName) != 0 {
+		if GetSortOrder(tableDef, col.ColPos) != 0 {
 			leftSorted = false
 		}
 		if !maybeSorted(builder.qry.Nodes[n.Children[0]], builder, col.RelPos) {
