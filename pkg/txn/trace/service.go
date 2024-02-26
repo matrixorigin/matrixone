@@ -673,7 +673,9 @@ func (s *service) handleEvent(
 	open := func() {
 		if current != "" {
 			if err := os.Remove(current); err != nil {
-				panic(err)
+				s.logger.Fatal("failed to remove csv file",
+					zap.String("file", current),
+					zap.Error(err))
 			}
 		}
 
@@ -681,7 +683,9 @@ func (s *service) handleEvent(
 
 		v, err := os.OpenFile(current, os.O_RDWR|os.O_APPEND|os.O_CREATE, 0666)
 		if err != nil {
-			panic(err)
+			s.logger.Fatal("failed to open csv file",
+				zap.String("file", current),
+				zap.Error(err))
 		}
 		f = v
 		w = csv.NewWriter(f)
@@ -702,11 +706,15 @@ func (s *service) handleEvent(
 
 		w.Flush()
 		if err := w.Error(); err != nil {
-			panic(err)
+			s.logger.Fatal("failed to flush csv file",
+				zap.String("table", tableName),
+				zap.Error(err))
 		}
 
 		if err := f.Close(); err != nil {
-			panic(err)
+			s.logger.Fatal("failed to close csv file",
+				zap.String("table", tableName),
+				zap.Error(err))
 		}
 
 		load := func() error {
@@ -755,7 +763,8 @@ func (s *service) handleEvent(
 		case e := <-csvC:
 			e.toCSVRecord(s.cn, buf, records)
 			if err := w.Write(records); err != nil {
-				panic(err)
+				s.logger.Fatal("failed to write csv record",
+					zap.Error(err))
 			}
 
 			sum += bytes()
