@@ -16,11 +16,12 @@ package disttae
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"math"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -525,8 +526,6 @@ type txnTable struct {
 
 	// timestamp of the last operation on this table
 	lastTS timestamp.Timestamp
-	//entries belong to this table,and come from txn.writes.
-	writes []Entry
 
 	// this should be the statement id
 	// but seems that we're not maintaining it at the moment

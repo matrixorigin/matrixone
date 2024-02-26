@@ -889,19 +889,20 @@ func (txn *Transaction) getUncommitedDataObjectsByTable(
 
 }
 
-func (txn *Transaction) getTableWrites(databaseId uint64, tableId uint64, writes []Entry) []Entry {
+func (txn *Transaction) forEachTableWrites(databaseId uint64, tableId uint64, f func(Entry)) {
+	j := txn.getWriteOffset()
 	txn.Lock()
 	defer txn.Unlock()
-	for _, entry := range txn.writes {
-		if entry.databaseId != databaseId {
+	for i := 0; i < j; i++ {
+		e := txn.writes[i]
+		if e.databaseId != databaseId {
 			continue
 		}
-		if entry.tableId != tableId {
+		if e.tableId != tableId {
 			continue
 		}
-		writes = append(writes, entry)
+		f(e)
 	}
-	return writes
 }
 
 // getCachedTable returns the cached table in this transaction if it exists, nil otherwise.
