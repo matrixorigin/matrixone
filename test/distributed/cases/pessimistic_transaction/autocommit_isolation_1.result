@@ -97,7 +97,6 @@ c    d
 set autocommit=0;
 select * from test_11;
 SQL parser error: table "test_11" does not exist
-Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
 commit;
 set autocommit=1;
 select * from test_11;
@@ -210,7 +209,6 @@ c    d
 Insert into test_11 values(50,50);
 Insert into test_11 values(50,50);
 Duplicate entry '50' for key 'c'
-Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
 select * from test_11;
 c    d
 1    1
@@ -218,6 +216,7 @@ c    d
 3    1
 4    2
 50    50
+5    4
 select * from test_11;
 c    d
 3    1
@@ -236,6 +235,7 @@ c    d
 3    1
 4    2
 50    50
+5    4
 select * from test_11;
 c    d
 1    1
@@ -243,6 +243,7 @@ c    d
 3    1
 4    2
 50    50
+5    4
 drop table if exists test_11;
 create table test_11 (c int primary key,d int);
 Insert into test_11 values(1,1);
@@ -265,7 +266,6 @@ c    d
 2    2
 Insert into test_11 values(50,50);
 Duplicate entry '50' for key 'c'
-Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
 select * from test_11;
 c    d
 50    50
@@ -320,7 +320,6 @@ c    d
 2    2
 Insert into test_11 values(50,50);
 Duplicate entry '50' for key 'c'
-Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
 select * from test_11;
 c    d
 50    50
@@ -349,7 +348,6 @@ c    d
 2    2
 Insert into test_11 values(100,50);
 Duplicate entry '100' for key 'c'
-Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
 commit;
 set autocommit=1;
 commit;
@@ -386,7 +384,6 @@ c    d
 2    2
 Insert into test_11 values(50,50);
 Duplicate entry '50' for key 'c'
-Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
 select * from test_11;
 c    d
 50    50
@@ -450,7 +447,6 @@ c    d
 2    2
 Insert into test_11 values(50,50);
 Duplicate entry '50' for key 'c'
-Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
 select * from test_11;
 c    d
 50    50
@@ -504,7 +500,6 @@ c    d
 set autocommit=0;
 select * from test_11;
 SQL parser error: table "test_11" does not exist
-Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
 commit;
 set autocommit=1;
 select * from test_11;
@@ -534,7 +529,6 @@ set autocommit=0;
 drop table test_11;
 select * from test_11;
 SQL parser error: table "test_11" does not exist
-Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
 select * from test_11;
 c    d
 1    1
@@ -542,15 +536,11 @@ c    d
 commit;
 set autocommit=1;
 select * from test_11;
-c    d
-1    1
-2    2
+SQL parser error: table "test_11" does not exist
 commit;
 set autocommit=1;
 select * from test_11;
-c    d
-1    1
-2    2
+SQL parser error: table "test_11" does not exist
 drop table if exists test_11;
 set autocommit=0;
 create table test_11 (c int primary key,d int);
@@ -563,14 +553,12 @@ c    d
 set autocommit=0;
 select * from test_11;
 SQL parser error: table "test_11" does not exist
-Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
 select * from test_11;
 c    d
 1    1
 2    2
 select * from test_11;
 SQL parser error: table "test_11" does not exist
-Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
 commit;
 set autocommit=1;
 select * from test_11;

@@ -36,7 +36,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/common/system"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/gossip"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
@@ -194,13 +193,13 @@ func startService(
 		return err
 	}
 
-	etlFS, err := fileservice.Get[fileservice.FileService](fs, defines.ETLFileServiceName)
-	if err != nil {
-		return err
-	}
-	if err = initTraceMetric(ctx, st, cfg, stopper, etlFS, uuid); err != nil {
-		return err
-	}
+	//etlFS, err := fileservice.Get[fileservice.FileService](fs, defines.ETLFileServiceName)
+	//if err != nil {
+	//	return err
+	//}
+	//if err = initTraceMetric(ctx, st, cfg, stopper, etlFS, uuid); err != nil {
+	//	return err
+	//}
 
 	switch st {
 	case metadata.ServiceType_CN:

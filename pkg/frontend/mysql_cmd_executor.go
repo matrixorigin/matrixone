@@ -3172,7 +3172,6 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 		*/
 		if ses.InMultiStmtTransactionMode() && ses.InActiveTransaction() {
 			ses.cleanCache()
-			ses.SetOptionBits(OPTION_ATTACH_ABORT_TRANSACTION_ERROR)
 		}
 		logError(ses, ses.GetDebugString(), err.Error())
 		txnErr := ses.TxnRollbackSingleStatement(stmt)
@@ -3223,14 +3222,25 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 		return err
 	}
 
+	// defer transaction state management.
+	defer func() {
+		err = finishTxnFunc()
+	}()
+
+	// statement management
 	_, txnOp, err := ses.GetTxnHandler().GetTxnOperator()
 	if err != nil {
 		return err
 	}
 
+	/**
+	非派生事务
+	*/
 	if txnOp != nil && !ses.IsDerivedStmt() {
+		//如果调用过startStatement 不能再次调用
 		ok, _ := ses.GetTxnHandler().calledStartStmt()
 		if !ok {
+			//StartStatement. 并记录是否调用 和 事务id
 			txnOp.GetWorkspace().StartStatement()
 			ses.GetTxnHandler().enableStartStmt(txnOp.Txn().ID)
 		}
@@ -3246,18 +3256,15 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 			logError(ses, ses.GetDebugString(), err3.Error())
 			return
 		}
+		//非派生事务
 		if txnOp != nil && !ses.IsDerivedStmt() {
+			//调用过startStatement 才能end 事务
 			ok, id := ses.GetTxnHandler().calledStartStmt()
 			if ok && bytes.Equal(txnOp.Txn().ID, id) {
 				txnOp.GetWorkspace().EndStatement()
 			}
 		}
 		ses.GetTxnHandler().disableStartStmt()
-	}()
-
-	// defer transaction state mangagement.
-	defer func() {
-		err = finishTxnFunc()
 	}()
 
 	// XXX XXX

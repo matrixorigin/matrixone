@@ -15,6 +15,7 @@
 package frontend
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"sync"
@@ -59,6 +60,8 @@ type TxnHandler struct {
 	entryMu            sync.Mutex
 	hasCalledStartStmt bool
 	prevTxnId          []byte
+	hasCalledIncrStmt bool
+	prevIncrTxnId     []byte
 }
 
 func InitTxnHandler(storage engine.Engine, txnClient TxnClient, txnCtx context.Context, txnOp TxnOperator) *TxnHandler {
@@ -211,6 +214,26 @@ func (th *TxnHandler) calledStartStmt() (bool, []byte) {
 	th.mu.Lock()
 	defer th.mu.Unlock()
 	return th.hasCalledStartStmt, th.prevTxnId
+}
+
+func (th *TxnHandler) enableIncrStmt(txnId []byte) {
+	th.mu.Lock()
+	defer th.mu.Unlock()
+	th.hasCalledIncrStmt = true
+	th.prevIncrTxnId = txnId
+}
+
+func (th *TxnHandler) disableIncrStmt() {
+	th.mu.Lock()
+	defer th.mu.Unlock()
+	th.hasCalledIncrStmt = false
+	th.prevIncrTxnId = nil
+}
+
+func (th *TxnHandler) calledIncrStmt() (bool, []byte) {
+	th.mu.Lock()
+	defer th.mu.Unlock()
+	return th.hasCalledIncrStmt, th.prevIncrTxnId
 }
 
 // NewTxn commits the old transaction if it existed.
@@ -718,10 +741,30 @@ func (ses *Session) TxnRollbackSingleStatement(stmt tree.Statement) error {
 		        the transaction need to be rollback at the end of the statement.
 				(every error will abort the transaction.)
 	*/
-	if !ses.InMultiStmtTransactionMode() || ses.InActiveTransaction() {
+	if !ses.InMultiStmtTransactionMode() || ses.InActiveTransaction() && NeedToBeCommittedInActiveTransaction(stmt) {
 		err = ses.GetTxnHandler().RollbackTxn()
 		ses.ClearServerStatus(SERVER_STATUS_IN_TRANS)
 		ses.ClearOptionBits(OPTION_BEGIN)
+	} else {
+		//just rollback statement
+		var err3 error
+		txnCtx, txnOp, err3 := ses.GetTxnHandler().GetTxnOperator()
+		if err3 != nil {
+			logError(ses, ses.GetDebugString(), err3.Error())
+			return err3
+		}
+
+		//非派生事务
+		if txnOp != nil && !ses.IsDerivedStmt() {
+			//调用过incrstatement 才能rollback statement
+			ok, id := ses.GetTxnHandler().calledIncrStmt()
+			if ok && bytes.Equal(txnOp.Txn().ID, id) {
+				err = txnOp.GetWorkspace().RollbackLastStatement(txnCtx)
+				if err != nil {
+					return err
+				}
+			}
+		}
 	}
 	return err
 }
