@@ -120,7 +120,6 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 func (ctr *container) handleRuntimeFilter(ap *Argument, proc *process.Process) error {
 	if len(ap.RuntimeFilterSenders) == 0 {
 		panic("there must be runtime filter in index build!")
-		return nil
 	}
 
 	var runtimeFilter *pipeline.RuntimeFilter
