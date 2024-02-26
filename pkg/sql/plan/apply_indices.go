@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -56,7 +57,76 @@ func (builder *QueryBuilder) applyIndices(nodeID int32, colRefCnt map[[2]int32]i
 	}
 }
 
-func (builder *QueryBuilder) applyIndicesForFilters(nodeID int32, node *plan.Node, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) int32 {
+func (builder *QueryBuilder) applyIndicesForFilters(nodeID int32, node *plan.Node,
+	colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) int32 {
+
+	if len(node.FilterList) == 0 || node.TableDef.Pkey == nil || len(node.TableDef.Indexes) == 0 {
+		return nodeID
+	}
+	// 1. Master Index Check
+	{
+		masterIndexes := make([]*plan.IndexDef, 0)
+		for _, indexDef := range node.TableDef.Indexes {
+			if !indexDef.Unique && catalog.IsMasterIndexAlgo(indexDef.IndexAlgo) {
+				masterIndexes = append(masterIndexes, indexDef)
+			}
+		}
+
+		if len(masterIndexes) == 0 {
+			goto END0
+		}
+
+		for _, expr := range node.FilterList {
+			fn := expr.GetF()
+			if fn == nil {
+				goto END0
+			}
+
+			switch fn.Func.ObjName {
+			case "=":
+				if isRuntimeConstExpr(fn.Args[0]) && fn.Args[1].GetCol() != nil {
+					fn.Args[0], fn.Args[1] = fn.Args[1], fn.Args[0]
+				}
+
+				if !isRuntimeConstExpr(fn.Args[1]) {
+					goto END0
+				}
+			case "in", "between":
+
+			default:
+				goto END0
+			}
+
+			col := fn.Args[0].GetCol()
+			if col == nil {
+				goto END0
+			}
+		}
+
+		for _, indexDef := range masterIndexes {
+			isAllFilterColumnsIncluded := true
+			for _, expr := range node.FilterList {
+				fn := expr.GetF()
+				col := fn.Args[0].GetCol()
+				if !isKeyPresentInList(col.Name, indexDef.Parts) {
+					isAllFilterColumnsIncluded = false
+					break
+				}
+			}
+			if isAllFilterColumnsIncluded {
+				return builder.applyIndicesForFiltersMasterIndex(nodeID, node, colRefCnt, idxColMap)
+			}
+		}
+
+	}
+END0:
+	// 2. Regular Index Check
+	{
+		return builder.applyIndicesForFiltersRegularIndex(nodeID, node, colRefCnt, idxColMap)
+	}
+}
+
+func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, node *plan.Node, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) int32 {
 	if len(node.FilterList) == 0 || node.TableDef.Pkey == nil || len(node.TableDef.Indexes) == 0 {
 		return nodeID
 	}
@@ -547,7 +617,7 @@ func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node,
 		return nodeID
 	}
 
-	newLeftChildID := builder.applyIndicesForFilters(node.Children[0], leftChild, colRefCnt, idxColMap)
+	newLeftChildID := builder.applyIndicesForFiltersRegularIndex(node.Children[0], leftChild, colRefCnt, idxColMap)
 	if newLeftChildID != node.Children[0] {
 		node.Children[0] = newLeftChildID
 		return nodeID
