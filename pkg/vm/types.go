@@ -55,6 +55,7 @@ const (
 	Mark
 	LoopMark
 	IndexJoin
+	IndexBuild
 
 	Merge
 	MergeTop
