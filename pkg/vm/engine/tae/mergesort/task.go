@@ -155,7 +155,7 @@ func DoMergeAndWrite(
 			}
 			defer newb.Clean(mpool) // whoever create new vector, should clean it
 			batches[i] = newb
-			batches[i].AntiShrink(del.ToI64Arrary())
+			batches[i].Shrink(del.ToI64Arrary(), true)
 			// skip empty batch
 			if batches[i].RowCount() == 0 {
 				continue
