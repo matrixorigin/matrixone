@@ -1496,6 +1496,8 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		builder.pushdownRuntimeFilters(rootID)
 		ReCalcNodeStats(rootID, builder, true, false, false)
 
+		builder.handleMessgaes(rootID)
+
 		builder.rewriteStarApproxCount(rootID)
 
 		rootNode := builder.qry.Nodes[rootID]
@@ -3689,12 +3691,19 @@ func (builder *QueryBuilder) genNewTag() int32 {
 	return builder.nextTag
 }
 
+func (builder *QueryBuilder) genNewMsgTag() (ret int32) {
+	// start from 1, and 0 means do not handle with message
+	builder.nextMsgTag++
+	return builder.nextMsgTag
+}
+
 func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ctx *BindContext) error {
 	node := builder.qry.Nodes[nodeID]
 
 	var cols []string
 	var colIsHidden []bool
 	var types []*plan.Type
+	var defaultVals []string
 	var binding *Binding
 	var table string
 	if node.NodeType == plan.Node_TABLE_SCAN || node.NodeType == plan.Node_MATERIAL_SCAN || node.NodeType == plan.Node_EXTERNAL_SCAN || node.NodeType == plan.Node_FUNCTION_SCAN || node.NodeType == plan.Node_VALUE_SCAN || node.NodeType == plan.Node_SINK_SCAN || node.NodeType == plan.Node_RECURSIVE_SCAN || node.NodeType == plan.Node_SOURCE_SCAN {
@@ -3726,6 +3735,7 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 		cols = make([]string, colLength)
 		colIsHidden = make([]bool, colLength)
 		types = make([]*plan.Type, colLength)
+		defaultVals = make([]string, colLength)
 
 		tag := node.BindingTags[0]
 
@@ -3737,11 +3747,14 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 			}
 			colIsHidden[i] = col.Hidden
 			types[i] = col.Typ
+			if col.Default != nil {
+				defaultVals[i] = col.Default.OriginString
+			}
 			name := table + "." + cols[i]
 			builder.nameByColRef[[2]int32{tag, int32(i)}] = name
 		}
 
-		binding = NewBinding(tag, nodeID, table, node.TableDef.TblId, cols, colIsHidden, types, util.TableIsClusterTable(node.TableDef.TableType))
+		binding = NewBinding(tag, nodeID, table, node.TableDef.TblId, cols, colIsHidden, types, util.TableIsClusterTable(node.TableDef.TableType), defaultVals)
 	} else {
 		// Subquery
 		subCtx := builder.ctxByNode[nodeID]
@@ -3768,6 +3781,7 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 		cols = make([]string, colLength)
 		colIsHidden = make([]bool, colLength)
 		types = make([]*plan.Type, colLength)
+		defaultVals = make([]string, colLength)
 
 		for i, col := range headings {
 			if i < len(alias.Cols) {
@@ -3777,11 +3791,12 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 			}
 			types[i] = projects[i].Typ
 			colIsHidden[i] = false
+			defaultVals[i] = ""
 			name := table + "." + cols[i]
 			builder.nameByColRef[[2]int32{tag, int32(i)}] = name
 		}
 
-		binding = NewBinding(tag, nodeID, table, 0, cols, colIsHidden, types, false)
+		binding = NewBinding(tag, nodeID, table, 0, cols, colIsHidden, types, false, defaultVals)
 	}
 
 	ctx.bindings = append(ctx.bindings, binding)

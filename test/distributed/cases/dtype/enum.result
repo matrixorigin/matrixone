@@ -50,7 +50,7 @@ update enum01 set col1 ='blue' where col1 = 'green';
 delete from enum01 where col1 = 'blue';
 show create table enum01;
 Table    Create Table
-enum01    CREATE TABLE `enum01` (\n`col1` ENUM DEFAULT NULL\n)
+enum01    CREATE TABLE `enum01` (\n`col1` ENUM('red','blue','green') DEFAULT NULL\n)
 select table_name, COLUMN_NAME, data_type, is_nullable from information_schema.columns where table_name like 'enum01' and COLUMN_NAME not like '__mo%';
 table_name    column_name    data_type    is_nullable
 enum01    col1    ENUM    YES
@@ -85,7 +85,7 @@ col1
 ejwuijfew
 show create table enum03;
 Table    Create Table
-enum03    CREATE TABLE `enum03` (\n`col1` ENUM NOT NULL\n)
+enum03    CREATE TABLE `enum03` (\n`col1` ENUM('ejwuijfew','ewrwrewretr','werwre') NOT NULL\n)
 show columns from enum03;
 Field    Type    Null    Key    Default    Extra    Comment
 col1    ENUM(0)    NO        null        
@@ -139,7 +139,7 @@ drop table if exists pri01;
 create table pri01 (col1 enum('qy4iujd3wi4fu4h3f', '323242r34df432432', '32e3ewfdewrew'));
 show create table pri01;
 Table    Create Table
-pri01    CREATE TABLE `pri01` (\n`col1` ENUM DEFAULT NULL\n)
+pri01    CREATE TABLE `pri01` (\n`col1` ENUM('qy4iujd3wi4fu4h3f','323242r34df432432','32e3ewfdewrew') DEFAULT NULL\n)
 insert into pri01 values ('qy4iujd3wi4fu4h3f');
 insert into pri01 values ('qy4iujd3wi4fu4h3f');
 insert into pri01 (col1) values ('323242r34df432432');
@@ -152,7 +152,7 @@ qy4iujd3wi4fu4h3f
 null
 show create table pri01;
 Table    Create Table
-pri01    CREATE TABLE `pri01` (\n`col1` ENUM DEFAULT NULL\n)
+pri01    CREATE TABLE `pri01` (\n`col1` ENUM('qy4iujd3wi4fu4h3f','323242r34df432432','32e3ewfdewrew') DEFAULT NULL\n)
 show columns from pri01;
 Field    Type    Null    Key    Default    Extra    Comment
 col1    ENUM(0)    YES        null        
@@ -171,7 +171,7 @@ PRIMARY KEY (`col2`)
 )";
 show create table pri02;
 Table    Create Table
-pri02    CREATE TABLE `pri02` (\n`col1` INT DEFAULT NULL,\n`col2` ENUM DEFAULT NULL\n)
+pri02    CREATE TABLE `pri02` (\n`col1` INT DEFAULT NULL,\n`col2` ENUM('数据库','数据库系统','数据库管理系统') DEFAULT NULL\n)
 show columns from pri02;
 Field    Type    Null    Key    Default    Extra    Comment
 col1    INT(32)    YES        null        
@@ -195,7 +195,7 @@ PRIMARY KEY (`col2`)
 )";
 show create table pri03;
 Table    Create Table
-pri03    CREATE TABLE `pri03` (\n`col1` INT DEFAULT NULL,\n`col2` ENUM DEFAULT NULL\n)
+pri03    CREATE TABLE `pri03` (\n`col1` INT DEFAULT NULL,\n`col2` ENUM('数据库','数据库系统','数据库管理系统') DEFAULT NULL\n)
 show columns from pri03;
 Field    Type    Null    Key    Default    Extra    Comment
 col1    INT(32)    YES        null        
@@ -211,10 +211,10 @@ insert into pri04 (col1, col2) values (1, 'database');
 insert into pri04 values (2, 'database management system');
 show create table pri04;
 Table    Create Table
-pri04    CREATE TABLE `pri04` (\n`col1` INT DEFAULT NULL,\n`col2` ENUM DEFAULT NULL\n)
+pri04    CREATE TABLE `pri04` (\n`col1` INT DEFAULT NULL,\n`col2` ENUM('database','database management','database management system') DEFAULT NULL\n)
 show create table pri04;
 Table    Create Table
-pri04    CREATE TABLE `pri04` (\n`col1` INT DEFAULT NULL,\n`col2` ENUM DEFAULT NULL\n)
+pri04    CREATE TABLE `pri04` (\n`col1` INT DEFAULT NULL,\n`col2` ENUM('database','database management','database management system') DEFAULT NULL\n)
 show columns from pri04;
 Field    Type    Null    Key    Default    Extra    Comment
 col1    INT(32)    YES        null        
@@ -241,7 +241,7 @@ id    order_number    status
 4    444    Cancelled
 show create table insert01;
 Table    Create Table
-insert01    CREATE TABLE `insert01` (\n`id` INT NOT NULL,\n`order_number` VARCHAR(20) DEFAULT NULL,\n`status` ENUM DEFAULT NULL,\nPRIMARY KEY (`id`)\n)
+insert01    CREATE TABLE `insert01` (\n`id` INT NOT NULL,\n`order_number` VARCHAR(20) DEFAULT NULL,\n`status` ENUM('Pending','Processing','Completed','Cancelled') DEFAULT NULL,\nPRIMARY KEY (`id`)\n)
 show columns from insert01;
 Field    Type    Null    Key    Default    Extra    Comment
 id    INT(32)    NO    PRI    null        
@@ -260,8 +260,7 @@ id    order_number    status
 select * from insert01 where status=4;
 invalid argument cast to int, bad value Pending
 select * from insert01 where status in ('Pending',4);
-id    order_number    status
-1    111    Pending
+invalid argument cast to int, bad value Pending
 drop table insert01;
 drop table if exists default01;
 create table default01 (`col1` enum('T', 'E') not null default 'T');

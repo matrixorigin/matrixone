@@ -16,6 +16,7 @@ package anti
 
 import (
 	"bytes"
+
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -54,7 +55,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(arg.info.Idx, arg.info.ParallelIdx, arg.info.ParallelMajor)
+	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
 	anal.Start()
 	defer anal.Stop()
 	ap := arg
@@ -91,11 +92,11 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 				ap.lastrow = 0
 			}
 
-			if ctr.batchRowCount == 0 {
-				err := ctr.emptyProbe(ap, proc, anal, arg.info.IsFirst, arg.info.IsLast, &result)
+			if ctr.mp == nil {
+				err := ctr.emptyProbe(ap, proc, anal, arg.GetIsFirst(), arg.GetIsLast(), &result)
 				return result, err
 			} else {
-				err := ctr.probe(ap, proc, anal, arg.info.IsFirst, arg.info.IsLast, &result)
+				err := ctr.probe(ap, proc, anal, arg.GetIsFirst(), arg.GetIsLast(), &result)
 				if ap.lastrow == 0 {
 					proc.PutBatch(ap.bat)
 					ap.bat = nil
@@ -207,7 +208,7 @@ func (ctr *container) probe(ap *Argument, proc *process.Process, anal process.An
 		// for anti join, if left batch is sorted , then output batch is sorted
 		ctr.rbat.Vecs[i].SetSorted(ap.bat.Vecs[pos].GetSorted())
 	}
-	if (ctr.batchRowCount == 1 && ctr.hasNull) || ctr.batchRowCount == 0 {
+	if ctr.batchRowCount == 1 && ctr.hasNull {
 		result.Batch = ctr.rbat
 		anal.Output(ctr.rbat, isLast)
 		return nil

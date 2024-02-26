@@ -16,11 +16,12 @@ package compile
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"hash/crc32"
 	"testing"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 
@@ -95,7 +96,7 @@ import (
 )
 
 func Test_CnServerMessageHandler(t *testing.T) {
-	colexec.Srv = colexec.NewServer(nil)
+	colexec.Set(colexec.NewServer(nil))
 
 	ctrl := gomock.NewController(t)
 	ctx := context.TODO()

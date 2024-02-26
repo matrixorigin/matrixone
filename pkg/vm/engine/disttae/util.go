@@ -72,6 +72,237 @@ func getValidCompositePKCnt(vals []*plan.Literal) int {
 	return cnt
 }
 
+func MustGetFullCompositePKValue(
+	expr *plan.Expr,
+	pkName string,
+	keys []string,
+	packer *types.Packer,
+	proc *process.Process,
+) (canEval, isVec bool, val []byte) {
+	ok, rExpr := MustGetFullCompositePK(expr, pkName, keys, packer, proc)
+	if !ok || rExpr == nil {
+		return false, false, nil
+	}
+
+	switch rExprImpl := rExpr.Expr.(type) {
+	case *plan.Expr_Lit:
+		return true, false, []byte(rExprImpl.Lit.Value.(*plan.Literal_Sval).Sval)
+	case *plan.Expr_Vec:
+		return true, true, rExprImpl.Vec.Data
+	case *plan.Expr_List:
+		ok, vec, put := evalExprListToVec(types.T_char, rExprImpl, proc)
+		if !ok || vec == nil || vec.Length() == 0 {
+			return false, false, nil
+		}
+		data, _ := vec.MarshalBinary()
+		put()
+		return true, true, data
+	}
+	return false, false, nil
+}
+
+func MustGetFullCompositePK(
+	expr *plan.Expr,
+	pkName string,
+	keys []string,
+	packer *types.Packer,
+	proc *process.Process,
+) (bool, *plan.Expr) {
+	tmpExprs := make([]*plan.Literal, len(keys))
+	ok, expr := mustGetFullCompositePK(expr, pkName, keys, tmpExprs, packer, proc)
+	if !ok {
+		return false, nil
+	}
+	if expr != nil {
+		return true, expr
+	}
+	packer.Reset()
+	for i := 0; i < len(tmpExprs); i++ {
+		if tmpExprs[i] == nil {
+			packer.Reset()
+			return false, nil
+		}
+	}
+	val := packer.Bytes()
+	packer.Reset()
+	return true, &plan.Expr{
+		Expr: &plan.Expr_Lit{
+			Lit: &plan.Literal{
+				Isnull: false,
+				Value: &plan.Literal_Sval{
+					Sval: util.UnsafeBytesToString(val),
+				},
+			},
+		},
+	}
+}
+
+func mustGetFullCompositePK(
+	expr *plan.Expr,
+	pkName string,
+	keys []string,
+	tmpExprs []*plan.Literal,
+	packer *types.Packer,
+	proc *process.Process,
+) (bool, *plan.Expr) {
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_F:
+		switch exprImpl.F.Func.ObjName {
+		case "=":
+			if leftExpr, ok := exprImpl.F.Args[0].Expr.(*plan.Expr_Col); ok {
+				// if it is a composite pk
+				if compPkCol(leftExpr.Col.Name, pkName) {
+					rExpr := getConstValueByExpr(exprImpl.F.Args[1], proc)
+					if rExpr == nil || rExpr.Isnull {
+						return false, nil
+					}
+					return true, &plan.Expr{
+						Expr: &plan.Expr_Lit{Lit: rExpr},
+					}
+				}
+				// if it is one of the composite pks
+				if pos := getPosInCompositPK(leftExpr.Col.Name, keys); pos != -1 {
+					rExpr := getConstValueByExpr(exprImpl.F.Args[1], proc)
+					if rExpr != nil && !rExpr.Isnull {
+						tmpExprs[pos] = rExpr
+					}
+					return true, nil
+				}
+
+				return false, nil
+			}
+			if rightExpr, ok := exprImpl.F.Args[1].Expr.(*plan.Expr_Col); ok {
+				// if it is a composite pk
+				if compPkCol(rightExpr.Col.Name, pkName) {
+					rExpr := getConstValueByExpr(exprImpl.F.Args[0], proc)
+					if rExpr == nil || rExpr.Isnull {
+						return false, nil
+					}
+					return true, &plan.Expr{
+						Expr: &plan.Expr_Lit{Lit: rExpr},
+					}
+				}
+				// if it is one of the composite pks
+				if pos := getPosInCompositPK(rightExpr.Col.Name, keys); pos != -1 {
+					rExpr := getConstValueByExpr(exprImpl.F.Args[0], proc)
+					if rExpr != nil && !rExpr.Isnull {
+						tmpExprs[pos] = rExpr
+					}
+					return true, nil
+				}
+				return false, nil
+			}
+			return false, nil
+		case "and":
+			ok, leftPkExpr := mustGetFullCompositePK(
+				exprImpl.F.Args[0], pkName, keys, tmpExprs, packer, proc,
+			)
+			if !ok || leftPkExpr != nil {
+				return ok, leftPkExpr
+			}
+			all := true
+			for _, expr := range tmpExprs {
+				if expr == nil {
+					all = false
+				}
+			}
+			if all {
+				packer.Reset()
+				for i, expr := range tmpExprs {
+					serialTupleByConstExpr(expr, packer)
+					tmpExprs[i] = nil
+				}
+				val := packer.Bytes()
+				packer.Reset()
+				return true, &plan.Expr{
+					Expr: &plan.Expr_Lit{
+						Lit: &plan.Literal{
+							Isnull: false,
+							Value: &plan.Literal_Sval{
+								Sval: util.UnsafeBytesToString(val),
+							},
+						},
+					},
+				}
+			}
+			ok, rightPkExpr := mustGetFullCompositePK(
+				exprImpl.F.Args[1], pkName, keys, tmpExprs, packer, proc,
+			)
+			if !ok || rightPkExpr != nil {
+				return ok, rightPkExpr
+			}
+			all = true
+			for _, expr := range tmpExprs {
+				if expr == nil {
+					all = false
+				}
+			}
+			if all {
+				packer.Reset()
+				for i, expr := range tmpExprs {
+					serialTupleByConstExpr(expr, packer)
+					tmpExprs[i] = nil
+				}
+				val := packer.Bytes()
+				packer.Reset()
+
+				return true, &plan.Expr{
+					Expr: &plan.Expr_Lit{
+						Lit: &plan.Literal{
+							Isnull: false,
+							Value: &plan.Literal_Sval{
+								Sval: util.UnsafeBytesToString(val),
+							},
+						},
+					},
+				}
+			}
+			return true, nil
+		case "or":
+			for i := 0; i < len(tmpExprs); i++ {
+				tmpExprs[i] = nil
+			}
+			ok, leftPkExpr := mustGetFullCompositePK(
+				exprImpl.F.Args[0], pkName, keys, tmpExprs, packer, proc,
+			)
+			for i := 0; i < len(tmpExprs); i++ {
+				tmpExprs[i] = nil
+			}
+			if !ok || leftPkExpr == nil {
+				return false, nil
+			}
+			ok, rightPkExpr := mustGetFullCompositePK(
+				exprImpl.F.Args[1], pkName, keys, tmpExprs, packer, proc,
+			)
+			for i := 0; i < len(tmpExprs); i++ {
+				tmpExprs[i] = nil
+			}
+			if !ok || rightPkExpr == nil {
+				return false, nil
+			}
+			return true, &plan.Expr{
+				Expr: &plan.Expr_List{
+					List: &plan.ExprList{
+						List: []*plan.Expr{leftPkExpr, rightPkExpr},
+					},
+				},
+				Typ: &plan.Type{
+					Id: int32(types.T_tuple),
+				},
+			}
+
+		case "in":
+			if leftExpr, ok := exprImpl.F.Args[0].Expr.(*plan.Expr_Col); ok {
+				if !compPkCol(leftExpr.Col.Name, pkName) {
+					return false, nil
+				}
+				return true, exprImpl.F.Args[1]
+			}
+		}
+	}
+	return false, nil
+}
+
 func getCompositPKVals(
 	expr *plan.Expr,
 	pks []string,
@@ -139,6 +370,16 @@ func getPkExpr(
 			if rightPK == nil {
 				return nil
 			}
+			if litExpr, ok := leftPK.Expr.(*plan.Expr_Lit); ok {
+				if litExpr.Lit.Isnull {
+					return rightPK
+				}
+			}
+			if litExpr, ok := rightPK.Expr.(*plan.Expr_Lit); ok {
+				if litExpr.Lit.Isnull {
+					return leftPK
+				}
+			}
 			return &plan.Expr{
 				Expr: &plan.Expr_List{
 					List: &plan.ExprList{
@@ -196,6 +437,13 @@ func getPkExpr(
 					return nil
 				}
 				return exprImpl.F.Args[1]
+			}
+		case "prefix_eq":
+			if leftExpr, ok := exprImpl.F.Args[0].Expr.(*plan.Expr_Col); ok {
+				if !compPkCol(leftExpr.Col.Name, pkName) {
+					return nil
+				}
+				return expr
 			}
 		}
 	}
@@ -261,11 +509,20 @@ func getNonCompositePKSearchFuncByExpr(
 			searchPKFunc = vector.OrderedBinarySearchOffsetByValFactory([]types.Enum{types.Enum(val.EnumVal)})
 		}
 
+	case *plan.Expr_F:
+		if exprImpl.F.Func.ObjName == "prefix_eq" {
+			expr := exprImpl.F.Args[1].Expr.(*plan.Expr_Lit)
+			val := util.UnsafeStringToBytes(expr.Lit.Value.(*plan.Literal_Sval).Sval)
+			searchPKFunc = vector.CollectOffsetsByOnePrefixFactory(val)
+		}
+
 	case *plan.Expr_Vec:
 		vec := vector.NewVec(types.T_any.ToType())
 		vec.UnmarshalBinary(exprImpl.Vec.Data)
 
 		switch vec.GetType().Oid {
+		case types.T_bit:
+			searchPKFunc = vector.OrderedBinarySearchOffsetByValFactory(vector.MustFixedCol[uint64](vec))
 		case types.T_int8:
 			searchPKFunc = vector.OrderedBinarySearchOffsetByValFactory(vector.MustFixedCol[int8](vec))
 		case types.T_int16:
@@ -387,14 +644,30 @@ func getPkValueByExpr(
 		}
 
 	case *plan.Expr_Vec:
-		// TODO: extract one from vector later
 		if mustOne {
+			vec := vector.NewVec(types.T_any.ToType())
+			vec.UnmarshalBinary(exprImpl.Vec.Data)
+			if vec.Length() != 1 {
+				return false, false, false, nil
+			}
+			exprLit := rule.GetConstantValue(vec, true, 0)
+			if exprLit == nil {
+				return false, false, false, nil
+			}
+			if exprLit.Isnull {
+				return false, true, false, nil
+			}
+			canEval, val := evalLiteralExpr(&plan.Expr_Lit{
+				Lit: exprLit,
+			}, oid)
+			if canEval {
+				return true, false, false, val
+			}
 			return false, false, false, nil
 		}
 		return true, false, true, exprImpl.Vec.Data
 
 	case *plan.Expr_List:
-		// TODO: extract one from vector later
 		if mustOne {
 			return false, false, false, nil
 		}
@@ -402,8 +675,8 @@ func getPkValueByExpr(
 		if !canEval || vec == nil || vec.Length() == 0 {
 			return false, false, false, nil
 		}
-		defer put()
 		data, _ := vec.MarshalBinary()
+		put()
 		return true, false, true, data
 	}
 
@@ -883,16 +1156,33 @@ func extractPKValueFromEqualExprs(
 	proc *process.Process,
 	pool *fileservice.Pool[*types.Packer],
 ) (val []byte, isVec bool) {
-	pk := def.Pkey
-	if pk.CompPkeyCol != nil {
-		val = extractCompositePKValueFromEqualExprs(
-			exprs, pk, proc, pool,
-		)
-		return
-	}
 	var canEval bool
+	pk := def.Pkey
 	column := def.Cols[pkIdx]
 	name := column.Name
+	if pk.CompPkeyCol != nil {
+		if len(exprs) == 1 {
+			expr := exprs[0]
+			var packer *types.Packer
+			put := pool.Get(&packer)
+			defer put.Put()
+			if canEval, isVec, v := MustGetFullCompositePKValue(
+				expr, name, pk.Names, packer, proc,
+			); canEval {
+				return v, isVec
+			}
+			return nil, false
+		} else {
+			// PXU TODO:
+			// we need to change the pushdown fiter exprs in
+			// the composite pk scenario.
+			val = extractCompositePKValueFromEqualExprs(
+				exprs, pk, proc, pool,
+			)
+			return
+		}
+	}
+
 	colType := types.T(column.Typ.Id)
 	for _, expr := range exprs {
 		var v any
@@ -959,7 +1249,7 @@ func UnfoldBlkInfoFromObjStats(stats *objectio.ObjectStats) (blks []objectio.Blo
 func ForeachBlkInObjStatsList(
 	next bool,
 	dataMeta objectio.ObjectDataMeta,
-	onBlock func(blk *objectio.BlockInfo, blkMeta objectio.BlockObject) bool,
+	onBlock func(blk objectio.BlockInfo, blkMeta objectio.BlockObject) bool,
 	objects ...objectio.ObjectStats,
 ) {
 	stop := false
@@ -1019,7 +1309,7 @@ func (i *StatsBlkIter) Next() bool {
 	return i.cur < int(i.blkCnt)
 }
 
-func (i *StatsBlkIter) Entry() *objectio.BlockInfo {
+func (i *StatsBlkIter) Entry() objectio.BlockInfo {
 	if i.cur == -1 {
 		i.cur = 0
 	}
@@ -1034,7 +1324,7 @@ func (i *StatsBlkIter) Entry() *objectio.BlockInfo {
 	}
 
 	loc := objectio.BuildLocation(i.name, i.extent, i.curBlkRows, uint16(i.cur))
-	blk := &objectio.BlockInfo{
+	blk := objectio.BlockInfo{
 		BlockID:   *objectio.BuildObjectBlockid(i.name, uint16(i.cur)),
 		SegmentID: i.name.SegmentId(),
 		MetaLoc:   objectio.ObjectLocation(loc),

@@ -199,7 +199,6 @@ message FuzzyFilter {
   float N = 1;
   string PkName = 2;
   plan.Type PkTyp = 3;
-  repeated plan.RuntimeFilterSpec runtime_filter_build_list = 4;
 }
 
 message Join {
@@ -433,6 +432,11 @@ message Instruction{
   PreInsertSecondaryIndex pre_insert_secondary_index  = 36;
   SampleFunc sample_func = 37;
   FuzzyFilter fuzzy_filter = 38;
+
+  string cn_addr = 39;
+  int32 operator_id = 40;
+  int32 parallel_id = 41;
+  int32 max_parallel = 42;
 }
 
 message AnalysisList {

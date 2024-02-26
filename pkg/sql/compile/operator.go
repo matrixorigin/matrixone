@@ -307,6 +307,7 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 		t := sourceIns.Arg.(*top.Argument)
 		arg := top.NewArgument()
 		arg.Limit = t.Limit
+		arg.TopValueTag = t.TopValueTag
 		arg.Fs = t.Fs
 		res.Arg = arg
 	case vm.Intersect:
@@ -512,7 +513,6 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 		arg.N = t.N
 		arg.PkName = t.PkName
 		arg.PkTyp = t.PkTyp
-		arg.RuntimeFilterSpecs = t.RuntimeFilterSpecs
 		res.Arg = arg
 	default:
 		panic(fmt.Sprintf("unexpected instruction type '%d' to dup", sourceIns.Op))
@@ -596,8 +596,6 @@ func constructFuzzyFilter(c *Compile, n, left, right *plan.Node) *fuzzyfilter.Ar
 	arg.PkName = pkName
 	arg.PkTyp = pkTyp
 	arg.N = right.Stats.Cost
-	arg.RuntimeFilterSpecs = n.RuntimeFilterBuildList
-
 	registerRuntimeFilters(arg, c, n.RuntimeFilterBuildList, 0)
 
 	return arg
@@ -784,6 +782,9 @@ func constructTop(n *plan.Node, topN int64) *top.Argument {
 	arg := top.NewArgument()
 	arg.Fs = n.OrderBy
 	arg.Limit = topN
+	if len(n.SendMsgList) > 0 {
+		arg.TopValueTag = n.SendMsgList[0].MsgTag
+	}
 	return arg
 }
 
@@ -800,7 +801,7 @@ func constructJoin(n *plan.Node, typs []types.Type, proc *process.Process) *join
 	arg.Cond = cond
 	arg.Conditions = constructJoinConditions(conds, proc)
 	arg.RuntimeFilterSpecs = n.RuntimeFilterBuildList
-	//arg.HashOnPK = n.Stats.HashmapStats != nil && n.Stats.HashmapStats.HashOnPK
+	arg.HashOnPK = n.Stats.HashmapStats != nil && n.Stats.HashmapStats.HashOnPK
 	arg.IsShuffle = n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle
 	return arg
 }
@@ -821,7 +822,7 @@ func constructSemi(n *plan.Node, typs []types.Type, proc *process.Process) *semi
 	arg.Cond = cond
 	arg.Conditions = constructJoinConditions(conds, proc)
 	arg.RuntimeFilterSpecs = n.RuntimeFilterBuildList
-	//arg.HashOnPK = n.Stats.HashmapStats != nil && n.Stats.HashmapStats.HashOnPK
+	arg.HashOnPK = n.Stats.HashmapStats != nil && n.Stats.HashmapStats.HashOnPK
 	arg.IsShuffle = n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle
 	return arg
 }
@@ -838,7 +839,7 @@ func constructLeft(n *plan.Node, typs []types.Type, proc *process.Process) *left
 	arg.Cond = cond
 	arg.Conditions = constructJoinConditions(conds, proc)
 	arg.RuntimeFilterSpecs = n.RuntimeFilterBuildList
-	//arg.HashOnPK = n.Stats.HashmapStats != nil && n.Stats.HashmapStats.HashOnPK
+	arg.HashOnPK = n.Stats.HashmapStats != nil && n.Stats.HashmapStats.HashOnPK
 	arg.IsShuffle = n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle
 	return arg
 }
@@ -858,7 +859,7 @@ func constructRight(n *plan.Node, left_typs, right_typs []types.Type, Ibucket, N
 	arg.Cond = cond
 	arg.Conditions = constructJoinConditions(conds, proc)
 	arg.RuntimeFilterSpecs = n.RuntimeFilterBuildList
-	//arg.HashOnPK = n.Stats.HashmapStats != nil && n.Stats.HashmapStats.HashOnPK
+	arg.HashOnPK = n.Stats.HashmapStats != nil && n.Stats.HashmapStats.HashOnPK
 	arg.IsShuffle = n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle
 	return arg
 }
@@ -878,7 +879,7 @@ func constructRightSemi(n *plan.Node, right_typs []types.Type, Ibucket, Nbucket 
 	arg.Cond = cond
 	arg.Conditions = constructJoinConditions(conds, proc)
 	arg.RuntimeFilterSpecs = n.RuntimeFilterBuildList
-	//arg.HashOnPK = n.Stats.HashmapStats != nil && n.Stats.HashmapStats.HashOnPK
+	arg.HashOnPK = n.Stats.HashmapStats != nil && n.Stats.HashmapStats.HashOnPK
 	arg.IsShuffle = n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle
 	return arg
 }
@@ -897,7 +898,7 @@ func constructRightAnti(n *plan.Node, right_typs []types.Type, Ibucket, Nbucket 
 	arg.Cond = cond
 	arg.Conditions = constructJoinConditions(conds, proc)
 	arg.RuntimeFilterSpecs = n.RuntimeFilterBuildList
-	//arg.HashOnPK = n.Stats.HashmapStats != nil && n.Stats.HashmapStats.HashOnPK
+	arg.HashOnPK = n.Stats.HashmapStats != nil && n.Stats.HashmapStats.HashOnPK
 	arg.IsShuffle = n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle
 	return arg
 }
@@ -914,7 +915,7 @@ func constructSingle(n *plan.Node, typs []types.Type, proc *process.Process) *si
 	arg.Cond = cond
 	arg.Conditions = constructJoinConditions(conds, proc)
 	arg.RuntimeFilterSpecs = n.RuntimeFilterBuildList
-	//arg.HashOnPK = n.Stats.HashmapStats != nil && n.Stats.HashmapStats.HashOnPK
+	arg.HashOnPK = n.Stats.HashmapStats != nil && n.Stats.HashmapStats.HashOnPK
 	return arg
 }
 
@@ -944,7 +945,7 @@ func constructAnti(n *plan.Node, typs []types.Type, proc *process.Process) *anti
 	arg.Result = result
 	arg.Cond = cond
 	arg.Conditions = constructJoinConditions(conds, proc)
-	//arg.HashOnPK = n.Stats.HashmapStats != nil && n.Stats.HashmapStats.HashOnPK
+	arg.HashOnPK = n.Stats.HashmapStats != nil && n.Stats.HashmapStats.HashOnPK
 	arg.IsShuffle = n.Stats.HashmapStats != nil && n.Stats.HashmapStats.Shuffle
 	return arg
 }
@@ -1130,9 +1131,9 @@ func constructLimit(n *plan.Node, proc *process.Process) *limit.Argument {
 	return arg
 }
 
-func constructSample(n *plan.Node) *sample.Argument {
+func constructSample(n *plan.Node, outputRowCount bool) *sample.Argument {
 	if n.SampleFunc.Rows != plan2.NotSampleByRows {
-		return sample.NewSampleByRows(int(n.SampleFunc.Rows), n.AggList, n.GroupBy)
+		return sample.NewSampleByRows(int(n.SampleFunc.Rows), n.AggList, n.GroupBy, n.SampleFunc.UsingRow, outputRowCount)
 	}
 	if n.SampleFunc.Percent != plan2.NotSampleByPercents {
 		return sample.NewSampleByPercent(n.SampleFunc.Percent, n.AggList, n.GroupBy)
@@ -1379,7 +1380,7 @@ func constructShuffleJoinArg(ss []*Scope, node *plan.Node, left bool) *shuffle.A
 	switch types.T(typ) {
 	case types.T_int64, types.T_int32, types.T_int16:
 		arg.ShuffleRangeInt64 = plan2.ShuffleRangeReEvalSigned(node.Stats.HashmapStats.Ranges, int(arg.AliveRegCnt), node.Stats.HashmapStats.Nullcnt, int64(node.Stats.TableCnt))
-	case types.T_uint64, types.T_uint32, types.T_uint16, types.T_varchar, types.T_char, types.T_text:
+	case types.T_uint64, types.T_uint32, types.T_uint16, types.T_varchar, types.T_char, types.T_text, types.T_bit:
 		arg.ShuffleRangeUint64 = plan2.ShuffleRangeReEvalUnsigned(node.Stats.HashmapStats.Ranges, int(arg.AliveRegCnt), node.Stats.HashmapStats.Nullcnt, int64(node.Stats.TableCnt))
 	}
 	return arg
@@ -1396,7 +1397,7 @@ func constructShuffleGroupArg(ss []*Scope, node *plan.Node) *shuffle.Argument {
 	switch types.T(typ) {
 	case types.T_int64, types.T_int32, types.T_int16:
 		arg.ShuffleRangeInt64 = plan2.ShuffleRangeReEvalSigned(node.Stats.HashmapStats.Ranges, int(arg.AliveRegCnt), node.Stats.HashmapStats.Nullcnt, int64(node.Stats.TableCnt))
-	case types.T_uint64, types.T_uint32, types.T_uint16, types.T_varchar, types.T_char, types.T_text:
+	case types.T_uint64, types.T_uint32, types.T_uint16, types.T_varchar, types.T_char, types.T_text, types.T_bit:
 		arg.ShuffleRangeUint64 = plan2.ShuffleRangeReEvalUnsigned(node.Stats.HashmapStats.Ranges, int(arg.AliveRegCnt), node.Stats.HashmapStats.Nullcnt, int64(node.Stats.TableCnt))
 	}
 	return arg
@@ -1614,11 +1615,12 @@ func constructHashBuild(c *Compile, in vm.Instruction, proc *process.Process, sh
 		ret.Typs = arg.Typs
 		ret.Conditions = arg.Conditions[1]
 		ret.IsDup = isDup
-		ret.NeedMergedBatch = true
 		ret.HashOnPK = arg.HashOnPK
 		if arg.Cond == nil {
+			ret.NeedMergedBatch = false
 			ret.NeedAllocateSels = false
 		} else {
+			ret.NeedMergedBatch = true
 			ret.NeedAllocateSels = true
 		}
 
@@ -1640,7 +1642,7 @@ func constructHashBuild(c *Compile, in vm.Instruction, proc *process.Process, sh
 		ret.IsDup = isDup
 		ret.HashOnPK = arg.HashOnPK
 
-		// to find if hashmap need to merge batches into one large batch and keep this batch for join
+		// to find if hashmap need to keep build batches for probe
 		var needMergedBatch bool
 		if arg.Cond != nil {
 			needMergedBatch = true
@@ -1716,11 +1718,12 @@ func constructHashBuild(c *Compile, in vm.Instruction, proc *process.Process, sh
 		ret.Typs = arg.Typs
 		ret.Conditions = arg.Conditions[1]
 		ret.IsDup = isDup
-		ret.NeedMergedBatch = true
 		ret.HashOnPK = arg.HashOnPK
 		if arg.Cond == nil {
+			ret.NeedMergedBatch = false
 			ret.NeedAllocateSels = false
 		} else {
+			ret.NeedMergedBatch = true
 			ret.NeedAllocateSels = true
 		}
 

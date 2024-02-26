@@ -88,6 +88,9 @@ func initCommand(ctx context.Context, inspectCtx *inspectContext) *cobra.Command
 	storage := &storageUsageHistoryArg{}
 	rootCmd.AddCommand(storage.PrepareCommand())
 
+	renamecol := &RenameColArg{}
+	rootCmd.AddCommand(renamecol.PrepareCommand())
+
 	return rootCmd
 }
 
@@ -294,7 +297,8 @@ type storageUsageHistoryArg struct {
 		accounts     map[uint64]struct{}
 	}
 
-	transfer bool
+	transfer        bool
+	eliminateErrors bool
 }
 
 func (c *storageUsageHistoryArg) PrepareCommand() *cobra.Command {
@@ -309,6 +313,7 @@ func (c *storageUsageHistoryArg) PrepareCommand() *cobra.Command {
 	// storage usage details in ckp
 	storageUsageCmd.Flags().StringP("detail", "d", "", "format: accId{.dbName{.tableName}}")
 	storageUsageCmd.Flags().StringP("transfer", "f", "", "format: *")
+	storageUsageCmd.Flags().StringP("eliminate_errors", "e", "", "format: *")
 	return storageUsageCmd
 }
 
@@ -350,6 +355,15 @@ func (c *storageUsageHistoryArg) FromCommand(cmd *cobra.Command) (err error) {
 		}
 	}
 
+	expr, _ = cmd.Flags().GetString("eliminate_errors")
+	if expr != "" {
+		if expr == "*" {
+			c.eliminateErrors = true
+		} else {
+			return moerr.NewInvalidArgNoCtx(expr, "`storage_usage -e *` expected")
+		}
+	}
+
 	return nil
 }
 
@@ -359,7 +373,9 @@ func (c *storageUsageHistoryArg) Run() (err error) {
 	} else if c.trace != nil {
 		return storageTrace(c)
 	} else if c.transfer {
-		return storageTransfer(c)
+		return storageUsageTransfer(c)
+	} else if c.eliminateErrors {
+		return storageUsageEliminateErrors(c)
 	}
 	return moerr.NewInvalidArgNoCtx("", c.ctx.args)
 }
@@ -479,6 +495,22 @@ func (c *infoArg) Run() error {
 		b.WriteString(fmt.Sprintf("prepareCompact: %v, %q\n", r, reason))
 		b.WriteString(fmt.Sprintf("left rows: %v\n", rows-dels))
 		b.WriteString(fmt.Sprintf("ppstring: %v\n", c.blk.GetBlockData().PPString(c.verbose, 0, "")))
+
+		schema := c.blk.GetSchema()
+		if schema.HasSortKey() {
+			zm, err := c.blk.GetPKZoneMap(context.Background(), c.blk.GetBlockData().GetFs().Service)
+			var zmstr string
+			if err != nil {
+				zmstr = err.Error()
+			} else if c.verbose <= common.PPL1 {
+				zmstr = zm.String()
+			} else if c.verbose == common.PPL2 {
+				zmstr = zm.StringForCompose()
+			} else {
+				zmstr = zm.StringForHex()
+			}
+			b.WriteString(fmt.Sprintf("sort key zm: %v\n", zmstr))
+		}
 	}
 	c.ctx.resp.Payload = b.Bytes()
 	return nil
@@ -649,6 +681,61 @@ func (c *compactPolicyArg) Run() error {
 	}
 	c.ctx.resp.Payload = []byte("<empty>")
 	return nil
+}
+
+type RenameColArg struct {
+	ctx              *inspectContext
+	tbl              *catalog.TableEntry
+	oldName, newName string
+	seq              int
+}
+
+func (c *RenameColArg) FromCommand(cmd *cobra.Command) (err error) {
+	c.ctx = cmd.Flag("ictx").Value.(*inspectContext)
+	c.tbl, _ = parseTableTarget(cmd.Flag("target").Value.String(), c.ctx.acinfo, c.ctx.db)
+	c.oldName, _ = cmd.Flags().GetString("old")
+	c.newName, _ = cmd.Flags().GetString("new")
+	c.seq, _ = cmd.Flags().GetInt("seq")
+	return nil
+}
+
+func (c *RenameColArg) PrepareCommand() *cobra.Command {
+	renameColCmd := &cobra.Command{
+		Use:   "rename_col",
+		Short: "rename column",
+		Run:   RunFactory(c),
+	}
+	renameColCmd.Flags().StringP("target", "t", "*", "format: db.table")
+	renameColCmd.Flags().StringP("old", "o", "", "old column name")
+	renameColCmd.Flags().StringP("new", "n", "", "new column name")
+	renameColCmd.Flags().IntP("seq", "s", 0, "column seq")
+	return renameColCmd
+}
+
+func (c *RenameColArg) String() string {
+	return fmt.Sprintf("rename col: %v, %v,%v,%v", c.tbl.GetLastestSchema().Name, c.oldName, c.newName, c.seq)
+}
+
+func (c *RenameColArg) Run() (err error) {
+	txn, _ := c.ctx.db.StartTxn(nil)
+	defer func() {
+		if err != nil {
+			txn.Rollback(context.Background())
+		}
+	}()
+	dbHdl, err := txn.GetDatabase(c.tbl.GetDB().GetName())
+	if err != nil {
+		return err
+	}
+	tblHdl, err := dbHdl.GetRelationByName(c.tbl.GetLastestSchema().Name)
+	if err != nil {
+		return err
+	}
+	err = tblHdl.AlterTable(context.Background(), api.NewRenameColumnReq(0, 0, c.oldName, c.newName, uint32(c.seq)))
+	if err != nil {
+		return err
+	}
+	return txn.Commit(context.Background())
 }
 
 func parseBlkTarget(address string, tbl *catalog.TableEntry) (*catalog.BlockEntry, error) {
@@ -1091,7 +1178,7 @@ func storageTrace(c *storageUsageHistoryArg) (err error) {
 	return nil
 }
 
-func storageTransfer(c *storageUsageHistoryArg) (err error) {
+func storageUsageTransfer(c *storageUsageHistoryArg) (err error) {
 	cnt, size, err := logtail.CorrectUsageWrongPlacement(c.ctx.db.Catalog)
 	if err != nil {
 		return err
@@ -1099,4 +1186,12 @@ func storageTransfer(c *storageUsageHistoryArg) (err error) {
 
 	c.ctx.out.Write([]byte(fmt.Sprintf("transferred %d tbl, %f mb; ", cnt, size)))
 	return
+}
+
+func storageUsageEliminateErrors(c *storageUsageHistoryArg) (err error) {
+	cnt := logtail.EliminateErrorsOnCache(c.ctx.db.Catalog)
+
+	c.ctx.out.Write([]byte(fmt.Sprintf("%d tables backed to the track. ", cnt)))
+
+	return nil
 }

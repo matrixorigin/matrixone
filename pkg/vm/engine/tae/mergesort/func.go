@@ -215,6 +215,8 @@ func Merge(
 		switch typ.Oid {
 		case types.T_bool:
 			mergeFixed[bool](column, ret, sortidx, mapping, boolLess, fromLayout, toLayout, m)
+		case types.T_bit:
+			mergeFixed[uint64](column, ret, sortidx, mapping, numericLess[uint64], fromLayout, toLayout, m)
 		case types.T_int8:
 			mergeFixed[int8](column, ret, sortidx, mapping, numericLess[int8], fromLayout, toLayout, m)
 		case types.T_int16:
@@ -321,6 +323,8 @@ func Multiplex(
 		switch typ.Oid {
 		case types.T_bool:
 			multiplexFixed[bool](column, ret, src, fromLayout, toLayout, m)
+		case types.T_bit:
+			multiplexFixed[uint64](column, ret, src, fromLayout, toLayout, m)
 		case types.T_int8:
 			multiplexFixed[int8](column, ret, src, fromLayout, toLayout, m)
 		case types.T_int16:

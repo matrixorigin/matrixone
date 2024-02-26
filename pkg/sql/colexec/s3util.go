@@ -169,16 +169,13 @@ func AllocS3Writer(proc *process.Process, tableDef *plan.TableDef) (*S3Writer, e
 
 	if tableDef.ClusterBy != nil {
 		writer.isClusterBy = true
-		if util.JudgeIsCompositeClusterByColumn(tableDef.ClusterBy.Name) {
-			// the serialized clusterby col is located in the last of the bat.vecs
-			// When INSERT, the TableDef columns list in the table contains a rowid column, but the inserted data
-			// does not have a rowid column, so it needs to be excluded. Therefore, is `len(tableDef.Cols) - 2`
-			writer.sortIndex = len(tableDef.Cols) - 2
-		} else {
-			for idx, colDef := range tableDef.Cols {
-				if colDef.Name == tableDef.ClusterBy.Name {
-					writer.sortIndex = idx
-				}
+
+		// the `rowId` column has been excluded from target table's `TableDef` for insert statements (insert, load),
+		// link: `/pkg/sql/plan/build_constraint_util.go` -> func setTableExprToDmlTableInfo
+		// and the `sortIndex` position can be directly obtained using a name that matches the sorting key
+		for idx, colDef := range tableDef.Cols {
+			if colDef.Name == tableDef.ClusterBy.Name {
+				writer.sortIndex = idx
 			}
 		}
 	}
@@ -446,6 +443,8 @@ func (w *S3Writer) SortAndFlush(proc *process.Process) error {
 		switch w.Bats[0].Vecs[sortIdx].GetType().Oid {
 		case types.T_bool:
 			merge = NewMerge(len(w.Bats), sort.NewBoolLess(), getFixedCols[bool](w.Bats, pos), nulls)
+		case types.T_bit:
+			merge = NewMerge(len(w.Bats), sort.NewGenericCompLess[uint64](), getFixedCols[uint64](w.Bats, pos), nulls)
 		case types.T_int8:
 			merge = NewMerge(len(w.Bats), sort.NewGenericCompLess[int8](), getFixedCols[int8](w.Bats, pos), nulls)
 		case types.T_int16:
@@ -570,7 +569,7 @@ func (w *S3Writer) GenerateWriter(proc *process.Process) (objectio.ObjectName, e
 func (w *S3Writer) generateWriter(proc *process.Process) (objectio.ObjectName, error) {
 	// Use uuid as segment id
 	// TODO: multiple 64m file in one segment
-	obj := Srv.GenerateObject()
+	obj := Get().GenerateObject()
 	s3, err := fileservice.Get[fileservice.FileService](proc.FileService, defines.SharedFileServiceName)
 	if err != nil {
 		return nil, err

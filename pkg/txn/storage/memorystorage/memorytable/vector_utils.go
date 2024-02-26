@@ -32,6 +32,9 @@ func VectorAt(vec *vector.Vector, i int) (value Nullable) {
 	case types.T_bool:
 		return vectorAtFixed[bool](vec, i)
 
+	case types.T_bit:
+		return vectorAtFixed[uint64](vec, i)
+
 	case types.T_int8:
 		return vectorAtFixed[int8](vec, i)
 

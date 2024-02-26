@@ -27,6 +27,7 @@ import (
 var (
 	// median() supported input type and output type.
 	AggMedianSupportedParameters = []types.T{
+		types.T_bit,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_float32, types.T_float64,
@@ -44,6 +45,8 @@ var (
 			return types.New(types.T_float64, 0, 0)
 		case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
 			return types.New(types.T_float64, 0, 0)
+		case types.T_bit:
+			return types.New(types.T_float64, 0, 0)
 		}
 		panic(moerr.NewInternalErrorNoCtx("unsupported type '%v' for median", typs[0]))
 	}
@@ -51,6 +54,8 @@ var (
 
 func NewAggMedian(overloadID int64, dist bool, inputTypes []types.Type, outputType types.Type, _ any) (agg.Agg[any], error) {
 	switch inputTypes[0].Oid {
+	case types.T_bit:
+		return newGenericMedian[uint64](overloadID, inputTypes[0], outputType, dist)
 	case types.T_int8:
 		return newGenericMedian[int8](overloadID, inputTypes[0], outputType, dist)
 	case types.T_int16:

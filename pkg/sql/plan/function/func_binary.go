@@ -23,7 +23,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"math"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -38,7 +37,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorize/format"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/instr"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"golang.org/x/exp/constraints"
 )
@@ -698,6 +696,16 @@ func ConvertTz(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 	toTzs := vector.GenerateFunctionStrParameter(ivecs[2])
 	rs := vector.MustFunctionResult[types.Varlena](result)
 
+	var fromLoc, toLoc *time.Location
+	if ivecs[1].IsConst() && !ivecs[1].IsConstNull() {
+		fromTz, _ := fromTzs.GetStrValue(0)
+		fromLoc = convertTimezone(string(fromTz))
+	}
+	if ivecs[2].IsConst() && !ivecs[2].IsConstNull() {
+		toTz, _ := toTzs.GetStrValue(0)
+		toLoc = convertTimezone(string(toTz))
+	}
+
 	for i := uint64(0); i < uint64(length); i++ {
 		date, null1 := dates.GetValue(i)
 		fromTz, null2 := fromTzs.GetStrValue(i)
@@ -714,15 +722,13 @@ func ConvertTz(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 			}
 			return nil
 		} else {
-			fromLoc := convertTimezone(string(fromTz))
-			if fromLoc == nil {
-				if err = rs.AppendBytes(nil, true); err != nil {
-					return err
-				}
-				return nil
+			if !ivecs[1].IsConst() {
+				fromLoc = convertTimezone(string(fromTz))
 			}
-			toLoc := convertTimezone(string(toTz))
-			if toLoc == nil {
+			if !ivecs[2].IsConst() {
+				toLoc = convertTimezone(string(toTz))
+			}
+			if fromLoc == nil || toLoc == nil {
 				if err = rs.AppendBytes(nil, true); err != nil {
 					return err
 				}
@@ -936,21 +942,42 @@ func DateFormat(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 
 	dates := vector.GenerateFunctionFixedTypeParameter[types.Datetime](ivecs[0])
 	formats := vector.GenerateFunctionStrParameter(ivecs[1])
+	fmt, null2 := formats.GetStrValue(0)
 
+	var dateFmtOperator DateFormatFunc
+	switch string(fmt) {
+	case "%d/%m/%Y":
+		dateFmtOperator = date_format_combine_pattern1
+	case "%Y%m%d":
+		dateFmtOperator = date_format_combine_pattern2
+	case "%Y":
+		dateFmtOperator = date_format_combine_pattern3
+	case "%Y-%m-%d":
+		dateFmtOperator = date_format_combine_pattern4
+	case "%Y-%m-%d %H:%i:%s", "%Y-%m-%d %T":
+		dateFmtOperator = date_format_combine_pattern5
+	case "%Y/%m/%d":
+		dateFmtOperator = date_format_combine_pattern6
+	case "%Y/%m/%d %H:%i:%s", "%Y/%m/%d %T":
+		dateFmtOperator = date_format_combine_pattern7
+	default:
+		dateFmtOperator = datetimeFormat
+	}
+
+	//format := "%b %D %M"   -> []func{func1,func2,  func3}
+	var buf bytes.Buffer
 	for i := uint64(0); i < uint64(length); i++ {
 		d, null1 := dates.GetValue(i)
-		f, null2 := formats.GetStrValue(i)
-
 		if null1 || null2 {
 			if err = rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
 		} else {
-			str, err := datetimeFormat(proc.Ctx, d, string(f))
-			if err != nil {
+			buf.Reset()
+			if err = dateFmtOperator(proc.Ctx, d, string(fmt), &buf); err != nil {
 				return err
 			}
-			if err = rs.AppendBytes([]byte(str), false); err != nil {
+			if err = rs.AppendBytes(buf.Bytes(), false); err != nil {
 				return err
 			}
 		}
@@ -958,14 +985,233 @@ func DateFormat(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 	return nil
 }
 
+type DateFormatFunc func(ctx context.Context, datetime types.Datetime, format string, buf *bytes.Buffer) error
+
+// DATE_FORMAT       datetime
+// handle '%d/%m/%Y' ->	 22/04/2021
+func date_format_combine_pattern1(ctx context.Context, t types.Datetime, format string, buf *bytes.Buffer) error {
+	month := int(t.Month())
+	day := int(t.Day())
+	year := int(t.Year())
+
+	// Convert numbers to strings using bitwise operations and append them to a buffer
+	buf.Grow(10) // Pre allocate sufficient buffer size
+
+	// Date and month conversion
+	buf.WriteByte(byte('0' + (day / 10 % 10)))
+	buf.WriteByte(byte('0' + (day % 10)))
+	buf.WriteByte('/')
+	buf.WriteByte(byte('0' + (month / 10 % 10)))
+	buf.WriteByte(byte('0' + (month % 10)))
+	buf.WriteByte('/')
+
+	// Year conversion
+	buf.WriteByte(byte('0' + (year / 1000 % 10)))
+	buf.WriteByte(byte('0' + (year / 100 % 10)))
+	buf.WriteByte(byte('0' + (year / 10 % 10)))
+	buf.WriteByte(byte('0' + (year % 10)))
+	return nil
+}
+
+// handle '%Y%m%d' ->   20210422
+func date_format_combine_pattern2(ctx context.Context, t types.Datetime, format string, buf *bytes.Buffer) error {
+	year := t.Year()
+	month := int(t.Month())
+	day := int(t.Day())
+
+	// Convert numbers to strings using bitwise operations and append them to a buffer
+	buf.Grow(8) // Pre allocate sufficient buffer size
+
+	// Year conversion
+	buf.WriteByte(byte('0' + (year / 1000 % 10)))
+	buf.WriteByte(byte('0' + (year / 100 % 10)))
+	buf.WriteByte(byte('0' + (year / 10 % 10)))
+	buf.WriteByte(byte('0' + (year % 10)))
+
+	// Month conversion
+	buf.WriteByte(byte('0' + (month / 10)))
+	buf.WriteByte(byte('0' + (month % 10)))
+
+	// date conversion
+	buf.WriteByte(byte('0' + (day / 10)))
+	buf.WriteByte(byte('0' + (day % 10)))
+	return nil
+}
+
+// handle '%Y'  ->   2021
+func date_format_combine_pattern3(ctx context.Context, t types.Datetime, format string, buf *bytes.Buffer) error {
+	year := t.Year()
+	// Year conversion
+	buf.WriteByte(byte('0' + (year / 1000 % 10)))
+	buf.WriteByte(byte('0' + (year / 100 % 10)))
+	buf.WriteByte(byte('0' + (year / 10 % 10)))
+	buf.WriteByte(byte('0' + (year % 10)))
+	return nil
+}
+
+// %Y-%m-%d	               2021-04-22
+func date_format_combine_pattern4(ctx context.Context, t types.Datetime, format string, buf *bytes.Buffer) error {
+	year := t.Year()
+	month := int(t.Month())
+	day := int(t.Day())
+
+	// Convert numbers to strings using bitwise operations and append them to a buffer
+	buf.Grow(10) // Pre allocate sufficient buffer size
+
+	// Year conversion
+	buf.WriteByte(byte('0' + (year / 1000 % 10)))
+	buf.WriteByte(byte('0' + (year / 100 % 10)))
+	buf.WriteByte(byte('0' + (year / 10 % 10)))
+	buf.WriteByte(byte('0' + (year % 10)))
+
+	// Month conversion
+	buf.WriteByte('-')
+	buf.WriteByte(byte('0' + (month / 10)))
+	buf.WriteByte(byte('0' + (month % 10)))
+
+	// date conversion
+	buf.WriteByte('-')
+	buf.WriteByte(byte('0' + (day / 10)))
+	buf.WriteByte(byte('0' + (day % 10)))
+	return nil
+}
+
+// handle '%Y-%m-%d %H:%i:%s'  ->   2004-04-03 13:11:10
+// handle ' %Y-%m-%d %T'   ->   2004-04-03 13:11:10
+func date_format_combine_pattern5(ctx context.Context, t types.Datetime, format string, buf *bytes.Buffer) error {
+	year := int(t.Year())
+	month := int(t.Month())
+	day := int(t.Day())
+	hour := int(t.Hour())
+	minute := int(t.Minute())
+	sec := int(t.Sec())
+
+	// Convert numbers to strings using bitwise operations and append them to a buffer
+	buf.Grow(19) // Pre allocate sufficient buffer size
+
+	// Year conversion
+	buf.WriteByte(byte('0' + (year / 1000 % 10)))
+	buf.WriteByte(byte('0' + (year / 100 % 10)))
+	buf.WriteByte(byte('0' + (year / 10 % 10)))
+	buf.WriteByte(byte('0' + (year % 10)))
+
+	buf.WriteByte('-')
+
+	// Month conversion
+	buf.WriteByte(byte('0' + (month / 10)))
+	buf.WriteByte(byte('0' + (month % 10)))
+
+	buf.WriteByte('-')
+
+	// date conversion
+	buf.WriteByte(byte('0' + (day / 10)))
+	buf.WriteByte(byte('0' + (day % 10)))
+
+	buf.WriteByte(' ')
+
+	// Hour conversion
+	buf.WriteByte(byte('0' + (hour / 10)))
+	buf.WriteByte(byte('0' + (hour % 10)))
+
+	buf.WriteByte(':')
+
+	// Minute conversion
+	buf.WriteByte(byte('0' + (minute / 10)))
+	buf.WriteByte(byte('0' + (minute % 10)))
+
+	buf.WriteByte(':')
+
+	// Second conversion
+	buf.WriteByte(byte('0' + (sec / 10)))
+	buf.WriteByte(byte('0' + (sec % 10)))
+	return nil
+}
+
+// handle '%Y/%m/%d'  ->   2010/01/07
+func date_format_combine_pattern6(ctx context.Context, t types.Datetime, format string, buf *bytes.Buffer) error {
+	year := t.Year()
+	month := int(t.Month())
+	day := int(t.Day())
+
+	// Convert numbers to strings using bitwise operations and append them to a buffer
+	buf.Grow(10) // Pre allocate sufficient buffer size
+
+	// Year conversion
+	buf.WriteByte(byte('0' + (year / 1000 % 10)))
+	buf.WriteByte(byte('0' + (year / 100 % 10)))
+	buf.WriteByte(byte('0' + (year / 10 % 10)))
+	buf.WriteByte(byte('0' + (year % 10)))
+
+	// Month conversion
+	buf.WriteByte('/')
+	buf.WriteByte(byte('0' + (month / 10)))
+	buf.WriteByte(byte('0' + (month % 10)))
+
+	// date conversion
+	buf.WriteByte('/')
+	buf.WriteByte(byte('0' + (day / 10)))
+	buf.WriteByte(byte('0' + (day % 10)))
+	return nil
+}
+
+// handle '%Y/%m/%d %H:%i:%s'   ->    2010/01/07 23:12:34
+// handle '%Y/%m/%d %T'   ->    2010/01/07 23:12:34
+func date_format_combine_pattern7(ctx context.Context, t types.Datetime, format string, buf *bytes.Buffer) error {
+	year := int(t.Year())
+	month := int(t.Month())
+	day := int(t.Day())
+	hour := int(t.Hour())
+	minute := int(t.Minute())
+	sec := int(t.Sec())
+
+	// Convert numbers to strings using bitwise operations and append them to a buffer
+	buf.Grow(19) // Pre allocate sufficient buffer size
+
+	// Year conversion
+	buf.WriteByte(byte('0' + (year / 1000 % 10)))
+	buf.WriteByte(byte('0' + (year / 100 % 10)))
+	buf.WriteByte(byte('0' + (year / 10 % 10)))
+	buf.WriteByte(byte('0' + (year % 10)))
+
+	buf.WriteByte('/')
+
+	// Month conversion
+	buf.WriteByte(byte('0' + (month / 10)))
+	buf.WriteByte(byte('0' + (month % 10)))
+
+	buf.WriteByte('/')
+
+	// date conversion
+	buf.WriteByte(byte('0' + (day / 10)))
+	buf.WriteByte(byte('0' + (day % 10)))
+
+	buf.WriteByte(' ')
+
+	// Hour conversion
+	buf.WriteByte(byte('0' + (hour / 10)))
+	buf.WriteByte(byte('0' + (hour % 10)))
+
+	buf.WriteByte(':')
+
+	// Minute conversion
+	buf.WriteByte(byte('0' + (minute / 10)))
+	buf.WriteByte(byte('0' + (minute % 10)))
+
+	buf.WriteByte(':')
+
+	// Second conversion
+	buf.WriteByte(byte('0' + (sec / 10)))
+	buf.WriteByte(byte('0' + (sec % 10)))
+	return nil
+}
+
 // datetimeFormat: format the datetime value according to the format string.
-func datetimeFormat(ctx context.Context, datetime types.Datetime, format string) (string, error) {
-	var buf bytes.Buffer
+func datetimeFormat(ctx context.Context, datetime types.Datetime, format string, buf *bytes.Buffer) error {
 	inPatternMatch := false
 	for _, b := range format {
 		if inPatternMatch {
-			if err := makeDateFormat(ctx, datetime, b, &buf); err != nil {
-				return "", err
+			if err := makeDateFormat(ctx, datetime, b, buf); err != nil {
+				return err
 			}
 			inPatternMatch = false
 			continue
@@ -978,7 +1224,7 @@ func datetimeFormat(ctx context.Context, datetime types.Datetime, format string)
 			buf.WriteRune(b)
 		}
 	}
-	return buf.String(), nil
+	return nil
 }
 
 var (
@@ -1037,14 +1283,16 @@ func makeDateFormat(ctx context.Context, t types.Datetime, b rune, buf *bytes.Bu
 		}
 		buf.WriteString(MonthNames[m-1])
 	case 'm':
-		buf.WriteString(FormatIntByWidth(int(t.Month()), 2))
+		FormatInt2BufByWidth(int(t.Month()), 2, buf)
+		//buf.WriteString(FormatIntByWidth(int(t.Month()), 2))
 	case 'c':
 		buf.WriteString(strconv.FormatInt(int64(t.Month()), 10))
 	case 'D':
 		buf.WriteString(strconv.FormatInt(int64(t.Day()), 10))
 		buf.WriteString(AbbrDayOfMonth(int(t.Day())))
 	case 'd':
-		buf.WriteString(FormatIntByWidth(int(t.Day()), 2))
+		FormatInt2BufByWidth(int(t.Day()), 2, buf)
+		//buf.WriteString(FormatIntByWidth(int(t.Day()), 2))
 	case 'e':
 		buf.WriteString(strconv.FormatInt(int64(t.Day()), 10))
 	case 'f':
@@ -1052,7 +1300,8 @@ func makeDateFormat(ctx context.Context, t types.Datetime, b rune, buf *bytes.Bu
 	case 'j':
 		fmt.Fprintf(buf, "%03d", t.DayOfYear())
 	case 'H':
-		buf.WriteString(FormatIntByWidth(int(t.Hour()), 2))
+		FormatInt2BufByWidth(int(t.Hour()), 2, buf)
+		//buf.WriteString(FormatIntByWidth(int(t.Hour()), 2))
 	case 'k':
 		buf.WriteString(strconv.FormatInt(int64(t.Hour()), 10))
 	case 'h', 'I':
@@ -1060,10 +1309,12 @@ func makeDateFormat(ctx context.Context, t types.Datetime, b rune, buf *bytes.Bu
 		if tt%12 == 0 {
 			buf.WriteString("12")
 		} else {
-			buf.WriteString(FormatIntByWidth(int(tt%12), 2))
+			FormatInt2BufByWidth(int(tt%12), 2, buf)
+			//buf.WriteString(FormatIntByWidth(int(tt%12), 2))
 		}
 	case 'i':
-		buf.WriteString(FormatIntByWidth(int(t.Minute()), 2))
+		FormatInt2BufByWidth(int(t.Minute()), 2, buf)
+		//buf.WriteString(FormatIntByWidth(int(t.Minute()), 2))
 	case 'l':
 		tt := t.Hour()
 		if tt%12 == 0 {
@@ -1092,21 +1343,26 @@ func makeDateFormat(ctx context.Context, t types.Datetime, b rune, buf *bytes.Bu
 			fmt.Fprintf(buf, "%02d:%02d:%02d PM", h-12, t.Minute(), t.Sec())
 		}
 	case 'S', 's':
-		buf.WriteString(FormatIntByWidth(int(t.Sec()), 2))
+		FormatInt2BufByWidth(int(t.Sec()), 2, buf)
+		//buf.WriteString(FormatIntByWidth(int(t.Sec()), 2))
 	case 'T':
 		fmt.Fprintf(buf, "%02d:%02d:%02d", t.Hour(), t.Minute(), t.Sec())
 	case 'U':
 		w := t.Week(0)
-		buf.WriteString(FormatIntByWidth(w, 2))
+		FormatInt2BufByWidth(w, 2, buf)
+		//buf.WriteString(FormatIntByWidth(w, 2))
 	case 'u':
 		w := t.Week(1)
-		buf.WriteString(FormatIntByWidth(w, 2))
+		FormatInt2BufByWidth(w, 2, buf)
+		//buf.WriteString(FormatIntByWidth(w, 2))
 	case 'V':
 		w := t.Week(2)
-		buf.WriteString(FormatIntByWidth(w, 2))
+		FormatInt2BufByWidth(w, 2, buf)
+		//buf.WriteString(FormatIntByWidth(w, 2))
 	case 'v':
 		_, w := t.YearWeek(3)
-		buf.WriteString(FormatIntByWidth(w, 2))
+		FormatInt2BufByWidth(w, 2, buf)
+		//buf.WriteString(FormatIntByWidth(w, 2))
 	case 'a':
 		weekday := t.DayOfWeek()
 		buf.WriteString(AbbrevWeekdayName[weekday])
@@ -1119,17 +1375,20 @@ func makeDateFormat(ctx context.Context, t types.Datetime, b rune, buf *bytes.Bu
 		if year < 0 {
 			buf.WriteString(strconv.FormatUint(uint64(math.MaxUint32), 10))
 		} else {
-			buf.WriteString(FormatIntByWidth(year, 4))
+			FormatInt2BufByWidth(year, 4, buf)
+			//buf.WriteString(FormatIntByWidth(year, 4))
 		}
 	case 'x':
 		year, _ := t.YearWeek(3)
 		if year < 0 {
 			buf.WriteString(strconv.FormatUint(uint64(math.MaxUint32), 10))
 		} else {
-			buf.WriteString(FormatIntByWidth(year, 4))
+			FormatInt2BufByWidth(year, 4, buf)
+			//buf.WriteString(FormatIntByWidth(year, 4))
 		}
 	case 'Y':
-		buf.WriteString(FormatIntByWidth(int(t.Year()), 4))
+		FormatInt2BufByWidth(int(t.Year()), 4, buf)
+		//buf.WriteString(FormatIntByWidth(int(t.Year()), 4))
 	case 'y':
 		str := FormatIntByWidth(int(t.Year()), 4)
 		buf.WriteString(str[2:])
@@ -1141,15 +1400,29 @@ func makeDateFormat(ctx context.Context, t types.Datetime, b rune, buf *bytes.Bu
 
 // FormatIntByWidth: Formatintwidthn is used to format ints with width parameter n. Insufficient numbers are filled with 0.
 func FormatIntByWidth(num, n int) string {
-	numStr := strconv.FormatInt(int64(num), 10)
+	numStr := strconv.Itoa(num)
 	if len(numStr) >= n {
 		return numStr
 	}
-	padBytes := make([]byte, n-len(numStr))
-	for i := range padBytes {
-		padBytes[i] = '0'
+
+	pad := strings.Repeat("0", n-len(numStr))
+	var builder strings.Builder
+	builder.Grow(n)
+	builder.WriteString(pad)
+	builder.WriteString(numStr)
+	return builder.String()
+}
+
+func FormatInt2BufByWidth(num, n int, buf *bytes.Buffer) {
+	numStr := strconv.Itoa(num)
+	if len(numStr) >= n {
+		buf.WriteString(numStr)
+		return
 	}
-	return string(padBytes) + numStr
+
+	pad := strings.Repeat("0", n-len(numStr))
+	buf.WriteString(pad)
+	buf.WriteString(numStr)
 }
 
 // AbbrDayOfMonth: Get the abbreviation of month of day
@@ -1323,7 +1596,13 @@ func fieldCheck(overloads []overload, inputs []types.Type) checkResult {
 	if len(inputs) < 2 {
 		return newCheckResultWithFailure(failedFunctionParametersWrong)
 	}
-	returnType := [...]types.T{types.T_varchar, types.T_char, types.T_int8, types.T_int16, types.T_int32, types.T_int64, types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64, types.T_float32, types.T_float64}
+	returnType := [...]types.T{
+		types.T_varchar, types.T_char,
+		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+		types.T_float32, types.T_float64,
+		types.T_bit,
+	}
 	for i, r := range returnType {
 		if tc(inputs, r) {
 			if i < 2 {
@@ -1580,6 +1859,7 @@ func FromUnixTimeInt64Format(ivecs []*vector.Vector, result vector.FunctionResul
 	formatMask, null1 := vector.GenerateFunctionStrParameter(ivecs[1]).GetStrValue(0)
 	f := string(formatMask)
 
+	var buf bytes.Buffer
 	for i := uint64(0); i < uint64(length); i++ {
 		v, null := vs.GetValue(i)
 
@@ -1588,12 +1868,12 @@ func FromUnixTimeInt64Format(ivecs []*vector.Vector, result vector.FunctionResul
 				return err
 			}
 		} else {
+			buf.Reset()
 			r := types.DatetimeFromUnix(proc.SessionInfo.TimeZone, v)
-			formatStr, err := datetimeFormat(proc.Ctx, r, f)
-			if err != nil {
+			if err = datetimeFormat(proc.Ctx, r, f, &buf); err != nil {
 				return err
 			}
-			if err = rs.AppendBytes([]byte(formatStr), false); err != nil {
+			if err = rs.AppendBytes(buf.Bytes(), false); err != nil {
 				return err
 			}
 		}
@@ -1611,6 +1891,7 @@ func FromUnixTimeUint64Format(ivecs []*vector.Vector, result vector.FunctionResu
 	formatMask, null1 := vector.GenerateFunctionStrParameter(ivecs[1]).GetStrValue(0)
 	f := string(formatMask)
 
+	var buf bytes.Buffer
 	for i := uint64(0); i < uint64(length); i++ {
 		v, null := vs.GetValue(i)
 
@@ -1619,12 +1900,12 @@ func FromUnixTimeUint64Format(ivecs []*vector.Vector, result vector.FunctionResu
 				return err
 			}
 		} else {
+			buf.Reset()
 			r := types.DatetimeFromUnix(proc.SessionInfo.TimeZone, int64(v))
-			formatStr, err := datetimeFormat(proc.Ctx, r, f)
-			if err != nil {
+			if err = datetimeFormat(proc.Ctx, r, f, &buf); err != nil {
 				return err
 			}
-			if err = rs.AppendBytes([]byte(formatStr), false); err != nil {
+			if err = rs.AppendBytes(buf.Bytes(), false); err != nil {
 				return err
 			}
 		}
@@ -1642,6 +1923,7 @@ func FromUnixTimeFloat64Format(ivecs []*vector.Vector, result vector.FunctionRes
 	formatMask, null1 := vector.GenerateFunctionStrParameter(ivecs[1]).GetStrValue(0)
 	f := string(formatMask)
 
+	var buf bytes.Buffer
 	for i := uint64(0); i < uint64(length); i++ {
 		v, null := vs.GetValue(i)
 
@@ -1650,13 +1932,13 @@ func FromUnixTimeFloat64Format(ivecs []*vector.Vector, result vector.FunctionRes
 				return err
 			}
 		} else {
+			buf.Reset()
 			x, y := splitDecimalToIntAndFrac(v)
 			r := types.DatetimeFromUnixWithNsec(proc.SessionInfo.TimeZone, x, y)
-			formatStr, err := datetimeFormat(proc.Ctx, r, f)
-			if err != nil {
+			if err = datetimeFormat(proc.Ctx, r, f, &buf); err != nil {
 				return err
 			}
-			if err = rs.AppendBytes([]byte(formatStr), false); err != nil {
+			if err = rs.AppendBytes(buf.Bytes(), false); err != nil {
 				return err
 			}
 		}
@@ -1833,7 +2115,7 @@ func getCount[T number](typ types.Type, val T) int64 {
 		} else {
 			r = int64(v)
 		}
-	case types.T_uint64:
+	case types.T_uint64, types.T_bit:
 		v := uint64(val)
 		if v > uint64(math.MaxInt64) {
 			r = math.MaxInt64
@@ -1882,64 +2164,6 @@ func StartsWith(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 
 func EndsWith(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
 	return opBinaryBytesBytesToFixed[bool](ivecs, result, proc, length, bytes.HasSuffix)
-}
-
-func PrefixEq(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-	lvec := parameters[0]
-	rval := parameters[1].GetBytesAt(0)
-	res := vector.MustFixedCol[bool](result.GetResultVector())
-
-	lcol, larea := vector.MustVarlenaRawData(lvec)
-	lowerBound := sort.Search(len(lcol), func(i int) bool {
-		return index.PrefixCompare(lcol[i].GetByteSlice(larea), rval) >= 0
-	})
-
-	upperBound := lowerBound
-	for upperBound < len(lcol) && bytes.HasPrefix(lcol[upperBound].GetByteSlice(larea), rval) {
-		upperBound++
-	}
-
-	for i := 0; i < lowerBound; i++ {
-		res[i] = false
-	}
-	for i := lowerBound; i < upperBound; i++ {
-		res[i] = true
-	}
-	for i := upperBound; i < len(res); i++ {
-		res[i] = false
-	}
-
-	return nil
-}
-
-func PrefixIn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-	lvec := parameters[0]
-	rvec := parameters[1]
-	res := vector.MustFixedCol[bool](result.GetResultVector())
-
-	lcol, larea := vector.MustVarlenaRawData(lvec)
-	rval := rvec.GetBytesAt(0)
-	rpos := 0
-	rlen := rvec.Length()
-
-	for i := 0; i < length; i++ {
-		lval := lcol[i].GetByteSlice(larea)
-		for index.PrefixCompare(lval, rval) > 0 {
-			rpos++
-			if rpos == rlen {
-				for j := i; j < length; j++ {
-					res[j] = false
-				}
-				return nil
-			}
-
-			rval = rvec.GetBytesAt(rpos)
-		}
-
-		res[i] = bytes.HasPrefix(lval, rval)
-	}
-
-	return nil
 }
 
 // https://dev.mysql.com/doc/refman/8.0/en/encryption-functions.html#function_sha2
@@ -2675,28 +2899,22 @@ func SplitPart(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 				return
 			}
 
-			res, isNull := SplitSingle(string(v1), string(v2), v3)
-			if isNull {
-				if err = rs.AppendBytes(nil, true); err != nil {
-					return err
-				}
-			} else {
-				if err = rs.AppendBytes([]byte(res), false); err != nil {
-					return err
-				}
+			res := SplitSingle(string(v1), string(v2), v3)
+			if err = rs.AppendBytes([]byte(res), false); err != nil {
+				return err
 			}
 		}
 	}
 	return nil
 }
 
-func SplitSingle(str, sep string, cnt uint32) (string, bool) {
+func SplitSingle(str, sep string, cnt uint32) string {
 	expectedLen := int(cnt + 1)
 	strSlice := strings.SplitN(str, sep, expectedLen)
-	if len(strSlice) < int(cnt) || strSlice[cnt-1] == "" {
-		return "", true
+	if len(strSlice) < int(cnt) {
+		return ""
 	}
-	return strSlice[cnt-1], false
+	return strSlice[cnt-1]
 }
 
 func InnerProductArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {

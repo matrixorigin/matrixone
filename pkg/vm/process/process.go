@@ -31,7 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/incrservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
-	"github.com/matrixorigin/matrixone/pkg/queryservice"
+	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/udf"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
@@ -48,7 +48,7 @@ func New(
 	txnOperator client.TxnOperator,
 	fileService fileservice.FileService,
 	lockService lockservice.LockService,
-	queryService queryservice.QueryService,
+	queryClient qclient.QueryClient,
 	hakeeper logservice.CNHAKeeperClient,
 	udfService udf.Service,
 	aicm *defines.AutoIncrCacheManager) *Process {
@@ -68,7 +68,7 @@ func New(
 			Limit: VectorLimit,
 		},
 		valueScanBatch: make(map[[16]byte]*batch.Batch),
-		QueryService:   queryService,
+		QueryClient:    queryClient,
 		Hakeeper:       hakeeper,
 		UdfService:     udfService,
 	}
@@ -97,7 +97,7 @@ func NewFromProc(p *Process, ctx context.Context, regNumber int) *Process {
 	proc.SessionInfo = p.SessionInfo
 	proc.FileService = p.FileService
 	proc.IncrService = p.IncrService
-	proc.QueryService = p.QueryService
+	proc.QueryClient = p.QueryClient
 	proc.Hakeeper = p.Hakeeper
 	proc.UdfService = p.UdfService
 	proc.UnixTime = p.UnixTime
@@ -105,6 +105,7 @@ func NewFromProc(p *Process, ctx context.Context, regNumber int) *Process {
 	proc.LockService = p.LockService
 	proc.Aicm = p.Aicm
 	proc.LoadTag = p.LoadTag
+	proc.MessageBoard = p.MessageBoard
 
 	proc.prepareParams = p.prepareParams
 	proc.resolveVariableFunc = p.resolveVariableFunc
@@ -301,6 +302,7 @@ func (proc *Process) AppendBatchFromOffset(dst *batch.Batch, src *batch.Batch, o
 		if err = dst.Vecs[i].UnionBatch(src.Vecs[i], int64(offset), length, nil, proc.Mp()); err != nil {
 			return dst, 0, err
 		}
+		dst.Vecs[i].SetSorted(false)
 	}
 	dst.AddRowCount(length)
 	return dst, length, nil

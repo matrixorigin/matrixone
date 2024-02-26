@@ -33,12 +33,16 @@ func (arg *Argument) String(buf *bytes.Buffer) {
 }
 
 func (arg *Argument) Prepare(proc *process.Process) (err error) {
+	arg.OrderBy = arg.Reader.GetOrderBy()
+	if arg.TopValueMsgTag > 0 {
+		arg.msgReceiver = proc.NewMessageReceiver([]int32{arg.TopValueMsgTag}, arg.GetAddress())
+	}
 	return nil
 }
 
 func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	t := time.Now()
-	anal := proc.GetAnalyze(arg.info.Idx, arg.info.ParallelIdx, arg.info.ParallelMajor)
+	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
 	anal.Start()
 	defer func() {
 		anal.Stop()
@@ -62,6 +66,17 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 
 	for {
+		// receive topvalue message
+		if arg.msgReceiver != nil {
+			msgs := arg.msgReceiver.ReceiveMessage(false)
+			for i := range msgs {
+				msg, ok := msgs[i].(process.TopValueMessage)
+				if !ok {
+					panic("only support top value message in table scan!")
+				}
+				arg.Reader.SetFilterZM(msg.TopValueZM)
+			}
+		}
 		// read data from storage engine
 		bat, err := arg.Reader.Read(proc.Ctx, arg.Attrs, nil, proc.Mp(), proc)
 		if err != nil {

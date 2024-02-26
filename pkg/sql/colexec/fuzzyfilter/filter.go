@@ -19,7 +19,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/bloomfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -73,13 +72,6 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 		rowCount = 100000
 	}
 
-	inFilterCardLimit := int64(plan.InFilterCardLimit)
-	v, ok := runtime.ProcessLevelRuntime().GetGlobalVariables("runtime_filter_limit_in")
-	if ok {
-		inFilterCardLimit = v.(int64)
-	}
-	arg.inFilterCardLimit = inFilterCardLimit
-
 	if err := arg.generate(proc); err != nil {
 		return err
 	}
@@ -111,7 +103,7 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 }
 
 func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
-	anal := proc.GetAnalyze(arg.info.Idx, arg.info.ParallelIdx, arg.info.ParallelMajor)
+	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
 	anal.Start()
 	defer anal.Stop()
 
@@ -292,11 +284,11 @@ func (arg *Argument) filterByRoaring(proc *process.Process, anal process.Analyze
 // utils functions
 
 func (arg *Argument) appendPassToRuntimeFilter(v *vector.Vector, proc *process.Process) {
-	if arg.pass2RuntimeFilter != nil {
+	if arg.pass2RuntimeFilter != nil && len(arg.RuntimeFilterSenders) > 0 {
 		el := arg.pass2RuntimeFilter.Length()
 		al := v.Length()
 
-		if int64(el)+int64(al) <= arg.inFilterCardLimit {
+		if int64(el)+int64(al) <= int64(arg.RuntimeFilterSenders[0].Spec.UpperLimit) {
 			arg.pass2RuntimeFilter.UnionMulti(v, 0, al, proc.Mp())
 		} else {
 			proc.PutVector(arg.pass2RuntimeFilter)

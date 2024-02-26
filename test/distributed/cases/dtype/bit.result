@@ -1,0 +1,192 @@
+drop table if exists t1;
+create table t1 (a int, b bit(10));
+show create table t1;
+Table    Create Table
+t1    CREATE TABLE `t1` (\n`a` INT DEFAULT NULL,\n`b` BIT(10) DEFAULT NULL\n)
+desc t1;
+Field    Type    Null    Key    Default    Extra    Comment
+a    INT(32)    YES        null        
+b    BIT(10)    YES        null        
+insert into t1 values (0, false);
+insert into t1 values (1, true);
+insert into t1 values (2, 0x2);
+insert into t1 values (3, 0b11);
+insert into t1 values (4, x'04');
+insert into t1 values (5, b'101');
+insert into t1 values (6, 'a');
+insert into t1 values (6, 'ab');  -- error, data too long, bit_len('ab') = 16 > 10
+invalid input: data too long, type width = 10, val = 110000101100010
+insert into t1 values (7, 7.4999);  -- round(7.4999) = 7
+insert into t1 values (8, 7.5);  -- round(7.5) = 8
+insert into t1 values (9, 9);
+insert into t1 values (10, 10);
+insert into t1 values (10, 10);
+insert into t1 values (1023, 0x3ff);
+insert into t1 values (1024, 0x4ff);  -- error, data too long, bit_len(0x4ff) = 11 > 10
+invalid input: data too long, type width = 10, val = 10011111111
+select * from t1;
+a    b
+0    0
+1    1
+2    2
+3    3
+4    4
+5    5
+6    97
+7    7
+8    8
+9    9
+10    10
+10    10
+1023    1023
+update t1 set b = 6 where b = cast('a' as bit(10));
+select * from t1;
+a    b
+0    0
+1    1
+2    2
+3    3
+4    4
+5    5
+7    7
+8    8
+9    9
+10    10
+10    10
+1023    1023
+6    6
+select * from t1 where b > 3 order by b desc;
+a    b
+1023    1023
+10    10
+10    10
+9    9
+8    8
+7    7
+6    6
+5    5
+4    4
+select sum(a), cast(b as unsigned) from t1 group by b having b > 3;
+sum(a)    cast(b as unsigned)
+4    4
+5    5
+7    7
+8    8
+9    9
+20    10
+1023    1023
+6    6
+delete from t1 where b >= 7 and b <= 10;
+select * from t1;
+a    b
+0    0
+1    1
+2    2
+3    3
+4    4
+5    5
+1023    1023
+6    6
+select cast(b as int) from t1;
+cast(b as int)
+0
+1
+2
+3
+4
+5
+1023
+6
+select count(b) from t1;
+count(b)
+8
+select sum(b) from t1;
+sum(b)
+1044
+select min(b) from t1;
+min(b)
+0
+select max(b) from t1;
+max(b)
+1023
+select avg(b) from t1;
+avg(b)
+130.5
+select median(b) from t1;
+median(b)
+3.5
+select var_pop(b) from t1;
+var_pop(b)
+113797.25
+select stddev_pop(b) from t1;
+stddev_pop(b)
+337.33847986851424
+ALTER TABLE t1 ADD c BIT(10) DEFAULT 0x1;
+select * from t1;
+a    b    c
+0    0    1
+1    1    1
+2    2    1
+3    3    1
+4    4    1
+5    5    1
+1023    1023    1
+6    6    1
+ALTER TABLE t1 ADD INDEX (c);
+show create table t1;
+Table    Create Table
+t1    CREATE TABLE `t1` (\n`a` INT DEFAULT NULL,\n`b` BIT(10) DEFAULT NULL,\n`c` BIT(10) DEFAULT 0x1,\nKEY `c` (`c`)\n)
+ALTER TABLE t1 ADD UNIQUE (b);
+show create table t1;
+Table    Create Table
+t1    CREATE TABLE `t1` (\n`a` INT DEFAULT NULL,\n`b` BIT(10) DEFAULT NULL,\n`c` BIT(10) DEFAULT 0x1,\nKEY `c` (`c`),\nUNIQUE KEY `b` (`b`)\n)
+ALTER TABLE t1 ADD PRIMARY KEY (b);
+show create table t1;
+Table    Create Table
+t1    CREATE TABLE `t1` (\n`a` INT DEFAULT NULL,\n`b` BIT(10) NOT NULL,\n`c` BIT(10) DEFAULT 0x1,\nPRIMARY KEY (`b`),\nUNIQUE KEY `b` (`b`),\nKEY `c` (`c`)\n)
+ALTER TABLE t1 DROP INDEX c;
+show create table t1;
+Table    Create Table
+t1    CREATE TABLE `t1` (\n`a` INT DEFAULT NULL,\n`b` BIT(10) NOT NULL,\n`c` BIT(10) DEFAULT 0x1,\nPRIMARY KEY (`b`),\nUNIQUE KEY `b` (`b`)\n)
+ALTER TABLE t1 DROP COLUMN c;
+show create table t1;
+Table    Create Table
+t1    CREATE TABLE `t1` (\n`a` INT DEFAULT NULL,\n`b` BIT(10) NOT NULL,\nPRIMARY KEY (`b`),\nUNIQUE KEY `b` (`b`)\n)
+ALTER TABLE t1 DROP INDEX b;
+show create table t1;
+Table    Create Table
+t1    CREATE TABLE `t1` (\n`a` INT DEFAULT NULL,\n`b` BIT(10) NOT NULL,\nPRIMARY KEY (`b`)\n)
+ALTER TABLE t1 DROP PRIMARY KEY;
+show create table t1;
+Table    Create Table
+t1    CREATE TABLE `t1` (\n`a` INT DEFAULT NULL,\n`b` BIT(10) NOT NULL\n)
+ALTER TABLE t1 MODIFY a bit(9);  -- error, data type length is too short
+Data truncation: data out of range: data type int9, value 1023
+ALTER TABLE t1 MODIFY a bit(10);
+show create table t1;
+Table    Create Table
+t1    CREATE TABLE `t1` (\n`a` BIT(10) DEFAULT NULL,\n`b` BIT(10) NOT NULL\n)
+select * from t1;
+a    b
+0    0
+1    1
+2    2
+3    3
+4    4
+5    5
+1023    1023
+6    6
+ALTER TABLE t1 CHANGE a new_a int;
+show create table t1;
+Table    Create Table
+t1    CREATE TABLE `t1` (\n`new_a` INT DEFAULT NULL,\n`b` BIT(10) NOT NULL\n)
+select * from t1;
+new_a    b
+0    0
+1    1
+2    2
+3    3
+4    4
+5    5
+1023    1023
+6    6

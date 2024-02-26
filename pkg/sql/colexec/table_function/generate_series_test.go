@@ -428,11 +428,12 @@ func TestGenerateSeriesString(t *testing.T) {
 
 func TestGenerateSeriesPrepare(t *testing.T) {
 	err := generateSeriesPrepare(nil, &Argument{
-		info: &vm.OperatorInfo{
-			Idx:     0,
-			IsFirst: false,
-			IsLast:  false,
-		}})
+		OperatorBase: vm.OperatorBase{
+			OperatorInfo: vm.OperatorInfo{
+				Idx:     0,
+				IsFirst: false,
+				IsLast:  false,
+			}}})
 	require.Nil(t, err)
 }
 func TestGenStep(t *testing.T) {
@@ -459,10 +460,12 @@ func TestGenerateSeriesCall(t *testing.T) {
 	arg := &Argument{
 		Attrs:    []string{"result"},
 		FuncName: "generate_series",
-		info: &vm.OperatorInfo{
-			Idx:     0,
-			IsFirst: false,
-			IsLast:  false,
+		OperatorBase: vm.OperatorBase{
+			OperatorInfo: vm.OperatorInfo{
+				Idx:     0,
+				IsFirst: false,
+				IsLast:  false,
+			},
 		},
 	}
 
