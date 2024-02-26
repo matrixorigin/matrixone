@@ -351,7 +351,7 @@ func determinShuffleForJoin(n *plan.Node, builder *QueryBuilder) {
 	}
 	//for now ,only support integer and string type
 	switch types.T(typ) {
-	case types.T_int64, types.T_int32, types.T_int16, types.T_uint64, types.T_uint32, types.T_uint16, types.T_varchar, types.T_char, types.T_text, types.T_bit:
+	case types.T_int64, types.T_int32, types.T_int16, types.T_uint64, types.T_uint32, types.T_uint16, types.T_varchar, types.T_char, types.T_text:
 		n.Stats.HashmapStats.ShuffleColIdx = int32(idx)
 		n.Stats.HashmapStats.Shuffle = true
 		determinShuffleType(hashCol, n, builder)
@@ -409,9 +409,10 @@ func determinShuffleForGroupBy(n *plan.Node, builder *QueryBuilder) {
 	if hashCol == nil {
 		return
 	}
+	logutil.Infof("deciding groupby shuffle colname %v idx %v", hashCol.Name, idx)
 	//for now ,only support integer and string type
 	switch types.T(typ) {
-	case types.T_int64, types.T_int32, types.T_int16, types.T_uint64, types.T_uint32, types.T_uint16, types.T_varchar, types.T_char, types.T_text, types.T_bit:
+	case types.T_int64, types.T_int32, types.T_int16, types.T_uint64, types.T_uint32, types.T_uint16, types.T_varchar, types.T_char, types.T_text:
 		n.Stats.HashmapStats.ShuffleColIdx = int32(idx)
 		n.Stats.HashmapStats.Shuffle = true
 		determinShuffleType(hashCol, n, builder)
