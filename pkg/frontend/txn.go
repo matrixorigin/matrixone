@@ -17,6 +17,7 @@ package frontend
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 
@@ -733,6 +734,12 @@ If it is Case2, Then
 */
 func (ses *Session) TxnRollbackSingleStatement(stmt tree.Statement) error {
 	var err error
+	rollbackWholeTxn := func() error {
+		err := ses.GetTxnHandler().RollbackTxn()
+		ses.ClearServerStatus(SERVER_STATUS_IN_TRANS)
+		ses.ClearOptionBits(OPTION_BEGIN)
+		return err
+	}
 	/*
 			Rollback Rules:
 			1, if it is in single-statement mode (Case2):
@@ -742,9 +749,7 @@ func (ses *Session) TxnRollbackSingleStatement(stmt tree.Statement) error {
 				(every error will abort the transaction.)
 	*/
 	if !ses.InMultiStmtTransactionMode() || ses.InActiveTransaction() && NeedToBeCommittedInActiveTransaction(stmt) {
-		err = ses.GetTxnHandler().RollbackTxn()
-		ses.ClearServerStatus(SERVER_STATUS_IN_TRANS)
-		ses.ClearOptionBits(OPTION_BEGIN)
+		err = rollbackWholeTxn()
 	} else {
 		//just rollback statement
 		var err3 error
@@ -761,7 +766,8 @@ func (ses *Session) TxnRollbackSingleStatement(stmt tree.Statement) error {
 			if ok && bytes.Equal(txnOp.Txn().ID, id) {
 				err = txnOp.GetWorkspace().RollbackLastStatement(txnCtx)
 				if err != nil {
-					return err
+					err4 := rollbackWholeTxn()
+					return errors.Join(err, err4)
 				}
 			}
 		}

@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"os"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -1590,6 +1591,7 @@ func (s *Scope) TruncateTable(c *Compile) error {
 	keepAutoIncrement := false
 	affectedRows := uint64(0)
 
+	fmt.Fprintln(os.Stderr, "--------1--------", dbName, tblName)
 	dbSource, err = c.e.Database(c.ctx, dbName, c.proc.TxnOperator)
 	if err != nil {
 		return err
@@ -1607,9 +1609,10 @@ func (s *Scope) TruncateTable(c *Compile) error {
 		}
 		isTemp = true
 	}
-
+	fmt.Fprintln(os.Stderr, "--------2--------", dbName, tblName)
 	if !isTemp && c.proc.TxnOperator.Txn().IsPessimistic() {
 		var err error
+		fmt.Fprintln(os.Stderr, "--------2.1--------", dbName, tblName)
 		if e := lockMoTable(c, dbName, tblName, lock.LockMode_Shared); e != nil {
 			if !moerr.IsMoErrCode(e, moerr.ErrTxnNeedRetry) &&
 				!moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
@@ -1618,6 +1621,7 @@ func (s *Scope) TruncateTable(c *Compile) error {
 			err = e
 		}
 		// before dropping table, lock it.
+		fmt.Fprintln(os.Stderr, "--------2.2--------", dbName, tblName)
 		if e := lockTable(c.ctx, c.e, c.proc, rel, dbName, tqry.PartitionTableNames, false); e != nil {
 			if !moerr.IsMoErrCode(e, moerr.ErrTxnNeedRetry) &&
 				!moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
@@ -1630,6 +1634,7 @@ func (s *Scope) TruncateTable(c *Compile) error {
 		}
 	}
 
+	fmt.Fprintln(os.Stderr, "--------3--------", dbName, tblName)
 	if tqry.IsDelete {
 		keepAutoIncrement = true
 		affectedRows, err = rel.Rows(c.ctx)
@@ -1638,18 +1643,21 @@ func (s *Scope) TruncateTable(c *Compile) error {
 		}
 	}
 
+	fmt.Fprintln(os.Stderr, "--------4--------", dbName, tblName)
 	if isTemp {
+		fmt.Fprintln(os.Stderr, "--------5--------", dbName, tblName)
 		// memoryengine truncate always return 0, so for temporary table, just use origin tableId as newId
 		_, err = dbSource.Truncate(c.ctx, engine.GetTempTableName(dbName, tblName))
 		newId = rel.GetTableID(c.ctx)
 	} else {
+		fmt.Fprintln(os.Stderr, "--------6--------", dbName, tblName)
 		newId, err = dbSource.Truncate(c.ctx, tblName)
 	}
 
 	if err != nil {
 		return err
 	}
-
+	fmt.Fprintln(os.Stderr, "--------7--------", dbName, tblName)
 	// Truncate Index Tables if needed
 	for _, name := range tqry.IndexTableNames {
 		var err error
@@ -1663,6 +1671,7 @@ func (s *Scope) TruncateTable(c *Compile) error {
 		}
 	}
 
+	fmt.Fprintln(os.Stderr, "--------8--------", dbName, tblName)
 	//Truncate Partition subtable if needed
 	for _, name := range tqry.PartitionTableNames {
 		var err error
@@ -1676,6 +1685,7 @@ func (s *Scope) TruncateTable(c *Compile) error {
 		}
 	}
 
+	fmt.Fprintln(os.Stderr, "--------9--------", dbName, tblName)
 	// update tableDef of foreign key's table with new table id
 	for _, ftblId := range tqry.ForeignTbl {
 		_, _, fkRelation, err := c.e.GetRelationById(c.ctx, c.proc.TxnOperator, ftblId)
@@ -1717,6 +1727,7 @@ func (s *Scope) TruncateTable(c *Compile) error {
 	if isTemp {
 		oldId = rel.GetTableID(c.ctx)
 	}
+	fmt.Fprintln(os.Stderr, "--------10--------", dbName, tblName)
 	err = incrservice.GetAutoIncrementService(c.ctx).Reset(
 		c.ctx,
 		oldId,
@@ -1727,6 +1738,7 @@ func (s *Scope) TruncateTable(c *Compile) error {
 		return err
 	}
 
+	fmt.Fprintln(os.Stderr, "--------11--------", dbName, tblName)
 	// update index information in mo_catalog.mo_indexes
 	updateSql := fmt.Sprintf(updateMoIndexesTruncateTableFormat, newId, oldId)
 	err = c.runSql(updateSql)
@@ -1734,6 +1746,7 @@ func (s *Scope) TruncateTable(c *Compile) error {
 		return err
 	}
 	c.addAffectedRows(uint64(affectedRows))
+	fmt.Fprintln(os.Stderr, "--------12--------", dbName, tblName)
 	return nil
 }
 
@@ -2769,9 +2782,12 @@ func lockTable(
 	partitionTableNames []string,
 	defChanged bool) error {
 
+	fmt.Fprintln(os.Stderr, "--------2.3--------", dbName)
 	if len(partitionTableNames) == 0 {
+		fmt.Fprintln(os.Stderr, "--------2.4--------", dbName)
 		return doLockTable(eng, proc, rel, defChanged)
 	}
+	fmt.Fprintln(os.Stderr, "--------2.5--------", dbName)
 
 	dbSource, err := eng.Database(ctx, dbName, proc.TxnOperator)
 	if err != nil {
