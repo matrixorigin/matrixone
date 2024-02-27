@@ -78,7 +78,7 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 	builder.haveOnDuplicateKey = len(stmt.OnDuplicateUpdate) > 0
 
 	bindCtx := NewBindContext(builder, nil)
-	checkInsertPkDup, isInsertWithoutAutoPkCol, err := initInsertStmt(builder, bindCtx, stmt, rewriteInfo)
+	checkInsertPkDup, isInsertWithoutAutoPkCol, insertWithoutUniqueKeyMap, err := initInsertStmt(builder, bindCtx, stmt, rewriteInfo)
 	if err != nil {
 		return nil, err
 	}
@@ -250,7 +250,7 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 
 		query.StmtType = plan.Query_UPDATE
 	} else {
-		err = buildInsertPlans(ctx, builder, bindCtx, stmt, objRef, tableDef, rewriteInfo.rootId, checkInsertPkDup, isInsertWithoutAutoPkCol)
+		err = buildInsertPlans(ctx, builder, bindCtx, stmt, objRef, tableDef, rewriteInfo.rootId, checkInsertPkDup, isInsertWithoutAutoPkCol, insertWithoutUniqueKeyMap)
 		if err != nil {
 			return nil, err
 		}
