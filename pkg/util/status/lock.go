@@ -28,9 +28,12 @@ type LockStatus struct {
 	Locks []LockItem `json:"locks"`
 }
 
-func (s *Status) fillLock(cnStatus *CNStatus, ls lockservice.LockService) {
+func (s *LockStatus) fill(ls lockservice.LockService) {
+	if ls == nil {
+		return
+	}
 	ls.IterLocks(func(tableID uint64, keys [][]byte, lock lockservice.Lock) bool {
-		cnStatus.LockStatus.Locks = append(cnStatus.LockStatus.Locks, LockItem{
+		s.Locks = append(s.Locks, LockItem{
 			TableID:  tableID,
 			Keys:     keys,
 			LockInfo: lock.String(),

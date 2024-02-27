@@ -277,7 +277,6 @@ func (task *flushTableTailTask) Execute(ctx context.Context) (err error) {
 		task.rt,
 		task.dirtyEndTs,
 	)
-	task.rel.GetDB()
 	readset := make([]*common.ID, 0, len(task.ablksMetas)+len(task.delSrcMetas))
 	for _, blk := range task.ablksMetas {
 		readset = append(readset, blk.AsCommonID())
@@ -804,6 +803,7 @@ func relaseFlushDelTask(task *flushDeletesTask, err error) {
 func releaseFlushBlkTasks(subtasks []*flushBlkTask, err error) {
 	if err != nil {
 		logutil.Infof("[FlushTabletail] release flush ablk bat because of err %v", err)
+		// add a timeout to avoid WaitDone block the whole process
 		ictx, cancel := context.WithTimeout(
 			context.Background(),
 			10*time.Second, /*6*time.Minute,*/

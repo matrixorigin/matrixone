@@ -41,42 +41,37 @@ type fileServices struct {
 	etlFS      fileservice.FileService
 }
 
-// newFileServices constructs an instance of fileServices.
-func (c *testCluster) buildFileServices(ctx context.Context) *fileServices {
-	tnServiceNum := c.opt.initial.tnServiceNum
-	cnServiceNum := c.opt.initial.cnServiceNum
-
-	factory := func(_ string, name string) fileservice.FileService {
-		fs, err := fileservice.NewMemoryFS(name, fileservice.DisabledCacheConfig, nil)
+func (c *testCluster) createFS(
+	ctx context.Context,
+	dir string,
+	name string) fileservice.FileService {
+	if c.opt.keepData {
+		fs, err := fileservice.NewLocalFS(ctx, name, filepath.Join(dir, name), fileservice.CacheConfig{}, nil)
 		require.NoError(c.t, err)
 		return fs
 	}
-	if c.opt.keepData {
-		factory = func(dir string, name string) fileservice.FileService {
-			fs, err := fileservice.NewLocalFS(ctx, name, filepath.Join(dir, name), fileservice.CacheConfig{}, nil)
-			require.NoError(c.t, err)
-			return fs
-		}
-	}
+
+	fs, err := fileservice.NewMemoryFS(name, fileservice.DisabledCacheConfig, nil)
+	require.NoError(c.t, err)
+	return fs
+
+}
+
+// newFileServices constructs an instance of fileServices.
+func (c *testCluster) buildFileServices(ctx context.Context) *fileServices {
+	tnServiceNum := c.opt.initial.tnServiceNum
 
 	tnLocals := make([]fileservice.FileService, 0, tnServiceNum)
 	for i := 0; i < tnServiceNum; i++ {
-		tnLocals = append(tnLocals, factory(c.tn.cfgs[i].DataDir, defines.LocalFileServiceName))
-	}
-
-	cnLocals := make([]fileservice.FileService, 0, cnServiceNum)
-	for i := 0; i < cnServiceNum; i++ {
-		cnLocals = append(cnLocals, factory(filepath.Join(c.opt.rootDataDir, c.cn.cfgs[i].UUID), defines.LocalFileServiceName))
+		tnLocals = append(tnLocals, c.createFS(ctx, c.tn.cfgs[i].DataDir, defines.LocalFileServiceName))
 	}
 
 	return &fileServices{
 		t:            c.t,
 		tnServiceNum: tnServiceNum,
-		cnServiceNum: cnServiceNum,
 		tnLocalFSs:   tnLocals,
-		cnLocalFSs:   cnLocals,
-		s3FS:         factory(c.opt.rootDataDir, defines.SharedFileServiceName),
-		etlFS:        factory(c.opt.rootDataDir, defines.ETLFileServiceName),
+		s3FS:         c.createFS(ctx, c.opt.rootDataDir, defines.SharedFileServiceName),
+		etlFS:        c.createFS(ctx, c.opt.rootDataDir, defines.ETLFileServiceName),
 	}
 }
 

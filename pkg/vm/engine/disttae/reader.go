@@ -16,9 +16,10 @@ package disttae
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"sort"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -95,7 +96,7 @@ func (mixin *withFilterMixin) tryUpdateColumns(cols []string) {
 			mixin.columns.seqnums[i] = objectio.SEQNUM_ROWID
 			mixin.columns.colTypes[i] = objectio.RowidType
 		} else {
-			if plan2.GetSortOrder(mixin.tableDef, column) == 0 {
+			if plan2.GetSortOrderByName(mixin.tableDef, column) == 0 {
 				mixin.columns.indexOfFirstSortedColumn = i
 			}
 			colIdx := mixin.tableDef.Name2ColIndex[column]
@@ -309,7 +310,18 @@ func (r *blockReader) Close() error {
 }
 
 func (r *blockReader) SetFilterZM(zm objectio.ZoneMap) {
-	r.filterZM = zm.Clone()
+	if !r.filterZM.IsInited() {
+		r.filterZM = zm.Clone()
+		return
+	}
+	if r.desc && r.filterZM.CompareMax(zm) < 0 {
+		r.filterZM = zm.Clone()
+		return
+	}
+	if !r.desc && r.filterZM.CompareMin(zm) > 0 {
+		r.filterZM = zm.Clone()
+		return
+	}
 }
 
 func (r *blockReader) GetOrderBy() []*plan.OrderBySpec {
@@ -322,7 +334,7 @@ func (r *blockReader) SetOrderBy(orderby []*plan.OrderBySpec) {
 
 func (r *blockReader) needReadBlkByZM(i int) bool {
 	zm := r.blockZMS[i]
-	if !r.filterZM.IsInited() || zm.IsInited() {
+	if !r.filterZM.IsInited() || !zm.IsInited() {
 		return true
 	}
 	if r.desc {
@@ -340,8 +352,8 @@ func (r *blockReader) getBlockZMs() {
 	var objDataMeta objectio.ObjectDataMeta
 	var location objectio.Location
 	for i := range r.blks {
+		location = r.blks[i].MetaLocation()
 		if !objectio.IsSameObjectLocVsMeta(location, objDataMeta) {
-			location = r.blks[i].MetaLocation()
 			objMeta, err := objectio.FastLoadObjectMeta(r.ctx, &location, false, r.fs)
 			if err != nil {
 				panic("load object meta error when ordered scan!")
@@ -354,12 +366,12 @@ func (r *blockReader) getBlockZMs() {
 }
 
 func (r *blockReader) sortBlockList() {
-	helper := make([]blockSortHelper, len(r.blks))
+	helper := make([]*blockSortHelper, len(r.blks))
 	for i := range r.blks {
+		helper[i] = &blockSortHelper{}
 		helper[i].blk = r.blks[i]
 		helper[i].zm = r.blockZMS[i]
 	}
-
 	if r.desc {
 		sort.Slice(helper, func(i, j int) bool {
 			zm1 := helper[i].zm
@@ -378,7 +390,7 @@ func (r *blockReader) sortBlockList() {
 			if !zm1.IsInited() {
 				return true
 			}
-			zm2 := helper[i].zm
+			zm2 := helper[j].zm
 			if !zm2.IsInited() {
 				return false
 			}
@@ -394,7 +406,7 @@ func (r *blockReader) sortBlockList() {
 
 func (r *blockReader) deleteFirstNBlocks(n int) {
 	r.blks = r.blks[n:]
-	if r.OrderBy != nil {
+	if len(r.OrderBy) > 0 {
 		r.blockZMS = r.blockZMS[n:]
 	}
 }
@@ -412,7 +424,7 @@ func (r *blockReader) Read(
 	}()
 
 	// for ordered scan, sort blocklist by zonemap info, and then filter by zonemap
-	if r.OrderBy != nil {
+	if len(r.OrderBy) > 0 {
 		if !r.sorted {
 			r.desc = r.OrderBy[0].Flag&plan.OrderBySpec_DESC != 0
 			r.getBlockZMs()
@@ -422,13 +434,12 @@ func (r *blockReader) Read(
 		i := 0
 		for i < len(r.blks) {
 			if r.needReadBlkByZM(i) {
-				r.deleteFirstNBlocks(i)
 				break
 			}
 			i++
 		}
+		r.deleteFirstNBlocks(i)
 	}
-
 	// if the block list is empty, return nil
 	if len(r.blks) == 0 {
 		return nil, nil

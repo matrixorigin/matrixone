@@ -15,6 +15,8 @@
 package plan
 
 import (
+	"context"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -76,7 +78,7 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 	builder.haveOnDuplicateKey = len(stmt.OnDuplicateUpdate) > 0
 
 	bindCtx := NewBindContext(builder, nil)
-	checkInsertPkDup, pkPosInValues, isInsertWithoutAutoPkCol, err := initInsertStmt(builder, bindCtx, stmt, rewriteInfo)
+	checkInsertPkDup, isInsertWithoutAutoPkCol, err := initInsertStmt(builder, bindCtx, stmt, rewriteInfo)
 	if err != nil {
 		return nil, err
 	}
@@ -85,14 +87,6 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 	query, err := builder.createQuery()
 	if err != nil {
 		return nil, err
-	}
-	var pkFilterExprs []*Expr
-	var newPartitionExpr *Expr
-	if CNPrimaryCheck && len(pkPosInValues) > 0 {
-		pkFilterExprs = getPkValueExpr(builder, ctx, tableDef, pkPosInValues)
-		// The insert statement subplan with a primary key has undergone manual column pruning in advance,
-		// so the partition expression needs to be remapped and judged whether partition pruning can be performed
-		newPartitionExpr = remapPartitionExpr(builder, tableDef, pkPosInValues)
 	}
 	builder.qry.Steps = append(builder.qry.Steps[:sourceStep], builder.qry.Steps[sourceStep+1:]...)
 
@@ -256,7 +250,7 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 
 		query.StmtType = plan.Query_UPDATE
 	} else {
-		err = buildInsertPlans(ctx, builder, bindCtx, objRef, tableDef, rewriteInfo.rootId, checkInsertPkDup, pkFilterExprs, newPartitionExpr, isInsertWithoutAutoPkCol)
+		err = buildInsertPlans(ctx, builder, bindCtx, stmt, objRef, tableDef, rewriteInfo.rootId, checkInsertPkDup, isInsertWithoutAutoPkCol)
 		if err != nil {
 			return nil, err
 		}
@@ -277,56 +271,270 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 	}, err
 }
 
-func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableDef, pkPosInValues map[int]int) []*Expr {
-	if builder.qry.Nodes[0].NodeType != plan.Node_VALUE_SCAN {
-		return nil
+// ------------------- pk filter relatived -------------------
+
+// getInsertColsFromStmt retrieves the list of column names to be inserted into a table
+// based on the given INSERT statement and table definition.
+// If the INSERT statement does not specify the columns, all columns except the fake primary key column
+// will be included in the list.
+// If the INSERT statement specifies the columns, it validates the column names against the table definition
+// and returns an error if any of the column names are invalid.
+// The function returns the list of insert columns and an error, if any.
+func getInsertColsFromStmt(ctx context.Context, stmt *tree.Insert, tableDef *TableDef) ([]string, error) {
+	var insertColsName []string
+	colToIdx := make(map[string]int)
+	for i, col := range tableDef.Cols {
+		colToIdx[col.Name] = i
+	}
+	if stmt.Columns == nil {
+		for _, col := range tableDef.Cols {
+			if col.Name != catalog.FakePrimaryKeyColName {
+				insertColsName = append(insertColsName, col.Name)
+			}
+		}
+	} else {
+		for _, column := range stmt.Columns {
+			colName := string(column)
+			if _, ok := colToIdx[colName]; !ok {
+				return nil, moerr.NewBadFieldError(ctx, colName, tableDef.Name)
+			}
+			insertColsName = append(insertColsName, colName)
+		}
+	}
+	return insertColsName, nil
+}
+
+// canUsePkFilter checks if the primary key filter can be used for the given insert statement.
+// It returns true if the primary key filter can be used, otherwise it returns false.
+// The primary key filter can be used if the following conditions are met:
+// NOTE : For hidden tables created by UNIQUE INDEX, the situation is more subtle.
+//  0. CNPrimaryCheck is true.
+//  1. The insert statement is INSERT VALUES type
+//  2. table contains primary key
+//  3. for auto-incr primary key, must contain corresponding columns, and values must not contain nil.
+//  4. performance constraints: (maybe outdated)
+//     4.1 for single priamry key and the type of pk is number type, the number of rows being inserted is less than or equal to 20_000
+//     4.2 otherwise : the number of rows being inserted is less than or equal to defaultmaxRowThenUnusePkFilterExpr
+//
+// Otherwise, the primary key filter cannot be used.
+func canUsePkFilter(builder *QueryBuilder, ctx CompilerContext, stmt *tree.Insert, tableDef *TableDef, insertColsName []string) bool {
+	if !CNPrimaryCheck {
+		return false // break condition 0
 	}
 
+	if builder.qry.Nodes[0].NodeType != plan.Node_VALUE_SCAN {
+		return false // break condition 1
+	}
+
+	// check for auto increment primary key
+	pkPos, pkTyp := getPkPos(tableDef, true)
+	if pkPos == -1 {
+		if tableDef.Pkey.PkeyColName != catalog.CPrimaryKeyColName {
+			return false // break condition 2
+		}
+
+		pkNameMap := make(map[string]int)
+		for pkIdx, pkName := range tableDef.Pkey.Names {
+			pkNameMap[pkName] = pkIdx
+		}
+
+		autoIncIdx := -1
+		for _, col := range tableDef.Cols {
+			if _, ok := pkNameMap[col.Name]; ok {
+				if col.Typ.AutoIncr {
+					foundInStmt := false
+					for i, name := range insertColsName {
+						if name == col.Name {
+							foundInStmt = true
+							autoIncIdx = i
+							break
+						}
+					}
+					if !foundInStmt {
+						// one of pk cols is auto incr col and this col was not in values, break condition 3
+						return false
+					}
+				}
+			}
+		}
+
+		if autoIncIdx != -1 {
+			var bat *batch.Batch
+			proc := ctx.GetProcess()
+			node := builder.qry.Nodes[0]
+			if builder.isPrepareStatement {
+				bat = proc.GetPrepareBatch()
+			} else {
+				bat = proc.GetValueScanBatch(uuid.UUID(node.Uuid))
+			}
+			autoPkVec := bat.Vecs[autoIncIdx]
+			if nulls.Any(autoPkVec.GetNulls()) {
+				// has at least one values is null, then can not use pk filter, break conditon 2
+				return false
+			}
+		}
+	} else if pkTyp.AutoIncr { // single auto incr primary key
+		var bat *batch.Batch
+
+		autoIncIdx := -1
+		for i, name := range insertColsName {
+			if tableDef.Pkey.PkeyColName == name {
+				autoIncIdx = i
+				break
+			}
+		}
+
+		if autoIncIdx == -1 {
+			// have no auto pk col in values, break condition 2
+			return false
+		} else {
+			proc := ctx.GetProcess()
+			node := builder.qry.Nodes[0]
+			if builder.isPrepareStatement {
+				bat = proc.GetPrepareBatch()
+			} else {
+				bat = proc.GetValueScanBatch(uuid.UUID(node.Uuid))
+			}
+
+			autoPkVec := bat.Vecs[autoIncIdx]
+			if nulls.Any(autoPkVec.GetNulls()) {
+				// has at least one values is null, then can not use pk filter, break conditon 2
+				return false
+			}
+		}
+	}
+
+	isCompound := len(insertColsName) > 1
+
+	switch slt := stmt.Rows.Select.(type) {
+	case *tree.ValuesClause:
+		if !isCompound {
+			for i, name := range tableDef.Pkey.Names {
+				if name == insertColsName[0] {
+					typ := tableDef.Cols[i].Typ
+					switch typ.Id {
+					case int32(types.T_int8), int32(types.T_int16), int32(types.T_int32), int32(types.T_int64), int32(types.T_int128):
+						if len(slt.Rows) > 20_000 {
+							return false // break condition 4.1
+						}
+					case int32(types.T_uint8), int32(types.T_uint16), int32(types.T_uint32), int32(types.T_uint64), int32(types.T_uint128), int32(types.T_bit):
+						if len(slt.Rows) > 20_000 {
+							return false // break condition 4.1
+						}
+					default:
+						if len(slt.Rows) > defaultmaxRowThenUnusePkFilterExpr {
+							return false // break condition 4.2
+						}
+					}
+				}
+			}
+		} else {
+			if len(slt.Rows) > defaultmaxRowThenUnusePkFilterExpr {
+				return false // break condition 4.2
+			}
+		}
+	default:
+		// TODO(jensenojs):need to support more type, such as load or update ?
+		return false
+	}
+
+	return true
+}
+
+type pkOrderAndIdx struct {
+	pkOrder int // pkOrder is the order(ignore non-pk cols) in tableDef.Pkey.Names
+	pkIndex int // pkIndex is the index of the primary key columns in tableDef.Cols
+}
+
+type pkLocationMap struct {
+	m map[string]pkOrderAndIdx
+}
+
+// getPkOrderInValues returns a map, that
+//
+//	The key   of this map is the order(ignore non-pk cols) in which the primary key columns are inserted in INSERT VALUE SQL
+//	The value of this map is the order(ignore non-pk cols) in which the primary key columns are inserted intableDef.Pkey.Names(NOT TableDef.Cols!)
+//
+// e.g
+//
+//	create table t1 (a int, b int, c int, d int, primary key(a, c, b));
+//	insert into t1(a, b, c, d) value (1, 2, 3, 4) ;
+//	        (a, b, c) -> (a, c, b)  => pkOrderInValues[0] = 0, pkOrderInValues[1] = 2, pkOrderInValues[2] = 1
+//	insert into t1(d, a, b, c) value (4, 1, 2, 3) ;
+//	        (a, b, c) -> (a, c, b)  => pkOrderInValues[0] = 0, pkOrderInValues[1] = 2, pkOrderInValues[2] = 1
+//	insert into t1(b, d, a, c) value (2, 4, 1, 3) ;
+//			(b, a, c) -> (a, c, b)  => pkOrderInValues[0] = 2, pkOrderInValues[1] = 0, pkOrderInValues[2] = 1
+//	insert into t1(c, b, d, a) value (3, 2, 4, 1) ;
+//			(c, b, a) -> (a, c, b)  => pkOrderInValues[0] = 2, pkOrderInValues[1] = 1, pkOrderInValues[2] = 0
+func (p *pkLocationMap) getPkOrderInValues(insertColsNameFromStmt []string) map[int]int {
+	pkOrderInValues := make(map[int]int)
+	i := 0
+	for _, name := range insertColsNameFromStmt {
+		if pkInfo, ok := p.m[name]; ok {
+			pkOrderInValues[i] = pkInfo.pkOrder
+			i++
+		}
+	}
+	return pkOrderInValues
+}
+
+// need to check if the primary key filter can be used before calling this function.
+// also need to consider both origin table and hidden table for unique key
+func NewPkLocationMap(tableDef *TableDef) *pkLocationMap {
+	m := make(map[string]pkOrderAndIdx)
+	pkName2Order := make(map[string]int)
+	for o, n := range tableDef.Pkey.Names {
+		pkName2Order[n] = o
+	}
+	pkName2Indx := make(map[string]int)
+	for i, col := range tableDef.Cols {
+		if _, ok := pkName2Order[col.Name]; ok {
+			pkName2Indx[col.Name] = i
+		}
+	}
+	for name := range pkName2Indx {
+		m[name] = pkOrderAndIdx{pkName2Order[name], pkName2Indx[name]}
+	}
+	return &pkLocationMap{m}
+}
+
+func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableDef, pkLocationMap *pkLocationMap, insertColsNameFromStmt []string) (pkFilterExprs []*Expr) {
 	var bat *batch.Batch
+	var pkLocationInfo pkOrderAndIdx
+	var ok bool
 	var err error
+	var colTyp *Type
 	proc := ctx.GetProcess()
 	node := builder.qry.Nodes[0]
+	isCompoundPk := len(pkLocationMap.m) > 1
+	isUniqueHiddenTable := strings.HasPrefix(tableDef.Name, catalog.UniqueIndexTableNamePrefix)
 	if builder.isPrepareStatement {
 		bat = proc.GetPrepareBatch()
 	} else {
 		bat = proc.GetValueScanBatch(uuid.UUID(node.Uuid))
 	}
-
-	pkPos, pkTyp := getPkPos(tableDef, true)
-	if pkPos == -1 {
-		if tableDef.Pkey.PkeyColName != catalog.CPrimaryKeyColName {
-			return nil
-		}
-	} else if pkTyp.AutoIncr {
-		// if pk col is incr col and this col has at least one values is null, then can not use pk filter
-		pkVec := bat.Vecs[pkPos]
-		if nulls.Any(pkVec.GetNulls()) {
-			return nil
-		}
-	}
-
 	rowsCount := bat.RowCount()
 
-	colExprs := make([][]*Expr, len(pkPosInValues))
-	pkColLength := len(pkPosInValues)
-	var colTyp *Type
-	var insertRowIdx int
-	var pkColIdx int
-
-	// handles UUID types specifically by creating a VARCHAR type and casting the UUID to a string.
+	// colExprs will store the constant value expressions (or UUID value) for each primary key column by the order in insert value SQL
+	// that is, the key part of pkPosInValues, more info see the comment of func getPkOrderInValues
+	colExprs := make([][]*Expr, len(pkLocationMap.m))
 	// If the expression is nil, it creates a constant expression with either the UUID value or a constant value.
-	for insertRowIdx, pkColIdx = range pkPosInValues {
+	for idx, name := range insertColsNameFromStmt {
+		var varcharTyp *Type
+		if pkLocationInfo, ok = pkLocationMap.m[name]; !ok {
+			continue
+		}
+
 		valExprs := make([]*Expr, rowsCount)
-		rowTyp := bat.Vecs[insertRowIdx].GetType()
+		rowTyp := bat.Vecs[idx].GetType()
 		colTyp = makePlan2Type(rowTyp)
 
-		var varcharTyp *Type
 		if rowTyp.Oid == types.T_uuid {
 			typ := types.T_varchar.ToType()
 			varcharTyp = MakePlan2Type(&typ)
 		}
 
-		for _, data := range node.RowsetData.Cols[insertRowIdx].Data {
+		for _, data := range node.RowsetData.Cols[idx].Data {
 			rowExpr := DeepCopyExpr(data.Expr)
 			e, err := forceCastExpr(builder.GetContext(), rowExpr, colTyp)
 			if err != nil {
@@ -337,9 +545,10 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 
 		for i := 0; i < rowsCount; i++ {
 			if valExprs[i] == nil {
-				if bat.Vecs[insertRowIdx].GetType().Oid == types.T_uuid {
+				// handles UUID types specifically by creating a VARCHAR type and casting the UUID to a string.
+				if bat.Vecs[idx].GetType().Oid == types.T_uuid {
 					// we have not uuid type in plan.Const. so use string & cast string to uuid
-					val := vector.MustFixedCol[types.Uuid](bat.Vecs[insertRowIdx])[i]
+					val := vector.MustFixedCol[types.Uuid](bat.Vecs[idx])[i]
 					constExpr := &plan.Expr{
 						Typ: varcharTyp,
 						Expr: &plan.Expr_Lit{
@@ -355,7 +564,7 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 						return nil
 					}
 				} else {
-					constExpr := rule.GetConstantValue(bat.Vecs[insertRowIdx], true, uint64(i))
+					constExpr := rule.GetConstantValue(bat.Vecs[idx], true, uint64(i))
 					if constExpr == nil {
 						return nil
 					}
@@ -368,10 +577,10 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 				}
 			}
 		}
-		colExprs[pkColIdx] = valExprs
+		colExprs[pkLocationInfo.pkOrder] = valExprs
 	}
 
-	if pkColLength == 1 {
+	if !isCompoundPk {
 		if rowsCount <= 3 {
 			// pk = a1 or pk = a2 or pk = a3
 			var orExpr *Expr
@@ -380,7 +589,8 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 					Typ: colTyp,
 					Expr: &plan.Expr_Col{
 						Col: &ColRef{
-							ColPos: int32(pkColIdx),
+							// ColPos: int32(pkOrderInTableDef),
+							ColPos: 0,
 							Name:   tableDef.Pkey.PkeyColName,
 						},
 					},
@@ -406,7 +616,8 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 				Typ: colTyp,
 				Expr: &plan.Expr_Col{
 					Col: &ColRef{
-						ColPos: int32(pkColIdx),
+						// ColPos: int32(pkOrderInTableDef),
+						ColPos: 0,
 						Name:   tableDef.Pkey.PkeyColName,
 					},
 				},
@@ -430,21 +641,27 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 			return []*Expr{expr}
 		}
 	} else {
-		var orExpr *Expr
-		if rowsCount <= 3 {
+		if rowsCount <= 3 && !isUniqueHiddenTable {
 			// ppk1 = a1 and ppk2 = a2 or ppk1 = b1 and ppk2 = b2 or ppk1 = c1 and ppk2 = c2
+			var orExpr *Expr
 			var andExpr *Expr
 			for i := 0; i < rowsCount; i++ {
-				for insertRowIdx, pkColIdx = range pkPosInValues {
-					eqExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{{
-						Typ: tableDef.Cols[insertRowIdx].Typ,
-						Expr: &plan.Expr_Col{
-							Col: &ColRef{
-								ColPos: int32(pkColIdx),
-								Name:   tableDef.Cols[insertRowIdx].Name,
+				for _, pkLocationInfo = range pkLocationMap.m {
+					pkOrder := pkLocationInfo.pkOrder
+					pkColIdx := pkLocationInfo.pkIndex
+					eqExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{
+						{
+							Typ: tableDef.Cols[pkColIdx].Typ,
+							Expr: &plan.Expr_Col{
+								Col: &ColRef{
+									ColPos: int32(pkOrder),
+									Name:   tableDef.Cols[pkColIdx].Name,
+								},
 							},
 						},
-					}, colExprs[pkColIdx][i]})
+						colExprs[pkOrder][i],
+					},
+					)
 					if err != nil {
 						return nil
 					}
@@ -465,6 +682,7 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 						return nil
 					}
 				}
+				andExpr = nil
 			}
 			return []*Expr{orExpr}
 		} else {
@@ -473,14 +691,16 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 
 			// serialize
 			for i := 0; i < rowsCount; i++ {
-				serExprs := make([]*plan.Expr, 0, len(pkPosInValues))
-				for insertRowIdx, pkColIdx := range pkPosInValues {
+				serExprs := make([]*plan.Expr, 0, len(pkLocationMap.m))
+				for _, pkLocationInfo = range pkLocationMap.m {
+					pkOrder := pkLocationInfo.pkOrder
+					pkColIdx := pkLocationInfo.pkIndex
 					serExprs = append(serExprs, &plan.Expr{
-						Typ: tableDef.Cols[insertRowIdx].Typ,
+						Typ: tableDef.Cols[pkColIdx].Typ,
 						Expr: &plan.Expr_Col{
 							Col: &ColRef{
-								ColPos: int32(pkColIdx),
-								Name:   tableDef.Cols[insertRowIdx].Name,
+								ColPos: int32(pkOrder),
+								Name:   tableDef.Cols[pkColIdx].Name,
 							},
 						},
 					})
@@ -508,7 +728,7 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 					Typ: colTyp,
 					Expr: &plan.Expr_Col{
 						Col: &ColRef{
-							ColPos: int32(len(pkPosInValues)),
+							ColPos: int32(len(tableDef.Pkey.Names)),
 							Name:   tableDef.Pkey.PkeyColName,
 						},
 					},
@@ -536,6 +756,8 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 		}
 	}
 }
+
+// ------------------- partition relatived -------------------
 
 // remapPartitionExpr Remap partition expression column references
 func remapPartitionExpr(builder *QueryBuilder, tableDef *TableDef, pkPosInValues map[int]int) *Expr {

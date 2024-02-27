@@ -280,7 +280,7 @@ func (b ObjectIndexByTSEntry) Less(than ObjectIndexByTSEntry) bool {
 
 func NewPartitionState(noData bool) *PartitionState {
 	opts := btree.Options{
-		Degree: 4,
+		Degree: 64,
 	}
 	return &PartitionState{
 		noData:                noData,

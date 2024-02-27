@@ -54,6 +54,8 @@ const (
 	LoopAnti
 	Mark
 	LoopMark
+	IndexJoin
+	IndexBuild
 
 	Merge
 	MergeTop
@@ -268,6 +270,15 @@ type OperatorInfo struct {
 	ParallelID  int32
 	MaxParallel int32
 }
+
+func (info OperatorInfo) GetAddress() process.MessageAddress {
+	return process.MessageAddress{
+		CnAddr:     info.CnAddr,
+		OperatorID: info.OperatorID,
+		ParallelID: info.ParallelID,
+	}
+}
+
 type Instructions []Instruction
 
 func (ins *Instruction) IsBrokenNode() bool {
