@@ -85,6 +85,8 @@ const (
 
 const (
 	WorkspaceThreshold uint64 = 1 * mpool.MB
+	GCBatchOfFileCount int    = 1000
+	GCPoolSize         int    = 5
 )
 
 var (
@@ -369,6 +371,7 @@ func (txn *Transaction) adjustUpdateOrderLocked(writeOffset uint64) error {
 
 func (txn *Transaction) gcObjs(start int, ctx context.Context) error {
 	objsToGC := make(map[string]struct{})
+	var objsName []string
 	for i := start; i < len(txn.writes); i++ {
 		if txn.writes[i].bat == nil {
 			continue
@@ -380,20 +383,42 @@ func (txn *Transaction) gcObjs(start int, ctx context.Context) error {
 			vs := vector.MustStrCol(txn.writes[i].bat.GetVector(0))
 			for _, s := range vs {
 				loc, _ := blockio.EncodeLocationFromString(s)
-				objsToGC[loc.Name().String()] = struct{}{}
+				if _, ok := objsToGC[loc.Name().String()]; !ok {
+					objsToGC[loc.Name().String()] = struct{}{}
+					objsName = append(objsName, loc.Name().String())
+					if txn.writes[i].tableName == "bugt" {
+						logutil.Infof("to gc object:%v", loc.Name().String())
+					}
+				}
 			}
 		}
 	}
 	//gc the objects asynchronously.
 	//TODO:: to handle the failure when CN is down.
-	if err := txn.engine.gcPool.Submit(func() {
-		for obj := range objsToGC {
-			if err := txn.engine.fs.Delete(ctx, obj); err != nil {
-				logutil.Warnf("failed to delete object:%s", obj)
+	step := GCBatchOfFileCount
+	if len(objsName) > 0 && len(objsName) < step {
+		if err := txn.engine.gcPool.Submit(func() {
+			if err := txn.engine.fs.Delete(ctx, objsName...); err != nil {
+				logutil.Warnf("failed to delete objects:%v", objsName)
+
 			}
+		}); err != nil {
+			return err
 		}
-	}); err != nil {
-		return err
+		return nil
+	}
+	for i := 0; i < len(objsName); i += step {
+		if i+step > len(objsName) {
+			step = len(objsName) - i
+		}
+		if err := txn.engine.gcPool.Submit(func() {
+			if err := txn.engine.fs.Delete(ctx, objsName[i:i+step]...); err != nil {
+				logutil.Warnf("failed to delete objects:%v", objsName[i:i+step])
+
+			}
+		}); err != nil {
+			return err
+		}
 	}
 	return nil
 }

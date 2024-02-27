@@ -106,7 +106,7 @@ func New(
 			},
 		),
 	}
-	pool, err := ants.NewPool(5)
+	pool, err := ants.NewPool(GCPoolSize)
 	if err != nil {
 		panic(err)
 	}
