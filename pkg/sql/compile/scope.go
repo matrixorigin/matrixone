@@ -336,15 +336,16 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 			panic("only support col in runtime filter's left child!")
 		}
 		newExpr := plan2.DeepCopyExpr(inExprList[i])
-		if s.DataSource.TableDef.Pkey != nil && col.Col.Name == s.DataSource.TableDef.Pkey.PkeyColName {
-			//put expr in reader
-			newExprList := []*plan.Expr{newExpr}
-			if s.DataSource.FilterExpr != nil {
-				newExprList = append(newExprList, s.DataSource.FilterExpr)
-			}
-			s.DataSource.FilterExpr = colexec.RewriteFilterExprList(newExprList)
-		} else {
-			// put expr in filter operator
+		//put expr in reader
+		newExprList := []*plan.Expr{newExpr}
+		if s.DataSource.FilterExpr != nil {
+			newExprList = append(newExprList, s.DataSource.FilterExpr)
+		}
+		s.DataSource.FilterExpr = colexec.RewriteFilterExprList(newExprList)
+
+		isFilterOnPK := s.DataSource.TableDef.Pkey != nil && col.Col.Name == s.DataSource.TableDef.Pkey.PkeyColName
+		if !isFilterOnPK {
+			// put expr in filter instruction
 			ins := s.Instructions[0]
 			arg, ok := ins.Arg.(*restrict.Argument)
 			if !ok {
