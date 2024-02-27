@@ -138,7 +138,6 @@ func (srv *Server) GetCnSegmentType(sid *objectio.Segmentid) int32 {
 	return srv.cnSegmentMap.mp[*sid]
 }
 
-// GenerateObject used to generate a new object name for CN.
 // GenerateObject used to generate a new object name for CN
 func (srv *Server) GenerateObject() objectio.ObjectName {
 	segId := objectio.NewSegmentid()
