@@ -25,14 +25,13 @@ import (
 	"sync"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
@@ -61,6 +60,12 @@ var _ plan2.CompilerContext = &TxnCompilerContext{}
 
 func (tcc *TxnCompilerContext) ReplacePlan(execPlan *plan.Execute) (*plan.Plan, tree.Statement, error) {
 	return replacePlan(tcc.ses.GetRequestContext(), tcc.ses, tcc.tcw, execPlan)
+}
+
+func (tcc *TxnCompilerContext) GetStatsCache() *plan2.StatsCache {
+	tcc.mu.Lock()
+	defer tcc.mu.Unlock()
+	return tcc.ses.statsCache
 }
 
 func InitTxnCompilerContext(txn *TxnHandler, db string) *TxnCompilerContext {
@@ -636,7 +641,63 @@ func (tcc *TxnCompilerContext) Stats(obj *plan2.ObjectRef) (*pb.StatsInfo, error
 	if err != nil {
 		return nil, err
 	}
-	return table.Stats(ctx, true), nil
+	s, needUpdate := tcc.statsInCache(ctx, dbName, table)
+	if s == nil {
+		return nil, nil
+	}
+	if needUpdate {
+		s := table.Stats(ctx, true)
+		tcc.UpdateStatsInCache(table.GetTableID(ctx), s)
+		return s, nil
+	}
+	return s, nil
+}
+
+func (tcc *TxnCompilerContext) UpdateStatsInCache(tid uint64, s *pb.StatsInfo) {
+	tcc.GetStatsCache().SetStatsInfo(tid, s)
+}
+
+// statsInCache get the *pb.StatsInfo from session cache. If the info is nil, just return nil and false,
+// else, check if the info needs to be updated.
+func (tcc *TxnCompilerContext) statsInCache(ctx context.Context, dbName string, table engine.Relation) (*pb.StatsInfo, bool) {
+	s := tcc.GetStatsCache().GetStatsInfo(table.GetTableID(ctx), true)
+	if s == nil {
+		return nil, false
+	}
+
+	var partitionInfo *plan2.PartitionByDef
+	engineDefs, err := table.TableDefs(ctx)
+	if err != nil {
+		return nil, false
+	}
+	for _, def := range engineDefs {
+		if partitionDef, ok := def.(*engine.PartitionDef); ok {
+			if partitionDef.Partitioned > 0 {
+				p := &plan2.PartitionByDef{}
+				err = p.UnMarshalPartitionInfo(([]byte)(partitionDef.Partition))
+				if err != nil {
+					return nil, false
+				}
+				partitionInfo = p
+			}
+		}
+	}
+	approxNumObjects := 0
+	if partitionInfo != nil {
+		for _, PartitionTableName := range partitionInfo.PartitionTableNames {
+			_, ptable, _ := tcc.getRelation(dbName, PartitionTableName, nil)
+			approxNumObjects += ptable.ApproxObjectsNum(ctx)
+		}
+	} else {
+		approxNumObjects = table.ApproxObjectsNum(ctx)
+	}
+	if approxNumObjects == 0 {
+		return nil, false
+	}
+	if s.NeedUpdate(int64(approxNumObjects)) {
+		return s, true
+	}
+	return s, false
 }
 
 func (tcc *TxnCompilerContext) GetProcess() *process.Process {
