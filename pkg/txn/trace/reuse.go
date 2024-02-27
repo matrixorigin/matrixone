@@ -20,7 +20,7 @@ import (
 )
 
 var (
-	buffSize = 1024 * 32
+	buffSize = 1024 * 4
 )
 
 func init() {
@@ -40,5 +40,9 @@ func init() {
 			l.reset()
 		},
 		reuse.DefaultOptions[buffer]().
+			WithReleaseFunc(
+				func(l *buffer) {
+					l.buf.Close()
+				}).
 			WithEnableChecker())
 }

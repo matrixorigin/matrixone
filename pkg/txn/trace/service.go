@@ -771,8 +771,16 @@ func (s *service) handleEvent(
 			if sum > s.options.flushBytes {
 				flush()
 			}
-		case buf := <-bufferC:
-			buf.close()
+
+			select {
+			case buf := <-bufferC:
+				buf.reset()
+				n := len(buf.buf.RawBuf()) / 1024
+				if n > buffSize {
+					fmt.Printf("%d kb\n", len(buf.buf.RawBuf())/1024)
+				}
+			default:
+			}
 		}
 	}
 }
@@ -1070,7 +1078,6 @@ func (b *buffer) reset() {
 }
 
 func (b *buffer) close() {
-	b.buf.Close()
 	reuse.Free(b, nil)
 }
 
