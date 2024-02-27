@@ -1180,7 +1180,11 @@ func DeepCopyStats(stats *plan.Stats) *plan.Stats {
 
 func calcBlockSelectivityUsingShuffleRange(s *pb.ShuffleRange, sel float64) float64 {
 	if s == nil {
-		return 1
+		if sel <= 0.01 {
+			return sel * 100
+		} else {
+			return 1
+		}
 	}
 	ret := sel * math.Pow(500, math.Pow(s.Overlap, 2))
 	if ret > 1 {
