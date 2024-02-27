@@ -1025,15 +1025,6 @@ func (txn *Transaction) clearTableCache() {
 	})
 }
 
-func (txn *Transaction) getWriteOffset() int {
-	if txn.statementID > 0 {
-		txn.Lock()
-		defer txn.Unlock()
-		return txn.statements[txn.statementID-1]
-	}
-	return 0
-}
-
 func (txn *Transaction) snapshotWriteOffset() int {
 	txn.Lock()
 	defer txn.Unlock()

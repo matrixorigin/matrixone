@@ -1512,7 +1512,7 @@ func (tbl *txnTable) Write(ctx context.Context, bat *batch.Batch) error {
 		ibat.Clean(tbl.db.txn.proc.Mp())
 		return err
 	}
-	return tbl.db.txn.dumpBatch(tbl.db.txn.getWriteOffset())
+	return tbl.db.txn.dumpBatch(tbl.getSnapshotWriteOffset())
 }
 
 func (tbl *txnTable) Update(ctx context.Context, bat *batch.Batch) error {
