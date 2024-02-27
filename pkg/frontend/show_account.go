@@ -18,7 +18,9 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -111,7 +113,8 @@ const (
 )
 
 var cnUsageCache = logtail.NewStorageUsageCache(
-	logtail.WithLazyThreshold(5))
+	logtail.WithLazyThreshold(5),
+	logtail.WithWorkers(runtime.NumCPU()))
 
 func getSqlForAllAccountInfo(like *tree.ComparisonExpr) string {
 	var likePattern = ""
@@ -347,6 +350,80 @@ func getAccountsStorageUsage(ctx context.Context, ses *Session, accIds [][]int32
 	}
 }
 
+type tableStatsResult struct {
+	bat       *batch.Batch
+	err       error
+	sqlResSet *MysqlResultSet
+}
+
+func getTableStatsAsync(
+	ctx context.Context, ses *Session,
+	outCh chan tableStatsResult,
+	wg *sync.WaitGroup, id int32) {
+
+	wg.Add(1)
+	cnUsageCache.ExecuteJob(func(c *logtail.StorageUsageCache) {
+		tmpHandler := ses.GetRawBatchBackgroundExec(ctx)
+		defer func() {
+			wg.Done()
+			tmpHandler.Close()
+		}()
+		// get the admin_name, db_count, table_count for each account
+		newCtx := defines.AttachAccountId(ctx, uint32(id))
+		if tmpBat, err := getTableStats(newCtx, tmpHandler, id); err != nil {
+			outCh <- tableStatsResult{nil, err, nil}
+			return
+		} else {
+			outCh <- tableStatsResult{tmpBat, nil, tmpHandler.ses.GetAllMysqlResultSet()[0]}
+		}
+	})
+}
+
+func getTableStatsParallel(
+	ctx context.Context, ses *Session,
+	accountIds [][]int32) (*MysqlResultSet, []*batch.Batch, error) {
+	wg := sync.WaitGroup{}
+	var err error
+	var sqlResSet *MysqlResultSet
+	outCh := make(chan tableStatsResult)
+
+	var statsBates []*batch.Batch
+
+	cnUsageCache.ExecuteJob(func(c *logtail.StorageUsageCache) {
+		for {
+			select {
+			case out := <-outCh:
+				if out.err != nil {
+					err = out.err
+				}
+				statsBates = append(statsBates, out.bat)
+				sqlResSet = out.sqlResSet
+
+			default:
+			}
+
+			if len(statsBates) == len(accountIds)*len(accountIds[0]) {
+				close(outCh)
+				break
+			}
+		}
+	})
+
+	for _, ids := range accountIds {
+		for _, id := range ids {
+			getTableStatsAsync(ctx, ses, outCh, &wg, id)
+		}
+	}
+
+	wg.Wait()
+
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return sqlResSet, statsBates, nil
+}
+
 func embeddingSizeToBatch(ori *batch.Batch, size uint64, mp *mpool.MPool) {
 	vector.SetFixedAt(ori.Vecs[idxOfSize], 0, math.Round(float64(size)/1048576.0*1e6)/1e6)
 }
@@ -356,7 +433,7 @@ func doShowAccounts(ctx context.Context, ses *Session, sa *tree.ShowAccounts) (e
 	var accountIds [][]int32
 	var allAccountInfo []*batch.Batch
 	var eachAccountInfo []*batch.Batch
-	var tempBatch *batch.Batch
+	var statsBates []*batch.Batch
 	var MoAccountColumns, EachAccountColumns *plan.ResultColDef
 	var outputBatches []*batch.Batch
 
@@ -365,7 +442,6 @@ func doShowAccounts(ctx context.Context, ses *Session, sa *tree.ShowAccounts) (e
 	defer func() {
 		v2.TaskShowAccountsTotalDurationHistogram.Observe(time.Since(start).Seconds())
 		v2.TaskShowAccountsGetTableStatsDurationHistogram.Observe(getTableStatsDur.Seconds())
-
 	}()
 
 	mp := ses.GetMemPool()
@@ -389,8 +465,9 @@ func doShowAccounts(ctx context.Context, ses *Session, sa *tree.ShowAccounts) (e
 			}
 			b.Clean(mp)
 		}
-		if tempBatch != nil {
-			tempBatch.Clean(mp)
+
+		for i := range statsBates {
+			statsBates[i].Clean(mp)
 		}
 	}()
 
@@ -453,36 +530,30 @@ func doShowAccounts(ctx context.Context, ses *Session, sa *tree.ShowAccounts) (e
 
 	// step 3
 	outputBatches = make([]*batch.Batch, len(allAccountInfo))
+
+	rsOfEachAccount, statsBates, err := getTableStatsParallel(ctx, ses, accountIds)
+	if err != nil {
+		return err
+	}
+
 	for i, ids := range accountIds {
-		for _, id := range ids {
-			//step 3.1: get the admin_name, db_count, table_count for each account
-			newCtx := defines.AttachAccountId(ctx, uint32(id))
-
-			tt = time.Now()
-			if tempBatch, err = getTableStats(newCtx, bh, id); err != nil {
-				return err
-			}
-			getTableStatsDur += time.Since(tt)
-
-			// step 3.2: put size value into batch
-			embeddingSizeToBatch(tempBatch, usage[id], mp)
-
-			eachAccountInfo = append(eachAccountInfo, tempBatch)
+		for j, id := range ids {
+			bat := statsBates[i*len(ids)+j]
+			embeddingSizeToBatch(bat, usage[id], mp)
+			eachAccountInfo = append(eachAccountInfo, bat)
 		}
 
-		// merge result set from mo_account and table stats from each account
 		outputBatches[i] = batch.NewWithSize(finalColumnCount)
 		if err = mergeOutputResult(ses, outputBatches[i], allAccountInfo[i], eachAccountInfo); err != nil {
 			return err
 		}
-
 		for _, b := range eachAccountInfo {
 			b.Clean(mp)
 		}
 		eachAccountInfo = nil
 	}
 
-	rsOfEachAccount := bh.ses.GetAllMysqlResultSet()[0]
+	//rsOfEachAccount := bh.ses.GetAllMysqlResultSet()[0]
 	EachAccountColumns = bh.ses.rs
 	bh.ClearExecResultSet()
 

@@ -18,14 +18,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
-	"github.com/tidwall/btree"
 	"go.uber.org/zap"
 	"math"
 	"math/rand"
@@ -35,11 +27,20 @@ import (
 	"unsafe"
 
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/panjf2000/ants/v2"
+	"github.com/tidwall/btree"
 )
 
 // 1. show accounts
@@ -152,6 +153,7 @@ type StorageUsageCache struct {
 	lastUpdate    time.Time
 	// accId -> dbId -> [tblId, size]
 	data     *btree.BTreeG[UsageData]
+	works    *ants.Pool
 	lessFunc func(a UsageData, b UsageData) bool
 }
 
@@ -161,6 +163,16 @@ type StorageUsageCacheOption = func(c *StorageUsageCache)
 func WithLazyThreshold(lazy int) StorageUsageCacheOption {
 	return StorageUsageCacheOption(func(c *StorageUsageCache) {
 		c.lazyThreshold = time.Second * time.Duration(lazy)
+	})
+}
+
+func WithWorkers(num int) StorageUsageCacheOption {
+	return StorageUsageCacheOption(func(c *StorageUsageCache) {
+		if pool, err := ants.NewPool(num); err == nil {
+			c.works = pool
+		} else {
+			logutil.Error("ants.NewPool failed", zap.Error(err))
+		}
 	})
 }
 
@@ -188,6 +200,12 @@ func NewStorageUsageCache(opts ...StorageUsageCacheOption) *StorageUsageCache {
 func (c *StorageUsageCache) fillDefault() {
 	c.lessFunc = usageLess
 	c.lazyThreshold = 0
+}
+
+func (c *StorageUsageCache) ExecuteJob(task func(c *StorageUsageCache)) {
+	c.works.Submit(func() {
+		task(c)
+	})
 }
 
 func (c *StorageUsageCache) LessFunc() func(a UsageData, b UsageData) bool {
