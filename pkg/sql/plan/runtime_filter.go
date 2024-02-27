@@ -48,11 +48,11 @@ func GetInFilterCardLimitOnPK(tableCnt float64) int32 {
 	return int32(upper)
 }
 
-func (builder *QueryBuilder) pushdownRuntimeFilters(nodeID int32) {
+func (builder *QueryBuilder) generateRuntimeFilters(nodeID int32) {
 	node := builder.qry.Nodes[nodeID]
 
 	for _, childID := range node.Children {
-		builder.pushdownRuntimeFilters(childID)
+		builder.generateRuntimeFilters(childID)
 	}
 
 	// Build runtime filters only for broadcast join
@@ -91,11 +91,6 @@ func (builder *QueryBuilder) pushdownRuntimeFilters(nodeID int32) {
 		return
 	}
 
-	rightChild := builder.qry.Nodes[node.Children[1]]
-	if rightChild.Stats.Selectivity > 0.5 {
-		return
-	}
-
 	leftChild := builder.qry.Nodes[node.Children[0]]
 
 	// TODO: build runtime filters deeper than 1 level
@@ -103,14 +98,19 @@ func (builder *QueryBuilder) pushdownRuntimeFilters(nodeID int32) {
 		return
 	}
 
-	leftTags := make(map[int32]emptyType)
-	for _, tag := range builder.enumerateTags(node.Children[0]) {
-		leftTags[tag] = emptyStruct
+	rightChild := builder.qry.Nodes[node.Children[1]]
+	if node.JoinType != plan.Node_INDEX && rightChild.Stats.Selectivity > 0.5 {
+		return
 	}
 
-	rightTags := make(map[int32]emptyType)
+	leftTags := make(map[int32]bool)
+	for _, tag := range builder.enumerateTags(node.Children[0]) {
+		leftTags[tag] = true
+	}
+
+	rightTags := make(map[int32]bool)
 	for _, tag := range builder.enumerateTags(node.Children[1]) {
-		rightTags[tag] = emptyStruct
+		rightTags[tag] = true
 	}
 
 	var probeExprs, buildExprs []*plan.Expr
@@ -261,7 +261,7 @@ func (builder *QueryBuilder) pushdownRuntimeFilters(nodeID int32) {
 			Typ: DeepCopyType(buildExprs[pos].Typ),
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
-					RelPos: 0,
+					RelPos: -1,
 					ColPos: int32(pos),
 				},
 			},

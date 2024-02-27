@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"strconv"
 	"strings"
 
@@ -27,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 func describeMessage(m *plan.MsgHeader, buf *bytes.Buffer) {
@@ -180,6 +180,13 @@ func describeExpr(ctx context.Context, expr *plan.Expr, options *ExplainOptions,
 			buf.WriteString(s)
 		} else {
 			buf.WriteString(vec.String())
+		}
+	case *plan.Expr_T:
+		tt := types.T(expr.Typ.Id)
+		if tt == types.T_decimal64 || tt == types.T_decimal128 {
+			fmt.Fprintf(buf, "%s(%d, %d))", tt.String(), expr.Typ.Width, expr.Typ.Scale)
+		} else {
+			fmt.Fprintf(buf, "%s)", tt.String())
 		}
 	default:
 		panic("unsupported expr")

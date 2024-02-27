@@ -17,9 +17,6 @@ package compile
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/restrict"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"hash/crc32"
 	goruntime "runtime"
 	"runtime/debug"
@@ -38,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	pbpipeline "github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/limit"
@@ -47,11 +45,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeoffset"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergetop"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/restrict"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/right"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightanti"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightsemi"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/sample"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -317,7 +317,7 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 						break FOR_LOOP
 
 					case pbpipeline.RuntimeFilter_IN:
-						inExpr := plan2.MakeInExpr(c.ctx, spec.Expr, filter.Card, filter.Data)
+						inExpr := plan2.MakeInExpr(c.ctx, spec.Expr, filter.Card, filter.Data, spec.MatchPrefix)
 						inExprList = append(inExprList, inExpr)
 
 						// TODO: implement BETWEEN expression
@@ -330,11 +330,12 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 	}
 
 	for i := range inExprList {
-		funcimpl, _ := inExprList[i].Expr.(*plan.Expr_F)
-		col, ok := funcimpl.F.Args[0].Expr.(*plan.Expr_Col)
+		fn := inExprList[i].GetF()
+		col, ok := fn.Args[0].Expr.(*plan.Expr_Col)
 		if !ok {
 			panic("only support col in runtime filter's left child!")
 		}
+
 		newExpr := plan2.DeepCopyExpr(inExprList[i])
 		//put expr in reader
 		newExprList := []*plan.Expr{newExpr}

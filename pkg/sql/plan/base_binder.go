@@ -1055,9 +1055,7 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 		typeExpr := &Expr{
 			Typ: typ,
 			Expr: &plan.Expr_T{
-				T: &plan.TargetType{
-					Typ: DeepCopyType(typ),
-				},
+				T: &plan.TargetType{},
 			},
 		}
 
@@ -1085,9 +1083,7 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 		typeExpr := &Expr{
 			Typ: typ,
 			Expr: &plan.Expr_T{
-				T: &plan.TargetType{
-					Typ: DeepCopyType(typ),
-				},
+				T: &plan.TargetType{},
 			},
 		}
 
@@ -1912,15 +1908,13 @@ func appendCastBeforeExpr(ctx context.Context, expr *Expr, toType *Type, isBin .
 		Expr: &plan.Expr_F{
 			F: &plan.Function{
 				Func: getFunctionObjRef(fGet.GetEncodedOverloadID(), "cast"),
-				Args: []*Expr{expr,
+				Args: []*Expr{
+					expr,
 					{
-						Typ: &typ,
-						Expr: &plan.Expr_T{
-							T: &plan.TargetType{
-								Typ: &typ,
-							},
-						},
-					}},
+						Typ:  &typ,
+						Expr: &plan.Expr_T{},
+					},
+				},
 			},
 		},
 		Typ: &typ,

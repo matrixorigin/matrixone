@@ -1449,7 +1449,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 			return nil, err
 		}
 
-		builder.pushdownLimit(rootID)
+		builder.pushdownLimitToTableScan(rootID)
 
 		colRefCnt := make(map[[2]int32]int)
 		builder.countColRefs(rootID, colRefCnt)
@@ -1462,7 +1462,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		tagCnt := make(map[int32]int)
 		rootID = builder.removeEffectlessLeftJoins(rootID, tagCnt)
 		ReCalcNodeStats(rootID, builder, true, false, true)
-		builder.pushTopDownToLeftJoin(rootID)
+		builder.pushdownTopThroughLeftJoin(rootID)
 		ReCalcNodeStats(rootID, builder, true, false, true)
 
 		rootID = builder.aggPushDown(rootID)
@@ -1498,7 +1498,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		// after determine shuffle, be careful when calling ReCalcNodeStats again.
 		// needResetHashMapStats should always be false from here
 
-		builder.pushdownRuntimeFilters(rootID)
+		builder.generateRuntimeFilters(rootID)
 		ReCalcNodeStats(rootID, builder, true, false, false)
 
 		builder.handleMessgaes(rootID)
@@ -1937,11 +1937,11 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 				return 0, moerr.NewSyntaxError(builder.GetContext(), "WITH query name %q specified more than once", name)
 			}
 
-			var maskedCTEs map[string]emptyType
+			var maskedCTEs map[string]bool
 			if len(maskedNames) > 0 {
-				maskedCTEs = make(map[string]emptyType)
+				maskedCTEs = make(map[string]bool)
 				for _, mask := range maskedNames {
-					maskedCTEs[mask] = emptyStruct
+					maskedCTEs[mask] = true
 				}
 			}
 
@@ -2110,9 +2110,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 		strColTargetTyp := &plan.Expr{
 			Typ: strTyp,
 			Expr: &plan.Expr_T{
-				T: &plan.TargetType{
-					Typ: strTyp,
-				},
+				T: &plan.TargetType{},
 			},
 		}
 		colCount := len(valuesClause.Rows[0])
@@ -3525,11 +3523,11 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 				}
 
 				viewName := viewStmt.Name.ObjectName
-				var maskedCTEs map[string]emptyType
+				var maskedCTEs map[string]bool
 				if len(ctx.cteByName) > 0 {
-					maskedCTEs = make(map[string]emptyType)
+					maskedCTEs = make(map[string]bool)
 					for name := range ctx.cteByName {
-						maskedCTEs[name] = emptyStruct
+						maskedCTEs[name] = true
 					}
 				}
 				defaultDatabase := viewData.DefaultDatabase
@@ -3895,20 +3893,20 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 
 	default:
 		if tbl.JoinType == tree.JOIN_TYPE_NATURAL || tbl.JoinType == tree.JOIN_TYPE_NATURAL_LEFT || tbl.JoinType == tree.JOIN_TYPE_NATURAL_RIGHT {
-			leftCols := make(map[string]emptyType)
+			leftCols := make(map[string]bool)
 			for _, binding := range leftCtx.bindings {
 				for i, col := range binding.cols {
 					if binding.colIsHidden[i] {
 						continue
 					}
-					leftCols[col] = emptyStruct
+					leftCols[col] = true
 				}
 			}
 
 			var usingCols []string
 			for _, binding := range rightCtx.bindings {
 				for _, col := range binding.cols {
-					if _, ok := leftCols[col]; ok {
+					if leftCols[col] {
 						usingCols = append(usingCols, col)
 					}
 				}

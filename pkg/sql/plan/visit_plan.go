@@ -124,9 +124,7 @@ func (vq *VisitPlan) exploreNode(ctx context.Context, rule VisitPlanRule, node *
 	targetTyp := &plan.Expr{
 		Typ: toTyp,
 		Expr: &plan.Expr_T{
-			T: &plan.TargetType{
-				Typ: toTyp,
-			},
+			T: &plan.TargetType{},
 		},
 	}
 
