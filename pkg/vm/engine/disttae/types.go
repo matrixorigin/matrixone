@@ -386,9 +386,6 @@ func (txn *Transaction) gcObjs(start int, ctx context.Context) error {
 				if _, ok := objsToGC[loc.Name().String()]; !ok {
 					objsToGC[loc.Name().String()] = struct{}{}
 					objsName = append(objsName, loc.Name().String())
-					if txn.writes[i].tableName == "bugt" {
-						logutil.Infof("to gc object:%v", loc.Name().String())
-					}
 				}
 			}
 		}
