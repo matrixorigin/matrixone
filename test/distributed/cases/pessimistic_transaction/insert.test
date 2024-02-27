@@ -327,3 +327,8 @@ select * from t2;
 drop table t2;
 drop database ssb;
 -- @bvt:issue
+drop table if exists indup_11;
+create table indup_11(a int, b varchar(20), primary key(a, b));
+insert into indup_11(a, b) values (1, "2");
+insert into indup_11(b, a) values ("2", 1);
+drop table indup_11;
