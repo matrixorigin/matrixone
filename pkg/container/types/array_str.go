@@ -16,7 +16,6 @@ package types
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"reflect"
 	"strconv"
 	"strings"
 	"unicode"
@@ -245,9 +244,10 @@ func StringToArrayV3[T RealNumbers](str string) ([]T, error) {
 
 // unsafeStringAt used when we want str[idx] without casting str to []rune
 func unsafeStringAt(str string, idx int) rune {
+	// version 1.20 and older:
 	// SCA fix from here: https://github.com/go101/go101/blob/7487c205ec72cd2658b614f9e289a77a5b42a99a/pages/fundamentals/unsafe.html#L1160
-	hdr := (*reflect.StringHeader)(unsafe.Pointer(&str))
-	pbyte := (*byte)(unsafe.Add(unsafe.Pointer(hdr.Data), idx))
+	// version 1.21 and further:
+	pbyte := (*byte)(unsafe.Add(unsafe.Pointer(unsafe.StringData(str)), idx))
 	return rune(*pbyte)
 }
 

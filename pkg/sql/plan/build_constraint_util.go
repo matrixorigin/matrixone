@@ -840,9 +840,7 @@ func forceCastExpr(ctx context.Context, expr *Expr, targetType *Type) (*Expr, er
 	t := &plan.Expr{
 		Typ: targetType,
 		Expr: &plan.Expr_T{
-			T: &plan.TargetType{
-				Typ: targetType,
-			},
+			T: &plan.TargetType{},
 		},
 	}
 	return &plan.Expr{
@@ -894,9 +892,7 @@ func buildValueScan(
 		targetTyp := &plan.Expr{
 			Typ: col.Typ,
 			Expr: &plan.Expr_T{
-				T: &plan.TargetType{
-					Typ: col.Typ,
-				},
+				T: &plan.TargetType{},
 			},
 		}
 		var defExpr *Expr
@@ -1366,7 +1362,8 @@ func appendPrimaryConstrantPlan(
 			if len(pkFilterExprs) == 0 {
 				fuzzyFilterNode.RuntimeFilterBuildList = []*plan.RuntimeFilterSpec{
 					{
-						Tag: rfTag,
+						Tag:        rfTag,
+						UpperLimit: GetInFilterCardLimitOnPK(scanNode.Stats.TableCnt),
 						Expr: &plan.Expr{
 							Typ: DeepCopyType(pkTyp),
 							Expr: &plan.Expr_Col{
@@ -1491,7 +1488,8 @@ func appendPrimaryConstrantPlan(
 					ProjectList: []*Expr{rowIdExpr, rightRowIdExpr, pkColExpr},
 					RuntimeFilterBuildList: []*plan.RuntimeFilterSpec{
 						{
-							Tag: rfTag,
+							Tag:        rfTag,
+							UpperLimit: GetInFilterCardLimitOnPK(scanNode.Stats.TableCnt),
 							Expr: &plan.Expr{
 								Typ: DeepCopyType(pkTyp),
 								Expr: &plan.Expr_Col{

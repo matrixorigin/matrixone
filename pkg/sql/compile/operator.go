@@ -17,6 +17,8 @@ package compile
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/indexbuild"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/indexjoin"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -222,6 +224,13 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 		arg.Result = t.Result
 		arg.Cond = t.Cond
 		arg.Typs = t.Typs
+		res.Arg = arg
+	case vm.IndexJoin:
+		t := sourceIns.Arg.(*indexjoin.Argument)
+		arg := indexjoin.NewArgument()
+		arg.Result = t.Result
+		arg.Typs = t.Typs
+		arg.RuntimeFilterSpecs = t.RuntimeFilterSpecs
 		res.Arg = arg
 	case vm.LoopLeft:
 		t := sourceIns.Arg.(*loopleft.Argument)
@@ -513,7 +522,6 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 		arg.N = t.N
 		arg.PkName = t.PkName
 		arg.PkTyp = t.PkTyp
-		arg.RuntimeFilterSpecs = t.RuntimeFilterSpecs
 		res.Arg = arg
 	default:
 		panic(fmt.Sprintf("unexpected instruction type '%d' to dup", sourceIns.Op))
@@ -597,8 +605,6 @@ func constructFuzzyFilter(c *Compile, n, left, right *plan.Node) *fuzzyfilter.Ar
 	arg.PkName = pkName
 	arg.PkTyp = pkTyp
 	arg.N = right.Stats.Cost
-	arg.RuntimeFilterSpecs = n.RuntimeFilterBuildList
-
 	registerRuntimeFilters(arg, c, n.RuntimeFilterBuildList, 0)
 
 	return arg
@@ -1487,6 +1493,22 @@ func constructPartition(n *plan.Node) *partition.Argument {
 	return arg
 }
 
+func constructIndexJoin(n *plan.Node, typs []types.Type, proc *process.Process) *indexjoin.Argument {
+	result := make([]int32, len(n.ProjectList))
+	for i, expr := range n.ProjectList {
+		rel, pos := constructJoinResult(expr, proc)
+		if rel != 0 {
+			panic(moerr.NewNYI(proc.Ctx, "loop semi result '%s'", expr))
+		}
+		result[i] = pos
+	}
+	arg := indexjoin.NewArgument()
+	arg.Typs = typs
+	arg.Result = result
+	arg.RuntimeFilterSpecs = n.RuntimeFilterBuildList
+	return arg
+}
+
 func constructLoopJoin(n *plan.Node, typs []types.Type, proc *process.Process) *loopjoin.Argument {
 	result := make([]colexec.ResultPos, len(n.ProjectList))
 	for i, expr := range n.ProjectList {
@@ -1604,6 +1626,28 @@ func registerRuntimeFilters[T runtimeFilterSenderSetter](arg T, c *Compile, spec
 	// Set the runtime filters for the concrete type
 	arg.SetRuntimeFilterSenders(RuntimeFilterSenders)
 
+}
+
+func constructJoinBuildInstruction(c *Compile, in vm.Instruction, proc *process.Process, shuffleCnt int, isDup bool) vm.Instruction {
+	switch in.Op {
+	case vm.IndexJoin:
+		arg := in.Arg.(*indexjoin.Argument)
+		ret := indexbuild.NewArgument()
+		registerRuntimeFilters(ret, c, arg.RuntimeFilterSpecs, shuffleCnt)
+		return vm.Instruction{
+			Op:      vm.IndexBuild,
+			Idx:     in.Idx,
+			IsFirst: true,
+			Arg:     ret,
+		}
+	default:
+		return vm.Instruction{
+			Op:      vm.HashBuild,
+			Idx:     in.Idx,
+			IsFirst: true,
+			Arg:     constructHashBuild(c, in, c.proc, shuffleCnt, isDup),
+		}
+	}
 }
 
 func constructHashBuild(c *Compile, in vm.Instruction, proc *process.Process, shuffleCnt int, isDup bool) *hashbuild.Argument {

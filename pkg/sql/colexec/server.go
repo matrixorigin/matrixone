@@ -138,32 +138,8 @@ func (srv *Server) GetCnSegmentType(sid *objectio.Segmentid) int32 {
 	return srv.cnSegmentMap.mp[*sid]
 }
 
-// SegmentId is part of Id for cn2s3 directly, for more info, refer to docs about it
+// GenerateObject used to generate a new object name for CN
 func (srv *Server) GenerateObject() objectio.ObjectName {
-	srv.Lock()
-	defer srv.Unlock()
-	return objectio.BuildObjectName(objectio.NewSegmentid(), 0)
-	// for future fileOffset
-	// if srv.InitSegmentId {
-	// 	srv.incrementSegmentId()
-	// } else {
-	// 	srv.getNewSegmentId()
-	// 	srv.currentFileOffset = 0
-	// 	srv.InitSegmentId = true
-	// }
-	// return objectio.BuildObjectName(srv.CNSegmentId, srv.currentFileOffset)
+	segId := objectio.NewSegmentid()
+	return objectio.BuildObjectName(segId, 0)
 }
-
-// func (srv *Server) incrementSegmentId() {
-// 	if srv.currentFileOffset < math.MaxUint16 {
-// 		srv.currentFileOffset++
-// 	} else {
-// 		srv.getNewSegmentId()
-// 		srv.currentFileOffset = 0
-// 	}
-// }
-
-// // for now, rowId is common between CN and DN.
-// func (srv *Server) getNewSegmentId() {
-// 	srv.CNSegmentId = common.NewSegmentid()
-// }

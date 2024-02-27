@@ -1110,12 +1110,14 @@ func ConstantFold(bat *batch.Batch, expr *plan.Expr, proc *process.Process, varA
 	if f.CannotFold() || f.IsRealTimeRelated() {
 		return expr, nil
 	}
+	isVec := false
 	for i := range fn.Args {
 		foldExpr, errFold := ConstantFold(bat, fn.Args[i], proc, varAndParamIsConst)
 		if errFold != nil {
 			return nil, errFold
 		}
 		fn.Args[i] = foldExpr
+		isVec = isVec || foldExpr.GetVec() != nil
 	}
 	if !rule.IsConstant(expr, varAndParamIsConst) {
 		return expr, nil
@@ -1127,7 +1129,7 @@ func ConstantFold(bat *batch.Batch, expr *plan.Expr, proc *process.Process, varA
 	}
 	defer vec.Free(proc.Mp())
 
-	if !vec.IsConst() && vec.Length() > 1 {
+	if isVec {
 		data, err := vec.MarshalBinary()
 		if err != nil {
 			return expr, nil
@@ -1892,7 +1894,30 @@ func HasFkSelfReferOnly(tableDef *TableDef) bool {
 	return true
 }
 
-func MakeInExpr(left *Expr, length int32, data []byte) *Expr {
+func MakeInExpr(ctx context.Context, left *Expr, length int32, data []byte, matchPrefix bool) *Expr {
+	rightArg := &plan.Expr{
+		Typ: &plan.Type{
+			Id: int32(types.T_tuple),
+		},
+		Expr: &plan.Expr_Vec{
+			Vec: &plan.LiteralVec{
+				Len:  length,
+				Data: data,
+			},
+		},
+	}
+
+	funcID := function.InFunctionEncodedID
+	funcName := function.InFunctionName
+	if matchPrefix {
+		funcID = function.PrefixInFunctionEncodedID
+		funcName = function.PrefixInFunctionName
+	}
+	args := []types.Type{makeTypeByPlan2Expr(left), makeTypeByPlan2Expr(rightArg)}
+	fGet, err := function.GetFunctionByName(ctx, funcName, args)
+	if err == nil {
+		funcID = fGet.GetEncodedOverloadID()
+	}
 	inExpr := &plan.Expr{
 		Typ: &plan.Type{
 			Id:          int32(types.T_bool),
@@ -1901,22 +1926,12 @@ func MakeInExpr(left *Expr, length int32, data []byte) *Expr {
 		Expr: &plan.Expr_F{
 			F: &plan.Function{
 				Func: &plan.ObjectRef{
-					Obj:     function.InFunctionEncodedID,
-					ObjName: function.InFunctionName,
+					Obj:     funcID,
+					ObjName: funcName,
 				},
 				Args: []*plan.Expr{
 					left,
-					{
-						Typ: &plan.Type{
-							Id: int32(types.T_tuple),
-						},
-						Expr: &plan.Expr_Vec{
-							Vec: &plan.LiteralVec{
-								Len:  length,
-								Data: data,
-							},
-						},
-					},
+					rightArg,
 				},
 			},
 		},

@@ -53,9 +53,7 @@ type Argument struct {
 	rbat         *batch.Batch
 
 	// about runtime filter
-	inFilterCardLimit    int64
 	pass2RuntimeFilter   *vector.Vector
-	RuntimeFilterSpecs   []*plan.RuntimeFilterSpec
 	RuntimeFilterSenders []*colexec.RuntimeFilterChan
 
 	vm.OperatorBase

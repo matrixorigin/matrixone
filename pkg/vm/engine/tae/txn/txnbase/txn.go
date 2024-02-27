@@ -315,6 +315,7 @@ func (txn *Txn) DoneWithErr(err error, isAbort bool) {
 		return
 	}
 	txn.done1PCWithErr(err)
+	txn.GetStore().EndTrace()
 }
 
 func (txn *Txn) PrepareCommit() (err error) {

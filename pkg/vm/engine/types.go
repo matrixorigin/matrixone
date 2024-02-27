@@ -600,6 +600,7 @@ type Relation interface {
 
 	// Get complete tableDef information, including columns, constraints, partitions, version, comments, etc
 	GetTableDef(context.Context) *plan.TableDef
+	CopyTableDef(context.Context) *plan.TableDef
 
 	GetPrimaryKeys(context.Context) ([]*Attribute, error)
 

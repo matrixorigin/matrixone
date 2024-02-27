@@ -1,2 +1,7 @@
 select metric_name, collecttime, value, `node`, role, account, type from system_metrics.metric limit 0;
 metric_name	collecttime	value	node	role	account	type
+select count(1) cnt, metric_name, collecttime, `node`, role, account, type from system_metrics.metric group by metric_name, collecttime, `node`, role, account, type having cnt > 1;
+cnt    metric_name    collecttime    node    role    account    type
+select count(1) > 0 exist from system_metrics.metric where collecttime > date_sub(now(), interval 5 minute) and metric_name = 'server_storage_usage';
+exist
+true

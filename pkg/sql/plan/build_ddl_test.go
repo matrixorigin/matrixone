@@ -433,3 +433,9 @@ func TestCreateSingleTable(t *testing.T) {
 	}
 	outPutPlan(logicPlan, true, t)
 }
+
+func TestCreateTableAsSelect(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	sqls := []string{"CREATE TABLE t1 (a int, b char(5)); CREATE TABLE t2 (c float) as select b, a from t1"}
+	runTestShouldPass(mock, t, sqls, false, false)
+}

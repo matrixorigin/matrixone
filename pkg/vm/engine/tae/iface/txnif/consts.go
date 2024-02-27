@@ -86,3 +86,12 @@ const (
 	PreApplyCommitPhase = "Phase_PreApplyCommit"
 	ApplyCommitPhase    = "Phase_ApplyCommit"
 )
+
+const (
+	TraceStart = iota
+	TracePreparing
+	TracePrepareWalWait
+	TracePrepareWal
+	TracePreapredWait
+	TracePrepared
+)

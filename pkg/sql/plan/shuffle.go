@@ -278,10 +278,13 @@ func determinShuffleType(col *plan.ColRef, n *plan.Node, builder *QueryBuilder) 
 	if s == nil {
 		return
 	}
+	if shouldUseHashShuffle(s.ShuffleRangeMap[colName]) {
+		return
+	}
 	n.Stats.HashmapStats.ShuffleType = plan.ShuffleType_Range
 	n.Stats.HashmapStats.ShuffleColMin = int64(s.MinValMap[colName])
 	n.Stats.HashmapStats.ShuffleColMax = int64(s.MaxValMap[colName])
-	n.Stats.HashmapStats.Ranges = shouldUseShuffleRange(s.ShuffleRangeMap[colName])
+	n.Stats.HashmapStats.Ranges = shouldUseShuffleRanges(s.ShuffleRangeMap[colName])
 	n.Stats.HashmapStats.Nullcnt = int64(s.NullCntMap[colName])
 }
 
@@ -346,7 +349,7 @@ func determinShuffleForJoin(n *plan.Node, builder *QueryBuilder) {
 	}
 	//for now ,only support integer and string type
 	switch types.T(typ) {
-	case types.T_int64, types.T_int32, types.T_int16, types.T_uint64, types.T_uint32, types.T_uint16, types.T_varchar, types.T_char, types.T_text, types.T_bit:
+	case types.T_int64, types.T_int32, types.T_int16, types.T_uint64, types.T_uint32, types.T_uint16, types.T_varchar, types.T_char, types.T_text:
 		n.Stats.HashmapStats.ShuffleColIdx = int32(idx)
 		n.Stats.HashmapStats.Shuffle = true
 		determinShuffleType(hashCol, n, builder)
@@ -406,7 +409,7 @@ func determinShuffleForGroupBy(n *plan.Node, builder *QueryBuilder) {
 	}
 	//for now ,only support integer and string type
 	switch types.T(typ) {
-	case types.T_int64, types.T_int32, types.T_int16, types.T_uint64, types.T_uint32, types.T_uint16, types.T_varchar, types.T_char, types.T_text, types.T_bit:
+	case types.T_int64, types.T_int32, types.T_int16, types.T_uint64, types.T_uint32, types.T_uint16, types.T_varchar, types.T_char, types.T_text:
 		n.Stats.HashmapStats.ShuffleColIdx = int32(idx)
 		n.Stats.HashmapStats.Shuffle = true
 		determinShuffleType(hashCol, n, builder)
@@ -473,7 +476,7 @@ func determinShuffleForScan(n *plan.Node, builder *QueryBuilder) {
 		n.Stats.HashmapStats.ShuffleColIdx = int32(n.TableDef.Cols[firstSortColID].Seqnum)
 		n.Stats.HashmapStats.ShuffleColMin = int64(s.MinValMap[firstSortColName])
 		n.Stats.HashmapStats.ShuffleColMax = int64(s.MaxValMap[firstSortColName])
-		n.Stats.HashmapStats.Ranges = shouldUseShuffleRange(s.ShuffleRangeMap[firstSortColName])
+		n.Stats.HashmapStats.Ranges = shouldUseShuffleRanges(s.ShuffleRangeMap[firstSortColName])
 		n.Stats.HashmapStats.Nullcnt = int64(s.NullCntMap[firstSortColName])
 	}
 }
@@ -522,7 +525,20 @@ func determineShuffleMethod2(nodeID, parentID int32, builder *QueryBuilder) {
 	}
 }
 
-func shouldUseShuffleRange(s *pb.ShuffleRange) []float64 {
+func shouldUseHashShuffle(s *pb.ShuffleRange) bool {
+	if s == nil {
+		return true
+	}
+	if s.Uniform > 0.3 {
+		return false
+	}
+	if s.Overlap > 0.6 {
+		return true
+	}
+	return true
+}
+
+func shouldUseShuffleRanges(s *pb.ShuffleRange) []float64 {
 	if s == nil {
 		return nil
 	}

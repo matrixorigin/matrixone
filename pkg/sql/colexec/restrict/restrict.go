@@ -99,7 +99,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 				if err != nil {
 					return result, err
 				}
-				arg.buf.Shrink(nil)
+				arg.buf.Shrink(nil, false)
 			}
 		} else {
 			if sels == nil {
@@ -127,7 +127,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 			if err != nil {
 				return result, err
 			}
-			arg.buf.Shrink(sels)
+			arg.buf.Shrink(sels, false)
 		}
 	}
 

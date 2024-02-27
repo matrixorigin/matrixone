@@ -16,6 +16,7 @@ package compile
 
 import (
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
@@ -134,7 +135,7 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 	{
 		// 8. invoke reindex for the new table, if it contains ivf index.
 		multiTableIndexes := make(map[string]*MultiTableIndex)
-		newTableDef := newRel.GetTableDef(c.ctx)
+		newTableDef := newRel.CopyTableDef(c.ctx)
 
 		for _, indexDef := range newTableDef.Indexes {
 			if catalog.IsIvfIndexAlgo(indexDef.IndexAlgo) {

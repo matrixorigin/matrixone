@@ -122,8 +122,10 @@ func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *pla
 	if f.IsRealTimeRelated() && r.isPrepared {
 		return expr
 	}
+	isVec := false
 	for i := range fn.Args {
 		fn.Args[i] = r.constantFold(fn.Args[i], proc)
+		isVec = isVec || fn.Args[i].GetVec() != nil
 	}
 	if !IsConstant(expr, false) {
 		return expr
@@ -135,7 +137,7 @@ func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *pla
 	}
 	defer vec.Free(proc.Mp())
 
-	if !vec.IsConst() && vec.Length() > 1 {
+	if isVec {
 		data, err := vec.MarshalBinary()
 		if err != nil {
 			return expr
@@ -325,18 +327,12 @@ func GetConstantValue(vec *vector.Vector, transAll bool, row uint64) *plan.Liter
 			},
 		}
 	case types.T_time:
-		if !transAll {
-			return nil
-		}
 		return &plan.Literal{
 			Value: &plan.Literal_Timeval{
 				Timeval: int64(vector.MustFixedCol[types.Time](vec)[row]),
 			},
 		}
 	case types.T_datetime:
-		if !transAll {
-			return nil
-		}
 		return &plan.Literal{
 			Value: &plan.Literal_Datetimeval{
 				Datetimeval: int64(vector.MustFixedCol[types.Datetime](vec)[row]),

@@ -126,7 +126,6 @@ var newMockWrapper = func(ctrl *gomock.Controller, ses *Session,
 	mcw := mock_frontend.NewMockComputationWrapper(ctrl)
 	mcw.EXPECT().GetAst().Return(stmt).AnyTimes()
 	mcw.EXPECT().GetProcess().Return(proc).AnyTimes()
-	mcw.EXPECT().SetDatabaseName(gomock.Any()).Return(nil).AnyTimes()
 	mcw.EXPECT().GetColumns().Return(columns, nil).AnyTimes()
 	mcw.EXPECT().Compile(gomock.Any(), gomock.Any(), gomock.Any()).Return(runner, nil).AnyTimes()
 	mcw.EXPECT().GetUUID().Return(uuid[:]).AnyTimes()

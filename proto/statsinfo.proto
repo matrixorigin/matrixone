@@ -25,23 +25,23 @@ message ShuffleHeap {
   ShuffleHeap Right = 2;
   double Key = 3;
   double Value = 4;
-  int32 Height = 5;
-  int32 Sz = 6;
-  int32 Nulls = 7;
+  int64 Height = 5;
+  int64 Sz = 6;
+  int64 Nulls = 7;
   bool Reverse = 8;
 }
 
 message ShuffleRange {
   bool IsStrType = 1;
-  int32 Sz = 2;
+  int64 Sz = 2;
   ShuffleHeap Tree = 3;
   double Min = 4;
   double Max = 5;
   repeated bytes Mins = 6;
   repeated bytes Maxs = 7;
-  repeated int32 Rows = 8;
-  repeated int32 Nulls = 9;
-  int32 MaxLen = 10;
+  repeated int64 Rows = 8;
+  repeated int64 Nulls = 9;
+  int64 MaxLen = 10;
   repeated bool Flags = 11;
   double Overlap = 12;
   double Uniform = 13;
@@ -56,9 +56,9 @@ message StatsInfo {
   map<string, uint64> NullCntMap = 5;
   map<string, uint64> SizeMap = 6;
   map<string, ShuffleRange> ShuffleRangeMap = 7;
-  int32 BlockNumber = 8;
-  int32 AccurateObjectNumber = 9;
-  int32 ApproxObjectNumber = 10;
+  int64 BlockNumber = 8;
+  int64 AccurateObjectNumber = 9;
+  int64 ApproxObjectNumber = 10;
   double TableCnt = 11;
   string TableName = 12;
 }

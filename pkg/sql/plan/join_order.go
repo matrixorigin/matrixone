@@ -430,6 +430,7 @@ func setParent(child, parent int32, vertices []*joinVertex) {
 	vertices[child].parent = parent
 	vertices[parent].children[child] = true
 }
+
 func unsetParent(child, parent int32, vertices []*joinVertex) {
 	if child == -1 || parent == -1 {
 		return

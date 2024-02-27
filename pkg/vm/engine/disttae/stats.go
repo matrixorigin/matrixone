@@ -61,7 +61,7 @@ type updateStatsRequest struct {
 	partitionState  *logtailreplay.PartitionState
 	fs              fileservice.FileService
 	ts              types.TS
-	approxObjectNum int32
+	approxObjectNum int64
 }
 
 func newUpdateStatsRequest(
@@ -70,7 +70,7 @@ func newUpdateStatsRequest(
 	partitionState *logtailreplay.PartitionState,
 	fs fileservice.FileService,
 	ts types.TS,
-	approxObjectNum int32,
+	approxObjectNum int64,
 	stats *pb.StatsInfo,
 ) *updateStatsRequest {
 	return &updateStatsRequest{
@@ -140,7 +140,7 @@ type GlobalStats struct {
 	// statsInfoMap is the global stats info in engine which
 	// contains all subscribed tables stats info.
 	mu struct {
-		sync.Mutex
+		sync.RWMutex
 
 		// cond is used to wait for stats updated for the first time.
 		// If sync parameter is false, it is unuseful.
@@ -184,13 +184,19 @@ func (gs *GlobalStats) fillConfig() {
 }
 
 func (gs *GlobalStats) Get(ctx context.Context, key pb.StatsInfoKey, sync bool) *pb.StatsInfo {
-	gs.mu.Lock()
-	defer gs.mu.Unlock()
-	info, ok := gs.mu.statsInfoMap[key]
-	if ok && info != nil {
+	var info *pb.StatsInfo
+	var ok bool
+	if ok = func() bool {
+		gs.mu.RLock()
+		defer gs.mu.RUnlock()
+		info, ok = gs.mu.statsInfoMap[key]
+		return ok
+	}(); ok {
 		return info
 	}
 
+	gs.mu.Lock()
+	defer gs.mu.Unlock()
 	// Get stats info from remote node.
 	if gs.KeyRouter != nil {
 		client := gs.engine.qc
@@ -398,7 +404,7 @@ func (gs *GlobalStats) updateTableStats(key pb.StatsInfoKey) {
 
 	partitionState := gs.engine.getPartition(key.DatabaseID, key.TableID).Snapshot()
 	var partitionsTableDef []*plan2.TableDef
-	var approxObjectNum int32
+	var approxObjectNum int64
 	if table.Partitioned > 0 {
 		partitionInfo := &plan2.PartitionByDef{}
 		if err := partitionInfo.UnMarshalPartitionInfo([]byte(table.Partition)); err != nil {
@@ -409,10 +415,10 @@ func (gs *GlobalStats) updateTableStats(key pb.StatsInfoKey) {
 			partitionTable := gs.engine.catalog.GetTableByName(key.DatabaseID, partitionTableName)
 			partitionsTableDef = append(partitionsTableDef, partitionTable.TableDef)
 			ps := gs.engine.getPartition(key.DatabaseID, partitionTable.Id).Snapshot()
-			approxObjectNum += int32(ps.ApproxObjectsNum())
+			approxObjectNum += int64(ps.ApproxObjectsNum())
 		}
 	} else {
-		approxObjectNum = int32(partitionState.ApproxObjectsNum())
+		approxObjectNum = int64(partitionState.ApproxObjectsNum())
 	}
 
 	if approxObjectNum == 0 {
@@ -548,7 +554,7 @@ func updateInfoFromZoneMap(ctx context.Context, req *updateStatsRequest, info *p
 		}
 		meta = objMeta.MustDataMeta()
 		info.AccurateObjectNumber++
-		info.BlockNumber += int32(obj.BlkCnt())
+		info.BlockNumber += int64(obj.BlkCnt())
 		info.TableCnt += float64(meta.BlockHeader().Rows())
 		if !init {
 			init = true
@@ -558,8 +564,8 @@ func updateInfoFromZoneMap(ctx context.Context, req *updateStatsRequest, info *p
 				info.ColumnZMs[idx] = objColMeta.ZoneMap().Clone()
 				info.DataTypes[idx] = types.T(col.Typ.Id).ToType()
 				info.ColumnNDVs[idx] = float64(objColMeta.Ndv())
-				info.ColumnSize[idx] = meta.BlockHeader().ZoneMapArea().Length() +
-					meta.BlockHeader().BFExtent().Length() + objColMeta.Location().Length()
+				info.ColumnSize[idx] = int64(meta.BlockHeader().ZoneMapArea().Length() +
+					meta.BlockHeader().BFExtent().Length() + objColMeta.Location().Length())
 				if info.ColumnNDVs[idx] > 100 || info.ColumnNDVs[idx] > 0.1*float64(meta.BlockHeader().Rows()) {
 					switch info.DataTypes[idx].Oid {
 					case types.T_int64, types.T_int32, types.T_int16, types.T_uint64, types.T_uint32, types.T_uint16, types.T_bit:
@@ -567,12 +573,12 @@ func updateInfoFromZoneMap(ctx context.Context, req *updateStatsRequest, info *p
 						if info.ColumnZMs[idx].IsInited() {
 							minvalue := getMinMaxValueByFloat64(info.DataTypes[idx], info.ColumnZMs[idx].GetMinBuf())
 							maxvalue := getMinMaxValueByFloat64(info.DataTypes[idx], info.ColumnZMs[idx].GetMaxBuf())
-							info.ShuffleRanges[idx].Update(minvalue, maxvalue, meta.BlockHeader().Rows(), objColMeta.NullCnt())
+							info.ShuffleRanges[idx].Update(minvalue, maxvalue, int64(meta.BlockHeader().Rows()), int64(objColMeta.NullCnt()))
 						}
 					case types.T_varchar, types.T_char, types.T_text:
 						info.ShuffleRanges[idx] = plan2.NewShuffleRange(true)
 						if info.ColumnZMs[idx].IsInited() {
-							info.ShuffleRanges[idx].UpdateString(info.ColumnZMs[idx].GetMinBuf(), info.ColumnZMs[idx].GetMaxBuf(), meta.BlockHeader().Rows(), objColMeta.NullCnt())
+							info.ShuffleRanges[idx].UpdateString(info.ColumnZMs[idx].GetMinBuf(), info.ColumnZMs[idx].GetMaxBuf(), int64(meta.BlockHeader().Rows()), int64(objColMeta.NullCnt()))
 						}
 					}
 				}
@@ -588,15 +594,15 @@ func updateInfoFromZoneMap(ctx context.Context, req *updateStatsRequest, info *p
 				index.UpdateZM(info.ColumnZMs[idx], zm.GetMaxBuf())
 				index.UpdateZM(info.ColumnZMs[idx], zm.GetMinBuf())
 				info.ColumnNDVs[idx] += float64(objColMeta.Ndv())
-				info.ColumnSize[idx] += objColMeta.Location().Length()
+				info.ColumnSize[idx] += int64(objColMeta.Location().Length())
 				if info.ShuffleRanges[idx] != nil {
 					switch info.DataTypes[idx].Oid {
 					case types.T_int64, types.T_int32, types.T_int16, types.T_uint64, types.T_uint32, types.T_uint16, types.T_bit:
 						minvalue := getMinMaxValueByFloat64(info.DataTypes[idx], zm.GetMinBuf())
 						maxvalue := getMinMaxValueByFloat64(info.DataTypes[idx], zm.GetMaxBuf())
-						info.ShuffleRanges[idx].Update(minvalue, maxvalue, meta.BlockHeader().Rows(), objColMeta.NullCnt())
+						info.ShuffleRanges[idx].Update(minvalue, maxvalue, int64(meta.BlockHeader().Rows()), int64(objColMeta.NullCnt()))
 					case types.T_varchar, types.T_char, types.T_text:
-						info.ShuffleRanges[idx].UpdateString(zm.GetMinBuf(), zm.GetMaxBuf(), meta.BlockHeader().Rows(), objColMeta.NullCnt())
+						info.ShuffleRanges[idx].UpdateString(zm.GetMinBuf(), zm.GetMaxBuf(), int64(meta.BlockHeader().Rows()), int64(objColMeta.NullCnt()))
 					}
 				}
 			}

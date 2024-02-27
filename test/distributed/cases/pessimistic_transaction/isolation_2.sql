@@ -219,7 +219,6 @@ select b, c from dis_table_02;
 select * from dis_view_02;
 drop table dis_view_02;
 
--- @bvt:issue#10316
 begin ;
 select * from dis_table_01;
 -- @session:id=1{
@@ -259,7 +258,6 @@ select b, c from dis_table_02;
 -- @session:id=1{
 select b, c from dis_table_02;
 -- @session}
--- @bvt:issue
 --------------------------------
 -- @bvt:issue#10585
 create database if not exists iso_db_02;

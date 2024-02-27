@@ -354,6 +354,20 @@ func (mr *MockRelationMockRecorder) AlterTable(ctx, c, constraint interface{}) *
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AlterTable", reflect.TypeOf((*MockRelation)(nil).AlterTable), ctx, c, constraint)
 }
 
+// CopyTableDef mocks base method.
+func (m *MockRelation) CopyTableDef(arg0 context.Context) *plan.TableDef {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "CopyTableDef", arg0)
+	ret0, _ := ret[0].(*plan.TableDef)
+	return ret0
+}
+
+// CopyTableDef indicates an expected call of CopyTableDef.
+func (mr *MockRelationMockRecorder) CopyTableDef(arg0 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CopyTableDef", reflect.TypeOf((*MockRelation)(nil).CopyTableDef), arg0)
+}
+
 // DelTableDef mocks base method.
 func (m *MockRelation) DelTableDef(arg0 context.Context, arg1 engine.TableDef) error {
 	m.ctrl.T.Helper()
@@ -1168,6 +1182,20 @@ func (mr *MockEngineMockRecorder) Nodes(isInternal, tenant, username, cnLabel in
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Nodes", reflect.TypeOf((*MockEngine)(nil).Nodes), isInternal, tenant, username, cnLabel)
 }
 
+// Stats mocks base method.
+func (m *MockEngine) Stats(ctx context.Context, key statsinfo.StatsInfoKey, sync bool) *statsinfo.StatsInfo {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "Stats", ctx, key, sync)
+	ret0, _ := ret[0].(*statsinfo.StatsInfo)
+	return ret0
+}
+
+// Stats indicates an expected call of Stats.
+func (mr *MockEngineMockRecorder) Stats(ctx, key, sync interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Stats", reflect.TypeOf((*MockEngine)(nil).Stats), ctx, key, sync)
+}
+
 // TryToSubscribeTable mocks base method.
 func (m *MockEngine) TryToSubscribeTable(arg0 context.Context, arg1, arg2 uint64) error {
 	m.ctrl.T.Helper()
@@ -1194,20 +1222,6 @@ func (m *MockEngine) UnsubscribeTable(arg0 context.Context, arg1, arg2 uint64) e
 func (mr *MockEngineMockRecorder) UnsubscribeTable(arg0, arg1, arg2 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UnsubscribeTable", reflect.TypeOf((*MockEngine)(nil).UnsubscribeTable), arg0, arg1, arg2)
-}
-
-// Stats mocks base method.
-func (m *MockEngine) Stats(ctx context.Context, key statsinfo.StatsInfoKey, sync bool) *statsinfo.StatsInfo {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Stats", ctx, key, sync)
-	ret0, _ := ret[0].(*statsinfo.StatsInfo)
-	return ret0
-}
-
-// Stats indicates an expected call of Stats.
-func (mr *MockEngineMockRecorder) Stats(ctx, key, sync interface{}) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Stats", reflect.TypeOf((*MockEngine)(nil).Stats), ctx, key, sync)
 }
 
 // MockVectorPool is a mock of VectorPool interface.

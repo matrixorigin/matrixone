@@ -236,6 +236,13 @@ func (s *Scanner) Scan() (int, string) {
 		default:
 			return s.Scan()
 		}
+	case ch == '#':
+		s.inc()
+		id, str := s.scanCommentTypeLine(1)
+		if id == LEX_ERROR {
+			return id, str
+		}
+		return s.Scan()
 	default:
 		return s.stepBackOneChar(ch)
 	}
