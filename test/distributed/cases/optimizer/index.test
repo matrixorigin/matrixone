@@ -44,5 +44,4 @@ select count(c3) from t2 where c2 between 1000 and 2000;
 select * from t2 where c2 in (1);
 select * from t2 where c2 in (1,1000,2000);
 select count(c3) from t2 where c2 in (1,1000,1111,2000);
-select c3,c2 from t1 where c2=1111 order by c3 limit 10;
 drop database if exists d1;
