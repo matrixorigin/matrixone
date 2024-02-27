@@ -115,6 +115,7 @@ func NewCompile(
 	c.uid = uid
 	c.sql = sql
 	c.proc = proc
+	c.proc.MessageBoard = c.MessageBoard
 	c.stmt = stmt
 	c.addr = addr
 	c.isInternal = isInternal
@@ -145,6 +146,8 @@ func (c *Compile) reset() {
 	for i := range c.createdFuzzy {
 		c.createdFuzzy[i].release()
 	}
+
+	c.MessageBoard.Messages = c.MessageBoard.Messages[:0]
 	c.createdFuzzy = c.createdFuzzy[:0]
 	c.scope = c.scope[:0]
 	c.proc.CleanValueScanBatchs()
@@ -1105,9 +1108,13 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		if err != nil {
 			return nil, err
 		}
-
-		// RelationName
-		ss = c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, ss)))
+		ss = c.compileProjection(n, c.compileRestrict(n, ss))
+		if n.Offset != nil {
+			ss = c.compileOffset(n, ss)
+		}
+		if n.Limit != nil {
+			ss = c.compileLimit(n, ss)
+		}
 		return ss, nil
 	case plan.Node_SOURCE_SCAN:
 		ss, err = c.compileSourceScan(ctx, n)
@@ -2130,7 +2137,7 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node) (*Sco
 }
 
 func (c *Compile) compileRestrict(n *plan.Node, ss []*Scope) []*Scope {
-	if len(n.FilterList) == 0 {
+	if len(n.FilterList) == 0 && len(n.RuntimeFilterProbeList) == 0 {
 		return ss
 	}
 	currentFirstFlag := c.anal.isFirst
@@ -2390,6 +2397,17 @@ func (c *Compile) compileBroadcastJoin(ctx context.Context, node, left, right *p
 				}
 			}
 		}
+
+	case plan.Node_INDEX:
+		rs = c.newBroadcastJoinScopeList(ss, children, node)
+		for i := range rs {
+			rs[i].appendInstruction(vm.Instruction{
+				Op:  vm.IndexJoin,
+				Idx: c.anal.curr,
+				Arg: constructIndexJoin(node, rightTyps, c.proc),
+			})
+		}
+
 	case plan.Node_SEMI:
 		if isEq {
 			if node.BuildOnLeft {
@@ -3374,12 +3392,7 @@ func (c *Compile) newJoinBuildScope(s *Scope, ss []*Scope) *Scope {
 		regTransplant(s, rs, i+s.BuildIdx, i)
 	}
 
-	rs.appendInstruction(vm.Instruction{
-		Op:      vm.HashBuild,
-		Idx:     s.Instructions[0].Idx,
-		IsFirst: true,
-		Arg:     constructHashBuild(c, s.Instructions[0], c.proc, s.ShuffleCnt, ss != nil),
-	})
+	rs.appendInstruction(constructJoinBuildInstruction(c, s.Instructions[0], c.proc, s.ShuffleCnt, ss != nil))
 
 	if ss == nil { // unparallel, send the hashtable to join scope directly
 		s.Proc.Reg.MergeReceivers[s.BuildIdx] = &process.WaitRegister{
@@ -3489,7 +3502,7 @@ func (c *Compile) determinExpandRanges(n *plan.Node, rel engine.Relation) bool {
 	if c.pn.GetQuery().StmtType != plan.Query_SELECT {
 		return true
 	}
-	if !plan2.InternalTable(n.TableDef) {
+	if plan2.InternalTable(n.TableDef) {
 		return true
 	}
 	if n.TableDef.Partition != nil {
@@ -4041,7 +4054,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 	}
 	// for multi cn in launch mode, put all payloads in current CN, maybe delete this in the future
 	// for an ordered scan, put all paylonds in current CN
-	if isLaunchMode(c.cnList) || n.OrderBy != nil {
+	if isLaunchMode(c.cnList) || len(n.OrderBy) > 0 {
 		return putBlocksInCurrentCN(c, ranges.GetAllBytes(), rel, n), partialResults, partialResultTypes, nil
 	}
 	// disttae engine

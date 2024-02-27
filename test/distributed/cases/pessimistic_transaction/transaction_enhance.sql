@@ -204,15 +204,14 @@ select * from atomic_table_14;
 commit;
 select * from atomic_table_14;
 
--- @bvt:issue#10316
 drop table if exists atomic_table_15;
 create table atomic_table_15(c1 int,c2 varchar(25));
 begin;
 insert into atomic_table_15 values (6,"a"),(7,"b");
 truncate table atomic_table_15;
 -- @session:id=1{
--- @wait:0:commit
 use transaction_enhance;
+-- @wait:0:commit
 drop table atomic_table_15;
 -- @session}
 select * from atomic_table_15;
@@ -225,8 +224,8 @@ begin;
 insert into atomic_table_16 values (6,"a"),(7,"b");
 drop table atomic_table_16;
 -- @session:id=1{
--- @wait:0:commit
 use transaction_enhance;
+-- @wait:0:commit
 drop table atomic_table_16;
 -- @session}
 commit;
@@ -293,8 +292,8 @@ show index from atomic_table_18;
 
 truncate table atomic_table_18;
 -- @session:id=1{
--- @wait:0:commit
 use transaction_enhance;
+-- @wait:0:commit
 drop table atomic_table_18;
 -- @session}
 select * from atomic_table_18;
@@ -308,8 +307,8 @@ insert into atomic_table_18 values (6,"a"),(7,"b");
 set autocommit=0;
 drop table atomic_table_18;
 -- @session:id=1{
--- @wait:0:commit
 use transaction_enhance;
+-- @wait:0:commit
 drop table atomic_table_18;
 -- @session}
 select * from atomic_table_18;
@@ -326,8 +325,8 @@ insert into alter01 values (3,"a"),(4,"b"),(5,"c");
 begin;
 alter table alter01 modify col1 float;
 -- @session:id=1{
--- @wait:0:commit
 use transaction_enhance;
+-- @wait:0:commit
 insert into alter01 values (8,"h");
 select * from alter01;
 -- @session
@@ -343,8 +342,8 @@ insert into alter01 values (3,"a"),(4,"b"),(5,"c");
 begin;
 alter table alter01 modify col1 float;
 -- @session:id=1{
--- @wait:0:commit
 use transaction_enhance;
+-- @wait:0:commit
 insert into alter01 values (8,"h");
 select * from alter01;
 -- @session
@@ -360,8 +359,8 @@ alter table atomic_table_12_5 add index key1(c1);
 begin;
 alter table atomic_table_12_5 change c1 clNew double;
 -- @session:id=1{
--- @wait:0:commit
 use transaction_enhance;
+-- @wait:0:commit
 insert into atomic_table_12_5 values (8,"h");
 show create table atomic_table_12_5;
 select * from atomic_table_12_5;
@@ -375,8 +374,8 @@ insert into alter01 values (3,"a"),(4,"b"),(5,"c");
 begin;
 alter table alter01 change col1 col1New float;
 -- @session:id=1{
--- @wait:0:commit
 use transaction_enhance;
+-- @wait:0:commit
 insert into alter01 values (8,"h");
 select * from alter01;
 -- @session
@@ -406,8 +405,8 @@ insert into alter01 values (3,"a"),(4,"b"),(5,"c");
 begin;
 alter table alter01 rename column col1 to col1New;
 -- @session:id=1{
--- @wait:0:commit
 use transaction_enhance;
+-- @wait:0:commit
 insert into alter01 values (8,"h");
 select * from alter01;
 -- @session

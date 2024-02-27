@@ -567,7 +567,8 @@ func (entry *TableEntry) ApplyCommit() (err error) {
 
 // hasColumnChangedSchema checks if add or drop columns on previous schema
 func (entry *TableEntry) isColumnChangedInSchema() bool {
-	// in commit queue, it is safe
+	entry.RLock()
+	defer entry.RUnlock()
 	node := entry.GetLatestNodeLocked()
 	toCommitted := node.BaseNode.Schema
 	ver := toCommitted.Version

@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/indexjoin"
 	"time"
 	"unsafe"
 
@@ -740,10 +741,9 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 		}
 	case *fuzzyfilter.Argument:
 		in.FuzzyFilter = &pipeline.FuzzyFilter{
-			N:                      float32(t.N),
-			PkName:                 t.PkName,
-			PkTyp:                  plan2.DeepCopyType(t.PkTyp),
-			RuntimeFilterBuildList: t.RuntimeFilterSpecs,
+			N:      float32(t.N),
+			PkName: t.PkName,
+			PkTyp:  plan2.DeepCopyType(t.PkTyp),
 		}
 	case *preinsert.Argument:
 		in.PreInsert = &pipeline.PreInsert{
@@ -977,6 +977,12 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			HashOnPk:               t.HashOnPK,
 			IsShuffle:              t.IsShuffle,
 		}
+	case *indexjoin.Argument:
+		in.IndexJoin = &pipeline.IndexJoin{
+			Result:                 t.Result,
+			Types:                  convertToPlanTypes(t.Typs),
+			RuntimeFilterBuildList: t.RuntimeFilterSpecs,
+		}
 	case *single.Argument:
 		relList, colList := getRelColList(t.Result)
 		in.SingleJoin = &pipeline.SingleJoin{
@@ -1190,7 +1196,6 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 		arg.N = float64(t.N)
 		arg.PkName = t.PkName
 		arg.PkTyp = t.PkTyp
-		arg.RuntimeFilterSpecs = t.RuntimeFilterBuildList
 		v.Arg = arg
 	case vm.Anti:
 		t := opr.GetAnti()
@@ -1367,6 +1372,13 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 		arg.Result = t.Result
 		arg.Cond = t.Expr
 		arg.Typs = convertToTypes(t.Types)
+		v.Arg = arg
+	case vm.IndexJoin:
+		t := opr.GetIndexJoin()
+		arg := indexjoin.NewArgument()
+		arg.Result = t.Result
+		arg.Typs = convertToTypes(t.Types)
+		arg.RuntimeFilterSpecs = t.RuntimeFilterBuildList
 		v.Arg = arg
 	case vm.LoopSingle:
 		t := opr.GetSingleJoin()

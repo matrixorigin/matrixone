@@ -20,7 +20,6 @@ import (
 	"sync"
 
 	"github.com/google/uuid"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
@@ -50,9 +49,6 @@ type Server struct {
 	sync.Mutex
 
 	hakeeper      logservice.CNHAKeeperClient
-	CNSegmentId   types.Uuid
-	InitSegmentId bool
-	// currentFileOffset uint16
 	uuidCsChanMap UuidProcMap
 	//txn's local segments.
 	cnSegmentMap CnSegmentMap
