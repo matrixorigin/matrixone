@@ -685,7 +685,7 @@ func (r *blockMergeReader) loadDeletes(ctx context.Context, cols []string) error
 
 	//TODO:: if r.table.writes is a map , the time complexity could be O(1)
 	//load deletes from txn.writes for the specified block
-	r.table.db.txn.forEachTableWrites(r.table.db.databaseId, r.table.tableId, func(entry Entry) {
+	r.table.db.txn.forEachTableWrites(r.table.db.databaseId, r.table.tableId, r.table.getSnapshotWriteOffset(), func(entry Entry) {
 		if entry.isGeneratedByTruncate() {
 			return
 		}

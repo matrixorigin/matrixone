@@ -889,11 +889,10 @@ func (txn *Transaction) getUncommitedDataObjectsByTable(
 
 }
 
-func (txn *Transaction) forEachTableWrites(databaseId uint64, tableId uint64, f func(Entry)) {
-	j := txn.getWriteOffset()
+func (txn *Transaction) forEachTableWrites(databaseId uint64, tableId uint64, offset int, f func(Entry)) {
 	txn.Lock()
 	defer txn.Unlock()
-	for i := 0; i < j; i++ {
+	for i := 0; i < offset; i++ {
 		e := txn.writes[i]
 		if e.databaseId != databaseId {
 			continue
@@ -1033,4 +1032,10 @@ func (txn *Transaction) getWriteOffset() int {
 		return txn.statements[txn.statementID-1]
 	}
 	return 0
+}
+
+func (txn *Transaction) snapshotWriteOffset() int {
+	txn.Lock()
+	defer txn.Unlock()
+	return len(txn.writes)
 }

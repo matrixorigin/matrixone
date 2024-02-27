@@ -80,7 +80,7 @@ func (tbl *txnTable) Rows(ctx context.Context) (uint64, error) {
 	e := tbl.getEngine()
 	var rows uint64
 	deletes := make(map[types.Rowid]struct{})
-	tbl.db.txn.forEachTableWrites(tbl.db.databaseId, tbl.tableId, func(entry Entry) {
+	tbl.db.txn.forEachTableWrites(tbl.db.databaseId, tbl.tableId, tbl.getSnapshotWriteOffset(), func(entry Entry) {
 		if entry.typ == INSERT || entry.typ == INSERT_TXN {
 			rows = rows + uint64(entry.bat.RowCount())
 		} else {
@@ -160,7 +160,7 @@ func (tbl *txnTable) Size(ctx context.Context, columnName string) (uint64, error
 	}
 
 	deletes := make(map[types.Rowid]struct{})
-	tbl.db.txn.forEachTableWrites(tbl.db.databaseId, tbl.tableId, func(entry Entry) {
+	tbl.db.txn.forEachTableWrites(tbl.db.databaseId, tbl.tableId, tbl.getSnapshotWriteOffset(), func(entry Entry) {
 		if entry.typ == INSERT || entry.typ == INSERT_TXN {
 			for i, s := range entry.bat.Attrs {
 				if _, ok := neededCols[s]; ok {
@@ -551,6 +551,8 @@ func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr) (ranges eng
 		v2.TxnTableRangeDurationHistogram.Observe(time.Since(start).Seconds())
 	}()
 
+	tbl.updateSnapshotWriteOffset()
+
 	// make sure we have the block infos snapshot
 	if err = tbl.UpdateObjectInfos(ctx); err != nil {
 		return
@@ -674,7 +676,7 @@ func (tbl *txnTable) rangesOnePart(
 		}, uncommittedObjects...)
 	}
 
-	tbl.db.txn.forEachTableWrites(tbl.db.databaseId, tbl.tableId, func(entry Entry) {
+	tbl.db.txn.forEachTableWrites(tbl.db.databaseId, tbl.tableId, tbl.getSnapshotWriteOffset(), func(entry Entry) {
 		// the CN workspace can only handle `INSERT` and `DELETE` operations. Other operations will be skipped,
 		// TODO Adjustments will be made here in the future
 		if entry.typ == DELETE || entry.typ == DELETE_TXN {
@@ -2262,4 +2264,17 @@ func (tbl *txnTable) readNewRowid(vec *vector.Vector, row int,
 
 func (tbl *txnTable) newPkFilter(pkExpr, constExpr *plan.Expr) (*plan.Expr, error) {
 	return plan2.BindFuncExprImplByPlanExpr(tbl.proc.Load().Ctx, "=", []*plan.Expr{pkExpr, constExpr})
+}
+
+func (tbl *txnTable) getSnapshotWriteOffset() int {
+	tbl.Lock()
+	defer tbl.Unlock()
+	return tbl.snapshotWriteOffset
+}
+
+// Before executing an SQL statement, take a snapshot to ensure that the SQL statement does not read the data it writes.
+func (tbl *txnTable) updateSnapshotWriteOffset() {
+	tbl.Lock()
+	defer tbl.Unlock()
+	tbl.snapshotWriteOffset = tbl.db.txn.snapshotWriteOffset()
 }

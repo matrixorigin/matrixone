@@ -527,6 +527,10 @@ type txnTable struct {
 	// timestamp of the last operation on this table
 	lastTS timestamp.Timestamp
 
+	// the last snapshot write offset
+	// instead the writes
+	snapshotWriteOffset int
+
 	// this should be the statement id
 	// but seems that we're not maintaining it at the moment
 	// localTS timestamp.Timestamp
