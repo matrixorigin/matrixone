@@ -77,7 +77,7 @@ func (builder *QueryBuilder) remapColRefForExpr(expr *Expr, colMap map[[2]int32]
 				keys = append(keys, fmt.Sprintf("%v", k))
 			}
 			mapKeys := fmt.Sprintf("{ %s }", strings.Join(keys, ", "))
-			return moerr.NewParseError(builder.GetContext(), "can't find column %v in context's map %s", mapID, mapKeys)
+			return moerr.NewParseError(builder.GetContext(), "can't find column %v in context's map %s \n %s", mapID, mapKeys, ne)
 		}
 
 	case *plan.Expr_F:
