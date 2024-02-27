@@ -2108,6 +2108,14 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node) (*Sco
 		}
 	}
 
+	filterExpr := colexec.RewriteFilterExprList(n.FilterList)
+	if filterExpr != nil {
+		filterExpr, err = plan2.ConstantFold(batch.EmptyForConstFoldBatch, plan2.DeepCopyExpr(filterExpr), c.proc, true)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	s = newScope(Remote)
 	s.NodeInfo = node
 	s.DataSource = &Source{
@@ -2118,7 +2126,7 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node) (*Sco
 		PartitionRelationNames: partitionRelNames,
 		SchemaName:             n.ObjRef.SchemaName,
 		AccountId:              n.ObjRef.GetPubInfo(),
-		FilterExpr:             plan2.DeepCopyExpr(colexec.RewriteFilterExprList(n.FilterList)),
+		FilterExpr:             plan2.DeepCopyExpr(filterExpr),
 		node:                   n,
 		RuntimeFilterSpecs:     n.RuntimeFilterProbeList,
 		OrderBy:                n.OrderBy,
