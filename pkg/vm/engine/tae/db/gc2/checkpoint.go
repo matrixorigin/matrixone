@@ -78,6 +78,11 @@ type checkpointCleaner struct {
 	delWorker *GCWorker
 
 	disableGC bool
+
+	snapshots struct {
+		sync.RWMutex
+		snapshots []types.TS
+	}
 }
 
 func NewCheckpointCleaner(
@@ -397,14 +402,15 @@ func (c *checkpointCleaner) CheckGC() error {
 		// TODO
 		return moerr.NewInternalErrorNoCtx("processing clean %s: %v", debugCandidates[0].String(), err)
 	}
-	debugTable.SoftGC(gcTable, gCkp.GetEnd(), []types.TS{})
+	snapshots, _ := c.GetSnapshots()
+	debugTable.SoftGC(gcTable, gCkp.GetEnd(), snapshots)
 	var mergeTable *GCTable
 	if len(c.inputs.tables) > 1 {
 		mergeTable = NewGCTable()
 		for _, table := range c.inputs.tables {
 			mergeTable.Merge(table)
 		}
-		mergeTable.SoftGC(gcTable, gCkp.GetEnd(), []types.TS{})
+		mergeTable.SoftGC(gcTable, gCkp.GetEnd(), snapshots)
 	} else {
 		mergeTable = c.inputs.tables[0]
 	}
@@ -413,7 +419,11 @@ func (c *checkpointCleaner) CheckGC() error {
 		logutil.Errorf("debugTable :%v", debugTable.String())
 		return moerr.NewInternalErrorNoCtx("Compare is failed")
 	} else {
+		for _, snapshot := range snapshots {
+			logutil.Infof("snapshot is %v", snapshot.ToString())
+		}
 		logutil.Info("[DiskCleaner]", common.OperationField("Compare is End"),
+			common.AnyField("table :", debugTable.String()),
 			common.OperandField(start1.ToString()))
 	}
 	return nil
@@ -523,5 +533,13 @@ func (c *checkpointCleaner) createNewInput(
 }
 
 func (c *checkpointCleaner) GetSnapshots() ([]types.TS, error) {
-	return []types.TS{}, nil
+	c.snapshots.Lock()
+	defer c.snapshots.Unlock()
+	return c.snapshots.snapshots, nil
+}
+
+func (c *checkpointCleaner) SnapshotForTest(snapshot types.TS) {
+	c.snapshots.Lock()
+	defer c.snapshots.Unlock()
+	c.snapshots.snapshots = append(c.snapshots.snapshots, snapshot)
 }

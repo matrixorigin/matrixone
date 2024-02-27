@@ -19,6 +19,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -60,6 +61,7 @@ func (t *GCTable) addObject(name string, objEntry *ObjectEntry, commitTS types.T
 		t.objects[name] = objEntry
 		return
 	}
+	t.objects[name] = objEntry
 	if object.commitTS.Less(commitTS) {
 		t.objects[name].commitTS = commitTS
 	}
@@ -88,9 +90,13 @@ func (t *GCTable) getObjects() map[string]*ObjectEntry {
 func (t *GCTable) SoftGC(table *GCTable, ts types.TS, snapShotList []types.TS) []string {
 	gc := make([]string, 0)
 	objects := t.getObjects()
+	for _, snap := range snapShotList {
+		logutil.Infof("SoftGC: snap %v", snap.ToString())
+	}
 	for name, entry := range objects {
 		objectEntry := table.objects[name]
 		if objectEntry == nil && entry.commitTS.Less(ts) && !isSnapshotRefers(entry, snapShotList) {
+			logutil.Infof("SoftGC: %s, entry create %v, drop %v", name, entry.createTS.ToString(), entry.dropTS.ToString())
 			gc = append(gc, name)
 			t.deleteObject(name)
 		}
@@ -103,14 +109,16 @@ func isSnapshotRefers(obj *ObjectEntry, snapShotList []types.TS) bool {
 	for left <= right {
 		mid := left + (right-left)/2
 		if snapShotList[mid].GreaterEq(obj.createTS) && snapShotList[mid].Less(obj.dropTS) {
-			return true
+			logutil.Infof("isSnapshotRefers: %s, create %v, drop %v", snapShotList[mid].ToString(), obj.createTS.ToString(), obj.dropTS.ToString())
+			return false
 		} else if snapShotList[mid].Less(obj.createTS) {
 			left = mid + 1
 		} else {
 			right = mid - 1
 		}
 	}
-	return false
+	logutil.Infof(" create %v, drop %v", obj.createTS.ToString(), obj.dropTS.ToString())
+	return true
 }
 
 func (t *GCTable) UpdateTable(data *logtail.CheckpointData) {
@@ -159,6 +167,8 @@ func (t *GCTable) collectData(files []string) []*containers.Batch {
 	}
 	for name, entry := range t.objects {
 		bats[CreateBlock].GetVectorByName(GCAttrObjectName).Append([]byte(name), false)
+		bats[CreateBlock].GetVectorByName(GCCreateTS).Append(entry.createTS, false)
+		bats[CreateBlock].GetVectorByName(GCDeleteTS).Append(entry.dropTS, false)
 		bats[CreateBlock].GetVectorByName(GCAttrCommitTS).Append(entry.commitTS, false)
 	}
 	return bats
@@ -205,11 +215,15 @@ func (t *GCTable) SaveFullTable(start, end types.TS, fs *objectio.ObjectFS, file
 func (t *GCTable) rebuildTable(bats []*containers.Batch) {
 	for i := 0; i < bats[CreateBlock].Length(); i++ {
 		name := string(bats[CreateBlock].GetVectorByName(GCAttrObjectName).Get(i).([]byte))
+		creatTS := bats[CreateBlock].GetVectorByName(GCCreateTS).Get(i).(types.TS)
+		deleteTS := bats[CreateBlock].GetVectorByName(GCDeleteTS).Get(i).(types.TS)
 		commitTS := bats[CreateBlock].GetVectorByName(GCAttrCommitTS).Get(i).(types.TS)
 		if t.objects[name] != nil {
 			continue
 		}
 		object := &ObjectEntry{
+			createTS: creatTS,
+			dropTS:   deleteTS,
 			commitTS: commitTS,
 		}
 		t.addObject(name, object, commitTS)

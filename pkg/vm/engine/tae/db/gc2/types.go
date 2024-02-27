@@ -46,15 +46,21 @@ const (
 	GCAttrTableId    = "table_id"
 	GCAttrDBId       = "db_id"
 	GCAttrCommitTS   = "commit_ts"
+	GCCreateTS       = "create_time"
+	GCDeleteTS       = "delete_time"
 )
 
 var (
 	BlockSchemaAttr = []string{
 		GCAttrObjectName,
+		GCCreateTS,
+		GCDeleteTS,
 		GCAttrCommitTS,
 	}
 	BlockSchemaTypes = []types.Type{
 		types.New(types.T_varchar, 5000, 0),
+		types.New(types.T_TS, types.MaxVarcharLen, 0),
+		types.New(types.T_TS, types.MaxVarcharLen, 0),
 		types.New(types.T_TS, types.MaxVarcharLen, 0),
 	}
 
@@ -93,4 +99,5 @@ type Cleaner interface {
 	GetMinMerged() *checkpoint.CheckpointEntry
 	CheckGC() error
 	GetInputs() *GCTable
+	SnapshotForTest(snapshots types.TS)
 }
