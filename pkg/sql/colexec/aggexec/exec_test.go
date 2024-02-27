@@ -51,11 +51,15 @@ func TestSingleAggFuncExec1(t *testing.T) {
 
 	info := singleAggInfo{
 		aggID:     1,
+		distinct:  false,
 		argType:   types.T_int32.ToType(),
 		retType:   types.T_int64.ToType(),
 		emptyNull: false,
 	}
-	executor := MakeAgg(proc, info.aggID, info.emptyNull, info.argType, info.retType, gTesSingleAggPrivate1)
+	executor := MakeAgg(
+		proc,
+		info.aggID, info.distinct, info.emptyNull, info.argType, info.retType,
+		gTesSingleAggPrivate1)
 
 	// input first row of [3, null, 4, 5] - count 1
 	// input second row of [3, null, 4, 5] - count 1
@@ -155,11 +159,15 @@ func TestMultiAggFuncExec1(t *testing.T) {
 
 	info := multiAggInfo{
 		aggID:     2,
+		distinct:  false,
 		argTypes:  []types.Type{types.T_int64.ToType(), types.T_bool.ToType()},
 		retType:   types.T_int64.ToType(),
 		emptyNull: false,
 	}
-	executor := MakeMultiAgg(proc, 2, info.emptyNull, info.argTypes, info.retType, gTesMultiAggPrivate1)
+	executor := MakeMultiAgg(
+		proc,
+		2, info.distinct, info.emptyNull, info.argTypes, info.retType,
+		gTesMultiAggPrivate1)
 
 	// input first row of [{null, false}, {1, true}] - count 0
 	// input second row of [{null, false}, {1, true}] - count 1
@@ -230,7 +238,8 @@ func TestGroupConcatExec(t *testing.T) {
 	proc := testutil.NewProcess()
 
 	info := multiAggInfo{
-		aggID: 3,
+		aggID:    3,
+		distinct: false,
 		argTypes: []types.Type{
 			types.T_varchar.ToType(),
 			types.T_char.ToType(),
@@ -238,7 +247,7 @@ func TestGroupConcatExec(t *testing.T) {
 		retType:   types.T_text.ToType(),
 		emptyNull: false,
 	}
-	executor := MakeGroupConcat(proc, info.aggID, info.argTypes, info.retType, ",")
+	executor := MakeGroupConcat(proc, info.aggID, info.distinct, info.argTypes, info.retType, ",")
 
 	// group concat the vector1 and vector2.
 	// vector1: ["a", "b", "c", "d"].
@@ -283,7 +292,10 @@ func TestGroupConcatExec(t *testing.T) {
 func TestEmptyNullFlag(t *testing.T) {
 	proc := testutil.NewProcess()
 	{
-		executor := MakeAgg(proc, 1, true, types.T_int32.ToType(), types.T_int64.ToType(), gTesSingleAggPrivate1)
+		executor := MakeAgg(
+			proc,
+			1, false, true, types.T_int32.ToType(), types.T_int64.ToType(),
+			gTesSingleAggPrivate1)
 		require.NoError(t, executor.GroupGrow(1))
 		v, err := executor.Flush()
 		require.NoError(t, err)
@@ -292,7 +304,10 @@ func TestEmptyNullFlag(t *testing.T) {
 		executor.Free()
 	}
 	{
-		executor := MakeAgg(proc, 1, false, types.T_int32.ToType(), types.T_int64.ToType(), gTesSingleAggPrivate1)
+		executor := MakeAgg(
+			proc,
+			1, false, false, types.T_int32.ToType(), types.T_int64.ToType(),
+			gTesSingleAggPrivate1)
 		require.NoError(t, executor.GroupGrow(1))
 		v, err := executor.Flush()
 		require.NoError(t, err)
@@ -302,7 +317,10 @@ func TestEmptyNullFlag(t *testing.T) {
 		executor.Free()
 	}
 	{
-		executor := MakeMultiAgg(proc, 2, true, []types.Type{types.T_int64.ToType(), types.T_bool.ToType()}, types.T_int64.ToType(), gTesMultiAggPrivate1)
+		executor := MakeMultiAgg(
+			proc,
+			2, false, true, []types.Type{types.T_int64.ToType(), types.T_bool.ToType()}, types.T_int64.ToType(),
+			gTesMultiAggPrivate1)
 		require.NoError(t, executor.GroupGrow(1))
 		v, err := executor.Flush()
 		require.NoError(t, err)
@@ -311,7 +329,10 @@ func TestEmptyNullFlag(t *testing.T) {
 		executor.Free()
 	}
 	{
-		executor := MakeMultiAgg(proc, 2, false, []types.Type{types.T_int64.ToType(), types.T_bool.ToType()}, types.T_int64.ToType(), gTesMultiAggPrivate1)
+		executor := MakeMultiAgg(
+			proc,
+			2, false, false, []types.Type{types.T_int64.ToType(), types.T_bool.ToType()}, types.T_int64.ToType(),
+			gTesMultiAggPrivate1)
 		require.NoError(t, executor.GroupGrow(1))
 		v, err := executor.Flush()
 		require.NoError(t, err)

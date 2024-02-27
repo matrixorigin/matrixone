@@ -23,9 +23,10 @@ import (
 
 // singleAggInfo contains the basic information of single column agg.
 type singleAggInfo struct {
-	aggID   int64
-	argType types.Type
-	retType types.Type
+	aggID    int64
+	distinct bool
+	argType  types.Type
+	retType  types.Type
 
 	// emptyNull indicates that whether we should return null for a group without any input value.
 	emptyNull bool
@@ -37,6 +38,10 @@ func (info singleAggInfo) String() string {
 
 func (info singleAggInfo) AggID() int64 {
 	return info.aggID
+}
+
+func (info singleAggInfo) IsDistinct() bool {
+	return info.distinct
 }
 
 func (info singleAggInfo) TypesInfo() ([]types.Type, types.Type) {

@@ -23,6 +23,7 @@ import (
 
 type multiAggInfo struct {
 	aggID    int64
+	distinct bool
 	argTypes []types.Type
 	retType  types.Type
 
@@ -41,6 +42,10 @@ func (info multiAggInfo) String() string {
 
 func (info multiAggInfo) AggID() int64 {
 	return info.aggID
+}
+
+func (info multiAggInfo) IsDistinct() bool {
+	return info.distinct
 }
 
 func (info multiAggInfo) TypesInfo() ([]types.Type, types.Type) {

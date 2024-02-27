@@ -22,6 +22,8 @@ type aggBytesSetter func(value []byte) error
 type aggGetter[T types.FixedSizeTExceptStrType] func() T
 type aggBytesGetter func() []byte
 
+// todo: marshal and unmarshal were needed.
+
 /*
 	all codes below are the interface of aggregation's private structure.
 	each aggregation has its own private structure to do the aggregation.

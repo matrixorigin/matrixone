@@ -15,6 +15,7 @@
 package aggexec
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -30,6 +31,7 @@ const (
 // todo: use vector... to replace the []*vector.Vector may be better.
 type AggFuncExec interface {
 	AggID() int64
+	IsDistinct() bool
 
 	// TypesInfo return the argument types and return type of the function.
 	TypesInfo() ([]types.Type, types.Type)
@@ -47,6 +49,8 @@ type AggFuncExec interface {
 	BatchMerge(next AggFuncExec, offset int, groups []uint64) error
 
 	// SetPreparedResult add a partial result to speed up.
+	// todo: the old implementation is not good, we should use the vector.Vector to replace the any.
+	// but for first version, I will keep it.
 	SetPreparedResult(partialResult any, groupIndex int)
 
 	// Flush return the aggregation result.
@@ -70,6 +74,9 @@ var (
 // MarshalBinary and UnmarshalBinary are used to serialize and deserialize the aggregation function.
 // todo: not implemented yet.
 func MarshalBinary(agg AggFuncExec) ([]byte, error) {
+	if agg.IsDistinct() {
+		return nil, moerr.NewInternalErrorNoCtx("distinct agg should not be serialized")
+	}
 	return nil, nil
 }
 
@@ -83,10 +90,11 @@ func UnmarshalBinary(data []byte) (AggFuncExec, error) {
 //	we can only use the aggID to create the aggregation function executor.
 func MakeAgg(
 	proc *process.Process,
-	aggID int64, emptyIsNull bool,
+	aggID int64, isDistinct bool, emptyIsNull bool,
 	param types.Type, result types.Type, implementationAllocator any) AggFuncExec {
 	info := singleAggInfo{
 		aggID:     aggID,
+		distinct:  isDistinct,
 		argType:   param,
 		retType:   result,
 		emptyNull: emptyIsNull,
@@ -113,10 +121,11 @@ func MakeAgg(
 // MakeMultiAgg supports creating an aggregation function executor for multiple columns.
 func MakeMultiAgg(
 	proc *process.Process,
-	aggID int64, emptyIsNull bool,
+	aggID int64, isDistinct bool, emptyIsNull bool,
 	param []types.Type, result types.Type, implementationAllocator any) AggFuncExec {
 	info := multiAggInfo{
 		aggID:     aggID,
+		distinct:  isDistinct,
 		argTypes:  param,
 		retType:   result,
 		emptyNull: emptyIsNull,
@@ -128,10 +137,12 @@ func MakeMultiAgg(
 // it supports creating an aggregation function executor for special aggregation `group_concat()`.
 func MakeGroupConcat(
 	proc *process.Process,
-	aggID int64, param []types.Type, result types.Type,
+	aggID int64, isDistinct bool,
+	param []types.Type, result types.Type,
 	separator string) AggFuncExec {
 	info := multiAggInfo{
 		aggID:     aggID,
+		distinct:  isDistinct,
 		argTypes:  param,
 		retType:   result,
 		emptyNull: true,
