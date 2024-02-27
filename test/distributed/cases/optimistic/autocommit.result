@@ -57,7 +57,6 @@ create table t2 (a int);
 rollback;
 select * from t2;
 SQL parser error: table "t2" does not exist
-Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
 insert into t1 values(3);
 use autocommit;
 show tables;
