@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/panjf2000/ants/v2"
 	"math"
 	"math/rand"
 	"sync"
@@ -153,6 +154,7 @@ type StorageUsageCache struct {
 	lastUpdate    time.Time
 	// accId -> dbId -> [tblId, size]
 	data     *btree.BTreeG[UsageData]
+	works    *ants.Pool
 	lessFunc func(a UsageData, b UsageData) bool
 }
 
@@ -162,6 +164,16 @@ type StorageUsageCacheOption = func(c *StorageUsageCache)
 func WithLazyThreshold(lazy int) StorageUsageCacheOption {
 	return StorageUsageCacheOption(func(c *StorageUsageCache) {
 		c.lazyThreshold = time.Second * time.Duration(lazy)
+	})
+}
+
+func WithWorkers(num int) StorageUsageCacheOption {
+	return StorageUsageCacheOption(func(c *StorageUsageCache) {
+		if pool, err := ants.NewPool(num); err == nil {
+			c.works = pool
+		} else {
+			logutil.Error("ants.NewPool failed", zap.Error(err))
+		}
 	})
 }
 
@@ -189,6 +201,12 @@ func NewStorageUsageCache(opts ...StorageUsageCacheOption) *StorageUsageCache {
 func (c *StorageUsageCache) fillDefault() {
 	c.lessFunc = usageLess
 	c.lazyThreshold = 0
+}
+
+func (c *StorageUsageCache) ExecuteJob(task func(c *StorageUsageCache)) {
+	c.works.Submit(func() {
+		task(c)
+	})
 }
 
 func (c *StorageUsageCache) LessFunc() func(a UsageData, b UsageData) bool {
