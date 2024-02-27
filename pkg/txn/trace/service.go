@@ -484,7 +484,7 @@ func (s *service) AddEntryFilter(name string, columns []string) error {
 	defer cancel()
 
 	now, _ := s.clock.Now()
-	err := s.executor.ExecTxn(
+	return s.executor.ExecTxn(
 		ctx,
 		func(txn executor.TxnExecutor) error {
 			txn.Use("mo_catalog")
@@ -518,11 +518,6 @@ func (s *service) AddEntryFilter(name string, columns []string) error {
 			WithWaitCommittedLogApplied().
 			WithDisableLock().
 			WithDisableTrace())
-	if err != nil {
-		return err
-	}
-
-	return s.RefreshFilters()
 }
 
 func (s *service) ClearFilters() error {
