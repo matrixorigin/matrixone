@@ -395,7 +395,9 @@ func (txn *Transaction) gcObjs(start int, ctx context.Context) error {
 	step := GCBatchOfFileCount
 	if len(objsName) > 0 && len(objsName) < step {
 		if err := txn.engine.gcPool.Submit(func() {
-			if err := txn.engine.fs.Delete(context.Background(), objsName...); err != nil {
+			if err := txn.engine.fs.Delete(
+				context.Background(),
+				objsName...); err != nil {
 				logutil.Warnf("failed to delete objects:%v, err:%v",
 					objsName,
 					err)
@@ -410,8 +412,13 @@ func (txn *Transaction) gcObjs(start int, ctx context.Context) error {
 		if i+step > len(objsName) {
 			step = len(objsName) - i
 		}
+		start := i
+		end := i + step
 		if err := txn.engine.gcPool.Submit(func() {
-			if err := txn.engine.fs.Delete(context.Background(), objsName[i:i+step]...); err != nil {
+			//notice that the closure can't capture the loop variable i, so we need to use start and end.
+			if err := txn.engine.fs.Delete(
+				context.Background(),
+				objsName[start:end]...); err != nil {
 				logutil.Warnf("failed to delete objects:%v, err:%v",
 					objsName[i:i+step],
 					err)
