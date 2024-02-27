@@ -2036,6 +2036,17 @@ func (c *Compile) compileTableFunction(n *plan.Node, ss []*Scope) []*Scope {
 }
 
 func (c *Compile) compileTableScan(n *plan.Node) ([]*Scope, error) {
+
+	// for dynamic parameter, sustitute param ref and const fold cast expression here to improve performance
+	newFilters, err := plan2.ConstandFoldList(n.FilterList, c.proc, true)
+	if err == nil {
+		n.FilterList = newFilters
+	}
+	newBlockFilters, err := plan2.ConstandFoldList(n.BlockFilterList, c.proc, true)
+	if err == nil {
+		n.BlockFilterList = newBlockFilters
+	}
+
 	nodes, partialResults, partialResultTypes, err := c.generateNodes(n)
 	if err != nil {
 		return nil, err
@@ -2108,14 +2119,6 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node) (*Sco
 		}
 	}
 
-	filterExpr := colexec.RewriteFilterExprList(n.FilterList)
-	if filterExpr != nil {
-		filterExpr, err = plan2.ConstantFold(batch.EmptyForConstFoldBatch, plan2.DeepCopyExpr(filterExpr), c.proc, true)
-		if err != nil {
-			return nil, err
-		}
-	}
-
 	s = newScope(Remote)
 	s.NodeInfo = node
 	s.DataSource = &Source{
@@ -2126,7 +2129,7 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node) (*Sco
 		PartitionRelationNames: partitionRelNames,
 		SchemaName:             n.ObjRef.SchemaName,
 		AccountId:              n.ObjRef.GetPubInfo(),
-		FilterExpr:             plan2.DeepCopyExpr(filterExpr),
+		FilterExpr:             plan2.DeepCopyExpr(colexec.RewriteFilterExprList(n.FilterList)),
 		node:                   n,
 		RuntimeFilterSpecs:     n.RuntimeFilterProbeList,
 		OrderBy:                n.OrderBy,

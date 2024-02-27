@@ -575,23 +575,11 @@ func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr) (ranges eng
 	var blocks objectio.BlockInfoSlice
 	blocks.AppendBlockInfo(objectio.EmptyBlockInfo)
 
-	// for dynamic parameter, sustitute param ref and const fold cast expression here to improve performance
-	// temporary solution, will fix it in the future
-	newExprs := make([]*plan.Expr, len(exprs))
-	for i := range exprs {
-		newExprs[i] = plan2.DeepCopyExpr(exprs[i])
-		// newExprs[i] = plan2.SubstitueParam(newExprs[i], tbl.proc)
-		foldedExpr, _ := plan2.ConstantFold(batch.EmptyForConstFoldBatch, newExprs[i], tbl.proc.Load(), true)
-		if foldedExpr != nil {
-			newExprs[i] = foldedExpr
-		}
-	}
-
 	if err = tbl.rangesOnePart(
 		ctx,
 		part,
 		tbl.GetTableDef(ctx),
-		newExprs,
+		exprs,
 		&blocks,
 		tbl.proc.Load(),
 	); err != nil {
