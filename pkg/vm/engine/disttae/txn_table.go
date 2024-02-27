@@ -575,6 +575,12 @@ func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr) (ranges eng
 	var blocks objectio.BlockInfoSlice
 	blocks.AppendBlockInfo(objectio.EmptyBlockInfo)
 
+	// for dynamic parameter, substitute param ref and const fold cast expression here to improve performance
+	newExprs, err := plan2.ConstandFoldList(exprs, tbl.proc.Load(), true)
+	if err == nil {
+		exprs = newExprs
+	}
+
 	if err = tbl.rangesOnePart(
 		ctx,
 		part,
