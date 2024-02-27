@@ -251,29 +251,6 @@ func (builder *QueryBuilder) remapWindowClause(expr *plan.Expr, windowTag int32,
 	}
 }
 
-/*
-func getJoinCondLeftCol(cond *Expr, leftTags map[int32]bool) *plan.Expr_Col {
-	fun, ok := cond.Expr.(*plan.Expr_F)
-	if !ok || fun.F.Func.ObjName != "=" {
-		return nil
-	}
-	leftCol, ok := fun.F.Args[0].Expr.(*plan.Expr_Col)
-	if !ok {
-		return nil
-	}
-	rightCol, ok := fun.F.Args[1].Expr.(*plan.Expr_Col)
-	if !ok {
-		return nil
-	}
-	if leftTags[leftCol.Col.RelPos] {
-		return leftCol
-	}
-	if leftTags[rightCol.Col.RelPos] {
-		return rightCol
-	}
-	return nil
-}*/
-
 // if join cond is a=b and a=c, we can remove a=c to improve join performance
 func (builder *QueryBuilder) removeRedundantJoinCond(nodeID int32, colMap map[[2]int32]int, colGroup []int) []int {
 	node := builder.qry.Nodes[nodeID]
@@ -286,22 +263,22 @@ func (builder *QueryBuilder) removeRedundantJoinCond(nodeID int32, colMap map[[2
 
 	newOnList := make([]*plan.Expr, 0)
 	for _, expr := range node.OnList {
-		if exprf, ok := expr.Expr.(*plan.Expr_F); ok {
-			if IsEqualFunc(exprf.F.Func.GetObj()) {
-				leftcol, leftok := exprf.F.Args[0].Expr.(*plan.Expr_Col)
-				rightcol, rightok := exprf.F.Args[1].Expr.(*plan.Expr_Col)
-				if leftok && rightok {
-					left, leftok := colMap[[2]int32{leftcol.Col.RelPos, leftcol.Col.ColPos}]
+		if exprf := expr.GetF(); exprf != nil {
+			if IsEqualFunc(exprf.Func.GetObj()) {
+				leftcol := exprf.Args[0].GetCol()
+				rightcol := exprf.Args[1].GetCol()
+				if leftcol != nil && rightcol != nil {
+					left, leftok := colMap[[2]int32{leftcol.RelPos, leftcol.ColPos}]
 					if !leftok {
 						left = len(colGroup)
 						colGroup = append(colGroup, left)
-						colMap[[2]int32{leftcol.Col.RelPos, leftcol.Col.ColPos}] = left
+						colMap[[2]int32{leftcol.RelPos, leftcol.ColPos}] = left
 					}
-					right, rightok := colMap[[2]int32{rightcol.Col.RelPos, rightcol.Col.ColPos}]
+					right, rightok := colMap[[2]int32{rightcol.RelPos, rightcol.ColPos}]
 					if !rightok {
 						right = len(colGroup)
 						colGroup = append(colGroup, right)
-						colMap[[2]int32{rightcol.Col.RelPos, rightcol.Col.ColPos}] = right
+						colMap[[2]int32{rightcol.RelPos, rightcol.ColPos}] = right
 					}
 					for colGroup[left] != colGroup[colGroup[left]] {
 						colGroup[left] = colGroup[colGroup[left]]
@@ -600,9 +577,8 @@ func (builder *QueryBuilder) rewriteEffectlessAggToProject(nodeID int32) {
 	}
 	groupCol := make([]int32, 0)
 	for _, expr := range node.GroupBy {
-		col, ok := expr.Expr.(*plan.Expr_Col)
-		if ok {
-			groupCol = append(groupCol, col.Col.ColPos)
+		if col := expr.GetCol(); col != nil {
+			groupCol = append(groupCol, col.ColPos)
 		}
 	}
 	if !containsAllPKs(groupCol, scan.TableDef) {

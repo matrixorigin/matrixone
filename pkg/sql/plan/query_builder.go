@@ -637,7 +637,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 		if child.NodeType == plan.Node_TABLE_SCAN && len(child.FilterList) == 0 && len(node.GroupBy) == 0 && child.Limit == nil && child.Offset == nil {
 			child.AggList = make([]*Expr, 0, len(node.AggList))
 			for _, agg := range node.AggList {
-				switch agg.Expr.(*plan.Expr_F).F.Func.ObjName {
+				switch agg.GetF().Func.ObjName {
 				case "starcount", "count", "min", "max":
 					child.AggList = append(child.AggList, DeepCopyExpr(agg))
 				default:
@@ -1333,7 +1333,7 @@ func (builder *QueryBuilder) markSinkProject(nodeID int32, step int32, colRefBoo
 		for _, i := range node.SourceStep {
 			if i >= step {
 				for _, expr := range node.ProjectList {
-					colRefBool[[2]int32{i, expr.Expr.(*plan.Expr_Col).Col.ColPos}] = true
+					colRefBool[[2]int32{i, expr.GetCol().ColPos}] = true
 				}
 			}
 		}
@@ -1344,36 +1344,20 @@ func (builder *QueryBuilder) markSinkProject(nodeID int32, step int32, colRefBoo
 	}
 }
 
-//func (builder *QueryBuilder) remapSinkScanColRefs(nodeID int32, step int32, sinkColRef map[[2]int32]int) {
-//	node := builder.qry.Nodes[nodeID]
-//
-//	switch node.NodeType {
-//	case plan.Node_SINK_SCAN:
-//		for _, expr := range node.ProjectList {
-//			expr.Expr.(*plan.Expr_Col).Col.ColPos = int32(sinkColRef[[2]int32{step, expr.Expr.(*plan.Expr_Col).Col.ColPos}])
-//		}
-//	default:
-//		for i := range node.Children {
-//			builder.remapSinkScanColRefs(node.Children[i], step, sinkColRef)
-//		}
-//	}
-//}
-
 func (builder *QueryBuilder) rewriteStarApproxCount(nodeID int32) {
 	node := builder.qry.Nodes[nodeID]
 
 	switch node.NodeType {
 	case plan.Node_AGG:
 		if len(node.GroupBy) == 0 && len(node.AggList) == 1 {
-			agg, ok := node.AggList[0].Expr.(*plan.Expr_F)
-			if ok && agg.F.Func.ObjName == "approx_count" {
+			if agg := node.AggList[0].GetF(); agg != nil && agg.Func.ObjName == "approx_count" {
 				if len(node.Children) == 1 {
 					child := builder.qry.Nodes[node.Children[0]]
 					if child.NodeType == plan.Node_TABLE_SCAN && len(child.FilterList) == 0 {
-						agg.F.Func.ObjName = "sum"
+						agg.Func.ObjName = "sum"
 						fr, _ := function.GetFunctionByName(context.TODO(), "sum", []types.Type{types.T_int64.ToType()})
-						agg.F.Func.Obj = fr.GetEncodedOverloadID()
-						agg.F.Args[0] = &plan.Expr{
+						agg.Func.Obj = fr.GetEncodedOverloadID()
+						agg.Args[0] = &plan.Expr{
 							Typ: &Type{},
 							Expr: &plan.Expr_Col{
 								Col: &plan.ColRef{
@@ -1420,10 +1404,10 @@ func (builder *QueryBuilder) rewriteStarApproxCount(nodeID int32) {
 						childId := builder.appendNode(scanNode, nil)
 						node.Children[0] = builder.buildMetadataScan(nil, nil, exprs, childId)
 						child = builder.qry.Nodes[node.Children[0]]
-						switch expr := agg.F.Args[0].Expr.(type) {
+						switch expr := agg.Args[0].Expr.(type) {
 						case *plan.Expr_Col:
 							expr.Col.RelPos = child.BindingTags[0]
-							agg.F.Args[0].Typ = child.TableDef.Cols[expr.Col.ColPos].Typ
+							agg.Args[0].Typ = child.TableDef.Cols[expr.Col.ColPos].Typ
 						}
 					}
 				}
@@ -2729,7 +2713,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 		}
 
 		for i, w := range ctx.windows {
-			e := w.Expr.(*plan.Expr_W).W
+			e := w.GetW()
 			if len(e.PartitionBy) > 0 {
 				partitionBy := make([]*plan.OrderBySpec, 0, len(e.PartitionBy))
 				for _, p := range e.PartitionBy {

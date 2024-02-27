@@ -153,7 +153,7 @@ func (builder *QueryBuilder) generateRuntimeFilters(nodeID int32) {
 
 			if node.Stats.HashmapStats.HashmapSize/probeNdv >= 0.1*probeNdv/leftChild.Stats.TableCnt {
 				switch col := probeExprs[0].Expr.(type) {
-				case (*plan.Expr_Col):
+				case *plan.Expr_Col:
 					ctx := builder.ctxByNode[leftChild.NodeId]
 					if ctx == nil {
 						return
@@ -176,9 +176,9 @@ func (builder *QueryBuilder) generateRuntimeFilters(nodeID int32) {
 			Expr: DeepCopyExpr(probeExprs[0]),
 		})
 
-		col := probeExprs[0].Expr.(*plan.Expr_Col)
+		col := probeExprs[0].GetCol()
 		inLimit := GetInFilterCardLimit()
-		if leftChild.TableDef.Pkey != nil && col.Col.Name == leftChild.TableDef.Pkey.PkeyColName {
+		if leftChild.TableDef.Pkey != nil && col.Name == leftChild.TableDef.Pkey.PkeyColName {
 			inLimit = GetInFilterCardLimitOnPK(leftChild.Stats.TableCnt)
 		}
 		node.RuntimeFilterBuildList = append(node.RuntimeFilterBuildList, &plan.RuntimeFilterSpec{
@@ -215,7 +215,7 @@ func (builder *QueryBuilder) generateRuntimeFilters(nodeID int32) {
 
 	for i, expr := range probeExprs {
 		switch col := expr.Expr.(type) {
-		case (*plan.Expr_Col):
+		case *plan.Expr_Col:
 			if pos, ok := name2Pos[col.Col.Name]; ok {
 				col2Probe[pos] = i
 			}

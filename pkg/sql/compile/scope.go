@@ -331,8 +331,8 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 
 	for i := range inExprList {
 		fn := inExprList[i].GetF()
-		col, ok := fn.Args[0].Expr.(*plan.Expr_Col)
-		if !ok {
+		col := fn.Args[0].GetCol()
+		if col == nil {
 			panic("only support col in runtime filter's left child!")
 		}
 
@@ -344,7 +344,7 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 		}
 		s.DataSource.FilterExpr = colexec.RewriteFilterExprList(newExprList)
 
-		isFilterOnPK := s.DataSource.TableDef.Pkey != nil && col.Col.Name == s.DataSource.TableDef.Pkey.PkeyColName
+		isFilterOnPK := s.DataSource.TableDef.Pkey != nil && col.Name == s.DataSource.TableDef.Pkey.PkeyColName
 		if !isFilterOnPK {
 			// put expr in filter instruction
 			ins := s.Instructions[0]
