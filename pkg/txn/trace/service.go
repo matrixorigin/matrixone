@@ -124,13 +124,13 @@ func NewService(
 	}
 
 	if s.options.flushDuration == 0 {
-		s.options.flushDuration = 30 * time.Second
+		s.options.flushDuration = 60 * time.Second
 	}
 	if s.options.flushBytes == 0 {
-		s.options.flushBytes = 8 * 1024 * 1024
+		s.options.flushBytes = 16 * 1024 * 1024
 	}
 	if s.options.bufferSize == 0 {
-		s.options.bufferSize = 1000
+		s.options.bufferSize = 10000
 	}
 
 	s.txnBufC = make(chan *buffer, s.options.bufferSize)
