@@ -186,25 +186,6 @@ func (mgr *TxnManager) StartTxn(info []byte) (txn txnif.AsyncTxn, err error) {
 	return
 }
 
-// StartTxn starts a local transaction initiated by DN
-func (mgr *TxnManager) StartTxnWithLatestTS(info []byte) (txn txnif.AsyncTxn, err error) {
-	if exp := mgr.Exception.Load(); exp != nil {
-		err = exp.(error)
-		logutil.Warnf("StartTxn: %v", err)
-		return
-	}
-	mgr.Lock()
-	defer mgr.Unlock()
-	txnId := mgr.IdAlloc.Alloc()
-	startTs := mgr.TsAlloc.Alloc()
-
-	store := mgr.TxnStoreFactory()
-	txn = mgr.TxnFactory(mgr, store, txnId, startTs, types.TS{})
-	store.BindTxn(txn)
-	mgr.IDMap[string(txnId)] = txn
-	return
-}
-
 func (mgr *TxnManager) StartTxnWithStartTSAndSnapshotTS(
 	info []byte,
 	startTS, snapshotTS types.TS,
@@ -486,7 +467,9 @@ func (mgr *TxnManager) dequeuePreparing(items ...any) {
 	now := time.Now()
 	for _, item := range items {
 		op := item.(*OpTxn)
-		t0 := time.Now()
+		store := op.Txn.GetStore()
+		store.TriggerTrace(txnif.TracePreparing)
+
 		// Idempotent check
 		if state := op.Txn.GetTxnState(false); state != txnif.TxnStateActive {
 			op.Txn.WaitDone(moerr.NewTxnNotActiveNoCtx(txnif.TxnStrState(state)), false)
@@ -517,11 +500,10 @@ func (mgr *TxnManager) dequeuePreparing(items ...any) {
 			mgr.prevPrepareTSInPreparing = op.Txn.GetPrepareTS()
 		}
 
+		store.TriggerTrace(txnif.TracePrepareWalWait)
 		if err := mgr.EnqueueFlushing(op); err != nil {
 			panic(err)
 		}
-
-		v2.TxnDequeuePreparingDurationHistogram.Observe(time.Since(t0).Seconds())
 	}
 	common.DoIfDebugEnabled(func() {
 		logutil.Debug("[dequeuePreparing]",
@@ -536,6 +518,8 @@ func (mgr *TxnManager) onPrepareWAL(items ...any) {
 
 	for _, item := range items {
 		op := item.(*OpTxn)
+		store := op.Txn.GetStore()
+		store.TriggerTrace(txnif.TracePrepareWal)
 		var t1, t2, t3, t4, t5 time.Time
 		t1 = time.Now()
 		if op.Txn.GetError() == nil && op.Op == OpCommit || op.Op == OpPrepare {
@@ -544,7 +528,6 @@ func (mgr *TxnManager) onPrepareWAL(items ...any) {
 			}
 
 			t2 = time.Now()
-			v2.TxnOnPrepareWALPrepareWALDurationHistogram.Observe(t2.Sub(t1).Seconds())
 
 			if !op.Txn.IsReplay() {
 				if !mgr.prevPrepareTSInPrepareWAL.IsEmpty() {
@@ -557,16 +540,14 @@ func (mgr *TxnManager) onPrepareWAL(items ...any) {
 
 			mgr.CommitListener.OnEndPrepareWAL(op.Txn)
 			t3 = time.Now()
-
-			v2.TxnOnPrepareWALEndPrepareDurationHistogram.Observe(t3.Sub(t2).Seconds())
 		}
 
 		t4 = time.Now()
+		store.TriggerTrace(txnif.TracePreapredWait)
 		if _, err := mgr.FlushQueue.Enqueue(op); err != nil {
 			panic(err)
 		}
 		t5 = time.Now()
-		v2.TxnOnPrepareWALFlushQueueDurationHistogram.Observe(t5.Sub(t4).Seconds())
 
 		if t5.Sub(t1) > time.Second {
 			logutil.Warn(
@@ -577,7 +558,6 @@ func (mgr *TxnManager) onPrepareWAL(items ...any) {
 				zap.Duration("enqueue-flush-duration", t5.Sub(t4)),
 			)
 		}
-		v2.TxnOnPrepareWALTotalDurationHistogram.Observe(t5.Sub(t1).Seconds())
 	}
 	common.DoIfDebugEnabled(func() {
 		logutil.Debug("[prepareWAL]",
@@ -592,6 +572,8 @@ func (mgr *TxnManager) dequeuePrepared(items ...any) {
 	now := time.Now()
 	for _, item := range items {
 		op := item.(*OpTxn)
+		store := op.Txn.GetStore()
+		store.TriggerTrace(txnif.TracePrepared)
 		mgr.workers.Submit(func() {
 			//Notice that WaitPrepared do nothing when op is OpRollback
 			t0 := time.Now()
