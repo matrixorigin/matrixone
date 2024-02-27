@@ -193,8 +193,8 @@ table_name    column_name
 mo_account    account_id
 mo_account    account_name
 mo_account    comments
+mo_account    create_version
 mo_account    created_time
-mo_account    status
 desc views;
 Field    Type    Null    Key    Default    Extra    Comment
 table_catalog    VARCHAR(3)    NO        null        

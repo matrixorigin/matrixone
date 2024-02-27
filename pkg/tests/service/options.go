@@ -29,7 +29,7 @@ import (
 const (
 	// default cluster initial information
 	defaultTNServiceNum  = 1
-	defaultTNShartnum    = 1
+	defaultTNShardNum    = 1
 	defaultLogServiceNum = 1
 	defaultLogShardNum   = 1
 	defaultLogReplicaNum = 1
@@ -80,7 +80,7 @@ type Options struct {
 		tnServiceNum  int
 		logServiceNum int
 		cnServiceNum  int
-		tnShartnum    uint64
+		tnShardNum    uint64
 		logShardNum   uint64
 		cnShardNum    uint64
 		logReplicaNum uint64
@@ -110,6 +110,10 @@ type Options struct {
 		logtailCollectInterval     time.Duration
 		logtailResponseSendTimeout time.Duration
 	}
+
+	cn struct {
+		optionFunc func(i int) []cnservice.Option
+	}
 }
 
 // DefaultOptions sets a list of recommended options.
@@ -135,8 +139,8 @@ func (opt *Options) validate() {
 	if opt.initial.cnServiceNum <= 0 {
 		opt.initial.cnServiceNum = defaultCNServiceNum
 	}
-	if opt.initial.tnShartnum <= 0 {
-		opt.initial.tnShartnum = defaultTNShartnum
+	if opt.initial.tnShardNum <= 0 {
+		opt.initial.tnShardNum = defaultTNShardNum
 	}
 	if opt.initial.logShardNum <= 0 {
 		opt.initial.logShardNum = defaultLogShardNum
@@ -232,9 +236,9 @@ func (opt Options) WithLogShardNum(num uint64) Options {
 	return opt
 }
 
-// WithTNShartnum sets tn shard number in the cluster.
-func (opt Options) WithTNShartnum(num uint64) Options {
-	opt.initial.tnShartnum = num
+// WithTNShardNum sets tn shard number in the cluster.
+func (opt Options) WithTNShardNum(num uint64) Options {
+	opt.initial.tnShardNum = num
 	return opt
 }
 
@@ -375,6 +379,12 @@ func (opt Options) WithLogtailCollectInterval(interval time.Duration) Options {
 // WithLogtailResponseSendTimeout sets response send timeout for logtail push server.
 func (opt Options) WithLogtailResponseSendTimeout(timeout time.Duration) Options {
 	opt.logtailPushServer.logtailResponseSendTimeout = timeout
+	return opt
+}
+
+// WithCNOptionFunc set build cn options func
+func (opt Options) WithCNOptionFunc(fn func(i int) []cnservice.Option) Options {
+	opt.cn.optionFunc = fn
 	return opt
 }
 

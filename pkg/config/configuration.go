@@ -24,7 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/queryservice"
+	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/udf"
@@ -700,8 +700,8 @@ type ParameterUnit struct {
 	// LockService instance
 	LockService lockservice.LockService
 
-	// QueryService instance
-	QueryService queryservice.QueryService
+	// QueryClient instance
+	QueryClient qclient.QueryClient
 
 	UdfService udf.Service
 

@@ -495,7 +495,7 @@ func genNewUniqueIndexDuplicateCheck(c *Compile, database, table, cols string) e
 	}
 	defer res.Close()
 
-	res.ReadRows(func(colVecs []*vector.Vector) bool {
+	res.ReadRows(func(_ int, colVecs []*vector.Vector) bool {
 		if t, e := types.Unpack(colVecs[0].GetBytesAt(0)); e != nil {
 			err = e
 		} else {

@@ -22,6 +22,20 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
+type WrappedResponse struct {
+	*Response
+	ReleaseFunc func()
+}
+
+func (r *WrappedResponse) Reset() {
+	if r.ReleaseFunc != nil {
+		r.ReleaseFunc()
+	}
+	if r.Response != nil {
+		r.Response.Reset()
+	}
+}
+
 // SetID implements the morpc.Message interface.
 func (m *Request) SetID(id uint64) {
 	m.RequestID = id

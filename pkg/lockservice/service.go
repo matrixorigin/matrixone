@@ -34,6 +34,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 )
 
+// WithWait setup wait func to wait some condition ready
+func WithWait(wait func()) Option {
+	return func(s *service) {
+		s.option.wait = wait
+	}
+}
+
 type service struct {
 	cfg                  Config
 	serviceID            string
@@ -57,10 +64,16 @@ type service struct {
 		sync.RWMutex
 		allocating map[uint32]map[uint64]chan struct{}
 	}
+
+	option struct {
+		wait func()
+	}
 }
 
 // NewLockService create a lock service instance
-func NewLockService(cfg Config) LockService {
+func NewLockService(
+	cfg Config,
+	opts ...Option) LockService {
 	cfg.Validate()
 	s := &service{
 		// If a cn with the same uuid is restarted within a short period of time, it will lead to
@@ -75,6 +88,11 @@ func NewLockService(cfg Config) LockService {
 			stopper.WithLogger(getLogger().RawLogger())),
 		fetchWhoWaitingListC: make(chan who, 10240),
 	}
+
+	for _, opt := range opts {
+		opt(s)
+	}
+
 	s.tableGroups = &lockTableHolders{service: s.serviceID, holders: map[uint32]*lockTableHolder{}}
 	s.mu.allocating = make(map[uint32]map[uint64]chan struct{})
 	s.activeTxnHolder = newMapBasedTxnHandler(s.serviceID, s.fsp)
@@ -104,6 +122,8 @@ func (s *service) Lock(
 	defer func() {
 		v2.TxnAcquireLockDurationHistogram.Observe(time.Since(start).Seconds())
 	}()
+
+	s.wait()
 
 	// FIXME(fagongzi): too many mem alloc in trace
 	ctx, span := trace.Debug(ctx, "lockservice.lock")
@@ -153,6 +173,8 @@ func (s *service) Unlock(
 	defer func() {
 		v2.TxnUnlockDurationHistogram.Observe(time.Since(start).Seconds())
 	}()
+
+	s.wait()
 
 	// FIXME(fagongzi): too many mem alloc in trace
 	_, span := trace.Debug(ctx, "lockservice.unlock")
@@ -383,6 +405,13 @@ func (s *service) createLockTableByBind(bind pb.LockTable) lockTable {
 		}
 		return newLockTableProxy(s.serviceID, remote)
 	}
+}
+
+func (s *service) wait() {
+	if s.option.wait == nil {
+		return
+	}
+	s.option.wait()
 }
 
 type activeTxnHolder interface {
