@@ -1911,8 +1911,10 @@ func appendCastBeforeExpr(ctx context.Context, expr *Expr, toType *Type, isBin .
 				Args: []*Expr{
 					expr,
 					{
-						Typ:  &typ,
-						Expr: &plan.Expr_T{},
+						Typ: &typ,
+						Expr: &plan.Expr_T{
+							T: &plan.TargetType{},
+						},
 					},
 				},
 			},
