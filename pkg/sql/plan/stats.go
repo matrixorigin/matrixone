@@ -60,10 +60,10 @@ type InfoFromZoneMap struct {
 	ColumnNDVs           []float64
 	NullCnts             []int64
 	ShuffleRanges        []*pb.ShuffleRange
-	ColumnSize           []uint32
-	BlockNumber          int32
-	AccurateObjectNumber int32
-	ApproxObjectNumber   int32
+	ColumnSize           []int64
+	BlockNumber          int64
+	AccurateObjectNumber int64
+	ApproxObjectNumber   int64
 	TableCnt             float64
 }
 
@@ -73,7 +73,7 @@ func NewInfoFromZoneMap(lenCols int) *InfoFromZoneMap {
 		DataTypes:     make([]types.Type, lenCols),
 		ColumnNDVs:    make([]float64, lenCols),
 		NullCnts:      make([]int64, lenCols),
-		ColumnSize:    make([]uint32, lenCols),
+		ColumnSize:    make([]int64, lenCols),
 		ShuffleRanges: make([]*pb.ShuffleRange, lenCols),
 	}
 	return info
@@ -634,7 +634,7 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 			node.Stats.HashmapStats.HashmapSize = rightStats.Outcnt
 			node.Stats.Selectivity = selectivity_out
 
-		case plan.Node_SEMI:
+		case plan.Node_SEMI, plan.Node_INDEX:
 			node.Stats.Outcnt = leftStats.Outcnt * selectivity
 			node.Stats.Cost = leftStats.Cost + rightStats.Cost
 			node.Stats.HashmapStats.HashmapSize = rightStats.Outcnt
