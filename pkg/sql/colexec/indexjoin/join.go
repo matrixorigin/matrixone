@@ -16,6 +16,7 @@ package indexjoin
 
 import (
 	"bytes"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -61,6 +62,18 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 				proc.PutBatch(bat)
 				continue
 			}
+			vecused := make([]bool, len(bat.Vecs))
+			newvecs := make([]*vector.Vector, len(ap.Result))
+			for i, pos := range ap.Result {
+				vecused[pos] = true
+				newvecs[i] = bat.Vecs[pos]
+			}
+			for i := range bat.Vecs {
+				if !vecused[i] {
+					bat.Vecs[i].Free(proc.Mp())
+				}
+			}
+			bat.Vecs = newvecs
 			result.Batch = bat
 			anal.Output(bat, arg.GetIsLast())
 			return result, nil
