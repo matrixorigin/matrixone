@@ -899,6 +899,11 @@ func (t T) IsFloat() bool {
 	return false
 }
 
+// IsEnum return true if the types.T is Enum type
+func (t T) IsEnum() bool {
+	return t == T_enum
+}
+
 // IsMySQLString return true if the types.T is a MySQL string type (https://dev.mysql.com/doc/refman/8.0/en/string-types.html)
 // NOTE: types.IsVarlen() and t.IsMySQLString() are different. t.IsMySQLString() doesn't have T_Json type.
 func (t T) IsMySQLString() bool {
