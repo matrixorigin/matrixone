@@ -72,7 +72,12 @@ func (builder *QueryBuilder) remapColRefForExpr(expr *Expr, colMap map[[2]int32]
 			ne.Col.ColPos = ids[1]
 			ne.Col.Name = builder.nameByColRef[mapID]
 		} else {
-			return moerr.NewParseError(builder.GetContext(), "can't find column %v in context's map %v", mapID, colMap)
+			var keys []string
+			for k := range colMap {
+				keys = append(keys, fmt.Sprintf("%v", k))
+			}
+			mapKeys := fmt.Sprintf("{ %s }", strings.Join(keys, ", "))
+			return moerr.NewParseError(builder.GetContext(), "can't find column %v in context's map %s", mapID, mapKeys)
 		}
 
 	case *plan.Expr_F:
