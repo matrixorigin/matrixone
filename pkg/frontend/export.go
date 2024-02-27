@@ -402,13 +402,15 @@ func initExportFirst(oq *outputQueue) {
 	oq.ep.Index++
 }
 
-func formatJsonString(str string, flag bool) string {
+func formatJsonString(str string, flag bool, terminatedBy string) string {
 	if len(str) < 2 {
 		return "\"" + str + "\""
 	}
-	tmp := strings.ReplaceAll(str, "\",", "\"\",")
-	if tmp[0] != '"' && tmp[len(tmp)-1] != '"' && !flag {
-		return "\"" + tmp + "\""
+	var tmp string
+	if !flag {
+		tmp = strings.ReplaceAll(str, terminatedBy, "\\"+terminatedBy)
+	} else {
+		tmp = strings.ReplaceAll(str, "\",", "\"\",")
 	}
 	return tmp
 }
@@ -417,6 +419,7 @@ func constructByte(obj interface{}, bat *batch.Batch, index int32, ByteChan chan
 	ses := obj.(*Session)
 	symbol := oq.ep.Symbol
 	closeby := oq.ep.userConfig.Fields.EnclosedBy.Value
+	terminated := oq.ep.userConfig.Fields.Terminated.Value
 	flag := oq.ep.ColumnFlag
 	writeByte := make([]byte, 0)
 	for i := 0; i < bat.RowCount(); i++ {
@@ -428,7 +431,7 @@ func constructByte(obj interface{}, bat *batch.Batch, index int32, ByteChan chan
 			switch vec.GetType().Oid { //get col
 			case types.T_json:
 				val := types.DecodeJson(vec.GetBytesAt(i))
-				writeByte = appendBytes(writeByte, []byte(formatJsonString(val.String(), flag[j])), symbol[j], closeby, flag[j])
+				writeByte = appendBytes(writeByte, []byte(formatJsonString(val.String(), flag[j], terminated)), symbol[j], closeby, flag[j])
 			case types.T_bool:
 				val := vector.GetFixedAt[bool](vec, i)
 				if val {
