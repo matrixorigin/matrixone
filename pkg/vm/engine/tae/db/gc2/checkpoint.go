@@ -308,17 +308,22 @@ func (c *checkpointCleaner) tryGC(data *logtail.CheckpointData, ts types.TS) err
 	}
 	gcTable := NewGCTable()
 	gcTable.UpdateTable(data)
-	gc := c.softGC(gcTable, ts)
+	snapshots, err := c.GetSnapshots()
+	if err != nil {
+		logutil.Errorf("GetSnapshots failed: %v", err.Error())
+		return nil
+	}
+	gc := c.softGC(gcTable, ts, snapshots)
 	// Delete files after softGC
 	// TODO:Requires Physical Removal Policy
-	err := c.delWorker.ExecDelete(c.ctx, gc, c.disableGC)
+	err = c.delWorker.ExecDelete(c.ctx, gc, c.disableGC)
 	if err != nil {
 		return err
 	}
 	return nil
 }
 
-func (c *checkpointCleaner) softGC(t *GCTable, ts types.TS) []string {
+func (c *checkpointCleaner) softGC(t *GCTable, ts types.TS, snapshots []types.TS) []string {
 	c.inputs.Lock()
 	defer c.inputs.Unlock()
 	if len(c.inputs.tables) == 0 {
@@ -328,7 +333,7 @@ func (c *checkpointCleaner) softGC(t *GCTable, ts types.TS) []string {
 	for _, table := range c.inputs.tables {
 		mergeTable.Merge(table)
 	}
-	gc := mergeTable.SoftGC(t, ts)
+	gc := mergeTable.SoftGC(t, ts, snapshots)
 	c.inputs.tables = make([]*GCTable, 0)
 	c.inputs.tables = append(c.inputs.tables, mergeTable)
 	//logutil.Infof("SoftGC is %v, merge table: %v", gc, mergeTable.String())
@@ -392,14 +397,14 @@ func (c *checkpointCleaner) CheckGC() error {
 		// TODO
 		return moerr.NewInternalErrorNoCtx("processing clean %s: %v", debugCandidates[0].String(), err)
 	}
-	debugTable.SoftGC(gcTable, gCkp.GetEnd())
+	debugTable.SoftGC(gcTable, gCkp.GetEnd(), []types.TS{})
 	var mergeTable *GCTable
 	if len(c.inputs.tables) > 1 {
 		mergeTable = NewGCTable()
 		for _, table := range c.inputs.tables {
 			mergeTable.Merge(table)
 		}
-		mergeTable.SoftGC(gcTable, gCkp.GetEnd())
+		mergeTable.SoftGC(gcTable, gCkp.GetEnd(), []types.TS{})
 	} else {
 		mergeTable = c.inputs.tables[0]
 	}
@@ -515,4 +520,8 @@ func (c *checkpointCleaner) createNewInput(
 	}
 
 	return
+}
+
+func (c *checkpointCleaner) GetSnapshots() ([]types.TS, error) {
+	return []types.TS{}, nil
 }
