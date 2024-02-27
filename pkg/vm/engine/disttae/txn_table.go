@@ -72,6 +72,7 @@ func (tbl *txnTable) Stats(ctx context.Context, sync bool) *pb.StatsInfo {
 }
 
 func (tbl *txnTable) Rows(ctx context.Context) (uint64, error) {
+	tbl.updateSnapshotWriteOffset()
 	_, err := tbl.getPartitionState(ctx)
 	if err != nil {
 		logutil.Errorf("failed to get stats info of table %d", tbl.tableId)
@@ -131,6 +132,7 @@ func (tbl *txnTable) Rows(ctx context.Context) (uint64, error) {
 }
 
 func (tbl *txnTable) Size(ctx context.Context, columnName string) (uint64, error) {
+	tbl.updateSnapshotWriteOffset()
 	_, err := tbl.getPartitionState(ctx)
 	if err != nil {
 		logutil.Errorf("failed to get stats info of table %d", tbl.tableId)
