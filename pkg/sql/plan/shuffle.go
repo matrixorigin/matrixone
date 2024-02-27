@@ -532,7 +532,7 @@ func shouldUseHashShuffle(s *pb.ShuffleRange) bool {
 	if s.Uniform > 0.3 {
 		return false
 	}
-	if s.Overlap > 0.6 {
+	if s.Overlap > 0.5 {
 		return true
 	}
 	return true

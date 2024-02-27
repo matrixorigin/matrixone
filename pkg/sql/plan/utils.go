@@ -1054,14 +1054,6 @@ func GetSortOrder(tableDef *plan.TableDef, colPos int32) int {
 	return GetSortOrderByName(tableDef, colName)
 }
 
-// handle the filter list for Stats. rewrite and constFold
-func rewriteFiltersForStats(exprList []*plan.Expr, proc *process.Process) *plan.Expr {
-	if proc == nil {
-		return nil
-	}
-	return colexec.RewriteFilterExprList(exprList)
-}
-
 func ConstantFold(bat *batch.Batch, expr *plan.Expr, proc *process.Process, varAndParamIsConst bool) (*plan.Expr, error) {
 	// If it is Expr_List, perform constant folding on its elements
 	if elist := expr.GetList(); elist != nil {
