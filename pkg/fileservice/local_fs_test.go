@@ -18,8 +18,10 @@ import (
 	"context"
 	"crypto/rand"
 	"fmt"
+	"io"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/fileservice/memorycache"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
 	"github.com/stretchr/testify/assert"
@@ -165,7 +167,6 @@ func TestLocalFSWithDiskCache(t *testing.T) {
 
 }
 
-/*
 // default allocator must use with no memcache
 // only memory obtained through memcache.Alloc can be set to memcache
 func TestLocalFSWithIOVectorCache(t *testing.T) {
@@ -181,7 +182,9 @@ func TestLocalFSWithIOVectorCache(t *testing.T) {
 
 	ctx := context.Background()
 	dir := t.TempDir()
-	fs, err := NewLocalFS(ctx, "test", dir, DisabledCacheConfig, nil)
+	fs, err := NewLocalFS(ctx, "test", dir, CacheConfig{
+		MemoryCapacity: ptrTo[toml.ByteSize](128 * 1024),
+	}, nil)
 	assert.Nil(t, err)
 
 	err = fs.Write(ctx, IOVector{
@@ -219,7 +222,6 @@ func TestLocalFSWithIOVectorCache(t *testing.T) {
 	assert.Equal(t, int64(8), memCache1.cache.Used())
 	assert.Equal(t, int64(8), memCache2.cache.Used())
 }
-*/
 
 func TestLocalFSEmptyRootPath(t *testing.T) {
 	fs, err := NewLocalFS(
