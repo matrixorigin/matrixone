@@ -680,7 +680,7 @@ func TestCompaction2(t *testing.T) {
 		return dirty.GetTree().Compact()
 	})
 	{
-		txn, _ := db.TxnMgr.StartTxnWithLatestTS(nil)
+		txn, _ := db.TxnMgr.StartTxn(nil)
 		database, _ := txn.GetDatabase("db")
 		rel, _ := database.GetRelationByName(schema.Name)
 		it := rel.MakeBlockIt()
@@ -695,7 +695,7 @@ func TestCompaction2(t *testing.T) {
 		}
 	}
 	{
-		txn, _ := db.TxnMgr.StartTxnWithLatestTS(nil)
+		txn, _ := db.TxnMgr.StartTxn(nil)
 		database, _ := txn.GetDatabase("db")
 		rel, _ := database.GetRelationByName(schema.Name)
 		it := rel.MakeBlockIt()
