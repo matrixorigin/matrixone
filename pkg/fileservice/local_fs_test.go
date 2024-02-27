@@ -218,9 +218,13 @@ func TestLocalFSWithIOVectorCache(t *testing.T) {
 	}
 	err = fs.Read(ctx, &vec)
 	assert.Nil(t, err)
+	vec.Release()
 
 	assert.Equal(t, int64(8), memCache1.cache.Used())
 	assert.Equal(t, int64(8), memCache2.cache.Used())
+	memCache1.cache.Flush()
+	memCache2.cache.Flush()
+	fs.FlushCache()
 }
 
 func TestLocalFSEmptyRootPath(t *testing.T) {
