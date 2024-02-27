@@ -86,7 +86,6 @@ type service struct {
 
 	atomic struct {
 		enabled         atomic.Bool
-		loadCSV         atomic.Bool
 		complexPKTables sync.Map // uint64 -> bool
 	}
 
