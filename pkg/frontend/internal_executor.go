@@ -205,6 +205,9 @@ func (ie *internalExecutor) newCmdSession(ctx context.Context, opts ie.SessionOv
 		}
 		if accountId == sysAccountID {
 			t.Tenant = sysAccountName // fixme: fix empty tencent value, while do metric collection.
+			t.User = "internal"
+			// more details in authenticateUserCanExecuteStatementWithObjectTypeNone()
+			t.DefaultRole = moAdminRoleName
 		}
 	} else {
 		t, _ = GetTenantInfo(ctx, DefaultTenantMoAdmin)
