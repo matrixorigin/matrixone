@@ -103,10 +103,9 @@ func (exec *groupConcatExec) SetPreparedResult(partialResult any, groupIndex int
 	panic("partial result is not supported for group_concat")
 }
 
-func (exec *groupConcatExec) Merge(next AggFuncExec, groupIdx1, groupIdx2 int) error {
-	other := next.(*groupConcatExec)
-	exec.ret.groupToSet = groupIdx1
-	other.ret.groupToSet = groupIdx2
+func (exec *groupConcatExec) merge(other *groupConcatExec, idx1, idx2 int) error {
+	exec.ret.groupToSet = idx1
+	other.ret.groupToSet = idx2
 
 	v1 := exec.ret.aggGet()
 	v2 := other.ret.aggGet()
@@ -122,6 +121,23 @@ func (exec *groupConcatExec) Merge(next AggFuncExec, groupIdx1, groupIdx2 int) e
 		return exec.ret.aggSet(v2)
 	}
 	return exec.ret.aggSet(v1)
+}
+
+func (exec *groupConcatExec) Merge(next AggFuncExec, groupIdx1, groupIdx2 int) error {
+	return exec.merge(next.(*groupConcatExec), groupIdx1, groupIdx2)
+}
+
+func (exec *groupConcatExec) BatchMerge(next AggFuncExec, offset int, groups []uint64) error {
+	other := next.(*groupConcatExec)
+	for i := range groups {
+		if groups[i] == GroupNotMatched {
+			continue
+		}
+		if err := exec.merge(other, i+offset, int(groups[i])-1); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (exec *groupConcatExec) Flush() (*vector.Vector, error) {

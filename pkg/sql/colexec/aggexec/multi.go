@@ -173,6 +173,27 @@ func (exec *multiAggFuncExec1[T]) Merge(next AggFuncExec, groupIdx1, groupIdx2 i
 	return nil
 }
 
+func (exec *multiAggFuncExec1[T]) BatchMerge(next AggFuncExec, offset int, groups []uint64) error {
+	other := next.(*multiAggFuncExec1[T])
+	setter := exec.ret.aggSet
+	getter1, getter2 := exec.ret.aggGet, other.ret.aggGet
+
+	for i := range groups {
+		if groups[i] == GroupNotMatched {
+			continue
+		}
+		groupIdx1, groupIdx2 := int(groups[i]-1), i+offset
+		exec.ret.groupToSet = groupIdx1
+		other.ret.groupToSet = groupIdx2
+
+		exec.groups[groupIdx1].merge(
+			other.groups[groupIdx2],
+			getter1, getter2,
+			setter)
+	}
+	return nil
+}
+
 func (exec *multiAggFuncExec1[T]) Flush() (*vector.Vector, error) {
 	setter := exec.ret.aggSet
 	getter := exec.ret.aggGet
@@ -275,6 +296,27 @@ func (exec *multiAggFuncExec2) Merge(next AggFuncExec, groupIdx1, groupIdx2 int)
 		other.groups[groupIdx2],
 		exec.ret.aggGet, other.ret.aggGet,
 		exec.ret.aggSet)
+	return nil
+}
+
+func (exec *multiAggFuncExec2) BatchMerge(next AggFuncExec, offset int, groups []uint64) error {
+	other := next.(*multiAggFuncExec2)
+	setter := exec.ret.aggSet
+	getter1, getter2 := exec.ret.aggGet, other.ret.aggGet
+
+	for i := range groups {
+		if groups[i] == GroupNotMatched {
+			continue
+		}
+		groupIdx1, groupIdx2 := int(groups[i]-1), i+offset
+		exec.ret.groupToSet = groupIdx1
+		other.ret.groupToSet = groupIdx2
+
+		exec.groups[groupIdx1].merge(
+			other.groups[groupIdx2],
+			getter1, getter2,
+			setter)
+	}
 	return nil
 }
 

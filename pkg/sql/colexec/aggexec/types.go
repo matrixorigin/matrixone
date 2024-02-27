@@ -42,7 +42,9 @@ type AggFuncExec interface {
 	BatchFill(offset int, groups []uint64, vectors []*vector.Vector) error
 
 	// Merge merges the aggregation result of two groups.
+	// BatchMerge merges the aggregation result of multiple groups.
 	Merge(next AggFuncExec, groupIdx1, groupIdx2 int) error
+	BatchMerge(next AggFuncExec, offset int, groups []uint64) error
 
 	// SetPreparedResult add a partial result to speed up.
 	SetPreparedResult(partialResult any, groupIndex int)
@@ -50,14 +52,7 @@ type AggFuncExec interface {
 	// Flush return the aggregation result.
 	Flush() (*vector.Vector, error)
 
-	// Copy returns a copy of the aggregation.
-	// This copy will be allocated in the inputting memory pool.
-	// todo: there is no place use this method now.
-	//  please refer to the old codes' Dup(pool) method.
-	//Copy(mp *mpool.MPool) AggFuncExec
-
-	// Free free the aggregation.
-	// This method will do the reset and reuse the aggregation if possible.
+	// Free clean the resource and reuse the aggregation if possible.
 	Free()
 }
 
@@ -69,7 +64,18 @@ var (
 	_ AggFuncExec = &singleAggFuncExec4{}
 	_ AggFuncExec = (*multiAggFuncExec1[int8])(nil)
 	_ AggFuncExec = (*multiAggFuncExec2)(nil)
+	_ AggFuncExec = &groupConcatExec{}
 )
+
+// MarshalBinary and UnmarshalBinary are used to serialize and deserialize the aggregation function.
+// todo: not implemented yet.
+func MarshalBinary(agg AggFuncExec) ([]byte, error) {
+	return nil, nil
+}
+
+func UnmarshalBinary(data []byte) (AggFuncExec, error) {
+	return nil, nil
+}
 
 // MakeAgg supports to create an aggregation function executor for single column.
 // todo: if we support some methods to register the param, result type and the implementation,
