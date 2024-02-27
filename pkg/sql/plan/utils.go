@@ -1124,12 +1124,14 @@ func ConstantFold(bat *batch.Batch, expr *plan.Expr, proc *process.Process, varA
 	if f.CannotFold() || f.IsRealTimeRelated() {
 		return expr, nil
 	}
+	isVec := false
 	for i := range fn.Args {
 		foldExpr, errFold := ConstantFold(bat, fn.Args[i], proc, varAndParamIsConst)
 		if errFold != nil {
 			return nil, errFold
 		}
 		fn.Args[i] = foldExpr
+		isVec = isVec || foldExpr.GetVec() != nil
 	}
 	if !rule.IsConstant(expr, varAndParamIsConst) {
 		return expr, nil
@@ -1141,7 +1143,7 @@ func ConstantFold(bat *batch.Batch, expr *plan.Expr, proc *process.Process, varA
 	}
 	defer vec.Free(proc.Mp())
 
-	if !vec.IsConst() && vec.Length() > 1 {
+	if isVec {
 		data, err := vec.MarshalBinary()
 		if err != nil {
 			return expr, nil
