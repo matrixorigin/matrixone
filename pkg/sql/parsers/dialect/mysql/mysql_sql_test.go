@@ -27,8 +27,8 @@ var (
 		input  string
 		output string
 	}{
-		input:  "alter table tbl1 drop constraint fk_name",
-		output: "alter table tbl1 drop foreign key fk_name",
+		input:  "explain analyze verbose force execute st",
+		output: "explain (analyze,verbose) execute st",
 	}
 )
 
@@ -2743,6 +2743,42 @@ var (
 		{
 			input:  "alter table tbl1 drop constraint fk_name",
 			output: "alter table tbl1 drop foreign key fk_name",
+		},
+		{
+			input:  "explain force execute st using @a",
+			output: "explain execute st using @a",
+		},
+		{
+			input:  "explain analyze force execute st using @a",
+			output: "explain (analyze) execute st using @a",
+		},
+		{
+			input:  "explain verbose force execute st using @a",
+			output: "explain (verbose) execute st using @a",
+		},
+		{
+			input:  "explain analyze verbose force execute st using @a",
+			output: "explain (analyze,verbose) execute st using @a",
+		},
+		{
+			input:  "explain force execute st",
+			output: "explain execute st",
+		},
+		{
+			input:  "explain analyze force execute st",
+			output: "explain (analyze) execute st",
+		},
+		{
+			input:  "explain verbose force execute st",
+			output: "explain (verbose) execute st",
+		},
+		{
+			input:  "explain analyze verbose force execute st",
+			output: "explain (analyze,verbose) execute st",
+		},
+		{
+			input:  "explain analyze verbose force execute st",
+			output: "explain (analyze,verbose) execute st",
 		},
 	}
 )

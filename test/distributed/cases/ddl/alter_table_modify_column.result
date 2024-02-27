@@ -1476,7 +1476,7 @@ col1    col2
 {"x": [3, 5, 7]}    b
 show create table abnormal04;
 Table    Create Table
-abnormal04    CREATE TABLE `abnormal04` (\n`col1` JSON DEFAULT NULL,\n`col2` ENUM DEFAULT NULL\n)
+abnormal04    CREATE TABLE `abnormal04` (\n`col1` JSON DEFAULT NULL,\n`col2` ENUM('a','b') DEFAULT NULL\n)
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'abnormal04' and COLUMN_NAME not like '__mo%';
 table_name    column_name    data_type    is_nullable
 abnormal04    col1    JSON    YES

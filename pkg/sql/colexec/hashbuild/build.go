@@ -23,7 +23,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -159,7 +158,7 @@ func (ctr *container) mergeIntoBatches(src *batch.Batch, proc *process.Process) 
 		appendRows := 0
 		length := src.RowCount()
 		for offset < length {
-			ctr.tmpBatch, appendRows, err = proc.AppendBatchFromOffset(ctr.tmpBatch, src, offset)
+			ctr.tmpBatch, appendRows, err = proc.AppendToFixedSizeFromOffset(ctr.tmpBatch, src, offset)
 			if err != nil {
 				return err
 			}
@@ -398,7 +397,8 @@ func (ctr *container) handleRuntimeFilter(ap *Argument, proc *process.Process) e
 		hashmapCount = ctr.strHashMap.GroupCount()
 	}
 
-	inFilterCardLimit := plan.GetInFilterCardLimit()
+	inFilterCardLimit := ap.RuntimeFilterSenders[0].Spec.UpperLimit
+	//inFilterCardLimit := plan.GetInFilterCardLimit()
 	//bloomFilterCardLimit := int64(plan.BloomFilterCardLimit)
 	//v, ok = runtime.ProcessLevelRuntime().GetGlobalVariables("runtime_filter_limit_bloom_filter")
 	//if ok {

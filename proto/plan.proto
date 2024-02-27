@@ -34,6 +34,11 @@ message Type {
 	string enumvalues = 7;
 };
 
+message	msgHeader {
+	int32 msg_tag = 1;
+	int32 msg_type =2;
+};
+
 // Literal: if a literal value can be reprensented by int64 or
 // double, use that, otherwise store a string representation.
 message Literal {
@@ -711,6 +716,7 @@ message Node {
 		SINGLE	= 6;
 		MARK	= 7;
 		APPLY	= 8;
+		INDEX = 9;
 	}
 
 	enum AggMode {
@@ -813,6 +819,10 @@ message Node {
 	int32 window_idx = 52;
 	repeated Expr onUpdateExprs = 53;
 	OriginTableMessageForFuzzy fuzzymessage = 54;
+
+	//for message
+	repeated msgHeader send_msg_list = 55;
+	repeated msgHeader recv_msg_list = 56;
 }
 
 message ExternScan {
@@ -862,6 +872,7 @@ message PreInsertCtx {
 message RuntimeFilterSpec {
 	int32 tag = 1;
 	Expr expr = 2;
+	int32 upperLimit = 3;
 }
 
 message IdList {
@@ -1107,6 +1118,7 @@ message CreateTable {
 	// we need column name when create table, but not in ForeignKeyDef
 	repeated FkColName fk_cols = 9;
 	repeated TableDef partition_tables = 10;// partition tables for partitions
+	string create_as_select_sql = 11;
 }
 
 message AlterTableDrop {
