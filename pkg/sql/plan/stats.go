@@ -134,6 +134,15 @@ func UpdateStatsInfo(info *InfoFromZoneMap, tableDef *plan.TableDef, s *pb.Stats
 		case types.T_date:
 			s.MinValMap[colName] = float64(types.DecodeDate(info.ColumnZMs[i].GetMinBuf()))
 			s.MaxValMap[colName] = float64(types.DecodeDate(info.ColumnZMs[i].GetMaxBuf()))
+		case types.T_time:
+			s.MinValMap[colName] = float64(types.DecodeTime(info.ColumnZMs[i].GetMinBuf()))
+			s.MaxValMap[colName] = float64(types.DecodeTime(info.ColumnZMs[i].GetMaxBuf()))
+		case types.T_timestamp:
+			s.MinValMap[colName] = float64(types.DecodeTimestamp(info.ColumnZMs[i].GetMinBuf()))
+			s.MaxValMap[colName] = float64(types.DecodeTimestamp(info.ColumnZMs[i].GetMaxBuf()))
+		case types.T_datetime:
+			s.MinValMap[colName] = float64(types.DecodeDatetime(info.ColumnZMs[i].GetMinBuf()))
+			s.MaxValMap[colName] = float64(types.DecodeDatetime(info.ColumnZMs[i].GetMaxBuf()))
 		case types.T_char, types.T_varchar, types.T_text:
 			s.MinValMap[colName] = float64(ByteSliceToUint64(info.ColumnZMs[i].GetMinBuf()))
 			s.MaxValMap[colName] = float64(ByteSliceToUint64(info.ColumnZMs[i].GetMaxBuf()))
@@ -296,24 +305,32 @@ func estimateEqualitySelectivity(expr *plan.Expr, builder *QueryBuilder) float64
 	return 0.01
 }
 
-func calcSelectivityByMinMax(funcName string, min, max float64, typ types.T, vals []*plan.Literal) float64 {
+func calcSelectivityByMinMax(funcName string, min, max float64, typ types.T, vals []*plan.Literal) (ret float64) {
 	switch funcName {
 	case ">", ">=":
 		if val, ok := getFloat64Value(typ, vals[0]); ok {
-			return (max - val + 1) / (max - min)
+			ret = (max - val + 1) / (max - min)
 		}
 	case "<", "<=":
 		if val, ok := getFloat64Value(typ, vals[0]); ok {
-			return (val - min + 1) / (max - min)
+			ret = (val - min + 1) / (max - min)
 		}
 	case "between":
 		if lb, ok := getFloat64Value(typ, vals[0]); ok {
 			if ub, ok := getFloat64Value(typ, vals[1]); ok {
-				return (ub - lb + 1) / (max - min)
+				ret = (ub - lb + 1) / (max - min)
 			}
 		}
+	default:
+		ret = 0.3
 	}
-	return -1 // never reach here
+	if ret < 0 {
+		ret = 0
+	}
+	if ret > 1 {
+		ret = 1
+	}
+	return ret
 }
 
 func getFloat64Value(typ types.T, lit *plan.Literal) (float64, bool) {
@@ -634,7 +651,7 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 			node.Stats.HashmapStats.HashmapSize = rightStats.Outcnt
 			node.Stats.Selectivity = selectivity_out
 
-		case plan.Node_SEMI:
+		case plan.Node_SEMI, plan.Node_INDEX:
 			node.Stats.Outcnt = leftStats.Outcnt * selectivity
 			node.Stats.Cost = leftStats.Cost + rightStats.Cost
 			node.Stats.HashmapStats.HashmapSize = rightStats.Outcnt
