@@ -17,7 +17,6 @@ package rpc
 import (
 	"context"
 	"fmt"
-	"runtime"
 	"testing"
 	"time"
 
@@ -33,7 +32,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
@@ -161,7 +159,7 @@ func mockTAEHandle(ctx context.Context, t *testing.T, opts *options.Options) *mo
 	mh.Handle = &Handle{
 		db: tae,
 	}
-	mh.Handle.txnCtxs = common.NewMap[string, *txnContext](runtime.NumCPU())
+	mh.Handle.mu.txnCtxs = make(map[string]*txnContext)
 	return mh
 }
 
