@@ -2036,8 +2036,7 @@ func (c *Compile) compileTableFunction(n *plan.Node, ss []*Scope) []*Scope {
 }
 
 func (c *Compile) compileTableScan(n *plan.Node) ([]*Scope, error) {
-
-	// for dynamic parameter, sustitute param ref and const fold cast expression here to improve performance
+	// for dynamic parameter, substitute param ref and const fold cast expression here to improve performance
 	newFilters, err := plan2.ConstandFoldList(n.FilterList, c.proc, true)
 	if err == nil {
 		n.FilterList = newFilters
