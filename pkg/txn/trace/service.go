@@ -123,10 +123,10 @@ func NewService(
 	}
 
 	if s.options.flushDuration == 0 {
-		s.options.flushDuration = 60 * time.Second
+		s.options.flushDuration = 30 * time.Second
 	}
 	if s.options.flushBytes == 0 {
-		s.options.flushBytes = 16 * 1024 * 1024
+		s.options.flushBytes = 8 * 1024 * 1024
 	}
 	if s.options.bufferSize == 0 {
 		s.options.bufferSize = 1000
@@ -700,6 +700,8 @@ func (s *service) handleEvent(
 	}
 
 	flush := func() {
+		defer buf.reset()
+
 		if sum == 0 {
 			return
 		}
@@ -773,12 +775,8 @@ func (s *service) handleEvent(
 			}
 
 			select {
-			case buf := <-bufferC:
-				buf.reset()
-				n := len(buf.buf.RawBuf()) / 1024
-				if n > buffSize {
-					fmt.Printf("%d kb\n", len(buf.buf.RawBuf())/1024)
-				}
+			case v := <-bufferC:
+				v.close()
 			default:
 			}
 		}

@@ -20,7 +20,7 @@ import (
 )
 
 var (
-	buffSize = 1024 * 4
+	buffSize = 1024 * 64
 )
 
 func init() {
