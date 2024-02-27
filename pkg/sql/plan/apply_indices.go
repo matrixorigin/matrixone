@@ -668,7 +668,7 @@ func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node,
 		node.RuntimeFilterBuildList = append(node.RuntimeFilterBuildList, &plan.RuntimeFilterSpec{
 			Tag:         rfTag,
 			MatchPrefix: len(condIdx) < numParts,
-			UpperLimit:  InFilterCardLimitPK,
+			UpperLimit:  GetInFilterCardLimitOnPK(leftChild.Stats.TableCnt),
 			Expr:        rfBuildExpr,
 		})
 
