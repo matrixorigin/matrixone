@@ -73,6 +73,7 @@ type service struct {
 	entryC    chan csvEvent
 	txnBufC   chan *buffer
 	entryBufC chan *buffer
+	loadC     chan loadAction
 	seq       atomic.Uint64
 	dir       string
 	logger    *log.MOLogger
@@ -117,6 +118,7 @@ func NewService(
 		executor: executor,
 		dir:      dataDir,
 		logger:   runtime.ProcessLevelRuntime().Logger().Named("txn-trace"),
+		loadC:    make(chan loadAction, 100000),
 	}
 	for _, opt := range opts {
 		opt(s)
@@ -141,6 +143,9 @@ func NewService(
 		panic(err)
 	}
 	if err := s.stopper.RunTask(s.handleEntryEvents); err != nil {
+		panic(err)
+	}
+	if err := s.stopper.RunTask(s.handleLoad); err != nil {
 		panic(err)
 	}
 	if err := s.stopper.RunTask(s.watch); err != nil {
@@ -621,6 +626,7 @@ func (s *service) Close() {
 	close(s.entryC)
 	close(s.txnC)
 	close(s.txnBufC)
+	close(s.loadC)
 }
 
 func (s *service) txnCSVFile() string {
@@ -671,14 +677,6 @@ func (s *service) handleEvent(
 	defer buf.close()
 
 	open := func() {
-		if current != "" {
-			if err := os.Remove(current); err != nil {
-				s.logger.Fatal("failed to remove csv file",
-					zap.String("file", current),
-					zap.Error(err))
-			}
-		}
-
 		current = fileCreator()
 
 		v, err := os.OpenFile(current, os.O_RDWR|os.O_APPEND|os.O_CREATE, 0666)
@@ -719,37 +717,11 @@ func (s *service) handleEvent(
 				zap.Error(err))
 		}
 
-		load := func() error {
-			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-			defer cancel()
-			return s.executor.ExecTxn(
-				ctx,
-				func(txn executor.TxnExecutor) error {
-					sql := fmt.Sprintf("load data infile '%s' into table %s fields terminated by ','", current, tableName)
-					res, err := txn.Exec(sql, executor.StatementOption{})
-					if err != nil {
-						return err
-					}
-					res.Close()
-					return nil
-				},
-				executor.Options{}.
-					WithDatabase(DebugDB).
-					WithDisableTrace().
-					WithDisableLock())
-		}
-
-		if s.atomic.loadCSV.Load() {
-			for {
-				if err := load(); err != nil {
-					s.logger.Error("load trace data to table failed, retry later",
-						zap.String("table", tableName),
-						zap.Error(err))
-					time.Sleep(time.Second * 5)
-					continue
-				}
-				break
-			}
+		s.loadC <- loadAction{
+			sql: fmt.Sprintf("load data infile '%s' into table %s fields terminated by ','",
+				current,
+				tableName),
+			file: current,
 		}
 		sum = 0
 		open()
@@ -778,6 +750,57 @@ func (s *service) handleEvent(
 			case v := <-bufferC:
 				v.close()
 			default:
+			}
+		}
+	}
+}
+
+func (s *service) handleLoad(ctx context.Context) {
+	load := func(sql string) error {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		return s.executor.ExecTxn(
+			ctx,
+			func(txn executor.TxnExecutor) error {
+				res, err := txn.Exec(sql, executor.StatementOption{})
+				if err != nil {
+					return err
+				}
+				res.Close()
+				return nil
+			},
+			executor.Options{}.
+				WithDatabase(DebugDB).
+				WithDisableTrace().
+				WithDisableLock())
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case e := <-s.loadC:
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				default:
+				}
+
+				if err := load(e.sql); err != nil {
+					s.logger.Error("load trace data to table failed, retry later",
+						zap.String("sql", e.sql),
+						zap.Error(err))
+					time.Sleep(time.Second * 5)
+					continue
+				}
+
+				if err := os.Remove(e.file); err != nil {
+					s.logger.Fatal("failed to remove csv file",
+						zap.String("file", e.file),
+						zap.Error(err))
+				}
+				break
 			}
 		}
 	}
@@ -1135,4 +1158,9 @@ func getEntryFilterSQL(
 
 func escape(value string) string {
 	return strings.ReplaceAll(value, "'", "''")
+}
+
+type loadAction struct {
+	sql  string
+	file string
 }
