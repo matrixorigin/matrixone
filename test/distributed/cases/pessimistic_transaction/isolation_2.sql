@@ -352,6 +352,7 @@ use isolation_2;
 insert into dis_table_06(a,b) values (5,'leetio');
 select * from dis_table_06;
 -- @session:id=1{
+-- @wait:0:commit
 update dis_table_06 set a=5 where b='sun';
 select * from dis_table_06;
 -- @session}
