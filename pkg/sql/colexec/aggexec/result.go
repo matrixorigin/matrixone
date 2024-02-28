@@ -106,10 +106,7 @@ func (r *aggFuncResult[T]) marshal() ([]byte, error) {
 	return r.res.MarshalBinary()
 }
 
-func (r *aggFuncResult[T]) unmarshal(proc *process.Process, p types.Type, data []byte) error {
-	r.proc = proc
-	r.mp = proc.Mp()
-	r.typ = p
+func (r *aggFuncResult[T]) unmarshal(data []byte) error {
 	return r.res.UnmarshalBinary(data)
 }
 
@@ -180,9 +177,6 @@ func (r *aggFuncBytesResult) marshal() ([]byte, error) {
 	return r.res.MarshalBinary()
 }
 
-func (r *aggFuncBytesResult) unmarshal(proc *process.Process, p types.Type, data []byte) error {
-	r.proc = proc
-	r.mp = proc.Mp()
-	r.typ = p
+func (r *aggFuncBytesResult) unmarshal(data []byte) error {
 	return r.res.UnmarshalBinary(data)
 }

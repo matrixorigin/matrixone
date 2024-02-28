@@ -45,6 +45,10 @@ func (t *testSingleAggPrivate1) merge(other singleAggPrivateStructure1[int32, in
 	setter(getter1() + getter2())
 }
 func (t *testSingleAggPrivate1) flush(getter aggGetter[int64], setter aggSetter[int64]) {}
+func (t *testSingleAggPrivate1) marshal() []byte {
+	return nil
+}
+func (t *testSingleAggPrivate1) unmarshal([]byte) {}
 
 func TestSingleAggFuncExec1(t *testing.T) {
 	proc := testutil.NewProcess()
@@ -153,6 +157,10 @@ func (t *testMultiAggPrivate1) merge(other multiAggPrivateStructure1[int64], get
 	setter(getter1() + getter2())
 }
 func (t *testMultiAggPrivate1) flush(getter aggGetter[int64], setter aggSetter[int64]) {}
+func (t *testMultiAggPrivate1) marshal() []byte {
+	return nil
+}
+func (t *testMultiAggPrivate1) unmarshal([]byte) {}
 
 func TestMultiAggFuncExec1(t *testing.T) {
 	proc := testutil.NewProcess()

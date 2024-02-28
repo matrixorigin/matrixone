@@ -22,7 +22,12 @@ type aggBytesSetter func(value []byte) error
 type aggGetter[T types.FixedSizeTExceptStrType] func() T
 type aggBytesGetter func() []byte
 
-// todo: marshal and unmarshal were needed.
+// each private structure of aggregation should implement the canMarshal interface.
+// the canMarshal interface is used for multi-node communication.
+type canMarshal interface {
+	marshal() []byte
+	unmarshal([]byte)
+}
 
 /*
 	all codes below are the interface of aggregation's private structure.
@@ -40,6 +45,7 @@ type aggBytesGetter func() []byte
 
 type singleAggPrivateStructure1[
 	from types.FixedSizeTExceptStrType, to types.FixedSizeTExceptStrType] interface {
+	canMarshal
 	init()
 	fill(from, aggGetter[to], aggSetter[to])
 	fillNull(aggGetter[to], aggSetter[to])
@@ -50,6 +56,7 @@ type singleAggPrivateStructure1[
 
 type singleAggPrivateStructure2[
 	from types.FixedSizeTExceptStrType] interface {
+	canMarshal
 	init()
 	fill(from, aggBytesGetter, aggBytesSetter)
 	fillNull(aggBytesGetter, aggBytesSetter)
@@ -60,6 +67,7 @@ type singleAggPrivateStructure2[
 
 type singleAggPrivateStructure3[
 	to types.FixedSizeTExceptStrType] interface {
+	canMarshal
 	init()
 	fillBytes([]byte, aggGetter[to], aggSetter[to])
 	fillNull(aggGetter[to], aggSetter[to])
@@ -69,6 +77,7 @@ type singleAggPrivateStructure3[
 }
 
 type singleAggPrivateStructure4 interface {
+	canMarshal
 	init()
 	fillBytes([]byte, aggBytesGetter, aggBytesSetter)
 	fillNull(aggBytesGetter, aggBytesSetter)
@@ -79,6 +88,7 @@ type singleAggPrivateStructure4 interface {
 
 type multiAggPrivateStructure1[
 	to types.FixedSizeTExceptStrType] interface {
+	canMarshal
 	init()
 	getFillWhich(idx int) any                        // return func fill(multiAggPrivateStructure1[to], value)
 	getFillNullWhich(idx int) any                    // return func fillNull(multiAggPrivateStructure1[to])
@@ -88,6 +98,7 @@ type multiAggPrivateStructure1[
 }
 
 type multiAggPrivateStructure2 interface {
+	canMarshal
 	init()
 	getFillWhich(idx int) any                          // return func fill(multiAggPrivateStructure2, value)
 	getFillNullWhich(idx int) any                      // return func fillNull(multiAggPrivateStructure2)

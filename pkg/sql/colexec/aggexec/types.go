@@ -29,6 +29,9 @@ const (
 // AggFuncExec is an interface to do execution for aggregation.
 // todo: use vector... to replace the []*vector.Vector may be better.
 type AggFuncExec interface {
+	marshal() ([]byte, error)
+	unmarshal([]byte) error
+
 	AggID() int64
 	IsDistinct() bool
 
@@ -68,6 +71,11 @@ var (
 	_ AggFuncExec = (*multiAggFuncExec1[int8])(nil)
 	_ AggFuncExec = (*multiAggFuncExec2)(nil)
 	_ AggFuncExec = &groupConcatExec{}
+)
+
+var (
+	fromAggInfoToSingleAggImpl func(aggID int64, args types.Type, ret types.Type) any
+	fromAggInfoToMultiAggImpl  func(aggID int64, args []types.Type, ret types.Type) any
 )
 
 // MakeAgg supports to create an aggregation function executor for single column.
