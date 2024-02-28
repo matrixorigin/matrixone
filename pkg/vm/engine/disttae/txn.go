@@ -1025,8 +1025,14 @@ func (txn *Transaction) clearTableCache() {
 	})
 }
 
-func (txn *Transaction) snapshotWriteOffset() int {
+func (txn *Transaction) GetSnapshotWriteOffset() int {
 	txn.Lock()
 	defer txn.Unlock()
-	return len(txn.writes)
+	return txn.snapshotWriteOffset
+}
+
+func (txn *Transaction) UpdateSnapshotWriteOffset() {
+	txn.Lock()
+	defer txn.Unlock()
+	txn.snapshotWriteOffset = len(txn.writes)
 }
