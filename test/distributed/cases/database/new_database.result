@@ -8,13 +8,14 @@ create database IF NOT EXISTS test01;
 create database `测试数据库`;
 show databases;
 Database
-mo_task
+information_schema
 mo_catalog
+mo_debug
+mo_task
+mysql
+new_database
 system
 system_metrics
-mysql
-information_schema
-new_database
 test01
 测试数据库
 drop database if exists test01;
@@ -31,15 +32,16 @@ database abcde already exists
 create database db_with_no_tables_and_an_unrelated_file_in_data_directory;
 show databases;
 Database
-mo_task
-mo_catalog
-information_schema
-mysql
-system_metrics
-system
-new_database
 abcde
 db_with_no_tables_and_an_unrelated_file_in_data_directory
+information_schema
+mo_catalog
+mo_debug
+mo_task
+mysql
+new_database
+system
+system_metrics
 drop database `ABCDE`;
 drop database `abcde`;
 Can't drop database 'abcde'; database doesn't exist

@@ -18,7 +18,7 @@ account_id    relname    relkind
 0    mo_columns    r
 0    mo_configurations    v
 0    mo_database    r
-0    mo_increment_columns
+0    mo_increment_columns    
 0    mo_indexes    r
 0    mo_locks    v
 0    mo_mysql_compatibility_mode    r

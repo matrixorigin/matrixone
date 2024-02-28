@@ -21,6 +21,8 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
 
@@ -71,8 +73,13 @@ func (v *versionHandle) HandleTenantUpgrade(
 func (v *versionHandle) HandleClusterUpgrade(
 	ctx context.Context,
 	txn executor.TxnExecutor) error {
-	err := handleCreateIndexesForTaskTables(ctx, txn)
-	return err
+  if err := handleCreateIndexesForTaskTables(ctx, txn); err != nil {
+	  return err
+  }
+	if err := v.handleCreateTxnTrace(txn); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (v *versionHandle) createFrameworkTables(
@@ -129,6 +136,37 @@ func handleCreateIndexesForTaskTables(ctx context.Context,
 			return err
 		}
 		r.Close()
+  }
+	return nil
+}
+
+func (v *versionHandle) handleCreateTxnTrace(txn executor.TxnExecutor) error {
+	txn.Use(catalog.MO_CATALOG)
+	res, err := txn.Exec("show databases", executor.StatementOption{})
+	if err != nil {
+		return err
+	}
+	completed := false
+	res.ReadRows(func(rows int, cols []*vector.Vector) bool {
+		for i := 0; i < rows; i++ {
+			if cols[0].GetStringAt(i) == trace.DebugDB {
+				completed = true
+			}
+		}
+		return true
+	})
+	res.Close()
+
+	if completed {
+		return nil
+	}
+
+	for _, sql := range trace.InitSQLs {
+		res, err = txn.Exec(sql, executor.StatementOption{})
+		if err != nil {
+			return err
+		}
+		res.Close()
 	}
 	return nil
 }
