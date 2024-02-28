@@ -106,45 +106,38 @@ func NewExpressionExecutor(proc *process.Process, planExpr *plan.Expr) (Expressi
 		if err != nil {
 			return nil, err
 		}
-		return &FixedVectorExpressionExecutor{
-			m:            proc.Mp(),
-			resultVector: vec,
-		}, nil
+		return NewFixedVectorExpressionExecutor(proc.Mp(), false, vec), nil
 
 	case *plan.Expr_T:
 		typ := types.New(types.T(planExpr.Typ.Id), planExpr.Typ.Width, planExpr.Typ.Scale)
 		vec := vector.NewConstNull(typ, 1, proc.Mp())
-		return &FixedVectorExpressionExecutor{
-			m:            proc.Mp(),
-			resultVector: vec,
-		}, nil
+		return NewFixedVectorExpressionExecutor(proc.Mp(), false, vec), nil
 
 	case *plan.Expr_Col:
 		typ := types.New(types.T(planExpr.Typ.Id), planExpr.Typ.Width, planExpr.Typ.Scale)
-		return &ColumnExpressionExecutor{
+		ce := NewColumnExpressionExecutor()
+		*ce = ColumnExpressionExecutor{
 			mp:       proc.Mp(),
 			relIndex: int(t.Col.RelPos),
 			colIndex: int(t.Col.ColPos),
 			typ:      typ,
-		}, nil
+		}
+		return ce, nil
 
 	case *plan.Expr_P:
-		return &ParamExpressionExecutor{
-			mp:  proc.Mp(),
-			vec: nil,
-			pos: int(t.P.Pos),
-			typ: types.T_text.ToType(),
-		}, nil
+		return NewParamExpressionExecutor(proc.Mp(), int(t.P.Pos), types.T_text.ToType()), nil
 
 	case *plan.Expr_V:
 		typ := types.New(types.T(planExpr.Typ.Id), planExpr.Typ.Width, planExpr.Typ.Scale)
-		return &VarExpressionExecutor{
+		ve := NewVarExpressionExecutor()
+		*ve = VarExpressionExecutor{
 			mp:     proc.Mp(),
 			name:   t.V.Name,
 			system: t.V.System,
 			global: t.V.Global,
 			typ:    typ,
-		}, nil
+		}
+		return ve, nil
 
 	case *plan.Expr_Vec:
 		vec := vector.NewVec(types.T_any.ToType())
@@ -152,11 +145,7 @@ func NewExpressionExecutor(proc *process.Process, planExpr *plan.Expr) (Expressi
 		if err != nil {
 			return nil, err
 		}
-		return &FixedVectorExpressionExecutor{
-			m:            proc.Mp(),
-			fixed:        true,
-			resultVector: vec,
-		}, nil
+		return NewFixedVectorExpressionExecutor(proc.Mp(), true, vec), nil
 
 	case *plan.Expr_F:
 		overload, err := function.GetFunctionById(proc.Ctx, t.F.GetFunc().GetObj())
@@ -164,7 +153,7 @@ func NewExpressionExecutor(proc *process.Process, planExpr *plan.Expr) (Expressi
 			return nil, err
 		}
 
-		executor := &FunctionExpressionExecutor{}
+		executor := NewFunctionExpressionExecutor()
 		typ := types.New(types.T(planExpr.Typ.Id), planExpr.Typ.Width, planExpr.Typ.Scale)
 		if err = executor.Init(proc, len(t.F.Args), typ, overload.GetExecuteMethod()); err != nil {
 			return nil, err
@@ -210,9 +199,7 @@ func NewExpressionExecutor(proc *process.Process, planExpr *plan.Expr) (Expressi
 				mp := proc.Mp()
 
 				result := executor.resultVector.GetResultVector()
-				fixed := &FixedVectorExpressionExecutor{
-					m: mp,
-				}
+				fixed := NewFixedVectorExpressionExecutor(mp, false, nil)
 
 				if execLen == 1 {
 					// ToConst just returns a new pointer to the same memory.
@@ -379,6 +366,7 @@ func (expr *ParamExpressionExecutor) Free() {
 		expr.null.Free(expr.mp)
 		expr.null = nil
 	}
+	reuse.Free[ParamExpressionExecutor](expr, nil)
 }
 
 func (expr *ParamExpressionExecutor) IsColumnExpr() bool {
@@ -446,6 +434,7 @@ func (expr *VarExpressionExecutor) Free() {
 		expr.null.Free(expr.mp)
 		expr.null = nil
 	}
+	reuse.Free[VarExpressionExecutor](expr, nil)
 }
 
 func (expr *VarExpressionExecutor) IsColumnExpr() bool {
@@ -509,6 +498,7 @@ func (expr *FunctionExpressionExecutor) Free() {
 	for _, p := range expr.parameterExecutor {
 		p.Free()
 	}
+	reuse.Free[FunctionExpressionExecutor](expr, nil)
 }
 
 func (expr *FunctionExpressionExecutor) SetParameter(index int, executor ExpressionExecutor) {
@@ -562,6 +552,7 @@ func (expr *ColumnExpressionExecutor) Free() {
 		expr.nullVecCache.Free(expr.mp)
 		expr.nullVecCache = nil
 	}
+	reuse.Free[ColumnExpressionExecutor](expr, nil)
 }
 
 func (expr *ColumnExpressionExecutor) IsColumnExpr() bool {
