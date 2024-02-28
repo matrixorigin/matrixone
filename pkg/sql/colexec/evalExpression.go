@@ -21,6 +21,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	util2 "github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -588,6 +589,7 @@ func (expr *FixedVectorExpressionExecutor) Free() {
 	}
 	expr.resultVector.Free(expr.m)
 	expr.resultVector = nil
+	reuse.Free[FixedVectorExpressionExecutor](expr, nil)
 }
 
 func (expr *FixedVectorExpressionExecutor) IsColumnExpr() bool {
