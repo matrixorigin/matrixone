@@ -2397,17 +2397,6 @@ func (c *Compile) compileBroadcastJoin(ctx context.Context, node, left, right *p
 				}
 			}
 		}
-
-	case plan.Node_INDEX:
-		rs = c.newBroadcastJoinScopeList(ss, children, node)
-		for i := range rs {
-			rs[i].appendInstruction(vm.Instruction{
-				Op:  vm.IndexJoin,
-				Idx: c.anal.curr,
-				Arg: constructIndexJoin(node, rightTyps, c.proc),
-			})
-		}
-
 	case plan.Node_SEMI:
 		if isEq {
 			if node.BuildOnLeft {
@@ -3392,7 +3381,12 @@ func (c *Compile) newJoinBuildScope(s *Scope, ss []*Scope) *Scope {
 		regTransplant(s, rs, i+s.BuildIdx, i)
 	}
 
-	rs.appendInstruction(constructJoinBuildInstruction(c, s.Instructions[0], c.proc, s.ShuffleCnt, ss != nil))
+	rs.appendInstruction(vm.Instruction{
+		Op:      vm.HashBuild,
+		Idx:     s.Instructions[0].Idx,
+		IsFirst: true,
+		Arg:     constructHashBuild(c, s.Instructions[0], c.proc, s.ShuffleCnt, ss != nil),
+	})
 
 	if ss == nil { // unparallel, send the hashtable to join scope directly
 		s.Proc.Reg.MergeReceivers[s.BuildIdx] = &process.WaitRegister{
