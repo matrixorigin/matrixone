@@ -800,6 +800,16 @@ func (tbl *txnTable) RangeDelete(
 				start,
 				end,
 				err)
+			if tbl.store.rt.Options.IncrementalDedup && moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict) {
+				logutil.Warnf("[txn%X,ts=%s]: table-%d blk-%s delete rows [%d,%d] pk %s",
+					tbl.store.txn.GetID(),
+					tbl.store.txn.GetStartTS().ToString(),
+					id.TableID,
+					id.BlockID.String(),
+					start, end,
+					pk.PPString(int(start-end+1)),
+				)
+			}
 		}
 	}()
 	if tbl.tableSpace != nil && id.ObjectID().Eq(tbl.tableSpace.entry.ID) {

@@ -871,6 +871,7 @@ message PreInsertCtx {
 message RuntimeFilterSpec {
 	int32 tag = 1;
 	Expr expr = 2;
+	int32 upperLimit = 3;
 }
 
 message IdList {
@@ -1116,6 +1117,7 @@ message CreateTable {
 	// we need column name when create table, but not in ForeignKeyDef
 	repeated FkColName fk_cols = 9;
 	repeated TableDef partition_tables = 10;// partition tables for partitions
+	string create_as_select_sql = 11;
 }
 
 message AlterTableDrop {

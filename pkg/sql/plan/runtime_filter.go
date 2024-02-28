@@ -22,17 +22,30 @@ import (
 )
 
 const (
-	InFilterCardLimit    = 10000
-	BloomFilterCardLimit = 100 * InFilterCardLimit
-	SelectivityThreshold = 0.5
+	InFilterCardLimitNonPK   = 10000
+	InFilterCardLimitPK      = 320000
+	BloomFilterCardLimit     = 100 * InFilterCardLimitNonPK
+	InFilterSelectivityLimit = 0.05
 )
 
-func GetInFilterCardLimit() int64 {
+func GetInFilterCardLimit() int32 {
 	v, ok := runtime.ProcessLevelRuntime().GetGlobalVariables("runtime_filter_limit_in")
 	if ok {
-		return v.(int64)
+		return int32(v.(int64))
 	}
-	return InFilterCardLimit
+	return InFilterCardLimitNonPK
+}
+
+func GetInFilterCardLimitOnPK(tableCnt float64) int32 {
+	upper := tableCnt * InFilterSelectivityLimit
+	if upper > InFilterCardLimitPK {
+		upper = InFilterCardLimitPK
+	}
+	lower := float64(GetInFilterCardLimit())
+	if upper < lower {
+		upper = lower
+	}
+	return int32(upper)
 }
 
 func (builder *QueryBuilder) pushdownRuntimeFilters(nodeID int32) {
@@ -74,7 +87,7 @@ func (builder *QueryBuilder) pushdownRuntimeFilters(nodeID int32) {
 	}
 
 	rightChild := builder.qry.Nodes[node.Children[1]]
-	if rightChild.Stats.Selectivity > SelectivityThreshold {
+	if rightChild.Stats.Selectivity > 0.5 {
 		return
 	}
 
@@ -156,8 +169,14 @@ func (builder *QueryBuilder) pushdownRuntimeFilters(nodeID int32) {
 			Expr: DeepCopyExpr(probeExprs[0]),
 		})
 
+		col := probeExprs[0].Expr.(*plan.Expr_Col)
+		inLimit := GetInFilterCardLimit()
+		if leftChild.TableDef.Pkey != nil && col.Col.Name == leftChild.TableDef.Pkey.PkeyColName {
+			inLimit = GetInFilterCardLimitOnPK(leftChild.Stats.TableCnt)
+		}
 		node.RuntimeFilterBuildList = append(node.RuntimeFilterBuildList, &plan.RuntimeFilterSpec{
-			Tag: rfTag,
+			Tag:        rfTag,
+			UpperLimit: inLimit,
 			Expr: &plan.Expr{
 				Typ: DeepCopyType(buildExprs[0].Typ),
 				Expr: &plan.Expr_Col{
@@ -244,8 +263,9 @@ func (builder *QueryBuilder) pushdownRuntimeFilters(nodeID int32) {
 
 	buildExpr, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", buildArgs)
 	node.RuntimeFilterBuildList = append(node.RuntimeFilterBuildList, &plan.RuntimeFilterSpec{
-		Tag:  rfTag,
-		Expr: buildExpr,
+		Tag:        rfTag,
+		UpperLimit: GetInFilterCardLimitOnPK(leftChild.Stats.TableCnt), // multicol pk, must hit all pk cols for now
+		Expr:       buildExpr,
 	})
 	recalcStatsByRuntimeFilter(leftChild, rightChild.Stats.Selectivity)
 }
