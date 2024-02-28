@@ -49,6 +49,8 @@ var (
 	RemoveRemoteLockTable = strings.ToUpper("RemoveRemoteLockTable")
 	GetLatestBind         = strings.ToUpper("GetLatestBind")
 	UnsubscribeTable      = "UNSUBSCRIBE_TABLE"
+
+	HandleTxnTrace = strings.ToUpper("txn-trace")
 )
 
 var (
@@ -81,6 +83,7 @@ var (
 		RemoveRemoteLockTable:    handleRemoveRemoteLockTable,
 		GetLatestBind:            handleGetLatestBind,
 		UnsubscribeTable:         handleUnsubscribeTable,
+		HandleTxnTrace:           handleTxnTrace,
 	}
 )
 
