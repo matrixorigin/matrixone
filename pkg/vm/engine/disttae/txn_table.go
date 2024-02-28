@@ -2091,13 +2091,16 @@ func (tbl *txnTable) PrimaryKeysPersistedMayBeModified(
 	to types.TS,
 	keys *vector.Vector,
 ) (bool, error) {
+
 	ctx := tbl.proc.Load().Ctx
 	fs := tbl.db.txn.engine.fs
 	primaryIdx := tbl.primaryIdx
+
 	var (
 		meta objectio.ObjectDataMeta
 		bf   objectio.BloomFilter
 	)
+
 	candidateBlks := make(map[types.Blockid]*objectio.BlockInfo)
 
 	//only check data objects.
@@ -2197,10 +2200,6 @@ func (tbl *txnTable) PrimaryKeysPersistedMayBeModified(
 			return true, err
 		}
 		filter := getPKSearchFuncByPKVals(keys)
-		//TODO::remove it,just for test.
-		if filter == nil {
-			return true, nil
-		}
 		sels := filter(bat.Vecs)
 		if len(sels) > 0 {
 			return true, nil

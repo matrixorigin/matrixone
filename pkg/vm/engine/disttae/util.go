@@ -451,11 +451,59 @@ func getPkExpr(
 	return nil
 }
 
-func getPKSearchFuncByPKVals(pkVals *vector.Vector) blockio.ReadFilter {
-	if pkVals == nil {
+func getPKSearchFuncByPKVals(vec *vector.Vector) blockio.ReadFilter {
+	if vec == nil {
 		return nil
 	}
-	return nil
+	var searchPKFunc func(*vector.Vector) []int32
+	switch vec.GetType().Oid {
+	case types.T_bit:
+		searchPKFunc = vector.OrderedBinarySearchOffsetByValFactory(vector.MustFixedCol[uint64](vec))
+	case types.T_int8:
+		searchPKFunc = vector.OrderedBinarySearchOffsetByValFactory(vector.MustFixedCol[int8](vec))
+	case types.T_int16:
+		searchPKFunc = vector.OrderedBinarySearchOffsetByValFactory(vector.MustFixedCol[int16](vec))
+	case types.T_int32:
+		searchPKFunc = vector.OrderedBinarySearchOffsetByValFactory(vector.MustFixedCol[int32](vec))
+	case types.T_int64:
+		searchPKFunc = vector.OrderedBinarySearchOffsetByValFactory(vector.MustFixedCol[int64](vec))
+	case types.T_uint8:
+		searchPKFunc = vector.OrderedBinarySearchOffsetByValFactory(vector.MustFixedCol[uint8](vec))
+	case types.T_uint16:
+		searchPKFunc = vector.OrderedBinarySearchOffsetByValFactory(vector.MustFixedCol[uint16](vec))
+	case types.T_uint32:
+		searchPKFunc = vector.OrderedBinarySearchOffsetByValFactory(vector.MustFixedCol[uint32](vec))
+	case types.T_uint64:
+		searchPKFunc = vector.OrderedBinarySearchOffsetByValFactory(vector.MustFixedCol[uint64](vec))
+	case types.T_float32:
+		searchPKFunc = vector.OrderedBinarySearchOffsetByValFactory(vector.MustFixedCol[float32](vec))
+	case types.T_float64:
+		searchPKFunc = vector.OrderedBinarySearchOffsetByValFactory(vector.MustFixedCol[float64](vec))
+	case types.T_date:
+		searchPKFunc = vector.OrderedBinarySearchOffsetByValFactory(vector.MustFixedCol[types.Date](vec))
+	case types.T_time:
+		searchPKFunc = vector.OrderedBinarySearchOffsetByValFactory(vector.MustFixedCol[types.Time](vec))
+	case types.T_datetime:
+		searchPKFunc = vector.OrderedBinarySearchOffsetByValFactory(vector.MustFixedCol[types.Datetime](vec))
+	case types.T_timestamp:
+		searchPKFunc = vector.OrderedBinarySearchOffsetByValFactory(vector.MustFixedCol[types.Timestamp](vec))
+	case types.T_decimal64:
+		searchPKFunc = vector.FixedSizedBinarySearchOffsetByValFactory(vector.MustFixedCol[types.Decimal64](vec), types.CompareDecimal64)
+	case types.T_decimal128:
+		searchPKFunc = vector.FixedSizedBinarySearchOffsetByValFactory(vector.MustFixedCol[types.Decimal128](vec), types.CompareDecimal128)
+	case types.T_uuid:
+		searchPKFunc = vector.FixedSizedBinarySearchOffsetByValFactory(vector.MustFixedCol[types.Uuid](vec), types.CompareUuid)
+	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_json, types.T_blob, types.T_text,
+		types.T_array_float32, types.T_array_float64, types.T_Rowid:
+		searchPKFunc = vector.VarlenBinarySearchOffsetByValFactory(vector.MustBytesCol(vec))
+	case types.T_enum:
+		searchPKFunc = vector.OrderedBinarySearchOffsetByValFactory(vector.MustFixedCol[types.Enum](vec))
+	default:
+		panic(fmt.Sprintf("unexpected type: %s", vec.GetType().String()))
+	}
+	return func(vecs []*vector.Vector) []int32 {
+		return searchPKFunc(vecs[0])
+	}
 }
 
 func getNonCompositePKSearchFuncByExpr(
