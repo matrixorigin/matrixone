@@ -17,7 +17,6 @@ package v1_2_0
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -73,9 +72,9 @@ func (v *versionHandle) HandleTenantUpgrade(
 func (v *versionHandle) HandleClusterUpgrade(
 	ctx context.Context,
 	txn executor.TxnExecutor) error {
-  if err := handleCreateIndexesForTaskTables(ctx, txn); err != nil {
-	  return err
-  }
+	if err := handleCreateIndexesForTaskTables(ctx, txn); err != nil {
+		return err
+	}
 	if err := v.handleCreateTxnTrace(txn); err != nil {
 		return err
 	}
@@ -136,7 +135,7 @@ func handleCreateIndexesForTaskTables(ctx context.Context,
 			return err
 		}
 		r.Close()
-  }
+	}
 	return nil
 }
 
