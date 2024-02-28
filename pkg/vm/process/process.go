@@ -280,7 +280,7 @@ func (proc *Process) NewBatchFromSrc(src *batch.Batch, preAllocSize int) (*batch
 	return bat, nil
 }
 
-func (proc *Process) AppendToFixedSizeFromOffset(dst *batch.Batch, src *batch.Batch, offset int) (*batch.Batch, int, error) {
+func (proc *Process) AppendBatchFromOffset(dst *batch.Batch, src *batch.Batch, offset int) (*batch.Batch, int, error) {
 	var err error
 	if dst == nil {
 		dst, err = proc.NewBatchFromSrc(src, 0)
@@ -289,7 +289,7 @@ func (proc *Process) AppendToFixedSizeFromOffset(dst *batch.Batch, src *batch.Ba
 		}
 	}
 	if dst.RowCount() >= DefaultBatchSize {
-		panic("can't call AppendToFixedSizeFromOffset when batch is full!")
+		panic("can't call AppendBatchFromOffset when batch is full!")
 	}
 	if len(dst.Vecs) != len(src.Vecs) {
 		return nil, 0, moerr.NewInternalError(proc.Ctx, "unexpected error happens in batch append")
