@@ -2197,6 +2197,10 @@ func (tbl *txnTable) PrimaryKeysPersistedMayBeModified(
 			return true, err
 		}
 		filter := getPKSearchFuncByPKVals(keys)
+		//TODO::remove it,just for test.
+		if filter == nil {
+			return true, nil
+		}
 		sels := filter(bat.Vecs)
 		if len(sels) > 0 {
 			return true, nil
@@ -2230,7 +2234,6 @@ func (tbl *txnTable) PrimaryKeysMayBeModified(
 		from,
 		to,
 		keysVector)
-	//return false, nil
 }
 
 func (tbl *txnTable) updateDeleteInfo(
