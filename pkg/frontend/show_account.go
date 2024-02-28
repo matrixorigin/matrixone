@@ -351,15 +351,16 @@ func getAccountsStorageUsage(ctx context.Context, ses *Session, accIds [][]int32
 }
 
 type tableStatsResult struct {
-	bat       *batch.Batch
-	err       error
-	sqlResSet *MysqlResultSet
+	bat         *batch.Batch
+	err         error
+	sqlResSet   *MysqlResultSet
+	batIdx, idx int
 }
 
 func getTableStatsAsync(
 	ctx context.Context, ses *Session,
 	outCh chan tableStatsResult,
-	wg *sync.WaitGroup, id int32) {
+	wg *sync.WaitGroup, id int32, batIdx, idx int) {
 
 	wg.Add(1)
 	cnUsageCache.ExecuteJob(func(c *logtail.StorageUsageCache) {
@@ -371,23 +372,33 @@ func getTableStatsAsync(
 		// get the admin_name, db_count, table_count for each account
 		newCtx := defines.AttachAccountId(ctx, uint32(id))
 		if tmpBat, err := getTableStats(newCtx, tmpHandler, id); err != nil {
-			outCh <- tableStatsResult{nil, err, nil}
+			outCh <- tableStatsResult{
+				nil, err, nil, batIdx, idx}
 			return
 		} else {
-			outCh <- tableStatsResult{tmpBat, nil, tmpHandler.ses.GetAllMysqlResultSet()[0]}
+			outCh <- tableStatsResult{
+				tmpBat, nil,
+				tmpHandler.ses.GetAllMysqlResultSet()[0],
+				batIdx, idx}
 		}
 	})
 }
 
 func getTableStatsParallel(
 	ctx context.Context, ses *Session,
-	accountIds [][]int32) (*MysqlResultSet, []*batch.Batch, error) {
+	accountIds [][]int32) (*MysqlResultSet, [][]*batch.Batch, error) {
 	wg := sync.WaitGroup{}
 	var err error
 	var sqlResSet *MysqlResultSet
 	outCh := make(chan tableStatsResult)
 
-	var statsBates []*batch.Batch
+	accLen, totalNum := len(accountIds), 0
+
+	statsBates := make([][]*batch.Batch, accLen)
+	for i, ids := range accountIds {
+		statsBates[i] = make([]*batch.Batch, len(ids))
+		totalNum += len(ids)
+	}
 
 	cnUsageCache.ExecuteJob(func(c *logtail.StorageUsageCache) {
 		for {
@@ -396,22 +407,23 @@ func getTableStatsParallel(
 				if out.err != nil {
 					err = out.err
 				}
-				statsBates = append(statsBates, out.bat)
+				statsBates[out.batIdx][out.idx] = out.bat
 				sqlResSet = out.sqlResSet
+				totalNum--
 
 			default:
 			}
 
-			if len(statsBates) == len(accountIds)*len(accountIds[0]) {
+			if totalNum == 0 {
 				close(outCh)
 				break
 			}
 		}
 	})
 
-	for _, ids := range accountIds {
-		for _, id := range ids {
-			getTableStatsAsync(ctx, ses, outCh, &wg, id)
+	for i, ids := range accountIds {
+		for j, id := range ids {
+			getTableStatsAsync(ctx, ses, outCh, &wg, id, i, j)
 		}
 	}
 
@@ -433,15 +445,13 @@ func doShowAccounts(ctx context.Context, ses *Session, sa *tree.ShowAccounts) (e
 	var accountIds [][]int32
 	var allAccountInfo []*batch.Batch
 	var eachAccountInfo []*batch.Batch
-	var statsBates []*batch.Batch
+	var statsBates [][]*batch.Batch
 	var MoAccountColumns, EachAccountColumns *plan.ResultColDef
 	var outputBatches []*batch.Batch
 
 	start := time.Now()
-	getTableStatsDur := time.Duration(0)
 	defer func() {
 		v2.TaskShowAccountsTotalDurationHistogram.Observe(time.Since(start).Seconds())
-		v2.TaskShowAccountsGetTableStatsDurationHistogram.Observe(getTableStatsDur.Seconds())
 	}()
 
 	mp := ses.GetMemPool()
@@ -467,7 +477,9 @@ func doShowAccounts(ctx context.Context, ses *Session, sa *tree.ShowAccounts) (e
 		}
 
 		for i := range statsBates {
-			statsBates[i].Clean(mp)
+			for j := range statsBates[i] {
+				statsBates[i][j].Clean(mp)
+			}
 		}
 	}()
 
@@ -531,14 +543,16 @@ func doShowAccounts(ctx context.Context, ses *Session, sa *tree.ShowAccounts) (e
 	// step 3
 	outputBatches = make([]*batch.Batch, len(allAccountInfo))
 
+	tt = time.Now()
 	rsOfEachAccount, statsBates, err := getTableStatsParallel(ctx, ses, accountIds)
 	if err != nil {
 		return err
 	}
+	v2.TaskShowAccountsGetTableStatsDurationHistogram.Observe(time.Since(tt).Seconds())
 
 	for i, ids := range accountIds {
 		for j, id := range ids {
-			bat := statsBates[i*len(ids)+j]
+			bat := statsBates[i][j]
 			embeddingSizeToBatch(bat, usage[id], mp)
 			eachAccountInfo = append(eachAccountInfo, bat)
 		}
