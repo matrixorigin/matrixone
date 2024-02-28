@@ -365,17 +365,17 @@ func (s *service) registerExecutorsLocked() {
 
 				if ready == 4 {
 					// init metric/log merge task cron rule
-					//if err := export.CreateCronTask(moServerCtx, task.TaskCode_MetricLogMerge, ts); err != nil {
-					//	return err
-					//}
+					if err := export.CreateCronTask(moServerCtx, task.TaskCode_MetricLogMerge, ts); err != nil {
+						return err
+					}
 					ready++
 				}
 
 				if ready == 5 {
 					// init metric task
-					//if err := mometric.CreateCronTask(moServerCtx, task.TaskCode_MetricStorageUsage, ts); err != nil {
-					//	return err
-					//}
+					if err := mometric.CreateCronTask(moServerCtx, task.TaskCode_MetricStorageUsage, ts); err != nil {
+						return err
+					}
 					ready++
 				}
 				return nil

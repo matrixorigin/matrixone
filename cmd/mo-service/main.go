@@ -19,6 +19,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"net/http"
 	"os"
 	"os/signal"
@@ -193,13 +194,13 @@ func startService(
 		return err
 	}
 
-	//etlFS, err := fileservice.Get[fileservice.FileService](fs, defines.ETLFileServiceName)
-	//if err != nil {
-	//	return err
-	//}
-	//if err = initTraceMetric(ctx, st, cfg, stopper, etlFS, uuid); err != nil {
-	//	return err
-	//}
+	etlFS, err := fileservice.Get[fileservice.FileService](fs, defines.ETLFileServiceName)
+	if err != nil {
+		return err
+	}
+	if err = initTraceMetric(ctx, st, cfg, stopper, etlFS, uuid); err != nil {
+		return err
+	}
 
 	switch st {
 	case metadata.ServiceType_CN:
