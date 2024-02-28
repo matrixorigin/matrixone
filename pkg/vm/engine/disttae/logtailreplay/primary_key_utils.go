@@ -16,26 +16,164 @@ package logtailreplay
 
 import (
 	"bytes"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
-func (p *PartitionState) PrimaryKeyMayBeModified(
+func ForeachCommittedObjects(
+	createObjs []objectio.ObjectNameShort,
+	delObjs []objectio.ObjectNameShort,
+	p *PartitionState,
+	onObj func(ObjectInfo) error) (err error) {
+	for _, obj := range createObjs {
+		if objInfo, ok := p.GetObject(obj); ok {
+			if err = onObj(objInfo); err != nil {
+				return
+			}
+		}
+	}
+	for _, obj := range delObjs {
+		if objInfo, ok := p.GetObject(obj); ok {
+			if err = onObj(objInfo); err != nil {
+				return
+			}
+		}
+	}
+	return nil
+
+}
+
+func (p *PartitionState) PrimaryKeysPersistedMayBeModified(
+	from types.TS,
+	to types.TS,
+	keys *vector.Vector,
+) bool {
+	candidateBlks := make(map[types.Blockid]*objectio.BlockInfo)
+
+	//only check data objects.
+	delObjs, cObjs := p.GetChangedObjsBetween(from.Next(), types.MaxTs())
+	if err := ForeachCommittedObjects(cObjs, delObjs, p, func(obj ObjectInfo) (err2 error) {
+		var zmCkecked bool
+		// if the object info contains a pk zonemap, fast-check with the zonemap
+		if !obj.ZMIsEmpty() {
+			if isVec {
+				if !obj.SortKeyZoneMap().AnyIn(vec) {
+					return
+				}
+			} else {
+				if !obj.SortKeyZoneMap().ContainsKey(val) {
+					return
+				}
+			}
+			zmCkecked = true
+		}
+
+		var objMeta objectio.ObjectMeta
+		location := obj.Location()
+
+		// load object metadata
+		v2.TxnRangesLoadedObjectMetaTotalCounter.Inc()
+		if objMeta, err2 = objectio.FastLoadObjectMeta(
+			tbl.proc.Load().Ctx, &location, false, fs,
+		); err2 != nil {
+			return
+		}
+
+		// reset bloom filter to nil for each object
+		meta = objMeta.MustDataMeta()
+
+		// check whether the object is skipped by zone map
+		// If object zone map doesn't contains the pk value, we need to check bloom filter
+		if !zmCkecked {
+			if isVec {
+				if !meta.MustGetColumn(uint16(tbl.primaryIdx)).ZoneMap().AnyIn(vec) {
+					return
+				}
+			} else {
+				if !meta.MustGetColumn(uint16(tbl.primaryIdx)).ZoneMap().ContainsKey(val) {
+					return
+				}
+			}
+		}
+
+		bf = nil
+		if bf, err2 = objectio.LoadBFWithMeta(
+			tbl.proc.Load().Ctx, meta, location, fs,
+		); err2 != nil {
+			return
+		}
+
+		ForeachBlkInObjStatsList(false, meta, func(blk objectio.BlockInfo, blkMeta objectio.BlockObject) bool {
+			if isVec {
+				if !blkMeta.IsEmpty() && !blkMeta.MustGetColumn(uint16(tbl.primaryIdx)).ZoneMap().AnyIn(vec) {
+					return true
+				}
+			} else {
+				if !blkMeta.IsEmpty() && !blkMeta.MustGetColumn(uint16(tbl.primaryIdx)).ZoneMap().ContainsKey(val) {
+					return true
+				}
+			}
+
+			blkBf := bf.GetBloomFilter(uint32(blk.BlockID.Sequence()))
+			blkBfIdx := index.NewEmptyBinaryFuseFilter()
+			if err2 = index.DecodeBloomFilter(blkBfIdx, blkBf); err2 != nil {
+				return false
+			}
+			var exist bool
+			if isVec {
+				if exist = blkBfIdx.MayContainsAny(vec); !exist {
+					return true
+				}
+			} else {
+				if exist, err2 = blkBfIdx.MayContainsKey(val); err2 != nil {
+					return false
+				} else if !exist {
+					return true
+				}
+			}
+
+			blk.Sorted = obj.Sorted
+			blk.EntryState = obj.EntryState
+			blk.CommitTs = obj.CommitTS
+			if obj.HasDeltaLoc {
+				deltaLoc, commitTs, ok := snapshot.GetBockDeltaLoc(blk.BlockID)
+				if ok {
+					blk.DeltaLoc = deltaLoc
+					blk.CommitTs = commitTs
+				}
+			}
+			blk.PartitionNum = -1
+			blocks.AppendBlockInfo(blk)
+			return true
+		}, obj.ObjectStats)
+		return
+	}); err != nil {
+		return true
+	}
+
+	return true
+}
+
+func (p *PartitionState) PrimaryKeysInMemMayBeModified(
 	from types.TS,
 	to types.TS,
 	keys [][]byte,
 ) bool {
 
-	p.shared.Lock()
-	lastFlushTimestamp := p.shared.lastFlushTimestamp
-	p.shared.Unlock()
+	//p.shared.Lock()
+	//lastFlushTimestamp := p.shared.lastFlushTimestamp
+	//p.shared.Unlock()
 
-	if !lastFlushTimestamp.IsEmpty() {
-		if from.LessEq(lastFlushTimestamp) {
-			return true
-		}
-	}
+	//if !lastFlushTimestamp.IsEmpty() {
+	//	if from.LessEq(lastFlushTimestamp) {
+	//		return true
+	//	}
+	//}
 
 	iter := p.primaryIndex.Copy().Iter()
 	pivot := RowEntry{
@@ -60,7 +198,8 @@ func (p *PartitionState) PrimaryKeyMayBeModified(
 				return true
 			}
 
-			// some legacy deletion entries may not indexed, check all rows for changes
+			//some legacy deletion entries may not be indexed since old TN maybe
+			//don't take pk in log tail when delete row , so check all rows for changes.
 			pivot.BlockID = entry.BlockID
 			pivot.RowID = entry.RowID
 			rowIter := p.rows.Iter()

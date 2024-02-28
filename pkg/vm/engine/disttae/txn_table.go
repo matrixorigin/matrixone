@@ -2098,7 +2098,10 @@ func (tbl *txnTable) PrimaryKeysMayBeModified(ctx context.Context, from types.TS
 	packer.Reset()
 
 	keys := logtailreplay.EncodePrimaryKeyVector(keysVector, packer)
-	if snap.PrimaryKeyMayBeModified(from, to, keys) {
+	if snap.PrimaryKeysInMemMayBeModified(from, to, keys) {
+		return true, nil
+	}
+	if snap.PrimaryKeysPersistedMayBeModified(from, to, keysVector) {
 		return true, nil
 	}
 	return false, nil
@@ -2176,6 +2179,7 @@ func (tbl *txnTable) updateDeleteInfo(
 			for i, rowid := range rowids {
 				blkid, _ := rowid.Decode()
 				if _, ok := deleteObjsMap[*objectio.ShortName(&blkid)]; ok {
+					// read new row id from newly created blocks.
 					newId, ok, err := tbl.readNewRowid(pkVec, i, blks)
 					if err != nil {
 						return err

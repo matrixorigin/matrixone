@@ -138,6 +138,7 @@ func (b *dirtyBlocksIter) Close() error {
 }
 
 // GetChangedObjsBetween get changed objects between [begin, end]
+// notice that an object may be created after begin and deleted before end theoretically
 func (p *PartitionState) GetChangedObjsBetween(
 	begin types.TS,
 	end types.TS,

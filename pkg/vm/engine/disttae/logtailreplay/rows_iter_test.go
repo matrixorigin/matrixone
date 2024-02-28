@@ -112,7 +112,7 @@ func TestPartitionStateRowsIter(t *testing.T) {
 		}
 		require.Equal(t, 1, n)
 		require.Nil(t, iter.Close())
-		modified := state.PrimaryKeyMayBeModified(ts.Prev(), ts.Next(), [][]byte{bs})
+		modified := state.PrimaryKeysInMemMayBeModified(ts.Prev(), ts.Next(), [][]byte{bs})
 		require.True(t, modified)
 	}
 
@@ -204,7 +204,7 @@ func TestPartitionStateRowsIter(t *testing.T) {
 		{
 			// primary key change detection
 			key := EncodePrimaryKey(int64(i), packer)
-			modified := state.PrimaryKeyMayBeModified(
+			modified := state.PrimaryKeysInMemMayBeModified(
 				types.BuildTS(int64(deleteAt+i), 0).Prev(),
 				types.BuildTS(int64(deleteAt+i), 0).Next(),
 				[][]byte{key},
@@ -349,7 +349,7 @@ func TestInsertAndDeleteAtTheSameTimestamp(t *testing.T) {
 	for i := 0; i < num; i++ {
 		ts := types.BuildTS(int64(i), 0)
 		key := EncodePrimaryKey(int64(i), packer)
-		modified := state.PrimaryKeyMayBeModified(ts.Prev(), ts.Next(), [][]byte{key})
+		modified := state.PrimaryKeysInMemMayBeModified(ts.Prev(), ts.Next(), [][]byte{key})
 		require.True(t, modified)
 	}
 
@@ -441,7 +441,7 @@ func TestDeleteBeforeInsertAtTheSameTime(t *testing.T) {
 	for i := 0; i < num; i++ {
 		ts := types.BuildTS(int64(i), 0)
 		key := EncodePrimaryKey(int64(i), packer)
-		modified := state.PrimaryKeyMayBeModified(ts.Prev(), ts.Next(), [][]byte{key})
+		modified := state.PrimaryKeysInMemMayBeModified(ts.Prev(), ts.Next(), [][]byte{key})
 		require.True(t, modified)
 	}
 
@@ -486,7 +486,7 @@ func TestPrimaryKeyModifiedWithDeleteOnly(t *testing.T) {
 	for i := 0; i < num; i++ {
 		ts := types.BuildTS(int64(i), 0)
 		key := EncodePrimaryKey(int64(i), packer)
-		modified := state.PrimaryKeyMayBeModified(ts.Prev(), ts.Next(), [][]byte{key})
+		modified := state.PrimaryKeysInMemMayBeModified(ts.Prev(), ts.Next(), [][]byte{key})
 		require.True(t, modified)
 	}
 
