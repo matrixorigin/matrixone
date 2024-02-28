@@ -395,7 +395,7 @@ func (o *testOperator) IsOpenLog() bool {
 	panic("unimplemented")
 }
 
-func (o *testOperator) AppendEventCallback(event client.EventType, callbacks ...func(txn.TxnMeta)) {
+func (o *testOperator) AppendEventCallback(event client.EventType, callbacks ...func(txn.TxnMeta, error)) {
 	panic("unimplemented")
 }
 

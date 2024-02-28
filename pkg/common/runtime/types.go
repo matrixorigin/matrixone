@@ -28,10 +28,12 @@ const (
 	LockService = "lock-service"
 	// InternalSQLExecutor attr name for internal sql executor
 	InternalSQLExecutor = "internal-sql-executor"
-	// AutoIncrmentService attr name for AutoIncrmentService
-	AutoIncrmentService = "auto-incrment-service"
+	// AutoIncrementService attr name for AutoIncrementService
+	AutoIncrementService = "auto-increment-service"
 	// StatusServer is the global server of status of cluster.
 	StatusServer = "status-server"
+	// TxnTraceService txn trance service
+	TxnTraceService = "txn-trace-service"
 
 	// TxnOptions options used to create txn
 	TxnOptions = "txn-options"
@@ -52,7 +54,7 @@ const (
 
 // Runtime contains the runtime environment for a MO service. Each CN/DN/LOG service
 // needs to receive a Runtime and will pass the Runtime to all components of the service.
-// These Runtimes may only be created in main or integration test framework.
+// These Runtime may only be created in main or integration test framework.
 //
 // Because most of our BVT tests and integration tests are run in a single mo-service
 // process, which runs multiple CN, TN and LOG services, the Runtime cannot be set as a
