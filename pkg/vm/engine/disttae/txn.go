@@ -350,13 +350,21 @@ func (txn *Transaction) checkDup() error {
 }
 
 // dumpBatch if txn.workspaceSize is larger than threshold, cn will write workspace to s3
+// start from write offset.   Pass in offset -1 to dump all.   Note that dump all will
+// modify txn.writes, so it can only be called right before txn.commit.
 func (txn *Transaction) dumpBatchLocked(offset int) error {
 	var size uint64
 	var pkCount int
 	if txn.workspaceSize < WorkspaceThreshold {
 		return nil
 	}
-	if offset > 0 {
+
+	dumpAll := offset < 0
+	if dumpAll {
+		offset = 0
+	}
+
+	if !dumpAll {
 		for i := offset; i < len(txn.writes); i++ {
 			if txn.writes[i].tableId == catalog.MO_DATABASE_ID ||
 				txn.writes[i].tableId == catalog.MO_TABLES_ID ||
@@ -465,9 +473,11 @@ func (txn *Transaction) dumpBatchLocked(offset int) error {
 			return err
 		}
 	}
-	if offset == 0 {
+
+	if dumpAll {
 		txn.workspaceSize = 0
 		txn.pkCount -= pkCount
+		// modifies txn.writes.
 		writes := txn.writes[:0]
 		for i, write := range txn.writes {
 			if write.bat != nil {
@@ -909,7 +919,7 @@ func (txn *Transaction) Commit(ctx context.Context) ([]txn.TxnRequest, error) {
 	if err := txn.mergeTxnWorkspaceLocked(); err != nil {
 		return nil, err
 	}
-	if err := txn.dumpBatchLocked(0); err != nil {
+	if err := txn.dumpBatchLocked(-1); err != nil {
 		return nil, err
 	}
 	pkDedupCount := txn.op.PKDedupCount()
