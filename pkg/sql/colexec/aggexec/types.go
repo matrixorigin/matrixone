@@ -15,6 +15,8 @@
 package aggexec
 
 import (
+	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -74,18 +76,63 @@ var (
 )
 
 var (
-	fromAggInfoToSingleAggImpl func(aggID int64, args types.Type, ret types.Type) any
-	fromAggInfoToMultiAggImpl  func(aggID int64, args []types.Type, ret types.Type) any
+	fromAggInfoToSingleAggImpl func(aggID int64, args types.Type, ret types.Type) (any, error)
+	fromAggInfoToMultiAggImpl  func(aggID int64, args []types.Type, ret types.Type) (any, error)
 )
 
+var (
+	// todo: the following code is not good.
+	// string is key like "aggID_argT_retT".
+	singleAggImpls = make(map[string]any)
+	genSingleKey   = func(id int64, arg, ret types.Type) string {
+		return fmt.Sprintf("%d_%d_%d", id, arg.Oid, ret.Oid)
+	}
+
+	// string is key like "aggID_argTs_retT".
+	multiAggImpls = make(map[string]any)
+	genMultiKey   = func(id int64, args []types.Type, ret types.Type) string {
+		key := fmt.Sprintf("%d_", id)
+		for _, arg := range args {
+			key += fmt.Sprintf("%d_", arg.Oid)
+		}
+		key += fmt.Sprintf("%d", ret.Oid)
+		return key
+	}
+)
+
+func RegisterSingleAggImpl(id int64, arg types.Type, ret types.Type, impl any) {
+	// todo: should do legal check later. and remove the codes in function MakeAgg.
+	singleAggImpls[genSingleKey(id, arg, ret)] = impl
+}
+
+func RegisterMultiAggImpl(id int64, args []types.Type, ret types.Type, impl any) {
+	// todo: should do legal check later. and remove the codes in function MakeMultiAgg.
+	multiAggImpls[genMultiKey(id, args, ret)] = impl
+}
+
+func init() {
+	fromAggInfoToSingleAggImpl = func(aggID int64, args types.Type, ret types.Type) (any, error) {
+		key := genSingleKey(aggID, args, ret)
+		if impl, ok := singleAggImpls[key]; ok {
+			return impl, nil
+		}
+		return nil, moerr.NewInternalErrorNoCtx("not found the implementation for the aggregation %d", aggID)
+	}
+
+	fromAggInfoToMultiAggImpl = func(aggID int64, args []types.Type, ret types.Type) (any, error) {
+		key := genMultiKey(aggID, args, ret)
+		if impl, ok := multiAggImpls[key]; ok {
+			return impl, nil
+		}
+		return nil, moerr.NewInternalErrorNoCtx("not found the implementation for the aggregation %d", aggID)
+	}
+}
+
 // MakeAgg supports to create an aggregation function executor for single column.
-// todo: if we support some methods to register the param, result type and the implementation,
-//
-//	we can only use the aggID to create the aggregation function executor.
 func MakeAgg(
 	proc *process.Process,
 	aggID int64, isDistinct bool, emptyIsNull bool,
-	param types.Type, result types.Type, implementationAllocator any) AggFuncExec {
+	param types.Type, result types.Type) AggFuncExec {
 	info := singleAggInfo{
 		aggID:     aggID,
 		distinct:  isDistinct,
@@ -95,6 +142,11 @@ func MakeAgg(
 	}
 	opt := singleAggOptimizedInfo{
 		receiveNull: true,
+	}
+
+	implementationAllocator, err := fromAggInfoToSingleAggImpl(aggID, param, result)
+	if err != nil {
+		panic(err)
 	}
 
 	pIsVarLen, rIsVarLen := param.IsVarlen(), result.IsVarlen()
@@ -116,13 +168,17 @@ func MakeAgg(
 func MakeMultiAgg(
 	proc *process.Process,
 	aggID int64, isDistinct bool, emptyIsNull bool,
-	param []types.Type, result types.Type, implementationAllocator any) AggFuncExec {
+	param []types.Type, result types.Type) AggFuncExec {
 	info := multiAggInfo{
 		aggID:     aggID,
 		distinct:  isDistinct,
 		argTypes:  param,
 		retType:   result,
 		emptyNull: emptyIsNull,
+	}
+	implementationAllocator, err := fromAggInfoToMultiAggImpl(aggID, param, result)
+	if err != nil {
+		panic(err)
 	}
 	return newMultiAggFuncExec(proc, info, implementationAllocator)
 }

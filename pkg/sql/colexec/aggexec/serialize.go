@@ -206,18 +206,16 @@ func UnmarshalAggFuncExec(
 	switch encoded.GetExecType() {
 	case EncodedAggExecType_special_group_concat:
 		exec = MakeGroupConcat(
-			proc, info.Id, info.IsDistinct, info.Args, info.Ret, string(encoded.Groups[0])).(*groupConcatExec)
+			proc, info.Id, info.IsDistinct, info.Args, info.Ret, string(encoded.Groups[0]))
 
 	case EncodedAggExecType_single_fixed_fixed, EncodedAggExecType_single_fixed_var,
 		EncodedAggExecType_single_var_fixed, EncodedAggExecType_single_var_var:
 		exec = MakeAgg(
-			proc, info.Id, info.IsDistinct, info.NullEmpty, info.Args[0], info.Ret,
-			fromAggInfoToSingleAggImpl(info.Id, info.Args[0], info.Ret))
+			proc, info.Id, info.IsDistinct, info.NullEmpty, info.Args[0], info.Ret)
 
 	case EncodedAggExecType_multi_return_fixed, EncodedAggExecType_multi_return_var:
 		exec = MakeMultiAgg(
-			proc, info.Id, info.IsDistinct, info.NullEmpty, info.Args, info.Ret,
-			fromAggInfoToMultiAggImpl(info.Id, info.Args, info.Ret))
+			proc, info.Id, info.IsDistinct, info.NullEmpty, info.Args, info.Ret)
 
 	default:
 		return nil, moerr.NewInternalError(proc.Ctx, "unmarshal agg exec failed, unknown exec type %d", encoded.GetExecType())
