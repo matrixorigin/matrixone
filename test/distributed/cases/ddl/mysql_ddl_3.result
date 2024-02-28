@@ -239,19 +239,19 @@ mysql_ddl_test_t34    CREATE TABLE `mysql_ddl_test_t34` (\n`created_at` DATETIME
 create table mysql_ddl_test_t35 (id int, gender enum('male', 'female'));
 show create table mysql_ddl_test_t35;
 Table    Create Table
-mysql_ddl_test_t35    CREATE TABLE `mysql_ddl_test_t35` (\n`id` INT DEFAULT NULL,\n`gender` ENUM DEFAULT NULL\n)
+mysql_ddl_test_t35    CREATE TABLE `mysql_ddl_test_t35` (\n`id` INT DEFAULT NULL,\n`gender` ENUM('male','female') DEFAULT NULL\n)
 create table mysql_ddl_test_t36 (id int, gender enum('male', 'female') NOT NULL);
 show create table mysql_ddl_test_t36;
 Table    Create Table
-mysql_ddl_test_t36    CREATE TABLE `mysql_ddl_test_t36` (\n`id` INT DEFAULT NULL,\n`gender` ENUM NOT NULL\n)
+mysql_ddl_test_t36    CREATE TABLE `mysql_ddl_test_t36` (\n`id` INT DEFAULT NULL,\n`gender` ENUM('male','female') NOT NULL\n)
 create table mysql_ddl_test_t37 (id int, gender enum('male', 'female') default 'male');
 show create table mysql_ddl_test_t37;
 Table    Create Table
-mysql_ddl_test_t37    CREATE TABLE `mysql_ddl_test_t37` (\n`id` INT DEFAULT NULL,\n`gender` ENUM DEFAULT 'male'\n)
+mysql_ddl_test_t37    CREATE TABLE `mysql_ddl_test_t37` (\n`id` INT DEFAULT NULL,\n`gender` ENUM('male','female') DEFAULT 'male'\n)
 CREATE TABLE `mysql_ddl_test_t38` (id int, gender enum('male', 'female') NOT NULL default 'male');
 show create table mysql_ddl_test_t38;
 Table    Create Table
-mysql_ddl_test_t38    CREATE TABLE `mysql_ddl_test_t38` (\n`id` INT DEFAULT NULL,\n`gender` ENUM DEFAULT 'male'\n)
+mysql_ddl_test_t38    CREATE TABLE `mysql_ddl_test_t38` (\n`id` INT DEFAULT NULL,\n`gender` ENUM('male','female') DEFAULT 'male'\n)
 CREATE TABLE mysql_ddl_test_t39 (id int, name varchar(50));
 SHOW CREATE TABLE mysql_ddl_test_t39;
 Table    Create Table

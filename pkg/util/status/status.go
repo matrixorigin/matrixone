@@ -23,14 +23,16 @@ type Status struct {
 type CNStatus struct {
 	TxnClientStatus TxnClientStatus `json:"txn_client_status"`
 	LockStatus      LockStatus      `json:"lock_status"`
+	LogtailStatus   LogtailStatus   `json:"logtail_status"`
 }
 
 func (s *Status) fillCNStatus(cnInstances map[string]*CNInstance) {
 	s.CNUUIDStatus = make(map[string]*CNStatus, len(cnInstances))
-	for cn, item := range cnInstances {
+	for cn, instance := range cnInstances {
 		cnStatus := &CNStatus{}
 		s.CNUUIDStatus[cn] = cnStatus
-		s.fillTxnClient(cnStatus, item.TxnClient)
-		s.fillLock(cnStatus, item.LockService)
+		cnStatus.TxnClientStatus.fill(instance.TxnClient)
+		cnStatus.LockStatus.fill(instance.LockService)
+		cnStatus.LogtailStatus.fill(instance.logtailClient)
 	}
 }

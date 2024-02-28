@@ -33,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -53,48 +54,38 @@ const (
 
 var _ engine.Relation = new(txnTable)
 
-func (tbl *txnTable) Stats(ctx context.Context, partitionTables []any, statsInfoMap any) bool {
-	s, ok := statsInfoMap.(*plan2.StatsInfoMap)
-	if !ok {
-		return false
-	}
-	approxNumObjects := 0
-	if partitionTables != nil {
-		for _, partitionTable := range partitionTables {
-			if ptable, ok2 := partitionTable.(*txnTable); ok2 {
-				approxNumObjects += ptable.ApproxObjectsNum(ctx)
-			} else {
-				panic("partition Table type is not txnTable")
-			}
-		}
-	} else {
-		approxNumObjects = tbl.ApproxObjectsNum(ctx)
-	}
-
-	if approxNumObjects == 0 {
-		// no objects flushed yet, very small table, or something error
-		return false
-	}
-	if s.NeedUpdate(approxNumObjects) {
-		if partitionTables != nil {
-			return UpdateStatsForPartitionTable(ctx, tbl, partitionTables, s, approxNumObjects)
-		} else {
-			return UpdateStats(ctx, tbl, s, approxNumObjects)
-		}
-	} else {
-		return true
-	}
-
+func (tbl *txnTable) getEngine() engine.Engine {
+	return tbl.db.txn.engine
 }
 
-func (tbl *txnTable) Rows(ctx context.Context) (rows int64, err error) {
+func (tbl *txnTable) Stats(ctx context.Context, sync bool) *pb.StatsInfo {
+	_, err := tbl.getPartitionState(ctx)
+	if err != nil {
+		logutil.Errorf("failed to get stats info of table %d", tbl.tableId)
+		return nil
+	}
+	e := tbl.getEngine()
+	return e.Stats(ctx, pb.StatsInfoKey{
+		DatabaseID: tbl.db.databaseId,
+		TableID:    tbl.tableId,
+	}, sync)
+}
+
+func (tbl *txnTable) Rows(ctx context.Context) (uint64, error) {
+	_, err := tbl.getPartitionState(ctx)
+	if err != nil {
+		logutil.Errorf("failed to get stats info of table %d", tbl.tableId)
+		return 0, err
+	}
+	e := tbl.getEngine()
 	writes := make([]Entry, 0, len(tbl.db.txn.writes))
 	writes = tbl.db.txn.getTableWrites(tbl.db.databaseId, tbl.tableId, writes)
 
+	var rows uint64
 	deletes := make(map[types.Rowid]struct{})
 	for _, entry := range writes {
 		if entry.typ == INSERT || entry.typ == INSERT_TXN {
-			rows = rows + int64(entry.bat.RowCount())
+			rows = rows + uint64(entry.bat.RowCount())
 		} else {
 			if entry.bat.GetVector(0).GetType().Oid == types.T_Rowid {
 				/*
@@ -123,6 +114,7 @@ func (tbl *txnTable) Rows(ctx context.Context) (rows int64, err error) {
 		return 0, err
 	}
 	iter := partition.NewRowsIter(ts, nil, false)
+	defer func() { _ = iter.Close() }()
 	for iter.Next() {
 		entry := iter.Entry()
 		if _, ok := deletes[entry.RowID]; ok {
@@ -130,45 +122,127 @@ func (tbl *txnTable) Rows(ctx context.Context) (rows int64, err error) {
 		}
 		rows++
 	}
-	iter.Close()
 
-	var meta objectio.ObjectDataMeta
-	var objMeta objectio.ObjectMeta
-	fs, err := fileservice.Get[fileservice.FileService](
-		tbl.db.txn.proc.FileService,
-		defines.SharedFileServiceName)
+	s := e.Stats(ctx, pb.StatsInfoKey{
+		DatabaseID: tbl.db.databaseId,
+		TableID:    tbl.tableId,
+	}, true)
+	if s == nil {
+		return rows, nil
+	}
+	return uint64(s.TableCnt) + rows, nil
+}
+
+func (tbl *txnTable) Size(ctx context.Context, columnName string) (uint64, error) {
+	_, err := tbl.getPartitionState(ctx)
+	if err != nil {
+		logutil.Errorf("failed to get stats info of table %d", tbl.tableId)
+		return 0, err
+	}
+	e := tbl.getEngine()
+	ts := types.TimestampToTS(tbl.db.txn.op.SnapshotTS())
+	part, err := tbl.getPartitionState(ctx)
 	if err != nil {
 		return 0, err
 	}
-	onObjFn := func(obj logtailreplay.ObjectEntry) error {
-		if obj.Rows() != 0 {
-			rows += int64(obj.Rows())
-			return nil
+
+	szInPart := uint64(0)
+	neededCols := make(map[string]*plan.ColDef)
+	cols := tbl.GetTableDef(ctx).Cols
+	found := false
+
+	for i := range cols {
+		if columnName == AllColumns || cols[i].Name == columnName {
+			neededCols[cols[i].Name] = cols[i]
+			found = true
 		}
-		var err error
-		location := obj.Location()
-		if objMeta, err = objectio.FastLoadObjectMeta(
-			ctx,
-			&location,
-			false,
-			fs); err != nil {
-			return err
+	}
+
+	if !found {
+		return 0, moerr.NewInvalidInput(ctx, "bad input column name %v", columnName)
+	}
+
+	writes := make([]Entry, 0, len(tbl.db.txn.writes))
+	writes = tbl.db.txn.getTableWrites(tbl.db.databaseId, tbl.tableId, writes)
+
+	deletes := make(map[types.Rowid]struct{})
+	for _, entry := range writes {
+		if entry.typ == INSERT || entry.typ == INSERT_TXN {
+			for i, s := range entry.bat.Attrs {
+				if _, ok := neededCols[s]; ok {
+					szInPart += uint64(entry.bat.Vecs[i].Size())
+				}
+			}
+		} else {
+			if entry.bat.GetVector(0).GetType().Oid == types.T_Rowid {
+				// CASE:
+				// create table t1(a int);
+				// begin;
+				// truncate t1; //txnDatabase.Truncate will DELETE mo_tables
+				// show tables; // t1 must be shown
+				if entry.databaseId == catalog.MO_CATALOG_ID &&
+					entry.tableId == catalog.MO_TABLES_ID &&
+					entry.truncate {
+					continue
+				}
+				vs := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
+				for _, v := range vs {
+					deletes[v] = struct{}{}
+				}
+			}
 		}
-		meta = objMeta.MustDataMeta()
-		rows += int64(meta.BlockHeader().Rows())
-		return nil
 	}
-	if err = tbl.ForeachVisibleDataObject(partition, onObjFn); err != nil {
-		return 0, err
+
+	// Different rows may belong to same batch. So we have
+	// to record the batch which we have already handled to avoid
+	// repetitive computation
+	handled := make(map[*batch.Batch]struct{})
+	// Calculate the in mem size
+	// TODO: It might includ some deleted row size
+	iter := part.NewRowsIter(ts, nil, false)
+	defer func() { _ = iter.Close() }()
+	for iter.Next() {
+		entry := iter.Entry()
+		if _, ok := deletes[entry.RowID]; ok {
+			continue
+		}
+		if _, ok := handled[entry.Batch]; ok {
+			continue
+		}
+		for i, s := range entry.Batch.Attrs {
+			if _, ok := neededCols[s]; ok {
+				szInPart += uint64(entry.Batch.Vecs[i].Size())
+			}
+		}
+		handled[entry.Batch] = struct{}{}
 	}
-	return rows, nil
+
+	s := e.Stats(ctx, pb.StatsInfoKey{
+		DatabaseID: tbl.db.databaseId,
+		TableID:    tbl.tableId,
+	}, true)
+	if s == nil {
+		return szInPart, nil
+	}
+	if columnName == AllColumns {
+		var ret uint64
+		for _, z := range s.SizeMap {
+			ret += z
+		}
+		return ret + szInPart, nil
+	}
+	sz, ok := s.SizeMap[columnName]
+	if !ok {
+		return 0, moerr.NewInvalidInput(ctx, "bad input column name %v", columnName)
+	}
+	return sz + szInPart, nil
 }
 
-func (tbl *txnTable) ForeachVisibleDataObject(
+func ForeachVisibleDataObject(
 	state *logtailreplay.PartitionState,
+	ts types.TS,
 	fn func(obj logtailreplay.ObjectEntry) error,
 ) (err error) {
-	ts := types.TimestampToTS(tbl.db.txn.op.SnapshotTS())
 	iter, err := state.NewObjectsIter(ts)
 	if err != nil {
 		return err
@@ -242,7 +316,7 @@ func (tbl *txnTable) MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, er
 		return nil
 	}
 
-	if err = tbl.ForeachVisibleDataObject(part, onObjFn); err != nil {
+	if err = ForeachVisibleDataObject(part, types.TimestampToTS(tbl.db.txn.op.SnapshotTS()), onObjFn); err != nil {
 		return nil, nil, err
 	}
 
@@ -255,125 +329,6 @@ func (tbl *txnTable) MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, er
 	}
 
 	return tableVal, tableTypes, nil
-}
-
-// Get all neede column exclude the hidden size
-func (tbl *txnTable) Size(ctx context.Context, name string) (int64, error) {
-	ts := types.TimestampToTS(tbl.db.txn.op.SnapshotTS())
-	part, err := tbl.getPartitionState(ctx)
-	if err != nil {
-		return 0, err
-	}
-
-	ret := int64(0)
-	neededCols := make(map[string]*plan.ColDef)
-	cols := tbl.GetTableDef(ctx).Cols
-	found := false
-
-	for i := range cols {
-		if name == AllColumns || cols[i].Name == name {
-			neededCols[cols[i].Name] = cols[i]
-			found = true
-		}
-	}
-
-	if !found {
-		return 0, moerr.NewInvalidInput(ctx, "bad input column name %v", name)
-	}
-
-	writes := make([]Entry, 0, len(tbl.db.txn.writes))
-	writes = tbl.db.txn.getTableWrites(tbl.db.databaseId, tbl.tableId, writes)
-
-	deletes := make(map[types.Rowid]struct{})
-	for _, entry := range writes {
-		if entry.typ == INSERT || entry.typ == INSERT_TXN {
-			for i, s := range entry.bat.Attrs {
-				if _, ok := neededCols[s]; ok {
-					ret += int64(entry.bat.Vecs[i].Size())
-				}
-			}
-		} else {
-			if entry.bat.GetVector(0).GetType().Oid == types.T_Rowid {
-				/*
-					CASE:
-					create table t1(a int);
-					begin;
-					truncate t1; //txnDatabase.Truncate will DELETE mo_tables
-					show tables; // t1 must be shown
-				*/
-				if entry.databaseId == catalog.MO_CATALOG_ID &&
-					entry.tableId == catalog.MO_TABLES_ID &&
-					entry.truncate {
-					continue
-				}
-				vs := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
-				for _, v := range vs {
-					deletes[v] = struct{}{}
-				}
-			}
-		}
-	}
-
-	// Different rows may belong to same batch. So we have
-	// to record the batch which we have already handled to avoid
-	// repetitive computation
-	handled := make(map[*batch.Batch]struct{})
-	// Calculate the in mem size
-	// TODO: It might includ some deleted row size
-	iter := part.NewRowsIter(ts, nil, false)
-	for iter.Next() {
-		entry := iter.Entry()
-		if _, ok := deletes[entry.RowID]; ok {
-			continue
-		}
-		if _, ok := handled[entry.Batch]; ok {
-			continue
-		}
-
-		for i, s := range entry.Batch.Attrs {
-			if _, ok := neededCols[s]; ok {
-				ret += int64(entry.Batch.Vecs[i].Size())
-			}
-		}
-
-		handled[entry.Batch] = struct{}{}
-	}
-	iter.Close()
-
-	var meta objectio.ObjectDataMeta
-	var objMeta objectio.ObjectMeta
-	fs, err := fileservice.Get[fileservice.FileService](tbl.db.txn.proc.FileService, defines.SharedFileServiceName)
-	if err != nil {
-		return -1, err
-	}
-	onObjFn := func(obj logtailreplay.ObjectEntry) error {
-		if obj.StatsValid() {
-			ret += int64(obj.Size())
-			return nil
-		}
-
-		var err error
-		location := obj.Location()
-		if objMeta, err = objectio.FastLoadObjectMeta(
-			ctx,
-			&location,
-			false,
-			fs); err != nil {
-			return err
-		}
-		meta = objMeta.MustDataMeta()
-		ret += int64(meta.BlockHeader().ZoneMapArea().Length())
-		ret += int64(meta.BlockHeader().BFExtent().Length())
-		for _, col := range neededCols {
-			colmata := meta.MustGetColumn(uint16(col.Seqnum))
-			ret += int64(colmata.Location().Length())
-		}
-		return nil
-	}
-	if err = tbl.ForeachVisibleDataObject(part, onObjFn); err != nil {
-		return 0, err
-	}
-	return ret, nil
 }
 
 func (tbl *txnTable) GetColumMetadataScanInfo(ctx context.Context, name string) ([]*plan.MetadataScanInfo, error) {
@@ -465,7 +420,7 @@ func (tbl *txnTable) GetColumMetadataScanInfo(ctx context.Context, name string) 
 		return nil
 	}
 
-	if err = tbl.ForeachVisibleDataObject(state, onObjFn); err != nil {
+	if err = ForeachVisibleDataObject(state, types.TimestampToTS(tbl.db.txn.op.SnapshotTS()), onObjFn); err != nil {
 		return nil, err
 	}
 
@@ -1263,9 +1218,12 @@ func (tbl *txnTable) GetTableDef(ctx context.Context) *plan.TableDef {
 			Version:       tbl.version,
 		}
 	}
-	tableDef := plan2.DeepCopyTableDef(tbl.tableDef, true)
-	tableDef.IsTemporary = tbl.GetEngineType() == engine.Memory
-	return tableDef
+	return tbl.tableDef
+}
+
+func (tbl *txnTable) CopyTableDef(ctx context.Context) *plan.TableDef {
+	tbl.GetTableDef(ctx)
+	return plan2.DeepCopyTableDef(tbl.tableDef, true)
 }
 
 func (tbl *txnTable) UpdateConstraint(ctx context.Context, c *engine.ConstraintDef) error {
@@ -1435,7 +1393,7 @@ func (tbl *txnTable) TableRenameInTxn(ctx context.Context, constraint [][]byte) 
 	newtbl.defs = tbl.defs
 	newtbl.tableName = tbl.tableName
 	newtbl.tableId = tbl.tableId
-	newtbl.GetTableDef(ctx)
+	newtbl.CopyTableDef(ctx)
 
 	{
 		sql := getSql(ctx)
@@ -1560,7 +1518,7 @@ func (tbl *txnTable) Write(ctx context.Context, bat *batch.Batch) error {
 		ibat.Clean(tbl.db.txn.proc.Mp())
 		return err
 	}
-	return tbl.db.txn.dumpBatch(tbl.writesOffset)
+	return tbl.db.txn.dumpBatch(tbl.db.txn.getWriteOffset())
 }
 
 func (tbl *txnTable) Update(ctx context.Context, bat *batch.Batch) error {
@@ -2067,6 +2025,12 @@ func (tbl *txnTable) UpdateObjectInfos(ctx context.Context) (err error) {
 }
 
 func (tbl *txnTable) updateLogtail(ctx context.Context) (err error) {
+	defer func() {
+		if err == nil {
+			tbl.db.txn.engine.globalStats.notifyLogtailUpdate(tbl.tableId)
+			tbl.logtailUpdated = true
+		}
+	}()
 	// if the logtail is updated, skip
 	if tbl.logtailUpdated {
 		return
@@ -2118,7 +2082,6 @@ func (tbl *txnTable) updateLogtail(ctx context.Context) (err error) {
 		return
 	}
 
-	tbl.logtailUpdated = true
 	return nil
 }
 
@@ -2309,11 +2272,4 @@ func (tbl *txnTable) readNewRowid(vec *vector.Vector, row int,
 
 func (tbl *txnTable) newPkFilter(pkExpr, constExpr *plan.Expr) (*plan.Expr, error) {
 	return plan2.BindFuncExprImplByPlanExpr(tbl.proc.Load().Ctx, "=", []*plan.Expr{pkExpr, constExpr})
-}
-
-// get the table's snapshot.
-func (tbl *txnTable) updateWriteOffset() {
-	if tbl.db.txn.statementID > 0 {
-		tbl.writesOffset = tbl.db.txn.statements[tbl.db.txn.statementID-1]
-	}
 }

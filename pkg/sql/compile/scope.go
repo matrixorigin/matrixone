@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/restrict"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"hash/crc32"
 	goruntime "runtime"
@@ -118,7 +119,11 @@ func (s *Scope) Run(c *Compile) (err error) {
 		if s.DataSource.Bat != nil {
 			_, err = p.ConstRun(s.DataSource.Bat, s.Proc)
 		} else {
-			_, err = p.Run(s.DataSource.R, s.Proc)
+			var tag int32
+			if s.DataSource.node != nil && len(s.DataSource.node.RecvMsgList) > 0 {
+				tag = s.DataSource.node.RecvMsgList[0].MsgTag
+			}
+			_, err = p.Run(s.DataSource.R, tag, s.Proc)
 		}
 	}
 
@@ -312,7 +317,7 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 						break FOR_LOOP
 
 					case pbpipeline.RuntimeFilter_IN:
-						inExpr := plan2.MakeInExpr(spec.Expr, filter.Card, filter.Data)
+						inExpr := plan2.MakeInExpr(c.ctx, spec.Expr, filter.Card, filter.Data)
 						inExprList = append(inExprList, inExpr)
 
 						// TODO: implement BETWEEN expression
@@ -324,12 +329,34 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 		}
 	}
 
-	if len(inExprList) > 0 {
-		newExprList := plan2.DeepCopyExprList(inExprList)
+	for i := range inExprList {
+		funcimpl, _ := inExprList[i].Expr.(*plan.Expr_F)
+		col, ok := funcimpl.F.Args[0].Expr.(*plan.Expr_Col)
+		if !ok {
+			panic("only support col in runtime filter's left child!")
+		}
+		newExpr := plan2.DeepCopyExpr(inExprList[i])
+		//put expr in reader
+		newExprList := []*plan.Expr{newExpr}
 		if s.DataSource.FilterExpr != nil {
 			newExprList = append(newExprList, s.DataSource.FilterExpr)
 		}
 		s.DataSource.FilterExpr = colexec.RewriteFilterExprList(newExprList)
+
+		isFilterOnPK := s.DataSource.TableDef.Pkey != nil && col.Col.Name == s.DataSource.TableDef.Pkey.PkeyColName
+		if !isFilterOnPK {
+			// put expr in filter instruction
+			ins := s.Instructions[0]
+			arg, ok := ins.Arg.(*restrict.Argument)
+			if !ok {
+				panic("missing instruction for runtime filter!")
+			}
+			newExprList := []*plan.Expr{newExpr}
+			if arg.E != nil {
+				newExprList = append(newExprList, arg.E)
+			}
+			arg.E = colexec.RewriteFilterExprList(newExprList)
+		}
 	}
 
 	if s.NodeInfo.NeedExpandRanges {
@@ -382,7 +409,7 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 
 	switch {
 	case remote:
-		if s.DataSource.OrderBy != nil {
+		if len(s.DataSource.OrderBy) > 0 {
 			panic("ordered scan can't run on remote CN!")
 		}
 		ctx := c.ctx
@@ -413,11 +440,11 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 		default:
 			mcpu = 1
 		}
-		if s.DataSource.OrderBy != nil {
+		if len(s.DataSource.OrderBy) > 0 {
 			// ordered scan must run on only one parallel!
 			mcpu = 1
 		}
-		if rds, err = s.NodeInfo.Rel.NewReader(c.ctx, mcpu, s.DataSource.FilterExpr, s.NodeInfo.Data, s.DataSource.OrderBy != nil); err != nil {
+		if rds, err = s.NodeInfo.Rel.NewReader(c.ctx, mcpu, s.DataSource.FilterExpr, s.NodeInfo.Data, len(s.DataSource.OrderBy) > 0); err != nil {
 			return err
 		}
 		s.NodeInfo.Data = nil
@@ -457,7 +484,7 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 		default:
 			mcpu = 1
 		}
-		if s.DataSource.OrderBy != nil {
+		if len(s.DataSource.OrderBy) > 0 {
 			// ordered scan must run on only one parallel!
 			mcpu = 1
 		}
@@ -468,7 +495,7 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 				mcpu,
 				s.DataSource.FilterExpr,
 				s.NodeInfo.Data,
-				s.DataSource.OrderBy != nil)
+				len(s.DataSource.OrderBy) > 0)
 			if err != nil {
 				return err
 			}
@@ -500,7 +527,7 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 					mcpu,
 					s.DataSource.FilterExpr,
 					cleanRanges,
-					s.DataSource.OrderBy != nil)
+					len(s.DataSource.OrderBy) > 0)
 				if err != nil {
 					return err
 				}
@@ -513,7 +540,7 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 				if err != nil {
 					return err
 				}
-				memRds, err := subrel.NewReader(c.ctx, mcpu, s.DataSource.FilterExpr, dirtyRanges[num], s.DataSource.OrderBy != nil)
+				memRds, err := subrel.NewReader(c.ctx, mcpu, s.DataSource.FilterExpr, dirtyRanges[num], len(s.DataSource.OrderBy) > 0)
 				if err != nil {
 					return err
 				}
@@ -540,7 +567,7 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 		return s.Run(c)
 	}
 
-	if s.DataSource.OrderBy != nil {
+	if len(s.DataSource.OrderBy) > 0 {
 		panic("ordered scan must run on only one parallel!")
 	}
 	ss := make([]*Scope, mcpu)
@@ -706,14 +733,13 @@ func newParallelScope(c *Compile, s *Scope, ss []*Scope) (*Scope, error) {
 				MaxParallel: 1,
 			}
 			for j := range ss {
+				newarg := top.NewArgument().WithFs(arg.Fs).WithLimit(arg.Limit)
+				newarg.TopValueTag = arg.TopValueTag
 				ss[j].appendInstruction(vm.Instruction{
-					Op:      vm.Top,
-					Idx:     in.Idx,
-					IsFirst: in.IsFirst,
-					Arg: top.NewArgument().
-						WithFs(arg.Fs).
-						WithLimit(arg.Limit),
-
+					Op:          vm.Top,
+					Idx:         in.Idx,
+					IsFirst:     in.IsFirst,
+					Arg:         newarg,
 					CnAddr:      in.CnAddr,
 					OperatorID:  in.OperatorID,
 					MaxParallel: int32(len(ss)),
