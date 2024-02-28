@@ -318,6 +318,9 @@ func getInsertColsFromStmt(ctx context.Context, stmt *tree.Insert, tableDef *Tab
 //
 // Otherwise, the primary key filter cannot be used.
 func canUsePkFilter(builder *QueryBuilder, ctx CompilerContext, stmt *tree.Insert, tableDef *TableDef, insertColsName []string) bool {
+
+	isCompound := len(tableDef.Pkey.Names) > 1
+
 	if !CNPrimaryCheck {
 		return false // break condition 0
 	}
@@ -404,13 +407,11 @@ func canUsePkFilter(builder *QueryBuilder, ctx CompilerContext, stmt *tree.Inser
 		}
 	}
 
-	isCompound := len(insertColsName) > 1
-
 	switch slt := stmt.Rows.Select.(type) {
 	case *tree.ValuesClause:
 		if !isCompound {
-			for i, name := range tableDef.Pkey.Names {
-				if name == insertColsName[0] {
+			for i, col := range tableDef.Cols {
+				if col.Name == tableDef.Pkey.PkeyColName {
 					typ := tableDef.Cols[i].Typ
 					switch typ.Id {
 					case int32(types.T_int8), int32(types.T_int16), int32(types.T_int32), int32(types.T_int64), int32(types.T_int128):
