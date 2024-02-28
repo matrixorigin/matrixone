@@ -51,6 +51,7 @@ select * from dis_table_03;
 -- @session}
 -- @session:id=2{
 select * from dis_table_03;
+-- @wait:0:commit
 truncate table dis_table_03;
 -- @session}
 insert into dis_table_03 select 'bbb','2012-09-30';
