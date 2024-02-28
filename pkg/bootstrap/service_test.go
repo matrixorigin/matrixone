@@ -49,7 +49,7 @@ func TestBootstrap(t *testing.T) {
 	defer cancel()
 
 	require.NoError(t, b.Bootstrap(ctx))
-	assert.Equal(t, len(step1InitSQLs)+len(step2InitSQLs)+1, n)
+	assert.Equal(t, len(step1InitSQLs)+len(step2InitSQLs)+1+len(trace.InitSQLs), n)
 }
 */
 

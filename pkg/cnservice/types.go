@@ -22,7 +22,6 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/bootstrap"
-	"github.com/matrixorigin/matrixone/pkg/cacheservice"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
@@ -40,6 +39,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
+	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -233,6 +233,13 @@ type Config struct {
 		//PKDedupCount check whether primary key in transaction's workspace is duplicated if the count of pk
 		// is less than PKDedupCount when txn commits. Default value is 0 , which means don't do deduplication.
 		PkDedupCount int `toml:"pk-dedup-count"`
+
+		// Trace trace
+		Trace struct {
+			BufferSize    int           `toml:"buffer-size"`
+			FlushBytes    toml.ByteSize `toml:"flush-bytes"`
+			FlushDuration toml.Duration `toml:"force-flush-duration"`
+		} `toml:"trace"`
 	} `toml:"txn"`
 
 	// AutoIncrement auto increment config
@@ -252,6 +259,10 @@ type Config struct {
 	InitWorkState string `toml:"init-work-state"`
 
 	PythonUdfClient pythonservice.ClientConfig `toml:"python-udf-client"`
+
+	// LogtailUpdateStatsThreshold is the number that logtail entries received
+	// to trigger stats updating.
+	LogtailUpdateStatsThreshold int `toml:"logtail-update-stats-threshold"`
 }
 
 func (c *Config) Validate() error {
@@ -545,7 +556,7 @@ type service struct {
 		engine engine.Engine,
 		fService fileservice.FileService,
 		lockService lockservice.LockService,
-		queryService queryservice.QueryService,
+		queryClient qclient.QueryClient,
 		hakeeper logservice.CNHAKeeperClient,
 		udfService udf.Service,
 		cli client.TxnClient,
@@ -570,8 +581,10 @@ type service struct {
 	lockService            lockservice.LockService
 	sqlExecutor            executor.SQLExecutor
 	sessionMgr             *queryservice.SessionManager
-	// queryService is used to send query request between CN services.
+	// queryService is used to handle query request from other CN service.
 	queryService queryservice.QueryService
+	// queryClient is used to send query request to other CN services.
+	queryClient qclient.QueryClient
 	// udfService is used to handle non-sql udf
 	udfService       udf.Service
 	bootstrapService bootstrap.Service
@@ -587,13 +600,13 @@ type service struct {
 		storageFactory taskservice.TaskStorageFactory
 	}
 
-	addressMgr  address.AddressManager
-	gossipNode  *gossip.Node
-	cacheServer cacheservice.CacheService
-	config      *util.ConfigData
+	addressMgr address.AddressManager
+	gossipNode *gossip.Node
+	config     *util.ConfigData
 
 	options struct {
 		bootstrapOptions []bootstrap.Option
+		traceDataPath    string
 	}
 }
 

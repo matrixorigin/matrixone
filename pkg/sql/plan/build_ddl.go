@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -171,6 +172,52 @@ func genViewTableDef(ctx CompilerContext, stmt *tree.Select) (*plan.TableDef, er
 	return &tableDef, nil
 }
 
+func genAsSelectCols(ctx CompilerContext, stmt *tree.Select) ([]*ColDef, error) {
+	var err error
+	var rootId int32
+	var query *Query
+	builder := NewQueryBuilder(plan.Query_SELECT, ctx, false)
+	bindCtx := NewBindContext(builder, nil)
+
+	if s, ok := stmt.Select.(*tree.ParenSelect); ok {
+		stmt = s.Select
+	}
+	if rootId, err = builder.buildSelect(stmt, bindCtx, true); err != nil {
+		return nil, err
+	}
+	builder.qry.Steps = append(builder.qry.Steps, rootId)
+
+	if query, err = builder.createQuery(); err != nil {
+		return nil, err
+	}
+
+	selectCols := query.Nodes[query.Steps[len(query.Steps)-1]].ProjectList
+	cols := make([]*plan.ColDef, len(selectCols))
+	for idx, expr := range selectCols {
+		defaultVal := ""
+		switch e := expr.Expr.(type) {
+		case *plan.Expr_Col:
+			splits := strings.Split(e.Col.Name, ".")
+			tblName, colName := splits[0], splits[1]
+			if binding, ok := bindCtx.bindingByTable[tblName]; ok {
+				defaultVal = binding.defaultVals[binding.colIdByName[colName]]
+			}
+		}
+
+		cols[idx] = &plan.ColDef{
+			Name: strings.ToLower(query.Headings[idx]),
+			Alg:  plan.CompressType_Lz4,
+			Typ:  expr.Typ,
+			Default: &plan.Default{
+				NullAbility:  !expr.Typ.NotNullable,
+				Expr:         nil,
+				OriginString: defaultVal,
+			},
+		}
+	}
+	return cols, nil
+}
+
 func buildCreateSource(stmt *tree.CreateSource, ctx CompilerContext) (*Plan, error) {
 	streamName := string(stmt.SourceName.ObjectName)
 	createStream := &plan.CreateTable{
@@ -313,10 +360,6 @@ func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) 
 	createTable.TableDef.Cols = tableDef.Cols
 	createTable.TableDef.ViewSql = tableDef.ViewSql
 	createTable.TableDef.Defs = tableDef.Defs
-
-	if createTable.TableDef.Name == "columns" {
-		fmt.Println("--------------------------")
-	}
 
 	return &Plan{
 		Plan: &plan.Plan_Ddl{
@@ -661,8 +704,15 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 		//createTable.TableDef.ViewSql = tableDef.ViewSql
 		//createTable.TableDef.Defs = tableDef.Defs
 	}
-	err = buildTableDefs(stmt, ctx, createTable)
-	if err != nil {
+
+	var asSelectCols []*ColDef
+	if stmt.IsAsSelect {
+		if asSelectCols, err = genAsSelectCols(ctx, stmt.AsSource); err != nil {
+			return nil, err
+		}
+	}
+
+	if err = buildTableDefs(stmt, ctx, createTable, asSelectCols); err != nil {
 		return nil, err
 	}
 
@@ -918,10 +968,11 @@ func buildPartitionByClause(ctx context.Context, partitionBinder *PartitionBinde
 	return builder.build(ctx, partitionBinder, stmt, tableDef)
 }
 
-func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *plan.CreateTable) error {
+func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *plan.CreateTable, asSelectCols []*ColDef) error {
 	var primaryKeys []string
 	var indexs []string
 	colMap := make(map[string]*ColDef)
+	defaultMap := make(map[string]string)
 	uniqueIndexInfos := make([]*tree.UniqueIndex, 0)
 	secondaryIndexInfos := make([]*tree.Index, 0)
 	fkDatasOfFKSelfRefer := make([]*fkData, 0)
@@ -1029,8 +1080,28 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 				OnUpdate: onUpdateExpr,
 				Comment:  comment,
 			}
-			colMap[col.Name] = col
-			createTable.TableDef.Cols = append(createTable.TableDef.Cols, col)
+			// if same name col in asSelectCols, overwrite it; add into colMap && createTable.TableDef.Cols later
+			if idx := slices.IndexFunc(asSelectCols, func(c *ColDef) bool { return c.Name == col.Name }); idx != -1 {
+				asSelectCols[idx] = col
+			} else {
+				colMap[col.Name] = col
+				createTable.TableDef.Cols = append(createTable.TableDef.Cols, col)
+
+				// get default val from ast node
+				attrIdx := slices.IndexFunc(def.Attributes, func(a tree.ColumnAttribute) bool {
+					_, ok := a.(*tree.AttributeDefault)
+					return ok
+				})
+				if attrIdx != -1 {
+					defaultAttr := def.Attributes[attrIdx].(*tree.AttributeDefault)
+					fmtCtx := tree.NewFmtCtx(dialect.MYSQL)
+					defaultAttr.Format(fmtCtx)
+					// defaultAttr.Format start with "default "
+					defaultMap[col.Name] = fmtCtx.String()[8:]
+				} else {
+					defaultMap[col.Name] = "NULL"
+				}
+			}
 		case *tree.PrimaryKeyIndex:
 			if len(primaryKeys) > 0 {
 				return moerr.NewInvalidInput(ctx.GetContext(), "more than one primary key defined")
@@ -1056,7 +1127,6 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 				name := key.ColName.Parts[0]
 				indexs = append(indexs, name)
 			}
-
 		case *tree.UniqueIndex:
 			err := checkIndexKeypartSupportability(ctx.GetContext(), def.KeyParts)
 			if err != nil {
@@ -1071,6 +1141,9 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 		case *tree.ForeignKey:
 			if createTable.Temporary {
 				return moerr.NewNYI(ctx.GetContext(), "add foreign key for temporary table")
+			}
+			if len(asSelectCols) != 0 {
+				return moerr.NewNYI(ctx.GetContext(), "add foreign key in create table ... as select statement")
 			}
 			err := adjustConstraintName(ctx.GetContext(), def)
 			if err != nil {
@@ -1095,6 +1168,43 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 		default:
 			return moerr.NewNYI(ctx.GetContext(), "table def: '%v'", def)
 		}
+	}
+
+	if stmt.IsAsSelect {
+		// add as select cols
+		for _, col := range asSelectCols {
+			colMap[col.Name] = col
+			createTable.TableDef.Cols = append(createTable.TableDef.Cols, col)
+		}
+
+		// insert into new_table select default_val1, default_val2, ..., * from (select clause);
+		var insertSqlBuilder strings.Builder
+		insertSqlBuilder.WriteString(fmt.Sprintf("insert into %s select ", createTable.TableDef.Name))
+
+		cols := createTable.TableDef.Cols
+		firstCol := true
+		for i := range cols {
+			// insert default values if col[i] only in create clause
+			if !slices.ContainsFunc(asSelectCols, func(c *ColDef) bool { return c.Name == cols[i].Name }) {
+				if !firstCol {
+					insertSqlBuilder.WriteString(", ")
+				}
+				insertSqlBuilder.WriteString(defaultMap[cols[i].Name])
+				firstCol = false
+			}
+		}
+		if !firstCol {
+			insertSqlBuilder.WriteString(", ")
+		}
+		// add all cols from select clause
+		insertSqlBuilder.WriteString("*")
+
+		// from
+		fmtCtx := tree.NewFmtCtx(dialect.MYSQL)
+		stmt.AsSource.Format(fmtCtx)
+		insertSqlBuilder.WriteString(fmt.Sprintf(" from (%s)", fmtCtx.String()))
+
+		createTable.CreateAsSelectSql = insertSqlBuilder.String()
 	}
 
 	//add cluster table attribute

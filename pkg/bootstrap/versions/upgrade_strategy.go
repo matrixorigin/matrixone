@@ -145,7 +145,12 @@ func (u *UpgradeEntry) Upgrade(txn executor.TxnExecutor) error {
 func CheckTableColumn(txn executor.TxnExecutor,
 	schema string,
 	tableName string,
-	columnName string) (*ColumnInfo, error) {
+	columnName string) (ColumnInfo, error) {
+
+	xyz := ColumnInfo{
+		IsExits: false,
+		Name:    columnName,
+	}
 
 	sql := fmt.Sprintf(`select data_type,
        			is_nullable,
@@ -162,16 +167,10 @@ func CheckTableColumn(txn executor.TxnExecutor,
 		schema, tableName, columnName)
 	res, err := txn.Exec(sql, executor.StatementOption{})
 	if err != nil {
-		return nil, err
+		return xyz, err
 	}
 	defer res.Close()
 
-	xyz := ColumnInfo{
-		IsExits: false,
-		Name:    columnName,
-	}
-	loaded := false
-	n := 0
 	res.ReadRows(func(rows int, cols []*vector.Vector) bool {
 		data_type := cols[0].GetStringAt(0)
 		is_nullable := cols[1].GetStringAt(0)
@@ -184,34 +183,21 @@ func CheckTableColumn(txn executor.TxnExecutor,
 		extra := cols[8].GetStringAt(0)
 		column_comment := cols[9].GetStringAt(0)
 
-		xyz = ColumnInfo{
-			IsExits:           true,
-			Name:              columnName,
-			ColType:           data_type,
-			Nullable:          checkInput(is_nullable),
-			ChatLength:        character_length,
-			Precision:         numeric_precision,
-			Scale:             numeric_scale,
-			datetimePrecision: datetime_precision,
-			Position:          ordinal_position,
-			Default:           column_default,
-			Extra:             extra,
-			Comment:           column_comment,
-		}
-		n++
-		loaded = true
+		xyz.IsExits = true
+		xyz.ColType = data_type
+		xyz.Nullable = checkInput(is_nullable)
+		xyz.ChatLength = character_length
+		xyz.Precision = numeric_precision
+		xyz.Scale = numeric_scale
+		xyz.datetimePrecision = datetime_precision
+		xyz.Position = ordinal_position
+		xyz.Default = column_default
+		xyz.Extra = extra
+		xyz.Comment = column_comment
+
 		return false
 	})
-
-	if loaded && n > 1 {
-		panic("BUG: Duplicate column names in table")
-	}
-
-	if loaded {
-		return &xyz, nil
-	} else {
-		return nil, nil
-	}
+	return xyz, nil
 }
 
 // CheckViewDefinition Check if the view exists, if so, return true and return the view definition

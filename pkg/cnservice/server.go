@@ -44,10 +44,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
+	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage"
+	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 	"github.com/matrixorigin/matrixone/pkg/udf"
 	"github.com/matrixorigin/matrixone/pkg/udf/pythonservice"
 	"github.com/matrixorigin/matrixone/pkg/util/address"
@@ -111,7 +113,7 @@ func NewService(
 		engine engine.Engine,
 		fService fileservice.FileService,
 		lockService lockservice.LockService,
-		queryService queryservice.QueryService,
+		queryClient qclient.QueryClient,
 		hakeeper logservice.CNHAKeeperClient,
 		udfService udf.Service,
 		cli client.TxnClient,
@@ -129,11 +131,11 @@ func NewService(
 	if _, err = srv.getHAKeeperClient(); err != nil {
 		return nil, err
 	}
-	srv.initQueryService()
-
-	if err := srv.initCacheServer(); err != nil {
+	if err := srv.initQueryService(); err != nil {
 		return nil, err
 	}
+
+	srv.stopper = stopper.NewStopper("cn-service", stopper.WithLogger(srv.logger))
 
 	if err := srv.initMetadata(); err != nil {
 		return nil, err
@@ -180,7 +182,7 @@ func NewService(
 	srv.pu = pu
 	srv.pu.LockService = srv.lockService
 	srv.pu.HAKeeperClient = srv._hakeeperClient
-	srv.pu.QueryService = srv.queryService
+	srv.pu.QueryClient = srv.queryClient
 	srv.pu.UdfService = srv.udfService
 	srv._txnClient = pu.TxnClient
 
@@ -209,6 +211,25 @@ func NewService(
 	srv.server = server
 	srv.storeEngine = pu.StorageEngine
 
+	srv.requestHandler = func(ctx context.Context,
+		cnAddr string,
+		message morpc.Message,
+		cs morpc.ClientSession,
+		engine engine.Engine,
+		fService fileservice.FileService,
+		lockService lockservice.LockService,
+		queryClient qclient.QueryClient,
+		hakeeper logservice.CNHAKeeperClient,
+		udfService udf.Service,
+		cli client.TxnClient,
+		aicm *defines.AutoIncrCacheManager,
+		messageAcquirer func() morpc.Message) error {
+		return nil
+	}
+	for _, opt := range options {
+		opt(srv)
+	}
+
 	// TODO: global client need to refactor
 	err = cnclient.NewCNClient(
 		srv.pipelineServiceServiceAddr(),
@@ -224,12 +245,6 @@ func (s *service) Start() error {
 
 	if err := s.queryService.Start(); err != nil {
 		return err
-	}
-
-	if s.cacheServer != nil {
-		if err := s.cacheServer.Start(); err != nil {
-			return err
-		}
 	}
 
 	err := s.runMoServer()
@@ -265,11 +280,6 @@ func (s *service) Close() error {
 		}
 	}
 
-	if s.cacheServer != nil {
-		if err := s.cacheServer.Close(); err != nil {
-			return err
-		}
-	}
 	if err := s.server.Close(); err != nil {
 		return err
 	}
@@ -292,11 +302,6 @@ func (s *service) SessionMgr() *queryservice.SessionManager {
 }
 
 func (s *service) CheckTenantUpgrade(_ context.Context, tenantID int64) error {
-	//opts := executor.Options{}.
-	//	WithDatabase(catalog.MO_CATALOG).
-	//	WithMinCommittedTS(s.now()).
-	//	WithWaitCommittedLogApplied()
-
 	finalVersion := s.GetFinalVersion()
 	tenantFetchFunc := func() (int32, string, error) {
 		return int32(tenantID), finalVersion, nil
@@ -306,7 +311,6 @@ func (s *service) CheckTenantUpgrade(_ context.Context, tenantID int64) error {
 	if _, err := s.bootstrapService.MaybeUpgradeTenant(ctx, tenantFetchFunc, nil); err != nil {
 		return err
 	}
-	// where commit txn ?
 	return nil
 }
 
@@ -348,6 +352,11 @@ func (s *service) stopRPCs() error {
 	}
 	if s.queryService != nil {
 		if err := s.queryService.Close(); err != nil {
+			return err
+		}
+	}
+	if s.queryClient != nil {
+		if err := s.queryClient.Close(); err != nil {
 			return err
 		}
 	}
@@ -397,7 +406,7 @@ func (s *service) handleRequest(
 			s.storeEngine,
 			s.fileService,
 			s.lockService,
-			s.queryService,
+			s.queryClient,
 			s._hakeeperClient,
 			s.udfService,
 			s._txnClient,
@@ -417,13 +426,10 @@ func (s *service) initMOServer(ctx context.Context, pu *config.ParameterUnit, ai
 	pu.LockService = s.lockService
 
 	logutil.Info("Initialize the engine ...")
-
 	err = s.initEngine(ctx, cancelMoServerCtx, pu)
 	if err != nil {
 		return err
 	}
-
-	//pu.BootstrapService = s.bootstrapService
 
 	s.createMOServer(cancelMoServerCtx, pu, aicm)
 	return nil
@@ -651,6 +657,11 @@ func (s *service) getTxnClient() (c client.TxnClient, err error) {
 		opts = append(opts,
 			client.WithLockService(s.lockService),
 			client.WithNormalStateNoWait(s.cfg.Txn.NormalStateNoWait),
+			client.WithTxnOpenedCallback([]func(op client.TxnOperator){
+				func(op client.TxnOperator) {
+					trace.GetService().TxnCreated(op)
+				},
+			}),
 		)
 		c = client.NewTxnClient(
 			sender,
@@ -735,7 +746,7 @@ func (s *service) initInternalSQlExecutor(mp *mpool.MPool) {
 		mp,
 		s._txnClient,
 		s.fileService,
-		s.queryService,
+		s.queryClient,
 		s._hakeeperClient,
 		s.udfService,
 		s.aicm)
@@ -752,13 +763,15 @@ func (s *service) initIncrService() {
 		store,
 		s.cfg.AutoIncrement)
 	runtime.ProcessLevelRuntime().SetGlobalVariables(
-		runtime.AutoIncrmentService,
+		runtime.AutoIncrementService,
 		incrService)
 	incrservice.SetAutoIncrementServiceByID(s.cfg.UUID, incrService)
 }
 
 func (s *service) bootstrap() error {
 	s.initIncrService()
+	s.initTxnTraceService()
+
 	rt := runtime.ProcessLevelRuntime()
 	s.bootstrapService = bootstrap.NewService(
 		&locker{hakeeperClient: s._hakeeperClient},
@@ -786,6 +799,23 @@ func (s *service) bootstrap() error {
 			}
 		}
 	})
+}
+
+func (s *service) initTxnTraceService() {
+	rt := runtime.ProcessLevelRuntime()
+	ts, err := trace.NewService(
+		s.options.traceDataPath,
+		s.cfg.UUID,
+		s._txnClient,
+		rt.Clock(),
+		s.sqlExecutor,
+		trace.WithBufferSize(s.cfg.Txn.Trace.BufferSize),
+		trace.WithFlushBytes(int(s.cfg.Txn.Trace.FlushBytes)),
+		trace.WithFlushDuration(s.cfg.Txn.Trace.FlushDuration.Duration))
+	if err != nil {
+		panic(err)
+	}
+	rt.SetGlobalVariables(runtime.TxnTraceService, ts)
 }
 
 type locker struct {

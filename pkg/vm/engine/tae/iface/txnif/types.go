@@ -34,7 +34,7 @@ import (
 )
 
 var (
-	ErrTxnWWConflict = moerr.NewTxnWWConflictNoCtx()
+	ErrTxnWWConflict = moerr.NewTxnWWConflictNoCtx(0, "")
 	ErrTxnNeedRetry  = moerr.NewTAENeedRetryNoCtx()
 )
 
@@ -243,8 +243,15 @@ type DeleteNode interface {
 	OnApply() error
 }
 
+type Tracer interface {
+	StartTrace()
+	TriggerTrace(state uint8)
+	EndTrace()
+}
+
 type TxnStore interface {
 	io.Closer
+	Tracer
 	Txn2PC
 	TxnUnsafe
 	WaitPrepared(ctx context.Context) error

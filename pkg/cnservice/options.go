@@ -24,7 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
-	"github.com/matrixorigin/matrixone/pkg/queryservice"
+	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/udf"
@@ -57,6 +57,12 @@ func WithBootstrapOptions(options ...bootstrap.Option) Option {
 	}
 }
 
+func WithTxnTraceData(traceDataPath string) Option {
+	return func(s *service) {
+		s.options.traceDataPath = traceDataPath
+	}
+}
+
 // WithMessageHandle setup message handle
 func WithMessageHandle(f func(ctx context.Context,
 	cnAddr string,
@@ -65,7 +71,7 @@ func WithMessageHandle(f func(ctx context.Context,
 	engine engine.Engine,
 	fs fileservice.FileService,
 	lockService lockservice.LockService,
-	queryService queryservice.QueryService,
+	queryClient qclient.QueryClient,
 	hakeeper logservice.CNHAKeeperClient,
 	udfService udf.Service,
 	cli client.TxnClient,

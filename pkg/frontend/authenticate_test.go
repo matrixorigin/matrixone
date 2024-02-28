@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	"reflect"
 	"strings"
 	"testing"
@@ -7441,7 +7442,42 @@ func newSes(priv *privilege, ctrl *gomock.Controller) *Session {
 	ses.SetTenantInfo(tenant)
 	ses.priv = priv
 	ses.SetRequestContext(ctx)
+
+	aicm := &defines.AutoIncrCacheManager{}
+	rm, _ := NewRoutineManager(ctx, pu, aicm)
+	rm.baseService = new(MockBaseService)
+	ses.rm = rm
+
 	return ses
+}
+
+var _ BaseService = &MockBaseService{}
+
+type MockBaseService struct {
+}
+
+func (m *MockBaseService) ID() string {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (m *MockBaseService) SQLAddress() string {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (m *MockBaseService) SessionMgr() *queryservice.SessionManager {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (m *MockBaseService) CheckTenantUpgrade(ctx context.Context, tenantID int64) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (m *MockBaseService) GetFinalVersion() string {
+	return "1.2.0"
 }
 
 func newBh(ctrl *gomock.Controller, sql2result map[string]ExecResult) BackgroundExec {

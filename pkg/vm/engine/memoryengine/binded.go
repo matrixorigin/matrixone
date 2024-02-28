@@ -17,6 +17,7 @@ package memoryengine
 import (
 	"context"
 
+	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -96,4 +97,8 @@ func (b *BindedEngine) TryToSubscribeTable(ctx context.Context, dbID, tbID uint6
 
 func (b *BindedEngine) UnsubscribeTable(ctx context.Context, dbID, tbID uint64) error {
 	return b.engine.UnsubscribeTable(ctx, dbID, tbID)
+}
+
+func (b *BindedEngine) Stats(ctx context.Context, key pb.StatsInfoKey, sync bool) *pb.StatsInfo {
+	return b.engine.Stats(ctx, key, sync)
 }

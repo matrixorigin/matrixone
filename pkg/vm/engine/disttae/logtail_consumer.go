@@ -133,9 +133,13 @@ type State struct {
 func (c *PushClient) GetState() State {
 	c.subscribed.mutex.Lock()
 	defer c.subscribed.mutex.Unlock()
+	subTables := make(map[SubTableID]SubTableStatus, len(c.subscribed.m))
+	for k, v := range c.subscribed.m {
+		subTables[k] = v
+	}
 	return State{
 		LatestTS:  c.receivedLogTailTime.getTimestamp(),
-		SubTables: c.subscribed.m,
+		SubTables: subTables,
 	}
 }
 
@@ -1033,6 +1037,7 @@ func dispatchSubscribeResponse(
 	receiveAt time.Time) error {
 	lt := response.Logtail
 	tbl := lt.GetTable()
+
 	notDistribute := ifShouldNotDistribute(tbl.DbId, tbl.TbId)
 	if notDistribute {
 		// time check for issue #10833.
@@ -1313,6 +1318,9 @@ func updatePartitionOfPush(
 	defer func() {
 		v2.LogTailApplyDurationHistogram.Observe(time.Since(start).Seconds())
 	}()
+
+	// after consume the logtail, enqueue it to global stats.
+	defer func() { e.globalStats.enqueue(tl) }()
 
 	// get table info by table id
 	dbId, tblId := tl.Table.GetDbId(), tl.Table.GetTbId()

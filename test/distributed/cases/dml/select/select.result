@@ -477,3 +477,14 @@ count(*)
 select count(*) from t11 where a in (1,20000);
 count(*)
 2
+drop table if exists t1;
+create table t1(a int primary key, b int);
+insert into t1 values (1,1),(2,2),(3,3);
+select mo_ctl('dn', 'flush', 'select.t1');
+mo_ctl(dn, flush, select.t1)
+{\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
+select * from t1 where a in (3,3,3,2,1);
+a    b
+1    1
+2    2
+3    3

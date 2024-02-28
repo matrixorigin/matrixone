@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 )
@@ -89,9 +90,9 @@ type ClusterByDef struct {
 }
 
 type Statistics interface {
-	Stats(ctx context.Context, partitionTables []any, statsInfoMap any) bool
-	Rows(ctx context.Context) (int64, error)
-	Size(ctx context.Context, columnName string) (int64, error)
+	Stats(ctx context.Context, sync bool) *pb.StatsInfo
+	Rows(ctx context.Context) (uint64, error)
+	Size(ctx context.Context, columnName string) (uint64, error)
 }
 
 type IndexTableDef struct {
@@ -599,6 +600,7 @@ type Relation interface {
 
 	// Get complete tableDef information, including columns, constraints, partitions, version, comments, etc
 	GetTableDef(context.Context) *plan.TableDef
+	CopyTableDef(context.Context) *plan.TableDef
 
 	GetPrimaryKeys(context.Context) ([]*Attribute, error)
 
@@ -712,6 +714,11 @@ type Engine interface {
 
 	// AllocateIDByKey allocate a globally unique ID by key.
 	AllocateIDByKey(ctx context.Context, key string) (uint64, error)
+
+	// Stats returns the stats info of the key.
+	// If sync is true, wait for the stats info to be updated, else,
+	// just return nil if the current stats info has not been initialized.
+	Stats(ctx context.Context, key pb.StatsInfoKey, sync bool) *pb.StatsInfo
 }
 
 type VectorPool interface {

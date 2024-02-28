@@ -33,6 +33,7 @@ var (
 )
 
 func (s *service) BootstrapUpgrade(ctx context.Context) error {
+	getUpgradeLogger().Info("start bootstrap upgrade")
 	s.adjustUpgrade()
 	// MO's upgrade framework is automated, requiring no manual execution of any
 	// upgrade commands, and supports cross-version upgrades. All upgrade processes
@@ -57,7 +58,6 @@ func (s *service) BootstrapUpgrade(ctx context.Context) error {
 	// be grouped for all tenants and concurrently executed on multiple CNs at the same
 	// time.
 	fmt.Printf("----------------wuxiliang2----------------begin upgrade-------------------------------")
-
 	if err := retryRun(ctx, "doCheckUpgrade", s.doCheckUpgrade); err != nil {
 		getUpgradeLogger().Error("check upgrade failed", zap.Error(err))
 		return err

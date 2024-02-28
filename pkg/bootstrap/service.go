@@ -18,7 +18,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/util/export"
@@ -40,6 +39,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
+	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"go.uber.org/zap"
 )
@@ -150,22 +150,24 @@ var (
 			last_run                    timestamp,
 			details                     blob)`,
 			catalog.MOTaskDB),
-
-		fmt.Sprintf(`insert into %s.sys_async_task(
-                              task_metadata_id,
-                              task_metadata_executor,
-                              task_metadata_context,
-		                      task_metadata_option,
-		                      task_parent_id,
-		                      task_status,
-		                      task_runner,
-		                      task_epoch,
-		                      last_heartbeat,
-		                      create_at,
-		                      end_at) values ("SystemInit", 1, "", "{}", 0, 0, 0, 0, 0, %d, 0)`,
-			catalog.MOTaskDB, time.Now().UnixNano()),
 	}
+
+	initSQLs []string
 )
+
+func init() {
+	initSQLs = append(initSQLs, step1InitSQLs...)
+	initSQLs = append(initSQLs, step2InitSQLs...)
+
+	// generate system cron tasks sql
+	sql, err := genInitCronTaskSQL()
+	if err != nil {
+		panic(err)
+	}
+	initSQLs = append(initSQLs, sql)
+
+	initSQLs = append(initSQLs, trace.InitSQLs...)
+}
 
 type service struct {
 	lock    Locker
@@ -174,7 +176,6 @@ type service struct {
 	exec    executor.SQLExecutor
 	stopper *stopper.Stopper
 	handles []VersionHandle
-	pu      *config.ParameterUnit
 
 	mu struct {
 		sync.RWMutex
@@ -273,6 +274,7 @@ func (s *service) checkAlreadyBootstrapped(ctx context.Context) (bool, error) {
 func (s *service) execBootstrap(ctx context.Context) error {
 	opts := executor.Options{}.
 		WithMinCommittedTS(s.now()).
+		//WithDisableTrace().
 		WithWaitCommittedLogApplied().
 		WithTimeZone(time.Local). // FIXME ??
 		WithAccountID(catalog.System_Account)
@@ -344,133 +346,15 @@ func initSysPreSQLs(ctx context.Context, txn executor.TxnExecutor) error {
 	}()
 
 	begin := time.Now()
-	for _, sql := range preInitializeSQLs {
-		if _, err := txn.Exec(sql, executor.StatementOption{}); err != nil {
-			return err
-		}
-	}
 
-	//  get system cron tasks sql and initialize cron tasks
-	if sql, err := genInitCronTaskSQL(); err != nil {
-		return err
-	} else {
-		if _, err = txn.Exec(sql, executor.StatementOption{}); err != nil {
+	for _, sql := range initSQLs {
+		if _, err := txn.Exec(sql, executor.StatementOption{}); err != nil {
 			return err
 		}
 	}
 
 	timeCost = time.Since(begin)
 	return nil
-}
-
-var preInitializeSQLs = []string{
-	fmt.Sprintf(`create table %s.%s(
-			id 			bigint unsigned not null,
-			table_id 	bigint unsigned not null,
-			database_id bigint unsigned not null,
-			name 		varchar(64) not null,
-			type        varchar(11) not null,
-    		algo	varchar(11),
-    		algo_table_type varchar(11),
-			algo_params varchar(2048),
-			is_visible  tinyint not null,
-			hidden      tinyint not null,
-			comment 	varchar(2048) not null,
-			column_name    varchar(256) not null,
-			ordinal_position  int unsigned  not null,
-			options     text,
-			index_table_name varchar(5000),
-			primary key(id, column_name)
-		);`, catalog.MO_CATALOG, catalog.MO_INDEXES),
-
-	fmt.Sprintf(`CREATE TABLE %s.%s (
-			  table_id bigint unsigned NOT NULL,
-			  database_id bigint unsigned not null,
-			  number smallint unsigned NOT NULL,
-			  name varchar(64) NOT NULL,
-    		  partition_type varchar(50) NOT NULL,
-              partition_expression varchar(2048) NULL,
-			  description_utf8 text,
-			  comment varchar(2048) NOT NULL,
-			  options text,
-			  partition_table_name varchar(1024) NOT NULL,
-    		  PRIMARY KEY table_id (table_id, name)
-			);`, catalog.MO_CATALOG, catalog.MO_TABLE_PARTITIONS),
-
-	fmt.Sprintf(`create table %s.%s (
-			table_id   bigint unsigned, 
-			col_name   varchar(770), 
-			col_index  int,
-			offset     bigint unsigned, 
-			step       bigint unsigned,  
-			primary key(table_id, col_name)
-		);`, catalog.MO_CATALOG, catalog.MOAutoIncrTable),
-
-	fmt.Sprintf(`create database %s`,
-		catalog.MOTaskDB),
-
-	fmt.Sprintf(`create table %s.sys_async_task (
-			task_id                     bigint primary key auto_increment,
-			task_metadata_id            varchar(50) unique not null,
-			task_metadata_executor      int,
-			task_metadata_context       blob,
-			task_metadata_option        varchar(1000),
-			task_parent_id              varchar(50),
-			task_status                 int,
-			task_runner                 varchar(50),
-			task_epoch                  int,
-			last_heartbeat              bigint,
-			result_code                 int null,
-			error_msg                   varchar(1000) null,
-			create_at                   bigint,
-			end_at                      bigint)`,
-		catalog.MOTaskDB),
-
-	fmt.Sprintf(`create table %s.sys_cron_task (
-			cron_task_id				bigint primary key auto_increment,
-    		task_metadata_id            varchar(50) unique not null,
-			task_metadata_executor      int,
-			task_metadata_context       blob,
-			task_metadata_option 		varchar(1000),
-			cron_expr					varchar(100) not null,
-			next_time					bigint,
-			trigger_times				int,
-			create_at					bigint,
-			update_at					bigint)`,
-		catalog.MOTaskDB),
-
-	fmt.Sprintf(`create table %s.sys_daemon_task (
-			task_id                     bigint primary key auto_increment,
-			task_metadata_id            varchar(50),
-			task_metadata_executor      int,
-			task_metadata_context       blob,
-			task_metadata_option        varchar(1000),
-			account_id                  int unsigned not null,
-			account                     varchar(128) not null,
-			task_type                   varchar(64) not null,
-			task_runner                 varchar(64),
-			task_status                 int not null,
-			last_heartbeat              timestamp,
-			create_at                   timestamp not null,
-			update_at                   timestamp not null,
-			end_at                      timestamp,
-			last_run                    timestamp,
-			details                     blob)`,
-		catalog.MOTaskDB),
-
-	//fmt.Sprintf(`insert into %s.sys_async_task(
-	//                         task_metadata_id,
-	//                         task_metadata_executor,
-	//                         task_metadata_context,
-	//	                      task_metadata_option,
-	//	                      task_parent_id,
-	//	                      task_status,
-	//	                      task_runner,
-	//	                      task_epoch,
-	//	                      last_heartbeat,
-	//	                      create_at,
-	//	                      end_at) values ("SystemInit", 1, "", "{}", 0, 0, 0, 0, 0, %d, 0)`,
-	//	catalog.MOTaskDB, time.Now().UnixNano()),
 }
 
 func genInitCronTaskSQL() (string, error) {
@@ -503,7 +387,7 @@ func genInitCronTaskSQL() (string, error) {
 	}
 
 	cronTasks := make([]*task.CronTask, 0, 2)
-	task1, err := createCronTask(export.MergeTaskMetadata(task.TaskCode_MetricLogMerge), export.MergeTaskCronExpr)
+	task1, err := createCronTask(export.MergeTaskMetadata(task.TaskCode_MetricLogMerge), export.MergeTaskCronExprEvery05Min)
 	if err != nil {
 		return "", err
 	}
