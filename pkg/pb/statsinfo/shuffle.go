@@ -19,7 +19,7 @@ import "math"
 const DefaultEvalSize = 1024
 
 type ShuffleList struct {
-	Size  int32
+	Size  int64
 	Value float64
 	Next  *ShuffleList
 	Tree  *ShuffleHeap
@@ -65,7 +65,7 @@ func (t *ShuffleHeap) Pop() (*ShuffleHeap, *ShuffleHeap) {
 	return t.Left.Merge(t.Right), t
 }
 
-func (s *ShuffleRange) UpdateString(zmmin []byte, zmmax []byte, rowCount uint32, nullCount uint32) {
+func (s *ShuffleRange) UpdateString(zmmin []byte, zmmax []byte, rowCount int64, nullCount int64) {
 	if len(zmmin) > 8 {
 		zmmin = zmmin[:8]
 	}
@@ -73,46 +73,46 @@ func (s *ShuffleRange) UpdateString(zmmin []byte, zmmax []byte, rowCount uint32,
 		zmmax = zmmax[:8]
 	}
 	if s.Sz == 0 {
-		s.Sz = int32(rowCount)
+		s.Sz = rowCount
 		s.Flags = make([]bool, 256)
 		s.Mins = make([][]byte, 0)
 		s.Maxs = make([][]byte, 0)
 		s.Mins = append(s.Mins, zmmin)
 		s.Maxs = append(s.Maxs, zmmax)
-		s.Rows = make([]int32, 0)
-		s.Rows = append(s.Rows, int32(rowCount))
-		s.Nulls = make([]int32, 0)
-		s.Nulls = append(s.Nulls, int32(nullCount))
+		s.Rows = make([]int64, 0)
+		s.Rows = append(s.Rows, rowCount)
+		s.Nulls = make([]int64, 0)
+		s.Nulls = append(s.Nulls, nullCount)
 	} else {
-		s.Sz += int32(rowCount)
+		s.Sz += rowCount
 		s.Mins = append(s.Mins, zmmin)
 		s.Maxs = append(s.Maxs, zmmax)
-		s.Rows = append(s.Rows, int32(rowCount))
-		s.Nulls = append(s.Nulls, int32(nullCount))
+		s.Rows = append(s.Rows, rowCount)
+		s.Nulls = append(s.Nulls, nullCount)
 	}
-	if s.MaxLen < int32(len(zmmin)) {
-		s.MaxLen = int32(len(zmmin))
+	if s.MaxLen < int64(len(zmmin)) {
+		s.MaxLen = int64(len(zmmin))
 	}
 	for _, c := range zmmin {
 		s.Flags[int(c)] = true
 	}
-	if s.MaxLen < int32(len(zmmax)) {
-		s.MaxLen = int32(len(zmmax))
+	if s.MaxLen < int64(len(zmmax)) {
+		s.MaxLen = int64(len(zmmax))
 	}
 	for _, c := range zmmax {
 		s.Flags[int(c)] = true
 	}
 }
 
-func (s *ShuffleRange) Update(zmmin float64, zmmax float64, rowCount uint32, nullCount uint32) {
-	s.Sz += int32(rowCount)
+func (s *ShuffleRange) Update(zmmin float64, zmmax float64, rowCount int64, nullCount int64) {
+	s.Sz += rowCount
 	if s.Tree == nil {
 		s.Tree = &ShuffleHeap{
 			Height: 1,
 			Key:    zmmax,
 			Value:  zmmin,
-			Sz:     int32(rowCount),
-			Nulls:  int32(nullCount),
+			Sz:     rowCount,
+			Nulls:  nullCount,
 		}
 		s.Min = zmmin
 		s.Max = zmmax
@@ -121,8 +121,8 @@ func (s *ShuffleRange) Update(zmmin float64, zmmax float64, rowCount uint32, nul
 			Height: 1,
 			Key:    zmmax,
 			Value:  zmmin,
-			Sz:     int32(rowCount),
-			Nulls:  int32(nullCount),
+			Sz:     rowCount,
+			Nulls:  nullCount,
 		})
 		if s.Min > zmmin {
 			s.Min = zmmin
@@ -163,13 +163,13 @@ func (s *ShuffleRange) Eval() {
 			for _, c := range s.Maxs[i] {
 				node.Key = node.Key*lens + float64(bytetoint[c])
 			}
-			for j := int32(len(s.Maxs[i])); j < s.MaxLen; j++ {
+			for j := int64(len(s.Maxs[i])); j < s.MaxLen; j++ {
 				node.Key = node.Key * lens
 			}
 			for _, c := range s.Mins[i] {
 				node.Value = node.Value*lens + float64(bytetoint[c])
 			}
-			for j := int32(len(s.Mins[i])); j < s.MaxLen; j++ {
+			for j := int64(len(s.Mins[i])); j < s.MaxLen; j++ {
 				node.Value = node.Value * lens
 			}
 			if s.Tree == nil {
@@ -181,7 +181,7 @@ func (s *ShuffleRange) Eval() {
 	}
 	var head *ShuffleList
 	var node *ShuffleHeap
-	var nulls int32
+	var nulls int64
 	s.Result = make([]float64, k-1)
 	for s.Tree != nil {
 		s.Tree, node = s.Tree.Pop()
@@ -351,7 +351,7 @@ func (s *ShuffleRange) Eval() {
 			var frac float64
 			str := make([]byte, s.MaxLen)
 			s.Result[i], _ = math.Modf(s.Result[i])
-			for j := int32(0); j < s.MaxLen; j++ {
+			for j := int64(0); j < s.MaxLen; j++ {
 				s.Result[i], frac = math.Modf(s.Result[i] / lens)
 				k := int(frac*lens + 0.01)
 				if k < 0 {
