@@ -25,7 +25,47 @@ var _ = math.Inf
 // proto package needs to be updated.
 const _ = proto.GoGoProtoPackageIsVersion3 // please upgrade the proto package
 
-type EncodeBasicInfo struct {
+type EncodedAggExecType int32
+
+const (
+	EncodedAggExecType_single_fixed_fixed   EncodedAggExecType = 0
+	EncodedAggExecType_single_fixed_var     EncodedAggExecType = 1
+	EncodedAggExecType_single_var_fixed     EncodedAggExecType = 2
+	EncodedAggExecType_single_var_var       EncodedAggExecType = 3
+	EncodedAggExecType_multi_return_fixed   EncodedAggExecType = 4
+	EncodedAggExecType_multi_return_var     EncodedAggExecType = 5
+	EncodedAggExecType_special_group_concat EncodedAggExecType = 6
+)
+
+var EncodedAggExecType_name = map[int32]string{
+	0: "single_fixed_fixed",
+	1: "single_fixed_var",
+	2: "single_var_fixed",
+	3: "single_var_var",
+	4: "multi_return_fixed",
+	5: "multi_return_var",
+	6: "special_group_concat",
+}
+
+var EncodedAggExecType_value = map[string]int32{
+	"single_fixed_fixed":   0,
+	"single_fixed_var":     1,
+	"single_var_fixed":     2,
+	"single_var_var":       3,
+	"multi_return_fixed":   4,
+	"multi_return_var":     5,
+	"special_group_concat": 6,
+}
+
+func (x EncodedAggExecType) String() string {
+	return proto.EnumName(EncodedAggExecType_name, int32(x))
+}
+
+func (EncodedAggExecType) EnumDescriptor() ([]byte, []int) {
+	return fileDescriptor_f1a7c2bf0e2dbbf4, []int{0}
+}
+
+type EncodedBasicInfo struct {
 	Id                   int64                                                        `protobuf:"varint,1,opt,name=id,proto3" json:"id,omitempty"`
 	IsDistinct           bool                                                         `protobuf:"varint,2,opt,name=is_distinct,json=isDistinct,proto3" json:"is_distinct,omitempty"`
 	NullEmpty            bool                                                         `protobuf:"varint,3,opt,name=null_empty,json=nullEmpty,proto3" json:"null_empty,omitempty"`
@@ -36,18 +76,18 @@ type EncodeBasicInfo struct {
 	XXX_sizecache        int32                                                        `json:"-"`
 }
 
-func (m *EncodeBasicInfo) Reset()         { *m = EncodeBasicInfo{} }
-func (m *EncodeBasicInfo) String() string { return proto.CompactTextString(m) }
-func (*EncodeBasicInfo) ProtoMessage()    {}
-func (*EncodeBasicInfo) Descriptor() ([]byte, []int) {
+func (m *EncodedBasicInfo) Reset()         { *m = EncodedBasicInfo{} }
+func (m *EncodedBasicInfo) String() string { return proto.CompactTextString(m) }
+func (*EncodedBasicInfo) ProtoMessage()    {}
+func (*EncodedBasicInfo) Descriptor() ([]byte, []int) {
 	return fileDescriptor_f1a7c2bf0e2dbbf4, []int{0}
 }
-func (m *EncodeBasicInfo) XXX_Unmarshal(b []byte) error {
+func (m *EncodedBasicInfo) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
 }
-func (m *EncodeBasicInfo) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+func (m *EncodedBasicInfo) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
 	if deterministic {
-		return xxx_messageInfo_EncodeBasicInfo.Marshal(b, m, deterministic)
+		return xxx_messageInfo_EncodedBasicInfo.Marshal(b, m, deterministic)
 	} else {
 		b = b[:cap(b)]
 		n, err := m.MarshalToSizedBuffer(b)
@@ -57,60 +97,61 @@ func (m *EncodeBasicInfo) XXX_Marshal(b []byte, deterministic bool) ([]byte, err
 		return b[:n], nil
 	}
 }
-func (m *EncodeBasicInfo) XXX_Merge(src proto.Message) {
-	xxx_messageInfo_EncodeBasicInfo.Merge(m, src)
+func (m *EncodedBasicInfo) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_EncodedBasicInfo.Merge(m, src)
 }
-func (m *EncodeBasicInfo) XXX_Size() int {
+func (m *EncodedBasicInfo) XXX_Size() int {
 	return m.ProtoSize()
 }
-func (m *EncodeBasicInfo) XXX_DiscardUnknown() {
-	xxx_messageInfo_EncodeBasicInfo.DiscardUnknown(m)
+func (m *EncodedBasicInfo) XXX_DiscardUnknown() {
+	xxx_messageInfo_EncodedBasicInfo.DiscardUnknown(m)
 }
 
-var xxx_messageInfo_EncodeBasicInfo proto.InternalMessageInfo
+var xxx_messageInfo_EncodedBasicInfo proto.InternalMessageInfo
 
-func (m *EncodeBasicInfo) GetId() int64 {
+func (m *EncodedBasicInfo) GetId() int64 {
 	if m != nil {
 		return m.Id
 	}
 	return 0
 }
 
-func (m *EncodeBasicInfo) GetIsDistinct() bool {
+func (m *EncodedBasicInfo) GetIsDistinct() bool {
 	if m != nil {
 		return m.IsDistinct
 	}
 	return false
 }
 
-func (m *EncodeBasicInfo) GetNullEmpty() bool {
+func (m *EncodedBasicInfo) GetNullEmpty() bool {
 	if m != nil {
 		return m.NullEmpty
 	}
 	return false
 }
 
-type EncodeAgg struct {
-	Info                 *EncodeBasicInfo `protobuf:"bytes,1,opt,name=info,proto3" json:"info,omitempty"`
-	Result               []byte           `protobuf:"bytes,2,opt,name=result,proto3" json:"result,omitempty"`
-	Groups               [][]byte         `protobuf:"bytes,3,rep,name=groups,proto3" json:"groups,omitempty"`
-	XXX_NoUnkeyedLiteral struct{}         `json:"-"`
-	XXX_unrecognized     []byte           `json:"-"`
-	XXX_sizecache        int32            `json:"-"`
+type EncodedAgg struct {
+	ExecType             EncodedAggExecType `protobuf:"varint,1,opt,name=exec_type,json=execType,proto3,enum=aggexec.EncodedAggExecType" json:"exec_type,omitempty"`
+	Info                 *EncodedBasicInfo  `protobuf:"bytes,2,opt,name=info,proto3" json:"info,omitempty"`
+	Result               []byte             `protobuf:"bytes,3,opt,name=result,proto3" json:"result,omitempty"`
+	Groups               [][]byte           `protobuf:"bytes,4,rep,name=groups,proto3" json:"groups,omitempty"`
+	XXX_NoUnkeyedLiteral struct{}           `json:"-"`
+	XXX_unrecognized     []byte             `json:"-"`
+	XXX_sizecache        int32              `json:"-"`
 }
 
-func (m *EncodeAgg) Reset()         { *m = EncodeAgg{} }
-func (m *EncodeAgg) String() string { return proto.CompactTextString(m) }
-func (*EncodeAgg) ProtoMessage()    {}
-func (*EncodeAgg) Descriptor() ([]byte, []int) {
+func (m *EncodedAgg) Reset()         { *m = EncodedAgg{} }
+func (m *EncodedAgg) String() string { return proto.CompactTextString(m) }
+func (*EncodedAgg) ProtoMessage()    {}
+func (*EncodedAgg) Descriptor() ([]byte, []int) {
 	return fileDescriptor_f1a7c2bf0e2dbbf4, []int{1}
 }
-func (m *EncodeAgg) XXX_Unmarshal(b []byte) error {
+func (m *EncodedAgg) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
 }
-func (m *EncodeAgg) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+func (m *EncodedAgg) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
 	if deterministic {
-		return xxx_messageInfo_EncodeAgg.Marshal(b, m, deterministic)
+		return xxx_messageInfo_EncodedAgg.Marshal(b, m, deterministic)
 	} else {
 		b = b[:cap(b)]
 		n, err := m.MarshalToSizedBuffer(b)
@@ -120,33 +161,40 @@ func (m *EncodeAgg) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
 		return b[:n], nil
 	}
 }
-func (m *EncodeAgg) XXX_Merge(src proto.Message) {
-	xxx_messageInfo_EncodeAgg.Merge(m, src)
+func (m *EncodedAgg) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_EncodedAgg.Merge(m, src)
 }
-func (m *EncodeAgg) XXX_Size() int {
+func (m *EncodedAgg) XXX_Size() int {
 	return m.ProtoSize()
 }
-func (m *EncodeAgg) XXX_DiscardUnknown() {
-	xxx_messageInfo_EncodeAgg.DiscardUnknown(m)
+func (m *EncodedAgg) XXX_DiscardUnknown() {
+	xxx_messageInfo_EncodedAgg.DiscardUnknown(m)
 }
 
-var xxx_messageInfo_EncodeAgg proto.InternalMessageInfo
+var xxx_messageInfo_EncodedAgg proto.InternalMessageInfo
 
-func (m *EncodeAgg) GetInfo() *EncodeBasicInfo {
+func (m *EncodedAgg) GetExecType() EncodedAggExecType {
+	if m != nil {
+		return m.ExecType
+	}
+	return EncodedAggExecType_single_fixed_fixed
+}
+
+func (m *EncodedAgg) GetInfo() *EncodedBasicInfo {
 	if m != nil {
 		return m.Info
 	}
 	return nil
 }
 
-func (m *EncodeAgg) GetResult() []byte {
+func (m *EncodedAgg) GetResult() []byte {
 	if m != nil {
 		return m.Result
 	}
 	return nil
 }
 
-func (m *EncodeAgg) GetGroups() [][]byte {
+func (m *EncodedAgg) GetGroups() [][]byte {
 	if m != nil {
 		return m.Groups
 	}
@@ -154,38 +202,46 @@ func (m *EncodeAgg) GetGroups() [][]byte {
 }
 
 func init() {
-	proto.RegisterType((*EncodeBasicInfo)(nil), "aggexec.EncodeBasicInfo")
-	proto.RegisterType((*EncodeAgg)(nil), "aggexec.EncodeAgg")
+	proto.RegisterEnum("aggexec.EncodedAggExecType", EncodedAggExecType_name, EncodedAggExecType_value)
+	proto.RegisterType((*EncodedBasicInfo)(nil), "aggexec.EncodedBasicInfo")
+	proto.RegisterType((*EncodedAgg)(nil), "aggexec.EncodedAgg")
 }
 
 func init() { proto.RegisterFile("serialize.proto", fileDescriptor_f1a7c2bf0e2dbbf4) }
 
 var fileDescriptor_f1a7c2bf0e2dbbf4 = []byte{
-	// 326 bytes of a gzipped FileDescriptorProto
-	0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0xac, 0x91, 0xb1, 0x4e, 0xeb, 0x30,
-	0x14, 0x86, 0xeb, 0xa4, 0xb7, 0x97, 0xba, 0x15, 0x45, 0x1e, 0x90, 0x85, 0x44, 0x1a, 0x75, 0xea,
-	0x00, 0x89, 0x04, 0x1b, 0x1b, 0x11, 0x1d, 0x58, 0xa3, 0x8a, 0xb5, 0x4a, 0x13, 0xd7, 0x1c, 0x91,
-	0xda, 0x96, 0xed, 0x48, 0x2d, 0x2f, 0xc1, 0x2b, 0xf0, 0x38, 0x1d, 0x99, 0x19, 0x2a, 0x54, 0x5e,
-	0x04, 0xc5, 0x09, 0x12, 0x62, 0x66, 0xf3, 0xf7, 0x1f, 0xfb, 0x97, 0xf5, 0x1d, 0x3c, 0x32, 0x4c,
-	0x43, 0x56, 0xc2, 0x33, 0x8b, 0x94, 0x96, 0x56, 0x92, 0xff, 0x19, 0xe7, 0x6c, 0xc3, 0xf2, 0xb3,
-	0x4b, 0x0e, 0xf6, 0xb1, 0x5a, 0x46, 0xb9, 0x5c, 0xc7, 0x5c, 0x72, 0x19, 0xbb, 0xf9, 0xb2, 0x5a,
-	0x39, 0x72, 0xe0, 0x4e, 0xcd, 0xbb, 0xc9, 0x8b, 0x87, 0x47, 0x33, 0x91, 0xcb, 0x82, 0x25, 0x99,
-	0x81, 0xfc, 0x5e, 0xac, 0x24, 0x39, 0xc6, 0x1e, 0x14, 0x14, 0x85, 0x68, 0xea, 0xa7, 0x1e, 0x14,
-	0x64, 0x8c, 0x07, 0x60, 0x16, 0x05, 0x18, 0x0b, 0x22, 0xb7, 0xd4, 0x0b, 0xd1, 0xf4, 0x28, 0xc5,
-	0x60, 0xee, 0xda, 0x84, 0x9c, 0x63, 0x2c, 0xaa, 0xb2, 0x5c, 0xb0, 0xb5, 0xb2, 0x5b, 0xea, 0xbb,
-	0x79, 0xbf, 0x4e, 0x66, 0x75, 0x40, 0x1e, 0x70, 0x37, 0xd3, 0xdc, 0xd0, 0x6e, 0xe8, 0x4f, 0x87,
-	0x49, 0xb2, 0xdb, 0x8f, 0x3b, 0xef, 0xfb, 0xf1, 0xcd, 0x8f, 0x8f, 0xae, 0x33, 0xab, 0x61, 0x23,
-	0x35, 0x70, 0x10, 0xdf, 0x20, 0x58, 0xac, 0x9e, 0x78, 0x9c, 0x4b, 0x61, 0x33, 0x10, 0x4c, 0xc7,
-	0x76, 0xab, 0x98, 0x89, 0xe6, 0x5b, 0xc5, 0x52, 0xd7, 0x47, 0xe6, 0xd8, 0xd7, 0xcc, 0xd2, 0x7f,
-	0x21, 0xfa, 0xa3, 0xda, 0xba, 0x6e, 0x02, 0xb8, 0xdf, 0x08, 0xb9, 0xe5, 0x9c, 0x5c, 0xe0, 0x2e,
-	0x88, 0x95, 0x74, 0x32, 0x06, 0x57, 0x34, 0x6a, 0x2d, 0x47, 0xbf, 0x94, 0xa5, 0xee, 0x16, 0x39,
-	0xc5, 0x3d, 0xcd, 0x4c, 0x55, 0x36, 0x8e, 0x86, 0x69, 0x4b, 0x75, 0xce, 0xb5, 0xac, 0x94, 0xa1,
-	0x7e, 0xad, 0x20, 0x6d, 0x29, 0x39, 0xd9, 0x1d, 0x02, 0xf4, 0x76, 0x08, 0xd0, 0xc7, 0x21, 0xe8,
-	0xbc, 0x7e, 0x06, 0x68, 0xd9, 0x73, 0x5b, 0xb9, 0xfe, 0x0a, 0x00, 0x00, 0xff, 0xff, 0x63, 0x22,
-	0xea, 0xd5, 0xe0, 0x01, 0x00, 0x00,
+	// 439 bytes of a gzipped FileDescriptorProto
+	0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0xac, 0x92, 0x41, 0x6e, 0x13, 0x31,
+	0x14, 0x86, 0xe3, 0x4c, 0x1a, 0xda, 0xd7, 0x2a, 0x8c, 0xac, 0xaa, 0x1a, 0x40, 0x24, 0x51, 0x57,
+	0x11, 0x52, 0x67, 0xa4, 0xb2, 0x41, 0xec, 0x88, 0xc8, 0x82, 0xed, 0xa8, 0x62, 0x3b, 0x72, 0x3c,
+	0x8e, 0x79, 0x62, 0x62, 0x8f, 0x6c, 0x4f, 0x95, 0x70, 0x0a, 0x8e, 0xc0, 0x86, 0x1b, 0x70, 0x88,
+	0x2e, 0x59, 0xb3, 0xa8, 0x50, 0xb8, 0x08, 0xb2, 0x6b, 0x20, 0x85, 0x2d, 0x9b, 0x91, 0xff, 0xdf,
+	0xff, 0xfb, 0xe7, 0xe9, 0x93, 0xe1, 0xa1, 0x15, 0x06, 0x59, 0x83, 0x1f, 0x44, 0xde, 0x1a, 0xed,
+	0x34, 0x7d, 0xc0, 0xa4, 0x14, 0x1b, 0xc1, 0x1f, 0x5f, 0x48, 0x74, 0xef, 0xba, 0x65, 0xce, 0xf5,
+	0xba, 0x90, 0x5a, 0xea, 0x22, 0xdc, 0x2f, 0xbb, 0x55, 0x50, 0x41, 0x84, 0xd3, 0xdd, 0xdc, 0xf9,
+	0xc7, 0x3e, 0xa4, 0x0b, 0xc5, 0x75, 0x2d, 0xea, 0x39, 0xb3, 0xc8, 0xdf, 0xa8, 0x95, 0xa6, 0x23,
+	0xe8, 0x63, 0x9d, 0x91, 0x29, 0x99, 0x25, 0x65, 0x1f, 0x6b, 0x3a, 0x81, 0x63, 0xb4, 0x55, 0x8d,
+	0xd6, 0xa1, 0xe2, 0x2e, 0xeb, 0x4f, 0xc9, 0xec, 0xb0, 0x04, 0xb4, 0xaf, 0xa3, 0x43, 0x9f, 0x02,
+	0xa8, 0xae, 0x69, 0x2a, 0xb1, 0x6e, 0xdd, 0x36, 0x4b, 0xc2, 0xfd, 0x91, 0x77, 0x16, 0xde, 0xa0,
+	0x6f, 0x61, 0xc0, 0x8c, 0xb4, 0xd9, 0x60, 0x9a, 0xcc, 0x4e, 0xe6, 0xf3, 0x9b, 0xdb, 0x49, 0xef,
+	0xdb, 0xed, 0xe4, 0xe5, 0xde, 0xa6, 0x6b, 0xe6, 0x0c, 0x6e, 0xb4, 0x41, 0x89, 0xea, 0x97, 0x50,
+	0xa2, 0x68, 0xdf, 0xcb, 0x82, 0x6b, 0xe5, 0x18, 0x2a, 0x61, 0x0a, 0xb7, 0x6d, 0x85, 0xcd, 0xaf,
+	0xb6, 0xad, 0x28, 0x43, 0x1f, 0xbd, 0x82, 0xc4, 0x08, 0x97, 0x1d, 0x4c, 0xc9, 0x7f, 0xaa, 0xf5,
+	0x75, 0xe7, 0x9f, 0x09, 0x40, 0x44, 0xf2, 0x4a, 0x4a, 0xfa, 0x02, 0x8e, 0x3c, 0xd8, 0xca, 0xc7,
+	0x02, 0x93, 0xd1, 0xe5, 0x93, 0x3c, 0xd2, 0xce, 0xff, 0xe4, 0x16, 0x1b, 0xc1, 0x43, 0xc7, 0xa1,
+	0x88, 0x27, 0x7a, 0x01, 0x03, 0x54, 0x2b, 0x1d, 0x78, 0x1d, 0x5f, 0x3e, 0xfa, 0x7b, 0xe8, 0x37,
+	0xef, 0x32, 0xc4, 0xe8, 0x19, 0x0c, 0x8d, 0xb0, 0x5d, 0xe3, 0x02, 0xc0, 0x93, 0x32, 0x2a, 0xef,
+	0x4b, 0xa3, 0xbb, 0x36, 0xf2, 0x2b, 0xa3, 0x7a, 0xf6, 0x85, 0x00, 0xfd, 0xf7, 0xff, 0xf4, 0x0c,
+	0xa8, 0x45, 0x25, 0x1b, 0x51, 0xad, 0x70, 0x23, 0xea, 0xbb, 0x6f, 0xda, 0xa3, 0xa7, 0x90, 0xde,
+	0xf3, 0xaf, 0x99, 0x49, 0xc9, 0x9e, 0x7b, 0xcd, 0x4c, 0xcc, 0xf6, 0x29, 0x85, 0xd1, 0x9e, 0xeb,
+	0x93, 0x89, 0xef, 0x5d, 0x77, 0x8d, 0xc3, 0xca, 0x08, 0xd7, 0x19, 0x15, 0xb3, 0x03, 0xdf, 0x70,
+	0xcf, 0xf7, 0xe9, 0x03, 0x9a, 0xc1, 0xa9, 0x6d, 0x05, 0x47, 0xd6, 0x54, 0x61, 0xdd, 0x8a, 0x6b,
+	0xc5, 0x99, 0x4b, 0x87, 0xf3, 0xf4, 0x66, 0x37, 0x26, 0x5f, 0x77, 0x63, 0xf2, 0x7d, 0x37, 0xee,
+	0x7d, 0xfa, 0x31, 0x26, 0xcb, 0x61, 0x78, 0x8a, 0xcf, 0x7f, 0x06, 0x00, 0x00, 0xff, 0xff, 0x2d,
+	0xb7, 0x64, 0x9b, 0xd5, 0x02, 0x00, 0x00,
 }
 
-func (m *EncodeBasicInfo) Marshal() (dAtA []byte, err error) {
+func (m *EncodedBasicInfo) Marshal() (dAtA []byte, err error) {
 	size := m.ProtoSize()
 	dAtA = make([]byte, size)
 	n, err := m.MarshalToSizedBuffer(dAtA[:size])
@@ -195,12 +251,12 @@ func (m *EncodeBasicInfo) Marshal() (dAtA []byte, err error) {
 	return dAtA[:n], nil
 }
 
-func (m *EncodeBasicInfo) MarshalTo(dAtA []byte) (int, error) {
+func (m *EncodedBasicInfo) MarshalTo(dAtA []byte) (int, error) {
 	size := m.ProtoSize()
 	return m.MarshalToSizedBuffer(dAtA[:size])
 }
 
-func (m *EncodeBasicInfo) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+func (m *EncodedBasicInfo) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 	i := len(dAtA)
 	_ = i
 	var l int
@@ -261,7 +317,7 @@ func (m *EncodeBasicInfo) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 	return len(dAtA) - i, nil
 }
 
-func (m *EncodeAgg) Marshal() (dAtA []byte, err error) {
+func (m *EncodedAgg) Marshal() (dAtA []byte, err error) {
 	size := m.ProtoSize()
 	dAtA = make([]byte, size)
 	n, err := m.MarshalToSizedBuffer(dAtA[:size])
@@ -271,12 +327,12 @@ func (m *EncodeAgg) Marshal() (dAtA []byte, err error) {
 	return dAtA[:n], nil
 }
 
-func (m *EncodeAgg) MarshalTo(dAtA []byte) (int, error) {
+func (m *EncodedAgg) MarshalTo(dAtA []byte) (int, error) {
 	size := m.ProtoSize()
 	return m.MarshalToSizedBuffer(dAtA[:size])
 }
 
-func (m *EncodeAgg) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+func (m *EncodedAgg) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 	i := len(dAtA)
 	_ = i
 	var l int
@@ -291,7 +347,7 @@ func (m *EncodeAgg) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 			copy(dAtA[i:], m.Groups[iNdEx])
 			i = encodeVarintSerialize(dAtA, i, uint64(len(m.Groups[iNdEx])))
 			i--
-			dAtA[i] = 0x1a
+			dAtA[i] = 0x22
 		}
 	}
 	if len(m.Result) > 0 {
@@ -299,7 +355,7 @@ func (m *EncodeAgg) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		copy(dAtA[i:], m.Result)
 		i = encodeVarintSerialize(dAtA, i, uint64(len(m.Result)))
 		i--
-		dAtA[i] = 0x12
+		dAtA[i] = 0x1a
 	}
 	if m.Info != nil {
 		{
@@ -311,7 +367,12 @@ func (m *EncodeAgg) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 			i = encodeVarintSerialize(dAtA, i, uint64(size))
 		}
 		i--
-		dAtA[i] = 0xa
+		dAtA[i] = 0x12
+	}
+	if m.ExecType != 0 {
+		i = encodeVarintSerialize(dAtA, i, uint64(m.ExecType))
+		i--
+		dAtA[i] = 0x8
 	}
 	return len(dAtA) - i, nil
 }
@@ -327,7 +388,7 @@ func encodeVarintSerialize(dAtA []byte, offset int, v uint64) int {
 	dAtA[offset] = uint8(v)
 	return base
 }
-func (m *EncodeBasicInfo) ProtoSize() (n int) {
+func (m *EncodedBasicInfo) ProtoSize() (n int) {
 	if m == nil {
 		return 0
 	}
@@ -356,12 +417,15 @@ func (m *EncodeBasicInfo) ProtoSize() (n int) {
 	return n
 }
 
-func (m *EncodeAgg) ProtoSize() (n int) {
+func (m *EncodedAgg) ProtoSize() (n int) {
 	if m == nil {
 		return 0
 	}
 	var l int
 	_ = l
+	if m.ExecType != 0 {
+		n += 1 + sovSerialize(uint64(m.ExecType))
+	}
 	if m.Info != nil {
 		l = m.Info.ProtoSize()
 		n += 1 + l + sovSerialize(uint64(l))
@@ -388,7 +452,7 @@ func sovSerialize(x uint64) (n int) {
 func sozSerialize(x uint64) (n int) {
 	return sovSerialize(uint64((x << 1) ^ uint64((int64(x) >> 63))))
 }
-func (m *EncodeBasicInfo) Unmarshal(dAtA []byte) error {
+func (m *EncodedBasicInfo) Unmarshal(dAtA []byte) error {
 	l := len(dAtA)
 	iNdEx := 0
 	for iNdEx < l {
@@ -411,10 +475,10 @@ func (m *EncodeBasicInfo) Unmarshal(dAtA []byte) error {
 		fieldNum := int32(wire >> 3)
 		wireType := int(wire & 0x7)
 		if wireType == 4 {
-			return fmt.Errorf("proto: EncodeBasicInfo: wiretype end group for non-group")
+			return fmt.Errorf("proto: EncodedBasicInfo: wiretype end group for non-group")
 		}
 		if fieldNum <= 0 {
-			return fmt.Errorf("proto: EncodeBasicInfo: illegal tag %d (wire type %d)", fieldNum, wire)
+			return fmt.Errorf("proto: EncodedBasicInfo: illegal tag %d (wire type %d)", fieldNum, wire)
 		}
 		switch fieldNum {
 		case 1:
@@ -566,7 +630,7 @@ func (m *EncodeBasicInfo) Unmarshal(dAtA []byte) error {
 	}
 	return nil
 }
-func (m *EncodeAgg) Unmarshal(dAtA []byte) error {
+func (m *EncodedAgg) Unmarshal(dAtA []byte) error {
 	l := len(dAtA)
 	iNdEx := 0
 	for iNdEx < l {
@@ -589,13 +653,32 @@ func (m *EncodeAgg) Unmarshal(dAtA []byte) error {
 		fieldNum := int32(wire >> 3)
 		wireType := int(wire & 0x7)
 		if wireType == 4 {
-			return fmt.Errorf("proto: EncodeAgg: wiretype end group for non-group")
+			return fmt.Errorf("proto: EncodedAgg: wiretype end group for non-group")
 		}
 		if fieldNum <= 0 {
-			return fmt.Errorf("proto: EncodeAgg: illegal tag %d (wire type %d)", fieldNum, wire)
+			return fmt.Errorf("proto: EncodedAgg: illegal tag %d (wire type %d)", fieldNum, wire)
 		}
 		switch fieldNum {
 		case 1:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field ExecType", wireType)
+			}
+			m.ExecType = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowSerialize
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.ExecType |= EncodedAggExecType(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		case 2:
 			if wireType != 2 {
 				return fmt.Errorf("proto: wrong wireType = %d for field Info", wireType)
 			}
@@ -625,13 +708,13 @@ func (m *EncodeAgg) Unmarshal(dAtA []byte) error {
 				return io.ErrUnexpectedEOF
 			}
 			if m.Info == nil {
-				m.Info = &EncodeBasicInfo{}
+				m.Info = &EncodedBasicInfo{}
 			}
 			if err := m.Info.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
 				return err
 			}
 			iNdEx = postIndex
-		case 2:
+		case 3:
 			if wireType != 2 {
 				return fmt.Errorf("proto: wrong wireType = %d for field Result", wireType)
 			}
@@ -665,7 +748,7 @@ func (m *EncodeAgg) Unmarshal(dAtA []byte) error {
 				m.Result = []byte{}
 			}
 			iNdEx = postIndex
-		case 3:
+		case 4:
 			if wireType != 2 {
 				return fmt.Errorf("proto: wrong wireType = %d for field Groups", wireType)
 			}

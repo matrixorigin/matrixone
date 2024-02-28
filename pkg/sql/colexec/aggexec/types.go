@@ -15,7 +15,6 @@
 package aggexec
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -70,19 +69,6 @@ var (
 	_ AggFuncExec = (*multiAggFuncExec2)(nil)
 	_ AggFuncExec = &groupConcatExec{}
 )
-
-// MarshalBinary and UnmarshalBinary are used to serialize and deserialize the aggregation function.
-// todo: not implemented yet.
-func MarshalBinary(agg AggFuncExec) ([]byte, error) {
-	if agg.IsDistinct() {
-		return nil, moerr.NewInternalErrorNoCtx("distinct agg should not be serialized")
-	}
-	return nil, nil
-}
-
-func UnmarshalBinary(data []byte) (AggFuncExec, error) {
-	return nil, nil
-}
 
 // MakeAgg supports to create an aggregation function executor for single column.
 // todo: if we support some methods to register the param, result type and the implementation,

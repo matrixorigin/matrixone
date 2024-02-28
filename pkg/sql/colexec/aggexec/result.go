@@ -96,7 +96,21 @@ func (r *aggFuncResult[T]) free() {
 	if r.res == nil {
 		return
 	}
+	if r.res.NeedDup() {
+		r.res.Free(r.mp)
+	}
 	r.proc.PutVector(r.res)
+}
+
+func (r *aggFuncResult[T]) marshal() ([]byte, error) {
+	return r.res.MarshalBinary()
+}
+
+func (r *aggFuncResult[T]) unmarshal(proc *process.Process, p types.Type, data []byte) error {
+	r.proc = proc
+	r.mp = proc.Mp()
+	r.typ = p
+	return r.res.UnmarshalBinary(data)
 }
 
 func initBytesAggFuncResult(
@@ -156,5 +170,19 @@ func (r *aggFuncBytesResult) free() {
 	if r.res == nil {
 		return
 	}
+	if r.res.NeedDup() {
+		r.res.Free(r.mp)
+	}
 	r.proc.PutVector(r.res)
+}
+
+func (r *aggFuncBytesResult) marshal() ([]byte, error) {
+	return r.res.MarshalBinary()
+}
+
+func (r *aggFuncBytesResult) unmarshal(proc *process.Process, p types.Type, data []byte) error {
+	r.proc = proc
+	r.mp = proc.Mp()
+	r.typ = p
+	return r.res.UnmarshalBinary(data)
 }

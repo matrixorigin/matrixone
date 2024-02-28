@@ -52,6 +52,15 @@ func (info multiAggInfo) TypesInfo() ([]types.Type, types.Type) {
 	return info.argTypes, info.retType
 }
 
+func (info multiAggInfo) getEncoded() *EncodedBasicInfo {
+	return &EncodedBasicInfo{
+		Id:         info.aggID,
+		IsDistinct: info.distinct,
+		Args:       info.argTypes,
+		Ret:        info.retType,
+	}
+}
+
 // multiAggFuncExec1 and multiAggFuncExec2 are the executors of multi columns agg.
 // 1's return type is a fixed length type.
 // 2's return type is bytes.

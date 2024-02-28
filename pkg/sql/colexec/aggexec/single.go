@@ -48,6 +48,15 @@ func (info singleAggInfo) TypesInfo() ([]types.Type, types.Type) {
 	return []types.Type{info.argType}, info.retType
 }
 
+func (info singleAggInfo) getEncoded() *EncodedBasicInfo {
+	return &EncodedBasicInfo{
+		Id:         info.aggID,
+		IsDistinct: info.distinct,
+		Args:       []types.Type{info.argType},
+		Ret:        info.retType,
+	}
+}
+
 type singleAggOptimizedInfo struct {
 	// modify it to `acceptNull` later.
 	receiveNull bool

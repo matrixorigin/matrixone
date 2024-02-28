@@ -20,7 +20,7 @@ import "github.com/gogo/protobuf/gogoproto/gogo.proto";
 option (gogoproto.sizer_all)      = false;
 option (gogoproto.protosizer_all) = true;
 
-message EncodeBasicInfo {
+message EncodedBasicInfo {
     int64 id = 1;
     bool is_distinct = 2;
     bool null_empty = 3;
@@ -34,8 +34,19 @@ message EncodeBasicInfo {
     ];
 }
 
-message EncodeAgg {
-    EncodeBasicInfo info = 1;
-    bytes  result = 2;
-    repeated bytes groups = 3;
+enum EncodedAggExecType {
+    single_fixed_fixed = 0;
+    single_fixed_var = 1;
+    single_var_fixed = 2;
+    single_var_var = 3;
+    multi_return_fixed = 4;
+    multi_return_var = 5;
+    special_group_concat = 6;
+}
+
+message EncodedAgg {
+    EncodedAggExecType exec_type = 1;
+    EncodedBasicInfo info = 2;
+    bytes  result = 3;
+    repeated bytes groups = 4;
 }
