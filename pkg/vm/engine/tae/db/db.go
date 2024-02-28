@@ -133,7 +133,11 @@ func (db *DB) StartTxn(info []byte) (txnif.AsyncTxn, error) {
 }
 
 func (db *DB) StartTxnWithLatestTS(info []byte) (txnif.AsyncTxn, error) {
+<<<<<<< HEAD
 	return db.TxnMgr.StartTxnWithLatestTS(info)
+=======
+	return db.TxnMgr.StartTxn(info)
+>>>>>>> parent of 5a247fb4b (ignore TestHandle_MVCCVisibility (#14694))
 }
 
 func (db *DB) CommitTxn(txn txnif.AsyncTxn) (err error) {
