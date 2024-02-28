@@ -314,6 +314,10 @@ func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) 
 	createTable.TableDef.ViewSql = tableDef.ViewSql
 	createTable.TableDef.Defs = tableDef.Defs
 
+	if createTable.TableDef.Name == "columns" {
+		fmt.Println("--------------------------")
+	}
+
 	return &Plan{
 		Plan: &plan.Plan_Ddl{
 			Ddl: &plan.DataDefinition{

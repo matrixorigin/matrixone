@@ -291,6 +291,29 @@ func (s *service) SessionMgr() *queryservice.SessionManager {
 	return s.sessionMgr
 }
 
+func (s *service) CheckTenantUpgrade(_ context.Context, tenantID int64) error {
+	//opts := executor.Options{}.
+	//	WithDatabase(catalog.MO_CATALOG).
+	//	WithMinCommittedTS(s.now()).
+	//	WithWaitCommittedLogApplied()
+
+	finalVersion := s.GetFinalVersion()
+	tenantFetchFunc := func() (int32, string, error) {
+		return int32(tenantID), finalVersion, nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*30)
+	defer cancel()
+	if _, err := s.bootstrapService.MaybeUpgradeTenant(ctx, tenantFetchFunc, nil); err != nil {
+		return err
+	}
+	// where commit txn ?
+	return nil
+}
+
+func (s *service) GetFinalVersion() string {
+	return s.bootstrapService.GetFinalVersion()
+}
+
 func (s *service) stopFrontend() error {
 	defer logutil.LogClose(s.logger, "cnservice/frontend")()
 
@@ -394,10 +417,13 @@ func (s *service) initMOServer(ctx context.Context, pu *config.ParameterUnit, ai
 	pu.LockService = s.lockService
 
 	logutil.Info("Initialize the engine ...")
+
 	err = s.initEngine(ctx, cancelMoServerCtx, pu)
 	if err != nil {
 		return err
 	}
+
+	//pu.BootstrapService = s.bootstrapService
 
 	s.createMOServer(cancelMoServerCtx, pu, aicm)
 	return nil
@@ -742,7 +768,9 @@ func (s *service) bootstrap() error {
 		s.options.bootstrapOptions...)
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute*5)
+	ctx = context.WithValue(ctx, config.ParameterUnitKey, s.pu)
 	defer cancel()
+
 	// bootstrap cannot fail. We panic here to make sure the service can not start.
 	// If bootstrap failed, need clean all data to retry.
 	if err := s.bootstrapService.Bootstrap(ctx); err != nil {
@@ -753,6 +781,7 @@ func (s *service) bootstrap() error {
 		defer cancel()
 		if err := s.bootstrapService.BootstrapUpgrade(ctx); err != nil {
 			if err != context.Canceled {
+				fmt.Printf("@@@@@@@@@@@@@@@@@@@ wuxiliangx-upgrade canceled @@@@@@@@@@@@@@@@@@@")
 				panic(err)
 			}
 		}

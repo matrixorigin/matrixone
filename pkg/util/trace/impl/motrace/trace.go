@@ -23,6 +23,7 @@ package motrace
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"sync/atomic"
 	"time"
 
@@ -159,6 +160,35 @@ func InitSchema(ctx context.Context, sqlExecutor func() ie.InternalExecutor) err
 	if err := InitSchemaByInnerExecutor(ctx, sqlExecutor); err != nil {
 		return err
 	}
+	return nil
+}
+
+func InitSchema2(ctx context.Context, txn executor.TxnExecutor) error {
+	_, err := txn.Exec(sqlCreateDBConst, executor.StatementOption{})
+	if err != nil {
+		return err
+	}
+
+	var createCost time.Duration
+	defer func() {
+		logutil.Debugf("[Trace] init tables: create cost %d ms", createCost.Milliseconds())
+	}()
+
+	instant := time.Now()
+	for _, tbl := range tables {
+		_, err = txn.Exec(tbl.ToCreateSql(ctx, true), executor.StatementOption{})
+		if err != nil {
+			return err
+		}
+	}
+
+	for _, v := range views {
+		_, err = txn.Exec(v.ToCreateSql(ctx, true), executor.StatementOption{})
+		if err != nil {
+			return err
+		}
+	}
+	createCost = time.Since(instant)
 	return nil
 }
 

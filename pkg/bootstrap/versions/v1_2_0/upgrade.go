@@ -50,10 +50,25 @@ func (v *versionHandle) Prepare(
 	if err != nil {
 		return err
 	}
+
+	// create new upgrade framework tables for the first time,
+	// which means using v1.2.0 for the first time
 	if !created {
 		// Many cn maybe create framework tables parallel, only one can create success.
 		// Just return error, and upgrade framework will retry.
-		return v.createFrameworkTables(txn, final)
+		err = v.createFrameworkTables(txn, final)
+		if err != nil {
+			return err
+		}
+
+		// First version as a genesis version, always need to be PREPARE.
+		// Because the first version need to init upgrade framework tables.
+		for _, upgEntry := range upgradeEntries {
+			err = upgEntry.Upgrade(txn)
+			if err != nil {
+				return err
+			}
+		}
 	}
 	return nil
 }
@@ -63,18 +78,15 @@ func (v *versionHandle) HandleTenantUpgrade(
 	tenantID int32,
 	txn executor.TxnExecutor) error {
 
+	//ctx = defines.AttachAccountId(ctx, uint32(tenantID))
+
 	return nil
 }
 
 func (v *versionHandle) HandleClusterUpgrade(
 	ctx context.Context,
 	txn executor.TxnExecutor) error {
-	for _, upgItem := range upgClusterList {
-		err := upgItem.Upgrade(txn, upgItem.UpgType, upgItem.UpgResource)
-		if err != nil {
-			return err
-		}
-	}
+
 	return nil
 }
 
@@ -83,18 +95,11 @@ func (v *versionHandle) createFrameworkTables(
 	final bool) error {
 	values := versions.FrameworkInitSQLs
 	if final {
-		//values = append(values, v.metadata.GetInsertSQL(versions.StateReady))
-		// Based on the new upgrade framework code originating from v1.2.0, the first upgrade of the new upgrade framework
-		// must be based on v1.1. x version
-		sql := fmt.Sprintf(`insert into %s values ('%s', %d, current_timestamp(), current_timestamp())`,
-			catalog.MOVersionTable,
-			v.metadata.MinUpgradeVersion,
-			versions.StateReady,
-		)
-		values = append(values, sql)
+		values = append(values, v.metadata.GetInsertSQL(versions.StateReady))
 	}
 
 	for _, sql := range values {
+		fmt.Printf("-------------createFrameworkTables: sql: %s\n", sql)
 		r, err := txn.Exec(sql, executor.StatementOption{})
 		if err != nil {
 			return err

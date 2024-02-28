@@ -50,6 +50,8 @@ type Service interface {
 		ctx context.Context,
 		tenantFetchFunc func() (int32, string, error),
 		txnOp client.TxnOperator) (bool, error)
+	// GetFinalVersion Get mo final version, which is based on the current code
+	GetFinalVersion() string
 	// Close close bootstrap service
 	Close() error
 }

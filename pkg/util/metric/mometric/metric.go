@@ -17,6 +17,7 @@ package mometric
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"net/http"
 	"strings"
 	"sync"
@@ -236,6 +237,51 @@ func registerAllMetrics() {
 func initConfigByParameterUnit(SV *config.ObservabilityParameters) {
 	metric.SetExportToProm(SV.EnableMetricToProm)
 	metric.SetGatherInterval(time.Second * time.Duration(SV.MetricGatherInterval))
+}
+
+func InitSchema2(ctx context.Context, txn executor.TxnExecutor) error {
+	if metric.GetForceInit() {
+		if _, err := txn.Exec(SqlDropDBConst, executor.StatementOption{}); err != nil {
+			return err
+		}
+	}
+
+	if _, err := txn.Exec(SqlCreateDBConst, executor.StatementOption{}); err != nil {
+		return err
+	}
+
+	var createCost time.Duration
+	defer func() {
+		logutil.Debugf("[Metric] init metrics tables: create cost %d ms", createCost.Milliseconds())
+	}()
+
+	instant := time.Now()
+	descChan := make(chan *prom.Desc, 10)
+	go func() {
+		for _, c := range metric.InitCollectors {
+			c.Describe(descChan)
+		}
+		for _, c := range metric.InternalCollectors {
+			c.Describe(descChan)
+		}
+		close(descChan)
+	}()
+
+	createSql := SingleMetricTable.ToCreateSql(ctx, true)
+	if _, err := txn.Exec(createSql, executor.StatementOption{}); err != nil {
+		//panic(fmt.Sprintf("[Metric] init metric tables error: %v, sql: %s", err, sql))
+		return moerr.NewInternalError(ctx, "[Metric] init metric tables error: %v, sql: %s", err, createSql)
+	}
+
+	for desc := range descChan {
+		view := getView(ctx, desc)
+		sql := view.ToCreateSql(ctx, true)
+		if _, err := txn.Exec(sql, executor.StatementOption{}); err != nil {
+			return moerr.NewInternalError(ctx, "[Metric] init metric tables error: %v, sql: %s", err, sql)
+		}
+	}
+	createCost = time.Since(instant)
+	return nil
 }
 
 func InitSchema(ctx context.Context, ieFactory func() ie.InternalExecutor) error {

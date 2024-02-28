@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"runtime"
 	"strings"
 	"sync"
@@ -1518,6 +1519,7 @@ func (ses *Session) AuthenticateUser(userInput string, dbName string, authRespon
 	var userID int64
 	var pwd, accountStatus string
 	var accountVersion uint64
+	var createVersion string
 	var pwdBytes []byte
 	var isSpecial bool
 	var specialAccount *TenantInfo
@@ -1582,6 +1584,19 @@ func (ses *Session) AuthenticateUser(userInput string, dbName string, authRespon
 	if err != nil {
 		return nil, err
 	}
+
+	// current Tenant system version
+	createVersion, err = rsset[0].GetString(sysTenantCtx, 0, 5)
+	if err != nil {
+		return nil, err
+	}
+
+	//------------------------------------------------------------------------------------------------------------------
+	err = ses.MaybeUpgradeTenant(sysTenantCtx, createVersion, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	//------------------------------------------------------------------------------------------------------------------
 
 	if strings.ToLower(accountStatus) == tree.AccountStatusSuspend.String() {
 		return nil, moerr.NewInternalError(sysTenantCtx, "Account %s is suspended", tenant.GetTenant())
@@ -1761,6 +1776,15 @@ func (ses *Session) AuthenticateUser(userInput string, dbName string, authRespon
 	logInfo(ses, sessionInfo, tenant.String())
 
 	return GetPassWord(pwd)
+}
+
+func (ses *Session) MaybeUpgradeTenant(ctx context.Context, curVersion string, tenantID int64) error {
+	// Get mo final version, which is based on the current code version
+	finalVersion := ses.rm.baseService.GetFinalVersion()
+	if versions.Compare(curVersion, finalVersion) <= 0 {
+		return ses.rm.baseService.CheckTenantUpgrade(ctx, tenantID)
+	}
+	return nil
 }
 
 func (ses *Session) InitGlobalSystemVariables() error {

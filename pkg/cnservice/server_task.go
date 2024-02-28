@@ -33,11 +33,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/export"
 	db_holder "github.com/matrixorigin/matrixone/pkg/util/export/etl/db"
-	"github.com/matrixorigin/matrixone/pkg/util/file"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/matrixorigin/matrixone/pkg/util/metric/mometric"
-	"github.com/matrixorigin/matrixone/pkg/util/sysview"
-	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"go.uber.org/zap"
 )
 
@@ -81,9 +78,9 @@ func (s *service) initTaskServiceHolder() {
 			})
 	}
 
-	if err := s.stopper.RunTask(s.waitSystemInitCompleted); err != nil {
-		panic(err)
-	}
+	//if err := s.stopper.RunTask(s.waitSystemInitCompleted); err != nil {
+	//	panic(err)
+	//}
 }
 
 func (s *service) createTaskService(command *logservicepb.CreateTaskService) {
@@ -242,52 +239,52 @@ func (s *service) GetTaskService() (taskservice.TaskService, bool) {
 	return s.task.holder.Get()
 }
 
-func (s *service) WaitSystemInitCompleted(ctx context.Context) error {
-	s.waitSystemInitCompleted(ctx)
-	return ctx.Err()
-}
+//func (s *service) WaitSystemInitCompleted(ctx context.Context) error {
+//	s.waitSystemInitCompleted(ctx)
+//	return ctx.Err()
+//}
 
-func (s *service) waitSystemInitCompleted(ctx context.Context) {
-	defer logutil.LogAsyncTask(s.logger, "cnservice/wait-system-init-task")()
-
-	startAt := time.Now()
-	s.logger.Debug("wait all init task completed task started")
-	wait := func() {
-		time.Sleep(time.Second)
-	}
-	for {
-		select {
-		case <-ctx.Done():
-			s.logger.Debug("wait all init task completed task stopped")
-			return
-		default:
-			ts, ok := s.GetTaskService()
-			if ok {
-				tasks, err := ts.QueryAsyncTask(ctx,
-					taskservice.WithTaskExecutorCond(taskservice.EQ, task.TaskCode_SystemInit),
-					taskservice.WithTaskStatusCond(task.TaskStatus_Completed))
-				if err != nil {
-					s.logger.Error("wait all init task completed failed", zap.Error(err))
-					break
-				}
-				s.logger.Debug("waiting all init task completed",
-					zap.Int("completed", len(tasks)))
-				if len(tasks) > 0 {
-					if err := file.WriteFile(s.metadataFS,
-						"./system_init_completed",
-						[]byte("OK")); err != nil {
-						panic(err)
-					}
-					return
-				}
-			}
-		}
-		wait()
-		if time.Since(startAt) > defaultSystemInitTimeout {
-			panic("wait system init timeout")
-		}
-	}
-}
+//func (s *service) waitSystemInitCompleted(ctx context.Context) {
+//	defer logutil.LogAsyncTask(s.logger, "cnservice/wait-system-init-task")()
+//
+//	startAt := time.Now()
+//	s.logger.Debug("wait all init task completed task started")
+//	wait := func() {
+//		time.Sleep(time.Second)
+//	}
+//	for {
+//		select {
+//		case <-ctx.Done():
+//			s.logger.Debug("wait all init task completed task stopped")
+//			return
+//		default:
+//			ts, ok := s.GetTaskService()
+//			if ok {
+//				tasks, err := ts.QueryAsyncTask(ctx,
+//					taskservice.WithTaskExecutorCond(taskservice.EQ, task.TaskCode_SystemInit),
+//					taskservice.WithTaskStatusCond(task.TaskStatus_Completed))
+//				if err != nil {
+//					s.logger.Error("wait all init task completed failed", zap.Error(err))
+//					break
+//				}
+//				s.logger.Debug("waiting all init task completed",
+//					zap.Int("completed", len(tasks)))
+//				if len(tasks) > 0 {
+//					if err := file.WriteFile(s.metadataFS,
+//						"./system_init_completed",
+//						[]byte("OK")); err != nil {
+//						panic(err)
+//					}
+//					return
+//				}
+//			}
+//		}
+//		wait()
+//		if time.Since(startAt) > defaultSystemInitTimeout {
+//			panic("wait system init timeout")
+//		}
+//	}
+//}
 
 func (s *service) stopTask() error {
 	defer logutil.LogClose(s.logger, "cnservice/task")()
@@ -318,7 +315,7 @@ func (s *service) registerExecutorsLocked() {
 	s.cfg.Frontend.SetDefaultValues()
 	pu.FileService = s.fileService
 	pu.LockService = s.lockService
-	moServerCtx := context.WithValue(context.Background(), config.ParameterUnitKey, pu)
+	//moServerCtx := context.WithValue(context.Background(), config.ParameterUnitKey, pu)
 	ieFactory := func() ie.InternalExecutor {
 		return frontend.NewInternalExecutor(pu, s.mo.GetRoutineManager().GetAutoIncrCacheManager())
 	}
@@ -327,70 +324,71 @@ func (s *service) registerExecutorsLocked() {
 	if !ok {
 		panic(moerr.NewInternalErrorNoCtx("task Service not ok"))
 	}
-	s.task.runner.RegisterExecutor(
-		task.TaskCode_SystemInit,
-		func(
-			ctx context.Context,
-			t task.Task) error {
-			// FIXME: use same txn to system init, it's too hack.
-			ready := 0
-			fn := func() error {
-				if ready == 0 {
-					if err := frontend.InitSysTenant(moServerCtx, s.mo.GetRoutineManager().GetAutoIncrCacheManager()); err != nil {
-						return err
-					}
-					ready++
-				}
+	/*
+		s.task.runner.RegisterExecutor(
+			task.TaskCode_SystemInit,
+			func(
+				ctx context.Context,
+				t task.Task) error {
+				// FIXME: use same txn to system init, it's too hack.
+				ready := 0
+				fn := func() error {
+					//if ready == 0 {
+					//	if err := frontend.InitSysTenant(moServerCtx, s.mo.GetRoutineManager().GetAutoIncrCacheManager()); err != nil {
+					//		return err
+					//	}
+					//	ready++
+					//}
+					//
+					//if ready == 1 {
+					//	if err := sysview.InitSchema(moServerCtx, ieFactory); err != nil {
+					//		return err
+					//	}
+					//	ready++
+					//}
+					//
+					//if ready == 2 {
+					//	if err := mometric.InitSchema(moServerCtx, ieFactory); err != nil {
+					//		return err
+					//	}
+					//	ready++
+					//}
+					//
+					//if ready == 3 {
+					//	if err := motrace.InitSchema(moServerCtx, ieFactory); err != nil {
+					//		return err
+					//	}
+					//	ready++
+					//}
 
-				if ready == 1 {
-					if err := sysview.InitSchema(moServerCtx, ieFactory); err != nil {
-						return err
+					if ready == 0 {
+						// init metric/log merge task cron rule
+						if err := export.CreateCronTask(moServerCtx, task.TaskCode_MetricLogMerge, ts); err != nil {
+							return err
+						}
+						ready++
 					}
-					ready++
-				}
 
-				if ready == 2 {
-					if err := mometric.InitSchema(moServerCtx, ieFactory); err != nil {
-						return err
+					if ready == 1 {
+						// init metric task
+						if err := mometric.CreateCronTask(moServerCtx, task.TaskCode_MetricStorageUsage, ts); err != nil {
+							return err
+						}
+						ready++
 					}
-					ready++
-				}
-
-				if ready == 3 {
-					if err := motrace.InitSchema(moServerCtx, ieFactory); err != nil {
-						return err
-					}
-					ready++
-				}
-
-				if ready == 4 {
-					// init metric/log merge task cron rule
-					if err := export.CreateCronTask(moServerCtx, task.TaskCode_MetricLogMerge, ts); err != nil {
-						return err
-					}
-					ready++
-				}
-
-				if ready == 5 {
-					// init metric task
-					if err := mometric.CreateCronTask(moServerCtx, task.TaskCode_MetricStorageUsage, ts); err != nil {
-						return err
-					}
-					ready++
-				}
-				return nil
-			}
-
-			for {
-				err := fn()
-				if err == nil {
 					return nil
 				}
-				s.logger.Error("system init failed", zap.Error(err))
-				time.Sleep(time.Second)
-			}
-		})
 
+				for {
+					err := fn()
+					if err == nil {
+						return nil
+					}
+					s.logger.Error("system init failed", zap.Error(err))
+					time.Sleep(time.Second)
+				}
+			})
+	*/
 	// init metric/log merge task executor
 	s.task.runner.RegisterExecutor(task.TaskCode_MetricLogMerge,
 		export.MergeTaskExecutorFactory(export.WithFileService(s.etlFS)))

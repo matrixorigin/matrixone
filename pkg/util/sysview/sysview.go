@@ -17,6 +17,8 @@ package sysview
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -479,4 +481,107 @@ func initInformationSchemaTables(ctx context.Context, ieFactory func() ie.Intern
 		mustExec(sql)
 	}
 	createCost = time.Since(instant)
+}
+
+//---------------------------------------------------------------------------------------------
+
+func InitSchema2(ctx context.Context, txn executor.TxnExecutor) error {
+	//ctx = defines.AttachAccount(ctx, catalog.System_Account, catalog.System_User, catalog.System_Role)
+	if err := initMysqlTables2(ctx, txn); err != nil {
+		return err
+	}
+	if err := initInformationSchemaTables2(ctx, txn); err != nil {
+		return err
+	}
+
+	//if err := initSchemaTables(ctx, txn, MysqlDBConst, InitMysqlSysTables); err != nil {
+	//	return err
+	//}
+	//if err := initSchemaTables(ctx, txn, InformationDBConst, InitInformationSchemaSysTables); err != nil {
+	//	return err
+	//}
+	return nil
+}
+
+func initSchemaTables(ctx context.Context, txn executor.TxnExecutor, schema string, sqls []string) error {
+	_, err := txn.Exec(sqlCreateDBConst+schema, executor.StatementOption{})
+	if err != nil {
+		return err
+	}
+
+	_, err = txn.Exec(sqlUseDbConst+schema, executor.StatementOption{})
+	if err != nil {
+		return err
+	}
+
+	var timeCost time.Duration
+	defer func() {
+		logutil.Debugf("[%s] init %s tables: create cost %d ms", schema, schema, timeCost.Milliseconds())
+	}()
+
+	begin := time.Now()
+	for _, sql := range sqls {
+		if _, err = txn.Exec(sql, executor.StatementOption{}); err != nil {
+			// panic(fmt.Sprintf("[Mysql] init mysql tables error: %v, sql: %s", err, sql))
+			return moerr.NewInternalError(ctx, "[%s] init %s tables error: %v, sql: %s", schema, schema, err, sql)
+		}
+	}
+	timeCost = time.Since(begin)
+	return nil
+}
+
+func initMysqlTables2(ctx context.Context, txn executor.TxnExecutor) error {
+	_, err := txn.Exec(sqlCreateDBConst+MysqlDBConst, executor.StatementOption{})
+	if err != nil {
+		return err
+	}
+
+	txn.Use(MysqlDBConst)
+	//_, err = txn.Exec(sqlUseDbConst+MysqlDBConst, executor.StatementOption{})
+	//if err != nil {
+	//	return err
+	//}
+
+	var timeCost time.Duration
+	defer func() {
+		logutil.Debugf("[Mysql] init mysql tables: create cost %d ms", timeCost.Milliseconds())
+	}()
+
+	begin := time.Now()
+	for _, sql := range InitMysqlSysTables {
+		if _, err = txn.Exec(sql, executor.StatementOption{}); err != nil {
+			// panic(fmt.Sprintf("[Mysql] init mysql tables error: %v, sql: %s", err, sql))
+			return moerr.NewInternalError(ctx, "[Mysql] init mysql tables error: %v, sql: %s", err, sql)
+		}
+	}
+	timeCost = time.Since(begin)
+	return nil
+}
+
+func initInformationSchemaTables2(ctx context.Context, txn executor.TxnExecutor) error {
+	_, err := txn.Exec(sqlCreateDBConst+InformationDBConst, executor.StatementOption{})
+	if err != nil {
+		return err
+	}
+
+	txn.Use(InformationDBConst)
+	//_, err = txn.Exec(sqlUseDbConst+InformationDBConst, executor.StatementOption{})
+	//if err != nil {
+	//	return err
+	//}
+
+	var timeCost time.Duration
+	defer func() {
+		logutil.Debugf("[information_schema] init information_schema tables: create cost %d ms", timeCost.Milliseconds())
+	}()
+
+	begin := time.Now()
+	for _, sql := range InitInformationSchemaSysTables {
+		if _, err = txn.Exec(sql, executor.StatementOption{}); err != nil {
+			//panic(fmt.Sprintf("[information_schema] init information_schema tables error: %v, sql: %s", err, sql))
+			return moerr.NewInternalError(ctx, fmt.Sprintf("[information_schema] init information_schema tables error: %v, sql: %s", err, sql))
+		}
+	}
+	timeCost = time.Since(begin)
+	return nil
 }

@@ -16,24 +16,23 @@ package versions
 
 import (
 	"fmt"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 )
 
 var (
 	FrameworkInitSQLs = []string{
-		fmt.Sprintf(`create table %s (
+		fmt.Sprintf(`create table %s.%s (
 			version             varchar(50) not null primary key,
 			state               int,
 			create_at           timestamp not null,
 			update_at           timestamp not null
-		)`, catalog.MOVersionTable),
+		)`, catalog.MO_CATALOG, catalog.MOVersionTable),
 
-		fmt.Sprintf(`create table %s (
+		fmt.Sprintf(`create table %s.%s (
 			id                  bigint unsigned not null primary key auto_increment,
-			from_version        varchar(50) not null, 
-			to_version          varchar(50) not null, 
-			final_version       varchar(50) not null, 
+			from_version        varchar(50) not null,
+			to_version          varchar(50) not null,
+			final_version       varchar(50) not null,
 			state               int,
 			upgrade_cluster     int,
 			upgrade_tenant      int,
@@ -42,20 +41,20 @@ var (
 			ready_tenant        int,
 			create_at           timestamp not null,
 			update_at           timestamp not null
-		)`, catalog.MOUpgradeTable),
+		)`, catalog.MO_CATALOG, catalog.MOUpgradeTable),
 
-		fmt.Sprintf(`create table %s ( 
+		fmt.Sprintf(`create table %s.%s (
 			id                  bigint unsigned not null primary key auto_increment,
 			upgrade_id		    bigint unsigned not null,
-			target_version      varchar(50) not null, 
-			from_account_id     int not null, 
-			to_account_id       int not null, 
+			target_version      varchar(50) not null,
+			from_account_id     int not null,
+			to_account_id       int not null,
 			ready               int,
 			create_at           timestamp not null,
 			update_at           timestamp not null
-		)`, catalog.MOUpgradeTenantTable),
+		)`, catalog.MO_CATALOG, catalog.MOUpgradeTenantTable),
 
-		`alter table mo_account add column create_version varchar(50) default '1.2.0' after suspended_time`,
+		//`alter table mo_account add column create_version varchar(50) default '1.2.0' after suspended_time`,
 	}
 )
 

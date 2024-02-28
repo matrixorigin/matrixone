@@ -16,51 +16,67 @@ package v1_2_0
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"strings"
 )
 
-var upgClusterList = []versions.UpgradeCluster{upg_mo_pub, upg_sys_async_task}
+var upgradeEntries = []versions.UpgradeEntry{upg_mo_account, upg_mo_pub, upg_sys_async_task}
 
-var upg_mo_pub = versions.UpgradeCluster{
-	UpgType: versions.ADD_COLUMN,
-	Comment: "upgrade mo_catalog.mo_pub",
-	UpgResource: &versions.TableChangeResource{
-		Schema:    "mo_catalog",
-		TableName: "mo_pubs",
-		HopeColumn: &plan.ColDef{
-			Name: "update_time",
-			Typ: &plan.Type{
-				Id:          int32(types.T_timestamp),
-				NotNullable: false,
-			},
-			Default: &plan.Default{
-				OriginString: "",
-				NullAbility:  true,
-			},
-			NotNull: false,
-		},
+var upg_mo_account = versions.UpgradeEntry{
+	Schema:    "mo_catalog",
+	TableName: "mo_account",
+	UpgType:   versions.ADD_COLUMN,
+	TableType: versions.BASE_TABLE,
+	UpgSql:    "alter table `mo_account` add column `create_version` varchar(50) default '1.2.0' after suspended_time",
+	CheckFunc: func(txn executor.TxnExecutor) (bool, error) {
+		colInfo, err := versions.CheckTableColumn(txn, "mo_catalog", "mo_account", "create_version")
+		if err != nil {
+			return false, err
+		}
+
+		if colInfo.IsExits {
+			return true, nil
+		}
+		return false, nil
 	},
 }
 
-// "alter table `mo_task`.`sys_async_task` modify task_id bigint",
-var upg_sys_async_task = versions.UpgradeCluster{
-	UpgType: versions.MODIFY_COLUMN,
-	Comment: "upgrade `mo_task`.`sys_async_task`",
-	UpgResource: &versions.TableChangeResource{
-		Schema:    "mo_task",
-		TableName: "sys_async_task",
-		HopeColumn: &plan.ColDef{
-			Name: "task_id",
-			Typ: &plan.Type{
-				Id:          int32(types.T_int64),
-				NotNullable: false,
-			},
-			Default: &plan.Default{
-				OriginString: "",
-				NullAbility:  true,
-			},
-			NotNull: false,
-		},
+var upg_mo_pub = versions.UpgradeEntry{
+	Schema:    "mo_catalog",
+	TableName: "mo_pubs",
+	UpgType:   versions.ADD_COLUMN,
+	TableType: versions.BASE_TABLE,
+	UpgSql:    "alter table `mo_catalog`.`mo_pubs` add column `update_time` timestamp",
+	CheckFunc: func(txn executor.TxnExecutor) (bool, error) {
+		colInfo, err := versions.CheckTableColumn(txn, "mo_catalog", "mo_pubs", "update_time")
+		if err != nil {
+			return false, err
+		}
+
+		if colInfo.IsExits {
+			return true, nil
+		}
+		return false, nil
+	},
+}
+
+var upg_sys_async_task = versions.UpgradeEntry{
+	Schema:    "mo_task",
+	TableName: "sys_async_task",
+	UpgType:   versions.MODIFY_COLUMN,
+	TableType: versions.BASE_TABLE,
+	UpgSql:    "alter table `mo_task`.`sys_async_task` modify task_id bigint auto_increment",
+	CheckFunc: func(txn executor.TxnExecutor) (bool, error) {
+		colInfo, err := versions.CheckTableColumn(txn, "mo_task", "sys_async_task", "task_id")
+		if err != nil {
+			return false, err
+		}
+
+		if colInfo.IsExits {
+			if strings.EqualFold(colInfo.ColType, versions.T_int64) {
+				return true, nil
+			}
+		}
+		return false, nil
 	},
 }

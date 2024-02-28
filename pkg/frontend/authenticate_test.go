@@ -227,8 +227,8 @@ func Test_checkSysExistsOrNot(t *testing.T) {
 
 		// A mock autoIncrCaches.
 		aicm := &defines.AutoIncrCacheManager{}
-
-		err = InitSysTenant(ctx, aicm)
+		finalVersion := "1.2.0"
+		err = InitSysTenant(ctx, aicm, finalVersion)
 		convey.So(err, convey.ShouldBeNil)
 	})
 }
@@ -355,8 +355,8 @@ func Test_createTablesInMoCatalogOfGeneralTenant(t *testing.T) {
 				IdentifiedType: tree.AccountIdentified{Typ: tree.AccountIdentifiedByPassword, Str: "123"}},
 			Comment: tree.AccountComment{Exist: true, Comment: "test acccount"},
 		}
-
-		newTi, _, err := createTablesInMoCatalogOfGeneralTenant(ctx, bh, ca)
+		finalVersion := "1.2.0"
+		newTi, _, err := createTablesInMoCatalogOfGeneralTenant(ctx, bh, finalVersion, ca)
 		convey.So(err, convey.ShouldBeNil)
 
 		err = createTablesInInformationSchemaOfGeneralTenant(ctx, bh, newTi)

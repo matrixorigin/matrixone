@@ -703,6 +703,9 @@ type ParameterUnit struct {
 	HAKeeperClient logservice.CNHAKeeperClient
 
 	TaskService taskservice.TaskService
+
+	// bootstrap.Service instance
+	//BootstrapService bootstrap.Service
 }
 
 func NewParameterUnit(

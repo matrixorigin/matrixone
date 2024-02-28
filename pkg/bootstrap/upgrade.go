@@ -22,10 +22,16 @@ import (
 // package. And register the upgrade logic into handles.
 func (s *service) initUpgrade() {
 	s.handles = append(s.handles, v1_2_0.Handler)
+	//s.handles = append(s.handles, v1_2_1.Handler)
 }
 
 func (s *service) getFinalVersionHandle() VersionHandle {
 	return s.handles[len(s.handles)-1]
+}
+
+// GetFinalVersion Get mo final version
+func (s *service) GetFinalVersion() string {
+	return s.handles[len(s.handles)-1].Metadata().Version
 }
 
 func (s *service) getVersionHandle(version string) VersionHandle {

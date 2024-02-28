@@ -16,11 +16,47 @@ package versions
 
 import (
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+)
+
+const (
+	T_any           = "ANY"
+	T_bool          = "BOOL"
+	T_bit           = "BIT"
+	T_int8          = "TINYINT"
+	T_int16         = "SMALLINT"
+	T_int32         = "INT"
+	T_int64         = "BIGINT"
+	T_uint8         = "TINYINT UNSIGNED"
+	T_uint16        = "SMALLINT UNSIGNED"
+	T_uint32        = "INT UNSIGNED"
+	T_uint64        = "BIGINT UNSIGNED"
+	T_float32       = "FLOAT"
+	T_float64       = "DOUBLE"
+	T_date          = "DATE"
+	T_datetime      = "DATETIME"
+	T_time          = "TIME"
+	T_timestamp     = "TIMESTAMP"
+	T_char          = "CHAR"
+	T_varchar       = "VARCHAR"
+	T_binary        = "BINARY"
+	T_varbinary     = "VARBINARY"
+	T_json          = "JSON"
+	T_tuple         = "TUPLE"
+	T_decimal64     = "DECIMAL64"
+	T_decimal128    = "DECIMAL128"
+	T_decimal256    = "DECIMAL256"
+	T_blob          = "BLOB"
+	T_text          = "TEXT"
+	T_TS            = "TRANSACTION TIMESTAMP"
+	T_Rowid         = "ROWID"
+	T_uuid          = "UUID"
+	T_Blockid       = "BLOCKID"
+	T_interval      = "INTERVAL"
+	T_array_float32 = "VECF32"
+	T_array_float64 = "VECF64"
+	T_enum          = "ENUM"
 )
 
 type TableType int8
@@ -58,325 +94,109 @@ const (
 	DROP_VIEW
 )
 
-// ----------------------------------------------------------------------------------------------------------------------
-type UpgradeResource interface {
-	getTableSchema() (string, string)
-	getAddColumn() *plan.ColDef
-	getDropColumn() *plan.ColDef
-	getModifyColumn() (*plan.ColDef, *plan.ColDef)
-	getRelCreateSQL() string
+// Describe the detailed information of the table column
+type ColumnInfo struct {
+	IsExits           bool
+	Name              string
+	Nullable          bool
+	ColType           string
+	ChatLength        int64
+	Precision         int64
+	Scale             int64
+	datetimePrecision int64
+	Position          int32
+	Default           string
+	Extra             string
+	Comment           string
 }
 
-type TableChangeResource struct {
-	Schema     string
-	TableName  string
-	TableType  TableType
-	HopeColumn *plan.ColDef
-	CurColumn  *plan.ColDef
-	createSQL  string
+// UpgradeEntry is used to designate a specific upgrade entity.
+// Users must provide `UpgSql` and `CheckFunc` implementations
+type UpgradeEntry struct {
+	Schema    string
+	TableName string
+	UpgType   UpgradeType
+	TableType TableType
+	UpgSql    string
+	CheckFunc func(txn executor.TxnExecutor) (bool, error)
 }
 
-func (t *TableChangeResource) getTableSchema() (string, string) {
-	return t.Schema, t.TableName
-}
+// Upgrade entity execution upgrade entrance
+func (u *UpgradeEntry) Upgrade(txn executor.TxnExecutor) error {
+	exist, err := u.CheckFunc(txn)
+	if err != nil {
+		return err
+	}
 
-func (t *TableChangeResource) getAddColumn() *plan.ColDef {
-	return t.HopeColumn
-}
-
-func (t *TableChangeResource) getDropColumn() *plan.ColDef {
-	return t.CurColumn
-}
-
-func (t *TableChangeResource) getModifyColumn() (*plan.ColDef, *plan.ColDef) {
-	return t.CurColumn, t.HopeColumn
-}
-
-func (t *TableChangeResource) getRelCreateSQL() string {
-	return t.createSQL
-}
-
-type ViewChangeResource struct {
-	Schema        string
-	TableName     string
-	TableType     TableType
-	NewViewDefine string
-}
-
-func (t *ViewChangeResource) getTableSchema() (string, string) {
-	return t.Schema, t.TableName
-}
-
-func (t *ViewChangeResource) getAddColumn() *plan.ColDef {
+	if exist {
+		return nil
+	} else {
+		res, err := txn.Exec(u.UpgSql, executor.StatementOption{})
+		if err != nil {
+			return err
+		}
+		res.Close()
+	}
 	return nil
 }
 
-func (t *ViewChangeResource) getDropColumn() *plan.ColDef {
-	return nil
-}
-
-func (t *ViewChangeResource) getModifyColumn() (*plan.ColDef, *plan.ColDef) {
-	return nil, nil
-}
-
-func (t *ViewChangeResource) getRelCreateSQL() string {
-	return t.NewViewDefine
-}
-
-type UpgradeCluster struct {
-	UpgType     UpgradeType
-	UpgResource UpgradeResource
-	Comment     string
-}
-
-func (u *UpgradeCluster) Upgrade(txn executor.TxnExecutor, upgradeType UpgradeType, resource UpgradeResource) error {
-	schema, tableName := resource.getTableSchema()
-	var err error = nil
-	switch upgradeType {
-	case ADD_COLUMN:
-		targetCol := resource.getAddColumn()
-		_, err = AddColumn(txn, targetCol, schema, tableName)
-	case DROP_COLUMN:
-		targetCol := resource.getDropColumn()
-		_, err = DropColumn(txn, targetCol, schema, tableName)
-	case MODIFY_COLUMN:
-		_, targetCol := resource.getModifyColumn()
-		_, err = ModifyColumn(txn, targetCol, schema, tableName)
-	case CHANGE_COLUMN:
-		oldCol, newCol := resource.getModifyColumn()
-		_, err = ChangeColumn(txn, oldCol, newCol, schema, tableName)
-	case CREATE_NEW_TABLE:
-		_, err = AddNewTable(txn, resource.getRelCreateSQL())
-	case MODIFY_VIEW, CREATE_VIEW:
-		viewDefine := resource.getRelCreateSQL()
-		_, err = UpdateViewDef(txn, viewDefine, schema, tableName)
-	case DROP_VIEW:
-		_, err = DropViewDef(txn, schema, tableName)
-	}
-	return err
-}
-
-func AddColumn(txn executor.TxnExecutor, newCol *plan.ColDef, schema string, tableName string) (bool, error) {
-	// 1.Check the table/view  status in current tenant
-	colState, err := checkTableColumn(schema, tableName, txn, *newCol)
-	if err != nil {
-		return false, err
-	}
-
-	if (colState & NameSame) != 0 {
-		return true, nil
-	} else {
-		typeMsg := plan2.MakeTypeByPlan2Type(newCol.Typ).DescString()
-		// ADD [COLUMN] col_name column_definition
-		sql := fmt.Sprintf("alter table `%s`.`%s` add column `%s` %s", schema, tableName, newCol.Name, typeMsg)
-		fmt.Printf("------------wuxiliang4---------->sql:%s\n", sql)
-		res, err := txn.Exec(sql, executor.StatementOption{})
-		if err != nil {
-			fmt.Printf("------------wuxiliang4---------->sql:%s, err:%s \n", sql, err.Error())
-			return false, err
-		}
-		res.Close()
-	}
-	return true, nil
-}
-
-func DropColumn(txn executor.TxnExecutor, targetCol *plan.ColDef, schema string, tableName string) (bool, error) {
-	// 1.Check the table/view  status in current tenant
-	colState, err := checkTableColumn(schema, tableName, txn, *targetCol)
-	if err != nil {
-		return false, err
-	}
-
-	if (colState & NameSame) != 0 {
-		// ADD [COLUMN] col_name column_definition
-		sql := fmt.Sprintf("alter table `%s`.`%s` drop column `%s`", schema, tableName, targetCol.Name)
-		fmt.Printf("------------wuxiliang5---------->sql:%s\n", sql)
-		res, err := txn.Exec(sql, executor.StatementOption{})
-		if err != nil {
-			fmt.Printf("------------wuxiliang5---------->sql:%s, err:%s \n", sql, err.Error())
-			return false, err
-		}
-		res.Close()
-	} else {
-		return true, nil
-	}
-	return true, nil
-}
-
-func ModifyColumn(txn executor.TxnExecutor, newCol *plan.ColDef, schema string, tableName string) (bool, error) {
-	// 1.Check the table/view  status in current tenant
-	colState, err := checkTableColumn(schema, tableName, txn, *newCol)
-	if err != nil {
-		return false, err
-	}
-
-	if (colState & NameSame) != 0 {
-		if (colState&TypeSame) != 0 && (colState&PrecisionSame) != 0 {
-			return true, nil
-		} else {
-			typeMsg := plan2.MakeTypeByPlan2Type(newCol.Typ).DescString()
-			sql := fmt.Sprintf("alter table `%s`.`%s` modify column `%s` %s", schema, tableName, newCol.Name, typeMsg)
-			fmt.Printf("------------wuxiliang6---------->sql:%s\n", sql)
-			res, err := txn.Exec(sql, executor.StatementOption{})
-			if err != nil {
-				fmt.Printf("------------wuxiliang6---------->sql:%s, err:%s \n", sql, err.Error())
-				return false, err
-			}
-			res.Close()
-		}
-	} else {
-		typeMsg := plan2.MakeTypeByPlan2Type(newCol.Typ).DescString()
-		// ADD [COLUMN] col_name column_definition
-		sql := fmt.Sprintf("alter table `%s`.`%s` add column `%s` %s", schema, tableName, newCol.Name, typeMsg)
-		fmt.Printf("------------wuxiliang7---------->sql:%s\n", sql)
-		res, err := txn.Exec(sql, executor.StatementOption{})
-		if err != nil {
-			fmt.Printf("------------wuxiliang7---------->sql:%s, err:%s \n", sql, err.Error())
-			return false, err
-		}
-		res.Close()
-	}
-	return true, nil
-}
-
-func ChangeColumn(txn executor.TxnExecutor, oldCol *plan.ColDef, newCol *plan.ColDef, schema string, tableName string) (bool, error) {
-	// 1.Check the table/view  status in current tenant
-	colState, err := checkTableColumn(schema, tableName, txn, *oldCol)
-	if err != nil {
-		return false, err
-	}
-	
-	if (colState & NameSame) != 0 {
-		if (colState&TypeSame) != 0 && (colState&PrecisionSame) != 0 {
-			return true, nil
-		} else {
-			typeMsg := plan2.MakeTypeByPlan2Type(newCol.Typ).DescString()
-			sql := fmt.Sprintf("alter table `%s`.`%s` change column `%s` `%s` %s", schema, tableName, oldCol.Name, newCol.Name, typeMsg)
-			fmt.Printf("------------wuxiliang8---------->sql:%s\n", sql)
-			res, err := txn.Exec(sql, executor.StatementOption{})
-			if err != nil {
-				fmt.Printf("------------wuxiliang8---------->sql:%s, err:%s \n", sql, err.Error())
-				return false, err
-			}
-			res.Close()
-		}
-	} else {
-		panic("No columns found for the target table")
-	}
-	return true, nil
-}
-
-func UpdateViewDef(txn executor.TxnExecutor, newViewDef string, schema string, viewName string) (bool, error) {
-	isExisted, curViewDef, err := checkViewDefinition(schema, viewName, txn)
-	if err != nil {
-		return false, err
-	}
-
-	if isExisted {
-		// If the current view definition is different from the new view definition, execute the update view definition operation
-		if curViewDef != newViewDef {
-			// Delete the current view
-			sql := fmt.Sprintf("drop view `%s`.`%s`", schema, viewName)
-			if _, err := txn.Exec(sql, executor.StatementOption{}); err != nil {
-				return false, err
-			}
-
-			// Create a new view
-			if _, err := txn.Exec(newViewDef, executor.StatementOption{}); err != nil {
-				return false, err
-			}
-		}
-	} else {
-		// If the view does not exist, you can choose to execute the operation of creating the view
-		if _, err := txn.Exec(newViewDef, executor.StatementOption{}); err != nil {
-			return false, err
-		}
-	}
-	return true, nil
-}
-
-func DropViewDef(txn executor.TxnExecutor, schema string, viewName string) (bool, error) {
-	isExisted, _, err := checkViewDefinition(schema, viewName, txn)
-	if err != nil {
-		return false, err
-	}
-
-	if isExisted {
-		// Delete the current view
-		sql := fmt.Sprintf("drop view `%s`.`%s`", schema, viewName)
-		if _, err = txn.Exec(sql, executor.StatementOption{}); err != nil {
-			return false, err
-		}
-	}
-	return true, nil
-}
-
-func AddNewTable(txn executor.TxnExecutor, tabledef string) (bool, error) {
-	if _, err := txn.Exec(tabledef, executor.StatementOption{}); err != nil {
-		return false, err
-	}
-	return true, nil
-}
-
-//----------------------------------------------------------------------------------------------------------------------
-
-type ColumnMatchResult int8
-
-const (
-	NameSame ColumnMatchResult = 1 << iota
-	TypeSame
-	PrecisionSame
-	NullableSame
-)
-
-func checkTableColumn(
+// CheckTableColumn Check if the columns in the table exist, and if so,
+// return the detailed information of the columns
+func CheckTableColumn(txn executor.TxnExecutor,
 	schema string,
 	tableName string,
-	txn executor.TxnExecutor,
-	column plan.ColDef) (ColumnMatchResult, error) {
-	var objectState ColumnMatchResult = 0
-	sql := fmt.Sprintf(`select data_type, 
+	columnName string) (*ColumnInfo, error) {
+
+	sql := fmt.Sprintf(`select data_type,
+       			is_nullable,
     			character_maximum_length, 
        			numeric_precision, 
        			numeric_scale, 
        			datetime_precision, 
-       			ordinal_position 
+       			ordinal_position,
+       			column_default,
+       			extra,
+				column_comment
 				from information_schema.columns 
                 where table_schema = '%s' and table_name = '%s' and column_name = '%s'`,
-		schema, tableName, column.Name)
-	fmt.Printf("------------wuxiliang3------------>sql:%s\n", sql)
+		schema, tableName, columnName)
 	res, err := txn.Exec(sql, executor.StatementOption{})
 	if err != nil {
-		return objectState, err
+		return nil, err
 	}
 	defer res.Close()
 
+	xyz := ColumnInfo{
+		IsExits: false,
+		Name:    columnName,
+	}
 	loaded := false
 	n := 0
 	res.ReadRows(func(rows int, cols []*vector.Vector) bool {
 		data_type := cols[0].GetStringAt(0)
-		character_length := vector.GetFixedAt[int64](cols[1], 0)
-		numeric_precision := vector.GetFixedAt[int64](cols[2], 0)
-		numeric_scale := vector.GetFixedAt[int64](cols[3], 0)
-		datetime_precision := vector.GetFixedAt[int64](cols[4], 0)
+		is_nullable := cols[1].GetStringAt(0)
+		character_length := vector.GetFixedAt[int64](cols[2], 0)
+		numeric_precision := vector.GetFixedAt[int64](cols[3], 0)
+		numeric_scale := vector.GetFixedAt[int64](cols[4], 0)
+		datetime_precision := vector.GetFixedAt[int64](cols[5], 0)
+		ordinal_position := vector.GetFixedAt[int32](cols[6], 0)
+		column_default := cols[7].GetStringAt(0)
+		extra := cols[8].GetStringAt(0)
+		column_comment := cols[9].GetStringAt(0)
 
-		objectState |= NameSame
-		if plan2.MakeTypeByPlan2Type(column.Typ).String() == data_type {
-			objectState |= TypeSame
-		}
-
-		if column.Typ.Id == int32(types.T_varchar) || column.Typ.Id == int32(types.T_char) {
-			if character_length == int64(column.Typ.Width) {
-				objectState |= PrecisionSame
-			}
-		} else if column.Typ.Id == int32(types.T_decimal64) || column.Typ.Id == int32(types.T_decimal128) || column.Typ.Id == int32(types.T_decimal256) {
-			if numeric_precision == int64(column.Typ.Width) && numeric_scale == int64(column.Typ.Scale) {
-				objectState |= PrecisionSame
-			}
-		} else if column.Typ.Id == int32(types.T_datetime) || column.Typ.Id == int32(types.T_timestamp) {
-			if datetime_precision == int64(column.Typ.Width) {
-				objectState |= PrecisionSame
-			}
+		xyz = ColumnInfo{
+			IsExits:           true,
+			Name:              columnName,
+			ColType:           data_type,
+			Nullable:          checkInput(is_nullable),
+			ChatLength:        character_length,
+			Precision:         numeric_precision,
+			Scale:             numeric_scale,
+			datetimePrecision: datetime_precision,
+			Position:          ordinal_position,
+			Default:           column_default,
+			Extra:             extra,
+			Comment:           column_comment,
 		}
 		n++
 		loaded = true
@@ -386,11 +206,17 @@ func checkTableColumn(
 	if loaded && n > 1 {
 		panic("BUG: Duplicate column names in table")
 	}
-	return objectState, nil
+
+	if loaded {
+		return &xyz, nil
+	} else {
+		return nil, nil
+	}
 }
 
-func checkViewDefinition(schema string, viewName string, txn executor.TxnExecutor) (bool, string, error) {
-	sql := fmt.Sprintf(`select view_definition from information_schema.views 
+// CheckViewDefinition Check if the view exists, if so, return true and return the view definition
+func CheckViewDefinition(txn executor.TxnExecutor, schema string, viewName string) (bool, string, error) {
+	sql := fmt.Sprintf(`select view_definition from information_schema.views
                        where table_schema = '%s' and table_name = '%s'`, schema, viewName)
 	fmt.Printf("------------wuxiliang3------------>sql:%s\n", sql)
 	res, err := txn.Exec(sql, executor.StatementOption{})
@@ -413,4 +239,50 @@ func checkViewDefinition(schema string, viewName string, txn executor.TxnExecuto
 		panic("BUG: Duplicate column names in table")
 	}
 	return loaded, view_def, nil
+}
+
+// CheckTableDefinition Check if the table exists, return true if it exists
+func CheckTableDefinition(txn executor.TxnExecutor, schema string, tableName string) (bool, error) {
+	sql := fmt.Sprintf(`select * from information_schema.tables where table_schema = '%s' and table_name = '%s'`, schema, tableName)
+	fmt.Printf("------------wuxiliang3------------>sql:%s\n", sql)
+	res, err := txn.Exec(sql, executor.StatementOption{})
+	if err != nil {
+		return false, err
+	}
+	defer res.Close()
+
+	loaded := false
+	n := 0
+	res.ReadRows(func(rows int, cols []*vector.Vector) bool {
+		n++
+		loaded = true
+		return false
+	})
+
+	if loaded && n > 1 {
+		panic("BUG: Duplicate column names in table")
+	}
+	return loaded, nil
+}
+
+func DropView(txn executor.TxnExecutor, schema string, viewName string) error {
+	// Delete the current view
+	sql := fmt.Sprintf("drop view `%s`.`%s`", schema, viewName)
+	res, err := txn.Exec(sql, executor.StatementOption{})
+	if err != nil {
+		return err
+	}
+	defer res.Close()
+	return nil
+}
+
+func checkInput(input string) bool {
+	switch input {
+	case "YES", "yes":
+		return true
+	case "NO", "no":
+		return false
+	default:
+		return false
+	}
 }

@@ -53,6 +53,10 @@ type BaseService interface {
 	SQLAddress() string
 	// SessionMgr returns the session manager instance of the service.
 	SessionMgr() *queryservice.SessionManager
+	// CheckTenantUpgrade used to upgrade tenant metadata if the tenant is old version.
+	CheckTenantUpgrade(ctx context.Context, tenantID int64) error
+	// GetFinalVersion Get mo final version, which is based on the current code
+	GetFinalVersion() string
 }
 
 func (mo *MOServer) GetRoutineManager() *RoutineManager {

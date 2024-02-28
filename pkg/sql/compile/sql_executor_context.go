@@ -42,6 +42,7 @@ type compilerContext struct {
 
 	buildAlterView       bool
 	dbOfView, nameOfView string
+	sql                  string
 	mu                   sync.Mutex
 }
 
@@ -179,7 +180,13 @@ func (c *compilerContext) GetPrimaryKeyDef(
 }
 
 func (c *compilerContext) GetRootSql() string {
-	return ""
+	return c.sql
+}
+
+func (c *compilerContext) SetRootSql(sql string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.sql = sql
 }
 
 func (c *compilerContext) GetUserName() string {

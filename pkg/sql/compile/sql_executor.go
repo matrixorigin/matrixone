@@ -218,7 +218,6 @@ func (exec *txnExecutor) Exec(
 	sql string,
 	statementOption executor.StatementOption) (executor.Result, error) {
 	receiveAt := time.Now()
-
 	stmts, err := parsers.Parse(exec.ctx, dialect.MYSQL, sql, 1)
 	defer func() {
 		for _, stmt := range stmts {
@@ -265,9 +264,10 @@ func (exec *txnExecutor) Exec(
 		proc.FreeVectors()
 	}()
 
-	pn, err := plan.BuildPlan(
-		exec.s.getCompileContext(exec.ctx, proc, exec.getDatabase()),
-		stmts[0], false)
+	compileContext := exec.s.getCompileContext(exec.ctx, proc, exec.getDatabase())
+	compileContext.SetRootSql(sql)
+
+	pn, err := plan.BuildPlan(compileContext, stmts[0], false)
 	if err != nil {
 		return executor.Result{}, err
 	}

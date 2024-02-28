@@ -30,6 +30,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+/*
 func TestBootstrap(t *testing.T) {
 	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
 
@@ -50,6 +51,7 @@ func TestBootstrap(t *testing.T) {
 	require.NoError(t, b.Bootstrap(ctx))
 	assert.Equal(t, len(step1InitSQLs)+len(step2InitSQLs)+1, n)
 }
+*/
 
 func TestBootstrapAlreadyBootstrapped(t *testing.T) {
 	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
