@@ -114,7 +114,7 @@ const (
 
 var cnUsageCache = logtail.NewStorageUsageCache(
 	logtail.WithLazyThreshold(5),
-	logtail.WithWorkers(runtime.NumCPU()))
+	logtail.WithWorkers(runtime.NumCPU()*2))
 
 func getSqlForAllAccountInfo(like *tree.ComparisonExpr) string {
 	var likePattern = ""
@@ -390,7 +390,7 @@ func getTableStatsParallel(
 	wg := sync.WaitGroup{}
 	var err error
 	var sqlResSet *MysqlResultSet
-	outCh := make(chan tableStatsResult)
+	outCh := make(chan tableStatsResult, 100)
 
 	accLen, totalNum := len(accountIds), 0
 
