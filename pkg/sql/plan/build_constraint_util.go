@@ -840,9 +840,7 @@ func forceCastExpr(ctx context.Context, expr *Expr, targetType *Type) (*Expr, er
 	t := &plan.Expr{
 		Typ: targetType,
 		Expr: &plan.Expr_T{
-			T: &plan.TargetType{
-				Typ: targetType,
-			},
+			T: &plan.TargetType{},
 		},
 	}
 	return &plan.Expr{
@@ -894,9 +892,7 @@ func buildValueScan(
 		targetTyp := &plan.Expr{
 			Typ: col.Typ,
 			Expr: &plan.Expr_T{
-				T: &plan.TargetType{
-					Typ: col.Typ,
-				},
+				T: &plan.TargetType{},
 			},
 		}
 		var defExpr *Expr

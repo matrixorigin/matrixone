@@ -53,11 +53,11 @@ func (b *LimitBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*pl
 			if err != nil {
 				return nil, err
 			}
-		} else if _, ok := expr.Expr.(*plan.Expr_P); ok {
+		} else if expr.GetP() != nil {
 			targetType := types.T_int64.ToType()
 			planTargetType := makePlan2Type(&targetType)
 			return appendCastBeforeExpr(b.GetContext(), expr, planTargetType)
-		} else if _, ok := expr.Expr.(*plan.Expr_V); ok {
+		} else if expr.GetV() != nil {
 			// SELECT IFNULL(CAST(@var AS BIGINT), 1) => CASE( ISNULL(@var), 1, CAST(@var AS BIGINT))
 
 			//ISNULL(@var)

@@ -32,6 +32,10 @@ func (arg *Argument) String(buf *bytes.Buffer) {
 
 func (arg *Argument) Prepare(proc *process.Process) (err error) {
 	ap := arg
+	if len(ap.RuntimeFilterSenders) == 0 {
+		panic("there must be runtime filter in index build!")
+	}
+
 	ap.ctr = new(container)
 	if len(proc.Reg.MergeReceivers) > 1 {
 		ap.ctr.InitReceiver(proc, true)
@@ -122,10 +126,6 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 }
 
 func (ctr *container) handleRuntimeFilter(ap *Argument, proc *process.Process) error {
-	if len(ap.RuntimeFilterSenders) == 0 {
-		panic("there must be runtime filter in index build!")
-	}
-
 	var runtimeFilter *pipeline.RuntimeFilter
 
 	if ap.RuntimeFilterSenders[0].Spec.Expr == nil {

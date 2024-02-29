@@ -81,7 +81,7 @@ func (bc *BindContext) findCTE(name string) *CTERef {
 	parent := bc.parent
 	for parent != nil && name != parent.cteName {
 		if cte, ok := parent.cteByName[name]; ok {
-			if _, ok := bc.maskedCTEs[name]; !ok {
+			if !bc.maskedCTEs[name] {
 				return cte
 			}
 		}
@@ -198,7 +198,7 @@ func (bc *BindContext) unfoldStar(ctx context.Context, table string, isSysAccoun
 		var exprs []tree.SelectExpr
 		var names []string
 
-		bc.doUnfoldStar(ctx, bc.bindingTree, make(map[string]emptyType), &exprs, &names, isSysAccount)
+		bc.doUnfoldStar(ctx, bc.bindingTree, make(map[string]bool), &exprs, &names, isSysAccount)
 
 		return exprs, names, nil
 	} else {
@@ -231,7 +231,7 @@ func (bc *BindContext) unfoldStar(ctx context.Context, table string, isSysAccoun
 	}
 }
 
-func (bc *BindContext) doUnfoldStar(ctx context.Context, root *BindingTreeNode, visitedUsingCols map[string]emptyType, exprs *[]tree.SelectExpr, names *[]string, isSysAccount bool) {
+func (bc *BindContext) doUnfoldStar(ctx context.Context, root *BindingTreeNode, visitedUsingCols map[string]bool, exprs *[]tree.SelectExpr, names *[]string, isSysAccount bool) {
 	if root == nil {
 		return
 	}
@@ -247,7 +247,7 @@ func (bc *BindContext) doUnfoldStar(ctx context.Context, root *BindingTreeNode, 
 			if !isSysAccount && root.binding.isClusterTable && util.IsClusterTableAttribute(col) {
 				continue
 			}
-			if _, ok := visitedUsingCols[col]; !ok {
+			if !visitedUsingCols[col] {
 				expr, _ := tree.NewUnresolvedName(ctx, root.binding.table, col)
 				*exprs = append(*exprs, tree.SelectExpr{Expr: expr})
 				*names = append(*names, col)
@@ -267,9 +267,9 @@ func (bc *BindContext) doUnfoldStar(ctx context.Context, root *BindingTreeNode, 
 		if !isSysAccount && root.binding.isClusterTable && util.IsClusterTableAttribute(using.col) {
 			continue
 		}
-		if _, ok := visitedUsingCols[using.col]; !ok {
+		if !visitedUsingCols[using.col] {
 			handledUsingCols = append(handledUsingCols, using.col)
-			visitedUsingCols[using.col] = emptyStruct
+			visitedUsingCols[using.col] = true
 
 			expr, _ := tree.NewUnresolvedName(ctx, using.table, using.col)
 			*exprs = append(*exprs, tree.SelectExpr{Expr: expr})
