@@ -94,7 +94,7 @@ type DropSnapShot struct {
 	statementImpl
 
 	IfExists bool
-	sName    string // snapshot name
+	Name     Identifier // snapshot name
 }
 
 func (node *DropSnapShot) Free() { reuse.Free[DropSnapShot](node, nil) }
@@ -103,10 +103,10 @@ func (node *DropSnapShot) reset() { *node = DropSnapShot{} }
 
 func (node DropSnapShot) TypeName() string { return "tree.DropSnapShot" }
 
-func NewDropSnapShot(ifExists bool, sName string) *DropSnapShot {
+func NewDropSnapShot(ifExists bool, Name Identifier) *DropSnapShot {
 	drop := reuse.Alloc[DropSnapShot](nil)
 	drop.IfExists = ifExists
-	drop.sName = sName
+	drop.Name = Name
 	return drop
 }
 
@@ -117,7 +117,7 @@ func (node *DropSnapShot) Format(ctx *FmtCtx) {
 		ctx.WriteString("if exists ")
 	}
 
-	ctx.WriteString(node.sName)
+	node.Name.Format(ctx)
 }
 
 func (node *DropSnapShot) GetStatementType() string { return "Drop Snapshot" }
