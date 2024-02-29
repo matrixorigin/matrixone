@@ -124,19 +124,19 @@ func (node *DropSnapShot) GetStatementType() string { return "Drop Snapshot" }
 
 func (node *DropSnapShot) GetQueryType() string { return QueryTypeOth }
 
-type ShowSnapShot struct {
+type ShowSnapShots struct {
 	statementImpl
 	Where *Where
 }
 
-func (node *ShowSnapShot) Format(ctx *FmtCtx) {
-	ctx.WriteString("show snapshot")
+func (node *ShowSnapShots) Format(ctx *FmtCtx) {
+	ctx.WriteString("show snapshots")
 	if node.Where != nil {
 		ctx.WriteString(" ")
 		node.Where.Format(ctx)
 	}
 }
 
-func (node *ShowSnapShot) GetStatementType() string { return "Show Snapshot" }
+func (node *ShowSnapShots) GetStatementType() string { return "Show Snapshot" }
 
-func (node *ShowSnapShot) GetQueryType() string { return QueryTypeDQL }
+func (node *ShowSnapShots) GetQueryType() string { return QueryTypeDQL }
