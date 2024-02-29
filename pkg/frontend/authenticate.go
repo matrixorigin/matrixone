@@ -830,6 +830,7 @@ var (
 		"mo_variables":                0,
 		"mo_transactions":             0,
 		"mo_cache":                    0,
+		"mo_snapshots":                0,
 	}
 	configInitVariables = map[string]int8{
 		"save_query_result":      0,
@@ -868,6 +869,7 @@ var (
 		"mo_transactions":             0,
 		"mo_cache":                    0,
 		"mo_foreign_keys":             0,
+		"mo_snapshots":                0,
 	}
 	createDbInformationSchemaSql = "create database information_schema;"
 	createAutoTableSql           = fmt.Sprintf(`create table if not exists %s (
@@ -1040,6 +1042,14 @@ var (
 				system_variables bool,
 				primary key(configuration_id)
 			);`,
+
+		`create table mo_snapshots(
+			snapshot_id uuid unique key,
+			sname varchar(64) primary key,
+			ts timestamp,
+			level enum('cluster','account','database','table'),
+			objName varchar(5000),
+			`,
 		`create table mo_pubs(
     		pub_name varchar(64) primary key,
     		database_name varchar(5000),
@@ -1105,6 +1115,7 @@ var (
 		`drop view if exists mo_catalog.mo_variables;`,
 		`drop view if exists mo_catalog.mo_transactions;`,
 		`drop view if exists mo_catalog.mo_cache;`,
+		`drop table if exists mo_catalog.mo_snapshots;`,
 	}
 	dropMoMysqlCompatibilityModeSql = `drop table if exists mo_catalog.mo_mysql_compatibility_mode;`
 	dropMoPubsSql                   = `drop table if exists mo_catalog.mo_pubs;`
