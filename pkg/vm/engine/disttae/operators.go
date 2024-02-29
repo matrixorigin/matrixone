@@ -130,14 +130,14 @@ func GenerateFilterExprOperators(
 				}
 			}
 			loadOp = loadMetadataOnlyOpFactory(ctx, fs)
+			colDef := tableDef.Cols[colExpr.Col.ColPos]
+			seqNum := colDef.Seqnum
 			objectCheckOp = func(meta objectio.ObjectMeta, _ objectio.BloomFilter) (bool, error) {
 				if isCluster || isPK {
 					return true, nil
 				}
 				dataMeta := meta.MustDataMeta()
-				colSeq := tableDef.Name2ColIndex[colExpr.Col.Name]
-				zm := dataMeta.MustGetColumn(uint16(colSeq)).ZoneMap()
-				return zm.AnyLE2(val), nil
+				return dataMeta.MustGetColumn(uint16(seqNum)).ZoneMap().AnyLE2(val), nil
 			}
 			blockCheckOp = func(
 				blk objectio.BlockInfo, blkMeta objectio.BlockObject, bf objectio.BloomFilter,
@@ -145,7 +145,7 @@ func GenerateFilterExprOperators(
 				if blkMeta.IsEmpty() {
 					return true, nil
 				}
-				return blkMeta.MustGetColumn(uint16(tableDef.Cols[colExpr.Col.ColPos].ColId)).ZoneMap().AnyLE2(val), nil
+				return blkMeta.MustGetColumn(uint16(seqNum)).ZoneMap().AnyLE2(val), nil
 			}
 		case ">=":
 			colExpr, val, ok := mustEvalColValueBinaryFunctionExpr(exprImpl, tableDef, proc)
@@ -162,13 +162,14 @@ func GenerateFilterExprOperators(
 				}
 			}
 			loadOp = loadMetadataOnlyOpFactory(ctx, fs)
+			colDef := tableDef.Cols[colExpr.Col.ColPos]
+			seqNum := colDef.Seqnum
 			objectCheckOp = func(meta objectio.ObjectMeta, _ objectio.BloomFilter) (bool, error) {
 				if isCluster || isPK {
 					return true, nil
 				}
 				dataMeta := meta.MustDataMeta()
-				colSeq := tableDef.Name2ColIndex[colExpr.Col.Name]
-				return dataMeta.MustGetColumn(uint16(colSeq)).ZoneMap().AnyGE2(val), nil
+				return dataMeta.MustGetColumn(uint16(seqNum)).ZoneMap().AnyGE2(val), nil
 			}
 			blockCheckOp = func(
 				blk objectio.BlockInfo, blkMeta objectio.BlockObject, bf objectio.BloomFilter,
@@ -176,7 +177,7 @@ func GenerateFilterExprOperators(
 				if blkMeta.IsEmpty() {
 					return true, nil
 				}
-				return blkMeta.MustGetColumn(uint16(tableDef.Cols[colExpr.Col.ColPos].ColId)).ZoneMap().AnyGE2(val), nil
+				return blkMeta.MustGetColumn(uint16(seqNum)).ZoneMap().AnyGE2(val), nil
 			}
 		case ">":
 			colExpr, val, ok := mustEvalColValueBinaryFunctionExpr(exprImpl, tableDef, proc)
@@ -193,13 +194,14 @@ func GenerateFilterExprOperators(
 				}
 			}
 			loadOp = loadMetadataOnlyOpFactory(ctx, fs)
+			colDef := tableDef.Cols[colExpr.Col.ColPos]
+			seqNum := colDef.Seqnum
 			objectCheckOp = func(meta objectio.ObjectMeta, _ objectio.BloomFilter) (bool, error) {
 				if isCluster || isPK {
 					return true, nil
 				}
 				dataMeta := meta.MustDataMeta()
-				colSeq := tableDef.Name2ColIndex[colExpr.Col.Name]
-				return dataMeta.MustGetColumn(uint16(colSeq)).ZoneMap().AnyGT2(val), nil
+				return dataMeta.MustGetColumn(uint16(seqNum)).ZoneMap().AnyGT2(val), nil
 			}
 			blockCheckOp = func(
 				blk objectio.BlockInfo, blkMeta objectio.BlockObject, bf objectio.BloomFilter,
@@ -207,7 +209,7 @@ func GenerateFilterExprOperators(
 				if blkMeta.IsEmpty() {
 					return true, nil
 				}
-				return blkMeta.MustGetColumn(uint16(tableDef.Cols[colExpr.Col.ColPos].ColId)).ZoneMap().AnyGT2(val), nil
+				return blkMeta.MustGetColumn(uint16(seqNum)).ZoneMap().AnyGT2(val), nil
 			}
 		case "<":
 			colExpr, val, ok := mustEvalColValueBinaryFunctionExpr(exprImpl, tableDef, proc)
@@ -224,13 +226,14 @@ func GenerateFilterExprOperators(
 				}
 			}
 			loadOp = loadMetadataOnlyOpFactory(ctx, fs)
+			colDef := tableDef.Cols[colExpr.Col.ColPos]
+			seqNum := colDef.Seqnum
 			objectCheckOp = func(meta objectio.ObjectMeta, _ objectio.BloomFilter) (bool, error) {
 				if isCluster || isPK {
 					return true, nil
 				}
 				dataMeta := meta.MustDataMeta()
-				colSeq := tableDef.Name2ColIndex[colExpr.Col.Name]
-				return dataMeta.MustGetColumn(uint16(colSeq)).ZoneMap().AnyLT2(val), nil
+				return dataMeta.MustGetColumn(uint16(seqNum)).ZoneMap().AnyLT2(val), nil
 			}
 			blockCheckOp = func(
 				blk objectio.BlockInfo, blkMeta objectio.BlockObject, bf objectio.BloomFilter,
@@ -238,7 +241,7 @@ func GenerateFilterExprOperators(
 				if blkMeta.IsEmpty() {
 					return true, nil
 				}
-				return blkMeta.MustGetColumn(uint16(tableDef.Cols[colExpr.Col.ColPos].ColId)).ZoneMap().AnyLT2(val), nil
+				return blkMeta.MustGetColumn(uint16(seqNum)).ZoneMap().AnyLT2(val), nil
 			}
 		case "prefix_eq":
 			colExpr, val, ok := mustEvalColValueBinaryFunctionExpr(exprImpl, tableDef, proc)
@@ -255,13 +258,14 @@ func GenerateFilterExprOperators(
 				}
 			}
 			loadOp = loadMetadataOnlyOpFactory(ctx, fs)
+			colDef := tableDef.Cols[colExpr.Col.ColPos]
+			seqNum := colDef.Seqnum
 			objectCheckOp = func(meta objectio.ObjectMeta, _ objectio.BloomFilter) (bool, error) {
 				if isCluster || isPK {
 					return true, nil
 				}
 				dataMeta := meta.MustDataMeta()
-				colSeq := tableDef.Name2ColIndex[colExpr.Col.Name]
-				return dataMeta.MustGetColumn(uint16(colSeq)).ZoneMap().PrefixEq(val), nil
+				return dataMeta.MustGetColumn(uint16(seqNum)).ZoneMap().PrefixEq(val), nil
 			}
 			blockCheckOp = func(
 				blk objectio.BlockInfo, blkMeta objectio.BlockObject, bf objectio.BloomFilter,
@@ -269,7 +273,7 @@ func GenerateFilterExprOperators(
 				if blkMeta.IsEmpty() {
 					return true, nil
 				}
-				return blkMeta.MustGetColumn(uint16(tableDef.Cols[colExpr.Col.ColPos].ColId)).ZoneMap().PrefixEq(val), nil
+				return blkMeta.MustGetColumn(uint16(seqNum)).ZoneMap().PrefixEq(val), nil
 			}
 		// case "prefix_between":
 		// case "between"
@@ -297,19 +301,19 @@ func GenerateFilterExprOperators(
 				loadOp = loadMetadataOnlyOpFactory(ctx, fs)
 			}
 
+			colDef := tableDef.Cols[colExpr.Col.ColPos]
+			seqNum := colDef.Seqnum
 			objectCheckOp = func(meta objectio.ObjectMeta, _ objectio.BloomFilter) (bool, error) {
 				if isCluster || isPK {
 					return true, nil
 				}
 				dataMeta := meta.MustDataMeta()
-				colSeq := tableDef.Name2ColIndex[colExpr.Col.Name]
-				zm := dataMeta.MustGetColumn(uint16(colSeq)).ZoneMap()
-				return zm.ContainsKey(val), nil
+				return dataMeta.MustGetColumn(uint16(seqNum)).ZoneMap().ContainsKey(val), nil
 			}
 			blockCheckOp = func(
 				blk objectio.BlockInfo, blkMeta objectio.BlockObject, bf objectio.BloomFilter,
 			) (bool, error) {
-				if !blkMeta.IsEmpty() && !blkMeta.MustGetColumn(uint16(tableDef.Cols[colExpr.Col.ColPos].ColId)).ZoneMap().ContainsKey(val) {
+				if !blkMeta.IsEmpty() && !blkMeta.MustGetColumn(uint16(seqNum)).ZoneMap().ContainsKey(val) {
 					return false, nil
 				}
 				if isPK {
