@@ -65,13 +65,14 @@ func (v *versionHandle) Prepare(
 
 		// First version as a genesis version, always need to be PREPARE.
 		// Because the first version need to init upgrade framework tables.
-		for _, upgEntry := range upgradeEntries {
+		for _, upgEntry := range clusterUpgEntries {
 			err = upgEntry.Upgrade(txn)
 			if err != nil {
 				return err
 			}
 		}
 	}
+
 	return nil
 }
 

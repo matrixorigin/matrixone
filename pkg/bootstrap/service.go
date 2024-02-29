@@ -276,11 +276,11 @@ func (s *service) execBootstrap(ctx context.Context) error {
 		WithMinCommittedTS(s.now()).
 		//WithDisableTrace().
 		WithWaitCommittedLogApplied().
-		WithTimeZone(time.Local). // FIXME ??
+		WithTimeZone(time.Local). // FIXME ???
 		WithAccountID(catalog.System_Account)
 
 	err := s.exec.ExecTxn(ctx, func(txn executor.TxnExecutor) error {
-		if err := initSysPreSQLs(ctx, txn); err != nil {
+		if err := initPreprocessSQL(ctx, txn); err != nil {
 			return err
 		}
 		if err := frontend.InitSysTenant2(ctx, txn, s.GetFinalVersion()); err != nil {
@@ -339,7 +339,8 @@ func execFunc(sql []string) func(executor.TxnExecutor) error {
 	}
 }
 
-func initSysPreSQLs(ctx context.Context, txn executor.TxnExecutor) error {
+// initPreprocessSQL  Execute preprocessed SQL, which typically must be completed before system tenant initialization
+func initPreprocessSQL(ctx context.Context, txn executor.TxnExecutor) error {
 	var timeCost time.Duration
 	defer func() {
 		logutil.Debugf("Initialize system pre SQL: create cost %d ms", timeCost.Milliseconds())
@@ -357,6 +358,7 @@ func initSysPreSQLs(ctx context.Context, txn executor.TxnExecutor) error {
 	return nil
 }
 
+// genInitCronTaskSQL Generate `insert` statement for creating system cron tasks, which works on the `mo_task`.`sys_cron_task` table.
 func genInitCronTaskSQL() (string, error) {
 	cronParser := cron.NewParser(
 		cron.Second |

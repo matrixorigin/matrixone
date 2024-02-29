@@ -238,16 +238,11 @@ func CheckTableDefinition(txn executor.TxnExecutor, schema string, tableName str
 	defer res.Close()
 
 	loaded := false
-	n := 0
 	res.ReadRows(func(rows int, cols []*vector.Vector) bool {
-		n++
 		loaded = true
 		return false
 	})
-
-	if loaded && n > 1 {
-		panic("BUG: Duplicate column names in table")
-	}
+	
 	return loaded, nil
 }
 
