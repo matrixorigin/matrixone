@@ -18,9 +18,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/indexjoin"
 	"time"
 	"unsafe"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/indexjoin"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -125,6 +127,10 @@ func CnServerMessageHandler(
 				zap.String("error", err.Error()))
 			err = errors.Join(err, cs.Close())
 		}
+	}()
+	start := time.Now()
+	defer func() {
+		v2.PipelineServerDurationHistogram.Observe(time.Since(start).Seconds())
 	}()
 
 	msg, ok := message.(*pipeline.Message)
