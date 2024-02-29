@@ -81,8 +81,8 @@ func (builder *QueryBuilder) applyIndicesForFiltersUsingMasterIndex(nodeID int32
 			Typ: DeepCopyType(pkType),
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
-					RelPos: prevIndexPkCol.GetCol().RelPos, // last idxTbl (may be join) relPos
-					ColPos: 1,                              // idxTbl.pk
+					RelPos: scanNode.BindingTags[0],
+					ColPos: pkPos, // tbl.pk
 				},
 			},
 		},
@@ -90,16 +90,16 @@ func (builder *QueryBuilder) applyIndicesForFiltersUsingMasterIndex(nodeID int32
 			Typ: DeepCopyType(pkType),
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
-					RelPos: scanNode.BindingTags[0],
-					ColPos: pkPos, // tbl.pk
+					RelPos: prevIndexPkCol.GetCol().RelPos, // last idxTbl (may be join) relPos
+					ColPos: 1,                              // idxTbl.pk
 				},
 			},
 		},
 	})
 	lastNodeId = builder.appendNode(&plan.Node{
 		NodeType: plan.Node_JOIN,
-		JoinType: plan.Node_INNER,
-		Children: []int32{lastNodeId, scanNode.NodeId},
+		JoinType: plan.Node_INDEX,
+		Children: []int32{scanNode.NodeId, lastNodeId},
 		OnList:   []*Expr{wherePkEqPk},
 	}, builder.ctxByNode[nodeID])
 
