@@ -16,9 +16,9 @@ package mergegroup
 
 import (
 	"bytes"
-
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -124,7 +124,14 @@ func (ctr *container) process(bat *batch.Batch, proc *process.Process) error {
 				if vec.GetType().Width == 0 {
 					width = 128
 				} else {
-					width = int(vec.GetType().Width)
+					switch vec.GetType().Oid {
+					case types.T_array_float32:
+						width = int(vec.GetType().Width) * 4
+					case types.T_array_float64:
+						width = int(vec.GetType().Width) * 8
+					default:
+						width = int(vec.GetType().Width)
+					}
 				}
 			}
 			keyWidth += width

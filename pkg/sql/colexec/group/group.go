@@ -134,7 +134,14 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 				if typ.Width == 0 {
 					width = 128
 				} else {
-					width = int(typ.Width)
+					switch types.T(typ.Id) {
+					case types.T_array_float32:
+						width = int(typ.Width) * 4
+					case types.T_array_float64:
+						width = int(typ.Width) * 8
+					default:
+						width = int(typ.Width)
+					}
 				}
 			}
 			ctr.keyWidth += width
