@@ -12,35 +12,38 @@ internal error: do not have privilege to execute the statement
 grant show databases on account * to r1;
 show databases;
 Database
-mo_task
-information_schema
-mysql
-system_metrics
-system
 cache
+information_schema
 mo_catalog
+mo_debug
+mo_task
+mysql
+system
+system_metrics
 revoke show databases on account * from r1;
 show variables like 'enable_privilege_cache';
 Variable_name    Value
 enable_privilege_cache    on
 show databases;
 Database
-mo_task
-information_schema
-mysql
-system_metrics
-system
 cache
+information_schema
 mo_catalog
+mo_debug
+mo_task
+mysql
+system
+system_metrics
 show databases;
 Database
-mo_task
-information_schema
-mysql
-system_metrics
-system
 cache
+information_schema
 mo_catalog
+mo_debug
+mo_task
+mysql
+system
+system_metrics
 set clear_privilege_cache = on;
 show variables like 'clear_privilege_cache';
 Variable_name    Value
@@ -55,22 +58,24 @@ internal error: do not have privilege to execute the statement
 grant show databases on account * to r1;
 show databases;
 Database
-mo_task
-information_schema
-mysql
-system_metrics
-system
 cache
+information_schema
 mo_catalog
+mo_debug
+mo_task
+mysql
+system
+system_metrics
 show databases;
 Database
-mo_task
-information_schema
-mysql
-system_metrics
-system
 cache
+information_schema
 mo_catalog
+mo_debug
+mo_task
+mysql
+system
+system_metrics
 revoke show databases on account * from r1;
 set enable_privilege_cache = off;
 show variables like 'clear_privilege_cache';
@@ -86,13 +91,14 @@ internal error: do not have privilege to execute the statement
 grant show databases on account * to r1;
 show databases;
 Database
-mo_task
-information_schema
-mysql
-system_metrics
-system
 cache
+information_schema
 mo_catalog
+mo_debug
+mo_task
+mysql
+system
+system_metrics
 revoke show databases on account * from r1;
 show databases;
 internal error: do not have privilege to execute the statement
