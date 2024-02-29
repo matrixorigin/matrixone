@@ -2917,7 +2917,7 @@ func SplitPart(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 func SplitSingle(str, sep string, cnt uint32) (string, bool) {
 	expectedLen := int(cnt + 1)
 	strSlice := strings.SplitN(str, sep, expectedLen)
-	if len(strSlice) < int(cnt) || strSlice[cnt-1] == "" {
+	if len(strSlice) < int(cnt) {
 		return "", true
 	}
 	return strSlice[cnt-1], false
