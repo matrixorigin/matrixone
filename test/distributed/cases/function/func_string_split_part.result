@@ -36,7 +36,7 @@ split_part(axxx, x, 1)
 a
 select split_part('axxx','x',2);
 split_part(axxx, x, 2)
-null
+
 select split_part('axxx','x',0);
 invalid input: split_part: field contains non-positive integer
 select split_part('axxx','x',-1);
@@ -57,7 +57,7 @@ null
 null
 null
 a
-null
+
 insert into t1 values('axxx','x',0);
 select split_part(a,b,c) from t1;
 invalid input: split_part: field contains non-positive integer
