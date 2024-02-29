@@ -15,11 +15,8 @@
 package disttae
 
 import (
-	"bytes"
 	"context"
-	"fmt"
 	"runtime"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -42,7 +39,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	txn2 "github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -105,62 +101,7 @@ func New(
 		panic(err)
 	}
 
-	// TODO(ghs)
-	// is debug for #13151, will remove later
-	e.enableDebug()
-
 	return e
-}
-
-func (e *Engine) enableDebug() {
-	function.DebugGetDatabaseExpectedEOB = func(caller string, proc *process.Process) {
-		txnState := fmt.Sprintf("account-%s, accId-%d, user-%s, role-%s, timezone-%s, txn-%s",
-			proc.SessionInfo.Account, proc.SessionInfo.AccountId,
-			proc.SessionInfo.User, proc.SessionInfo.Role,
-			proc.SessionInfo.TimeZone.String(),
-			proc.TxnOperator.Txn().DebugString(),
-		)
-		e.DebugGetDatabaseExpectedEOB(caller, txnState)
-	}
-}
-
-func (e *Engine) DebugGetDatabaseExpectedEOB(caller string, txnState string) {
-	dbs, tbls := e.catalog.TraverseDbAndTbl()
-	sort.Slice(dbs, func(i, j int) bool {
-		if dbs[i].AccountId != dbs[j].AccountId {
-			return dbs[i].AccountId < dbs[j].AccountId
-		}
-		return dbs[i].Id < dbs[j].Id
-	})
-
-	sort.Slice(tbls, func(i, j int) bool {
-		if tbls[i].AccountId != tbls[j].AccountId {
-			return tbls[i].AccountId < tbls[j].AccountId
-		}
-
-		if tbls[i].DatabaseId != tbls[j].DatabaseId {
-			return tbls[i].DatabaseId < tbls[j].DatabaseId
-		}
-
-		return tbls[i].Id < tbls[j].Id
-	})
-
-	var out bytes.Buffer
-	tIdx := 0
-	for idx := range dbs {
-		out.WriteString(fmt.Sprintf("%s\n", dbs[idx].String()))
-		for ; tIdx < len(tbls); tIdx++ {
-			if tbls[tIdx].AccountId != dbs[idx].AccountId ||
-				tbls[tIdx].DatabaseId != dbs[idx].Id {
-				break
-			}
-
-			out.WriteString(fmt.Sprintf("\t%s\n", tbls[tIdx].String()))
-		}
-	}
-
-	logutil.Infof("%s.Database got ExpectEOB, current txn state: \n%s\n%s",
-		caller, txnState, out.String())
 }
 
 func (e *Engine) Create(ctx context.Context, name string, op client.TxnOperator) error {
