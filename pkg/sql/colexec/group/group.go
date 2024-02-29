@@ -132,7 +132,14 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 			width := types.T(typ.Id).TypeLen()
 			if types.T(typ.Id).FixedLength() < 0 {
 				if typ.Width == 0 {
-					width = 128
+					switch types.T(typ.Id) {
+					case types.T_array_float32:
+						width = 128 * 4
+					case types.T_array_float64:
+						width = 128 * 8
+					default:
+						width = 128
+					}
 				} else {
 					switch types.T(typ.Id) {
 					case types.T_array_float32:

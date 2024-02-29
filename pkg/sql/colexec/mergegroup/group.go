@@ -122,7 +122,14 @@ func (ctr *container) process(bat *batch.Batch, proc *process.Process) error {
 			width := vec.GetType().TypeSize()
 			if vec.GetType().IsVarlen() {
 				if vec.GetType().Width == 0 {
-					width = 128
+					switch vec.GetType().Oid {
+					case types.T_array_float32:
+						width = 128 * 4
+					case types.T_array_float64:
+						width = 128 * 8
+					default:
+						width = 128
+					}
 				} else {
 					switch vec.GetType().Oid {
 					case types.T_array_float32:
