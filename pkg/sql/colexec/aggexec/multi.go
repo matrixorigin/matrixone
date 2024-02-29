@@ -69,46 +69,46 @@ type multiAggFuncExec1[T types.FixedSizeTExceptStrType] struct {
 
 	args   []mArg1[T]
 	ret    aggFuncResult[T]
-	groups []multiAggPrivateStructure1[T]
+	groups []MultiAggRetFixed[T]
 
 	// method to new the private structure for group growing.
-	gGroup func() multiAggPrivateStructure1[T]
+	gGroup func() MultiAggRetFixed[T]
 }
 type multiAggFuncExec2 struct {
 	multiAggInfo
 
 	args   []mArg2
 	ret    aggFuncBytesResult
-	groups []multiAggPrivateStructure2
+	groups []MultiAggRetVar
 
 	// method to new the private structure for group growing.
-	gGroup func() multiAggPrivateStructure2
+	gGroup func() MultiAggRetVar
 }
 
 func (exec *multiAggFuncExec1[T]) init(
 	proc *process.Process,
 	info multiAggInfo,
-	nm func() multiAggPrivateStructure1[T]) {
+	nm func() MultiAggRetFixed[T]) {
 
 	exec.multiAggInfo = info
 	exec.args = make([]mArg1[T], len(info.argTypes))
 	exec.ret = initFixedAggFuncResult[T](proc, info.retType, info.emptyNull)
-	exec.groups = make([]multiAggPrivateStructure1[T], 0, 1)
+	exec.groups = make([]MultiAggRetFixed[T], 0, 1)
 	exec.gGroup = nm
 	exec.args = make([]mArg1[T], len(info.argTypes))
 	for i := range exec.args {
 		exec.args[i] = newArgumentOfMultiAgg1[T](info.argTypes[i])
 
 		t := nm()
-		exec.args[i].cacheFill(t.getFillWhich(i), t.getFillNullWhich(i).(func(multiAggPrivateStructure1[T])))
+		exec.args[i].cacheFill(t.GetWhichFill(i), t.GetWhichFillNull(i).(func(MultiAggRetFixed[T])))
 	}
 }
 
 func (exec *multiAggFuncExec1[T]) GroupGrow(more int) error {
-	moreGroups := make([]multiAggPrivateStructure1[T], more)
+	moreGroups := make([]MultiAggRetFixed[T], more)
 	for i := range moreGroups {
 		moreGroups[i] = exec.gGroup()
-		moreGroups[i].init()
+		moreGroups[i].Init()
 	}
 	exec.groups = append(exec.groups, moreGroups...)
 	return exec.ret.grows(more)
@@ -123,7 +123,7 @@ func (exec *multiAggFuncExec1[T]) Fill(groupIndex int, row int, vectors []*vecto
 		}
 	}
 	exec.ret.groupToSet = groupIndex
-	exec.groups[groupIndex].eval(exec.ret.aggGet, exec.ret.aggSet)
+	exec.groups[groupIndex].Eval(exec.ret.aggGet, exec.ret.aggSet)
 
 	return nil
 }
@@ -143,7 +143,7 @@ func (exec *multiAggFuncExec1[T]) BulkFill(groupIndex int, vectors []*vector.Vec
 				return err
 			}
 		}
-		exec.groups[groupIndex].eval(getter, setter)
+		exec.groups[groupIndex].Eval(getter, setter)
 	}
 
 	return nil
@@ -166,7 +166,7 @@ func (exec *multiAggFuncExec1[T]) BatchFill(offset int, groups []uint64, vectors
 				}
 			}
 			exec.ret.groupToSet = groupIdx
-			exec.groups[groupIdx].eval(getter, setter)
+			exec.groups[groupIdx].Eval(getter, setter)
 
 		}
 		idx++
@@ -183,7 +183,7 @@ func (exec *multiAggFuncExec1[T]) Merge(next AggFuncExec, groupIdx1, groupIdx2 i
 	other := next.(*multiAggFuncExec1[T])
 	exec.ret.groupToSet = groupIdx1
 	other.ret.groupToSet = groupIdx2
-	exec.groups[groupIdx1].merge(
+	exec.groups[groupIdx1].Merge(
 		other.groups[groupIdx2],
 		exec.ret.aggGet, other.ret.aggGet,
 		exec.ret.aggSet)
@@ -203,7 +203,7 @@ func (exec *multiAggFuncExec1[T]) BatchMerge(next AggFuncExec, offset int, group
 		exec.ret.groupToSet = groupIdx1
 		other.ret.groupToSet = groupIdx2
 
-		exec.groups[groupIdx1].merge(
+		exec.groups[groupIdx1].Merge(
 			other.groups[groupIdx2],
 			getter1, getter2,
 			setter)
@@ -216,7 +216,7 @@ func (exec *multiAggFuncExec1[T]) Flush() (*vector.Vector, error) {
 	getter := exec.ret.aggGet
 	for i, group := range exec.groups {
 		exec.ret.groupToSet = i
-		group.flush(getter, setter)
+		group.Flush(getter, setter)
 	}
 	return exec.ret.flush(), nil
 }
@@ -228,27 +228,27 @@ func (exec *multiAggFuncExec1[T]) Free() {
 func (exec *multiAggFuncExec2) init(
 	proc *process.Process,
 	info multiAggInfo,
-	nm func() multiAggPrivateStructure2) {
+	nm func() MultiAggRetVar) {
 
 	exec.multiAggInfo = info
 	exec.args = make([]mArg2, len(info.argTypes))
 	exec.ret = initBytesAggFuncResult(proc, info.retType, info.emptyNull)
-	exec.groups = make([]multiAggPrivateStructure2, 0, 1)
+	exec.groups = make([]MultiAggRetVar, 0, 1)
 	exec.gGroup = nm
 	exec.args = make([]mArg2, len(info.argTypes))
 	for i := range exec.args {
 		exec.args[i] = newArgumentOfMultiAgg2(info.argTypes[i])
 
 		t := nm()
-		exec.args[i].cacheFill(t.getFillWhich(i), t.getFillNullWhich(i).(func(multiAggPrivateStructure2)))
+		exec.args[i].cacheFill(t.GetWhichFill(i), t.GetWhichFillNull(i).(func(MultiAggRetVar)))
 	}
 }
 
 func (exec *multiAggFuncExec2) GroupGrow(more int) error {
-	moreGroups := make([]multiAggPrivateStructure2, more)
+	moreGroups := make([]MultiAggRetVar, more)
 	for i := range moreGroups {
 		moreGroups[i] = exec.gGroup()
-		moreGroups[i].init()
+		moreGroups[i].Init()
 	}
 	exec.groups = append(exec.groups, moreGroups...)
 	return exec.ret.grows(more)
@@ -263,7 +263,7 @@ func (exec *multiAggFuncExec2) Fill(groupIndex int, row int, vectors []*vector.V
 		}
 	}
 	exec.ret.groupToSet = groupIndex
-	exec.groups[groupIndex].eval(exec.ret.aggGet, exec.ret.aggSet)
+	exec.groups[groupIndex].Eval(exec.ret.aggGet, exec.ret.aggSet)
 
 	return nil
 }
@@ -286,7 +286,7 @@ func (exec *multiAggFuncExec2) BulkFill(groupIndex int, vectors []*vector.Vector
 				return err
 			}
 		}
-		exec.groups[groupIndex].eval(getter, setter)
+		exec.groups[groupIndex].Eval(getter, setter)
 	}
 
 	return nil
@@ -309,7 +309,7 @@ func (exec *multiAggFuncExec2) BatchFill(offset int, groups []uint64, vectors []
 				}
 			}
 			exec.ret.groupToSet = groupIdx
-			exec.groups[groupIdx].eval(getter, setter)
+			exec.groups[groupIdx].Eval(getter, setter)
 
 		}
 		idx++
@@ -326,7 +326,7 @@ func (exec *multiAggFuncExec2) Merge(next AggFuncExec, groupIdx1, groupIdx2 int)
 	other := next.(*multiAggFuncExec2)
 	exec.ret.groupToSet = groupIdx1
 	other.ret.groupToSet = groupIdx2
-	exec.groups[groupIdx1].merge(
+	exec.groups[groupIdx1].Merge(
 		other.groups[groupIdx2],
 		exec.ret.aggGet, other.ret.aggGet,
 		exec.ret.aggSet)
@@ -346,7 +346,7 @@ func (exec *multiAggFuncExec2) BatchMerge(next AggFuncExec, offset int, groups [
 		exec.ret.groupToSet = groupIdx1
 		other.ret.groupToSet = groupIdx2
 
-		exec.groups[groupIdx1].merge(
+		exec.groups[groupIdx1].Merge(
 			other.groups[groupIdx2],
 			getter1, getter2,
 			setter)
@@ -361,7 +361,7 @@ func (exec *multiAggFuncExec2) Flush() (*vector.Vector, error) {
 
 	for i, group := range exec.groups {
 		exec.ret.groupToSet = i
-		if err = group.flush(getter, setter); err != nil {
+		if err = group.Flush(getter, setter); err != nil {
 			return nil, err
 		}
 	}

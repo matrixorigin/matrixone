@@ -81,7 +81,7 @@ func (r *aggFuncResult[T]) aggGet() T {
 	return r.values[r.groupToSet]
 }
 
-// for agg private structure's fill.
+// for agg private structure's Fill.
 func (r *aggFuncResult[T]) aggSet(v T) {
 	r.values[r.groupToSet] = v
 }

@@ -57,18 +57,18 @@ func (arg *sBytesArg) collect() {}
 type mArg1[ret types.FixedSizeTExceptStrType] interface {
 	prepare(v *vector.Vector)
 
-	// fill one row of input vector into the group.
-	doRowFill(aggImp multiAggPrivateStructure1[ret], row uint64) error
+	// Fill one row of input vector into the group.
+	doRowFill(aggImp MultiAggRetFixed[ret], row uint64) error
 
-	// fill is func(multiAggPrivateStructure1[T], value), value is the arg type.
-	cacheFill(fill any, fillNull func(multiAggPrivateStructure1[ret]))
+	// Fill is func(MultiAggRetFixed[T], value), value is the arg type.
+	cacheFill(fill any, fillNull func(MultiAggRetFixed[ret]))
 }
 type mArg2 interface {
 	prepare(v *vector.Vector)
 
-	doRowFill(aggImp multiAggPrivateStructure2, row uint64) error
+	doRowFill(aggImp MultiAggRetVar, row uint64) error
 
-	cacheFill(fill any, fillNull func(multiAggPrivateStructure2))
+	cacheFill(fill any, fillNull func(MultiAggRetVar))
 }
 
 var (
@@ -169,15 +169,15 @@ func newArgumentOfMultiAgg2(paramType types.Type) mArg2 {
 type mArg1Fixed[ret types.FixedSizeTExceptStrType, arg types.FixedSizeTExceptStrType] struct {
 	w vector.FunctionParameterWrapper[arg]
 
-	fill     func(multiAggPrivateStructure1[ret], arg)
-	fillNull func(multiAggPrivateStructure1[ret])
+	fill     func(MultiAggRetFixed[ret], arg)
+	fillNull func(MultiAggRetFixed[ret])
 }
 
 func (a *mArg1Fixed[ret, arg]) prepare(v *vector.Vector) {
 	a.w = vector.GenerateFunctionFixedTypeParameter[arg](v)
 }
 
-func (a *mArg1Fixed[ret, arg]) doRowFill(aggImp multiAggPrivateStructure1[ret], row uint64) error {
+func (a *mArg1Fixed[ret, arg]) doRowFill(aggImp MultiAggRetFixed[ret], row uint64) error {
 	v, null := a.w.GetValue(row)
 	if null {
 		a.fillNull(aggImp)
@@ -187,23 +187,23 @@ func (a *mArg1Fixed[ret, arg]) doRowFill(aggImp multiAggPrivateStructure1[ret], 
 	return nil
 }
 
-func (a *mArg1Fixed[ret, arg]) cacheFill(fill any, fillNull func(multiAggPrivateStructure1[ret])) {
-	a.fill = fill.(func(multiAggPrivateStructure1[ret], arg))
+func (a *mArg1Fixed[ret, arg]) cacheFill(fill any, fillNull func(MultiAggRetFixed[ret])) {
+	a.fill = fill.(func(MultiAggRetFixed[ret], arg))
 	a.fillNull = fillNull
 }
 
 type mArg1Bytes[ret types.FixedSizeTExceptStrType] struct {
 	w vector.FunctionParameterWrapper[types.Varlena]
 
-	fill     func(multiAggPrivateStructure1[ret], []byte)
-	fillNull func(multiAggPrivateStructure1[ret])
+	fill     func(MultiAggRetFixed[ret], []byte)
+	fillNull func(MultiAggRetFixed[ret])
 }
 
 func (a *mArg1Bytes[ret]) prepare(v *vector.Vector) {
 	a.w = vector.GenerateFunctionStrParameter(v)
 }
 
-func (a *mArg1Bytes[ret]) doRowFill(aggImp multiAggPrivateStructure1[ret], row uint64) error {
+func (a *mArg1Bytes[ret]) doRowFill(aggImp MultiAggRetFixed[ret], row uint64) error {
 	v, null := a.w.GetStrValue(row)
 	if null {
 		a.fillNull(aggImp)
@@ -213,23 +213,23 @@ func (a *mArg1Bytes[ret]) doRowFill(aggImp multiAggPrivateStructure1[ret], row u
 	return nil
 }
 
-func (a *mArg1Bytes[ret]) cacheFill(fill any, fillNull func(multiAggPrivateStructure1[ret])) {
-	a.fill = fill.(func(multiAggPrivateStructure1[ret], []byte))
+func (a *mArg1Bytes[ret]) cacheFill(fill any, fillNull func(MultiAggRetFixed[ret])) {
+	a.fill = fill.(func(MultiAggRetFixed[ret], []byte))
 	a.fillNull = fillNull
 }
 
 type mArg2Fixed[arg types.FixedSizeTExceptStrType] struct {
 	w vector.FunctionParameterWrapper[arg]
 
-	fill     func(multiAggPrivateStructure2, arg)
-	fillNull func(multiAggPrivateStructure2)
+	fill     func(MultiAggRetVar, arg)
+	fillNull func(MultiAggRetVar)
 }
 
 func (a *mArg2Fixed[arg]) prepare(v *vector.Vector) {
 	a.w = vector.GenerateFunctionFixedTypeParameter[arg](v)
 }
 
-func (a *mArg2Fixed[arg]) doRowFill(aggImp multiAggPrivateStructure2, row uint64) error {
+func (a *mArg2Fixed[arg]) doRowFill(aggImp MultiAggRetVar, row uint64) error {
 	v, null := a.w.GetValue(row)
 	if null {
 		a.fillNull(aggImp)
@@ -239,23 +239,23 @@ func (a *mArg2Fixed[arg]) doRowFill(aggImp multiAggPrivateStructure2, row uint64
 	return nil
 }
 
-func (a *mArg2Fixed[arg]) cacheFill(fill any, fillNull func(multiAggPrivateStructure2)) {
-	a.fill = fill.(func(multiAggPrivateStructure2, arg))
+func (a *mArg2Fixed[arg]) cacheFill(fill any, fillNull func(MultiAggRetVar)) {
+	a.fill = fill.(func(MultiAggRetVar, arg))
 	a.fillNull = fillNull
 }
 
 type mArg2Bytes struct {
 	w vector.FunctionParameterWrapper[types.Varlena]
 
-	fill     func(multiAggPrivateStructure2, []byte)
-	fillNull func(multiAggPrivateStructure2)
+	fill     func(MultiAggRetVar, []byte)
+	fillNull func(MultiAggRetVar)
 }
 
 func (a *mArg2Bytes) prepare(v *vector.Vector) {
 	a.w = vector.GenerateFunctionStrParameter(v)
 }
 
-func (a *mArg2Bytes) doRowFill(aggImp multiAggPrivateStructure2, row uint64) error {
+func (a *mArg2Bytes) doRowFill(aggImp MultiAggRetVar, row uint64) error {
 	v, null := a.w.GetStrValue(row)
 	if null {
 		a.fillNull(aggImp)
@@ -265,7 +265,7 @@ func (a *mArg2Bytes) doRowFill(aggImp multiAggPrivateStructure2, row uint64) err
 	return nil
 }
 
-func (a *mArg2Bytes) cacheFill(fill any, fillNull func(multiAggPrivateStructure2)) {
-	a.fill = fill.(func(multiAggPrivateStructure2, []byte))
+func (a *mArg2Bytes) cacheFill(fill any, fillNull func(MultiAggRetVar)) {
+	a.fill = fill.(func(MultiAggRetVar, []byte))
 	a.fillNull = fillNull
 }

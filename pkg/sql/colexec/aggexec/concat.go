@@ -49,7 +49,7 @@ func (exec *groupConcatExec) GroupGrow(more int) error {
 }
 
 func (exec *groupConcatExec) Fill(groupIndex int, row int, vectors []*vector.Vector) error {
-	// if any value was null, there is no need to fill.
+	// if any value was null, there is no need to Fill.
 	u64Row := uint64(row)
 	for _, v := range vectors {
 		if v.IsNull(u64Row) {

@@ -22,11 +22,11 @@ type aggBytesSetter func(value []byte) error
 type aggGetter[T types.FixedSizeTExceptStrType] func() T
 type aggBytesGetter func() []byte
 
-// each private structure of aggregation should implement the canMarshal interface.
-// the canMarshal interface is used for multi-node communication.
-type canMarshal interface {
-	marshal() []byte
-	unmarshal([]byte)
+// AggCanMarshal interface is used for multi-node communication.
+// each private structure of aggregation should implement the AggCanMarshal interface.
+type AggCanMarshal interface {
+	Marshal() []byte
+	Unmarshal([]byte)
 }
 
 /*
@@ -35,74 +35,74 @@ type canMarshal interface {
 	we use the interface to hide the private structure's detail.
 
     we have 4 kinds of aggregation for single-column aggregation and 2 kinds of aggregation for multi-column aggregation:
-	1. singleAggPrivateStructure1: aggregation receives a fixed length type and returns a fixed length type.
-	2. singleAggPrivateStructure2: aggregation receives a fixed length type and returns a variable length type.
-	3. singleAggPrivateStructure3: aggregation receives a variable length type and returns a fixed length type.
-	4. singleAggPrivateStructure4: aggregation receives a variable length type and returns a variable length type.
-	5. multiAggPrivateStructure1: aggregation receives multi columns and returns a fixed length type.
-	6. multiAggPrivateStructure2: aggregation receives multi columns and returns a variable length type.
+	1. SingleAggFromFixedRetFixed: aggregation receives a fixed length type and returns a fixed length type.
+	2. SingleAggFromFixedRetVar: aggregation receives a fixed length type and returns a variable length type.
+	3. SingleAggFromVarRetFixed: aggregation receives a variable length type and returns a fixed length type.
+	4. SingleAggFromVarRetVar: aggregation receives a variable length type and returns a variable length type.
+	5. MultiAggRetFixed: aggregation receives multi columns and returns a fixed length type.
+	6. MultiAggRetVar: aggregation receives multi columns and returns a variable length type.
 */
 
-type singleAggPrivateStructure1[
+type SingleAggFromFixedRetFixed[
 	from types.FixedSizeTExceptStrType, to types.FixedSizeTExceptStrType] interface {
-	canMarshal
-	init()
-	fill(from, aggGetter[to], aggSetter[to])
-	fillNull(aggGetter[to], aggSetter[to])
-	fills(value from, isNull bool, count int, getter aggGetter[to], setter aggSetter[to])
-	merge(other singleAggPrivateStructure1[from, to], getter1, getter2 aggGetter[to], setter aggSetter[to])
-	flush(getter aggGetter[to], setter aggSetter[to])
+	AggCanMarshal
+	Init()
+	Fill(from, aggGetter[to], aggSetter[to])
+	FillNull(aggGetter[to], aggSetter[to])
+	Fills(value from, isNull bool, count int, getter aggGetter[to], setter aggSetter[to])
+	Merge(other SingleAggFromFixedRetFixed[from, to], getter1, getter2 aggGetter[to], setter aggSetter[to])
+	Flush(getter aggGetter[to], setter aggSetter[to])
 }
 
-type singleAggPrivateStructure2[
+type SingleAggFromFixedRetVar[
 	from types.FixedSizeTExceptStrType] interface {
-	canMarshal
-	init()
-	fill(from, aggBytesGetter, aggBytesSetter)
-	fillNull(aggBytesGetter, aggBytesSetter)
-	fills(value from, isNull bool, count int, getter aggBytesGetter, setter aggBytesSetter)
-	merge(other singleAggPrivateStructure2[from], getter1, getter2 aggBytesGetter, setter aggBytesSetter)
-	flush(aggBytesGetter, aggBytesSetter)
+	AggCanMarshal
+	Init()
+	Fill(from, aggBytesGetter, aggBytesSetter)
+	FillNull(aggBytesGetter, aggBytesSetter)
+	Fills(value from, isNull bool, count int, getter aggBytesGetter, setter aggBytesSetter)
+	Merge(other SingleAggFromFixedRetVar[from], getter1, getter2 aggBytesGetter, setter aggBytesSetter)
+	Flush(aggBytesGetter, aggBytesSetter)
 }
 
-type singleAggPrivateStructure3[
+type SingleAggFromVarRetFixed[
 	to types.FixedSizeTExceptStrType] interface {
-	canMarshal
-	init()
-	fillBytes([]byte, aggGetter[to], aggSetter[to])
-	fillNull(aggGetter[to], aggSetter[to])
-	fills(value []byte, isNull bool, count int, getter aggGetter[to], setter aggSetter[to])
-	merge(other singleAggPrivateStructure3[to], getter1, getter2 aggGetter[to], setter aggSetter[to])
-	flush(getter aggGetter[to], setter aggSetter[to])
+	AggCanMarshal
+	Init()
+	FillBytes([]byte, aggGetter[to], aggSetter[to])
+	FillNull(aggGetter[to], aggSetter[to])
+	Fills(value []byte, isNull bool, count int, getter aggGetter[to], setter aggSetter[to])
+	Merge(other SingleAggFromVarRetFixed[to], getter1, getter2 aggGetter[to], setter aggSetter[to])
+	Flush(getter aggGetter[to], setter aggSetter[to])
 }
 
-type singleAggPrivateStructure4 interface {
-	canMarshal
-	init()
-	fillBytes([]byte, aggBytesGetter, aggBytesSetter)
-	fillNull(aggBytesGetter, aggBytesSetter)
-	fills(value []byte, isNull bool, count int, getter aggBytesGetter, setter aggBytesSetter)
-	merge(other singleAggPrivateStructure4, getter1, getter2 aggBytesGetter, setter aggBytesSetter)
-	flush(aggBytesGetter, aggBytesSetter)
+type SingleAggFromVarRetVar interface {
+	AggCanMarshal
+	Init()
+	FillBytes([]byte, aggBytesGetter, aggBytesSetter)
+	FillNull(aggBytesGetter, aggBytesSetter)
+	Fills(value []byte, isNull bool, count int, getter aggBytesGetter, setter aggBytesSetter)
+	Merge(other SingleAggFromVarRetVar, getter1, getter2 aggBytesGetter, setter aggBytesSetter)
+	Flush(aggBytesGetter, aggBytesSetter)
 }
 
-type multiAggPrivateStructure1[
+type MultiAggRetFixed[
 	to types.FixedSizeTExceptStrType] interface {
-	canMarshal
-	init()
-	getFillWhich(idx int) any                        // return func fill(multiAggPrivateStructure1[to], value)
-	getFillNullWhich(idx int) any                    // return func fillNull(multiAggPrivateStructure1[to])
-	eval(getter aggGetter[to], setter aggSetter[to]) // after fill one row, do eval.
-	merge(other multiAggPrivateStructure1[to], getter1, getter2 aggGetter[to], setter aggSetter[to])
-	flush(getter aggGetter[to], setter aggSetter[to]) // return the result.
+	AggCanMarshal
+	Init()
+	GetWhichFill(idx int) any                        // return func Fill(MultiAggRetFixed[to], value)
+	GetWhichFillNull(idx int) any                    // return func FillNull(MultiAggRetFixed[to])
+	Eval(getter aggGetter[to], setter aggSetter[to]) // after Fill one row, do eval.
+	Merge(other MultiAggRetFixed[to], getter1, getter2 aggGetter[to], setter aggSetter[to])
+	Flush(getter aggGetter[to], setter aggSetter[to]) // return the result.
 }
 
-type multiAggPrivateStructure2 interface {
-	canMarshal
-	init()
-	getFillWhich(idx int) any                          // return func fill(multiAggPrivateStructure2, value)
-	getFillNullWhich(idx int) any                      // return func fillNull(multiAggPrivateStructure2)
-	eval(getter aggBytesGetter, setter aggBytesSetter) // after fill one row, do eval.
-	merge(other multiAggPrivateStructure2, getter1, getter2 aggBytesGetter, setter aggBytesSetter)
-	flush(getter aggBytesGetter, setter aggBytesSetter) error // return the result.
+type MultiAggRetVar interface {
+	AggCanMarshal
+	Init()
+	GetWhichFill(idx int) any                          // return func Fill(MultiAggRetVar, value)
+	GetWhichFillNull(idx int) any                      // return func FillNull(MultiAggRetVar)
+	Eval(getter aggBytesGetter, setter aggBytesSetter) // after Fill one row, do eval.
+	Merge(other MultiAggRetVar, getter1, getter2 aggBytesGetter, setter aggBytesSetter)
+	Flush(getter aggBytesGetter, setter aggBytesSetter) error // return the result.
 }

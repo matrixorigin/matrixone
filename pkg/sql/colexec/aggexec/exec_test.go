@@ -23,32 +23,32 @@ import (
 	"testing"
 )
 
-// testSingleAggPrivate1 is a structure that implements singleAggPrivateStructure1.
+// testSingleAggPrivate1 is a structure that implements SingleAggFromFixedRetFixed.
 // it counts the number of input values (including NULLs) and it returns the count.
 // just for testing purposes.
 type testSingleAggPrivate1 struct{}
 
-func gTesSingleAggPrivate1() singleAggPrivateStructure1[int32, int64] {
+func gTesSingleAggPrivate1() SingleAggFromFixedRetFixed[int32, int64] {
 	return &testSingleAggPrivate1{}
 }
-func (t *testSingleAggPrivate1) init() {}
-func (t *testSingleAggPrivate1) fill(from int32, getter aggGetter[int64], setter aggSetter[int64]) {
+func (t *testSingleAggPrivate1) Init() {}
+func (t *testSingleAggPrivate1) Fill(from int32, getter aggGetter[int64], setter aggSetter[int64]) {
 	setter(getter() + 1)
 }
-func (t *testSingleAggPrivate1) fillNull(getter aggGetter[int64], setter aggSetter[int64]) {
+func (t *testSingleAggPrivate1) FillNull(getter aggGetter[int64], setter aggSetter[int64]) {
 	setter(getter() + 1)
 }
-func (t *testSingleAggPrivate1) fills(value int32, isNull bool, count int, getter aggGetter[int64], setter aggSetter[int64]) {
+func (t *testSingleAggPrivate1) Fills(value int32, isNull bool, count int, getter aggGetter[int64], setter aggSetter[int64]) {
 	setter(getter() + int64(count))
 }
-func (t *testSingleAggPrivate1) merge(other singleAggPrivateStructure1[int32, int64], getter1 aggGetter[int64], getter2 aggGetter[int64], setter aggSetter[int64]) {
+func (t *testSingleAggPrivate1) Merge(other SingleAggFromFixedRetFixed[int32, int64], getter1 aggGetter[int64], getter2 aggGetter[int64], setter aggSetter[int64]) {
 	setter(getter1() + getter2())
 }
-func (t *testSingleAggPrivate1) flush(getter aggGetter[int64], setter aggSetter[int64]) {}
-func (t *testSingleAggPrivate1) marshal() []byte {
+func (t *testSingleAggPrivate1) Flush(getter aggGetter[int64], setter aggSetter[int64]) {}
+func (t *testSingleAggPrivate1) Marshal() []byte {
 	return nil
 }
-func (t *testSingleAggPrivate1) unmarshal([]byte) {}
+func (t *testSingleAggPrivate1) Unmarshal([]byte) {}
 
 func TestSingleAggFuncExec1(t *testing.T) {
 	proc := testutil.NewProcess()
@@ -88,7 +88,7 @@ func TestSingleAggFuncExec1(t *testing.T) {
 	}
 	{
 		require.NoError(t, executor.GroupGrow(1))
-		// data fill.
+		// data Fill.
 		require.NoError(t, executor.Fill(0, 0, []*vector.Vector{inputs[0]}))
 		require.NoError(t, executor.Fill(0, 1, []*vector.Vector{inputs[1]}))
 		require.NoError(t, executor.BulkFill(0, []*vector.Vector{inputs[2]}))
@@ -115,52 +115,52 @@ func TestSingleAggFuncExec1(t *testing.T) {
 	}
 }
 
-// testMultiAggPrivate1 is a structure that implements multiAggPrivateStructure1.
+// testMultiAggPrivate1 is a structure that implements MultiAggRetFixed.
 // it counts the amount of the second input value (including NULLs) when the first value was not null.
 type testMultiAggPrivate1 struct {
 	firstIsNull bool
 }
 
-func gTesMultiAggPrivate1() multiAggPrivateStructure1[int64] {
+func gTesMultiAggPrivate1() MultiAggRetFixed[int64] {
 	return &testMultiAggPrivate1{}
 }
-func (t *testMultiAggPrivate1) init() {}
-func (t *testMultiAggPrivate1) getFillWhich(idx int) any {
+func (t *testMultiAggPrivate1) Init() {}
+func (t *testMultiAggPrivate1) GetWhichFill(idx int) any {
 	switch idx {
 	case 0:
-		return func(k multiAggPrivateStructure1[int64], value int64) {
+		return func(k MultiAggRetFixed[int64], value int64) {
 			k.(*testMultiAggPrivate1).firstIsNull = false
 		}
 	case 1:
-		return func(k multiAggPrivateStructure1[int64], value bool) {}
+		return func(k MultiAggRetFixed[int64], value bool) {}
 	}
 	panic("invalid idx")
 }
-func (t *testMultiAggPrivate1) getFillNullWhich(idx int) any {
+func (t *testMultiAggPrivate1) GetWhichFillNull(idx int) any {
 	switch idx {
 	case 0:
-		return func(k multiAggPrivateStructure1[int64]) {
+		return func(k MultiAggRetFixed[int64]) {
 			k.(*testMultiAggPrivate1).firstIsNull = true
 		}
 	case 1:
-		return func(k multiAggPrivateStructure1[int64]) {}
+		return func(k MultiAggRetFixed[int64]) {}
 	}
 	panic("invalid idx")
 }
-func (t *testMultiAggPrivate1) eval(getter aggGetter[int64], setter aggSetter[int64]) {
+func (t *testMultiAggPrivate1) Eval(getter aggGetter[int64], setter aggSetter[int64]) {
 	if t.firstIsNull {
 		return
 	}
 	setter(getter() + 1)
 }
-func (t *testMultiAggPrivate1) merge(other multiAggPrivateStructure1[int64], getter1 aggGetter[int64], getter2 aggGetter[int64], setter aggSetter[int64]) {
+func (t *testMultiAggPrivate1) Merge(other MultiAggRetFixed[int64], getter1 aggGetter[int64], getter2 aggGetter[int64], setter aggSetter[int64]) {
 	setter(getter1() + getter2())
 }
-func (t *testMultiAggPrivate1) flush(getter aggGetter[int64], setter aggSetter[int64]) {}
-func (t *testMultiAggPrivate1) marshal() []byte {
+func (t *testMultiAggPrivate1) Flush(getter aggGetter[int64], setter aggSetter[int64]) {}
+func (t *testMultiAggPrivate1) Marshal() []byte {
 	return nil
 }
-func (t *testMultiAggPrivate1) unmarshal([]byte) {}
+func (t *testMultiAggPrivate1) Unmarshal([]byte) {}
 
 func TestMultiAggFuncExec1(t *testing.T) {
 	proc := testutil.NewProcess()
@@ -213,7 +213,7 @@ func TestMultiAggFuncExec1(t *testing.T) {
 	}
 	{
 		require.NoError(t, executor.GroupGrow(1))
-		// data fill.
+		// data Fill.
 		require.NoError(t, executor.Fill(0, 0, inputs[0][:]))
 		require.NoError(t, executor.Fill(0, 1, inputs[1][:]))
 		require.NoError(t, executor.BulkFill(0, inputs[2][:]))
@@ -266,7 +266,7 @@ func TestGroupConcatExec(t *testing.T) {
 	inputs[1] = testutil.NewStringVector(4, info.argTypes[1], proc.Mp(), false, []string{"d", "c", "b", "a"})
 	{
 		require.NoError(t, executor.GroupGrow(1))
-		// data fill.
+		// data Fill.
 		require.NoError(t, executor.Fill(0, 0, inputs))
 		require.NoError(t, executor.Fill(0, 1, inputs))
 		require.NoError(t, executor.Fill(0, 2, inputs))

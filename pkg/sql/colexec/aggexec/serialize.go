@@ -51,7 +51,7 @@ func UnmarshalAggFuncExec(
 			proc, info.Id, info.IsDistinct, info.NullEmpty, info.Args, info.Ret)
 
 	default:
-		return nil, moerr.NewInternalError(proc.Ctx, "unmarshal agg exec failed, unknown exec type %d", encoded.GetExecType())
+		return nil, moerr.NewInternalError(proc.Ctx, "Unmarshal agg exec failed, unknown exec type %d", encoded.GetExecType())
 	}
 
 	if err := exec.unmarshal(encoded.Result, encoded.Groups); err != nil {
@@ -75,17 +75,17 @@ func (exec *singleAggFuncExec1[from, to]) marshal() ([]byte, error) {
 	if len(exec.groups) > 0 {
 		encoded.Groups = make([][]byte, len(exec.groups))
 		for i := range encoded.Groups {
-			encoded.Groups[i] = exec.groups[i].marshal()
+			encoded.Groups[i] = exec.groups[i].Marshal()
 		}
 	}
 	return encoded.Marshal()
 }
 
 func (exec *singleAggFuncExec1[from, to]) unmarshal(result []byte, groups [][]byte) error {
-	exec.groups = make([]singleAggPrivateStructure1[from, to], len(groups))
+	exec.groups = make([]SingleAggFromFixedRetFixed[from, to], len(groups))
 	for i := range exec.groups {
 		exec.groups[i] = exec.gGroup()
-		exec.groups[i].unmarshal(groups[i])
+		exec.groups[i].Unmarshal(groups[i])
 	}
 	exec.ret.free()
 	return exec.ret.unmarshal(result)
@@ -105,17 +105,17 @@ func (exec *singleAggFuncExec2[from]) marshal() ([]byte, error) {
 	if len(exec.groups) > 0 {
 		encoded.Groups = make([][]byte, len(exec.groups))
 		for i := range encoded.Groups {
-			encoded.Groups[i] = exec.groups[i].marshal()
+			encoded.Groups[i] = exec.groups[i].Marshal()
 		}
 	}
 	return encoded.Marshal()
 }
 
 func (exec *singleAggFuncExec2[from]) unmarshal(result []byte, groups [][]byte) error {
-	exec.groups = make([]singleAggPrivateStructure2[from], len(groups))
+	exec.groups = make([]SingleAggFromFixedRetVar[from], len(groups))
 	for i := range exec.groups {
 		exec.groups[i] = exec.gGroup()
-		exec.groups[i].unmarshal(groups[i])
+		exec.groups[i].Unmarshal(groups[i])
 	}
 	exec.ret.free()
 	return exec.ret.unmarshal(result)
@@ -135,17 +135,17 @@ func (exec *singleAggFuncExec3[to]) marshal() ([]byte, error) {
 	if len(exec.groups) > 0 {
 		encoded.Groups = make([][]byte, len(exec.groups))
 		for i := range encoded.Groups {
-			encoded.Groups[i] = exec.groups[i].marshal()
+			encoded.Groups[i] = exec.groups[i].Marshal()
 		}
 	}
 	return encoded.Marshal()
 }
 
 func (exec *singleAggFuncExec3[to]) unmarshal(result []byte, groups [][]byte) error {
-	exec.groups = make([]singleAggPrivateStructure3[to], len(groups))
+	exec.groups = make([]SingleAggFromVarRetFixed[to], len(groups))
 	for i := range exec.groups {
 		exec.groups[i] = exec.gGroup()
-		exec.groups[i].unmarshal(groups[i])
+		exec.groups[i].Unmarshal(groups[i])
 	}
 	exec.ret.free()
 	return exec.ret.unmarshal(result)
@@ -165,17 +165,17 @@ func (exec *singleAggFuncExec4) marshal() ([]byte, error) {
 	if len(exec.groups) > 0 {
 		encoded.Groups = make([][]byte, len(exec.groups))
 		for i := range encoded.Groups {
-			encoded.Groups[i] = exec.groups[i].marshal()
+			encoded.Groups[i] = exec.groups[i].Marshal()
 		}
 	}
 	return encoded.Marshal()
 }
 
 func (exec *singleAggFuncExec4) unmarshal(result []byte, groups [][]byte) error {
-	exec.groups = make([]singleAggPrivateStructure4, len(groups))
+	exec.groups = make([]SingleAggFromVarRetVar, len(groups))
 	for i := range exec.groups {
 		exec.groups[i] = exec.gGroup()
-		exec.groups[i].unmarshal(groups[i])
+		exec.groups[i].Unmarshal(groups[i])
 	}
 	exec.ret.free()
 	return exec.ret.unmarshal(result)
@@ -195,17 +195,17 @@ func (exec *multiAggFuncExec1[to]) marshal() ([]byte, error) {
 	if len(exec.groups) > 0 {
 		encoded.Groups = make([][]byte, len(exec.groups))
 		for i := range encoded.Groups {
-			encoded.Groups[i] = exec.groups[i].marshal()
+			encoded.Groups[i] = exec.groups[i].Marshal()
 		}
 	}
 	return encoded.Marshal()
 }
 
 func (exec *multiAggFuncExec1[T]) unmarshal(result []byte, groups [][]byte) error {
-	exec.groups = make([]multiAggPrivateStructure1[T], len(groups))
+	exec.groups = make([]MultiAggRetFixed[T], len(groups))
 	for i := range exec.groups {
 		exec.groups[i] = exec.gGroup()
-		exec.groups[i].unmarshal(groups[i])
+		exec.groups[i].Unmarshal(groups[i])
 	}
 	exec.ret.free()
 	return exec.ret.unmarshal(result)
@@ -225,17 +225,17 @@ func (exec *multiAggFuncExec2) marshal() ([]byte, error) {
 	if len(exec.groups) > 0 {
 		encoded.Groups = make([][]byte, len(exec.groups))
 		for i := range encoded.Groups {
-			encoded.Groups[i] = exec.groups[i].marshal()
+			encoded.Groups[i] = exec.groups[i].Marshal()
 		}
 	}
 	return encoded.Marshal()
 }
 
 func (exec *multiAggFuncExec2) unmarshal(result []byte, groups [][]byte) error {
-	exec.groups = make([]multiAggPrivateStructure2, len(groups))
+	exec.groups = make([]MultiAggRetVar, len(groups))
 	for i := range exec.groups {
 		exec.groups[i] = exec.gGroup()
-		exec.groups[i].unmarshal(groups[i])
+		exec.groups[i].Unmarshal(groups[i])
 	}
 	exec.ret.free()
 	return exec.ret.unmarshal(result)
