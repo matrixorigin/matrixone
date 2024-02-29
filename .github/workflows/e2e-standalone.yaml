@@ -120,7 +120,7 @@ jobs:
         if: ${{ failure() || cancelled()}}
         continue-on-error: true
         with:
-          name: e2e-BVT-Test-on-Linux/x64(LAUNCH,Optimistic)-reports
+          name: e2e-BVT-Test-on-Linux-x64(LAUNCH,Optimistic)-reports
           path: |
             ${{ github.workspace }}/upload
           retention-days: 7
@@ -202,7 +202,7 @@ jobs:
         if: ${{ failure() || cancelled()}}
         continue-on-error: true
         with:
-          name: Multi-CN-e2e-BVT-Test-on-Linux/x64(LAUNCH, PROXY)-reports
+          name: Multi-CN-e2e-BVT-Test-on-Linux-x64(LAUNCH,PROXY)-reports
           path: |
             ${{ github.workspace }}/upload
           retention-days: 7
@@ -299,7 +299,7 @@ jobs:
         if: ${{ failure() || cancelled()}}
         continue-on-error: true
         with:
-          name: e2e-BVT-Test-on-Linux/x64(LAUNCH, PESSIMISTIC)-reports
+          name: e2e-BVT-Test-on-Linux-x64(LAUNCH,PESSIMISTIC)-reports
           path: |
             ${{ github.workspace }}/upload
           retention-days: 7
