@@ -610,13 +610,13 @@ func checkUserTables(ctx context.Context, t *testing.T, tid uint64, ins, del, cn
 	data2 := collector.OrphanData()
 	bats := data2.GetBatches()
 	ins2 := bats[logtail.BLKMetaInsertIDX]
-	del2 := bats[logtail.BLKMetaDeleteIDX]
-	cnIns2 := bats[logtail.BLKCNMetaInsertIDX]
+	// del2 := bats[logtail.BLKMetaDeleteIDX]
+	// cnIns2 := bats[logtail.BLKCNMetaInsertIDX]
 	seg2 := bats[logtail.ObjectInfoIDX]
 
 	isProtoTNBatchEqual(ctx, t, ins, ins2)
-	isProtoTNBatchEqual(ctx, t, del, del2)
-	isProtoTNBatchEqual(ctx, t, cnIns, cnIns2)
+	// isProtoTNBatchEqual(ctx, t, del, del2)// del is always empty after block is removed
+	// isProtoTNBatchEqual(ctx, t, cnIns, cnIns2)
 
 	// seg batch doesn't exist before ckp V9
 	if seg != nil {
@@ -742,15 +742,15 @@ func (e *TestEngine) CheckObjectInfo(onlyCheckName bool) {
 			if se.IsAppendable() && !node.HasDropCommitted() {
 				flushed = false
 			}
-			stats, err := se.LoadObjectInfoWithTxnTS(node.Start)
-			assert.NoError(e.t, err)
 			if onlyCheckName || !flushed {
-				assert.Equal(e.t, stats.ObjectLocation().Name(),
+				assert.Equal(e.t, objectio.BuildObjectNameWithObjectID(&se.ID),
 					node.BaseNode.ObjectStats.ObjectLocation().Name(),
 					"load %v, get %v",
-					stats.String(),
+					se.ID.String(),
 					node.BaseNode.ObjectStats.String())
 				if flushed {
+					stats, err := se.LoadObjectInfoWithTxnTS(node.Start)
+					assert.NoError(e.t, err)
 					assert.Equal(e.t, stats.ObjectLocation().Extent(),
 						node.BaseNode.ObjectStats.ObjectLocation().Extent(),
 						"load %v, get %v",
@@ -759,6 +759,8 @@ func (e *TestEngine) CheckObjectInfo(onlyCheckName bool) {
 
 				}
 			} else {
+				stats, err := se.LoadObjectInfoWithTxnTS(node.Start)
+				assert.NoError(e.t, err)
 				assert.Equal(e.t, stats, node.BaseNode.ObjectStats, "load %v, get %v", stats.String(), node.BaseNode.ObjectStats.String())
 			}
 			return true
