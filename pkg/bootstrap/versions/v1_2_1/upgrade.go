@@ -1,9 +1,24 @@
+// Copyright 2024 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package v1_2_1
 
 import (
 	"context"
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
 
@@ -47,7 +62,7 @@ func (v *versionHandle) HandleTenantUpgrade(
 func (v *versionHandle) HandleClusterUpgrade(
 	ctx context.Context,
 	txn executor.TxnExecutor) error {
-	for _, upgEntry := range upgradeEntries {
+	for _, upgEntry := range clusterUpgEntries {
 		err := upgEntry.Upgrade(txn)
 		if err != nil {
 			return err
@@ -60,17 +75,5 @@ func (v *versionHandle) HandleClusterUpgrade(
 func (v *versionHandle) createFrameworkTables(
 	txn executor.TxnExecutor,
 	final bool) error {
-	values := versions.FrameworkInitSQLs
-	if final {
-		values = append(values, v.metadata.GetInsertSQL(versions.StateReady))
-	}
-
-	for _, sql := range values {
-		r, err := txn.Exec(sql, executor.StatementOption{})
-		if err != nil {
-			return err
-		}
-		r.Close()
-	}
-	return nil
+	return moerr.NewInternalErrorNoCtx("Only v1.2.0 can initialize upgrade framework, current version is:", Handler.metadata.Version)
 }
