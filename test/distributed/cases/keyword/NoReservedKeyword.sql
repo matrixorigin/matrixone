@@ -80,7 +80,7 @@ select 1 as user, 1 as uuid, 1 as validation, 1 as value, 1 as varbinary, 1 as v
 
 select 1 as verbose, 1 as view, 1 as visible, 1 as warnings, 1 as week, 1 as without, 1 as write, 1 as work;
 
-select 1 as x509, 1 as year, 1 as zerofill, 1 as zonemap;
+select 1 as x509, 1 as year, 1 as zerofill, 1 as zonemap, 1 as comment;
 
 drop database if exists test;
 create database test;

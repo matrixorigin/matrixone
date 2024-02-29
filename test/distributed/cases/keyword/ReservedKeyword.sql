@@ -12,7 +12,7 @@ show create table `between`;
 drop table `between`;
 
 drop table if exists `check`;
-create table `check` (`collate` int, `column` bigint, `comment` smallint, `config` decimal, `constraint` char, `convert` varchar, `create` int, `cross` float);
+create table `check` (`collate` int, `column` bigint, `config` decimal, `constraint` char, `convert` varchar, `create` int, `cross` float);
 show create table `check`;
 drop table `check`;
 

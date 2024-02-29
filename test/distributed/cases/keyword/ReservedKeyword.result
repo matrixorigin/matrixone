@@ -13,10 +13,10 @@ Table    Create Table
 between    CREATE TABLE `between` (\n`binary` INT DEFAULT NULL,\n`both` BIGINT DEFAULT NULL,\n`by` SMALLINT DEFAULT NULL,\n`call` DECIMAL(38,0) DEFAULT NULL,\n`case` CHAR(1) DEFAULT NULL,\n`change` VARCHAR(65535) DEFAULT NULL,\n`char` INT DEFAULT NULL,\n`character` FLOAT DEFAULT NULL\n)
 drop table `between`;
 drop table if exists `check`;
-create table `check` (`collate` int, `column` bigint, `comment` smallint, `config` decimal, `constraint` char, `convert` varchar, `create` int, `cross` float);
+create table `check` (`collate` int, `column` bigint, `config` decimal, `constraint` char, `convert` varchar, `create` int, `cross` float);
 show create table `check`;
 Table    Create Table
-check    CREATE TABLE `check` (\n`collate` INT DEFAULT NULL,\n`column` BIGINT DEFAULT NULL,\n`comment` SMALLINT DEFAULT NULL,\n`config` DECIMAL(38,0) DEFAULT NULL,\n`constraint` CHAR(1) DEFAULT NULL,\n`convert` VARCHAR(65535) DEFAULT NULL,\n`create` INT DEFAULT NULL,\n`cross` FLOAT DEFAULT NULL\n)
+check    CREATE TABLE `check` (\n`collate` INT DEFAULT NULL,\n`column` BIGINT DEFAULT NULL,\n`config` DECIMAL(38,0) DEFAULT NULL,\n`constraint` CHAR(1) DEFAULT NULL,\n`convert` VARCHAR(65535) DEFAULT NULL,\n`create` INT DEFAULT NULL,\n`cross` FLOAT DEFAULT NULL\n)
 drop table `check`;
 drop table if exists `current_date`;
 create table `current_date` (`current_role` int, `current_time` bigint, `current_timestamp` smallint, `current_user` decimal, `database` char, `databases` varchar, `day_hour` int, `day_microsecond` float);
