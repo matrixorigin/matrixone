@@ -2094,8 +2094,7 @@ func (tbl *txnTable) PKPersistedBetween(
 	if tbl.tableName == catalog.MO_DATABASE ||
 		tbl.tableName == catalog.MO_TABLES ||
 		tbl.tableName == catalog.MO_COLUMNS {
-		//TODO::should return true,just for test
-		return false, nil
+		return true, nil
 	}
 	ctx := tbl.proc.Load().Ctx
 	fs := tbl.db.txn.engine.fs

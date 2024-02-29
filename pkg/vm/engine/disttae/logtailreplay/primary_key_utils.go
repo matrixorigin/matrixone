@@ -26,17 +26,6 @@ func (p *PartitionState) PKExistInMemBetween(
 	to types.TS,
 	keys [][]byte,
 ) (bool, bool) {
-
-	//p.shared.Lock()
-	//lastFlushTimestamp := p.shared.lastFlushTimestamp
-	//p.shared.Unlock()
-
-	//if !lastFlushTimestamp.IsEmpty() {
-	//	if from.LessEq(lastFlushTimestamp) {
-	//		return true
-	//	}
-	//}
-
 	iter := p.primaryIndex.Copy().Iter()
 	pivot := RowEntry{
 		Time: types.BuildTS(math.MaxInt64, math.MaxUint32),
@@ -98,11 +87,8 @@ func (p *PartitionState) PKExistInMemBetween(
 	p.shared.Lock()
 	lastFlushTimestamp := p.shared.lastFlushTimestamp
 	p.shared.Unlock()
-
-	if !lastFlushTimestamp.IsEmpty() {
-		if lastFlushTimestamp.LessEq(from) {
-			return false, false
-		}
+	if lastFlushTimestamp.LessEq(from) {
+		return false, false
 	}
 	return false, true
 }
