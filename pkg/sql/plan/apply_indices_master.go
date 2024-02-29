@@ -151,8 +151,9 @@ func makeIndexTblScan(builder *QueryBuilder, bindCtx *BindContext, filterExp *pl
 			serialExpr2, // serial_full("a","value2")
 		})
 
+		//TODO: need to convert []Expr{"a", args[1]} --> []Expr{"a", "value1", "value2", "value3"...}
+		// Will be done later. args[1] is LiteralVec
 		//case "in":
-		//	//TODO: might need to do, "a", args[1] --> "a", "value1", "value2", "value3"...etc
 		//	serialExpr1, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "serial_full",
 		//		[]*plan.Expr{
 		//			makePlan2StringConstExprWithType(args[0].GetCol().Name), // "a"
