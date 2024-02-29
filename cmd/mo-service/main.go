@@ -22,6 +22,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	struntime "runtime"
 	"strings"
 	"sync"
@@ -247,6 +248,7 @@ func startCNService(
 			cnservice.WithLogger(logutil.GetGlobalLogger().Named("cn-service").With(zap.String("uuid", cfg.CN.UUID))),
 			cnservice.WithMessageHandle(compile.CnServerMessageHandler),
 			cnservice.WithConfigData(commonConfigKVMap),
+			cnservice.WithTxnTraceData(filepath.Join(cfg.DataDir, "trace")),
 		)
 		if err != nil {
 			panic(err)
