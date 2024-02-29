@@ -495,6 +495,17 @@ Data truncation: division by zero
 select 5 + (-1*cast("[1,2,3]" as vecf32(3)));
 5 + (-1 * cast([1,2,3] as vecf32(3)))
 [4, 3, 2]
+create table t11(a vecf32(2));
+insert into t11 values('[1,0]');
+insert into t11 values('[1,2]');
+select distinct a from t11;
+a
+[1, 0]
+[1, 2]
+select distinct a,a from t11;
+a    a
+[1, 0]    [1, 0]
+[1, 2]    [1, 2]
 select * from t8 except select * from t9;
 a    b    c
 3    [0.1726299, 3.2908857, 30.433094]    [0.45052445, 2.1984527, 9.579752, 123.48039, 4635.894]
