@@ -2173,17 +2173,25 @@ func (tbl *txnTable) updateDeleteInfo(
 		if (entry.typ == DELETE || entry.typ == DELETE_TXN) && entry.fileName == "" {
 			pkVec := entry.bat.GetVector(1)
 			rowids := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
+			update := 0
+			toTransfer := 0
 			for i, rowid := range rowids {
 				blkid, _ := rowid.Decode()
 				if _, ok := deleteObjsMap[*objectio.ShortName(&blkid)]; ok {
+					toTransfer++
 					newId, ok, err := tbl.readNewRowid(pkVec, i, blks)
 					if err != nil {
 						return err
 					}
 					if ok {
 						rowids[i] = newId
+						update++
 					}
 				}
+			}
+			if update != toTransfer {
+				logutil.Fatalf("xxxx update rowid failed, update %d, toTransfer:%d, total %d",
+					update, toTransfer, len(rowids))
 			}
 		}
 	}
