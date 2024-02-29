@@ -80,6 +80,9 @@ type multiAggFuncExec2 struct {
 	args   []mArg2
 	ret    aggFuncBytesResult
 	groups []multiAggPrivateStructure2
+
+	// method to new the private structure for group growing.
+	gGroup func() multiAggPrivateStructure2
 }
 
 func (exec *multiAggFuncExec1[T]) init(
@@ -226,12 +229,29 @@ func (exec *multiAggFuncExec2) init(
 	proc *process.Process,
 	info multiAggInfo,
 	nm func() multiAggPrivateStructure2) {
-	// todo:
+
+	exec.multiAggInfo = info
+	exec.args = make([]mArg2, len(info.argTypes))
+	exec.ret = initBytesAggFuncResult(proc, info.retType, info.emptyNull)
+	exec.groups = make([]multiAggPrivateStructure2, 0, 1)
+	exec.gGroup = nm
+	exec.args = make([]mArg2, len(info.argTypes))
+	for i := range exec.args {
+		exec.args[i] = newArgumentOfMultiAgg2(info.argTypes[i])
+
+		t := nm()
+		exec.args[i].cacheFill(t.getFillWhich(i), t.getFillNullWhich(i).(func(multiAggPrivateStructure2)))
+	}
 }
 
 func (exec *multiAggFuncExec2) GroupGrow(more int) error {
-	// todo:
-	return nil
+	moreGroups := make([]multiAggPrivateStructure2, more)
+	for i := range moreGroups {
+		moreGroups[i] = exec.gGroup()
+		moreGroups[i].init()
+	}
+	exec.groups = append(exec.groups, moreGroups...)
+	return exec.ret.grows(more)
 }
 
 func (exec *multiAggFuncExec2) Fill(groupIndex int, row int, vectors []*vector.Vector) error {

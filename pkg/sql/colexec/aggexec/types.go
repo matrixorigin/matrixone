@@ -32,7 +32,7 @@ const (
 // todo: use vector... to replace the []*vector.Vector may be better.
 type AggFuncExec interface {
 	marshal() ([]byte, error)
-	unmarshal([]byte) error
+	unmarshal(result []byte, groups [][]byte) error
 
 	AggID() int64
 	IsDistinct() bool

@@ -19,175 +19,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func (exec *singleAggFuncExec1[from, to]) marshal() ([]byte, error) {
-	d := exec.singleAggInfo.getEncoded()
-	r, err := exec.ret.marshal()
-	if err != nil {
-		return nil, err
-	}
-	encoded := &EncodedAgg{
-		ExecType: EncodedAggExecType_single_fixed_fixed,
-		Info:     d,
-		Result:   r,
-	}
-	if len(exec.groups) > 0 {
-		encoded.Groups = make([][]byte, len(exec.groups))
-		for i := range encoded.Groups {
-			encoded.Groups[i] = exec.groups[i].marshal()
-		}
-	}
-	return encoded.Marshal()
-}
-
-func (exec *singleAggFuncExec1[from, to]) unmarshal(data []byte) error {
-	exec.ret.free()
-	return exec.ret.unmarshal(data)
-}
-
-func (exec *singleAggFuncExec2[from]) marshal() ([]byte, error) {
-	d := exec.singleAggInfo.getEncoded()
-	r, err := exec.ret.marshal()
-	if err != nil {
-		return nil, err
-	}
-	encoded := &EncodedAgg{
-		ExecType: EncodedAggExecType_single_fixed_fixed,
-		Info:     d,
-		Result:   r,
-	}
-	if len(exec.groups) > 0 {
-		encoded.Groups = make([][]byte, len(exec.groups))
-		for i := range encoded.Groups {
-			encoded.Groups[i] = exec.groups[i].marshal()
-		}
-	}
-	return encoded.Marshal()
-}
-
-func (exec *singleAggFuncExec2[from]) unmarshal(data []byte) error {
-	exec.ret.free()
-	return exec.ret.unmarshal(data)
-}
-
-func (exec *singleAggFuncExec3[to]) marshal() ([]byte, error) {
-	d := exec.singleAggInfo.getEncoded()
-	r, err := exec.ret.marshal()
-	if err != nil {
-		return nil, err
-	}
-	encoded := &EncodedAgg{
-		ExecType: EncodedAggExecType_single_fixed_fixed,
-		Info:     d,
-		Result:   r,
-	}
-	if len(exec.groups) > 0 {
-		encoded.Groups = make([][]byte, len(exec.groups))
-		for i := range encoded.Groups {
-			encoded.Groups[i] = exec.groups[i].marshal()
-		}
-	}
-	return encoded.Marshal()
-}
-
-func (exec *singleAggFuncExec3[to]) unmarshal(data []byte) error {
-	exec.ret.free()
-	return exec.ret.unmarshal(data)
-}
-
-func (exec *singleAggFuncExec4) marshal() ([]byte, error) {
-	d := exec.singleAggInfo.getEncoded()
-	r, err := exec.ret.marshal()
-	if err != nil {
-		return nil, err
-	}
-	encoded := &EncodedAgg{
-		ExecType: EncodedAggExecType_single_fixed_fixed,
-		Info:     d,
-		Result:   r,
-	}
-	if len(exec.groups) > 0 {
-		encoded.Groups = make([][]byte, len(exec.groups))
-		for i := range encoded.Groups {
-			encoded.Groups[i] = exec.groups[i].marshal()
-		}
-	}
-	return encoded.Marshal()
-}
-
-func (exec *singleAggFuncExec4) unmarshal(data []byte) error {
-	exec.ret.free()
-	return exec.ret.unmarshal(data)
-}
-
-func (exec *multiAggFuncExec1[to]) marshal() ([]byte, error) {
-	d := exec.multiAggInfo.getEncoded()
-	r, err := exec.ret.marshal()
-	if err != nil {
-		return nil, err
-	}
-	encoded := &EncodedAgg{
-		ExecType: EncodedAggExecType_multi_return_fixed,
-		Info:     d,
-		Result:   r,
-	}
-	if len(exec.groups) > 0 {
-		encoded.Groups = make([][]byte, len(exec.groups))
-		for i := range encoded.Groups {
-			encoded.Groups[i] = exec.groups[i].marshal()
-		}
-	}
-	return encoded.Marshal()
-}
-
-func (exec *multiAggFuncExec1[T]) unmarshal(data []byte) error {
-	exec.ret.free()
-	return exec.ret.unmarshal(data)
-}
-
-func (exec *multiAggFuncExec2) marshal() ([]byte, error) {
-	d := exec.multiAggInfo.getEncoded()
-	r, err := exec.ret.marshal()
-	if err != nil {
-		return nil, err
-	}
-	encoded := &EncodedAgg{
-		ExecType: EncodedAggExecType_multi_return_fixed,
-		Info:     d,
-		Result:   r,
-	}
-	if len(exec.groups) > 0 {
-		encoded.Groups = make([][]byte, len(exec.groups))
-		for i := range encoded.Groups {
-			encoded.Groups[i] = exec.groups[i].marshal()
-		}
-	}
-	return encoded.Marshal()
-}
-
-func (exec *multiAggFuncExec2) unmarshal(data []byte) error {
-	exec.ret.free()
-	return exec.ret.unmarshal(data)
-}
-
-func (exec *groupConcatExec) marshal() ([]byte, error) {
-	d := exec.multiAggInfo.getEncoded()
-	r, err := exec.ret.marshal()
-	if err != nil {
-		return nil, err
-	}
-	encoded := &EncodedAgg{
-		ExecType: EncodedAggExecType_special_group_concat,
-		Info:     d,
-		Result:   r,
-		Groups:   [][]byte{exec.separator},
-	}
-	return encoded.Marshal()
-}
-
-func (exec *groupConcatExec) unmarshal(data []byte) error {
-	exec.ret.free()
-	return exec.ret.unmarshal(data)
-}
+var _ = MarshalAggFuncExec
+var _ = UnmarshalAggFuncExec
 
 func MarshalAggFuncExec(exec AggFuncExec) ([]byte, error) {
 	return exec.marshal()
@@ -221,9 +54,209 @@ func UnmarshalAggFuncExec(
 		return nil, moerr.NewInternalError(proc.Ctx, "unmarshal agg exec failed, unknown exec type %d", encoded.GetExecType())
 	}
 
-	if err := exec.unmarshal(encoded.Result); err != nil {
+	if err := exec.unmarshal(encoded.Result, encoded.Groups); err != nil {
 		exec.Free()
 		return nil, err
 	}
 	return exec, nil
+}
+
+func (exec *singleAggFuncExec1[from, to]) marshal() ([]byte, error) {
+	d := exec.singleAggInfo.getEncoded()
+	r, err := exec.ret.marshal()
+	if err != nil {
+		return nil, err
+	}
+	encoded := &EncodedAgg{
+		ExecType: EncodedAggExecType_single_fixed_fixed,
+		Info:     d,
+		Result:   r,
+	}
+	if len(exec.groups) > 0 {
+		encoded.Groups = make([][]byte, len(exec.groups))
+		for i := range encoded.Groups {
+			encoded.Groups[i] = exec.groups[i].marshal()
+		}
+	}
+	return encoded.Marshal()
+}
+
+func (exec *singleAggFuncExec1[from, to]) unmarshal(result []byte, groups [][]byte) error {
+	exec.groups = make([]singleAggPrivateStructure1[from, to], len(groups))
+	for i := range exec.groups {
+		exec.groups[i] = exec.gGroup()
+		exec.groups[i].unmarshal(groups[i])
+	}
+	exec.ret.free()
+	return exec.ret.unmarshal(result)
+}
+
+func (exec *singleAggFuncExec2[from]) marshal() ([]byte, error) {
+	d := exec.singleAggInfo.getEncoded()
+	r, err := exec.ret.marshal()
+	if err != nil {
+		return nil, err
+	}
+	encoded := &EncodedAgg{
+		ExecType: EncodedAggExecType_single_fixed_fixed,
+		Info:     d,
+		Result:   r,
+	}
+	if len(exec.groups) > 0 {
+		encoded.Groups = make([][]byte, len(exec.groups))
+		for i := range encoded.Groups {
+			encoded.Groups[i] = exec.groups[i].marshal()
+		}
+	}
+	return encoded.Marshal()
+}
+
+func (exec *singleAggFuncExec2[from]) unmarshal(result []byte, groups [][]byte) error {
+	exec.groups = make([]singleAggPrivateStructure2[from], len(groups))
+	for i := range exec.groups {
+		exec.groups[i] = exec.gGroup()
+		exec.groups[i].unmarshal(groups[i])
+	}
+	exec.ret.free()
+	return exec.ret.unmarshal(result)
+}
+
+func (exec *singleAggFuncExec3[to]) marshal() ([]byte, error) {
+	d := exec.singleAggInfo.getEncoded()
+	r, err := exec.ret.marshal()
+	if err != nil {
+		return nil, err
+	}
+	encoded := &EncodedAgg{
+		ExecType: EncodedAggExecType_single_fixed_fixed,
+		Info:     d,
+		Result:   r,
+	}
+	if len(exec.groups) > 0 {
+		encoded.Groups = make([][]byte, len(exec.groups))
+		for i := range encoded.Groups {
+			encoded.Groups[i] = exec.groups[i].marshal()
+		}
+	}
+	return encoded.Marshal()
+}
+
+func (exec *singleAggFuncExec3[to]) unmarshal(result []byte, groups [][]byte) error {
+	exec.groups = make([]singleAggPrivateStructure3[to], len(groups))
+	for i := range exec.groups {
+		exec.groups[i] = exec.gGroup()
+		exec.groups[i].unmarshal(groups[i])
+	}
+	exec.ret.free()
+	return exec.ret.unmarshal(result)
+}
+
+func (exec *singleAggFuncExec4) marshal() ([]byte, error) {
+	d := exec.singleAggInfo.getEncoded()
+	r, err := exec.ret.marshal()
+	if err != nil {
+		return nil, err
+	}
+	encoded := &EncodedAgg{
+		ExecType: EncodedAggExecType_single_fixed_fixed,
+		Info:     d,
+		Result:   r,
+	}
+	if len(exec.groups) > 0 {
+		encoded.Groups = make([][]byte, len(exec.groups))
+		for i := range encoded.Groups {
+			encoded.Groups[i] = exec.groups[i].marshal()
+		}
+	}
+	return encoded.Marshal()
+}
+
+func (exec *singleAggFuncExec4) unmarshal(result []byte, groups [][]byte) error {
+	exec.groups = make([]singleAggPrivateStructure4, len(groups))
+	for i := range exec.groups {
+		exec.groups[i] = exec.gGroup()
+		exec.groups[i].unmarshal(groups[i])
+	}
+	exec.ret.free()
+	return exec.ret.unmarshal(result)
+}
+
+func (exec *multiAggFuncExec1[to]) marshal() ([]byte, error) {
+	d := exec.multiAggInfo.getEncoded()
+	r, err := exec.ret.marshal()
+	if err != nil {
+		return nil, err
+	}
+	encoded := &EncodedAgg{
+		ExecType: EncodedAggExecType_multi_return_fixed,
+		Info:     d,
+		Result:   r,
+	}
+	if len(exec.groups) > 0 {
+		encoded.Groups = make([][]byte, len(exec.groups))
+		for i := range encoded.Groups {
+			encoded.Groups[i] = exec.groups[i].marshal()
+		}
+	}
+	return encoded.Marshal()
+}
+
+func (exec *multiAggFuncExec1[T]) unmarshal(result []byte, groups [][]byte) error {
+	exec.groups = make([]multiAggPrivateStructure1[T], len(groups))
+	for i := range exec.groups {
+		exec.groups[i] = exec.gGroup()
+		exec.groups[i].unmarshal(groups[i])
+	}
+	exec.ret.free()
+	return exec.ret.unmarshal(result)
+}
+
+func (exec *multiAggFuncExec2) marshal() ([]byte, error) {
+	d := exec.multiAggInfo.getEncoded()
+	r, err := exec.ret.marshal()
+	if err != nil {
+		return nil, err
+	}
+	encoded := &EncodedAgg{
+		ExecType: EncodedAggExecType_multi_return_fixed,
+		Info:     d,
+		Result:   r,
+	}
+	if len(exec.groups) > 0 {
+		encoded.Groups = make([][]byte, len(exec.groups))
+		for i := range encoded.Groups {
+			encoded.Groups[i] = exec.groups[i].marshal()
+		}
+	}
+	return encoded.Marshal()
+}
+
+func (exec *multiAggFuncExec2) unmarshal(result []byte, groups [][]byte) error {
+	exec.groups = make([]multiAggPrivateStructure2, len(groups))
+	for i := range exec.groups {
+		exec.groups[i] = exec.gGroup()
+		exec.groups[i].unmarshal(groups[i])
+	}
+	exec.ret.free()
+	return exec.ret.unmarshal(result)
+}
+
+func (exec *groupConcatExec) marshal() ([]byte, error) {
+	d := exec.multiAggInfo.getEncoded()
+	r, err := exec.ret.marshal()
+	if err != nil {
+		return nil, err
+	}
+	encoded := &EncodedAgg{
+		ExecType: EncodedAggExecType_special_group_concat,
+		Info:     d,
+		Result:   r,
+		Groups:   [][]byte{exec.separator},
+	}
+	return encoded.Marshal()
+}
+
+func (exec *groupConcatExec) unmarshal(result []byte, groups [][]byte) error {
+	exec.ret.free()
+	return exec.ret.unmarshal(result)
 }

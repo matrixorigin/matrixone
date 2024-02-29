@@ -122,6 +122,50 @@ func newArgumentOfMultiAgg1[ret types.FixedSizeTExceptStrType](paramType types.T
 	panic("unsupported parameter type for multiAggFuncExec1")
 }
 
+func newArgumentOfMultiAgg2(paramType types.Type) mArg2 {
+	if paramType.IsVarlen() {
+		return &mArg2Bytes{}
+	}
+
+	switch paramType.Oid {
+	case types.T_bool:
+		return &mArg2Fixed[bool]{}
+	case types.T_int8:
+		return &mArg2Fixed[int8]{}
+	case types.T_int16:
+		return &mArg2Fixed[int16]{}
+	case types.T_int32:
+		return &mArg2Fixed[int32]{}
+	case types.T_int64:
+		return &mArg2Fixed[int64]{}
+	case types.T_uint8:
+		return &mArg2Fixed[uint8]{}
+	case types.T_uint16:
+		return &mArg2Fixed[uint16]{}
+	case types.T_uint32:
+		return &mArg2Fixed[uint32]{}
+	case types.T_uint64:
+		return &mArg2Fixed[uint64]{}
+	case types.T_float32:
+		return &mArg2Fixed[float32]{}
+	case types.T_float64:
+		return &mArg2Fixed[float64]{}
+	case types.T_decimal64:
+		return &mArg2Fixed[types.Decimal64]{}
+	case types.T_decimal128:
+		return &mArg2Fixed[types.Decimal128]{}
+	case types.T_date:
+		return &mArg2Fixed[types.Date]{}
+	case types.T_datetime:
+		return &mArg2Fixed[types.Datetime]{}
+	case types.T_time:
+		return &mArg2Fixed[types.Time]{}
+	case types.T_timestamp:
+		return &mArg2Fixed[types.Timestamp]{}
+	}
+	panic("unsupported parameter type for multiAggFuncExec2")
+}
+
 type mArg1Fixed[ret types.FixedSizeTExceptStrType, arg types.FixedSizeTExceptStrType] struct {
 	w vector.FunctionParameterWrapper[arg]
 
