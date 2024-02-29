@@ -849,7 +849,7 @@ func (n *MVCCHandle) InMemoryCollectDeleteInRange(
 	n.RLock()
 	schema := n.meta.GetSchema()
 	pkDef := schema.GetPrimaryKey()
-	rowID, ts, pk, abort, abortedMap, deletes, minTS, persisitedTS := n.CollectDeleteLocked(start.Next(), end, pkDef.Type, mp)
+	rowID, ts, pk, abort, abortedMap, deletes, minTS, persisitedTS := n.CollectDeleteLocked(start, end, pkDef.Type, mp)
 	n.RUnlock()
 	if rowID == nil {
 		return
