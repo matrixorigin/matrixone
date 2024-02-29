@@ -61,8 +61,8 @@ type TxnHandler struct {
 	entryMu            sync.Mutex
 	hasCalledStartStmt bool
 	prevTxnId          []byte
-	hasCalledIncrStmt bool
-	prevIncrTxnId     []byte
+	hasCalledIncrStmt  bool
+	prevIncrTxnId      []byte
 }
 
 func InitTxnHandler(storage engine.Engine, txnClient TxnClient, txnCtx context.Context, txnOp TxnOperator) *TxnHandler {
@@ -778,6 +778,7 @@ func (ses *Session) TxnRollbackSingleStatement(stmt tree.Statement) error {
 			ok, id := ses.GetTxnHandler().calledIncrStmt()
 			if ok && bytes.Equal(txnOp.Txn().ID, id) {
 				err = txnOp.GetWorkspace().RollbackLastStatement(txnCtx)
+				ses.GetTxnHandler().disableIncrStmt()
 				if err != nil {
 					err4 := ses.rollbackWholeTxn()
 					return errors.Join(err, err4)
