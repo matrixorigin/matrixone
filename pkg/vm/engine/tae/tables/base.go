@@ -121,6 +121,8 @@ func (blk *baseBlock) GCInMemeoryDeletesByTS(ts types.TS) {
 }
 
 func (blk *baseBlock) UpgradeAllDeleteChain() {
+	blk.Lock()
+	defer blk.Unlock()
 	mvcc := blk.tryGetMVCC()
 	if mvcc == nil {
 		return
@@ -1031,6 +1033,8 @@ func (blk *baseBlock) MakeAppender() (appender data.BlockAppender, err error) {
 }
 
 func (blk *baseBlock) GetTotalChanges() int {
+	blk.RLock()
+	defer blk.RUnlock()
 	objMVCC := blk.tryGetMVCC()
 	if objMVCC == nil {
 		return 0
@@ -1042,6 +1046,8 @@ func (blk *baseBlock) IsAppendable() bool { return false }
 
 func (blk *baseBlock) MutationInfo() string {
 	rows, err := blk.Rows()
+	blk.RLock()
+	defer blk.RUnlock()
 	if err != nil {
 		logutil.Warnf("get object rows failed, obj: %v, err %v", blk.meta.ID.String(), err)
 	}
@@ -1071,6 +1077,8 @@ func (blk *baseBlock) UpdateDeltaLoc(txn txnif.TxnReader, blkID uint16, deltaLoc
 }
 
 func (blk *baseBlock) GetDeltaPersistedTS() types.TS {
+	blk.RLock()
+	defer blk.RUnlock()
 	objMVCC := blk.tryGetMVCC()
 	if objMVCC == nil {
 		return types.TS{}

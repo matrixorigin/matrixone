@@ -181,7 +181,7 @@ func (entry *TableEntry) GetDeleteList() *btree.BTreeG[DeleteEntry] {
 }
 func (entry *TableEntry) TryGetTombstone(oid objectio.ObjectId) data.Tombstone {
 	pivot := DeleteEntry{ObjectID: oid}
-	tombstone, ok := entry.deleteList.Copy().Get(pivot)
+	tombstone, ok := entry.deleteList.Get(pivot)
 	if !ok {
 		return nil
 	}
@@ -190,7 +190,7 @@ func (entry *TableEntry) TryGetTombstone(oid objectio.ObjectId) data.Tombstone {
 
 func (entry *TableEntry) GetOrCreateTombstone(obj *ObjectEntry, factory TombstoneFactory) data.Tombstone {
 	pivot := DeleteEntry{ObjectID: obj.ID}
-	delete, ok := entry.deleteList.Copy().Get(pivot)
+	delete, ok := entry.deleteList.Get(pivot)
 	if ok {
 		return delete.Tombstone
 	}
