@@ -635,7 +635,7 @@ func (tbl *txnTable) rangesOnePart(
 		deleteObjs, createObjs := state.GetChangedObjsBetween(types.TimestampToTS(tbl.lastTS),
 			types.TimestampToTS(tbl.db.txn.op.SnapshotTS()))
 		if len(deleteObjs) > 0 {
-			if err := tbl.updateDeleteInfo(ctx, state, deleteObjs, createObjs); err != nil {
+			if err := tbl.transferRowids(ctx, state, deleteObjs, createObjs); err != nil {
 				return err
 			}
 		}
@@ -2245,7 +2245,7 @@ func (tbl *txnTable) PrimaryKeysMayBeModified(
 		keysVector)
 }
 
-func (tbl *txnTable) updateDeleteInfo(
+func (tbl *txnTable) transferRowids(
 	ctx context.Context,
 	state *logtailreplay.PartitionState,
 	deleteObjs,
