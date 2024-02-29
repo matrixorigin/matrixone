@@ -9562,3 +9562,43 @@ func postAlterSessionStatus(
 	err = queryservice.RequestMultipleCn(ctx, nodes, qc, genRequest, handleValidResponse, handleInvalidResponse)
 	return errors.Join(err, retErr)
 }
+
+func doCreateSnapshot(ctx context.Context, ses *Session, stmt *tree.CreateSnapShot) error {
+	var err error
+	var sql string
+
+	// check create stage priv
+	err = doCheckRole(ctx, ses)
+	if err != nil {
+		return nil
+	}
+
+	bh := ses.GetBackgroundExec(ctx)
+	defer bh.Close()
+	err = bh.Exec(ctx, "begin;")
+	defer func() {
+		err = finishTxn(ctx, bh, err)
+	}()
+	if err != nil {
+		return err
+	}
+
+	// check create snapshot priv
+	// 1.only sys can create cluster level snapshot
+	// 2.only sys can create tenant level snapshot for other tenant
+	// 3.only admin can create tenant level snapshot for himself
+
+	// check snapshot exists or not
+
+	// insert record to the system table
+
+	return err
+}
+
+func doDropSnapshot(ctx context.Context, ses *Session, stmt *tree.DropSnapShot) error {
+	var err error
+
+	// check
+
+	return err
+}

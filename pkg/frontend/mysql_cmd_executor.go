@@ -1397,6 +1397,13 @@ func (mce *MysqlCmdExecutor) handleAlterStage(ctx context.Context, as *tree.Alte
 func (mce *MysqlCmdExecutor) handleDropStage(ctx context.Context, ds *tree.DropStage) error {
 	return doDropStage(ctx, mce.GetSession(), ds)
 }
+func (mce *MysqlCmdExecutor) handleCreateSnapshot(ctx context.Context, ct *tree.CreateSnapShot) error {
+	return doCreateSnapshot(ctx, mce.GetSession(), ct)
+}
+
+func (mce *MysqlCmdExecutor) handleDropSnapshot(ctx context.Context, ct *tree.DropSnapShot) error {
+	return doDropSnapshot(ctx, mce.GetSession(), ct)
+}
 
 // handleCreateAccount creates a new user-level tenant in the context of the tenant SYS
 // which has been initialized.
@@ -3530,6 +3537,16 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 	case *tree.AlterStage:
 		selfHandle = true
 		if err = mce.handleAlterStage(requestCtx, st); err != nil {
+			return
+		}
+	case *tree.CreateSnapShot:
+		selfHandle = true
+		if err = mce.handleCreateSnapshot(requestCtx, st); err != nil {
+			return
+		}
+	case *tree.DropSnapShot:
+		selfHandle = true
+		if err = mce.handleDropSnapshot(requestCtx, st); err != nil {
 			return
 		}
 	case *tree.CreateAccount:
