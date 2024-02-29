@@ -121,9 +121,9 @@ user    uuid    validation    value    varbinary    varchar    variables    vecf
 select 1 as verbose, 1 as view, 1 as visible, 1 as warnings, 1 as week, 1 as without, 1 as write, 1 as work;
 verbose    view    visible    warnings    week    without    write    work
 1    1    1    1    1    1    1    1
-select 1 as x509, 1 as year, 1 as zerofill, 1 as zonemap, 1 as comment;
-x509    year    zerofill    zonemap    comment
-1    1    1    1    1
+select 1 as x509, 1 as year, 1 as zerofill, 1 as zonemap;
+x509    year    zerofill    zonemap
+1    1    1    1
 drop database if exists test;
 create database test;
 use test;
