@@ -14,7 +14,12 @@
 
 package frontend
 
-import "context"
+import (
+	"context"
+
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+)
 
 // verifyAccountCanOperateClusterTable determines the account can operate
 // the cluster table
@@ -219,4 +224,31 @@ func privilegeCacheIsEnabled(ses *Session) (bool, error) {
 	}
 
 	return newValue, err
+}
+
+// hasMoCtrl checks whether the plan has mo_ctrl
+func hasMoCtrl(p *plan2.Plan) bool {
+	if p != nil && p.GetQuery() != nil { //select,insert select, update, delete
+		q := p.GetQuery()
+		if q.StmtType == plan.Query_INSERT || q.StmtType == plan.Query_SELECT {
+			for _, node := range q.Nodes {
+				if node != nil && node.NodeType == plan.Node_PROJECT {
+					//restrict :
+					//	select mo_ctrl ...
+					//	insert into ... select mo_ctrl ...
+					for _, proj := range node.ProjectList {
+						if plan2.HasMoCtrl(proj) {
+							return true
+						}
+					}
+				}
+			}
+		}
+	}
+	return false
+}
+
+// verifyAccountCanExecMoCtrl only sys account and moadmin role.
+func verifyAccountCanExecMoCtrl(account *TenantInfo) bool {
+	return account.IsSysTenant() && account.IsMoAdminRole()
 }

@@ -40,6 +40,11 @@ type Argument struct {
 
 	// it determines which sample action (random sample by rows / percents, sample by order and so on) to take.
 	Type int
+	// UsingBlock is used to speed up the sample process but will cause centroids skewed.
+	// If true, the sample action will randomly stop the sample process after it has sampled enough rows.
+	UsingBlock bool
+	// NeedOutputRowSeen indicates whether the sample operator needs to output the count of row seen as the last column.
+	NeedOutputRowSeen bool
 
 	Rows     int
 	Percents float64
@@ -51,10 +56,13 @@ type Argument struct {
 	GroupExprs []*plan.Expr
 
 	IBucket, NBucket int
+	buf              *batch.Batch
 
-	info     *vm.OperatorInfo
-	children []vm.Operator
-	buf      *batch.Batch
+	vm.OperatorBase
+}
+
+func (arg *Argument) GetOperatorBase() *vm.OperatorBase {
+	return &arg.OperatorBase
 }
 
 type container struct {
@@ -95,7 +103,7 @@ func init() {
 	)
 }
 
-func (arg Argument) Name() string {
+func (arg Argument) TypeName() string {
 	return argName
 }
 
@@ -109,7 +117,7 @@ func (arg *Argument) Release() {
 	}
 }
 
-func NewMergeSample(rowSampleArg *Argument) *Argument {
+func NewMergeSample(rowSampleArg *Argument, outputRowCount bool) *Argument {
 	if rowSampleArg.Type != sampleByRow {
 		panic("invalid sample type to merge")
 	}
@@ -139,8 +147,11 @@ func NewMergeSample(rowSampleArg *Argument) *Argument {
 		}
 	}
 
+	rowSampleArg.NeedOutputRowSeen = true
 	arg := NewArgument()
 	arg.Type = mergeSampleByRow
+	arg.UsingBlock = rowSampleArg.UsingBlock
+	arg.NeedOutputRowSeen = outputRowCount
 	arg.Rows = rowSampleArg.Rows
 	arg.IBucket = 0
 	arg.NBucket = 0
@@ -149,9 +160,11 @@ func NewMergeSample(rowSampleArg *Argument) *Argument {
 	return arg
 }
 
-func NewSampleByRows(rows int, sampleExprs, groupExprs []*plan.Expr) *Argument {
+func NewSampleByRows(rows int, sampleExprs, groupExprs []*plan.Expr, usingRow bool, outputRowCount bool) *Argument {
 	arg := NewArgument()
 	arg.Type = sampleByRow
+	arg.UsingBlock = !usingRow
+	arg.NeedOutputRowSeen = outputRowCount
 	arg.Rows = rows
 	arg.SampleExprs = sampleExprs
 	arg.GroupExprs = groupExprs
@@ -163,20 +176,14 @@ func NewSampleByRows(rows int, sampleExprs, groupExprs []*plan.Expr) *Argument {
 func NewSampleByPercent(percent float64, sampleExprs, groupExprs []*plan.Expr) *Argument {
 	arg := NewArgument()
 	arg.Type = sampleByPercent
+	arg.UsingBlock = false
+	arg.NeedOutputRowSeen = false
 	arg.Percents = percent
 	arg.SampleExprs = sampleExprs
 	arg.GroupExprs = groupExprs
 	arg.IBucket = 0
 	arg.NBucket = 0
 	return arg
-}
-
-func (arg *Argument) SetInfo(info *vm.OperatorInfo) {
-	arg.info = info
-}
-
-func (arg *Argument) AppendChild(child vm.Operator) {
-	arg.children = append(arg.children, child)
 }
 
 func (arg *Argument) IsMergeSampleByRow() bool {
@@ -190,6 +197,8 @@ func (arg *Argument) IsByPercent() bool {
 func (arg *Argument) SimpleDup() *Argument {
 	a := NewArgument()
 	a.Type = arg.Type
+	a.UsingBlock = arg.UsingBlock
+	a.NeedOutputRowSeen = arg.NeedOutputRowSeen
 	a.Rows = arg.Rows
 	a.Percents = arg.Percents
 	a.SampleExprs = arg.SampleExprs
@@ -231,10 +240,15 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 
 func (arg *Argument) ConvertToPipelineOperator(in *pipeline.Instruction) {
 	in.Agg = &pipeline.Group{
-		Ibucket: uint64(arg.IBucket),
-		Nbucket: uint64(arg.NBucket),
-		Exprs:   arg.GroupExprs,
+		Ibucket:  uint64(arg.IBucket),
+		Nbucket:  uint64(arg.NBucket),
+		Exprs:    arg.GroupExprs,
+		NeedEval: arg.UsingBlock,
 	}
+	if arg.NeedOutputRowSeen {
+		in.Agg.PreAllocSize = 1
+	}
+
 	in.SampleFunc = &pipeline.SampleFunc{
 		SampleColumns: arg.SampleExprs,
 		SampleType:    pipeline.SampleFunc_Rows,
@@ -252,11 +266,15 @@ func (arg *Argument) ConvertToPipelineOperator(in *pipeline.Instruction) {
 func GenerateFromPipelineOperator(opr *pipeline.Instruction) *Argument {
 	s := opr.GetSampleFunc()
 	g := opr.GetAgg()
+	needOutputRowSeen := g.PreAllocSize == 1
+
 	if s.SampleType == pipeline.SampleFunc_Rows {
-		return NewSampleByRows(int(s.SampleRows), s.SampleColumns, g.Exprs)
-	} else if s.SampleType == pipeline.SampleFunc_Percent {
-		return NewSampleByPercent(s.SamplePercent, s.SampleColumns, g.Exprs)
-	} else {
-		return NewSampleByRows(int(s.SampleRows), s.SampleColumns, g.Exprs)
+		return NewSampleByRows(int(s.SampleRows), s.SampleColumns, g.Exprs, !g.NeedEval, needOutputRowSeen)
 	}
+	if s.SampleType == pipeline.SampleFunc_Percent {
+		return NewSampleByPercent(s.SamplePercent, s.SampleColumns, g.Exprs)
+	}
+	arg := NewSampleByRows(int(s.SampleRows), s.SampleColumns, g.Exprs, !g.NeedEval, needOutputRowSeen)
+	arg.Type = mergeSampleByRow
+	return arg
 }

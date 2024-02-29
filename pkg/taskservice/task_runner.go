@@ -285,6 +285,17 @@ func (r *taskRunner) RegisterExecutor(code task.TaskCode, executor TaskExecutor)
 	}
 }
 
+func (r *taskRunner) GetExecutor(code task.TaskCode) TaskExecutor {
+	r.executors.RLock()
+	defer r.executors.RUnlock()
+
+	if executor, ok := r.executors.m[code]; ok {
+		return executor
+	}
+
+	return nil
+}
+
 func (r *taskRunner) Attach(ctx context.Context, taskID uint64, routine ActiveRoutine) error {
 	r.daemonTasks.Lock()
 	defer r.daemonTasks.Unlock()

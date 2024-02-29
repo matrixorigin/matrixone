@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -45,12 +46,21 @@ type PartitionReader struct {
 
 var _ engine.Reader = new(PartitionReader)
 
+func (p *PartitionReader) SetFilterZM(objectio.ZoneMap) {
+}
+
+func (p *PartitionReader) GetOrderBy() []*plan.OrderBySpec {
+	return nil
+}
+
+func (p *PartitionReader) SetOrderBy([]*plan.OrderBySpec) {
+}
+
 func (p *PartitionReader) Close() error {
 	//p.withFilterMixin.reset()
 	p.inserts = nil
 	p.deletes = nil
-	p.iter.Close()
-	return nil
+	return p.iter.Close()
 }
 
 func (p *PartitionReader) prepare() error {
@@ -62,7 +72,7 @@ func (p *PartitionReader) prepare() error {
 		inserts = make([]*batch.Batch, 0, len(p.table.writes))
 		deletes = make(map[types.Rowid]uint8)
 		for _, entry := range p.table.writes {
-			if entry.typ == INSERT {
+			if entry.typ == INSERT || entry.typ == INSERT_TXN {
 				if entry.bat == nil || entry.bat.IsEmpty() {
 					continue
 				}
@@ -94,7 +104,9 @@ func (p *PartitionReader) prepare() error {
 		}
 		//deletes maybe comes from PartitionState.rows, PartitionReader need to skip them;
 		// so, here only load deletes which don't belong to PartitionState.blks.
-		p.table.LoadDeletesForMemBlocksIn(p.table._partState, deletes)
+		if err := p.table.LoadDeletesForMemBlocksIn(p.table._partState, deletes); err != nil {
+			return err
+		}
 		p.inserts = inserts
 		p.deletes = deletes
 		p.prepared = true
@@ -103,89 +115,93 @@ func (p *PartitionReader) prepare() error {
 }
 
 func (p *PartitionReader) Read(
-	ctx context.Context,
+	_ context.Context,
 	colNames []string,
-	expr *plan.Expr,
+	_ *plan.Expr,
 	mp *mpool.MPool,
-	vp engine.VectorPool) (*batch.Batch, error) {
+	pool engine.VectorPool) (result *batch.Batch, err error) {
 	if p == nil {
-		return nil, nil
+		return
 	}
-	//prepare data for read.
-	if err := p.prepare(); err != nil {
+	// prepare the data for read.
+	if err = p.prepare(); err != nil {
 		return nil, err
 	}
-	//p.tryUpdateColumns(colNames)
-	//read batch resides in memory from txn.writes.
+
+	defer func() {
+		if err != nil && result != nil {
+			if pool == nil {
+				result.Clean(mp)
+			} else {
+				pool.PutBatch(result)
+			}
+		}
+	}()
+	result = batch.NewWithSize(len(colNames))
+	result.SetAttributes(colNames)
+	for i, name := range colNames {
+		if pool == nil {
+			result.Vecs[i] = vector.NewVec(p.typsMap[name])
+		} else {
+			result.Vecs[i] = pool.GetVector(p.typsMap[name])
+		}
+	}
+
+	// read batch resided in the memory from txn.writes.
 	if len(p.inserts) > 0 {
 		bat := p.inserts[0].GetSubBatch(colNames)
-		rowIds := vector.MustFixedCol[types.Rowid](p.inserts[0].Vecs[0])
+
+		rowIDs := vector.MustFixedCol[types.Rowid](p.inserts[0].Vecs[0])
 		p.inserts = p.inserts[1:]
-		b := batch.NewWithSize(len(colNames))
-		b.SetAttributes(colNames)
-		for i, name := range colNames {
-			if vp == nil {
-				b.Vecs[i] = vector.NewVec(p.typsMap[name])
-			} else {
-				b.Vecs[i] = vp.GetVector(p.typsMap[name])
-			}
-		}
-		for i, vec := range b.Vecs {
-			srcVec := bat.Vecs[i]
+
+		for i, vec := range result.Vecs {
 			uf := vector.GetUnionOneFunction(*vec.GetType(), mp)
-			for j := 0; j < bat.RowCount(); j++ {
-				if _, ok := p.deletes[rowIds[j]]; ok {
+
+			for j, k := int64(0), int64(bat.RowCount()); j < k; j++ {
+				if _, ok := p.deletes[rowIDs[j]]; ok {
 					continue
 				}
-				if err := uf(vec, srcVec, int64(j)); err != nil {
-					return nil, err
+				if err = uf(vec, bat.Vecs[i], j); err != nil {
+					return
 				}
 			}
 		}
+
 		logutil.Debugf("read %v with %v", colNames, p.seqnumMp)
 		//		CORNER CASE:
 		//		if some rowIds[j] is in p.deletes above, then some rows has been filtered.
 		//		the bat.RowCount() is not always the right value for the result batch b.
-		b.SetRowCount(b.Vecs[0].Length())
+		result.SetRowCount(result.Vecs[0].Length())
 		if logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
 			logutil.Debug(testutil.OperatorCatchBatch(
 				"partition reader[workspace:memory]",
-				b))
+				result))
 		}
-		return b, nil
+		return result, err
 	}
 
-	//read batch from partitionState.rows.
 	{
 		const maxRows = 8192
-		b := batch.NewWithSize(len(colNames))
-		b.SetAttributes(colNames)
-		for i, name := range colNames {
-			if vp == nil {
-				b.Vecs[i] = vector.NewVec(p.typsMap[name])
-			} else {
-				b.Vecs[i] = vp.GetVector(p.typsMap[name])
-			}
-		}
 		rows := 0
-		appendFuncs := make([]func(*vector.Vector, *vector.Vector, int64) error, len(b.Attrs))
-		for i, name := range b.Attrs {
+		appendFuncs := make([]func(*vector.Vector, *vector.Vector, int64) error, len(result.Attrs))
+		for i, name := range result.Attrs {
 			if name == catalog.Row_ID {
 				appendFuncs[i] = vector.GetUnionOneFunction(types.T_Rowid.ToType(), mp)
 			} else {
 				appendFuncs[i] = vector.GetUnionOneFunction(p.typsMap[name], mp)
 			}
 		}
-		//read rows from partitionState.rows.
+		// read rows from partitionState.rows.
 		for p.iter.Next() {
 			entry := p.iter.Entry()
 			if _, ok := p.deletes[entry.RowID]; ok {
 				continue
 			}
-			for i, name := range b.Attrs {
+
+			for i, name := range result.Attrs {
 				if name == catalog.Row_ID {
-					if err := vector.AppendFixed(
-						b.Vecs[i],
+					if err = vector.AppendFixed(
+						result.Vecs[i],
 						entry.RowID,
 						false,
 						mp); err != nil {
@@ -193,23 +209,23 @@ func (p *PartitionReader) Read(
 					}
 				} else {
 					idx := 2 /*rowid and commits*/ + p.seqnumMp[name]
-					if int(idx) >= len(entry.Batch.Vecs) /*add column*/ ||
+					if idx >= len(entry.Batch.Vecs) /*add column*/ ||
 						entry.Batch.Attrs[idx] == "" /*drop column*/ {
-						if err := vector.AppendAny(
-							b.Vecs[i],
+						err = vector.AppendAny(
+							result.Vecs[i],
 							nil,
 							true,
-							mp); err != nil {
-							return nil, err
-						}
+							mp)
 					} else {
-						appendFuncs[i](
-							b.Vecs[i],
+						err = appendFuncs[i](
+							result.Vecs[i],
 							entry.Batch.Vecs[2 /*rowid and commits*/ +p.seqnumMp[name]],
 							entry.Offset,
 						)
 					}
-
+					if err != nil {
+						return nil, err
+					}
 				}
 			}
 			rows++
@@ -217,21 +233,22 @@ func (p *PartitionReader) Read(
 				break
 			}
 		}
+
 		if rows == 0 {
-			if vp == nil {
-				b.Clean(mp)
+			if pool == nil {
+				result.Clean(mp)
 			} else {
-				vp.PutBatch(b)
+				pool.PutBatch(result)
 			}
 			return nil, nil
 		}
-		b.SetRowCount(rows)
 
+		result.SetRowCount(rows)
 		if logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
 			logutil.Debug(testutil.OperatorCatchBatch(
 				"partition reader[snapshot: partitionState.rows]",
-				b))
+				result))
 		}
-		return b, nil
+		return result, nil
 	}
 }

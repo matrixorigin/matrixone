@@ -33,7 +33,7 @@ func newMpoolBased[T ReusableObject](
 	opts.adjust()
 	var v T
 	c := newChecker[T](opts.enableChecker)
-	mp, err := mpool.NewMPool(fmt.Sprintf("reuse-%s", v.Name()), opts.memCapacity, 0)
+	mp, err := mpool.NewMPool(fmt.Sprintf("reuse-%s", v.TypeName()), opts.memCapacity, 0)
 	if err != nil {
 		panic(err)
 	}

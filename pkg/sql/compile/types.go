@@ -76,12 +76,14 @@ type Source struct {
 	Attributes             []string
 	R                      engine.Reader
 	Bat                    *batch.Batch
-	Expr                   *plan.Expr
+	FilterExpr             *plan.Expr //todo: change this to []*plan.Expr
+	node                   *plan.Node
 	TableDef               *plan.TableDef
 	Timestamp              timestamp.Timestamp
 	AccountId              *plan.PubInfo
 
 	RuntimeFilterSpecs []*plan.RuntimeFilterSpec
+	OrderBy            []*plan.OrderBySpec // for ordered scan
 }
 
 // Col is the information of attribute
@@ -196,7 +198,7 @@ func (a *anaylze) Nodes() []*process.AnalyzeInfo {
 	return a.analInfos
 }
 
-func (a anaylze) Name() string {
+func (a anaylze) TypeName() string {
 	return "compile.anaylze"
 }
 
@@ -224,10 +226,10 @@ type Compile struct {
 	info plan2.ExecInfo
 
 	u any
-	//fill is a result writer runs a callback function.
-	//fill will be called when result data is ready.
+	// fill is a result writer runs a callback function.
+	// fill will be called when result data is ready.
 	fill func(any, *batch.Batch) error
-	//affectRows stores the number of rows affected while insert / update / delete
+	// affectRows stores the number of rows affected while insert / update / delete
 	affectRows *atomic.Uint64
 	// cn address
 	addr string
@@ -246,6 +248,8 @@ type Compile struct {
 	ctx context.Context
 	// proc stores the execution context.
 	proc *process.Process
+
+	MessageBoard *process.MessageBoard
 
 	cnList engine.Nodes
 	// ast
@@ -274,6 +278,8 @@ type Compile struct {
 	needLockMeta bool
 	metaTables   map[string]struct{}
 	disableRetry bool
+
+	lastAllocID int32
 }
 
 // runtimeFilterSender is in hashbuild.Argument and fuzzyFilter.Arguement

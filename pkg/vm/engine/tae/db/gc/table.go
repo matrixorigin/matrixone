@@ -115,7 +115,7 @@ func (t *GCTable) dropTable(id common.ID) {
 	t.dbs[id.DbID] = db
 }
 
-func (t *GCTable) UpdateTable(data *logtail.CheckpointData) {
+func (t *GCTable) UpdateTable2(data *logtail.CheckpointData) {
 	ins, insTxn, del, delTxn := data.GetBlkBatchs()
 	for i := 0; i < ins.Length(); i++ {
 		dbid := insTxn.GetVectorByName(catalog.SnapshotAttr_DBID).Get(i).(uint64)
@@ -143,6 +143,47 @@ func (t *GCTable) UpdateTable(data *logtail.CheckpointData) {
 		t.deleteBlock(id, metaLoc.Name().String())
 	}
 	_, _, _, del, delTxn = data.GetTblBatchs()
+	for i := 0; i < del.Length(); i++ {
+		dbid := delTxn.GetVectorByName(catalog.SnapshotAttr_DBID).Get(i).(uint64)
+		tid := delTxn.GetVectorByName(catalog.SnapshotAttr_TID).Get(i).(uint64)
+		id := common.ID{
+			DbID:    dbid,
+			TableID: tid,
+		}
+		t.dropTable(id)
+	}
+
+	_, _, del, delTxn = data.GetDBBatchs()
+	for i := 0; i < del.Length(); i++ {
+		dbid := delTxn.GetVectorByName(catalog.SnapshotAttr_DBID).Get(i).(uint64)
+		id := common.ID{
+			DbID: dbid,
+		}
+		t.dropDB(id)
+	}
+}
+
+func (t *GCTable) UpdateTable(data *logtail.CheckpointData) {
+	ins := data.GetObjectBatchs()
+	for i := 0; i < ins.Length(); i++ {
+		var objectStats objectio.ObjectStats
+		buf := ins.GetVectorByName(catalog.ObjectAttr_ObjectStats).Get(i).([]byte)
+		objectStats.UnMarshal(buf)
+		dbid := ins.GetVectorByName(catalog.SnapshotAttr_DBID).Get(i).(uint64)
+		tid := ins.GetVectorByName(catalog.SnapshotAttr_TID).Get(i).(uint64)
+		BlockID := objectio.BuildObjectBlockid(objectStats.ObjectName(), 0)
+		deleteAt := ins.GetVectorByName(catalog.EntryNode_DeleteAt).Get(i).(types.TS)
+		id := common.ID{
+			DbID:    dbid,
+			TableID: tid,
+			BlockID: *BlockID,
+		}
+		t.addBlock(id, objectStats.ObjectName().String())
+		if !deleteAt.IsEmpty() {
+			t.deleteBlock(id, objectStats.ObjectName().String())
+		}
+	}
+	_, _, _, del, delTxn := data.GetTblBatchs()
 	for i := 0; i < del.Length(); i++ {
 		dbid := delTxn.GetVectorByName(catalog.SnapshotAttr_DBID).Get(i).(uint64)
 		tid := delTxn.GetVectorByName(catalog.SnapshotAttr_TID).Get(i).(uint64)
@@ -293,17 +334,20 @@ func (t *GCTable) replayData(ctx context.Context,
 	for i := range attrs {
 		idxes[i] = uint16(i)
 	}
-	mobat, err := reader.LoadColumns(ctx, idxes, nil, bs[typ].GetID(), common.DefaultAllocator)
+	mobat, release, err := reader.LoadColumns(ctx, idxes, nil, bs[typ].GetID(), common.DefaultAllocator)
 	if err != nil {
 		return err
 	}
+	defer release()
 	for i := range attrs {
 		pkgVec := mobat.Vecs[i]
 		var vec containers.Vector
 		if pkgVec.Length() == 0 {
 			vec = containers.MakeVector(types[i], common.CheckpointAllocator)
 		} else {
-			vec = containers.ToTNVector(pkgVec, common.CheckpointAllocator)
+			srcVec := containers.ToTNVector(pkgVec, common.CheckpointAllocator)
+			defer srcVec.Close()
+			vec = srcVec.CloneWindow(0, pkgVec.Length(), common.CheckpointAllocator)
 		}
 		bats[typ].AddVector(attrs[i], vec)
 	}

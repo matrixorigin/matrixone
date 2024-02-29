@@ -80,7 +80,6 @@ func TestSize(t *testing.T) {
 }
 
 func TestGetUnionOneFunction(t *testing.T) {
-
 	{ // test const vector
 		mp := mpool.MustNewZero()
 		v := NewVec(types.T_int8.ToType())
@@ -133,7 +132,23 @@ func TestGetUnionOneFunction(t *testing.T) {
 		w.Free(mp)
 		v.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
+	}
+	{ // test bit vector
+		mp := mpool.MustNewZero()
+		v := NewVec(types.New(types.T_bit, 10, 0))
+		w := NewVec(types.New(types.T_bit, 10, 0))
+		err := AppendFixedList[uint64](w, []uint64{1, 2, 3, 4}, nil, mp)
+		require.NoError(t, err)
+		uf := GetUnionOneFunction(*w.GetType(), mp)
+		err = uf(v, w, 0)
+		require.NoError(t, err)
+		require.Equal(t, 1, v.Length())
+		vs := MustFixedCol[uint64](v)
+		require.Equal(t, uint64(1), vs[0])
 
+		w.Free(mp)
+		v.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
 	}
 }
 
@@ -530,6 +545,16 @@ func TestShrink(t *testing.T) {
 		v.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
+	{ // bit
+		v := NewVec(types.T_bit.ToType())
+		err := AppendFixedList(v, []uint64{1, 2, 3, 4}, nil, mp)
+		require.NoError(t, err)
+		v.Shrink([]int64{1, 2}, false)
+		vs := MustFixedCol[uint64](v)
+		require.Equal(t, []uint64{2, 3}, vs)
+		v.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+	}
 }
 
 func TestShuffle(t *testing.T) {
@@ -798,6 +823,18 @@ func TestShuffle(t *testing.T) {
 		v.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
 	}
+	{ // bit
+		v := NewVec(types.T_bit.ToType())
+		err := AppendFixedList(v, []uint64{1, 2, 3, 4}, nil, mp)
+		require.NoError(t, err)
+		err = v.Shuffle([]int64{1, 2}, mp)
+		require.NoError(t, err)
+		vs := MustFixedCol[uint64](v)
+		require.Equal(t, []uint64{2, 3}, vs)
+		require.Equal(t, "[2 3]", v.String())
+		v.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+	}
 }
 
 func TestCopy(t *testing.T) {
@@ -810,6 +847,20 @@ func TestCopy(t *testing.T) {
 		err := v.Copy(w, 2, 0, mp)
 		require.NoError(t, err)
 		require.Equal(t, MustFixedCol[int8](v), MustFixedCol[int8](w))
+		v.Free(mp)
+		w.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+	}
+	{ // bit
+		v := NewVec(types.T_bit.ToType())
+		err := AppendFixedList(v, []uint64{0, 0, 1, 0}, nil, mp)
+		require.NoError(t, err)
+		w := NewVec(types.T_bit.ToType())
+		err = AppendFixedList(w, []uint64{0, 0, 0, 0}, nil, mp)
+		require.NoError(t, err)
+		err = v.Copy(w, 2, 0, mp)
+		require.NoError(t, err)
+		require.Equal(t, MustFixedCol[uint64](v), MustFixedCol[uint64](w))
 		v.Free(mp)
 		w.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())
@@ -872,7 +923,7 @@ func TestCloneWindow(t *testing.T) {
 	require.True(t, v2.IsConstNull())
 	require.Equal(t, 2, v2.Length())
 
-	v3 := NewConstFixed[int32](types.T_int32.ToType(), 10, 20, mp)
+	v3, _ := NewConstFixed[int32](types.T_int32.ToType(), 10, 20, mp)
 	defer v3.Free(mp)
 	v4, err := v3.CloneWindow(3, 5, mp)
 	defer v4.Free(mp)
@@ -1488,6 +1539,20 @@ func TestSetFunction(t *testing.T) {
 		require.NoError(t, err)
 		ws := MustFixedCol[bool](w)
 		require.Equal(t, []bool{false}, ws)
+		v.Free(mp)
+		w.Free(mp)
+		require.Equal(t, int64(0), mp.CurrNB())
+	}
+	{ // bit
+		v := NewVec(types.T_bit.ToType())
+		w := NewConstNull(types.T_uint64.ToType(), 0, mp)
+		err := AppendFixedList(v, []uint64{1, 2, 3, 4}, nil, mp)
+		require.NoError(t, err)
+		sf := GetConstSetFunction(types.T_uint64.ToType(), mp)
+		err = sf(w, v, 1, 1)
+		require.NoError(t, err)
+		ws := MustFixedCol[uint64](w)
+		require.Equal(t, []uint64{2}, ws)
 		v.Free(mp)
 		w.Free(mp)
 		require.Equal(t, int64(0), mp.CurrNB())

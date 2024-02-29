@@ -2,8 +2,8 @@ drop table if exists t1;
 CREATE TABLE t1(a INTEGER, b CHAR(10), c date, d decimal(7,2), UNIQUE KEY(a, b));
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    YES    UNI    null        
-b    CHAR(10)    YES    UNI    null        
+a    INT(32)    YES    MUL    null        
+b    CHAR(10)    YES        null        
 c    DATE(0)    YES        null        
 d    DECIMAL64(7)    YES        null        
 insert into t1 values(1, 'ab', '1980-12-17', 800);
@@ -42,8 +42,8 @@ a    b    c    d
 alter table t1 drop primary key;
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    NO    UNI    null        
-b    CHAR(10)    NO    UNI    null        
+a    INT(32)    NO    PRI    null        
+b    CHAR(10)    NO    PRI    null        
 c    DATE(0)    YES        null        
 d    DECIMAL64(7)    YES        null        
 select * from t1;
@@ -55,8 +55,8 @@ alter table t1 drop primary key;
 Can't DROP 'PRIMARY'; check that column/key exists
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    NO    UNI    null        
-b    CHAR(10)    NO    UNI    null        
+a    INT(32)    NO    PRI    null        
+b    CHAR(10)    NO    PRI    null        
 c    DATE(0)    YES        null        
 d    DECIMAL64(7)    YES        null        
 select * from t1;
@@ -68,7 +68,7 @@ alter table t1 add constraint pk primary key pk1(a);
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    NO    PRI    null        
-b    CHAR(10)    NO    UNI    null        
+b    CHAR(10)    NO        null        
 c    DATE(0)    YES        null        
 d    DECIMAL64(7)    YES        null        
 select * from t1;

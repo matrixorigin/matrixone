@@ -109,11 +109,13 @@ func (zm ZM) innerString(f func([]byte) string) string {
 
 func (zm ZM) StringForCompose() string {
 	return zm.innerString(func(b []byte) string {
-		s := string(b)
-		if r, _, e := types.DecodeTuple(b); e == nil {
-			s = r.ErrString(nil)
+		if len(b) >= 30 {
+			return hex.EncodeToString(b)
 		}
-		return s
+		if r, _, _, e := types.DecodeTuple(b); e == nil {
+			return r.ErrString(nil)
+		}
+		return string(b)
 	})
 }
 
@@ -131,7 +133,7 @@ func (zm ZM) StringForHex() string {
 
 func (zm ZM) supportSum() bool {
 	t := zm.GetType()
-	return t.IsInteger() || t.IsFloat() || t == types.T_decimal64
+	return t.IsInteger() || t.IsFloat() || t == types.T_decimal64 || t == types.T_bit
 }
 
 func (zm ZM) Clone() ZM {
@@ -219,6 +221,8 @@ func (zm ZM) decodeSum() any {
 		return types.DecodeFloat64(zm.GetSumBuf())
 	case types.T_decimal64:
 		return types.DecodeDecimal64(zm.GetSumBuf())
+	case types.T_bit:
+		return types.DecodeUint64(zm.GetSumBuf())
 	}
 	return nil
 }
@@ -353,6 +357,8 @@ func (zm ZM) getValue(buf []byte) any {
 	switch types.T(zm[63]) {
 	case types.T_bool:
 		return types.DecodeFixed[bool](buf)
+	case types.T_bit:
+		return types.DecodeFixed[uint64](buf)
 	case types.T_int8:
 		return types.DecodeFixed[int8](buf)
 	case types.T_int16:
@@ -449,6 +455,15 @@ func (zm ZM) compareCheck(o ZM) (ok bool) {
 		return false
 	}
 	return zm.GetType() == o.GetType() || (zm.IsString() && o.IsString())
+}
+
+// caller need to do compareCheck
+func (zm ZM) CompareMax(o ZM) int {
+	return compute.Compare(zm.GetMaxBuf(), o.GetMaxBuf(), zm.GetType(), zm.GetScale(), o.GetScale())
+}
+
+func (zm ZM) CompareMin(o ZM) int {
+	return compute.Compare(zm.GetMinBuf(), o.GetMinBuf(), zm.GetType(), zm.GetScale(), o.GetScale())
 }
 
 func (zm ZM) AnyGT(o ZM) (res bool, ok bool) {
@@ -606,6 +621,15 @@ func (zm ZM) AnyIn(vec *vector.Vector) bool {
 		})
 
 		return lowerBound < len(col) && (maxVal || !col[lowerBound])
+
+	case types.T_bit:
+		col := vector.MustFixedCol[uint64](vec)
+		minVal, maxVal := types.DecodeUint64(zm.GetMinBuf()), types.DecodeUint64(zm.GetMaxBuf())
+		lowerBound := sort.Search(len(col), func(i int) bool {
+			return minVal <= col[i]
+		})
+
+		return lowerBound < len(col) && maxVal >= col[lowerBound]
 
 	case types.T_int8:
 		col := vector.MustFixedCol[int8](vec)
@@ -873,6 +897,25 @@ func ZMMulti(v1, v2, res ZM) ZM {
 func applyArithmetic(v1, v2, res ZM, op byte, scale1, scale2 int32) (ok bool) {
 	ok = true
 	switch v1.GetType() {
+	case types.T_bit:
+		var minv, maxv uint64
+		switch op {
+		case '+':
+			maxv = types.DecodeUint64(v1.GetMaxBuf()) + types.DecodeUint64(v2.GetMaxBuf())
+			minv = types.DecodeUint64(v1.GetMinBuf()) + types.DecodeUint64(v2.GetMinBuf())
+		case '-':
+			maxv = types.DecodeUint64(v1.GetMaxBuf()) - types.DecodeUint64(v2.GetMinBuf())
+			minv = types.DecodeUint64(v1.GetMinBuf()) - types.DecodeUint64(v2.GetMaxBuf())
+		case '*':
+			v1_0, v1_1 := types.DecodeUint64(v1.GetMinBuf()), types.DecodeUint64(v1.GetMaxBuf())
+			v2_0, v2_1 := types.DecodeUint64(v2.GetMinBuf()), types.DecodeUint64(v2.GetMaxBuf())
+			minv, maxv = compute.GetOrderedMinAndMax(v1_0*v2_0, v1_0*v2_1, v1_1*v2_0, v1_1*v2_1)
+		default:
+			ok = false
+			return
+		}
+		UpdateZM(res, types.EncodeUint64(&minv))
+		UpdateZM(res, types.EncodeUint64(&maxv))
 	case types.T_int8:
 		var minv, maxv int8
 		switch op {

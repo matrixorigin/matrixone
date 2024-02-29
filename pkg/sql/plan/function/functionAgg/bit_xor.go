@@ -30,12 +30,15 @@ var (
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_float32, types.T_float64,
 		types.T_binary, types.T_varbinary,
+		types.T_bit,
 	}
 	AggBitXorReturnType = AggBitAndReturnType
 )
 
 func NewAggBitXor(overloadID int64, dist bool, inputTypes []types.Type, outputType types.Type, _ any) (agg.Agg[any], error) {
 	switch inputTypes[0].Oid {
+	case types.T_bit:
+		return newGenericBitXor[uint64](overloadID, inputTypes[0], outputType, dist)
 	case types.T_uint8:
 		return newGenericBitXor[uint8](overloadID, inputTypes[0], outputType, dist)
 	case types.T_uint16:

@@ -15,11 +15,9 @@
 package colexec
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"math"
-	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -31,7 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
-	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -339,7 +336,7 @@ type ParamExpressionExecutor struct {
 }
 
 func (expr *ParamExpressionExecutor) Eval(proc *process.Process, batches []*batch.Batch) (*vector.Vector, error) {
-	val, err := proc.GetPrepareParamsAt(int(expr.pos))
+	val, err := proc.GetPrepareParamsAt(expr.pos)
 	if err != nil {
 		return nil, err
 	}
@@ -352,14 +349,11 @@ func (expr *ParamExpressionExecutor) Eval(proc *process.Process, batches []*batc
 	}
 
 	if expr.vec == nil {
-		expr.vec = vector.NewConstBytes(expr.typ, val, 1, proc.Mp())
+		expr.vec, err = vector.NewConstBytes(expr.typ, val, 1, proc.Mp())
 	} else {
-		err := vector.SetConstBytes(expr.vec, val, 1, proc.GetMPool())
-		if err != nil {
-			return nil, err
-		}
+		err = vector.SetConstBytes(expr.vec, val, 1, proc.GetMPool())
 	}
-	return expr.vec, nil
+	return expr.vec, err
 }
 
 func (expr *ParamExpressionExecutor) EvalWithoutResultReusing(proc *process.Process, batches []*batch.Batch) (*vector.Vector, error) {
@@ -600,86 +594,84 @@ func (expr *FixedVectorExpressionExecutor) IsColumnExpr() bool {
 	return false
 }
 
-func generateConstExpressionExecutor(proc *process.Process, typ types.Type, con *plan.Literal) (*vector.Vector, error) {
-	var vec *vector.Vector
-
+func generateConstExpressionExecutor(proc *process.Process, typ types.Type, con *plan.Literal) (vec *vector.Vector, err error) {
 	if con.GetIsnull() {
 		vec = vector.NewConstNull(typ, 1, proc.Mp())
 	} else {
 		switch con.GetValue().(type) {
 		case *plan.Literal_Bval:
-			vec = vector.NewConstFixed(constBType, con.GetBval(), 1, proc.Mp())
+			vec, err = vector.NewConstFixed(constBType, con.GetBval(), 1, proc.Mp())
 		case *plan.Literal_I8Val:
-			vec = vector.NewConstFixed(constI8Type, int8(con.GetI8Val()), 1, proc.Mp())
+			vec, err = vector.NewConstFixed(constI8Type, int8(con.GetI8Val()), 1, proc.Mp())
 		case *plan.Literal_I16Val:
-			vec = vector.NewConstFixed(constI16Type, int16(con.GetI16Val()), 1, proc.Mp())
+			vec, err = vector.NewConstFixed(constI16Type, int16(con.GetI16Val()), 1, proc.Mp())
 		case *plan.Literal_I32Val:
-			vec = vector.NewConstFixed(constI32Type, con.GetI32Val(), 1, proc.Mp())
+			vec, err = vector.NewConstFixed(constI32Type, con.GetI32Val(), 1, proc.Mp())
 		case *plan.Literal_I64Val:
-			vec = vector.NewConstFixed(constI64Type, con.GetI64Val(), 1, proc.Mp())
+			vec, err = vector.NewConstFixed(constI64Type, con.GetI64Val(), 1, proc.Mp())
 		case *plan.Literal_U8Val:
-			vec = vector.NewConstFixed(constU8Type, uint8(con.GetU8Val()), 1, proc.Mp())
+			vec, err = vector.NewConstFixed(constU8Type, uint8(con.GetU8Val()), 1, proc.Mp())
 		case *plan.Literal_U16Val:
-			vec = vector.NewConstFixed(constU16Type, uint16(con.GetU16Val()), 1, proc.Mp())
+			vec, err = vector.NewConstFixed(constU16Type, uint16(con.GetU16Val()), 1, proc.Mp())
 		case *plan.Literal_U32Val:
-			vec = vector.NewConstFixed(constU32Type, con.GetU32Val(), 1, proc.Mp())
+			vec, err = vector.NewConstFixed(constU32Type, con.GetU32Val(), 1, proc.Mp())
 		case *plan.Literal_U64Val:
-			vec = vector.NewConstFixed(constU64Type, con.GetU64Val(), 1, proc.Mp())
+			vec, err = vector.NewConstFixed(constU64Type, con.GetU64Val(), 1, proc.Mp())
 		case *plan.Literal_Fval:
-			vec = vector.NewConstFixed(constFType, con.GetFval(), 1, proc.Mp())
+			vec, err = vector.NewConstFixed(constFType, con.GetFval(), 1, proc.Mp())
 		case *plan.Literal_Dval:
-			vec = vector.NewConstFixed(constDType, con.GetDval(), 1, proc.Mp())
+			vec, err = vector.NewConstFixed(constDType, con.GetDval(), 1, proc.Mp())
 		case *plan.Literal_Dateval:
-			vec = vector.NewConstFixed(constDateType, types.Date(con.GetDateval()), 1, proc.Mp())
+			vec, err = vector.NewConstFixed(constDateType, types.Date(con.GetDateval()), 1, proc.Mp())
 		case *plan.Literal_Timeval:
-			vec = vector.NewConstFixed(typ, types.Time(con.GetTimeval()), 1, proc.Mp())
+			vec, err = vector.NewConstFixed(typ, types.Time(con.GetTimeval()), 1, proc.Mp())
 		case *plan.Literal_Datetimeval:
-			vec = vector.NewConstFixed(typ, types.Datetime(con.GetDatetimeval()), 1, proc.Mp())
+			vec, err = vector.NewConstFixed(typ, types.Datetime(con.GetDatetimeval()), 1, proc.Mp())
 		case *plan.Literal_Decimal64Val:
 			cd64 := con.GetDecimal64Val()
 			d64 := types.Decimal64(cd64.A)
-			vec = vector.NewConstFixed(typ, d64, 1, proc.Mp())
+			vec, err = vector.NewConstFixed(typ, d64, 1, proc.Mp())
 		case *plan.Literal_Decimal128Val:
 			cd128 := con.GetDecimal128Val()
 			d128 := types.Decimal128{B0_63: uint64(cd128.A), B64_127: uint64(cd128.B)}
-			vec = vector.NewConstFixed(typ, d128, 1, proc.Mp())
+			vec, err = vector.NewConstFixed(typ, d128, 1, proc.Mp())
 		case *plan.Literal_Timestampval:
 			scale := typ.Scale
 			if scale < 0 || scale > 6 {
 				return nil, moerr.NewInternalError(proc.Ctx, "invalid timestamp scale")
 			}
-			vec = vector.NewConstFixed(constTimestampTypes[scale], types.Timestamp(con.GetTimestampval()), 1, proc.Mp())
+			vec, err = vector.NewConstFixed(constTimestampTypes[scale], types.Timestamp(con.GetTimestampval()), 1, proc.Mp())
 		case *plan.Literal_Sval:
 			sval := con.GetSval()
 			// Distinguish binary with non-binary string.
 			if typ.Oid == types.T_binary || typ.Oid == types.T_varbinary || typ.Oid == types.T_blob {
-				vec = vector.NewConstBytes(constBinType, []byte(sval), 1, proc.Mp())
+				vec, err = vector.NewConstBytes(constBinType, []byte(sval), 1, proc.Mp())
 			} else if typ.Oid == types.T_array_float32 {
-				array, err := types.StringToArray[float32](sval)
-				if err != nil {
-					return nil, err
+				array, err1 := types.StringToArray[float32](sval)
+				if err1 != nil {
+					return nil, err1
 				}
-				vec = vector.NewConstArray(typ, array, 1, proc.Mp())
+				vec, err = vector.NewConstArray(typ, array, 1, proc.Mp())
 			} else if typ.Oid == types.T_array_float64 {
-				array, err := types.StringToArray[float64](sval)
-				if err != nil {
-					return nil, err
+				array, err1 := types.StringToArray[float64](sval)
+				if err1 != nil {
+					return nil, err1
 				}
-				vec = vector.NewConstArray(typ, array, 1, proc.Mp())
+				vec, err = vector.NewConstArray(typ, array, 1, proc.Mp())
 			} else {
-				vec = vector.NewConstBytes(constSType, []byte(sval), 1, proc.Mp())
+				vec, err = vector.NewConstBytes(constSType, []byte(sval), 1, proc.Mp())
 			}
 		case *plan.Literal_Defaultval:
 			defaultVal := con.GetDefaultval()
-			vec = vector.NewConstFixed(constBType, defaultVal, 1, proc.Mp())
+			vec, err = vector.NewConstFixed(constBType, defaultVal, 1, proc.Mp())
 		case *plan.Literal_EnumVal:
-			vec = vector.NewConstFixed(constEnumType, uint16(con.GetU16Val()), 1, proc.Mp())
+			vec, err = vector.NewConstFixed(constEnumType, uint16(con.GetU16Val()), 1, proc.Mp())
 		default:
 			return nil, moerr.NewNYI(proc.Ctx, fmt.Sprintf("const expression %v", con.GetValue()))
 		}
 		vec.SetIsBin(con.IsBin)
 	}
-	return vec, nil
+	return vec, err
 }
 
 func GenerateConstListExpressionExecutor(proc *process.Process, exprs []*plan.Expr) (*vector.Vector, error) {
@@ -884,8 +876,9 @@ func getConstZM(
 	proc *process.Process,
 ) (zm index.ZM, err error) {
 	c := expr.Expr.(*plan.Expr_Lit)
+	typ := expr.Typ
 	if c.Lit.GetIsnull() {
-		zm = index.NewZM(types.T(expr.Typ.Id), expr.Typ.Scale)
+		zm = index.NewZM(types.T(typ.Id), typ.Scale)
 		return
 	}
 	switch c.Lit.GetValue().(type) {
@@ -947,17 +940,17 @@ func getConstZM(
 		index.UpdateZM(zm, types.EncodeInt64(&v))
 	case *plan.Literal_Decimal64Val:
 		v := c.Lit.GetDecimal64Val()
-		zm = index.NewZM(types.T_decimal64, expr.Typ.Scale)
+		zm = index.NewZM(types.T_decimal64, typ.Scale)
 		d64 := types.Decimal64(v.A)
 		index.UpdateZM(zm, types.EncodeDecimal64(&d64))
 	case *plan.Literal_Decimal128Val:
 		v := c.Lit.GetDecimal128Val()
-		zm = index.NewZM(types.T_decimal128, expr.Typ.Scale)
+		zm = index.NewZM(types.T_decimal128, typ.Scale)
 		d128 := types.Decimal128{B0_63: uint64(v.A), B64_127: uint64(v.B)}
 		index.UpdateZM(zm, types.EncodeDecimal128(&d128))
 	case *plan.Literal_Timestampval:
 		v := c.Lit.GetTimestampval()
-		scale := expr.Typ.Scale
+		scale := typ.Scale
 		if scale < 0 || scale > 6 {
 			err = moerr.NewInternalError(proc.Ctx, "invalid timestamp scale")
 			return
@@ -1061,6 +1054,26 @@ func GetExprZoneMap(
 
 			// Some expressions need to be handled specifically
 			switch t.F.Func.ObjName {
+			case "isnull", "is_null":
+				switch exprImpl := args[0].Expr.(type) {
+				case *plan.Expr_Col:
+					nullCnt := meta.MustGetColumn(uint16(columnMap[int(exprImpl.Col.ColPos)])).NullCnt()
+					zms[expr.AuxId] = index.SetBool(zms[expr.AuxId], nullCnt > 0)
+					return zms[expr.AuxId]
+				default:
+					zms[expr.AuxId].Reset()
+					return zms[expr.AuxId]
+				}
+			case "isnotnull", "is_not_null":
+				switch exprImpl := args[0].Expr.(type) {
+				case *plan.Expr_Col:
+					zm := meta.MustGetColumn(uint16(columnMap[int(exprImpl.Col.ColPos)])).ZoneMap()
+					zms[expr.AuxId] = index.SetBool(zms[expr.AuxId], zm.IsInited())
+					return zms[expr.AuxId]
+				default:
+					zms[expr.AuxId].Reset()
+					return zms[expr.AuxId]
+				}
 			case "in":
 				rid := args[1].AuxId
 				if vecs[rid] == nil {
@@ -1306,159 +1319,6 @@ func GetExprZoneMap(
 	return zms[expr.AuxId]
 }
 
-func SortInFilter(vec *vector.Vector) {
-	switch vec.GetType().Oid {
-	case types.T_bool:
-		col := vector.MustFixedCol[bool](vec)
-		sort.Slice(col, func(i, j int) bool {
-			return !col[i] && col[j]
-		})
-
-	case types.T_int8:
-		col := vector.MustFixedCol[int8](vec)
-		sort.Slice(col, func(i, j int) bool {
-			return col[i] < col[j]
-		})
-
-	case types.T_int16:
-		col := vector.MustFixedCol[int16](vec)
-		sort.Slice(col, func(i, j int) bool {
-			return col[i] < col[j]
-		})
-
-	case types.T_int32:
-		col := vector.MustFixedCol[int32](vec)
-		sort.Slice(col, func(i, j int) bool {
-			return col[i] < col[j]
-		})
-
-	case types.T_int64:
-		col := vector.MustFixedCol[int64](vec)
-		sort.Slice(col, func(i, j int) bool {
-			return col[i] < col[j]
-		})
-
-	case types.T_uint8:
-		col := vector.MustFixedCol[uint8](vec)
-		sort.Slice(col, func(i, j int) bool {
-			return col[i] < col[j]
-		})
-
-	case types.T_uint16:
-		col := vector.MustFixedCol[uint16](vec)
-		sort.Slice(col, func(i, j int) bool {
-			return col[i] < col[j]
-		})
-
-	case types.T_uint32:
-		col := vector.MustFixedCol[uint32](vec)
-		sort.Slice(col, func(i, j int) bool {
-			return col[i] < col[j]
-		})
-
-	case types.T_uint64:
-		col := vector.MustFixedCol[uint64](vec)
-		sort.Slice(col, func(i, j int) bool {
-			return col[i] < col[j]
-		})
-
-	case types.T_float32:
-		col := vector.MustFixedCol[float32](vec)
-		sort.Slice(col, func(i, j int) bool {
-			return col[i] < col[j]
-		})
-
-	case types.T_float64:
-		col := vector.MustFixedCol[float64](vec)
-		sort.Slice(col, func(i, j int) bool {
-			return col[i] < col[j]
-		})
-
-	case types.T_date:
-		col := vector.MustFixedCol[types.Date](vec)
-		sort.Slice(col, func(i, j int) bool {
-			return col[i] < col[j]
-		})
-
-	case types.T_datetime:
-		col := vector.MustFixedCol[types.Datetime](vec)
-		sort.Slice(col, func(i, j int) bool {
-			return col[i] < col[j]
-		})
-
-	case types.T_time:
-		col := vector.MustFixedCol[types.Time](vec)
-		sort.Slice(col, func(i, j int) bool {
-			return col[i] < col[j]
-		})
-
-	case types.T_timestamp:
-		col := vector.MustFixedCol[types.Timestamp](vec)
-		sort.Slice(col, func(i, j int) bool {
-			return col[i] < col[j]
-		})
-
-	case types.T_enum:
-		col := vector.MustFixedCol[types.Enum](vec)
-		sort.Slice(col, func(i, j int) bool {
-			return col[i] < col[j]
-		})
-
-	case types.T_decimal64:
-		col := vector.MustFixedCol[types.Decimal64](vec)
-		sort.Slice(col, func(i, j int) bool {
-			return col[i].Less(col[j])
-		})
-
-	case types.T_decimal128:
-		col := vector.MustFixedCol[types.Decimal128](vec)
-		sort.Slice(col, func(i, j int) bool {
-			return col[i].Less(col[j])
-		})
-
-	case types.T_TS:
-		col := vector.MustFixedCol[types.TS](vec)
-		sort.Slice(col, func(i, j int) bool {
-			return col[i].Less(col[j])
-		})
-
-	case types.T_uuid:
-		col := vector.MustFixedCol[types.Uuid](vec)
-		sort.Slice(col, func(i, j int) bool {
-			return col[i].Lt(col[j])
-		})
-
-	case types.T_Rowid:
-		col := vector.MustFixedCol[types.Rowid](vec)
-		sort.Slice(col, func(i, j int) bool {
-			return col[i].Less(col[j])
-		})
-
-	case types.T_char, types.T_varchar, types.T_json, types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
-		col, area := vector.MustVarlenaRawData(vec)
-		sort.Slice(col, func(i, j int) bool {
-			return bytes.Compare(col[i].GetByteSlice(area), col[j].GetByteSlice(area)) < 0
-		})
-
-	case types.T_array_float32:
-		col, area := vector.MustVarlenaRawData(vec)
-		sort.Slice(col, func(i, j int) bool {
-			return moarray.Compare[float32](
-				types.GetArray[float32](&col[i], area),
-				types.GetArray[float32](&col[j], area),
-			) < 0
-		})
-	case types.T_array_float64:
-		col, area := vector.MustVarlenaRawData(vec)
-		sort.Slice(col, func(i, j int) bool {
-			return moarray.Compare[float64](
-				types.GetArray[float64](&col[i], area),
-				types.GetArray[float64](&col[j], area),
-			) < 0
-		})
-	}
-}
-
 // RewriteFilterExprList will convert an expression list to be an AndExpr
 func RewriteFilterExprList(list []*plan.Expr) *plan.Expr {
 	l := len(list)
@@ -1485,6 +1345,9 @@ func SplitAndExprs(list []*plan.Expr) []*plan.Expr {
 }
 
 func splitAndExpr(expr *plan.Expr) []*plan.Expr {
+	if expr == nil {
+		return nil
+	}
 	exprs := make([]*plan.Expr, 0, 1)
 	if e, ok := expr.Expr.(*plan.Expr_F); ok {
 		fid, _ := function.DecodeOverloadID(e.F.Func.GetObj())

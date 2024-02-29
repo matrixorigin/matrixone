@@ -33,7 +33,7 @@ var (
 	// The default value of refresh interval to HAKeeper.
 	defaultRefreshInterval = 5 * time.Second
 	// The default value of rebalance interval.
-	defaultRebalanceInterval = 30 * time.Second
+	defaultRebalanceInterval = 15 * time.Second
 	// The default value of rebalnce tolerance.
 	defaultRebalanceTolerance = 0.3
 	// The default value of heartbeat interval.

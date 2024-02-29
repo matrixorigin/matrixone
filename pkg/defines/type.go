@@ -73,6 +73,8 @@ func (typ *MysqlType) GetLength(width int32) uint32 {
 		return uint32(width) + 2
 	case MYSQL_TYPE_BOOL:
 		return 1
+	case MYSQL_TYPE_BIT:
+		return uint32(width)
 	case MYSQL_TYPE_TINY:
 		return 8
 	case MYSQL_TYPE_SHORT:

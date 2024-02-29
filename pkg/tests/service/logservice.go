@@ -21,6 +21,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/lni/dragonboat/v4"
 	"github.com/lni/vfs"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/stretchr/testify/assert"
 	"go.uber.org/zap"
@@ -156,7 +157,7 @@ func newLogService(
 
 // buildLogConfig builds configuration for a log service.
 func buildLogConfig(
-	index int, opt Options, address serviceAddresses,
+	index int, opt Options, address *serviceAddresses,
 ) logservice.Config {
 	cfg := logservice.DefaultConfig()
 	uid, _ := uuid.NewV7()
@@ -188,6 +189,7 @@ func buildLogConfig(
 func buildLogOptions(cfg logservice.Config, filter FilterFunc) logOptions {
 	return []logservice.Option{
 		logservice.WithBackendFilter(filter),
+		logservice.WithRuntime(runtime.ProcessLevelRuntime()),
 	}
 }
 
@@ -240,7 +242,7 @@ func (c *testCluster) setInitialClusterInfo() error {
 
 		err = selected[0].SetInitialClusterInfo(
 			c.opt.initial.logShardNum,
-			c.opt.initial.tnShartnum,
+			c.opt.initial.tnShardNum,
 			c.opt.initial.logReplicaNum,
 		)
 		if err != nil {

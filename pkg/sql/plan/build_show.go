@@ -175,11 +175,24 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 			typeStr = fmt.Sprintf("DECIMAL(%d,%d)", col.Typ.Width, col.Typ.Scale)
 		}
 		if typ.Oid == types.T_varchar || typ.Oid == types.T_char ||
-			typ.Oid == types.T_binary || typ.Oid == types.T_varbinary || typ.Oid.IsArrayRelate() {
+			typ.Oid == types.T_binary || typ.Oid == types.T_varbinary ||
+			typ.Oid.IsArrayRelate() || typ.Oid == types.T_bit {
 			typeStr += fmt.Sprintf("(%d)", col.Typ.Width)
 		}
 		if typ.Oid.IsFloat() && col.Typ.Scale != -1 {
 			typeStr += fmt.Sprintf("(%d,%d)", col.Typ.Width, col.Typ.Scale)
+		}
+
+		if typ.Oid.IsEnum() {
+			enums := strings.Split(col.Typ.GetEnumvalues(), ",")
+			typeStr += "("
+			for i, enum := range enums {
+				typeStr += fmt.Sprintf("'%s'", enum)
+				if i < len(enums)-1 {
+					typeStr += ","
+				}
+			}
+			typeStr += ")"
 		}
 
 		updateOpt := ""
@@ -276,7 +289,16 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 		for i, colId := range fk.Cols {
 			colNames[i] = colIdToName[colId]
 		}
-		_, fkTableDef := ctx.ResolveById(fk.ForeignTbl)
+
+		var fkTableDef *TableDef
+
+		//fk self reference
+		if fk.ForeignTbl == 0 {
+			fkTableDef = tableDef
+		} else {
+			_, fkTableDef = ctx.ResolveById(fk.ForeignTbl)
+		}
+
 		fkColIdToName := make(map[uint64]string)
 		for _, col := range fkTableDef.Cols {
 			fkColIdToName[col.ColId] = col.Name
@@ -352,29 +374,54 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 		}
 		createStr += fmt.Sprintf(" INFILE{'FILEPATH'='%s','COMPRESSION'='%s','FORMAT'='%s','JSONDATA'='%s'}", param.Filepath, param.CompressType, param.Format, param.JsonData)
 
-		escapedby := ""
-		if param.Tail.Fields.EscapedBy != byte(0) {
-			escapedby = fmt.Sprintf(" ESCAPED BY '%c'", param.Tail.Fields.EscapedBy)
+		fields := ""
+		if param.Tail.Fields.Terminated != nil {
+			if param.Tail.Fields.Terminated.Value == "" {
+				fields += " TERMINATED BY \"\""
+			} else {
+				fields += fmt.Sprintf(" TERMINATED BY '%s'", param.Tail.Fields.Terminated.Value)
+			}
+		}
+		if param.Tail.Fields.EnclosedBy != nil {
+			if param.Tail.Fields.EnclosedBy.Value == byte(0) {
+				fields += " ENCLOSED BY ''"
+			} else if param.Tail.Fields.EnclosedBy.Value == byte('\\') {
+				fields += " ENCLOSED BY '\\\\'"
+			} else {
+				fields += fmt.Sprintf(" ENCLOSED BY '%c'", param.Tail.Fields.EnclosedBy.Value)
+			}
+		}
+		if param.Tail.Fields.EscapedBy != nil {
+			if param.Tail.Fields.EscapedBy.Value == byte(0) {
+				fields += " ESCAPED BY ''"
+			} else if param.Tail.Fields.EscapedBy.Value == byte('\\') {
+				fields += " ESCAPED BY '\\\\'"
+			} else {
+				fields += fmt.Sprintf(" ESCAPED BY '%c'", param.Tail.Fields.EscapedBy.Value)
+			}
 		}
 
 		line := ""
 		if param.Tail.Lines.StartingBy != "" {
-			line = fmt.Sprintf(" LINE STARTING BY '%s'", param.Tail.Lines.StartingBy)
+			line += fmt.Sprintf(" STARTING BY '%s'", param.Tail.Lines.StartingBy)
 		}
-		lineEnd := ""
-		if param.Tail.Lines.TerminatedBy == "\n" || param.Tail.Lines.TerminatedBy == "\r\n" {
-			lineEnd = " TERMINATED BY '\\\\n'"
-		} else {
-			lineEnd = fmt.Sprintf(" TERMINATED BY '%s'", param.Tail.Lines.TerminatedBy)
-		}
-		if len(line) > 0 {
-			line += lineEnd
-		} else {
-			line = " LINES" + lineEnd
+		if param.Tail.Lines.TerminatedBy != nil {
+			if param.Tail.Lines.TerminatedBy.Value == "\n" || param.Tail.Lines.TerminatedBy.Value == "\r\n" {
+				line += " TERMINATED BY '\\\\n'"
+			} else {
+				line += fmt.Sprintf(" TERMINATED BY '%s'", param.Tail.Lines.TerminatedBy)
+			}
 		}
 
-		createStr += fmt.Sprintf(" FIELDS TERMINATED BY '%s' ENCLOSED BY '%c'%s", param.Tail.Fields.Terminated, rune(param.Tail.Fields.EnclosedBy), escapedby)
-		createStr += line
+		if len(fields) > 0 {
+			fields = " FIELDS" + fields
+			createStr += fields
+		}
+		if len(line) > 0 {
+			line = " LINES" + line
+			createStr += line
+		}
+
 		if param.Tail.IgnoredLines > 0 {
 			createStr += fmt.Sprintf(" IGNORE %d LINES", param.Tail.IgnoredLines)
 		}
@@ -443,9 +490,9 @@ func buildShowDatabases(stmt *tree.ShowDatabases, ctx CompilerContext) (*Plan, e
 	// Any account should shows database MO_CATALOG_DB_NAME
 	if accountId == catalog.System_Account {
 		accountClause := fmt.Sprintf("account_id = %v or (account_id = 0 and datname = '%s')", accountId, MO_CATALOG_DB_NAME)
-		sql = fmt.Sprintf("SELECT datname `Database` FROM %s.mo_database where (%s)", MO_CATALOG_DB_NAME, accountClause)
+		sql = fmt.Sprintf("SELECT datname `Database` FROM %s.mo_database where (%s) ORDER BY %s", MO_CATALOG_DB_NAME, accountClause, catalog.SystemDBAttr_Name)
 	} else {
-		sql = fmt.Sprintf("SELECT datname `Database` FROM %s.mo_database", MO_CATALOG_DB_NAME)
+		sql = fmt.Sprintf("SELECT datname `Database` FROM %s.mo_database ORDER BY %s", MO_CATALOG_DB_NAME, catalog.SystemDBAttr_Name)
 	}
 
 	if stmt.Where != nil {
@@ -542,6 +589,9 @@ func buildShowTables(stmt *tree.ShowTables, ctx CompilerContext) (*Plan, error) 
 
 	// Do not show sequences.
 	sql += fmt.Sprintf(" and relkind != '%s'", catalog.SystemSequenceRel)
+
+	// Order by relname
+	sql += fmt.Sprintf(" ORDER BY %s", catalog.SystemRelAttr_Name)
 
 	if stmt.Where != nil {
 		return returnByWhereAndBaseSQL(ctx, sql, stmt.Where, ddlType)
@@ -775,30 +825,28 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error
 				}
 			}
 			if tableDef.Indexes != nil {
-				uniqueColName := make(map[string]bool)
 				for _, indexdef := range tableDef.Indexes {
+					name := indexdef.Parts[0]
 					if indexdef.Unique {
-						for _, name := range indexdef.Parts {
-							if uniqueColName[name] {
-								continue
+						if isPrimaryKey(tableDef, indexdef.Parts) {
+							for _, name := range indexdef.Parts {
+								keyStr += " when attname = "
+								keyStr += "'" + name + "'"
+								keyStr += " then 'PRI'"
 							}
-							keyStr += " when attname = "
-							keyStr += "'" + name + "'"
-							keyStr += " then 'UNI'"
-							uniqueColName[name] = true
-						}
-					}
-				}
-				for _, indexdef := range tableDef.Indexes {
-					if !indexdef.Unique {
-						for _, name := range indexdef.Parts {
-							if uniqueColName[name] {
-								continue
-							}
+						} else if isMultiplePriKey(indexdef) {
 							keyStr += " when attname = "
 							keyStr += "'" + name + "'"
 							keyStr += " then 'MUL'"
+						} else {
+							keyStr += " when attname = "
+							keyStr += "'" + name + "'"
+							keyStr += " then 'UNI'"
 						}
+					} else {
+						keyStr += " when attname = "
+						keyStr += "'" + name + "'"
+						keyStr += " then 'MUL'"
 					}
 				}
 			}
@@ -878,8 +926,34 @@ func buildShowTableStatus(stmt *tree.ShowTableStatus, ctx CompilerContext) (*Pla
 
 	mustShowTable := "relname = 'mo_database' or relname = 'mo_tables' or relname = 'mo_columns'"
 	accountClause := fmt.Sprintf("account_id = %v or (account_id = 0 and (%s))", accountId, mustShowTable)
-	sql := "select relname as `Name`, 'Tae' as `Engine`, 'Dynamic' as `Row_format`, 0 as `Rows`, 0 as `Avg_row_length`, 0 as `Data_length`, 0 as `Max_data_length`, 0 as `Index_length`, 'NULL' as `Data_free`, 0 as `Auto_increment`, created_time as `Create_time`, 'NULL' as `Update_time`, 'NULL' as `Check_time`, 'utf-8' as `Collation`, 'NULL' as `Checksum`, '' as `Create_options`, rel_comment as `Comment` from %s.mo_tables where reldatabase = '%s' and relkind != '%s' and relname != '%s' and relname not like '%s' and (%s)"
-
+	sql := `select
+				relname as 'Name',
+				'Tae' as 'Engine',
+				'Dynamic' as 'Row_format',
+				0 as 'Rows',
+				0 as 'Avg_row_length',
+				0 as 'Data_length',
+				0 as 'Max_data_length',
+				0 as 'Index_length',
+				'NULL' as 'Data_free',
+				0 as 'Auto_increment',
+				created_time as 'Create_time',
+				'NULL' as 'Update_time',
+				'NULL' as 'Check_time',
+				'utf-8' as 'Collation',
+				'NULL' as 'Checksum',
+				'' as 'Create_options',
+				rel_comment as 'Comment',
+				owner as 'Role_id',
+				'-' as 'Role_name'
+			from
+				%s.mo_tables
+			where
+				reldatabase = '%s'
+				and relkind != '%s'
+				and relname != '%s'
+				and relname not like '%s'
+				and (%s)`
 	sql = fmt.Sprintf(sql, MO_CATALOG_DB_NAME, dbName, catalog.SystemPartitionRel, catalog.MOAutoIncrTable, catalog.IndexTableNamePrefix+"%", accountClause)
 
 	if stmt.Where != nil {
@@ -1159,12 +1233,6 @@ func buildShowStatus(stmt *tree.ShowStatus, ctx CompilerContext) (*Plan, error) 
 	return returnByRewriteSQL(ctx, sql, ddlType)
 }
 
-func buildShowCollation(stmt *tree.ShowCollation, ctx CompilerContext) (*Plan, error) {
-	ddlType := plan.DataDefinition_SHOW_COLLATION
-	sql := "select 'utf8mb4_bin' as `Collation`, 'utf8mb4' as `Charset`, 46 as `Id`, 'Yes' as `Compiled`, 1 as `Sortlen`"
-	return returnByRewriteSQL(ctx, sql, ddlType)
-}
-
 func buildShowProcessList(ctx CompilerContext) (*Plan, error) {
 	ddlType := plan.DataDefinition_SHOW_PROCESSLIST
 	// "show processlist" is implemented by table function processlist().
@@ -1206,11 +1274,12 @@ func buildShowCreatePublications(stmt *tree.ShowCreatePublications, ctx Compiler
 
 func returnByRewriteSQL(ctx CompilerContext, sql string,
 	ddlType plan.DataDefinition_DdlType) (*Plan, error) {
-	stmt, err := getRewriteSQLStmt(ctx, sql)
+	newStmt, err := getRewriteSQLStmt(ctx, sql)
+	defer newStmt.Free()
 	if err != nil {
 		return nil, err
 	}
-	return getReturnDdlBySelectStmt(ctx, stmt, ddlType)
+	return getReturnDdlBySelectStmt(ctx, newStmt, ddlType)
 }
 
 func returnByWhereAndBaseSQL(ctx CompilerContext, baseSQL string,
@@ -1218,6 +1287,7 @@ func returnByWhereAndBaseSQL(ctx CompilerContext, baseSQL string,
 	sql := fmt.Sprintf("SELECT * FROM (%s) tbl", baseSQL)
 	// logutil.Info(sql)
 	newStmt, err := getRewriteSQLStmt(ctx, sql)
+	defer newStmt.Free()
 	if err != nil {
 		return nil, err
 	}
@@ -1229,6 +1299,7 @@ func returnByWhereAndBaseSQL(ctx CompilerContext, baseSQL string,
 func returnByLikeAndSQL(ctx CompilerContext, sql string, like *tree.ComparisonExpr,
 	ddlType plan.DataDefinition_DdlType) (*Plan, error) {
 	newStmt, err := getRewriteSQLStmt(ctx, sql)
+	defer newStmt.Free()
 	if err != nil {
 		return nil, err
 	}

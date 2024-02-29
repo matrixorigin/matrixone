@@ -102,11 +102,9 @@ func (l *lockTableAllocator) Valid(binds []pb.LockTable) []uint64 {
 		current, ok := l.getLockTablesLocked(b.Group)[b.Table]
 		if !ok ||
 			current.Changed(b) {
-			if l.logger.Enabled(zap.DebugLevel) {
-				l.logger.Debug("table and service bind changed",
-					zap.String("current", current.DebugString()),
-					zap.String("received", b.DebugString()))
-			}
+			l.logger.Info("table and service bind changed",
+				zap.String("current", current.DebugString()),
+				zap.String("received", b.DebugString()))
 			invalid = append(invalid, b.Table)
 		}
 	}
@@ -119,6 +117,17 @@ func (l *lockTableAllocator) Close() error {
 	l.logger.Debug("lock service allocator closed",
 		zap.Error(err))
 	return err
+}
+
+func (l *lockTableAllocator) GetLatest(groupID uint32, tableID uint64) pb.LockTable {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+
+	m := l.getLockTablesLocked(groupID)
+	if old, ok := m[tableID]; ok {
+		return old
+	}
+	return pb.LockTable{}
 }
 
 func (l *lockTableAllocator) disableTableBinds(b *serviceBinds) {
@@ -138,7 +147,7 @@ func (l *lockTableAllocator) disableTableBinds(b *serviceBinds) {
 
 	// service need deleted, because this service may never restart
 	delete(l.mu.services, b.serviceID)
-	l.logger.Debug("lock service disabled",
+	l.logger.Info("service removed",
 		zap.String("service", b.serviceID))
 }
 
@@ -173,11 +182,6 @@ func (l *lockTableAllocator) registerService(
 	}
 	b = newServiceBinds(serviceID, l.logger.With(zap.String("lockservice", serviceID)))
 	l.mu.services[serviceID] = b
-
-	if l.logger.Enabled(zap.DebugLevel) {
-		l.logger.Debug("lock service registered",
-			zap.String("service", serviceID))
-	}
 	return b
 }
 
@@ -218,6 +222,11 @@ func (l *lockTableAllocator) tryRebindLocked(
 	old.Version++
 	old.Valid = true
 	l.getLockTablesLocked(group)[tableID] = old
+
+	l.logger.Info("bind changed",
+		zap.Uint64("table", tableID),
+		zap.Uint64("version", old.Version),
+		zap.String("service", binds.serviceID))
 	return old
 }
 
@@ -250,6 +259,9 @@ func (l *lockTableAllocator) createBindLocked(
 		Group:       group,
 	}
 	l.getLockTablesLocked(group)[tableID] = b
+	l.logger.Info("bind created",
+		zap.Uint64("table", tableID),
+		zap.String("service", binds.serviceID))
 	return b
 }
 
@@ -263,8 +275,11 @@ func (l *lockTableAllocator) checkInvalidBinds(ctx context.Context) {
 			return
 		case <-timer.C:
 			timeoutBinds := l.getTimeoutBinds(time.Now())
-			l.logger.Debug("get timeout services",
-				zap.Int("count", len(timeoutBinds)))
+			if len(timeoutBinds) > 0 {
+				l.logger.Info("get timeout services",
+					zap.Duration("timeout", l.keepBindTimeout),
+					zap.Int("count", len(timeoutBinds)))
+			}
 			for _, b := range timeoutBinds {
 				b.disable()
 				l.disableTableBinds(b)
@@ -316,8 +331,6 @@ func (b *serviceBinds) bind(
 		return false
 	}
 	b.getTablesLocked(group)[tableID] = struct{}{}
-	b.logger.Debug("table bind added",
-		zap.Uint64("table", tableID))
 	return true
 }
 
@@ -334,7 +347,8 @@ func (b *serviceBinds) disable() {
 	b.Lock()
 	defer b.Unlock()
 	b.disabled = true
-	b.logger.Debug("lock service binds disabled")
+	b.logger.Info("bind disabled",
+		zap.String("service", b.serviceID))
 }
 
 func (b *serviceBinds) getTablesLocked(group uint32) map[uint64]struct{} {

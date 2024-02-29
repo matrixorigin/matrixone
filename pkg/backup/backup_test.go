@@ -544,8 +544,9 @@ func TestBackup(t *testing.T) {
 	tf1 := getTempFile(t, "", "t1", "test_t1")
 
 	bs := &tree.BackupStart{
-		IsS3: false,
-		Dir:  tDir,
+		IsS3:        false,
+		Dir:         tDir,
+		Parallelism: "10",
 	}
 
 	//backup configs

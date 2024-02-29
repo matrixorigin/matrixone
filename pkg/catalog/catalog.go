@@ -311,6 +311,11 @@ func GenRows(bat *batch.Batch) [][]any {
 			for j := 0; j < vec.Length(); j++ {
 				rows[j][i] = col[j]
 			}
+		case types.T_bit:
+			col := vector.MustFixedCol[uint64](vec)
+			for j := 0; j < vec.Length(); j++ {
+				rows[j][i] = col[j]
+			}
 		case types.T_int8:
 			col := vector.MustFixedCol[int8](vec)
 			for j := 0; j < vec.Length(); j++ {

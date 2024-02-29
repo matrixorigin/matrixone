@@ -182,15 +182,15 @@ Variable_name    Value
 select * from t1;
 a    b
 1    1
-show collation;
-Collation    Charset    Id    Compiled    Sortlen
-utf8mb4_bin    utf8mb4    46    Yes    1
-show collation like '%';
-Collation    Charset    Id    Compiled    Sortlen
-utf8mb4_bin    utf8mb4    46    Yes    1
-show collation where 'Charset'='utf8mb4';
-Collation    Charset    Id    Compiled    Sortlen
-utf8mb4_bin    utf8mb4    46    Yes    1
+show collation like 'utf8mb4_general_ci';
+Collation    Charset    Id    Default    Compiled    Sortlen    Pad_attribute
+utf8mb4_general_ci    utf8mb4    45        Yes    1    PAD SPACE
+show collation like 'utf8mb4_general_ci%';
+Collation    Charset    Id    Default    Compiled    Sortlen    Pad_attribute
+utf8mb4_general_ci    utf8mb4    45        Yes    1    PAD SPACE
+show collation where Charset='utf8mb4'and Collation ='utf8mb4_general_ci';
+Collation    Charset    Id    Default    Compiled    Sortlen    Pad_attribute
+utf8mb4_general_ci    utf8mb4    45        Yes    1    PAD SPACE
 show variables like 'sql_safe_updates';
 Variable_name    Value
 sql_safe_updates    0
@@ -223,30 +223,33 @@ use mo_catalog;
 show tables;
 Tables_in_mo_catalog
 mo_indexes
+mo_database
+mo_tables
+mo_columns
 mo_table_partitions
 mo_user
-mo_account
 mo_role
 mo_user_grant
 mo_role_grant
 mo_role_privs
 mo_user_defined_function
-mo_sessions
-mo_configurations
-mo_stored_procedure
-mo_stages
 mo_mysql_compatibility_mode
 mo_pubs
-mo_database
-mo_columns
-mo_tables
+mo_stored_procedure
+mo_stages
+mo_sessions
+mo_configurations
 mo_locks
 mo_variables
 mo_transactions
 mo_cache
+mo_version
+mo_upgrade
+mo_upgrade_tenant
+mo_account
 show table_number from mo_catalog;
 Number of tables in mo_catalog
-22
+25
 show column_number from mo_database;
 Number of columns in mo_database
 9
@@ -319,12 +322,12 @@ va    create view va as select a from a;
 show create view va;
 View    Create View
 va    create view va as select a from a;
-show collation;
-Collation    Charset    Id    Compiled    Sortlen
-utf8mb4_bin    utf8mb4    46    Yes    1
-show collation like '%';
-Collation    Charset    Id    Compiled    Sortlen
-utf8mb4_bin    utf8mb4    46    Yes    1
+show collation like 'utf8mb4_general_ci';
+Collation    Charset    Id    Default    Compiled    Sortlen    Pad_attribute
+utf8mb4_general_ci    utf8mb4    45        Yes    1    PAD SPACE
+show collation like 'utf8mb4_general_ci%';
+Collation    Charset    Id    Default    Compiled    Sortlen    Pad_attribute
+utf8mb4_general_ci    utf8mb4    45        Yes    1    PAD SPACE
 rollback;
 drop database if exists showDb;
 DROP DATABASE IF EXISTS test;

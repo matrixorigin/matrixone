@@ -261,23 +261,39 @@ func (node *DeleteNode) setPersistedRows() {
 	if node.nt != NT_Persisted {
 		panic("unsupport")
 	}
-	bat, err := blockio.LoadTombstoneColumns(
+	var closeFunc func()
+	var rowids containers.Vector
+	var vectors []containers.Vector
+	var err error
+	defer func() {
+		if closeFunc != nil {
+			closeFunc()
+		}
+		if rowids != nil {
+			rowids.Close()
+		}
+	}()
+	//Extend lifetime of vectors is within the function.
+	//No NeedCopy. closeFunc is required after use.
+	vectors, closeFunc, err = blockio.LoadTombstoneColumns2(
 		node.Txn.GetContext(),
 		[]uint16{0},
 		nil,
 		node.chain.Load().mvcc.meta.GetBlockData().GetFs().Service,
 		node.deltaloc,
+		false,
 		nil,
 	)
 	if err != nil {
 		for {
 			logutil.Warnf(fmt.Sprintf("load deletes failed, deltaloc: %s, err: %v", node.deltaloc.String(), err))
-			bat, err = blockio.LoadTombstoneColumns(
+			vectors, closeFunc, err = blockio.LoadTombstoneColumns2(
 				node.Txn.GetContext(),
 				[]uint16{0},
 				nil,
 				node.chain.Load().mvcc.meta.GetBlockData().GetFs().Service,
 				node.deltaloc,
+				false,
 				nil,
 			)
 			if err == nil {
@@ -286,8 +302,7 @@ func (node *DeleteNode) setPersistedRows() {
 		}
 	}
 	node.mask = roaring.NewBitmap()
-	rowids := containers.ToTNVector(bat.Vecs[0], common.MutMemAllocator)
-	defer rowids.Close()
+	rowids = vectors[0]
 	err = containers.ForeachVector(rowids, func(rowid types.Rowid, _ bool, row int) error {
 		offset := rowid.GetRowOffset()
 		node.mask.Add(offset)

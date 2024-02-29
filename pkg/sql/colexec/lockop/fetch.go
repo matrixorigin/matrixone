@@ -51,6 +51,8 @@ func GetFetchRowsFunc(t types.Type) FetchLockRowsFunc {
 	switch t.Oid {
 	case types.T_bool:
 		return fetchBoolRows
+	case types.T_bit:
+		return fetchUint64Rows
 	case types.T_int8:
 		return fetchInt8Rows
 	case types.T_int16:

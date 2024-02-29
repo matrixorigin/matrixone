@@ -58,7 +58,7 @@ func newWaiter() *waiter {
 	return w
 }
 
-func (w waiter) Name() string {
+func (w waiter) TypeName() string {
 	return "lockservice.wait"
 }
 

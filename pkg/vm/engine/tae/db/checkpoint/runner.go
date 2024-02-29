@@ -545,7 +545,7 @@ func (r *runner) saveCheckpoint(start, end types.TS, ckpLSN, truncateLSN uint64)
 }
 
 func (r *runner) doIncrementalCheckpoint(entry *CheckpointEntry) (fields []zap.Field, err error) {
-	factory := logtail.IncrementalCheckpointDataFactory(entry.start, entry.end, true)
+	factory := logtail.IncrementalCheckpointDataFactory(entry.start, entry.end, true, false)
 	data, err := factory(r.catalog)
 	if err != nil {
 		return

@@ -32,6 +32,7 @@ var (
 		types.T_timestamp, types.T_time,
 		types.T_decimal64, types.T_decimal128,
 		types.T_bool,
+		types.T_bit,
 		types.T_varchar, types.T_char, types.T_blob, types.T_text,
 		types.T_uuid,
 		types.T_binary, types.T_varbinary,
@@ -49,6 +50,8 @@ func NewAggMax(overloadID int64, dist bool, inputTypes []types.Type, outputType 
 			return agg.NewUnaryDistAgg(overloadID, aggPriv, false, inputTypes[0], outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill), nil
 		}
 		return agg.NewUnaryAgg(overloadID, aggPriv, false, inputTypes[0], outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill), nil
+	case types.T_bit:
+		return newGenericMax[uint64](overloadID, inputTypes[0], outputType, dist)
 	case types.T_uint8:
 		return newGenericMax[uint8](overloadID, inputTypes[0], outputType, dist)
 	case types.T_uint16:

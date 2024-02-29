@@ -208,6 +208,7 @@ const decimal128Code = 0x45
 const stringTypeCode = 0x46
 const timeCode = 0x47
 const enumCode = 0x50 // TODO: reorder the list to put timeCode next to date type code?
+const bitCode = 0x51
 
 var sizeLimits = []uint64{
 	1<<(0*8) - 1,
@@ -499,6 +500,11 @@ func (p *Packer) EncodeStringType(e []byte) {
 	p.encodeBytes(bytesCode, e)
 }
 
+func (p *Packer) EncodeBit(e uint64) {
+	p.putByte(bitCode)
+	p.encodeUint(e)
+}
+
 func (p *Packer) GetBuf() []byte {
 	return p.buf[:p.size]
 }
@@ -681,83 +687,117 @@ func decodeDecimal128(b []byte) (Decimal128, int) {
 
 var DecodeTuple = decodeTuple
 
-func decodeTuple(b []byte) (Tuple, int, error) {
+func decodeTuple(b []byte) (Tuple, int, []T, error) {
 	var t Tuple
 
 	var i int
-
+	var schema = make([]T, 0)
 	for i < len(b) {
 		var el interface{}
 		var off int
 
 		switch {
 		case b[i] == nilCode:
+			schema = append(schema, T_any)
 			el = nil
 			off = 1
 		case b[i] == int8Code:
+			schema = append(schema, T_int8)
 			el, off = decodeInt(int8Code, b[i+1:])
 			off += 1
 		case b[i] == int16Code:
+			schema = append(schema, T_int16)
 			el, off = decodeInt(int16Code, b[i+1:])
 			off += 1
 		case b[i] == int32Code:
+			schema = append(schema, T_int32)
 			el, off = decodeInt(int32Code, b[i+1:])
 			off += 1
 		case b[i] == int64Code:
+			schema = append(schema, T_int64)
 			el, off = decodeInt(int64Code, b[i+1:])
 			off += 1
 		case b[i] == uint8Code:
+			schema = append(schema, T_uint8)
 			el, off = decodeUint(uint8Code, b[i+1:])
 			off += 1
 		case b[i] == uint16Code:
+			schema = append(schema, T_uint16)
 			el, off = decodeUint(uint16Code, b[i+1:])
 			off += 1
 		case b[i] == uint32Code:
+			schema = append(schema, T_uint32)
 			el, off = decodeUint(uint32Code, b[i+1:])
 			off += 1
 		case b[i] == uint64Code:
+			schema = append(schema, T_uint64)
 			el, off = decodeUint(uint64Code, b[i+1:])
 			off += 1
 		case b[i] == trueCode:
+			schema = append(schema, T_bool)
 			el = true
 			off = 1
 		case b[i] == falseCode:
+			schema = append(schema, T_bool)
 			el = false
 			off = 1
 		case b[i] == float32Code:
+			schema = append(schema, T_float32)
 			el, off = decodeFloat32(b[i:])
 		case b[i] == float64Code:
+			schema = append(schema, T_float64)
 			el, off = decodeFloat64(b[i:])
 		case b[i] == dateCode:
+			schema = append(schema, T_date)
 			el, off = decodeInt(dateCode, b[i+1:])
 			off += 1
 		case b[i] == datetimeCode:
+			schema = append(schema, T_datetime)
 			el, off = decodeInt(datetimeCode, b[i+1:])
 			off += 1
 		case b[i] == timestampCode:
+			schema = append(schema, T_timestamp)
 			el, off = decodeInt(timestampCode, b[i+1:])
 			off += 1
 		case b[i] == timeCode:
+			schema = append(schema, T_time)
 			el, off = decodeInt(timeCode, b[i+1:])
 			off += 1
 		case b[i] == decimal64Code:
+			schema = append(schema, T_decimal64)
 			el, off = decodeDecimal64(b[i+1:])
 		case b[i] == decimal128Code:
+			schema = append(schema, T_decimal128)
 			el, off = decodeDecimal128(b[i+1:])
 		case b[i] == stringTypeCode:
+			schema = append(schema, T_varchar)
 			el, off = decodeBytes(b[i+1:])
 			off += 1
+		case b[i] == bitCode:
+			schema = append(schema, T_bit)
+			el, off = decodeUint(uint64Code, b[i+1:])
+			off += 1
+		case b[i] == enumCode:
+			schema = append(schema, T_enum)
+			//TODO: need to verify @YANGGMM
+			el, off = decodeUint(uint16Code, b[i+1:])
+			off += 1
 		default:
-			return nil, i, moerr.NewInternalErrorNoCtx("unable to decode tuple element with unknown typecode %02x", b[i])
+			return nil, i, nil, moerr.NewInternalErrorNoCtx("unable to decode tuple element with unknown typecode %02x", b[i])
 		}
 		t = append(t, el)
 		i += off
 	}
 
-	return t, i, nil
+	return t, i, schema, nil
 }
 
 func Unpack(b []byte) (Tuple, error) {
-	t, _, err := decodeTuple(b)
+	t, _, _, err := decodeTuple(b)
 	return t, err
+}
+
+func UnpackWithSchema(b []byte) (Tuple, []T, error) {
+	t, _, schema, err := decodeTuple(b)
+	return t, schema, err
 }

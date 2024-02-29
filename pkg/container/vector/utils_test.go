@@ -74,3 +74,34 @@ func TestFindFirstIndexInSortedVarlenVector(t *testing.T) {
 		}
 	})
 }
+
+func TestCollectOffsetsByOnePrefixFactory(t *testing.T) {
+	mp := mpool.MustNewZero()
+	v1 := NewVec(types.T_char.ToType())
+	defer v1.Free(mp)
+
+	AppendBytes(v1, []byte("1111"), false, mp)
+	AppendBytes(v1, []byte("1121"), false, mp)
+	AppendBytes(v1, []byte("1211"), false, mp)
+	AppendBytes(v1, []byte("1221"), false, mp)
+	AppendBytes(v1, []byte("1231"), false, mp)
+	AppendBytes(v1, []byte("1311"), false, mp)
+
+	prefix1 := []byte("01")
+	prefix2 := []byte("12")
+	prefix3 := []byte("14")
+	prefix4 := []byte("113")
+
+	fn1 := CollectOffsetsByOnePrefixFactory(prefix1)
+	fn2 := CollectOffsetsByOnePrefixFactory(prefix2)
+	fn3 := CollectOffsetsByOnePrefixFactory(prefix3)
+	fn4 := CollectOffsetsByOnePrefixFactory(prefix4)
+	off1 := fn1(v1)
+	off2 := fn2(v1)
+	off3 := fn3(v1)
+	off4 := fn4(v1)
+	require.Equal(t, 0, len(off1))
+	require.Equal(t, []int32{2, 3, 4}, off2)
+	require.Equal(t, 0, len(off3))
+	require.Equal(t, 0, len(off4))
+}

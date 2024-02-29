@@ -40,7 +40,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	result, err := arg.children[0].Call(proc)
+	result, err := arg.GetChildren(0).Call(proc)
 	if err != nil {
 		return result, err
 	}
@@ -48,10 +48,10 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		return result, nil
 	}
 	bat := result.Batch
-	anal := proc.GetAnalyze(arg.info.Idx, arg.info.ParallelIdx, arg.info.ParallelMajor)
+	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
 	anal.Start()
 	defer anal.Stop()
-	anal.Input(bat, arg.info.IsFirst)
+	anal.Input(bat, arg.GetIsFirst())
 
 	if arg.Seen > arg.Offset {
 		return result, nil
@@ -60,7 +60,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	if arg.Seen+uint64(length) > arg.Offset {
 		sels := newSels(int64(arg.Offset-arg.Seen), int64(length)-int64(arg.Offset-arg.Seen), proc)
 		arg.Seen += uint64(length)
-		bat.Shrink(sels)
+		bat.Shrink(sels, false)
 		proc.Mp().PutSels(sels)
 		result.Batch = bat
 		return result, nil

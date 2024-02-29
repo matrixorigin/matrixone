@@ -33,17 +33,42 @@ const (
 
 	// MOAutoIncrTable mo auto increment table name
 	MOAutoIncrTable = "mo_increment_columns"
+	// TableTailAttr are attrs in table tail
+	TableTailAttrCommitTs = "__mo_%1_commit_time"
+	TableTailAttrAborted  = "__mo_%1_aborted"
+	TableTailAttrPKVal    = "__mo_%1_pk_val"
+
+	// MOVersionTable mo version table. This table records information about the
+	// versions of the MO cluster that have been upgraded. In other words, you can
+	// query this table to find out all the versions of the MO cluster that have
+	// been running.
+	MOVersionTable = "mo_version"
+	// MOUpgradeTable mo upgrade table. This table records the MO cluster version
+	// upgrade paths, including upgrade paths for intermediate versions that are
+	// upgraded across versions.
+	MOUpgradeTable = "mo_upgrade"
+	// MOUpgradeTenantTable MO is a cloud-native, multi-tenant database, and when
+	// versions are upgraded, it may be necessary to upgrade all tenant-related metadata.
+	// This table is used to record all the tenant records that need to be upgraded
+	MOUpgradeTenantTable = "mo_upgrade_tenant"
 )
 
 var InternalColumns = map[string]int8{
-	Row_ID:                   0,
-	PrefixPriColName:         0,
-	PrefixCBColName:          0,
-	PrefixIndexTableName:     0,
-	CPrimaryKeyColName:       0,
-	FakePrimaryKeyColName:    0,
-	IndexTableIndexColName:   0,
-	IndexTablePrimaryColName: 0,
+	Row_ID:                                     0,
+	PrefixPriColName:                           0,
+	PrefixCBColName:                            0,
+	PrefixIndexTableName:                       0,
+	CPrimaryKeyColName:                         0,
+	FakePrimaryKeyColName:                      0,
+	IndexTableIndexColName:                     0,
+	IndexTablePrimaryColName:                   0,
+	SystemSI_IVFFLAT_TblCol_Metadata_key:       0,
+	SystemSI_IVFFLAT_TblCol_Metadata_val:       0,
+	SystemSI_IVFFLAT_TblCol_Centroids_version:  0,
+	SystemSI_IVFFLAT_TblCol_Centroids_id:       0,
+	SystemSI_IVFFLAT_TblCol_Centroids_centroid: 0,
+	SystemSI_IVFFLAT_TblCol_Entries_version:    0,
+	SystemSI_IVFFLAT_TblCol_Entries_id:         0,
 }
 
 var InternalTableNames = map[string]int8{
@@ -235,7 +260,12 @@ const (
 	// locks to the Lock operator in pessimistic transaction mode.
 	FakePrimaryKeyColName = "__mo_fake_pk_col"
 
-	/************ 1. IVF_FLAT Secondary Index ************/
+	/************ 1. Master Index  ************/
+
+	MasterIndexTableIndexColName   = IndexTableIndexColName
+	MasterIndexTablePrimaryColName = IndexTablePrimaryColName
+
+	/************ 2. IVF_FLAT Secondary Index ************/
 
 	// IVF_FLAT Table Types
 	SystemSI_IVFFLAT_TblType_Metadata  = "metadata"

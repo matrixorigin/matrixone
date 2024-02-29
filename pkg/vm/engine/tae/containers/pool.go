@@ -261,6 +261,10 @@ func (p *VectorPool) VarlenUsed(isUnsafe bool) (int, int) {
 	return cnt, size
 }
 
+func (p *VectorPool) GetAllocator() *mpool.MPool {
+	return p.mp
+}
+
 func (p *VectorPool) Used(isUnsafe bool) (int, int) {
 	cnt, size := p.FixedSizeUsed(isUnsafe)
 	cnt2, size2 := p.VarlenUsed(isUnsafe)

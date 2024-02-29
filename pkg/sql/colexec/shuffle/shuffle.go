@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -41,15 +42,6 @@ func (arg *Argument) Prepare(proc *process.Process) error {
 	return nil
 }
 
-func findBatchToSend(ap *Argument, threshHold int) int {
-	for i := range ap.ctr.shuffledBats {
-		if ap.ctr.shuffledBats[i] != nil && ap.ctr.shuffledBats[i].RowCount() > threshHold {
-			return i
-		}
-	}
-	return -1
-}
-
 // there are two ways for shuffle to send a batch
 // if a batch belongs to one bucket, send this batch directly, and shuffle need to do nothing
 // else split this batch into pieces, write data into pool. if one bucket is full, send this bucket.
@@ -59,48 +51,45 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	if err, isCancel := vm.CancelCheck(proc); isCancel {
 		return vm.CancelResult, err
 	}
-
 	ap := arg
-	var index int
-
-	anal := proc.GetAnalyze(arg.info.Idx, arg.info.ParallelIdx, arg.info.ParallelMajor)
+	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
 	anal.Start()
 	defer func() {
 		anal.Stop()
 	}()
 
-	// clean last sent batch
-	if ap.ctr.lastSentIdx != -1 {
-		// todo: reuse this batch, need to fix this
-		//	ap.ctr.shuffledBats[ap.ctr.lastSentIdx].SetRowCount(0)
-		ap.ctr.shuffledBats[ap.ctr.lastSentIdx] = nil
-		ap.ctr.lastSentIdx = -1
+	if ap.ctr.lastSentBatch != nil {
+		proc.PutBatch(ap.ctr.lastSentBatch)
+		ap.ctr.lastSentBatch = nil
 	}
 
-	//find output
+SENDLAST:
 	if ap.ctr.ending {
-		index = findBatchToSend(ap, 0)
-		if index == -1 {
-			result := vm.NewCallResult()
-			result.Status = vm.ExecStop
-			return result, nil
+		result := vm.NewCallResult()
+		//send shuffle pool
+		for i, bat := range ap.ctr.shufflePool {
+			if bat != nil {
+				result.Batch = bat
+				ap.ctr.lastSentBatch = result.Batch
+				ap.ctr.shufflePool[i] = nil
+				return result, nil
+			}
 		}
-	} else {
-		index = findBatchToSend(ap, shuffleBatchSize)
+		//end
+		result.Status = vm.ExecStop
+		return result, nil
 	}
 
-	for index == -1 {
+	for len(ap.ctr.sendPool) == 0 {
 		// do input
-
-		result, err := vm.ChildrenCall(arg.children[0], proc, anal)
-
+		result, err := vm.ChildrenCall(arg.GetChildren(0), proc, anal)
 		if err != nil {
 			return result, err
 		}
 		bat := result.Batch
-
 		if bat == nil {
 			ap.ctr.ending = true
+			goto SENDLAST
 		} else if !bat.IsEmpty() {
 			if ap.ShuffleType == int32(plan.ShuffleType_Hash) {
 				bat, err = hashShuffle(ap, bat, proc)
@@ -115,41 +104,30 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 				return result, nil
 			}
 		}
-
-		// find output again
-		if ap.ctr.ending {
-			index = findBatchToSend(ap, 0)
-			if index == -1 {
-				result.Batch = nil
-				result.Status = vm.ExecStop
-				return result, nil
-			}
-		} else {
-			index = findBatchToSend(ap, shuffleBatchSize)
-		}
 	}
 
-	// do output
+	// send batch in send pool
 	result := vm.NewCallResult()
-	result.Batch = ap.ctr.shuffledBats[index]
-	ap.ctr.lastSentIdx = index
+	length := len(ap.ctr.sendPool)
+	result.Batch = ap.ctr.sendPool[length-1]
+	ap.ctr.lastSentBatch = result.Batch
+	ap.ctr.sendPool = ap.ctr.sendPool[:length-1]
 	return result, nil
 }
 
 func (arg *Argument) initShuffle() {
-	arg.ctr.lastSentIdx = -1
 	if arg.ctr.sels == nil {
 		arg.ctr.sels = make([][]int32, arg.AliveRegCnt)
 		for i := 0; i < int(arg.AliveRegCnt); i++ {
-			arg.ctr.sels[i] = make([]int32, shuffleBatchSize/arg.AliveRegCnt*2)
+			arg.ctr.sels[i] = make([]int32, 0, colexec.DefaultBatchSize/arg.AliveRegCnt*2)
 		}
-		arg.ctr.shuffledBats = make([]*batch.Batch, arg.AliveRegCnt)
+		arg.ctr.shufflePool = make([]*batch.Batch, arg.AliveRegCnt)
 	}
 }
 
 func (arg *Argument) getSels() [][]int32 {
 	for i := range arg.ctr.sels {
-		arg.ctr.sels[i] = nil
+		arg.ctr.sels[i] = arg.ctr.sels[i][:0]
 	}
 	return arg.ctr.sels
 }
@@ -158,6 +136,9 @@ func shuffleConstVectorByHash(ap *Argument, bat *batch.Batch) uint64 {
 	lenRegs := uint64(ap.AliveRegCnt)
 	groupByVec := bat.Vecs[ap.ShuffleColIdx]
 	switch groupByVec.GetType().Oid {
+	case types.T_bit:
+		groupByCol := vector.MustFixedCol[uint64](groupByVec)
+		return plan2.SimpleInt64HashToRange(groupByCol[0], lenRegs)
 	case types.T_int64:
 		groupByCol := vector.MustFixedCol[int64](groupByVec)
 		return plan2.SimpleInt64HashToRange(uint64(groupByCol[0]), lenRegs)
@@ -189,6 +170,15 @@ func getShuffledSelsByHashWithNull(ap *Argument, bat *batch.Batch) [][]int32 {
 	lenRegs := uint64(ap.AliveRegCnt)
 	groupByVec := bat.Vecs[ap.ShuffleColIdx]
 	switch groupByVec.GetType().Oid {
+	case types.T_bit:
+		groupByCol := vector.MustFixedCol[uint64](groupByVec)
+		for row, v := range groupByCol {
+			var regIndex uint64 = 0
+			if !groupByVec.IsNull(uint64(row)) {
+				regIndex = plan2.SimpleInt64HashToRange(v, lenRegs)
+			}
+			sels[regIndex] = append(sels[regIndex], int32(row))
+		}
 	case types.T_int64:
 		groupByCol := vector.MustFixedCol[int64](groupByVec)
 		for row, v := range groupByCol {
@@ -263,6 +253,12 @@ func getShuffledSelsByHashWithoutNull(ap *Argument, bat *batch.Batch) [][]int32 
 	lenRegs := uint64(ap.AliveRegCnt)
 	groupByVec := bat.Vecs[ap.ShuffleColIdx]
 	switch groupByVec.GetType().Oid {
+	case types.T_bit:
+		groupByCol := vector.MustFixedCol[uint64](groupByVec)
+		for row, v := range groupByCol {
+			regIndex := plan2.SimpleInt64HashToRange(v, lenRegs)
+			sels[regIndex] = append(sels[regIndex], int32(row))
+		}
 	case types.T_int64:
 		groupByCol := vector.MustFixedCol[int64](groupByVec)
 		for row, v := range groupByCol {
@@ -311,26 +307,6 @@ func getShuffledSelsByHashWithoutNull(ap *Argument, bat *batch.Batch) [][]int32 
 	return sels
 }
 
-func initShuffledBats(ap *Argument, bat *batch.Batch, proc *process.Process, regIndex int) error {
-	lenVecs := len(bat.Vecs)
-	shuffledBats := ap.ctr.shuffledBats
-
-	shuffledBats[regIndex] = batch.NewWithSize(lenVecs)
-	shuffledBats[regIndex].ShuffleIDX = regIndex
-	for j := range shuffledBats[regIndex].Vecs {
-		v := proc.GetVector(*bat.Vecs[j].GetType())
-		if v.Capacity() < shuffleBatchSize {
-			err := v.PreExtend(shuffleBatchSize, proc.Mp())
-			if err != nil {
-				v.Free(proc.Mp())
-				return err
-			}
-		}
-		shuffledBats[regIndex].Vecs[j] = v
-	}
-	return nil
-}
-
 func hashShuffle(ap *Argument, bat *batch.Batch, proc *process.Process) (*batch.Batch, error) {
 	groupByVec := bat.Vecs[ap.ShuffleColIdx]
 	if groupByVec.IsConstNull() {
@@ -375,6 +351,14 @@ func allBatchInOneRange(ap *Argument, bat *batch.Batch) (bool, uint64) {
 	var firstValueUnsigned, lastValueUnsigned uint64
 	var signed bool
 	switch groupByVec.GetType().Oid {
+	case types.T_bit:
+		groupByCol := vector.MustFixedCol[uint64](groupByVec)
+		firstValueUnsigned = groupByCol[0]
+		if groupByVec.IsConst() {
+			lastValueUnsigned = firstValueUnsigned
+		} else {
+			lastValueUnsigned = groupByCol[groupByVec.Length()-1]
+		}
 	case types.T_int64:
 		signed = true
 		groupByCol := vector.MustFixedCol[int64](groupByVec)
@@ -465,6 +449,19 @@ func getShuffledSelsByRangeWithoutNull(ap *Argument, bat *batch.Batch) [][]int32
 	lenRegs := uint64(ap.AliveRegCnt)
 	groupByVec := bat.Vecs[ap.ShuffleColIdx]
 	switch groupByVec.GetType().Oid {
+	case types.T_bit:
+		groupByCol := vector.MustFixedCol[uint64](groupByVec)
+		if ap.ShuffleRangeUint64 != nil {
+			for row, v := range groupByCol {
+				regIndex := plan2.GetRangeShuffleIndexUnsignedSlice(ap.ShuffleRangeUint64, v)
+				sels[regIndex] = append(sels[regIndex], int32(row))
+			}
+		} else {
+			for row, v := range groupByCol {
+				regIndex := plan2.GetRangeShuffleIndexUnsignedMinMax(uint64(ap.ShuffleColMin), uint64(ap.ShuffleColMax), v, lenRegs)
+				sels[regIndex] = append(sels[regIndex], int32(row))
+			}
+		}
 	case types.T_int64:
 		groupByCol := vector.MustFixedCol[int64](groupByVec)
 		if ap.ShuffleRangeInt64 != nil {
@@ -585,6 +582,25 @@ func getShuffledSelsByRangeWithNull(ap *Argument, bat *batch.Batch) [][]int32 {
 	lenRegs := uint64(ap.AliveRegCnt)
 	groupByVec := bat.Vecs[ap.ShuffleColIdx]
 	switch groupByVec.GetType().Oid {
+	case types.T_bit:
+		groupByCol := vector.MustFixedCol[uint64](groupByVec)
+		if ap.ShuffleRangeUint64 != nil {
+			for row, v := range groupByCol {
+				var regIndex uint64 = 0
+				if !groupByVec.IsNull(uint64(row)) {
+					regIndex = plan2.GetRangeShuffleIndexUnsignedSlice(ap.ShuffleRangeUint64, v)
+				}
+				sels[regIndex] = append(sels[regIndex], int32(row))
+			}
+		} else {
+			for row, v := range groupByCol {
+				var regIndex uint64 = 0
+				if !groupByVec.IsNull(uint64(row)) {
+					regIndex = plan2.GetRangeShuffleIndexSignedMinMax(ap.ShuffleColMin, ap.ShuffleColMax, int64(v), lenRegs)
+				}
+				sels[regIndex] = append(sels[regIndex], int32(row))
+			}
+		}
 	case types.T_int64:
 		groupByCol := vector.MustFixedCol[int64](groupByVec)
 		if ap.ShuffleRangeInt64 != nil {
@@ -748,27 +764,39 @@ func getShuffledSelsByRangeWithNull(ap *Argument, bat *batch.Batch) [][]int32 {
 	return sels
 }
 
-func putBatchIntoShuffledPoolsBySels(ap *Argument, bat *batch.Batch, sels [][]int32, proc *process.Process) error {
-	shuffledBats := ap.ctr.shuffledBats
-	for regIndex := range shuffledBats {
-		lenSels := len(sels[regIndex])
-		if lenSels > 0 {
-			b := shuffledBats[regIndex]
-			if b == nil {
-				err := initShuffledBats(ap, bat, proc, regIndex)
+func putBatchIntoShuffledPoolsBySels(ap *Argument, srcBatch *batch.Batch, sels [][]int32, proc *process.Process) error {
+	shuffledPool := ap.ctr.shufflePool
+	var err error
+	for regIndex := range shuffledPool {
+		newSels := sels[regIndex]
+		for len(newSels) > 0 {
+			bat := shuffledPool[regIndex]
+			if bat == nil {
+				bat, err = proc.NewBatchFromSrc(srcBatch, colexec.DefaultBatchSize)
 				if err != nil {
 					return err
 				}
-				b = shuffledBats[regIndex]
+				bat.ShuffleIDX = regIndex
+				ap.ctr.shufflePool[regIndex] = bat
 			}
-			for vecIndex := range b.Vecs {
-				v := b.Vecs[vecIndex]
-				err := v.Union(bat.Vecs[vecIndex], sels[regIndex], proc.Mp())
+			length := len(newSels)
+			if length+bat.RowCount() > colexec.DefaultBatchSize {
+				length = colexec.DefaultBatchSize - bat.RowCount()
+			}
+			for vecIndex := range bat.Vecs {
+				v := bat.Vecs[vecIndex]
+				v.SetSorted(false)
+				err = v.Union(srcBatch.Vecs[vecIndex], newSels[:length], proc.Mp())
 				if err != nil {
 					return err
 				}
 			}
-			b.AddRowCount(lenSels)
+			bat.AddRowCount(length)
+			newSels = newSels[length:]
+			if bat.RowCount() == colexec.DefaultBatchSize {
+				ap.ctr.sendPool = append(ap.ctr.sendPool, bat)
+				shuffledPool[regIndex] = nil
+			}
 		}
 	}
 	return nil

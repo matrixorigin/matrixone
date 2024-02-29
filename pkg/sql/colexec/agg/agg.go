@@ -430,15 +430,6 @@ func (a *UnaryAgg[T1, T2]) MarshalBinary() ([]byte, error) {
 	return source.Marshal()
 }
 
-func getUnaryAggStrVs(strUnaryAgg any) []string {
-	agg := strUnaryAgg.(*UnaryAgg[[]byte, []byte])
-	result := make([]string, len(agg.vs))
-	for i := range result {
-		result[i] = string(agg.vs[i])
-	}
-	return result
-}
-
 func (a *UnaryAgg[T1, T2]) UnmarshalBinary(data []byte) error {
 	// avoid resulting errors caused by morpc overusing memory
 	copyData := make([]byte, len(data))
@@ -460,6 +451,19 @@ func (a *UnaryAgg[T1, T2]) UnmarshalBinary(data []byte) error {
 	setAggValues[T1, T2](a, a.outputType)
 
 	return a.priv.UnmarshalBinary(decoded.Private)
+}
+
+func (a *UnaryAgg[T1, T2]) SetPartialResult(PartialResult any) {
+	a.PartialResult = PartialResult
+}
+
+func getUnaryAggStrVs(strUnaryAgg any) []string {
+	agg := strUnaryAgg.(*UnaryAgg[[]byte, []byte])
+	result := make([]string, len(agg.vs))
+	for i := range result {
+		result[i] = string(agg.vs[i])
+	}
+	return result
 }
 
 func setAggValues[T1, T2 any](agg any, typ types.Type) {

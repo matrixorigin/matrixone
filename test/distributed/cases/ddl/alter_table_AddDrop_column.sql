@@ -201,7 +201,7 @@ drop table if exists foreign02;
 create table foreign02(col1 int,
                        col2 int,
                        col3 int primary key,
-                       foreign key(col1) references foreign01(col1));
+                       constraint `c1` foreign key(col1) references foreign01(col1));
 show create table foreign01;
 show create table foreign02;
 insert into foreign01 values(1,'sfhuwe',1,1);

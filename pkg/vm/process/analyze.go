@@ -15,10 +15,11 @@
 package process
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 )
@@ -31,7 +32,7 @@ func init() {
 	)
 }
 
-func (a AnalyzeInfo) Name() string {
+func (a AnalyzeInfo) TypeName() string {
 	return "compile.anaylzeinfo"
 }
 

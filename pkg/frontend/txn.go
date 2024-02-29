@@ -178,6 +178,21 @@ func (th *TxnHandler) NewTxnOperator() (context.Context, TxnOperator, error) {
 			}
 		}
 
+		if th.ses.IsBackgroundSession() {
+			opts = append(opts, client.WithDisableTrace(true))
+		} else {
+			varVal, err = th.ses.GetSessionVar("disable_txn_trace")
+			if err != nil {
+				return nil, nil, err
+			}
+			if gsv, ok := GSysVariables.GetDefinitionOfSysVar("disable_txn_trace"); ok {
+				if svbt, ok2 := gsv.GetType().(SystemVariableBoolType); ok2 {
+					if svbt.IsTrue(varVal) {
+						opts = append(opts, client.WithDisableTrace(true))
+					}
+				}
+			}
+		}
 	}
 
 	th.txnOperator, err = th.txnClient.New(
@@ -591,9 +606,9 @@ When it is not in single statement transaction mode:
 	Starts a new transaction if there is none. Reuse the current transaction if there is one.
 */
 func (ses *Session) TxnCreate() (context.Context, TxnOperator, error) {
-	if ses.InMultiStmtTransactionMode() {
-		ses.SetServerStatus(SERVER_STATUS_IN_TRANS)
-	}
+	// SERVER_STATUS_IN_TRANS should be set to true regardless of whether autocommit is equal to 1.
+	ses.SetServerStatus(SERVER_STATUS_IN_TRANS)
+
 	if !ses.GetTxnHandler().IsValidTxnOperator() {
 		return ses.GetTxnHandler().NewTxn()
 	}
@@ -743,14 +758,27 @@ SetAutocommit sets the value of the system variable 'autocommit'.
 The rule is that we can not execute the statement 'set parameter = value' in
 an active transaction whichever it is started by BEGIN or in 'set autocommit = 0;'.
 */
-func (ses *Session) SetAutocommit(on bool) error {
-	if ses.InActiveTransaction() {
-		return moerr.NewInternalError(ses.requestCtx, parameterModificationInTxnErrorInfo())
-	}
-	if on {
+func (ses *Session) SetAutocommit(old, on bool) error {
+	//on -> on : do nothing
+	//off -> on : commit active txn
+	//	if commit failed, clean OPTION_AUTOCOMMIT
+	//	if commit succeeds, clean OPTION_BEGIN | OPTION_NOT_AUTOCOMMIT
+	//		and set SERVER_STATUS_AUTOCOMMIT
+	//on -> off :
+	//	clean OPTION_AUTOCOMMIT
+	//	clean SERVER_STATUS_AUTOCOMMIT
+	//	set OPTION_NOT_AUTOCOMMIT
+	//off -> off : do nothing
+	if !old && on { //off -> on
+		//activating autocommit
+		err := ses.txnHandler.CommitTxn()
+		if err != nil {
+			ses.ClearOptionBits(OPTION_AUTOCOMMIT)
+			return err
+		}
 		ses.ClearOptionBits(OPTION_BEGIN | OPTION_NOT_AUTOCOMMIT)
 		ses.SetServerStatus(SERVER_STATUS_AUTOCOMMIT)
-	} else {
+	} else if old && !on { //on -> off
 		ses.ClearServerStatus(SERVER_STATUS_AUTOCOMMIT)
 		ses.SetOptionBits(OPTION_NOT_AUTOCOMMIT)
 	}

@@ -113,18 +113,6 @@ func (entry *flushTableTailEntry) addTransferPages() {
 
 // PrepareCommit check deletes between start ts and commit ts
 func (entry *flushTableTailEntry) PrepareCommit() error {
-	found := false
-	nconflictCnt := 0
-	for _, blk := range entry.delSrcMetas {
-		exist, _ := blk.GetBlockData().HasDeleteIntentsPreparedIn(entry.txn.GetStartTS().Next(), types.MaxTs())
-		if exist {
-			found = true
-			nconflictCnt++
-			if blk.HasDropCommitted() {
-				panic(fmt.Sprintf("[FlushTabletail] task %d has write-write conflict on nblk %s, but it has been dropped", entry.taskID, blk.ID.String()))
-			}
-		}
-	}
 	var aconflictCnt, totalTrans int
 	// transfer deletes in (startts .. committs] for ablocks
 	delTbls := make([]*model.TransDels, len(entry.createdBlkHandles))
@@ -170,7 +158,6 @@ func (entry *flushTableTailEntry) PrepareCommit() error {
 				return err
 			}
 		}
-		found = true
 		entry.nextRoundDirties = append(entry.nextRoundDirties, blk)
 	}
 	for i, delTbl := range delTbls {
@@ -180,11 +167,15 @@ func (entry *flushTableTailEntry) PrepareCommit() error {
 		}
 	}
 
-	if found {
+	if aconflictCnt > 0 || totalTrans > 0 {
 		logutil.Infof(
-			"[FlushTabletail] task %d ww (%s .. %s): on %d ablk, transfer %v rows; on %v nblk, no tranfer, don't worry",
-			entry.taskID, entry.txn.GetStartTS().ToString(), entry.txn.GetPrepareTS().ToString(),
-			aconflictCnt, totalTrans, nconflictCnt)
+			"[FlushTabletail] task %d ww (%s .. %s): on %d ablk, transfer %v rows",
+			entry.taskID,
+			entry.txn.GetStartTS().ToString(),
+			entry.txn.GetPrepareTS().ToString(),
+			aconflictCnt,
+			totalTrans,
+		)
 	}
 	return nil
 }

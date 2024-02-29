@@ -394,7 +394,7 @@ format(d2, 4)
 SELECT any_value(format(id,2)) FROM format_02;
 any_value(format(id, 2))
 1.00
-SELECT d1, d2 FROM format_02 WHERE format(id,0) BETWEEN 0 AND 400;
+SELECT d1, d2 FROM format_02 WHERE cast(format(id,0) as bigint) BETWEEN 0 AND 400;
 d1    d2
 1.2    47832.434
 -3283.33    73.32
@@ -423,10 +423,10 @@ format(ceil(d2), 6)
 0.000000
 37,827,330.000000
 3,923,405.000000
-SELECT * FROM format_02 WHERE format(d2,0) IN (73, 32789);
+SELECT * FROM format_02 WHERE format(d2,0) IN ('73', '32789');
 id    d1    d2
 2    -3283.33    73.32
-SELECT * FROM format_02 WHERE format(d2,0) NOT IN (73, 32789);
+SELECT * FROM format_02 WHERE format(d2,0) NOT IN ('73', '32789');
 id    d1    d2
 1    1.2    47832.434
 3    null    32789.33

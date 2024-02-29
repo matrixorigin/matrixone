@@ -467,3 +467,24 @@ select 1 > 0;
 true
 SELECT TABLE_SCHEMA AS TABLE_CAT, NULL AS TABLE_SCHEM, TABLE_NAME, CASE WHEN TABLE_TYPE='BASE TABLE' THEN CASE WHEN TABLE_SCHEMA = 'mysql' OR TABLE_SCHEMA = 'performance_schema' THEN 'SYSTEM TABLE' ELSE 'TABLE' END WHEN TABLE_TYPE='TEMPORARY' THEN 'LOCAL_TEMPORARY' ELSE TABLE_TYPE END AS TABLE_TYPE, TABLE_COMMENT AS REMARKS, NULL AS TYPE_CAT, NULL AS TYPE_SCHEM, NULL AS TYPE_NAME, NULL AS SELF_REFERENCING_COL_NAME, NULL AS REF_GENERATION FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = 'abc' group by null HAVING TABLE_TYPE IN ('LOCAL TEMPORARY','TABLE','VIEW',null,null) ORDER BY TABLE_TYPE, TABLE_SCHEMA, TABLE_NAME;
 internal error: Invalid GROUP BY NULL
+use db1;
+drop table if exists t11;
+create table t11 (a int, b int, primary key (a));
+insert into t11 (select *,* from generate_series(1, 50000, 1)g);
+select count(*) from t11 where a=20000;
+count(*)
+1
+select count(*) from t11 where a in (1,20000);
+count(*)
+2
+drop table if exists t1;
+create table t1(a int primary key, b int);
+insert into t1 values (1,1),(2,2),(3,3);
+select mo_ctl('dn', 'flush', 'select.t1');
+mo_ctl(dn, flush, select.t1)
+{\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
+select * from t1 where a in (3,3,3,2,1);
+a    b
+1    1
+2    2
+3    3

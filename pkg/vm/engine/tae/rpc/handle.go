@@ -20,8 +20,8 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"runtime"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 
@@ -30,6 +30,7 @@ import (
 	"github.com/google/shlex"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -62,13 +63,8 @@ const (
 )
 
 type Handle struct {
-	db *db.DB
-	mu struct {
-		sync.RWMutex
-		//map txn id to txnContext.
-		txnCtxs map[string]*txnContext
-	}
-
+	db        *db.DB
+	txnCtxs   *common.Map[string, *txnContext]
 	GCManager *gc.Manager
 }
 
@@ -100,9 +96,8 @@ func NewTAEHandle(ctx context.Context, path string, opt *options.Options) *Handl
 	h := &Handle{
 		db: tae,
 	}
-	h.mu.txnCtxs = make(map[string]*txnContext)
+	h.txnCtxs = common.NewMap[string, *txnContext](runtime.NumCPU())
 
-	// clean h.mu.txnCtxs by interval
 	h.GCManager = gc.NewManager(
 		gc.WithCronJob(
 			"clean-txn-cache",
@@ -120,13 +115,9 @@ func NewTAEHandle(ctx context.Context, path string, opt *options.Options) *Handl
 // TODO: vast items within h.mu.txnCtxs would incur performance penality.
 func (h *Handle) GCCache(now time.Time) error {
 	logutil.Infof("GC rpc handle txn cache")
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	for id, txn := range h.mu.txnCtxs {
-		if txn.deadline.Before(now) {
-			delete(h.mu.txnCtxs, id)
-		}
-	}
+	h.txnCtxs.DeleteIf(func(k string, v *txnContext) bool {
+		return v.deadline.Before(now)
+	})
 	return nil
 }
 
@@ -134,9 +125,7 @@ func (h *Handle) HandleCommit(
 	ctx context.Context,
 	meta txn.TxnMeta) (cts timestamp.Timestamp, err error) {
 	start := time.Now()
-	h.mu.RLock()
-	txnCtx, ok := h.mu.txnCtxs[string(meta.GetID())]
-	h.mu.RUnlock()
+	txnCtx, ok := h.txnCtxs.Load(util.UnsafeBytesToString(meta.GetID()))
 	common.DoIfDebugEnabled(func() {
 		logutil.Debugf("HandleCommit start : %X",
 			string(meta.GetID()))
@@ -144,9 +133,7 @@ func (h *Handle) HandleCommit(
 	defer func() {
 		if ok {
 			//delete the txn's context.
-			h.mu.Lock()
-			delete(h.mu.txnCtxs, string(meta.GetID()))
-			h.mu.Unlock()
+			h.txnCtxs.Delete(util.UnsafeBytesToString(meta.GetID()))
 		}
 		common.DoIfInfoEnabled(func() {
 			if time.Since(start) > MAX_ALLOWED_TXN_LATENCY {
@@ -276,10 +263,8 @@ func (h *Handle) handleRequests(
 func (h *Handle) HandleRollback(
 	ctx context.Context,
 	meta txn.TxnMeta) (err error) {
-	h.mu.Lock()
-	_, ok := h.mu.txnCtxs[string(meta.GetID())]
-	delete(h.mu.txnCtxs, string(meta.GetID()))
-	h.mu.Unlock()
+	_, ok := h.txnCtxs.LoadAndDelete(util.UnsafeBytesToString(meta.GetID()))
+
 	//Rollback after pre-commit write.
 	if ok {
 		return
@@ -308,16 +293,12 @@ func (h *Handle) HandleCommitting(
 func (h *Handle) HandlePrepare(
 	ctx context.Context,
 	meta txn.TxnMeta) (pts timestamp.Timestamp, err error) {
-	h.mu.RLock()
-	txnCtx, ok := h.mu.txnCtxs[string(meta.GetID())]
-	h.mu.RUnlock()
+	txnCtx, ok := h.txnCtxs.Load(util.UnsafeBytesToString(meta.GetID()))
 	var txn txnif.AsyncTxn
 	defer func() {
 		if ok {
 			//delete the txn's context.
-			h.mu.Lock()
-			delete(h.mu.txnCtxs, string(meta.GetID()))
-			h.mu.Unlock()
+			h.txnCtxs.Delete(util.UnsafeBytesToString(meta.GetID()))
 		}
 	}()
 	if ok {
@@ -538,9 +519,7 @@ func (h *Handle) EvaluateTxnRequest(
 	ctx context.Context,
 	meta txn.TxnMeta,
 ) error {
-	h.mu.RLock()
-	txnCtx := h.mu.txnCtxs[string(meta.GetID())]
-	h.mu.RUnlock()
+	txnCtx, _ := h.txnCtxs.Load(util.UnsafeBytesToString(meta.GetID()))
 
 	metaLocCnt := 0
 	deltaLocCnt := 0
@@ -582,8 +561,7 @@ func (h *Handle) CacheTxnRequest(
 	meta txn.TxnMeta,
 	req any,
 	rsp any) (err error) {
-	h.mu.Lock()
-	txnCtx, ok := h.mu.txnCtxs[string(meta.GetID())]
+	txnCtx, ok := h.txnCtxs.Load(util.UnsafeBytesToString(meta.GetID()))
 	if !ok {
 		now := time.Now()
 		txnCtx = &txnContext{
@@ -592,9 +570,8 @@ func (h *Handle) CacheTxnRequest(
 			meta:     meta,
 			toCreate: make(map[uint64]*catalog2.Schema),
 		}
-		h.mu.txnCtxs[string(meta.GetID())] = txnCtx
+		h.txnCtxs.Store(util.UnsafeBytesToString(meta.GetID()), txnCtx)
 	}
-	h.mu.Unlock()
 	txnCtx.reqs = append(txnCtx.reqs, req)
 	if r, ok := req.(*db.CreateRelationReq); ok {
 		// Does this place need
@@ -979,7 +956,7 @@ func (h *Handle) HandleWrite(
 		// TODO: debug for #13342, remove me later
 		if IsDistrictTable(tb.Schema().(*catalog2.Schema).Name) {
 			for i := 0; i < req.Batch.Vecs[0].Length(); i++ {
-				pk, _, _ := types.DecodeTuple(req.Batch.Vecs[11].GetRawBytesAt(i))
+				pk, _, _, _ := types.DecodeTuple(req.Batch.Vecs[11].GetRawBytesAt(i))
 				logutil.Infof("op1 %v %v", txn.GetStartTS().ToString(), PrintTuple(pk))
 			}
 		}
@@ -1004,19 +981,25 @@ func (h *Handle) HandleWrite(
 				return err
 			}
 			var ok bool
-			var bat *batch.Batch
-			bat, err = blockio.LoadTombstoneColumns(
+			var vectors []containers.Vector
+			var closeFunc func()
+			//Extend lifetime of vectors is within the function.
+			//No NeedCopy. closeFunc is required after use.
+			//closeFunc is not nil.
+			vectors, closeFunc, err = blockio.LoadTombstoneColumns2(
 				ctx,
 				[]uint16{uint16(rowidIdx), uint16(pkIdx)},
 				nil,
 				h.db.Runtime.Fs.Service,
 				location,
+				false,
 				nil,
 			)
 			if err != nil {
 				return
 			}
-			blkids := getBlkIDsFromRowids(bat.Vecs[0])
+			defer closeFunc()
+			blkids := getBlkIDsFromRowids(vectors[0].GetDownstreamVector())
 			id := tb.GetMeta().(*catalog2.TableEntry).AsCommonID()
 			if len(blkids) == 1 {
 				for blkID := range blkids {
@@ -1033,9 +1016,9 @@ func (h *Handle) HandleWrite(
 			} else {
 				logutil.Warnf("multiply blocks in one deltalocation")
 			}
-			rowIDVec := containers.ToTNVector(bat.Vecs[0], common.WorkspaceAllocator)
+			rowIDVec := vectors[0]
 			defer rowIDVec.Close()
-			pkVec := containers.ToTNVector(bat.Vecs[1], common.WorkspaceAllocator)
+			pkVec := vectors[1]
 			//defer pkVec.Close()
 			if err = tb.DeleteByPhyAddrKeys(rowIDVec, pkVec); err != nil {
 				return
@@ -1055,7 +1038,7 @@ func (h *Handle) HandleWrite(
 		for i := 0; i < rowIDVec.Length(); i++ {
 
 			rowID := objectio.HackBytes2Rowid(req.Batch.Vecs[0].GetRawBytesAt(i))
-			pk, _, _ := types.DecodeTuple(req.Batch.Vecs[1].GetRawBytesAt(i))
+			pk, _, _, _ := types.DecodeTuple(req.Batch.Vecs[1].GetRawBytesAt(i))
 			logutil.Infof("op2 %v %v %v", txn.GetStartTS().ToString(), PrintTuple(pk), rowID.String())
 		}
 	}

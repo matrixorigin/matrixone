@@ -196,7 +196,22 @@ func (ie *internalExecutor) newCmdSession(ctx context.Context, opts ie.SessionOv
 	sess.SetRequestContext(ctx)
 	sess.SetConnectContext(ctx)
 
-	t, _ := GetTenantInfo(ctx, DefaultTenantMoAdmin)
+	var t *TenantInfo
+	if accountId, err := defines.GetAccountId(ctx); err == nil {
+		t = &TenantInfo{
+			TenantID:      accountId,
+			UserID:        defines.GetUserId(ctx),
+			DefaultRoleID: defines.GetRoleId(ctx),
+		}
+		if accountId == sysAccountID {
+			t.Tenant = sysAccountName // fixme: fix empty tencent value, while do metric collection.
+			t.User = "internal"
+			// more details in authenticateUserCanExecuteStatementWithObjectTypeNone()
+			t.DefaultRole = moAdminRoleName
+		}
+	} else {
+		t, _ = GetTenantInfo(ctx, DefaultTenantMoAdmin)
+	}
 	sess.SetTenantInfo(t)
 	applyOverride(sess, ie.baseSessOpts)
 	applyOverride(sess, opts)

@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"go.uber.org/zap"
 )
 
@@ -111,10 +112,10 @@ func (l *LocalFS) initCaches(ctx context.Context, config CacheConfig) error {
 	config.setDefaults()
 
 	if config.RemoteCacheEnabled {
-		if config.CacheClient == nil {
-			return moerr.NewInternalError(ctx, "cache client is nil")
+		if config.QueryClient == nil {
+			return moerr.NewInternalError(ctx, "query client is nil")
 		}
-		l.remoteCache = NewRemoteCache(config.CacheClient, config.KeyRouterFactory)
+		l.remoteCache = NewRemoteCache(config.QueryClient, config.KeyRouterFactory)
 		logutil.Info("fileservice: remote cache initialized",
 			zap.Any("fs-name", l.name),
 		)
@@ -288,14 +289,16 @@ func (l *LocalFS) Read(ctx context.Context, vector *IOVector) (err error) {
 	bytesCounter := new(atomic.Int64)
 	start := time.Now()
 	defer func() {
-		v2.LocalReadIODurationHistogram.Observe(time.Since(start).Seconds())
+		LocalReadIODuration := time.Since(start)
+
+		v2.LocalReadIODurationHistogram.Observe(LocalReadIODuration.Seconds())
 		v2.LocalReadIOBytesHistogram.Observe(float64(bytesCounter.Load()))
 	}()
 
 	if len(vector.Entries) == 0 {
 		return moerr.NewEmptyVectorNoCtx()
 	}
-
+	startLock := time.Now()
 	unlock, wait := l.ioLocks.Lock(IOLockKey{
 		File: vector.FilePath,
 	})
@@ -304,6 +307,9 @@ func (l *LocalFS) Read(ctx context.Context, vector *IOVector) (err error) {
 	} else {
 		wait()
 	}
+
+	stats := statistic.StatsInfoFromContext(ctx)
+	stats.AddLockTimeConsumption(time.Since(startLock))
 
 	for _, cache := range vector.Caches {
 		cache := cache
@@ -329,6 +335,11 @@ func (l *LocalFS) Read(ctx context.Context, vector *IOVector) (err error) {
 			err = l.memCache.Update(ctx, vector, l.asyncUpdate)
 		}()
 	}
+
+	ioStart := time.Now()
+	defer func() {
+		stats.AddIOAccessTimeConsumption(time.Since(ioStart))
+	}()
 
 	if l.diskCache != nil {
 		if err := readCache(ctx, l.diskCache, vector); err != nil {
@@ -368,14 +379,17 @@ func (l *LocalFS) ReadCache(ctx context.Context, vector *IOVector) (err error) {
 		return moerr.NewEmptyVectorNoCtx()
 	}
 
+	startLock := time.Now()
 	unlock, wait := l.ioLocks.Lock(IOLockKey{
 		File: vector.FilePath,
 	})
+
 	if unlock != nil {
 		defer unlock()
 	} else {
 		wait()
 	}
+	statistic.StatsInfoFromContext(ctx).AddLockTimeConsumption(time.Since(startLock))
 
 	for _, cache := range vector.Caches {
 		cache := cache
@@ -809,6 +823,10 @@ func (l *LocalFS) ensureDir(nativePath string) error {
 
 	// create
 	if err := os.Mkdir(nativePath, 0755); err != nil {
+		if os.IsExist(err) {
+			// existed
+			return nil
+		}
 		return err
 	}
 

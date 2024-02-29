@@ -89,6 +89,7 @@ func startDynamicCNServices(
 			os.Args[0],
 			"-cfg", "./mo-data/cn-" + fmt.Sprintf("%d", i) + ".toml",
 			"-max-processor", fmt.Sprintf("%d", cfg.CpuCount),
+			"-debug-http", fmt.Sprintf("127.0.0.1:606%d", i),
 		}
 		if err := startDynamicCNByIndex(i); err != nil {
 			return err
@@ -122,6 +123,7 @@ func genDynamicCNConfigs(
 			string(baseCNConfig),
 			uuid,
 			port,
+			i,
 			frontendPort,
 			unixSocketPort)
 		f, err := os.CreateTemp(

@@ -19,13 +19,16 @@ import (
 	"fmt"
 	"strconv"
 	"sync"
+	"time"
 
 	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/bootstrap"
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/tests"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
 
 // CNService describes expected behavior for tn service.
@@ -45,6 +48,10 @@ type CNService interface {
 	GetTaskRunner() taskservice.TaskRunner
 	// GetTaskService returns the taskservice
 	GetTaskService() (taskservice.TaskService, bool)
+	// GetSQLExecutor returns sql executor
+	GetSQLExecutor() executor.SQLExecutor
+	// GetBootstrapService returns bootstrap service
+	GetBootstrapService() bootstrap.Service
 	// WaitSystemInitCompleted wait system init task completed
 	WaitSystemInitCompleted(ctx context.Context) error
 	//SetCancel sets CancelFunc to stop GetClusterDetailsFromHAKeeper
@@ -120,6 +127,14 @@ func (c *cnService) GetTaskService() (taskservice.TaskService, bool) {
 	return c.svc.GetTaskService()
 }
 
+func (c *cnService) GetSQLExecutor() executor.SQLExecutor {
+	return c.svc.GetSQLExecutor()
+}
+
+func (c *cnService) GetBootstrapService() bootstrap.Service {
+	return c.svc.GetBootstrapService()
+}
+
 func (c *cnService) WaitSystemInitCompleted(ctx context.Context) error {
 	return c.svc.WaitSystemInitCompleted(ctx)
 }
@@ -150,7 +165,7 @@ func newCNService(
 	}, nil
 }
 
-func buildCNConfig(index int, opt Options, address serviceAddresses) *cnservice.Config {
+func buildCNConfig(index int, opt Options, address *serviceAddresses) *cnservice.Config {
 	port, err := tests.GetAvailablePort("127.0.0.1")
 	if err != nil {
 		panic(err)
@@ -161,9 +176,10 @@ func buildCNConfig(index int, opt Options, address serviceAddresses) *cnservice.
 	}
 	uid, _ := uuid.NewV7()
 	cfg := &cnservice.Config{
-		UUID:          uid.String(),
-		ListenAddress: address.getCNListenAddress(index),
-		SQLAddress:    fmt.Sprintf("127.0.0.1:%d", p),
+		UUID:           uid.String(),
+		ListenAddress:  address.getCNListenAddress(index),
+		ServiceAddress: address.getCNListenAddress(index),
+		SQLAddress:     fmt.Sprintf("127.0.0.1:%d", p),
 		Frontend: config.FrontendParameters{
 			Port: int64(p),
 		},
@@ -172,6 +188,11 @@ func buildCNConfig(index int, opt Options, address serviceAddresses) *cnservice.
 	cfg.HAKeeper.HeatbeatInterval.Duration = opt.heartbeat.cn
 	cfg.Engine.Type = opt.storage.cnEngine
 	cfg.TaskRunner.Parallelism = 4
+	cfg.LockService.ListenAddress = address.getCNLockListenAddress(index)
+	cfg.LockService.ServiceAddress = cfg.LockService.ListenAddress
+	cfg.LockService.KeepBindTimeout.Duration = time.Second * 30
+	cfg.QueryServiceConfig.Address.ListenAddress = address.getCNQueryListenAddress(index)
+	cfg.QueryServiceConfig.Address.ServiceAddress = cfg.QueryServiceConfig.Address.ListenAddress
 
 	// We need the filled version of configuration.
 	// It's necessary when building cnservice.Option.
@@ -180,8 +201,4 @@ func buildCNConfig(index int, opt Options, address serviceAddresses) *cnservice.
 	}
 
 	return cfg
-}
-
-func buildCNOptions() cnOptions {
-	return nil
 }

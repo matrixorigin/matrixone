@@ -26,7 +26,7 @@ create table emp(
                     comm decimal(7,2) COMMENT '奖金',
                     deptno int unsigned COMMENT '所在部门',
                     primary key(empno),
-                    FOREIGN KEY (deptno) REFERENCES dept(deptno)
+                    constraint `c1` FOREIGN KEY (deptno) REFERENCES dept(deptno)
 );
 
 INSERT INTO emp VALUES (7369,'SMITH','CLERK',7902,'1980-12-17',800,NULL,20);
@@ -107,7 +107,7 @@ create table emp(
                     comm decimal(7,2) COMMENT '奖金',
                     deptno int unsigned COMMENT '所在部门',
                     primary key(empno),
-                    FOREIGN KEY (deptno) REFERENCES dept(deptno)
+                    constraint `c1` FOREIGN KEY (deptno) REFERENCES dept(deptno)
 );
 
 INSERT INTO emp VALUES (7369,'SMITH','CLERK',7902,'1980-12-17',800,NULL,20);
@@ -174,7 +174,7 @@ create table emp(
                     comm decimal(7,2) COMMENT '奖金',
                     deptno int unsigned COMMENT '所在部门',
                     primary key(empno),
-                    FOREIGN KEY (deptno) REFERENCES dept(deptno)
+                    constraint `c1` FOREIGN KEY (deptno) REFERENCES dept(deptno)
 );
 
 INSERT INTO emp VALUES (7369,'SMITH','CLERK',7902,'1980-12-17',800,NULL,20);
@@ -235,7 +235,7 @@ create table emp(
                     comm decimal(7,2) COMMENT '奖金',
                     deptno int unsigned COMMENT '所在部门',
                     primary key(empno),
-                    FOREIGN KEY (deptno) REFERENCES dept(deptno)
+                    constraint `c1` FOREIGN KEY (deptno) REFERENCES dept(deptno)
 );
 
 INSERT INTO emp VALUES (7369,'SMITH','CLERK',7902,'1980-12-17',800,NULL,20);

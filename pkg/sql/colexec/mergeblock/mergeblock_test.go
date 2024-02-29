@@ -16,10 +16,11 @@ package mergeblock
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"reflect"
 	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
@@ -114,11 +115,14 @@ func TestMergeBlock(t *testing.T) {
 		Tbl: &mockRelation{},
 		//Unique_tbls:  []engine.Relation{&mockRelation{}, &mockRelation{}},
 		affectedRows: 0,
-		info: &vm.OperatorInfo{
-			Idx:     0,
-			IsFirst: false,
-			IsLast:  false,
+		OperatorBase: vm.OperatorBase{
+			OperatorInfo: vm.OperatorInfo{
+				Idx:     0,
+				IsFirst: false,
+				IsLast:  false,
+			},
 		},
+		AddAffectedRows: true,
 	}
 	resetChildren(&argument1, batch1)
 
@@ -160,23 +164,18 @@ func TestMergeBlock(t *testing.T) {
 	for k := range argument1.container.mp {
 		argument1.container.mp[k].Clean(proc.GetMPool())
 	}
-	argument1.children[0].Free(proc, false, nil)
+	argument1.GetChildren(0).Free(proc, false, nil)
 	proc.FreeVectors()
 	require.Equal(t, int64(0), proc.GetMPool().CurrNB())
 }
 
 func resetChildren(arg *Argument, bat *batch.Batch) {
-	if len(arg.children) == 0 {
-		arg.AppendChild(&value_scan.Argument{
-			Batchs: []*batch.Batch{bat},
+	arg.SetChildren(
+		[]vm.Operator{
+			&value_scan.Argument{
+				Batchs: []*batch.Batch{bat},
+			},
 		})
-
-	} else {
-		arg.children = arg.children[:0]
-		arg.AppendChild(&value_scan.Argument{
-			Batchs: []*batch.Batch{bat},
-		})
-	}
 }
 
 func mockBlockInfoBat(proc *process.Process, withStats bool) *batch.Batch {
@@ -193,7 +192,7 @@ func mockBlockInfoBat(proc *process.Process, withStats bool) *batch.Batch {
 	blockInfoBat.Vecs[1] = proc.GetVector(types.T_text.ToType())
 
 	if withStats {
-		blockInfoBat.Vecs[2] = vector.NewConstBytes(types.T_binary.ToType(),
+		blockInfoBat.Vecs[2], _ = vector.NewConstBytes(types.T_binary.ToType(),
 			objectio.ZeroObjectStats.Marshal(), 1, proc.GetMPool())
 	}
 
@@ -205,11 +204,14 @@ func TestArgument_GetMetaLocBat(t *testing.T) {
 		Tbl: &mockRelation{},
 		//Unique_tbls:  []engine.Relation{&mockRelation{}, &mockRelation{}},
 		affectedRows: 0,
-		info: &vm.OperatorInfo{
-			Idx:     0,
-			IsFirst: false,
-			IsLast:  false,
+		OperatorBase: vm.OperatorBase{
+			OperatorInfo: vm.OperatorInfo{
+				Idx:     0,
+				IsFirst: false,
+				IsLast:  false,
+			},
 		},
+		AddAffectedRows: true,
 	}
 
 	proc := testutil.NewProc()

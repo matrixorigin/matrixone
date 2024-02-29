@@ -133,12 +133,15 @@ func TestT_ToType(t *testing.T) {
 	require.Equal(t, int32(2), T_uint16.ToType().Size)
 	require.Equal(t, int32(4), T_uint32.ToType().Size)
 	require.Equal(t, int32(8), T_uint64.ToType().Size)
+	require.Equal(t, int32(8), T_bit.ToType().Size)
+	require.Equal(t, int32(MaxBitLen), T_bit.ToType().Width)
 }
 
 func TestT_String(t *testing.T) {
 	require.Equal(t, "TINYINT", T_int8.String())
 	require.Equal(t, "SMALLINT", T_int16.String())
 	require.Equal(t, "INT", T_int32.String())
+	require.Equal(t, "BIT", T_bit.String())
 }
 
 func TestT_OidString(t *testing.T) {
@@ -154,6 +157,8 @@ func TestT_OidString(t *testing.T) {
 
 	require.Equal(t, "T_float32", T_float32.OidString())
 	require.Equal(t, "T_float64", T_float64.OidString())
+
+	require.Equal(t, "T_bit", T_bit.OidString())
 }
 
 func sliceCopy(a, b []float64) {
@@ -254,4 +259,9 @@ func TestType_DescString(t *testing.T) {
 		Width: 20,
 		Scale: 10,
 	}.DescString(), "DECIMAL(20,10)")
+
+	require.Equal(t, Type{
+		Oid:   T_bit,
+		Width: 10,
+	}.DescString(), "BIT(10)")
 }

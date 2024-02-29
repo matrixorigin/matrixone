@@ -1272,6 +1272,33 @@ var supportedStringBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `serial_extract`
+	{
+		functionId: SERIAL_EXTRACT,
+		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
+		layout:     STANDARD_FUNCTION,
+		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
+			if len(inputs) == 3 {
+				if inputs[0].Oid == types.T_varchar &&
+					inputs[1].Oid == types.T_int64 {
+					return newCheckResultWithSuccess(0)
+				}
+			}
+			return newCheckResultWithFailure(failedFunctionParametersWrong)
+		},
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				retType: func(parameters []types.Type) types.Type {
+					return parameters[2]
+				},
+				newOp: func() executeLogicOfOverload {
+					return builtInSerialExtract
+				},
+			},
+		},
+	},
+
 	// function `space`
 	{
 		functionId: SPACE,
@@ -2099,6 +2126,16 @@ var supportedMathBuiltIns = []FuncNew{
 			},
 			{
 				overloadId: 3,
+				args:       []types.T{types.T_decimal64},
+				retType: func(parameters []types.Type) types.Type {
+					return parameters[0]
+				},
+				newOp: func() executeLogicOfOverload {
+					return AbsDecimal64
+				},
+			},
+			{
+				overloadId: 4,
 				args:       []types.T{types.T_decimal128},
 				retType: func(parameters []types.Type) types.Type {
 					return parameters[0]
@@ -2108,7 +2145,7 @@ var supportedMathBuiltIns = []FuncNew{
 				},
 			},
 			{
-				overloadId: 4,
+				overloadId: 5,
 				args:       []types.T{types.T_array_float32},
 				retType: func(parameters []types.Type) types.Type {
 					return parameters[0]
@@ -2118,7 +2155,7 @@ var supportedMathBuiltIns = []FuncNew{
 				},
 			},
 			{
-				overloadId: 5,
+				overloadId: 6,
 				args:       []types.T{types.T_array_float64},
 				retType: func(parameters []types.Type) types.Type {
 					return parameters[0]
@@ -2674,6 +2711,16 @@ var supportedMathBuiltIns = []FuncNew{
 				},
 				newOp: func() executeLogicOfOverload {
 					return HexInt64
+				},
+			},
+			{
+				overloadId: 3,
+				args:       []types.T{types.T_uint64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return HexUint64
 				},
 			},
 		},
@@ -5709,7 +5756,7 @@ var supportedOthersBuiltIns = []FuncNew{
 									col, _ := columnNames.GetStrValue(i)
 									coltypes, _ := columnTypes.GetStrValue(i)
 									if !null2 {
-										tuples, _, err := types.DecodeTuple(value)
+										tuples, _, _, err := types.DecodeTuple(value)
 										scales := make([]int32, len(coltypes))
 										for j := range coltypes {
 											scales[j] = int32(coltypes[j])

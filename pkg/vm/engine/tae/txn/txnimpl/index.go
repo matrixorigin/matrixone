@@ -223,6 +223,9 @@ func (idx *simpleTableIndex) BatchInsert(
 	case types.T_bool:
 		vs := vector.MustFixedCol[bool](col.GetDownstreamVector())
 		return InsertOp(colType, attr, vs, start, count, row, dedupInput, idx.tree)
+	case types.T_bit:
+		vs := vector.MustFixedCol[uint64](col.GetDownstreamVector())
+		return InsertOp(colType, attr, vs, start, count, row, dedupInput, idx.tree)
 	case types.T_int8:
 		vs := vector.MustFixedCol[int8](col.GetDownstreamVector())
 		return InsertOp(colType, attr, vs, start, count, row, dedupInput, idx.tree)
@@ -370,6 +373,9 @@ func (idx *simpleTableIndex) BatchDedup(attr string, col containers.Vector) erro
 	switch colType.Oid {
 	case types.T_bool:
 		vals := vector.MustFixedCol[bool](col.GetDownstreamVector())
+		return DedupOp(colType, attr, vals, idx.tree)
+	case types.T_bit:
+		vals := vector.MustFixedCol[uint64](col.GetDownstreamVector())
 		return DedupOp(colType, attr, vals, idx.tree)
 	case types.T_int8:
 		vals := vector.MustFixedCol[int8](col.GetDownstreamVector())

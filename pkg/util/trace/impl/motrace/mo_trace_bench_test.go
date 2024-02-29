@@ -16,12 +16,11 @@ package motrace
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"math/rand"
 	"sync"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 )
 
 // BenchmarkMOSpan_1kFree
@@ -311,10 +310,6 @@ func dummyReturnNilEndFunc(
 	_ context.Context,
 	end func(),
 ) {
-	v := ctx.Value(fileservice.CtxKeyStatementProfiler)
-	if v == nil {
-		return ctx, nil
-	}
 	return ctx, nil
 }
 
@@ -324,10 +319,6 @@ func dummyReturnEmptyEndFunc(
 	_ context.Context,
 	end func(),
 ) {
-	v := ctx.Value(fileservice.CtxKeyStatementProfiler)
-	if v == nil {
-		return ctx, func() {}
-	}
 	return ctx, func() {}
 }
 

@@ -135,9 +135,21 @@ UNIQUE KEY (`PRIMARY`, col3)
 );
 drop table t2;
 
-create table test (`a` varchar(255) DEFAULT b'0');
-insert into test values (), ();
-select * from test;
+-- ascii 0
+create table t1 (`a` varchar(255) DEFAULT b'0');
+desc t1;
+insert into t1 values ();
+select * from t1;
+select hex(a) from t1;
+drop table t1;
+
+-- char 0
+create table t1 (`a` varchar(255) DEFAULT x'30');
+desc t1;
+insert into t1 values ();
+select * from t1;
+select hex(a) from t1;
+drop table t1;
 
 drop table if exists products;
 create table products (

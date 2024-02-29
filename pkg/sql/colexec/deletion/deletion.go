@@ -58,11 +58,11 @@ func (arg *Argument) Prepare(_ *process.Process) error {
 	if ap.RemoteDelete {
 		ap.ctr = new(container)
 		ap.ctr.state = vm.Build
-		ap.ctr.blockId_type = make(map[string]int8)
-		ap.ctr.blockId_bitmap = make(map[string]*nulls.Nulls)
+		ap.ctr.blockId_type = make(map[types.Blockid]int8)
+		ap.ctr.blockId_bitmap = make(map[types.Blockid]*nulls.Nulls)
 		ap.ctr.pool = &BatchPool{pools: make([]*batch.Batch, 0, options.DefaultBlocksPerObject)}
-		ap.ctr.partitionId_blockId_rowIdBatch = make(map[int]map[string]*batch.Batch)
-		ap.ctr.partitionId_blockId_deltaLoc = make(map[int]map[string]*batch.Batch)
+		ap.ctr.partitionId_blockId_rowIdBatch = make(map[int]map[types.Blockid]*batch.Batch)
+		ap.ctr.partitionId_blockId_deltaLoc = make(map[int]map[types.Blockid]*batch.Batch)
 	}
 	return nil
 }
@@ -74,14 +74,15 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 
 	if arg.RemoteDelete {
-		return arg.remote_delete(proc)
+		return arg.remoteDelete(proc)
 	}
-	return arg.normal_delete(proc)
+	return arg.normalDelete(proc)
 }
 
-func (arg *Argument) remote_delete(proc *process.Process) (vm.CallResult, error) {
+func (arg *Argument) remoteDelete(proc *process.Process) (vm.CallResult, error) {
+	var err error
 
-	anal := proc.GetAnalyze(arg.info.Idx, arg.info.ParallelIdx, arg.info.ParallelMajor)
+	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
 	anal.Start()
 	defer func() {
 		anal.Stop()
@@ -89,7 +90,7 @@ func (arg *Argument) remote_delete(proc *process.Process) (vm.CallResult, error)
 
 	if arg.ctr.state == vm.Build {
 		for {
-			result, err := vm.ChildrenCall(arg.children[0], proc, anal)
+			result, err := vm.ChildrenCall(arg.GetChildren(0), proc, anal)
 
 			if err != nil {
 				return result, err
@@ -102,7 +103,9 @@ func (arg *Argument) remote_delete(proc *process.Process) (vm.CallResult, error)
 				continue
 			}
 
-			arg.SplitBatch(proc, result.Batch)
+			if err = arg.SplitBatch(proc, result.Batch); err != nil {
+				return result, err
+			}
 		}
 	}
 
@@ -127,40 +130,59 @@ func (arg *Argument) remote_delete(proc *process.Process) (vm.CallResult, error)
 		arg.resBat.SetVector(2, proc.GetVector(types.T_int8.ToType()))
 		arg.resBat.SetVector(3, proc.GetVector(types.T_int32.ToType()))
 
-		for pidx, blockId_rowIdBatch := range arg.ctr.partitionId_blockId_rowIdBatch {
-			for blkid, bat := range blockId_rowIdBatch {
-				vector.AppendBytes(arg.resBat.GetVector(0), []byte(blkid), false, proc.GetMPool())
-				bat.SetRowCount(bat.GetVector(0).Length())
-				bytes, err := bat.MarshalBinary()
-				if err != nil {
-					result.Status = vm.ExecStop
+		for pidx, blockidRowidbatch := range arg.ctr.partitionId_blockId_rowIdBatch {
+			for blkid, bat := range blockidRowidbatch {
+				if err = vector.AppendBytes(arg.resBat.GetVector(0), blkid[:], false, proc.GetMPool()); err != nil {
 					return result, err
 				}
-				vector.AppendBytes(arg.resBat.GetVector(1), bytes, false, proc.GetMPool())
-				vector.AppendFixed(arg.resBat.GetVector(2), arg.ctr.blockId_type[blkid], false, proc.GetMPool())
-				vector.AppendFixed(arg.resBat.GetVector(3), int32(pidx), false, proc.GetMPool())
+				bat.SetRowCount(bat.GetVector(0).Length())
+				byts, err1 := bat.MarshalBinary()
+				if err1 != nil {
+					result.Status = vm.ExecStop
+					return result, err1
+				}
+				if err = vector.AppendBytes(arg.resBat.GetVector(1), byts, false, proc.GetMPool()); err != nil {
+					return result, err
+				}
+				if err = vector.AppendFixed(arg.resBat.GetVector(2), arg.ctr.blockId_type[blkid], false, proc.GetMPool()); err != nil {
+					return result, err
+				}
+				if err = vector.AppendFixed(arg.resBat.GetVector(3), int32(pidx), false, proc.GetMPool()); err != nil {
+					return result, err
+				}
 			}
 		}
 
-		for pidx, blockId_deltaLoc := range arg.ctr.partitionId_blockId_deltaLoc {
-			for blkid, bat := range blockId_deltaLoc {
-				vector.AppendBytes(arg.resBat.GetVector(0), []byte(blkid), false, proc.GetMPool())
-				//bat.Attrs = {catalog.BlockMeta_DeltaLoc}
-				bat.SetRowCount(bat.GetVector(0).Length())
-				bytes, err := bat.MarshalBinary()
-				if err != nil {
-					result.Status = vm.ExecStop
+		for pidx, blockidDeltaloc := range arg.ctr.partitionId_blockId_deltaLoc {
+			for blkid, bat := range blockidDeltaloc {
+				if err = vector.AppendBytes(arg.resBat.GetVector(0), blkid[:], false, proc.GetMPool()); err != nil {
 					return result, err
 				}
-				vector.AppendBytes(arg.resBat.GetVector(1), bytes, false, proc.GetMPool())
-				vector.AppendFixed(arg.resBat.GetVector(2), int8(FlushDeltaLoc), false, proc.GetMPool())
-				vector.AppendFixed(arg.resBat.GetVector(3), int32(pidx), false, proc.GetMPool())
+				//bat.Attrs = {catalog.BlockMeta_DeltaLoc}
+				bat.SetRowCount(bat.GetVector(0).Length())
+				byts, err1 := bat.MarshalBinary()
+				if err1 != nil {
+					result.Status = vm.ExecStop
+					return result, err1
+				}
+				if err = vector.AppendBytes(arg.resBat.GetVector(1), byts, false, proc.GetMPool()); err != nil {
+					return result, err
+				}
+				if err = vector.AppendFixed(arg.resBat.GetVector(2), int8(FlushDeltaLoc), false, proc.GetMPool()); err != nil {
+					return result, err
+				}
+				if err = vector.AppendFixed(arg.resBat.GetVector(3), int32(pidx), false, proc.GetMPool()); err != nil {
+					return result, err
+				}
 			}
 		}
 
 		arg.resBat.SetRowCount(arg.resBat.Vecs[0].Length())
-		arg.resBat.SetVector(4, vector.NewConstFixed(types.T_uint32.ToType(), arg.ctr.deleted_length, arg.resBat.RowCount(), proc.GetMPool()))
-
+		arg.resBat.Vecs[4], err = vector.NewConstFixed(types.T_uint32.ToType(), arg.ctr.deleted_length, arg.resBat.RowCount(), proc.GetMPool())
+		if err != nil {
+			result.Status = vm.ExecStop
+			return result, err
+		}
 		result.Batch = arg.resBat
 		arg.ctr.state = vm.End
 		return result, nil
@@ -174,8 +196,8 @@ func (arg *Argument) remote_delete(proc *process.Process) (vm.CallResult, error)
 
 }
 
-func (arg *Argument) normal_delete(proc *process.Process) (vm.CallResult, error) {
-	result, err := arg.children[0].Call(proc)
+func (arg *Argument) normalDelete(proc *process.Process) (vm.CallResult, error) {
+	result, err := arg.GetChildren(0).Call(proc)
 	if err != nil {
 		return result, err
 	}
@@ -183,7 +205,7 @@ func (arg *Argument) normal_delete(proc *process.Process) (vm.CallResult, error)
 		return result, nil
 	}
 
-	anal := proc.GetAnalyze(arg.info.Idx, arg.info.ParallelIdx, arg.info.ParallelMajor)
+	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
 	anal.Start()
 	defer anal.Stop()
 

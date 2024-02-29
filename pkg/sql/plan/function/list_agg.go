@@ -54,7 +54,7 @@ var supportedAggregateFunctions = []FuncNew{
 			{
 				overloadId: 0,
 				isAgg:      true,
-				retType:    functionAgg.AggMinxReturnType,
+				retType:    functionAgg.AggMinReturnType,
 				aggFramework: aggregationLogicOfOverload{
 					str:    "min",
 					aggNew: functionAgg.NewAggMin,

@@ -1,0 +1,28 @@
+select @@sql_select_limit;
+@@sql_select_limit
+18446744073709551615
+set sql_select_limit=default;
+select @@sql_select_limit;
+@@sql_select_limit
+18446744073709551615
+set autocommit=0;
+begin;
+select @@sql_select_limit;
+@@sql_select_limit
+18446744073709551615
+set sql_select_limit=default;
+commit;
+select @@sql_select_limit;
+@@sql_select_limit
+18446744073709551615
+begin;
+select @@sql_mode;
+@@sql_mode
+ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES
+set sql_mode = 'NO_UNSIGNED_SUBTRACTION';
+select @@sql_mode;
+@@sql_mode
+NO_UNSIGNED_SUBTRACTION
+commit;
+set @@sql_mode=default;
+set autocommit=1;

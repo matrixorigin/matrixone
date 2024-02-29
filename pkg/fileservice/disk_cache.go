@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"hash/maphash"
 	"io"
 	"io/fs"
 	"os"
@@ -28,6 +27,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/cespare/xxhash/v2"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fifocache"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
@@ -59,8 +59,6 @@ func NewDiskCache(
 		return nil, err
 	}
 
-	hashSeed := maphash.MakeSeed()
-
 	ret = &DiskCache{
 		path:            path,
 		perfCounterSets: perfCounterSets,
@@ -76,7 +74,7 @@ func NewDiskCache(
 				}
 			},
 			func(key string) uint8 {
-				return uint8(maphash.String(hashSeed, key))
+				return uint8(xxhash.Sum64String(key))
 			},
 		),
 	}

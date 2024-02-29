@@ -18,7 +18,16 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 )
+
+func init() {
+	reuse.CreatePool[DropFunction](
+		func() *DropFunction { return &DropFunction{} },
+		func(d *DropFunction) { d.reset() },
+		reuse.DefaultOptions[DropFunction]().
+			WithEnableChecker())
+}
 
 type FunctionArg interface {
 	NodeFormatter
@@ -102,6 +111,26 @@ type DropFunction struct {
 	statementImpl
 	Name *FunctionName
 	Args FunctionArgs
+}
+
+func (node DropFunction) TypeName() string { return "tree.DropFunction" }
+
+func (node *DropFunction) Free() {
+	reuse.Free[DropFunction](node, nil)
+}
+
+func (node *DropFunction) reset() {
+	// if node.Name != nil {
+	// 	reuse.Free[FunctionName](node.Name, nil)
+	// }
+	*node = DropFunction{}
+}
+
+func NewDropFunction(name *FunctionName, args FunctionArgs) *DropFunction {
+	dropFunction := reuse.Alloc[DropFunction](nil)
+	dropFunction.Name = name
+	dropFunction.Args = args
+	return dropFunction
 }
 
 func (node *FunctionName) Format(ctx *FmtCtx) {

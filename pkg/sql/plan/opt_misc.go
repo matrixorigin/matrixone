@@ -18,13 +18,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
-// removeSimpleProjections On top of each subquery or view it has a PROJECT node, which interrupts optimizer rules such as join order.
-func (builder *QueryBuilder) removeSimpleProjections(nodeID int32, parentType plan.Node_NodeType, flag bool, colRefCnt map[[2]int32]int) (int32, map[[2]int32]*plan.Expr) {
+func (builder *QueryBuilder) countColRefs(nodeID int32, colRefCnt map[[2]int32]int) {
 	node := builder.qry.Nodes[nodeID]
-	if node.NodeType == plan.Node_SINK {
-		return builder.removeSimpleProjections(node.Children[0], plan.Node_UNKNOWN, flag, colRefCnt)
-	}
-	projMap := make(map[[2]int32]*plan.Expr)
 
 	increaseRefCntForExprList(node.ProjectList, 1, colRefCnt)
 	increaseRefCntForExprList(node.OnList, 1, colRefCnt)
@@ -36,6 +31,19 @@ func (builder *QueryBuilder) removeSimpleProjections(nodeID int32, parentType pl
 	for i := range node.OrderBy {
 		increaseRefCnt(node.OrderBy[i].Expr, 1, colRefCnt)
 	}
+
+	for _, childID := range node.Children {
+		builder.countColRefs(childID, colRefCnt)
+	}
+}
+
+// removeSimpleProjections On top of each subquery or view it has a PROJECT node, which interrupts optimizer rules such as join order.
+func (builder *QueryBuilder) removeSimpleProjections(nodeID int32, parentType plan.Node_NodeType, flag bool, colRefCnt map[[2]int32]int) (int32, map[[2]int32]*plan.Expr) {
+	node := builder.qry.Nodes[nodeID]
+	if node.NodeType == plan.Node_SINK {
+		return builder.removeSimpleProjections(node.Children[0], plan.Node_UNKNOWN, flag, colRefCnt)
+	}
+	projMap := make(map[[2]int32]*plan.Expr)
 
 	switch node.NodeType {
 	case plan.Node_JOIN:
@@ -54,7 +62,7 @@ func (builder *QueryBuilder) removeSimpleProjections(nodeID int32, parentType pl
 			projMap[ref] = expr
 		}
 
-	case plan.Node_AGG, plan.Node_PROJECT, plan.Node_WINDOW, plan.Node_TIME_WINDOW, plan.Node_Fill:
+	case plan.Node_AGG, plan.Node_PROJECT, plan.Node_WINDOW, plan.Node_TIME_WINDOW, plan.Node_FILL:
 		for i, childID := range node.Children {
 			newChildID, childProjMap := builder.removeSimpleProjections(childID, node.NodeType, false, colRefCnt)
 			node.Children[i] = newChildID
@@ -73,23 +81,14 @@ func (builder *QueryBuilder) removeSimpleProjections(nodeID int32, parentType pl
 		}
 	}
 
-	removeProjectionsForExprList(node.ProjectList, projMap)
-	removeProjectionsForExprList(node.OnList, projMap)
-	removeProjectionsForExprList(node.FilterList, projMap)
-	removeProjectionsForExprList(node.GroupBy, projMap)
-	removeProjectionsForExprList(node.GroupingSet, projMap)
-	removeProjectionsForExprList(node.AggList, projMap)
-	removeProjectionsForExprList(node.WinSpecList, projMap)
-	for i := range node.OrderBy {
-		node.OrderBy[i].Expr = removeProjectionsForExpr(node.OrderBy[i].Expr, projMap)
-	}
+	replaceColumnsForNode(node, projMap)
 
 	if builder.canRemoveProject(parentType, node) {
 		allColRef := true
 		tag := node.BindingTags[0]
 		for i, proj := range node.ProjectList {
 			if flag || colRefCnt[[2]int32{tag, int32(i)}] > 1 {
-				if proj.GetCol() == nil {
+				if proj.GetCol() == nil && (proj.GetLit() == nil || flag) {
 					allColRef = false
 					break
 				}
@@ -154,13 +153,26 @@ func (builder *QueryBuilder) canRemoveProject(parentType plan.Node_NodeType, nod
 	return true
 }
 
-func removeProjectionsForExprList(exprList []*plan.Expr, projMap map[[2]int32]*plan.Expr) {
-	for i, expr := range exprList {
-		exprList[i] = removeProjectionsForExpr(expr, projMap)
+func replaceColumnsForNode(node *plan.Node, projMap map[[2]int32]*plan.Expr) {
+	replaceColumnsForExprList(node.ProjectList, projMap)
+	replaceColumnsForExprList(node.OnList, projMap)
+	replaceColumnsForExprList(node.FilterList, projMap)
+	replaceColumnsForExprList(node.GroupBy, projMap)
+	replaceColumnsForExprList(node.GroupingSet, projMap)
+	replaceColumnsForExprList(node.AggList, projMap)
+	replaceColumnsForExprList(node.WinSpecList, projMap)
+	for i := range node.OrderBy {
+		node.OrderBy[i].Expr = replaceColumnsForExpr(node.OrderBy[i].Expr, projMap)
 	}
 }
 
-func removeProjectionsForExpr(expr *plan.Expr, projMap map[[2]int32]*plan.Expr) *plan.Expr {
+func replaceColumnsForExprList(exprList []*plan.Expr, projMap map[[2]int32]*plan.Expr) {
+	for i, expr := range exprList {
+		exprList[i] = replaceColumnsForExpr(expr, projMap)
+	}
+}
+
+func replaceColumnsForExpr(expr *plan.Expr, projMap map[[2]int32]*plan.Expr) *plan.Expr {
 	if expr == nil {
 		return nil
 	}
@@ -174,16 +186,16 @@ func removeProjectionsForExpr(expr *plan.Expr, projMap map[[2]int32]*plan.Expr) 
 
 	case *plan.Expr_F:
 		for i, arg := range ne.F.Args {
-			ne.F.Args[i] = removeProjectionsForExpr(arg, projMap)
+			ne.F.Args[i] = replaceColumnsForExpr(arg, projMap)
 		}
 
 	case *plan.Expr_W:
-		ne.W.WindowFunc = removeProjectionsForExpr(ne.W.WindowFunc, projMap)
+		ne.W.WindowFunc = replaceColumnsForExpr(ne.W.WindowFunc, projMap)
 		for i, arg := range ne.W.PartitionBy {
-			ne.W.PartitionBy[i] = removeProjectionsForExpr(arg, projMap)
+			ne.W.PartitionBy[i] = replaceColumnsForExpr(arg, projMap)
 		}
 		for i, order := range ne.W.OrderBy {
-			ne.W.OrderBy[i].Expr = removeProjectionsForExpr(order.Expr, projMap)
+			ne.W.OrderBy[i].Expr = replaceColumnsForExpr(order.Expr, projMap)
 		}
 	}
 	return expr
@@ -994,7 +1006,7 @@ func getHashColsNDVRatio(nodeID int32, builder *QueryBuilder) float64 {
 	for i := range hashCols {
 		hashColPos[i] = hashCols[i].ColPos
 	}
-	return getColNDVRatio(hashColPos, tableDef, builder) * result
+	return builder.getColNDVRatio(hashColPos, tableDef) * result
 }
 
 func checkExprInTags(expr *plan.Expr, tags []int32) bool {

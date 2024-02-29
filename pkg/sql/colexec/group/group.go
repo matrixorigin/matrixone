@@ -155,16 +155,16 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 
 	ap := arg
-	anal := proc.GetAnalyze(arg.info.Idx, arg.info.ParallelIdx, arg.info.ParallelMajor)
+	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
 	anal.Start()
 	defer anal.Stop()
 
 	// if operator has no group by clause.
 	if len(ap.Exprs) == 0 {
 		// if operator has no group by clause.
-		return ap.ctr.processWithoutGroup(ap, proc, anal, arg.info.IsFirst, arg.info.IsLast)
+		return ap.ctr.processWithoutGroup(ap, proc, anal, arg.GetIsFirst(), arg.GetIsLast())
 	}
-	return ap.ctr.processWithGroup(ap, proc, anal, arg.info.IsFirst, arg.info.IsLast)
+	return ap.ctr.processWithGroup(ap, proc, anal, arg.GetIsFirst(), arg.GetIsLast())
 }
 
 func (ctr *container) generateAggStructures(arg *Argument) error {
@@ -184,7 +184,7 @@ func (ctr *container) generateAggStructures(arg *Argument) error {
 func (ctr *container) processWithoutGroup(ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool) (vm.CallResult, error) {
 	if ctr.state == vm.Build {
 		for {
-			result, err := vm.ChildrenCall(ap.children[0], proc, anal)
+			result, err := vm.ChildrenCall(ap.GetChildren(0), proc, anal)
 			if err != nil {
 				return result, err
 			}
@@ -261,7 +261,7 @@ func initCtrBatchForProcessWithoutGroup(ap *Argument, proc *process.Process, ctr
 func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool) (vm.CallResult, error) {
 	if ctr.state == vm.Build {
 		for {
-			result, err := vm.ChildrenCall(ap.children[0], proc, anal)
+			result, err := vm.ChildrenCall(ap.GetChildren(0), proc, anal)
 			if err != nil {
 				return result, err
 			}

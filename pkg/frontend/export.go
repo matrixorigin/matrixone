@@ -19,25 +19,24 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	util2 "github.com/matrixorigin/matrixone/pkg/common/util"
 	"io"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	util2 "github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
-
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
 type ExportConfig struct {
@@ -67,6 +66,7 @@ type ExportConfig struct {
 	AsyncReader *io.PipeReader
 	AsyncWriter *io.PipeWriter
 	AsyncGroup  *errgroup.Group
+	RowCount    uint64
 }
 
 type writeParam struct {
@@ -75,7 +75,7 @@ type writeParam struct {
 	Index      int32
 	WriteIndex int32
 	ByteChan   chan *BatchByte
-	BatchMap   map[int32]([]byte)
+	BatchMap   map[int32][]byte
 }
 
 type BatchByte struct {
@@ -112,6 +112,12 @@ func (ec *ExportConfig) needExportToFile() bool {
 	return ec != nil && ec.userConfig != nil && ec.userConfig.Outfile
 }
 
+func (ec *ExportConfig) addRowCount(n uint64) {
+	if ec != nil {
+		ec.RowCount += n
+	}
+}
+
 func initExportFileParam(ep *ExportConfig, mrs *MysqlResultSet) {
 	ep.DefaultBufSize *= 1024 * 1024
 	n := (int)(mrs.GetColumnCount())
@@ -120,9 +126,9 @@ func initExportFileParam(ep *ExportConfig, mrs *MysqlResultSet) {
 	}
 	ep.Symbol = make([][]byte, n)
 	for i := 0; i < n-1; i++ {
-		ep.Symbol[i] = []byte(ep.userConfig.Fields.Terminated)
+		ep.Symbol[i] = []byte(ep.userConfig.Fields.Terminated.Value)
 	}
-	ep.Symbol[n-1] = []byte(ep.userConfig.Lines.TerminatedBy)
+	ep.Symbol[n-1] = []byte(ep.userConfig.Lines.TerminatedBy.Value)
 	ep.ColumnFlag = make([]bool, len(mrs.Name2Index))
 	for i := 0; i < len(ep.userConfig.ForceQuote); i++ {
 		col, ok := mrs.Name2Index[ep.userConfig.ForceQuote[i]]
@@ -188,9 +194,9 @@ var openNewFile = func(ctx context.Context, ep *ExportConfig, mrs *MysqlResultSe
 			return nil
 		}
 		for i := 0; i < n-1; i++ {
-			header += mrs.Columns[i].Name() + ep.userConfig.Fields.Terminated
+			header += mrs.Columns[i].Name() + ep.userConfig.Fields.Terminated.Value
 		}
-		header += mrs.Columns[n-1].Name() + ep.userConfig.Lines.TerminatedBy
+		header += mrs.Columns[n-1].Name() + ep.userConfig.Lines.TerminatedBy.Value
 		if ep.userConfig.MaxFileSize != 0 && uint64(len(header)) >= ep.userConfig.MaxFileSize {
 			return moerr.NewInternalError(ctx, "the header line size is over the maxFileSize")
 		}
@@ -221,7 +227,7 @@ func getExportFilePath(filename string, fileCnt uint) string {
 
 var formatOutputString = func(oq *outputQueue, tmp, symbol []byte, enclosed byte, flag bool) error {
 	var err error
-	if flag {
+	if flag && enclosed != 0 {
 		if err = writeToCSVFile(oq, []byte{enclosed}); err != nil {
 			return err
 		}
@@ -229,7 +235,7 @@ var formatOutputString = func(oq *outputQueue, tmp, symbol []byte, enclosed byte
 	if err = writeToCSVFile(oq, tmp); err != nil {
 		return err
 	}
-	if flag {
+	if flag && enclosed != 0 {
 		if err = writeToCSVFile(oq, []byte{enclosed}); err != nil {
 			return err
 		}
@@ -370,11 +376,11 @@ var writeDataToCSVFile = func(ep *ExportConfig, output []byte) error {
 }
 
 func appendBytes(writeByte, tmp, symbol []byte, enclosed byte, flag bool) []byte {
-	if flag {
+	if flag && enclosed != 0 {
 		writeByte = append(writeByte, enclosed)
 	}
 	writeByte = append(writeByte, tmp...)
-	if flag {
+	if flag && enclosed != 0 {
 		writeByte = append(writeByte, enclosed)
 	}
 	writeByte = append(writeByte, symbol...)
@@ -402,13 +408,15 @@ func initExportFirst(oq *outputQueue) {
 	oq.ep.Index++
 }
 
-func formatJsonString(str string, flag bool) string {
+func formatJsonString(str string, flag bool, terminatedBy string) string {
 	if len(str) < 2 {
 		return "\"" + str + "\""
 	}
-	tmp := strings.ReplaceAll(str, "\",", "\"\",")
-	if tmp[0] != '"' && tmp[len(tmp)-1] != '"' && !flag {
-		return "\"" + tmp + "\""
+	var tmp string
+	if !flag {
+		tmp = strings.ReplaceAll(str, terminatedBy, "\\"+terminatedBy)
+	} else {
+		tmp = strings.ReplaceAll(str, "\",", "\"\",")
 	}
 	return tmp
 }
@@ -416,7 +424,8 @@ func formatJsonString(str string, flag bool) string {
 func constructByte(obj interface{}, bat *batch.Batch, index int32, ByteChan chan *BatchByte, oq *outputQueue) {
 	ses := obj.(*Session)
 	symbol := oq.ep.Symbol
-	closeby := oq.ep.userConfig.Fields.EnclosedBy
+	closeby := oq.ep.userConfig.Fields.EnclosedBy.Value
+	terminated := oq.ep.userConfig.Fields.Terminated.Value
 	flag := oq.ep.ColumnFlag
 	writeByte := make([]byte, 0)
 	for i := 0; i < bat.RowCount(); i++ {
@@ -428,7 +437,7 @@ func constructByte(obj interface{}, bat *batch.Batch, index int32, ByteChan chan
 			switch vec.GetType().Oid { //get col
 			case types.T_json:
 				val := types.DecodeJson(vec.GetBytesAt(i))
-				writeByte = appendBytes(writeByte, []byte(formatJsonString(val.String(), flag[j])), symbol[j], closeby, flag[j])
+				writeByte = appendBytes(writeByte, []byte(formatJsonString(val.String(), flag[j], terminated)), symbol[j], closeby, flag[j])
 			case types.T_bool:
 				val := vector.GetFixedAt[bool](vec, i)
 				if val {
@@ -436,6 +445,13 @@ func constructByte(obj interface{}, bat *batch.Batch, index int32, ByteChan chan
 				} else {
 					writeByte = appendBytes(writeByte, []byte("false"), symbol[j], closeby, flag[j])
 				}
+			case types.T_bit:
+				val := vector.GetFixedAt[uint64](vec, i)
+				bitLength := vec.GetType().Width
+				byteLength := (bitLength + 7) / 8
+				b := types.EncodeUint64(&val)[:byteLength]
+				slices.Reverse(b)
+				writeByte = appendBytes(writeByte, b, symbol[j], closeby, flag[j])
 			case types.T_int8:
 				val := vector.GetFixedAt[int8](vec, i)
 				writeByte = appendBytes(writeByte, []byte(strconv.FormatInt(int64(val), 10)), symbol[j], closeby, flag[j])
@@ -571,7 +587,7 @@ func exportDataToCSVFile(oq *outputQueue) error {
 	oq.ep.LineSize = 0
 
 	symbol := oq.ep.Symbol
-	closeby := oq.ep.userConfig.Fields.EnclosedBy
+	closeby := oq.ep.userConfig.Fields.EnclosedBy.Value
 	flag := oq.ep.ColumnFlag
 	for i := uint64(0); i < oq.mrs.GetColumnCount(); i++ {
 		column, err := oq.mrs.GetColumn(oq.ctx, i)
@@ -602,6 +618,14 @@ func exportDataToCSVFile(oq *outputQueue) error {
 				return err
 			}
 		case defines.MYSQL_TYPE_BOOL:
+			value, err := oq.mrs.GetString(oq.ctx, 0, i)
+			if err != nil {
+				return err
+			}
+			if err = formatOutputString(oq, []byte(value), symbol[i], closeby, flag[i]); err != nil {
+				return err
+			}
+		case defines.MYSQL_TYPE_BIT:
 			value, err := oq.mrs.GetString(oq.ctx, 0, i)
 			if err != nil {
 				return err

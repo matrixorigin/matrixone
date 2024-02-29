@@ -578,15 +578,6 @@ func (a *UnaryDistAgg[T1, T2]) MarshalBinary() ([]byte, error) {
 	return types.Encode(source)
 }
 
-func getDistAggStrVs(strUnaryDistAgg any) []string {
-	agg := strUnaryDistAgg.(*UnaryDistAgg[[]byte, []byte])
-	result := make([]string, len(agg.vs))
-	for i := range result {
-		result[i] = string(agg.vs[i])
-	}
-	return result
-}
-
 func (a *UnaryDistAgg[T1, T2]) UnmarshalBinary(data []byte) error {
 	// avoid resulting errors caused by morpc overusing memory
 	copyData := make([]byte, len(data))
@@ -623,6 +614,19 @@ func (a *UnaryDistAgg[T1, T2]) UnmarshalBinary(data []byte) error {
 		}
 	}
 	return a.priv.UnmarshalBinary(decode.Private)
+}
+
+func (a *UnaryDistAgg[T1, T2]) SetPartialResult(PartialResult any) {
+	a.PartialResult = PartialResult
+}
+
+func getDistAggStrVs(strUnaryDistAgg any) []string {
+	agg := strUnaryDistAgg.(*UnaryDistAgg[[]byte, []byte])
+	result := make([]string, len(agg.vs))
+	for i := range result {
+		result[i] = string(agg.vs[i])
+	}
+	return result
 }
 
 func setDistAggValues[T1, T2 any](agg any, typ types.Type) {

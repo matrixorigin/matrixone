@@ -158,6 +158,7 @@ type CreateTable struct {
 	AsSource        *Select
 	IsDynamicTable  bool
 	DTOptions       []TableOption
+	IsAsSelect      bool
 }
 
 func (node *CreateTable) Format(ctx *FmtCtx) {
@@ -208,6 +209,11 @@ func (node *CreateTable) Format(ctx *FmtCtx) {
 			def.Format(ctx)
 		}
 		ctx.WriteByte(')')
+	}
+
+	if node.IsAsSelect {
+		ctx.WriteString(" as ")
+		node.AsSource.Format(ctx)
 	}
 
 	if node.Options != nil && !node.IsDynamicTable {
@@ -761,6 +767,8 @@ func (it IndexType) ToString() string {
 		return "zonemap"
 	case INDEX_TYPE_IVFFLAT:
 		return "ivfflat"
+	case INDEX_TYPE_MASTER:
+		return "master"
 	case INDEX_TYPE_INVALID:
 		return ""
 	default:
@@ -776,6 +784,7 @@ const (
 	INDEX_TYPE_BSI
 	INDEX_TYPE_ZONEMAP
 	INDEX_TYPE_IVFFLAT
+	INDEX_TYPE_MASTER
 )
 
 type VisibleType int

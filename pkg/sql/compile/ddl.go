@@ -17,6 +17,9 @@ package compile
 import (
 	"context"
 	"fmt"
+	"math"
+	"strings"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/compress"
@@ -38,8 +41,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"go.uber.org/zap"
 	"golang.org/x/exp/constraints"
-	"math"
-	"strings"
 )
 
 func (s *Scope) CreateDatabase(c *Compile) error {
@@ -237,6 +238,42 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 		}
 	}
 
+	var oldCt *engine.ConstraintDef
+	newCt := &engine.ConstraintDef{
+		Cts: []engine.Constraint{},
+	}
+	for _, def := range oldDefs {
+		if ct, ok := def.(*engine.ConstraintDef); ok {
+			oldCt = ct
+			break
+		}
+	}
+
+	if oldCt == nil {
+		oldCt = &engine.ConstraintDef{
+			Cts: []engine.Constraint{},
+		}
+	}
+
+	//added fk in this alter table statement
+	newAddedFkNames := make(map[string]bool)
+	/*
+		collect old fk names.
+		ForeignKeyDef.Name may be empty in previous design.
+		So, we only use ForeignKeyDef.Name that is no empty.
+	*/
+	oldFkNames := make(map[string]bool)
+	for _, ct := range oldCt.Cts {
+		switch t := ct.(type) {
+		case *engine.ForeignKeyDef:
+			for _, fkey := range t.Fkeys {
+				if len(fkey.Name) != 0 {
+					oldFkNames[fkey.Name] = true
+				}
+			}
+		}
+	}
+
 	removeRefChildTbls := make(map[string]uint64)
 	var addRefChildTbls []uint64
 	var newFkeys []*plan.ForeignKeyDef
@@ -260,6 +297,10 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 			alterTableDrop := act.Drop
 			constraintName := alterTableDrop.Name
 			if alterTableDrop.Typ == plan.AlterTableDrop_FOREIGN_KEY {
+				//check fk existed in table
+				if _, has := oldFkNames[constraintName]; !has {
+					return moerr.NewErrCantDropFieldOrKey(c.ctx, constraintName)
+				}
 				alterKinds = addAlterKind(alterKinds, api.AlterKind_UpdateConstraint)
 				for i, fk := range tableDef.Fkeys {
 					if fk.Name == constraintName {
@@ -313,6 +354,15 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 				}
 			}
 		case *plan.AlterTable_Action_AddFk:
+			//check fk existed in table
+			if _, has := oldFkNames[act.AddFk.Fkey.Name]; has {
+				return moerr.NewErrDuplicateKeyName(c.ctx, act.AddFk.Fkey.Name)
+			}
+			//check fk existed in this alter table statement
+			if _, has := newAddedFkNames[act.AddFk.Fkey.Name]; has {
+				return moerr.NewErrDuplicateKeyName(c.ctx, act.AddFk.Fkey.Name)
+			}
+			newAddedFkNames[act.AddFk.Fkey.Name] = true
 			alterKinds = addAlterKind(alterKinds, api.AlterKind_UpdateConstraint)
 			addRefChildTbls = append(addRefChildTbls, act.AddFk.Fkey.ForeignTbl)
 			newFkeys = append(newFkeys, act.AddFk.Fkey)
@@ -341,8 +391,11 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 				} else if !indexDef.Unique && catalog.IsRegularIndexAlgo(indexDef.IndexAlgo) {
 					// 2. Regular Secondary index
 					err = s.handleRegularSecondaryIndexTable(c, indexDef, qry.Database, tableDef, indexInfo)
+				} else if !indexDef.Unique && catalog.IsMasterIndexAlgo(indexDef.IndexAlgo) {
+					// 3. Master index
+					err = s.handleMasterIndexTable(c, indexDef, qry.Database, tableDef, indexInfo)
 				} else if !indexDef.Unique && catalog.IsIvfIndexAlgo(indexDef.IndexAlgo) {
-					// 3. IVF indexDefs are aggregated and handled later
+					// 4. IVF indexDefs are aggregated and handled later
 					if _, ok := multiTableIndexes[indexDef.IndexName]; !ok {
 						multiTableIndexes[indexDef.IndexName] = &MultiTableIndex{
 							IndexAlgo: catalog.ToLower(indexDef.IndexAlgo),
@@ -520,29 +573,17 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 	}
 
 	// reset origin table's constraint
-	var oldCt *engine.ConstraintDef
-	newCt := &engine.ConstraintDef{
-		Cts: []engine.Constraint{},
-	}
-	for _, def := range oldDefs {
-		if ct, ok := def.(*engine.ConstraintDef); ok {
-			oldCt = ct
-			break
-		}
-	}
-
-	if oldCt == nil {
-		oldCt = &engine.ConstraintDef{
-			Cts: []engine.Constraint{},
-		}
-	}
 	originHasFkDef := false
 	originHasIndexDef := false
 	for _, ct := range oldCt.Cts {
 		switch t := ct.(type) {
 		case *engine.ForeignKeyDef:
 			for _, fkey := range t.Fkeys {
-				if _, ok := removeRefChildTbls[fkey.Name]; !ok {
+				//For compatibility, regenerate constraint name for the constraint with empty name.
+				if len(fkey.Name) == 0 {
+					fkey.Name = plan2.GenConstraintName()
+					newFkeys = append(newFkeys, fkey)
+				} else if _, ok := removeRefChildTbls[fkey.Name]; !ok {
 					newFkeys = append(newFkeys, fkey)
 				}
 			}
@@ -628,22 +669,43 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 	}
 
 	// remove refChildTbls for drop foreign key clause
+	//remove the child table id -- tblId from the parent table -- fkTblId
 	for _, fkTblId := range removeRefChildTbls {
-		err := s.removeRefChildTbl(c, fkTblId, tblId)
+		var fkRelation engine.Relation
+		if fkTblId == 0 {
+			//fk self refer
+			fkRelation = rel
+		} else {
+			_, _, fkRelation, err = c.e.GetRelationById(c.ctx, c.proc.TxnOperator, fkTblId)
+			if err != nil {
+				return err
+			}
+		}
+
+		err = s.removeRefChildTbl(c, fkRelation, tblId)
 		if err != nil {
 			return err
 		}
 	}
 
 	// append refChildTbls for add foreign key clause
+	//add the child table id -- tblId into the parent table -- fkTblId
 	for _, fkTblId := range addRefChildTbls {
-		_, _, fkRelation, err := c.e.GetRelationById(c.ctx, c.proc.TxnOperator, fkTblId)
-		if err != nil {
-			return err
-		}
-		err = s.addRefChildTbl(c, fkRelation, tblId)
-		if err != nil {
-			return err
+		if fkTblId == 0 {
+			//fk self refer
+			err = s.addRefChildTbl(c, rel, fkTblId)
+			if err != nil {
+				return err
+			}
+		} else {
+			_, _, fkRelation, err := c.e.GetRelationById(c.ctx, c.proc.TxnOperator, fkTblId)
+			if err != nil {
+				return err
+			}
+			err = s.addRefChildTbl(c, fkRelation, tblId)
+			if err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -803,6 +865,8 @@ func (s *Scope) CreateTable(c *Compile) error {
 	fkDbs := qry.GetFkDbs()
 	if len(fkDbs) > 0 {
 		fkTables := qry.GetFkTables()
+		//get the relation of created table above again.
+		//due to the colId may be changed.
 		newRelation, err := dbSource.Relation(c.ctx, tblName, nil)
 		if err != nil {
 			getLogger().Info("createTable",
@@ -823,6 +887,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 			)
 			return err
 		}
+		//get the columnId of the column from newTableDef
 		var colNameToId = make(map[string]uint64)
 		var oldCt *engine.ConstraintDef
 		for _, def := range newTableDef {
@@ -833,6 +898,14 @@ func (s *Scope) CreateTable(c *Compile) error {
 				oldCt = ct
 			}
 		}
+		colId2Name := make(map[uint64]string)
+		for _, col := range planCols {
+			colId2Name[col.ColId] = col.Name
+		}
+		//1. update fk info in child table.
+		//column ids of column names in child table have changed after
+		//the table is created by engine.Database.Create.
+		//refresh column ids of column names in child table.
 		newFkeys := make([]*plan.ForeignKeyDef, len(qry.GetTableDef().Fkeys))
 		for i, fkey := range qry.GetTableDef().Fkeys {
 			newDef := &plan.ForeignKeyDef{
@@ -843,7 +916,20 @@ func (s *Scope) CreateTable(c *Compile) error {
 				OnDelete:    fkey.OnDelete,
 				OnUpdate:    fkey.OnUpdate,
 			}
-			copy(newDef.ForeignCols, fkey.ForeignCols)
+			//if it is fk self, the parent table is same as the child table.
+			//refresh the ForeignCols also.
+			if fkey.ForeignTbl == 0 {
+				for j, colId := range fkey.ForeignCols {
+					//old colId -> colName
+					colName := colId2Name[colId]
+					//colName -> new colId
+					newDef.ForeignCols[j] = colNameToId[colName]
+				}
+			} else {
+				copy(newDef.ForeignCols, fkey.ForeignCols)
+			}
+
+			//refresh child table column id
 			for idx, colName := range qry.GetFkCols()[i].Cols {
 				newDef.Cols[idx] = colNameToId[colName]
 			}
@@ -871,9 +957,24 @@ func (s *Scope) CreateTable(c *Compile) error {
 			return err
 		}
 
-		// need to append TableId to parent's TableDef.RefChildTbls
+		//2. need to append TableId to parent's TableDef.RefChildTbls
 		for i, fkTableName := range fkTables {
 			fkDbName := fkDbs[i]
+			fkey := qry.GetTableDef().Fkeys[i]
+			if fkey.ForeignTbl == 0 {
+				//fk self refer
+				//add current table to parent's children table
+				err = s.addRefChildTbl(c, newRelation, 0)
+				if err != nil {
+					getLogger().Info("createTable",
+						zap.String("databaseName", c.db),
+						zap.String("tableName", qry.GetTableDef().GetName()),
+						zap.Error(err),
+					)
+					return err
+				}
+				continue
+			}
 			fkDbSource, err := c.e.Database(c.ctx, fkDbName, c.proc.TxnOperator)
 			if err != nil {
 				getLogger().Info("createTable",
@@ -892,6 +993,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 				)
 				return err
 			}
+			//add current table to parent's children table
 			err = s.addRefChildTbl(c, fkRelation, tblId)
 			if err != nil {
 				getLogger().Info("createTable",
@@ -1155,8 +1257,11 @@ func (s *Scope) CreateIndex(c *Compile) error {
 		} else if !indexDef.Unique && catalog.IsRegularIndexAlgo(indexAlgo) {
 			// 2. Regular Secondary index
 			err = s.handleRegularSecondaryIndexTable(c, indexDef, qry.Database, originalTableDef, indexInfo)
+		} else if !indexDef.Unique && catalog.IsMasterIndexAlgo(indexAlgo) {
+			// 3. Master index
+			err = s.handleMasterIndexTable(c, indexDef, qry.Database, originalTableDef, indexInfo)
 		} else if !indexDef.Unique && catalog.IsIvfIndexAlgo(indexAlgo) {
-			// 3. IVF indexDefs are aggregated and handled later
+			// 4. IVF indexDefs are aggregated and handled later
 			if _, ok := multiTableIndexes[indexDef.IndexName]; !ok {
 				multiTableIndexes[indexDef.IndexName] = &MultiTableIndex{
 					IndexAlgo: catalog.ToLower(indexDef.IndexAlgo),
@@ -1246,8 +1351,8 @@ func (s *Scope) handleVectorIvfFlatIndex(c *Compile, indexDefs map[string]*plan.
 		}
 	}
 
-	// 3. if table does not have data, we stop here.
-	totalCnt, err := s.handleIndexAndPKColCount(c, indexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata], qryDatabase, originalTableDef)
+	// 3. get count of secondary index column in original table
+	totalCnt, err := s.handleIndexColCount(c, indexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata], qryDatabase, originalTableDef)
 	if err != nil {
 		return err
 	}
@@ -1438,11 +1543,10 @@ func (s *Scope) addRefChildTbl(c *Compile, fkRelation engine.Relation, tblId uin
 	return fkRelation.UpdateConstraint(c.ctx, newCt)
 }
 
-func (s *Scope) removeRefChildTbl(c *Compile, fkTblId uint64, tblId uint64) error {
-	_, _, fkRelation, err := c.e.GetRelationById(c.ctx, c.proc.TxnOperator, fkTblId)
-	if err != nil {
-		return err
-	}
+// removeRefChildTbl removes the tblId from the tableDef of fkRelation.
+// input the fkRelation as the parameter instead of retrieving it again
+// to embrace the fk self refer situation
+func (s *Scope) removeRefChildTbl(c *Compile, fkRelation engine.Relation, tblId uint64) error {
 	fkTableDef, err := fkRelation.TableDefs(c.ctx)
 	if err != nil {
 		return err
@@ -1484,7 +1588,7 @@ func (s *Scope) TruncateTable(c *Compile) error {
 	tblName := tqry.GetTable()
 	oldId := tqry.GetTableId()
 	keepAutoIncrement := false
-	affectedRows := int64(0)
+	affectedRows := uint64(0)
 
 	dbSource, err = c.e.Database(c.ctx, dbName, c.proc.TxnOperator)
 	if err != nil {
@@ -1732,8 +1836,18 @@ func (s *Scope) DropTable(c *Compile) error {
 	}
 
 	// update tableDef of foreign key's table
+	//remove the child table id -- tblId from the parent table -- fkTblId
 	for _, fkTblId := range qry.ForeignTbl {
-		err := s.removeRefChildTbl(c, fkTblId, tblId)
+		if fkTblId == 0 {
+			//fk self refer
+			continue
+		}
+		_, _, fkRelation, err := c.e.GetRelationById(c.ctx, c.proc.TxnOperator, fkTblId)
+		if err != nil {
+			return err
+		}
+
+		err = s.removeRefChildTbl(c, fkRelation, tblId)
 		if err != nil {
 			return err
 		}
@@ -2387,30 +2501,75 @@ func makeSequenceInitBatch(ctx context.Context, stmt *tree.CreateSequence, table
 	return &bat, nil
 }
 
-func makeSequenceVecs[T constraints.Integer](vecs []*vector.Vector, stmt *tree.CreateSequence, typ types.Type, proc *process.Process, incr int64, minV, maxV, startN T) error {
-	vecs[0] = vector.NewConstFixed(typ, startN, 1, proc.Mp())
-	vecs[1] = vector.NewConstFixed(typ, minV, 1, proc.Mp())
-	vecs[2] = vector.NewConstFixed(typ, maxV, 1, proc.Mp())
-	vecs[3] = vector.NewConstFixed(typ, startN, 1, proc.Mp())
-	vecs[4] = vector.NewConstFixed(types.T_int64.ToType(), incr, 1, proc.Mp())
-	if stmt.Cycle {
-		vecs[5] = vector.NewConstFixed(types.T_bool.ToType(), true, 1, proc.Mp())
-	} else {
-		vecs[5] = vector.NewConstFixed(types.T_bool.ToType(), false, 1, proc.Mp())
+func makeSequenceVecs[T constraints.Integer](vecs []*vector.Vector, stmt *tree.CreateSequence, typ types.Type, proc *process.Process, incr int64, minV, maxV, startN T) (err error) {
+	defer func() {
+		if err != nil {
+			for _, v := range vecs {
+				if v != nil {
+					v.Free(proc.Mp())
+				}
+			}
+		}
+	}()
+
+	if vecs[0], err = vector.NewConstFixed(typ, startN, 1, proc.Mp()); err != nil {
+		return err
 	}
-	vecs[6] = vector.NewConstFixed(types.T_bool.ToType(), false, 1, proc.Mp())
-	return nil
+	if vecs[1], err = vector.NewConstFixed(typ, minV, 1, proc.Mp()); err != nil {
+		return err
+	}
+	if vecs[2], err = vector.NewConstFixed(typ, maxV, 1, proc.Mp()); err != nil {
+		return err
+	}
+	if vecs[3], err = vector.NewConstFixed(typ, startN, 1, proc.Mp()); err != nil {
+		return err
+	}
+	if vecs[4], err = vector.NewConstFixed(types.T_int64.ToType(), incr, 1, proc.Mp()); err != nil {
+		return err
+	}
+	if stmt.Cycle {
+		vecs[5], err = vector.NewConstFixed(types.T_bool.ToType(), true, 1, proc.Mp())
+	} else {
+		vecs[5], err = vector.NewConstFixed(types.T_bool.ToType(), false, 1, proc.Mp())
+	}
+	if err != nil {
+		return err
+	}
+	vecs[6], err = vector.NewConstFixed(types.T_bool.ToType(), false, 1, proc.Mp())
+	return err
 }
 
-func makeAlterSequenceVecs[T constraints.Integer](vecs []*vector.Vector, typ types.Type, proc *process.Process, incr int64, lastV, minV, maxV, startN T, cycle bool) error {
-	vecs[0] = vector.NewConstFixed(typ, lastV, 1, proc.Mp())
-	vecs[1] = vector.NewConstFixed(typ, minV, 1, proc.Mp())
-	vecs[2] = vector.NewConstFixed(typ, maxV, 1, proc.Mp())
-	vecs[3] = vector.NewConstFixed(typ, startN, 1, proc.Mp())
-	vecs[4] = vector.NewConstFixed(types.T_int64.ToType(), incr, 1, proc.Mp())
-	vecs[5] = vector.NewConstFixed(types.T_bool.ToType(), cycle, 1, proc.Mp())
-	vecs[6] = vector.NewConstFixed(types.T_bool.ToType(), false, 1, proc.Mp())
-	return nil
+func makeAlterSequenceVecs[T constraints.Integer](vecs []*vector.Vector, typ types.Type, proc *process.Process, incr int64, lastV, minV, maxV, startN T, cycle bool) (err error) {
+	defer func() {
+		if err != nil {
+			for _, v := range vecs {
+				if v != nil {
+					v.Free(proc.Mp())
+				}
+			}
+		}
+	}()
+
+	if vecs[0], err = vector.NewConstFixed(typ, lastV, 1, proc.Mp()); err != nil {
+		return err
+	}
+	if vecs[1], err = vector.NewConstFixed(typ, minV, 1, proc.Mp()); err != nil {
+		return err
+	}
+	if vecs[2], err = vector.NewConstFixed(typ, maxV, 1, proc.Mp()); err != nil {
+		return err
+	}
+	if vecs[3], err = vector.NewConstFixed(typ, startN, 1, proc.Mp()); err != nil {
+		return err
+	}
+	if vecs[4], err = vector.NewConstFixed(types.T_int64.ToType(), incr, 1, proc.Mp()); err != nil {
+		return err
+	}
+	if vecs[5], err = vector.NewConstFixed(types.T_bool.ToType(), cycle, 1, proc.Mp()); err != nil {
+		return err
+	}
+	vecs[6], err = vector.NewConstFixed(types.T_bool.ToType(), false, 1, proc.Mp())
+	return err
 }
 
 func makeSequenceParam[T constraints.Integer](ctx context.Context, stmt *tree.CreateSequence) (int64, T, T, T, error) {
@@ -2743,6 +2902,7 @@ func lockMoDatabase(c *Compile, dbName string) error {
 	if err != nil {
 		return err
 	}
+	defer vec.Free(c.proc.Mp())
 	if err := lockRows(c.e, c.proc, dbRel, vec, lock.LockMode_Exclusive, lock.Sharding_ByRow, c.proc.SessionInfo.AccountId); err != nil {
 		return err
 	}

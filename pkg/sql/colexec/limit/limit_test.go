@@ -54,10 +54,12 @@ func init() {
 			arg: &Argument{
 				Seen:  0,
 				Limit: 8,
-				info: &vm.OperatorInfo{
-					Idx:     0,
-					IsFirst: false,
-					IsLast:  false,
+				OperatorBase: vm.OperatorBase{
+					OperatorInfo: vm.OperatorInfo{
+						Idx:     0,
+						IsFirst: false,
+						IsLast:  false,
+					},
 				},
 			},
 		},
@@ -69,10 +71,12 @@ func init() {
 			arg: &Argument{
 				Seen:  0,
 				Limit: 10,
-				info: &vm.OperatorInfo{
-					Idx:     0,
-					IsFirst: false,
-					IsLast:  false,
+				OperatorBase: vm.OperatorBase{
+					OperatorInfo: vm.OperatorInfo{
+						Idx:     0,
+						IsFirst: false,
+						IsLast:  false,
+					},
 				},
 			},
 		},
@@ -84,10 +88,12 @@ func init() {
 			arg: &Argument{
 				Seen:  0,
 				Limit: 12,
-				info: &vm.OperatorInfo{
-					Idx:     0,
-					IsFirst: false,
-					IsLast:  false,
+				OperatorBase: vm.OperatorBase{
+					OperatorInfo: vm.OperatorInfo{
+						Idx:     0,
+						IsFirst: false,
+						IsLast:  false,
+					},
 				},
 			},
 		},
@@ -121,7 +127,7 @@ func TestLimit(t *testing.T) {
 		resetChildren(tc.arg, bats)
 		_, _ = tc.arg.Call(tc.proc)
 		tc.arg.Free(tc.proc, false, nil)
-		tc.arg.children[0].Free(tc.proc, false, nil)
+		tc.arg.GetChildren(0).Free(tc.proc, false, nil)
 		tc.proc.FreeVectors()
 		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
@@ -164,15 +170,10 @@ func newBatch(t *testing.T, ts []types.Type, proc *process.Process, rows int64) 
 }
 
 func resetChildren(arg *Argument, bats []*batch.Batch) {
-	if len(arg.children) == 0 {
-		arg.AppendChild(&value_scan.Argument{
-			Batchs: bats,
+	arg.SetChildren(
+		[]vm.Operator{
+			&value_scan.Argument{
+				Batchs: bats,
+			},
 		})
-
-	} else {
-		arg.children = arg.children[:0]
-		arg.AppendChild(&value_scan.Argument{
-			Batchs: bats,
-		})
-	}
 }

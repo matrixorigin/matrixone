@@ -73,10 +73,12 @@ func newTestCase(all bool, format, jsondata string) externalTestCase {
 					Filter:    &FilterParam{},
 				},
 			},
-			info: &vm.OperatorInfo{
-				Idx:     1,
-				IsFirst: false,
-				IsLast:  false,
+			OperatorBase: vm.OperatorBase{
+				OperatorInfo: vm.OperatorInfo{
+					Idx:     1,
+					IsFirst: false,
+					IsLast:  false,
+				},
 			},
 		},
 		cancel:   cancel,

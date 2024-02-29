@@ -17,6 +17,7 @@ package table_scan
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -25,13 +26,21 @@ import (
 var _ vm.Operator = new(Argument)
 
 type Argument struct {
-	Reader engine.Reader
-	Attrs  []string
+	msgReceiver    *process.MessageReceiver
+	TopValueMsgTag int32
+	OrderBy        []*plan.OrderBySpec
+	Reader         engine.Reader
+	Attrs          []string
+	TableID        uint64
 
-	info     *vm.OperatorInfo
-	children []vm.Operator
+	buf    *batch.Batch
+	tmpBuf *batch.Batch
 
-	buf *batch.Batch
+	vm.OperatorBase
+}
+
+func (arg *Argument) GetOperatorBase() *vm.OperatorBase {
+	return &arg.OperatorBase
 }
 
 func init() {
@@ -47,7 +56,7 @@ func init() {
 	)
 }
 
-func (arg Argument) Name() string {
+func (arg Argument) TypeName() string {
 	return argName
 }
 
@@ -61,17 +70,18 @@ func (arg *Argument) Release() {
 	}
 }
 
-func (arg *Argument) SetInfo(info *vm.OperatorInfo) {
-	arg.info = info
-}
-
-func (arg *Argument) AppendChild(child vm.Operator) {
-	arg.children = append(arg.children, child)
-}
-
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	if arg.buf != nil {
 		arg.buf.Clean(proc.Mp())
 		arg.buf = nil
+	}
+
+	if arg.tmpBuf != nil {
+		arg.tmpBuf.Clean(proc.Mp())
+		arg.tmpBuf = nil
+	}
+
+	if arg.msgReceiver != nil {
+		arg.msgReceiver.Free()
 	}
 }

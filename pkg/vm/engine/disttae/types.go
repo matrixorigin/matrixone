@@ -16,13 +16,11 @@ package disttae
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"math"
 	"sync"
 	"sync/atomic"
 	"time"
-
-	"github.com/matrixorigin/matrixone/pkg/logservice"
-	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -31,14 +29,16 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
+	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
-	"github.com/matrixorigin/matrixone/pkg/queryservice"
+	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/udf"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
@@ -59,6 +59,8 @@ const (
 	COMPACTION_CN
 	UPDATE
 	ALTER
+	INSERT_TXN // Only for CN workspace consumption, not sent to DN
+	DELETE_TXN // Only for CN workspace consumption, not sent to DN
 )
 
 const (
@@ -103,7 +105,7 @@ type Engine struct {
 	mp         *mpool.MPool
 	fs         fileservice.FileService
 	ls         lockservice.LockService
-	qs         queryservice.QueryService
+	qc         qclient.QueryClient
 	hakeeper   logservice.CNHAKeeperClient
 	us         udf.Service
 	cli        client.TxnClient
@@ -114,7 +116,11 @@ type Engine struct {
 	packerPool *fileservice.Pool[*types.Packer]
 
 	// XXX related to cn push model
-	pClient pushClient
+	pClient PushClient
+
+	// globalStats is the global stats information, which is updated
+	// from logtail updates.
+	globalStats *GlobalStats
 }
 
 // Transaction represents a transaction
@@ -178,7 +184,10 @@ type Transaction struct {
 	// notice that it's guarded by txn.Lock()
 	cnBlkId_Pos map[types.Blockid]Pos
 	// committed block belongs to txn's snapshot data -> delta locations for committed block's deletes.
-	blockId_tn_delete_metaLoc_batch map[types.Blockid][]*batch.Batch
+	blockId_tn_delete_metaLoc_batch struct {
+		sync.RWMutex
+		data map[types.Blockid][]*batch.Batch
+	}
 	//select list for raw batch comes from txn.writes.batch.
 	batchSelectList map[*batch.Batch][]int64
 	toFreeBatches   map[tableKey][]*batch.Batch
@@ -354,6 +363,7 @@ func (txn *Transaction) RollbackLastStatement(ctx context.Context) error {
 
 	txn.rollbackCount++
 	if txn.statementID > 0 {
+		txn.clearTableCache()
 		txn.rollbackCreateTableLocked()
 
 		txn.statementID--
@@ -362,7 +372,7 @@ func (txn *Transaction) RollbackLastStatement(ctx context.Context) error {
 			if txn.writes[i].bat == nil {
 				continue
 			}
-			txn.writes[i].bat.Clean(txn.engine.mp)
+			txn.writes[i].bat.Clean(txn.proc.Mp())
 		}
 		txn.writes = txn.writes[:end]
 		txn.statements = txn.statements[:txn.statementID]
@@ -517,8 +527,6 @@ type txnTable struct {
 	lastTS timestamp.Timestamp
 	//entries belong to this table,and come from txn.writes.
 	writes []Entry
-	// offset of the writes in workspace
-	writesOffset int
 
 	// this should be the statement id
 	// but seems that we're not maintaining it at the moment
@@ -596,19 +604,32 @@ type withFilterMixin struct {
 	sels []int32
 }
 
+type blockSortHelper struct {
+	blk *objectio.BlockInfo
+	zm  index.ZM
+}
+
 type blockReader struct {
 	withFilterMixin
 
 	// used for prefetch
-	infos       [][]*objectio.BlockInfo
-	steps       []int
-	currentStep int
+	dontPrefetch bool
+	infos        [][]*objectio.BlockInfo
+	steps        []int
+	currentStep  int
 
 	scanType int
 	// block list to scan
 	blks []*objectio.BlockInfo
 	//buffer for block's deletes
 	buffer []int64
+
+	// for ordered scan
+	desc     bool
+	blockZMS []index.ZM
+	OrderBy  []*plan.OrderBySpec
+	sorted   bool // blks need to be sorted by zonemap
+	filterZM objectio.ZoneMap
 }
 
 type blockMergeReader struct {
@@ -628,10 +649,4 @@ type mergeReader struct {
 }
 
 type emptyReader struct {
-}
-
-type pkRange struct {
-	isRange bool
-	items   []int64
-	ranges  []int64
 }

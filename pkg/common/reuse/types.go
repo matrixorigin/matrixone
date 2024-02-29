@@ -42,9 +42,9 @@ type Options[T ReusableObject] struct {
 
 // ReusableObject all reusable objects must implements this interface
 type ReusableObject interface {
-	// Name returns the name of the object type. We cannot use reflect.TypeOf to get
+	// TypeName returns the name of the object type. We cannot use reflect.TypeOf to get
 	// the name of the object type, to avoid mem allocate.
-	Name() string
+	TypeName() string
 }
 
 func init() {

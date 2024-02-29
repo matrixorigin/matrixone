@@ -29,10 +29,12 @@ var _ vm.Operator = new(Argument)
 type Argument struct {
 	ctr *container
 	Es  []*plan.Expr
+	buf *batch.Batch
+	vm.OperatorBase
+}
 
-	info     *vm.OperatorInfo
-	children []vm.Operator
-	buf      *batch.Batch
+func (arg *Argument) GetOperatorBase() *vm.OperatorBase {
+	return &arg.OperatorBase
 }
 
 func init() {
@@ -48,7 +50,7 @@ func init() {
 	)
 }
 
-func (arg Argument) Name() string {
+func (arg Argument) TypeName() string {
 	return argName
 }
 
@@ -62,17 +64,9 @@ func (arg *Argument) Release() {
 	}
 }
 
-func (arg *Argument) SetInfo(info *vm.OperatorInfo) {
-	arg.info = info
-}
-
-func (arg *Argument) AppendChild(child vm.Operator) {
-	arg.children = append(arg.children, child)
-}
-
 type container struct {
 	projExecutors []colexec.ExpressionExecutor
-	uafs          []func(v, w *vector.Vector) error //vector.GetUnionAllFunction
+	uafs          []func(v, w *vector.Vector) error // vector.GetUnionAllFunction
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {

@@ -249,3 +249,53 @@ drop table t1;
 select if(1, cast(1111111111111111111 as unsigned), 1) i, case when 1 then cast(1111111111111111111 as unsigned) else 1 end c, coalesce(cast(1111111111111111111 as unsigned), 1) co;
 i	c	co
 1111111111111111111	1111111111111111111	1111111111111111111
+create database if not exists test;
+use test;
+drop table if exists `alarm`;
+CREATE TABLE `alarm` (
+`alarm_id` INT NOT NULL AUTO_INCREMENT,
+`var_name` TEXT DEFAULT NULL,
+`address` TEXT DEFAULT NULL,
+`var_type` TEXT DEFAULT NULL,
+`alarm_value` TEXT DEFAULT NULL,
+`current_value` TEXT DEFAULT NULL,
+`priority` INT DEFAULT null,
+`operator` TEXT DEFAULT NULL,
+`insert_time` BLOB DEFAULT NULL,
+`note` TEXT DEFAULT NULL,
+PRIMARY KEY (`alarm_id`)
+);
+INSERT INTO `alarm` VALUES (2,'测试','M100.0','Bool','True','True',0,'管理员',_binary '2023-03-01 14:20:29','报警测试'),(3,'测试','M100.0','Bool','True','True',0,'管理员',_binary '2023-03-01 14:20:41','报警测试'),(4,'测试','M100.0','Bool','True','True',0,'管理员',_binary '2023-03-01 14:20:46','报警测试'),(5,'Emergency','M1000.4','bool','False','False',1,'Admin',_binary '2023-03-03 14:29:26.327337','设备急停中'),(6,'Emergency','M1000.4','bool','False','False',1,'Admin',_binary '2023-03-05 11:38:10.6059081','设备急停中'),(7,'Emergency','M1000.4','bool','False','False',1,'Admin',_binary '2023-03-15 07:55:37.1308852','设备急停中'),(8,'Emergency','M1000.4','bool','False','False',1,'Admin',_binary '2023-03-15 08:02:48.7571227','设备急停中'),(9,'Emergency','M1000.4','bool','False','False',1,'Admin',_binary '2023-03-19 03:27:49.5087995','设备急停中'),(10,'Emergency','M1000.4','bool','False','False',1,'Admin',_binary '2023-03-22 00:05:23.1781761','设备急停中'),(11,'Emergency','M1000.4','bool','False','False',1,'Admin',_binary '2023-03-22 16:05:08.6198487','设备急停中'),(12,'Emergency','M1000.4','bool','False','False',1,'Admin',_binary '2023-03-22 16:12:10.8425965','设备急停中'),(13,'Emergency','M1000.4','bool','False','False',1,'Admin',_binary '2023-03-22 16:24:30.269232','设备急停中'),(14,'Emergency','M1000.4','bool','False','False',1,'Admin',_binary '2023-03-22 16:25:16.3121285','设备急停中'),(15,'Emergency','M1000.4','bool','False','False',1,'Admin',_binary '2023-03-22 16:25:23.5447725','设备急停中'),(16,'Emergency','M1000.4','bool','False','False',1,'Admin',_binary '2023-03-22 20:34:57.8534506','设备急停中'),(17,'Emergency','M1000.4','bool','False','False',1,'Admin',_binary '2023-03-22 20:35:20.1639042','设备急停中'),(18,'Emergency','M1000.4','bool','False','False',1,'Admin',_binary '2023-03-22 20:45:27.0464144','设备急停中'),(19,'Emergency','M1000.4','bool','False','False',1,'Admin',_binary '2023-03-22 20:49:59.5979518','设备急停中'),(20,'Emergency','M1000.4','bool','False','False',1,'Admin',_binary '2023-03-23 01:26:46.1155487','设备急停中'),(21,'Emergency','M1000.4','bool','False','False',1,'Admin',_binary '2023-03-30 06:33:50.6666203','设备急停中'),(22,'Emergency','M1000.4','bool','False','False',1,'Admin',_binary '2023-04-03 05:44:03.5318075','设备急停中'),(23,'Emergency','M1000.4','bool','False','False',1,'Admin',_binary '2023-04-03 05:45:01.64952','设备急停中'),(24,'Emergency','M1000.4','bool','False','False',1,'Admin',_binary '2023-04-03 05:46:37.8612795','设备急停中'),(25,'Emergency','M1000.4','bool','False','False',1,'Admin',_binary '2023-04-03 06:05:06.5081611','设备急停中'),(26,'Emergency','M1000.4','bool','False','False',1,'Admin',_binary '2023-04-03 12:21:23.1368163','设备急停中'),(27,'Emergency','M1000.4','bool','False','False',1,'Admin',_binary '2023-04-03 12:25:45.5234186','设备急停中'),(28,'Emergency','M1000.4','bool','False','False',1,'Admin',_binary '2023-04-03 18:22:29.7438075','设备急停中'),(29,'Emergency','M1000.4','bool','False','False',1,'Admin',_binary '2023-04-04 06:52:07.473582','设备急停中'),(30,'Emergency','M1000.4','bool','False','False',1,'Admin',_binary '2023-04-04 08:32:50.2166836','设备急停中'),(31,'测试报警','M100','bool','true','true',1,'Admin',_binary '2023-04-06 21:00:09.7964362','note测试报警');
+SELECT * FROM  `alarm`;
+alarm_id    var_name    address    var_type    alarm_value    current_value    priority    operator    insert_time    note
+2    测试    M100.0    Bool    True    True    0    管理员    2023-03-01 14:20:29    报警测试
+3    测试    M100.0    Bool    True    True    0    管理员    2023-03-01 14:20:41    报警测试
+4    测试    M100.0    Bool    True    True    0    管理员    2023-03-01 14:20:46    报警测试
+5    Emergency    M1000.4    bool    False    False    1    Admin    2023-03-03 14:29:26.327337    设备急停中
+6    Emergency    M1000.4    bool    False    False    1    Admin    2023-03-05 11:38:10.6059081    设备急停中
+7    Emergency    M1000.4    bool    False    False    1    Admin    2023-03-15 07:55:37.1308852    设备急停中
+8    Emergency    M1000.4    bool    False    False    1    Admin    2023-03-15 08:02:48.7571227    设备急停中
+9    Emergency    M1000.4    bool    False    False    1    Admin    2023-03-19 03:27:49.5087995    设备急停中
+10    Emergency    M1000.4    bool    False    False    1    Admin    2023-03-22 00:05:23.1781761    设备急停中
+11    Emergency    M1000.4    bool    False    False    1    Admin    2023-03-22 16:05:08.6198487    设备急停中
+12    Emergency    M1000.4    bool    False    False    1    Admin    2023-03-22 16:12:10.8425965    设备急停中
+13    Emergency    M1000.4    bool    False    False    1    Admin    2023-03-22 16:24:30.269232    设备急停中
+14    Emergency    M1000.4    bool    False    False    1    Admin    2023-03-22 16:25:16.3121285    设备急停中
+15    Emergency    M1000.4    bool    False    False    1    Admin    2023-03-22 16:25:23.5447725    设备急停中
+16    Emergency    M1000.4    bool    False    False    1    Admin    2023-03-22 20:34:57.8534506    设备急停中
+17    Emergency    M1000.4    bool    False    False    1    Admin    2023-03-22 20:35:20.1639042    设备急停中
+18    Emergency    M1000.4    bool    False    False    1    Admin    2023-03-22 20:45:27.0464144    设备急停中
+19    Emergency    M1000.4    bool    False    False    1    Admin    2023-03-22 20:49:59.5979518    设备急停中
+20    Emergency    M1000.4    bool    False    False    1    Admin    2023-03-23 01:26:46.1155487    设备急停中
+21    Emergency    M1000.4    bool    False    False    1    Admin    2023-03-30 06:33:50.6666203    设备急停中
+22    Emergency    M1000.4    bool    False    False    1    Admin    2023-04-03 05:44:03.5318075    设备急停中
+23    Emergency    M1000.4    bool    False    False    1    Admin    2023-04-03 05:45:01.64952    设备急停中
+24    Emergency    M1000.4    bool    False    False    1    Admin    2023-04-03 05:46:37.8612795    设备急停中
+25    Emergency    M1000.4    bool    False    False    1    Admin    2023-04-03 06:05:06.5081611    设备急停中
+26    Emergency    M1000.4    bool    False    False    1    Admin    2023-04-03 12:21:23.1368163    设备急停中
+27    Emergency    M1000.4    bool    False    False    1    Admin    2023-04-03 12:25:45.5234186    设备急停中
+28    Emergency    M1000.4    bool    False    False    1    Admin    2023-04-03 18:22:29.7438075    设备急停中
+29    Emergency    M1000.4    bool    False    False    1    Admin    2023-04-04 06:52:07.473582    设备急停中
+30    Emergency    M1000.4    bool    False    False    1    Admin    2023-04-04 08:32:50.2166836    设备急停中
+31    测试报警    M100    bool    true    true    1    Admin    2023-04-06 21:00:09.7964362    note测试报警
+drop database test;

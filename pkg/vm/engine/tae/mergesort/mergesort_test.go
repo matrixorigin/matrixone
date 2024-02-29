@@ -29,7 +29,7 @@ import (
 
 func TestSort1(t *testing.T) {
 	defer testutils.AfterTest(t)()
-	vecTypes := types.MockColTypes(23)
+	vecTypes := types.MockColTypes()
 	pool := mocks.GetTestVectorPool()
 
 	// sort not null
@@ -64,7 +64,7 @@ func TestSort1(t *testing.T) {
 }
 func TestSort2(t *testing.T) {
 	defer testutils.AfterTest(t)()
-	vecTypes := types.MockColTypes(23)
+	vecTypes := types.MockColTypes()
 	for _, vecType := range vecTypes {
 		vec := containers.MockVector(vecType, 10000, false, nil)
 		t0 := time.Now()
@@ -76,7 +76,7 @@ func TestSort2(t *testing.T) {
 }
 func TestMerge1(t *testing.T) {
 	defer testutils.AfterTest(t)()
-	vecTypes := types.MockColTypes(23)
+	vecTypes := types.MockColTypes()
 	// mrege not null
 	for _, vecType := range vecTypes {
 		vec := containers.MockVector(vecType, 5, false, nil)
@@ -151,7 +151,7 @@ func TestMerge1(t *testing.T) {
 }
 func TestMerge2(t *testing.T) {
 	defer testutils.AfterTest(t)()
-	vecTypes := types.MockColTypes(23)
+	vecTypes := types.MockColTypes()
 	for _, vecType := range vecTypes {
 		vec := containers.MockVector(vecType, 50000, false, nil)
 		vec2 := containers.MockVector(vecType, 50000, false, nil)
@@ -169,7 +169,7 @@ func TestMerge2(t *testing.T) {
 }
 func TestReshape1(t *testing.T) {
 	defer testutils.AfterTest(t)()
-	vecTypes := types.MockColTypes(23)
+	vecTypes := types.MockColTypes()
 	for _, vecType := range vecTypes {
 		vec := containers.MockVector(vecType, 4, false, nil)
 		vec.Update(rand.Intn(4), nil, true)
@@ -186,7 +186,7 @@ func TestReshape1(t *testing.T) {
 }
 func TestReshape2(t *testing.T) {
 	defer testutils.AfterTest(t)()
-	vecTypes := types.MockColTypes(23)
+	vecTypes := types.MockColTypes()
 	for _, vecType := range vecTypes {
 		vec := containers.MockVector(vecType, 50000, false, nil)
 		vec2 := containers.MockVector(vecType, 50000, false, nil)

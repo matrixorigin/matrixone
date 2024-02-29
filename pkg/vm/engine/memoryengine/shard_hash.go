@@ -306,6 +306,20 @@ func getNullableValueFromVector(vec *vector.Vector, i int) (value Nullable) {
 		}
 		return
 
+	case types.T_bit:
+		if vec.IsConstNull() {
+			value = Nullable{
+				IsNull: true,
+				Value:  uint64(0),
+			}
+			return
+		}
+		value = Nullable{
+			IsNull: vec.GetNulls().Contains(uint64(i)),
+			Value:  vector.MustFixedCol[uint64](vec)[i],
+		}
+		return
+
 	case types.T_int8:
 		if vec.IsConstNull() {
 			value = Nullable{

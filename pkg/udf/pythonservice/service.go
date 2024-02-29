@@ -20,7 +20,6 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
-	"regexp"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -60,7 +59,7 @@ func (s *service) Start() error {
 		if path.IsAbs(file) {
 			file = path.Join(s.cfg.Path, "server.py")
 		} else {
-			file = path.Join(splitPath(exePath, 2), s.cfg.Path, "server.py")
+			file = path.Join(exePath, s.cfg.Path, "server.py")
 		}
 		_, err = os.Stat(file)
 		if err != nil {
@@ -68,7 +67,7 @@ func (s *service) Start() error {
 		}
 
 		no := strconv.Itoa(int(atomic.AddInt32(&severNo, 1)))
-		s.log, err = os.OpenFile(path.Join(splitPath(exePath, 2), "pyserver"+no+".log"), os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0644)
+		s.log, err = os.OpenFile(path.Join(exePath, "pyserver"+no+".log"), os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0644)
 		if err != nil {
 			return err
 		}
@@ -81,7 +80,7 @@ func (s *service) Start() error {
 		cmd := exec.Command("python", "-u", file, "--address="+s.cfg.Address)
 		cmd.Stdout = s.log
 		cmd.Stderr = s.log
-		err = cmd.Run()
+		err = cmd.Start()
 		if err != nil {
 			return err
 		}
@@ -110,28 +109,4 @@ func (s *service) Close() error {
 	}
 
 	return nil
-}
-
-func splitPath(pathname string, lv int) string {
-	count := 0
-	idx := 0
-	//find pathname字符串里面的数量
-	idxcount := regexp.MustCompile("/").FindAllStringIndex(pathname, -1)
-	if lv > len(idxcount) {
-		return "not found"
-	}
-	for i := len(pathname) - 1; i >= 0; i-- {
-		//os.PathSeparator 等同Python的os.seq
-		if pathname[i] == os.PathSeparator || pathname[i] == '/' {
-			count++
-			if count == lv {
-				idx = i
-				break //找到就退出for提高效率
-			}
-		}
-	}
-	if idx > 0 {
-		idx++
-	}
-	return pathname[:idx]
 }

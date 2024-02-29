@@ -20,7 +20,6 @@ import (
 	"math"
 	"strconv"
 	"strings"
-
 	"sync/atomic"
 	"time"
 
@@ -252,61 +251,37 @@ func (c *MockHLCClock) SetNodeID(id uint16) {
 	// nothing to do.
 }
 
-func MockColTypes(colCnt int) (ct []Type) {
-	for i := 0; i < colCnt; i++ {
-		var typ Type
-		switch i {
-		case 0:
-			typ = T_int8.ToType()
-		case 1:
-			typ = T_int16.ToType()
-		case 2:
-			typ = T_int32.ToType()
-		case 3:
-			typ = T_int64.ToType()
-		case 4:
-			typ = T_uint8.ToType()
-		case 5:
-			typ = T_uint16.ToType()
-		case 6:
-			typ = T_uint32.ToType()
-		case 7:
-			typ = T_uint64.ToType()
-		case 8:
-			typ = T_float32.ToType()
-		case 9:
-			typ = T_float64.ToType()
-		case 10:
-			typ = T_date.ToType()
-		case 11:
-			typ = T_datetime.ToType()
-		case 12:
-			typ = T_varchar.ToType()
-		case 13:
-			typ = T_char.ToType()
-		case 14:
-			typ = T_bool.ToType()
-			typ.Width = 8
-		case 15:
-			typ = T_timestamp.ToType()
-		case 16:
-			typ = T_decimal64.ToType()
-		case 17:
-			typ = T_decimal128.ToType()
-		case 18:
-			typ = T_binary.ToType()
-		case 19:
-			typ = T_varbinary.ToType()
-		case 20:
-			typ = T_enum.ToType()
-		case 21:
-			typ = T_array_float32.ToType()
-		case 22:
-			typ = T_array_float64.ToType()
-		}
-		ct = append(ct, typ)
-	}
-	return
+var columnTypes = []Type{
+	T_int8.ToType(),
+	T_int16.ToType(),
+	T_int32.ToType(),
+	T_int64.ToType(),
+	T_uint8.ToType(),
+	T_uint16.ToType(),
+	T_uint32.ToType(),
+	T_uint64.ToType(),
+	T_float32.ToType(),
+	T_float64.ToType(),
+	T_date.ToType(),
+	T_datetime.ToType(),
+	T_varchar.ToType(),
+	T_char.ToType(),
+	T_bool.ToType(),
+	T_timestamp.ToType(),
+	T_decimal64.ToType(),
+	T_decimal128.ToType(),
+	T_binary.ToType(),
+	T_varbinary.ToType(),
+	T_enum.ToType(),
+	T_array_float32.ToType(),
+	T_array_float64.ToType(),
+	T_bit.ToType(),
+}
+
+func MockColTypes() (ct []Type) {
+	// set type bool's width to 8
+	columnTypes[14].Width = 8
+	return columnTypes
 }
 
 func CompareTSTSAligned(a, b TS) int {

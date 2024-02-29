@@ -147,6 +147,22 @@ func (cc *CatalogCache) GetTableById(databaseId, tblId uint64) *TableItem {
 	return rel
 }
 
+// GetTableByName returns the table item whose name is tableName in the database.
+func (cc *CatalogCache) GetTableByName(databaseID uint64, tableName string) *TableItem {
+	var rel *TableItem
+	key := &TableItem{
+		DatabaseId: databaseID,
+	}
+	cc.tables.data.Ascend(key, func(item *TableItem) bool {
+		if item.Name == tableName {
+			rel = item
+			return false
+		}
+		return true
+	})
+	return rel
+}
+
 func (cc *CatalogCache) Databases(accountId uint32, ts timestamp.Timestamp) []string {
 	var rs []string
 
@@ -773,4 +789,68 @@ func getTableDef(tblItem *TableItem, coldefs []engine.TableDef) *plan.TableDef {
 		Indexes:       indexes,
 		Version:       tblItem.Version,
 	}
+}
+
+// TODO(ghs)
+// is debug for #13151, will remove later
+func (cc *CatalogCache) TraverseDbAndTbl() (dbs []DebugDatabaseItem, tbls []DebugTableItem) {
+	dbs = cc.databases.TraverseDatabaseCache()
+	tbls = cc.tables.TraverseTableCache()
+	return
+}
+
+type DebugTableItem struct {
+	AccountId  uint32
+	DatabaseId uint64
+	Name       string
+	Ts         timestamp.Timestamp
+	Id         uint64
+	Deleted    bool
+}
+
+func (dt *DebugTableItem) String() string {
+	return fmt.Sprintf("%d-%d-%d-%s-%v-%s",
+		dt.AccountId, dt.DatabaseId, dt.Id, dt.Name, dt.Deleted, types.TimestampToTS(dt.Ts).ToString())
+}
+
+type DebugDatabaseItem struct {
+	AccountId uint32
+	Name      string
+	Ts        timestamp.Timestamp
+	Id        uint64
+	Deleted   bool
+}
+
+func (dd *DebugDatabaseItem) String() string {
+	return fmt.Sprintf("%d-%d-%s-%v-%s",
+		dd.AccountId, dd.Id, dd.Name, dd.Deleted, types.TimestampToTS(dd.Ts).ToString())
+}
+
+func (c *tableCache) TraverseTableCache() (ret []DebugTableItem) {
+	c.data.Scan(func(tblItem *TableItem) bool {
+		ret = append(ret, DebugTableItem{
+			Ts:         tblItem.Ts,
+			Id:         tblItem.Id,
+			Name:       tblItem.Name,
+			Deleted:    tblItem.deleted,
+			AccountId:  tblItem.AccountId,
+			DatabaseId: tblItem.DatabaseId,
+		})
+		return true
+	})
+	return
+}
+
+func (t *databaseCache) TraverseDatabaseCache() (ret []DebugDatabaseItem) {
+	t.data.Scan(func(dbItem *DatabaseItem) bool {
+		ret = append(ret, DebugDatabaseItem{
+			Ts:        dbItem.Ts,
+			Id:        dbItem.Id,
+			Name:      dbItem.Name,
+			Deleted:   dbItem.deleted,
+			AccountId: dbItem.AccountId,
+		})
+		return true
+	})
+	return
 }

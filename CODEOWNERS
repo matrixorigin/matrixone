@@ -1,12 +1,12 @@
 # default owner for stuff that is not explicitly set for ownership
 # for triage only
 
-# github and CI related stuff
+# github and CI-related stuff
 .github @sukki37
 .github/actions @sukki37
 .github/workflow @sukki37
 
-# files under the top level directory
+# files under the top-level directory
 /*.yml @sukki37
 /*.yaml @sukki37
 /.gitignore @sukki37
@@ -20,7 +20,7 @@
 /go.mod @zhangxu19830126
 /go.sum @zhangxu19830126
 
-# top level folders
+# Top-level folders
 /cgo @aunjgr
 /docs @fengttt
 /etc @zhangxu19830126
@@ -41,6 +41,13 @@
 
 # pkg/cnservice
 /pkg/cnservice @nnsgmsone @reusee @daviszhen
+
+/pkg/cacheservice @volgariver6 
+
+/pkg/clusterservice @volgariver6 
+
+
+
 
 # pkg/common
 /pkg/common @zhangxu19830126
@@ -149,7 +156,7 @@
 /pkg/util/toml @zhangxu19830126
 /pkg/util/trace @xzxiong
 /pkg/util/export @xzxiong
-/pkg/util/metric/v2 @zhangxu19830126
+/pkg/util/metric/v2 @zhangxu19830126 @aptend
 
 # pkg/vectorize
 /pkg/vectorize @aunjgr
@@ -158,13 +165,23 @@
 /pkg/vm @nnsgmsone @XuPeng-SH
 /pkg/vm/engine @nnsgmsone
 /pkg/vm/engine/disttae @nnsgmsone @XuPeng-SH @triump2020
-/pkg/vm/engine/disttae/logtailreplay @reusee
+/pkg/vm/engine/disttae/logtailreplay @reusee @triump2020
 /pkg/vm/engine/tae @XuPeng-SH
 /pkg/vm/engine/memoryengine @reusee
+/pkg/vm/engine/tae/logtail/service @XuPeng-SH @volgariver6
+/pkg/vm/engine/tae/logstore @XuPeng-SH @jiangxinmeng1
+/pkg/vm/engine/tae/wal @XuPeng-SH @jiangxinmeng1
+/pkg/vm/engine/tae/blockio @XuPeng-SH @LeftHandCold
+
 
 # proxy
 /pkg/proxy @zhangxu19830126 @volgariver6
 
+/pkg/stream @fengttt
+
+/pkg/udf @aylei @daviszhen
+
+/pkg/version @zhangxu19830126
 
 # /proto contains pb definitions, owners will be responsible
 # for compatibility issues required for rolling upgrade.
@@ -175,3 +192,5 @@
 /proto/plan.proto @nnsgmsone
 /proto/timestamp.proto @zhangxu19830126
 /proto/txn.proto @zhangxu19830126
+/proto/api.proto @XuPeng-SH
+/proto/logtail.proto @XuPeng-SH

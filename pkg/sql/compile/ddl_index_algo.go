@@ -16,12 +16,13 @@ package compile
 
 import (
 	"fmt"
+	"strconv"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
-	"strconv"
 )
 
 func (s *Scope) handleUniqueIndexTable(c *Compile,
@@ -33,24 +34,14 @@ func (s *Scope) handleUniqueIndexTable(c *Compile,
 		return err
 	}
 
-	err = s.createAndInsertForUniqueOrRegularIndexTable(c, indexDef, qryDatabase, originalTableDef, indexInfo)
-	if err != nil {
-		return err
-	}
-
-	return err
+	return s.createAndInsertForUniqueOrRegularIndexTable(c, indexDef, qryDatabase, originalTableDef, indexInfo)
 }
 
 func (s *Scope) handleRegularSecondaryIndexTable(c *Compile,
 	indexDef *plan.IndexDef, qryDatabase string,
 	originalTableDef *plan.TableDef, indexInfo *plan.CreateTable) error {
 
-	err := s.createAndInsertForUniqueOrRegularIndexTable(c, indexDef, qryDatabase, originalTableDef, indexInfo)
-	if err != nil {
-		return err
-	}
-
-	return err
+	return s.createAndInsertForUniqueOrRegularIndexTable(c, indexDef, qryDatabase, originalTableDef, indexInfo)
 }
 
 func (s *Scope) createAndInsertForUniqueOrRegularIndexTable(c *Compile, indexDef *plan.IndexDef,
@@ -74,8 +65,31 @@ func (s *Scope) createAndInsertForUniqueOrRegularIndexTable(c *Compile, indexDef
 	}
 	return nil
 }
+func (s *Scope) handleMasterIndexTable(c *Compile, indexDef *plan.IndexDef, qryDatabase string,
+	originalTableDef *plan.TableDef, indexInfo *plan.CreateTable) error {
 
-func (s *Scope) handleIndexAndPKColCount(c *Compile, indexDef *plan.IndexDef, qryDatabase string, originalTableDef *plan.TableDef) (int64, error) {
+	if len(indexInfo.GetIndexTables()) != 1 {
+		return moerr.NewInternalErrorNoCtx("index table count not equal to 1")
+	}
+
+	def := indexInfo.GetIndexTables()[0]
+	createSQL := genCreateIndexTableSql(def, indexDef, qryDatabase)
+	err := c.runSql(createSQL)
+	if err != nil {
+		return err
+	}
+
+	insertSQLs := genInsertIndexTableSqlForMasterIndex(originalTableDef, indexDef, qryDatabase)
+	for _, insertSQL := range insertSQLs {
+		err = c.runSql(insertSQL)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Scope) handleIndexColCount(c *Compile, indexDef *plan.IndexDef, qryDatabase string, originalTableDef *plan.TableDef) (int64, error) {
 
 	indexColumnName := indexDef.Parts[0]
 	countTotalSql := fmt.Sprintf("select count(`%s`) from `%s`.`%s`;",
@@ -88,7 +102,7 @@ func (s *Scope) handleIndexAndPKColCount(c *Compile, indexDef *plan.IndexDef, qr
 	}
 
 	var totalCnt int64
-	rs.ReadRows(func(cols []*vector.Vector) bool {
+	rs.ReadRows(func(_ int, cols []*vector.Vector) bool {
 		totalCnt = executor.GetFixedRows[int64](cols[0])[0]
 		return false
 	})
@@ -130,7 +144,7 @@ func (s *Scope) handleIvfIndexMetaTable(c *Compile, indexDef *plan.IndexDef, qry
 }
 
 func (s *Scope) handleIvfIndexCentroidsTable(c *Compile, indexDef *plan.IndexDef,
-	qryDatabase string, originalTableDef *plan.TableDef, totalCnt int64, metaTableName string) error {
+	qryDatabase string, originalTableDef *plan.TableDef, totalCnt int64, metadataTableName string) error {
 
 	// 1.a algo params
 	params, err := catalog.IndexParamsStringToMap(indexDef.IndexAlgoParams)
@@ -165,7 +179,7 @@ func (s *Scope) handleIvfIndexCentroidsTable(c *Compile, indexDef *plan.IndexDef
 	// 2. Sampling SQL Logic
 	sampleCnt := catalog.CalcSampleCount(int64(centroidParamsLists), totalCnt)
 	indexColumnName := indexDef.Parts[0]
-	sampleSQL := fmt.Sprintf("(select sample(`%s`, %d rows) as `%s` from `%s`.`%s`)",
+	sampleSQL := fmt.Sprintf("(select sample(`%s`, %d rows, 'row') as `%s` from `%s`.`%s`)",
 		indexColumnName,
 		sampleCnt,
 		indexColumnName,
@@ -206,7 +220,7 @@ func (s *Scope) handleIvfIndexCentroidsTable(c *Compile, indexDef *plan.IndexDef
 		insertSQL,
 
 		catalog.SystemSI_IVFFLAT_TblCol_Metadata_val,
-		metaTableName,
+		metadataTableName,
 		catalog.SystemSI_IVFFLAT_TblCol_Metadata_key,
 
 		indexColumnName,
@@ -216,7 +230,18 @@ func (s *Scope) handleIvfIndexCentroidsTable(c *Compile, indexDef *plan.IndexDef
 		kmeansNormalize,
 		sampleSQL,
 	)
+
+	err = s.logTimestamp(c, qryDatabase, metadataTableName, "clustering_start")
+	if err != nil {
+		return err
+	}
+
 	err = c.runSql(clusterCentersSQL)
+	if err != nil {
+		return err
+	}
+
+	err = s.logTimestamp(c, qryDatabase, metadataTableName, "clustering_end")
 	if err != nil {
 		return err
 	}
@@ -243,6 +268,7 @@ func (s *Scope) handleIvfIndexEntriesTable(c *Compile, indexDef *plan.IndexDef, 
 	// 2. Original table's pkey name and value
 	var originalTblPkColsCommaSeperated string
 	var originalTblPkColMaySerial string
+	var originalTblPkColMaySerialColNameAlias = "__mo_org_tbl_pk_may_serial_col"
 	if originalTableDef.Pkey.PkeyColName == catalog.CPrimaryKeyColName {
 		for i, part := range originalTableDef.Pkey.Names {
 			if i > 0 {
@@ -280,60 +306,87 @@ func (s *Scope) handleIvfIndexEntriesTable(c *Compile, indexDef *plan.IndexDef, 
 		centroidsTableName,
 	)
 
+	// 5. original table with normalized SK
+	originalTableWithNormalizedSkSql := fmt.Sprintf("(select %s as `%s`, "+
+		"normalize_l2(`%s`.`%s`) as `%s` from `%s`.`%s`) as `%s`",
+		originalTblPkColMaySerial,
+		originalTblPkColMaySerialColNameAlias,
+
+		originalTableDef.Name,
+		indexColumnName,
+		indexColumnName,
+		qryDatabase,
+		originalTableDef.Name,
+		originalTableDef.Name,
+	)
+
 	/*
 		Sample SQL:
-		SELECT `__mo_index_entries_tbl`.`__mo_index_centroid_version_fk`,
-		`__mo_index_entries_tbl`.`__mo_index_centroid_id_fk`,
-		`__mo_index_entries_tbl`.`__mo_index_table_pk` FROM
-		(
-		SELECT
-		centroids.`__mo_index_centroid_version` as __mo_index_centroid_version_fk,
-		centroids.`__mo_index_centroid_id` as __mo_index_centroid_id_fk,
-		tbl.id as __mo_index_table_pk,
-		ROW_NUMBER() OVER (PARTITION BY tbl.id ORDER BY l2_distance(centroids.__mo_index_centroid, normalize_l2(tbl.embedding) ) ) as `__mo_index_rn`
-		FROM tbl
+		INSERT INTO `a`.`entries_tbl`(`__mo_index_centroid_fk_version`, `__mo_index_centroid_fk_id`, `__mo_index_pri_col`)
+		SELECT     `centroids_tbl`.`__mo_index_centroid_version`,
+		           serial_extract( min( serial( l2_distance(`centroids_tbl`.`__mo_index_centroid`,`tbl`.embedding ), `centroids_tbl`.`__mo_index_centroid_id`)), 1 AS bigint),
+		           `tbl`.`__mo_org_tbl_pk_may_serial_col`
+		FROM
+			(SELECT `tbl`.`id` AS `__mo_org_tbl_pk_may_serial_col`, normalize_l2(`tbl`.embedding) AS `embedding` FROM `a`.`tbl`) AS `tbl`
 		CROSS JOIN
-		(select * from `__mo_index_secondary_ff6b099e-9b2f-11ee-9b85-723e89f7b974` where `__mo_index_centroid_version` = (select CAST(`__mo_index_val` as BIGINT) from `__mo_index_secondary_ff6b0890-9b2f-11ee-9b85-723e89f7b974` where `__mo_index_key` = 'version')) as centroids
-		)`__mo_index_entries_tbl` WHERE `__mo_index_entries_tbl`.`__mo_index_rn` = 1;
+			(SELECT * FROM   `a`.`centroids_tbl` WHERE  `__mo_index_centroid_version` = 0) AS `centroids_tbl`
+		GROUP BY   `tbl`.`__mo_org_tbl_pk_may_serial_col`;
+
 	*/
-	// 5. final SQL
+	// 6. final SQL
 	mappingSQL := fmt.Sprintf("%s "+
-		"SELECT `__mo_index_entries_tbl`.`__mo_index_centroid_version_fk`, "+
-		"`__mo_index_entries_tbl`.`__mo_index_centroid_id_fk`, "+
-		"`__mo_index_entries_tbl`.`__mo_index_table_pk` FROM "+
-		"("+
-		"SELECT "+
-		"`%s`.`%s` as `__mo_index_centroid_version_fk`,  "+
-		"`%s`.`%s` as `__mo_index_centroid_id_fk`, "+
-		"%s as `__mo_index_table_pk`, "+
-		"ROW_NUMBER() OVER (PARTITION BY %s ORDER BY %s(`%s`.`%s`, normalize_l2(%s.%s))) as `__mo_index_rn` "+
-		"FROM "+
-		" %s CROSS JOIN %s "+
-		") `__mo_index_entries_tbl` WHERE `__mo_index_entries_tbl`.`__mo_index_rn` = 1;",
+		"select `%s`.`__mo_index_centroid_version`, "+
+		"serial_extract( min( serial_full( %s(`%s`.`%s`, `%s`.%s), `%s`.`%s`)), 1 as bigint), "+
+		"%s "+
+		"from %s CROSS JOIN %s group by %s;",
 		insertSQL,
 
 		centroidsTableName,
-		catalog.SystemSI_IVFFLAT_TblCol_Centroids_version,
-		centroidsTableName,
-		catalog.SystemSI_IVFFLAT_TblCol_Centroids_id,
-		// NOTE: no need to add tableName here, because it could be serial()
-		originalTblPkColMaySerial,
 
-		originalTblPkColMaySerial,
 		algoParamsDistFn,
 		centroidsTableName,
 		catalog.SystemSI_IVFFLAT_TblCol_Centroids_centroid,
 		originalTableDef.Name,
 		indexColumnName,
+		centroidsTableName,
+		catalog.SystemSI_IVFFLAT_TblCol_Centroids_id,
 
-		originalTableDef.Name,
+		originalTblPkColMaySerialColNameAlias, // NOTE: no need to add tableName here, because it could be serial()
+
+		originalTableWithNormalizedSkSql,
 		centroidsTableForCurrentVersionSql,
+		originalTblPkColMaySerialColNameAlias,
 	)
+
+	err = s.logTimestamp(c, qryDatabase, metadataTableName, "mapping_start")
+	if err != nil {
+		return err
+	}
 
 	err = c.runSql(mappingSQL)
 	if err != nil {
 		return err
 	}
 
+	err = s.logTimestamp(c, qryDatabase, metadataTableName, "mapping_end")
+	if err != nil {
+		return err
+	}
+
 	return nil
+}
+
+func (s *Scope) logTimestamp(c *Compile, qryDatabase, metadataTableName, metrics string) error {
+	return c.runSql(fmt.Sprintf("INSERT INTO `%s`.`%s` (%s, %s) "+
+		" VALUES ('%s', NOW()) "+
+		" ON DUPLICATE KEY UPDATE %s = NOW();",
+		qryDatabase,
+		metadataTableName,
+		catalog.SystemSI_IVFFLAT_TblCol_Metadata_key,
+		catalog.SystemSI_IVFFLAT_TblCol_Metadata_val,
+
+		metrics,
+
+		catalog.SystemSI_IVFFLAT_TblCol_Metadata_val,
+	))
 }

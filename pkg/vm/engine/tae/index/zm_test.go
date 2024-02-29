@@ -273,6 +273,28 @@ func TestZMNull(t *testing.T) {
 	require.False(t, zm.Contains(int64(1)))
 }
 
+func TestZmStringCompose(t *testing.T) {
+	packer := types.NewPacker(mpool.MustNewNoFixed("TestZmCompose"))
+	packer.EncodeStringType([]byte("0123456789.0123456789.0123456789."))
+	packer.EncodeInt32(42)
+
+	zm1 := BuildZM(types.T_varchar, packer.Bytes())
+	require.NotPanics(t, func() {
+		t.Log(zm1.StringForCompose())
+	})
+
+	packer.Reset()
+
+	packer.EncodeStringType([]byte("0123456789."))
+	packer.EncodeInt32(42)
+
+	zm2 := BuildZM(types.T_varchar, packer.Bytes())
+	require.NotPanics(t, func() {
+		t.Log(zm2.StringForCompose())
+	})
+
+}
+
 func TestZM(t *testing.T) {
 	int64v := int64(100)
 	zm1 := BuildZM(types.T_int64, types.EncodeInt64(&int64v))
@@ -328,6 +350,34 @@ func TestZM(t *testing.T) {
 	require.Equal(t, zm2.GetMinBuf(), zm3.GetMinBuf())
 	require.Equal(t, zm2.GetMaxBuf(), zm3.GetMaxBuf())
 	require.True(t, zm3.MaxTruncated())
+
+	{ // bit
+		v := uint64(500)
+		zm := BuildZM(types.T_bit, types.EncodeUint64(&v))
+		require.Equal(t, v, zm.GetMin())
+		require.Equal(t, v, zm.GetMax())
+
+		vMin := v - 200
+		vMax := v + 100
+		require.True(t, zm.ContainsKey(types.EncodeUint64(&v)))
+		require.False(t, zm.ContainsKey(types.EncodeUint64(&vMin)))
+		require.False(t, zm.ContainsKey(types.EncodeUint64(&vMax)))
+
+		UpdateZMAny(zm, vMin)
+		t.Log(zm.String())
+		require.True(t, zm.ContainsKey(types.EncodeUint64(&v)))
+		require.True(t, zm.ContainsKey(types.EncodeUint64(&vMin)))
+		require.False(t, zm.ContainsKey(types.EncodeUint64(&vMax)))
+
+		UpdateZMAny(zm, vMax)
+		t.Log(zm.String())
+		require.True(t, zm.ContainsKey(types.EncodeUint64(&v)))
+		require.True(t, zm.ContainsKey(types.EncodeUint64(&vMin)))
+		require.True(t, zm.ContainsKey(types.EncodeUint64(&vMax)))
+
+		require.Equal(t, vMin, zm.GetMin())
+		require.Equal(t, vMax, zm.GetMax())
+	}
 }
 
 func TestZMSum(t *testing.T) {
@@ -339,6 +389,7 @@ func TestZMSum(t *testing.T) {
 	testUIntSum(t, types.T_uint16)
 	testUIntSum(t, types.T_uint32)
 	testUIntSum(t, types.T_uint64)
+	testUIntSum(t, types.T_bit)
 	testFloatSum(t, types.T_float32)
 	testFloatSum(t, types.T_float64)
 	testDecimal64Sum(t)

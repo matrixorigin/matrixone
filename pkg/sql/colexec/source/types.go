@@ -35,16 +35,19 @@ type Argument struct {
 	Offset int64
 	Limit  int64
 
-	//end     bool
+	// end     bool
 	attrs   []string
 	types   []types.Type
 	Configs map[string]interface{}
 
-	info     *vm.OperatorInfo
-	children []vm.Operator
-	buf      *batch.Batch
-
+	buf    *batch.Batch
 	status int
+
+	vm.OperatorBase
+}
+
+func (arg *Argument) GetOperatorBase() *vm.OperatorBase {
+	return &arg.OperatorBase
 }
 
 func init() {
@@ -60,7 +63,7 @@ func init() {
 	)
 }
 
-func (arg Argument) Name() string {
+func (arg Argument) TypeName() string {
 	return argName
 }
 
@@ -72,14 +75,6 @@ func (arg *Argument) Release() {
 	if arg != nil {
 		reuse.Free[Argument](arg, nil)
 	}
-}
-
-func (arg *Argument) SetInfo(info *vm.OperatorInfo) {
-	arg.info = info
-}
-
-func (arg *Argument) AppendChild(child vm.Operator) {
-	arg.children = append(arg.children, child)
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {

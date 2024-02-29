@@ -47,17 +47,15 @@ func NewScheduler(taskServiceGetter func() taskservice.TaskService, cfg hakeeper
 }
 
 func (s *scheduler) Schedule(cnState logservice.CNState, currentTick uint64) {
-	workingCN := getWorkingCNs(s.cfg, cnState, currentTick)
-
 	runningTasks := s.queryTasks(task.TaskStatus_Running)
 	createdTasks := s.queryTasks(task.TaskStatus_Created)
 	tasks := append(runningTasks, createdTasks...)
-	for _, task := range tasks {
-		if task.IsInitTask() {
+	for _, t := range tasks {
+		if t.IsInitTask() {
 			runtime.ProcessLevelRuntime().
 				SubLogger(runtime.SystemInit).Debug(
 				"task schedule query init task",
-				zap.String("task", task.Metadata.String()))
+				zap.String("task", t.Metadata.String()))
 		}
 	}
 
@@ -67,7 +65,8 @@ func (s *scheduler) Schedule(cnState logservice.CNState, currentTick uint64) {
 	if len(tasks) == 0 {
 		return
 	}
-	orderedCN, expiredTasks := getCNOrderedAndExpiredTasks(runningTasks, workingCN)
+	workingCNs := selectCNs(cnState, notExpired(s.cfg, currentTick))
+	orderedCN, expiredTasks := getCNOrderedAndExpiredTasks(runningTasks, getUUIDs(workingCNs))
 	runtime.ProcessLevelRuntime().Logger().Info("task schedule query tasks",
 		zap.Int("created", len(createdTasks)),
 		zap.Int("expired", len(expiredTasks)))
@@ -114,11 +113,11 @@ func (s *scheduler) allocateTasks(tasks []task.AsyncTask, orderedCN *cnMap) {
 	}
 
 	for _, t := range tasks {
-		s.allocateTask(ts, t, orderedCN)
+		allocateTask(ts, t, orderedCN)
 	}
 }
 
-func (s *scheduler) allocateTask(ts taskservice.TaskService, t task.AsyncTask, orderedCN *cnMap) {
+func allocateTask(ts taskservice.TaskService, t task.AsyncTask, orderedCN *cnMap) {
 	runner := orderedCN.min()
 	if runner == "" {
 		runtime.ProcessLevelRuntime().Logger().Warn("no CN available")
@@ -142,11 +141,11 @@ func (s *scheduler) allocateTask(ts taskservice.TaskService, t task.AsyncTask, o
 	orderedCN.inc(t.TaskRunner)
 }
 
-func getCNOrderedAndExpiredTasks(tasks []task.AsyncTask, workingCN []string) (*cnMap, []task.AsyncTask) {
+func getCNOrderedAndExpiredTasks(tasks []task.AsyncTask, workingCN map[string]struct{}) (*cnMap, []task.AsyncTask) {
 	orderedMap := newOrderedMap(workingCN)
 	n := 0
 	for _, t := range tasks {
-		if contains(workingCN, t.TaskRunner) {
+		if _, ok := workingCN[t.TaskRunner]; ok {
 			orderedMap.inc(t.TaskRunner)
 		} else {
 			n++
@@ -157,7 +156,7 @@ func getCNOrderedAndExpiredTasks(tasks []task.AsyncTask, workingCN []string) (*c
 	}
 	expired := make([]task.AsyncTask, 0, n)
 	for _, t := range tasks {
-		if !contains(workingCN, t.TaskRunner) {
+		if _, ok := workingCN[t.TaskRunner]; !ok {
 			expired = append(expired, t)
 		}
 	}

@@ -77,6 +77,12 @@ func MoTableRows(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 			ctx := proc.Ctx
 			dbo, err := e.Database(ctx, dbStr, txn)
 			if err != nil {
+				if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
+					if DebugGetDatabaseExpectedEOB != nil {
+						DebugGetDatabaseExpectedEOB("MoTableRows", proc)
+					}
+					return moerr.NewInvalidArgNoCtx("db not found when mo_table_rows", dbStr)
+				}
 				return err
 			}
 			rel, err = dbo.Relation(ctx, tblStr, nil)
@@ -103,12 +109,12 @@ func MoTableRows(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 				}
 			}
 
-			var rows int64
+			var rows uint64
 
 			// check if the current table is partitioned
 			if partitionInfo != nil {
 				var prel engine.Relation
-				var prows int64
+				var prows uint64
 				// for partition table,  the table rows is equal to the sum of the partition tables.
 				for _, partitionTable := range partitionInfo.PartitionTableNames {
 					prel, err = dbo.Relation(ctx, partitionTable, nil)
@@ -128,19 +134,22 @@ func MoTableRows(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 				if err = rel.UpdateObjectInfos(ctx); err != nil {
 					return err
 				}
-				rows, err = rel.Rows(ctx)
-				if err != nil {
+				if rows, err = rel.Rows(ctx); err != nil {
 					return err
 				}
 			}
 
-			if err = rs.Append(rows, false); err != nil {
+			if err = rs.Append(int64(rows), false); err != nil {
 				return err
 			}
 		}
 	}
 	return nil
 }
+
+// TODO(ghs)
+// is debug for #13151, will remove later
+var DebugGetDatabaseExpectedEOB func(caller string, proc *process.Process)
 
 // MoTableSize returns an estimated size of a table.
 func MoTableSize(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
@@ -180,6 +189,12 @@ func MoTableSize(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 			ctx := proc.Ctx
 			dbo, err := e.Database(ctx, dbStr, txn)
 			if err != nil {
+				if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
+					if DebugGetDatabaseExpectedEOB != nil {
+						DebugGetDatabaseExpectedEOB("MoTableSize", proc)
+					}
+					return moerr.NewInvalidArgNoCtx("db not found when mo_table_size", dbStr)
+				}
 				return err
 			}
 			rel, err = dbo.Relation(ctx, tblStr, nil)
@@ -206,12 +221,12 @@ func MoTableSize(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 				}
 			}
 
-			var size int64
+			var size uint64
 
 			// check if the current table is partitioned
 			if partitionInfo != nil {
 				var prel engine.Relation
-				var psize int64
+				var psize uint64
 				// for partition table, the table size is equal to the sum of the partition tables.
 				for _, partitionTable := range partitionInfo.PartitionTableNames {
 					prel, err = dbo.Relation(ctx, partitionTable, nil)
@@ -221,8 +236,7 @@ func MoTableSize(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 					if prel.UpdateObjectInfos(ctx); err != nil {
 						return err
 					}
-					psize, err = prel.Size(ctx, AllColumns)
-					if err != nil {
+					if psize, err = prel.Size(ctx, AllColumns); err != nil {
 						return err
 					}
 					size += psize
@@ -231,12 +245,11 @@ func MoTableSize(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 				if err = rel.UpdateObjectInfos(ctx); err != nil {
 					return err
 				}
-				size, err = rel.Size(ctx, AllColumns)
-				if err != nil {
+				if size, err = rel.Size(ctx, AllColumns); err != nil {
 					return err
 				}
 			}
-			if err = rs.Append(size, false); err != nil {
+			if err = rs.Append(int64(size), false); err != nil {
 				return err
 			}
 		}

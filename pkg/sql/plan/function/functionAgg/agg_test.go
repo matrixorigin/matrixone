@@ -17,7 +17,6 @@ package functionAgg
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionAgg/algos/kmeans"
 	"math"
 	"testing"
 
@@ -28,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionAgg/algos/kmeans"
 	"github.com/stretchr/testify/require"
 )
 
@@ -228,7 +228,7 @@ func TestMax(t *testing.T) {
 }
 
 func TestMin(t *testing.T) {
-	require.NoError(t, testUnaryAggSupported(NewAggMin, AggMinSupportedParameters, AggMinxReturnType))
+	require.NoError(t, testUnaryAggSupported(NewAggMin, AggMinSupportedParameters, AggMinReturnType))
 
 	s := &sAggMin[int32]{}
 	{

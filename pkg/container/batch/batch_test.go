@@ -70,6 +70,14 @@ func TestBatch(t *testing.T) {
 	}
 }
 
+func TestBatchShrink(t *testing.T) {
+	bat := newBatch([]types.Type{types.T_int8.ToType()}, 4)
+	bat.Shrink([]int64{0}, true)
+	require.Equal(t, 3, bat.rowCount)
+	bat.Shrink([]int64{0, 2}, false)
+	require.Equal(t, 2, bat.rowCount)
+}
+
 func TestBatch_ReplaceVector(t *testing.T) {
 	v1, v2, v3 := &vector.Vector{}, &vector.Vector{}, &vector.Vector{}
 	bat := &Batch{
@@ -104,7 +112,10 @@ func newBatch(ts []types.Type, rows int) *Batch {
 		switch typ.Oid {
 		case types.T_int8:
 			vec := vector.NewVec(typ)
-			vec.PreExtend(rows, mp)
+			err := vec.PreExtend(rows, mp)
+			if err != nil {
+				panic(err)
+			}
 			vec.SetLength(rows)
 			vs := vector.MustFixedCol[int8](vec)
 			for j := range vs {

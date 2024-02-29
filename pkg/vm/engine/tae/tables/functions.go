@@ -28,6 +28,7 @@ import (
 
 var dedupNABlkFunctions = map[types.T]any{
 	types.T_bool:       dedupNABlkFuncFactory(compute.CompareBool),
+	types.T_bit:        dedupNABlkOrderedFunc[uint64],
 	types.T_int8:       dedupNABlkOrderedFunc[int8],
 	types.T_int16:      dedupNABlkOrderedFunc[int16],
 	types.T_int32:      dedupNABlkOrderedFunc[int32],
@@ -65,6 +66,7 @@ var dedupNABlkFunctions = map[types.T]any{
 
 var dedupAlkFunctions = map[types.T]any{
 	types.T_bool:       dedupABlkFuncFactory(compute.CompareBool),
+	types.T_bit:        dedupABlkFuncFactory(compute.CompareOrdered[uint64]),
 	types.T_int8:       dedupABlkFuncFactory(compute.CompareOrdered[int8]),
 	types.T_int16:      dedupABlkFuncFactory(compute.CompareOrdered[int16]),
 	types.T_int32:      dedupABlkFuncFactory(compute.CompareOrdered[int32]),

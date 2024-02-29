@@ -17,10 +17,11 @@ package frontend
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"io"
 	"testing"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 
 	"github.com/fagongzi/goetty/v2"
 	"github.com/fagongzi/goetty/v2/buf"
@@ -122,7 +123,6 @@ func Test_mce(t *testing.T) {
 		}
 		create_1.EXPECT().GetAst().Return(stmts[0]).AnyTimes()
 		create_1.EXPECT().GetUUID().Return(make([]byte, 16)).AnyTimes()
-		create_1.EXPECT().SetDatabaseName(gomock.Any()).Return(nil).AnyTimes()
 		create_1.EXPECT().Compile(gomock.Any(), gomock.Any(), gomock.Any()).Return(runner, nil).AnyTimes()
 		create_1.EXPECT().Run(gomock.Any()).Return(nil, nil).AnyTimes()
 		create_1.EXPECT().GetLoadTag().Return(false).AnyTimes()
@@ -135,7 +135,6 @@ func Test_mce(t *testing.T) {
 		}
 		select_1.EXPECT().GetAst().Return(stmts[0]).AnyTimes()
 		select_1.EXPECT().GetUUID().Return(make([]byte, 16)).AnyTimes()
-		select_1.EXPECT().SetDatabaseName(gomock.Any()).Return(nil).AnyTimes()
 		select_1.EXPECT().Compile(gomock.Any(), gomock.Any(), gomock.Any()).Return(runner, nil).AnyTimes()
 		select_1.EXPECT().Run(gomock.Any()).Return(nil, nil).AnyTimes()
 		select_1.EXPECT().GetLoadTag().Return(false).AnyTimes()
@@ -213,7 +212,6 @@ func Test_mce(t *testing.T) {
 			convey.So(err, convey.ShouldBeNil)
 			select_2.EXPECT().GetAst().Return(stmts[0]).AnyTimes()
 			select_2.EXPECT().GetUUID().Return(make([]byte, 16)).AnyTimes()
-			select_2.EXPECT().SetDatabaseName(gomock.Any()).Return(nil).AnyTimes()
 			select_2.EXPECT().Compile(gomock.Any(), gomock.Any(), gomock.Any()).Return(runner, nil).AnyTimes()
 			select_2.EXPECT().Run(gomock.Any()).Return(nil, nil).AnyTimes()
 			select_2.EXPECT().GetLoadTag().Return(false).AnyTimes()
@@ -636,6 +634,7 @@ func Test_typeconvert(t *testing.T) {
 			types.T_json,
 			types.T_array_float32,
 			types.T_array_float64,
+			types.T_bit,
 		}
 
 		type kase struct {
@@ -654,13 +653,14 @@ func Test_typeconvert(t *testing.T) {
 			{tp: defines.MYSQL_TYPE_FLOAT, signed: true},
 			{tp: defines.MYSQL_TYPE_DOUBLE, signed: true},
 			{tp: defines.MYSQL_TYPE_STRING, signed: true},
-			{tp: defines.MYSQL_TYPE_VARCHAR, signed: true},
+			{tp: defines.MYSQL_TYPE_VAR_STRING, signed: true},
 			{tp: defines.MYSQL_TYPE_DATE, signed: true},
 			{tp: defines.MYSQL_TYPE_TIME, signed: true},
 			{tp: defines.MYSQL_TYPE_DATETIME, signed: true},
 			{tp: defines.MYSQL_TYPE_JSON, signed: true},
 			{tp: defines.MYSQL_TYPE_VARCHAR, signed: true},
 			{tp: defines.MYSQL_TYPE_VARCHAR, signed: true},
+			{tp: defines.MYSQL_TYPE_BIT},
 		}
 
 		convey.So(len(input), convey.ShouldEqual, len(output))
@@ -682,7 +682,9 @@ func allocTestBatch(attrName []string, tt []types.Type, batchSize int) *batch.Ba
 	//alloc space for vector
 	for i := 0; i < len(attrName); i++ {
 		vec := vector.NewVec(tt[i])
-		vec.PreExtend(batchSize, testutil.TestUtilMp)
+		if err := vec.PreExtend(batchSize, testutil.TestUtilMp); err != nil {
+			panic(err)
+		}
 		vec.SetLength(batchSize)
 		batchData.Vecs[i] = vec
 	}

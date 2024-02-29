@@ -447,7 +447,7 @@ col6 smallint unsigned,
 col7 int unsigned,
 col8 bigint unsigned
 );
-load data infile '$resources/load_data/integer_numbers_3.csv' into table t1;
+load data infile '$resources/load_data/integer_numbers_3.csv' into table t1 fields terminated by ',';
 select * from t1;
 col1    col2    col3    col4    col5    col6    col7    col8
 127    32767    2147483647    9223372036854775807    255    65535    4294967295    18446744073709551615
@@ -474,7 +474,7 @@ c1
 5
 drop table t2;
 create table t2(c1 int) cluster by c1;
-load data infile '$resources/load_data/integer.csv' into table t2;
+load data infile '$resources/load_data/integer.csv' into table t2 fields terminated by ',';
 select * from t2;
 c1
 3
@@ -494,7 +494,7 @@ c1
 5
 drop table t2;
 create table t2(c1 int,c2 int) cluster by (c1,c2);
-load data infile '$resources/load_data/integer2.csv' into table t2;
+load data infile '$resources/load_data/integer2.csv' into table t2 fields terminated by ',';
 select * from t2;
 c1    c2
 3    5

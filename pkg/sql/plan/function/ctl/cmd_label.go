@@ -135,7 +135,7 @@ func handleSyncCommit(
 	service serviceType,
 	parameter string,
 	sender requestSender) (Result, error) {
-	qs := proc.QueryService
+	qt := proc.QueryClient
 	mc := clusterservice.GetMOCluster()
 	var addrs []string
 	mc.GetCNService(
@@ -148,25 +148,25 @@ func handleSyncCommit(
 	defer cancel()
 	maxCommitTS := timestamp.Timestamp{}
 	for _, addr := range addrs {
-		req := qs.NewRequest(querypb.CmdMethod_GetCommit)
-		resp, err := qs.SendMessage(ctx, addr, req)
+		req := qt.NewRequest(querypb.CmdMethod_GetCommit)
+		resp, err := qt.SendMessage(ctx, addr, req)
 		if err != nil {
 			return Result{}, err
 		}
 		if maxCommitTS.Less(resp.GetCommit.CurrentCommitTS) {
 			maxCommitTS = resp.GetCommit.CurrentCommitTS
 		}
-		qs.Release(resp)
+		qt.Release(resp)
 	}
 
 	for _, addr := range addrs {
-		req := qs.NewRequest(querypb.CmdMethod_SyncCommit)
+		req := qt.NewRequest(querypb.CmdMethod_SyncCommit)
 		req.SycnCommit = &querypb.SyncCommitRequest{LatestCommitTS: maxCommitTS}
-		resp, err := qs.SendMessage(ctx, addr, req)
+		resp, err := qt.SendMessage(ctx, addr, req)
 		if err != nil {
 			return Result{}, err
 		}
-		qs.Release(resp)
+		qt.Release(resp)
 	}
 
 	return Result{

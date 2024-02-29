@@ -18,13 +18,14 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/fagongzi/goetty/v2"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"reflect"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/fagongzi/goetty/v2"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 
@@ -286,6 +287,35 @@ func Test_checkTenantExistsOrNot(t *testing.T) {
 	})
 }
 
+func Test_checkDatabaseExistsOrNot(t *testing.T) {
+	convey.Convey("check databse exists or not", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+
+		bh := mock_frontend.NewMockBackgroundExec(ctrl)
+		bh.EXPECT().Close().Return().AnyTimes()
+		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+
+		mrs1 := mock_frontend.NewMockExecResult(ctrl)
+		mrs1.EXPECT().GetRowCount().Return(uint64(1)).AnyTimes()
+
+		bh.EXPECT().GetExecResultSet().Return([]interface{}{mrs1}).AnyTimes()
+		bh.EXPECT().ClearExecResultSet().Return().AnyTimes()
+
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+
+		exists, err := checkDatabaseExistsOrNot(ctx, bh, "test")
+		convey.So(exists, convey.ShouldBeTrue)
+		convey.So(err, convey.ShouldBeNil)
+	})
+}
+
 func Test_createTablesInMoCatalogOfGeneralTenant(t *testing.T) {
 	convey.Convey("createTablesInMoCatalog", t, func() {
 		ctrl := gomock.NewController(t)
@@ -392,7 +422,7 @@ func Test_initFunction(t *testing.T) {
 		ses := &Session{tenant: tenant}
 		mce := &MysqlCmdExecutor{}
 		err := mce.InitFunction(ctx, ses, tenant, cu)
-		convey.So(err, convey.ShouldBeNil)
+		convey.So(err, convey.ShouldNotBeNil)
 	})
 }
 
@@ -5456,6 +5486,34 @@ func Test_doRevokePrivilege(t *testing.T) {
 			err = doRevokePrivilege(ses.GetRequestContext(), ses, stmt)
 			convey.So(err, convey.ShouldBeNil)
 		}
+	})
+}
+
+func Test_doDropFunctionWithDB(t *testing.T) {
+	convey.Convey("drop function with db", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+
+		bh := &backgroundExecTest{}
+		bh.init()
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+
+		stmt := &tree.DropDatabase{
+			Name: tree.Identifier("abc"),
+		}
+
+		ses := &Session{}
+		sql := getSqlForCheckUdfWithDb(string(stmt.Name))
+
+		bh.sql2result[sql] = nil
+		err := doDropFunctionWithDB(ctx, ses, stmt, nil)
+		convey.So(err, convey.ShouldNotBeNil)
 	})
 }
 

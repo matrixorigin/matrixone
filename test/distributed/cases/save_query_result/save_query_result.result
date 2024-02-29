@@ -26,7 +26,7 @@ mysql
 select * from result_scan(last_query_id()) as u;
 Database
 mysql
-load data infile '$resources/load_data/test_1.csv' into table test_table;
+load data infile '$resources/load_data/test_1.csv' into table test_table fields terminated by ',';
 /* save_result */select * from test_table;
 col1    col2    col3    col4    col5    col6
 0    0.1    true    1982-03-24    varchar_0    text_0

@@ -4,11 +4,11 @@ create account if not exists acc1 ADMIN_NAME 'admin' IDENTIFIED BY '123';
 alter account acc1 restricted;
 show databases;
 Database
+information_schema
 mo_catalog
+mysql
 system
 system_metrics
-information_schema
-mysql
 create table r_test(c1 int);
 internal error: do not have privilege to execute the statement
 insert into r_test values(3);
@@ -35,7 +35,7 @@ create table r1(c1 int,c2 varchar(20));
 internal error: do not have privilege to execute the statement
 insert into r_test values(8,'c');
 internal error: do not have privilege to execute the statement
-load data infile '$resources/load_data/integer_numbers_1.csv' into table r_test;
+load data infile '$resources/load_data/integer_numbers_1.csv' into table r_test fields terminated by ',';
 internal error: do not have privilege to execute the statement
 update r_test set c1=5 where c2='h';
 internal error: do not have privilege to execute the statement
@@ -62,12 +62,12 @@ alter table ti1 add constraint fi1 foreign key (b) references ti2(a);
 internal error: do not have privilege to execute the statement
 show databases;
 Database
-mo_catalog
-system
-system_metrics
 information_schema
+mo_catalog
 mysql
 res_test
+system
+system_metrics
 use res_test;
 desc r_test;
 Field    Type    Null    Key    Default    Extra    Comment
@@ -176,9 +176,9 @@ show TRIGGERS;
 Trigger    Event    Table    Statement    Timing    Created    sql_mode    Definer    character_set_client    collation_connection    Database Collation
 show TRIGGERS like '*%';
 Trigger    Event    Table    Statement    Timing    Created    sql_mode    Definer    character_set_client    collation_connection    Database Collation
-show collation like '%';
-Collation    Charset    Id    Compiled    Sortlen
-utf8mb4_bin    utf8mb4    46    Yes    1
+show collation like 'utf8mb4_general_ci%';
+Collation    Charset    Id    Default    Compiled    Sortlen    Pad_attribute
+utf8mb4_general_ci    utf8mb4    45        Yes    1    PAD SPACE
 show full tables;
 Tables_in_res_test    Table_type
 r_test    BASE TABLE
@@ -289,9 +289,9 @@ show TRIGGERS;
 Trigger    Event    Table    Statement    Timing    Created    sql_mode    Definer    character_set_client    collation_connection    Database Collation
 show TRIGGERS like '*%';
 Trigger    Event    Table    Statement    Timing    Created    sql_mode    Definer    character_set_client    collation_connection    Database Collation
-show collation like '%';
-Collation    Charset    Id    Compiled    Sortlen
-utf8mb4_bin    utf8mb4    46    Yes    1
+show collation like 'utf8mb4_general_ci%';
+Collation    Charset    Id    Default    Compiled    Sortlen    Pad_attribute
+utf8mb4_general_ci    utf8mb4    45        Yes    1    PAD SPACE
 show full tables;
 Tables_in_res_test    Table_type
 r_test    BASE TABLE

@@ -49,8 +49,8 @@ func (o *Overlap) OnObject(obj *catalog.ObjectEntry) {
 		if o.schema.Name == "bmsql_new_order" {
 			minv := sortKeyZonemap.GetMinBuf()
 			maxv := sortKeyZonemap.GetMaxBuf()
-			mint, _, _ := types.DecodeTuple(minv)
-			maxt, _, _ := types.DecodeTuple(maxv)
+			mint, _, _, _ := types.DecodeTuple(minv)
+			maxt, _, _, _ := types.DecodeTuple(maxv)
 			logutil.Infof("Mergeblocks %d %s %s", obj.SortHint, mint.ErrString(nil), maxt.ErrString(nil))
 		}
 	}
@@ -91,6 +91,8 @@ func (oi *OverlapInspector) push(point any, isOpen bool, entry *catalog.ObjectEn
 func (oi *OverlapInspector) analyze(t types.T, name string) {
 	sort.Slice(oi.units, func(i, j int) bool {
 		switch t {
+		case types.T_bit:
+			return oi.units[i].point.(uint64) < oi.units[j].point.(uint64)
 		case types.T_int8:
 			return oi.units[i].point.(int8) < oi.units[j].point.(int8)
 		case types.T_int16:

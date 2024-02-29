@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/indexjoin"
 	"time"
 	"unsafe"
 
@@ -37,7 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/queryservice"
+	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/anti"
@@ -111,7 +112,7 @@ func CnServerMessageHandler(
 	storeEngine engine.Engine,
 	fileService fileservice.FileService,
 	lockService lockservice.LockService,
-	queryService queryservice.QueryService,
+	queryClient qclient.QueryClient,
 	hakeeper logservice.CNHAKeeperClient,
 	udfService udf.Service,
 	cli client.TxnClient,
@@ -133,7 +134,7 @@ func CnServerMessageHandler(
 	}
 
 	receiver := newMessageReceiverOnServer(ctx, cnAddr, msg,
-		cs, messageAcquirer, storeEngine, fileService, lockService, queryService, hakeeper, udfService, cli, aicm)
+		cs, messageAcquirer, storeEngine, fileService, lockService, queryClient, hakeeper, udfService, cli, aicm)
 
 	// rebuild pipeline to run and send the query result back.
 	err = cnMessageHandle(&receiver)
@@ -337,6 +338,8 @@ func (s *Scope) remoteRun(c *Compile) (err error) {
 	// new sender and do send work.
 	sender, err := newMessageSenderOnClient(s.Proc.Ctx, c, s.NodeInfo.Addr)
 	if err != nil {
+		logutil.Errorf("Failed to newMessageSenderOnClient sql=%s, txnID=%s, err=%v",
+			c.sql, c.proc.TxnOperator.Txn().DebugString(), err)
 		return err
 	}
 	defer sender.close()
@@ -506,7 +509,7 @@ func generatePipeline(s *Scope, ctx *scopeContext, ctxId int32) (*pipeline.Pipel
 			ColList:                s.DataSource.Attributes,
 			PushdownId:             s.DataSource.PushdownId,
 			PushdownAddr:           s.DataSource.PushdownAddr,
-			Expr:                   s.DataSource.Expr,
+			Expr:                   s.DataSource.FilterExpr,
 			TableDef:               s.DataSource.TableDef,
 			Timestamp:              &s.DataSource.Timestamp,
 			RuntimeFilterProbeList: s.DataSource.RuntimeFilterSpecs,
@@ -621,7 +624,7 @@ func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContex
 			Attributes:         dsc.ColList,
 			PushdownId:         dsc.PushdownId,
 			PushdownAddr:       dsc.PushdownAddr,
-			Expr:               dsc.Expr,
+			FilterExpr:         dsc.Expr,
 			TableDef:           dsc.TableDef,
 			Timestamp:          *dsc.Timestamp,
 			RuntimeFilterSpecs: dsc.RuntimeFilterProbeList,
@@ -690,7 +693,17 @@ func fillInstructionsForScope(s *Scope, ctx *scopeContext, p *pipeline.Pipeline,
 // convert vm.Instruction to pipeline.Instruction
 // todo: bad design, need to be refactored. and please refer to how sample operator do.
 func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId int32) (int32, *pipeline.Instruction, error) {
-	in := &pipeline.Instruction{Op: int32(opr.Op), Idx: int32(opr.Idx), IsFirst: opr.IsFirst, IsLast: opr.IsLast}
+	in := &pipeline.Instruction{
+		Op:      int32(opr.Op),
+		Idx:     int32(opr.Idx),
+		IsFirst: opr.IsFirst,
+		IsLast:  opr.IsLast,
+
+		CnAddr:      opr.CnAddr,
+		OperatorId:  opr.OperatorID,
+		ParallelId:  opr.ParallelID,
+		MaxParallel: opr.MaxParallel,
+	}
 	switch t := opr.Arg.(type) {
 	case *insert.Argument:
 		in.Insert = &pipeline.Insert{
@@ -728,10 +741,9 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 		}
 	case *fuzzyfilter.Argument:
 		in.FuzzyFilter = &pipeline.FuzzyFilter{
-			N:                      float32(t.N),
-			PkName:                 t.PkName,
-			PkTyp:                  plan2.DeepCopyType(t.PkTyp),
-			RuntimeFilterBuildList: t.RuntimeFilterSpecs,
+			N:      float32(t.N),
+			PkName: t.PkName,
+			PkTyp:  plan2.DeepCopyType(t.PkTyp),
 		}
 	case *preinsert.Argument:
 		in.PreInsert = &pipeline.PreInsert{
@@ -965,6 +977,12 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			HashOnPk:               t.HashOnPK,
 			IsShuffle:              t.IsShuffle,
 		}
+	case *indexjoin.Argument:
+		in.IndexJoin = &pipeline.IndexJoin{
+			Result:                 t.Result,
+			Types:                  convertToPlanTypes(t.Typs),
+			RuntimeFilterBuildList: t.RuntimeFilterSpecs,
+		}
 	case *single.Argument:
 		relList, colList := getRelColList(t.Result)
 		in.SingleJoin = &pipeline.SingleJoin{
@@ -1086,7 +1104,17 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 
 // convert pipeline.Instruction to vm.Instruction
 func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng engine.Engine) (vm.Instruction, error) {
-	v := vm.Instruction{Op: vm.OpType(opr.Op), Idx: int(opr.Idx), IsFirst: opr.IsFirst, IsLast: opr.IsLast}
+	v := vm.Instruction{
+		Op:      vm.OpType(opr.Op),
+		Idx:     int(opr.Idx),
+		IsFirst: opr.IsFirst,
+		IsLast:  opr.IsLast,
+
+		CnAddr:      opr.CnAddr,
+		OperatorID:  opr.OperatorId,
+		ParallelID:  opr.ParallelId,
+		MaxParallel: opr.MaxParallel,
+	}
 	switch v.Op {
 	case vm.Deletion:
 		t := opr.GetDelete()
@@ -1168,7 +1196,6 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 		arg.N = float64(t.N)
 		arg.PkName = t.PkName
 		arg.PkTyp = t.PkTyp
-		arg.RuntimeFilterSpecs = t.RuntimeFilterBuildList
 		v.Arg = arg
 	case vm.Anti:
 		t := opr.GetAnti()
@@ -1345,6 +1372,13 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 		arg.Result = t.Result
 		arg.Cond = t.Expr
 		arg.Typs = convertToTypes(t.Types)
+		v.Arg = arg
+	case vm.IndexJoin:
+		t := opr.GetIndexJoin()
+		arg := indexjoin.NewArgument()
+		arg.Result = t.Result
+		arg.Typs = convertToTypes(t.Types)
+		arg.RuntimeFilterSpecs = t.RuntimeFilterBuildList
 		v.Arg = arg
 	case vm.LoopSingle:
 		t := opr.GetSingleJoin()
@@ -1776,6 +1810,10 @@ func EncodeMergeGroup(merge *mergegroup.Argument, pipe *pipeline.Group) {
 			result := merge.PartialResults[i].(bool)
 			bytes := unsafe.Slice((*byte)(unsafe.Pointer(&result)), merge.PartialResultTypes[i].FixedLength())
 			pipe.PartialResults = append(pipe.PartialResults, bytes...)
+		case types.T_bit:
+			result := merge.PartialResults[i].(uint64)
+			bytes := unsafe.Slice((*byte)(unsafe.Pointer(&result)), merge.PartialResultTypes[i].FixedLength())
+			pipe.PartialResults = append(pipe.PartialResults, bytes...)
 		case types.T_int8:
 			result := merge.PartialResults[i].(int8)
 			bytes := unsafe.Slice((*byte)(unsafe.Pointer(&result)), merge.PartialResultTypes[i].FixedLength())
@@ -1875,6 +1913,10 @@ func DecodeMergeGroup(merge *mergegroup.Argument, pipe *pipeline.Group) {
 		switch merge.PartialResultTypes[i] {
 		case types.T_bool:
 			result := *(*bool)(unsafe.Pointer(&pipe.PartialResults[0]))
+			merge.PartialResults = append(merge.PartialResults, result)
+			pipe.PartialResults = pipe.PartialResults[merge.PartialResultTypes[i].FixedLength():]
+		case types.T_bit:
+			result := *(*uint64)(unsafe.Pointer(&pipe.PartialResults[0]))
 			merge.PartialResults = append(merge.PartialResults, result)
 			pipe.PartialResults = pipe.PartialResults[merge.PartialResultTypes[i].FixedLength():]
 		case types.T_int8:

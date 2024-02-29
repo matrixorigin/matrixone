@@ -35,7 +35,4 @@ func TestFileServices(t *testing.T) {
 	require.NotNil(t, fs.getTNLocalFileService(1))
 	require.NotNil(t, fs.getTNLocalFileService(2))
 	require.Nil(t, fs.getTNLocalFileService(3))
-	require.NotNil(t, fs.getCNLocalFileService(0))
-	require.NotNil(t, fs.getCNLocalFileService(1))
-	require.Nil(t, fs.getCNLocalFileService(2))
 }

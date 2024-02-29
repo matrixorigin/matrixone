@@ -18,10 +18,11 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -77,7 +78,7 @@ func newFuzzyCheck(n *plan.Node) (*fuzzyCheck, error) {
 	return f, nil
 }
 
-func (f fuzzyCheck) Name() string {
+func (f fuzzyCheck) TypeName() string {
 	return "compile.fuzzyCheck"
 }
 
@@ -136,7 +137,7 @@ func (f *fuzzyCheck) fill(ctx context.Context, bat *batch.Batch) error {
 		var i int
 		var j int
 
-		var lastRow = len(pkeys[0]) - 1
+		lastRow := len(pkeys[0]) - 1
 
 		cAttrs := make([]string, len(f.compoundCols))
 		for k, c := range f.compoundCols {
@@ -221,7 +222,6 @@ func (f *fuzzyCheck) firstlyCheck(ctx context.Context, toCheck *vector.Vector) e
 // genCollsionKeys return [][]string to store the string of collsion keys, it will check if
 // collision keys are duplicates with each other, if do dup, no need to run background SQL
 func (f *fuzzyCheck) genCollsionKeys(toCheck *vector.Vector) ([][]string, error) {
-
 	var keys [][]string
 	if !f.isCompound {
 		keys = make([][]string, 1)
@@ -377,6 +377,8 @@ func vectorToString(vec *vector.Vector, rowIndex int) (string, error) {
 			return "true", nil
 		}
 		return "false", nil
+	case types.T_bit:
+		return fmt.Sprintf("%v", vector.GetFixedAt[uint64](vec, rowIndex)), nil
 	case types.T_int8:
 		return fmt.Sprintf("%v", vector.GetFixedAt[int8](vec, rowIndex)), nil
 	case types.T_int16:

@@ -134,22 +134,18 @@ drop table if exists t3;
 create table t3(a int);
 insert into t3 values (10),(20),(30);
 set @@autocommit=ON;
-internal error: Uncommitted transaction exists. Please commit or rollback first.
 select @@autocommit;
 @@autocommit
-0
+1
 set @@autocommit=OFF;
-internal error: Uncommitted transaction exists. Please commit or rollback first.
 select @@autocommit;
 @@autocommit
 0
 set @@autocommit=1;
-internal error: Uncommitted transaction exists. Please commit or rollback first.
 select @@autocommit;
 @@autocommit
-0
+1
 set @@autocommit=0;
-internal error: Uncommitted transaction exists. Please commit or rollback first.
 select @@autocommit;
 @@autocommit
 0
@@ -158,22 +154,18 @@ drop table if exists tab3;
 create table tab3 (a int, b varchar(25));
 insert into tab3 values (10, 'aa'),(20, 'bb'),(30, 'cc');
 set @@autocommit=ON;
-internal error: Uncommitted transaction exists. Please commit or rollback first.
 select @@autocommit;
 @@autocommit
-0
+1
 set @@autocommit=OFF;
-internal error: Uncommitted transaction exists. Please commit or rollback first.
 select @@autocommit;
 @@autocommit
 0
 set @@autocommit=1;
-internal error: Uncommitted transaction exists. Please commit or rollback first.
 select @@autocommit;
 @@autocommit
-0
+1
 set @@autocommit=0;
-internal error: Uncommitted transaction exists. Please commit or rollback first.
 commit;
 select * from tab3;
 a    b
@@ -253,22 +245,18 @@ begin;
 create database test_xx;
 internal error: CREATE/DROP of database is not supported in transactions
 SET @@session.autocommit=1;
-internal error: Uncommitted transaction exists. Please commit or rollback first.
 SELECT @@session.autocommit;
 @@autocommit
 1
 SET @@session.autocommit= 0;
-internal error: Uncommitted transaction exists. Please commit or rollback first.
 SELECT @@session.autocommit;
 @@autocommit
-1
+0
 SET @@session.autocommit=OFF;
-internal error: Uncommitted transaction exists. Please commit or rollback first.
 SELECT @@session.autocommit;
 @@autocommit
-1
+0
 SET @@session.autocommit=ON;
-internal error: Uncommitted transaction exists. Please commit or rollback first.
 SELECT @@session.autocommit;
 @@autocommit
 1

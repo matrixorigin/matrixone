@@ -173,6 +173,29 @@ func (s *Schema) ApplyAlterTable(req *apipb.AlterTableReq) error {
 		s.Constraint = req.GetUpdateCstr().GetConstraints()
 	case apipb.AlterKind_UpdateComment:
 		s.Comment = req.GetUpdateComment().GetComment()
+	case apipb.AlterKind_RenameColumn:
+		rename := req.GetRenameCol()
+		var targetCol *ColDef
+		for _, def := range s.ColDefs {
+			if def.Name == rename.NewName {
+				return moerr.NewInternalErrorNoCtx("duplicate column %q", def.Name)
+			}
+			if def.Name == rename.OldName {
+				targetCol = def
+			}
+		}
+		if targetCol == nil {
+			return moerr.NewInternalErrorNoCtx("column %q not found", rename.OldName)
+		}
+		if targetCol.SeqNum != uint16(rename.SequenceNum) {
+			return moerr.NewInternalErrorNoCtx("unmatched seqnumn: %d != %d", targetCol.SeqNum, rename.SequenceNum)
+		}
+		targetCol.Name = rename.NewName
+		// a -> b, z -> a, m -> z
+		// only m column deletion should be sent to cn. a and z can be seen as update according to pk, <tid-colname>
+		s.Extra.DroppedAttrs = append(s.Extra.DroppedAttrs, rename.OldName)
+		s.removeDroppedName(rename.NewName)
+		logutil.Infof("[Alter] rename column %s %s %d", rename.OldName, rename.NewName, targetCol.SeqNum)
 	case apipb.AlterKind_AddColumn:
 		add := req.GetAddColumn()
 		logutil.Infof("[Alter] add column %s(%s)@%d", add.Column.Name, types.T(add.Column.Typ.Id), add.InsertPosition)

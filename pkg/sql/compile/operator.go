@@ -17,6 +17,8 @@ package compile
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/indexbuild"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/indexjoin"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -99,7 +101,16 @@ func init() {
 }
 
 func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]*process.WaitRegister, index int) vm.Instruction {
-	res := vm.Instruction{Op: sourceIns.Op, Idx: sourceIns.Idx, IsFirst: sourceIns.IsFirst, IsLast: sourceIns.IsLast}
+	res := vm.Instruction{
+		Op:          sourceIns.Op,
+		Idx:         sourceIns.Idx,
+		IsFirst:     sourceIns.IsFirst,
+		IsLast:      sourceIns.IsLast,
+		CnAddr:      sourceIns.CnAddr,
+		OperatorID:  sourceIns.OperatorID,
+		MaxParallel: sourceIns.MaxParallel,
+		ParallelID:  sourceIns.ParallelID,
+	}
 	switch sourceIns.Op {
 	case vm.Anti:
 		t := sourceIns.Arg.(*anti.Argument)
@@ -214,6 +225,13 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 		arg.Cond = t.Cond
 		arg.Typs = t.Typs
 		res.Arg = arg
+	case vm.IndexJoin:
+		t := sourceIns.Arg.(*indexjoin.Argument)
+		arg := indexjoin.NewArgument()
+		arg.Result = t.Result
+		arg.Typs = t.Typs
+		arg.RuntimeFilterSpecs = t.RuntimeFilterSpecs
+		res.Arg = arg
 	case vm.LoopLeft:
 		t := sourceIns.Arg.(*loopleft.Argument)
 		arg := loopleft.NewArgument()
@@ -298,6 +316,7 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 		t := sourceIns.Arg.(*top.Argument)
 		arg := top.NewArgument()
 		arg.Limit = t.Limit
+		arg.TopValueTag = t.TopValueTag
 		arg.Fs = t.Fs
 		res.Arg = arg
 	case vm.Intersect:
@@ -503,7 +522,6 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 		arg.N = t.N
 		arg.PkName = t.PkName
 		arg.PkTyp = t.PkTyp
-		arg.RuntimeFilterSpecs = t.RuntimeFilterSpecs
 		res.Arg = arg
 	default:
 		panic(fmt.Sprintf("unexpected instruction type '%d' to dup", sourceIns.Op))
@@ -587,8 +605,6 @@ func constructFuzzyFilter(c *Compile, n, left, right *plan.Node) *fuzzyfilter.Ar
 	arg.PkName = pkName
 	arg.PkTyp = pkTyp
 	arg.N = right.Stats.Cost
-	arg.RuntimeFilterSpecs = n.RuntimeFilterBuildList
-
 	registerRuntimeFilters(arg, c, n.RuntimeFilterBuildList, 0)
 
 	return arg
@@ -775,6 +791,9 @@ func constructTop(n *plan.Node, topN int64) *top.Argument {
 	arg := top.NewArgument()
 	arg.Fs = n.OrderBy
 	arg.Limit = topN
+	if len(n.SendMsgList) > 0 {
+		arg.TopValueTag = n.SendMsgList[0].MsgTag
+	}
 	return arg
 }
 
@@ -1121,9 +1140,9 @@ func constructLimit(n *plan.Node, proc *process.Process) *limit.Argument {
 	return arg
 }
 
-func constructSample(n *plan.Node) *sample.Argument {
+func constructSample(n *plan.Node, outputRowCount bool) *sample.Argument {
 	if n.SampleFunc.Rows != plan2.NotSampleByRows {
-		return sample.NewSampleByRows(int(n.SampleFunc.Rows), n.AggList, n.GroupBy)
+		return sample.NewSampleByRows(int(n.SampleFunc.Rows), n.AggList, n.GroupBy, n.SampleFunc.UsingRow, outputRowCount)
 	}
 	if n.SampleFunc.Percent != plan2.NotSampleByPercents {
 		return sample.NewSampleByPercent(n.SampleFunc.Percent, n.AggList, n.GroupBy)
@@ -1370,7 +1389,7 @@ func constructShuffleJoinArg(ss []*Scope, node *plan.Node, left bool) *shuffle.A
 	switch types.T(typ) {
 	case types.T_int64, types.T_int32, types.T_int16:
 		arg.ShuffleRangeInt64 = plan2.ShuffleRangeReEvalSigned(node.Stats.HashmapStats.Ranges, int(arg.AliveRegCnt), node.Stats.HashmapStats.Nullcnt, int64(node.Stats.TableCnt))
-	case types.T_uint64, types.T_uint32, types.T_uint16, types.T_varchar, types.T_char, types.T_text:
+	case types.T_uint64, types.T_uint32, types.T_uint16, types.T_varchar, types.T_char, types.T_text, types.T_bit:
 		arg.ShuffleRangeUint64 = plan2.ShuffleRangeReEvalUnsigned(node.Stats.HashmapStats.Ranges, int(arg.AliveRegCnt), node.Stats.HashmapStats.Nullcnt, int64(node.Stats.TableCnt))
 	}
 	return arg
@@ -1387,7 +1406,7 @@ func constructShuffleGroupArg(ss []*Scope, node *plan.Node) *shuffle.Argument {
 	switch types.T(typ) {
 	case types.T_int64, types.T_int32, types.T_int16:
 		arg.ShuffleRangeInt64 = plan2.ShuffleRangeReEvalSigned(node.Stats.HashmapStats.Ranges, int(arg.AliveRegCnt), node.Stats.HashmapStats.Nullcnt, int64(node.Stats.TableCnt))
-	case types.T_uint64, types.T_uint32, types.T_uint16, types.T_varchar, types.T_char, types.T_text:
+	case types.T_uint64, types.T_uint32, types.T_uint16, types.T_varchar, types.T_char, types.T_text, types.T_bit:
 		arg.ShuffleRangeUint64 = plan2.ShuffleRangeReEvalUnsigned(node.Stats.HashmapStats.Ranges, int(arg.AliveRegCnt), node.Stats.HashmapStats.Nullcnt, int64(node.Stats.TableCnt))
 	}
 	return arg
@@ -1471,6 +1490,22 @@ func constructMergeOrder(n *plan.Node) *mergeorder.Argument {
 func constructPartition(n *plan.Node) *partition.Argument {
 	arg := partition.NewArgument()
 	arg.OrderBySpecs = n.OrderBy
+	return arg
+}
+
+func constructIndexJoin(n *plan.Node, typs []types.Type, proc *process.Process) *indexjoin.Argument {
+	result := make([]int32, len(n.ProjectList))
+	for i, expr := range n.ProjectList {
+		rel, pos := constructJoinResult(expr, proc)
+		if rel != 0 {
+			panic(moerr.NewNYI(proc.Ctx, "loop semi result '%s'", expr))
+		}
+		result[i] = pos
+	}
+	arg := indexjoin.NewArgument()
+	arg.Typs = typs
+	arg.Result = result
+	arg.RuntimeFilterSpecs = n.RuntimeFilterBuildList
 	return arg
 }
 
@@ -1593,6 +1628,28 @@ func registerRuntimeFilters[T runtimeFilterSenderSetter](arg T, c *Compile, spec
 
 }
 
+func constructJoinBuildInstruction(c *Compile, in vm.Instruction, proc *process.Process, shuffleCnt int, isDup bool) vm.Instruction {
+	switch in.Op {
+	case vm.IndexJoin:
+		arg := in.Arg.(*indexjoin.Argument)
+		ret := indexbuild.NewArgument()
+		registerRuntimeFilters(ret, c, arg.RuntimeFilterSpecs, shuffleCnt)
+		return vm.Instruction{
+			Op:      vm.IndexBuild,
+			Idx:     in.Idx,
+			IsFirst: true,
+			Arg:     ret,
+		}
+	default:
+		return vm.Instruction{
+			Op:      vm.HashBuild,
+			Idx:     in.Idx,
+			IsFirst: true,
+			Arg:     constructHashBuild(c, in, c.proc, shuffleCnt, isDup),
+		}
+	}
+}
+
 func constructHashBuild(c *Compile, in vm.Instruction, proc *process.Process, shuffleCnt int, isDup bool) *hashbuild.Argument {
 	// XXX BUG
 	// relation index of arg.Conditions should be rewritten to 0 here.
@@ -1605,11 +1662,12 @@ func constructHashBuild(c *Compile, in vm.Instruction, proc *process.Process, sh
 		ret.Typs = arg.Typs
 		ret.Conditions = arg.Conditions[1]
 		ret.IsDup = isDup
-		ret.NeedMergedBatch = true
 		ret.HashOnPK = arg.HashOnPK
 		if arg.Cond == nil {
+			ret.NeedMergedBatch = false
 			ret.NeedAllocateSels = false
 		} else {
+			ret.NeedMergedBatch = true
 			ret.NeedAllocateSels = true
 		}
 
@@ -1631,7 +1689,7 @@ func constructHashBuild(c *Compile, in vm.Instruction, proc *process.Process, sh
 		ret.IsDup = isDup
 		ret.HashOnPK = arg.HashOnPK
 
-		// to find if hashmap need to merge batches into one large batch and keep this batch for join
+		// to find if hashmap need to keep build batches for probe
 		var needMergedBatch bool
 		if arg.Cond != nil {
 			needMergedBatch = true
@@ -1707,11 +1765,12 @@ func constructHashBuild(c *Compile, in vm.Instruction, proc *process.Process, sh
 		ret.Typs = arg.Typs
 		ret.Conditions = arg.Conditions[1]
 		ret.IsDup = isDup
-		ret.NeedMergedBatch = true
 		ret.HashOnPK = arg.HashOnPK
 		if arg.Cond == nil {
+			ret.NeedMergedBatch = false
 			ret.NeedAllocateSels = false
 		} else {
+			ret.NeedMergedBatch = true
 			ret.NeedAllocateSels = true
 		}
 

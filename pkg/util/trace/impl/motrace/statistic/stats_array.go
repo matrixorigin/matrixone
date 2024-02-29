@@ -17,6 +17,7 @@ package statistic
 import (
 	"context"
 	"strconv"
+	"sync/atomic"
 	"time"
 )
 
@@ -219,9 +220,11 @@ type StatsInfo struct {
 	//PipelineTimeConsumption      time.Duration
 	//PipelineBlockTimeConsumption time.Duration
 
-	//S3AccessTimeConsumption time.Duration
+	IOAccessTimeConsumption int64
 	//S3ReadBytes             uint
 	//S3WriteBytes            uint
+
+	LockTimeConsumption int64
 
 	ParseStartTime     time.Time `json:"ParseStartTime"`
 	PlanStartTime      time.Time `json:"PlanStartTime"`
@@ -276,6 +279,20 @@ func (stats *StatsInfo) ExecutionEnd() {
 	stats.ExecutionDuration = stats.ExecutionEndTime.Sub(stats.ExecutionStartTime)
 }
 
+func (stats *StatsInfo) AddIOAccessTimeConsumption(d time.Duration) {
+	if stats == nil {
+		return
+	}
+	atomic.AddInt64(&stats.IOAccessTimeConsumption, int64(d))
+}
+
+func (stats *StatsInfo) AddLockTimeConsumption(d time.Duration) {
+	if stats == nil {
+		return
+	}
+	atomic.AddInt64(&stats.LockTimeConsumption, int64(d))
+}
+
 // reset StatsInfo into zero state
 func (stats *StatsInfo) Reset() {
 	if stats == nil {
@@ -284,6 +301,7 @@ func (stats *StatsInfo) Reset() {
 	stats.ParseDuration = 0
 	stats.CompileDuration = 0
 	stats.PlanDuration = 0
+	stats.ExecutionDuration = 0
 
 	//stats.PipelineTimeConsumption = 0
 	//stats.PipelineBlockTimeConsumption = 0
@@ -291,7 +309,8 @@ func (stats *StatsInfo) Reset() {
 	//stats.S3AccessTimeConsumption = 0
 	//stats.S3ReadBytes = 0
 	//stats.S3WriteBytes = 0
-
+	stats.IOAccessTimeConsumption = 0
+	stats.LockTimeConsumption = 0
 	stats.CompileStartTime = time.Time{}
 	stats.PlanStartTime = time.Time{}
 

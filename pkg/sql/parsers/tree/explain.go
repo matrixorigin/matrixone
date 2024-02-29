@@ -17,7 +17,30 @@ package tree
 import (
 	"strconv"
 	"strings"
+
+	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 )
+
+func init() {
+	reuse.CreatePool[ExplainStmt](
+		func() *ExplainStmt { return &ExplainStmt{} },
+		func(e *ExplainStmt) { e.reset() },
+		reuse.DefaultOptions[ExplainStmt]().
+			WithEnableChecker())
+
+	reuse.CreatePool[ExplainAnalyze](
+		func() *ExplainAnalyze { return &ExplainAnalyze{} },
+		func(e *ExplainAnalyze) { e.reset() },
+		reuse.DefaultOptions[ExplainAnalyze]().
+			WithEnableChecker())
+
+	reuse.CreatePool[ExplainFor](
+		func() *ExplainFor { return &ExplainFor{} },
+		func(e *ExplainFor) { e.reset() },
+		reuse.DefaultOptions[ExplainFor]().
+			WithEnableChecker())
+
+}
 
 type Explain interface {
 	Statement
@@ -28,6 +51,9 @@ type explainImpl struct {
 	Statement Statement
 	Format    string
 	Options   []OptionElem
+}
+
+func (e *explainImpl) Free() {
 }
 
 // EXPLAIN stmt statement
@@ -72,8 +98,23 @@ func (node *ExplainStmt) Format(ctx *FmtCtx) {
 func (node *ExplainStmt) GetStatementType() string { return "Explain" }
 func (node *ExplainStmt) GetQueryType() string     { return QueryTypeOth }
 
+// EXPLAIN FOR CONNECTION statement
+
+func (node *ExplainStmt) Free() {
+	reuse.Free[ExplainStmt](node, nil)
+}
+
+func (node *ExplainStmt) reset() {
+	*node = ExplainStmt{}
+}
+
+func (node ExplainStmt) TypeName() string { return "tree.ExplainStmt" }
+
 func NewExplainStmt(stmt Statement, f string) *ExplainStmt {
-	return &ExplainStmt{explainImpl{Statement: stmt, Format: f}}
+	ex := reuse.Alloc[ExplainStmt](nil)
+	ex.explainImpl.Statement = stmt
+	ex.explainImpl.Format = f
+	return ex
 }
 
 // EXPLAIN ANALYZE statement
@@ -118,8 +159,21 @@ func (node *ExplainAnalyze) Format(ctx *FmtCtx) {
 func (node *ExplainAnalyze) GetStatementType() string { return "Explain Analyze" }
 func (node *ExplainAnalyze) GetQueryType() string     { return QueryTypeOth }
 
+func (node *ExplainAnalyze) Free() {
+	reuse.Free[ExplainAnalyze](node, nil)
+}
+
+func (node *ExplainAnalyze) reset() {
+	*node = ExplainAnalyze{}
+}
+
+func (node ExplainAnalyze) TypeName() string { return "tree.ExplainAnalyze" }
+
 func NewExplainAnalyze(stmt Statement, f string) *ExplainAnalyze {
-	return &ExplainAnalyze{explainImpl{Statement: stmt, Format: f}}
+	ex := reuse.Alloc[ExplainAnalyze](nil)
+	ex.explainImpl.Statement = stmt
+	ex.explainImpl.Format = f
+	return ex
 }
 
 // EXPLAIN FOR CONNECTION statement
@@ -138,11 +192,21 @@ func (node *ExplainFor) Format(ctx *FmtCtx) {
 func (node *ExplainFor) GetStatementType() string { return "Explain Format" }
 func (node *ExplainFor) GetQueryType() string     { return QueryTypeOth }
 
+func (node *ExplainFor) Free() {
+	reuse.Free[ExplainFor](node, nil)
+}
+
+func (node *ExplainFor) reset() {
+	*node = ExplainFor{}
+}
+
+func (node ExplainFor) TypeName() string { return "tree.ExplainFor" }
+
 func NewExplainFor(f string, id uint64) *ExplainFor {
-	return &ExplainFor{
-		explainImpl: explainImpl{Statement: nil, Format: f},
-		ID:          id,
-	}
+	ex := reuse.Alloc[ExplainFor](nil)
+	ex.explainImpl = explainImpl{Statement: nil, Format: f}
+	ex.ID = id
+	return ex
 }
 
 type OptionElem struct {

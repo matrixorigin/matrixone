@@ -180,7 +180,7 @@ func TestVector3(t *testing.T) {
 
 func TestVector5(t *testing.T) {
 	defer testutils.AfterTest(t)()
-	vecTypes := types.MockColTypes(23)
+	vecTypes := types.MockColTypes()
 	sels := nulls.NewWithSize(1)
 	sels.Add(uint64(2), uint64(6))
 	for _, vecType := range vecTypes {
@@ -222,7 +222,7 @@ func TestVector5(t *testing.T) {
 
 func TestVector6(t *testing.T) {
 	defer testutils.AfterTest(t)()
-	vecTypes := types.MockColTypes(23)
+	vecTypes := types.MockColTypes()
 	sels := nulls.NewWithSize(1)
 	sels.Add(uint64(2), uint64(6))
 	f := func(vecType types.Type, nullable bool) {
@@ -309,7 +309,7 @@ func TestVector6(t *testing.T) {
 
 func TestVector7(t *testing.T) {
 	defer testutils.AfterTest(t)()
-	vecTypes := types.MockColTypes(23)
+	vecTypes := types.MockColTypes()
 	testF := func(typ types.Type, nullable bool) {
 		vec := MockVector(typ, 10, false, nil)
 		if nullable {
@@ -591,6 +591,8 @@ func getOverload(typ types.T, t *testing.T, rows *roaring.Bitmap, vec Vector) an
 	switch typ {
 	case types.T_bool:
 		return overLoadFactory[bool](t, rows, vec)
+	case types.T_bit:
+		return overLoadFactory[uint64](t, rows, vec)
 	case types.T_int8:
 		return overLoadFactory[int8](t, rows, vec)
 	case types.T_int16:
@@ -653,7 +655,7 @@ func overLoadFactory[T any](t *testing.T, rows *roaring.Bitmap, vec Vector) func
 
 func TestForeachSelectBitmap(t *testing.T) {
 	defer testutils.AfterTest(t)()
-	vecTypes := types.MockColTypes(23)
+	vecTypes := types.MockColTypes()
 	sels := nulls.NewWithSize(1)
 	sels.Add(uint64(2), uint64(6))
 	f := func(vecType types.Type, nullable bool) {

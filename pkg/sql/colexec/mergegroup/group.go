@@ -46,7 +46,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 
 	ap := arg
 	ctr := ap.ctr
-	anal := proc.GetAnalyze(arg.info.Idx, arg.info.ParallelIdx, arg.info.ParallelMajor)
+	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
 	anal.Start()
 	defer anal.Stop()
 	result := vm.NewCallResult()
@@ -63,7 +63,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 				if end {
 					break
 				}
-				anal.Input(bat, arg.info.IsFirst)
+				anal.Input(bat, arg.GetIsFirst())
 				if err = ctr.process(bat, proc); err != nil {
 					bat.Clean(proc.Mp())
 					return result, err
@@ -93,7 +93,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 					}
 					ctr.bat.Aggs = nil
 				}
-				anal.Output(ctr.bat, arg.info.IsLast)
+				anal.Output(ctr.bat, arg.GetIsLast())
 				result.Batch = ctr.bat
 			}
 			ctr.state = End

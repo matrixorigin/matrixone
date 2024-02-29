@@ -24,12 +24,12 @@ func (res Result) Close() {
 	}
 }
 
-// ReadRows read all rows, apply is used to read cols data in a row. If apply return false, stop
-// reading. If the query has a lot of data, apply will be called multiple times, giving a batch of
-// rows for each call.
-func (res Result) ReadRows(apply func(cols []*vector.Vector) bool) {
+// ReadRows read all rows, apply is used to read cols data in a row. If apply return
+// false, stop reading. If the query has a lot of data, apply will be called multiple times, giving
+// a batch of rows for each call.
+func (res Result) ReadRows(apply func(rows int, cols []*vector.Vector) bool) {
 	for _, rows := range res.Batches {
-		if !apply(rows.Vecs) {
+		if !apply(rows.RowCount(), rows.Vecs) {
 			return
 		}
 	}

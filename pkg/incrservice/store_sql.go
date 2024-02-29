@@ -76,7 +76,7 @@ func (s *sqlStore) SelectAll(
 	}
 	str := fmt.Sprintf("Cannot find tableID %d in table %s, accountid %d, txn: %s", tableID, incrTableName,
 		accountId, txnOp.Txn().DebugString())
-	res.ReadRows(func(cols []*vector.Vector) bool {
+	res.ReadRows(func(_ int, cols []*vector.Vector) bool {
 		str += fmt.Sprintf("\tcol_name: %s, table_id: %d\n",
 			executor.GetStringRows(cols[0])[0],
 			executor.GetFixedRows[uint64](cols[1])[0])
@@ -148,7 +148,7 @@ func (s *sqlStore) Allocate(
 					return err
 				}
 				rows := 0
-				res.ReadRows(func(cols []*vector.Vector) bool {
+				res.ReadRows(func(_ int, cols []*vector.Vector) bool {
 					current = executor.GetFixedRows[uint64](cols[0])[0]
 					step = executor.GetFixedRows[uint64](cols[1])[0]
 					rows++
@@ -298,7 +298,7 @@ func (s *sqlStore) GetColumns(
 	var indexes []int32
 	var offsets []uint64
 	var steps []uint64
-	res.ReadRows(func(cols []*vector.Vector) bool {
+	res.ReadRows(func(_ int, cols []*vector.Vector) bool {
 		colNames = append(colNames, executor.GetStringRows(cols[0])...)
 		indexes = append(indexes, executor.GetFixedRows[int32](cols[1])...)
 		offsets = append(offsets, executor.GetFixedRows[uint64](cols[2])...)

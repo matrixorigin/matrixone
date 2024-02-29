@@ -137,10 +137,12 @@ func newTestCase(m *mpool.MPool, attrs []string, jsons, paths []string, outers [
 			Attrs:    attrs,
 			Rets:     colDefs,
 			FuncName: "unnest",
-			info: &vm.OperatorInfo{
-				Idx:     0,
-				IsFirst: false,
-				IsLast:  false,
+			OperatorBase: vm.OperatorBase{
+				OperatorInfo: vm.OperatorInfo{
+					Idx:     0,
+					IsFirst: false,
+					IsLast:  false,
+				},
 			},
 		},
 		jsons:    jsons,
@@ -309,17 +311,12 @@ func appendOtherExprs(ret []*plan.Expr, paths []string, outers []bool) []*plan.E
 }
 
 func resetChildren(arg *Argument, bat *batch.Batch) {
-	if len(arg.children) == 0 {
-		arg.AppendChild(&value_scan.Argument{
-			Batchs: []*batch.Batch{bat},
+	arg.SetChildren(
+		[]vm.Operator{
+			&value_scan.Argument{
+				Batchs: []*batch.Batch{bat},
+			},
 		})
-
-	} else {
-		arg.children = arg.children[:0]
-		arg.AppendChild(&value_scan.Argument{
-			Batchs: []*batch.Batch{bat},
-		})
-	}
 }
 
 func cleanResult(result *vm.CallResult, proc *process.Process) {

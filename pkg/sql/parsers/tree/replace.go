@@ -14,6 +14,16 @@
 
 package tree
 
+import "github.com/matrixorigin/matrixone/pkg/common/reuse"
+
+func init() {
+	reuse.CreatePool[Replace](
+		func() *Replace { return &Replace{} },
+		func(r *Replace) { r.reset() },
+		reuse.DefaultOptions[Replace]().
+			WithEnableChecker())
+}
+
 // the REPLACE statement.
 type Replace struct {
 	statementImpl
@@ -48,10 +58,23 @@ func (node *Replace) GetStatementType() string { return "Replace" }
 func (node *Replace) GetQueryType() string     { return QueryTypeDML }
 
 func NewReplace(t TableExpr, c IdentifierList, r *Select, p IdentifierList) *Replace {
-	return &Replace{
-		Table:          t,
-		Columns:        c,
-		Rows:           r,
-		PartitionNames: p,
-	}
+	replace := reuse.Alloc[Replace](nil)
+	replace.Table = t
+	replace.Columns = c
+	replace.Rows = r
+	replace.PartitionNames = p
+	return replace
 }
+
+func (node *Replace) Free() {
+	reuse.Free[Replace](node, nil)
+}
+
+func (node *Replace) reset() {
+	// if node.Rows != nil {
+	// 	reuse.Free[Select](node.Rows, nil)
+	// }
+	*node = Replace{}
+}
+
+func (node Replace) TypeName() string { return "tree.Replace" }

@@ -61,6 +61,19 @@ func AbsFloat64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 	})
 }
 
+func absDecimal64(v types.Decimal64) types.Decimal64 {
+	if v.Sign() {
+		v = v.Minus()
+	}
+	return v
+}
+
+func AbsDecimal64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	return opUnaryFixedToFixed[types.Decimal64, types.Decimal64](ivecs, result, proc, length, func(v types.Decimal64) types.Decimal64 {
+		return absDecimal64(v)
+	})
+}
+
 func absDecimal128(v types.Decimal128) types.Decimal128 {
 	if v.Sign() {
 		v = v.Minus()
@@ -210,6 +223,7 @@ var (
 		types.T_uint32: 1,
 		types.T_int64:  0,
 		types.T_uint64: 0,
+		types.T_bit:    0,
 	}
 	ints  = []int64{1e16, 1e8, 1e4, 1e2, 1e1}
 	uints = []uint64{1e16, 1e8, 1e4, 1e2, 1e1}
@@ -771,11 +785,19 @@ func HexInt64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 	return opUnaryFixedToStr[int64](ivecs, result, proc, length, hexEncodeInt64)
 }
 
+func HexUint64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	return opUnaryFixedToStr[uint64](ivecs, result, proc, length, hexEncodeUint64)
+}
+
 func hexEncodeString(xs []byte) string {
 	return hex.EncodeToString(xs)
 }
 
 func hexEncodeInt64(xs int64) string {
+	return fmt.Sprintf("%X", uint64(xs))
+}
+
+func hexEncodeUint64(xs uint64) string {
 	return fmt.Sprintf("%X", xs)
 }
 
@@ -1241,6 +1263,9 @@ func BitCast(
 	ctx := proc.Ctx
 
 	switch toType.Oid {
+	case types.T_bit:
+		rs := vector.MustFunctionResult[uint64](result)
+		return bitCastBinaryToFixed(ctx, source, rs, 8, length)
 	case types.T_int8:
 		rs := vector.MustFunctionResult[int8](result)
 		return bitCastBinaryToFixed(ctx, source, rs, 1, length)

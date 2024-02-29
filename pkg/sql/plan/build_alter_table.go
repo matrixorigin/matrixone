@@ -142,7 +142,7 @@ func buildAlterTableCopy(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, err
 		}
 	}
 
-	createTmpDdl, err := restoreDDL(ctx, alterTablePlan.CopyTableDef, schemaName, alterTableCtx.copyTableName, true)
+	createTmpDdl, err := restoreDDL(ctx, alterTablePlan.CopyTableDef, schemaName, alterTableCtx.copyTableName, false)
 	if err != nil {
 		return nil, err
 	}
@@ -246,7 +246,8 @@ func restoreDDL(ctx CompilerContext, tableDef *TableDef, schemaName string, tblN
 			typeStr = fmt.Sprintf("DECIMAL(%d,%d)", col.Typ.Width, col.Typ.Scale)
 		}
 		if typ.Oid == types.T_varchar || typ.Oid == types.T_char ||
-			typ.Oid == types.T_binary || typ.Oid == types.T_varbinary || typ.Oid.IsArrayRelate() {
+			typ.Oid == types.T_binary || typ.Oid == types.T_varbinary ||
+			typ.Oid.IsArrayRelate() || typ.Oid == types.T_bit {
 			typeStr += fmt.Sprintf("(%d)", col.Typ.Width)
 		}
 		if typ.Oid.IsFloat() && col.Typ.Scale != -1 {
@@ -429,29 +430,52 @@ func restoreDDL(ctx CompilerContext, tableDef *TableDef, schemaName string, tblN
 		}
 		createStr += fmt.Sprintf(" INFILE{'FILEPATH'='%s','COMPRESSION'='%s','FORMAT'='%s','JSONDATA'='%s'}", param.Filepath, param.CompressType, param.Format, param.JsonData)
 
-		escapedby := ""
-		if param.Tail.Fields.EscapedBy != byte(0) {
-			escapedby = fmt.Sprintf(" ESCAPED BY '%c'", param.Tail.Fields.EscapedBy)
+		fields := " FIELDS"
+		if param.Tail.Fields.Terminated != nil {
+			if param.Tail.Fields.Terminated.Value == "" {
+				fields += " TERMINATED BY \"\""
+			} else {
+				fields += fmt.Sprintf(" TERMINATED BY '%s'", param.Tail.Fields.Terminated.Value)
+			}
+		}
+		if param.Tail.Fields.EnclosedBy != nil {
+			if param.Tail.Fields.EnclosedBy.Value == byte(0) {
+				fields += " ENCLOSED BY ''"
+			} else if param.Tail.Fields.EnclosedBy.Value == byte('\\') {
+				fields += " ENCLOSED BY '\\\\'"
+			} else {
+				fields += fmt.Sprintf(" ENCLOSED BY '%c'", param.Tail.Fields.EnclosedBy.Value)
+			}
+		}
+		if param.Tail.Fields.EscapedBy != nil {
+			if param.Tail.Fields.EscapedBy.Value == byte(0) {
+				fields += " ESCAPED BY ''"
+			} else if param.Tail.Fields.EscapedBy.Value == byte('\\') {
+				fields += " ESCAPED BY '\\\\'"
+			} else {
+				fields += fmt.Sprintf(" ESCAPED BY '%c'", param.Tail.Fields.EscapedBy.Value)
+			}
 		}
 
-		line := ""
+		line := " LINES"
 		if param.Tail.Lines.StartingBy != "" {
-			line = fmt.Sprintf(" LINE STARTING BY '%s'", param.Tail.Lines.StartingBy)
+			line += fmt.Sprintf(" STARTING BY '%s'", param.Tail.Lines.StartingBy)
 		}
-		lineEnd := ""
-		if param.Tail.Lines.TerminatedBy == "\n" || param.Tail.Lines.TerminatedBy == "\r\n" {
-			lineEnd = " TERMINATED BY '\\\\n'"
-		} else {
-			lineEnd = fmt.Sprintf(" TERMINATED BY '%s'", param.Tail.Lines.TerminatedBy)
-		}
-		if len(line) > 0 {
-			line += lineEnd
-		} else {
-			line = " LINES" + lineEnd
+		if param.Tail.Lines.TerminatedBy != nil {
+			if param.Tail.Lines.TerminatedBy.Value == "\n" || param.Tail.Lines.TerminatedBy.Value == "\r\n" {
+				line += " TERMINATED BY '\\\\n'"
+			} else {
+				line += fmt.Sprintf(" TERMINATED BY '%s'", param.Tail.Lines.TerminatedBy)
+			}
 		}
 
-		createStr += fmt.Sprintf(" FIELDS TERMINATED BY '%s' ENCLOSED BY '%c'%s", param.Tail.Fields.Terminated, rune(param.Tail.Fields.EnclosedBy), escapedby)
-		createStr += line
+		if fields != " FIELDS" {
+			createStr += fields
+		}
+		if line != " LINES" {
+			createStr += line
+		}
+
 		if param.Tail.IgnoredLines > 0 {
 			createStr += fmt.Sprintf(" IGNORE %d LINES", param.Tail.IgnoredLines)
 		}
@@ -465,7 +489,12 @@ func restoreDDL(ctx CompilerContext, tableDef *TableDef, schemaName string, tblN
 		buf.WriteRune(ch)
 	}
 	sql := buf.String()
-	_, err := getRewriteSQLStmt(ctx, sql)
+	stmt, err := getRewriteSQLStmt(ctx, sql)
+	defer func() {
+		if stmt != nil {
+			stmt.Free()
+		}
+	}()
 	if err != nil {
 		return "", err
 	}
@@ -617,7 +646,7 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 		return nil, moerr.NewInvalidInput(ctx.GetContext(), "can't add/drop column for partition table now")
 	}
 
-	if stmt.PartitionOptions != nil {
+	if stmt.PartitionOption != nil {
 		if stmt.Options != nil {
 			return nil, moerr.NewParseError(ctx.GetContext(), "Unsupported multi schema change")
 		}
@@ -713,7 +742,8 @@ func buildNotNullColumnVal(col *ColDef) string {
 		col.Typ.Id == int32(types.T_decimal64) ||
 		col.Typ.Id == int32(types.T_decimal128) ||
 		col.Typ.Id == int32(types.T_decimal256) ||
-		col.Typ.Id == int32(types.T_bool) {
+		col.Typ.Id == int32(types.T_bool) ||
+		col.Typ.Id == int32(types.T_bit) {
 		defaultValue = "0"
 	} else if col.Typ.Id == int32(types.T_varchar) ||
 		col.Typ.Id == int32(types.T_char) ||

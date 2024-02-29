@@ -53,24 +53,26 @@ func TestSamplePool(t *testing.T) {
 
 	{
 		// sample 5 rows by second column.
-		pool1 := newSamplePoolByRows(proc, 5, 1)
+		pool1 := newSamplePoolByRows(proc, 5, 1, true)
 		err := pool1.sampleFromColumn(1, b1.Vecs[1], b1)
 		require.NoError(t, err)
 		err = pool1.sampleFromColumn(1, b2.Vecs[1], b2)
 		require.NoError(t, err)
 
 		// cannot get any result before end.
-		tbat, err := pool1.Output(false)
+		tbat, err := pool1.Result(false)
 		require.NoError(t, err)
 		require.Equal(t, 0, tbat.RowCount())
 
 		// check the result.
-		// due to reorder, the result will be [sample column, normal column].
-		out, err := pool1.Output(true)
+		// due to reorder, the result will be [sample column, normal column, rowsCount column].
+		out, err := pool1.Result(true)
 		require.NoError(t, err)
-		require.Equal(t, 2, len(out.Vecs))
+		require.Equal(t, 3, len(out.Vecs))
 		require.Equal(t, 5, out.Vecs[0].Length())
 		require.Equal(t, 5, out.Vecs[1].Length())
+		// invalid scan row count was 9. the 10th row with null value at the sample column will be ignored.
+		require.Equal(t, int64(9), vector.GetFixedAt[int64](out.Vecs[2], 0))
 
 		out.Clean(proc.Mp())
 		pool1.Free()
@@ -78,18 +80,19 @@ func TestSamplePool(t *testing.T) {
 
 	{
 		// sample 5 rows by 2 columns.
-		pool2 := newSamplePoolByRows(proc, 5, 2)
+		pool2 := newSamplePoolByRows(proc, 5, 2, false)
 		err := pool2.sampleFromColumns(1, b1.Vecs, b1)
 		require.NoError(t, err)
 		err = pool2.sampleFromColumns(1, b2.Vecs, b2)
 		require.NoError(t, err)
 
-		tbat, err := pool2.Output(false)
+		tbat, err := pool2.Result(false)
 		require.NoError(t, err)
 		require.Equal(t, 0, tbat.RowCount())
 
-		out, err := pool2.Output(true)
+		out, err := pool2.Result(true)
 		require.NoError(t, err)
+		// due to we set outputRowCount to false, the result will be [sample column, normal column].
 		require.Equal(t, 2, len(out.Vecs))
 		require.Equal(t, 5, out.Vecs[0].Length())
 		require.Equal(t, 5, out.Vecs[1].Length())
@@ -105,14 +108,14 @@ func TestSamplePool(t *testing.T) {
 		require.NoError(t, err)
 
 		// can take out the result before an end.
-		tbat, err := pool3.Output(false)
+		tbat, err := pool3.Result(false)
 		require.NoError(t, err)
 		require.Equal(t, 5, tbat.RowCount())
 
 		err = pool3.sampleFromColumn(1, b2.Vecs[1], b2)
 		require.NoError(t, err)
 
-		out, err := pool3.Output(true)
+		out, err := pool3.Result(true)
 		require.NoError(t, err)
 		require.Equal(t, 4, out.RowCount())
 
@@ -147,9 +150,9 @@ func genSampleBatch(proc *process.Process, rows [][]int64) (*batch.Batch, error)
 
 func TestSamplePoolOthers(t *testing.T) {
 	// merge sample and sample by percent cannot be tested full.
-	s1 := newSamplePoolByRows(nil, 1, 1)
+	s1 := newSamplePoolByRows(nil, 1, 1, false)
 	s2 := newSamplePoolByPercent(nil, 1.0, 1)
-	s3 := newSamplePoolByRowsForMerge(nil, 1, 1)
+	s3 := newSamplePoolByRowsForMerge(nil, 1, 1, false)
 
 	s1.setPerfFields(false)
 	s2.setPerfFields(false)

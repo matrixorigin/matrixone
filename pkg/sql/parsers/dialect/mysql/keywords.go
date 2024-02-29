@@ -64,6 +64,7 @@ func init() {
 		"cascade":                    CASCADE,
 		"case":                       CASE,
 		"cast":                       CAST,
+		"serial_extract":             SERIAL_EXTRACT,
 		"change":                     CHANGE,
 		"char":                       CHAR,
 		"character":                  CHARACTER,
@@ -616,5 +617,7 @@ func init() {
 		"handler":                    HANDLER,
 		"sample":                     SAMPLE,
 		"percent":                    PERCENT,
+		"master":                     MASTER,
+		"parallelism":                PARALLELISM,
 	}
 }

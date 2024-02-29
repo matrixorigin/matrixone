@@ -91,7 +91,14 @@ func (task *flushBlkTask) Execute(ctx context.Context) (err error) {
 		writer.SetSortKey(uint16(task.meta.GetSchema().GetSingleSortKeyIdx()))
 	}
 
-	_, err = writer.WriteBatch(containers.ToCNBatch(task.data))
+	cnBatch := containers.ToCNBatch(task.data)
+	for _, vec := range cnBatch.Vecs {
+		if vec == nil {
+			// this task has been canceled
+			return nil
+		}
+	}
+	_, err = writer.WriteBatch(cnBatch)
 	if err != nil {
 		return err
 	}
@@ -102,6 +109,9 @@ func (task *flushBlkTask) Execute(ctx context.Context) (err error) {
 		}
 	}
 	task.blocks, _, err = writer.Sync(ctx)
+	if err != nil {
+		return err
+	}
 	task.Stats = writer.GetObjectStats()[objectio.SchemaData]
 
 	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {

@@ -76,7 +76,7 @@ col1new    col2    col3new
 3    10    null
 3    4    121131312
 update rename03 set col1New = 100 where col1New = 1;
-update rename03 set col3New = '2798u3d3frew' where col3New = 6;
+update rename03 set col3New = '2798u3d3frew' where col3New = '6';
 delete from rename03 where col3New is null;
 select * from rename03;
 col1new    col2    col3new
@@ -159,7 +159,7 @@ table_name    column_name    data_type    is_nullable
 rename06    数据库系统    INT    YES
 show columns from rename06;
 Field    Type    Null    Key    Default    Extra    Comment
-数据库系统    INT(32)    YES        null
+数据库系统    INT(32)    YES        null        
 drop table rename06;
 alter table system.statement_info rename column role_id to role_idNew;
 internal error: do not have privilege to execute the statement
@@ -204,13 +204,13 @@ drop table if exists foreign02;
 create table foreign02(col1 int,
 col2 int,
 col3 int primary key,
-foreign key(col1) references foreign01(col1));
+constraint `c1` foreign key(col1) references foreign01(col1));
 show create table foreign01;
 Table    Create Table
 foreign01    CREATE TABLE `foreign01` (\n`col1` INT NOT NULL,\n`col2` VARCHAR(20) DEFAULT NULL,\n`col3` INT DEFAULT NULL,\n`col4` BIGINT DEFAULT NULL,\nPRIMARY KEY (`col1`)\n)
 show create table foreign02;
 Table    Create Table
-foreign02    CREATE TABLE `foreign02` (\n`col1` INT DEFAULT NULL,\n`col2` INT DEFAULT NULL,\n`col3` INT NOT NULL,\nPRIMARY KEY (`col3`),\nCONSTRAINT `` FOREIGN KEY (`col1`) REFERENCES `foreign01` (`col1`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
+foreign02    CREATE TABLE `foreign02` (\n`col1` INT DEFAULT NULL,\n`col2` INT DEFAULT NULL,\n`col3` INT NOT NULL,\nPRIMARY KEY (`col3`),\nCONSTRAINT `c1` FOREIGN KEY (`col1`) REFERENCES `foreign01` (`col1`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
 insert into foreign01 values(1,'sfhuwe',1,1);
 insert into foreign01 values(2,'37829901k3d',2,2);
 insert into foreign02 values(1,1,1);
@@ -230,7 +230,7 @@ Table    Create Table
 foreign01    CREATE TABLE `foreign01` (\n`col1new` INT NOT NULL,\n`col2` VARCHAR(20) DEFAULT NULL,\n`col3` INT DEFAULT NULL,\n`col4` BIGINT DEFAULT NULL,\nPRIMARY KEY (`col1new`)\n)
 show create table foreign02;
 Table    Create Table
-foreign02    CREATE TABLE `foreign02` (\n`colnewcolumn` INT DEFAULT NULL,\n`col2` INT DEFAULT NULL,\n`col3` INT NOT NULL,\nPRIMARY KEY (`col3`),\nCONSTRAINT `` FOREIGN KEY (`colnewcolumn`) REFERENCES `foreign01` (`col1new`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
+foreign02    CREATE TABLE `foreign02` (\n`colnewcolumn` INT DEFAULT NULL,\n`col2` INT DEFAULT NULL,\n`col3` INT NOT NULL,\nPRIMARY KEY (`col3`),\nCONSTRAINT `c1` FOREIGN KEY (`colnewcolumn`) REFERENCES `foreign01` (`col1new`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
 alter table foreign01 change col2 col2New varchar(100);
 alter table foreign02 change col2 col2new double after col3;
 insert into foreign01 values(3,'bcguwgheinwqneku678',2,2);
@@ -256,7 +256,7 @@ Table    Create Table
 foreign01    CREATE TABLE `foreign01` (\n`col1new` INT NOT NULL,\n`col2new` VARCHAR(100) DEFAULT NULL,\n`col3` INT DEFAULT NULL,\n`col4` BIGINT DEFAULT NULL,\nPRIMARY KEY (`col1new`)\n)
 show create table foreign02;
 Table    Create Table
-foreign02    CREATE TABLE `foreign02` (\n`colnewcolumn` INT DEFAULT NULL,\n`col3` INT NOT NULL,\n`col2new` DOUBLE DEFAULT NULL,\nPRIMARY KEY (`col3`),\nCONSTRAINT `` FOREIGN KEY (`colnewcolumn`) REFERENCES `foreign01` (`col1new`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
+foreign02    CREATE TABLE `foreign02` (\n`colnewcolumn` INT DEFAULT NULL,\n`col3` INT NOT NULL,\n`col2new` DOUBLE DEFAULT NULL,\nPRIMARY KEY (`col3`),\nCONSTRAINT `c1` FOREIGN KEY (`colnewcolumn`) REFERENCES `foreign01` (`col1new`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
 show columns from foreign01;
 Field    Type    Null    Key    Default    Extra    Comment
 col1new    INT(32)    NO    PRI    null        
@@ -327,10 +327,10 @@ a    bnew    c    d
 2    ac    2022-12-12    1600.00
 show columns from index01;
 Field    Type    Null    Key    Default    Extra    Comment
-a    INT(32)    NO    UNI    null        
-bnew    CHAR(10)    YES    UNI    null        
-c    DATE(0)    YES        null        
-d    DECIMAL64(7)    YES        null        
+a    INT(32)    NO    MUL    null
+bnew    CHAR(10)    YES        null
+c    DATE(0)    YES        null
+d    DECIMAL64(7)    YES        null
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'index01' and COLUMN_NAME not like '__mo%';
 table_name    column_name    data_type    is_nullable
 index01    a    INT    NO
@@ -370,7 +370,7 @@ index02    0    PRIMARY    1    a    A    0    NULL    NULL                     
 show columns from index02;
 Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    NO    PRI    null        
-bnewnew    CHAR(10)    YES    MUL    null        
+bnewnew    CHAR(10)    YES        null        
 c    DATE(0)    YES    MUL    null        
 d    DECIMAL64(7)    YES        null        
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'index02' and COLUMN_NAME not like '__mo%';
@@ -401,10 +401,10 @@ newaaaaaaaa    b    c    d
 -32    32    8329    893434
 show columns from cluster01;
 Field    Type    Null    Key    Default    Extra    Comment
-newaaaaaaaa    TINYINT(8)    NO    PRI    null        
-b    SMALLINT(16)    YES        null        
-c    INT UNSIGNED(32)    YES        null        
-d    BIGINT(64)    NO        null        
+newaaaaaaaa    TINYINT(8)    NO    PRI    null
+b    SMALLINT(16)    YES        null
+c    INT UNSIGNED(32)    YES        null
+d    BIGINT(64)    NO        null
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'cluster01' and COLUMN_NAME not like '__mo%';
 table_name    column_name    data_type    is_nullable
 cluster01    b    SMALLINT    YES
@@ -425,8 +425,8 @@ uuuyggbbjbj    col2
 -32893    -89232
 show columns from temporary01;
 Field    Type    Null    Key    Default    Extra    Comment
-uuuyggbbjbj    INT(32)    YES        null        
-col2    DECIMAL128(38)    YES        null        
+uuuyggbbjbj    INT(32)    YES        null
+col2    DECIMAL128(38)    YES        null
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'temporary01' and COLUMN_NAME not like '__mo%';
 table_name    column_name    data_type    is_nullable
 temporary01    col2    DECIMAL128    YES
@@ -454,10 +454,10 @@ alter table view01 rename column a to `cwhuenwjfdwcweffcfwef`;
 alter table view02 rename column a to `cwhuenwjfdwcweffcfwef`;
 show columns from view01;
 Field    Type    Null    Key    Default    Extra    Comment
-cwhuenwjfdwcweffcfwef    INT(32)    YES        null        
+cwhuenwjfdwcweffcfwef    INT(32)    YES        null
 show columns from view02;
 Field    Type    Null    Key    Default    Extra    Comment
-cwhuenwjfdwcweffcfwef    INT(32)    YES        null        
+cwhuenwjfdwcweffcfwef    INT(32)    YES        null
 show create table view01;
 Table    Create Table
 view01    CREATE TABLE `view01` (\n`cwhuenwjfdwcweffcfwef` INT DEFAULT NULL\n)
@@ -497,7 +497,7 @@ Table    Create Table
 rename01    CREATE TABLE `rename01` (\n`newnewrename` INT DEFAULT NULL\n)
 show columns from rename01;
 Field    Type    Null    Key    Default    Extra    Comment
-newnewrename    INT(32)    YES        null        
+newnewrename    INT(32)    YES        null
 drop table rename01;
 drop role role_r1;
 drop user role_u1;
@@ -516,8 +516,8 @@ Table    Create Table
 prepare01    CREATE TABLE `prepare01` (\n`col1` INT DEFAULT NULL,\n`col2` CHAR(1) DEFAULT NULL\n)
 show columns from prepare01;
 Field    Type    Null    Key    Default    Extra    Comment
-col1    INT(32)    YES        null        
-col2    CHAR(1)    YES        null        
+col1    INT(32)    YES        null
+col2    CHAR(1)    YES        null
 update prepare01 set col1 = 2147483647 where col2 = 'c';
 delete from prepare01 where col2 = 'b';
 insert into prepare01 values (42342, '3');

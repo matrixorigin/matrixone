@@ -129,7 +129,7 @@ func TestFuzzyFilter(t *testing.T) {
 	for _, tc := range tcs {
 		for _, r := range rowCnts {
 			tc.arg.N = r
-			tc.arg.info = &vm.OperatorInfo{
+			tc.arg.OperatorBase.OperatorInfo = vm.OperatorInfo{
 				Idx:     0,
 				IsFirst: false,
 				IsLast:  false,
@@ -148,7 +148,7 @@ func TestFuzzyFilter(t *testing.T) {
 				require.NoError(t, err)
 				if result.Status == vm.ExecStop {
 					tc.arg.Free(tc.proc, false, err)
-					tc.arg.children[0].Free(tc.proc, false, err)
+					tc.arg.GetChildren(0).Free(tc.proc, false, err)
 					require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 					break
 				}
@@ -168,15 +168,10 @@ func newBatch(t *testing.T, ts []types.Type, proc *process.Process, rows int64) 
 }
 
 func resetChildren(arg *Argument, bats []*batch.Batch) {
-	if len(arg.children) == 0 {
-		arg.AppendChild(&value_scan.Argument{
-			Batchs: bats,
+	arg.SetChildren(
+		[]vm.Operator{
+			&value_scan.Argument{
+				Batchs: bats,
+			},
 		})
-
-	} else {
-		arg.children = arg.children[:0]
-		arg.AppendChild(&value_scan.Argument{
-			Batchs: bats,
-		})
-	}
 }

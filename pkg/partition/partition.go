@@ -137,6 +137,8 @@ func Partition(sels []int64, diffs []bool, partitions []int64, vec *vector.Vecto
 	switch vec.GetType().Oid {
 	case types.T_bool:
 		return genericPartition[bool](sels, diffs, partitions, vec)
+	case types.T_bit:
+		return genericPartition[uint64](sels, diffs, partitions, vec)
 	case types.T_int8:
 		return genericPartition[int8](sels, diffs, partitions, vec)
 	case types.T_int16:

@@ -30,6 +30,11 @@ func New(typ types.Type, desc, nullsLast bool) Compare {
 			return newCompare(boolDescCompare, boolCopy[bool], nullsLast)
 		}
 		return newCompare(boolAscCompare, boolCopy[bool], nullsLast)
+	case types.T_bit:
+		if desc {
+			return newCompare(genericDescCompare[uint64], genericCopy[uint64], nullsLast)
+		}
+		return newCompare(genericAscCompare[uint64], genericCopy[uint64], nullsLast)
 	case types.T_int8:
 		if desc {
 			return newCompare(genericDescCompare[int8], genericCopy[int8], nullsLast)

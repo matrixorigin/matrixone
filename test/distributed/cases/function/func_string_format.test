@@ -162,12 +162,12 @@ SELECT format(d2,0)FROM format_02;
 SELECT format(d1, id) FROM format_02 WHERE d2 % 2 = 0;
 SELECT format(d2, 4) FROM format_02 WHERE ABS(d2) > 1000;
 SELECT any_value(format(id,2)) FROM format_02;
-SELECT d1, d2 FROM format_02 WHERE format(id,0) BETWEEN 0 AND 400;
+SELECT d1, d2 FROM format_02 WHERE cast(format(id,0) as bigint) BETWEEN 0 AND 400;
 SELECT * from format_02 WHERE format(id, 1) like '1.2';
 SELECT format(FLOOR(d2),4) FROM format_02;
 SELECT format(CEIL(d2),6) FROM format_02;
-SELECT * FROM format_02 WHERE format(d2,0) IN (73, 32789);
-SELECT * FROM format_02 WHERE format(d2,0) NOT IN (73, 32789);
+SELECT * FROM format_02 WHERE format(d2,0) IN ('73', '32789');
+SELECT * FROM format_02 WHERE format(d2,0) NOT IN ('73', '32789');
 
 
 -- Abnormal test
