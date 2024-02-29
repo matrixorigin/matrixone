@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"net/http"
 	"runtime/trace"
 	"sync"
@@ -35,6 +34,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
+	txnTrace "github.com/matrixorigin/matrixone/pkg/txn/trace"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/tidwall/btree"
 )
 
@@ -284,7 +285,7 @@ func (b ObjectIndexByTSEntry) Less(than ObjectIndexByTSEntry) bool {
 
 func NewPartitionState(noData bool) *PartitionState {
 	opts := btree.Options{
-		Degree: 4,
+		Degree: 64,
 	}
 	return &PartitionState{
 		noData:                noData,
@@ -356,6 +357,7 @@ func (p *PartitionState) HandleLogtailEntry(
 	primarySeqnum int,
 	packer *types.Packer,
 ) {
+	txnTrace.GetService().ApplyLogtail(entry, 1)
 	switch entry.EntryType {
 	case api.Entry_Insert:
 		if IsBlkTable(entry.TableName) {
@@ -575,7 +577,6 @@ func (p *PartitionState) HandleRowsInsert(
 				}
 				p.primaryIndex.Set(entry)
 			}
-
 		})
 	}
 

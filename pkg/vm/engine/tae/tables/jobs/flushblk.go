@@ -90,7 +90,14 @@ func (task *flushBlkTask) Execute(ctx context.Context) (err error) {
 		writer.SetSortKey(uint16(task.meta.GetSchema().GetSingleSortKeyIdx()))
 	}
 
-	_, err = writer.WriteBatch(containers.ToCNBatch(task.data))
+	cnBatch := containers.ToCNBatch(task.data)
+	for _, vec := range cnBatch.Vecs {
+		if vec == nil {
+			// this task has been canceled
+			return nil
+		}
+	}
+	_, err = writer.WriteBatch(cnBatch)
 	if err != nil {
 		return err
 	}

@@ -188,7 +188,6 @@ type Transaction struct {
 		sync.RWMutex
 		data map[types.Blockid][]*batch.Batch
 	}
-	//blockId_tn_delete_metaLoc_batch map[types.Blockid][]*batch.Batch
 	//select list for raw batch comes from txn.writes.batch.
 	batchSelectList map[*batch.Batch][]int64
 	toFreeBatches   map[tableKey][]*batch.Batch
@@ -528,8 +527,6 @@ type txnTable struct {
 	lastTS timestamp.Timestamp
 	//entries belong to this table,and come from txn.writes.
 	writes []Entry
-	// offset of the writes in workspace
-	writesOffset int
 
 	// this should be the statement id
 	// but seems that we're not maintaining it at the moment

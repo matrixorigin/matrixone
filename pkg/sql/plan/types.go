@@ -168,7 +168,8 @@ type QueryBuilder struct {
 
 	tag2Table map[int32]*TableDef
 
-	nextTag int32
+	nextTag    int32
+	nextMsgTag int32
 
 	isPrepareStatement bool
 	mysqlCompatible    bool
@@ -369,6 +370,7 @@ type Binding struct {
 	refCnts        []uint
 	colIdByName    map[string]int32
 	isClusterTable bool
+	defaultVals    []string
 }
 
 const (

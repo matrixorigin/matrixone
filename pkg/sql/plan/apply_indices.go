@@ -45,6 +45,9 @@ func (builder *QueryBuilder) applyIndices(nodeID int32, colRefCnt map[[2]int32]i
 	case plan.Node_JOIN:
 		return builder.applyIndicesForJoins(nodeID, node, colRefCnt, idxColMap)
 
+	case plan.Node_SORT:
+		return builder.applyIndicesForSort(nodeID, node, colRefCnt, idxColMap)
+
 	default:
 		for i, childID := range node.Children {
 			node.Children[i] = builder.applyIndices(childID, colRefCnt, idxColMap)
@@ -222,7 +225,7 @@ func (builder *QueryBuilder) applyIndicesForFilters(nodeID int32, node *plan.Nod
 	}
 
 END0:
-	if node.Stats.Selectivity > 0.05 || node.Stats.Outcnt > float64(GetInFilterCardLimit()) {
+	if node.Stats.Selectivity > InFilterSelectivityLimit || node.Stats.Outcnt > float64(GetInFilterCardLimitOnPK(node.Stats.TableCnt)) {
 		return nodeID
 	}
 
@@ -293,7 +296,7 @@ END0:
 			filterIdx = append(filterIdx, idx)
 
 			filter := node.FilterList[idx]
-			if filter.Selectivity <= 0.05 && node.Stats.TableCnt*filter.Selectivity <= float64(GetInFilterCardLimit()) {
+			if filter.Selectivity <= InFilterSelectivityLimit && node.Stats.TableCnt*filter.Selectivity <= float64(GetInFilterCardLimitOnPK(node.Stats.TableCnt)) {
 				usePartialIndex = true
 			}
 		}
@@ -555,7 +558,7 @@ func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node,
 
 	rightChild := builder.qry.Nodes[node.Children[1]]
 
-	if rightChild.Stats.Outcnt > float64(GetInFilterCardLimit()) || rightChild.Stats.Outcnt > leftChild.Stats.Cost*0.1 {
+	if rightChild.Stats.Outcnt > float64(GetInFilterCardLimitOnPK(leftChild.Stats.TableCnt)) || rightChild.Stats.Outcnt > leftChild.Stats.Cost*0.1 {
 		return nodeID
 	}
 

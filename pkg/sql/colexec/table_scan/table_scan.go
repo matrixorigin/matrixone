@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -34,6 +35,9 @@ func (arg *Argument) String(buf *bytes.Buffer) {
 
 func (arg *Argument) Prepare(proc *process.Process) (err error) {
 	arg.OrderBy = arg.Reader.GetOrderBy()
+	if arg.TopValueMsgTag > 0 {
+		arg.msgReceiver = proc.NewMessageReceiver([]int32{arg.TopValueMsgTag}, arg.GetAddress())
+	}
 	return nil
 }
 
@@ -63,6 +67,17 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 
 	for {
+		// receive topvalue message
+		if arg.msgReceiver != nil {
+			msgs := arg.msgReceiver.ReceiveMessage(false)
+			for i := range msgs {
+				msg, ok := msgs[i].(process.TopValueMessage)
+				if !ok {
+					panic("only support top value message in table scan!")
+				}
+				arg.Reader.SetFilterZM(msg.TopValueZM)
+			}
+		}
 		// read data from storage engine
 		bat, err := arg.Reader.Read(proc.Ctx, arg.Attrs, nil, proc.Mp(), proc)
 		if err != nil {
@@ -84,6 +99,13 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		if bat.IsEmpty() {
 			continue
 		}
+
+		trace.GetService().TxnRead(
+			proc.TxnOperator.Txn().ID,
+			proc.TxnOperator.Txn().SnapshotTS,
+			arg.TableID,
+			arg.Attrs,
+			bat)
 
 		bat.Cnt = 1
 		anal.S3IOByte(bat)
