@@ -253,6 +253,9 @@ import (
     timeSliding *tree.Sliding
     timeFill *tree.Fill
     fillMode tree.FillMode
+
+    snapshotObject tree.ObejectInfo
+
 }
 
 %token LEX_ERROR
@@ -517,6 +520,7 @@ import (
 %type <statement> loop_stmt iterate_stmt leave_stmt repeat_stmt while_stmt
 %type <statement> create_publication_stmt drop_publication_stmt alter_publication_stmt show_publications_stmt show_subscriptions_stmt
 %type <statement> create_stage_stmt drop_stage_stmt alter_stage_stmt
+%type <statement> create_snapshot_stmt
 %type <str> urlparams
 %type <str> comment_opt view_list_opt view_opt security_opt view_tail check_type
 %type <subscriptionOption> subcription_opt
@@ -754,6 +758,7 @@ import (
 %type <stageCredentials> stage_credentials_opt
 %type <userIdentified> user_identified user_identified_opt
 %type <accountRole> default_role_opt
+%type <snapshotObject> snapshot_object_opt
 
 %type <indexHintType> index_hint_type
 %type <indexHintScope> index_hint_scope
@@ -893,7 +898,7 @@ normal_stmt:
         $$ = $1
     }
 |   kill_stmt
-|   backup_stmt
+|   backup_stmt   
 
 backup_stmt:
     BACKUP STRING FILESYSTEM STRING PARALLELISM STRING
@@ -913,6 +918,39 @@ backup_stmt:
         	    Option : $5,
         	}
     }
+
+create_snapshot_stmt:
+    CREATE SNAPSHOT not_exists_opt ident FOR snapshot_object_opt
+    {
+        $$ = &tree.CreateSnapShot{
+            IfNotExists: $3,
+            Name: tree.Identifier($4.Compare()),
+            Obeject: $6,
+        }
+    }
+
+snapshot_object_opt:
+    CLUSTER
+    {
+        spLevel := tree.SnapshotLevelType{
+            Level: tree.SNAPSHOTLEVELCLUSTER,
+        }
+        $$ = tree.ObejectInfo{
+            SLevel: spLevel,
+            ObjName: "",
+        }
+    }
+|    ACCOUNT ident
+    {
+        spLevel := tree.SnapshotLevelType{
+            Level: tree.SNAPSHOTLEVELACCOUNT,
+        }
+        $$ = tree.ObejectInfo{
+            SLevel: spLevel,
+            ObjName: tree.Identifier($2.Compare()),
+        }
+    }
+
 
 kill_stmt:
     KILL kill_opt INTEGRAL statement_id_opt
@@ -5469,6 +5507,7 @@ create_stmt:
 |   create_account_stmt
 |   create_publication_stmt
 |   create_stage_stmt
+|   create_snapshot_stmt
 
 create_ddl_stmt:
     create_table_stmt

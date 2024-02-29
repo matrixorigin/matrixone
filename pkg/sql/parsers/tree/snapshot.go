@@ -14,7 +14,9 @@
 
 package tree
 
-import "github.com/matrixorigin/matrixone/pkg/common/reuse"
+import (
+	"github.com/matrixorigin/matrixone/pkg/common/reuse"
+)
 
 func init() {
 	reuse.CreatePool[DropSnapShot](
@@ -33,62 +35,55 @@ const (
 	SNAPSHOTLEVELTABLE
 )
 
+func (s SnapshotLevel) String() string {
+	switch s {
+	case SNAPSHOTLEVELCLUSTER:
+		return "cluster"
+	case SNAPSHOTLEVELACCOUNT:
+		return "account"
+	case SNAPSHOTLEVELDATABASE:
+		return "database"
+	case SNAPSHOTLEVELTABLE:
+		return "table"
+	}
+	return "unknown"
+}
+
 type SnapshotLevelType struct {
 	Level SnapshotLevel
 }
 
 func (node *SnapshotLevelType) Format(ctx *FmtCtx) {
-	switch node.Level {
-	case SNAPSHOTLEVELCLUSTER:
-		ctx.WriteString("cluster")
-	case SNAPSHOTLEVELACCOUNT:
-		ctx.WriteString("account")
-	case SNAPSHOTLEVELDATABASE:
-		ctx.WriteString("database")
-	case SNAPSHOTLEVELTABLE:
-		ctx.WriteString("table")
-	}
-}
-
-type AccountOption struct {
-	HasActOpt   bool
-	AccountName Identifier
+	ctx.WriteString(node.Level.String())
 }
 
 type ObejectInfo struct {
-	sLevel  SnapshotLevelType // snapshot level
-	objName Identifier        // object name
+	SLevel  SnapshotLevelType // snapshot level
+	ObjName Identifier        // object name
 }
 
 func (node *ObejectInfo) Format(ctx *FmtCtx) {
-	node.sLevel.Format(ctx)
+	node.SLevel.Format(ctx)
 	ctx.WriteString(" ")
-	node.objName.Format(ctx)
+	node.ObjName.Format(ctx)
 }
 
 type CreateSnapShot struct {
 	statementImpl
 
 	IfNotExists bool
-	sName       Identifier // snapshot name
-	obejectInfo ObejectInfo
-	accountOpt  AccountOption // account option
+	Name        Identifier // snapshot name
+	Obeject     ObejectInfo
 }
 
 func (node *CreateSnapShot) Format(ctx *FmtCtx) {
 	ctx.WriteString("create snapshot ")
-
 	if node.IfNotExists {
 		ctx.WriteString("if not exists ")
 	}
-
-	node.sName.Format(ctx)
-	ctx.WriteString(" on ")
-	node.obejectInfo.Format(ctx)
-	if node.accountOpt.HasActOpt {
-		ctx.WriteString(" for ")
-		node.accountOpt.AccountName.Format(ctx)
-	}
+	node.Name.Format(ctx)
+	ctx.WriteString(" for ")
+	node.Obeject.Format(ctx)
 }
 
 func (node *CreateSnapShot) GetStatementType() string { return "Create Snapshot" }
@@ -98,9 +93,8 @@ func (node *CreateSnapShot) GetQueryType() string { return QueryTypeOth }
 type DropSnapShot struct {
 	statementImpl
 
-	IfExists   bool
-	sName      Identifier    // snapshot name
-	accountOpt AccountOption // account option
+	IfExists bool
+	sName    string // snapshot name
 }
 
 func (node *DropSnapShot) Free() { reuse.Free[DropSnapShot](node, nil) }
@@ -109,11 +103,10 @@ func (node *DropSnapShot) reset() { *node = DropSnapShot{} }
 
 func (node DropSnapShot) TypeName() string { return "tree.DropSnapShot" }
 
-func NewDropSnapShot(ifExists bool, sName Identifier, accountOpt AccountOption) *DropSnapShot {
+func NewDropSnapShot(ifExists bool, sName string) *DropSnapShot {
 	drop := reuse.Alloc[DropSnapShot](nil)
 	drop.IfExists = ifExists
 	drop.sName = sName
-	drop.accountOpt = accountOpt
 	return drop
 }
 
@@ -124,11 +117,7 @@ func (node *DropSnapShot) Format(ctx *FmtCtx) {
 		ctx.WriteString("if exists ")
 	}
 
-	node.sName.Format(ctx)
-	if node.accountOpt.HasActOpt {
-		ctx.WriteString(" for ")
-		node.accountOpt.AccountName.Format(ctx)
-	}
+	ctx.WriteString(node.sName)
 }
 
 func (node *DropSnapShot) GetStatementType() string { return "Drop Snapshot" }

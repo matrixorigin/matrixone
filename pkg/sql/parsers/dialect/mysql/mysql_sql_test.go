@@ -2389,6 +2389,14 @@ var (
 			output: "create stage my_ext_stage1 url='s3://load/files/' crentiasl={'AWS_KEY_ID'='1a2b3c','AWS_SECRET_KEY'='4x5y6z'} enabled",
 		},
 		{
+			input:  "CREATE SNAPSHOT snapshot1 FOR CLUSTER",
+			output: "create snapshot snapshot1 for cluster ",
+		},
+		{
+			input:  "CREATE SNAPSHOT snapshot1 FOR ACCOUNT acc1",
+			output: "create snapshot snapshot1 for account acc1",
+		},
+		{
 			input:  "DROP STAGE my_ext_stage1",
 			output: "drop stage my_ext_stage1",
 		},
