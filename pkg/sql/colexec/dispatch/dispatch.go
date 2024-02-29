@@ -116,10 +116,6 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		return result, err
 	}
 
-	analy := proc.GetAnalyze(arg.info.Idx, arg.info.ParallelIdx, arg.info.ParallelMajor)
-	analy.Start()
-	defer analy.Stop()
-
 	bat := result.Batch
 
 	if result.Batch == nil {

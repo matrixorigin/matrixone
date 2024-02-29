@@ -2074,7 +2074,7 @@ var (
 		},
 		{
 			input:  "create table test (`col` varchar(255) DEFAULT b'0')",
-			output: "create table test (col varchar(255) default 0)",
+			output: "create table test (col varchar(255) default 0b0)",
 		},
 		{
 			input:  "select trim(a)",
@@ -2621,8 +2621,11 @@ var (
 			input:  "insert into t1 values(_binary 0x123)",
 			output: "insert into t1 values (123)",
 		}, {
-			input:  "backup '123' filesystem '/home/abc'",
-			output: "backup 123 filesystem /home/abc",
+			input:  "backup '123' filesystem '/home/abc' parallelism '1'",
+			output: "backup 123 filesystem /home/abc parallelism 1",
+		}, {
+			input:  "backup '125' filesystem '/tmp/backup' parallelism '1';",
+			output: "backup 125 filesystem /tmp/backup parallelism 1",
 		}, {
 			input:  "backup '123' s3option {\"bucket\"='dan-test1', \"filepath\"='ex_table_dan_gzip.gz',\"role_arn\"='arn:aws:iam::468413122987:role/dev-cross-s3', \"external_id\"='5404f91c_4e59_4898_85b3', \"compression\"='auto'}",
 			output: "backup 123 s3option {'bucket'='dan-test1', 'filepath'='ex_table_dan_gzip.gz', 'role_arn'='arn:aws:iam::468413122987:role/dev-cross-s3', 'external_id'='5404f91c_4e59_4898_85b3', 'compression'='auto'}",
@@ -2644,6 +2647,10 @@ var (
 		}, {
 			input:  "/*!50001 CREATE ALGORITHM=UNDEFINED *//*!50013 DEFINER=`root`@`%` SQL SECURITY DEFINER *//*!50001 VIEW `xab0100` AS (select `a`.`SYSUSERID` AS `sysuserid`,`a`.`USERID` AS `userid`,`a`.`USERNAME` AS `usernm`,`a`.`PWDHASH` AS `userpwd`,`a`.`USERTYPE` AS `usertype`,`a`.`EMPID` AS `empid`,`a`.`EMAIL` AS `email`,`a`.`TELO` AS `telo`,`a`.`TELH` AS `telh`,`a`.`MOBIL` AS `mobil`,(case `a`.`ACTIVED` when '1' then 'N' when '2' then 'Y' else 'Y' end) AS `useyn`,`a`.`ENABLEPWD` AS `enablepwd`,`a`.`ENABLEMMSG` AS `enablemmsg`,`a`.`FEECENTER` AS `feecenter`,left(concat(ifnull(`c`.`ORGID`,''),'|'),(char_length(concat(ifnull(`c`.`ORGID`,''),'|')) - 1)) AS `orgid`,left(concat(ifnull(`c`.`ORGNAME`,''),'|'),(char_length(concat(ifnull(`c`.`ORGNAME`,''),'|')) - 1)) AS `orgname`,ifnull(`a`.`ISPLANNER`,'') AS `isplanner`,ifnull(`a`.`ISWHEMPLOYEE`,'') AS `iswhemployee`,ifnull(`a`.`ISBUYER`,'') AS `isbuyer`,ifnull(`a`.`ISQCEMPLOYEE`,'') AS `isqceemployee`,ifnull(`a`.`ISSALEEMPLOYEE`,'') AS `issaleemployee`,`a`.`SEX` AS `sex`,ifnull(`c`.`ENTID`,'3') AS `ORGANIZATION_ID`,ifnull(`a`.`NOTICEUSER`,'') AS `NOTICEUSER` from ((`kaf_cpcuser` `a` left join `kaf_cpcorguser` `b` on((`a`.`SYSUSERID` = `b`.`SYSUSERID`))) left join `kaf_cpcorg` `c` on((`b`.`ORGID` = `c`.`ORGID`))) order by `a`.`SYSUSERID`,`a`.`USERID`,`a`.`USERNAME`,`a`.`USERPASS`,`a`.`USERTYPE`,`a`.`EMPID`,`a`.`EMAIL`,`a`.`TELO`,`a`.`TELH`,`a`.`MOBIL`,`a`.`ACTIVED`,`a`.`ENABLEPWD`,`a`.`ENABLEMMSG`,`a`.`FEECENTER`,`a`.`ISPLANNER`,`a`.`ISWHEMPLOYEE`,`a`.`ISBUYER`,`a`.`ISQCEMPLOYEE`,`a`.`ISSALEEMPLOYEE`,`a`.`SEX`,`c`.`ENTID`) */;",
 			output: "create view xab0100 as (select a.sysuserid as sysuserid, a.userid as userid, a.username as usernm, a.pwdhash as userpwd, a.usertype as usertype, a.empid as empid, a.email as email, a.telo as telo, a.telh as telh, a.mobil as mobil, (case a.actived when 1 then N when 2 then Y else Y end) as useyn, a.enablepwd as enablepwd, a.enablemmsg as enablemmsg, a.feecenter as feecenter, left(concat(ifnull(c.orgid, ), |), (char_length(concat(ifnull(c.orgid, ), |)) - 1)) as orgid, left(concat(ifnull(c.orgname, ), |), (char_length(concat(ifnull(c.orgname, ), |)) - 1)) as orgname, ifnull(a.isplanner, ) as isplanner, ifnull(a.iswhemployee, ) as iswhemployee, ifnull(a.isbuyer, ) as isbuyer, ifnull(a.isqcemployee, ) as isqceemployee, ifnull(a.issaleemployee, ) as issaleemployee, a.sex as sex, ifnull(c.entid, 3) as ORGANIZATION_ID, ifnull(a.noticeuser, ) as NOTICEUSER from kaf_cpcuser as a left join kaf_cpcorguser as b on ((a.sysuserid = b.sysuserid)) left join kaf_cpcorg as c on ((b.orgid = c.orgid)) order by a.sysuserid, a.userid, a.username, a.userpass, a.usertype, a.empid, a.email, a.telo, a.telh, a.mobil, a.actived, a.enablepwd, a.enablemmsg, a.feecenter, a.isplanner, a.iswhemployee, a.isbuyer, a.isqcemployee, a.issaleemployee, a.sex, c.entid)",
+		},
+		{
+			input:  "CREATE TABLE `ecbase_push_log` (`id` bigint NOT NULL AUTO_INCREMENT COMMENT '主键',`create_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间') ENGINE=InnoDB AUTO_INCREMENT=654 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='推送记录表'/*!50500 PARTITION BY RANGE  COLUMNS(create_time)(PARTITION p20240115 VALUES LESS THAN ('2024-01-15 00:00:00') ENGINE = InnoDB,PARTITION p20240116 VALUES LESS THAN ('2024-01-16 00:00:00') ENGINE = InnoDB,PARTITION p20240117 VALUES LESS THAN ('2024-01-17 00:00:00') ENGINE = InnoDB,PARTITION p20240118 VALUES LESS THAN ('2024-01-18 00:00:00') ENGINE = InnoDB,PARTITION p20240119 VALUES LESS THAN ('2024-01-19 00:00:00') ENGINE = InnoDB,PARTITION p20240120 VALUES LESS THAN ('2024-01-20 00:00:00') ENGINE = InnoDB,PARTITION p20240121 VALUES LESS THAN ('2024-01-21 00:00:00') ENGINE = InnoDB,PARTITION p20240122 VALUES LESS THAN ('2024-01-22 00:00:00') ENGINE = InnoDB,PARTITION p20240123 VALUES LESS THAN ('2024-01-23 00:00:00') ENGINE = InnoDB,PARTITION p20240124 VALUES LESS THAN ('2024-01-24 00:00:00') ENGINE = InnoDB,PARTITION p20240125 VALUES LESS THAN ('2024-01-25 00:00:00') ENGINE = InnoDB) */;",
+			output: "create table ecbase_push_log (id bigint not null auto_increment comment 主键, create_time datetime not null default current_timestamp() comment 创建时间) engine = innodb auto_increment = 654 charset = utf8mb4 Collate = utf8mb4_general_ci comment = 推送记录表 partition by range columns (create_time) (partition p20240115 values less than (2024-01-15 00:00:00) engine = innodb, partition p20240116 values less than (2024-01-16 00:00:00) engine = innodb, partition p20240117 values less than (2024-01-17 00:00:00) engine = innodb, partition p20240118 values less than (2024-01-18 00:00:00) engine = innodb, partition p20240119 values less than (2024-01-19 00:00:00) engine = innodb, partition p20240120 values less than (2024-01-20 00:00:00) engine = innodb, partition p20240121 values less than (2024-01-21 00:00:00) engine = innodb, partition p20240122 values less than (2024-01-22 00:00:00) engine = innodb, partition p20240123 values less than (2024-01-23 00:00:00) engine = innodb, partition p20240124 values less than (2024-01-24 00:00:00) engine = innodb, partition p20240125 values less than (2024-01-25 00:00:00) engine = innodb)",
 		},
 		{
 			input:  "show connectors",

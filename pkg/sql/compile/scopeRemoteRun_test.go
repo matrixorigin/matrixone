@@ -16,11 +16,12 @@ package compile
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"hash/crc32"
 	"testing"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 
 	"github.com/golang/mock/gomock"
 	"github.com/google/uuid"
@@ -110,7 +111,7 @@ func Test_CnServerMessageHandler(t *testing.T) {
 	procInfoData, err := procInfo.Marshal()
 	require.Nil(t, err)
 
-	id, _ := uuid.NewUUID()
+	id, _ := uuid.NewV7()
 	pipe := &pipeline.Pipeline{
 		UuidsToRegIdx: []*pipeline.UuidToRegIdx{
 			{Idx: 1, Uuid: id[:]},
@@ -331,7 +332,7 @@ func Test_refactorScope(t *testing.T) {
 }
 
 func Test_convertPipelineUuid(t *testing.T) {
-	id, _ := uuid.NewUUID()
+	id, _ := uuid.NewV7()
 	p := &pipeline.Pipeline{
 		UuidsToRegIdx: []*pipeline.UuidToRegIdx{
 			{Idx: 1, Uuid: id[:]},
@@ -345,7 +346,7 @@ func Test_convertPipelineUuid(t *testing.T) {
 }
 
 func Test_convertScopeRemoteReceivInfo(t *testing.T) {
-	id, _ := uuid.NewUUID()
+	id, _ := uuid.NewV7()
 	s := &Scope{
 		RemoteReceivRegInfos: []RemoteReceivRegInfo{
 			{Idx: 1, Uuid: id},

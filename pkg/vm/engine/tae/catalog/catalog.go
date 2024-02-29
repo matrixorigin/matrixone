@@ -686,6 +686,10 @@ func (catalog *Catalog) replayObjectByBlock(
 	}
 	// delete
 	if delete {
+		if obj.HasDropCommitted() {
+			// logutil.Infof("skip deltaloc for entry %v", ObjectID.String())
+			return
+		}
 		node := obj.SearchNode(
 			&MVCCNode[*ObjectMVCCNode]{
 				TxnMVCCNode: &txnbase.TxnMVCCNode{

@@ -321,6 +321,35 @@ func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tab
 	if txn == nil {
 		return "", "", nil, moerr.NewTxnClosed(ctx, op.Txn().ID)
 	}
+	switch tableId {
+	case catalog.MO_DATABASE_ID:
+		db := &txnDatabase{
+			txn:          txn,
+			databaseId:   catalog.MO_CATALOG_ID,
+			databaseName: catalog.MO_CATALOG,
+		}
+		defs := catalog.MoDatabaseTableDefs
+		return catalog.MO_CATALOG, catalog.MO_DATABASE,
+			db.openSysTable(nil, tableKey{}, tableId, catalog.MO_DATABASE, defs), nil
+	case catalog.MO_TABLES_ID:
+		db := &txnDatabase{
+			txn:          txn,
+			databaseId:   catalog.MO_CATALOG_ID,
+			databaseName: catalog.MO_CATALOG,
+		}
+		defs := catalog.MoTablesTableDefs
+		return catalog.MO_CATALOG, catalog.MO_TABLES,
+			db.openSysTable(nil, tableKey{}, tableId, catalog.MO_TABLES, defs), nil
+	case catalog.MO_COLUMNS_ID:
+		db := &txnDatabase{
+			txn:          txn,
+			databaseId:   catalog.MO_CATALOG_ID,
+			databaseName: catalog.MO_CATALOG,
+		}
+		defs := catalog.MoColumnsTableDefs
+		return catalog.MO_CATALOG, catalog.MO_COLUMNS,
+			db.openSysTable(nil, tableKey{}, tableId, catalog.MO_COLUMNS, defs), nil
+	}
 	accountId, err := defines.GetAccountId(ctx)
 	if err != nil {
 		return "", "", nil, err

@@ -26,11 +26,20 @@ import (
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
 
+const (
+	LoadParallelMinSize = 1 << 20
+)
+
 func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan, error) {
 	start := time.Now()
 	defer func() {
 		v2.TxnStatementBuildLoadHistogram.Observe(time.Since(start).Seconds())
 	}()
+	tblName := string(stmt.Table.ObjectName)
+	tblInfo, err := getDmlTableInfo(ctx, tree.TableExprs{stmt.Table}, nil, nil, "insert")
+	if err != nil {
+		return nil, err
+	}
 	if stmt.Param.Tail.Lines != nil && stmt.Param.Tail.Lines.StartingBy != "" {
 		return nil, moerr.NewBadConfig(ctx.GetContext(), "load operation do not support StartingBy field.")
 	}
@@ -44,11 +53,6 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 	}
 
 	if err := InitNullMap(stmt.Param, ctx); err != nil {
-		return nil, err
-	}
-	tblName := string(stmt.Table.ObjectName)
-	tblInfo, err := getDmlTableInfo(ctx, tree.TableExprs{stmt.Table}, nil, nil, "insert")
-	if err != nil {
 		return nil, err
 	}
 	tableDef := tblInfo.tableDefs[0]
@@ -75,6 +79,9 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 		return nil, err
 	}
 
+	if stmt.Param.FileSize < LoadParallelMinSize {
+		stmt.Param.Parallel = false
+	}
 	stmt.Param.Tail.ColumnList = nil
 	stmt.Param.LoadFile = true
 	if stmt.Param.ScanType != tree.INLINE {
@@ -125,6 +132,9 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 	if err != nil {
 		return nil, err
 	}
+	if stmt.Param.FileSize < LoadParallelMinSize {
+		stmt.Param.Parallel = false
+	}
 	if stmt.Param.Parallel && (getCompressType(stmt.Param, fileName) != tree.NOCOMPRESS || stmt.Local) {
 		projectNode.ProjectList = makeCastExpr(stmt, fileName, tableDef)
 	}
@@ -152,6 +162,19 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 	if err != nil {
 		return nil, err
 	}
+	// use shuffle for load if parallel and no compress
+	if stmt.Param.Parallel && (getCompressType(stmt.Param, fileName) == tree.NOCOMPRESS) {
+		for i := range builder.qry.Nodes {
+			node := builder.qry.Nodes[i]
+			if node.NodeType == plan.Node_INSERT {
+				if node.Stats.HashmapStats == nil {
+					node.Stats.HashmapStats = &plan.HashMapStats{}
+				}
+				node.Stats.HashmapStats.Shuffle = true
+			}
+		}
+	}
+
 	query := builder.qry
 	reduceSinkSinkScanNodes(query)
 	query.StmtType = plan.Query_INSERT
@@ -192,16 +215,14 @@ func checkFileExist(param *tree.ExternParam, ctx CompilerContext) (string, error
 	if len(param.Filepath) == 0 {
 		return "", nil
 	}
-
-	fileList, _, err := ReadDir(param)
-	if err != nil {
+	if err := StatFile(param); err != nil {
+		if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
+			return "", moerr.NewInvalidInput(ctx.GetContext(), "the file does not exist in load flow")
+		}
 		return "", err
 	}
-	if len(fileList) == 0 {
-		return "", moerr.NewInvalidInput(param.Ctx, "the file does not exist in load flow")
-	}
-	param.Ctx = nil
-	return fileList[0], nil
+	param.Init = true
+	return param.Filepath, nil
 }
 
 func getProjectNode(stmt *tree.Load, ctx CompilerContext, node *plan.Node, tableDef *TableDef) (bool, error) {

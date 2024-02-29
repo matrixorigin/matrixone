@@ -287,9 +287,10 @@ func NewCluster(ctx context.Context, t *testing.T, opt Options) (Cluster, error)
 	})
 	opt.validate()
 
+	uid, _ := uuid.NewV7()
 	c := &testCluster{
 		t:       t,
-		testID:  uuid.New().String(),
+		testID:  uid.String(),
 		opt:     opt,
 		stopper: stopper.NewStopper("test-cluster"),
 	}

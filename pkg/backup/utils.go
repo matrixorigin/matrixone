@@ -16,10 +16,12 @@ package backup
 
 import (
 	"context"
+	"strconv"
+	"strings"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/version"
-	"strings"
 )
 
 func buildInfo() string {
@@ -76,7 +78,22 @@ func getS3Config(ctx context.Context, option []string) (*s3Config, error) {
 			conf.jsonData = jsondata
 			conf.format = tree.JSONLINE
 		case "is_minio":
-			conf.isMinio = true
+			isMinioData := strings.ToLower(option[i+1])
+			if isMinioData != "true" && isMinioData != "false" {
+				return nil, moerr.NewBadConfig(ctx, "the is_minio '%s' is not supported", isMinioData)
+			}
+			if isMinioData == "true" {
+				conf.isMinio = true
+			} else {
+				conf.isMinio = false
+			}
+		case "parallelism":
+			parallelismData := strings.ToLower(option[i+1])
+			parall, err := strconv.ParseUint(parallelismData, 10, 16)
+			if err != nil {
+				return nil, moerr.NewBadConfig(ctx, "the parallelism '%s' is invalid", parallelismData)
+			}
+			conf.parallelism = uint16(parall)
 		default:
 			return nil, moerr.NewBadConfig(ctx, "the keyword '%s' is not support", strings.ToLower(option[i]))
 		}

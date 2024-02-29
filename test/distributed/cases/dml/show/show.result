@@ -182,15 +182,15 @@ Variable_name    Value
 select * from t1;
 a    b
 1    1
-show collation;
-Collation    Charset    Id    Compiled    Sortlen
-utf8mb4_bin    utf8mb4    46    Yes    1
-show collation like '%';
-Collation    Charset    Id    Compiled    Sortlen
-utf8mb4_bin    utf8mb4    46    Yes    1
-show collation where 'Charset'='utf8mb4';
-Collation    Charset    Id    Compiled    Sortlen
-utf8mb4_bin    utf8mb4    46    Yes    1
+show collation like 'utf8mb4_general_ci';
+Collation    Charset    Id    Default    Compiled    Sortlen    Pad_attribute
+utf8mb4_general_ci    utf8mb4    45        Yes    1    PAD SPACE
+show collation like 'utf8mb4_general_ci%';
+Collation    Charset    Id    Default    Compiled    Sortlen    Pad_attribute
+utf8mb4_general_ci    utf8mb4    45        Yes    1    PAD SPACE
+show collation where Charset='utf8mb4'and Collation ='utf8mb4_general_ci';
+Collation    Charset    Id    Default    Compiled    Sortlen    Pad_attribute
+utf8mb4_general_ci    utf8mb4    45        Yes    1    PAD SPACE
 show variables like 'sql_safe_updates';
 Variable_name    Value
 sql_safe_updates    0
@@ -319,12 +319,12 @@ va    create view va as select a from a;
 show create view va;
 View    Create View
 va    create view va as select a from a;
-show collation;
-Collation    Charset    Id    Compiled    Sortlen
-utf8mb4_bin    utf8mb4    46    Yes    1
-show collation like '%';
-Collation    Charset    Id    Compiled    Sortlen
-utf8mb4_bin    utf8mb4    46    Yes    1
+show collation like 'utf8mb4_general_ci';
+Collation    Charset    Id    Default    Compiled    Sortlen    Pad_attribute
+utf8mb4_general_ci    utf8mb4    45        Yes    1    PAD SPACE
+show collation like 'utf8mb4_general_ci%';
+Collation    Charset    Id    Default    Compiled    Sortlen    Pad_attribute
+utf8mb4_general_ci    utf8mb4    45        Yes    1    PAD SPACE
 rollback;
 drop database if exists showDb;
 DROP DATABASE IF EXISTS test;

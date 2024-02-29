@@ -41,12 +41,12 @@ show tables;
 Tables_in_test_db
 test_table
 test_view
-show collation;
-Collation    Charset    Id    Compiled    Sortlen
-utf8mb4_bin    utf8mb4    46    Yes    1
-show collation like '%';
-Collation    Charset    Id    Compiled    Sortlen
-utf8mb4_bin    utf8mb4    46    Yes    1
+show collation like 'utf8mb4_general_ci';
+Collation    Charset    Id    Default    Compiled    Sortlen    Pad_attribute
+utf8mb4_general_ci    utf8mb4    45        Yes    1    PAD SPACE
+show collation like 'utf8mb4_general_ci%';
+Collation    Charset    Id    Default    Compiled    Sortlen    Pad_attribute
+utf8mb4_general_ci    utf8mb4    45        Yes    1    PAD SPACE
 show index from test_table;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
 values row(1,1), row(2,2), row(3,3) order by column_0 desc;
@@ -57,6 +57,9 @@ column_0    column_1
 WITH cte1 AS (SELECT 1),cte2 AS (SELECT 2) SELECT * FROM cte1 join cte2;
 1    2
 1    2
+select * from unnest('{"a":1}') as f;
+col    seq    key    path    index    value    this
+UNNEST_DEFAULT    0    a    $.a    null    1    {"a": 1}
 insert into test_table values (1,'a'),(2,'b'),(3,'c');
 update test_table set col2='xxx' where col1=1;
 delete from test_table where col1=3;
@@ -83,15 +86,15 @@ drop index index_table_2 on table_2;
 drop view view_2;
 drop table table_2;
 drop database db2;
-select * from unnest('{"a":1}') as f;
-col    seq    key    path    index    value    this
-UNNEST_DEFAULT    0    a    $.a    null    1    {"a": 1}
 prepare s1 from select * from test_table where col1=?;
 set @a=2;
 execute s1 using @a;
 col1    col2
 2    b
 deallocate prepare s1;
+select sleep(15);
+sleep(15)
+0
 drop table if exists test_01;
 create table test_01(a int, b varchar);
 show create table test_01;
@@ -100,6 +103,10 @@ test_01    CREATE TABLE `test_01` (\n`a` INT DEFAULT NULL,\n`b` VARCHAR(65535) D
 insert into test_01 values (1,'a');
 insert into test_01 values (2,'b');
 update test_01 set a=100 where b='b';
+select * from test_01;
+a    b
+1    a
+100    b
 select * from test_01;
 a    b
 1    a
@@ -155,7 +162,11 @@ column_0    column_1
 WITH cte1 AS (SELECT 1),cte2 AS (SELECT 2) SELECT * FROM cte1 join cte2;
 1    2
 1    2
+select * from unnest('{"a":1}') as f;
+col    seq    key    path    index    value    this
+UNNEST_DEFAULT    0    a    $.a    null    1    {"a": 1}
 insert into test_table values (1,'a'),(2,'b'),(3,'c');
+insert into test_table values (4,'d');
 create account test_account admin_name = 'test_name' identified by '111' open comment 'tenant_test';
 internal error: do not have privilege to execute the statement
 create role test_role;
@@ -189,9 +200,6 @@ drop view view_2;
 drop table table_2;
 drop database db2;
 internal error: CREATE/DROP of database is not supported in transactions
-select * from unnest('{"a":1}') as f;
-col    seq    key    path    index    value    this
-UNNEST_DEFAULT    0    a    $.a    null    1    {"a": 1}
 prepare s1 from select * from test_table where col1=?;
 set @a=2;
 execute s1 using @a;
@@ -206,12 +214,13 @@ sleep(1)
 select sleep(15);
 sleep(15)
 0
-select statement,query_type,sql_source_type from  system.statement_info where account="bvt_query_type" and sql_source_type="external_sql" and status != "Running" and statement not like '%mo_ctl%' and aggr_count <1 order by request_at desc limit 96;
+select statement,query_type,sql_source_type from  system.statement_info where account="bvt_query_type" and sql_source_type="external_sql" and status != "Running" and statement not like '%mo_ctl%' and aggr_count <1 order by request_at desc limit 104;
 statement    query_type    sql_source_type
 select sleep(1)    DQL    external_sql
 use system    Other    external_sql
 rollback    TCL    external_sql
 deallocate prepare s1    Other    external_sql
+execute s1 using @a // prepare s1 from select * from test_table where col1=? ; set @a=2    Other    external_sql
 set @a=2    Other    external_sql
 prepare s1 from select * from test_table where col1=?    Other    external_sql
 drop database db2    DDL    external_sql
@@ -253,11 +262,15 @@ use statement_query_type    Other    external_sql
 drop database test_db    DDL    external_sql
 drop table test_01    DDL    external_sql
 truncate table test_01    DDL    external_sql
+delete from test_01 where a=1    DML    external_sql
 explain select * from test_01    Other    external_sql
+update test_01 set a=100 where b='b'    DML    external_sql
 show create table test_01    Other    external_sql
 create table test_01(a int, b varchar)    DDL    external_sql
 drop table if exists test_01    DDL    external_sql
+select sleep(15)    DQL    external_sql
 deallocate prepare s1    Other    external_sql
+execute s1 using @a // prepare s1 from select * from test_table where col1=? ; set @a=2    Other    external_sql
 set @a=2    Other    external_sql
 prepare s1 from select * from test_table where col1=?    Other    external_sql
 drop database db2    DDL    external_sql
@@ -278,10 +291,13 @@ create database if not exists db1    DDL    external_sql
 create user user_name identified by '******'    DCL    external_sql
 create role test_role    DCL    external_sql
 create account test_account admin_name = 'test_name' identified by '******' open comment 'tenant_test'    DCL    external_sql
+delete from test_table where col1=3    DML    external_sql
+update test_table set col2='xxx' where col1=1    DML    external_sql
+insert into test_table values (1,'a'),(2,'b'),(3,'c')    DML    external_sql
 values row(1,1), row(2,2), row(3,3) order by column_0 desc    DQL    external_sql
 show index from test_table    Other    external_sql
-show collation like '%'    Other    external_sql
-show collation    Other    external_sql
+show collation like 'utf8mb4_general_ci%'    Other    external_sql
+show collation like 'utf8mb4_general_ci'    Other    external_sql
 show tables    Other    external_sql
 show privileges    Other    external_sql
 show profiles    Other    external_sql
@@ -342,12 +358,12 @@ Db    Name    Type    Definer    Modified    Created    Security_type    Comment
 Tables_in_test_db
 test_table
 test_view
-/* cloud_user */ show collation;
-Collation    Charset    Id    Compiled    Sortlen
-utf8mb4_bin    utf8mb4    46    Yes    1
-/* cloud_user */ show collation like '%';
-Collation    Charset    Id    Compiled    Sortlen
-utf8mb4_bin    utf8mb4    46    Yes    1
+/* cloud_user */ show collation like 'utf8mb4_general_ci';
+Collation    Charset    Id    Default    Compiled    Sortlen    Pad_attribute
+utf8mb4_general_ci    utf8mb4    45        Yes    1    PAD SPACE
+/* cloud_user */ show collation like 'utf8mb4_general_ci%';
+Collation    Charset    Id    Default    Compiled    Sortlen    Pad_attribute
+utf8mb4_general_ci    utf8mb4    45        Yes    1    PAD SPACE
 /* cloud_user */ show index from test_table;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
 /* cloud_user */ values row(1,1), row(2,2), row(3,3) order by column_0 desc;
@@ -412,8 +428,8 @@ Project
 /* cloud_user */ select sleep(1);
 sleep(1)
 0
-select sleep(15);
-sleep(15)
+select sleep(30);
+sleep(30)
 0
 /* cloud_user */ select statement,query_type,sql_source_type from  system.statement_info where user="dump" and sql_source_type="cloud_user_sql" and status != "Running" and statement not like '%mo_ctl%' order by request_at desc limit 67;
 statement    query_type    sql_source_type
@@ -460,8 +476,8 @@ insert into test_table values (1,'a'),(2,'b'),(3,'c')    DML    cloud_user_sql
 WITH cte1 AS (SELECT 1),cte2 AS (SELECT 2) SELECT * FROM cte1 join cte2    DQL    cloud_user_sql
 values row(1,1), row(2,2), row(3,3) order by column_0 desc    DQL    cloud_user_sql
 show index from test_table    Other    cloud_user_sql
-show collation like '%'    Other    cloud_user_sql
-show collation    Other    cloud_user_sql
+show collation like 'utf8mb4_general_ci%'    Other    cloud_user_sql
+show collation like 'utf8mb4_general_ci'    Other    cloud_user_sql
 show tables    Other    cloud_user_sql
 show privileges    Other    cloud_user_sql
 show profiles    Other    cloud_user_sql
@@ -522,12 +538,12 @@ Db    Name    Type    Definer    Modified    Created    Security_type    Comment
 Tables_in_test_db
 test_table
 test_view
-/* cloud_nonuser */ show collation;
-Collation    Charset    Id    Compiled    Sortlen
-utf8mb4_bin    utf8mb4    46    Yes    1
-/* cloud_nonuser */ show collation like '%';
-Collation    Charset    Id    Compiled    Sortlen
-utf8mb4_bin    utf8mb4    46    Yes    1
+/* cloud_nonuser */ show collation like 'utf8mb4_general_ci';
+Collation    Charset    Id    Default    Compiled    Sortlen    Pad_attribute
+utf8mb4_general_ci    utf8mb4    45        Yes    1    PAD SPACE
+/* cloud_nonuser */ show collation like 'utf8mb4_general_ci%';
+Collation    Charset    Id    Default    Compiled    Sortlen    Pad_attribute
+utf8mb4_general_ci    utf8mb4    45        Yes    1    PAD SPACE
 /* cloud_nonuser */ show index from test_table;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
 /* cloud_nonuser */ values row(1,1), row(2,2), row(3,3) order by column_0 desc;
@@ -541,6 +557,9 @@ column_0    column_1
 /* cloud_nonuser */ insert into test_table values (1,'a'),(2,'b'),(3,'c');
 /* cloud_nonuser */ update test_table set col2='xxx' where col1=1;
 /* cloud_nonuser */ delete from test_table where col1=3;
+/* cloud_nonuser */ select sleep(5);
+sleep(5)
+0
 /* cloud_nonuser */ create account test_account admin_name = 'test_name' identified by '111' open comment 'tenant_test';
 /* cloud_nonuser */ create role test_role;
 /* cloud_nonuser */ create user user_name identified by 'password';
@@ -559,9 +578,6 @@ column_0    column_1
 /* cloud_nonuser */ drop view view_2;
 /* cloud_nonuser */ drop table table_2;
 /* cloud_nonuser */ drop database db2;
-/* cloud_nonuser */ select * from unnest('{"a":1}') as f;
-col    seq    key    path    index    value    this
-UNNEST_DEFAULT    0    a    $.a    null    1    {"a": 1}
 /* cloud_nonuser */ prepare s1 from select * from test_table where col1=?;
 /* cloud_nonuser */ set @a=2;
 /* cloud_nonuser */ execute s1 using @a;
@@ -576,6 +592,9 @@ test_01    CREATE TABLE `test_01` (\n`a` INT DEFAULT NULL,\n`b` VARCHAR(65535) D
 /* cloud_nonuser */ insert into test_01 values (1,'a');
 /* cloud_nonuser */ insert into test_01 values (2,'b');
 /* cloud_nonuser */ update test_01 set a=100 where b='b';
+/* cloud_nonuser */ select * from unnest('{"a":1}') as f;
+col    seq    key    path    index    value    this
+UNNEST_DEFAULT    0    a    $.a    null    1    {"a": 1}
 /* cloud_nonuser */ select * from test_01;
 a    b
 1    a
@@ -589,24 +608,27 @@ Project
 /* cloud_nonuser */ drop table test_01;
 /* cloud_nonuser */ use system;
 /* cloud_nonuser */ drop database test_db;
-/* cloud_nonuser */ select sleep(1);
-sleep(1)
+/* cloud_nonuser */ select sleep(2);
+sleep(2)
 0
-select sleep(15);
-sleep(15)
+select sleep(30);
+sleep(30)
 0
-/* cloud_nonuser */ select statement,query_type,sql_source_type from  system.statement_info where user="dump" and sql_source_type="cloud_nonuser_sql" and status != "Running" and statement not like '%mo_ctl%' and aggr_count = 0 order by request_at desc limit 67;
+/* cloud_nonuser */ select statement,query_type,sql_source_type from  system.statement_info where user="dump" and sql_source_type="cloud_nonuser_sql" and status != "Running" and statement not like '%mo_ctl%' and aggr_count = 0 order by request_at desc limit 68;
 statement    query_type    sql_source_type
-select sleep(1)    DQL    cloud_nonuser_sql
+select sleep(2)    DQL    cloud_nonuser_sql
 drop database test_db    DDL    cloud_nonuser_sql
 use system    Other    cloud_nonuser_sql
 drop table test_01    DDL    cloud_nonuser_sql
 truncate table test_01    DDL    cloud_nonuser_sql
+delete from test_01 where a=1    DML    cloud_nonuser_sql
 explain select * from test_01    Other    cloud_nonuser_sql
+update test_01 set a=100 where b='b'    DML    cloud_nonuser_sql
 show create table test_01    Other    cloud_nonuser_sql
 create table test_01(a int, b varchar)    DDL    cloud_nonuser_sql
 drop table if exists test_01    DDL    cloud_nonuser_sql
 deallocate prepare s1    Other    cloud_nonuser_sql
+execute s1 using @a // prepare s1 from select * from test_table where col1=? ; set @a=2    Other    cloud_nonuser_sql
 set @a=2    Other    cloud_nonuser_sql
 prepare s1 from select * from test_table where col1=?    Other    cloud_nonuser_sql
 drop database db2    DDL    cloud_nonuser_sql
@@ -627,10 +649,15 @@ create database if not exists db1    DDL    cloud_nonuser_sql
 create user user_name identified by '******'    DCL    cloud_nonuser_sql
 create role test_role    DCL    cloud_nonuser_sql
 create account test_account admin_name = 'test_name' identified by '******' open comment 'tenant_test'    DCL    cloud_nonuser_sql
+select sleep(5)    DQL    cloud_nonuser_sql
+delete from test_table where col1=3    DML    cloud_nonuser_sql
+update test_table set col2='xxx' where col1=1    DML    cloud_nonuser_sql
+insert into test_table values (1,'a'),(2,'b'),(3,'c')    DML    cloud_nonuser_sql
+WITH cte1 AS (SELECT 1),cte2 AS (SELECT 2) SELECT * FROM cte1 join cte2    DQL    cloud_nonuser_sql
 values row(1,1), row(2,2), row(3,3) order by column_0 desc    DQL    cloud_nonuser_sql
 show index from test_table    Other    cloud_nonuser_sql
-show collation like '%'    Other    cloud_nonuser_sql
-show collation    Other    cloud_nonuser_sql
+show collation like 'utf8mb4_general_ci%'    Other    cloud_nonuser_sql
+show collation like 'utf8mb4_general_ci'    Other    cloud_nonuser_sql
 show tables    Other    cloud_nonuser_sql
 show privileges    Other    cloud_nonuser_sql
 show profiles    Other    cloud_nonuser_sql
@@ -660,12 +687,12 @@ create view test_view as select * from test_table;
 show create view test_view;
 View    Create View
 test_view    create view test_view as select * from test_table;
-show collation;
-Collation    Charset    Id    Compiled    Sortlen
-utf8mb4_bin    utf8mb4    46    Yes    1
-show collation like '%';
-Collation    Charset    Id    Compiled    Sortlen
-utf8mb4_bin    utf8mb4    46    Yes    1
+show collation like 'utf8mb4_general_ci';
+Collation    Charset    Id    Default    Compiled    Sortlen    Pad_attribute
+utf8mb4_general_ci    utf8mb4    45        Yes    1    PAD SPACE
+show collation like 'utf8mb4_general_ci%';
+Collation    Charset    Id    Default    Compiled    Sortlen    Pad_attribute
+utf8mb4_general_ci    utf8mb4    45        Yes    1    PAD SPACE
 load data infile '$resources/load_data/test.csv' into table test_table;
 insert into test_table values (1,'a'),(2,'b'),(3,'c');
 update test_table set col2='xxx' where col1=1;

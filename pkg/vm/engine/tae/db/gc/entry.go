@@ -43,6 +43,9 @@ func NewObjectEntry() *ObjectEntry {
 
 func (o *ObjectEntry) AddBlock(block common.ID) {
 	o.table.tid = block.TableID
+	if len(o.table.blocks) > 0 {
+		return
+	}
 	o.table.blocks = append(o.table.blocks, block)
 	o.Refs(1)
 }

@@ -21,21 +21,22 @@ import (
 	"strings"
 	"time"
 
-	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/ctl"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -132,7 +133,7 @@ func getSqlForTableStats(accountId int32) string {
 	return fmt.Sprintf(getTableStatsFormatV2, catalog.SystemPartitionRel, accountId)
 }
 
-func requestStorageUsage(ses *Session, accIds [][]int32) (resp any, err error) {
+func requestStorageUsage(ses *Session, accIds [][]int32) (resp any, tried bool, err error) {
 	whichTN := func(string) ([]uint64, error) { return nil, nil }
 	payload := func(tnShardID uint64, parameter string, proc *process.Process) ([]byte, error) {
 		req := db.StorageUsageReq{}
@@ -154,7 +155,7 @@ func requestStorageUsage(ses *Session, accIds [][]int32) (resp any, err error) {
 	var ctx context.Context
 	var txnOperator client.TxnOperator
 	if ctx, txnOperator, err = ses.txnHandler.GetTxn(); err != nil {
-		return nil, err
+		return nil, false, err
 	}
 
 	// create a new proc for `handler`
@@ -168,12 +169,77 @@ func requestStorageUsage(ses *Session, accIds [][]int32) (resp any, err error) {
 	handler := ctl.GetTNHandlerFunc(api.OpCode_OpStorageUsage, whichTN, payload, responseUnmarshaler)
 	result, err := handler(proc, "DN", "", ctl.MoCtlTNCmdSender)
 	if moerr.IsMoErrCode(err, moerr.ErrNotSupported) {
-		return nil, moerr.NewNotSupportedNoCtx("current tn version not supported `show accounts`")
-	} else if err != nil {
-		return nil, err
+		// try the previous RPC method
+		payload_V0 := func(tnShardID uint64, parameter string, proc *process.Process) ([]byte, error) { return nil, nil }
+		responseUnmarshaler_V0 := func(payload []byte) (interface{}, error) {
+			usage := &db.StorageUsageResp_V0{}
+			if err := usage.Unmarshal(payload); err != nil {
+				return nil, err
+			}
+			return usage, nil
+		}
+
+		tried = true
+		CmdMethod_StorageUsage := api.OpCode(14)
+		handler = ctl.GetTNHandlerFunc(CmdMethod_StorageUsage, whichTN, payload_V0, responseUnmarshaler_V0)
+		result, err = handler(proc, "DN", "", ctl.MoCtlTNCmdSender)
+
+		if moerr.IsMoErrCode(err, moerr.ErrNotSupported) {
+			return nil, tried, moerr.NewNotSupportedNoCtx("current tn version not supported `show accounts`")
+		}
 	}
 
-	return result.Data.([]any)[0], nil
+	if err != nil {
+		return nil, tried, err
+	}
+
+	return result.Data.([]any)[0], tried, nil
+}
+
+func handleStorageUsageResponse_V0(ctx context.Context, fs fileservice.FileService,
+	usage *db.StorageUsageResp_V0) (map[int32]uint64, error) {
+	result := make(map[int32]uint64, 0)
+	for idx := range usage.CkpEntries {
+		version := usage.CkpEntries[idx].Version
+		location := usage.CkpEntries[idx].Location
+
+		// storage usage was introduced after `CheckpointVersion9`
+		if version < logtail.CheckpointVersion9 {
+			// exist old version checkpoint which hasn't storage usage data in it,
+			// to avoid inaccurate info leading misunderstand, we chose to return empty result
+			logutil.Info("[storage usage]: found older ckp when handle storage usage response")
+			return map[int32]uint64{}, nil
+		}
+
+		ckpData, err := logtail.LoadSpecifiedCkpBatch(ctx, location, version, logtail.StorageUsageInsIDX, fs)
+		if err != nil {
+			return nil, err
+		}
+
+		storageUsageBat := ckpData.GetBatches()[logtail.StorageUsageInsIDX]
+		accIDVec := vector.MustFixedCol[uint64](
+			storageUsageBat.GetVectorByName(catalog.SystemColAttr_AccID).GetDownstreamVector(),
+		)
+		sizeVec := vector.MustFixedCol[uint64](
+			storageUsageBat.GetVectorByName(logtail.CheckpointMetaAttr_ObjectSize).GetDownstreamVector(),
+		)
+
+		size := uint64(0)
+		length := len(accIDVec)
+		for i := 0; i < length; i++ {
+			result[int32(accIDVec[i])] += sizeVec[i]
+			size += sizeVec[i]
+		}
+
+		ckpData.Close()
+	}
+
+	// [account_id, db_id, table_id, obj_id, table_total_size]
+	for _, info := range usage.BlockEntries {
+		result[int32(info.Info[0])] += info.Info[3]
+	}
+
+	return result, nil
 }
 
 func handleStorageUsageResponse(
@@ -232,7 +298,7 @@ func updateStorageUsageCache(accIds []int32, sizes []uint64) {
 			usage.Size += old.Size
 		}
 
-		cnUsageCache.Update(usage)
+		cnUsageCache.SetOrReplace(usage)
 	}
 }
 
@@ -249,20 +315,36 @@ func getAccountsStorageUsage(ctx context.Context, ses *Session, accIds [][]int32
 	}
 
 	// step 2: query to tn
-	response, err := requestStorageUsage(ses, accIds)
+	response, tried, err := requestStorageUsage(ses, accIds)
 	if err != nil {
 		return nil, err
 	}
 
-	usage, ok := response.(*db.StorageUsageResp)
-	if !ok || usage.Magic != logtail.StorageUsageMagic {
-		return nil, moerr.NewNotSupportedNoCtx("cn version newer than tn, retry later")
+	if tried {
+		usage, ok := response.(*db.StorageUsageResp_V0)
+		if !ok {
+			return nil, moerr.NewInternalErrorNoCtx("storage usage response decode failed, retry later")
+		}
+
+		fs, err := fileservice.Get[fileservice.FileService](ses.GetParameterUnit().FileService, defines.SharedFileServiceName)
+		if err != nil {
+			return nil, err
+		}
+
+		// step 3: handling these pulled data
+		return handleStorageUsageResponse_V0(ctx, fs, usage)
+
+	} else {
+		usage, ok := response.(*db.StorageUsageResp)
+		if !ok || usage.Magic != logtail.StorageUsageMagic {
+			return nil, moerr.NewInternalErrorNoCtx("storage usage response decode failed, retry later")
+		}
+
+		updateStorageUsageCache(usage.AccIds, usage.Sizes)
+
+		// step 3: handling these pulled data
+		return handleStorageUsageResponse(ctx, usage)
 	}
-
-	updateStorageUsageCache(usage.AccIds, usage.Sizes)
-
-	// step 3: handling these pulled data
-	return handleStorageUsageResponse(ctx, usage)
 }
 
 func embeddingSizeToBatch(ori *batch.Batch, size uint64, mp *mpool.MPool) {

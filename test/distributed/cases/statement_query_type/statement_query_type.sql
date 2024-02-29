@@ -33,11 +33,12 @@ show plugins;
 show profiles;
 show privileges;
 show tables;
-show collation;
-show collation like '%';
+show collation like 'utf8mb4_general_ci';
+show collation like 'utf8mb4_general_ci%';
 show index from test_table;
 values row(1,1), row(2,2), row(3,3) order by column_0 desc;
 WITH cte1 AS (SELECT 1),cte2 AS (SELECT 2) SELECT * FROM cte1 join cte2;
+select * from unnest('{"a":1}') as f;
 
 
 -- test DML sql
@@ -75,7 +76,6 @@ drop database db2;
 
 
 -- test other type
-select * from unnest('{"a":1}') as f;
 prepare s1 from select * from test_table where col1=?;
 set @a=2;
 execute s1 using @a;
@@ -83,12 +83,14 @@ deallocate prepare s1;
 
 
 -- test DDL and DQL
+select sleep(15);
 drop table if exists test_01;
 create table test_01(a int, b varchar);
 show create table test_01;
 insert into test_01 values (1,'a');
 insert into test_01 values (2,'b');
 update test_01 set a=100 where b='b';
+select * from test_01;
 select * from test_01;
 explain select * from test_01;
 delete from test_01 where a=1;
@@ -120,8 +122,10 @@ show tables;
 show index from test_table;
 values row(1,1), row(2,2), row(3,3) order by column_0 desc;
 WITH cte1 AS (SELECT 1),cte2 AS (SELECT 2) SELECT * FROM cte1 join cte2;
+select * from unnest('{"a":1}') as f;
 
 insert into test_table values (1,'a'),(2,'b'),(3,'c');
+insert into test_table values (4,'d');
 
 create account test_account admin_name = 'test_name' identified by '111' open comment 'tenant_test';
 create role test_role;
@@ -147,7 +151,6 @@ drop view view_2;
 drop table table_2;
 drop database db2;
 
-select * from unnest('{"a":1}') as f;
 prepare s1 from select * from test_table where col1=?;
 set @a=2;
 execute s1 using @a;
@@ -160,7 +163,7 @@ select sleep(1);
 
 -- RESULT CHECK: part 1
 select sleep(15);
-select statement,query_type,sql_source_type from  system.statement_info where account="bvt_query_type" and sql_source_type="external_sql" and status != "Running" and statement not like '%mo_ctl%' and aggr_count <1 order by request_at desc limit 96;
+select statement,query_type,sql_source_type from  system.statement_info where account="bvt_query_type" and sql_source_type="external_sql" and status != "Running" and statement not like '%mo_ctl%' and aggr_count <1 order by request_at desc limit 104;
 -- @bvt:issue
 
 -- CASE: part 2
@@ -188,8 +191,8 @@ select statement,query_type,sql_source_type from  system.statement_info where ac
 /* cloud_user */ show profiles;
 /* cloud_user */ show privileges;
 /* cloud_user */ show tables;
-/* cloud_user */ show collation;
-/* cloud_user */ show collation like '%';
+/* cloud_user */ show collation like 'utf8mb4_general_ci';
+/* cloud_user */ show collation like 'utf8mb4_general_ci%';
 /* cloud_user */ show index from test_table;
 /* cloud_user */ values row(1,1), row(2,2), row(3,3) order by column_0 desc;
 /* cloud_user */ WITH cte1 AS (SELECT 1),cte2 AS (SELECT 2) SELECT * FROM cte1 join cte2;
@@ -243,7 +246,7 @@ select statement,query_type,sql_source_type from  system.statement_info where ac
 
 -- RESULT CHECK: part 2
 -- @session:id=1&user=bvt_query_type:admin:accountadmin&password=123456
-select sleep(15);
+select sleep(30);
 -- @session
 /* cloud_user */ select statement,query_type,sql_source_type from  system.statement_info where user="dump" and sql_source_type="cloud_user_sql" and status != "Running" and statement not like '%mo_ctl%' order by request_at desc limit 67;
 
@@ -272,8 +275,8 @@ select sleep(15);
 /* cloud_nonuser */ show profiles;
 /* cloud_nonuser */ show privileges;
 /* cloud_nonuser */ show tables;
-/* cloud_nonuser */ show collation;
-/* cloud_nonuser */ show collation like '%';
+/* cloud_nonuser */ show collation like 'utf8mb4_general_ci';
+/* cloud_nonuser */ show collation like 'utf8mb4_general_ci%';
 /* cloud_nonuser */ show index from test_table;
 /* cloud_nonuser */ values row(1,1), row(2,2), row(3,3) order by column_0 desc;
 /* cloud_nonuser */ WITH cte1 AS (SELECT 1),cte2 AS (SELECT 2) SELECT * FROM cte1 join cte2;
@@ -281,6 +284,7 @@ select sleep(15);
 /* cloud_nonuser */ insert into test_table values (1,'a'),(2,'b'),(3,'c');
 /* cloud_nonuser */ update test_table set col2='xxx' where col1=1;
 /* cloud_nonuser */ delete from test_table where col1=3;
+/* cloud_nonuser */ select sleep(5);
 
 /* cloud_nonuser */ create account test_account admin_name = 'test_name' identified by '111' open comment 'tenant_test';
 /* cloud_nonuser */ create role test_role;
@@ -303,7 +307,6 @@ select sleep(15);
 /* cloud_nonuser */ drop table table_2;
 /* cloud_nonuser */ drop database db2;
 
-/* cloud_nonuser */ select * from unnest('{"a":1}') as f;
 /* cloud_nonuser */ prepare s1 from select * from test_table where col1=?;
 /* cloud_nonuser */ set @a=2;
 /* cloud_nonuser */ execute s1 using @a;
@@ -315,6 +318,7 @@ select sleep(15);
 /* cloud_nonuser */ insert into test_01 values (1,'a');
 /* cloud_nonuser */ insert into test_01 values (2,'b');
 /* cloud_nonuser */ update test_01 set a=100 where b='b';
+/* cloud_nonuser */ select * from unnest('{"a":1}') as f;
 /* cloud_nonuser */ select * from test_01;
 /* cloud_nonuser */ explain select * from test_01;
 /* cloud_nonuser */ delete from test_01 where a=1;
@@ -322,13 +326,13 @@ select sleep(15);
 /* cloud_nonuser */ drop table test_01;
 /* cloud_nonuser */ use system;
 /* cloud_nonuser */ drop database test_db;
-/* cloud_nonuser */ select sleep(1);
+/* cloud_nonuser */ select sleep(2);
 
 -- RESULT CHECK: part 3
 -- @session:id=1&user=bvt_query_type:admin:accountadmin&password=123456
-select sleep(15);
+select sleep(30);
 -- @session
-/* cloud_nonuser */ select statement,query_type,sql_source_type from  system.statement_info where user="dump" and sql_source_type="cloud_nonuser_sql" and status != "Running" and statement not like '%mo_ctl%' and aggr_count = 0 order by request_at desc limit 67;
+/* cloud_nonuser */ select statement,query_type,sql_source_type from  system.statement_info where user="dump" and sql_source_type="cloud_nonuser_sql" and status != "Running" and statement not like '%mo_ctl%' and aggr_count = 0 order by request_at desc limit 68;
 
 -- CASE: last
 begin;
@@ -336,8 +340,8 @@ use statement_query_type;
 create table test_table(col1 int,col2 varchar);
 create view test_view as select * from test_table;
 show create view test_view;
-show collation;
-show collation like '%';
+show collation like 'utf8mb4_general_ci';
+show collation like 'utf8mb4_general_ci%';
 load data infile '$resources/load_data/test.csv' into table test_table;
 insert into test_table values (1,'a'),(2,'b'),(3,'c');
 update test_table set col2='xxx' where col1=1;

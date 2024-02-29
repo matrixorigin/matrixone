@@ -318,6 +318,7 @@ func (bat *Batch) Append(ctx context.Context, mh *mpool.MPool, b *Batch) (*Batch
 		if err := bat.Vecs[i].UnionBatch(b.Vecs[i], 0, b.Vecs[i].Length(), nil, mh); err != nil {
 			return bat, err
 		}
+		bat.Vecs[i].SetSorted(false)
 	}
 	bat.rowCount += b.rowCount
 	return bat, nil

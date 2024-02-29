@@ -71,15 +71,15 @@ func describeExpr(ctx context.Context, expr *plan.Expr, options *ExplainOptions,
 		case *plan.Literal_Dateval:
 			fmt.Fprintf(buf, "%s", types.Date(val.Dateval))
 		case *plan.Literal_Datetimeval:
-			fmt.Fprintf(buf, "%s", types.Date(val.Datetimeval))
+			fmt.Fprintf(buf, "%s", types.Datetime(val.Datetimeval).String2(expr.Typ.Scale))
 		case *plan.Literal_Timeval:
-			fmt.Fprintf(buf, "%s", types.Date(val.Timeval))
+			fmt.Fprintf(buf, "%s", types.Time(val.Timeval).String2(expr.Typ.Scale))
 		case *plan.Literal_Sval:
 			buf.WriteString("'" + val.Sval + "'")
 		case *plan.Literal_Bval:
 			fmt.Fprintf(buf, "%v", val.Bval)
 		case *plan.Literal_EnumVal:
-			fmt.Fprintf(buf, "%v", types.Date(val.EnumVal))
+			fmt.Fprintf(buf, "%v", val.EnumVal)
 		case *plan.Literal_Decimal64Val:
 			fmt.Fprintf(buf, "%s", types.Decimal64(val.Decimal64Val.A).Format(expr.Typ.GetScale()))
 		case *plan.Literal_Decimal128Val:
@@ -277,6 +277,21 @@ func funcExprExplain(ctx context.Context, funcExpr *plan.Expr_F, Typ *plan.Type,
 			}
 		}
 		buf.WriteString(" END")
+	case function.BETWEEN_AND_EXPRESSION:
+		err = describeExpr(ctx, funcExpr.F.Args[0], options, buf)
+		if err != nil {
+			return err
+		}
+		buf.WriteString(" BETWEEN ")
+		err = describeExpr(ctx, funcExpr.F.Args[1], options, buf)
+		if err != nil {
+			return err
+		}
+		buf.WriteString(" AND ")
+		err = describeExpr(ctx, funcExpr.F.Args[2], options, buf)
+		if err != nil {
+			return err
+		}
 	case function.IN_PREDICATE:
 		if len(funcExpr.F.Args) != 2 {
 			panic("Nested query predicate,such as in,exist,all,any parameter number error!")

@@ -266,8 +266,9 @@ func (rb *remoteBackend) adjust() {
 		}
 	}
 
+	uid, _ := uuid.NewV7()
 	rb.logger = logutil.Adjust(rb.logger).With(zap.String("remote", rb.remote),
-		zap.String("backend-id", uuid.NewString()))
+		zap.String("backend-id", uid.String()))
 	rb.options.goettyOptions = append(rb.options.goettyOptions,
 		goetty.WithSessionCodec(rb.codec),
 		goetty.WithSessionLogger(rb.logger))

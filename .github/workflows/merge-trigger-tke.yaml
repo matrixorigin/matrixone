@@ -15,7 +15,7 @@ jobs:
   docker_image_build:
     runs-on: amd64-mo-guangzhou-dind
     if: ${{ github.event.pull_request.merged == true }}
-    timeout-minutes: 60
+    timeout-minutes: 30
     name: BUILD MO DOCKER IMAGE
     outputs:
        version: ${{ steps.prep.outputs.version }}
@@ -56,7 +56,7 @@ jobs:
     if: ${{ always() && !cancelled() && needs.docker_image_build.result == 'success' }}
     needs: docker_image_build
     runs-on: amd64-mo-guangzhou-medium8
-    timeout-minutes: 90
+    timeout-minutes: 40
     name: SETUP MO TEST ENV
     outputs:
       mo_svc_ip: ${{ steps.get_mo_addr.outputs.mo_svc_ip }}
@@ -103,12 +103,12 @@ jobs:
           kubectl -n mo-checkin-regression-${{ github.event.pull_request.number }} apply -f $GITHUB_WORKSPACE/matrixone/optools/mo_checkin_regression/mo_checkin_regression_tke.yaml
           sleep 100s
           while true; do
-            if [ "$(kubectl -n mo-checkin-regression-${{ github.event.pull_request.number }} get pods --field-selector status.phase=Running|grep -c "mo-checkin-regression-*")" -eq 6 ]; then
-              break;
-            else
-              echo "wait mo cluster init finish..."
+           if [ "$(kubectl get mo -n mo-checkin-regression-${{ github.event.pull_request.number }} | grep ${{ needs.docker_image_build.outputs.version }} | grep -iv NotReady | grep -ic Ready )" -eq 0 ]; then
+              kubectl get mo -n mo-checkin-regression-${{ github.event.pull_request.number }};
               sleep 15s;
               continue;
+            else
+              break;
             fi
           done
           kubectl -n mo-checkin-regression-${{ github.event.pull_request.number }} get pod -owide
@@ -251,7 +251,7 @@ jobs:
           repository: matrixorigin/mo-load-data
           token: ${{secrets.TOKEN_ACTION}}
           path: ./mo-load-data
-          ref: change_cos_bucket
+          ref: main
 
       - name: Clone mo-ssb Repo
         if: ${{ always() && !cancelled() }}
@@ -552,7 +552,7 @@ jobs:
           repository: matrixorigin/mo-load-data
           token: ${{secrets.TOKEN_ACTION}}
           path: ./mo-load-data
-          ref: change_cos_bucket
+          ref: main
 
       - name: Clone mo-tpcc Repo
         if: ${{ always() && !cancelled() }}

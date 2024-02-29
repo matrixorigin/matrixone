@@ -181,6 +181,18 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 			typeStr += fmt.Sprintf("(%d,%d)", col.Typ.Width, col.Typ.Scale)
 		}
 
+		if typ.Oid.IsEnum() {
+			enums := strings.Split(col.Typ.GetEnumvalues(), ",")
+			typeStr += "("
+			for i, enum := range enums {
+				typeStr += fmt.Sprintf("'%s'", enum)
+				if i < len(enums)-1 {
+					typeStr += ","
+				}
+			}
+			typeStr += ")"
+		}
+
 		updateOpt := ""
 		if col.OnUpdate != nil && col.OnUpdate.Expr != nil {
 			updateOpt = " ON UPDATE " + col.OnUpdate.OriginString
@@ -1107,12 +1119,6 @@ func buildShowVariables(stmt *tree.ShowVariables, ctx CompilerContext) (*Plan, e
 func buildShowStatus(stmt *tree.ShowStatus, ctx CompilerContext) (*Plan, error) {
 	ddlType := plan.DataDefinition_SHOW_STATUS
 	sql := "select '' as `Variable_name`, '' as `Value` where 0"
-	return returnByRewriteSQL(ctx, sql, ddlType)
-}
-
-func buildShowCollation(stmt *tree.ShowCollation, ctx CompilerContext) (*Plan, error) {
-	ddlType := plan.DataDefinition_SHOW_COLLATION
-	sql := "select 'utf8mb4_bin' as `Collation`, 'utf8mb4' as `Charset`, 46 as `Id`, 'Yes' as `Compiled`, 1 as `Sortlen`"
 	return returnByRewriteSQL(ctx, sql, ddlType)
 }
 

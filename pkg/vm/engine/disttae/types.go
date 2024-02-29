@@ -57,6 +57,8 @@ const (
 	COMPACTION_CN
 	UPDATE
 	ALTER
+	INSERT_TXN // Only for CN workspace consumption, not sent to DN
+	DELETE_TXN // Only for CN workspace consumption, not sent to DN
 )
 
 const (
@@ -352,6 +354,7 @@ func (txn *Transaction) RollbackLastStatement(ctx context.Context) error {
 
 	txn.rollbackCount++
 	if txn.statementID > 0 {
+		txn.clearTableCache()
 		txn.rollbackCreateTableLocked()
 
 		txn.statementID--
@@ -511,8 +514,6 @@ type txnTable struct {
 	lastTS timestamp.Timestamp
 	//entries belong to this table,and come from txn.writes.
 	writes []Entry
-	// offset of the writes in workspace
-	writesOffset int
 
 	// this should be the statement id
 	// but seems that we're not maintaining it at the moment

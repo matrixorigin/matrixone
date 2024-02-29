@@ -89,10 +89,10 @@ type ZonemapFileparam struct {
 }
 
 type FilterParam struct {
-	exprMono    bool
-	columnMap   map[int]int
-	FilterExpr  *plan.Expr
-	blockReader *blockio.BlockReader
+	zonemappable bool
+	columnMap    map[int]int
+	FilterExpr   *plan.Expr
+	blockReader  *blockio.BlockReader
 }
 
 type Argument struct {

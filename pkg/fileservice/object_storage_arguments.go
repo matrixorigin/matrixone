@@ -25,9 +25,10 @@ import (
 
 type ObjectStorageArguments struct {
 	// misc
-	Name                string `toml:"name"`
-	KeyPrefix           string `toml:"key-prefix"`
-	SharedConfigProfile string `toml:"shared-config-profile"`
+	Name                 string `toml:"name"`
+	KeyPrefix            string `toml:"key-prefix"`
+	SharedConfigProfile  string `toml:"shared-config-profile"`
+	NoDefaultCredentials bool   `toml:"no-default-credentials"`
 
 	// s3
 	Bucket    string   `toml:"bucket"`

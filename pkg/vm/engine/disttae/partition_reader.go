@@ -61,7 +61,7 @@ func (p *PartitionReader) prepare() error {
 		inserts = make([]*batch.Batch, 0, len(p.table.writes))
 		deletes = make(map[types.Rowid]uint8)
 		for _, entry := range p.table.writes {
-			if entry.typ == INSERT {
+			if entry.typ == INSERT || entry.typ == INSERT_TXN {
 				if entry.bat == nil || entry.bat.IsEmpty() {
 					continue
 				}

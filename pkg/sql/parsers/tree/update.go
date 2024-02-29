@@ -143,7 +143,9 @@ type ExternParam struct {
 }
 
 type ExParamConst struct {
+	Init         bool
 	ScanType     int
+	FileSize     int64
 	Filepath     string
 	CompressType string
 	Format       string

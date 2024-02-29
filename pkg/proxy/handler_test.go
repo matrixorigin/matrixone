@@ -56,8 +56,7 @@ func newTestProxyHandler(t *testing.T) *testProxyHandler {
 	runtime.SetupProcessLevelRuntime(rt)
 	ctx, cancel := context.WithCancel(context.TODO())
 	hc := &mockHAKeeperClient{}
-	mc := clusterservice.NewMOCluster(hc, 3*time.Second,
-		clusterservice.WithDisableRefresh())
+	mc := clusterservice.NewMOCluster(hc, 3*time.Second)
 	rt.SetGlobalVariables(runtime.ClusterService, mc)
 	logger := rt.Logger()
 	st := stopper.NewStopper("test-proxy", stopper.WithLogger(rt.Logger().RawLogger()))

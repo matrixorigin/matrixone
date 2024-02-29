@@ -132,7 +132,10 @@ func NewAwsSDKv2(
 		)
 	}
 
-	credentialProvider := args.credentialsProviderForAwsSDKv2(ctx)
+	credentialProvider, err := args.credentialsProviderForAwsSDKv2(ctx)
+	if err != nil {
+		return nil, err
+	}
 
 	// validate
 	if credentialProvider != nil {
@@ -689,6 +692,7 @@ func (o ObjectStorageArguments) credentialsProviderForAwsSDKv2(
 	ctx context.Context,
 ) (
 	ret aws.CredentialsProvider,
+	err error,
 ) {
 
 	// cache
@@ -750,7 +754,13 @@ func (o ObjectStorageArguments) credentialsProviderForAwsSDKv2(
 	if o.KeyID != "" && o.KeySecret != "" {
 		// static
 		logutil.Info("static credential")
-		return credentials.NewStaticCredentialsProvider(o.KeyID, o.KeySecret, o.SessionToken)
+		return credentials.NewStaticCredentialsProvider(o.KeyID, o.KeySecret, o.SessionToken), nil
+	}
+
+	if o.NoDefaultCredentials {
+		return nil, moerr.NewInvalidInputNoCtx(
+			"no valid credentials",
+		)
 	}
 
 	return

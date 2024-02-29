@@ -59,11 +59,14 @@ func NewMinioSDK(
 	options := new(minio.Options)
 
 	// credentials
-	credentialProviders := []credentials.Provider{
-		// aws env
-		new(credentials.EnvAWS),
-		// minio env
-		new(credentials.EnvMinio),
+	var credentialProviders []credentials.Provider
+	if !args.NoDefaultCredentials {
+		credentialProviders = append(credentialProviders,
+			// aws env
+			new(credentials.EnvAWS),
+			// minio env
+			new(credentials.EnvMinio),
+		)
 	}
 	if args.KeyID != "" && args.KeySecret != "" {
 		// static

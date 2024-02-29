@@ -242,9 +242,11 @@ func (entry *ObjectEntry) NeedPrefetchObjectMetaForObjectInfo(nodes []*MVCCNode[
 	if blk == nil {
 		return false, nil
 	}
+	blk.RLock()
 	node := blk.SearchNode(&MVCCNode[*MetadataMVCCNode]{
 		TxnMVCCNode: &txnbase.TxnMVCCNode{Start: lastNode.Start},
 	})
+	blk.RUnlock()
 	// in some unit tests, node doesn't exist
 	if node == nil || node.BaseNode.MetaLoc == nil || node.BaseNode.MetaLoc.IsEmpty() {
 		return
@@ -252,6 +254,29 @@ func (entry *ObjectEntry) NeedPrefetchObjectMetaForObjectInfo(nodes []*MVCCNode[
 
 	needPrefetch = true
 	return
+}
+
+func (entry *ObjectEntry) SetObjectStatsForPreviousNode(nodes []*MVCCNode[*ObjectMVCCNode]) {
+	if entry.IsAppendable() || len(nodes) <= 1 {
+		return
+	}
+	lastNode := nodes[0]
+	for _, n := range nodes {
+		if n.Start.Greater(lastNode.Start) {
+			lastNode = n
+		}
+	}
+	stat := lastNode.BaseNode.ObjectStats
+	if lastNode.BaseNode.IsEmpty() {
+		panic(fmt.Sprintf("logic error: last node is empty, object %v", entry.PPString(3, 0, "")))
+	}
+	entry.Lock()
+	for _, n := range nodes {
+		if n.BaseNode.IsEmpty() {
+			n.BaseNode.ObjectStats = *stat.Clone()
+		}
+	}
+	entry.Unlock()
 }
 func (entry *ObjectEntry) LoadObjectInfoWithTxnTS(startTS types.TS) (objectio.ObjectStats, error) {
 	stats := *objectio.NewObjectStats()

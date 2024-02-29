@@ -167,6 +167,12 @@ func (a *AliyunSDK) Stat(
 	err error,
 ) {
 
+	defer func() {
+		if a.is404(err) {
+			err = moerr.NewFileNotFoundNoCtx(key)
+		}
+	}()
+
 	if err := ctx.Err(); err != nil {
 		return 0, err
 	}
@@ -536,6 +542,9 @@ func (o ObjectStorageArguments) credentialProviderForAliyunSDK(
 ) (ret oss.CredentialsProvider, err error) {
 
 	defer func() {
+		if err != nil {
+			return
+		}
 		// chain assume role provider
 		if o.RoleARN != "" {
 			logutil.Info("with role arn")
@@ -578,6 +587,12 @@ func (o ObjectStorageArguments) credentialProviderForAliyunSDK(
 	}
 
 	if config.Type == nil {
+
+		if o.NoDefaultCredentials {
+			return nil, moerr.NewInvalidInputNoCtx(
+				"no valid credentials",
+			)
+		}
 
 		// check aws env
 		awsCredentials := awscredentials.NewEnvCredentials()

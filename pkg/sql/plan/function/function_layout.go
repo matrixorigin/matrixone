@@ -17,22 +17,22 @@ package function
 type FuncExplainLayout int32
 
 const (
-	STANDARD_FUNCTION          FuncExplainLayout = 0 //standard function
-	UNARY_ARITHMETIC_OPERATOR  FuncExplainLayout = 1 //unary arithmetic operator
-	BINARY_ARITHMETIC_OPERATOR FuncExplainLayout = 2 //binary arithmetic operator
-	UNARY_LOGICAL_OPERATOR     FuncExplainLayout = 3 // unary logical operator
-	BINARY_LOGICAL_OPERATOR    FuncExplainLayout = 4 // binary logical operator
-	COMPARISON_OPERATOR        FuncExplainLayout = 5 // comparison operator
-	CAST_EXPRESSION            FuncExplainLayout = 6 // cast expression
-	CASE_WHEN_EXPRESSION       FuncExplainLayout = 7 // case when expression
-	BETWEEN_AND_EXPRESSION     FuncExplainLayout = 8
-	IN_PREDICATE               FuncExplainLayout = 9  //query 'in' predicate
-	EXISTS_ANY_PREDICATE       FuncExplainLayout = 10 //query predicate,such as exist,all,any
-	IS_EXPRESSION              FuncExplainLayout = 11 // IS expression
-	NOPARAMETER_FUNCTION       FuncExplainLayout = 12 // noparameter function
-	DATE_INTERVAL_EXPRESSION   FuncExplainLayout = 13 // date expression,interval expression
-	EXTRACT_FUNCTION           FuncExplainLayout = 14 // extract function,such as extract(MONTH/DAY/HOUR/MINUTE/SECOND FROM p)
-	POSITION_FUNCTION          FuncExplainLayout = 15 // position function, such as POSITION(substr IN str)
-	UNKNOW_KIND_FUNCTION       FuncExplainLayout = 16
-	IS_NOT_EXPRESSION          FuncExplainLayout = 17 // IS NOT operator
+	STANDARD_FUNCTION          FuncExplainLayout = iota // standard function
+	UNARY_ARITHMETIC_OPERATOR                           // unary arithmetic operator
+	BINARY_ARITHMETIC_OPERATOR                          // binary arithmetic operator
+	UNARY_LOGICAL_OPERATOR                              // unary logical operator
+	BINARY_LOGICAL_OPERATOR                             // binary logical operator
+	COMPARISON_OPERATOR                                 // comparison operator
+	CAST_EXPRESSION                                     // CAST expression
+	CASE_WHEN_EXPRESSION                                // CASE ... WHEN ... expression
+	BETWEEN_AND_EXPRESSION                              // BETWEEN ... AND ... expression
+	IN_PREDICATE                                        // IN predicate
+	IS_EXPRESSION                                       // IS expression
+	IS_NOT_EXPRESSION                                   // IS NOT operator
+	NOPARAMETER_FUNCTION                                // noparameter function
+	DATE_INTERVAL_EXPRESSION                            // DATE expression, INTERVAL expression
+	EXTRACT_FUNCTION                                    // EXTRACT function,such as EXTRACT(MONTH/DAY/HOUR/MINUTE/SECOND FROM p)
+	POSITION_FUNCTION                                   // POSITION function, such as POSITION(substr IN str)
+	EXISTS_ANY_PREDICATE
+	UNKNOW_KIND_FUNCTION
 )

@@ -20,6 +20,9 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -90,7 +93,7 @@ func (tbl *txnTable) Rows(ctx context.Context) (rows int64, err error) {
 
 	deletes := make(map[types.Rowid]struct{})
 	for _, entry := range writes {
-		if entry.typ == INSERT {
+		if entry.typ == INSERT || entry.typ == INSERT_TXN {
 			rows = rows + int64(entry.bat.RowCount())
 		} else {
 			if entry.bat.GetVector(0).GetType().Oid == types.T_Rowid {
@@ -283,7 +286,7 @@ func (tbl *txnTable) Size(ctx context.Context, name string) (int64, error) {
 
 	deletes := make(map[types.Rowid]struct{})
 	for _, entry := range writes {
-		if entry.typ == INSERT {
+		if entry.typ == INSERT || entry.typ == INSERT_TXN {
 			for i, s := range entry.bat.Attrs {
 				if _, ok := neededCols[s]; ok {
 					ret += int64(entry.bat.Vecs[i].Size())
@@ -547,7 +550,7 @@ func (tbl *txnTable) LoadDeletesForMemBlocksIn(
 				if err != nil {
 					return err
 				}
-				rowIdBat, err := blockio.LoadColumns(
+				rowIdBat, err := blockio.LoadTombstoneColumns(
 					tbl.db.txn.proc.Ctx,
 					[]uint16{0},
 					nil,
@@ -601,7 +604,6 @@ func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr) (ranges [][
 	}()
 
 	tbl.writes = tbl.writes[:0]
-	tbl.writesOffset = tbl.db.txn.statements[tbl.db.txn.statementID-1]
 
 	tbl.writes = tbl.db.txn.getTableWrites(tbl.db.databaseId, tbl.tableId, tbl.writes)
 
@@ -716,19 +718,19 @@ func (tbl *txnTable) rangesOnePart(
 	}
 
 	for _, entry := range tbl.writes {
-		if entry.typ == INSERT {
-			continue
-		}
-		// entry.typ == DELETE
-		if entry.isGeneratedByTruncate() {
-			continue
-		}
-		//deletes in tbl.writes maybe comes from PartitionState.rows or PartitionState.blocks.
-		if entry.fileName == "" {
-			vs := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
-			for _, v := range vs {
-				id, _ := v.Decode()
-				dirtyBlks[id] = struct{}{}
+		// the CN workspace can only handle `INSERT` and `DELETE` operations. Other operations will be skipped,
+		// TODO Adjustments will be made here in the future
+		if entry.typ == DELETE || entry.typ == DELETE_TXN {
+			if entry.isGeneratedByTruncate() {
+				continue
+			}
+			//deletes in tbl.writes maybe comes from PartitionState.rows or PartitionState.blocks.
+			if entry.fileName == "" {
+				vs := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
+				for _, v := range vs {
+					id, _ := v.Decode()
+					dirtyBlks[id] = struct{}{}
+				}
 			}
 		}
 	}
@@ -773,7 +775,7 @@ func (tbl *txnTable) rangesOnePart(
 	if auxIdCnt > 0 {
 		zms = make([]objectio.ZoneMap, auxIdCnt)
 		vecs = make([]*vector.Vector, auxIdCnt)
-		plan2.GetColumnMapByExprs(exprs, tableDef, &columnMap)
+		plan2.GetColumnMapByExprs(exprs, tableDef, columnMap)
 	}
 
 	errCtx := errutil.ContextWithNoReport(ctx, true)
@@ -1367,9 +1369,12 @@ func (tbl *txnTable) GetTableDef(ctx context.Context) *plan.TableDef {
 			Version:       tbl.version,
 		}
 	}
-	tableDef := plan2.DeepCopyTableDef(tbl.tableDef, true)
-	tableDef.IsTemporary = tbl.GetEngineType() == engine.Memory
-	return tableDef
+	return tbl.tableDef
+}
+
+func (tbl *txnTable) CopyTableDef(ctx context.Context) *plan.TableDef {
+	tbl.GetTableDef(ctx)
+	return plan2.DeepCopyTableDef(tbl.tableDef, true)
 }
 
 func (tbl *txnTable) UpdateConstraint(ctx context.Context, c *engine.ConstraintDef) error {
@@ -1409,6 +1414,180 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, co
 	tbl.constraint = ct
 	tbl.tableDef = nil
 	tbl.GetTableDef(ctx)
+	return nil
+}
+
+func (tbl *txnTable) TableRenameInTxn(ctx context.Context, constraint [][]byte) error {
+	// 1. delete cn metadata of table
+	accountId, userId, roleId, err := getAccessInfo(ctx)
+	if err != nil {
+		return err
+	}
+	databaseId := tbl.GetDBID(ctx)
+	db := tbl.db
+
+	var id uint64
+	var rowid types.Rowid
+	var rowids []types.Rowid
+	key := genTableKey(accountId, tbl.tableName, databaseId)
+	if value, ok := db.txn.createMap.Load(key); ok {
+		db.txn.createMap.Delete(key)
+		table := value.(*txnTable)
+		id = table.tableId
+		rowid = table.rowid
+		rowids = table.rowids
+		if tbl != table {
+			panic("The table object in createMap should be the current table object")
+		}
+	} else if value, ok := db.txn.tableCache.tableMap.Load(key); ok {
+		table := value.(*txnTable)
+		id = table.tableId
+		rowid = table.rowid
+		rowids = table.rowids
+		if tbl != table {
+			panic("The table object in tableCache should be the current table object")
+		}
+		db.txn.tableCache.tableMap.Delete(key)
+	} else {
+		// I think it is unnecessary to make a judgment on this branch because the table is already in use, so it must be in the cache
+		item := &cache.TableItem{
+			Name:       tbl.tableName,
+			DatabaseId: databaseId,
+			AccountId:  accountId,
+			Ts:         db.txn.op.SnapshotTS(),
+		}
+		if ok := db.txn.engine.catalog.GetTable(item); !ok {
+			return moerr.GetOkExpectedEOB()
+		}
+		id = item.Id
+		rowid = item.Rowid
+		rowids = item.Rowids
+	}
+
+	bat, err := genDropTableTuple(rowid, id, db.databaseId, tbl.tableName, db.databaseName, db.txn.proc.Mp())
+	if err != nil {
+		return err
+	}
+	for _, store := range db.txn.tnStores {
+		if err := db.txn.WriteBatch(DELETE_TXN, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
+			catalog.MO_CATALOG, catalog.MO_TABLES, bat, store, -1, false, false); err != nil {
+			bat.Clean(db.txn.proc.Mp())
+			return err
+		}
+	}
+
+	// Add writeBatch(delete,mo_columns) to filter table in mo_columns.
+	// Every row in writeBatch(delete,mo_columns) needs rowid
+	for _, rid := range rowids {
+		bat, err = genDropColumnTuple(rid, db.txn.proc.Mp())
+		if err != nil {
+			return err
+		}
+		for _, store := range db.txn.tnStores {
+			if err = db.txn.WriteBatch(DELETE_TXN, catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID,
+				catalog.MO_CATALOG, catalog.MO_COLUMNS, bat, store, -1, false, false); err != nil {
+				bat.Clean(db.txn.proc.Mp())
+				return err
+			}
+		}
+	}
+	db.txn.deletedTableMap.Store(key, id)
+
+	//------------------------------------------------------------------------------------------------------------------
+	// 2. send alter message to DN
+	bat, err = genTableAlterTuple(constraint, db.txn.proc.Mp())
+	if err != nil {
+		return err
+	}
+	if err = db.txn.WriteBatch(ALTER, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
+		catalog.MO_CATALOG, catalog.MO_TABLES, bat, db.txn.tnStores[0], -1, false, false); err != nil {
+		bat.Clean(db.txn.proc.Mp())
+		return err
+	}
+
+	req := &api.AlterTableReq{}
+	if err = req.Unmarshal(constraint[0]); err != nil {
+		return err
+	} else {
+		rename_table := req.Operation.(*api.AlterTableReq_RenameTable)
+		newTblName := rename_table.RenameTable.NewName
+		tbl.tableName = newTblName
+	}
+	tbl.tableDef = nil
+	tbl.GetTableDef(ctx)
+
+	//------------------------------------------------------------------------------------------------------------------
+	// 3. insert new table metadata
+	newtbl := new(txnTable)
+
+	newRowId, err := db.txn.allocateID(ctx)
+	if err != nil {
+		return err
+	}
+	newtbl.rowid = types.DecodeFixed[types.Rowid](types.EncodeSlice([]uint64{newRowId}))
+	newtbl.comment = tbl.comment
+	newtbl.relKind = tbl.relKind
+	newtbl.createSql = tbl.createSql
+	newtbl.viewdef = tbl.viewdef
+	newtbl.partitioned = tbl.partitioned
+	newtbl.partition = tbl.partition
+	newtbl.constraint = tbl.constraint
+	newtbl.primaryIdx = tbl.primaryIdx
+	newtbl.primarySeqnum = tbl.primarySeqnum
+	newtbl.clusterByIdx = tbl.clusterByIdx
+	newtbl.db = db
+	newtbl.defs = tbl.defs
+	newtbl.tableName = tbl.tableName
+	newtbl.tableId = tbl.tableId
+	newtbl.CopyTableDef(ctx)
+
+	{
+		sql := getSql(ctx)
+		bat, err := genCreateTableTuple(newtbl, sql, accountId, userId, roleId, newtbl.tableName,
+			newtbl.tableId, db.databaseId, db.databaseName, newtbl.rowid, true, db.txn.proc.Mp())
+		if err != nil {
+			return err
+		}
+		for _, store := range db.txn.tnStores {
+			if err := db.txn.WriteBatch(INSERT_TXN, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
+				catalog.MO_CATALOG, catalog.MO_TABLES, bat, store, -1, true, false); err != nil {
+				bat.Clean(db.txn.proc.Mp())
+				return err
+			}
+		}
+	}
+
+	cols, err := genColumns(accountId, newtbl.tableName, db.databaseName, newtbl.tableId, db.databaseId, newtbl.defs)
+	if err != nil {
+		return err
+	}
+
+	newtbl.rowids = make([]types.Rowid, len(cols))
+	for i, col := range cols {
+		newtbl.rowids[i] = db.txn.genRowId()
+		bat, err := genCreateColumnTuple(col, newtbl.rowids[i], true, db.txn.proc.Mp())
+		if err != nil {
+			return err
+		}
+		for _, store := range db.txn.tnStores {
+			if err := db.txn.WriteBatch(INSERT_TXN, catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID,
+				catalog.MO_CATALOG, catalog.MO_COLUMNS, bat, store, -1, true, false); err != nil {
+				bat.Clean(db.txn.proc.Mp())
+				return err
+			}
+		}
+		if col.constraintType == catalog.SystemColPKConstraint {
+			newtbl.primaryIdx = i
+			newtbl.primarySeqnum = i
+		}
+		if col.isClusterBy == 1 {
+			newtbl.clusterByIdx = i
+		}
+	}
+
+	newkey := genTableKey(accountId, newtbl.tableName, databaseId)
+	newtbl.db.txn.addCreateTable(newkey, newtbl)
+	newtbl.db.txn.deletedTableMap.Delete(newkey)
 	return nil
 }
 
@@ -1483,7 +1662,7 @@ func (tbl *txnTable) Write(ctx context.Context, bat *batch.Batch) error {
 		ibat.Clean(tbl.db.txn.proc.Mp())
 		return err
 	}
-	return tbl.db.txn.dumpBatch(tbl.writesOffset)
+	return tbl.db.txn.dumpBatch(tbl.db.txn.getWriteOffset())
 }
 
 func (tbl *txnTable) Update(ctx context.Context, bat *batch.Batch) error {
@@ -2119,7 +2298,7 @@ func (tbl *txnTable) updateDeleteInfo(
 		if entry.isGeneratedByTruncate() || entry.tableId != tbl.tableId {
 			continue
 		}
-		if entry.typ == DELETE && entry.fileName == "" {
+		if (entry.typ == DELETE || entry.typ == DELETE_TXN) && entry.fileName == "" {
 			pkVec := entry.bat.GetVector(1)
 			rowids := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
 			for i, rowid := range rowids {
@@ -2166,7 +2345,7 @@ func (tbl *txnTable) readNewRowid(vec *vector.Vector, row int,
 	auxIdCnt += plan2.AssignAuxIdForExpr(filter, auxIdCnt)
 	zms := make([]objectio.ZoneMap, auxIdCnt)
 	vecs := make([]*vector.Vector, auxIdCnt)
-	plan2.GetColumnMapByExprs([]*plan.Expr{filter}, tableDef, &columnMap)
+	plan2.GetColumnMapByExprs([]*plan.Expr{filter}, tableDef, columnMap)
 	objFilterMap := make(map[objectio.ObjectNameShort]bool)
 	for _, blk := range blks {
 		location := blk.MetaLocation()

@@ -574,9 +574,9 @@ When it is not in single statement transaction mode:
 	Starts a new transaction if there is none. Reuse the current transaction if there is one.
 */
 func (ses *Session) TxnCreate() (context.Context, TxnOperator, error) {
-	if ses.InMultiStmtTransactionMode() {
-		ses.SetServerStatus(SERVER_STATUS_IN_TRANS)
-	}
+	// SERVER_STATUS_IN_TRANS should be set to true regardless of whether autocommit is equal to 1.
+	ses.SetServerStatus(SERVER_STATUS_IN_TRANS)
+
 	if !ses.GetTxnHandler().IsValidTxnOperator() {
 		return ses.GetTxnHandler().NewTxn()
 	}

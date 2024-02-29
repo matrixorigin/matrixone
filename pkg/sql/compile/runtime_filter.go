@@ -95,7 +95,7 @@ func ApplyRuntimeFilters(
 	columnMap := make(map[int]int)
 	zms := make([]objectio.ZoneMap, auxIdCnt)
 	vecs := make([]*vector.Vector, auxIdCnt)
-	plan2.GetColumnMapByExprs(exprs, tableDef, &columnMap)
+	plan2.GetColumnMapByExprs(exprs, tableDef, columnMap)
 
 	defer func() {
 		for i := range vecs {

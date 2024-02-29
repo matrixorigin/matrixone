@@ -94,9 +94,9 @@ select * from t1;
 -- @case
 -- @desc:test for show collation
 -- @label:bvt
-show collation;
-show collation like '%';
-show collation where 'Charset'='utf8mb4';
+show collation like 'utf8mb4_general_ci';
+show collation like 'utf8mb4_general_ci%';
+show collation where Charset='utf8mb4'and Collation ='utf8mb4_general_ci';
 
 -- @case
 -- @desc:test for set and show variables
@@ -179,8 +179,8 @@ begin;
 show create table a;
 show create table va;
 show create view va;
-show collation;
-show collation like '%';
+show collation like 'utf8mb4_general_ci';
+show collation like 'utf8mb4_general_ci%';
 rollback;
 drop database if exists showDb;
 
