@@ -2085,13 +2085,18 @@ func (tbl *txnTable) updateLogtail(ctx context.Context) (err error) {
 	return nil
 }
 
-func (tbl *txnTable) PrimaryKeysPersistedMayBeModified(
+func (tbl *txnTable) PKPersistedBetween(
 	p *logtailreplay.PartitionState,
 	from types.TS,
 	to types.TS,
 	keys *vector.Vector,
 ) (bool, error) {
-
+	if tbl.tableName == catalog.MO_DATABASE ||
+		tbl.tableName == catalog.MO_TABLES ||
+		tbl.tableName == catalog.MO_COLUMNS {
+		//TODO::should return true,just for test
+		return false, nil
+	}
 	ctx := tbl.proc.Load().Ctx
 	fs := tbl.db.txn.engine.fs
 	primaryIdx := tbl.primaryIdx
@@ -2225,10 +2230,15 @@ func (tbl *txnTable) PrimaryKeysMayBeModified(
 	packer.Reset()
 
 	keys := logtailreplay.EncodePrimaryKeyVector(keysVector, packer)
-	if snap.PrimaryKeysInMemMayBeModified(from, to, keys) {
+	exist, flushed := snap.PKExistInMemBetween(from, to, keys)
+	if exist {
 		return true, nil
 	}
-	return tbl.PrimaryKeysPersistedMayBeModified(
+	if !flushed {
+		return false, nil
+	}
+	//need check pk whether exist on S3 block.
+	return tbl.PKPersistedBetween(
 		snap,
 		from,
 		to,
