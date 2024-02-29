@@ -32,19 +32,19 @@ func gTesSingleAggPrivate1() SingleAggFromFixedRetFixed[int32, int64] {
 	return &testSingleAggPrivate1{}
 }
 func (t *testSingleAggPrivate1) Init() {}
-func (t *testSingleAggPrivate1) Fill(from int32, getter aggGetter[int64], setter aggSetter[int64]) {
+func (t *testSingleAggPrivate1) Fill(from int32, getter AggGetter[int64], setter AggSetter[int64]) {
 	setter(getter() + 1)
 }
-func (t *testSingleAggPrivate1) FillNull(getter aggGetter[int64], setter aggSetter[int64]) {
+func (t *testSingleAggPrivate1) FillNull(getter AggGetter[int64], setter AggSetter[int64]) {
 	setter(getter() + 1)
 }
-func (t *testSingleAggPrivate1) Fills(value int32, isNull bool, count int, getter aggGetter[int64], setter aggSetter[int64]) {
+func (t *testSingleAggPrivate1) Fills(value int32, isNull bool, count int, getter AggGetter[int64], setter AggSetter[int64]) {
 	setter(getter() + int64(count))
 }
-func (t *testSingleAggPrivate1) Merge(other SingleAggFromFixedRetFixed[int32, int64], getter1 aggGetter[int64], getter2 aggGetter[int64], setter aggSetter[int64]) {
+func (t *testSingleAggPrivate1) Merge(other SingleAggFromFixedRetFixed[int32, int64], getter1 AggGetter[int64], getter2 AggGetter[int64], setter AggSetter[int64]) {
 	setter(getter1() + getter2())
 }
-func (t *testSingleAggPrivate1) Flush(getter aggGetter[int64], setter aggSetter[int64]) {}
+func (t *testSingleAggPrivate1) Flush(getter AggGetter[int64], setter AggSetter[int64]) {}
 func (t *testSingleAggPrivate1) Marshal() []byte {
 	return nil
 }
@@ -147,16 +147,16 @@ func (t *testMultiAggPrivate1) GetWhichFillNull(idx int) any {
 	}
 	panic("invalid idx")
 }
-func (t *testMultiAggPrivate1) Eval(getter aggGetter[int64], setter aggSetter[int64]) {
+func (t *testMultiAggPrivate1) Eval(getter AggGetter[int64], setter AggSetter[int64]) {
 	if t.firstIsNull {
 		return
 	}
 	setter(getter() + 1)
 }
-func (t *testMultiAggPrivate1) Merge(other MultiAggRetFixed[int64], getter1 aggGetter[int64], getter2 aggGetter[int64], setter aggSetter[int64]) {
+func (t *testMultiAggPrivate1) Merge(other MultiAggRetFixed[int64], getter1 AggGetter[int64], getter2 AggGetter[int64], setter AggSetter[int64]) {
 	setter(getter1() + getter2())
 }
-func (t *testMultiAggPrivate1) Flush(getter aggGetter[int64], setter aggSetter[int64]) {}
+func (t *testMultiAggPrivate1) Flush(getter AggGetter[int64], setter AggSetter[int64]) {}
 func (t *testMultiAggPrivate1) Marshal() []byte {
 	return nil
 }

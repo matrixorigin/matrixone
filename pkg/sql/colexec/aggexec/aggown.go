@@ -16,11 +16,14 @@ package aggexec
 
 import "github.com/matrixorigin/matrixone/pkg/container/types"
 
-// result get method and set method for aggregation.
-type aggSetter[T types.FixedSizeTExceptStrType] func(value T)
-type aggBytesSetter func(value []byte) error
-type aggGetter[T types.FixedSizeTExceptStrType] func() T
-type aggBytesGetter func() []byte
+/*
+	result get method and set method for aggregation.
+*/
+
+type AggSetter[T types.FixedSizeTExceptStrType] func(value T)
+type AggBytesSetter func(value []byte) error
+type AggGetter[T types.FixedSizeTExceptStrType] func() T
+type AggBytesGetter func() []byte
 
 // AggCanMarshal interface is used for multi-node communication.
 // each private structure of aggregation should implement the AggCanMarshal interface.
@@ -47,43 +50,43 @@ type SingleAggFromFixedRetFixed[
 	from types.FixedSizeTExceptStrType, to types.FixedSizeTExceptStrType] interface {
 	AggCanMarshal
 	Init()
-	Fill(from, aggGetter[to], aggSetter[to])
-	FillNull(aggGetter[to], aggSetter[to])
-	Fills(value from, isNull bool, count int, getter aggGetter[to], setter aggSetter[to])
-	Merge(other SingleAggFromFixedRetFixed[from, to], getter1, getter2 aggGetter[to], setter aggSetter[to])
-	Flush(getter aggGetter[to], setter aggSetter[to])
+	Fill(from, AggGetter[to], AggSetter[to])
+	FillNull(AggGetter[to], AggSetter[to])
+	Fills(value from, isNull bool, count int, getter AggGetter[to], setter AggSetter[to])
+	Merge(other SingleAggFromFixedRetFixed[from, to], getter1, getter2 AggGetter[to], setter AggSetter[to])
+	Flush(getter AggGetter[to], setter AggSetter[to])
 }
 
 type SingleAggFromFixedRetVar[
 	from types.FixedSizeTExceptStrType] interface {
 	AggCanMarshal
 	Init()
-	Fill(from, aggBytesGetter, aggBytesSetter)
-	FillNull(aggBytesGetter, aggBytesSetter)
-	Fills(value from, isNull bool, count int, getter aggBytesGetter, setter aggBytesSetter)
-	Merge(other SingleAggFromFixedRetVar[from], getter1, getter2 aggBytesGetter, setter aggBytesSetter)
-	Flush(aggBytesGetter, aggBytesSetter)
+	Fill(from, AggBytesGetter, AggBytesSetter)
+	FillNull(AggBytesGetter, AggBytesSetter)
+	Fills(value from, isNull bool, count int, getter AggBytesGetter, setter AggBytesSetter)
+	Merge(other SingleAggFromFixedRetVar[from], getter1, getter2 AggBytesGetter, setter AggBytesSetter)
+	Flush(AggBytesGetter, AggBytesSetter)
 }
 
 type SingleAggFromVarRetFixed[
 	to types.FixedSizeTExceptStrType] interface {
 	AggCanMarshal
 	Init()
-	FillBytes([]byte, aggGetter[to], aggSetter[to])
-	FillNull(aggGetter[to], aggSetter[to])
-	Fills(value []byte, isNull bool, count int, getter aggGetter[to], setter aggSetter[to])
-	Merge(other SingleAggFromVarRetFixed[to], getter1, getter2 aggGetter[to], setter aggSetter[to])
-	Flush(getter aggGetter[to], setter aggSetter[to])
+	FillBytes([]byte, AggGetter[to], AggSetter[to])
+	FillNull(AggGetter[to], AggSetter[to])
+	Fills(value []byte, isNull bool, count int, getter AggGetter[to], setter AggSetter[to])
+	Merge(other SingleAggFromVarRetFixed[to], getter1, getter2 AggGetter[to], setter AggSetter[to])
+	Flush(getter AggGetter[to], setter AggSetter[to])
 }
 
 type SingleAggFromVarRetVar interface {
 	AggCanMarshal
 	Init()
-	FillBytes([]byte, aggBytesGetter, aggBytesSetter)
-	FillNull(aggBytesGetter, aggBytesSetter)
-	Fills(value []byte, isNull bool, count int, getter aggBytesGetter, setter aggBytesSetter)
-	Merge(other SingleAggFromVarRetVar, getter1, getter2 aggBytesGetter, setter aggBytesSetter)
-	Flush(aggBytesGetter, aggBytesSetter)
+	FillBytes([]byte, AggBytesGetter, AggBytesSetter)
+	FillNull(AggBytesGetter, AggBytesSetter)
+	Fills(value []byte, isNull bool, count int, getter AggBytesGetter, setter AggBytesSetter)
+	Merge(other SingleAggFromVarRetVar, getter1, getter2 AggBytesGetter, setter AggBytesSetter)
+	Flush(AggBytesGetter, AggBytesSetter)
 }
 
 type MultiAggRetFixed[
@@ -92,9 +95,9 @@ type MultiAggRetFixed[
 	Init()
 	GetWhichFill(idx int) any                        // return func Fill(MultiAggRetFixed[to], value)
 	GetWhichFillNull(idx int) any                    // return func FillNull(MultiAggRetFixed[to])
-	Eval(getter aggGetter[to], setter aggSetter[to]) // after Fill one row, do eval.
-	Merge(other MultiAggRetFixed[to], getter1, getter2 aggGetter[to], setter aggSetter[to])
-	Flush(getter aggGetter[to], setter aggSetter[to]) // return the result.
+	Eval(getter AggGetter[to], setter AggSetter[to]) // after Fill one row, do eval.
+	Merge(other MultiAggRetFixed[to], getter1, getter2 AggGetter[to], setter AggSetter[to])
+	Flush(getter AggGetter[to], setter AggSetter[to]) // return the result.
 }
 
 type MultiAggRetVar interface {
@@ -102,7 +105,7 @@ type MultiAggRetVar interface {
 	Init()
 	GetWhichFill(idx int) any                          // return func Fill(MultiAggRetVar, value)
 	GetWhichFillNull(idx int) any                      // return func FillNull(MultiAggRetVar)
-	Eval(getter aggBytesGetter, setter aggBytesSetter) // after Fill one row, do eval.
-	Merge(other MultiAggRetVar, getter1, getter2 aggBytesGetter, setter aggBytesSetter)
-	Flush(getter aggBytesGetter, setter aggBytesSetter) error // return the result.
+	Eval(getter AggBytesGetter, setter AggBytesSetter) // after Fill one row, do eval.
+	Merge(other MultiAggRetVar, getter1, getter2 AggBytesGetter, setter AggBytesSetter)
+	Flush(getter AggBytesGetter, setter AggBytesSetter) error // return the result.
 }
