@@ -66,7 +66,7 @@ func (builder *QueryBuilder) applyIndicesForFiltersUsingMasterIndex(nodeID int32
 			}, builder.ctxByNode[nodeID])
 		}
 
-		prevIndexPkCol = currIndexPkCol
+		prevIndexPkCol = DeepCopyExpr(currIndexPkCol)
 		prevLastNodeId = lastNodeId
 	}
 
