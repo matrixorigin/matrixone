@@ -32,21 +32,10 @@ type TxnOption func(*txnOperator)
 // TxnClientCreateOption options for create txn
 type TxnClientCreateOption func(*txnClient)
 
-// TxnClient transaction client, the operational entry point for transactions.
-// Each CN node holds one instance of TxnClient.
-type TxnClient interface {
+// TxnTimestampAware transaction timestamp aware
+type TxnTimestampAware interface {
 	// Minimum Active Transaction Timestamp
 	MinTimestamp() timestamp.Timestamp
-	// New returns a TxnOperator to handle read and write operation for a
-	// transaction.
-	New(ctx context.Context, commitTS timestamp.Timestamp, options ...TxnOption) (TxnOperator, error)
-	// NewWithSnapshot create a txn operator from a snapshot. The snapshot must
-	// be from a CN coordinator txn operator.
-	NewWithSnapshot(snapshot []byte) (TxnOperator, error)
-	// AbortAllRunningTxn rollback all running transactions. but still keep their workspace to avoid panic.
-	AbortAllRunningTxn()
-	// Close closes client.sender
-	Close() error
 	// WaitLogTailAppliedAt wait log tail applied at ts
 	WaitLogTailAppliedAt(ctx context.Context, ts timestamp.Timestamp) (timestamp.Timestamp, error)
 	// GetLatestCommitTS get latest commit timestamp
@@ -55,18 +44,37 @@ type TxnClient interface {
 	SyncLatestCommitTS(timestamp.Timestamp)
 	// GetSyncLatestCommitTSTimes returns times of sync latest commit ts
 	GetSyncLatestCommitTSTimes() uint64
+}
+
+type TxnAction interface {
+	// AbortAllRunningTxn rollback all running transactions. but still keep their workspace to avoid panic.
+	AbortAllRunningTxn()
 	// Pause the txn client to prevent new txn from being created.
 	Pause()
 	// Resume the txn client to allow new txn to be created.
 	Resume()
+}
+
+// TxnClient transaction client, the operational entry point for transactions.
+// Each CN node holds one instance of TxnClient.
+type TxnClient interface {
+	TxnTimestampAware
+	TxnAction
+
+	// New returns a TxnOperator to handle read and write operation for a
+	// transaction.
+	New(ctx context.Context, commitTS timestamp.Timestamp, options ...TxnOption) (TxnOperator, error)
+	// NewWithSnapshot create a txn operator from a snapshot. The snapshot must
+	// be from a CN coordinator txn operator.
+	NewWithSnapshot(snapshot []byte) (TxnOperator, error)
+	// Close closes client.sender
+	Close() error
 	// RefreshExpressionEnabled return true if refresh expression feature enabled
 	RefreshExpressionEnabled() bool
 	// CNBasedConsistencyEnabled return true if cn based consistency feature enabled
 	CNBasedConsistencyEnabled() bool
-
 	// IterTxns iter all txns
 	IterTxns(func(TxnOverview) bool)
-
 	// GetState returns the current state of txn client.
 	GetState() TxnState
 }
@@ -162,7 +170,7 @@ type TxnOperator interface {
 
 	// AppendEventCallback append callback. All append callbacks will be called sequentially
 	// if event happen.
-	AppendEventCallback(event EventType, callbacks ...func(txn.TxnMeta))
+	AppendEventCallback(event EventType, callbacks ...func(txn.TxnMeta, error))
 
 	// Debug send debug request to DN, after use, SendResult needs to call the Release
 	// method.

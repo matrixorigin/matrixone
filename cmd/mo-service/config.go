@@ -186,8 +186,14 @@ func parseFromString(data string, cfg any) error {
 }
 
 func (c *Config) validate() error {
-	if c.DataDir == "" {
-		c.DataDir = "./mo-data"
+	if c.DataDir == "" ||
+		c.DataDir == "./mo-data" ||
+		c.DataDir == "mo-data" {
+		path, err := os.Getwd()
+		if err != nil {
+			panic(err)
+		}
+		c.DataDir = filepath.Join(path, "mo-data")
 	}
 	if _, err := c.getServiceType(); err != nil {
 		return err

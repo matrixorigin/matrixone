@@ -955,7 +955,7 @@ func (txn *Transaction) Commit(ctx context.Context) ([]txn.TxnRequest, error) {
 			return nil, err
 		}
 	}
-	reqs, err := genWriteReqs(ctx, txn.writes, txn.op.Txn().DebugString())
+	reqs, err := genWriteReqs(ctx, txn.writes, txn.op)
 	if err != nil {
 		return nil, err
 	}

@@ -253,8 +253,10 @@ func NewTxnRWConflictNoCtx() *Error {
 	return newError(Context(), ErrTxnRWConflict)
 }
 
-func NewTxnWWConflictNoCtx() *Error {
-	return newError(Context(), ErrTxnWWConflict)
+func NewTxnWWConflictNoCtx(
+	tableID uint64,
+	s string) *Error {
+	return NewTxnWWConflict(Context(), tableID, s)
 }
 
 func NewTAENeedRetryNoCtx() *Error {
