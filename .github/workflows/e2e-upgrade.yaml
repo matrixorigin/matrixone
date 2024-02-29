@@ -164,7 +164,6 @@ jobs:
           rm -rf ./mo-tester/lib
           mv ${{ github.workspace }}/workspace ${{ github.workspace }}/upload/
           mv ${{ github.workspace }}/mo-tester ${{ github.workspace }}/upload/
-          exit 1
 
       - uses: actions/upload-artifact@v3
         if: ${{ failure() || cancelled()}}
