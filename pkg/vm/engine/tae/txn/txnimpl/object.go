@@ -283,55 +283,55 @@ func (obj *txnObject) Prefetch(idxes []int) error {
 	return nil
 }
 
-func (blk *txnObject) Fingerprint() *common.ID { return blk.entry.AsCommonID() }
+func (obj *txnObject) Fingerprint() *common.ID { return obj.entry.AsCommonID() }
 
-func (blk *txnObject) GetByFilter(
+func (obj *txnObject) GetByFilter(
 	ctx context.Context, filter *handle.Filter, mp *mpool.MPool,
 ) (blkID uint16, offset uint32, err error) {
-	return blk.entry.GetBlockData().GetByFilter(ctx, blk.table.store.txn, filter, mp)
+	return obj.entry.GetBlockData().GetByFilter(ctx, obj.table.store.txn, filter, mp)
 }
 
-func (blk *txnObject) GetColumnDataById(
+func (obj *txnObject) GetColumnDataById(
 	ctx context.Context, blkID uint16, colIdx int, mp *mpool.MPool,
 ) (*containers.ColumnView, error) {
-	if blk.entry.IsLocal {
-		return blk.table.tableSpace.GetColumnDataById(ctx, blk.entry, colIdx, mp)
+	if obj.entry.IsLocal {
+		return obj.table.tableSpace.GetColumnDataById(ctx, obj.entry, colIdx, mp)
 	}
-	return blk.entry.GetBlockData().GetColumnDataById(ctx, blk.Txn, blk.table.GetLocalSchema(), blkID, colIdx, mp)
+	return obj.entry.GetBlockData().GetColumnDataById(ctx, obj.Txn, obj.table.GetLocalSchema(), blkID, colIdx, mp)
 }
 
-func (blk *txnObject) GetColumnDataByIds(
+func (obj *txnObject) GetColumnDataByIds(
 	ctx context.Context, blkID uint16, colIdxes []int, mp *mpool.MPool,
 ) (*containers.BlockView, error) {
-	if blk.entry.IsLocal {
-		return blk.table.tableSpace.GetColumnDataByIds(blk.entry, colIdxes, mp)
+	if obj.entry.IsLocal {
+		return obj.table.tableSpace.GetColumnDataByIds(obj.entry, colIdxes, mp)
 	}
-	return blk.entry.GetBlockData().GetColumnDataByIds(ctx, blk.Txn, blk.table.GetLocalSchema(), blkID, colIdxes, mp)
+	return obj.entry.GetBlockData().GetColumnDataByIds(ctx, obj.Txn, obj.table.GetLocalSchema(), blkID, colIdxes, mp)
 }
 
-func (blk *txnObject) GetColumnDataByName(
+func (obj *txnObject) GetColumnDataByName(
 	ctx context.Context, blkID uint16, attr string, mp *mpool.MPool,
 ) (*containers.ColumnView, error) {
-	schema := blk.table.GetLocalSchema()
+	schema := obj.table.GetLocalSchema()
 	colIdx := schema.GetColIdx(attr)
-	if blk.entry.IsLocal {
-		return blk.table.tableSpace.GetColumnDataById(ctx, blk.entry, colIdx, mp)
+	if obj.entry.IsLocal {
+		return obj.table.tableSpace.GetColumnDataById(ctx, obj.entry, colIdx, mp)
 	}
-	return blk.entry.GetBlockData().GetColumnDataById(ctx, blk.Txn, schema, blkID, colIdx, mp)
+	return obj.entry.GetBlockData().GetColumnDataById(ctx, obj.Txn, schema, blkID, colIdx, mp)
 }
 
-func (blk *txnObject) GetColumnDataByNames(
+func (obj *txnObject) GetColumnDataByNames(
 	ctx context.Context, blkID uint16, attrs []string, mp *mpool.MPool,
 ) (*containers.BlockView, error) {
-	schema := blk.table.GetLocalSchema()
+	schema := obj.table.GetLocalSchema()
 	attrIds := make([]int, len(attrs))
 	for i, attr := range attrs {
 		attrIds[i] = schema.GetColIdx(attr)
 	}
-	if blk.entry.IsLocal {
-		return blk.table.tableSpace.GetColumnDataByIds(blk.entry, attrIds, mp)
+	if obj.entry.IsLocal {
+		return obj.table.tableSpace.GetColumnDataByIds(obj.entry, attrIds, mp)
 	}
-	return blk.entry.GetBlockData().GetColumnDataByIds(ctx, blk.Txn, schema, blkID, attrIds, mp)
+	return obj.entry.GetBlockData().GetColumnDataByIds(ctx, obj.Txn, schema, blkID, attrIds, mp)
 }
 
 func (blk *txnObject) UpdateDeltaLoc(blkID uint16, deltaLoc objectio.Location) error {

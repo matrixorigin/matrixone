@@ -218,8 +218,8 @@ func (task *mergeBlocksTask) Execute(ctx context.Context) (err error) {
 				return err
 			}
 			task.transMappings.Clean()
-			return nil
 		}
+		return nil
 	}
 
 	var toObjEntry handle.Object
@@ -280,7 +280,6 @@ func (task *mergeBlocksTask) Execute(ctx context.Context) (err error) {
 		task.transMappings.UpdateMappingAfterMerge(nil, fromLayout, toLayout)
 	}
 
-	length = 0
 	batchs := make([]*containers.Batch, 0)
 	phaseNumber = 2
 	for _, vec := range sortedVecs {

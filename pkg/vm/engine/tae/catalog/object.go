@@ -487,12 +487,6 @@ func (entry *ObjectEntry) GetNonAppendableBlockCnt() int {
 	return entry.blkCnt
 }
 
-func (entry *ObjectEntry) replayNextObjectIdx(objn uint16) {
-	if objn >= entry.nextObjectIdx {
-		entry.nextObjectIdx = objn + 1
-	}
-}
-
 func (entry *ObjectEntry) AsCommonID() *common.ID {
 	id := &common.ID{
 		DbID:    entry.GetTable().GetDB().ID,

@@ -860,6 +860,9 @@ func (blk *baseBlock) CollectDeleteInRange(
 			withAborted,
 			mp,
 		)
+		if err != nil {
+			return nil, nil, err
+		}
 		if deletes == nil || deletes.Length() == 0 {
 			emtpyDelBlkIdx.Add(uint64(blkID))
 		} else {

@@ -303,14 +303,14 @@ func (n *AppendMVCCHandle) AllAppendsCommittedBefore(ts types.TS) bool {
 	return anode.GetCommitTS().Less(ts)
 }
 
-func (a *AppendMVCCHandle) StringLocked() string {
-	return a.appends.StringLocked()
+func (n *AppendMVCCHandle) StringLocked() string {
+	return n.appends.StringLocked()
 }
 
-func (a *AppendMVCCHandle) EstimateMemSizeLocked() int {
+func (n *AppendMVCCHandle) EstimateMemSizeLocked() int {
 	asize := 0
-	if a.appends != nil {
-		asize += len(a.appends.MVCC) * AppendNodeApproxSize
+	if n.appends != nil {
+		asize += len(n.appends.MVCC) * AppendNodeApproxSize
 	}
 	return asize
 }
@@ -324,8 +324,8 @@ func (n *AppendMVCCHandle) GetTotalRow() uint32 {
 	return an.maxRow
 }
 
-func (a *AppendMVCCHandle) GetID() *common.ID {
-	return a.meta.AsCommonID()
+func (n *AppendMVCCHandle) GetID() *common.ID {
+	return n.meta.AsCommonID()
 }
 
 type ObjectMVCCHandle struct {
@@ -576,7 +576,6 @@ func VisitDeltaloc(bat, tnBatch *containers.Batch, object *catalog.ObjectEntry, 
 		tnBatch.GetVectorByName(catalog.SnapshotAttr_TID).Append(object.GetTable().ID, false)
 		node.TxnMVCCNode.AppendTuple(tnBatch)
 	}
-	return
 }
 
 type DeltalocChain struct {

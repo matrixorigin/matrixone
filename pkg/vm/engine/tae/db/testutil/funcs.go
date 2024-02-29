@@ -207,7 +207,9 @@ func ForEachColumnView(rel handle.Relation, colIdx int, fn func(view *containers
 			}
 			defer view.Close()
 			err = fn(view)
-
+			if err != nil {
+				return err
+			}
 		}
 		return
 	})

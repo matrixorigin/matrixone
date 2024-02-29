@@ -68,20 +68,6 @@ func (blk *txnSysBlock) RangeDelete(blkID uint16, start, end uint32, dt handle.D
 	return blk.txnObject.RangeDelete(blkID, start, end, dt, mp)
 }
 
-func (blk *txnSysBlock) dbRows() int {
-	return blk.catalog.CoarseDBCnt()
-}
-
-func (blk *txnSysBlock) tableRows() int {
-	rows := 0
-	fn := func(db *catalog.DBEntry) error {
-		rows += db.CoarseTableCnt()
-		return nil
-	}
-	_ = blk.processDB(fn, true)
-	return rows
-}
-
 func (blk *txnSysBlock) processDB(fn func(*catalog.DBEntry) error, ignoreErr bool) (err error) {
 	it := newDBIt(blk.Txn, blk.catalog)
 	for it.linkIt.Valid() {
@@ -114,20 +100,6 @@ func (blk *txnSysBlock) processTable(entry *catalog.DBEntry, fn func(*catalog.Ta
 		it.Next()
 	}
 	return
-}
-
-func (blk *txnSysBlock) columnRows() int {
-	rows := 0
-	fn := func(table *catalog.TableEntry) error {
-		rows += len(table.GetLastestSchema().ColDefs)
-		return nil
-	}
-	dbFn := func(db *catalog.DBEntry) error {
-		_ = blk.processTable(db, fn, true)
-		return nil
-	}
-	_ = blk.processDB(dbFn, true)
-	return rows
 }
 
 func FillColumnRow(table *catalog.TableEntry, node *catalog.MVCCNode[*catalog.TableMVCCNode], attr string, colData containers.Vector) {

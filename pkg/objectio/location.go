@@ -71,7 +71,7 @@ func (l Location) Rows() uint32 {
 	return types.DecodeUint32(l[RowsOff : RowsOff+RowsLen])
 }
 func (l Location) SetRows(rows uint32) {
-	copy(l[RowsOff : RowsOff+RowsLen], types.EncodeUint32(&rows))
+	copy(l[RowsOff:RowsOff+RowsLen], types.EncodeUint32(&rows))
 }
 
 func (l Location) ID() uint16 {

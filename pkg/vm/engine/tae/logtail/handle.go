@@ -444,7 +444,6 @@ type TableLogtailRespBuilder struct {
 	checkpoint      string
 	blkMetaInsBatch *containers.Batch
 	blkMetaDelBatch *containers.Batch
-	segMetaDelBatch *containers.Batch
 	objectMetaBatch *containers.Batch
 	dataInsBatches  map[uint32]*containers.Batch // schema version -> data batch
 	dataDelBatch    *containers.Batch
@@ -523,11 +522,8 @@ func (b *TableLogtailRespBuilder) visitObjMeta(e *catalog.ObjectEntry) (bool, er
 }
 func (b *TableLogtailRespBuilder) skipObjectData(e *catalog.ObjectEntry, lastMVCCNode *catalog.MVCCNode[*catalog.ObjectMVCCNode]) bool {
 	if e.IsAppendable() {
-		if !lastMVCCNode.BaseNode.IsEmpty() {
-			// appendable block has been flushed, no need to collect data
-			return true
-		}
-		return false
+		// appendable block has been flushed, no need to collect data
+		return !lastMVCCNode.BaseNode.IsEmpty()
 	} else {
 		return true
 	}

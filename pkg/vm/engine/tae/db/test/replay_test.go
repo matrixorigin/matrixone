@@ -69,6 +69,7 @@ func TestReplayCatalog1(t *testing.T) {
 			objCnt := rand.Intn(5) + 1
 			for i := 0; i < objCnt; i++ {
 				obj, err := rel.CreateNonAppendableObject(false)
+				assert.Nil(t, err)
 				objMeta := obj.GetMeta().(*catalog.ObjectEntry)
 				objMeta.Lock()
 				baseNode := objMeta.GetLatestNodeLocked().BaseNode
@@ -169,7 +170,7 @@ func TestReplayCatalog2(t *testing.T) {
 	txn, _ = tae.StartTxn(nil)
 	e, err = txn.GetDatabase("db")
 	assert.Nil(t, err)
-	rel, err = e.GetRelationByName(schema.Name)
+	_, err = e.GetRelationByName(schema.Name)
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit(context.Background()))
 
@@ -217,7 +218,7 @@ func TestReplayCatalog3(t *testing.T) {
 	assert.Nil(t, err)
 	rel, err := e.CreateRelation(schema)
 	assert.Nil(t, err)
-	obj, err := rel.CreateNonAppendableObject(false)
+	_, err = rel.CreateNonAppendableObject(false)
 	assert.Nil(t, err)
 	_, err = e.CreateRelation(schema2)
 	assert.Nil(t, err)
@@ -245,9 +246,9 @@ func TestReplayCatalog3(t *testing.T) {
 	txn, _ = tae.StartTxn(nil)
 	e, err = txn.GetDatabase("db")
 	assert.Nil(t, err)
-	rel, err = e.GetRelationByName(schema.Name)
+	_, err = e.GetRelationByName(schema.Name)
 	assert.Nil(t, err)
-	obj, err = rel.CreateObject(false)
+	obj, err := rel.CreateObject(false)
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit(context.Background()))
 
@@ -501,7 +502,7 @@ func TestReplay2(t *testing.T) {
 	assert.Nil(t, err)
 	rel, err = e.GetRelationByName(schema.Name)
 	assert.Nil(t, err)
-	objEntry, err = rel.GetMeta().(*catalog.TableEntry).GetObjectByID(obj.GetID())
+	_, err = rel.GetMeta().(*catalog.TableEntry).GetObjectByID(obj.GetID())
 	assert.Nil(t, err)
 	val, _, err = rel.GetValueByFilter(context.Background(), filter, 0)
 	assert.Nil(t, err)

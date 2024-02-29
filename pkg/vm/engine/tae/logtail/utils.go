@@ -3121,7 +3121,8 @@ func (collector *GlobalCollector) VisitObj(entry *catalog.ObjectEntry) error {
 }
 
 func (collector *BaseCollector) visitTombstone(entry data.Tombstone) {
-	_, start, end, err := entry.VisitDeletes(nil, collector.start, collector.end, collector.data.bats[BLKMetaInsertIDX], collector.data.bats[BLKMetaInsertTxnIDX], true)
+	// If ctx is used when collect in memory deletes.
+	_, start, end, err := entry.VisitDeletes(context.Background(), collector.start, collector.end, collector.data.bats[BLKMetaInsertIDX], collector.data.bats[BLKMetaInsertTxnIDX], true)
 	if err != nil {
 		panic(err)
 	}
