@@ -1175,7 +1175,7 @@ insert into test values (23,'000000','1111111111111125','in','house','',NULL,'c'
 insert into test values (24,'000000','1111111111111126','in','house','',NULL,'c',NULL,16,'mark02','warehouse B1',NULL,NULL,NULL,NULL,NULL,NULL,'10000.000000','20000.000000',200,134,134,256,'lisi','2024-01-04 12:05:53',200,'lisi','2024-01-04 12:05:53',NULL,3,0);
 insert into test values (25,'000000','1111111111111127','in','house','',NULL,'c',NULL,17,'mark02','warehouse B1',NULL,NULL,NULL,NULL,NULL,NULL,'0.000000','326780.000000',200,134,134,256,'lisi','2024-01-04 12:07:19',200,'lisi','2024-01-04 12:07:19',NULL,3,0);
 insert into test values (26,'000000','1111111111111128','in','house','',NULL,NULL,NULL,18,'mark02','warehouse B',NULL,NULL,NULL,NULL,NULL,NULL,'137.000000','33878.000000',300,112,900,111,'zhangsan','2024-01-04 16:22:31',300,'zhangsan','2024-01-04 16:22:31',NULL,3,0);
-
+-- @separator:table
 select mo_ctl('dn','flush','test.test');
 select id, count(*) from test group by id order by count(*) desc;
 update test set status = 3 where is_deleted = 0 and (id in (10, 11, 12, 10, 13, 10) and is_deleted = 0 and tenant_id = '000000');
