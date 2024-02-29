@@ -323,7 +323,6 @@ select * from dis_view_02;
 SQL parser error: table "dis_view_02" does not exist
 select * from dis_view_02;
 SQL parser error: table "dis_view_02" does not exist
-
 insert into dis_table_02 values (2,'oooo','1802-03-20');
 commit;
 select b, c from dis_table_02;
