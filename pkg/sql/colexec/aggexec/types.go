@@ -81,7 +81,8 @@ var (
 )
 
 var (
-	// todo: the following code is not good.
+	compositeSingleAggImpls = make(map[int64]func(arg types.Type, ret types.Type) (any, error))
+	compositeMultiAggImpls  = make(map[int64]func(args []types.Type, ret types.Type) (any, error))
 	// string is key like "aggID_argT_retT".
 	singleAggImpls = make(map[string]any)
 	genSingleKey   = func(id int64, arg, ret types.Type) string {
@@ -100,6 +101,17 @@ var (
 	}
 )
 
+func RegisterCompositeSingleAggImpl(
+	id int64, compositeImpl func(arg types.Type, ret types.Type) (any, error)) {
+	// todo: legal check needed.
+	compositeSingleAggImpls[id] = compositeImpl
+}
+
+func RegisterCompositeMultiAggImpl(
+	id int64, compositeImpl func(args []types.Type, ret types.Type) (any, error)) {
+	compositeMultiAggImpls[id] = compositeImpl
+}
+
 func RegisterSingleAggImpl(id int64, arg types.Type, ret types.Type, impl any) {
 	// todo: should do legal check later. and remove the codes in function MakeAgg.
 	singleAggImpls[genSingleKey(id, arg, ret)] = impl
@@ -112,6 +124,10 @@ func RegisterMultiAggImpl(id int64, args []types.Type, ret types.Type, impl any)
 
 func init() {
 	fromAggInfoToSingleAggImpl = func(aggID int64, args types.Type, ret types.Type) (any, error) {
+		if composite, ok := compositeSingleAggImpls[aggID]; ok {
+			return composite(args, ret)
+		}
+
 		key := genSingleKey(aggID, args, ret)
 		if impl, ok := singleAggImpls[key]; ok {
 			return impl, nil
@@ -120,6 +136,10 @@ func init() {
 	}
 
 	fromAggInfoToMultiAggImpl = func(aggID int64, args []types.Type, ret types.Type) (any, error) {
+		if composite, ok := compositeMultiAggImpls[aggID]; ok {
+			return composite(args, ret)
+		}
+
 		key := genMultiKey(aggID, args, ret)
 		if impl, ok := multiAggImpls[key]; ok {
 			return impl, nil

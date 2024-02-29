@@ -14,11 +14,47 @@
 
 package agg2
 
-import "github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
+import (
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
+)
 
-var _ aggexec.SingleAggFromFixedRetFixed[int32, int64] = &aggSum[int32, int64]{}
+var _ aggexec.SingleAggFromFixedRetFixed[int32, int64] = aggSum[int32, int64]{}
 
 type aggSum[from numeric, to maxScaleNumeric] struct{}
+
+func newAggSum[from numeric, to maxScaleNumeric]() aggSum[from, to] {
+	return aggSum[from, to]{}
+}
+
+type aggSumDecimal64 struct{}
+
+func newAggSumDecimal64() aggSumDecimal64 {
+	return aggSumDecimal64{}
+}
+
+type aggSumDecimal128 struct{}
+
+func newAggSumDecimal128() aggSumDecimal128 {
+	return aggSumDecimal128{}
+}
+
+func init() {
+	// todo: id is hard-coded here.
+	aggexec.RegisterSingleAggImpl(100, types.T_bit.ToType(), types.T_int64.ToType(), newAggSum[int8, int64])
+	aggexec.RegisterSingleAggImpl(100, types.T_int8.ToType(), types.T_int64.ToType(), newAggSum[int8, int64])
+	aggexec.RegisterSingleAggImpl(101, types.T_int16.ToType(), types.T_int64.ToType(), newAggSum[int16, int64])
+	aggexec.RegisterSingleAggImpl(102, types.T_int32.ToType(), types.T_int64.ToType(), newAggSum[int32, int64])
+	aggexec.RegisterSingleAggImpl(103, types.T_int64.ToType(), types.T_int64.ToType(), newAggSum[int64, int64])
+	aggexec.RegisterSingleAggImpl(104, types.T_uint8.ToType(), types.T_uint64.ToType(), newAggSum[uint8, uint64])
+	aggexec.RegisterSingleAggImpl(105, types.T_uint16.ToType(), types.T_uint64.ToType(), newAggSum[uint16, uint64])
+	aggexec.RegisterSingleAggImpl(106, types.T_uint32.ToType(), types.T_uint64.ToType(), newAggSum[uint32, uint64])
+	aggexec.RegisterSingleAggImpl(107, types.T_uint64.ToType(), types.T_uint64.ToType(), newAggSum[uint64, uint64])
+	aggexec.RegisterSingleAggImpl(108, types.T_float32.ToType(), types.T_float64.ToType(), newAggSum[float32, float64])
+	aggexec.RegisterSingleAggImpl(109, types.T_float64.ToType(), types.T_float64.ToType(), newAggSum[float64, float64])
+	aggexec.RegisterSingleAggImpl(110, types.T_decimal64.ToType(), types.T_decimal128.ToType(), newAggSumDecimal64)
+	aggexec.RegisterSingleAggImpl(111, types.T_decimal128.ToType(), types.T_decimal128.ToType(), newAggSumDecimal128)
+}
 
 func (a aggSum[from, to]) Marshal() []byte        { return nil }
 func (a aggSum[from, to]) Unmarshal(bytes []byte) {}
