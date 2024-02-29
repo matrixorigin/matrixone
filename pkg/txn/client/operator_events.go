@@ -22,29 +22,41 @@ import (
 type EventType int
 
 const (
-	// ClosedEvent txn closed event
-	ClosedEvent = EventType(0)
+	ActiveEvent          = EventType(0)
+	SnapshotUpdatedEvent = EventType(1)
+	ClosedEvent          = EventType(2)
+	CommitFailedEvent    = EventType(3)
 )
 
 func (tc *txnOperator) AppendEventCallback(
 	event EventType,
-	callbacks ...func(txn.TxnMeta)) {
+	callbacks ...func(txn.TxnMeta, error)) {
 	tc.mu.Lock()
 	defer tc.mu.Unlock()
 	if tc.mu.closed {
 		panic("append callback on closed txn")
 	}
 	if tc.mu.callbacks == nil {
-		tc.mu.callbacks = make(map[EventType][]func(txn.TxnMeta), 1)
+		tc.mu.callbacks = make(map[EventType][]func(txn.TxnMeta, error), 1)
 	}
 	tc.mu.callbacks[event] = append(tc.mu.callbacks[event], callbacks...)
 }
 
-func (tc *txnOperator) triggerEventLocked(event EventType) {
+func (tc *txnOperator) triggerEvent(
+	event EventType,
+	err error) {
+	tc.mu.RLock()
+	defer tc.mu.RUnlock()
+	tc.triggerEventLocked(event, err)
+}
+
+func (tc *txnOperator) triggerEventLocked(
+	event EventType,
+	err error) {
 	if tc.mu.callbacks == nil {
 		return
 	}
 	for _, cb := range tc.mu.callbacks[event] {
-		cb(tc.mu.txn)
+		cb(tc.mu.txn, err)
 	}
 }

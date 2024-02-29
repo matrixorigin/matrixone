@@ -233,6 +233,13 @@ type Config struct {
 		//PKDedupCount check whether primary key in transaction's workspace is duplicated if the count of pk
 		// is less than PKDedupCount when txn commits. Default value is 0 , which means don't do deduplication.
 		PkDedupCount int `toml:"pk-dedup-count"`
+
+		// Trace trace
+		Trace struct {
+			BufferSize    int           `toml:"buffer-size"`
+			FlushBytes    toml.ByteSize `toml:"flush-bytes"`
+			FlushDuration toml.Duration `toml:"force-flush-duration"`
+		} `toml:"trace"`
 	} `toml:"txn"`
 
 	// AutoIncrement auto increment config
@@ -599,6 +606,7 @@ type service struct {
 
 	options struct {
 		bootstrapOptions []bootstrap.Option
+		traceDataPath    string
 	}
 }
 

@@ -34,7 +34,7 @@ import (
 )
 
 var (
-	ErrTxnWWConflict = moerr.NewTxnWWConflictNoCtx()
+	ErrTxnWWConflict = moerr.NewTxnWWConflictNoCtx(0, "")
 	ErrTxnNeedRetry  = moerr.NewTAENeedRetryNoCtx()
 )
 
