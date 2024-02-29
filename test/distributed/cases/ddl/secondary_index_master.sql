@@ -186,16 +186,16 @@ insert into t1 values("Nightingale","Lane", "3");
 --+---------------------------------------------------------------------------------------------+
 --| Project                                                                                     |
 --|   ->  Join                                                                                  |
---|         Join Type: INNER                                                                    |
+--|         Join Type: INDEX                                                                    |
 --|         Join Cond: (t1.__mo_fake_pk_col = #[1,0])                                           | <-- Good
 --|         ->  Table Scan on a.t1                                                              |
 --|               Filter Cond: (t1.b = 'Lane'), (t1.a = 'Congress')                             |
 --|         ->  Join                                                                            |
 --|               Join Type: INNER                                                              |
 --|               Join Cond: (#[0,0] = #[1,0])                                                  |
---|               ->  Table Scan on a.__mo_index_secondary_018df358-07e9-7ba7-98ad-b0925c730588 |
+--|               ->  Table Scan on a.__mo_index_secondary_018df437-c576-7c78-8d68-eb29bf7cd598 |
 --|                     Filter Cond: prefix_eq(#[0,0], 'Fa FCongress ')                       |
---|               ->  Table Scan on a.__mo_index_secondary_018df358-07e9-7ba7-98ad-b0925c730588 |
+--|               ->  Table Scan on a.__mo_index_secondary_018df437-c576-7c78-8d68-eb29bf7cd598 |
 --|                     Filter Cond: prefix_eq(#[0,0], 'Fb FLane ')                           |
 --+---------------------------------------------------------------------------------------------+
 select * from t1 where a="Congress" and b="Lane";
@@ -213,17 +213,17 @@ insert into t1 values("Nightingale","Lane", "3");
 --+---------------------------------------------------------------------------------------------+
 --| Project                                                                                     |
 --|   ->  Join                                                                                  |
---|         Join Type: INNER   hashOnPK                                                         |
---|         Join Cond: (#[0,0] = t1.c)                                                          |<-- Good
+--|         Join Type: INDEX                                                                    |
+--|         Join Cond: (t1.c = #[1,0])                                                          |<-- Good
+--|         ->  Table Scan on a.t1                                                              |
+--|               Filter Cond: (t1.b = 'Lane'), (t1.a = 'Nightingale')                          |
 --|         ->  Join                                                                            |
 --|               Join Type: INNER                                                              |
 --|               Join Cond: (#[0,0] = #[1,0])                                                  |
---|               ->  Table Scan on a.__mo_index_secondary_018df3d0-af04-76e6-9720-4dee6d627ecc |
+--|               ->  Table Scan on a.__mo_index_secondary_018df438-9530-7b1d-b252-b10d794ae2a4 |
 --|                     Filter Cond: prefix_eq(#[0,0], 'Fa FNightingale ')                    |
---|               ->  Table Scan on a.__mo_index_secondary_018df3d0-af04-76e6-9720-4dee6d627ecc |
+--|               ->  Table Scan on a.__mo_index_secondary_018df438-9530-7b1d-b252-b10d794ae2a4 |
 --|                     Filter Cond: prefix_eq(#[0,0], 'Fb FLane ')                           |
---|         ->  Table Scan on a.t1                                                              |
---|               Filter Cond: (t1.b = 'Lane'), (t1.a = 'Nightingale')                          |
 --+---------------------------------------------------------------------------------------------+
 select * from t1 where a="Nightingale" and b="Lane";
 
@@ -241,17 +241,17 @@ insert into t1 values("Nightingale","Lane","ALane", "3","0");
 --+---------------------------------------------------------------------------------------------+
 --| Project                                                                                     |
 --|   ->  Join                                                                                  |
---|         Join Type: INNER                                                                    |
---|         Join Cond: (#[0,0] = t1.__mo_cpkey_col)                                             | <-- Good
+--|         Join Type: INDEX                                                                    |
+--|         Join Cond: (t1.__mo_cpkey_col = #[1,0])                                             |<-- Good
+--|         ->  Table Scan on a.t1                                                              |
+--|               Filter Cond: (t1.b0 = 'Lane'), (t1.a = 'Nightingale')                         |
 --|         ->  Join                                                                            |
 --|               Join Type: INNER                                                              |
 --|               Join Cond: (#[0,0] = #[1,0])                                                  |
---|               ->  Table Scan on a.__mo_index_secondary_018df3cf-e454-7b47-84d3-ac0241fde645 |
+--|               ->  Table Scan on a.__mo_index_secondary_018df43c-db6a-7afe-bb23-bdf898223435 |
 --|                     Filter Cond: prefix_eq(#[0,0], 'Fa FNightingale ')                    |
---|               ->  Table Scan on a.__mo_index_secondary_018df3cf-e454-7b47-84d3-ac0241fde645 |
+--|               ->  Table Scan on a.__mo_index_secondary_018df43c-db6a-7afe-bb23-bdf898223435 |
 --|                     Filter Cond: prefix_eq(#[0,0], 'Fb0 FLane ')                          |
---|         ->  Table Scan on a.t1                                                              |
---|               Filter Cond: (t1.b0 = 'Lane'), (t1.a = 'Nightingale')                         |
 --+---------------------------------------------------------------------------------------------+
 select * from t1 where a="Nightingale" and b0="Lane";
 
@@ -268,12 +268,12 @@ insert into t1 values("Nightingale","Lane", "3");
 --+---------------------------------------------------------------------------------------+
 --| Project                                                                               |
 --|   ->  Join                                                                            |
---|         Join Type: INNER   hashOnPK                                                   |
---|         Join Cond: (#[0,0] = t1.c)                                                    |
---|         ->  Table Scan on a.__mo_index_secondary_018df3d4-9f51-7036-a244-e41c4a6d7b12 |
---|               Filter Cond: prefix_eq(#[0,0], 'Fb FLane ')                           |
+--|         Join Type: INDEX                                                              |
+--|         Join Cond: (t1.c = #[1,0])                                                    |<-- Good
 --|         ->  Table Scan on a.t1                                                        |
 --|               Filter Cond: (t1.b = 'Lane')                                            |
+--|         ->  Table Scan on a.__mo_index_secondary_018df43d-47dd-75bd-a6c4-9c25c7a51c23 |
+--|               Filter Cond: prefix_eq(#[0,0], 'Fb FLane ')                           |
 --+---------------------------------------------------------------------------------------+
 select * from t1 where b="Lane";
 
@@ -284,17 +284,17 @@ select * from t1 where b="Lane";
 --+---------------------------------------------------------------------------------------------+
 --| Project                                                                                     |
 --|   ->  Join                                                                                  |
---|         Join Type: INNER   hashOnPK                                                         |
---|         Join Cond: (#[0,0] = t1.c)                                                          |
---|         ->  Join                                                                            |
---|               Join Type: INNER                                                              |
---|               Join Cond: (#[0,0] = #[1,0])                                                  |
---|               ->  Table Scan on a.__mo_index_secondary_018df3d4-9f51-7036-a244-e41c4a6d7b12 |
---|                     Filter Cond: prefix_eq(#[0,0], 'Fa FJuniper ')                        |
---|               ->  Table Scan on a.__mo_index_secondary_018df3d4-9f51-7036-a244-e41c4a6d7b12 |
---|                     Filter Cond: prefix_eq(#[0,0], 'Fb FWay ')                            |
+--|         Join Type: INDEX                                                                    |
+--|         Join Cond: (t1.c = #[1,0])                                                          |
 --|         ->  Table Scan on a.t1                                                              |
 --|               Filter Cond: (t1.b = 'Way'), (t1.a = 'Juniper')                               |
+--|         ->  Join                                                                            |
+--|               Join Type: INNER                                                              |<-- Good
+--|               Join Cond: (#[0,0] = #[1,0])                                                  |
+--|               ->  Table Scan on a.__mo_index_secondary_018df43d-47dd-75bd-a6c4-9c25c7a51c23 |
+--|                     Filter Cond: prefix_eq(#[0,0], 'Fa FJuniper ')                        |
+--|               ->  Table Scan on a.__mo_index_secondary_018df43d-47dd-75bd-a6c4-9c25c7a51c23 |
+--|                     Filter Cond: prefix_eq(#[0,0], 'Fb FWay ')                            |
 --+---------------------------------------------------------------------------------------------+
 select * from t1 where a="Juniper" and b="Way";
 
@@ -311,22 +311,22 @@ insert into t1 values("Nightingale","Lane", "3");
 --+---------------------------------------------------------------------------------------------------+
 --| Project                                                                                           |
 --|   ->  Join                                                                                        |
---|         Join Type: INNER   hashOnPK                                                               |
---|         Join Cond: (#[0,0] = t1.__mo_fake_pk_col)                                                 |
---|         ->  Join                                                                                  |
---|               Join Type: INNER                                                                    |
---|               Join Cond: (#[0,0] = #[1,0])                                                        |
---|               ->  Table Scan on a.__mo_index_secondary_018df3d6-3662-7f6d-b1e6-68e7413c5c7d       |
---|                     Filter Cond: prefix_eq(#[0,0], 'Fa FCongress ')                             |
---|               ->  Join                                                                            |
---|                     Join Type: INNER                                                              |
---|                     Join Cond: (#[0,0] = #[1,0])                                                  |
---|                     ->  Table Scan on a.__mo_index_secondary_018df3d6-3662-7f6d-b1e6-68e7413c5c7d |
---|                           Filter Cond: prefix_eq(#[0,0], 'Fb FLane ')                           |
---|                     ->  Table Scan on a.__mo_index_secondary_018df3d6-3662-7f6d-b1e6-68e7413c5c7d |
---|                           Filter Cond: prefix_eq(#[0,0], 'Fc F1 ')                              |
+--|         Join Type: INDEX                                                                          |
+--|         Join Cond: (t1.__mo_fake_pk_col = #[1,0])                                                 |
 --|         ->  Table Scan on a.t1                                                                    |
 --|               Filter Cond: (t1.c = '1'), (t1.b = 'Lane'), (t1.a = 'Congress')                     |
+--|         ->  Join                                                                                  |
+--|               Join Type: INNER                                                                    |<-- Good
+--|               Join Cond: (#[0,0] = #[1,0])                                                        |
+--|               ->  Table Scan on a.__mo_index_secondary_018df43e-105b-70d8-a9c1-88c03b26d8ee       |
+--|                     Filter Cond: prefix_eq(#[0,0], 'Fa FCongress ')                             |
+--|               ->  Join                                                                            |
+--|                     Join Type: INNER                                                              |<-- Good
+--|                     Join Cond: (#[0,0] = #[1,0])                                                  |
+--|                     ->  Table Scan on a.__mo_index_secondary_018df43e-105b-70d8-a9c1-88c03b26d8ee |
+--|                           Filter Cond: prefix_eq(#[0,0], 'Fb FLane ')                           |
+--|                     ->  Table Scan on a.__mo_index_secondary_018df43e-105b-70d8-a9c1-88c03b26d8ee |
+--|                           Filter Cond: prefix_eq(#[0,0], 'Fc F1 ')                              |
 --+---------------------------------------------------------------------------------------------------+
 select * from t1 where a="Congress" and b="Lane" and c="1";
 
@@ -338,16 +338,16 @@ select * from t1 where a="Congress" and b="Lane" and c="1";
 --+---------------------------------------------------------------------------------------------+
 --| Project                                                                                     |
 --|   ->  Join                                                                                  |
---|         Join Type: INNER   hashOnPK                                                         |
---|         Join Cond: (#[0,0] = t1.__mo_fake_pk_col)                                           |
---|         ->  Join                                                                            |
---|               Join Type: INNER                                                              |
---|               Join Cond: (#[0,0] = #[1,0])                                                  |
---|               ->  Table Scan on a.__mo_index_secondary_018df3d6-3662-7f6d-b1e6-68e7413c5c7d |
---|                     Filter Cond: prefix_between(#[0,0], 'Fc F2 ', 'Fc F3 ')             |
---|               ->  Table Scan on a.__mo_index_secondary_018df3d6-3662-7f6d-b1e6-68e7413c5c7d |
---|                     Filter Cond: prefix_eq(#[0,0], 'Fa FNightingale ')                    |
+--|         Join Type: INDEX                                                                    |
+--|         Join Cond: (t1.__mo_fake_pk_col = #[1,0])                                           |
 --|         ->  Table Scan on a.t1                                                              |
 --|               Filter Cond: (t1.a = 'Nightingale'), t1.c BETWEEN '2' AND '3'                 |
+--|         ->  Join                                                                            |
+--|               Join Type: INNER                                                              |<-- Good
+--|               Join Cond: (#[0,0] = #[1,0])                                                  |
+--|               ->  Table Scan on a.__mo_index_secondary_018df43e-105b-70d8-a9c1-88c03b26d8ee |
+--|                     Filter Cond: prefix_between(#[0,0], 'Fc F2 ', 'Fc F3 ')                 |<-- Good
+--|               ->  Table Scan on a.__mo_index_secondary_018df43e-105b-70d8-a9c1-88c03b26d8ee |
+--|                     Filter Cond: prefix_eq(#[0,0], 'Fa FNightingale ')                      |<-- Good
 --+---------------------------------------------------------------------------------------------+
 select * from t1 where a="Nightingale" and c between "2" and "3";
