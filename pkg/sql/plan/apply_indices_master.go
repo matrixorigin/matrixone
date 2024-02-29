@@ -45,7 +45,7 @@ func (builder *QueryBuilder) applyIndicesForFiltersUsingMasterIndex(nodeID int32
 		//    ...
 		lastNodeId = currScanId
 		currIndexPkCol := &Expr{
-			Typ: pkType,
+			Typ: DeepCopyType(pkType),
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: currIdxScanTag,
@@ -78,7 +78,7 @@ func (builder *QueryBuilder) applyIndicesForFiltersUsingMasterIndex(nodeID int32
 	//    ) ON tbl.pk = idx1.pk
 	wherePkEqPk, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{
 		{
-			Typ: pkType,
+			Typ: DeepCopyType(pkType),
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: prevIndexPkCol.GetCol().RelPos, // last idxTbl (may be join) relPos
@@ -87,7 +87,7 @@ func (builder *QueryBuilder) applyIndicesForFiltersUsingMasterIndex(nodeID int32
 			},
 		},
 		{
-			Typ: pkType,
+			Typ: DeepCopyType(pkType),
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: scanNode.BindingTags[0],
