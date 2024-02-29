@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -318,7 +319,6 @@ func getInsertColsFromStmt(ctx context.Context, stmt *tree.Insert, tableDef *Tab
 //
 // Otherwise, the primary key filter cannot be used.
 func canUsePkFilter(builder *QueryBuilder, ctx CompilerContext, stmt *tree.Insert, tableDef *TableDef, insertColsName []string) bool {
-
 	isCompound := len(tableDef.Pkey.Names) > 1
 
 	if !CNPrimaryCheck {
@@ -499,11 +499,10 @@ func NewPkLocationMap(tableDef *TableDef) *pkLocationMap {
 	return &pkLocationMap{m}
 }
 
-func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableDef, pkLocationMap *pkLocationMap, insertColsNameFromStmt []string) (pkFilterExprs []*Expr) {
+func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableDef, pkLocationMap *pkLocationMap, insertColsNameFromStmt []string) (pkFilterExprs []*Expr, err error) {
 	var bat *batch.Batch
 	var pkLocationInfo pkOrderAndIdx
 	var ok bool
-	var err error
 	var colTyp *Type
 	proc := ctx.GetProcess()
 	node := builder.qry.Nodes[0]
@@ -539,7 +538,7 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 			rowExpr := DeepCopyExpr(data.Expr)
 			e, err := forceCastExpr(builder.GetContext(), rowExpr, colTyp)
 			if err != nil {
-				return nil
+				return nil, err
 			}
 			valExprs[data.RowPos] = e
 		}
@@ -562,12 +561,12 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 					}
 					valExprs[i], err = appendCastBeforeExpr(proc.Ctx, constExpr, colTyp, false)
 					if err != nil {
-						return nil
+						return nil, err
 					}
 				} else {
 					constExpr := rule.GetConstantValue(bat.Vecs[idx], true, uint64(i))
 					if constExpr == nil {
-						return nil
+						return nil, err
 					}
 					valExprs[i] = &plan.Expr{
 						Typ: colTyp,
@@ -597,7 +596,7 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 					},
 				}, colExprs[0][i]})
 				if err != nil {
-					return nil
+					return nil, err
 				}
 
 				if i == 0 {
@@ -605,11 +604,11 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 				} else {
 					orExpr, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "or", []*Expr{orExpr, expr})
 					if err != nil {
-						return nil
+						return nil, err
 					}
 				}
 			}
-			return []*Expr{orExpr}
+			return []*Expr{orExpr}, err
 		} else {
 			// pk in (a1, a2, a3)
 			// args in list must be constant
@@ -633,13 +632,13 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 				},
 			}})
 			if err != nil {
-				return nil
+				return nil, err
 			}
 			expr, err = ConstantFold(batch.EmptyForConstFoldBatch, expr, proc, false)
 			if err != nil {
-				return nil
+				return nil, err
 			}
-			return []*Expr{expr}
+			return []*Expr{expr}, err
 		}
 	} else {
 		if rowsCount <= 3 && !isUniqueHiddenTable {
@@ -664,14 +663,14 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 					},
 					)
 					if err != nil {
-						return nil
+						return nil, err
 					}
 					if andExpr == nil {
 						andExpr = eqExpr
 					} else {
 						andExpr, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "and", []*Expr{andExpr, eqExpr})
 						if err != nil {
-							return nil
+							return nil, err
 						}
 					}
 				}
@@ -680,80 +679,62 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 				} else {
 					orExpr, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "or", []*Expr{orExpr, andExpr})
 					if err != nil {
-						return nil
+						return nil, err
 					}
 				}
 				andExpr = nil
 			}
-			return []*Expr{orExpr}
+			return []*Expr{orExpr}, nil
 		} else {
-			//  __cpkey__ in (serial(a1,b1,c1,d1),serial(a2,b2,c2,d2),xxx)
-			inExprs := make([]*plan.Expr, rowsCount)
-
-			// serialize
-			for i := 0; i < rowsCount; i++ {
-				serExprs := make([]*plan.Expr, 0, len(pkLocationMap.m))
-				for _, pkLocationInfo = range pkLocationMap.m {
-					pkOrder := pkLocationInfo.pkOrder
-					pkColIdx := pkLocationInfo.pkIndex
-					serExprs = append(serExprs, &plan.Expr{
-						Typ: tableDef.Cols[pkColIdx].Typ,
-						Expr: &plan.Expr_Col{
-							Col: &ColRef{
-								ColPos: int32(pkOrder),
-								Name:   tableDef.Cols[pkColIdx].Name,
-							},
-						},
-					})
-				}
-				cpk, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", []*Expr{
-					{
-						Expr: &plan.Expr_List{
-							List: &plan.ExprList{
-								List: serExprs,
-							},
-						},
-						Typ: &plan.Type{
-							Id: int32(types.T_tuple),
-						},
-					},
-				})
-				if err != nil {
-					return nil
-				}
-				inExprs[i] = cpk
+			pkNames := make([]string, len(pkLocationMap.m))
+			for n, p := range pkLocationMap.m {
+				pkNames[p.pkOrder] = n
 			}
-
-			expr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "in", []*Expr{
+			toSerialBatch := bat.GetSubBatch(pkNames)
+			// serialize
+			//  __cpkey__ in (serial(a1,b1,c1,d1),serial(a2,b2,c2,d2),xxx)
+			// processing composite primary key
+			vec, err := function.RunFunctionDirectly(proc, function.SerialFunctionEncodeID,
+				toSerialBatch.Vecs,
+				toSerialBatch.RowCount())
+			if err != nil {
+				return nil, err
+			}
+			vec.InplaceSort()
+			data, err := vec.MarshalBinary()
+			inExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "in", []*Expr{
 				{
-					Typ: colTyp,
+					Typ: makeHiddenColTyp(),
 					Expr: &plan.Expr_Col{
 						Col: &ColRef{
 							ColPos: int32(len(tableDef.Pkey.Names)),
-							Name:   tableDef.Pkey.PkeyColName,
+							// ColPos: 0,
+							Name: tableDef.Pkey.PkeyColName,
 						},
 					},
-				}, {
-					Expr: &plan.Expr_List{
-						List: &plan.ExprList{
-							List: inExprs,
-						},
-					},
+				},
+				{
 					Typ: &plan.Type{
 						Id: int32(types.T_tuple),
+					},
+					Expr: &plan.Expr_Vec{
+						Vec: &plan.LiteralVec{
+							Len:  int32(vec.Length()),
+							Data: data,
+						},
 					},
 				},
 			})
 			if err != nil {
-				return nil
+				return nil, err
 			}
 
-			expr2, err := ConstantFold(batch.EmptyForConstFoldBatch, expr, proc, false)
+			filterExpr, err := ConstantFold(batch.EmptyForConstFoldBatch, inExpr, proc, false)
 			if err != nil {
-				return nil
+				return nil, nil
 			}
 
-			return []*Expr{expr2}
+			return []*Expr{filterExpr}, nil
 		}
 	}
 }
