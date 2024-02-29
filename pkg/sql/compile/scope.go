@@ -17,9 +17,6 @@ package compile
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/restrict"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"hash/crc32"
 	goruntime "runtime"
 	"runtime/debug"
@@ -38,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	pbpipeline "github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/limit"
@@ -47,11 +45,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeoffset"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergetop"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/restrict"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/right"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightanti"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightsemi"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/sample"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -110,12 +110,16 @@ func (s *Scope) Run(c *Compile) (err error) {
 	s.Proc.Ctx = context.WithValue(s.Proc.Ctx, defines.EngineKey{}, c.e)
 	// DataSource == nil specify the empty scan
 	if s.DataSource == nil {
-		p = pipeline.New(nil, s.Instructions, s.Reg)
+		p = pipeline.New(0, nil, s.Instructions, s.Reg)
 		if _, err = p.ConstRun(nil, s.Proc); err != nil {
 			return err
 		}
 	} else {
-		p = pipeline.New(s.DataSource.Attributes, s.Instructions, s.Reg)
+		id := uint64(0)
+		if s.DataSource.TableDef != nil {
+			id = s.DataSource.TableDef.TblId
+		}
+		p = pipeline.New(id, s.DataSource.Attributes, s.Instructions, s.Reg)
 		if s.DataSource.Bat != nil {
 			_, err = p.ConstRun(s.DataSource.Bat, s.Proc)
 		} else {
@@ -256,7 +260,7 @@ func (s *Scope) RemoteRun(c *Compile) error {
 			zap.String("local-address", c.addr),
 			zap.String("remote-address", s.NodeInfo.Addr))
 
-	p := pipeline.New(nil, s.Instructions, s.Reg)
+	p := pipeline.New(0, nil, s.Instructions, s.Reg)
 	err := s.remoteRun(c)
 	select {
 	case <-s.Proc.Ctx.Done():

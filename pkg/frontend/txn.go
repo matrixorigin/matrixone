@@ -182,6 +182,21 @@ func (th *TxnHandler) NewTxnOperator() (context.Context, TxnOperator, error) {
 			}
 		}
 
+		if th.ses.IsBackgroundSession() {
+			opts = append(opts, client.WithDisableTrace(true))
+		} else {
+			varVal, err = th.ses.GetSessionVar("disable_txn_trace")
+			if err != nil {
+				return nil, nil, err
+			}
+			if gsv, ok := GSysVariables.GetDefinitionOfSysVar("disable_txn_trace"); ok {
+				if svbt, ok2 := gsv.GetType().(SystemVariableBoolType); ok2 {
+					if svbt.IsTrue(varVal) {
+						opts = append(opts, client.WithDisableTrace(true))
+					}
+				}
+			}
+		}
 	}
 
 	th.txnOperator, err = th.txnClient.New(
