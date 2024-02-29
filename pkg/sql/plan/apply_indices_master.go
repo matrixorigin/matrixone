@@ -29,14 +29,21 @@ func (builder *QueryBuilder) applyIndicesForFiltersUsingMasterIndex(nodeID int32
 	var pkPos = scanNode.TableDef.Name2ColIndex[scanNode.TableDef.Pkey.PkeyColName]
 	var pkType = scanNode.TableDef.Cols[pkPos].Typ
 
-	var prevScanId int32
 	var prevIndexPkCol *Expr
+	var prevLastNodeId int32
 	var lastNodeId int32
 	for i, filterExp := range scanNode.FilterList {
 		idxObjRef, idxTableDef := builder.compCtx.Resolve(scanNode.ObjRef.SchemaName, indexDef.IndexTableName)
 
 		// 1. SELECT pk from idx WHERE prefix_eq(`__mo_index_idx_col`,serial_full("a","value"))
 		currIdxScanTag, currScanId := makeIndexTblScan(builder, builder.ctxByNode[nodeID], filterExp, idxTableDef, idxObjRef)
+
+		// 2. (SELECT pk from idx1 WHERE prefix_eq(`__mo_index_idx_col`,serial_full("a","value1")) )
+		//    	INNER JOIN
+		//    (SELECT pk from idx2 WHERE prefix_eq(`__mo_index_idx_col` =  serial_full("b","value2")) )
+		//    	ON idx1.pk = idx2.pk
+		//    ...
+		lastNodeId = currScanId
 		currIndexPkCol := &Expr{
 			Typ: pkType,
 			Expr: &plan.Expr_Col{
@@ -46,29 +53,21 @@ func (builder *QueryBuilder) applyIndicesForFiltersUsingMasterIndex(nodeID int32
 				},
 			},
 		}
-
-		lastNodeId = currScanId
-
-		// 2. (SELECT pk from idx1 WHERE prefix_eq(`__mo_index_idx_col`,serial_full("a","value1")) )
-		//    	INNER JOIN
-		//    (SELECT pk from idx2 WHERE prefix_eq(`__mo_index_idx_col` =  serial_full("b","value2")) )
-		//    	ON idx1.pk = idx2.pk
-		//    ...
 		if i != 0 {
 			wherePrevPkEqCurrPk, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{
-				prevIndexPkCol,
 				currIndexPkCol,
+				prevIndexPkCol,
 			})
 			lastNodeId = builder.appendNode(&plan.Node{
 				NodeType: plan.Node_JOIN,
 				JoinType: plan.Node_INNER,
-				Children: []int32{currScanId, prevScanId},
+				Children: []int32{currScanId, prevLastNodeId},
 				OnList:   []*Expr{wherePrevPkEqCurrPk},
 			}, builder.ctxByNode[nodeID])
 		}
 
-		prevScanId = currScanId
 		prevIndexPkCol = currIndexPkCol
+		prevLastNodeId = lastNodeId
 	}
 
 	// 3. SELECT * from tbl INNER JOIN (
@@ -82,7 +81,7 @@ func (builder *QueryBuilder) applyIndicesForFiltersUsingMasterIndex(nodeID int32
 			Typ: pkType,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
-					RelPos: prevIndexPkCol.GetCol().RelPos, // last idxTbl relPos
+					RelPos: prevIndexPkCol.GetCol().RelPos, // last idxTbl (may be join) relPos
 					ColPos: 1,                              // idxTbl.pk
 				},
 			},
@@ -100,7 +99,7 @@ func (builder *QueryBuilder) applyIndicesForFiltersUsingMasterIndex(nodeID int32
 	lastNodeId = builder.appendNode(&plan.Node{
 		NodeType: plan.Node_JOIN,
 		JoinType: plan.Node_INNER,
-		Children: []int32{scanNode.NodeId, lastNodeId},
+		Children: []int32{lastNodeId, scanNode.NodeId},
 		OnList:   []*Expr{wherePkEqPk},
 	}, builder.ctxByNode[nodeID])
 
