@@ -86,10 +86,6 @@ func unclassifiedStatementInUncommittedTxnErrorInfo() string {
 	return "unclassified statement appears in uncommitted transaction"
 }
 
-func abortTransactionErrorInfo() string {
-	return "Previous DML conflicts with existing constraints or data format. This transaction has to be aborted"
-}
-
 func writeWriteConflictsErrorInfo() string {
 	return "Write conflicts detected. Previous transaction need to be aborted."
 }
@@ -3233,14 +3229,11 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 		return err
 	}
 
-	/**
-	非派生事务
-	*/
+	//non derived statement
 	if txnOp != nil && !ses.IsDerivedStmt() {
-		//如果调用过startStatement 不能再次调用
+		//startStatement has been called
 		ok, _ := ses.GetTxnHandler().calledStartStmt()
 		if !ok {
-			//StartStatement. 并记录是否调用 和 事务id
 			txnOp.GetWorkspace().StartStatement()
 			ses.GetTxnHandler().enableStartStmt(txnOp.Txn().ID)
 		}
@@ -3256,9 +3249,9 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 			logError(ses, ses.GetDebugString(), err3.Error())
 			return
 		}
-		//非派生事务
+		//non derived statement
 		if txnOp != nil && !ses.IsDerivedStmt() {
-			//调用过startStatement 才能end 事务
+			//startStatement has been called
 			ok, id := ses.GetTxnHandler().calledStartStmt()
 			if ok && bytes.Equal(txnOp.Txn().ID, id) {
 				txnOp.GetWorkspace().EndStatement()

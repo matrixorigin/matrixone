@@ -734,12 +734,6 @@ If it is Case2, Then
 */
 func (ses *Session) TxnRollbackSingleStatement(stmt tree.Statement) error {
 	var err error
-	rollbackWholeTxn := func() error {
-		err := ses.GetTxnHandler().RollbackTxn()
-		ses.ClearServerStatus(SERVER_STATUS_IN_TRANS)
-		ses.ClearOptionBits(OPTION_BEGIN)
-		return err
-	}
 	/*
 			Rollback Rules:
 			1, if it is in single-statement mode (Case2):
@@ -749,8 +743,12 @@ func (ses *Session) TxnRollbackSingleStatement(stmt tree.Statement) error {
 				(every error will abort the transaction.)
 	*/
 	if !ses.InMultiStmtTransactionMode() || ses.InActiveTransaction() && NeedToBeCommittedInActiveTransaction(stmt) {
-		err = rollbackWholeTxn()
+		//Case1.1: autocommit && not_begin
+		//Case1.2: (not_autocommit || begin) && activeTxn && needToBeCommitted
+		err = ses.rollbackWholeTxn()
 	} else {
+		//Case2: not ( autocommit && !begin ) && not ( activeTxn && needToBeCommitted )
+		//<==>  ( not_autocommit || begin ) && not ( activeTxn && needToBeCommitted )
 		//just rollback statement
 		var err3 error
 		txnCtx, txnOp, err3 := ses.GetTxnHandler().GetTxnOperator()
@@ -759,19 +757,27 @@ func (ses *Session) TxnRollbackSingleStatement(stmt tree.Statement) error {
 			return err3
 		}
 
-		//非派生事务
+		//non derived statement
 		if txnOp != nil && !ses.IsDerivedStmt() {
-			//调用过incrstatement 才能rollback statement
+			//incrStatement has been called
 			ok, id := ses.GetTxnHandler().calledIncrStmt()
 			if ok && bytes.Equal(txnOp.Txn().ID, id) {
 				err = txnOp.GetWorkspace().RollbackLastStatement(txnCtx)
 				if err != nil {
-					err4 := rollbackWholeTxn()
+					err4 := ses.rollbackWholeTxn()
 					return errors.Join(err, err4)
 				}
 			}
 		}
 	}
+	return err
+}
+
+// rollbackWholeTxn
+func (ses *Session) rollbackWholeTxn() error {
+	err := ses.GetTxnHandler().RollbackTxn()
+	ses.ClearServerStatus(SERVER_STATUS_IN_TRANS)
+	ses.ClearOptionBits(OPTION_BEGIN)
 	return err
 }
 

@@ -2,7 +2,7 @@ service-type = "CN"
 data-dir = "./mo-data"
 
 [log]
-level = "error"
+level = "info"
 
 [cn]
 uuid = "dd1dccb4-4d3c-41f8-b482-5251dc7a41bf"
