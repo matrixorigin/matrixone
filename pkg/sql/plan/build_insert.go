@@ -702,6 +702,9 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 			}
 			vec.InplaceSort()
 			data, err := vec.MarshalBinary()
+			if err != nil {
+				return nil, err
+			}
 			inExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "in", []*Expr{
 				{
 					Typ: makeHiddenColTyp(),
