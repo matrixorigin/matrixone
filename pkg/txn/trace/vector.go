@@ -15,6 +15,7 @@
 package trace
 
 import (
+	"encoding/hex"
 	"fmt"
 	"strconv"
 
@@ -160,6 +161,11 @@ func writeValue(
 		buf.buf.MustWrite(intToString(dst, int64(v.Physical())))
 		buf.buf.WriteString("-")
 		buf.buf.MustWrite(intToString(dst, int64(v.Logical())))
+	case types.T_Blockid:
+		v := vector.MustFixedCol[types.Blockid](vec)[row]
+		n := hex.EncodedLen(len(v[:]))
+		hex.Encode(dst[:n], v[:])
+		buf.buf.MustWrite(dst[:n])
 	default:
 		panic(fmt.Sprintf("not support for %s", t.String()))
 	}
