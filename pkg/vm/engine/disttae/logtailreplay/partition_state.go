@@ -366,6 +366,9 @@ func (p *PartitionState) HandleLogtailEntry(
 	switch entry.EntryType {
 	case api.Entry_Insert:
 		if IsBlkTable(entry.TableName) {
+			//if entry.TableName == "bugt_meta" {
+			logutil.Infof("xxxx HandleMetadataInsert table name:%s", entry.TableName)
+			//}
 			p.HandleMetadataInsert(ctx, fs, entry.Bat)
 		} else if IsObjTable(entry.TableName) {
 			p.HandleObjectInsert(ctx, entry.Bat, fs)
@@ -374,6 +377,9 @@ func (p *PartitionState) HandleLogtailEntry(
 		}
 	case api.Entry_Delete:
 		if IsBlkTable(entry.TableName) {
+			//if entry.TableName == "bugt_meta" {
+			logutil.Infof("xxxx HandleMetadataDelete table name:%s", entry.TableName)
+			//}
 			p.HandleMetadataDelete(ctx, entry.Bat)
 		} else if IsObjTable(entry.TableName) {
 			p.HandleObjectDelete(entry.Bat)
@@ -928,7 +934,6 @@ func (p *PartitionState) HandleMetadataDelete(ctx context.Context, input *api.Ba
 	defer func() {
 		partitionStateProfileHandler.AddSample(time.Since(t0))
 	}()
-
 	rowIDVector := vector.MustFixedCol[types.Rowid](mustVectorFromProto(input.Vecs[0]))
 	deleteTimeVector := vector.MustFixedCol[types.TS](mustVectorFromProto(input.Vecs[1]))
 
