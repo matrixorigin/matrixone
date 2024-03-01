@@ -75,7 +75,6 @@ type Service interface {
 	GetTaskService() (taskservice.TaskService, bool)
 	GetSQLExecutor() executor.SQLExecutor
 	GetBootstrapService() bootstrap.Service
-	//WaitSystemInitCompleted(ctx context.Context) error
 }
 
 type EngineType string

@@ -72,10 +72,6 @@ func (s *service) initTaskServiceHolder() {
 				return s.task.storageFactory
 			})
 	}
-
-	//if err := s.stopper.RunTask(s.waitSystemInitCompleted); err != nil {
-	//	panic(err)
-	//}
 }
 
 func (s *service) createTaskService(command *logservicepb.CreateTaskService) {
@@ -213,53 +209,6 @@ func (s *service) GetTaskService() (taskservice.TaskService, bool) {
 	return s.task.holder.Get()
 }
 
-//func (s *service) WaitSystemInitCompleted(ctx context.Context) error {
-//	s.waitSystemInitCompleted(ctx)
-//	return ctx.Err()
-//}
-
-//func (s *service) waitSystemInitCompleted(ctx context.Context) {
-//	defer logutil.LogAsyncTask(s.logger, "cnservice/wait-system-init-task")()
-//
-//	startAt := time.Now()
-//	s.logger.Debug("wait all init task completed task started")
-//	wait := func() {
-//		time.Sleep(time.Second)
-//	}
-//	for {
-//		select {
-//		case <-ctx.Done():
-//			s.logger.Debug("wait all init task completed task stopped")
-//			return
-//		default:
-//			ts, ok := s.GetTaskService()
-//			if ok {
-//				tasks, err := ts.QueryAsyncTask(ctx,
-//					taskservice.WithTaskExecutorCond(taskservice.EQ, task.TaskCode_SystemInit),
-//					taskservice.WithTaskStatusCond(task.TaskStatus_Completed))
-//				if err != nil {
-//					s.logger.Error("wait all init task completed failed", zap.Error(err))
-//					break
-//				}
-//				s.logger.Debug("waiting all init task completed",
-//					zap.Int("completed", len(tasks)))
-//				if len(tasks) > 0 {
-//					if err := file.WriteFile(s.metadataFS,
-//						"./system_init_completed",
-//						[]byte("OK")); err != nil {
-//						panic(err)
-//					}
-//					return
-//				}
-//			}
-//		}
-//		wait()
-//		if time.Since(startAt) > defaultSystemInitTimeout {
-//			panic("wait system init timeout")
-//		}
-//	}
-//}
-
 func (s *service) stopTask() error {
 	defer logutil.LogClose(s.logger, "cnservice/task")()
 
@@ -298,7 +247,7 @@ func (s *service) registerExecutorsLocked() {
 	if !ok {
 		panic(moerr.NewInternalErrorNoCtx("task Service not ok"))
 	}
-	
+
 	// init metric/log merge task executor
 	s.task.runner.RegisterExecutor(task.TaskCode_MetricLogMerge,
 		export.MergeTaskExecutorFactory(export.WithFileService(s.etlFS)))

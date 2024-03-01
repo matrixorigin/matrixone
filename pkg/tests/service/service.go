@@ -1493,9 +1493,6 @@ func (c *testCluster) startCNServices(ctx context.Context) error {
 		}
 	}
 
-	//if err := c.waitSystemInitCompleted(ctx); err != nil {
-	//	return err
-	//}
 	return nil
 }
 
@@ -1618,18 +1615,6 @@ func (c *testCluster) rangeHAKeeperService(
 		}
 	}
 }
-
-//func (c *testCluster) waitSystemInitCompleted(ctx context.Context) error {
-//	c.WaitCNStoreTaskServiceCreatedIndexed(ctx, 0)
-//	cn, err := c.GetCNServiceIndexed(0)
-//	if err != nil {
-//		return err
-//	}
-//	if err := cn.WaitSystemInitCompleted(ctx); err != nil {
-//		return err
-//	}
-//	return nil
-//}
 
 func (c *testCluster) newRuntime() runtime.Runtime {
 	return runtime.NewRuntime(metadata.ServiceType_CN, "", c.logger, runtime.WithClock(c.clock))

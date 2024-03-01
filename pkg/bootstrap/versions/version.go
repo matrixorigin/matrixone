@@ -227,6 +227,7 @@ func IsFrameworkTablesCreated(txn executor.TxnExecutor) (bool, error) {
 	return false, nil
 }
 
+/*
 // FetchAllTenants get all tenantIDs in mo system, including system tenants
 func FetchAllTenants(txn executor.TxnExecutor) ([]int32, error) {
 	ids := make([]int32, 0, 10)
@@ -246,3 +247,4 @@ func FetchAllTenants(txn executor.TxnExecutor) ([]int32, error) {
 	res.Close()
 	return ids, nil
 }
+*/
