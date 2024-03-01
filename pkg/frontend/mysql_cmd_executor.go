@@ -3093,7 +3093,7 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 			*tree.SetDefaultRole, *tree.SetRole, *tree.SetPassword, *tree.Delete, *tree.TruncateTable, *tree.Use,
 			*tree.BeginTransaction, *tree.CommitTransaction, *tree.RollbackTransaction,
 			*tree.LockTableStmt, *tree.UnLockTableStmt,
-			*tree.CreateStage, *tree.DropStage, *tree.AlterStage, *tree.CreateSource, *tree.AlterSequence:
+			*tree.CreateStage, *tree.DropStage, *tree.AlterStage, *tree.CreateSource, *tree.AlterSequence, *tree.CreateSnapShot, *tree.DropSnapShot:
 			// skip create table as select
 			if createTblStmt, ok := stmt.(*tree.CreateTable); ok && createTblStmt.IsAsSelect {
 				return nil

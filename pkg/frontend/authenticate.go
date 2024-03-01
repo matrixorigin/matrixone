@@ -9565,6 +9565,10 @@ func postAlterSessionStatus(
 
 func doCreateSnapshot(ctx context.Context, ses *Session, stmt *tree.CreateSnapShot) error {
 	var err error
+	var snapshotLevel tree.SnapshotLevel
+	var tenantInfo *TenantInfo
+	var currentAccount string
+	var snapshotForAccount string
 	var sql string
 
 	// check create stage priv
@@ -9584,9 +9588,26 @@ func doCreateSnapshot(ctx context.Context, ses *Session, stmt *tree.CreateSnapSh
 	}
 
 	// check create snapshot priv
-	// 1.only sys can create cluster level snapshot
-	// 2.only sys can create tenant level snapshot for other tenant
-	// 3.only admin can create tenant level snapshot for himself
+
+	// 1.only admin can create tenant level snapshot for himself
+	err = doCheckRole(ctx, ses)
+	if err != nil {
+		return err
+	}
+	// 2.only sys can create cluster level snapshot
+	tenantInfo = ses.GetTenantInfo()
+	currentAccount = tenantInfo.GetTenant()
+	snapshotLevel = stmt.Obeject.SLevel.Level
+	if snapshotLevel == tree.SNAPSHOTLEVELCLUSTER && currentAccount != sysAccountName {
+		return moerr.NewInternalError(ctx, "only sys tenant can create cluster level snapshot")
+	}
+	// 3.only sys can create tenant level snapshot for other tenant
+	if snapshotLevel == tree.SNAPSHOTLEVELACCOUNT {
+		snapshotForAccount = string(stmt.Obeject.ObjName)
+		if currentAccount != sysAccountName && currentAccount != snapshotForAccount {
+			return moerr.NewInternalError(ctx, "only sys tenant can create tenant level snapshot for other tenant")
+		}
+	}
 
 	// check snapshot exists or not
 
@@ -9601,4 +9622,8 @@ func doDropSnapshot(ctx context.Context, ses *Session, stmt *tree.DropSnapShot) 
 	// check
 
 	return err
+}
+
+func checkSnapShotExistOrNot(ctx context.Context, bh BackgroundExec, snapshotName string) (bool, error) {
+
 }
