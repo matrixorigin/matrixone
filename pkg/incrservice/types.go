@@ -26,7 +26,7 @@ import (
 
 // GetAutoIncrementService get increment service from process level runtime
 func GetAutoIncrementService(ctx context.Context) AutoIncrementService {
-	v, ok := runtime.ProcessLevelRuntime().GetGlobalVariables(runtime.AutoIncrmentService)
+	v, ok := runtime.ProcessLevelRuntime().GetGlobalVariables(runtime.AutoIncrementService)
 	if !ok {
 		return nil
 	}
@@ -36,7 +36,7 @@ func GetAutoIncrementService(ctx context.Context) AutoIncrementService {
 		return s
 	}
 	if s.UUID() != uuid {
-		v, ok := runtime.ProcessLevelRuntime().GetGlobalVariables(runtime.AutoIncrmentService + "_" + uuid)
+		v, ok := runtime.ProcessLevelRuntime().GetGlobalVariables(runtime.AutoIncrementService + "_" + uuid)
 		if !ok {
 			panic("cannot get the appropriate AutoIncrementService")
 		}
@@ -47,7 +47,7 @@ func GetAutoIncrementService(ctx context.Context) AutoIncrementService {
 
 // SetAutoIncrementServiceByID set auto increment service instance into process level runtime.
 func SetAutoIncrementServiceByID(id string, v AutoIncrementService) {
-	runtime.ProcessLevelRuntime().SetGlobalVariables(runtime.AutoIncrmentService+"_"+id, v)
+	runtime.ProcessLevelRuntime().SetGlobalVariables(runtime.AutoIncrementService+"_"+id, v)
 }
 
 // AutoIncrementService provides data service for the columns of auto-increment.

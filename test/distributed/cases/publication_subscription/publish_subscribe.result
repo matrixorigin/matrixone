@@ -8,13 +8,14 @@ create account test_tenant_3 admin_name 'test_account' identified by '111';
 create account test_tenant_4 admin_name 'test_account' identified by '111';
 show databases;
 Database
-mo_task
 information_schema
-mysql
-system_metrics
-system
-publish_subscribe
 mo_catalog
+mo_debug
+mo_task
+mysql
+publish_subscribe
+system
+system_metrics
 create database db1;
 use db1;
 create table t1(a int);
@@ -23,12 +24,12 @@ create publication pubname1 database db1 account test_tenant_1 comment 'publish 
 create database sub_db1 from sys publication pubname1;
 show databases;
 Database
+information_schema
+mo_catalog
+mysql
 sub_db1
 system
 system_metrics
-information_schema
-mysql
-mo_catalog
 use sub_db1;
 show tables;
 Tables_in_sub_db1
@@ -63,32 +64,33 @@ drop database db1;
 internal error: can not drop database 'db1' which is publishing
 show databases;
 Database
+information_schema
+mo_catalog
+mysql
 sub_db1
 system
 system_metrics
-information_schema
-mysql
-mo_catalog
 drop publication pubname1;
 show databases;
 Database
-mo_task
-information_schema
-mysql
-system_metrics
-system
 db1
-publish_subscribe
+information_schema
 mo_catalog
+mo_debug
+mo_task
+mysql
+publish_subscribe
+system
+system_metrics
 drop database db1;
 show databases;
 Database
+information_schema
+mo_catalog
+mysql
 sub_db1
 system
 system_metrics
-information_schema
-mysql
-mo_catalog
 use sub_db1;
 internal error: there is no publication pubname1
 drop database sub_db1;
@@ -99,12 +101,12 @@ create publication pubname2 database db2 account test_tenant_1,test_tenant_2,tes
 create database sub_db1 from sys publication pubname2;
 show databases;
 Database
+information_schema
+mo_catalog
+mysql
 sub_db1
 system
 system_metrics
-information_schema
-mysql
-mo_catalog
 use sub_db1;
 show tables;
 Tables_in_sub_db1
@@ -112,12 +114,12 @@ t3
 create database sub_db1 from sys publication pubname2;
 show databases;
 Database
+information_schema
+mo_catalog
+mysql
 sub_db1
 system
 system_metrics
-information_schema
-mysql
-mo_catalog
 use sub_db1;
 show tables;
 Tables_in_sub_db1
@@ -125,12 +127,12 @@ t3
 create database sub_db1 from sys publication pubname2;
 show databases;
 Database
-system
-system_metrics
 information_schema
+mo_catalog
 mysql
 sub_db1
-mo_catalog
+system
+system_metrics
 use sub_db1;
 show tables;
 Tables_in_sub_db1
@@ -139,36 +141,36 @@ drop publication pubname2;
 create publication pubname2 database db2 account test_tenant_1,test_tenant_2,test_tenant_3 comment 'publish db3';
 show databases;
 Database
+information_schema
+mo_catalog
+mysql
 sub_db1
 system
 system_metrics
-information_schema
-mysql
-mo_catalog
 use sub_db1;
 show tables;
 Tables_in_sub_db1
 t3
 show databases;
 Database
+information_schema
+mo_catalog
+mysql
 sub_db1
 system
 system_metrics
-information_schema
-mysql
-mo_catalog
 use sub_db1;
 show tables;
 Tables_in_sub_db1
 t3
 show databases;
 Database
-system
-system_metrics
 information_schema
+mo_catalog
 mysql
 sub_db1
-mo_catalog
+system
+system_metrics
 use sub_db1;
 show tables;
 Tables_in_sub_db1
@@ -178,34 +180,34 @@ create database db3;
 create publication pubname2 database db3 account test_tenant_1,test_tenant_2,test_tenant_3 comment 'publish db3';
 show databases;
 Database
+information_schema
+mo_catalog
+mysql
 sub_db1
 system
 system_metrics
-information_schema
-mysql
-mo_catalog
 use sub_db1;
 show tables;
 Tables_in_sub_db1
 show databases;
 Database
+information_schema
+mo_catalog
+mysql
 sub_db1
 system
 system_metrics
-information_schema
-mysql
-mo_catalog
 use sub_db1;
 show tables;
 Tables_in_sub_db1
 show databases;
 Database
-system
-system_metrics
 information_schema
+mo_catalog
 mysql
 sub_db1
-mo_catalog
+system
+system_metrics
 use sub_db1;
 show tables;
 Tables_in_sub_db1
@@ -223,12 +225,12 @@ create publication pubname4_1 database db4 comment 'publication to all tenant';
 create database sub_db4 from sys publication pubname4;
 show databases;
 Database
+information_schema
+mo_catalog
+mysql
 sub_db4
 system
 system_metrics
-information_schema
-mysql
-mo_catalog
 use sub_db4;
 show tables;
 Tables_in_sub_db4
@@ -239,12 +241,12 @@ database test_db_1 already exists
 create database sub_db4 from sys publication pubname4;
 show databases;
 Database
+information_schema
+mo_catalog
+mysql
 sub_db4
 system
 system_metrics
-information_schema
-mysql
-mo_catalog
 use sub_db4;
 show tables;
 Tables_in_sub_db4
@@ -252,12 +254,12 @@ t4
 create database sub_db4 from sys publication pubname4;
 show databases;
 Database
-system
-system_metrics
 information_schema
+mo_catalog
 mysql
 sub_db4
-mo_catalog
+system
+system_metrics
 use sub_db4;
 show tables;
 Tables_in_sub_db4
@@ -267,14 +269,14 @@ create database sub_db4_1 from sys publication pubname4;
 create database sub_db4_2 from sys publication pubname4;
 show databases;
 Database
-system
-system_metrics
 information_schema
+mo_catalog
 mysql
 sub_db4
 sub_db4_1
 sub_db4_2
-mo_catalog
+system
+system_metrics
 use sub_db4;
 show tables;
 Tables_in_sub_db4
@@ -283,12 +285,12 @@ create account test_tenant_5 admin_name 'test_account' identified by '111';
 create database sub_db4 from sys publication pubname4;
 show databases;
 Database
-system
-system_metrics
 information_schema
+mo_catalog
 mysql
 sub_db4
-mo_catalog
+system
+system_metrics
 use sub_db4;
 show tables;
 Tables_in_sub_db4
@@ -296,51 +298,51 @@ t4
 alter publication pubname4 account test_tenant_1, test_tenant_2;
 show databases;
 Database
+information_schema
+mo_catalog
+mysql
 sub_db4
+system
+system_metrics
 test_db_1
-system
-system_metrics
-information_schema
-mysql
-mo_catalog
 use sub_db4;
 show tables;
 Tables_in_sub_db4
 t4
 show databases;
 Database
+information_schema
+mo_catalog
+mysql
 sub_db4
 system
 system_metrics
-information_schema
-mysql
-mo_catalog
 use sub_db4;
 show tables;
 Tables_in_sub_db4
 t4
 show databases;
 Database
-system
-system_metrics
 information_schema
+mo_catalog
 mysql
 sub_db4
-mo_catalog
+system
+system_metrics
 use sub_db4;
 internal error: the account test_tenant_3 is not allowed to subscribe the publication pubname4
 show tables;
 internal error: the account test_tenant_3 is not allowed to subscribe the publication pubname4
 show databases;
 Database
-system
-system_metrics
 information_schema
+mo_catalog
 mysql
 sub_db4
 sub_db4_1
 sub_db4_2
-mo_catalog
+system
+system_metrics
 use sub_db4;
 internal error: the account test_tenant_4 is not allowed to subscribe the publication pubname4
 show tables;
@@ -348,51 +350,51 @@ internal error: the account test_tenant_4 is not allowed to subscribe the public
 alter publication pubname4 account all;
 show databases;
 Database
+information_schema
+mo_catalog
+mysql
 sub_db4
+system
+system_metrics
 test_db_1
-system
-system_metrics
-information_schema
-mysql
-mo_catalog
 use sub_db4;
 show tables;
 Tables_in_sub_db4
 t4
 show databases;
 Database
+information_schema
+mo_catalog
+mysql
+sub_db4
+system
+system_metrics
+use sub_db4;
+show tables;
+Tables_in_sub_db4
+t4
+show databases;
+Database
+information_schema
+mo_catalog
+mysql
 sub_db4
 system
 system_metrics
-information_schema
-mysql
-mo_catalog
 use sub_db4;
 show tables;
 Tables_in_sub_db4
 t4
 show databases;
 Database
-system
-system_metrics
 information_schema
-mysql
-sub_db4
 mo_catalog
-use sub_db4;
-show tables;
-Tables_in_sub_db4
-t4
-show databases;
-Database
-system
-system_metrics
-information_schema
 mysql
 sub_db4
 sub_db4_1
 sub_db4_2
-mo_catalog
+system
+system_metrics
 use sub_db4;
 show tables;
 Tables_in_sub_db4
@@ -402,48 +404,49 @@ drop publication pubname4_1;
 drop database db4;
 show databases;
 Database
-mo_task
 information_schema
-mysql
-system_metrics
-system
-publish_subscribe
 mo_catalog
+mo_debug
+mo_task
+mysql
+publish_subscribe
+system
+system_metrics
 drop database sub_db4;
 drop database test_db_1;
 show databases;
 Database
+information_schema
+mo_catalog
+mysql
 system
 system_metrics
-information_schema
-mysql
-mo_catalog
 drop database sub_db4;
 show databases;
 Database
+information_schema
+mo_catalog
+mysql
 system
 system_metrics
-information_schema
-mysql
-mo_catalog
 drop database sub_db4;
 show databases;
 Database
+information_schema
+mo_catalog
+mysql
 system
 system_metrics
-information_schema
-mysql
-mo_catalog
 drop database sub_db4;
 drop database sub_db4_1;
 drop database sub_db4_2;
 show databases;
 Database
+information_schema
+mo_catalog
+mysql
 system
 system_metrics
-information_schema
-mysql
-mo_catalog
 create database db1;
 create publication pubname5 database db1 account sys comment 'publication to sys tenant';
 create database sub_db5 from test_tenant_1 publication pubname5;
@@ -464,37 +467,38 @@ drop publication pubname5;
 drop database db1;
 show databases;
 Database
+information_schema
+mo_catalog
+mysql
 system
 system_metrics
-information_schema
-mysql
-mo_catalog
 drop database sub_db5;
 show databases;
 Database
+information_schema
+mo_catalog
+mo_debug
 mo_task
-information_schema
 mysql
-system_metrics
-system
 publish_subscribe
-mo_catalog
+system
+system_metrics
 drop database sub_db5;
 show databases;
 Database
+information_schema
+mo_catalog
+mysql
 system
 system_metrics
-information_schema
-mysql
-mo_catalog
 drop database sub_db5;
 show databases;
 Database
+information_schema
+mo_catalog
+mysql
 system
 system_metrics
-information_schema
-mysql
-mo_catalog
 create database db7;
 use db7;
 create table t1(a int, b varchar(225));
@@ -554,22 +558,23 @@ drop publication pubname7;
 drop database db7;
 show databases;
 Database
+information_schema
+mo_catalog
+mysql
 system
 system_metrics
-information_schema
-mysql
-mo_catalog
 drop database sub_db1;
 drop database db1;
 show databases;
 Database
-mo_task
 information_schema
-mysql
-system_metrics
-system
-publish_subscribe
 mo_catalog
+mo_debug
+mo_task
+mysql
+publish_subscribe
+system
+system_metrics
 create database db6;
 create publication pubname6 database db6 account test_tenant_1 comment 'publication to test_tenant_1';
 show create publication pubname6;
@@ -577,11 +582,11 @@ Publication    Create Publication
 pubname6    CREATE PUBLICATION pubname6 DATABASE db6 ACCOUNT test_tenant_1
 show publications;
 publication    database    create_time    update_time    sub_account    comments
-pubname6    db6    2024-01-05 18:40:33    null    test_tenant_1    publication to test_tenant_1
+pubname6    db6    2024-02-27 19:16:04    null    test_tenant_1    publication to test_tenant_1
 create database sub_db6 from sys publication pubname6;
 show subscriptions;
 pub_name    pub_account    pub_database    pub_time    sub_name    sub_time
-pubname6    sys    db6    2024-01-05 18:40:33    sub_db6    2024-01-05 18:40:33
+pubname6    sys    db6    2024-02-27 19:16:04    sub_db6    2024-02-27 19:16:04
 show create database sub_db6;
 Database    Create Database
 sub_db6    create database sub_db6 from sys publication pubname6

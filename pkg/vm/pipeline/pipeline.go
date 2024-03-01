@@ -26,11 +26,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func New(attrs []string, ins vm.Instructions, reg *process.WaitRegister) *Pipeline {
+func New(tableID uint64, attrs []string, ins vm.Instructions, reg *process.WaitRegister) *Pipeline {
 	return &Pipeline{
 		reg:          reg,
 		instructions: ins,
 		attrs:        attrs,
+		tableID:      tableID,
 	}
 }
 
@@ -69,6 +70,7 @@ func (p *Pipeline) Run(r engine.Reader, topValueMsgTag int32, proc *process.Proc
 		Reader:         r,
 		TopValueMsgTag: topValueMsgTag,
 		Attrs:          p.attrs,
+		TableID:        p.tableID,
 	}
 	p.instructions = append([]vm.Instruction{
 		{
