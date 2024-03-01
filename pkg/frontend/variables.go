@@ -480,10 +480,17 @@ func (svut SystemVariableUintType) ConvertFromString(value string) (interface{},
 }
 
 type SystemVariableDoubleType struct {
-	// Unused
-	// name    string
+	name    string
 	minimum float64
 	maximum float64
+}
+
+func InitSystemVariableDoubleType(name string, minimum, maximum float64) SystemVariableDoubleType {
+	return SystemVariableDoubleType{
+		name:    name,
+		minimum: minimum,
+		maximum: maximum,
+	}
 }
 
 func (svdt SystemVariableDoubleType) String() string {
@@ -3531,7 +3538,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Scope:             ScopeGlobal,
 		Dynamic:           true,
 		SetVarHintApplies: false,
-		Type:              InitSystemVariableIntType("mo_cpu_price"),
+		Type:              InitSystemVariableDoubleType("mo_cpu_price", 0, 1e9),
 		Default:           float64(7.43e-14),
 	},
 	"mo_mem_price": {
@@ -3539,7 +3546,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Scope:             ScopeGlobal,
 		Dynamic:           true,
 		SetVarHintApplies: false,
-		Type:              InitSystemVariableStringType("mo_mem_price"),
+		Type:              InitSystemVariableDoubleType("mo_mem_price", 0, 1e9),
 		Default:           float64(6.79e-24),
 	},
 }
