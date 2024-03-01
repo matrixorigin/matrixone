@@ -571,4 +571,37 @@ func Test_rollbackStatement6(t *testing.T) {
 		convey.So(ctx2, convey.ShouldNotBeNil)
 		convey.So(t2, convey.ShouldBeNil)
 	})
+	convey.Convey("abnormal rollback -- rollback whole txn", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ctx := defines.AttachAccountId(context.TODO(), sysAccountID)
+		ses := newMockErrSession(t, ctx, ctrl)
+		var txnOp TxnOperator
+
+		//case3.2 not_autocommit && begin && Insert Stmt (need not to be committed in the active txn)
+		err := ses.SetAutocommit(true, false)
+		convey.So(err, convey.ShouldBeNil)
+		err = ses.TxnBegin()
+		convey.So(err, convey.ShouldBeNil)
+		_, txnOp, err = ses.GetTxnHandler().GetTxnOperator()
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(ses.OptionBitsIsSet(OPTION_BEGIN), convey.ShouldBeTrue)
+		convey.So(ses.OptionBitsIsSet(OPTION_NOT_AUTOCOMMIT), convey.ShouldBeTrue)
+		convey.So(!ses.InMultiStmtTransactionMode(), convey.ShouldBeFalse)
+		convey.So(ses.InActiveTransaction() &&
+			NeedToBeCommittedInActiveTransaction(&tree.Insert{}), convey.ShouldBeFalse)
+		convey.So(txnOp != nil && !ses.IsDerivedStmt(), convey.ShouldBeTrue)
+		//called incrStatement
+		txnOp.GetWorkspace().StartStatement()
+		err = txnOp.GetWorkspace().IncrStatementID(ctx, false)
+		convey.So(err, convey.ShouldBeNil)
+		ses.GetTxnHandler().enableIncrStmt(txnOp.Txn().ID)
+		err = ses.TxnRollbackSingleStatement(&tree.Insert{}, getRandomErrorRollbackWholeTxn())
+		convey.So(err, convey.ShouldNotBeNil)
+		ctx2, t2, err := ses.txnHandler.GetTxnOperator()
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(ctx2, convey.ShouldNotBeNil)
+		convey.So(t2, convey.ShouldBeNil)
+	})
 }
