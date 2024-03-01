@@ -329,12 +329,6 @@ message Product {
   bool is_shuffle =4;
 }
 
-message IndexJoin {
-  repeated int32 result = 1;
-  repeated plan.Type  types = 2;
-  repeated plan.RuntimeFilterSpec runtime_filter_build_list = 3;
-}
-
 message TableFunction {
   repeated string attrs = 1;
   repeated plan.ColDef rets = 2;
@@ -443,7 +437,6 @@ message Instruction{
   int32 operator_id = 40;
   int32 parallel_id = 41;
   int32 max_parallel = 42;
-  IndexJoin index_join = 43;
 }
 
 message AnalysisList {
