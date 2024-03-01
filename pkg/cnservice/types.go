@@ -589,9 +589,8 @@ type service struct {
 	udfService       udf.Service
 	bootstrapService bootstrap.Service
 
-	stopper     *stopper.Stopper
-	aicm        *defines.AutoIncrCacheManager
-	upgradeOnce sync.Once
+	stopper *stopper.Stopper
+	aicm    *defines.AutoIncrCacheManager
 
 	task struct {
 		sync.RWMutex
