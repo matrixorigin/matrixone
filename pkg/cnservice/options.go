@@ -57,6 +57,12 @@ func WithBootstrapOptions(options ...bootstrap.Option) Option {
 	}
 }
 
+func WithTxnTraceData(traceDataPath string) Option {
+	return func(s *service) {
+		s.options.traceDataPath = traceDataPath
+	}
+}
+
 // WithMessageHandle setup message handle
 func WithMessageHandle(f func(ctx context.Context,
 	cnAddr string,

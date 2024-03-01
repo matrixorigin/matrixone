@@ -69,7 +69,6 @@ func LockTableWithUniqueID(
 		WithFetchLockRowsFunc(GetFetchRowsFunc(pkType))
 	_, _, _, err = doLock(
 		proc.Ctx,
-		false,
 		eng,
 		nil,
 		tableID,

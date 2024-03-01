@@ -60,7 +60,8 @@ type TxnCompilerContext struct {
 var _ plan2.CompilerContext = &TxnCompilerContext{}
 
 func (tcc *TxnCompilerContext) ReplacePlan(execPlan *plan.Execute) (*plan.Plan, tree.Statement, error) {
-	return replacePlan(tcc.ses.GetRequestContext(), tcc.ses, tcc.tcw, execPlan)
+	p, st, _, err := replacePlan(tcc.ses.GetRequestContext(), tcc.ses, tcc.tcw, execPlan)
+	return p, st, err
 }
 
 func InitTxnCompilerContext(txn *TxnHandler, db string) *TxnCompilerContext {
