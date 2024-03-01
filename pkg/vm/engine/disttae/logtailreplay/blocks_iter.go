@@ -96,6 +96,47 @@ func (b *objectsIter) Close() error {
 	return nil
 }
 
+// for test
+type objectsIterForTest struct {
+	iter        btree.IterG[ObjectEntry]
+	firstCalled bool
+}
+
+func (p *PartitionState) NewObjectsIterForTest() (*objectsIterForTest, error) {
+	iter := p.dataObjects.Copy().Iter()
+	ret := &objectsIterForTest{
+		iter: iter,
+	}
+	return ret, nil
+}
+
+var _ ObjectsIter = new(objectsIterForTest)
+
+func (b *objectsIterForTest) Next() bool {
+	for {
+		if !b.firstCalled {
+			if !b.iter.First() {
+				return false
+			}
+			b.firstCalled = true
+		} else {
+			if !b.iter.Next() {
+				return false
+			}
+		}
+		return true
+	}
+}
+
+func (b *objectsIterForTest) Entry() ObjectEntry {
+	return b.iter.Item()
+}
+
+func (b *objectsIterForTest) Close() error {
+	b.iter.Release()
+	return nil
+}
+
 type BlocksIter interface {
 	Next() bool
 	Close() error

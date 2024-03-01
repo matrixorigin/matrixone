@@ -694,6 +694,12 @@ func (r *blockMergeReader) loadDeletes(ctx context.Context, cols []string) error
 			for _, v := range vs {
 				id, offset := v.Decode()
 				if id == info.BlockID {
+					if r.table.tableName == "bugt" {
+						logutil.Infof("xxxx load deletes, txn:%s, delete rowid:%s, blockid:%s",
+							r.table.db.txn.op.Txn().DebugString(),
+							v.String(),
+							info.BlockID.String())
+					}
 					r.buffer = append(r.buffer, int64(offset))
 				}
 			}

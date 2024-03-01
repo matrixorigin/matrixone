@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+	"fmt"
 	"strconv"
 	"time"
 	"unsafe"
@@ -598,6 +599,16 @@ func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr) (ranges eng
 		return
 	}
 	ranges = &blocks
+	if tbl.tableName == "bugt" {
+		for i := 1; i < blocks.Len(); i++ {
+			blk := blocks.Get(i)
+			logutil.Infof("xxxx ranges return blks, txn:%s,blkid:%s, entry state:%v",
+				tbl.db.txn.op.Txn().DebugString(),
+				blk.BlockID.String(),
+				blk.EntryState)
+		}
+	}
+
 	return
 }
 
@@ -632,8 +643,61 @@ func (tbl *txnTable) rangesOnePart(
 		if err != nil {
 			return err
 		}
+		//for test,log txn, start ts
+		//if tbl.tableName == "bugt" {
+		//	objItr, _:= state.NewObjectsIterForTest()
+		//	defer objItr.Close()
+		//	for objItr.Next() {
+		//		entry := objItr.Entry()
+		//		logutil.Infof("xxxx txn:%s, obj:%s, last ts:%s, snapshot ts:%s",
+		//			tbl.db.txn.op.Txn().DebugString(),
+		//			entry.ObjectInfo.String(),
+		//			tbl.lastTS.DebugString(),
+		//			tbl.db.txn.op.SnapshotTS().DebugString())
+		//	}
+		//}
+
 		deleteObjs, createObjs := state.GetChangedObjsBetween(types.TimestampToTS(tbl.lastTS),
 			types.TimestampToTS(tbl.db.txn.op.SnapshotTS()))
+
+		deleteObjInfos := ""
+		createObjsInfos := ""
+		allObjInfos := ""
+		if tbl.tableName == "bugt" || len(deleteObjs) > 0 || len(createObjs) > 0 {
+			objItr, _ := state.NewObjectsIterForTest()
+			defer objItr.Close()
+			for objItr.Next() {
+				entry := objItr.Entry()
+				allObjInfos = fmt.Sprintf("%s:%s", allObjInfos, entry.ObjectInfo.String())
+			}
+			logutil.Infof("xxxx txn:%s, all object infos:%s, last ts:%s, snapshot ts:%s",
+				tbl.db.txn.op.Txn().DebugString(),
+				allObjInfos,
+				tbl.lastTS.DebugString(),
+				tbl.db.txn.op.SnapshotTS().DebugString())
+
+			for _, obj := range deleteObjs {
+				objInfo, ok := state.GetObject(obj)
+				if !ok {
+					logutil.Fatalf("xxxx obj-seg:%s not found in partition state",
+						obj.Segmentid().ToString())
+				}
+				deleteObjInfos = fmt.Sprintf("%s:%s", deleteObjInfos, objInfo.String())
+			}
+			for _, obj := range createObjs {
+				objInfo, ok := state.GetObject(obj)
+				if !ok {
+					logutil.Fatalf("xxxx obj-seg:%s not found in partition state",
+						obj.Segmentid().ToString())
+				}
+				createObjsInfos = fmt.Sprintf("%s:%s", createObjsInfos, objInfo.String())
+			}
+			logutil.Infof("xxxx deleteObjs:%s, xxxx createObjs:%s, txn:%s",
+				deleteObjInfos,
+				createObjsInfos,
+				tbl.db.txn.op.Txn().DebugString())
+
+		}
 		if len(deleteObjs) > 0 {
 			if err := tbl.updateDeleteInfo(ctx, state, deleteObjs, createObjs); err != nil {
 				return err
@@ -697,6 +761,12 @@ func (tbl *txnTable) rangesOnePart(
 				for _, v := range vs {
 					id, _ := v.Decode()
 					dirtyBlks[id] = struct{}{}
+					if tbl.tableName == "bugt" {
+						logutil.Infof("xxxx txn:%s, workspce's rowid:%s, blkid:%s",
+							tbl.db.txn.op.Txn().DebugString(),
+							v.String(),
+							id.String())
+					}
 				}
 			}
 		}
@@ -2127,6 +2197,9 @@ func (tbl *txnTable) updateDeleteInfo(
 		var objMeta objectio.ObjectMeta
 		for _, name := range createObjs {
 			if obj, ok := state.GetObject(name); ok {
+				if !obj.DeleteTime.IsEmpty() {
+					continue
+				}
 				location := obj.Location()
 				if objMeta, err = objectio.FastLoadObjectMeta(
 					ctx,
@@ -2181,16 +2254,21 @@ func (tbl *txnTable) updateDeleteInfo(
 					toTransfer++
 					newId, ok, err := tbl.readNewRowid(pkVec, i, blks)
 					if err != nil {
+						logutil.Fatalf("xxxx read new rowid failed, err:%v", err)
 						return err
 					}
 					if ok {
 						rowids[i] = newId
 						update++
+						if tbl.tableName == "bugt" {
+							logutil.Infof("xxxx transfer rowid:%s to %s, txn:%s",
+								rowid.String(), newId.String(), tbl.db.txn.op.Txn().DebugString())
+						}
 					}
 				}
 			}
 			if update != toTransfer {
-				logutil.Fatalf("xxxx update rowid failed, update %d, toTransfer:%d, total %d",
+				logutil.Fatalf("xxxx transfer rowid failed, update %d, toTransfer:%d, total %d",
 					update, toTransfer, len(rowids))
 			}
 		}
