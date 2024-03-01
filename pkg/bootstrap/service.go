@@ -340,19 +340,6 @@ func (s *service) Close() error {
 	return nil
 }
 
-func execFunc(sql []string) func(executor.TxnExecutor) error {
-	return func(e executor.TxnExecutor) error {
-		for _, s := range sql {
-			r, err := e.Exec(s, executor.StatementOption{})
-			if err != nil {
-				return err
-			}
-			r.Close()
-		}
-		return nil
-	}
-}
-
 // initPreprocessSQL  Execute preprocessed SQL, which typically must be completed before system tenant initialization
 func initPreprocessSQL(ctx context.Context, txn executor.TxnExecutor) error {
 	var timeCost time.Duration

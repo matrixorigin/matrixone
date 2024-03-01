@@ -236,19 +236,13 @@ func FetchAllTenants(txn executor.TxnExecutor) ([]int32, error) {
 		return ids, err
 	}
 
-	n := 0
 	res.ReadRows(func(rows int, cols []*vector.Vector) bool {
-		last := int32(-1)
 		for i := 0; i < rows; i++ {
-			last = vector.GetFixedAt[int32](cols[0], i)
+			last := vector.GetFixedAt[int32](cols[0], i)
 			ids = append(ids, last)
-			n++
 		}
 		return true
 	})
 	res.Close()
-	if n == 0 {
-		return ids, nil
-	}
 	return ids, nil
 }
