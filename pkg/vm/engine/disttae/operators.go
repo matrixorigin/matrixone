@@ -132,7 +132,9 @@ func CompileFilterExprs(
 	loadOp LoadOp,
 	objectCheckOp ObjectCheckOp,
 	blockCheckOp BlockCheckOp,
+	canCompile bool,
 ) {
+	canCompile = true
 	if len(exprs) == 0 {
 		return
 	}
@@ -145,7 +147,10 @@ func CompileFilterExprs(
 	ops4 := make([]BlockCheckOp, len(exprs))
 
 	for _, expr := range exprs {
-		expr_op1, expr_op2, expr_op3, expr_op4 := CompileFilterExpr(expr, proc, tableDef, fs)
+		expr_op1, expr_op2, expr_op3, expr_op4, can := CompileFilterExpr(expr, proc, tableDef, fs)
+		if !can {
+			return nil, nil, nil, nil, false
+		}
 		ops1 = append(ops1, expr_op1)
 		ops2 = append(ops2, expr_op2)
 		ops3 = append(ops3, expr_op3)
@@ -221,7 +226,9 @@ func CompileFilterExpr(
 	loadOp LoadOp,
 	objectCheckOp ObjectCheckOp,
 	blockCheckOp BlockCheckOp,
+	canCompile bool,
 ) {
+	canCompile = true
 	if expr == nil {
 		return
 	}
@@ -231,6 +238,7 @@ func CompileFilterExpr(
 		case "<=":
 			colExpr, val, ok := mustEvalColValueBinaryFunctionExpr(exprImpl, tableDef, proc)
 			if !ok {
+				canCompile = false
 				return
 			}
 			isPK, isCluster := isClusterOrPKFromColExpr(colExpr, tableDef)
@@ -263,6 +271,7 @@ func CompileFilterExpr(
 		case ">=":
 			colExpr, val, ok := mustEvalColValueBinaryFunctionExpr(exprImpl, tableDef, proc)
 			if !ok {
+				canCompile = false
 				return
 			}
 			isPK, isCluster := isClusterOrPKFromColExpr(colExpr, tableDef)
@@ -295,6 +304,7 @@ func CompileFilterExpr(
 		case ">":
 			colExpr, val, ok := mustEvalColValueBinaryFunctionExpr(exprImpl, tableDef, proc)
 			if !ok {
+				canCompile = false
 				return
 			}
 			isPK, isCluster := isClusterOrPKFromColExpr(colExpr, tableDef)
@@ -327,6 +337,7 @@ func CompileFilterExpr(
 		case "<":
 			colExpr, val, ok := mustEvalColValueBinaryFunctionExpr(exprImpl, tableDef, proc)
 			if !ok {
+				canCompile = false
 				return
 			}
 			isPK, isCluster := isClusterOrPKFromColExpr(colExpr, tableDef)
@@ -359,6 +370,7 @@ func CompileFilterExpr(
 		case "prefix_eq":
 			colExpr, val, ok := mustEvalColValueBinaryFunctionExpr(exprImpl, tableDef, proc)
 			if !ok {
+				canCompile = false
 				return
 			}
 			isPK, isCluster := isClusterOrPKFromColExpr(colExpr, tableDef)
@@ -397,6 +409,7 @@ func CompileFilterExpr(
 		case "=":
 			colExpr, val, ok := mustEvalColValueBinaryFunctionExpr(exprImpl, tableDef, proc)
 			if !ok {
+				canCompile = false
 				return
 			}
 			isPK, isCluster := isClusterOrPKFromColExpr(colExpr, tableDef)
@@ -442,21 +455,43 @@ func CompileFilterExpr(
 				}
 				return true, nil
 			}
+		default:
+			canCompile = false
 		}
+	default:
+		canCompile = false
 	}
 	return
 }
 
-// func TryFastFilterBlocks(
-// 	tableDef *plan.TableDef,
-// 	exprs []*plan.Expr,
-// 	snapshot *logtailreplay.PartitionState,
-// 	uncommittedObjects []objectio.ObjectStats,
-// 	blocks *BlockInfoSlice,
-// 	fs fileservice.FileService,
-// 	proc *process.Process,
-// ) (ok bool, err error) {
-// }
+func TryFastFilterBlocks(
+	snapshotTS timestamp.Timestamp,
+	tableDef *plan.TableDef,
+	exprs []*plan.Expr,
+	snapshot *logtailreplay.PartitionState,
+	uncommittedObjects []objectio.ObjectStats,
+	blocks *objectio.BlockInfoSlice,
+	fs fileservice.FileService,
+	proc *process.Process,
+) (ok bool, err error) {
+	fastCheckOp, loadOp, objectCheckOp, blockCheckOp, ok := CompileFilterExprs(exprs, proc, tableDef, fs)
+	if !ok {
+		return false, nil
+	}
+	err = ExecuteBlockFilter(
+		snapshotTS,
+		fastCheckOp,
+		loadOp,
+		objectCheckOp,
+		blockCheckOp,
+		snapshot,
+		uncommittedObjects,
+		blocks,
+		fs,
+		proc,
+	)
+	return true, err
+}
 
 func ExecuteBlockFilter(
 	snapshotTS timestamp.Timestamp,
