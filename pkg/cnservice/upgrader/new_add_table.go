@@ -124,6 +124,18 @@ var (
 				refer_column_id)
 			);`, catalog.MO_CATALOG, catalog.MOForeignKeys),
 	}
+	MoSnapshotsTable = &table.Table{
+		Account:  table.AccountAll,
+		Database: catalog.MO_CATALOG,
+		Table:    catalog.MO_SNAPSHOTS,
+		CreateTableSql: fmt.Sprintf(`CREATE TABLE %s.%s (
+			snapshot_id uuid unique key,
+			sname varchar(64) primary key,
+			ts timestamp,
+			level enum('cluster','account','database','table'),
+			objname varchar(5000),
+			);`, catalog.MO_CATALOG, catalog.MO_SNAPSHOTS),
+	}
 )
 
 var needUpgradeNewTable = []*table.Table{
