@@ -143,6 +143,7 @@ var needUpgradeNewTable = []*table.Table{
 	SysDaemonTaskTable,
 	MoStagesTable,
 	MoForeignKeys,
+	MoSnapshotsTable,
 }
 
 var PARTITIONSView = &table.Table{

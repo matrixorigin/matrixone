@@ -9617,7 +9617,7 @@ func doCreateSnapshot(ctx context.Context, ses *Session, stmt *tree.CreateSnapSh
 	// check create stage priv
 	err = doCheckRole(ctx, ses)
 	if err != nil {
-		return nil
+		return err
 	}
 
 	bh := ses.GetBackgroundExec(ctx)

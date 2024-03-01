@@ -17,6 +17,7 @@ package frontend
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"reflect"
 	"strings"
@@ -10686,5 +10687,465 @@ func TestUpload(t *testing.T) {
 		err = fs.Read(proc.Ctx, iovec)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(iovec.Entries[0].Data, convey.ShouldResemble, []byte("def add(a, b):\n  return a + b"))
+	})
+}
+
+func TestCheckSnapshotExistOrNot(t *testing.T) {
+	convey.Convey("checkSnapshotExistOrNot success", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		aicm := &defines.AutoIncrCacheManager{}
+		rm, _ := NewRoutineManager(ctx, pu, aicm)
+		ses.rm = rm
+
+		tenant := &TenantInfo{
+			Tenant:        sysAccountName,
+			User:          rootName,
+			DefaultRole:   moAdminRoleName,
+			TenantID:      sysAccountID,
+			UserID:        rootID,
+			DefaultRoleID: moAdminRoleID,
+		}
+		ses.SetTenantInfo(tenant)
+
+		//no result set
+		bh.sql2result["begin;"] = nil
+		bh.sql2result["commit;"] = nil
+		bh.sql2result["rollback;"] = nil
+
+		sql, _ := getSqlForCheckSnapshot(ctx, "snapshot_test")
+		mrs := newMrsForPasswordOfUser([][]interface{}{
+			{0, 0},
+		})
+		bh.sql2result[sql] = mrs
+
+		rst, err := checkSnapShotExistOrNot(ctx, bh, "snapshot_test")
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(rst, convey.ShouldBeTrue)
+	})
+
+	convey.Convey("checkSnapshotExistOrNot success", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		aicm := &defines.AutoIncrCacheManager{}
+		rm, _ := NewRoutineManager(ctx, pu, aicm)
+		ses.rm = rm
+
+		tenant := &TenantInfo{
+			Tenant:        sysAccountName,
+			User:          rootName,
+			DefaultRole:   moAdminRoleName,
+			TenantID:      sysAccountID,
+			UserID:        rootID,
+			DefaultRoleID: moAdminRoleID,
+		}
+		ses.SetTenantInfo(tenant)
+
+		//no result set
+		bh.sql2result["begin;"] = nil
+		bh.sql2result["commit;"] = nil
+		bh.sql2result["rollback;"] = nil
+
+		sql, _ := getSqlForCheckSnapshot(ctx, "snapshot_test")
+		mrs := newMrsForPasswordOfUser([][]interface{}{})
+		bh.sql2result[sql] = mrs
+
+		rst, err := checkSnapShotExistOrNot(ctx, bh, "snapshot_test")
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(rst, convey.ShouldBeFalse)
+	})
+}
+
+func TestCheckSnapShotExistOrNot(t *testing.T) {
+	convey.Convey("checkSnapShotExistOrNot", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		bh := mock_frontend.NewMockBackgroundExec(ctrl)
+		bh.EXPECT().ClearExecResultSet().Return().AnyTimes()
+		bh.EXPECT().GetExecResultSet().Return(nil).AnyTimes()
+
+		ctx := context.TODO()
+		snapshotName := "snapshot1"
+
+		convey.Convey("when getSqlForCheckSnapshot returns an error", func() {
+			bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(errors.New("mock error")).Times(1)
+			exists, err := checkSnapShotExistOrNot(ctx, bh, snapshotName)
+			convey.So(exists, convey.ShouldBeFalse)
+			convey.So(err, convey.ShouldNotBeNil)
+		})
+
+		convey.Convey("when Exec returns an error", func() {
+			bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(errors.New("mock error")).Times(1)
+			exists, err := checkSnapShotExistOrNot(ctx, bh, snapshotName)
+			convey.So(exists, convey.ShouldBeFalse)
+			convey.So(err, convey.ShouldNotBeNil)
+		})
+
+		convey.Convey("when execResultArrayHasData returns true", func() {
+			bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).Times(1)
+			exists, err := checkSnapShotExistOrNot(ctx, bh, snapshotName)
+			convey.So(exists, convey.ShouldBeFalse)
+			convey.So(err, convey.ShouldBeNil)
+		})
+
+		convey.Convey("when execResultArrayHasData returns false", func() {
+			bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).Times(1)
+			exists, err := checkSnapShotExistOrNot(ctx, bh, snapshotName)
+			convey.So(exists, convey.ShouldBeFalse)
+			convey.So(err, convey.ShouldBeNil)
+		})
+	})
+}
+
+func TestDoDropSnapshot(t *testing.T) {
+	convey.Convey("doDropSnapshot success", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		aicm := &defines.AutoIncrCacheManager{}
+		rm, _ := NewRoutineManager(ctx, pu, aicm)
+		ses.rm = rm
+
+		tenant := &TenantInfo{
+			Tenant:        sysAccountName,
+			User:          rootName,
+			DefaultRole:   moAdminRoleName,
+			TenantID:      sysAccountID,
+			UserID:        rootID,
+			DefaultRoleID: moAdminRoleID,
+		}
+		ses.SetTenantInfo(tenant)
+
+		ds := &tree.DropSnapShot{
+			IfExists: false,
+			Name:     tree.Identifier("snapshot_test"),
+		}
+
+		//no result set
+		bh.sql2result["begin;"] = nil
+		bh.sql2result["commit;"] = nil
+		bh.sql2result["rollback;"] = nil
+
+		sql, _ := getSqlForCheckSnapshot(ctx, "snapshot_test")
+		mrs := newMrsForPasswordOfUser([][]interface{}{
+			{0, 0},
+		})
+		bh.sql2result[sql] = mrs
+
+		sql = getSqlForDropSnapshot(string(ds.Name))
+		mrs = newMrsForPasswordOfUser([][]interface{}{})
+		bh.sql2result[sql] = mrs
+
+		err := doDropSnapshot(ctx, ses, ds)
+		convey.So(err, convey.ShouldBeNil)
+	})
+
+	convey.Convey("doDropSnapshot success", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		aicm := &defines.AutoIncrCacheManager{}
+		rm, _ := NewRoutineManager(ctx, pu, aicm)
+		ses.rm = rm
+
+		tenant := &TenantInfo{
+			Tenant:        sysAccountName,
+			User:          rootName,
+			DefaultRole:   moAdminRoleName,
+			TenantID:      sysAccountID,
+			UserID:        rootID,
+			DefaultRoleID: moAdminRoleID,
+		}
+		ses.SetTenantInfo(tenant)
+
+		ds := &tree.DropSnapShot{
+			IfExists: true,
+			Name:     tree.Identifier("snapshot_test"),
+		}
+
+		//no result set
+		bh.sql2result["begin;"] = nil
+		bh.sql2result["commit;"] = nil
+		bh.sql2result["rollback;"] = nil
+
+		sql, _ := getSqlForCheckSnapshot(ctx, "snapshot_test")
+		mrs := newMrsForPasswordOfUser([][]interface{}{
+			{0, 0},
+		})
+		bh.sql2result[sql] = mrs
+
+		sql = getSqlForDropSnapshot(string(ds.Name))
+		mrs = newMrsForPasswordOfUser([][]interface{}{})
+		bh.sql2result[sql] = mrs
+
+		err := doDropSnapshot(ctx, ses, ds)
+		convey.So(err, convey.ShouldBeNil)
+	})
+
+	convey.Convey("doDropSnapshot fail", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		aicm := &defines.AutoIncrCacheManager{}
+		rm, _ := NewRoutineManager(ctx, pu, aicm)
+		ses.rm = rm
+
+		tenant := &TenantInfo{
+			Tenant:        sysAccountName,
+			User:          rootName,
+			DefaultRole:   moAdminRoleName,
+			TenantID:      sysAccountID,
+			UserID:        rootID,
+			DefaultRoleID: moAdminRoleID,
+		}
+		ses.SetTenantInfo(tenant)
+
+		ds := &tree.DropSnapShot{
+			IfExists: false,
+			Name:     tree.Identifier("snapshot_test"),
+		}
+
+		//no result set
+		bh.sql2result["begin;"] = nil
+		bh.sql2result["commit;"] = nil
+		bh.sql2result["rollback;"] = nil
+
+		sql, _ := getSqlForCheckSnapshot(ctx, "snapshot_test")
+		mrs := newMrsForPasswordOfUser([][]interface{}{})
+		bh.sql2result[sql] = mrs
+
+		sql = getSqlForDropSnapshot(string(ds.Name))
+		mrs = newMrsForPasswordOfUser([][]interface{}{})
+		bh.sql2result[sql] = mrs
+
+		err := doDropSnapshot(ctx, ses, ds)
+		convey.So(err, convey.ShouldNotBeNil)
+	})
+
+	convey.Convey("doDropSnapshot fail", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		aicm := &defines.AutoIncrCacheManager{}
+		rm, _ := NewRoutineManager(ctx, pu, aicm)
+		ses.rm = rm
+
+		tenant := &TenantInfo{
+			Tenant:        "test_account",
+			User:          rootName,
+			DefaultRole:   "test_role",
+			TenantID:      sysAccountID,
+			UserID:        rootID,
+			DefaultRoleID: moAdminRoleID,
+		}
+		ses.SetTenantInfo(tenant)
+
+		ds := &tree.DropSnapShot{
+			IfExists: true,
+			Name:     tree.Identifier("snapshot_test"),
+		}
+
+		//no result set
+		bh.sql2result["begin;"] = nil
+		bh.sql2result["commit;"] = nil
+		bh.sql2result["rollback;"] = nil
+
+		sql, _ := getSqlForCheckSnapshot(ctx, "snapshot_test")
+		mrs := newMrsForPasswordOfUser([][]interface{}{
+			{0, 0},
+		})
+		bh.sql2result[sql] = mrs
+
+		sql = getSqlForDropSnapshot(string(ds.Name))
+		mrs = newMrsForPasswordOfUser([][]interface{}{})
+		bh.sql2result[sql] = mrs
+
+		err := doDropSnapshot(ctx, ses, ds)
+		convey.So(err, convey.ShouldNotBeNil)
+	})
+}
+
+func TestDoCreateSnapshot(t *testing.T) {
+	convey.Convey("doCreateSnapshot success", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		aicm := &defines.AutoIncrCacheManager{}
+		rm, _ := NewRoutineManager(ctx, pu, aicm)
+		ses.rm = rm
+
+		tenant := &TenantInfo{
+			Tenant:        sysAccountName,
+			User:          rootName,
+			DefaultRole:   moAdminRoleName,
+			TenantID:      sysAccountID,
+			UserID:        rootID,
+			DefaultRoleID: moAdminRoleID,
+		}
+		ses.SetTenantInfo(tenant)
+
+		cs := &tree.CreateSnapShot{
+			IfNotExists: false,
+			Name:        tree.Identifier("snapshot_test"),
+			Obeject: tree.ObejectInfo{
+				SLevel: tree.SnapshotLevelType{
+					Level: tree.SNAPSHOTLEVELCLUSTER,
+				},
+				ObjName: "",
+			},
+		}
+
+		//no result set
+		bh.sql2result["begin;"] = nil
+		bh.sql2result["commit;"] = nil
+		bh.sql2result["rollback;"] = nil
+
+		sql, _ := getSqlForCheckSnapshot(ctx, "snapshot_test")
+		mrs := newMrsForPasswordOfUser([][]interface{}{})
+		bh.sql2result[sql] = mrs
+
+		err := doCreateSnapshot(ctx, ses, cs)
+		convey.So(err, convey.ShouldBeNil)
+	})
+
+	convey.Convey("doCreateSnapshot success", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		aicm := &defines.AutoIncrCacheManager{}
+		rm, _ := NewRoutineManager(ctx, pu, aicm)
+		ses.rm = rm
+
+		tenant := &TenantInfo{
+			Tenant:        "acc1",
+			User:          rootName,
+			DefaultRole:   moAdminRoleName,
+			TenantID:      333333,
+			UserID:        rootID,
+			DefaultRoleID: 12,
+		}
+		ses.SetTenantInfo(tenant)
+
+		cs := &tree.CreateSnapShot{
+			IfNotExists: false,
+			Name:        tree.Identifier("snapshot_test"),
+			Obeject: tree.ObejectInfo{
+				SLevel: tree.SnapshotLevelType{
+					Level: tree.SNAPSHOTLEVELCLUSTER,
+				},
+				ObjName: "",
+			},
+		}
+
+		//no result set
+		bh.sql2result["begin;"] = nil
+		bh.sql2result["commit;"] = nil
+		bh.sql2result["rollback;"] = nil
+
+		sql, _ := getSqlForCheckSnapshot(ctx, "snapshot_test")
+		mrs := newMrsForPasswordOfUser([][]interface{}{})
+		bh.sql2result[sql] = mrs
+
+		err := doCreateSnapshot(ctx, ses, cs)
+		convey.So(err, convey.ShouldNotBeNil)
 	})
 }
