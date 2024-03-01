@@ -29,6 +29,7 @@ SELECT split_part('12345*&+789*&dhejwfew2','*&',2);
 split_part(12345*&+789*&dhejwfew2, *&, 2)
 +789
 SELECT split_part('.+0___=+. ','.',1);
+split_part(.+0___=+. , ., 1)
 
 SELECT split_part('..','.',1);
 split_part(.., ., 1)
