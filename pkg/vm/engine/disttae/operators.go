@@ -7,6 +7,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -442,5 +444,90 @@ func CompileFilterExpr(
 			}
 		}
 	}
+	return
+}
+
+// func TryFastFilterBlocks(
+// 	tableDef *plan.TableDef,
+// 	exprs []*plan.Expr,
+// 	snapshot *logtailreplay.PartitionState,
+// 	uncommittedObjects []objectio.ObjectStats,
+// 	blocks *BlockInfoSlice,
+// 	fs fileservice.FileService,
+// 	proc *process.Process,
+// ) (ok bool, err error) {
+// }
+
+func ExecuteBlockFilter(
+	snapshotTS timestamp.Timestamp,
+	fastCheckOp FastCheckOp,
+	loadOp LoadOp,
+	objectCheckOp ObjectCheckOp,
+	blockCheckOp BlockCheckOp,
+	snapshot *logtailreplay.PartitionState,
+	uncommittedObjects []objectio.ObjectStats,
+	blocks *objectio.BlockInfoSlice,
+	fs fileservice.FileService,
+	proc *process.Process,
+) (err error) {
+	err = ForeachSnapshotObjects(
+		snapshotTS,
+		func(obj logtailreplay.ObjectInfo, isCommitted bool) (err2 error) {
+			var ok bool
+			objStats := obj.ObjectStats
+			if fastCheckOp != nil {
+				if ok, err2 = fastCheckOp(objStats); err2 != nil || !ok {
+					return
+				}
+			}
+			var (
+				meta objectio.ObjectMeta
+				bf   objectio.BloomFilter
+			)
+			if loadOp != nil {
+				if meta, bf, err2 = loadOp(
+					proc.Ctx, objStats, meta, bf,
+				); err2 != nil {
+					return
+				}
+			}
+			if objectCheckOp != nil {
+				if ok, err2 = objectCheckOp(meta, bf); err2 != nil || !ok {
+					return
+				}
+			}
+			ForeachBlkInObjStatsList(false, meta.MustDataMeta(), func(blk objectio.BlockInfo, blkMeta objectio.BlockObject) bool {
+				var ok2 bool
+				if blockCheckOp != nil {
+					ok2, err2 = blockCheckOp(blk, blkMeta, bf)
+					if err2 != nil {
+						return false
+					}
+					if !ok2 {
+						return true
+					}
+				}
+
+				blk.Sorted = obj.Sorted
+				blk.EntryState = obj.EntryState
+				blk.CommitTs = obj.CommitTS
+				if obj.HasDeltaLoc {
+					deltaLoc, commitTs, ok := snapshot.GetBockDeltaLoc(blk.BlockID)
+					if ok {
+						blk.DeltaLoc = deltaLoc
+						blk.CommitTs = commitTs
+					}
+				}
+				blk.PartitionNum = -1
+				blocks.AppendBlockInfo(blk)
+				return true
+			},
+				objStats,
+			)
+			return
+		},
+		snapshot,
+		uncommittedObjects...,
+	)
 	return
 }
