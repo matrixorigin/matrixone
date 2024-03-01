@@ -486,47 +486,12 @@ func initInformationSchemaTables(ctx context.Context, ieFactory func() ie.Intern
 //---------------------------------------------------------------------------------------------
 
 func InitSchema2(ctx context.Context, txn executor.TxnExecutor) error {
-	//ctx = defines.AttachAccount(ctx, catalog.System_Account, catalog.System_User, catalog.System_Role)
 	if err := initMysqlTables2(ctx, txn); err != nil {
 		return err
 	}
 	if err := initInformationSchemaTables2(ctx, txn); err != nil {
 		return err
 	}
-
-	//if err := initSchemaTables(ctx, txn, MysqlDBConst, InitMysqlSysTables); err != nil {
-	//	return err
-	//}
-	//if err := initSchemaTables(ctx, txn, InformationDBConst, InitInformationSchemaSysTables); err != nil {
-	//	return err
-	//}
-	return nil
-}
-
-func initSchemaTables(ctx context.Context, txn executor.TxnExecutor, schema string, sqls []string) error {
-	_, err := txn.Exec(sqlCreateDBConst+schema, executor.StatementOption{})
-	if err != nil {
-		return err
-	}
-
-	_, err = txn.Exec(sqlUseDbConst+schema, executor.StatementOption{})
-	if err != nil {
-		return err
-	}
-
-	var timeCost time.Duration
-	defer func() {
-		logutil.Debugf("[%s] init %s tables: create cost %d ms", schema, schema, timeCost.Milliseconds())
-	}()
-
-	begin := time.Now()
-	for _, sql := range sqls {
-		if _, err = txn.Exec(sql, executor.StatementOption{}); err != nil {
-			// panic(fmt.Sprintf("[Mysql] init mysql tables error: %v, sql: %s", err, sql))
-			return moerr.NewInternalError(ctx, "[%s] init %s tables error: %v, sql: %s", schema, schema, err, sql)
-		}
-	}
-	timeCost = time.Since(begin)
 	return nil
 }
 

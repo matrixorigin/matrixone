@@ -284,7 +284,7 @@ func (s *service) checkAlreadyBootstrapped(ctx context.Context) (bool, error) {
 func (s *service) execBootstrap(ctx context.Context) error {
 	opts := executor.Options{}.
 		WithMinCommittedTS(s.now()).
-		//WithDisableTrace().
+		WithDisableTrace().
 		WithWaitCommittedLogApplied().
 		WithTimeZone(time.Local). // FIXME ???
 		WithAccountID(catalog.System_Account)
