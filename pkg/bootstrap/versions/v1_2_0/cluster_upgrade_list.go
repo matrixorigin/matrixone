@@ -15,9 +15,7 @@
 package v1_2_0
 
 import (
-	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"strings"
 )
@@ -83,6 +81,7 @@ var upg_sys_async_task = versions.UpgradeEntry{
 	},
 }
 
+/*
 // MOForeignKeys = "mo_foreign_keys"
 var upg_mo_foreign_keys = versions.UpgradeEntry{
 	Schema:    "mo_catalog",
@@ -134,3 +133,4 @@ var upg_mo_foreign_keys = versions.UpgradeEntry{
 		return false, nil
 	},
 }
+*/

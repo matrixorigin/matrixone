@@ -14,6 +14,7 @@
 
 package v1_2_0
 
+/*
 import (
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
@@ -38,3 +39,4 @@ var upg_sql_dut_total = versions.UpgradeEntry{
 		return false, nil
 	},
 }
+*/
