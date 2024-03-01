@@ -13,3 +13,7 @@
 // limitations under the License.
 
 package agg2
+
+func init() {
+	registerSum()
+}

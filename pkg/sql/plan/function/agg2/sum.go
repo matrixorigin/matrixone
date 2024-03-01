@@ -19,7 +19,25 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 )
 
+func registerSum() {
+	// todo: id is hard-coded here.
+	aggexec.RegisterSingleAggImpl(100, types.T_bit.ToType(), types.T_int64.ToType(), newAggSum[int8, int64])
+	aggexec.RegisterSingleAggImpl(100, types.T_int8.ToType(), types.T_int64.ToType(), newAggSum[int8, int64])
+	aggexec.RegisterSingleAggImpl(101, types.T_int16.ToType(), types.T_int64.ToType(), newAggSum[int16, int64])
+	aggexec.RegisterSingleAggImpl(102, types.T_int32.ToType(), types.T_int64.ToType(), newAggSum[int32, int64])
+	aggexec.RegisterSingleAggImpl(103, types.T_int64.ToType(), types.T_int64.ToType(), newAggSum[int64, int64])
+	aggexec.RegisterSingleAggImpl(104, types.T_uint8.ToType(), types.T_uint64.ToType(), newAggSum[uint8, uint64])
+	aggexec.RegisterSingleAggImpl(105, types.T_uint16.ToType(), types.T_uint64.ToType(), newAggSum[uint16, uint64])
+	aggexec.RegisterSingleAggImpl(106, types.T_uint32.ToType(), types.T_uint64.ToType(), newAggSum[uint32, uint64])
+	aggexec.RegisterSingleAggImpl(107, types.T_uint64.ToType(), types.T_uint64.ToType(), newAggSum[uint64, uint64])
+	aggexec.RegisterSingleAggImpl(108, types.T_float32.ToType(), types.T_float64.ToType(), newAggSum[float32, float64])
+	aggexec.RegisterSingleAggImpl(109, types.T_float64.ToType(), types.T_float64.ToType(), newAggSum[float64, float64])
+	aggexec.RegisterSingleAggImpl(110, types.T_decimal64.ToType(), types.T_decimal128.ToType(), newAggSumDecimal64)
+	aggexec.RegisterSingleAggImpl(111, types.T_decimal128.ToType(), types.T_decimal128.ToType(), newAggSumDecimal128)
+}
+
 var _ aggexec.SingleAggFromFixedRetFixed[int32, int64] = aggSum[int32, int64]{}
+var _ aggexec.SingleAggFromFixedRetFixed[types.Decimal64, types.Decimal128] = aggSumDecimal64{}
 
 type aggSum[from numeric, to maxScaleNumeric] struct{}
 
@@ -39,23 +57,6 @@ func newAggSumDecimal128() aggSumDecimal128 {
 	return aggSumDecimal128{}
 }
 
-func init() {
-	// todo: id is hard-coded here.
-	aggexec.RegisterSingleAggImpl(100, types.T_bit.ToType(), types.T_int64.ToType(), newAggSum[int8, int64])
-	aggexec.RegisterSingleAggImpl(100, types.T_int8.ToType(), types.T_int64.ToType(), newAggSum[int8, int64])
-	aggexec.RegisterSingleAggImpl(101, types.T_int16.ToType(), types.T_int64.ToType(), newAggSum[int16, int64])
-	aggexec.RegisterSingleAggImpl(102, types.T_int32.ToType(), types.T_int64.ToType(), newAggSum[int32, int64])
-	aggexec.RegisterSingleAggImpl(103, types.T_int64.ToType(), types.T_int64.ToType(), newAggSum[int64, int64])
-	aggexec.RegisterSingleAggImpl(104, types.T_uint8.ToType(), types.T_uint64.ToType(), newAggSum[uint8, uint64])
-	aggexec.RegisterSingleAggImpl(105, types.T_uint16.ToType(), types.T_uint64.ToType(), newAggSum[uint16, uint64])
-	aggexec.RegisterSingleAggImpl(106, types.T_uint32.ToType(), types.T_uint64.ToType(), newAggSum[uint32, uint64])
-	aggexec.RegisterSingleAggImpl(107, types.T_uint64.ToType(), types.T_uint64.ToType(), newAggSum[uint64, uint64])
-	aggexec.RegisterSingleAggImpl(108, types.T_float32.ToType(), types.T_float64.ToType(), newAggSum[float32, float64])
-	aggexec.RegisterSingleAggImpl(109, types.T_float64.ToType(), types.T_float64.ToType(), newAggSum[float64, float64])
-	aggexec.RegisterSingleAggImpl(110, types.T_decimal64.ToType(), types.T_decimal128.ToType(), newAggSumDecimal64)
-	aggexec.RegisterSingleAggImpl(111, types.T_decimal128.ToType(), types.T_decimal128.ToType(), newAggSumDecimal128)
-}
-
 func (a aggSum[from, to]) Marshal() []byte        { return nil }
 func (a aggSum[from, to]) Unmarshal(bytes []byte) {}
 func (a aggSum[from, to]) Init()                  {}
@@ -72,3 +73,49 @@ func (a aggSum[from, to]) Merge(other aggexec.SingleAggFromFixedRetFixed[from, t
 	set(getter1() + getter2())
 }
 func (a aggSum[from, to]) Flush(get aggexec.AggGetter[to], setter aggexec.AggSetter[to]) {}
+
+func (a aggSumDecimal64) Marshal() []byte        { return nil }
+func (a aggSumDecimal64) Unmarshal(bytes []byte) {}
+func (a aggSumDecimal64) Init()                  {}
+func (a aggSumDecimal64) Fill(from types.Decimal64, get aggexec.AggGetter[types.Decimal128], set aggexec.AggSetter[types.Decimal128]) {
+	r, _ := get().Add64(from)
+	set(r)
+}
+func (a aggSumDecimal64) FillNull(get aggexec.AggGetter[types.Decimal128], set aggexec.AggSetter[types.Decimal128]) {
+}
+func (a aggSumDecimal64) Fills(value types.Decimal64, isNull bool, count int, get aggexec.AggGetter[types.Decimal128], set aggexec.AggSetter[types.Decimal128]) {
+	if !isNull {
+		v := types.Decimal128{B0_63: uint64(value), B64_127: 0}
+		if value.Sign() {
+			v.B64_127 = ^v.B64_127
+		}
+		r, _ := v.Mul128(types.Decimal128{B0_63: uint64(count), B64_127: 0})
+		r, _ = get().Add128(r)
+		set(r)
+	}
+}
+func (a aggSumDecimal64) Merge(other aggexec.SingleAggFromFixedRetFixed[types.Decimal64, types.Decimal128], get1, get2 aggexec.AggGetter[types.Decimal128], setter aggexec.AggSetter[types.Decimal128]) {
+}
+func (a aggSumDecimal64) Flush(get aggexec.AggGetter[types.Decimal128], set aggexec.AggSetter[types.Decimal128]) {
+}
+
+func (a aggSumDecimal128) Marshal() []byte        { return nil }
+func (a aggSumDecimal128) Unmarshal(bytes []byte) {}
+func (a aggSumDecimal128) Init()                  {}
+func (a aggSumDecimal128) Fill(from types.Decimal128, get aggexec.AggGetter[types.Decimal128], set aggexec.AggSetter[types.Decimal128]) {
+	r, _ := get().Add128(from)
+	set(r)
+}
+func (a aggSumDecimal128) FillNull(get aggexec.AggGetter[types.Decimal128], set aggexec.AggSetter[types.Decimal128]) {
+}
+func (a aggSumDecimal128) Fills(value types.Decimal128, isNull bool, count int, get aggexec.AggGetter[types.Decimal128], set aggexec.AggSetter[types.Decimal128]) {
+	if !isNull {
+		r, _, _ := value.Mul(types.Decimal128{B0_63: uint64(count), B64_127: 0}, 0, 0)
+		r, _ = get().Add128(r)
+		set(r)
+	}
+}
+func (a aggSumDecimal128) Merge(other aggexec.SingleAggFromFixedRetFixed[types.Decimal128, types.Decimal128], get1, get2 aggexec.AggGetter[types.Decimal128], setter aggexec.AggSetter[types.Decimal128]) {
+}
+func (a aggSumDecimal128) Flush(get aggexec.AggGetter[types.Decimal128], set aggexec.AggSetter[types.Decimal128]) {
+}
