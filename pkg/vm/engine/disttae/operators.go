@@ -12,7 +12,9 @@ import (
 )
 
 type FastCheckOp func(objectio.ObjectStats) (bool, error)
-type LoadOp = func(context.Context, objectio.ObjectStats) (objectio.ObjectMeta, objectio.BloomFilter, error)
+type LoadOp = func(
+	context.Context, objectio.ObjectStats, objectio.ObjectMeta, objectio.BloomFilter,
+) (objectio.ObjectMeta, objectio.BloomFilter, error)
 type ObjectCheckOp func(objectio.ObjectMeta, objectio.BloomFilter) (bool, error)
 type BlockCheckOp func(objectio.BlockInfo, objectio.BlockObject, objectio.BloomFilter) (bool, error)
 type LoadOpFactory func(fileservice.FileService) LoadOp
@@ -22,34 +24,52 @@ var loadMetadataAndBFOpFactory LoadOpFactory
 
 func init() {
 	loadMetadataAndBFOpFactory = func(fs fileservice.FileService) LoadOp {
-		return func(ctx context.Context, obj objectio.ObjectStats) (objectio.ObjectMeta, objectio.BloomFilter, error) {
+		return func(
+			ctx context.Context,
+			obj objectio.ObjectStats,
+			inMeta objectio.ObjectMeta,
+			inBF objectio.BloomFilter,
+		) (outMeta objectio.ObjectMeta, outBF objectio.BloomFilter, err error) {
 			location := obj.ObjectLocation()
-			objMeta, err := objectio.FastLoadObjectMeta(
-				ctx, &location, false, fs,
-			)
-			if err != nil {
-				return nil, nil, err
+			outMeta = inMeta
+			if outMeta == nil {
+				if outMeta, err = objectio.FastLoadObjectMeta(
+					ctx, &location, false, fs,
+				); err != nil {
+					return nil, nil, err
+				}
 			}
-			meta := objMeta.MustDataMeta()
-			bf, err := objectio.LoadBFWithMeta(
-				ctx, meta, location, fs,
-			)
-			if err != nil {
-				return nil, nil, err
+			outBF = inBF
+			if outBF == nil {
+				meta := outMeta.MustDataMeta()
+				if outBF, err = objectio.LoadBFWithMeta(
+					ctx, meta, location, fs,
+				); err != nil {
+					return nil, nil, err
+				}
 			}
-			return objMeta, bf, nil
+			return outMeta, outBF, nil
 		}
 	}
 	loadMetadataOnlyOpFactory = func(fs fileservice.FileService) LoadOp {
-		return func(ctx context.Context, obj objectio.ObjectStats) (objectio.ObjectMeta, objectio.BloomFilter, error) {
+		return func(
+			ctx context.Context,
+			obj objectio.ObjectStats,
+			inMeta objectio.ObjectMeta,
+			inBF objectio.BloomFilter,
+		) (outMeta objectio.ObjectMeta, outBF objectio.BloomFilter, err error) {
+			outMeta = inMeta
+			outBF = inBF
+			if outMeta != nil {
+				return
+			}
 			location := obj.ObjectLocation()
-			objMeta, err := objectio.FastLoadObjectMeta(
+			if outMeta, err = objectio.FastLoadObjectMeta(
 				ctx, &location, false, fs,
-			)
-			if err != nil {
+			); err != nil {
 				return nil, nil, err
 			}
-			return objMeta, nil, nil
+			return outMeta, outBF, nil
 		}
 	}
 }
@@ -100,7 +120,96 @@ func mustEvalColValueBinaryFunctionExpr(
 	return colExpr, val, true
 }
 
-func GenerateFilterExprOperators(
+func CompileFilterExprs(
+	exprs []*plan.Expr,
+	proc *process.Process,
+	tableDef *plan.TableDef,
+	fs fileservice.FileService,
+) (
+	fastCheckOp FastCheckOp,
+	loadOp LoadOp,
+	objectCheckOp ObjectCheckOp,
+	blockCheckOp BlockCheckOp,
+) {
+	if len(exprs) == 0 {
+		return
+	}
+	if len(exprs) == 1 {
+		return CompileFilterExpr(exprs[0], proc, tableDef, fs)
+	}
+	ops1 := make([]FastCheckOp, len(exprs))
+	ops2 := make([]LoadOp, len(exprs))
+	ops3 := make([]ObjectCheckOp, len(exprs))
+	ops4 := make([]BlockCheckOp, len(exprs))
+
+	for _, expr := range exprs {
+		expr_op1, expr_op2, expr_op3, expr_op4 := CompileFilterExpr(expr, proc, tableDef, fs)
+		ops1 = append(ops1, expr_op1)
+		ops2 = append(ops2, expr_op2)
+		ops3 = append(ops3, expr_op3)
+		ops4 = append(ops4, expr_op4)
+	}
+	fastCheckOp = func(obj objectio.ObjectStats) (bool, error) {
+		for _, op := range ops1 {
+			if op == nil {
+				continue
+			}
+			ok, err := op(obj)
+			if err != nil || !ok {
+				return ok, err
+			}
+		}
+		return true, nil
+	}
+	loadOp = func(
+		ctx context.Context,
+		obj objectio.ObjectStats,
+		inMeta objectio.ObjectMeta,
+		inBF objectio.BloomFilter,
+	) (meta objectio.ObjectMeta, bf objectio.BloomFilter, err error) {
+		for _, op := range ops2 {
+			if op == nil {
+				continue
+			}
+			if meta != nil && bf != nil {
+				continue
+			}
+			if meta, bf, err = op(ctx, obj, meta, bf); err != nil {
+				return
+			}
+		}
+		return
+	}
+	objectCheckOp = func(meta objectio.ObjectMeta, bf objectio.BloomFilter) (bool, error) {
+		for _, op := range ops3 {
+			if op == nil {
+				continue
+			}
+			ok, err := op(meta, bf)
+			if !ok || err != nil {
+				return ok, err
+			}
+		}
+		return true, nil
+	}
+	blockCheckOp = func(
+		obj objectio.BlockInfo, blkMeta objectio.BlockObject, bf objectio.BloomFilter,
+	) (bool, error) {
+		for _, op := range ops4 {
+			if op == nil {
+				continue
+			}
+			ok, err := op(obj, blkMeta, bf)
+			if !ok || err != nil {
+				return ok, err
+			}
+		}
+		return true, nil
+	}
+	return
+}
+
+func CompileFilterExpr(
 	expr *plan.Expr,
 	proc *process.Process,
 	tableDef *plan.TableDef,
