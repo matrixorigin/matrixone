@@ -29,8 +29,7 @@ function launch_mo() {
 function wait_system_init() {
     for num in {1..300}  
     do
-        MYSQL_PWD=111 mysql -h 127.0.0.1 -P 6001 -u dump -e "show databases;";
-        if [ "$?" -eq 0 ]; then
+        if MYSQL_PWD=111 mysql -h 127.0.0.1 -P 6001 -u dump -e "show databases;"; then
             echo "ok, cost $num seconds"
             return 0
         fi
