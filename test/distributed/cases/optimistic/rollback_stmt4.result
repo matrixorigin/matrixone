@@ -1,7 +1,6 @@
 drop database if exists rollbacktest;
 create database rollbacktest;
-create database test;
-use test;
+use rollbacktest;
 create table if not exists t2( id int primary key );
 insert into t2 values(1);
 select * from t2;

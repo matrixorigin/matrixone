@@ -1,9 +1,7 @@
 drop database if exists rollbacktest;
 create database rollbacktest;
-
+use rollbacktest;
 --// workspace内部有与表中数据重复时，commit会报错
-create database test;
-use test;
 create table if not exists t2( id int primary key );
 insert into t2 values(1);
 select * from t2;
