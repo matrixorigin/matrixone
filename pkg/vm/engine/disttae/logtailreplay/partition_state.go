@@ -252,6 +252,15 @@ type ObjectIndexByTSEntry struct {
 	IsAppendable bool
 }
 
+func (b ObjectIndexByTSEntry) ToString() string {
+	return fmt.Sprintf(
+		"Time:%s; ShortSegName: %s; IsDelete: %v; IsAppendable: %v",
+		b.Time.ToString(),
+		b.ShortObjName.Segmentid().ToString(),
+		b.IsDelete,
+		b.IsAppendable)
+}
+
 func (b ObjectIndexByTSEntry) Less(than ObjectIndexByTSEntry) bool {
 	// asc
 	if b.Time.Less(than.Time) {

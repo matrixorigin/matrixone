@@ -663,18 +663,35 @@ func (tbl *txnTable) rangesOnePart(
 		deleteObjInfos := ""
 		createObjsInfos := ""
 		allObjInfos := ""
+		allObjsInIndexTS := ""
 		if tbl.tableName == "bugt" || len(deleteObjs) > 0 || len(createObjs) > 0 {
-			objItr, _ := state.NewObjectsIterForTest()
-			defer objItr.Close()
-			for objItr.Next() {
-				entry := objItr.Entry()
-				allObjInfos = fmt.Sprintf("%s:%s", allObjInfos, entry.ObjectInfo.String())
+			{
+				objItr, _ := state.NewObjectsIterForTest()
+				defer objItr.Close()
+				for objItr.Next() {
+					entry := objItr.Entry()
+					allObjInfos = fmt.Sprintf("%s:%s", allObjInfos, entry.ObjectInfo.String())
+				}
+				logutil.Infof("xxxx txn:%s, all object infos in dataObjects:%s, last ts:%s, snapshot ts:%s",
+					tbl.db.txn.op.Txn().DebugString(),
+					allObjInfos,
+					tbl.lastTS.DebugString(),
+					tbl.db.txn.op.SnapshotTS().DebugString())
 			}
-			logutil.Infof("xxxx txn:%s, all object infos:%s, last ts:%s, snapshot ts:%s",
-				tbl.db.txn.op.Txn().DebugString(),
-				allObjInfos,
-				tbl.lastTS.DebugString(),
-				tbl.db.txn.op.SnapshotTS().DebugString())
+			{
+				objItr, _ := state.NewObjectsIterForIndexByTS()
+				defer objItr.Close()
+				for objItr.Next() {
+					entry := objItr.Entry()
+					allObjsInIndexTS = fmt.Sprintf("%s:%s", allObjsInIndexTS, entry.ToString())
+				}
+				logutil.Infof("xxxx txn:%s, all object infos in indexByTS:%s, last ts:%s, snapshot ts:%s",
+					tbl.db.txn.op.Txn().DebugString(),
+					allObjsInIndexTS,
+					tbl.lastTS.DebugString(),
+					tbl.db.txn.op.SnapshotTS().DebugString())
+
+			}
 
 			for _, obj := range deleteObjs {
 				objInfo, ok := state.GetObject(obj)
@@ -2197,9 +2214,9 @@ func (tbl *txnTable) updateDeleteInfo(
 		var objMeta objectio.ObjectMeta
 		for _, name := range createObjs {
 			if obj, ok := state.GetObject(name); ok {
-				if !obj.DeleteTime.IsEmpty() {
-					continue
-				}
+				//if !obj.DeleteTime.IsEmpty() {
+				//	continue
+				//}
 				location := obj.Location()
 				if objMeta, err = objectio.FastLoadObjectMeta(
 					ctx,

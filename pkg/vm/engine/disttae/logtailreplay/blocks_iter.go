@@ -97,6 +97,53 @@ func (b *objectsIter) Close() error {
 }
 
 // for test
+type ObjectsIterForIndexByTS struct {
+	iter        btree.IterG[ObjectIndexByTSEntry]
+	firstCalled bool
+	p           *PartitionState
+}
+
+func (p *PartitionState) NewObjectsIterForIndexByTS() (*ObjectsIterForIndexByTS, error) {
+	iter := p.objectIndexByTS.Copy().Iter()
+	ret := &ObjectsIterForIndexByTS{
+		iter: iter,
+		p:    p,
+	}
+	return ret, nil
+}
+
+//var _ ObjectsIter = new(ObjectsIterForIndexByTS)
+
+func (b *ObjectsIterForIndexByTS) Next() bool {
+	for {
+		if !b.firstCalled {
+			if !b.iter.First() {
+				return false
+			}
+			b.firstCalled = true
+		} else {
+			if !b.iter.Next() {
+				return false
+			}
+		}
+		return true
+	}
+}
+
+func (b *ObjectsIterForIndexByTS) Entry() ObjectIndexByTSEntry {
+	return b.iter.Item()
+	//obj, ok := b.p.GetObject(shortName)
+	//if !ok {
+	//	panic(fmt.Sprintf("xxxx object not found:%s", shortName.Segmentid().ToString()))
+	//}
+}
+
+func (b *ObjectsIterForIndexByTS) Close() error {
+	b.iter.Release()
+	b.p = nil
+	return nil
+}
+
 type objectsIterForTest struct {
 	iter        btree.IterG[ObjectEntry]
 	firstCalled bool
