@@ -505,3 +505,14 @@ insert into t3 values(-1000);
 select maxvalue from t1;
 SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 15 near " maxvalue from t1;";
 drop table t3;
+drop table if exists t4;
+create table t4(col1 int, col2 decimal, col3 smallint, primary key(col1, col3));
+insert into t4 (col1, col2, col3) values(6, 6, 8);
+insert into t4 (col2, col3, col1) values(2, 3, 1);
+insert into t4 (col3, col1) values (8, 6);
+Duplicate entry '(6,8)' for key '__mo_cpkey_col'
+select * from t4;
+col1    col2    col3
+6    6    8
+1    2    3
+drop table t4;
