@@ -24,9 +24,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/defines"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -239,7 +236,7 @@ func initConfigByParameterUnit(SV *config.ObservabilityParameters) {
 	metric.SetGatherInterval(time.Second * time.Duration(SV.MetricGatherInterval))
 }
 
-func InitSchema2(ctx context.Context, txn executor.TxnExecutor) error {
+func InitSchema(ctx context.Context, txn executor.TxnExecutor) error {
 	if metric.GetForceInit() {
 		if _, err := txn.Exec(SqlDropDBConst, executor.StatementOption{}); err != nil {
 			return err
@@ -281,12 +278,6 @@ func InitSchema2(ctx context.Context, txn executor.TxnExecutor) error {
 		}
 	}
 	createCost = time.Since(instant)
-	return nil
-}
-
-func InitSchema(ctx context.Context, ieFactory func() ie.InternalExecutor) error {
-	ctx = defines.AttachAccount(ctx, catalog.System_Account, catalog.System_User, catalog.System_Role)
-	initTables(ctx, ieFactory)
 	return nil
 }
 

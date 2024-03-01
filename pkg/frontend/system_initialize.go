@@ -27,6 +27,8 @@ import (
 	"time"
 )
 
+// InitSysTenant initializes the tenant SYS before any tenants and accepting any requests
+// during the system is booting.
 func InitSysTenant2(ctx context.Context, txn executor.TxnExecutor, finalVersion string) (err error) {
 	txn.Use(catalog.MO_CATALOG)
 	res, err := txn.Exec(createDbInformationSchemaSql, executor.StatementOption{})
@@ -48,13 +50,10 @@ func InitSysTenant2(ctx context.Context, txn executor.TxnExecutor, finalVersion 
 	return err
 }
 
-// createTablesInMoCatalog creates catalog tables in the database mo_catalog.
+// createTablesInMoCatalog2 creates catalog tables in the database mo_catalog.
 func createTablesInMoCatalog2(ctx context.Context, txn executor.TxnExecutor, finalVersion string) error {
 	var initMoAccount string
 	var initDataSqls []string
-	//if !tenant.IsSysTenant() {
-	//	return moerr.NewInternalError(ctx, "only sys tenant can execute the function")
-	//}
 
 	addSqlIntoSet := func(sql string) {
 		initDataSqls = append(initDataSqls, sql)

@@ -286,7 +286,7 @@ func (s *service) execBootstrap(ctx context.Context) error {
 		WithMinCommittedTS(s.now()).
 		WithDisableTrace().
 		WithWaitCommittedLogApplied().
-		WithTimeZone(time.Local). // FIXME ???
+		WithTimeZone(time.Local).
 		WithAccountID(catalog.System_Account)
 
 	err := s.exec.ExecTxn(ctx, func(txn executor.TxnExecutor) error {
@@ -296,10 +296,10 @@ func (s *service) execBootstrap(ctx context.Context) error {
 		if err := frontend.InitSysTenant2(ctx, txn, s.GetFinalVersion()); err != nil {
 			return err
 		}
-		if err := sysview.InitSchema2(ctx, txn); err != nil {
+		if err := sysview.InitSchema(ctx, txn); err != nil {
 			return err
 		}
-		if err := mometric.InitSchema2(ctx, txn); err != nil {
+		if err := mometric.InitSchema(ctx, txn); err != nil {
 			return err
 		}
 		if err := motrace.InitSchema2(ctx, txn); err != nil {
