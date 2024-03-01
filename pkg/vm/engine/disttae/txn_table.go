@@ -878,22 +878,6 @@ func (tbl *txnTable) rangesOnePart(
 	return
 }
 
-// func (tbl *txnTable) tryFastRanges2(
-// 	exprs []*plan.Expr,
-// 	snapshot *logtailreplay.PartitionState,
-// 	uncommittedObjects []objectio.ObjectStats,
-// 	blocks *objectio.BlockInfoSlice,
-// 	fs fileservice.FileService,
-// ) (done bool, err error) {
-// 	err = ForeachSnapshotObjects(
-// 		tbl.db.txn.op.SnapshotTS(),
-// 		func(obj logtailreplay.ObjectInfo, isCommitted bool) (err2 error) {
-// 		},
-// 		snapshot,
-// 		uncommittedObjects...,
-// 	)
-// }
-
 // tryFastRanges only handle equal expression filter on zonemap and bloomfilter in tp scenario;
 // it filters out only a small number of blocks which should not be distributed to remote CNs.
 func (tbl *txnTable) tryFastRanges(
