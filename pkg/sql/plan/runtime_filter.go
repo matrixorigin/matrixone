@@ -92,7 +92,7 @@ func (builder *QueryBuilder) pushdownRuntimeFilters(nodeID int32) {
 	}
 
 	rightChild := builder.qry.Nodes[node.Children[1]]
-	if rightChild.Stats.Selectivity > 0.5 {
+	if node.JoinType != plan.Node_INDEX && rightChild.Stats.Selectivity > 0.5 {
 		return
 	}
 
