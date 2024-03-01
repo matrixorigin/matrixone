@@ -32,6 +32,7 @@ import (
 var (
 	disableTask = "disable"
 	enableTask  = "enable"
+	getUser     = "getuser"
 
 	taskMap = map[string]int32{
 		"storageusage": int32(taskpb.TaskCode_MetricStorageUsage),
@@ -47,7 +48,7 @@ func handleTask(proc *process.Process,
 	service serviceType,
 	parameter string,
 	sender requestSender) (Result, error) {
-	switch parameter {
+	switch strings.ToLower(parameter) {
 	case disableTask:
 		taskservice.DebugCtlTaskFramework(true)
 		return Result{
@@ -60,6 +61,15 @@ func handleTask(proc *process.Process,
 			Method: TaskMethod,
 			Data:   "OK",
 		}, nil
+	case getUser:
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		state, err := proc.Hakeeper.GetClusterState(ctx)
+		cancel()
+		if err != nil {
+			return Result{Method: TaskMethod, Data: "failed to get cluster state"}, err
+		}
+		user := state.GetTaskTableUser()
+		return Result{Method: TaskMethod, Data: user}, nil
 	default:
 	}
 
