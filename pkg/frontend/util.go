@@ -841,3 +841,28 @@ func mysqlColDef2PlanResultColDef(mr *MysqlResultSet) *plan.ResultColDef {
 		ResultCols: resultCols,
 	}
 }
+
+//errCodeRollbackWholeTxn denotes that the error code
+//that should rollback the whole txn
+var errCodeRollbackWholeTxn = map[uint16]bool{
+	moerr.ErrDeadLockDetected:     false,
+	moerr.ErrLockTableBindChanged: false,
+	moerr.ErrLockTableNotFound:    false,
+	moerr.ErrDeadlockCheckBusy:    false,
+	moerr.ErrLockConflict:         false,
+}
+
+func isErrorRollbackWholeTxn(inputErr error) bool {
+	if inputErr == nil {
+		return false
+	}
+	me, ok := inputErr.(*moerr.Error)
+	if !ok {
+		// This is not a moerr
+		return false
+	}
+	if _, has := errCodeRollbackWholeTxn[me.ErrorCode()]; has {
+		return true
+	}
+	return false
+}

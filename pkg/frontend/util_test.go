@@ -1031,3 +1031,22 @@ func Test_makeExecuteSql(t *testing.T) {
 		})
 	}
 }
+
+var _ error = &testErr{}
+
+type testErr struct {
+}
+
+func (t testErr) Error() string {
+	return "test"
+}
+
+func Test_isErrorRollbackWholeTxn(t *testing.T) {
+	assert.Equal(t, false, isErrorRollbackWholeTxn(nil))
+	assert.Equal(t, false, isErrorRollbackWholeTxn(&testError{}))
+	assert.Equal(t, true, isErrorRollbackWholeTxn(moerr.NewDeadLockDetectedNoCtx()))
+	assert.Equal(t, true, isErrorRollbackWholeTxn(moerr.NewLockTableBindChangedNoCtx()))
+	assert.Equal(t, true, isErrorRollbackWholeTxn(moerr.NewLockTableNotFoundNoCtx()))
+	assert.Equal(t, true, isErrorRollbackWholeTxn(moerr.NewDeadlockCheckBusyNoCtx()))
+	assert.Equal(t, true, isErrorRollbackWholeTxn(moerr.NewLockConflictNoCtx()))
+}

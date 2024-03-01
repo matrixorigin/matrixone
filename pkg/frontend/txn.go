@@ -747,8 +747,12 @@ If it is Case2, Then
 
 	InMultiStmtTransactionMode returns false
 */
-func (ses *Session) TxnRollbackSingleStatement(stmt tree.Statement) error {
+func (ses *Session) TxnRollbackSingleStatement(stmt tree.Statement, inputErr error) error {
 	var err error
+	var rollbackWholeTxn bool
+	if inputErr != nil {
+		rollbackWholeTxn = isErrorRollbackWholeTxn(inputErr)
+	}
 	/*
 			Rollback Rules:
 			1, if it is in single-statement mode (Case2):
@@ -757,9 +761,12 @@ func (ses *Session) TxnRollbackSingleStatement(stmt tree.Statement) error {
 		        the transaction need to be rollback at the end of the statement.
 				(every error will abort the transaction.)
 	*/
-	if !ses.InMultiStmtTransactionMode() || ses.InActiveTransaction() && NeedToBeCommittedInActiveTransaction(stmt) {
+	if !ses.InMultiStmtTransactionMode() ||
+		ses.InActiveTransaction() && NeedToBeCommittedInActiveTransaction(stmt) ||
+		rollbackWholeTxn {
 		//Case1.1: autocommit && not_begin
 		//Case1.2: (not_autocommit || begin) && activeTxn && needToBeCommitted
+		//Case1.3: the error that should rollback the whole txn
 		err = ses.rollbackWholeTxn()
 	} else {
 		//Case2: not ( autocommit && !begin ) && not ( activeTxn && needToBeCommitted )

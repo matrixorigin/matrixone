@@ -3170,7 +3170,7 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 			ses.cleanCache()
 		}
 		logError(ses, ses.GetDebugString(), err.Error())
-		txnErr := ses.TxnRollbackSingleStatement(stmt)
+		txnErr := ses.TxnRollbackSingleStatement(stmt, err)
 		if txnErr != nil {
 			logStatementStatus(requestCtx, ses, stmt, fail, txnErr)
 			return txnErr
