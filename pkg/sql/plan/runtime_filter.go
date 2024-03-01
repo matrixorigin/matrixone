@@ -60,11 +60,6 @@ func (builder *QueryBuilder) pushdownRuntimeFilters(nodeID int32) {
 		return
 	}
 
-	// if this node has already pushed runtime filter, just return
-	if len(node.RuntimeFilterBuildList) > 0 {
-		return
-	}
-
 	if node.JoinType == plan.Node_LEFT || node.JoinType == plan.Node_OUTER || node.JoinType == plan.Node_SINGLE || node.JoinType == plan.Node_MARK {
 		return
 	}
@@ -145,29 +140,27 @@ func (builder *QueryBuilder) pushdownRuntimeFilters(nodeID int32) {
 	}
 
 	if len(probeExprs) == 1 {
-		if node.JoinType != plan.Node_INDEX {
-			probeNdv := getExprNdv(probeExprs[0], builder)
-			if probeNdv == -1 || node.Stats.HashmapStats.HashmapSize/probeNdv >= 0.1 {
-				return
-			}
+		probeNdv := getExprNdv(probeExprs[0], builder)
+		if probeNdv == -1 || node.Stats.HashmapStats.HashmapSize/probeNdv >= 0.1 {
+			return
+		}
 
-			if node.Stats.HashmapStats.HashmapSize/probeNdv >= 0.1*probeNdv/leftChild.Stats.TableCnt {
-				switch col := probeExprs[0].Expr.(type) {
-				case (*plan.Expr_Col):
-					ctx := builder.ctxByNode[leftChild.NodeId]
-					if ctx == nil {
-						return
-					}
-					if binding, ok := ctx.bindingByTag[col.Col.RelPos]; ok {
-						tableDef := builder.qry.Nodes[binding.nodeId].TableDef
-						if GetSortOrder(tableDef, col.Col.ColPos) != 0 {
-							return
-						}
-					}
-
-				default:
+		if node.Stats.HashmapStats.HashmapSize/probeNdv >= 0.1*probeNdv/leftChild.Stats.TableCnt {
+			switch col := probeExprs[0].Expr.(type) {
+			case (*plan.Expr_Col):
+				ctx := builder.ctxByNode[leftChild.NodeId]
+				if ctx == nil {
 					return
 				}
+				if binding, ok := ctx.bindingByTag[col.Col.RelPos]; ok {
+					tableDef := builder.qry.Nodes[binding.nodeId].TableDef
+					if GetSortOrder(tableDef, col.Col.ColPos) != 0 {
+						return
+					}
+				}
+
+			default:
+				return
 			}
 		}
 
