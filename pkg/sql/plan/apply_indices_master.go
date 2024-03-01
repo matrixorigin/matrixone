@@ -36,7 +36,7 @@ func (builder *QueryBuilder) applyIndicesForFiltersUsingMasterIndex(nodeID int32
 		idxObjRef, idxTableDef := builder.compCtx.Resolve(scanNode.ObjRef.SchemaName, indexDef.IndexTableName)
 
 		// 1. SELECT pk from idx WHERE prefix_eq(`__mo_index_idx_col`,serial_full("a","value"))
-		currIdxScanTag, currScanId := makeIndexTblScan(builder, builder.ctxByNode[nodeID], filterExp, idxTableDef, idxObjRef)
+		currIdxProjTag, currScanId := makeIndexTblScan(builder, builder.ctxByNode[nodeID], filterExp, idxTableDef, idxObjRef)
 
 		// 2. (SELECT pk from idx1 WHERE prefix_eq(`__mo_index_idx_col`,serial_full("a","value1")) )
 		//    	INNER JOIN
@@ -48,8 +48,8 @@ func (builder *QueryBuilder) applyIndicesForFiltersUsingMasterIndex(nodeID int32
 			Typ: DeepCopyType(pkType),
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
-					RelPos: currIdxScanTag,
-					ColPos: 1, // __mo_index_pk_col
+					RelPos: currIdxProjTag,
+					ColPos: 0, // __mo_index_pk_col
 				},
 			},
 		}
@@ -91,7 +91,7 @@ func (builder *QueryBuilder) applyIndicesForFiltersUsingMasterIndex(nodeID int32
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: prevIndexPkCol.GetCol().RelPos, // last idxTbl (may be join) relPos
-					ColPos: 1,                              // idxTbl.pk
+					ColPos: 0,                              // idxTbl.pk
 				},
 			},
 		},
@@ -109,6 +109,7 @@ func (builder *QueryBuilder) applyIndicesForFiltersUsingMasterIndex(nodeID int32
 func makeIndexTblScan(builder *QueryBuilder, bindCtx *BindContext, filterExp *plan.Expr,
 	idxTableDef *TableDef, idxObjRef *ObjectRef) (int32, int32) {
 
+	// a. Scan * WHERE prefix_eq(`__mo_index_idx_col`,serial_full("a","value"))
 	idxScanTag := builder.genNewTag()
 	args := filterExp.GetF().Args
 
@@ -172,7 +173,26 @@ func makeIndexTblScan(builder *QueryBuilder, bindCtx *BindContext, filterExp *pl
 		FilterList:  []*plan.Expr{filterList},
 		BindingTags: []int32{idxScanTag},
 	}, bindCtx)
-	return idxScanTag, scanId
+
+	// b. Project __mo_index_pk_col
+	projPkCol := &Expr{
+		Typ: makePlan2Type(&varcharType),
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{
+				RelPos: idxScanTag, //__mo_index_pk_col
+				ColPos: 1,
+			},
+		},
+	}
+	idxProjectTag := builder.genNewTag()
+	projectId := builder.appendNode(&Node{
+		NodeType:    plan.Node_PROJECT,
+		Children:    []int32{scanId},
+		ProjectList: []*Expr{projPkCol},
+		BindingTags: []int32{idxProjectTag},
+	}, bindCtx)
+
+	return idxProjectTag, projectId
 }
 
 func isKeyPresentInList(key string, list []string) bool {
