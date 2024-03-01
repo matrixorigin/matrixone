@@ -289,6 +289,9 @@ type Session struct {
 
 	// insert sql for create table as select stmt
 	createAsSelectSql string
+
+	// FromProxy denotes whether the session is dispatched from proxy
+	fromProxy bool
 }
 
 func (ses *Session) ClearStmtProfile() {
@@ -2318,6 +2321,7 @@ func (ses *Session) StatusSession() *status.Session {
 				QueryStart:    time.Time{},
 				ClientHost:    ses.GetMysqlProtocol().Peer(),
 				Role:          roleName,
+				FromProxy:     ses.fromProxy,
 			}
 		}
 	}
@@ -2340,6 +2344,7 @@ func (ses *Session) StatusSession() *status.Session {
 		QueryStart:    ses.GetQueryStart(),
 		ClientHost:    ses.GetMysqlProtocol().Peer(),
 		Role:          roleName,
+		FromProxy:     ses.fromProxy,
 	}
 }
 
