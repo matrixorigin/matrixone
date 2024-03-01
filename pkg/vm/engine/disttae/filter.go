@@ -1,3 +1,17 @@
+// Copyright 2022 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package disttae
 
 import (
@@ -13,12 +27,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-type FastCheckOp func(objectio.ObjectStats) (bool, error)
+type FastFilterOp func(objectio.ObjectStats) (bool, error)
 type LoadOp = func(
 	context.Context, objectio.ObjectStats, objectio.ObjectMeta, objectio.BloomFilter,
 ) (objectio.ObjectMeta, objectio.BloomFilter, error)
-type ObjectCheckOp func(objectio.ObjectMeta, objectio.BloomFilter) (bool, error)
-type BlockCheckOp func(objectio.BlockInfo, objectio.BlockObject, objectio.BloomFilter) (bool, error)
+type ObjectFilterOp func(objectio.ObjectMeta, objectio.BloomFilter) (bool, error)
+type BlockFilterOp func(objectio.BlockInfo, objectio.BlockObject, objectio.BloomFilter) (bool, error)
 type LoadOpFactory func(fileservice.FileService) LoadOp
 
 var loadMetadataOnlyOpFactory LoadOpFactory
@@ -128,10 +142,10 @@ func CompileFilterExprs(
 	tableDef *plan.TableDef,
 	fs fileservice.FileService,
 ) (
-	fastCheckOp FastCheckOp,
+	fastFilterOp FastFilterOp,
 	loadOp LoadOp,
-	objectCheckOp ObjectCheckOp,
-	blockCheckOp BlockCheckOp,
+	objectFilterOp ObjectFilterOp,
+	blockFilterOp BlockFilterOp,
 	canCompile bool,
 ) {
 	canCompile = true
@@ -141,10 +155,10 @@ func CompileFilterExprs(
 	if len(exprs) == 1 {
 		return CompileFilterExpr(exprs[0], proc, tableDef, fs)
 	}
-	ops1 := make([]FastCheckOp, len(exprs))
+	ops1 := make([]FastFilterOp, len(exprs))
 	ops2 := make([]LoadOp, len(exprs))
-	ops3 := make([]ObjectCheckOp, len(exprs))
-	ops4 := make([]BlockCheckOp, len(exprs))
+	ops3 := make([]ObjectFilterOp, len(exprs))
+	ops4 := make([]BlockFilterOp, len(exprs))
 
 	for _, expr := range exprs {
 		expr_op1, expr_op2, expr_op3, expr_op4, can := CompileFilterExpr(expr, proc, tableDef, fs)
@@ -156,7 +170,7 @@ func CompileFilterExprs(
 		ops3 = append(ops3, expr_op3)
 		ops4 = append(ops4, expr_op4)
 	}
-	fastCheckOp = func(obj objectio.ObjectStats) (bool, error) {
+	fastFilterOp = func(obj objectio.ObjectStats) (bool, error) {
 		for _, op := range ops1 {
 			if op == nil {
 				continue
@@ -187,7 +201,7 @@ func CompileFilterExprs(
 		}
 		return
 	}
-	objectCheckOp = func(meta objectio.ObjectMeta, bf objectio.BloomFilter) (bool, error) {
+	objectFilterOp = func(meta objectio.ObjectMeta, bf objectio.BloomFilter) (bool, error) {
 		for _, op := range ops3 {
 			if op == nil {
 				continue
@@ -199,7 +213,7 @@ func CompileFilterExprs(
 		}
 		return true, nil
 	}
-	blockCheckOp = func(
+	blockFilterOp = func(
 		obj objectio.BlockInfo, blkMeta objectio.BlockObject, bf objectio.BloomFilter,
 	) (bool, error) {
 		for _, op := range ops4 {
@@ -222,10 +236,10 @@ func CompileFilterExpr(
 	tableDef *plan.TableDef,
 	fs fileservice.FileService,
 ) (
-	fastCheckOp FastCheckOp,
+	fastFilterOp FastFilterOp,
 	loadOp LoadOp,
-	objectCheckOp ObjectCheckOp,
-	blockCheckOp BlockCheckOp,
+	objectFilterOp ObjectFilterOp,
+	blockFilterOp BlockFilterOp,
 	canCompile bool,
 ) {
 	canCompile = true
@@ -243,7 +257,7 @@ func CompileFilterExpr(
 			}
 			isPK, isCluster := isClusterOrPKFromColExpr(colExpr, tableDef)
 			if isPK || isCluster {
-				fastCheckOp = func(obj objectio.ObjectStats) (bool, error) {
+				fastFilterOp = func(obj objectio.ObjectStats) (bool, error) {
 					if obj.ZMIsEmpty() {
 						return true, nil
 					}
@@ -253,14 +267,14 @@ func CompileFilterExpr(
 			loadOp = loadMetadataOnlyOpFactory(fs)
 			colDef := tableDef.Cols[colExpr.Col.ColPos]
 			seqNum := colDef.Seqnum
-			objectCheckOp = func(meta objectio.ObjectMeta, _ objectio.BloomFilter) (bool, error) {
+			objectFilterOp = func(meta objectio.ObjectMeta, _ objectio.BloomFilter) (bool, error) {
 				if isCluster || isPK {
 					return true, nil
 				}
 				dataMeta := meta.MustDataMeta()
 				return dataMeta.MustGetColumn(uint16(seqNum)).ZoneMap().AnyLE2(val), nil
 			}
-			blockCheckOp = func(
+			blockFilterOp = func(
 				blk objectio.BlockInfo, blkMeta objectio.BlockObject, bf objectio.BloomFilter,
 			) (bool, error) {
 				if blkMeta.IsEmpty() {
@@ -276,7 +290,7 @@ func CompileFilterExpr(
 			}
 			isPK, isCluster := isClusterOrPKFromColExpr(colExpr, tableDef)
 			if isPK || isCluster {
-				fastCheckOp = func(obj objectio.ObjectStats) (bool, error) {
+				fastFilterOp = func(obj objectio.ObjectStats) (bool, error) {
 					if obj.ZMIsEmpty() {
 						return true, nil
 					}
@@ -286,14 +300,14 @@ func CompileFilterExpr(
 			loadOp = loadMetadataOnlyOpFactory(fs)
 			colDef := tableDef.Cols[colExpr.Col.ColPos]
 			seqNum := colDef.Seqnum
-			objectCheckOp = func(meta objectio.ObjectMeta, _ objectio.BloomFilter) (bool, error) {
+			objectFilterOp = func(meta objectio.ObjectMeta, _ objectio.BloomFilter) (bool, error) {
 				if isCluster || isPK {
 					return true, nil
 				}
 				dataMeta := meta.MustDataMeta()
 				return dataMeta.MustGetColumn(uint16(seqNum)).ZoneMap().AnyGE2(val), nil
 			}
-			blockCheckOp = func(
+			blockFilterOp = func(
 				blk objectio.BlockInfo, blkMeta objectio.BlockObject, bf objectio.BloomFilter,
 			) (bool, error) {
 				if blkMeta.IsEmpty() {
@@ -309,7 +323,7 @@ func CompileFilterExpr(
 			}
 			isPK, isCluster := isClusterOrPKFromColExpr(colExpr, tableDef)
 			if isPK || isCluster {
-				fastCheckOp = func(obj objectio.ObjectStats) (bool, error) {
+				fastFilterOp = func(obj objectio.ObjectStats) (bool, error) {
 					if obj.ZMIsEmpty() {
 						return true, nil
 					}
@@ -319,14 +333,14 @@ func CompileFilterExpr(
 			loadOp = loadMetadataOnlyOpFactory(fs)
 			colDef := tableDef.Cols[colExpr.Col.ColPos]
 			seqNum := colDef.Seqnum
-			objectCheckOp = func(meta objectio.ObjectMeta, _ objectio.BloomFilter) (bool, error) {
+			objectFilterOp = func(meta objectio.ObjectMeta, _ objectio.BloomFilter) (bool, error) {
 				if isCluster || isPK {
 					return true, nil
 				}
 				dataMeta := meta.MustDataMeta()
 				return dataMeta.MustGetColumn(uint16(seqNum)).ZoneMap().AnyGT2(val), nil
 			}
-			blockCheckOp = func(
+			blockFilterOp = func(
 				blk objectio.BlockInfo, blkMeta objectio.BlockObject, bf objectio.BloomFilter,
 			) (bool, error) {
 				if blkMeta.IsEmpty() {
@@ -342,7 +356,7 @@ func CompileFilterExpr(
 			}
 			isPK, isCluster := isClusterOrPKFromColExpr(colExpr, tableDef)
 			if isPK || isCluster {
-				fastCheckOp = func(obj objectio.ObjectStats) (bool, error) {
+				fastFilterOp = func(obj objectio.ObjectStats) (bool, error) {
 					if obj.ZMIsEmpty() {
 						return true, nil
 					}
@@ -352,14 +366,14 @@ func CompileFilterExpr(
 			loadOp = loadMetadataOnlyOpFactory(fs)
 			colDef := tableDef.Cols[colExpr.Col.ColPos]
 			seqNum := colDef.Seqnum
-			objectCheckOp = func(meta objectio.ObjectMeta, _ objectio.BloomFilter) (bool, error) {
+			objectFilterOp = func(meta objectio.ObjectMeta, _ objectio.BloomFilter) (bool, error) {
 				if isCluster || isPK {
 					return true, nil
 				}
 				dataMeta := meta.MustDataMeta()
 				return dataMeta.MustGetColumn(uint16(seqNum)).ZoneMap().AnyLT2(val), nil
 			}
-			blockCheckOp = func(
+			blockFilterOp = func(
 				blk objectio.BlockInfo, blkMeta objectio.BlockObject, bf objectio.BloomFilter,
 			) (bool, error) {
 				if blkMeta.IsEmpty() {
@@ -375,7 +389,7 @@ func CompileFilterExpr(
 			}
 			isPK, isCluster := isClusterOrPKFromColExpr(colExpr, tableDef)
 			if isPK || isCluster {
-				fastCheckOp = func(obj objectio.ObjectStats) (bool, error) {
+				fastFilterOp = func(obj objectio.ObjectStats) (bool, error) {
 					if obj.ZMIsEmpty() {
 						return true, nil
 					}
@@ -385,14 +399,14 @@ func CompileFilterExpr(
 			loadOp = loadMetadataOnlyOpFactory(fs)
 			colDef := tableDef.Cols[colExpr.Col.ColPos]
 			seqNum := colDef.Seqnum
-			objectCheckOp = func(meta objectio.ObjectMeta, _ objectio.BloomFilter) (bool, error) {
+			objectFilterOp = func(meta objectio.ObjectMeta, _ objectio.BloomFilter) (bool, error) {
 				if isCluster || isPK {
 					return true, nil
 				}
 				dataMeta := meta.MustDataMeta()
 				return dataMeta.MustGetColumn(uint16(seqNum)).ZoneMap().PrefixEq(val), nil
 			}
-			blockCheckOp = func(
+			blockFilterOp = func(
 				blk objectio.BlockInfo, blkMeta objectio.BlockObject, bf objectio.BloomFilter,
 			) (bool, error) {
 				if blkMeta.IsEmpty() {
@@ -414,7 +428,7 @@ func CompileFilterExpr(
 			}
 			isPK, isCluster := isClusterOrPKFromColExpr(colExpr, tableDef)
 			if isPK || isCluster {
-				fastCheckOp = func(obj objectio.ObjectStats) (bool, error) {
+				fastFilterOp = func(obj objectio.ObjectStats) (bool, error) {
 					if obj.ZMIsEmpty() {
 						return true, nil
 					}
@@ -429,14 +443,14 @@ func CompileFilterExpr(
 
 			colDef := tableDef.Cols[colExpr.Col.ColPos]
 			seqNum := colDef.Seqnum
-			objectCheckOp = func(meta objectio.ObjectMeta, _ objectio.BloomFilter) (bool, error) {
+			objectFilterOp = func(meta objectio.ObjectMeta, _ objectio.BloomFilter) (bool, error) {
 				if isCluster || isPK {
 					return true, nil
 				}
 				dataMeta := meta.MustDataMeta()
 				return dataMeta.MustGetColumn(uint16(seqNum)).ZoneMap().ContainsKey(val), nil
 			}
-			blockCheckOp = func(
+			blockFilterOp = func(
 				blk objectio.BlockInfo, blkMeta objectio.BlockObject, bf objectio.BloomFilter,
 			) (bool, error) {
 				if !blkMeta.IsEmpty() && !blkMeta.MustGetColumn(uint16(seqNum)).ZoneMap().ContainsKey(val) {
@@ -474,16 +488,16 @@ func TryFastFilterBlocks(
 	fs fileservice.FileService,
 	proc *process.Process,
 ) (ok bool, err error) {
-	fastCheckOp, loadOp, objectCheckOp, blockCheckOp, ok := CompileFilterExprs(exprs, proc, tableDef, fs)
+	fastFilterOp, loadOp, objectFilterOp, blockFilterOp, ok := CompileFilterExprs(exprs, proc, tableDef, fs)
 	if !ok {
 		return false, nil
 	}
 	err = ExecuteBlockFilter(
 		snapshotTS,
-		fastCheckOp,
+		fastFilterOp,
 		loadOp,
-		objectCheckOp,
-		blockCheckOp,
+		objectFilterOp,
+		blockFilterOp,
 		snapshot,
 		uncommittedObjects,
 		blocks,
@@ -495,10 +509,10 @@ func TryFastFilterBlocks(
 
 func ExecuteBlockFilter(
 	snapshotTS timestamp.Timestamp,
-	fastCheckOp FastCheckOp,
+	fastFilterOp FastFilterOp,
 	loadOp LoadOp,
-	objectCheckOp ObjectCheckOp,
-	blockCheckOp BlockCheckOp,
+	objectFilterOp ObjectFilterOp,
+	blockFilterOp BlockFilterOp,
 	snapshot *logtailreplay.PartitionState,
 	uncommittedObjects []objectio.ObjectStats,
 	blocks *objectio.BlockInfoSlice,
@@ -510,8 +524,8 @@ func ExecuteBlockFilter(
 		func(obj logtailreplay.ObjectInfo, isCommitted bool) (err2 error) {
 			var ok bool
 			objStats := obj.ObjectStats
-			if fastCheckOp != nil {
-				if ok, err2 = fastCheckOp(objStats); err2 != nil || !ok {
+			if fastFilterOp != nil {
+				if ok, err2 = fastFilterOp(objStats); err2 != nil || !ok {
 					return
 				}
 			}
@@ -526,15 +540,15 @@ func ExecuteBlockFilter(
 					return
 				}
 			}
-			if objectCheckOp != nil {
-				if ok, err2 = objectCheckOp(meta, bf); err2 != nil || !ok {
+			if objectFilterOp != nil {
+				if ok, err2 = objectFilterOp(meta, bf); err2 != nil || !ok {
 					return
 				}
 			}
 			ForeachBlkInObjStatsList(false, meta.MustDataMeta(), func(blk objectio.BlockInfo, blkMeta objectio.BlockObject) bool {
 				var ok2 bool
-				if blockCheckOp != nil {
-					ok2, err2 = blockCheckOp(blk, blkMeta, bf)
+				if blockFilterOp != nil {
+					ok2, err2 = blockFilterOp(blk, blkMeta, bf)
 					if err2 != nil {
 						return false
 					}
