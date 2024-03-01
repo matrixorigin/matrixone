@@ -442,12 +442,6 @@ func (p *PartitionState) HandleObjectInsert(ctx context.Context, bat *api.Batch,
 				IsAppendable: objEntry.EntryState,
 			}
 			p.objectIndexByTS.Set(e)
-
-			if !deleteTSCol[idx].IsEmpty() {
-				e.IsDelete = true
-				e.Time = deleteTSCol[idx]
-				p.objectIndexByTS.Set(e)
-			}
 		}
 		//prefetch the object meta
 		if err := blockio.PrefetchMeta(fs, objEntry.Location()); err != nil {
