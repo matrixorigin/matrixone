@@ -16,6 +16,8 @@ package aggexec
 
 import (
 	"fmt"
+
+	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -86,6 +88,8 @@ type singleAggFuncExec1[from, to types.FixedSizeTExceptStrType] struct {
 	ret    aggFuncResult[to]
 	groups []SingleAggFromFixedRetFixed[from, to]
 
+	hashmaps []*hashmap.StrHashMap
+
 	// method to new the private structure for group growing.
 	gGroup func() SingleAggFromFixedRetFixed[from, to]
 }
@@ -146,6 +150,17 @@ func (exec *singleAggFuncExec1[from, to]) GroupGrow(more int) error {
 		moreGroup[i].Init()
 	}
 	exec.groups = append(exec.groups, moreGroup...)
+
+	if exec.IsDistinct() {
+		for i := 0; i < more; i++ {
+			strMap, err := hashmap.NewStrMap(true, 0, 0, exec.ret.mp)
+			if err != nil {
+				return err
+			}
+			exec.hashmaps = append(exec.hashmaps, strMap)
+		}
+	}
+
 	return exec.ret.grows(more)
 }
 
@@ -284,6 +299,140 @@ func (exec *singleAggFuncExec1[from, to]) BatchFill(offset int, groups []uint64,
 
 	for i, j, idx := uint64(offset), uint64(offset+len(groups)), 0; i < j; i++ {
 		if groups[idx] != GroupNotMatched {
+			v, _ := exec.arg.w.GetValue(i)
+			groupIdx := int(groups[idx] - 1)
+			exec.ret.groupToSet = groupIdx
+			exec.groups[groupIdx].Fill(v, getter, setter)
+		}
+		idx++
+	}
+	return nil
+}
+
+func (exec *singleAggFuncExec1[from, to]) DistinctFill(groupIndex int, row int, vectors []*vector.Vector) error {
+
+	vec := vectors[0]
+	if vec.IsConst() {
+		row = 0
+	}
+
+	isNew, err := exec.hashmaps[groupIndex].Insert(vectors, row)
+	if err != nil {
+		return err
+	}
+	if !isNew {
+		return nil
+	}
+
+	exec.ret.groupToSet = groupIndex
+	getter := exec.ret.aggGet
+	setter := exec.ret.aggSet
+
+	if vec.IsConstNull() || vec.GetNulls().Contains(uint64(row)) {
+		if exec.receiveNull {
+			exec.groups[groupIndex].FillNull(getter, setter)
+		}
+		return nil
+	}
+
+	exec.groups[groupIndex].Fill(vector.MustFixedCol[from](vec)[row], getter, setter)
+	return nil
+}
+
+func (exec *singleAggFuncExec1[from, to]) DistinctBulkFill(groupIndex int, vectors []*vector.Vector) error {
+	for i := range vectors {
+		if err := exec.DistinctFill(groupIndex, i, vectors); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (exec *singleAggFuncExec1[from, to]) DistinctBatchFill(offset int, groups []uint64, vectors []*vector.Vector) error {
+	if !exec.IsDistinct() {
+		return nil
+	}
+
+	vec := vectors[0]
+	setter := exec.ret.aggSet
+	getter := exec.ret.aggGet
+
+	shouldBeFilled := make([]bool, len(groups))
+
+	for vecIdx, idx := uint64(offset), 0; vecIdx < uint64(offset+len(groups)); vecIdx++ {
+		if groups[vecIdx] != GroupNotMatched {
+			groupIdx := int(groups[idx] - 1)
+			isNew, err := exec.hashmaps[groupIdx].Insert(vectors, int(vecIdx))
+			if err != nil {
+				return err
+			}
+			if isNew {
+				shouldBeFilled[idx] = true
+			}
+		}
+		idx++
+	}
+
+	if vec.IsConst() {
+		if vec.IsConstNull() {
+			if exec.receiveNull {
+				for i := 0; i < len(groups); i++ {
+					if shouldBeFilled[i] {
+						groupIdx := int(groups[i] - 1)
+						exec.ret.groupToSet = groupIdx
+						exec.groups[groupIdx].FillNull(getter, setter)
+					}
+				}
+			}
+			return nil
+		}
+
+		value := vector.MustFixedCol[from](vec)[0]
+		for i := 0; i < len(groups); i++ {
+			if shouldBeFilled[i] {
+				groupIdx := int(groups[i] - 1)
+				exec.ret.groupToSet = groupIdx
+				exec.groups[groupIdx].Fill(value, getter, setter)
+			}
+		}
+		return nil
+	}
+
+	exec.arg.prepare(vec)
+	if exec.arg.w.WithAnyNullValue() {
+		if exec.receiveNull {
+			for i, j, idx := uint64(offset), uint64(offset+len(groups)), 0; i < j; i++ {
+				if shouldBeFilled[idx] {
+					v, null := exec.arg.w.GetValue(i)
+					groupIdx := int(groups[idx] - 1)
+					exec.ret.groupToSet = groupIdx
+					if null {
+						exec.groups[groupIdx].FillNull(getter, setter)
+					} else {
+						exec.groups[groupIdx].Fill(v, getter, setter)
+					}
+				}
+				idx++
+			}
+			return nil
+		}
+
+		for i, j, idx := uint64(offset), uint64(offset+len(groups)), 0; i < j; i++ {
+			if shouldBeFilled[idx] {
+				v, null := exec.arg.w.GetValue(i)
+				if !null {
+					groupIdx := int(groups[idx] - 1)
+					exec.ret.groupToSet = groupIdx
+					exec.groups[groupIdx].Fill(v, getter, setter)
+				}
+			}
+			idx++
+		}
+		return nil
+	}
+
+	for i, j, idx := uint64(offset), uint64(offset+len(groups)), 0; i < j; i++ {
+		if shouldBeFilled[idx] {
 			v, _ := exec.arg.w.GetValue(i)
 			groupIdx := int(groups[idx] - 1)
 			exec.ret.groupToSet = groupIdx
