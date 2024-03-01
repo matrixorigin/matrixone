@@ -127,7 +127,7 @@ func NewService(
 		s.options.flushDuration = 60 * time.Second
 	}
 	if s.options.flushBytes == 0 {
-		s.options.flushBytes = 16 * 1024 * 1024
+		s.options.flushBytes = 64 * 1024 * 1024
 	}
 	if s.options.bufferSize == 0 {
 		s.options.bufferSize = 10000
@@ -172,7 +172,59 @@ func (s *service) TxnCreated(op client.TxnOperator) {
 	op.AppendEventCallback(client.ClosedEvent, s.handleTxnClosed)
 	op.AppendEventCallback(client.SnapshotUpdatedEvent, s.handleTxnSnapshotUpdated)
 	op.AppendEventCallback(client.CommitFailedEvent, s.handleTxnCommitFailed)
+}
 
+func (s *service) TxnExecute(
+	op client.TxnOperator,
+	sql string) {
+	if op.Txn().DisableTrace {
+		return
+	}
+
+	if !s.atomic.enabled.Load() {
+		return
+	}
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.mu.closed {
+		return
+	}
+
+	if len(sql) > 1000 {
+		sql = sql[:1000]
+	}
+	s.txnC <- newTxnInfoEvent(op.Txn(), txnExecuteEvent, sql)
+}
+
+func (s *service) TxnNeedUpdateSnapshot(
+	op client.TxnOperator,
+	tableID uint64,
+	why string) {
+	if op.Txn().DisableTrace {
+		return
+	}
+
+	if !s.atomic.enabled.Load() {
+		return
+	}
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.mu.closed {
+		return
+	}
+
+	buf := reuse.Alloc[buffer](nil)
+	table := buf.writeUint(tableID)
+
+	idx := buf.buf.GetWriteIndex()
+	buf.buf.WriteString(why)
+	buf.buf.WriteString(" table:")
+	buf.buf.WriteString(table)
+	info := buf.buf.RawSlice(idx, buf.buf.GetWriteIndex())
+	s.txnC <- newTxnInfoEvent(op.Txn(), txnUpdateSnapshotReasonEvent, util.UnsafeBytesToString(info))
+	s.txnBufC <- buf
 }
 
 func (s *service) handleTxnActive(
@@ -343,6 +395,49 @@ func (s *service) TxnRead(
 	s.entryBufC <- buf
 }
 
+func (s *service) TxnReadBlock(
+	op client.TxnOperator,
+	tableID uint64,
+	block []byte) {
+	if op.Txn().DisableTrace {
+		return
+	}
+
+	if !s.atomic.enabled.Load() {
+		return
+	}
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.mu.closed {
+		return
+	}
+
+	entryData := newTableOnlyEntryData(tableID)
+	defer func() {
+		entryData.close()
+	}()
+
+	skipped := true
+	for _, f := range s.mu.entryFilters {
+		if !f.Filter(entryData) {
+			skipped = false
+			break
+		}
+	}
+	if skipped {
+		return
+	}
+
+	buf := reuse.Alloc[buffer](nil)
+	s.entryC <- newReadBlockEvent(
+		time.Now().UnixNano(),
+		op.Txn().ID,
+		tableID,
+		buf.writeHexWithBytes(block))
+	s.entryBufC <- buf
+}
+
 func (s *service) ChangedCheck(
 	txnID []byte,
 	tableID uint64,
@@ -471,12 +566,196 @@ func (s *service) ApplyLogtail(
 	s.entryBufC <- buf
 }
 
+func (s *service) ApplyFlush(
+	txnID []byte,
+	tableID uint64,
+	from, to timestamp.Timestamp,
+	count int) {
+	if !s.atomic.enabled.Load() {
+		return
+	}
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.mu.closed {
+		return
+	}
+
+	if len(s.mu.entryFilters) == 0 {
+		return
+	}
+
+	entryData := newTableOnlyEntryData(tableID)
+	defer func() {
+		entryData.close()
+	}()
+
+	skipped := true
+	for _, f := range s.mu.entryFilters {
+		if !f.Filter(entryData) {
+			skipped = false
+			break
+		}
+	}
+	if skipped {
+		return
+	}
+
+	buf := reuse.Alloc[buffer](nil)
+	fromTS := buf.writeTimestamp(from)
+	toTS := buf.writeTimestamp(to)
+	result := buf.writeIntWithBytes(int64(count))
+
+	idx := buf.buf.GetWriteIndex()
+	buf.buf.WriteString(fromTS)
+	buf.buf.WriteString(" ")
+	buf.buf.WriteString(toTS)
+	buf.buf.WriteString(" ")
+	buf.buf.MustWrite(result)
+
+	s.entryC <- newFlushEvent(
+		time.Now().UnixNano(),
+		txnID,
+		tableID,
+		buf.buf.RawSlice(idx, buf.buf.GetWriteIndex()))
+	s.entryBufC <- buf
+}
+
+func (s *service) ApplyTransferRowID(
+	txnID []byte,
+	tableID uint64,
+	from, to []byte,
+	fromBlockID, toBlockID []byte,
+	vec *vector.Vector,
+	row int) {
+	if !s.atomic.enabled.Load() {
+		return
+	}
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.mu.closed {
+		return
+	}
+
+	if len(s.mu.entryFilters) == 0 {
+		return
+	}
+
+	entryData := newTableOnlyEntryData(tableID)
+	defer func() {
+		entryData.close()
+	}()
+
+	skipped := true
+	for _, f := range s.mu.entryFilters {
+		if !f.Filter(entryData) {
+			skipped = false
+			break
+		}
+	}
+	if skipped {
+		return
+	}
+
+	buf := reuse.Alloc[buffer](nil)
+
+	fromRowID := types.Rowid(from)
+	toRowID := types.Rowid(to)
+	fromBlockIDHex := buf.writeHex(fromBlockID)
+	toBlockIDHex := buf.writeHex(toBlockID)
+
+	tmp := buf.alloc(100)
+	idx := buf.buf.GetWriteIndex()
+
+	_, ok := s.atomic.complexPKTables.Load(tableID)
+	if ok {
+		writeCompletedValue(vec.GetBytesAt(row), buf, tmp)
+	} else {
+		writeValue(vec, row, buf, tmp)
+	}
+
+	buf.buf.WriteString(" row_id: ")
+	buf.buf.WriteString(fromRowID.String())
+	buf.buf.WriteString("->")
+	buf.buf.WriteString(toRowID.String())
+	buf.buf.WriteString(" block_id:")
+	buf.buf.WriteString(fromBlockIDHex)
+	buf.buf.WriteString("->")
+	buf.buf.WriteString(toBlockIDHex)
+	data := buf.buf.RawSlice(idx, buf.buf.GetWriteIndex())
+
+	s.entryC <- newTransferEvent(
+		time.Now().UnixNano(),
+		txnID,
+		tableID,
+		data)
+	s.entryBufC <- buf
+}
+
+func (s *service) ApplyDeleteObject(
+	tableID uint64,
+	ts timestamp.Timestamp,
+	objName string,
+	tag string) {
+	if !s.atomic.enabled.Load() {
+		return
+	}
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.mu.closed {
+		return
+	}
+
+	if len(s.mu.entryFilters) == 0 {
+		return
+	}
+
+	entryData := newTableOnlyEntryData(tableID)
+	defer func() {
+		entryData.close()
+	}()
+
+	skipped := true
+	for _, f := range s.mu.entryFilters {
+		if !f.Filter(entryData) {
+			skipped = false
+			break
+		}
+	}
+	if skipped {
+		return
+	}
+
+	buf := reuse.Alloc[buffer](nil)
+	version := buf.writeTimestamp(ts)
+
+	idx := buf.buf.GetWriteIndex()
+	buf.buf.WriteString(objName)
+	buf.buf.MustWriteByte(' ')
+	buf.buf.WriteString(version)
+	buf.buf.MustWriteByte(' ')
+	buf.buf.WriteString(tag)
+	data := buf.buf.RawSlice(idx, buf.buf.GetWriteIndex())
+
+	s.entryC <- newDeleteObjectEvent(
+		time.Now().UnixNano(),
+		tableID,
+		data)
+	s.entryBufC <- buf
+}
+
 func (s *service) Enable() error {
 	return s.updateState(stateEnable)
 }
 
 func (s *service) Disable() error {
 	return s.updateState(stateDisable)
+}
+
+func (s *service) Enabled() bool {
+	return s.atomic.enabled.Load()
 }
 
 func (s *service) AddEntryFilter(name string, columns []string) error {
@@ -603,7 +882,7 @@ func (s *service) DecodeHexComplexPK(hexPK string) (string, error) {
 	buf := reuse.Alloc[buffer](nil)
 	defer buf.close()
 
-	dst := buf.alloc(20)
+	dst := buf.alloc(100)
 	idx := buf.buf.GetWriteIndex()
 	writeCompletedValue(v, buf, dst)
 	return string(buf.buf.RawSlice(idx, buf.buf.GetWriteIndex())), nil
@@ -645,7 +924,7 @@ func (s *service) handleTxnEvents(ctx context.Context) {
 	s.handleEvent(
 		ctx,
 		s.txnCSVFile,
-		8,
+		9,
 		eventTxnTable,
 		s.txnC,
 		s.txnBufC)
@@ -782,7 +1061,7 @@ func (s *service) handleLoad(ctx context.Context) {
 				}
 
 				if err := load(e.sql); err != nil {
-					s.logger.Error("load trace data to table failed, retry later",
+					s.logger.Fatal("load trace data to table failed, retry later",
 						zap.String("sql", e.sql),
 						zap.Error(err))
 					time.Sleep(time.Second * 5)
@@ -801,7 +1080,7 @@ func (s *service) handleLoad(ctx context.Context) {
 }
 
 func (s *service) watch(ctx context.Context) {
-	ticker := time.NewTicker(time.Second * 10)
+	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 
 	fetch := func() (string, error) {
@@ -932,6 +1211,12 @@ func newReadEntryData(
 	return l
 }
 
+func newTableOnlyEntryData(tableID uint64) *EntryData {
+	l := reuse.Alloc[EntryData](nil)
+	l.id = tableID
+	return l
+}
+
 func (l *EntryData) needFilterColumns() bool {
 	return !l.snapshotTS.IsEmpty() || l.entryType == api.Entry_Insert
 }
@@ -1044,7 +1329,7 @@ func (l *EntryData) writeToBuf(
 
 	_, ok := completedPKTables.Load(l.id)
 	isCompletedPKTable := false
-	dst := buf.alloc(20)
+	dst := buf.alloc(100)
 	rows := l.vecs[0].Length()
 	for row := 0; row < rows; row++ {
 		idx := buf.buf.GetWriteIndex()
@@ -1108,6 +1393,11 @@ func (b buffer) writeInt(v int64) string {
 	return util.UnsafeBytesToString(intToString(dst, v))
 }
 
+func (b buffer) writeIntWithBytes(v int64) []byte {
+	dst := b.alloc(20)
+	return intToString(dst, v)
+}
+
 func (b buffer) writeUint(v uint64) string {
 	dst := b.alloc(20)
 	return util.UnsafeBytesToString(uintToString(dst, v))
@@ -1120,6 +1410,15 @@ func (b buffer) writeHex(src []byte) string {
 	dst := b.alloc(hex.EncodedLen(len(src)))
 	hex.Encode(dst, src)
 	return util.UnsafeBytesToString(dst)
+}
+
+func (b buffer) writeHexWithBytes(src []byte) []byte {
+	if len(src) == 0 {
+		return nil
+	}
+	dst := b.alloc(hex.EncodedLen(len(src)))
+	hex.Encode(dst, src)
+	return dst
 }
 
 func (b buffer) writeTimestamp(value timestamp.Timestamp) string {
