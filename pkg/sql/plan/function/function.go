@@ -52,10 +52,14 @@ func initAllSupportedFunctions() {
 		allSupportedFunctions[fn.functionId] = fn
 	}
 	for _, fn := range supportedAggregateFunctions {
-		allSupportedFunctions[fn.functionId] = fn
+		if fn.isAggregate() && fn.Overloads[0].aggFramework.aggRegister != nil {
+			allSupportedFunctions[fn.functionId] = fn
+		}
 	}
 	for _, fn := range supportedWindowFunctions {
-		allSupportedFunctions[fn.functionId] = fn
+		if fn.isAggregate() && fn.Overloads[0].aggFramework.aggRegister != nil {
+			allSupportedFunctions[fn.functionId] = fn
+		}
 	}
 
 	agg.InitAggFramework(generateAggExecutorWithoutConfig, generateAggExecutor, GetFunctionIsWinOrderFunById)
@@ -351,6 +355,9 @@ type aggregationLogicOfOverload struct {
 
 	// newAgg is used to create a new aggregation structure for agg framework.
 	aggNew func(overloadID int64, dist bool, inputTypes []types.Type, outputType types.Type, config any) (agg.Agg[any], error)
+
+	// how to register the aggregation.
+	aggRegister func(overloadID int64)
 }
 
 // an overload of a function.

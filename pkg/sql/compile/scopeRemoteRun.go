@@ -1739,19 +1739,6 @@ func decodeBatch(mp *mpool.MPool, vp engine.VectorPool, data []byte) (*batch.Bat
 		bat.Vecs[i] = rvec
 	}
 	bat.SetCnt(1)
-	// allocated memory of aggVec from mPool.
-	for i, ag := range bat.Aggs {
-		err = ag.WildAggReAlloc(mp)
-		if err != nil {
-			for j := 0; j < i; j++ {
-				bat.Aggs[j].Free(mp)
-			}
-			for j := range bat.Vecs {
-				bat.Vecs[j].Free(mp)
-			}
-			return nil, err
-		}
-	}
 	return bat, err
 }
 

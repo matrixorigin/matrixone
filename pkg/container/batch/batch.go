@@ -18,16 +18,15 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"sync/atomic"
-
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 )
 
 func New(ro bool, attrs []string) *Batch {
@@ -55,42 +54,16 @@ func SetLength(bat *Batch, n int) {
 	bat.rowCount = n
 }
 
-func (info *aggInfo) MarshalBinary() ([]byte, error) {
-	var buf bytes.Buffer
-	buf.Write(types.EncodeInt64(&info.Op))
-	buf.Write(types.EncodeBool(&info.Dist))
-	buf.Write(types.EncodeType(&info.inputTypes))
-	data, err := types.Encode(info.Agg)
-	if err != nil {
-		return nil, err
-	}
-	buf.Write(data)
-	return buf.Bytes(), nil
-}
-
-func (info *aggInfo) UnmarshalBinary(data []byte) error {
-	info.Op = types.DecodeInt64(data[:8])
-	data = data[8:]
-	info.Dist = types.DecodeBool(data[:1])
-	data = data[1:]
-	info.inputTypes = types.DecodeType(data[:types.TSize])
-	data = data[types.TSize:]
-	aggregate, err := agg.NewAgg(info.Op, info.Dist, []types.Type{info.inputTypes})
-	if err != nil {
-		return err
-	}
-	info.Agg = aggregate
-	return types.Decode(data, info.Agg)
-}
-
 func (bat *Batch) MarshalBinary() ([]byte, error) {
-	aggInfos := make([]aggInfo, len(bat.Aggs))
-	for i := range aggInfos {
-		aggInfos[i].Op = bat.Aggs[i].GetOperatorId()
-		aggInfos[i].inputTypes = bat.Aggs[i].InputTypes()[0]
-		aggInfos[i].Dist = bat.Aggs[i].IsDistinct()
-		aggInfos[i].Agg = bat.Aggs[i]
+	aggInfos := make([][]byte, len(bat.Aggs))
+	for i, exec := range bat.Aggs {
+		data, err := aggexec.MarshalAggFuncExec(exec)
+		if err != nil {
+			return nil, err
+		}
+		aggInfos[i] = data
 	}
+
 	return types.Encode(&EncodeBatch{
 		rowCount:  int64(bat.rowCount),
 		Vecs:      bat.Vecs,
@@ -100,10 +73,10 @@ func (bat *Batch) MarshalBinary() ([]byte, error) {
 	})
 }
 
-func (bat *Batch) UnmarshalBinary(data []byte) error {
+func (bat *Batch) UnmarshalBinary(data []byte) (err error) {
 	rbat := new(EncodeBatch)
 
-	if err := types.Decode(data, rbat); err != nil {
+	if err = types.Decode(data, rbat); err != nil {
 		return err
 	}
 	bat.Recursive = rbat.Recursive
@@ -111,11 +84,12 @@ func (bat *Batch) UnmarshalBinary(data []byte) error {
 	bat.rowCount = int(rbat.rowCount)
 	bat.Vecs = rbat.Vecs
 	bat.Attrs = append(bat.Attrs, rbat.Attrs...)
-	// initialize bat.Aggs only if necessary
 	if len(rbat.AggInfos) > 0 {
-		bat.Aggs = make([]agg.Agg[any], len(rbat.AggInfos))
+		bat.Aggs = make([]aggexec.AggFuncExec, len(rbat.AggInfos))
 		for i, info := range rbat.AggInfos {
-			bat.Aggs[i] = info.Agg
+			if bat.Aggs[i], err = aggexec.UnmarshalAggFuncExec(info); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -220,7 +194,7 @@ func (bat *Batch) Clean(m *mpool.MPool) {
 	}
 	for _, agg := range bat.Aggs {
 		if agg != nil {
-			agg.Free(m)
+			agg.Free()
 		}
 	}
 	bat.Attrs = nil

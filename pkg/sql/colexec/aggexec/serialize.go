@@ -16,7 +16,6 @@ package aggexec
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 var _ = MarshalAggFuncExec
@@ -26,8 +25,9 @@ func MarshalAggFuncExec(exec AggFuncExec) ([]byte, error) {
 	return exec.marshal()
 }
 
+// there must be 1 bug that, the result of unmarshal was read only. it cannot do any write operation.
 func UnmarshalAggFuncExec(
-	proc *process.Process, data []byte) (AggFuncExec, error) {
+	data []byte) (AggFuncExec, error) {
 	encoded := &EncodedAgg{}
 	if err := encoded.Unmarshal(data); err != nil {
 		return nil, err
@@ -39,19 +39,19 @@ func UnmarshalAggFuncExec(
 	switch encoded.GetExecType() {
 	case EncodedAggExecType_special_group_concat:
 		exec = MakeGroupConcat(
-			proc, info.Id, info.IsDistinct, info.Args, info.Ret, string(encoded.Groups[0]))
+			nil, info.Id, info.IsDistinct, info.Args, info.Ret, string(encoded.Groups[0]))
 
 	case EncodedAggExecType_single_fixed_fixed, EncodedAggExecType_single_fixed_var,
 		EncodedAggExecType_single_var_fixed, EncodedAggExecType_single_var_var:
 		exec = MakeAgg(
-			proc, info.Id, info.IsDistinct, info.NullEmpty, info.Args[0], info.Ret)
+			nil, info.Id, info.IsDistinct, info.NullEmpty, info.Args[0], info.Ret)
 
 	case EncodedAggExecType_multi_return_fixed, EncodedAggExecType_multi_return_var:
 		exec = MakeMultiAgg(
-			proc, info.Id, info.IsDistinct, info.NullEmpty, info.Args, info.Ret)
+			nil, info.Id, info.IsDistinct, info.NullEmpty, info.Args, info.Ret)
 
 	default:
-		return nil, moerr.NewInternalError(proc.Ctx, "Unmarshal agg exec failed, unknown exec type %d", encoded.GetExecType())
+		return nil, moerr.NewInternalErrorNoCtx("Unmarshal agg exec failed, unknown exec type %d", encoded.GetExecType())
 	}
 
 	if err := exec.unmarshal(encoded.Result, encoded.Groups); err != nil {
@@ -87,7 +87,6 @@ func (exec *singleAggFuncExec1[from, to]) unmarshal(result []byte, groups [][]by
 		exec.groups[i] = exec.gGroup()
 		exec.groups[i].Unmarshal(groups[i])
 	}
-	exec.ret.free()
 	return exec.ret.unmarshal(result)
 }
 
@@ -117,7 +116,6 @@ func (exec *singleAggFuncExec2[from]) unmarshal(result []byte, groups [][]byte) 
 		exec.groups[i] = exec.gGroup()
 		exec.groups[i].Unmarshal(groups[i])
 	}
-	exec.ret.free()
 	return exec.ret.unmarshal(result)
 }
 
@@ -147,7 +145,6 @@ func (exec *singleAggFuncExec3[to]) unmarshal(result []byte, groups [][]byte) er
 		exec.groups[i] = exec.gGroup()
 		exec.groups[i].Unmarshal(groups[i])
 	}
-	exec.ret.free()
 	return exec.ret.unmarshal(result)
 }
 
@@ -177,7 +174,6 @@ func (exec *singleAggFuncExec4) unmarshal(result []byte, groups [][]byte) error 
 		exec.groups[i] = exec.gGroup()
 		exec.groups[i].Unmarshal(groups[i])
 	}
-	exec.ret.free()
 	return exec.ret.unmarshal(result)
 }
 
@@ -207,7 +203,6 @@ func (exec *multiAggFuncExec1[T]) unmarshal(result []byte, groups [][]byte) erro
 		exec.groups[i] = exec.gGroup()
 		exec.groups[i].Unmarshal(groups[i])
 	}
-	exec.ret.free()
 	return exec.ret.unmarshal(result)
 }
 
@@ -237,7 +232,6 @@ func (exec *multiAggFuncExec2) unmarshal(result []byte, groups [][]byte) error {
 		exec.groups[i] = exec.gGroup()
 		exec.groups[i].Unmarshal(groups[i])
 	}
-	exec.ret.free()
 	return exec.ret.unmarshal(result)
 }
 
@@ -257,6 +251,5 @@ func (exec *groupConcatExec) marshal() ([]byte, error) {
 }
 
 func (exec *groupConcatExec) unmarshal(result []byte, groups [][]byte) error {
-	exec.ret.free()
 	return exec.ret.unmarshal(result)
 }

@@ -17,6 +17,7 @@ package function
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/agg2"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionAgg"
 )
 
@@ -77,8 +78,9 @@ var supportedAggregateFunctions = []FuncNew{
 				isAgg:      true,
 				retType:    functionAgg.AggSumReturnType,
 				aggFramework: aggregationLogicOfOverload{
-					str:    "sum",
-					aggNew: functionAgg.NewAggSum,
+					str:         "sum",
+					aggNew:      functionAgg.NewAggSum,
+					aggRegister: agg2.RegisterSum,
 				},
 			},
 		},

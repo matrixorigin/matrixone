@@ -44,6 +44,13 @@ type aggFuncBytesResult struct {
 func initFixedAggFuncResult[T types.FixedSizeTExceptStrType](
 	proc *process.Process, typ types.Type,
 	emptyNull bool) aggFuncResult[T] {
+	if proc == nil {
+		return aggFuncResult[T]{
+			typ:         typ,
+			res:         vector.NewVec(typ),
+			emptyBeNull: emptyNull,
+		}
+	}
 	return aggFuncResult[T]{
 		proc:        proc,
 		mp:          proc.Mp(),
@@ -113,6 +120,13 @@ func (r *aggFuncResult[T]) unmarshal(data []byte) error {
 func initBytesAggFuncResult(
 	proc *process.Process, typ types.Type,
 	emptyNull bool) aggFuncBytesResult {
+	if proc == nil {
+		return aggFuncBytesResult{
+			typ:         typ,
+			res:         vector.NewVec(typ),
+			emptyBeNull: emptyNull,
+		}
+	}
 	return aggFuncBytesResult{
 		proc:        proc,
 		mp:          proc.Mp(),
@@ -164,7 +178,7 @@ func (r *aggFuncBytesResult) flush() *vector.Vector {
 }
 
 func (r *aggFuncBytesResult) free() {
-	if r.res == nil {
+	if r.res == nil || r.proc == nil {
 		return
 	}
 	if r.res.NeedDup() {
