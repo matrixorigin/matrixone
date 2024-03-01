@@ -1,5 +1,6 @@
 drop database if exists special;
 create database special;
+use special;
 
 -- case 1
 create table ct_07(a int,b varchar(25),c date, d double,primary key(a,c));
@@ -21,11 +22,13 @@ begin ;
 insert into dis_table_03 select b,c from dis_table_02;
 select * from dis_table_03;
 -- @session:id=1{
+use special;
 insert into dis_table_03 select 'bbb','2012-09-30';
 update dis_table_03 set b='aaa';
 select * from dis_table_03;
 -- @session}
 -- @session:id=2{
+use special;
 select * from dis_table_03;
 truncate table dis_table_03;
 -- @session}

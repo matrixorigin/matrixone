@@ -1,54 +1,61 @@
 drop database if exists special;
 create database special;
+use special;
 create table ct_07(a int,b varchar(25),c date, d double,primary key(a,c));
-not connect to a database
 insert into ct_07 values (1,'901','2011-09-29',0.01),(2,'187','2011-09-29',1.31),(3,'90','2111-02-09',10.01);
-no such table .ct_07
 begin;
 insert into ct_07 values (3,'90','2111-02-09',10.01);
-no such table .ct_07
 insert into ct_07 values (4,'11','2011-09-29',7.00),(2,'567','2011-09-29',1.31),(4,'90','2011-09-29',89.3);
-no such table .ct_07
+(Duplicate entry) '\((\d+),(\d{4}-\d{2}-\d{2})\)' (for key '__mo_cpkey_col')
 select * from ct_07;
-not connect to a database
+a    b    c    d
+3    90    2111-02-09    10.01
+1    901    2011-09-29    0.01
+2    187    2011-09-29    1.31
+3    90    2111-02-09    10.01
 commit;
+Duplicate entry '3a150341170bc28c' for key '__mo_cpkey_col'
 select * from ct_07;
-not connect to a database
+a    b    c    d
+1    901    2011-09-29    0.01
+2    187    2011-09-29    1.31
+3    90    2111-02-09    10.01
 create table dis_table_02(a int not null auto_increment,b varchar(25) not null,c datetime,primary key(a),key bstr (b),key cdate (c) );
-not connect to a database
 insert into dis_table_02(b,c) values ('aaaa','2020-09-08');
-no such table .dis_table_02
 insert into dis_table_02(b,c) values ('aaaa','2020-09-08');
-no such table .dis_table_02
 create table dis_table_03(b varchar(25) primary key,c datetime);
-not connect to a database
 begin ;
 insert into dis_table_03 select b,c from dis_table_02;
-no such table .dis_table_03
+Duplicate entry 'aaaa' for key 'b'
 select * from dis_table_03;
-not connect to a database
+b    c
+use special;
 insert into dis_table_03 select 'bbb','2012-09-30';
-no such table .dis_table_03
 update dis_table_03 set b='aaa';
-no such table .dis_table_03
 select * from dis_table_03;
-not connect to a database
+b    c
+aaa    2012-09-30 00:00:00
+use special;
 select * from dis_table_03;
-not connect to a database
+b    c
+aaa    2012-09-30 00:00:00
 truncate table dis_table_03;
-no such table .dis_table_03
 insert into dis_table_03 select 'bbb','2012-09-30';
-no such table .dis_table_03
 select * from dis_table_03;
-not connect to a database
+b    c
+bbb    2012-09-30 00:00:00
 commit;
+w-w conflict
 select * from dis_table_03;
-not connect to a database
+b    c
 create database if not exists iso_db_02;
 start transaction ;
 use special;
 show tables;
 Tables_in_special
+ct_07
+dis_table_02
+dis_table_03
 begin ;
 use special;
 create table iso_table_0001(a int);
