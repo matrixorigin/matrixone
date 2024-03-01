@@ -71,6 +71,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	mokafka "github.com/matrixorigin/matrixone/pkg/stream/adapter/kafka"
+	txnTrace "github.com/matrixorigin/matrixone/pkg/txn/trace"
 	util2 "github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -429,28 +430,6 @@ func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
 	c.ctx, span = trace.Start(c.ctx, "Compile.Run", trace.WithKind(trace.SpanKindStatement))
 	_, task := gotrace.NewTask(context.TODO(), "pipeline.Run")
 	defer func() {
-		// fuzzy filter not sure whether this insert / load obey duplicate constraints, need double check
-		if runC != nil {
-			if runC.fuzzy != nil && runC.fuzzy.cnt > 0 && err == nil {
-				err = runC.fuzzy.backgroundSQLCheck(runC)
-			}
-
-			//detect fk self refer
-			//update, insert
-			query := c.pn.GetQuery()
-			if err == nil && query != nil && (query.StmtType == plan.Query_INSERT ||
-				query.StmtType == plan.Query_UPDATE) && len(query.GetDetectSqls()) != 0 {
-				err = detectFkSelfRefer(runC, query.DetectSqls)
-			}
-			//alter table ... add/drop foreign key
-			if err == nil && c.pn.GetDdl() != nil {
-				alterTable := c.pn.GetDdl().GetAlterTable()
-				if alterTable != nil && len(alterTable.GetDetectSqls()) != 0 {
-					err = detectFkSelfRefer(runC, alterTable.GetDetectSqls())
-				}
-			}
-		}
-
 		c.Release()
 		releaseRunC()
 
@@ -593,11 +572,36 @@ func (c *Compile) runOnce() error {
 		}
 	}
 
-	if len(errList) == 0 {
-		return nil
-	} else {
-		return errList[0]
+	if len(errList) > 0 {
+		err = errList[0]
 	}
+	if err != nil {
+		return err
+	}
+
+	// fuzzy filter not sure whether this insert / load obey duplicate constraints, need double check
+	if c.fuzzy != nil && c.fuzzy.cnt > 0 && err == nil {
+		err = c.fuzzy.backgroundSQLCheck(c)
+	}
+	if err != nil {
+		return err
+	}
+
+	//detect fk self refer
+	//update, insert
+	query := c.pn.GetQuery()
+	if err == nil && query != nil && (query.StmtType == plan.Query_INSERT ||
+		query.StmtType == plan.Query_UPDATE) && len(query.GetDetectSqls()) != 0 {
+		err = detectFkSelfRefer(c, query.DetectSqls)
+	}
+	//alter table ... add/drop foreign key
+	if err == nil && c.pn.GetDdl() != nil {
+		alterTable := c.pn.GetDdl().GetAlterTable()
+		if alterTable != nil && len(alterTable.GetDetectSqls()) != 0 {
+			err = detectFkSelfRefer(c, alterTable.GetDetectSqls())
+		}
+	}
+	return err
 }
 
 // shouldReturnCtxErr return true only if the ctx has error and the error is not canceled.
@@ -2402,17 +2406,6 @@ func (c *Compile) compileBroadcastJoin(ctx context.Context, node, left, right *p
 				}
 			}
 		}
-
-	case plan.Node_INDEX:
-		rs = c.newBroadcastJoinScopeList(ss, children, node)
-		for i := range rs {
-			rs[i].appendInstruction(vm.Instruction{
-				Op:  vm.IndexJoin,
-				Idx: c.anal.curr,
-				Arg: constructIndexJoin(node, rightTyps, c.proc),
-			})
-		}
-
 	case plan.Node_SEMI:
 		if isEq {
 			if node.BuildOnLeft {
@@ -3397,7 +3390,12 @@ func (c *Compile) newJoinBuildScope(s *Scope, ss []*Scope) *Scope {
 		regTransplant(s, rs, i+s.BuildIdx, i)
 	}
 
-	rs.appendInstruction(constructJoinBuildInstruction(c, s.Instructions[0], c.proc, s.ShuffleCnt, ss != nil))
+	rs.appendInstruction(vm.Instruction{
+		Op:      vm.HashBuild,
+		Idx:     s.Instructions[0].Idx,
+		IsFirst: true,
+		Arg:     constructHashBuild(c, s.Instructions[0], c.proc, s.ShuffleCnt, ss != nil),
+	})
 
 	if ss == nil { // unparallel, send the hashtable to join scope directly
 		s.Proc.Reg.MergeReceivers[s.BuildIdx] = &process.WaitRegister{
@@ -4447,11 +4445,6 @@ func (c *Compile) fatalLog(retry int, err error) {
 	if err == nil {
 		return
 	}
-	v, ok := moruntime.ProcessLevelRuntime().
-		GetGlobalVariables(moruntime.EnableCheckInvalidRCErrors)
-	if !ok || !v.(bool) {
-		return
-	}
 	fatal := moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) ||
 		moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) ||
 		moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict) ||
@@ -4461,6 +4454,15 @@ func (c *Compile) fatalLog(retry int, err error) {
 	if !fatal {
 		return
 	}
+
+	txnTrace.GetService().AddTxnError(c.proc.TxnOperator.Txn().ID, err)
+
+	v, ok := moruntime.ProcessLevelRuntime().
+		GetGlobalVariables(moruntime.EnableCheckInvalidRCErrors)
+	if !ok || !v.(bool) {
+		return
+	}
+
 	if retry == 0 &&
 		(moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) ||
 			moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged)) {
