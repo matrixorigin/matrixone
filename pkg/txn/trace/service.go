@@ -177,7 +177,8 @@ func (s *service) TxnCreated(op client.TxnOperator) {
 func (s *service) TxnExecute(
 	op client.TxnOperator,
 	sql string) {
-	if op.Txn().DisableTrace {
+	if op == nil ||
+		op.Txn().DisableTrace {
 		return
 	}
 
