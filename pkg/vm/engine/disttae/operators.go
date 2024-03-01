@@ -11,15 +11,18 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-type LoadOp = func(obj objectio.ObjectStats) (objectio.ObjectMeta, objectio.BloomFilter, error)
-type LoadOpFactory func(context.Context, fileservice.FileService) LoadOp
+type FastCheckOp func(objectio.ObjectStats) (bool, error)
+type LoadOp = func(context.Context, objectio.ObjectStats) (objectio.ObjectMeta, objectio.BloomFilter, error)
+type ObjectCheckOp func(objectio.ObjectMeta, objectio.BloomFilter) (bool, error)
+type BlockCheckOp func(objectio.BlockInfo, objectio.BlockObject, objectio.BloomFilter) (bool, error)
+type LoadOpFactory func(fileservice.FileService) LoadOp
 
 var loadMetadataOnlyOpFactory LoadOpFactory
 var loadMetadataAndBFOpFactory LoadOpFactory
 
 func init() {
-	loadMetadataAndBFOpFactory = func(ctx context.Context, fs fileservice.FileService) LoadOp {
-		return func(obj objectio.ObjectStats) (objectio.ObjectMeta, objectio.BloomFilter, error) {
+	loadMetadataAndBFOpFactory = func(fs fileservice.FileService) LoadOp {
+		return func(ctx context.Context, obj objectio.ObjectStats) (objectio.ObjectMeta, objectio.BloomFilter, error) {
 			location := obj.ObjectLocation()
 			objMeta, err := objectio.FastLoadObjectMeta(
 				ctx, &location, false, fs,
@@ -37,8 +40,8 @@ func init() {
 			return objMeta, bf, nil
 		}
 	}
-	loadMetadataOnlyOpFactory = func(ctx context.Context, fs fileservice.FileService) LoadOp {
-		return func(obj objectio.ObjectStats) (objectio.ObjectMeta, objectio.BloomFilter, error) {
+	loadMetadataOnlyOpFactory = func(fs fileservice.FileService) LoadOp {
+		return func(ctx context.Context, obj objectio.ObjectStats) (objectio.ObjectMeta, objectio.BloomFilter, error) {
 			location := obj.ObjectLocation()
 			objMeta, err := objectio.FastLoadObjectMeta(
 				ctx, &location, false, fs,
@@ -98,16 +101,15 @@ func mustEvalColValueBinaryFunctionExpr(
 }
 
 func GenerateFilterExprOperators(
-	ctx context.Context,
 	expr *plan.Expr,
 	proc *process.Process,
 	tableDef *plan.TableDef,
 	fs fileservice.FileService,
 ) (
-	fastCheckOp func(objectio.ObjectStats) (bool, error),
-	loadOp func(objectio.ObjectStats) (objectio.ObjectMeta, objectio.BloomFilter, error),
-	objectCheckOp func(objectio.ObjectMeta, objectio.BloomFilter) (bool, error),
-	blockCheckOp func(objectio.BlockInfo, objectio.BlockObject, objectio.BloomFilter) (bool, error),
+	fastCheckOp FastCheckOp,
+	loadOp LoadOp,
+	objectCheckOp ObjectCheckOp,
+	blockCheckOp BlockCheckOp,
 ) {
 	if expr == nil {
 		return
@@ -129,7 +131,7 @@ func GenerateFilterExprOperators(
 					return obj.SortKeyZoneMap().AnyLE2(val), nil
 				}
 			}
-			loadOp = loadMetadataOnlyOpFactory(ctx, fs)
+			loadOp = loadMetadataOnlyOpFactory(fs)
 			colDef := tableDef.Cols[colExpr.Col.ColPos]
 			seqNum := colDef.Seqnum
 			objectCheckOp = func(meta objectio.ObjectMeta, _ objectio.BloomFilter) (bool, error) {
@@ -161,7 +163,7 @@ func GenerateFilterExprOperators(
 					return obj.SortKeyZoneMap().AnyGE2(val), nil
 				}
 			}
-			loadOp = loadMetadataOnlyOpFactory(ctx, fs)
+			loadOp = loadMetadataOnlyOpFactory(fs)
 			colDef := tableDef.Cols[colExpr.Col.ColPos]
 			seqNum := colDef.Seqnum
 			objectCheckOp = func(meta objectio.ObjectMeta, _ objectio.BloomFilter) (bool, error) {
@@ -193,7 +195,7 @@ func GenerateFilterExprOperators(
 					return obj.SortKeyZoneMap().AnyGT2(val), nil
 				}
 			}
-			loadOp = loadMetadataOnlyOpFactory(ctx, fs)
+			loadOp = loadMetadataOnlyOpFactory(fs)
 			colDef := tableDef.Cols[colExpr.Col.ColPos]
 			seqNum := colDef.Seqnum
 			objectCheckOp = func(meta objectio.ObjectMeta, _ objectio.BloomFilter) (bool, error) {
@@ -225,7 +227,7 @@ func GenerateFilterExprOperators(
 					return obj.SortKeyZoneMap().AnyLT2(val), nil
 				}
 			}
-			loadOp = loadMetadataOnlyOpFactory(ctx, fs)
+			loadOp = loadMetadataOnlyOpFactory(fs)
 			colDef := tableDef.Cols[colExpr.Col.ColPos]
 			seqNum := colDef.Seqnum
 			objectCheckOp = func(meta objectio.ObjectMeta, _ objectio.BloomFilter) (bool, error) {
@@ -257,7 +259,7 @@ func GenerateFilterExprOperators(
 					return obj.SortKeyZoneMap().PrefixEq(val), nil
 				}
 			}
-			loadOp = loadMetadataOnlyOpFactory(ctx, fs)
+			loadOp = loadMetadataOnlyOpFactory(fs)
 			colDef := tableDef.Cols[colExpr.Col.ColPos]
 			seqNum := colDef.Seqnum
 			objectCheckOp = func(meta objectio.ObjectMeta, _ objectio.BloomFilter) (bool, error) {
@@ -296,9 +298,9 @@ func GenerateFilterExprOperators(
 				}
 			}
 			if isPK {
-				loadOp = loadMetadataAndBFOpFactory(ctx, fs)
+				loadOp = loadMetadataAndBFOpFactory(fs)
 			} else {
-				loadOp = loadMetadataOnlyOpFactory(ctx, fs)
+				loadOp = loadMetadataOnlyOpFactory(fs)
 			}
 
 			colDef := tableDef.Cols[colExpr.Col.ColPos]
