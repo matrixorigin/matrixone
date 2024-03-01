@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -88,7 +89,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 
 	txnOp := proc.TxnOperator
-	if !txnOp.Txn().IsPessimistic() {
+	if !txnOp.Txn().IsPessimistic() || txnOp.Txn().DisableLock {
 		return arg.GetChildren(0).Call(proc)
 	}
 
@@ -289,7 +290,9 @@ func LockTable(
 	tableID uint64,
 	pkType types.Type,
 	changeDef bool) error {
-	if !proc.TxnOperator.Txn().IsPessimistic() {
+	txnOp := proc.TxnOperator
+	if !txnOp.Txn().IsPessimistic() ||
+		txnOp.Txn().DisableLock {
 		return nil
 	}
 	parker := types.NewPacker(proc.Mp())
@@ -333,7 +336,9 @@ func LockRows(
 	sharding lock.Sharding,
 	group uint32,
 ) error {
-	if !proc.TxnOperator.Txn().IsPessimistic() {
+	txnOp := proc.TxnOperator
+	if !txnOp.Txn().IsPessimistic() ||
+		txnOp.Txn().DisableLock {
 		return nil
 	}
 
@@ -486,6 +491,13 @@ func doLock(
 		if err != nil {
 			return false, false, timestamp.Timestamp{}, err
 		}
+		trace.GetService().ChangedCheck(
+			txn.ID,
+			tableID,
+			snapshotTS,
+			newSnapshotTS,
+			changed)
+
 		if changed {
 			if err := txnOp.UpdateSnapshot(ctx, newSnapshotTS); err != nil {
 				return false, false, timestamp.Timestamp{}, err
@@ -515,7 +527,7 @@ func doLock(
 	// is modified between [snapshotTS,prev.commits] and raise the SnapshotTS of
 	// the SI transaction to eliminate conflicts)
 	if !txnOp.Txn().IsRCIsolation() {
-		return false, false, timestamp.Timestamp{}, moerr.NewTxnWWConflict(ctx)
+		return false, false, timestamp.Timestamp{}, moerr.NewTxnWWConflict(ctx, tableID, "SI not support retry")
 	}
 
 	// forward rc's snapshot ts
