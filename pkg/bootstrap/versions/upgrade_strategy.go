@@ -148,7 +148,7 @@ func CheckTableColumn(txn executor.TxnExecutor,
 	tableName string,
 	columnName string) (ColumnInfo, error) {
 
-	xyz := ColumnInfo{
+	colInfo := ColumnInfo{
 		IsExits: false,
 		Name:    columnName,
 	}
@@ -168,7 +168,7 @@ func CheckTableColumn(txn executor.TxnExecutor,
 		schema, tableName, columnName)
 	res, err := txn.Exec(sql, executor.StatementOption{}.WithAccountID(accountId))
 	if err != nil {
-		return xyz, err
+		return colInfo, err
 	}
 	defer res.Close()
 
@@ -184,21 +184,21 @@ func CheckTableColumn(txn executor.TxnExecutor,
 		extra := cols[8].GetStringAt(0)
 		column_comment := cols[9].GetStringAt(0)
 
-		xyz.IsExits = true
-		xyz.ColType = data_type
-		xyz.Nullable = checkInput(is_nullable)
-		xyz.ChatLength = character_length
-		xyz.Precision = numeric_precision
-		xyz.Scale = numeric_scale
-		xyz.datetimePrecision = datetime_precision
-		xyz.Position = ordinal_position
-		xyz.Default = column_default
-		xyz.Extra = extra
-		xyz.Comment = column_comment
+		colInfo.IsExits = true
+		colInfo.ColType = data_type
+		colInfo.Nullable = checkInput(is_nullable)
+		colInfo.ChatLength = character_length
+		colInfo.Precision = numeric_precision
+		colInfo.Scale = numeric_scale
+		colInfo.datetimePrecision = datetime_precision
+		colInfo.Position = ordinal_position
+		colInfo.Default = column_default
+		colInfo.Extra = extra
+		colInfo.Comment = column_comment
 
 		return false
 	})
-	return xyz, nil
+	return colInfo, nil
 }
 
 // CheckViewDefinition Check if the view exists, if so, return true and return the view definition
