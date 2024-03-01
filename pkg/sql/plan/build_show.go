@@ -1183,6 +1183,17 @@ func buildShowStages(stmt *tree.ShowStages, ctx CompilerContext) (*Plan, error) 
 	return returnByRewriteSQL(ctx, sql, ddlType)
 }
 
+func buildShowSnapShots(stmt *tree.ShowSnapShots, ctx CompilerContext) (*Plan, error) {
+	ddlType := plan.DataDefinition_SHOW_TARGET
+	sql := fmt.Sprintf("SELECT snapshot_id as `SNAPSHOT_ID`, sname as `SNAPSHOT_NAME`, ts as `SNAPSHOT_TIME`, ts as `TIMESTAMP`,  level as `SNAPSHOT_LEVEL`, objname as `OBJECT_NAME` FROM %s.mo_snapshots;", MO_CATALOG_DB_NAME)
+
+	if stmt.Where != nil {
+		return returnByWhereAndBaseSQL(ctx, sql, stmt.Where, ddlType)
+	}
+
+	return returnByRewriteSQL(ctx, sql, ddlType)
+}
+
 func buildShowVariables(stmt *tree.ShowVariables, ctx CompilerContext) (*Plan, error) {
 	showVariables := &plan.ShowVariables{
 		Global: stmt.Global,

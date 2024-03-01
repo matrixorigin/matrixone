@@ -3070,7 +3070,7 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 			*tree.ShowProcessList, *tree.ShowStatus, *tree.ShowTableStatus, *tree.ShowGrants, *tree.ShowRolesStmt,
 			*tree.ShowIndex, *tree.ShowCreateView, *tree.ShowTarget, *tree.ValuesStatement,
 			*tree.ExplainFor, *tree.ExplainStmt, *tree.ShowTableNumber, *tree.ShowColumnNumber, *tree.ShowTableValues, *tree.ShowLocks, *tree.ShowNodeList, *tree.ShowFunctionOrProcedureStatus,
-			*tree.ShowPublications, *tree.ShowCreatePublications, *tree.ShowStages, *tree.ExplainAnalyze:
+			*tree.ShowPublications, *tree.ShowCreatePublications, *tree.ShowStages, *tree.ExplainAnalyze, *tree.ShowSnapShots:
 			/*
 				mysql COM_QUERY response: End after the data row has been sent.
 				After all row data has been sent, it sends the EOF or OK packet.
@@ -3894,7 +3894,7 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 		*tree.ShowProcessList, *tree.ShowStatus, *tree.ShowTableStatus, *tree.ShowGrants, *tree.ShowRolesStmt,
 		*tree.ShowIndex, *tree.ShowCreateView, *tree.ShowTarget, *tree.ShowCollation, *tree.ValuesStatement,
 		*tree.ExplainFor, *tree.ShowTableNumber, *tree.ShowColumnNumber, *tree.ShowTableValues, *tree.ShowLocks, *tree.ShowNodeList, *tree.ShowFunctionOrProcedureStatus,
-		*tree.ShowPublications, *tree.ShowCreatePublications, *tree.ShowStages:
+		*tree.ShowPublications, *tree.ShowCreatePublications, *tree.ShowStages, *tree.ShowSnapShots:
 		columns, err = cw.GetColumns()
 		if err != nil {
 			logError(ses, ses.GetDebugString(),

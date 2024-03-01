@@ -1049,7 +1049,7 @@ var (
 			sname varchar(64) primary key,
 			ts timestamp,
 			level enum('cluster','account','database','table'),
-			objName varchar(5000),
+			objname varchar(5000),
 			`,
 		`create table mo_pubs(
     		pub_name varchar(64) primary key,
@@ -1151,7 +1151,7 @@ var (
 		sname,
 		ts,
 		level,
-		objName) values ('%s','%s', '%s', '%s','%s');`
+		objname) values ('%s','%s', '%s', '%s','%s');`
 
 	initMoUserDefinedFunctionFormat = `insert into mo_catalog.mo_user_defined_function(
 			name,
@@ -5945,7 +5945,7 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		*tree.ShowTableValues, *tree.ShowNodeList, *tree.ShowRolesStmt,
 		*tree.ShowLocks, *tree.ShowFunctionOrProcedureStatus, *tree.ShowPublications, *tree.ShowSubscriptions,
 		*tree.ShowBackendServers, *tree.ShowStages, *tree.ShowConnectors, *tree.DropConnector,
-		*tree.PauseDaemonTask, *tree.CancelDaemonTask, *tree.ResumeDaemonTask:
+		*tree.PauseDaemonTask, *tree.CancelDaemonTask, *tree.ResumeDaemonTask, *tree.ShowSnapShots:
 		objType = objectTypeNone
 		kind = privilegeKindNone
 		canExecInRestricted = true
