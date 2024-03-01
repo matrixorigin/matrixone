@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -88,19 +89,18 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 
 	txnOp := proc.TxnOperator
-	if !txnOp.Txn().IsPessimistic() {
+	if !txnOp.Txn().IsPessimistic() || txnOp.Txn().DisableLock {
 		return arg.GetChildren(0).Call(proc)
 	}
 
 	if !arg.block {
-		return callNonBlocking(arg.GetIdx(), proc, arg)
+		return callNonBlocking(proc, arg)
 	}
 
-	return callBlocking(arg.GetIdx(), proc, arg, arg.GetIsFirst(), arg.GetIsLast())
+	return callBlocking(proc, arg, arg.GetIsFirst(), arg.GetIsLast())
 }
 
 func callNonBlocking(
-	idx int,
 	proc *process.Process,
 	arg *Argument) (vm.CallResult, error) {
 
@@ -129,11 +129,10 @@ func callNonBlocking(
 }
 
 func callBlocking(
-	idx int,
 	proc *process.Process,
 	arg *Argument,
 	isFirst bool,
-	isLast bool) (vm.CallResult, error) {
+	_ bool) (vm.CallResult, error) {
 
 	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
 	anal.Start()
@@ -217,7 +216,6 @@ func performLock(
 		}
 		locked, defChanged, refreshTS, err := doLock(
 			proc.Ctx,
-			arg.block,
 			arg.engine,
 			nil,
 			target.tableID,
@@ -289,7 +287,9 @@ func LockTable(
 	tableID uint64,
 	pkType types.Type,
 	changeDef bool) error {
-	if !proc.TxnOperator.Txn().IsPessimistic() {
+	txnOp := proc.TxnOperator
+	if !txnOp.Txn().IsPessimistic() ||
+		txnOp.Txn().DisableLock {
 		return nil
 	}
 	parker := types.NewPacker(proc.Mp())
@@ -300,7 +300,6 @@ func LockTable(
 		WithFetchLockRowsFunc(GetFetchRowsFunc(pkType))
 	_, defChanged, refreshTS, err := doLock(
 		proc.Ctx,
-		false,
 		eng,
 		nil,
 		tableID,
@@ -333,7 +332,9 @@ func LockRows(
 	sharding lock.Sharding,
 	group uint32,
 ) error {
-	if !proc.TxnOperator.Txn().IsPessimistic() {
+	txnOp := proc.TxnOperator
+	if !txnOp.Txn().IsPessimistic() ||
+		txnOp.Txn().DisableLock {
 		return nil
 	}
 
@@ -348,7 +349,6 @@ func LockRows(
 		WithFetchLockRowsFunc(GetFetchRowsFunc(pkType))
 	_, defChanged, refreshTS, err := doLock(
 		proc.Ctx,
-		false,
 		eng,
 		rel,
 		tableID,
@@ -375,7 +375,6 @@ func LockRows(
 // be manipulated has been modified, you need to get the latest data at timestamp.
 func doLock(
 	ctx context.Context,
-	blocking bool,
 	eng engine.Engine,
 	rel engine.Relation,
 	tableID uint64,
@@ -486,7 +485,18 @@ func doLock(
 		if err != nil {
 			return false, false, timestamp.Timestamp{}, err
 		}
+		trace.GetService().ChangedCheck(
+			txn.ID,
+			tableID,
+			snapshotTS,
+			newSnapshotTS,
+			changed)
+
 		if changed {
+			trace.GetService().TxnNeedUpdateSnapshot(
+				proc.TxnOperator,
+				tableID,
+				"no conflict, data changed")
 			if err := txnOp.UpdateSnapshot(ctx, newSnapshotTS); err != nil {
 				return false, false, timestamp.Timestamp{}, err
 			}
@@ -515,11 +525,15 @@ func doLock(
 	// is modified between [snapshotTS,prev.commits] and raise the SnapshotTS of
 	// the SI transaction to eliminate conflicts)
 	if !txnOp.Txn().IsRCIsolation() {
-		return false, false, timestamp.Timestamp{}, moerr.NewTxnWWConflict(ctx)
+		return false, false, timestamp.Timestamp{}, moerr.NewTxnWWConflict(ctx, tableID, "SI not support retry")
 	}
 
 	// forward rc's snapshot ts
 	snapshotTS = result.Timestamp.Next()
+	trace.GetService().TxnNeedUpdateSnapshot(
+		proc.TxnOperator,
+		tableID,
+		"conflict")
 	if err := txnOp.UpdateSnapshot(ctx, snapshotTS); err != nil {
 		return false, false, timestamp.Timestamp{}, err
 	}
@@ -763,7 +777,7 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 	arg.rt.FreeMergeTypeOperator(pipelineFailed)
 }
 
-func (arg *Argument) cleanCachedBatch(proc *process.Process) {
+func (arg *Argument) cleanCachedBatch(_ *process.Process) {
 	// do not need clean,  only set nil
 	// for _, bat := range arg.rt.cachedBatches {
 	// 	bat.Clean(proc.Mp())
@@ -772,7 +786,7 @@ func (arg *Argument) cleanCachedBatch(proc *process.Process) {
 }
 
 func (arg *Argument) getBatch(
-	proc *process.Process,
+	_ *process.Process,
 	anal process.Analyze,
 	isFirst bool) (*batch.Batch, error) {
 	fn := arg.rt.batchFetchFunc

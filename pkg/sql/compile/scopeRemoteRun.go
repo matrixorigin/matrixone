@@ -18,7 +18,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/indexjoin"
 	"time"
 	"unsafe"
 
@@ -977,12 +976,6 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			HashOnPk:               t.HashOnPK,
 			IsShuffle:              t.IsShuffle,
 		}
-	case *indexjoin.Argument:
-		in.IndexJoin = &pipeline.IndexJoin{
-			Result:                 t.Result,
-			Types:                  convertToPlanTypes(t.Typs),
-			RuntimeFilterBuildList: t.RuntimeFilterSpecs,
-		}
 	case *single.Argument:
 		relList, colList := getRelColList(t.Result)
 		in.SingleJoin = &pipeline.SingleJoin{
@@ -1372,13 +1365,6 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 		arg.Result = t.Result
 		arg.Cond = t.Expr
 		arg.Typs = convertToTypes(t.Types)
-		v.Arg = arg
-	case vm.IndexJoin:
-		t := opr.GetIndexJoin()
-		arg := indexjoin.NewArgument()
-		arg.Result = t.Result
-		arg.Typs = convertToTypes(t.Types)
-		arg.RuntimeFilterSpecs = t.RuntimeFilterBuildList
 		v.Arg = arg
 	case vm.LoopSingle:
 		t := opr.GetSingleJoin()
