@@ -853,6 +853,19 @@ func (tbl *txnTable) tryFastRanges(
 	blocks *objectio.BlockInfoSlice,
 	fs fileservice.FileService,
 ) (done bool, err error) {
+	// {
+	// 	var bb objectio.BlockInfoSlice
+	// 	TryFastFilterBlocks(
+	// 		tbl.db.txn.op.SnapshotTS(),
+	// 		tbl.tableDef,
+	// 		exprs,
+	// 		snapshot,
+	// 		uncommittedObjects,
+	// 		&bb,
+	// 		fs,
+	// 		tbl.proc.Load(),
+	// 	)
+	// }
 	if tbl.primaryIdx == -1 || len(exprs) == 0 {
 		done = false
 		return

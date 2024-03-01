@@ -94,7 +94,7 @@ func isClusterOrPKFromColExpr(expr *plan.Expr_Col, tableDef *plan.TableDef) (isP
 	if tableDef.Pkey != nil && tableDef.Pkey.PkeyColId == uint64(expr.Col.ColPos) {
 		isPK = true
 	}
-	if !isPK && tableDef.ClusterBy != nil && tableDef.ClusterBy.CompCbkeyCol.ColId == uint64(expr.Col.ColPos) {
+	if !isPK && tableDef.Cols[expr.Col.ColPos].ClusterBy {
 		isCluster = true
 	}
 	return
@@ -545,7 +545,11 @@ func ExecuteBlockFilter(
 					return
 				}
 			}
-			ForeachBlkInObjStatsList(false, meta.MustDataMeta(), func(blk objectio.BlockInfo, blkMeta objectio.BlockObject) bool {
+			var dataMeta objectio.ObjectDataMeta
+			if meta != nil {
+				dataMeta = meta.MustDataMeta()
+			}
+			ForeachBlkInObjStatsList(false, dataMeta, func(blk objectio.BlockInfo, blkMeta objectio.BlockObject) bool {
 				var ok2 bool
 				if blockFilterOp != nil {
 					ok2, err2 = blockFilterOp(blk, blkMeta, bf)
