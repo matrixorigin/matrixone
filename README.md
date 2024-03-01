@@ -148,7 +148,7 @@ MatrixOne is a hyper-converged cloud & edge native distributed database with a s
      Poor business agility results from slow, complex queries and redundant intermediate tables in current data warehousing solutions. MatrixOne supports blazing-fast experience even for star and snowflake schema queries, improving business agility with real-time analytics.
 </details>
 <details>
-  <summary><b><font size=4>An Solid OLTP-like OLAP Experience</b></font></summary>
+  <summary><b><font size=4>Solid OLTP-like OLAP Experience</b></font></summary>
      Current data warehousing solutions have the following problems: high latency and absence of immediate visibility for data updates. MatrixOne brings OLTP (Online Transactional Processing) level consistency and high availability to CRUD operations in OLAP (Online Analytical Processing).
 </details>
 <details>
