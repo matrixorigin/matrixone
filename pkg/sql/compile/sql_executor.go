@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"errors"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/buffer"
@@ -224,6 +225,24 @@ func (exec *txnExecutor) Exec(
 	sql string,
 	statementOption executor.StatementOption) (executor.Result, error) {
 
+	//-----------------------------------------------------------------------------------------
+	recoverAccount := func(exec *txnExecutor, accId uint32) {
+		exec.ctx = context.WithValue(exec.ctx, defines.TenantIDKey{}, accId)
+	}
+
+	if statementOption.HasAccountID() {
+		originAccountID := catalog.System_Account
+		if v := exec.ctx.Value(defines.TenantIDKey{}); v != nil {
+			originAccountID = v.(uint32)
+		}
+
+		exec.ctx = context.WithValue(exec.ctx,
+			defines.TenantIDKey{},
+			statementOption.AccountID())
+		// NOTE: Restore AccountID information in context.Context
+		defer recoverAccount(exec, originAccountID)
+	}
+	//-----------------------------------------------------------------------------------------
 	receiveAt := time.Now()
 	stmts, err := parsers.Parse(exec.ctx, dialect.MYSQL, sql, 1)
 	defer func() {

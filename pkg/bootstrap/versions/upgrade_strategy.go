@@ -118,12 +118,12 @@ type UpgradeEntry struct {
 	UpgType   UpgradeType
 	TableType TableType
 	UpgSql    string
-	CheckFunc func(txn executor.TxnExecutor) (bool, error)
+	CheckFunc func(txn executor.TxnExecutor, accountId uint32) (bool, error)
 }
 
 // Upgrade entity execution upgrade entrance
-func (u *UpgradeEntry) Upgrade(txn executor.TxnExecutor) error {
-	exist, err := u.CheckFunc(txn)
+func (u *UpgradeEntry) Upgrade(txn executor.TxnExecutor, accountId uint32) error {
+	exist, err := u.CheckFunc(txn, accountId)
 	if err != nil {
 		return err
 	}
@@ -131,7 +131,7 @@ func (u *UpgradeEntry) Upgrade(txn executor.TxnExecutor) error {
 	if exist {
 		return nil
 	} else {
-		res, err := txn.Exec(u.UpgSql, executor.StatementOption{})
+		res, err := txn.Exec(u.UpgSql, executor.StatementOption{}.WithAccountID(accountId))
 		if err != nil {
 			return err
 		}
@@ -143,6 +143,7 @@ func (u *UpgradeEntry) Upgrade(txn executor.TxnExecutor) error {
 // CheckTableColumn Check if the columns in the table exist, and if so,
 // return the detailed information of the columns
 func CheckTableColumn(txn executor.TxnExecutor,
+	accountId uint32,
 	schema string,
 	tableName string,
 	columnName string) (ColumnInfo, error) {
@@ -165,7 +166,7 @@ func CheckTableColumn(txn executor.TxnExecutor,
 				from information_schema.columns 
                 where table_schema = '%s' and table_name = '%s' and column_name = '%s'`,
 		schema, tableName, columnName)
-	res, err := txn.Exec(sql, executor.StatementOption{})
+	res, err := txn.Exec(sql, executor.StatementOption{}.WithAccountID(accountId))
 	if err != nil {
 		return xyz, err
 	}
@@ -201,11 +202,10 @@ func CheckTableColumn(txn executor.TxnExecutor,
 }
 
 // CheckViewDefinition Check if the view exists, if so, return true and return the view definition
-func CheckViewDefinition(txn executor.TxnExecutor, schema string, viewName string) (bool, string, error) {
+func CheckViewDefinition(txn executor.TxnExecutor, accountId uint32, schema string, viewName string) (bool, string, error) {
 	sql := fmt.Sprintf(`select view_definition from information_schema.views
                        where table_schema = '%s' and table_name = '%s'`, schema, viewName)
-	fmt.Printf("------------wuxiliang3------------>sql:%s\n", sql)
-	res, err := txn.Exec(sql, executor.StatementOption{})
+	res, err := txn.Exec(sql, executor.StatementOption{}.WithAccountID(accountId))
 	if err != nil {
 		return false, "", err
 	}
@@ -228,10 +228,9 @@ func CheckViewDefinition(txn executor.TxnExecutor, schema string, viewName strin
 }
 
 // CheckTableDefinition Check if the table exists, return true if it exists
-func CheckTableDefinition(txn executor.TxnExecutor, schema string, tableName string) (bool, error) {
+func CheckTableDefinition(txn executor.TxnExecutor, accountId uint32, schema string, tableName string) (bool, error) {
 	sql := fmt.Sprintf(`select * from information_schema.tables where table_schema = '%s' and table_name = '%s'`, schema, tableName)
-	fmt.Printf("------------wuxiliang3------------>sql:%s\n", sql)
-	res, err := txn.Exec(sql, executor.StatementOption{})
+	res, err := txn.Exec(sql, executor.StatementOption{}.WithAccountID(accountId))
 	if err != nil {
 		return false, err
 	}
@@ -242,14 +241,15 @@ func CheckTableDefinition(txn executor.TxnExecutor, schema string, tableName str
 		loaded = true
 		return false
 	})
-	
+
 	return loaded, nil
 }
 
-func DropView(txn executor.TxnExecutor, schema string, viewName string) error {
+// DropView Execute the delete view operation
+func DropView(txn executor.TxnExecutor, accountId uint32, schema string, viewName string) error {
 	// Delete the current view
 	sql := fmt.Sprintf("drop view `%s`.`%s`", schema, viewName)
-	res, err := txn.Exec(sql, executor.StatementOption{})
+	res, err := txn.Exec(sql, executor.StatementOption{}.WithAccountID(accountId))
 	if err != nil {
 		return err
 	}

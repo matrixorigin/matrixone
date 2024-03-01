@@ -54,8 +54,8 @@ var upg_test_view = versions.UpgradeEntry{
 	UpgType:   versions.CREATE_VIEW,
 	TableType: versions.SYSTEM_VIEW,
 	UpgSql:    test_view_sql,
-	CheckFunc: func(txn executor.TxnExecutor) (bool, error) {
-		isExisted, _, err := versions.CheckViewDefinition(txn, "information_schema", "wuxiliang_cluster_view_v121")
+	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+		isExisted, _, err := versions.CheckViewDefinition(txn, accountId, "information_schema", "wuxiliang_cluster_view_v121")
 		if err != nil {
 			return false, err
 		}
@@ -91,8 +91,8 @@ var upg_test_table = versions.UpgradeEntry{
 		"ROUTINE_TYPE  varchar(64)"+
 		");", catalog.MO_CATALOG, "wuxiliang_cluster_table_v121"),
 
-	CheckFunc: func(txn executor.TxnExecutor) (bool, error) {
-		isExist, err := versions.CheckTableDefinition(txn, catalog.MO_CATALOG, "wuxiliang_cluster_table_v121")
+	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+		isExist, err := versions.CheckTableDefinition(txn, accountId, catalog.MO_CATALOG, "wuxiliang_cluster_table_v121")
 		if err != nil {
 			return false, nil
 		}

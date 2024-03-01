@@ -28,7 +28,7 @@ var (
 			Version:           "1.2.1",
 			MinUpgradeVersion: "1.2.0",
 			UpgradeCluster:    versions.Yes,
-			UpgradeTenant:     versions.No,
+			UpgradeTenant:     versions.Yes,
 		},
 	}
 )
@@ -54,7 +54,12 @@ func (v *versionHandle) HandleTenantUpgrade(
 	tenantID int32,
 	txn executor.TxnExecutor) error {
 
-	//ctx = defines.AttachAccountId(ctx, uint32(tenantID))
+	for _, upgEntry := range tenantUpgEntries {
+		err := upgEntry.Upgrade(txn, uint32(tenantID))
+		if err != nil {
+			return err
+		}
+	}
 
 	return nil
 }
@@ -63,7 +68,7 @@ func (v *versionHandle) HandleClusterUpgrade(
 	ctx context.Context,
 	txn executor.TxnExecutor) error {
 	for _, upgEntry := range clusterUpgEntries {
-		err := upgEntry.Upgrade(txn)
+		err := upgEntry.Upgrade(txn, catalog.System_Account)
 		if err != nil {
 			return err
 		}

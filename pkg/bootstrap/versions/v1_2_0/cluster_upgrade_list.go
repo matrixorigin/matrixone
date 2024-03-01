@@ -30,8 +30,8 @@ var upg_mo_account = versions.UpgradeEntry{
 	UpgType:   versions.ADD_COLUMN,
 	TableType: versions.BASE_TABLE,
 	UpgSql:    "alter table `mo_account` add column `create_version` varchar(50) default '1.2.0' after suspended_time",
-	CheckFunc: func(txn executor.TxnExecutor) (bool, error) {
-		colInfo, err := versions.CheckTableColumn(txn, "mo_catalog", "mo_account", "create_version")
+	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+		colInfo, err := versions.CheckTableColumn(txn, accountId, "mo_catalog", "mo_account", "create_version")
 		if err != nil {
 			return false, err
 		}
@@ -49,8 +49,8 @@ var upg_mo_pub = versions.UpgradeEntry{
 	UpgType:   versions.ADD_COLUMN,
 	TableType: versions.BASE_TABLE,
 	UpgSql:    "alter table `mo_catalog`.`mo_pubs` add column `update_time` timestamp",
-	CheckFunc: func(txn executor.TxnExecutor) (bool, error) {
-		colInfo, err := versions.CheckTableColumn(txn, "mo_catalog", "mo_pubs", "update_time")
+	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+		colInfo, err := versions.CheckTableColumn(txn, accountId, "mo_catalog", "mo_pubs", "update_time")
 		if err != nil {
 			return false, err
 		}
@@ -68,8 +68,8 @@ var upg_sys_async_task = versions.UpgradeEntry{
 	UpgType:   versions.MODIFY_COLUMN,
 	TableType: versions.BASE_TABLE,
 	UpgSql:    "alter table `mo_task`.`sys_async_task` modify task_id bigint auto_increment",
-	CheckFunc: func(txn executor.TxnExecutor) (bool, error) {
-		colInfo, err := versions.CheckTableColumn(txn, "mo_task", "sys_async_task", "task_id")
+	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+		colInfo, err := versions.CheckTableColumn(txn, accountId, "mo_task", "sys_async_task", "task_id")
 		if err != nil {
 			return false, err
 		}
@@ -122,8 +122,8 @@ var upg_mo_foreign_keys = versions.UpgradeEntry{
 				refer_column_name,
 				refer_column_id)
 		);`, catalog.MO_CATALOG, "mo_foreign_keys"),
-	CheckFunc: func(txn executor.TxnExecutor) (bool, error) {
-		isExist, err := versions.CheckTableDefinition(txn, "mo_catalog", "mo_foreign_keys")
+	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+		isExist, err := versions.CheckTableDefinition(txn, accountId, "mo_catalog", "mo_foreign_keys")
 		if err != nil {
 			return false, err
 		}

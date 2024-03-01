@@ -237,7 +237,6 @@ func (s *service) Bootstrap(ctx context.Context) error {
 
 	// current node get the bootstrap privilege
 	if ok {
-		//return s.execBootstrap(ctx)
 		// the auto-increment service has already been initialized at current time
 		if err = s.execBootstrap(ctx); err != nil {
 			return err

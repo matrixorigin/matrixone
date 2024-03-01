@@ -57,7 +57,6 @@ func (s *service) BootstrapUpgrade(ctx context.Context) error {
 	// number of tenants is huge. So the whole tenant upgrade is asynchronous and will
 	// be grouped for all tenants and concurrently executed on multiple CNs at the same
 	// time.
-	fmt.Printf("----------------wuxiliang2----------------begin upgrade-------------------------------")
 	if err := retryRun(ctx, "doCheckUpgrade", s.doCheckUpgrade); err != nil {
 		getUpgradeLogger().Error("check upgrade failed", zap.Error(err))
 		return err

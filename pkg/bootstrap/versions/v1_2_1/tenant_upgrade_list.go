@@ -38,8 +38,8 @@ var upg_wuxiliang_test = versions.UpgradeEntry{
 		"from mo_catalog.mo_tables "+
 		"where relkind = 'v';",
 		INFORMATION_SCHEMA, "wuxiliang_tenant_view_v121"),
-	CheckFunc: func(txn executor.TxnExecutor) (bool, error) {
-		isExisted, _, err := versions.CheckViewDefinition(txn, INFORMATION_SCHEMA, "wuxiliang_tenant_view_v121")
+	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+		isExisted, _, err := versions.CheckViewDefinition(txn, accountId, INFORMATION_SCHEMA, "wuxiliang_tenant_view_v121")
 		if err != nil {
 			return false, err
 		}

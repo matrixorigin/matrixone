@@ -795,7 +795,6 @@ func (s *service) bootstrap() error {
 		defer cancel()
 		if err := s.bootstrapService.BootstrapUpgrade(ctx); err != nil {
 			if err != context.Canceled {
-				fmt.Printf("@@@@@@@@@@@@@@@@@@@ wuxiliangx-upgrade canceled @@@@@@@@@@@@@@@@@@@")
 				panic(err)
 			}
 		}

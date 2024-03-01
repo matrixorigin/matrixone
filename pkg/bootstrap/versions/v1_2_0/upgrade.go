@@ -16,7 +16,6 @@ package v1_2_0
 
 import (
 	"context"
-	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -66,13 +65,27 @@ func (v *versionHandle) Prepare(
 		// First version as a genesis version, always need to be PREPARE.
 		// Because the first version need to init upgrade framework tables.
 		for _, upgEntry := range clusterUpgEntries {
-			err = upgEntry.Upgrade(txn)
+			err = upgEntry.Upgrade(txn, catalog.System_Account)
 			if err != nil {
 				return err
 			}
 		}
 	}
 
+	// get all tenantIDs in mo system, including system tenants
+	//tenants, err := versions.FetchAllTenants(txn)
+	//if err != nil {
+	//	return err
+	//}
+	//for _, tenantID := range tenants {
+	//	//ctx = defines.AttachAccountId(ctx, uint32(tenantID))
+	//	for _, upgEntry := range tenantUpgEntries {
+	//		err = upgEntry.Upgrade(txn, uint32(tenantID))
+	//		if err != nil {
+	//			return err
+	//		}
+	//	}
+	//}
 	return nil
 }
 
@@ -104,7 +117,6 @@ func (v *versionHandle) createFrameworkTables(
 	}
 
 	for _, sql := range values {
-		fmt.Printf("-------------createFrameworkTables: sql: %s\n", sql)
 		r, err := txn.Exec(sql, executor.StatementOption{})
 		if err != nil {
 			return err

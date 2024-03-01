@@ -34,7 +34,7 @@ var upg_sql_dut_total = versions.UpgradeEntry{
 		"from `system_metrics`.`metric` "+
 		"where `metric_name` = 'sql_statement_duration_total'",
 		catalog.MO_SYSTEM_METRICS, "sql_statement_duration_total"),
-	CheckFunc: func(txn executor.TxnExecutor) (bool, error) {
+	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
 		return false, nil
 	},
 }

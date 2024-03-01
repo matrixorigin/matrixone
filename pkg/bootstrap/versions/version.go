@@ -226,3 +226,29 @@ func IsFrameworkTablesCreated(txn executor.TxnExecutor) (bool, error) {
 	}
 	return false, nil
 }
+
+// FetchAllTenants get all tenantIDs in mo system, including system tenants
+func FetchAllTenants(txn executor.TxnExecutor) ([]int32, error) {
+	ids := make([]int32, 0, 10)
+	sql := "select account_id from mo_account where account_id >= 0 order by account_id"
+	res, err := txn.Exec(sql, executor.StatementOption{})
+	if err != nil {
+		return ids, err
+	}
+
+	n := 0
+	res.ReadRows(func(rows int, cols []*vector.Vector) bool {
+		last := int32(-1)
+		for i := 0; i < rows; i++ {
+			last = vector.GetFixedAt[int32](cols[0], i)
+			ids = append(ids, last)
+			n++
+		}
+		return true
+	})
+	res.Close()
+	if n == 0 {
+		return ids, nil
+	}
+	return ids, nil
+}
