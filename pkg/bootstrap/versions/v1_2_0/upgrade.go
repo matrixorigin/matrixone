@@ -93,9 +93,7 @@ func (v *versionHandle) HandleTenantUpgrade(
 	ctx context.Context,
 	tenantID int32,
 	txn executor.TxnExecutor) error {
-
-	//ctx = defines.AttachAccountId(ctx, uint32(tenantID))
-
+	
 	return nil
 }
 
