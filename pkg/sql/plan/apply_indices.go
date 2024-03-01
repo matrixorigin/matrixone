@@ -314,16 +314,19 @@ END0:
 		var idxFilter *plan.Expr
 		if numParts == 1 {
 			idx := filterIdx[0]
-			idxFilter = DeepCopyExpr(node.FilterList[idx])
-			args := idxFilter.GetF().Args
+
+			args := node.FilterList[idx].GetF().Args
 			col := args[0].GetCol()
 			col.RelPos = idxTag
 			col.ColPos = 0
 			col.Name = idxTableDef.Cols[0].Name
+
+			idxFilter = node.FilterList[idx]
+			node.FilterList = append(node.FilterList[:idx], node.FilterList[idx+1:]...)
 		} else {
 			serialArgs := make([]*plan.Expr, len(filterIdx))
 			for i := range filterIdx {
-				serialArgs[i] = DeepCopyExpr(node.FilterList[filterIdx[i]].GetF().Args[1])
+				serialArgs[i] = node.FilterList[filterIdx[i]].GetF().Args[1]
 			}
 			rightArg, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", serialArgs)
 
@@ -343,6 +346,20 @@ END0:
 				},
 				rightArg,
 			})
+
+			hitFilterSet := make(map[int]emptyType)
+			for i := range filterIdx {
+				hitFilterSet[filterIdx[i]] = emptyStruct
+			}
+
+			newFilterList := make([]*plan.Expr, 0, len(node.FilterList)-len(filterIdx))
+			for i, filter := range node.FilterList {
+				if _, ok := hitFilterSet[i]; !ok {
+					newFilterList = append(newFilterList, filter)
+				}
+			}
+
+			node.FilterList = newFilterList
 		}
 
 		calcScanStats(node, builder)
@@ -386,7 +403,7 @@ END0:
 		joinNodeID := builder.appendNode(&plan.Node{
 			NodeType: plan.Node_JOIN,
 			Children: []int32{nodeID, idxTableNodeID},
-			JoinType: plan.Node_INDEX,
+			JoinType: plan.Node_SEMI,
 			OnList:   []*plan.Expr{joinCond},
 		}, builder.ctxByNode[nodeID])
 
@@ -412,8 +429,7 @@ END0:
 		}
 	}
 
-	for i := range node.FilterList {
-		expr := DeepCopyExpr(node.FilterList[i])
+	for i, expr := range node.FilterList {
 		fn := expr.GetF()
 		if fn == nil {
 			continue
@@ -468,6 +484,8 @@ END0:
 				idxFilter, _ = bindFuncExprAndConstFold(builder.GetContext(), builder.compCtx.GetProcess(), "prefix_between", fn.Args)
 			}
 		}
+
+		node.FilterList = append(node.FilterList[:i], node.FilterList[i+1:]...)
 		calcScanStats(node, builder)
 
 		idxTableNodeID := builder.appendNode(&plan.Node{
@@ -509,7 +527,7 @@ END0:
 		joinNodeID := builder.appendNode(&plan.Node{
 			NodeType: plan.Node_JOIN,
 			Children: []int32{nodeID, idxTableNodeID},
-			JoinType: plan.Node_INDEX,
+			JoinType: plan.Node_SEMI,
 			OnList:   []*plan.Expr{joinCond},
 		}, builder.ctxByNode[nodeID])
 
