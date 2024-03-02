@@ -29,21 +29,19 @@ var (
 	DebugDB         = "mo_debug"
 	featuresTables  = "trace_features"
 	traceTable      = "trace_tables"
+	traceCostTable  = "trace_costs"
 	eventTxnTable   = "trace_event_txn"
 	eventDataTable  = "trace_event_data"
 	eventErrorTable = "trace_event_error"
+	eventCostTable  = "trace_event_cost"
 
-	featureTraceTxn = "txn"
-	stateEnable     = "enable"
-	stateDisable    = "disable"
+	featureTraceTxn     = "txn"
+	featureTraceTxnCost = "txn-cost"
+	stateEnable         = "enable"
+	stateDisable        = "disable"
 
 	InitSQLs = []string{
 		fmt.Sprintf("create database %s", DebugDB),
-
-		fmt.Sprintf(`create table %s.%s(
-			name    varchar(50) not null primary key,
-			state   varchar(20) not null
-		)`, DebugDB, featuresTables),
 
 		fmt.Sprintf(`create table %s.%s(
 			ts 			          bigint       not null,
@@ -82,10 +80,36 @@ var (
 			error_info            varchar(1000)   not null
 		)`, DebugDB, eventErrorTable),
 
+		fmt.Sprintf(`create table %s.%s(
+			id                    bigint UNSIGNED primary key auto_increment,
+			filter_method         varchar(50)     not null,
+			filter_name           varchar(50)     not null,
+			filter_value          varchar(500)    not null
+		)`, DebugDB, traceCostTable),
+
+		fmt.Sprintf(`create table %s.%s(
+			ts 			          bigint       not null,
+			txn_id                varchar(50)  not null,
+			table_id              bigint UNSIGNED,
+			cost_name             varchar(100) not null,
+			cost_value            varchar(100) not null
+		)`, DebugDB, eventCostTable),
+
+		fmt.Sprintf(`create table %s.%s(
+			name    varchar(50) not null primary key,
+			state   varchar(20) not null
+		)`, DebugDB, featuresTables),
+
 		fmt.Sprintf(`insert into %s.%s (name, state) values ('%s', '%s')`,
 			DebugDB,
 			featuresTables,
 			featureTraceTxn,
+			stateDisable),
+
+		fmt.Sprintf(`insert into %s.%s (name, state) values ('%s', '%s')`,
+			DebugDB,
+			featuresTables,
+			featureTraceTxnCost,
 			stateDisable),
 	}
 )
@@ -133,5 +157,11 @@ type Option func(*service)
 type EntryFilter interface {
 	// Filter returns true means the entry should be skipped.
 	Filter(entry *EntryData) bool
+	Name() string
+}
+
+type TxnFilter interface {
+	// Filter returns true means the txn should be skipped.
+	Filter(op client.TxnOperator) bool
 	Name() string
 }
