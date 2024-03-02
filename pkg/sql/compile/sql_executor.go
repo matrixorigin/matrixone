@@ -177,8 +177,14 @@ func (s *sqlExecutor) adjustOptions(
 	}
 
 	if !opts.HasExistsTxn() {
-		txnOp, err := s.txnClient.New(ctx, opts.MinCommittedTS(),
-			client.WithTxnCreateBy("sql-executor"))
+		txnOpts := opts.ExtraTxnOptions()
+		txnOpts = append(txnOpts,
+			client.WithTxnCreateBy("sql-executor"),
+			client.WithDisableTrace(true))
+		txnOp, err := s.txnClient.New(
+			ctx,
+			opts.MinCommittedTS(),
+			txnOpts...)
 		if err != nil {
 			return nil, executor.Options{}, err
 		}

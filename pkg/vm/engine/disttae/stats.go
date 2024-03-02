@@ -140,7 +140,7 @@ type GlobalStats struct {
 	// statsInfoMap is the global stats info in engine which
 	// contains all subscribed tables stats info.
 	mu struct {
-		sync.RWMutex
+		sync.Mutex
 
 		// cond is used to wait for stats updated for the first time.
 		// If sync parameter is false, it is unuseful.
@@ -184,19 +184,13 @@ func (gs *GlobalStats) fillConfig() {
 }
 
 func (gs *GlobalStats) Get(ctx context.Context, key pb.StatsInfoKey, sync bool) *pb.StatsInfo {
-	var info *pb.StatsInfo
-	var ok bool
-	if ok = func() bool {
-		gs.mu.RLock()
-		defer gs.mu.RUnlock()
-		info, ok = gs.mu.statsInfoMap[key]
-		return ok
-	}(); ok {
+	gs.mu.Lock()
+	defer gs.mu.Unlock()
+	info, ok := gs.mu.statsInfoMap[key]
+	if ok {
 		return info
 	}
 
-	gs.mu.Lock()
-	defer gs.mu.Unlock()
 	// Get stats info from remote node.
 	if gs.KeyRouter != nil {
 		client := gs.engine.qc
