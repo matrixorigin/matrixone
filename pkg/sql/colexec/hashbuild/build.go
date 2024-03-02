@@ -158,7 +158,7 @@ func (ctr *container) mergeIntoBatches(src *batch.Batch, proc *process.Process) 
 		appendRows := 0
 		length := src.RowCount()
 		for offset < length {
-			ctr.tmpBatch, appendRows, err = proc.AppendToFixedSizeFromOffset(ctr.tmpBatch, src, offset)
+			ctr.tmpBatch, appendRows, err = proc.AppendBatchFromOffset(ctr.tmpBatch, src, offset)
 			if err != nil {
 				return err
 			}

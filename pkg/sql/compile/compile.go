@@ -161,6 +161,7 @@ func (c *Compile) reset() {
 	c.tenant = ""
 	c.uid = ""
 	c.sql = ""
+	c.originSQL = ""
 	c.anal = nil
 	c.e = nil
 	c.ctx = nil
@@ -394,6 +395,12 @@ func (c *Compile) allocOperatorID() int32 {
 
 // Run is an important function of the compute-layer, it executes a single sql according to its scope
 func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
+	sql := c.originSQL
+	if sql == "" {
+		sql = c.sql
+	}
+	txnTrace.GetService().TxnExecute(c.proc.TxnOperator, sql)
+
 	var writeOffset uint64
 
 	start := time.Now()
@@ -2401,17 +2408,6 @@ func (c *Compile) compileBroadcastJoin(ctx context.Context, node, left, right *p
 				}
 			}
 		}
-
-	case plan.Node_INDEX:
-		rs = c.newBroadcastJoinScopeList(ss, children, node)
-		for i := range rs {
-			rs[i].appendInstruction(vm.Instruction{
-				Op:  vm.IndexJoin,
-				Idx: c.anal.curr,
-				Arg: constructIndexJoin(node, rightTyps, c.proc),
-			})
-		}
-
 	case plan.Node_SEMI:
 		if isEq {
 			if node.BuildOnLeft {
@@ -3396,7 +3392,12 @@ func (c *Compile) newJoinBuildScope(s *Scope, ss []*Scope) *Scope {
 		regTransplant(s, rs, i+s.BuildIdx, i)
 	}
 
-	rs.appendInstruction(constructJoinBuildInstruction(c, s.Instructions[0], c.proc, s.ShuffleCnt, ss != nil))
+	rs.appendInstruction(vm.Instruction{
+		Op:      vm.HashBuild,
+		Idx:     s.Instructions[0].Idx,
+		IsFirst: true,
+		Arg:     constructHashBuild(c, s.Instructions[0], c.proc, s.ShuffleCnt, ss != nil),
+	})
 
 	if ss == nil { // unparallel, send the hashtable to join scope directly
 		s.Proc.Reg.MergeReceivers[s.BuildIdx] = &process.WaitRegister{
@@ -4456,6 +4457,12 @@ func (c *Compile) fatalLog(retry int, err error) {
 		return
 	}
 
+	if retry == 0 &&
+		(moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) ||
+			moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged)) {
+		return
+	}
+
 	txnTrace.GetService().AddTxnError(c.proc.TxnOperator.Txn().ID, err)
 
 	v, ok := moruntime.ProcessLevelRuntime().
@@ -4464,16 +4471,14 @@ func (c *Compile) fatalLog(retry int, err error) {
 		return
 	}
 
-	if retry == 0 &&
-		(moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) ||
-			moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged)) {
-		return
-	}
-
 	logutil.Fatalf("BUG(RC): txn %s retry %d, error %+v\n",
 		hex.EncodeToString(c.proc.TxnOperator.Txn().ID),
 		retry,
 		err.Error())
+}
+
+func (c *Compile) SetOriginSQL(sql string) {
+	c.originSQL = sql
 }
 
 func (c *Compile) SetBuildPlanFunc(buildPlanFunc func() (*plan2.Plan, error)) {
