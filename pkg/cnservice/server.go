@@ -778,7 +778,6 @@ func (s *service) bootstrap() error {
 		rt.Clock(),
 		s._txnClient,
 		s.sqlExecutor,
-		s.metadataFS,
 		s.options.bootstrapOptions...)
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute*5)

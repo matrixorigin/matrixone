@@ -17,11 +17,8 @@ package bootstrap
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/predefine"
-	"github.com/matrixorigin/matrixone/pkg/util/file"
 	"github.com/matrixorigin/matrixone/pkg/util/metric/mometric"
 	"github.com/matrixorigin/matrixone/pkg/util/sysview"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
@@ -169,13 +166,12 @@ func init() {
 }
 
 type service struct {
-	lock       Locker
-	clock      clock.Clock
-	client     client.TxnClient
-	exec       executor.SQLExecutor
-	stopper    *stopper.Stopper
-	metadataFS fileservice.ReplaceableFileService
-	handles    []VersionHandle
+	lock    Locker
+	clock   clock.Clock
+	client  client.TxnClient
+	exec    executor.SQLExecutor
+	stopper *stopper.Stopper
+	handles []VersionHandle
 
 	mu struct {
 		sync.RWMutex
@@ -197,15 +193,13 @@ func NewService(
 	clock clock.Clock,
 	client client.TxnClient,
 	exec executor.SQLExecutor,
-	metaFS fileservice.ReplaceableFileService,
 	opts ...Option) Service {
 	s := &service{
-		clock:      clock,
-		exec:       exec,
-		lock:       lock,
-		client:     client,
-		stopper:    stopper.NewStopper("upgrade", stopper.WithLogger(getLogger().RawLogger())),
-		metadataFS: metaFS,
+		clock:   clock,
+		exec:    exec,
+		lock:    lock,
+		client:  client,
+		stopper: stopper.NewStopper("upgrade", stopper.WithLogger(getLogger().RawLogger())),
 	}
 	s.mu.tenants = make(map[int32]bool)
 	s.initUpgrade()
@@ -234,15 +228,7 @@ func (s *service) Bootstrap(ctx context.Context) error {
 	// current node get the bootstrap privilege
 	if ok {
 		// the auto-increment service has already been initialized at current time
-		if err = s.execBootstrap(ctx); err != nil {
-			return err
-		}
-
-		if err = file.WriteFile(s.metadataFS, "./system_init_completed", []byte("OK")); err != nil {
-			getLogger().Error("bootstrap completed,but write file `system_init_completed` failed", zap.Error(err))
-			return moerr.NewInternalError(ctx, "bootstrap completed,but write file `system_init_completed` failed: %s", err.Error())
-		}
-		return nil
+		return s.execBootstrap(ctx)
 	}
 
 	// otherwise, wait bootstrap completed

@@ -16,8 +16,6 @@ package bootstrap
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -76,15 +74,11 @@ func TestBootstrapAlreadyBootstrapped(t *testing.T) {
 		return executor.Result{}, nil
 	})
 
-	fs, err := fileservice.NewMemoryFS(defines.LocalFileServiceName, fileservice.DisabledCacheConfig, nil)
-	assert.NoError(t, err)
-
 	b := NewService(
 		&memLocker{},
 		clock.NewHLCClock(func() int64 { return 0 }, 0),
 		nil,
-		exec,
-		fs)
+		exec)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 	defer cancel()
 
@@ -109,17 +103,13 @@ func TestBootstrapWithWait(t *testing.T) {
 		return executor.Result{}, nil
 	})
 
-	fs, err := fileservice.NewMemoryFS(defines.LocalFileServiceName, fileservice.DisabledCacheConfig, nil)
-	assert.NoError(t, err)
-
 	b := NewService(
 		&memLocker{ids: map[string]uint64{
 			bootstrapKey: 1,
 		}},
 		clock.NewHLCClock(func() int64 { return 0 }, 0),
 		nil,
-		exec,
-		fs)
+		exec)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 	defer cancel()
 
