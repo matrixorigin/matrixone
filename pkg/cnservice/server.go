@@ -795,6 +795,7 @@ func (s *service) bootstrap() error {
 		defer cancel()
 		if err := s.bootstrapService.BootstrapUpgrade(ctx); err != nil {
 			if err != context.Canceled {
+				runtime.DefaultRuntime().Logger().Error("bootstrap system upgrade failed by: ", zap.Error(err))
 				panic(err)
 			}
 		}

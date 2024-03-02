@@ -93,7 +93,6 @@ func (v *versionHandle) HandleTenantUpgrade(
 	ctx context.Context,
 	tenantID int32,
 	txn executor.TxnExecutor) error {
-	
 	return nil
 }
 
