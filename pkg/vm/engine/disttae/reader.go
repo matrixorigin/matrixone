@@ -19,8 +19,6 @@ import (
 	"sort"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -35,10 +33,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"go.uber.org/zap"
 )
@@ -288,6 +288,12 @@ func newBlockReader(
 	fs fileservice.FileService,
 	proc *process.Process,
 ) *blockReader {
+	for _, blk := range blks {
+		trace.GetService().TxnReadBlock(
+			proc.TxnOperator,
+			tableDef.TblId,
+			blk.BlockID[:])
+	}
 	r := &blockReader{
 		withFilterMixin: withFilterMixin{
 			ctx:      ctx,

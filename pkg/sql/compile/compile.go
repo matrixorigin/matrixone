@@ -164,6 +164,7 @@ func (c *Compile) reset() {
 	c.tenant = ""
 	c.uid = ""
 	c.sql = ""
+	c.originSQL = ""
 	c.anal = nil
 	c.e = nil
 	c.ctx = nil
@@ -397,6 +398,12 @@ func (c *Compile) allocOperatorID() int32 {
 
 // Run is an important function of the compute-layer, it executes a single sql according to its scope
 func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
+	sql := c.originSQL
+	if sql == "" {
+		sql = c.sql
+	}
+	txnTrace.GetService().TxnExecute(c.proc.TxnOperator, sql)
+
 	var writeOffset uint64
 
 	start := time.Now()
@@ -4453,6 +4460,12 @@ func (c *Compile) fatalLog(retry int, err error) {
 		return
 	}
 
+	if retry == 0 &&
+		(moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) ||
+			moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged)) {
+		return
+	}
+
 	txnTrace.GetService().AddTxnError(c.proc.TxnOperator.Txn().ID, err)
 
 	v, ok := moruntime.ProcessLevelRuntime().
@@ -4461,16 +4474,14 @@ func (c *Compile) fatalLog(retry int, err error) {
 		return
 	}
 
-	if retry == 0 &&
-		(moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) ||
-			moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged)) {
-		return
-	}
-
 	logutil.Fatalf("BUG(RC): txn %s retry %d, error %+v\n",
 		hex.EncodeToString(c.proc.TxnOperator.Txn().ID),
 		retry,
 		err.Error())
+}
+
+func (c *Compile) SetOriginSQL(sql string) {
+	c.originSQL = sql
 }
 
 func (c *Compile) SetBuildPlanFunc(buildPlanFunc func() (*plan2.Plan, error)) {
