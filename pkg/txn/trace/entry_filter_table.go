@@ -45,7 +45,8 @@ func (f *tableEntryFilter) Filter(entry *EntryData) bool {
 	if entry.id != f.id {
 		return true
 	}
-	if entry == nil {
+
+	if len(entry.columns) == 0 {
 		return false
 	}
 
