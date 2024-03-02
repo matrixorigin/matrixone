@@ -94,7 +94,7 @@ const (
 	DROP_VIEW
 )
 
-// Describe the detailed information of the table column
+// ColumnInfo Describe the detailed information of the table column
 type ColumnInfo struct {
 	IsExits           bool
 	Name              string
@@ -115,9 +115,14 @@ type ColumnInfo struct {
 type UpgradeEntry struct {
 	Schema    string
 	TableName string
+	// UpgType declare the type of upgrade
 	UpgType   UpgradeType
 	TableType TableType
-	UpgSql    string
+	// UpgSql is used to perform upgrade operations
+	UpgSql string
+	// CheckFunc was used to check whether an upgrade is required
+	// return true if the system is already in the final state and does not need to be upgraded,
+	// otherwise return false
 	CheckFunc func(txn executor.TxnExecutor, accountId uint32) (bool, error)
 }
 
