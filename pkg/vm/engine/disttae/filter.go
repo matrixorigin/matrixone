@@ -110,7 +110,7 @@ func getConstBytesFromExpr(expr *plan.Expr, colDef *plan.ColDef, proc *process.P
 	return val, ok
 }
 
-func mustEvalColValueBinaryFunctionExpr(
+func mustColConstValueFromBinaryFuncExpr(
 	expr *plan.Expr_F, tableDef *plan.TableDef, proc *process.Process,
 ) (*plan.Expr_Col, []byte, bool) {
 	var (
@@ -250,7 +250,7 @@ func CompileFilterExpr(
 	case *plan.Expr_F:
 		switch exprImpl.F.Func.ObjName {
 		case "<=":
-			colExpr, val, ok := mustEvalColValueBinaryFunctionExpr(exprImpl, tableDef, proc)
+			colExpr, val, ok := mustColConstValueFromBinaryFuncExpr(exprImpl, tableDef, proc)
 			if !ok {
 				canCompile = false
 				return
@@ -283,7 +283,7 @@ func CompileFilterExpr(
 				return blkMeta.MustGetColumn(uint16(seqNum)).ZoneMap().AnyLEByValue(val), nil
 			}
 		case ">=":
-			colExpr, val, ok := mustEvalColValueBinaryFunctionExpr(exprImpl, tableDef, proc)
+			colExpr, val, ok := mustColConstValueFromBinaryFuncExpr(exprImpl, tableDef, proc)
 			if !ok {
 				canCompile = false
 				return
@@ -316,7 +316,7 @@ func CompileFilterExpr(
 				return blkMeta.MustGetColumn(uint16(seqNum)).ZoneMap().AnyGEByValue(val), nil
 			}
 		case ">":
-			colExpr, val, ok := mustEvalColValueBinaryFunctionExpr(exprImpl, tableDef, proc)
+			colExpr, val, ok := mustColConstValueFromBinaryFuncExpr(exprImpl, tableDef, proc)
 			if !ok {
 				canCompile = false
 				return
@@ -349,7 +349,7 @@ func CompileFilterExpr(
 				return blkMeta.MustGetColumn(uint16(seqNum)).ZoneMap().AnyGTByValue(val), nil
 			}
 		case "<":
-			colExpr, val, ok := mustEvalColValueBinaryFunctionExpr(exprImpl, tableDef, proc)
+			colExpr, val, ok := mustColConstValueFromBinaryFuncExpr(exprImpl, tableDef, proc)
 			if !ok {
 				canCompile = false
 				return
@@ -382,7 +382,7 @@ func CompileFilterExpr(
 				return blkMeta.MustGetColumn(uint16(seqNum)).ZoneMap().AnyLTByValue(val), nil
 			}
 		case "prefix_eq":
-			colExpr, val, ok := mustEvalColValueBinaryFunctionExpr(exprImpl, tableDef, proc)
+			colExpr, val, ok := mustColConstValueFromBinaryFuncExpr(exprImpl, tableDef, proc)
 			if !ok {
 				canCompile = false
 				return
@@ -414,14 +414,14 @@ func CompileFilterExpr(
 				}
 				return blkMeta.MustGetColumn(uint16(seqNum)).ZoneMap().PrefixEq(val), nil
 			}
+		// case "in":
 		// case "prefix_between":
 		// case "between"
-		// case "in":
 		// case "prefix_in":
 		// case "isnull", "is_null"
 		// case "isnotnull", "is_not_null"
 		case "=":
-			colExpr, val, ok := mustEvalColValueBinaryFunctionExpr(exprImpl, tableDef, proc)
+			colExpr, val, ok := mustColConstValueFromBinaryFuncExpr(exprImpl, tableDef, proc)
 			if !ok {
 				canCompile = false
 				return
