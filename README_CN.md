@@ -13,11 +13,11 @@
   <a href="https://www.codefactor.io/repository/github/matrixorigin/matrixone">
     <img src="https://www.codefactor.io/repository/github/matrixorigin/matrixone/badge?s=7280f4312fca2f2e6938fb8de5b726c5252541f0" alt="codefactor"/>
   </a>
-  <a href="https://docs.matrixorigin.cn/0.7.0/MatrixOne/Release-Notes/v0.7.0/">
-   <img src="https://img.shields.io/badge/Release-v0.7.0-green.svg" alt="release"/>
+  <a href="https://docs.matrixorigin.cn/1.1.1/MatrixOne/Release-Notes/v1.1.1/">
+   <img src="https://img.shields.io/badge/Release-1.1.1-green.svg" alt="release"/>
   </a>
   <br>
-  <a href="https://docs.matrixorigin.cn//0.7.0/">
+  <a href="https://docs.matrixorigin.cn//1.1.1/">
     <b>Docs</b>
   </a>
   <b>||</b>
@@ -41,8 +41,7 @@
 
 </p>
 
-<h5 align="center">如果你对 MatrixOne 项目感兴趣的话，请帮忙给 MatrixOne 点击 Star, Fork 和 Watch 三连吧，谢谢!</h5>
-
+<h5 align="center">如果你对 MatrixOne 项目感兴趣的话，请帮忙给 MatrixOne 点击 Star, Fork 和 Watch 三连吧，谢谢！</h5>
 
 目录
 ========
@@ -57,211 +56,205 @@
 
 ## <a id="what-is-matrixone">MatrixOne 是什么？</a>
 
-MatrixOne 是一款面向未来的超融合异构云原生数据库，通过超融合数据引擎支持事务/分析/流处理等混合工作负载，通过异构云原生架构支持跨机房协同/多地协同/云边协同。简化开发运维，消简数据碎片，打破数据的系统、位置和创新边界。
+MatrixOne 是一款超融合异构分布式数据库，通过云原生化和存储、计算、事务分离的架构构建 HSTAP 超融合数据引擎，实现单一数据库系统支持 OLTP、OLAP、流计算等多种业务负载，并且支持公有云、私有云、边缘云部署和使用，实现异构基础设施的兼容。
 <p align="center">
-  <img alt="MatrixOne" height="500" src="https://github.com/matrixorigin/artwork/blob/main/docs/overview/all-in-one.png?raw=true">
+  <img alt="MatrixOne" height="500" src="https://community-shared-data-1308875761.cos.ap-beijing.myqcloud.com/artwork/docs/overview/mo-new-arch.png?raw=true">
 </p>
 
-##  🎯 <a id="key-features">核心特性</a>
+## 🎯 <a id="key-features">核心特性</a>
+
 ### 💥 **超融合引擎**
 
 <details>
   <summary><b><font size=4>超融合引擎</b></font></summary>
-           融合数据引擎，单数据库即可支持TP、AP、时序、机器学习等混合工作负载。
+    HTAP 数据引擎，单数据库即可支持 TP、AP、时序、机器学习等混合工作负载。
 </details>
 
 <details>
   <summary><b><font size=4>内置流引擎</b></font></summary>
-     利用独有的增量物化视图能力，无需跨数据库即可实现实时数据流处理。
+     内置流计算引擎，支持实时数据流入、实时数据转换及实时数据查询。
 </details>
-
 
 ### ☁️ **异构云原生**
 
+<details>
+  <summary><b><font size=4>存算分离架构</b></font></summary>
+     将存储、计算、事务三层解耦，通过完全容器化的设计来实现极致扩展。
+</details>
 
 <details>
-  <summary><b><font size=4>异构统一</b></font></summary>
+  <summary><b><font size=4>多基础设施兼容</b></font></summary>
      支持跨机房协同/多地协同/云边协同，实现无感知扩缩容，提供高效统一的数据管理。
 </details>
 
+### 🚀 **极致性能**
+
 <details>
-  <summary><b><font size=4>多地多活</b></font></summary>
-     MatrixOne采用最优的一致性协议，实现业内最短网络延迟的多地多活。
+  <summary><b><font size=4>高性能执行引擎</b></font></summary>
+  通过 Compute Node 和 Transaction node 的灵活配合兼顾点查询与批处理，对于 OLTP 和 OLAP 都具备极致性能。
+  </details>
+
+<details>
+  <summary><b><font size=4>企业级高可用</b></font></summary>
+     在领先的 Multi-Raft 复制状态机模型下建立强一致共享日志，可在避免数据重复的同时保证集群的高可用。
 </details>
 
-
-### 🚀 **极致的性能**
-
-<details>
-  <summary><b><font size=4>高性能</b></font></summary>     特有的因子化计算和向量化执行引擎，支持极速的复杂查询。单表、星型和雪花查询都具备极速分析性能。</details>
+### 🖊️ **简单易用**
 
 <details>
-  <summary><b><font size=4>强一致</b></font></summary>
-     提供跨存储引擎的高性能全局分布式事务能力，在保证极速分析性能的同时支持更新、删除和实时点查询。
+  <summary><b><font size=4>自带多租户能力</b></font></summary>
+  自带多租户功能，租户既相互隔离，独立扩缩容又可进行统一管理，简化上层应用的多租户设计复杂度。
+  </details>
+
+<details>
+  <summary><b><font size=4>MySQL 高度兼容</b></font></summary>
+     MatrixOne 与 MySQL8.0 高度兼容，包括传输协议，SQL 语法和生态工具，降低使用和迁移门槛。
 </details>
 
+### 💰 **高性价比**
+
 <details>
-  <summary><b><font size=4>高可用</b></font></summary>
-     存算分离，支持存储节点与计算节点独立扩缩容，高效应对负载变化。
+  <summary><b><font size=4>高效存储设计</b></font></summary>
+  以成本低廉的对象存储作为主存储，通过纠删码技术仅需要 150% 左右的数据冗余即可实现高可用，同时提供高速缓存能力，通过冷热分离多级存储方案兼顾成本和性能。
+
+  </details>
+
+<details>
+  <summary><b><font size=4>资源灵活调配</b></font></summary>
+    用户可以根据业务情况自由调整为 OLTP 及 OLAP 分配的资源比例，实现资源最大化利用。
 </details>
 
+### 🔒 **企业级安全合规**
 
+ 采用用户角色访问控制（RBAC）、TLS 连接、数据加密等手段，建立多级安全防护体系，保障企业级数据安全和合规。
 
 ## 💎 **<a id="user-values">用户价值</a>**
+
 <details>
   <summary><b><font size=4>简化数据开发和运维</b></font></summary>
-      随着业务发展，企业使用的数据引擎和中间件越来越多，而每一个数据引擎平均依赖5+个基础组件，存储3+个数据副本，每一个数据引擎都要各自安装、监控、补丁和升级。这些都导致数据引擎的选型、开发及运维成本高昂且不可控。在MatrixOne的一体化架构下，用户使用单个数据库即可服务多种数据应用，引入的数据组件和技术栈减少80%，大大简化了数据库管理和维护的成本。
+      随着业务发展，企业使用的数据引擎和中间件越来越多，而每一个数据引擎平均依赖 5+ 个基础组件，存储 3+ 个数据副本，每一个数据引擎都要各自安装、监控、补丁和升级。这些都导致数据引擎的选型、开发及运维成本高昂且不可控。在 MatrixOne 的一体化架构下，用户使用单个数据库即可服务多种数据应用，引入的数据组件和技术栈减少 80%，大大简化了数据库管理和维护的成本。
 </details>
 <details>
   <summary><b><font size=4>消减数据碎片和不一致</b></font></summary>
-    在既有复杂的系统架构内，存在多条数据管道多份数据存储冗余。数据依赖复杂，导致数据更新维护复杂，上下游数据不一致问题频发，人工校对难度增大。MatrixOne的高内聚架构和独有的增量物化视图能力，使得下游可以支持上游数据的实时更新，摆脱冗余的ETL流程，实现端到端实时数据处理。
+    在既有复杂的系统架构内，存在多条数据管道多份数据存储冗余。数据依赖复杂，导致数据更新维护复杂，上下游数据不一致问题频发，人工校对难度增大。MatrixOne 的高内聚架构和独有的增量物化视图能力，使得下游可以支持上游数据的实时更新，摆脱冗余的 ETL 流程，实现端到端实时数据处理。
 </details>
 <details>
   <summary><b><font size=4>无需绑定基础设施</b></font></summary>
-    因为基础设施的碎片化，企业的私有化数据集群和公有云数据集群之间数据架构和建设方案割裂，数据迁移成本高。而数据上云一旦选型确定数据库厂商，后续的集群扩容、其他组件采购等都将被既有厂商绑定。MatrixOne提供统一的云边基础架构和高效统一的数据管理，企业数据架构不再被基础设施绑定，实现单数据集群跨云无感知扩缩容，提升性价比。
+    因为基础设施的碎片化，企业的私有化数据集群和公有云数据集群之间数据架构和建设方案割裂，数据迁移成本高。而数据上云一旦选型确定数据库厂商，后续的集群扩容、其他组件采购等都将被既有厂商绑定。MatrixOne 提供统一的云边基础架构和高效统一的数据管理，企业数据架构不再被基础设施绑定，实现单数据集群跨云无感知扩缩容，提升性价比。
 </details>
 <details>
   <summary><b><font size=4>极速的分析性能</b></font></summary>  
-    目前，由于缓慢的复杂查询性能以及冗余的中间表，数据仓库在业务敏捷性上的表现不尽人意，大量宽表的创建也严重影响迭代速度。MatrixOne通过特有的因子化计算和向量化执行引擎，支持极速的复杂查询，单表、星型和雪花查询都具备极速分析性能。
+    目前，由于缓慢的复杂查询性能以及冗余的中间表，数据仓库在业务敏捷性上的表现不尽人意，大量宽表的创建也严重影响迭代速度。MatrixOne 通过特有的因子化计算和向量化执行引擎，支持极速的复杂查询，单表、星型和雪花查询都具备极速分析性能。
 </details>
 <details>
-  <summary><b><font size=4>像 TP 一样可靠的 AP 体验</b></font></summary>   
-    传统数据仓库数据更新代价非常高，很难做到数据更新即可见。在营销风控，无人驾驶，智能工厂等实时计算要求高的场景或者上游数据变化快的场景中，当前的大数据分析系统无法支持增量更新，往往需要做全量的更新，耗时耗力。MatrixOne通过提供跨存储引擎的高性能全局分布式事务能力，支持条级别的实时增量更新，在保证极速分析性能的同时支持更新、删除和实时点查询。
+  <summary><b><font size=4>像 TP 一样可靠的 AP 体验</b></font></summary>
+    传统数据仓库数据更新代价非常高，很难做到数据更新即可见。在营销风控，无人驾驶，智能工厂等实时计算要求高的场景或者上游数据变化快的场景中，当前的大数据分析系统无法支持增量更新，往往需要做全量的更新，耗时耗力。MatrixOne 通过提供跨存储引擎的高性能全局分布式事务能力，支持条级别的实时增量更新，在保证极速分析性能的同时支持更新、删除和实时点查询。
 </details>
 <details>
-  <summary><b><font size=4>不停服自动扩缩容</b></font></summary>   
-    传统数仓无法兼顾性能和灵活度，性价比无法做到最优。MatrixOne基于存算分离的技术架构，支持存储节点与计算节点独立扩缩容，高效应对负载变化。
+  <summary><b><font size=4>不停服自动扩缩容</b></font></summary>
+    传统数仓无法兼顾性能和灵活度，性价比无法做到最优。MatrixOne 基于存算分离的技术架构，支持存储节点与计算节点独立扩缩容，高效应对负载变化。
 </details>
 
 ## 🔎 <a id="architecture">架构一览</a>
-MatrixOne 的架构图如下图所示：   
+
+MatrixOne 的架构图如下图所示：
 <p align="center">
-  <img alt="MatrixOne" height="500" src="https://github.com/matrixorigin/artwork/blob/main/docs/overview/matrixone_new_arch.png?raw=true">
+  <img alt="MatrixOne" height="500" src="https://community-shared-data-1308875761.cos.ap-beijing.myqcloud.com/artwork/docs/overview/architecture/architecture-1.png?raw=true">
 </p>
 
-关于更详细的 MatrixOne 技术架构，可以参考[MatrixOne 架构设计](https://docs.matrixorigin.cn/0.7.0/MatrixOne/Overview/matrixone-architecture-design/)。
+关于更详细的 MatrixOne 技术架构，可以参考[MatrixOne 架构设计](https://docs.matrixorigin.cn/1.1.1/MatrixOne/Overview/architecture/matrixone-architecture-design/)。
 
 ## ⚡️ <a id="quick-start">快速上手</a>
 
 ### ⚙️ 安装 MatrixOne
 
-MatrixOne 目前支持 Linux 及 MacOS 系统，您可以通过源码安装或者 docker 安装。其他安装方式请参见[MatrixOne 安装指南](https://docs.matrixorigin.cn/0.7.0/MatrixOne/Get-Started/install-standalone-matrixone/)
+MatrixOne 目前支持 Linux 及 MacOS 系统，您可以通过源码安装、二进制包安装或者 docker 安装。详情方式请参见[MatrixOne 安装指南](https://docs.matrixorigin.cn/1.1.1/MatrixOne/Get-Started/install-standalone-matrixone/)
 
 #### 使用源代码搭建
 
-**步骤 1.** 搭建 Go 语言环境（至少需要 1.20 版本）
+**步骤 1.前置依赖** 
+
+1. 搭建 Go 语言环境（至少需要 1.20 版本）
 
 点击 <a href="https://go.dev/doc/install" target="_blank">Go Download and install</a> 入到 **Go** 的官方文档，按照官方指导安装步骤完成 **Go** 语言的安装。
 
-**步骤 2.** 获取 MatrixOne 源码，构建 MatrixOne
+2. 安装 GCC/Clang
+
+点击 <a href="https://gcc.gnu.org/install/" target="_blank">GCC Download and install</a> 进入到 **GCC** 的官方文档，按照官方指导安装步骤完成 **GCC** 的安装。
+
+3. 安装 Git
+
+通过[官方文档](https://git-scm.com/download)安装 Git。
+
+4. 安装 MySQL Client
+
+点击 <a href="https://dev.mysql.com/downloads/mysql" target="_blank">MySQL Community Downloads</a>，进入到 MySQL 客户端下载安装页面，根据你的操作系统和硬件环境，按需选择下载安装包进行安装并配置环境变量
+
+**步骤 2.安装 mo_ctl 工具** 
+
+[mo_ctl](https://github.com/matrixorigin/mo_ctl_standalone) 是一个部署安装和管理 MatrixOne 的命令行工具，使用它可以非常方便的对 MatrixOne 进行各类操作。
+
+通过以下命令一键安装 mo_ctl 工具：
+```  
+wget https://raw.githubusercontent.com/matrixorigin/mo_ctl_standalone/main/install.sh && sudo -u $(whoami) bash +x ./install.sh
+```
+
+如需获取完整的使用细节可以参考 [mo_ctl 工具指南](https://docs.matrixorigin.cn/1.1.1/MatrixOne/Maintain/mo_ctl/#_3)。
+
+**步骤 3.一键安装 MatrixOne** 
 
 根据您的需要，选择您所获取的代码永远保持最新，还是获得稳定版本的代码。
 
-- *选项 1*：获取 MatrixOne(开发版本) 代码，搭建 MatrixOne
+- *选项 1*：获取 MatrixOne(开发版本) 
 
-**main** 分支是默认分支，主分支上的代码总是最新的，但不够稳定。
+    **main** 分支是默认分支，主分支上的代码总是最新的，但不够稳定。
 
-1. 获取 MatrixOne(开发版本) 代码方法如下：
-
-    ```shell
-    git clone https://github.com/matrixorigin/matrixone.git
-    cd matrixone
+    ```  
+    mo_ctl deploy main
     ```
 
-2. 运行 `make build` 编译文件：
+- *选项 2*：获取 MatrixOne (稳定版本) 
+
+    如果您想获得 MatrixOne 发布的最新稳定版本，请先从 **main** 切换选择至 **1.1.1** 版本分支。
 
     ```
-    make build
+    mo_ctl deploy 1.1.1
     ```
 
-    __Tips__: 你也可以运行`make debug`与`make clean`或者其他任何`Makefile`支持的命令；`make debug` 可以用来调试构建进程，`make clean` 可以清除构建进程。
+**步骤 4.启动 MatrixOne 服务**
 
-- *选项 2*：获取 MatrixOne(稳定版本) 代码，搭建 MatrixOne
+通过 `mo_ctl start` 命令一键启动 MatrixOne 服务。MatrixOne 的相关运行日志会在 `/data/mo/logs/` 中。
 
-1. 如果您想获得 MatrixOne 发布的最新稳定版本代码，请先从 **main** 切换选择至 **0.8.0** 版本分支。
+__Tips__: 首次启动 MatrixOne 大致需要花费 20 至 30 秒的时间，在稍作等待后，你便可以连接至 MatrixOne。
 
-    ```
-    git clone https://github.com/matrixorigin/matrixone.git
-    git checkout 0.8.0
-    cd matrixone
-    ```
+**步骤 5.连接 MatrixOne 服务**
 
-2. 运行 `make config` 和 `make build` 编译文件：
+通过 `mo_ctl connect` 命令一键连接 MatrixOne 服务。
 
-    ```
-    make config
-    make build
-    ```
-
-    __Tips__: 你也可以运行`make debug`与`make clean`或者其他任何`Makefile`支持的命令；`make debug` 可以用来调试构建进程，`make clean` 可以清除构建进程。
-
-**步骤 3.** 启动 MatrixOne 服务：
-
-- **在终端的前台启动 MatrixOne 服务**
-
-    该启动方式会在终端的前台运行 `mo-service` 进行，实时打印系统日志。如果你想停止 MatrixOne 服务器，只需按 CTRL+C 或关闭当前终端。
-
-    ```
-    # Start mo-service in the frontend
-    ./mo-service -launch ./etc/quickstart/launch.toml
-    ```
-
-- **在终端的后台启动 MatrixOne 服务**
-
-    该启动方法会在后台运行 `mo-service` 进程，系统日志将重定向到 `test.log` 文件中。如果你想停止 MatrixOne 服务器，你需要通过以下命令查找出它的 `PID` 进程号并消除进程。下面是整个过程的完整示例。
-
-    ```
-    # Start mo-service in the backend
-    ./mo-service --daemon --launch ./etc/quickstart/launch.toml &> test.log &
-
-    # Find mo-service PID
-    ps aux | grep mo-service
-
-    [root@VM-0-10-centos ~]# ps aux | grep mo-service
-    root       15277  2.8 16.6 8870276 5338016 ?     Sl   Nov25 156:59 ./mo-service -launch ./etc/quickstart/launch.toml
-    root      836740  0.0  0.0  12136  1040 pts/0    S+   10:39   0:00 grep --color=auto mo-service
-
-    # Kill the mo-service process
-    kill -9 15277
-    ```
-
-    __Tips__: 如上述示例所示，使用命令 `ps aux | grep mo-service` 首先查找出 MatrixOne 运行的进程号为 `15277`，`kill -9 15277` 即表示停止进程号为 `15277` 的 MatrixOne。
-
+__Tips__: 连接和登录账号为初始账号 `root` 和密码 `111`，请在登录 MatrixOne 后及时修改初始密码，参见[密码管理](https://docs.matrixorigin.cn/1.1.1/MatrixOne/Security/password-mgmt/)。修改登录用户名或密码后重新登录同样需要通过 `mo_ctl set_conf` 的方式设置新的用户名和密码，详情可以参考 [mo_ctl 工具指南](https://docs.matrixorigin.cn/1.1.1/MatrixOne/Maintain/mo_ctl/#_3)。
 
 #### 使用 Docker
 
-**步骤 1.** 确保 Docker 已经安装
+**步骤 1.安装 Docker** 
 
-点击<a href="https://docs.docker.com/get-docker/" target="_blank">Get Docker</a>，进入 Docker 的官方文档页面，根据你的操作系统，下载安装对应的 Docker。
+点击 <a href="https://docs.docker.com/get-docker/" target="_blank">Get Docker</a>，进入 Docker 的官方文档页面，根据你的操作系统，下载安装对应的 Docker，Docker 版本推荐选择在 20.10.18 及以上，且尽量保持 Docker client 和 Docker server 的版本一致。
 
-请检查 Docker daemon 是否正在后台运行，并确认 Docker 版本：
+**步骤 2.获取 MatrixOne 镜像并启动** 
 
-```
-$ docker --version
-```
+使用以下命令将从 Docker Hub 中拉取 MatrixOne 镜像，你可以选择稳定版本镜像，或开发版本镜像，当 Tag 为 `latest` 时获取最新稳定版本。
 
-安装成功，代码示例如下：
-
-```
-Docker version 20.10.17, build 100c701
-```
-
-**步骤 2.** 创建并运行容器
-
-使用以下命令将从 Docker Hub 中拉取 MatrixOne 镜像，你可以选择稳定版本镜像，或开发版本镜像。
-
-- 稳定版本的镜像（0.8.0）
+- 稳定版本的镜像（1.1.1）
 
 ```bash
-docker pull matrixorigin/matrixone:0.8.0
-docker run -d -p 6001:6001 --name matrixone matrixorigin/matrixone:0.8.0
+docker pull matrixorigin/matrixone:1.1.1
+docker run -d -p 6001:6001 --name matrixone matrixorigin/matrixone:1.1.1
 ```
 
 如果你使用的是中国大陆的网络，你可以拉取阿里云上的 MatrixOne 稳定版本镜像：
 
 ```bash
-docker pull registry.cn-shanghai.aliyuncs.com/matrixorigin/matrixone:0.8.0
-docker run -d -p 6001:6001 --name matrixone registry.cn-shanghai.aliyuncs.com/matrixorigin/matrixone:0.8.0
+docker pull registry.cn-shanghai.aliyuncs.com/matrixorigin/matrixone:1.1.1
+docker run -d -p 6001:6001 --name matrixone registry.cn-shanghai.aliyuncs.com/matrixorigin/matrixone:1.1.1
 ```
 
 - 开发版本的镜像
@@ -280,55 +273,793 @@ docker pull registry.cn-shanghai.aliyuncs.com/matrixorigin/matrixone:nightly-com
 docker run -d -p 6001:6001 --name matrixone registry.cn-shanghai.aliyuncs.com/matrixorigin/matrixone:nightly-commitnumber
 ```
 
-!!! info
-     如上面代码所示，*nightly* 为标识的 Tag 版本每天都进行更新，请注意获取最新的镜像。
+__Note__: 若 Docker 版本低于 20.10.18 或者 Docker client 和 Docker server 的版本不一致，推荐同时升级到 Docker 最新稳定版本后再尝试。若坚持使用，需要在 ```docker run``` 命令中加上参数 ```--privileged=true```，如：
 
-运行 Docker Hub 时需要输入用户名和密码，获取用户名和密码可以参考**连接 MatrixOne 服务**章节所述。
+  ```bash
+    docker run -d -p 6001:6001 --name matrixone --privileged=true matrixorigin/matrixone:1.1.1
+  ```
 
-### 🌟 连接 MatrixOne 服务
+__Tips__: 首次启动 MatrixOne 大致需要花费 20 至 30 秒的时间，在稍作等待后，你便可以使用 MySQL 客户端连接至 MatrixOne。
+
+**步骤 3.连接 MatrixOne 服务**
 
 1. 安装 MySQL 客户端
 
-  MatrixOne 支持 MySQL 连接协议，因此您可以使用各种语言通过 MySQL 客户机程序进行连接。  
-  目前，MatrixOne 只兼容 Oracle MySQL 客户端，因此一些特性可能无法在 MariaDB、Percona 客户端下正常工作。  
+MatrixOne 支持 MySQL 连接协议，因此您可以使用各种语言通过 MySQL 客户机程序进行连接。  
+目前，MatrixOne 只兼容 Oracle MySQL 客户端，因此一些特性可能无法在 MariaDB、Percona 客户端下正常工作。  
 
-  安装部署 MySQL 客户端请进入到 [MySQL Community Downloads](https://dev.mysql.com/downloads/mysql/) 页面下载：
+点击 <a href="https://dev.mysql.com/downloads/mysql" target="_blank">MySQL Community Downloads</a>，进入到 MySQL 客户端下载安装页面，根据你的操作系统和硬件环境，按需选择下载安装包进行安装。
 
-     - 根据你的系统，下拉选择 **Select Operating System**。
-     - 下拉选择 **Select OS Version**，建议选择 8.0.30 版本及以上。
-
-   安装完成后，按照<a href="https://dev.mysql.com/doc/refman/8.0/en/installing.html" target="_blank">Installing and Upgrading MySQL</a>指导，配置 MySQL 客户端环境变量。
+__Tips__: 建议 MySQL 客户端版本为 8.0.30 版本及以上。
 
 2. 连接 MatrixOne 服务
 
-你按照上述步骤完成安装启动 MatrixOne，默认在启动模式下，产生很多日志，接下来你可以启动新的终端，使用 MySQL 命令行客户端来连接 MatrixOne 服务。  
+你可以使用 MySQL 命令行客户端来连接 MatrixOne。打开一个新的终端，直接输入以下指令：
 
-```
-mysql -h IP -P PORT -uUsername -p
-```
+       ```
+       mysql -h 127.0.0.1 -P 6001 -uroot -p
+       Enter password:  # 初始密码默认为 111
 
-输入完成上述命令后，终端会提示你提供用户名和密码。你可以使用我们的内置帐号：
-
-- user: dump
-- password: 111
-
-也可以使用 MySQL 客户端下述命令行，输入密码，来连接 MatrixOne 服务：
-
-```
-mysql -h 127.0.0.1 -P 6001 -udump -p
-Enter password:
-```
 目前，MatrixOne 只支持 TCP 监听。
+
+### 👏贡献者
+
+<!-- readme: contributors -start -->
+<table>
+<tr>
+    <td align="center">
+        <a href="https://github.com/nnsgmsone">
+            <img src="https://avatars.githubusercontent.com/u/31609524?v=4" width="30;" alt="nnsgmsone"/>
+            <br />
+            <sub><b>Nnsgmsone</b></sub>
+        </a>
+    </td>
+    <td align="center">
+        <a href="https://github.com/XuPeng-SH">
+            <img src="https://avatars.githubusercontent.com/u/39627130?v=4" width="30;" alt="XuPeng-SH"/>
+            <br />
+            <sub><b>XuPeng-SH</b></sub>
+        </a>
+    </td>
+    <td align="center">
+        <a href="https://github.com/zhangxu19830126">
+            <img src="https://avatars.githubusercontent.com/u/2995754?v=4" width="30;" alt="zhangxu19830126"/>
+            <br />
+            <sub><b>Fagongzi</b></sub>
+        </a>
+    </td>
+    <td align="center">
+        <a href="https://github.com/reusee">
+            <img src="https://avatars.githubusercontent.com/u/398457?v=4" width="30;" alt="reusee"/>
+            <br />
+            <sub><b>Reusee</b></sub>
+        </a>
+    </td>
+    <td align="center">
+        <a href="https://github.com/ouyuanning">
+            <img src="https://avatars.githubusercontent.com/u/45346669?v=4" width="30;" alt="ouyuanning"/>
+            <br />
+            <sub><b>Ouyuanning</b></sub>
+        </a>
+    </td>
+    <td align="center">
+        <a href="https://github.com/daviszhen">
+            <img src="https://avatars.githubusercontent.com/u/60595215?v=4" width="30;" alt="daviszhen"/>
+            <br />
+            <sub><b>Daviszhen</b></sub>
+        </a>
+    </td></tr>
+<tr>
+    <td align="center">
+        <a href="https://github.com/aunjgr">
+            <img src="https://avatars.githubusercontent.com/u/523063?v=4" width="30;" alt="aunjgr"/>
+            <br />
+            <sub><b>BRong Njam</b></sub>
+        </a>
+    </td>
+    <td align="center">
+        <a href="https://github.com/sukki37">
+            <img src="https://avatars.githubusercontent.com/u/77312370?v=4" width="30;" alt="sukki37"/>
+            <br />
+            <sub><b>Maomao</b></sub>
+        </a>
+    </td>
+    <td align="center">
+        <a href="https://github.com/iamlinjunhong">
+            <img src="https://avatars.githubusercontent.com/u/49111204?v=4" width="30;" alt="iamlinjunhong"/>
+            <br />
+            <sub><b>Iamlinjunhong</b></sub>
+        </a>
+    </td>
+    <td align="center">
+        <a href="https://github.com/jiangxinmeng1">
+            <img src="https://avatars.githubusercontent.com/u/51114574?v=4" width="30;" alt="jiangxinmeng1"/>
+            <br />
+            <sub><b>Jiangxinmeng1</b></sub>
+        </a>
+    </td>
+    <td align="center">
+        <a href="https://github.com/jianwan0214">
+            <img src="https://avatars.githubusercontent.com/u/32733096?v=4" width="30;" alt="jianwan0214"/>
+            <br />
+            <sub><b>Jianwan0214</b></sub>
+        </a>
+    </td>
+    <td align="center">
+        <a href="https://github.com/LeftHandCold">
+            <img src="https://avatars.githubusercontent.com/u/14086886?v=4" width="30;" alt="LeftHandCold"/>
+            <br />
+            <sub><b>GreatRiver</b></sub>
+        </a>
+    </td></tr>
+<tr>
+    <td align="center">
+        <a href="https://github.com/w-zr">
+            <img src="https://avatars.githubusercontent.com/u/28624654?v=4" width="30;" alt="w-zr"/>
+            <br />
+            <sub><b>Wei Ziran</b></sub>
+        </a>
+    </td>
+    <td align="center">
+        <a href="https://github.com/m-schen">
+            <img src="https://avatars.githubusercontent.com/u/59043531?v=4" width="30;" alt="m-schen"/>
+            <br />
+            <sub><b>Chenmingsong</b></sub>
+        </a>
+    </td>
+    <td align="center">
+        <a href="https://github.com/dengn">
+            <img src="https://avatars.githubusercontent.com/u/4965857?v=4" width="30;" alt="dengn"/>
+            <br />
+            <sub><b>Dengn</b></sub>
+        </a>
+    </td>
+    <td align="center">
+        <a href="https://github.com/aptend">
+            <img src="https://avatars.githubusercontent.com/u/49832303?v=4" width="30;" alt="aptend"/>
+            <br />
+            <sub><b>Aptend</b></sub>
+        </a>
+    </td>
+    <td align="center">
+        <a href="https://github.com/lni">
+            <img src="https://avatars.githubusercontent.com/u/30930154?v=4" width="30;" alt="lni"/>
+            <br />
+            <sub><b>Lni</b></sub>
+        </a>
+    </td>
+    <td align="center">
+        <a href="https://github.com/xzxiong">
+            <img src="https://avatars.githubusercontent.com/u/3927687?v=4" width="30;" alt="xzxiong"/>
+            <br />
+            <sub><b>Jackson</b></sub>
+        </a>
+    </td></tr>
+<tr>
+    <td align="center">
+        <a href="https://github.com/YANGGMM">
+            <img src="https://avatars.githubusercontent.com/u/26563383?v=4" width="30;" alt="YANGGMM"/>
+            <br />
+            <sub><b>YANGGMM</b></sub>
+        </a>
+    </td>
+    <td align="center">
+        <a href="https://github.com/qingxinhome">
+            <img src="https://avatars.githubusercontent.com/u/70939751?v=4" width="30;" alt="qingxinhome"/>
+            <br />
+            <sub><b>Qingxinhome</b></sub>
+        </a>
+    </td>
+    <td align="center">
+        <a href="https://github.com/badboynt1">
+            <img src="https://avatars.githubusercontent.com/u/112734932?v=4" width="30;" alt="badboynt1"/>
+            <br />
+            <sub><b>Nitao</b></sub>
+        </a>
+    </td>
+    <td align="center">
+        <a href="https://github.com/broccoliSpicy">
+            <img src="https://avatars.githubusercontent.com/u/93440049?v=4" width="30;" alt="broccoliSpicy"/>
+            <br />
+            <sub><b>BroccoliSpicy</b></sub>
+        </a>
+    </td>
+    <td align="center">
+        <a href="https://github.com/mooleetzi">
+            <img src="https://avatars.githubusercontent.com/u/42628885?v=4" width="30;" alt="mooleetzi"/>
+            <br />
+            <sub><b>Mooleetzi</b></sub>
+        </a>
+    </td>
+    <td align="center">
+        <a href="https://github.com/fengttt">
+            <img src="https://avatars.githubusercontent.com/u/169294?v=4" width="30;" alt="fengttt"/>
+            <br />
+            <sub><b>Fengttt</b></sub>
+        </a>
+    </td></tr>
+<tr>
+    <td align="center">
+        <a href="https://github.com/zzl200012">
+            <img src="https://avatars.githubusercontent.com/u/57308069?v=4" width="30;" alt="zzl200012"/>
+            <br />
+            <sub><b>Kutori</b></sub>
+        </a>
+    </td>
+    <td align="center">
+        <a href="https://github.com/lacrimosaprinz">
+            <img src="https://avatars.githubusercontent.com/u/43231571?v=4" width="30;" alt="lacrimosaprinz"/>
+            <br />
+            <sub><b>Prinz</b></sub>
+        </a>
+    </td>
+    <td align="center">
+        <a href="https://github.com/guguducken">
+            <img src="https://avatars.githubusercontent.com/u/22561920?v=4" width="30;" alt="guguducken"/>
+            <br />
+            <sub><b>Brown</b></sub>
+        </a>
+    </td>
+    <td align="center">
+        <a href="https://github.com/dongdongyang33">
+            <img src="https://avatars.githubusercontent.com/u/47596332?v=4" width="30;" alt="dongdongyang33"/>
+            <br />
+            <sub><b>Dongdongyang</b></sub>
+        </a>
+    </td>
+    <td align="center">
+        <a href="https://github.com/JackTan25">
+            <img src="https://avatars.githubusercontent.com/u/60096118?v=4" width="30;" alt="JackTan25"/>
+            <br />
+            <sub><b>Boyu Tan</b></sub>
+        </a>
+    </td>
+    <td align="center">
+        <a href="https://github.com/cnutshell">
+            <img src="https://avatars.githubusercontent.com/u/20291742?v=4" width="30;" alt="cnutshell"/>
+            <br />
+            <sub><b>Cui Guoke</b></sub>
+        </a>
+    </td></tr>
+<tr>
+    <td align="center">
+        <a href="https://github.com/JinHai-CN">
+            <img src="https://avatars.githubusercontent.com/u/33142505?v=4" width="30;" alt="JinHai-CN"/>
+            <br />
+            <sub><b>Jin Hai</b></sub>
+        </a>
+    </td>
+    <td align="center">
+        <a href="https://github.com/lignay">
+            <img src="https://avatars.githubusercontent.com/u/58507761?v=4" width="30;" alt="lignay"/>
+            <br />
+            <sub><b>Matthew</b></sub>
+        </a>
+    </td>
+    <td align="center">
+        <a href="https://github.com/bbbearxyz">
+            <img src="https://avatars.githubusercontent.com/u/71327518?v=4" width="30;" alt="bbbearxyz"/>
+            <br />
+            <sub><b>Bbbearxyz</b></sub>
+        </a>
+    </td>
+    <td align="center">
+        <a href="https://github.com/tianyahui-python">
+            <img src="https://avatars.githubusercontent.com/u/39303074?v=4" width="30;" alt="tianyahui-python"/>
+            <br />
+            <sub><b>Tianyahui-python</b></sub>
+        </a>
+    </td>
+    <td align="center">
+        <a href="https://github.com/wanglei4687">
+            <img src="https://avatars.githubusercontent.com/u/74483764?v=4" width="30;" alt="wanglei4687"/>
+            <br />
+            <sub><b>Wanglei</b></sub>
+        </a>
+    </td>
+    <td align="center">
+        <a href="https://github.com/triump2020">
+            <img src="https://avatars.githubusercontent.com/u/63033222?v=4" width="30;" alt="triump2020"/>
+            <br />
+            <sub><b>Triump2020</b></sub>
+        </a>
+    </td></tr>
+<tr>
+    <td align="center">
+        <a href="https://github.com/heni02">
+            <img src="https://avatars.githubusercontent.com/u/113406637?v=4" width="30;" alt="heni02"/>
+            <br />
+            <sub><b>Heni02</b></sub>
+        </a>
+    </td>
+    <td align="center">
+        <a href="https://github.com/wanhanbo">
+            <img src="https://avatars.githubusercontent.com/u/97089788?v=4" width="30;" alt="wanhanbo"/>
+            <br />
+            <sub><b>Wanhanbo</b></sub>
+        </a>
+    </td>
+    <td align="center">
+        <a href="https://github.com/iceTTTT">
+            <img src="https://avatars.githubusercontent.com/u/74845916?v=4" width="30;" alt="iceTTTT"/>
+            <br />
+            <sub><b>IceTTTT</b></sub>
+        </a>
+    </td>
+    <td align="center">
+        <a href="https://github.com/volgariver6">
+            <img src="https://avatars.githubusercontent.com/u/18366608?v=4" width="30;" alt="volgariver6"/>
+            <br />
+            <sub><b>LiuBo</b></sub>
+        </a>
+    </td>
+    <td align="center">
+        <a href="https://github.com/taofengliu">
+            <img src="https://avatars.githubusercontent.com/u/81315978?v=4" width="30;" alt="taofengliu"/>
+            <br />
+            <sub><b>刘陶峰</b></sub>
+        </a>
+    </td>
+    <td align="center">
+        <a href="https://github.com/Ariznawlll">
+            <img src="https://avatars.githubusercontent.com/u/108530700?v=4" width="30;" alt="Ariznawlll"/>
+            <br />
+            <sub><b>Ariznawlll</b></sub>
+        </a>
+    </td></tr>
+<tr>
+    <td align="center">
+        <a href="https://github.com/goodMan-code">
+            <img src="https://avatars.githubusercontent.com/u/74952516?v=4" width="30;" alt="goodMan-code"/>
+            <br />
+            <sub><b>GoodMan-code</b></sub>
+        </a>
+    </td>
+    <td align="center">
+        <a href="https://github.com/yingfeng">
+            <img src="https://avatars.githubusercontent.com/u/7248?v=4" width="30;" alt="yingfeng"/>
+            <br />
+            <sub><b>Yingfeng</b></sub>
+        </a>
+    </td>
+    <td align="center">
+        <a href="https://github.com/mklzl">
+            <img src="https://avatars.githubusercontent.com/u/36362816?v=4" width="30;" alt="mklzl"/>
+            <br />
+            <sub><b>Mklzl</b></sub>
+        </a>
+    </td>
+    <td align="center">
+        <a href="https://github.com/jensenojs">
+            <img src="https://avatars.githubusercontent.com/u/56761542?v=4" width="30;" alt="jensenojs"/>
+            <br />
+            <sub><b>Jensen</b></sub>
+        </a>
+    </td>
+    <td align="center">
+        <a href="https://github.com/domingozhang">
+            <img src="https://avatars.githubusercontent.com/u/88298673?v=4" width="30;" alt="domingozhang"/>
+            <br />
+            <sub><b>DomingoZhang</b></sub>
+        </a>
+    </td>
+    <td align="center">
+        <a href="https://github.com/arjunsk">
+            <img src="https://avatars.githubusercontent.com/u/9638314?v=4" width="30;" alt="arjunsk"/>
+            <br />
+            <sub><b>Arjun Sunil Kumar</b></sub>
+        </a>
+    </td></tr>
+<tr>
+    <td align="center">
+        <a href="https://github.com/chrisxu333">
+            <img src="https://avatars.githubusercontent.com/u/44099579?v=4" width="30;" alt="chrisxu333"/>
+            <br />
+            <sub><b>Nuo Xu</b></sub>
+        </a>
+    </td>
+    <td align="center">
+        <a href="https://github.com/aressu1985">
+            <img src="https://avatars.githubusercontent.com/u/47846308?v=4" width="30;" alt="aressu1985"/>
+            <br />
+            <sub><b>Aressu1985</b></sub>
+        </a>
+    </td>
+    <td align="center">
+        <a href="https://github.com/matrix-meow">
+            <img src="https://avatars.githubusercontent.com/u/108789643?v=4" width="30;" alt="matrix-meow"/>
+            <br />
+            <sub><b>Mo-bot</b></sub>
+        </a>
+    </td>
+    <td align="center">
+        <a href="https://github.com/zengyan1">
+            <img src="https://avatars.githubusercontent.com/u/93656539?v=4" width="30;" alt="zengyan1"/>
+            <br />
+            <sub><b>Zengyan1</b></sub>
+        </a>
+    </td>
+    <td align="center">
+        <a href="https://github.com/aylei">
+            <img src="https://avatars.githubusercontent.com/u/18556593?v=4" width="30;" alt="aylei"/>
+            <br />
+            <sub><b>Aylei</b></sub>
+        </a>
+    </td>
+    <td align="center">
+        <a href="https://github.com/noneback">
+            <img src="https://avatars.githubusercontent.com/u/46670806?v=4" width="30;" alt="noneback"/>
+            <br />
+            <sub><b>NoneBack</b></sub>
+        </a>
+    </td></tr>
+<tr>
+    <td align="center">
+        <a href="https://github.com/WenhaoKong2001">
+            <img src="https://avatars.githubusercontent.com/u/43122508?v=4" width="30;" alt="WenhaoKong2001"/>
+            <br />
+            <sub><b>Otter</b></sub>
+        </a>
+    </td>
+    <td align="center">
+        <a href="https://github.com/richelleguice">
+            <img src="https://avatars.githubusercontent.com/u/84093582?v=4" width="30;" alt="richelleguice"/>
+            <br />
+            <sub><b>Richelle Guice</b></sub>
+        </a>
+    </td>
+    <td align="center">
+        <a href="https://github.com/yjw1268">
+            <img src="https://avatars.githubusercontent.com/u/29796528?v=4" width="30;" alt="yjw1268"/>
+            <br />
+            <sub><b>Ryan</b></sub>
+        </a>
+    </td>
+    <td align="center">
+        <a href="https://github.com/e1ijah1">
+            <img src="https://avatars.githubusercontent.com/u/30852919?v=4" width="30;" alt="e1ijah1"/>
+            <br />
+            <sub><b>Elijah</b></sub>
+        </a>
+    </td>
+    <td align="center">
+        <a href="https://github.com/MatrixAdventurer">
+            <img src="https://avatars.githubusercontent.com/u/85048713?v=4" width="30;" alt="MatrixAdventurer"/>
+            <br />
+            <sub><b>MatrixAdventurer</b></sub>
+        </a>
+    </td>
+    <td align="center">
+        <a href="https://github.com/NTH19">
+            <img src="https://avatars.githubusercontent.com/u/74389817?v=4" width="30;" alt="NTH19"/>
+            <br />
+            <sub><b>NTH19</b></sub>
+        </a>
+    </td></tr>
+<tr>
+    <td align="center">
+        <a href="https://github.com/anitajjx">
+            <img src="https://avatars.githubusercontent.com/u/61374486?v=4" width="30;" alt="anitajjx"/>
+            <br />
+            <sub><b>Anitajjx</b></sub>
+        </a>
+    </td>
+    <td align="center">
+        <a href="https://github.com/whileskies">
+            <img src="https://avatars.githubusercontent.com/u/20637002?v=4" width="30;" alt="whileskies"/>
+            <br />
+            <sub><b>Whileskies</b></sub>
+        </a>
+    </td>
+    <td align="center">
+        <a href="https://github.com/BePPPower">
+            <img src="https://avatars.githubusercontent.com/u/43782773?v=4" width="30;" alt="BePPPower"/>
+            <br />
+            <sub><b>BePPPower</b></sub>
+        </a>
+    </td>
+    <td align="center">
+        <a href="https://github.com/jiajunhuang">
+            <img src="https://avatars.githubusercontent.com/u/5924269?v=4" width="30;" alt="jiajunhuang"/>
+            <br />
+            <sub><b>Jiajun Huang</b></sub>
+        </a>
+    </td>
+    <td align="center">
+        <a href="https://github.com/Morranto">
+            <img src="https://avatars.githubusercontent.com/u/56924967?v=4" width="30;" alt="Morranto"/>
+            <br />
+            <sub><b>Morranto</b></sub>
+        </a>
+    </td>
+    <td align="center">
+        <a href="https://github.com/Y7n05h">
+            <img src="https://avatars.githubusercontent.com/u/69407218?v=4" width="30;" alt="Y7n05h"/>
+            <br />
+            <sub><b>Y7n05h</b></sub>
+        </a>
+    </td></tr>
+<tr>
+    <td align="center">
+        <a href="https://github.com/songjiayang">
+            <img src="https://avatars.githubusercontent.com/u/1459834?v=4" width="30;" alt="songjiayang"/>
+            <br />
+            <sub><b> Songjiayang</b></sub>
+        </a>
+    </td>
+    <td align="center">
+        <a href="https://github.com/Abirdcfly">
+            <img src="https://avatars.githubusercontent.com/u/5100555?v=4" width="30;" alt="Abirdcfly"/>
+            <br />
+            <sub><b>Abirdcfly</b></sub>
+        </a>
+    </td>
+    <td align="center">
+        <a href="https://github.com/decster">
+            <img src="https://avatars.githubusercontent.com/u/193300?v=4" width="30;" alt="decster"/>
+            <br />
+            <sub><b>Binglin Chang</b></sub>
+        </a>
+    </td>
+    <td align="center">
+        <a href="https://github.com/Charlie17Li">
+            <img src="https://avatars.githubusercontent.com/u/32014420?v=4" width="30;" alt="Charlie17Li"/>
+            <br />
+            <sub><b>Charlie17Li</b></sub>
+        </a>
+    </td>
+    <td align="center">
+        <a href="https://github.com/DanielZhangQD">
+            <img src="https://avatars.githubusercontent.com/u/36026334?v=4" width="30;" alt="DanielZhangQD"/>
+            <br />
+            <sub><b>DanielZhangQD</b></sub>
+        </a>
+    </td>
+    <td align="center">
+        <a href="https://github.com/Juneezee">
+            <img src="https://avatars.githubusercontent.com/u/20135478?v=4" width="30;" alt="Juneezee"/>
+            <br />
+            <sub><b>Eng Zer Jun</b></sub>
+        </a>
+    </td></tr>
+<tr>
+    <td align="center">
+        <a href="https://github.com/ericsyh">
+            <img src="https://avatars.githubusercontent.com/u/10498732?v=4" width="30;" alt="ericsyh"/>
+            <br />
+            <sub><b>Eric Shen</b></sub>
+        </a>
+    </td>
+    <td align="center">
+        <a href="https://github.com/Fungx">
+            <img src="https://avatars.githubusercontent.com/u/38498093?v=4" width="30;" alt="Fungx"/>
+            <br />
+            <sub><b>Fungx</b></sub>
+        </a>
+    </td>
+    <td align="center">
+        <a href="https://github.com/player-kirito">
+            <img src="https://avatars.githubusercontent.com/u/73377767?v=4" width="30;" alt="player-kirito"/>
+            <br />
+            <sub><b>Kirito</b></sub>
+        </a>
+    </td>
+    <td align="center">
+        <a href="https://github.com/JasonPeng1310">
+            <img src="https://avatars.githubusercontent.com/u/46837930?v=4" width="30;" alt="JasonPeng1310"/>
+            <br />
+            <sub><b>Jason Peng</b></sub>
+        </a>
+    </td>
+    <td align="center">
+        <a href="https://github.com/ikenchina">
+            <img src="https://avatars.githubusercontent.com/u/3422667?v=4" width="30;" alt="ikenchina"/>
+            <br />
+            <sub><b>O2</b></sub>
+        </a>
+    </td>
+    <td align="center">
+        <a href="https://github.com/RinChanNOWWW">
+            <img src="https://avatars.githubusercontent.com/u/33975039?v=4" width="30;" alt="RinChanNOWWW"/>
+            <br />
+            <sub><b>RinChanNOW!</b></sub>
+        </a>
+    </td></tr>
+<tr>
+    <td align="center">
+        <a href="https://github.com/TheR1sing3un">
+            <img src="https://avatars.githubusercontent.com/u/87409330?v=4" width="30;" alt="TheR1sing3un"/>
+            <br />
+            <sub><b>TheR1sing3un</b></sub>
+        </a>
+    </td>
+    <td align="center">
+        <a href="https://github.com/chaixuqing">
+            <img src="https://avatars.githubusercontent.com/u/41991639?v=4" width="30;" alt="chaixuqing"/>
+            <br />
+            <sub><b>XuQing Chai</b></sub>
+        </a>
+    </td>
+    <td align="center">
+        <a href="https://github.com/qqIsAProgrammer">
+            <img src="https://avatars.githubusercontent.com/u/68439848?v=4" width="30;" alt="qqIsAProgrammer"/>
+            <br />
+            <sub><b>Yiliang Qiu</b></sub>
+        </a>
+    </td>
+    <td align="center">
+        <a href="https://github.com/yubindy">
+            <img src="https://avatars.githubusercontent.com/u/74901886?v=4" width="30;" alt="yubindy"/>
+            <br />
+            <sub><b>ZeYu Zhao</b></sub>
+        </a>
+    </td>
+    <td align="center">
+        <a href="https://github.com/adlternative">
+            <img src="https://avatars.githubusercontent.com/u/58138461?v=4" width="30;" alt="adlternative"/>
+            <br />
+            <sub><b>ZheNing Hu</b></sub>
+        </a>
+    </td>
+    <td align="center">
+        <a href="https://github.com/TszKitLo40">
+            <img src="https://avatars.githubusercontent.com/u/18443139?v=4" width="30;" alt="TszKitLo40"/>
+            <br />
+            <sub><b>Zijie Lu</b></sub>
+        </a>
+    </td></tr>
+<tr>
+    <td align="center">
+        <a href="https://github.com/ZoranPandovski">
+            <img src="https://avatars.githubusercontent.com/u/7192539?v=4" width="30;" alt="ZoranPandovski"/>
+            <br />
+            <sub><b>Zoran Pandovski</b></sub>
+        </a>
+    </td>
+    <td align="center">
+        <a href="https://github.com/yegetables">
+            <img src="https://avatars.githubusercontent.com/u/37119488?v=4" width="30;" alt="yegetables"/>
+            <br />
+            <sub><b>Ajian</b></sub>
+        </a>
+    </td>
+    <td align="center">
+        <a href="https://github.com/bxiiiiii">
+            <img src="https://avatars.githubusercontent.com/u/75570810?v=4" width="30;" alt="bxiiiiii"/>
+            <br />
+            <sub><b>Binxxi</b></sub>
+        </a>
+    </td>
+    <td align="center">
+        <a href="https://github.com/coderzc">
+            <img src="https://avatars.githubusercontent.com/u/26179648?v=4" width="30;" alt="coderzc"/>
+            <br />
+            <sub><b>Coderzc</b></sub>
+        </a>
+    </td>
+    <td align="center">
+        <a href="https://github.com/forsaken628">
+            <img src="https://avatars.githubusercontent.com/u/18322364?v=4" width="30;" alt="forsaken628"/>
+            <br />
+            <sub><b>ColdWater</b></sub>
+        </a>
+    </td>
+    <td align="center">
+        <a href="https://github.com/dr-lab">
+            <img src="https://avatars.githubusercontent.com/u/815516?v=4" width="30;" alt="dr-lab"/>
+            <br />
+            <sub><b>Dr-lab</b></sub>
+        </a>
+    </td></tr>
+<tr>
+    <td align="center">
+        <a href="https://github.com/florashi181">
+            <img src="https://avatars.githubusercontent.com/u/87641339?v=4" width="30;" alt="florashi181"/>
+            <br />
+            <sub><b>Florashi181</b></sub>
+        </a>
+    </td>
+    <td align="center">
+        <a href="https://github.com/hiyoyolumi">
+            <img src="https://avatars.githubusercontent.com/u/75571545?v=4" width="30;" alt="hiyoyolumi"/>
+            <br />
+            <sub><b>Hiyoyolumi</b></sub>
+        </a>
+    </td>
+    <td align="center">
+        <a href="https://github.com/jinfuchiang">
+            <img src="https://avatars.githubusercontent.com/u/92502624?v=4" width="30;" alt="jinfuchiang"/>
+            <br />
+            <sub><b>Jinfu</b></sub>
+        </a>
+    </td>
+    <td align="center">
+        <a href="https://github.com/sourcelliu">
+            <img src="https://avatars.githubusercontent.com/u/20898138?v=4" width="30;" alt="sourcelliu"/>
+            <br />
+            <sub><b>Liuguangliang</b></sub>
+        </a>
+    </td>
+    <td align="center">
+        <a href="https://github.com/lokax">
+            <img src="https://avatars.githubusercontent.com/u/57343445?v=4" width="30;" alt="lokax"/>
+            <br />
+            <sub><b>Lokax</b></sub>
+        </a>
+    </td>
+    <td align="center">
+        <a href="https://github.com/lyfer233">
+            <img src="https://avatars.githubusercontent.com/u/24930135?v=4" width="30;" alt="lyfer233"/>
+            <br />
+            <sub><b>Lyfer233</b></sub>
+        </a>
+    </td></tr>
+<tr>
+    <td align="center">
+        <a href="https://github.com/sundy-li">
+            <img src="https://avatars.githubusercontent.com/u/3325189?v=4" width="30;" alt="sundy-li"/>
+            <br />
+            <sub><b>Sundyli</b></sub>
+        </a>
+    </td>
+    <td align="center">
+        <a href="https://github.com/supermario1990">
+            <img src="https://avatars.githubusercontent.com/u/8428531?v=4" width="30;" alt="supermario1990"/>
+            <br />
+            <sub><b>Supermario1990</b></sub>
+        </a>
+    </td>
+    <td align="center">
+        <a href="https://github.com/lawrshen">
+            <img src="https://avatars.githubusercontent.com/u/63652929?v=4" width="30;" alt="lawrshen"/>
+            <br />
+            <sub><b>Tjie</b></sub>
+        </a>
+    </td>
+    <td align="center">
+        <a href="https://github.com/Toms1999">
+            <img src="https://avatars.githubusercontent.com/u/94617906?v=4" width="30;" alt="Toms1999"/>
+            <br />
+            <sub><b>Toms</b></sub>
+        </a>
+    </td>
+    <td align="center">
+        <a href="https://github.com/wuliuqii">
+            <img src="https://avatars.githubusercontent.com/u/34090258?v=4" width="30;" alt="wuliuqii"/>
+            <br />
+            <sub><b>Wuliuqii</b></sub>
+        </a>
+    </td>
+    <td align="center">
+        <a href="https://github.com/xiw5">
+            <img src="https://avatars.githubusercontent.com/u/33027107?v=4" width="30;" alt="xiw5"/>
+            <br />
+            <sub><b>Xiyuedong</b></sub>
+        </a>
+    </td></tr>
+<tr>
+    <td align="center">
+        <a href="https://github.com/yclchuxue">
+            <img src="https://avatars.githubusercontent.com/u/75575291?v=4" width="30;" alt="yclchuxue"/>
+            <br />
+            <sub><b>Yclchuxue</b></sub>
+        </a>
+    </td>
+    <td align="center">
+        <a href="https://github.com/ZtXavier">
+            <img src="https://avatars.githubusercontent.com/u/75614614?v=4" width="30;" alt="ZtXavier"/>
+            <br />
+            <sub><b>Zt</b></sub>
+        </a>
+    </td></tr>
+</table>
+<!-- readme: contributors -end -->
 
 ## 🙌 <a id="contributing">参与贡献</a>
 
 欢迎大家对 MatrixOne 的贡献。  
-请查看[贡献指南](https://docs.matrixorigin.cn/0.8.0/MatrixOne/Contribution-Guide/make-your-first-contribution/)来了解有关提交补丁和完成整个贡献流程的详细信息。
-
-### 👏贡献者们
-
-<!-- readme: contributors -start -->
-<!-- readme: contributors -end -->
+请查看[贡献指南](https://docs.matrixorigin.cn/1.1.1/MatrixOne/Contribution-Guide/make-your-first-contribution/)来了解有关提交补丁和完成整个贡献流程的详细信息。
 
 ## <a id="license">License</a>
+
 [Apache License, Version 2.0](LICENSE)。
