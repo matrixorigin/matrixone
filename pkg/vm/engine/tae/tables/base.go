@@ -713,7 +713,7 @@ func (blk *baseBlock) inMemoryCollectDeleteInRange(
 	blk.RLock()
 	schema := blk.meta.GetSchema()
 	pkDef := schema.GetPrimaryKey()
-	rowID, ts, pk, abort, abortedMap, deletes, minTS, persistedTS := blk.mvcc.CollectDeleteLocked(start.Next(), end, pkDef.Type, mp)
+	rowID, ts, pk, abort, abortedMap, deletes, minTS, persistedTS := blk.mvcc.CollectDeleteLocked(start, end, pkDef.Type, mp)
 	blk.RUnlock()
 	if rowID == nil {
 		return
