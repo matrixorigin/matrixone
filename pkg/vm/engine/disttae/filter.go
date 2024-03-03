@@ -261,7 +261,7 @@ func CompileFilterExpr(
 					if obj.ZMIsEmpty() {
 						return true, nil
 					}
-					return obj.SortKeyZoneMap().AnyLE2(val), nil
+					return obj.SortKeyZoneMap().AnyLEByValue(val), nil
 				}
 			}
 			loadOp = loadMetadataOnlyOpFactory(fs)
@@ -272,7 +272,7 @@ func CompileFilterExpr(
 					return true, nil
 				}
 				dataMeta := meta.MustDataMeta()
-				return dataMeta.MustGetColumn(uint16(seqNum)).ZoneMap().AnyLE2(val), nil
+				return dataMeta.MustGetColumn(uint16(seqNum)).ZoneMap().AnyLEByValue(val), nil
 			}
 			blockFilterOp = func(
 				blk objectio.BlockInfo, blkMeta objectio.BlockObject, bf objectio.BloomFilter,
@@ -280,7 +280,7 @@ func CompileFilterExpr(
 				if blkMeta.IsEmpty() {
 					return true, nil
 				}
-				return blkMeta.MustGetColumn(uint16(seqNum)).ZoneMap().AnyLE2(val), nil
+				return blkMeta.MustGetColumn(uint16(seqNum)).ZoneMap().AnyLEByValue(val), nil
 			}
 		case ">=":
 			colExpr, val, ok := mustEvalColValueBinaryFunctionExpr(exprImpl, tableDef, proc)
@@ -294,7 +294,7 @@ func CompileFilterExpr(
 					if obj.ZMIsEmpty() {
 						return true, nil
 					}
-					return obj.SortKeyZoneMap().AnyGE2(val), nil
+					return obj.SortKeyZoneMap().AnyGEByValue(val), nil
 				}
 			}
 			loadOp = loadMetadataOnlyOpFactory(fs)
@@ -305,7 +305,7 @@ func CompileFilterExpr(
 					return true, nil
 				}
 				dataMeta := meta.MustDataMeta()
-				return dataMeta.MustGetColumn(uint16(seqNum)).ZoneMap().AnyGE2(val), nil
+				return dataMeta.MustGetColumn(uint16(seqNum)).ZoneMap().AnyGEByValue(val), nil
 			}
 			blockFilterOp = func(
 				blk objectio.BlockInfo, blkMeta objectio.BlockObject, bf objectio.BloomFilter,
@@ -313,7 +313,7 @@ func CompileFilterExpr(
 				if blkMeta.IsEmpty() {
 					return true, nil
 				}
-				return blkMeta.MustGetColumn(uint16(seqNum)).ZoneMap().AnyGE2(val), nil
+				return blkMeta.MustGetColumn(uint16(seqNum)).ZoneMap().AnyGEByValue(val), nil
 			}
 		case ">":
 			colExpr, val, ok := mustEvalColValueBinaryFunctionExpr(exprImpl, tableDef, proc)
@@ -327,7 +327,7 @@ func CompileFilterExpr(
 					if obj.ZMIsEmpty() {
 						return true, nil
 					}
-					return obj.SortKeyZoneMap().AnyGT2(val), nil
+					return obj.SortKeyZoneMap().AnyGTByValue(val), nil
 				}
 			}
 			loadOp = loadMetadataOnlyOpFactory(fs)
@@ -338,7 +338,7 @@ func CompileFilterExpr(
 					return true, nil
 				}
 				dataMeta := meta.MustDataMeta()
-				return dataMeta.MustGetColumn(uint16(seqNum)).ZoneMap().AnyGT2(val), nil
+				return dataMeta.MustGetColumn(uint16(seqNum)).ZoneMap().AnyGTByValue(val), nil
 			}
 			blockFilterOp = func(
 				blk objectio.BlockInfo, blkMeta objectio.BlockObject, bf objectio.BloomFilter,
@@ -346,7 +346,7 @@ func CompileFilterExpr(
 				if blkMeta.IsEmpty() {
 					return true, nil
 				}
-				return blkMeta.MustGetColumn(uint16(seqNum)).ZoneMap().AnyGT2(val), nil
+				return blkMeta.MustGetColumn(uint16(seqNum)).ZoneMap().AnyGTByValue(val), nil
 			}
 		case "<":
 			colExpr, val, ok := mustEvalColValueBinaryFunctionExpr(exprImpl, tableDef, proc)
@@ -360,7 +360,7 @@ func CompileFilterExpr(
 					if obj.ZMIsEmpty() {
 						return true, nil
 					}
-					return obj.SortKeyZoneMap().AnyLT2(val), nil
+					return obj.SortKeyZoneMap().AnyLTByValue(val), nil
 				}
 			}
 			loadOp = loadMetadataOnlyOpFactory(fs)
@@ -371,7 +371,7 @@ func CompileFilterExpr(
 					return true, nil
 				}
 				dataMeta := meta.MustDataMeta()
-				return dataMeta.MustGetColumn(uint16(seqNum)).ZoneMap().AnyLT2(val), nil
+				return dataMeta.MustGetColumn(uint16(seqNum)).ZoneMap().AnyLTByValue(val), nil
 			}
 			blockFilterOp = func(
 				blk objectio.BlockInfo, blkMeta objectio.BlockObject, bf objectio.BloomFilter,
@@ -379,7 +379,7 @@ func CompileFilterExpr(
 				if blkMeta.IsEmpty() {
 					return true, nil
 				}
-				return blkMeta.MustGetColumn(uint16(seqNum)).ZoneMap().AnyLT2(val), nil
+				return blkMeta.MustGetColumn(uint16(seqNum)).ZoneMap().AnyLTByValue(val), nil
 			}
 		case "prefix_eq":
 			colExpr, val, ok := mustEvalColValueBinaryFunctionExpr(exprImpl, tableDef, proc)

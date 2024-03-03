@@ -340,7 +340,7 @@ func (zm ZM) ContainsKey(k []byte) bool {
 }
 
 // zm.min < k
-func (zm ZM) AnyLT2(k []byte) bool {
+func (zm ZM) AnyLTByValue(k []byte) bool {
 	if !zm.IsInited() {
 		return false
 	}
@@ -353,7 +353,7 @@ func (zm ZM) AnyLT2(k []byte) bool {
 }
 
 // zm.min <= k
-func (zm ZM) AnyLE2(k []byte) bool {
+func (zm ZM) AnyLEByValue(k []byte) bool {
 	if !zm.IsInited() {
 		return false
 	}
@@ -366,7 +366,7 @@ func (zm ZM) AnyLE2(k []byte) bool {
 }
 
 // zm.max > k
-func (zm ZM) AnyGT2(k []byte) bool {
+func (zm ZM) AnyGTByValue(k []byte) bool {
 	if !zm.IsInited() {
 		return false
 	}
@@ -379,7 +379,7 @@ func (zm ZM) AnyGT2(k []byte) bool {
 }
 
 // zm.min >= k
-func (zm ZM) AnyGE2(k []byte) bool {
+func (zm ZM) AnyGEByValue(k []byte) bool {
 	if !zm.IsInited() {
 		return false
 	}
