@@ -92,12 +92,12 @@ func init() {
 }
 
 func isClusterOrPKFromColExpr(expr *plan.Expr_Col, tableDef *plan.TableDef) (isPK, isCluster bool) {
-	if tableDef.Pkey != nil && tableDef.Pkey.PkeyColId == uint64(expr.Col.ColPos) {
+	colDef := tableDef.Cols[expr.Col.ColPos]
+	if colDef.Primary {
 		isPK = true
+		return
 	}
-	if !isPK && tableDef.Cols[expr.Col.ColPos].ClusterBy {
-		isCluster = true
-	}
+	isCluster = colDef.ClusterBy
 	return
 }
 
