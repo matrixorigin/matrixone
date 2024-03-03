@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"net/http"
 	"runtime/trace"
 	"sync"
@@ -35,6 +34,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
+	txnTrace "github.com/matrixorigin/matrixone/pkg/txn/trace"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/tidwall/btree"
 )
 
@@ -352,6 +353,7 @@ func (p *PartitionState) HandleLogtailEntry(
 	primarySeqnum int,
 	packer *types.Packer,
 ) {
+	txnTrace.GetService().ApplyLogtail(entry, 1)
 	switch entry.EntryType {
 	case api.Entry_Insert:
 		if IsBlkTable(entry.TableName) {
@@ -363,9 +365,9 @@ func (p *PartitionState) HandleLogtailEntry(
 		}
 	case api.Entry_Delete:
 		if IsBlkTable(entry.TableName) {
-			p.HandleMetadataDelete(ctx, entry.Bat)
+			p.HandleMetadataDelete(ctx, entry.TableId, entry.Bat)
 		} else if IsObjTable(entry.TableName) {
-			p.HandleObjectDelete(entry.Bat)
+			p.HandleObjectDelete(entry.TableId, entry.Bat)
 		} else {
 			p.HandleRowsDelete(ctx, entry.Bat, packer)
 		}
@@ -374,7 +376,9 @@ func (p *PartitionState) HandleLogtailEntry(
 	}
 }
 
-func (p *PartitionState) HandleObjectDelete(bat *api.Batch) {
+func (p *PartitionState) HandleObjectDelete(
+	tableID uint64,
+	bat *api.Batch) {
 	statsVec := mustVectorFromProto(bat.Vecs[2])
 	stateCol := vector.MustFixedCol[bool](mustVectorFromProto(bat.Vecs[3]))
 	sortedCol := vector.MustFixedCol[bool](mustVectorFromProto(bat.Vecs[4]))
@@ -396,8 +400,7 @@ func (p *PartitionState) HandleObjectDelete(bat *api.Batch) {
 		objEntry.DeleteTime = deleteTSCol[idx]
 		objEntry.CommitTS = commitTSCol[idx]
 		objEntry.Sorted = sortedCol[idx]
-
-		p.objectDeleteHelper(objEntry, deleteTSCol[idx])
+		p.objectDeleteHelper(tableID, objEntry, deleteTSCol[idx])
 	}
 }
 
@@ -567,7 +570,6 @@ func (p *PartitionState) HandleRowsInsert(
 				}
 				p.primaryIndex.Set(entry)
 			}
-
 		})
 	}
 
@@ -844,7 +846,10 @@ func (p *PartitionState) HandleMetadataInsert(
 	})
 }
 
-func (p *PartitionState) objectDeleteHelper(pivot ObjectEntry, deleteTime types.TS) {
+func (p *PartitionState) objectDeleteHelper(
+	tableID uint64,
+	pivot ObjectEntry,
+	deleteTime types.TS) {
 	objEntry, ok := p.dataObjects.Get(pivot)
 	//TODO non-appendable block' delete maybe arrive before its insert?
 	if !ok {
@@ -865,6 +870,11 @@ func (p *PartitionState) objectDeleteHelper(pivot ObjectEntry, deleteTime types.
 
 				IsAppendable: objEntry.EntryState,
 			}
+			txnTrace.GetService().ApplyDeleteObject(
+				tableID,
+				objEntry.DeleteTime.ToTimestamp(),
+				"",
+				"delete-object")
 			p.objectIndexByTS.Set(e)
 		}
 	} else {
@@ -904,7 +914,10 @@ func (p *PartitionState) objectDeleteHelper(pivot ObjectEntry, deleteTime types.
 	}
 }
 
-func (p *PartitionState) HandleMetadataDelete(ctx context.Context, input *api.Batch) {
+func (p *PartitionState) HandleMetadataDelete(
+	ctx context.Context,
+	tableID uint64,
+	input *api.Batch) {
 	ctx, task := trace.NewTask(ctx, "PartitionState.HandleMetadataDelete")
 	defer task.End()
 
@@ -922,7 +935,7 @@ func (p *PartitionState) HandleMetadataDelete(ctx context.Context, input *api.Ba
 			pivot := ObjectEntry{}
 			objectio.SetObjectStatsShortName(&pivot.ObjectStats, objectio.ShortName(&blockID))
 
-			p.objectDeleteHelper(pivot, deleteTimeVector[i])
+			p.objectDeleteHelper(tableID, pivot, deleteTimeVector[i])
 		})
 	}
 

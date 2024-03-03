@@ -286,6 +286,11 @@ type Session struct {
 
 	// timestampMap record timestamp for statistical purposes
 	timestampMap map[TS]time.Time
+
+	// insert sql for create table as select stmt
+	createAsSelectSql string
+
+	disableTrace bool
 }
 
 func (ses *Session) ClearStmtProfile() {
