@@ -289,6 +289,8 @@ type Session struct {
 
 	// insert sql for create table as select stmt
 	createAsSelectSql string
+
+	disableTrace bool
 }
 
 func (ses *Session) ClearStmtProfile() {
