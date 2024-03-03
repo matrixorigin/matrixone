@@ -18,6 +18,7 @@ import (
 	"context"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -108,6 +109,29 @@ func getConstBytesFromExpr(expr *plan.Expr, colDef *plan.ColDef, proc *process.P
 	colType := types.T(colDef.Typ.Id)
 	val, ok := evalLiteralExpr2(constVal, colType)
 	return val, ok
+}
+
+func mustColVecValueFromBinaryFuncExpr(
+	expr *plan.Expr_F, tableDef *plan.TableDef, proc *process.Process,
+) (*plan.Expr_Col, []byte, bool) {
+	var (
+		colExpr *plan.Expr_Col
+		valExpr *plan.Expr
+		ok      bool
+	)
+	if colExpr, ok = expr.F.Args[0].Expr.(*plan.Expr_Col); ok {
+		valExpr = expr.F.Args[1]
+	} else if colExpr, ok = expr.F.Args[1].Expr.(*plan.Expr_Col); ok {
+		valExpr = expr.F.Args[0]
+	} else {
+		return nil, nil, false
+	}
+
+	switch exprImpl := valExpr.Expr.(type) {
+	case *plan.Expr_Vec:
+		return colExpr, exprImpl.Vec.Data, true
+	}
+	return nil, nil, false
 }
 
 func mustColConstValueFromBinaryFuncExpr(
@@ -414,12 +438,62 @@ func CompileFilterExpr(
 				}
 				return blkMeta.MustGetColumn(uint16(seqNum)).ZoneMap().PrefixEq(val), nil
 			}
-		// case "in":
+
 		// case "prefix_between":
 		// case "between"
 		// case "prefix_in":
 		// case "isnull", "is_null"
 		// case "isnotnull", "is_not_null"
+		case "in":
+			colExpr, val, ok := mustColVecValueFromBinaryFuncExpr(exprImpl, tableDef, proc)
+			if !ok {
+				canCompile = false
+				return
+			}
+			vec := vector.NewVec(types.T_any.ToType())
+			_ = vec.UnmarshalBinary(val)
+			isPK, isCluster := isClusterOrPKFromColExpr(colExpr, tableDef)
+			if isPK || isCluster {
+				fastFilterOp = func(obj objectio.ObjectStats) (bool, error) {
+					if obj.ZMIsEmpty() {
+						return true, nil
+					}
+					return obj.SortKeyZoneMap().AnyIn(vec), nil
+				}
+			}
+			if isPK {
+				loadOp = loadMetadataAndBFOpFactory(fs)
+			} else {
+				loadOp = loadMetadataOnlyOpFactory(fs)
+			}
+
+			colDef := tableDef.Cols[colExpr.Col.ColPos]
+			seqNum := colDef.Seqnum
+			objectFilterOp = func(meta objectio.ObjectMeta, _ objectio.BloomFilter) (bool, error) {
+				if isCluster || isPK {
+					return true, nil
+				}
+				dataMeta := meta.MustDataMeta()
+				return dataMeta.MustGetColumn(uint16(seqNum)).ZoneMap().AnyIn(vec), nil
+			}
+			blockFilterOp = func(
+				blk objectio.BlockInfo, blkMeta objectio.BlockObject, bf objectio.BloomFilter,
+			) (bool, error) {
+				if !blkMeta.IsEmpty() && !blkMeta.MustGetColumn(uint16(seqNum)).ZoneMap().AnyIn(vec) {
+					return false, nil
+				}
+				if isPK {
+					blkBf := bf.GetBloomFilter(uint32(blk.BlockID.Sequence()))
+					blkBfIdx := index.NewEmptyBinaryFuseFilter()
+					if err := index.DecodeBloomFilter(blkBfIdx, blkBf); err != nil {
+						return false, err
+					}
+					if exist := blkBfIdx.MayContainsAny(vec); !exist {
+						return false, nil
+					}
+				}
+				return true, nil
+			}
 		case "=":
 			colExpr, val, ok := mustColConstValueFromBinaryFuncExpr(exprImpl, tableDef, proc)
 			if !ok {
