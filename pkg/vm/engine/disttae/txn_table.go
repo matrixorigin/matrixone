@@ -853,19 +853,22 @@ func (tbl *txnTable) tryFastRanges(
 	blocks *objectio.BlockInfoSlice,
 	fs fileservice.FileService,
 ) (done bool, err error) {
-	// {
-	// 	var bb objectio.BlockInfoSlice
-	// 	TryFastFilterBlocks(
-	// 		tbl.db.txn.op.SnapshotTS(),
-	// 		tbl.tableDef,
-	// 		exprs,
-	// 		snapshot,
-	// 		uncommittedObjects,
-	// 		&bb,
-	// 		fs,
-	// 		tbl.proc.Load(),
-	// 	)
-	// }
+	// TODO: remove me if composite key can be pushdown
+	if tbl.tableDef.Pkey == nil || tbl.tableDef.Pkey.CompPkeyCol == nil {
+		done, err = TryFastFilterBlocks(
+			tbl.db.txn.op.SnapshotTS(),
+			tbl.tableDef,
+			exprs,
+			snapshot,
+			uncommittedObjects,
+			blocks,
+			fs,
+			tbl.proc.Load(),
+		)
+		if err != nil || done {
+			return
+		}
+	}
 	if tbl.primaryIdx == -1 || len(exprs) == 0 {
 		done = false
 		return
