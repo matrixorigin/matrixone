@@ -275,6 +275,81 @@ func CompileFilterExpr(
 	// case *plan.Expr_Col:
 	case *plan.Expr_F:
 		switch exprImpl.F.Func.ObjName {
+		case "or":
+			leftFastOp, leftLoadOp, leftObjectOp, leftBlockOp, leftCan := CompileFilterExpr(
+				exprImpl.F.Args[0], proc, tableDef, fs,
+			)
+			if !leftCan {
+				return nil, nil, nil, nil, false
+			}
+			rightFastOp, rightLoadOp, rightObjectOp, rightBlockOp, rightCan := CompileFilterExpr(
+				exprImpl.F.Args[1], proc, tableDef, fs,
+			)
+			if !rightCan {
+				return nil, nil, nil, nil, false
+			}
+			if leftFastOp != nil || rightFastOp != nil {
+				fastFilterOp = func(obj objectio.ObjectStats) (bool, error) {
+					if leftFastOp != nil {
+						if ok, err := leftFastOp(obj); ok || err != nil {
+							return ok, err
+						}
+					}
+					if rightFastOp != nil {
+						return rightFastOp(obj)
+					}
+					return true, nil
+				}
+			}
+			if leftLoadOp != nil || rightLoadOp != nil {
+				loadOp = func(
+					ctx context.Context,
+					obj objectio.ObjectStats,
+					inMeta objectio.ObjectMeta,
+					inBF objectio.BloomFilter,
+				) (meta objectio.ObjectMeta, bf objectio.BloomFilter, err error) {
+					if leftLoadOp != nil {
+						if meta, bf, err = leftLoadOp(ctx, obj, inMeta, inBF); err != nil {
+							return
+						}
+						inMeta = meta
+						inBF = bf
+					}
+					if rightLoadOp != nil {
+						meta, bf, err = rightLoadOp(ctx, obj, inMeta, inBF)
+					}
+					return
+				}
+			}
+			if leftObjectOp != nil || rightLoadOp != nil {
+				objectFilterOp = func(meta objectio.ObjectMeta, bf objectio.BloomFilter) (bool, error) {
+					if leftObjectOp != nil {
+						if ok, err := leftObjectOp(meta, bf); ok || err != nil {
+							return ok, err
+						}
+					}
+					if rightObjectOp != nil {
+						return rightObjectOp(meta, bf)
+					}
+					return true, nil
+				}
+
+			}
+			if leftBlockOp != nil || rightBlockOp != nil {
+				blockFilterOp = func(
+					obj objectio.BlockInfo, blkMeta objectio.BlockObject, bf objectio.BloomFilter,
+				) (bool, error) {
+					if leftBlockOp != nil {
+						if ok, err := leftBlockOp(obj, blkMeta, bf); ok || err != nil {
+							return ok, err
+						}
+					}
+					if rightBlockOp != nil {
+						return rightBlockOp(obj, blkMeta, bf)
+					}
+					return true, nil
+				}
+			}
 		case "and":
 			leftFastOp, leftLoadOp, leftObjectOp, leftBlockOp, leftCan := CompileFilterExpr(
 				exprImpl.F.Args[0], proc, tableDef, fs,
@@ -350,7 +425,6 @@ func CompileFilterExpr(
 					return true, nil
 				}
 			}
-		// case "or":
 		case "<=":
 			colExpr, val, ok := mustColConstValueFromBinaryFuncExpr(exprImpl, tableDef, proc)
 			if !ok {
