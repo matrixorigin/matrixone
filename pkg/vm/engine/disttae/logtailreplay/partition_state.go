@@ -247,8 +247,8 @@ func (p *PrimaryIndexEntry) Less(than *PrimaryIndexEntry) bool {
 type ObjectIndexByTSEntry struct {
 	Time         types.TS // insert or delete time
 	ShortObjName objectio.ObjectNameShort
-	IsDelete     bool
 
+	IsDelete     bool
 	IsAppendable bool
 }
 
@@ -278,12 +278,12 @@ func (b ObjectIndexByTSEntry) Less(than ObjectIndexByTSEntry) bool {
 		return false
 	}
 
-	if b.IsDelete && !than.IsDelete {
-		return true
-	}
-	if !b.IsDelete && than.IsDelete {
-		return false
-	}
+	//if b.IsDelete && !than.IsDelete {
+	//	return true
+	//}
+	//if !b.IsDelete && than.IsDelete {
+	//	return false
+	//}
 
 	return false
 }
@@ -445,6 +445,7 @@ func (p *PartitionState) HandleObjectInsert(ctx context.Context, bat *api.Batch,
 		if old, exist := p.dataObjects.Get(objEntry); exist {
 			objEntry.HasDeltaLoc = old.HasDeltaLoc
 			if !old.DeleteTime.IsEmpty() {
+				logutil.Infof("xxxx HandleObjectInsert old:%s, ", old.String())
 				continue
 			}
 		} else {
@@ -463,6 +464,7 @@ func (p *PartitionState) HandleObjectInsert(ctx context.Context, bat *api.Batch,
 			//	p.objectIndexByTS.Set(e)
 			//}
 		}
+
 		//prefetch the object meta
 		if err := blockio.PrefetchMeta(fs, objEntry.Location()); err != nil {
 			logutil.Errorf("prefetch object meta failed. %v", err)
@@ -476,6 +478,31 @@ func (p *PartitionState) HandleObjectInsert(ctx context.Context, bat *api.Batch,
 
 		p.dataObjects.Set(objEntry)
 		p.dataObjectsByCreateTS.Set(ObjectIndexByCreateTSEntry(objEntry))
+		{
+
+			//e := ObjectIndexByTSEntry{
+			//	Time:         createTSCol[idx],
+			//	ShortObjName: *objEntry.ObjectShortName(),
+			//	IsDelete:     false,
+
+			//	IsAppendable: objEntry.EntryState,
+			//}
+			//p.objectIndexByTS.Set(e)
+
+			//Need to insert an entry in objectIndexByTS, when soft delete appendable object.
+			e := ObjectIndexByTSEntry{
+				//Time:         createTSCol[idx],
+				ShortObjName: *objEntry.ObjectShortName(),
+				//IsDelete:     false,
+
+				IsAppendable: objEntry.EntryState,
+			}
+			if !deleteTSCol[idx].IsEmpty() {
+				e.Time = deleteTSCol[idx]
+				e.IsDelete = true
+				p.objectIndexByTS.Set(e)
+			}
+		}
 
 		// for appendable object, gc rows when delete object
 		if objEntry.EntryState && !objEntry.DeleteTime.IsEmpty() {
