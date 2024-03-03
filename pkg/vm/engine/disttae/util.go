@@ -1161,8 +1161,9 @@ func serialTupleByConstExpr(expr *plan.Literal, packer *types.Packer) {
 	}
 }
 
-func getConstValueByExpr(expr *plan.Expr,
-	proc *process.Process) *plan.Literal {
+func getConstValueByExpr(
+	expr *plan.Expr, proc *process.Process,
+) *plan.Literal {
 	exec, err := colexec.NewExpressionExecutor(proc, expr)
 	if err != nil {
 		return nil
