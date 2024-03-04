@@ -187,7 +187,7 @@ func (gs *GlobalStats) Get(ctx context.Context, key pb.StatsInfoKey, sync bool) 
 	gs.mu.Lock()
 	defer gs.mu.Unlock()
 	info, ok := gs.mu.statsInfoMap[key]
-	if ok {
+	if ok && info != nil {
 		return info
 	}
 
