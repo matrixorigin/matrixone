@@ -6682,6 +6682,49 @@ create_table_stmt:
             DTOptions: $8,
         }
     }
+|   CREATE temporary_opt TABLE not_exists_opt table_name select_stmt
+    {
+        $$ = &tree.CreateTable {
+            IsAsSelect: true,
+            Temporary: $2,
+            IfNotExists: $4,
+            Table: *$5,
+            AsSource: $6,
+        }
+    }
+|   CREATE temporary_opt TABLE not_exists_opt table_name '(' table_elem_list_opt ')' select_stmt
+    {
+        $$ = &tree.CreateTable {
+            IsAsSelect: true,
+            Temporary: $2,
+            IfNotExists: $4,
+            Table: *$5,
+            Defs: $7,
+            AsSource: $9,
+        }
+    }
+|   CREATE temporary_opt TABLE not_exists_opt table_name AS select_stmt
+    {
+        $$ = &tree.CreateTable {
+            IsAsSelect: true,
+            Temporary: $2,
+            IfNotExists: $4,
+            Table: *$5,
+            AsSource: $7,
+        }
+    }
+|   CREATE temporary_opt TABLE not_exists_opt table_name '(' table_elem_list_opt ')' AS select_stmt
+    {
+        $$ = &tree.CreateTable {
+            IsAsSelect: true,
+            Temporary: $2,
+            IfNotExists: $4,
+            Table: *$5,
+            Defs: $7,
+            AsSource: $10,
+        }
+    }
+
 load_param_opt_2:
     load_param_opt tail_param_opt
     {

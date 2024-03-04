@@ -72,7 +72,12 @@ func (builder *QueryBuilder) remapColRefForExpr(expr *Expr, colMap map[[2]int32]
 			ne.Col.ColPos = ids[1]
 			ne.Col.Name = builder.nameByColRef[mapID]
 		} else {
-			return moerr.NewParseError(builder.GetContext(), "can't find column %v in context's map %v", mapID, colMap)
+			var keys []string
+			for k := range colMap {
+				keys = append(keys, fmt.Sprintf("%v", k))
+			}
+			mapKeys := fmt.Sprintf("{ %s }", strings.Join(keys, ", "))
+			return moerr.NewParseError(builder.GetContext(), "can't find column %v in context's map %s", mapID, mapKeys)
 		}
 
 	case *plan.Expr_F:
@@ -178,7 +183,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			remapping.addColRef(internalRemapping.localToGlobal[i])
 
 			node.ProjectList = append(node.ProjectList, &plan.Expr{
-				Typ: col.Typ,
+				Typ: *col.Typ,
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
 						RelPos: 0,
@@ -195,7 +200,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 				remapping.addColRef(globalRef)
 
 				node.ProjectList = append(node.ProjectList, &plan.Expr{
-					Typ: node.TableDef.Cols[0].Typ,
+					Typ: *node.TableDef.Cols[0].Typ,
 					Expr: &plan.Expr_Col{
 						Col: &plan.ColRef{
 							RelPos: 0,
@@ -207,7 +212,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			} else {
 				remapping.addColRef(internalRemapping.localToGlobal[0])
 				node.ProjectList = append(node.ProjectList, &plan.Expr{
-					Typ: node.TableDef.Cols[0].Typ,
+					Typ: *node.TableDef.Cols[0].Typ,
 					Expr: &plan.Expr_Col{
 						Col: &plan.ColRef{
 							RelPos: 0,
@@ -315,7 +320,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			remapping.addColRef(internalRemapping.localToGlobal[i])
 
 			node.ProjectList = append(node.ProjectList, &plan.Expr{
-				Typ: col.Typ,
+				Typ: *col.Typ,
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
 						RelPos: 0,
@@ -332,7 +337,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 				remapping.addColRef(globalRef)
 
 				node.ProjectList = append(node.ProjectList, &plan.Expr{
-					Typ: node.TableDef.Cols[0].Typ,
+					Typ: *node.TableDef.Cols[0].Typ,
 					Expr: &plan.Expr_Col{
 						Col: &plan.ColRef{
 							RelPos: 0,
@@ -344,7 +349,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			} else {
 				remapping.addColRef(internalRemapping.localToGlobal[0])
 				node.ProjectList = append(node.ProjectList, &plan.Expr{
-					Typ: node.TableDef.Cols[0].Typ,
+					Typ: *node.TableDef.Cols[0].Typ,
 					Expr: &plan.Expr_Col{
 						Col: &plan.ColRef{
 							RelPos: 0,
@@ -468,7 +473,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			remapping.addColRef(globalRef)
 
 			node.ProjectList = append(node.ProjectList, &plan.Expr{
-				Typ: &plan.Type{
+				Typ: plan.Type{
 					Id:          int32(types.T_bool),
 					NotNullable: false,
 				},
@@ -1205,7 +1210,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 		// VALUE_SCAN always have one column now
 		if node.TableDef == nil { // like select 1,2
 			node.ProjectList = append(node.ProjectList, &plan.Expr{
-				Typ:  &plan.Type{Id: int32(types.T_int64)},
+				Typ:  plan.Type{Id: int32(types.T_int64)},
 				Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_I64Val{I64Val: 0}}},
 			})
 		} else {
@@ -1230,7 +1235,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 				remapping.addColRef(internalRemapping.localToGlobal[i])
 
 				node.ProjectList = append(node.ProjectList, &plan.Expr{
-					Typ: col.Typ,
+					Typ: *col.Typ,
 					Expr: &plan.Expr_Col{
 						Col: &plan.ColRef{
 							RelPos: 0,
@@ -1245,7 +1250,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 	case plan.Node_LOCK_OP:
 		preNode := builder.qry.Nodes[node.Children[0]]
 		pkexpr := &plan.Expr{
-			Typ: node.LockTargets[0].GetPrimaryColTyp(),
+			Typ: *node.LockTargets[0].GetPrimaryColTyp(),
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: preNode.BindingTags[0],
@@ -1369,7 +1374,7 @@ func (builder *QueryBuilder) rewriteStarApproxCount(nodeID int32) {
 						fr, _ := function.GetFunctionByName(context.TODO(), "sum", []types.Type{types.T_int64.ToType()})
 						agg.F.Func.Obj = fr.GetEncodedOverloadID()
 						agg.F.Args[0] = &plan.Expr{
-							Typ: &Type{},
+							Typ: Type{},
 							Expr: &plan.Expr_Col{
 								Col: &plan.ColRef{
 									RelPos: 0,
@@ -1381,7 +1386,7 @@ func (builder *QueryBuilder) rewriteStarApproxCount(nodeID int32) {
 						var exprs []*plan.Expr
 						str := child.ObjRef.SchemaName + "." + child.TableDef.Name
 						exprs = append(exprs, &plan.Expr{
-							Typ: &Type{
+							Typ: Type{
 								Id:          int32(types.T_varchar),
 								NotNullable: true,
 								Width:       int32(len(str)),
@@ -1396,7 +1401,7 @@ func (builder *QueryBuilder) rewriteStarApproxCount(nodeID int32) {
 						})
 						str = child.TableDef.Cols[0].Name
 						exprs = append(exprs, &plan.Expr{
-							Typ: &Type{
+							Typ: Type{
 								Id:          int32(types.T_varchar),
 								NotNullable: true,
 								Width:       int32(len(str)),
@@ -1418,7 +1423,7 @@ func (builder *QueryBuilder) rewriteStarApproxCount(nodeID int32) {
 						switch expr := agg.F.Args[0].Expr.(type) {
 						case *plan.Expr_Col:
 							expr.Col.RelPos = child.BindingTags[0]
-							agg.F.Args[0].Typ = child.TableDef.Cols[expr.Col.ColPos].Typ
+							agg.F.Args[0].Typ = *child.TableDef.Cols[expr.Col.ColPos].Typ
 						}
 					}
 				}
@@ -1676,7 +1681,7 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 				if !argsType[idx].Eq(targetArgType) {
 					node := builder.qry.Nodes[tmpID]
 					if argsType[idx].Oid == types.T_any {
-						node.ProjectList[columnIdx].Typ = targetType
+						node.ProjectList[columnIdx].Typ = *targetType
 					} else {
 						node.ProjectList[columnIdx], err = appendCastBeforeExpr(builder.GetContext(), node.ProjectList[columnIdx], targetType)
 						if err != nil {
@@ -2103,7 +2108,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 		}
 		strColTyp := makeTypeByPlan2Type(strTyp)
 		strColTargetTyp := &plan.Expr{
-			Typ: strTyp,
+			Typ: *strTyp,
 			Expr: &plan.Expr_T{
 				T: &plan.TargetType{
 					Typ: strTyp,
@@ -2453,7 +2458,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 					}
 				}
 				if astTimeWindow.Fill.Val != nil {
-					e, err := appendCastBeforeExpr(builder.GetContext(), v, t.Typ)
+					e, err := appendCastBeforeExpr(builder.GetContext(), v, &t.Typ)
 					if err != nil {
 						return 0, err
 					}
@@ -2478,7 +2483,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 					if err != nil {
 						return 0, err
 					}
-					col, err := appendCastBeforeExpr(builder.GetContext(), v, fillCols[i].Typ)
+					col, err := appendCastBeforeExpr(builder.GetContext(), v, &fillCols[i].Typ)
 					if err != nil {
 						return 0, err
 					}
@@ -3359,7 +3364,8 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 							return 0, moerr.NewParseError(builder.GetContext(), "recursive cte %s projection error", table)
 						}
 						for i := range n.ProjectList {
-							n.ProjectList[i], err = makePlan2CastExpr(builder.GetContext(), n.ProjectList[i], projects[i].GetTyp())
+							projTyp := projects[i].GetTyp()
+							n.ProjectList[i], err = makePlan2CastExpr(builder.GetContext(), n.ProjectList[i], &projTyp)
 							if err != nil {
 								return
 							}
@@ -3703,6 +3709,7 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 	var cols []string
 	var colIsHidden []bool
 	var types []*plan.Type
+	var defaultVals []string
 	var binding *Binding
 	var table string
 	if node.NodeType == plan.Node_TABLE_SCAN || node.NodeType == plan.Node_MATERIAL_SCAN || node.NodeType == plan.Node_EXTERNAL_SCAN || node.NodeType == plan.Node_FUNCTION_SCAN || node.NodeType == plan.Node_VALUE_SCAN || node.NodeType == plan.Node_SINK_SCAN || node.NodeType == plan.Node_RECURSIVE_SCAN || node.NodeType == plan.Node_SOURCE_SCAN {
@@ -3734,6 +3741,7 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 		cols = make([]string, colLength)
 		colIsHidden = make([]bool, colLength)
 		types = make([]*plan.Type, colLength)
+		defaultVals = make([]string, colLength)
 
 		tag := node.BindingTags[0]
 
@@ -3745,11 +3753,14 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 			}
 			colIsHidden[i] = col.Hidden
 			types[i] = col.Typ
+			if col.Default != nil {
+				defaultVals[i] = col.Default.OriginString
+			}
 			name := table + "." + cols[i]
 			builder.nameByColRef[[2]int32{tag, int32(i)}] = name
 		}
 
-		binding = NewBinding(tag, nodeID, table, node.TableDef.TblId, cols, colIsHidden, types, util.TableIsClusterTable(node.TableDef.TableType))
+		binding = NewBinding(tag, nodeID, table, node.TableDef.TblId, cols, colIsHidden, types, util.TableIsClusterTable(node.TableDef.TableType), defaultVals)
 	} else {
 		// Subquery
 		subCtx := builder.ctxByNode[nodeID]
@@ -3776,6 +3787,7 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 		cols = make([]string, colLength)
 		colIsHidden = make([]bool, colLength)
 		types = make([]*plan.Type, colLength)
+		defaultVals = make([]string, colLength)
 
 		for i, col := range headings {
 			if i < len(alias.Cols) {
@@ -3783,13 +3795,14 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 			} else {
 				cols[i] = strings.ToLower(col)
 			}
-			types[i] = projects[i].Typ
+			types[i] = &projects[i].Typ
 			colIsHidden[i] = false
+			defaultVals[i] = ""
 			name := table + "." + cols[i]
 			builder.nameByColRef[[2]int32{tag, int32(i)}] = name
 		}
 
-		binding = NewBinding(tag, nodeID, table, 0, cols, colIsHidden, types, false)
+		binding = NewBinding(tag, nodeID, table, 0, cols, colIsHidden, types, false, defaultVals)
 	}
 
 	ctx.bindings = append(ctx.bindings, binding)

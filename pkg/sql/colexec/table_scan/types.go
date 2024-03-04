@@ -31,6 +31,7 @@ type Argument struct {
 	OrderBy        []*plan.OrderBySpec
 	Reader         engine.Reader
 	Attrs          []string
+	TableID        uint64
 
 	buf    *batch.Batch
 	tmpBuf *batch.Batch

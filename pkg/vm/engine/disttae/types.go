@@ -16,11 +16,12 @@ package disttae
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"math"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -37,6 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 	"github.com/matrixorigin/matrixone/pkg/udf"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -145,6 +147,9 @@ type Transaction struct {
 	// txn workspace size
 	workspaceSize uint64
 
+	// the last snapshot write offset
+	snapshotWriteOffset int
+
 	tnStores []DNStore
 	proc     *process.Process
 
@@ -188,7 +193,6 @@ type Transaction struct {
 		sync.RWMutex
 		data map[types.Blockid][]*batch.Batch
 	}
-	//blockId_tn_delete_metaLoc_batch map[types.Blockid][]*batch.Batch
 	//select list for raw batch comes from txn.writes.batch.
 	batchSelectList map[*batch.Batch][]int64
 	toFreeBatches   map[tableKey][]*batch.Batch
@@ -313,13 +317,6 @@ func (txn *Transaction) IncrStatementID(ctx context.Context, commit bool) error 
 	return txn.handleRCSnapshot(ctx, commit)
 }
 
-// writeOffset returns the offset of the first write in the workspace
-func (txn *Transaction) WriteOffset() uint64 {
-	txn.Lock()
-	defer txn.Unlock()
-	return uint64(len(txn.writes))
-}
-
 // Adjust adjust writes order
 func (txn *Transaction) Adjust(writeOffset uint64) error {
 	txn.Lock()
@@ -416,6 +413,10 @@ func (txn *Transaction) handleRCSnapshot(ctx context.Context, commit bool) error
 	}
 	if !commit && txn.op.Txn().IsRCIsolation() &&
 		(txn.GetSQLCount() > 1 || needResetSnapshot) {
+		trace.GetService().TxnNeedUpdateSnapshot(
+			txn.op,
+			0,
+			"before execute")
 		if err := txn.op.UpdateSnapshot(
 			ctx,
 			timestamp.Timestamp{}); err != nil {
@@ -526,8 +527,6 @@ type txnTable struct {
 
 	// timestamp of the last operation on this table
 	lastTS timestamp.Timestamp
-	//entries belong to this table,and come from txn.writes.
-	writes []Entry
 
 	// this should be the statement id
 	// but seems that we're not maintaining it at the moment

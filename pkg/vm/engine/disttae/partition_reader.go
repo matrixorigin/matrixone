@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -69,18 +70,19 @@ func (p *PartitionReader) prepare() error {
 	var deletes map[types.Rowid]uint8
 	//prepare inserts and deletes for partition reader.
 	if !txn.readOnly.Load() && !p.prepared {
-		inserts = make([]*batch.Batch, 0, len(p.table.writes))
+		inserts = make([]*batch.Batch, 0)
 		deletes = make(map[types.Rowid]uint8)
-		for _, entry := range p.table.writes {
+		//load inserts and deletes from txn.writes.
+		p.table.db.txn.forEachTableWrites(p.table.db.databaseId, p.table.tableId, p.table.db.txn.GetSnapshotWriteOffset(), func(entry Entry) {
 			if entry.typ == INSERT || entry.typ == INSERT_TXN {
 				if entry.bat == nil || entry.bat.IsEmpty() {
-					continue
+					return
 				}
 				if entry.bat.Attrs[0] == catalog.BlockMeta_MetaLoc {
-					continue
+					return
 				}
 				inserts = append(inserts, entry.bat)
-				continue
+				return
 			}
 			//entry.typ == DELETE
 			if entry.bat.GetVector(0).GetType().Oid == types.T_Rowid {
@@ -92,7 +94,7 @@ func (p *PartitionReader) prepare() error {
 					show tables; // t1 must be shown
 				*/
 				if entry.isGeneratedByTruncate() {
-					continue
+					return
 				}
 				//deletes in txn.Write maybe comes from PartitionState.Rows ,
 				// PartitionReader need to skip them.
@@ -101,7 +103,7 @@ func (p *PartitionReader) prepare() error {
 					deletes[v] = 0
 				}
 			}
-		}
+		})
 		//deletes maybe comes from PartitionState.rows, PartitionReader need to skip them;
 		// so, here only load deletes which don't belong to PartitionState.blks.
 		if err := p.table.LoadDeletesForMemBlocksIn(p.table._partState, deletes); err != nil {
