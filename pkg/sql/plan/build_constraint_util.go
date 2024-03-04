@@ -1167,8 +1167,6 @@ func appendPrimaryConstrantPlan(
 	pkFilterExprs []*Expr,
 	indexSourceColTypes []*plan.Type,
 	sourceStep int32,
-	checkInsertPkDupForHiddenIndexTable bool,
-	ifExistAutoPkCol bool,
 	isUpdate bool,
 	updatePkCol bool,
 	fuzzymessage *OriginTableMessageForFuzzy,
@@ -1178,7 +1176,7 @@ func appendPrimaryConstrantPlan(
 
 	// need more comments here to explain checkCondition, for example, why updatePkCol is needed
 	// we should not checkInsertPkDup any more, insert into t values (1) checkInsertPkDup is false, however it may still conflict with pk already exists
-	if pkPos, pkTyp := getPkPos(tableDef, true); pkPos != -1 && checkInsertPkDupForHiddenIndexTable && !ifExistAutoPkCol {
+	if pkPos, pkTyp := getPkPos(tableDef, true); pkPos != -1 {
 		// needCheck := true
 		needCheck := !builder.qry.LoadTag
 		useFuzzyFilter := CNPrimaryCheck
@@ -1387,7 +1385,7 @@ func appendPrimaryConstrantPlan(
 	// The refactor that using fuzzy filter has not been completely finished, Update type Insert cannot directly use fuzzy filter for duplicate detection.
 	//  so the original logic is retained. should be deleted later
 	// make plan: sink_scan -> join -> filter	// check if pk is unique in rows & snapshot
-	if CNPrimaryCheck && checkInsertPkDupForHiddenIndexTable && !ifExistAutoPkCol {
+	if CNPrimaryCheck {
 		if pkPos, pkTyp := getPkPos(tableDef, true); pkPos != -1 {
 			rfTag := builder.genNewTag()
 
