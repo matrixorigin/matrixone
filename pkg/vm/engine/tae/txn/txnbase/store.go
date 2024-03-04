@@ -105,7 +105,7 @@ func (store *NoopTxnStore) GetObject(id *common.ID) (obj handle.Object, err erro
 func (store *NoopTxnStore) CreateObject(dbId, tid uint64, is1PC bool) (obj handle.Object, err error) {
 	return
 }
-func (store *NoopTxnStore) CreateNonAppendableObject(dbId, tid uint64, _ bool) (obj handle.Object, err error) {
+func (store *NoopTxnStore) CreateNonAppendableObject(dbId, tid uint64, _ bool, _ *objectio.CreateObjOpt) (obj handle.Object, err error) {
 	return
 }
 func (store *NoopTxnStore) GetBlock(id *common.ID) (blk handle.Block, err error) { return }

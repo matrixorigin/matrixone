@@ -368,7 +368,7 @@ func (task *compactBlockTask) createAndFlushNewBlock(
 	obj handle.Object,
 	preparer *model.PreparedCompactedBlockData,
 ) (newBlk handle.Block, err error) {
-	obj, err = obj.GetRelation().CreateNonAppendableObject(false)
+	obj, err = obj.GetRelation().CreateNonAppendableObject(false, nil)
 	if err != nil {
 		return
 	}
