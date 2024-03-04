@@ -599,7 +599,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 					updateExprs[col.Name] = defExpr
 				}
 				info.projectList = append(info.projectList, &plan.Expr{
-					Typ: col.Typ,
+					Typ: *col.Typ,
 					Expr: &plan.Expr_Col{
 						Col: &plan.ColRef{
 							RelPos: rightTag,
@@ -618,7 +618,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 				for _, colIdx := range uniqueColMap {
 					col := rightTableDef.Cols[colIdx]
 					leftExpr := &Expr{
-						Typ: col.Typ,
+						Typ: *col.Typ,
 						Expr: &plan.Expr_Col{
 							Col: &plan.ColRef{
 								RelPos: baseNodeTag,
@@ -627,7 +627,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 						},
 					}
 					rightExpr := &plan.Expr{
-						Typ: col.Typ,
+						Typ: *col.Typ,
 						Expr: &plan.Expr_Col{
 							Col: &plan.ColRef{
 								RelPos: rightTag,
@@ -838,7 +838,7 @@ func forceCastExpr(ctx context.Context, expr *Expr, targetType *Type) (*Expr, er
 		return nil, err
 	}
 	t := &plan.Expr{
-		Typ: targetType,
+		Typ: *targetType,
 		Expr: &plan.Expr_T{
 			T: &plan.TargetType{
 				Typ: targetType,
@@ -852,7 +852,7 @@ func forceCastExpr(ctx context.Context, expr *Expr, targetType *Type) (*Expr, er
 				Args: []*Expr{expr, t},
 			},
 		},
-		Typ: targetType,
+		Typ: *targetType,
 	}, nil
 }
 
@@ -892,7 +892,7 @@ func buildValueScan(
 		vec := proc.GetVector(colTyp)
 		bat.Vecs[i] = vec
 		targetTyp := &plan.Expr{
-			Typ: col.Typ,
+			Typ: *col.Typ,
 			Expr: &plan.Expr_T{
 				T: &plan.TargetType{
 					Typ: col.Typ,
@@ -954,7 +954,7 @@ func buildValueScan(
 						RowPos: int32(j),
 						Pos:    int32(nv.Offset),
 						Expr: &plan.Expr{
-							Typ: constTextType,
+							Typ: *constTextType,
 							Expr: &plan.Expr_P{
 								P: &plan.ParamRef{
 									Pos: int32(nv.Offset),
@@ -1007,7 +1007,7 @@ func buildValueScan(
 			Typ:   col.Typ,
 		}
 		expr := &plan.Expr{
-			Typ: col.Typ,
+			Typ: *col.Typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: lastTag,
@@ -1025,7 +1025,7 @@ func buildValueScan(
 			col := tableDef.Cols[colToIdx[expr.Names[0].Parts[0]]]
 			if nv, ok := expr.Expr.(*tree.ParamExpr); ok {
 				updateExpr = &plan.Expr{
-					Typ: constTextType,
+					Typ: *constTextType,
 					Expr: &plan.Expr_P{
 						P: &plan.ParamRef{
 							Pos: int32(nv.Offset),
@@ -1125,7 +1125,7 @@ func appendForeignConstrantPlan(
 			errExpr := makePlan2StringConstExprWithType("Cannot add or update a child row: a foreign key constraint fails")
 			for i := range tableDef.Fkeys {
 				colExpr := &plan.Expr{
-					Typ: makePlan2Type(&rowIdTyp),
+					Typ: *makePlan2Type(&rowIdTyp),
 					Expr: &plan.Expr_Col{
 						Col: &plan.ColRef{
 							ColPos: int32(beginIdx + i),
@@ -1199,7 +1199,7 @@ func appendPrimaryConstrantPlan(
 			// make plan: sink_scan -> group_by -> filter  //check if pk is unique in rows
 			lastNodeId = appendSinkScanNode(builder, bindCtx, sourceStep)
 			pkColExpr := &plan.Expr{
-				Typ: pkTyp,
+				Typ: *pkTyp,
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
 						ColPos: int32(pkPos),
@@ -1214,7 +1214,7 @@ func appendPrimaryConstrantPlan(
 
 			countType := types.T_int64.ToType()
 			countColExpr := &plan.Expr{
-				Typ: makePlan2Type(&countType),
+				Typ: makePlan2TypeValue(&countType),
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
 						Name: tableDef.Pkey.PkeyColName,
@@ -1228,7 +1228,7 @@ func appendPrimaryConstrantPlan(
 			}
 			varcharType := types.T_varchar.ToType()
 			varcharExpr, err := makePlan2CastExpr(builder.GetContext(), &Expr{
-				Typ: tableDef.Cols[pkPos].Typ,
+				Typ: *tableDef.Cols[pkPos].Typ,
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{ColPos: 1, Name: tableDef.Cols[pkPos].Name},
 				},
@@ -1268,7 +1268,7 @@ func appendPrimaryConstrantPlan(
 				SourceStep: []int32{sourceStep},
 				ProjectList: []*Expr{
 					&plan.Expr{
-						Typ: pkTyp,
+						Typ: *pkTyp,
 						Expr: &plan.Expr_Col{
 							Col: &plan.ColRef{
 								ColPos: int32(pkPos),
@@ -1309,7 +1309,7 @@ func appendPrimaryConstrantPlan(
 				ObjRef:   objRef,
 				TableDef: scanTableDef,
 				ProjectList: []*Expr{{
-					Typ: pkTyp,
+					Typ: *pkTyp,
 					Expr: &plan.Expr_Col{
 						Col: &ColRef{
 							ColPos: int32(len(scanTableDef.Cols) - 1),
@@ -1321,7 +1321,7 @@ func appendPrimaryConstrantPlan(
 					{
 						Tag: rfTag,
 						Expr: &plan.Expr{
-							Typ: DeepCopyType(pkTyp),
+							Typ: *pkTyp,
 							Expr: &plan.Expr_Col{
 								Col: &plan.ColRef{
 									Name: tableDef.Pkey.PkeyColName,
@@ -1374,7 +1374,7 @@ func appendPrimaryConstrantPlan(
 						Tag:        rfTag,
 						UpperLimit: GetInFilterCardLimitOnPK(scanNode.Stats.TableCnt),
 						Expr: &plan.Expr{
-							Typ: DeepCopyType(pkTyp),
+							Typ: *pkTyp,
 							Expr: &plan.Expr_Col{
 								Col: &plan.ColRef{
 									RelPos: 0,
@@ -1409,7 +1409,7 @@ func appendPrimaryConstrantPlan(
 				scanTableDef.Cols = []*plan.ColDef{DeepCopyColDef(tableDef.Cols[pkPos]), DeepCopyColDef(rowIdDef)}
 
 				scanPkExpr := &Expr{
-					Typ: pkTyp,
+					Typ: *pkTyp,
 					Expr: &plan.Expr_Col{
 						Col: &ColRef{
 							Name: tableDef.Pkey.PkeyColName,
@@ -1417,7 +1417,7 @@ func appendPrimaryConstrantPlan(
 					},
 				}
 				scanRowIdExpr := &Expr{
-					Typ: rowIdDef.Typ,
+					Typ: *rowIdDef.Typ,
 					Expr: &plan.Expr_Col{
 						Col: &ColRef{
 							ColPos: 1,
@@ -1435,7 +1435,7 @@ func appendPrimaryConstrantPlan(
 						{
 							Tag: rfTag,
 							Expr: &plan.Expr{
-								Typ: DeepCopyType(pkTyp),
+								Typ: *pkTyp,
 								Expr: &plan.Expr_Col{
 									Col: &plan.ColRef{
 										Name: tableDef.Pkey.PkeyColName,
@@ -1448,7 +1448,7 @@ func appendPrimaryConstrantPlan(
 				rightId := builder.appendNode(scanNode, bindCtx)
 
 				pkColExpr := &Expr{
-					Typ: pkTyp,
+					Typ: *pkTyp,
 					Expr: &plan.Expr_Col{
 						Col: &ColRef{
 							RelPos: 1,
@@ -1458,7 +1458,7 @@ func appendPrimaryConstrantPlan(
 					},
 				}
 				rightExpr := &Expr{
-					Typ: pkTyp,
+					Typ: *pkTyp,
 					Expr: &plan.Expr_Col{
 						Col: &plan.ColRef{
 							Name: tableDef.Pkey.PkeyColName,
@@ -1470,7 +1470,7 @@ func appendPrimaryConstrantPlan(
 					return err
 				}
 				rightRowIdExpr := &Expr{
-					Typ: rowIdDef.Typ,
+					Typ: *rowIdDef.Typ,
 					Expr: &plan.Expr_Col{
 						Col: &ColRef{
 							ColPos: 1,
@@ -1479,7 +1479,7 @@ func appendPrimaryConstrantPlan(
 					},
 				}
 				rowIdExpr := &Expr{
-					Typ: rowIdDef.Typ,
+					Typ: *rowIdDef.Typ,
 					Expr: &plan.Expr_Col{
 						Col: &ColRef{
 							RelPos: 1,
@@ -1500,7 +1500,7 @@ func appendPrimaryConstrantPlan(
 							Tag:        rfTag,
 							UpperLimit: GetInFilterCardLimitOnPK(scanNode.Stats.TableCnt),
 							Expr: &plan.Expr{
-								Typ: DeepCopyType(pkTyp),
+								Typ: *pkTyp,
 								Expr: &plan.Expr_Col{
 									Col: &plan.ColRef{
 										RelPos: 0,
@@ -1596,7 +1596,7 @@ func appendPrimaryConstrantPlan(
 					return err
 				}
 				colExpr := &Expr{
-					Typ: rowIdDef.Typ,
+					Typ: *rowIdDef.Typ,
 					Expr: &plan.Expr_Col{
 						Col: &plan.ColRef{
 							Name: rowIdDef.Name,
@@ -1611,7 +1611,7 @@ func appendPrimaryConstrantPlan(
 					ProjectList: []*Expr{
 						colExpr,
 						{
-							Typ: tableDef.Cols[pkPos].Typ,
+							Typ: *tableDef.Cols[pkPos].Typ,
 							Expr: &plan.Expr_Col{
 								Col: &plan.ColRef{ColPos: 2, Name: tableDef.Cols[pkPos].Name},
 							},
@@ -1627,7 +1627,7 @@ func appendPrimaryConstrantPlan(
 
 				varcharType := types.T_varchar.ToType()
 				varcharExpr, err := makePlan2CastExpr(builder.GetContext(), &Expr{
-					Typ: tableDef.Cols[pkPos].Typ,
+					Typ: *tableDef.Cols[pkPos].Typ,
 					Expr: &plan.Expr_Col{
 						Col: &plan.ColRef{ColPos: 1, Name: tableDef.Cols[pkPos].Name},
 					},

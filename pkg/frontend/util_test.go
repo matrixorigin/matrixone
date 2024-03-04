@@ -672,9 +672,9 @@ func TestGetExprValue(t *testing.T) {
 				cvey.So(err, cvey.ShouldBeNil)
 				switch ret := value.(type) {
 				case *plan.Expr:
-					if types.T(ret.GetTyp().GetId()) == types.T_decimal64 {
+					if types.T(ret.GetTyp().Id) == types.T_decimal64 {
 						cvey.So(ret.GetLit().GetDecimal64Val().GetA(), cvey.ShouldEqual, kase.want)
-					} else if types.T(ret.GetTyp().GetId()) == types.T_decimal128 {
+					} else if types.T(ret.GetTyp().Id) == types.T_decimal128 {
 						temp := kase.want.(types.Decimal128)
 						cvey.So(uint64(ret.GetLit().GetDecimal128Val().GetA()), cvey.ShouldEqual, temp.B0_63)
 						cvey.So(uint64(ret.GetLit().GetDecimal128Val().GetB()), cvey.ShouldEqual, temp.B64_127)
