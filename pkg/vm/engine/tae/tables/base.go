@@ -923,6 +923,9 @@ func (blk *baseBlock) CollectDeleteInRangeAfterDeltalocation(
 				mp,
 			)
 		}
+		if err != nil {
+			return nil, err
+		}
 		if deletes != nil && deletes.Length() != 0 {
 			if bat == nil {
 				bat = containers.NewBatch()

@@ -1003,6 +1003,9 @@ func (n *MVCCHandle) TryDeleteByDeltaloc(txn txnif.AsyncTxn, deltaLoc objectio.L
 		deltaLoc,
 		nil,
 	)
+	if err == nil {
+		ok = true
+	}
 	rowids := containers.ToTNVector(bat.Vecs[0], common.MutMemAllocator)
 	defer rowids.Close()
 	err = containers.ForeachVector(rowids, func(rowid types.Rowid, _ bool, row int) error {

@@ -334,8 +334,8 @@ func (obj *txnObject) GetColumnDataByNames(
 	return obj.entry.GetBlockData().GetColumnDataByIds(ctx, obj.Txn, schema, blkID, attrIds, mp)
 }
 
-func (blk *txnObject) UpdateDeltaLoc(blkID uint16, deltaLoc objectio.Location) error {
-	id := blk.entry.AsCommonID()
+func (obj *txnObject) UpdateDeltaLoc(blkID uint16, deltaLoc objectio.Location) error {
+	id := obj.entry.AsCommonID()
 	id.SetBlockOffset(blkID)
-	return blk.table.store.UpdateDeltaLoc(id, deltaLoc)
+	return obj.table.store.UpdateDeltaLoc(id, deltaLoc)
 }
