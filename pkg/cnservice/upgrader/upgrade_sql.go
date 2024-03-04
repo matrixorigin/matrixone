@@ -32,7 +32,7 @@ type sqlWithSomeDetails struct {
 
 var sqls = []sqlWithSomeDetails{
 	{
-		sql:     "alter table `mo_task`.`sys_async_task` modify task_id bigint",
+		sql:     "alter table `mo_task`.`sys_async_task` modify task_id bigint auto_increment",
 		schema:  "mo_task",
 		table:   "sys_async_task",
 		tenant:  frontend.GetDefaultTenant(),
