@@ -311,20 +311,25 @@ func (blk *baseObject) loadLatestPersistedDeletes(
 	txn txnif.TxnReader,
 	mp *mpool.MPool,
 ) (bat *containers.Batch, persistedByCN bool, deltalocCommitTS types.TS, visible bool, err error) {
+	blk.RLock()
 	mvcc := blk.tryGetMVCC()
 	if mvcc == nil {
+		blk.RUnlock()
 		return
 	}
 	node := mvcc.GetLatestMVCCNode(blkID)
 	if node == nil {
+		blk.RUnlock()
 		return
 	}
 	location := node.BaseNode.DeltaLoc
 	if location.IsEmpty() {
+		blk.RUnlock()
 		return
 	}
 	deltalocCommitTS = node.End
 	visible = node.IsVisible(txn)
+	blk.RUnlock()
 	pkName := blk.meta.GetSchema().GetPrimaryKey().Name
 	bat, persistedByCN, err = LoadPersistedDeletes(
 		ctx,

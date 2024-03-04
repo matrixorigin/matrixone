@@ -206,8 +206,8 @@ func (space *tableSpace) prepareApplyANode(node *anode) error {
 		}
 		id := appender.GetID()
 		space.table.store.warChecker.Insert(appender.GetMeta().(*catalog.ObjectEntry))
-		space.table.store.txn.GetMemo().AddBlock(space.table.entry.GetDB().ID,
-			id.TableID, &id.BlockID)
+		space.table.store.txn.GetMemo().AddObject(space.table.entry.GetDB().ID,
+			id.TableID, id.ObjectID())
 		space.appends = append(space.appends, ctx)
 		// logutil.Debugf("%s: toAppend %d, appended %d, blks=%d",
 		// 	id.String(), toAppend, appended, len(space.appends))

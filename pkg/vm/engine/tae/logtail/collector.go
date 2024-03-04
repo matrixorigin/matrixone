@@ -216,14 +216,11 @@ func (d *dirtyCollector) IsCommitted(from, to types.TS) bool {
 }
 
 // DirtyCount returns unflushed table, Object, block count
-func (d *dirtyCollector) DirtyCount() (tblCnt, objCnt, blkCnt int) {
+func (d *dirtyCollector) DirtyCount() (tblCnt, objCnt int) {
 	merged := d.GetAndRefreshMerged()
 	tblCnt = merged.tree.TableCount()
 	for _, tblTree := range merged.tree.Tables {
 		objCnt += len(tblTree.Objs)
-		for _, objTree := range tblTree.Objs {
-			blkCnt += len(objTree.Blks)
-		}
 	}
 	return
 }
@@ -420,11 +417,6 @@ func (d *dirtyCollector) tryCompactTree(
 		}
 
 		for id, dirtyObj := range dirtyTable.Objs {
-			// remove empty objs
-			if dirtyObj.IsEmpty() {
-				dirtyTable.Shrink(id)
-				continue
-			}
 			if obj, err = tbl.GetObjectByID(dirtyObj.ID); err != nil {
 				if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
 					dirtyTable.Shrink(id)

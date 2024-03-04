@@ -541,7 +541,7 @@ func (tbl *txnTable) AddDeleteNode(id *common.ID, node txnif.DeleteNode) error {
 		}
 	} else {
 		tbl.store.IncreateWriteCnt()
-		tbl.store.txn.GetMemo().AddBlock(tbl.entry.GetDB().ID, id.TableID, &id.BlockID)
+		tbl.store.txn.GetMemo().AddObject(tbl.entry.GetDB().ID, id.TableID, id.ObjectID())
 		tbl.deleteNodes[nid] = newDeleteNode(node, tbl.txnEntries.Len())
 	}
 	tbl.txnEntries.Append(node)
@@ -882,7 +882,7 @@ func (tbl *txnTable) UpdateDeltaLoc(id *common.ID, deltaloc objectio.Location) (
 	if err != nil {
 		return
 	}
-	tbl.store.txn.GetMemo().AddBlock(tbl.entry.GetDB().ID, id.TableID, &id.BlockID)
+	tbl.store.txn.GetMemo().AddObject(tbl.entry.GetDB().ID, id.TableID, id.ObjectID())
 	if isNewNode {
 		tbl.txnEntries.Append(entry)
 	}

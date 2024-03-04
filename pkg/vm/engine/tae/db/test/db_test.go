@@ -3212,13 +3212,13 @@ func TestDelete3(t *testing.T) {
 	defer tae.Close()
 
 	// this task won't affect logic of TestAppend2, it just prints logs about dirty count
-	// forest := logtail.NewDirtyCollector(tae.LogtailMgr, opts.Clock, tae.Catalog, new(catalog.LoopProcessor))
-	// hb := ops.NewHeartBeaterWithFunc(5*time.Millisecond, func() {
-	// 	forest.Run()
-	// 	t.Log(forest.String())
-	// }, nil)
-	// hb.Start()
-	// defer hb.Stop()
+	forest := logtail.NewDirtyCollector(tae.LogtailMgr, opts.Clock, tae.Catalog, new(catalog.LoopProcessor))
+	hb := ops.NewHeartBeaterWithFunc(5*time.Millisecond, func() {
+		forest.Run()
+		t.Log(forest.String())
+	}, nil)
+	hb.Start()
+	defer hb.Stop()
 	schema := catalog.MockSchemaAll(3, 2)
 	schema.BlockMaxRows = 10
 	schema.ObjectMaxBlocks = 2
@@ -3765,9 +3765,6 @@ func TestLogtailBasic(t *testing.T) {
 	reader = logMgr.GetReader(firstWriteTs, lastWriteTs)
 	dirties := reader.GetDirtyByTable(dbID, tableID)
 	require.Equal(t, 10, len(dirties.Objs))
-	for _, obj := range dirties.Objs {
-		require.Equal(t, 1, len(obj.Blks))
-	}
 	tots := func(ts types.TS) *timestamp.Timestamp {
 		return &timestamp.Timestamp{PhysicalTime: types.DecodeInt64(ts[4:12]), LogicalTime: types.DecodeUint32(ts[:4])}
 	}
@@ -4212,8 +4209,7 @@ func TestWatchDirty(t *testing.T) {
 	visitor := &catalog.LoopProcessor{}
 	watcher := logtail.NewDirtyCollector(logMgr, opts.Clock, tae.Catalog, visitor)
 
-	tbl, obj, blk := watcher.DirtyCount()
-	assert.Zero(t, blk)
+	tbl, obj := watcher.DirtyCount()
 	assert.Zero(t, obj)
 	assert.Zero(t, tbl)
 
@@ -4255,9 +4251,9 @@ func TestWatchDirty(t *testing.T) {
 		default:
 			watcher.Run()
 			time.Sleep(5 * time.Millisecond)
-			_, _, blkCnt := watcher.DirtyCount()
+			_, objCnt := watcher.DirtyCount()
 			// find block zero
-			if blkCnt == 0 {
+			if objCnt == 0 {
 				return
 			}
 		}
@@ -4311,7 +4307,7 @@ func TestDirtyWatchRace(t *testing.T) {
 				watcher.Run()
 				// tbl, obj, blk := watcher.DirtyCount()
 				// t.Logf("t%d: tbl %d, obj %d, blk %d", i, tbl, obj, blk)
-				_, _, _ = watcher.DirtyCount()
+				_, _ = watcher.DirtyCount()
 			}
 			wg.Done()
 		}(i)
