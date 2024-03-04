@@ -3538,22 +3538,6 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableBoolType("disable_txn_trace"),
 		Default:           int64(0),
 	},
-	"mo_cpu_price": {
-		Name:              "mo_cpu_price",
-		Scope:             ScopeGlobal,
-		Dynamic:           true,
-		SetVarHintApplies: false,
-		Type:              InitSystemVariableDoubleType("mo_cpu_price", 0, 1e9),
-		Default:           "7.43e-14",
-	},
-	"mo_mem_price": {
-		Name:              "mo_mem_price",
-		Scope:             ScopeGlobal,
-		Dynamic:           true,
-		SetVarHintApplies: false,
-		Type:              InitSystemVariableDoubleType("mo_mem_price", 0, 1e9),
-		Default:           "6.79e-24",
-	},
 }
 
 func updateTimeZone(sess *Session, vars map[string]interface{}, name string, val interface{}) error {
