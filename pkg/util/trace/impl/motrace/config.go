@@ -19,6 +19,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
@@ -82,6 +83,8 @@ type tracerProviderConfig struct {
 
 	bufferSizeThreshold int64 // WithBufferSizeThreshold
 
+	cuConfig config.OBCUConfig // WithCUConfig
+
 	mux sync.RWMutex
 }
 
@@ -111,6 +114,10 @@ func (cfg *tracerProviderConfig) GetSqlExecutor() func() ie.InternalExecutor {
 	cfg.mux.RLock()
 	defer cfg.mux.RUnlock()
 	return cfg.sqlExecutor
+}
+
+func (cfg *tracerProviderConfig) GetCUConfig() config.OBCUConfig {
+	return cfg.cuConfig
 }
 
 // TracerProviderOption configures a TracerProvider.
@@ -197,6 +204,12 @@ func WithAggregatorDisable(disable bool) tracerProviderOption {
 func WithStmtMergeEnable(enable bool) tracerProviderOption {
 	return func(cfg *tracerProviderConfig) {
 		cfg.enableStmtMerge = enable
+	}
+}
+
+func WithCUConfig(cu config.OBCUConfig) tracerProviderOption {
+	return func(cfg *tracerProviderConfig) {
+		cfg.cuConfig = cu
 	}
 }
 

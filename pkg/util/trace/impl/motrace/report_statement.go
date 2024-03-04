@@ -63,7 +63,7 @@ func StatementInfoNew(i Item, ctx context.Context) Item {
 	if s, ok := i.(*StatementInfo); ok {
 
 		// execute the stat plan
-		s.ExecPlan2Stats(ctx)
+		// s.ExecPlan2Stats(ctx) // deprecated
 
 		// remove the plan, s will be free
 		s.jsonByte = nil
@@ -136,7 +136,7 @@ func StatementInfoUpdate(ctx context.Context, existing, new Item) {
 	e.Duration += n.Duration
 	e.ResultCount += n.ResultCount
 	// responseAt is the last response time
-	n.ExecPlan2Stats(context.Background())
+	// n.ExecPlan2Stats(context.Background()) // deprecated
 	if err := mergeStats(e, n); err != nil {
 		// handle error
 		logutil.Error("Failed to merge stats", logutil.ErrorField(err))
@@ -405,7 +405,8 @@ func (s *StatementInfo) FillRow(ctx context.Context, row *table.Row) {
 		float64Val := calculateAggrMemoryBytes(s.AggrMemoryTime, float64(s.Duration))
 		s.statsArray.WithMemorySize(float64Val)
 	}
-	stats := s.ExecPlan2Stats(ctx)
+	// stats := s.ExecPlan2Stats(ctx) // deprecated
+	stats := s.statsArray.ToJsonString()
 	if GetTracerProvider().disableSqlWriter {
 		// Be careful, this two string is unsafe, will be free after Free
 		row.SetColumnVal(execPlanCol, table.StringField(util.UnsafeBytesToString(execPlan)))
@@ -490,6 +491,8 @@ func (s *StatementInfo) ExecPlan2Stats(ctx context.Context) []byte {
 		s.statsArray.WithConnType(s.ConnType)
 		s.RowsRead = stats.RowsRead
 		s.BytesScan = stats.BytesScan
+		cu := calculateCU(s.statsArray, int64(s.Duration))
+		s.statsArray.WithCU(cu)
 		return s.statsArray.ToJsonString()
 	}
 }
@@ -550,6 +553,30 @@ func (s *StatementInfo) MarkResponseAt() {
 	}
 }
 
+func calculateCU(stats statistic.StatsArray, durationNS int64) float64 {
+
+	cfg := GetTracerProvider().GetCUConfig()
+
+	// basic
+	cpu := stats.GetTimeConsumed() * cfg.CpuPrice
+	mem := stats.GetMemorySize() * float64(durationNS) * cfg.MemPrice
+	ioIn := stats.GetS3IOInputCount() * cfg.IoInPrice
+	ioOut := stats.GetS3IOOutputCount() * cfg.IoOutPrice
+	connType := stats.GetConnType()
+	traffic := 0.0
+	switch statistic.ConnType(connType) {
+	case statistic.ConnTypeUnknown:
+		traffic = stats.GetOutTrafficBytes() * cfg.TrafficPrice0
+	case statistic.ConnTypeInternal:
+		traffic = stats.GetOutTrafficBytes() * cfg.TrafficPrice1
+	case statistic.ConnTypeExternal:
+		traffic = stats.GetOutTrafficBytes() * cfg.TrafficPrice2
+	default:
+		logutil.Warn("Unknown ConnType as CU", zap.Float64("connType", connType))
+	}
+	return (cpu + mem + ioIn + ioOut + traffic) / cfg.CUUnit
+}
+
 // TcpIpv4HeaderSize default tcp header bytes.
 const TcpIpv4HeaderSize = 66
 
@@ -579,6 +606,8 @@ func EndStatement(ctx context.Context, err error, sentRows int64, outBytes int64
 		}
 		outBytes += TcpIpv4HeaderSize * outPacket
 		s.statsArray.InitIfEmpty().WithOutTrafficBytes(float64(outBytes)).WithOutPacketCount(float64(outPacket))
+		s.ExecPlan2Stats(ctx)
+		s.ExecPlan = nil
 		s.Status = StatementStatusSuccess
 		if err != nil {
 			s.Error = err

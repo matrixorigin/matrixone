@@ -67,6 +67,7 @@ func InitWithConfig(ctx context.Context, SV *config.ObservabilityParameters, opt
 		WithAggregatorWindow(SV.AggregationWindow.Duration),
 		WithSelectThreshold(SV.SelectAggrThreshold.Duration),
 		WithStmtMergeEnable(SV.EnableStmtMerge),
+		WithCUConfig(SV.CU),
 
 		DebugMode(SV.EnableTraceDebug),
 		WithBufferSizeThreshold(SV.BufferSize),
