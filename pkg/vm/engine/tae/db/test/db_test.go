@@ -3212,13 +3212,13 @@ func TestDelete3(t *testing.T) {
 	defer tae.Close()
 
 	// this task won't affect logic of TestAppend2, it just prints logs about dirty count
-	forest := logtail.NewDirtyCollector(tae.LogtailMgr, opts.Clock, tae.Catalog, new(catalog.LoopProcessor))
-	hb := ops.NewHeartBeaterWithFunc(5*time.Millisecond, func() {
-		forest.Run()
-		t.Log(forest.String())
-	}, nil)
-	hb.Start()
-	defer hb.Stop()
+	// forest := logtail.NewDirtyCollector(tae.LogtailMgr, opts.Clock, tae.Catalog, new(catalog.LoopProcessor))
+	// hb := ops.NewHeartBeaterWithFunc(5*time.Millisecond, func() {
+	// 	forest.Run()
+	// 	t.Log(forest.String())
+	// }, nil)
+	// hb.Start()
+	// defer hb.Stop()
 	schema := catalog.MockSchemaAll(3, 2)
 	schema.BlockMaxRows = 10
 	schema.ObjectMaxBlocks = 2
