@@ -59,7 +59,7 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 		idx := int32(i)
 		tableDef.Name2ColIndex[tableDef.Cols[i].Name] = idx
 		colExpr := &plan.Expr{
-			Typ: tableDef.Cols[i].Typ,
+			Typ: *tableDef.Cols[i].Typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					ColPos: idx,
@@ -245,7 +245,7 @@ func getProjectNode(stmt *tree.Load, ctx CompilerContext, node *plan.Node, table
 	projectVec := make([]*plan.Expr, len(tableDef.Cols))
 	for i := 0; i < len(tableDef.Cols); i++ {
 		tmp := &plan.Expr{
-			Typ: tableDef.Cols[i].Typ,
+			Typ: *tableDef.Cols[i].Typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					ColPos: int32(i),
@@ -369,7 +369,7 @@ func makeCastExpr(stmt *tree.Load, fileName string, tableDef *TableDef) []*plan.
 	for i := 0; i < len(tableDef.Cols); i++ {
 		typ := tableDef.Cols[i].Typ
 		expr := &plan.Expr{
-			Typ: stringTyp,
+			Typ: *stringTyp,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: 0,
