@@ -6,13 +6,13 @@ select sleep(1);
 create snapshot snapshot_03 for account default_1;
 select sleep(1);
 create snapshot snapshot_04 for account defalt_1;
--- @ignore:1,3
+-- @ignore:3
 show snapshots;
--- @ignore:1,3
+-- @ignore:3
 show snapshots where SNAPSHOT_NAME = 'snapshot_01';
--- @ignore:1,3
+-- @ignore:3
 show snapshots where SNAPSHOT_LEVEL = 'cluster';
--- @ignore:1,3
+-- @ignore:3
 show snapshots where OBJECT_NAME = 'default_1';
 DROP SNAPSHOT snapshot_01;
 DROP SNAPSHOT snapshot_02;
@@ -25,13 +25,13 @@ select sleep(1);
 create snapshot snapshot_06 for account default_1;
 select sleep(1);
 create snapshot snapshot_07 for account default_1;
--- @ignore:1,3
+-- @ignore:3
 show snapshots;
--- @ignore:1,3
+-- @ignore:3
 show snapshots where SNAPSHOT_NAME = 'snapshot_07';
--- @ignore:1,3
+-- @ignore:3
 show snapshots where SNAPSHOT_LEVEL = 'account';
--- @ignore:1,3
+-- @ignore:3
 show snapshots where OBJECT_NAME = 'default_1';
 -- @session
 drop account default_1;
@@ -44,14 +44,14 @@ select sleep(1);
 create snapshot snapshot_09 for account default_1;
 create account default_2 ADMIN_NAME admin IDENTIFIED BY '111111';
 create snapshot snapshot_10 for account default_2;
--- @ignore:1,3
+-- @ignore:3
 show snapshots;
 
 -- @session:id=2&user=default_1:admin&password=111111
 create snapshot snapshot_11 for account default_1;
 create snapshot snapshot_12 for account default_2;
 create snapshot snapshot_13 for cluster;
--- @ignore:1,3
+-- @ignore:3
 show snapshots;
 create user  efg identified by '111';
 -- @session

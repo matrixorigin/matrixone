@@ -11,20 +11,20 @@ sleep(1)
 create snapshot snapshot_04 for account defalt_1;
 internal error: create snapshot for account defalt_1, account defalt_1 does not exist
 show snapshots;
-SNAPSHOT_ID    SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    OBJECT_NAME
-018e0837-b0ce-7add-844e-4c09c8a29a0b    snapshot_01    2024-03-04 14:47:31    cluster    
-018e0837-b313-73cf-9a89-6f6e72848c1c    snapshot_02    2024-03-04 14:47:31    account    default_1
-018e0837-b70e-7e47-bb63-69a505a003b2    snapshot_03    2024-03-04 14:47:32    account    default_1
+SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    OBJECT_NAME
+snapshot_01    2024-03-04 15:27:57    cluster    
+snapshot_02    2024-03-04 15:27:57    account    default_1
+snapshot_03    2024-03-04 15:27:58    account    default_1
 show snapshots where SNAPSHOT_NAME = 'snapshot_01';
-snapshot_id    snapshot_name    timestamp    snapshot_level    object_name
-018e0837-b0ce-7add-844e-4c09c8a29a0b    snapshot_01    2024-03-04 14:47:31    cluster    
+snapshot_name    timestamp    snapshot_level    object_name
+snapshot_01    2024-03-04 15:27:57    cluster    
 show snapshots where SNAPSHOT_LEVEL = 'cluster';
-snapshot_id    snapshot_name    timestamp    snapshot_level    object_name
-018e0837-b0ce-7add-844e-4c09c8a29a0b    snapshot_01    2024-03-04 14:47:31    cluster    
+snapshot_name    timestamp    snapshot_level    object_name
+snapshot_01    2024-03-04 15:27:57    cluster    
 show snapshots where OBJECT_NAME = 'default_1';
-snapshot_id    snapshot_name    timestamp    snapshot_level    object_name
-018e0837-b313-73cf-9a89-6f6e72848c1c    snapshot_02    2024-03-04 14:47:31    account    default_1
-018e0837-b70e-7e47-bb63-69a505a003b2    snapshot_03    2024-03-04 14:47:32    account    default_1
+snapshot_name    timestamp    snapshot_level    object_name
+snapshot_02    2024-03-04 15:27:57    account    default_1
+snapshot_03    2024-03-04 15:27:58    account    default_1
 DROP SNAPSHOT snapshot_01;
 DROP SNAPSHOT snapshot_02;
 DROP SNAPSHOT snapshot_03;
@@ -40,23 +40,23 @@ sleep(1)
 0
 create snapshot snapshot_07 for account default_1;
 show snapshots;
-SNAPSHOT_ID    SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    OBJECT_NAME
-018e0837-bb69-7493-98fa-7a00365b7b6a    snapshot_05    2024-03-04 14:47:33    account    default_1
-018e0837-bf66-7387-b5b6-dfb1be23b406    snapshot_06    2024-03-04 14:47:35    account    default_1
-018e0837-c35b-7c5c-a991-0cc649c74409    snapshot_07    2024-03-04 14:47:36    account    default_1
+SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    OBJECT_NAME
+snapshot_05    2024-03-04 15:27:59    account    default_1
+snapshot_06    2024-03-04 15:28:00    account    default_1
+snapshot_07    2024-03-04 15:28:01    account    default_1
 show snapshots where SNAPSHOT_NAME = 'snapshot_07';
-snapshot_id    snapshot_name    timestamp    snapshot_level    object_name
-018e0837-c35b-7c5c-a991-0cc649c74409    snapshot_07    2024-03-04 14:47:36    account    default_1
+snapshot_name    timestamp    snapshot_level    object_name
+snapshot_07    2024-03-04 15:28:01    account    default_1
 show snapshots where SNAPSHOT_LEVEL = 'account';
-snapshot_id    snapshot_name    timestamp    snapshot_level    object_name
-018e0837-bb69-7493-98fa-7a00365b7b6a    snapshot_05    2024-03-04 14:47:33    account    default_1
-018e0837-bf66-7387-b5b6-dfb1be23b406    snapshot_06    2024-03-04 14:47:35    account    default_1
-018e0837-c35b-7c5c-a991-0cc649c74409    snapshot_07    2024-03-04 14:47:36    account    default_1
+snapshot_name    timestamp    snapshot_level    object_name
+snapshot_05    2024-03-04 15:27:59    account    default_1
+snapshot_06    2024-03-04 15:28:00    account    default_1
+snapshot_07    2024-03-04 15:28:01    account    default_1
 show snapshots where OBJECT_NAME = 'default_1';
-snapshot_id    snapshot_name    timestamp    snapshot_level    object_name
-018e0837-bb69-7493-98fa-7a00365b7b6a    snapshot_05    2024-03-04 14:47:33    account    default_1
-018e0837-bf66-7387-b5b6-dfb1be23b406    snapshot_06    2024-03-04 14:47:35    account    default_1
-018e0837-c35b-7c5c-a991-0cc649c74409    snapshot_07    2024-03-04 14:47:36    account    default_1
+snapshot_name    timestamp    snapshot_level    object_name
+snapshot_05    2024-03-04 15:27:59    account    default_1
+snapshot_06    2024-03-04 15:28:00    account    default_1
+snapshot_07    2024-03-04 15:28:01    account    default_1
 drop account default_1;
 create snapshot snapshot_08 for account default_1;
 internal error: create snapshot for account default_1, account default_1 does not exist
@@ -70,17 +70,17 @@ internal error: snapshot snapshot_09 already exists
 create account default_2 ADMIN_NAME admin IDENTIFIED BY '111111';
 create snapshot snapshot_10 for account default_2;
 show snapshots;
-SNAPSHOT_ID    SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    OBJECT_NAME
-018e0837-c5cb-7436-adc8-71ea97d03655    snapshot_09    2024-03-04 14:47:36    account    default_1
-018e0837-cbd8-795d-a914-9280ab9fbac1    snapshot_10    2024-03-04 14:47:38    account    default_2
+SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    OBJECT_NAME
+snapshot_09    2024-03-04 15:28:02    account    default_1
+snapshot_10    2024-03-04 15:28:03    account    default_2
 create snapshot snapshot_11 for account default_1;
 create snapshot snapshot_12 for account default_2;
 internal error: only sys tenant can create tenant level snapshot for other tenant
 create snapshot snapshot_13 for cluster;
 internal error: only sys tenant can create cluster level snapshot
 show snapshots;
-SNAPSHOT_ID    SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    OBJECT_NAME
-018e0837-cbed-722e-ba33-c3323539c835    snapshot_11    2024-03-04 14:47:38    account    default_1
+SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    OBJECT_NAME
+snapshot_11    2024-03-04 15:28:03    account    default_1
 create user  efg identified by '111';
 create snapshot snapshot_14 for account default_1;
 internal error: do not have privilege to execute the statement
