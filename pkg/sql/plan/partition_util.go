@@ -618,7 +618,7 @@ func collectColumnsType(partitionDef *plan.PartitionByDef) []*Type {
 	if len(partitionDef.PartitionColumns.Columns) > 0 {
 		colTypes := make([]*Type, 0, len(partitionDef.PartitionColumns.Columns))
 		for _, col := range partitionDef.PartitionColumns.Columns {
-			colTypes = append(colTypes, col.Typ)
+			colTypes = append(colTypes, &col.Typ)
 		}
 		return colTypes
 	}

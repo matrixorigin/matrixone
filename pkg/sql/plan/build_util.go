@@ -436,7 +436,7 @@ func getDefaultExpr(ctx context.Context, d *plan.ColDef) (*Expr, error) {
 					Isnull: true,
 				},
 			},
-			Typ: &plan.Type{
+			Typ: plan.Type{
 				Id:          d.Typ.Id,
 				NotNullable: false,
 			},
