@@ -1,0 +1,6 @@
+create table t1(a int, b int unique key);
+-- @separator:table
+explain insert into t1(a) values (1);
+create table t2(a int, b int, c int, unique key(b, c));
+-- @separator:table
+explain insert into t2(a) values (1);
