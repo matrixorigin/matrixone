@@ -1,0 +1,147 @@
+drop database if exists d1;
+create database d1;
+use d1;
+drop table if exists t1;
+create table t1(c1 int primary key, c2 int, c3 int, key(c2), unique key id1(c3));
+insert into t1 select *,*,* from generate_series(1,100000) g;
+insert into t1 select *,1111,* from generate_series(100001,150000) g;
+drop table if exists t2;
+create table t2(c0 int, c1 int , c2 int, c3 int, primary key(c0,c1),key(c2), unique key id1(c3));
+insert into t2 select *,*,*,* from generate_series(1,100000) g;
+insert into t2 select *,*,1111,* from generate_series(100001,150000) g;
+select mo_ctl('dn', 'flush', 'd1.t1');
+mo_ctl(dn, flush, d1.t1)
+{\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
+select mo_ctl('dn', 'flush', 'd1.t2');
+mo_ctl(dn, flush, d1.t2)
+{\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
+select Sleep(5);
+sleep(5)
+0
+select * from t1 where c2=1;
+c1    c2    c3
+1    1    1
+select count(c3) from t1 where c2=1111;
+count(c3)
+50001
+select * from t1 where c3=1234;
+c1    c2    c3
+1234    1234    1234
+select * from t1 where c3=5678;
+c1    c2    c3
+5678    5678    5678
+select * from t1 where c2 between 1 and 3;
+c1    c2    c3
+1    1    1
+2    2    2
+3    3    3
+select * from t1 where c3 between 2 and 10;
+c1    c2    c3
+2    2    2
+3    3    3
+4    4    4
+5    5    5
+6    6    6
+7    7    7
+8    8    8
+9    9    9
+10    10    10
+select count(c3) from t1 where c2 between 1000 and 1100;
+count(c3)
+101
+select count(c3) from t1 where c2 between 1000 and 1200;
+count(c3)
+50201
+select count(c3) from t1 where c2 between 1000 and 2000;
+count(c3)
+51001
+select count(c3) from t1 where c2 between 1000 and 3000;
+count(c3)
+52001
+select count(c3) from t1 where c3 between 1000 and 1100;
+count(c3)
+101
+select count(c3) from t1 where c2 between 1000 and 2000;
+count(c3)
+51001
+select * from t1 where c2 in (1);
+c1    c2    c3
+1    1    1
+select * from t1 where c2 in (1,1000,2000);
+c1    c2    c3
+1    1    1
+1000    1000    1000
+2000    2000    2000
+select count(c3) from t1 where c2 in (1,1000,1111,2000);
+count(c3)
+50004
+select * from t2 where c2=1;
+c0    c1    c2    c3
+1    1    1    1
+select count(c3) from t2 where c2=1111;
+count(c3)
+50001
+select * from t2 where c3=1234;
+c0    c1    c2    c3
+1234    1234    1234    1234
+select * from t2 where c3=5678;
+c0    c1    c2    c3
+5678    5678    5678    5678
+select * from t2 where c2 between 1 and 3;
+c0    c1    c2    c3
+1    1    1    1
+2    2    2    2
+3    3    3    3
+select * from t2 where c3 between 2 and 10;
+c0    c1    c2    c3
+2    2    2    2
+3    3    3    3
+4    4    4    4
+5    5    5    5
+6    6    6    6
+7    7    7    7
+8    8    8    8
+9    9    9    9
+10    10    10    10
+select count(c3) from t2 where c2 between 1000 and 1100;
+count(c3)
+101
+select count(c3) from t2 where c2 between 1000 and 1200;
+count(c3)
+50201
+select count(c3) from t2 where c2 between 1000 and 2000;
+count(c3)
+51001
+select count(c3) from t2 where c2 between 1000 and 3000;
+count(c3)
+52001
+select count(c3) from t2 where c3 between 1000 and 1100;
+count(c3)
+101
+select count(c3) from t2 where c2 between 1000 and 2000;
+count(c3)
+51001
+select * from t2 where c2 in (1);
+c0    c1    c2    c3
+1    1    1    1
+select * from t2 where c2 in (1,1000,2000);
+c0    c1    c2    c3
+1    1    1    1
+1000    1000    1000    1000
+2000    2000    2000    2000
+select count(c3) from t2 where c2 in (1,1000,1111,2000);
+count(c3)
+50004
+select c3,c2 from t1 where c2=1111 order by c3 limit 10;
+c3    c2
+1111    1111
+100001    1111
+100002    1111
+100003    1111
+100004    1111
+100005    1111
+100006    1111
+100007    1111
+100008    1111
+100009    1111
+drop database if exists d1;
