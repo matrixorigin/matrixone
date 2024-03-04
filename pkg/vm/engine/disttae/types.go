@@ -23,6 +23,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -44,7 +46,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -150,6 +151,9 @@ type Transaction struct {
 	writes []Entry
 	// txn workspace size
 	workspaceSize uint64
+
+	// the last snapshot write offset
+	snapshotWriteOffset int
 
 	tnStores []DNStore
 	proc     *process.Process
@@ -610,8 +614,6 @@ type txnTable struct {
 
 	// timestamp of the last operation on this table
 	lastTS timestamp.Timestamp
-	//entries belong to this table,and come from txn.writes.
-	writes []Entry
 
 	// this should be the statement id
 	// but seems that we're not maintaining it at the moment
