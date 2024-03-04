@@ -48,7 +48,8 @@ func handleTask(proc *process.Process,
 	service serviceType,
 	parameter string,
 	sender requestSender) (Result, error) {
-	switch strings.ToLower(parameter) {
+	parameter = strings.ToLower(parameter)
+	switch parameter {
 	case disableTask:
 		taskservice.DebugCtlTaskFramework(true)
 		return Result{
@@ -88,7 +89,6 @@ func handleTask(proc *process.Process,
 }
 
 func checkRunTaskParameter(param string) (string, int32, error) {
-	param = strings.ToLower(param)
 	// uuid:taskId
 	args := strings.Split(param, ":")
 	if len(args) != 2 {
