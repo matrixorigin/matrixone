@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -308,6 +309,8 @@ func (u *Upgrader) RunUpgradeSqls(ctx context.Context) []error {
 	if exec == nil {
 		return nil
 	}
+
+	time.Sleep(time.Second * 4)
 
 	errors := []error{}
 	// Execute upgrade SQL
