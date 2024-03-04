@@ -37,6 +37,7 @@ const (
 	StatsArrayVersion2 = 2 // float64 array + plus one elem OutTrafficBytes
 	StatsArrayVersion3 = 3 // ... + one elem: ConnType
 	StatsArrayVersion4 = 4 // ... + one elem: OutPacketCount
+	StatsArrayVersion5 = 5 // ... + one elem: CU
 
 	StatsArrayVersionLatest // same value as last variable StatsArrayVersion#
 )
@@ -50,6 +51,7 @@ const (
 	StatsArrayIndexOutTrafficBytes // index: 5
 	StatsArrayIndexConnType        // index: 6
 	StatsArrayIndexOutPacketCnt    // index: 7
+	StatsArrayIndexCU              // index: 8
 
 	StatsArrayLength
 )
@@ -59,6 +61,7 @@ const (
 	StatsArrayLengthV2 = 6
 	StatsArrayLengthV3 = 7
 	StatsArrayLengthV4 = 8
+	StatsArrayLengthV5 = 9
 )
 
 type ConnType float64
@@ -88,6 +91,10 @@ func NewStatsArrayV3() *StatsArray {
 
 func NewStatsArrayV4() *StatsArray {
 	return NewStatsArray().WithVersion(StatsArrayVersion4)
+}
+
+func NewStatsArrayV5() *StatsArray {
+	return NewStatsArray().WithVersion(StatsArrayVersion5)
 }
 
 func (s *StatsArray) Init() *StatsArray {
@@ -131,6 +138,12 @@ func (s *StatsArray) GetOutPacketCount() float64 {
 	}
 	return s[StatsArrayIndexOutPacketCnt]
 }
+func (s *StatsArray) GetCU() float64 {
+	if s.GetVersion() < StatsArrayVersion5 {
+		return 0
+	}
+	return s[StatsArrayIndexCU]
+}
 
 // WithVersion set the version array in StatsArray, please carefully to use.
 func (s *StatsArray) WithVersion(v float64) *StatsArray { (*s)[StatsArrayIndexVersion] = v; return s }
@@ -169,6 +182,11 @@ func (s *StatsArray) WithOutPacketCount(v float64) *StatsArray {
 	return s
 }
 
+func (s *StatsArray) WithCU(v float64) *StatsArray {
+	s[StatsArrayIndexCU] = v
+	return s
+}
+
 func (s *StatsArray) ToJsonString() []byte {
 	switch s.GetVersion() {
 	case StatsArrayVersion1:
@@ -179,6 +197,8 @@ func (s *StatsArray) ToJsonString() []byte {
 		return StatsArrayToJsonString((*s)[:StatsArrayLengthV3])
 	case StatsArrayVersion4:
 		return StatsArrayToJsonString((*s)[:StatsArrayLengthV4])
+	case StatsArrayLengthV5:
+		return StatsArrayToJsonString((*s)[:StatsArrayLengthV5])
 	default:
 		return StatsArrayToJsonString((*s)[:])
 	}
