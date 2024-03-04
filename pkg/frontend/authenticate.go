@@ -9684,8 +9684,9 @@ func doCreateSnapshot(ctx context.Context, ses *Session, stmt *tree.CreateSnapSh
 		snapshotId = newUUid.String()
 
 		// 2. get snapshot ts
-		ts := ses.proc.TxnOperator.SnapshotTS()
-		snapshotTs = ts.String()
+		// ts := ses.proc.TxnOperator.SnapshotTS()
+		// snapshotTs = ts.String()
+		snapshotTs = types.CurrentTimestamp().String2(time.Local, 0)
 
 		sql, err = getSqlForCreateSnapshot(ctx, snapshotId, snapshotName, snapshotTs, snapshotLevel.String(), string(stmt.Obeject.ObjName))
 		if err != nil {
