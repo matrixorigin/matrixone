@@ -3539,7 +3539,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           true,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableDoubleType("mo_cpu_price", 0, 1e9),
-		Default:           float64(7.43e-14),
+		Default:           "7.43e-14",
 	},
 	"mo_mem_price": {
 		Name:              "mo_mem_price",
@@ -3547,7 +3547,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           true,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableDoubleType("mo_mem_price", 0, 1e9),
-		Default:           float64(6.79e-24),
+		Default:           "6.79e-24",
 	},
 }
 
