@@ -63,7 +63,7 @@ func StatementInfoNew(i Item, ctx context.Context) Item {
 	if s, ok := i.(*StatementInfo); ok {
 
 		// execute the stat plan
-		// s.ExecPlan2Stats(ctx) // deprecated
+		s.ExecPlan2Stats(ctx) // deprecated
 
 		// remove the plan, s will be free
 		s.jsonByte = nil
@@ -136,7 +136,7 @@ func StatementInfoUpdate(ctx context.Context, existing, new Item) {
 	e.Duration += n.Duration
 	e.ResultCount += n.ResultCount
 	// responseAt is the last response time
-	// n.ExecPlan2Stats(context.Background()) // deprecated
+	n.ExecPlan2Stats(context.Background()) // deprecated
 	if err := mergeStats(e, n); err != nil {
 		// handle error
 		logutil.Error("Failed to merge stats", logutil.ErrorField(err))
