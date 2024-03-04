@@ -381,6 +381,8 @@ var (
 	metricRoleColumn        = table.StringDefaultColumn(`role`, ALL_IN_ONE_MODE, `mo node role, like: CN, DN, LOG`)
 	metricAccountColumn     = table.StringDefaultColumn(`account`, `sys`, `account name`)
 	metricTypeColumn        = table.StringColumn(`type`, `sql type, like: insert, select, ...`)
+
+	sqlSourceTypeColumn = table.StringColumn(`sql_source_type`, `sql_source_type, val like: external_sql, cloud_nonuser_sql, cloud_user_sql, internal_sql, ...`)
 )
 
 var SingleMetricTable = &table.Table{
@@ -402,11 +404,30 @@ var SingleMetricTable = &table.Table{
 	SupportConstAccess: true,
 }
 
+var SqlStatementCUTable = &table.Table{
+	Account:          table.AccountSys,
+	Database:         MetricDBConst,
+	Table:            `metric`,
+	Columns:          []table.Column{metricAccountColumn, metricCollectTimeColumn, metricValueColumn, metricNodeColumn, metricRoleColumn, sqlSourceTypeColumn},
+	PrimaryKeyColumn: []table.Column{},
+	ClusterBy:        []table.Column{metricAccountColumn, metricCollectTimeColumn},
+	Engine:           table.NormalTableEngine,
+	Comment:          `metric data`,
+	PathBuilder:      table.NewAccountDatePathBuilder(),
+	AccountColumn:    &metricAccountColumn,
+	// TimestampColumn
+	TimestampColumn: &metricCollectTimeColumn,
+	// SupportUserAccess
+	SupportUserAccess: true,
+	// SupportConstAccess
+	SupportConstAccess: true,
+}
+
 // GetAllTables
 //
 // Deprecated: use table.GetAllTables() instead.
 func GetAllTables() []*table.Table {
-	return []*table.Table{SingleMetricTable}
+	return []*table.Table{SingleMetricTable, SqlStatementCUTable}
 }
 
 func NewMetricView(tbl string, opts ...table.ViewOption) *table.View {
