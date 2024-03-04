@@ -57,6 +57,18 @@ func getPosInCompositPK(name string, pks []string) int {
 	return -1
 }
 
+func getColDefByName(name string, tableDef *plan.TableDef) *plan.ColDef {
+	idx := strings.Index(name, ".")
+	var pos int32
+	if idx >= 0 {
+		subName := name[idx+1:]
+		pos = tableDef.Name2ColIndex[subName]
+	} else {
+		pos = tableDef.Name2ColIndex[name]
+	}
+	return tableDef.Cols[pos]
+}
+
 func getValidCompositePKCnt(vals []*plan.Literal) int {
 	if len(vals) == 0 {
 		return 0
