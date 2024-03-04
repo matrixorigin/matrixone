@@ -34,6 +34,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -800,7 +802,7 @@ func newStringConstVal(v string) *plan.Expr {
 
 func newColumnExpr(pos int, typ *plan.Type, name string) *plan.Expr {
 	return &plan.Expr{
-		Typ: typ,
+		Typ: *typ,
 		Expr: &plan.Expr_Col{
 			Col: &plan.ColRef{
 				Name:   name,
@@ -810,7 +812,7 @@ func newColumnExpr(pos int, typ *plan.Type, name string) *plan.Expr {
 	}
 }
 
-func genWriteReqs(ctx context.Context, writes []Entry, tid string) ([]txn.TxnRequest, error) {
+func genWriteReqs(ctx context.Context, writes []Entry, op client.TxnOperator) ([]txn.TxnRequest, error) {
 	mq := make(map[string]DNStore)
 	mp := make(map[string][]*api.Entry)
 	v := ctx.Value(defines.PkCheckByTN{})
@@ -835,7 +837,9 @@ func genWriteReqs(ctx context.Context, writes []Entry, tid string) ([]txn.TxnReq
 			continue
 		}
 		if e.tableId == catalog.MO_TABLES_ID && (e.typ == INSERT || e.typ == INSERT_TXN) {
-			logutil.Infof("precommit: create table: %s-%v", tid, vector.MustStrCol(e.bat.GetVector(1+catalog.MO_TABLES_REL_NAME_IDX)))
+			logutil.Infof("precommit: create table: %s-%v",
+				op.Txn().DebugString(),
+				vector.MustStrCol(e.bat.GetVector(1+catalog.MO_TABLES_REL_NAME_IDX)))
 		}
 		if v != nil {
 			e.pkChkByTN = v.(int8)
@@ -851,6 +855,7 @@ func genWriteReqs(ctx context.Context, writes []Entry, tid string) ([]txn.TxnReq
 	}
 	reqs := make([]txn.TxnRequest, 0, len(mp))
 	for k := range mp {
+		trace.GetService().CommitEntries(op.Txn().ID, mp[k])
 		payload, err := types.Encode(&api.PrecommitWriteCmd{EntryList: mp[k]})
 		if err != nil {
 			return nil, err
