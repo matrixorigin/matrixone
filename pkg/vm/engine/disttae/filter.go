@@ -96,14 +96,23 @@ func isClusterOrPK(colDef *plan.ColDef) (isPK, isCluster bool) {
 	return
 }
 
-func getConstBytesFromExpr(expr *plan.Expr, colDef *plan.ColDef, proc *process.Process) ([]byte, bool) {
-	constVal := getConstValueByExpr(expr, proc)
-	if constVal == nil {
-		return nil, false
+func getConstBytesFromExpr(exprs []*plan.Expr, colDef *plan.ColDef, proc *process.Process) ([][]byte, bool) {
+	vals := make([][]byte, len(exprs))
+	for idx := range exprs {
+		constVal := getConstValueByExpr(exprs[idx], proc)
+		if constVal == nil {
+			return nil, false
+		}
+		colType := types.T(colDef.Typ.Id)
+		val, ok := evalLiteralExpr2(constVal, colType)
+		if !ok {
+			return nil, ok
+		}
+
+		vals[idx] = val
 	}
-	colType := types.T(colDef.Typ.Id)
-	val, ok := evalLiteralExpr2(constVal, colType)
-	return val, ok
+
+	return vals, true
 }
 
 func mustColVecValueFromBinaryFuncExpr(
@@ -131,28 +140,34 @@ func mustColVecValueFromBinaryFuncExpr(
 
 func mustColConstValueFromBinaryFuncExpr(
 	expr *plan.Expr_F, tableDef *plan.TableDef, proc *process.Process,
-) (*plan.Expr_Col, []byte, bool) {
+) (*plan.Expr_Col, [][]byte, bool) {
 	var (
-		colExpr *plan.Expr_Col
-		valExpr *plan.Expr
-		ok      bool
+		colExpr  *plan.Expr_Col
+		valExprs []*plan.Expr
+		ok       bool
 	)
 	if colExpr, ok = expr.F.Args[0].Expr.(*plan.Expr_Col); ok {
-		valExpr = expr.F.Args[1]
-	} else if colExpr, ok = expr.F.Args[1].Expr.(*plan.Expr_Col); ok {
-		valExpr = expr.F.Args[0]
-	} else {
-		return nil, nil, false
+		panic("first args is not col expr")
 	}
-	val, ok := getConstBytesFromExpr(
-		valExpr,
+
+	valExprs = expr.F.Args[1:]
+
+	//if colExpr, ok = expr.F.Args[0].Expr.(*plan.Expr_Col); ok {
+	//	valExpr = expr.F.Args[1]
+	//} else if colExpr, ok = expr.F.Args[1].Expr.(*plan.Expr_Col); ok {
+	//	valExpr = expr.F.Args[0]
+	//} else {
+	//	return nil, nil, false
+	//}
+	vals, ok := getConstBytesFromExpr(
+		valExprs,
 		tableDef.Cols[colExpr.Col.ColPos],
 		proc,
 	)
 	if !ok {
 		return nil, nil, false
 	}
-	return colExpr, val, true
+	return colExpr, vals, true
 }
 
 func CompileFilterExprs(
@@ -421,7 +436,7 @@ func CompileFilterExpr(
 				}
 			}
 		case "<=":
-			colExpr, val, ok := mustColConstValueFromBinaryFuncExpr(exprImpl, tableDef, proc)
+			colExpr, vals, ok := mustColConstValueFromBinaryFuncExpr(exprImpl, tableDef, proc)
 			if !ok {
 				canCompile = false
 				return
@@ -433,7 +448,7 @@ func CompileFilterExpr(
 					if obj.ZMIsEmpty() {
 						return true, nil
 					}
-					return obj.SortKeyZoneMap().AnyLEByValue(val), nil
+					return obj.SortKeyZoneMap().AnyLEByValue(vals[0]), nil
 				}
 			}
 			loadOp = loadMetadataOnlyOpFactory(fs)
@@ -443,7 +458,7 @@ func CompileFilterExpr(
 					return true, nil
 				}
 				dataMeta := meta.MustDataMeta()
-				return dataMeta.MustGetColumn(uint16(seqNum)).ZoneMap().AnyLEByValue(val), nil
+				return dataMeta.MustGetColumn(uint16(seqNum)).ZoneMap().AnyLEByValue(vals[0]), nil
 			}
 			blockFilterOp = func(
 				blk objectio.BlockInfo, blkMeta objectio.BlockObject, bf objectio.BloomFilter,
@@ -451,10 +466,10 @@ func CompileFilterExpr(
 				if blkMeta.IsEmpty() {
 					return true, nil
 				}
-				return blkMeta.MustGetColumn(uint16(seqNum)).ZoneMap().AnyLEByValue(val), nil
+				return blkMeta.MustGetColumn(uint16(seqNum)).ZoneMap().AnyLEByValue(vals[0]), nil
 			}
 		case ">=":
-			colExpr, val, ok := mustColConstValueFromBinaryFuncExpr(exprImpl, tableDef, proc)
+			colExpr, vals, ok := mustColConstValueFromBinaryFuncExpr(exprImpl, tableDef, proc)
 			if !ok {
 				canCompile = false
 				return
@@ -466,7 +481,7 @@ func CompileFilterExpr(
 					if obj.ZMIsEmpty() {
 						return true, nil
 					}
-					return obj.SortKeyZoneMap().AnyGEByValue(val), nil
+					return obj.SortKeyZoneMap().AnyGEByValue(vals[0]), nil
 				}
 			}
 			loadOp = loadMetadataOnlyOpFactory(fs)
@@ -476,7 +491,7 @@ func CompileFilterExpr(
 					return true, nil
 				}
 				dataMeta := meta.MustDataMeta()
-				return dataMeta.MustGetColumn(uint16(seqNum)).ZoneMap().AnyGEByValue(val), nil
+				return dataMeta.MustGetColumn(uint16(seqNum)).ZoneMap().AnyGEByValue(vals[0]), nil
 			}
 			blockFilterOp = func(
 				blk objectio.BlockInfo, blkMeta objectio.BlockObject, bf objectio.BloomFilter,
@@ -484,10 +499,10 @@ func CompileFilterExpr(
 				if blkMeta.IsEmpty() {
 					return true, nil
 				}
-				return blkMeta.MustGetColumn(uint16(seqNum)).ZoneMap().AnyGEByValue(val), nil
+				return blkMeta.MustGetColumn(uint16(seqNum)).ZoneMap().AnyGEByValue(vals[0]), nil
 			}
 		case ">":
-			colExpr, val, ok := mustColConstValueFromBinaryFuncExpr(exprImpl, tableDef, proc)
+			colExpr, vals, ok := mustColConstValueFromBinaryFuncExpr(exprImpl, tableDef, proc)
 			if !ok {
 				canCompile = false
 				return
@@ -499,7 +514,7 @@ func CompileFilterExpr(
 					if obj.ZMIsEmpty() {
 						return true, nil
 					}
-					return obj.SortKeyZoneMap().AnyGTByValue(val), nil
+					return obj.SortKeyZoneMap().AnyGTByValue(vals[0]), nil
 				}
 			}
 			loadOp = loadMetadataOnlyOpFactory(fs)
@@ -509,7 +524,7 @@ func CompileFilterExpr(
 					return true, nil
 				}
 				dataMeta := meta.MustDataMeta()
-				return dataMeta.MustGetColumn(uint16(seqNum)).ZoneMap().AnyGTByValue(val), nil
+				return dataMeta.MustGetColumn(uint16(seqNum)).ZoneMap().AnyGTByValue(vals[0]), nil
 			}
 			blockFilterOp = func(
 				blk objectio.BlockInfo, blkMeta objectio.BlockObject, bf objectio.BloomFilter,
@@ -517,10 +532,10 @@ func CompileFilterExpr(
 				if blkMeta.IsEmpty() {
 					return true, nil
 				}
-				return blkMeta.MustGetColumn(uint16(seqNum)).ZoneMap().AnyGTByValue(val), nil
+				return blkMeta.MustGetColumn(uint16(seqNum)).ZoneMap().AnyGTByValue(vals[0]), nil
 			}
 		case "<":
-			colExpr, val, ok := mustColConstValueFromBinaryFuncExpr(exprImpl, tableDef, proc)
+			colExpr, vals, ok := mustColConstValueFromBinaryFuncExpr(exprImpl, tableDef, proc)
 			if !ok {
 				canCompile = false
 				return
@@ -532,7 +547,7 @@ func CompileFilterExpr(
 					if obj.ZMIsEmpty() {
 						return true, nil
 					}
-					return obj.SortKeyZoneMap().AnyLTByValue(val), nil
+					return obj.SortKeyZoneMap().AnyLTByValue(vals[0]), nil
 				}
 			}
 			loadOp = loadMetadataOnlyOpFactory(fs)
@@ -542,7 +557,7 @@ func CompileFilterExpr(
 					return true, nil
 				}
 				dataMeta := meta.MustDataMeta()
-				return dataMeta.MustGetColumn(uint16(seqNum)).ZoneMap().AnyLTByValue(val), nil
+				return dataMeta.MustGetColumn(uint16(seqNum)).ZoneMap().AnyLTByValue(vals[0]), nil
 			}
 			blockFilterOp = func(
 				blk objectio.BlockInfo, blkMeta objectio.BlockObject, bf objectio.BloomFilter,
@@ -550,10 +565,10 @@ func CompileFilterExpr(
 				if blkMeta.IsEmpty() {
 					return true, nil
 				}
-				return blkMeta.MustGetColumn(uint16(seqNum)).ZoneMap().AnyLTByValue(val), nil
+				return blkMeta.MustGetColumn(uint16(seqNum)).ZoneMap().AnyLTByValue(vals[0]), nil
 			}
 		case "prefix_eq":
-			colExpr, val, ok := mustColConstValueFromBinaryFuncExpr(exprImpl, tableDef, proc)
+			colExpr, vals, ok := mustColConstValueFromBinaryFuncExpr(exprImpl, tableDef, proc)
 			if !ok {
 				canCompile = false
 				return
@@ -565,7 +580,7 @@ func CompileFilterExpr(
 					if obj.ZMIsEmpty() {
 						return true, nil
 					}
-					return obj.SortKeyZoneMap().PrefixEq(val), nil
+					return obj.SortKeyZoneMap().PrefixEq(vals[0]), nil
 				}
 			}
 			loadOp = loadMetadataOnlyOpFactory(fs)
@@ -575,7 +590,7 @@ func CompileFilterExpr(
 					return true, nil
 				}
 				dataMeta := meta.MustDataMeta()
-				return dataMeta.MustGetColumn(uint16(seqNum)).ZoneMap().PrefixEq(val), nil
+				return dataMeta.MustGetColumn(uint16(seqNum)).ZoneMap().PrefixEq(vals[0]), nil
 			}
 			blockFilterOp = func(
 				blk objectio.BlockInfo, blkMeta objectio.BlockObject, bf objectio.BloomFilter,
@@ -583,12 +598,97 @@ func CompileFilterExpr(
 				if blkMeta.IsEmpty() {
 					return true, nil
 				}
-				return blkMeta.MustGetColumn(uint16(seqNum)).ZoneMap().PrefixEq(val), nil
+				return blkMeta.MustGetColumn(uint16(seqNum)).ZoneMap().PrefixEq(vals[0]), nil
 			}
 
-		// case "prefix_between":
-		// case "between"
-		// case "prefix_in":
+		//case "prefix_between":
+		// what is the difference between 'prefix_between' and 'between'
+		case "between":
+			// where xxx between A and B
+			colExpr, vals, ok := mustColConstValueFromBinaryFuncExpr(exprImpl, tableDef, proc)
+			if !ok {
+				canCompile = false
+				return
+			}
+			colDef := getColDefByName(colExpr.Col.Name, tableDef)
+			isPK, isCluster := isClusterOrPK(colDef)
+			if isPK || isCluster {
+				fastFilterOp = func(obj objectio.ObjectStats) (bool, error) {
+					if obj.ZMIsEmpty() {
+						return true, nil
+					}
+					return obj.SortKeyZoneMap().PrefixBetween(vals[0], vals[1]), nil
+				}
+			}
+			loadOp = loadMetadataOnlyOpFactory(fs)
+			seqNum := colDef.Seqnum
+			objectFilterOp = func(meta objectio.ObjectMeta, _ objectio.BloomFilter) (bool, error) {
+				if isCluster || isPK {
+					return true, nil
+				}
+				dataMeta := meta.MustDataMeta()
+				return dataMeta.MustGetColumn(uint16(seqNum)).ZoneMap().PrefixBetween(vals[0], vals[1]), nil
+			}
+			blockFilterOp = func(
+				blk objectio.BlockInfo, blkMeta objectio.BlockObject, bf objectio.BloomFilter,
+			) (bool, error) {
+				if blkMeta.IsEmpty() {
+					return true, nil
+				}
+				return blkMeta.MustGetColumn(uint16(seqNum)).ZoneMap().PrefixBetween(vals[0], vals[1]), nil
+			}
+
+		case "prefix_in":
+			colExpr, val, ok := mustColVecValueFromBinaryFuncExpr(exprImpl, tableDef, proc)
+			if !ok {
+				canCompile = false
+				return
+			}
+			vec := vector.NewVec(types.T_any.ToType())
+			_ = vec.UnmarshalBinary(val)
+			colDef := getColDefByName(colExpr.Col.Name, tableDef)
+			isPK, isCluster := isClusterOrPK(colDef)
+			if isPK || isCluster {
+				fastFilterOp = func(obj objectio.ObjectStats) (bool, error) {
+					if obj.ZMIsEmpty() {
+						return true, nil
+					}
+					return obj.SortKeyZoneMap().PrefixIn(vec), nil
+				}
+			}
+			if isPK {
+				loadOp = loadMetadataAndBFOpFactory(fs)
+			} else {
+				loadOp = loadMetadataOnlyOpFactory(fs)
+			}
+
+			seqNum := colDef.Seqnum
+			objectFilterOp = func(meta objectio.ObjectMeta, _ objectio.BloomFilter) (bool, error) {
+				if isCluster || isPK {
+					return true, nil
+				}
+				dataMeta := meta.MustDataMeta()
+				return dataMeta.MustGetColumn(uint16(seqNum)).ZoneMap().PrefixIn(vec), nil
+			}
+			blockFilterOp = func(
+				blk objectio.BlockInfo, blkMeta objectio.BlockObject, bf objectio.BloomFilter,
+			) (bool, error) {
+				if !blkMeta.IsEmpty() && !blkMeta.MustGetColumn(uint16(seqNum)).ZoneMap().PrefixIn(vec) {
+					return false, nil
+				}
+				if isPK {
+					blkBf := bf.GetBloomFilter(uint32(blk.BlockID.Sequence()))
+					blkBfIdx := index.NewEmptyBinaryFuseFilter()
+					if err := index.DecodeBloomFilter(blkBfIdx, blkBf); err != nil {
+						return false, err
+					}
+					if exist := blkBfIdx.MayContainsAny(vec); !exist {
+						return false, nil
+					}
+				}
+				return true, nil
+			}
+
 		// case "isnull", "is_null"
 		// case "isnotnull", "is_not_null"
 		case "in":
@@ -642,7 +742,7 @@ func CompileFilterExpr(
 				return true, nil
 			}
 		case "=":
-			colExpr, val, ok := mustColConstValueFromBinaryFuncExpr(exprImpl, tableDef, proc)
+			colExpr, vals, ok := mustColConstValueFromBinaryFuncExpr(exprImpl, tableDef, proc)
 			if !ok {
 				canCompile = false
 				return
@@ -654,7 +754,7 @@ func CompileFilterExpr(
 					if obj.ZMIsEmpty() {
 						return true, nil
 					}
-					return obj.SortKeyZoneMap().ContainsKey(val), nil
+					return obj.SortKeyZoneMap().ContainsKey(vals[0]), nil
 				}
 			}
 			if isPK {
@@ -669,12 +769,12 @@ func CompileFilterExpr(
 					return true, nil
 				}
 				dataMeta := meta.MustDataMeta()
-				return dataMeta.MustGetColumn(uint16(seqNum)).ZoneMap().ContainsKey(val), nil
+				return dataMeta.MustGetColumn(uint16(seqNum)).ZoneMap().ContainsKey(vals[0]), nil
 			}
 			blockFilterOp = func(
 				blk objectio.BlockInfo, blkMeta objectio.BlockObject, bf objectio.BloomFilter,
 			) (bool, error) {
-				if !blkMeta.IsEmpty() && !blkMeta.MustGetColumn(uint16(seqNum)).ZoneMap().ContainsKey(val) {
+				if !blkMeta.IsEmpty() && !blkMeta.MustGetColumn(uint16(seqNum)).ZoneMap().ContainsKey(vals[0]) {
 					return false, nil
 				}
 				if isPK {
@@ -683,7 +783,7 @@ func CompileFilterExpr(
 					if err := index.DecodeBloomFilter(blkBfIdx, blkBf); err != nil {
 						return false, err
 					}
-					exist, err := blkBfIdx.MayContainsKey(val)
+					exist, err := blkBfIdx.MayContainsKey(vals[0])
 					if err != nil || !exist {
 						return false, err
 					}
