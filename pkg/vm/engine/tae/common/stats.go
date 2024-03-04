@@ -490,15 +490,9 @@ func HumanReadableBytes(bytes int) string {
 	return fmt.Sprintf("%.2fGB", float64(bytes)/1024/1024/1024)
 }
 
-func ShortSegId(x types.Uuid) string {
-	var shortuuid [8]byte
-	hex.Encode(shortuuid[:], x[:4])
-	return string(shortuuid[:])
-}
-
 func ShortObjId(x types.Objectid) string {
-	var shortuuid [8]byte
-	hex.Encode(shortuuid[:], x[:4])
+	var shortuuid [12]byte
+	hex.Encode(shortuuid[:], x[10:16])
 	return string(shortuuid[:])
 }
 
