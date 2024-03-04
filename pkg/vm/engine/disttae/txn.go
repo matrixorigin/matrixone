@@ -856,38 +856,6 @@ func (txn *Transaction) hasUncommittedDeletesOnBlock(id *types.Blockid) bool {
 	return txn.deletedBlocks.hasDeletes(id)
 }
 
-func (txn *Transaction) getUncommitedDataObjectsByTable(
-	databaseId uint64, tableId uint64) (statsList []objectio.ObjectStats, err error) {
-	txn.Lock()
-	defer txn.Unlock()
-	var stats objectio.ObjectStats
-	for _, entry := range txn.writes {
-		if entry.databaseId != databaseId ||
-			entry.tableId != tableId {
-			continue
-		}
-		if entry.bat == nil || entry.bat.IsEmpty() {
-			continue
-		}
-
-		if entry.typ == INSERT_TXN {
-			continue
-		}
-
-		if entry.typ != INSERT ||
-			len(entry.bat.Attrs) < 2 ||
-			entry.bat.Attrs[1] != catalog.ObjectMeta_ObjectStats {
-			continue
-		}
-		for i := 0; i < entry.bat.Vecs[1].Length(); i++ {
-			stats.UnMarshal(entry.bat.Vecs[1].GetBytesAt(i))
-			statsList = append(statsList, stats)
-		}
-	}
-	return statsList, nil
-
-}
-
 func (txn *Transaction) forEachTableWrites(databaseId uint64, tableId uint64, offset int, f func(Entry)) {
 	txn.Lock()
 	defer txn.Unlock()
