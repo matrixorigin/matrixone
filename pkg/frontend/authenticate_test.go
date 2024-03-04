@@ -42,6 +42,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/prashantv/gostub"
@@ -11070,7 +11072,13 @@ func TestDoCreateSnapshot(t *testing.T) {
 			DefaultRoleID: moAdminRoleID,
 		}
 		ses.SetTenantInfo(tenant)
-
+		txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+		txnOperator.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
+		timeStamp, _ := timestamp.ParseTimestamp("2021-01-01 00:00:00")
+		txnOperator.EXPECT().SnapshotTS().Return(timeStamp).AnyTimes()
+		// process.
+		ses.proc = testutil.NewProc()
+		ses.proc.TxnOperator = txnOperator
 		cs := &tree.CreateSnapShot{
 			IfNotExists: false,
 			Name:        tree.Identifier("snapshot_test"),
@@ -11095,6 +11103,68 @@ func TestDoCreateSnapshot(t *testing.T) {
 		convey.So(err, convey.ShouldBeNil)
 	})
 
+	// non-system tenant can't create cluster level snapshot
+	convey.Convey("doCreateSnapshot fail", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		aicm := &defines.AutoIncrCacheManager{}
+		rm, _ := NewRoutineManager(ctx, pu, aicm)
+		ses.rm = rm
+
+		tenant := &TenantInfo{
+			Tenant:        "test_account",
+			User:          rootName,
+			DefaultRole:   moAdminRoleName,
+			TenantID:      sysAccountID,
+			UserID:        rootID,
+			DefaultRoleID: moAdminRoleID,
+		}
+		ses.SetTenantInfo(tenant)
+		txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+		txnOperator.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
+		timeStamp, _ := timestamp.ParseTimestamp("2021-01-01 00:00:00")
+		txnOperator.EXPECT().SnapshotTS().Return(timeStamp).AnyTimes()
+		// process.
+		ses.proc = testutil.NewProc()
+		ses.proc.TxnOperator = txnOperator
+		cs := &tree.CreateSnapShot{
+			IfNotExists: false,
+			Name:        tree.Identifier("snapshot_test"),
+			Obeject: tree.ObejectInfo{
+				SLevel: tree.SnapshotLevelType{
+					Level: tree.SNAPSHOTLEVELCLUSTER,
+				},
+				ObjName: "",
+			},
+		}
+
+		//no result set
+		bh.sql2result["begin;"] = nil
+		bh.sql2result["commit;"] = nil
+		bh.sql2result["rollback;"] = nil
+
+		sql, _ := getSqlForCheckSnapshot(ctx, "snapshot_test")
+		mrs := newMrsForPasswordOfUser([][]interface{}{})
+		bh.sql2result[sql] = mrs
+
+		err := doCreateSnapshot(ctx, ses, cs)
+		convey.So(err, convey.ShouldNotBeNil)
+	})
+
+	// system tenant  create account level snapshot for other tenant
 	convey.Convey("doCreateSnapshot success", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
@@ -11116,23 +11186,151 @@ func TestDoCreateSnapshot(t *testing.T) {
 		ses.rm = rm
 
 		tenant := &TenantInfo{
-			Tenant:        "acc1",
+			Tenant:        sysAccountName,
 			User:          rootName,
 			DefaultRole:   moAdminRoleName,
-			TenantID:      333333,
+			TenantID:      sysAccountID,
 			UserID:        rootID,
-			DefaultRoleID: 12,
+			DefaultRoleID: moAdminRoleID,
 		}
 		ses.SetTenantInfo(tenant)
-
+		txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+		txnOperator.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
+		timeStamp, _ := timestamp.ParseTimestamp("2021-01-01 00:00:00")
+		txnOperator.EXPECT().SnapshotTS().Return(timeStamp).AnyTimes()
+		// process.
+		ses.proc = testutil.NewProc()
+		ses.proc.TxnOperator = txnOperator
 		cs := &tree.CreateSnapShot{
 			IfNotExists: false,
 			Name:        tree.Identifier("snapshot_test"),
 			Obeject: tree.ObejectInfo{
 				SLevel: tree.SnapshotLevelType{
-					Level: tree.SNAPSHOTLEVELCLUSTER,
+					Level: tree.SNAPSHOTLEVELACCOUNT,
 				},
-				ObjName: "",
+				ObjName: "acc1",
+			},
+		}
+
+		//no result set
+		bh.sql2result["begin;"] = nil
+		bh.sql2result["commit;"] = nil
+		bh.sql2result["rollback;"] = nil
+
+		sql, _ := getSqlForCheckSnapshot(ctx, "snapshot_test")
+		mrs := newMrsForPasswordOfUser([][]interface{}{})
+		bh.sql2result[sql] = mrs
+
+		err := doCreateSnapshot(ctx, ses, cs)
+		convey.So(err, convey.ShouldBeNil)
+	})
+
+	// non-system tenant can't create acccount level snapshot for other tenant
+	convey.Convey("doCreateSnapshot fail", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		aicm := &defines.AutoIncrCacheManager{}
+		rm, _ := NewRoutineManager(ctx, pu, aicm)
+		ses.rm = rm
+
+		tenant := &TenantInfo{
+			Tenant:        "test_account",
+			User:          rootName,
+			DefaultRole:   moAdminRoleName,
+			TenantID:      sysAccountID,
+			UserID:        rootID,
+			DefaultRoleID: moAdminRoleID,
+		}
+		ses.SetTenantInfo(tenant)
+		txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+		txnOperator.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
+		timeStamp, _ := timestamp.ParseTimestamp("2021-01-01 00:00:00")
+		txnOperator.EXPECT().SnapshotTS().Return(timeStamp).AnyTimes()
+		// process.
+		ses.proc = testutil.NewProc()
+		ses.proc.TxnOperator = txnOperator
+		cs := &tree.CreateSnapShot{
+			IfNotExists: false,
+			Name:        tree.Identifier("snapshot_test"),
+			Obeject: tree.ObejectInfo{
+				SLevel: tree.SnapshotLevelType{
+					Level: tree.SNAPSHOTLEVELACCOUNT,
+				},
+				ObjName: "acc1",
+			},
+		}
+
+		//no result set
+		bh.sql2result["begin;"] = nil
+		bh.sql2result["commit;"] = nil
+		bh.sql2result["rollback;"] = nil
+
+		sql, _ := getSqlForCheckSnapshot(ctx, "snapshot_test")
+		mrs := newMrsForPasswordOfUser([][]interface{}{})
+		bh.sql2result[sql] = mrs
+
+		err := doCreateSnapshot(ctx, ses, cs)
+		convey.So(err, convey.ShouldNotBeNil)
+	})
+
+	// no-admin user can't create acccount level snapshot for himself tenant
+	convey.Convey("doCreateSnapshot fail", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		aicm := &defines.AutoIncrCacheManager{}
+		rm, _ := NewRoutineManager(ctx, pu, aicm)
+		ses.rm = rm
+
+		tenant := &TenantInfo{
+			Tenant:        "test_account",
+			User:          rootName,
+			DefaultRole:   "test_role",
+			TenantID:      sysAccountID,
+			UserID:        rootID,
+			DefaultRoleID: moAdminRoleID,
+		}
+		ses.SetTenantInfo(tenant)
+		txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+		txnOperator.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
+		timeStamp, _ := timestamp.ParseTimestamp("2021-01-01 00:00:00")
+		txnOperator.EXPECT().SnapshotTS().Return(timeStamp).AnyTimes()
+		// process.
+		ses.proc = testutil.NewProc()
+		ses.proc.TxnOperator = txnOperator
+		cs := &tree.CreateSnapShot{
+			IfNotExists: false,
+			Name:        tree.Identifier("snapshot_test"),
+			Obeject: tree.ObejectInfo{
+				SLevel: tree.SnapshotLevelType{
+					Level: tree.SNAPSHOTLEVELACCOUNT,
+				},
+				ObjName: "test_account",
 			},
 		}
 
