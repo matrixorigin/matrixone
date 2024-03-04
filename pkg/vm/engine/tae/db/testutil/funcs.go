@@ -339,15 +339,8 @@ func MergeBlocks(t *testing.T, tenantID uint32, e *db.DB, dbName string, schema 
 			}
 			assert.NoErrorf(t, err, "Txn Ts=%d", txn.GetStartTS())
 		}
-		var metas []*catalog.BlockEntry
-		it := objHandle.MakeBlockIt()
-		for it.Valid() {
-			meta := it.GetBlock().GetMeta().(*catalog.BlockEntry)
-			metas = append(metas, meta)
-			it.Next()
-		}
 		objsToMerge := []*catalog.ObjectEntry{objHandle.GetMeta().(*catalog.ObjectEntry)}
-		task, err := jobs.NewMergeBlocksTask(nil, txn, metas, objsToMerge, nil, e.Runtime)
+		task, err := jobs.NewMergeObjectsTask(nil, txn, objsToMerge, e.Runtime)
 		if skipConflict && err != nil {
 			_ = txn.Rollback(context.Background())
 			continue
