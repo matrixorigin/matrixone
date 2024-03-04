@@ -373,7 +373,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 	info.tblInfo.oldColPosMap = append(info.tblInfo.oldColPosMap, oldColPosMap)
 	info.tblInfo.newColPosMap = append(info.tblInfo.newColPosMap, oldColPosMap)
 
-	isInsertWithoutAutoPkCol := false
+	ifExistAutoPkCol := false
 
 	if insertColumns, err = getInsertColsFromStmt(builder.GetContext(), stmt, tableDef); err != nil {
 		return false, err
@@ -490,7 +490,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 			}
 
 			if col.Typ.AutoIncr && col.Name == tableDef.Pkey.PkeyColName {
-				isInsertWithoutAutoPkCol = true
+				ifExistAutoPkCol = true
 			}
 			projectList = append(projectList, defExpr)
 		}
@@ -689,7 +689,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 		}
 	}
 
-	return isInsertWithoutAutoPkCol, nil
+	return ifExistAutoPkCol, nil
 }
 
 func deleteToSelect(builder *QueryBuilder, bindCtx *BindContext, node *tree.Delete, haveConstraint bool, tblInfo *dmlTableInfo) (int32, error) {
@@ -1168,7 +1168,7 @@ func appendPrimaryConstrantPlan(
 	indexSourceColTypes []*plan.Type,
 	sourceStep int32,
 	checkInsertPkDupForHiddenIndexTable bool,
-	isInsertWithoutAutoPkCol bool,
+	ifExistAutoPkCol bool,
 	isUpdate bool,
 	updatePkCol bool,
 	fuzzymessage *OriginTableMessageForFuzzy,
@@ -1178,7 +1178,7 @@ func appendPrimaryConstrantPlan(
 
 	// need more comments here to explain checkCondition, for example, why updatePkCol is needed
 	// we should not checkInsertPkDup any more, insert into t values (1) checkInsertPkDup is false, however it may still conflict with pk already exists
-	if pkPos, pkTyp := getPkPos(tableDef, true); pkPos != -1 && checkInsertPkDupForHiddenIndexTable && !isInsertWithoutAutoPkCol {
+	if pkPos, pkTyp := getPkPos(tableDef, true); pkPos != -1 && checkInsertPkDupForHiddenIndexTable && !ifExistAutoPkCol {
 		// needCheck := true
 		needCheck := !builder.qry.LoadTag
 		useFuzzyFilter := CNPrimaryCheck
@@ -1387,7 +1387,7 @@ func appendPrimaryConstrantPlan(
 	// The refactor that using fuzzy filter has not been completely finished, Update type Insert cannot directly use fuzzy filter for duplicate detection.
 	//  so the original logic is retained. should be deleted later
 	// make plan: sink_scan -> join -> filter	// check if pk is unique in rows & snapshot
-	if CNPrimaryCheck && checkInsertPkDupForHiddenIndexTable && !isInsertWithoutAutoPkCol {
+	if CNPrimaryCheck && checkInsertPkDupForHiddenIndexTable && !ifExistAutoPkCol {
 		if pkPos, pkTyp := getPkPos(tableDef, true); pkPos != -1 {
 			rfTag := builder.genNewTag()
 

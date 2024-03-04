@@ -114,7 +114,7 @@ type deleteNodeInfo struct {
 func buildInsertPlans(
 	ctx CompilerContext, builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Insert,
 	objRef *ObjectRef, tableDef *TableDef, lastNodeId int32,
-	isInsertWithoutAutoPkCol bool) error {
+	ifExistAutoPkCol bool) error {
 
 	var err error
 	var insertColsNameFromStmt []string
@@ -146,7 +146,7 @@ func buildInsertPlans(
 	insertBindCtx := NewBindContext(builder, nil)
 	return buildInsertPlansWithRelatedHiddenTable(stmt, ctx, builder, insertBindCtx, objRef, tableDef,
 		0, sourceStep, true, false, true, pkFilterExpr,
-		newPartitionExpr, isInsertWithoutAutoPkCol, !builder.qry.LoadTag, nil, nil)
+		newPartitionExpr, ifExistAutoPkCol, !builder.qry.LoadTag, nil, nil)
 }
 
 // buildUpdatePlans  build update plan.
@@ -1181,7 +1181,7 @@ func appendAggNodeForFkJoin(builder *QueryBuilder, bindCtx *BindContext, lastNod
 func buildInsertPlansWithRelatedHiddenTable(
 	stmt *tree.Insert, ctx CompilerContext, builder *QueryBuilder, bindCtx *BindContext, objRef *ObjectRef,
 	tableDef *TableDef, updateColLength int, sourceStep int32, addAffectedRows bool, isFkRecursionCall bool,
-	updatePkCol bool, pkFilterExprs []*Expr, partitionExpr *Expr, isInsertWithoutAutoPkCol bool,
+	updatePkCol bool, pkFilterExprs []*Expr, partitionExpr *Expr, ifExistAutoPkCol bool,
 	checkInsertPkDupForHiddenIndexTable bool, indexSourceColTypes []*plan.Type, fuzzymessage *OriginTableMessageForFuzzy,
 ) error {
 	var lastNodeId int32
@@ -1364,7 +1364,7 @@ func buildInsertPlansWithRelatedHiddenTable(
 
 	return makeOneInsertPlan(ctx, builder, bindCtx, objRef, tableDef, 
 		updateColLength, sourceStep, addAffectedRows, isFkRecursionCall, updatePkCol, 
-		pkFilterExprs, partitionExpr, isInsertWithoutAutoPkCol, checkInsertPkDupForHiddenIndexTable, indexSourceColTypes, fuzzymessage)
+		pkFilterExprs, partitionExpr, ifExistAutoPkCol, checkInsertPkDupForHiddenIndexTable, indexSourceColTypes, fuzzymessage)
 }
 
 // makeOneInsertPlan generates plan branch for insert one table
@@ -1375,7 +1375,7 @@ func buildInsertPlansWithRelatedHiddenTable(
 func makeOneInsertPlan(
 	ctx CompilerContext, builder *QueryBuilder, bindCtx *BindContext, objRef *ObjectRef, tableDef *TableDef, 
 	updateColLength int, sourceStep int32, addAffectedRows bool, isFkRecursionCall bool, updatePkCol bool,
-	pkFilterExprs []*Expr, partitionExpr *Expr, isInsertWithoutAutoPkCol bool, checkInsertPkDupForHiddenIndexTable bool,
+	pkFilterExprs []*Expr, partitionExpr *Expr, ifExistAutoPkCol bool, checkInsertPkDupForHiddenIndexTable bool,
 	indexSourceColTypes []*plan.Type, fuzzymessage *OriginTableMessageForFuzzy,
 ) (err error) {
 
@@ -1391,7 +1391,9 @@ func makeOneInsertPlan(
 	// there will be some cases that no need to check if primary key is duplicate
 	//  case 1: For SQL that contains on duplicate update
 	//  case 2: the only primary key is auto increment type
-	if err = appendPrimaryConstrantPlan(builder, bindCtx, tableDef, objRef, partitionExpr, pkFilterExprs, indexSourceColTypes, sourceStep, checkInsertPkDupForHiddenIndexTable, isInsertWithoutAutoPkCol, updateColLength > 0, updatePkCol, fuzzymessage); err != nil {
+	if err = appendPrimaryConstrantPlan(builder, bindCtx, tableDef, objRef, partitionExpr, pkFilterExprs, 
+		indexSourceColTypes, sourceStep, checkInsertPkDupForHiddenIndexTable, ifExistAutoPkCol, 
+		updateColLength > 0, updatePkCol, fuzzymessage); err != nil {
 		return err
 	}
 
