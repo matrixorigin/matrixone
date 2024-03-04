@@ -1,0 +1,16 @@
+create table t1(a int, b int unique key);
+explain insert into t1(a) values (1);
+QUERY PLAN
+Insert on insert.t1
+  ->  PreInsert on insert.t1
+        ->  Project
+              ->  Project
+                    ->  Values Scan "*VALUES*" 
+create table t2(a int, b int, c int, unique key(b, c));
+explain insert into t2(a) values (1);
+QUERY PLAN
+Insert on insert.t2
+  ->  PreInsert on insert.t2
+        ->  Project
+              ->  Project
+                    ->  Values Scan "*VALUES*" 
