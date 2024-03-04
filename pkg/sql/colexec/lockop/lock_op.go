@@ -94,14 +94,13 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 
 	if !arg.block {
-		return callNonBlocking(arg.GetIdx(), proc, arg)
+		return callNonBlocking(proc, arg)
 	}
 
-	return callBlocking(arg.GetIdx(), proc, arg, arg.GetIsFirst(), arg.GetIsLast())
+	return callBlocking(proc, arg, arg.GetIsFirst(), arg.GetIsLast())
 }
 
 func callNonBlocking(
-	idx int,
 	proc *process.Process,
 	arg *Argument) (vm.CallResult, error) {
 
@@ -130,11 +129,10 @@ func callNonBlocking(
 }
 
 func callBlocking(
-	idx int,
 	proc *process.Process,
 	arg *Argument,
 	isFirst bool,
-	isLast bool) (vm.CallResult, error) {
+	_ bool) (vm.CallResult, error) {
 
 	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
 	anal.Start()
@@ -218,7 +216,6 @@ func performLock(
 		}
 		locked, defChanged, refreshTS, err := doLock(
 			proc.Ctx,
-			arg.block,
 			arg.engine,
 			nil,
 			target.tableID,
@@ -303,7 +300,6 @@ func LockTable(
 		WithFetchLockRowsFunc(GetFetchRowsFunc(pkType))
 	_, defChanged, refreshTS, err := doLock(
 		proc.Ctx,
-		false,
 		eng,
 		nil,
 		tableID,
@@ -353,7 +349,6 @@ func LockRows(
 		WithFetchLockRowsFunc(GetFetchRowsFunc(pkType))
 	_, defChanged, refreshTS, err := doLock(
 		proc.Ctx,
-		false,
 		eng,
 		rel,
 		tableID,
@@ -380,7 +375,6 @@ func LockRows(
 // be manipulated has been modified, you need to get the latest data at timestamp.
 func doLock(
 	ctx context.Context,
-	blocking bool,
 	eng engine.Engine,
 	rel engine.Relation,
 	tableID uint64,
@@ -499,6 +493,10 @@ func doLock(
 			changed)
 
 		if changed {
+			trace.GetService().TxnNeedUpdateSnapshot(
+				proc.TxnOperator,
+				tableID,
+				"no conflict, data changed")
 			if err := txnOp.UpdateSnapshot(ctx, newSnapshotTS); err != nil {
 				return false, false, timestamp.Timestamp{}, err
 			}
@@ -532,6 +530,10 @@ func doLock(
 
 	// forward rc's snapshot ts
 	snapshotTS = result.Timestamp.Next()
+	trace.GetService().TxnNeedUpdateSnapshot(
+		proc.TxnOperator,
+		tableID,
+		"conflict")
 	if err := txnOp.UpdateSnapshot(ctx, snapshotTS); err != nil {
 		return false, false, timestamp.Timestamp{}, err
 	}
@@ -775,7 +777,7 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 	arg.rt.FreeMergeTypeOperator(pipelineFailed)
 }
 
-func (arg *Argument) cleanCachedBatch(proc *process.Process) {
+func (arg *Argument) cleanCachedBatch(_ *process.Process) {
 	// do not need clean,  only set nil
 	// for _, bat := range arg.rt.cachedBatches {
 	// 	bat.Clean(proc.Mp())
@@ -784,7 +786,7 @@ func (arg *Argument) cleanCachedBatch(proc *process.Process) {
 }
 
 func (arg *Argument) getBatch(
-	proc *process.Process,
+	_ *process.Process,
 	anal process.Analyze,
 	isFirst bool) (*batch.Batch, error) {
 	fn := arg.rt.batchFetchFunc
