@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	db_holder "github.com/matrixorigin/matrixone/pkg/util/export/etl/db"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
+	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 
 	"github.com/google/uuid"
@@ -553,6 +554,9 @@ func (s *StatementInfo) MarkResponseAt() {
 	}
 }
 
+// calculateCU calculate CU cost
+// the result only keep 3 decimal places
+// Tips: CU is long-tailed numbers
 func calculateCU(stats statistic.StatsArray, durationNS int64) float64 {
 
 	cfg := GetTracerProvider().GetCUConfig()
@@ -574,6 +578,9 @@ func calculateCU(stats statistic.StatsArray, durationNS int64) float64 {
 	default:
 		logutil.Warn("Unknown ConnType as CU", zap.Float64("connType", connType))
 	}
+	// TODO: need format
+	// 1. 精度校验
+	// 2. 保留 3位小数的问题
 	return (cpu + mem + ioIn + ioOut + traffic) / cfg.CUUnit
 }
 
@@ -607,6 +614,7 @@ func EndStatement(ctx context.Context, err error, sentRows int64, outBytes int64
 		outBytes += TcpIpv4HeaderSize * outPacket
 		s.statsArray.InitIfEmpty().WithOutTrafficBytes(float64(outBytes)).WithOutPacketCount(float64(outPacket))
 		s.ExecPlan2Stats(ctx)
+		metric.StatementCUCounter(s.Account, s.SqlSourceType).Add(s.statsArray.GetCU())
 		s.ExecPlan = nil
 		s.Status = StatementStatusSuccess
 		if err != nil {
