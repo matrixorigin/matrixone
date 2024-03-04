@@ -17,7 +17,6 @@ package aggexec
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"math"
 )
 
@@ -29,10 +28,10 @@ type groupConcatExec struct {
 	separator []byte
 }
 
-func newGroupConcatExec(proc *process.Process, info multiAggInfo, separator string) AggFuncExec {
+func newGroupConcatExec(mg AggMemoryManager, info multiAggInfo, separator string) AggFuncExec {
 	return &groupConcatExec{
 		multiAggInfo: info,
-		ret:          initBytesAggFuncResult(proc, info.retType, info.emptyNull),
+		ret:          initBytesAggFuncResult(mg, info.retType, info.emptyNull),
 		separator:    []byte(separator),
 	}
 }

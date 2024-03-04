@@ -15,9 +15,9 @@
 package aggexec
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 const (
@@ -73,9 +73,15 @@ var (
 	_ AggFuncExec = &groupConcatExec{}
 )
 
+type AggMemoryManager interface {
+	Mp() *mpool.MPool
+	GetVector(typ types.Type) *vector.Vector
+	PutVector(v *vector.Vector)
+}
+
 // MakeAgg supports to create an aggregation function executor for single column.
 func MakeAgg(
-	proc *process.Process,
+	mg AggMemoryManager,
 	aggID int64, isDistinct bool, emptyIsNull bool,
 	param types.Type) AggFuncExec {
 	implementationAllocator, result, err := getSingleAggImplByInfo(aggID, param)
@@ -96,22 +102,22 @@ func MakeAgg(
 
 	pIsVarLen, rIsVarLen := param.IsVarlen(), result.IsVarlen()
 	if pIsVarLen && rIsVarLen {
-		return newSingleAggFuncExec4(proc, info, opt, implementationAllocator)
+		return newSingleAggFuncExec4(mg, info, opt, implementationAllocator)
 	}
 
 	if pIsVarLen && !rIsVarLen {
-		return newSingleAggFuncExec2(proc, info, opt, implementationAllocator)
+		return newSingleAggFuncExec2(mg, info, opt, implementationAllocator)
 	}
 
 	if !pIsVarLen && rIsVarLen {
-		return newSingleAggFuncExec3(proc, info, opt, implementationAllocator)
+		return newSingleAggFuncExec3(mg, info, opt, implementationAllocator)
 	}
-	return newSingleAggFuncExec1(proc, info, opt, implementationAllocator)
+	return newSingleAggFuncExec1(mg, info, opt, implementationAllocator)
 }
 
 // MakeMultiAgg supports creating an aggregation function executor for multiple columns.
 func MakeMultiAgg(
-	proc *process.Process,
+	mg AggMemoryManager,
 	aggID int64, isDistinct bool, emptyIsNull bool,
 	param []types.Type) AggFuncExec {
 	implementationAllocator, result, err := getMultiArgAggImplByInfo(aggID, param)
@@ -126,13 +132,13 @@ func MakeMultiAgg(
 		retType:   result,
 		emptyNull: emptyIsNull,
 	}
-	return newMultiAggFuncExec(proc, info, implementationAllocator)
+	return newMultiAggFuncExec(mg, info, implementationAllocator)
 }
 
 // MakeGroupConcat is one special case of MakeMultiAgg.
 // it supports creating an aggregation function executor for special aggregation `group_concat()`.
 func MakeGroupConcat(
-	proc *process.Process,
+	mg AggMemoryManager,
 	aggID int64, isDistinct bool,
 	param []types.Type, result types.Type,
 	separator string) AggFuncExec {
@@ -143,5 +149,5 @@ func MakeGroupConcat(
 		retType:   result,
 		emptyNull: true,
 	}
-	return newGroupConcatExec(proc, info, separator)
+	return newGroupConcatExec(mg, info, separator)
 }

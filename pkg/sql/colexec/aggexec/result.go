@@ -18,11 +18,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 type aggFuncResult[T types.FixedSizeTExceptStrType] struct {
-	proc   *process.Process
+	mg     AggMemoryManager
 	mp     *mpool.MPool
 	typ    types.Type
 	res    *vector.Vector
@@ -33,7 +32,7 @@ type aggFuncResult[T types.FixedSizeTExceptStrType] struct {
 }
 
 type aggFuncBytesResult struct {
-	proc        *process.Process
+	mg          AggMemoryManager
 	mp          *mpool.MPool
 	typ         types.Type
 	res         *vector.Vector
@@ -42,9 +41,9 @@ type aggFuncBytesResult struct {
 }
 
 func initFixedAggFuncResult[T types.FixedSizeTExceptStrType](
-	proc *process.Process, typ types.Type,
+	mg AggMemoryManager, typ types.Type,
 	emptyNull bool) aggFuncResult[T] {
-	if proc == nil {
+	if mg == nil {
 		return aggFuncResult[T]{
 			typ:         typ,
 			res:         vector.NewVec(typ),
@@ -52,10 +51,10 @@ func initFixedAggFuncResult[T types.FixedSizeTExceptStrType](
 		}
 	}
 	return aggFuncResult[T]{
-		proc:        proc,
-		mp:          proc.Mp(),
+		mg:          mg,
+		mp:          mg.Mp(),
 		typ:         typ,
-		res:         proc.GetVector(typ),
+		res:         mg.GetVector(typ),
 		groupToSet:  0,
 		emptyBeNull: emptyNull,
 	}
@@ -106,7 +105,7 @@ func (r *aggFuncResult[T]) free() {
 	if r.res.NeedDup() {
 		r.res.Free(r.mp)
 	}
-	r.proc.PutVector(r.res)
+	r.mg.PutVector(r.res)
 }
 
 func (r *aggFuncResult[T]) marshal() ([]byte, error) {
@@ -118,9 +117,9 @@ func (r *aggFuncResult[T]) unmarshal(data []byte) error {
 }
 
 func initBytesAggFuncResult(
-	proc *process.Process, typ types.Type,
+	mg AggMemoryManager, typ types.Type,
 	emptyNull bool) aggFuncBytesResult {
-	if proc == nil {
+	if mg == nil {
 		return aggFuncBytesResult{
 			typ:         typ,
 			res:         vector.NewVec(typ),
@@ -128,10 +127,10 @@ func initBytesAggFuncResult(
 		}
 	}
 	return aggFuncBytesResult{
-		proc:        proc,
-		mp:          proc.Mp(),
+		mg:          mg,
+		mp:          mg.Mp(),
 		typ:         typ,
-		res:         proc.GetVector(typ),
+		res:         mg.GetVector(typ),
 		groupToSet:  0,
 		emptyBeNull: emptyNull,
 	}
@@ -178,13 +177,13 @@ func (r *aggFuncBytesResult) flush() *vector.Vector {
 }
 
 func (r *aggFuncBytesResult) free() {
-	if r.res == nil || r.proc == nil {
+	if r.res == nil || r.mg == nil {
 		return
 	}
 	if r.res.NeedDup() {
 		r.res.Free(r.mp)
 	}
-	r.proc.PutVector(r.res)
+	r.mg.PutVector(r.res)
 }
 
 func (r *aggFuncBytesResult) marshal() ([]byte, error) {

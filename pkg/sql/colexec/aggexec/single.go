@@ -20,7 +20,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 // singleAggInfo contains the basic information of single column agg.
@@ -131,14 +130,14 @@ type singleAggFuncExec4 struct {
 }
 
 func (exec *singleAggFuncExec1[from, to]) init(
-	proc *process.Process,
+	mg AggMemoryManager,
 	info singleAggInfo,
 	opt singleAggOptimizedInfo,
 	nm func() SingleAggFromFixedRetFixed[from, to]) {
 
 	exec.singleAggInfo = info
 	exec.singleAggOptimizedInfo = opt
-	exec.ret = initFixedAggFuncResult[to](proc, info.retType, info.emptyNull)
+	exec.ret = initFixedAggFuncResult[to](mg, info.retType, info.emptyNull)
 	exec.groups = make([]SingleAggFromFixedRetFixed[from, to], 0, 1)
 	exec.gGroup = nm
 }
@@ -496,14 +495,14 @@ func (exec *singleAggFuncExec1[from, to]) Free() {
 }
 
 func (exec *singleAggFuncExec2[from]) init(
-	proc *process.Process,
+	mg AggMemoryManager,
 	info singleAggInfo,
 	opt singleAggOptimizedInfo,
 	nm func() SingleAggFromFixedRetVar[from]) {
 
 	exec.singleAggInfo = info
 	exec.singleAggOptimizedInfo = opt
-	exec.ret = initBytesAggFuncResult(proc, info.retType, info.emptyNull)
+	exec.ret = initBytesAggFuncResult(mg, info.retType, info.emptyNull)
 	exec.groups = make([]SingleAggFromFixedRetVar[from], 0, 1)
 	exec.gGroup = nm
 }
@@ -715,14 +714,14 @@ func (exec *singleAggFuncExec2[from]) Free() {
 }
 
 func (exec *singleAggFuncExec3[to]) init(
-	proc *process.Process,
+	mg AggMemoryManager,
 	info singleAggInfo,
 	opt singleAggOptimizedInfo,
 	nm func() SingleAggFromVarRetFixed[to]) {
 
 	exec.singleAggInfo = info
 	exec.singleAggOptimizedInfo = opt
-	exec.ret = initFixedAggFuncResult[to](proc, info.retType, info.emptyNull)
+	exec.ret = initFixedAggFuncResult[to](mg, info.retType, info.emptyNull)
 	exec.groups = make([]SingleAggFromVarRetFixed[to], 0, 1)
 	exec.gGroup = nm
 }
@@ -935,14 +934,14 @@ func (exec *singleAggFuncExec3[to]) Free() {
 }
 
 func (exec *singleAggFuncExec4) init(
-	proc *process.Process,
+	mg AggMemoryManager,
 	info singleAggInfo,
 	opt singleAggOptimizedInfo,
 	nm func() SingleAggFromVarRetVar) {
 
 	exec.singleAggInfo = info
 	exec.singleAggOptimizedInfo = opt
-	exec.ret = initBytesAggFuncResult(proc, info.retType, info.emptyNull)
+	exec.ret = initBytesAggFuncResult(mg, info.retType, info.emptyNull)
 	exec.groups = make([]SingleAggFromVarRetVar, 0, 1)
 	exec.gGroup = nm
 }

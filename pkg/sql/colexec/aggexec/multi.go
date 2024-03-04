@@ -18,7 +18,6 @@ import (
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 type multiAggInfo struct {
@@ -86,13 +85,13 @@ type multiAggFuncExec2 struct {
 }
 
 func (exec *multiAggFuncExec1[T]) init(
-	proc *process.Process,
+	mg AggMemoryManager,
 	info multiAggInfo,
 	nm func() MultiAggRetFixed[T]) {
 
 	exec.multiAggInfo = info
 	exec.args = make([]mArg1[T], len(info.argTypes))
-	exec.ret = initFixedAggFuncResult[T](proc, info.retType, info.emptyNull)
+	exec.ret = initFixedAggFuncResult[T](mg, info.retType, info.emptyNull)
 	exec.groups = make([]MultiAggRetFixed[T], 0, 1)
 	exec.gGroup = nm
 	exec.args = make([]mArg1[T], len(info.argTypes))
@@ -226,13 +225,13 @@ func (exec *multiAggFuncExec1[T]) Free() {
 }
 
 func (exec *multiAggFuncExec2) init(
-	proc *process.Process,
+	mg AggMemoryManager,
 	info multiAggInfo,
 	nm func() MultiAggRetVar) {
 
 	exec.multiAggInfo = info
 	exec.args = make([]mArg2, len(info.argTypes))
-	exec.ret = initBytesAggFuncResult(proc, info.retType, info.emptyNull)
+	exec.ret = initBytesAggFuncResult(mg, info.retType, info.emptyNull)
 	exec.groups = make([]MultiAggRetVar, 0, 1)
 	exec.gGroup = nm
 	exec.args = make([]mArg2, len(info.argTypes))
