@@ -1049,8 +1049,8 @@ var (
 			sname varchar(64) primary key,
 			ts timestamp,
 			level enum('cluster','account','database','table'),
-			objname varchar(5000),
-			`,
+			objname varchar(5000)
+			);`,
 		`create table mo_pubs(
     		pub_name varchar(64) primary key,
     		database_name varchar(5000),
@@ -9649,6 +9649,15 @@ func doCreateSnapshot(ctx context.Context, ses *Session, stmt *tree.CreateSnapSh
 		snapshotForAccount = string(stmt.Obeject.ObjName)
 		if currentAccount != sysAccountName && currentAccount != snapshotForAccount {
 			return moerr.NewInternalError(ctx, "only sys tenant can create tenant level snapshot for other tenant")
+		}
+
+		// check account exists or not
+		accuntExist, err := checkTenantExistsOrNot(ctx, bh, snapshotForAccount)
+		if err != nil {
+			return err
+		}
+		if !accuntExist {
+			return moerr.NewInternalError(ctx, "create snapshot for account %s, account %s does not exist", snapshotForAccount, snapshotForAccount)
 		}
 	}
 
