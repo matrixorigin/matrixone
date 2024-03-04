@@ -16,10 +16,8 @@ package aggexec
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 	"testing"
 )
@@ -95,14 +93,15 @@ func TestSingleAggFuncExec1(t *testing.T) {
 		// prepare the input data.
 		var err error
 
-		vec := testutil.NewInt32Vector(4, inputType, mg.Mp(), false, []int32{3, 3, 0, 1, 1})
-		vec.SetNulls(nulls.Build(4, 1))
+		vec := vector.NewVec(inputType)
+		require.NoError(t, vector.AppendFixedList[int32](vec, []int32{3, 0, 4, 5}, []bool{false, true, false, false}, mg.Mp()))
 		inputs[0] = vec
 		inputs[1] = vec
 		inputs[2] = vector.NewConstNull(inputType, 2, mg.Mp())
 		inputs[3], err = vector.NewConstFixed[int32](inputType, 1, 3, mg.Mp())
 		require.NoError(t, err)
-		inputs[4] = testutil.NewInt32Vector(4, inputType, mg.Mp(), false, []int32{1, 2, 3, 4})
+		inputs[4] = vector.NewVec(inputType)
+		require.NoError(t, vector.AppendFixedList[int32](inputs[4], []int32{1, 2, 3, 4}, nil, mg.Mp()))
 	}
 	{
 		require.NoError(t, executor.GroupGrow(1))
@@ -207,9 +206,10 @@ func TestMultiAggFuncExec1(t *testing.T) {
 		var err error
 
 		// prepare the input data.
-		vec1 := testutil.NewInt64Vector(2, inputType1, mg.Mp(), false, []int64{0, 1})
-		vec1.SetNulls(nulls.Build(2, 0))
-		vec2 := testutil.NewBoolVector(2, inputType2, mg.Mp(), false, []bool{false, true})
+		vec1 := vector.NewVec(inputType1)
+		require.NoError(t, vector.AppendFixedList[int64](vec1, []int64{0, 1}, []bool{true, false}, mg.Mp()))
+		vec2 := vector.NewVec(inputType2)
+		require.NoError(t, vector.AppendFixedList[bool](vec2, []bool{false, true}, nil, mg.Mp()))
 		inputs[0] = [2]*vector.Vector{vec1, vec2}
 		inputs[1] = [2]*vector.Vector{vec1, vec2}
 
@@ -224,10 +224,10 @@ func TestMultiAggFuncExec1(t *testing.T) {
 		inputs[3][1], err = vector.NewConstFixed[bool](inputType2, true, 3, mg.Mp())
 		require.NoError(t, err)
 
-		inputs[4][0] = testutil.NewInt64Vector(4, inputType1, mg.Mp(), false, []int64{1, 0, 3, 0})
-		inputs[4][0].SetNulls(nulls.Build(4, 1, 3))
-		inputs[4][1] = testutil.NewBoolVector(4, inputType2, mg.Mp(), false, []bool{true, false, true, false})
-		inputs[4][1].SetNulls(nulls.Build(4, 0))
+		inputs[4][0] = vector.NewVec(inputType1)
+		require.NoError(t, vector.AppendFixedList[int64](inputs[4][0], []int64{1, 0, 3, 0}, []bool{false, true, false, true}, mg.Mp()))
+		inputs[4][1] = vector.NewVec(inputType2)
+		require.NoError(t, vector.AppendFixedList[bool](inputs[4][1], []bool{true, false, true, false}, []bool{true, false, false, false}, mg.Mp()))
 	}
 	{
 		require.NoError(t, executor.GroupGrow(1))
@@ -280,8 +280,10 @@ func TestGroupConcatExec(t *testing.T) {
 	// vector2: ["d", "c", "b", "a"].
 	// the result is ["ad,bc,cb,da"].
 	inputs := make([]*vector.Vector, 2)
-	inputs[0] = testutil.NewStringVector(4, info.argTypes[0], mg.Mp(), false, []string{"a", "b", "c", "d"})
-	inputs[1] = testutil.NewStringVector(4, info.argTypes[1], mg.Mp(), false, []string{"d", "c", "b", "a"})
+	inputs[0] = vector.NewVec(info.argTypes[0])
+	inputs[1] = vector.NewVec(info.argTypes[1])
+	require.NoError(t, vector.AppendStringList(inputs[0], []string{"a", "b", "c", "d"}, nil, mg.Mp()))
+	require.NoError(t, vector.AppendStringList(inputs[1], []string{"d", "c", "b", "a"}, nil, mg.Mp()))
 	{
 		require.NoError(t, executor.GroupGrow(1))
 		// data Fill.

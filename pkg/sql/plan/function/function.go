@@ -53,6 +53,8 @@ func initAllSupportedFunctions() {
 	}
 	for _, fn := range supportedAggregateFunctions {
 		if fn.isAggregate() && fn.Overloads[0].aggFramework.aggRegister != nil {
+			fn.Overloads[0].aggFramework.aggRegister(encodeOverloadID(
+				int32(fn.functionId), 0))
 			allSupportedFunctions[fn.functionId] = fn
 		}
 	}
