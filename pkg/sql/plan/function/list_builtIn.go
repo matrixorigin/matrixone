@@ -3733,6 +3733,39 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `mo_cu`
+	{
+		functionId: MO_CU,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				volatile:   true,
+				args:       []types.T{types.T_varchar, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_decimal128.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return buildInMOCU
+				},
+			},
+			{
+				overloadId: 0,
+				volatile:   true,
+				args:       []types.T{types.T_varchar, types.T_int64, types.T_bool},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_decimal128.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return buildInMOCU
+				},
+			},
+		},
+	},
+
 	// function `month`
 	{
 		functionId: MONTH,

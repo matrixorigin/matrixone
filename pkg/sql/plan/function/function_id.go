@@ -306,6 +306,7 @@ const (
 	MO_LOG_DATE // parse date from string, like __mo_filepath
 	MO_CHECH_LEVEL
 	PURGE_LOG // purge mo internal log, like rawlog, statement_info, metric
+	MO_CU
 
 	GIT_VERSION
 	BUILD_VERSION
@@ -597,6 +598,7 @@ var functionIdRegister = map[string]int32{
 	"mo_log_date":                    MO_LOG_DATE,
 	"mo_check_level":                 MO_CHECH_LEVEL,
 	"purge_log":                      PURGE_LOG,
+	"mo_cu":                          MO_CU,
 	"git_version":                    GIT_VERSION,
 	"build_version":                  BUILD_VERSION,
 	"values":                         VALUES,

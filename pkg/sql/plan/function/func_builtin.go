@@ -17,6 +17,7 @@ package function
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"math"
 	"math/rand"
@@ -37,6 +38,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionUtil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/momath"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -2116,4 +2119,63 @@ func builtInToLower(parameters []*vector.Vector, result vector.FunctionResultWra
 	return opUnaryBytesToBytes(parameters, result, proc, length, func(v []byte) []byte {
 		return bytes.ToLower(v)
 	})
+}
+
+// buildInMOCU extract cu or calculate cu from parameters
+// example: select mo_cu('[1,2,3,4,5,6,7,8]', 134123)
+// example: select mo_cu('[1,2,3,4,5,6,7,8]', 134123, true)
+func buildInMOCU(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	var (
+		cu    float64
+		p3    vector.FunctionParameterWrapper[bool]
+		stats statistic.StatsArray
+	)
+	rs := vector.MustFunctionResult[float64](result)
+
+	p1 := vector.GenerateFunctionStrParameter(parameters[0])
+	p2 := vector.GenerateFunctionFixedTypeParameter[int64](parameters[1])
+
+	if len(parameters) == 2 {
+		p3 = vector.GenerateFunctionFixedTypeParameter[bool](parameters[2])
+	}
+
+	if proc.SessionInfo.AccountId != sysAccountID {
+		return moerr.NewNotSupported(proc.Ctx, "only support sys account")
+	}
+
+	for i := uint64(0); i < uint64(length); i++ {
+		statsJsonArrayStr, null1 := p1.GetStrValue(i) /* stats json array */
+		durationNS, null2 := p2.GetValue(i)           /* duration_ns */
+		forceCalculate := false                       /* force calculate */
+		if p3 != nil {
+			if v3Parsed, null3 := p3.GetValue(i); !null3 {
+				forceCalculate = v3Parsed
+			}
+		}
+
+		// fixme: should we need to support null date?
+		if null1 || null2 {
+			rs.Append(float64(0), true)
+			continue
+		}
+
+		if len(statsJsonArrayStr) == 0 {
+			rs.Append(float64(0), true)
+			continue
+		}
+
+		if err := json.Unmarshal(statsJsonArrayStr, &stats); err != nil {
+			rs.Append(float64(0), true)
+			//return moerr.NewInternalError(proc.Ctx, "failed to parse json arr: %v", err)
+		}
+
+		if stats.GetVersion() >= statistic.StatsArrayVersion5 && !forceCalculate {
+			cu = stats.GetCU()
+		} else {
+			cu = motrace.CalculateCU(stats, durationNS)
+		}
+		rs.Append(cu, false)
+	}
+
+	return nil
 }

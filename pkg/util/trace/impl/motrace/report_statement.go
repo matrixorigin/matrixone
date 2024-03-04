@@ -492,7 +492,7 @@ func (s *StatementInfo) ExecPlan2Stats(ctx context.Context) []byte {
 		s.statsArray.WithConnType(s.ConnType)
 		s.RowsRead = stats.RowsRead
 		s.BytesScan = stats.BytesScan
-		cu := calculateCU(s.statsArray, int64(s.Duration))
+		cu := CalculateCU(s.statsArray, int64(s.Duration))
 		s.statsArray.WithCU(cu)
 		return s.statsArray.ToJsonString()
 	}
@@ -554,10 +554,10 @@ func (s *StatementInfo) MarkResponseAt() {
 	}
 }
 
-// calculateCU calculate CU cost
+// CalculateCU calculate CU cost
 // the result only keep 3 decimal places
 // Tips: CU is long-tailed numbers
-func calculateCU(stats statistic.StatsArray, durationNS int64) float64 {
+func CalculateCU(stats statistic.StatsArray, durationNS int64) float64 {
 
 	cfg := GetTracerProvider().GetCUConfig()
 
