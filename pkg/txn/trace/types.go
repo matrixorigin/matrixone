@@ -19,6 +19,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -52,7 +53,8 @@ var (
 			txn_status			  varchar(10),
 			snapshot_ts           varchar(50),
 			commit_ts             varchar(50),
-			check_changed		  varchar(100)
+			check_changed		  varchar(100),
+			info                  varchar(1000)
 		)`, DebugDB, eventTxnTable),
 
 		fmt.Sprintf(`create table %s.%s(
@@ -98,14 +100,21 @@ func GetService() Service {
 
 type Service interface {
 	TxnCreated(op client.TxnOperator)
+	TxnExecute(op client.TxnOperator, sql string)
+	TxnNeedUpdateSnapshot(op client.TxnOperator, tableID uint64, why string)
 	CommitEntries(txnID []byte, entries []*api.Entry)
-	ApplyLogtail(logtail *api.Entry, commitTSIndex int)
 	TxnRead(txnID []byte, snapshotTS timestamp.Timestamp, tableID uint64, columns []string, bat *batch.Batch)
+	TxnReadBlock(op client.TxnOperator, tableID uint64, block []byte)
+	ApplyLogtail(logtail *api.Entry, commitTSIndex int)
+	ApplyFlush(txnID []byte, tableID uint64, from, to timestamp.Timestamp, count int)
+	ApplyTransferRowID(txnID []byte, tableID uint64, fromRowID, toRowID, fromBlockID, toBlockID []byte, vec *vector.Vector, row int)
+	ApplyDeleteObject(tableID uint64, ts timestamp.Timestamp, objName string, tag string)
 	ChangedCheck(txnID []byte, tableID uint64, from, to timestamp.Timestamp, changed bool)
 	AddTxnError(txnID []byte, err error)
 
 	Enable() error
 	Disable() error
+	Enabled() bool
 
 	AddEntryFilter(name string, columns []string) error
 	RefreshFilters() error
