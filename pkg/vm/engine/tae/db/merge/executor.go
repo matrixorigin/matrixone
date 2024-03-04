@@ -123,15 +123,15 @@ func (e *MergeExecutor) ManuallyExecute(entry *catalog.TableEntry, objs []*catal
 		return moerr.NewInternalErrorNoCtx("no enough mem to merge. osize %d, mem %d", osize, mem)
 	}
 
-	blkCnt := len(objs)
+	objCnt := len(objs)
 
-	scopes := make([]common.ID, blkCnt)
-	for i, blk := range objs {
-		scopes[i] = *blk.AsCommonID()
+	scopes := make([]common.ID, objCnt)
+	for i, obj := range objs {
+		scopes[i] = *obj.AsCommonID()
 	}
 
 	factory := func(ctx *tasks.Context, txn txnif.AsyncTxn) (tasks.Task, error) {
-		return jobs.NewMergeObjectsTask(ctx, txn, mobjs, e.rt)
+		return jobs.NewMergeObjectsTask(ctx, txn, objs, e.rt)
 	}
 	task, err := e.rt.Scheduler.ScheduleMultiScopedTxnTask(tasks.WaitableCtx, tasks.DataCompactionTask, scopes, factory)
 	if err == tasks.ErrScheduleScopeConflict {
@@ -162,7 +162,7 @@ func (e *MergeExecutor) ExecuteFor(entry *catalog.TableEntry, policy Policy) {
 	}
 
 	factory := func(ctx *tasks.Context, txn txnif.AsyncTxn) (tasks.Task, error) {
-		return jobs.NewMergeObjectsTask(ctx, txn, mobjs, e.rt)
+		return jobs.NewMergeObjectsTask(ctx, txn, objectList, e.rt)
 	}
 	task, err := e.rt.Scheduler.ScheduleMultiScopedTxnTask(nil, tasks.DataCompactionTask, scopes, factory)
 	if err != nil {

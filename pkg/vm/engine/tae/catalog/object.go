@@ -593,6 +593,7 @@ func (entry *ObjectEntry) ObjectPersisted() bool {
 		return true
 	}
 }
+
 // for old flushed objects, stats may be empty
 func (entry *ObjectEntry) HasCommittedPersistedData() bool {
 	entry.RLock()

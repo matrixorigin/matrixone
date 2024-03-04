@@ -33,15 +33,13 @@ import (
 
 type mergeObjectsEntry struct {
 	sync.RWMutex
-	txn         txnif.AsyncTxn
-	relation    handle.Relation
-	droppedObjs []*catalog.ObjectEntry
-	deletes     []*nulls.Bitmap
-	createdObjs []*catalog.ObjectEntry
+	txn                txnif.AsyncTxn
+	relation           handle.Relation
+	droppedObjs        []*catalog.ObjectEntry
+	createdObjs        []*catalog.ObjectEntry
 	createdBlkCnt      []int
 	totalCreatedBlkCnt int
-	transMappings *api.BlkTransferBooking
-	skippedBlks        []int
+	transMappings      *api.BlkTransferBooking
 
 	rt      *dbutils.Runtime
 	pageIds []*common.ID
@@ -52,17 +50,15 @@ func NewMergeObjectsEntry(
 	relation handle.Relation,
 	droppedObjs, createdObjs []*catalog.ObjectEntry,
 	transMappings *api.BlkTransferBooking,
-	deletes []*nulls.Bitmap,
-	skipBlks []int,
 	rt *dbutils.Runtime,
-) *mergeBlocksEntry {
+) *mergeObjectsEntry {
 	createdBlkCnt := make([]int, len(createdObjs))
 	totalCreatedBlkCnt := 0
 	for i, obj := range createdObjs {
 		createdBlkCnt[i] = totalCreatedBlkCnt
 		totalCreatedBlkCnt += obj.BlockCnt()
 	}
-	entry := &mergeBlocksEntry{
+	entry := &mergeObjectsEntry{
 		txn:                txn,
 		relation:           relation,
 		createdObjs:        createdObjs,
@@ -70,8 +66,6 @@ func NewMergeObjectsEntry(
 		createdBlkCnt:      createdBlkCnt,
 		droppedObjs:        droppedObjs,
 		transMappings:      transMappings,
-		deletes:            deletes,
-		skippedBlks:        skipBlks,
 		rt:                 rt,
 	}
 	entry.prepareTransferPage()
@@ -79,26 +73,34 @@ func NewMergeObjectsEntry(
 }
 
 func (entry *mergeObjectsEntry) prepareTransferPage() {
-	for i, blk := range entry.droppedObjs {
-		if len(entry.transMappings.Mappings[i].M) == 0 {
-			continue
+	k := 0
+	for _, obj := range entry.droppedObjs {
+		for j := 0; j < obj.BlockCnt(); j++ {
+			if len(entry.transMappings.Mappings[k].M) == 0 {
+				k++
+				continue
+			}
+			mapping := entry.transMappings.Mappings[k].M
+			if len(mapping) == 0 {
+				panic("cannot tranfer empty block")
+			}
+			tblEntry := obj.GetTable()
+			isTransient := !tblEntry.GetLastestSchema().HasPK()
+			id := obj.AsCommonID()
+			id.SetBlockOffset(uint16(j))
+			page := model.NewTransferHashPage(id, time.Now(), isTransient)
+			for srcRow, dst := range mapping {
+				objID := entry.createdObjs[0].ID
+				blkID := objectio.NewBlockidWithObjectID(&objID, uint16(dst.Idx))
+				page.Train(uint32(srcRow), *objectio.NewRowid(blkID, uint32(dst.Row)))
+			}
+			entry.pageIds = append(entry.pageIds, id)
+			_ = entry.rt.TransferTable.AddPage(page)
+			k++
 		}
-		mapping := entry.transMappings.Mappings[i].M
-		if len(mapping) == 0 {
-			panic("cannot tranfer empty block")
-		}
-		tblEntry := blk.GetTable()
-		isTransient := !tblEntry.GetLastestSchema().HasPK()
-		id := blk.AsCommonID()
-		page := model.NewTransferHashPage(id, time.Now(), isTransient)
-		for srcRow, dst := range mapping {
-			objID := entry.createdObjs[0].ID
-			blkOffset := dst.Idx
-			blkID := objectio.NewBlockidWithObjectID(&objID, uint16(blkOffset))
-			page.Train(uint32(srcRow), *objectio.NewRowid(blkID, uint32(dst.Row)))
-		}
-		entry.pageIds = append(entry.pageIds, id)
-		_ = entry.rt.TransferTable.AddPage(page)
+	}
+	if k != len(entry.transMappings.Mappings) {
+		panic(fmt.Sprintf("k %v, mapping %v", k, len(entry.transMappings.Mappings)))
 	}
 }
 
@@ -143,15 +145,10 @@ func (entry *mergeObjectsEntry) Is1PC() bool { return false }
 
 func (entry *mergeObjectsEntry) transferBlockDeletes(
 	dropped *catalog.ObjectEntry,
-	blks []handle.Block,
+	created handle.Object,
 	delTbls []*model.TransDels,
-	blkidx int,
-	blkID uint16) (err error) {
+	blkidxStart int) (err error) {
 
-	mapping := entry.transMappings.Mappings[blkidx].M
-	if len(mapping) == 0 {
-		panic("cannot tranfer empty block")
-	}
 	dataBlock := dropped.GetBlockData()
 	tblEntry := dropped.GetTable()
 
@@ -176,8 +173,16 @@ func (entry *mergeObjectsEntry) transferBlockDeletes(
 	ts := vector.MustFixedCol[types.TS](bat.GetVectorByName(catalog.AttrCommitTs).GetDownstreamVector())
 
 	count := len(rowid)
+	if err != nil {
+		panic(err)
+	}
 	for i := 0; i < count; i++ {
 		row := rowid[i].GetRowOffset()
+		blkOffset := rowid[i].GetBlockOffset()
+		mapping := entry.transMappings.Mappings[blkidxStart+int(blkOffset)].M
+		if len(mapping) == 0 {
+			panic("cannot tranfer empty block")
+		}
 		destpos, ok := mapping[int32(row)]
 		if !ok {
 			panic(fmt.Sprintf("%s find no transfer mapping for row %d", dropped.ID.String(), row))
@@ -185,7 +190,7 @@ func (entry *mergeObjectsEntry) transferBlockDeletes(
 		if delTbls[destpos.Idx] == nil {
 			delTbls[destpos.Idx] = model.NewTransDels(entry.txn.GetPrepareTS())
 		}
-		delTbls[destpos.Idx].Mapping[destpos.Row] = ts[i]
+		delTbls[destpos.Idx].Mapping[int(destpos.Row)] = ts[i]
 		if err = created.RangeDelete(
 			uint16(destpos.Idx), uint32(destpos.Row), uint32(destpos.Row), handle.DT_MergeCompact, common.MergeAllocator,
 		); err != nil {
@@ -195,8 +200,11 @@ func (entry *mergeObjectsEntry) transferBlockDeletes(
 	return
 }
 
-func (entry *mergeBlocksEntry) PrepareCommit() (err error) {
+func (entry *mergeObjectsEntry) PrepareCommit() (err error) {
 	delTbls := make([]*model.TransDels, entry.totalCreatedBlkCnt)
+	if len(entry.createdBlkCnt) == 0 {
+		return
+	}
 	created, err := entry.relation.GetObject(&entry.createdObjs[0].ID)
 	if err != nil {
 		return
@@ -204,22 +212,33 @@ func (entry *mergeBlocksEntry) PrepareCommit() (err error) {
 
 	ids := make([]*common.ID, 0)
 
-	if len(entry.droppedBlks) != len(entry.transMappings.Mappings) {
-		panic(fmt.Sprintf("bad length %v != %v", len(entry.droppedBlks), len(entry.transMappings.Mappings)))
-	}
-
-	for idx, dropped := range entry.droppedBlks {
-		if len(entry.transMappings.Mappings[idx].M) == 0 {
+	blkIdxStart := 0
+	k := 0
+	for _, dropped := range entry.droppedObjs {
+		hasMapping := false
+		for i := 0; i < dropped.BlockCnt(); i++ {
+			if len(entry.transMappings.Mappings[k+i].M) != 0 {
+				hasMapping = true
+				break
+			}
+		}
+		k += dropped.BlockCnt()
+		if !hasMapping {
+			blkIdxStart += dropped.BlockCnt()
 			continue
 		}
 		if err = entry.transferBlockDeletes(
 			dropped,
-			blks,
+			created,
 			delTbls,
-			idx,
+			blkIdxStart,
 		); err != nil {
 			break
 		}
+		blkIdxStart += dropped.BlockCnt()
+	}
+	if k != len(entry.transMappings.Mappings) {
+		panic(fmt.Sprintf("bad length %v != %v", k, len(entry.transMappings.Mappings)))
 	}
 	objID := entry.createdObjs[0].ID
 	if err == nil {

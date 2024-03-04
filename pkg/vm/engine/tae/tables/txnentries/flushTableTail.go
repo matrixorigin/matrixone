@@ -159,7 +159,7 @@ func (entry *flushTableTailEntry) PrepareCommit() error {
 			if delTbls[destpos.Idx] == nil {
 				delTbls[destpos.Idx] = model.NewTransDels(entry.txn.GetPrepareTS())
 			}
-			delTbls[destpos.Idx].Mapping[destpos.Row] = ts[i]
+			delTbls[destpos.Idx].Mapping[int(destpos.Row)] = ts[i]
 			if err = entry.createdBlkHandles.RangeDelete(
 				uint16(destpos.Idx), uint32(destpos.Row), uint32(destpos.Row), handle.DT_MergeCompact, common.MergeAllocator,
 			); err != nil {

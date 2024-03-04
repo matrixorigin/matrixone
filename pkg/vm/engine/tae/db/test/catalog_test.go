@@ -166,19 +166,15 @@ func TestCheckpointCatalog2(t *testing.T) {
 	pool, _ := ants.NewPool(20)
 	defer pool.Release()
 	var wg sync.WaitGroup
-	mockRes := func() {
-		defer wg.Done()
-		txn, _ := tae.StartTxn(nil)
-		db, _ := txn.GetDatabase("db")
-		rel, _ := db.GetRelationByName(schema.Name)
-		obj, err := rel.CreateNonAppendableObject(false, nil)
-		assert.Nil(t, err)
-		var id *common.ID
-		for i := 0; i < 30; i++ {
-			blk, err := obj.CreateNonAppendableBlock(new(objectio.CreateBlockOpt).WithBlkIdx(uint16(i)))
-			if i == 2 {
-				id = blk.Fingerprint()
-			}
+	mockRes := func(i int) func() {
+		return func() {
+			defer wg.Done()
+			txn, _ := tae.StartTxn(nil)
+			db, _ := txn.GetDatabase("db")
+			rel, _ := db.GetRelationByName(schema.Name)
+			err := rel.Append(context.Background(), bats[i])
+			assert.Nil(t, err)
+			err = txn.Commit(context.Background())
 			assert.Nil(t, err)
 		}
 	}

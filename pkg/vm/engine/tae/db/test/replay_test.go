@@ -218,7 +218,7 @@ func TestReplayCatalog3(t *testing.T) {
 	assert.Nil(t, err)
 	rel, err := e.CreateRelation(schema)
 	assert.Nil(t, err)
-	_, err = rel.CreateNonAppendableObject(false)
+	_, err = rel.CreateNonAppendableObject(false, nil)
 	assert.Nil(t, err)
 	_, err = e.CreateRelation(schema2)
 	assert.Nil(t, err)

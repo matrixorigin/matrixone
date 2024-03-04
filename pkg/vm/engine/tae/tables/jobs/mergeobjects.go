@@ -42,14 +42,16 @@ import (
 
 type mergeObjectsTask struct {
 	*tasks.BaseTask
-	txn         txnif.AsyncTxn
-	rt          *dbutils.Runtime
-	mergedObjs  []*catalog.ObjectEntry
-	createdBlks []*catalog.BlockEntry
-	compacted   []handle.Block
-	commitEntry *mergesort.MergeCommitEntry
-	rel         handle.Relation
-	did, tid    uint64
+	txn               txnif.AsyncTxn
+	rt                *dbutils.Runtime
+	mergedObjs        []*catalog.ObjectEntry
+	mergedObjsHandle  []handle.Object
+	mergedBlkCnt      []int
+	totalMergedBlkCnt int
+	createdBObjs      []*catalog.ObjectEntry
+	commitEntry       *mergesort.MergeCommitEntry
+	rel               handle.Relation
+	did, tid          uint64
 }
 
 func NewMergeObjectsTask(
@@ -61,11 +63,15 @@ func NewMergeObjectsTask(
 		panic("empty mergedObjs")
 	}
 	task = &mergeObjectsTask{
-		txn:         txn,
-		rt:          rt,
-		mergedObjs:  mergedObjs,
-		createdBlks: make([]*catalog.BlockEntry, 0),
-		compacted:   make([]handle.Block, 0),
+		txn:          txn,
+		rt:           rt,
+		mergedObjs:   mergedObjs,
+		createdBObjs: make([]*catalog.ObjectEntry, 0),
+		mergedBlkCnt: make([]int, len(mergedObjs)),
+	}
+	for i, obj := range mergedObjs {
+		task.mergedBlkCnt[i] = task.totalMergedBlkCnt
+		task.totalMergedBlkCnt += obj.BlockCnt()
 	}
 
 	task.did = mergedObjs[0].GetTable().GetDB().ID
@@ -83,15 +89,7 @@ func NewMergeObjectsTask(
 		if err != nil {
 			return nil, err
 		}
-		defer obj.Close()
-		it := obj.MakeBlockIt()
-		for ; it.Valid(); it.Next() {
-			blk := it.GetBlock()
-			task.compacted = append(task.compacted, blk)
-		}
-		if err != nil {
-			return nil, err
-		}
+		task.mergedObjsHandle = append(task.mergedObjsHandle, obj)
 	}
 	task.BaseTask = tasks.NewBaseTask(task, tasks.DataCompactionTask, ctx)
 	return
@@ -109,7 +107,7 @@ func (task *mergeObjectsTask) GetMPool() *mpool.MPool {
 
 func (task *mergeObjectsTask) PrepareData() ([]*batch.Batch, []*nulls.Nulls, func(), error) {
 	var err error
-	views := make([]*containers.BlockView, len(task.compacted))
+	views := make([]*containers.BlockView, task.totalMergedBlkCnt)
 	releaseF := func() {
 		for _, view := range views {
 			if view != nil {
@@ -132,14 +130,23 @@ func (task *mergeObjectsTask) PrepareData() ([]*batch.Batch, []*nulls.Nulls, fun
 		idxs = append(idxs, def.Idx)
 		attrs = append(attrs, def.Name)
 	}
-	for i, block := range task.compacted {
-		if views[i], err = block.GetColumnDataByIds(context.Background(), idxs, common.MergeAllocator); err != nil {
-			return nil, nil, nil, err
+	for i, obj := range task.mergedObjsHandle {
+
+		maxBlockOffset := task.totalMergedBlkCnt
+		if i != len(task.mergedObjs)-1 {
+			maxBlockOffset = task.mergedBlkCnt[i+1]
+		}
+		minBlockOffset := task.mergedBlkCnt[i]
+
+		for j := 0; j < maxBlockOffset-minBlockOffset; j++ {
+			if views[minBlockOffset+j], err = obj.GetColumnDataByIds(context.Background(), uint16(j), idxs, common.MergeAllocator); err != nil {
+				return nil, nil, nil, err
+			}
 		}
 	}
 
-	batches := make([]*batch.Batch, 0, len(task.compacted))
-	dels := make([]*nulls.Nulls, 0, len(task.compacted))
+	batches := make([]*batch.Batch, 0, task.totalMergedBlkCnt)
+	dels := make([]*nulls.Nulls, 0, task.totalMergedBlkCnt)
 	for _, view := range views {
 		batch := batch.New(true, attrs)
 		if len(attrs) != len(view.Columns) {
@@ -212,7 +219,7 @@ func (task *mergeObjectsTask) Execute(ctx context.Context) (err error) {
 		return err
 	}
 
-	if task.createdBlks, err = HandleMergeEntryInTxn(task.txn, task.commitEntry, task.rt); err != nil {
+	if task.createdBObjs, err = HandleMergeEntryInTxn(task.txn, task.commitEntry, task.rt); err != nil {
 		return err
 	}
 
@@ -222,11 +229,7 @@ func (task *mergeObjectsTask) Execute(ctx context.Context) (err error) {
 	return nil
 }
 
-func (task *mergeObjectsTask) GetCreatedBlocks() []*catalog.BlockEntry {
-	return task.createdBlks
-}
-
-func HandleMergeEntryInTxn(txn txnif.AsyncTxn, entry *mergesort.MergeCommitEntry, rt *dbutils.Runtime) ([]*catalog.BlockEntry, error) {
+func HandleMergeEntryInTxn(txn txnif.AsyncTxn, entry *mergesort.MergeCommitEntry, rt *dbutils.Runtime) ([]*catalog.ObjectEntry, error) {
 	database, err := txn.GetDatabaseByID(entry.DbID)
 	if err != nil {
 		return nil, err
@@ -238,8 +241,6 @@ func HandleMergeEntryInTxn(txn txnif.AsyncTxn, entry *mergesort.MergeCommitEntry
 
 	mergedObjs := make([]*catalog.ObjectEntry, 0, len(entry.MergedObjs))
 	createdObjs := make([]*catalog.ObjectEntry, 0, len(entry.CreatedObjectStats))
-	mergedBlks := make([]*catalog.BlockEntry, 0, len(entry.MergedObjs)*2)
-	createdBlks := make([]*catalog.BlockEntry, 0, len(entry.CreatedObjectStats)*2)
 	ids := make([]*common.ID, 0, len(entry.MergedObjs)*2)
 
 	// drop merged blocks and objects
@@ -250,15 +251,6 @@ func HandleMergeEntryInTxn(txn txnif.AsyncTxn, entry *mergesort.MergeCommitEntry
 			return nil, err
 		}
 		mergedObjs = append(mergedObjs, obj.GetMeta().(*catalog.ObjectEntry))
-		it := obj.MakeBlockIt()
-		for ; it.Valid(); it.Next() {
-			blk := it.GetBlock()
-			if err = obj.SoftDeleteBlock(blk.ID()); err != nil {
-				return nil, err
-			}
-			mergedBlks = append(mergedBlks, blk.GetMeta().(*catalog.BlockEntry))
-			ids = append(ids, blk.Fingerprint())
-		}
 		if err = rel.SoftDeleteObject(objID); err != nil {
 			return nil, err
 		}
@@ -278,34 +270,6 @@ func HandleMergeEntryInTxn(txn txnif.AsyncTxn, entry *mergesort.MergeCommitEntry
 		}
 		objEntry := obj.GetMeta().(*catalog.ObjectEntry)
 		objEntry.SetSorted()
-
-		num := stats.ObjectName().Num()
-		blkCount := stats.BlkCnt()
-		totalRow := stats.Rows()
-		blkMaxRows := rel.Schema().(*catalog.Schema).BlockMaxRows
-		for i := uint16(0); i < uint16(blkCount); i++ {
-			var blkRow uint32
-			if totalRow > blkMaxRows {
-				blkRow = blkMaxRows
-			} else {
-				blkRow = totalRow
-			}
-			totalRow -= blkRow
-			metaloc := objectio.BuildLocation(stats.ObjectName(), stats.Extent(), blkRow, i)
-			blk, err := obj.CreateNonAppendableBlock(
-				new(objectio.CreateBlockOpt).
-					WithMetaloc(metaloc).
-					WithFileIdx(num).
-					WithBlkIdx(i))
-			if err != nil {
-				return nil, err
-			}
-			blkEntry := blk.GetMeta().(*catalog.BlockEntry)
-			createdBlks = append(createdBlks, blkEntry)
-			if err = blkEntry.GetBlockData().Init(); err != nil {
-				return nil, err
-			}
-		}
 	}
 
 	txnEntry := txnentries.NewMergeObjectsEntry(
@@ -313,8 +277,6 @@ func HandleMergeEntryInTxn(txn txnif.AsyncTxn, entry *mergesort.MergeCommitEntry
 		rel,
 		mergedObjs,
 		createdObjs,
-		mergedBlks,
-		createdBlks,
 		entry.Booking,
 		rt,
 	)
@@ -323,5 +285,10 @@ func HandleMergeEntryInTxn(txn txnif.AsyncTxn, entry *mergesort.MergeCommitEntry
 		return nil, err
 	}
 
-	return createdBlks, nil
+	return createdObjs, nil
+}
+
+// for UT
+func (entry *mergeObjectsTask) GetCreatedObjects() []*catalog.ObjectEntry {
+	return entry.createdBObjs
 }
