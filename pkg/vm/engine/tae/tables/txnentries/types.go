@@ -52,7 +52,7 @@ func init() {
 		},
 		nil,
 		func(b []byte) (any, error) {
-			cmd := new(mergeBlocksCmd)
+			cmd := new(mergeObjectsCmd)
 			err := cmd.UnmarshalBinary(b)
 			return cmd, err
 		},
