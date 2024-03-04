@@ -530,6 +530,10 @@ func (svdt SystemVariableDoubleType) Convert(value interface{}) (interface{}, er
 		return cv1(float64(v))
 	case float64:
 		return cv1(v)
+	case string:
+		if f, err := strconv.ParseFloat(v, 64); err == nil {
+			return cv1(f)
+		}
 	}
 	return nil, errorConvertToDoubleFailed
 }
