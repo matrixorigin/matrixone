@@ -18,13 +18,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"math"
-	"math/rand"
-	"sync"
-	"sync/atomic"
-	"time"
-	"unsafe"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -34,6 +27,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/tidwall/btree"
 	"go.uber.org/zap"
+	"math"
+	"math/rand"
+	"sync"
+	"sync/atomic"
+	"time"
+	"unsafe"
 
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -680,9 +679,13 @@ func (m *TNUsageMemo) EstablishFromCKPs(c *catalog.Catalog) {
 				if m.pendingReplay.delayed == nil {
 					m.pendingReplay.delayed = make(map[uint64]UsageData)
 				}
-				m.pendingReplay.delayed[usage.TblId] = usage
+				if old, ok := m.pendingReplay.delayed[usage.TblId]; !ok {
+					m.pendingReplay.delayed[usage.TblId] = usage
+				} else {
+					old.Size += usage.Size
+					m.pendingReplay.delayed[usage.TblId] = old
+				}
 			}
-
 			m.DeltaUpdate(usage, false)
 		}
 
@@ -806,9 +809,6 @@ func updateStorageUsageMeta(data *CheckpointData, tid uint64, start, end int32, 
 // putCacheBack2Track correct the margin of error happened in incremental checkpoint
 func putCacheBack2Track(collector *BaseCollector) (string, int) {
 	memo := collector.UsageMemo
-	//if len(memo.pendingReplay.delayed) == 0 {
-	//	return "", 0
-	//}
 
 	var buf bytes.Buffer
 
@@ -826,9 +826,34 @@ func putCacheBack2Track(collector *BaseCollector) (string, int) {
 		tblChanges[uniqueTbl] += int64(usages[idx].Size)
 	}
 
+	delDbs := make(map[uint64]struct{})
+	delTbls := make(map[uint64]struct{})
+	for _, del := range collector.Usage.Deletes {
+		switch e := del.(type) {
+		case *catalog.DBEntry:
+			delDbs[e.ID] = struct{}{}
+		case *catalog.TableEntry:
+			delTbls[e.ID] = struct{}{}
+		}
+	}
+
+	if len(tblChanges) == 0 {
+		return "", 0
+	}
+
+	memo.GetCache().ClearForUpdate()
+
 	for uniqueTbl, size := range tblChanges {
 		if size <= 0 {
 			size = 0
+		}
+
+		if _, ok := delDbs[uniqueTbl[1]]; ok {
+			continue
+		}
+
+		if _, ok := delTbls[uniqueTbl[2]]; ok {
+			continue
 		}
 
 		memo.Replace(UsageData{
@@ -847,7 +872,8 @@ func putCacheBack2Track(collector *BaseCollector) (string, int) {
 				usage.AccId, usage.DbId, usage.TblId, usage.Size, size))
 		}
 	}
-	return buf.String(), len(tblChanges)
+
+	return buf.String(), memo.CacheLen()
 }
 
 func applyChanges(collector *BaseCollector, tnUsageMemo *TNUsageMemo) string {
@@ -1125,13 +1151,24 @@ func CorrectUsageWrongPlacement(c *catalog.Catalog) (int, float64, error) {
 	return anyTransferred, transferredSize, nil
 }
 
-func EliminateErrorsOnCache(c *catalog.Catalog) int {
+func EliminateErrorsOnCache(c *catalog.Catalog, end types.TS) int {
 	collector := BaseCollector{}
 	loop := catalog.LoopProcessor{}
 	loop.ObjectFn = func(entry *catalog.ObjectEntry) error {
+		if entry.GetTable().GetDB().HasDropCommitted() || entry.GetTable().HasDropCommitted() {
+			return nil
+		}
+
 		if entry.IsAppendable() || !entry.IsCommitted() {
 			return nil
 		}
+
+		entry.Lock()
+		if entry.GetCreatedAtLocked().GreaterEq(end) {
+			entry.Unlock()
+			return nil
+		}
+		entry.Unlock()
 
 		if entry.HasDropCommitted() {
 			collector.Usage.ObjDeletes = append(collector.Usage.ObjDeletes, entry)
@@ -1145,6 +1182,9 @@ func EliminateErrorsOnCache(c *catalog.Catalog) int {
 	c.RecurLoop(&loop)
 
 	collector.UsageMemo = c.GetUsageMemo().(*TNUsageMemo)
+
+	collector.UsageMemo.EnterProcessing()
+	defer collector.UsageMemo.LeaveProcessing()
 	_, cnt := putCacheBack2Track(&collector)
 
 	return cnt
