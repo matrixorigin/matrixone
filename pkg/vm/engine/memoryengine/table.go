@@ -540,3 +540,7 @@ func (t *Table) GetColumMetadataScanInfo(ctx context.Context, name string) ([]*p
 func (t *Table) PrimaryKeysMayBeModified(ctx context.Context, from types.TS, to types.TS, keyVector *vector.Vector) (bool, error) {
 	return true, nil
 }
+
+func (t *Table) ApproxObjectsNum(ctx context.Context) int {
+	return 0
+}
