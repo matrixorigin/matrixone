@@ -43,7 +43,7 @@ func TestCatalog1(t *testing.T) {
 	schema := catalog.MockSchema(1, 0)
 	txn, _, rel := testutil.CreateRelationNoCommit(t, db, testutil.DefaultTestDB, schema, true)
 	// relMeta := rel.GetMeta().(*catalog.TableEntry)
-	obj, err := rel.CreateNonAppendableObject(false)
+	obj, err := rel.CreateNonAppendableObject(false, nil)
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit(context.Background()))
 	t.Log(db.Catalog.SimplePPString(common.PPL1))
@@ -166,15 +166,19 @@ func TestCheckpointCatalog2(t *testing.T) {
 	pool, _ := ants.NewPool(20)
 	defer pool.Release()
 	var wg sync.WaitGroup
-	mockRes := func(i int) func() {
-		return func() {
-			defer wg.Done()
-			txn, _ := tae.StartTxn(nil)
-			db, _ := txn.GetDatabase("db")
-			rel, _ := db.GetRelationByName(schema.Name)
-			err := rel.Append(context.Background(), bats[i])
-			assert.Nil(t, err)
-			err = txn.Commit(context.Background())
+	mockRes := func() {
+		defer wg.Done()
+		txn, _ := tae.StartTxn(nil)
+		db, _ := txn.GetDatabase("db")
+		rel, _ := db.GetRelationByName(schema.Name)
+		obj, err := rel.CreateNonAppendableObject(false, nil)
+		assert.Nil(t, err)
+		var id *common.ID
+		for i := 0; i < 30; i++ {
+			blk, err := obj.CreateNonAppendableBlock(new(objectio.CreateBlockOpt).WithBlkIdx(uint16(i)))
+			if i == 2 {
+				id = blk.Fingerprint()
+			}
 			assert.Nil(t, err)
 		}
 	}

@@ -251,8 +251,8 @@ func (p *PrimaryIndexEntry) Less(than *PrimaryIndexEntry) bool {
 type ObjectIndexByTSEntry struct {
 	Time         types.TS // insert or delete time
 	ShortObjName objectio.ObjectNameShort
-	IsDelete     bool
 
+	IsDelete     bool
 	IsAppendable bool
 }
 
@@ -273,12 +273,12 @@ func (b ObjectIndexByTSEntry) Less(than ObjectIndexByTSEntry) bool {
 		return false
 	}
 
-	if b.IsDelete && !than.IsDelete {
-		return true
-	}
-	if !b.IsDelete && than.IsDelete {
-		return false
-	}
+	//if b.IsDelete && !than.IsDelete {
+	//	return true
+	//}
+	//if !b.IsDelete && than.IsDelete {
+	//	return false
+	//}
 
 	return false
 }
@@ -464,6 +464,19 @@ func (p *PartitionState) HandleObjectInsert(ctx context.Context, bat *api.Batch,
 
 		p.dataObjects.Set(objEntry)
 		p.dataObjectsByCreateTS.Set(ObjectIndexByCreateTSEntry(objEntry))
+		{
+			//Need to insert an entry in objectIndexByTS, when soft delete appendable object.
+			e := ObjectIndexByTSEntry{
+				ShortObjName: *objEntry.ObjectShortName(),
+
+				IsAppendable: objEntry.EntryState,
+			}
+			if !deleteTSCol[idx].IsEmpty() {
+				e.Time = deleteTSCol[idx]
+				e.IsDelete = true
+				p.objectIndexByTS.Set(e)
+			}
+		}
 
 		// for appendable object, gc rows when delete object
 		if objEntry.EntryState && !objEntry.DeleteTime.IsEmpty() {

@@ -624,12 +624,12 @@ func (store *txnStore) CreateObject(dbId, tid uint64, is1PC bool) (obj handle.Ob
 	return db.CreateObject(tid, is1PC)
 }
 
-func (store *txnStore) CreateNonAppendableObject(dbId, tid uint64, is1PC bool) (obj handle.Object, err error) {
+func (store *txnStore) CreateNonAppendableObject(dbId, tid uint64, is1PC bool, opt *objectio.CreateObjOpt) (obj handle.Object, err error) {
 	var db *txnDB
 	if db, err = store.getOrSetDB(dbId); err != nil {
 		return
 	}
-	return db.CreateNonAppendableObject(tid, is1PC)
+	return db.CreateNonAppendableObject(tid, is1PC, opt)
 }
 
 func (store *txnStore) getOrSetDB(id uint64) (db *txnDB, err error) {

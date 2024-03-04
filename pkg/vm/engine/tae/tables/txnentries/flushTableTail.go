@@ -21,11 +21,11 @@ import (
 	"io"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
@@ -41,7 +41,7 @@ type flushTableTailEntry struct {
 	taskID     uint64
 	tableEntry *catalog.TableEntry
 
-	transMappings      *BlkTransferBooking
+	transMappings      *api.BlkTransferBooking
 	ablksMetas         []*catalog.ObjectEntry
 	delSrcMetas        []*catalog.ObjectEntry
 	ablksHandles       []handle.Object
@@ -59,7 +59,7 @@ type flushTableTailEntry struct {
 func NewFlushTableTailEntry(
 	txn txnif.AsyncTxn,
 	taskID uint64,
-	mapping *BlkTransferBooking,
+	mapping *api.BlkTransferBooking,
 	tableEntry *catalog.TableEntry,
 	ablksMetas []*catalog.ObjectEntry,
 	nblksMetas []*catalog.ObjectEntry,
@@ -96,7 +96,8 @@ func NewFlushTableTailEntry(
 // add transfer pages for dropped ablocks
 func (entry *flushTableTailEntry) addTransferPages() {
 	isTransient := !entry.tableEntry.GetLastestSchema().HasPK()
-	for i, m := range entry.transMappings.Mappings {
+	for i, mcontainer := range entry.transMappings.Mappings {
+		m := mcontainer.M
 		if len(m) == 0 {
 			continue
 		}
@@ -124,7 +125,7 @@ func (entry *flushTableTailEntry) PrepareCommit() error {
 	// transfer deletes in (startts .. committs] for ablocks
 	delTbls := make([]*model.TransDels, entry.createdBlkHandles.GetMeta().(*catalog.ObjectEntry).BlockCnt())
 	for i, blk := range entry.ablksMetas {
-		mapping := entry.transMappings.Mappings[i]
+		mapping := entry.transMappings.Mappings[i].M
 		if len(mapping) == 0 {
 			// empty frozen ablocks, it can not has any more deletes
 			continue
@@ -151,7 +152,7 @@ func (entry *flushTableTailEntry) PrepareCommit() error {
 		aconflictCnt++
 		for i := 0; i < count; i++ {
 			row := rowid[i].GetRowOffset()
-			destpos, ok := mapping[int(row)]
+			destpos, ok := mapping[int32(row)]
 			if !ok {
 				panic(fmt.Sprintf("%s find no transfer mapping for row %d", blk.ID.String(), row))
 			}
@@ -303,115 +304,3 @@ func (cmd *flushTableTailCmd) ApplyCommit()                              {}
 func (cmd *flushTableTailCmd) ApplyRollback()                            {}
 func (cmd *flushTableTailCmd) SetReplayTxn(txnif.AsyncTxn)               {}
 func (cmd *flushTableTailCmd) Close()                                    {}
-
-////////////////////////////////////////
-// transferMapping
-////////////////////////////////////////
-
-type DestPos struct {
-	Idx int // idx of the created blk
-	Row int // destination row number
-}
-
-type BlkTransferBooking struct {
-	// row in the deleted blk -> row in the created blk
-	Mappings []map[int]DestPos
-}
-
-func NewBlkTransferBooking(size int) *BlkTransferBooking {
-	mappings := make([]map[int]DestPos, size)
-	for i := 0; i < size; i++ {
-		mappings[i] = make(map[int]DestPos)
-	}
-	return &BlkTransferBooking{
-		Mappings: mappings,
-	}
-}
-
-func (b *BlkTransferBooking) Clean() {
-	for i := 0; i < len(b.Mappings); i++ {
-		b.Mappings[i] = make(map[int]DestPos)
-	}
-}
-
-func (b *BlkTransferBooking) AddSortPhaseMapping(idx int, originRowCnt int, deletes *nulls.Nulls, mapping []int32) {
-	// TODO: remove panic check
-	if mapping != nil {
-		deletecnt := 0
-		if deletes != nil {
-			deletecnt = deletes.GetCardinality()
-		}
-		if len(mapping) != originRowCnt-deletecnt {
-			panic(fmt.Sprintf("mapping length %d != originRowCnt %d - deletes %s", len(mapping), originRowCnt, deletes))
-		}
-		// mapping sortedVec[i] = originalVec[sortMapping[i]]
-		// transpose it, originalVec[sortMapping[i]] = sortedVec[i]
-		// [9 4 8 5 2 6 0 7 3 1](orignVec)  -> [6 9 4 8 1 3 5 7 2 0](sortedVec)
-		// [0 1 2 3 4 5 6 7 8 9](sortedVec) -> [0 1 2 3 4 5 6 7 8 9](originalVec)
-		// TODO: use a more efficient way to transpose, in place
-		transposedMapping := make([]int32, len(mapping))
-		for sortedPos, originalPos := range mapping {
-			transposedMapping[originalPos] = int32(sortedPos)
-		}
-		mapping = transposedMapping
-	}
-	posInVecApplyDeletes := 0
-	targetMapping := b.Mappings[idx]
-	for origRow := 0; origRow < originRowCnt; origRow++ {
-		if deletes != nil && deletes.Contains(uint64(origRow)) {
-			// this row has been deleted, skip its mapping
-			continue
-		}
-		if mapping == nil {
-			// no sort phase, the mapping is 1:1, just use posInVecApplyDeletes
-			targetMapping[origRow] = DestPos{Idx: -1, Row: posInVecApplyDeletes}
-		} else {
-			targetMapping[origRow] = DestPos{Idx: -1, Row: int(mapping[posInVecApplyDeletes])}
-		}
-		posInVecApplyDeletes++
-	}
-}
-
-func (b *BlkTransferBooking) UpdateMappingAfterMerge(mapping, fromLayout, toLayout []uint32) {
-	bisectHaystack := make([]uint32, 0, len(toLayout)+1)
-	bisectHaystack = append(bisectHaystack, 0)
-	for _, x := range toLayout {
-		bisectHaystack = append(bisectHaystack, bisectHaystack[len(bisectHaystack)-1]+x)
-	}
-
-	// given toLayout and a needle, find its corresponding block index and row index in the block
-	// For example, toLayout [8192, 8192, 1024], needle = 0 -> (0, 0); needle = 8192 -> (1, 0); needle = 8193 -> (1, 1)
-	bisectPinpoint := func(needle uint32) (int, uint32) {
-		i, j := 0, len(bisectHaystack)
-		for i < j {
-			m := (i + j) / 2
-			if bisectHaystack[m] > needle {
-				j = m
-			} else {
-				i = m + 1
-			}
-		}
-		// bisectHaystack[i] is the first number > needle, so the needle falls into i-1 th block
-		blkIdx := i - 1
-		rows := needle - bisectHaystack[blkIdx]
-		return blkIdx, rows
-	}
-
-	var totalHandledRows int
-
-	for _, m := range b.Mappings {
-		var curTotal int     // index in the flatten src array
-		var destTotal uint32 // index in the flatten merged array
-		for srcRow := range m {
-			curTotal = totalHandledRows + m[srcRow].Row
-			if mapping == nil {
-				destTotal = uint32(curTotal)
-			} else {
-				destTotal = mapping[curTotal]
-			}
-			destBlkIdx, destRowIdx := bisectPinpoint(destTotal)
-			m[srcRow] = DestPos{Idx: destBlkIdx, Row: int(destRowIdx)}
-		}
-		totalHandledRows += len(m)
-	}
-}

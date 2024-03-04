@@ -68,7 +68,7 @@ func TestReplayCatalog1(t *testing.T) {
 			assert.Nil(t, err)
 			objCnt := rand.Intn(5) + 1
 			for i := 0; i < objCnt; i++ {
-				obj, err := rel.CreateNonAppendableObject(false)
+				obj, err := rel.CreateNonAppendableObject(false, nil)
 				assert.Nil(t, err)
 				objMeta := obj.GetMeta().(*catalog.ObjectEntry)
 				objMeta.Lock()
@@ -139,7 +139,7 @@ func TestReplayCatalog2(t *testing.T) {
 	assert.Nil(t, err)
 	rel, err := e.CreateRelation(schema)
 	assert.Nil(t, err)
-	obj, err := rel.CreateNonAppendableObject(false)
+	obj, err := rel.CreateNonAppendableObject(false, nil)
 	assert.Nil(t, err)
 	objMeta := obj.GetMeta().(*catalog.ObjectEntry)
 	objMeta.Lock()

@@ -55,7 +55,7 @@ type Relation interface {
 
 	GetMeta() any
 	CreateObject(bool) (Object, error)
-	CreateNonAppendableObject(is1PC bool) (Object, error)
+	CreateNonAppendableObject(is1PC bool, opt *objectio.CreateObjOpt) (Object, error)
 	GetObject(id *types.Objectid) (Object, error)
 	SoftDeleteObject(id *types.Objectid) (err error)
 

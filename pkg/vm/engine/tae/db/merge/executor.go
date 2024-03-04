@@ -131,7 +131,7 @@ func (e *MergeExecutor) ManuallyExecute(entry *catalog.TableEntry, objs []*catal
 	}
 
 	factory := func(ctx *tasks.Context, txn txnif.AsyncTxn) (tasks.Task, error) {
-		return jobs.NewMergeBlocksTask(ctx, txn, objs, nil, e.rt)
+		return jobs.NewMergeObjectsTask(ctx, txn, mobjs, e.rt)
 	}
 	task, err := e.rt.Scheduler.ScheduleMultiScopedTxnTask(tasks.WaitableCtx, tasks.DataCompactionTask, scopes, factory)
 	if err == tasks.ErrScheduleScopeConflict {
@@ -162,7 +162,7 @@ func (e *MergeExecutor) ExecuteFor(entry *catalog.TableEntry, policy Policy) {
 	}
 
 	factory := func(ctx *tasks.Context, txn txnif.AsyncTxn) (tasks.Task, error) {
-		return jobs.NewMergeBlocksTask(ctx, txn, objectList, nil, e.rt)
+		return jobs.NewMergeObjectsTask(ctx, txn, mobjs, e.rt)
 	}
 	task, err := e.rt.Scheduler.ScheduleMultiScopedTxnTask(nil, tasks.DataCompactionTask, scopes, factory)
 	if err != nil {
