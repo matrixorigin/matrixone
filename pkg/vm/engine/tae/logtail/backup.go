@@ -673,11 +673,9 @@ func ReWriteCheckpointAndBlockFromKey(
 		if isABlk {
 			panic(any(fmt.Sprintf("The inserted block is an ablock: %v-%d", metaLoc.String(), i)))
 		}
-		if deltaLoc.IsEmpty() || metaLoc.IsEmpty() {
-			panic(any(fmt.Sprintf("deltaLoc or metaLoc is empty: %v-%v", deltaLoc.String(), metaLoc.String())))
+		if deltaLoc.IsEmpty() {
+			panic(any(fmt.Sprintf("deltaLoc is empty: %v-%v", deltaLoc.String(), metaLoc.String())))
 		}
-		addBlockToObjectData(metaLoc, isABlk, false, i,
-			blkMetaInsTxnBatTid.Get(i).(uint64), blkID, objectio.SchemaData, &objectsData)
 		addBlockToObjectData(deltaLoc, isABlk, false, i,
 			blkMetaInsTxnBatTid.Get(i).(uint64), blkID, objectio.SchemaTombstone, &objectsData)
 	}

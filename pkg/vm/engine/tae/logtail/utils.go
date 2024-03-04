@@ -825,7 +825,7 @@ func NewBackupCollector(start, end types.TS) *IncrementalCollector {
 		},
 	}
 	// TODO
-	// collector.BlockFn = collector.VisitBlkForBackup
+	collector.TombstoneFn = collector.VisitTombstone
 	collector.ObjectFn = collector.VisitObjForBackup
 	return collector
 }

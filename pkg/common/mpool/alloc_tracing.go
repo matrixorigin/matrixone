@@ -13,6 +13,7 @@
 // limitations under the License.
 
 // go:build race
+//go:build race
 // +build race
 
 package mpool
@@ -23,7 +24,6 @@ import (
 	// "sync/atomic"
 	"time"
 	"unsafe"
-
 	// "github.com/matrixorigin/matrixone/pkg/logutil"
 	// "go.uber.org/zap"
 )

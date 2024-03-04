@@ -593,6 +593,21 @@ func (entry *ObjectEntry) ObjectPersisted() bool {
 		return true
 	}
 }
+// for old flushed objects, stats may be empty
+func (entry *ObjectEntry) HasCommittedPersistedData() bool {
+	entry.RLock()
+	if entry.IsEmpty() {
+		entry.RUnlock()
+		return false
+	}
+	lastNode := entry.GetLatestNodeLocked()
+	entry.RUnlock()
+	if entry.IsAppendable() {
+		return lastNode.HasDropCommitted()
+	} else {
+		return true
+	}
+}
 func (entry *ObjectEntry) MustGetObjectStats() (objectio.ObjectStats, error) {
 	entry.RLock()
 	baseNode := entry.GetLatestNodeLocked().BaseNode

@@ -1087,7 +1087,7 @@ func (tbl *txnTable) DedupSnapByPK(ctx context.Context, keys containers.Vector, 
 				continue
 			}
 		}
-		if blk.HasPersistedData() {
+		if blk.HasCommittedPersistedData() {
 			if bf, err = tbl.tryGetCurrentObjectBF(
 				ctx,
 				stats.ObjectLocation(),
