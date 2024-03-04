@@ -398,22 +398,14 @@ func (tbl *txnTable) CollectCmd(cmdMgr *commandManager) (err error) {
 }
 
 func (tbl *txnTable) GetObject(id *types.Objectid) (obj handle.Object, err error) {
-	var meta *catalog.ObjectEntry
-	if meta, err = tbl.entry.GetObjectByID(id); err != nil {
-		return
-	}
-	var ok bool
-	meta.RLock()
-	ok, err = meta.IsVisible(tbl.store.txn, meta.RWMutex)
-	meta.RUnlock()
+	meta, err := tbl.store.warChecker.CacheGet(
+		tbl.entry.GetDB().ID,
+		tbl.entry.ID,
+		id)
 	if err != nil {
 		return
 	}
-	if !ok {
-		err = moerr.NewNotFoundNoCtx()
-		return
-	}
-	obj = newObject(tbl, meta)
+	obj = buildObject(tbl, meta)
 	return
 }
 

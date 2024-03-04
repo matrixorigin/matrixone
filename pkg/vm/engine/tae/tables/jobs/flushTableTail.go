@@ -114,7 +114,6 @@ func NewFlushTableTailTask(
 		var hdl handle.Object
 		hdl, err = rel.GetObject(&blk.ID)
 		if err != nil {
-			logutil.Infof("get object %v failed, table:\n%v",blk.ID.String(),rel.GetMeta().(*catalog.TableEntry).PPString(3,0,""))
 			return
 		}
 		if hdl.IsAppendable() {

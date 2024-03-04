@@ -212,7 +212,12 @@ func (obj *txnObject) reset() {
 	obj.table = nil
 	obj.TxnObject.Reset()
 }
-
+func buildObject(table *txnTable, meta *catalog.ObjectEntry) handle.Object {
+	if isSysTableId(meta.GetTable().ID) {
+		return newSysObject(table, meta)
+	}
+	return newObject(table, meta)
+}
 func (obj *txnObject) Close() (err error) {
 	obj.reset()
 	_objPool.Put(obj)
