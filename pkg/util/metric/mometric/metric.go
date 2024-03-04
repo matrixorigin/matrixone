@@ -278,6 +278,7 @@ func initTables(ctx context.Context, ieFactory func() ie.InternalExecutor) {
 	}()
 
 	mustExec(SingleMetricTable.ToCreateSql(ctx, true))
+	mustExec(SqlStatementCUTable.ToCreateSql(ctx, true))
 	for desc := range descChan {
 		view := getView(ctx, desc)
 		sql := view.ToCreateSql(ctx, true)
@@ -407,12 +408,12 @@ var SingleMetricTable = &table.Table{
 var SqlStatementCUTable = &table.Table{
 	Account:          table.AccountSys,
 	Database:         MetricDBConst,
-	Table:            `metric`,
+	Table:            catalog.MO_SQL_STMT_CU,
 	Columns:          []table.Column{metricAccountColumn, metricCollectTimeColumn, metricValueColumn, metricNodeColumn, metricRoleColumn, sqlSourceTypeColumn},
 	PrimaryKeyColumn: []table.Column{},
 	ClusterBy:        []table.Column{metricAccountColumn, metricCollectTimeColumn},
 	Engine:           table.NormalTableEngine,
-	Comment:          `metric data`,
+	Comment:          `sql_statement_cu metric data`,
 	PathBuilder:      table.NewAccountDatePathBuilder(),
 	AccountColumn:    &metricAccountColumn,
 	// TimestampColumn
@@ -492,6 +493,9 @@ func GetMetricViewWithLabels(ctx context.Context, tbl string, lbls []string) *ta
 func GetSchemaForAccount(ctx context.Context, account string) []string {
 	var sqls = make([]string, 0, 1)
 	tbl := SingleMetricTable.Clone()
+	tbl.Account = account
+	sqls = append(sqls, tbl.ToCreateSql(ctx, true))
+	tbl = SqlStatementCUTable.Clone()
 	tbl.Account = account
 	sqls = append(sqls, tbl.ToCreateSql(ctx, true))
 
