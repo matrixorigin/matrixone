@@ -61,7 +61,7 @@ func (tbl *txnTable) getEngine() engine.Engine {
 func (tbl *txnTable) Stats(ctx context.Context, sync bool) *pb.StatsInfo {
 	_, err := tbl.getPartitionState(ctx)
 	if err != nil {
-		logutil.Errorf("failed to get stats info of table %d", tbl.tableId)
+		logutil.Errorf("failed to get partition state of table %d: %v", tbl.tableId, err)
 		return nil
 	}
 	e := tbl.getEngine()
@@ -639,11 +639,24 @@ func (tbl *txnTable) rangesOnePart(
 	}
 
 	var uncommittedObjects []objectio.ObjectStats
-	if uncommittedObjects, err = tbl.db.txn.getUncommitedDataObjectsByTable(
-		tbl.db.databaseId, tbl.tableId,
-	); err != nil {
-		return err
-	}
+	tbl.db.txn.forEachTableWrites(tbl.db.databaseId, tbl.tableId, tbl.db.txn.GetSnapshotWriteOffset(), func(entry Entry) {
+		stats := objectio.ObjectStats{}
+		if entry.bat == nil || entry.bat.IsEmpty() {
+			return
+		}
+		if entry.typ == INSERT_TXN {
+			return
+		}
+		if entry.typ != INSERT ||
+			len(entry.bat.Attrs) < 2 ||
+			entry.bat.Attrs[1] != catalog.ObjectMeta_ObjectStats {
+			return
+		}
+		for i := 0; i < entry.bat.Vecs[1].Length(); i++ {
+			stats.UnMarshal(entry.bat.Vecs[1].GetBytesAt(i))
+			uncommittedObjects = append(uncommittedObjects, stats)
+		}
+	})
 
 	if done, err := tbl.tryFastRanges(
 		exprs, state, uncommittedObjects, blocks, tbl.db.txn.engine.fs,
@@ -2104,13 +2117,8 @@ func (tbl *txnTable) updateDeleteInfo(
 	ctx context.Context,
 	state *logtailreplay.PartitionState,
 	deleteObjs,
-	createObjs []objectio.ObjectNameShort) error {
+	createObjs map[objectio.ObjectNameShort]struct{}) error {
 	var blks []objectio.BlockInfo
-
-	deleteObjsMap := make(map[objectio.ObjectNameShort]struct{})
-	for _, name := range deleteObjs {
-		deleteObjsMap[name] = struct{}{}
-	}
 
 	{
 		fs, err := fileservice.Get[fileservice.FileService](
@@ -2121,7 +2129,7 @@ func (tbl *txnTable) updateDeleteInfo(
 		}
 		var objDataMeta objectio.ObjectDataMeta
 		var objMeta objectio.ObjectMeta
-		for _, name := range createObjs {
+		for name := range createObjs {
 			if obj, ok := state.GetObject(name); ok {
 				location := obj.Location()
 				if objMeta, err = objectio.FastLoadObjectMeta(
@@ -2162,6 +2170,7 @@ func (tbl *txnTable) updateDeleteInfo(
 			}
 		}
 	}
+
 	for _, entry := range tbl.db.txn.writes {
 		if entry.isGeneratedByTruncate() || entry.tableId != tbl.tableId {
 			continue
@@ -2169,9 +2178,12 @@ func (tbl *txnTable) updateDeleteInfo(
 		if (entry.typ == DELETE || entry.typ == DELETE_TXN) && entry.fileName == "" {
 			pkVec := entry.bat.GetVector(1)
 			rowids := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
+			beTransfered := 0
+			toTransfer := 0
 			for i, rowid := range rowids {
 				blkid, _ := rowid.Decode()
-				if _, ok := deleteObjsMap[*objectio.ShortName(&blkid)]; ok {
+				if _, ok := deleteObjs[*objectio.ShortName(&blkid)]; ok {
+					toTransfer++
 					newId, ok, err := tbl.readNewRowid(pkVec, i, blks)
 					if err != nil {
 						return err
@@ -2188,9 +2200,15 @@ func (tbl *txnTable) updateDeleteInfo(
 							pkVec,
 							i)
 						rowids[i] = newId
+						beTransfered++
 					}
 				}
 			}
+			if beTransfered != toTransfer {
+				logutil.Fatalf("xxxx transfer rowid failed, beTransfered:%d, toTransfer:%d, total %d",
+					beTransfered, toTransfer, len(rowids))
+			}
+
 		}
 	}
 	return nil
