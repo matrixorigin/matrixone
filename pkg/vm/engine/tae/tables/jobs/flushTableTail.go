@@ -223,8 +223,8 @@ func (task *flushTableTailTask) Execute(ctx context.Context) (err error) {
 	//// phase seperator
 	///////////////////
 
-	phaseDesc = "1-merge ablocks"
-	// merge ablocks, no need to wait, it is a sync procedure, that is why put it
+	phaseDesc = "1-merge aobjects"
+	// merge aobjects, no need to wait, it is a sync procedure, that is why put it
 	// after flushAblksForSnapshot and flushAllDeletesFromNBlks
 	if err = task.mergeAblks(ctx); err != nil {
 		return
@@ -383,7 +383,7 @@ func (task *flushTableTailTask) mergeAblks(ctx context.Context) (err error) {
 		seqnums = append(seqnums, def.SeqNum)
 	}
 
-	// read from ablocks
+	// read from aobjects
 	readedBats := make([]*containers.Batch, 0, len(task.ablksHandles))
 	for _, block := range task.ablksHandles {
 		err = block.Prefetch(readColIdxs)
@@ -573,7 +573,7 @@ func (task *flushTableTailTask) mergeAblks(ctx context.Context) (err error) {
 	return nil
 }
 
-// flushAblksForSnapshot schedule io task to flush ablocks for snapshot read. this function will not release any data in io task
+// flushAblksForSnapshot schedule io task to flush aobjects for snapshot read. this function will not release any data in io task
 func (task *flushTableTailTask) flushAblksForSnapshot(ctx context.Context) (subtasks []*flushBlkTask, err error) {
 	defer func() {
 		if err != nil {
@@ -608,7 +608,7 @@ func (task *flushTableTailTask) flushAblksForSnapshot(ctx context.Context) (subt
 			mergesort.SortBlockColumns(deletes.Vecs, 0, task.rt.VectorPool.Transient)
 		}
 
-		ablockTask := NewFlushBlkTask(
+		aobjectTask := NewFlushBlkTask(
 			tasks.WaitableCtx,
 			dataVer.Version,
 			dataVer.Seqnums,
@@ -618,15 +618,15 @@ func (task *flushTableTailTask) flushAblksForSnapshot(ctx context.Context) (subt
 			deletes,
 			true,
 		)
-		if err = task.rt.Scheduler.Schedule(ablockTask); err != nil {
+		if err = task.rt.Scheduler.Schedule(aobjectTask); err != nil {
 			return
 		}
-		subtasks[i] = ablockTask
+		subtasks[i] = aobjectTask
 	}
 	return
 }
 
-// waitFlushAblkForSnapshot waits all io tasks about flushing ablock for snapshot read, update locations
+// waitFlushAblkForSnapshot waits all io tasks about flushing aobject for snapshot read, update locations
 func (task *flushTableTailTask) waitFlushAblkForSnapshot(ctx context.Context, subtasks []*flushBlkTask) (err error) {
 	ictx, cancel := context.WithTimeout(ctx, 6*time.Minute)
 	defer cancel()

@@ -36,25 +36,25 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
 )
 
-type ablock struct {
-	*baseBlock
+type aobject struct {
+	*baseObject
 	frozen atomic.Bool
 }
 
 func newABlock(
 	meta *catalog.ObjectEntry,
 	rt *dbutils.Runtime,
-) *ablock {
-	blk := &ablock{}
-	blk.baseBlock = newBaseBlock(blk, meta, rt)
+) *aobject {
+	blk := &aobject{}
+	blk.baseObject = newBaseBlock(blk, meta, rt)
 	if blk.meta.HasDropCommitted() {
-		pnode := newPersistedNode(blk.baseBlock)
+		pnode := newPersistedNode(blk.baseObject)
 		node := NewNode(pnode)
 		node.Ref()
 		blk.node.Store(node)
 		blk.FreezeAppend()
 	} else {
-		mnode := newMemoryNode(blk.baseBlock)
+		mnode := newMemoryNode(blk.baseObject)
 		node := NewNode(mnode)
 		node.Ref()
 		blk.node.Store(node)
@@ -62,15 +62,15 @@ func newABlock(
 	return blk
 }
 
-func (blk *ablock) FreezeAppend() {
+func (blk *aobject) FreezeAppend() {
 	blk.frozen.Store(true)
 }
 
-func (blk *ablock) IsAppendFrozen() bool {
+func (blk *aobject) IsAppendFrozen() bool {
 	return blk.frozen.Load()
 }
 
-func (blk *ablock) IsAppendable() bool {
+func (blk *aobject) IsAppendable() bool {
 	if blk.IsAppendFrozen() {
 		return false
 	}
@@ -83,7 +83,7 @@ func (blk *ablock) IsAppendable() bool {
 	return rows < blk.meta.GetSchema().BlockMaxRows
 }
 
-func (blk *ablock) PrepareCompactInfo() (result bool, reason string) {
+func (blk *aobject) PrepareCompactInfo() (result bool, reason string) {
 	if n := blk.RefCount(); n > 0 {
 		reason = fmt.Sprintf("entering refcount %d", n)
 		return
@@ -105,7 +105,7 @@ func (blk *ablock) PrepareCompactInfo() (result bool, reason string) {
 	return blk.RefCount() == 0, reason
 }
 
-func (blk *ablock) PrepareCompact() bool {
+func (blk *aobject) PrepareCompact() bool {
 	if blk.RefCount() > 0 {
 		return false
 	}
@@ -116,14 +116,14 @@ func (blk *ablock) PrepareCompact() bool {
 	return blk.RefCount() == 0
 }
 
-func (blk *ablock) Pin() *common.PinnedItem[*ablock] {
+func (blk *aobject) Pin() *common.PinnedItem[*aobject] {
 	blk.Ref()
-	return &common.PinnedItem[*ablock]{
+	return &common.PinnedItem[*aobject]{
 		Val: blk,
 	}
 }
 
-func (blk *ablock) GetColumnDataByIds(
+func (blk *aobject) GetColumnDataByIds(
 	ctx context.Context,
 	txn txnif.AsyncTxn,
 	readSchema any,
@@ -141,7 +141,7 @@ func (blk *ablock) GetColumnDataByIds(
 	)
 }
 
-func (blk *ablock) GetColumnDataById(
+func (blk *aobject) GetColumnDataById(
 	ctx context.Context,
 	txn txnif.AsyncTxn,
 	readSchema any,
@@ -159,7 +159,7 @@ func (blk *ablock) GetColumnDataById(
 	)
 }
 
-func (blk *ablock) resolveColumnDatas(
+func (blk *aobject) resolveColumnDatas(
 	ctx context.Context,
 	txn txnif.TxnReader,
 	readSchema *catalog.Schema,
@@ -191,7 +191,7 @@ func (blk *ablock) resolveColumnDatas(
 // here we assume that the ts is greater equal than the block's
 // create ts and less than the block's delete ts
 // it is a coarse-grained check
-func (blk *ablock) CoarseCheckAllRowsCommittedBefore(ts types.TS) bool {
+func (blk *aobject) CoarseCheckAllRowsCommittedBefore(ts types.TS) bool {
 	// if the block is not frozen, always return false
 	if !blk.IsAppendFrozen() {
 		return false
@@ -211,7 +211,7 @@ func (blk *ablock) CoarseCheckAllRowsCommittedBefore(ts types.TS) bool {
 	return false
 }
 
-func (blk *ablock) resolveColumnData(
+func (blk *aobject) resolveColumnData(
 	ctx context.Context,
 	txn txnif.TxnReader,
 	readSchema *catalog.Schema,
@@ -239,7 +239,7 @@ func (blk *ablock) resolveColumnData(
 	}
 }
 
-func (blk *ablock) GetValue(
+func (blk *aobject) GetValue(
 	ctx context.Context,
 	txn txnif.AsyncTxn,
 	readSchema any,
@@ -260,7 +260,7 @@ func (blk *ablock) GetValue(
 }
 
 // GetByFilter will read pk column, which seqnum will not change, no need to pass the read schema.
-func (blk *ablock) GetByFilter(
+func (blk *aobject) GetByFilter(
 	ctx context.Context,
 	txn txnif.AsyncTxn,
 	filter *handle.Filter,
@@ -281,7 +281,7 @@ func (blk *ablock) GetByFilter(
 	return
 }
 
-func (blk *ablock) BatchDedup(
+func (blk *aobject) BatchDedup(
 	ctx context.Context,
 	txn txnif.AsyncTxn,
 	keys containers.Vector,
@@ -323,7 +323,7 @@ func (blk *ablock) BatchDedup(
 	}
 }
 
-func (blk *ablock) CollectAppendInRange(
+func (blk *aobject) CollectAppendInRange(
 	start, end types.TS,
 	withAborted bool,
 	mp *mpool.MPool,
@@ -333,7 +333,7 @@ func (blk *ablock) CollectAppendInRange(
 	return node.CollectAppendInRange(start, end, withAborted, mp)
 }
 
-func (blk *ablock) estimateRawScore() (score int, dropped bool, err error) {
+func (blk *aobject) estimateRawScore() (score int, dropped bool, err error) {
 	if blk.meta.HasDropCommitted() {
 		dropped = true
 		return
@@ -371,18 +371,18 @@ func (blk *ablock) estimateRawScore() (score int, dropped bool, err error) {
 	return
 }
 
-func (blk *ablock) RunCalibration() (score int, err error) {
+func (blk *aobject) RunCalibration() (score int, err error) {
 	score, _, err = blk.estimateRawScore()
 	return
 }
 
-func (blk *ablock) OnReplayAppend(node txnif.AppendNode) (err error) {
+func (blk *aobject) OnReplayAppend(node txnif.AppendNode) (err error) {
 	an := node.(*updates.AppendNode)
 	blk.appendMVCC.OnReplayAppendNode(an)
 	return
 }
 
-func (blk *ablock) OnReplayAppendPayload(bat *containers.Batch) (err error) {
+func (blk *aobject) OnReplayAppendPayload(bat *containers.Batch) (err error) {
 	appender, err := blk.MakeAppender()
 	if err != nil {
 		return
@@ -391,7 +391,7 @@ func (blk *ablock) OnReplayAppendPayload(bat *containers.Batch) (err error) {
 	return
 }
 
-func (blk *ablock) MakeAppender() (appender data.BlockAppender, err error) {
+func (blk *aobject) MakeAppender() (appender data.ObjectAppender, err error) {
 	if blk == nil {
 		err = moerr.GetOkExpectedEOB()
 		return
@@ -400,9 +400,9 @@ func (blk *ablock) MakeAppender() (appender data.BlockAppender, err error) {
 	return
 }
 
-func (blk *ablock) Init() (err error) { return }
+func (blk *aobject) Init() (err error) { return }
 
-func (blk *ablock) EstimateMemSize() (int, int) {
+func (blk *aobject) EstimateMemSize() (int, int) {
 	node := blk.PinNode()
 	defer node.Unref()
 	blk.RLock()
@@ -419,7 +419,7 @@ func (blk *ablock) EstimateMemSize() (int, int) {
 	return asize, dsize
 }
 
-func (blk *ablock) GetRowsOnReplay() uint64 {
+func (blk *aobject) GetRowsOnReplay() uint64 {
 	rows := uint64(blk.appendMVCC.GetTotalRow())
 	fileRows := uint64(blk.meta.GetLatestCommittedNode().
 		BaseNode.ObjectStats.Rows())

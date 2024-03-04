@@ -22,12 +22,12 @@ import (
 )
 
 type blockAppender struct {
-	blk         *ablock
+	blk         *aobject
 	placeholder uint32
 	rows        uint32
 }
 
-func newAppender(ablk *ablock) *blockAppender {
+func newAppender(ablk *aobject) *blockAppender {
 	appender := new(blockAppender)
 	appender.blk = ablk
 	rows, _ := ablk.Rows()

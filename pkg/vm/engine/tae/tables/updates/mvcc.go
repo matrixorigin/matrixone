@@ -995,6 +995,9 @@ func (n *MVCCHandle) TryDeleteByDeltaloc(txn txnif.AsyncTxn, deltaLoc objectio.L
 		return
 	}
 	_, entry, err = n.UpdateDeltaLoc(txn, deltaLoc, needCheckWhenCommit)
+	if err != nil {
+		return
+	}
 	bat, err := blockio.LoadTombstoneColumns(
 		txn.GetContext(),
 		[]uint16{0},

@@ -35,7 +35,7 @@ import (
 )
 
 type block struct {
-	*baseBlock
+	*baseObject
 }
 
 func newBlock(
@@ -43,8 +43,8 @@ func newBlock(
 	rt *dbutils.Runtime,
 ) *block {
 	blk := &block{}
-	blk.baseBlock = newBaseBlock(blk, meta, rt)
-	pnode := newPersistedNode(blk.baseBlock)
+	blk.baseObject = newBaseBlock(blk, meta, rt)
+	pnode := newPersistedNode(blk.baseObject)
 	node := NewNode(pnode)
 	node.Ref()
 	blk.node.Store(node)

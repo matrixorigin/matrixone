@@ -93,7 +93,7 @@ func NewFlushTableTailEntry(
 	return entry
 }
 
-// add transfer pages for dropped ablocks
+// add transfer pages for dropped aobjects
 func (entry *flushTableTailEntry) addTransferPages() {
 	isTransient := !entry.tableEntry.GetLastestSchema().HasPK()
 	for i, mcontainer := range entry.transMappings.Mappings {
@@ -122,12 +122,12 @@ func (entry *flushTableTailEntry) PrepareCommit() error {
 		return nil
 	}
 	var aconflictCnt, totalTrans int
-	// transfer deletes in (startts .. committs] for ablocks
+	// transfer deletes in (startts .. committs] for aobjects
 	delTbls := make([]*model.TransDels, entry.createdBlkHandles.GetMeta().(*catalog.ObjectEntry).BlockCnt())
 	for i, blk := range entry.ablksMetas {
 		mapping := entry.transMappings.Mappings[i].M
 		if len(mapping) == 0 {
-			// empty frozen ablocks, it can not has any more deletes
+			// empty frozen aobjects, it can not has any more deletes
 			continue
 		}
 		dataBlock := blk.GetBlockData()
@@ -199,7 +199,7 @@ func (entry *flushTableTailEntry) PrepareRollback() (err error) {
 	// remove written file
 	fs := entry.rt.Fs.Service
 
-	// object for snapshot read of ablocks
+	// object for snapshot read of aobjects
 	ablkNames := make([]string, 0, len(entry.ablksMetas))
 	for _, blk := range entry.ablksMetas {
 		if !blk.HasPersistedData() {

@@ -22,38 +22,38 @@ import (
 
 type tableHandle struct {
 	table    *dataTable
-	block    *ablock
-	appender data.BlockAppender
+	object   *aobject
+	appender data.ObjectAppender
 }
 
-func newHandle(table *dataTable, block *ablock) *tableHandle {
+func newHandle(table *dataTable, object *aobject) *tableHandle {
 	h := &tableHandle{
-		table: table,
-		block: block,
+		table:  table,
+		object: object,
 	}
-	if block != nil {
-		h.appender, _ = block.MakeAppender()
+	if object != nil {
+		h.appender, _ = object.MakeAppender()
 	}
 	return h
 }
 
-func (h *tableHandle) SetAppender(id *common.ID) (appender data.BlockAppender) {
+func (h *tableHandle) SetAppender(id *common.ID) (appender data.ObjectAppender) {
 	tableMeta := h.table.meta
 	objMeta, _ := tableMeta.GetObjectByID(id.ObjectID())
-	h.block = objMeta.GetBlockData().(*ablock)
-	h.appender, _ = h.block.MakeAppender()
-	h.block.Ref()
+	h.object = objMeta.GetBlockData().(*aobject)
+	h.appender, _ = h.object.MakeAppender()
+	h.object.Ref()
 	return h.appender
 }
 
-func (h *tableHandle) ThrowAppenderAndErr() (appender data.BlockAppender, err error) {
+func (h *tableHandle) ThrowAppenderAndErr() (appender data.ObjectAppender, err error) {
 	err = data.ErrAppendableObjectNotFound
-	h.block = nil
+	h.object = nil
 	h.appender = nil
 	return
 }
 
-func (h *tableHandle) GetAppender() (appender data.BlockAppender, err error) {
+func (h *tableHandle) GetAppender() (appender data.ObjectAppender, err error) {
 	var objEntry *catalog.ObjectEntry
 	if h.appender == nil {
 		objEntry = h.table.meta.LastAppendableObject()
@@ -61,22 +61,22 @@ func (h *tableHandle) GetAppender() (appender data.BlockAppender, err error) {
 			err = data.ErrAppendableObjectNotFound
 			return
 		}
-		h.block = objEntry.GetBlockData().(*ablock)
-		h.appender, err = h.block.MakeAppender()
+		h.object = objEntry.GetBlockData().(*aobject)
+		h.appender, err = h.object.MakeAppender()
 		if err != nil {
 			panic(err)
 		}
 	}
 
-	dropped := h.block.meta.HasDropCommitted()
-	if !h.appender.IsAppendable() || !h.block.IsAppendable() || dropped {
+	dropped := h.object.meta.HasDropCommitted()
+	if !h.appender.IsAppendable() || !h.object.IsAppendable() || dropped {
 		return h.ThrowAppenderAndErr()
 	}
-	h.block.Ref()
+	h.object.Ref()
 	// Similar to optimistic locking
-	dropped = h.block.meta.HasDropCommitted()
-	if !h.appender.IsAppendable() || !h.block.IsAppendable() || dropped {
-		h.block.Unref()
+	dropped = h.object.meta.HasDropCommitted()
+	if !h.appender.IsAppendable() || !h.object.IsAppendable() || dropped {
+		h.object.Unref()
 		return h.ThrowAppenderAndErr()
 	}
 	appender = h.appender

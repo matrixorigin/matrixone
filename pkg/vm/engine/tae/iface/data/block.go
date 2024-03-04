@@ -38,7 +38,7 @@ type CheckpointUnit interface {
 	// EstimateScore(time.Duration, bool) int
 }
 
-type BlockAppender interface {
+type ObjectAppender interface {
 	GetID() *common.ID
 	GetMeta() any
 	IsSameColumns(otherSchema any /*avoid import cycle*/) bool
@@ -83,7 +83,7 @@ type Block interface {
 	Prefetch(idxes []uint16, blkID uint16) error
 	GetMeta() any
 
-	MakeAppender() (BlockAppender, error)
+	MakeAppender() (ObjectAppender, error)
 	RangeDelete(txn txnif.AsyncTxn, blkID uint16, start, end uint32, pk containers.Vector, dt handle.DeleteType) (txnif.DeleteNode, error)
 	TryDeleteByDeltaloc(txn txnif.AsyncTxn, blkID uint16, deltaLoc objectio.Location) (node txnif.TxnEntry, ok bool, err error)
 

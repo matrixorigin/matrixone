@@ -17,6 +17,9 @@ package logtail
 import (
 	"context"
 	"fmt"
+	"math"
+	"sort"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -31,8 +34,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
-	"math"
-	"sort"
 )
 
 type fileData struct {
@@ -671,7 +672,7 @@ func ReWriteCheckpointAndBlockFromKey(
 		blkID := blkMetaInsertBlkID.Get(i).(types.Blockid)
 		isABlk := blkMetaInsertEntryState.Get(i).(bool)
 		if isABlk {
-			panic(any(fmt.Sprintf("The inserted block is an ablock: %v-%d", metaLoc.String(), i)))
+			panic(any(fmt.Sprintf("The inserted block is an aobject: %v-%d", metaLoc.String(), i)))
 		}
 		if deltaLoc.IsEmpty() {
 			panic(any(fmt.Sprintf("deltaLoc is empty: %v-%v", deltaLoc.String(), metaLoc.String())))

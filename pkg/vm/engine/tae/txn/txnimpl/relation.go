@@ -131,11 +131,11 @@ func (h *txnRelation) SimplePPString(level common.PPLevel) string {
 	if level < common.PPL1 {
 		return s
 	}
-	it := h.MakeBlockIt()
+	it := h.MakeObjectIt()
 	for it.Valid() {
-		block := it.GetBlock()
-		defer block.Close()
-		s = fmt.Sprintf("%s\n%s", s, block.String())
+		object := it.GetObject()
+		defer object.Close()
+		s = fmt.Sprintf("%s\n%s", s, object.String())
 		it.Next()
 	}
 	return s

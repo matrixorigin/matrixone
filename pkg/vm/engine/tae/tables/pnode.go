@@ -35,10 +35,10 @@ var _ NodeT = (*persistedNode)(nil)
 
 type persistedNode struct {
 	common.RefHelper
-	block *baseBlock
+	block *baseObject
 }
 
-func newPersistedNode(block *baseBlock) *persistedNode {
+func newPersistedNode(block *baseObject) *persistedNode {
 	node := &persistedNode{
 		block: block,
 	}

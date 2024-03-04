@@ -289,6 +289,6 @@ func HandleMergeEntryInTxn(txn txnif.AsyncTxn, entry *mergesort.MergeCommitEntry
 }
 
 // for UT
-func (entry *mergeObjectsTask) GetCreatedObjects() []*catalog.ObjectEntry {
-	return entry.createdBObjs
+func (task *mergeObjectsTask) GetCreatedObjects() []*catalog.ObjectEntry {
+	return task.createdBObjs
 }

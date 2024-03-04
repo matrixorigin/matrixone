@@ -25,6 +25,33 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
 
+type FilterOp int16
+
+const (
+	FilterEq FilterOp = iota
+	FilterBatchEq
+	FilterBtw
+)
+
+type Filter struct {
+	Op  FilterOp
+	Val any
+}
+
+type DeleteType int8
+
+const (
+	DT_Normal DeleteType = iota
+	DT_MergeCompact
+)
+
+func NewEQFilter(v any) *Filter {
+	return &Filter{
+		Op:  FilterEq,
+		Val: v,
+	}
+}
+
 type ObjectIt interface {
 	Iterator
 	GetObject() Object

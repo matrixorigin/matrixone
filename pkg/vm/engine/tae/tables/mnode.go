@@ -38,7 +38,7 @@ var _ NodeT = (*memoryNode)(nil)
 
 type memoryNode struct {
 	common.RefHelper
-	block       *baseBlock
+	block       *baseObject
 	writeSchema *catalog.Schema
 	data        *containers.Batch
 
@@ -46,7 +46,7 @@ type memoryNode struct {
 	pkIndex *indexwrapper.MutIndex
 }
 
-func newMemoryNode(block *baseBlock) *memoryNode {
+func newMemoryNode(block *baseObject) *memoryNode {
 	impl := new(memoryNode)
 	impl.block = block
 
