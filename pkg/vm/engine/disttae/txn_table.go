@@ -656,7 +656,6 @@ func (tbl *txnTable) rangesOnePart(
 			stats.UnMarshal(entry.bat.Vecs[1].GetBytesAt(i))
 			uncommittedObjects = append(uncommittedObjects, stats)
 		}
-		return
 	})
 
 	if done, err := tbl.tryFastRanges(
