@@ -1042,12 +1042,14 @@ func Test_getVariableValue(t *testing.T) {
 		want string
 	}{
 		{name: "0.1", args: args{varDefault: 0.1}, want: "0.100000"},
-		{name: "0.0000001", args: args{varDefault: 0.0000001}, want: "1.000000e-7"},
+		{name: "0.000001", args: args{varDefault: 0.000001}, want: "0.000001"},
+		{name: "0.0000009", args: args{varDefault: 0.0000009}, want: "9.000000e-07"},
 		{name: "7.43e-14", args: args{varDefault: 7.43e-14}, want: "7.430000e-14"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Equalf(t, tt.want, getVariableValue(tt.args.varDefault), "getVariableValue(%v)", tt.args.varDefault)
+			got := getVariableValue(tt.args.varDefault)
+			assert.Equalf(t, tt.want, got, "getVariableValue(%v)", tt.args.varDefault)
 		})
 	}
 }

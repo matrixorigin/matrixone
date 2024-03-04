@@ -531,7 +531,7 @@ func (svdt SystemVariableDoubleType) Convert(value interface{}) (interface{}, er
 	case float64:
 		return cv1(v)
 	case string:
-		// some case '0.1', '1.23e-4' recognized as string
+		// some case '0.1' is recognized as string
 		if f, err := strconv.ParseFloat(v, 64); err == nil {
 			return cv1(f)
 		}
@@ -2271,8 +2271,8 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Scope:             ScopeBoth,
 		Dynamic:           true,
 		SetVarHintApplies: false,
-		Type:              InitSystemVariableIntType("long_query_time", 0, 31536000, false),
-		Default:           int64(10),
+		Type:              InitSystemVariableDoubleType("long_query_time", 0, 31536000),
+		Default:           float64(10),
 	},
 	"low_priority_updates": {
 		Name:              "low_priority_updates",

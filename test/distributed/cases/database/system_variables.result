@@ -487,6 +487,13 @@ select @@sql_mode;
 @@sql_mode
 ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES
 set @@sql_mode = default;
+show variables like 'long_query_time';
+Variable_name    Value
+long_query_time  10.000000
+set global long_query_time = 1;
+show variables like 'long_query_time';
+Variable_name    Value
+long_query_time  1
 create account acc_idx ADMIN_NAME 'root' IDENTIFIED BY '123456';
 create database test_for_navicat;
 create database test_for_navicat;
