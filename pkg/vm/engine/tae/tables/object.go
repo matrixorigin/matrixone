@@ -18,6 +18,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/jobs"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
@@ -45,7 +46,9 @@ func BuildObjectCompactionTaskFactory(meta *catalog.ObjectEntry, rt *dbutils.Run
 	for _, blk := range blks {
 		scopes = append(scopes, *blk.AsCommonID())
 	}
-	factory = jobs.CompactObjectTaskFactory(blks, rt)
+	factory = func(ctx *tasks.Context, txn txnif.AsyncTxn) (tasks.Task, error) {
+		return jobs.NewMergeObjectsTask(ctx, txn, []*catalog.ObjectEntry{meta}, rt)
+	}
 	taskType = tasks.DataCompactionTask
 	return
 }

@@ -33,7 +33,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
@@ -298,7 +297,7 @@ func mustGetFullCompositePK(
 						List: []*plan.Expr{leftPkExpr, rightPkExpr},
 					},
 				},
-				Typ: &plan.Type{
+				Typ: plan.Type{
 					Id: int32(types.T_tuple),
 				},
 			}
@@ -398,7 +397,7 @@ func getPkExpr(
 						List: []*plan.Expr{leftPK, rightPK},
 					},
 				},
-				Typ: &plan.Type{
+				Typ: plan.Type{
 					Id: int32(types.T_tuple),
 				},
 			}
@@ -420,7 +419,7 @@ func getPkExpr(
 					return nil
 				}
 				return &plan.Expr{
-					Typ: plan2.DeepCopyType(exprImpl.F.Args[1].Typ),
+					Typ: exprImpl.F.Args[1].Typ,
 					Expr: &plan.Expr_Lit{
 						Lit: constVal,
 					},
@@ -435,7 +434,7 @@ func getPkExpr(
 					return nil
 				}
 				return &plan.Expr{
-					Typ: plan2.DeepCopyType(exprImpl.F.Args[0].Typ),
+					Typ: exprImpl.F.Args[0].Typ,
 					Expr: &plan.Expr_Lit{
 						Lit: constVal,
 					},
@@ -1190,7 +1189,7 @@ func getConstValueByExpr(
 
 func getConstExpr(oid int32, c *plan.Literal) *plan.Expr {
 	return &plan.Expr{
-		Typ:  &plan.Type{Id: oid},
+		Typ:  plan.Type{Id: oid},
 		Expr: &plan.Expr_Lit{Lit: c},
 	}
 }

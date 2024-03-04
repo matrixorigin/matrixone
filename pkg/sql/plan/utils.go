@@ -1545,7 +1545,7 @@ func GenUniqueColJoinExpr(ctx context.Context, tableDef *TableDef, uniqueCols []
 		for _, colIdx := range uniqueColMap {
 			col := tableDef.Cols[colIdx]
 			leftExpr := &Expr{
-				Typ: col.Typ,
+				Typ: *col.Typ,
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
 						RelPos: leftTag,
@@ -1554,7 +1554,7 @@ func GenUniqueColJoinExpr(ctx context.Context, tableDef *TableDef, uniqueCols []
 				},
 			}
 			rightExpr := &plan.Expr{
-				Typ: col.Typ,
+				Typ: *col.Typ,
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
 						RelPos: rightTag,
@@ -1604,7 +1604,7 @@ func GenUniqueColCheckExpr(ctx context.Context, tableDef *TableDef, uniqueCols [
 			col := tableDef.Cols[colIdx]
 			// insert values
 			leftExpr := &Expr{
-				Typ: col.Typ,
+				Typ: *col.Typ,
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
 						RelPos: 0,
@@ -1613,7 +1613,7 @@ func GenUniqueColCheckExpr(ctx context.Context, tableDef *TableDef, uniqueCols [
 				},
 			}
 			rightExpr := &plan.Expr{
-				Typ: col.Typ,
+				Typ: *col.Typ,
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
 						RelPos: 1,
@@ -1905,7 +1905,7 @@ func HasFkSelfReferOnly(tableDef *TableDef) bool {
 
 func MakeInExpr(ctx context.Context, left *Expr, length int32, data []byte) *Expr {
 	rightArg := &plan.Expr{
-		Typ: &plan.Type{
+		Typ: plan.Type{
 			Id: int32(types.T_tuple),
 		},
 		Expr: &plan.Expr_Vec{
@@ -1923,7 +1923,7 @@ func MakeInExpr(ctx context.Context, left *Expr, length int32, data []byte) *Exp
 		fid = fGet.GetEncodedOverloadID()
 	}
 	inExpr := &plan.Expr{
-		Typ: &plan.Type{
+		Typ: plan.Type{
 			Id:          int32(types.T_bool),
 			NotNullable: left.Typ.NotNullable,
 		},
