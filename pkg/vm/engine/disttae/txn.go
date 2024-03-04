@@ -889,19 +889,19 @@ func (txn *Transaction) getUncommitedDataObjectsByTable(
 
 }
 
-func (txn *Transaction) getTableWrites(databaseId uint64, tableId uint64, writes []Entry) []Entry {
+func (txn *Transaction) forEachTableWrites(databaseId uint64, tableId uint64, offset int, f func(Entry)) {
 	txn.Lock()
 	defer txn.Unlock()
-	for _, entry := range txn.writes {
-		if entry.databaseId != databaseId {
+	for i := 0; i < offset; i++ {
+		e := txn.writes[i]
+		if e.databaseId != databaseId {
 			continue
 		}
-		if entry.tableId != tableId {
+		if e.tableId != tableId {
 			continue
 		}
-		writes = append(writes, entry)
+		f(e)
 	}
-	return writes
 }
 
 // getCachedTable returns the cached table in this transaction if it exists, nil otherwise.
@@ -1025,11 +1025,14 @@ func (txn *Transaction) clearTableCache() {
 	})
 }
 
-func (txn *Transaction) getWriteOffset() int {
-	if txn.statementID > 0 {
-		txn.Lock()
-		defer txn.Unlock()
-		return txn.statements[txn.statementID-1]
-	}
-	return 0
+func (txn *Transaction) GetSnapshotWriteOffset() int {
+	txn.Lock()
+	defer txn.Unlock()
+	return txn.snapshotWriteOffset
+}
+
+func (txn *Transaction) UpdateSnapshotWriteOffset() {
+	txn.Lock()
+	defer txn.Unlock()
+	txn.snapshotWriteOffset = len(txn.writes)
 }

@@ -123,6 +123,9 @@ func NewCompile(
 	c.cnLabel = cnLabel
 	c.startAt = startAt
 	c.disableRetry = false
+	if c.proc.TxnOperator != nil {
+		c.proc.TxnOperator.GetWorkspace().UpdateSnapshotWriteOffset()
+	}
 	return c
 }
 
@@ -161,6 +164,7 @@ func (c *Compile) reset() {
 	c.tenant = ""
 	c.uid = ""
 	c.sql = ""
+	c.originSQL = ""
 	c.anal = nil
 	c.e = nil
 	c.ctx = nil
@@ -394,6 +398,12 @@ func (c *Compile) allocOperatorID() int32 {
 
 // Run is an important function of the compute-layer, it executes a single sql according to its scope
 func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
+	sql := c.originSQL
+	if sql == "" {
+		sql = c.sql
+	}
+	txnTrace.GetService().TxnExecute(c.proc.TxnOperator, sql)
+
 	var writeOffset uint64
 
 	start := time.Now()
@@ -412,7 +422,7 @@ func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
 	}
 
 	if c.proc.TxnOperator != nil {
-		writeOffset = c.proc.TxnOperator.GetWorkspace().WriteOffset()
+		writeOffset = uint64(c.proc.TxnOperator.GetWorkspace().GetSnapshotWriteOffset())
 	}
 	result = &util2.RunResult{}
 	var span trace.Span
@@ -2259,12 +2269,12 @@ func (c *Compile) compileShuffleJoin(ctx context.Context, node, left, right *pla
 
 	rightTyps := make([]types.Type, len(right.ProjectList))
 	for i, expr := range right.ProjectList {
-		rightTyps[i] = dupType(expr.Typ)
+		rightTyps[i] = dupType(&expr.Typ)
 	}
 
 	leftTyps := make([]types.Type, len(left.ProjectList))
 	for i, expr := range left.ProjectList {
-		leftTyps[i] = dupType(expr.Typ)
+		leftTyps[i] = dupType(&expr.Typ)
 	}
 
 	parent, children := c.newShuffleJoinScopeList(lefts, rights, node)
@@ -2365,12 +2375,12 @@ func (c *Compile) compileBroadcastJoin(ctx context.Context, node, left, right *p
 
 	rightTyps := make([]types.Type, len(right.ProjectList))
 	for i, expr := range right.ProjectList {
-		rightTyps[i] = dupType(expr.Typ)
+		rightTyps[i] = dupType(&expr.Typ)
 	}
 
 	leftTyps := make([]types.Type, len(left.ProjectList))
 	for i, expr := range left.ProjectList {
-		leftTyps[i] = dupType(expr.Typ)
+		leftTyps[i] = dupType(&expr.Typ)
 	}
 
 	switch node.JoinType {
@@ -4456,6 +4466,12 @@ func (c *Compile) fatalLog(retry int, err error) {
 		return
 	}
 
+	if retry == 0 &&
+		(moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) ||
+			moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged)) {
+		return
+	}
+
 	txnTrace.GetService().AddTxnError(c.proc.TxnOperator.Txn().ID, err)
 
 	v, ok := moruntime.ProcessLevelRuntime().
@@ -4464,16 +4480,14 @@ func (c *Compile) fatalLog(retry int, err error) {
 		return
 	}
 
-	if retry == 0 &&
-		(moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) ||
-			moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged)) {
-		return
-	}
-
 	logutil.Fatalf("BUG(RC): txn %s retry %d, error %+v\n",
 		hex.EncodeToString(c.proc.TxnOperator.Txn().ID),
 		retry,
 		err.Error())
+}
+
+func (c *Compile) SetOriginSQL(sql string) {
+	c.originSQL = sql
 }
 
 func (c *Compile) SetBuildPlanFunc(buildPlanFunc func() (*plan2.Plan, error)) {
