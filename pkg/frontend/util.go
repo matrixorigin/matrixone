@@ -628,7 +628,13 @@ func getVariableValue(varDefault interface{}) string {
 	case int8:
 		return fmt.Sprintf("%d", val)
 	case float64:
-		return fmt.Sprintf("%e", val)
+		// 0.1 => 0.100000
+		// 0.0000001 -> 1.000000e-7
+		if val > 1e-6 {
+			return fmt.Sprintf("%.6f", val)
+		} else {
+			return fmt.Sprintf("%.6e", val)
+		}
 	case string:
 		return val
 	default:
