@@ -292,6 +292,8 @@ type Session struct {
 
 	// FromProxy denotes whether the session is dispatched from proxy
 	fromProxy bool
+
+	disableTrace bool
 }
 
 func (ses *Session) ClearStmtProfile() {
