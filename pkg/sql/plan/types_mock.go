@@ -227,6 +227,20 @@ func (mr *MockCompilerContext2MockRecorder) GetRootSql() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetRootSql", reflect.TypeOf((*MockCompilerContext2)(nil).GetRootSql))
 }
 
+// GetStatsCache mocks base method.
+func (m *MockCompilerContext2) GetStatsCache() *StatsCache {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetStatsCache")
+	ret0, _ := ret[0].(*StatsCache)
+	return ret0
+}
+
+// GetStatsCache indicates an expected call of GetStatsCache.
+func (mr *MockCompilerContext2MockRecorder) GetStatsCache() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetStatsCache", reflect.TypeOf((*MockCompilerContext2)(nil).GetStatsCache))
+}
+
 // GetSubscriptionMeta mocks base method.
 func (m *MockCompilerContext2) GetSubscriptionMeta(dbName string) (*plan.SubscriptionMeta, error) {
 	m.ctrl.T.Helper()
