@@ -334,7 +334,7 @@ func (e *TestEngine) TryDeleteByDeltalocWithTxn(vals []any, txn txnif.AsyncTxn) 
 		obj, err := rel.GetMeta().(*catalog.TableEntry).GetObjectByID(id.ObjectID())
 		assert.NoError(e.t, err)
 		_, blkOffset := id.BlockID.Offsets()
-		deltaLoc, err := MockCNDeleteInS3(e.Runtime.Fs, obj.GetBlockData(), blkOffset, e.schema, txn, offsets)
+		deltaLoc, err := MockCNDeleteInS3(e.Runtime.Fs, obj.GetObjectData(), blkOffset, e.schema, txn, offsets)
 		assert.NoError(e.t, err)
 		ok, err = rel.TryDeleteByDeltaloc(&id, deltaLoc)
 		assert.NoError(e.t, err)
@@ -701,7 +701,7 @@ func (e *TestEngine) CheckCollectDeleteInRange() {
 	txn, rel := e.GetRelation()
 	ForEachObject(rel, func(obj handle.Object) error {
 		meta := obj.GetMeta().(*catalog.ObjectEntry)
-		deleteBat, _, err := meta.GetBlockData().CollectDeleteInRange(
+		deleteBat, _, err := meta.GetObjectData().CollectDeleteInRange(
 			context.Background(), types.TS{}, txn.GetStartTS(), false, common.DefaultAllocator,
 		)
 		assert.NoError(e.t, err)
@@ -712,9 +712,9 @@ func (e *TestEngine) CheckCollectDeleteInRange() {
 		pkVectors := make([]*containers.ColumnView, blkCnt)
 		rowIDVectors := make([]*containers.ColumnView, blkCnt)
 		for i := uint16(0); i < uint16(blkCnt); i++ {
-			pkVectors[i], err = meta.GetBlockData().GetColumnDataById(context.Background(), txn, e.schema, i, pkDef.Idx, common.DefaultAllocator)
+			pkVectors[i], err = meta.GetObjectData().GetColumnDataById(context.Background(), txn, e.schema, i, pkDef.Idx, common.DefaultAllocator)
 			assert.NoError(e.t, err)
-			rowIDVectors[i], err = meta.GetBlockData().GetColumnDataById(context.Background(), txn, e.schema, i, e.schema.PhyAddrKey.Idx, common.DefaultAllocator)
+			rowIDVectors[i], err = meta.GetObjectData().GetColumnDataById(context.Background(), txn, e.schema, i, e.schema.PhyAddrKey.Idx, common.DefaultAllocator)
 			assert.NoError(e.t, err)
 		}
 		for i := 0; i < deleteBat.Length(); i++ {

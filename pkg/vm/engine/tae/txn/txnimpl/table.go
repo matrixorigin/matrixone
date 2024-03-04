@@ -764,7 +764,7 @@ func (tbl *txnTable) RangeDelete(
 	if err != nil {
 		return
 	}
-	blkData := blk.GetBlockData()
+	blkData := blk.GetObjectData()
 	_, blkOffset := id.BlockID.Offsets()
 	node2, err := blkData.RangeDelete(tbl.store.txn, blkOffset, start, end, pk, dt)
 	if err == nil {
@@ -788,7 +788,7 @@ func (tbl *txnTable) TryDeleteByDeltaloc(id *common.ID, deltaloc objectio.Locati
 	if err != nil {
 		return
 	}
-	blkData := blk.GetBlockData()
+	blkData := blk.GetObjectData()
 	_, blkOffset := id.BlockID.Offsets()
 	node2, ok, err := blkData.TryDeleteByDeltaloc(tbl.store.txn, blkOffset, deltaloc)
 	if err == nil && ok {
@@ -849,7 +849,7 @@ func (tbl *txnTable) GetValue(ctx context.Context, id *common.ID, row uint32, co
 	if err != nil {
 		panic(err)
 	}
-	block := meta.GetBlockData()
+	block := meta.GetObjectData()
 	_, blkOffset := id.BlockID.Offsets()
 	return block.GetValue(ctx, tbl.store.txn, tbl.GetLocalSchema(), blkOffset, int(row), int(col), common.WorkspaceAllocator)
 }
@@ -878,7 +878,7 @@ func (tbl *txnTable) UpdateDeltaLoc(id *common.ID, deltaloc objectio.Location) (
 		panic(err)
 	}
 	_, blkOffset := id.BlockID.Offsets()
-	isNewNode, entry, err := meta.GetBlockData().UpdateDeltaLoc(tbl.store.txn, blkOffset, deltaloc)
+	isNewNode, entry, err := meta.GetObjectData().UpdateDeltaLoc(tbl.store.txn, blkOffset, deltaloc)
 	if err != nil {
 		return
 	}
@@ -1052,7 +1052,7 @@ func (tbl *txnTable) DedupSnapByPK(ctx context.Context, keys containers.Vector, 
 		if ObjectHint > maxObjectHint {
 			maxObjectHint = ObjectHint
 		}
-		blkData := blk.GetBlockData()
+		blkData := blk.GetObjectData()
 		if blkData == nil {
 			it.Next()
 			continue
@@ -1125,7 +1125,7 @@ func (tbl *txnTable) DedupSnapByMetaLocs(ctx context.Context, metaLocs []objecti
 			if ObjectHint > maxObjectHint {
 				maxObjectHint = ObjectHint
 			}
-			blkData := blk.GetBlockData()
+			blkData := blk.GetObjectData()
 			if blkData == nil {
 				it.Next()
 				continue
@@ -1223,7 +1223,7 @@ func (tbl *txnTable) DoPrecommitDedupByPK(pks containers.Vector, pksZM index.ZM)
 					continue
 				}
 			}
-			blkData := obj.GetBlockData()
+			blkData := obj.GetObjectData()
 			var rowmask *roaring.Bitmap
 			if len(tbl.deleteNodes) > 0 {
 				if tbl.store.warChecker.HasConflict(obj.ID) {
@@ -1290,7 +1290,7 @@ func (tbl *txnTable) DoPrecommitDedupByNode(ctx context.Context, node InsertNode
 			defer pks.Close()
 		}
 		err = nil
-		blkData := obj.GetBlockData()
+		blkData := obj.GetObjectData()
 		var rowmask *roaring.Bitmap
 		if len(tbl.deleteNodes) > 0 {
 			if tbl.store.warChecker.HasConflict(obj.ID) {

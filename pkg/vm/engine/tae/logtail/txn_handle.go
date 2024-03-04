@@ -225,7 +225,7 @@ func (b *TxnLogtailRespBuilder) visitDelete(ctx context.Context, vnode txnif.Del
 		//pkVec.Extend(v)
 	}
 
-	//_ = meta.GetBlockData().Foreach(
+	//_ = meta.GetObjectData().Foreach(
 	//	ctx,
 	//	schema,
 	//	pkDef.Idx,

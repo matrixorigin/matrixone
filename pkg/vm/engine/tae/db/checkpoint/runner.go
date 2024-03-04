@@ -852,7 +852,7 @@ func (r *runner) fireFlushTabletail(table *catalog.TableEntry, tree *model.Table
 	// freeze all append
 	scopes := make([]common.ID, 0, len(metas))
 	for _, meta := range metas {
-		if !meta.GetBlockData().PrepareCompact() {
+		if !meta.GetObjectData().PrepareCompact() {
 			logutil.Infof("[FlushTabletail] %d-%s / %s false prepareCompact ", table.ID, table.GetLastestSchema().Name, meta.ID.String())
 			return moerr.GetOkExpectedEOB()
 		}
@@ -875,7 +875,7 @@ func (r *runner) EstimateTableMemSize(table *catalog.TableEntry, tree *model.Tab
 		if err != nil {
 			panic(err)
 		}
-		a, d := object.GetBlockData().EstimateMemSize()
+		a, d := object.GetObjectData().EstimateMemSize()
 		asize += a
 		dsize += d
 	}

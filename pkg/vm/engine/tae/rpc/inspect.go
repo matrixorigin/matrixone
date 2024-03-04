@@ -417,7 +417,7 @@ func (c *manualyIgnoreArg) Run() error {
 type infoArg struct {
 	ctx     *inspectContext
 	tbl     *catalog.TableEntry
-	blk     *catalog.ObjectEntry
+	obj     *catalog.ObjectEntry
 	verbose common.PPLevel
 }
 
@@ -429,7 +429,7 @@ func (c *infoArg) PrepareCommand() *cobra.Command {
 	}
 	cmd.Flags().CountP("verbose", "v", "verbose level")
 	cmd.Flags().StringP("target", "t", "*", "format: table-id")
-	cmd.Flags().StringP("blk", "b", "", "format: <objectId>_<fineN>_<blkN>")
+	cmd.Flags().StringP("obj", "b", "", "format: <objectId>_<fineN>")
 	return cmd
 }
 
@@ -459,7 +459,7 @@ func (c *infoArg) FromCommand(cmd *cobra.Command) (err error) {
 	}
 
 	baddress, _ := cmd.Flags().GetString("blk")
-	c.blk, err = parseBlkTarget(baddress, c.tbl)
+	c.obj, err = parseBlkTarget(baddress, c.tbl)
 	if err != nil {
 		return err
 	}
@@ -473,8 +473,8 @@ func (c *infoArg) String() string {
 		t = fmt.Sprintf("%d-%s", c.tbl.ID, c.tbl.GetLastestSchema().Name)
 	}
 
-	if c.blk != nil {
-		t = fmt.Sprintf("%s %s", t, c.blk.ID.String())
+	if c.obj != nil {
+		t = fmt.Sprintf("%s %s", t, c.obj.ID.String())
 	}
 
 	return fmt.Sprintf("info: %v", t)
@@ -486,22 +486,22 @@ func (c *infoArg) Run() error {
 		b.WriteString(fmt.Sprintf("last_merge: %v\n", c.tbl.Stats.GetLastMerge().String()))
 		b.WriteString(fmt.Sprintf("last_flush: %v\n", c.tbl.Stats.GetLastFlush().ToString()))
 	}
-	if c.blk != nil {
+	if c.obj != nil {
 		b.WriteRune('\n')
-		b.WriteString(fmt.Sprintf("persisted_ts: %v\n", c.blk.GetBlockData().GetDeltaPersistedTS().ToString()))
-		r, reason := c.blk.GetBlockData().PrepareCompactInfo()
-		rows, err := c.blk.GetBlockData().Rows()
+		b.WriteString(fmt.Sprintf("persisted_ts: %v\n", c.obj.GetObjectData().GetDeltaPersistedTS().ToString()))
+		r, reason := c.obj.GetObjectData().PrepareCompactInfo()
+		rows, err := c.obj.GetObjectData().Rows()
 		if err != nil {
-			logutil.Warnf("get object rows failed, obj: %v, err %v", c.blk.ID.String(), err)
+			logutil.Warnf("get object rows failed, obj: %v, err %v", c.obj.ID.String(), err)
 		}
-		dels := c.blk.GetBlockData().GetTotalChanges()
+		dels := c.obj.GetObjectData().GetTotalChanges()
 		b.WriteString(fmt.Sprintf("prepareCompact: %v, %q\n", r, reason))
 		b.WriteString(fmt.Sprintf("left rows: %v\n", rows-dels))
-		b.WriteString(fmt.Sprintf("ppstring: %v\n", c.blk.GetBlockData().PPString(c.verbose, 0, "")))
+		b.WriteString(fmt.Sprintf("ppstring: %v\n", c.obj.GetObjectData().PPString(c.verbose, 0, "")))
 
-		schema := c.blk.GetSchema()
+		schema := c.obj.GetSchema()
 		if schema.HasSortKey() {
-			zm, err := c.blk.GetPKZoneMap(context.Background(), c.blk.GetBlockData().GetFs().Service)
+			zm, err := c.obj.GetPKZoneMap(context.Background(), c.obj.GetObjectData().GetFs().Service)
 			var zmstr string
 			if err != nil {
 				zmstr = err.Error()

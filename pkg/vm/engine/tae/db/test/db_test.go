@@ -413,7 +413,7 @@ func TestNonAppendableBlock(t *testing.T) {
 		assert.Nil(t, err)
 		obj, err := rel.CreateNonAppendableObject(false, nil)
 		assert.Nil(t, err)
-		dataBlk := obj.GetMeta().(*catalog.ObjectEntry).GetBlockData()
+		dataBlk := obj.GetMeta().(*catalog.ObjectEntry).GetObjectData()
 		sid := objectio.NewObjectid()
 		name := objectio.BuildObjectNameWithObjectID(sid)
 		writer, err := blockio.NewBlockWriterNew(dataBlk.GetFs().Service, name, 0, nil)
@@ -3130,7 +3130,7 @@ func TestCompactblk3(t *testing.T) {
 			return nil
 		}
 		for j := 0; j < be.BlockCnt(); j++ {
-			view, err := be.GetBlockData().GetColumnDataById(context.Background(), txn, schema, uint16(j), 0, common.DefaultAllocator)
+			view, err := be.GetObjectData().GetColumnDataById(context.Background(), txn, schema, uint16(j), 0, common.DefaultAllocator)
 			assert.NoError(t, err)
 			view.ApplyDeletes()
 			assert.Equal(t, 2, view.Length())
@@ -3189,14 +3189,14 @@ func TestImmutableIndexInAblk(t *testing.T) {
 	assert.NoError(t, err)
 
 	txn, _ = tae.GetRelation()
-	_, _, err = meta.GetBlockData().GetByFilter(context.Background(), txn, filter, common.DefaultAllocator)
+	_, _, err = meta.GetObjectData().GetByFilter(context.Background(), txn, filter, common.DefaultAllocator)
 	assert.Error(t, err)
 	v = testutil.GetSingleSortKeyValue(bat, schema, 2)
 	filter = handle.NewEQFilter(v)
-	_, _, err = meta.GetBlockData().GetByFilter(context.Background(), txn, filter, common.DefaultAllocator)
+	_, _, err = meta.GetObjectData().GetByFilter(context.Background(), txn, filter, common.DefaultAllocator)
 	assert.NoError(t, err)
 
-	err = meta.GetBlockData().BatchDedup(
+	err = meta.GetObjectData().BatchDedup(
 		context.Background(), txn, bat.Vecs[1], nil, nil, false, objectio.BloomFilter{}, common.DefaultAllocator,
 	)
 	assert.Error(t, err)
@@ -3960,7 +3960,7 @@ func TestCollectInsert(t *testing.T) {
 
 	_, rel = tae.GetRelation()
 	blkit := rel.MakeObjectIt()
-	blkdata := blkit.GetObject().GetMeta().(*catalog.ObjectEntry).GetBlockData()
+	blkdata := blkit.GetObject().GetMeta().(*catalog.ObjectEntry).GetObjectData()
 
 	batch, err := blkdata.CollectAppendInRange(types.TS{}, p1, true, common.DefaultAllocator)
 	assert.NoError(t, err)
@@ -4036,7 +4036,7 @@ func TestCollectDelete(t *testing.T) {
 	txn, rel := tae.GetRelation()
 	blkit = rel.MakeObjectIt()
 	blkhandle := blkit.GetObject()
-	blkdata := blkhandle.GetMeta().(*catalog.ObjectEntry).GetBlockData()
+	blkdata := blkhandle.GetMeta().(*catalog.ObjectEntry).GetObjectData()
 
 	batch, _, err := blkdata.CollectDeleteInRange(context.Background(), types.TS{}, p1, true, common.DefaultAllocator)
 	assert.NoError(t, err)
@@ -5258,7 +5258,7 @@ func TestCollectDeletesAfterCKP(t *testing.T) {
 	{
 		txn, rel := tae.GetRelation()
 		meta := testutil.GetOneBlockMeta(rel)
-		bat, _, err := meta.GetBlockData().CollectDeleteInRange(ctx, types.TS{}, types.MaxTs(), true, common.DefaultAllocator)
+		bat, _, err := meta.GetObjectData().CollectDeleteInRange(ctx, types.TS{}, types.MaxTs(), true, common.DefaultAllocator)
 		require.NoError(t, err)
 		require.Equal(t, 10, bat.Length())
 		require.NoError(t, txn.Commit(ctx))
@@ -5268,7 +5268,7 @@ func TestCollectDeletesAfterCKP(t *testing.T) {
 	{
 		txn, rel := tae.GetRelation()
 		meta := testutil.GetOneBlockMeta(rel)
-		bat, _, err := meta.GetBlockData().CollectDeleteInRange(ctx, types.TS{}, types.MaxTs(), true, common.DefaultAllocator)
+		bat, _, err := meta.GetObjectData().CollectDeleteInRange(ctx, types.TS{}, types.MaxTs(), true, common.DefaultAllocator)
 		require.NoError(t, err)
 		require.Equal(t, 10, bat.Length())
 		require.NoError(t, txn.Commit(ctx))
@@ -5279,7 +5279,7 @@ func TestCollectDeletesAfterCKP(t *testing.T) {
 	{
 		txn, rel := tae.GetRelation()
 		meta := testutil.GetOneBlockMeta(rel)
-		bat, _, err := meta.GetBlockData().CollectDeleteInRange(ctx, types.TS{}, types.MaxTs(), true, common.DefaultAllocator)
+		bat, _, err := meta.GetObjectData().CollectDeleteInRange(ctx, types.TS{}, types.MaxTs(), true, common.DefaultAllocator)
 		require.NoError(t, err)
 		require.Equal(t, 10, bat.Length())
 		require.NoError(t, txn.Commit(ctx))
@@ -6102,7 +6102,7 @@ func TestAlterFakePk(t *testing.T) {
 		require.NoError(t, err)
 		// check non-exist column foreach
 		newSchema := obj.GetRelation().Schema()
-		blkdata := obj.GetMeta().(*catalog.ObjectEntry).GetBlockData()
+		blkdata := obj.GetMeta().(*catalog.ObjectEntry).GetObjectData()
 		sels := []uint32{1, 3}
 		rows := make([]int, 0, 4)
 		blkdata.Foreach(context.Background(), newSchema, 0, 1 /*"add1" column*/, func(v any, isnull bool, row int) error {
@@ -7493,7 +7493,7 @@ func TestGCInMemoryDeletesByTS(t *testing.T) {
 	blkHandle := blkit.GetObject()
 	blkMeta := blkHandle.GetMeta().(*catalog.ObjectEntry)
 	blkID := blkMeta.AsCommonID()
-	blkData := blkMeta.GetBlockData()
+	blkData := blkMeta.GetObjectData()
 	assert.NoError(t, txn.Commit(context.Background()))
 	ctx, cancel := context.WithCancel(context.Background())
 	wg := sync.WaitGroup{}
@@ -8033,21 +8033,21 @@ func TestEstimateMemSize(t *testing.T) {
 		testutil.CreateRelationAndAppend(t, 0, tae.DB, "db", schema, bat, true)
 		txn, rel := tae.GetRelation()
 		blk := testutil.GetOneBlockMeta(rel)
-		size1, ds1 := blk.GetBlockData().EstimateMemSize()
+		size1, ds1 := blk.GetObjectData().EstimateMemSize()
 		schema50rowSize = size1
 
 		blkID := objectio.NewBlockidWithObjectID(&blk.ID, 0)
 		err := rel.DeleteByPhyAddrKey(*objectio.NewRowid(blkID, 1))
 		require.NoError(t, err)
-		size2, ds2 := blk.GetBlockData().EstimateMemSize()
+		size2, ds2 := blk.GetObjectData().EstimateMemSize()
 
 		err = rel.DeleteByPhyAddrKey(*objectio.NewRowid(blkID, 5))
 		require.NoError(t, err)
-		size3, ds3 := blk.GetBlockData().EstimateMemSize()
+		size3, ds3 := blk.GetObjectData().EstimateMemSize()
 		// require.Less(t, size1, size2)
 		// require.Less(t, size2, size3)
 		require.NoError(t, txn.Rollback(ctx))
-		size4, ds4 := blk.GetBlockData().EstimateMemSize()
+		size4, ds4 := blk.GetObjectData().EstimateMemSize()
 		t.Log(size1, size2, size3, size4)
 		t.Log(ds1, ds2, ds3, ds4)
 	}
@@ -8058,17 +8058,17 @@ func TestEstimateMemSize(t *testing.T) {
 		testutil.CreateRelationAndAppend(t, 0, tae.DB, "db", schemaBig, bat, false)
 		txn, rel := tae.GetRelation()
 		blk := testutil.GetOneBlockMeta(rel)
-		size1, d1 := blk.GetBlockData().EstimateMemSize()
+		size1, d1 := blk.GetObjectData().EstimateMemSize()
 
 		blkID := objectio.NewBlockidWithObjectID(&blk.ID, 0)
 		err := rel.DeleteByPhyAddrKey(*objectio.NewRowid(blkID, 1))
 		require.NoError(t, err)
 
-		size2, d2 := blk.GetBlockData().EstimateMemSize()
+		size2, d2 := blk.GetObjectData().EstimateMemSize()
 
 		err = rel.DeleteByPhyAddrKey(*objectio.NewRowid(blkID, 5))
 		require.NoError(t, err)
-		size3, d3 := blk.GetBlockData().EstimateMemSize()
+		size3, d3 := blk.GetObjectData().EstimateMemSize()
 
 		t.Log(size1, size2, size3)
 		t.Log(d1, d2, d3)
@@ -8168,7 +8168,7 @@ func TestCollectDeletesInRange2(t *testing.T) {
 
 	txn, rel := tae.GetRelation()
 	blk := rel.MakeObjectIt().GetObject()
-	deltaLoc, err := testutil.MockCNDeleteInS3(tae.Runtime.Fs, blk.GetMeta().(*catalog.ObjectEntry).GetBlockData(), 0, schema, txn, []uint32{0, 1, 2, 3})
+	deltaLoc, err := testutil.MockCNDeleteInS3(tae.Runtime.Fs, blk.GetMeta().(*catalog.ObjectEntry).GetObjectData(), 0, schema, txn, []uint32{0, 1, 2, 3})
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit(context.Background()))
 
@@ -8182,7 +8182,7 @@ func TestCollectDeletesInRange2(t *testing.T) {
 	t.Log(tae.Catalog.SimplePPString(3))
 	txn, rel = tae.GetRelation()
 	blk = rel.MakeObjectIt().GetObject()
-	deletes, _, err := blk.GetMeta().(*catalog.ObjectEntry).GetBlockData().CollectDeleteInRange(
+	deletes, _, err := blk.GetMeta().(*catalog.ObjectEntry).GetObjectData().CollectDeleteInRange(
 		context.Background(), types.TS{}, txn.GetStartTS(), true, common.DefaultAllocator,
 	)
 	assert.NoError(t, err)
@@ -8198,7 +8198,7 @@ func TestCollectDeletesInRange2(t *testing.T) {
 
 	txn, rel = tae.GetRelation()
 	blk = rel.MakeObjectIt().GetObject()
-	deletes, _, err = blk.GetMeta().(*catalog.ObjectEntry).GetBlockData().CollectDeleteInRange(
+	deletes, _, err = blk.GetMeta().(*catalog.ObjectEntry).GetObjectData().CollectDeleteInRange(
 		context.Background(), types.TS{}, txn.GetStartTS(), true, common.DefaultAllocator,
 	)
 	assert.NoError(t, err)

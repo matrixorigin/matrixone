@@ -149,7 +149,7 @@ func (entry *mergeObjectsEntry) transferBlockDeletes(
 	delTbls []*model.TransDels,
 	blkidxStart int) (err error) {
 
-	dataBlock := dropped.GetBlockData()
+	dataBlock := dropped.GetObjectData()
 	tblEntry := dropped.GetTable()
 
 	bat, _, err := dataBlock.CollectDeleteInRange(

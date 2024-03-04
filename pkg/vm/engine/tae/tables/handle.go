@@ -40,7 +40,7 @@ func newHandle(table *dataTable, object *aobject) *tableHandle {
 func (h *tableHandle) SetAppender(id *common.ID) (appender data.ObjectAppender) {
 	tableMeta := h.table.meta
 	objMeta, _ := tableMeta.GetObjectByID(id.ObjectID())
-	h.object = objMeta.GetBlockData().(*aobject)
+	h.object = objMeta.GetObjectData().(*aobject)
 	h.appender, _ = h.object.MakeAppender()
 	h.object.Ref()
 	return h.appender
@@ -61,7 +61,7 @@ func (h *tableHandle) GetAppender() (appender data.ObjectAppender, err error) {
 			err = data.ErrAppendableObjectNotFound
 			return
 		}
-		h.object = objEntry.GetBlockData().(*aobject)
+		h.object = objEntry.GetObjectData().(*aobject)
 		h.appender, err = h.object.MakeAppender()
 		if err != nil {
 			panic(err)

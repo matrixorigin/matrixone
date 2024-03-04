@@ -172,7 +172,7 @@ func (store *replayTxnStore) replayAppendData(cmd *AppendCmd, observer wal.Repla
 		bat := data.CloneWindow(int(start), int(info.GetSrcLen()))
 		bat.Compact()
 		defer bat.Close()
-		if err = blk.GetBlockData().OnReplayAppendPayload(bat); err != nil {
+		if err = blk.GetObjectData().OnReplayAppendPayload(bat); err != nil {
 			panic(err)
 		}
 	}
@@ -206,7 +206,7 @@ func (store *replayTxnStore) replayDelete(cmd *updates.UpdateCmd, observer wal.R
 	if !blk.IsActive() {
 		return
 	}
-	blkData := blk.GetBlockData()
+	blkData := blk.GetObjectData()
 	_, blkOffset := id.BlockID.Offsets()
 	err = blkData.OnReplayDelete(blkOffset, deleteNode)
 	if err != nil {
@@ -237,7 +237,7 @@ func (store *replayTxnStore) replayAppend(cmd *updates.UpdateCmd, observer wal.R
 	if blk.ObjectPersisted() {
 		return
 	}
-	if err = blk.GetBlockData().OnReplayAppend(appendNode); err != nil {
+	if err = blk.GetObjectData().OnReplayAppend(appendNode); err != nil {
 		panic(err)
 	}
 }

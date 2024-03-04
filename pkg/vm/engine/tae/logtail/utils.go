@@ -3009,7 +3009,7 @@ func (collector *BaseCollector) loadObjectInfo() error {
 	for idx := 1; idx <= len(collector.Objects); idx++ {
 
 		obj := collector.Objects[idx-1]
-		blockio.PrefetchMeta(obj.GetBlockData().GetFs().Service, obj.GetLocation())
+		blockio.PrefetchMeta(obj.GetObjectData().GetFs().Service, obj.GetLocation())
 
 		for idx%batchCnt == 0 && i < idx {
 			obj := collector.Objects[i]

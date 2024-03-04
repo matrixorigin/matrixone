@@ -225,7 +225,7 @@ func (obj *txnObject) Close() (err error) {
 	return
 }
 func (obj *txnObject) GetTotalChanges() int {
-	return obj.entry.GetBlockData().GetTotalChanges()
+	return obj.entry.GetObjectData().GetTotalChanges()
 }
 func (obj *txnObject) RangeDelete(blkID uint16, start, end uint32, dt handle.DeleteType, mp *mpool.MPool) (err error) {
 	schema := obj.table.GetLocalSchema()
@@ -233,7 +233,7 @@ func (obj *txnObject) RangeDelete(blkID uint16, start, end uint32, dt handle.Del
 	pkVec := makeWorkspaceVector(pkDef.Type)
 	defer pkVec.Close()
 	for row := start; row <= end; row++ {
-		pkVal, _, err := obj.entry.GetBlockData().GetValue(
+		pkVal, _, err := obj.entry.GetObjectData().GetValue(
 			obj.table.store.GetContext(), obj.Txn, schema, blkID, int(row), pkDef.Idx, mp,
 		)
 		if err != nil {
@@ -280,7 +280,7 @@ func (obj *txnObject) Prefetch(idxes []int) error {
 		return obj.table.tableSpace.Prefetch(obj.entry, seqnums)
 	}
 	for i := 0; i < obj.entry.BlockCnt(); i++ {
-		err := obj.entry.GetBlockData().Prefetch(seqnums, uint16(i))
+		err := obj.entry.GetObjectData().Prefetch(seqnums, uint16(i))
 		if err != nil {
 			return err
 		}
@@ -293,7 +293,7 @@ func (obj *txnObject) Fingerprint() *common.ID { return obj.entry.AsCommonID() }
 func (obj *txnObject) GetByFilter(
 	ctx context.Context, filter *handle.Filter, mp *mpool.MPool,
 ) (blkID uint16, offset uint32, err error) {
-	return obj.entry.GetBlockData().GetByFilter(ctx, obj.table.store.txn, filter, mp)
+	return obj.entry.GetObjectData().GetByFilter(ctx, obj.table.store.txn, filter, mp)
 }
 
 func (obj *txnObject) GetColumnDataById(
@@ -302,7 +302,7 @@ func (obj *txnObject) GetColumnDataById(
 	if obj.entry.IsLocal {
 		return obj.table.tableSpace.GetColumnDataById(ctx, obj.entry, colIdx, mp)
 	}
-	return obj.entry.GetBlockData().GetColumnDataById(ctx, obj.Txn, obj.table.GetLocalSchema(), blkID, colIdx, mp)
+	return obj.entry.GetObjectData().GetColumnDataById(ctx, obj.Txn, obj.table.GetLocalSchema(), blkID, colIdx, mp)
 }
 
 func (obj *txnObject) GetColumnDataByIds(
@@ -311,7 +311,7 @@ func (obj *txnObject) GetColumnDataByIds(
 	if obj.entry.IsLocal {
 		return obj.table.tableSpace.GetColumnDataByIds(obj.entry, colIdxes, mp)
 	}
-	return obj.entry.GetBlockData().GetColumnDataByIds(ctx, obj.Txn, obj.table.GetLocalSchema(), blkID, colIdxes, mp)
+	return obj.entry.GetObjectData().GetColumnDataByIds(ctx, obj.Txn, obj.table.GetLocalSchema(), blkID, colIdxes, mp)
 }
 
 func (obj *txnObject) GetColumnDataByName(
@@ -322,7 +322,7 @@ func (obj *txnObject) GetColumnDataByName(
 	if obj.entry.IsLocal {
 		return obj.table.tableSpace.GetColumnDataById(ctx, obj.entry, colIdx, mp)
 	}
-	return obj.entry.GetBlockData().GetColumnDataById(ctx, obj.Txn, schema, blkID, colIdx, mp)
+	return obj.entry.GetObjectData().GetColumnDataById(ctx, obj.Txn, schema, blkID, colIdx, mp)
 }
 
 func (obj *txnObject) GetColumnDataByNames(
@@ -336,7 +336,7 @@ func (obj *txnObject) GetColumnDataByNames(
 	if obj.entry.IsLocal {
 		return obj.table.tableSpace.GetColumnDataByIds(obj.entry, attrIds, mp)
 	}
-	return obj.entry.GetBlockData().GetColumnDataByIds(ctx, obj.Txn, schema, blkID, attrIds, mp)
+	return obj.entry.GetObjectData().GetColumnDataByIds(ctx, obj.Txn, schema, blkID, attrIds, mp)
 }
 
 func (obj *txnObject) UpdateDeltaLoc(blkID uint16, deltaLoc objectio.Location) error {

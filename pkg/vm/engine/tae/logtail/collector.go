@@ -434,7 +434,7 @@ func (d *dirtyCollector) tryCompactTree(
 				return
 			}
 			var calibration int
-			calibration, err = obj.GetBlockData().RunCalibration()
+			calibration, err = obj.GetObjectData().RunCalibration()
 			if err != nil {
 				logutil.Warnf("get object rows failed, obj %v, err: %v", obj.ID.String(), err)
 				continue
@@ -443,7 +443,7 @@ func (d *dirtyCollector) tryCompactTree(
 				// TODO: may be put it to post replay process
 				// FIXME
 				if obj.HasPersistedData() {
-					obj.GetBlockData().TryUpgrade()
+					obj.GetObjectData().TryUpgrade()
 				}
 				dirtyTable.Shrink(id)
 				continue
@@ -455,7 +455,7 @@ func (d *dirtyCollector) tryCompactTree(
 				}
 				// sometimes, delchain is no cleared after flushing table tail.
 				// the reason is still unknown, but here bumping the check from ts to lastFlush is correct anyway.
-				found, _ := obj.GetBlockData().HasDeleteIntentsPreparedIn(newFrom, to)
+				found, _ := obj.GetObjectData().HasDeleteIntentsPreparedIn(newFrom, to)
 				if !found {
 					dirtyTable.Shrink(id)
 					continue

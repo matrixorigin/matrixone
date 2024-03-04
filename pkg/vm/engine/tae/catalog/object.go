@@ -221,7 +221,7 @@ func (entry *ObjectEntry) InitData(factory DataFactory) {
 func (entry *ObjectEntry) HasPersistedData() bool {
 	return entry.ObjectPersisted()
 }
-func (entry *ObjectEntry) GetBlockData() data.Block { return entry.blkData }
+func (entry *ObjectEntry) GetObjectData() data.Block { return entry.blkData }
 func (entry *ObjectEntry) GetObjectStats() (stats objectio.ObjectStats) {
 	entry.RLock()
 	defer entry.RUnlock()

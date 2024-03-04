@@ -837,7 +837,7 @@ func (catalog *Catalog) ReplayTableRows() {
 		if !be.IsActive() {
 			return nil
 		}
-		rows += be.GetBlockData().GetRowsOnReplay()
+		rows += be.GetObjectData().GetRowsOnReplay()
 		return nil
 	}
 	tableProcessor.TombstoneFn = func(t data.Tombstone) error {

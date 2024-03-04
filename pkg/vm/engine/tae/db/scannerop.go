@@ -272,11 +272,11 @@ func (s *MergeTaskBuilder) onObject(objectEntry *catalog.ObjectEntry) (err error
 	// nblks in appenable objs or non-sorted non-appendable objs
 	// these blks are formed by continuous append
 	objectEntry.RUnlock()
-	rows, err := objectEntry.GetBlockData().Rows()
+	rows, err := objectEntry.GetObjectData().Rows()
 	if err != nil {
 		return
 	}
-	dels := objectEntry.GetBlockData().GetTotalChanges()
+	dels := objectEntry.GetObjectData().GetTotalChanges()
 	objectEntry.RLock()
 	s.ObjectHelper.objRowCnt += rows
 	s.ObjectHelper.objRowDel += dels

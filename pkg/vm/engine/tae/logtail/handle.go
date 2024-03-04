@@ -529,7 +529,7 @@ func (b *TableLogtailRespBuilder) skipObjectData(e *catalog.ObjectEntry, lastMVC
 	}
 }
 func (b *TableLogtailRespBuilder) visitObjData(e *catalog.ObjectEntry) error {
-	data := e.GetBlockData()
+	data := e.GetObjectData()
 	insBatch, err := data.CollectAppendInRange(b.start, b.end, false, common.LogtailAllocator)
 	if err != nil {
 		return err

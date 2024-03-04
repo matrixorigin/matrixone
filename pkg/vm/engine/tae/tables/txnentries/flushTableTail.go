@@ -130,7 +130,7 @@ func (entry *flushTableTailEntry) PrepareCommit() error {
 			// empty frozen aobjects, it can not has any more deletes
 			continue
 		}
-		dataBlock := blk.GetBlockData()
+		dataBlock := blk.GetObjectData()
 		bat, _, err := dataBlock.CollectDeleteInRange(
 			entry.txn.GetContext(),
 			entry.txn.GetStartTS().Next(),
@@ -233,12 +233,12 @@ func (entry *flushTableTailEntry) PrepareRollback() (err error) {
 // ApplyCommit Gc in memory deletes and update table compact status
 func (entry *flushTableTailEntry) ApplyCommit() (err error) {
 	for _, blk := range entry.ablksMetas {
-		_ = blk.GetBlockData().TryUpgrade()
-		blk.GetBlockData().UpgradeAllDeleteChain()
+		_ = blk.GetObjectData().TryUpgrade()
+		blk.GetObjectData().UpgradeAllDeleteChain()
 	}
 
 	for _, blk := range entry.delSrcMetas {
-		blk.GetBlockData().UpgradeAllDeleteChain()
+		blk.GetObjectData().UpgradeAllDeleteChain()
 	}
 
 	tbl := entry.tableEntry

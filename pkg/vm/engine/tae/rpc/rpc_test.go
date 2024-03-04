@@ -1922,7 +1922,7 @@ func TestApplyDeltaloc(t *testing.T) {
 		obj, err := rel.GetMeta().(*catalog.TableEntry).GetObjectByID(id.ObjectID())
 		assert.NoError(t, err)
 		_, blkOffset := id.BlockID.Offsets()
-		deltaLoc, err := testutil.MockCNDeleteInS3(h.db.Runtime.Fs, obj.GetBlockData(), blkOffset, schema, txn0, offsets)
+		deltaLoc, err := testutil.MockCNDeleteInS3(h.db.Runtime.Fs, obj.GetObjectData(), blkOffset, schema, txn0, offsets)
 		assert.NoError(t, err)
 		delLocBat.Vecs[0].Append([]byte(deltaLoc.String()), false)
 	}
@@ -1970,7 +1970,7 @@ func TestApplyDeltaloc(t *testing.T) {
 			blk := it.GetObject()
 			meta := blk.GetMeta().(*catalog.ObjectEntry)
 			for j := 0; j < blk.BlkCnt(); j++ {
-				view, err := meta.GetBlockData().GetColumnDataById(context.Background(), txn0, schema, uint16(j), def.Idx, common.DefaultAllocator)
+				view, err := meta.GetObjectData().GetColumnDataById(context.Background(), txn0, schema, uint16(j), def.Idx, common.DefaultAllocator)
 				assert.NoError(t, err)
 				view.ApplyDeletes()
 				length += view.GetData().Length()

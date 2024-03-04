@@ -557,7 +557,7 @@ func (task *flushTableTailTask) mergeAblks(ctx context.Context) (err error) {
 	if err != nil {
 		return
 	}
-	err = toObjectHandle.GetMeta().(*catalog.ObjectEntry).GetBlockData().Init()
+	err = toObjectHandle.GetMeta().(*catalog.ObjectEntry).GetObjectData().Init()
 	if err != nil {
 		return
 	}
@@ -585,7 +585,7 @@ func (task *flushTableTailTask) flushAblksForSnapshot(ctx context.Context) (subt
 	for i, blk := range task.ablksMetas {
 		var data, deletes *containers.Batch
 		var dataVer *containers.BatchWithVersion
-		blkData := blk.GetBlockData()
+		blkData := blk.GetObjectData()
 		if dataVer, err = blkData.CollectAppendInRange(
 			types.TS{}, task.txn.GetStartTS(), true, common.MergeAllocator,
 		); err != nil {
@@ -666,7 +666,7 @@ func (task *flushTableTailTask) flushAllDeletesFromDelSrc(ctx context.Context) (
 	}()
 	emtpyDelBlkIdx = make([]*bitmap.Bitmap, len(task.delSrcMetas))
 	for i, blk := range task.delSrcMetas {
-		blkData := blk.GetBlockData()
+		blkData := blk.GetObjectData()
 		var deletes *containers.Batch
 		var emptyDelBlks *bitmap.Bitmap
 		if deletes, emptyDelBlks, err = blkData.CollectDeleteInRange(

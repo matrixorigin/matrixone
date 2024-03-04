@@ -642,7 +642,7 @@ func (entry *TableEntry) FreezeAppend() {
 		// nothing to freeze
 		return
 	}
-	obj.GetBlockData().FreezeAppend()
+	obj.GetObjectData().FreezeAppend()
 }
 
 // IsActive is coarse API: no consistency check

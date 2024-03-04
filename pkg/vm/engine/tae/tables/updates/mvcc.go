@@ -857,7 +857,7 @@ func (n *MVCCHandle) InMemoryCollectDeleteInRange(
 	// collect pk by block.Foreach
 	if len(deletes) != 0 {
 		pkIdx := pkDef.Idx
-		data := n.meta.GetBlockData()
+		data := n.meta.GetObjectData()
 		data.Foreach(ctx, schema, n.blkID, pkIdx, func(v any, isNull bool, row int) error {
 			pk.Append(v, false)
 			return nil
@@ -900,7 +900,7 @@ func (n *MVCCHandle) CollectDeleteInRangeAfterDeltalocation(
 	// there's another delta location committed.
 	// It includes more deletes than former delta location.
 	if persisted.Greater(start) {
-		deletes, err = n.meta.GetBlockData().PersistedCollectDeleteInRange(
+		deletes, err = n.meta.GetObjectData().PersistedCollectDeleteInRange(
 			ctx,
 			deletes,
 			n.blkID,
@@ -1002,7 +1002,7 @@ func (n *MVCCHandle) TryDeleteByDeltaloc(txn txnif.AsyncTxn, deltaLoc objectio.L
 		txn.GetContext(),
 		[]uint16{0},
 		nil,
-		n.meta.GetBlockData().GetFs().Service,
+		n.meta.GetObjectData().GetFs().Service,
 		deltaLoc,
 		nil,
 	)
