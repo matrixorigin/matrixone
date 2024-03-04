@@ -15,8 +15,6 @@
 package aggexec
 
 import (
-	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -75,84 +73,16 @@ var (
 	_ AggFuncExec = &groupConcatExec{}
 )
 
-var (
-	fromAggInfoToSingleAggImpl func(aggID int64, args types.Type, ret types.Type) (any, error)
-	fromAggInfoToMultiAggImpl  func(aggID int64, args []types.Type, ret types.Type) (any, error)
-)
-
-var (
-	compositeSingleAggImpls = make(map[int64]func(arg types.Type, ret types.Type) (any, error))
-	compositeMultiAggImpls  = make(map[int64]func(args []types.Type, ret types.Type) (any, error))
-	// string is key like "aggID_argT_retT".
-	singleAggImpls = make(map[string]any)
-	genSingleKey   = func(id int64, arg, ret types.Type) string {
-		return fmt.Sprintf("%d_%d_%d", id, arg.Oid, ret.Oid)
-	}
-
-	// string is key like "aggID_argTs_retT".
-	multiAggImpls = make(map[string]any)
-	genMultiKey   = func(id int64, args []types.Type, ret types.Type) string {
-		key := fmt.Sprintf("%d_", id)
-		for _, arg := range args {
-			key += fmt.Sprintf("%d_", arg.Oid)
-		}
-		key += fmt.Sprintf("%d", ret.Oid)
-		return key
-	}
-)
-
-func RegisterCompositeSingleAggImpl(
-	id int64, compositeImpl func(arg types.Type, ret types.Type) (any, error)) {
-	// todo: legal check needed.
-	compositeSingleAggImpls[id] = compositeImpl
-}
-
-func RegisterCompositeMultiAggImpl(
-	id int64, compositeImpl func(args []types.Type, ret types.Type) (any, error)) {
-	compositeMultiAggImpls[id] = compositeImpl
-}
-
-func RegisterSingleAggImpl(id int64, arg types.Type, ret types.Type, impl any) {
-	// todo: should do legal check later. and remove the codes in function MakeAgg.
-	singleAggImpls[genSingleKey(id, arg, ret)] = impl
-}
-
-func RegisterMultiAggImpl(id int64, args []types.Type, ret types.Type, impl any) {
-	// todo: should do legal check later. and remove the codes in function MakeMultiAgg.
-	multiAggImpls[genMultiKey(id, args, ret)] = impl
-}
-
-func init() {
-	fromAggInfoToSingleAggImpl = func(aggID int64, args types.Type, ret types.Type) (any, error) {
-		if composite, ok := compositeSingleAggImpls[aggID]; ok {
-			return composite(args, ret)
-		}
-
-		key := genSingleKey(aggID, args, ret)
-		if impl, ok := singleAggImpls[key]; ok {
-			return impl, nil
-		}
-		return nil, moerr.NewInternalErrorNoCtx("not found the implementation for the aggregation %d", aggID)
-	}
-
-	fromAggInfoToMultiAggImpl = func(aggID int64, args []types.Type, ret types.Type) (any, error) {
-		if composite, ok := compositeMultiAggImpls[aggID]; ok {
-			return composite(args, ret)
-		}
-
-		key := genMultiKey(aggID, args, ret)
-		if impl, ok := multiAggImpls[key]; ok {
-			return impl, nil
-		}
-		return nil, moerr.NewInternalErrorNoCtx("not found the implementation for the aggregation %d", aggID)
-	}
-}
-
 // MakeAgg supports to create an aggregation function executor for single column.
 func MakeAgg(
 	proc *process.Process,
 	aggID int64, isDistinct bool, emptyIsNull bool,
-	param types.Type, result types.Type) AggFuncExec {
+	param types.Type) AggFuncExec {
+	implementationAllocator, result, err := getSingleAggImplByInfo(aggID, param)
+	if err != nil {
+		panic(err)
+	}
+
 	info := singleAggInfo{
 		aggID:     aggID,
 		distinct:  isDistinct,
@@ -162,11 +92,6 @@ func MakeAgg(
 	}
 	opt := singleAggOptimizedInfo{
 		receiveNull: true,
-	}
-
-	implementationAllocator, err := fromAggInfoToSingleAggImpl(aggID, param, result)
-	if err != nil {
-		panic(err)
 	}
 
 	pIsVarLen, rIsVarLen := param.IsVarlen(), result.IsVarlen()
@@ -188,17 +113,18 @@ func MakeAgg(
 func MakeMultiAgg(
 	proc *process.Process,
 	aggID int64, isDistinct bool, emptyIsNull bool,
-	param []types.Type, result types.Type) AggFuncExec {
+	param []types.Type) AggFuncExec {
+	implementationAllocator, result, err := getMultiArgAggImplByInfo(aggID, param)
+	if err != nil {
+		panic(err)
+	}
+
 	info := multiAggInfo{
 		aggID:     aggID,
 		distinct:  isDistinct,
 		argTypes:  param,
 		retType:   result,
 		emptyNull: emptyIsNull,
-	}
-	implementationAllocator, err := fromAggInfoToMultiAggImpl(aggID, param, result)
-	if err != nil {
-		panic(err)
 	}
 	return newMultiAggFuncExec(proc, info, implementationAllocator)
 }

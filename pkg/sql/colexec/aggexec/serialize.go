@@ -44,11 +44,11 @@ func UnmarshalAggFuncExec(
 	case EncodedAggExecType_single_fixed_fixed, EncodedAggExecType_single_fixed_var,
 		EncodedAggExecType_single_var_fixed, EncodedAggExecType_single_var_var:
 		exec = MakeAgg(
-			nil, info.Id, info.IsDistinct, info.NullEmpty, info.Args[0], info.Ret)
+			nil, info.Id, info.IsDistinct, info.NullEmpty, info.Args[0])
 
 	case EncodedAggExecType_multi_return_fixed, EncodedAggExecType_multi_return_var:
 		exec = MakeMultiAgg(
-			nil, info.Id, info.IsDistinct, info.NullEmpty, info.Args, info.Ret)
+			nil, info.Id, info.IsDistinct, info.NullEmpty, info.Args)
 
 	default:
 		return nil, moerr.NewInternalErrorNoCtx("Unmarshal agg exec failed, unknown exec type %d", encoded.GetExecType())

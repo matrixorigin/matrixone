@@ -20,19 +20,19 @@ import (
 )
 
 func RegisterSum(id int64) {
-	aggexec.RegisterSingleAggImpl(id, types.T_bit.ToType(), types.T_int64.ToType(), newAggSum[int8, int64])
-	aggexec.RegisterSingleAggImpl(id, types.T_int8.ToType(), types.T_int64.ToType(), newAggSum[int8, int64])
-	aggexec.RegisterSingleAggImpl(id, types.T_int16.ToType(), types.T_int64.ToType(), newAggSum[int16, int64])
-	aggexec.RegisterSingleAggImpl(id, types.T_int32.ToType(), types.T_int64.ToType(), newAggSum[int32, int64])
-	aggexec.RegisterSingleAggImpl(id, types.T_int64.ToType(), types.T_int64.ToType(), newAggSum[int64, int64])
-	aggexec.RegisterSingleAggImpl(id, types.T_uint8.ToType(), types.T_uint64.ToType(), newAggSum[uint8, uint64])
-	aggexec.RegisterSingleAggImpl(id, types.T_uint16.ToType(), types.T_uint64.ToType(), newAggSum[uint16, uint64])
-	aggexec.RegisterSingleAggImpl(id, types.T_uint32.ToType(), types.T_uint64.ToType(), newAggSum[uint32, uint64])
-	aggexec.RegisterSingleAggImpl(id, types.T_uint64.ToType(), types.T_uint64.ToType(), newAggSum[uint64, uint64])
-	aggexec.RegisterSingleAggImpl(id, types.T_float32.ToType(), types.T_float64.ToType(), newAggSum[float32, float64])
-	aggexec.RegisterSingleAggImpl(id, types.T_float64.ToType(), types.T_float64.ToType(), newAggSum[float64, float64])
-	aggexec.RegisterSingleAggImpl(id, types.T_decimal64.ToType(), types.T_decimal128.ToType(), newAggSumDecimal64)
-	aggexec.RegisterSingleAggImpl(id, types.T_decimal128.ToType(), types.T_decimal128.ToType(), newAggSumDecimal128)
+	aggexec.RegisterDeterminedSingleAgg(id, types.T_bit.ToType(), types.T_int64.ToType(), newAggSum[int8, int64])
+	aggexec.RegisterDeterminedSingleAgg(id, types.T_int8.ToType(), types.T_int64.ToType(), newAggSum[int8, int64])
+	aggexec.RegisterDeterminedSingleAgg(id, types.T_int16.ToType(), types.T_int64.ToType(), newAggSum[int16, int64])
+	aggexec.RegisterDeterminedSingleAgg(id, types.T_int32.ToType(), types.T_int64.ToType(), newAggSum[int32, int64])
+	aggexec.RegisterDeterminedSingleAgg(id, types.T_int64.ToType(), types.T_int64.ToType(), newAggSum[int64, int64])
+	aggexec.RegisterDeterminedSingleAgg(id, types.T_uint8.ToType(), types.T_uint64.ToType(), newAggSum[uint8, uint64])
+	aggexec.RegisterDeterminedSingleAgg(id, types.T_uint16.ToType(), types.T_uint64.ToType(), newAggSum[uint16, uint64])
+	aggexec.RegisterDeterminedSingleAgg(id, types.T_uint32.ToType(), types.T_uint64.ToType(), newAggSum[uint32, uint64])
+	aggexec.RegisterDeterminedSingleAgg(id, types.T_uint64.ToType(), types.T_uint64.ToType(), newAggSum[uint64, uint64])
+	aggexec.RegisterDeterminedSingleAgg(id, types.T_float32.ToType(), types.T_float64.ToType(), newAggSum[float32, float64])
+	aggexec.RegisterDeterminedSingleAgg(id, types.T_float64.ToType(), types.T_float64.ToType(), newAggSum[float64, float64])
+	aggexec.RegisterDeterminedSingleAgg(id, types.T_decimal64.ToType(), types.T_decimal128.ToType(), newAggSumDecimal64)
+	aggexec.RegisterDeterminedSingleAgg(id, types.T_decimal128.ToType(), types.T_decimal128.ToType(), newAggSumDecimal128)
 }
 
 var _ aggexec.SingleAggFromFixedRetFixed[int32, int64] = aggSum[int32, int64]{}
