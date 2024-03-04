@@ -1185,7 +1185,7 @@ func buildShowStages(stmt *tree.ShowStages, ctx CompilerContext) (*Plan, error) 
 
 func buildShowSnapShots(stmt *tree.ShowSnapShots, ctx CompilerContext) (*Plan, error) {
 	ddlType := plan.DataDefinition_SHOW_TARGET
-	sql := fmt.Sprintf("SELECT sname as `SNAPSHOT_NAME`, ts as `TIMESTAMP`,  level as `SNAPSHOT_LEVEL`, objname as `OBJECT_NAME` FROM %s.mo_snapshots", MO_CATALOG_DB_NAME)
+	sql := fmt.Sprintf("SELECT sname as `SNAPSHOT_NAME`, ts as `TIMESTAMP`,  level as `SNAPSHOT_LEVEL`, objname as `OBJECT_NAME` FROM %s.mo_snapshots ORDER BY ts DESC", MO_CATALOG_DB_NAME)
 
 	if stmt.Where != nil {
 		return returnByWhereAndBaseSQL(ctx, sql, stmt.Where, ddlType)

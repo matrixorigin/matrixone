@@ -5,7 +5,7 @@ create snapshot snapshot_02 for account default_1;
 select sleep(1);
 create snapshot snapshot_03 for account default_1;
 select sleep(1);
-create snapshot snapshot_04 for account defalt_1;
+create snapshot snapshot_04 for account default_1;
 -- @ignore:3
 show snapshots;
 -- @ignore:3

@@ -9658,7 +9658,7 @@ func doCreateSnapshot(ctx context.Context, ses *Session, stmt *tree.CreateSnapSh
 				return err
 			}
 			if !accuntExist {
-				return moerr.NewInternalError(ctx, "create snapshot for account %s, account %s does not exist", snapshotForAccount, snapshotForAccount)
+				return moerr.NewInternalError(ctx, "account %s does not exist", snapshotForAccount)
 			}
 		}
 	}
