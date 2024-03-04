@@ -91,13 +91,8 @@ func init() {
 	}
 }
 
-func isClusterOrPKFromColExpr(expr *plan.Expr_Col, tableDef *plan.TableDef) (isPK, isCluster bool) {
-	colDef := tableDef.Cols[expr.Col.ColPos]
-	if colDef.Primary {
-		isPK = true
-		return
-	}
-	isCluster = colDef.ClusterBy
+func isClusterOrPK(colDef *plan.ColDef) (isPK, isCluster bool) {
+	isPK, isCluster = colDef.Primary, colDef.ClusterBy
 	return
 }
 
@@ -431,7 +426,8 @@ func CompileFilterExpr(
 				canCompile = false
 				return
 			}
-			isPK, isCluster := isClusterOrPKFromColExpr(colExpr, tableDef)
+			colDef := getColDefByName(colExpr.Col.Name, tableDef)
+			isPK, isCluster := isClusterOrPK(colDef)
 			if isPK || isCluster {
 				fastFilterOp = func(obj objectio.ObjectStats) (bool, error) {
 					if obj.ZMIsEmpty() {
@@ -441,7 +437,6 @@ func CompileFilterExpr(
 				}
 			}
 			loadOp = loadMetadataOnlyOpFactory(fs)
-			colDef := tableDef.Cols[colExpr.Col.ColPos]
 			seqNum := colDef.Seqnum
 			objectFilterOp = func(meta objectio.ObjectMeta, _ objectio.BloomFilter) (bool, error) {
 				if isCluster || isPK {
@@ -464,7 +459,8 @@ func CompileFilterExpr(
 				canCompile = false
 				return
 			}
-			isPK, isCluster := isClusterOrPKFromColExpr(colExpr, tableDef)
+			colDef := getColDefByName(colExpr.Col.Name, tableDef)
+			isPK, isCluster := isClusterOrPK(colDef)
 			if isPK || isCluster {
 				fastFilterOp = func(obj objectio.ObjectStats) (bool, error) {
 					if obj.ZMIsEmpty() {
@@ -474,7 +470,6 @@ func CompileFilterExpr(
 				}
 			}
 			loadOp = loadMetadataOnlyOpFactory(fs)
-			colDef := tableDef.Cols[colExpr.Col.ColPos]
 			seqNum := colDef.Seqnum
 			objectFilterOp = func(meta objectio.ObjectMeta, _ objectio.BloomFilter) (bool, error) {
 				if isCluster || isPK {
@@ -497,7 +492,8 @@ func CompileFilterExpr(
 				canCompile = false
 				return
 			}
-			isPK, isCluster := isClusterOrPKFromColExpr(colExpr, tableDef)
+			colDef := getColDefByName(colExpr.Col.Name, tableDef)
+			isPK, isCluster := isClusterOrPK(colDef)
 			if isPK || isCluster {
 				fastFilterOp = func(obj objectio.ObjectStats) (bool, error) {
 					if obj.ZMIsEmpty() {
@@ -507,7 +503,6 @@ func CompileFilterExpr(
 				}
 			}
 			loadOp = loadMetadataOnlyOpFactory(fs)
-			colDef := tableDef.Cols[colExpr.Col.ColPos]
 			seqNum := colDef.Seqnum
 			objectFilterOp = func(meta objectio.ObjectMeta, _ objectio.BloomFilter) (bool, error) {
 				if isCluster || isPK {
@@ -530,7 +525,8 @@ func CompileFilterExpr(
 				canCompile = false
 				return
 			}
-			isPK, isCluster := isClusterOrPKFromColExpr(colExpr, tableDef)
+			colDef := getColDefByName(colExpr.Col.Name, tableDef)
+			isPK, isCluster := isClusterOrPK(colDef)
 			if isPK || isCluster {
 				fastFilterOp = func(obj objectio.ObjectStats) (bool, error) {
 					if obj.ZMIsEmpty() {
@@ -540,7 +536,6 @@ func CompileFilterExpr(
 				}
 			}
 			loadOp = loadMetadataOnlyOpFactory(fs)
-			colDef := tableDef.Cols[colExpr.Col.ColPos]
 			seqNum := colDef.Seqnum
 			objectFilterOp = func(meta objectio.ObjectMeta, _ objectio.BloomFilter) (bool, error) {
 				if isCluster || isPK {
@@ -563,7 +558,8 @@ func CompileFilterExpr(
 				canCompile = false
 				return
 			}
-			isPK, isCluster := isClusterOrPKFromColExpr(colExpr, tableDef)
+			colDef := getColDefByName(colExpr.Col.Name, tableDef)
+			isPK, isCluster := isClusterOrPK(colDef)
 			if isPK || isCluster {
 				fastFilterOp = func(obj objectio.ObjectStats) (bool, error) {
 					if obj.ZMIsEmpty() {
@@ -573,7 +569,6 @@ func CompileFilterExpr(
 				}
 			}
 			loadOp = loadMetadataOnlyOpFactory(fs)
-			colDef := tableDef.Cols[colExpr.Col.ColPos]
 			seqNum := colDef.Seqnum
 			objectFilterOp = func(meta objectio.ObjectMeta, _ objectio.BloomFilter) (bool, error) {
 				if isCluster || isPK {
@@ -604,7 +599,8 @@ func CompileFilterExpr(
 			}
 			vec := vector.NewVec(types.T_any.ToType())
 			_ = vec.UnmarshalBinary(val)
-			isPK, isCluster := isClusterOrPKFromColExpr(colExpr, tableDef)
+			colDef := getColDefByName(colExpr.Col.Name, tableDef)
+			isPK, isCluster := isClusterOrPK(colDef)
 			if isPK || isCluster {
 				fastFilterOp = func(obj objectio.ObjectStats) (bool, error) {
 					if obj.ZMIsEmpty() {
@@ -619,7 +615,6 @@ func CompileFilterExpr(
 				loadOp = loadMetadataOnlyOpFactory(fs)
 			}
 
-			colDef := tableDef.Cols[colExpr.Col.ColPos]
 			seqNum := colDef.Seqnum
 			objectFilterOp = func(meta objectio.ObjectMeta, _ objectio.BloomFilter) (bool, error) {
 				if isCluster || isPK {
@@ -652,7 +647,8 @@ func CompileFilterExpr(
 				canCompile = false
 				return
 			}
-			isPK, isCluster := isClusterOrPKFromColExpr(colExpr, tableDef)
+			colDef := getColDefByName(colExpr.Col.Name, tableDef)
+			isPK, isCluster := isClusterOrPK(colDef)
 			if isPK || isCluster {
 				fastFilterOp = func(obj objectio.ObjectStats) (bool, error) {
 					if obj.ZMIsEmpty() {
@@ -667,7 +663,6 @@ func CompileFilterExpr(
 				loadOp = loadMetadataOnlyOpFactory(fs)
 			}
 
-			colDef := tableDef.Cols[colExpr.Col.ColPos]
 			seqNum := colDef.Seqnum
 			objectFilterOp = func(meta objectio.ObjectMeta, _ objectio.BloomFilter) (bool, error) {
 				if isCluster || isPK {
