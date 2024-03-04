@@ -46,8 +46,10 @@ type AggFuncExec interface {
 	BatchFill(offset int, groups []uint64, vectors []*vector.Vector) error
 
 	// Merge merges the aggregation result of two groups.
-	// BatchMerge merges the aggregation result of multiple groups.
 	Merge(next AggFuncExec, groupIdx1, groupIdx2 int) error
+	// BatchMerge merges the aggregation result of multiple groups.
+	// merge work starts from the offset group of the next agg,
+	// and merges the (offset + i)th group with the (groups[i]-1) group of the current agg.
 	BatchMerge(next AggFuncExec, offset int, groups []uint64) error
 
 	// SetPreparedResult add a partial result to speed up.

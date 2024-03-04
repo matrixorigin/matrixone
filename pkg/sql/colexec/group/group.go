@@ -17,13 +17,13 @@ package group
 import (
 	"bytes"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -167,14 +167,12 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	return ap.ctr.processWithGroup(ap, proc, anal, arg.GetIsFirst(), arg.GetIsLast())
 }
 
-func (ctr *container) generateAggStructures(arg *Argument) error {
-	var err error
+func (ctr *container) generateAggStructures(proc *process.Process, arg *Argument) error {
 	i := 0
 	for i < len(arg.Aggs) {
-		if ctr.bat.Aggs[i], err = agg.NewAggWithConfig(arg.Aggs[i].Op, arg.Aggs[i].Dist, []types.Type{*ctr.aggVecs[i].vec.GetType()}, arg.Aggs[i].Config); err != nil {
-			ctr.bat = nil
-			return err
-		}
+		ctr.bat.Aggs[i] = aggexec.MakeAgg(proc,
+			arg.Aggs[i].Op, arg.Aggs[i].Dist, false, *ctr.aggVecs[i].vec.GetType())
+		ctr.bat.Aggs[i].SetPreparedResult(arg.Aggs[i].Config, 0)
 		i++
 	}
 
@@ -246,12 +244,12 @@ func initCtrBatchForProcessWithoutGroup(ap *Argument, proc *process.Process, ctr
 	ctr.bat = batch.NewWithSize(0)
 	ctr.bat.SetRowCount(1)
 
-	ctr.bat.Aggs = make([]agg.Agg[any], len(ap.Aggs)+len(ap.MultiAggs))
-	if err = ctr.generateAggStructures(ap); err != nil {
+	ctr.bat.Aggs = make([]aggexec.AggFuncExec, len(ap.Aggs)+len(ap.MultiAggs))
+	if err = ctr.generateAggStructures(proc, ap); err != nil {
 		return err
 	}
 	for _, ag := range ctr.bat.Aggs {
-		if err = ag.Grows(1, proc.Mp()); err != nil {
+		if err = ag.GroupGrow(1); err != nil {
 			return err
 		}
 	}
@@ -300,8 +298,8 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 						return result, err
 					}
 				}
-				ctr.bat.Aggs = make([]agg.Agg[any], len(ap.Aggs)+len(ap.MultiAggs))
-				if err = ctr.generateAggStructures(ap); err != nil {
+				ctr.bat.Aggs = make([]aggexec.AggFuncExec, len(ap.Aggs)+len(ap.MultiAggs))
+				if err = ctr.generateAggStructures(proc, ap); err != nil {
 					return result, err
 				}
 				switch {
@@ -350,7 +348,7 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 		if ctr.bat != nil {
 			if ap.NeedEval {
 				for i, ag := range ctr.bat.Aggs {
-					vec, err := ag.Eval(proc.Mp())
+					vec, err := ag.Flush()
 					if err != nil {
 						return result, err
 					}
@@ -358,7 +356,7 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 					ctr.bat.Vecs = append(ctr.bat.Vecs, vec)
 					anal.Alloc(int64(vec.Size()))
 
-					ag.Free(proc.Mp())
+					ag.Free()
 				}
 				ctr.bat.Aggs = nil
 			}
@@ -511,7 +509,7 @@ func (ctr *container) batchFill(i int, n int, bat *batch.Batch, vals []uint64, h
 			}
 		}
 		for _, ag := range ctr.bat.Aggs {
-			if err := ag.Grows(cnt, proc.Mp()); err != nil {
+			if err := ag.GroupGrow(cnt); err != nil {
 				return err
 			}
 		}
@@ -521,7 +519,7 @@ func (ctr *container) batchFill(i int, n int, bat *batch.Batch, vals []uint64, h
 	}
 	for j, ag := range ctr.bat.Aggs {
 		ctr.tmpVecs[0] = ctr.aggVecs[j].vec
-		err := ag.BatchFill(int64(i), ctr.inserted[:n], vals, ctr.tmpVecs)
+		err := ag.BatchFill(i, vals[:n], ctr.tmpVecs)
 		if err != nil {
 			return err
 		}

@@ -76,9 +76,9 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 				if ap.NeedEval {
 					for i, agg := range ctr.bat.Aggs {
 						if ap.PartialResults != nil {
-							agg.SetPartialResult(ap.PartialResults[i])
+							agg.SetPreparedResult(ap.PartialResults[i], 0)
 						}
-						vec, err := agg.Eval(proc.Mp())
+						vec, err := agg.Flush()
 						if err != nil {
 							ctr.state = End
 							return result, err
@@ -89,7 +89,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 							anal.Alloc(int64(vec.Size()))
 						}
 
-						agg.Free(proc.Mp())
+						agg.Free()
 					}
 					ctr.bat.Aggs = nil
 				}
@@ -256,13 +256,13 @@ func (ctr *container) batchFill(i int, n int, bat *batch.Batch, vals []uint64, h
 			}
 		}
 		for _, agg := range ctr.bat.Aggs {
-			if err := agg.Grows(cnt, proc.Mp()); err != nil {
+			if err := agg.GroupGrow(cnt); err != nil {
 				return err
 			}
 		}
 	}
 	for j, agg := range ctr.bat.Aggs {
-		if err := agg.BatchMerge(bat.Aggs[j], int64(i), ctr.inserted[:n], vals); err != nil {
+		if err := agg.BatchMerge(bat.Aggs[j], i, vals[:n]); err != nil {
 			return err
 		}
 	}

@@ -16,6 +16,7 @@ package window
 
 import (
 	"bytes"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -26,7 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sort"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -123,12 +123,11 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 				return result, err
 			}
 
-			ctr.bat.Aggs = make([]agg.Agg[any], len(ap.Aggs))
+			ctr.bat.Aggs = make([]aggexec.AggFuncExec, len(ap.Aggs))
 			for i, ag := range ap.Aggs {
-				if ctr.bat.Aggs[i], err = agg.NewAggWithConfig(int64(ag.Op), ag.Dist, []types.Type{ap.Types[i]}, ag.Config); err != nil {
-					return result, err
-				}
-				if err = ctr.bat.Aggs[i].Grows(ctr.bat.RowCount(), proc.Mp()); err != nil {
+				ctr.bat.Aggs[i] = aggexec.MakeAgg(proc, ag.Op, ag.Dist, false, ap.Types[i])
+				ctr.bat.Aggs[i].SetPreparedResult(ag.Config, 0)
+				if err = ctr.bat.Aggs[i].GroupGrow(ctr.bat.RowCount()); err != nil {
 					return result, err
 				}
 			}
@@ -203,7 +202,7 @@ func (ctr *container) processFunc(idx int, ap *Argument, proc *process.Process, 
 
 				if ctr.os[o] <= ctr.ps[p] {
 
-					if err = ctr.bat.Aggs[idx].Fill(int64(p-1), int64(o), []*vector.Vector{vec}); err != nil {
+					if err = ctr.bat.Aggs[idx].Fill(p-1, o, []*vector.Vector{vec}); err != nil {
 						return err
 					}
 
@@ -233,7 +232,7 @@ func (ctr *container) processFunc(idx int, ap *Argument, proc *process.Process, 
 			}
 
 			if right < start || left > end || left >= right {
-				if err = ctr.bat.Aggs[idx].Fill(int64(j), int64(0), []*vector.Vector{nullVec}); err != nil {
+				if err = ctr.bat.Aggs[idx].Fill(j, 0, []*vector.Vector{nullVec}); err != nil {
 					return err
 				}
 				continue
@@ -247,7 +246,7 @@ func (ctr *container) processFunc(idx int, ap *Argument, proc *process.Process, 
 			}
 
 			for k := left; k < right; k++ {
-				if err = ctr.bat.Aggs[idx].Fill(int64(j), int64(k), []*vector.Vector{ctr.aggVecs[idx].vec}); err != nil {
+				if err = ctr.bat.Aggs[idx].Fill(j, k, []*vector.Vector{ctr.aggVecs[idx].vec}); err != nil {
 					return err
 				}
 			}
@@ -255,7 +254,7 @@ func (ctr *container) processFunc(idx int, ap *Argument, proc *process.Process, 
 		}
 	}
 
-	vec, err := ctr.bat.Aggs[idx].Eval(proc.Mp())
+	vec, err := ctr.bat.Aggs[idx].Flush()
 	if err != nil {
 		return err
 	}
