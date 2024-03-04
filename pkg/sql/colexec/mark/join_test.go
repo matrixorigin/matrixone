@@ -186,7 +186,7 @@ func BenchmarkMark(b *testing.B) {
 
 func newExpr(pos int32, typ types.Type) *plan.Expr {
 	return &plan.Expr{
-		Typ: &plan.Type{
+		Typ: plan.Type{
 			Scale: typ.Scale,
 			Width: typ.Width,
 			Id:    int32(typ.Oid),
@@ -215,7 +215,7 @@ func newTestCase(flgs []bool, ts []types.Type, rp []int32, cs [][]*plan.Expr) ma
 	fid := fr.GetEncodedOverloadID()
 	args := make([]*plan.Expr, 0, 2)
 	args = append(args, &plan.Expr{
-		Typ: &plan.Type{
+		Typ: plan.Type{
 			Id: int32(ts[0].Oid),
 		},
 		Expr: &plan.Expr_Col{
@@ -226,7 +226,7 @@ func newTestCase(flgs []bool, ts []types.Type, rp []int32, cs [][]*plan.Expr) ma
 		},
 	})
 	args = append(args, &plan.Expr{
-		Typ: &plan.Type{
+		Typ: plan.Type{
 			Id: int32(ts[0].Oid),
 		},
 		Expr: &plan.Expr_Col{
@@ -237,7 +237,7 @@ func newTestCase(flgs []bool, ts []types.Type, rp []int32, cs [][]*plan.Expr) ma
 		},
 	})
 	cond := &plan.Expr{
-		Typ: &plan.Type{
+		Typ: plan.Type{
 			Id: int32(types.T_bool),
 		},
 		Expr: &plan.Expr_F{
