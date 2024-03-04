@@ -19,7 +19,6 @@ import (
 	"context"
 	"encoding/hex"
 	"errors"
-	gotrace "runtime/trace"
 	"sync"
 	"time"
 
@@ -176,6 +175,18 @@ func WithTxnPKDedupCount(count int) TxnOption {
 	}
 }
 
+func WithDisableTrace(value bool) TxnOption {
+	return func(tc *txnOperator) {
+		tc.mu.txn.DisableTrace = value
+	}
+}
+
+func WithDisableLock(value bool) TxnOption {
+	return func(tc *txnOperator) {
+		tc.mu.txn.DisableLock = value
+	}
+}
+
 type txnOperator struct {
 	sender rpc.TxnSender
 	waiter *waiter
@@ -201,7 +212,7 @@ type txnOperator struct {
 		txn          txn.TxnMeta
 		cachedWrites map[uint64][]txn.TxnRequest
 		lockTables   []lock.LockTable
-		callbacks    map[EventType][]func(txn.TxnMeta)
+		callbacks    map[EventType][]func(txn.TxnMeta, error)
 		retry        bool
 		openlog      bool
 
@@ -276,6 +287,7 @@ func (tc *txnOperator) waitActive(ctx context.Context) error {
 	start := time.Now()
 	defer func() {
 		v2.TxnWaitActiveDurationHistogram.Observe(time.Since(start).Seconds())
+		tc.triggerEvent(ActiveEvent, nil)
 	}()
 
 	if tc.waiter == nil {
@@ -363,8 +375,6 @@ func (tc *txnOperator) Snapshot() ([]byte, error) {
 func (tc *txnOperator) UpdateSnapshot(
 	ctx context.Context,
 	ts timestamp.Timestamp) error {
-	_, task := gotrace.NewTask(context.TODO(), "transaction.UpdateSnapshot")
-	defer task.End()
 	tc.mu.Lock()
 	defer tc.mu.Unlock()
 	if err := tc.checkStatus(true); err != nil {
@@ -377,7 +387,6 @@ func (tc *txnOperator) UpdateSnapshot(
 	}
 
 	minTS := ts
-
 	lastSnapshotTS, err := tc.timestampWaiter.GetTimestamp(
 		ctx,
 		minTS)
@@ -385,12 +394,11 @@ func (tc *txnOperator) UpdateSnapshot(
 		return err
 	}
 	tc.mu.txn.SnapshotTS = lastSnapshotTS
+	tc.triggerEventLocked(SnapshotUpdatedEvent, nil)
 	return nil
 }
 
 func (tc *txnOperator) ApplySnapshot(data []byte) error {
-	_, task := gotrace.NewTask(context.TODO(), "transaction.ApplySnapshot")
-	defer task.End()
 	if !tc.option.coordinator {
 		util.GetLogger().Fatal("apply snapshot on non-coordinator txn operator")
 	}
@@ -439,8 +447,6 @@ func (tc *txnOperator) ApplySnapshot(data []byte) error {
 }
 
 func (tc *txnOperator) Read(ctx context.Context, requests []txn.TxnRequest) (*rpc.SendResult, error) {
-	_, task := gotrace.NewTask(context.TODO(), "transaction.Read")
-	defer task.End()
 	util.LogTxnRead(tc.getTxnMeta(false))
 
 	for idx := range requests {
@@ -456,16 +462,11 @@ func (tc *txnOperator) Read(ctx context.Context, requests []txn.TxnRequest) (*rp
 }
 
 func (tc *txnOperator) Write(ctx context.Context, requests []txn.TxnRequest) (*rpc.SendResult, error) {
-	_, task := gotrace.NewTask(context.TODO(), "transaction.Write")
-	defer task.End()
 	util.LogTxnWrite(tc.getTxnMeta(false))
-
 	return tc.doWrite(ctx, requests, false)
 }
 
 func (tc *txnOperator) WriteAndCommit(ctx context.Context, requests []txn.TxnRequest) (*rpc.SendResult, error) {
-	_, task := gotrace.NewTask(context.TODO(), "transaction.WriteAndCommit")
-	defer task.End()
 	util.LogTxnWrite(tc.getTxnMeta(false))
 	util.LogTxnCommit(tc.getTxnMeta(false))
 	return tc.doWrite(ctx, requests, true)
@@ -477,8 +478,6 @@ func (tc *txnOperator) Commit(ctx context.Context) error {
 		v2.TxnCNCommitDurationHistogram.Observe(time.Since(tc.commitAt).Seconds())
 	}()
 
-	_, task := gotrace.NewTask(context.TODO(), "transaction.Commit")
-	defer task.End()
 	util.LogTxnCommit(tc.getTxnMeta(false))
 
 	if tc.option.readyOnly {
@@ -500,9 +499,6 @@ func (tc *txnOperator) Commit(ctx context.Context) error {
 
 func (tc *txnOperator) Rollback(ctx context.Context) error {
 	v2.TxnRollbackCounter.Inc()
-
-	_, task := gotrace.NewTask(context.TODO(), "transaction.Rollback")
-	defer task.End()
 	txnMeta := tc.getTxnMeta(false)
 	util.LogTxnRollback(txnMeta)
 	if tc.workspace != nil && !tc.cannotCleanWorkspace {
@@ -875,13 +871,23 @@ func (tc *txnOperator) handleErrorResponse(resp txn.TxnResponse) error {
 
 		// commit failed, refresh invalid lock tables
 		if err != nil && moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged) {
-			tc.option.lockService.ForceRefreshLockTableBinds(resp.CommitResponse.InvalidLockTables...)
+			tc.option.lockService.ForceRefreshLockTableBinds(
+				resp.CommitResponse.InvalidLockTables,
+				func(bind lock.LockTable) bool {
+					for _, hold := range tc.mu.lockTables {
+						if hold.Table == bind.Table && !hold.Changed(bind) {
+							return true
+						}
+					}
+					return false
+				})
 		}
 
-		v, ok := moruntime.ProcessLevelRuntime().GetGlobalVariables(moruntime.EnableCheckInvalidRCErrors)
-		if ok && v.(bool) {
-			if moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict) ||
-				moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry) {
+		if moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict) ||
+			moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry) {
+			tc.triggerEventLocked(CommitFailedEvent, err)
+			v, ok := moruntime.ProcessLevelRuntime().GetGlobalVariables(moruntime.EnableCheckInvalidRCErrors)
+			if ok && v.(bool) {
 				util.GetLogger().Fatal("failed",
 					zap.Error(err),
 					zap.String("txn", hex.EncodeToString(tc.txnID)))
@@ -1035,7 +1041,7 @@ func (tc *txnOperator) needUnlockLocked() bool {
 func (tc *txnOperator) closeLocked() {
 	if !tc.mu.closed {
 		tc.mu.closed = true
-		tc.triggerEventLocked(ClosedEvent)
+		tc.triggerEventLocked(ClosedEvent, nil)
 	}
 }
 
