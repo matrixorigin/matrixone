@@ -178,9 +178,10 @@ select @@sql_mode;
 set @@sql_mode = default;
 
 --double type
-show variables like 'long_query_time';
-set global long_query_time = 1;
-show variables like 'long_query_time';
+set global long_query_time = 1.1;
+show global variables like 'long_query_time';
+set global long_query_time = default;
+show global variables like 'long_query_time';
 
 create account acc_idx ADMIN_NAME 'root' IDENTIFIED BY '123456';
 create database test_for_navicat;
