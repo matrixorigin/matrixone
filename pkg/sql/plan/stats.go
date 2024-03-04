@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
@@ -38,6 +39,47 @@ import (
 const BlockNumForceOneCN = 200
 const blockSelectivityThreshHold = 0.95
 const highNDVcolumnThreshHold = 0.95
+const statsCacheInitSize = 128
+const statsCacheMaxSize = 8192
+
+type StatsCache struct {
+	cache map[uint64]*pb.StatsInfo
+}
+
+func NewStatsCache() *StatsCache {
+	return &StatsCache{
+		cache: make(map[uint64]*pb.StatsInfo, statsCacheInitSize),
+	}
+}
+
+// GetStatsInfo returns the stats info and if the info in the cache needs to be updated.
+func (sc *StatsCache) GetStatsInfo(tableID uint64, create bool) *pb.StatsInfo {
+	if sc == nil {
+		return nil
+	}
+	if s, ok := sc.cache[tableID]; ok {
+		return s
+	}
+	if create {
+		if len(sc.cache) > statsCacheMaxSize {
+			sc.cache = make(map[uint64]*pb.StatsInfo, statsCacheInitSize)
+			logutil.Infof("statscache entries more than %v in long session, release memory and create new cachepool", statsCacheMaxSize)
+		}
+		s := NewStatsInfo()
+		sc.cache[tableID] = s
+		return s
+	} else {
+		return nil
+	}
+}
+
+// SetStatsInfo updates the stats info in the cache.
+func (sc *StatsCache) SetStatsInfo(tableID uint64, s *pb.StatsInfo) {
+	if sc == nil {
+		return
+	}
+	sc.cache[tableID] = s
+}
 
 func NewStatsInfo() *pb.StatsInfo {
 	return &pb.StatsInfo{
@@ -211,19 +253,19 @@ func (builder *QueryBuilder) getStatsInfoByTableID(tableID uint64) *pb.StatsInfo
 	if builder == nil {
 		return nil
 	}
-	obj, _ := builder.compCtx.ResolveById(tableID)
-	if obj == nil {
+	sc := builder.compCtx.GetStatsCache()
+	if sc == nil {
 		return nil
 	}
-	stats, err := builder.compCtx.Stats(obj)
-	if err != nil {
-		return nil
-	}
-	return stats
+	return sc.GetStatsInfo(tableID, false)
 }
 
 func (builder *QueryBuilder) getStatsInfoByCol(col *plan.ColRef) *pb.StatsInfo {
 	if builder == nil {
+		return nil
+	}
+	sc := builder.compCtx.GetStatsCache()
+	if sc == nil {
 		return nil
 	}
 	tableDef, ok := builder.tag2Table[col.RelPos]
@@ -234,7 +276,7 @@ func (builder *QueryBuilder) getStatsInfoByCol(col *plan.ColRef) *pb.StatsInfo {
 	if len(col.Name) == 0 {
 		col.Name = tableDef.Cols[col.ColPos].Name
 	}
-	return builder.getStatsInfoByTableID(tableDef.TblId)
+	return sc.GetStatsInfo(tableDef.TblId, false)
 }
 
 func (builder *QueryBuilder) getColNdv(col *plan.ColRef) float64 {
@@ -651,7 +693,7 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 			node.Stats.HashmapStats.HashmapSize = rightStats.Outcnt
 			node.Stats.Selectivity = selectivity_out
 
-		case plan.Node_SEMI:
+		case plan.Node_SEMI, plan.Node_INDEX:
 			node.Stats.Outcnt = leftStats.Outcnt * selectivity
 			node.Stats.Cost = leftStats.Cost + rightStats.Cost
 			node.Stats.HashmapStats.HashmapSize = rightStats.Outcnt

@@ -291,4 +291,5 @@ delete from t1 where a = 1;
 --no error
 select count(*) from t1;
 
+drop table if exists t1;
 drop database if exists fk_self_refer2;

@@ -35,10 +35,11 @@ import (
 var _ plan.CompilerContext = new(compilerContext)
 
 type compilerContext struct {
-	ctx       context.Context
-	defaultDB string
-	engine    engine.Engine
-	proc      *process.Process
+	ctx        context.Context
+	defaultDB  string
+	engine     engine.Engine
+	proc       *process.Process
+	statsCache *plan.StatsCache
 
 	buildAlterView       bool
 	dbOfView, nameOfView string
@@ -93,6 +94,13 @@ func (c *compilerContext) Stats(obj *plan.ObjectRef) (*pb.StatsInfo, error) {
 		return nil, err
 	}
 	return t.Stats(c.ctx, true), nil
+}
+
+func (c *compilerContext) GetStatsCache() *plan.StatsCache {
+	if c.statsCache == nil {
+		c.statsCache = plan.NewStatsCache()
+	}
+	return c.statsCache
 }
 
 func (c *compilerContext) GetSubscriptionMeta(dbName string) (*plan.SubscriptionMeta, error) {
@@ -204,7 +212,7 @@ func (c *compilerContext) Resolve(dbName string, tableName string) (*plan.Object
 }
 
 func (c *compilerContext) ResolveVariable(varName string, isSystemVar bool, isGlobalVar bool) (interface{}, error) {
-	return "", nil
+	return nil, nil
 }
 
 func (c *compilerContext) SetBuildingAlterView(yesOrNo bool, dbName, viewName string) {
