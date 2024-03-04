@@ -41,7 +41,7 @@ func makeColExprForTest(idx int32, typ types.T) *plan.Expr {
 	exprType := plan2.MakePlan2Type(&containerType)
 
 	return &plan.Expr{
-		Typ: exprType,
+		Typ: *exprType,
 		Expr: &plan.Expr_Col{
 			Col: &plan.ColRef{
 				RelPos: 0,
@@ -66,7 +66,7 @@ func makeFunctionExprForTest(name string, args []*plan.Expr) *plan.Expr {
 	retTyp := finfo.GetReturnType()
 
 	return &plan.Expr{
-		Typ: plan2.MakePlan2Type(&retTyp),
+		Typ: *plan2.MakePlan2Type(&retTyp),
 		Expr: &plan.Expr_F{
 			F: &plan.Function{
 				Func: &plan.ObjectRef{
@@ -87,7 +87,7 @@ func makeInExprForTest[T any](arg0 *plan.Expr, vals []T, oid types.T, mp *mpool.
 	data, _ := vec.MarshalBinary()
 	vec.Free(mp)
 	return &plan.Expr{
-		Typ: &plan.Type{
+		Typ: plan.Type{
 			Id:          int32(types.T_bool),
 			NotNullable: true,
 		},
@@ -100,7 +100,7 @@ func makeInExprForTest[T any](arg0 *plan.Expr, vals []T, oid types.T, mp *mpool.
 				Args: []*plan.Expr{
 					arg0,
 					{
-						Typ: &plan.Type{
+						Typ: plan.Type{
 							Id: int32(types.T_tuple),
 						},
 						Expr: &plan.Expr_Vec{
@@ -1035,7 +1035,7 @@ func TestGetPKExpr(t *testing.T) {
 						},
 					},
 				},
-				Typ: &plan.Type{
+				Typ: plan.Type{
 					Id: int32(types.T_tuple),
 				},
 			},
@@ -1048,7 +1048,7 @@ func TestGetPKExpr(t *testing.T) {
 						},
 					},
 				},
-				Typ: &plan.Type{
+				Typ: plan.Type{
 					Id: int32(types.T_tuple),
 				},
 			},
@@ -1063,7 +1063,7 @@ func TestGetPKExpr(t *testing.T) {
 						},
 					},
 				},
-				Typ: &plan.Type{
+				Typ: plan.Type{
 					Id: int32(types.T_tuple),
 				},
 			},
