@@ -44,7 +44,7 @@ func TestCatalog1(t *testing.T) {
 	schema := catalog.MockSchema(1, 0)
 	txn, _, rel := testutil.CreateRelationNoCommit(t, db, testutil.DefaultTestDB, schema, true)
 	// relMeta := rel.GetMeta().(*catalog.TableEntry)
-	obj, err := rel.CreateNonAppendableObject(false)
+	obj, err := rel.CreateNonAppendableObject(false, nil)
 	assert.Nil(t, err)
 	blk, err := obj.CreateNonAppendableBlock(new(objectio.CreateBlockOpt).WithBlkIdx(0))
 	assert.Nil(t, err)
@@ -175,7 +175,7 @@ func TestCheckpointCatalog2(t *testing.T) {
 		txn, _ := tae.StartTxn(nil)
 		db, _ := txn.GetDatabase("db")
 		rel, _ := db.GetRelationByName(schema.Name)
-		obj, err := rel.CreateNonAppendableObject(false)
+		obj, err := rel.CreateNonAppendableObject(false, nil)
 		assert.Nil(t, err)
 		var id *common.ID
 		for i := 0; i < 30; i++ {
