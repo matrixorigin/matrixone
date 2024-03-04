@@ -20,12 +20,12 @@ package mpool
 import (
 	// "runtime"
 	"runtime/debug"
-	"sync/atomic"
+	// "sync/atomic"
 	"time"
 	"unsafe"
 
 	// "github.com/matrixorigin/matrixone/pkg/logutil"
-	"go.uber.org/zap"
+	// "go.uber.org/zap"
 )
 
 const (
