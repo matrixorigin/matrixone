@@ -40,19 +40,19 @@ var _ aggexec.SingleAggFromFixedRetFixed[types.Decimal64, types.Decimal128] = ag
 
 type aggSum[from numeric, to maxScaleNumeric] struct{}
 
-func newAggSum[from numeric, to maxScaleNumeric]() aggSum[from, to] {
+func newAggSum[from numeric, to maxScaleNumeric]() aggexec.SingleAggFromFixedRetFixed[from, to] {
 	return aggSum[from, to]{}
 }
 
 type aggSumDecimal64 struct{}
 
-func newAggSumDecimal64() aggSumDecimal64 {
+func newAggSumDecimal64() aggexec.SingleAggFromFixedRetFixed[types.Decimal64, types.Decimal128] {
 	return aggSumDecimal64{}
 }
 
 type aggSumDecimal128 struct{}
 
-func newAggSumDecimal128() aggSumDecimal128 {
+func newAggSumDecimal128() aggexec.SingleAggFromFixedRetFixed[types.Decimal128, types.Decimal128] {
 	return aggSumDecimal128{}
 }
 
