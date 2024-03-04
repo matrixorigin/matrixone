@@ -21,6 +21,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -43,7 +45,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -145,6 +146,9 @@ type Transaction struct {
 	writes []Entry
 	// txn workspace size
 	workspaceSize uint64
+
+	// the last snapshot write offset
+	snapshotWriteOffset int
 
 	tnStores []DNStore
 	proc     *process.Process
@@ -311,13 +315,6 @@ func (txn *Transaction) IncrStatementID(ctx context.Context, commit bool) error 
 	txn.statementID++
 
 	return txn.handleRCSnapshot(ctx, commit)
-}
-
-// writeOffset returns the offset of the first write in the workspace
-func (txn *Transaction) WriteOffset() uint64 {
-	txn.Lock()
-	defer txn.Unlock()
-	return uint64(len(txn.writes))
 }
 
 // Adjust adjust writes order
@@ -530,8 +527,6 @@ type txnTable struct {
 
 	// timestamp of the last operation on this table
 	lastTS timestamp.Timestamp
-	//entries belong to this table,and come from txn.writes.
-	writes []Entry
 
 	// this should be the statement id
 	// but seems that we're not maintaining it at the moment
