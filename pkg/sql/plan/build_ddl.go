@@ -58,7 +58,7 @@ func genDynamicTableDef(ctx CompilerContext, stmt *tree.Select) (*plan.TableDef,
 		cols[idx] = &plan.ColDef{
 			Name: strings.ToLower(query.Headings[idx]),
 			Alg:  plan.CompressType_Lz4,
-			Typ:  expr.Typ,
+			Typ:  DeepCopyType(&expr.Typ),
 			Default: &plan.Default{
 				NullAbility:  !expr.Typ.NotNullable,
 				Expr:         nil,
@@ -120,7 +120,7 @@ func genViewTableDef(ctx CompilerContext, stmt *tree.Select) (*plan.TableDef, er
 		cols[idx] = &plan.ColDef{
 			Name: strings.ToLower(query.Headings[idx]),
 			Alg:  plan.CompressType_Lz4,
-			Typ:  expr.Typ,
+			Typ:  DeepCopyType(&expr.Typ),
 			Default: &plan.Default{
 				NullAbility:  !expr.Typ.NotNullable,
 				Expr:         nil,
@@ -207,7 +207,7 @@ func genAsSelectCols(ctx CompilerContext, stmt *tree.Select) ([]*ColDef, error) 
 		cols[idx] = &plan.ColDef{
 			Name: strings.ToLower(query.Headings[idx]),
 			Alg:  plan.CompressType_Lz4,
-			Typ:  expr.Typ,
+			Typ:  &expr.Typ,
 			Default: &plan.Default{
 				NullAbility:  !expr.Typ.NotNullable,
 				Expr:         nil,
@@ -1229,7 +1229,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 							Value:  &plan.Literal_U32Val{U32Val: catalog.System_Account},
 						},
 					},
-					Typ: &plan.Type{
+					Typ: plan.Type{
 						Id:          colType.Id,
 						NotNullable: true,
 					},
