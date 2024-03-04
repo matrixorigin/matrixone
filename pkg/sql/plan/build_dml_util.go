@@ -132,7 +132,9 @@ func buildInsertPlans(
 			// The insert statement subplan with a primary key has undergone manual column pruning in advance,
 			// so the partition expression needs to be remapped and judged whether partition pruning can be performed
 			newPartitionExpr = remapPartitionExpr(builder, tableDef, pkLocationMap.getPkOrderInValues(insertColsNameFromStmt))
-			pkFilterExpr = getPkValueExpr(builder, ctx, tableDef, pkLocationMap, insertColsNameFromStmt)
+			if pkFilterExpr, err = getPkValueExpr(builder, ctx, tableDef, pkLocationMap, insertColsNameFromStmt); err != nil {
+				return err
+			}
 		}
 	}
 
