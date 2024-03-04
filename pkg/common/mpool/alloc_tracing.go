@@ -12,19 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//go:build race
+// go:build race
 // +build race
 
 package mpool
 
 import (
-	"runtime"
+	// "runtime"
 	"runtime/debug"
 	"sync/atomic"
 	"time"
 	"unsafe"
 
-	"github.com/matrixorigin/matrixone/pkg/logutil"
+	// "github.com/matrixorigin/matrixone/pkg/logutil"
 	"go.uber.org/zap"
 )
 
@@ -54,18 +54,18 @@ func alloc(sz, requiredSpaceWithoutHeader int, mp *MPool) []byte {
 		mp.details.recordAlloc(int64(pHdr.allocSz))
 	}
 	b := pHdr.ToSlice(sz, requiredSpaceWithoutHeader)
-	stack := string(debug.Stack())
-	runtime.SetFinalizer(&b, func(ptr *[]byte) {
-		d := *ptr
-		hdr := unsafe.Add((unsafe.Pointer)(&d[0]), -kMemHdrSz)
-		pHdr := (*memHdr)(unsafe.Pointer(hdr))
-		if allocSz := atomic.LoadInt32(&pHdr.allocSz); allocSz >= 0 {
-			logutil.Error("memory leak detected",
-				zap.Any("ptr", pHdr),
-				zap.Int("size", int(allocSz)),
-				zap.String("stack", stack),
-			)
-		}
-	})
+	// stack := string(debug.Stack())
+	// runtime.SetFinalizer(&b, func(ptr *[]byte) {
+	// 	d := *ptr
+	// 	hdr := unsafe.Add((unsafe.Pointer)(&d[0]), -kMemHdrSz)
+	// 	pHdr := (*memHdr)(unsafe.Pointer(hdr))
+	// 	if allocSz := atomic.LoadInt32(&pHdr.allocSz); allocSz >= 0 {
+	// 		logutil.Error("memory leak detected",
+	// 			zap.Any("ptr", pHdr),
+	// 			zap.Int("size", int(allocSz)),
+	// 			zap.String("stack", stack),
+	// 		)
+	// 	}
+	// })
 	return b
 }
