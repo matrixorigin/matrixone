@@ -132,9 +132,6 @@ func (b *TxnLogtailRespBuilder) visitObject(iobj any) {
 func (b *TxnLogtailRespBuilder) visitDeltaloc(ideltalocChain any) {
 	deltalocChain := ideltalocChain.(*updates.DeltalocChain)
 	node := deltalocChain.GetLatestNodeLocked()
-	if node.BaseNode.MetaLoc.IsEmpty() {
-		return
-	}
 	if node.BaseNode.DeltaLoc.IsEmpty() {
 		return
 	}
