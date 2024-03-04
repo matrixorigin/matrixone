@@ -17,7 +17,6 @@ package frontend
 import (
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"reflect"
 	"strings"
@@ -10781,48 +10780,6 @@ func TestCheckSnapshotExistOrNot(t *testing.T) {
 		rst, err := checkSnapShotExistOrNot(ctx, bh, "snapshot_test")
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(rst, convey.ShouldBeFalse)
-	})
-}
-
-func TestCheckSnapShotExistOrNot(t *testing.T) {
-	convey.Convey("checkSnapShotExistOrNot", t, func() {
-		ctrl := gomock.NewController(t)
-		defer ctrl.Finish()
-
-		bh := mock_frontend.NewMockBackgroundExec(ctrl)
-		bh.EXPECT().ClearExecResultSet().Return().AnyTimes()
-		bh.EXPECT().GetExecResultSet().Return(nil).AnyTimes()
-
-		ctx := context.TODO()
-		snapshotName := "snapshot1"
-
-		convey.Convey("when getSqlForCheckSnapshot returns an error", func() {
-			bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(errors.New("mock error")).Times(1)
-			exists, err := checkSnapShotExistOrNot(ctx, bh, snapshotName)
-			convey.So(exists, convey.ShouldBeFalse)
-			convey.So(err, convey.ShouldNotBeNil)
-		})
-
-		convey.Convey("when Exec returns an error", func() {
-			bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(errors.New("mock error")).Times(1)
-			exists, err := checkSnapShotExistOrNot(ctx, bh, snapshotName)
-			convey.So(exists, convey.ShouldBeFalse)
-			convey.So(err, convey.ShouldNotBeNil)
-		})
-
-		convey.Convey("when execResultArrayHasData returns true", func() {
-			bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).Times(1)
-			exists, err := checkSnapShotExistOrNot(ctx, bh, snapshotName)
-			convey.So(exists, convey.ShouldBeFalse)
-			convey.So(err, convey.ShouldBeNil)
-		})
-
-		convey.Convey("when execResultArrayHasData returns false", func() {
-			bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).Times(1)
-			exists, err := checkSnapShotExistOrNot(ctx, bh, snapshotName)
-			convey.So(exists, convey.ShouldBeFalse)
-			convey.So(err, convey.ShouldBeNil)
-		})
 	})
 }
 
