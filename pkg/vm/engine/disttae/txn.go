@@ -857,51 +857,19 @@ func (txn *Transaction) hasUncommittedDeletesOnBlock(id *types.Blockid) bool {
 	return txn.deletedBlocks.hasDeletes(id)
 }
 
-func (txn *Transaction) getUncommitedDataObjectsByTable(
-	databaseId uint64, tableId uint64) (statsList []objectio.ObjectStats, err error) {
+func (txn *Transaction) forEachTableWrites(databaseId uint64, tableId uint64, offset int, f func(Entry)) {
 	txn.Lock()
 	defer txn.Unlock()
-	var stats objectio.ObjectStats
-	for _, entry := range txn.writes {
-		if entry.databaseId != databaseId ||
-			entry.tableId != tableId {
+	for i := 0; i < offset; i++ {
+		e := txn.writes[i]
+		if e.databaseId != databaseId {
 			continue
 		}
-		if entry.bat == nil || entry.bat.IsEmpty() {
+		if e.tableId != tableId {
 			continue
 		}
-
-		if entry.typ == INSERT_TXN {
-			continue
-		}
-
-		if entry.typ != INSERT ||
-			len(entry.bat.Attrs) < 2 ||
-			entry.bat.Attrs[1] != catalog.ObjectMeta_ObjectStats {
-			continue
-		}
-		for i := 0; i < entry.bat.Vecs[1].Length(); i++ {
-			stats.UnMarshal(entry.bat.Vecs[1].GetBytesAt(i))
-			statsList = append(statsList, stats)
-		}
+		f(e)
 	}
-	return statsList, nil
-
-}
-
-func (txn *Transaction) getTableWrites(databaseId uint64, tableId uint64, writes []Entry) []Entry {
-	txn.Lock()
-	defer txn.Unlock()
-	for _, entry := range txn.writes {
-		if entry.databaseId != databaseId {
-			continue
-		}
-		if entry.tableId != tableId {
-			continue
-		}
-		writes = append(writes, entry)
-	}
-	return writes
 }
 
 // getCachedTable returns the cached table in this transaction if it exists, nil otherwise.
@@ -1025,11 +993,14 @@ func (txn *Transaction) clearTableCache() {
 	})
 }
 
-func (txn *Transaction) getWriteOffset() int {
-	if txn.statementID > 0 {
-		txn.Lock()
-		defer txn.Unlock()
-		return txn.statements[txn.statementID-1]
-	}
-	return 0
+func (txn *Transaction) GetSnapshotWriteOffset() int {
+	txn.Lock()
+	defer txn.Unlock()
+	return txn.snapshotWriteOffset
+}
+
+func (txn *Transaction) UpdateSnapshotWriteOffset() {
+	txn.Lock()
+	defer txn.Unlock()
+	txn.snapshotWriteOffset = len(txn.writes)
 }

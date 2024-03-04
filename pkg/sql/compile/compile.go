@@ -123,6 +123,9 @@ func NewCompile(
 	c.cnLabel = cnLabel
 	c.startAt = startAt
 	c.disableRetry = false
+	if c.proc.TxnOperator != nil {
+		c.proc.TxnOperator.GetWorkspace().UpdateSnapshotWriteOffset()
+	}
 	return c
 }
 
@@ -419,7 +422,7 @@ func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
 	}
 
 	if c.proc.TxnOperator != nil {
-		writeOffset = c.proc.TxnOperator.GetWorkspace().WriteOffset()
+		writeOffset = uint64(c.proc.TxnOperator.GetWorkspace().GetSnapshotWriteOffset())
 	}
 	result = &util2.RunResult{}
 	var span trace.Span
@@ -2271,12 +2274,12 @@ func (c *Compile) compileShuffleJoin(ctx context.Context, node, left, right *pla
 
 	rightTyps := make([]types.Type, len(right.ProjectList))
 	for i, expr := range right.ProjectList {
-		rightTyps[i] = dupType(expr.Typ)
+		rightTyps[i] = dupType(&expr.Typ)
 	}
 
 	leftTyps := make([]types.Type, len(left.ProjectList))
 	for i, expr := range left.ProjectList {
-		leftTyps[i] = dupType(expr.Typ)
+		leftTyps[i] = dupType(&expr.Typ)
 	}
 
 	parent, children := c.newShuffleJoinScopeList(lefts, rights, node)
@@ -2377,12 +2380,12 @@ func (c *Compile) compileBroadcastJoin(ctx context.Context, node, left, right *p
 
 	rightTyps := make([]types.Type, len(right.ProjectList))
 	for i, expr := range right.ProjectList {
-		rightTyps[i] = dupType(expr.Typ)
+		rightTyps[i] = dupType(&expr.Typ)
 	}
 
 	leftTyps := make([]types.Type, len(left.ProjectList))
 	for i, expr := range left.ProjectList {
-		leftTyps[i] = dupType(expr.Typ)
+		leftTyps[i] = dupType(&expr.Typ)
 	}
 
 	switch node.JoinType {
