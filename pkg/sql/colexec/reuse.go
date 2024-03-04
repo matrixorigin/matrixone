@@ -70,7 +70,7 @@ func init() {
 
 }
 
-func (e FixedVectorExpressionExecutor) TypeName() string {
+func (expr FixedVectorExpressionExecutor) TypeName() string {
 	return "FixedVectorExpressionExecutor"
 }
 
@@ -84,7 +84,7 @@ func NewFixedVectorExpressionExecutor(m *mpool.MPool, fixed bool, resultVector *
 	return fe
 }
 
-func (e ColumnExpressionExecutor) TypeName() string {
+func (expr ColumnExpressionExecutor) TypeName() string {
 	return "ColumnExpressionExecutor"
 }
 
@@ -93,7 +93,7 @@ func NewColumnExpressionExecutor() *ColumnExpressionExecutor {
 	return ce
 }
 
-func (e ParamExpressionExecutor) TypeName() string {
+func (expr ParamExpressionExecutor) TypeName() string {
 	return "ParamExpressionExecutor"
 }
 
@@ -107,7 +107,7 @@ func NewParamExpressionExecutor(mp *mpool.MPool, pos int, typ types.Type) *Param
 	return pe
 }
 
-func (e VarExpressionExecutor) TypeName() string {
+func (expr VarExpressionExecutor) TypeName() string {
 	return "VarExpressionExecutor"
 }
 
@@ -116,7 +116,7 @@ func NewVarExpressionExecutor() *VarExpressionExecutor {
 	return ve
 }
 
-func (e FunctionExpressionExecutor) TypeName() string {
+func (expr FunctionExpressionExecutor) TypeName() string {
 	return "FunctionExpressionExecutor"
 }
 
