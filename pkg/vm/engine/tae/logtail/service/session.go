@@ -71,7 +71,7 @@ func (sm *SessionManager) GetSession(
 	notifier SessionErrorNotifier,
 	stream morpcStream,
 	sendTimeout time.Duration,
-	poisionTime time.Duration,
+	poisonTime time.Duration,
 	heartbeatInterval time.Duration,
 ) *Session {
 	sm.Lock()
@@ -80,7 +80,7 @@ func (sm *SessionManager) GetSession(
 	if _, ok := sm.clients[stream]; !ok {
 		sm.clients[stream] = NewSession(
 			rootCtx, logger, responses, notifier, stream,
-			sendTimeout, poisionTime, heartbeatInterval,
+			sendTimeout, poisonTime, heartbeatInterval,
 		)
 	}
 	return sm.clients[stream]
@@ -230,9 +230,9 @@ type Session struct {
 	responses   LogtailResponsePool
 	notifier    SessionErrorNotifier
 
-	stream      morpcStream
-	poisionTime time.Duration
-	sendChan    chan message
+	stream     morpcStream
+	poisonTime time.Duration
+	sendChan   chan message
 
 	active int32
 
@@ -264,7 +264,7 @@ func NewSession(
 	notifier SessionErrorNotifier,
 	stream morpcStream,
 	sendTimeout time.Duration,
-	poisionTime time.Duration,
+	poisonTime time.Duration,
 	heartbeatInterval time.Duration,
 ) *Session {
 	ctx, cancel := context.WithCancel(rootCtx)
@@ -276,7 +276,7 @@ func NewSession(
 		responses:         responses,
 		notifier:          notifier,
 		stream:            stream,
-		poisionTime:       poisionTime,
+		poisonTime:        poisonTime,
 		sendChan:          make(chan message, responseBufferSize), // buffer response for morpc client session
 		tables:            make(map[TableID]TableState),
 		heartbeatInterval: heartbeatInterval,
@@ -299,6 +299,11 @@ func NewSession(
 
 			case <-timer.C:
 				ss.logger.Info("send logtail channel blocked", zap.Int64("sendRound", cnt))
+				if ss.TableCount() == 0 {
+					ss.logger.Error("no tables are subscribed yet, close this session")
+					ss.notifier.NotifySessionError(ss, moerr.NewInternalError(ctx, "no tables are subscribed"))
+					return
+				}
 				timer.Reset(10 * time.Second)
 
 			case msg, ok := <-ss.sendChan:
@@ -569,8 +574,8 @@ func (ss *Session) SendResponse(
 	}
 
 	select {
-	case <-time.After(ss.poisionTime):
-		ss.logger.Error("poision morpc client session detected, close it",
+	case <-time.After(ss.poisonTime):
+		ss.logger.Error("poison morpc client session detected, close it",
 			zap.Int("buffer-capacity", cap(ss.sendChan)),
 			zap.Int("buffer-length", len(ss.sendChan)),
 		)
@@ -591,7 +596,17 @@ func (ss *Session) Active() int {
 func (ss *Session) Tables() map[TableID]TableState {
 	ss.mu.Lock()
 	defer ss.mu.Unlock()
-	return ss.tables
+	tables := make(map[TableID]TableState, len(ss.tables))
+	for k, v := range ss.tables {
+		tables[k] = v
+	}
+	return tables
+}
+
+func (ss *Session) TableCount() int {
+	ss.mu.Lock()
+	defer ss.mu.Unlock()
+	return len(ss.tables)
 }
 
 func (ss *Session) OnBeforeSend(t time.Time) {
