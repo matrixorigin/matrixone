@@ -61,7 +61,7 @@ func (tbl *txnTable) getEngine() engine.Engine {
 func (tbl *txnTable) Stats(ctx context.Context, sync bool) *pb.StatsInfo {
 	_, err := tbl.getPartitionState(ctx)
 	if err != nil {
-		logutil.Errorf("failed to get stats info of table %d", tbl.tableId)
+		logutil.Errorf("failed to get partition state of table %d: %v", tbl.tableId, err)
 		return nil
 	}
 	e := tbl.getEngine()
@@ -639,11 +639,24 @@ func (tbl *txnTable) rangesOnePart(
 	}
 
 	var uncommittedObjects []objectio.ObjectStats
-	if uncommittedObjects, err = tbl.db.txn.getUncommitedDataObjectsByTable(
-		tbl.db.databaseId, tbl.tableId,
-	); err != nil {
-		return err
-	}
+	tbl.db.txn.forEachTableWrites(tbl.db.databaseId, tbl.tableId, tbl.db.txn.GetSnapshotWriteOffset(), func(entry Entry) {
+		stats := objectio.ObjectStats{}
+		if entry.bat == nil || entry.bat.IsEmpty() {
+			return
+		}
+		if entry.typ == INSERT_TXN {
+			return
+		}
+		if entry.typ != INSERT ||
+			len(entry.bat.Attrs) < 2 ||
+			entry.bat.Attrs[1] != catalog.ObjectMeta_ObjectStats {
+			return
+		}
+		for i := 0; i < entry.bat.Vecs[1].Length(); i++ {
+			stats.UnMarshal(entry.bat.Vecs[1].GetBytesAt(i))
+			uncommittedObjects = append(uncommittedObjects, stats)
+		}
+	})
 
 	if done, err := tbl.tryFastRanges(
 		exprs, state, uncommittedObjects, blocks, tbl.db.txn.engine.fs,
