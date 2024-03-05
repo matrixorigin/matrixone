@@ -1,0 +1,97 @@
+drop database if exists fk_foreign_key_checks;
+create database fk_foreign_key_checks;
+use fk_foreign_key_checks;
+SET FOREIGN_KEY_CHECKS=0;
+drop table if exists t1;
+create table t1( b int, constraint `c1` foreign key `fk1` (b) references t2(a));
+drop table if exists t2;
+create table t2(a int primary key,b int);
+insert into t2 values (1,1),(2,2),(3,3);
+insert into t1 values (1),(2),(3);
+SET FOREIGN_KEY_CHECKS=1;
+delete from t2 where a = 1;
+internal error: Cannot delete or update a parent row: a foreign key constraint fails
+insert into t1 values (4);
+internal error: Cannot add or update a child row: a foreign key constraint fails
+insert into t2 values (4,4),(5,5);
+insert into t1 values (4);
+delete from t2 where a = 4;
+internal error: Cannot delete or update a parent row: a foreign key constraint fails
+delete from t2 where a = 5;
+drop table if exists t3;
+create table t3( b int, constraint `c1` foreign key `fk1` (b) references t2(a));
+insert into t3 values (1),(2),(3),(4);
+insert into t3 values (5);
+internal error: Cannot add or update a child row: a foreign key constraint fails
+delete from t2 where a = 3;
+internal error: Cannot delete or update a parent row: a foreign key constraint fails
+drop table t2;
+internal error: can not drop table 't2' referenced by some foreign key constraint
+SET FOREIGN_KEY_CHECKS=0;
+insert into t1 values (5);
+insert into t3 values (5);
+delete from t2 where a = 3;
+drop table t2;
+insert into t1 values (6);
+insert into t3 values (6);
+SET FOREIGN_KEY_CHECKS=1;
+insert into t1 values (7);
+insert into t3 values (7);
+create table t2(a int primary key,b int);
+insert into t1 values (8);
+internal error: Cannot add or update a child row: a foreign key constraint fails
+insert into t3 values (8);
+internal error: Cannot add or update a child row: a foreign key constraint fails
+insert into t2 values (1,1),(2,2),(3,3),(4,4),(5,5),(6,6),(7,7),(8,8);
+insert into t1 values (8);
+insert into t3 values (8);
+insert into t1 values (9);
+internal error: Cannot add or update a child row: a foreign key constraint fails
+insert into t3 values (9);
+internal error: Cannot add or update a child row: a foreign key constraint fails
+delete from t2 where a = 3;
+internal error: Cannot delete or update a parent row: a foreign key constraint fails
+delete from t1 where b = 3;
+delete from t3 where b = 3;
+delete from t2 where a = 3;
+drop table t2;
+internal error: can not drop table 't2' referenced by some foreign key constraint
+drop table t1;
+drop table t2;
+internal error: can not drop table 't2' referenced by some foreign key constraint
+insert into t3 values (9);
+internal error: Cannot add or update a child row: a foreign key constraint fails
+insert into t3 values (3);
+internal error: Cannot add or update a child row: a foreign key constraint fails
+insert into t2 values (3,3);
+insert into t3 values (9);
+internal error: Cannot add or update a child row: a foreign key constraint fails
+insert into t3 values (3);
+drop table t2;
+internal error: can not drop table 't2' referenced by some foreign key constraint
+SET FOREIGN_KEY_CHECKS=0;
+drop table t2;
+insert into t3 values (9);
+SET FOREIGN_KEY_CHECKS=1;
+create table t2(a int primary key,b int);
+insert into t3 values (10);
+internal error: Cannot add or update a child row: a foreign key constraint fails
+insert into t2 values (1,1),(2,2),(3,3),(4,4),(5,5),(6,6),(7,7),(8,8),(9,9);
+insert into t2 values (10,10);
+insert into t3 values (10);
+delete from t2 where a = 10;
+internal error: Cannot delete or update a parent row: a foreign key constraint fails
+drop table t2;
+internal error: can not drop table 't2' referenced by some foreign key constraint
+drop table t3;
+delete from t2 where a = 10;
+drop table t2;
+SET FOREIGN_KEY_CHECKS=0;
+create table t2(a int primary key,b int);
+SET FOREIGN_KEY_CHECKS=1;
+insert into t2 values (1,1),(2,2);
+delete from t2 where a = 2;
+drop table if exists t1;
+drop table if exists t3;
+drop table if exists t2;
+drop database if exists fk_foreign_key_checks;

@@ -25,7 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 )
 
-type mergeBlocksCmd struct {
+type mergeObjectsCmd struct {
 	txnbase.BaseCmd
 	tid         uint64
 	droppedObjs []*common.ID
@@ -40,8 +40,8 @@ func newMergeBlocksCmd(
 	tid uint64,
 	droppedObjs, createdObjs, droppedBlks, createdBlks []*common.ID,
 	txn txnif.AsyncTxn,
-	id uint32) *mergeBlocksCmd {
-	return &mergeBlocksCmd{
+	id uint32) *mergeObjectsCmd {
+	return &mergeObjectsCmd{
 		tid:         tid,
 		droppedObjs: droppedObjs,
 		createdObjs: createdObjs,
@@ -52,9 +52,9 @@ func newMergeBlocksCmd(
 	}
 }
 
-func (cmd *mergeBlocksCmd) GetType() uint16 { return IOET_WALTxnCommand_Merge }
+func (cmd *mergeObjectsCmd) GetType() uint16 { return IOET_WALTxnCommand_Merge }
 
-func (cmd *mergeBlocksCmd) WriteTo(w io.Writer) (n int64, err error) {
+func (cmd *mergeObjectsCmd) WriteTo(w io.Writer) (n int64, err error) {
 	typ := IOET_WALTxnCommand_Merge
 	if _, err = w.Write(types.EncodeUint16(&typ)); err != nil {
 		return
@@ -67,10 +67,10 @@ func (cmd *mergeBlocksCmd) WriteTo(w io.Writer) (n int64, err error) {
 	n = 2
 	return
 }
-func (cmd *mergeBlocksCmd) ReadFrom(r io.Reader) (n int64, err error) {
+func (cmd *mergeObjectsCmd) ReadFrom(r io.Reader) (n int64, err error) {
 	return
 }
-func (cmd *mergeBlocksCmd) MarshalBinary() (buf []byte, err error) {
+func (cmd *mergeObjectsCmd) MarshalBinary() (buf []byte, err error) {
 	var bbuf bytes.Buffer
 	if _, err = cmd.WriteTo(&bbuf); err != nil {
 		return
@@ -78,13 +78,13 @@ func (cmd *mergeBlocksCmd) MarshalBinary() (buf []byte, err error) {
 	buf = bbuf.Bytes()
 	return
 }
-func (cmd *mergeBlocksCmd) UnmarshalBinary(buf []byte) (err error) {
+func (cmd *mergeObjectsCmd) UnmarshalBinary(buf []byte) (err error) {
 	bbuf := bytes.NewBuffer(buf)
 	_, err = cmd.ReadFrom(bbuf)
 	return
 }
 
-func (cmd *mergeBlocksCmd) Desc() string {
+func (cmd *mergeObjectsCmd) Desc() string {
 	s := "CmdName=MERGE;From=["
 	for _, blk := range cmd.droppedBlks {
 		s = fmt.Sprintf("%s %d", s, blk.BlockID)
@@ -97,7 +97,7 @@ func (cmd *mergeBlocksCmd) Desc() string {
 	return s
 }
 
-func (cmd *mergeBlocksCmd) String() string {
+func (cmd *mergeObjectsCmd) String() string {
 	s := "CmdName=MERGE;From=["
 	for _, blk := range cmd.droppedBlks {
 		s = fmt.Sprintf("%s %d", s, blk.BlockID)
@@ -109,7 +109,7 @@ func (cmd *mergeBlocksCmd) String() string {
 	s = fmt.Sprintf("%s ]", s)
 	return s
 }
-func (cmd *mergeBlocksCmd) VerboseString() string {
+func (cmd *mergeObjectsCmd) VerboseString() string {
 	s := "CmdName=MERGE;From=["
 	for _, blk := range cmd.droppedBlks {
 		s = fmt.Sprintf("%s %s", s, blk.BlockString())
@@ -121,6 +121,6 @@ func (cmd *mergeBlocksCmd) VerboseString() string {
 	s = fmt.Sprintf("%s ]", s)
 	return s
 }
-func (cmd *mergeBlocksCmd) ApplyCommit()                  {}
-func (cmd *mergeBlocksCmd) ApplyRollback()                {}
-func (cmd *mergeBlocksCmd) SetReplayTxn(_ txnif.AsyncTxn) {}
+func (cmd *mergeObjectsCmd) ApplyCommit()                  {}
+func (cmd *mergeObjectsCmd) ApplyRollback()                {}
+func (cmd *mergeObjectsCmd) SetReplayTxn(_ txnif.AsyncTxn) {}
