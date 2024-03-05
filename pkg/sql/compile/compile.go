@@ -2155,7 +2155,12 @@ func (c *Compile) compileRestrict(n *plan.Node, ss []*Scope) []*Scope {
 		return ss
 	}
 	currentFirstFlag := c.anal.isFirst
-	filterExpr := colexec.RewriteFilterExprList(n.FilterList)
+	// for dynamic parameter, substitute param ref and const fold cast expression here to improve performance
+	newFilters, err := plan2.ConstandFoldList(n.FilterList, c.proc, true)
+	if err != nil {
+		newFilters = n.FilterList
+	}
+	filterExpr := colexec.RewriteFilterExprList(newFilters)
 	for i := range ss {
 		ss[i].appendInstruction(vm.Instruction{
 			Op:      vm.Restrict,
@@ -2411,6 +2416,17 @@ func (c *Compile) compileBroadcastJoin(ctx context.Context, node, left, right *p
 				}
 			}
 		}
+
+	case plan.Node_INDEX:
+		rs = c.newBroadcastJoinScopeList(ss, children, node)
+		for i := range rs {
+			rs[i].appendInstruction(vm.Instruction{
+				Op:  vm.IndexJoin,
+				Idx: c.anal.curr,
+				Arg: constructIndexJoin(node, rightTyps, c.proc),
+			})
+		}
+
 	case plan.Node_SEMI:
 		if isEq {
 			if node.BuildOnLeft {
@@ -3395,12 +3411,7 @@ func (c *Compile) newJoinBuildScope(s *Scope, ss []*Scope) *Scope {
 		regTransplant(s, rs, i+s.BuildIdx, i)
 	}
 
-	rs.appendInstruction(vm.Instruction{
-		Op:      vm.HashBuild,
-		Idx:     s.Instructions[0].Idx,
-		IsFirst: true,
-		Arg:     constructHashBuild(c, s.Instructions[0], c.proc, s.ShuffleCnt, ss != nil),
-	})
+	rs.appendInstruction(constructJoinBuildInstruction(c, s.Instructions[0], c.proc, s.ShuffleCnt, ss != nil))
 
 	if ss == nil { // unparallel, send the hashtable to join scope directly
 		s.Proc.Reg.MergeReceivers[s.BuildIdx] = &process.WaitRegister{

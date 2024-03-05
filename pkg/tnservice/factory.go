@@ -145,6 +145,7 @@ func (s *store) newTAEStorage(ctx context.Context, shard metadata.TNShard, facto
 	logtailServerCfg := &options.LogtailServerCfg{
 		RpcMaxMessageSize:      int64(s.cfg.LogtailServer.RpcMaxMessageSize),
 		RpcEnableChecksum:      s.cfg.LogtailServer.RpcEnableChecksum,
+		RPCStreamPoisonTime:    s.cfg.LogtailServer.LogtailRPCStreamPoisonTime.Duration,
 		LogtailCollectInterval: s.cfg.LogtailServer.LogtailCollectInterval.Duration,
 		ResponseSendTimeout:    s.cfg.LogtailServer.LogtailResponseSendTimeout.Duration,
 	}
