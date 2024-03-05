@@ -517,4 +517,7 @@ func init() {
 	if table.RegisterTableDefine(SingleMetricTable) != nil {
 		panic(moerr.NewInternalError(context.Background(), "metric table already registered"))
 	}
+	if table.RegisterTableDefine(SqlStatementCUTable) != nil {
+		panic(moerr.NewInternalError(context.Background(), "metric table 'sql_statement_cu' already registered"))
+	}
 }
