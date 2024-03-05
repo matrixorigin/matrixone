@@ -17,12 +17,13 @@ package plan
 import (
 	"context"
 	"fmt"
+	"strings"
+	"sync"
+
 	"github.com/google/uuid"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
-	"strings"
-	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -116,7 +117,7 @@ type deleteNodeInfo struct {
 // buildInsertPlans  build insert plan.
 func buildInsertPlans(
 	ctx CompilerContext, builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Insert,
-	objRef *ObjectRef, tableDef *TableDef, lastNodeId int32, ifExistAutoPkCol bool,  insertWithoutUniqueKeyMap map[string]bool) error {
+	objRef *ObjectRef, tableDef *TableDef, lastNodeId int32, ifExistAutoPkCol bool, insertWithoutUniqueKeyMap map[string]bool) error {
 
 	var err error
 	var insertColsNameFromStmt []string
@@ -130,7 +131,7 @@ func buildInsertPlans(
 
 		// try to build pk filter epxr for origin table
 		if canUsePkFilter(builder, ctx, stmt, tableDef, insertColsNameFromStmt, nil) {
-			pkLocationMap := NewPkLocationMap(tableDef, nil)
+			pkLocationMap := newLocationMap(tableDef, nil)
 			// The insert statement subplan with a primary key has undergone manual column pruning in advance,
 			// so the partition expression needs to be remapped and judged whether partition pruning can be performed
 			newPartitionExpr = remapPartitionExpr(builder, tableDef, pkLocationMap.getPkOrderInValues(insertColsNameFromStmt))
@@ -1309,7 +1310,7 @@ func buildInsertPlansWithRelatedHiddenTable(
 
 					// try to build pk filter epxr for hidden table created by unique key
 					if canUsePkFilter(builder, ctx, stmt, tableDef, insertColsNameFromStmt, indexdef) {
-						uniqueColLocationMap := NewPkLocationMap(tableDef, indexdef)
+						uniqueColLocationMap := newLocationMap(tableDef, indexdef)
 						pkFilterExprForHiddenTable, err = getPkValueExpr(builder, ctx, tableDef, uniqueColLocationMap, insertColsNameFromStmt)
 						if err != nil {
 							return err
