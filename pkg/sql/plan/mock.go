@@ -863,6 +863,10 @@ func (m *MockCompilerContext) Stats(obj *ObjectRef) (*pb.StatsInfo, error) {
 	return nil, nil
 }
 
+func (m *MockCompilerContext) GetStatsCache() *StatsCache {
+	return nil
+}
+
 func (m *MockCompilerContext) GetAccountId() (uint32, error) {
 	return 0, nil
 }
