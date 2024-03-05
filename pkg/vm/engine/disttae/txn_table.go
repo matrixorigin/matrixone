@@ -565,23 +565,17 @@ func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr) (ranges eng
 	var blocks objectio.BlockInfoSlice
 	blocks.AppendBlockInfo(objectio.EmptyBlockInfo)
 
-	// for dynamic parameter, sustitute param ref and const fold cast expression here to improve performance
-	// temporary solution, will fix it in the future
-	newExprs := make([]*plan.Expr, len(exprs))
-	for i := range exprs {
-		newExprs[i] = plan2.DeepCopyExpr(exprs[i])
-		// newExprs[i] = plan2.SubstitueParam(newExprs[i], tbl.proc)
-		foldedExpr, _ := plan2.ConstantFold(batch.EmptyForConstFoldBatch, newExprs[i], tbl.proc.Load(), true)
-		if foldedExpr != nil {
-			newExprs[i] = foldedExpr
-		}
+	// for dynamic parameter, substitute param ref and const fold cast expression here to improve performance
+	newExprs, err := plan2.ConstandFoldList(exprs, tbl.proc.Load(), true)
+	if err == nil {
+		exprs = newExprs
 	}
 
 	if err = tbl.rangesOnePart(
 		ctx,
 		part,
 		tbl.GetTableDef(ctx),
-		newExprs,
+		exprs,
 		&blocks,
 		tbl.proc.Load(),
 	); err != nil {
@@ -862,6 +856,19 @@ func (tbl *txnTable) tryFastRanges(
 	blocks *objectio.BlockInfoSlice,
 	fs fileservice.FileService,
 ) (done bool, err error) {
+	// TODO: refactor this code if composite key can be pushdown
+	if tbl.tableDef.Pkey == nil || tbl.tableDef.Pkey.CompPkeyCol == nil {
+		return TryFastFilterBlocks(
+			tbl.db.txn.op.SnapshotTS(),
+			tbl.tableDef,
+			exprs,
+			snapshot,
+			uncommittedObjects,
+			blocks,
+			fs,
+			tbl.proc.Load(),
+		)
+	}
 	if tbl.primaryIdx == -1 || len(exprs) == 0 {
 		done = false
 		return
@@ -875,8 +882,17 @@ func (tbl *txnTable) tryFastRanges(
 		tbl.db.txn.engine.packerPool,
 	)
 	if len(val) == 0 {
-		done = false
-		return
+		// TODO: refactor this code if composite key can be pushdown
+		return TryFastFilterBlocks(
+			tbl.db.txn.op.SnapshotTS(),
+			tbl.tableDef,
+			exprs,
+			snapshot,
+			uncommittedObjects,
+			blocks,
+			fs,
+			tbl.proc.Load(),
+		)
 	}
 
 	var (
@@ -1586,7 +1602,7 @@ func (tbl *txnTable) EnhanceDelete(bat *batch.Batch, name string) error {
 }
 
 // TODO:: do prefetch read and parallel compaction
-func (tbl *txnTable) mergeCompaction(
+func (tbl *txnTable) compaction(
 	compactedBlks map[objectio.ObjectLocation][]int64) ([]objectio.BlockInfo, []objectio.ObjectStats, error) {
 	s3writer := &colexec.S3Writer{}
 	s3writer.SetTableName(tbl.tableName)
