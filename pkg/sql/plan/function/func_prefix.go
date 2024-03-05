@@ -32,7 +32,7 @@ func PrefixEq(parameters []*vector.Vector, result vector.FunctionResultWrapper, 
 
 	if lvec.GetSorted() {
 		lowerBound := sort.Search(len(lcol), func(i int) bool {
-			return bytes.Compare(rval, lcol[i].GetByteSlice(larea)) <= 0
+			return bytes.Compare(lcol[i].GetByteSlice(larea), rval) >= 0
 		})
 
 		upperBound := lowerBound
@@ -87,7 +87,7 @@ func PrefixBetween(parameters []*vector.Vector, result vector.FunctionResultWrap
 	} else {
 		for i := 0; i < length; i++ {
 			val := icol[i].GetByteSlice(iarea)
-			res[i] = index.PrefixCompare(val, lval) >= 0 && index.PrefixCompare(val, rval) <= 0
+			res[i] = bytes.Compare(val, lval) >= 0 && index.PrefixCompare(val, rval) <= 0
 		}
 	}
 
@@ -126,8 +126,8 @@ func PrefixIn(parameters []*vector.Vector, result vector.FunctionResultWrapper, 
 	} else {
 		for i := 0; i < length; i++ {
 			lval := lcol[i].GetByteSlice(larea)
-			rpos, _ := sort.Find(len(rcol), func(j int) int {
-				return bytes.Compare(rcol[j].GetByteSlice(rarea), lval)
+			rpos := sort.Search(len(rcol), func(j int) bool {
+				return index.PrefixCompare(lval, rcol[j].GetByteSlice(rarea)) <= 0
 			})
 
 			res[i] = rpos < len(rcol) && bytes.HasPrefix(lval, rcol[rpos].GetByteSlice(rarea))
