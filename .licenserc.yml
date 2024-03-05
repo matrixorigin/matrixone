@@ -12,6 +12,7 @@ header:
   paths-ignore:
     - 'docs/'
     - 'test/'
+    - 'musl/'
     - 'optools/'
     - 'cgo/external/'
     - 'pkg/frontend/test/'
