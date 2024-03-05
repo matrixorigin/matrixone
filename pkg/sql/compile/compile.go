@@ -430,7 +430,7 @@ func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
 			}
 		}
 
-		// c.release()
+		putCompile(c)
 		releaseRunC()
 
 		task.End()
