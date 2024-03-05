@@ -19,7 +19,79 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
+/*
+	methods to register the aggregation function.
+	after registered, the function `MakeAgg` can make the aggregation function executor.
+*/
+
+func RegisterDeterminedSingleAgg(info DeterminedSingleAggInfo, impl any) {
+	// impl legal check.
+
+	key := generateKeyOfDeterminedSingleAgg(info.id, info.arg)
+	registeredDeterminedAggFunctions[key] = determinedAggInfo{
+		registeredAggInfo: registeredAggInfo{
+			isSingleAgg:          true,
+			acceptNull:           info.acceptNull,
+			setNullForEmptyGroup: info.setNullForEmptyGroup,
+		},
+		retType:        info.ret,
+		implementation: impl,
+	}
+}
+
+func RegisterDeterminedMultiAgg(info DeterminedMultiAggInfo, impl any) {
+	// impl legal check.
+
+	key := generateKeyOfDeterminedArgAgg(info.id, info.args)
+	registeredDeterminedAggFunctions[key] = determinedAggInfo{
+		registeredAggInfo: registeredAggInfo{
+			isSingleAgg:          false,
+			acceptNull:           true,
+			setNullForEmptyGroup: info.setNullForEmptyGroup,
+		},
+		retType:        info.ret,
+		implementation: impl,
+	}
+}
+
+func RegisterFlexibleSingleAgg(info FlexibleAggInfo, getReturnType func([]types.Type) types.Type, getImplementation func(args []types.Type, ret types.Type) any) {
+	// impl legal check.
+
+	key := generateKeyOfFlexibleSingleAgg(info.id)
+	registeredFlexibleAggFunctions[key] = flexibleAggInfo{
+		registeredAggInfo: registeredAggInfo{
+			isSingleAgg:          true,
+			acceptNull:           info.acceptNull,
+			setNullForEmptyGroup: info.setNullForEmptyGroup,
+		},
+		getReturnType:     getReturnType,
+		getImplementation: getImplementation,
+	}
+}
+
+func RegisterFlexibleMultiAgg(info FlexibleAggInfo, getReturnType func([]types.Type) types.Type, getImplementation func(args []types.Type, ret types.Type) any) {
+	// impl legal check.
+
+	key := generateKeyOfFlexibleMultiAgg(info.id)
+	registeredFlexibleAggFunctions[key] = flexibleAggInfo{
+		registeredAggInfo: registeredAggInfo{
+			isSingleAgg:          false,
+			acceptNull:           info.acceptNull,
+			setNullForEmptyGroup: info.setNullForEmptyGroup,
+		},
+		getReturnType:     getReturnType,
+		getImplementation: getImplementation,
+	}
+}
+
+type registeredAggInfo struct {
+	isSingleAgg          bool
+	acceptNull           bool
+	setNullForEmptyGroup bool
+}
+
 type determinedAggInfo struct {
+	registeredAggInfo
 	retType types.Type
 
 	// implementation is a function about how to make a structure to do the aggregation.
@@ -27,6 +99,7 @@ type determinedAggInfo struct {
 }
 
 type flexibleAggInfo struct {
+	registeredAggInfo
 	getReturnType func([]types.Type) types.Type
 
 	// getImplementation will return a function to make a structure to do the aggregation.
@@ -35,16 +108,24 @@ type flexibleAggInfo struct {
 
 type aggKey string
 
-func generateKeyOfSingleAgg(aggID int64, argType types.Type) aggKey {
-	return aggKey(fmt.Sprintf("s%d_%d", aggID, argType.Oid))
+func generateKeyOfDeterminedSingleAgg(aggID int64, argType types.Type) aggKey {
+	return aggKey(fmt.Sprintf("s_d_%d_%d", aggID, argType.Oid))
 }
 
-func generateKeyOfMultiArgAgg(overloadID int64, argTypes []types.Type) aggKey {
-	key := fmt.Sprintf("m%d", overloadID)
+func generateKeyOfDeterminedArgAgg(overloadID int64, argTypes []types.Type) aggKey {
+	key := fmt.Sprintf("m_d_%d", overloadID)
 	for _, argType := range argTypes {
 		key += fmt.Sprintf("_%d", argType.Oid)
 	}
 	return aggKey(key)
+}
+
+func generateKeyOfFlexibleSingleAgg(aggID int64) aggKey {
+	return aggKey(fmt.Sprintf("s_f_%d", aggID))
+}
+
+func generateKeyOfFlexibleMultiAgg(aggID int64) aggKey {
+	return aggKey(fmt.Sprintf("m_f_%d", aggID))
 }
 
 var (
@@ -53,29 +134,27 @@ var (
 )
 
 func getSingleAggImplByInfo(
-	id int64, arg types.Type) (implementationAllocator any, ret types.Type, err error) {
-	key := generateKeyOfSingleAgg(id, arg)
-	if info, ok := registeredDeterminedAggFunctions[key]; ok {
-		return info.implementation, info.retType, nil
+	id int64, arg types.Type) (implementationAllocator any, ret types.Type, raInfo registeredAggInfo, err error) {
+	if info, ok := registeredDeterminedAggFunctions[generateKeyOfDeterminedSingleAgg(id, arg)]; ok {
+		return info.implementation, info.retType, info.registeredAggInfo, nil
 	}
-	if info, ok := registeredFlexibleAggFunctions[key]; ok {
+	if info, ok := registeredFlexibleAggFunctions[generateKeyOfFlexibleSingleAgg(id)]; ok {
 		ret = info.getReturnType([]types.Type{arg})
-		return info.getImplementation([]types.Type{arg}, ret), ret, nil
+		return info.getImplementation([]types.Type{arg}, ret), ret, info.registeredAggInfo, nil
 	}
-	return nil, ret, fmt.Errorf("no implementation for aggID %d with argType %s", id, arg)
+	return nil, ret, raInfo, fmt.Errorf("no implementation for aggID %d with argType %s", id, arg)
 }
 
 func getMultiArgAggImplByInfo(
-	id int64, args []types.Type) (implementationAllocator any, ret types.Type, err error) {
-	key := generateKeyOfMultiArgAgg(id, args)
-	if info, ok := registeredDeterminedAggFunctions[key]; ok {
-		return info.implementation, info.retType, nil
+	id int64, args []types.Type) (implementationAllocator any, ret types.Type, raInfo registeredAggInfo, err error) {
+	if info, ok := registeredDeterminedAggFunctions[generateKeyOfDeterminedArgAgg(id, args)]; ok {
+		return info.implementation, info.retType, info.registeredAggInfo, nil
 	}
-	if info, ok := registeredFlexibleAggFunctions[key]; ok {
+	if info, ok := registeredFlexibleAggFunctions[generateKeyOfFlexibleMultiAgg(id)]; ok {
 		ret = info.getReturnType(args)
-		return info.getImplementation(args, ret), ret, nil
+		return info.getImplementation(args, ret), ret, info.registeredAggInfo, nil
 	}
-	return nil, ret, fmt.Errorf("no implementation for aggID %d with argTypes %v", id, args)
+	return nil, ret, raInfo, fmt.Errorf("no implementation for aggID %d with argTypes %v", id, args)
 }
 
 var (
@@ -83,44 +162,53 @@ var (
 	_ = RegisterDeterminedMultiAgg
 	_ = RegisterFlexibleSingleAgg
 	_ = RegisterFlexibleMultiAgg
+	_ = MakeFlexibleAggInfo
 )
 
-func RegisterDeterminedSingleAgg(id int64, arg types.Type, ret types.Type, impl any) {
-	// impl legal check.
+type DeterminedSingleAggInfo struct {
+	id                   int64
+	arg                  types.Type
+	ret                  types.Type
+	acceptNull           bool
+	setNullForEmptyGroup bool
+}
 
-	key := generateKeyOfSingleAgg(id, arg)
-	registeredDeterminedAggFunctions[key] = determinedAggInfo{
-		retType:        ret,
-		implementation: impl,
+func MakeDeterminedSingleAggInfo(id int64, arg types.Type, ret types.Type, acceptNull bool, setNullForEmptyGroup bool) DeterminedSingleAggInfo {
+	return DeterminedSingleAggInfo{
+		id:                   id,
+		arg:                  arg,
+		ret:                  ret,
+		acceptNull:           acceptNull,
+		setNullForEmptyGroup: setNullForEmptyGroup,
 	}
 }
 
-func RegisterDeterminedMultiAgg(id int64, args []types.Type, ret types.Type, impl any) {
-	// impl legal check.
+type DeterminedMultiAggInfo struct {
+	id                   int64
+	args                 []types.Type
+	ret                  types.Type
+	setNullForEmptyGroup bool
+}
 
-	key := generateKeyOfMultiArgAgg(id, args)
-	registeredDeterminedAggFunctions[key] = determinedAggInfo{
-		retType:        ret,
-		implementation: impl,
+func MakeDeterminedMultiAggInfo(id int64, args []types.Type, ret types.Type, setNullForEmptyGroup bool) DeterminedMultiAggInfo {
+	return DeterminedMultiAggInfo{
+		id:                   id,
+		args:                 args,
+		ret:                  ret,
+		setNullForEmptyGroup: setNullForEmptyGroup,
 	}
 }
 
-func RegisterFlexibleSingleAgg(id int64, getReturnType func([]types.Type) types.Type, getImplementation func(args []types.Type, ret types.Type) any) {
-	// impl legal check.
-
-	key := generateKeyOfSingleAgg(id, types.Type{})
-	registeredFlexibleAggFunctions[key] = flexibleAggInfo{
-		getReturnType:     getReturnType,
-		getImplementation: getImplementation,
-	}
+type FlexibleAggInfo struct {
+	id                   int64
+	acceptNull           bool
+	setNullForEmptyGroup bool
 }
 
-func RegisterFlexibleMultiAgg(id int64, getReturnType func([]types.Type) types.Type, getImplementation func(args []types.Type, ret types.Type) any) {
-	// impl legal check.
-
-	key := generateKeyOfMultiArgAgg(id, []types.Type{})
-	registeredFlexibleAggFunctions[key] = flexibleAggInfo{
-		getReturnType:     getReturnType,
-		getImplementation: getImplementation,
+func MakeFlexibleAggInfo(id int64, acceptNull bool, setNullForEmptyGroup bool) FlexibleAggInfo {
+	return FlexibleAggInfo{
+		id:                   id,
+		acceptNull:           acceptNull,
+		setNullForEmptyGroup: setNullForEmptyGroup,
 	}
 }

@@ -27,6 +27,7 @@ type AggBytesGetter func() []byte
 
 // AggCanMarshal interface is used for multi-node communication.
 // each private structure of aggregation should implement the AggCanMarshal interface.
+// todo: change to deliver []byte directly, and agg developer choose how to use the []byte.
 type AggCanMarshal interface {
 	Marshal() []byte
 	Unmarshal([]byte)

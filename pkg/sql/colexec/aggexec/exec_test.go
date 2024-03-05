@@ -76,10 +76,13 @@ func TestSingleAggFuncExec1(t *testing.T) {
 		retType:   types.T_int64.ToType(),
 		emptyNull: false,
 	}
-	RegisterDeterminedSingleAgg(info.aggID, info.argType, info.retType, gTesSingleAggPrivate1)
+	RegisterDeterminedSingleAgg(
+		MakeDeterminedSingleAggInfo(
+			info.aggID, info.argType, info.retType, true, info.emptyNull),
+		gTesSingleAggPrivate1)
 	executor := MakeAgg(
 		mg,
-		info.aggID, info.distinct, info.emptyNull, info.argType)
+		info.aggID, info.distinct, info.argType)
 
 	// input first row of [3, null, 4, 5] - count 1
 	// input second row of [3, null, 4, 5] - count 1
@@ -189,10 +192,13 @@ func TestMultiAggFuncExec1(t *testing.T) {
 		retType:   types.T_int64.ToType(),
 		emptyNull: false,
 	}
-	RegisterDeterminedMultiAgg(info.aggID, info.argTypes, info.retType, gTesMultiAggPrivate1)
+	RegisterDeterminedMultiAgg(
+		MakeDeterminedMultiAggInfo(
+			info.aggID, info.argTypes, info.retType, false),
+		gTesMultiAggPrivate1)
 	executor := MakeMultiAgg(
 		mg,
-		info.aggID, info.distinct, info.emptyNull, info.argTypes)
+		info.aggID, info.distinct, info.argTypes)
 
 	// input first row of [{null, false}, {1, true}] - count 0
 	// input second row of [{null, false}, {1, true}] - count 1
@@ -319,12 +325,14 @@ func TestGroupConcatExec(t *testing.T) {
 // if the emptyNull flag is true, the NULL value will be returned for empty groups.
 func TestEmptyNullFlag(t *testing.T) {
 	mg := newTestAggMemoryManager()
-	RegisterDeterminedSingleAgg(1, types.T_int32.ToType(), types.T_int64.ToType(), gTesSingleAggPrivate1)
-	RegisterDeterminedMultiAgg(2, []types.Type{types.T_int64.ToType(), types.T_bool.ToType()}, types.T_int64.ToType(), gTesMultiAggPrivate1)
 	{
+		RegisterDeterminedSingleAgg(
+			MakeDeterminedSingleAggInfo(
+				1, types.T_int32.ToType(), types.T_int64.ToType(), false, true),
+			gTesSingleAggPrivate1)
 		executor := MakeAgg(
 			mg,
-			1, false, true, types.T_int32.ToType())
+			1, false, types.T_int32.ToType())
 		require.NoError(t, executor.GroupGrow(1))
 		v, err := executor.Flush()
 		require.NoError(t, err)
@@ -333,9 +341,13 @@ func TestEmptyNullFlag(t *testing.T) {
 		executor.Free()
 	}
 	{
+		RegisterDeterminedSingleAgg(
+			MakeDeterminedSingleAggInfo(
+				1, types.T_int32.ToType(), types.T_int64.ToType(), false, false),
+			gTesSingleAggPrivate1)
 		executor := MakeAgg(
 			mg,
-			1, false, false, types.T_int32.ToType())
+			1, false, types.T_int32.ToType())
 		require.NoError(t, executor.GroupGrow(1))
 		v, err := executor.Flush()
 		require.NoError(t, err)
@@ -345,9 +357,11 @@ func TestEmptyNullFlag(t *testing.T) {
 		executor.Free()
 	}
 	{
+		RegisterDeterminedMultiAgg(
+			MakeDeterminedMultiAggInfo(2, []types.Type{types.T_int64.ToType(), types.T_bool.ToType()}, types.T_int64.ToType(), true), gTesMultiAggPrivate1)
 		executor := MakeMultiAgg(
 			mg,
-			2, false, true, []types.Type{types.T_int64.ToType(), types.T_bool.ToType()})
+			2, false, []types.Type{types.T_int64.ToType(), types.T_bool.ToType()})
 		require.NoError(t, executor.GroupGrow(1))
 		v, err := executor.Flush()
 		require.NoError(t, err)
@@ -356,9 +370,11 @@ func TestEmptyNullFlag(t *testing.T) {
 		executor.Free()
 	}
 	{
+		RegisterDeterminedMultiAgg(
+			MakeDeterminedMultiAggInfo(2, []types.Type{types.T_int64.ToType(), types.T_bool.ToType()}, types.T_int64.ToType(), false), gTesMultiAggPrivate1)
 		executor := MakeMultiAgg(
 			mg,
-			2, false, false, []types.Type{types.T_int64.ToType(), types.T_bool.ToType()})
+			2, false, []types.Type{types.T_int64.ToType(), types.T_bool.ToType()})
 		require.NoError(t, executor.GroupGrow(1))
 		v, err := executor.Flush()
 		require.NoError(t, err)

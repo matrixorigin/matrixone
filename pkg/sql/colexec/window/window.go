@@ -125,7 +125,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 
 			ctr.bat.Aggs = make([]aggexec.AggFuncExec, len(ap.Aggs))
 			for i, ag := range ap.Aggs {
-				ctr.bat.Aggs[i] = aggexec.MakeAgg(proc, ag.Op, ag.Dist, false, ap.Types[i])
+				ctr.bat.Aggs[i] = aggexec.MakeAgg(proc, ag.Op, ag.Dist, ap.Types[i])
 				ctr.bat.Aggs[i].SetPreparedResult(ag.Config, 0)
 				if err = ctr.bat.Aggs[i].GroupGrow(ctr.bat.RowCount()); err != nil {
 					return result, err

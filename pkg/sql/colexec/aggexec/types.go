@@ -81,12 +81,14 @@ type AggMemoryManager interface {
 	PutVector(v *vector.Vector)
 }
 
+// todo: can combine the following 3 functions to one function.
+
 // MakeAgg supports to create an aggregation function executor for single column.
 func MakeAgg(
 	mg AggMemoryManager,
-	aggID int64, isDistinct bool, emptyIsNull bool,
+	aggID int64, isDistinct bool,
 	param types.Type) AggFuncExec {
-	implementationAllocator, result, err := getSingleAggImplByInfo(aggID, param)
+	implementationAllocator, result, rInfo, err := getSingleAggImplByInfo(aggID, param)
 	if err != nil {
 		panic(err)
 	}
@@ -96,10 +98,10 @@ func MakeAgg(
 		distinct:  isDistinct,
 		argType:   param,
 		retType:   result,
-		emptyNull: emptyIsNull,
+		emptyNull: rInfo.setNullForEmptyGroup,
 	}
 	opt := singleAggOptimizedInfo{
-		receiveNull: true,
+		receiveNull: rInfo.acceptNull,
 	}
 
 	pIsVarLen, rIsVarLen := param.IsVarlen(), result.IsVarlen()
@@ -120,9 +122,9 @@ func MakeAgg(
 // MakeMultiAgg supports creating an aggregation function executor for multiple columns.
 func MakeMultiAgg(
 	mg AggMemoryManager,
-	aggID int64, isDistinct bool, emptyIsNull bool,
+	aggID int64, isDistinct bool,
 	param []types.Type) AggFuncExec {
-	implementationAllocator, result, err := getMultiArgAggImplByInfo(aggID, param)
+	implementationAllocator, result, rInfo, err := getMultiArgAggImplByInfo(aggID, param)
 	if err != nil {
 		panic(err)
 	}
@@ -132,7 +134,7 @@ func MakeMultiAgg(
 		distinct:  isDistinct,
 		argTypes:  param,
 		retType:   result,
-		emptyNull: emptyIsNull,
+		emptyNull: rInfo.setNullForEmptyGroup,
 	}
 	return newMultiAggFuncExec(mg, info, implementationAllocator)
 }

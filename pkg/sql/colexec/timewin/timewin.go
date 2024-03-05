@@ -150,7 +150,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 			ctr.aggs = make([]aggexec.AggFuncExec, len(ap.Aggs))
 			for i, ag := range ap.Aggs {
-				ctr.aggs[i] = aggexec.MakeAgg(proc, ag.Op, ag.Dist, false, ap.Types[i])
+				ctr.aggs[i] = aggexec.MakeAgg(proc, ag.Op, ag.Dist, ap.Types[i])
 				if ag.Config != nil {
 					ctr.aggs[i].SetPreparedResult(ag.Config, 0)
 				}
@@ -196,7 +196,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 			ctr.aggs = make([]aggexec.AggFuncExec, len(ap.Aggs))
 			for i, ag := range ap.Aggs {
-				ctr.aggs[i] = aggexec.MakeAgg(proc, ag.Op, ag.Dist, false, ap.Types[i])
+				ctr.aggs[i] = aggexec.MakeAgg(proc, ag.Op, ag.Dist, ap.Types[i])
 				if ag.Config != nil {
 					ctr.aggs[i].SetPreparedResult(ag.Config, 0)
 				}
@@ -284,7 +284,7 @@ func eval[T constraints.Integer](ctr *container, ap *Argument, proc *process.Pro
 				}
 				ctr.aggs = make([]aggexec.AggFuncExec, len(ap.Aggs))
 				for i, ag := range ap.Aggs {
-					ctr.aggs[i] = aggexec.MakeAgg(proc, ag.Op, ag.Dist, false, ap.Types[i])
+					ctr.aggs[i] = aggexec.MakeAgg(proc, ag.Op, ag.Dist, ap.Types[i])
 					if ag.Config != nil {
 						ctr.aggs[i].SetPreparedResult(ag.Config, 0)
 					}
