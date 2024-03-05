@@ -36,10 +36,10 @@ type taskScheduler struct {
 }
 
 func newTaskScheduler(db *DB, asyncWorkers int, ioWorkers int) *taskScheduler {
-	if asyncWorkers < 0 || asyncWorkers > 100 {
+	if asyncWorkers < 0 {
 		panic(fmt.Sprintf("bad param: %d txn workers", asyncWorkers))
 	}
-	if ioWorkers < 0 || ioWorkers > 100 {
+	if ioWorkers < 0 {
 		panic(fmt.Sprintf("bad param: %d io workers", ioWorkers))
 	}
 	s := &taskScheduler{
