@@ -1094,12 +1094,6 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 			ReleaseScopes(right)
 		}
 	}()
-
-	if strings.Contains(c.sql, "between") && ns[curNodeIdx].NodeType == plan.Node_TABLE_SCAN {
-		x := 0
-		x++
-	}
-
 	n := ns[curNodeIdx]
 	switch n.NodeType {
 	case plan.Node_VALUE_SCAN:
