@@ -169,7 +169,7 @@ func makeCentroidsSingleJoinMetaOnCurrVersionOrderByL2DistNormalizeL2(builder *Q
 	joinCond, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{
 		scanCols[0],
 		{
-			Typ: makePlan2Type(&bigIntType),
+			Typ: *makePlan2Type(&bigIntType),
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: idxTags["meta1.project"],
@@ -190,7 +190,7 @@ func makeCentroidsSingleJoinMetaOnCurrVersionOrderByL2DistNormalizeL2(builder *Q
 
 	// 3. Project version, centroid_id, centroid, l2_distance(literal, normalize_l2(col))
 	centroidsCol := &plan.Expr{
-		Typ: DeepCopyType(indexTableDefs[1].Cols[2].Typ),
+		Typ: *indexTableDefs[1].Cols[2].Typ,
 		Expr: &plan.Expr_Col{
 			Col: &plan.ColRef{
 				RelPos: idxTags["centroids.scan"],
@@ -218,7 +218,7 @@ func makeCentroidsSingleJoinMetaOnCurrVersionOrderByL2DistNormalizeL2(builder *Q
 
 	// 4.1 @probe_limit is a system variable
 	probeLimitValueExpr := &plan.Expr{
-		Typ: makePlan2Type(&textType), // T_text
+		Typ: *makePlan2Type(&textType), // T_text
 		Expr: &plan.Expr_V{
 			V: &plan.VarRef{
 				Name:   "probe_limit",
@@ -263,7 +263,7 @@ func makeCentroidsSingleJoinMetaOnCurrVersionOrderByL2DistNormalizeL2(builder *Q
 		OrderBy: []*OrderBySpec{
 			{
 				Expr: &plan.Expr{
-					Typ: makePlan2Type(&float64Type),
+					Typ: *makePlan2Type(&float64Type),
 					Expr: &plan.Expr_Col{
 						Col: &plan.ColRef{
 							RelPos: idxTags["centroids.project"],
@@ -291,7 +291,7 @@ func makeEntriesCrossJoinMetaOnCurrVersion(builder *QueryBuilder, bindCtx *BindC
 	joinCond, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{
 		scanCols[0],
 		{
-			Typ: makePlan2Type(&bigIntType),
+			Typ: *makePlan2Type(&bigIntType),
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: idxTags["meta2.project"],
@@ -325,7 +325,7 @@ func makeEntriesCrossJoinMetaOnCurrVersion(builder *QueryBuilder, bindCtx *BindC
 func makeEntriesCrossJoinCentroidsOnCentroidId(builder *QueryBuilder, bindCtx *BindContext, idxTableDefs []*TableDef, idxTags map[string]int32, entriesForCurrVersion int32, centroidsForCurrVersion int32) int32 {
 	entriesCentroidIdEqCentroidId, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{
 		{
-			Typ: DeepCopyType(idxTableDefs[2].Cols[1].Typ),
+			Typ: *idxTableDefs[2].Cols[1].Typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: idxTags["entries.project"],
@@ -334,7 +334,7 @@ func makeEntriesCrossJoinCentroidsOnCentroidId(builder *QueryBuilder, bindCtx *B
 			},
 		},
 		{
-			Typ: DeepCopyType(idxTableDefs[1].Cols[1].Typ),
+			Typ: *idxTableDefs[1].Cols[1].Typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: idxTags["centroids.project"],
@@ -360,7 +360,7 @@ func makeTblCrossJoinEntriesCentroidOnPK(builder *QueryBuilder, bindCtx *BindCon
 
 	entriesOriginPkEqTblPk, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{
 		{
-			Typ: DeepCopyType(idxTableDefs[2].Cols[2].Typ),
+			Typ: *idxTableDefs[2].Cols[2].Typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: idxTags["entries.project"],
@@ -369,7 +369,7 @@ func makeTblCrossJoinEntriesCentroidOnPK(builder *QueryBuilder, bindCtx *BindCon
 			},
 		},
 		{
-			Typ: DeepCopyType(idxTableDefs[2].Cols[2].Typ),
+			Typ: *idxTableDefs[2].Cols[2].Typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: scanNode.BindingTags[0],
@@ -395,7 +395,7 @@ func makeTblOrderByL2DistNormalizeL2(builder *QueryBuilder, bindCtx *BindContext
 	distFnName := fn.Func.ObjName
 	l2DistanceColLit, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), distFnName, []*plan.Expr{
 		{
-			Typ: DeepCopyType(scanNode.TableDef.Cols[colPosOrderBy].Typ),
+			Typ: *scanNode.TableDef.Cols[colPosOrderBy].Typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: scanNode.BindingTags[0],
@@ -434,7 +434,7 @@ func makeHiddenTblScanWithBindingTag(builder *QueryBuilder, bindCtx *BindContext
 	scanCols := make([]*Expr, len(indexTableDef.Cols))
 	for colIdx, column := range indexTableDef.Cols {
 		scanCols[colIdx] = &plan.Expr{
-			Typ: column.Typ,
+			Typ: *column.Typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: idxTag,

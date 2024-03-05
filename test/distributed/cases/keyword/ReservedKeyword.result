@@ -1,0 +1,123 @@
+drop database if exists test;
+create database test;
+drop table if exists `_binary`;
+create table `_binary` (`add` int, `all` bigint, `alter` smallint, `analyze` decimal, `and` char, `as` varchar, `asc` int, `begin` float);
+show create table `_binary`;
+Table    Create Table
+_binary    CREATE TABLE `_binary` (\n`add` INT DEFAULT NULL,\n`all` BIGINT DEFAULT NULL,\n`alter` SMALLINT DEFAULT NULL,\n`analyze` DECIMAL(38,0) DEFAULT NULL,\n`and` CHAR(1) DEFAULT NULL,\n`as` VARCHAR(65535) DEFAULT NULL,\n`asc` INT DEFAULT NULL,\n`begin` FLOAT DEFAULT NULL\n)
+drop table `_binary`;
+drop table if exists `between`;
+create table `between` (`binary` int, `both` bigint, `by` smallint, `call` decimal, `case` char, `change` varchar, `char` int, `character` float);
+show create table `between`;
+Table    Create Table
+between    CREATE TABLE `between` (\n`binary` INT DEFAULT NULL,\n`both` BIGINT DEFAULT NULL,\n`by` SMALLINT DEFAULT NULL,\n`call` DECIMAL(38,0) DEFAULT NULL,\n`case` CHAR(1) DEFAULT NULL,\n`change` VARCHAR(65535) DEFAULT NULL,\n`char` INT DEFAULT NULL,\n`character` FLOAT DEFAULT NULL\n)
+drop table `between`;
+drop table if exists `check`;
+create table `check` (`collate` int, `column` bigint, `config` decimal, `constraint` char, `convert` varchar, `create` int, `cross` float);
+show create table `check`;
+Table    Create Table
+check    CREATE TABLE `check` (\n`collate` INT DEFAULT NULL,\n`column` BIGINT DEFAULT NULL,\n`config` DECIMAL(38,0) DEFAULT NULL,\n`constraint` CHAR(1) DEFAULT NULL,\n`convert` VARCHAR(65535) DEFAULT NULL,\n`create` INT DEFAULT NULL,\n`cross` FLOAT DEFAULT NULL\n)
+drop table `check`;
+drop table if exists `current_date`;
+create table `current_date` (`current_role` int, `current_time` bigint, `current_timestamp` smallint, `current_user` decimal, `database` char, `databases` varchar, `day_hour` int, `day_microsecond` float);
+show create table `current_date`;
+Table    Create Table
+current_date    CREATE TABLE `current_date` (\n`current_role` INT DEFAULT NULL,\n`current_time` BIGINT DEFAULT NULL,\n`current_timestamp` SMALLINT DEFAULT NULL,\n`current_user` DECIMAL(38,0) DEFAULT NULL,\n`database` CHAR(1) DEFAULT NULL,\n`databases` VARCHAR(65535) DEFAULT NULL,\n`day_hour` INT DEFAULT NULL,\n`day_microsecond` FLOAT DEFAULT NULL\n)
+drop table `current_date`;
+drop table if exists `day_minute`;
+create table `day_minute` (`day_second` int, `declare` bigint, `default` smallint, `delayed` decimal, `delete` char, `dense_rank` varchar, `desc` int, `describe` float);
+show create table `day_minute`;
+Table    Create Table
+day_minute    CREATE TABLE `day_minute` (\n`day_second` INT DEFAULT NULL,\n`declare` BIGINT DEFAULT NULL,\n`default` SMALLINT DEFAULT NULL,\n`delayed` DECIMAL(38,0) DEFAULT NULL,\n`delete` CHAR(1) DEFAULT NULL,\n`dense_rank` VARCHAR(65535) DEFAULT NULL,\n`desc` INT DEFAULT NULL,\n`describe` FLOAT DEFAULT NULL\n)
+drop table `day_minute`;
+drop table if exists `distinct`;
+create table `distinct` (`div` int, `drop` bigint, `else` smallint, `elseif` decimal, `enclosed` char, `end` varchar, `escape` int, `escaped` float);
+show create table `distinct`;
+Table    Create Table
+distinct    CREATE TABLE `distinct` (\n`div` INT DEFAULT NULL,\n`drop` BIGINT DEFAULT NULL,\n`else` SMALLINT DEFAULT NULL,\n`elseif` DECIMAL(38,0) DEFAULT NULL,\n`enclosed` CHAR(1) DEFAULT NULL,\n`end` VARCHAR(65535) DEFAULT NULL,\n`escape` INT DEFAULT NULL,\n`escaped` FLOAT DEFAULT NULL\n)
+drop table `distinct`;
+drop table if exists `except`;
+create table `except` (`exists` int, `explain` bigint, `false` smallint, `for` decimal, `force` char, `foreign` varchar, `from` int, `fulltext` float);
+show create table `except`;
+Table    Create Table
+except    CREATE TABLE `except` (\n`exists` INT DEFAULT NULL,\n`explain` BIGINT DEFAULT NULL,\n`false` SMALLINT DEFAULT NULL,\n`for` DECIMAL(38,0) DEFAULT NULL,\n`force` CHAR(1) DEFAULT NULL,\n`foreign` VARCHAR(65535) DEFAULT NULL,\n`from` INT DEFAULT NULL,\n`fulltext` FLOAT DEFAULT NULL\n)
+drop table `except`;
+drop table if exists `function`;
+create table `function` (`group` int, `groups` bigint, `having` smallint, `high_priority` decimal, `hour_microsecond` char, `hour_minute` varchar, `hour_second` int, `if` float);
+show create table `function`;
+Table    Create Table
+function    CREATE TABLE `function` (\n`group` INT DEFAULT NULL,\n`groups` BIGINT DEFAULT NULL,\n`having` SMALLINT DEFAULT NULL,\n`high_priority` DECIMAL(38,0) DEFAULT NULL,\n`hour_microsecond` CHAR(1) DEFAULT NULL,\n`hour_minute` VARCHAR(65535) DEFAULT NULL,\n`hour_second` INT DEFAULT NULL,\n`if` FLOAT DEFAULT NULL\n)
+drop table `function`;
+drop table if exists `ignore`;
+create table `ignore` (`ilike` int, `in` bigint, `index` smallint, `infile` decimal, `inner` char, `inout` varchar, `insert` int, `int1` float);
+show create table `ignore`;
+Table    Create Table
+ignore    CREATE TABLE `ignore` (\n`ilike` INT DEFAULT NULL,\n`in` BIGINT DEFAULT NULL,\n`index` SMALLINT DEFAULT NULL,\n`infile` DECIMAL(38,0) DEFAULT NULL,\n`inner` CHAR(1) DEFAULT NULL,\n`inout` VARCHAR(65535) DEFAULT NULL,\n`insert` INT DEFAULT NULL,\n`int1` FLOAT DEFAULT NULL\n)
+drop table `ignore`;
+drop table if exists `int2`;
+create table `int2` (`int3` int, `int4` bigint, `int8` smallint, `intersect` decimal, `interval` char, `into` varchar, `is` int, `iterate` float);
+show create table `int2`;
+Table    Create Table
+int2    CREATE TABLE `int2` (\n`int3` INT DEFAULT NULL,\n`int4` BIGINT DEFAULT NULL,\n`int8` SMALLINT DEFAULT NULL,\n`intersect` DECIMAL(38,0) DEFAULT NULL,\n`interval` CHAR(1) DEFAULT NULL,\n`into` VARCHAR(65535) DEFAULT NULL,\n`is` INT DEFAULT NULL,\n`iterate` FLOAT DEFAULT NULL\n)
+drop table `int2`;
+drop table if exists `join`;
+create table `join` (`key` int, `kill` bigint, `leading` smallint, `leave` decimal, `left` char, `like` varchar, `limit` int, `lines` float);
+show create table `join`;
+Table    Create Table
+join    CREATE TABLE `join` (\n`key` INT DEFAULT NULL,\n`kill` BIGINT DEFAULT NULL,\n`leading` SMALLINT DEFAULT NULL,\n`leave` DECIMAL(38,0) DEFAULT NULL,\n`left` CHAR(1) DEFAULT NULL,\n`like` VARCHAR(65535) DEFAULT NULL,\n`limit` INT DEFAULT NULL,\n`lines` FLOAT DEFAULT NULL\n)
+drop table `join`;
+drop table if exists `load`;
+create table `load` (`localtime` int, `localtimestamp` bigint, `lock` smallint, `loop` decimal, `low_priority` char, `match` varchar, `maxvalue` int, `minus` float);
+show create table `load`;
+Table    Create Table
+load    CREATE TABLE `load` (\n`localtime` INT DEFAULT NULL,\n`localtimestamp` BIGINT DEFAULT NULL,\n`lock` SMALLINT DEFAULT NULL,\n`loop` DECIMAL(38,0) DEFAULT NULL,\n`low_priority` CHAR(1) DEFAULT NULL,\n`match` VARCHAR(65535) DEFAULT NULL,\n`maxvalue` INT DEFAULT NULL,\n`minus` FLOAT DEFAULT NULL\n)
+drop table `load`;
+drop table if exists `minute_microsecond`;
+create table `minute_microsecond` (`minute_second` int, `mod` bigint, `natural` smallint, `not` decimal, `null` char, `on` varchar, `optionally` int, `or` float);
+show create table `minute_microsecond`;
+Table    Create Table
+minute_microsecond    CREATE TABLE `minute_microsecond` (\n`minute_second` INT DEFAULT NULL,\n`mod` BIGINT DEFAULT NULL,\n`natural` SMALLINT DEFAULT NULL,\n`not` DECIMAL(38,0) DEFAULT NULL,\n`null` CHAR(1) DEFAULT NULL,\n`on` VARCHAR(65535) DEFAULT NULL,\n`optionally` INT DEFAULT NULL,\n`or` FLOAT DEFAULT NULL\n)
+drop table `minute_microsecond`;
+drop table if exists `order`;
+create table `order` (`out` int, `outer` bigint, `outfile` smallint, `over` decimal, `partition` char, `primary` varchar, `quick` int, `rank` float);
+show create table `order`;
+Table    Create Table
+order    CREATE TABLE `order` (\n`out` INT DEFAULT NULL,\n`outer` BIGINT DEFAULT NULL,\n`outfile` SMALLINT DEFAULT NULL,\n`over` DECIMAL(38,0) DEFAULT NULL,\n`partition` CHAR(1) DEFAULT NULL,\n`primary` VARCHAR(65535) DEFAULT NULL,\n`quick` INT DEFAULT NULL,\n`rank` FLOAT DEFAULT NULL\n)
+drop table `order`;
+drop table if exists `recursive`;
+create table `recursive` (`references` int, `regexp` bigint, `reindex` smallint, `rename` decimal, `repeat` char, `replace` varchar, `require` int, `right` float);
+show create table `recursive`;
+Table    Create Table
+recursive    CREATE TABLE `recursive` (\n`references` INT DEFAULT NULL,\n`regexp` BIGINT DEFAULT NULL,\n`reindex` SMALLINT DEFAULT NULL,\n`rename` DECIMAL(38,0) DEFAULT NULL,\n`repeat` CHAR(1) DEFAULT NULL,\n`replace` VARCHAR(65535) DEFAULT NULL,\n`require` INT DEFAULT NULL,\n`right` FLOAT DEFAULT NULL\n)
+drop table `recursive`;
+drop table if exists `rlike`;
+create table `rlike` (`row` int, `row_number` bigint, `rows` smallint, `schema` decimal, `schemas` char, `second_microsecond` varchar, `select` int, `separator` float);
+show create table `rlike`;
+Table    Create Table
+rlike    CREATE TABLE `rlike` (\n`row` INT DEFAULT NULL,\n`row_number` BIGINT DEFAULT NULL,\n`rows` SMALLINT DEFAULT NULL,\n`schema` DECIMAL(38,0) DEFAULT NULL,\n`schemas` CHAR(1) DEFAULT NULL,\n`second_microsecond` VARCHAR(65535) DEFAULT NULL,\n`select` INT DEFAULT NULL,\n`separator` FLOAT DEFAULT NULL\n)
+drop table `rlike`;
+drop table if exists `set`;
+create table `set` (`show` int, `sql_big_result` bigint, `sql_buffer_result` smallint, `sql_small_result` decimal, `ssl` char, `starting` varchar, `straight_join` int, `table` float);
+show create table `set`;
+Table    Create Table
+set    CREATE TABLE `set` (\n`show` INT DEFAULT NULL,\n`sql_big_result` BIGINT DEFAULT NULL,\n`sql_buffer_result` SMALLINT DEFAULT NULL,\n`sql_small_result` DECIMAL(38,0) DEFAULT NULL,\n`ssl` CHAR(1) DEFAULT NULL,\n`starting` VARCHAR(65535) DEFAULT NULL,\n`straight_join` INT DEFAULT NULL,\n`table` FLOAT DEFAULT NULL\n)
+drop table `set`;
+drop table if exists `temporary`;
+create table `temporary` (`terminated` int, `then` bigint, `to` smallint, `trailing` decimal, `true` char, `union` varchar, `unique` int, `until` float);
+show create table `temporary`;
+Table    Create Table
+temporary    CREATE TABLE `temporary` (\n`terminated` INT DEFAULT NULL,\n`then` BIGINT DEFAULT NULL,\n`to` SMALLINT DEFAULT NULL,\n`trailing` DECIMAL(38,0) DEFAULT NULL,\n`true` CHAR(1) DEFAULT NULL,\n`union` VARCHAR(65535) DEFAULT NULL,\n`unique` INT DEFAULT NULL,\n`until` FLOAT DEFAULT NULL\n)
+drop table `temporary`;
+drop table if exists `update`;
+create table `update` (`usage` int, `use` bigint, `using` smallint, `utc_date` decimal, `utc_time` char, `utc_timestamp` varchar, `values` int, `when` float);
+show create table `update`;
+Table    Create Table
+update    CREATE TABLE `update` (\n`usage` INT DEFAULT NULL,\n`use` BIGINT DEFAULT NULL,\n`using` SMALLINT DEFAULT NULL,\n`utc_date` DECIMAL(38,0) DEFAULT NULL,\n`utc_time` CHAR(1) DEFAULT NULL,\n`utc_timestamp` VARCHAR(65535) DEFAULT NULL,\n`values` INT DEFAULT NULL,\n`when` FLOAT DEFAULT NULL\n)
+drop table `update`;
+drop table if exists `where`;
+create table `where` (`while` int, `with` bigint, `xor` smallint, `year_month` decimal);
+show create table `where`;
+Table    Create Table
+where    CREATE TABLE `where` (\n`while` INT DEFAULT NULL,\n`with` BIGINT DEFAULT NULL,\n`xor` SMALLINT DEFAULT NULL,\n`year_month` DECIMAL(38,0) DEFAULT NULL\n)
+drop table `where`;
+drop database test;

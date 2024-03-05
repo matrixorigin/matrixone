@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/panjf2000/ants/v2"
 	"runtime"
 	"sort"
 	"strings"
@@ -105,6 +106,11 @@ func New(
 			},
 		),
 	}
+	pool, err := ants.NewPool(GCPoolSize)
+	if err != nil {
+		panic(err)
+	}
+	e.gcPool = pool
 
 	e.globalStats = NewGlobalStats(ctx, e, keyRouter,
 		WithLogtailUpdateStatsThreshold(threshold),
