@@ -32,6 +32,11 @@ var (
 	UpdateSnapshotEvent  = EventType{2, "update-snapshot"}
 	LockEvent            = EventType{3, "lock"}
 	UnlockEvent          = EventType{4, "unlock"}
+	RangesEvent          = EventType{5, "ranges"}
+	BuildPlanEvent       = EventType{6, "build-plan"}
+	ExecuteSQLEvent      = EventType{7, "execute-sql"}
+	CompileEvent         = EventType{8, "compile"}
+	TableScanEvent       = EventType{9, "table-scan"}
 	CommitEvent          = EventType{95, "commit"}
 	CommitResponseEvent  = EventType{96, "commit-response"}
 	CommitWaitApplyEvent = EventType{97, "wait-applied"}

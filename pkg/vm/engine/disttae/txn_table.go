@@ -37,6 +37,7 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -553,8 +554,37 @@ func (tbl *txnTable) resetSnapshot() {
 // return all unmodified blocks
 func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr) (ranges engine.Ranges, err error) {
 	start := time.Now()
+
+	seq := tbl.db.txn.op.NextSequence()
+	trace.GetService().AddTxnDurationAction(
+		tbl.db.txn.op,
+		client.RangesEvent,
+		seq,
+		tbl.tableId,
+		0,
+		nil)
+
 	defer func() {
-		v2.TxnTableRangeDurationHistogram.Observe(time.Since(start).Seconds())
+		cost := time.Since(start)
+
+		trace.GetService().AddTxnAction(
+			tbl.db.txn.op,
+			client.RangesEvent,
+			seq,
+			tbl.tableId,
+			int64(ranges.Len()),
+			"blocks",
+			err)
+
+		trace.GetService().AddTxnDurationAction(
+			tbl.db.txn.op,
+			client.RangesEvent,
+			seq,
+			tbl.tableId,
+			cost,
+			err)
+
+		v2.TxnTableRangeDurationHistogram.Observe(cost.Seconds())
 	}()
 
 	tbl.writes = tbl.writes[:0]

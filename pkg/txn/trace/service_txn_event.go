@@ -76,6 +76,11 @@ func (s *service) TxnCreated(op client.TxnOperator) {
 		op.AppendEventCallback(client.CommitResponseEvent, s.handleTxnActionEvent)
 		op.AppendEventCallback(client.CommitWaitApplyEvent, s.handleTxnActionEvent)
 		op.AppendEventCallback(client.UnlockEvent, s.handleTxnActionEvent)
+		op.AppendEventCallback(client.RangesEvent, s.handleTxnActionEvent)
+		op.AppendEventCallback(client.BuildPlanEvent, s.handleTxnActionEvent)
+		op.AppendEventCallback(client.ExecuteSQLEvent, s.handleTxnActionEvent)
+		op.AppendEventCallback(client.CompileEvent, s.handleTxnActionEvent)
+		op.AppendEventCallback(client.TableScanEvent, s.handleTxnActionEvent)
 	}
 }
 
@@ -400,16 +405,34 @@ func (s *service) doAddTxnError(
 	}
 }
 
+func (s *service) AddTxnDurationAction(
+	op client.TxnOperator,
+	eventType client.EventType,
+	seq uint64,
+	tableID uint64,
+	value time.Duration,
+	err error,
+) {
+	s.AddTxnAction(
+		op,
+		eventType,
+		seq,
+		tableID,
+		value.Microseconds(),
+		"us",
+		err)
+}
+
 func (s *service) AddTxnAction(
 	op client.TxnOperator,
-	action string,
-	actionSequence uint64,
+	eventType client.EventType,
+	seq uint64,
 	tableID uint64,
 	value int64,
 	unit string,
 	err error,
 ) {
-	if !s.Enabled(FeatureTraceTxn) {
+	if !s.Enabled(FeatureTraceTxnAction) {
 		return
 	}
 
@@ -424,8 +447,8 @@ func (s *service) AddTxnAction(
 
 	s.doAddTxnAction(
 		op.Txn().ID,
-		action,
-		actionSequence,
+		eventType.Name,
+		seq,
 		tableID,
 		value,
 		unit,

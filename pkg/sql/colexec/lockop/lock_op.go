@@ -19,6 +19,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
@@ -30,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -388,6 +390,16 @@ func doLock(
 		return false, false, timestamp.Timestamp{}, nil
 	}
 
+	seq := txnOp.NextSequence()
+	startAt := time.Now()
+	trace.GetService().AddTxnDurationAction(
+		txnOp,
+		client.LockEvent,
+		seq,
+		tableID,
+		0,
+		nil)
+
 	//in this case:
 	// create table t1 (a int primary key, b int ,c int, unique key(b,c));
 	// insert into t1 values (1,1,null);
@@ -448,6 +460,15 @@ func doLock(
 		rows,
 		txn.ID,
 		options)
+
+	trace.GetService().AddTxnDurationAction(
+		txnOp,
+		client.LockEvent,
+		seq,
+		tableID,
+		time.Since(startAt),
+		nil)
+
 	if err != nil {
 		return false, false, timestamp.Timestamp{}, err
 	}

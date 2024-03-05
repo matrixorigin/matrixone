@@ -16,6 +16,7 @@ package trace
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -140,7 +141,8 @@ type txnEventService interface {
 	TxnReadBlock(op client.TxnOperator, tableID uint64, block []byte)
 	TxnError(op client.TxnOperator, err error)
 
-	AddTxnAction(op client.TxnOperator, action string, actionSequence uint64, tableID uint64, value int64, unit string, err error)
+	AddTxnDurationAction(op client.TxnOperator, eventType client.EventType, seq uint64, tableID uint64, value time.Duration, err error)
+	AddTxnAction(op client.TxnOperator, eventType client.EventType, seq uint64, tableID uint64, value int64, unit string, err error)
 
 	AddTxnFilter(method, value string) error
 	ClearTxnFilters() error

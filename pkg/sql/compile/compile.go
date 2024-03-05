@@ -71,6 +71,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	mokafka "github.com/matrixorigin/matrixone/pkg/stream/adapter/kafka"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	txnTrace "github.com/matrixorigin/matrixone/pkg/txn/trace"
 	util2 "github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -238,6 +239,25 @@ func (c *Compile) Compile(ctx context.Context, pn *plan.Plan, u any, fill func(a
 	}()
 
 	if c.proc.TxnOperator != nil && c.proc.TxnOperator.Txn().IsPessimistic() {
+		txnOp := c.proc.TxnOperator
+		seq := txnOp.NextSequence()
+		txnTrace.GetService().AddTxnDurationAction(
+			txnOp,
+			client.CompileEvent,
+			seq,
+			0,
+			0,
+			err)
+		defer func() {
+			txnTrace.GetService().AddTxnDurationAction(
+				txnOp,
+				client.CompileEvent,
+				seq,
+				0,
+				time.Since(start),
+				err)
+		}()
+
 		if qry, ok := pn.Plan.(*plan.Plan_Query); ok {
 			if qry.Query.StmtType == plan.Query_SELECT {
 				for _, n := range qry.Query.Nodes {
@@ -395,11 +415,21 @@ func (c *Compile) allocOperatorID() int32 {
 
 // Run is an important function of the compute-layer, it executes a single sql according to its scope
 func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
+	txnOp := c.proc.TxnOperator
+	seq := txnOp.NextSequence()
+	txnTrace.GetService().AddTxnDurationAction(
+		txnOp,
+		client.ExecuteSQLEvent,
+		seq,
+		0,
+		0,
+		err)
+
 	sql := c.originSQL
 	if sql == "" {
 		sql = c.sql
 	}
-	txnTrace.GetService().TxnExecSQL(c.proc.TxnOperator, sql)
+	txnTrace.GetService().TxnExecSQL(txnOp, sql)
 
 	var writeOffset uint64
 
@@ -411,7 +441,17 @@ func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
 
 	defer func() {
 		stats.ExecutionEnd()
-		v2.TxnStatementExecuteDurationHistogram.Observe(time.Since(start).Seconds())
+
+		cost := time.Since(start)
+		txnTrace.GetService().AddTxnDurationAction(
+			txnOp,
+			client.ExecuteSQLEvent,
+			seq,
+			0,
+			cost,
+			err)
+
+		v2.TxnStatementExecuteDurationHistogram.Observe(cost.Seconds())
 	}()
 
 	for _, s := range c.scope {

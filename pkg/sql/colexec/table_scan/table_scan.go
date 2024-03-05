@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -42,12 +43,34 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 }
 
 func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
-	t := time.Now()
+	var e error
+	start := time.Now()
+	txnOp := proc.TxnOperator
+	seq := txnOp.NextSequence()
+
+	trace.GetService().AddTxnDurationAction(
+		txnOp,
+		client.TableScanEvent,
+		seq,
+		arg.TableID,
+		0,
+		nil)
+
 	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
 	anal.Start()
 	defer func() {
 		anal.Stop()
-		v2.TxnStatementScanDurationHistogram.Observe(time.Since(t).Seconds())
+
+		cost := time.Since(start)
+
+		trace.GetService().AddTxnDurationAction(
+			txnOp,
+			client.TableScanEvent,
+			seq,
+			arg.TableID,
+			cost,
+			e)
+		v2.TxnStatementScanDurationHistogram.Observe(cost.Seconds())
 	}()
 
 	result := vm.NewCallResult()
@@ -59,6 +82,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	//default:
 	//}
 	if err, isCancel := vm.CancelCheck(proc); isCancel {
+		e = err
 		return vm.CancelResult, err
 	}
 
@@ -82,6 +106,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		bat, err := arg.Reader.Read(proc.Ctx, arg.Attrs, nil, proc.Mp(), proc)
 		if err != nil {
 			result.Status = vm.ExecStop
+			e = err
 			return result, err
 		}
 
@@ -92,6 +117,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 				break
 			} else {
 				result.Status = vm.ExecStop
+				e = err
 				return result, err
 			}
 		}
@@ -122,6 +148,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 			_, err := arg.tmpBuf.Append(proc.Ctx, proc.GetMPool(), bat)
 			proc.PutBatch(bat)
 			if err != nil {
+				e = err
 				return result, err
 			}
 			continue
