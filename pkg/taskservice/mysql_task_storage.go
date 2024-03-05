@@ -755,7 +755,6 @@ func buildWhereClause(c *conditions) string {
 
 	for code := range whereConditionCodes {
 		if cond, ok := (*c)[code]; ok {
-			fmt.Println(cond.sql())
 			clauseBuilder.WriteString(" AND ")
 			clauseBuilder.WriteString(cond.sql())
 		}
