@@ -24,4 +24,5 @@ replace INTO names values (3, "Jack", 19,2);
 internal error: Cannot delete or update a parent row: a foreign key constraint fails
 replace INTO names values (1, "Join", 19,2);
 internal error: Cannot delete or update a parent row: a foreign key constraint fails
+drop table if exists names;
 drop database if exists fk_self_refer5;
