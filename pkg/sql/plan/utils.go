@@ -1062,6 +1062,20 @@ func rewriteFiltersForStats(exprList []*plan.Expr, proc *process.Process) *plan.
 	return colexec.RewriteFilterExprList(exprList)
 }
 
+func ConstandFoldList(exprs []*plan.Expr, proc *process.Process, varAndParamIsConst bool) ([]*plan.Expr, error) {
+	newExprs := DeepCopyExprList(exprs)
+	for i := range newExprs {
+		foldedExpr, err := ConstantFold(batch.EmptyForConstFoldBatch, newExprs[i], proc, varAndParamIsConst)
+		if err != nil {
+			return nil, err
+		}
+		if foldedExpr != nil {
+			newExprs[i] = foldedExpr
+		}
+	}
+	return newExprs, nil
+}
+
 func ConstantFold(bat *batch.Batch, expr *plan.Expr, proc *process.Process, varAndParamIsConst bool) (*plan.Expr, error) {
 	// If it is Expr_List, perform constant folding on its elements
 	if elist := expr.GetList(); elist != nil {
@@ -1706,6 +1720,15 @@ func ResetAuxIdForExpr(expr *plan.Expr) {
 // 	}
 // 	return expr
 // }
+
+func FormatExprs(exprs []*plan.Expr) string {
+	var w bytes.Buffer
+	for _, expr := range exprs {
+		w.WriteString(FormatExpr(expr))
+		w.WriteByte('\n')
+	}
+	return w.String()
+}
 
 func FormatExpr(expr *plan.Expr) string {
 	var w bytes.Buffer
