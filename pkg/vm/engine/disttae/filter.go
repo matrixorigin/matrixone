@@ -16,7 +16,6 @@ package disttae
 
 import (
 	"context"
-
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -146,19 +145,21 @@ func mustColConstValueFromBinaryFuncExpr(
 		valExprs []*plan.Expr
 		ok       bool
 	)
-	if colExpr, ok = expr.F.Args[0].Expr.(*plan.Expr_Col); ok {
-		panic("first args is not col expr")
+
+	for idx := range expr.F.Args {
+		ee := expr.F.Args[idx]
+
+		if tmpExpr, ok := ee.Expr.(*plan.Expr_Col); !ok {
+			valExprs = append(valExprs, ee)
+		} else {
+			colExpr = tmpExpr
+		}
 	}
 
-	valExprs = expr.F.Args[1:]
+	if len(valExprs) == 0 || colExpr == nil {
+		return nil, nil, false
+	}
 
-	//if colExpr, ok = expr.F.Args[0].Expr.(*plan.Expr_Col); ok {
-	//	valExpr = expr.F.Args[1]
-	//} else if colExpr, ok = expr.F.Args[1].Expr.(*plan.Expr_Col); ok {
-	//	valExpr = expr.F.Args[0]
-	//} else {
-	//	return nil, nil, false
-	//}
 	vals, ok := getConstBytesFromExpr(
 		valExprs,
 		tableDef.Cols[colExpr.Col.ColPos],
