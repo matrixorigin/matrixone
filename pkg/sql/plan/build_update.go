@@ -242,6 +242,8 @@ func selectUpdateTables(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.
 		upPlanCtx.rowIdPos = rowIdPos
 		upPlanCtx.updateColPosMap = updateColPosMap
 		upPlanCtx.allDelTableIDs = map[uint64]struct{}{}
+		upPlanCtx.allDelTables = map[FkReferKey]struct{}{}
+		upPlanCtx.checkInsertPkDup = true
 		upPlanCtx.updatePkCol = updatePkCol
 
 		for idx, col := range tableDef.Cols {

@@ -345,7 +345,7 @@ func (c *DashboardCreator) getMetricWithFilter(name string, filter string) strin
 }
 
 func (c *DashboardCreator) getCloudFilters() string {
-	return `matrixone_cloud_main_cluster=~"$physicalCluster", matrixone_cloud_cluster=~"$cluster", pod=~"$pod"`
+	return `matrixone_cloud_main_cluster=~"$physicalCluster", pod=~"$pod"`
 }
 
 func (c *DashboardCreator) initCloudFilterOptions() {
@@ -356,17 +356,18 @@ func (c *DashboardCreator) initCloudFilterOptions() {
 			query.DefaultAll(),
 			query.IncludeAll(),
 			query.Multiple(),
-			query.Label("matrixone_cloud_main_cluster"),
-			query.Request("label_values(matrixone_cloud_main_cluster)"),
+			query.Label("main_cluster"),
+			query.Request(`label_values(up, matrixone_cloud_main_cluster)`),
 		),
 		dashboard.VariableAsQuery(
-			"cluster",
+			"owner",
 			query.DataSource(c.dataSource),
 			query.DefaultAll(),
 			query.IncludeAll(),
 			query.Multiple(),
-			query.Label("matrixone_cloud_cluster"),
-			query.Request("label_values(matrixone_cloud_cluster)"),
+			query.Label("owner"),
+			query.Request(`label_values(up{matrixone_cloud_main_cluster=~"$physicalCluster"}, matrixorigin_io_owner)`),
+			query.AllValue(".*"),
 		),
 		dashboard.VariableAsQuery(
 			"pod",
@@ -375,7 +376,7 @@ func (c *DashboardCreator) initCloudFilterOptions() {
 			query.IncludeAll(),
 			query.Multiple(),
 			query.Label("pod"),
-			query.Request("label_values(pod)"),
+			query.Request(`label_values(up{matrixone_cloud_main_cluster="$physicalCluster", matrixorigin_io_owner=~"$owner"},pod)`),
 		))
 }
 
@@ -388,7 +389,7 @@ func (c *DashboardCreator) initCloudCtrlPlaneFilterOptions(metaDatasource string
 			"unit",
 			query.DataSource(metaDatasource),
 			query.Label("unit"),
-			query.Request("label_values(controlplane_instance_detail_info,unit)"),
+			query.Request(`label_values(mo_cluster_info, unit)`),
 		),
 		dashboard.VariableAsDatasource(
 			"ds_prom",
@@ -398,17 +399,18 @@ func (c *DashboardCreator) initCloudCtrlPlaneFilterOptions(metaDatasource string
 		dashboard.VariableAsQuery(
 			"physicalCluster",
 			query.DataSource(`${ds_prom}`),
-			query.Label("matrixone_cloud_main_cluster"),
-			query.Request("label_values(up,matrixone_cloud_main_cluster)"),
+			query.Label("main_cluster"),
+			query.Request(`label_values(up, matrixone_cloud_main_cluster)`),
 		),
 		dashboard.VariableAsQuery(
-			"cluster",
+			"owner",
 			query.DataSource(`${ds_prom}`),
 			query.DefaultAll(),
 			query.IncludeAll(),
 			query.Multiple(),
-			query.Label("matrixone_cloud_cluster"),
-			query.Request("label_values(up,matrixone_cloud_cluster)"),
+			query.Label("owner"),
+			query.Request(`label_values(up{matrixone_cloud_main_cluster=~"$physicalCluster"}, matrixorigin_io_owner)`),
+			query.AllValue(".*"),
 		),
 		dashboard.VariableAsQuery(
 			"pod",
@@ -417,7 +419,7 @@ func (c *DashboardCreator) initCloudCtrlPlaneFilterOptions(metaDatasource string
 			query.IncludeAll(),
 			query.Multiple(),
 			query.Label("pod"),
-			query.Request(`label_values(up{matrixone_cloud_main_cluster="$physicalCluster"},pod)`),
+			query.Request(`label_values(up{matrixone_cloud_main_cluster="$physicalCluster", matrixorigin_io_owner=~"$owner"},pod)`),
 		))
 }
 
