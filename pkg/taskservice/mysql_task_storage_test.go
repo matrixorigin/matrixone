@@ -15,6 +15,8 @@
 package taskservice
 
 import (
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
@@ -28,16 +30,12 @@ func TestBuildWhereClause(t *testing.T) {
 		expected string
 	}{
 		{
-			condition: conditions{
-				codeCond: map[condCode]condition{
-					CondTaskID: &taskIDCond{op: EQ, taskID: 1},
-				},
-			},
-			expected: "task_id=1",
+			condition: conditions(map[condCode]condition{CondTaskID: &taskIDCond{op: EQ, taskID: 1}}),
+			expected:  " AND task_id=1",
 		},
 		{
-			condition: conditions{
-				codeCond: map[condCode]condition{
+			condition: conditions(
+				map[condCode]condition{
 					CondTaskID:           &taskIDCond{op: EQ, taskID: 1},
 					CondTaskRunner:       &taskRunnerCond{op: EQ, taskRunner: "abc"},
 					CondTaskStatus:       &taskStatusCond{op: IN, taskStatus: []task.TaskStatus{task.TaskStatus_Created}},
@@ -45,24 +43,27 @@ func TestBuildWhereClause(t *testing.T) {
 					CondTaskParentTaskID: &taskParentTaskIDCond{op: GE, taskParentTaskID: "ab"},
 					CondTaskExecutor:     &taskExecutorCond{op: GE, taskExecutor: 1},
 				},
-			},
-			expected: "task_id=1 AND task_runner='abc' AND task_status IN (0) AND task_epoch<=100 AND task_parent_id>='ab' AND task_metadata_executor>=1",
+			),
+			expected: " AND task_id=1 AND task_runner='abc' AND task_status IN (0) AND task_epoch<=100 AND task_parent_id>='ab' AND task_metadata_executor>=1",
 		},
 		{
-			condition: conditions{
-				codeCond: map[condCode]condition{
-					CondTaskRunner:       &taskRunnerCond{op: EQ, taskRunner: "abc"},
-					CondTaskStatus:       &taskStatusCond{op: IN, taskStatus: []task.TaskStatus{task.TaskStatus_Created}},
-					CondTaskParentTaskID: &taskParentTaskIDCond{op: GE, taskParentTaskID: "ab"},
-					CondTaskExecutor:     &taskExecutorCond{op: LE, taskExecutor: 1},
-				},
+			condition: conditions(map[condCode]condition{
+				CondTaskRunner:       &taskRunnerCond{op: EQ, taskRunner: "abc"},
+				CondTaskStatus:       &taskStatusCond{op: IN, taskStatus: []task.TaskStatus{task.TaskStatus_Created}},
+				CondTaskParentTaskID: &taskParentTaskIDCond{op: GE, taskParentTaskID: "ab"},
+				CondTaskExecutor:     &taskExecutorCond{op: LE, taskExecutor: 1},
 			},
-			expected: "task_runner='abc' AND task_status IN (0) AND task_parent_id>='ab' AND task_metadata_executor<=1",
+			),
+			expected: " AND task_runner='abc' AND task_status IN (0) AND task_parent_id>='ab' AND task_metadata_executor<=1",
 		},
 	}
 
 	for _, c := range cases {
 		result := buildWhereClause(&c.condition)
-		assert.Equal(t, c.expected, result)
+		actual := strings.Split(result, " AND ")
+		expected := strings.Split(c.expected, " AND ")
+		slices.Sort(actual)
+		slices.Sort(expected)
+		assert.Equal(t, expected, actual)
 	}
 }

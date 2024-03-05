@@ -141,7 +141,7 @@ func (s *memTaskStorage) QueryAsyncTask(ctx context.Context, conds ...Condition)
 		if s.filterAsyncTask(c, task) {
 			result = append(result, task)
 		}
-		if cond, e := c.codeCond[CondLimit]; e && cond.eval(len(result)) {
+		if cond, e := (*c)[CondLimit]; e && cond.eval(len(result)) {
 			break
 		}
 	}
@@ -166,7 +166,7 @@ func (s *memTaskStorage) AddCronTask(ctx context.Context, tasks ...task.CronTask
 	return n, nil
 }
 
-func (s *memTaskStorage) QueryCronTask(context.Context) ([]task.CronTask, error) {
+func (s *memTaskStorage) QueryCronTask(context.Context, ...Condition) ([]task.CronTask, error) {
 	s.Lock()
 	defer s.Unlock()
 
@@ -283,7 +283,7 @@ func (s *memTaskStorage) QueryDaemonTask(ctx context.Context, conds ...Condition
 		if s.filterDaemonTask(c, task) {
 			result = append(result, task)
 		}
-		if cond, e := c.codeCond[CondLimit]; e && cond.eval(len(result)) {
+		if cond, e := (*c)[CondLimit]; e && cond.eval(len(result)) {
 			break
 		}
 	}
@@ -316,35 +316,35 @@ func (s *memTaskStorage) nextIDLocked() uint64 {
 func (s *memTaskStorage) filterAsyncTask(c *conditions, task task.AsyncTask) bool {
 	ok := true
 
-	if cond, e := c.codeCond[CondTaskID]; e {
+	if cond, e := (*c)[CondTaskID]; e {
 		ok = cond.eval(task.ID)
 	}
 	if !ok {
 		return false
 	}
 
-	if cond, e := c.codeCond[CondTaskRunner]; e {
+	if cond, e := (*c)[CondTaskRunner]; e {
 		ok = cond.eval(task.TaskRunner)
 	}
 	if !ok {
 		return false
 	}
 
-	if cond, e := c.codeCond[CondTaskStatus]; e {
+	if cond, e := (*c)[CondTaskStatus]; e {
 		ok = cond.eval(task.Status)
 	}
 	if !ok {
 		return false
 	}
 
-	if cond, e := c.codeCond[CondTaskEpoch]; e {
+	if cond, e := (*c)[CondTaskEpoch]; e {
 		ok = cond.eval(task.Epoch)
 	}
 	if !ok {
 		return false
 	}
 
-	if cond, e := c.codeCond[CondTaskParentTaskID]; e {
+	if cond, e := (*c)[CondTaskParentTaskID]; e {
 		ok = cond.eval(task.ParentTaskID)
 	}
 	return ok
@@ -353,40 +353,40 @@ func (s *memTaskStorage) filterAsyncTask(c *conditions, task task.AsyncTask) boo
 func (s *memTaskStorage) filterDaemonTask(c *conditions, task task.DaemonTask) bool {
 	ok := true
 
-	if cond, e := c.codeCond[CondTaskID]; e {
+	if cond, e := (*c)[CondTaskID]; e {
 		ok = cond.eval(task.ID)
 	}
 	if !ok {
 		return false
 	}
 
-	if cond, e := c.codeCond[CondTaskRunner]; e {
+	if cond, e := (*c)[CondTaskRunner]; e {
 		ok = cond.eval(task.TaskRunner)
 	}
 	if !ok {
 		return false
 	}
 
-	if cond, e := c.codeCond[CondTaskStatus]; e {
+	if cond, e := (*c)[CondTaskStatus]; e {
 		ok = cond.eval(task.TaskStatus)
 	}
 	if !ok {
 		return false
 	}
 
-	if cond, e := c.codeCond[CondTaskType]; e {
+	if cond, e := (*c)[CondTaskType]; e {
 		ok = cond.eval(task.TaskType)
 	}
 
-	if cond, e := c.codeCond[CondAccountID]; e {
+	if cond, e := (*c)[CondAccountID]; e {
 		ok = cond.eval(task.AccountID)
 	}
 
-	if cond, e := c.codeCond[CondAccount]; e {
+	if cond, e := (*c)[CondAccount]; e {
 		ok = cond.eval(task.Account)
 	}
 
-	if cond, e := c.codeCond[CondLastHeartbeat]; e {
+	if cond, e := (*c)[CondLastHeartbeat]; e {
 		ok = cond.eval(task.LastHeartbeat.UnixNano())
 	}
 	return ok

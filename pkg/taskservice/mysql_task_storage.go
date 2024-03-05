@@ -71,7 +71,7 @@ var (
 							error_msg,
 							create_at,
 							end_at 
-						from %s.sys_async_task`
+						from %s.sys_async_task where 1=1`
 
 	insertCronTask = `insert into %s.sys_cron_task (
                            task_metadata_id,
@@ -96,7 +96,7 @@ var (
     						trigger_times,
     						create_at,
     						update_at
-						from %s.sys_cron_task`
+						from %s.sys_cron_task where 1=1`
 
 	updateCronTask = `update %s.sys_cron_task set 
 							task_metadata_executor=?,
@@ -112,7 +112,7 @@ var (
 
 	getTriggerTimes = `select trigger_times from %s.sys_cron_task where task_metadata_id=?`
 
-	deleteAsyncTask = `delete from %s.sys_async_task where `
+	deleteAsyncTask = `delete from %s.sys_async_task where 1=1`
 
 	insertDaemonTask = `insert into %s.sys_daemon_task (
                       task_metadata_id,
@@ -144,7 +144,7 @@ var (
 	heartbeatDaemonTask = `update %s.sys_daemon_task set
 							last_heartbeat=? where task_id=?`
 
-	deleteDaemonTask = `delete from %s.sys_daemon_task where `
+	deleteDaemonTask = `delete from %s.sys_daemon_task where 1=1`
 
 	selectDaemonTask = `select
 							task_id,
@@ -163,7 +163,7 @@ var (
 							end_at,
 							last_run,
 							details
-						from %s.sys_daemon_task`
+						from %s.sys_daemon_task where 1=1`
 )
 
 var (
@@ -313,12 +313,7 @@ func (m *mysqlTaskStorage) UpdateAsyncTask(ctx context.Context, tasks []task.Asy
 		return 0, err
 	}
 
-	var update string
-	if where != "" {
-		update = fmt.Sprintf(updateAsyncTask, m.dbname) + " and " + where
-	} else {
-		update = fmt.Sprintf(updateAsyncTask, m.dbname)
-	}
+	update := fmt.Sprintf(updateAsyncTask, m.dbname) + where
 	n := 0
 	for _, t := range tasks {
 		err := func() error {
@@ -402,9 +397,7 @@ func (m *mysqlTaskStorage) DeleteAsyncTask(ctx context.Context, condition ...Con
 	for _, cond := range condition {
 		cond(c)
 	}
-	where := buildWhereClause(c)
-
-	exec, err := conn.ExecContext(ctx, fmt.Sprintf(deleteAsyncTask, m.dbname)+where)
+	exec, err := conn.ExecContext(ctx, fmt.Sprintf(deleteAsyncTask, m.dbname)+buildWhereClause(c))
 	if err != nil {
 		return 0, err
 	}
@@ -441,13 +434,7 @@ func (m *mysqlTaskStorage) QueryAsyncTask(ctx context.Context, condition ...Cond
 		cond(c)
 	}
 
-	where := buildWhereClause(c)
-	var query string
-	if where != "" {
-		query = fmt.Sprintf(selectAsyncTask, m.dbname) + " where " + where
-	} else {
-		query = fmt.Sprintf(selectAsyncTask, m.dbname)
-	}
+	query := fmt.Sprintf(selectAsyncTask, m.dbname) + buildWhereClause(c)
 	query += buildOrderByClause(c)
 	query += buildLimitClause(c)
 
@@ -585,7 +572,7 @@ func (m *mysqlTaskStorage) AddCronTask(ctx context.Context, cronTask ...task.Cro
 	return int(affected), nil
 }
 
-func (m *mysqlTaskStorage) QueryCronTask(ctx context.Context) (tasks []task.CronTask, err error) {
+func (m *mysqlTaskStorage) QueryCronTask(ctx context.Context, condition ...Condition) (tasks []task.CronTask, err error) {
 	if taskFrameworkDisabled() {
 		return nil, nil
 	}
@@ -606,7 +593,12 @@ func (m *mysqlTaskStorage) QueryCronTask(ctx context.Context) (tasks []task.Cron
 		_ = conn.Close()
 	}()
 
-	rows, err := conn.QueryContext(ctx, fmt.Sprintf(selectCronTask, m.dbname))
+	c := newConditions()
+	for _, cond := range condition {
+		cond(c)
+	}
+	query := fmt.Sprintf(selectCronTask, m.dbname) + buildWhereClause(c)
+	rows, err := conn.QueryContext(ctx, query)
 	defer func(rows *sql.Rows) {
 		if rows == nil {
 			return
@@ -759,48 +751,17 @@ func (m *mysqlTaskStorage) getTriggerTimes(ctx context.Context, conn *sql.Conn, 
 }
 
 func buildWhereClause(c *conditions) string {
-	var clause string
+	var clauseBuilder strings.Builder
 
-	if cond, ok := c.codeCond[CondTaskID]; ok {
-		clause = cond.sql()
-	}
-
-	if cond, ok := c.codeCond[CondTaskRunner]; ok {
-		if clause != "" {
-			clause += " AND "
+	for code := range whereConditionCodes {
+		if cond, ok := (*c)[code]; ok {
+			fmt.Println(cond.sql())
+			clauseBuilder.WriteString(" AND ")
+			clauseBuilder.WriteString(cond.sql())
 		}
-		clause += cond.sql()
 	}
 
-	if cond, ok := c.codeCond[CondTaskStatus]; ok {
-		if clause != "" {
-			clause += " AND "
-		}
-		clause += cond.sql()
-	}
-
-	if cond, ok := c.codeCond[CondTaskEpoch]; ok {
-		if clause != "" {
-			clause += " AND "
-		}
-		clause += cond.sql()
-	}
-
-	if cond, ok := c.codeCond[CondTaskParentTaskID]; ok {
-		if clause != "" {
-			clause += " AND "
-		}
-		clause += cond.sql()
-	}
-
-	if cond, ok := c.codeCond[CondTaskExecutor]; ok {
-		if clause != "" {
-			clause += " AND "
-		}
-		clause += cond.sql()
-	}
-
-	return clause
+	return clauseBuilder.String()
 }
 
 func (m *mysqlTaskStorage) getDB() (*sql.DB, func() error, error) {
@@ -837,14 +798,14 @@ func (m *mysqlTaskStorage) useDB(db *sql.DB) (err error) {
 }
 
 func buildLimitClause(c *conditions) string {
-	if cond, ok := c.codeCond[CondLimit]; ok {
+	if cond, ok := (*c)[CondLimit]; ok {
 		return cond.sql()
 	}
 	return ""
 }
 
 func buildOrderByClause(c *conditions) string {
-	if cond, ok := c.codeCond[CondOrderByDesc]; ok {
+	if cond, ok := (*c)[CondOrderByDesc]; ok {
 		return cond.sql()
 	}
 	return " order by task_id"
@@ -1014,12 +975,7 @@ func (m *mysqlTaskStorage) UpdateDaemonTask(ctx context.Context, tasks []task.Da
 		return 0, err
 	}
 
-	var update string
-	if where != "" {
-		update = fmt.Sprintf(updateDaemonTask, m.dbname) + " and " + where
-	} else {
-		update = fmt.Sprintf(updateDaemonTask, m.dbname)
-	}
+	update := fmt.Sprintf(updateDaemonTask, m.dbname) + where
 	n := 0
 	for _, t := range tasks {
 		err := func() error {
@@ -1295,53 +1251,14 @@ func (m *mysqlTaskStorage) HeartbeatDaemonTask(ctx context.Context, tasks []task
 }
 
 func buildDaemonTaskWhereClause(c *conditions) string {
-	var clause string
+	var clauseBuilder strings.Builder
 
-	if cond, ok := c.codeCond[CondTaskID]; ok {
-		clause = cond.sql()
-	}
-
-	if cond, ok := c.codeCond[CondTaskRunner]; ok {
-		if clause != "" {
-			clause += " AND "
+	for cond := range daemonWhereConditionCodes {
+		if cond, ok := (*c)[cond]; ok {
+			clauseBuilder.WriteString(" AND ")
+			clauseBuilder.WriteString(cond.sql())
 		}
-		clause += cond.sql()
 	}
 
-	if cond, ok := c.codeCond[CondTaskStatus]; ok {
-		if clause != "" {
-			clause += " AND "
-		}
-		clause += cond.sql()
-	}
-
-	if cond, ok := c.codeCond[CondTaskType]; ok {
-		if clause != "" {
-			clause += " AND "
-		}
-		clause += cond.sql()
-	}
-
-	if cond, ok := c.codeCond[CondAccountID]; ok {
-		if clause != "" {
-			clause += " AND "
-		}
-		clause += cond.sql()
-	}
-
-	if cond, ok := c.codeCond[CondAccount]; ok {
-		if clause != "" {
-			clause += " AND "
-		}
-		clause += cond.sql()
-	}
-
-	if cond, ok := c.codeCond[CondLastHeartbeat]; ok {
-		if clause != "" {
-			clause += " AND "
-		}
-		clause += cond.sql()
-	}
-
-	return clause
+	return clauseBuilder.String()
 }
