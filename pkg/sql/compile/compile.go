@@ -71,6 +71,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	mokafka "github.com/matrixorigin/matrixone/pkg/stream/adapter/kafka"
+	txnTrace "github.com/matrixorigin/matrixone/pkg/txn/trace"
 	util2 "github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -122,6 +123,9 @@ func NewCompile(
 	c.cnLabel = cnLabel
 	c.startAt = startAt
 	c.disableRetry = false
+	if c.proc.TxnOperator != nil {
+		c.proc.TxnOperator.GetWorkspace().UpdateSnapshotWriteOffset()
+	}
 	return c
 }
 
@@ -160,6 +164,7 @@ func (c *Compile) reset() {
 	c.tenant = ""
 	c.uid = ""
 	c.sql = ""
+	c.originSQL = ""
 	c.anal = nil
 	c.e = nil
 	c.ctx = nil
@@ -393,6 +398,12 @@ func (c *Compile) allocOperatorID() int32 {
 
 // Run is an important function of the compute-layer, it executes a single sql according to its scope
 func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
+	sql := c.originSQL
+	if sql == "" {
+		sql = c.sql
+	}
+	txnTrace.GetService().TxnExecute(c.proc.TxnOperator, sql)
+
 	var writeOffset uint64
 
 	start := time.Now()
@@ -411,7 +422,7 @@ func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
 	}
 
 	if c.proc.TxnOperator != nil {
-		writeOffset = c.proc.TxnOperator.GetWorkspace().WriteOffset()
+		writeOffset = uint64(c.proc.TxnOperator.GetWorkspace().GetSnapshotWriteOffset())
 	}
 	result = &util2.RunResult{}
 	var span trace.Span
@@ -429,28 +440,6 @@ func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
 	c.ctx, span = trace.Start(c.ctx, "Compile.Run", trace.WithKind(trace.SpanKindStatement))
 	_, task := gotrace.NewTask(context.TODO(), "pipeline.Run")
 	defer func() {
-		// fuzzy filter not sure whether this insert / load obey duplicate constraints, need double check
-		if runC != nil {
-			if runC.fuzzy != nil && runC.fuzzy.cnt > 0 && err == nil {
-				err = runC.fuzzy.backgroundSQLCheck(runC)
-			}
-
-			//detect fk self refer
-			//update, insert
-			query := c.pn.GetQuery()
-			if err == nil && query != nil && (query.StmtType == plan.Query_INSERT ||
-				query.StmtType == plan.Query_UPDATE) && len(query.GetDetectSqls()) != 0 {
-				err = detectFkSelfRefer(runC, query.DetectSqls)
-			}
-			//alter table ... add/drop foreign key
-			if err == nil && c.pn.GetDdl() != nil {
-				alterTable := c.pn.GetDdl().GetAlterTable()
-				if alterTable != nil && len(alterTable.GetDetectSqls()) != 0 {
-					err = detectFkSelfRefer(runC, alterTable.GetDetectSqls())
-				}
-			}
-		}
-
 		c.Release()
 		releaseRunC()
 
@@ -593,11 +582,36 @@ func (c *Compile) runOnce() error {
 		}
 	}
 
-	if len(errList) == 0 {
-		return nil
-	} else {
-		return errList[0]
+	if len(errList) > 0 {
+		err = errList[0]
 	}
+	if err != nil {
+		return err
+	}
+
+	// fuzzy filter not sure whether this insert / load obey duplicate constraints, need double check
+	if c.fuzzy != nil && c.fuzzy.cnt > 0 && err == nil {
+		err = c.fuzzy.backgroundSQLCheck(c)
+	}
+	if err != nil {
+		return err
+	}
+
+	//detect fk self refer
+	//update, insert
+	query := c.pn.GetQuery()
+	if err == nil && query != nil && (query.StmtType == plan.Query_INSERT ||
+		query.StmtType == plan.Query_UPDATE) && len(query.GetDetectSqls()) != 0 {
+		err = detectFkSelfRefer(c, query.DetectSqls)
+	}
+	//alter table ... add/drop foreign key
+	if err == nil && c.pn.GetDdl() != nil {
+		alterTable := c.pn.GetDdl().GetAlterTable()
+		if alterTable != nil && len(alterTable.GetDetectSqls()) != 0 {
+			err = detectFkSelfRefer(c, alterTable.GetDetectSqls())
+		}
+	}
+	return err
 }
 
 // shouldReturnCtxErr return true only if the ctx has error and the error is not canceled.
@@ -2141,7 +2155,12 @@ func (c *Compile) compileRestrict(n *plan.Node, ss []*Scope) []*Scope {
 		return ss
 	}
 	currentFirstFlag := c.anal.isFirst
-	filterExpr := colexec.RewriteFilterExprList(n.FilterList)
+	// for dynamic parameter, substitute param ref and const fold cast expression here to improve performance
+	newFilters, err := plan2.ConstandFoldList(n.FilterList, c.proc, true)
+	if err != nil {
+		newFilters = n.FilterList
+	}
+	filterExpr := colexec.RewriteFilterExprList(newFilters)
 	for i := range ss {
 		ss[i].appendInstruction(vm.Instruction{
 			Op:      vm.Restrict,
@@ -2255,12 +2274,12 @@ func (c *Compile) compileShuffleJoin(ctx context.Context, node, left, right *pla
 
 	rightTyps := make([]types.Type, len(right.ProjectList))
 	for i, expr := range right.ProjectList {
-		rightTyps[i] = dupType(expr.Typ)
+		rightTyps[i] = dupType(&expr.Typ)
 	}
 
 	leftTyps := make([]types.Type, len(left.ProjectList))
 	for i, expr := range left.ProjectList {
-		leftTyps[i] = dupType(expr.Typ)
+		leftTyps[i] = dupType(&expr.Typ)
 	}
 
 	parent, children := c.newShuffleJoinScopeList(lefts, rights, node)
@@ -2361,12 +2380,12 @@ func (c *Compile) compileBroadcastJoin(ctx context.Context, node, left, right *p
 
 	rightTyps := make([]types.Type, len(right.ProjectList))
 	for i, expr := range right.ProjectList {
-		rightTyps[i] = dupType(expr.Typ)
+		rightTyps[i] = dupType(&expr.Typ)
 	}
 
 	leftTyps := make([]types.Type, len(left.ProjectList))
 	for i, expr := range left.ProjectList {
-		leftTyps[i] = dupType(expr.Typ)
+		leftTyps[i] = dupType(&expr.Typ)
 	}
 
 	switch node.JoinType {
@@ -3499,9 +3518,6 @@ func (c *Compile) fillAnalyzeInfo() {
 }
 
 func (c *Compile) determinExpandRanges(n *plan.Node, rel engine.Relation) bool {
-	if c.pn.GetQuery().StmtType != plan.Query_SELECT {
-		return true
-	}
 	if plan2.InternalTable(n.TableDef) {
 		return true
 	}
@@ -4442,11 +4458,6 @@ func (c *Compile) fatalLog(retry int, err error) {
 	if err == nil {
 		return
 	}
-	v, ok := moruntime.ProcessLevelRuntime().
-		GetGlobalVariables(moruntime.EnableCheckInvalidRCErrors)
-	if !ok || !v.(bool) {
-		return
-	}
 	fatal := moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) ||
 		moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) ||
 		moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict) ||
@@ -4456,9 +4467,18 @@ func (c *Compile) fatalLog(retry int, err error) {
 	if !fatal {
 		return
 	}
+
 	if retry == 0 &&
 		(moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) ||
 			moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged)) {
+		return
+	}
+
+	txnTrace.GetService().AddTxnError(c.proc.TxnOperator.Txn().ID, err)
+
+	v, ok := moruntime.ProcessLevelRuntime().
+		GetGlobalVariables(moruntime.EnableCheckInvalidRCErrors)
+	if !ok || !v.(bool) {
 		return
 	}
 
@@ -4466,6 +4486,10 @@ func (c *Compile) fatalLog(retry int, err error) {
 		hex.EncodeToString(c.proc.TxnOperator.Txn().ID),
 		retry,
 		err.Error())
+}
+
+func (c *Compile) SetOriginSQL(sql string) {
+	c.originSQL = sql
 }
 
 func (c *Compile) SetBuildPlanFunc(buildPlanFunc func() (*plan2.Plan, error)) {
@@ -4502,6 +4526,28 @@ func runDetectSql(c *Compile, sql string) error {
 			yes := vector.GetFixedAt[bool](vs[0], 0)
 			if !yes {
 				return moerr.NewErrFKNoReferencedRow2(c.ctx)
+			}
+		}
+	}
+	return nil
+}
+
+// runDetectFkReferToDBSql runs the fk detecting sql
+func runDetectFkReferToDBSql(c *Compile, sql string) error {
+	res, err := c.runSqlWithResult(sql)
+	if err != nil {
+		logutil.Errorf("The sql that caused the fk self refer check failed is %s, and generated background sql is %s", c.sql, sql)
+		return err
+	}
+	defer res.Close()
+
+	if res.Batches != nil {
+		vs := res.Batches[0].Vecs
+		if vs != nil && vs[0].Length() > 0 {
+			yes := vector.GetFixedAt[bool](vs[0], 0)
+			if yes {
+				return moerr.NewInternalError(c.ctx,
+					"can not drop database. It has been referenced by foreign keys")
 			}
 		}
 	}

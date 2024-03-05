@@ -76,6 +76,8 @@ func (m *MockCompilerContext) ResolveVariable(varName string, isSystemVar, isGlo
 		vars["sql_mode"] = "ONLY_FULL_GROUP_BY"
 	}
 
+	vars["foreign_key_checks"] = int64(1)
+
 	if result, ok := vars[varName]; ok {
 		return result, nil
 	}
@@ -859,6 +861,10 @@ func (m *MockCompilerContext) GetPrimaryKeyDef(dbName string, tableName string) 
 
 func (m *MockCompilerContext) Stats(obj *ObjectRef) (*pb.StatsInfo, error) {
 	return nil, nil
+}
+
+func (m *MockCompilerContext) GetStatsCache() *StatsCache {
+	return nil
 }
 
 func (m *MockCompilerContext) GetAccountId() (uint32, error) {
