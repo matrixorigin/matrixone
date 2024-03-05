@@ -313,12 +313,12 @@ func (db *txnDB) CreateObject(tid uint64, is1PC bool) (obj handle.Object, err er
 	}
 	return table.CreateObject(is1PC)
 }
-func (db *txnDB) CreateNonAppendableObject(tid uint64, is1PC bool) (obj handle.Object, err error) {
+func (db *txnDB) CreateNonAppendableObject(tid uint64, is1PC bool, opt *objectio.CreateObjOpt) (obj handle.Object, err error) {
 	var table *txnTable
 	if table, err = db.getOrSetTable(tid); err != nil {
 		return
 	}
-	return table.CreateNonAppendableObject(is1PC, nil)
+	return table.CreateNonAppendableObject(is1PC, opt)
 }
 
 func (db *txnDB) UpdateObjectStats(id *common.ID, stats *objectio.ObjectStats) error {

@@ -450,7 +450,8 @@ func TestGetSimpleExprValue(t *testing.T) {
 			{"set @@x=-x", true, nil},
 		}
 		ctrl := gomock.NewController(t)
-		ses := NewSession(&FakeProtocol{}, testutil.NewProc().Mp(), config.NewParameterUnit(nil, mock_frontend.NewMockEngine(ctrl), mock_frontend.NewMockTxnClient(ctrl), nil), GSysVariables, false, nil, nil)
+		ses := newTestSession(t, ctrl)
+		//ses := NewSession(&FakeProtocol{}, testutil.NewProc().Mp(), config.NewParameterUnit(nil, mock_frontend.NewMockEngine(ctrl), mock_frontend.NewMockTxnClient(ctrl), nil), GSysVariables, false, nil, nil)
 		ses.txnCompileCtx.SetProcess(testutil.NewProc())
 		ses.requestCtx = ctx
 		for _, kase := range kases {
@@ -487,7 +488,8 @@ func TestGetSimpleExprValue(t *testing.T) {
 			{"set @@x=-1.2345670", false, fmt.Sprintf("%v", dec3.Format(7))},
 		}
 		ctrl := gomock.NewController(t)
-		ses := NewSession(&FakeProtocol{}, testutil.NewProc().Mp(), config.NewParameterUnit(nil, mock_frontend.NewMockEngine(ctrl), mock_frontend.NewMockTxnClient(ctrl), nil), GSysVariables, false, nil, nil)
+		ses := newTestSession(t, ctrl)
+		//ses := NewSession(&FakeProtocol{}, testutil.NewProc().Mp(), config.NewParameterUnit(nil, mock_frontend.NewMockEngine(ctrl), mock_frontend.NewMockTxnClient(ctrl), nil), GSysVariables, false, nil, nil)
 		ses.txnCompileCtx.SetProcess(testutil.NewProc())
 		ses.requestCtx = ctx
 		for _, kase := range kases {
@@ -629,7 +631,8 @@ func TestGetExprValue(t *testing.T) {
 		ws.EXPECT().GetSQLCount().AnyTimes()
 		ws.EXPECT().StartStatement().AnyTimes()
 		ws.EXPECT().EndStatement().AnyTimes()
-		ws.EXPECT().WriteOffset().Return(uint64(0)).AnyTimes()
+		ws.EXPECT().GetSnapshotWriteOffset().Return(0).AnyTimes()
+		ws.EXPECT().UpdateSnapshotWriteOffset().AnyTimes()
 		ws.EXPECT().Adjust(gomock.Any()).AnyTimes()
 
 		txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
@@ -670,9 +673,9 @@ func TestGetExprValue(t *testing.T) {
 				cvey.So(err, cvey.ShouldBeNil)
 				switch ret := value.(type) {
 				case *plan.Expr:
-					if types.T(ret.GetTyp().GetId()) == types.T_decimal64 {
+					if types.T(ret.GetTyp().Id) == types.T_decimal64 {
 						cvey.So(ret.GetLit().GetDecimal64Val().GetA(), cvey.ShouldEqual, kase.want)
-					} else if types.T(ret.GetTyp().GetId()) == types.T_decimal128 {
+					} else if types.T(ret.GetTyp().Id) == types.T_decimal128 {
 						temp := kase.want.(types.Decimal128)
 						cvey.So(uint64(ret.GetLit().GetDecimal128Val().GetA()), cvey.ShouldEqual, temp.B0_63)
 						cvey.So(uint64(ret.GetLit().GetDecimal128Val().GetB()), cvey.ShouldEqual, temp.B64_127)
@@ -729,7 +732,8 @@ func TestGetExprValue(t *testing.T) {
 		ws.EXPECT().IncrStatementID(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 		ws.EXPECT().StartStatement().AnyTimes()
 		ws.EXPECT().EndStatement().AnyTimes()
-		ws.EXPECT().WriteOffset().Return(uint64(0)).AnyTimes()
+		ws.EXPECT().GetSnapshotWriteOffset().Return(0).AnyTimes()
+		ws.EXPECT().UpdateSnapshotWriteOffset().AnyTimes()
 		ws.EXPECT().Adjust(uint64(0)).AnyTimes()
 		ws.EXPECT().IncrSQLCount().AnyTimes()
 		ws.EXPECT().GetSQLCount().AnyTimes()

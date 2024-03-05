@@ -104,7 +104,10 @@ func (w *Ws) Rollback(ctx context.Context) error {
 	return nil
 }
 
-func (w *Ws) WriteOffset() uint64 {
+func (w *Ws) UpdateSnapshotWriteOffset() {
+}
+
+func (w *Ws) GetSnapshotWriteOffset() int {
 	return 0
 }
 
