@@ -601,10 +601,7 @@ func CompileFilterExpr(
 				return blkMeta.MustGetColumn(uint16(seqNum)).ZoneMap().PrefixEq(vals[0]), nil
 			}
 
-		//case "prefix_between":
-		// what is the difference between 'prefix_between' and 'between'
-		case "between":
-			// where xxx between A and B
+		case "prefix_between":
 			colExpr, vals, ok := mustColConstValueFromBinaryFuncExpr(exprImpl, tableDef, proc)
 			if !ok {
 				canCompile = false
@@ -636,6 +633,40 @@ func CompileFilterExpr(
 					return true, nil
 				}
 				return blkMeta.MustGetColumn(uint16(seqNum)).ZoneMap().PrefixBetween(vals[0], vals[1]), nil
+			}
+
+		case "between":
+			colExpr, vals, ok := mustColConstValueFromBinaryFuncExpr(exprImpl, tableDef, proc)
+			if !ok {
+				canCompile = false
+				return
+			}
+			colDef := getColDefByName(colExpr.Col.Name, tableDef)
+			isPK, isCluster := isClusterOrPK(colDef)
+			if isPK || isCluster {
+				fastFilterOp = func(obj objectio.ObjectStats) (bool, error) {
+					if obj.ZMIsEmpty() {
+						return true, nil
+					}
+					return obj.SortKeyZoneMap().Between(vals[0], vals[1]), nil
+				}
+			}
+			loadOp = loadMetadataOnlyOpFactory(fs)
+			seqNum := colDef.Seqnum
+			objectFilterOp = func(meta objectio.ObjectMeta, _ objectio.BloomFilter) (bool, error) {
+				if isCluster || isPK {
+					return true, nil
+				}
+				dataMeta := meta.MustDataMeta()
+				return dataMeta.MustGetColumn(uint16(seqNum)).ZoneMap().Between(vals[0], vals[1]), nil
+			}
+			blockFilterOp = func(
+				blk objectio.BlockInfo, blkMeta objectio.BlockObject, bf objectio.BloomFilter,
+			) (bool, error) {
+				if blkMeta.IsEmpty() {
+					return true, nil
+				}
+				return blkMeta.MustGetColumn(uint16(seqNum)).ZoneMap().Between(vals[0], vals[1]), nil
 			}
 
 		case "prefix_in":
@@ -689,8 +720,52 @@ func CompileFilterExpr(
 				return true, nil
 			}
 
-		// case "isnull", "is_null"
-		// case "isnotnull", "is_not_null"
+		case "isnull", "is_null":
+			colExpr, _, ok := mustColConstValueFromBinaryFuncExpr(exprImpl, tableDef, proc)
+			if !ok {
+				canCompile = false
+				return
+			}
+			colDef := getColDefByName(colExpr.Col.Name, tableDef)
+			fastFilterOp = nil
+			loadOp = loadMetadataOnlyOpFactory(fs)
+			seqNum := colDef.Seqnum
+			objectFilterOp = func(meta objectio.ObjectMeta, _ objectio.BloomFilter) (bool, error) {
+				dataMeta := meta.MustDataMeta()
+				return dataMeta.MustGetColumn(uint16(seqNum)).NullCnt() != 0, nil
+			}
+			blockFilterOp = func(
+				blk objectio.BlockInfo, blkMeta objectio.BlockObject, bf objectio.BloomFilter,
+			) (bool, error) {
+				if blkMeta.IsEmpty() {
+					return true, nil
+				}
+				return blkMeta.MustGetColumn(uint16(seqNum)).NullCnt() != 0, nil
+			}
+
+		case "isnotnull", "is_not_null":
+			colExpr, _, ok := mustColConstValueFromBinaryFuncExpr(exprImpl, tableDef, proc)
+			if !ok {
+				canCompile = false
+				return
+			}
+			colDef := getColDefByName(colExpr.Col.Name, tableDef)
+			fastFilterOp = nil
+			loadOp = loadMetadataOnlyOpFactory(fs)
+			seqNum := colDef.Seqnum
+			objectFilterOp = func(meta objectio.ObjectMeta, _ objectio.BloomFilter) (bool, error) {
+				dataMeta := meta.MustDataMeta()
+				return dataMeta.MustGetColumn(uint16(seqNum)).NullCnt() < dataMeta.BlockHeader().Rows(), nil
+			}
+			blockFilterOp = func(
+				blk objectio.BlockInfo, blkMeta objectio.BlockObject, bf objectio.BloomFilter,
+			) (bool, error) {
+				if blkMeta.IsEmpty() {
+					return true, nil
+				}
+				return blkMeta.MustGetColumn(uint16(seqNum)).NullCnt() < blkMeta.GetRows(), nil
+			}
+
 		case "in":
 			colExpr, val, ok := mustColVecValueFromBinaryFuncExpr(exprImpl, tableDef, proc)
 			if !ok {
