@@ -196,7 +196,7 @@ message Function {
 }
 
 message Expr {
-	Type typ = 1;
+	Type typ = 1 [(gogoproto.nullable) = false];
 	oneof expr {
 		Literal		lit		= 2;
 		ParamRef	p		= 3;
