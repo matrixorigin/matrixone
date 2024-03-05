@@ -424,6 +424,7 @@ import (
 %token <str> STDDEV_POP STDDEV_SAMP SUBDATE SUBSTR SUBSTRING SUM SYSDATE
 %token <str> SYSTEM_USER TRANSLATE TRIM VARIANCE VAR_POP VAR_SAMP AVG RANK ROW_NUMBER
 %token <str> DENSE_RANK BIT_CAST
+%token <str> BITMAP_BIT_POSITION BITMAP_BUCKET_NUMBER BITMAP_COUNT BITMAP_CONSTRUCT_AGG BITMAP_OR_AGG
 
 // Sequence function
 %token <str> NEXTVAL SETVAL CURRVAL LASTVAL
@@ -8985,8 +8986,26 @@ function_call_aggregate:
 	    WindowSpec: $6,
 	    }
     }
-
-
+|   BITMAP_CONSTRUCT_AGG '(' func_type_opt expression ')' window_spec_opt
+    {
+        name := tree.SetUnresolvedName(strings.ToLower($1))
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            Exprs: tree.Exprs{$4},
+            Type: $3,
+            WindowSpec: $6,
+        }
+    }
+|   BITMAP_OR_AGG '(' func_type_opt expression ')' window_spec_opt
+    {
+        name := tree.SetUnresolvedName(strings.ToLower($1))
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            Exprs: tree.Exprs{$4},
+            Type: $3,
+            WindowSpec: $6,
+        }
+    }
 
 std_dev_pop:
     STD
@@ -9354,6 +9373,30 @@ function_call_keyword:
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
             Exprs: tree.Exprs{val},
+        }
+    }
+|   BITMAP_BIT_POSITION '(' expression_list_opt ')'
+    {
+        name := tree.SetUnresolvedName(strings.ToLower($1))
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            Exprs: $3,
+        }
+    }
+|   BITMAP_BUCKET_NUMBER '(' expression_list_opt ')'
+    {
+        name := tree.SetUnresolvedName(strings.ToLower($1))
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            Exprs: $3,
+        }
+    }
+|   BITMAP_COUNT '(' expression_list_opt ')'
+    {
+        name := tree.SetUnresolvedName(strings.ToLower($1))
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            Exprs: $3,
         }
     }
 
@@ -11234,6 +11277,9 @@ not_keyword:
 |   HEADERS
 |   SERIAL_EXTRACT
 |   BIT_CAST
+|   BITMAP_BIT_POSITION
+|   BITMAP_BUCKET_NUMBER
+|   BITMAP_COUNT
 
 //mo_keywords:
 //    PROPERTIES

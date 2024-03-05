@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"strconv"
 	"strings"
 
@@ -27,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 func describeMessage(m *plan.MsgHeader, buf *bytes.Buffer) {
@@ -216,13 +216,13 @@ func funcExprExplain(ctx context.Context, funcExpr *plan.Expr_F, Typ *plan.Type,
 		}
 		buf.WriteString(")")
 	case function.UNARY_ARITHMETIC_OPERATOR:
-		var opertator string
+		var operator string
 		if funcExpr.F.Func.GetObjName() == "UNARY_PLUS" {
-			opertator = "+"
+			operator = "+"
 		} else {
-			opertator = "-"
+			operator = "-"
 		}
-		buf.WriteString("(" + opertator)
+		buf.WriteString("(" + operator)
 		err = describeExpr(ctx, funcExpr.F.Args[0], options, buf)
 		if err != nil {
 			return err
