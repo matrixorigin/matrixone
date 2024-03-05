@@ -1308,21 +1308,6 @@ func (ses *Session) GetTxnCompileCtx() *TxnCompilerContext {
 	proc = ses.proc
 	ses.mu.Unlock()
 	compCtx.SetProcess(proc)
-	if proc != nil {
-		conCtx := ses.GetConnectContext()
-		if conCtx == nil {
-			conCtx = context.Background()
-		}
-		proc.Ctx, proc.Cancel = context.WithTimeout(conCtx,
-			ses.GetParameterUnit().SV.SessionTimeout.Duration)
-		reqCtx := ses.GetRequestContext()
-		if reqCtx != nil {
-			accountId, err := defines.GetAccountId(reqCtx)
-			if err == nil {
-				proc.Ctx = defines.AttachAccountId(proc.Ctx, accountId)
-			}
-		}
-	}
 	return compCtx
 }
 
