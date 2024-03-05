@@ -15,6 +15,7 @@
 package task
 
 import (
+	"container/heap"
 	"context"
 	"time"
 
@@ -47,6 +48,7 @@ func NewScheduler(taskServiceGetter func() taskservice.TaskService, cfg hakeeper
 }
 
 func (s *scheduler) Schedule(cnState logservice.CNState, currentTick uint64) {
+	cnPool := newCNPoolWithCNState(cnState)
 	runningTasks := s.queryTasks(task.TaskStatus_Running)
 	createdTasks := s.queryTasks(task.TaskStatus_Created)
 	tasks := append(runningTasks, createdTasks...)
@@ -65,13 +67,13 @@ func (s *scheduler) Schedule(cnState logservice.CNState, currentTick uint64) {
 	if len(tasks) == 0 {
 		return
 	}
-	workingCNs := selectCNs(cnState, notExpired(s.cfg, currentTick))
-	orderedCN, expiredTasks := getCNOrderedAndExpiredTasks(runningTasks, getUUIDs(workingCNs))
+	workingCNPool := cnPool.selectCNs(notExpired(s.cfg, currentTick))
+	expiredTasks := getExpiredTasks(runningTasks, workingCNPool)
 	runtime.ProcessLevelRuntime().Logger().Info("task schedule query tasks",
 		zap.Int("created", len(createdTasks)),
 		zap.Int("expired", len(expiredTasks)))
-	s.allocateTasks(createdTasks, orderedCN)
-	s.allocateTasks(expiredTasks, orderedCN)
+	s.allocateTasks(createdTasks, workingCNPool)
+	s.allocateTasks(expiredTasks, workingCNPool)
 }
 
 func (s *scheduler) StartScheduleCronTask() {
@@ -106,59 +108,73 @@ func (s *scheduler) queryTasks(status task.TaskStatus) []task.AsyncTask {
 	return tasks
 }
 
-func (s *scheduler) allocateTasks(tasks []task.AsyncTask, orderedCN *cnMap) {
+func (s *scheduler) allocateTasks(tasks []task.AsyncTask, cnPool *cnPool) {
 	ts := s.taskServiceGetter()
 	if ts == nil {
 		return
 	}
 
 	for _, t := range tasks {
-		allocateTask(ts, t, orderedCN)
+		allocateTask(ts, t, cnPool)
 	}
 }
 
-func allocateTask(ts taskservice.TaskService, t task.AsyncTask, orderedCN *cnMap) {
-	runner := orderedCN.min()
-	if runner == "" {
+func allocateTask(ts taskservice.TaskService, t task.AsyncTask, cnPool *cnPool) {
+	var rules []rule
+	if len(t.Metadata.Options.Labels) != 0 {
+		rules = make([]rule, 0, len(t.Metadata.Options.Labels))
+		for key, label := range t.Metadata.Options.Labels {
+			rules = append(rules, containsLabel(key, label))
+		}
+
+	}
+	if t.Metadata.Options.Resource.GetCPU() > 0 {
+		rules = append(rules, withCPU(t.Metadata.Options.Resource.CPU))
+	}
+	if t.Metadata.Options.Resource.GetMemory() > 0 {
+		rules = append(rules, withMemory(t.Metadata.Options.Resource.Memory))
+	}
+	cnPool = cnPool.selectCNs(rules...)
+	runner := cnPool.min()
+	if runner.uuid == "" {
 		runtime.ProcessLevelRuntime().Logger().Warn("no CN available")
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), taskSchedulerDefaultTimeout)
 	defer cancel()
 
-	if err := ts.Allocate(ctx, t, runner); err != nil {
+	if err := ts.Allocate(ctx, t, runner.uuid); err != nil {
 		runtime.ProcessLevelRuntime().Logger().Error("failed to allocate task",
 			zap.Uint64("task-id", t.ID),
 			zap.String("task-metadata-id", t.Metadata.ID),
-			zap.String("task-runner", runner),
+			zap.String("task-runner", runner.uuid),
 			zap.Error(err))
 		return
 	}
 	runtime.ProcessLevelRuntime().Logger().Info("task allocated",
 		zap.Uint64("task-id", t.ID),
 		zap.String("task-metadata-id", t.Metadata.ID),
-		zap.String("task-runner", runner))
-	orderedCN.inc(t.TaskRunner)
+		zap.String("task-runner", runner.uuid))
+	heap.Push(cnPool, runner)
 }
 
-func getCNOrderedAndExpiredTasks(tasks []task.AsyncTask, workingCN map[string]struct{}) (*cnMap, []task.AsyncTask) {
-	orderedMap := newOrderedMap(workingCN)
-	n := 0
+func getExpiredTasks(tasks []task.AsyncTask, workingCNPool *cnPool) []task.AsyncTask {
+	expireCount := 0
 	for _, t := range tasks {
-		if _, ok := workingCN[t.TaskRunner]; ok {
-			orderedMap.inc(t.TaskRunner)
+		if store, ok := workingCNPool.getStore(t.TaskRunner); ok {
+			heap.Push(workingCNPool, store)
 		} else {
-			n++
+			expireCount++
 		}
 	}
-	if n == 0 {
-		return orderedMap, nil
+	if expireCount == 0 {
+		return nil
 	}
-	expired := make([]task.AsyncTask, 0, n)
+	expired := make([]task.AsyncTask, 0, expireCount)
 	for _, t := range tasks {
-		if _, ok := workingCN[t.TaskRunner]; !ok {
+		if !workingCNPool.contains(t.TaskRunner) {
 			expired = append(expired, t)
 		}
 	}
-	return orderedMap, expired
+	return expired
 }

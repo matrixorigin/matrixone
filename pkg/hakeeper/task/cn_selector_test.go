@@ -15,16 +15,24 @@
 package task
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"testing"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/stretchr/testify/assert"
 )
 
 var expiredTick = uint64(hakeeper.DefaultCNStoreTimeout / time.Second * hakeeper.DefaultTickPerSecond)
+
+func getUUIDs(cnState *cnPool) map[string]struct{} {
+	uuids := make(map[string]struct{}, len(cnState.freq))
+	for uuid := range cnState.freq {
+		uuids[uuid] = struct{}{}
+	}
+	return uuids
+}
 
 func TestSelectWorkingCNs(t *testing.T) {
 	cases := []struct {
@@ -54,7 +62,8 @@ func TestSelectWorkingCNs(t *testing.T) {
 	for _, c := range cases {
 		cfg := hakeeper.Config{}
 		cfg.Fill()
-		working := selectCNs(c.infos, notExpired(cfg, c.currentTick))
+		pool := newCNPoolWithCNState(c.infos)
+		working := pool.selectCNs(notExpired(cfg, c.currentTick))
 		assert.Equal(t, c.expectedCN, getUUIDs(working))
 	}
 }
@@ -123,7 +132,8 @@ func TestContainsLabel(t *testing.T) {
 	for _, c := range cases {
 		cfg := hakeeper.Config{}
 		cfg.Fill()
-		working := selectCNs(c.infos, containsLabel(c.key, c.value))
+		pool := newCNPoolWithCNState(c.infos)
+		working := pool.selectCNs(containsLabel(c.key, c.value))
 		assert.Equal(t, c.expectedCN, getUUIDs(working))
 	}
 }
@@ -172,7 +182,8 @@ func TestWithResource(t *testing.T) {
 	for _, c := range cases {
 		cfg := hakeeper.Config{}
 		cfg.Fill()
-		working := selectCNs(c.infos, withCPU(c.cpu), withMemory(c.mem))
+		pool := newCNPoolWithCNState(c.infos)
+		working := pool.selectCNs(withCPU(c.cpu), withMemory(c.mem))
 		assert.Equal(t, c.expectedCN, getUUIDs(working))
 	}
 }
