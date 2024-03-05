@@ -15,7 +15,9 @@
 package plan
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
@@ -151,18 +153,40 @@ func makeIndexTblScan(builder *QueryBuilder, bindCtx *BindContext, filterExp *pl
 			serialExpr2, // serial_full("a","value2")
 		})
 
-		//TODO: need to convert []Expr{"a", args[1]} --> []Expr{"a", "value1", "value2", "value3"...}
-		// Will be done later. args[1] is LiteralVec
-		//case "in":
-		//	serialExpr1, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "serial_full",
-		//		[]*plan.Expr{
-		//			makePlan2StringConstExprWithType(args[0].GetCol().Name), // "a"
-		//			args[1], // value
-		//		})
-		//	filterList, _ = bindFuncExprAndConstFold(builder.GetContext(), builder.compCtx.GetProcess(), "prefix_in", []*Expr{
-		//		indexKeyCol, // __mo_index_idx_col
-		//		serialExpr1, // serial_full("a","value")
-		//	})
+	case "in":
+
+		// NOTE: here we assume that args[1] is of type vector[varchar]. It is because master index is only
+		// applicable for string type columns.
+		origVec := vector.NewVec(types.T_varchar.ToType())
+		_ = origVec.UnmarshalBinary(args[1].GetVec().GetData())
+
+		concatVec := vector.NewVec(types.T_varchar.ToType())
+		mp := mpool.MustNewZero() //TODO: is this the right way to use mpool?
+		for i := 0; i < origVec.Length(); i++ {
+			newBytes := origVec.GetBytesAt(i)
+			newBytes = append([]byte(args[0].GetCol().Name), newBytes...) //concat("a","value1")
+			_ = vector.AppendBytes(concatVec, newBytes, false, mp)
+		}
+
+		newLen := concatVec.Length()
+		newData, _ := concatVec.MarshalBinary()
+		concatVec.Free(mp) // here we free the memory allocated by mpool.
+
+		newLiteralVecExpr := &plan.Expr{
+			Typ: *makePlan2Type(&varcharType),
+			Expr: &plan.Expr_Vec{
+				Vec: &plan.LiteralVec{
+					Len:  int32(newLen),
+					Data: newData,
+				},
+			},
+		}
+		serialExpr, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "serial_full", []*plan.Expr{newLiteralVecExpr})
+
+		filterList, _ = bindFuncExprAndConstFold(builder.GetContext(), builder.compCtx.GetProcess(), "prefix_in", []*Expr{
+			indexKeyCol, // __mo_index_idx_col
+			serialExpr,  // serial_full( concat("a","value1"), concat("a","value2"), ... )
+		})
 
 	}
 

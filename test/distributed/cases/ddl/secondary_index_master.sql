@@ -351,3 +351,41 @@ select * from t1 where a="Congress" and b="Lane" and c="1";
 --|                     Filter Cond: prefix_eq(#[0,0], 'Fa FNightingale ')                      |<-- Good
 --+---------------------------------------------------------------------------------------------+
 select * from t1 where a="Nightingale" and c between "2" and "3";
+
+-- 2.8.e Select with = and in
+drop table if exists t1;
+create table t1(a varchar(30), b varchar(30), c varchar(30));
+create index idx1 using master on t1(a,b,c);
+insert into t1 values("Congress","Lane", "1");
+insert into t1 values("Juniper","Way", "2");
+insert into t1 values("Nightingale","Lane", "3");
+--mysql> explain select * from t1 where a in ("Congress","Nightingale") and b="Lane" and c in("1","2","3");
+--+---------------------------------------------------------------------------------------------------------+
+--| QUERY PLAN                                                                                              |
+--+---------------------------------------------------------------------------------------------------------+
+--| Project                                                                                                 |
+--|   ->  Join                                                                                              |
+--|         Join Type: INDEX                                                                                |
+--|         Join Cond: (t1.__mo_fake_pk_col = #[1,0])                                                       |
+--|         Runtime Filter Build: #[-1,0]                                                                   |
+--|         ->  Table Scan on a.t1                                                                          |
+--|               Filter Cond: (t1.b = 'Lane'), t1.c in ([1 2 3]), t1.a in ([Congress Nightingale])         |
+--|               Runtime Filter Probe: t1.__mo_fake_pk_col                                                 |
+--|         ->  Join                                                                                        |
+--|               Join Type: INNER                                                                          |
+--|               Join Cond: (#[0,0] = #[1,0])                                                              |
+--|               ->  Project                                                                               |
+--|                     ->  Table Scan on a.__mo_index_secondary_018e0cf1-3349-7fa1-9b81-b2aea37c8f52       |
+--|                           Filter Cond: prefix_in(#[0,0], [FaCongress  FaNightingale ])                  | <-- Good
+--|               ->  Join                                                                                  |
+--|                     Join Type: INNER                                                                    |
+--|                     Join Cond: (#[0,0] = #[1,0])                                                        |
+--|                     ->  Project                                                                         |
+--|                           ->  Table Scan on a.__mo_index_secondary_018e0cf1-3349-7fa1-9b81-b2aea37c8f52 |
+--|                                 Filter Cond: prefix_in(#[0,0], [Fc1  Fc2  Fc3 ])                        |  <-- Good
+--|                     ->  Project                                                                         |
+--|                           ->  Table Scan on a.__mo_index_secondary_018e0cf1-3349-7fa1-9b81-b2aea37c8f52 |
+--|                                 Filter Cond: prefix_eq(#[0,0], 'Fb FLane ')                             |
+--+---------------------------------------------------------------------------------------------------------+
+--23 rows in set (0.00 sec)
+select * from t1 where a in ("Congress","Nightingale") and b="Lane" and c in("1","2","3");

@@ -95,6 +95,7 @@ func (builder *QueryBuilder) applyIndicesForFilters(nodeID int32, node *plan.Nod
 					goto END0
 				}
 			case "between":
+			case "in":
 
 			default:
 				goto END0
