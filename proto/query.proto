@@ -31,7 +31,7 @@ enum CmdMethod {
   Query = 0;
   // ShowProcessList represents the show process list query.
   ShowProcessList = 1;
-  // AlterAccount represent set account status as restricted 
+  // AlterAccount represent set account status as restricted
   AlterAccount = 2;
   // KillConn represents the kill connection request.
   KillConn = 3;
@@ -66,6 +66,8 @@ enum CmdMethod {
   GetCacheData = 17;
   // GetStatsInfo is the method to get stats info from remote node.
   GetStatsInfo = 18;
+  // GetPipelineInfo is the method to get pipeline info from CN
+  GetPipelineInfo = 19;
 }
 
 // QueryRequest is the common query request. It contains the query
@@ -139,6 +141,15 @@ message RunTaskResponse {
   string Result = 1;
 }
 
+
+message GetPipelineInfoRequest {
+}
+
+message GetPipelineInfoResponse {
+  // Count is the total pipelines running in the server
+  int64 Count = 1;
+}
+
 // Request is the query request.
 message Request {
   // RequestID is the request ID.
@@ -178,6 +189,8 @@ message Request {
   GetCacheDataRequest GetCacheDataRequest = 20;
   // GetStatsInfoRequest is the request of getting stats info from remote cn node.
   GetStatsInfoRequest GetStatsInfoRequest = 21;
+
+  GetPipelineInfoRequest GetPipelineInfoRequest = 22;
 }
 
 // ShowProcessListResponse is the response of command ShowProcessList.
@@ -224,6 +237,8 @@ message Response {
   GetCacheDataResponse GetCacheDataResponse = 20;
   // GetStatsInfoResponse is the response of GetStatsInfoRequest.
   GetStatsInfoResponse GetStatsInfoResponse = 21;
+
+  GetPipelineInfoResponse GetPipelineInfoResponse = 22;
 }
 
 // AlterAccountRequest is the "alter account restricted" query request.
