@@ -26,19 +26,20 @@ import (
 )
 
 var (
-	DebugDB         = "mo_debug"
-	featuresTables  = "trace_features"
-	traceTable      = "trace_tables"
-	traceCostTable  = "trace_costs"
-	eventTxnTable   = "trace_event_txn"
-	eventDataTable  = "trace_event_data"
-	eventErrorTable = "trace_event_error"
-	eventCostTable  = "trace_event_cost"
+	DebugDB               = "mo_debug"
+	featuresTables        = "trace_features"
+	traceTableFilterTable = "trace_table_filters"
+	traceTxnFilterTable   = "trace_txn_filters"
+	eventTxnTable         = "trace_event_txn"
+	eventDataTable        = "trace_event_data"
+	eventErrorTable       = "trace_event_error"
+	eventTxnActionTable   = "trace_event_txn_action"
 
-	featureTraceTxn     = "txn"
-	featureTraceTxnCost = "txn-cost"
-	stateEnable         = "enable"
-	stateDisable        = "disable"
+	FeatureTraceTxn       = "txn"
+	FeatureTraceTxnAction = "txn-action"
+	FeatureTraceData      = "data"
+	stateEnable           = "enable"
+	stateDisable          = "disable"
 
 	InitSQLs = []string{
 		fmt.Sprintf("create database %s", DebugDB),
@@ -51,18 +52,17 @@ var (
 			txn_status			  varchar(10),
 			snapshot_ts           varchar(50),
 			commit_ts             varchar(50),
-			check_changed		  varchar(100),
 			info                  varchar(1000)
 		)`, DebugDB, eventTxnTable),
 
 		fmt.Sprintf(`create table %s.%s(
-			ts 			          bigint       not null,
-			cn                    varchar(100) not null,
-			event_type            varchar(50)  not null,
-			entry_type			  varchar(50)  not null,
+			ts 			          bigint          not null,
+			cn                    varchar(100)    not null,
+			event_type            varchar(50)     not null,
+			entry_type			  varchar(50)     not null,
 			table_id 	          bigint UNSIGNED not null,
 			txn_id                varchar(50),
-			row_data              varchar(500) not null, 
+			row_data              varchar(500)    not null, 
 			committed_ts          varchar(50),
 			snapshot_ts           varchar(50)
 		)`, DebugDB, eventDataTable),
@@ -72,7 +72,13 @@ var (
 			table_id			  bigint UNSIGNED not null,
 			table_name            varchar(50)     not null,
 			columns               varchar(200)
-		)`, DebugDB, traceTable),
+		)`, DebugDB, traceTableFilterTable),
+
+		fmt.Sprintf(`create table %s.%s(
+			id             bigint UNSIGNED primary key auto_increment,
+			method         varchar(50)     not null,
+			value          varchar(500)    not null
+		)`, DebugDB, traceTxnFilterTable),
 
 		fmt.Sprintf(`create table %s.%s(
 			ts 			          bigint          not null,
@@ -81,19 +87,16 @@ var (
 		)`, DebugDB, eventErrorTable),
 
 		fmt.Sprintf(`create table %s.%s(
-			id                    bigint UNSIGNED primary key auto_increment,
-			filter_method         varchar(50)     not null,
-			filter_name           varchar(50)     not null,
-			filter_value          varchar(500)    not null
-		)`, DebugDB, traceCostTable),
-
-		fmt.Sprintf(`create table %s.%s(
-			ts 			          bigint       not null,
-			txn_id                varchar(50)  not null,
+			ts 			          bigint          not null,
+			txn_id                varchar(50)     not null,
+			cn                    varchar(50)     not null,
 			table_id              bigint UNSIGNED,
-			cost_name             varchar(100) not null,
-			cost_value            varchar(100) not null
-		)`, DebugDB, eventCostTable),
+			action                varchar(100)    not null,
+			action_sequence       bigint UNSIGNED not null,
+			value                 bigint,
+			unit                  varchar(10),
+			err                   varchar(100) 
+		)`, DebugDB, eventTxnActionTable),
 
 		fmt.Sprintf(`create table %s.%s(
 			name    varchar(50) not null primary key,
@@ -103,13 +106,19 @@ var (
 		fmt.Sprintf(`insert into %s.%s (name, state) values ('%s', '%s')`,
 			DebugDB,
 			featuresTables,
-			featureTraceTxn,
+			FeatureTraceTxn,
 			stateDisable),
 
 		fmt.Sprintf(`insert into %s.%s (name, state) values ('%s', '%s')`,
 			DebugDB,
 			featuresTables,
-			featureTraceTxnCost,
+			FeatureTraceTxnAction,
+			stateDisable),
+
+		fmt.Sprintf(`insert into %s.%s (name, state) values ('%s', '%s')`,
+			DebugDB,
+			featuresTables,
+			FeatureTraceData,
 			stateDisable),
 	}
 )
@@ -122,27 +131,40 @@ func GetService() Service {
 	return v.(Service)
 }
 
-type Service interface {
+type txnEventService interface {
 	TxnCreated(op client.TxnOperator)
-	TxnExecute(op client.TxnOperator, sql string)
-	TxnNeedUpdateSnapshot(op client.TxnOperator, tableID uint64, why string)
-	CommitEntries(txnID []byte, entries []*api.Entry)
-	TxnRead(txnID []byte, snapshotTS timestamp.Timestamp, tableID uint64, columns []string, bat *batch.Batch)
+	TxnExecSQL(op client.TxnOperator, sql string)
+	TxnUpdateSnapshot(op client.TxnOperator, tableID uint64, why string)
+	TxnCommit(op client.TxnOperator, entries []*api.Entry)
+	TxnRead(op client.TxnOperator, snapshotTS timestamp.Timestamp, tableID uint64, columns []string, bat *batch.Batch)
 	TxnReadBlock(op client.TxnOperator, tableID uint64, block []byte)
+	TxnError(op client.TxnOperator, err error)
+
+	AddTxnAction(op client.TxnOperator, action string, actionSequence uint64, tableID uint64, value int64, unit string, err error)
+
+	AddTxnFilter(method, value string) error
+	ClearTxnFilters() error
+	RefreshTxnFilters() error
+}
+
+type dataEventService interface {
 	ApplyLogtail(logtail *api.Entry, commitTSIndex int)
 	ApplyFlush(txnID []byte, tableID uint64, from, to timestamp.Timestamp, count int)
 	ApplyTransferRowID(txnID []byte, tableID uint64, fromRowID, toRowID, fromBlockID, toBlockID []byte, vec *vector.Vector, row int)
 	ApplyDeleteObject(tableID uint64, ts timestamp.Timestamp, objName string, tag string)
-	ChangedCheck(txnID []byte, tableID uint64, from, to timestamp.Timestamp, changed bool)
-	AddTxnError(txnID []byte, err error)
 
-	Enable() error
-	Disable() error
-	Enabled() bool
+	AddTableFilter(name string, columns []string) error
+	ClearTableFilters() error
+	RefreshTableFilters() error
+}
 
-	AddEntryFilter(name string, columns []string) error
-	RefreshFilters() error
-	ClearFilters() error
+type Service interface {
+	txnEventService
+	dataEventService
+
+	Enable(feature string) error
+	Disable(feature string) error
+	Enabled(feature string) bool
 
 	DecodeHexComplexPK(hex string) (string, error)
 
@@ -163,5 +185,11 @@ type EntryFilter interface {
 type TxnFilter interface {
 	// Filter returns true means the txn should be skipped.
 	Filter(op client.TxnOperator) bool
-	Name() string
+}
+
+type csvEvent interface {
+	toCSVRecord(
+		cn string,
+		buf *buffer,
+		records []string)
 }

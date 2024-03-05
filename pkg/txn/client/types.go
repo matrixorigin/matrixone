@@ -103,6 +103,8 @@ type TxnOperator interface {
 
 	// Txn returns the current txn metadata
 	Txn() txn.TxnMeta
+	// TxnOptions returns the current txn options
+	TxnOptions() txn.TxnOptions
 	// TxnRef returns pointer of current txn metadata. In RC mode, txn's snapshot ts
 	// will updated before statement executed.
 	TxnRef() *txn.TxnMeta
@@ -165,18 +167,15 @@ type TxnOperator interface {
 	ResetRetry(bool)
 	IsRetry() bool
 
-	SetOpenLog(bool)
-	IsOpenLog() bool
-
 	// AppendEventCallback append callback. All append callbacks will be called sequentially
 	// if event happen.
-	AppendEventCallback(event EventType, callbacks ...func(txn.TxnMeta, error))
+	AppendEventCallback(event EventType, callbacks ...func(TxnEvent))
 
 	// Debug send debug request to DN, after use, SendResult needs to call the Release
 	// method.
 	Debug(ctx context.Context, ops []txn.TxnRequest) (*rpc.SendResult, error)
 
-	PKDedupCount() int
+	NextSequence() uint64
 }
 
 // TxnIDGenerator txn id generator
@@ -270,4 +269,14 @@ type Lock struct {
 	Rows [][]byte
 	// Options lock options, include lock type(row|range) and lock mode
 	Options lock.LockOptions
+}
+
+type TxnEvent struct {
+	Event     EventType
+	Txn       txn.TxnMeta
+	TableID   uint64
+	Err       error
+	Sequence  uint64
+	Cost      time.Duration
+	CostEvent bool
 }

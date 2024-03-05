@@ -89,7 +89,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 
 	txnOp := proc.TxnOperator
-	if !txnOp.Txn().IsPessimistic() || txnOp.Txn().DisableLock {
+	if !txnOp.Txn().IsPessimistic() {
 		return arg.GetChildren(0).Call(proc)
 	}
 
@@ -288,8 +288,7 @@ func LockTable(
 	pkType types.Type,
 	changeDef bool) error {
 	txnOp := proc.TxnOperator
-	if !txnOp.Txn().IsPessimistic() ||
-		txnOp.Txn().DisableLock {
+	if !txnOp.Txn().IsPessimistic() {
 		return nil
 	}
 	parker := types.NewPacker(proc.Mp())
@@ -333,8 +332,7 @@ func LockRows(
 	group uint32,
 ) error {
 	txnOp := proc.TxnOperator
-	if !txnOp.Txn().IsPessimistic() ||
-		txnOp.Txn().DisableLock {
+	if !txnOp.Txn().IsPessimistic() {
 		return nil
 	}
 
@@ -485,15 +483,9 @@ func doLock(
 		if err != nil {
 			return false, false, timestamp.Timestamp{}, err
 		}
-		trace.GetService().ChangedCheck(
-			txn.ID,
-			tableID,
-			snapshotTS,
-			newSnapshotTS,
-			changed)
 
 		if changed {
-			trace.GetService().TxnNeedUpdateSnapshot(
+			trace.GetService().TxnUpdateSnapshot(
 				proc.TxnOperator,
 				tableID,
 				"no conflict, data changed")
@@ -530,7 +522,7 @@ func doLock(
 
 	// forward rc's snapshot ts
 	snapshotTS = result.Timestamp.Next()
-	trace.GetService().TxnNeedUpdateSnapshot(
+	trace.GetService().TxnUpdateSnapshot(
 		proc.TxnOperator,
 		tableID,
 		"conflict")

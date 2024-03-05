@@ -101,7 +101,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		}
 
 		trace.GetService().TxnRead(
-			proc.TxnOperator.Txn().ID,
+			proc.TxnOperator,
 			proc.TxnOperator.Txn().SnapshotTS,
 			arg.TableID,
 			arg.Attrs,

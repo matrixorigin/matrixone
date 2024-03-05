@@ -855,7 +855,7 @@ func genWriteReqs(ctx context.Context, writes []Entry, op client.TxnOperator) ([
 	}
 	reqs := make([]txn.TxnRequest, 0, len(mp))
 	for k := range mp {
-		trace.GetService().CommitEntries(op.Txn().ID, mp[k])
+		trace.GetService().TxnCommit(op, mp[k])
 		payload, err := types.Encode(&api.PrecommitWriteCmd{EntryList: mp[k]})
 		if err != nil {
 			return nil, err

@@ -154,7 +154,7 @@ func TestCommitWithLockTables(t *testing.T) {
 		}()
 
 		tc.mu.txn.Mode = txn.TxnMode_Pessimistic
-		tc.option.lockService = s
+		tc.lockService = s
 		tc.AddLockTable(lock.LockTable{Table: 1})
 		tc.mu.txn.TNShards = append(tc.mu.txn.TNShards, metadata.TNShard{TNShardRecord: metadata.TNShardRecord{ShardID: 1}})
 		err := tc.Commit(ctx)
@@ -195,7 +195,7 @@ func TestCommitWithLockTablesChanged(t *testing.T) {
 				})
 
 				tc.mu.txn.Mode = txn.TxnMode_Pessimistic
-				tc.option.lockService = s
+				tc.lockService = s
 
 				// table 1 hold bind same as lockservice, commit failed, will removed
 				tc.AddLockTable(lock.LockTable{Table: tableID1, ServiceID: s.GetServiceID(), Version: 1})
@@ -431,9 +431,9 @@ func TestSnapshotTxnOperator(t *testing.T) {
 
 		tc2.mu.txn.Mirror = false
 		assert.Equal(t, tc.mu.txn, tc2.mu.txn)
-		assert.False(t, tc2.option.coordinator)
-		tc2.option.coordinator = true
-		assert.Equal(t, tc.option, tc2.option)
+		assert.False(t, tc2.coordinator)
+		tc2.coordinator = true
+		assert.Equal(t, tc.options, tc2.options)
 		assert.Equal(t, 1, len(tc2.mu.lockTables))
 	}, WithTxnReadyOnly(), WithTxnDisable1PCOpt())
 }

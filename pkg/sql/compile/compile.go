@@ -399,7 +399,7 @@ func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
 	if sql == "" {
 		sql = c.sql
 	}
-	txnTrace.GetService().TxnExecute(c.proc.TxnOperator, sql)
+	txnTrace.GetService().TxnExecSQL(c.proc.TxnOperator, sql)
 
 	var writeOffset uint64
 
@@ -4463,7 +4463,7 @@ func (c *Compile) fatalLog(retry int, err error) {
 		return
 	}
 
-	txnTrace.GetService().AddTxnError(c.proc.TxnOperator.Txn().ID, err)
+	txnTrace.GetService().TxnError(c.proc.TxnOperator, err)
 
 	v, ok := moruntime.ProcessLevelRuntime().
 		GetGlobalVariables(moruntime.EnableCheckInvalidRCErrors)
