@@ -477,6 +477,12 @@ func (s *StatementInfo) ExecPlan2Stats(ctx context.Context) []byte {
 	var stats Statistic
 	var statsArray statistic.StatsArray
 
+	// fix: s.ExecPlan is nil
+	defer func() {
+		cu := CalculateCU(s.statsArray, int64(s.Duration))
+		s.statsArray.WithCU(cu)
+	}()
+
 	if s.ExecPlan == nil {
 		if s.statsArray.GetVersion() == 0 {
 			s.statsArray.Init()
@@ -493,8 +499,6 @@ func (s *StatementInfo) ExecPlan2Stats(ctx context.Context) []byte {
 		s.statsArray.WithConnType(s.ConnType)
 		s.RowsRead = stats.RowsRead
 		s.BytesScan = stats.BytesScan
-		cu := CalculateCU(s.statsArray, int64(s.Duration))
-		s.statsArray.WithCU(cu)
 		return s.statsArray.ToJsonString()
 	}
 }

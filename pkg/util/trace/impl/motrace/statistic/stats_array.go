@@ -26,7 +26,7 @@ type StatsArray [StatsArrayLength]float64
 const (
 	Decimal128ToFloat64Scale = 5
 	Float64PrecForMemorySize = 3
-	Float64PrecForCU         = 3
+	Float64PrecForCU         = 4
 )
 
 const StatsArrayVersion = StatsArrayVersionLatest
