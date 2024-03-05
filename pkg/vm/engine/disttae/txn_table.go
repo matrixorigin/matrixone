@@ -887,6 +887,7 @@ func (tbl *txnTable) tryFastRanges(
 	blocks *objectio.BlockInfoSlice,
 	fs fileservice.FileService,
 ) (done bool, err error) {
+
 	// TODO: refactor this code if composite key can be pushdown
 	if tbl.tableDef.Pkey == nil || tbl.tableDef.Pkey.CompPkeyCol == nil {
 		return TryFastFilterBlocks(

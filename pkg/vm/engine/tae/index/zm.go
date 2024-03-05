@@ -679,6 +679,19 @@ func (zm ZM) PrefixBetween(lb, ub []byte) bool {
 	return PrefixCompare(lb, zmax) <= 0 && PrefixCompare(zmin, ub) <= 0
 }
 
+func (zm ZM) Between(lb, ub []byte) bool {
+	// 			lb           ub
+	// 			|-----------|
+	//		|-------------------|
+	//   |-----------|
+	//           |--------------|
+	//          |-----|
+	// ===> lb <= max && ub >= min
+	zmin := zm.GetMinBuf()
+	zmax := zm.GetMaxBuf()
+	return bytes.Compare(lb, zmax) <= 0 && bytes.Compare(zmin, ub) <= 0
+}
+
 func (zm ZM) PrefixIn(vec *vector.Vector) bool {
 	col, area := vector.MustVarlenaRawData(vec)
 	minVal, maxVal := zm.GetMinBuf(), zm.GetMaxBuf()

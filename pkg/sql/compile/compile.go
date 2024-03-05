@@ -1140,13 +1140,6 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 
 	n := ns[curNodeIdx]
 
-	if strings.Contains(c.sql, "bmsql_") {
-		fmt.Println("block filter", n.BlockFilterList)
-		fmt.Println("filter", n.FilterList)
-		fmt.Println()
-		fmt.Println()
-	}
-
 	switch n.NodeType {
 	case plan.Node_VALUE_SCAN:
 		var bat *batch.Batch
