@@ -133,12 +133,14 @@ func LoadPersistedDeletes(
 		for i := 0; i < 2; i++ {
 			vec := containers.ToTNVector(movbat.Vecs[i], mp)
 			bat.AddVector(colNames[i], vec.CloneWindow(0, vec.Length()))
+			vec.Close()
 		}
 	} else {
 		colNames := []string{catalog.PhyAddrColumnName, catalog.AttrCommitTs, catalog.AttrPKVal, catalog.AttrAborted}
 		for i := 0; i < 4; i++ {
 			vec := containers.ToTNVector(movbat.Vecs[i], mp)
 			bat.AddVector(colNames[i], vec.CloneWindow(0, vec.Length()))
+			vec.Close()
 		}
 	}
 	return
