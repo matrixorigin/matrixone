@@ -107,6 +107,7 @@ type CompilerContext interface {
 	// is building the alter view or not
 	// return: yes or no, dbName, viewName
 	GetBuildingAlterView() (bool, string, string)
+	GetStatsCache() *StatsCache
 	GetSubscriptionMeta(dbName string) (*SubscriptionMeta, error)
 	CheckSubscriptionValid(subName, accName string, pubName string) error
 	SetQueryingSubscription(meta *SubscriptionMeta)

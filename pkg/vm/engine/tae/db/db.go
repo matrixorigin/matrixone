@@ -132,6 +132,10 @@ func (db *DB) StartTxn(info []byte) (txnif.AsyncTxn, error) {
 	return db.TxnMgr.StartTxn(info)
 }
 
+func (db *DB) StartTxnWithLatestTS(info []byte) (txnif.AsyncTxn, error) {
+	return db.TxnMgr.StartTxnWithLatestTS(info)
+}
+
 func (db *DB) CommitTxn(txn txnif.AsyncTxn) (err error) {
 	return txn.Commit(context.Background())
 }

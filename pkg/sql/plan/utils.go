@@ -1062,6 +1062,20 @@ func rewriteFiltersForStats(exprList []*plan.Expr, proc *process.Process) *plan.
 	return colexec.RewriteFilterExprList(exprList)
 }
 
+func ConstandFoldList(exprs []*plan.Expr, proc *process.Process, varAndParamIsConst bool) ([]*plan.Expr, error) {
+	newExprs := DeepCopyExprList(exprs)
+	for i := range newExprs {
+		foldedExpr, err := ConstantFold(batch.EmptyForConstFoldBatch, newExprs[i], proc, varAndParamIsConst)
+		if err != nil {
+			return nil, err
+		}
+		if foldedExpr != nil {
+			newExprs[i] = foldedExpr
+		}
+	}
+	return newExprs, nil
+}
+
 func ConstantFold(bat *batch.Batch, expr *plan.Expr, proc *process.Process, varAndParamIsConst bool) (*plan.Expr, error) {
 	// If it is Expr_List, perform constant folding on its elements
 	if elist := expr.GetList(); elist != nil {
@@ -1545,7 +1559,7 @@ func GenUniqueColJoinExpr(ctx context.Context, tableDef *TableDef, uniqueCols []
 		for _, colIdx := range uniqueColMap {
 			col := tableDef.Cols[colIdx]
 			leftExpr := &Expr{
-				Typ: col.Typ,
+				Typ: *col.Typ,
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
 						RelPos: leftTag,
@@ -1554,7 +1568,7 @@ func GenUniqueColJoinExpr(ctx context.Context, tableDef *TableDef, uniqueCols []
 				},
 			}
 			rightExpr := &plan.Expr{
-				Typ: col.Typ,
+				Typ: *col.Typ,
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
 						RelPos: rightTag,
@@ -1604,7 +1618,7 @@ func GenUniqueColCheckExpr(ctx context.Context, tableDef *TableDef, uniqueCols [
 			col := tableDef.Cols[colIdx]
 			// insert values
 			leftExpr := &Expr{
-				Typ: col.Typ,
+				Typ: *col.Typ,
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
 						RelPos: 0,
@@ -1613,7 +1627,7 @@ func GenUniqueColCheckExpr(ctx context.Context, tableDef *TableDef, uniqueCols [
 				},
 			}
 			rightExpr := &plan.Expr{
-				Typ: col.Typ,
+				Typ: *col.Typ,
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
 						RelPos: 1,
@@ -1896,7 +1910,7 @@ func HasFkSelfReferOnly(tableDef *TableDef) bool {
 
 func MakeInExpr(ctx context.Context, left *Expr, length int32, data []byte, matchPrefix bool) *Expr {
 	rightArg := &plan.Expr{
-		Typ: &plan.Type{
+		Typ: plan.Type{
 			Id: int32(types.T_tuple),
 		},
 		Expr: &plan.Expr_Vec{
@@ -1919,7 +1933,7 @@ func MakeInExpr(ctx context.Context, left *Expr, length int32, data []byte, matc
 		funcID = fGet.GetEncodedOverloadID()
 	}
 	inExpr := &plan.Expr{
-		Typ: &plan.Type{
+		Typ: plan.Type{
 			Id:          int32(types.T_bool),
 			NotNullable: left.Typ.NotNullable,
 		},

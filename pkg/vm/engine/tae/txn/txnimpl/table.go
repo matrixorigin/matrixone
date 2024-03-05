@@ -175,7 +175,7 @@ func (tbl *txnTable) TransferDeleteIntent(
 	}
 	rowID, ok := pinned.Item().Transfer(row)
 	if !ok {
-		err = moerr.NewTxnWWConflictNoCtx()
+		err = moerr.NewTxnWWConflictNoCtx(0, "")
 		return
 	}
 	changed = true
@@ -234,7 +234,7 @@ func (tbl *txnTable) recurTransferDelete(
 
 	rowID, ok := page.Transfer(row)
 	if !ok {
-		err := moerr.NewTxnWWConflictNoCtx()
+		err := moerr.NewTxnWWConflictNoCtx(0, "")
 		msg := fmt.Sprintf("table-%d blk-%d delete row-%d depth-%d",
 			id.TableID,
 			id.BlockID,
@@ -789,6 +789,10 @@ func (tbl *txnTable) RangeDelete(
 		// }
 		// This err also captured by txn's write conflict check.
 		if err != nil {
+			if moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict) {
+				err = moerr.NewTxnWWConflictNoCtx(id.TableID, pk.PPString(int(start-end+1)))
+			}
+
 			logutil.Debugf("[ts=%s]: table-%d blk-%s delete rows from %d to %d %v",
 				tbl.store.txn.GetStartTS().ToString(),
 				id.TableID,

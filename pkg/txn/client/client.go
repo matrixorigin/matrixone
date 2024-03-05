@@ -18,7 +18,6 @@ import (
 	"context"
 	"encoding/hex"
 	"math"
-	gotrace "runtime/trace"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -139,6 +138,12 @@ func WithPKDedupCount(count int) TxnClientCreateOption {
 	}
 }
 
+func WithTxnOpenedCallback(callbacks []func(op TxnOperator)) TxnClientCreateOption {
+	return func(tc *txnClient) {
+		tc.txnOpenedCallbacks = callbacks
+	}
+}
+
 var _ TxnClient = (*txnClient)(nil)
 
 type status int
@@ -161,6 +166,7 @@ type txnClient struct {
 	enableSacrificingFreshness bool
 	enableRefreshExpression    bool
 	PKDedupCount               int
+	txnOpenedCallbacks         []func(TxnOperator)
 
 	// normalStateNoWait is used to control if wait for the txn client's
 	// state to be normal. If it is false, which is default value, wait
@@ -259,8 +265,6 @@ func (client *txnClient) New(
 	}()
 
 	// we take a token from the limiter to control the number of transactions created per second.
-	_, task := gotrace.NewTask(context.TODO(), "transaction.New")
-	defer task.End()
 	client.limiter.Take()
 
 	ts, err := client.determineTxnSnapshot(ctx, minTS)
@@ -294,6 +298,11 @@ func (client *txnClient) New(
 	if err := client.openTxn(op); err != nil {
 		return nil, err
 	}
+
+	for _, cb := range client.txnOpenedCallbacks {
+		cb(op)
+	}
+
 	if err := op.waitActive(ctx); err != nil {
 		_ = op.Rollback(ctx)
 		return nil, err
@@ -302,8 +311,6 @@ func (client *txnClient) New(
 }
 
 func (client *txnClient) NewWithSnapshot(snapshot []byte) (TxnOperator, error) {
-	_, task := gotrace.NewTask(context.TODO(), "transaction.NewWithSnapshot")
-	defer task.End()
 	op, err := newTxnOperatorWithSnapshot(client.sender, snapshot)
 	if err != nil {
 		return nil, err
@@ -320,8 +327,6 @@ func (client *txnClient) Close() error {
 }
 
 func (client *txnClient) MinTimestamp() timestamp.Timestamp {
-	_, task := gotrace.NewTask(context.TODO(), "transaction.MinTimestamp")
-	defer task.End()
 	client.mu.RLock()
 	defer client.mu.RUnlock()
 
@@ -338,8 +343,6 @@ func (client *txnClient) MinTimestamp() timestamp.Timestamp {
 func (client *txnClient) WaitLogTailAppliedAt(
 	ctx context.Context,
 	ts timestamp.Timestamp) (timestamp.Timestamp, error) {
-	_, task := gotrace.NewTask(context.TODO(), "transaction.WaitLogTailAppliedAt")
-	defer task.End()
 	if client.timestampWaiter == nil {
 		return timestamp.Timestamp{}, nil
 	}
@@ -360,7 +363,9 @@ func (client *txnClient) getTxnMode() txn.TxnMode {
 	return txn.TxnMode_Pessimistic
 }
 
-func (client *txnClient) updateLastCommitTS(txn txn.TxnMeta) {
+func (client *txnClient) updateLastCommitTS(
+	txn txn.TxnMeta,
+	_ error) {
 	var old *timestamp.Timestamp
 	new := &txn.CommitTS
 	for {
@@ -424,7 +429,7 @@ func (client *txnClient) GetLatestCommitTS() timestamp.Timestamp {
 }
 
 func (client *txnClient) SyncLatestCommitTS(ts timestamp.Timestamp) {
-	client.updateLastCommitTS(txn.TxnMeta{CommitTS: ts})
+	client.updateLastCommitTS(txn.TxnMeta{CommitTS: ts}, nil)
 	if client.timestampWaiter != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second*30)
 		defer cancel()
@@ -480,7 +485,9 @@ func (client *txnClient) openTxn(op *txnOperator) error {
 	return nil
 }
 
-func (client *txnClient) closeTxn(txn txn.TxnMeta) {
+func (client *txnClient) closeTxn(
+	txn txn.TxnMeta,
+	_ error) {
 	client.mu.Lock()
 	defer func() {
 		v2.TxnActiveQueueSizeGauge.Set(float64(len(client.mu.activeTxns)))

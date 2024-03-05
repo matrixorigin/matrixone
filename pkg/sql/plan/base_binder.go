@@ -97,7 +97,7 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 				if _, ok := curScope[strings.ToLower(exprImpl.Parts[0])]; ok {
 					typ := types.T_text.ToType()
 					expr = &Expr{
-						Typ: makePlan2Type(&typ),
+						Typ: *makePlan2Type(&typ),
 						Expr: &plan.Expr_V{
 							V: &plan.VarRef{
 								Name:   exprImpl.Parts[0],
@@ -171,7 +171,7 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 					List: exprs,
 				},
 			},
-			Typ: &plan.Type{
+			Typ: plan.Type{
 				Id: int32(types.T_tuple),
 			},
 		}
@@ -190,7 +190,7 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 
 	case *tree.DefaultVal:
 		return &Expr{
-			Typ: &plan.Type{
+			Typ: plan.Type{
 				Id:          int32(types.T_bool),
 				NotNullable: true,
 			},
@@ -253,7 +253,7 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 func (b *baseBinder) baseBindParam(astExpr *tree.ParamExpr, depth int32, isRoot bool) (expr *plan.Expr, err error) {
 	typ := types.T_text.ToType()
 	return &Expr{
-		Typ: makePlan2Type(&typ),
+		Typ: *makePlan2Type(&typ),
 		Expr: &plan.Expr_P{
 			P: &plan.ParamRef{
 				Pos: int32(astExpr.Offset),
@@ -265,7 +265,7 @@ func (b *baseBinder) baseBindParam(astExpr *tree.ParamExpr, depth int32, isRoot 
 func (b *baseBinder) baseBindVar(astExpr *tree.VarExpr, depth int32, isRoot bool) (expr *plan.Expr, err error) {
 	typ := types.T_text.ToType()
 	return &Expr{
-		Typ: makePlan2Type(&typ),
+		Typ: *makePlan2Type(&typ),
 		Expr: &plan.Expr_V{
 			V: &plan.VarRef{
 				Name:   astExpr.Name,
@@ -294,7 +294,7 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 	if b.ctx.timeTag > 0 && (col == TimeWindowStart || col == TimeWindowEnd) {
 		colPos := int32(len(b.ctx.times))
 		expr = &plan.Expr{
-			Typ: &plan.Type{Id: int32(types.T_timestamp)},
+			Typ: plan.Type{Id: int32(types.T_timestamp)},
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: b.ctx.timeTag,
@@ -365,7 +365,7 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 			args[idx] = expr
 		}
 		args[len(args)-1] = &Expr{
-			Typ: typ,
+			Typ: *typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: relPos,
@@ -382,7 +382,7 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 		b.boundCols = append(b.boundCols, table+"."+col)
 
 		expr = &plan.Expr{
-			Typ: typ,
+			Typ: *typ,
 		}
 
 		if depth == 0 {
@@ -456,7 +456,7 @@ func (b *baseBinder) baseBindSubquery(astExpr *tree.Subquery, isRoot bool) (*Exp
 	rowSize := int32(len(subCtx.results))
 
 	returnExpr := &plan.Expr{
-		Typ: &plan.Type{
+		Typ: plan.Type{
 			Id: int32(types.T_tuple),
 		},
 		Expr: &plan.Expr_Sub{
@@ -468,7 +468,7 @@ func (b *baseBinder) baseBindSubquery(astExpr *tree.Subquery, isRoot bool) (*Exp
 	}
 
 	if astExpr.Exists {
-		returnExpr.Typ = &plan.Type{
+		returnExpr.Typ = plan.Type{
 			Id:          int32(types.T_bool),
 			NotNullable: true,
 		}
@@ -834,7 +834,7 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 				subquery.Typ = plan.SubqueryRef_IN
 				subquery.Child = leftArg
 
-				rightArg.Typ = &plan.Type{
+				rightArg.Typ = plan.Type{
 					Id:          int32(types.T_bool),
 					NotNullable: leftArg.Typ.NotNullable && rightArg.Typ.NotNullable,
 				}
@@ -875,7 +875,7 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 				subquery.Typ = plan.SubqueryRef_NOT_IN
 				subquery.Child = leftArg
 
-				rightArg.Typ = &plan.Type{
+				rightArg.Typ = plan.Type{
 					Id:          int32(types.T_bool),
 					NotNullable: leftArg.Typ.NotNullable && rightArg.Typ.NotNullable,
 				}
@@ -930,7 +930,7 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 				subquery.Typ = plan.SubqueryRef_ALL
 			}
 
-			expr.Typ = &plan.Type{
+			expr.Typ = plan.Type{
 				Id:          int32(types.T_bool),
 				NotNullable: expr.Typ.NotNullable && child.Typ.NotNullable,
 			}
@@ -1053,7 +1053,7 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 			return nil, err
 		}
 		typeExpr := &Expr{
-			Typ: typ,
+			Typ: *typ,
 			Expr: &plan.Expr_T{
 				T: &plan.TargetType{},
 			},
@@ -1081,7 +1081,7 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 			return nil, err
 		}
 		typeExpr := &Expr{
-			Typ: typ,
+			Typ: *typ,
 			Expr: &plan.Expr_T{
 				T: &plan.TargetType{},
 			},
@@ -1203,12 +1203,12 @@ func (b *baseBinder) bindPythonUdf(udf *function.Udf, astArgs []tree.Expr, depth
 	// function args
 	fArgTypes := udf.GetArgsPlanType()
 	for i, t := range fArgTypes {
-		args[len(astArgs)+i+1] = &Expr{Typ: t}
+		args[len(astArgs)+i+1] = &Expr{Typ: *t}
 	}
 
 	// function ret
 	fRetType := udf.GetRetPlanType()
-	args[2*len(astArgs)+1] = &Expr{Typ: fRetType}
+	args[2*len(astArgs)+1] = &Expr{Typ: *fRetType}
 
 	return BindFuncExprImplByPlanExpr(b.GetContext(), "python_user_defined_function", args)
 }
@@ -1309,7 +1309,7 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 	case "interval":
 		// rewrite interval function to ListExpr, and retrun directly
 		return &plan.Expr{
-			Typ: &plan.Type{
+			Typ: plan.Type{
 				Id: int32(types.T_interval),
 			},
 			Expr: &plan.Expr_List{
@@ -1575,7 +1575,7 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 
 	if function.GetFunctionIsAggregateByName(name) {
 		if constExpr := args[0].GetLit(); constExpr != nil && constExpr.Isnull {
-			args[0].Typ = makePlan2Type(&returnType)
+			args[0].Typ = *makePlan2Type(&returnType)
 		}
 	}
 
@@ -1627,7 +1627,7 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 
 			for _, rightVal := range rightList.List {
 				if checkNoNeedCast(makeTypeByPlan2Expr(rightVal), typLeft, rightVal.GetLit()) {
-					inExpr, err := appendCastBeforeExpr(ctx, rightVal, args[0].Typ)
+					inExpr, err := appendCastBeforeExpr(ctx, rightVal, &args[0].Typ)
 					if err != nil {
 						return nil, err
 					}
@@ -1650,7 +1650,7 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 							Args: args,
 						},
 					},
-					Typ: typ,
+					Typ: *typ,
 				}
 			} else if len(inExprList) > 0 {
 				orExprList = append(inExprList, orExprList...)
@@ -1737,7 +1737,7 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 				Args: args,
 			},
 		},
-		Typ: Typ,
+		Typ: *Typ,
 	}, nil
 }
 
@@ -1799,7 +1799,7 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ *Type) (*Expr, error) 
 							},
 						},
 					},
-					Typ: typ,
+					Typ: *typ,
 				}, nil
 			}
 			if typ.Id == int32(types.T_decimal128) {
@@ -1818,7 +1818,7 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ *Type) (*Expr, error) 
 							},
 						},
 					},
-					Typ: typ,
+					Typ: *typ,
 				}, nil
 			}
 			return appendCastBeforeExpr(b.GetContext(), makePlan2StringConstExprWithType(astExpr.String()), typ)
@@ -1838,7 +1838,7 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ *Type) (*Expr, error) 
 					},
 				},
 			},
-			Typ: &plan.Type{
+			Typ: plan.Type{
 				Id:          int32(types.T_decimal128),
 				Width:       38,
 				Scale:       scale,
@@ -1911,7 +1911,7 @@ func appendCastBeforeExpr(ctx context.Context, expr *Expr, toType *Type, isBin .
 				Args: []*Expr{
 					expr,
 					{
-						Typ: &typ,
+						Typ: typ,
 						Expr: &plan.Expr_T{
 							T: &plan.TargetType{},
 						},
@@ -1919,7 +1919,7 @@ func appendCastBeforeExpr(ctx context.Context, expr *Expr, toType *Type, isBin .
 				},
 			},
 		},
-		Typ: &typ,
+		Typ: typ,
 	}, nil
 }
 
@@ -2014,7 +2014,7 @@ func resetDateFunction(ctx context.Context, dateExpr *Expr, intervalExpr *Expr) 
 				},
 			},
 		},
-		Typ: strType,
+		Typ: *strType,
 	}
 	list.List[1] = strExpr
 	expr := &plan.Expr_List{

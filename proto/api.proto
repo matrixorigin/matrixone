@@ -364,3 +364,17 @@ message SchemaExtra {
 message Int64Map {
     map<int64, int64> m = 1;
 }
+
+
+message TransDestPos {
+    int32 idx = 1;
+    int32 row = 2;
+}
+
+message BlkTransMap {
+    map<int32, TransDestPos> m = 1[(gogoproto.nullable) = false];
+}
+
+message BlkTransferBooking {
+    repeated BlkTransMap mappings = 1[(gogoproto.nullable) = false];
+}
