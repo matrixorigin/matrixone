@@ -16,48 +16,141 @@ package aggexec
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
-type aggFuncResult[T types.FixedSizeTExceptStrType] struct {
-	mg     AggMemoryManager
-	mp     *mpool.MPool
-	typ    types.Type
-	res    *vector.Vector
-	values []T // for quick get/set
-
-	groupToSet  int  // row index for aggGet() and aggSet()
-	emptyBeNull bool // indicate that if we should set null to the new row.
-}
-
-type aggFuncBytesResult struct {
+type basicResult struct {
 	mg          AggMemoryManager
 	mp          *mpool.MPool
 	typ         types.Type
 	res         *vector.Vector
+	ess         *vector.Vector // empty situation.
+	empty       []bool
 	groupToSet  int  // row index for aggGet() and aggSet()
 	emptyBeNull bool // indicate that if we should set null to the new row.
+}
+
+func (r *basicResult) init(
+	mg AggMemoryManager, typ types.Type,
+	emptyNull bool) {
+	r.typ = typ
+	r.emptyBeNull = emptyNull
+	r.groupToSet = 0
+	if mg == nil {
+		return
+	}
+	r.mg = mg
+	r.mp = mg.Mp()
+	r.res = mg.GetVector(typ)
+	r.ess = mg.GetVector(types.T_bool.ToType())
+}
+
+func (r *basicResult) preExtend(more int) (oldLen, newLen int, err error) {
+	oldLen, newLen = r.res.Length(), r.res.Length()+more
+	if err = r.res.PreExtend(newLen, r.mp); err != nil {
+		return oldLen, oldLen, err
+	}
+	if err = r.ess.PreExtend(newLen, r.mp); err != nil {
+		return oldLen, oldLen, err
+	}
+	r.res.SetLength(newLen)
+	r.ess.SetLength(newLen)
+
+	r.empty = vector.MustFixedCol[bool](r.ess)
+	for i := oldLen; i < newLen; i++ {
+		r.empty[i] = true
+	}
+	return oldLen, newLen, nil
+}
+
+func (r *basicResult) flush() *vector.Vector {
+	if r.emptyBeNull {
+		nsp := nulls.NewWithSize(len(r.empty))
+		for i, j := uint64(0), uint64(len(r.empty)); i < j; i++ {
+			if r.empty[i] {
+				nsp.Add(i)
+			}
+		}
+		r.res.SetNulls(nsp)
+	}
+	result := r.res
+	r.res = nil
+	return result
+}
+
+func (r *basicResult) free() {
+	if r.mg == nil {
+		return
+	}
+	if r.res != nil {
+		if r.res.NeedDup() {
+			r.res.Free(r.mp)
+		} else {
+			r.mg.PutVector(r.res)
+		}
+	}
+	if r.ess != nil {
+		if r.ess.NeedDup() {
+			r.ess.Free(r.mp)
+		} else {
+			r.mg.PutVector(r.ess)
+		}
+	}
+}
+
+func (r *basicResult) marshal() ([]byte, error) {
+	d1, err := r.res.MarshalBinary()
+	if err != nil {
+		return nil, err
+	}
+	d2, err := r.ess.MarshalBinary()
+	if err != nil {
+		return nil, err
+	}
+	d := make([]byte, 0, 4+len(d1)+len(d2))
+	length := uint32(len(d1))
+	d = append(d, types.EncodeUint32(&length)...)
+	d = append(d, d1...)
+	d = append(d, d2...)
+	return r.res.MarshalBinary()
+}
+
+func (r *basicResult) unmarshal0(data []byte) error {
+	r.res = r.mg.GetVector(r.typ)
+	r.ess = r.mg.GetVector(types.T_bool.ToType())
+
+	length := types.DecodeUint32(data[:4])
+	data = data[4:]
+
+	if err := r.res.UnmarshalBinary(data[:length]); err != nil {
+		return err
+	}
+	data = data[length:]
+	if err := r.ess.UnmarshalBinary(data); err != nil {
+		r.res.Free(r.mp)
+		return err
+	}
+	r.empty = vector.MustFixedCol[bool](r.ess)
+	return nil
+}
+
+type aggFuncResult[T types.FixedSizeTExceptStrType] struct {
+	basicResult
+	values []T // for quick get/set
+}
+
+type aggFuncBytesResult struct {
+	basicResult
 }
 
 func initFixedAggFuncResult[T types.FixedSizeTExceptStrType](
 	mg AggMemoryManager, typ types.Type,
 	emptyNull bool) aggFuncResult[T] {
-	if mg == nil {
-		return aggFuncResult[T]{
-			typ:         typ,
-			res:         vector.NewVec(typ),
-			emptyBeNull: emptyNull,
-		}
-	}
-	return aggFuncResult[T]{
-		mg:          mg,
-		mp:          mg.Mp(),
-		typ:         typ,
-		res:         mg.GetVector(typ),
-		groupToSet:  0,
-		emptyBeNull: emptyNull,
-	}
+	r := aggFuncResult[T]{}
+	r.init(mg, typ, emptyNull)
+	return r
 }
 
 // todo: there is a bug here if we set result as null when group grows.
@@ -65,26 +158,21 @@ func initFixedAggFuncResult[T types.FixedSizeTExceptStrType](
 //	this row cannot be set value again because the null flag was set.
 //	should use a bool array to indicate that if a group was empty.
 func (r *aggFuncResult[T]) grows(more int) error {
-	oldLen, newLen := r.res.Length(), r.res.Length()+more
-	if err := r.res.PreExtend(newLen, r.mp); err != nil {
+	oldLen, newLen, err := r.preExtend(more)
+	if err != nil {
 		return err
 	}
-	r.res.SetLength(newLen)
 	r.values = vector.MustFixedCol[T](r.res)
-
 	// reset the new row.
-	{
-		var v T
-		for i, j := oldLen, newLen; i < j; i++ {
-			r.values[i] = v
-		}
-		if r.emptyBeNull {
-			for i, j := uint64(oldLen), uint64(newLen); i < j; i++ {
-				r.res.GetNulls().Set(i)
-			}
-		}
+	var v T
+	for i, j := oldLen, newLen; i < j; i++ {
+		r.values[i] = v
 	}
 	return nil
+}
+
+func (r *aggFuncResult[T]) aggInit(v T) {
+	r.values[r.groupToSet] = v
 }
 
 func (r *aggFuncResult[T]) aggGet() T {
@@ -93,74 +181,42 @@ func (r *aggFuncResult[T]) aggGet() T {
 
 // for agg private structure's Fill.
 func (r *aggFuncResult[T]) aggSet(v T) {
+	r.empty[r.groupToSet] = false
 	r.values[r.groupToSet] = v
 }
 
-func (r *aggFuncResult[T]) flush() *vector.Vector {
-	result := r.res
-	r.res = nil
-	return result
-}
-
-func (r *aggFuncResult[T]) free() {
-	if r.res == nil {
-		return
-	}
-	if r.res.NeedDup() {
-		r.res.Free(r.mp)
-	}
-	r.mg.PutVector(r.res)
-}
-
-func (r *aggFuncResult[T]) marshal() ([]byte, error) {
-	return r.res.MarshalBinary()
-}
-
 func (r *aggFuncResult[T]) unmarshal(data []byte) error {
-	return r.res.UnmarshalBinary(data)
+	if err := r.unmarshal0(data); err != nil {
+		return err
+	}
+	r.values = vector.MustFixedCol[T](r.res)
+	return nil
 }
 
 func initBytesAggFuncResult(
 	mg AggMemoryManager, typ types.Type,
 	emptyNull bool) aggFuncBytesResult {
-	if mg == nil {
-		return aggFuncBytesResult{
-			typ:         typ,
-			res:         vector.NewVec(typ),
-			emptyBeNull: emptyNull,
-		}
-	}
-	return aggFuncBytesResult{
-		mg:          mg,
-		mp:          mg.Mp(),
-		typ:         typ,
-		res:         mg.GetVector(typ),
-		groupToSet:  0,
-		emptyBeNull: emptyNull,
-	}
+	r := aggFuncBytesResult{}
+	r.init(mg, typ, emptyNull)
+	return r
 }
 
 func (r *aggFuncBytesResult) grows(more int) error {
-	oldLen, newLen := r.res.Length(), r.res.Length()+more
-	if err := r.res.PreExtend(newLen, r.mp); err != nil {
+	oldLen, newLen, err := r.preExtend(more)
+	if err != nil {
 		return err
 	}
-	r.res.SetLength(newLen)
 
-	// reset the new row.
-	{
-		var v = []byte("")
-		for i, j := oldLen, newLen; i < j; i++ {
-			// this will never cause error.
-			_ = vector.SetBytesAt(r.res, i, v, r.mp)
-		}
-		if r.emptyBeNull {
-			for i, j := uint64(oldLen), uint64(newLen); i < j; i++ {
-				r.res.GetNulls().Set(i)
-			}
-		}
+	var v = []byte("")
+	for i, j := oldLen, newLen; i < j; i++ {
+		// this will never cause error.
+		_ = vector.SetBytesAt(r.res, i, v, r.mp)
 	}
 	return nil
+}
+
+func (r *aggFuncBytesResult) aggInit(v []byte) error {
+	return vector.SetBytesAt(r.res, r.groupToSet, v, r.mp)
 }
 
 func (r *aggFuncBytesResult) aggGet() []byte {
@@ -171,29 +227,10 @@ func (r *aggFuncBytesResult) aggGet() []byte {
 }
 
 func (r *aggFuncBytesResult) aggSet(v []byte) error {
+	r.empty[r.groupToSet] = false
 	return vector.SetBytesAt(r.res, r.groupToSet, v, r.mp)
 }
 
-func (r *aggFuncBytesResult) flush() *vector.Vector {
-	result := r.res
-	r.res = nil
-	return result
-}
-
-func (r *aggFuncBytesResult) free() {
-	if r.res == nil || r.mg == nil {
-		return
-	}
-	if r.res.NeedDup() {
-		r.res.Free(r.mp)
-	}
-	r.mg.PutVector(r.res)
-}
-
-func (r *aggFuncBytesResult) marshal() ([]byte, error) {
-	return r.res.MarshalBinary()
-}
-
 func (r *aggFuncBytesResult) unmarshal(data []byte) error {
-	return r.res.UnmarshalBinary(data)
+	return r.unmarshal0(data)
 }

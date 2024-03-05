@@ -127,6 +127,7 @@ func TestSingleAggFuncExec1(t *testing.T) {
 		v.Free(mg.Mp())
 	}
 	{
+		executor.Free()
 		// memory check.
 		for _, v := range inputs {
 			v.Free(mg.Mp())
@@ -256,6 +257,7 @@ func TestMultiAggFuncExec1(t *testing.T) {
 		v.Free(mg.Mp())
 	}
 	{
+		executor.Free()
 		// memory check.
 		for _, v := range inputs {
 			for _, vv := range v {
@@ -312,6 +314,7 @@ func TestGroupConcatExec(t *testing.T) {
 		v.Free(mg.Mp())
 	}
 	{
+		executor.Free()
 		// memory check.
 		for _, v := range inputs {
 			v.Free(mg.Mp())

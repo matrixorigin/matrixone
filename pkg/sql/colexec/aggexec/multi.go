@@ -107,7 +107,7 @@ func (exec *multiAggFuncExec1[T]) GroupGrow(more int) error {
 	if err := exec.ret.grows(more); err != nil {
 		return err
 	}
-	setter := exec.ret.aggSet
+	setter := exec.ret.aggInit
 	moreGroup := make([]MultiAggRetFixed[T], more)
 	for i := 0; i < more; i++ {
 		moreGroup[i] = exec.gGroup()
@@ -253,7 +253,7 @@ func (exec *multiAggFuncExec2) GroupGrow(more int) error {
 	if err := exec.ret.grows(more); err != nil {
 		return err
 	}
-	setter := exec.ret.aggSet
+	setter := exec.ret.aggInit
 	moreGroup := make([]MultiAggRetVar, more)
 	for i := 0; i < more; i++ {
 		moreGroup[i] = exec.gGroup()

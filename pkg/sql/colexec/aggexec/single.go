@@ -156,7 +156,7 @@ func (exec *singleAggFuncExec1[from, to]) GroupGrow(more int) error {
 	if err := exec.ret.grows(more); err != nil {
 		return err
 	}
-	setter := exec.ret.aggSet
+	setter := exec.ret.aggInit
 	moreGroup := make([]SingleAggFromFixedRetFixed[from, to], more)
 	for i := 0; i < more; i++ {
 		moreGroup[i] = exec.gGroup()
@@ -516,7 +516,7 @@ func (exec *singleAggFuncExec2[from]) GroupGrow(more int) error {
 	if err := exec.ret.grows(more); err != nil {
 		return err
 	}
-	setter := exec.ret.aggSet
+	setter := exec.ret.aggInit
 	moreGroup := make([]SingleAggFromFixedRetVar[from], more)
 	for i := 0; i < more; i++ {
 		moreGroup[i] = exec.gGroup()
@@ -741,7 +741,7 @@ func (exec *singleAggFuncExec3[to]) GroupGrow(more int) error {
 	if err := exec.ret.grows(more); err != nil {
 		return err
 	}
-	setter := exec.ret.aggSet
+	setter := exec.ret.aggInit
 	moreGroup := make([]SingleAggFromVarRetFixed[to], more)
 	for i := 0; i < more; i++ {
 		moreGroup[i] = exec.gGroup()
@@ -967,7 +967,7 @@ func (exec *singleAggFuncExec4) GroupGrow(more int) error {
 	if err := exec.ret.grows(more); err != nil {
 		return err
 	}
-	setter := exec.ret.aggSet
+	setter := exec.ret.aggInit
 	moreGroup := make([]SingleAggFromVarRetVar, more)
 	for i := 0; i < more; i++ {
 		moreGroup[i] = exec.gGroup()
