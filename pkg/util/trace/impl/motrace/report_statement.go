@@ -584,6 +584,57 @@ func CalculateCU(stats statistic.StatsArray, durationNS int64) float64 {
 	return (cpu + mem + ioIn + ioOut + traffic) / cfg.CUUnit
 }
 
+func CalculateCUCpu(cpuRuntimeNS int64) float64 {
+	cfg := GetTracerProvider().GetCUConfig()
+	// TODO: need format
+	// 1. 精度校验
+	// 2. 保留 3位小数的问题
+	return float64(cpuRuntimeNS) * cfg.CpuPrice / cfg.CUUnit
+}
+
+func CalculateCUMem(memByte int64, durationNS int64) float64 {
+	cfg := GetTracerProvider().GetCUConfig()
+	// TODO: need format
+	// 1. 精度校验
+	// 2. 保留 3位小数的问题
+	return float64(memByte*durationNS) * cfg.CpuPrice / cfg.CUUnit
+}
+
+func CalculateCUIOIn(ioCnt int64) float64 {
+	cfg := GetTracerProvider().GetCUConfig()
+	// TODO: need format
+	// 1. 精度校验
+	// 2. 保留 3位小数的问题
+	return float64(ioCnt) * cfg.IoInPrice / cfg.CUUnit
+}
+
+func CalculateCUIOOut(ioCnt int64) float64 {
+	cfg := GetTracerProvider().GetCUConfig()
+	// TODO: need format
+	// 1. 精度校验
+	// 2. 保留 3位小数的问题
+	return float64(ioCnt) * cfg.IoOutPrice / cfg.CUUnit
+}
+
+func CalculateCUTraffic(bytes int64, connType int) float64 {
+	cfg := GetTracerProvider().GetCUConfig()
+	// TODO: need format
+	// 1. 精度校验
+	// 2. 保留 3位小数的问题
+	traffic := 0.0
+	switch statistic.ConnType(connType) {
+	case statistic.ConnTypeUnknown:
+		traffic = float64(bytes) * cfg.TrafficPrice0
+	case statistic.ConnTypeInternal:
+		traffic = float64(bytes) * cfg.TrafficPrice1
+	case statistic.ConnTypeExternal:
+		traffic = float64(bytes) * cfg.TrafficPrice2
+	default:
+		traffic = float64(bytes) * cfg.TrafficPrice0
+	}
+	return traffic
+}
+
 // TcpIpv4HeaderSize default tcp header bytes.
 const TcpIpv4HeaderSize = 66
 

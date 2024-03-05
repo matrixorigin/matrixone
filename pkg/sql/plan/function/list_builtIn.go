@@ -3746,7 +3746,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				volatile:   true,
 				args:       []types.T{types.T_varchar, types.T_int64},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_decimal128.ToType()
+					return types.T_float64.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
 					return buildInMOCU
@@ -3755,12 +3755,12 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 			{
 				overloadId: 0,
 				volatile:   true,
-				args:       []types.T{types.T_varchar, types.T_int64, types.T_bool},
+				args:       []types.T{types.T_varchar, types.T_int64, types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_decimal128.ToType()
+					return types.T_float64.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return buildInMOCU
+					return buildInMOCUElem
 				},
 			},
 		},

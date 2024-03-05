@@ -2122,12 +2122,11 @@ func builtInToLower(parameters []*vector.Vector, result vector.FunctionResultWra
 }
 
 // buildInMOCU extract cu or calculate cu from parameters
-// example: select mo_cu('[1,2,3,4,5,6,7,8]', 134123)
-// example: select mo_cu('[1,2,3,4,5,6,7,8]', 134123, true)
+// example:
+// - select mo_cu('[1,2,3,4,5,6,7,8]', 134123)
 func buildInMOCU(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	var (
 		cu    float64
-		p3    vector.FunctionParameterWrapper[bool]
 		stats statistic.StatsArray
 	)
 	rs := vector.MustFunctionResult[float64](result)
@@ -2135,25 +2134,10 @@ func buildInMOCU(parameters []*vector.Vector, result vector.FunctionResultWrappe
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
 	p2 := vector.GenerateFunctionFixedTypeParameter[int64](parameters[1])
 
-	if len(parameters) == 2 {
-		p3 = vector.GenerateFunctionFixedTypeParameter[bool](parameters[2])
-	}
-
-	if proc.SessionInfo.AccountId != sysAccountID {
-		return moerr.NewNotSupported(proc.Ctx, "only support sys account")
-	}
-
 	for i := uint64(0); i < uint64(length); i++ {
 		statsJsonArrayStr, null1 := p1.GetStrValue(i) /* stats json array */
 		durationNS, null2 := p2.GetValue(i)           /* duration_ns */
-		forceCalculate := false                       /* force calculate */
-		if p3 != nil {
-			if v3Parsed, null3 := p3.GetValue(i); !null3 {
-				forceCalculate = v3Parsed
-			}
-		}
 
-		// fixme: should we need to support null date?
 		if null1 || null2 {
 			rs.Append(float64(0), true)
 			continue
@@ -2169,10 +2153,73 @@ func buildInMOCU(parameters []*vector.Vector, result vector.FunctionResultWrappe
 			//return moerr.NewInternalError(proc.Ctx, "failed to parse json arr: %v", err)
 		}
 
-		if stats.GetVersion() >= statistic.StatsArrayVersion5 && !forceCalculate {
+		if stats.GetVersion() >= statistic.StatsArrayVersion5 {
 			cu = stats.GetCU()
 		} else {
 			cu = motrace.CalculateCU(stats, durationNS)
+		}
+		rs.Append(cu, false)
+	}
+
+	return nil
+}
+
+// buildInMOCU extract cu or calculate cu from parameters
+// example:
+// - select mo_cu('[1,2,3,4,5,6,7,8]', 134123, 'cpu')
+// - select mo_cu('[1,2,3,4,5,6,7,8]', 134123, 'mem')
+// - select mo_cu('[1,2,3,4,5,6,7,8]', 134123, 'ioin')
+// - select mo_cu('[1,2,3,4,5,6,7,8]', 134123, 'ioout')
+// - select mo_cu('[1,2,3,4,5,6,7,8]', 134123, 'network')
+func buildInMOCUElem(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	var (
+		cu    float64
+		p3    vector.FunctionParameterWrapper[types.Varlena]
+		stats statistic.StatsArray
+	)
+	rs := vector.MustFunctionResult[float64](result)
+
+	p1 := vector.GenerateFunctionStrParameter(parameters[0])
+	p2 := vector.GenerateFunctionFixedTypeParameter[int64](parameters[1])
+
+	if len(parameters) == 3 {
+		p3 = vector.GenerateFunctionStrParameter(parameters[2])
+	}
+
+	for i := uint64(0); i < uint64(length); i++ {
+		statsJsonArrayStr, null1 := p1.GetStrValue(i) /* stats json array */
+		durationNS, null2 := p2.GetValue(i)           /* duration_ns */
+		elem, null3 := p3.GetStrValue(i)
+
+		if null1 || null2 || null3 {
+			rs.Append(float64(0), true)
+			continue
+		}
+
+		if len(statsJsonArrayStr) == 0 {
+			rs.Append(float64(0), true)
+			continue
+		}
+
+		if err := json.Unmarshal(statsJsonArrayStr, &stats); err != nil {
+			rs.Append(float64(0), true)
+			//return moerr.NewInternalError(proc.Ctx, "failed to parse json arr: %v", err)
+		}
+
+		switch util.UnsafeBytesToString(elem) {
+		case "cpu":
+			cu = motrace.CalculateCUCpu(int64(stats.GetTimeConsumed()))
+		case "mem":
+			cu = motrace.CalculateCUMem(int64(stats.GetMemory()), durationNS)
+		case "ioin":
+			cu = motrace.CalculateCUIOIn(int64(stats.GetS3IOInputCount()))
+		case "ioout":
+			cu = motrace.CalculateCUIOOut(int64(stats.GetS3IOOutputCount()))
+		case "network":
+			cu = motrace.CalculateCUTraffic(int64(stats.GetOutTrafficBytes()), stats.GetConnType())
+		default:
+			rs.Append(float64(0), true)
+			continue
 		}
 		rs.Append(cu, false)
 	}
