@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
+	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -2124,58 +2125,28 @@ func builtInToLower(parameters []*vector.Vector, result vector.FunctionResultWra
 // buildInMOCU extract cu or calculate cu from parameters
 // example:
 // - select mo_cu('[1,2,3,4,5,6,7,8]', 134123)
-func buildInMOCU(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-	var (
-		cu    float64
-		stats statistic.StatsArray
-	)
-	rs := vector.MustFunctionResult[float64](result)
-
-	p1 := vector.GenerateFunctionStrParameter(parameters[0])
-	p2 := vector.GenerateFunctionFixedTypeParameter[int64](parameters[1])
-
-	for i := uint64(0); i < uint64(length); i++ {
-		statsJsonArrayStr, null1 := p1.GetStrValue(i) /* stats json array */
-		durationNS, null2 := p2.GetValue(i)           /* duration_ns */
-
-		if null1 || null2 {
-			rs.Append(float64(0), true)
-			continue
-		}
-
-		if len(statsJsonArrayStr) == 0 {
-			rs.Append(float64(0), true)
-			continue
-		}
-
-		if err := json.Unmarshal(statsJsonArrayStr, &stats); err != nil {
-			rs.Append(float64(0), true)
-			//return moerr.NewInternalError(proc.Ctx, "failed to parse json arr: %v", err)
-		}
-
-		if stats.GetVersion() >= statistic.StatsArrayVersion5 {
-			cu = stats.GetCU()
-		} else {
-			cu = motrace.CalculateCU(stats, durationNS)
-		}
-		rs.Append(cu, false)
-	}
-
-	return nil
-}
-
-// buildInMOCU extract cu or calculate cu from parameters
-// example:
+// - select mo_cu('[1,2,3,4,5,6,7,8]', 134123, 'total')
 // - select mo_cu('[1,2,3,4,5,6,7,8]', 134123, 'cpu')
 // - select mo_cu('[1,2,3,4,5,6,7,8]', 134123, 'mem')
 // - select mo_cu('[1,2,3,4,5,6,7,8]', 134123, 'ioin')
 // - select mo_cu('[1,2,3,4,5,6,7,8]', 134123, 'ioout')
 // - select mo_cu('[1,2,3,4,5,6,7,8]', 134123, 'network')
-func buildInMOCUElem(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func buildInMOCU(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	return buildInMOCUWithCfg(parameters, result, proc, length, nil)
+}
+
+func buildInMOCUv1(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	cfg := config.GetOBCUConfigV1()
+	return buildInMOCUWithCfg(parameters, result, proc, length, &cfg)
+}
+
+func buildInMOCUWithCfg(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, cfg *config.OBCUConfig) error {
 	var (
-		cu    float64
-		p3    vector.FunctionParameterWrapper[types.Varlena]
-		stats statistic.StatsArray
+		cu     float64
+		p3     vector.FunctionParameterWrapper[types.Varlena]
+		stats  statistic.StatsArray
+		target []byte
+		null3  bool
 	)
 	rs := vector.MustFunctionResult[float64](result)
 
@@ -2189,7 +2160,11 @@ func buildInMOCUElem(parameters []*vector.Vector, result vector.FunctionResultWr
 	for i := uint64(0); i < uint64(length); i++ {
 		statsJsonArrayStr, null1 := p1.GetStrValue(i) /* stats json array */
 		durationNS, null2 := p2.GetValue(i)           /* duration_ns */
-		elem, null3 := p3.GetStrValue(i)
+		if p3 == nil {
+			target, null3 = []byte("total"), false
+		} else {
+			target, null3 = p3.GetStrValue(i)
+		}
 
 		if null1 || null2 || null3 {
 			rs.Append(float64(0), true)
@@ -2206,17 +2181,19 @@ func buildInMOCUElem(parameters []*vector.Vector, result vector.FunctionResultWr
 			//return moerr.NewInternalError(proc.Ctx, "failed to parse json arr: %v", err)
 		}
 
-		switch util.UnsafeBytesToString(elem) {
+		switch util.UnsafeBytesToString(target) {
 		case "cpu":
-			cu = motrace.CalculateCUCpu(int64(stats.GetTimeConsumed()))
+			cu = motrace.CalculateCUCpu(int64(stats.GetTimeConsumed()), cfg)
 		case "mem":
-			cu = motrace.CalculateCUMem(int64(stats.GetMemory()), durationNS)
+			cu = motrace.CalculateCUMem(int64(stats.GetMemorySize()), durationNS, cfg)
 		case "ioin":
-			cu = motrace.CalculateCUIOIn(int64(stats.GetS3IOInputCount()))
+			cu = motrace.CalculateCUIOIn(int64(stats.GetS3IOInputCount()), cfg)
 		case "ioout":
-			cu = motrace.CalculateCUIOOut(int64(stats.GetS3IOOutputCount()))
+			cu = motrace.CalculateCUIOOut(int64(stats.GetS3IOOutputCount()), cfg)
 		case "network":
-			cu = motrace.CalculateCUTraffic(int64(stats.GetOutTrafficBytes()), stats.GetConnType())
+			cu = motrace.CalculateCUTraffic(int64(stats.GetOutTrafficBytes()), stats.GetConnType(), cfg)
+		case "total":
+			cu = motrace.CalculateCUWithCfg(stats, durationNS, cfg)
 		default:
 			rs.Append(float64(0), true)
 			continue

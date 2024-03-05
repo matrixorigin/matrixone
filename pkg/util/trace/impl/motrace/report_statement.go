@@ -26,6 +26,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
+	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/frontend/constant"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -554,12 +555,12 @@ func (s *StatementInfo) MarkResponseAt() {
 	}
 }
 
-// CalculateCU calculate CU cost
-// the result only keep 3 decimal places
-// Tips: CU is long-tailed numbers
-func CalculateCU(stats statistic.StatsArray, durationNS int64) float64 {
+func CalculateCUWithCfg(stats statistic.StatsArray, durationNS int64, cfg *config.OBCUConfig) float64 {
 
-	cfg := GetTracerProvider().GetCUConfig()
+	if cfg == nil {
+		cuCfg := GetTracerProvider().GetCUConfig()
+		cfg = &cuCfg
+	}
 
 	// basic
 	cpu := stats.GetTimeConsumed() * cfg.CpuPrice
@@ -584,40 +585,69 @@ func CalculateCU(stats statistic.StatsArray, durationNS int64) float64 {
 	return (cpu + mem + ioIn + ioOut + traffic) / cfg.CUUnit
 }
 
-func CalculateCUCpu(cpuRuntimeNS int64) float64 {
+// CalculateCU calculate CU cost
+// the result only keep 3 decimal places
+// Tips: CU is long-tailed numbers
+func CalculateCU(stats statistic.StatsArray, durationNS int64) float64 {
 	cfg := GetTracerProvider().GetCUConfig()
+	return CalculateCUWithCfg(stats, durationNS, &cfg)
+}
+
+// CalculateCUv1 calculate CU cost
+func CalculateCUv1(stats statistic.StatsArray, durationNS int64) float64 {
+	cfg := config.GetOBCUConfigV1()
+	return CalculateCUWithCfg(stats, durationNS, &cfg)
+}
+
+func CalculateCUCpu(cpuRuntimeNS int64, cfg *config.OBCUConfig) float64 {
+	if cfg == nil {
+		cuCfg := GetTracerProvider().GetCUConfig()
+		cfg = &cuCfg
+	}
 	// TODO: need format
 	// 1. 精度校验
 	// 2. 保留 3位小数的问题
 	return float64(cpuRuntimeNS) * cfg.CpuPrice / cfg.CUUnit
 }
 
-func CalculateCUMem(memByte int64, durationNS int64) float64 {
-	cfg := GetTracerProvider().GetCUConfig()
+func CalculateCUMem(memByte int64, durationNS int64, cfg *config.OBCUConfig) float64 {
+	if cfg == nil {
+		cuCfg := GetTracerProvider().GetCUConfig()
+		cfg = &cuCfg
+	}
 	// TODO: need format
 	// 1. 精度校验
 	// 2. 保留 3位小数的问题
 	return float64(memByte*durationNS) * cfg.CpuPrice / cfg.CUUnit
 }
 
-func CalculateCUIOIn(ioCnt int64) float64 {
-	cfg := GetTracerProvider().GetCUConfig()
+func CalculateCUIOIn(ioCnt int64, cfg *config.OBCUConfig) float64 {
+	if cfg == nil {
+		cuCfg := GetTracerProvider().GetCUConfig()
+		cfg = &cuCfg
+	}
 	// TODO: need format
 	// 1. 精度校验
 	// 2. 保留 3位小数的问题
 	return float64(ioCnt) * cfg.IoInPrice / cfg.CUUnit
 }
 
-func CalculateCUIOOut(ioCnt int64) float64 {
-	cfg := GetTracerProvider().GetCUConfig()
+func CalculateCUIOOut(ioCnt int64, cfg *config.OBCUConfig) float64 {
+	if cfg == nil {
+		cuCfg := GetTracerProvider().GetCUConfig()
+		cfg = &cuCfg
+	}
 	// TODO: need format
 	// 1. 精度校验
 	// 2. 保留 3位小数的问题
 	return float64(ioCnt) * cfg.IoOutPrice / cfg.CUUnit
 }
 
-func CalculateCUTraffic(bytes int64, connType int) float64 {
-	cfg := GetTracerProvider().GetCUConfig()
+func CalculateCUTraffic(bytes int64, connType float64, cfg *config.OBCUConfig) float64 {
+	if cfg == nil {
+		cuCfg := GetTracerProvider().GetCUConfig()
+		cfg = &cuCfg
+	}
 	// TODO: need format
 	// 1. 精度校验
 	// 2. 保留 3位小数的问题

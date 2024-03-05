@@ -307,6 +307,7 @@ const (
 	MO_CHECH_LEVEL
 	PURGE_LOG // purge mo internal log, like rawlog, statement_info, metric
 	MO_CU
+	MO_CU_V1
 
 	GIT_VERSION
 	BUILD_VERSION
@@ -599,6 +600,7 @@ var functionIdRegister = map[string]int32{
 	"mo_check_level":                 MO_CHECH_LEVEL,
 	"purge_log":                      PURGE_LOG,
 	"mo_cu":                          MO_CU,
+	"mo_cu_v1":                       MO_CU_V1,
 	"git_version":                    GIT_VERSION,
 	"build_version":                  BUILD_VERSION,
 	"values":                         VALUES,

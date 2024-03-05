@@ -723,6 +723,20 @@ func NewOBCUConfig() *OBCUConfig {
 	return cfg
 }
 
+func GetOBCUConfigV1() OBCUConfig {
+	cfg := OBCUConfig{
+		CUUnit:        1.0026988039e-06,
+		CpuPrice:      7.43e-14,
+		MemPrice:      6.79e-24,
+		IoInPrice:     1e-06,
+		IoOutPrice:    1e-06,
+		TrafficPrice0: 8.94e-10,
+		TrafficPrice1: 0,
+		TrafficPrice2: 8.94e-10,
+	}
+	return cfg
+}
+
 func (c *OBCUConfig) SetDefaultValues() {
 	if c.CUUnit <= 0 {
 		c.CUUnit = CUUnitDefault
