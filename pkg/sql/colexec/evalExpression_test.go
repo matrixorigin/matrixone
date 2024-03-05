@@ -61,7 +61,7 @@ func TestFixedExpressionExecutor(t *testing.T) {
 				Scale: 6,
 			},
 		}},
-		Typ: &plan.Type{
+		Typ: plan.Type{
 			Id:          int32(types.T_decimal128),
 			Width:       30,
 			Scale:       6,
@@ -95,7 +95,7 @@ func TestColumnExpressionExecutor(t *testing.T) {
 				ColPos: 2,
 			},
 		},
-		Typ: &plan.Type{
+		Typ: plan.Type{
 			Id:          int32(types.T_int32),
 			NotNullable: true,
 		},
@@ -159,7 +159,7 @@ func TestFunctionExpressionExecutor(t *testing.T) {
 					ColPos: 0,
 				},
 			},
-			Typ: &plan.Type{
+			Typ: plan.Type{
 				Id:          int32(types.T_int64),
 				NotNullable: true,
 			},
@@ -197,7 +197,7 @@ func TestFunctionExpressionExecutor(t *testing.T) {
 		col2 := makePlan2BoolConstExprWithType(true)
 
 		fExpr := &plan.Expr{
-			Typ: &plan.Type{
+			Typ: plan.Type{
 				Id:          int32(types.T_bool),
 				NotNullable: true,
 			},
@@ -226,7 +226,7 @@ func TestFunctionExpressionExecutor(t *testing.T) {
 func makePlan2Int64ConstExprWithType(v int64) *plan.Expr {
 	return &plan.Expr{
 		Expr: makePlan2Int64ConstExpr(v),
-		Typ: &plan.Type{
+		Typ: plan.Type{
 			Id:          int32(types.T_int64),
 			NotNullable: true,
 		},
@@ -245,7 +245,7 @@ func makePlan2Int64ConstExpr(v int64) *plan.Expr_Lit {
 func makePlan2BoolConstExprWithType(b bool) *plan.Expr {
 	return &plan.Expr{
 		Expr: makePlan2BoolConstExpr(b),
-		Typ: &plan.Type{
+		Typ: plan.Type{
 			Id:          int32(types.T_bool),
 			NotNullable: true,
 		},

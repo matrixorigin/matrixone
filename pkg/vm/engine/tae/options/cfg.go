@@ -25,6 +25,7 @@ const (
 	defaultRpcEnableChecksum      = true
 	defaultLogtailCollectInterval = 50 * time.Millisecond
 	defaultResponseSendTimeout    = 10 * time.Second
+	defaultRpcStreamPoisonTime    = 5 * time.Second
 )
 
 type StorageCfg struct {
@@ -73,6 +74,7 @@ type LogtailCfg struct {
 type LogtailServerCfg struct {
 	RpcMaxMessageSize      int64
 	RpcEnableChecksum      bool
+	RPCStreamPoisonTime    time.Duration
 	LogtailCollectInterval time.Duration
 	ResponseSendTimeout    time.Duration
 }
@@ -81,6 +83,7 @@ func NewDefaultLogtailServerCfg() *LogtailServerCfg {
 	return &LogtailServerCfg{
 		RpcMaxMessageSize:      defaultRpcMaxMessageSize,
 		RpcEnableChecksum:      defaultRpcEnableChecksum,
+		RPCStreamPoisonTime:    defaultRpcStreamPoisonTime,
 		LogtailCollectInterval: defaultLogtailCollectInterval,
 		ResponseSendTimeout:    defaultResponseSendTimeout,
 	}
@@ -89,6 +92,9 @@ func NewDefaultLogtailServerCfg() *LogtailServerCfg {
 func (l *LogtailServerCfg) Validate() {
 	if l.RpcMaxMessageSize <= 0 {
 		l.RpcMaxMessageSize = defaultRpcMaxMessageSize
+	}
+	if l.RPCStreamPoisonTime <= 0 {
+		l.RPCStreamPoisonTime = defaultRpcStreamPoisonTime
 	}
 	if l.LogtailCollectInterval <= 0 {
 		l.LogtailCollectInterval = defaultLogtailCollectInterval
