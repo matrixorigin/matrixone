@@ -20,6 +20,7 @@
  
  import "github.com/gogo/protobuf/gogoproto/gogo.proto";
 import "google/protobuf/timestamp.proto";
+import "metadata.proto";
 
  option (gogoproto.goproto_enum_prefix_all) = true;
  
@@ -85,6 +86,18 @@ import "google/protobuf/timestamp.proto";
      int64  DelayDuration = 3;
      // Concurrency is the max number of a task running at the same time. 0 means no limits.
      uint32 Concurrency   = 4;
+     // Labels indicates that the task should run on the CNs with the Labels.
+     map<string, string> Labels = 5;
+     // Resource required by the task
+     Resource Resource = 6;
+ }
+
+ // Resource task resource
+ message Resource {
+   // CPU cpu resource
+   uint64 CPU = 1;
+   // Memory memory resource
+   uint64 Memory = 2;
  }
  
  // ResultCode result code

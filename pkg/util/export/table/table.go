@@ -65,6 +65,7 @@ const (
 	TFloat32
 	TTimestamp
 	TBit
+	TBlob
 )
 
 func (c *ColType) ToType() types.Type {
@@ -103,6 +104,8 @@ func (c *ColType) ToType() types.Type {
 		fallthrough
 	case TBit:
 		return types.T_bit.ToType()
+	case TBlob:
+		return types.T_blob.ToType()
 	default:
 		panic("not support ColType")
 	}
@@ -140,6 +143,8 @@ func (c *ColType) String(scale int) string {
 			scale = 1024
 		}
 		return fmt.Sprintf("CHAR(%d)", scale)
+	case TBlob:
+		return "BLOB"
 	case TSkip:
 		panic("not support SkipType")
 	default:
