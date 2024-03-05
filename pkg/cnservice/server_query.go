@@ -73,6 +73,7 @@ func (s *service) initQueryCommandHandler() {
 	s.queryService.AddHandleFunc(query.CmdMethod_UnsubscribeTable, s.handleUnsubscribeTable, false)
 	s.queryService.AddHandleFunc(query.CmdMethod_GetCacheData, s.handleGetCacheData, false)
 	s.queryService.AddHandleFunc(query.CmdMethod_GetStatsInfo, s.handleGetStatsInfo, false)
+	s.queryService.AddHandleFunc(query.CmdMethod_GetPipelineInfo, s.handleGetPipelineInfo, false)
 }
 
 func (s *service) handleKillConn(ctx context.Context, req *query.Request, resp *query.Response) error {
@@ -374,6 +375,19 @@ func (s *service) handleGetStatsInfo(ctx context.Context, req *query.Request, re
 	// and we do not need wait for the data sync.
 	resp.GetStatsInfoResponse = &query.GetStatsInfoResponse{
 		StatsInfo: s.storeEngine.Stats(ctx, *req.GetStatsInfoRequest.StatsInfoKey, false),
+	}
+	return nil
+}
+
+// handleGetPipelineInfo handles the GetPipelineInfoRequest and respond with
+// the pipeline info in the server.
+func (s *service) handleGetPipelineInfo(ctx context.Context, req *query.Request, resp *query.Response) error {
+	if req.GetPipelineInfoRequest == nil {
+		return moerr.NewInternalError(ctx, "bad request")
+	}
+	count := s.pipelines.counter.Load()
+	resp.GetPipelineInfoResponse = &query.GetPipelineInfoResponse{
+		Count: count,
 	}
 	return nil
 }
