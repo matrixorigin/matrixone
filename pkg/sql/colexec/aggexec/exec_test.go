@@ -47,7 +47,7 @@ type testSingleAggPrivate1 struct{}
 func gTesSingleAggPrivate1() SingleAggFromFixedRetFixed[int32, int64] {
 	return &testSingleAggPrivate1{}
 }
-func (t *testSingleAggPrivate1) Init() {}
+func (t *testSingleAggPrivate1) Init(AggSetter[int64]) {}
 func (t *testSingleAggPrivate1) Fill(from int32, getter AggGetter[int64], setter AggSetter[int64]) {
 	setter(getter() + 1)
 }
@@ -144,7 +144,7 @@ type testMultiAggPrivate1 struct {
 func gTesMultiAggPrivate1() MultiAggRetFixed[int64] {
 	return &testMultiAggPrivate1{}
 }
-func (t *testMultiAggPrivate1) Init() {}
+func (t *testMultiAggPrivate1) Init(AggSetter[int64]) {}
 func (t *testMultiAggPrivate1) GetWhichFill(idx int) any {
 	switch idx {
 	case 0:

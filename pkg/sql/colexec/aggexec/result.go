@@ -60,6 +60,10 @@ func initFixedAggFuncResult[T types.FixedSizeTExceptStrType](
 	}
 }
 
+// todo: there is a bug here if we set result as null when group grows.
+//
+//	this row cannot be set value again because the null flag was set.
+//	should use a bool array to indicate that if a group was empty.
 func (r *aggFuncResult[T]) grows(more int) error {
 	oldLen, newLen := r.res.Length(), r.res.Length()+more
 	if err := r.res.PreExtend(newLen, r.mp); err != nil {

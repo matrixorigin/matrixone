@@ -104,13 +104,19 @@ func (exec *multiAggFuncExec1[T]) init(
 }
 
 func (exec *multiAggFuncExec1[T]) GroupGrow(more int) error {
-	moreGroups := make([]MultiAggRetFixed[T], more)
-	for i := range moreGroups {
-		moreGroups[i] = exec.gGroup()
-		moreGroups[i].Init()
+	if err := exec.ret.grows(more); err != nil {
+		return err
 	}
-	exec.groups = append(exec.groups, moreGroups...)
-	return exec.ret.grows(more)
+	setter := exec.ret.aggSet
+	moreGroup := make([]MultiAggRetFixed[T], more)
+	for i := 0; i < more; i++ {
+		moreGroup[i] = exec.gGroup()
+
+		exec.ret.groupToSet = i + len(exec.groups)
+		moreGroup[i].Init(setter)
+	}
+	exec.groups = append(exec.groups, moreGroup...)
+	return nil
 }
 
 func (exec *multiAggFuncExec1[T]) Fill(groupIndex int, row int, vectors []*vector.Vector) error {
@@ -244,13 +250,19 @@ func (exec *multiAggFuncExec2) init(
 }
 
 func (exec *multiAggFuncExec2) GroupGrow(more int) error {
-	moreGroups := make([]MultiAggRetVar, more)
-	for i := range moreGroups {
-		moreGroups[i] = exec.gGroup()
-		moreGroups[i].Init()
+	if err := exec.ret.grows(more); err != nil {
+		return err
 	}
-	exec.groups = append(exec.groups, moreGroups...)
-	return exec.ret.grows(more)
+	setter := exec.ret.aggSet
+	moreGroup := make([]MultiAggRetVar, more)
+	for i := 0; i < more; i++ {
+		moreGroup[i] = exec.gGroup()
+
+		exec.ret.groupToSet = i + len(exec.groups)
+		moreGroup[i].Init(setter)
+	}
+	exec.groups = append(exec.groups, moreGroup...)
+	return nil
 }
 
 func (exec *multiAggFuncExec2) Fill(groupIndex int, row int, vectors []*vector.Vector) error {
