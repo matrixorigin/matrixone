@@ -159,7 +159,7 @@ func (ctr *container) cleanEvalVectors() {
 	for i := range ctr.evecs {
 		if ctr.evecs[i].executor != nil {
 			ctr.evecs[i].executor.Free()
-			ctr.evecs[i].executor = nil
 		}
+		ctr.evecs[i].vec = nil
 	}
 }

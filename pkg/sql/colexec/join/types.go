@@ -158,6 +158,9 @@ func (ctr *container) cleanHashMap() {
 
 func (ctr *container) cleanEvalVectors() {
 	for i := range ctr.evecs {
-		ctr.evecs[i].executor.Free()
+		if ctr.evecs[i].executor != nil {
+			ctr.evecs[i].executor.Free()
+		}
+		ctr.evecs[i].vec = nil
 	}
 }

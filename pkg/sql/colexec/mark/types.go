@@ -248,6 +248,7 @@ func (ctr *container) cleanEvalVectors() {
 		if ctr.evecs[i].executor != nil {
 			ctr.evecs[i].executor.Free()
 		}
+		ctr.evecs[i].vec = nil
 	}
 }
 
@@ -256,5 +257,6 @@ func (ctr *container) cleanEqVectors() {
 		if ctr.buildEqEvecs[i].executor != nil {
 			ctr.buildEqEvecs[i].executor.Free()
 		}
+		ctr.buildEqEvecs[i].vec = nil
 	}
 }
