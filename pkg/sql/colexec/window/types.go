@@ -106,8 +106,8 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 		mp := proc.Mp()
 		ctr.FreeMergeTypeOperator(pipelineFailed)
 		ctr.cleanBatch(mp)
-		ctr.cleanAggVectors(mp)
-		ctr.cleanOrderVectors(mp)
+		ctr.cleanAggVectors()
+		ctr.cleanOrderVectors()
 	}
 }
 
@@ -118,7 +118,7 @@ func (ctr *container) cleanBatch(mp *mpool.MPool) {
 	}
 }
 
-func (ctr *container) cleanOrderVectors(_ *mpool.MPool) {
+func (ctr *container) cleanOrderVectors() {
 	for i := range ctr.orderVecs {
 		if ctr.orderVecs[i].executor != nil {
 			ctr.orderVecs[i].executor.Free()
@@ -127,7 +127,7 @@ func (ctr *container) cleanOrderVectors(_ *mpool.MPool) {
 	}
 }
 
-func (ctr *container) cleanAggVectors(_ *mpool.MPool) {
+func (ctr *container) cleanAggVectors() {
 	for i := range ctr.aggVecs {
 		if ctr.aggVecs[i].executor != nil {
 			ctr.aggVecs[i].executor.Free()

@@ -315,7 +315,6 @@ func (ctr *container) evalJoinCondition(bat *batch.Batch, proc *process.Process)
 	for i := range ctr.evecs {
 		vec, err := ctr.evecs[i].executor.Eval(proc, []*batch.Batch{bat})
 		if err != nil {
-			ctr.cleanEvalVectors()
 			return err
 		}
 		ctr.vecs[i] = vec

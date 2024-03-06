@@ -186,5 +186,6 @@ func (ctr *container) cleanEvalVectors() {
 		if ctr.evecs[i].executor != nil {
 			ctr.evecs[i].executor.Free()
 		}
+		ctr.evecs[i].vec = nil
 	}
 }
