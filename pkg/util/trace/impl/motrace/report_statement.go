@@ -473,22 +473,11 @@ endL:
 
 // ExecPlan2Stats return Stats Serialized int array str
 // and set RowsRead, BytesScan from ExecPlan
-func (s *StatementInfo) ExecPlan2Stats(ctx context.Context) []byte {
+func (s *StatementInfo) ExecPlan2Stats(ctx context.Context) error {
 	var stats Statistic
 	var statsArray statistic.StatsArray
 
-	// fix: s.ExecPlan is nil
-	defer func() {
-		cu := CalculateCU(s.statsArray, int64(s.Duration))
-		s.statsArray.WithCU(cu)
-	}()
-
-	if s.ExecPlan == nil {
-		if s.statsArray.GetVersion() == 0 {
-			s.statsArray.Init()
-		}
-		return s.statsArray.ToJsonString()
-	} else {
+	if s.ExecPlan != nil {
 		statsArray, stats = s.ExecPlan.Stats(ctx)
 		if s.statsArray.GetTimeConsumed() > 0 {
 			logutil.GetSkip1Logger().Error("statsArray.GetTimeConsumed() > 0",
@@ -499,8 +488,10 @@ func (s *StatementInfo) ExecPlan2Stats(ctx context.Context) []byte {
 		s.statsArray.WithConnType(s.ConnType)
 		s.RowsRead = stats.RowsRead
 		s.BytesScan = stats.BytesScan
-		return s.statsArray.ToJsonString()
 	}
+	cu := CalculateCU(s.statsArray, int64(s.Duration))
+	s.statsArray.WithCU(cu)
+	return nil
 }
 
 // SetSkipTxn set skip txn flag, cooperate with SetSkipTxnId()
