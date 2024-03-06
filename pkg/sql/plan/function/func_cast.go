@@ -619,7 +619,7 @@ func bitToOthers(ctx context.Context,
 	case types.T_char, types.T_varchar, types.T_text,
 		types.T_binary, types.T_varbinary, types.T_blob:
 		rs := vector.MustFunctionResult[types.Varlena](result)
-		return bitToStr(source, rs, length, toType)
+		return bitToStr(ctx, source, rs, length, toType)
 	case types.T_time:
 		rs := vector.MustFunctionResult[types.Time](result)
 		return integerToTime(ctx, source, rs, length)
@@ -686,7 +686,7 @@ func int8ToOthers(ctx context.Context,
 		types.T_binary, types.T_text, types.T_varbinary:
 		// string type.
 		rs := vector.MustFunctionResult[types.Varlena](result)
-		return signedToStr(source, rs, length, toType)
+		return signedToStr(ctx, source, rs, length, toType)
 	case types.T_time:
 		rs := vector.MustFunctionResult[types.Time](result)
 		return integerToTime(ctx, source, rs, length)
@@ -747,7 +747,7 @@ func int16ToOthers(ctx context.Context,
 		types.T_binary, types.T_text, types.T_varbinary:
 		// string type.
 		rs := vector.MustFunctionResult[types.Varlena](result)
-		return signedToStr(source, rs, length, toType)
+		return signedToStr(ctx, source, rs, length, toType)
 	case types.T_time:
 		rs := vector.MustFunctionResult[types.Time](result)
 		return integerToTime(ctx, source, rs, length)
@@ -808,7 +808,7 @@ func int32ToOthers(ctx context.Context,
 		types.T_binary, types.T_text, types.T_varbinary:
 		// string type.
 		rs := vector.MustFunctionResult[types.Varlena](result)
-		return signedToStr(source, rs, length, toType)
+		return signedToStr(ctx, source, rs, length, toType)
 	case types.T_time:
 		rs := vector.MustFunctionResult[types.Time](result)
 		return integerToTime(ctx, source, rs, length)
@@ -869,7 +869,7 @@ func int64ToOthers(ctx context.Context,
 		types.T_binary, types.T_varbinary, types.T_text:
 		// string type.
 		rs := vector.MustFunctionResult[types.Varlena](result)
-		return signedToStr(source, rs, length, toType)
+		return signedToStr(ctx, source, rs, length, toType)
 	case types.T_time:
 		rs := vector.MustFunctionResult[types.Time](result)
 		return integerToTime(ctx, source, rs, length)
@@ -932,7 +932,7 @@ func uint8ToOthers(ctx context.Context,
 	case types.T_char, types.T_varchar, types.T_blob,
 		types.T_binary, types.T_text, types.T_varbinary:
 		rs := vector.MustFunctionResult[types.Varlena](result)
-		return unsignedToStr(source, rs, length, toType)
+		return unsignedToStr(ctx, source, rs, length, toType)
 	case types.T_time:
 		rs := vector.MustFunctionResult[types.Time](result)
 		return integerToTime(ctx, source, rs, length)
@@ -995,7 +995,7 @@ func uint16ToOthers(ctx context.Context,
 	case types.T_char, types.T_varchar, types.T_blob,
 		types.T_binary, types.T_text, types.T_varbinary:
 		rs := vector.MustFunctionResult[types.Varlena](result)
-		return unsignedToStr(source, rs, length, toType)
+		return unsignedToStr(ctx, source, rs, length, toType)
 	case types.T_time:
 		rs := vector.MustFunctionResult[types.Time](result)
 		return integerToTime(ctx, source, rs, length)
@@ -1058,7 +1058,7 @@ func uint32ToOthers(ctx context.Context,
 	case types.T_char, types.T_varchar, types.T_blob,
 		types.T_binary, types.T_text, types.T_varbinary:
 		rs := vector.MustFunctionResult[types.Varlena](result)
-		return unsignedToStr(source, rs, length, toType)
+		return unsignedToStr(ctx, source, rs, length, toType)
 	case types.T_time:
 		rs := vector.MustFunctionResult[types.Time](result)
 		return integerToTime(ctx, source, rs, length)
@@ -1121,7 +1121,7 @@ func uint64ToOthers(ctx context.Context,
 	case types.T_char, types.T_varchar, types.T_blob,
 		types.T_binary, types.T_text, types.T_varbinary:
 		rs := vector.MustFunctionResult[types.Varlena](result)
-		return unsignedToStr(source, rs, length, toType)
+		return unsignedToStr(ctx, source, rs, length, toType)
 	case types.T_time:
 		rs := vector.MustFunctionResult[types.Time](result)
 		return integerToTime(ctx, source, rs, length)
@@ -1190,7 +1190,7 @@ func float32ToOthers(ctx context.Context,
 	case types.T_char, types.T_varchar, types.T_blob,
 		types.T_binary, types.T_text, types.T_varbinary:
 		rs := vector.MustFunctionResult[types.Varlena](result)
-		return floatToStr(source, rs, length, toType)
+		return floatToStr(ctx, source, rs, length, toType)
 	}
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from float32 to %s", toType))
 }
@@ -1250,7 +1250,7 @@ func float64ToOthers(ctx context.Context,
 	case types.T_char, types.T_varchar, types.T_blob,
 		types.T_binary, types.T_text, types.T_varbinary:
 		rs := vector.MustFunctionResult[types.Varlena](result)
-		return floatToStr(source, rs, length, toType)
+		return floatToStr(ctx, source, rs, length, toType)
 	}
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from float64 to %s", toType))
 }
@@ -1284,7 +1284,7 @@ func dateToOthers(proc *process.Process,
 	case types.T_char, types.T_varchar, types.T_blob,
 		types.T_binary, types.T_varbinary, types.T_text:
 		rs := vector.MustFunctionResult[types.Varlena](result)
-		return dateToStr(source, rs, length, toType)
+		return dateToStr(proc.Ctx, source, rs, length, toType)
 	}
 	return moerr.NewInternalError(proc.Ctx, fmt.Sprintf("unsupported cast from date to %s", toType))
 }
@@ -1320,7 +1320,7 @@ func datetimeToOthers(proc *process.Process,
 	case types.T_char, types.T_varchar, types.T_blob,
 		types.T_binary, types.T_varbinary, types.T_text:
 		rs := vector.MustFunctionResult[types.Varlena](result)
-		return datetimeToStr(source, rs, length, toType)
+		return datetimeToStr(proc.Ctx, source, rs, length, toType)
 	case types.T_decimal64:
 		rs := vector.MustFunctionResult[types.Decimal64](result)
 		return datetimeToDecimal64(proc.Ctx, source, rs, length)
@@ -1360,7 +1360,7 @@ func timestampToOthers(proc *process.Process,
 	case types.T_char, types.T_varchar, types.T_blob,
 		types.T_binary, types.T_varbinary, types.T_text:
 		rs := vector.MustFunctionResult[types.Varlena](result)
-		return timestampToStr(source, rs, length, zone, toType)
+		return timestampToStr(proc.Ctx, source, rs, length, zone, toType)
 	case types.T_decimal64:
 		rs := vector.MustFunctionResult[types.Decimal64](result)
 		return timestampToDecimal64(proc.Ctx, source, rs, length)
@@ -1416,7 +1416,7 @@ func timeToOthers(ctx context.Context,
 	case types.T_char, types.T_varchar, types.T_blob,
 		types.T_binary, types.T_varbinary, types.T_text:
 		rs := vector.MustFunctionResult[types.Varlena](result)
-		return timeToStr(source, rs, length, toType)
+		return timeToStr(ctx, source, rs, length, toType)
 	case types.T_decimal64:
 		rs := vector.MustFunctionResult[types.Decimal64](result)
 		return timeToDecimal64(ctx, source, rs, length)
@@ -1487,7 +1487,7 @@ func decimal64ToOthers(ctx context.Context,
 	case types.T_char, types.T_varchar, types.T_blob,
 		types.T_binary, types.T_varbinary, types.T_text:
 		rs := vector.MustFunctionResult[types.Varlena](result)
-		return decimal64ToStr(source, rs, length, toType)
+		return decimal64ToStr(ctx, source, rs, length, toType)
 	}
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from decimal64 to %s", toType))
 }
@@ -1552,7 +1552,7 @@ func decimal128ToOthers(ctx context.Context,
 	case types.T_char, types.T_varchar, types.T_blob,
 		types.T_binary, types.T_varbinary, types.T_text:
 		rs := vector.MustFunctionResult[types.Varlena](result)
-		return decimal128ToStr(source, rs, length, toType)
+		return decimal128ToStr(ctx, source, rs, length, toType)
 	}
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from decimal128 to %s", toType))
 }
@@ -1694,7 +1694,7 @@ func uuidToOthers(ctx context.Context,
 	case types.T_char, types.T_varchar, types.T_blob,
 		types.T_binary, types.T_varbinary, types.T_text:
 		rs := vector.MustFunctionResult[types.Varlena](result)
-		return uuidToStr(source, rs, length, toType)
+		return uuidToStr(ctx, source, rs, length, toType)
 	}
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from uuid to %s", toType))
 }
@@ -1735,7 +1735,7 @@ func jsonToOthers(ctx context.Context,
 	switch toType.Oid {
 	case types.T_char, types.T_varchar, types.T_text:
 		rs := vector.MustFunctionResult[types.Varlena](result)
-		return jsonToStr(source, rs, length)
+		return jsonToStr(ctx, source, rs, length)
 	}
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from json to %s", toType))
 }
@@ -1749,7 +1749,7 @@ func enumToOthers(ctx context.Context,
 		return enumToUint16(source, rs, length)
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
 		rs := vector.MustFunctionResult[types.Varlena](result)
-		return enumToStr(source, rs, length)
+		return enumToStr(ctx, source, rs, length)
 	}
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from enum to %s", toType.String()))
 }
@@ -2005,6 +2005,7 @@ func boolToInteger[T constraints.Integer](
 }
 
 func bitToStr(
+	ctx context.Context,
 	from vector.FunctionParameterWrapper[uint64],
 	to *vector.FunctionResult[types.Varlena], length int, toType types.Type) error {
 
@@ -2050,6 +2051,10 @@ func bitToStr(
 			for len(b) < int(toType.Width) {
 				b = append(b, byte(0))
 			}
+		}
+		if len(b) > int(toType.Width) {
+			return formatCastError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
+				"%v is larger than Dest length %v", v, toType.Width))
 		}
 		if err := to.AppendBytes(b, false); err != nil {
 			return err
@@ -2211,6 +2216,7 @@ func floatToDecimal128[T constraints.Float](
 }
 
 func signedToStr[T constraints.Integer](
+	ctx context.Context,
 	from vector.FunctionParameterWrapper[T],
 	to *vector.FunctionResult[types.Varlena], length int, toType types.Type) error {
 	var i uint64
@@ -2246,6 +2252,10 @@ func signedToStr[T constraints.Integer](
 					result = append(result, 0)
 				}
 			}
+			if len(result) > int(toType.Width) {
+				return formatCastError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
+					"%v is larger than Dest length %v", v, toType.Width))
+			}
 			if err := to.AppendBytes(result, false); err != nil {
 				return err
 			}
@@ -2255,6 +2265,7 @@ func signedToStr[T constraints.Integer](
 }
 
 func unsignedToStr[T constraints.Unsigned](
+	ctx context.Context,
 	from vector.FunctionParameterWrapper[T],
 	to *vector.FunctionResult[types.Varlena], length int, toType types.Type) error {
 	var i uint64
@@ -2289,6 +2300,10 @@ func unsignedToStr[T constraints.Unsigned](
 					result = append(result, 0)
 				}
 			}
+			if len(result) > int(toType.Width) {
+				return formatCastError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
+					"%v is larger than Dest length %v", v, toType.Width))
+			}
 			if err := to.AppendBytes(result, false); err != nil {
 				return err
 			}
@@ -2298,6 +2313,7 @@ func unsignedToStr[T constraints.Unsigned](
 }
 
 func floatToStr[T constraints.Float](
+	ctx context.Context,
 	from vector.FunctionParameterWrapper[T],
 	to *vector.FunctionResult[types.Varlena], length int, toType types.Type) error {
 	var i uint64
@@ -2333,6 +2349,10 @@ func floatToStr[T constraints.Float](
 				for ; add0 != 0; add0-- {
 					result = append(result, 0)
 				}
+			}
+			if len(result) > int(toType.Width) {
+				return formatCastError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
+					"%v is larger than Dest length %v", v, toType.Width))
 			}
 			if err := to.AppendBytes(result, false); err != nil {
 				return err
@@ -2888,6 +2908,7 @@ func timeToDate(
 }
 
 func dateToStr(
+	ctx context.Context,
 	from vector.FunctionParameterWrapper[types.Date],
 	to *vector.FunctionResult[types.Varlena], length int, toType types.Type) error {
 	var i uint64
@@ -2922,6 +2943,10 @@ func dateToStr(
 					result = append(result, 0)
 				}
 			}
+			if len(result) > int(toType.Width) {
+				return formatCastError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
+					"%v is larger than Dest length %v", v.String(), toType.Width))
+			}
 			if err := to.AppendBytes(result, false); err != nil {
 				return err
 			}
@@ -2931,6 +2956,7 @@ func dateToStr(
 }
 
 func datetimeToStr(
+	ctx context.Context,
 	from vector.FunctionParameterWrapper[types.Datetime],
 	to *vector.FunctionResult[types.Varlena], length int, toType types.Type) error {
 	var i uint64
@@ -2966,6 +2992,10 @@ func datetimeToStr(
 					result = append(result, 0)
 				}
 			}
+			if len(result) > int(toType.Width) {
+				return formatCastError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
+					"%v is larger than Dest length %v", v.String(), toType.Width))
+			}
 			if err := to.AppendBytes(result, false); err != nil {
 				return err
 			}
@@ -2975,6 +3005,7 @@ func datetimeToStr(
 }
 
 func timestampToStr(
+	ctx context.Context,
 	from vector.FunctionParameterWrapper[types.Timestamp],
 	to *vector.FunctionResult[types.Varlena], length int,
 	zone *time.Location, toType types.Type) error {
@@ -3011,6 +3042,10 @@ func timestampToStr(
 					result = append(result, 0)
 				}
 			}
+			if len(result) > int(toType.Width) {
+				return formatCastError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
+					"%v is larger than Dest length %v", v.String(), toType.Width))
+			}
 			if err := to.AppendBytes(result, false); err != nil {
 				return err
 			}
@@ -3020,6 +3055,7 @@ func timestampToStr(
 }
 
 func timeToStr(
+	ctx context.Context,
 	from vector.FunctionParameterWrapper[types.Time],
 	to *vector.FunctionResult[types.Varlena], length int, toType types.Type) error {
 	var i uint64
@@ -3054,6 +3090,10 @@ func timeToStr(
 				for ; add0 != 0; add0-- {
 					result = append(result, 0)
 				}
+			}
+			if len(result) > int(toType.Width) {
+				return formatCastError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
+					"%v is larger than Dest length %v", v.String(), toType.Width))
 			}
 			if err := to.AppendBytes(result, false); err != nil {
 				return err
@@ -3629,6 +3669,7 @@ func decimal128ToDecimal128(
 }
 
 func decimal64ToStr(
+	ctx context.Context,
 	from vector.FunctionParameterWrapper[types.Decimal64],
 	to *vector.FunctionResult[types.Varlena], length int, toType types.Type) error {
 	var i uint64
@@ -3664,6 +3705,10 @@ func decimal64ToStr(
 					result = append(result, 0)
 				}
 			}
+			if len(result) > int(toType.Width) {
+				return formatCastError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
+					"%v is larger than Dest length %v", v.Format(fromType.Scale), toType.Width))
+			}
 			if err := to.AppendBytes(result, false); err != nil {
 				return err
 			}
@@ -3673,6 +3718,7 @@ func decimal64ToStr(
 }
 
 func decimal128ToStr(
+	ctx context.Context,
 	from vector.FunctionParameterWrapper[types.Decimal128],
 	to *vector.FunctionResult[types.Varlena], length int, toType types.Type) error {
 	var i uint64
@@ -3707,6 +3753,10 @@ func decimal128ToStr(
 				for ; add0 != 0; add0-- {
 					result = append(result, 0)
 				}
+			}
+			if len(result) > int(toType.Width) {
+				return formatCastError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
+					"%v is larger than Dest length %v", v.Format(fromType.Scale), toType.Width))
 			}
 			if err := to.AppendBytes(result, false); err != nil {
 				return err
@@ -4391,6 +4441,7 @@ func arrayToArray[I types.RealNumbers, O types.RealNumbers](
 }
 
 func uuidToStr(
+	ctx context.Context,
 	from vector.FunctionParameterWrapper[types.Uuid],
 	to *vector.FunctionResult[types.Varlena], length int, toType types.Type) error {
 	var i uint64
@@ -4430,7 +4481,11 @@ func uuidToStr(
 					return moerr.NewDataTruncatedNoCtx("Uuid", "truncated for char/varchar")
 				}
 			}
-			if err := to.AppendBytes([]byte(result), false); err != nil {
+			if len(result) > int(toType.Width) {
+				return formatCastError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
+					"%v is larger than Dest length %v", v.ToString(), toType.Width))
+			}
+			if err := to.AppendBytes(result, false); err != nil {
 				return err
 			}
 		}
@@ -4439,9 +4494,11 @@ func uuidToStr(
 }
 
 func jsonToStr(
+	ctx context.Context,
 	from vector.FunctionParameterWrapper[types.Varlena],
 	to *vector.FunctionResult[types.Varlena], length int) error {
 	var i uint64
+	toType := to.GetType()
 	for i = 0; i < uint64(length); i++ {
 		v, null := from.GetStrValue(i)
 		if null {
@@ -4453,6 +4510,10 @@ func jsonToStr(
 			val, err := bj.MarshalJSON()
 			if err != nil {
 				return err
+			}
+			if len(val) > int(toType.Width) {
+				return formatCastError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
+					"%v is larger than Dest length %v", val, toType.Width))
 			}
 			if err = to.AppendBytes(val, false); err != nil {
 				return err
@@ -4482,9 +4543,11 @@ func enumToUint16(
 }
 
 func enumToStr(
+	ctx context.Context,
 	from vector.FunctionParameterWrapper[types.Enum],
 	to *vector.FunctionResult[types.Varlena], length int) error {
 	var i uint64
+	toType := to.GetType()
 	for i = 0; i < uint64(length); i++ {
 		v, null := from.GetValue(i)
 		if null {
@@ -4492,7 +4555,12 @@ func enumToStr(
 				return err
 			}
 		} else {
-			if err := to.AppendBytes([]byte(strconv.FormatUint(uint64(v), 10)), false); err != nil {
+			result := strconv.FormatUint(uint64(v), 10)
+			if len(result) > int(toType.Width) {
+				return formatCastError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
+					"%v is larger than Dest length %v", v, toType.Width))
+			}
+			if err := to.AppendBytes([]byte(result), false); err != nil {
 				return err
 			}
 		}
