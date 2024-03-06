@@ -354,6 +354,20 @@ func (mr *MockRelationMockRecorder) AlterTable(ctx, c, constraint interface{}) *
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AlterTable", reflect.TypeOf((*MockRelation)(nil).AlterTable), ctx, c, constraint)
 }
 
+// ApproxObjectsNum mocks base method.
+func (m *MockRelation) ApproxObjectsNum(ctx context.Context) int {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ApproxObjectsNum", ctx)
+	ret0, _ := ret[0].(int)
+	return ret0
+}
+
+// ApproxObjectsNum indicates an expected call of ApproxObjectsNum.
+func (mr *MockRelationMockRecorder) ApproxObjectsNum(ctx interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ApproxObjectsNum", reflect.TypeOf((*MockRelation)(nil).ApproxObjectsNum), ctx)
+}
+
 // CopyTableDef mocks base method.
 func (m *MockRelation) CopyTableDef(arg0 context.Context) *plan.TableDef {
 	m.ctrl.T.Helper()
