@@ -52,6 +52,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/explain"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	txnTrace "github.com/matrixorigin/matrixone/pkg/txn/trace"
 	util2 "github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -1963,17 +1965,42 @@ func buildMoExplainQuery(explainColName string, buffer *explain.ExplainDataBuffe
 }
 
 func buildPlan(requestCtx context.Context, ses *Session, ctx plan2.CompilerContext, stmt tree.Statement) (*plan2.Plan, error) {
+	var ret *plan2.Plan
+	var err error
+
+	txnOp := ctx.GetProcess().TxnOperator
 	start := time.Now()
+	seq := uint64(0)
+	if txnOp != nil {
+		seq = txnOp.NextSequence()
+		txnTrace.GetService().AddTxnDurationAction(
+			txnOp,
+			client.BuildPlanEvent,
+			seq,
+			0,
+			0,
+			err)
+	}
+
 	defer func() {
-		v2.TxnStatementBuildPlanDurationHistogram.Observe(time.Since(start).Seconds())
+		cost := time.Since(start)
+
+		if txnOp != nil {
+			txnTrace.GetService().AddTxnDurationAction(
+				txnOp,
+				client.BuildPlanEvent,
+				seq,
+				0,
+				cost,
+				err)
+		}
+		v2.TxnStatementBuildPlanDurationHistogram.Observe(cost.Seconds())
 	}()
 
 	stats := statistic.StatsInfoFromContext(requestCtx)
 	stats.PlanStart()
 	defer stats.PlanEnd()
 
-	var ret *plan2.Plan
-	var err error
 	isPrepareStmt := false
 	if ses != nil {
 		ses.accountId, err = defines.GetAccountId(requestCtx)
