@@ -447,9 +447,17 @@ func makeInsertMultiIndexSQL(eg engine.Engine, ctx context.Context, proc *proces
 	databaseId := dbSource.GetDatabaseId(ctx)
 	tableId := relation.GetTableID(ctx)
 
-	ct, err := GetConstraintDef(ctx, relation)
+	tableDefs, err := relation.TableDefs(ctx)
 	if err != nil {
 		return "", err
+	}
+
+	var ct *engine.ConstraintDef
+	for _, def := range tableDefs {
+		if constraintDef, ok := def.(*engine.ConstraintDef); ok {
+			ct = constraintDef
+			break
+		}
 	}
 	if ct == nil {
 		return "", nil
@@ -569,28 +577,4 @@ func genInsertMoTablePartitionsSql(databaseId string, tableId uint64, partitionB
 	}
 	buffer.WriteString(";")
 	return buffer.String()
-}
-
-func GetConstraintDef(ctx context.Context, rel engine.Relation) (*engine.ConstraintDef, error) {
-	defs, err := rel.TableDefs(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	return GetConstraintDefFromTableDefs(defs), nil
-}
-
-func GetConstraintDefFromTableDefs(defs []engine.TableDef) *engine.ConstraintDef {
-	var cstrDef *engine.ConstraintDef
-	for _, def := range defs {
-		if ct, ok := def.(*engine.ConstraintDef); ok {
-			cstrDef = ct
-			break
-		}
-	}
-	if cstrDef == nil {
-		cstrDef = &engine.ConstraintDef{}
-		cstrDef.Cts = make([]engine.Constraint, 0)
-	}
-	return cstrDef
 }
