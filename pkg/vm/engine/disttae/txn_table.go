@@ -595,12 +595,6 @@ func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr) (ranges eng
 	var blocks objectio.BlockInfoSlice
 	blocks.AppendBlockInfo(objectio.EmptyBlockInfo)
 
-	// for dynamic parameter, substitute param ref and const fold cast expression here to improve performance
-	newExprs, err := plan2.ConstandFoldList(exprs, tbl.proc.Load(), true)
-	if err == nil {
-		exprs = newExprs
-	}
-
 	if err = tbl.rangesOnePart(
 		ctx,
 		part,
@@ -682,7 +676,20 @@ func (tbl *txnTable) rangesOnePart(
 		}
 	})
 
-	if done, err := tbl.tryFastRanges(
+	done, err := tbl.tryFastFilterBlocks(exprs, state, uncommittedObjects, blocks, tbl.db.txn.engine.fs)
+	if err != nil {
+		return err
+	} else if done {
+		return nil
+	}
+
+	// for dynamic parameter, substitute param ref and const fold cast expression here to improve performance
+	newExprs, err := plan2.ConstandFoldList(exprs, tbl.proc.Load(), true)
+	if err == nil {
+		exprs = newExprs
+	}
+
+	if done, err = tbl.tryFastRanges(
 		exprs, state, uncommittedObjects, blocks, tbl.db.txn.engine.fs,
 	); err != nil {
 		return err
@@ -877,16 +884,13 @@ func (tbl *txnTable) rangesOnePart(
 	return
 }
 
-// tryFastRanges only handle equal expression filter on zonemap and bloomfilter in tp scenario;
-// it filters out only a small number of blocks which should not be distributed to remote CNs.
-func (tbl *txnTable) tryFastRanges(
+// tryFastFilterBlocks is going to replace the tryFastRanges completely soon, in progress now.
+func (tbl *txnTable) tryFastFilterBlocks(
 	exprs []*plan.Expr,
 	snapshot *logtailreplay.PartitionState,
 	uncommittedObjects []objectio.ObjectStats,
 	blocks *objectio.BlockInfoSlice,
-	fs fileservice.FileService,
-) (done bool, err error) {
-
+	fs fileservice.FileService) (done bool, err error) {
 	// TODO: refactor this code if composite key can be pushdown
 	if tbl.tableDef.Pkey == nil || tbl.tableDef.Pkey.CompPkeyCol == nil {
 		return TryFastFilterBlocks(
@@ -900,6 +904,18 @@ func (tbl *txnTable) tryFastRanges(
 			tbl.proc.Load(),
 		)
 	}
+	return
+}
+
+// tryFastRanges only handle equal expression filter on zonemap and bloomfilter in tp scenario;
+// it filters out only a small number of blocks which should not be distributed to remote CNs.
+func (tbl *txnTable) tryFastRanges(
+	exprs []*plan.Expr,
+	snapshot *logtailreplay.PartitionState,
+	uncommittedObjects []objectio.ObjectStats,
+	blocks *objectio.BlockInfoSlice,
+	fs fileservice.FileService,
+) (done bool, err error) {
 	if tbl.primaryIdx == -1 || len(exprs) == 0 {
 		done = false
 		return
