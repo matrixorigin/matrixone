@@ -17,6 +17,8 @@ package plan
 import (
 	"context"
 	"encoding/json"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"testing"
 
 	"github.com/golang/mock/gomock"
@@ -112,6 +114,7 @@ func TestBuildAlterView(t *testing.T) {
 	ctx.EXPECT().GetQueryingSubscription().Return(nil).AnyTimes()
 	ctx.EXPECT().DatabaseExists(gomock.Any()).Return(true).AnyTimes()
 	ctx.EXPECT().ResolveById(gomock.Any()).Return(nil, nil).AnyTimes()
+	ctx.EXPECT().GetStatsCache().Return(nil).AnyTimes()
 
 	ctx.EXPECT().GetRootSql().Return(sql1).AnyTimes()
 	stmt1, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql1, 1)
@@ -236,7 +239,11 @@ func TestBuildLockTables(t *testing.T) {
 
 func TestBuildCreateTable(t *testing.T) {
 	mock := NewMockOptimizer(false)
-
+	rt := moruntime.DefaultRuntime()
+	moruntime.SetupProcessLevelRuntime(rt)
+	moruntime.ProcessLevelRuntime().SetGlobalVariables(moruntime.InternalSQLExecutor, executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+		return executor.Result{}, nil
+	}))
 	sqls := []string{
 		`CREATE TABLE t3(
 					col1 INT NOT NULL,

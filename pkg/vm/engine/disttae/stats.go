@@ -187,7 +187,7 @@ func (gs *GlobalStats) Get(ctx context.Context, key pb.StatsInfoKey, sync bool) 
 	gs.mu.Lock()
 	defer gs.mu.Unlock()
 	info, ok := gs.mu.statsInfoMap[key]
-	if ok {
+	if ok && info != nil {
 		return info
 	}
 
@@ -378,10 +378,10 @@ func (gs *GlobalStats) updateTableStats(key pb.StatsInfoKey) {
 		}
 
 		// update the time to current time only if the stats is not nil.
-		if stats.ApproxObjectNumber > 0 {
+		if updated {
 			gs.mu.statsInfoMap[key] = stats
 			gs.statsUpdated.Store(key, time.Now())
-		} else {
+		} else if _, ok := gs.mu.statsInfoMap[key]; !ok {
 			gs.mu.statsInfoMap[key] = nil
 		}
 

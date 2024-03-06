@@ -15,6 +15,7 @@
 package task
 
 import (
+	"container/heap"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
@@ -56,16 +57,14 @@ func matchAllRules(cn pb.CNStoreInfo, rules ...rule) bool {
 	return true
 }
 
-func selectCNs(cnState pb.CNState, rules ...rule) pb.CNState {
-	cns := pb.CNState{
-		Stores: make(map[string]pb.CNStoreInfo),
-	}
-	for uuid, cn := range cnState.Stores {
-		if matchAllRules(cn, rules...) {
-			cns.Stores[uuid] = cn
+func (p *cnPool) selectCNs(rules ...rule) *cnPool {
+	newPool := newCNPool()
+	for _, cn := range p.sortedCN {
+		if matchAllRules(cn.info, rules...) {
+			heap.Push(newPool, cn)
 		}
 	}
-	return cns
+	return newPool
 }
 
 func contains(slice []string, val string) bool {
@@ -75,12 +74,4 @@ func contains(slice []string, val string) bool {
 		}
 	}
 	return false
-}
-
-func getUUIDs(cnState pb.CNState) map[string]struct{} {
-	uuids := make(map[string]struct{}, len(cnState.Stores))
-	for uuid := range cnState.Stores {
-		uuids[uuid] = struct{}{}
-	}
-	return uuids
 }

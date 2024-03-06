@@ -938,7 +938,7 @@ func (r *runner) tryCompactTree(entry *logtail.DirtyTreeEntry, force bool) {
 		}
 
 		if force {
-			logutil.Infof("[flushtabletail] force flush %s", table.GetLastestSchema().Name)
+			logutil.Infof("[flushtabletail] force flush %v-%s", table.ID, table.GetLastestSchema().Name)
 			if err := r.fireFlushTabletail(table, dirtyTree, endTs); err == nil {
 				stats.ResetDeadlineWithLock()
 			}
