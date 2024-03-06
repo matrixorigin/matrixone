@@ -37,6 +37,7 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -547,8 +548,37 @@ func (tbl *txnTable) resetSnapshot() {
 // return all unmodified blocks
 func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr) (ranges engine.Ranges, err error) {
 	start := time.Now()
+
+	seq := tbl.db.txn.op.NextSequence()
+	trace.GetService().AddTxnDurationAction(
+		tbl.db.txn.op,
+		client.RangesEvent,
+		seq,
+		tbl.tableId,
+		0,
+		nil)
+
 	defer func() {
-		v2.TxnTableRangeDurationHistogram.Observe(time.Since(start).Seconds())
+		cost := time.Since(start)
+
+		trace.GetService().AddTxnAction(
+			tbl.db.txn.op,
+			client.RangesEvent,
+			seq,
+			tbl.tableId,
+			int64(ranges.Len()),
+			"blocks",
+			err)
+
+		trace.GetService().AddTxnDurationAction(
+			tbl.db.txn.op,
+			client.RangesEvent,
+			seq,
+			tbl.tableId,
+			cost,
+			err)
+
+		v2.TxnTableRangeDurationHistogram.Observe(cost.Seconds())
 	}()
 
 	// make sure we have the block infos snapshot
@@ -856,19 +886,6 @@ func (tbl *txnTable) tryFastRanges(
 	blocks *objectio.BlockInfoSlice,
 	fs fileservice.FileService,
 ) (done bool, err error) {
-	// TODO: refactor this code if composite key can be pushdown
-	if tbl.tableDef.Pkey == nil || tbl.tableDef.Pkey.CompPkeyCol == nil {
-		return TryFastFilterBlocks(
-			tbl.db.txn.op.SnapshotTS(),
-			tbl.tableDef,
-			exprs,
-			snapshot,
-			uncommittedObjects,
-			blocks,
-			fs,
-			tbl.proc.Load(),
-		)
-	}
 	if tbl.primaryIdx == -1 || len(exprs) == 0 {
 		done = false
 		return
@@ -882,17 +899,8 @@ func (tbl *txnTable) tryFastRanges(
 		tbl.db.txn.engine.packerPool,
 	)
 	if len(val) == 0 {
-		// TODO: refactor this code if composite key can be pushdown
-		return TryFastFilterBlocks(
-			tbl.db.txn.op.SnapshotTS(),
-			tbl.tableDef,
-			exprs,
-			snapshot,
-			uncommittedObjects,
-			blocks,
-			fs,
-			tbl.proc.Load(),
-		)
+		done = false
+		return
 	}
 
 	var (

@@ -439,7 +439,7 @@ func replacePlan(requestCtx context.Context, ses *Session, cwft *TxnComputationW
 	if err != nil {
 		return nil, nil, originSQL, err
 	}
-	if txnTrace.GetService().Enabled() {
+	if txnTrace.GetService().Enabled(txnTrace.FeatureTraceTxn) {
 		originSQL = tree.String(prepareStmt.PrepareStmt, dialect.MYSQL)
 	}
 	preparePlan := prepareStmt.PreparePlan.GetDcl().GetPrepare()
