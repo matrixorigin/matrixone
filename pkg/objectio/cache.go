@@ -140,10 +140,6 @@ func LoadObjectMetaByExtent(
 			return
 		}
 		meta = obj.(ObjectMeta)
-		metaCacheStats.Record(1, 1)
-		if !prefetch {
-			metaCacheHitStats.Record(1, 1)
-		}
 		return
 	}
 	if v, err = ReadExtent(ctx, name.String(), extent, policy, fs, constructorFactory); err != nil {
@@ -156,10 +152,6 @@ func LoadObjectMetaByExtent(
 	}
 	meta = obj.(ObjectMeta)
 	metaCache.Set(ctx, key, v[:])
-	metaCacheStats.Record(0, 1)
-	if !prefetch {
-		metaCacheHitStats.Record(0, 1)
-	}
 	return
 }
 
@@ -172,7 +164,6 @@ func FastLoadBF(
 	key := encodeCacheKey(*location.ShortName(), cacheKeyTypeBloomFilter)
 	v, ok := metaCache.Get(ctx, key)
 	if ok {
-		metaCacheStats.Record(1, 1)
 		return v.Bytes(), nil
 	}
 	meta, err := FastLoadObjectMeta(ctx, &location, isPrefetch, fs)
@@ -191,7 +182,6 @@ func LoadBFWithMeta(
 	key := encodeCacheKey(*location.ShortName(), cacheKeyTypeBloomFilter)
 	v, ok := metaCache.Get(ctx, key)
 	if ok {
-		metaCacheStats.Record(1, 1)
 		return v.Bytes(), nil
 	}
 	extent := meta.BlockHeader().BFExtent()
@@ -200,7 +190,6 @@ func LoadBFWithMeta(
 		return nil, err
 	}
 	metaCache.Set(ctx, key, fileservice.Bytes(bf))
-	metaCacheStats.Record(0, 1)
 	return bf, nil
 }
 
