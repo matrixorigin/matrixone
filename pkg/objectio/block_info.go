@@ -15,8 +15,6 @@
 package objectio
 
 import (
-	"bytes"
-	"fmt"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -138,14 +136,4 @@ func (s *BlockInfoSlice) SetBytes(bs []byte) {
 
 func (s *BlockInfoSlice) GetAllBytes() []byte {
 	return *s
-}
-
-func (s *BlockInfoSlice) String() string {
-	var buf bytes.Buffer
-	buf.WriteString(fmt.Sprintf("BlockInfoSlice[Len=%d]:\n", s.Len()))
-	for i := 0; i < s.Len(); i++ {
-		buf.WriteString(s.Get(i).BlockID.String())
-		buf.WriteByte('\n')
-	}
-	return buf.String()
 }
