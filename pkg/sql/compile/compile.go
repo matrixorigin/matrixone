@@ -416,7 +416,10 @@ func (c *Compile) allocOperatorID() int32 {
 // Run is an important function of the compute-layer, it executes a single sql according to its scope
 func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
 	txnOp := c.proc.TxnOperator
-	seq := txnOp.NextSequence()
+	seq := uint64(0)
+	if txnOp != nil {
+		seq = txnOp.NextSequence()
+	}
 	txnTrace.GetService().AddTxnDurationAction(
 		txnOp,
 		client.ExecuteSQLEvent,

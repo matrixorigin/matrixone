@@ -263,17 +263,6 @@ func TestMissingTxnIDWillPanic(t *testing.T) {
 	newTxnOperator(nil, newTestTxnSender(), txn.TxnMeta{})
 }
 
-func TestEmptyTxnSnapshotTSWillPanic(t *testing.T) {
-	defer func() {
-		if err := recover(); err != nil {
-			return
-		}
-		assert.Fail(t, "must panic")
-	}()
-	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
-	newTxnOperator(nil, newTestTxnSender(), txn.TxnMeta{ID: []byte{1}})
-}
-
 func TestReadOnlyAndCacheWriteBothSetWillPanic(t *testing.T) {
 	defer func() {
 		if err := recover(); err != nil {

@@ -125,13 +125,13 @@ func NewService(
 	}
 
 	if s.options.flushDuration == 0 {
-		s.options.flushDuration = 60 * time.Second
+		s.options.flushDuration = 30 * time.Second
 	}
 	if s.options.flushBytes == 0 {
-		s.options.flushBytes = 64 * 1024 * 1024
+		s.options.flushBytes = 16 * 1024 * 1024
 	}
 	if s.options.bufferSize == 0 {
-		s.options.bufferSize = 10000
+		s.options.bufferSize = 100000
 	}
 
 	s.txnBufC = make(chan *buffer, s.options.bufferSize)
@@ -334,7 +334,7 @@ func (s *service) handleLoad(ctx context.Context) {
 				}
 
 				if err := load(e.sql); err != nil {
-					s.logger.Fatal("load trace data to table failed, retry later",
+					s.logger.Error("load trace data to table failed, retry later",
 						zap.String("sql", e.sql),
 						zap.Error(err))
 					time.Sleep(time.Second * 5)

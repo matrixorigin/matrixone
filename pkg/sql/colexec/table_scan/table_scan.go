@@ -46,7 +46,10 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	var e error
 	start := time.Now()
 	txnOp := proc.TxnOperator
-	seq := txnOp.NextSequence()
+	seq := uint64(0)
+	if txnOp != nil {
+		seq = txnOp.NextSequence()
+	}
 
 	trace.GetService().AddTxnDurationAction(
 		txnOp,
