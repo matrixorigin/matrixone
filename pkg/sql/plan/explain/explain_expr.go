@@ -99,14 +99,14 @@ func describeExpr(ctx context.Context, expr *plan.Expr, options *ExplainOptions,
 
 	case *plan.Expr_F:
 		funcExpr := expr.Expr.(*plan.Expr_F)
-		err := funcExprExplain(ctx, funcExpr, expr.Typ, options, buf)
+		err := funcExprExplain(ctx, funcExpr, &expr.Typ, options, buf)
 		if err != nil {
 			return err
 		}
 	case *plan.Expr_W:
 		w := exprImpl.W
 		funcExpr := w.WindowFunc.Expr.(*plan.Expr_F)
-		err := funcExprExplain(ctx, funcExpr, expr.Typ, options, buf)
+		err := funcExprExplain(ctx, funcExpr, &expr.Typ, options, buf)
 		if err != nil {
 			return err
 		}

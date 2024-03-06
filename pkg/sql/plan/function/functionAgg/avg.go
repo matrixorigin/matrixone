@@ -307,6 +307,7 @@ func (s *sAggDecimalAvg) Eval(lastResult []types.Decimal128) ([]types.Decimal128
 			continue
 		}
 		s.x.B0_63 = uint64(s.cnts[i])
+		s.x.B64_127 = 0
 		lastResult[i], _, err = lastResult[i].Div(s.x, s.typ.Scale, 0)
 		if err != nil {
 			return nil, err
