@@ -281,6 +281,10 @@ func (s *StatementInfo) GetName() string {
 	return SingleStatementTable.GetName()
 }
 
+func (s *StatementInfo) IsMoLogger() bool {
+	return s.Account == "sys" && s.User == db_holder.MOLoggerUser
+}
+
 // deltaContentLength approximate value that may gen as table record
 // stmtID, txnID, sesID: 36 * 3
 // timestamp: 26 * 2
@@ -740,9 +744,9 @@ var ReportStatement = func(ctx context.Context, s *StatementInfo) error {
 		return nil
 	}
 	// Filter out the MO_LOGGER SQL statements
-	if s.User == db_holder.MOLoggerUser {
-		goto DiscardAndFreeL
-	}
+	//if s.User == db_holder.MOLoggerUser {
+	//	goto DiscardAndFreeL
+	//}
 
 	// Filter out the statement is empty
 	if s.Statement == "" {
@@ -763,7 +767,7 @@ var ReportStatement = func(ctx context.Context, s *StatementInfo) error {
 	}
 
 	// logging the statement that should not be here anymore
-	if s.exported || s.reported || s.User == db_holder.MOLoggerUser || s.Statement == "" {
+	if s.exported || s.reported || s.Statement == "" {
 		logutil.Error("StatementInfo should not be here anymore", zap.String("StatementInfo", s.Statement), zap.String("statement_id", uuid.UUID(s.StatementID).String()), zap.String("user", s.User), zap.Bool("exported", s.exported), zap.Bool("reported", s.reported))
 	}
 
