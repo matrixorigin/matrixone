@@ -123,7 +123,7 @@ func BenchmarkBuild(b *testing.B) {
 
 func newExpr(pos int32, typ types.Type) *plan.Expr {
 	return &plan.Expr{
-		Typ: &plan.Type{
+		Typ: plan.Type{
 			Id:    int32(typ.Oid),
 			Width: typ.Width,
 			Scale: typ.Scale,

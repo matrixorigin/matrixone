@@ -717,7 +717,7 @@ func TestBlock1(t *testing.T) {
 	db, _ := txn1.CreateDatabase("db", "", "")
 	schema := catalog.MockSchema(1, 0)
 	rel, _ := db.CreateRelation(schema)
-	obj, _ := rel.CreateNonAppendableObject(false)
+	obj, _ := rel.CreateNonAppendableObject(false, nil)
 
 	blkCnt := 100
 	for i := 0; i < blkCnt; i++ {

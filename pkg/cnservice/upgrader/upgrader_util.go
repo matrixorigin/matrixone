@@ -57,6 +57,8 @@ func ParseDataTypeToColType(dataType string) (table.ColType, error) {
 		return table.TUuid, nil
 	case strings.EqualFold(dataTypeStr, "bool"):
 		return table.TBool, nil
+	case strings.EqualFold(dataTypeStr, "blob"):
+		return table.TBlob, nil
 	default:
 		return table.TSkip, moerr.NewInternalError(context.Background(), "unknown data type %s", dataTypeStr)
 	}
