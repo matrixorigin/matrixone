@@ -424,7 +424,7 @@ var supportedAggregateFunctions = []FuncNew{
 				isAgg: true,
 				aggFramework: aggregationLogicOfOverload{
 					str:    "bitmap_construct_agg",
-					aggNew: functionAgg.NewBitmapConstruct,
+					aggNew: functionAgg.NewAggBitmapConstruct,
 				},
 			},
 		},
@@ -436,7 +436,7 @@ var supportedAggregateFunctions = []FuncNew{
 		class:      plan.Function_AGG,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			return fixedUnaryAggTypeCheck(inputs, functionAgg.AggBitmapConstructSupportedParameters)
+			return fixedUnaryAggTypeCheck(inputs, functionAgg.AggBitmapOrSupportedParameters)
 		},
 
 		Overloads: []overload{
@@ -448,7 +448,7 @@ var supportedAggregateFunctions = []FuncNew{
 				isAgg: true,
 				aggFramework: aggregationLogicOfOverload{
 					str:    "bitmap_or_agg",
-					aggNew: functionAgg.NewBitmapOr,
+					aggNew: functionAgg.NewAggBitmapOr,
 				},
 			},
 		},

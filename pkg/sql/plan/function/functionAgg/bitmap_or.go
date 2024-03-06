@@ -30,12 +30,14 @@ var (
 		types.T_varbinary,
 	}
 	AggBitmapConstructReturnType = func(_ []types.Type) types.Type {
-		return types.T_varbinary.ToType()
+		typ := types.T_varbinary.ToType()
+		typ.Width = BitmapMaxWidth >> 3
+		return typ
 	}
 	AggBitmapOrReturnType = AggBitmapConstructReturnType
 )
 
-func NewBitmapConstruct(overloadID int64, dist bool, inputTypes []types.Type, outputType types.Type, _ any) (agg.Agg[any], error) {
+func NewAggBitmapConstruct(overloadID int64, dist bool, inputTypes []types.Type, outputType types.Type, _ any) (agg.Agg[any], error) {
 	aggPriv := &sAggBitmapConstruct{}
 	if dist {
 		return agg.NewUnaryDistAgg[uint64, []byte](overloadID, aggPriv, false, inputTypes[0], outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill), nil
@@ -43,7 +45,7 @@ func NewBitmapConstruct(overloadID int64, dist bool, inputTypes []types.Type, ou
 	return agg.NewUnaryAgg[uint64, []byte](overloadID, aggPriv, false, inputTypes[0], outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill), nil
 }
 
-func NewBitmapOr(overloadID int64, dist bool, inputTypes []types.Type, outputType types.Type, _ any) (agg.Agg[any], error) {
+func NewAggBitmapOr(overloadID int64, dist bool, inputTypes []types.Type, outputType types.Type, _ any) (agg.Agg[any], error) {
 	aggPriv := &sAggBitmapOr{}
 	if dist {
 		return agg.NewUnaryDistAgg[[]byte, []byte](overloadID, aggPriv, false, inputTypes[0], outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill), nil

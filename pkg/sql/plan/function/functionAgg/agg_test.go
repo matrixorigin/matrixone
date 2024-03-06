@@ -783,3 +783,55 @@ func TestClusterCenters(t *testing.T) {
 		require.Equal(t, s1.groupedData, s2.groupedData)
 	}
 }
+
+func TestBitmapOr(t *testing.T) {
+	require.NoError(t, testUnaryAggSupported(NewAggBitmapConstruct, AggBitmapConstructSupportedParameters, AggBitmapConstructReturnType))
+	s1 := &sAggBitmapConstruct{}
+	{
+		tr := &simpleAggTester[uint64, []byte]{
+			source: s1,
+			grow:   s1.Grows,
+			free:   s1.Free,
+			fill:   s1.Fill,
+			merge:  s1.Merge,
+			eval:   s1.Eval,
+		}
+		// 1 << 1 || 1<< 3 || 1 << 6 || 1 << 9 = 01001010 00000010 = 4B 02
+		nsp := nulls.NewWithSize(5)
+		nsp.Add(3)
+		err := tr.testUnaryAgg([]uint64{1, 3, 6, 0, 9}, nsp, func(result []byte, isEmpty bool) bool {
+			return !isEmpty && len(result) == BitmapMaxWidth>>3 && result[0] == 74 && result[1] == 2
+		})
+		require.NoError(t, err)
+	}
+
+	require.NoError(t, testUnaryAggSupported(NewAggBitmapOr, AggBitmapOrSupportedParameters, AggBitmapOrReturnType))
+	s2 := &sAggBitmapOr{}
+	{
+		tr := &simpleAggTester[[]byte, []byte]{
+			source: s2,
+			grow:   s2.Grows,
+			free:   s2.Free,
+			fill:   s2.Fill,
+			merge:  s2.Merge,
+			eval:   s2.Eval,
+		}
+
+		genBytes := func(x int) []byte {
+			bytes := make([]byte, BitmapMaxWidth>>3)
+			for i := 0; x > 0; i++ {
+				bytes[i] = byte(x & 0xff)
+				x >>= 8
+			}
+			return bytes
+		}
+		// 0x7b || 0x1c8 || 0x315 = 0x3ff
+		bytes0 := genBytes(123)
+		bytes1 := genBytes(456)
+		bytes2 := genBytes(789)
+		err := tr.testUnaryAgg([][]byte{bytes0, bytes1, bytes2}, nil, func(result []byte, isEmpty bool) bool {
+			return !isEmpty && result[0] == byte(0xff) && result[1] == byte(0x3)
+		})
+		require.NoError(t, err)
+	}
+}
