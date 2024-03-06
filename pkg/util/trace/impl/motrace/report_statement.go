@@ -473,6 +473,7 @@ endL:
 
 // ExecPlan2Stats return Stats Serialized int array str
 // and set RowsRead, BytesScan from ExecPlan
+// and CalculateCU
 func (s *StatementInfo) ExecPlan2Stats(ctx context.Context) error {
 	var stats Statistic
 	var statsArray statistic.StatsArray
