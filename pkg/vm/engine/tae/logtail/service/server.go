@@ -39,10 +39,6 @@ import (
 const (
 	LogtailServiceRPCName = "logtail-server"
 
-	// FIXME: make this configurable
-	// duration to detect slow morpc stream
-	RpcStreamPoisionTime = 1 * time.Second
-
 	// updateEventMaxInterval is the max interval between update events.
 	// If 3s has passed since last update event, we should try to send an
 	// update event, rather than a suscription, to avoid there are no
@@ -142,7 +138,7 @@ func NewLogtailServer(
 		ssmgr:     NewSessionManager(),
 		waterline: NewWaterliner(),
 		errChan:   make(chan sessionError, 1),
-		subChan:   make(chan subscription, 10),
+		subChan:   make(chan subscription, 100),
 		logtail:   logtail,
 	}
 
@@ -264,12 +260,13 @@ func (s *LogtailServer) onSubscription(
 		// FIXME: using s.cfg
 		s.rootCtx, logger, s.pool.responses, s, stream,
 		s.cfg.ResponseSendTimeout,
-		s.streamPoisionTime(),
+		s.cfg.RPCStreamPoisonTime,
 		s.cfg.LogtailCollectInterval,
 	)
 
 	repeated := session.Register(tableID, *req.Table)
 	if repeated {
+		logger.Info("repeated sub request", zap.String("table ID", string(tableID)))
 		return nil
 	}
 
@@ -280,17 +277,23 @@ func (s *LogtailServer) onSubscription(
 		session: session,
 	}
 
-	select {
-	case <-s.rootCtx.Done():
-		logger.Error("logtail server context done", zap.Error(s.rootCtx.Err()))
-		return s.rootCtx.Err()
-	case <-sendCtx.Done():
-		logger.Error("request context done", zap.Error(sendCtx.Err()))
-		return sendCtx.Err()
-	case s.subChan <- sub:
+	for {
+		select {
+		case <-s.rootCtx.Done():
+			logger.Error("logtail server context done", zap.Error(s.rootCtx.Err()))
+			return s.rootCtx.Err()
+		case <-sendCtx.Done():
+			logger.Error("request context done", zap.Error(sendCtx.Err()))
+			return sendCtx.Err()
+		case <-time.After(time.Second):
+			logger.Error("cannot send subscription request, retry",
+				zap.Int("chan cap", cap(s.subChan)),
+				zap.Int("chan len", len(s.subChan)),
+			)
+		case s.subChan <- sub:
+			return nil
+		}
 	}
-
-	return nil
 }
 
 // onUnsubscription sends response for unsubscription.
@@ -302,7 +305,7 @@ func (s *LogtailServer) onUnsubscription(
 		// FIXME: using s.cfg
 		s.rootCtx, s.logger, s.pool.responses, s, stream,
 		s.cfg.ResponseSendTimeout,
-		s.streamPoisionTime(),
+		s.cfg.RPCStreamPoisonTime,
 		s.cfg.LogtailCollectInterval,
 	)
 
@@ -312,11 +315,6 @@ func (s *LogtailServer) onUnsubscription(
 	}
 
 	return session.SendUnsubscriptionResponse(sendCtx, *req.Table)
-}
-
-// streamPoisionTime returns poision duration for stream.
-func (s *LogtailServer) streamPoisionTime() time.Duration {
-	return RpcStreamPoisionTime
 }
 
 // NotifySessionError notifies session manager with session error.

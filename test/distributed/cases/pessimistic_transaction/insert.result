@@ -506,3 +506,14 @@ insert into indup_11(a, b) values (1, "2");
 insert into indup_11(b, a) values ("2", 1);
 Duplicate entry '(1,2)' for key '__mo_cpkey_col'
 drop table indup_11;
+drop table if exists t4;
+create table t4(col1 int, col2 decimal, col3 smallint, primary key(col1, col3));
+insert into t4 (col1, col2, col3) values(6, 6, 8);
+insert into t4 (col2, col3, col1) values(2, 3, 1);
+insert into t4 (col3, col1) values (8, 6);
+Duplicate entry '(6,8)' for key '__mo_cpkey_col'
+select * from t4;
+col1    col2    col3
+6    6    8
+1    2    3
+drop table t4;

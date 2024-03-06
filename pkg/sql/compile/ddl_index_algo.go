@@ -338,7 +338,7 @@ func (s *Scope) handleIvfIndexEntriesTable(c *Compile, indexDef *plan.IndexDef, 
 		"select `%s`.`__mo_index_centroid_version`, "+
 		"serial_extract( min( serial_full( %s(`%s`.`%s`, `%s`.%s), `%s`.`%s`)), 1 as bigint), "+
 		"%s "+
-		"from %s CROSS JOIN %s group by %s;",
+		"from %s CROSS JOIN %s group by %s, `%s`.`__mo_index_centroid_version`;",
 		insertSQL,
 
 		centroidsTableName,
@@ -356,6 +356,7 @@ func (s *Scope) handleIvfIndexEntriesTable(c *Compile, indexDef *plan.IndexDef, 
 		originalTableWithNormalizedSkSql,
 		centroidsTableForCurrentVersionSql,
 		originalTblPkColMaySerialColNameAlias,
+		centroidsTableName,
 	)
 
 	err = s.logTimestamp(c, qryDatabase, metadataTableName, "mapping_start")

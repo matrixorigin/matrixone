@@ -196,7 +196,7 @@ message Function {
 }
 
 message Expr {
-	Type typ = 1;
+	Type typ = 1 [(gogoproto.nullable) = false];
 	oneof expr {
 		Literal		lit		= 2;
 		ParamRef	p		= 3;
@@ -716,6 +716,7 @@ message Node {
 		SINGLE	= 6;
 		MARK	= 7;
 		APPLY	= 8;
+		INDEX = 9;
 	}
 
 	enum AggMode {
@@ -1098,10 +1099,40 @@ message DropDatabase {
 	bool if_exists 		= 1;
 	string database 	= 2;
 	uint64 database_id	= 3;
+	// drop database should delete fk records related to this database
+	// from mo_foreign_keys
+	string updateFkSql = 4;
+	// drop database should check mo_foreign_keys to find fk records
+	// that refer to this database before dropping the database
+	string checkFKSql = 5;
 }
 
 message FkColName {
 	repeated string cols = 1;
+}
+
+/* ForeignKeyInfo holds the fk forward reference.
+
+	Example: t2(b) --fk--> t1(a) but t1 defined after t2
+
+		set foreign_key_checks=0;
+
+		create table t2(b int, constraint c1 foreign key (b) references t1(a));
+
+		create table t1(a int primary key);
+
+	The reason we need ForeignKeyInfo instead of using ForeignKeyDef is that:
+
+		ForeignKeyDef only has table id, column id that does not exist in handling fk forward reference.
+		ForeignKeyDef does not have database name, table name and column names,
+		ForeignKeyInfo also has the ForeignKeyDef internally that holds the child table fk definition.
+ */
+message ForeignKeyInfo{
+	string db = 1; // database name of child table
+	string table = 2; // child table name
+	FkColName cols = 3; // fk names in child table
+	FkColName colsReferred = 4; // referred names in parent table
+	ForeignKeyDef def = 5; //child table fk def
 }
 
 message CreateTable {
@@ -1118,6 +1149,11 @@ message CreateTable {
 	repeated FkColName fk_cols = 9;
 	repeated TableDef partition_tables = 10;// partition tables for partitions
 	string create_as_select_sql = 11;
+	// create table may insert fk records related to this table
+	// into mo_foreign_keys
+	repeated string updateFkSqls = 12;
+	// fks forward reference to me
+	repeated ForeignKeyInfo fksReferToMe = 13;
 }
 
 message AlterTableDrop {
@@ -1230,6 +1266,9 @@ message AlterTable {
 	map<uint64, ColDef> change_tbl_colId_map = 11;
 	//detect fk self refer constraint
 	repeated string detectSqls= 12;
+	// alter table may insert fk records related to this table
+	// into mo_foreign_keys
+	repeated string updateFkSqls = 13;
 }
 
 message DropTable {
@@ -1243,6 +1282,11 @@ message DropTable {
 	repeated string partition_table_names = 8;
 	bool isView = 9;
 	TableDef table_def 	= 10;
+	// drop table may delete fk records related to this table
+	// into mo_foreign_keys
+	repeated string updateFkSqls = 11;
+	//fk child table id that refers to me
+	repeated uint64 fkChildTblsReferToMe = 12;
 }
 
 message AlterView {
