@@ -32,22 +32,27 @@ var (
 	disableColumns      = map[string]struct{}{
 		"object_stats":        {},
 		"__mo_%1_commit_time": {},
-		"block_id":            {},
 		"%!%mo__meta_loc":     {},
 		"delta_loc":           {},
 		"segment_id":          {},
 		"trunc_pointt":        {},
 	}
 
-	txnCreateEvent         = "created"
-	txnActiveEvent         = "active"
-	txnClosedEvent         = "closed"
-	txnUpdateSnapshotEvent = "update-snapshot"
-	txnCheckChangedEvent   = "check-changed"
+	txnCreateEvent               = "created"
+	txnActiveEvent               = "active"
+	txnClosedEvent               = "closed"
+	txnUpdateSnapshotEvent       = "update-snapshot"
+	txnCheckChangedEvent         = "check-changed"
+	txnExecuteEvent              = "execute"
+	txnUpdateSnapshotReasonEvent = "update-snapshot-reason"
 
-	entryApplyEvent  = "apply"
-	entryCommitEvent = "commit"
-	entryReadEvent   = "read"
+	entryApplyEvent         = "apply"
+	entryCommitEvent        = "commit"
+	entryReadEvent          = "read"
+	entryReadBlockEvent     = "read-block"
+	entryApplyFlushEvent    = "apply-flush"
+	entryTransferRowIDEvent = "transfer-row-id"
+	entryDeleteObjectEvent  = "apply-delete-object"
 )
 
 func isComplexColumn(name string) bool {
@@ -72,6 +77,17 @@ type txnEvent struct {
 
 	from, to timestamp.Timestamp
 	changed  bool
+
+	info string
+}
+
+func newTxnInfoEvent(
+	txn txn.TxnMeta,
+	eventType string,
+	info string) txnEvent {
+	e := newTxnEvent(txn, eventType)
+	e.info = info
+	return e
 }
 
 func newTxnCreated(txn txn.TxnMeta) txnEvent {
@@ -129,6 +145,7 @@ func (e txnEvent) toCSVRecord(
 	records[5] = buf.writeTimestamp(e.snapshotTS)
 	records[6] = buf.writeTimestamp(e.commitTS)
 	records[7] = buf.writeBool(e.changed)
+	records[8] = e.info
 }
 
 type entryEvent struct {
@@ -189,6 +206,60 @@ func newReadEntryEvent(
 		row:        row,
 		eventType:  entryReadEvent,
 		snapshotTS: snapshotTS,
+	}
+}
+
+func newFlushEvent(
+	ts int64,
+	txnID []byte,
+	tableID uint64,
+	row []byte) entryEvent {
+	return entryEvent{
+		ts:        ts,
+		txnID:     txnID,
+		tableID:   tableID,
+		row:       row,
+		eventType: entryApplyFlushEvent,
+	}
+}
+
+func newReadBlockEvent(
+	ts int64,
+	txnID []byte,
+	tableID uint64,
+	row []byte) entryEvent {
+	return entryEvent{
+		ts:        ts,
+		txnID:     txnID,
+		tableID:   tableID,
+		row:       row,
+		eventType: entryReadBlockEvent,
+	}
+}
+
+func newTransferEvent(
+	ts int64,
+	txnID []byte,
+	tableID uint64,
+	row []byte) entryEvent {
+	return entryEvent{
+		ts:        ts,
+		txnID:     txnID,
+		tableID:   tableID,
+		row:       row,
+		eventType: entryTransferRowIDEvent,
+	}
+}
+
+func newDeleteObjectEvent(
+	ts int64,
+	tableID uint64,
+	row []byte) entryEvent {
+	return entryEvent{
+		ts:        ts,
+		tableID:   tableID,
+		row:       row,
+		eventType: entryDeleteObjectEvent,
 	}
 }
 
