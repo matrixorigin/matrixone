@@ -80,11 +80,7 @@ func (s *memTaskStorage) UpdateAsyncTask(ctx context.Context, tasks []task.Async
 		s.preUpdate()
 	}
 
-	c := newConditions()
-	for _, cond := range conds {
-		cond(c)
-	}
-
+	c := newConditions(conds...)
 	s.Lock()
 	defer s.Unlock()
 
@@ -99,10 +95,7 @@ func (s *memTaskStorage) UpdateAsyncTask(ctx context.Context, tasks []task.Async
 }
 
 func (s *memTaskStorage) DeleteAsyncTask(ctx context.Context, conds ...Condition) (int, error) {
-	c := newConditions()
-	for _, cond := range conds {
-		cond(c)
-	}
+	c := newConditions(conds...)
 
 	s.Lock()
 	defer s.Unlock()
@@ -125,10 +118,7 @@ func (s *memTaskStorage) QueryAsyncTask(ctx context.Context, conds ...Condition)
 	s.RLock()
 	defer s.RUnlock()
 
-	c := newConditions()
-	for _, cond := range conds {
-		cond(c)
-	}
+	c := newConditions(conds...)
 
 	sortedTasks := make([]task.AsyncTask, 0, len(s.asyncTasks))
 	for _, task := range s.asyncTasks {
@@ -222,10 +212,7 @@ func (s *memTaskStorage) UpdateDaemonTask(ctx context.Context, tasks []task.Daem
 		s.preUpdate()
 	}
 
-	c := newConditions()
-	for _, cond := range conds {
-		cond(c)
-	}
+	c := newConditions(conds...)
 
 	s.Lock()
 	defer s.Unlock()
@@ -241,10 +228,7 @@ func (s *memTaskStorage) UpdateDaemonTask(ctx context.Context, tasks []task.Daem
 }
 
 func (s *memTaskStorage) DeleteDaemonTask(ctx context.Context, conds ...Condition) (int, error) {
-	c := newConditions()
-	for _, cond := range conds {
-		cond(c)
-	}
+	c := newConditions(conds...)
 
 	s.Lock()
 	defer s.Unlock()
@@ -267,10 +251,7 @@ func (s *memTaskStorage) QueryDaemonTask(ctx context.Context, conds ...Condition
 	s.RLock()
 	defer s.RUnlock()
 
-	c := newConditions()
-	for _, cond := range conds {
-		cond(c)
-	}
+	c := newConditions(conds...)
 
 	sortedTasks := make([]task.DaemonTask, 0, len(s.daemonTasks))
 	for _, t := range s.daemonTasks {
