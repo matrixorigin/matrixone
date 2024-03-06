@@ -19,6 +19,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
@@ -30,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -89,7 +91,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 
 	txnOp := proc.TxnOperator
-	if !txnOp.Txn().IsPessimistic() || txnOp.Txn().DisableLock {
+	if !txnOp.Txn().IsPessimistic() {
 		return arg.GetChildren(0).Call(proc)
 	}
 
@@ -288,8 +290,7 @@ func LockTable(
 	pkType types.Type,
 	changeDef bool) error {
 	txnOp := proc.TxnOperator
-	if !txnOp.Txn().IsPessimistic() ||
-		txnOp.Txn().DisableLock {
+	if !txnOp.Txn().IsPessimistic() {
 		return nil
 	}
 	parker := types.NewPacker(proc.Mp())
@@ -333,8 +334,7 @@ func LockRows(
 	group uint32,
 ) error {
 	txnOp := proc.TxnOperator
-	if !txnOp.Txn().IsPessimistic() ||
-		txnOp.Txn().DisableLock {
+	if !txnOp.Txn().IsPessimistic() {
 		return nil
 	}
 
@@ -389,6 +389,16 @@ func doLock(
 	if !txnOp.Txn().IsPessimistic() {
 		return false, false, timestamp.Timestamp{}, nil
 	}
+
+	seq := txnOp.NextSequence()
+	startAt := time.Now()
+	trace.GetService().AddTxnDurationAction(
+		txnOp,
+		client.LockEvent,
+		seq,
+		tableID,
+		0,
+		nil)
 
 	//in this case:
 	// create table t1 (a int primary key, b int ,c int, unique key(b,c));
@@ -450,6 +460,15 @@ func doLock(
 		rows,
 		txn.ID,
 		options)
+
+	trace.GetService().AddTxnDurationAction(
+		txnOp,
+		client.LockEvent,
+		seq,
+		tableID,
+		time.Since(startAt),
+		nil)
+
 	if err != nil {
 		return false, false, timestamp.Timestamp{}, err
 	}
@@ -485,15 +504,9 @@ func doLock(
 		if err != nil {
 			return false, false, timestamp.Timestamp{}, err
 		}
-		trace.GetService().ChangedCheck(
-			txn.ID,
-			tableID,
-			snapshotTS,
-			newSnapshotTS,
-			changed)
 
 		if changed {
-			trace.GetService().TxnNeedUpdateSnapshot(
+			trace.GetService().TxnUpdateSnapshot(
 				proc.TxnOperator,
 				tableID,
 				"no conflict, data changed")
@@ -530,7 +543,7 @@ func doLock(
 
 	// forward rc's snapshot ts
 	snapshotTS = result.Timestamp.Next()
-	trace.GetService().TxnNeedUpdateSnapshot(
+	trace.GetService().TxnUpdateSnapshot(
 		proc.TxnOperator,
 		tableID,
 		"conflict")

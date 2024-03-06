@@ -116,21 +116,20 @@ message TxnMeta {
     bool                      Mirror       = 10;
     // LockService lock service's service address. Empty if is not pessimistic txn.
     string                    LockService  = 11;
-    bool                      DisableTrace = 12;
-    bool                      DisableLock  = 13;
 }
 
 // CNTxnSnapshot snapshot of the cn txn operation.
 message CNTxnSnapshot {
     // ID txn id
     TxnMeta                   Txn              = 1 [(gogoproto.nullable) = false];
-    // ReadyOnly txn options
+    // Deprecated: use TxnOptions
     bool                      ReadyOnly        = 2;
-    // EnableCacheWrite txn options
+    // Deprecated: use TxnOptions
     bool                      EnableCacheWrite = 3;
-    // Disable1PCOpt txn options
+    // Deprecated: use TxnOptions
     bool                      Disable1PCOpt    = 4;
     repeated lock.LockTable   LockTables       = 5 [(gogoproto.nullable) = false];
+    TxnOptions                Options          = 6 [(gogoproto.nullable) = false];
 }
 
 // CNOpRequest cn read/write request, CN -> TN. If data is written to more than one TN (>1) in a 
@@ -358,4 +357,15 @@ message TxnError {
     // transaction framework, it is necessary to use a code for the interface call to uniformly
     // replace these error codes.
     uint32 TxnErrCode = 3;
+}
+
+message TxnOptions {
+    uint32                 Features           = 1;
+    string                 CN                 = 2;
+    string                 SessionID          = 3;
+    uint32                 AccountID          = 4;
+    uint32                 ConnectionID       = 5;
+    string                 UserName           = 6;
+    repeated uint64        SkipLockTables     = 7;
+    repeated lock.LockMode SkipLockTableModes = 8;
 }

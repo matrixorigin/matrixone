@@ -1126,12 +1126,7 @@ func appendForeignConstrantPlan(
 	sourceStep int32,
 	isFkRecursionCall bool,
 ) error {
-	enabled, err := IsForeignKeyChecksEnabled(builder.compCtx)
-	if err != nil {
-		return err
-	}
-
-	if enabled && !isFkRecursionCall && len(tableDef.Fkeys) > 0 {
+	if !isFkRecursionCall && len(tableDef.Fkeys) > 0 {
 		lastNodeId := appendSinkScanNode(builder, bindCtx, sourceStep)
 
 		lastNodeId, err := appendJoinNodeForParentFkCheck(builder, bindCtx, objRef, tableDef, lastNodeId)
