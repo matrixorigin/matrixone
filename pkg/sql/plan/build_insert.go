@@ -415,7 +415,7 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 		}
 	} else {
 
-		// insertRowIdx is the order in insert value SQL, pkColIdx is the order in tableDef.Pkey.Names	
+		// insertRowIdx is the order in insert value SQL, pkColIdx is the order in tableDef.Pkey.Names
 		pkOrder2Idx := make(map[int]int)
 		for _, o := range pkPosInValues {
 			pkName := tableDef.Pkey.Names[o]
