@@ -279,6 +279,7 @@ func (exec *txnExecutor) Exec(
 	}
 
 	c := NewCompile(exec.s.addr, exec.getDatabase(), sql, "", "", exec.ctx, exec.s.eng, proc, stmts[0], false, nil, receiveAt)
+	defer c.Release()
 	c.disableRetry = exec.opts.DisableIncrStatement()
 	c.SetBuildPlanFunc(func() (*plan.Plan, error) {
 		return plan.BuildPlan(
@@ -305,10 +306,6 @@ func (exec *txnExecutor) Exec(
 			}
 			return nil
 		})
-	if err != nil {
-		c.Release()
-		return executor.Result{}, err
-	}
 	var runResult *util.RunResult
 	runResult, err = c.Run(0)
 	if err != nil {

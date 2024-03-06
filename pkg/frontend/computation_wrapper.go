@@ -409,6 +409,7 @@ func (cwft *TxnComputationWrapper) Run(ts uint64) (*util2.RunResult, error) {
 		logDebug(cwft.ses, cwft.ses.GetDebugString(), "compile.Run end")
 	}()
 	runResult, err := cwft.compile.Run(ts)
+	cwft.compile.Release()
 	cwft.runResult = runResult
 	cwft.compile = nil
 	return runResult, err

@@ -46,6 +46,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
@@ -3676,6 +3677,11 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 	if ret, err = cw.Compile(requestCtx, ses, ses.GetOutputCallback()); err != nil {
 		return
 	}
+	defer func() {
+		if c, ok := ret.(*compile.Compile); ok {
+			c.Release()
+		}
+	}()
 	stmt = cw.GetAst()
 	// reset some special stmt for execute statement
 	switch st := stmt.(type) {
