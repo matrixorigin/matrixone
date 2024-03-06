@@ -3702,6 +3702,10 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 		if len(n.AggList) == 1 && n.AggList[0].Expr.(*plan.Expr_F).F.Func.ObjName == "starcount" {
 			for i := 1; i < ranges.Len(); i++ {
 				blk := ranges.(*objectio.BlockInfoSlice).Get(i)
+				if !blk.CanRemote || !blk.DeltaLocation().IsEmpty() {
+					newranges = append(newranges, ranges.(*objectio.BlockInfoSlice).GetBytes(i)...)
+					continue
+				}
 				partialResults[0] = partialResults[0].(int64) + int64(blk.MetaLocation().Rows())
 			}
 		} else if partialResults != nil {
@@ -4022,11 +4026,11 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 					}
 				}
 			}
-			if ranges.Size() == len(newranges) {
-				partialResults = nil
-			} else if partialResults != nil {
-				ranges.SetBytes(newranges)
-			}
+		}
+		if ranges.Size() == len(newranges) {
+			partialResults = nil
+		} else if partialResults != nil {
+			ranges.SetBytes(newranges)
 		}
 		if partialResults == nil {
 			partialResultTypes = nil
