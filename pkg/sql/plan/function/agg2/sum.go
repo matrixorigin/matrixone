@@ -31,6 +31,7 @@ func RegisterSum(id int64) {
 	aggexec.RegisterDeterminedSingleAgg(aggexec.MakeDeterminedSingleAggInfo(id, types.T_uint64.ToType(), types.T_uint64.ToType(), false, true), newAggSum[uint64, uint64])
 	aggexec.RegisterDeterminedSingleAgg(aggexec.MakeDeterminedSingleAggInfo(id, types.T_float32.ToType(), types.T_float64.ToType(), false, true), newAggSum[float32, float64])
 	aggexec.RegisterDeterminedSingleAgg(aggexec.MakeDeterminedSingleAggInfo(id, types.T_float64.ToType(), types.T_float64.ToType(), false, true), newAggSum[float64, float64])
+	// todo: bug here, should use the register flexible agg.
 	aggexec.RegisterDeterminedSingleAgg(aggexec.MakeDeterminedSingleAggInfo(id, types.T_decimal64.ToType(), types.T_decimal128.ToType(), false, true), newAggSumDecimal64)
 	aggexec.RegisterDeterminedSingleAgg(aggexec.MakeDeterminedSingleAggInfo(id, types.T_decimal128.ToType(), types.T_decimal128.ToType(), false, true), newAggSumDecimal128)
 }

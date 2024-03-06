@@ -52,16 +52,17 @@ func initAllSupportedFunctions() {
 		allSupportedFunctions[fn.functionId] = fn
 	}
 	for _, fn := range supportedAggregateFunctions {
-		if fn.isAggregate() && fn.Overloads[0].aggFramework.aggRegister != nil {
-			fn.Overloads[0].aggFramework.aggRegister(encodeOverloadID(
-				int32(fn.functionId), 0))
-			allSupportedFunctions[fn.functionId] = fn
-		}
+		allSupportedFunctions[fn.functionId] = fn
 	}
 	for _, fn := range supportedWindowFunctions {
-		if fn.isAggregate() && fn.Overloads[0].aggFramework.aggRegister != nil {
-			allSupportedFunctions[fn.functionId] = fn
+		allSupportedFunctions[fn.functionId] = fn
+	}
+
+	for _, fn := range supportedAggInNewFramework {
+		for _, ov := range fn.Overloads {
+			ov.aggFramework.aggRegister(encodeOverloadID(int32(fn.functionId), int32(ov.overloadId)))
 		}
+		allSupportedFunctions[fn.functionId] = fn
 	}
 
 	agg.InitAggFramework(generateAggExecutorWithoutConfig, generateAggExecutor, GetFunctionIsWinOrderFunById)

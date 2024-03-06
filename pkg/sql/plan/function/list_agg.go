@@ -23,92 +23,6 @@ import (
 
 var supportedAggregateFunctions = []FuncNew{
 	{
-		functionId: MAX,
-		class:      plan.Function_AGG,
-		layout:     STANDARD_FUNCTION,
-		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			return fixedUnaryAggTypeCheck(inputs, functionAgg.AggMaxSupportedParameters)
-		},
-
-		Overloads: []overload{
-			{
-				overloadId: 0,
-				isAgg:      true,
-				retType:    functionAgg.AggMaxReturnType,
-				aggFramework: aggregationLogicOfOverload{
-					str:         "max",
-					aggNew:      functionAgg.NewAggMax,
-					aggRegister: agg2.RegisterMax,
-				},
-			},
-		},
-	},
-
-	{
-		functionId: MIN,
-		class:      plan.Function_AGG,
-		layout:     STANDARD_FUNCTION,
-		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			return fixedUnaryAggTypeCheck(inputs, functionAgg.AggMinSupportedParameters)
-		},
-
-		Overloads: []overload{
-			{
-				overloadId: 0,
-				isAgg:      true,
-				retType:    functionAgg.AggMinReturnType,
-				aggFramework: aggregationLogicOfOverload{
-					str:    "min",
-					aggNew: functionAgg.NewAggMin,
-				},
-			},
-		},
-	},
-
-	{
-		functionId: SUM,
-		class:      plan.Function_AGG,
-		layout:     STANDARD_FUNCTION,
-		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			return fixedUnaryAggTypeCheck(inputs, functionAgg.AggSumSupportedParameters)
-		},
-
-		Overloads: []overload{
-			{
-				overloadId: 0,
-				isAgg:      true,
-				retType:    functionAgg.AggSumReturnType,
-				aggFramework: aggregationLogicOfOverload{
-					str:         "sum",
-					aggNew:      functionAgg.NewAggSum,
-					aggRegister: agg2.RegisterSum,
-				},
-			},
-		},
-	},
-
-	{
-		functionId: AVG,
-		class:      plan.Function_AGG,
-		layout:     STANDARD_FUNCTION,
-		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			return fixedUnaryAggTypeCheck(inputs, functionAgg.AggAvgSupportedParameters)
-		},
-
-		Overloads: []overload{
-			{
-				overloadId: 0,
-				isAgg:      true,
-				retType:    functionAgg.AggAvgReturnType,
-				aggFramework: aggregationLogicOfOverload{
-					str:    "avg",
-					aggNew: functionAgg.NewAggAvg,
-				},
-			},
-		},
-	},
-
-	{
 		functionId: COUNT,
 		class:      plan.Function_AGG | plan.Function_PRODUCE_NO_NULL,
 		layout:     STANDARD_FUNCTION,
@@ -404,6 +318,92 @@ var supportedAggregateFunctions = []FuncNew{
 				aggFramework: aggregationLogicOfOverload{
 					str:    "cluster_centers",
 					aggNew: functionAgg.NewAggClusterCenters,
+				},
+			},
+		},
+	},
+}
+
+var supportedAggInNewFramework = []FuncNew{
+	{
+		functionId: MIN,
+		class:      plan.Function_AGG,
+		layout:     STANDARD_FUNCTION,
+		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
+			return fixedUnaryAggTypeCheck(inputs, functionAgg.AggMinSupportedParameters)
+		},
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				isAgg:      true,
+				retType:    functionAgg.AggMinReturnType,
+				aggFramework: aggregationLogicOfOverload{
+					str:         "min",
+					aggRegister: agg2.RegisterMin,
+				},
+			},
+		},
+	},
+
+	{
+		functionId: MAX,
+		class:      plan.Function_AGG,
+		layout:     STANDARD_FUNCTION,
+		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
+			return fixedUnaryAggTypeCheck(inputs, functionAgg.AggMaxSupportedParameters)
+		},
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				isAgg:      true,
+				retType:    functionAgg.AggMaxReturnType,
+				aggFramework: aggregationLogicOfOverload{
+					str:         "max",
+					aggRegister: agg2.RegisterMax,
+				},
+			},
+		},
+	},
+
+	{
+		functionId: SUM,
+		class:      plan.Function_AGG,
+		layout:     STANDARD_FUNCTION,
+		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
+			return fixedUnaryAggTypeCheck(inputs, functionAgg.AggSumSupportedParameters)
+		},
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				isAgg:      true,
+				retType:    functionAgg.AggSumReturnType,
+				aggFramework: aggregationLogicOfOverload{
+					str:         "sum",
+					aggRegister: agg2.RegisterSum,
+				},
+			},
+		},
+	},
+
+	{
+		functionId: AVG,
+		class:      plan.Function_AGG,
+		layout:     STANDARD_FUNCTION,
+		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
+			return fixedUnaryAggTypeCheck(inputs, functionAgg.AggAvgSupportedParameters)
+		},
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				isAgg:      true,
+				retType:    functionAgg.AggAvgReturnType,
+				aggFramework: aggregationLogicOfOverload{
+					str:         "avg",
+					aggRegister: agg2.RegisterAvg,
 				},
 			},
 		},
