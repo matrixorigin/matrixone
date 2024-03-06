@@ -2052,7 +2052,7 @@ func bitToStr(
 				b = append(b, byte(0))
 			}
 		}
-		if len(b) > int(toType.Width) {
+		if len(b) > int(toType.Width) && toType.Oid != types.T_text {
 			return formatCastError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
 				"%v is larger than Dest length %v", v, toType.Width))
 		}
@@ -2252,7 +2252,7 @@ func signedToStr[T constraints.Integer](
 					result = append(result, 0)
 				}
 			}
-			if len(result) > int(toType.Width) {
+			if len(result) > int(toType.Width) && toType.Oid != types.T_text {
 				return formatCastError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
 					"%v is larger than Dest length %v", v, toType.Width))
 			}
@@ -2300,7 +2300,7 @@ func unsignedToStr[T constraints.Unsigned](
 					result = append(result, 0)
 				}
 			}
-			if len(result) > int(toType.Width) {
+			if len(result) > int(toType.Width) && toType.Oid != types.T_text {
 				return formatCastError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
 					"%v is larger than Dest length %v", v, toType.Width))
 			}
@@ -2350,7 +2350,7 @@ func floatToStr[T constraints.Float](
 					result = append(result, 0)
 				}
 			}
-			if len(result) > int(toType.Width) {
+			if len(result) > int(toType.Width) && toType.Oid != types.T_text {
 				return formatCastError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
 					"%v is larger than Dest length %v", v, toType.Width))
 			}
@@ -2943,7 +2943,7 @@ func dateToStr(
 					result = append(result, 0)
 				}
 			}
-			if len(result) > int(toType.Width) {
+			if len(result) > int(toType.Width) && toType.Oid != types.T_text {
 				return formatCastError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
 					"%v is larger than Dest length %v", v.String(), toType.Width))
 			}
@@ -2992,7 +2992,7 @@ func datetimeToStr(
 					result = append(result, 0)
 				}
 			}
-			if len(result) > int(toType.Width) {
+			if len(result) > int(toType.Width) && toType.Oid != types.T_text {
 				return formatCastError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
 					"%v is larger than Dest length %v", v.String(), toType.Width))
 			}
@@ -3042,7 +3042,7 @@ func timestampToStr(
 					result = append(result, 0)
 				}
 			}
-			if len(result) > int(toType.Width) {
+			if len(result) > int(toType.Width) && toType.Oid != types.T_text {
 				return formatCastError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
 					"%v is larger than Dest length %v", v.String(), toType.Width))
 			}
@@ -3091,7 +3091,7 @@ func timeToStr(
 					result = append(result, 0)
 				}
 			}
-			if len(result) > int(toType.Width) {
+			if len(result) > int(toType.Width) && toType.Oid != types.T_text {
 				return formatCastError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
 					"%v is larger than Dest length %v", v.String(), toType.Width))
 			}
@@ -3705,7 +3705,7 @@ func decimal64ToStr(
 					result = append(result, 0)
 				}
 			}
-			if len(result) > int(toType.Width) {
+			if len(result) > int(toType.Width) && toType.Oid != types.T_text {
 				return formatCastError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
 					"%v is larger than Dest length %v", v.Format(fromType.Scale), toType.Width))
 			}
@@ -3754,7 +3754,7 @@ func decimal128ToStr(
 					result = append(result, 0)
 				}
 			}
-			if len(result) > int(toType.Width) {
+			if len(result) > int(toType.Width) && toType.Oid != types.T_text {
 				return formatCastError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
 					"%v is larger than Dest length %v", v.Format(fromType.Scale), toType.Width))
 			}
@@ -4481,7 +4481,7 @@ func uuidToStr(
 					return moerr.NewDataTruncatedNoCtx("Uuid", "truncated for char/varchar")
 				}
 			}
-			if len(result) > int(toType.Width) {
+			if len(result) > int(toType.Width) && toType.Oid != types.T_text {
 				return formatCastError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
 					"%v is larger than Dest length %v", v.ToString(), toType.Width))
 			}
@@ -4511,7 +4511,7 @@ func jsonToStr(
 			if err != nil {
 				return err
 			}
-			if len(val) > int(toType.Width) {
+			if len(val) > int(toType.Width) && toType.Oid != types.T_text {
 				return formatCastError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
 					"%v is larger than Dest length %v", val, toType.Width))
 			}
@@ -4556,7 +4556,7 @@ func enumToStr(
 			}
 		} else {
 			result := strconv.FormatUint(uint64(v), 10)
-			if len(result) > int(toType.Width) {
+			if len(result) > int(toType.Width) && toType.Oid != types.T_text {
 				return formatCastError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
 					"%v is larger than Dest length %v", v, toType.Width))
 			}
