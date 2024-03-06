@@ -16,7 +16,6 @@ package fault
 
 import (
 	"context"
-	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -176,19 +175,6 @@ func TestWait(t *testing.T) {
 	cnt, _, ok = TriggerFault("gw")
 	require.Equal(t, true, ok)
 	require.Equal(t, int64(0), cnt)
-
-	Disable()
-}
-
-func Test_trigger(t *testing.T) {
-	Enable()
-	AddFaultPoint(context.Background(), "sub", "1:100:1:0.8", "echo", 100, "")
-	for i := 0; i < 1000; i++ {
-		ir, _, exists := TriggerFault("sub")
-		if exists {
-			fmt.Println("ir", ir)
-		}
-	}
 
 	Disable()
 }
