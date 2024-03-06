@@ -112,6 +112,7 @@ func NewService(
 
 	s := &service{
 		stopper:  stopper.NewStopper("txn-trace"),
+		cn:       cn,
 		client:   client,
 		clock:    clock,
 		executor: executor,
