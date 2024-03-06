@@ -155,7 +155,7 @@ func (builder *QueryBuilder) applyIndicesForFilters(nodeID int32, node *plan.Nod
 				col.ColPos = 0
 
 				idxColExpr := &plan.Expr{
-					Typ: DeepCopyType(idxTableDef.Cols[0].Typ),
+					Typ: *idxTableDef.Cols[0].Typ,
 					Expr: &plan.Expr_Col{
 						Col: &plan.ColRef{
 							RelPos: idxTag,
@@ -166,7 +166,7 @@ func (builder *QueryBuilder) applyIndicesForFilters(nodeID int32, node *plan.Nod
 
 				if !idxDef.Unique {
 					origType := fn.Args[0].Typ
-					fn.Args[0].Typ = DeepCopyType(idxTableDef.Cols[0].Typ)
+					fn.Args[0].Typ = *idxTableDef.Cols[0].Typ
 					switch fn.Func.ObjName {
 					case "=":
 						fn.Args[1], _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", []*plan.Expr{fn.Args[1]})
@@ -185,7 +185,7 @@ func (builder *QueryBuilder) applyIndicesForFilters(nodeID int32, node *plan.Nod
 					idxColExpr, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "serial_extract", []*plan.Expr{
 						idxColExpr,
 						{
-							Typ: &plan.Type{
+							Typ: plan.Type{
 								Id: int32(types.T_int64),
 							},
 							Expr: &plan.Expr_Lit{
@@ -198,7 +198,7 @@ func (builder *QueryBuilder) applyIndicesForFilters(nodeID int32, node *plan.Nod
 							Typ: origType,
 							Expr: &plan.Expr_T{
 								T: &plan.TargetType{
-									Typ: DeepCopyType(origType),
+									Typ: DeepCopyType(&origType),
 								},
 							},
 						},
@@ -314,16 +314,19 @@ END0:
 		var idxFilter *plan.Expr
 		if numParts == 1 {
 			idx := filterIdx[0]
-			idxFilter = DeepCopyExpr(node.FilterList[idx])
-			args := idxFilter.GetF().Args
+
+			args := node.FilterList[idx].GetF().Args
 			col := args[0].GetCol()
 			col.RelPos = idxTag
 			col.ColPos = 0
 			col.Name = idxTableDef.Cols[0].Name
+
+			idxFilter = node.FilterList[idx]
+			node.FilterList = append(node.FilterList[:idx], node.FilterList[idx+1:]...)
 		} else {
 			serialArgs := make([]*plan.Expr, len(filterIdx))
 			for i := range filterIdx {
-				serialArgs[i] = DeepCopyExpr(node.FilterList[filterIdx[i]].GetF().Args[1])
+				serialArgs[i] = node.FilterList[filterIdx[i]].GetF().Args[1]
 			}
 			rightArg, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", serialArgs)
 
@@ -333,7 +336,7 @@ END0:
 			}
 			idxFilter, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), funcName, []*plan.Expr{
 				{
-					Typ: DeepCopyType(idxTableDef.Cols[0].Typ),
+					Typ: *idxTableDef.Cols[0].Typ,
 					Expr: &plan.Expr_Col{
 						Col: &plan.ColRef{
 							RelPos: idxTag,
@@ -343,6 +346,20 @@ END0:
 				},
 				rightArg,
 			})
+
+			hitFilterSet := make(map[int]emptyType)
+			for i := range filterIdx {
+				hitFilterSet[filterIdx[i]] = emptyStruct
+			}
+
+			newFilterList := make([]*plan.Expr, 0, len(node.FilterList)-len(filterIdx))
+			for i, filter := range node.FilterList {
+				if _, ok := hitFilterSet[i]; !ok {
+					newFilterList = append(newFilterList, filter)
+				}
+			}
+
+			node.FilterList = newFilterList
 		}
 
 		calcScanStats(node, builder)
@@ -362,7 +379,7 @@ END0:
 
 		pkIdx := node.TableDef.Name2ColIndex[node.TableDef.Pkey.PkeyColName]
 		pkExpr := &plan.Expr{
-			Typ: DeepCopyType(node.TableDef.Cols[pkIdx].Typ),
+			Typ: *node.TableDef.Cols[pkIdx].Typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: node.BindingTags[0],
@@ -374,7 +391,7 @@ END0:
 		joinCond, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*plan.Expr{
 			pkExpr,
 			{
-				Typ: DeepCopyType(pkExpr.Typ),
+				Typ: pkExpr.Typ,
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
 						RelPos: idxTag,
@@ -386,7 +403,7 @@ END0:
 		joinNodeID := builder.appendNode(&plan.Node{
 			NodeType: plan.Node_JOIN,
 			Children: []int32{nodeID, idxTableNodeID},
-			JoinType: plan.Node_INDEX,
+			JoinType: plan.Node_SEMI,
 			OnList:   []*plan.Expr{joinCond},
 		}, builder.ctxByNode[nodeID])
 
@@ -412,8 +429,7 @@ END0:
 		}
 	}
 
-	for i := range node.FilterList {
-		expr := DeepCopyExpr(node.FilterList[i])
+	for i, expr := range node.FilterList {
 		fn := expr.GetF()
 		if fn == nil {
 			continue
@@ -455,7 +471,7 @@ END0:
 		if idxDef.Unique {
 			idxFilter = expr
 		} else {
-			fn.Args[0].Typ = DeepCopyType(idxTableDef.Cols[0].Typ)
+			fn.Args[0].Typ = *idxTableDef.Cols[0].Typ
 
 			switch fn.Func.ObjName {
 			case "in":
@@ -468,6 +484,8 @@ END0:
 				idxFilter, _ = bindFuncExprAndConstFold(builder.GetContext(), builder.compCtx.GetProcess(), "prefix_between", fn.Args)
 			}
 		}
+
+		node.FilterList = append(node.FilterList[:i], node.FilterList[i+1:]...)
 		calcScanStats(node, builder)
 
 		idxTableNodeID := builder.appendNode(&plan.Node{
@@ -485,7 +503,7 @@ END0:
 
 		pkIdx := node.TableDef.Name2ColIndex[node.TableDef.Pkey.PkeyColName]
 		pkExpr := &plan.Expr{
-			Typ: DeepCopyType(node.TableDef.Cols[pkIdx].Typ),
+			Typ: *node.TableDef.Cols[pkIdx].Typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: node.BindingTags[0],
@@ -497,7 +515,7 @@ END0:
 		joinCond, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*plan.Expr{
 			DeepCopyExpr(pkExpr),
 			{
-				Typ: DeepCopyType(pkExpr.Typ),
+				Typ: pkExpr.Typ,
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
 						RelPos: idxTag,
@@ -509,7 +527,7 @@ END0:
 		joinNodeID := builder.appendNode(&plan.Node{
 			NodeType: plan.Node_JOIN,
 			Children: []int32{nodeID, idxTableNodeID},
-			JoinType: plan.Node_INDEX,
+			JoinType: plan.Node_SEMI,
 			OnList:   []*plan.Expr{joinCond},
 		}, builder.ctxByNode[nodeID])
 
@@ -625,7 +643,7 @@ func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node,
 
 		pkIdx := leftChild.TableDef.Name2ColIndex[leftChild.TableDef.Pkey.PkeyColName]
 		pkExpr := &plan.Expr{
-			Typ: DeepCopyType(leftChild.TableDef.Cols[pkIdx].Typ),
+			Typ: *leftChild.TableDef.Cols[pkIdx].Typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: leftChild.BindingTags[0],
@@ -637,7 +655,7 @@ func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node,
 		pkJoinCond, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*plan.Expr{
 			pkExpr,
 			{
-				Typ: DeepCopyType(pkExpr.Typ),
+				Typ: pkExpr.Typ,
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
 						RelPos: idxTag,
@@ -668,7 +686,7 @@ func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node,
 
 			idxJoinCond, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*plan.Expr{
 				{
-					Typ: DeepCopyType(idxTableDef.Cols[0].Typ),
+					Typ: *idxTableDef.Cols[0].Typ,
 					Expr: &plan.Expr_Col{
 						Col: &plan.ColRef{
 							RelPos: idxTag,

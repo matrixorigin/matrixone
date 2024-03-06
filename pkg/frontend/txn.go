@@ -182,7 +182,8 @@ func (th *TxnHandler) NewTxnOperator() (context.Context, TxnOperator, error) {
 			}
 		}
 
-		if th.ses.IsBackgroundSession() {
+		if th.ses.IsBackgroundSession() ||
+			th.ses.disableTrace {
 			opts = append(opts, client.WithDisableTrace(true))
 		} else {
 			varVal, err = th.ses.GetSessionVar("disable_txn_trace")
