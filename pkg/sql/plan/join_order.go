@@ -28,7 +28,7 @@ type joinEdge struct {
 
 type joinVertex struct {
 	node     *plan.Node
-	children map[int32]emptyType
+	children map[int32]bool
 	parent   int32
 	joined   bool
 }
@@ -57,14 +57,14 @@ func (builder *QueryBuilder) pushdownSemiAntiJoins(nodeID int32) int32 {
 			break
 		}
 
-		leftTags := make(map[int32]emptyType)
+		leftTags := make(map[int32]bool)
 		for _, tag := range builder.enumerateTags(joinNode.Children[0]) {
-			leftTags[tag] = emptyStruct
+			leftTags[tag] = true
 		}
 
-		rightTags := make(map[int32]emptyType)
+		rightTags := make(map[int32]bool)
 		for _, tag := range builder.enumerateTags(joinNode.Children[1]) {
-			rightTags[tag] = emptyStruct
+			rightTags[tag] = true
 		}
 
 		var joinSide int8
@@ -111,14 +111,14 @@ func (builder *QueryBuilder) IsEquiJoin(node *plan.Node) bool {
 		return false
 	}
 
-	leftTags := make(map[int32]emptyType)
+	leftTags := make(map[int32]bool)
 	for _, tag := range builder.enumerateTags(node.Children[0]) {
-		leftTags[tag] = emptyStruct
+		leftTags[tag] = true
 	}
 
-	rightTags := make(map[int32]emptyType)
+	rightTags := make(map[int32]bool)
 	for _, tag := range builder.enumerateTags(node.Children[1]) {
-		rightTags[tag] = emptyStruct
+		rightTags[tag] = true
 	}
 
 	for _, expr := range node.OnList {
@@ -129,7 +129,7 @@ func (builder *QueryBuilder) IsEquiJoin(node *plan.Node) bool {
 	return false
 }
 
-func isEquiCond(expr *plan.Expr, leftTags, rightTags map[int32]emptyType) bool {
+func isEquiCond(expr *plan.Expr, leftTags, rightTags map[int32]bool) bool {
 	if e, ok := expr.Expr.(*plan.Expr_F); ok {
 		if !IsEqualFunc(e.F.Func.GetObj()) {
 			return false
@@ -252,7 +252,7 @@ func (builder *QueryBuilder) determineJoinOrder(nodeID int32) int32 {
 	visited := make([]bool, nLeaf)
 
 	for _, cond := range conds {
-		hyperEdge := make(map[int32]emptyType)
+		hyperEdge := make(map[int32]bool)
 		getHyperEdgeFromExpr(cond, leafByTag, hyperEdge)
 
 		for i := range hyperEdge {
@@ -355,7 +355,7 @@ func (builder *QueryBuilder) getJoinGraph(leaves []*plan.Node, conds []*plan.Exp
 	for i, node := range leaves {
 		vertices[i] = &joinVertex{
 			node:     node,
-			children: make(map[int32]emptyType),
+			children: make(map[int32]bool),
 			parent:   -1,
 		}
 
@@ -428,8 +428,9 @@ func setParent(child, parent int32, vertices []*joinVertex) {
 	}
 	unsetParent(child, vertices[child].parent, vertices)
 	vertices[child].parent = parent
-	vertices[parent].children[child] = emptyStruct
+	vertices[parent].children[child] = true
 }
+
 func unsetParent(child, parent int32, vertices []*joinVertex) {
 	if child == -1 || parent == -1 {
 		return

@@ -42,9 +42,7 @@ func BenchmarkInsert(b *testing.B) {
 	targetT := &plan.Expr{
 		Typ: *targetType,
 		Expr: &plan.Expr_T{
-			T: &plan.TargetType{
-				Typ: targetType,
-			},
+			T: &plan.TargetType{},
 		},
 	}
 	ctx := context.TODO()

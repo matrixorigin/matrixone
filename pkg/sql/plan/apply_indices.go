@@ -297,13 +297,7 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 			}
 		}
 
-		colCnt := colRefCnt[[2]int32{node.BindingTags[0], colPos}] - len(node.FilterList)
-
 		for _, idxDef := range indexes {
-			if !idxDef.Unique && colCnt > 0 {
-				goto END0
-			}
-
 			if !idxDef.TableExist {
 				continue
 			}
@@ -323,24 +317,48 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 			builder.nameByColRef[[2]int32{idxTag, 0}] = idxTableDef.Name + "." + idxTableDef.Cols[0].Name
 			builder.nameByColRef[[2]int32{idxTag, 1}] = idxTableDef.Name + "." + idxTableDef.Cols[1].Name
 
+			idxColExpr := &plan.Expr{
+				Typ: *idxTableDef.Cols[0].Typ,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: idxTag,
+						ColPos: 0,
+					},
+				},
+			}
+
+			if !idxDef.Unique {
+				origType := node.TableDef.Cols[colPos].Typ
+				idxColExpr, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "serial_extract", []*plan.Expr{
+					idxColExpr,
+					{
+						Typ: plan.Type{
+							Id: int32(types.T_int64),
+						},
+						Expr: &plan.Expr_Lit{
+							Lit: &plan.Literal{
+								Value: &plan.Literal_I64Val{I64Val: 0},
+							},
+						},
+					},
+					{
+						Typ: *origType,
+						Expr: &plan.Expr_T{
+							T: &plan.TargetType{},
+						},
+					},
+				})
+			}
+
+			idxColMap[[2]int32{node.BindingTags[0], colPos}] = idxColExpr
+
 			for i, expr := range node.FilterList {
 				fn := expr.GetF()
 				col := fn.Args[0].GetCol()
 				col.RelPos = idxTag
 				col.ColPos = 0
 
-				idxColExpr := &plan.Expr{
-					Typ: *idxTableDef.Cols[0].Typ,
-					Expr: &plan.Expr_Col{
-						Col: &plan.ColRef{
-							RelPos: idxTag,
-							ColPos: 0,
-						},
-					},
-				}
-
 				if !idxDef.Unique {
-					origType := fn.Args[0].Typ
 					fn.Args[0].Typ = *idxTableDef.Cols[0].Typ
 					switch fn.Func.ObjName {
 					case "=":
@@ -356,31 +374,7 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 						fn.Args[1], _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", []*plan.Expr{fn.Args[1]})
 						node.FilterList[i], _ = bindFuncExprAndConstFold(builder.GetContext(), builder.compCtx.GetProcess(), "prefix_in", fn.Args)
 					}
-
-					idxColExpr, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "serial_extract", []*plan.Expr{
-						idxColExpr,
-						{
-							Typ: plan.Type{
-								Id: int32(types.T_int64),
-							},
-							Expr: &plan.Expr_Lit{
-								Lit: &plan.Literal{
-									Value: &plan.Literal_I64Val{I64Val: 1},
-								},
-							},
-						},
-						{
-							Typ: origType,
-							Expr: &plan.Expr_T{
-								T: &plan.TargetType{
-									Typ: DeepCopyType(&origType),
-								},
-							},
-						},
-					})
 				}
-
-				idxColMap[[2]int32{node.BindingTags[0], colPos}] = idxColExpr
 			}
 
 			idxTableNodeID := builder.appendNode(&plan.Node{
@@ -719,14 +713,14 @@ func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node,
 		return nodeID
 	}
 
-	leftTags := make(map[int32]emptyType)
+	leftTags := make(map[int32]bool)
 	for _, tag := range builder.enumerateTags(node.Children[0]) {
-		leftTags[tag] = emptyStruct
+		leftTags[tag] = true
 	}
 
-	rightTags := make(map[int32]emptyType)
+	rightTags := make(map[int32]bool)
 	for _, tag := range builder.enumerateTags(node.Children[1]) {
-		rightTags[tag] = emptyStruct
+		rightTags[tag] = true
 	}
 
 	col2Cond := make(map[int32]int)
@@ -760,17 +754,21 @@ func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node,
 	indexes := leftChild.TableDef.Indexes
 	condIdx := make([]int, 0, len(col2Cond))
 	for _, idxDef := range indexes {
-		if !idxDef.TableExist || !idxDef.Unique {
+		if !idxDef.TableExist {
 			continue
 		}
 
 		numParts := len(idxDef.Parts)
-		if numParts > len(col2Cond) {
+		numKeyParts := numParts
+		if !idxDef.Unique {
+			numKeyParts--
+		}
+		if numKeyParts == 0 || numKeyParts > len(col2Cond) {
 			continue
 		}
 
 		condIdx = condIdx[:0]
-		for i := 0; i < numParts; i++ {
+		for i := 0; i < numKeyParts; i++ {
 			colIdx := leftChild.TableDef.Name2ColIndex[idxDef.Parts[i]]
 			idx, ok := col2Cond[colIdx]
 			if !ok {
@@ -780,7 +778,7 @@ func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node,
 			condIdx = append(condIdx, idx)
 		}
 
-		if len(condIdx) < numParts {
+		if len(condIdx) < numKeyParts {
 			continue
 		}
 
@@ -790,13 +788,64 @@ func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node,
 		builder.nameByColRef[[2]int32{idxTag, 0}] = idxTableDef.Name + "." + idxTableDef.Cols[0].Name
 		builder.nameByColRef[[2]int32{idxTag, 1}] = idxTableDef.Name + "." + idxTableDef.Cols[1].Name
 
+		rfTag := builder.genNewTag()
+
+		var rfBuildExpr *plan.Expr
+		if numParts == 1 {
+			rfBuildExpr = &plan.Expr{
+				Typ: *idxTableDef.Cols[0].Typ,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: -1,
+						ColPos: 0,
+					},
+				},
+			}
+		} else {
+			serialArgs := make([]*plan.Expr, len(condIdx))
+			for i := range condIdx {
+				serialArgs[i] = &plan.Expr{
+					Typ: node.OnList[condIdx[i]].GetF().Args[1].Typ,
+					Expr: &plan.Expr_Col{
+						Col: &plan.ColRef{
+							RelPos: -1,
+							ColPos: int32(condIdx[i]),
+						},
+					},
+				}
+			}
+			rfBuildExpr, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", serialArgs)
+		}
+
 		idxTableNodeID := builder.appendNode(&plan.Node{
 			NodeType:     plan.Node_TABLE_SCAN,
 			TableDef:     idxTableDef,
 			ObjRef:       idxObjRef,
 			ParentObjRef: DeepCopyObjectRef(leftChild.ObjRef),
 			BindingTags:  []int32{idxTag},
+			RuntimeFilterProbeList: []*plan.RuntimeFilterSpec{
+				{
+					Tag:         rfTag,
+					MatchPrefix: len(condIdx) < numParts,
+					Expr: &plan.Expr{
+						Typ: *idxTableDef.Cols[0].Typ,
+						Expr: &plan.Expr_Col{
+							Col: &plan.ColRef{
+								RelPos: idxTag,
+								ColPos: 0,
+							},
+						},
+					},
+				},
+			},
 		}, builder.ctxByNode[nodeID])
+
+		node.RuntimeFilterBuildList = append(node.RuntimeFilterBuildList, &plan.RuntimeFilterSpec{
+			Tag:         rfTag,
+			MatchPrefix: len(condIdx) < numParts,
+			UpperLimit:  GetInFilterCardLimitOnPK(leftChild.Stats.TableCnt),
+			Expr:        rfBuildExpr,
+		})
 
 		pkIdx := leftChild.TableDef.Name2ColIndex[leftChild.TableDef.Pkey.PkeyColName]
 		pkExpr := &plan.Expr{
@@ -808,7 +857,6 @@ func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node,
 				},
 			},
 		}
-
 		pkJoinCond, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*plan.Expr{
 			pkExpr,
 			{
@@ -822,63 +870,18 @@ func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node,
 			},
 		})
 
-		var idxJoinCond *plan.Expr
-		if numParts == 1 {
-			idx := condIdx[0]
-
-			args := node.OnList[idx].GetF().Args
-			col := args[0].GetCol()
-			col.RelPos = idxTag
-			col.ColPos = 0
-			col.Name = idxTableDef.Cols[0].Name
-
-			idxJoinCond = node.OnList[idx]
-			node.OnList[idx] = pkJoinCond
-		} else {
-			serialArgs := make([]*plan.Expr, numParts)
-			for i := range condIdx {
-				serialArgs[i] = node.OnList[condIdx[i]].GetF().Args[1]
-			}
-			rightArg, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", serialArgs)
-
-			idxJoinCond, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*plan.Expr{
-				{
-					Typ: *idxTableDef.Cols[0].Typ,
-					Expr: &plan.Expr_Col{
-						Col: &plan.ColRef{
-							RelPos: idxTag,
-							ColPos: 0,
-						},
-					},
-				},
-				rightArg,
-			})
-
-			hitFilterSet := make(map[int]emptyType)
-			for i := range condIdx {
-				hitFilterSet[condIdx[i]] = emptyStruct
-			}
-
-			newOnList := make([]*plan.Expr, 0, len(node.OnList)-numParts)
-			for i, filter := range node.OnList {
-				if _, ok := hitFilterSet[i]; !ok {
-					newOnList = append(newOnList, filter)
-				}
-			}
-
-			node.OnList = append(newOnList, pkJoinCond)
-		}
-
 		idxJoinNodeID := builder.appendNode(&plan.Node{
 			NodeType: plan.Node_JOIN,
-			Children: []int32{idxTableNodeID, node.Children[1]},
-			Limit:    node.Limit,
-			Offset:   node.Offset,
-			OnList:   []*plan.Expr{idxJoinCond},
+			Children: []int32{node.Children[0], idxTableNodeID},
+			JoinType: plan.Node_INDEX,
+			Limit:    leftChild.Limit,
+			Offset:   leftChild.Offset,
+			OnList:   []*plan.Expr{pkJoinCond},
 		}, builder.ctxByNode[nodeID])
 
-		node.Children[1] = idxJoinNodeID
-		node.Limit, node.Offset = nil, nil
+		leftChild.Limit, leftChild.Offset = nil, nil
+
+		node.Children[0] = idxJoinNodeID
 
 		break
 	}
