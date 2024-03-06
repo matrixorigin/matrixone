@@ -427,7 +427,9 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 			{"sname", types.T_varchar, false, 64, 0},
 			{"ts", types.T_timestamp, false, 50, 0},
 			{"level", types.T_enum, false, 50, 0},
-			{"objname", types.T_varchar, false, 50, 0},
+			{"account_name", types.T_varchar, false, 50, 0},
+			{"database_name", types.T_varchar, false, 50, 0},
+			{"table_name", types.T_varchar, false, 50, 0},
 		},
 	}
 

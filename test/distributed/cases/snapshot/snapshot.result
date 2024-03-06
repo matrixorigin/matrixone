@@ -10,22 +10,22 @@ sleep(1)
 0
 create snapshot snapshot_04 for account default_1;
 show snapshots;
-SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    OBJECT_NAME
-snapshot_04    2024-03-04 15:47:41    account    default_1
-snapshot_03    2024-03-04 15:47:40    account    default_1
-snapshot_02    2024-03-04 15:47:39    account    default_1
-snapshot_01    2024-03-04 15:47:38    cluster    
+SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
+snapshot_04    2024-03-06 15:09:15    account    default_1        
+snapshot_03    2024-03-06 15:09:14    account    default_1        
+snapshot_01    2024-03-06 15:09:13    cluster            
+snapshot_02    2024-03-06 15:09:13    account    default_1        
 show snapshots where SNAPSHOT_NAME = 'snapshot_01';
-snapshot_name    timestamp    snapshot_level    object_name
-snapshot_01    2024-03-04 15:47:38    cluster    
+snapshot_name    timestamp    snapshot_level    account_name    database_name    table_name
+snapshot_01    2024-03-06 15:09:13    cluster            
 show snapshots where SNAPSHOT_LEVEL = 'cluster';
-snapshot_name    timestamp    snapshot_level    object_name
-snapshot_01    2024-03-04 15:47:38    cluster    
-show snapshots where OBJECT_NAME = 'default_1';
-snapshot_name    timestamp    snapshot_level    object_name
-snapshot_04    2024-03-04 15:47:41    account    default_1
-snapshot_03    2024-03-04 15:47:40    account    default_1
-snapshot_02    2024-03-04 15:47:39    account    default_1
+snapshot_name    timestamp    snapshot_level    account_name    database_name    table_name
+snapshot_01    2024-03-06 15:09:13    cluster            
+show snapshots where ACCOUNT_NAME = 'default_1';
+snapshot_name    timestamp    snapshot_level    account_name    database_name    table_name
+snapshot_04    2024-03-06 15:09:15    account    default_1        
+snapshot_03    2024-03-06 15:09:14    account    default_1        
+snapshot_02    2024-03-06 15:09:13    account    default_1        
 DROP SNAPSHOT snapshot_01;
 DROP SNAPSHOT snapshot_02;
 DROP SNAPSHOT snapshot_03;
@@ -40,23 +40,23 @@ sleep(1)
 0
 create snapshot snapshot_07 for account default_1;
 show snapshots;
-SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    OBJECT_NAME
-snapshot_07    2024-03-04 15:47:43    account    default_1
-snapshot_06    2024-03-04 15:47:42    account    default_1
-snapshot_05    2024-03-04 15:47:41    account    default_1
+SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
+snapshot_07    2024-03-06 15:09:18    account    default_1        
+snapshot_06    2024-03-06 15:09:17    account    default_1        
+snapshot_05    2024-03-06 15:09:16    account    default_1        
 show snapshots where SNAPSHOT_NAME = 'snapshot_07';
-snapshot_name    timestamp    snapshot_level    object_name
-snapshot_07    2024-03-04 15:47:43    account    default_1
+snapshot_name    timestamp    snapshot_level    account_name    database_name    table_name
+snapshot_07    2024-03-06 15:09:18    account    default_1        
 show snapshots where SNAPSHOT_LEVEL = 'account';
-snapshot_name    timestamp    snapshot_level    object_name
-snapshot_07    2024-03-04 15:47:43    account    default_1
-snapshot_06    2024-03-04 15:47:42    account    default_1
-snapshot_05    2024-03-04 15:47:41    account    default_1
-show snapshots where OBJECT_NAME = 'default_1';
-snapshot_name    timestamp    snapshot_level    object_name
-snapshot_07    2024-03-04 15:47:43    account    default_1
-snapshot_06    2024-03-04 15:47:42    account    default_1
-snapshot_05    2024-03-04 15:47:41    account    default_1
+snapshot_name    timestamp    snapshot_level    account_name    database_name    table_name
+snapshot_07    2024-03-06 15:09:18    account    default_1        
+snapshot_06    2024-03-06 15:09:17    account    default_1        
+snapshot_05    2024-03-06 15:09:16    account    default_1        
+show snapshots where ACCOUNT_NAME = 'default_1';
+snapshot_name    timestamp    snapshot_level    account_name    database_name    table_name
+snapshot_07    2024-03-06 15:09:18    account    default_1        
+snapshot_06    2024-03-06 15:09:17    account    default_1        
+snapshot_05    2024-03-06 15:09:16    account    default_1        
 drop account default_1;
 create snapshot snapshot_08 for account default_1;
 internal error: account default_1 does not exist
@@ -70,17 +70,17 @@ internal error: snapshot snapshot_09 already exists
 create account default_2 ADMIN_NAME admin IDENTIFIED BY '111111';
 create snapshot snapshot_10 for account default_2;
 show snapshots;
-SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    OBJECT_NAME
-snapshot_10    2024-03-04 15:47:45    account    default_2
-snapshot_09    2024-03-04 15:47:44    account    default_1
+SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
+snapshot_10    2024-03-06 15:09:20    account    default_2        
+snapshot_09    2024-03-06 15:09:18    account    default_1        
 create snapshot snapshot_11 for account default_1;
 create snapshot snapshot_12 for account default_2;
 internal error: only sys tenant can create tenant level snapshot for other tenant
 create snapshot snapshot_13 for cluster;
 internal error: only sys tenant can create cluster level snapshot
 show snapshots;
-SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    OBJECT_NAME
-snapshot_11    2024-03-04 15:47:45    account    default_1
+SNAPSHOT_NAME    TIMESTAMP    SNAPSHOT_LEVEL    ACCOUNT_NAME    DATABASE_NAME    TABLE_NAME
+snapshot_11    2024-03-06 15:09:20    account    default_1        
 create user  efg identified by '111';
 create snapshot snapshot_14 for account default_1;
 internal error: do not have privilege to execute the statement

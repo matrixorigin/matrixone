@@ -13,7 +13,7 @@ show snapshots where SNAPSHOT_NAME = 'snapshot_01';
 -- @ignore:1
 show snapshots where SNAPSHOT_LEVEL = 'cluster';
 -- @ignore:1
-show snapshots where OBJECT_NAME = 'default_1';
+show snapshots where ACCOUNT_NAME = 'default_1';
 DROP SNAPSHOT snapshot_01;
 DROP SNAPSHOT snapshot_02;
 DROP SNAPSHOT snapshot_03;
@@ -32,7 +32,7 @@ show snapshots where SNAPSHOT_NAME = 'snapshot_07';
 -- @ignore:1
 show snapshots where SNAPSHOT_LEVEL = 'account';
 -- @ignore:1
-show snapshots where OBJECT_NAME = 'default_1';
+show snapshots where ACCOUNT_NAME = 'default_1';
 -- @session
 drop account default_1;
 

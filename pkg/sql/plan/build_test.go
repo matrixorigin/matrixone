@@ -874,6 +874,7 @@ func TestShow(t *testing.T) {
 		"show function status",
 		"show function status like '%ff'",
 		"show snapshots",
+		"show snapshots where SNAPSHOT_NAME = 'snapshot_07'",
 		// "show procedure status",
 		// "show procedure status like '%ff'",
 		"show roles",

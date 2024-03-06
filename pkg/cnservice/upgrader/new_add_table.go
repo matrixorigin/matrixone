@@ -133,7 +133,9 @@ var (
 			sname varchar(64) primary key,
 			ts timestamp,
 			level enum('cluster','account','database','table'),
-			objname varchar(5000)
+	        account_name varchar(300),
+			database_name varchar(5000),
+			table_name  varchar(5000)
 			);`, catalog.MO_CATALOG, catalog.MO_SNAPSHOTS),
 	}
 )
