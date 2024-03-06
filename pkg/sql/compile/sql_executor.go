@@ -306,6 +306,9 @@ func (exec *txnExecutor) Exec(
 			}
 			return nil
 		})
+	if err != nil {
+		return executor.Result{}, err
+	}
 	var runResult *util.RunResult
 	runResult, err = c.Run(0)
 	if err != nil {
