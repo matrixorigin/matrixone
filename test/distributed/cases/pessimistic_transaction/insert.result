@@ -367,7 +367,7 @@ insert into t select * from t;
 Duplicate entry ('[0-9]{6}'|'[0-9]{5}'|'[0-9]{4}'|'[0-9]{3}'|'[0-9]{2}'|'[0-9]{1}') for key 'a'
 begin;
 insert into t select * from t;
-txn s3 writes can not retry in rc mode
+Duplicate entry ('[0-9]{6}'|'[0-9]{5}'|'[0-9]{4}'|'[0-9]{3}'|'[0-9]{2}'|'[0-9]{1}') for key 'a'
 select count(*) from t;
 count(*)
 200000
