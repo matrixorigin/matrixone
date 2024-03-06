@@ -383,6 +383,9 @@ func (m *TNUsageMemo) CacheLen() int {
 func (m *TNUsageMemo) MemoryUsed() float64 {
 	cacheUsed := m.cache.MemUsed() + m.newAccCache.MemUsed()
 	memoUsed := int(unsafe.Sizeof(TNUsageMemo{})) + len(m.reqTrace)*(12+int(unsafe.Sizeof(time.Time{})))
+	extraUsed := int(unsafe.Sizeof(UsageData{})) * (len(summaryLog[0]) + len(summaryLog[1]))
+
+	memoUsed += extraUsed
 	return cacheUsed + (float64(memoUsed)/1048576.0*1e6)/1e6
 }
 
@@ -733,6 +736,7 @@ const UsageBatMetaTableId uint64 = StorageUsageMagic
 
 var lastInsUsage UsageData = zeroUsageData
 var lastDelUsage UsageData = zeroUsageData
+var summaryLog [2][]UsageData
 
 // this function will accumulate all size of one table into one row.
 // [acc1, db1, table1, size1]  \
@@ -751,7 +755,15 @@ func appendToStorageUsageBat(data *CheckpointData, usage UsageData, del bool, mp
 	}
 
 	tableChanged := func(last UsageData) bool {
-		return !(last.AccId == usage.AccId && last.DbId == usage.DbId && last.TblId == usage.TblId)
+		changed := !(last.AccId == usage.AccId && last.DbId == usage.DbId && last.TblId == usage.TblId)
+		if changed {
+			if del {
+				summaryLog[1] = append(summaryLog[1], last)
+			} else {
+				summaryLog[0] = append(summaryLog[0], last)
+			}
+		}
+		return changed
 	}
 
 	entranceFunc := func(last *UsageData, batIdx uint16) {
@@ -870,6 +882,8 @@ func putCacheBack2Track(collector *BaseCollector) (string, int) {
 		if usage, ok := memo.pendingReplay.delayed[uniqueTbl[2]]; ok {
 			buf.WriteString(fmt.Sprintf("[u-tbl]%d_%d_%d_(o)%d_(n)%d; ",
 				usage.AccId, usage.DbId, usage.TblId, usage.Size, size))
+
+			delete(memo.pendingReplay.delayed, uniqueTbl[2])
 		}
 	}
 
@@ -894,6 +908,45 @@ func applyChanges(collector *BaseCollector, tnUsageMemo *TNUsageMemo) string {
 	return log
 }
 
+func doSummary(ckp string, fields ...zap.Field) {
+	defer func() {
+		summaryLog[0] = summaryLog[0][:0]
+		summaryLog[1] = summaryLog[1][:0]
+	}()
+
+	var buf bytes.Buffer
+	buf.WriteString(fmt.Sprintf("\nCKP[%s]\t%s\n", ckp, time.Now().UTC().String()))
+
+	format := "\taccId(%19d)\t dbId(%19d)\t tblId(%19d)\t size(%19.6fmb)"
+	accumulated := int64(0)
+
+	for idx := range summaryLog[0] {
+		buf.WriteString(fmt.Sprintf(format+" -> insert\n",
+			summaryLog[0][idx].AccId,
+			summaryLog[0][idx].DbId,
+			summaryLog[0][idx].TblId,
+			float64(summaryLog[0][idx].Size)/(1024*1024)))
+
+		accumulated += int64(summaryLog[0][idx].Size)
+	}
+
+	for idx := range summaryLog[1] {
+		buf.WriteString(fmt.Sprintf(format+" -> delete\n",
+			summaryLog[1][idx].AccId,
+			summaryLog[1][idx].DbId,
+			summaryLog[1][idx].TblId,
+			float64(summaryLog[1][idx].Size)/(1024*1024)))
+
+		accumulated -= int64(summaryLog[1][idx].Size)
+	}
+
+	buf.WriteString(fmt.Sprintf("accumulated size in this ckp: %19.6fmb",
+		float64(accumulated)/(1024*1024)))
+
+	fields = append(fields, zap.String("storage usage summary when ckp", buf.String()))
+	logutil.Info(fmt.Sprintf("storage usage [%s]", ckp), fields...)
+}
+
 func FillUsageBatOfGlobal(collector *GlobalCollector) {
 	start := time.Now()
 
@@ -907,7 +960,7 @@ func FillUsageBatOfGlobal(collector *GlobalCollector) {
 	log2 := collector.UsageMemo.ClearDroppedAccounts(collector.Usage.ReservedAccIds)
 	collector.UsageMemo.replayIntoGCKP(collector)
 
-	logutil.Info("[storage usage] CKP[G]",
+	doSummary("G",
 		zap.String("update old data", log1),
 		zap.Int("tables back to track", cnt),
 		zap.String("accounts cleaned", log2))
@@ -915,10 +968,11 @@ func FillUsageBatOfGlobal(collector *GlobalCollector) {
 
 func FillUsageBatOfIncremental(collector *IncrementalCollector) {
 	start := time.Now()
+	var memoryUsed float64
 
 	collector.UsageMemo.EnterProcessing()
 	defer func() {
-		v2.TaskStorageUsageCacheMemUsedGauge.Set(collector.UsageMemo.MemoryUsed())
+		v2.TaskStorageUsageCacheMemUsedGauge.Set(memoryUsed)
 		v2.TaskICkpCollectUsageDurationHistogram.Observe(time.Since(start).Seconds())
 		collector.UsageMemo.LeaveProcessing()
 	}()
@@ -926,8 +980,9 @@ func FillUsageBatOfIncremental(collector *IncrementalCollector) {
 	log1 := applyChanges(collector.BaseCollector, collector.UsageMemo)
 	//log2 := applyTransfer(collector.BaseCollector, collector.UsageMemo)
 
-	logutil.Info("[storage usage] CKP[I]",
-		zap.Float64("cache mem used", collector.UsageMemo.MemoryUsed()),
+	memoryUsed = collector.UsageMemo.MemoryUsed()
+	doSummary("I",
+		zap.Float64("cache mem used", memoryUsed),
 		zap.String("applied deletes", log1))
 }
 
