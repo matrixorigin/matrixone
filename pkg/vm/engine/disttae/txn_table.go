@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"strconv"
 	"time"
 	"unsafe"
@@ -646,12 +647,13 @@ func (tbl *txnTable) rangesOnePart(
 		if err != nil {
 			return err
 		}
-		deleteObjs, createObjs := state.GetChangedObjsBetween(types.TimestampToTS(tbl.lastTS),
+		deleteObjs, createObjs := state.GetChangedObjsBetween(
+			types.TimestampToTS(tbl.lastTs.Load().(timestamp.Timestamp)),
 			types.TimestampToTS(tbl.db.txn.op.SnapshotTS()))
 		trace.GetService().ApplyFlush(
 			tbl.db.txn.op.Txn().ID,
 			tbl.tableId,
-			tbl.lastTS,
+			tbl.lastTs.Load().(timestamp.Timestamp),
 			tbl.db.txn.op.SnapshotTS(),
 			len(deleteObjs))
 		if len(deleteObjs) > 0 {
@@ -659,7 +661,7 @@ func (tbl *txnTable) rangesOnePart(
 				return err
 			}
 		}
-		tbl.lastTS = tbl.db.txn.op.SnapshotTS()
+		tbl.lastTs.Store(tbl.db.txn.op.SnapshotTS())
 	}
 
 	var uncommittedObjects []objectio.ObjectStats

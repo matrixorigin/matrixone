@@ -613,7 +613,7 @@ type txnTable struct {
 	constraint    []byte
 
 	// timestamp of the last operation on this table
-	lastTS timestamp.Timestamp
+	lastTs atomic.Value
 
 	// this should be the statement id
 	// but seems that we're not maintaining it at the moment
