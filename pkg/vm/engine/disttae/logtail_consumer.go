@@ -18,7 +18,6 @@ import (
 	"context"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
-	"math/rand"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -255,7 +254,7 @@ func (c *PushClient) TryToSubscribeTable(
 	dbId, tblId uint64) error {
 	ir, _, exists := fault.TriggerFault("sub")
 	if exists {
-		if ir == 0 || rand.Int()%int(ir) == 0 {
+		if ir != 0 {
 			return moerr.NewInternalError(ctx, "trigger sub fault")
 		}
 	}
@@ -588,7 +587,7 @@ func (c *PushClient) connect(ctx context.Context, e *Engine) {
 func (c *PushClient) UnsubscribeTable(ctx context.Context, dbID, tbID uint64) error {
 	ir, _, exists := fault.TriggerFault("unsub")
 	if exists {
-		if ir == 0 || rand.Int()%int(ir) == 0 {
+		if ir != 0 {
 			return moerr.NewInternalError(ctx, "trigger unsub fault")
 		}
 	}
