@@ -374,3 +374,32 @@ func TestCalculateAggrMemoryBytes(t *testing.T) {
 		})
 	}
 }
+
+func TestCalculateFloat64(t *testing.T) {
+	type fields struct {
+		dividend float64
+		divisor  float64
+	}
+
+	tests := []struct {
+		name   string
+		fields fields
+		want   float64
+	}{
+		{
+			name: "cu",
+			fields: fields{
+				dividend: 6.79e-24,
+				divisor:  1.0026988039e-06,
+			},
+			want: 6.77172444366172e-18,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+
+			got := tt.fields.dividend / tt.fields.divisor
+			require.Equal(t, tt.want, got)
+		})
+	}
+}
