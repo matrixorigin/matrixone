@@ -534,9 +534,6 @@ func (m *mysqlTaskStorage) AddCronTask(ctx context.Context, cronTask ...task.Cro
 			t.UpdateAt,
 		)
 	}
-	if sqlStr == fmt.Sprintf(insertCronTask, m.dbname) {
-		return 0, nil
-	}
 	sqlStr = sqlStr[0 : len(sqlStr)-1]
 	stmt, err := conn.PrepareContext(ctx, sqlStr)
 	if err != nil {
