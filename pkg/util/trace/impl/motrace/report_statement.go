@@ -614,7 +614,7 @@ func CalculateCUMem(memByte int64, durationNS int64, cfg *config.OBCUConfig) flo
 	// TODO: need format
 	// 1. 精度校验
 	// 2. 保留 3位小数的问题
-	return float64(memByte*durationNS) * cfg.CpuPrice / cfg.CUUnit
+	return float64(memByte*durationNS) * cfg.MemPrice / cfg.CUUnit
 }
 
 func CalculateCUIOIn(ioCnt int64, cfg *config.OBCUConfig) float64 {
