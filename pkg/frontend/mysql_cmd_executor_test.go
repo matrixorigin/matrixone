@@ -866,6 +866,7 @@ func runTestHandle(funName string, t *testing.T, handleFun func(*MysqlCmdExecuto
 		ses.mrs = &MysqlResultSet{}
 		mce := &MysqlCmdExecutor{}
 		mce.SetSession(ses)
+		ses.txnCompileCtx.proc = testutil.NewProc()
 
 		convey.So(handleFun(mce), convey.ShouldBeNil)
 	})

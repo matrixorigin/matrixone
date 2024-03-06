@@ -18,7 +18,6 @@ account_id    relname    relkind
 0    mo_columns    r
 0    mo_configurations    v
 0    mo_database    r
-0    mo_foreign_keys    r
 0    mo_increment_columns    
 0    mo_indexes    r
 0    mo_locks    v
