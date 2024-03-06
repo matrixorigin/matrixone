@@ -36,8 +36,9 @@ var supportedAggregateFunctions = []FuncNew{
 				isAgg:      true,
 				retType:    functionAgg.AggMaxReturnType,
 				aggFramework: aggregationLogicOfOverload{
-					str:    "max",
-					aggNew: functionAgg.NewAggMax,
+					str:         "max",
+					aggNew:      functionAgg.NewAggMax,
+					aggRegister: agg2.RegisterMax,
 				},
 			},
 		},

@@ -65,6 +65,10 @@ func (r *basicResult) preExtend(more int) (oldLen, newLen int, err error) {
 	return oldLen, newLen, nil
 }
 
+func (r *basicResult) mergeEmpty(other basicResult, i, j int) {
+	r.empty[i] = r.empty[i] && other.empty[j]
+}
+
 func (r *basicResult) flush() *vector.Vector {
 	if r.emptyBeNull {
 		nsp := nulls.NewWithSize(len(r.empty))

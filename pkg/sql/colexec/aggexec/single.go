@@ -452,6 +452,7 @@ func (exec *singleAggFuncExec1[from, to]) Merge(next AggFuncExec, groupIdx1, gro
 	exec.ret.groupToSet = groupIdx1
 	other.ret.groupToSet = groupIdx2
 
+	exec.ret.mergeEmpty(other.ret.basicResult, groupIdx1, groupIdx2)
 	exec.groups[groupIdx1].Merge(
 		other.groups[groupIdx2],
 		exec.ret.aggGet, other.ret.aggGet,
@@ -472,6 +473,7 @@ func (exec *singleAggFuncExec1[from, to]) BatchMerge(next AggFuncExec, offset in
 		exec.ret.groupToSet = groupIdx1
 		other.ret.groupToSet = groupIdx2
 
+		exec.ret.mergeEmpty(other.ret.basicResult, groupIdx1, groupIdx2)
 		exec.groups[groupIdx1].Merge(
 			other.groups[groupIdx2],
 			getter1, getter2,
@@ -677,6 +679,7 @@ func (exec *singleAggFuncExec2[from]) Merge(next AggFuncExec, groupIdx1, groupId
 	exec.ret.groupToSet = groupIdx1
 	other.ret.groupToSet = groupIdx2
 
+	exec.ret.mergeEmpty(other.ret.basicResult, groupIdx1, groupIdx2)
 	exec.groups[groupIdx1].Merge(
 		other.groups[groupIdx2],
 		exec.ret.aggGet, other.ret.aggGet,
@@ -697,6 +700,7 @@ func (exec *singleAggFuncExec2[from]) BatchMerge(next AggFuncExec, offset int, g
 		exec.ret.groupToSet = groupIdx1
 		other.ret.groupToSet = groupIdx2
 
+		exec.ret.mergeEmpty(other.ret.basicResult, groupIdx1, groupIdx2)
 		exec.groups[groupIdx1].Merge(
 			other.groups[groupIdx2],
 			getter1, getter2,
@@ -902,6 +906,7 @@ func (exec *singleAggFuncExec3[to]) Merge(next AggFuncExec, groupIdx1, groupIdx2
 	exec.ret.groupToSet = groupIdx1
 	other.ret.groupToSet = groupIdx2
 
+	exec.ret.mergeEmpty(other.ret.basicResult, groupIdx1, groupIdx2)
 	exec.groups[groupIdx1].Merge(
 		other.groups[groupIdx2],
 		exec.ret.aggGet, other.ret.aggGet,
@@ -922,6 +927,7 @@ func (exec *singleAggFuncExec3[to]) BatchMerge(next AggFuncExec, offset int, gro
 		exec.ret.groupToSet = groupIdx1
 		other.ret.groupToSet = groupIdx2
 
+		exec.ret.mergeEmpty(other.ret.basicResult, groupIdx1, groupIdx2)
 		exec.groups[groupIdx1].Merge(
 			other.groups[groupIdx2],
 			getter1, getter2,
@@ -1128,6 +1134,7 @@ func (exec *singleAggFuncExec4) Merge(next AggFuncExec, groupIdx1, groupIdx2 int
 	exec.ret.groupToSet = groupIdx1
 	other.ret.groupToSet = groupIdx2
 
+	exec.ret.mergeEmpty(other.ret.basicResult, groupIdx1, groupIdx2)
 	exec.groups[groupIdx1].Merge(
 		other.groups[groupIdx2],
 		exec.ret.aggGet, other.ret.aggGet,
@@ -1148,6 +1155,7 @@ func (exec *singleAggFuncExec4) BatchMerge(next AggFuncExec, offset int, groups 
 		exec.ret.groupToSet = groupIdx1
 		other.ret.groupToSet = groupIdx2
 
+		exec.ret.mergeEmpty(other.ret.basicResult, groupIdx1, groupIdx2)
 		exec.groups[groupIdx1].Merge(
 			other.groups[groupIdx2],
 			getter1, getter2,
