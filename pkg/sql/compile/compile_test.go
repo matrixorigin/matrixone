@@ -130,6 +130,8 @@ func TestCompile(t *testing.T) {
 	txnOperator.EXPECT().GetWorkspace().Return(&Ws{}).AnyTimes()
 	txnOperator.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
 	txnOperator.EXPECT().ResetRetry(gomock.Any()).AnyTimes()
+	txnOperator.EXPECT().TxnOptions().Return(txn.TxnOptions{}).AnyTimes()
+	txnOperator.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()
 
 	txnClient := mock_frontend.NewMockTxnClient(ctrl)
 	txnClient.EXPECT().New(gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
