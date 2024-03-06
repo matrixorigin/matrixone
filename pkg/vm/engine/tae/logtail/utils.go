@@ -834,6 +834,7 @@ type GlobalCollector struct {
 }
 
 func NewGlobalCollector(end types.TS, versionInterval time.Duration) *GlobalCollector {
+	versionInterval = time.Minute
 	versionThresholdTS := types.BuildTS(end.Physical()-versionInterval.Nanoseconds(), end.Logical())
 	collector := &GlobalCollector{
 		BaseCollector: &BaseCollector{
