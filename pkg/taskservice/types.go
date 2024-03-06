@@ -345,8 +345,12 @@ var (
 
 type conditions map[condCode]condition
 
-func newConditions() *conditions {
-	return &conditions{}
+func newConditions(conds ...Condition) *conditions {
+	c := &conditions{}
+	for _, cond := range conds {
+		cond(c)
+	}
+	return c
 }
 
 // WithTaskIDDesc set query with order by task id desc
