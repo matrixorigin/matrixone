@@ -490,6 +490,7 @@ jobs:
             echo "select mo_ctl('cn', 'txn-trace', 'add-table sbtest$i');" >> enable_txn_trace.sql;
           done
           echo "select mo_ctl('cn', 'txn-trace', 'enable txn');" >> enable_txn_trace.sql;
+          echo "select mo_ctl('cn', 'txn-trace', 'enable data');" >> enable_txn_trace.sql;
           cat enable_txn_trace.sql;
           echo "===================";
           mysql -h ${{ needs.setup_mo_test_env.outputs.mo_svc_ip }} -u dump -P 6001 < enable_txn_trace.sql
@@ -630,6 +631,7 @@ jobs:
             echo "select mo_ctl('cn', 'txn-trace', 'add-table $table');" >> enable_txn_trace.sql;
           done
           echo "select mo_ctl('cn', 'txn-trace', 'enable txn');" >> enable_txn_trace.sql;
+          echo "select mo_ctl('cn', 'txn-trace', 'enable data');" >> enable_txn_trace.sql;
           cat enable_txn_trace.sql;
           echo "===================";
           mysql -h ${{ needs.setup_mo_test_env.outputs.mo_svc_ip }} -u dump -P 6001 < enable_txn_trace.sql
