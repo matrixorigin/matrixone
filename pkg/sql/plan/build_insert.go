@@ -360,6 +360,10 @@ func canUsePkFilter(builder *QueryBuilder, ctx CompilerContext, stmt *tree.Inser
 		var bat *batch.Batch
 		proc := ctx.GetProcess()
 		node := builder.qry.Nodes[0]
+		if node.Uuid == nil {
+			return false // TODO(jensenojs): issue14726
+		}
+
 		if builder.isPrepareStatement {
 			bat = proc.GetPrepareBatch()
 		} else {
@@ -416,6 +420,9 @@ func canUsePkFilter(builder *QueryBuilder, ctx CompilerContext, stmt *tree.Inser
 				var bat *batch.Batch
 				proc := ctx.GetProcess()
 				node := builder.qry.Nodes[0]
+				if node.Uuid == nil {
+					return false // TODO(jensenojs): issue14726
+				}
 				if builder.isPrepareStatement {
 					bat = proc.GetPrepareBatch()
 				} else {
@@ -444,6 +451,9 @@ func canUsePkFilter(builder *QueryBuilder, ctx CompilerContext, stmt *tree.Inser
 			} else {
 				proc := ctx.GetProcess()
 				node := builder.qry.Nodes[0]
+				if node.Uuid == nil {
+					return false // TODO(jensenojs): issue14726
+				}
 				if builder.isPrepareStatement {
 					bat = proc.GetPrepareBatch()
 				} else {
