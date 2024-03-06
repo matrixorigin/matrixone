@@ -604,6 +604,11 @@ func (s *service) RefreshTxnFilters() error {
 					accountID: format.MustParseStringUint32(params[0]),
 					userName:  params[1],
 				})
+		case userMethod:
+			filters = append(filters,
+				&userFilter{
+					userName: values[i],
+				})
 		}
 	}
 

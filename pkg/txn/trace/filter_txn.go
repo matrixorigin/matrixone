@@ -22,6 +22,7 @@ var (
 	sessionMethod    = "session"
 	connectionMethod = "connection"
 	tenantMethod     = "tenant"
+	userMethod       = "user"
 )
 
 type txnFilters struct {
@@ -76,6 +77,15 @@ type tenantFilter struct {
 func (f *tenantFilter) Filter(op client.TxnOperator) bool {
 	match := f.accountID == op.TxnOptions().AccountID &&
 		f.userName == op.TxnOptions().UserName
+	return !match
+}
+
+type userFilter struct {
+	userName string
+}
+
+func (f *userFilter) Filter(op client.TxnOperator) bool {
+	match := f.userName == op.TxnOptions().UserName
 	return !match
 }
 
