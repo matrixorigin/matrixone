@@ -5949,7 +5949,7 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		*tree.ShowTableValues, *tree.ShowNodeList, *tree.ShowRolesStmt,
 		*tree.ShowLocks, *tree.ShowFunctionOrProcedureStatus, *tree.ShowPublications, *tree.ShowSubscriptions,
 		*tree.ShowBackendServers, *tree.ShowStages, *tree.ShowConnectors, *tree.DropConnector,
-		*tree.PauseDaemonTask, *tree.CancelDaemonTask, *tree.ResumeDaemonTask, *tree.ShowSnapShots:
+		*tree.PauseDaemonTask, *tree.CancelDaemonTask, *tree.ResumeDaemonTask:
 		objType = objectTypeNone
 		kind = privilegeKindNone
 		canExecInRestricted = true
@@ -5986,6 +5986,14 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 	case *tree.ValuesStatement:
 		objType = objectTypeTable
 		typs = append(typs, PrivilegeTypeValues, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership)
+	case *tree.ShowSnapShots:
+		typs = append(typs, PrivilegeTypeAccountAll)
+		objType = objectTypeDatabase
+		kind = privilegeKindNone
+	case *tree.CreateSnapShot, *tree.DropSnapShot:
+		typs = append(typs, PrivilegeTypeAccountAll)
+		objType = objectTypeDatabase
+		kind = privilegeKindNone
 	case *tree.TruncateTable:
 		objType = objectTypeTable
 		typs = append(typs, PrivilegeTypeTruncate, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership)
@@ -6010,9 +6018,6 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		objType = objectTypeNone
 		kind = privilegeKindNone
 	case *tree.CreateStage, *tree.AlterStage, *tree.DropStage:
-		objType = objectTypeNone
-		kind = privilegeKindNone
-	case *tree.CreateSnapShot, *tree.DropSnapShot:
 		objType = objectTypeNone
 		kind = privilegeKindNone
 	case *tree.BackupStart:
