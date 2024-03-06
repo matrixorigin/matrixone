@@ -1303,17 +1303,19 @@ func buildInsertPlansWithRelatedHiddenTable(
 						}
 					}
 					originTableMessageForFuzzy.ParentUniqueCols = uniqueCols
-					insertColsNameFromStmt, err := getInsertColsFromStmt(ctx.GetContext(), stmt, tableDef)
-					if err != nil {
-						return err
-					}
-
-					// try to build pk filter epxr for hidden table created by unique key
-					if canUsePkFilter(builder, ctx, stmt, tableDef, insertColsNameFromStmt, indexdef) {
-						uniqueColLocationMap := newLocationMap(tableDef, indexdef)
-						pkFilterExprForHiddenTable, err = getPkValueExpr(builder, ctx, tableDef, uniqueColLocationMap, insertColsNameFromStmt)
+					if stmt != nil {
+						insertColsNameFromStmt, err := getInsertColsFromStmt(ctx.GetContext(), stmt, tableDef)
 						if err != nil {
 							return err
+						}
+
+						// try to build pk filter epxr for hidden table created by unique key
+						if canUsePkFilter(builder, ctx, stmt, tableDef, insertColsNameFromStmt, indexdef) {
+							uniqueColLocationMap := newLocationMap(tableDef, indexdef)
+							pkFilterExprForHiddenTable, err = getPkValueExpr(builder, ctx, tableDef, uniqueColLocationMap, insertColsNameFromStmt)
+							if err != nil {
+								return err
+							}
 						}
 					}
 				}
