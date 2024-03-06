@@ -54,13 +54,6 @@ func ChangeColumn(ctx CompilerContext, alterPlan *plan.AlterTable, spec *tree.Al
 		if newcol != nil {
 			return moerr.NewErrDupFieldName(ctx.GetContext(), newColName)
 		}
-
-		//change the name of the column in the foreign key constraint
-		alterCtx.UpdateSqls = append(alterCtx.UpdateSqls,
-			getSqlForRenameColumn(alterPlan.Database,
-				alterPlan.TableDef.Name,
-				originalColName,
-				newColName)...)
 	}
 
 	colType, err := getTypeFromAst(ctx.GetContext(), specNewColumn.Type)
