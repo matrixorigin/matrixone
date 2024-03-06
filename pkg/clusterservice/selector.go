@@ -83,6 +83,14 @@ func (s Selector) filter(serviceID string, labels map[string]metadata.LabelList)
 	if s.byServiceID {
 		return serviceID == s.serviceID
 	}
+	return s.Match(labels)
+}
+
+// Match check if @labels match the selector.
+// At most case, the selector's labels is subset of @labels
+//
+// return true, if @labels is empty.
+func (s Selector) Match(labels map[string]metadata.LabelList) bool {
 	if s.byLabel {
 		switch s.labelOp {
 		case Contain:
