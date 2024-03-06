@@ -129,7 +129,7 @@ func PrefixIn(parameters []*vector.Vector, result vector.FunctionResultWrapper, 
 		for i := range lcol {
 			lval := lcol[i].GetByteSlice(larea)
 			rpos, _ := sort.Find(len(rcol), func(j int) int {
-				return bytes.Compare(rcol[j].GetByteSlice(rarea), lval)
+				return index.PrefixCompare(lval, rcol[j].GetByteSlice(rarea))
 			})
 
 			res[i] = rpos < len(rcol) && bytes.HasPrefix(lval, rcol[rpos].GetByteSlice(rarea))
