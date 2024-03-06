@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -59,7 +60,181 @@ func (builder *QueryBuilder) applyIndices(nodeID int32, colRefCnt map[[2]int32]i
 	}
 }
 
-func (builder *QueryBuilder) applyIndicesForFilters(nodeID int32, node *plan.Node, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) int32 {
+func (builder *QueryBuilder) applyIndicesForFilters(nodeID int32, node *plan.Node,
+	colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) int32 {
+
+	if len(node.FilterList) == 0 || node.TableDef.Pkey == nil || len(node.TableDef.Indexes) == 0 {
+		return nodeID
+	}
+	// 1. Master Index Check
+	{
+		masterIndexes := make([]*plan.IndexDef, 0)
+		for _, indexDef := range node.TableDef.Indexes {
+			if !indexDef.Unique && catalog.IsMasterIndexAlgo(indexDef.IndexAlgo) {
+				masterIndexes = append(masterIndexes, indexDef)
+			}
+		}
+
+		if len(masterIndexes) == 0 {
+			goto END0
+		}
+
+		for _, expr := range node.FilterList {
+			fn := expr.GetF()
+			if fn == nil {
+				goto END0
+			}
+
+			switch fn.Func.ObjName {
+			case "=":
+				if isRuntimeConstExpr(fn.Args[0]) && fn.Args[1].GetCol() != nil {
+					fn.Args[0], fn.Args[1] = fn.Args[1], fn.Args[0]
+				}
+
+				if !isRuntimeConstExpr(fn.Args[1]) {
+					goto END0
+				}
+			case "between":
+			case "in":
+
+			default:
+				goto END0
+			}
+
+			col := fn.Args[0].GetCol()
+			if col == nil {
+				goto END0
+			}
+		}
+
+		for _, indexDef := range masterIndexes {
+			isAllFilterColumnsIncluded := true
+			for _, expr := range node.FilterList {
+				fn := expr.GetF()
+				col := fn.Args[0].GetCol()
+				if !isKeyPresentInList(col.Name, indexDef.Parts) {
+					isAllFilterColumnsIncluded = false
+					break
+				}
+			}
+			if isAllFilterColumnsIncluded {
+				return builder.applyIndicesForFiltersUsingMasterIndex(nodeID, node,
+					colRefCnt, idxColMap, indexDef)
+			}
+		}
+
+	}
+END0:
+	// 2. Regular Index Check
+	{
+		return builder.applyIndicesForFiltersRegularIndex(nodeID, node, colRefCnt, idxColMap)
+	}
+}
+
+func (builder *QueryBuilder) applyIndicesForSort(nodeID int32, sortNode *plan.Node, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) int32 {
+
+	// 1. Vector Index Check
+	// Handle Queries like
+	// SELECT id,embedding FROM tbl ORDER BY l2_distance(embedding, "[1,2,3]") LIMIT 10;
+	{
+		scanNode := builder.resolveTableScanWithIndexFromChildren(sortNode)
+
+		// 1.a if there are no table scans with multi-table indexes, skip
+		if scanNode == nil || sortNode == nil || len(sortNode.OrderBy) != 1 {
+			goto END0
+		}
+		multiTableIndexes := make(map[string]*MultiTableIndex)
+		for _, indexDef := range scanNode.TableDef.Indexes {
+			if catalog.IsIvfIndexAlgo(indexDef.IndexAlgo) {
+				if _, ok := multiTableIndexes[indexDef.IndexName]; !ok {
+					multiTableIndexes[indexDef.IndexName] = &MultiTableIndex{
+						IndexAlgo: catalog.ToLower(indexDef.IndexAlgo),
+						IndexDefs: make(map[string]*plan.IndexDef),
+					}
+				}
+				multiTableIndexes[indexDef.IndexName].IndexDefs[catalog.ToLower(indexDef.IndexAlgoTableType)] = indexDef
+			}
+		}
+		if len(multiTableIndexes) == 0 {
+			return nodeID
+		}
+
+		//1.b if sortNode has more than one order by, skip
+		if len(sortNode.OrderBy) != 1 {
+			goto END0
+		}
+
+		// 1.c if sortNode does not have a registered distance function, skip
+		distFnExpr := sortNode.OrderBy[0].Expr.GetF()
+		if distFnExpr == nil {
+			goto END0
+		}
+		if _, ok := distFuncOpTypes[distFnExpr.Func.ObjName]; !ok {
+			goto END0
+		}
+
+		// 1.d if the order by argument order is not of the form dist_func(col, const), swap and see
+		// if that works. if not, skip
+		if isRuntimeConstExpr(distFnExpr.Args[0]) && distFnExpr.Args[1].GetCol() != nil {
+			distFnExpr.Args[0], distFnExpr.Args[1] = distFnExpr.Args[1], distFnExpr.Args[0]
+		}
+		if !isRuntimeConstExpr(distFnExpr.Args[1]) {
+			goto END0
+		}
+		if distFnExpr.Args[0].GetCol() == nil {
+			goto END0
+		}
+		// NOTE: here we assume the first argument is the column to order by
+		colPosOrderBy := distFnExpr.Args[0].GetCol().ColPos
+
+		// 1.d if the distance function in sortNode is not indexed for that column in any of the IVFFLAT index, skip
+		distanceFunctionIndexed := false
+		var multiTableIndexWithSortDistFn *MultiTableIndex
+		for _, multiTableIndex := range multiTableIndexes {
+			switch multiTableIndex.IndexAlgo {
+			case catalog.MoIndexIvfFlatAlgo.ToString():
+				storedParams, err := catalog.IndexParamsStringToMap(multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].IndexAlgoParams)
+				if err != nil {
+					continue
+				}
+				storedOpType, ok := storedParams[catalog.IndexAlgoParamOpType]
+				if !ok {
+					continue
+				}
+
+				// if index is not the order by column, skip
+				idxDef0 := multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata]
+				if scanNode.TableDef.Name2ColIndex[idxDef0.Parts[0]] != colPosOrderBy {
+					continue
+				}
+
+				// if index is of the same distance function in order by, the index is valid
+				if storedOpType == distFuncOpTypes[distFnExpr.Func.ObjName] {
+					distanceFunctionIndexed = true
+					multiTableIndexWithSortDistFn = multiTableIndex
+				}
+			}
+			if distanceFunctionIndexed {
+				break
+			}
+		}
+		if !distanceFunctionIndexed {
+			goto END0
+		}
+
+		return builder.applyIndicesForSortUsingVectorIndex(nodeID, sortNode, scanNode,
+			colRefCnt, idxColMap, multiTableIndexWithSortDistFn, colPosOrderBy)
+	}
+END0:
+	// 2. Regular Index Check
+	{
+
+	}
+
+	return nodeID
+}
+
+func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, node *plan.Node, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) int32 {
 	if len(node.FilterList) == 0 || node.TableDef.Pkey == nil || len(node.TableDef.Indexes) == 0 {
 		return nodeID
 	}
@@ -526,7 +701,7 @@ func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node,
 		return nodeID
 	}
 
-	newLeftChildID := builder.applyIndicesForFilters(node.Children[0], leftChild, colRefCnt, idxColMap)
+	newLeftChildID := builder.applyIndicesForFiltersRegularIndex(node.Children[0], leftChild, colRefCnt, idxColMap)
 	if newLeftChildID != node.Children[0] {
 		node.Children[0] = newLeftChildID
 		return nodeID
