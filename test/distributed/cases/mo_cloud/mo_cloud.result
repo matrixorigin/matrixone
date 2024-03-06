@@ -618,6 +618,7 @@ mo_catalog    mo_cache    v    accountadmin
 mo_catalog    mo_columns    r    -
 mo_catalog    mo_configurations    v    accountadmin
 mo_catalog    mo_database    r    -
+mo_catalog    mo_foreign_keys    r    accountadmin
 mo_catalog    mo_increment_columns        accountadmin
 mo_catalog    mo_indexes    r    accountadmin
 mo_catalog    mo_locks    v    accountadmin
