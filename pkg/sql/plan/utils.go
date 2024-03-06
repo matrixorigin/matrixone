@@ -1713,15 +1713,6 @@ func ResetAuxIdForExpr(expr *plan.Expr) {
 // 	return expr
 // }
 
-func FormatExprs(exprs []*plan.Expr) string {
-	var w bytes.Buffer
-	for _, expr := range exprs {
-		w.WriteString(FormatExpr(expr))
-		w.WriteByte('\n')
-	}
-	return w.String()
-}
-
 func FormatExpr(expr *plan.Expr) string {
 	var w bytes.Buffer
 	doFormatExpr(expr, &w, 0)
