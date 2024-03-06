@@ -355,92 +355,92 @@ func newConditions(conds ...Condition) *conditions {
 
 // WithTaskIDDesc set query with order by task id desc
 func WithTaskIDDesc() Condition {
-	return func(qo *conditions) {
-		(*qo)[CondOrderByDesc] = &orderByDescCond{}
+	return func(c *conditions) {
+		(*c)[CondOrderByDesc] = &orderByDescCond{}
 	}
 }
 
 // WithTaskExecutorCond set task executor condition
 func WithTaskExecutorCond(op Op, value task.TaskCode) Condition {
-	return func(qo *conditions) {
-		(*qo)[CondTaskExecutor] = &taskExecutorCond{op: op, taskExecutor: value}
+	return func(c *conditions) {
+		(*c)[CondTaskExecutor] = &taskExecutorCond{op: op, taskExecutor: value}
 	}
 }
 
 // WithLimitCond set query result limit
 func WithLimitCond(limit int) Condition {
-	return func(qo *conditions) {
-		(*qo)[CondLimit] = &limitCond{limit: limit}
+	return func(c *conditions) {
+		(*c)[CondLimit] = &limitCond{limit: limit}
 	}
 }
 
 // WithTaskIDCond set task id condition
 func WithTaskIDCond(op Op, value uint64) Condition {
-	return func(qo *conditions) {
-		(*qo)[CondTaskID] = &taskIDCond{op: op, taskID: value}
+	return func(c *conditions) {
+		(*c)[CondTaskID] = &taskIDCond{op: op, taskID: value}
 	}
 }
 
 // WithTaskRunnerCond set task runner condition
 func WithTaskRunnerCond(op Op, value string) Condition {
-	return func(qo *conditions) {
-		(*qo)[CondTaskRunner] = &taskRunnerCond{op: op, taskRunner: value}
+	return func(c *conditions) {
+		(*c)[CondTaskRunner] = &taskRunnerCond{op: op, taskRunner: value}
 	}
 }
 
 // WithTaskStatusCond set status condition
 func WithTaskStatusCond(value ...task.TaskStatus) Condition {
 	op := IN
-	return func(qo *conditions) {
-		(*qo)[CondTaskStatus] = &taskStatusCond{op: op, taskStatus: value}
+	return func(c *conditions) {
+		(*c)[CondTaskStatus] = &taskStatusCond{op: op, taskStatus: value}
 	}
 }
 
 // WithTaskEpochCond set task epoch condition
 func WithTaskEpochCond(op Op, value uint32) Condition {
-	return func(qo *conditions) {
-		(*qo)[CondTaskEpoch] = &taskEpochCond{op: op, taskEpoch: value}
+	return func(c *conditions) {
+		(*c)[CondTaskEpoch] = &taskEpochCond{op: op, taskEpoch: value}
 	}
 }
 
 // WithTaskParentTaskIDCond set task ParentTaskID condition
 func WithTaskParentTaskIDCond(op Op, value string) Condition {
-	return func(qo *conditions) {
-		(*qo)[CondTaskParentTaskID] = &taskParentTaskIDCond{op: op, taskParentTaskID: value}
+	return func(c *conditions) {
+		(*c)[CondTaskParentTaskID] = &taskParentTaskIDCond{op: op, taskParentTaskID: value}
 	}
 }
 
 // WithTaskType set task type condition.
 func WithTaskType(op Op, value string) Condition {
-	return func(qo *conditions) {
-		(*qo)[CondTaskType] = &taskTypeCond{op: op, taskType: value}
+	return func(c *conditions) {
+		(*c)[CondTaskType] = &taskTypeCond{op: op, taskType: value}
 	}
 }
 
 // WithAccountID set task account ID condition.
 func WithAccountID(op Op, value uint32) Condition {
-	return func(qo *conditions) {
-		(*qo)[CondAccountID] = &accountIDCond{op: op, accountID: value}
+	return func(c *conditions) {
+		(*c)[CondAccountID] = &accountIDCond{op: op, accountID: value}
 	}
 }
 
 // WithAccount set task account condition.
 func WithAccount(op Op, value string) Condition {
-	return func(qo *conditions) {
-		(*qo)[CondAccount] = &accountCond{op: op, account: value}
+	return func(c *conditions) {
+		(*c)[CondAccount] = &accountCond{op: op, account: value}
 	}
 }
 
 // WithLastHeartbeat set last heartbeat condition.
 func WithLastHeartbeat(op Op, value int64) Condition {
-	return func(qo *conditions) {
-		(*qo)[CondLastHeartbeat] = &lastHeartbeatCond{op: op, hb: value}
+	return func(c *conditions) {
+		(*c)[CondLastHeartbeat] = &lastHeartbeatCond{op: op, hb: value}
 	}
 }
 
 func WithCronTaskId(op Op, value uint64) Condition {
-	return func(qo *conditions) {
-		(*qo)[CondCronTaskId] = &cronTaskIDCond{op: op, cronTaskID: value}
+	return func(c *conditions) {
+		(*c)[CondCronTaskId] = &cronTaskIDCond{op: op, cronTaskID: value}
 	}
 }
 
