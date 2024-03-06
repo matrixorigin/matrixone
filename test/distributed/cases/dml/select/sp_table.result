@@ -8,7 +8,6 @@ mo_cache    v
 mo_columns    r
 mo_configurations    v
 mo_database    r
-mo_foreign_keys    r
 mo_increment_columns
 mo_indexes    r
 mo_locks    v
