@@ -19,6 +19,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/bootstrap"
@@ -605,6 +606,13 @@ type service struct {
 	options struct {
 		bootstrapOptions []bootstrap.Option
 		traceDataPath    string
+	}
+
+	// pipelines record running pipelines in the service, used for monitoring.
+	pipelines struct {
+		// counter recording the total number of running pipelines,
+		// details are not recorded for simplicity as suggested by @nnsgmsone
+		counter atomic.Int64
 	}
 }
 

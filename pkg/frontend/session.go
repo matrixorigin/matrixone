@@ -294,6 +294,9 @@ type Session struct {
 	// insert sql for create table as select stmt
 	createAsSelectSql string
 
+	// FromProxy denotes whether the session is dispatched from proxy
+	fromProxy bool
+
 	disableTrace bool
 }
 
@@ -1303,12 +1306,9 @@ func (ses *Session) GetGlobalVar(name string) (interface{}, error) {
 
 func (ses *Session) GetTxnCompileCtx() *TxnCompilerContext {
 	var compCtx *TxnCompilerContext
-	var proc *process.Process
 	ses.mu.Lock()
 	compCtx = ses.txnCompileCtx
-	proc = ses.proc
 	ses.mu.Unlock()
-	compCtx.SetProcess(proc)
 	return compCtx
 }
 
@@ -2348,6 +2348,7 @@ func (ses *Session) StatusSession() *status.Session {
 				QueryStart:    time.Time{},
 				ClientHost:    ses.GetMysqlProtocol().Peer(),
 				Role:          roleName,
+				FromProxy:     ses.fromProxy,
 			}
 		}
 	}
@@ -2370,6 +2371,7 @@ func (ses *Session) StatusSession() *status.Session {
 		QueryStart:    ses.GetQueryStart(),
 		ClientHost:    ses.GetMysqlProtocol().Peer(),
 		Role:          roleName,
+		FromProxy:     ses.fromProxy,
 	}
 }
 
