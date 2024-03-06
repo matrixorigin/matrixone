@@ -76,8 +76,6 @@ func (m *MockCompilerContext) ResolveVariable(varName string, isSystemVar, isGlo
 		vars["sql_mode"] = "ONLY_FULL_GROUP_BY"
 	}
 
-	vars["foreign_key_checks"] = int64(1)
-
 	if result, ok := vars[varName]; ok {
 		return result, nil
 	}

@@ -1305,27 +1305,9 @@ func (ses *Session) GetGlobalVar(name string) (interface{}, error) {
 
 func (ses *Session) GetTxnCompileCtx() *TxnCompilerContext {
 	var compCtx *TxnCompilerContext
-	var proc *process.Process
 	ses.mu.Lock()
 	compCtx = ses.txnCompileCtx
-	proc = ses.proc
 	ses.mu.Unlock()
-	compCtx.SetProcess(proc)
-	if proc != nil {
-		conCtx := ses.GetConnectContext()
-		if conCtx == nil {
-			conCtx = context.Background()
-		}
-		proc.Ctx, proc.Cancel = context.WithTimeout(conCtx,
-			ses.GetParameterUnit().SV.SessionTimeout.Duration)
-		reqCtx := ses.GetRequestContext()
-		if reqCtx != nil {
-			accountId, err := defines.GetAccountId(reqCtx)
-			if err == nil {
-				proc.Ctx = defines.AttachAccountId(proc.Ctx, accountId)
-			}
-		}
-	}
 	return compCtx
 }
 
