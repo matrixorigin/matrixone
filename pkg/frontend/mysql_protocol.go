@@ -2754,6 +2754,8 @@ func (mp *MysqlProtocolImpl) receiveExtraInfo(rs goetty.IOSession) {
 		return
 	}
 
+	// must from proxy if extraInfo is received
+	mp.GetSession().fromProxy = true
 	salt, ok := ve.ExtraInfo.GetSalt()
 	if ok {
 		mp.SetSalt(salt)
