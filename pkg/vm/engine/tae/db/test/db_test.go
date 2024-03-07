@@ -6084,7 +6084,7 @@ func TestGCWithCheckpoint(t *testing.T) {
 	opts := config.WithQuickScanAndCKPAndGCOpts(nil)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
-	manager := gc.NewDiskCleaner(context.Background(), tae.Runtime.Fs, tae.BGCheckpointRunner, tae.Catalog)
+	manager := gc.NewDiskCleaner(context.Background(), tae.Runtime.Fs, tae.BGCheckpointRunner, tae.Catalog, false)
 	manager.Start()
 	defer manager.Stop()
 
@@ -6116,7 +6116,7 @@ func TestGCWithCheckpoint(t *testing.T) {
 		return entries[num-1].GetEnd().Equal(manager.GetMaxConsumed().GetEnd())
 	})
 	assert.True(t, entries[num-1].GetEnd().Equal(manager.GetMaxConsumed().GetEnd()))
-	manager2 := gc.NewDiskCleaner(context.Background(), tae.Runtime.Fs, tae.BGCheckpointRunner, tae.Catalog)
+	manager2 := gc.NewDiskCleaner(context.Background(), tae.Runtime.Fs, tae.BGCheckpointRunner, tae.Catalog, false)
 	manager2.Start()
 	defer manager2.Stop()
 	testutils.WaitExpect(5000, func() bool {
@@ -6138,7 +6138,7 @@ func TestGCDropDB(t *testing.T) {
 	opts := config.WithQuickScanAndCKPAndGCOpts(nil)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
-	manager := gc.NewDiskCleaner(context.Background(), tae.Runtime.Fs, tae.BGCheckpointRunner, tae.Catalog)
+	manager := gc.NewDiskCleaner(context.Background(), tae.Runtime.Fs, tae.BGCheckpointRunner, tae.Catalog, false)
 	manager.Start()
 	defer manager.Stop()
 	schema := catalog.MockSchemaAll(3, 1)
@@ -6173,7 +6173,7 @@ func TestGCDropDB(t *testing.T) {
 		return entries[num-1].GetEnd().Equal(manager.GetMaxConsumed().GetEnd())
 	})
 	assert.True(t, entries[num-1].GetEnd().Equal(manager.GetMaxConsumed().GetEnd()))
-	manager2 := gc.NewDiskCleaner(context.Background(), tae.Runtime.Fs, tae.BGCheckpointRunner, tae.Catalog)
+	manager2 := gc.NewDiskCleaner(context.Background(), tae.Runtime.Fs, tae.BGCheckpointRunner, tae.Catalog, false)
 	manager2.Start()
 	defer manager2.Stop()
 	testutils.WaitExpect(5000, func() bool {
@@ -6196,7 +6196,7 @@ func TestGCDropTable(t *testing.T) {
 	opts := config.WithQuickScanAndCKPAndGCOpts(nil)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
-	manager := gc.NewDiskCleaner(context.Background(), tae.Runtime.Fs, tae.BGCheckpointRunner, tae.Catalog)
+	manager := gc.NewDiskCleaner(context.Background(), tae.Runtime.Fs, tae.BGCheckpointRunner, tae.Catalog, false)
 	manager.Start()
 	defer manager.Stop()
 	schema := catalog.MockSchemaAll(3, 1)
@@ -6246,7 +6246,7 @@ func TestGCDropTable(t *testing.T) {
 		return entries[num-1].GetEnd().Equal(manager.GetMaxConsumed().GetEnd())
 	})
 	assert.True(t, entries[num-1].GetEnd().Equal(manager.GetMaxConsumed().GetEnd()))
-	manager2 := gc.NewDiskCleaner(context.Background(), tae.Runtime.Fs, tae.BGCheckpointRunner, tae.Catalog)
+	manager2 := gc.NewDiskCleaner(context.Background(), tae.Runtime.Fs, tae.BGCheckpointRunner, tae.Catalog, false)
 	manager2.Start()
 	defer manager2.Stop()
 	testutils.WaitExpect(5000, func() bool {

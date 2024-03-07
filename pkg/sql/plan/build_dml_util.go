@@ -1481,6 +1481,27 @@ func makeOneDeletePlan(
 	isUK bool, // is delete unique key hidden table
 ) (int32, error) {
 	if isUK {
+		// append filter
+		rowIdTyp := types.T_Rowid.ToType()
+		rowIdColExpr := &plan.Expr{
+			Typ: makePlan2Type(&rowIdTyp),
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					ColPos: int32(delNodeInfo.deleteIndex),
+				},
+			},
+		}
+		filterExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "is_not_null", []*Expr{rowIdColExpr})
+		if err != nil {
+			return -1, err
+		}
+		filterNode := &Node{
+			NodeType:   plan.Node_FILTER,
+			Children:   []int32{lastNodeId},
+			FilterList: []*plan.Expr{filterExpr},
+		}
+		lastNodeId = builder.appendNode(filterNode, bindCtx)
+
 		// append lock
 		lockTarget := &plan.LockTarget{
 			TableId:            delNodeInfo.tableDef.TblId,

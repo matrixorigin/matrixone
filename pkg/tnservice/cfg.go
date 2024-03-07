@@ -116,6 +116,12 @@ type Config struct {
 		ReservedWALEntryCount uint64        `toml:"reserved-WAL-entry-count"`
 	}
 
+	GCCfg struct {
+		GCTTL          toml.Duration `toml:"gc-ttl"`
+		ScanGCInterval toml.Duration `toml:"scan-gc-interval"`
+		DisableGC      bool          `toml:"disable-gc"`
+	}
+
 	LogtailServer struct {
 		ListenAddress              string        `toml:"listen-address"`
 		ServiceAddress             string        `toml:"service-address"`
@@ -224,6 +230,7 @@ func (c *Config) Validate() error {
 	if c.Ckp.ReservedWALEntryCount == 0 {
 		c.Ckp.ReservedWALEntryCount = defaultReservedWALEntryCount
 	}
+
 	if c.LogtailServer.ListenAddress == "" {
 		c.LogtailServer.ListenAddress = defaultLogtailListenAddress
 	}

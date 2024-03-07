@@ -264,8 +264,8 @@ import (
 %left <str> ')'
 %nonassoc LOWER_THAN_STRING
 %nonassoc <str> ID AT_ID AT_AT_ID STRING VALUE_ARG LIST_ARG COMMENT COMMENT_KEYWORD QUOTE_ID STAGE CREDENTIALS STAGES
-%token <item> INTEGRAL HEX BIT_LITERAL FLOAT
-%token <str>  HEXNUM
+%token <item> INTEGRAL HEX FLOAT
+%token <str>  HEXNUM BIT_LITERAL
 %token <str> NULL TRUE FALSE
 %nonassoc LOWER_THAN_CHARSET
 %nonassoc <str> CHARSET
@@ -9068,17 +9068,7 @@ literal:
     }
 |   BIT_LITERAL
     {
-        switch v := $1.(type) {
-        case uint64:
-            $$ = tree.NewNumValWithType(constant.MakeUint64(v), yylex.(*Lexer).scanner.LastToken, false, tree.P_uint64)
-        case int64:
-            $$ = tree.NewNumValWithType(constant.MakeInt64(v), yylex.(*Lexer).scanner.LastToken, false, tree.P_int64)
-        case string:
-            $$ = tree.NewNumValWithType(constant.MakeString(v), v, false, tree.P_bit)
-        default:
-            yylex.Error("parse integral fail")
-            return 1
-        }
+        $$ = tree.NewNumValWithType(constant.MakeString($1), $1, false, tree.P_bit)
     }
 |   VALUE_ARG
     {
