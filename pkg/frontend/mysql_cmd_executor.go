@@ -46,12 +46,15 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/explain"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	txnTrace "github.com/matrixorigin/matrixone/pkg/txn/trace"
 	util2 "github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -333,14 +336,14 @@ var RecordParseErrorStatement = func(ctx context.Context, ses *Session, proc *pr
 			if err != nil {
 				return nil, err
 			}
-			motrace.EndStatement(ctx, retErr, 0, 0)
+			motrace.EndStatement(ctx, retErr, 0, 0, 0)
 		}
 	} else {
 		ctx, err = RecordStatement(ctx, ses, proc, nil, envBegin, "", sqlType, true)
 		if err != nil {
 			return nil, err
 		}
-		motrace.EndStatement(ctx, retErr, 0, 0)
+		motrace.EndStatement(ctx, retErr, 0, 0, 0)
 	}
 
 	tenant := ses.GetTenantInfo()
@@ -1967,17 +1970,42 @@ func buildMoExplainQuery(explainColName string, buffer *explain.ExplainDataBuffe
 }
 
 func buildPlan(requestCtx context.Context, ses *Session, ctx plan2.CompilerContext, stmt tree.Statement) (*plan2.Plan, error) {
+	var ret *plan2.Plan
+	var err error
+
+	txnOp := ctx.GetProcess().TxnOperator
 	start := time.Now()
+	seq := uint64(0)
+	if txnOp != nil {
+		seq = txnOp.NextSequence()
+		txnTrace.GetService().AddTxnDurationAction(
+			txnOp,
+			client.BuildPlanEvent,
+			seq,
+			0,
+			0,
+			err)
+	}
+
 	defer func() {
-		v2.TxnStatementBuildPlanDurationHistogram.Observe(time.Since(start).Seconds())
+		cost := time.Since(start)
+
+		if txnOp != nil {
+			txnTrace.GetService().AddTxnDurationAction(
+				txnOp,
+				client.BuildPlanEvent,
+				seq,
+				0,
+				cost,
+				err)
+		}
+		v2.TxnStatementBuildPlanDurationHistogram.Observe(cost.Seconds())
 	}()
 
 	stats := statistic.StatsInfoFromContext(requestCtx)
 	stats.PlanStart()
 	defer stats.PlanEnd()
 
-	var ret *plan2.Plan
-	var err error
 	isPrepareStmt := false
 	if ses != nil {
 		ses.accountId, err = defines.GetAccountId(requestCtx)
@@ -2869,6 +2897,7 @@ func (mce *MysqlCmdExecutor) processLoadLocal(ctx context.Context, param *tree.E
 	if length == 0 {
 		return
 	}
+	ses.CountPayload(len(packet.Payload))
 
 	skipWrite := false
 	// If inner error occurs(unexpected or expected(ctrl-c)), proc.LoadLocalReader will be closed.
@@ -2912,6 +2941,7 @@ func (mce *MysqlCmdExecutor) processLoadLocal(ctx context.Context, param *tree.E
 		}
 		seq = uint8(packet.SequenceID + 1)
 		proto.SetSequenceID(seq)
+		ses.CountPayload(len(packet.Payload))
 
 		writeStart := time.Now()
 		if !skipWrite {
@@ -3676,6 +3706,11 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 	if ret, err = cw.Compile(requestCtx, ses, ses.GetOutputCallback()); err != nil {
 		return
 	}
+	defer func() {
+		if c, ok := ret.(*compile.Compile); ok {
+			c.Release()
+		}
+	}()
 	stmt = cw.GetAst()
 	// reset some special stmt for execute statement
 	switch st := stmt.(type) {
@@ -4185,7 +4220,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, input *UserI
 
 	proc.SessionInfo.User = userNameOnly
 	proc.SessionInfo.QueryId = ses.getQueryId(input.isInternal())
-	ses.txnCompileCtx.SetProcess(ses.proc)
+	ses.txnCompileCtx.SetProcess(proc)
 	ses.proc.SessionInfo = proc.SessionInfo
 
 	statsInfo := statistic.StatsInfo{ParseStartTime: beginInstant}

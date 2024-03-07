@@ -409,6 +409,7 @@ func (cwft *TxnComputationWrapper) Run(ts uint64) (*util2.RunResult, error) {
 		logDebug(cwft.ses, cwft.ses.GetDebugString(), "compile.Run end")
 	}()
 	runResult, err := cwft.compile.Run(ts)
+	cwft.compile.Release()
 	cwft.runResult = runResult
 	cwft.compile = nil
 	return runResult, err
@@ -439,7 +440,7 @@ func replacePlan(requestCtx context.Context, ses *Session, cwft *TxnComputationW
 	if err != nil {
 		return nil, nil, originSQL, err
 	}
-	if txnTrace.GetService().Enabled() {
+	if txnTrace.GetService().Enabled(txnTrace.FeatureTraceTxn) {
 		originSQL = tree.String(prepareStmt.PrepareStmt, dialect.MYSQL)
 	}
 	preparePlan := prepareStmt.PreparePlan.GetDcl().GetPrepare()

@@ -12,8 +12,8 @@ mo_ctl(dn, flush, d1.t1)
 select mo_ctl('dn', 'flush', 'd1.t2');
 mo_ctl(dn, flush, d1.t2)
 {\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
-select Sleep(10);
-sleep(10)
+select Sleep(5);
+sleep(5)
 0
 explain select * from t1 order by c1 limit 100 offset 200;
 QUERY PLAN
@@ -42,6 +42,7 @@ Project
                     Recv Message: [tag 1 , type MsgTopValue]
               ->  Table Scan on d1.t2
                     Filter Cond: t2.c2 BETWEEN 33333 AND 44444
+                    Block Filter Cond: t2.c2 BETWEEN 33333 AND 44444
 select * from t1 order by c1 limit 10 ;
 c1    c2    c3
 1    1    1
@@ -165,6 +166,7 @@ Project
                     Recv Message: [tag 1 , type MsgTopValue]
               ->  Table Scan on d1.t2
                     Filter Cond: t2.c2 BETWEEN 33333 AND 555555
+                    Block Filter Cond: t2.c2 BETWEEN 33333 AND 555555
 select * from t1,t2 where t1.c1=t2.c1 and t2.c2 between 33333 and 555555 order by t1.c1 desc limit 10 offset 10;
 c1    c2    c3    c1    c2    c3
 555545    555545    555545    555545    555545    555545
