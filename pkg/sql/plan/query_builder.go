@@ -1424,6 +1424,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 	sinkColRef := make(map[[2]int32]int)
 
 	for i, rootID := range builder.qry.Steps {
+		builder.skipStats = builder.canSkipStats()
 		builder.rewriteDistinctToAGG(rootID)
 		builder.rewriteEffectlessAggToProject(rootID)
 		rootID, _ = builder.pushdownFilters(rootID, nil, false)
@@ -1496,7 +1497,6 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 				colRefBool[[2]int32{int32(i), int32(j)}] = true
 			}
 		}
-
 	}
 
 	for i := range builder.qry.Steps {

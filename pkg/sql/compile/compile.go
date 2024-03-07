@@ -417,6 +417,7 @@ func (c *Compile) allocOperatorID() int32 {
 }
 
 // Run is an important function of the compute-layer, it executes a single sql according to its scope
+// Need call Release() after call this function.
 func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
 	txnOp := c.proc.TxnOperator
 	seq := uint64(0)
@@ -483,7 +484,6 @@ func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
 	c.ctx, span = trace.Start(c.ctx, "Compile.Run", trace.WithKind(trace.SpanKindStatement))
 	_, task := gotrace.NewTask(context.TODO(), "pipeline.Run")
 	defer func() {
-		c.Release()
 		releaseRunC()
 
 		task.End()
