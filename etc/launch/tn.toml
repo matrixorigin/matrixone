@@ -2,18 +2,8 @@ service-type = "TN"
 data-dir = "./mo-data"
 
 [log]
-level = "panic"
-format = "console"
+level = "info"
 
 [tn]
 uuid = "dd4dccb4-4d3c-41f8-b482-5251dc7a41bf"
 port-base = 19000
-
-
-
-[tn.Ckp]
-flush-interval = "20s"
-min-count = 20
-scan-interval = "5s"
-incremental-interval = "20s"
-global-min-count = 2
