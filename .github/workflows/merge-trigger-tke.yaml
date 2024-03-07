@@ -127,10 +127,15 @@ jobs:
           cn_ips=$(kubectl -n mo-checkin-regression-${{ github.event.pull_request.number }} get pods -l matrixorigin.io/component=CNSet -o=jsonpath='{.items[*].status.podIP}' | sed 's/ /,/g')
           echo "cn_ips is $cn_ips"
           echo "cn_ips=$cn_ips"  >>  $GITHUB_OUTPUT;
-
       - name: Add TXN Filter
         run: |
-          MYSQL_PWD=111 mysql -h ${{ steps.get_mo_addr.outputs.mo_svc_ip }} -P 6001 -u dump -e "select mo_ctl('cn', 'txn-trace', 'add-txn user admin');"
+          export MYSQL_PWD=111;
+          for i in {1..300}; do
+            if mysql -h ${{ steps.get_mo_addr.outputs.mo_svc_ip }} -P 6001 -u dump -e "select mo_ctl('cn', 'txn-trace', 'add-txn user admin');"; then
+              break;
+            fi
+          done
+
       - name: Prepare Data in cn-0
         timeout-minutes: 5
         run: |
@@ -481,6 +486,25 @@ jobs:
           echo "sysbench_password=111" >> $GITHUB_OUTPUT
           echo "$JAVA_HOME/bin" >> $GITHUB_PATH
 
+      # start sysbench test
+      - name: Prepare Sysbench Database and Tables
+        if: ${{ always() && !cancelled() }}
+        timeout-minutes: 5
+        run: |
+          set -uo pipefail
+          export LC_ALL="C.UTF-8"
+          locale
+          
+          cd $GITHUB_WORKSPACE/mo-load
+          mkdir -p report
+          sed -i 's/127.0.0.1/${{ needs.setup_mo_test_env.outputs.mo_svc_ip }}/g' mo.yml
+          sed -i 's/name:.*$/name: "${{ steps.account_for_sysbench.outputs.sysbench_account }}"/g' mo.yml
+          sed -i 's/password:.*$/password: "${{ steps.account_for_sysbench.outputs.sysbench_password }}"/g' mo.yml
+          
+          echo 'Start Prepare Data of 10-tables-100000-per-table'
+          ./start.sh -m SYSBENCH -n 10 -s 100000 -t 1 | tee report/load-oltp-mix.log
+          sleep 10
+
       - name: Enable CN TXN Trace
         timeout-minutes: 2
         run: |
@@ -503,19 +527,9 @@ jobs:
           set -uo pipefail
           export LC_ALL="C.UTF-8"
           locale
-          sleep 60s
-
+          
           cd $GITHUB_WORKSPACE/mo-load
           mkdir -p report
-          sed -i 's/127.0.0.1/${{ needs.setup_mo_test_env.outputs.mo_svc_ip }}/g' mo.yml
-          sed -i 's/name:.*$/name: "${{ steps.account_for_sysbench.outputs.sysbench_account }}"/g' mo.yml
-          sed -i 's/password:.*$/password: "${{ steps.account_for_sysbench.outputs.sysbench_password }}"/g' mo.yml
-          
-          echo 'Start Prepare Data of 10-tables-100000-per-table'
-          ./start.sh -m SYSBENCH -n 10 -s 100000 -t 1 | tee report/load-oltp-mix.log
-          sleep 10
-          
-          echo ''
           echo 'Start OLTP Insert Test With 100 threads'
           ./start.sh -c cases/sysbench/mixed_10_100000 -t 100 -d 20 -g -b sbtest | tee report/oltp-mix.log
      
