@@ -313,6 +313,30 @@ func (zm ZM) containsString(k []byte) bool {
 		compute.CompareBytes(k, zm.GetMaxBuf()) <= 0
 }
 
+func (zm ZM) containsStringAndGE(k []byte) (bool, bool) {
+	if zm.MaxTruncated() {
+		return true, true
+	}
+
+	// ------|-------|-----|----
+	//       k       min  max
+	ltMin := compute.CompareBytes(k, zm.GetMinBuf()) < 0
+	if ltMin {
+		return false, true
+	}
+
+	// ------|-------|-----|----
+	//      min     max    k
+	gtMax := compute.CompareBytes(k, zm.GetMaxBuf()) > 0
+	if gtMax {
+		return false, false
+	}
+
+	// ------|-------|-----|----
+	//      min      k    max
+	return true, true
+}
+
 // TODO: remove me later
 func (zm ZM) Contains(k any) bool {
 	if !zm.IsInited() {
@@ -337,6 +361,38 @@ func (zm ZM) ContainsKey(k []byte) bool {
 	t := types.T(zm[63])
 	return compute.Compare(k, zm.GetMinBuf(), t, 0, 0) >= 0 &&
 		compute.Compare(k, zm.GetMaxBuf(), t, 0, 0) <= 0
+}
+
+// ret1 specify whether it is inited
+// ret2 specify whether it contains the key
+// ret3 specify whether the zm is greater and equal than the key
+func (zm ZM) ContainsKeyAndGE(k []byte) (bool, bool, bool) {
+	if !zm.IsInited() {
+		return false, false, false
+	}
+	if zm.IsString() {
+		ok, isGE := zm.containsStringAndGE(k)
+		return true, ok, isGE
+	}
+	t := types.T(zm[63])
+
+	// ------|-------|-----|----
+	//       k       min  max
+	ltMin := compute.Compare(k, zm.GetMinBuf(), t, 0, 0) < 0
+	if ltMin {
+		return true, false, true
+	}
+
+	// ------|-------|-----|----
+	//      min     max    k
+	gtMax := compute.Compare(k, zm.GetMaxBuf(), t, 0, 0) > 0
+	if gtMax {
+		return true, false, false
+	}
+
+	// ------|-------|-----|----
+	//      min      k    max
+	return true, true, true
 }
 
 func (zm ZM) IsInited() bool {

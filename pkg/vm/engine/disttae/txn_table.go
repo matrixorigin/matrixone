@@ -986,8 +986,21 @@ func (tbl *txnTable) tryFastRanges(
 						return true
 					}
 				} else {
-					if !blkMeta.IsEmpty() && !blkMeta.MustGetColumn(uint16(tbl.primaryIdx)).ZoneMap().ContainsKey(val) {
+					if blkMeta.IsEmpty() {
 						return true
+					}
+
+					// -----|------|------|----  ==> (ok=false,isGE=true)
+					//      k     min    max
+
+					// -----|------|------|----  ==> (ok=true,isGE=true)
+					//     min     k     max
+
+					// -----|------|------|----  ==> (ok=false,isGE=false)
+					//     min    max     k
+					isInited, ok, isGE := blkMeta.MustGetColumn(uint16(tbl.primaryIdx)).ZoneMap().ContainsKeyAndGE(val)
+					if isInited && !ok {
+						return !isGE
 					}
 				}
 
