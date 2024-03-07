@@ -618,6 +618,12 @@ func CalculateCUMem(memByte int64, durationNS int64, cfg *config.OBCUConfig) flo
 		cuCfg := GetTracerProvider().GetCUConfig()
 		cfg = &cuCfg
 	}
+	if durationNS > 1e9 {
+		val, err := CalculateCUMemDecimal(memByte, durationNS, cfg.MemPrice, cfg.CUUnit)
+		if err == nil {
+			return val
+		}
+	}
 	return float64(memByte) * float64(durationNS) * cfg.MemPrice / cfg.CUUnit
 }
 

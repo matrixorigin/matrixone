@@ -456,14 +456,44 @@ func TestCalculateCUMemDecimal(t *testing.T) {
 		want float64
 	}{
 		{
-			name: "case1",
+			name: "573,384,797,164(byte)*309(sec)",
 			args: args{
 				memByte:    573384797164,
 				durationNS: 309319808921,
 				cfg:        &dummyOBConfig,
 			},
 			//    1.2010281439016873e+06
-			want: 1.201028143902e+06,
+			want: 1.2010281439e+06,
+		},
+		{
+			name: "5,733(G-byte)*86400(sec)",
+			args: args{
+				memByte:    5733847971640,
+				durationNS: 86400e9,
+				cfg:        &dummyOBConfig,
+			},
+			//    3,354,742,523.444667
+			want: 3.3547425234447e+09,
+		},
+		{
+			name: "128(GB)*7*86400(sec)",
+			args: args{
+				memByte:    128 << 30,
+				durationNS: 7 * 86400e9,
+				cfg:        &dummyOBConfig,
+			},
+			//  562,886,586.3021176
+			want: 5.628865863021e+08,
+		},
+		{
+			name: "573384797164(byte)*1e9(ns)",
+			args: args{
+				memByte:    573384797164,
+				durationNS: 1e9,
+				cfg:        &dummyOBConfig,
+			},
+			//    3882.803846579476
+			want: 3882.8038,
 		},
 	}
 	for _, tt := range tests {
@@ -493,6 +523,16 @@ func TestCalculateByteNS(t *testing.T) {
 				durationNS: 309319808921,
 			},
 			want: 1.773592758969748e+23,
+		},
+		{
+			name: "573384797164(byte)*1e9(ns)",
+			args: args{
+				memByte:    573384797164,
+				durationNS: 1e9,
+				cfg:        &dummyOBConfig,
+			},
+			//    3882.803846579476
+			want: 3882.8038,
 		},
 	}
 	for _, tt := range tests {
