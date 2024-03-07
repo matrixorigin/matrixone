@@ -46,6 +46,10 @@ CREATE table t9 (index (a)) as select * from t1;
 desc t9;
 select * from t9;
 
+CREATE table t10 (c char(5) not null default 'a\'b') as select a from t1;
+desc t10;
+select * from t10;
+
 drop table t1;
 drop table t2;
 drop table t3;
@@ -54,4 +58,5 @@ drop table t6;
 drop table t7;
 drop table t8;
 drop table t9;
+drop table t10;
 drop database test;
