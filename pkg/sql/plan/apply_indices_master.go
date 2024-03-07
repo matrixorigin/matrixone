@@ -154,40 +154,62 @@ func makeIndexTblScan(builder *QueryBuilder, bindCtx *BindContext, filterExp *pl
 		})
 
 	case "in":
+		// Here we convert
+		// -- in ("value1", "value2", "value3")  to
+		// -- prefix_in(__mo_index_idx_col, serial_full("a","value1"))
+		//	  OR prefix_in(__mo_index_idx_col, serial_full("a","value2"))
+		//	  OR prefix_in(__mo_index_idx_col, serial_full("a","value3"))
 
-		// NOTE: here we assume that args[1] is of type vector[varchar]. It is because master index is only
-		// applicable for string type columns.
-		origVec := vector.NewVec(types.T_varchar.ToType())
-		_ = origVec.UnmarshalBinary(args[1].GetVec().GetData())
+		// Since this master index specifically for varchar, we assume the `IN` to contain only varchar values.
+		inVecType := types.T_varchar.ToType()
 
-		concatVec := vector.NewVec(types.T_varchar.ToType())
-		mp := mpool.MustNewZero() //TODO: is this the right way to use mpool?
-		for i := 0; i < origVec.Length(); i++ {
-			newBytes := origVec.GetBytesAt(i)
-			newBytes = append([]byte(args[0].GetCol().Name), newBytes...) //concat("a","value1")
-			_ = vector.AppendBytes(concatVec, newBytes, false, mp)
-		}
+		// in (value1, value2, value3)
+		inEntriesVec := vector.NewVec(inVecType)
+		_ = inEntriesVec.UnmarshalBinary(args[1].GetVec().GetData())
 
-		newLen := concatVec.Length()
-		newData, _ := concatVec.MarshalBinary()
-		concatVec.Free(mp) // here we free the memory allocated by mpool.
+		prefixInList := make([]*plan.Expr, 0)
+		mp := mpool.MustNewZero()
+		for i := 0; i < inEntriesVec.Length(); i++ {
+			inEntryAsBytes := inEntriesVec.GetBytesAt(i)                                  // value1 as []byte
+			newInEntryVector, _ := vector.NewConstBytes(inVecType, inEntryAsBytes, 1, mp) // value1 as const vector
+			newInEntryAsBytes, _ := newInEntryVector.MarshalBinary()                      // value1 const vector as []byte
+			newInEntryVector.Free(mp)                                                     // here we free the memory allocated by mpool.
 
-		newLiteralVecExpr := &plan.Expr{
-			Typ: *makePlan2Type(&varcharType),
-			Expr: &plan.Expr_Vec{
-				Vec: &plan.LiteralVec{
-					Len:  int32(newLen),
-					Data: newData,
+			// "value1" as LiteralVec
+			inEntryAsLiteralVec := &plan.Expr{
+				Typ: *makePlan2Type(&varcharType),
+				Expr: &plan.Expr_Vec{
+					Vec: &plan.LiteralVec{
+						Len:  int32(len(newInEntryAsBytes)),
+						Data: newInEntryAsBytes,
+					},
 				},
-			},
+			}
+			// serial_full("a","value1")
+			serialFullExpr, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "serial_full", []*plan.Expr{
+				makePlan2StringConstExprWithType(args[0].GetCol().Name), // "a"
+				inEntryAsLiteralVec, // value1
+			})
+
+			prefixInExpr, _ := bindFuncExprAndConstFold(builder.GetContext(), builder.compCtx.GetProcess(), "prefix_in", []*Expr{
+				indexKeyCol,    // __mo_index_idx_col
+				serialFullExpr, // serial_full("a","value1")
+			})
+
+			prefixInList = append(prefixInList, prefixInExpr)
 		}
-		serialExpr, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "serial_full", []*plan.Expr{newLiteralVecExpr})
 
-		filterList, _ = bindFuncExprAndConstFold(builder.GetContext(), builder.compCtx.GetProcess(), "prefix_in", []*Expr{
-			indexKeyCol, // __mo_index_idx_col
-			serialExpr,  // serial_full( concat("a","value1"), concat("a","value2"), ... )
-		})
-
+		if len(prefixInList) == 1 {
+			filterList = prefixInList[0]
+		} else {
+			for i := 1; i < len(prefixInList); i++ {
+				prefixInList[0], _ = bindFuncExprAndConstFold(builder.GetContext(), builder.compCtx.GetProcess(), "or", []*Expr{
+					prefixInList[0],
+					prefixInList[i],
+				})
+			}
+			filterList = prefixInList[0]
+		}
 	}
 
 	scanId := builder.appendNode(&Node{
