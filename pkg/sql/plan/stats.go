@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"math"
 	"sort"
 	"strings"
@@ -37,7 +38,6 @@ import (
 )
 
 const BlockNumForceOneCN = 200
-const blockSelectivityThreshHold = 0.95
 const highNDVcolumnThreshHold = 0.95
 const statsCacheInitSize = 128
 const statsCacheMaxSize = 8192
@@ -505,14 +505,14 @@ func estimateExprSelectivity(expr *plan.Expr, builder *QueryBuilder) float64 {
 			}
 			return 0.5
 		case "in":
-			card := float64(exprImpl.F.Args[1].Expr.(*plan.Expr_Vec).Vec.Len)
+			card := float64(exprImpl.F.Args[1].GetVec().Len)
 			ndv := getExprNdv(expr, builder)
 			if ndv > card {
 				return card / ndv
 			}
 			return 1
 		case "prefix_in":
-			card := float64(exprImpl.F.Args[1].Expr.(*plan.Expr_Vec).Vec.Len)
+			card := float64(exprImpl.F.Args[1].GetVec().Len)
 			ndv := getExprNdv(expr, builder)
 			if ndv > 10*card {
 				return 10 * card / ndv
@@ -569,23 +569,22 @@ func estimateFilterWeight(expr *plan.Expr, w float64) float64 {
 }
 
 // harsh estimate of block selectivity, will improve it in the future
-func estimateFilterBlockSelectivity(ctx context.Context, expr *plan.Expr, tableDef *plan.TableDef) float64 {
+func estimateFilterBlockSelectivity(ctx context.Context, expr *plan.Expr, tableDef *plan.TableDef, s *pb.StatsInfo) float64 {
 	if !ExprIsZonemappable(ctx, expr) {
 		return 1
 	}
-	if expr.Selectivity < 0.01 {
-		return expr.Selectivity * 100
-	}
 	col := extractColRefInFilter(expr)
 	if col != nil {
+		blocksel := calcBlockSelectivityUsingShuffleRange(s.ShuffleRangeMap[col.Name], expr.Selectivity)
 		switch GetSortOrder(tableDef, col.ColPos) {
 		case 0:
-			return math.Min(expr.Selectivity, 0.5)
+			blocksel = math.Min(blocksel, 0.2)
 		case 1:
-			return math.Min(expr.Selectivity*3, 0.5)
+			return math.Min(blocksel, 0.5)
 		case 2:
-			return math.Min(expr.Selectivity*10, 0.5)
+			return math.Min(blocksel, 0.7)
 		}
+		return blocksel
 	}
 	return 1
 }
@@ -988,6 +987,9 @@ func recalcStatsByRuntimeFilter(node *plan.Node, runtimeFilterSel float64) {
 }
 
 func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
+	if builder.skipStats {
+		return DefaultStats()
+	}
 	if InternalTable(node.TableDef) {
 		return DefaultStats()
 	}
@@ -1006,8 +1008,8 @@ func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
 	var blockExprList []*plan.Expr
 	for i := range node.FilterList {
 		node.FilterList[i].Selectivity = estimateExprSelectivity(node.FilterList[i], builder)
-		currentBlockSel := estimateFilterBlockSelectivity(builder.GetContext(), node.FilterList[i], node.TableDef)
-		if currentBlockSel < blockSelectivityThreshHold {
+		currentBlockSel := estimateFilterBlockSelectivity(builder.GetContext(), node.FilterList[i], node.TableDef, s)
+		if currentBlockSel < 1 {
 			copyOfExpr := DeepCopyExpr(node.FilterList[i])
 			copyOfExpr.Selectivity = currentBlockSel
 			blockExprList = append(blockExprList, copyOfExpr)
@@ -1015,8 +1017,7 @@ func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
 		blockSel = andSelectivity(blockSel, currentBlockSel)
 	}
 	node.BlockFilterList = blockExprList
-	expr := rewriteFiltersForStats(node.FilterList, builder.compCtx.GetProcess())
-	stats.Selectivity = estimateExprSelectivity(expr, builder)
+	stats.Selectivity = estimateExprSelectivity(colexec.RewriteFilterExprList(node.FilterList), builder)
 	stats.Outcnt = stats.Selectivity * stats.TableCnt
 	stats.Cost = stats.TableCnt * blockSel
 	stats.BlockNum = int32(float64(s.BlockNumber)*blockSel) + 1
@@ -1220,4 +1221,42 @@ func DeepCopyStats(stats *plan.Stats) *plan.Stats {
 		Selectivity:  stats.Selectivity,
 		HashmapStats: hashmapStats,
 	}
+}
+
+func calcBlockSelectivityUsingShuffleRange(s *pb.ShuffleRange, sel float64) float64 {
+	if s == nil {
+		if sel <= 0.01 {
+			return sel * 100
+		} else {
+			return 1
+		}
+	}
+	ret := sel * math.Pow(500, math.Pow(s.Overlap, 2))
+	if ret > 1 {
+		ret = 1
+	}
+	return ret
+}
+
+func (builder *QueryBuilder) canSkipStats() bool {
+	//for now ,only skip stats for select count(*) from xx
+	if len(builder.qry.Steps) != 1 || len(builder.qry.Nodes) != 3 {
+		return false
+	}
+	project := builder.qry.Nodes[builder.qry.Steps[0]]
+	if project.NodeType != plan.Node_PROJECT {
+		return false
+	}
+	agg := builder.qry.Nodes[project.Children[0]]
+	if agg.NodeType != plan.Node_AGG {
+		return false
+	}
+	if len(agg.AggList) != 1 || len(agg.GroupBy) != 0 {
+		return false
+	}
+	if agg.AggList[0].GetF() == nil || agg.AggList[0].GetF().Func.ObjName != "starcount" {
+		return false
+	}
+	scan := builder.qry.Nodes[agg.Children[0]]
+	return scan.NodeType == plan.Node_TABLE_SCAN
 }

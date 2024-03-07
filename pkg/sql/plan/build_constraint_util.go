@@ -868,9 +868,7 @@ func forceCastExpr(ctx context.Context, expr *Expr, targetType *Type) (*Expr, er
 	t := &plan.Expr{
 		Typ: *targetType,
 		Expr: &plan.Expr_T{
-			T: &plan.TargetType{
-				Typ: targetType,
-			},
+			T: &plan.TargetType{},
 		},
 	}
 	return &plan.Expr{
@@ -922,9 +920,7 @@ func buildValueScan(
 		targetTyp := &plan.Expr{
 			Typ: *col.Typ,
 			Expr: &plan.Expr_T{
-				T: &plan.TargetType{
-					Typ: col.Typ,
-				},
+				T: &plan.TargetType{},
 			},
 		}
 		var defExpr *Expr
@@ -1128,12 +1124,7 @@ func appendForeignConstrantPlan(
 	sourceStep int32,
 	isFkRecursionCall bool,
 ) error {
-	enabled, err := IsForeignKeyChecksEnabled(builder.compCtx)
-	if err != nil {
-		return err
-	}
-
-	if enabled && !isFkRecursionCall && len(tableDef.Fkeys) > 0 {
+	if !isFkRecursionCall && len(tableDef.Fkeys) > 0 {
 		lastNodeId := appendSinkScanNode(builder, bindCtx, sourceStep)
 
 		lastNodeId, err := appendJoinNodeForParentFkCheck(builder, bindCtx, objRef, tableDef, lastNodeId)

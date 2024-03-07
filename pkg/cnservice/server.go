@@ -619,14 +619,14 @@ func (s *service) getTxnClient() (c client.TxnClient, err error) {
 		if s.cfg.Txn.EnableLeakCheck == 1 {
 			opts = append(opts, client.WithEnableLeakCheck(
 				s.cfg.Txn.MaxActiveAges.Duration,
-				func(txnID []byte, createAt time.Time, createBy string) {
+				func(txnID []byte, createAt time.Time, createBy txn.TxnOptions) {
 					// dump all goroutines to stderr
 					profile.ProfileGoroutine(os.Stderr, 2)
 					v2.TxnLeakCounter.Inc()
 					runtime.DefaultRuntime().Logger().Error("found leak txn",
 						zap.String("txn-id", hex.EncodeToString(txnID)),
 						zap.Time("create-at", createAt),
-						zap.String("create-by", createBy))
+						zap.String("options", createBy.String()))
 				}))
 		}
 		if s.cfg.Txn.Limit > 0 {
@@ -637,8 +637,9 @@ func (s *service) getTxnClient() (c client.TxnClient, err error) {
 			opts = append(opts,
 				client.WithMaxActiveTxn(s.cfg.Txn.MaxActive))
 		}
-		opts = append(opts,
-			client.WithPKDedupCount(s.cfg.Txn.PkDedupCount))
+		if s.cfg.Txn.PkDedupCount > 0 {
+			opts = append(opts, client.WithCheckDup())
+		}
 		opts = append(opts,
 			client.WithLockService(s.lockService),
 			client.WithNormalStateNoWait(s.cfg.Txn.NormalStateNoWait),

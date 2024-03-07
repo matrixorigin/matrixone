@@ -35,24 +35,58 @@ func handleTxnTrace(
 
 	switch strings.ToLower(params[0]) {
 	case "enable":
-		err := trace.GetService().Enable()
+		if len(params) < 2 {
+			return Result{}, moerr.NewInvalidInputNoCtx("invalid parameter %s", parameter)
+		}
+
+		err := trace.GetService().Enable(params[1])
 		if err != nil {
 			return Result{}, err
 		}
 		return Result{Data: "OK"}, nil
 	case "disable":
-		err := trace.GetService().Disable()
+		if len(params) < 2 {
+			return Result{}, moerr.NewInvalidInputNoCtx("invalid parameter %s", parameter)
+		}
+
+		err := trace.GetService().Disable(params[1])
 		if err != nil {
 			return Result{}, err
 		}
 		return Result{Data: "OK"}, nil
 	case "clear":
-		err := trace.GetService().ClearFilters()
+		if len(params) < 2 || (params[1] != "txn" && params[1] != "table") {
+			return Result{}, moerr.NewInvalidInputNoCtx("invalid parameter %s", parameter)
+		}
+
+		var err error
+		if params[1] == "txn" {
+			err = trace.GetService().ClearTxnFilters()
+		} else {
+			err = trace.GetService().ClearTableFilters()
+		}
+
 		if err != nil {
 			return Result{}, err
 		}
 		return Result{Data: "OK"}, nil
-	case "add":
+	case "refresh":
+		if len(params) < 2 || (params[1] != "txn" && params[1] != "table") {
+			return Result{}, moerr.NewInvalidInputNoCtx("invalid parameter %s", parameter)
+		}
+
+		var err error
+		if params[1] == "txn" {
+			err = trace.GetService().RefreshTxnFilters()
+		} else {
+			err = trace.GetService().RefreshTableFilters()
+		}
+
+		if err != nil {
+			return Result{}, err
+		}
+		return Result{Data: "OK"}, nil
+	case "add-table":
 		// add table [column1, column2, ...]
 		if len(params) < 2 {
 			return Result{}, moerr.NewInvalidInputNoCtx("invalid parameter %s", parameter)
@@ -63,7 +97,18 @@ func handleTxnTrace(
 			columns = params[2:]
 		}
 
-		err := trace.GetService().AddEntryFilter(table, columns)
+		err := trace.GetService().AddTableFilter(table, columns)
+		if err != nil {
+			return Result{}, err
+		}
+		return Result{Data: "OK"}, nil
+	case "add-txn":
+		// add-txn method value
+		if len(params) < 3 {
+			return Result{}, moerr.NewInvalidInputNoCtx("invalid parameter %s", parameter)
+		}
+
+		err := trace.GetService().AddTxnFilter(params[1], params[2])
 		if err != nil {
 			return Result{}, err
 		}

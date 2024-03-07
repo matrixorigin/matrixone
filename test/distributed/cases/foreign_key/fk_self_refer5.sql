@@ -49,6 +49,4 @@ replace INTO names values (3, "Jack", 19,2);
 
 --error
 replace INTO names values (1, "Join", 19,2);
-
-drop table if exists names;
 drop database if exists fk_self_refer5;
