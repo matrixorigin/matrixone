@@ -17,8 +17,12 @@ package logtail
 import (
 	"context"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"sync"
 )
 
@@ -57,6 +61,29 @@ func mergeCheckpoint(fs fileservice.FileService,ckpClient checkpoint.RunnerReade
 		gckp.GetLocation(), gckp.GetVersion(), nil)
 	if err != nil {
 		return err
+	}
+	ins := data.GetObjectBatchs()
+	insCommitTSVec := ins.GetVectorByName(txnbase.SnapshotAttr_CommitTS).GetDownstreamVector()
+	insDeleteTSVec := ins.GetVectorByName(catalog.EntryNode_DeleteAt).GetDownstreamVector()
+	insCreateTSVec := ins.GetVectorByName(catalog.EntryNode_CreateAt).GetDownstreamVector()
+	dbid := ins.GetVectorByName(catalog.SnapshotAttr_DBID).GetDownstreamVector()
+	tid := ins.GetVectorByName(catalog.SnapshotAttr_TID).GetDownstreamVector()
+
+	for i := 0; i < ins.Length(); i++ {
+		var objectStats objectio.ObjectStats
+		buf := ins.GetVectorByName(catalog.ObjectAttr_ObjectStats).Get(i).([]byte)
+		objectStats.UnMarshal(buf)
+		commitTS := vector.GetFixedAt[types.TS](insCommitTSVec, i)
+		deleteTS := vector.GetFixedAt[types.TS](insDeleteTSVec, i)
+		createTS := vector.GetFixedAt[types.TS](insCreateTSVec, i)
+		object := &ObjectEntry{
+			commitTS: commitTS,
+			createTS: createTS,
+			dropTS:   deleteTS,
+			db:       vector.GetFixedAt[uint64](dbid, i),
+			table:    vector.GetFixedAt[uint64](tid, i),
+		}
+		t.addObject(objectStats.ObjectName().String(), object, commitTS)
 	}
 
 	return nil
