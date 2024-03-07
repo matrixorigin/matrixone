@@ -325,6 +325,8 @@ select * from test_11;
 
 set @@autocommit=0;
 drop table test_11;
+-- test_11 does not exist. the txn will not be rollback.
+-- so the test_11 will be deleted after the txn is committed.
 select * from test_11;
 -- @session:id=1{
 select * from test_11;
