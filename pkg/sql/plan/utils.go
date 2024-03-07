@@ -49,17 +49,17 @@ func GetBindings(expr *plan.Expr) []int32 {
 	return bindings
 }
 
-func doGetBindings(expr *plan.Expr) map[int32]emptyType {
-	res := make(map[int32]emptyType)
+func doGetBindings(expr *plan.Expr) map[int32]bool {
+	res := make(map[int32]bool)
 
 	switch expr := expr.Expr.(type) {
 	case *plan.Expr_Col:
-		res[expr.Col.RelPos] = emptyStruct
+		res[expr.Col.RelPos] = true
 
 	case *plan.Expr_F:
 		for _, child := range expr.F.Args {
 			for id := range doGetBindings(child) {
-				res[id] = emptyStruct
+				res[id] = true
 			}
 		}
 	}
@@ -189,7 +189,7 @@ func decreaseDepth(expr *plan.Expr) (*plan.Expr, bool) {
 	return expr, correlated
 }
 
-func getJoinSide(expr *plan.Expr, leftTags, rightTags map[int32]emptyType, markTag int32) (side int8) {
+func getJoinSide(expr *plan.Expr, leftTags, rightTags map[int32]bool, markTag int32) (side int8) {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
 		for _, arg := range exprImpl.F.Args {
@@ -197,9 +197,9 @@ func getJoinSide(expr *plan.Expr, leftTags, rightTags map[int32]emptyType, markT
 		}
 
 	case *plan.Expr_Col:
-		if _, ok := leftTags[exprImpl.Col.RelPos]; ok {
+		if leftTags[exprImpl.Col.RelPos] {
 			side = JoinSideLeft
-		} else if _, ok := rightTags[exprImpl.Col.RelPos]; ok {
+		} else if rightTags[exprImpl.Col.RelPos] {
 			side = JoinSideRight
 		} else if exprImpl.Col.RelPos == markTag {
 			side = JoinSideMark
@@ -800,10 +800,10 @@ func increaseRefCnt(expr *plan.Expr, inc int, colRefCnt map[[2]int32]int) {
 	}
 }
 
-func getHyperEdgeFromExpr(expr *plan.Expr, leafByTag map[int32]int32, hyperEdge map[int32]emptyType) {
+func getHyperEdgeFromExpr(expr *plan.Expr, leafByTag map[int32]int32, hyperEdge map[int32]bool) {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_Col:
-		hyperEdge[leafByTag[exprImpl.Col.RelPos]] = emptyStruct
+		hyperEdge[leafByTag[exprImpl.Col.RelPos]] = true
 
 	case *plan.Expr_F:
 		for _, arg := range exprImpl.F.Args {
@@ -1054,12 +1054,18 @@ func GetSortOrder(tableDef *plan.TableDef, colPos int32) int {
 	return GetSortOrderByName(tableDef, colName)
 }
 
-// handle the filter list for Stats. rewrite and constFold
-func rewriteFiltersForStats(exprList []*plan.Expr, proc *process.Process) *plan.Expr {
-	if proc == nil {
-		return nil
+func ConstandFoldList(exprs []*plan.Expr, proc *process.Process, varAndParamIsConst bool) ([]*plan.Expr, error) {
+	newExprs := DeepCopyExprList(exprs)
+	for i := range newExprs {
+		foldedExpr, err := ConstantFold(batch.EmptyForConstFoldBatch, newExprs[i], proc, varAndParamIsConst)
+		if err != nil {
+			return nil, err
+		}
+		if foldedExpr != nil {
+			newExprs[i] = foldedExpr
+		}
 	}
-	return colexec.RewriteFilterExprList(exprList)
+	return newExprs, nil
 }
 
 func ConstantFold(bat *batch.Batch, expr *plan.Expr, proc *process.Process, varAndParamIsConst bool) (*plan.Expr, error) {
@@ -1545,7 +1551,7 @@ func GenUniqueColJoinExpr(ctx context.Context, tableDef *TableDef, uniqueCols []
 		for _, colIdx := range uniqueColMap {
 			col := tableDef.Cols[colIdx]
 			leftExpr := &Expr{
-				Typ: col.Typ,
+				Typ: *col.Typ,
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
 						RelPos: leftTag,
@@ -1554,7 +1560,7 @@ func GenUniqueColJoinExpr(ctx context.Context, tableDef *TableDef, uniqueCols []
 				},
 			}
 			rightExpr := &plan.Expr{
-				Typ: col.Typ,
+				Typ: *col.Typ,
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
 						RelPos: rightTag,
@@ -1604,7 +1610,7 @@ func GenUniqueColCheckExpr(ctx context.Context, tableDef *TableDef, uniqueCols [
 			col := tableDef.Cols[colIdx]
 			// insert values
 			leftExpr := &Expr{
-				Typ: col.Typ,
+				Typ: *col.Typ,
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
 						RelPos: 0,
@@ -1613,7 +1619,7 @@ func GenUniqueColCheckExpr(ctx context.Context, tableDef *TableDef, uniqueCols [
 				},
 			}
 			rightExpr := &plan.Expr{
-				Typ: col.Typ,
+				Typ: *col.Typ,
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
 						RelPos: 1,
@@ -1894,9 +1900,9 @@ func HasFkSelfReferOnly(tableDef *TableDef) bool {
 	return true
 }
 
-func MakeInExpr(ctx context.Context, left *Expr, length int32, data []byte) *Expr {
+func MakeInExpr(ctx context.Context, left *Expr, length int32, data []byte, matchPrefix bool) *Expr {
 	rightArg := &plan.Expr{
-		Typ: &plan.Type{
+		Typ: plan.Type{
 			Id: int32(types.T_tuple),
 		},
 		Expr: &plan.Expr_Vec{
@@ -1907,22 +1913,27 @@ func MakeInExpr(ctx context.Context, left *Expr, length int32, data []byte) *Exp
 		},
 	}
 
-	fid := function.InFunctionEncodedID
+	funcID := function.InFunctionEncodedID
+	funcName := function.InFunctionName
+	if matchPrefix {
+		funcID = function.PrefixInFunctionEncodedID
+		funcName = function.PrefixInFunctionName
+	}
 	args := []types.Type{makeTypeByPlan2Expr(left), makeTypeByPlan2Expr(rightArg)}
-	fGet, err := function.GetFunctionByName(ctx, "in", args)
+	fGet, err := function.GetFunctionByName(ctx, funcName, args)
 	if err == nil {
-		fid = fGet.GetEncodedOverloadID()
+		funcID = fGet.GetEncodedOverloadID()
 	}
 	inExpr := &plan.Expr{
-		Typ: &plan.Type{
+		Typ: plan.Type{
 			Id:          int32(types.T_bool),
 			NotNullable: left.Typ.NotNullable,
 		},
 		Expr: &plan.Expr_F{
 			F: &plan.Function{
 				Func: &plan.ObjectRef{
-					Obj:     fid,
-					ObjName: function.InFunctionName,
+					Obj:     funcID,
+					ObjName: funcName,
 				},
 				Args: []*plan.Expr{
 					left,

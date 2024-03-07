@@ -140,3 +140,65 @@ drop table if exists t1;
 create table t1(a varchar(30), b bigint, c varchar(30) primary key);
 create index idx1 using master on t1(a,b);
 not supported: column 'b' is not varchar type.
+drop table if exists t1;
+create table t1(a varchar(30), b varchar(30), c varchar(30));
+create index idx1 using master on t1(a,b);
+insert into t1 values("Congress","Lane", "1");
+insert into t1 values("Juniper","Way", "2");
+insert into t1 values("Nightingale","Lane", "3");
+select * from t1 where a="Congress" and b="Lane";
+a    b    c
+Congress    Lane    1
+drop table if exists t1;
+create table t1(a varchar(30), b varchar(30), c varchar(30) primary key);
+create index idx1 using master on t1(a,b);
+insert into t1 values("Congress","Lane", "1");
+insert into t1 values("Juniper","Way", "2");
+insert into t1 values("Nightingale","Lane", "3");
+select * from t1 where a="Nightingale" and b="Lane";
+a    b    c
+Nightingale    Lane    3
+drop table if exists t1;
+create table t1(a varchar(30), b0 varchar(30), b1 varchar(30), c varchar(30), d varchar(30), primary key( c, d));
+create index idx1 using master on t1(a,b0);
+insert into t1 values("Congress","Lane", "ALane","1","0");
+insert into t1 values("Juniper","Way","AWay", "2","0");
+insert into t1 values("Nightingale","Lane","ALane", "3","0");
+select * from t1 where a="Nightingale" and b0="Lane";
+a    b0    b1    c    d
+Nightingale    Lane    ALane    3    0
+drop table if exists t1;
+create table t1(a varchar(30), b varchar(30), c varchar(30) primary key);
+create index idx1 using master on t1(a,b);
+insert into t1 values("Congress","Lane", "1");
+insert into t1 values("Juniper","Way", "2");
+insert into t1 values("Nightingale","Lane", "3");
+select * from t1 where b="Lane";
+a    b    c
+Congress    Lane    1
+Nightingale    Lane    3
+select * from t1 where a="Juniper" and b="Way";
+a    b    c
+Juniper    Way    2
+drop table if exists t1;
+create table t1(a varchar(30), b varchar(30), c varchar(30));
+create index idx1 using master on t1(a,b,c);
+insert into t1 values("Congress","Lane", "1");
+insert into t1 values("Juniper","Way", "2");
+insert into t1 values("Nightingale","Lane", "3");
+select * from t1 where a="Congress" and b="Lane" and c="1";
+a    b    c
+Congress    Lane    1
+select * from t1 where a="Nightingale" and c between "2" and "3";
+a    b    c
+Nightingale    Lane    3
+drop table if exists t1;
+create table t1(a varchar(30), b varchar(30), c varchar(30));
+create index idx1 using master on t1(a,b,c);
+insert into t1 values("Congress","Lane", "1");
+insert into t1 values("Juniper","Way", "2");
+insert into t1 values("Nightingale","Lane", "3");
+select * from t1 where a in ("Congress","Nightingale") and b="Lane" and c in("1","2","3");
+a    b    c
+Congress    Lane    1
+Nightingale    Lane    3
