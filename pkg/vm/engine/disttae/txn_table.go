@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+	"sort"
 	"strconv"
 	"time"
 	"unsafe"
@@ -980,46 +981,57 @@ func (tbl *txnTable) tryFastRanges(
 				return
 			}
 
-			ForeachBlkInObjStatsList(false, meta, func(blk objectio.BlockInfo, blkMeta objectio.BlockObject) bool {
+			blockCnt := int(meta.BlockCount())
+			pivot := val
+			if isVec {
+				pivot = vec.GetRawBytesAt(vec.Length() - 1)
+			}
+			blkIdx := sort.Search(blockCnt, func(j int) bool {
+				return meta.GetBlockMeta(uint32(j)).MustGetColumn(uint16(tbl.primaryIdx)).ZoneMap().AnyGEByValue(pivot)
+			})
+			if blkIdx >= blockCnt {
+				return
+			}
+			for ; blkIdx < blockCnt; blkIdx++ {
+				blkMeta := meta.GetBlockMeta(uint32(blkIdx))
+				zm := blkMeta.MustGetColumn(uint16(tbl.primaryIdx)).ZoneMap()
+				if !zm.AnyLEByValue(pivot) {
+					break
+				}
 				if isVec {
-					if !blkMeta.IsEmpty() && !blkMeta.MustGetColumn(uint16(tbl.primaryIdx)).ZoneMap().AnyIn(vec) {
-						return true
+					if !zm.AnyIn(vec) {
+						continue
 					}
 				} else {
-					if blkMeta.IsEmpty() {
-						return true
-					}
-
-					// -----|------|------|----  ==> (ok=false,isGE=true)
-					//      k     min    max
-
-					// -----|------|------|----  ==> (ok=true,isGE=true)
-					//     min     k     max
-
-					// -----|------|------|----  ==> (ok=false,isGE=false)
-					//     min    max     k
-					isInited, ok, isGE := blkMeta.MustGetColumn(uint16(tbl.primaryIdx)).ZoneMap().ContainsKeyAndGE(val)
-					if isInited && !ok {
-						return !isGE
+					if !zm.ContainsKey(val) {
+						continue
 					}
 				}
 
-				blkBf := bf.GetBloomFilter(uint32(blk.BlockID.Sequence()))
+				blkBf := bf.GetBloomFilter(uint32(blkIdx))
 				blkBfIdx := index.NewEmptyBinaryFuseFilter()
 				if err2 = index.DecodeBloomFilter(blkBfIdx, blkBf); err2 != nil {
-					return false
+					return
 				}
 				var exist bool
 				if isVec {
 					if exist = blkBfIdx.MayContainsAny(vec); !exist {
-						return true
+						continue
 					}
 				} else {
 					if exist, err2 = blkBfIdx.MayContainsKey(val); err2 != nil {
-						return false
+						return
 					} else if !exist {
-						return true
+						continue
 					}
+				}
+
+				name := obj.ObjectName()
+				loc := objectio.BuildLocation(name, obj.Extent(), blkMeta.GetRows(), uint16(blkIdx))
+				blk := objectio.BlockInfo{
+					BlockID:   *objectio.BuildObjectBlockid(name, uint16(blkIdx)),
+					SegmentID: name.SegmentId(),
+					MetaLoc:   objectio.ObjectLocation(loc),
 				}
 
 				blk.Sorted = obj.Sorted
@@ -1034,8 +1046,7 @@ func (tbl *txnTable) tryFastRanges(
 				}
 				blk.PartitionNum = -1
 				blocks.AppendBlockInfo(blk)
-				return true
-			}, obj.ObjectStats)
+			}
 
 			return
 		},

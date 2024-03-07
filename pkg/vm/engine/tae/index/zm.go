@@ -363,38 +363,6 @@ func (zm ZM) ContainsKey(k []byte) bool {
 		compute.Compare(k, zm.GetMaxBuf(), t, 0, 0) <= 0
 }
 
-// ret1 specify whether it is inited
-// ret2 specify whether it contains the key
-// ret3 specify whether the zm is greater and equal than the key
-func (zm ZM) ContainsKeyAndGE(k []byte) (bool, bool, bool) {
-	if !zm.IsInited() {
-		return false, false, false
-	}
-	if zm.IsString() {
-		ok, isGE := zm.containsStringAndGE(k)
-		return true, ok, isGE
-	}
-	t := types.T(zm[63])
-
-	// ------|-------|-----|----
-	//       k       min  max
-	ltMin := compute.Compare(k, zm.GetMinBuf(), t, 0, 0) < 0
-	if ltMin {
-		return true, false, true
-	}
-
-	// ------|-------|-----|----
-	//      min     max    k
-	gtMax := compute.Compare(k, zm.GetMaxBuf(), t, 0, 0) > 0
-	if gtMax {
-		return true, false, false
-	}
-
-	// ------|-------|-----|----
-	//      min      k    max
-	return true, true, true
-}
-
 func (zm ZM) IsInited() bool {
 	return len(zm) == ZMSize && zm[62]&0x80 != 0
 }
@@ -542,6 +510,32 @@ func (zm ZM) AnyGE(o ZM) (res bool, ok bool) {
 	ok = true
 	res = compute.Compare(zm.GetMaxBuf(), o.GetMinBuf(), zm.GetType(), zm.GetScale(), o.GetScale()) >= 0
 	return
+}
+
+// zm.min >= k
+func (zm ZM) AnyGEByValue(k []byte) bool {
+	if !zm.IsInited() {
+		return false
+	}
+	if !zm.IsString() || len(k) < 31 {
+		return compute.Compare(zm.GetMaxBuf(), k, zm.GetType(), 0, 0) >= 0
+	}
+	zm2 := BuildZM(zm.GetType(), k)
+	ret, _ := zm.AnyGE(zm2)
+	return ret
+}
+
+// zm.min <= k
+func (zm ZM) AnyLEByValue(k []byte) bool {
+	if !zm.IsInited() {
+		return false
+	}
+	if !zm.IsString() || len(k) < 31 {
+		return compute.Compare(zm.GetMinBuf(), k, zm.GetType(), 0, 0) <= 0
+	}
+	zm2 := BuildZM(zm.GetType(), k)
+	ret, _ := zm.AnyLE(zm2)
+	return ret
 }
 
 func (zm ZM) AnyLT(o ZM) (res bool, ok bool) {
