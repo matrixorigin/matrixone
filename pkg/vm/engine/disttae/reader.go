@@ -546,20 +546,21 @@ func (r *blockMergeReader) loadDeletes(ctx context.Context, cols []string) error
 
 	//TODO:: if r.table.writes is a map , the time complexity could be O(1)
 	//load deletes from txn.writes for the specified block
-	for _, entry := range r.table.writes {
-		if entry.isGeneratedByTruncate() {
-			continue
-		}
-		if (entry.typ == DELETE || entry.typ == DELETE_TXN) && entry.fileName == "" {
-			vs := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
-			for _, v := range vs {
-				id, offset := v.Decode()
-				if id == info.BlockID {
-					r.buffer = append(r.buffer, int64(offset))
+	r.table.db.txn.forEachTableWrites(r.table.db.databaseId, r.table.tableId,
+		r.table.db.txn.GetSnapshotWriteOffset(), func(entry Entry) {
+			if entry.isGeneratedByTruncate() {
+				return
+			}
+			if (entry.typ == DELETE || entry.typ == DELETE_TXN) && entry.fileName == "" {
+				vs := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
+				for _, v := range vs {
+					id, offset := v.Decode()
+					if id == info.BlockID {
+						r.buffer = append(r.buffer, int64(offset))
+					}
 				}
 			}
-		}
-	}
+		})
 	//load deletes from txn.deletedBlocks.
 	txn := r.table.db.txn
 	txn.deletedBlocks.getDeletedOffsetsByBlock(&info.BlockID, &r.buffer)

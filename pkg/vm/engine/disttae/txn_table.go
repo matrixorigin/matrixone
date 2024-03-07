@@ -88,11 +88,8 @@ func (tbl *txnTable) Stats(ctx context.Context, partitionTables []any, statsInfo
 }
 
 func (tbl *txnTable) Rows(ctx context.Context) (rows int64, err error) {
-	writes := make([]Entry, 0, len(tbl.db.txn.writes))
-	writes = tbl.db.txn.getTableWrites(tbl.db.databaseId, tbl.tableId, writes)
-
 	deletes := make(map[types.Rowid]struct{})
-	for _, entry := range writes {
+	tbl.db.txn.forEachTableWrites(tbl.db.databaseId, tbl.tableId, tbl.db.txn.GetSnapshotWriteOffset(), func(entry Entry) {
 		if entry.typ == INSERT || entry.typ == INSERT_TXN {
 			rows = rows + int64(entry.bat.RowCount())
 		} else {
@@ -107,7 +104,7 @@ func (tbl *txnTable) Rows(ctx context.Context) (rows int64, err error) {
 				if entry.databaseId == catalog.MO_CATALOG_ID &&
 					entry.tableId == catalog.MO_TABLES_ID &&
 					entry.truncate {
-					continue
+					return
 				}
 				vs := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
 				for _, v := range vs {
@@ -115,7 +112,7 @@ func (tbl *txnTable) Rows(ctx context.Context) (rows int64, err error) {
 				}
 			}
 		}
-	}
+	})
 
 	ts := types.TimestampToTS(tbl.db.txn.op.SnapshotTS())
 	partition, err := tbl.getPartitionState(ctx)
@@ -281,11 +278,8 @@ func (tbl *txnTable) Size(ctx context.Context, name string) (int64, error) {
 		return 0, moerr.NewInvalidInput(ctx, "bad input column name %v", name)
 	}
 
-	writes := make([]Entry, 0, len(tbl.db.txn.writes))
-	writes = tbl.db.txn.getTableWrites(tbl.db.databaseId, tbl.tableId, writes)
-
 	deletes := make(map[types.Rowid]struct{})
-	for _, entry := range writes {
+	tbl.db.txn.forEachTableWrites(tbl.db.databaseId, tbl.tableId, tbl.db.txn.GetSnapshotWriteOffset(), func(entry Entry) {
 		if entry.typ == INSERT || entry.typ == INSERT_TXN {
 			for i, s := range entry.bat.Attrs {
 				if _, ok := neededCols[s]; ok {
@@ -304,7 +298,7 @@ func (tbl *txnTable) Size(ctx context.Context, name string) (int64, error) {
 				if entry.databaseId == catalog.MO_CATALOG_ID &&
 					entry.tableId == catalog.MO_TABLES_ID &&
 					entry.truncate {
-					continue
+					return
 				}
 				vs := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
 				for _, v := range vs {
@@ -312,7 +306,7 @@ func (tbl *txnTable) Size(ctx context.Context, name string) (int64, error) {
 				}
 			}
 		}
-	}
+	})
 
 	// Different rows may belong to same batch. So we have
 	// to record the batch which we have already handled to avoid
@@ -603,10 +597,6 @@ func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr) (ranges [][
 		v2.TxnTableRangeDurationHistogram.Observe(time.Since(start).Seconds())
 	}()
 
-	tbl.writes = tbl.writes[:0]
-
-	tbl.writes = tbl.db.txn.getTableWrites(tbl.db.databaseId, tbl.tableId, tbl.writes)
-
 	// make sure we have the block infos snapshot
 	if err = tbl.UpdateObjectInfos(ctx); err != nil {
 		return
@@ -717,12 +707,12 @@ func (tbl *txnTable) rangesOnePart(
 		}, objectStatsList...)
 	}
 
-	for _, entry := range tbl.writes {
+	tbl.db.txn.forEachTableWrites(tbl.db.databaseId, tbl.tableId, tbl.db.txn.GetSnapshotWriteOffset(), func(entry Entry) {
 		// the CN workspace can only handle `INSERT` and `DELETE` operations. Other operations will be skipped,
 		// TODO Adjustments will be made here in the future
 		if entry.typ == DELETE || entry.typ == DELETE_TXN {
 			if entry.isGeneratedByTruncate() {
-				continue
+				return
 			}
 			//deletes in tbl.writes maybe comes from PartitionState.rows or PartitionState.blocks.
 			if entry.fileName == "" {
@@ -733,7 +723,7 @@ func (tbl *txnTable) rangesOnePart(
 				}
 			}
 		}
-	}
+	})
 
 	var (
 		objDataMeta objectio.ObjectDataMeta
@@ -1662,7 +1652,7 @@ func (tbl *txnTable) Write(ctx context.Context, bat *batch.Batch) error {
 		ibat.Clean(tbl.db.txn.proc.Mp())
 		return err
 	}
-	return tbl.db.txn.dumpBatch(tbl.db.txn.getWriteOffset())
+	return tbl.db.txn.dumpBatch(tbl.db.txn.GetSnapshotWriteOffset())
 }
 
 func (tbl *txnTable) Update(ctx context.Context, bat *batch.Batch) error {
