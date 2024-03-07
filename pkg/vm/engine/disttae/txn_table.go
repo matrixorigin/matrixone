@@ -981,21 +981,20 @@ func (tbl *txnTable) tryFastRanges(
 				return
 			}
 
+			var blkIdx int
 			blockCnt := int(meta.BlockCount())
-			pivot := val
-			if isVec {
-				pivot = vec.GetRawBytesAt(vec.Length() - 1)
+			if !isVec {
+				blkIdx = sort.Search(blockCnt, func(j int) bool {
+					return meta.GetBlockMeta(uint32(j)).MustGetColumn(uint16(tbl.primaryIdx)).ZoneMap().AnyGEByValue(val)
+				})
 			}
-			blkIdx := sort.Search(blockCnt, func(j int) bool {
-				return meta.GetBlockMeta(uint32(j)).MustGetColumn(uint16(tbl.primaryIdx)).ZoneMap().AnyGEByValue(pivot)
-			})
 			if blkIdx >= blockCnt {
 				return
 			}
 			for ; blkIdx < blockCnt; blkIdx++ {
 				blkMeta := meta.GetBlockMeta(uint32(blkIdx))
 				zm := blkMeta.MustGetColumn(uint16(tbl.primaryIdx)).ZoneMap()
-				if !zm.AnyLEByValue(pivot) {
+				if !isVec && !zm.AnyLEByValue(val) {
 					break
 				}
 				if isVec {
