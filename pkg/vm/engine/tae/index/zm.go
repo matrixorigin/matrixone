@@ -313,30 +313,6 @@ func (zm ZM) containsString(k []byte) bool {
 		compute.CompareBytes(k, zm.GetMaxBuf()) <= 0
 }
 
-func (zm ZM) containsStringAndGE(k []byte) (bool, bool) {
-	if zm.MaxTruncated() {
-		return true, true
-	}
-
-	// ------|-------|-----|----
-	//       k       min  max
-	ltMin := compute.CompareBytes(k, zm.GetMinBuf()) < 0
-	if ltMin {
-		return false, true
-	}
-
-	// ------|-------|-----|----
-	//      min     max    k
-	gtMax := compute.CompareBytes(k, zm.GetMaxBuf()) > 0
-	if gtMax {
-		return false, false
-	}
-
-	// ------|-------|-----|----
-	//      min      k    max
-	return true, true
-}
-
 // TODO: remove me later
 func (zm ZM) Contains(k any) bool {
 	if !zm.IsInited() {
