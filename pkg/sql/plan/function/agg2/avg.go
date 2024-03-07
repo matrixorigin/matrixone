@@ -31,6 +31,42 @@ func RegisterAvg(id int64) {
 	aggexec.RegisterDeterminedSingleAgg(aggexec.MakeDeterminedSingleAggInfo(id, types.T_uint64.ToType(), types.T_float64.ToType(), false, true), newAggAvg[uint64])
 	aggexec.RegisterDeterminedSingleAgg(aggexec.MakeDeterminedSingleAggInfo(id, types.T_float32.ToType(), types.T_float64.ToType(), false, true), newAggAvg[float32])
 	aggexec.RegisterDeterminedSingleAgg(aggexec.MakeDeterminedSingleAggInfo(id, types.T_float64.ToType(), types.T_float64.ToType(), false, true), newAggAvg[float64])
+	aggexec.RegisterFlexibleSingleAgg(
+		aggexec.MakeFlexibleAggInfo(id, false, true),
+		func(t []types.Type) types.Type {
+			switch t[0].Oid {
+			case types.T_decimal64:
+				s := int32(12)
+				if s < t[0].Scale {
+					s = t[0].Scale
+				}
+				if s > t[0].Scale+6 {
+					s = t[0].Scale + 6
+				}
+				return types.New(types.T_decimal128, 18, s)
+			case types.T_decimal128:
+				s := int32(12)
+				if s < t[0].Scale {
+					s = t[0].Scale
+				}
+				if s > t[0].Scale+6 {
+					s = t[0].Scale + 6
+				}
+				return types.New(types.T_decimal128, 18, s)
+			default:
+				panic("unexpected type for avg()")
+			}
+		},
+		func(args []types.Type, ret types.Type) any {
+			switch args[0].Oid {
+			case types.T_decimal64:
+				return newAggAvgDecimal64()
+			case types.T_decimal128:
+				return newAggAvgDecimal128()
+			default:
+				panic("unexpected type for avg()")
+			}
+		})
 }
 
 type aggAvg[from numeric] struct {
@@ -45,8 +81,16 @@ type aggAvgDecimal64 struct {
 	count int64
 }
 
+func newAggAvgDecimal64() aggexec.SingleAggFromFixedRetFixed[types.Decimal64, types.Decimal128] {
+	return &aggAvgDecimal64{}
+}
+
 type aggAvgDecimal128 struct {
 	count int64
+}
+
+func newAggAvgDecimal128() aggexec.SingleAggFromFixedRetFixed[types.Decimal128, types.Decimal128] {
+	return &aggAvgDecimal128{}
 }
 
 func (a *aggAvg[from]) Marshal() []byte       { return types.EncodeInt64(&a.count) }
@@ -111,6 +155,41 @@ func (a *aggAvgDecimal64) Merge(other aggexec.SingleAggFromFixedRetFixed[types.D
 	a.count += next.count
 }
 func (a *aggAvgDecimal64) Flush(get aggexec.AggGetter[types.Decimal128], set aggexec.AggSetter[types.Decimal128]) {
+	if a.count != 0 {
+		v, _ := get().Div128(types.Decimal128{B0_63: uint64(a.count), B64_127: 0})
+		set(v)
+	}
+}
+
+func (a *aggAvgDecimal128) Marshal() []byte       { return types.EncodeInt64(&a.count) }
+func (a *aggAvgDecimal128) Unmarshal(data []byte) { a.count = types.DecodeInt64(data) }
+func (a *aggAvgDecimal128) Init(set aggexec.AggSetter[types.Decimal128]) {
+	set(types.Decimal128{B0_63: 0, B64_127: 0})
+	a.count = 0
+}
+func (a *aggAvgDecimal128) Fill(value types.Decimal128, get aggexec.AggGetter[types.Decimal128], set aggexec.AggSetter[types.Decimal128]) {
+	r, _ := get().Add128(value)
+	set(r)
+	a.count++
+}
+func (a *aggAvgDecimal128) FillNull(get aggexec.AggGetter[types.Decimal128], set aggexec.AggSetter[types.Decimal128]) {
+}
+func (a *aggAvgDecimal128) Fills(value types.Decimal128, isNull bool, count int, get aggexec.AggGetter[types.Decimal128], set aggexec.AggSetter[types.Decimal128]) {
+	if isNull {
+		return
+	}
+	r, _ := value.Mul128(types.Decimal128{B0_63: uint64(count), B64_127: 0})
+	r, _ = get().Add128(r)
+	set(r)
+	a.count += int64(count)
+}
+func (a *aggAvgDecimal128) Merge(other aggexec.SingleAggFromFixedRetFixed[types.Decimal128, types.Decimal128], get1, get2 aggexec.AggGetter[types.Decimal128], set aggexec.AggSetter[types.Decimal128]) {
+	next := other.(*aggAvgDecimal128)
+	r, _ := get1().Add128(get2())
+	set(r)
+	a.count += next.count
+}
+func (a *aggAvgDecimal128) Flush(get aggexec.AggGetter[types.Decimal128], set aggexec.AggSetter[types.Decimal128]) {
 	if a.count != 0 {
 		v, _ := get().Div128(types.Decimal128{B0_63: uint64(a.count), B64_127: 0})
 		set(v)
