@@ -174,6 +174,7 @@ type QueryBuilder struct {
 	isForUpdate        bool // if it's a query plan for update
 
 	deleteNode map[uint64]int32 //delete node in this query. key is tableId, value is the nodeId of sinkScan node in the delete plan
+	skipStats  bool
 }
 
 type CTERef struct {
