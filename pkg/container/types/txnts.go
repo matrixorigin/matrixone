@@ -57,7 +57,7 @@ func (ts TS) Compare(rhs TS) int {
 	if p1 > p2 {
 		return 1
 	}
-	l1, l2 := DecodeInt64(ts[:4]), DecodeInt64(rhs[:4])
+	l1, l2 := DecodeUint32(ts[:4]), DecodeUint32(rhs[:4])
 	if l1 < l2 {
 		return -1
 	}
