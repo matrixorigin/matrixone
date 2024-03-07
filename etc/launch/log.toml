@@ -3,6 +3,5 @@ service-type = "LOG"
 data-dir = "./mo-data"
 
 [log]
-level = "panic"
-format = "console"
+level = "info"
 
