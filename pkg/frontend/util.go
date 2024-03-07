@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"math/rand"
 	"os"
 	"runtime"
 	"strconv"
@@ -847,5 +848,53 @@ func mysqlColDef2PlanResultColDef(mr *MysqlResultSet) *plan.ResultColDef {
 	}
 	return &plan.ResultColDef{
 		ResultCols: resultCols,
+	}
+}
+
+// errCodeRollbackWholeTxn denotes that the error code
+// that should rollback the whole txn
+var errCodeRollbackWholeTxn = map[uint16]bool{
+	moerr.ErrDeadLockDetected:     false,
+	moerr.ErrLockTableBindChanged: false,
+	moerr.ErrLockTableNotFound:    false,
+	moerr.ErrDeadlockCheckBusy:    false,
+	moerr.ErrLockConflict:         false,
+}
+
+func isErrorRollbackWholeTxn(inputErr error) bool {
+	if inputErr == nil {
+		return false
+	}
+	me, ok := inputErr.(*moerr.Error)
+	if !ok {
+		// This is not a moerr
+		return false
+	}
+	if _, has := errCodeRollbackWholeTxn[me.ErrorCode()]; has {
+		return true
+	}
+	return false
+}
+
+func getRandomErrorRollbackWholeTxn() error {
+	rand.NewSource(time.Now().UnixNano())
+	x := rand.Intn(len(errCodeRollbackWholeTxn))
+	arr := make([]uint16, 0, len(errCodeRollbackWholeTxn))
+	for k := range errCodeRollbackWholeTxn {
+		arr = append(arr, k)
+	}
+	switch arr[x] {
+	case moerr.ErrDeadLockDetected:
+		return moerr.NewDeadLockDetectedNoCtx()
+	case moerr.ErrLockTableBindChanged:
+		return moerr.NewLockTableBindChangedNoCtx()
+	case moerr.ErrLockTableNotFound:
+		return moerr.NewLockTableNotFoundNoCtx()
+	case moerr.ErrDeadlockCheckBusy:
+		return moerr.NewDeadlockCheckBusyNoCtx()
+	case moerr.ErrLockConflict:
+		return moerr.NewLockConflictNoCtx()
+	default:
+		panic(fmt.Sprintf("usp error code %d", arr[x]))
 	}
 }
