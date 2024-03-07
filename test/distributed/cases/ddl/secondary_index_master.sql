@@ -359,33 +359,54 @@ create index idx1 using master on t1(a,b,c);
 insert into t1 values("Congress","Lane", "1");
 insert into t1 values("Juniper","Way", "2");
 insert into t1 values("Nightingale","Lane", "3");
---mysql> explain select * from t1 where a in ("Congress","Nightingale") and b="Lane" and c in("1","2","3");
---+---------------------------------------------------------------------------------------------------------+
---| QUERY PLAN                                                                                              |
---+---------------------------------------------------------------------------------------------------------+
---| Project                                                                                                 |
---|   ->  Join                                                                                              |
---|         Join Type: INDEX                                                                                |
---|         Join Cond: (t1.__mo_fake_pk_col = #[1,0])                                                       |
---|         Runtime Filter Build: #[-1,0]                                                                   |
---|         ->  Table Scan on a.t1                                                                          |
---|               Filter Cond: (t1.b = 'Lane'), t1.c in ([1 2 3]), t1.a in ([Congress Nightingale])         |
---|               Runtime Filter Probe: t1.__mo_fake_pk_col                                                 |
---|         ->  Join                                                                                        |
---|               Join Type: INNER                                                                          |
---|               Join Cond: (#[0,0] = #[1,0])                                                              |
---|               ->  Project                                                                               |
---|                     ->  Table Scan on a.__mo_index_secondary_018e0cf1-3349-7fa1-9b81-b2aea37c8f52       |
---|                           Filter Cond: prefix_in(#[0,0], [FaCongress  FaNightingale ])                  | <-- Good
---|               ->  Join                                                                                  |
---|                     Join Type: INNER                                                                    |
---|                     Join Cond: (#[0,0] = #[1,0])                                                        |
---|                     ->  Project                                                                         |
---|                           ->  Table Scan on a.__mo_index_secondary_018e0cf1-3349-7fa1-9b81-b2aea37c8f52 |
---|                                 Filter Cond: prefix_in(#[0,0], [Fc1  Fc2  Fc3 ])                        |  <-- Good
---|                     ->  Project                                                                         |
---|                           ->  Table Scan on a.__mo_index_secondary_018e0cf1-3349-7fa1-9b81-b2aea37c8f52 |
---|                                 Filter Cond: prefix_eq(#[0,0], 'Fb FLane ')                             |
---+---------------------------------------------------------------------------------------------------------+
---23 rows in set (0.00 sec)
+--mysql> explain analyze select * from t1 where a in ("Congress","Nightingale") and b="Lane" and c in("1","2","3");
+--+-----------------------------------------------------------------------------------------------------------------------------------------------------------+
+--| QUERY PLAN                                                                                                                                                |
+--+-----------------------------------------------------------------------------------------------------------------------------------------------------------+
+--| Project                                                                                                                                                   |
+--|   Analyze: timeConsumed=0ms waitTime=0ms inputRows=2 outputRows=2 InputSize=144bytes OutputSize=144bytes MemorySize=144bytes                              |
+--|   ->  Join                                                                                                                                                |
+--|         Analyze: timeConsumed=0ms waitTime=6ms inputRows=4 outputRows=2 InputSize=176bytes OutputSize=144bytes MemorySize=16bytes                         |
+--|         Join Type: INDEX                                                                                                                                  |
+--|         Join Cond: (t1.__mo_fake_pk_col = #[1,0])                                                                                                         |
+--|         Runtime Filter Build: #[-1,0]                                                                                                                     |
+--|         ->  Table Scan on a.t1                                                                                                                            |
+--|               Analyze: timeConsumed=0ms waitTime=0ms inputRows=3 outputRows=2 InputSize=240bytes OutputSize=160bytes MemorySize=409bytes                  |
+--|               Filter Cond: (t1.b = 'Lane'), t1.c in ([1 2 3]), t1.a in ([Congress Nightingale])                                                           |
+--|               Block Filter Cond: t1.__mo_fake_pk_col in ([1 3])                                                                                           |
+--|               Runtime Filter Probe: t1.__mo_fake_pk_col                                                                                                   |
+--|         ->  Join                                                                                                                                          |
+--|               Analyze: timeConsumed=0ms waitTime=0ms inputRows=2 outputRows=2 InputSize=16bytes OutputSize=16bytes MemorySize=32898bytes                  |
+--|               Join Type: INNER                                                                                                                            |
+--|               Join Cond: (#[0,0] = #[1,0])                                                                                                                |
+--|               ->  Project                                              ------> [GOOD]                                                                                      |
+--|                     Analyze: timeConsumed=0ms waitTime=0ms inputRows=2 outputRows=2 InputSize=16bytes OutputSize=16bytes MemorySize=16bytes               |
+--|                     ->  Table Scan on a.__mo_index_secondary_018e17c1-aca2-788a-a11d-553d5cd2aea6                                                         |
+--|                           Analyze: timeConsumed=0ms waitTime=0ms inputRows=9 outputRows=2 InputSize=288bytes OutputSize=16bytes MemorySize=313bytes       |
+--|                           Filter Cond: (prefix_in(#[0,0], Fa FCongress ) or prefix_in(#[0,0], Fa FNightingale ))                                      |
+--|               ->  Join                                                                                                                                    |
+--|                     Analyze: timeConsumed=0ms waitTime=0ms inputRows=2 outputRows=2 InputSize=16bytes OutputSize=16bytes MemorySize=32898bytes            |
+--|                     Join Type: INNER                                                                                                                      |
+--|                     Join Cond: (#[0,0] = #[1,0])                                                                                                          |
+--|                     ->  Project                                       ------> [GOOD]                                                                                    |
+--|                           Analyze: timeConsumed=0ms waitTime=0ms inputRows=3 outputRows=3 InputSize=24bytes OutputSize=24bytes MemorySize=24bytes         |
+--|                           ->  Table Scan on a.__mo_index_secondary_018e17c1-aca2-788a-a11d-553d5cd2aea6                                                   |
+--|                                 Analyze: timeConsumed=0ms waitTime=0ms inputRows=9 outputRows=3 InputSize=288bytes OutputSize=24bytes MemorySize=321bytes |
+--|                                 Filter Cond: ((prefix_in(#[0,0], Fc F1 ) or prefix_in(#[0,0], Fc F2 )) or prefix_in(#[0,0], Fc F3 ))                |
+--|                     ->  Project                                                                                                                           |
+--|                           Analyze: timeConsumed=0ms waitTime=0ms inputRows=2 outputRows=2 InputSize=16bytes OutputSize=16bytes MemorySize=16bytes         |
+--|                           ->  Table Scan on a.__mo_index_secondary_018e17c1-aca2-788a-a11d-553d5cd2aea6                                                   |
+--|                                 Analyze: timeConsumed=0ms waitTime=0ms inputRows=9 outputRows=2 InputSize=288bytes OutputSize=16bytes MemorySize=313bytes |
+--|                                 Filter Cond: prefix_eq(#[0,0], 'Fb FLane ')                                                                             |
+--+-----------------------------------------------------------------------------------------------------------------------------------------------------------+
+--35 rows in set (0.01 sec)
 select * from t1 where a in ("Congress","Nightingale") and b="Lane" and c in("1","2","3");
+
+-- 2.8.f Select with Limit
+drop table if exists t1;
+create table t1(a varchar(30), b varchar(30), c varchar(30));
+create index idx1 using master on t1(a,b,c);
+insert into t1 values("Congress","Lane", "1");
+insert into t1 values("Juniper","Way", "2");
+insert into t1 values("Nightingale","Lane", "3");
+select * from t1 where a in ("Congress","Nightingale") and b="Lane" and c in("1","2","3") limit 1;
