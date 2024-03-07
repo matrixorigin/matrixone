@@ -70,10 +70,10 @@ func ReadByFilter(
 		var rows *nulls.Nulls
 		var bisect time.Duration
 		if persistedByCN {
-			rows = evalDeleteRowsByTimestampForDeletesPersistedByCN(persistedDeletes, ts, info.CommitTs)
+			rows = EvalDeleteRowsByTimestampForDeletesPersistedByCN(persistedDeletes, ts, info.CommitTs)
 		} else {
 			nowx := time.Now()
-			rows = evalDeleteRowsByTimestamp(persistedDeletes, ts, &info.BlockID)
+			rows = EvalDeleteRowsByTimestamp(persistedDeletes, ts, &info.BlockID)
 			bisect = time.Since(nowx)
 		}
 		if rows != nil {
@@ -300,10 +300,10 @@ func BlockReadInner(
 		var rows *nulls.Nulls
 		var bisect time.Duration
 		if persistedByCN {
-			rows = evalDeleteRowsByTimestampForDeletesPersistedByCN(deletes, ts, info.CommitTs)
+			rows = EvalDeleteRowsByTimestampForDeletesPersistedByCN(deletes, ts, info.CommitTs)
 		} else {
 			nowx := time.Now()
-			rows = evalDeleteRowsByTimestamp(deletes, ts, &info.BlockID)
+			rows = EvalDeleteRowsByTimestamp(deletes, ts, &info.BlockID)
 			bisect = time.Since(nowx)
 		}
 
@@ -543,7 +543,7 @@ func persistedByCN(ctx context.Context, deltaloc objectio.Location, fs fileservi
 	return columnCount == 2, nil
 }
 
-func evalDeleteRowsByTimestamp(deletes *batch.Batch, ts types.TS, blockid *types.Blockid) (rows *nulls.Bitmap) {
+func EvalDeleteRowsByTimestamp(deletes *batch.Batch, ts types.TS, blockid *types.Blockid) (rows *nulls.Bitmap) {
 	if deletes == nil {
 		return
 	}
@@ -567,7 +567,7 @@ func evalDeleteRowsByTimestamp(deletes *batch.Batch, ts types.TS, blockid *types
 	return
 }
 
-func evalDeleteRowsByTimestampForDeletesPersistedByCN(deletes *batch.Batch, ts types.TS, committs types.TS) (rows *nulls.Bitmap) {
+func EvalDeleteRowsByTimestampForDeletesPersistedByCN(deletes *batch.Batch, ts types.TS, committs types.TS) (rows *nulls.Bitmap) {
 	if deletes == nil || ts.Less(committs) {
 		return
 	}

@@ -264,7 +264,11 @@ func MoBatchToString(moBat *batch.Batch, printN int) string {
 	}
 	buf := new(bytes.Buffer)
 	for i, vec := range moBat.Vecs {
-		fmt.Fprintf(buf, "[%v] = %v\n", moBat.Attrs[i], MoVectorToString(vec, n, WithDoNotPrintBin{}))
+		if len(moBat.Attrs) == 0 {
+			fmt.Fprintf(buf, "[col%v] = %v\n", i, MoVectorToString(vec, n))
+		} else {
+			fmt.Fprintf(buf, "[%v] = %v\n", moBat.Attrs[i], MoVectorToString(vec, n, WithDoNotPrintBin{}))
+		}
 	}
 	return buf.String()
 }

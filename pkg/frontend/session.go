@@ -39,6 +39,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
@@ -209,12 +210,18 @@ type Session struct {
 	sentRows atomic.Int64
 	// writeCsvBytes is used to record bytes sent by `select ... into 'file.csv'` for motrace.StatementInfo
 	writeCsvBytes atomic.Int64
+	// packetCounter count the packet communicated with client.
+	packetCounter atomic.Int64
+	// payloadCounter count the payload send by `load data`
+	payloadCounter int64
 
 	createdTime time.Time
 
 	expiredTime time.Time
 
 	planCache *planCache
+
+	statsCache *plan2.StatsCache
 
 	autoIncrCacheManager *defines.AutoIncrCacheManager
 
@@ -289,6 +296,9 @@ type Session struct {
 
 	// insert sql for create table as select stmt
 	createAsSelectSql string
+
+	// FromProxy denotes whether the session is dispatched from proxy
+	fromProxy bool
 
 	disableTrace bool
 }
@@ -477,6 +487,32 @@ func (ses *Session) GetSqlHelper() *SqlHelper {
 	return ses.sqlHelper
 }
 
+func (ses *Session) CountPayload(length int) {
+	if ses == nil {
+		return
+	}
+	ses.payloadCounter += int64(length)
+}
+func (ses *Session) CountPacket(delta int64) {
+	if ses == nil {
+		return
+	}
+	ses.packetCounter.Add(delta)
+}
+func (ses *Session) GetPacketCnt() int64 {
+	if ses == nil {
+		return 0
+	}
+	return ses.packetCounter.Load()
+}
+func (ses *Session) ResetPacketCounter() {
+	if ses == nil {
+		return
+	}
+	ses.packetCounter.Store(0)
+	ses.payloadCounter = 0
+}
+
 // The update version. Four function.
 func (ses *Session) SetAutoIncrCacheManager(aicm *defines.AutoIncrCacheManager) {
 	ses.mu.Lock()
@@ -586,6 +622,7 @@ func NewSession(proto Protocol, mp *mpool.MPool, pu *config.ParameterUnit,
 		connType:  ConnTypeUnset,
 
 		timestampMap: map[TS]time.Time{},
+		statsCache:   plan2.NewStatsCache(),
 	}
 	if isNotBackgroundSession {
 		ses.sysVars = gSysVars.CopySysVarsToSession()
@@ -1298,12 +1335,9 @@ func (ses *Session) GetGlobalVar(name string) (interface{}, error) {
 
 func (ses *Session) GetTxnCompileCtx() *TxnCompilerContext {
 	var compCtx *TxnCompilerContext
-	var proc *process.Process
 	ses.mu.Lock()
 	compCtx = ses.txnCompileCtx
-	proc = ses.proc
 	ses.mu.Unlock()
-	compCtx.SetProcess(proc)
 	return compCtx
 }
 
@@ -2320,6 +2354,7 @@ func (ses *Session) StatusSession() *status.Session {
 				QueryStart:    time.Time{},
 				ClientHost:    ses.GetMysqlProtocol().Peer(),
 				Role:          roleName,
+				FromProxy:     ses.fromProxy,
 			}
 		}
 	}
@@ -2342,6 +2377,7 @@ func (ses *Session) StatusSession() *status.Session {
 		QueryStart:    ses.GetQueryStart(),
 		ClientHost:    ses.GetMysqlProtocol().Peer(),
 		Role:          roleName,
+		FromProxy:     ses.fromProxy,
 	}
 }
 

@@ -71,6 +71,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	mokafka "github.com/matrixorigin/matrixone/pkg/stream/adapter/kafka"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	txnTrace "github.com/matrixorigin/matrixone/pkg/txn/trace"
 	util2 "github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -241,6 +242,25 @@ func (c *Compile) Compile(ctx context.Context, pn *plan.Plan, u any, fill func(a
 	}()
 
 	if c.proc.TxnOperator != nil && c.proc.TxnOperator.Txn().IsPessimistic() {
+		txnOp := c.proc.TxnOperator
+		seq := txnOp.NextSequence()
+		txnTrace.GetService().AddTxnDurationAction(
+			txnOp,
+			client.CompileEvent,
+			seq,
+			0,
+			0,
+			err)
+		defer func() {
+			txnTrace.GetService().AddTxnDurationAction(
+				txnOp,
+				client.CompileEvent,
+				seq,
+				0,
+				time.Since(start),
+				err)
+		}()
+
 		if qry, ok := pn.Plan.(*plan.Plan_Query); ok {
 			if qry.Query.StmtType == plan.Query_SELECT {
 				for _, n := range qry.Query.Nodes {
@@ -398,11 +418,24 @@ func (c *Compile) allocOperatorID() int32 {
 
 // Run is an important function of the compute-layer, it executes a single sql according to its scope
 func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
+	txnOp := c.proc.TxnOperator
+	seq := uint64(0)
+	if txnOp != nil {
+		seq = txnOp.NextSequence()
+	}
+	txnTrace.GetService().AddTxnDurationAction(
+		txnOp,
+		client.ExecuteSQLEvent,
+		seq,
+		0,
+		0,
+		err)
+
 	sql := c.originSQL
 	if sql == "" {
 		sql = c.sql
 	}
-	txnTrace.GetService().TxnExecute(c.proc.TxnOperator, sql)
+	txnTrace.GetService().TxnExecSQL(txnOp, sql)
 
 	var writeOffset uint64
 
@@ -414,7 +447,17 @@ func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
 
 	defer func() {
 		stats.ExecutionEnd()
-		v2.TxnStatementExecuteDurationHistogram.Observe(time.Since(start).Seconds())
+
+		cost := time.Since(start)
+		txnTrace.GetService().AddTxnDurationAction(
+			txnOp,
+			client.ExecuteSQLEvent,
+			seq,
+			0,
+			cost,
+			err)
+
+		v2.TxnStatementExecuteDurationHistogram.Observe(cost.Seconds())
 	}()
 
 	for _, s := range c.scope {
@@ -2155,7 +2198,12 @@ func (c *Compile) compileRestrict(n *plan.Node, ss []*Scope) []*Scope {
 		return ss
 	}
 	currentFirstFlag := c.anal.isFirst
-	filterExpr := colexec.RewriteFilterExprList(n.FilterList)
+	// for dynamic parameter, substitute param ref and const fold cast expression here to improve performance
+	newFilters, err := plan2.ConstandFoldList(n.FilterList, c.proc, true)
+	if err != nil {
+		newFilters = n.FilterList
+	}
+	filterExpr := colexec.RewriteFilterExprList(newFilters)
 	for i := range ss {
 		ss[i].appendInstruction(vm.Instruction{
 			Op:      vm.Restrict,
@@ -2411,6 +2459,17 @@ func (c *Compile) compileBroadcastJoin(ctx context.Context, node, left, right *p
 				}
 			}
 		}
+
+	case plan.Node_INDEX:
+		rs = c.newBroadcastJoinScopeList(ss, children, node)
+		for i := range rs {
+			rs[i].appendInstruction(vm.Instruction{
+				Op:  vm.IndexJoin,
+				Idx: c.anal.curr,
+				Arg: constructIndexJoin(node, rightTyps, c.proc),
+			})
+		}
+
 	case plan.Node_SEMI:
 		if isEq {
 			if node.BuildOnLeft {
@@ -3395,12 +3454,7 @@ func (c *Compile) newJoinBuildScope(s *Scope, ss []*Scope) *Scope {
 		regTransplant(s, rs, i+s.BuildIdx, i)
 	}
 
-	rs.appendInstruction(vm.Instruction{
-		Op:      vm.HashBuild,
-		Idx:     s.Instructions[0].Idx,
-		IsFirst: true,
-		Arg:     constructHashBuild(c, s.Instructions[0], c.proc, s.ShuffleCnt, ss != nil),
-	})
+	rs.appendInstruction(constructJoinBuildInstruction(c, s.Instructions[0], c.proc, s.ShuffleCnt, ss != nil))
 
 	if ss == nil { // unparallel, send the hashtable to join scope directly
 		s.Proc.Reg.MergeReceivers[s.BuildIdx] = &process.WaitRegister{
@@ -3507,9 +3561,6 @@ func (c *Compile) fillAnalyzeInfo() {
 }
 
 func (c *Compile) determinExpandRanges(n *plan.Node, rel engine.Relation) bool {
-	if c.pn.GetQuery().StmtType != plan.Query_SELECT {
-		return true
-	}
 	if plan2.InternalTable(n.TableDef) {
 		return true
 	}
@@ -4466,7 +4517,7 @@ func (c *Compile) fatalLog(retry int, err error) {
 		return
 	}
 
-	txnTrace.GetService().AddTxnError(c.proc.TxnOperator.Txn().ID, err)
+	txnTrace.GetService().TxnError(c.proc.TxnOperator, err)
 
 	v, ok := moruntime.ProcessLevelRuntime().
 		GetGlobalVariables(moruntime.EnableCheckInvalidRCErrors)
