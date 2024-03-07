@@ -142,15 +142,14 @@ func mustColConstValueFromBinaryFuncExpr(
 ) (*plan.Expr_Col, [][]byte, bool) {
 	var (
 		colExpr  *plan.Expr_Col
+		tmpExpr  *plan.Expr_Col
 		valExprs []*plan.Expr
 		ok       bool
 	)
 
 	for idx := range expr.F.Args {
-		ee := expr.F.Args[idx]
-
-		if tmpExpr, ok := ee.Expr.(*plan.Expr_Col); !ok {
-			valExprs = append(valExprs, ee)
+		if tmpExpr, ok = expr.F.Args[idx].Expr.(*plan.Expr_Col); !ok {
+			valExprs = append(valExprs, expr.F.Args[idx])
 		} else {
 			colExpr = tmpExpr
 		}
@@ -636,6 +635,7 @@ func CompileFilterExpr(
 				return blkMeta.MustGetColumn(uint16(seqNum)).ZoneMap().PrefixBetween(vals[0], vals[1]), nil
 			}
 
+			// ok
 		case "between":
 			colExpr, vals, ok := mustColConstValueFromBinaryFuncExpr(exprImpl, tableDef, proc)
 			if !ok {
@@ -721,6 +721,7 @@ func CompileFilterExpr(
 				return true, nil
 			}
 
+			// ok
 		case "isnull", "is_null":
 			colExpr, _, ok := mustColConstValueFromBinaryFuncExpr(exprImpl, tableDef, proc)
 			if !ok {
@@ -744,6 +745,7 @@ func CompileFilterExpr(
 				return blkMeta.MustGetColumn(uint16(seqNum)).NullCnt() != 0, nil
 			}
 
+			// ok
 		case "isnotnull", "is_not_null":
 			colExpr, _, ok := mustColConstValueFromBinaryFuncExpr(exprImpl, tableDef, proc)
 			if !ok {
