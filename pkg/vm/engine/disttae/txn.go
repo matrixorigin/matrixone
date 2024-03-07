@@ -889,7 +889,11 @@ func (txn *Transaction) getCachedTable(
 		}
 		val := txn.engine.catalog.GetSchemaVersion(tblKey)
 		if val != nil {
-			if val.Ts.Greater(tbl.lastTs.Load().(timestamp.Timestamp)) && val.Version != tbl.version {
+			lastTs := timestamp.Timestamp{}
+			if v := tbl.lastTs.Load(); v != nil {
+				lastTs = v.(timestamp.Timestamp)
+			}
+			if val.Ts.Greater(lastTs) && val.Version != tbl.version {
 				txn.tableCache.tableMap.Delete(genTableKey(k.accountId, k.name, k.databaseId))
 				return nil
 			}

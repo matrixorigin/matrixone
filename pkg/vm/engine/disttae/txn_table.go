@@ -647,13 +647,17 @@ func (tbl *txnTable) rangesOnePart(
 		if err != nil {
 			return err
 		}
+		lastTs := timestamp.Timestamp{}
+		if v := tbl.lastTs.Load(); v != nil {
+			lastTs = v.(timestamp.Timestamp)
+		}
 		deleteObjs, createObjs := state.GetChangedObjsBetween(
-			types.TimestampToTS(tbl.lastTs.Load().(timestamp.Timestamp)),
+			types.TimestampToTS(lastTs),
 			types.TimestampToTS(tbl.db.txn.op.SnapshotTS()))
 		trace.GetService().ApplyFlush(
 			tbl.db.txn.op.Txn().ID,
 			tbl.tableId,
-			tbl.lastTs.Load().(timestamp.Timestamp),
+			lastTs,
 			tbl.db.txn.op.SnapshotTS(),
 			len(deleteObjs))
 		if len(deleteObjs) > 0 {
