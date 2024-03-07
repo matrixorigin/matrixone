@@ -38,7 +38,11 @@ func (ts TS) Logical() uint32 {
 }
 
 func (ts TS) IsEmpty() bool {
-	return ts.Physical() == 0 && ts.Logical() == 0
+	p := DecodeInt64(ts[4:12])
+	if p != 0 {
+		return false
+	}
+	return DecodeInt64(ts[:4]) == 0
 }
 func (ts TS) Equal(rhs TS) bool {
 	return ts == rhs
@@ -46,14 +50,14 @@ func (ts TS) Equal(rhs TS) bool {
 
 // Compare physical first then logical.
 func (ts TS) Compare(rhs TS) int {
-	p1, p2 := ts.Physical(), rhs.Physical()
+	p1, p2 := DecodeInt64(ts[4:12]), DecodeInt64(rhs[4:12])
 	if p1 < p2 {
 		return -1
 	}
 	if p1 > p2 {
 		return 1
 	}
-	l1, l2 := ts.Logical(), rhs.Logical()
+	l1, l2 := DecodeUint32(ts[:4]), DecodeUint32(rhs[:4])
 	if l1 < l2 {
 		return -1
 	}
@@ -105,12 +109,18 @@ func (ts TS) Prev() TS {
 	}
 	return BuildTS(p, l-1)
 }
+
 func (ts TS) Next() TS {
-	p, l := ts.Physical(), ts.Logical()
+	ret := ts
+	p, l := DecodeInt64(ts[4:12]), DecodeUint32(ts[:4])
 	if l == math.MaxUint32 {
-		return BuildTS(p+1, 0)
+		p += 1
+		copy(ret[4:12], EncodeInt64(&p))
+		return ret
 	}
-	return BuildTS(p, l+1)
+	l += 1
+	copy(ret[:4], EncodeUint32(&l))
+	return ret
 }
 
 func (ts TS) ToString() string {
