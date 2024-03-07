@@ -1,0 +1,49 @@
+drop database if exists special;
+create database special;
+use special;
+set @@autocommit = 1;
+create table t(a int primary key);
+insert into t select * from generate_series(1,200000) g;
+select count(*) from t;
+count(*)
+200000
+insert into t select * from t;
+(Duplicate entry)([\d\D]*)(for key 'a')
+begin;
+insert into t select * from t;
+(Duplicate entry)([\d\D]*)(for key 'a')
+select count(*) from t;
+count(*)
+200000
+commit;
+select count(*) from t;
+count(*)
+200000
+begin;
+use special;
+create external table ex_table_dis(num_col1 tinyint,num_col2 smallint,num_col3 int,num_col4 bigint,num_col5 tinyint unsigned,num_col6 smallint unsigned,num_col7 int unsigned,num_col8 bigint unsigned ,num_col9 float(5,3),num_col10 double(6,5),num_col11 decimal(38,19)) infile{"filepath"='$resources/external_table_file/ex_table_number.csv'} fields terminated by ',' enclosed by '\"' lines terminated by '\n';
+select num_col1,num_col2 from ex_table_dis;
+num_col1    num_col2
+60    -1000
+-128    -32768
+127    32767
+null    null
+use special;
+select * from ex_table_dis;
+SQL parser error: table "ex_table_dis" does not exist
+update ex_table_dis set num_col1=1000;
+invalid input: cannot insert/update/delete from external table
+select num_col1,num_col2 from ex_table_dis;
+num_col1    num_col2
+60    -1000
+-128    -32768
+127    32767
+null    null
+commit;
+select num_col1,num_col2 from ex_table_dis;
+num_col1    num_col2
+60    -1000
+-128    -32768
+127    32767
+null    null
+drop database if exists special;
