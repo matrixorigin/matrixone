@@ -389,3 +389,12 @@ insert into t1 values("Nightingale","Lane", "3");
 --+---------------------------------------------------------------------------------------------------------+
 --23 rows in set (0.00 sec)
 select * from t1 where a in ("Congress","Nightingale") and b="Lane" and c in("1","2","3");
+
+-- 2.8.f SELECT with LIMIT
+drop table if exists t1;
+create table t1(a varchar(30), b varchar(30), c varchar(30));
+create index idx1 using master on t1(a,b,c);
+insert into t1 values("Congress","Lane", "1");
+insert into t1 values("Juniper","Way", "2");
+insert into t1 values("Nightingale","Lane", "3");
+select * from t1 where a in ("Congress","Nightingale") and b="Lane" and c in("1","2","3") limit 1;

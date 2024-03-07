@@ -71,6 +71,7 @@ func (builder *QueryBuilder) applyIndicesForFiltersUsingMasterIndex(nodeID int32
 		prevIndexPkCol = DeepCopyExpr(currIndexPkCol)
 		prevLastNodeId = lastNodeId
 	}
+	scanNode.Limit, scanNode.Offset = nil, nil
 
 	// 3. SELECT * from tbl INNER JOIN (
 	//    	(SELECT pk from idx1 WHERE prefix_eq(`__mo_index_idx_col`,serial_full("a","value1")) )
@@ -196,10 +197,9 @@ func makeIndexTblScan(builder *QueryBuilder, bindCtx *BindContext, filterExp *pl
 		ObjRef:      idxObjRef,
 		FilterList:  []*plan.Expr{filterList},
 		BindingTags: []int32{idxScanTag},
-		Limit:       scanNode.Limit,
-		Offset:      scanNode.Offset,
+		Limit:       DeepCopyExpr(scanNode.Limit),
+		Offset:      DeepCopyExpr(scanNode.Offset),
 	}, bindCtx)
-	scanNode.Limit, scanNode.Offset = nil, nil
 
 	// b. Project __mo_index_pk_col
 	projPkCol := &Expr{
