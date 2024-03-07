@@ -54,7 +54,7 @@ func TestNewTxn(t *testing.T) {
 	tx, err := c.New(ctx, newTestTimestamp(0))
 	assert.Nil(t, err)
 	txnMeta := tx.(*txnOperator).mu.txn
-	assert.Equal(t, timestamp.Timestamp{PhysicalTime: 1}, txnMeta.SnapshotTS)
+	assert.Equal(t, timestamp.Timestamp{PhysicalTime: 0}, txnMeta.SnapshotTS)
 	assert.NotEmpty(t, txnMeta.ID)
 	assert.Equal(t, txn.TxnStatus_Active, txnMeta.Status)
 }
@@ -80,7 +80,7 @@ func TestNewTxnWithNormalStateWait(t *testing.T) {
 			tx, err := c.New(ctx, newTestTimestamp(0))
 			assert.Nil(t, err)
 			txnMeta := tx.(*txnOperator).mu.txn
-			assert.Equal(t, int64(1), txnMeta.SnapshotTS.PhysicalTime)
+			assert.Equal(t, int64(0), txnMeta.SnapshotTS.PhysicalTime)
 			assert.NotEmpty(t, txnMeta.ID)
 			assert.Equal(t, txn.TxnStatus_Active, txnMeta.Status)
 		}()

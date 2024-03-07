@@ -150,11 +150,6 @@ func (opts Options) WithDisableTrace() Options {
 	return opts
 }
 
-func (opts Options) WithDisableLock() Options {
-	opts.txnOpts = append(opts.txnOpts, client.WithDisableLock(true))
-	return opts
-}
-
 func (opts Options) ExtraTxnOptions() []client.TxnOption {
 	return opts.txnOpts
 }
