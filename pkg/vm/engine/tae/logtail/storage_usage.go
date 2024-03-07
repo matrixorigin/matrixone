@@ -29,6 +29,7 @@ import (
 	"go.uber.org/zap"
 	"math"
 	"math/rand"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -736,6 +737,8 @@ const UsageBatMetaTableId uint64 = StorageUsageMagic
 
 var lastInsUsage UsageData = zeroUsageData
 var lastDelUsage UsageData = zeroUsageData
+
+// 0: insert, 1: delete
 var summaryLog [2][]UsageData
 
 // this function will accumulate all size of one table into one row.
@@ -748,21 +751,27 @@ func appendToStorageUsageBat(data *CheckpointData, usage UsageData, del bool, mp
 		vector.AppendFixed[uint64](vecs[UsageAccID], usage.AccId, false, mp)
 		vector.AppendFixed[uint64](vecs[UsageDBID], usage.DbId, false, mp)
 		vector.AppendFixed[uint64](vecs[UsageTblID], usage.TblId, false, mp)
+
+		// new table
+		if del {
+			summaryLog[1] = append(summaryLog[1], usage)
+		} else {
+			summaryLog[0] = append(summaryLog[0], usage)
+		}
 	}
 
 	updateFunc := func(vecs []*vector.Vector, size uint64) {
 		vector.SetFixedAt[uint64](vecs[UsageSize], vecs[UsageSize].Length()-1, size)
+
+		if del {
+			summaryLog[1][len(summaryLog[1])-1].Size = size
+		} else {
+			summaryLog[0][len(summaryLog[0])-1].Size = size
+		}
 	}
 
 	tableChanged := func(last UsageData) bool {
 		changed := !(last.AccId == usage.AccId && last.DbId == usage.DbId && last.TblId == usage.TblId)
-		if changed {
-			if del {
-				summaryLog[1] = append(summaryLog[1], last)
-			} else {
-				summaryLog[0] = append(summaryLog[0], last)
-			}
-		}
 		return changed
 	}
 
@@ -912,7 +921,13 @@ func doSummary(ckp string, fields ...zap.Field) {
 	defer func() {
 		summaryLog[0] = summaryLog[0][:0]
 		summaryLog[1] = summaryLog[1][:0]
+
+		lastInsUsage = zeroUsageData
+		lastDelUsage = zeroUsageData
 	}()
+
+	sort.Slice(summaryLog[0], func(i, j int) bool { return usageLess(summaryLog[0][i], summaryLog[0][j]) })
+	sort.Slice(summaryLog[1], func(i, j int) bool { return usageLess(summaryLog[1][i], summaryLog[1][j]) })
 
 	var buf bytes.Buffer
 	buf.WriteString(fmt.Sprintf("\nCKP[%s]\t%s\n", ckp, time.Now().UTC().String()))
@@ -940,7 +955,7 @@ func doSummary(ckp string, fields ...zap.Field) {
 		accumulated -= int64(summaryLog[1][idx].Size)
 	}
 
-	buf.WriteString(fmt.Sprintf("accumulated size in this ckp: %19.6fmb",
+	buf.WriteString(fmt.Sprintf("accumulated size in this ckp: %19.6fmb, ",
 		float64(accumulated)/(1024*1024)))
 
 	fields = append(fields, zap.String("storage usage summary when ckp", buf.String()))
