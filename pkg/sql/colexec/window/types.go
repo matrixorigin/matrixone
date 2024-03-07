@@ -125,6 +125,7 @@ func (ctr *container) cleanOrderVectors() {
 		}
 		ctr.orderVecs[i].vec = nil
 	}
+	ctr.orderVecs = nil
 }
 
 func (ctr *container) cleanAggVectors() {
@@ -134,4 +135,5 @@ func (ctr *container) cleanAggVectors() {
 		}
 		ctr.aggVecs[i].vec = nil
 	}
+	ctr.aggVecs = nil
 }
