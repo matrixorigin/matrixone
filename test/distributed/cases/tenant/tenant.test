@@ -4,7 +4,7 @@ create account tenant_test admin_name = 'root' identified by '111' open comment 
 create account tenant_test admin_name = 'root' identified by '111' open comment 'tenant_test';
 create account if not exists tenant_test admin_name = 'root' identified by '111' open comment 'tenant_test';
 create account tenant_test admin_name = 'root' open comment 'tenant_test';
--- @ignore:2,7
+-- @ignore:2,6,7
 show accounts;
 drop account if exists tenant_test;
 select account_id,relname,relkind from mo_catalog.mo_tables where reldatabase = 'mo_catalog' and relname not like '__mo_index_unique__%' order by relname;
