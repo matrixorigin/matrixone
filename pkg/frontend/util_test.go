@@ -18,12 +18,13 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"math"
 	"sort"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/defines"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
@@ -628,7 +629,8 @@ func TestGetExprValue(t *testing.T) {
 		ws.EXPECT().GetSQLCount().AnyTimes()
 		ws.EXPECT().StartStatement().AnyTimes()
 		ws.EXPECT().EndStatement().AnyTimes()
-		ws.EXPECT().WriteOffset().Return(uint64(0)).AnyTimes()
+		ws.EXPECT().GetSnapshotWriteOffset().Return(0).AnyTimes()
+		ws.EXPECT().UpdateSnapshotWriteOffset().AnyTimes()
 		ws.EXPECT().Adjust(gomock.Any()).AnyTimes()
 
 		txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
@@ -728,7 +730,8 @@ func TestGetExprValue(t *testing.T) {
 		ws.EXPECT().IncrStatementID(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 		ws.EXPECT().StartStatement().AnyTimes()
 		ws.EXPECT().EndStatement().AnyTimes()
-		ws.EXPECT().WriteOffset().Return(uint64(0)).AnyTimes()
+		ws.EXPECT().GetSnapshotWriteOffset().Return(0).AnyTimes()
+		ws.EXPECT().UpdateSnapshotWriteOffset().AnyTimes()
 		ws.EXPECT().Adjust(uint64(0)).AnyTimes()
 		ws.EXPECT().IncrSQLCount().AnyTimes()
 		ws.EXPECT().GetSQLCount().AnyTimes()

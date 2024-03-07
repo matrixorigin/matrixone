@@ -126,6 +126,9 @@ func New(
 	c.startAt = startAt
 	c.metaTables = make(map[string]struct{})
 	c.disableRetry = false
+	if c.proc.TxnOperator != nil {
+		c.proc.TxnOperator.GetWorkspace().UpdateSnapshotWriteOffset()
+	}
 	return c
 }
 
@@ -405,7 +408,7 @@ func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
 	}()
 
 	if c.proc.TxnOperator != nil {
-		writeOffset = c.proc.TxnOperator.GetWorkspace().WriteOffset()
+		writeOffset = uint64(c.proc.TxnOperator.GetWorkspace().GetSnapshotWriteOffset())
 	}
 	result = &util2.RunResult{}
 	var span trace.Span
