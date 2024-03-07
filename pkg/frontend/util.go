@@ -505,7 +505,7 @@ func logStatementStatus(ctx context.Context, ses *Session, stmt tree.Statement, 
 
 func logStatementStringStatus(ctx context.Context, ses *Session, stmtStr string, status statementStatus, err error) {
 	str := SubStringFromBegin(stmtStr, int(ses.GetParameterUnit().SV.LengthOfQueryPrinted))
-	outBytes := ses.GetMysqlProtocol().CalculateOutTrafficBytes()
+	outBytes, outPacket := ses.GetMysqlProtocol().CalculateOutTrafficBytes(true)
 	if status == success {
 		logDebug(ses, ses.GetDebugString(), "query trace status", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.StatementField(str), logutil.StatusField(status.String()), trace.ContextField(ctx))
 		err = nil // make sure: it is nil for EndStatement
@@ -513,7 +513,7 @@ func logStatementStringStatus(ctx context.Context, ses *Session, stmtStr string,
 		logError(ses, ses.GetDebugString(), "query trace status", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.StatementField(str), logutil.StatusField(status.String()), logutil.ErrorField(err), trace.ContextField(ctx))
 	}
 	// pls make sure: NO ONE use the ses.tStmt after EndStatement
-	motrace.EndStatement(ctx, err, ses.sentRows.Load(), outBytes)
+	motrace.EndStatement(ctx, err, ses.sentRows.Load(), outBytes, outPacket)
 	// need just below EndStatement
 	ses.SetTStmt(nil)
 }
@@ -627,6 +627,14 @@ func getVariableValue(varDefault interface{}) string {
 		return fmt.Sprintf("%d", val)
 	case int8:
 		return fmt.Sprintf("%d", val)
+	case float64:
+		// 0.1 => 0.100000
+		// 0.0000001 -> 1.000000e-7
+		if val >= 1e-6 {
+			return fmt.Sprintf("%.6f", val)
+		} else {
+			return fmt.Sprintf("%.6e", val)
+		}
 	case string:
 		return val
 	default:

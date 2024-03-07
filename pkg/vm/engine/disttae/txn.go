@@ -912,9 +912,9 @@ func (txn *Transaction) Commit(ctx context.Context) ([]txn.TxnRequest, error) {
 	if err := txn.dumpBatchLocked(0); err != nil {
 		return nil, err
 	}
-	pkDedupCount := txn.op.PKDedupCount()
+
 	if !txn.hasS3Op.Load() &&
-		pkDedupCount > 0 && txn.pkCount <= pkDedupCount {
+		txn.op.TxnOptions().CheckDupEnabled() {
 		if err := txn.checkDup(); err != nil {
 			return nil, err
 		}
