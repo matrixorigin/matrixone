@@ -136,6 +136,8 @@ type IOEntry struct {
 
 	// fromCache indicates which cache filled the entry
 	fromCache IOVectorCache
+
+	allocator CacheDataAllocator
 }
 
 func (i IOEntry) String() string {
