@@ -397,4 +397,49 @@ create index idx1 using master on t1(a,b,c);
 insert into t1 values("Congress","Lane", "1");
 insert into t1 values("Juniper","Way", "2");
 insert into t1 values("Nightingale","Lane", "3");
-select * from t1 where a in ("Congress","Nightingale") and b="Lane" and c in("1","2","3") limit 1;
+select * from t1 where a between "Congress" and "Nightingale" and b="Lane" and c between "1" and "3";
+select * from t1 where a between "Congress" and "Nightingale" and b="Lane" and c between "1" and "3" limit 1;
+mysql> explain analyze select * from t1 where a between "Congress" and "Nightingale" and b="Lane" and c between "1" and "3" limit 1;
+--+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+--| QUERY PLAN                                                                                                                                                                                                    |
+--+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+--| Project                                                                                                                                                                                                       |
+--|   Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 InputSize=72bytes OutputSize=72bytes MemorySize=72bytes                                                                                     |
+--|   ->  Join                                                                                                                                                                                                    |
+--|         Analyze: timeConsumed=0ms waitTime=2ms inputRows=1 outputRows=1 InputSize=8bytes OutputSize=72bytes MemorySize=8bytes                                                                                 |
+--|         Join Type: INDEX                                                                                                                                                                                      |
+--|         Join Cond: (t1.__mo_fake_pk_col = #[1,0])                                                                                                                                                             |
+--|         Runtime Filter Build: #[-1,0]                                                                                                                                                                         |
+--|         ->  Table Scan on a.t1                                                                                                                                                                                |
+--|               Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 InputSize=80bytes OutputSize=80bytes MemorySize=164bytes                                                                        |
+--|               Filter Cond: (t1.b = 'Lane'), t1.c BETWEEN '1' AND '3', t1.a BETWEEN 'Congress' AND 'Nightingale'                                                                                               |
+--|               Block Filter Cond: t1.__mo_fake_pk_col in (1)                                                                                                                                                   |
+--|               Runtime Filter Probe: t1.__mo_fake_pk_col                                                                                                                                                       |
+--|         ->  Join                                                                                                                                                                                              |
+--|               Analyze: timeConsumed=0ms probe_time=[total=0ms,min=0ms,max=0ms,dop=10] build_time=[0ms] waitTime=5ms inputRows=2 outputRows=1 InputSize=16bytes OutputSize=8bytes MemorySize=180859bytes       |
+--|               Join Type: INNER                                                                                                                                                                                |
+--|               Join Cond: (#[0,0] = #[1,0])                                                                                                                                                                    |
+--|               ->  Project                                                                                                                                                                                     |
+--|                     Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 InputSize=8bytes OutputSize=8bytes MemorySize=8bytes                                                                      |
+--|                     ->  Table Scan on a.__mo_index_secondary_018e1b30-c9e3-7a5a-9c55-27561743c32d                                                                                                             |
+--|                           Analyze: timeConsumed=0ms waitTime=0ms inputRows=9 outputRows=1 InputSize=288bytes OutputSize=8bytes MemorySize=321bytes                                                            |
+--|                           Filter Cond: prefix_between(#[0,0], 'Fa FCongress ', 'Fa FNightingale ')                                                                                                        |
+--|                           Limit: 1  <--- [Good]                                                                                                                                                                           |
+--|               ->  Join                                                                                                                                                                                        |
+--|                     Analyze: timeConsumed=0ms probe_time=[total=0ms,min=0ms,max=0ms,dop=10] build_time=[0ms] waitTime=2ms inputRows=2 outputRows=1 InputSize=16bytes OutputSize=8bytes MemorySize=180859bytes |
+--|                     Join Type: INNER                                                                                                                                                                          |
+--|                     Join Cond: (#[0,0] = #[1,0])                                                                                                                                                              |
+--|                     ->  Project                                                                                                                                                                               |
+--|                           Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 InputSize=8bytes OutputSize=8bytes MemorySize=8bytes                                                                |
+--|                           ->  Table Scan on a.__mo_index_secondary_018e1b30-c9e3-7a5a-9c55-27561743c32d                                                                                                       |
+--|                                 Analyze: timeConsumed=0ms waitTime=0ms inputRows=9 outputRows=1 InputSize=288bytes OutputSize=8bytes MemorySize=321bytes                                                      |
+--|                                 Filter Cond: prefix_between(#[0,0], 'Fc F1 ', 'Fc F3 ')                                                                                                                   |
+--|                                 Limit: 1                                                                                                                                                                      |
+--|                     ->  Project                                                                                                                                                                               |
+--|                           Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 InputSize=8bytes OutputSize=8bytes MemorySize=8bytes                                                                |
+--|                           ->  Table Scan on a.__mo_index_secondary_018e1b30-c9e3-7a5a-9c55-27561743c32d                                                                                                       |
+--|                                 Analyze: timeConsumed=0ms waitTime=0ms inputRows=9 outputRows=1 InputSize=288bytes OutputSize=8bytes MemorySize=313bytes                                                      |
+--|                                 Filter Cond: prefix_eq(#[0,0], 'Fb FLane ')                                                                                                                                 |
+--|                                 Limit: 1                                                                                                                                                                      |
+--+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+--38 rows in set (0.00 sec)
