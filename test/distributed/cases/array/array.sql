@@ -219,6 +219,13 @@ select 2.0 / cast("[1,2,3]" as vecf32(3));
 select cast("[1,2,3]" as vecf32(3)) / 0 ;
 select 5 + (-1*cast("[1,2,3]" as vecf32(3)));
 
+-- Distinct SQL
+create table t11(a vecf32(2));
+insert into t11 values('[1,0]');
+insert into t11 values('[1,2]');
+select distinct a from t11;
+select distinct a,a from t11;
+
 -- Except
 select * from t8 except select * from t9;
 

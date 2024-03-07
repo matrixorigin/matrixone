@@ -90,6 +90,10 @@ func (*CompilerContext) Stats(obj *plan.ObjectRef) (*pb.StatsInfo, error) {
 	return nil, nil
 }
 
+func (*CompilerContext) GetStatsCache() *plan.StatsCache {
+	return nil
+}
+
 func (c *CompilerContext) GetSubscriptionMeta(dbName string) (*plan.SubscriptionMeta, error) {
 	return nil, nil
 }

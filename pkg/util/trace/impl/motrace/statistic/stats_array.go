@@ -28,13 +28,17 @@ const (
 	Float64PrecForMemorySize = 3
 )
 
-const (
-	StatsArrayVersion = StatsArrayVersion3
+const StatsArrayVersion = StatsArrayVersionLatest
 
-	StatsArrayVersion0 = 0 // raw statistics
+const (
+	StatsArrayVersion0 = iota // raw statistics
+
 	StatsArrayVersion1 = 1 // float64 array
 	StatsArrayVersion2 = 2 // float64 array + plus one elem OutTrafficBytes
 	StatsArrayVersion3 = 3 // ... + one elem: ConnType
+	StatsArrayVersion4 = 4 // ... + one elem: OutPacketCount
+
+	StatsArrayVersionLatest // same value as last variable StatsArrayVersion#
 )
 
 const (
@@ -45,6 +49,7 @@ const (
 	StatsArrayIndexS3IOOutputCount // index: 4
 	StatsArrayIndexOutTrafficBytes // index: 5
 	StatsArrayIndexConnType        // index: 6
+	StatsArrayIndexOutPacketCnt    // index: 7
 
 	StatsArrayLength
 )
@@ -53,6 +58,7 @@ const (
 	StatsArrayLengthV1 = 5
 	StatsArrayLengthV2 = 6
 	StatsArrayLengthV3 = 7
+	StatsArrayLengthV4 = 8
 )
 
 type ConnType float64
@@ -77,7 +83,11 @@ func NewStatsArrayV2() *StatsArray {
 }
 
 func NewStatsArrayV3() *StatsArray {
-	return NewStatsArray()
+	return NewStatsArray().WithVersion(StatsArrayVersion3)
+}
+
+func NewStatsArrayV4() *StatsArray {
+	return NewStatsArray().WithVersion(StatsArrayVersion4)
 }
 
 func (s *StatsArray) Init() *StatsArray {
@@ -115,6 +125,12 @@ func (s *StatsArray) GetConnType() float64 {
 	}
 	return (*s)[StatsArrayIndexConnType]
 }
+func (s *StatsArray) GetOutPacketCount() float64 {
+	if s.GetVersion() < StatsArrayVersion4 {
+		return 0
+	}
+	return s[StatsArrayIndexOutPacketCnt]
+}
 
 // WithVersion set the version array in StatsArray, please carefully to use.
 func (s *StatsArray) WithVersion(v float64) *StatsArray { (*s)[StatsArrayIndexVersion] = v; return s }
@@ -148,6 +164,11 @@ func (s *StatsArray) WithConnType(v ConnType) *StatsArray {
 	return s
 }
 
+func (s *StatsArray) WithOutPacketCount(v float64) *StatsArray {
+	s[StatsArrayIndexOutPacketCnt] = v
+	return s
+}
+
 func (s *StatsArray) ToJsonString() []byte {
 	switch s.GetVersion() {
 	case StatsArrayVersion1:
@@ -156,6 +177,8 @@ func (s *StatsArray) ToJsonString() []byte {
 		return StatsArrayToJsonString((*s)[:StatsArrayLengthV2])
 	case StatsArrayVersion3:
 		return StatsArrayToJsonString((*s)[:StatsArrayLengthV3])
+	case StatsArrayVersion4:
+		return StatsArrayToJsonString((*s)[:StatsArrayLengthV4])
 	default:
 		return StatsArrayToJsonString((*s)[:])
 	}

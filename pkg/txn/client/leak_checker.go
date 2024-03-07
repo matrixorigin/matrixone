@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 )
 
 // leakChecker is used to detect leak txn which is not committed or aborted.
@@ -31,13 +32,13 @@ type leakChecker struct {
 	logger         *log.MOLogger
 	actives        []activeTxn
 	maxActiveAges  time.Duration
-	leakHandleFunc func(txnID []byte, createAt time.Time, createBy string)
+	leakHandleFunc func(txnID []byte, createAt time.Time, options txn.TxnOptions)
 	stopper        *stopper.Stopper
 }
 
 func newLeakCheck(
 	maxActiveAges time.Duration,
-	leakHandleFunc func(txnID []byte, createAt time.Time, createBy string)) *leakChecker {
+	leakHandleFunc func(txnID []byte, createAt time.Time, options txn.TxnOptions)) *leakChecker {
 	logger := runtime.DefaultRuntime().Logger()
 	return &leakChecker{
 		logger:         logger,
@@ -60,15 +61,11 @@ func (lc *leakChecker) close() {
 
 func (lc *leakChecker) txnOpened(
 	txnID []byte,
-	createBy string) {
-	if createBy == "" {
-		createBy = "unknown"
-	}
-
+	options txn.TxnOptions) {
 	lc.Lock()
 	defer lc.Unlock()
 	lc.actives = append(lc.actives, activeTxn{
-		createBy: createBy,
+		options:  options,
 		id:       txnID,
 		createAt: time.Now(),
 	})
@@ -106,13 +103,13 @@ func (lc *leakChecker) doCheck() {
 	now := time.Now()
 	for _, txn := range lc.actives {
 		if now.Sub(txn.createAt) >= lc.maxActiveAges {
-			lc.leakHandleFunc(txn.id, txn.createAt, txn.createBy)
+			lc.leakHandleFunc(txn.id, txn.createAt, txn.options)
 		}
 	}
 }
 
 type activeTxn struct {
-	createBy string
+	options  txn.TxnOptions
 	id       []byte
 	createAt time.Time
 }

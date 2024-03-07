@@ -37,6 +37,7 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -61,7 +62,7 @@ func (tbl *txnTable) getEngine() engine.Engine {
 func (tbl *txnTable) Stats(ctx context.Context, sync bool) *pb.StatsInfo {
 	_, err := tbl.getPartitionState(ctx)
 	if err != nil {
-		logutil.Errorf("failed to get stats info of table %d", tbl.tableId)
+		logutil.Errorf("failed to get partition state of table %d: %v", tbl.tableId, err)
 		return nil
 	}
 	e := tbl.getEngine()
@@ -547,8 +548,37 @@ func (tbl *txnTable) resetSnapshot() {
 // return all unmodified blocks
 func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr) (ranges engine.Ranges, err error) {
 	start := time.Now()
+
+	seq := tbl.db.txn.op.NextSequence()
+	trace.GetService().AddTxnDurationAction(
+		tbl.db.txn.op,
+		client.RangesEvent,
+		seq,
+		tbl.tableId,
+		0,
+		nil)
+
 	defer func() {
-		v2.TxnTableRangeDurationHistogram.Observe(time.Since(start).Seconds())
+		cost := time.Since(start)
+
+		trace.GetService().AddTxnAction(
+			tbl.db.txn.op,
+			client.RangesEvent,
+			seq,
+			tbl.tableId,
+			int64(ranges.Len()),
+			"blocks",
+			err)
+
+		trace.GetService().AddTxnDurationAction(
+			tbl.db.txn.op,
+			client.RangesEvent,
+			seq,
+			tbl.tableId,
+			cost,
+			err)
+
+		v2.TxnTableRangeDurationHistogram.Observe(cost.Seconds())
 	}()
 
 	// make sure we have the block infos snapshot
@@ -565,23 +595,17 @@ func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr) (ranges eng
 	var blocks objectio.BlockInfoSlice
 	blocks.AppendBlockInfo(objectio.EmptyBlockInfo)
 
-	// for dynamic parameter, sustitute param ref and const fold cast expression here to improve performance
-	// temporary solution, will fix it in the future
-	newExprs := make([]*plan.Expr, len(exprs))
-	for i := range exprs {
-		newExprs[i] = plan2.DeepCopyExpr(exprs[i])
-		// newExprs[i] = plan2.SubstitueParam(newExprs[i], tbl.proc)
-		foldedExpr, _ := plan2.ConstantFold(batch.EmptyForConstFoldBatch, newExprs[i], tbl.proc.Load(), true)
-		if foldedExpr != nil {
-			newExprs[i] = foldedExpr
-		}
+	// for dynamic parameter, substitute param ref and const fold cast expression here to improve performance
+	newExprs, err := plan2.ConstandFoldList(exprs, tbl.proc.Load(), true)
+	if err == nil {
+		exprs = newExprs
 	}
 
 	if err = tbl.rangesOnePart(
 		ctx,
 		part,
 		tbl.GetTableDef(ctx),
-		newExprs,
+		exprs,
 		&blocks,
 		tbl.proc.Load(),
 	); err != nil {
@@ -639,11 +663,24 @@ func (tbl *txnTable) rangesOnePart(
 	}
 
 	var uncommittedObjects []objectio.ObjectStats
-	if uncommittedObjects, err = tbl.db.txn.getUncommitedDataObjectsByTable(
-		tbl.db.databaseId, tbl.tableId,
-	); err != nil {
-		return err
-	}
+	tbl.db.txn.forEachTableWrites(tbl.db.databaseId, tbl.tableId, tbl.db.txn.GetSnapshotWriteOffset(), func(entry Entry) {
+		stats := objectio.ObjectStats{}
+		if entry.bat == nil || entry.bat.IsEmpty() {
+			return
+		}
+		if entry.typ == INSERT_TXN {
+			return
+		}
+		if entry.typ != INSERT ||
+			len(entry.bat.Attrs) < 2 ||
+			entry.bat.Attrs[1] != catalog.ObjectMeta_ObjectStats {
+			return
+		}
+		for i := 0; i < entry.bat.Vecs[1].Length(); i++ {
+			stats.UnMarshal(entry.bat.Vecs[1].GetBytesAt(i))
+			uncommittedObjects = append(uncommittedObjects, stats)
+		}
+	})
 
 	if done, err := tbl.tryFastRanges(
 		exprs, state, uncommittedObjects, blocks, tbl.db.txn.engine.fs,
@@ -1573,7 +1610,7 @@ func (tbl *txnTable) EnhanceDelete(bat *batch.Batch, name string) error {
 }
 
 // TODO:: do prefetch read and parallel compaction
-func (tbl *txnTable) mergeCompaction(
+func (tbl *txnTable) compaction(
 	compactedBlks map[objectio.ObjectLocation][]int64) ([]objectio.BlockInfo, []objectio.ObjectStats, error) {
 	s3writer := &colexec.S3Writer{}
 	s3writer.SetTableName(tbl.tableName)
