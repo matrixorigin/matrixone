@@ -40,6 +40,8 @@ func RegisterDeterminedSingleAgg(info DeterminedSingleAggInfo, impl any) {
 		retType:        info.ret,
 		implementation: impl,
 	}
+
+	singleAgg[info.id] = true
 }
 
 func RegisterDeterminedMultiAgg(info DeterminedMultiAggInfo, impl any) {
@@ -55,6 +57,8 @@ func RegisterDeterminedMultiAgg(info DeterminedMultiAggInfo, impl any) {
 		retType:        info.ret,
 		implementation: impl,
 	}
+
+	multiAgg[info.id] = true
 }
 
 func RegisterFlexibleSingleAgg(info FlexibleAggInfo, getReturnType func([]types.Type) types.Type, getImplementation func(args []types.Type, ret types.Type) any) {
@@ -70,6 +74,8 @@ func RegisterFlexibleSingleAgg(info FlexibleAggInfo, getReturnType func([]types.
 		getReturnType:     getReturnType,
 		getImplementation: getImplementation,
 	}
+
+	singleAgg[info.id] = true
 }
 
 func RegisterFlexibleMultiAgg(info FlexibleAggInfo, getReturnType func([]types.Type) types.Type, getImplementation func(args []types.Type, ret types.Type) any) {
@@ -85,6 +91,24 @@ func RegisterFlexibleMultiAgg(info FlexibleAggInfo, getReturnType func([]types.T
 		getReturnType:     getReturnType,
 		getImplementation: getImplementation,
 	}
+
+	multiAgg[info.id] = true
+}
+
+func RegisterCountColumnAgg(id int64) {
+	specialAgg[id] = true
+	aggIdOfCountColumn = id
+}
+
+func RegisterCountStarAgg(id int64) {
+	specialAgg[id] = true
+	aggIdOfCountStar = id
+}
+
+func RegisterGroupConcatAgg(id int64, sep string) {
+	specialAgg[id] = true
+	aggIdOfGroupConcat = id
+	groupConcatSep = sep
 }
 
 type registeredAggInfo struct {
@@ -134,6 +158,20 @@ func generateKeyOfFlexibleMultiAgg(aggID int64) aggKey {
 var (
 	registeredDeterminedAggFunctions = make(map[aggKey]determinedAggInfo)
 	registeredFlexibleAggFunctions   = make(map[aggKey]flexibleAggInfo)
+)
+
+var (
+	singleAgg  = make(map[int64]bool)
+	multiAgg   = make(map[int64]bool)
+	specialAgg = make(map[int64]bool)
+
+	aggIdOfCountColumn = int64(-1)
+	aggIdOfCountStar   = int64(-2)
+	aggIdOfGroupConcat = int64(-3)
+	groupConcatSep     = ","
+	getCroupConcatRet  = func(args ...types.Type) types.Type {
+		return types.T_blob.ToType()
+	}
 )
 
 func getSingleAggImplByInfo(

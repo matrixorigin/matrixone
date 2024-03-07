@@ -41,6 +41,13 @@ func UnmarshalAggFuncExec(
 		exec = MakeGroupConcat(
 			nil, info.Id, info.IsDistinct, info.Args, info.Ret, string(encoded.Groups[0]))
 
+	case EncodedAggExecType_special_count_column:
+		exec = MakeCount(
+			nil, info.Id, info.IsDistinct, info.Args[0])
+
+	case EncodedAggExecType_special_count_star:
+		panic("count(*) not implement now.")
+
 	case EncodedAggExecType_single_fixed_fixed, EncodedAggExecType_single_fixed_var,
 		EncodedAggExecType_single_var_fixed, EncodedAggExecType_single_var_var:
 		exec = MakeAgg(
@@ -251,5 +258,24 @@ func (exec *groupConcatExec) marshal() ([]byte, error) {
 }
 
 func (exec *groupConcatExec) unmarshal(result []byte, groups [][]byte) error {
+	return exec.ret.unmarshal(result)
+}
+
+func (exec *countColumnExec) marshal() ([]byte, error) {
+	d := exec.singleAggInfo.getEncoded()
+	r, err := exec.ret.marshal()
+	if err != nil {
+		return nil, err
+	}
+	encoded := &EncodedAgg{
+		ExecType: EncodedAggExecType_special_count_column,
+		Info:     d,
+		Result:   r,
+		Groups:   nil,
+	}
+	return encoded.Marshal()
+}
+
+func (exec *countColumnExec) unmarshal(result []byte, groups [][]byte) error {
 	return exec.ret.unmarshal(result)
 }

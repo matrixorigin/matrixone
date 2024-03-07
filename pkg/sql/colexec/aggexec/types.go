@@ -15,6 +15,7 @@
 package aggexec
 
 import (
+	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -139,6 +140,43 @@ func MakeMultiAgg(
 	return newMultiAggFuncExec(mg, info, implementationAllocator)
 }
 
+func MakeAgg2(
+	mg AggMemoryManager,
+	aggID int64, isDistinct bool,
+	param ...types.Type) AggFuncExec {
+
+	if exec, ok := makeSpecialAggExec(mg, aggID, isDistinct, param...); ok {
+		return exec
+	}
+
+	if _, ok := singleAgg[aggID]; ok && len(param) == 1 {
+		return MakeAgg(mg, aggID, isDistinct, param[0])
+	}
+
+	if _, ok := multiAgg[aggID]; ok && len(param) > 0 {
+		return MakeMultiAgg(mg, aggID, isDistinct, param)
+	}
+
+	panic(fmt.Sprintf("unexpected aggID %d and param types %v.", aggID, param))
+}
+
+func makeSpecialAggExec(
+	mg AggMemoryManager,
+	id int64, isDistinct bool, params ...types.Type) (AggFuncExec, bool) {
+	if _, ok := specialAgg[id]; ok {
+		if id == aggIdOfCountColumn {
+			return MakeCount(mg, id, isDistinct, params[0]), true
+		}
+		if id == aggIdOfCountStar {
+			panic("not implemented")
+		}
+		if id == aggIdOfGroupConcat {
+			return MakeGroupConcat(mg, id, isDistinct, params, getCroupConcatRet(params...), groupConcatSep), true
+		}
+	}
+	return nil, false
+}
+
 // MakeGroupConcat is one special case of MakeMultiAgg.
 // it supports creating an aggregation function executor for special aggregation `group_concat()`.
 func MakeGroupConcat(
@@ -154,4 +192,19 @@ func MakeGroupConcat(
 		emptyNull: true,
 	}
 	return newGroupConcatExec(mg, info, separator)
+}
+
+func MakeCount(
+	mg AggMemoryManager,
+	aggID int64, isDistinct bool,
+	param types.Type) AggFuncExec {
+	info := singleAggInfo{
+		aggID:     aggID,
+		distinct:  isDistinct,
+		argType:   param,
+		retType:   types.T_int64.ToType(),
+		emptyNull: false,
+	}
+
+	return newCountColumnExecExec(mg, info)
 }

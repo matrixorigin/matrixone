@@ -42,6 +42,8 @@ enum EncodedAggExecType {
     multi_return_fixed = 4;
     multi_return_var = 5;
     special_group_concat = 6;
+    special_count_column = 7;
+    special_count_star = 8;
 }
 
 message EncodedAgg {
