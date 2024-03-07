@@ -680,16 +680,17 @@ func (zm ZM) PrefixBetween(lb, ub []byte) bool {
 }
 
 func (zm ZM) Between(lb, ub []byte) bool {
-	// 			lb           ub
-	// 			|-----------|
-	//		|-------------------|
-	//   |-----------|
-	//           |--------------|
-	//          |-----|
-	// ===> lb <= max && ub >= min
-	zmin := zm.GetMinBuf()
-	zmax := zm.GetMaxBuf()
-	return bytes.Compare(lb, zmax) <= 0 && bytes.Compare(zmin, ub) <= 0
+	oth := BuildZM(zm.GetType(), lb)
+	if zm.IsString() {
+		oth.updateMinString(lb)
+		oth.updateMaxString(ub)
+	} else {
+		oth.updateMinFixed(lb)
+		oth.updateMaxFixed(ub)
+	}
+
+	ok1, ok2 := zm.Intersect(oth)
+	return ok1 && ok2
 }
 
 func (zm ZM) PrefixIn(vec *vector.Vector) bool {
