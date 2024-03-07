@@ -34,8 +34,26 @@ func RegisterMax(id int64) {
 	aggexec.RegisterDeterminedSingleAgg(aggexec.MakeDeterminedSingleAggInfo(id, types.T_date.ToType(), types.T_date.ToType(), false, true), newAggMax[types.Date])
 	aggexec.RegisterDeterminedSingleAgg(aggexec.MakeDeterminedSingleAggInfo(id, types.T_datetime.ToType(), types.T_datetime.ToType(), false, true), newAggMax[types.Datetime])
 	aggexec.RegisterDeterminedSingleAgg(aggexec.MakeDeterminedSingleAggInfo(id, types.T_timestamp.ToType(), types.T_timestamp.ToType(), false, true), newAggMax[types.Timestamp])
-	aggexec.RegisterDeterminedSingleAgg(aggexec.MakeDeterminedSingleAggInfo(id, types.T_decimal64.ToType(), types.T_decimal64.ToType(), false, true), newAggMaxDecimal64)
-	aggexec.RegisterDeterminedSingleAgg(aggexec.MakeDeterminedSingleAggInfo(id, types.T_decimal128.ToType(), types.T_decimal128.ToType(), false, true), newAggMaxDecimal128)
+	aggexec.RegisterFlexibleSingleAgg(
+		aggexec.MakeFlexibleAggInfo(id, false, true),
+		func(t []types.Type) types.Type {
+			switch t[0].Oid {
+			case types.T_decimal64, types.T_decimal128:
+				return t[0]
+			default:
+				panic("unexpect type for max()")
+			}
+		},
+		func(args []types.Type, ret types.Type) any {
+			switch args[0].Oid {
+			case types.T_decimal64:
+				return newAggMaxDecimal64
+			case types.T_decimal128:
+				return newAggMaxDecimal128
+			default:
+				panic("unexpect type for max()")
+			}
+		})
 }
 
 type aggMax[from canCompare] struct{}

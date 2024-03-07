@@ -19,8 +19,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 )
 
-// todo: not done.
 func RegisterAvg(id int64) {
+	aggexec.RegisterDeterminedSingleAgg(aggexec.MakeDeterminedSingleAggInfo(id, types.T_bit.ToType(), types.T_float64.ToType(), false, true), newAggAvg[uint64])
 	aggexec.RegisterDeterminedSingleAgg(aggexec.MakeDeterminedSingleAggInfo(id, types.T_int8.ToType(), types.T_float64.ToType(), false, true), newAggAvg[int8])
 	aggexec.RegisterDeterminedSingleAgg(aggexec.MakeDeterminedSingleAggInfo(id, types.T_int16.ToType(), types.T_float64.ToType(), false, true), newAggAvg[int16])
 	aggexec.RegisterDeterminedSingleAgg(aggexec.MakeDeterminedSingleAggInfo(id, types.T_int32.ToType(), types.T_float64.ToType(), false, true), newAggAvg[int32])
@@ -39,6 +39,14 @@ type aggAvg[from numeric] struct {
 
 func newAggAvg[from numeric]() aggexec.SingleAggFromFixedRetFixed[from, float64] {
 	return &aggAvg[from]{}
+}
+
+type aggAvgDecimal64 struct {
+	count int64
+}
+
+type aggAvgDecimal128 struct {
+	count int64
 }
 
 func (a *aggAvg[from]) Marshal() []byte       { return types.EncodeInt64(&a.count) }
@@ -65,9 +73,46 @@ func (a *aggAvg[from]) Merge(other aggexec.SingleAggFromFixedRetFixed[from, floa
 	a.count += next.count
 }
 func (a *aggAvg[from]) Flush(get aggexec.AggGetter[float64], set aggexec.AggSetter[float64]) {
-	if a.count == 0 {
-		set(0)
-	} else {
+	if a.count != 0 {
 		set(get() / float64(a.count))
+	}
+}
+
+func (a *aggAvgDecimal64) Marshal() []byte       { return types.EncodeInt64(&a.count) }
+func (a *aggAvgDecimal64) Unmarshal(data []byte) { a.count = types.DecodeInt64(data) }
+func (a *aggAvgDecimal64) Init(set aggexec.AggSetter[types.Decimal128]) {
+	set(types.Decimal128{B0_63: 0, B64_127: 0})
+	a.count = 0
+}
+func (a *aggAvgDecimal64) Fill(value types.Decimal64, get aggexec.AggGetter[types.Decimal128], set aggexec.AggSetter[types.Decimal128]) {
+	r, _ := get().Add64(value)
+	set(r)
+	a.count++
+}
+func (a *aggAvgDecimal64) FillNull(get aggexec.AggGetter[types.Decimal128], set aggexec.AggSetter[types.Decimal128]) {
+}
+func (a *aggAvgDecimal64) Fills(value types.Decimal64, isNull bool, count int, get aggexec.AggGetter[types.Decimal128], set aggexec.AggSetter[types.Decimal128]) {
+	if isNull {
+		return
+	}
+	v := types.Decimal128{B0_63: uint64(value), B64_127: 0}
+	if value.Sign() {
+		v.B64_127 = ^v.B64_127
+	}
+	r, _ := v.Mul128(types.Decimal128{B0_63: uint64(count), B64_127: 0})
+	r, _ = get().Add128(r)
+	set(r)
+	a.count += int64(count)
+}
+func (a *aggAvgDecimal64) Merge(other aggexec.SingleAggFromFixedRetFixed[types.Decimal64, types.Decimal128], get1, get2 aggexec.AggGetter[types.Decimal128], set aggexec.AggSetter[types.Decimal128]) {
+	next := other.(*aggAvgDecimal64)
+	r, _ := get1().Add128(get2())
+	set(r)
+	a.count += next.count
+}
+func (a *aggAvgDecimal64) Flush(get aggexec.AggGetter[types.Decimal128], set aggexec.AggSetter[types.Decimal128]) {
+	if a.count != 0 {
+		v, _ := get().Div128(types.Decimal128{B0_63: uint64(a.count), B64_127: 0})
+		set(v)
 	}
 }

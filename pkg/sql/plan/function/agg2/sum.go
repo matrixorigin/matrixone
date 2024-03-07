@@ -31,9 +31,26 @@ func RegisterSum(id int64) {
 	aggexec.RegisterDeterminedSingleAgg(aggexec.MakeDeterminedSingleAggInfo(id, types.T_uint64.ToType(), types.T_uint64.ToType(), false, true), newAggSum[uint64, uint64])
 	aggexec.RegisterDeterminedSingleAgg(aggexec.MakeDeterminedSingleAggInfo(id, types.T_float32.ToType(), types.T_float64.ToType(), false, true), newAggSum[float32, float64])
 	aggexec.RegisterDeterminedSingleAgg(aggexec.MakeDeterminedSingleAggInfo(id, types.T_float64.ToType(), types.T_float64.ToType(), false, true), newAggSum[float64, float64])
-	// todo: bug here, should use the register flexible agg.
-	aggexec.RegisterDeterminedSingleAgg(aggexec.MakeDeterminedSingleAggInfo(id, types.T_decimal64.ToType(), types.T_decimal128.ToType(), false, true), newAggSumDecimal64)
-	aggexec.RegisterDeterminedSingleAgg(aggexec.MakeDeterminedSingleAggInfo(id, types.T_decimal128.ToType(), types.T_decimal128.ToType(), false, true), newAggSumDecimal128)
+	aggexec.RegisterFlexibleSingleAgg(
+		aggexec.MakeFlexibleAggInfo(id, false, true),
+		func(t []types.Type) types.Type {
+			switch t[0].Oid {
+			case types.T_decimal64, types.T_decimal128:
+				return types.New(types.T_decimal128, 38, t[0].Scale)
+			default:
+				panic("unexpect type for sum()")
+			}
+		},
+		func(args []types.Type, ret types.Type) any {
+			switch args[0].Oid {
+			case types.T_decimal64:
+				return newAggSumDecimal64
+			case types.T_decimal128:
+				return newAggSumDecimal128
+			default:
+				panic("unexpect type for sum()")
+			}
+		})
 }
 
 var _ aggexec.SingleAggFromFixedRetFixed[int32, int64] = aggSum[int32, int64]{}

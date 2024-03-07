@@ -69,6 +69,10 @@ func (r *basicResult) mergeEmpty(other basicResult, i, j int) {
 	r.empty[i] = r.empty[i] && other.empty[j]
 }
 
+func (r *basicResult) groupIsEmpty(i int) bool {
+	return r.empty[i]
+}
+
 func (r *basicResult) flush() *vector.Vector {
 	if r.emptyBeNull {
 		nsp := nulls.NewWithSize(len(r.empty))

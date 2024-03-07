@@ -24,6 +24,9 @@ import (
 	after registered, the function `MakeAgg` can make the aggregation function executor.
 */
 
+// todo: the implementation argument should deliver the returnType maybe ?
+//  or the Init() method need to do this ?
+
 func RegisterDeterminedSingleAgg(info DeterminedSingleAggInfo, impl any) {
 	// impl legal check.
 

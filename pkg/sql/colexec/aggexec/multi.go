@@ -222,9 +222,19 @@ func (exec *multiAggFuncExec1[T]) BatchMerge(next AggFuncExec, offset int, group
 func (exec *multiAggFuncExec1[T]) Flush() (*vector.Vector, error) {
 	setter := exec.ret.aggSet
 	getter := exec.ret.aggGet
-	for i, group := range exec.groups {
-		exec.ret.groupToSet = i
-		group.Flush(getter, setter)
+	if exec.ret.emptyBeNull {
+		for i, group := range exec.groups {
+			if exec.ret.groupIsEmpty(i) {
+				continue
+			}
+			exec.ret.groupToSet = i
+			group.Flush(getter, setter)
+		}
+	} else {
+		for i, group := range exec.groups {
+			exec.ret.groupToSet = i
+			group.Flush(getter, setter)
+		}
 	}
 	return exec.ret.flush(), nil
 }
@@ -376,10 +386,22 @@ func (exec *multiAggFuncExec2) Flush() (*vector.Vector, error) {
 	setter := exec.ret.aggSet
 	getter := exec.ret.aggGet
 
-	for i, group := range exec.groups {
-		exec.ret.groupToSet = i
-		if err = group.Flush(getter, setter); err != nil {
-			return nil, err
+	if exec.ret.emptyBeNull {
+		for i, group := range exec.groups {
+			if exec.ret.groupIsEmpty(i) {
+				continue
+			}
+			exec.ret.groupToSet = i
+			if err = group.Flush(getter, setter); err != nil {
+				return nil, err
+			}
+		}
+	} else {
+		for i, group := range exec.groups {
+			exec.ret.groupToSet = i
+			if err = group.Flush(getter, setter); err != nil {
+				return nil, err
+			}
 		}
 	}
 	return exec.ret.flush(), nil
