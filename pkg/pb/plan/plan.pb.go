@@ -2469,6 +2469,7 @@ func (m *Function) GetArgs() []*Expr {
 type Expr struct {
 	Typ Type `protobuf:"bytes,1,opt,name=typ,proto3" json:"typ"`
 	// Types that are valid to be assigned to Expr:
+	//
 	//	*Expr_Lit
 	//	*Expr_P
 	//	*Expr_V
@@ -4463,6 +4464,7 @@ func (m *TableDef) GetIsDynamic() bool {
 // XXX: Deprecated and to be removed soon.
 type TableDef_DefType struct {
 	// Types that are valid to be assigned to Def:
+	//
 	//	*TableDef_DefType_Properties
 	Def                  isTableDef_DefType_Def `protobuf_oneof:"def"`
 	XXX_NoUnkeyedLiteral struct{}               `json:"-"`
@@ -4724,18 +4726,18 @@ func (m *HashMapStats) GetRanges() []float64 {
 }
 
 type Stats struct {
-	//for scan, number of blocks to read from S3
+	// for scan, number of blocks to read from S3
 	BlockNum int32 `protobuf:"varint,1,opt,name=block_num,json=blockNum,proto3" json:"block_num,omitempty"`
-	//for scan, cost of reading from S3, basically the read lines
-	//for other nodes, it means the estimated cost of current node
+	// for scan, cost of reading from S3, basically the read lines
+	// for other nodes, it means the estimated cost of current node
 	Cost float64 `protobuf:"fixed64,2,opt,name=cost,proto3" json:"cost,omitempty"`
-	//number of output lines
+	// number of output lines
 	Outcnt float64 `protobuf:"fixed64,3,opt,name=outcnt,proto3" json:"outcnt,omitempty"`
 	// average size of one row, currently not used
 	Rowsize float64 `protobuf:"fixed64,4,opt,name=rowsize,proto3" json:"rowsize,omitempty"`
-	//for scan, this means total count of all table, before filtering
+	// for scan, this means total count of all table, before filtering
 	TableCnt float64 `protobuf:"fixed64,5,opt,name=table_cnt,json=tableCnt,proto3" json:"table_cnt,omitempty"`
-	//for scan, selectivity means outcnt divide total count
+	// for scan, selectivity means outcnt divide total count
 	Selectivity          float64       `protobuf:"fixed64,6,opt,name=selectivity,proto3" json:"selectivity,omitempty"`
 	HashmapStats         *HashMapStats `protobuf:"bytes,7,opt,name=hashmapStats,proto3" json:"hashmapStats,omitempty"`
 	XXX_NoUnkeyedLiteral struct{}      `json:"-"`
@@ -5925,7 +5927,7 @@ type Node struct {
 	WindowIdx     int32                       `protobuf:"varint,52,opt,name=window_idx,json=windowIdx,proto3" json:"window_idx,omitempty"`
 	OnUpdateExprs []*Expr                     `protobuf:"bytes,53,rep,name=onUpdateExprs,proto3" json:"onUpdateExprs,omitempty"`
 	Fuzzymessage  *OriginTableMessageForFuzzy `protobuf:"bytes,54,opt,name=fuzzymessage,proto3" json:"fuzzymessage,omitempty"`
-	//for message
+	// for message
 	SendMsgList          []*MsgHeader `protobuf:"bytes,55,rep,name=send_msg_list,json=sendMsgList,proto3" json:"send_msg_list,omitempty"`
 	RecvMsgList          []*MsgHeader `protobuf:"bytes,56,rep,name=recv_msg_list,json=recvMsgList,proto3" json:"recv_msg_list,omitempty"`
 	XXX_NoUnkeyedLiteral struct{}     `json:"-"`
@@ -6639,7 +6641,7 @@ func (m *PreInsertUkCtx) GetTableDef() *TableDef {
 }
 
 type PreDeleteCtx struct {
-	//the indexes of row_id&pk column in the batch
+	// the indexes of row_id&pk column in the batch
 	Idx                  []int32  `protobuf:"varint,1,rep,packed,name=idx,proto3" json:"idx,omitempty"`
 	XXX_NoUnkeyedLiteral struct{} `json:"-"`
 	XXX_unrecognized     []byte   `json:"-"`
@@ -7056,7 +7058,7 @@ type Query struct {
 	Headings []string `protobuf:"bytes,5,rep,name=headings,proto3" json:"headings,omitempty"`
 	// load Tag
 	LoadTag bool `protobuf:"varint,6,opt,name=loadTag,proto3" json:"loadTag,omitempty"`
-	//detectSqls are sqls detect fk self refer constraint
+	// detectSqls are sqls detect fk self refer constraint
 	DetectSqls           []string `protobuf:"bytes,7,rep,name=detectSqls,proto3" json:"detectSqls,omitempty"`
 	XXX_NoUnkeyedLiteral struct{} `json:"-"`
 	XXX_unrecognized     []byte   `json:"-"`
@@ -7146,9 +7148,10 @@ func (m *Query) GetDetectSqls() []string {
 }
 
 type TransationControl struct {
-	//TransationControl type
+	// TransationControl type
 	TclType TransationControl_TclType `protobuf:"varint,1,opt,name=tcl_type,json=tclType,proto3,enum=plan.TransationControl_TclType" json:"tcl_type,omitempty"`
 	// Types that are valid to be assigned to Action:
+	//
 	//	*TransationControl_Begin
 	//	*TransationControl_Commit
 	//	*TransationControl_Rollback
@@ -7398,6 +7401,7 @@ func (m *TransationRollback) GetCompletionType() TransationCompletionType {
 
 type Plan struct {
 	// Types that are valid to be assigned to Plan:
+	//
 	//	*Plan_Query
 	//	*Plan_Tcl
 	//	*Plan_Ddl
@@ -7574,9 +7578,10 @@ func (m *Column) GetColumn() []*Expr {
 }
 
 type DataControl struct {
-	//DataDefinition type
+	// DataDefinition type
 	DclType DataControl_DclType `protobuf:"varint,1,opt,name=dcl_type,json=dclType,proto3,enum=plan.DataControl_DclType" json:"dcl_type,omitempty"`
 	// Types that are valid to be assigned to Control:
+	//
 	//	*DataControl_SetVariables
 	//	*DataControl_Prepare
 	//	*DataControl_Execute
@@ -7697,13 +7702,14 @@ func (*DataControl) XXX_OneofWrappers() []interface{} {
 }
 
 type DataDefinition struct {
-	//DataDefinition type
+	// DataDefinition type
 	DdlType DataDefinition_DdlType `protobuf:"varint,1,opt,name=ddl_type,json=ddlType,proto3,enum=plan.DataDefinition_DdlType" json:"ddl_type,omitempty"`
-	//other show statement we will rewrite to a select statement
-	//then we will get a Query
-	//eg: 'show databases' will rewrite to 'select md.datname as `Database` from mo_database md'
+	// other show statement we will rewrite to a select statement
+	// then we will get a Query
+	// eg: 'show databases' will rewrite to 'select md.datname as `Database` from mo_database md'
 	Query *Query `protobuf:"bytes,2,opt,name=query,proto3" json:"query,omitempty"`
 	// Types that are valid to be assigned to Definition:
+	//
 	//	*DataDefinition_CreateDatabase
 	//	*DataDefinition_AlterDatabase
 	//	*DataDefinition_DropDatabase
@@ -9281,7 +9287,7 @@ type AlterTable struct {
 	CreateTableSql    string                   `protobuf:"bytes,9,opt,name=create_table_sql,json=createTableSql,proto3" json:"create_table_sql,omitempty"`
 	InsertDataSql     string                   `protobuf:"bytes,10,opt,name=insert_data_sql,json=insertDataSql,proto3" json:"insert_data_sql,omitempty"`
 	ChangeTblColIdMap map[uint64]*ColDef       `protobuf:"bytes,11,rep,name=change_tbl_colId_map,json=changeTblColIdMap,proto3" json:"change_tbl_colId_map,omitempty" protobuf_key:"varint,1,opt,name=key,proto3" protobuf_val:"bytes,2,opt,name=value,proto3"`
-	//detect fk self refer constraint
+	// detect fk self refer constraint
 	DetectSqls []string `protobuf:"bytes,12,rep,name=detectSqls,proto3" json:"detectSqls,omitempty"`
 	// alter table may insert fk records related to this table
 	// into mo_foreign_keys
@@ -9417,6 +9423,7 @@ func (m *AlterTable) GetUpdateFkSqls() []string {
 
 type AlterTable_Action struct {
 	// Types that are valid to be assigned to Action:
+	//
 	//	*AlterTable_Action_Drop
 	//	*AlterTable_Action_AddFk
 	//	*AlterTable_Action_AddIndex
@@ -9621,7 +9628,7 @@ type DropTable struct {
 	// drop table may delete fk records related to this table
 	// into mo_foreign_keys
 	UpdateFkSqls []string `protobuf:"bytes,11,rep,name=updateFkSqls,proto3" json:"updateFkSqls,omitempty"`
-	//fk child table id that refers to me
+	// fk child table id that refers to me
 	FkChildTblsReferToMe []uint64 `protobuf:"varint,12,rep,packed,name=fkChildTblsReferToMe,proto3" json:"fkChildTblsReferToMe,omitempty"`
 	XXX_NoUnkeyedLiteral struct{} `json:"-"`
 	XXX_unrecognized     []byte   `json:"-"`
