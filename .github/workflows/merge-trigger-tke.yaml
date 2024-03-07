@@ -115,6 +115,7 @@ jobs:
           if [ ! -d $GITHUB_WORKSPACE/mo-server-log ]; then
             mkdir $GITHUB_WORKSPACE/mo-server-log;
           fi
+
       - name: Get MO Cluster Addr
         id: get_mo_addr
         timeout-minutes: 2
@@ -125,7 +126,11 @@ jobs:
           kubectl get pod -n mo-checkin-regression-${{ github.event.pull_request.number }} -l matrixorigin.io/component=CNSet | awk 'NR>1{arr[a++]=$1} END {for(i in arr){system("echo cn_"i"="arr[i]" >> $GITHUB_OUTPUT")}}'
           cn_ips=$(kubectl -n mo-checkin-regression-${{ github.event.pull_request.number }} get pods -l matrixorigin.io/component=CNSet -o=jsonpath='{.items[*].status.podIP}' | sed 's/ /,/g')
           echo "cn_ips is $cn_ips"
-          echo "cn_ips=$cn_ips"  >>  $GITHUB_OUTPUT
+          echo "cn_ips=$cn_ips"  >>  $GITHUB_OUTPUT;
+
+      - name: Add TXN Filter
+        run: |
+          MYSQL_PWD=111 mysql -h ${{ steps.get_mo_addr.outputs.mo_svc_ip }} -P 6001 -u dump -e "select mo_ctl('cn', 'txn-trace', 'add-txn user admin');"
       - name: Prepare Data in cn-0
         timeout-minutes: 5
         run: |
@@ -476,6 +481,19 @@ jobs:
           echo "sysbench_password=111" >> $GITHUB_OUTPUT
           echo "$JAVA_HOME/bin" >> $GITHUB_PATH
 
+      - name: Enable CN TXN Trace
+        timeout-minutes: 2
+        run: |
+          export MYSQL_PWD='111'
+          # add sysbench tables
+          for i in {1..10}; do
+            echo "select mo_ctl('cn', 'txn-trace', 'add-table sbtest$i');" >> enable_txn_trace.sql;
+          done
+          echo "select mo_ctl('cn', 'txn-trace', 'enable txn');" >> enable_txn_trace.sql;
+          echo "select mo_ctl('cn', 'txn-trace', 'enable data');" >> enable_txn_trace.sql;
+          cat enable_txn_trace.sql;
+          echo "===================";
+          mysql -h ${{ needs.setup_mo_test_env.outputs.mo_svc_ip }} -u dump -P 6001 < enable_txn_trace.sql
  
       # start sysbench test
       - name: Start OLTP Mixed Test With 100 Threads
@@ -602,6 +620,21 @@ jobs:
           cd $GITHUB_WORKSPACE/mo-load-data
           mkdir -p report
           ./load.sh -u ${{ steps.account_for_tpcc.outputs.tpcc_account }} -p ${{ steps.account_for_tpcc.outputs.tpcc_password }} -h ${{ needs.setup_mo_test_env.outputs.mo_svc_ip }} -c cases/02_from_cos/tpcc_10 -r -m -g | tee report/mo-load-data-tpcc.log
+
+      - name: Enable CN TXN Trace
+        timeout-minutes: 2
+        run: |
+          export MYSQL_PWD='111'
+          # add tpcc tables
+          tpcc_tables=("bmsql_config" "bmsql_customer" "bmsql_district" "bmsql_history" "bmsql_item" "bmsql_new_order" "bmsql_oorder" "bmsql_order_line" "bmsql_stock" "bmsql_warehouse");
+          for table in ${tpcc_tables[@]}; do
+            echo "select mo_ctl('cn', 'txn-trace', 'add-table $table');" >> enable_txn_trace.sql;
+          done
+          echo "select mo_ctl('cn', 'txn-trace', 'enable txn');" >> enable_txn_trace.sql;
+          echo "select mo_ctl('cn', 'txn-trace', 'enable data');" >> enable_txn_trace.sql;
+          cat enable_txn_trace.sql;
+          echo "===================";
+          mysql -h ${{ needs.setup_mo_test_env.outputs.mo_svc_ip }} -u dump -P 6001 < enable_txn_trace.sql
 
       - name: Start TPCC 10 Warehouses 100 terminals Test
         if: ${{ always() && !cancelled() && steps.load_tpcc_data.conclusion == 'success' }}
