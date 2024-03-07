@@ -236,17 +236,21 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 	// See `func (exec *txnExecutor) Exec(sql string)` for details.
 	txnOp := cwft.proc.TxnOperator
 	cwft.ses.SetTxnId(txnOp.Txn().ID)
+	//non derived statement
 	if txnOp != nil && !cwft.ses.IsDerivedStmt() {
+		//startStatement has been called
 		ok, _ := cwft.ses.GetTxnHandler().calledStartStmt()
 		if !ok {
 			txnOp.GetWorkspace().StartStatement()
 			cwft.ses.GetTxnHandler().enableStartStmt(txnOp.Txn().ID)
 		}
 
+		//increase statement id
 		err = txnOp.GetWorkspace().IncrStatementID(requestCtx, false)
 		if err != nil {
 			return nil, err
 		}
+		cwft.ses.GetTxnHandler().enableIncrStmt(txnOp.Txn().ID)
 	}
 
 	cacheHit := cwft.plan != nil
