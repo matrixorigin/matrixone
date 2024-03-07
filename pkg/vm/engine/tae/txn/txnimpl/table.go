@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 
@@ -826,6 +827,9 @@ func (tbl *txnTable) RangeDelete(
 		if err = mvcc.CheckNotDeleted(start, end, tbl.store.txn.GetStartTS()); err == nil {
 			node.RangeDeleteLocked(start, end, pk, common.WorkspaceAllocator)
 		}
+		if err != nil && moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict) {
+			logutil.Warn("w-w conflict", zap.String("chain", mvcc.StringLocked()))
+		}
 		mvcc.Unlock()
 		if err != nil {
 			tbl.store.warChecker.Insert(mvcc.GetEntry())
@@ -842,6 +846,9 @@ func (tbl *txnTable) RangeDelete(
 	}
 	blkData := blk.GetBlockData()
 	node2, err := blkData.RangeDelete(tbl.store.txn, start, end, pk, dt)
+	if err != nil && moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict) {
+		logutil.Warn("w-w conflict", zap.String("blk", blkData.PPString(common.PPL2, 0, "")))
+	}
 	if err == nil {
 		if err = tbl.AddDeleteNode(id, node2); err != nil {
 			return
