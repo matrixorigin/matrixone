@@ -802,7 +802,7 @@ func newStringConstVal(v string) *plan.Expr {
 
 func newColumnExpr(pos int, typ *plan.Type, name string) *plan.Expr {
 	return &plan.Expr{
-		Typ: typ,
+		Typ: *typ,
 		Expr: &plan.Expr_Col{
 			Col: &plan.ColRef{
 				Name:   name,
@@ -855,7 +855,7 @@ func genWriteReqs(ctx context.Context, writes []Entry, op client.TxnOperator) ([
 	}
 	reqs := make([]txn.TxnRequest, 0, len(mp))
 	for k := range mp {
-		trace.GetService().CommitEntries(op.Txn().ID, mp[k])
+		trace.GetService().TxnCommit(op, mp[k])
 		payload, err := types.Encode(&api.PrecommitWriteCmd{EntryList: mp[k]})
 		if err != nil {
 			return nil, err

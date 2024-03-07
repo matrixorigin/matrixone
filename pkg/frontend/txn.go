@@ -16,17 +16,13 @@ package frontend
 
 import (
 	"context"
-	"fmt"
 	"sync"
 
 	"github.com/google/uuid"
-
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"go.uber.org/zap"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage"
@@ -34,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"go.uber.org/zap"
 )
 
 var (
@@ -157,8 +154,23 @@ func (th *TxnHandler) NewTxnOperator() (context.Context, TxnOperator, error) {
 	if txnCtx == nil {
 		panic("context should not be nil")
 	}
+
+	accountID := uint32(0)
+	userName := ""
+	connectionID := uint32(0)
+	if th.ses.protocol != nil {
+		connectionID = th.ses.protocol.ConnectionID()
+	}
+	if th.ses.GetTenantInfo() != nil {
+		accountID = th.ses.GetTenantInfo().TenantID
+		userName = th.ses.GetTenantInfo().User
+	}
 	opts = append(opts,
-		client.WithTxnCreateBy(fmt.Sprintf("frontend-session-%p", th.ses)))
+		client.WithTxnCreateBy(
+			accountID,
+			userName,
+			th.ses.GetUUIDString(),
+			connectionID))
 
 	if th.ses != nil && th.ses.GetFromRealUser() {
 		opts = append(opts,
@@ -166,22 +178,11 @@ func (th *TxnHandler) NewTxnOperator() (context.Context, TxnOperator, error) {
 	}
 
 	if th.ses != nil {
-		varVal, err := th.ses.GetSessionVar("transaction_operator_open_log")
-		if err != nil {
-			return nil, nil, err
-		}
-		if gsv, ok := GSysVariables.GetDefinitionOfSysVar("transaction_operator_open_log"); ok {
-			if svbt, ok2 := gsv.GetType().(SystemVariableBoolType); ok2 {
-				if svbt.IsTrue(varVal) {
-					opts = append(opts, client.WithTxnOpenLog())
-				}
-			}
-		}
-
-		if th.ses.IsBackgroundSession() {
+		if th.ses.IsBackgroundSession() ||
+			th.ses.disableTrace {
 			opts = append(opts, client.WithDisableTrace(true))
 		} else {
-			varVal, err = th.ses.GetSessionVar("disable_txn_trace")
+			varVal, err := th.ses.GetSessionVar("disable_txn_trace")
 			if err != nil {
 				return nil, nil, err
 			}

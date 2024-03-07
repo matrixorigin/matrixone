@@ -20,7 +20,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -38,7 +37,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
-	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -64,29 +62,31 @@ func WithFlushDuration(value time.Duration) Option {
 }
 
 type service struct {
-	cn        string
-	client    client.TxnClient
-	clock     clock.Clock
-	executor  executor.SQLExecutor
-	stopper   *stopper.Stopper
-	txnC      chan csvEvent
-	entryC    chan csvEvent
-	txnBufC   chan *buffer
-	entryBufC chan *buffer
-	loadC     chan loadAction
-	seq       atomic.Uint64
-	dir       string
-	logger    *log.MOLogger
+	cn            string
+	client        client.TxnClient
+	clock         clock.Clock
+	executor      executor.SQLExecutor
+	stopper       *stopper.Stopper
+	txnC          chan csvEvent
+	txnBufC       chan *buffer
+	entryC        chan csvEvent
+	entryBufC     chan *buffer
+	txnActionC    chan csvEvent
+	txnActionBufC chan *buffer
 
-	mu struct {
-		sync.RWMutex
-		entryFilters []EntryFilter
-		closed       bool
-	}
+	loadC  chan loadAction
+	seq    atomic.Uint64
+	dir    string
+	logger *log.MOLogger
 
 	atomic struct {
-		enabled         atomic.Bool
-		complexPKTables sync.Map // uint64 -> bool
+		txnEventEnabled       atomic.Bool
+		txnActionEventEnabled atomic.Bool
+		dataEventEnabled      atomic.Bool
+		tableFilters          atomic.Pointer[tableFilters]
+		txnFilters            atomic.Pointer[txnFilters]
+		closed                atomic.Bool
+		complexPKTables       sync.Map // uint64 -> bool
 	}
 
 	options struct {
@@ -112,6 +112,7 @@ func NewService(
 
 	s := &service{
 		stopper:  stopper.NewStopper("txn-trace"),
+		cn:       cn,
 		client:   client,
 		clock:    clock,
 		executor: executor,
@@ -124,24 +125,29 @@ func NewService(
 	}
 
 	if s.options.flushDuration == 0 {
-		s.options.flushDuration = 60 * time.Second
+		s.options.flushDuration = 30 * time.Second
 	}
 	if s.options.flushBytes == 0 {
 		s.options.flushBytes = 16 * 1024 * 1024
 	}
 	if s.options.bufferSize == 0 {
-		s.options.bufferSize = 10000
+		s.options.bufferSize = 100000
 	}
 
 	s.txnBufC = make(chan *buffer, s.options.bufferSize)
 	s.entryBufC = make(chan *buffer, s.options.bufferSize)
 	s.entryC = make(chan csvEvent, s.options.bufferSize)
 	s.txnC = make(chan csvEvent, s.options.bufferSize)
+	s.txnActionC = make(chan csvEvent, s.options.bufferSize)
+	s.txnActionBufC = make(chan *buffer, s.options.bufferSize)
 
 	if err := s.stopper.RunTask(s.handleTxnEvents); err != nil {
 		panic(err)
 	}
-	if err := s.stopper.RunTask(s.handleEntryEvents); err != nil {
+	if err := s.stopper.RunTask(s.handleTxnActionEvents); err != nil {
+		panic(err)
+	}
+	if err := s.stopper.RunTask(s.handleDataEvents); err != nil {
 		panic(err)
 	}
 	if err := s.stopper.RunTask(s.handleLoad); err != nil {
@@ -153,445 +159,24 @@ func NewService(
 	return s, nil
 }
 
-func (s *service) TxnCreated(op client.TxnOperator) {
-	if op.Txn().DisableTrace {
-		return
-	}
-
-	if !s.atomic.enabled.Load() {
-		return
-	}
-
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	if s.mu.closed {
-		return
-	}
-	s.txnC <- newTxnCreated(op.Txn())
-	op.AppendEventCallback(client.ActiveEvent, s.handleTxnActive)
-	op.AppendEventCallback(client.ClosedEvent, s.handleTxnClosed)
-	op.AppendEventCallback(client.SnapshotUpdatedEvent, s.handleTxnSnapshotUpdated)
-	op.AppendEventCallback(client.CommitFailedEvent, s.handleTxnCommitFailed)
-
+func (s *service) Enable(feature string) error {
+	return s.updateState(feature, stateEnable)
 }
 
-func (s *service) handleTxnActive(
-	meta txn.TxnMeta,
-	_ error) {
-	if !s.atomic.enabled.Load() {
-		return
-	}
-
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	if s.mu.closed {
-		return
-	}
-
-	s.txnC <- newTxnActive(meta)
+func (s *service) Disable(feature string) error {
+	return s.updateState(feature, stateDisable)
 }
 
-func (s *service) handleTxnClosed(
-	meta txn.TxnMeta,
-	_ error) {
-	if !s.atomic.enabled.Load() {
-		return
+func (s *service) Enabled(feature string) bool {
+	switch feature {
+	case FeatureTraceData:
+		return s.atomic.dataEventEnabled.Load()
+	case FeatureTraceTxn:
+		return s.atomic.txnEventEnabled.Load()
+	case FeatureTraceTxnAction:
+		return s.atomic.txnActionEventEnabled.Load()
 	}
-
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	if s.mu.closed {
-		return
-	}
-
-	s.txnC <- newTxnClosed(meta)
-}
-
-func (s *service) handleTxnSnapshotUpdated(
-	meta txn.TxnMeta,
-	_ error) {
-	if !s.atomic.enabled.Load() {
-		return
-	}
-
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	if s.mu.closed {
-		return
-	}
-
-	s.txnC <- newTxnSnapshotUpdated(meta)
-}
-
-func (s *service) handleTxnCommitFailed(
-	meta txn.TxnMeta,
-	err error) {
-	if !s.atomic.enabled.Load() {
-		return
-	}
-
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	if s.mu.closed {
-		return
-	}
-
-	s.AddTxnError(meta.ID, err)
-}
-
-func (s *service) CommitEntries(
-	txnID []byte,
-	entries []*api.Entry) {
-	if !s.atomic.enabled.Load() {
-		return
-	}
-
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	if s.mu.closed {
-		return
-	}
-
-	if len(s.mu.entryFilters) == 0 {
-		return
-	}
-
-	ts := time.Now().UnixNano()
-	buf := reuse.Alloc[buffer](nil)
-	var entryData *EntryData
-	defer func() {
-		entryData.close()
-	}()
-
-	n := 0
-	for _, entry := range entries {
-		if entryData == nil {
-			entryData = newEntryData(entry, -1, ts)
-		} else {
-			entryData.reset()
-			entryData.init(entry, -1, ts)
-		}
-
-		skipped := true
-		for _, f := range s.mu.entryFilters {
-			if !f.Filter(entryData) {
-				skipped = false
-				break
-			}
-		}
-		if skipped {
-			continue
-		}
-
-		entryData.createCommit(
-			txnID,
-			buf,
-			func(e entryEvent) {
-				s.entryC <- e
-			},
-			&s.atomic.complexPKTables)
-		n++
-	}
-
-	if n == 0 {
-		buf.close()
-		return
-	}
-	s.entryBufC <- buf
-}
-
-func (s *service) TxnRead(
-	txnID []byte,
-	snapshotTS timestamp.Timestamp,
-	tableID uint64,
-	columns []string,
-	bat *batch.Batch) {
-	if !s.atomic.enabled.Load() {
-		return
-	}
-
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	if s.mu.closed {
-		return
-	}
-
-	entryData := newReadEntryData(tableID, snapshotTS, bat, columns, time.Now().UnixNano())
-	defer func() {
-		entryData.close()
-	}()
-
-	skipped := true
-	for _, f := range s.mu.entryFilters {
-		if !f.Filter(entryData) {
-			skipped = false
-			break
-		}
-	}
-	if skipped {
-		return
-	}
-
-	buf := reuse.Alloc[buffer](nil)
-	entryData.createRead(
-		txnID,
-		buf,
-		func(e entryEvent) {
-			s.entryC <- e
-		},
-		&s.atomic.complexPKTables)
-	s.entryBufC <- buf
-}
-
-func (s *service) ChangedCheck(
-	txnID []byte,
-	tableID uint64,
-	from, to timestamp.Timestamp,
-	changed bool) {
-	if !s.atomic.enabled.Load() {
-		return
-	}
-
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	if s.mu.closed {
-		return
-	}
-
-	skipped := true
-	l := reuse.Alloc[EntryData](nil)
-	defer l.close()
-	l.id = tableID
-	l.empty = true
-	for _, f := range s.mu.entryFilters {
-		if !f.Filter(l) {
-			skipped = false
-			break
-		}
-	}
-	if skipped {
-		return
-	}
-	s.txnC <- newTxnCheckChanged(txnID, from, to, changed)
-}
-
-func (s *service) AddTxnError(
-	txnID []byte,
-	value error) {
-	if !s.atomic.enabled.Load() {
-		return
-	}
-
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	if s.mu.closed {
-		return
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-	defer cancel()
-
-	ts := time.Now().UnixNano()
-	msg := value.Error()
-	if me, ok := value.(*moerr.Error); ok {
-		msg += ": " + me.Detail()
-	}
-
-	sql := fmt.Sprintf("insert into %s (ts, txn_id, error_info) values (%d, '%x', '%s')",
-		eventErrorTable,
-		ts,
-		txnID,
-		escape(msg))
-
-	now, _ := s.clock.Now()
-	err := s.executor.ExecTxn(
-		ctx,
-		func(txn executor.TxnExecutor) error {
-			res, err := txn.Exec(sql,
-				executor.StatementOption{})
-			if err != nil {
-				return err
-			}
-			res.Close()
-			return nil
-		},
-		executor.Options{}.
-			WithDatabase(DebugDB).
-			WithMinCommittedTS(now).
-			WithWaitCommittedLogApplied().
-			WithDisableLock().
-			WithDisableTrace())
-	if err != nil {
-		s.logger.Error("exec txn error trace failed",
-			zap.String("sql", sql),
-			zap.Error(err))
-	}
-}
-
-func (s *service) ApplyLogtail(
-	entry *api.Entry,
-	commitTSIndex int) {
-	if !s.atomic.enabled.Load() {
-		return
-	}
-
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	if s.mu.closed {
-		return
-	}
-
-	if len(s.mu.entryFilters) == 0 {
-		return
-	}
-
-	entryData := newEntryData(entry, commitTSIndex, time.Now().UnixNano())
-	defer func() {
-		entryData.close()
-	}()
-
-	skipped := true
-	for _, f := range s.mu.entryFilters {
-		if !f.Filter(entryData) {
-			skipped = false
-			break
-		}
-	}
-	if skipped {
-		return
-	}
-
-	buf := reuse.Alloc[buffer](nil)
-	entryData.createApply(
-		buf,
-		func(e entryEvent) {
-			s.entryC <- e
-		},
-		&s.atomic.complexPKTables)
-	s.entryBufC <- buf
-}
-
-func (s *service) Enable() error {
-	return s.updateState(stateEnable)
-}
-
-func (s *service) Disable() error {
-	return s.updateState(stateDisable)
-}
-
-func (s *service) AddEntryFilter(name string, columns []string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	now, _ := s.clock.Now()
-	return s.executor.ExecTxn(
-		ctx,
-		func(txn executor.TxnExecutor) error {
-			txn.Use("mo_catalog")
-			res, err := txn.Exec(fmt.Sprintf("select rel_id from mo_tables where relname = '%s'", name), executor.StatementOption{})
-			if err != nil {
-				return err
-			}
-			defer res.Close()
-
-			var tables []uint64
-			res.ReadRows(func(rows int, cols []*vector.Vector) bool {
-				tables = append(tables, vector.MustFixedCol[uint64](cols[0])...)
-				return true
-			})
-			if len(tables) == 0 {
-				return moerr.NewNoSuchTableNoCtx("", name)
-			}
-
-			txn.Use(DebugDB)
-			for _, id := range tables {
-				r, err := txn.Exec(getEntryFilterSQL(id, name, columns), executor.StatementOption{})
-				if err != nil {
-					return err
-				}
-				r.Close()
-			}
-			return nil
-		},
-		executor.Options{}.
-			WithMinCommittedTS(now).
-			WithWaitCommittedLogApplied().
-			WithDisableLock().
-			WithDisableTrace())
-}
-
-func (s *service) ClearFilters() error {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	now, _ := s.clock.Now()
-	err := s.executor.ExecTxn(
-		ctx,
-		func(txn executor.TxnExecutor) error {
-			txn.Use(DebugDB)
-			res, err := txn.Exec(
-				fmt.Sprintf("truncate table %s",
-					traceTable),
-				executor.StatementOption{})
-			if err != nil {
-				return err
-			}
-			res.Close()
-			return nil
-		},
-		executor.Options{}.
-			WithDisableLock().
-			WithDisableTrace().
-			WithMinCommittedTS(now).
-			WithWaitCommittedLogApplied())
-	if err != nil {
-		return err
-	}
-
-	return s.RefreshFilters()
-}
-
-func (s *service) RefreshFilters() error {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	var filters []EntryFilter
-	now, _ := s.clock.Now()
-	err := s.executor.ExecTxn(
-		ctx,
-		func(txn executor.TxnExecutor) error {
-			txn.Use(DebugDB)
-			res, err := txn.Exec(
-				fmt.Sprintf("select table_id, columns from %s",
-					traceTable),
-				executor.StatementOption{})
-			if err != nil {
-				return err
-			}
-			defer res.Close()
-
-			res.ReadRows(func(rows int, cols []*vector.Vector) bool {
-				for i := 0; i < rows; i++ {
-					id := vector.MustFixedCol[uint64](cols[0])[i]
-					columns := cols[1].GetStringAt(i)
-					filters = append(filters, NewKeepTableFilter(id, strings.Split(columns, ",")))
-				}
-				return true
-			})
-			return nil
-		},
-		executor.Options{}.
-			WithDisableLock().
-			WithDisableTrace().
-			WithMinCommittedTS(now).
-			WithWaitCommittedLogApplied())
-	if err != nil {
-		return err
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.mu.entryFilters = filters
-	return nil
+	return false
 }
 
 func (s *service) DecodeHexComplexPK(hexPK string) (string, error) {
@@ -603,7 +188,7 @@ func (s *service) DecodeHexComplexPK(hexPK string) (string, error) {
 	buf := reuse.Alloc[buffer](nil)
 	defer buf.close()
 
-	dst := buf.alloc(20)
+	dst := buf.alloc(100)
 	idx := buf.buf.GetWriteIndex()
 	writeCompletedValue(v, buf, dst)
 	return string(buf.buf.RawSlice(idx, buf.buf.GetWriteIndex())), nil
@@ -611,44 +196,12 @@ func (s *service) DecodeHexComplexPK(hexPK string) (string, error) {
 
 func (s *service) Close() {
 	s.stopper.Stop()
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	s.mu.closed = true
+	s.atomic.closed.Store(true)
 	close(s.entryBufC)
 	close(s.entryC)
 	close(s.txnC)
 	close(s.txnBufC)
 	close(s.loadC)
-}
-
-func (s *service) txnCSVFile() string {
-	return filepath.Join(s.dir, fmt.Sprintf("txn-%d.csv", s.seq.Add(1)))
-}
-
-func (s *service) entryCSVFile() string {
-	return filepath.Join(s.dir, fmt.Sprintf("entry-%d.csv", s.seq.Add(1)))
-}
-
-func (s *service) handleEntryEvents(ctx context.Context) {
-	s.handleEvent(
-		ctx,
-		s.entryCSVFile,
-		9,
-		eventDataTable,
-		s.entryC,
-		s.entryBufC)
-}
-
-func (s *service) handleTxnEvents(ctx context.Context) {
-	s.handleEvent(
-		ctx,
-		s.txnCSVFile,
-		8,
-		eventTxnTable,
-		s.txnC,
-		s.txnBufC)
 }
 
 func (s *service) handleEvent(
@@ -765,8 +318,7 @@ func (s *service) handleLoad(ctx context.Context) {
 			},
 			executor.Options{}.
 				WithDatabase(DebugDB).
-				WithDisableTrace().
-				WithDisableLock())
+				WithDisableTrace())
 	}
 
 	for {
@@ -804,32 +356,33 @@ func (s *service) watch(ctx context.Context) {
 	ticker := time.NewTicker(time.Second * 10)
 	defer ticker.Stop()
 
-	fetch := func() (string, error) {
+	fetch := func() ([]string, []string, error) {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second*30)
 		defer cancel()
-		state := "disable"
+		var features []string
+		var states []string
 		err := s.executor.ExecTxn(
 			ctx,
 			func(txn executor.TxnExecutor) error {
-				sql := fmt.Sprintf("select state from %s where name = '%s'",
-					featuresTables,
-					featureTraceTxn)
+				sql := fmt.Sprintf("select name, state from %s", featuresTables)
 				res, err := txn.Exec(sql, executor.StatementOption{})
 				if err != nil {
 					return err
 				}
 				defer res.Close()
 				res.ReadRows(func(rows int, cols []*vector.Vector) bool {
-					state = cols[0].GetStringAt(0)
+					for i := 0; i < rows; i++ {
+						features = append(features, cols[0].GetStringAt(i))
+						states = append(states, cols[1].GetStringAt(i))
+					}
 					return true
 				})
 				return nil
 			},
 			executor.Options{}.
 				WithDatabase(DebugDB).
-				WithDisableTrace().
-				WithDisableLock())
-		return state, err
+				WithDisableTrace())
+		return features, states, err
 	}
 
 	for {
@@ -837,23 +390,51 @@ func (s *service) watch(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			state, err := fetch()
+			features, states, err := fetch()
 			if err != nil {
 				s.logger.Error("failed to fetch trace state",
 					zap.Error(err))
 				continue
 			}
 
-			if state == stateEnable {
-				s.active()
-			} else {
-				s.inactive()
+			needRefresh := false
+			for i, feature := range features {
+				enable := states[i] == stateEnable
+				if enable {
+					needRefresh = true
+				}
+				switch feature {
+				case FeatureTraceData:
+					s.atomic.dataEventEnabled.Store(enable)
+				case FeatureTraceTxn:
+					s.atomic.txnEventEnabled.Store(enable)
+				case FeatureTraceTxnAction:
+					s.atomic.txnActionEventEnabled.Store(enable)
+				}
+			}
+
+			if needRefresh {
+				if err := s.RefreshTableFilters(); err != nil {
+					s.logger.Error("failed to refresh table filters",
+						zap.Error(err))
+				}
+
+				if err := s.RefreshTxnFilters(); err != nil {
+					s.logger.Error("failed to refresh txn filters",
+						zap.Error(err))
+				}
 			}
 		}
 	}
 }
 
-func (s *service) updateState(state string) error {
+func (s *service) updateState(feature, state string) error {
+	switch feature {
+	case FeatureTraceData, FeatureTraceTxnAction, FeatureTraceTxn:
+	default:
+		return moerr.NewNotSupportedNoCtx("feature %s", feature)
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
@@ -862,9 +443,10 @@ func (s *service) updateState(state string) error {
 		ctx,
 		func(txn executor.TxnExecutor) error {
 			res, err := txn.Exec(
-				fmt.Sprintf("update %s set state = '%s'",
+				fmt.Sprintf("update %s set state = '%s' where name = '%s'",
 					featuresTables,
-					state),
+					state,
+					feature),
 				executor.StatementOption{})
 			if err != nil {
 				return err
@@ -876,24 +458,7 @@ func (s *service) updateState(state string) error {
 			WithDatabase(DebugDB).
 			WithMinCommittedTS(now).
 			WithWaitCommittedLogApplied().
-			WithDisableLock().
 			WithDisableTrace())
-}
-
-func (s *service) active() {
-	if s.atomic.enabled.Load() {
-		return
-	}
-
-	if err := s.RefreshFilters(); err != nil {
-		return
-	}
-	s.atomic.enabled.Store(true)
-}
-
-func (s *service) inactive() error {
-	s.atomic.enabled.Store(false)
-	return nil
 }
 
 // EntryData entry data
@@ -929,6 +494,12 @@ func newReadEntryData(
 	l.id = tableID
 	l.columns = append(l.columns, columns...)
 	l.vecs = append(l.vecs, bat.Vecs...)
+	return l
+}
+
+func newTableOnlyEntryData(tableID uint64) *EntryData {
+	l := reuse.Alloc[EntryData](nil)
+	l.id = tableID
 	return l
 }
 
@@ -976,13 +547,13 @@ func (l *EntryData) close() {
 
 func (l *EntryData) createApply(
 	buf *buffer,
-	fn func(e entryEvent),
+	fn func(e dataEvent),
 	completedPKTables *sync.Map) {
 	commitTS := vector.MustFixedCol[types.TS](l.commitVec)
 
 	l.writeToBuf(
 		buf,
-		func(data []byte, row int) entryEvent {
+		func(data []byte, row int) dataEvent {
 			return newApplyLogtailEvent(
 				l.at,
 				l.id,
@@ -997,11 +568,11 @@ func (l *EntryData) createApply(
 func (l *EntryData) createCommit(
 	txnID []byte,
 	buf *buffer,
-	fn func(e entryEvent),
+	fn func(e dataEvent),
 	completedPKTables *sync.Map) {
 	l.writeToBuf(
 		buf,
-		func(data []byte, _ int) entryEvent {
+		func(data []byte, _ int) dataEvent {
 			return newCommitEntryEvent(
 				l.at,
 				txnID,
@@ -1016,11 +587,11 @@ func (l *EntryData) createCommit(
 func (l *EntryData) createRead(
 	txnID []byte,
 	buf *buffer,
-	fn func(e entryEvent),
+	fn func(e dataEvent),
 	completedPKTables *sync.Map) {
 	l.writeToBuf(
 		buf,
-		func(data []byte, row int) entryEvent {
+		func(data []byte, row int) dataEvent {
 			return newReadEntryEvent(
 				l.at,
 				txnID,
@@ -1035,8 +606,8 @@ func (l *EntryData) createRead(
 
 func (l *EntryData) writeToBuf(
 	buf *buffer,
-	factory func([]byte, int) entryEvent,
-	fn func(e entryEvent),
+	factory func([]byte, int) dataEvent,
+	fn func(e dataEvent),
 	completedPKTables *sync.Map) {
 	if len(l.vecs) == 0 {
 		return
@@ -1044,7 +615,7 @@ func (l *EntryData) writeToBuf(
 
 	_, ok := completedPKTables.Load(l.id)
 	isCompletedPKTable := false
-	dst := buf.alloc(20)
+	dst := buf.alloc(100)
 	rows := l.vecs[0].Length()
 	for row := 0; row < rows; row++ {
 		idx := buf.buf.GetWriteIndex()
@@ -1096,7 +667,7 @@ func (b *buffer) close() {
 	reuse.Free(b, nil)
 }
 
-func (b buffer) alloc(n int) []byte {
+func (b *buffer) alloc(n int) []byte {
 	b.buf.Grow(n)
 	idx := b.buf.GetWriteIndex()
 	b.buf.SetWriteIndex(idx + n)
@@ -1106,6 +677,11 @@ func (b buffer) alloc(n int) []byte {
 func (b buffer) writeInt(v int64) string {
 	dst := b.alloc(20)
 	return util.UnsafeBytesToString(intToString(dst, v))
+}
+
+func (b buffer) writeIntWithBytes(v int64) []byte {
+	dst := b.alloc(20)
+	return intToString(dst, v)
 }
 
 func (b buffer) writeUint(v uint64) string {
@@ -1122,6 +698,15 @@ func (b buffer) writeHex(src []byte) string {
 	return util.UnsafeBytesToString(dst)
 }
 
+func (b buffer) writeHexWithBytes(src []byte) []byte {
+	if len(src) == 0 {
+		return nil
+	}
+	dst := b.alloc(hex.EncodedLen(len(src)))
+	hex.Encode(dst, src)
+	return dst
+}
+
 func (b buffer) writeTimestamp(value timestamp.Timestamp) string {
 	dst := b.alloc(20)
 	dst2 := b.alloc(20)
@@ -1130,24 +715,6 @@ func (b buffer) writeTimestamp(value timestamp.Timestamp) string {
 	b.buf.MustWriteByte('-')
 	b.buf.MustWrite(uintToString(dst2, uint64(value.LogicalTime)))
 	return util.UnsafeBytesToString(b.buf.RawSlice(idx, b.buf.GetWriteIndex()))
-}
-
-func (b buffer) writeBool(value bool) string {
-	if value {
-		return "true"
-	}
-	return "false"
-}
-
-func getEntryFilterSQL(
-	id uint64,
-	name string,
-	columns []string) string {
-	return fmt.Sprintf("insert into %s (table_id, table_name, columns) values (%d, '%s', '%s')",
-		traceTable,
-		id,
-		name,
-		strings.Join(columns, ","))
 }
 
 func escape(value string) string {
