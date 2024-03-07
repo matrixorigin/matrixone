@@ -16,6 +16,7 @@ package v1_2_0
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -71,6 +72,9 @@ func (v *versionHandle) HandleTenantUpgrade(
 func (v *versionHandle) HandleClusterUpgrade(
 	ctx context.Context,
 	txn executor.TxnExecutor) error {
+	if err := handleCreateIndexesForTaskTables(ctx, txn); err != nil {
+		return err
+	}
 	if err := v.handleCreateTxnTrace(txn); err != nil {
 		return err
 	}
@@ -86,6 +90,46 @@ func (v *versionHandle) createFrameworkTables(
 	}
 
 	for _, sql := range values {
+		r, err := txn.Exec(sql, executor.StatementOption{})
+		if err != nil {
+			return err
+		}
+		r.Close()
+	}
+	return nil
+}
+
+func handleCreateIndexesForTaskTables(ctx context.Context,
+	txn executor.TxnExecutor) error {
+	result, err := txn.Exec(`show indexes in mo_task.sys_async_task;`, executor.StatementOption{})
+	if err != nil {
+		return err
+	}
+	defer result.Close()
+	hasIndex := false
+	result.ReadRows(func(rows int, cols []*vector.Vector) bool {
+		hasIndex = true
+		return false
+	})
+	if hasIndex {
+		return nil
+	}
+
+	indexSqls := []string{
+		fmt.Sprintf(`create index idx_task_status on %s.sys_async_task(task_status)`,
+			catalog.MOTaskDB),
+		fmt.Sprintf(`create index idx_task_runner on %s.sys_async_task(task_runner)`,
+			catalog.MOTaskDB),
+		fmt.Sprintf(`create index idx_task_executor on %s.sys_async_task(task_metadata_executor)`,
+			catalog.MOTaskDB),
+		fmt.Sprintf(`create index idx_task_epoch on %s.sys_async_task(task_epoch)`,
+			catalog.MOTaskDB),
+		fmt.Sprintf(`create index idx_account_id on %s.sys_daemon_task(account_id)`,
+			catalog.MOTaskDB),
+		fmt.Sprintf(`create index idx_last_heartbeat on %s.sys_daemon_task(last_heartbeat)`,
+			catalog.MOTaskDB),
+	}
+	for _, sql := range indexSqls {
 		r, err := txn.Exec(sql, executor.StatementOption{})
 		if err != nil {
 			return err
