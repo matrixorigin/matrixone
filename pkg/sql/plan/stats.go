@@ -987,6 +987,9 @@ func recalcStatsByRuntimeFilter(node *plan.Node, runtimeFilterSel float64) {
 }
 
 func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
+	if builder.skipStats {
+		return DefaultStats()
+	}
 	if InternalTable(node.TableDef) {
 		return DefaultStats()
 	}
@@ -1233,4 +1236,30 @@ func calcBlockSelectivityUsingShuffleRange(s *pb.ShuffleRange, sel float64) floa
 		ret = 1
 	}
 	return ret
+}
+
+func (builder *QueryBuilder) canSkipStats() bool {
+	//for now ,only skip stats for select count(*) from xx
+	if len(builder.qry.Steps) != 1 || len(builder.qry.Nodes) != 3 {
+		return false
+	}
+	project := builder.qry.Nodes[builder.qry.Steps[0]]
+	if project.NodeType != plan.Node_PROJECT {
+		return false
+	}
+	agg := builder.qry.Nodes[project.Children[0]]
+	if agg.NodeType != plan.Node_AGG {
+		return false
+	}
+	if len(agg.AggList) != 1 || len(agg.GroupBy) != 0 {
+		return false
+	}
+	if agg.AggList[0].GetF() == nil || agg.AggList[0].GetF().Func.ObjName != "starcount" {
+		return false
+	}
+	scan := builder.qry.Nodes[agg.Children[0]]
+	if scan.NodeType != plan.Node_TABLE_SCAN {
+		return false
+	}
+	return true
 }
