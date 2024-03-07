@@ -144,6 +144,7 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 		ctr.cleanHashMap()
 		ctr.cleanExprExecutor()
 		ctr.FreeAllReg()
+		ctr.cleanEvalVectors()
 	}
 }
 
