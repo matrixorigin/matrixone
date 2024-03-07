@@ -210,6 +210,8 @@ func makeIndexTblScan(builder *QueryBuilder, bindCtx *BindContext, filterExp *pl
 			}
 			filterList = prefixInList[0]
 		}
+	default:
+		panic("unsupported filter expression")
 	}
 
 	scanId := builder.appendNode(&Node{
