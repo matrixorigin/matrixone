@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"testing"
 	"time"
@@ -176,7 +177,7 @@ func TestStatementInfo_Report_EndStatement(t *testing.T) {
 			require.Equal(t, tt.fields.doExport, s.exported)
 
 			stmCtx := ContextWithStatement(tt.args.ctx, s)
-			EndStatement(stmCtx, tt.args.err, 0, 0)
+			EndStatement(stmCtx, tt.args.err, 0, 0, 0)
 			require.Equal(t, tt.wantReportCntAfterEnd, gotCnt)
 		})
 	}
@@ -397,9 +398,107 @@ func TestCalculateFloat64(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-
 			got := tt.fields.dividend / tt.fields.divisor
 			require.Equal(t, tt.want, got)
+		})
+	}
+}
+
+var dummyOBConfig = config.OBCUConfig{
+	CUUnit:        1.0026988039e-06,
+	CpuPrice:      7.43e-14,
+	MemPrice:      6.79e-24,
+	IoInPrice:     1e-06,
+	IoOutPrice:    1e-06,
+	TrafficPrice0: 8.94e-10,
+	TrafficPrice1: 0,
+	TrafficPrice2: 8.94e-10,
+}
+
+func TestCalculateCUMem(t *testing.T) {
+	type args struct {
+		memByte    int64
+		durationNS int64
+		cfg        *config.OBCUConfig
+	}
+	tests := []struct {
+		name string
+		args args
+		want float64
+	}{
+		{
+			name: "case1",
+			args: args{
+				memByte:    573384797164,
+				durationNS: 309319808921,
+				cfg:        &dummyOBConfig,
+			},
+			want: 1.201028143901687e+06,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := CalculateCUMem(tt.args.memByte, tt.args.durationNS, tt.args.cfg)
+			assert.Equalf(t, tt.want, got, "CalculateCUMem(%v, %v, %v)", tt.args.memByte, tt.args.durationNS, tt.args.cfg)
+		})
+	}
+}
+
+func TestCalculateCUMemDecimal(t *testing.T) {
+	type args struct {
+		memByte    int64
+		durationNS int64
+		cfg        *config.OBCUConfig
+	}
+	tests := []struct {
+		name string
+		args args
+		want float64
+	}{
+		{
+			name: "case1",
+			args: args{
+				memByte:    573384797164,
+				durationNS: 309319808921,
+				cfg:        &dummyOBConfig,
+			},
+			//    1.2010281439016873e+06
+			want: 1.201028143902e+06,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := CalculateCUMemDecimal(tt.args.memByte, tt.args.durationNS, tt.args.cfg.MemPrice, tt.args.cfg.CUUnit)
+			require.Nil(t, err)
+			assert.Equalf(t, tt.want, got, "CalculateCUMemDecimal(%v, %v, %v, %v)", tt.args.memByte, tt.args.durationNS, tt.args.cfg.MemPrice, tt.args.cfg.CUUnit)
+		})
+	}
+}
+
+func TestCalculateByteNS(t *testing.T) {
+	type args struct {
+		memByte    int64
+		durationNS int64
+		cfg        *config.OBCUConfig
+	}
+	tests := []struct {
+		name string
+		args args
+		want float64
+	}{
+		{
+			name: "case1",
+			args: args{
+				memByte:    573384797164,
+				durationNS: 309319808921,
+			},
+			want: 1.773592758969748e+23,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := float64(tt.args.memByte) * float64(tt.args.durationNS)
+			assert.Equalf(t, tt.want, got, "CalculateCUMem(%v, %v, %v)", tt.args.memByte, tt.args.durationNS, tt.args.cfg)
 		})
 	}
 }

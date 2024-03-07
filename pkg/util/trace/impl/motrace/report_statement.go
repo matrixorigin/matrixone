@@ -554,7 +554,6 @@ func (s *StatementInfo) MarkResponseAt() {
 		s.Duration = s.ResponseAt.Sub(s.RequestAt)
 	}
 }
-
 func CalculateCUWithCfg(stats statistic.StatsArray, durationNS int64, cfg *config.OBCUConfig) float64 {
 
 	if cfg == nil {
@@ -564,7 +563,7 @@ func CalculateCUWithCfg(stats statistic.StatsArray, durationNS int64, cfg *confi
 
 	// basic
 	cpu := stats.GetTimeConsumed() * cfg.CpuPrice
-	mem := stats.GetMemorySize() * float64(durationNS) * cfg.MemPrice
+	mem := stats.GetMemorySize() * cfg.MemPrice * float64(durationNS)
 	ioIn := stats.GetS3IOInputCount() * cfg.IoInPrice
 	ioOut := stats.GetS3IOOutputCount() * cfg.IoOutPrice
 	connType := stats.GetConnType()
@@ -599,6 +598,8 @@ func CalculateCUv1(stats statistic.StatsArray, durationNS int64) float64 {
 	return CalculateCUWithCfg(stats, durationNS, &cfg)
 }
 
+// CalculateCUCpu
+// Be careful of the number overflow
 func CalculateCUCpu(cpuRuntimeNS int64, cfg *config.OBCUConfig) float64 {
 	if cfg == nil {
 		cuCfg := GetTracerProvider().GetCUConfig()
@@ -610,25 +611,66 @@ func CalculateCUCpu(cpuRuntimeNS int64, cfg *config.OBCUConfig) float64 {
 	return float64(cpuRuntimeNS) * cfg.CpuPrice / cfg.CUUnit
 }
 
+// CalculateCUMem
+// Be careful of the number overflow
 func CalculateCUMem(memByte int64, durationNS int64, cfg *config.OBCUConfig) float64 {
 	if cfg == nil {
 		cuCfg := GetTracerProvider().GetCUConfig()
 		cfg = &cuCfg
 	}
-	// TODO: need format
-	// 1. 精度校验
-	// 2. 保留 3位小数的问题
-	return float64(memByte*durationNS) * cfg.MemPrice / cfg.CUUnit
+	return float64(memByte) * float64(durationNS) * cfg.MemPrice / cfg.CUUnit
 }
+
+func CalculateCUMemDecimal(memByte, durationNS int64, memPrice, cuUnit float64) (float64, error) {
+	bytes := mustDecimal128(convertFloat64ToDecimal128(float64(memByte)))
+	ns := mustDecimal128(convertFloat64ToDecimal128(float64(durationNS)))
+	price := mustDecimal128(convertFloat64ToDecimal128Price(memPrice))
+	unit := mustDecimal128(convertFloat64ToDecimal128Price(cuUnit))
+
+	val1, valScale1, err := bytes.Mul(ns, Decimal128Scale, Decimal128Scale)
+	if err != nil {
+		return 0, err
+	}
+	val2, valScale2, err := val1.Mul(price, valScale1, Decimal128ScalePrice)
+	if err != nil {
+		return 0, err
+	}
+	cuVal, cuScale, err := val2.Div(unit, valScale2, Decimal128ScalePrice)
+	if err != nil {
+		return 0, err
+	}
+
+	// adjust scale
+	if cuScale > statistic.Float64PrecForCU {
+		//cuVal.Round(cuScale, statistic.Float64PrecForCU)
+		val, err := cuVal.Scale(statistic.Float64PrecForCU - cuScale)
+		if err == nil {
+			cuVal = val
+			cuScale = statistic.Float64PrecForCU
+		}
+	}
+
+	return types.Decimal128ToFloat64(cuVal, cuScale), nil
+}
+
+const Decimal128ScalePrice = 26
+
+func convertFloat64ToDecimal128Price(val float64) (types.Decimal128, error) {
+	return types.Decimal128FromFloat64(val, Decimal128Width, Decimal128ScalePrice)
+}
+
+// func calculateDivScale30(dividend types.Decimal128, divisor float64) float64 {
+// 	divisorD := mustDecimal128(types.Decimal128FromFloat64(divisor, Decimal128Width, Decimal128ScalePrice))
+// 	val, valScale, err := dividend.Div(divisorD, Decimal128Scale30, Decimal128ScalePrice)
+// 	val = mustDecimal128(val, err)
+// 	return types.Decimal128ToFloat64(val, valScale)
+// }
 
 func CalculateCUIOIn(ioCnt int64, cfg *config.OBCUConfig) float64 {
 	if cfg == nil {
 		cuCfg := GetTracerProvider().GetCUConfig()
 		cfg = &cuCfg
 	}
-	// TODO: need format
-	// 1. 精度校验
-	// 2. 保留 3位小数的问题
 	return float64(ioCnt) * cfg.IoInPrice / cfg.CUUnit
 }
 
@@ -637,9 +679,6 @@ func CalculateCUIOOut(ioCnt int64, cfg *config.OBCUConfig) float64 {
 		cuCfg := GetTracerProvider().GetCUConfig()
 		cfg = &cuCfg
 	}
-	// TODO: need format
-	// 1. 精度校验
-	// 2. 保留 3位小数的问题
 	return float64(ioCnt) * cfg.IoOutPrice / cfg.CUUnit
 }
 
@@ -648,9 +687,6 @@ func CalculateCUTraffic(bytes int64, connType float64, cfg *config.OBCUConfig) f
 		cuCfg := GetTracerProvider().GetCUConfig()
 		cfg = &cuCfg
 	}
-	// TODO: need format
-	// 1. 精度校验
-	// 2. 保留 3位小数的问题
 	traffic := 0.0
 	switch statistic.ConnType(connType) {
 	case statistic.ConnTypeUnknown:
@@ -662,7 +698,7 @@ func CalculateCUTraffic(bytes int64, connType float64, cfg *config.OBCUConfig) f
 	default:
 		traffic = float64(bytes) * cfg.TrafficPrice0
 	}
-	return traffic
+	return traffic / cfg.CUUnit
 }
 
 // TcpIpv4HeaderSize default tcp header bytes.
