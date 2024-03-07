@@ -670,17 +670,13 @@ func (m *mysqlTaskStorage) UpdateCronTask(ctx context.Context, cronTask task.Cro
 	if err != nil {
 		return 0, err
 	}
-	defer func(stmt *sql.Stmt) {
-		_ = stmt.Close()
-	}(preInsert)
+	defer preInsert.Close()
 
 	preUpdate, err := tx.Prepare(fmt.Sprintf(updateCronTask, m.dbname))
 	if err != nil {
 		return 0, err
 	}
-	defer func(stmt *sql.Stmt) {
-		_ = stmt.Close()
-	}(preUpdate)
+	defer preUpdate.Close()
 
 	j, err := json.Marshal(asyncTask.Metadata.Options)
 	if err != nil {
