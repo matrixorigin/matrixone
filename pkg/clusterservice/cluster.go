@@ -136,6 +136,20 @@ func (c *cluster) GetCNService(selector Selector, apply func(metadata.CNService)
 	}
 }
 
+func (c *cluster) GetCNServiceWithoutWorkingState(selector Selector, apply func(metadata.CNService) bool) {
+	c.waitReady()
+
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	for _, cn := range c.mu.cnServices {
+		if selector.filterCN(cn) {
+			if !apply(cn) {
+				return
+			}
+		}
+	}
+}
+
 func (c *cluster) GetTNService(selector Selector, apply func(metadata.TNService) bool) {
 	c.waitReady()
 
@@ -151,6 +165,9 @@ func (c *cluster) GetTNService(selector Selector, apply func(metadata.TNService)
 }
 
 func (c *cluster) ForceRefresh(sync bool) {
+	if c.options.disableRefresh {
+		return
+	}
 	if sync {
 		c.refresh()
 		return
