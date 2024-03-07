@@ -313,13 +313,13 @@ func determinShuffleForJoin(n *plan.Node, builder *QueryBuilder) {
 	if !builder.IsEquiJoin(n) {
 		return
 	}
-	leftTags := make(map[int32]emptyType)
+	leftTags := make(map[int32]bool)
 	for _, tag := range builder.enumerateTags(n.Children[0]) {
-		leftTags[tag] = emptyStruct
+		leftTags[tag] = true
 	}
-	rightTags := make(map[int32]emptyType)
+	rightTags := make(map[int32]bool)
 	for _, tag := range builder.enumerateTags(n.Children[1]) {
-		rightTags[tag] = emptyStruct
+		rightTags[tag] = true
 	}
 	// for now ,only support the first join condition
 	for i := range n.OnList {
@@ -532,7 +532,7 @@ func shouldUseHashShuffle(s *pb.ShuffleRange) bool {
 	if s.Uniform > 0.3 {
 		return false
 	}
-	if s.Overlap > 0.6 {
+	if s.Overlap > 0.5 {
 		return true
 	}
 	return true

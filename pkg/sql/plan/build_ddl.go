@@ -1094,9 +1094,9 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 				})
 				if attrIdx != -1 {
 					defaultAttr := def.Attributes[attrIdx].(*tree.AttributeDefault)
-					fmtCtx := tree.NewFmtCtx(dialect.MYSQL)
+					fmtCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
 					defaultAttr.Format(fmtCtx)
-					// defaultAttr.Format start with "default "
+					// defaultAttr.Format start with "default ", trim first 8 chars
 					defaultMap[col.Name] = fmtCtx.String()[8:]
 				} else {
 					defaultMap[col.Name] = "NULL"
@@ -1200,7 +1200,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 		insertSqlBuilder.WriteString("*")
 
 		// from
-		fmtCtx := tree.NewFmtCtx(dialect.MYSQL)
+		fmtCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
 		stmt.AsSource.Format(fmtCtx)
 		insertSqlBuilder.WriteString(fmt.Sprintf(" from (%s)", fmtCtx.String()))
 

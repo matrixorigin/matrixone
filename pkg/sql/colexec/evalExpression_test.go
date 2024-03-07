@@ -54,13 +54,7 @@ func TestFixedExpressionExecutor(t *testing.T) {
 
 	// Expr_T
 	ety := &plan.Expr{
-		Expr: &plan.Expr_T{T: &plan.TargetType{
-			Typ: &plan.Type{
-				Id:    int32(types.T_decimal128),
-				Width: 30,
-				Scale: 6,
-			},
-		}},
+		Expr: &plan.Expr_T{T: &plan.TargetType{}},
 		Typ: plan.Type{
 			Id:          int32(types.T_decimal128),
 			Width:       30,
