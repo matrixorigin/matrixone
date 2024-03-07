@@ -1258,8 +1258,5 @@ func (builder *QueryBuilder) canSkipStats() bool {
 		return false
 	}
 	scan := builder.qry.Nodes[agg.Children[0]]
-	if scan.NodeType != plan.Node_TABLE_SCAN {
-		return false
-	}
-	return true
+	return scan.NodeType == plan.Node_TABLE_SCAN
 }
