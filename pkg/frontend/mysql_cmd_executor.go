@@ -46,6 +46,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
@@ -331,14 +332,14 @@ var RecordParseErrorStatement = func(ctx context.Context, ses *Session, proc *pr
 			if err != nil {
 				return nil, err
 			}
-			motrace.EndStatement(ctx, retErr, 0, 0)
+			motrace.EndStatement(ctx, retErr, 0, 0, 0)
 		}
 	} else {
 		ctx, err = RecordStatement(ctx, ses, proc, nil, envBegin, "", sqlType, true)
 		if err != nil {
 			return nil, err
 		}
-		motrace.EndStatement(ctx, retErr, 0, 0)
+		motrace.EndStatement(ctx, retErr, 0, 0, 0)
 	}
 
 	tenant := ses.GetTenantInfo()
@@ -2892,6 +2893,7 @@ func (mce *MysqlCmdExecutor) processLoadLocal(ctx context.Context, param *tree.E
 	if length == 0 {
 		return
 	}
+	ses.CountPayload(len(packet.Payload))
 
 	skipWrite := false
 	// If inner error occurs(unexpected or expected(ctrl-c)), proc.LoadLocalReader will be closed.
@@ -2935,6 +2937,7 @@ func (mce *MysqlCmdExecutor) processLoadLocal(ctx context.Context, param *tree.E
 		}
 		seq = uint8(packet.SequenceID + 1)
 		proto.SetSequenceID(seq)
+		ses.CountPayload(len(packet.Payload))
 
 		writeStart := time.Now()
 		if !skipWrite {
@@ -3703,6 +3706,11 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 	if ret, err = cw.Compile(requestCtx, ses, ses.GetOutputCallback()); err != nil {
 		return
 	}
+	defer func() {
+		if c, ok := ret.(*compile.Compile); ok {
+			c.Release()
+		}
+	}()
 	stmt = cw.GetAst()
 	// reset some special stmt for execute statement
 	switch st := stmt.(type) {
