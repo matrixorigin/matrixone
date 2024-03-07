@@ -399,7 +399,7 @@ insert into t1 values("Juniper","Way", "2");
 insert into t1 values("Nightingale","Lane", "3");
 select * from t1 where a between "Congress" and "Nightingale" and b="Lane" and c between "1" and "3";
 select * from t1 where a between "Congress" and "Nightingale" and b="Lane" and c between "1" and "3" limit 1;
-mysql> explain analyze select * from t1 where a between "Congress" and "Nightingale" and b="Lane" and c between "1" and "3" limit 1;
+--mysql> explain analyze select * from t1 where a between "Congress" and "Nightingale" and b="Lane" and c between "1" and "3" limit 1;
 --+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
 --| QUERY PLAN                                                                                                                                                                                                    |
 --+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
