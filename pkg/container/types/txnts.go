@@ -111,7 +111,7 @@ func (ts TS) Prev() TS {
 }
 
 func (ts TS) Next() TS {
-	var ret TS
+	ret := ts
 	p, l := DecodeInt64(ts[4:12]), DecodeUint32(ts[:4])
 	if l == math.MaxUint32 {
 		p += 1
