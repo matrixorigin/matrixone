@@ -148,6 +148,10 @@ func (s *Scanner) Scan() (int, string) {
 			s.incN(2)
 			return ASSIGNMENT, ""
 		}
+		if s.peek(1) == '\'' {
+			s.inc()
+			return s.Scan()
+		}
 		// Like mysql -h ::1 ?
 		id, str := s.scanBindVar()
 		if id == LEX_ERROR {
@@ -742,6 +746,11 @@ func (s *Scanner) scanIdentifier(isVariable bool) (int, string) {
 		if ch == '@' {
 			break
 		}
+
+		if ch == ':' {
+			break
+		}
+
 		s.inc()
 	}
 	keywordName := s.buf[start:s.Pos]

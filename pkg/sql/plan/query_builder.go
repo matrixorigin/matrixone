@@ -3554,7 +3554,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 					SchemaName:      tree.Identifier(""),
 					ExplicitCatalog: false,
 					ExplicitSchema:  false,
-				})
+				}, nil)
 				return builder.buildTable(newTableName, ctx, preNodeId, leftCtx)
 			}
 		}
