@@ -54,6 +54,7 @@ func (node *AnalyzeStmt) reset() {
 	// }
 	*node = AnalyzeStmt{}
 }
+
 func NewAnalyzeStmt(tbl *TableName, cols IdentifierList) *AnalyzeStmt {
 	analyzestmt := reuse.Alloc[AnalyzeStmt](nil)
 	analyzestmt.Table = tbl

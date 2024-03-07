@@ -903,20 +903,21 @@ normal_stmt:
 backup_stmt:
     BACKUP STRING FILESYSTEM STRING PARALLELISM STRING
 	{
-		$$ = &tree.BackupStart{
-		    Timestamp: $2,
-		    IsS3 : false,
-		    Dir: $4,
-            Parallelism: $6,
-		}
+        var timestamp = $2
+        var isS3 = false
+        var dir = $4
+        var parallelism = $6
+        var option []string
+        $$ = tree.NewBackupStart(timestamp, isS3, dir, parallelism, option)
 	}
     | BACKUP STRING S3OPTION '{' infile_or_s3_params '}'
     {
-    	$$ = &tree.BackupStart{
-        	    Timestamp: $2,
-        	    IsS3 : true,
-        	    Option : $5,
-        	}
+        var timestamp = $2
+        var isS3 = true
+        var dir string
+        var parallelism string
+        var option = $5
+        $$ = tree.NewBackupStart(timestamp, isS3, dir, parallelism, option)
     }
 
 create_snapshot_stmt:
