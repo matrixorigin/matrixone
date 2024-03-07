@@ -418,7 +418,7 @@ func (ctr *container) handleRuntimeFilter(ap *Argument, proc *process.Process) e
 		}
 	} else {
 		// Composite primary key
-		if len(ctr.uniqueJoinKeys) > 1 {
+		if ap.RuntimeFilterSenders[0].Spec.Expr.GetF() != nil {
 			bat := batch.NewWithSize(len(ctr.uniqueJoinKeys))
 			bat.SetRowCount(vec.Length())
 			copy(bat.Vecs, ctr.uniqueJoinKeys)

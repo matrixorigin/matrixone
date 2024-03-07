@@ -19,6 +19,8 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	log "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/stretchr/testify/assert"
@@ -48,6 +50,7 @@ func (c *testHAKeeperClient) GetClusterDetails(ctx context.Context) (log.Cluster
 }
 
 func TestAddressFunc(t *testing.T) {
+	runtime.SetupProcessLevelRuntime(runtime.NewRuntime(metadata.ServiceType_CN, "test", logutil.GetGlobalLogger()))
 	t.Run("no client", func(t *testing.T) {
 		getClient := func() HAKeeperClient {
 			return nil

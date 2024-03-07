@@ -114,7 +114,6 @@ message MaxValue {
 
 // TargetType used in cast function as target type
 message TargetType {
-	Type typ = 1;
 }
 
 // Reference a subquery
@@ -871,8 +870,9 @@ message PreInsertCtx {
 
 message RuntimeFilterSpec {
 	int32 tag = 1;
-	Expr expr = 2;
-	int32 upperLimit = 3;
+	bool match_prefix = 2;
+	int32 upper_limit = 3;
+	Expr expr = 4;
 }
 
 message IdList {
