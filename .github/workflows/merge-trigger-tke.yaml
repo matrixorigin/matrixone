@@ -128,9 +128,6 @@ jobs:
           echo "cn_ips is $cn_ips"
           echo "cn_ips=$cn_ips"  >>  $GITHUB_OUTPUT;
 
-      - name: Add TXN Filter
-        run: |
-          MYSQL_PWD=111 mysql -h ${{ steps.get_mo_addr.outputs.mo_svc_ip }} -P 6001 -u dump -e "select mo_ctl('cn', 'txn-trace', 'add-txn user admin');"
       - name: Prepare Data in cn-0
         timeout-minutes: 5
         run: |
@@ -236,6 +233,10 @@ jobs:
         run: |
           mkdir -p $GITHUB_WORKSPACE/reports/mo-tester
           mkdir -p $GITHUB_WORKSPACE/mo-tester && cp -r $GITHUB_WORKSPACE/mo-tester $GITHUB_WORKSPACE/reports/mo-tester
+      - name: Add TXN Filter
+        if: ${{ always() }}
+        run: |
+          MYSQL_PWD=111 mysql -h ${{ needs.setup_mo_test_env.outputs.mo_svc_ip }} -P 6001 -u dump -e "select mo_ctl('cn', 'txn-trace', 'add-txn user admin');"
       - uses: actions/upload-artifact@v3
         if: ${{ failure() || cancelled()}}
         continue-on-error: true
