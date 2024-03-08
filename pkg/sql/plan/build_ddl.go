@@ -175,9 +175,18 @@ func genViewTableDef(ctx CompilerContext, stmt *tree.Select) (*plan.TableDef, er
 func genAsSelectCols(ctx CompilerContext, stmt *tree.Select) ([]*ColDef, error) {
 	var err error
 	var rootId int32
-	var query *Query
 	builder := NewQueryBuilder(plan.Query_SELECT, ctx, false)
 	bindCtx := NewBindContext(builder, nil)
+
+	getTblAndColName := func(relPos, colPos int32) (string, string) {
+		name := builder.nameByColRef[[2]int32{relPos, colPos}]
+		// name pattern: tableName.colName
+		splits := strings.Split(name, ".")
+		if len(splits) < 2 {
+			return "", ""
+		}
+		return splits[0], splits[1]
+	}
 
 	if s, ok := stmt.Select.(*tree.ParenSelect); ok {
 		stmt = s.Select
@@ -185,29 +194,34 @@ func genAsSelectCols(ctx CompilerContext, stmt *tree.Select) ([]*ColDef, error) 
 	if rootId, err = builder.buildSelect(stmt, bindCtx, true); err != nil {
 		return nil, err
 	}
-	builder.qry.Steps = append(builder.qry.Steps, rootId)
+	rootNode := builder.qry.Nodes[rootId]
 
-	if query, err = builder.createQuery(); err != nil {
-		return nil, err
-	}
-
-	selectCols := query.Nodes[query.Steps[len(query.Steps)-1]].ProjectList
-	cols := make([]*plan.ColDef, len(selectCols))
-	for idx, expr := range selectCols {
+	cols := make([]*plan.ColDef, len(rootNode.ProjectList))
+	for i, expr := range rootNode.ProjectList {
 		defaultVal := ""
+		typ := &expr.Typ
 		switch e := expr.Expr.(type) {
 		case *plan.Expr_Col:
-			splits := strings.Split(e.Col.Name, ".")
-			tblName, colName := splits[0], splits[1]
+			tblName, colName := getTblAndColName(e.Col.RelPos, e.Col.ColPos)
 			if binding, ok := bindCtx.bindingByTable[tblName]; ok {
-				defaultVal = binding.defaultVals[binding.colIdByName[colName]]
+				defaultVal = binding.defaults[binding.colIdByName[colName]]
+			}
+		case *plan.Expr_F:
+			// enum
+			if e.F.Func.ObjName == moEnumCastIndexToValueFun {
+				// cast_index_to_value('apple,banana,orange', cast(col_name as T_uint16))
+				colRef := e.F.Args[1].Expr.(*plan.Expr_F).F.Args[0].Expr.(*plan.Expr_Col).Col
+				tblName, colName := getTblAndColName(colRef.RelPos, colRef.ColPos)
+				if binding, ok := bindCtx.bindingByTable[tblName]; ok {
+					typ = binding.types[binding.colIdByName[colName]]
+				}
 			}
 		}
 
-		cols[idx] = &plan.ColDef{
-			Name: strings.ToLower(query.Headings[idx]),
+		cols[i] = &plan.ColDef{
+			Name: strings.ToLower(bindCtx.headings[i]),
 			Alg:  plan.CompressType_Lz4,
-			Typ:  &expr.Typ,
+			Typ:  typ,
 			Default: &plan.Default{
 				NullAbility:  !expr.Typ.NotNullable,
 				Expr:         nil,

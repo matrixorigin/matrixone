@@ -21,22 +21,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
-func (p *PartitionState) PrimaryKeyMayBeModified(
+func (p *PartitionState) PKExistInMemBetween(
 	from types.TS,
 	to types.TS,
 	keys [][]byte,
-) bool {
-
-	p.shared.Lock()
-	lastFlushTimestamp := p.shared.lastFlushTimestamp
-	p.shared.Unlock()
-
-	if !lastFlushTimestamp.IsEmpty() {
-		if from.LessEq(lastFlushTimestamp) {
-			return true
-		}
-	}
-
+) (bool, bool) {
 	iter := p.primaryIndex.Copy().Iter()
 	pivot := RowEntry{
 		Time: types.BuildTS(math.MaxInt64, math.MaxUint32),
@@ -57,10 +46,11 @@ func (p *PartitionState) PrimaryKeyMayBeModified(
 			}
 
 			if entry.Time.GreaterEq(from) {
-				return true
+				return true, false
 			}
 
-			// some legacy deletion entries may not indexed, check all rows for changes
+			//some legacy deletion entries may not be indexed since old TN maybe
+			//don't take pk in log tail when delete row , so check all rows for changes.
 			pivot.BlockID = entry.BlockID
 			pivot.RowID = entry.RowID
 			rowIter := p.rows.Iter()
@@ -85,7 +75,7 @@ func (p *PartitionState) PrimaryKeyMayBeModified(
 				}
 				if row.Time.GreaterEq(from) {
 					rowIter.Release()
-					return true
+					return true, false
 				}
 			}
 			rowIter.Release()
@@ -93,5 +83,12 @@ func (p *PartitionState) PrimaryKeyMayBeModified(
 
 		iter.First()
 	}
-	return false
+
+	p.shared.Lock()
+	lastFlushTimestamp := p.shared.lastFlushTimestamp
+	p.shared.Unlock()
+	if lastFlushTimestamp.LessEq(from) {
+		return false, false
+	}
+	return false, true
 }
