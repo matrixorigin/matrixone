@@ -144,4 +144,12 @@ c3    c2
 100007    1111
 100008    1111
 100009    1111
+select * from t1 where c2=-1;
+c1    c2    c3
+insert into t1 values(-1,-1,-1);
+select * from t1 where c2=-1;
+c1    c2    c3
+-1    -1    -1
+select * from t1 where c2=-2;
+c1    c2    c3
 drop database if exists d1;
