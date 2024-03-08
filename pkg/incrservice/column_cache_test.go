@@ -343,7 +343,7 @@ func TestOverflow(t *testing.T) {
 		func(
 			ctx context.Context,
 			cc *columnCache) {
-			require.NoError(t, cc.updateTo(ctx, 0, 1, math.MaxUint64, nil))
+			require.NoError(t, cc.updateTo(ctx, 0, math.MaxUint64, nil))
 			require.True(t, cc.overflow)
 
 			require.NoError(t,
@@ -452,7 +452,7 @@ func TestIssue9840(t *testing.T) {
 func testColumnCacheInsert[T constraints.Integer](
 	t *testing.T,
 	rows int,
-	expecLastInsertValue uint64,
+	expectLastInsertValue uint64,
 	input *vector.Vector,
 	expect *vector.Vector) {
 	runColumnCacheTests(
@@ -464,7 +464,7 @@ func testColumnCacheInsert[T constraints.Integer](
 			c *columnCache) {
 			lastInsertValue, err := c.insertAutoValues(ctx, 0, input, rows, nil)
 			require.NoError(t, err)
-			assert.Equal(t, expecLastInsertValue, lastInsertValue)
+			assert.Equal(t, expectLastInsertValue, lastInsertValue)
 			assert.Equal(t,
 				vector.MustFixedCol[T](expect),
 				vector.MustFixedCol[T](input))
