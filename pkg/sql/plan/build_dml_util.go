@@ -2885,7 +2885,7 @@ func appendDeleteUniqueTablePlan(
 		Typ: *uniqueTableDef.Cols[rightRowIdPos].Typ,
 		Expr: &plan.Expr_Col{
 			Col: &plan.ColRef{
-				RelPos: 1,
+				RelPos: 0,
 				ColPos: rightRowIdPos,
 				Name:   catalog.Row_ID,
 			},
@@ -2894,7 +2894,7 @@ func appendDeleteUniqueTablePlan(
 		Typ: *uniqueTableDef.Cols[rightPkPos].Typ,
 		Expr: &plan.Expr_Col{
 			Col: &plan.ColRef{
-				RelPos: 1,
+				RelPos: 0,
 				ColPos: rightPkPos,
 				Name:   catalog.IndexTableIndexColName,
 			},
@@ -2905,7 +2905,7 @@ func appendDeleteUniqueTablePlan(
 		Typ: *uniqueTableDef.Cols[rightPkPos].Typ,
 		Expr: &plan.Expr_Col{
 			Col: &plan.ColRef{
-				RelPos: 1,
+				RelPos: 0,
 				ColPos: rightPkPos,
 				Name:   catalog.IndexTableIndexColName,
 			},
@@ -2923,7 +2923,7 @@ func appendDeleteUniqueTablePlan(
 			Typ: *typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
-					RelPos: 0,
+					RelPos: 1,
 					ColPos: int32(posMap[orginIndexColumnName]),
 					Name:   orginIndexColumnName,
 				},
@@ -2938,7 +2938,7 @@ func appendDeleteUniqueTablePlan(
 				Typ: *typ,
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
-						RelPos: 0,
+						RelPos: 1,
 						ColPos: int32(posMap[column]),
 						Name:   column,
 					},
