@@ -35,6 +35,10 @@ import (
 	"go.uber.org/zap"
 )
 
+type CNMergeScheduler interface {
+	SendMergeTask(ctx context.Context, task *api.MergeTaskEntry) error
+}
+
 // DisposableVecPool bridge the gap between the vector pools in cn and tn
 type DisposableVecPool interface {
 	GetVector(*types.Type) (ret *vector.Vector, release func())

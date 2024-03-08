@@ -390,3 +390,12 @@ message MergeCommitEntry {
     repeated bytes created_objs = 6;
     BlkTransferBooking booking = 7;
 }
+
+message MergeTaskEntry {
+    uint64 db_id = 1;
+    uint64 tbl_id = 2;
+    string table_name = 3;
+    // ObjectStats
+    repeated bytes to_merge_objs = 4;
+    uint64 estimated_mem_usage = 5;
+}

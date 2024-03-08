@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	gc2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 
@@ -68,6 +69,8 @@ type DB struct {
 	Runtime *dbutils.Runtime
 
 	DBLocker io.Closer
+
+	CNMerger mergesort.CNMergeScheduler
 
 	Closed *atomic.Value
 }
