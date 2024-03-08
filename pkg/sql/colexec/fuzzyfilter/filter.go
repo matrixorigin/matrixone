@@ -330,19 +330,8 @@ func (arg *Argument) handleRuntimeFilter(proc *process.Process) error {
 		}
 	}
 
-	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
-
 	if runtimeFilter != nil {
-		runtimeFilterStart1 := time.Now()
-		select {
-		case <-proc.Ctx.Done():
-			ctr.state = End
-
-		case arg.RuntimeFilterSenders[0].Chan <- runtimeFilter:
-			ctr.state = Probe
-		}
-
-		anal.WaitStop(runtimeFilterStart1)
+		sendFilter(ctr, proc, runtimeFilter)
 		return nil
 	}
 
@@ -363,18 +352,21 @@ func (arg *Argument) handleRuntimeFilter(proc *process.Process) error {
 		Data: data,
 	}
 
-	runtimeFilterStart2 := time.Now()
+	sendFilter(ctr, proc, runtimeFilter)
+	return nil
+
+}
+
+func sendFilter(ap *Argument, proc *process.Process, runtimeFilter *pipeline.RuntimeFilter) {
+	anal := proc.GetAnalyze(ap.GetIdx(), ap.GetParallelIdx(), ap.GetParallelMajor())
+	sendRuntimeFilterStart := time.Now()
 
 	select {
 	case <-proc.Ctx.Done():
-		ctr.state = End
+		ap.state = End
 
-	case arg.RuntimeFilterSenders[0].Chan <- runtimeFilter:
-		ctr.state = Probe
+	case ap.RuntimeFilterSenders[0].Chan <- runtimeFilter:
+		ap.state = Probe
 	}
-
-	anal.WaitStop(runtimeFilterStart2)
-
-	return nil
-
+	anal.WaitStop(sendRuntimeFilterStart)
 }
