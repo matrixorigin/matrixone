@@ -2852,6 +2852,7 @@ func appendDeleteUniqueTablePlan(
 	lastNodeId := baseNodeId
 	var err error
 	projectList := getProjectionByLastNodeForRightJoin(builder, lastNodeId)
+	rfTag := builder.genNewTag()
 
 	var rightRowIdPos int32 = -1
 	var rightPkPos int32 = -1
@@ -2872,12 +2873,26 @@ func appendDeleteUniqueTablePlan(
 			},
 		}
 	}
+	pkTyp := uniqueTableDef.Cols[rightPkPos].Typ
 	rightId := builder.appendNode(&plan.Node{
 		NodeType:    plan.Node_TABLE_SCAN,
 		Stats:       &plan.Stats{},
 		ObjRef:      uniqueObjRef,
 		TableDef:    uniqueTableDef,
 		ProjectList: scanNodeProject,
+		RuntimeFilterProbeList: []*plan.RuntimeFilterSpec{
+			{
+				Tag: rfTag,
+				Expr: &plan.Expr{
+					Typ: *pkTyp,
+					Expr: &plan.Expr_Col{
+						Col: &plan.ColRef{
+							Name: uniqueTableDef.Pkey.PkeyColName,
+						},
+					},
+				},
+			},
+		},
 	}, bindCtx)
 
 	// append projection
@@ -2973,6 +2988,21 @@ func appendDeleteUniqueTablePlan(
 		JoinType:    plan.Node_RIGHT,
 		OnList:      joinConds,
 		ProjectList: projectList,
+		RuntimeFilterBuildList: []*plan.RuntimeFilterSpec{
+			{
+				Tag:        rfTag,
+				UpperLimit: GetInFilterCardLimitOnPK(builder.qry.Nodes[rightId].Stats.TableCnt),
+				Expr: &plan.Expr{
+					Typ: *pkTyp,
+					Expr: &plan.Expr_Col{
+						Col: &plan.ColRef{
+							RelPos: 0,
+							ColPos: 0,
+						},
+					},
+				},
+			},
+		},
 	}, bindCtx)
 	return lastNodeId, nil
 }
