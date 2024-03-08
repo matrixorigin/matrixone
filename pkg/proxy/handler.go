@@ -41,6 +41,8 @@ type handler struct {
 	moCluster clusterservice.MOCluster
 	// router select the best CN server and connects to it.
 	router Router
+	// rebalancer is the global rebalancer.
+	rebalancer *rebalancer
 	// counterSet counts the events in proxy.
 	counterSet *counterSet
 	// haKeeperClient is the client to communicate with HAKeeper.
@@ -68,7 +70,7 @@ func newProxyHandler(
 	var opts []rebalancerOption
 	opts = append(opts,
 		withRebalancerInterval(cfg.RebalanceInterval.Duration),
-		withRebalancerTolerance(cfg.RebalanceToerance),
+		withRebalancerTolerance(cfg.RebalanceTolerance),
 	)
 	if cfg.RebalanceDisabled {
 		opts = append(opts, withRebalancerDisabled())
@@ -111,6 +113,7 @@ func newProxyHandler(
 		moCluster:      mc,
 		counterSet:     cs,
 		router:         ru,
+		rebalancer:     re,
 		haKeeperClient: haKeeperClient,
 		ipNetList:      ipNetList,
 	}, nil
@@ -128,7 +131,10 @@ func (h *handler) handle(c goetty.IOSession) error {
 	}()
 
 	// Create a new tunnel to manage client connection and server connection.
-	t := newTunnel(h.ctx, h.logger, h.counterSet)
+	t := newTunnel(h.ctx, h.logger, h.counterSet,
+		withRebalancePolicy(RebalancePolicyMapping[h.config.RebalancePolicy]),
+		withRebalancer(h.rebalancer),
+	)
 	defer func() {
 		_ = t.Close()
 	}()

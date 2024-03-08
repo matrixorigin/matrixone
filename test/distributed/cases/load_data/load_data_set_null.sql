@@ -45,4 +45,7 @@ delete from t2;
 insert into t2 values();
 select * from t2;
 
+-- test load character set
+load data infile "$resources/load_data/set_null_3.csv" into table t2 character set utf8 fields terminated by ',' set col1=nullif(col1,'null');
+
 drop table t2;

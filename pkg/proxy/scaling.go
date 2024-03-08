@@ -16,12 +16,12 @@ package proxy
 
 import (
 	"context"
-	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"go.uber.org/zap"
 )
 
@@ -94,9 +94,13 @@ func (s *scaling) doScaling() {
 			zap.String("CN ID", cn),
 		)
 		for _, tun := range tuns {
+			tun.setTransferType(transferByScaling)
 			select {
 			case s.queue <- tun:
 			default:
+				// Reset the transfer type to default value.
+				tun.setTransferType(transferByRebalance)
+
 				s.logger.Info("rebalance queue is full")
 			}
 		}
