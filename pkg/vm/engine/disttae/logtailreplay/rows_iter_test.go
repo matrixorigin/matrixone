@@ -203,10 +203,11 @@ func TestPartitionStateRowsIter(t *testing.T) {
 
 		{
 			// primary key change detection
+			ts := types.BuildTS(int64(deleteAt+i), 0)
 			key := EncodePrimaryKey(int64(i), packer)
 			modified := state.PrimaryKeyMayBeModified(
-				types.BuildTS(int64(deleteAt+i), 0).Prev(),
-				types.BuildTS(int64(deleteAt+i), 0).Next(),
+				ts.Prev(),
+				ts.Next(),
 				[][]byte{key},
 			)
 			require.True(t, modified)
