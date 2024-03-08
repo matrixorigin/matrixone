@@ -21,7 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"slices"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -65,8 +65,8 @@ func TestBuildWhereClause(t *testing.T) {
 		result := buildWhereClause(&c.condition)
 		actual := strings.Split(result, " AND ")
 		expected := strings.Split(c.expected, " AND ")
-		slices.Sort(actual)
-		slices.Sort(expected)
+		sort.Strings(actual)
+		sort.Strings(expected)
 		assert.Equal(t, expected, actual)
 	}
 }
