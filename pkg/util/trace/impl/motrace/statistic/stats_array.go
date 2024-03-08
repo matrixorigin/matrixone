@@ -37,8 +37,7 @@ const (
 	StatsArrayVersion1 = 1 // float64 array
 	StatsArrayVersion2 = 2 // float64 array + plus one elem OutTrafficBytes
 	StatsArrayVersion3 = 3 // ... + one elem: ConnType
-	StatsArrayVersion4 = 4 // ... + one elem: OutPacketCount
-	StatsArrayVersion5 = 5 // ... + one elem: CU
+	StatsArrayVersion4 = 4 // ... + two elem: OutPacketCount, CU
 
 	StatsArrayVersionLatest // same value as last variable StatsArrayVersion#
 )
@@ -51,8 +50,8 @@ const (
 	StatsArrayIndexS3IOOutputCount // index: 4
 	StatsArrayIndexOutTrafficBytes // index: 5
 	StatsArrayIndexConnType        // index: 6
-	StatsArrayIndexOutPacketCnt    // index: 7
-	StatsArrayIndexCU              // index: 8
+	StatsArrayIndexOutPacketCnt    // index: 7, version: 4
+	StatsArrayIndexCU              // index: 8, version: 4
 
 	StatsArrayLength
 )
@@ -62,7 +61,6 @@ const (
 	StatsArrayLengthV2 = 6
 	StatsArrayLengthV3 = 7
 	StatsArrayLengthV4 = 8
-	StatsArrayLengthV5 = 9
 )
 
 type ConnType float64
@@ -92,10 +90,6 @@ func NewStatsArrayV3() *StatsArray {
 
 func NewStatsArrayV4() *StatsArray {
 	return NewStatsArray().WithVersion(StatsArrayVersion4)
-}
-
-func NewStatsArrayV5() *StatsArray {
-	return NewStatsArray().WithVersion(StatsArrayVersion5)
 }
 
 func (s *StatsArray) Init() *StatsArray {
@@ -140,7 +134,7 @@ func (s *StatsArray) GetOutPacketCount() float64 {
 	return s[StatsArrayIndexOutPacketCnt]
 }
 func (s *StatsArray) GetCU() float64 {
-	if s.GetVersion() < StatsArrayVersion5 {
+	if s.GetVersion() < StatsArrayVersion4 {
 		return 0
 	}
 	return s[StatsArrayIndexCU]
@@ -198,8 +192,6 @@ func (s *StatsArray) ToJsonString() []byte {
 		return StatsArrayToJsonString((*s)[:StatsArrayLengthV3])
 	case StatsArrayVersion4:
 		return StatsArrayToJsonString((*s)[:StatsArrayLengthV4])
-	case StatsArrayLengthV5:
-		return StatsArrayToJsonString((*s)[:StatsArrayLengthV5])
 	default:
 		return StatsArrayToJsonString((*s)[:])
 	}
