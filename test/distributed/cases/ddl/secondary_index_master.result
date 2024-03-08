@@ -200,5 +200,16 @@ insert into t1 values("Juniper","Way", "2");
 insert into t1 values("Nightingale","Lane", "3");
 select * from t1 where a in ("Congress","Nightingale") and b="Lane" and c in("1","2","3");
 a    b    c
+drop table if exists t1;
+create table t1(a varchar(30), b varchar(30), c varchar(30));
+create index idx1 using master on t1(a,b,c);
+insert into t1 values("Congress","Lane", "1");
+insert into t1 values("Juniper","Way", "2");
+insert into t1 values("Nightingale","Lane", "3");
+select * from t1 where a between "Congress" and "Nightingale" and b="Lane" and c between "1" and "3";
+a    b    c
 Congress    Lane    1
 Nightingale    Lane    3
+select * from t1 where a between "Congress" and "Nightingale" and b="Lane" and c between "1" and "3" limit 1;
+a    b    c
+Congress    Lane    1
