@@ -2258,6 +2258,7 @@ func (tbl *txnTable) PKPersistedBetween(
 
 		colExpr := newColumnExpr(0, plan2.MakePlan2Type(keys.GetType()), "pk")
 
+		keys.InplaceSort()
 		bytes, _ := keys.MarshalBinary()
 		inExpr := plan2.MakeInExpr(
 			tbl.proc.Load().Ctx,
