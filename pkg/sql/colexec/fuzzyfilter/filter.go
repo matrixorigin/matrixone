@@ -16,6 +16,7 @@ package fuzzyfilter
 
 import (
 	"bytes"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/bloomfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -329,7 +330,10 @@ func (arg *Argument) handleRuntimeFilter(proc *process.Process) error {
 		}
 	}
 
+	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
+
 	if runtimeFilter != nil {
+		runtimeFilterStart1 := time.Now()
 		select {
 		case <-proc.Ctx.Done():
 			ctr.state = End
@@ -337,6 +341,8 @@ func (arg *Argument) handleRuntimeFilter(proc *process.Process) error {
 		case arg.RuntimeFilterSenders[0].Chan <- runtimeFilter:
 			ctr.state = Probe
 		}
+
+		anal.WaitStop(runtimeFilterStart1)
 		return nil
 	}
 
@@ -357,6 +363,8 @@ func (arg *Argument) handleRuntimeFilter(proc *process.Process) error {
 		Data: data,
 	}
 
+	runtimeFilterStart2 := time.Now()
+
 	select {
 	case <-proc.Ctx.Done():
 		ctr.state = End
@@ -364,6 +372,8 @@ func (arg *Argument) handleRuntimeFilter(proc *process.Process) error {
 	case arg.RuntimeFilterSenders[0].Chan <- runtimeFilter:
 		ctr.state = Probe
 	}
+
+	anal.WaitStop(runtimeFilterStart2)
 
 	return nil
 
