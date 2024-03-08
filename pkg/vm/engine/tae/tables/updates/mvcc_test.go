@@ -52,7 +52,8 @@ func TestMutationControllerAppend(t *testing.T) {
 		//queries = append(queries, ts+1)
 		queries = append(queries, ts.Next())
 		//ts += 2
-		ts = ts.Next().Next()
+		ts = ts.Next()
+		ts = ts.Next()
 	}
 
 	st := time.Now()
