@@ -49,6 +49,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/merge"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/gc"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/rpchandle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
@@ -379,6 +380,12 @@ func (h *Handle) HandleCommitMerge(
 	if err != nil {
 		return
 	}
+	ids := make([]objectio.ObjectId, 0, len(req.MergedObjs))
+	for _, o := range req.MergedObjs {
+		stat := objectio.ObjectStats(o)
+		ids = append(ids, *stat.ObjectName().ObjectId())
+	}
+	merge.ActiveCNObj.RemoveActiveCNObj(ids)
 	_, err = jobs.HandleMergeEntryInTxn(txn, req, h.db.Runtime)
 	if err != nil {
 		return

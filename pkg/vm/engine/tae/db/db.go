@@ -70,7 +70,7 @@ type DB struct {
 
 	DBLocker io.Closer
 
-	CNMerger mergesort.CNMergeScheduler
+	CNMergeSched mergesort.CNMergeScheduler
 
 	Closed *atomic.Value
 }

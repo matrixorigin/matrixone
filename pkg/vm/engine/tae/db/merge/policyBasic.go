@@ -198,21 +198,28 @@ func (o *Basic) GetConfig(tbl *catalog.TableEntry) any {
 	return r
 }
 
-func (o *Basic) Revise(cpu, mem int64) []*catalog.ObjectEntry {
+func (o *Basic) Revise(cpu, mem int64) ([]*catalog.ObjectEntry, TaskHostKind) {
 	objs := o.objHeap.finish()
 	sort.Slice(objs, func(i, j int) bool {
 		return objs[i].GetRemainingRows() < objs[j].GetRemainingRows()
 	})
+
+	osize, esize, _ := estimateMergeConsume(objs)
+	if esize > common.Const1GBytes*1 {
+		objs = o.controlMem(objs, common.Const1GBytes*5)
+		objs = o.optimize(objs)
+		return objs, TaskHostCN
+	}
+
 	objs = o.controlMem(objs, mem)
 	if cpu > 85 {
-		osize, _, _ := estimateMergeConsume(objs)
 		if osize > 25*common.Const1MBytes {
 			logutil.Infof("mergeblocks skip big merge for high level cpu usage, %d", cpu)
-			return nil
+			return nil, TaskHostDN
 		}
 	}
 	objs = o.optimize(objs)
-	return objs
+	return objs, TaskHostDN
 }
 
 func (o *Basic) ConfigString() string {

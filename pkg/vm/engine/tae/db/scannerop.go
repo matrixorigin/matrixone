@@ -131,7 +131,7 @@ func newMergeTaskBuiler(db *DB) *MergeTaskBuilder {
 		LoopProcessor: new(catalog.LoopProcessor),
 		ObjectHelper:  newObjHelper(),
 		objPolicy:     merge.NewBasicPolicy(),
-		executor:      merge.NewMergeExecutor(db.Runtime),
+		executor:      merge.NewMergeExecutor(db.Runtime, db.CNMergeSched),
 	}
 
 	op.DatabaseFn = op.onDataBase

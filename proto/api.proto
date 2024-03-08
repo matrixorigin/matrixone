@@ -395,7 +395,8 @@ message MergeTaskEntry {
     uint64 db_id = 1;
     uint64 tbl_id = 2;
     string table_name = 3;
+    string db_name = 4;
     // ObjectStats
-    repeated bytes to_merge_objs = 4;
-    uint64 estimated_mem_usage = 5;
+    repeated bytes to_merge_objs = 5;
+    uint64 estimated_mem_usage = 6;
 }

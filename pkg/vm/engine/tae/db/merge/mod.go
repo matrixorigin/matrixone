@@ -15,15 +15,60 @@
 package merge
 
 import (
+	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 )
 
 var StopMerge atomic.Bool
+
+type TaskHostKind int
+
+const (
+	TaskHostCN TaskHostKind = iota
+	TaskHostDN
+)
+
+var ActiveCNObj ActiveCNObjMap = ActiveCNObjMap{
+	o: make(map[objectio.ObjectId]struct{}),
+}
+
+type ActiveCNObjMap struct {
+	sync.Mutex
+	o map[objectio.ObjectId]struct{}
+}
+
+func (e *ActiveCNObjMap) AddActiveCNObj(entries []*catalog.ObjectEntry) {
+	e.Lock()
+	for _, entry := range entries {
+		e.o[entry.ID] = struct{}{}
+	}
+	e.Unlock()
+}
+
+func (e *ActiveCNObjMap) RemoveActiveCNObj(ids []objectio.ObjectId) {
+	e.Lock()
+	defer e.Unlock()
+	for _, id := range ids {
+		delete(e.o, id)
+	}
+}
+
+func (e *ActiveCNObjMap) CheckOverlapOnCNActive(entries []*catalog.ObjectEntry) bool {
+	e.Lock()
+	defer e.Unlock()
+	for _, entry := range entries {
+		if _, ok := e.o[entry.ID]; ok {
+			return true
+		}
+	}
+	return false
+}
 
 const (
 	constMergeMinBlks       = 5
@@ -34,7 +79,7 @@ const (
 
 type Policy interface {
 	OnObject(obj *catalog.ObjectEntry)
-	Revise(cpu, mem int64) []*catalog.ObjectEntry
+	Revise(cpu, mem int64) ([]*catalog.ObjectEntry, TaskHostKind)
 	ResetForTable(*catalog.TableEntry)
 	SetConfig(*catalog.TableEntry, func() txnif.AsyncTxn, any)
 	GetConfig(*catalog.TableEntry) any
