@@ -1632,6 +1632,32 @@ func makeOneDeletePlan(
 	return lastNodeId, nil
 }
 
+func getProjectionByLastNodeForRightJoin(builder *QueryBuilder, lastNodeId int32) []*Expr {
+	lastNode := builder.qry.Nodes[lastNodeId]
+	projLength := len(lastNode.ProjectList)
+	if projLength == 0 {
+		return getProjectionByLastNode(builder, lastNode.Children[0])
+	}
+	projection := make([]*Expr, len(lastNode.ProjectList))
+	for i, expr := range lastNode.ProjectList {
+		name := ""
+		if col, ok := expr.Expr.(*plan.Expr_Col); ok {
+			name = col.Col.Name
+		}
+		projection[i] = &plan.Expr{
+			Typ: expr.Typ,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: 1,
+					ColPos: int32(i),
+					Name:   name,
+				},
+			},
+		}
+	}
+	return projection
+}
+
 func getProjectionByLastNode(builder *QueryBuilder, lastNodeId int32) []*Expr {
 	lastNode := builder.qry.Nodes[lastNodeId]
 	projLength := len(lastNode.ProjectList)
@@ -2825,7 +2851,7 @@ func appendDeleteUniqueTablePlan(
 	********/
 	lastNodeId := baseNodeId
 	var err error
-	projectList := getProjectionByLastNode(builder, lastNodeId)
+	projectList := getProjectionByLastNodeForRightJoin(builder, lastNodeId)
 
 	var rightRowIdPos int32 = -1
 	var rightPkPos int32 = -1
