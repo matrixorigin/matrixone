@@ -27,8 +27,8 @@ var (
 		input  string
 		output string
 	}{
-		input:  "explain analyze verbose force execute st",
-		output: "explain (analyze,verbose) execute st",
+		input:  "LOAD DATA LOCAL INFILE 'a.csv' INTO TABLE wawa CHARACTER\nSET\nutf8 FIELDS TERMINATED BY ',' ENCLOSED BY '\"' ESCAPED BY '\"' LINES TERMINATED BY '' (\ndx,\ndx,\ncy,\nvx,\nvy\n);",
+		output: "load data local infile a.csv into table wawa character set utf8 fields terminated by , enclosed by \" escaped by \" lines terminated by '' (dx, dx, cy, vx, vy)",
 	}
 )
 
