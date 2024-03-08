@@ -668,18 +668,18 @@ func (tbl *txnTable) rangesOnePart(
 		return nil
 	}
 
-	// for dynamic parameter, substitute param ref and const fold cast expression here to improve performance
-	newExprs, err := plan2.ConstandFoldList(exprs, tbl.proc.Load(), true)
-	if err == nil {
-		exprs = newExprs
-	}
-
 	if done, err = tbl.tryFastRanges(
 		exprs, state, uncommittedObjects, dirtyBlks, outBlocks, tbl.db.txn.engine.fs,
 	); err != nil {
 		return err
 	} else if done {
 		return nil
+	}
+
+	// for dynamic parameter, substitute param ref and const fold cast expression here to improve performance
+	newExprs, err := plan2.ConstandFoldList(exprs, tbl.proc.Load(), true)
+	if err == nil {
+		exprs = newExprs
 	}
 
 	var (
