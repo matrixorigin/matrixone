@@ -2147,6 +2147,7 @@ func (tbl *txnTable) PKPersistedBetween(
 	to types.TS,
 	keys *vector.Vector,
 ) (bool, error) {
+
 	ctx := tbl.proc.Load().Ctx
 	fs := tbl.db.txn.engine.fs
 	primaryIdx := tbl.primaryIdx
@@ -2254,7 +2255,29 @@ func (tbl *txnTable) PKPersistedBetween(
 		if err != nil {
 			return true, err
 		}
-		filter := getPKSearchFuncByPKVals(keys)
+
+		bytes, _ := keys.MarshalBinary()
+		vecExpr := &plan.Expr{
+			Typ: *plan2.MakePlan2Type(keys.GetType()),
+			Expr: &plan.Expr_Vec{
+				Vec: &plan.LiteralVec{
+					Len:  int32(keys.Length()),
+					Data: bytes,
+				}},
+		}
+
+		colExpr := newColumnExpr(0, plan2.MakePlan2Type(keys.GetType()), "pk")
+
+		expr, _ := plan2.BindFuncExprImplByPlanExpr(
+			tbl.proc.Load().Ctx,
+			"in",
+			[]*plan.Expr{vecExpr, colExpr})
+
+		_, _, filter := getNonCompositePKSearchFuncByExpr(
+			expr,
+			"pk",
+			keys.GetType().Oid,
+			tbl.proc.Load())
 		sels := filter(bat.Vecs)
 		if len(sels) > 0 {
 			return true, nil
