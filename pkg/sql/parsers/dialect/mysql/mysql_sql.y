@@ -448,7 +448,6 @@ import (
 // Call
 %token <str> CALL
 
-
 // Time window
 %token <str> PREV SLIDING FILL
 
@@ -4079,12 +4078,12 @@ table_name_opt_wild:
     ident wild_opt
     {
         prefix := tree.ObjectNamePrefix{ExplicitSchema: false}
-        $$ = tree.NewTableName(tree.Identifier($1.Compare()), prefix)
+        $$ = tree.NewTableName(tree.Identifier($1.Compare()), prefix, nil)
     }
 |    ident '.' ident wild_opt
     {
         prefix := tree.ObjectNamePrefix{SchemaName: tree.Identifier($1.Compare()), ExplicitSchema: true}
-        $$ = tree.NewTableName(tree.Identifier($3.Compare()), prefix)
+        $$ = tree.NewTableName(tree.Identifier($3.Compare()), prefix, nil)
     }
 
 wild_opt:
@@ -5067,7 +5066,7 @@ select_expression:
 from_opt:
     {
         prefix := tree.ObjectNamePrefix{ExplicitSchema: false}
-        tn := tree.NewTableName(tree.Identifier(""), prefix)
+        tn := tree.NewTableName(tree.Identifier(""), prefix, nil)
         $$ = &tree.From{
             Tables: tree.TableExprs{&tree.AliasedTableExpr{Expr: tn}},
         }
@@ -7564,12 +7563,60 @@ table_name:
     ident
     {
         prefix := tree.ObjectNamePrefix{ExplicitSchema: false}
-        $$ = tree.NewTableName(tree.Identifier($1.Compare()), prefix)
+        $$ = tree.NewTableName(tree.Identifier($1.Compare()), prefix, nil)
     }
 |   ident '.' ident
     {
         prefix := tree.ObjectNamePrefix{SchemaName: tree.Identifier($1.Compare()), ExplicitSchema: true}
-        $$ = tree.NewTableName(tree.Identifier($3.Compare()), prefix)
+        $$ = tree.NewTableName(tree.Identifier($3.Compare()), prefix, nil)
+    }
+|   ident '@' STRING '@' STRING
+    {
+        prefix := tree.ObjectNamePrefix{ExplicitSchema: false}
+        atType := tree.ATTIMESTAMPNONE
+        if $3 != "" {
+            t := strings.ToLower($3)
+            switch t {
+                case "timestamp":
+                    atType = tree.ATTIMESTAMPTIME
+                case "snapshot":
+                    atType = tree.ATTIMESTAMPSNAPSHOT
+                default:
+                    yylex.Error("Invalid the type of at timestamp")
+                    return 1
+            }
+        }
+        atTs := &tree.AtTimeStampClause{
+            TimeStampExpr: &tree.TimeStampExpr{
+                Type: atType,
+                Expr: $5,
+            },
+        }
+        $$ = tree.NewTableName(tree.Identifier($1.Compare()), prefix, atTs)
+    }
+|   ident '.' ident '@' STRING '@' STRING
+    {
+        prefix := tree.ObjectNamePrefix{SchemaName: tree.Identifier($1.Compare()), ExplicitSchema: true}
+        atType := tree.ATTIMESTAMPNONE
+        if $5 != "" {
+            t := strings.ToLower($5)
+            switch t {
+                case "timestamp":
+                    atType = tree.ATTIMESTAMPTIME
+                case "snapshot":
+                    atType = tree.ATTIMESTAMPSNAPSHOT
+                default:
+                    yylex.Error("Invalid the type of at timestamp")
+                    return 1
+            }
+        }
+        atTs := &tree.AtTimeStampClause{
+            TimeStampExpr: &tree.TimeStampExpr{
+                Type: atType,
+                Expr: $7,
+            },
+        }
+        $$ = tree.NewTableName(tree.Identifier($3.Compare()), prefix, atTs)
     }
 
 table_elem_list_opt:
