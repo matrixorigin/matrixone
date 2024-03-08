@@ -33,9 +33,11 @@ var (
 	// The default value of refresh interval to HAKeeper.
 	defaultRefreshInterval = 5 * time.Second
 	// The default value of rebalance interval.
-	defaultRebalanceInterval = 15 * time.Second
+	defaultRebalanceInterval = 10 * time.Second
 	// The default value of rebalnce tolerance.
 	defaultRebalanceTolerance = 0.3
+	// The default value of rebalance policy.
+	defaultRebalancePolicy = "active"
 	// The default value of heartbeat interval.
 	defaultHeartbeatInterval = time.Second * 3
 	// The default value of heartbeat timeout.
@@ -48,6 +50,18 @@ var (
 	defaultTLSConnectTimeout = time.Second * 10
 )
 
+type RebalancePolicy int
+
+const (
+	RebalancePolicyActive RebalancePolicy = iota
+	RebalancePolicyPassive
+)
+
+var RebalancePolicyMapping = map[string]RebalancePolicy{
+	"active":  RebalancePolicyActive,
+	"passive": RebalancePolicyPassive,
+}
+
 // Config is the configuration of proxy server.
 type Config struct {
 	UUID          string `toml:"uuid"`
@@ -56,10 +70,14 @@ type Config struct {
 	RebalanceInterval toml.Duration `toml:"rebalance-interval" user_setting:"advanced"`
 	// RebalanceDisabled indicates that the rebalancer is disabled.
 	RebalanceDisabled bool `toml:"rebalance-disabled" user_setting:"advanced"`
-	// RebalanceToerance indicates the rebalancer's tolerance.
+	// RebalanceTolerance indicates the rebalancer's tolerance.
 	// Connections above the avg*(1+tolerance) will be migrated to
 	// other CN servers. This value should be less than 1.
-	RebalanceToerance float64 `toml:"rebalance-tolerance" user_setting:"advanced"`
+	RebalanceTolerance float64 `toml:"rebalance-tolerance" user_setting:"advanced"`
+	// RebalancePolicy indicates that the rebalance policy, which could be active or
+	// passive currently. Active means that the connection transfer will be more proactive
+	// to make sure the sessions are balanced in all CN servers. Default value is "active".
+	RebalancePolicy string `toml:"rebalance-proactive" user_setting:"advanced"`
 	// ConnectTimeout is the timeout duration when proxy connects to backend
 	// CN servers. If proxy connects to cn timeout, it will return a retryable
 	// error and try to connect to other cn servers.
@@ -183,8 +201,11 @@ func (c *Config) FillDefault() {
 	if c.Cluster.RefreshInterval.Duration == 0 {
 		c.Cluster.RefreshInterval.Duration = defaultRefreshInterval
 	}
-	if c.RebalanceToerance == 0 {
-		c.RebalanceToerance = defaultRebalanceTolerance
+	if c.RebalanceTolerance == 0 {
+		c.RebalanceTolerance = defaultRebalanceTolerance
+	}
+	if c.RebalancePolicy == "" {
+		c.RebalancePolicy = defaultRebalancePolicy
 	}
 	if c.Plugin != nil {
 		if c.Plugin.Timeout == 0 {
@@ -209,6 +230,9 @@ func (c *Config) Validate() error {
 		if c.Plugin.Timeout == 0 {
 			return moerr.NewInternalError(noReport, "proxy plugin backend timeout must be set")
 		}
+	}
+	if _, ok := RebalancePolicyMapping[c.RebalancePolicy]; !ok {
+		c.RebalancePolicy = defaultRebalancePolicy
 	}
 	return nil
 }
