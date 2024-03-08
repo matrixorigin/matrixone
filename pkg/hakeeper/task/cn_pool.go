@@ -17,7 +17,6 @@ package task
 import (
 	"container/heap"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
-	"slices"
 )
 
 type cnStore struct {
@@ -81,7 +80,7 @@ func (p *cnPool) set(key cnStore, val uint32) {
 		p.sortedCN = append(p.sortedCN, key)
 	}
 	p.freq[key.uuid] = val
-	heap.Fix(p, slices.IndexFunc(p.sortedCN,
+	heap.Fix(p, indexFunc(p.sortedCN,
 		func(store cnStore) bool {
 			return store.uuid == key.uuid
 		}))
@@ -105,7 +104,7 @@ func (p *cnPool) min() cnStore {
 
 func (p *cnPool) remove(key string) {
 	delete(p.freq, key)
-	slices.DeleteFunc(p.sortedCN, func(store cnStore) bool {
+	p.sortedCN = deleteFunc(p.sortedCN, func(store cnStore) bool {
 		return store.uuid == key
 	})
 }
@@ -121,4 +120,28 @@ func (p *cnPool) getStore(key string) (cnStore, bool) {
 		}
 	}
 	return cnStore{}, false
+}
+
+func indexFunc[S ~[]E, E any](s S, f func(E) bool) int {
+	for i := range s {
+		if f(s[i]) {
+			return i
+		}
+	}
+	return -1
+}
+
+func deleteFunc[S ~[]E, E any](s S, del func(E) bool) S {
+	i := indexFunc(s, del)
+	if i == -1 {
+		return s
+	}
+	// Don't start copying elements until we find one to delete.
+	for j := i + 1; j < len(s); j++ {
+		if v := s[j]; !del(v) {
+			s[i] = v
+			i++
+		}
+	}
+	return s[:i]
 }
