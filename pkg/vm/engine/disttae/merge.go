@@ -139,7 +139,7 @@ func (t *CNMergeTask) readAllData() ([]*batch.Batch, []*nulls.Nulls, error) {
 
 		// read all blocks data in an object
 		var innerErr error
-		readBlock := func(blk *objectio.BlockInfo, _ objectio.BlockObject) bool {
+		readBlock := func(blk objectio.BlockInfo, _ objectio.BlockObject) bool {
 			// update delta location
 			blk.Sorted = obj.Sorted
 			blk.EntryState = obj.EntryState
@@ -151,7 +151,7 @@ func (t *CNMergeTask) readAllData() ([]*batch.Batch, []*nulls.Nulls, error) {
 					blk.CommitTs = commitTs
 				}
 			}
-			bat, delmask, innerErr := t.readblock(blk)
+			bat, delmask, innerErr := t.readblock(&blk)
 			if innerErr != nil {
 				return false
 			}
