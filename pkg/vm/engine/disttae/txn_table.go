@@ -2141,7 +2141,149 @@ func (tbl *txnTable) updateLogtail(ctx context.Context) (err error) {
 	return nil
 }
 
-func (tbl *txnTable) PrimaryKeysMayBeModified(ctx context.Context, from types.TS, to types.TS, keysVector *vector.Vector) (bool, error) {
+func (tbl *txnTable) PKPersistedBetween(
+	p *logtailreplay.PartitionState,
+	from types.TS,
+	to types.TS,
+	keys *vector.Vector,
+) (bool, error) {
+
+	ctx := tbl.proc.Load().Ctx
+	fs := tbl.db.txn.engine.fs
+	primaryIdx := tbl.primaryIdx
+
+	var (
+		meta objectio.ObjectDataMeta
+		bf   objectio.BloomFilter
+	)
+
+	candidateBlks := make(map[types.Blockid]*objectio.BlockInfo)
+
+	//only check data objects.
+	delObjs, cObjs := p.GetChangedObjsBetween(from.Next(), types.MaxTs())
+
+	if err := ForeachCommittedObjects(cObjs, delObjs, p,
+		func(obj logtailreplay.ObjectInfo) (err2 error) {
+			var zmCkecked bool
+			// if the object info contains a pk zonemap, fast-check with the zonemap
+			if !obj.ZMIsEmpty() {
+				if !obj.SortKeyZoneMap().AnyIn(keys) {
+					return
+				}
+				zmCkecked = true
+			}
+
+			var objMeta objectio.ObjectMeta
+			location := obj.Location()
+
+			// load object metadata
+			if objMeta, err2 = objectio.FastLoadObjectMeta(
+				ctx, &location, false, fs,
+			); err2 != nil {
+				return
+			}
+
+			// reset bloom filter to nil for each object
+			meta = objMeta.MustDataMeta()
+
+			// check whether the object is skipped by zone map
+			// If object zone map doesn't contains the pk value, we need to check bloom filter
+			if !zmCkecked {
+				if !meta.MustGetColumn(uint16(primaryIdx)).ZoneMap().AnyIn(keys) {
+					return
+				}
+			}
+
+			bf = nil
+			if bf, err2 = objectio.LoadBFWithMeta(
+				ctx, meta, location, fs,
+			); err2 != nil {
+				return
+			}
+
+			ForeachBlkInObjStatsList(false, meta,
+				func(blk objectio.BlockInfo, blkMeta objectio.BlockObject) bool {
+					if !blkMeta.IsEmpty() &&
+						!blkMeta.MustGetColumn(uint16(primaryIdx)).ZoneMap().AnyIn(keys) {
+						return true
+					}
+
+					blkBf := bf.GetBloomFilter(uint32(blk.BlockID.Sequence()))
+					blkBfIdx := index.NewEmptyBinaryFuseFilter()
+					if err2 = index.DecodeBloomFilter(blkBfIdx, blkBf); err2 != nil {
+						return false
+					}
+					var exist bool
+					if exist = blkBfIdx.MayContainsAny(keys); !exist {
+						return true
+					}
+
+					blk.Sorted = obj.Sorted
+					blk.EntryState = obj.EntryState
+					blk.CommitTs = obj.CommitTS
+					if obj.HasDeltaLoc {
+						deltaLoc, commitTs, ok := p.GetBockDeltaLoc(blk.BlockID)
+						if ok {
+							blk.DeltaLoc = deltaLoc
+							blk.CommitTs = commitTs
+						}
+					}
+					blk.PartitionNum = -1
+					candidateBlks[blk.BlockID] = &blk
+					return true
+				}, obj.ObjectStats)
+
+			return
+		}); err != nil {
+		return true, err
+	}
+
+	//read block ,check if keys exist in the block.
+	pkDef := tbl.tableDef.Cols[tbl.primaryIdx]
+	pkSeq := pkDef.Seqnum
+	pkType := types.T(pkDef.Typ.Id).ToType()
+	for _, blk := range candidateBlks {
+		bat, err := blockio.LoadColumns(
+			ctx,
+			[]uint16{uint16(pkSeq)},
+			[]types.Type{pkType},
+			fs,
+			blk.MetaLocation(),
+			tbl.proc.Load().GetMPool(),
+			fileservice.Policy(0),
+		)
+		if err != nil {
+			return true, err
+		}
+
+		colExpr := newColumnExpr(0, plan2.MakePlan2Type(keys.GetType()), "pk")
+
+		bytes, _ := keys.MarshalBinary()
+		inExpr := plan2.MakeInExpr(
+			tbl.proc.Load().Ctx,
+			colExpr,
+			int32(keys.Length()),
+			bytes,
+			false)
+
+		_, _, filter := getNonCompositePKSearchFuncByExpr(
+			inExpr,
+			"pk",
+			keys.GetType().Oid,
+			tbl.proc.Load())
+		sels := filter(bat.Vecs)
+		if len(sels) > 0 {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func (tbl *txnTable) PrimaryKeysMayBeModified(
+	ctx context.Context,
+	from types.TS,
+	to types.TS,
+	keysVector *vector.Vector) (bool, error) {
 	part, err := tbl.db.txn.engine.lazyLoad(ctx, tbl)
 	if err != nil {
 		return false, err
@@ -2154,10 +2296,25 @@ func (tbl *txnTable) PrimaryKeysMayBeModified(ctx context.Context, from types.TS
 	packer.Reset()
 
 	keys := logtailreplay.EncodePrimaryKeyVector(keysVector, packer)
-	if snap.PrimaryKeyMayBeModified(from, to, keys) {
+	exist, flushed := snap.PKExistInMemBetween(from, to, keys)
+	if exist {
 		return true, nil
 	}
-	return false, nil
+	if !flushed {
+		return false, nil
+	}
+	//need check pk whether exist on S3 block.
+	if tbl.tableName == catalog.MO_DATABASE ||
+		tbl.tableName == catalog.MO_TABLES ||
+		tbl.tableName == catalog.MO_COLUMNS {
+		logutil.Warnf("mo table:%s always exist in memory", tbl.tableName)
+		return true, nil
+	}
+	return tbl.PKPersistedBetween(
+		snap,
+		from,
+		to,
+		keysVector)
 }
 
 func (tbl *txnTable) updateDeleteInfo(
