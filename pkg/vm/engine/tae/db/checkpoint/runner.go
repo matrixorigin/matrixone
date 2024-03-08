@@ -687,7 +687,8 @@ func (r *runner) tryAddNewIncrementalCheckpointEntry(entry *CheckpointEntry) (su
 
 	// if it is not the right candidate, skip this request
 	// [startTs, endTs] --> [endTs+1, ?]
-	if !maxEntry.GetEnd().Next().Equal(entry.GetStart()) {
+	endTS := maxEntry.GetEnd()
+	if !endTS.Next().Equal(entry.GetStart()) {
 		success = false
 		return
 	}
@@ -999,8 +1000,12 @@ func (r *runner) onDirtyEntries(entries ...any) {
 }
 
 func (r *runner) crontask(ctx context.Context) {
+	lag := 2 * time.Second
+	if r.options.maxFlushInterval < time.Second {
+		lag = 0 * time.Second
+	}
 	hb := w.NewHeartBeaterWithFunc(r.options.collectInterval, func() {
-		r.source.Run()
+		r.source.Run(lag)
 		entry := r.source.GetAndRefreshMerged()
 		_, endts := entry.GetTimeRange()
 		if entry.IsEmpty() {
