@@ -2136,8 +2136,8 @@ func buildInMOCU(parameters []*vector.Vector, result vector.FunctionResultWrappe
 }
 
 func buildInMOCUv1(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-	cfg := config.GetOBCUConfigV1()
-	return buildInMOCUWithCfg(parameters, result, proc, length, &cfg)
+	cfg := motrace.GetCUConfigV1()
+	return buildInMOCUWithCfg(parameters, result, proc, length, cfg)
 }
 
 func buildInMOCUWithCfg(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, cfg *config.OBCUConfig) error {

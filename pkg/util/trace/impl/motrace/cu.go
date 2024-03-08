@@ -23,15 +23,14 @@ import (
 	"go.uber.org/zap"
 )
 
-const DecimalNSThreshold = 1e9
+// DecimalNSThreshold default 100 sec
+const DecimalNSThreshold = 100e9
 
 func CalculateCUWithCfg(stats statistic.StatsArray, durationNS int64, cfg *config.OBCUConfig) float64 {
 
 	if cfg == nil {
-		cuCfg := GetTracerProvider().GetCUConfig()
-		cfg = &cuCfg
+		cfg = GetCUConfig()
 	}
-
 	// basic
 	cpu := stats.GetTimeConsumed() * cfg.CpuPrice
 	ioIn := stats.GetS3IOInputCount() * cfg.IoInPrice
@@ -63,22 +62,21 @@ func CalculateCUWithCfg(stats statistic.StatsArray, durationNS int64, cfg *confi
 // the result only keep 3 decimal places
 // Tips: CU is long-tailed numbers
 func CalculateCU(stats statistic.StatsArray, durationNS int64) float64 {
-	cfg := GetTracerProvider().GetCUConfig()
-	return CalculateCUWithCfg(stats, durationNS, &cfg)
+	cfg := GetCUConfig()
+	return CalculateCUWithCfg(stats, durationNS, cfg)
 }
 
 // CalculateCUv1 calculate CU cost
 func CalculateCUv1(stats statistic.StatsArray, durationNS int64) float64 {
-	cfg := config.GetOBCUConfigV1()
-	return CalculateCUWithCfg(stats, durationNS, &cfg)
+	cfg := GetCUConfigV1()
+	return CalculateCUWithCfg(stats, durationNS, cfg)
 }
 
 // CalculateCUCpu
 // Be careful of the number overflow
 func CalculateCUCpu(cpuRuntimeNS int64, cfg *config.OBCUConfig) float64 {
 	if cfg == nil {
-		cuCfg := GetTracerProvider().GetCUConfig()
-		cfg = &cuCfg
+		cfg = GetCUConfig()
 	}
 	return float64(cpuRuntimeNS) / cfg.CUUnit * cfg.CpuPrice
 }
@@ -87,8 +85,7 @@ func CalculateCUCpu(cpuRuntimeNS int64, cfg *config.OBCUConfig) float64 {
 // Be careful of the number overflow
 func CalculateCUMem(memByte int64, durationNS int64, cfg *config.OBCUConfig) float64 {
 	if cfg == nil {
-		cuCfg := GetTracerProvider().GetCUConfig()
-		cfg = &cuCfg
+		cfg = GetCUConfig()
 	}
 	if durationNS > DecimalNSThreshold {
 		val, err := CalculateCUMemDecimal(memByte, durationNS, cfg.MemPrice, cfg.CUUnit)
@@ -125,39 +122,26 @@ func CalculateCUMemDecimal(memByte, durationNS int64, memPrice, cuUnit float64) 
 		return 0, err
 	}
 
-	// adjust scale
-	if cuScale > statistic.Float64PrecForCU {
-		//cuVal.Round(cuScale, statistic.Float64PrecForCU)
-		val, err := cuVal.Scale(statistic.Float64PrecForCU - cuScale)
-		if err == nil {
-			cuVal = val
-			cuScale = statistic.Float64PrecForCU
-		}
-	}
-
 	return types.Decimal128ToFloat64(cuVal, cuScale), nil
 }
 
 func CalculateCUIOIn(ioCnt int64, cfg *config.OBCUConfig) float64 {
 	if cfg == nil {
-		cuCfg := GetTracerProvider().GetCUConfig()
-		cfg = &cuCfg
+		cfg = GetCUConfig()
 	}
 	return float64(ioCnt) * cfg.IoInPrice / cfg.CUUnit
 }
 
 func CalculateCUIOOut(ioCnt int64, cfg *config.OBCUConfig) float64 {
 	if cfg == nil {
-		cuCfg := GetTracerProvider().GetCUConfig()
-		cfg = &cuCfg
+		cfg = GetCUConfig()
 	}
 	return float64(ioCnt) * cfg.IoOutPrice / cfg.CUUnit
 }
 
 func CalculateCUTraffic(bytes int64, connType float64, cfg *config.OBCUConfig) float64 {
 	if cfg == nil {
-		cuCfg := GetTracerProvider().GetCUConfig()
-		cfg = &cuCfg
+		cfg = GetCUConfig()
 	}
 	traffic := 0.0
 	switch statistic.ConnType(connType) {
@@ -171,4 +155,19 @@ func CalculateCUTraffic(bytes int64, connType float64, cfg *config.OBCUConfig) f
 		traffic = float64(bytes) * cfg.TrafficPrice0
 	}
 	return traffic / cfg.CUUnit
+}
+
+var cuCfg = config.NewOBCUConfig()
+var cuCfgV1 = config.NewOBCUConfig()
+
+func GetCUConfig() *config.OBCUConfig {
+	return cuCfg
+}
+
+func GetCUConfigV1() *config.OBCUConfig {
+	return cuCfgV1
+}
+
+func SetCuConfig(cu, cuv1 *config.OBCUConfig) {
+	cuCfg, cuCfgV1 = cu, cuv1
 }

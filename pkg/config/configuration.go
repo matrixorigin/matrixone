@@ -538,7 +538,8 @@ type ObservabilityParameters struct {
 	LabelSelector map[string]string `toml:"labelSelector"`
 
 	// for cu calculation
-	CU OBCUConfig `toml:"cu"`
+	CU   OBCUConfig `toml:"cu"`
+	CUv1 OBCUConfig `toml:"cu_v1"`
 
 	OBCollectorConfig
 }
@@ -570,6 +571,7 @@ func NewObservabilityParameters() *ObservabilityParameters {
 		EnableStmtMerge:                    false,
 		LabelSelector:                      map[string]string{defaultLoggerLabelKey: defaultLoggerLabelVal}, /*role=logging_cn*/
 		CU:                                 *NewOBCUConfig(),
+		CUv1:                               *NewOBCUConfig(),
 		OBCollectorConfig:                  *NewOBCollectorConfig(),
 	}
 	op.MetricInternalGatherInterval.Duration = defaultMetricInternalGatherInterval
@@ -700,14 +702,14 @@ type OBCUConfig struct {
 	TrafficPrice2 float64 `toml:"traffic_price_2"`
 }
 
-const CUUnitDefault = 1.0026988039e-06
-const CUCpuPriceDefault = 7.43e-14
-const CUMemPriceDefault = 6.79e-24
-const CUIOInPriceDefault = 1e-06
-const CUIOOutPriceDefault = 1e-06
-const CUTrafficPrice0Default = 8.94e-10
-const CUTrafficPrice1Default = 0
-const CUTrafficPrice2Default = 8.94e-10
+const CUUnitDefault = 1.002678e-06
+const CUCpuPriceDefault = 3.45e-14
+const CUMemPriceDefault = 4.56e-24
+const CUIOInPriceDefault = 5.67e-06
+const CUIOOutPriceDefault = 6.78e-06
+const CUTrafficPrice0Default = 7.89e-10
+const CUTrafficPrice1Default = 7.89e-10
+const CUTrafficPrice2Default = 7.89e-10
 
 func NewOBCUConfig() *OBCUConfig {
 	cfg := &OBCUConfig{
@@ -719,20 +721,6 @@ func NewOBCUConfig() *OBCUConfig {
 		TrafficPrice0: CUTrafficPrice0Default,
 		TrafficPrice1: CUTrafficPrice1Default,
 		TrafficPrice2: CUTrafficPrice2Default,
-	}
-	return cfg
-}
-
-func GetOBCUConfigV1() OBCUConfig {
-	cfg := OBCUConfig{
-		CUUnit:        1.0026988039e-06,
-		CpuPrice:      7.43e-14,
-		MemPrice:      6.79e-24,
-		IoInPrice:     1e-06,
-		IoOutPrice:    1e-06,
-		TrafficPrice0: 8.94e-10,
-		TrafficPrice1: 0,
-		TrafficPrice2: 8.94e-10,
 	}
 	return cfg
 }

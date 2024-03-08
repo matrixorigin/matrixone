@@ -94,6 +94,9 @@ func TestCalculateCUMem(t *testing.T) {
 		durationNS int64
 		cfg        *config.OBCUConfig
 	}
+
+	defaultCUConfig := config.NewOBCUConfig()
+
 	tests := []struct {
 		name string
 		args args
@@ -107,7 +110,17 @@ func TestCalculateCUMem(t *testing.T) {
 				cfg:        &dummyOBConfig,
 			},
 			// want: 1.201028143901687e+06,
-			want: 1.2010281439e+06,
+			want: 1.2010281439016873e+06,
+		},
+		{
+			name: "default_cfg",
+			args: args{
+				memByte:    573384797164,
+				durationNS: 309319808921,
+				cfg:        defaultCUConfig,
+			},
+			// want: 806598.2280355261,
+			want: 806598.2280355261,
 		},
 	}
 	for _, tt := range tests {
@@ -136,8 +149,7 @@ func TestCalculateCUMemDecimal(t *testing.T) {
 				durationNS: 309319808921,
 				cfg:        &dummyOBConfig,
 			},
-			//    1.2010281439016873e+06
-			want: 1.2010281439e+06,
+			want: 1.2010281439016873e+06,
 		},
 		{
 			name: "5,733(G-byte)*86400(sec)",
@@ -147,7 +159,7 @@ func TestCalculateCUMemDecimal(t *testing.T) {
 				cfg:        &dummyOBConfig,
 			},
 			//    3,354,742,523.444667
-			want: 3.3547425234447e+09,
+			want: 3.354742523444667e+09,
 		},
 		{
 			name: "128(GB)*7*86400(sec)",
@@ -157,7 +169,7 @@ func TestCalculateCUMemDecimal(t *testing.T) {
 				cfg:        &dummyOBConfig,
 			},
 			//  562,886,586.3021176
-			want: 5.628865863021e+08,
+			want: 5.628865863021175e+08,
 		},
 		{
 			name: "573384797164(byte)*1e9(ns)",
@@ -167,7 +179,7 @@ func TestCalculateCUMemDecimal(t *testing.T) {
 				cfg:        &dummyOBConfig,
 			},
 			//    3882.803846579476
-			want: 3882.8038,
+			want: 3882.803846579476,
 		},
 	}
 	for _, tt := range tests {
@@ -175,44 +187,6 @@ func TestCalculateCUMemDecimal(t *testing.T) {
 			got, err := CalculateCUMemDecimal(tt.args.memByte, tt.args.durationNS, tt.args.cfg.MemPrice, tt.args.cfg.CUUnit)
 			require.Nil(t, err)
 			assert.Equalf(t, tt.want, got, "CalculateCUMemDecimal(%v, %v, %v, %v)", tt.args.memByte, tt.args.durationNS, tt.args.cfg.MemPrice, tt.args.cfg.CUUnit)
-		})
-	}
-}
-
-func TestCalculateByteNS(t *testing.T) {
-	type args struct {
-		memByte    int64
-		durationNS int64
-		cfg        *config.OBCUConfig
-	}
-	tests := []struct {
-		name string
-		args args
-		want float64
-	}{
-		{
-			name: "case1",
-			args: args{
-				memByte:    573384797164,
-				durationNS: 309319808921,
-			},
-			want: 1.773592758969748e+23,
-		},
-		{
-			name: "573384797164(byte)*1e9(ns)",
-			args: args{
-				memByte:    573384797164,
-				durationNS: 1e9,
-				cfg:        &dummyOBConfig,
-			},
-			//    3882.803846579476
-			want: 3882.8038,
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := float64(tt.args.memByte) * float64(tt.args.durationNS)
-			assert.Equalf(t, tt.want, got, "CalculateCUMem(%v, %v, %v)", tt.args.memByte, tt.args.durationNS, tt.args.cfg)
 		})
 	}
 }

@@ -36,8 +36,8 @@ const (
 
 	StatsArrayVersion1 = 1 // float64 array
 	StatsArrayVersion2 = 2 // float64 array + plus one elem OutTrafficBytes
-	StatsArrayVersion3 = 3 // ... + one elem: ConnType
-	StatsArrayVersion4 = 4 // ... + two elem: OutPacketCount, CU
+	StatsArrayVersion3 = 3 // ... + 1 elem: ConnType
+	StatsArrayVersion4 = 4 // ... + 2 elem: OutPacketCount, CU
 
 	StatsArrayVersionLatest // same value as last variable StatsArrayVersion#
 )

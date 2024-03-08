@@ -83,7 +83,8 @@ type tracerProviderConfig struct {
 
 	bufferSizeThreshold int64 // WithBufferSizeThreshold
 
-	cuConfig config.OBCUConfig // WithCUConfig
+	cuConfig   config.OBCUConfig // WithCUConfig
+	cuConfigV1 config.OBCUConfig // WithCUConfig
 
 	mux sync.RWMutex
 }
@@ -114,10 +115,6 @@ func (cfg *tracerProviderConfig) GetSqlExecutor() func() ie.InternalExecutor {
 	cfg.mux.RLock()
 	defer cfg.mux.RUnlock()
 	return cfg.sqlExecutor
-}
-
-func (cfg *tracerProviderConfig) GetCUConfig() config.OBCUConfig {
-	return cfg.cuConfig
 }
 
 // TracerProviderOption configures a TracerProvider.
@@ -207,9 +204,10 @@ func WithStmtMergeEnable(enable bool) tracerProviderOption {
 	}
 }
 
-func WithCUConfig(cu config.OBCUConfig) tracerProviderOption {
+func WithCUConfig(cu config.OBCUConfig, cuv1 config.OBCUConfig) tracerProviderOption {
 	return func(cfg *tracerProviderConfig) {
 		cfg.cuConfig = cu
+		cfg.cuConfigV1 = cuv1
 	}
 }
 

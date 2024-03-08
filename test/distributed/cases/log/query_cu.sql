@@ -1,0 +1,11 @@
+set @stats="[3,7528422223,573384797164.000,0,1,247109,2]";
+set @duration=309319808921;
+select json_extract(@stats, '$[1]') val;
+select json_extract(@stats, '$[2]') val;
+select json_extract(@stats, '$[3]') val;
+select json_extract(@stats, '$[4]') val;
+select json_extract(@stats, '$[5]') val;
+select json_extract(@stats, '$[6]') val;
+select CAST(mo_cu(@stats, @duration) AS DECIMAL(32,4)) as cu, CAST(mo_cu(@stats, @duration, "total") AS DECIMAL(32,4)) cu_total, CAST(mo_cu(@stats, @duration, "cpu") AS DECIMAL(32,4)) cu_cpu, CAST(mo_cu(@stats, @duration, "mem") AS DECIMAL(32,4)) cu_mem, CAST(mo_cu(@stats, @duration, "ioin") AS DECIMAL(32,4)) cu_ioin, CAST(mo_cu(@stats, @duration, "ioout") AS DECIMAL(32,4)) cu_ioout, CAST(mo_cu(@stats, @duration, "network") AS DECIMAL(32,4)) cu_network;
+select CAST( JSON_UNQUOTE(JSON_EXTRACT(@stats, '$[1]')) * 3.45e-14 / 1.002678e-06  AS DECIMAL(32,6)) - CAST(mo_cu(@stats, @duration, "cpu") AS DECIMAL(32,6)) val;
+select JSON_UNQUOTE(JSON_EXTRACT(@stats, '$[2]')) * 4.56e-24 * @duration / 1.002678e-06 AS DECIMAL(32,) - CAST(mo_cu(@stats, @duration, "mem") AS DECIMAL(32,6)) val;
