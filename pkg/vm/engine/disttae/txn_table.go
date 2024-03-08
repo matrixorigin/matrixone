@@ -2257,24 +2257,35 @@ func (tbl *txnTable) PKPersistedBetween(
 		}
 
 		bytes, _ := keys.MarshalBinary()
-		vecExpr := &plan.Expr{
-			Typ: *plan2.MakePlan2Type(keys.GetType()),
-			Expr: &plan.Expr_Vec{
-				Vec: &plan.LiteralVec{
-					Len:  int32(keys.Length()),
-					Data: bytes,
-				}},
-		}
+		//vecExpr := &plan.Expr{
+		//	Typ: *plan2.MakePlan2Type(keys.GetType()),
+		//	Expr: &plan.Expr_Vec{
+		//		Vec: &plan.LiteralVec{
+		//			Len:  int32(keys.Length()),
+		//			Data: bytes,
+		//		}},
+		//}
 
 		colExpr := newColumnExpr(0, plan2.MakePlan2Type(keys.GetType()), "pk")
 
-		expr, _ := plan2.BindFuncExprImplByPlanExpr(
+		inExpr := plan2.MakeInExpr(
 			tbl.proc.Load().Ctx,
-			"in",
-			[]*plan.Expr{vecExpr, colExpr})
+			colExpr,
+			int32(keys.Length()),
+			bytes,
+			false)
+
+		//expr, err := plan2.BindFuncExprImplByPlanExpr(
+		//	tbl.proc.Load().Ctx,
+		//	"in",
+		//	[]*plan.Expr{vecExpr, colExpr})
+		//if err != nil {
+		//	//panic("build func expr failed")
+		//	logutil.Fatalf("build func expr failed:%s", err.Error())
+		//}
 
 		_, _, filter := getNonCompositePKSearchFuncByExpr(
-			expr,
+			inExpr,
 			"pk",
 			keys.GetType().Oid,
 			tbl.proc.Load())
