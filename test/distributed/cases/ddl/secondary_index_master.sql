@@ -170,3 +170,276 @@ alter table t1 drop primary key;
 drop table if exists t1;
 create table t1(a varchar(30), b bigint, c varchar(30) primary key);
 create index idx1 using master on t1(a,b);
+
+
+
+-- 2.7.a Select with No PK
+drop table if exists t1;
+create table t1(a varchar(30), b varchar(30), c varchar(30));
+create index idx1 using master on t1(a,b);
+insert into t1 values("Congress","Lane", "1");
+insert into t1 values("Juniper","Way", "2");
+insert into t1 values("Nightingale","Lane", "3");
+--explain select * from t1 where a="Congress" and b="Lane";
+--+---------------------------------------------------------------------------------------------+
+--| QUERY PLAN                                                                                  |
+--+---------------------------------------------------------------------------------------------+
+--| Project                                                                                     |
+--|   ->  Join                                                                                  |
+--|         Join Type: INDEX                                                                    |
+--|         Join Cond: (t1.__mo_fake_pk_col = #[1,0])                                           | <-- Good
+--|         ->  Table Scan on a.t1                                                              |
+--|               Filter Cond: (t1.b = 'Lane'), (t1.a = 'Congress')                             |
+--|         ->  Join                                                                            |
+--|               Join Type: INNER                                                              |
+--|               Join Cond: (#[0,0] = #[1,0])                                                  |
+--|               ->  Table Scan on a.__mo_index_secondary_018df437-c576-7c78-8d68-eb29bf7cd598 |
+--|                     Filter Cond: prefix_eq(#[0,0], 'Fa FCongress ')                       |
+--|               ->  Table Scan on a.__mo_index_secondary_018df437-c576-7c78-8d68-eb29bf7cd598 |
+--|                     Filter Cond: prefix_eq(#[0,0], 'Fb FLane ')                           |
+--+---------------------------------------------------------------------------------------------+
+select * from t1 where a="Congress" and b="Lane";
+
+-- 2.7.b Select with Single PK
+drop table if exists t1;
+create table t1(a varchar(30), b varchar(30), c varchar(30) primary key);
+create index idx1 using master on t1(a,b);
+insert into t1 values("Congress","Lane", "1");
+insert into t1 values("Juniper","Way", "2");
+insert into t1 values("Nightingale","Lane", "3");
+--mysql> explain select * from t1 where a="Nightingale" and b="Lane";
+--+---------------------------------------------------------------------------------------------+
+--| QUERY PLAN                                                                                  |
+--+---------------------------------------------------------------------------------------------+
+--| Project                                                                                     |
+--|   ->  Join                                                                                  |
+--|         Join Type: INDEX                                                                    |
+--|         Join Cond: (t1.c = #[1,0])                                                          |<-- Good
+--|         ->  Table Scan on a.t1                                                              |
+--|               Filter Cond: (t1.b = 'Lane'), (t1.a = 'Nightingale')                          |
+--|         ->  Join                                                                            |
+--|               Join Type: INNER                                                              |
+--|               Join Cond: (#[0,0] = #[1,0])                                                  |
+--|               ->  Table Scan on a.__mo_index_secondary_018df438-9530-7b1d-b252-b10d794ae2a4 |
+--|                     Filter Cond: prefix_eq(#[0,0], 'Fa FNightingale ')                    |
+--|               ->  Table Scan on a.__mo_index_secondary_018df438-9530-7b1d-b252-b10d794ae2a4 |
+--|                     Filter Cond: prefix_eq(#[0,0], 'Fb FLane ')                           |
+--+---------------------------------------------------------------------------------------------+
+select * from t1 where a="Nightingale" and b="Lane";
+
+
+-- 2.7.c Select with 2 or more PK
+drop table if exists t1;
+create table t1(a varchar(30), b0 varchar(30), b1 varchar(30), c varchar(30), d varchar(30), primary key( c, d));
+create index idx1 using master on t1(a,b0);
+insert into t1 values("Congress","Lane", "ALane","1","0");
+insert into t1 values("Juniper","Way","AWay", "2","0");
+insert into t1 values("Nightingale","Lane","ALane", "3","0");
+--mysql> explain select * from t1 where a="Nightingale" and b0="Lane";
+--+---------------------------------------------------------------------------------------------+
+--| QUERY PLAN                                                                                  |
+--+---------------------------------------------------------------------------------------------+
+--| Project                                                                                     |
+--|   ->  Join                                                                                  |
+--|         Join Type: INDEX                                                                    |
+--|         Join Cond: (t1.__mo_cpkey_col = #[1,0])                                             |<-- Good
+--|         ->  Table Scan on a.t1                                                              |
+--|               Filter Cond: (t1.b0 = 'Lane'), (t1.a = 'Nightingale')                         |
+--|         ->  Join                                                                            |
+--|               Join Type: INNER                                                              |
+--|               Join Cond: (#[0,0] = #[1,0])                                                  |
+--|               ->  Table Scan on a.__mo_index_secondary_018df43c-db6a-7afe-bb23-bdf898223435 |
+--|                     Filter Cond: prefix_eq(#[0,0], 'Fa FNightingale ')                    |
+--|               ->  Table Scan on a.__mo_index_secondary_018df43c-db6a-7afe-bb23-bdf898223435 |
+--|                     Filter Cond: prefix_eq(#[0,0], 'Fb0 FLane ')                          |
+--+---------------------------------------------------------------------------------------------+
+select * from t1 where a="Nightingale" and b0="Lane";
+
+-- 2.8.a Select with one Filter
+drop table if exists t1;
+create table t1(a varchar(30), b varchar(30), c varchar(30) primary key);
+create index idx1 using master on t1(a,b);
+insert into t1 values("Congress","Lane", "1");
+insert into t1 values("Juniper","Way", "2");
+insert into t1 values("Nightingale","Lane", "3");
+--mysql> explain  select * from t1 where b="Lane";
+--+---------------------------------------------------------------------------------------+
+--| QUERY PLAN                                                                            |
+--+---------------------------------------------------------------------------------------+
+--| Project                                                                               |
+--|   ->  Join                                                                            |
+--|         Join Type: INDEX                                                              |
+--|         Join Cond: (t1.c = #[1,0])                                                    |<-- Good
+--|         ->  Table Scan on a.t1                                                        |
+--|               Filter Cond: (t1.b = 'Lane')                                            |
+--|         ->  Table Scan on a.__mo_index_secondary_018df43d-47dd-75bd-a6c4-9c25c7a51c23 |
+--|               Filter Cond: prefix_eq(#[0,0], 'Fb FLane ')                           |
+--+---------------------------------------------------------------------------------------+
+select * from t1 where b="Lane";
+
+-- 2.8.b Select with 2 Filters
+--mysql> explain select * from t1 where a="Juniper" and b="Way";
+--+---------------------------------------------------------------------------------------------+
+--| QUERY PLAN                                                                                  |
+--+---------------------------------------------------------------------------------------------+
+--| Project                                                                                     |
+--|   ->  Join                                                                                  |
+--|         Join Type: INDEX                                                                    |
+--|         Join Cond: (t1.c = #[1,0])                                                          |
+--|         ->  Table Scan on a.t1                                                              |
+--|               Filter Cond: (t1.b = 'Way'), (t1.a = 'Juniper')                               |
+--|         ->  Join                                                                            |
+--|               Join Type: INNER                                                              |<-- Good
+--|               Join Cond: (#[0,0] = #[1,0])                                                  |
+--|               ->  Table Scan on a.__mo_index_secondary_018df43d-47dd-75bd-a6c4-9c25c7a51c23 |
+--|                     Filter Cond: prefix_eq(#[0,0], 'Fa FJuniper ')                        |
+--|               ->  Table Scan on a.__mo_index_secondary_018df43d-47dd-75bd-a6c4-9c25c7a51c23 |
+--|                     Filter Cond: prefix_eq(#[0,0], 'Fb FWay ')                            |
+--+---------------------------------------------------------------------------------------------+
+select * from t1 where a="Juniper" and b="Way";
+
+-- 2.8.c Select with 3 or more Filters
+drop table if exists t1;
+create table t1(a varchar(30), b varchar(30), c varchar(30));
+create index idx1 using master on t1(a,b,c);
+insert into t1 values("Congress","Lane", "1");
+insert into t1 values("Juniper","Way", "2");
+insert into t1 values("Nightingale","Lane", "3");
+--mysql> explain select * from t1 where a="Congress" and b="Lane" and c="1";
+--+---------------------------------------------------------------------------------------------------+
+--| QUERY PLAN                                                                                        |
+--+---------------------------------------------------------------------------------------------------+
+--| Project                                                                                           |
+--|   ->  Join                                                                                        |
+--|         Join Type: INDEX                                                                          |
+--|         Join Cond: (t1.__mo_fake_pk_col = #[1,0])                                                 |
+--|         ->  Table Scan on a.t1                                                                    |
+--|               Filter Cond: (t1.c = '1'), (t1.b = 'Lane'), (t1.a = 'Congress')                     |
+--|         ->  Join                                                                                  |
+--|               Join Type: INNER                                                                    |<-- Good
+--|               Join Cond: (#[0,0] = #[1,0])                                                        |
+--|               ->  Table Scan on a.__mo_index_secondary_018df43e-105b-70d8-a9c1-88c03b26d8ee       |
+--|                     Filter Cond: prefix_eq(#[0,0], 'Fa FCongress ')                             |
+--|               ->  Join                                                                            |
+--|                     Join Type: INNER                                                              |<-- Good
+--|                     Join Cond: (#[0,0] = #[1,0])                                                  |
+--|                     ->  Table Scan on a.__mo_index_secondary_018df43e-105b-70d8-a9c1-88c03b26d8ee |
+--|                           Filter Cond: prefix_eq(#[0,0], 'Fb FLane ')                           |
+--|                     ->  Table Scan on a.__mo_index_secondary_018df43e-105b-70d8-a9c1-88c03b26d8ee |
+--|                           Filter Cond: prefix_eq(#[0,0], 'Fc F1 ')                              |
+--+---------------------------------------------------------------------------------------------------+
+select * from t1 where a="Congress" and b="Lane" and c="1";
+
+
+-- 2.8.d Select with = and between
+--mysql> explain select * from t1 where a="Nightingale" and c between "2" and "3";
+--+---------------------------------------------------------------------------------------------+
+--| QUERY PLAN                                                                                  |
+--+---------------------------------------------------------------------------------------------+
+--| Project                                                                                     |
+--|   ->  Join                                                                                  |
+--|         Join Type: INDEX                                                                    |
+--|         Join Cond: (t1.__mo_fake_pk_col = #[1,0])                                           |
+--|         ->  Table Scan on a.t1                                                              |
+--|               Filter Cond: (t1.a = 'Nightingale'), t1.c BETWEEN '2' AND '3'                 |
+--|         ->  Join                                                                            |
+--|               Join Type: INNER                                                              |<-- Good
+--|               Join Cond: (#[0,0] = #[1,0])                                                  |
+--|               ->  Table Scan on a.__mo_index_secondary_018df43e-105b-70d8-a9c1-88c03b26d8ee |
+--|                     Filter Cond: prefix_between(#[0,0], 'Fc F2 ', 'Fc F3 ')                 |<-- Good
+--|               ->  Table Scan on a.__mo_index_secondary_018df43e-105b-70d8-a9c1-88c03b26d8ee |
+--|                     Filter Cond: prefix_eq(#[0,0], 'Fa FNightingale ')                      |<-- Good
+--+---------------------------------------------------------------------------------------------+
+select * from t1 where a="Nightingale" and c between "2" and "3";
+
+-- 2.8.e Select with = and in
+drop table if exists t1;
+create table t1(a varchar(30), b varchar(30), c varchar(30));
+create index idx1 using master on t1(a,b,c);
+insert into t1 values("Congress","Lane", "1");
+insert into t1 values("Juniper","Way", "2");
+insert into t1 values("Nightingale","Lane", "3");
+--mysql> explain select * from t1 where a in ("Congress","Nightingale") and b="Lane" and c in("1","2","3");
+--+---------------------------------------------------------------------------------------------------------+
+--| QUERY PLAN                                                                                              |
+--+---------------------------------------------------------------------------------------------------------+
+--| Project                                                                                                 |
+--|   ->  Join                                                                                              |
+--|         Join Type: INDEX                                                                                |
+--|         Join Cond: (t1.__mo_fake_pk_col = #[1,0])                                                       |
+--|         Runtime Filter Build: #[-1,0]                                                                   |
+--|         ->  Table Scan on a.t1                                                                          |
+--|               Filter Cond: (t1.b = 'Lane'), t1.c in ([1 2 3]), t1.a in ([Congress Nightingale])         |
+--|               Runtime Filter Probe: t1.__mo_fake_pk_col                                                 |
+--|         ->  Join                                                                                        |
+--|               Join Type: INNER                                                                          |
+--|               Join Cond: (#[0,0] = #[1,0])                                                              |
+--|               ->  Project                                                                               |
+--|                     ->  Table Scan on a.__mo_index_secondary_018e0cf1-3349-7fa1-9b81-b2aea37c8f52       |
+--|                           Filter Cond: prefix_in(#[0,0], [FaCongress  FaNightingale ])                  | <-- Good
+--|               ->  Join                                                                                  |
+--|                     Join Type: INNER                                                                    |
+--|                     Join Cond: (#[0,0] = #[1,0])                                                        |
+--|                     ->  Project                                                                         |
+--|                           ->  Table Scan on a.__mo_index_secondary_018e0cf1-3349-7fa1-9b81-b2aea37c8f52 |
+--|                                 Filter Cond: prefix_in(#[0,0], [Fc1  Fc2  Fc3 ])                        |  <-- Good
+--|                     ->  Project                                                                         |
+--|                           ->  Table Scan on a.__mo_index_secondary_018e0cf1-3349-7fa1-9b81-b2aea37c8f52 |
+--|                                 Filter Cond: prefix_eq(#[0,0], 'Fb FLane ')                             |
+--+---------------------------------------------------------------------------------------------------------+
+--23 rows in set (0.00 sec)
+select * from t1 where a in ("Congress","Nightingale") and b="Lane" and c in("1","2","3");
+
+-- 2.8.f SELECT with LIMIT
+drop table if exists t1;
+create table t1(a varchar(30), b varchar(30), c varchar(30));
+create index idx1 using master on t1(a,b,c);
+insert into t1 values("Congress","Lane", "1");
+insert into t1 values("Juniper","Way", "2");
+insert into t1 values("Nightingale","Lane", "3");
+select * from t1 where a between "Congress" and "Nightingale" and b="Lane" and c between "1" and "3";
+select * from t1 where a between "Congress" and "Nightingale" and b="Lane" and c between "1" and "3" limit 1;
+--mysql> explain analyze select * from t1 where a between "Congress" and "Nightingale" and b="Lane" and c between "1" and "3" limit 1;
+--+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+--| QUERY PLAN                                                                                                                                                                                                    |
+--+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+--| Project                                                                                                                                                                                                       |
+--|   Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 InputSize=72bytes OutputSize=72bytes MemorySize=72bytes                                                                                     |
+--|   ->  Join                                                                                                                                                                                                    |
+--|         Analyze: timeConsumed=0ms waitTime=2ms inputRows=1 outputRows=1 InputSize=8bytes OutputSize=72bytes MemorySize=8bytes                                                                                 |
+--|         Join Type: INDEX                                                                                                                                                                                      |
+--|         Join Cond: (t1.__mo_fake_pk_col = #[1,0])                                                                                                                                                             |
+--|         Runtime Filter Build: #[-1,0]                                                                                                                                                                         |
+--|         ->  Table Scan on a.t1                                                                                                                                                                                |
+--|               Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 InputSize=80bytes OutputSize=80bytes MemorySize=164bytes                                                                        |
+--|               Filter Cond: (t1.b = 'Lane'), t1.c BETWEEN '1' AND '3', t1.a BETWEEN 'Congress' AND 'Nightingale'                                                                                               |
+--|               Block Filter Cond: t1.__mo_fake_pk_col in (1)                                                                                                                                                   |
+--|               Runtime Filter Probe: t1.__mo_fake_pk_col                                                                                                                                                       |
+--|         ->  Join                                                                                                                                                                                              |
+--|               Analyze: timeConsumed=0ms probe_time=[total=0ms,min=0ms,max=0ms,dop=10] build_time=[0ms] waitTime=5ms inputRows=2 outputRows=1 InputSize=16bytes OutputSize=8bytes MemorySize=180859bytes       |
+--|               Join Type: INNER                                                                                                                                                                                |
+--|               Join Cond: (#[0,0] = #[1,0])                                                                                                                                                                    |
+--|               ->  Project                                                                                                                                                                                     |
+--|                     Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 InputSize=8bytes OutputSize=8bytes MemorySize=8bytes                                                                      |
+--|                     ->  Table Scan on a.__mo_index_secondary_018e1b30-c9e3-7a5a-9c55-27561743c32d                                                                                                             |
+--|                           Analyze: timeConsumed=0ms waitTime=0ms inputRows=9 outputRows=1 InputSize=288bytes OutputSize=8bytes MemorySize=321bytes                                                            |
+--|                           Filter Cond: prefix_between(#[0,0], 'Fa FCongress ', 'Fa FNightingale ')                                                                                                        |
+--|                           Limit: 1  <--- [Good]                                                                                                                                                                           |
+--|               ->  Join                                                                                                                                                                                        |
+--|                     Analyze: timeConsumed=0ms probe_time=[total=0ms,min=0ms,max=0ms,dop=10] build_time=[0ms] waitTime=2ms inputRows=2 outputRows=1 InputSize=16bytes OutputSize=8bytes MemorySize=180859bytes |
+--|                     Join Type: INNER                                                                                                                                                                          |
+--|                     Join Cond: (#[0,0] = #[1,0])                                                                                                                                                              |
+--|                     ->  Project                                                                                                                                                                               |
+--|                           Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 InputSize=8bytes OutputSize=8bytes MemorySize=8bytes                                                                |
+--|                           ->  Table Scan on a.__mo_index_secondary_018e1b30-c9e3-7a5a-9c55-27561743c32d                                                                                                       |
+--|                                 Analyze: timeConsumed=0ms waitTime=0ms inputRows=9 outputRows=1 InputSize=288bytes OutputSize=8bytes MemorySize=321bytes                                                      |
+--|                                 Filter Cond: prefix_between(#[0,0], 'Fc F1 ', 'Fc F3 ')                                                                                                                   |
+--|                                 Limit: 1                                                                                                                                                                      |
+--|                     ->  Project                                                                                                                                                                               |
+--|                           Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 InputSize=8bytes OutputSize=8bytes MemorySize=8bytes                                                                |
+--|                           ->  Table Scan on a.__mo_index_secondary_018e1b30-c9e3-7a5a-9c55-27561743c32d                                                                                                       |
+--|                                 Analyze: timeConsumed=0ms waitTime=0ms inputRows=9 outputRows=1 InputSize=288bytes OutputSize=8bytes MemorySize=313bytes                                                      |
+--|                                 Filter Cond: prefix_eq(#[0,0], 'Fb FLane ')                                                                                                                                 |
+--|                                 Limit: 1                                                                                                                                                                      |
+--+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
+--38 rows in set (0.00 sec)

@@ -985,8 +985,12 @@ func (r *runner) onDirtyEntries(entries ...any) {
 }
 
 func (r *runner) crontask(ctx context.Context) {
+	lag := 2 * time.Second
+	if r.options.maxFlushInterval < time.Second {
+		lag = 0 * time.Second
+	}
 	hb := w.NewHeartBeaterWithFunc(r.options.collectInterval, func() {
-		r.source.Run()
+		r.source.Run(lag)
 		entry := r.source.GetAndRefreshMerged()
 		_, endts := entry.GetTimeRange()
 		if entry.IsEmpty() {
