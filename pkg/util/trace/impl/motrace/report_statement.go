@@ -64,7 +64,7 @@ func StatementInfoNew(i Item, ctx context.Context) Item {
 	if s, ok := i.(*StatementInfo); ok {
 
 		// execute the stat plan
-		s.ExecPlan2Stats(ctx) // deprecated
+		s.ExecPlan2Stats(ctx)
 
 		// remove the plan, s will be free
 		s.jsonByte = nil
@@ -137,7 +137,7 @@ func StatementInfoUpdate(ctx context.Context, existing, new Item) {
 	e.Duration += n.Duration
 	e.ResultCount += n.ResultCount
 	// responseAt is the last response time
-	n.ExecPlan2Stats(context.Background()) // deprecated
+	n.ExecPlan2Stats(context.Background())
 	if err := mergeStats(e, n); err != nil {
 		// handle error
 		logutil.Error("Failed to merge stats", logutil.ErrorField(err))
@@ -411,7 +411,7 @@ func (s *StatementInfo) FillRow(ctx context.Context, row *table.Row) {
 		s.statsArray.WithMemorySize(float64Val)
 	}
 	// stats := s.ExecPlan2Stats(ctx) // deprecated
-	stats := s.statsArray.ToJsonString()
+	stats := s.GetStatsArrayBytes()
 	if GetTracerProvider().disableSqlWriter {
 		// Be careful, this two string is unsafe, will be free after Free
 		row.SetColumnVal(execPlanCol, table.StringField(util.UnsafeBytesToString(execPlan)))
@@ -496,6 +496,10 @@ func (s *StatementInfo) ExecPlan2Stats(ctx context.Context) error {
 	cu := CalculateCU(s.statsArray, int64(s.Duration))
 	s.statsArray.WithCU(cu)
 	return nil
+}
+
+func (s *StatementInfo) GetStatsArrayBytes() []byte {
+	return s.statsArray.ToJsonString()
 }
 
 // SetSkipTxn set skip txn flag, cooperate with SetSkipTxnId()

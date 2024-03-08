@@ -60,7 +60,7 @@ const (
 	StatsArrayLengthV1 = 5
 	StatsArrayLengthV2 = 6
 	StatsArrayLengthV3 = 7
-	StatsArrayLengthV4 = 8
+	StatsArrayLengthV4 = 9
 )
 
 type ConnType float64
