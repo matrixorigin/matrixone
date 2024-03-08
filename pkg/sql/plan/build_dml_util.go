@@ -2935,7 +2935,7 @@ func appendDeleteUniqueTablePlan(
 		}
 	}
 
-	condExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{leftExpr, rightExpr})
+	condExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{rightExpr, leftExpr})
 	if err != nil {
 		return -1, err
 	}
@@ -2943,12 +2943,11 @@ func appendDeleteUniqueTablePlan(
 
 	lastNodeId = builder.appendNode(&plan.Node{
 		NodeType:    plan.Node_JOIN,
-		Children:    []int32{lastNodeId, rightId},
-		JoinType:    plan.Node_LEFT,
+		Children:    []int32{rightId, lastNodeId},
+		JoinType:    plan.Node_RIGHT,
 		OnList:      joinConds,
 		ProjectList: projectList,
 	}, bindCtx)
-	lastNodeId = builder.optimizeDML(lastNodeId)
 	return lastNodeId, nil
 }
 
