@@ -7524,7 +7524,8 @@ func TestGCCatalog1(t *testing.T) {
 	assert.NoError(t, err)
 
 	t.Log(tae.Catalog.SimplePPString(3))
-	tae.Catalog.GCByTS(context.Background(), txn2.GetCommitTS().Next())
+	commitTS := txn2.GetCommitTS()
+	tae.Catalog.GCByTS(context.Background(), commitTS.Next())
 	t.Log(tae.Catalog.SimplePPString(3))
 
 	resetCount()
@@ -7555,7 +7556,8 @@ func TestGCCatalog1(t *testing.T) {
 	assert.NoError(t, err)
 
 	t.Log(tae.Catalog.SimplePPString(3))
-	tae.Catalog.GCByTS(context.Background(), txn3.GetCommitTS().Next())
+	commitTS = txn3.GetCommitTS()
+	tae.Catalog.GCByTS(context.Background(), commitTS.Next())
 	t.Log(tae.Catalog.SimplePPString(3))
 
 	resetCount()
@@ -7582,7 +7584,8 @@ func TestGCCatalog1(t *testing.T) {
 	assert.NoError(t, err)
 
 	t.Log(tae.Catalog.SimplePPString(3))
-	tae.Catalog.GCByTS(context.Background(), txn4.GetCommitTS().Next())
+	commitTS = txn4.GetCommitTS()
+	tae.Catalog.GCByTS(context.Background(), commitTS.Next())
 	t.Log(tae.Catalog.SimplePPString(3))
 
 	resetCount()
@@ -7605,7 +7608,8 @@ func TestGCCatalog1(t *testing.T) {
 	assert.NoError(t, err)
 
 	t.Log(tae.Catalog.SimplePPString(3))
-	tae.Catalog.GCByTS(context.Background(), txn5.GetCommitTS().Next())
+	commitTS = txn5.GetCommitTS()
+	tae.Catalog.GCByTS(context.Background(), commitTS.Next())
 	t.Log(tae.Catalog.SimplePPString(3))
 
 	resetCount()
@@ -7959,7 +7963,8 @@ func TestDedupSnapshot1(t *testing.T) {
 	assert.Equal(t, uint64(0), tae.Wal.GetPenddingCnt())
 
 	txn, rel := tae.GetRelation()
-	txn.SetSnapshotTS(txn.GetStartTS().Next())
+	startTS := txn.GetStartTS()
+	txn.SetSnapshotTS(startTS.Next())
 	txn.SetDedupType(txnif.IncrementalDedup)
 	err := rel.Append(context.Background(), bat)
 	assert.NoError(t, err)
@@ -8001,7 +8006,8 @@ func TestDedupSnapshot2(t *testing.T) {
 	assert.NoError(t, txn.Commit(context.Background()))
 
 	txn, rel = tae.GetRelation()
-	txn.SetSnapshotTS(txn.GetStartTS().Next())
+	startTS := txn.GetStartTS()
+	txn.SetSnapshotTS(startTS.Next())
 	txn.SetDedupType(txnif.IncrementalDedup)
 	err = rel.AddBlksWithMetaLoc(context.Background(), statsVec)
 	assert.NoError(t, err)
@@ -8805,7 +8811,8 @@ func TestColumnCount(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit(context.Background()))
 
-	tae.Catalog.GCByTS(context.Background(), txn.GetCommitTS().Next())
+	commitTS := txn.GetCommitTS()
+	tae.Catalog.GCByTS(context.Background(), commitTS.Next())
 }
 
 func TestCollectDeletesInRange1(t *testing.T) {
