@@ -932,11 +932,11 @@ func doSummary(ckp string, fields ...zap.Field) {
 	var buf bytes.Buffer
 	buf.WriteString(fmt.Sprintf("\nCKP[%s]\t%s\n", ckp, time.Now().UTC().String()))
 
-	format := "\taccId(%19d)\t dbId(%19d)\t tblId(%19d)\t size(%19.6fmb)"
+	format := "\t%19d\t%19d\t%19d\t%19.6fmb"
 	accumulated := int64(0)
 
 	for idx := range summaryLog[0] {
-		buf.WriteString(fmt.Sprintf(format+" -> insert\n",
+		buf.WriteString(fmt.Sprintf(format+" -> i\n",
 			summaryLog[0][idx].AccId,
 			summaryLog[0][idx].DbId,
 			summaryLog[0][idx].TblId,
@@ -946,7 +946,7 @@ func doSummary(ckp string, fields ...zap.Field) {
 	}
 
 	for idx := range summaryLog[1] {
-		buf.WriteString(fmt.Sprintf(format+" -> delete\n",
+		buf.WriteString(fmt.Sprintf(format+" -> d\n",
 			summaryLog[1][idx].AccId,
 			summaryLog[1][idx].DbId,
 			summaryLog[1][idx].TblId,
