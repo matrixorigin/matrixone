@@ -1709,11 +1709,8 @@ func (tbl *txnTable) GetDBID(ctx context.Context) uint64 {
 func (tbl *txnTable) NewReader(ctx context.Context, num int, expr *plan.Expr, ranges []byte, orderedScan bool) ([]engine.Reader, error) {
 	encodedPK, hasNull, _ := tbl.makeEncodedPK(expr)
 	blkArray := objectio.BlockInfoSlice(ranges)
-	if hasNull {
+	if hasNull || blkArray.Len() == 0 {
 		return []engine.Reader{new(emptyReader)}, nil
-	}
-	if blkArray.Len() == 0 {
-		return tbl.newMergeReader(ctx, num, expr, encodedPK, nil)
 	}
 	if blkArray.Len() == 1 && engine.IsMemtable(blkArray.GetBytes(0)) {
 		return tbl.newMergeReader(ctx, num, expr, encodedPK, nil)

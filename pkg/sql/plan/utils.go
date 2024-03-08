@@ -1900,6 +1900,20 @@ func HasFkSelfReferOnly(tableDef *TableDef) bool {
 	return true
 }
 
+func MakeFalseExpr() *Expr {
+	return &plan.Expr{
+		Typ: plan.Type{
+			Id: int32(types.T_bool),
+		},
+		Expr: &plan.Expr_Lit{
+			Lit: &plan.Literal{
+				Isnull: false,
+				Value:  &plan.Literal_Bval{false},
+			},
+		},
+	}
+}
+
 func MakeInExpr(ctx context.Context, left *Expr, length int32, data []byte, matchPrefix bool) *Expr {
 	rightArg := &plan.Expr{
 		Typ: plan.Type{
