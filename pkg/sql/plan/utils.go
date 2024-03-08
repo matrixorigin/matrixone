@@ -1900,6 +1900,15 @@ func HasFkSelfReferOnly(tableDef *TableDef) bool {
 	return true
 }
 
+func IsFalseExpr(e *Expr) bool {
+	if e == nil || e.GetTyp().Id != int32(types.T_bool) || e.GetLit() == nil {
+		return false
+	}
+	if x, ok := e.GetLit().GetValue().(*plan.Literal_Bval); ok {
+		return !x.Bval
+	}
+	return false
+}
 func MakeFalseExpr() *Expr {
 	return &plan.Expr{
 		Typ: plan.Type{
@@ -1908,7 +1917,7 @@ func MakeFalseExpr() *Expr {
 		Expr: &plan.Expr_Lit{
 			Lit: &plan.Literal{
 				Isnull: false,
-				Value:  &plan.Literal_Bval{false},
+				Value:  &plan.Literal_Bval{Bval: false},
 			},
 		},
 	}
