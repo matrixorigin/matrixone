@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
@@ -95,4 +96,21 @@ func (ts *testTxnSender) getLastRequests() []txn.TxnRequest {
 	ts.Lock()
 	defer ts.Unlock()
 	return ts.lastRequests
+}
+
+type counter struct {
+	enter atomic.Uint64
+	exit  atomic.Uint64
+}
+
+func (count *counter) addEnter() {
+	count.enter.Add(1)
+}
+
+func (count *counter) addExit() {
+	count.exit.Add(1)
+}
+
+func (count *counter) String() string {
+	return fmt.Sprintf("enter:%d, exit:%d", count.enter.Load(), count.exit.Load())
 }

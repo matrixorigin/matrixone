@@ -368,4 +368,5 @@ message TxnOptions {
     string                 UserName           = 6;
     repeated uint64        SkipLockTables     = 7;
     repeated lock.LockMode SkipLockTableModes = 8;
+    string counter = 9;
 }

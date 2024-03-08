@@ -424,6 +424,9 @@ func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
 	if txnOp != nil {
 		seq = txnOp.NextSequence()
 	}
+	//txnOp.AddRun()
+	//defer txnOp.AddExitRun()
+	//txnOp.Commit() /Rollback()
 	txnTrace.GetService().AddTxnDurationAction(
 		txnOp,
 		client.ExecuteSQLEvent,
