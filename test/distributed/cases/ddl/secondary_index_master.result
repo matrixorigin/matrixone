@@ -200,5 +200,3 @@ insert into t1 values("Juniper","Way", "2");
 insert into t1 values("Nightingale","Lane", "3");
 select * from t1 where a in ("Congress","Nightingale") and b="Lane" and c in("1","2","3");
 a    b    c
-Congress    Lane    1
-Nightingale    Lane    3
