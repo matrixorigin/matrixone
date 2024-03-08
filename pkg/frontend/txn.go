@@ -15,7 +15,9 @@
 package frontend
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"sync"
 
 	"github.com/google/uuid"
@@ -56,6 +58,8 @@ type TxnHandler struct {
 	entryMu            sync.Mutex
 	hasCalledStartStmt bool
 	prevTxnId          []byte
+	hasCalledIncrStmt  bool
+	prevIncrTxnId      []byte
 }
 
 func InitTxnHandler(storage engine.Engine, txnClient TxnClient, txnCtx context.Context, txnOp TxnOperator) *TxnHandler {
@@ -227,6 +231,26 @@ func (th *TxnHandler) calledStartStmt() (bool, []byte) {
 	th.mu.Lock()
 	defer th.mu.Unlock()
 	return th.hasCalledStartStmt, th.prevTxnId
+}
+
+func (th *TxnHandler) enableIncrStmt(txnId []byte) {
+	th.mu.Lock()
+	defer th.mu.Unlock()
+	th.hasCalledIncrStmt = true
+	th.prevIncrTxnId = txnId
+}
+
+func (th *TxnHandler) disableIncrStmt() {
+	th.mu.Lock()
+	defer th.mu.Unlock()
+	th.hasCalledIncrStmt = false
+	th.prevIncrTxnId = nil
+}
+
+func (th *TxnHandler) calledIncrStmt() (bool, []byte) {
+	th.mu.Lock()
+	defer th.mu.Unlock()
+	return th.hasCalledIncrStmt, th.prevIncrTxnId
 }
 
 // NewTxn commits the old transaction if it existed.
@@ -724,8 +748,12 @@ If it is Case2, Then
 
 	InMultiStmtTransactionMode returns false
 */
-func (ses *Session) TxnRollbackSingleStatement(stmt tree.Statement) error {
+func (ses *Session) TxnRollbackSingleStatement(stmt tree.Statement, inputErr error) error {
 	var err error
+	var rollbackWholeTxn bool
+	if inputErr != nil {
+		rollbackWholeTxn = isErrorRollbackWholeTxn(inputErr)
+	}
 	/*
 			Rollback Rules:
 			1, if it is in single-statement mode (Case2):
@@ -734,11 +762,46 @@ func (ses *Session) TxnRollbackSingleStatement(stmt tree.Statement) error {
 		        the transaction need to be rollback at the end of the statement.
 				(every error will abort the transaction.)
 	*/
-	if !ses.InMultiStmtTransactionMode() || ses.InActiveTransaction() {
-		err = ses.GetTxnHandler().RollbackTxn()
-		ses.ClearServerStatus(SERVER_STATUS_IN_TRANS)
-		ses.ClearOptionBits(OPTION_BEGIN)
+	if !ses.InMultiStmtTransactionMode() ||
+		ses.InActiveTransaction() && NeedToBeCommittedInActiveTransaction(stmt) ||
+		rollbackWholeTxn {
+		//Case1.1: autocommit && not_begin
+		//Case1.2: (not_autocommit || begin) && activeTxn && needToBeCommitted
+		//Case1.3: the error that should rollback the whole txn
+		err = ses.rollbackWholeTxn()
+	} else {
+		//Case2: not ( autocommit && !begin ) && not ( activeTxn && needToBeCommitted )
+		//<==>  ( not_autocommit || begin ) && not ( activeTxn && needToBeCommitted )
+		//just rollback statement
+		var err3 error
+		txnCtx, txnOp, err3 := ses.GetTxnHandler().GetTxnOperator()
+		if err3 != nil {
+			logError(ses, ses.GetDebugString(), err3.Error())
+			return err3
+		}
+
+		//non derived statement
+		if txnOp != nil && !ses.IsDerivedStmt() {
+			//incrStatement has been called
+			ok, id := ses.GetTxnHandler().calledIncrStmt()
+			if ok && bytes.Equal(txnOp.Txn().ID, id) {
+				err = txnOp.GetWorkspace().RollbackLastStatement(txnCtx)
+				ses.GetTxnHandler().disableIncrStmt()
+				if err != nil {
+					err4 := ses.rollbackWholeTxn()
+					return errors.Join(err, err4)
+				}
+			}
+		}
 	}
+	return err
+}
+
+// rollbackWholeTxn
+func (ses *Session) rollbackWholeTxn() error {
+	err := ses.GetTxnHandler().RollbackTxn()
+	ses.ClearServerStatus(SERVER_STATUS_IN_TRANS)
+	ses.ClearOptionBits(OPTION_BEGIN)
 	return err
 }
 
