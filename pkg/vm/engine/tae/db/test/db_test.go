@@ -7556,7 +7556,8 @@ func TestGCCatalog1(t *testing.T) {
 	assert.NoError(t, err)
 
 	t.Log(tae.Catalog.SimplePPString(3))
-	tae.Catalog.GCByTS(context.Background(), txn3.GetCommitTS().Next())
+	commitTS = txn3.GetCommitTS()
+	tae.Catalog.GCByTS(context.Background(), commitTS.Next())
 	t.Log(tae.Catalog.SimplePPString(3))
 
 	resetCount()
