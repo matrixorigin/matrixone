@@ -3861,7 +3861,31 @@ func strToSigned[T constraints.Signed](
 					if strings.Contains(err.Error(), "value out of range") {
 						return moerr.NewOutOfRange(ctx, fmt.Sprintf("int%d", bitSize), "value '%s'", s)
 					}
-					return moerr.NewInvalidArg(ctx, "cast to int", s)
+					var f float64
+					f, err = strconv.ParseFloat(s, 64)
+					if err != nil {
+						return moerr.NewInvalidArg(ctx, "cast to int", s)
+					}
+					f = math.Round(f)
+					switch bitSize {
+					case 8:
+						if f < math.MinInt8 || f > math.MaxInt8 {
+							return moerr.NewInvalidArg(ctx, "cast to int", s)
+						}
+					case 16:
+						if f < math.MinInt16 || f > math.MaxInt16 {
+							return moerr.NewInvalidArg(ctx, "cast to int", s)
+						}
+					case 32:
+						if f < math.MinInt32 || f > math.MaxInt32 {
+							return moerr.NewInvalidArg(ctx, "cast to int", s)
+						}
+					case 64:
+						if f < math.MinInt64 || f > math.MaxInt64 {
+							return moerr.NewInvalidArg(ctx, "cast to int", s)
+						}
+					}
+					r = int64(f)
 				}
 				result = T(r)
 			}
@@ -3882,8 +3906,7 @@ func strToUnsigned[T constraints.Unsigned](
 	var l = uint64(length)
 	isBinary := from.GetSourceVector().GetIsBin()
 
-	var val uint64
-	var tErr error
+	var result T
 	for i = 0; i < l; i++ {
 		v, null := from.GetStrValue(i)
 		if null {
@@ -3891,27 +3914,61 @@ func strToUnsigned[T constraints.Unsigned](
 				return err
 			}
 		} else {
-			var res *string
 			if isBinary {
-				s := hex.EncodeToString(v)
-				res = &s
-				val, tErr = strconv.ParseUint(s, 16, 64)
+				r, err := strconv.ParseUint(
+					hex.EncodeToString(v), 16, 64)
+				if err != nil {
+					if strings.Contains(err.Error(), "value out of range") {
+						// the string maybe non-visible,don't print it
+						return moerr.NewOutOfRange(ctx, "uint", "")
+					}
+					return moerr.NewInvalidArg(ctx, "cast to uint", r)
+				}
+				result = T(r)
 			} else {
 				s := strings.TrimSpace(convertByteSliceToString(v))
-				res = &s
+				var r uint64
+				var err error
 				if strings.HasPrefix(s, "0x") || strings.HasPrefix(s, "0X") {
-					val, tErr = strconv.ParseUint(s[2:], 16, bitSize)
+					r, err = strconv.ParseUint(s[2:], 16, bitSize)
 				} else {
-					val, tErr = strconv.ParseUint(s, 10, bitSize)
+					r, err = strconv.ParseUint(s, 10, bitSize)
 				}
-			}
-			if tErr != nil {
-				if strings.Contains(tErr.Error(), "value out of range") {
-					return moerr.NewOutOfRange(ctx, fmt.Sprintf("uint%d", bitSize), "value '%s'", *res)
+				if err != nil {
+					// XXX I'm not sure if we should return the int8 / int16 / int64 info. or
+					// just return the int. the old code just return the int. too much bvt result needs to update.
+					if strings.Contains(err.Error(), "value out of range") {
+						return moerr.NewOutOfRange(ctx, fmt.Sprintf("uint%d", bitSize), "value '%s'", s)
+					}
+					var f float64
+					f, err = strconv.ParseFloat(s, 64)
+					if err != nil {
+						return moerr.NewInvalidArg(ctx, "cast to uint", s)
+					}
+					f = math.Round(f)
+					switch bitSize {
+					case 8:
+						if f < 0 || f > math.MaxUint8 {
+							return moerr.NewInvalidArg(ctx, "cast to uint", s)
+						}
+					case 16:
+						if f < 0 || f > math.MaxUint16 {
+							return moerr.NewInvalidArg(ctx, "cast to uint", s)
+						}
+					case 32:
+						if f < 0 || f > math.MaxUint32 {
+							return moerr.NewInvalidArg(ctx, "cast to uint", s)
+						}
+					case 64:
+						if f < 0 || f > math.MaxUint64 {
+							return moerr.NewInvalidArg(ctx, "cast to uint", s)
+						}
+					}
+					r = uint64(f)
 				}
-				return moerr.NewInvalidArg(ctx, fmt.Sprintf("cast to uint%d", bitSize), *res)
+				result = T(r)
 			}
-			if err := to.Append(T(val), false); err != nil {
+			if err := to.Append(T(result), false); err != nil {
 				return err
 			}
 		}
