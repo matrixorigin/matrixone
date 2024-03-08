@@ -58,6 +58,10 @@ func buildDelete(stmt *tree.Delete, ctx CompilerContext, isPrepareStmt bool) (*P
 		allDelTableIDs[tableDef.TblId] = struct{}{}
 	}
 
+	allDelTables := make(map[FkReferKey]struct{})
+	for i, tableDef := range tblInfo.tableDefs {
+		allDelTables[FkReferKey{Db: tblInfo.objRef[i].SchemaName, Tbl: tableDef.Name}] = struct{}{}
+	}
 	// append delete plans
 	beginIdx := 0
 	// needLockTable := !tblInfo.isMulti && stmt.Where == nil && stmt.Limit == nil
@@ -76,6 +80,7 @@ func buildDelete(stmt *tree.Delete, ctx CompilerContext, isPrepareStmt bool) (*P
 		delPlanCtx.updateColLength = 0
 		delPlanCtx.rowIdPos = getRowIdPos(tableDef)
 		delPlanCtx.allDelTableIDs = allDelTableIDs
+		delPlanCtx.allDelTables = allDelTables
 		delPlanCtx.lockTable = needLockTable
 		delPlanCtx.isDeleteWithoutFilters = isDeleteWithoutFilters
 
