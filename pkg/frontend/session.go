@@ -290,13 +290,8 @@ type Session struct {
 	// timestampMap record timestamp for statistical purposes
 	timestampMap map[TS]time.Time
 
-	// insert sql for create table as select stmt
-	createAsSelectSql string
-
 	// FromProxy denotes whether the session is dispatched from proxy
 	fromProxy bool
-
-	disableTrace bool
 }
 
 func (ses *Session) ClearStmtProfile() {
