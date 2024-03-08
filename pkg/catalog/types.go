@@ -52,6 +52,23 @@ const (
 	TableTailAttrCommitTs = "__mo_%1_commit_time"
 	TableTailAttrAborted  = "__mo_%1_aborted"
 	TableTailAttrPKVal    = "__mo_%1_pk_val"
+
+	// MOVersionTable mo version table. This table records information about the
+	// versions of the MO cluster that have been upgraded. In other words, you can
+	// query this table to find out all the versions of the MO cluster that have
+	// been running.
+	MOVersionTable = "mo_version"
+	// MOUpgradeTable mo upgrade table. This table records the MO cluster version
+	// upgrade paths, including upgrade paths for intermediate versions that are
+	// upgraded across versions.
+	MOUpgradeTable = "mo_upgrade"
+	// MOUpgradeTenantTable MO is a cloud-native, multi-tenant database, and when
+	// versions are upgraded, it may be necessary to upgrade all tenant-related metadata.
+	// This table is used to record all the tenant records that need to be upgraded
+	MOUpgradeTenantTable = "mo_upgrade_tenant"
+
+	// MOForeignKeys saves the fk relationships
+	MOForeignKeys = "mo_foreign_keys"
 )
 
 var InternalColumns = map[string]int8{
