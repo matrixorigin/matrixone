@@ -2147,11 +2147,6 @@ func (tbl *txnTable) PKPersistedBetween(
 	to types.TS,
 	keys *vector.Vector,
 ) (bool, error) {
-	if tbl.tableName == catalog.MO_DATABASE ||
-		tbl.tableName == catalog.MO_TABLES ||
-		tbl.tableName == catalog.MO_COLUMNS {
-		return true, nil
-	}
 	ctx := tbl.proc.Load().Ctx
 	fs := tbl.db.txn.engine.fs
 	primaryIdx := tbl.primaryIdx
@@ -2293,6 +2288,12 @@ func (tbl *txnTable) PrimaryKeysMayBeModified(
 		return false, nil
 	}
 	//need check pk whether exist on S3 block.
+	if tbl.tableName == catalog.MO_DATABASE ||
+		tbl.tableName == catalog.MO_TABLES ||
+		tbl.tableName == catalog.MO_COLUMNS {
+		logutil.Warnf("mo table:%s always exist in memory", tbl.tableName)
+		return true, nil
+	}
 	return tbl.PKPersistedBetween(
 		snap,
 		from,
