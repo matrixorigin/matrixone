@@ -883,7 +883,8 @@ func TryFastFilterBlocks(
 	exprs []*plan.Expr,
 	snapshot *logtailreplay.PartitionState,
 	uncommittedObjects []objectio.ObjectStats,
-	blocks *objectio.BlockInfoSlice,
+	dirtyBlocks map[types.Blockid]struct{},
+	outBlocks *objectio.BlockInfoSlice,
 	fs fileservice.FileService,
 	proc *process.Process,
 ) (ok bool, err error) {
@@ -899,7 +900,8 @@ func TryFastFilterBlocks(
 		blockFilterOp,
 		snapshot,
 		uncommittedObjects,
-		blocks,
+		dirtyBlocks,
+		outBlocks,
 		fs,
 		proc,
 	)
@@ -914,10 +916,13 @@ func ExecuteBlockFilter(
 	blockFilterOp BlockFilterOp,
 	snapshot *logtailreplay.PartitionState,
 	uncommittedObjects []objectio.ObjectStats,
-	blocks *objectio.BlockInfoSlice,
+	dirtyBlocks map[types.Blockid]struct{},
+	outBlocks *objectio.BlockInfoSlice,
 	fs fileservice.FileService,
 	proc *process.Process,
 ) (err error) {
+
+	hasDeletes := len(dirtyBlocks) > 0
 	err = ForeachSnapshotObjects(
 		snapshotTS,
 		func(obj logtailreplay.ObjectInfo, isCommitted bool) (err2 error) {
@@ -970,8 +975,20 @@ func ExecuteBlockFilter(
 						blk.CommitTs = commitTs
 					}
 				}
+
+				if hasDeletes {
+					if _, ok := dirtyBlocks[blk.BlockID]; !ok {
+						blk.CanRemote = true
+					}
+					blk.PartitionNum = -1
+					outBlocks.AppendBlockInfo(blk)
+					return true
+				}
+				// store the block in ranges
+				blk.CanRemote = true
 				blk.PartitionNum = -1
-				blocks.AppendBlockInfo(blk)
+				outBlocks.AppendBlockInfo(blk)
+
 				return true
 			},
 				objStats,
