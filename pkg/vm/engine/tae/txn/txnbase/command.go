@@ -383,7 +383,7 @@ func (c *TxnCmd) ReadFromWithVersion(r io.Reader, ver uint16) (n int64, err erro
 	if ver >= IOET_WALTxnEntry_V2 {
 		MemoVersion = model.MemoTreeVersion2
 	}
-	if ver >= IOET_WALTxnEntry_V3{
+	if ver >= IOET_WALTxnEntry_V3 {
 		MemoVersion = model.MemoTreeVersion3
 	}
 

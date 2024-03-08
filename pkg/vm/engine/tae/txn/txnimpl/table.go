@@ -753,7 +753,7 @@ func (tbl *txnTable) RangeDelete(
 			node.RangeDeleteLocked(start, end, pk, common.WorkspaceAllocator)
 		}
 		if err != nil && moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict) {
-			logutil.Warn("w-w conflict", zap.String("chain", mvcc.StringLocked()))
+			logutil.Warn("w-w conflict", zap.String("chain", mvcc.StringLocked(3, 0, "")))
 		}
 		mvcc.Unlock()
 		if err != nil {
@@ -769,7 +769,8 @@ func (tbl *txnTable) RangeDelete(
 		return
 	}
 	blkData := blk.GetObjectData()
-	node2, err := blkData.RangeDelete(tbl.store.txn, start, end, pk, dt)
+	_, blkOffset := id.BlockID.Offsets()
+	node2, err := blkData.RangeDelete(tbl.store.txn, blkOffset, start, end, pk, dt)
 	if err != nil && moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict) {
 		logutil.Warn("w-w conflict", zap.String("blk", blkData.PPString(common.PPL2, 0, "")))
 	}
