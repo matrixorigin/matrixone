@@ -31,8 +31,8 @@ import (
 )
 
 const (
-	// The default rebalancer queue size is 128.
-	defaultQueueSize = 128
+	// The default rebalancer queue size is 1024.
+	defaultQueueSize = 1024
 )
 
 type rebalancer struct {
@@ -228,8 +228,9 @@ func (r *rebalancer) collectTunnels(hash LabelHash) []*tunnel {
 	// For each CN server, pick the tunnels that need to move to other
 	// CN servers.
 	for uuid, ts := range tuns {
-		if ts.count() > upperLimit {
-			ret = append(ret, pickTunnels(ts, ts.count()-upperLimit)...)
+		num := ts.countWithoutIntent()
+		if num > upperLimit {
+			ret = append(ret, pickTunnels(ts, num-upperLimit)...)
 		}
 		if _, ok := emptyCNs[uuid]; ok && len(notEmptyCns) > 0 {
 			// when there ARE selected CNs, migrate tunnels (if any) in empty CNs to the selected CNs
