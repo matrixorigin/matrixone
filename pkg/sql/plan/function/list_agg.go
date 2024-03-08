@@ -23,33 +23,6 @@ import (
 
 var supportedAggregateFunctions = []FuncNew{
 	{
-		functionId: STARCOUNT,
-		class:      plan.Function_AGG | plan.Function_PRODUCE_NO_NULL,
-		layout:     STANDARD_FUNCTION,
-		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			if len(inputs) == 1 {
-				if inputs[0].Oid == types.T_any {
-					return newCheckResultWithCast(0, []types.Type{types.T_int64.ToType()})
-				}
-				return newCheckResultWithSuccess(0)
-			}
-			return newCheckResultWithFailure(failedAggParametersWrong)
-		},
-
-		Overloads: []overload{
-			{
-				overloadId: 0,
-				isAgg:      true,
-				retType:    functionAgg.AggCountReturnType,
-				aggFramework: aggregationLogicOfOverload{
-					str:    "count(*)",
-					aggNew: functionAgg.NewAggStarCount,
-				},
-			},
-		},
-	},
-
-	{
 		functionId: APPROX_COUNT,
 		class:      plan.Function_AGG | plan.Function_PRODUCE_NO_NULL,
 		layout:     STANDARD_FUNCTION,
@@ -301,6 +274,34 @@ var supportedAggInNewFramework = []FuncNew{
 			},
 		},
 	},
+
+	{
+		functionId: STARCOUNT,
+		class:      plan.Function_AGG | plan.Function_PRODUCE_NO_NULL,
+		layout:     STANDARD_FUNCTION,
+		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
+			if len(inputs) == 1 {
+				if inputs[0].Oid == types.T_any {
+					return newCheckResultWithCast(0, []types.Type{types.T_int64.ToType()})
+				}
+				return newCheckResultWithSuccess(0)
+			}
+			return newCheckResultWithFailure(failedAggParametersWrong)
+		},
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				isAgg:      true,
+				retType:    functionAgg.AggCountReturnType,
+				aggFramework: aggregationLogicOfOverload{
+					str:         "count(*)",
+					aggRegister: agg2.RegisterCountStar,
+				},
+			},
+		},
+	},
+
 	{
 		functionId: MIN,
 		class:      plan.Function_AGG,

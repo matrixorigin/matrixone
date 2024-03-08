@@ -127,3 +127,75 @@ func (exec *countColumnExec) Flush() (*vector.Vector, error) {
 func (exec *countColumnExec) Free() {
 	exec.ret.free()
 }
+
+type countStarExec struct {
+	singleAggInfo
+	singleAggExecOptimized
+	ret aggFuncResult[int64]
+}
+
+func newCountStarExec(mg AggMemoryManager, info singleAggInfo) AggFuncExec {
+	return &countStarExec{
+		singleAggInfo: info,
+		ret:           initFixedAggFuncResult[int64](mg, info.retType, false),
+	}
+}
+
+func (exec *countStarExec) GroupGrow(more int) error {
+	return exec.ret.grows(more)
+}
+
+func (exec *countStarExec) Fill(groupIndex int, row int, vectors []*vector.Vector) error {
+	exec.ret.groupToSet = groupIndex
+	exec.ret.aggSet(exec.ret.aggGet() + 1)
+	return nil
+}
+
+func (exec *countStarExec) BulkFill(groupIndex int, vectors []*vector.Vector) error {
+	exec.ret.groupToSet = groupIndex
+	exec.ret.aggSet(exec.ret.aggGet() + int64(vectors[0].Length()))
+	return nil
+}
+
+func (exec *countStarExec) BatchFill(offset int, groups []uint64, vectors []*vector.Vector) error {
+	vs := exec.ret.values
+	for _, group := range groups {
+		if group != GroupNotMatched {
+			vs[group-1]++
+		}
+	}
+	return nil
+}
+
+func (exec *countStarExec) Merge(next AggFuncExec, groupIdx1, groupIdx2 int) error {
+	exec.ret.groupToSet = groupIdx1
+	exec.ret.aggSet(exec.ret.aggGet() + next.(*countStarExec).ret.aggGet())
+	return nil
+}
+
+func (exec *countStarExec) BatchMerge(next AggFuncExec, offset int, groups []uint64) error {
+	other := next.(*countStarExec)
+	vs1 := exec.ret.values
+	vs2 := other.ret.values
+
+	for i := range groups {
+		if groups[i] == GroupNotMatched {
+			continue
+		}
+		g1, g2 := int(groups[i])-1, i+offset
+		exec.ret.mergeEmpty(other.ret.basicResult, g1, g2)
+		vs1[g1] += vs2[g2]
+	}
+	return nil
+}
+
+func (exec *countStarExec) Flush() (*vector.Vector, error) {
+	if exec.partialResult != nil {
+		exec.ret.values[exec.ret.groupToSet] += exec.partialResult.(int64)
+	}
+	return exec.ret.flush(), nil
+}
+
+func (exec *countStarExec) Free() {
+	exec.ret.free()
+}

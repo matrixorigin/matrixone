@@ -165,10 +165,10 @@ func makeSpecialAggExec(
 	id int64, isDistinct bool, params ...types.Type) (AggFuncExec, bool) {
 	if _, ok := specialAgg[id]; ok {
 		if id == aggIdOfCountColumn {
-			return makeCount(mg, id, isDistinct, params[0]), true
+			return makeCount(mg, false, id, isDistinct, params[0]), true
 		}
 		if id == aggIdOfCountStar {
-			panic("not implemented")
+			return makeCount(mg, true, id, isDistinct, params[0]), true
 		}
 		if id == aggIdOfGroupConcat {
 			return makeGroupConcat(mg, id, isDistinct, params, getCroupConcatRet(params...), groupConcatSep), true
@@ -195,7 +195,7 @@ func makeGroupConcat(
 }
 
 func makeCount(
-	mg AggMemoryManager,
+	mg AggMemoryManager, isStar bool,
 	aggID int64, isDistinct bool,
 	param types.Type) AggFuncExec {
 	info := singleAggInfo{
@@ -206,5 +206,8 @@ func makeCount(
 		emptyNull: false,
 	}
 
+	if isStar {
+		return newCountStarExec(mg, info)
+	}
 	return newCountColumnExecExec(mg, info)
 }

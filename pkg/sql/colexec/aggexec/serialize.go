@@ -281,3 +281,22 @@ func (exec *countColumnExec) marshal() ([]byte, error) {
 func (exec *countColumnExec) unmarshal(result []byte, groups [][]byte) error {
 	return exec.ret.unmarshal(result)
 }
+
+func (exec *countStarExec) marshal() ([]byte, error) {
+	d := exec.singleAggInfo.getEncoded()
+	r, err := exec.ret.marshal()
+	if err != nil {
+		return nil, err
+	}
+	encoded := &EncodedAgg{
+		ExecType: EncodedAggExecType_special_count_star,
+		Info:     d,
+		Result:   r,
+		Groups:   nil,
+	}
+	return encoded.Marshal()
+}
+
+func (exec *countStarExec) unmarshal(result []byte, groups [][]byte) error {
+	return exec.ret.unmarshal(result)
+}
