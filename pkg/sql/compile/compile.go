@@ -3561,28 +3561,33 @@ func (c *Compile) fillAnalyzeInfo() {
 }
 
 func (c *Compile) determinExpandRanges(n *plan.Node, rel engine.Relation) bool {
-	if plan2.InternalTable(n.TableDef) {
-		return true
-	}
-	if n.TableDef.Partition != nil {
-		return true
-	}
-	if len(n.RuntimeFilterProbeList) == 0 {
-		return true
-	}
-	if n.Stats.BlockNum > plan2.BlockNumForceOneCN && len(c.cnList) > 1 {
-		return true
-	}
-	if rel.GetEngineType() != engine.Disttae {
-		return true
-	}
-	if n.AggList != nil { //need to handle partial results
-		return true
-	}
-	return false
+	// for some reason, revert this function to avoid bug, maybe fix this in the future
+	return true
+	/*
+		if plan2.InternalTable(n.TableDef) {
+			return true
+		}
+		if n.TableDef.Partition != nil {
+			return true
+		}
+		if len(n.RuntimeFilterProbeList) == 0 {
+			return true
+		}
+		if n.Stats.BlockNum > plan2.BlockNumForceOneCN && len(c.cnList) > 1 {
+			return true
+		}
+		if rel.GetEngineType() != engine.Disttae {
+			return true
+		}
+		if n.AggList != nil { //need to handle partial results
+			return true
+		}
+		return false
+
+	*/
 }
 
-func (c *Compile) expandRanges(n *plan.Node, rel engine.Relation) (engine.Ranges, error) {
+func (c *Compile) expandRanges(n *plan.Node, rel engine.Relation, blockFilterList []*plan.Expr) (engine.Ranges, error) {
 	var err error
 	var db engine.Database
 	var ranges engine.Ranges
@@ -3601,7 +3606,7 @@ func (c *Compile) expandRanges(n *plan.Node, rel engine.Relation) (engine.Ranges
 	if err != nil {
 		return nil, err
 	}
-	ranges, err = rel.Ranges(ctx, n.BlockFilterList)
+	ranges, err = rel.Ranges(ctx, blockFilterList)
 	if err != nil {
 		return nil, err
 	}
@@ -3705,7 +3710,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 	}
 
 	if c.determinExpandRanges(n, rel) {
-		ranges, err = c.expandRanges(n, rel)
+		ranges, err = c.expandRanges(n, rel, n.BlockFilterList)
 		if err != nil {
 			return nil, nil, nil, err
 		}

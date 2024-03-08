@@ -1641,6 +1641,32 @@ func makeOneDeletePlan(
 	return lastNodeId, nil
 }
 
+func getProjectionByLastNodeForRightJoin(builder *QueryBuilder, lastNodeId int32) []*Expr {
+	lastNode := builder.qry.Nodes[lastNodeId]
+	projLength := len(lastNode.ProjectList)
+	if projLength == 0 {
+		return getProjectionByLastNode(builder, lastNode.Children[0])
+	}
+	projection := make([]*Expr, len(lastNode.ProjectList))
+	for i, expr := range lastNode.ProjectList {
+		name := ""
+		if col, ok := expr.Expr.(*plan.Expr_Col); ok {
+			name = col.Col.Name
+		}
+		projection[i] = &plan.Expr{
+			Typ: expr.Typ,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: 1,
+					ColPos: int32(i),
+					Name:   name,
+				},
+			},
+		}
+	}
+	return projection
+}
+
 func getProjectionByLastNode(builder *QueryBuilder, lastNodeId int32) []*Expr {
 	lastNode := builder.qry.Nodes[lastNodeId]
 	projLength := len(lastNode.ProjectList)
@@ -2837,7 +2863,8 @@ func appendDeleteUniqueTablePlan(
 	********/
 	lastNodeId := baseNodeId
 	var err error
-	projectList := getProjectionByLastNode(builder, lastNodeId)
+	projectList := getProjectionByLastNodeForRightJoin(builder, lastNodeId)
+	rfTag := builder.genNewTag()
 
 	var rightRowIdPos int32 = -1
 	var rightPkPos int32 = -1
@@ -2858,12 +2885,26 @@ func appendDeleteUniqueTablePlan(
 			},
 		}
 	}
+	pkTyp := uniqueTableDef.Cols[rightPkPos].Typ
 	rightId := builder.appendNode(&plan.Node{
 		NodeType:    plan.Node_TABLE_SCAN,
 		Stats:       &plan.Stats{},
 		ObjRef:      uniqueObjRef,
 		TableDef:    uniqueTableDef,
 		ProjectList: scanNodeProject,
+		RuntimeFilterProbeList: []*plan.RuntimeFilterSpec{
+			{
+				Tag: rfTag,
+				Expr: &plan.Expr{
+					Typ: *pkTyp,
+					Expr: &plan.Expr_Col{
+						Col: &plan.ColRef{
+							Name: uniqueTableDef.Pkey.PkeyColName,
+						},
+					},
+				},
+			},
+		},
 	}, bindCtx)
 
 	// append projection
@@ -2871,7 +2912,7 @@ func appendDeleteUniqueTablePlan(
 		Typ: *uniqueTableDef.Cols[rightRowIdPos].Typ,
 		Expr: &plan.Expr_Col{
 			Col: &plan.ColRef{
-				RelPos: 1,
+				RelPos: 0,
 				ColPos: rightRowIdPos,
 				Name:   catalog.Row_ID,
 			},
@@ -2880,7 +2921,7 @@ func appendDeleteUniqueTablePlan(
 		Typ: *uniqueTableDef.Cols[rightPkPos].Typ,
 		Expr: &plan.Expr_Col{
 			Col: &plan.ColRef{
-				RelPos: 1,
+				RelPos: 0,
 				ColPos: rightPkPos,
 				Name:   catalog.IndexTableIndexColName,
 			},
@@ -2891,7 +2932,7 @@ func appendDeleteUniqueTablePlan(
 		Typ: *uniqueTableDef.Cols[rightPkPos].Typ,
 		Expr: &plan.Expr_Col{
 			Col: &plan.ColRef{
-				RelPos: 1,
+				RelPos: 0,
 				ColPos: rightPkPos,
 				Name:   catalog.IndexTableIndexColName,
 			},
@@ -2909,7 +2950,7 @@ func appendDeleteUniqueTablePlan(
 			Typ: *typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
-					RelPos: 0,
+					RelPos: 1,
 					ColPos: int32(posMap[orginIndexColumnName]),
 					Name:   orginIndexColumnName,
 				},
@@ -2924,7 +2965,7 @@ func appendDeleteUniqueTablePlan(
 				Typ: *typ,
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
-						RelPos: 0,
+						RelPos: 1,
 						ColPos: int32(posMap[column]),
 						Name:   column,
 					},
@@ -2947,7 +2988,7 @@ func appendDeleteUniqueTablePlan(
 		}
 	}
 
-	condExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{leftExpr, rightExpr})
+	condExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{rightExpr, leftExpr})
 	if err != nil {
 		return -1, err
 	}
@@ -2955,10 +2996,25 @@ func appendDeleteUniqueTablePlan(
 
 	lastNodeId = builder.appendNode(&plan.Node{
 		NodeType:    plan.Node_JOIN,
-		Children:    []int32{lastNodeId, rightId},
-		JoinType:    plan.Node_LEFT,
+		Children:    []int32{rightId, lastNodeId},
+		JoinType:    plan.Node_RIGHT,
 		OnList:      joinConds,
 		ProjectList: projectList,
+		RuntimeFilterBuildList: []*plan.RuntimeFilterSpec{
+			{
+				Tag:        rfTag,
+				UpperLimit: GetInFilterCardLimitOnPK(builder.qry.Nodes[rightId].Stats.TableCnt),
+				Expr: &plan.Expr{
+					Typ: *pkTyp,
+					Expr: &plan.Expr_Col{
+						Col: &plan.ColRef{
+							RelPos: 0,
+							ColPos: 0,
+						},
+					},
+				},
+			},
+		},
 	}, bindCtx)
 	return lastNodeId, nil
 }
