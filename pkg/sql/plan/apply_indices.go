@@ -38,6 +38,10 @@ func isRuntimeConstExpr(expr *plan.Expr) bool {
 
 func (builder *QueryBuilder) applyIndices(nodeID int32, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) int32 {
 	node := builder.qry.Nodes[nodeID]
+	for i, childID := range node.Children {
+		node.Children[i] = builder.applyIndices(childID, colRefCnt, idxColMap)
+	}
+	replaceColumnsForNode(node, idxColMap)
 
 	switch node.NodeType {
 	case plan.Node_TABLE_SCAN:
@@ -49,15 +53,8 @@ func (builder *QueryBuilder) applyIndices(nodeID int32, colRefCnt map[[2]int32]i
 	case plan.Node_SORT:
 		return builder.applyIndicesForSort(nodeID, node, colRefCnt, idxColMap)
 
-	default:
-		for i, childID := range node.Children {
-			node.Children[i] = builder.applyIndices(childID, colRefCnt, idxColMap)
-		}
-
-		replaceColumnsForNode(node, idxColMap)
-
-		return nodeID
 	}
+	return nodeID
 }
 
 func (builder *QueryBuilder) applyIndicesForFilters(nodeID int32, node *plan.Node,
@@ -689,21 +686,12 @@ END0:
 }
 
 func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) int32 {
-	node.Children[1] = builder.applyIndices(node.Children[1], colRefCnt, idxColMap)
-
-	leftChild := builder.qry.Nodes[node.Children[0]]
-	if leftChild.NodeType != plan.Node_TABLE_SCAN {
-		node.Children[0] = builder.applyIndices(node.Children[0], colRefCnt, idxColMap)
-		replaceColumnsForNode(node, idxColMap)
-		return nodeID
-	} else if leftChild.TableDef.Pkey == nil {
-		replaceColumnsForNode(node, idxColMap)
+	if node.JoinType == plan.Node_INDEX {
 		return nodeID
 	}
 
-	newLeftChildID := builder.applyIndicesForFiltersRegularIndex(node.Children[0], leftChild, colRefCnt, idxColMap)
-	if newLeftChildID != node.Children[0] {
-		node.Children[0] = newLeftChildID
+	leftChild := builder.qry.Nodes[node.Children[0]]
+	if leftChild.NodeType != plan.Node_TABLE_SCAN || leftChild.TableDef.Pkey == nil {
 		return nodeID
 	}
 
