@@ -18,13 +18,14 @@
 package mpool
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"go.uber.org/zap"
 	"runtime"
 	"runtime/debug"
 	"sync/atomic"
 	"time"
 	"unsafe"
+
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"go.uber.org/zap"
 )
 
 const (
