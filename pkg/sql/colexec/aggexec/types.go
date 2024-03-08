@@ -55,7 +55,8 @@ type AggFuncExec interface {
 
 	// SetPreparedResult add a partial result to speed up.
 	// todo: the old implementation is not good, we should use the vector.Vector to replace the any.
-	// but for first version, I will keep it.
+	//  and for the 'group_concat', it was a bad hack to use the method to set the separator.
+	//  but for first version, I will keep it.
 	SetPreparedResult(partialResult any, groupIndex int)
 
 	// Flush return the aggregation result.
