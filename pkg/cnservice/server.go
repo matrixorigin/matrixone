@@ -823,7 +823,7 @@ func (s *service) initTxnTraceService() {
 func (s *service) saveProfile(profilePath string) {
 	reader, writer := io.Pipe()
 	go func() {
-		// dump all goroutines to stderr
+		// dump all goroutines
 		_ = profile.ProfileGoroutine(writer, 2)
 		_ = writer.Close()
 	}()
