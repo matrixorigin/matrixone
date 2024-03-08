@@ -40,11 +40,9 @@ func BenchmarkInsert(b *testing.B) {
 	originStr := "0123456789"
 	testExpr := tree.NewNumValWithType(constant.MakeString(originStr), originStr, false, tree.P_char)
 	targetT := &plan.Expr{
-		Typ: targetType,
+		Typ: *targetType,
 		Expr: &plan.Expr_T{
-			T: &plan.TargetType{
-				Typ: targetType,
-			},
+			T: &plan.TargetType{},
 		},
 	}
 	ctx := context.TODO()

@@ -18,7 +18,6 @@ import (
 	"context"
 	"encoding/hex"
 	"math"
-	gotrace "runtime/trace"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -105,7 +104,7 @@ func WithEnableRefreshExpression() TxnClientCreateOption {
 // WithEnableLeakCheck enable txn leak check. Used to found any txn is not committed or rolled back.
 func WithEnableLeakCheck(
 	maxActiveAges time.Duration,
-	leakHandleFunc func(txnID []byte, createAt time.Time, createBy string)) TxnClientCreateOption {
+	leakHandleFunc func(txnID []byte, createAt time.Time, options txn.TxnOptions)) TxnClientCreateOption {
 	return func(tc *txnClient) {
 		tc.leakChecker = newLeakCheck(maxActiveAges, leakHandleFunc)
 	}
@@ -133,9 +132,15 @@ func WithNormalStateNoWait(t bool) TxnClientCreateOption {
 	}
 }
 
-func WithPKDedupCount(count int) TxnClientCreateOption {
+func WithTxnOpenedCallback(callbacks []func(op TxnOperator)) TxnClientCreateOption {
 	return func(tc *txnClient) {
-		tc.PKDedupCount = count
+		tc.txnOpenedCallbacks = callbacks
+	}
+}
+
+func WithCheckDup() TxnClientCreateOption {
+	return func(tc *txnClient) {
+		tc.enableCheckDup = true
 	}
 }
 
@@ -157,10 +162,11 @@ type txnClient struct {
 	leakChecker                *leakChecker
 	limiter                    ratelimit.Limiter
 	maxActiveTxn               int
+	enableCheckDup             bool
 	enableCNBasedConsistency   bool
 	enableSacrificingFreshness bool
 	enableRefreshExpression    bool
-	PKDedupCount               int
+	txnOpenedCallbacks         []func(TxnOperator)
 
 	// normalStateNoWait is used to control if wait for the txn client's
 	// state to be normal. If it is false, which is default value, wait
@@ -259,28 +265,23 @@ func (client *txnClient) New(
 	}()
 
 	// we take a token from the limiter to control the number of transactions created per second.
-	_, task := gotrace.NewTask(context.TODO(), "transaction.New")
-	defer task.End()
 	client.limiter.Take()
-
-	ts, err := client.determineTxnSnapshot(ctx, minTS)
-	if err != nil {
-		return nil, err
-	}
 
 	txnMeta := txn.TxnMeta{}
 	txnMeta.ID = client.generator.Generate()
-	txnMeta.SnapshotTS = ts
 	txnMeta.Mode = client.getTxnMode()
 	txnMeta.Isolation = client.getTxnIsolation()
 	if client.lockService != nil {
 		txnMeta.LockService = client.lockService.GetServiceID()
 	}
 
-	options = append(options, WithTxnPKDedupCount(client.PKDedupCount))
 	options = append(options,
 		WithTxnCNCoordinator(),
 		WithTxnLockService(client.lockService))
+	if client.enableCheckDup {
+		options = append(options, WithTxnEnableCheckDup())
+	}
+
 	op := newTxnOperator(
 		client.clock,
 		client.sender,
@@ -294,6 +295,23 @@ func (client *txnClient) New(
 	if err := client.openTxn(op); err != nil {
 		return nil, err
 	}
+
+	for _, cb := range client.txnOpenedCallbacks {
+		cb(op)
+	}
+
+	ts, err := client.determineTxnSnapshot(minTS)
+	if err != nil {
+		return nil, err
+	}
+	if err := op.UpdateSnapshot(ctx, ts); err != nil {
+		return nil, err
+	}
+
+	util.LogTxnSnapshotTimestamp(
+		minTS,
+		ts)
+
 	if err := op.waitActive(ctx); err != nil {
 		_ = op.Rollback(ctx)
 		return nil, err
@@ -302,8 +320,6 @@ func (client *txnClient) New(
 }
 
 func (client *txnClient) NewWithSnapshot(snapshot []byte) (TxnOperator, error) {
-	_, task := gotrace.NewTask(context.TODO(), "transaction.NewWithSnapshot")
-	defer task.End()
 	op, err := newTxnOperatorWithSnapshot(client.sender, snapshot)
 	if err != nil {
 		return nil, err
@@ -320,8 +336,6 @@ func (client *txnClient) Close() error {
 }
 
 func (client *txnClient) MinTimestamp() timestamp.Timestamp {
-	_, task := gotrace.NewTask(context.TODO(), "transaction.MinTimestamp")
-	defer task.End()
 	client.mu.RLock()
 	defer client.mu.RUnlock()
 
@@ -338,8 +352,6 @@ func (client *txnClient) MinTimestamp() timestamp.Timestamp {
 func (client *txnClient) WaitLogTailAppliedAt(
 	ctx context.Context,
 	ts timestamp.Timestamp) (timestamp.Timestamp, error) {
-	_, task := gotrace.NewTask(context.TODO(), "transaction.WaitLogTailAppliedAt")
-	defer task.End()
 	if client.timestampWaiter == nil {
 		return timestamp.Timestamp{}, nil
 	}
@@ -360,12 +372,12 @@ func (client *txnClient) getTxnMode() txn.TxnMode {
 	return txn.TxnMode_Pessimistic
 }
 
-func (client *txnClient) updateLastCommitTS(txn txn.TxnMeta) {
+func (client *txnClient) updateLastCommitTS(event TxnEvent) {
 	var old *timestamp.Timestamp
-	new := &txn.CommitTS
+	new := &event.Txn.CommitTS
 	for {
 		old = client.atomic.latestCommitTS.Load()
-		if old != nil && old.GreaterEq(txn.CommitTS) {
+		if old != nil && old.GreaterEq(event.Txn.CommitTS) {
 			return
 		}
 
@@ -378,9 +390,7 @@ func (client *txnClient) updateLastCommitTS(txn txn.TxnMeta) {
 // determineTxnSnapshot assuming we determine the timestamp to be ts, the final timestamp
 // returned will be ts+1. This is because we need to see the submitted data for ts, and the
 // timestamp for all things is ts+1.
-func (client *txnClient) determineTxnSnapshot(
-	ctx context.Context,
-	minTS timestamp.Timestamp) (timestamp.Timestamp, error) {
+func (client *txnClient) determineTxnSnapshot(minTS timestamp.Timestamp) (timestamp.Timestamp, error) {
 	start := time.Now()
 	defer func() {
 		v2.TxnDetermineSnapshotDurationHistogram.Observe(time.Since(start).Seconds())
@@ -397,18 +407,7 @@ func (client *txnClient) determineTxnSnapshot(
 		minTS = client.adjustTimestamp(minTS)
 	}
 
-	if client.timestampWaiter == nil {
-		return minTS, nil
-	}
-
-	ts, err := client.timestampWaiter.GetTimestamp(ctx, minTS)
-	if err != nil {
-		return ts, err
-	}
-	util.LogTxnSnapshotTimestamp(
-		minTS,
-		ts)
-	return ts, nil
+	return minTS, nil
 }
 
 func (client *txnClient) adjustTimestamp(ts timestamp.Timestamp) timestamp.Timestamp {
@@ -424,7 +423,7 @@ func (client *txnClient) GetLatestCommitTS() timestamp.Timestamp {
 }
 
 func (client *txnClient) SyncLatestCommitTS(ts timestamp.Timestamp) {
-	client.updateLastCommitTS(txn.TxnMeta{CommitTS: ts})
+	client.updateLastCommitTS(TxnEvent{Txn: txn.TxnMeta{CommitTS: ts}})
 	if client.timestampWaiter != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second*30)
 		defer cancel()
@@ -462,7 +461,7 @@ func (client *txnClient) openTxn(op *txnOperator) error {
 			zap.String("txn ID", hex.EncodeToString(op.txnID)))
 	}
 
-	if !op.isUserTxn() ||
+	if !op.options.UserTxn() ||
 		client.mu.users < client.maxActiveTxn {
 		client.addActiveTxnLocked(op)
 		return nil
@@ -480,7 +479,9 @@ func (client *txnClient) openTxn(op *txnOperator) error {
 	return nil
 }
 
-func (client *txnClient) closeTxn(txn txn.TxnMeta) {
+func (client *txnClient) closeTxn(event TxnEvent) {
+	txn := event.Txn
+
 	client.mu.Lock()
 	defer func() {
 		v2.TxnActiveQueueSizeGauge.Set(float64(len(client.mu.activeTxns)))
@@ -494,7 +495,7 @@ func (client *txnClient) closeTxn(txn txn.TxnMeta) {
 
 		delete(client.mu.activeTxns, key)
 		client.removeFromLeakCheck(txn.ID)
-		if !op.isUserTxn() {
+		if !op.options.UserTxn() {
 			return
 		}
 		client.mu.users--
@@ -516,7 +517,7 @@ func (client *txnClient) closeTxn(txn txn.TxnMeta) {
 }
 
 func (client *txnClient) addActiveTxnLocked(op *txnOperator) {
-	if op.isUserTxn() {
+	if op.options.UserTxn() {
 		client.mu.users++
 	}
 	client.mu.activeTxns[cutil.UnsafeBytesToString(op.txnID)] = op
@@ -595,7 +596,7 @@ func (client *txnClient) startLeakChecker() {
 
 func (client *txnClient) addToLeakCheck(op *txnOperator) {
 	if client.leakChecker != nil {
-		client.leakChecker.txnOpened(op.txnID, op.option.createBy)
+		client.leakChecker.txnOpened(op.txnID, op.options)
 	}
 }
 

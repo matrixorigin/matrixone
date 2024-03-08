@@ -16,13 +16,15 @@ package disttae
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
-	"github.com/panjf2000/ants/v2"
 	"math"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/panjf2000/ants/v2"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -38,6 +40,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 	"github.com/matrixorigin/matrixone/pkg/udf"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -149,6 +152,9 @@ type Transaction struct {
 	writes []Entry
 	// txn workspace size
 	workspaceSize uint64
+
+	// the last snapshot write offset
+	snapshotWriteOffset int
 
 	tnStores []DNStore
 	proc     *process.Process
@@ -317,7 +323,7 @@ func (txn *Transaction) IncrStatementID(ctx context.Context, commit bool) error 
 	if err := txn.mergeTxnWorkspaceLocked(); err != nil {
 		return err
 	}
-	//flushing writes into S3 for the last statement
+	// dump batch to s3, starting from 0 (begining of the workspace)
 	if err := txn.dumpBatchLocked(0); err != nil {
 		return err
 	}
@@ -495,6 +501,10 @@ func (txn *Transaction) handleRCSnapshot(ctx context.Context, commit bool) error
 	}
 	if !commit && txn.op.Txn().IsRCIsolation() &&
 		(txn.GetSQLCount() > 1 || needResetSnapshot) {
+		trace.GetService().TxnUpdateSnapshot(
+			txn.op,
+			0,
+			"before execute")
 		if err := txn.op.UpdateSnapshot(
 			ctx,
 			timestamp.Timestamp{}); err != nil {
@@ -605,8 +615,6 @@ type txnTable struct {
 
 	// timestamp of the last operation on this table
 	lastTS timestamp.Timestamp
-	//entries belong to this table,and come from txn.writes.
-	writes []Entry
 
 	// this should be the statement id
 	// but seems that we're not maintaining it at the moment

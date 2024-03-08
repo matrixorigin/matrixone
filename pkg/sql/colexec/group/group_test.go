@@ -148,7 +148,7 @@ func newTestCase(flgs []bool, ts []types.Type, exprs []*plan.Expr, aggs []agg.Ag
 	for _, expr := range exprs {
 		if col, ok := expr.Expr.(*plan.Expr_Col); ok {
 			idx := col.Col.ColPos
-			expr.Typ = &plan.Type{
+			expr.Typ = plan.Type{
 				Id:    int32(ts[idx].Oid),
 				Width: ts[idx].Width,
 				Scale: ts[idx].Scale,
@@ -175,7 +175,7 @@ func newTestCase(flgs []bool, ts []types.Type, exprs []*plan.Expr, aggs []agg.Ag
 
 func newExpression(pos int32) *plan.Expr {
 	return &plan.Expr{
-		Typ: new(plan.Type),
+		Typ: plan.Type{},
 		Expr: &plan.Expr_Col{
 			Col: &plan.ColRef{
 				ColPos: pos,

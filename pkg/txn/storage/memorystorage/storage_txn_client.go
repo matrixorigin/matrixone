@@ -135,7 +135,7 @@ func (s *StorageTxnOperator) IsOpenLog() bool {
 	panic("unimplemented")
 }
 
-func (s *StorageTxnOperator) AppendEventCallback(event client.EventType, callbacks ...func(txn.TxnMeta)) {
+func (s *StorageTxnOperator) AppendEventCallback(event client.EventType, callbacks ...func(client.TxnEvent)) {
 	panic("unimplemented")
 }
 
@@ -310,5 +310,13 @@ func (s *StorageTxnOperator) GetOverview() client.TxnOverview {
 }
 
 func (s *StorageTxnOperator) LockSkipped(tableID uint64, mode lock.LockMode) bool {
+	panic("should not call")
+}
+
+func (s *StorageTxnOperator) TxnOptions() txn.TxnOptions {
+	panic("should not call")
+}
+
+func (s *StorageTxnOperator) NextSequence() uint64 {
 	panic("should not call")
 }

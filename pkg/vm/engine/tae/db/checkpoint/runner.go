@@ -938,7 +938,7 @@ func (r *runner) tryCompactTree(entry *logtail.DirtyTreeEntry, force bool) {
 		}
 
 		if force {
-			logutil.Infof("[flushtabletail] force flush %s", table.GetLastestSchema().Name)
+			logutil.Infof("[flushtabletail] force flush %v-%s", table.ID, table.GetLastestSchema().Name)
 			if err := r.fireFlushTabletail(table, dirtyTree, endTs); err == nil {
 				stats.ResetDeadlineWithLock()
 			}
@@ -999,8 +999,12 @@ func (r *runner) onDirtyEntries(entries ...any) {
 }
 
 func (r *runner) crontask(ctx context.Context) {
+	lag := 2 * time.Second
+	if r.options.maxFlushInterval < time.Second {
+		lag = 0 * time.Second
+	}
 	hb := w.NewHeartBeaterWithFunc(r.options.collectInterval, func() {
-		r.source.Run()
+		r.source.Run(lag)
 		entry := r.source.GetAndRefreshMerged()
 		_, endts := entry.GetTimeRange()
 		if entry.IsEmpty() {
