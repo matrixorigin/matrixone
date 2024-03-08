@@ -40,6 +40,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -8962,4 +8963,27 @@ func TestGlobalCheckpoint7(t *testing.T) {
 	}
 	assert.Equal(t, 1, len(entries))
 
+}
+
+func TestSplitCommand(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	opts.MaxMessageSize = txnbase.CmdBufReserved + 2*1024
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(2, 1)
+	schema.BlockMaxRows = 50
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 50)
+	defer bat.Close()
+
+	tae.CreateRelAndAppend(bat, true)
+
+	tae.CheckRowsByScan(50, false)
+	t.Log(tae.Catalog.SimplePPString(3))
+	tae.Restart(context.Background())
+	t.Log(tae.Catalog.SimplePPString(3))
+	tae.CheckRowsByScan(50, false)
 }
