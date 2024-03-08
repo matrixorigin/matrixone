@@ -19,6 +19,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
 var (
@@ -154,62 +155,53 @@ func makeIndexTblScan(builder *QueryBuilder, bindCtx *BindContext, filterExp *pl
 		})
 
 	case "in":
-		// Here we convert
-		// -- in ("value1", "value2", "value3")  to
-		// -- prefix_in(__mo_index_idx_col, serial_full("a","value1"))
-		//	  OR prefix_in(__mo_index_idx_col, serial_full("a","value2"))
-		//	  OR prefix_in(__mo_index_idx_col, serial_full("a","value3"))
-
 		// Since this master index specifically for varchar, we assume the `IN` to contain only varchar values.
 		inVecType := types.T_varchar.ToType()
 
-		// in (value1, value2, value3)
-		inEntriesVec := vector.NewVec(inVecType)
-		_ = inEntriesVec.UnmarshalBinary(args[1].GetVec().GetData())
+		// a. varchar vector ("value1", "value2", "value3")
+		arg1AsColValuesVec := vector.NewVec(inVecType)
+		_ = arg1AsColValuesVec.UnmarshalBinary(args[1].GetVec().GetData())
+		inExprListLen := arg1AsColValuesVec.Length()
 
-		prefixInList := make([]*plan.Expr, 0)
+		// b. const vector "a"
 		mp := mpool.MustNewZero()
-		for i := 0; i < inEntriesVec.Length(); i++ {
-			inEntryAsBytes := inEntriesVec.GetBytesAt(i)                                  // value1 as []byte
-			newInEntryVector, _ := vector.NewConstBytes(inVecType, inEntryAsBytes, 1, mp) // value1 as const vector
-			newInEntryAsBytes, _ := newInEntryVector.MarshalBinary()                      // value1 const vector as []byte
-			newInEntryVector.Free(mp)                                                     // here we free the memory allocated by mpool.
+		arg0AsColNameVec, _ := vector.NewConstBytes(inVecType, []byte(args[0].GetCol().Name), inExprListLen, mp)
 
-			// "value1" as LiteralVec
-			inEntryAsLiteralVec := &plan.Expr{
-				Typ: *makePlan2Type(&varcharType),
-				Expr: &plan.Expr_Vec{
-					Vec: &plan.LiteralVec{
-						Len:  int32(len(newInEntryAsBytes)),
-						Data: newInEntryAsBytes,
-					},
+		// c. (serial_full("a","value1"), serial_full("a","value2"), serial_full("a","value3"))
+		ps := types.NewPackerArray(inExprListLen, mp)
+		defer func() {
+			for _, p := range ps {
+				p.FreeMem()
+			}
+		}()
+		function.SerialHelper(arg0AsColNameVec, nil, ps, true)
+		function.SerialHelper(arg1AsColValuesVec, nil, ps, true)
+		arg1ForPrefixInVec := vector.NewVec(inVecType)
+		for i := 0; i < inExprListLen; i++ {
+			_ = vector.AppendBytes(arg1ForPrefixInVec, ps[i].Bytes(), false, mp)
+		}
+
+		// d. convert result vector to LiteralVec
+		arg1ForPrefixInBytes, _ := arg1ForPrefixInVec.MarshalBinary()
+		arg1ForPrefixInLitVec := &plan.Expr{
+			Typ: *makePlan2Type(&varcharType),
+			Expr: &plan.Expr_Vec{
+				Vec: &plan.LiteralVec{
+					Len:  int32(len(arg1ForPrefixInBytes)),
+					Data: arg1ForPrefixInBytes,
 				},
-			}
-			// serial_full("a","value1")
-			serialFullExpr, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "serial_full", []*plan.Expr{
-				makePlan2StringConstExprWithType(args[0].GetCol().Name), // "a"
-				inEntryAsLiteralVec, // value1
-			})
-
-			prefixInExpr, _ := bindFuncExprAndConstFold(builder.GetContext(), builder.compCtx.GetProcess(), "prefix_in", []*Expr{
-				indexKeyCol,    // __mo_index_idx_col
-				serialFullExpr, // serial_full("a","value1")
-			})
-
-			prefixInList = append(prefixInList, prefixInExpr)
+			},
 		}
 
-		if len(prefixInList) == 1 {
-			filterList = prefixInList[0]
-		} else {
-			for i := 1; i < len(prefixInList); i++ {
-				prefixInList[0], _ = bindFuncExprAndConstFold(builder.GetContext(), builder.compCtx.GetProcess(), "or", []*Expr{
-					prefixInList[0],
-					prefixInList[i],
-				})
-			}
-			filterList = prefixInList[0]
-		}
+		// e. free memory for arg0, arg1 vector. Packer's memory is freed in defer.
+		arg1ForPrefixInVec.Free(mp)
+		arg0AsColNameVec.Free(mp)
+
+		filterList, _ = bindFuncExprAndConstFold(builder.GetContext(), builder.compCtx.GetProcess(), "prefix_in", []*Expr{
+			indexKeyCol,           // __mo_index_idx_col
+			arg1ForPrefixInLitVec, // (serial_full("a","value1"), serial_full("a","value2"), serial_full("a","value3"))
+		})
+
 	default:
 		panic("unsupported filter expression")
 	}
