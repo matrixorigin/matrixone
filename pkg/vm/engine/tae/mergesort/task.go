@@ -47,6 +47,7 @@ type DisposableVecPool interface {
 
 type MergeTaskHost interface {
 	DisposableVecPool
+	HostHintName() string
 	PrepareData() ([]*batch.Batch, []*nulls.Nulls, func(), error)
 	PrepareCommitEntry() *api.MergeCommitEntry
 	PrepareNewWriterFunc() func() *blockio.BlockWriter
@@ -102,6 +103,7 @@ func DoMergeAndWrite(
 	tableDesc := fmt.Sprintf("%v-%v", commitEntry.TblId, commitEntry.TableName)
 	logutil.Info("[Start] Mergeblocks",
 		zap.String("table", commitEntry.TableName),
+		zap.String("on", mergehost.HostHintName()),
 		zap.String("txn-start-ts", commitEntry.StartTs.DebugString()),
 		zap.String("from-objs", fromObjsDesc),
 	)
@@ -286,6 +288,7 @@ func DoMergeAndWrite(
 		cobjstats[0].Rows())
 	logutil.Info("[Done] Mergeblocks",
 		zap.String("table", tableDesc),
+		zap.String("on", mergehost.HostHintName()),
 		zap.String("txn-start-ts", commitEntry.StartTs.DebugString()),
 		zap.String("to-objs", cobj),
 		common.DurationField(time.Since(now)))

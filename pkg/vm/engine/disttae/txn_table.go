@@ -2570,7 +2570,7 @@ func (tbl *txnTable) MergeObjects(ctx context.Context, objstats []objectio.Objec
 	objInfos := make([]logtailreplay.ObjectInfo, 0, len(objstats))
 	for _, objstat := range objstats {
 		info, exist := state.GetObject(*objstat.ObjectShortName())
-		if !exist {
+		if !exist || info.DeleteTime.Greater(snapshot) {
 			return nil, moerr.NewInternalErrorNoCtx("object %s not exist", objstat.ObjectName().String())
 		}
 		objInfos = append(objInfos, info)

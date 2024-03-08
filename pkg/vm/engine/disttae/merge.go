@@ -99,6 +99,8 @@ func (t *CNMergeTask) GetMPool() *mpool.MPool {
 	return t.proc.GetMPool()
 }
 
+func (t *CNMergeTask) HostHintName() string { return "CN" }
+
 func (t *CNMergeTask) PrepareData() ([]*batch.Batch, []*nulls.Nulls, func(), error) {
 	r, d, e := t.readAllData()
 	return r, d, func() {}, e

@@ -108,6 +108,8 @@ func (task *mergeObjectsTask) GetMPool() *mpool.MPool {
 	return task.rt.VectorPool.Transient.MPool()
 }
 
+func (task *mergeObjectsTask) HostHintName() string { return "DN" }
+
 func (task *mergeObjectsTask) PrepareData() ([]*batch.Batch, []*nulls.Nulls, func(), error) {
 	var err error
 	views := make([]*containers.BlockView, len(task.compacted))
