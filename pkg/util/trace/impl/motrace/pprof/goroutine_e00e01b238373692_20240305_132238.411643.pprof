@@ -1,0 +1,107 @@
+goroutine 186 [running]:
+runtime/pprof.writeGoroutineStacks({0x337d040, 0xc000130550})
+	/usr/local/go/src/runtime/pprof/pprof.go:703 +0x75
+runtime/pprof.writeGoroutine({0x337d040, 0xc000130550}, 0x2)
+	/usr/local/go/src/runtime/pprof/pprof.go:692 +0x45
+runtime/pprof.(*Profile).WriteTo(0x3f7baa0, {0x337d040, 0xc000130550}, 0x411fcc?)
+	/usr/local/go/src/runtime/pprof/pprof.go:329 +0x1b1
+github.com/matrixorigin/matrixone/pkg/util/profile.ProfileRuntime({0x2231616, 0x9}, {0x337d040, 0xc000130550}, 0x3d?)
+	/home/pengzhen/Documents/matrixone/pkg/util/profile/profile.go:70 +0x5e
+github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace.(*MOSpan).doProfileRuntime(0xc0025eed80, {0x3390eb8, 0xc0020001e0}, {0x2231616, 0x9}, 0x47b269?)
+	/home/pengzhen/Documents/matrixone/pkg/util/trace/impl/motrace/mo_trace.go:316 +0x1bc
+github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace.(*MOSpan).doProfile(0xc0025eed80)
+	/home/pengzhen/Documents/matrixone/pkg/util/trace/impl/motrace/mo_trace.go:384 +0x175
+github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace.(*MOSpan).End(0xc0025eed80, {0x0, 0x0, 0xc0000c2e30?})
+	/home/pengzhen/Documents/matrixone/pkg/util/trace/impl/motrace/mo_trace.go:299 +0x3c5
+github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace.TestMOSpan_doProfile.func2(0xc000583520)
+	/home/pengzhen/Documents/matrixone/pkg/util/trace/impl/motrace/mo_trace_test.go:479 +0x1fc
+testing.tRunner(0xc000583520, 0xc0005ebb30)
+	/usr/local/go/src/testing/testing.go:1595 +0x262
+created by testing.(*T).Run in goroutine 184
+	/usr/local/go/src/testing/testing.go:1648 +0x846
+
+goroutine 1 [chan receive]:
+testing.(*T).Run(0xc000583040, {0x2242305, 0x14}, 0x22c07c0)
+	/usr/local/go/src/testing/testing.go:1649 +0x871
+testing.runTests.func1(0x0?)
+	/usr/local/go/src/testing/testing.go:2054 +0x85
+testing.tRunner(0xc000583040, 0xc001e07af8)
+	/usr/local/go/src/testing/testing.go:1595 +0x262
+testing.runTests(0xc000636fa0?, {0x3f88760, 0x24, 0x24}, {0x1c?, 0x1e?, 0xc000444700?})
+	/usr/local/go/src/testing/testing.go:2052 +0x8ae
+testing.(*M).Run(0xc000636fa0)
+	/usr/local/go/src/testing/testing.go:1925 +0xcd8
+main.main()
+	_testmain.go:125 +0x2be
+
+goroutine 19 [select]:
+github.com/panjf2000/ants/v2.(*Pool).purgeStaleWorkers(0xc00046c140, {0x3390ef0, 0xc00017f310})
+	/home/pengzhen/go/pkg/mod/github.com/panjf2000/ants/v2@v2.7.4/pool.go:83 +0x1eb
+created by github.com/panjf2000/ants/v2.(*Pool).goPurge in goroutine 1
+	/home/pengzhen/go/pkg/mod/github.com/panjf2000/ants/v2@v2.7.4/pool.go:148 +0x185
+
+goroutine 20 [select]:
+github.com/panjf2000/ants/v2.(*Pool).ticktock(0xc00046c140, {0x3390ef0, 0xc00017f360})
+	/home/pengzhen/go/pkg/mod/github.com/panjf2000/ants/v2@v2.7.4/pool.go:126 +0x205
+created by github.com/panjf2000/ants/v2.(*Pool).goTicktock in goroutine 1
+	/home/pengzhen/go/pkg/mod/github.com/panjf2000/ants/v2@v2.7.4/pool.go:155 +0x187
+
+goroutine 133 [chan receive]:
+github.com/matrixorigin/matrixone/pkg/common/mpool.init.0.func1()
+	/home/pengzhen/Documents/matrixone/pkg/common/mpool/alloc_tracing.go:39 +0x45
+created by github.com/matrixorigin/matrixone/pkg/common/mpool.init.0 in goroutine 1
+	/home/pengzhen/Documents/matrixone/pkg/common/mpool/alloc_tracing.go:36 +0x25
+
+goroutine 102 [select]:
+github.com/panjf2000/ants/v2.(*Pool).purgeStaleWorkers(0xc000636960, {0x3390ef0, 0xc0008a6c80})
+	/home/pengzhen/go/pkg/mod/github.com/panjf2000/ants/v2@v2.7.4/pool.go:83 +0x1eb
+created by github.com/panjf2000/ants/v2.(*Pool).goPurge in goroutine 1
+	/home/pengzhen/go/pkg/mod/github.com/panjf2000/ants/v2@v2.7.4/pool.go:148 +0x185
+
+goroutine 103 [select]:
+github.com/panjf2000/ants/v2.(*Pool).ticktock(0xc000636960, {0x3390ef0, 0xc0008a6cd0})
+	/home/pengzhen/go/pkg/mod/github.com/panjf2000/ants/v2@v2.7.4/pool.go:126 +0x205
+created by github.com/panjf2000/ants/v2.(*Pool).goTicktock in goroutine 1
+	/home/pengzhen/go/pkg/mod/github.com/panjf2000/ants/v2@v2.7.4/pool.go:155 +0x187
+
+goroutine 104 [select]:
+github.com/panjf2000/ants/v2.(*Pool).purgeStaleWorkers(0xc000636aa0, {0x3390ef0, 0xc0008a6d70})
+	/home/pengzhen/go/pkg/mod/github.com/panjf2000/ants/v2@v2.7.4/pool.go:83 +0x1eb
+created by github.com/panjf2000/ants/v2.(*Pool).goPurge in goroutine 1
+	/home/pengzhen/go/pkg/mod/github.com/panjf2000/ants/v2@v2.7.4/pool.go:148 +0x185
+
+goroutine 105 [select]:
+github.com/panjf2000/ants/v2.(*Pool).ticktock(0xc000636aa0, {0x3390ef0, 0xc0008a6dc0})
+	/home/pengzhen/go/pkg/mod/github.com/panjf2000/ants/v2@v2.7.4/pool.go:126 +0x205
+created by github.com/panjf2000/ants/v2.(*Pool).goTicktock in goroutine 1
+	/home/pengzhen/go/pkg/mod/github.com/panjf2000/ants/v2@v2.7.4/pool.go:155 +0x187
+
+goroutine 106 [IO wait]:
+internal/poll.runtime_pollWait(0x7ff21eb68e88, 0x72)
+	/usr/local/go/src/runtime/netpoll.go:343 +0x85
+internal/poll.(*pollDesc).wait(0xc000056620, 0x1?, 0x0)
+	/usr/local/go/src/internal/poll/fd_poll_runtime.go:84 +0xb1
+internal/poll.(*pollDesc).waitRead(...)
+	/usr/local/go/src/internal/poll/fd_poll_runtime.go:89
+internal/poll.(*FD).Accept(0xc000056600)
+	/usr/local/go/src/internal/poll/fd_unix.go:611 +0x425
+net.(*netFD).accept(0xc000056600)
+	/usr/local/go/src/net/fd_unix.go:172 +0x3e
+net.(*TCPListener).accept(0xc00062f1e0)
+	/usr/local/go/src/net/tcpsock_posix.go:152 +0x3e
+net.(*TCPListener).Accept(0xc00062f1e0)
+	/usr/local/go/src/net/tcpsock.go:315 +0x65
+github.com/google/gops/agent.listen({0x3389b10, 0xc00062f1e0})
+	/home/pengzhen/go/pkg/mod/github.com/google/gops@v0.3.25/agent/agent.go:130 +0x69
+created by github.com/google/gops/agent.Listen in goroutine 1
+	/home/pengzhen/go/pkg/mod/github.com/google/gops@v0.3.25/agent/agent.go:123 +0x4e5
+
+goroutine 184 [chan receive]:
+testing.(*T).Run(0xc000582ea0, {0x2231616, 0x9}, 0xc0005ebb30)
+	/usr/local/go/src/testing/testing.go:1649 +0x871
+github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace.TestMOSpan_doProfile(0x0?)
+	/home/pengzhen/Documents/matrixone/pkg/util/trace/impl/motrace/mo_trace_test.go:471 +0x946
+testing.tRunner(0xc000582ea0, 0x22c07c0)
+	/usr/local/go/src/testing/testing.go:1595 +0x262
+created by testing.(*T).Run in goroutine 1
+	/usr/local/go/src/testing/testing.go:1648 +0x846

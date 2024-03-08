@@ -185,6 +185,12 @@ func WithDisableTrace(value bool) TxnOption {
 	}
 }
 
+func WithSessionInfo(info string) TxnOption {
+	return func(tc *txnOperator) {
+		tc.options.SessionInfo = info
+	}
+}
+
 type txnOperator struct {
 	sender               rpc.TxnSender
 	waiter               *waiter
@@ -216,6 +222,7 @@ type txnOperator struct {
 
 	commitCounter   counter
 	rollbackCounter counter
+	runSqlCounter   counter
 }
 
 func newTxnOperator(
@@ -1174,8 +1181,29 @@ func (tc *txnOperator) doCostAction(
 	return cost, err
 }
 
+func (tc *txnOperator) EnterRunSql() {
+	tc.runSqlCounter.addEnter()
+}
+
+func (tc *txnOperator) ExitRunSql() {
+	tc.runSqlCounter.addExit()
+}
+
+func (tc *txnOperator) inRunSql() bool {
+	return tc.runSqlCounter.more()
+}
+
+func (tc *txnOperator) inCommit() bool {
+	return tc.commitCounter.more()
+}
+
+func (tc *txnOperator) inRollback() bool {
+	return tc.rollbackCounter.more()
+}
+
 func (tc *txnOperator) counter() string {
-	return fmt.Sprintf("commit: %s rollback: %s",
+	return fmt.Sprintf("commit: %s rollback: %s runSql: %s",
 		tc.commitCounter.String(),
-		tc.rollbackCounter.String())
+		tc.rollbackCounter.String(),
+		tc.runSqlCounter.String())
 }

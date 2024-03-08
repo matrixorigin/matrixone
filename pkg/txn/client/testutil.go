@@ -111,6 +111,10 @@ func (count *counter) addExit() {
 	count.exit.Add(1)
 }
 
+func (count *counter) more() bool {
+	return count.enter.Load() > count.exit.Load()
+}
+
 func (count *counter) String() string {
 	return fmt.Sprintf("enter:%d, exit:%d", count.enter.Load(), count.exit.Load())
 }

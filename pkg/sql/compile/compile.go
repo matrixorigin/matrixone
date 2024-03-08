@@ -423,10 +423,15 @@ func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
 	seq := uint64(0)
 	if txnOp != nil {
 		seq = txnOp.NextSequence()
+		txnOp.EnterRunSql()
 	}
-	//txnOp.AddRun()
-	//defer txnOp.AddExitRun()
-	//txnOp.Commit() /Rollback()
+
+	defer func() {
+		if txnOp != nil {
+			txnOp.ExitRunSql()
+		}
+	}()
+
 	txnTrace.GetService().AddTxnDurationAction(
 		txnOp,
 		client.ExecuteSQLEvent,

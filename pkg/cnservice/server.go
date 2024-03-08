@@ -18,7 +18,12 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
-	"os"
+	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/matrixorigin/matrixone/pkg/util/profile"
+	"go.uber.org/zap"
+	"io"
 	"sync"
 	"time"
 
@@ -54,12 +59,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/udf/pythonservice"
 	"github.com/matrixorigin/matrixone/pkg/util/address"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
-	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
-	"github.com/matrixorigin/matrixone/pkg/util/profile"
 	"github.com/matrixorigin/matrixone/pkg/util/status"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
-	"go.uber.org/zap"
 )
 
 func NewService(
@@ -620,13 +622,30 @@ func (s *service) getTxnClient() (c client.TxnClient, err error) {
 			opts = append(opts, client.WithEnableLeakCheck(
 				s.cfg.Txn.MaxActiveAges.Duration,
 				func(txnID []byte, createAt time.Time, createBy txn.TxnOptions) {
-					// dump all goroutines to stderr
-					profile.ProfileGoroutine(os.Stderr, 2)
-					v2.TxnLeakCounter.Inc()
-					runtime.DefaultRuntime().Logger().Error("found leak txn",
+					name, _ := uuid.NewV7()
+					profPath := catalog.BuildProfilePath("routine", name.String())
+
+					fields := []zap.Field{
 						zap.String("txn-id", hex.EncodeToString(txnID)),
 						zap.Time("create-at", createAt),
-						zap.String("options", createBy.String()))
+						zap.String("options", createBy.String()),
+						zap.String("profile", profPath),
+					}
+					if createBy.InRunSql {
+						//the txn runs sql in compile.Run() and doest not exist
+						v2.TxnLongRunningCounter.Inc()
+						runtime.DefaultRuntime().Logger().Error("found long running txn", fields...)
+					} else if createBy.InCommit {
+						v2.TxnInCommitCounter.Inc()
+						runtime.DefaultRuntime().Logger().Error("found txn in commit", fields...)
+					} else if createBy.InRollback {
+						v2.TxnInRollbackCounter.Inc()
+						runtime.DefaultRuntime().Logger().Error("found txn in rollback", fields...)
+					} else {
+						v2.TxnLeakCounter.Inc()
+						runtime.DefaultRuntime().Logger().Error("found leak txn", fields...)
+					}
+					s.saveProfile(profPath)
 				}))
 		}
 		if s.cfg.Txn.Limit > 0 {
@@ -799,6 +818,32 @@ func (s *service) initTxnTraceService() {
 		panic(err)
 	}
 	rt.SetGlobalVariables(runtime.TxnTraceService, ts)
+}
+
+func (s *service) saveProfile(profilePath string) {
+	reader, writer := io.Pipe()
+	go func() {
+		// dump all goroutines to stderr
+		_ = profile.ProfileGoroutine(writer, 2)
+		_ = writer.Close()
+	}()
+	writeVec := fileservice.IOVector{
+		FilePath: profilePath,
+		Entries: []fileservice.IOEntry{
+			{
+				Offset:         0,
+				ReaderForWrite: reader,
+				Size:           -1,
+			},
+		},
+	}
+	ctx, cancel := context.WithTimeout(context.TODO(), time.Minute*3)
+	defer cancel()
+	err := s.etlFS.Write(ctx, writeVec)
+	if err != nil {
+		logutil.Errorf("save profile %s failed. err:%v", profilePath, err)
+		return
+	}
 }
 
 type locker struct {

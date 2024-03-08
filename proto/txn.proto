@@ -369,4 +369,8 @@ message TxnOptions {
     repeated uint64        SkipLockTables     = 7;
     repeated lock.LockMode SkipLockTableModes = 8;
     string counter = 9;
+    string sessionInfo = 10;
+    bool inRunSql = 11;
+    bool inCommit = 12;
+    bool inRollback = 13;
 }
