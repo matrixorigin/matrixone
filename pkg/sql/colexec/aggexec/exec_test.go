@@ -197,9 +197,9 @@ func TestMultiAggFuncExec1(t *testing.T) {
 		MakeDeterminedMultiAggInfo(
 			info.aggID, info.argTypes, info.retType, false),
 		gTesMultiAggPrivate1)
-	executor := MakeMultiAgg(
+	executor := MakeAgg(
 		mg,
-		info.aggID, info.distinct, info.argTypes)
+		info.aggID, info.distinct, info.argTypes...)
 
 	// input first row of [{null, false}, {1, true}] - count 0
 	// input second row of [{null, false}, {1, true}] - count 1
@@ -270,7 +270,7 @@ func TestMultiAggFuncExec1(t *testing.T) {
 
 func TestGroupConcatExec(t *testing.T) {
 	mg := newTestAggMemoryManager()
-
+	RegisterGroupConcatAgg(3, ",")
 	info := multiAggInfo{
 		aggID:    3,
 		distinct: false,
@@ -281,7 +281,7 @@ func TestGroupConcatExec(t *testing.T) {
 		retType:   types.T_text.ToType(),
 		emptyNull: false,
 	}
-	executor := MakeGroupConcat(mg, info.aggID, info.distinct, info.argTypes, info.retType, ",")
+	executor := MakeAgg(mg, info.aggID, info.distinct, info.argTypes...)
 
 	// group concat the vector1 and vector2.
 	// vector1: ["a", "b", "c", "d"].
@@ -362,9 +362,9 @@ func TestEmptyNullFlag(t *testing.T) {
 	{
 		RegisterDeterminedMultiAgg(
 			MakeDeterminedMultiAggInfo(2, []types.Type{types.T_int64.ToType(), types.T_bool.ToType()}, types.T_int64.ToType(), true), gTesMultiAggPrivate1)
-		executor := MakeMultiAgg(
+		executor := MakeAgg(
 			mg,
-			2, false, []types.Type{types.T_int64.ToType(), types.T_bool.ToType()})
+			2, false, []types.Type{types.T_int64.ToType(), types.T_bool.ToType()}...)
 		require.NoError(t, executor.GroupGrow(1))
 		v, err := executor.Flush()
 		require.NoError(t, err)
@@ -375,9 +375,9 @@ func TestEmptyNullFlag(t *testing.T) {
 	{
 		RegisterDeterminedMultiAgg(
 			MakeDeterminedMultiAggInfo(2, []types.Type{types.T_int64.ToType(), types.T_bool.ToType()}, types.T_int64.ToType(), false), gTesMultiAggPrivate1)
-		executor := MakeMultiAgg(
+		executor := MakeAgg(
 			mg,
-			2, false, []types.Type{types.T_int64.ToType(), types.T_bool.ToType()})
+			2, false, []types.Type{types.T_int64.ToType(), types.T_bool.ToType()}...)
 		require.NoError(t, executor.GroupGrow(1))
 		v, err := executor.Flush()
 		require.NoError(t, err)

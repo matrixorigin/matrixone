@@ -205,9 +205,9 @@ func Test_receiveMessageFromCnServer(t *testing.T) {
 	streamSender := mock_morpc.NewMockStream(ctrl)
 	ch := make(chan morpc.Message)
 	streamSender.EXPECT().Receive().Return(ch, nil)
-
-	agg0 := aggexec.MakeGroupConcat(
-		testutil.NewProcess(), 0, false, []types.Type{types.T_varchar.ToType()}, types.T_varchar.ToType(), ",")
+	aggexec.RegisterGroupConcatAgg(0, ",")
+	agg0 := aggexec.MakeAgg(
+		testutil.NewProcess(), 0, false, []types.Type{types.T_varchar.ToType()}...)
 
 	bat := &batch.Batch{
 		Recursive:  0,
@@ -662,9 +662,9 @@ func Test_decodeBatch(t *testing.T) {
 		nil,
 		nil,
 		nil)
-
-	agg0 := aggexec.MakeGroupConcat(
-		vp, 0, false, []types.Type{types.T_varchar.ToType()}, types.T_varchar.ToType(), ",")
+	aggexec.RegisterGroupConcatAgg(0, ",")
+	agg0 := aggexec.MakeAgg(
+		vp, 0, false, []types.Type{types.T_varchar.ToType()}...)
 
 	bat := &batch.Batch{
 		Recursive:  0,

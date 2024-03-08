@@ -14,10 +14,6 @@
 
 package aggexec
 
-import (
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-)
-
 var _ = MarshalAggFuncExec
 var _ = UnmarshalAggFuncExec
 
@@ -35,31 +31,31 @@ func UnmarshalAggFuncExec(
 
 	info := encoded.GetInfo()
 
-	var exec AggFuncExec
-	switch encoded.GetExecType() {
-	case EncodedAggExecType_special_group_concat:
-		exec = MakeGroupConcat(
-			nil, info.Id, info.IsDistinct, info.Args, info.Ret, string(encoded.Groups[0]))
-
-	case EncodedAggExecType_special_count_column:
-		exec = MakeCount(
-			nil, info.Id, info.IsDistinct, info.Args[0])
-
-	case EncodedAggExecType_special_count_star:
-		panic("count(*) not implement now.")
-
-	case EncodedAggExecType_single_fixed_fixed, EncodedAggExecType_single_fixed_var,
-		EncodedAggExecType_single_var_fixed, EncodedAggExecType_single_var_var:
-		exec = MakeAgg(
-			nil, info.Id, info.IsDistinct, info.Args[0])
-
-	case EncodedAggExecType_multi_return_fixed, EncodedAggExecType_multi_return_var:
-		exec = MakeMultiAgg(
-			nil, info.Id, info.IsDistinct, info.Args)
-
-	default:
-		return nil, moerr.NewInternalErrorNoCtx("Unmarshal agg exec failed, unknown exec type %d", encoded.GetExecType())
-	}
+	var exec = MakeAgg(nil, info.Id, info.IsDistinct, info.Args...)
+	//switch encoded.GetExecType() {
+	//case EncodedAggExecType_special_group_concat:
+	//	exec = makeGroupConcat(
+	//		nil, info.Id, info.IsDistinct, info.Args, info.Ret, string(encoded.Groups[0]))
+	//
+	//case EncodedAggExecType_special_count_column:
+	//	exec = makeCount(
+	//		nil, info.Id, info.IsDistinct, info.Args[0])
+	//
+	//case EncodedAggExecType_special_count_star:
+	//	panic("count(*) not implement now.")
+	//
+	//case EncodedAggExecType_single_fixed_fixed, EncodedAggExecType_single_fixed_var,
+	//	EncodedAggExecType_single_var_fixed, EncodedAggExecType_single_var_var:
+	//	exec = makeSingleAgg(
+	//		nil, info.Id, info.IsDistinct, info.Args[0])
+	//
+	//case EncodedAggExecType_multi_return_fixed, EncodedAggExecType_multi_return_var:
+	//	exec = makeMultiAgg(
+	//		nil, info.Id, info.IsDistinct, info.Args)
+	//
+	//default:
+	//	return nil, moerr.NewInternalErrorNoCtx("Unmarshal agg exec failed, unknown exec type %d", encoded.GetExecType())
+	//}
 
 	if err := exec.unmarshal(encoded.Result, encoded.Groups); err != nil {
 		exec.Free()

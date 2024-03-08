@@ -82,10 +82,30 @@ type AggMemoryManager interface {
 	PutVector(v *vector.Vector)
 }
 
-// todo: can combine the following 3 functions to one function.
-
-// MakeAgg supports to create an aggregation function executor for single column.
+// MakeAgg creates an aggregation function executor.
+// all the aggID should be registered before calling this function.
 func MakeAgg(
+	mg AggMemoryManager,
+	aggID int64, isDistinct bool,
+	param ...types.Type) AggFuncExec {
+
+	if exec, ok := makeSpecialAggExec(mg, aggID, isDistinct, param...); ok {
+		return exec
+	}
+
+	if _, ok := singleAgg[aggID]; ok && len(param) == 1 {
+		return makeSingleAgg(mg, aggID, isDistinct, param[0])
+	}
+
+	if _, ok := multiAgg[aggID]; ok && len(param) > 0 {
+		return makeMultiAgg(mg, aggID, isDistinct, param)
+	}
+
+	panic(fmt.Sprintf("unexpected aggID %d and param types %v.", aggID, param))
+}
+
+// makeSingleAgg supports to create an aggregation function executor for single column.
+func makeSingleAgg(
 	mg AggMemoryManager,
 	aggID int64, isDistinct bool,
 	param types.Type) AggFuncExec {
@@ -120,8 +140,8 @@ func MakeAgg(
 	return newSingleAggFuncExec1(mg, info, opt, implementationAllocator)
 }
 
-// MakeMultiAgg supports creating an aggregation function executor for multiple columns.
-func MakeMultiAgg(
+// makeMultiAgg supports creating an aggregation function executor for multiple columns.
+func makeMultiAgg(
 	mg AggMemoryManager,
 	aggID int64, isDistinct bool,
 	param []types.Type) AggFuncExec {
@@ -140,46 +160,26 @@ func MakeMultiAgg(
 	return newMultiAggFuncExec(mg, info, implementationAllocator)
 }
 
-func MakeAgg2(
-	mg AggMemoryManager,
-	aggID int64, isDistinct bool,
-	param ...types.Type) AggFuncExec {
-
-	if exec, ok := makeSpecialAggExec(mg, aggID, isDistinct, param...); ok {
-		return exec
-	}
-
-	if _, ok := singleAgg[aggID]; ok && len(param) == 1 {
-		return MakeAgg(mg, aggID, isDistinct, param[0])
-	}
-
-	if _, ok := multiAgg[aggID]; ok && len(param) > 0 {
-		return MakeMultiAgg(mg, aggID, isDistinct, param)
-	}
-
-	panic(fmt.Sprintf("unexpected aggID %d and param types %v.", aggID, param))
-}
-
 func makeSpecialAggExec(
 	mg AggMemoryManager,
 	id int64, isDistinct bool, params ...types.Type) (AggFuncExec, bool) {
 	if _, ok := specialAgg[id]; ok {
 		if id == aggIdOfCountColumn {
-			return MakeCount(mg, id, isDistinct, params[0]), true
+			return makeCount(mg, id, isDistinct, params[0]), true
 		}
 		if id == aggIdOfCountStar {
 			panic("not implemented")
 		}
 		if id == aggIdOfGroupConcat {
-			return MakeGroupConcat(mg, id, isDistinct, params, getCroupConcatRet(params...), groupConcatSep), true
+			return makeGroupConcat(mg, id, isDistinct, params, getCroupConcatRet(params...), groupConcatSep), true
 		}
 	}
 	return nil, false
 }
 
-// MakeGroupConcat is one special case of MakeMultiAgg.
+// makeGroupConcat is one special case of makeMultiAgg.
 // it supports creating an aggregation function executor for special aggregation `group_concat()`.
-func MakeGroupConcat(
+func makeGroupConcat(
 	mg AggMemoryManager,
 	aggID int64, isDistinct bool,
 	param []types.Type, result types.Type,
@@ -194,7 +194,7 @@ func MakeGroupConcat(
 	return newGroupConcatExec(mg, info, separator)
 }
 
-func MakeCount(
+func makeCount(
 	mg AggMemoryManager,
 	aggID int64, isDistinct bool,
 	param types.Type) AggFuncExec {

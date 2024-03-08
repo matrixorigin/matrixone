@@ -21,7 +21,7 @@ import (
 
 /*
 	methods to register the aggregation function.
-	after registered, the function `MakeAgg` can make the aggregation function executor.
+	after registered, the function `makeSingleAgg` can make the aggregation function executor.
 */
 
 // todo: the implementation argument should deliver the returnType maybe ?
@@ -170,7 +170,12 @@ var (
 	aggIdOfGroupConcat = int64(-3)
 	groupConcatSep     = ","
 	getCroupConcatRet  = func(args ...types.Type) types.Type {
-		return types.T_blob.ToType()
+		for _, p := range args {
+			if p.Oid == types.T_binary || p.Oid == types.T_varbinary || p.Oid == types.T_blob {
+				return types.T_blob.ToType()
+			}
+		}
+		return types.T_text.ToType()
 	}
 )
 
