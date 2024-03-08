@@ -94,4 +94,12 @@ var (
 			Name:      "connections_need_to_transfer",
 			Help:      "Proxy connections need to transfer",
 		})
+
+	ProxyConnectionsTransferIntentGauge = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "mo",
+			Subsystem: "proxy",
+			Name:      "connections_transfer_intent",
+			Help:      "Proxy connections in transfer intent state",
+		})
 )
