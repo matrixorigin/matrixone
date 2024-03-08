@@ -135,6 +135,8 @@ func GetService() Service {
 type txnEventService interface {
 	TxnCreated(op client.TxnOperator)
 	TxnExecSQL(op client.TxnOperator, sql string)
+	TxnNoConflictChanged(op client.TxnOperator, tableID uint64, lockedAt, newSnapshotTS timestamp.Timestamp)
+	TxnConflictChanged(op client.TxnOperator, tableID uint64, lastCommitAt timestamp.Timestamp)
 	TxnUpdateSnapshot(op client.TxnOperator, tableID uint64, why string)
 	TxnCommit(op client.TxnOperator, entries []*api.Entry)
 	TxnRead(op client.TxnOperator, snapshotTS timestamp.Timestamp, tableID uint64, columns []string, bat *batch.Batch)
