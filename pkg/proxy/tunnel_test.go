@@ -260,9 +260,10 @@ func TestTunnelClose(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 
 	ctx := context.Background()
+	rt := runtime.DefaultRuntime()
 	for _, withRun := range []bool{true, false} {
 		t.Run(fmt.Sprintf("withRun=%t", withRun), func(t *testing.T) {
-			f := newTunnel(ctx, nil, nil)
+			f := newTunnel(ctx, rt.Logger(), nil)
 			defer f.Close()
 
 			if withRun {
@@ -288,11 +289,12 @@ func TestTunnelClose(t *testing.T) {
 func TestTunnelReplaceConn(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 
+	rt := runtime.DefaultRuntime()
 	ctx := context.Background()
 	clientProxy, client := net.Pipe()
 	serverProxy, server := net.Pipe()
 
-	tu := newTunnel(ctx, nil, nil)
+	tu := newTunnel(ctx, rt.Logger(), nil)
 	defer tu.Close()
 
 	cc := newMockClientConn(clientProxy, "t1", clientInfo{}, nil, tu)
@@ -344,9 +346,14 @@ func TestPipeCancelError(t *testing.T) {
 	defer clientProxy.Close()
 	defer serverProxy.Close()
 
+	rt := runtime.DefaultRuntime()
+	runtime.SetupProcessLevelRuntime(rt)
+	logger := rt.Logger()
+	tun := newTunnel(ctx, logger, newCounterSet())
+
 	cc := newMySQLConn("client", clientProxy, 0, nil, nil)
 	sc := newMySQLConn("server", serverProxy, 0, nil, nil)
-	p := newPipe("client to server", cc, sc)
+	p := tun.newPipe(pipeClientToServer, cc, sc)
 	err := p.kickoff(ctx)
 	require.EqualError(t, err, context.Canceled.Error())
 	p.mu.Lock()
@@ -368,9 +375,15 @@ func TestPipeStart(t *testing.T) {
 	clientProxy, serverProxy := net.Pipe()
 	defer clientProxy.Close()
 	defer serverProxy.Close()
+
+	rt := runtime.DefaultRuntime()
+	runtime.SetupProcessLevelRuntime(rt)
+	logger := rt.Logger()
+	tun := newTunnel(ctx, logger, newCounterSet())
+
 	cc := newMySQLConn("client", clientProxy, 0, nil, nil)
 	sc := newMySQLConn("server", serverProxy, 0, nil, nil)
-	p := newPipe("client to server", cc, sc)
+	p := tun.newPipe(pipeClientToServer, cc, sc)
 
 	errCh := make(chan error)
 	go func() {
@@ -407,9 +420,14 @@ func TestPipeStartAndPause(t *testing.T) {
 	defer clientProxy.Close()
 	defer serverProxy.Close()
 
+	rt := runtime.DefaultRuntime()
+	runtime.SetupProcessLevelRuntime(rt)
+	logger := rt.Logger()
+	tun := newTunnel(ctx, logger, newCounterSet())
+
 	cc := newMySQLConn("client", clientProxy, 0, nil, nil)
 	sc := newMySQLConn("server", serverProxy, 0, nil, nil)
-	p := newPipe("client to server", cc, sc)
+	p := tun.newPipe(pipeClientToServer, cc, sc)
 
 	errCh := make(chan error, 2)
 	go func() { errCh <- p.kickoff(ctx) }()
@@ -454,9 +472,14 @@ func TestPipeMultipleStartAndPause(t *testing.T) {
 	defer serverProxy.Close()
 	defer server.Close()
 
+	rt := runtime.DefaultRuntime()
+	runtime.SetupProcessLevelRuntime(rt)
+	logger := rt.Logger()
+	tun := newTunnel(ctx, logger, newCounterSet())
+
 	cc := newMySQLConn("client", clientProxy, 0, nil, nil)
 	sc := newMySQLConn("server", serverProxy, 0, nil, nil)
-	p := newPipe("client to server", cc, sc)
+	p := tun.newPipe(pipeClientToServer, cc, sc)
 
 	const (
 		queryCount  = 100
@@ -608,7 +631,8 @@ func TestReplaceServerConn(t *testing.T) {
 	clientProxy, client := net.Pipe()
 	serverProxy, _ := net.Pipe()
 
-	tu := newTunnel(ctx, nil, nil)
+	rt := runtime.DefaultRuntime()
+	tu := newTunnel(ctx, rt.Logger(), nil)
 	defer func() {
 		require.NoError(t, tu.Close())
 	}()
