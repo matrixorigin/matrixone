@@ -38,7 +38,7 @@ func (ts TS) Logical() uint32 {
 	return DecodeUint32(ts[:4])
 }
 
-func (ts TS) IsEmpty() bool {
+func (ts *TS) IsEmpty() bool {
 	p := DecodeInt64(ts[4:12])
 	if p != 0 {
 		return false
