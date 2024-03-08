@@ -3582,7 +3582,7 @@ func (c *Compile) determinExpandRanges(n *plan.Node, rel engine.Relation) bool {
 	return false
 }
 
-func (c *Compile) expandRanges(n *plan.Node, rel engine.Relation) (engine.Ranges, error) {
+func (c *Compile) expandRanges(n *plan.Node, rel engine.Relation, blockFilterList []*plan.Expr) (engine.Ranges, error) {
 	var err error
 	var db engine.Database
 	var ranges engine.Ranges
@@ -3601,7 +3601,7 @@ func (c *Compile) expandRanges(n *plan.Node, rel engine.Relation) (engine.Ranges
 	if err != nil {
 		return nil, err
 	}
-	ranges, err = rel.Ranges(ctx, n.BlockFilterList)
+	ranges, err = rel.Ranges(ctx, blockFilterList)
 	if err != nil {
 		return nil, err
 	}
@@ -3705,7 +3705,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 	}
 
 	if c.determinExpandRanges(n, rel) {
-		ranges, err = c.expandRanges(n, rel)
+		ranges, err = c.expandRanges(n, rel, n.BlockFilterList)
 		if err != nil {
 			return nil, nil, nil, err
 		}
