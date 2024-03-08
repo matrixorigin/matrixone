@@ -57,6 +57,12 @@ func UnmarshalAggFuncExec(
 	//	return nil, moerr.NewInternalErrorNoCtx("Unmarshal agg exec failed, unknown exec type %d", encoded.GetExecType())
 	//}
 
+	if encoded.GetExecType() == EncodedAggExecType_special_group_concat {
+		if len(encoded.Groups) > 0 && len(encoded.Groups[0]) > 0 {
+			exec.(*groupConcatExec).separator = encoded.Groups[0]
+		}
+	}
+
 	if err := exec.unmarshal(encoded.Result, encoded.Groups); err != nil {
 		exec.Free()
 		return nil, err

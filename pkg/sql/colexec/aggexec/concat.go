@@ -99,7 +99,8 @@ func (exec *groupConcatExec) BatchFill(offset int, groups []uint64, vectors []*v
 }
 
 func (exec *groupConcatExec) SetPreparedResult(partialResult any, groupIndex int) {
-	panic("partial result is not supported for group_concat")
+	// todo: too bad here.
+	exec.separator = partialResult.([]byte)
 }
 
 func (exec *groupConcatExec) merge(other *groupConcatExec, idx1, idx2 int) error {

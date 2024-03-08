@@ -1064,7 +1064,7 @@ func constructWindow(ctx context.Context, n *plan.Node, proc *process.Process) *
 		distinct := (uint64(f.F.Func.Obj) & function.Distinct) != 0
 		obj := int64(uint64(f.F.Func.Obj) & function.DistinctMask)
 		var e *plan.Expr = nil
-		var cfg []byte
+		var cfg []byte = nil
 
 		if len(f.F.Args) > 0 {
 
@@ -1143,7 +1143,7 @@ func constructSample(n *plan.Node, outputRowCount bool) *sample.Argument {
 
 func constructGroup(ctx context.Context, n, cn *plan.Node, ibucket, nbucket int, needEval bool, shuffleDop int, proc *process.Process) *group.Argument {
 	aggs := make([]agg.Aggregate, len(n.AggList))
-	var cfg []byte
+	var cfg []byte = nil
 	for i, expr := range n.AggList {
 		if f, ok := expr.Expr.(*plan.Expr_F); ok {
 			distinct := (uint64(f.F.Func.Obj) & function.Distinct) != 0
