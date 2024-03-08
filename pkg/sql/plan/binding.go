@@ -37,7 +37,7 @@ func NewBinding(tag, nodeID int32, table string, tableID uint64, cols []string, 
 		types:          types,
 		refCnts:        make([]uint, len(cols)),
 		isClusterTable: isClusterTable,
-		defaultVals:    defaultVals,
+		defaults:       defaultVals,
 	}
 
 	binding.colIdByName = make(map[string]int32)
