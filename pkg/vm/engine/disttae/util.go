@@ -1387,18 +1387,18 @@ func (i *StatsBlkIter) Entry() objectio.BlockInfo {
 }
 
 func ForeachCommittedObjects(
-	createObjs []objectio.ObjectNameShort,
-	delObjs []objectio.ObjectNameShort,
+	createObjs map[objectio.ObjectNameShort]struct{},
+	delObjs map[objectio.ObjectNameShort]struct{},
 	p *logtailreplay.PartitionState,
 	onObj func(info logtailreplay.ObjectInfo) error) (err error) {
-	for _, obj := range createObjs {
+	for obj := range createObjs {
 		if objInfo, ok := p.GetObject(obj); ok {
 			if err = onObj(objInfo); err != nil {
 				return
 			}
 		}
 	}
-	for _, obj := range delObjs {
+	for obj := range delObjs {
 		if objInfo, ok := p.GetObject(obj); ok {
 			if err = onObj(objInfo); err != nil {
 				return
