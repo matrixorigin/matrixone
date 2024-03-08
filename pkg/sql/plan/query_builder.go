@@ -1419,6 +1419,17 @@ func (builder *QueryBuilder) rewriteStarApproxCount(nodeID int32) {
 	}
 }
 
+func (builder *QueryBuilder) optimizeDML(rootID int32) int32 {
+	builder.skipStats = false
+	ReCalcNodeStats(rootID, builder, true, true, true)
+	builder.determineBuildAndProbeSide(rootID, true)
+	// XXX: This will be removed soon, after merging implementation of all hash-join operators
+	builder.swapJoinChildren(rootID)
+	builder.generateRuntimeFilters(rootID)
+	ReCalcNodeStats(rootID, builder, true, false, false)
+	return rootID
+}
+
 func (builder *QueryBuilder) createQuery() (*Query, error) {
 	colRefBool := make(map[[2]int32]bool)
 	sinkColRef := make(map[[2]int32]int)

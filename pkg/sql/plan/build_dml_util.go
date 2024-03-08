@@ -2948,6 +2948,7 @@ func appendDeleteUniqueTablePlan(
 		OnList:      joinConds,
 		ProjectList: projectList,
 	}, bindCtx)
+	lastNodeId = builder.optimizeDML(lastNodeId)
 	return lastNodeId, nil
 }
 
