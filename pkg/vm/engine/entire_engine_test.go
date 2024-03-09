@@ -426,3 +426,7 @@ func (o *testOperator) TxnOptions() txn.TxnOptions {
 func (o *testOperator) NextSequence() uint64 {
 	panic("should not call")
 }
+
+func (o *testOperator) EnterRunSql() {}
+
+func (o *testOperator) ExitRunSql() {}

@@ -596,7 +596,7 @@ func (client *txnClient) startLeakChecker() {
 
 func (client *txnClient) addToLeakCheck(op *txnOperator) {
 	if client.leakChecker != nil {
-		client.leakChecker.txnOpened(op.txnID, op.options)
+		client.leakChecker.txnOpened(op, op.txnID, op.options)
 	}
 }
 

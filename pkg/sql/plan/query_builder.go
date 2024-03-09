@@ -2274,6 +2274,15 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 			}, ctx)
 		}
 
+		ctx.groupTag = builder.genNewTag()
+		ctx.aggregateTag = builder.genNewTag()
+		ctx.projectTag = builder.genNewTag()
+		ctx.windowTag = builder.genNewTag()
+		ctx.sampleTag = builder.genNewTag()
+		if astTimeWindow != nil {
+			ctx.timeTag = builder.genNewTag() // ctx.timeTag > 0
+		}
+
 		// Preprocess aliases
 		for i := range selectList {
 			selectList[i].Expr, err = ctx.qualifyColumnNames(selectList[i].Expr, NoAlias)
@@ -2289,15 +2298,6 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 					astExpr: selectList[i].Expr,
 				}
 			}
-		}
-
-		ctx.groupTag = builder.genNewTag()
-		ctx.aggregateTag = builder.genNewTag()
-		ctx.projectTag = builder.genNewTag()
-		ctx.windowTag = builder.genNewTag()
-		ctx.sampleTag = builder.genNewTag()
-		if astTimeWindow != nil {
-			ctx.timeTag = builder.genNewTag() // ctx.timeTag > 0
 		}
 
 		// bind GROUP BY clause
@@ -3535,7 +3535,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 					SchemaName:      tree.Identifier(""),
 					ExplicitCatalog: false,
 					ExplicitSchema:  false,
-				})
+				}, nil)
 				return builder.buildTable(newTableName, ctx, preNodeId, leftCtx)
 			}
 		}
