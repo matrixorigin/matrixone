@@ -19,6 +19,7 @@ import (
 	"context"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -184,6 +185,12 @@ func WithDisableTrace(value bool) TxnOption {
 	}
 }
 
+func WithSessionInfo(info string) TxnOption {
+	return func(tc *txnOperator) {
+		tc.options.SessionInfo = info
+	}
+}
+
 type txnOperator struct {
 	sender               rpc.TxnSender
 	waiter               *waiter
@@ -212,6 +219,10 @@ type txnOperator struct {
 		lockSeq      uint64
 		waitLocks    map[uint64]Lock
 	}
+
+	commitCounter   counter
+	rollbackCounter counter
+	runSqlCounter   counter
 }
 
 func newTxnOperator(
@@ -454,6 +465,8 @@ func (tc *txnOperator) WriteAndCommit(ctx context.Context, requests []txn.TxnReq
 }
 
 func (tc *txnOperator) Commit(ctx context.Context) (err error) {
+	tc.commitCounter.addEnter()
+	defer tc.commitCounter.addExit()
 	txn := tc.getTxnMeta(false)
 	util.LogTxnCommit(txn)
 
@@ -487,6 +500,8 @@ func (tc *txnOperator) Commit(ctx context.Context) (err error) {
 }
 
 func (tc *txnOperator) Rollback(ctx context.Context) (err error) {
+	tc.rollbackCounter.addEnter()
+	defer tc.rollbackCounter.addExit()
 	v2.TxnRollbackCounter.Inc()
 	txnMeta := tc.getTxnMeta(false)
 	util.LogTxnRollback(txnMeta)
@@ -1164,4 +1179,31 @@ func (tc *txnOperator) doCostAction(
 			err,
 			time.Since(startAt)))
 	return cost, err
+}
+
+func (tc *txnOperator) EnterRunSql() {
+	tc.runSqlCounter.addEnter()
+}
+
+func (tc *txnOperator) ExitRunSql() {
+	tc.runSqlCounter.addExit()
+}
+
+func (tc *txnOperator) inRunSql() bool {
+	return tc.runSqlCounter.more()
+}
+
+func (tc *txnOperator) inCommit() bool {
+	return tc.commitCounter.more()
+}
+
+func (tc *txnOperator) inRollback() bool {
+	return tc.rollbackCounter.more()
+}
+
+func (tc *txnOperator) counter() string {
+	return fmt.Sprintf("commit: %s rollback: %s runSql: %s",
+		tc.commitCounter.String(),
+		tc.rollbackCounter.String(),
+		tc.runSqlCounter.String())
 }
