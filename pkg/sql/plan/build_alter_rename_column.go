@@ -101,6 +101,12 @@ func RenameColumn(ctx CompilerContext, alterPlan *plan.AlterTable, spec *tree.Al
 		tmpCol.Name = newColName
 	}
 
+	alterCtx.UpdateSqls = append(alterCtx.UpdateSqls,
+		getSqlForRenameColumn(alterPlan.Database,
+			alterPlan.TableDef.Name,
+			originalColName,
+			newColName)...)
+
 	return nil
 }
 

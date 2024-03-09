@@ -51,6 +51,9 @@ const (
 	// versions are upgraded, it may be necessary to upgrade all tenant-related metadata.
 	// This table is used to record all the tenant records that need to be upgraded
 	MOUpgradeTenantTable = "mo_upgrade_tenant"
+
+	// MOForeignKeys saves the fk relationships
+	MOForeignKeys = "mo_foreign_keys"
 )
 
 var InternalColumns = map[string]int8{
