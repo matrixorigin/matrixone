@@ -199,7 +199,7 @@ func CompileFilterExprs(
 	ops2 := make([]LoadOp, 0, len(exprs))
 	ops3 := make([]ObjectFilterOp, 0, len(exprs))
 	ops4 := make([]BlockFilterOp, 0, len(exprs))
-	ops5 := make([]SeekFirstBlockOp, len(exprs))
+	ops5 := make([]SeekFirstBlockOp, 0, len(exprs))
 
 	for _, expr := range exprs {
 		expr_op1, expr_op2, expr_op3, expr_op4, expr_op5, can := CompileFilterExpr(expr, proc, tableDef, fs)
@@ -1068,7 +1068,7 @@ func ExecuteBlockFilter(
 						quickBreak, ok2 bool
 					)
 					blkMeta = dataMeta.GetBlockMeta(uint32(pos))
-					if quickBreak, ok2, err2 = blockFilterOp(pos, blkMeta, bf); err != nil {
+					if quickBreak, ok2, err2 = blockFilterOp(pos, blkMeta, bf); err2 != nil {
 						return
 
 					}
@@ -1115,7 +1115,7 @@ func ExecuteBlockFilter(
 					}
 					blk.PartitionNum = -1
 					outBlocks.AppendBlockInfo(blk)
-					return
+					continue
 				}
 				// store the block in ranges
 				blk.CanRemote = true
