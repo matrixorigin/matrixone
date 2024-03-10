@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -1061,11 +1062,12 @@ func ExecuteBlockFilter(
 			}
 
 			for ; pos < blockCnt; pos++ {
-				blkMeta := dataMeta.GetBlockMeta(uint32(pos))
-				if blockFilterOp != nil {
+				var blkMeta objectio.BlockObject
+				if dataMeta != nil && blockFilterOp != nil {
 					var (
 						quickBreak, ok2 bool
 					)
+					blkMeta = dataMeta.GetBlockMeta(uint32(pos))
 					if quickBreak, ok2, err2 = blockFilterOp(pos, blkMeta, bf); err != nil {
 						return
 
@@ -1079,7 +1081,17 @@ func ExecuteBlockFilter(
 						continue
 					}
 				}
-				loc := objectio.BuildLocation(name, extent, blkMeta.GetRows(), uint16(pos))
+				var rows uint32
+				if blkMeta != nil {
+					rows = blkMeta.GetRows()
+				} else {
+					if pos < blockCnt-1 {
+						rows = options.DefaultBlockMaxRows
+					} else {
+						rows = objStats.Rows() - options.DefaultBlockMaxRows*uint32(pos)
+					}
+				}
+				loc := objectio.BuildLocation(name, extent, rows, uint16(pos))
 				blk := objectio.BlockInfo{
 					BlockID:   *objectio.BuildObjectBlockid(name, uint16(pos)),
 					SegmentID: name.SegmentId(),
