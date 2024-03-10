@@ -2899,22 +2899,28 @@ func SplitPart(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 				return
 			}
 
-			res := SplitSingle(string(v1), string(v2), v3)
-			if err = rs.AppendBytes([]byte(res), false); err != nil {
-				return err
+			res, isNull := SplitSingle(string(v1), string(v2), v3)
+			if isNull {
+				if err = rs.AppendBytes(nil, true); err != nil {
+					return err
+				}
+			} else {
+				if err = rs.AppendBytes([]byte(res), false); err != nil {
+					return err
+				}
 			}
 		}
 	}
 	return nil
 }
 
-func SplitSingle(str, sep string, cnt uint32) string {
+func SplitSingle(str, sep string, cnt uint32) (string, bool) {
 	expectedLen := int(cnt + 1)
 	strSlice := strings.SplitN(str, sep, expectedLen)
 	if len(strSlice) < int(cnt) {
-		return ""
+		return "", true
 	}
-	return strSlice[cnt-1]
+	return strSlice[cnt-1], false
 }
 
 func InnerProductArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
