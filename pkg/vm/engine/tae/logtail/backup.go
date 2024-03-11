@@ -139,6 +139,16 @@ func addObjectToObjectData(
 		object.obj.tid = tid
 		object.obj.delete = isDelete
 		object.obj.isABlock = isABlk
+		if isABlk {
+			object.data[0] = &blockData{
+				num:       0,
+				location:  stats.ObjectLocation(),
+				blockType: objectio.SchemaData,
+				isABlock:  true,
+				tid:       tid,
+				sortKey:   uint16(math.MaxUint16),
+			}
+		}
 		(*objectsData)[name] = object
 		if !isTN {
 			if isDelete {
@@ -681,6 +691,7 @@ func ReWriteCheckpointAndBlockFromKey(
 			}
 			addBlockToObjectData(deltaLoc, isABlk, true, i,
 				blkMetaInsTxnBatTid.Get(i).(uint64), blkID, objectio.SchemaTombstone, &objectsData)
+			objectsData[name.String()].data[blkID.Sequence()].blockId = blkID
 			objectsData[name.String()].data[blkID.Sequence()].tombstone = objectsData[deltaLoc.Name().String()].data[deltaLoc.ID()]
 		} else {
 			addBlockToObjectData(deltaLoc, isABlk, false, i,
