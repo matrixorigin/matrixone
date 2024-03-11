@@ -694,7 +694,12 @@ func ReWriteCheckpointAndBlockFromKey(
 				blkMetaInsTxnBatTid.Get(i).(uint64), blkID, objectio.SchemaTombstone, &objectsData)
 			objectsData[name.String()].data[blkID.Sequence()].blockId = blkID
 			objectsData[name.String()].data[blkID.Sequence()].tombstone = objectsData[deltaLoc.Name().String()].data[deltaLoc.ID()]
-			objectsData[name.String()].data[blkID.Sequence()].deleteRow = []int{i}
+			if len(objectsData[name.String()].data[blkID.Sequence()].deleteRow) > 0 {
+				logutil.Infof("deleteRow is not empty: %v", objectsData[name.String()].data[blkID.Sequence()].deleteRow)
+				objectsData[name.String()].data[blkID.Sequence()].deleteRow = append(objectsData[name.String()].data[blkID.Sequence()].deleteRow, i)
+			} else {
+				objectsData[name.String()].data[blkID.Sequence()].deleteRow = []int{i}
+			}
 		} else {
 
 			if objectsData[name.String()] != nil {
