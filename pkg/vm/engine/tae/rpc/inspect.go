@@ -73,7 +73,7 @@ func initCommand(ctx context.Context, inspectCtx *inspectContext) *cobra.Command
 	object := &objStatArg{}
 	rootCmd.AddCommand(object.PrepareCommand())
 
-	policy := &compactPolicyArg{}
+	policy := &mergePolicyArg{}
 	rootCmd.AddCommand(policy.PrepareCommand())
 
 	mmerge := &manuallyMergeArg{}
@@ -607,7 +607,7 @@ func (c *manuallyMergeArg) Run() error {
 	return nil
 }
 
-type compactPolicyArg struct {
+type mergePolicyArg struct {
 	ctx              *inspectContext
 	tbl              *catalog.TableEntry
 	maxMergeObjN     int32
@@ -616,7 +616,7 @@ type compactPolicyArg struct {
 	hints            []api.MergeHint
 }
 
-func (c *compactPolicyArg) PrepareCommand() *cobra.Command {
+func (c *mergePolicyArg) PrepareCommand() *cobra.Command {
 	policyCmd := &cobra.Command{
 		Use:   "policy",
 		Short: "set merge policy for table",
@@ -629,7 +629,7 @@ func (c *compactPolicyArg) PrepareCommand() *cobra.Command {
 	return policyCmd
 }
 
-func (c *compactPolicyArg) FromCommand(cmd *cobra.Command) (err error) {
+func (c *mergePolicyArg) FromCommand(cmd *cobra.Command) (err error) {
 	c.ctx = cmd.Flag("ictx").Value.(*inspectContext)
 
 	address, _ := cmd.Flags().GetString("target")
@@ -650,7 +650,7 @@ func (c *compactPolicyArg) FromCommand(cmd *cobra.Command) (err error) {
 	return nil
 }
 
-func (c *compactPolicyArg) String() string {
+func (c *mergePolicyArg) String() string {
 	t := "*"
 	if c.tbl != nil {
 		t = fmt.Sprintf("%d-%s", c.tbl.ID, c.tbl.GetLastestSchemaLocked().Name)
@@ -661,7 +661,7 @@ func (c *compactPolicyArg) String() string {
 	)
 }
 
-func (c *compactPolicyArg) Run() error {
+func (c *mergePolicyArg) Run() error {
 	if c.tbl == nil {
 		common.RuntimeMaxMergeObjN.Store(c.maxMergeObjN)
 		common.RuntimeMinRowsQualified.Store(c.minRowsQualified)
