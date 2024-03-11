@@ -1096,3 +1096,9 @@ func (p *PartitionState) truncate(ids [2]uint64, ts types.TS) {
 		logutil.Infof("GC partition_state at %v for table %d:%s", ts.ToString(), ids[1], objsToDelete)
 	}
 }
+
+func (p *PartitionState) LastFlushTimestamp() types.TS {
+	p.shared.Lock()
+	defer p.shared.Unlock()
+	return p.shared.lastFlushTimestamp
+}

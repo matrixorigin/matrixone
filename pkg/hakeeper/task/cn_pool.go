@@ -105,7 +105,7 @@ func (p *cnPool) min() cnStore {
 
 func (p *cnPool) remove(key string) {
 	delete(p.freq, key)
-	slices.DeleteFunc(p.sortedCN, func(store cnStore) bool {
+	p.sortedCN = slices.DeleteFunc(p.sortedCN, func(store cnStore) bool {
 		return store.uuid == key
 	})
 }

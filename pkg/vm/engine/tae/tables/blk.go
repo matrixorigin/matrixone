@@ -182,10 +182,12 @@ func (blk *block) estimateRawScore() (score int, dropped bool) {
 		return
 	}
 	changeCnt := uint32(0)
+	blk.RLock()
 	objectMVCC := blk.tryGetMVCC()
 	if objectMVCC != nil {
 		changeCnt = objectMVCC.GetChangeIntentionCnt()
 	}
+	blk.RUnlock()
 	if changeCnt == 0 {
 		// No deletes found
 		score = 0

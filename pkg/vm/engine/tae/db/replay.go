@@ -157,7 +157,8 @@ func (replayer *Replayer) OnReplayTxn(cmd txnif.TxnCmd, lsn uint64) {
 	var err error
 	replayer.readCount++
 	txnCmd := cmd.(*txnbase.TxnCmd)
-	if txnCmd.PrepareTS.LessEq(replayer.maxTs) {
+	// If WAL entry splits, they share same prepareTS
+	if txnCmd.PrepareTS.Less(replayer.maxTs) {
 		return
 	}
 	replayer.applyCount++

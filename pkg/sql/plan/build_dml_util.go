@@ -16,11 +16,13 @@ package plan
 
 import (
 	"context"
+	"fmt"
+	"github.com/google/uuid"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"strings"
 	"sync"
-
-	"github.com/google/uuid"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -79,6 +81,7 @@ type dmlPlanCtx struct {
 	insertColPos           []int
 	updateColPosMap        map[string]int
 	allDelTableIDs         map[uint64]struct{}
+	allDelTables           map[FkReferKey]struct{}
 	isFkRecursionCall      bool //if update plan was recursion called by parent table( ref foreign key), we do not check parent's foreign key contraint
 	lockTable              bool //we need lock table in stmt: delete from tbl
 	checkInsertPkDup       bool //if we need check for duplicate values in insert batch.  eg:insert into t values (1).  load data will not check
@@ -316,7 +319,13 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 	if err != nil {
 		return err
 	}
-	if len(delCtx.tableDef.RefChildTbls) > 0 ||
+
+	enabled, err := IsForeignKeyChecksEnabled(ctx)
+	if err != nil {
+		return err
+	}
+
+	if enabled && len(delCtx.tableDef.RefChildTbls) > 0 ||
 		delCtx.tableDef.ViewSql != nil ||
 		(util.TableIsClusterTable(delCtx.tableDef.GetTableType()) && accountId != catalog.System_Account) ||
 		delCtx.objRef.PubInfo != nil {
@@ -776,7 +785,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 	builder.appendStep(lastNodeId)
 
 	// if some table references to this table
-	if len(delCtx.tableDef.RefChildTbls) > 0 {
+	if enabled && len(delCtx.tableDef.RefChildTbls) > 0 {
 		nameTypMap := make(map[string]*plan.Type)
 		idNameMap := make(map[uint64]string)
 		nameIdxMap := make(map[string]int32)
@@ -2108,6 +2117,9 @@ func appendJoinNodeForParentFkCheck(builder *QueryBuilder, bindCtx *BindContext,
 		}
 
 		parentObjRef, parentTableDef := builder.compCtx.ResolveById(fk.ForeignTbl)
+		if parentTableDef == nil {
+			return -1, moerr.NewInternalError(builder.GetContext(), "parent table %d not found", fk.ForeignTbl)
+		}
 		newTableDef := DeepCopyTableDef(parentTableDef, false)
 		joinConds := make([]*plan.Expr, 0)
 		for _, col := range parentTableDef.Cols {
@@ -3791,4 +3803,308 @@ func adjustConstraintName(ctx context.Context, def *tree.ForeignKey) error {
 		}
 	}
 	return nil
+}
+
+func runSql(ctx CompilerContext, sql string) (executor.Result, error) {
+	v, ok := moruntime.ProcessLevelRuntime().GetGlobalVariables(moruntime.InternalSQLExecutor)
+	if !ok {
+		panic("missing lock service")
+	}
+	proc := ctx.GetProcess()
+	exec := v.(executor.SQLExecutor)
+	opts := executor.Options{}.
+		// All runSql and runSqlWithResult is a part of input sql, can not incr statement.
+		// All these sub-sql's need to be rolled back and retried en masse when they conflict in pessimistic mode
+		WithDisableIncrStatement().
+		WithTxn(proc.TxnOperator).
+		WithDatabase(proc.SessionInfo.Database).
+		WithTimeZone(proc.SessionInfo.TimeZone).
+		WithAccountID(proc.SessionInfo.AccountId)
+	return exec.Exec(proc.Ctx, sql, opts)
+}
+
+/*
+Example on FkReferKey and FkReferDef:
+
+	In database `test`:
+
+		create table t1(a int,primary key(a));
+
+		create table t2(b int, constraint c1 foreign key(b) references t1(a));
+
+	So, the structure FkReferDef below denotes such relationships : test.t2(b) -> test.t1(a)
+	FkReferKey holds : db = test, tbl = t2
+
+*/
+
+// FkReferKey holds the database and table name of the foreign key
+type FkReferKey struct {
+	Db  string //fk database name
+	Tbl string //fk table name
+}
+
+// FkReferDef holds the definition & details of the foreign key
+type FkReferDef struct {
+	Db       string //fk database name
+	Tbl      string //fk table name
+	Name     string //fk constraint name
+	Col      string //fk column name
+	ReferCol string //referenced column name
+	OnDelete string //on delete action
+	OnUpdate string //on update action
+}
+
+func (fk FkReferDef) String() string {
+	return fmt.Sprintf("%s.%s %s %s => %s",
+		fk.Db, fk.Tbl, fk.Name, fk.Col, fk.ReferCol)
+}
+
+// GetSqlForFkReferredTo returns the query that retrieves the fk relationships
+// that refer to the table
+func GetSqlForFkReferredTo(db, table string) string {
+	return fmt.Sprintf(
+		"select "+
+			"db_name, "+
+			"table_name, "+
+			"constraint_name, "+
+			"column_name, "+
+			"refer_column_name, "+
+			"on_delete, "+
+			"on_update "+
+			"from "+
+			"`mo_catalog`.`mo_foreign_keys` "+
+			"where "+
+			"refer_db_name = '%s' and refer_table_name = '%s' "+
+			" and "+
+			"(db_name != '%s' or db_name = '%s' and table_name != '%s') "+
+			"order by db_name, table_name, constraint_name;",
+		db, table, db, db, table)
+}
+
+// GetFkReferredTo returns the foreign key relationships that refer to the table
+func GetFkReferredTo(ctx CompilerContext, db, table string) (map[FkReferKey]map[string][]*FkReferDef, error) {
+	//exclude fk self reference
+	sql := GetSqlForFkReferredTo(db, table)
+	res, err := runSql(ctx, sql)
+	if err != nil {
+		return nil, err
+	}
+	defer res.Close()
+	ret := make(map[FkReferKey]map[string][]*FkReferDef)
+	const dbIdx = 0
+	const tblIdx = 1
+	const nameIdx = 2
+	const colIdx = 3
+	const referColIdx = 4
+	const deleteIdx = 5
+	const updateIdx = 6
+	if res.Batches != nil {
+		for _, batch := range res.Batches {
+			if batch != nil &&
+				batch.Vecs[0] != nil &&
+				batch.Vecs[0].Length() > 0 {
+				for i := 0; i < batch.Vecs[0].Length(); i++ {
+					fk := &FkReferDef{
+						Db:       string(batch.Vecs[dbIdx].GetBytesAt(i)),
+						Tbl:      string(batch.Vecs[tblIdx].GetBytesAt(i)),
+						Name:     string(batch.Vecs[nameIdx].GetBytesAt(i)),
+						Col:      string(batch.Vecs[colIdx].GetBytesAt(i)),
+						ReferCol: string(batch.Vecs[referColIdx].GetBytesAt(i)),
+						OnDelete: string(batch.Vecs[deleteIdx].GetBytesAt(i)),
+						OnUpdate: string(batch.Vecs[updateIdx].GetBytesAt(i)),
+					}
+					key := FkReferKey{Db: fk.Db, Tbl: fk.Tbl}
+					var constraint map[string][]*FkReferDef
+					var ok bool
+					if constraint, ok = ret[key]; !ok {
+						constraint = make(map[string][]*FkReferDef)
+						ret[key] = constraint
+					}
+					constraint[fk.Name] = append(constraint[fk.Name], fk)
+				}
+			}
+		}
+	}
+	return ret, nil
+}
+
+func convertIntoReferAction(s string) plan.ForeignKeyDef_RefAction {
+	switch strings.ToLower(s) {
+	case "cascade":
+		return plan.ForeignKeyDef_CASCADE
+	case "restrict":
+		return plan.ForeignKeyDef_RESTRICT
+	case "set null":
+		fallthrough
+	case "set_null":
+		return plan.ForeignKeyDef_SET_NULL
+	case "no_action":
+		fallthrough
+	case "no action":
+		return plan.ForeignKeyDef_NO_ACTION
+	case "set_default":
+		fallthrough
+	case "set default":
+		return plan.ForeignKeyDef_SET_DEFAULT
+	default:
+		return plan.ForeignKeyDef_RESTRICT
+	}
+}
+
+// getSqlForAddFk returns the insert sql that adds a fk relationship
+// into the mo_foreign_keys table
+func getSqlForAddFk(db, table string, data *FkData) string {
+	row := make([]string, 16)
+	rows := 0
+	sb := strings.Builder{}
+	sb.WriteString("insert into `mo_catalog`.`mo_foreign_keys`  ")
+	sb.WriteString(" values ")
+	for childIdx, childCol := range data.Cols.Cols {
+		row[0] = data.Def.Name
+		row[1] = "0"
+		row[2] = db
+		row[3] = "0"
+		row[4] = table
+		row[5] = "0"
+		row[6] = childCol
+		row[7] = "0"
+		row[8] = data.ParentDbName
+		row[9] = "0"
+		row[10] = data.ParentTableName
+		row[11] = "0"
+		row[12] = data.ColsReferred.Cols[childIdx]
+		row[13] = "0"
+		row[14] = data.Def.OnDelete.String()
+		row[15] = data.Def.OnUpdate.String()
+		{
+			if rows > 0 {
+				sb.WriteByte(',')
+			}
+			rows++
+			sb.WriteByte('(')
+			for j, col := range row {
+				if j > 0 {
+					sb.WriteByte(',')
+				}
+				sb.WriteByte('\'')
+				sb.WriteString(col)
+				sb.WriteByte('\'')
+			}
+			sb.WriteByte(')')
+		}
+	}
+	return sb.String()
+}
+
+// getSqlForDeleteTable returns the delete sql that deletes all the fk relationships from mo_foreign_keys
+// on the table
+func getSqlForDeleteTable(db, tbl string) string {
+	sb := strings.Builder{}
+	sb.WriteString("delete from `mo_catalog`.`mo_foreign_keys` where ")
+	sb.WriteString(fmt.Sprintf(
+		"db_name = '%s' and table_name = '%s'", db, tbl))
+	return sb.String()
+}
+
+// getSqlForDeleteConstraint returns the delete sql that deletes the fk constraint from mo_foreign_keys
+// on the table
+func getSqlForDeleteConstraint(db, tbl, constraint string) string {
+	sb := strings.Builder{}
+	sb.WriteString("delete from `mo_catalog`.`mo_foreign_keys` where ")
+	sb.WriteString(fmt.Sprintf(
+		"constraint_name = '%s' and db_name = '%s' and table_name = '%s'",
+		constraint, db, tbl))
+	return sb.String()
+}
+
+// getSqlForDeleteDB returns the delete sql that deletes all the fk relationships from mo_foreign_keys
+// on the database
+func getSqlForDeleteDB(db string) string {
+	sb := strings.Builder{}
+	sb.WriteString("delete from `mo_catalog`.`mo_foreign_keys` where ")
+	sb.WriteString(fmt.Sprintf("db_name = '%s'", db))
+	return sb.String()
+}
+
+// getSqlForRenameTable returns the sqls that rename the table of all fk relationships in mo_foreign_keys
+func getSqlForRenameTable(db, oldName, newName string) (ret []string) {
+	sb := strings.Builder{}
+	sb.WriteString("update `mo_catalog`.`mo_foreign_keys` ")
+	sb.WriteString(fmt.Sprintf("set table_name = '%s' ", newName))
+	sb.WriteString(fmt.Sprintf("where db_name = '%s' and table_name = '%s' ; ", db, oldName))
+	ret = append(ret, sb.String())
+
+	sb.Reset()
+	sb.WriteString("update `mo_catalog`.`mo_foreign_keys` ")
+	sb.WriteString(fmt.Sprintf("set refer_table_name = '%s' ", newName))
+	sb.WriteString(fmt.Sprintf("where refer_db_name = '%s' and refer_table_name = '%s' ; ", db, oldName))
+	ret = append(ret, sb.String())
+	return
+}
+
+// getSqlForRenameColumn returns the sqls that rename the column of all fk relationships in mo_foreign_keys
+func getSqlForRenameColumn(db, table, oldName, newName string) (ret []string) {
+	sb := strings.Builder{}
+	sb.WriteString("update `mo_catalog`.`mo_foreign_keys` ")
+	sb.WriteString(fmt.Sprintf("set column_name = '%s' ", newName))
+	sb.WriteString(fmt.Sprintf("where db_name = '%s' and table_name = '%s' and column_name = '%s' ; ",
+		db, table, oldName))
+	ret = append(ret, sb.String())
+
+	sb.Reset()
+	sb.WriteString("update `mo_catalog`.`mo_foreign_keys` ")
+	sb.WriteString(fmt.Sprintf("set refer_column_name = '%s' ", newName))
+	sb.WriteString(fmt.Sprintf("where refer_db_name = '%s' and refer_table_name = '%s' and refer_column_name = '%s' ; ",
+		db, table, oldName))
+	ret = append(ret, sb.String())
+	return
+}
+
+// getSqlForCheckHasDBRefersTo returns the sql that checks if the database has any foreign key relationships
+// that refer to it.
+func getSqlForCheckHasDBRefersTo(db string) string {
+	sb := strings.Builder{}
+	sb.WriteString("select count(*) > 0 from `mo_catalog`.`mo_foreign_keys` ")
+	sb.WriteString(fmt.Sprintf("where refer_db_name = '%s' and db_name != '%s';", db, db))
+	return sb.String()
+}
+
+// fkBannedDatabase denotes the databases that forbid the foreign keys
+// you can not define fk in these databases or
+// define fk refers to these databases.
+// for simplicity of the design
+var fkBannedDatabase = map[string]bool{
+	catalog.MO_CATALOG:        true,
+	catalog.MO_SYSTEM:         true,
+	catalog.MO_SYSTEM_METRICS: true,
+	catalog.MOTaskDB:          true,
+	"information_schema":      true,
+	"mysql":                   true,
+}
+
+// isFkBannedDatabase denotes the database should not have any
+// foreign keys
+func isFkBannedDatabase(db string) bool {
+	if _, has := fkBannedDatabase[db]; has {
+		return true
+	}
+	return false
+}
+
+// IsForeignKeyChecksEnabled returns the system variable foreign_key_checks is true or false
+func IsForeignKeyChecksEnabled(ctx CompilerContext) (bool, error) {
+	value, err := ctx.ResolveVariable("foreign_key_checks", true, false)
+	if err != nil {
+		return false, err
+	}
+	if value == nil {
+		return true, nil
+	}
+	if v, ok := value.(int64); ok {
+		return v == 1, nil
+	} else if v1, ok := value.(int8); ok {
+		return v1 == 1, nil
+	} else {
+		return false, moerr.NewInternalError(ctx.GetContext(), "invalid  %v ", value)
+	}
 }
