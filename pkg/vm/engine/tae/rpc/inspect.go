@@ -1188,8 +1188,12 @@ func storageUsageTransfer(c *storageUsageHistoryArg) (err error) {
 }
 
 func storageUsageEliminateErrors(c *storageUsageHistoryArg) (err error) {
-	cnt := logtail.EliminateErrorsOnCache(c.ctx.db.Catalog)
-
+	entries := c.ctx.db.BGCheckpointRunner.GetAllCheckpoints()
+	if len(entries) == 0 {
+		return moerr.NewNotSupportedNoCtx("please execute this cmd after at least one checkpoint has been generated")
+	}
+	end := entries[len(entries)-1].GetEnd()
+	cnt := logtail.EliminateErrorsOnCache(c.ctx.db.Catalog, end)
 	c.ctx.out.Write([]byte(fmt.Sprintf("%d tables backed to the track. ", cnt)))
 
 	return nil
