@@ -2896,7 +2896,7 @@ func appendDeleteUniqueTablePlan(
 			{
 				Tag: rfTag,
 				Expr: &plan.Expr{
-					Typ: *pkTyp,
+					Typ: pkTyp,
 					Expr: &plan.Expr_Col{
 						Col: &plan.ColRef{
 							Name: uniqueTableDef.Pkey.PkeyColName,
@@ -3005,7 +3005,7 @@ func appendDeleteUniqueTablePlan(
 				Tag:        rfTag,
 				UpperLimit: GetInFilterCardLimitOnPK(builder.qry.Nodes[rightId].Stats.TableCnt),
 				Expr: &plan.Expr{
-					Typ: *pkTyp,
+					Typ: pkTyp,
 					Expr: &plan.Expr_Col{
 						Col: &plan.ColRef{
 							RelPos: 0,

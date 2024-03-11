@@ -3556,7 +3556,7 @@ func buildFkDataOfForwardRefer(ctx CompilerContext,
 			//column name from tableDef
 			fkData.Cols.Cols[i] = colDef.Name
 			//column type from tableDef
-			fkData.ColTyps[i] = colDef.Typ
+			fkData.ColTyps[i] = &colDef.Typ
 		} else {
 			return nil, moerr.NewInternalError(ctx.GetContext(), "column '%v' no exists in table '%v'", fkDef.Col, fkDefs[0].Tbl)
 		}
