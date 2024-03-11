@@ -694,6 +694,7 @@ func ReWriteCheckpointAndBlockFromKey(
 				blkMetaInsTxnBatTid.Get(i).(uint64), blkID, objectio.SchemaTombstone, &objectsData)
 			objectsData[name.String()].data[blkID.Sequence()].blockId = blkID
 			objectsData[name.String()].data[blkID.Sequence()].tombstone = objectsData[deltaLoc.Name().String()].data[deltaLoc.ID()]
+			objectsData[name.String()].data[blkID.Sequence()].deleteRow = []int{i}
 		} else {
 			addBlockToObjectData(deltaLoc, isABlk, false, i,
 				blkMetaInsTxnBatTid.Get(i).(uint64), blkID, objectio.SchemaTombstone, &objectsData)
