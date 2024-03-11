@@ -105,5 +105,6 @@ show create table sys_tbl_1;
 Table    Create Table
 sys_tbl_1    CREATE TABLE `sys_tbl_1` (\n`b` DECIMAL(38,0) NOT NULL,\n`c` CHAR(1) DEFAULT NULL,\n`a` CHAR(1) NOT NULL,\n`d` VARCHAR(20) DEFAULT NULL,\nPRIMARY KEY (`a`,`b`),\nUNIQUE KEY `b` (`b`,`c`)\n)
 drop database sub1;
+drop account acc0;
 drop publication sys_pub_1;
 drop database sys_db_1;

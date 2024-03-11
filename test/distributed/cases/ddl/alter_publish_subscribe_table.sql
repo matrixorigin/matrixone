@@ -75,6 +75,7 @@ show create table sys_tbl_1;
 -- @session:id=2&user=acc0:root&password=111
 drop database sub1;
 -- @session
+drop account acc0;
 drop publication sys_pub_1;
 drop database sys_db_1;
 
