@@ -164,7 +164,7 @@ func (c *compilerContext) GetPrimaryKeyDef(
 	for _, key := range priKeys {
 		priDefs = append(priDefs, &plan.ColDef{
 			Name: key.Name,
-			Typ: &plan.Type{
+			Typ: plan.Type{
 				Id:    int32(key.Type.Oid),
 				Width: key.Type.Width,
 				Scale: key.Type.Scale,
@@ -287,7 +287,7 @@ func (c *compilerContext) getTableDef(
 			col := &plan.ColDef{
 				ColId: attr.Attr.ID,
 				Name:  attr.Attr.Name,
-				Typ: &plan.Type{
+				Typ: plan.Type{
 					Id:          int32(attr.Attr.Type.Oid),
 					Width:       attr.Attr.Type.Width,
 					Scale:       attr.Attr.Type.Scale,

@@ -155,7 +155,7 @@ func (builder *QueryBuilder) applyIndicesForFilters(nodeID int32, node *plan.Nod
 				col.ColPos = 0
 
 				idxColExpr := &plan.Expr{
-					Typ: *idxTableDef.Cols[0].Typ,
+					Typ: idxTableDef.Cols[0].Typ,
 					Expr: &plan.Expr_Col{
 						Col: &plan.ColRef{
 							RelPos: idxTag,
@@ -166,7 +166,7 @@ func (builder *QueryBuilder) applyIndicesForFilters(nodeID int32, node *plan.Nod
 
 				if !idxDef.Unique {
 					origType := fn.Args[0].Typ
-					fn.Args[0].Typ = *idxTableDef.Cols[0].Typ
+					fn.Args[0].Typ = idxTableDef.Cols[0].Typ
 					switch fn.Func.ObjName {
 					case "=":
 						fn.Args[1], _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", []*plan.Expr{fn.Args[1]})
@@ -333,7 +333,7 @@ END0:
 			}
 			idxFilter, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), funcName, []*plan.Expr{
 				{
-					Typ: *idxTableDef.Cols[0].Typ,
+					Typ: idxTableDef.Cols[0].Typ,
 					Expr: &plan.Expr_Col{
 						Col: &plan.ColRef{
 							RelPos: idxTag,
@@ -362,7 +362,7 @@ END0:
 
 		pkIdx := node.TableDef.Name2ColIndex[node.TableDef.Pkey.PkeyColName]
 		pkExpr := &plan.Expr{
-			Typ: *node.TableDef.Cols[pkIdx].Typ,
+			Typ: node.TableDef.Cols[pkIdx].Typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: node.BindingTags[0],
@@ -455,7 +455,7 @@ END0:
 		if idxDef.Unique {
 			idxFilter = expr
 		} else {
-			fn.Args[0].Typ = *idxTableDef.Cols[0].Typ
+			fn.Args[0].Typ = idxTableDef.Cols[0].Typ
 
 			switch fn.Func.ObjName {
 			case "in":
@@ -485,7 +485,7 @@ END0:
 
 		pkIdx := node.TableDef.Name2ColIndex[node.TableDef.Pkey.PkeyColName]
 		pkExpr := &plan.Expr{
-			Typ: *node.TableDef.Cols[pkIdx].Typ,
+			Typ: node.TableDef.Cols[pkIdx].Typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: node.BindingTags[0],
@@ -625,7 +625,7 @@ func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node,
 
 		pkIdx := leftChild.TableDef.Name2ColIndex[leftChild.TableDef.Pkey.PkeyColName]
 		pkExpr := &plan.Expr{
-			Typ: *leftChild.TableDef.Cols[pkIdx].Typ,
+			Typ: leftChild.TableDef.Cols[pkIdx].Typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: leftChild.BindingTags[0],
@@ -668,7 +668,7 @@ func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node,
 
 			idxJoinCond, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*plan.Expr{
 				{
-					Typ: *idxTableDef.Cols[0].Typ,
+					Typ: idxTableDef.Cols[0].Typ,
 					Expr: &plan.Expr_Col{
 						Col: &plan.ColRef{
 							RelPos: idxTag,

@@ -591,12 +591,12 @@ func constructFuzzyFilter(c *Compile, n, left, right *plan.Node) *fuzzyfilter.Ar
 	pkName := n.TableDef.Pkey.PkeyColName
 	var pkTyp *plan.Type
 	if pkName == catalog.CPrimaryKeyColName {
-		pkTyp = n.TableDef.Pkey.CompPkeyCol.Typ
+		pkTyp = &n.TableDef.Pkey.CompPkeyCol.Typ
 	} else {
 		cols := n.TableDef.Cols
 		for _, c := range cols {
 			if c.Name == pkName {
-				pkTyp = c.Typ
+				pkTyp = &c.Typ
 			}
 		}
 	}

@@ -195,7 +195,7 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 		}
 		for i, col := range tableDef.Cols {
 			projectProjection = append(projectProjection, &plan.Expr{
-				Typ: *col.Typ,
+				Typ: col.Typ,
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
 						ColPos: int32(i + updateColLength),
@@ -207,7 +207,7 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 		for i := 0; i < updateColLength; i++ {
 			col := tableDef.Cols[i]
 			projectProjection = append(projectProjection, &plan.Expr{
-				Typ: *col.Typ,
+				Typ: col.Typ,
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
 						ColPos: int32(i),
@@ -651,7 +651,7 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 					pkColIdx := pkLocationInfo.pkIndex
 					eqExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{
 						{
-							Typ: *tableDef.Cols[pkColIdx].Typ,
+							Typ: tableDef.Cols[pkColIdx].Typ,
 							Expr: &plan.Expr_Col{
 								Col: &ColRef{
 									ColPos: int32(pkOrder),
@@ -707,7 +707,7 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 			}
 			inExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "in", []*Expr{
 				{
-					Typ: *makeHiddenColTyp(),
+					Typ: makeHiddenColTyp(),
 					Expr: &plan.Expr_Col{
 						Col: &ColRef{
 							ColPos: int32(len(tableDef.Pkey.Names)),

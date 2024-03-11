@@ -469,7 +469,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 				},
 			},
 		}
-		projExpr, err = forceCastExpr(builder.GetContext(), projExpr, tableDef.Cols[colIdx].Typ)
+		projExpr, err = forceCastExpr(builder.GetContext(), projExpr, &tableDef.Cols[colIdx].Typ)
 		if err != nil {
 			return false, false, nil, err
 		}
@@ -620,14 +620,14 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 							return false, false, nil, err
 						}
 					}
-					defExpr, err = forceCastExpr(builder.GetContext(), defExpr, col.Typ)
+					defExpr, err = forceCastExpr(builder.GetContext(), defExpr, &col.Typ)
 					if err != nil {
 						return false, false, nil, err
 					}
 					updateExprs[col.Name] = defExpr
 				}
 				info.projectList = append(info.projectList, &plan.Expr{
-					Typ: *col.Typ,
+					Typ: col.Typ,
 					Expr: &plan.Expr_Col{
 						Col: &plan.ColRef{
 							RelPos: rightTag,
@@ -646,7 +646,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 				for _, colIdx := range uniqueColMap {
 					col := rightTableDef.Cols[colIdx]
 					leftExpr := &Expr{
-						Typ: *col.Typ,
+						Typ: col.Typ,
 						Expr: &plan.Expr_Col{
 							Col: &plan.ColRef{
 								RelPos: baseNodeTag,
@@ -655,7 +655,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 						},
 					}
 					rightExpr := &plan.Expr{
-						Typ: *col.Typ,
+						Typ: col.Typ,
 						Expr: &plan.Expr_Col{
 							Col: &plan.ColRef{
 								RelPos: rightTag,
@@ -916,14 +916,14 @@ func buildValueScan(
 
 	for i, colName := range updateColumns {
 		col := tableDef.Cols[colToIdx[colName]]
-		colTyp := makeTypeByPlan2Type(col.Typ)
+		colTyp := makeTypeByPlan2Type(&col.Typ)
 		vec := proc.GetVector(colTyp)
 		bat.Vecs[i] = vec
 		targetTyp := &plan.Expr{
-			Typ: *col.Typ,
+			Typ: col.Typ,
 			Expr: &plan.Expr_T{
 				T: &plan.TargetType{
-					Typ: col.Typ,
+					Typ: &col.Typ,
 				},
 			},
 		}
@@ -949,7 +949,7 @@ func buildValueScan(
 				})
 			}
 		} else {
-			binder := NewDefaultBinder(builder.GetContext(), nil, nil, col.Typ, nil)
+			binder := NewDefaultBinder(builder.GetContext(), nil, nil, &col.Typ, nil)
 			binder.builder = builder
 			for j, r := range slt.Rows {
 				if nv, ok := r[i].(*tree.NumVal); ok {
@@ -997,8 +997,8 @@ func buildValueScan(
 						bat.Clean(proc.Mp())
 						return err
 					}
-					if col.Typ != nil && col.Typ.Id == int32(types.T_enum) {
-						defExpr, err = funcCastForEnumType(builder.GetContext(), defExpr, col.GetTyp())
+					if col.Typ.Id == int32(types.T_enum) {
+						defExpr, err = funcCastForEnumType(builder.GetContext(), defExpr, &col.Typ)
 						if err != nil {
 							bat.Clean(proc.Mp())
 							return err
@@ -1035,7 +1035,7 @@ func buildValueScan(
 			Typ:   col.Typ,
 		}
 		expr := &plan.Expr{
-			Typ: *col.Typ,
+			Typ: col.Typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: lastTag,
@@ -1062,7 +1062,7 @@ func buildValueScan(
 				}
 			} else if nv, ok := expr.Expr.(*tree.FuncExpr); ok {
 				if checkExprHasParamExpr(nv.Exprs) {
-					binder := NewDefaultBinder(builder.GetContext(), nil, nil, col.Typ, nil)
+					binder := NewDefaultBinder(builder.GetContext(), nil, nil, &col.Typ, nil)
 					binder.builder = builder
 					binder.ctx = bindCtx
 					updateExpr, err = binder.BindExpr(nv, 0, true)
@@ -1072,7 +1072,7 @@ func buildValueScan(
 				}
 			} else if nv, ok := expr.Expr.(*tree.BinaryExpr); ok {
 				if checkExprHasParamExpr([]tree.Expr{nv.Right}) {
-					binder := NewDefaultBinder(builder.GetContext(), nil, nil, col.Typ, nil)
+					binder := NewDefaultBinder(builder.GetContext(), nil, nil, &col.Typ, nil)
 					binder.builder = builder
 					binder.ctx = bindCtx
 					updateExpr, err = binder.BindExpr(nv.Right, 0, true)
@@ -1251,7 +1251,7 @@ func appendPrimaryConstrantPlan(
 			}
 			varcharType := types.T_varchar.ToType()
 			varcharExpr, err := makePlan2CastExpr(builder.GetContext(), &Expr{
-				Typ: *tableDef.Cols[pkPos].Typ,
+				Typ: tableDef.Cols[pkPos].Typ,
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{ColPos: 1, Name: tableDef.Cols[pkPos].Name},
 				},
@@ -1440,7 +1440,7 @@ func appendPrimaryConstrantPlan(
 					},
 				}
 				scanRowIdExpr := &Expr{
-					Typ: *rowIdDef.Typ,
+					Typ: rowIdDef.Typ,
 					Expr: &plan.Expr_Col{
 						Col: &ColRef{
 							ColPos: 1,
@@ -1493,7 +1493,7 @@ func appendPrimaryConstrantPlan(
 					return err
 				}
 				rightRowIdExpr := &Expr{
-					Typ: *rowIdDef.Typ,
+					Typ: rowIdDef.Typ,
 					Expr: &plan.Expr_Col{
 						Col: &ColRef{
 							ColPos: 1,
@@ -1502,7 +1502,7 @@ func appendPrimaryConstrantPlan(
 					},
 				}
 				rowIdExpr := &Expr{
-					Typ: *rowIdDef.Typ,
+					Typ: rowIdDef.Typ,
 					Expr: &plan.Expr_Col{
 						Col: &ColRef{
 							RelPos: 1,
@@ -1619,7 +1619,7 @@ func appendPrimaryConstrantPlan(
 					return err
 				}
 				colExpr := &Expr{
-					Typ: *rowIdDef.Typ,
+					Typ: rowIdDef.Typ,
 					Expr: &plan.Expr_Col{
 						Col: &plan.ColRef{
 							Name: rowIdDef.Name,
@@ -1634,7 +1634,7 @@ func appendPrimaryConstrantPlan(
 					ProjectList: []*Expr{
 						colExpr,
 						{
-							Typ: *tableDef.Cols[pkPos].Typ,
+							Typ: tableDef.Cols[pkPos].Typ,
 							Expr: &plan.Expr_Col{
 								Col: &plan.ColRef{ColPos: 2, Name: tableDef.Cols[pkPos].Name},
 							},
@@ -1650,7 +1650,7 @@ func appendPrimaryConstrantPlan(
 
 				varcharType := types.T_varchar.ToType()
 				varcharExpr, err := makePlan2CastExpr(builder.GetContext(), &Expr{
-					Typ: *tableDef.Cols[pkPos].Typ,
+					Typ: tableDef.Cols[pkPos].Typ,
 					Expr: &plan.Expr_Col{
 						Col: &plan.ColRef{ColPos: 1, Name: tableDef.Cols[pkPos].Name},
 					},

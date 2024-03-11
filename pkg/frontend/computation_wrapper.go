@@ -140,25 +140,25 @@ func (cwft *TxnComputationWrapper) GetColumns() ([]interface{}, error) {
 	case *tree.ShowColumns:
 		if len(cols) == 7 {
 			cols = []*plan2.ColDef{
-				{Typ: &plan2.Type{Id: int32(types.T_char)}, Name: "Field"},
-				{Typ: &plan2.Type{Id: int32(types.T_char)}, Name: "Type"},
-				{Typ: &plan2.Type{Id: int32(types.T_char)}, Name: "Null"},
-				{Typ: &plan2.Type{Id: int32(types.T_char)}, Name: "Key"},
-				{Typ: &plan2.Type{Id: int32(types.T_char)}, Name: "Default"},
-				{Typ: &plan2.Type{Id: int32(types.T_char)}, Name: "Extra"},
-				{Typ: &plan2.Type{Id: int32(types.T_char)}, Name: "Comment"},
+				{Typ: plan2.Type{Id: int32(types.T_char)}, Name: "Field"},
+				{Typ: plan2.Type{Id: int32(types.T_char)}, Name: "Type"},
+				{Typ: plan2.Type{Id: int32(types.T_char)}, Name: "Null"},
+				{Typ: plan2.Type{Id: int32(types.T_char)}, Name: "Key"},
+				{Typ: plan2.Type{Id: int32(types.T_char)}, Name: "Default"},
+				{Typ: plan2.Type{Id: int32(types.T_char)}, Name: "Extra"},
+				{Typ: plan2.Type{Id: int32(types.T_char)}, Name: "Comment"},
 			}
 		} else {
 			cols = []*plan2.ColDef{
-				{Typ: &plan2.Type{Id: int32(types.T_char)}, Name: "Field"},
-				{Typ: &plan2.Type{Id: int32(types.T_char)}, Name: "Type"},
-				{Typ: &plan2.Type{Id: int32(types.T_char)}, Name: "Collation"},
-				{Typ: &plan2.Type{Id: int32(types.T_char)}, Name: "Null"},
-				{Typ: &plan2.Type{Id: int32(types.T_char)}, Name: "Key"},
-				{Typ: &plan2.Type{Id: int32(types.T_char)}, Name: "Default"},
-				{Typ: &plan2.Type{Id: int32(types.T_char)}, Name: "Extra"},
-				{Typ: &plan2.Type{Id: int32(types.T_char)}, Name: "Privileges"},
-				{Typ: &plan2.Type{Id: int32(types.T_char)}, Name: "Comment"},
+				{Typ: plan2.Type{Id: int32(types.T_char)}, Name: "Field"},
+				{Typ: plan2.Type{Id: int32(types.T_char)}, Name: "Type"},
+				{Typ: plan2.Type{Id: int32(types.T_char)}, Name: "Collation"},
+				{Typ: plan2.Type{Id: int32(types.T_char)}, Name: "Null"},
+				{Typ: plan2.Type{Id: int32(types.T_char)}, Name: "Key"},
+				{Typ: plan2.Type{Id: int32(types.T_char)}, Name: "Default"},
+				{Typ: plan2.Type{Id: int32(types.T_char)}, Name: "Extra"},
+				{Typ: plan2.Type{Id: int32(types.T_char)}, Name: "Privileges"},
+				{Typ: plan2.Type{Id: int32(types.T_char)}, Name: "Comment"},
 			}
 		}
 	}

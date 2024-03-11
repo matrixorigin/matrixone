@@ -293,7 +293,7 @@ func makeCentroidsSingleJoinMetaOnCurrVersionOrderByL2DistNormalizeL2(builder *Q
 
 	// 3. Project version, centroid_id, centroid, l2_distance(literal, normalize_l2(col))
 	centroidsCol := &plan.Expr{
-		Typ: *indexTableDefs[1].Cols[2].Typ,
+		Typ: indexTableDefs[1].Cols[2].Typ,
 		Expr: &plan.Expr_Col{
 			Col: &plan.ColRef{
 				RelPos: idxTags["centroids.scan"],
@@ -428,7 +428,7 @@ func makeEntriesCrossJoinMetaOnCurrVersion(builder *QueryBuilder, bindCtx *BindC
 func makeEntriesCrossJoinCentroidsOnCentroidId(builder *QueryBuilder, bindCtx *BindContext, idxTableDefs []*TableDef, idxTags map[string]int32, entriesForCurrVersion int32, centroidsForCurrVersion int32) int32 {
 	entriesCentroidIdEqCentroidId, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{
 		{
-			Typ: *idxTableDefs[2].Cols[1].Typ,
+			Typ: idxTableDefs[2].Cols[1].Typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: idxTags["entries.project"],
@@ -437,7 +437,7 @@ func makeEntriesCrossJoinCentroidsOnCentroidId(builder *QueryBuilder, bindCtx *B
 			},
 		},
 		{
-			Typ: *idxTableDefs[1].Cols[1].Typ,
+			Typ: idxTableDefs[1].Cols[1].Typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: idxTags["centroids.project"],
@@ -463,7 +463,7 @@ func makeTblCrossJoinEntriesCentroidOnPK(builder *QueryBuilder, bindCtx *BindCon
 
 	entriesOriginPkEqTblPk, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{
 		{
-			Typ: *idxTableDefs[2].Cols[2].Typ,
+			Typ: idxTableDefs[2].Cols[2].Typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: idxTags["entries.project"],
@@ -472,7 +472,7 @@ func makeTblCrossJoinEntriesCentroidOnPK(builder *QueryBuilder, bindCtx *BindCon
 			},
 		},
 		{
-			Typ: *idxTableDefs[2].Cols[2].Typ,
+			Typ: idxTableDefs[2].Cols[2].Typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: scanNode.BindingTags[0],
@@ -498,7 +498,7 @@ func makeTblOrderByL2DistNormalizeL2(builder *QueryBuilder, bindCtx *BindContext
 	distFnName := fn.Func.ObjName
 	l2DistanceColLit, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), distFnName, []*plan.Expr{
 		{
-			Typ: *scanNode.TableDef.Cols[colPosOrderBy].Typ,
+			Typ: scanNode.TableDef.Cols[colPosOrderBy].Typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: scanNode.BindingTags[0],
@@ -537,7 +537,7 @@ func makeHiddenTblScanWithBindingTag(builder *QueryBuilder, bindCtx *BindContext
 	scanCols := make([]*Expr, len(indexTableDef.Cols))
 	for colIdx, column := range indexTableDef.Cols {
 		scanCols[colIdx] = &plan.Expr{
-			Typ: *column.Typ,
+			Typ: column.Typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: idxTag,
