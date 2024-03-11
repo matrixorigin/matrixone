@@ -671,11 +671,28 @@ func ReWriteCheckpointAndBlockFromKey(
 		deltaLoc := objectio.Location(blkMetaInsertDeltaLoc.Get(i).([]byte))
 		blkID := blkMetaInsertBlkID.Get(i).(types.Blockid)
 		isABlk := blkMetaInsertEntryState.Get(i).(bool)
-		if isABlk {
-			panic(any(fmt.Sprintf("The inserted block is an aobject: %v-%d", metaLoc.String(), i)))
-		}
-		if deltaLoc.IsEmpty() {
+		if deltaLoc.IsEmpty() || !metaLoc.IsEmpty() {
 			panic(any(fmt.Sprintf("deltaLoc is empty: %v-%v", deltaLoc.String(), metaLoc.String())))
+		}
+		if isABlk {
+			if blkID.Sequence() > 0 {
+				panic(any(fmt.Sprintf("The inserted block is an aobject and blkID not 0 : %v", blkID.String())))
+			}
+			objectName := objectio.BuildObjectName(blkID.Segment(), blkID.Sequence())
+			locationReader, err := blockio.NewFileReader(fs, objectName.String())
+			if err != nil {
+				return nil, nil, nil, err
+			}
+			meta, err := locationReader.GetObjectReader().ReadAllMeta(ctx, nil)
+			if err != nil {
+				return nil, nil, nil, err
+			}
+			dataMeta := meta.MustDataMeta()
+			blockMeta := dataMeta.GetBlockMeta(uint32(blkID.Sequence()))
+			row := blockMeta.GetRows()
+			metaLocation := objectio.BuildLocation(objectName, *locationReader.GetObjectReader().GetMetaExtent(), row, blkID.Sequence())
+			addBlockToObjectData(metaLocation, isABlk, false, i,
+				blkMetaInsTxnBatTid.Get(i).(uint64), blkID, objectio.SchemaData, &objectsData)
 		}
 		addBlockToObjectData(deltaLoc, isABlk, false, i,
 			blkMetaInsTxnBatTid.Get(i).(uint64), blkID, objectio.SchemaTombstone, &objectsData)
