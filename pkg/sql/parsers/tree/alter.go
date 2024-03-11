@@ -135,6 +135,12 @@ func init() {
 		reuse.DefaultOptions[AlterTableOrderByColumnClause]().
 			WithEnableChecker())
 
+	reuse.CreatePool[AlterAccountAuthOption](
+		func() *AlterAccountAuthOption { return &AlterAccountAuthOption{} },
+		func(a *AlterAccountAuthOption) { a.reset() },
+		reuse.DefaultOptions[AlterAccountAuthOption]().
+			WithEnableChecker())
+
 	reuse.CreatePool[AlterColumnOrder](
 		func() *AlterColumnOrder { return &AlterColumnOrder{} },
 		func(a *AlterColumnOrder) { a.reset() },
@@ -263,6 +269,15 @@ func (node *AlterAccountAuthOption) Format(ctx *FmtCtx) {
 	}
 }
 
+func (node AlterAccountAuthOption) TypeName() string { return "tree.AlterAccountAuthOption" }
+
+func (node *AlterAccountAuthOption) reset() {
+	node.IdentifiedType.Free()
+	*node = AlterAccountAuthOption{}
+}
+
+func (node *AlterAccountAuthOption) Free() { reuse.Free[AlterAccountAuthOption](node, nil) }
+
 type AlterAccount struct {
 	statementImpl
 	IfExists   bool
@@ -303,6 +318,8 @@ func (node *AlterAccount) GetQueryType() string     { return QueryTypeDCL }
 func (node AlterAccount) TypeName() string { return "tree.AlterAccount" }
 
 func (node *AlterAccount) reset() {
+
+	node.AuthOption.Free()
 	*node = AlterAccount{}
 }
 
@@ -1260,8 +1277,7 @@ type AlterPartitionAddPartitionClause struct {
 }
 
 func NewAlterPartitionAddPartitionClause(typ AlterPartitionOptionType, partitions []*Partition) *AlterPartitionAddPartitionClause {
-	// a := reuse.Alloc[AlterPartitionAddPartitionClause](nil)
-	a := new(AlterPartitionAddPartitionClause)
+	a := reuse.Alloc[AlterPartitionAddPartitionClause](nil)
 	a.Typ = typ
 	a.Partitions = partitions
 	return a
@@ -1291,11 +1307,11 @@ func (node AlterPartitionAddPartitionClause) TypeName() string {
 }
 
 func (node *AlterPartitionAddPartitionClause) reset() {
-	// if node.Partitions != nil {
-	// 	for _, item := range node.Partitions {
-	// 		reuse.Free[Partition](item, nil)
-	// 	}
-	// }
+	if node.Partitions != nil {
+		for _, item := range node.Partitions {
+			reuse.Free[Partition](item, nil)
+		}
+	}
 	*node = AlterPartitionAddPartitionClause{}
 }
 

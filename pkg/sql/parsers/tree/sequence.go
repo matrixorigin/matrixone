@@ -26,6 +26,13 @@ func init() {
 		func(a *AlterSequence) { a.reset() },
 		reuse.DefaultOptions[AlterSequence]().
 			WithEnableChecker())
+
+	reuse.CreatePool[CreateSequence](
+		func() *CreateSequence { return &CreateSequence{} },
+		func(c *CreateSequence) { c.reset() },
+		reuse.DefaultOptions[CreateSequence]().
+			WithEnableChecker())
+
 	reuse.CreatePool[DropSequence](
 		func() *DropSequence { return &DropSequence{} },
 		func(a *DropSequence) { a.reset() },
@@ -44,6 +51,23 @@ type CreateSequence struct {
 	MaxValue    *MaxValueOption
 	StartWith   *StartWithOption
 	Cycle       bool
+}
+
+func NewCreateSequence(name *TableName, typ ResolvableTypeReference, ifnotexists bool, incrementby *IncrementByOption, minvalue *MinValueOption, maxvalue *MaxValueOption, startwith *StartWithOption, cycle bool) *CreateSequence {
+	create := reuse.Alloc[CreateSequence](nil)
+	create.Name = name
+	create.Type = typ
+	create.IfNotExists = ifnotexists
+	create.IncrementBy = incrementby
+	create.MinValue = minvalue
+	create.MaxValue = maxvalue
+	create.StartWith = startwith
+	create.Cycle = cycle
+	return create
+}
+
+func (node *CreateSequence) Free() {
+	reuse.Free[CreateSequence](node, nil)
 }
 
 func (node *CreateSequence) Format(ctx *FmtCtx) {
@@ -76,6 +100,27 @@ func (node *CreateSequence) Format(ctx *FmtCtx) {
 		ctx.WriteString("no cycle")
 	}
 }
+
+func (node *CreateSequence) reset() {
+	// if node.Name != nil {
+	// 	reuse.Free[TableName](node.Name, nil)
+	// }
+	// if node.IncrementBy != nil {
+	// 	reuse.Free[IncrementByOption](node.IncrementBy, nil)
+	// }
+	// if node.MinValue != nil {
+	// 	reuse.Free[MinValueOption](node.MinValue, nil)
+	// }
+	// if node.MaxValue != nil {
+	// 	reuse.Free[MaxValueOption](node.MaxValue, nil)
+	// }
+	// if node.StartWith != nil {
+	// 	reuse.Free[StartWithOption](node.StartWith, nil)
+	// }
+	*node = CreateSequence{}
+}
+
+func (node CreateSequence) TypeName() string { return "tree.CreateSequence" }
 
 func (node *CreateSequence) GetStatementType() string { return "Create Sequence" }
 func (node *CreateSequence) GetQueryType() string     { return QueryTypeDDL }

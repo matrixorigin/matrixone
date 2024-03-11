@@ -77,6 +77,13 @@ type CreateConnector struct {
 	Options   []*ConnectorOption
 }
 
+func NewCreateConnector(t *TableName, o []*ConnectorOption) *CreateConnector {
+	createView := reuse.Alloc[CreateConnector](nil)
+	createView.TableName = t
+	createView.Options = o
+	return createView
+}
+
 func (node *CreateConnector) Format(ctx *FmtCtx) {
 	ctx.WriteString("create connector for ")
 	node.TableName.Format(ctx)
@@ -116,6 +123,13 @@ type ConnectorOption struct {
 	createOptionImpl
 	Key Identifier
 	Val Expr
+}
+
+func NewConnectorOption(k Identifier, v Expr) *ConnectorOption {
+	option := reuse.Alloc[ConnectorOption](nil)
+	option.Key = k
+	option.Val = v
+	return option
 }
 
 func (node *ConnectorOption) Format(ctx *FmtCtx) {
