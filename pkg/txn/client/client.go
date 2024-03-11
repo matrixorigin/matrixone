@@ -302,10 +302,16 @@ func (client *txnClient) New(
 
 	ts, err := client.determineTxnSnapshot(minTS)
 	if err != nil {
+		{
+			util.GetLogger().Info("txn closed", zap.String("txn ID", hex.EncodeToString(op.txnID)))
+		}
 		_ = op.Rollback(ctx)
 		return nil, err
 	}
 	if err := op.UpdateSnapshot(ctx, ts); err != nil {
+		{
+			util.GetLogger().Info("txn closed", zap.String("txn ID", hex.EncodeToString(op.txnID)))
+		}
 		_ = op.Rollback(ctx)
 		return nil, err
 	}
@@ -519,7 +525,7 @@ func (client *txnClient) closeTxn(event TxnEvent) {
 			}
 		}
 	} else {
-		util.GetLogger().Fatal("txn closed", zap.String("txn ID", hex.EncodeToString(txn.ID)))
+		util.GetLogger().Warn("txn closed", zap.String("txn ID", hex.EncodeToString(txn.ID)))
 	}
 }
 
