@@ -127,27 +127,6 @@ var supportedAggregateFunctions = []FuncNew{
 	},
 
 	{
-		functionId: ANY_VALUE,
-		class:      plan.Function_AGG,
-		layout:     STANDARD_FUNCTION,
-		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			return fixedUnaryAggTypeCheck(inputs, functionAgg.AggAnyValueSupportedParameters)
-		},
-
-		Overloads: []overload{
-			{
-				overloadId: 0,
-				isAgg:      true,
-				retType:    functionAgg.AggAnyValueReturnType,
-				aggFramework: aggregationLogicOfOverload{
-					str:    "any_value",
-					aggNew: functionAgg.NewAggAnyValue,
-				},
-			},
-		},
-	},
-
-	{
 		functionId: MEDIAN,
 		class:      plan.Function_AGG,
 		layout:     STANDARD_FUNCTION,
@@ -391,6 +370,27 @@ var supportedAggInNewFramework = []FuncNew{
 				aggFramework: aggregationLogicOfOverload{
 					str:         "approx_count",
 					aggRegister: agg2.RegisterApproxCount,
+				},
+			},
+		},
+	},
+
+	{
+		functionId: ANY_VALUE,
+		class:      plan.Function_AGG,
+		layout:     STANDARD_FUNCTION,
+		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
+			return fixedUnaryAggTypeCheck(inputs, functionAgg.AggAnyValueSupportedParameters)
+		},
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				isAgg:      true,
+				retType:    functionAgg.AggAnyValueReturnType,
+				aggFramework: aggregationLogicOfOverload{
+					str:         "any_value",
+					aggRegister: agg2.RegisterAnyValue,
 				},
 			},
 		},
