@@ -997,13 +997,10 @@ func ReWriteCheckpointAndBlockFromKey(
 					if blk.apply {
 						continue
 					}
-					deleteRow := insertBatch[tid].insertBlocks[b].deleteRow
 					if insertBatch[tid].insertBlocks[b].data == nil {
 
 					} else {
 						insertBatch[tid].insertBlocks[b].apply = true
-						appendValToBatch(data.bats[BLKCNMetaInsertIDX], blkMeta, deleteRow)
-						appendValToBatch(data.bats[BLKMetaDeleteTxnIDX], blkMetaTxn, deleteRow)
 
 						row := blkMeta.Vecs[0].Length() - 1
 						if !blk.location.IsEmpty() {
