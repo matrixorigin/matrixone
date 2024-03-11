@@ -304,6 +304,3 @@ func newVectorElement(pool *VectorPool, t *types.Type, mp *mpool.MPool) *vectorP
 	}
 	return element
 }
-
-//go:linkname fastrand runtime.fastrand
-func fastrand() uint32
