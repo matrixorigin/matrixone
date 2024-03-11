@@ -52,6 +52,7 @@ func (s *service) initQueryCommandHandler() {
 	s.queryService.AddHandleFunc(query.CmdMethod_ShowProcessList, s.handleShowProcessList, false)
 	s.queryService.AddHandleFunc(query.CmdMethod_RunTask, s.handleRunTask, false)
 	s.queryService.AddHandleFunc(query.CmdMethod_RemoveRemoteLockTable, s.handleRemoveRemoteLockTable, false)
+	s.queryService.AddHandleFunc(query.CmdMethod_GetPipelineInfo, s.handleGetPipelineInfo, false)
 }
 
 func (s *service) handleKillConn(ctx context.Context, req *query.Request, resp *query.Response) error {
@@ -312,6 +313,19 @@ func (s *service) handleRemoveRemoteLockTable(
 	resp.RemoveRemoteLockTable = &query.RemoveRemoteLockTableResponse{}
 	if removed {
 		resp.RemoveRemoteLockTable.Count = 1
+	}
+	return nil
+}
+
+// handleGetPipelineInfo handles the GetPipelineInfoRequest and respond with
+// the pipeline info in the server.
+func (s *service) handleGetPipelineInfo(ctx context.Context, req *query.Request, resp *query.Response) error {
+	if req.GetPipelineInfoRequest == nil {
+		return moerr.NewInternalError(ctx, "bad request")
+	}
+	count := s.pipelines.counter.Load()
+	resp.GetPipelineInfoResponse = &query.GetPipelineInfoResponse{
+		Count: count,
 	}
 	return nil
 }
