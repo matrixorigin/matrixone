@@ -265,7 +265,7 @@ func (t *tunnel) canStartTransfer() bool {
 	}
 
 	// We are now in a transaction.
-	if scp.isInTxn() || csp.isPrepared() {
+	if scp.isInTxn() {
 		return false
 	}
 
@@ -362,7 +362,7 @@ func (t *tunnel) getNewServerConn(ctx context.Context) (*MySQLConn, error) {
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
 	}
-	newConn, err := t.cc.BuildConnWithServer(false)
+	newConn, err := t.cc.BuildConnWithServer(t.mu.serverConn.RemoteAddr().String())
 	if err != nil {
 		return nil, err
 	}
@@ -649,11 +649,4 @@ func (p *pipe) isInTxn() bool {
 		return false
 	}
 	return p.src.isInTxn()
-}
-
-func (p *pipe) isPrepared() bool {
-	if p.src == nil {
-		return false
-	}
-	return p.src.isPrepared()
 }
