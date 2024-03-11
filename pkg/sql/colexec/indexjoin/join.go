@@ -16,6 +16,8 @@ package indexjoin
 
 import (
 	"bytes"
+
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -62,20 +64,23 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 				proc.PutBatch(bat)
 				continue
 			}
-			vecused := make([]bool, len(bat.Vecs))
-			newvecs := make([]*vector.Vector, len(ap.Result))
+
+			if arg.buf != nil {
+				proc.PutBatch(arg.buf)
+				arg.buf = nil
+			}
+			arg.buf = batch.NewWithSize(len(ap.Result))
 			for i, pos := range ap.Result {
-				vecused[pos] = true
-				newvecs[i] = bat.Vecs[pos]
-			}
-			for i := range bat.Vecs {
-				if !vecused[i] {
-					bat.Vecs[i].Free(proc.Mp())
+				vec := proc.GetVector(*bat.Vecs[pos].GetType())
+				if err := vector.GetUnionAllFunction(*bat.Vecs[pos].GetType(), proc.Mp())(vec, bat.Vecs[pos]); err != nil {
+					vec.Free(proc.Mp())
+					return result, err
 				}
+				arg.buf.SetVector(int32(i), vec)
 			}
-			bat.Vecs = newvecs
-			result.Batch = bat
-			anal.Output(bat, arg.GetIsLast())
+			proc.PutBatch(bat)
+			result.Batch = arg.buf
+			anal.Output(arg.buf, arg.GetIsLast())
 			return result, nil
 
 		default:
