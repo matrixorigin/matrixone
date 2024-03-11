@@ -590,7 +590,7 @@ count(*)
 SELECT datname AS name, IF (table_cnt IS NULL, 0, table_cnt) AS tables, role_name AS owner FROM (SELECT dat_id, datname, mo_database.created_time, IF(role_name IS NULL, '-', role_name) AS role_name FROM mo_catalog.mo_database LEFT JOIN mo_catalog.mo_role ON mo_database.owner = role_id) AS x LEFT JOIN(SELECT count(*) AS table_cnt, reldatabase_id FROM mo_catalog.mo_tables WHERE relkind IN ('r','v','e','cluster') GROUP BY reldatabase_id) AS y ON x.dat_id = y.reldatabase_id;
 name    tables    owner
 system    1    accountadmin
-system_metrics    7    accountadmin
+system_metrics    8    accountadmin
 information_schema    16    accountadmin
 mysql    5    accountadmin
 mo_mo    0    accountadmin
@@ -647,6 +647,7 @@ system_metrics    metric    r    accountadmin
 system_metrics    server_connections    v    accountadmin
 system_metrics    server_storage_usage    v    accountadmin
 system_metrics    sql_statement_errors    v    accountadmin
+system_metrics    sql_statement_duration_total    v    accountadmin
 system_metrics    sql_statement_total    v    accountadmin
 system_metrics    sql_transaction_errors    v    accountadmin
 system_metrics    sql_transaction_total    v    accountadmin
