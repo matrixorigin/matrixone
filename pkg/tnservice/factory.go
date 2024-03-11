@@ -169,5 +169,6 @@ func (s *store) newTAEStorage(ctx context.Context, shard metadata.TNShard, facto
 		logtailServerCfg,
 		s.cfg.Txn.IncrementalDedup == "true",
 		uint64(s.cfg.RPC.MaxMessageSize),
+		s.GetTaskService,
 	)
 }

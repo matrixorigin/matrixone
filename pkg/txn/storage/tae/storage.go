@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage"
 	"github.com/matrixorigin/matrixone/pkg/util/status"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/rpchandle"
@@ -55,18 +56,20 @@ func NewTAEStorage(
 	logtailServerCfg *options.LogtailServerCfg,
 	incrementalDedup bool,
 	maxMessageSize uint64,
+	taskServiceGetter taskservice.Getter,
 ) (storage.TxnStorage, error) {
 	opt := &options.Options{
-		Clock:            rt.Clock(),
-		Fs:               fs,
-		Lc:               logservicedriver.LogServiceClientFactory(factory),
-		Shard:            shard,
-		CheckpointCfg:    ckpCfg,
-		GCCfg:            gcCfg,
-		LogStoreT:        options.LogstoreLogservice,
-		IncrementalDedup: incrementalDedup,
-		Ctx:              ctx,
-		MaxMessageSize:   maxMessageSize,
+		Clock:             rt.Clock(),
+		Fs:                fs,
+		Lc:                logservicedriver.LogServiceClientFactory(factory),
+		Shard:             shard,
+		CheckpointCfg:     ckpCfg,
+		GCCfg:             gcCfg,
+		LogStoreT:         options.LogstoreLogservice,
+		IncrementalDedup:  incrementalDedup,
+		Ctx:               ctx,
+		MaxMessageSize:    maxMessageSize,
+		TaskServiceGetter: taskServiceGetter,
 	}
 
 	taeHandler := rpc.NewTAEHandle(ctx, dataDir, opt)

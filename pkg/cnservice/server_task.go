@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	moconnector "github.com/matrixorigin/matrixone/pkg/stream/connector"
@@ -400,4 +401,17 @@ func (s *service) registerExecutorsLocked() {
 	// streaming connector task
 	s.task.runner.RegisterExecutor(task.TaskCode_ConnectorKafkaSink,
 		moconnector.KafkaSinkConnectorExecutor(s.logger, ts, ieFactory, s.task.runner.Attach))
+	s.task.runner.RegisterExecutor(task.TaskCode_MergeTablet,
+		func(ctx context.Context, task task.Task) error {
+			metadata := task.GetMetadata()
+			var mergeTask api.MergeTaskEntry
+			err := mergeTask.Unmarshal(metadata.Context)
+			if err != nil {
+				return err
+			}
+
+			sql := fmt.Sprintf("select mo_ctl('cn', 'merge', 'db1:t1:xxx')")
+			return ieFactory().Exec(ctx, sql, ie.NewOptsBuilder().Finish())
+		},
+	)
 }

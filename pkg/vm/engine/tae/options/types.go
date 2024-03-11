@@ -16,6 +16,7 @@ package options
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -81,4 +82,6 @@ type Options struct {
 	Ctx       context.Context
 	// MaxMessageSize is the size of max message which is sent to log-service.
 	MaxMessageSize uint64
+
+	TaskServiceGetter taskservice.Getter
 }
