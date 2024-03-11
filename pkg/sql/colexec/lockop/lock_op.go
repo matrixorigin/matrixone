@@ -506,10 +506,11 @@ func doLock(
 		}
 
 		if changed {
-			trace.GetService().TxnUpdateSnapshot(
+			trace.GetService().TxnNoConflictChanged(
 				proc.TxnOperator,
 				tableID,
-				"no conflict, data changed")
+				lockedTS,
+				newSnapshotTS)
 			if err := txnOp.UpdateSnapshot(ctx, newSnapshotTS); err != nil {
 				return false, false, timestamp.Timestamp{}, err
 			}
@@ -543,10 +544,11 @@ func doLock(
 
 	// forward rc's snapshot ts
 	snapshotTS = result.Timestamp.Next()
-	trace.GetService().TxnUpdateSnapshot(
+
+	trace.GetService().TxnConflictChanged(
 		proc.TxnOperator,
 		tableID,
-		"conflict")
+		snapshotTS)
 	if err := txnOp.UpdateSnapshot(ctx, snapshotTS); err != nil {
 		return false, false, timestamp.Timestamp{}, err
 	}

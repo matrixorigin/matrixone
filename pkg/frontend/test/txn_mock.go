@@ -521,6 +521,30 @@ func (mr *MockTxnOperatorMockRecorder) Debug(ctx, ops interface{}) *gomock.Call 
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Debug", reflect.TypeOf((*MockTxnOperator)(nil).Debug), ctx, ops)
 }
 
+// EnterRunSql mocks base method.
+func (m *MockTxnOperator) EnterRunSql() {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "EnterRunSql")
+}
+
+// EnterRunSql indicates an expected call of EnterRunSql.
+func (mr *MockTxnOperatorMockRecorder) EnterRunSql() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "EnterRunSql", reflect.TypeOf((*MockTxnOperator)(nil).EnterRunSql))
+}
+
+// ExitRunSql mocks base method.
+func (m *MockTxnOperator) ExitRunSql() {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "ExitRunSql")
+}
+
+// ExitRunSql indicates an expected call of ExitRunSql.
+func (mr *MockTxnOperatorMockRecorder) ExitRunSql() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ExitRunSql", reflect.TypeOf((*MockTxnOperator)(nil).ExitRunSql))
+}
+
 // GetOverview mocks base method.
 func (m *MockTxnOperator) GetOverview() client.TxnOverview {
 	m.ctrl.T.Helper()

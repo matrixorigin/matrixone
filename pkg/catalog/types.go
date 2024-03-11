@@ -51,6 +51,9 @@ const (
 	// versions are upgraded, it may be necessary to upgrade all tenant-related metadata.
 	// This table is used to record all the tenant records that need to be upgraded
 	MOUpgradeTenantTable = "mo_upgrade_tenant"
+
+	// MOForeignKeys saves the fk relationships
+	MOForeignKeys = "mo_foreign_keys"
 )
 
 var InternalColumns = map[string]int8{
@@ -728,12 +731,15 @@ var (
 	QueryResultPath     string
 	QueryResultMetaPath string
 	QueryResultMetaDir  string
+	//ProfileDir holds all profiles dumped by the runtime/pprof
+	ProfileDir string
 )
 
 func init() {
 	QueryResultPath = fileservice.JoinPath(defines.SharedFileServiceName, "/query_result/%s_%s_%d.blk")
 	QueryResultMetaPath = fileservice.JoinPath(defines.SharedFileServiceName, "/query_result_meta/%s_%s.blk")
 	QueryResultMetaDir = fileservice.JoinPath(defines.SharedFileServiceName, "/query_result_meta")
+	ProfileDir = fileservice.JoinPath(defines.ETLFileServiceName, "/profile")
 }
 
 const QueryResultName = "%s_%s_%d.blk"
