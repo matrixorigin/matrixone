@@ -685,8 +685,8 @@ func ReWriteCheckpointAndBlockFromKey(
 		if deltaLoc.IsEmpty() || !metaLoc.IsEmpty() {
 			panic(any(fmt.Sprintf("deltaLoc is empty: %v-%v", deltaLoc.String(), metaLoc.String())))
 		}
+		name := objectio.BuildObjectName(blkID.Segment(), blkID.Sequence())
 		if isABlk {
-			name := objectio.BuildObjectName(blkID.Segment(), blkID.Sequence())
 			if objectsData[name.String()] == nil {
 				panic(any(fmt.Sprintf("object %v not found", name.String())))
 			}
@@ -696,8 +696,16 @@ func ReWriteCheckpointAndBlockFromKey(
 			objectsData[name.String()].data[blkID.Sequence()].tombstone = objectsData[deltaLoc.Name().String()].data[deltaLoc.ID()]
 			objectsData[name.String()].data[blkID.Sequence()].deleteRow = []int{i}
 		} else {
-			addBlockToObjectData(deltaLoc, isABlk, false, i,
-				blkMetaInsTxnBatTid.Get(i).(uint64), blkID, objectio.SchemaTombstone, &objectsData)
+
+			if objectsData[name.String()] != nil {
+				if objectsData[name.String()].isDeleteBatch {
+					addBlockToObjectData(deltaLoc, isABlk, true, i,
+						blkMetaInsTxnBatTid.Get(i).(uint64), blkID, objectio.SchemaTombstone, &objectsData)
+				} else {
+					addBlockToObjectData(deltaLoc, isABlk, false, i,
+						blkMetaInsTxnBatTid.Get(i).(uint64), blkID, objectio.SchemaTombstone, &objectsData)
+				}
+			}
 		}
 	}
 
