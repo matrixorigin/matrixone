@@ -25,7 +25,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/prashantv/gostub"
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -186,7 +185,7 @@ var dummyNoExecPlanJsonResult = `{"code":200,"message":"no exec plan"}`
 var dummyNoExecPlanJsonResult2 = `{"func":"dummy2","code":200,"message":"no exec plan"}`
 
 var dummyStatsArray = *statistic.NewStatsArray().WithTimeConsumed(1).WithMemorySize(2).WithS3IOInputCount(3).WithS3IOOutputCount(4).
-	WithOutTrafficBytes(5).WithCU(6.986)
+	WithOutTrafficBytes(5).WithCU(44.0161)
 
 var dummySerializeExecPlan = func(_ context.Context, plan any, _ uuid.UUID) ([]byte, statistic.StatsArray, Statistic) {
 	if plan == nil {
@@ -274,11 +273,13 @@ func TestStatementInfo_ExecPlan2Json(t *testing.T) {
 			}
 			s.SetSerializableExecPlan(p)
 			got := s.ExecPlan2Json(ctx)
-			stats := s.ExecPlan2Stats(ctx)
-			assert.Equalf(t, tt.want, util.UnsafeBytesToString(got), "ExecPlan2Json()")
-			assert.Equalf(t, tt.wantStatsByte, stats, "stats")
+			err := s.ExecPlan2Stats(ctx)
+			require.Nil(t, err)
+			stats := s.GetStatsArrayBytes()
+			require.Equal(t, tt.want, util.UnsafeBytesToString(got), "ExecPlan2Json()")
+			require.Equal(t, tt.wantStatsByte, stats, "want, got: %s, %s", tt.wantStatsByte, stats)
 			mapper := new(map[string]any)
-			err := json.Unmarshal([]byte(got), mapper)
+			err = json.Unmarshal([]byte(got), mapper)
 			require.Nil(t, err, "jons.Unmarshal failed")
 		})
 	}

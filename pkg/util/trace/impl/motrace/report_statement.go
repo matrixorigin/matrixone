@@ -240,6 +240,7 @@ type StatementInfo struct {
 	// keep []byte as elem
 	jsonByte   []byte
 	statsArray statistic.StatsArray
+	stated     bool
 
 	// skipTxnOnce, readonly, for flow control
 	// see more on NeedSkipTxn() and SkipTxnId()
@@ -264,6 +265,7 @@ var stmtPool = sync.Pool{
 func NewStatementInfo() *StatementInfo {
 	s := stmtPool.Get().(*StatementInfo)
 	s.statsArray.Reset()
+	s.stated = false
 	return s
 }
 
@@ -363,6 +365,7 @@ func (s *StatementInfo) free() {
 	// clean []byte
 	s.jsonByte = nil
 	s.statsArray.Reset()
+	s.stated = false
 	// clean skipTxn ctrl
 	s.skipTxnOnce = false
 	s.skipTxnID = nil
@@ -481,7 +484,7 @@ func (s *StatementInfo) ExecPlan2Stats(ctx context.Context) error {
 	var stats Statistic
 	var statsArray statistic.StatsArray
 
-	if s.ExecPlan != nil {
+	if s.ExecPlan != nil && !s.stated {
 		statsArray, stats = s.ExecPlan.Stats(ctx)
 		if s.statsArray.GetTimeConsumed() > 0 {
 			logutil.GetSkip1Logger().Error("statsArray.GetTimeConsumed() > 0",
@@ -492,6 +495,7 @@ func (s *StatementInfo) ExecPlan2Stats(ctx context.Context) error {
 		s.statsArray.WithConnType(s.ConnType)
 		s.RowsRead = stats.RowsRead
 		s.BytesScan = stats.BytesScan
+		s.stated = true
 	}
 	cu := CalculateCU(s.statsArray, int64(s.Duration))
 	s.statsArray.WithCU(cu)
@@ -589,7 +593,6 @@ func EndStatement(ctx context.Context, err error, sentRows int64, outBytes int64
 		s.statsArray.InitIfEmpty().WithOutTrafficBytes(float64(outBytes)).WithOutPacketCount(float64(outPacket))
 		s.ExecPlan2Stats(ctx)
 		metric.StatementCUCounter(s.Account, s.SqlSourceType).Add(s.statsArray.GetCU())
-		s.ExecPlan = nil
 		s.Status = StatementStatusSuccess
 		if err != nil {
 			s.Error = err

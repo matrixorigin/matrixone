@@ -93,7 +93,6 @@ func BenchmarkCalculateMem(b *testing.B) {
 func BenchmarkCalculate10kTimes(b *testing.B) {
 	type args struct {
 		stats      statistic.StatsArray
-		memByte    int64
 		durationNS int64
 		cfg        *config.OBCUConfig
 	}
@@ -175,7 +174,6 @@ func BenchmarkCalculate10kTimes(b *testing.B) {
 func BenchmarkCalculateElem(b *testing.B) {
 	type args struct {
 		stats      statistic.StatsArray
-		memByte    int64
 		durationNS int64
 		cfg        *config.OBCUConfig
 	}

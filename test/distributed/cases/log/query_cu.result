@@ -18,12 +18,18 @@ val
 select json_extract(@stats, '$[6]') val;
 val
 2
-select CAST(mo_cu(@stats, @duration) AS DECIMAL(32,4)) as cu, CAST(mo_cu(@stats, @duration, "total") AS DECIMAL(32,4)) cu_total, CAST(mo_cu(@stats, @duration, "cpu") AS DECIMAL(32,4)) cu_cpu, CAST(mo_cu(@stats, @duration, "mem") AS DECIMAL(32,4)) cu_mem, CAST(mo_cu(@stats, @duration, "ioin") AS DECIMAL(32,4)) cu_ioin, CAST(mo_cu(@stats, @duration, "ioout") AS DECIMAL(32,4)) cu_ioout, CAST(mo_cu(@stats, @duration, "network") AS DECIMAL(32,4)) cu_network;
+select CAST(mo_cu(@stats, @duration) AS DECIMAL(32,6)) as cu, CAST(mo_cu(@stats, @duration, "total") AS DECIMAL(32,6)) cu_total, CAST(mo_cu(@stats, @duration, "cpu") AS DECIMAL(32,6)) cu_cpu, CAST(mo_cu(@stats, @duration, "mem") AS DECIMAL(32,6)) cu_mem, CAST(mo_cu(@stats, @duration, "ioin") AS DECIMAL(32,6)) cu_ioin, CAST(mo_cu(@stats, @duration, "ioout") AS DECIMAL(32,6)) cu_ioout, CAST(mo_cu(@stats, @duration, "network") AS DECIMAL(32,6)) cu_network;
 cu    cu_total    cu_cpu    cu_mem    cu_ioin    cu_ioout    cu_network
 807058.4751    807058.4750    259.0369    806598.2280    0.0000    6.7619    194.4483
-select CAST( JSON_UNQUOTE(JSON_EXTRACT(@stats, '$[1]')) * 3.45e-14 / 1.002678e-06  AS DECIMAL(32,4)) - CAST(mo_cu(@stats, @duration, "cpu") AS DECIMAL(32,4)) val;
+select CAST(JSON_UNQUOTE(JSON_EXTRACT(@stats, '$[1]')) * 3.45e-14 / 1.002678e-06  AS DECIMAL(32,6)) - CAST(mo_cu(@stats, @duration, "cpu") AS DECIMAL(32,6)) val;
 val
 0
-select CAST( JSON_UNQUOTE(JSON_EXTRACT(@stats, '$[1]')) * 3.45e-14 / 1.002678e-06  AS DECIMAL(32,4)) - CAST(mo_cu(@stats, @duration, "cpu") AS DECIMAL(32,4)) val;
+select CAST(JSON_UNQUOTE(JSON_EXTRACT(@stats, '$[2]')) * 4.56e-24 * @duration / 1.002678e-06 AS DECIMAL(32,6)) - CAST(mo_cu(@stats, @duration, "mem") AS DECIMAL(32,6)) val;
 val
 0
+select mo_cu('[1,1,2,3,4,5,0,0]', 0) val;
+val
+44.0121
+select mo_cu('[3,1,2,3,4,5,0,0]', 0) val;
+val
+44.0161

@@ -16,9 +16,11 @@ package motrace
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"testing"
+	"time"
 )
 
 func TestCalculateFloat64(t *testing.T) {
@@ -195,7 +197,6 @@ func TestCalculateDiff(t *testing.T) {
 	type args struct {
 		memByte    int64
 		durationNS int64
-		cfg        *config.OBCUConfig
 	}
 	tests := []struct {
 		name string
@@ -225,6 +226,58 @@ func TestCalculateDiff(t *testing.T) {
 			t.Logf("got1 = %v", got1)
 			t.Logf("got2 = %v", got2)
 			t.Logf("got3 = %v", got3)
+		})
+	}
+}
+
+func TestCalculateCU(t *testing.T) {
+	type args struct {
+		stats      statistic.StatsArray
+		durationNS time.Duration
+		cfg        *config.OBCUConfig
+	}
+
+	defaultCUConfig := config.NewOBCUConfig()
+
+	// [ 3, 7528422223, 573384797164.000, 0, 1, 247109, 2 ]
+	var stats2 statistic.StatsArray
+	stats2.WithTimeConsumed(123456)
+	stats2.WithMemorySize(573384797164)
+	stats2.WithS3IOInputCount(0)
+	stats2.WithS3IOOutputCount(1)
+	stats2.WithOutTrafficBytes(247109)
+	stats2.WithConnType(2)
+
+	tests := []struct {
+		name string
+		args args
+		want float64
+	}{
+		{
+			name: "case1",
+			args: args{
+				stats:      dummyStatsArray,
+				durationNS: 0,
+				cfg:        defaultCUConfig,
+			},
+			want: 44.016069999042564,
+		},
+		{
+			name: "big memory",
+			args: args{
+				stats:      stats2,
+				durationNS: 309319808921,
+				cfg:        defaultCUConfig,
+			},
+			want: 807058.4750616836,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := CalculateCUWithCfg(tt.args.stats, int64(tt.args.durationNS), tt.args.cfg)
+			t.Logf("stats: %s", tt.args.stats.ToJsonString())
+			require.Equal(t, tt.want, got)
 		})
 	}
 }
