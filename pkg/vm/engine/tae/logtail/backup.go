@@ -691,6 +691,9 @@ func ReWriteCheckpointAndBlockFromKey(
 			if objectsData[name.String()] == nil {
 				panic(any(fmt.Sprintf("object %v not found", name.String())))
 			}
+			if !objectsData[name.String()].isDeleteBatch {
+				panic(any(fmt.Sprintf("object %v is not deleteBatch", name.String())))
+			}
 			addBlockToObjectData(deltaLoc, isABlk, true, i,
 				blkMetaInsTxnBatTid.Get(i).(uint64), blkID, objectio.SchemaTombstone, &objectsData)
 			objectsData[name.String()].data[blkID.Sequence()].blockId = blkID
@@ -700,6 +703,7 @@ func ReWriteCheckpointAndBlockFromKey(
 				objectsData[name.String()].data[blkID.Sequence()].deleteRow = append(objectsData[name.String()].data[blkID.Sequence()].deleteRow, i)
 			} else {
 				objectsData[name.String()].data[blkID.Sequence()].deleteRow = []int{i}
+				logutil.Infof("deleteRow is empty: %v, row is %d", name.String(), i)
 			}
 		} else {
 
@@ -1056,8 +1060,10 @@ func ReWriteCheckpointAndBlockFromKey(
 			for _, block := range insertBatch[i].insertBlocks {
 				if block.data != nil {
 					for _, cnRow := range block.data.deleteRow {
-						data.bats[BLKMetaInsertIDX].Delete(cnRow)
-						data.bats[BLKMetaInsertTxnIDX].Delete(cnRow)
+						if block.data.isABlock {
+							data.bats[BLKMetaInsertIDX].Delete(cnRow)
+							data.bats[BLKMetaInsertTxnIDX].Delete(cnRow)
+						}
 					}
 				}
 			}
