@@ -706,12 +706,13 @@ func ReWriteCheckpointAndBlockFromKey(
 				logutil.Infof("deleteRow is empty: %v, row is %d", name.String(), i)
 			}
 		} else {
-
 			if objectsData[name.String()] != nil {
 				if objectsData[name.String()].isDeleteBatch {
+					logutil.Infof("object %v is deleteBatch", name.String())
 					addBlockToObjectData(deltaLoc, isABlk, true, i,
 						blkMetaInsTxnBatTid.Get(i).(uint64), blkID, objectio.SchemaTombstone, &objectsData)
 				} else {
+					logutil.Infof("object %v is not deleteBatch", name.String())
 					addBlockToObjectData(deltaLoc, isABlk, false, i,
 						blkMetaInsTxnBatTid.Get(i).(uint64), blkID, objectio.SchemaTombstone, &objectsData)
 				}
