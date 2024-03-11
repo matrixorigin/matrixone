@@ -805,7 +805,7 @@ func checkOverFlow[T1, T2 constraints.Integer | constraints.Float](ctx context.C
 }
 
 func setInsertValueNumber[T constraints.Integer | constraints.Float](proc *process.Process, numVal *tree.NumVal, vec *vector.Vector) (canInsert bool, err error) {
-	canInsert = true
+	canInsert = false
 	switch numVal.ValType {
 	case tree.P_null:
 		err = vector.AppendBytes(vec, nil, true, proc.Mp())
