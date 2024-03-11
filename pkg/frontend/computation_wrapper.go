@@ -96,7 +96,7 @@ type TxnComputationWrapper struct {
 }
 
 func InitTxnComputationWrapper(ses *Session, stmt tree.Statement, proc *process.Process) *TxnComputationWrapper {
-	uuid, _ := uuid.NewUUID()
+	uuid, _ := uuid.NewV7()
 	return &TxnComputationWrapper{
 		stmt: stmt,
 		proc: proc,

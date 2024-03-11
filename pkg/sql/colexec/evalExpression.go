@@ -627,9 +627,9 @@ func generateConstExpressionExecutor(proc *process.Process, typ types.Type, con 
 		case *plan.Literal_Dateval:
 			vec, err = vector.NewConstFixed(constDateType, types.Date(con.GetDateval()), 1, proc.Mp())
 		case *plan.Literal_Timeval:
-			vec, err = vector.NewConstFixed(constTimeType, types.Time(con.GetTimeval()), 1, proc.Mp())
+			vec, err = vector.NewConstFixed(typ, types.Time(con.GetTimeval()), 1, proc.Mp())
 		case *plan.Literal_Datetimeval:
-			vec, err = vector.NewConstFixed(constDatetimeType, types.Datetime(con.GetDatetimeval()), 1, proc.Mp())
+			vec, err = vector.NewConstFixed(typ, types.Datetime(con.GetDatetimeval()), 1, proc.Mp())
 		case *plan.Literal_Decimal64Val:
 			cd64 := con.GetDecimal64Val()
 			d64 := types.Decimal64(cd64.A)
@@ -1056,6 +1056,26 @@ func GetExprZoneMap(
 
 			// Some expressions need to be handled specifically
 			switch t.F.Func.ObjName {
+			case "isnull", "is_null":
+				switch exprImpl := args[0].Expr.(type) {
+				case *plan.Expr_Col:
+					nullCnt := meta.MustGetColumn(uint16(columnMap[int(exprImpl.Col.ColPos)])).NullCnt()
+					zms[expr.AuxId] = index.SetBool(zms[expr.AuxId], nullCnt > 0)
+					return zms[expr.AuxId]
+				default:
+					zms[expr.AuxId].Reset()
+					return zms[expr.AuxId]
+				}
+			case "isnotnull", "is_not_null":
+				switch exprImpl := args[0].Expr.(type) {
+				case *plan.Expr_Col:
+					zm := meta.MustGetColumn(uint16(columnMap[int(exprImpl.Col.ColPos)])).ZoneMap()
+					zms[expr.AuxId] = index.SetBool(zms[expr.AuxId], zm.IsInited())
+					return zms[expr.AuxId]
+				default:
+					zms[expr.AuxId].Reset()
+					return zms[expr.AuxId]
+				}
 			case "in":
 				rid := args[1].AuxId
 				if vecs[rid] == nil {
@@ -1091,9 +1111,22 @@ func GetExprZoneMap(
 					return zms[expr.AuxId]
 				}
 
-				s := []byte(args[1].Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_Sval).Sval)
+				s := []byte(args[1].GetLit().GetSval())
 
 				zms[expr.AuxId] = index.SetBool(zms[expr.AuxId], lhs.PrefixEq(s))
+				return zms[expr.AuxId]
+
+			case "prefix_between":
+				lhs := GetExprZoneMap(ctx, proc, args[0], meta, columnMap, zms, vecs)
+				if !lhs.IsInited() {
+					zms[expr.AuxId].Reset()
+					return zms[expr.AuxId]
+				}
+
+				lb := []byte(args[1].GetLit().GetSval())
+				ub := []byte(args[2].GetLit().GetSval())
+
+				zms[expr.AuxId] = index.SetBool(zms[expr.AuxId], lhs.PrefixBetween(lb, ub))
 				return zms[expr.AuxId]
 
 			case "prefix_in":
@@ -1183,6 +1216,16 @@ func GetExprZoneMap(
 					return zms[expr.AuxId]
 				}
 				if res, ok = zms[args[0].AuxId].Intersect(zms[args[1].AuxId]); !ok {
+					zms[expr.AuxId].Reset()
+				} else {
+					zms[expr.AuxId] = index.SetBool(zms[expr.AuxId], res)
+				}
+
+			case "between":
+				if f() {
+					return zms[expr.AuxId]
+				}
+				if res, ok = zms[args[0].AuxId].AnyBetween(zms[args[1].AuxId], zms[args[2].AuxId]); !ok {
 					zms[expr.AuxId].Reset()
 				} else {
 					zms[expr.AuxId] = index.SetBool(zms[expr.AuxId], res)

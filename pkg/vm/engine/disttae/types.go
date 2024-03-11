@@ -57,6 +57,8 @@ const (
 	COMPACTION_CN
 	UPDATE
 	ALTER
+	INSERT_TXN // Only for CN workspace consumption, not sent to DN
+	DELETE_TXN // Only for CN workspace consumption, not sent to DN
 )
 
 const (
@@ -131,6 +133,9 @@ type Transaction struct {
 	// txn workspace size
 	workspaceSize uint64
 
+	// the last snapshot write offset
+	snapshotWriteOffset int
+
 	tnStores []DNStore
 	proc     *process.Process
 
@@ -174,7 +179,11 @@ type Transaction struct {
 	//TODO::remove it
 	blockId_raw_batch map[types.Blockid]*batch.Batch
 	// committed block belongs to txn's snapshot data -> delta locations for committed block's deletes.
-	blockId_tn_delete_metaLoc_batch map[types.Blockid][]*batch.Batch
+	blockId_tn_delete_metaLoc_batch struct {
+		sync.RWMutex
+		data map[types.Blockid][]*batch.Batch
+	}
+	//blockId_tn_delete_metaLoc_batch map[types.Blockid][]*batch.Batch
 	//select list for raw batch comes from txn.writes.batch.
 	batchSelectList map[*batch.Batch][]int64
 	toFreeBatches   map[[2]string][]*batch.Batch
@@ -298,10 +307,10 @@ func (txn *Transaction) IncrStatementID(ctx context.Context, commit bool) error 
 }
 
 // Adjust adjust writes order
-func (txn *Transaction) Adjust() error {
+func (txn *Transaction) Adjust(writeOffset uint64) error {
 	txn.Lock()
 	defer txn.Unlock()
-	if err := txn.adjustUpdateOrderLocked(); err != nil {
+	if err := txn.adjustUpdateOrderLocked(writeOffset); err != nil {
 		return err
 	}
 	if err := txn.mergeTxnWorkspaceLocked(); err != nil {
@@ -312,23 +321,20 @@ func (txn *Transaction) Adjust() error {
 
 // The current implementation, update's delete and insert are executed concurrently, inside workspace it
 // may be the order of insert+delete that needs to be adjusted.
-func (txn *Transaction) adjustUpdateOrderLocked() error {
+func (txn *Transaction) adjustUpdateOrderLocked(writeOffset uint64) error {
 	if txn.statementID > 0 {
-		start := txn.statements[txn.statementID-1]
-		writes := make([]Entry, 0, len(txn.writes[start:]))
-		for i := start; i < len(txn.writes); i++ {
-			if txn.writes[i].typ == DELETE {
+		writes := make([]Entry, 0, len(txn.writes[writeOffset:]))
+		for i := writeOffset; i < uint64(len(txn.writes)); i++ {
+			if !txn.writes[i].isCatalog() && txn.writes[i].typ == DELETE {
 				writes = append(writes, txn.writes[i])
 			}
 		}
-		for i := start; i < len(txn.writes); i++ {
-			if txn.writes[i].typ != DELETE {
+		for i := writeOffset; i < uint64(len(txn.writes)); i++ {
+			if txn.writes[i].isCatalog() || txn.writes[i].typ != DELETE {
 				writes = append(writes, txn.writes[i])
 			}
 		}
-		txn.writes = append(txn.writes[:start], writes...)
-		// restore the scope of the statement
-		txn.statements[txn.statementID-1] = len(txn.writes)
+		txn.writes = append(txn.writes[:writeOffset], writes...)
 	}
 	return nil
 }
@@ -344,6 +350,7 @@ func (txn *Transaction) RollbackLastStatement(ctx context.Context) error {
 
 	txn.rollbackCount++
 	if txn.statementID > 0 {
+		txn.clearTableCache()
 		txn.rollbackCreateTableLocked()
 
 		txn.statementID--
@@ -352,7 +359,7 @@ func (txn *Transaction) RollbackLastStatement(ctx context.Context) error {
 			if txn.writes[i].bat == nil {
 				continue
 			}
-			txn.writes[i].bat.Clean(txn.engine.mp)
+			txn.writes[i].bat.Clean(txn.proc.Mp())
 		}
 		txn.writes = txn.writes[:end]
 		txn.statements = txn.statements[:txn.statementID]
@@ -433,6 +440,13 @@ func (e *Entry) isGeneratedByTruncate() bool {
 		e.truncate
 }
 
+// isCatalog denotes the entry is apply the tree tables
+func (e *Entry) isCatalog() bool {
+	return e.tableId == catalog.MO_TABLES_ID ||
+		e.tableId == catalog.MO_COLUMNS_ID ||
+		e.tableId == catalog.MO_DATABASE_ID
+}
+
 // txnDatabase represents an opened database in a transaction
 type txnDatabase struct {
 	databaseId        uint64
@@ -494,10 +508,6 @@ type txnTable struct {
 
 	// timestamp of the last operation on this table
 	lastTS timestamp.Timestamp
-	//entries belong to this table,and come from txn.writes.
-	writes []Entry
-	// offset of the writes in workspace
-	writesOffset int
 
 	// this should be the statement id
 	// but seems that we're not maintaining it at the moment

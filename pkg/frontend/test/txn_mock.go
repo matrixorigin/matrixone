@@ -755,17 +755,17 @@ func (m *MockWorkspace) EXPECT() *MockWorkspaceMockRecorder {
 }
 
 // Adjust mocks base method.
-func (m *MockWorkspace) Adjust() error {
+func (m *MockWorkspace) Adjust(writeOffset uint64) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Adjust")
+	ret := m.ctrl.Call(m, "Adjust", writeOffset)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // Adjust indicates an expected call of Adjust.
-func (mr *MockWorkspaceMockRecorder) Adjust() *gomock.Call {
+func (mr *MockWorkspaceMockRecorder) Adjust(writeOffset interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Adjust", reflect.TypeOf((*MockWorkspace)(nil).Adjust))
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Adjust", reflect.TypeOf((*MockWorkspace)(nil).Adjust), writeOffset)
 }
 
 // Commit mocks base method.
@@ -807,6 +807,20 @@ func (m *MockWorkspace) GetSQLCount() uint64 {
 func (mr *MockWorkspaceMockRecorder) GetSQLCount() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetSQLCount", reflect.TypeOf((*MockWorkspace)(nil).GetSQLCount))
+}
+
+// GetSnapshotWriteOffset mocks base method.
+func (m *MockWorkspace) GetSnapshotWriteOffset() int {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetSnapshotWriteOffset")
+	ret0, _ := ret[0].(int)
+	return ret0
+}
+
+// GetSnapshotWriteOffset indicates an expected call of GetSnapshotWriteOffset.
+func (mr *MockWorkspaceMockRecorder) GetSnapshotWriteOffset() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetSnapshotWriteOffset", reflect.TypeOf((*MockWorkspace)(nil).GetSnapshotWriteOffset))
 }
 
 // IncrSQLCount mocks base method.
@@ -873,4 +887,16 @@ func (m *MockWorkspace) StartStatement() {
 func (mr *MockWorkspaceMockRecorder) StartStatement() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "StartStatement", reflect.TypeOf((*MockWorkspace)(nil).StartStatement))
+}
+
+// UpdateSnapshotWriteOffset mocks base method.
+func (m *MockWorkspace) UpdateSnapshotWriteOffset() {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "UpdateSnapshotWriteOffset")
+}
+
+// UpdateSnapshotWriteOffset indicates an expected call of UpdateSnapshotWriteOffset.
+func (mr *MockWorkspaceMockRecorder) UpdateSnapshotWriteOffset() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateSnapshotWriteOffset", reflect.TypeOf((*MockWorkspace)(nil).UpdateSnapshotWriteOffset))
 }

@@ -107,7 +107,7 @@ func (c *client) AsyncSend(ctx context.Context, request *pb.Request) (*morpc.Fut
 		switch request.Method {
 		case pb.Method_ForwardLock:
 			sid := getUUIDFromServiceIdentifier(request.Lock.Options.ForwardTo)
-			c.cluster.GetCNService(
+			c.cluster.GetCNServiceWithoutWorkingState(
 				clusterservice.NewServiceIDSelector(sid),
 				func(s metadata.CNService) bool {
 					address = s.LockServiceAddress
@@ -118,7 +118,7 @@ func (c *client) AsyncSend(ctx context.Context, request *pb.Request) (*morpc.Fut
 			pb.Method_GetTxnLock,
 			pb.Method_KeepRemoteLock:
 			sid := getUUIDFromServiceIdentifier(request.LockTable.ServiceID)
-			c.cluster.GetCNService(
+			c.cluster.GetCNServiceWithoutWorkingState(
 				clusterservice.NewServiceIDSelector(sid),
 				func(s metadata.CNService) bool {
 					address = s.LockServiceAddress
@@ -126,7 +126,7 @@ func (c *client) AsyncSend(ctx context.Context, request *pb.Request) (*morpc.Fut
 				})
 		case pb.Method_GetWaitingList:
 			sid := getUUIDFromServiceIdentifier(request.GetWaitingList.Txn.CreatedOn)
-			c.cluster.GetCNService(
+			c.cluster.GetCNServiceWithoutWorkingState(
 				clusterservice.NewServiceIDSelector(sid),
 				func(s metadata.CNService) bool {
 					address = s.LockServiceAddress
@@ -150,6 +150,7 @@ func (c *client) AsyncSend(ctx context.Context, request *pb.Request) (*morpc.Fut
 	if address == "" {
 		getLogger().Error("cannot find lockservice address",
 			zap.String("request", request.DebugString()))
+
 	}
 	return c.client.Send(ctx, address, request)
 }

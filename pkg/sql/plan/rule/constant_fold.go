@@ -76,29 +76,30 @@ func (r *ConstantFold) Apply(n *plan.Node, _ *plan.Query, proc *process.Process)
 	}
 }
 
-func (r *ConstantFold) constantFold(e *plan.Expr, proc *process.Process) *plan.Expr {
-	ef, ok := e.Expr.(*plan.Expr_F)
-	if !ok {
-		if el, ok := e.Expr.(*plan.Expr_List); ok {
-			exprList := el.List.List
+func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *plan.Expr {
+	fn := expr.GetF()
+	if fn == nil {
+		if elist := expr.GetList(); elist != nil {
+			exprList := elist.List
 			for i := range exprList {
 				exprList[i] = r.constantFold(exprList[i], proc)
 			}
 
 			vec, err := colexec.GenerateConstListExpressionExecutor(proc, exprList)
 			if err != nil {
-				return e
+				return expr
 			}
 			defer vec.Free(proc.Mp())
 
-			colexec.SortInFilter(vec)
+			vec.InplaceSortAndCompact()
+
 			data, err := vec.MarshalBinary()
 			if err != nil {
-				return e
+				return expr
 			}
 
 			return &plan.Expr{
-				Typ: e.Typ,
+				Typ: expr.Typ,
 				Expr: &plan.Expr_Vec{
 					Vec: &plan.LiteralVec{
 						Len:  int32(vec.Length()),
@@ -108,40 +109,42 @@ func (r *ConstantFold) constantFold(e *plan.Expr, proc *process.Process) *plan.E
 			}
 		}
 
-		return e
+		return expr
 	}
-	overloadID := ef.F.Func.GetObj()
+	overloadID := fn.Func.GetObj()
 	f, exists := function.GetFunctionByIdWithoutError(overloadID)
 	if !exists {
-		return e
+		return expr
 	}
 	if f.CannotFold() { // function cannot be fold
-		return e
+		return expr
 	}
 	if f.IsRealTimeRelated() && r.isPrepared {
-		return e
+		return expr
 	}
-	for i := range ef.F.Args {
-		ef.F.Args[i] = r.constantFold(ef.F.Args[i], proc)
+	isVec := false
+	for i := range fn.Args {
+		fn.Args[i] = r.constantFold(fn.Args[i], proc)
+		isVec = isVec || fn.Args[i].GetVec() != nil
 	}
-	if !IsConstant(e, false) {
-		return e
+	if !IsConstant(expr, false) {
+		return expr
 	}
 
-	vec, err := colexec.EvalExpressionOnce(proc, e, []*batch.Batch{r.bat})
+	vec, err := colexec.EvalExpressionOnce(proc, expr, []*batch.Batch{r.bat})
 	if err != nil {
-		return e
+		return expr
 	}
 	defer vec.Free(proc.Mp())
 
-	if !vec.IsConst() && vec.Length() > 1 {
+	if isVec {
 		data, err := vec.MarshalBinary()
 		if err != nil {
-			return e
+			return expr
 		}
 
 		return &plan.Expr{
-			Typ: e.Typ,
+			Typ: expr.Typ,
 			Expr: &plan.Expr_Vec{
 				Vec: &plan.LiteralVec{
 					Len:  int32(vec.Length()),
@@ -153,30 +156,30 @@ func (r *ConstantFold) constantFold(e *plan.Expr, proc *process.Process) *plan.E
 
 	c := GetConstantValue(vec, false, 0)
 	if c == nil {
-		return e
+		return expr
 	}
 
 	if f.IsRealTimeRelated() {
 		c.Src = &plan.Expr{
 			Typ: &plan.Type{
-				Id:          e.Typ.Id,
-				NotNullable: e.Typ.NotNullable,
-				Width:       e.Typ.Width,
-				Scale:       e.Typ.Scale,
-				AutoIncr:    e.Typ.AutoIncr,
-				Table:       e.Typ.Table,
+				Id:          expr.Typ.Id,
+				NotNullable: expr.Typ.NotNullable,
+				Width:       expr.Typ.Width,
+				Scale:       expr.Typ.Scale,
+				AutoIncr:    expr.Typ.AutoIncr,
+				Table:       expr.Typ.Table,
 			},
 			Expr: &plan.Expr_F{
 				F: &plan.Function{
 					Func: &plan.ObjectRef{
-						Server:     ef.F.Func.GetServer(),
-						Db:         ef.F.Func.GetDb(),
-						Schema:     ef.F.Func.GetSchema(),
-						Obj:        ef.F.Func.GetObj(),
-						ServerName: ef.F.Func.GetServerName(),
-						DbName:     ef.F.Func.GetDbName(),
-						SchemaName: ef.F.Func.GetSchemaName(),
-						ObjName:    ef.F.Func.GetObjName(),
+						Server:     fn.Func.GetServer(),
+						Db:         fn.Func.GetDb(),
+						Schema:     fn.Func.GetSchema(),
+						Obj:        fn.Func.GetObj(),
+						ServerName: fn.Func.GetServerName(),
+						DbName:     fn.Func.GetDbName(),
+						SchemaName: fn.Func.GetSchemaName(),
+						ObjName:    fn.Func.GetObjName(),
 					},
 					Args: make([]*plan.Expr, 0),
 				},
@@ -184,10 +187,10 @@ func (r *ConstantFold) constantFold(e *plan.Expr, proc *process.Process) *plan.E
 		}
 	} else {
 		existRealTimeFunc := false
-		for i, expr := range ef.F.Args {
+		for i, expr := range fn.Args {
 			if ac, cok := expr.Expr.(*plan.Expr_Lit); cok && ac.Lit.Src != nil {
 				if _, pok := ac.Lit.Src.Expr.(*plan.Expr_V); !pok {
-					ef.F.Args[i] = ac.Lit.Src
+					fn.Args[i] = ac.Lit.Src
 					existRealTimeFunc = true
 				}
 			}
@@ -195,14 +198,16 @@ func (r *ConstantFold) constantFold(e *plan.Expr, proc *process.Process) *plan.E
 		if existRealTimeFunc {
 			c.Src = &plan.Expr{
 				Typ: &plan.Type{
-					Id:          e.Typ.Id,
-					NotNullable: e.Typ.NotNullable,
-					Width:       e.Typ.Width,
-					Scale:       e.Typ.Scale,
-					AutoIncr:    e.Typ.AutoIncr,
-					Table:       e.Typ.Table,
+					Id:          expr.Typ.Id,
+					NotNullable: expr.Typ.NotNullable,
+					Width:       expr.Typ.Width,
+					Scale:       expr.Typ.Scale,
+					AutoIncr:    expr.Typ.AutoIncr,
+					Table:       expr.Typ.Table,
 				},
-				Expr: ef,
+				Expr: &plan.Expr_F{
+					F: fn,
+				},
 			}
 		}
 	}
@@ -210,9 +215,10 @@ func (r *ConstantFold) constantFold(e *plan.Expr, proc *process.Process) *plan.E
 	ec := &plan.Expr_Lit{
 		Lit: c,
 	}
-	e.Typ = &plan.Type{Id: int32(vec.GetType().Oid), Scale: vec.GetType().Scale, Width: vec.GetType().Width}
-	e.Expr = ec
-	return e
+	expr.Typ = &plan.Type{Id: int32(vec.GetType().Oid), Scale: vec.GetType().Scale, Width: vec.GetType().Width}
+	expr.Expr = ec
+
+	return expr
 }
 
 func GetConstantValue(vec *vector.Vector, transAll bool, row uint64) *plan.Literal {

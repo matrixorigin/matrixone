@@ -235,6 +235,20 @@ func (mr *MockRelationMockRecorder) AlterTable(ctx, c, constraint interface{}) *
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AlterTable", reflect.TypeOf((*MockRelation)(nil).AlterTable), ctx, c, constraint)
 }
 
+// CopyTableDef mocks base method.
+func (m *MockRelation) CopyTableDef(arg0 context.Context) *plan.TableDef {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "CopyTableDef", arg0)
+	ret0, _ := ret[0].(*plan.TableDef)
+	return ret0
+}
+
+// CopyTableDef indicates an expected call of CopyTableDef.
+func (mr *MockRelationMockRecorder) CopyTableDef(arg0 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CopyTableDef", reflect.TypeOf((*MockRelation)(nil).CopyTableDef), arg0)
+}
+
 // DelTableDef mocks base method.
 func (m *MockRelation) DelTableDef(arg0 context.Context, arg1 engine.TableDef) error {
 	m.ctrl.T.Helper()
@@ -511,6 +525,20 @@ func (m *MockRelation) TableDefs(arg0 context.Context) ([]engine.TableDef, error
 func (mr *MockRelationMockRecorder) TableDefs(arg0 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "TableDefs", reflect.TypeOf((*MockRelation)(nil).TableDefs), arg0)
+}
+
+// TableRenameInTxn mocks base method.
+func (m *MockRelation) TableRenameInTxn(ctx context.Context, constraint [][]byte) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "TableRenameInTxn", ctx, constraint)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// TableRenameInTxn indicates an expected call of TableRenameInTxn.
+func (mr *MockRelationMockRecorder) TableRenameInTxn(ctx, constraint interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "TableRenameInTxn", reflect.TypeOf((*MockRelation)(nil).TableRenameInTxn), ctx, constraint)
 }
 
 // Update mocks base method.

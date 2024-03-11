@@ -351,7 +351,7 @@ func getDmlTableInfo(ctx CompilerContext, tableExprs tree.TableExprs, with *tree
 	return tblInfo, nil
 }
 
-func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Insert, info *dmlSelectInfo) (bool, map[int]int, bool, error) {
+func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Insert, info *dmlSelectInfo) (bool, map[int]int, bool, map[string]bool, error) {
 	var err error
 	var insertColumns []string
 	tableDef := info.tblInfo.tableDefs[0]
@@ -371,6 +371,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 	checkInsertPkDup := true
 	isInsertWithoutAutoPkCol := false
 	pkPosInValues := make(map[int]int)
+	insertWithoutUniqueKeyMap := make(map[string]bool)
 
 	if stmt.Columns == nil {
 		for _, col := range tableDef.Cols {
@@ -385,7 +386,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 		for _, column := range stmt.Columns {
 			colName := string(column)
 			if _, ok := colToIdx[colName]; !ok {
-				return false, nil, false, moerr.NewBadFieldError(builder.GetContext(), colName, tableDef.Name)
+				return false, nil, false, nil, moerr.NewBadFieldError(builder.GetContext(), colName, tableDef.Name)
 			}
 			insertColumns = append(insertColumns, colName)
 		}
@@ -402,14 +403,14 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 		if isAllDefault {
 			for j, row := range slt.Rows {
 				if row != nil {
-					return false, nil, false, moerr.NewWrongValueCountOnRow(builder.GetContext(), j+1)
+					return false, nil, false, nil, moerr.NewWrongValueCountOnRow(builder.GetContext(), j+1)
 				}
 			}
 		} else {
 			colCount := len(insertColumns)
 			for j, row := range slt.Rows {
 				if len(row) != colCount {
-					return false, nil, false, moerr.NewWrongValueCountOnRow(builder.GetContext(), j+1)
+					return false, nil, false, nil, moerr.NewWrongValueCountOnRow(builder.GetContext(), j+1)
 				}
 			}
 		}
@@ -418,7 +419,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 		//but it does not work at the case:
 		//insert into a(a) values (); insert into a values (0),();
 		if isAllDefault && syntaxHasColumnNames {
-			return false, nil, false, moerr.NewInvalidInput(builder.GetContext(), "insert values does not match the number of columns")
+			return false, nil, false, nil, moerr.NewInvalidInput(builder.GetContext(), "insert values does not match the number of columns")
 		}
 		checkInsertPkDup = len(slt.Rows) > 1
 		if CNPrimaryCheck {
@@ -475,7 +476,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 
 		err = buildValueScan(isAllDefault, info, builder, bindCtx, tableDef, slt, insertColumns, colToIdx)
 		if err != nil {
-			return false, nil, false, err
+			return false, nil, false, nil, err
 		}
 
 	case *tree.SelectClause:
@@ -484,7 +485,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 		subCtx := NewBindContext(builder, bindCtx)
 		info.rootId, err = builder.buildSelect(astSlt, subCtx, false)
 		if err != nil {
-			return false, nil, false, err
+			return false, nil, false, nil, err
 		}
 
 	case *tree.ParenSelect:
@@ -493,23 +494,23 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 		subCtx := NewBindContext(builder, bindCtx)
 		info.rootId, err = builder.buildSelect(astSlt, subCtx, false)
 		if err != nil {
-			return false, nil, false, err
+			return false, nil, false, nil, err
 		}
 
 	default:
-		return false, nil, false, moerr.NewInvalidInput(builder.GetContext(), "insert has unknown select statement")
+		return false, nil, false, nil, moerr.NewInvalidInput(builder.GetContext(), "insert has unknown select statement")
 	}
 
 	err = builder.addBinding(info.rootId, tree.AliasClause{
 		Alias: derivedTableName,
 	}, bindCtx)
 	if err != nil {
-		return false, nil, false, err
+		return false, nil, false, nil, err
 	}
 
 	lastNode := builder.qry.Nodes[info.rootId]
 	if len(insertColumns) != len(lastNode.ProjectList) {
-		return false, nil, false, moerr.NewInvalidInput(builder.GetContext(), "insert values does not match the number of columns")
+		return false, nil, false, nil, moerr.NewInvalidInput(builder.GetContext(), "insert values does not match the number of columns")
 	}
 
 	tag := builder.qry.Nodes[info.rootId].BindingTags[0]
@@ -530,9 +531,35 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 		}
 		projExpr, err = forceCastExpr(builder.GetContext(), projExpr, tableDef.Cols[colIdx].Typ)
 		if err != nil {
-			return false, nil, false, err
+			return false, nil, false, nil, err
 		}
 		insertColToExpr[column] = projExpr
+	}
+
+	// create table t(a int, b int unique key);
+	// insert into t(a) values (1);  -> isInsertWithoutUniqueKey = true,  then we do not need a plan to insert unique_key_hidden_table;
+	// create table t(a int, b int unique key auto_increment)	-> isInsertWithoutUniqueKey is allways false
+	// create table t(a int, b int unique key default 10) 		-> isInsertWithoutUniqueKey is allways false
+	for _, idx := range tableDef.Indexes {
+		if idx.Unique {
+			withoutUniqueCol := true
+			for _, name := range idx.Parts {
+				_, ok := insertColToExpr[name]
+				if ok {
+					withoutUniqueCol = false
+					break
+				} else {
+					// insert without unique
+					// then need check col is not auto_incr & default is not null
+					col := tableDef.Cols[tableDef.Name2ColIndex[name]]
+					if col.Typ.AutoIncr || (col.Default.Expr != nil && !isNullExpr(col.Default.Expr)) {
+						withoutUniqueCol = false
+						break
+					}
+				}
+			}
+			insertWithoutUniqueKeyMap[idx.IndexName] = withoutUniqueCol
+		}
 	}
 
 	// have tables : t1(a default 0, b int, pk(a,b)) ,  t2(j int,k int)
@@ -548,7 +575,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 		} else {
 			defExpr, err := getDefaultExpr(builder.GetContext(), col)
 			if err != nil {
-				return false, nil, false, err
+				return false, nil, false, nil, err
 			}
 
 			if col.Typ.AutoIncr && col.Name == tableDef.Pkey.PkeyColName {
@@ -643,17 +670,17 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 					if _, ok := updateExpr.(*tree.DefaultVal); ok {
 						defExpr, err = getDefaultExpr(builder.GetContext(), col)
 						if err != nil {
-							return false, nil, false, err
+							return false, nil, false, nil, err
 						}
 					} else {
 						defExpr, err = binder.BindExpr(updateExpr, 0, true)
 						if err != nil {
-							return false, nil, false, err
+							return false, nil, false, nil, err
 						}
 					}
 					defExpr, err = forceCastExpr(builder.GetContext(), defExpr, col.Typ)
 					if err != nil {
-						return false, nil, false, err
+						return false, nil, false, nil, err
 					}
 					updateExprs[col.Name] = defExpr
 				}
@@ -696,14 +723,14 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 					}
 					eqExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{leftExpr, rightExpr})
 					if err != nil {
-						return false, nil, false, err
+						return false, nil, false, nil, err
 					}
 					if condIdx == 0 {
 						condExpr = eqExpr
 					} else {
 						condExpr, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "and", []*Expr{condExpr, eqExpr})
 						if err != nil {
-							return false, nil, false, err
+							return false, nil, false, nil, err
 						}
 					}
 					condIdx++
@@ -714,7 +741,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 				} else {
 					joinConds, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "or", []*Expr{joinConds, condExpr})
 					if err != nil {
-						return false, nil, false, err
+						return false, nil, false, nil, err
 					}
 				}
 				joinIdx++
@@ -724,7 +751,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 			leftCtx := builder.ctxByNode[info.rootId]
 			err = joinCtx.mergeContexts(builder.GetContext(), leftCtx, rightCtx)
 			if err != nil {
-				return false, nil, false, err
+				return false, nil, false, nil, err
 			}
 			newRootId := builder.appendNode(&plan.Node{
 				NodeType: plan.Node_JOIN,
@@ -750,7 +777,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 		}
 	}
 
-	return checkInsertPkDup, pkPosInValues, isInsertWithoutAutoPkCol, nil
+	return checkInsertPkDup, pkPosInValues, isInsertWithoutAutoPkCol, insertWithoutUniqueKeyMap, nil
 }
 
 func deleteToSelect(builder *QueryBuilder, bindCtx *BindContext, node *tree.Delete, haveConstraint bool, tblInfo *dmlTableInfo) (int32, error) {
@@ -1076,7 +1103,7 @@ func buildValueScan(
 	}
 
 	bat.SetRowCount(len(slt.Rows))
-	nodeId, _ := uuid.NewUUID()
+	nodeId, _ := uuid.NewV7()
 	scanNode := &plan.Node{
 		NodeType:    plan.Node_VALUE_SCAN,
 		RowsetData:  rowsetData,

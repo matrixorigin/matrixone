@@ -158,8 +158,9 @@ func newTNService(
 func buildTNConfig(
 	index int, opt Options, address serviceAddresses,
 ) *tnservice.Config {
+	uid, _ := uuid.NewV7()
 	cfg := &tnservice.Config{
-		UUID:          uuid.New().String(),
+		UUID:          uid.String(),
 		ListenAddress: address.getTnListenAddress(index),
 	}
 	cfg.ServiceAddress = cfg.ListenAddress

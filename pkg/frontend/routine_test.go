@@ -102,7 +102,7 @@ var newMockWrapper = func(ctrl *gomock.Controller, ses *Session,
 	} else {
 		panic(fmt.Sprintf("there is no mysqlResultset for the sql %s", sql))
 	}
-	uuid, _ := uuid.NewUUID()
+	uuid, _ := uuid.NewV7()
 	runner := mock_frontend.NewMockComputationRunner(ctrl)
 	runner.EXPECT().Run(gomock.Any()).DoAndReturn(func(uint64) (*util.RunResult, error) {
 		proto := ses.GetMysqlProtocol()
@@ -126,7 +126,6 @@ var newMockWrapper = func(ctrl *gomock.Controller, ses *Session,
 	mcw := mock_frontend.NewMockComputationWrapper(ctrl)
 	mcw.EXPECT().GetAst().Return(stmt).AnyTimes()
 	mcw.EXPECT().GetProcess().Return(proc).AnyTimes()
-	mcw.EXPECT().SetDatabaseName(gomock.Any()).Return(nil).AnyTimes()
 	mcw.EXPECT().GetColumns().Return(columns, nil).AnyTimes()
 	mcw.EXPECT().Compile(gomock.Any(), gomock.Any(), gomock.Any()).Return(runner, nil).AnyTimes()
 	mcw.EXPECT().GetUUID().Return(uuid[:]).AnyTimes()

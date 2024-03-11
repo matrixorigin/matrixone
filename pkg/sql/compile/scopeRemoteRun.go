@@ -189,6 +189,9 @@ func cnMessageHandle(receiver *messageReceiverOnServer) error {
 
 	case pipeline.Method_PipelineMessage:
 		c := receiver.newCompile()
+		defer func() {
+			mpool.DeleteMPool(c.proc.Mp())
+		}()
 
 		// decode and rewrite the scope.
 		s, err := decodeScope(receiver.scopeData, c.proc, true, c.e)
@@ -316,6 +319,8 @@ func (s *Scope) remoteRun(c *Compile) (err error) {
 	// new sender and do send work.
 	sender, err := newMessageSenderOnClient(s.Proc.Ctx, c, s.NodeInfo.Addr)
 	if err != nil {
+		logutil.Errorf("Failed to newMessageSenderOnClient sql=%s, txnID=%s, err=%v",
+			c.sql, c.proc.TxnOperator.Txn().DebugString(), err)
 		return err
 	}
 	defer sender.close()

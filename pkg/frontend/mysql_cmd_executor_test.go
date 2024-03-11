@@ -17,10 +17,11 @@ package frontend
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"io"
 	"testing"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 
 	"github.com/fagongzi/goetty/v2"
 	"github.com/fagongzi/goetty/v2/buf"
@@ -122,7 +123,6 @@ func Test_mce(t *testing.T) {
 		}
 		create_1.EXPECT().GetAst().Return(stmts[0]).AnyTimes()
 		create_1.EXPECT().GetUUID().Return(make([]byte, 16)).AnyTimes()
-		create_1.EXPECT().SetDatabaseName(gomock.Any()).Return(nil).AnyTimes()
 		create_1.EXPECT().Compile(gomock.Any(), gomock.Any(), gomock.Any()).Return(runner, nil).AnyTimes()
 		create_1.EXPECT().Run(gomock.Any()).Return(nil, nil).AnyTimes()
 		create_1.EXPECT().GetLoadTag().Return(false).AnyTimes()
@@ -135,7 +135,6 @@ func Test_mce(t *testing.T) {
 		}
 		select_1.EXPECT().GetAst().Return(stmts[0]).AnyTimes()
 		select_1.EXPECT().GetUUID().Return(make([]byte, 16)).AnyTimes()
-		select_1.EXPECT().SetDatabaseName(gomock.Any()).Return(nil).AnyTimes()
 		select_1.EXPECT().Compile(gomock.Any(), gomock.Any(), gomock.Any()).Return(runner, nil).AnyTimes()
 		select_1.EXPECT().Run(gomock.Any()).Return(nil, nil).AnyTimes()
 		select_1.EXPECT().GetLoadTag().Return(false).AnyTimes()
@@ -213,7 +212,6 @@ func Test_mce(t *testing.T) {
 			convey.So(err, convey.ShouldBeNil)
 			select_2.EXPECT().GetAst().Return(stmts[0]).AnyTimes()
 			select_2.EXPECT().GetUUID().Return(make([]byte, 16)).AnyTimes()
-			select_2.EXPECT().SetDatabaseName(gomock.Any()).Return(nil).AnyTimes()
 			select_2.EXPECT().Compile(gomock.Any(), gomock.Any(), gomock.Any()).Return(runner, nil).AnyTimes()
 			select_2.EXPECT().Run(gomock.Any()).Return(nil, nil).AnyTimes()
 			select_2.EXPECT().GetLoadTag().Return(false).AnyTimes()
@@ -654,7 +652,7 @@ func Test_typeconvert(t *testing.T) {
 			{tp: defines.MYSQL_TYPE_FLOAT, signed: true},
 			{tp: defines.MYSQL_TYPE_DOUBLE, signed: true},
 			{tp: defines.MYSQL_TYPE_STRING, signed: true},
-			{tp: defines.MYSQL_TYPE_VARCHAR, signed: true},
+			{tp: defines.MYSQL_TYPE_VAR_STRING, signed: true},
 			{tp: defines.MYSQL_TYPE_DATE, signed: true},
 			{tp: defines.MYSQL_TYPE_TIME, signed: true},
 			{tp: defines.MYSQL_TYPE_DATETIME, signed: true},
@@ -1044,7 +1042,8 @@ func TestSerializePlanToJson(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%+v", err)
 		}
-		stm := &motrace.StatementInfo{StatementID: uuid.New(), Statement: sql, RequestAt: time.Now()}
+		uid, _ := uuid.NewV7()
+		stm := &motrace.StatementInfo{StatementID: uid, Statement: sql, RequestAt: time.Now()}
 		h := NewMarshalPlanHandler(mock.CurrentContext().GetContext(), stm, plan)
 		json := h.Marshal(mock.CurrentContext().GetContext())
 		_, stats := h.Stats(mock.CurrentContext().GetContext())

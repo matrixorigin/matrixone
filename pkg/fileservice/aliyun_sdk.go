@@ -87,26 +87,24 @@ func NewAliyunSDK(
 		zap.Any("arguments", args),
 	)
 
-	res, err := client.ListBuckets()
-	if err != nil {
-		return nil, err
-	}
-	for _, info := range res.Buckets {
-		if info.Name == args.Bucket {
-			bucket, err := client.Bucket(args.Bucket)
-			if err != nil {
-				return nil, err
-			}
-
-			return &AliyunSDK{
-				name:            args.Name,
-				bucket:          bucket,
-				perfCounterSets: perfCounterSets,
-			}, nil
+	if !args.NoBucketValidation {
+		// validate bucket
+		_, err := client.GetBucketInfo(args.Bucket)
+		if err != nil {
+			return nil, err
 		}
 	}
 
-	return nil, moerr.NewInvalidArgNoCtx("Bucket", args.Bucket)
+	bucket, err := client.Bucket(args.Bucket)
+	if err != nil {
+		return nil, err
+	}
+
+	return &AliyunSDK{
+		name:            args.Name,
+		bucket:          bucket,
+		perfCounterSets: perfCounterSets,
+	}, nil
 }
 
 var _ ObjectStorage = new(AliyunSDK)
@@ -166,6 +164,12 @@ func (a *AliyunSDK) Stat(
 	size int64,
 	err error,
 ) {
+
+	defer func() {
+		if a.is404(err) {
+			err = moerr.NewFileNotFoundNoCtx(key)
+		}
+	}()
 
 	if err := ctx.Err(); err != nil {
 		return 0, err
@@ -536,6 +540,9 @@ func (o ObjectStorageArguments) credentialProviderForAliyunSDK(
 ) (ret oss.CredentialsProvider, err error) {
 
 	defer func() {
+		if err != nil {
+			return
+		}
 		// chain assume role provider
 		if o.RoleARN != "" {
 			logutil.Info("with role arn")
@@ -578,6 +585,12 @@ func (o ObjectStorageArguments) credentialProviderForAliyunSDK(
 	}
 
 	if config.Type == nil {
+
+		if o.NoDefaultCredentials {
+			return nil, moerr.NewInvalidInputNoCtx(
+				"no valid credentials",
+			)
+		}
 
 		// check aws env
 		awsCredentials := awscredentials.NewEnvCredentials()

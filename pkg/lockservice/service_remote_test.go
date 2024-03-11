@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
@@ -557,6 +558,47 @@ func TestIssue12554(t *testing.T) {
 				Policy:      pb.WaitPolicy_Wait,
 			})
 			assert.True(t, moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged))
+
+			assert.Nil(t, l1.tables.get(table))
+		},
+	)
+}
+
+func TestIssue14346(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1", "s2"},
+		func(alloc *lockTableAllocator, s []*service) {
+			s1 := s[0]
+			s2 := s[1]
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+			defer cancel()
+
+			txn1 := []byte("txn1")
+			txn2 := []byte("txn2")
+			table := uint64(10)
+			rows := newTestRows(1)
+
+			// txn1 hold lock row1 on s1
+			mustAddTestLock(t, ctx, s1, table, txn1, rows, pb.Granularity_Row)
+			require.NoError(t, s1.Unlock(ctx, txn1, timestamp.Timestamp{}))
+
+			// txn1 hold lock row1 on s2
+			mustAddTestLock(t, ctx, s2, table, txn2, rows, pb.Granularity_Row)
+			require.NoError(t, s2.Unlock(ctx, txn2, timestamp.Timestamp{}))
+
+			// remove s1
+			clusterservice.GetMOCluster().RemoveCN("s1")
+
+			// wait bind remove on s2
+			for {
+				v, err := s2.getLockTable(table)
+				require.NoError(t, err)
+				if v == nil {
+					return
+				}
+				time.Sleep(time.Second)
+			}
 		},
 	)
 }

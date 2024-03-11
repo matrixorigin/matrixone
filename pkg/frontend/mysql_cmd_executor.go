@@ -245,7 +245,7 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 			text = SubStringFromBegin(envStmt, int(ses.GetParameterUnit().SV.LengthOfQueryPrinted))
 		}
 	} else {
-		stmID = uuid.New()
+		stmID, _ = uuid.NewV7()
 		text = SubStringFromBegin(envStmt, int(ses.GetParameterUnit().SV.LengthOfQueryPrinted))
 	}
 	ses.SetStmtId(stmID)
@@ -711,6 +711,7 @@ func doSetVar(ctx context.Context, mce *MysqlCmdExecutor, ses *Session, sv *tree
 	var err error = nil
 	var ok bool
 	setVarFunc := func(system, global bool, name string, value interface{}, sql string) error {
+		var oldValueRaw interface{}
 		if system {
 			if global {
 				err = doCheckRole(ctx, ses)
@@ -726,6 +727,12 @@ func doSetVar(ctx context.Context, mce *MysqlCmdExecutor, ses *Session, sv *tree
 					return err
 				}
 			} else {
+				if strings.ToLower(name) == "autocommit" {
+					oldValueRaw, err = ses.GetSessionVar("autocommit")
+					if err != nil {
+						return err
+					}
+				}
 				err = ses.SetSessionVar(name, value)
 				if err != nil {
 					return err
@@ -733,11 +740,15 @@ func doSetVar(ctx context.Context, mce *MysqlCmdExecutor, ses *Session, sv *tree
 			}
 
 			if strings.ToLower(name) == "autocommit" {
-				newValue, err2 := valueIsBoolTrue(value)
-				if err2 != nil {
-					return err2
+				oldValue, err := valueIsBoolTrue(oldValueRaw)
+				if err != nil {
+					return err
 				}
-				err = ses.SetAutocommit(newValue)
+				newValue, err := valueIsBoolTrue(value)
+				if err != nil {
+					return err
+				}
+				err = ses.SetAutocommit(oldValue, newValue)
 				if err != nil {
 					return err
 				}
@@ -1066,6 +1077,46 @@ func constructVarBatch(ses *Session, rows [][]interface{}) (*batch.Batch, error)
 	vector.AppendStringList(bat.Vecs[0], v0, nil, ses.GetMemPool())
 	bat.Vecs[1] = vector.NewVec(typ)
 	vector.AppendStringList(bat.Vecs[1], v1, nil, ses.GetMemPool())
+	return bat, nil
+}
+
+func constructCollationBatch(ses *Session, rows [][]interface{}) (*batch.Batch, error) {
+	bat := batch.New(true, []string{"Collation", "Charset", "Id", "Default", "Compiled", "Sortlen", "Pad_attribute"})
+	typ := types.New(types.T_varchar, types.MaxVarcharLen, 0)
+	longlongTyp := types.New(types.T_int64, 0, 0)
+	longTyp := types.New(types.T_int32, 0, 0)
+	cnt := len(rows)
+	bat.SetRowCount(cnt)
+	v0 := make([]string, cnt)
+	v1 := make([]string, cnt)
+	v2 := make([]int64, cnt)
+	v3 := make([]string, cnt)
+	v4 := make([]string, cnt)
+	v5 := make([]int32, cnt)
+	v6 := make([]string, cnt)
+	for i, row := range rows {
+		v0[i] = row[0].(string)
+		v1[i] = row[1].(string)
+		v2[i] = row[2].(int64)
+		v3[i] = row[3].(string)
+		v4[i] = row[4].(string)
+		v5[i] = row[5].(int32)
+		v6[i] = row[6].(string)
+	}
+	bat.Vecs[0] = vector.NewVec(typ)
+	vector.AppendStringList(bat.Vecs[0], v0, nil, ses.GetMemPool())
+	bat.Vecs[1] = vector.NewVec(typ)
+	vector.AppendStringList(bat.Vecs[1], v1, nil, ses.GetMemPool())
+	bat.Vecs[2] = vector.NewVec(longlongTyp)
+	vector.AppendFixedList[int64](bat.Vecs[2], v2, nil, ses.GetMemPool())
+	bat.Vecs[3] = vector.NewVec(typ)
+	vector.AppendStringList(bat.Vecs[3], v3, nil, ses.GetMemPool())
+	bat.Vecs[4] = vector.NewVec(typ)
+	vector.AppendStringList(bat.Vecs[4], v4, nil, ses.GetMemPool())
+	bat.Vecs[5] = vector.NewVec(longTyp)
+	vector.AppendFixedList[int32](bat.Vecs[5], v5, nil, ses.GetMemPool())
+	bat.Vecs[6] = vector.NewVec(typ)
+	vector.AppendStringList(bat.Vecs[6], v6, nil, ses.GetMemPool())
 	return bat, nil
 }
 
@@ -1450,6 +1501,184 @@ func (mce *MysqlCmdExecutor) handleShowAccounts(ctx context.Context, sa *tree.Sh
 	if err = proto.SendResponse(ctx, resp); err != nil {
 		return moerr.NewInternalError(ctx, "routine send response failed. error:%v ", err)
 	}
+	return err
+}
+
+// handleShowCollation lists the info of collation
+func (mce *MysqlCmdExecutor) handleShowCollation(sc *tree.ShowCollation, proc *process.Process, cwIndex, cwsLen int) error {
+	var err error
+	ses := mce.GetSession()
+	proto := ses.GetMysqlProtocol()
+	err = doShowCollation(ses, proc, sc)
+	if err != nil {
+		return err
+	}
+	mer := NewMysqlExecutionResult(0, 0, 0, 0, ses.GetMysqlResultSet())
+	resp := mce.ses.SetNewResponse(ResultResponse, 0, int(COM_QUERY), mer, cwIndex, cwsLen)
+
+	if err := proto.SendResponse(ses.requestCtx, resp); err != nil {
+		return moerr.NewInternalError(ses.requestCtx, "routine send response failed. error:%v ", err)
+	}
+	return err
+}
+
+func doShowCollation(ses *Session, proc *process.Process, sc *tree.ShowCollation) error {
+	var err error
+	var bat *batch.Batch
+	// var outputBatches []*batch.Batch
+
+	// Construct the columns.
+	col1 := new(MysqlColumn)
+	col1.SetColumnType(defines.MYSQL_TYPE_VAR_STRING)
+	col1.SetName("Collation")
+
+	col2 := new(MysqlColumn)
+	col2.SetColumnType(defines.MYSQL_TYPE_VAR_STRING)
+	col2.SetName("Charset")
+
+	col3 := new(MysqlColumn)
+	col3.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
+	col3.SetName("Id")
+
+	col4 := new(MysqlColumn)
+	col4.SetColumnType(defines.MYSQL_TYPE_VAR_STRING)
+	col4.SetName("Default")
+
+	col5 := new(MysqlColumn)
+	col5.SetColumnType(defines.MYSQL_TYPE_VAR_STRING)
+	col5.SetName("Compiled")
+
+	col6 := new(MysqlColumn)
+	col6.SetColumnType(defines.MYSQL_TYPE_LONG)
+	col6.SetName("Sortlen")
+
+	col7 := new(MysqlColumn)
+	col7.SetColumnType(defines.MYSQL_TYPE_VAR_STRING)
+	col7.SetName("Pad_attribute")
+
+	mrs := ses.GetMysqlResultSet()
+	mrs.AddColumn(col1)
+	mrs.AddColumn(col2)
+	mrs.AddColumn(col3)
+	mrs.AddColumn(col4)
+	mrs.AddColumn(col5)
+	mrs.AddColumn(col6)
+	mrs.AddColumn(col7)
+
+	var hasLike = false
+	var likePattern = ""
+	var isIlike = false
+	if sc.Like != nil {
+		hasLike = true
+		if sc.Like.Op == tree.ILIKE {
+			isIlike = true
+		}
+		likePattern = strings.ToLower(sc.Like.Right.String())
+	}
+
+	// Construct the rows.
+	rows := make([][]interface{}, 0, len(Collations))
+	for _, collation := range Collations {
+		if hasLike {
+			s := collation.collationName
+			if isIlike {
+				s = strings.ToLower(s)
+			}
+			if !WildcardMatch(likePattern, s) {
+				continue
+			}
+		}
+		row := make([]interface{}, 7)
+		row[0] = collation.collationName
+		row[1] = collation.charset
+		row[2] = collation.id
+		row[3] = collation.isDefault
+		row[4] = collation.isCompiled
+		row[5] = collation.sortLen
+		row[6] = collation.padAttribute
+		rows = append(rows, row)
+	}
+
+	bat, err = constructCollationBatch(ses, rows)
+	defer bat.Clean(proc.Mp())
+	if err != nil {
+		return err
+	}
+
+	if sc.Where != nil {
+		binder := plan2.NewDefaultBinder(proc.Ctx, nil, nil, &plan2.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen}, []string{"collation", "charset", "id", "default", "compiled", "sortlen", "pad_attribute"})
+		planExpr, err := binder.BindExpr(sc.Where.Expr, 0, false)
+		if err != nil {
+			return err
+		}
+
+		executor, err := colexec.NewExpressionExecutor(proc, planExpr)
+		if err != nil {
+			return err
+		}
+		vec, err := executor.Eval(proc, []*batch.Batch{bat})
+		if err != nil {
+			executor.Free()
+			return err
+		}
+
+		bs := vector.MustFixedCol[bool](vec)
+		sels := proc.Mp().GetSels()
+		for i, b := range bs {
+			if b {
+				sels = append(sels, int64(i))
+			}
+		}
+		executor.Free()
+
+		bat.Shrink(sels)
+		proc.Mp().PutSels(sels)
+		v0 := vector.MustStrCol(bat.Vecs[0])
+		v1 := vector.MustStrCol(bat.Vecs[1])
+		v2 := vector.MustFixedCol[int64](bat.Vecs[2])
+		v3 := vector.MustStrCol(bat.Vecs[3])
+		v4 := vector.MustStrCol(bat.Vecs[4])
+		v5 := vector.MustFixedCol[int32](bat.Vecs[5])
+		v6 := vector.MustStrCol(bat.Vecs[6])
+		rows = rows[:len(v0)]
+		for i := range v0 {
+			rows[i][0] = v0[i]
+			rows[i][1] = v1[i]
+			rows[i][2] = v2[i]
+			rows[i][3] = v3[i]
+			rows[i][4] = v4[i]
+			rows[i][5] = v5[i]
+			rows[i][6] = v6[i]
+		}
+	}
+
+	//sort by name
+	sort.Slice(rows, func(i, j int) bool {
+		return rows[i][0].(string) < rows[j][0].(string)
+	})
+
+	for _, row := range rows {
+		mrs.AddRow(row)
+	}
+
+	// oq := newFakeOutputQueue(mrs)
+	// if err = fillResultSet(oq, bat, ses); err != nil {
+	// 	return err
+	// }
+
+	ses.SetMysqlResultSet(mrs)
+	ses.rs = mysqlColDef2PlanResultColDef(mrs)
+
+	// save query result
+	if openSaveQueryResult(ses) {
+		if err := saveQueryResult(ses, bat); err != nil {
+			return err
+		}
+		if err := saveQueryResultMeta(ses); err != nil {
+			return err
+		}
+	}
+
 	return err
 }
 
@@ -2513,8 +2742,6 @@ func (mce *MysqlCmdExecutor) canExecuteStatementInUncommittedTransaction(request
 			return moerr.NewInternalError(requestCtx, onlyCreateStatementErrorInfo())
 		} else if IsAdministrativeStatement(stmt) {
 			return moerr.NewInternalError(requestCtx, administrativeCommandIsUnsupportedInTxnErrorInfo())
-		} else if IsParameterModificationStatement(stmt) {
-			return moerr.NewInternalError(requestCtx, parameterModificationInTxnErrorInfo())
 		} else {
 			return moerr.NewInternalError(requestCtx, unclassifiedStatementInUncommittedTxnErrorInfo())
 		}
@@ -2894,10 +3121,13 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 	if err != nil {
 		return err
 	}
-	ses.GetTxnHandler().disableStartStmt()
+
 	if txnOp != nil && !ses.IsDerivedStmt() {
-		txnOp.GetWorkspace().StartStatement()
-		ses.GetTxnHandler().enableStartStmt(txnOp.Txn().ID)
+		ok, _ := ses.GetTxnHandler().calledStartStmt()
+		if !ok {
+			txnOp.GetWorkspace().StartStatement()
+			ses.GetTxnHandler().enableStartStmt(txnOp.Txn().ID)
+		}
 	}
 
 	// defer Start/End Statement management, called after finishTxnFunc()
@@ -3289,6 +3519,11 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 	case *tree.ShowAccounts:
 		selfHandle = true
 		if err = mce.handleShowAccounts(requestCtx, st, i, len(cws)); err != nil {
+			return
+		}
+	case *tree.ShowCollation:
+		selfHandle = true
+		if err = mce.handleShowCollation(st, proc, i, len(cws)); err != nil {
 			return
 		}
 	case *tree.Load:
@@ -4335,7 +4570,7 @@ func convertEngineTypeToMysqlType(ctx context.Context, engineType types.T, col *
 	case types.T_char:
 		col.SetColumnType(defines.MYSQL_TYPE_STRING)
 	case types.T_varchar:
-		col.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+		col.SetColumnType(defines.MYSQL_TYPE_VAR_STRING)
 	case types.T_array_float32, types.T_array_float64:
 		col.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
 	case types.T_binary:
@@ -4553,9 +4788,8 @@ func (h *marshalPlanHandler) Stats(ctx context.Context) (statsByte statistic.Sta
 				statsByte.GetTimeConsumed() +
 					float64(statsInfo.ParseDuration+
 						statsInfo.CompileDuration+
-						statsInfo.CompileDuration+
 						statsInfo.PlanDuration) -
-					float64(statsInfo.DiskAccessTimeConsumption+statsInfo.S3AccessTimeConsumption))
+					float64(statsInfo.IOAccessTimeConsumption+statsInfo.LockTimeConsumption))
 		}
 
 	} else {

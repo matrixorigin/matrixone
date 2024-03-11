@@ -111,7 +111,7 @@ type deleteNodeInfo struct {
 func buildInsertPlans(
 	ctx CompilerContext, builder *QueryBuilder, bindCtx *BindContext,
 	objRef *ObjectRef, tableDef *TableDef, lastNodeId int32,
-	checkInsertPkDup bool, pkFilterExpr []*Expr, newPartitionExpr *Expr, isInsertWithoutAutoPkCol bool) error {
+	checkInsertPkDup bool, pkFilterExpr []*Expr, newPartitionExpr *Expr, isInsertWithoutAutoPkCol bool, insertWithoutUniqueKeyMap map[string]bool) error {
 
 	// add plan: -> preinsert -> sink
 	lastNodeId = appendPreInsertNode(builder, bindCtx, objRef, tableDef, lastNodeId, false)
@@ -121,7 +121,7 @@ func buildInsertPlans(
 
 	// make insert plans
 	insertBindCtx := NewBindContext(builder, nil)
-	err := makeInsertPlan(ctx, builder, insertBindCtx, objRef, tableDef, 0, sourceStep, true, false, checkInsertPkDup, true, pkFilterExpr, newPartitionExpr, isInsertWithoutAutoPkCol, !builder.qry.LoadTag, nil, nil)
+	err := makeInsertPlan(ctx, builder, insertBindCtx, objRef, tableDef, 0, sourceStep, true, false, checkInsertPkDup, true, pkFilterExpr, newPartitionExpr, isInsertWithoutAutoPkCol, !builder.qry.LoadTag, nil, nil, insertWithoutUniqueKeyMap)
 	return err
 }
 
@@ -200,7 +200,7 @@ func buildUpdatePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 	// build insert plan.
 	insertBindCtx := NewBindContext(builder, nil)
 	err = makeInsertPlan(ctx, builder, insertBindCtx, updatePlanCtx.objRef, updatePlanCtx.tableDef, updatePlanCtx.updateColLength,
-		sourceStep, false, updatePlanCtx.isFkRecursionCall, updatePlanCtx.checkInsertPkDup, updatePlanCtx.updatePkCol, updatePlanCtx.pkFilterExprs, nil, false, true, nil, nil)
+		sourceStep, false, updatePlanCtx.isFkRecursionCall, updatePlanCtx.checkInsertPkDup, updatePlanCtx.updatePkCol, updatePlanCtx.pkFilterExprs, nil, false, true, nil, nil, nil)
 	return err
 }
 
@@ -407,7 +407,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 							}
 						}
 						_checkInsertPKDupForHiddenIndexTable := indexdef.Unique // only check PK uniqueness for UK. SK will not check PK uniqueness.
-						err = makeInsertPlan(ctx, builder, bindCtx, uniqueObjRef, insertUniqueTableDef, 1, preUKStep, false, false, _checkInsertPKDupForHiddenIndexTable, true, nil, nil, false, _checkInsertPKDupForHiddenIndexTable, nil, nil)
+						err = makeInsertPlan(ctx, builder, bindCtx, uniqueObjRef, insertUniqueTableDef, 1, preUKStep, false, false, _checkInsertPKDupForHiddenIndexTable, true, nil, nil, false, _checkInsertPKDupForHiddenIndexTable, nil, nil, nil)
 						if err != nil {
 							return err
 						}
@@ -676,7 +676,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 							NodeType:    plan.Node_TABLE_SCAN,
 							Stats:       &plan.Stats{},
 							ObjRef:      childObjRef,
-							TableDef: copiedTableDef,
+							TableDef:    copiedTableDef,
 							ProjectList: childProjectList,
 						}, bindCtx)
 
@@ -923,6 +923,7 @@ func makeInsertPlan(
 	checkInsertPkDupForHiddenIndexTable bool,
 	indexSourceColTypes []*plan.Type,
 	fuzzymessage *OriginTableMessageForFuzzy,
+	insertWithoutUniqueKeyMap map[string]bool,
 ) error {
 	var lastNodeId int32
 	var err error
@@ -982,6 +983,10 @@ func makeInsertPlan(
 	// append plan for the hidden tables of unique keys
 	if updateColLength == 0 {
 		for idx, indexdef := range tableDef.Indexes {
+			if indexdef.GetUnique() && (insertWithoutUniqueKeyMap != nil && insertWithoutUniqueKeyMap[indexdef.IndexName]) {
+				continue
+			}
+
 			if indexdef.TableExist {
 				idxRef, idxTableDef := ctx.Resolve(objRef.SchemaName, indexdef.IndexTableName)
 				// remove row_id
@@ -1025,7 +1030,7 @@ func makeInsertPlan(
 				for i := range tableDef.Cols {
 					colTypes[i] = tableDef.Cols[i].Typ
 				}
-				err = makeInsertPlan(ctx, builder, bindCtx, idxRef, idxTableDef, 0, newSourceStep, false, false, checkInsertPkDupForHiddenIndexTable, true, nil, nil, false, _checkInsertPkDupForHiddenTable, colTypes, originTableMessageForFuzzy)
+				err = makeInsertPlan(ctx, builder, bindCtx, idxRef, idxTableDef, 0, newSourceStep, false, false, checkInsertPkDupForHiddenIndexTable, true, nil, nil, false, _checkInsertPkDupForHiddenTable, colTypes, originTableMessageForFuzzy, nil)
 				if err != nil {
 					return err
 				}
@@ -1567,6 +1572,27 @@ func makeOneDeletePlan(
 	isSK bool,
 ) (int32, error) {
 	if isUK || isSK {
+		// append filter
+		rowIdTyp := types.T_Rowid.ToType()
+		rowIdColExpr := &plan.Expr{
+			Typ: makePlan2Type(&rowIdTyp),
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					ColPos: int32(delNodeInfo.deleteIndex),
+				},
+			},
+		}
+		filterExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "is_not_null", []*Expr{rowIdColExpr})
+		if err != nil {
+			return -1, err
+		}
+		filterNode := &Node{
+			NodeType:   plan.Node_FILTER,
+			Children:   []int32{lastNodeId},
+			FilterList: []*plan.Expr{filterExpr},
+		}
+		lastNodeId = builder.appendNode(filterNode, bindCtx)
+
 		// append lock
 		lockTarget := &plan.LockTarget{
 			TableId:            delNodeInfo.tableDef.TblId,

@@ -49,13 +49,16 @@ func (s *service) GetWaitingList(
 	return true, waitingList, nil
 }
 
-func (s *service) ForceRefreshLockTableBinds(targets ...uint64) {
-	contains := func(id uint64, _ lockTable) bool {
+func (s *service) ForceRefreshLockTableBinds(
+	targets []uint64,
+	matcher func(bind pb.LockTable) bool) {
+	contains := func(id uint64, l lockTable) bool {
 		if len(targets) == 0 {
 			return true
 		}
+
 		for _, v := range targets {
-			if v == id {
+			if v == id && (matcher == nil || matcher(l.getBind())) {
 				return true
 			}
 		}
@@ -99,4 +102,18 @@ func (s *service) IterLocks(fn func(tableID uint64, keys [][]byte, lock Lock) bo
 			return !stop
 		}()
 	})
+}
+
+func (s *service) CloseRemoteLockTable(
+	tableID uint64,
+	version uint64) (bool, error) {
+	removed := false
+	s.tables.removeWithFilter(func(id uint64, lt lockTable) bool {
+		ok := id == tableID && lt.getBind().Version == version
+		if ok {
+			removed = ok
+		}
+		return ok
+	})
+	return removed, nil
 }

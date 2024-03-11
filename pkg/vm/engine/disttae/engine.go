@@ -21,10 +21,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/logservice"
-
-	txn2 "github.com/matrixorigin/matrixone/pkg/pb/txn"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -35,11 +31,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
+	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	txn2 "github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
@@ -122,14 +120,14 @@ func (e *Engine) Create(ctx context.Context, name string, op client.TxnOperator)
 		return err
 	}
 	bat, err := genCreateDatabaseTuple(sql, accountId, userId, roleId,
-		name, databaseId, typ, e.mp)
+		name, databaseId, typ, txn.proc.Mp())
 	if err != nil {
 		return err
 	}
 	// non-io operations do not need to pass context
 	if err = txn.WriteBatch(INSERT, catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID,
 		catalog.MO_CATALOG, catalog.MO_DATABASE, bat, txn.tnStores[0], -1, false, false); err != nil {
-		bat.Clean(e.mp)
+		bat.Clean(txn.proc.Mp())
 		return err
 	}
 	txn.databaseMap.Store(genDatabaseKey(accountId, name), &txnDatabase{
@@ -264,6 +262,35 @@ func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tab
 	if txn == nil {
 		return "", "", nil, moerr.NewTxnClosed(ctx, op.Txn().ID)
 	}
+	switch tableId {
+	case catalog.MO_DATABASE_ID:
+		db := &txnDatabase{
+			txn:          txn,
+			databaseId:   catalog.MO_CATALOG_ID,
+			databaseName: catalog.MO_CATALOG,
+		}
+		defs := catalog.MoDatabaseTableDefs
+		return catalog.MO_CATALOG, catalog.MO_DATABASE,
+			db.openSysTable(nil, tableKey{}, tableId, catalog.MO_DATABASE, defs), nil
+	case catalog.MO_TABLES_ID:
+		db := &txnDatabase{
+			txn:          txn,
+			databaseId:   catalog.MO_CATALOG_ID,
+			databaseName: catalog.MO_CATALOG,
+		}
+		defs := catalog.MoTablesTableDefs
+		return catalog.MO_CATALOG, catalog.MO_TABLES,
+			db.openSysTable(nil, tableKey{}, tableId, catalog.MO_TABLES, defs), nil
+	case catalog.MO_COLUMNS_ID:
+		db := &txnDatabase{
+			txn:          txn,
+			databaseId:   catalog.MO_CATALOG_ID,
+			databaseName: catalog.MO_CATALOG,
+		}
+		defs := catalog.MoColumnsTableDefs
+		return catalog.MO_CATALOG, catalog.MO_COLUMNS,
+			db.openSysTable(nil, tableKey{}, tableId, catalog.MO_COLUMNS, defs), nil
+	}
 	accountId, err := defines.GetAccountId(ctx)
 	if err != nil {
 		return "", "", nil, err
@@ -309,6 +336,12 @@ func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tab
 	}
 
 	if rel == nil {
+		if tableId == 2 {
+			logutil.Errorf("can not find table by id %d: accountId: %v, txnId: %v",
+				tableId, accountId, op.Txn().DebugString())
+			tbls, tblIds := e.catalog.Tables(accountId, 1, op.SnapshotTS())
+			logutil.Errorf("tables: %v, tableIds: %v", tbls, tblIds)
+		}
 		return "", "", nil, moerr.NewInternalError(ctx, "can not find table by id %d", tableId)
 	}
 	return
@@ -358,13 +391,14 @@ func (e *Engine) Delete(ctx context.Context, name string, op client.TxnOperator)
 			return err
 		}
 	}
-	bat, err := genDropDatabaseTuple(db.databaseId, name, e.mp)
+	bat, err := genDropDatabaseTuple(db.databaseId, name, txn.proc.Mp())
 	if err != nil {
 		return err
 	}
 	// non-io operations do not need to pass context
 	if err := txn.WriteBatch(DELETE, catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID,
 		catalog.MO_CATALOG, catalog.MO_DATABASE, bat, txn.tnStores[0], -1, false, false); err != nil {
+		bat.Clean(txn.proc.Mp())
 		return err
 	}
 	return nil
@@ -415,13 +449,19 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 		deletedBlocks: &deletedBlocks{
 			offsets: map[types.Blockid][]int64{},
 		},
-		cnBlkId_Pos:                     map[types.Blockid]Pos{},
-		blockId_raw_batch:               make(map[types.Blockid]*batch.Batch),
-		blockId_tn_delete_metaLoc_batch: make(map[types.Blockid][]*batch.Batch),
-		batchSelectList:                 make(map[*batch.Batch][]int64),
-		toFreeBatches:                   make(map[[2]string][]*batch.Batch),
-		syncCommittedTSCount:            e.cli.GetSyncLatestCommitTSTimes(),
+
+		cnBlkId_Pos:          map[types.Blockid]Pos{},
+		blockId_raw_batch:    make(map[types.Blockid]*batch.Batch),
+		batchSelectList:      make(map[*batch.Batch][]int64),
+		toFreeBatches:        make(map[[2]string][]*batch.Batch),
+		syncCommittedTSCount: e.cli.GetSyncLatestCommitTSTimes(),
 	}
+
+	txn.blockId_tn_delete_metaLoc_batch = struct {
+		sync.RWMutex
+		data map[types.Blockid][]*batch.Batch
+	}{data: make(map[types.Blockid][]*batch.Batch)}
+
 	txn.readOnly.Store(true)
 	// transaction's local segment for raw batch.
 	colexec.Srv.PutCnSegment(id, colexec.TxnWorkSpaceIdType)

@@ -183,8 +183,7 @@ func TestRouter_RouteForSys(t *testing.T) {
 	st := stopper.NewStopper("test-proxy", stopper.WithLogger(rt.Logger().RawLogger()))
 	defer st.Stop()
 	hc := &mockHAKeeperClient{}
-	mc := clusterservice.NewMOCluster(hc, 3*time.Second,
-		clusterservice.WithDisableRefresh())
+	mc := clusterservice.NewMOCluster(hc, 3*time.Second)
 	defer mc.Close()
 	rt.SetGlobalVariables(runtime.ClusterService, mc)
 	re := testRebalancer(t, st, logger, mc)
@@ -339,7 +338,7 @@ func TestRouter_ConnectAndSelectBalanced(t *testing.T) {
 	require.NotNil(t, cn)
 	cn.addr = "unix://" + cn.addr
 	cn.salt = testSlat
-	tu1 := newTunnel(context.TODO(), nil, nil)
+	tu1 := newTunnel(context.TODO(), logger, nil)
 	_, _, err = ru.Connect(cn, testPacket, tu1)
 	require.NoError(t, err)
 	connResult[cn.uuid] = struct{}{}
@@ -356,7 +355,7 @@ func TestRouter_ConnectAndSelectBalanced(t *testing.T) {
 	require.NotNil(t, cn)
 	cn.addr = "unix://" + cn.addr
 	cn.salt = testSlat
-	tu2 := newTunnel(context.TODO(), nil, nil)
+	tu2 := newTunnel(context.TODO(), logger, nil)
 	_, _, err = ru.Connect(cn, testPacket, tu2)
 	require.NoError(t, err)
 	connResult[cn.uuid] = struct{}{}
@@ -373,7 +372,7 @@ func TestRouter_ConnectAndSelectBalanced(t *testing.T) {
 	require.NotNil(t, cn)
 	cn.addr = "unix://" + cn.addr
 	cn.salt = testSlat
-	tu3 := newTunnel(context.TODO(), nil, nil)
+	tu3 := newTunnel(context.TODO(), logger, nil)
 	_, _, err = ru.Connect(cn, testPacket, tu3)
 	require.NoError(t, err)
 	connResult[cn.uuid] = struct{}{}
@@ -448,7 +447,7 @@ func TestRouter_ConnectAndSelectSpecify(t *testing.T) {
 	require.NotNil(t, cn)
 	cn.addr = "unix://" + cn.addr
 	cn.salt = testSlat
-	tu1 := newTunnel(context.TODO(), nil, nil)
+	tu1 := newTunnel(context.TODO(), logger, nil)
 	_, _, err = ru.Connect(cn, testPacket, tu1)
 	require.NoError(t, err)
 	connResult[cn.uuid] = struct{}{}
@@ -464,7 +463,7 @@ func TestRouter_ConnectAndSelectSpecify(t *testing.T) {
 	require.NotNil(t, cn)
 	cn.addr = "unix://" + cn.addr
 	cn.salt = testSlat
-	tu2 := newTunnel(context.TODO(), nil, nil)
+	tu2 := newTunnel(context.TODO(), logger, nil)
 	_, _, err = ru.Connect(cn, testPacket, tu2)
 	require.NoError(t, err)
 	connResult[cn.uuid] = struct{}{}
@@ -480,7 +479,7 @@ func TestRouter_ConnectAndSelectSpecify(t *testing.T) {
 	require.NotNil(t, cn)
 	cn.addr = "unix://" + cn.addr
 	cn.salt = testSlat
-	tu3 := newTunnel(context.TODO(), nil, nil)
+	tu3 := newTunnel(context.TODO(), logger, nil)
 	_, _, err = ru.Connect(cn, testPacket, tu3)
 	require.NoError(t, err)
 	connResult[cn.uuid] = struct{}{}
@@ -601,7 +600,7 @@ func TestRouter_RetryableConnect(t *testing.T) {
 	require.NotNil(t, cn)
 	cn.addr = "unix://" + cn.addr
 	cn.salt = testSlat
-	tu1 := newTunnel(context.TODO(), nil, nil)
+	tu1 := newTunnel(context.TODO(), logger, nil)
 	_, _, err = ru.Connect(cn, testPacket, tu1)
 	require.True(t, isRetryableErr(err))
 
@@ -626,7 +625,7 @@ func TestRouter_RetryableConnect(t *testing.T) {
 	require.NotNil(t, cn)
 	cn.addr = "unix://" + cn.addr
 	cn.salt = testSlat
-	tu3 := newTunnel(context.TODO(), nil, nil)
+	tu3 := newTunnel(context.TODO(), logger, nil)
 	_, _, err = ru.Connect(cn, testPacket, tu3)
 	require.True(t, isRetryableErr(err))
 }

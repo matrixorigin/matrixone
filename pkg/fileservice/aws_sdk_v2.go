@@ -132,7 +132,10 @@ func NewAwsSDKv2(
 		)
 	}
 
-	credentialProvider := args.credentialsProviderForAwsSDKv2(ctx)
+	credentialProvider, err := args.credentialsProviderForAwsSDKv2(ctx)
+	if err != nil {
+		return nil, err
+	}
 
 	// validate
 	if credentialProvider != nil {
@@ -228,12 +231,14 @@ func NewAwsSDKv2(
 		zap.Any("arguments", args),
 	)
 
-	// head bucket to validate
-	_, err = client.HeadBucket(ctx, &s3.HeadBucketInput{
-		Bucket: ptrTo(args.Bucket),
-	})
-	if err != nil {
-		return nil, moerr.NewInternalErrorNoCtx("bad s3 config: %v", err)
+	if !args.NoBucketValidation {
+		// head bucket to validate
+		_, err = client.HeadBucket(ctx, &s3.HeadBucketInput{
+			Bucket: ptrTo(args.Bucket),
+		})
+		if err != nil {
+			return nil, moerr.NewInternalErrorNoCtx("bad s3 config: %v", err)
+		}
 	}
 
 	return &AwsSDKv2{
@@ -689,6 +694,7 @@ func (o ObjectStorageArguments) credentialsProviderForAwsSDKv2(
 	ctx context.Context,
 ) (
 	ret aws.CredentialsProvider,
+	err error,
 ) {
 
 	// cache
@@ -750,7 +756,13 @@ func (o ObjectStorageArguments) credentialsProviderForAwsSDKv2(
 	if o.KeyID != "" && o.KeySecret != "" {
 		// static
 		logutil.Info("static credential")
-		return credentials.NewStaticCredentialsProvider(o.KeyID, o.KeySecret, o.SessionToken)
+		return credentials.NewStaticCredentialsProvider(o.KeyID, o.KeySecret, o.SessionToken), nil
+	}
+
+	if o.NoDefaultCredentials {
+		return nil, moerr.NewInvalidInputNoCtx(
+			"no valid credentials",
+		)
 	}
 
 	return

@@ -17,11 +17,12 @@ package compile
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"os"
 	"testing"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
@@ -101,7 +102,14 @@ func (w *Ws) Rollback(ctx context.Context) error {
 	return nil
 }
 
-func (w *Ws) Adjust() error {
+func (w *Ws) UpdateSnapshotWriteOffset() {
+}
+
+func (w *Ws) GetSnapshotWriteOffset() int {
+	return 0
+}
+
+func (w *Ws) Adjust(_ uint64) error {
 	return nil
 }
 

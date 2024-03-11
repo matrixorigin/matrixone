@@ -113,8 +113,12 @@ type pushClient struct {
 	// initialized is true means that it is not the first time to init push client.
 	initialized bool
 
+	mu struct {
+		sync.Mutex
+		paused bool
+	}
 	// pauseC is the channel used to control whether the receiver is paused.
-	pauseC  chan struct{}
+	pauseC  chan bool
 	resumeC chan struct{}
 
 	consumeErrC chan error
@@ -182,7 +186,7 @@ func (c *pushClient) init(
 		c.connector = newConnector(c, e)
 		c.receiver = make([]routineController, consumerNumber)
 		c.consumeErrC = make(chan error, consumerNumber)
-		c.pauseC = make(chan struct{}, 1)
+		c.pauseC = make(chan bool, 1)
 		c.resumeC = make(chan struct{})
 	}
 	c.initialized = true
@@ -315,17 +319,26 @@ func (c *pushClient) subSysTables(ctx context.Context) error {
 	return err
 }
 
-func (c *pushClient) pause() {
+func (c *pushClient) pause(s bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.mu.paused {
+		return
+	}
 	select {
-	case c.pauseC <- struct{}{}:
+	case c.pauseC <- s:
+		c.mu.paused = true
 	default:
 		logutil.Infof("%s already set to pause", logTag)
 	}
 }
 
 func (c *pushClient) resume() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	select {
 	case c.resumeC <- struct{}{}:
+		c.mu.paused = false
 	default:
 		logutil.Infof("%s not in pause state", logTag)
 	}
@@ -378,9 +391,11 @@ func (c *pushClient) receiveLogtails(ctx context.Context, e *Engine) {
 		case <-ctx.Done():
 			return
 
-		case <-c.pauseC:
+		case s := <-c.pauseC:
 			logutil.Infof("%s logtail receiver paused", logTag)
-			c.sendConnectSig()
+			if s {
+				c.sendConnectSig()
+			}
 
 			// Wait for resuming logtail receiver.
 			<-c.resumeC
@@ -389,7 +404,7 @@ func (c *pushClient) receiveLogtails(ctx context.Context, e *Engine) {
 		default:
 			if err := c.receiveOneLogtail(ctx, e); err != nil {
 				logutil.Errorf("%s receive one logtail failed, err: %v", logTag, err)
-				c.pause()
+				c.pause(!c.connector.first.Load())
 			}
 		}
 	}
@@ -436,7 +451,7 @@ func (c *pushClient) run(ctx context.Context, e *Engine) {
 		case err := <-c.consumeErrC:
 			// receive an error from sub-routine to consume log.
 			logutil.Errorf("%s consume log tail failed, err: %s", logTag, err)
-			c.pause()
+			c.pause(!c.connector.first.Load())
 
 		case <-ctx.Done():
 			logutil.Infof("%s logtail consumer stopped", logTag)
@@ -473,7 +488,16 @@ func (c *pushClient) connect(ctx context.Context, e *Engine) {
 		for {
 			err := c.subSysTables(ctx)
 			if err != nil {
+				c.pause(false)
 				time.Sleep(time.Second)
+
+				tnLogTailServerBackend := e.getTNServices()[0].LogTailServiceAddress
+				if err := c.init(tnLogTailServerBackend, c.timestampWaiter, c.serviceID, e); err != nil {
+					logutil.Errorf("%s init push client failed: %v", logTag, err)
+					continue
+				}
+
+				c.resume()
 				continue
 			}
 			c.waitTimestamp()

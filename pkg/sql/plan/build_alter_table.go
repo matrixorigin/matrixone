@@ -140,7 +140,7 @@ func buildAlterTableCopy(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, err
 		}
 	}
 
-	createTmpDdl, err := restoreDDL(ctx, alterTablePlan.CopyTableDef, schemaName, alterTableCtx.copyTableName, true)
+	createTmpDdl, err := restoreDDL(ctx, alterTablePlan.CopyTableDef, schemaName, alterTableCtx.copyTableName, false)
 	if err != nil {
 		return nil, err
 	}
@@ -560,7 +560,7 @@ func initAlterTableContext(originTableDef *TableDef, copyTableDef *TableDef, sch
 func buildCopyTableDef(ctx context.Context, tableDef *TableDef) (*TableDef, error) {
 	replicaTableDef := DeepCopyTableDef(tableDef, true)
 
-	id, err := uuid.NewUUID()
+	id, err := uuid.NewV7()
 	if err != nil {
 		return nil, moerr.NewInternalError(ctx, "new uuid failed")
 	}

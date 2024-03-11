@@ -150,8 +150,9 @@ func NewLogtailServer(
 		opt(s)
 	}
 
+	uid, _ := uuid.NewV7()
 	s.logger = s.logger.Named(LogtailServiceRPCName).
-		With(zap.String("server-id", uuid.NewString()))
+		With(zap.String("server-id", uid.String()))
 
 	s.pool.requests = NewLogtailRequestPool()
 	s.pool.responses = NewLogtailResponsePool()

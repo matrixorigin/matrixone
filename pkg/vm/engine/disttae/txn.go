@@ -79,7 +79,7 @@ func (txn *Transaction) WriteBatch(
 	bat.Cnt = 1
 	txn.Lock()
 	defer txn.Unlock()
-	if typ == INSERT {
+	if typ == INSERT || typ == INSERT_TXN {
 		if !insertBatchHasRowId {
 			txn.genBlock()
 			len := bat.RowCount()
@@ -128,7 +128,25 @@ func (txn *Transaction) dumpBatchLocked(offset int) error {
 	if txn.workspaceSize < WorkspaceThreshold {
 		return nil
 	}
-
+	if offset > 0 {
+		for i := offset; i < len(txn.writes); i++ {
+			if txn.writes[i].tableId == catalog.MO_DATABASE_ID ||
+				txn.writes[i].tableId == catalog.MO_TABLES_ID ||
+				txn.writes[i].tableId == catalog.MO_COLUMNS_ID {
+				continue
+			}
+			if txn.writes[i].bat == nil || txn.writes[i].bat.RowCount() == 0 {
+				continue
+			}
+			if txn.writes[i].typ == INSERT && txn.writes[i].fileName == "" {
+				size += uint64(txn.writes[i].bat.Size())
+			}
+		}
+		if size < WorkspaceThreshold {
+			return nil
+		}
+		size = 0
+	}
 	txn.hasS3Op.Store(true)
 	mp := make(map[[2]string][]*batch.Batch)
 	for i := offset; i < len(txn.writes); i++ {
@@ -225,7 +243,6 @@ func (txn *Transaction) dumpBatchLocked(offset int) error {
 			}
 		}
 		txn.writes = writes
-		txn.statements[txn.statementID-1] = len(txn.writes)
 	} else {
 		txn.workspaceSize -= size
 	}
@@ -447,7 +464,6 @@ func (txn *Transaction) deleteTableWrites(
 			}
 			if len(sels) != len(vs) {
 				txn.batchSelectList[e.bat] = append(txn.batchSelectList[e.bat], sels...)
-
 			}
 		}
 	}
@@ -572,6 +588,11 @@ func (txn *Transaction) mergeCompactionLocked() error {
 		if entry.bat == nil || entry.bat.IsEmpty() {
 			continue
 		}
+
+		if entry.typ == INSERT_TXN {
+			continue
+		}
+
 		if entry.typ != INSERT ||
 			entry.bat.Attrs[0] != catalog.BlockMeta_MetaLoc {
 			continue
@@ -598,31 +619,39 @@ func (txn *Transaction) getInsertedObjectListForTable(
 		if entry.bat == nil || entry.bat.IsEmpty() {
 			continue
 		}
-		if entry.typ != INSERT || len(entry.bat.Attrs) < 2 ||
+
+		if entry.typ == INSERT_TXN {
+			continue
+		}
+
+		if entry.typ != INSERT ||
+			len(entry.bat.Attrs) < 2 ||
 			entry.bat.Attrs[1] != catalog.ObjectMeta_ObjectStats {
 			continue
 		}
-		stats.UnMarshal(entry.bat.Vecs[1].GetBytesAt(0))
-		statsList = append(statsList, stats)
+		for i := 0; i < entry.bat.Vecs[1].Length(); i++ {
+			stats.UnMarshal(entry.bat.Vecs[1].GetBytesAt(i))
+			statsList = append(statsList, stats)
+		}
 
 	}
 	return statsList, nil
 
 }
 
-func (txn *Transaction) getTableWrites(databaseId uint64, tableId uint64, writes []Entry) []Entry {
+func (txn *Transaction) forEachTableWrites(databaseId uint64, tableId uint64, offset int, f func(Entry)) {
 	txn.Lock()
 	defer txn.Unlock()
-	for _, entry := range txn.writes {
-		if entry.databaseId != databaseId {
+	for i := 0; i < offset; i++ {
+		e := txn.writes[i]
+		if e.databaseId != databaseId {
 			continue
 		}
-		if entry.tableId != tableId {
+		if e.tableId != tableId {
 			continue
 		}
-		writes = append(writes, entry)
+		f(e)
 	}
-	return writes
 }
 
 // getCachedTable returns the cached table in this transaction if it exists, nil otherwise.
@@ -696,8 +725,9 @@ func (txn *Transaction) delTransaction() {
 	txn.createMap = nil
 	txn.databaseMap = nil
 	txn.deletedTableMap = nil
-	txn.blockId_tn_delete_metaLoc_batch = nil
 	txn.blockId_raw_batch = nil
+
+	txn.blockId_tn_delete_metaLoc_batch.data = nil
 	txn.deletedBlocks = nil
 	segmentnames := make([]objectio.Segmentid, 0, len(txn.cnBlkId_Pos)+1)
 	segmentnames = append(segmentnames, txn.segId)
@@ -730,4 +760,23 @@ func (txn *Transaction) rollbackCreateTableLocked() {
 		}
 		return true
 	})
+}
+
+func (txn *Transaction) clearTableCache() {
+	txn.tableCache.tableMap.Range(func(key, value any) bool {
+		txn.tableCache.tableMap.Delete(key)
+		return true
+	})
+}
+
+func (txn *Transaction) GetSnapshotWriteOffset() int {
+	txn.Lock()
+	defer txn.Unlock()
+	return txn.snapshotWriteOffset
+}
+
+func (txn *Transaction) UpdateSnapshotWriteOffset() {
+	txn.Lock()
+	defer txn.Unlock()
+	txn.snapshotWriteOffset = len(txn.writes)
 }

@@ -76,6 +76,8 @@ type msgBuf struct {
 	// for debug
 	name string
 	src  io.Reader
+
+	peer *msgBuf
 	// buf keeps message which is read from src. It can contain multiple messages.
 	// The default available part of buffer is only [0:defaultBufLen]. The rest part
 	// [defaultBufLen:] is used to save data to handle events when the first part is full.
@@ -126,6 +128,11 @@ func newMsgBuf(
 		reqC:     reqC,
 		respC:    respC,
 	}
+}
+
+func setPeer(p1, p2 *msgBuf) {
+	p1.peer = p2
+	p2.peer = p1
 }
 
 // readAvail returns the position that is available to read.
@@ -231,6 +238,12 @@ func (b *msgBuf) setTxnStatus(status uint16) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.mu.inTxn = status&frontend.SERVER_STATUS_IN_TRANS != 0
+
+	if b.peer != nil {
+		b.peer.mu.Lock()
+		defer b.peer.mu.Unlock()
+		b.peer.mu.inTxn = b.mu.inTxn
+	}
 }
 
 // isInTxn returns if the session is in a transaction.

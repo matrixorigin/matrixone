@@ -273,8 +273,8 @@ import (
 %left <str> ')'
 %nonassoc LOWER_THAN_STRING
 %nonassoc <str> ID AT_ID AT_AT_ID STRING VALUE_ARG LIST_ARG COMMENT COMMENT_KEYWORD QUOTE_ID STAGE CREDENTIALS STAGES
-%token <item> INTEGRAL HEX BIT_LITERAL FLOAT
-%token <str>  HEXNUM
+%token <item> INTEGRAL HEX FLOAT
+%token <str>  HEXNUM BIT_LITERAL
 %token <str> NULL TRUE FALSE
 %nonassoc LOWER_THAN_CHARSET
 %nonassoc <str> CHARSET
@@ -757,7 +757,7 @@ import (
 
 %token <str> KILL
 %type <killOption> kill_opt
-%token <str> BACKUP FILESYSTEM
+%token <str> BACKUP FILESYSTEM PARALLELISM
 %type <statementOption> statement_id_opt
 %token <str> QUERY_RESULT
 %type<tableLock> table_lock_elem
@@ -891,12 +891,13 @@ normal_stmt:
 |   backup_stmt
 
 backup_stmt:
-    BACKUP STRING FILESYSTEM STRING
+    BACKUP STRING FILESYSTEM STRING PARALLELISM STRING
 	{
 		$$ = &tree.BackupStart{
 		    Timestamp: $2,
 		    IsS3 : false,
 		    Dir: $4,
+            Parallelism: $6,
 		}
 	}
     | BACKUP STRING S3OPTION '{' infile_or_s3_params '}'
@@ -3229,7 +3230,10 @@ show_stmt:
 show_collation_stmt:
     SHOW COLLATION like_opt where_expression_opt
     {
-        $$ = &tree.ShowCollation{}
+        $$ = &tree.ShowCollation{
+            Like: $3,
+            Where: $4,
+        }
     }
 
 show_stages_stmt:
@@ -9484,17 +9488,7 @@ literal:
     }
 |   BIT_LITERAL
     {
-        switch v := $1.(type) {
-        case uint64:
-            $$ = tree.NewNumValWithType(constant.MakeUint64(v), yylex.(*Lexer).scanner.LastToken, false, tree.P_uint64)
-        case int64:
-            $$ = tree.NewNumValWithType(constant.MakeInt64(v), yylex.(*Lexer).scanner.LastToken, false, tree.P_int64)
-        case string:
-            $$ = tree.NewNumValWithType(constant.MakeString(v), v, false, tree.P_bit)
-        default:
-            yylex.Error("parse integral fail")
-            return 1
-        }
+        $$ = tree.NewNumValWithType(constant.MakeString($1), $1, false, tree.P_bit)
     }
 |   VALUE_ARG
     {
@@ -10768,6 +10762,7 @@ non_reserved_keyword:
 |   STAGES
 |   BACKUP
 |   FILESYSTEM
+|   PARALLELISM
 |	VALUE
 |	REFERENCE
 |	MODIFY
@@ -10790,7 +10785,6 @@ non_reserved_keyword:
 |	COPY
 |	UNDEFINED
 |	MERGE
-|	UNDERSCORE_BINARY
 |	TEMPTABLE
 |	INVOKER
 |	SECURITY

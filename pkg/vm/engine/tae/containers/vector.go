@@ -156,6 +156,9 @@ func (vec *vectorWrapper) ShallowGet(i int) any {
 }
 
 func (vec *vectorWrapper) Length() int {
+	if vec.wrapped == nil {
+		return 0
+	}
 	return vec.wrapped.Length()
 }
 

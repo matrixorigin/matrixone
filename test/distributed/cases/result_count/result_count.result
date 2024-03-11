@@ -192,7 +192,7 @@ create database db1    0
 commit    0
 start transaction    0
 commit    0
-select statement, result_count from statement_info where user="dump" and sql_source_type="cloud_user_sql" and status != 'Running' order by request_at desc limit 2;
+select statement, result_count from statement_info where user="dump" and sql_source_type="cloud_user_sql" and status != 'Running' and aggr_count < 1 order by request_at desc limit 2;
 statement    result_count
 drop account test_tenant_1    0
 create account test_tenant_1 admin_name 'test_account' identified by '******'    0

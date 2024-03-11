@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -98,7 +99,7 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 		}
 	}
 
-	// 5.2 delete all of the original table
+	// 5.2 delete all index table of the original table
 	if qry.TableDef.Indexes != nil {
 		for _, indexdef := range qry.TableDef.Indexes {
 			if indexdef.TableExist {
@@ -109,28 +110,27 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 		}
 	}
 
-	// 6. Recreate the original table
-	err = c.runSql(qry.CreateTableSql)
+	//6. obtain relation for new tables
+	newRel, err := dbSource.Relation(c.ctx, qry.CopyTableDef.Name, nil)
 	if err != nil {
 		return err
 	}
 
-	// 7. import data from the temporary replica table into the original table
-	err = c.runSql(qry.InsertDataSql)
+	//--------------------------------------------------------------------------------------------------------------
+	// 7. rename temporary replica table into the original table( Table Id remains unchanged)
+	copyTblName := qry.CopyTableDef.Name
+	req := api.NewRenameTableReq(newRel.GetDBID(c.ctx), newRel.GetTableID(c.ctx), copyTblName, tblName)
+	tmp, err := req.Marshal()
 	if err != nil {
 		return err
 	}
-
-	// 8. Delete temporary replica table
-	if err = dbSource.Delete(c.ctx, qry.CopyTableDef.Name); err != nil {
-		return err
-	}
-
-	// 9. obtain relation for new tables
-	newRel, err := dbSource.Relation(c.ctx, tblName, nil)
+	constraint := make([][]byte, 0)
+	constraint = append(constraint, tmp)
+	err = newRel.TableRenameInTxn(c.ctx, constraint)
 	if err != nil {
 		return err
 	}
+	//--------------------------------------------------------------------------------------------------------------
 
 	// get and update the change mapping information of table colIds
 	if err = updateNewTableColId(c, newRel, qry.ChangeTblColIdMap); err != nil {

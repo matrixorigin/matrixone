@@ -17,6 +17,9 @@ package compile
 import (
 	"context"
 	"fmt"
+	"math"
+	"strings"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/compress"
@@ -38,8 +41,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"go.uber.org/zap"
 	"golang.org/x/exp/constraints"
-	"math"
-	"strings"
 )
 
 func (s *Scope) CreateDatabase(c *Compile) error {
@@ -2654,6 +2655,7 @@ func lockMoDatabase(c *Compile, dbName string) error {
 	if err != nil {
 		return err
 	}
+	defer vec.Free(c.proc.Mp())
 	if err := lockRows(c.e, c.proc, dbRel, vec, lock.LockMode_Exclusive); err != nil {
 		return err
 	}

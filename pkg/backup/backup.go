@@ -18,15 +18,17 @@ import (
 	"bytes"
 	"context"
 	"encoding/csv"
+	"os"
+	"path"
+	"strconv"
+	"strings"
+	"time"
+
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"os"
-	"path"
-	"strings"
-	"time"
 )
 
 // Backup
@@ -47,11 +49,17 @@ func Backup(ctx context.Context, bs *tree.BackupStart, cfg *Config) error {
 		if err != nil {
 			return err
 		}
-		//for tae hakeeper
+		// for tae hakeeper
 		cfg.TaeDir, _, err = setupFilesystem(ctx, bs.Dir, false)
 		if err != nil {
 			return err
 		}
+		// for parallel backup
+		parallel, err := strconv.ParseUint(bs.Parallelism, 10, 16)
+		if err != nil {
+			return err
+		}
+		cfg.Parallelism = uint16(parallel)
 	} else {
 		s3Conf, err = getS3Config(ctx, bs.Option)
 		if err != nil {
@@ -65,6 +73,7 @@ func Backup(ctx context.Context, bs *tree.BackupStart, cfg *Config) error {
 		if err != nil {
 			return err
 		}
+		cfg.Parallelism = s3Conf.parallelism
 	}
 
 	// step 2 : backup mo
@@ -116,7 +125,7 @@ func backupConfigs(ctx context.Context, cfg *Config) error {
 
 var backupTae = func(ctx context.Context, config *Config) error {
 	fs := fileservice.SubPath(config.TaeDir, taeDir)
-	return BackupData(ctx, config.SharedFs, fs, "")
+	return BackupData(ctx, config.SharedFs, fs, "", int(config.Parallelism))
 }
 
 func backupHakeeper(ctx context.Context, config *Config) error {
@@ -149,7 +158,7 @@ func backupConfigFile(ctx context.Context, typ, configPath string, cfg *Config) 
 		//!!!neglect the error
 		return nil
 	}
-	uid, _ := uuid.NewUUID()
+	uid, _ := uuid.NewV7()
 	_, file := path.Split(configPath)
 	newfile := file + "_" + uid.String()
 	cfg.Metas.AppendLaunchconfig(typ, newfile)

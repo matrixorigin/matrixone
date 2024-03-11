@@ -29,11 +29,10 @@ drop table t1;
 commit;
 start transaction;
 set autocommit=1;
-internal error: Uncommitted transaction exists. Please commit or rollback first.
 commit;
 start transaction;
 show tables;
-tables_in_autocommit
+Tables_in_autocommit
 commit;
 set autocommit=0;
 drop table if exists t1;
@@ -46,7 +45,6 @@ a
 insert into t1 values(1);
 insert into t1 values(2);
 set autocommit=1;
-internal error: Uncommitted transaction exists. Please commit or rollback first.
 commit;
 set autocommit=1;
 set autocommit=0;
@@ -63,7 +61,7 @@ Previous DML conflicts with existing constraints or data format. This transactio
 insert into t1 values(3);
 use autocommit;
 show tables;
-tables_in_autocommit
+Tables_in_autocommit
 t1
 commit;
 set autocommit = 1;

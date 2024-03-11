@@ -16,12 +16,14 @@ package txnimpl
 
 import (
 	"context"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"runtime/trace"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
-	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	motrace "github.com/matrixorigin/matrixone/pkg/util/trace"
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -41,6 +43,93 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
+var (
+	_tracerPool = sync.Pool{
+		New: func() any {
+			return &txnTracer{}
+		},
+	}
+)
+
+func getTracer() *txnTracer {
+	return _tracerPool.Get().(*txnTracer)
+}
+
+func putTracer(tracer *txnTracer) {
+	tracer.task = nil
+	tracer.state = 0
+	_tracerPool.Put(tracer)
+}
+
+type txnTracer struct {
+	state uint8
+	task  *trace.Task
+	stamp time.Time
+}
+
+func (tracer *txnTracer) Trigger(state uint8) {
+	switch state {
+	case 0: // start preparing wait
+		_, tracer.task = trace.NewTask(context.Background(), "1-PreparingWait")
+		tracer.stamp = time.Now()
+		tracer.state = 0
+
+	case 1: // end preparing wait and start preparing
+		if tracer.task != nil && tracer.state == 0 {
+			tracer.task.End()
+			v2.TxnPreparingWaitDurationHistogram.Observe(time.Since(tracer.stamp).Seconds())
+		}
+		_, tracer.task = trace.NewTask(context.Background(), "2-Preparing")
+		tracer.stamp = time.Now()
+		tracer.state = 1
+
+	case 2: // end preparing and start prepare wal wait
+		if tracer.task != nil && tracer.state == 1 {
+			tracer.task.End()
+			v2.TxnPreparingDurationHistogram.Observe(time.Since(tracer.stamp).Seconds())
+		}
+		_, tracer.task = trace.NewTask(context.Background(), "3-PrepareWalWait")
+		tracer.stamp = time.Now()
+		tracer.state = 2
+
+	case 3: // end prepare wal wait and start prepare wal
+		if tracer.task != nil && tracer.state == 2 {
+			tracer.task.End()
+			v2.TxnPrepareWalWaitDurationHistogram.Observe(time.Since(tracer.stamp).Seconds())
+		}
+		_, tracer.task = trace.NewTask(context.Background(), "4-PrepareWal")
+		tracer.stamp = time.Now()
+		tracer.state = 3
+
+	case 4: // end prepare wal and start prepared wait
+		if tracer.task != nil && tracer.state == 3 {
+			tracer.task.End()
+			v2.TxnPrepareWalDurationHistogram.Observe(time.Since(tracer.stamp).Seconds())
+		}
+		_, tracer.task = trace.NewTask(context.Background(), "5-PreparedWait")
+		tracer.stamp = time.Now()
+		tracer.state = 4
+
+	case 5: // end prepared wait and start prepared
+		if tracer.task != nil && tracer.state == 4 {
+			tracer.task.End()
+			v2.TxnPreparedWaitDurationHistogram.Observe(time.Since(tracer.stamp).Seconds())
+		}
+		_, tracer.task = trace.NewTask(context.Background(), "6-Prepared")
+		tracer.stamp = time.Now()
+		tracer.state = 5
+	}
+}
+
+func (tracer *txnTracer) Stop() {
+	if tracer.task != nil && tracer.state == 5 {
+		tracer.task.End()
+		v2.TxnPreparedDurationHistogram.Observe(time.Since(tracer.stamp).Seconds())
+	}
+	tracer.task = nil
+	tracer.state = 0
+}
+
 type txnStore struct {
 	ctx context.Context
 	txnbase.NoopTxnStore
@@ -55,6 +144,7 @@ type txnStore struct {
 	warChecker  *warChecker
 	dataFactory *tables.DataFactory
 	writeOps    atomic.Uint32
+	tracer      *txnTracer
 
 	wg sync.WaitGroup
 }
@@ -89,6 +179,31 @@ func newStore(
 		dataFactory: dataFactory,
 		wg:          sync.WaitGroup{},
 	}
+}
+
+func (store *txnStore) StartTrace() {
+	if store.IsReadonly() || store.GetTransactionType() == txnif.TxnType_Heartbeat {
+		return
+	}
+	store.tracer = getTracer()
+	store.tracer.Trigger(txnif.TraceStart)
+}
+
+func (store *txnStore) EndTrace() {
+	if store.tracer == nil {
+		return
+	}
+	tracer := store.tracer
+	store.tracer = nil
+	tracer.Stop()
+	putTracer(tracer)
+}
+
+func (store *txnStore) TriggerTrace(state uint8) {
+	if store.tracer == nil {
+		return
+	}
+	store.tracer.Trigger(state)
 }
 
 func (store *txnStore) GetContext() context.Context    { return store.ctx }
@@ -647,7 +762,7 @@ func (store *txnStore) ApplyCommit() (err error) {
 	now := time.Now()
 	defer func() {
 		applyCommitDuration := time.Since(now)
-		_, enable, threshold := trace.IsMOCtledSpan(trace.SpanKindTNRPCHandle)
+		_, enable, threshold := motrace.IsMOCtledSpan(motrace.SpanKindTNRPCHandle)
 		if enable && applyCommitDuration > threshold && store.GetContext() != nil {
 			store.SetContext(context.WithValue(store.GetContext(), common.StoreApplyCommit, &common.DurationRecords{Duration: applyCommitDuration}))
 		}
@@ -681,7 +796,7 @@ func (store *txnStore) PrePrepare(ctx context.Context) (err error) {
 	now := time.Now()
 	defer func() {
 		prePrepareDuration := time.Since(now)
-		_, enable, threshold := trace.IsMOCtledSpan(trace.SpanKindTNRPCHandle)
+		_, enable, threshold := motrace.IsMOCtledSpan(motrace.SpanKindTNRPCHandle)
 		if enable && prePrepareDuration > threshold && store.GetContext() != nil {
 			store.SetContext(context.WithValue(store.GetContext(), common.StorePrePrepare, &common.DurationRecords{Duration: prePrepareDuration}))
 		}
@@ -699,7 +814,7 @@ func (store *txnStore) PrepareCommit() (err error) {
 	now := time.Now()
 	defer func() {
 		prepareCommitDuration := time.Since(now)
-		_, enable, threshold := trace.IsMOCtledSpan(trace.SpanKindTNRPCHandle)
+		_, enable, threshold := motrace.IsMOCtledSpan(motrace.SpanKindTNRPCHandle)
 		if enable && prepareCommitDuration > threshold && store.GetContext() != nil {
 			store.SetContext(context.WithValue(store.GetContext(), common.StorePreApplyCommit, &common.DurationRecords{Duration: prepareCommitDuration}))
 		}
@@ -728,7 +843,7 @@ func (store *txnStore) PreApplyCommit() (err error) {
 		}
 	}
 	preApplyCommitDuration := time.Since(now)
-	_, enable, threshold := trace.IsMOCtledSpan(trace.SpanKindTNRPCHandle)
+	_, enable, threshold := motrace.IsMOCtledSpan(motrace.SpanKindTNRPCHandle)
 	if enable && preApplyCommitDuration > threshold && store.GetContext() != nil {
 		store.SetContext(context.WithValue(store.GetContext(), common.StorePreApplyCommit, &common.DurationRecords{Duration: preApplyCommitDuration}))
 	}

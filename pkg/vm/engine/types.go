@@ -578,6 +578,7 @@ type Relation interface {
 
 	// Get complete tableDef information, including columns, constraints, partitions, version, comments, etc
 	GetTableDef(context.Context) *plan.TableDef
+	CopyTableDef(context.Context) *plan.TableDef
 
 	GetPrimaryKeys(context.Context) ([]*Attribute, error)
 
@@ -597,6 +598,9 @@ type Relation interface {
 	UpdateConstraint(context.Context, *ConstraintDef) error
 
 	AlterTable(ctx context.Context, c *ConstraintDef, constraint [][]byte) error
+
+	// Support renaming tables within explicit transactions (CN worspace)
+	TableRenameInTxn(ctx context.Context, constraint [][]byte) error
 
 	GetTableID(context.Context) uint64
 

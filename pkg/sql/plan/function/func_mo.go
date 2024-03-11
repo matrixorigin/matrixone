@@ -40,7 +40,7 @@ const (
 // Mo functions are better tested with bvt.
 
 // MoTableRows returns an estimated row number of a table.
-func MoTableRows(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func MoTableRows(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
 	rs := vector.MustFunctionResult[int64](result)
 	dbs := vector.GenerateFunctionStrParameter(ivecs[0])
 	tbls := vector.GenerateFunctionStrParameter(ivecs[1])
@@ -52,8 +52,15 @@ func MoTableRows(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 	}
 	txn := proc.TxnOperator
 
+	var accountId uint32
+	var accSwitched bool
 	// XXX old code starts a new transaction.   why?
 	for i := uint64(0); i < uint64(length); i++ {
+		if accSwitched {
+			accSwitched = false
+			proc.Ctx = defines.AttachAccountId(proc.Ctx, accountId)
+		}
+
 		db, dbnull := dbs.GetStrValue(i)
 		tbl, tblnull := tbls.GetStrValue(i)
 		if dbnull || tblnull {
@@ -67,17 +74,22 @@ func MoTableRows(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 
 			if isClusterTable(dbStr, tblStr) {
 				//if it is the cluster table in the general account, switch into the sys account
-				accountId, err := defines.GetAccountId(proc.Ctx)
+				accountId, err = defines.GetAccountId(proc.Ctx)
 				if err != nil {
 					return err
 				}
 				if accountId != uint32(sysAccountID) {
+					accSwitched = true
 					proc.Ctx = defines.AttachAccountId(proc.Ctx, uint32(sysAccountID))
 				}
 			}
 			ctx := proc.Ctx
-			dbo, err := e.Database(ctx, dbStr, txn)
+			var dbo engine.Database
+			dbo, err = e.Database(ctx, dbStr, txn)
 			if err != nil {
+				if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
+					return moerr.NewInvalidArgNoCtx("db not found when mo_table_rows", dbStr)
+				}
 				return err
 			}
 			rel, err = dbo.Relation(ctx, tblStr, nil)
@@ -86,7 +98,8 @@ func MoTableRows(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 			}
 
 			// get the table definition information and check whether the current table is a partition table
-			engineDefs, err := rel.TableDefs(ctx)
+			var engineDefs []engine.TableDef
+			engineDefs, err = rel.TableDefs(ctx)
 			if err != nil {
 				return err
 			}
@@ -144,7 +157,7 @@ func MoTableRows(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 }
 
 // MoTableSize returns an estimated size of a table.
-func MoTableSize(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func MoTableSize(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
 	rs := vector.MustFunctionResult[int64](result)
 	dbs := vector.GenerateFunctionStrParameter(ivecs[0])
 	tbls := vector.GenerateFunctionStrParameter(ivecs[1])
@@ -155,12 +168,27 @@ func MoTableSize(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 	}
 	txn := proc.TxnOperator
 
+	var accountId uint32
+	var accSwitched bool
 	// XXX old code starts a new transaction.   why?
 	for i := uint64(0); i < uint64(length); i++ {
+		if accSwitched {
+			// consider this situation:
+			// 	 if a sql trys to gather all table's size in one query,
+			// 	 this will traverse all tables, including the cluster table, belongs
+			// 	 this account.
+			//   but if these tables in `tbls` has orders: xxx, cluster table, xxx, xxx, xxx.
+			//   the account id stored in proc.Ctx will be changed to system account id when process that cluster
+			//   table, and causing the last three tables can not be found when call the `engine.Database()`.
+			//   so should be first to switch bach the right account id here.
+			accSwitched = false
+			proc.Ctx = defines.AttachAccountId(proc.Ctx, accountId)
+		}
+
 		db, dbnull := dbs.GetStrValue(i)
 		tbl, tblnull := tbls.GetStrValue(i)
 		if dbnull || tblnull {
-			if err := rs.Append(0, true); err != nil {
+			if err = rs.Append(0, true); err != nil {
 				return err
 			}
 		} else {
@@ -170,17 +198,23 @@ func MoTableSize(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 
 			if isClusterTable(dbStr, tblStr) {
 				//if it is the cluster table in the general account, switch into the sys account
-				accountId, err := defines.GetAccountId(proc.Ctx)
+				accountId, err = defines.GetAccountId(proc.Ctx)
 				if err != nil {
 					return err
 				}
 				if accountId != uint32(sysAccountID) {
+					accSwitched = true
 					proc.Ctx = defines.AttachAccountId(proc.Ctx, uint32(sysAccountID))
 				}
 			}
 			ctx := proc.Ctx
-			dbo, err := e.Database(ctx, dbStr, txn)
+
+			var dbo engine.Database
+			dbo, err = e.Database(ctx, dbStr, txn)
 			if err != nil {
+				if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
+					return moerr.NewInvalidArgNoCtx("db not found when mo_table_size", dbStr)
+				}
 				return err
 			}
 			rel, err = dbo.Relation(ctx, tblStr, nil)
@@ -189,7 +223,8 @@ func MoTableSize(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 			}
 
 			// get the table definition information and check whether the current table is a partition table
-			engineDefs, err := rel.TableDefs(ctx)
+			var engineDefs []engine.TableDef
+			engineDefs, err = rel.TableDefs(ctx)
 			if err != nil {
 				return err
 			}

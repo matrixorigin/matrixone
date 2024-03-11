@@ -222,8 +222,11 @@ type Workspace interface {
 	// RollbackLastStatement rollback the last statement.
 	RollbackLastStatement(ctx context.Context) error
 
+	UpdateSnapshotWriteOffset()
+	GetSnapshotWriteOffset() int
+
 	// Adjust adjust workspace, adjust update's delete+insert to correct order and merge workspace.
-	Adjust() error
+	Adjust(writeOffset uint64) error
 
 	Commit(ctx context.Context) ([]txn.TxnRequest, error)
 	Rollback(ctx context.Context) error

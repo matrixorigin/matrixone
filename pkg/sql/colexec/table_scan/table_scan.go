@@ -23,6 +23,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+const maxBatchMemSize = 8192 * 1024
+
 func (arg *Argument) String(buf *bytes.Buffer) {
 	buf.WriteString(" table_scan ")
 }
@@ -52,6 +54,10 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
+	if arg.buf != nil {
+		proc.PutBatch(arg.buf)
+	}
+
 	for {
 		// read data from storage engine
 		bat, err := arg.Reader.Read(proc.Ctx, arg.Attrs, nil, proc.Mp(), proc)
@@ -60,21 +66,43 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 			return result, err
 		}
 
-		if bat != nil {
-			if bat.IsEmpty() {
-				continue
+		if bat == nil {
+			if arg.tmpBuf != nil {
+				arg.buf = arg.tmpBuf
+				arg.tmpBuf = nil
+				break
+			} else {
+				result.Status = vm.ExecStop
+				return result, err
 			}
-
-			bat.Cnt = 1
-			anal.S3IOByte(bat)
-			anal.Alloc(int64(bat.Size()))
 		}
 
-		if arg.buf != nil {
-			proc.PutBatch(arg.buf)
+		if bat.IsEmpty() {
+			continue
 		}
-		arg.buf = bat
-		bat = nil
+
+		bat.Cnt = 1
+		anal.S3IOByte(bat)
+		anal.Alloc(int64(bat.Size()))
+
+		if arg.tmpBuf == nil {
+			arg.tmpBuf = bat
+			continue
+		}
+
+		tmpSize := arg.tmpBuf.Size()
+		batSize := bat.Size()
+		if arg.tmpBuf.RowCount()+bat.RowCount() < 8192 && tmpSize+batSize < maxBatchMemSize {
+			_, err := arg.tmpBuf.Append(proc.Ctx, proc.GetMPool(), bat)
+			proc.PutBatch(bat)
+			if err != nil {
+				return result, err
+			}
+			continue
+		}
+
+		arg.buf = arg.tmpBuf
+		arg.tmpBuf = bat
 		break
 	}
 

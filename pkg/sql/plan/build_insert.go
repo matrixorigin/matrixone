@@ -75,7 +75,7 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 	builder.haveOnDuplicateKey = len(stmt.OnDuplicateUpdate) > 0
 
 	bindCtx := NewBindContext(builder, nil)
-	checkInsertPkDup, pkPosInValues, isInsertWithoutAutoPkCol, err := initInsertStmt(builder, bindCtx, stmt, rewriteInfo)
+	checkInsertPkDup, pkPosInValues, isInsertWithoutAutoPkCol, insertWithoutUniqueKeyMap, err := initInsertStmt(builder, bindCtx, stmt, rewriteInfo)
 	if err != nil {
 		return nil, err
 	}
@@ -255,7 +255,7 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 
 		query.StmtType = plan.Query_UPDATE
 	} else {
-		err = buildInsertPlans(ctx, builder, bindCtx, objRef, tableDef, rewriteInfo.rootId, checkInsertPkDup, pkFilterExprs, newPartitionExpr, isInsertWithoutAutoPkCol)
+		err = buildInsertPlans(ctx, builder, bindCtx, objRef, tableDef, rewriteInfo.rootId, checkInsertPkDup, pkFilterExprs, newPartitionExpr, isInsertWithoutAutoPkCol, insertWithoutUniqueKeyMap)
 		if err != nil {
 			return nil, err
 		}
@@ -305,9 +305,9 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 	pkColLength := len(pkPosInValues)
 	var colTyp *Type
 	var insertRowIdx int
-	var pkColIdx int
+	var pkOrder int
 
-	for insertRowIdx, pkColIdx = range pkPosInValues {
+	for insertRowIdx, pkOrder = range pkPosInValues {
 		valExprs := make([]*Expr, rowsCount)
 		rowTyp := bat.Vecs[insertRowIdx].GetType()
 		colTyp = makePlan2Type(rowTyp)
@@ -360,7 +360,7 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 				}
 			}
 		}
-		colExprs[pkColIdx] = valExprs
+		colExprs[pkOrder] = valExprs
 	}
 
 	if pkColLength == 1 {
@@ -370,7 +370,7 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 				Typ: colTyp,
 				Expr: &plan.Expr_Col{
 					Col: &ColRef{
-						ColPos: int32(pkColIdx),
+						ColPos: int32(pkOrder),
 						Name:   tableDef.Pkey.PkeyColName,
 					},
 				},
@@ -399,7 +399,7 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 					Typ: colTyp,
 					Expr: &plan.Expr_Col{
 						Col: &ColRef{
-							ColPos: int32(pkColIdx),
+							ColPos: int32(pkOrder),
 							Name:   tableDef.Pkey.PkeyColName,
 						},
 					},
@@ -420,23 +420,37 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 			return []*Expr{orExpr}
 		}
 	} else {
+
+		// insertRowIdx is the order in insert value SQL, pkColIdx is the order in tableDef.Pkey.Names
+		pkOrder2Idx := make(map[int]int)
+		for _, o := range pkPosInValues {
+			pkName := tableDef.Pkey.Names[o]
+			for i, c := range tableDef.Cols {
+				if c.Name == pkName {
+					pkOrder2Idx[o] = i
+					break
+				}
+			}
+		}
+
 		// multi cols pk & one row for insert
 		if rowsCount == 1 {
 			filterExprs := make([]*Expr, pkColLength)
-			for insertRowIdx, pkColIdx = range pkPosInValues {
+			for insertRowIdx, pkOrder = range pkPosInValues {
+				pkColIdx := pkOrder2Idx[pkOrder]
 				expr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{{
 					Typ: tableDef.Cols[insertRowIdx].Typ,
 					Expr: &plan.Expr_Col{
 						Col: &ColRef{
-							ColPos: int32(pkColIdx),
-							Name:   tableDef.Cols[insertRowIdx].Name,
+							ColPos: int32(pkOrder),
+							Name:   tableDef.Cols[pkColIdx].Name,
 						},
 					},
-				}, colExprs[pkColIdx][0]})
+				}, colExprs[pkOrder][0]})
 				if err != nil {
 					return nil
 				}
-				filterExprs[pkColIdx] = expr
+				filterExprs[pkOrder] = expr
 			}
 			return filterExprs
 		} else {
@@ -444,16 +458,17 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 			var orExpr *Expr
 			for i := 0; i < rowsCount; i++ {
 				var andExpr *Expr
-				for insertRowIdx, pkColIdx = range pkPosInValues {
+				for insertRowIdx, pkOrder = range pkPosInValues {
+					pkColIdx := pkOrder2Idx[pkOrder]
 					eqExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{{
 						Typ: tableDef.Cols[insertRowIdx].Typ,
 						Expr: &plan.Expr_Col{
 							Col: &ColRef{
-								ColPos: int32(pkColIdx),
-								Name:   tableDef.Cols[insertRowIdx].Name,
+								ColPos: int32(pkOrder),
+								Name:   tableDef.Cols[pkColIdx].Name,
 							},
 						},
-					}, colExprs[pkColIdx][i]})
+					}, colExprs[pkOrder][i]})
 					if err != nil {
 						return nil
 					}

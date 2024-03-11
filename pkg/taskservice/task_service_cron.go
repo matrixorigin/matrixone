@@ -220,10 +220,10 @@ func (j *cronJob) doRun() {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 	defer cancel()
 
+	cronTask.TriggerTimes++
 	asyncTask := newTaskFromMetadata(cronTask.Metadata)
 	asyncTask.ParentTaskID = asyncTask.Metadata.ID
 	asyncTask.Metadata.ID = fmt.Sprintf("%s:%d", asyncTask.ParentTaskID, cronTask.TriggerTimes)
-	cronTask.TriggerTimes++
 
 	_, err := j.s.store.UpdateCronTask(ctx, cronTask, asyncTask)
 	if err != nil {

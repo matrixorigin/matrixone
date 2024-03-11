@@ -257,7 +257,13 @@ func (s *service) getLocalLockTable(
 		uuid := getUUIDFromServiceIdentifier(s.serviceID)
 		uuidRequest := getUUIDFromServiceIdentifier(bind.ServiceID)
 		if strings.EqualFold(uuid, uuidRequest) {
-			l.close()
+			getLogger().Warn("stale bind found, handle remote lock on remote lock table instance",
+				zap.String("bind", bind.DebugString()))
+			// only remove old bind lock table
+			s.tables.removeWithFilter(
+				func(table uint64, lt lockTable) bool {
+					return lt.getBind().Equal(bind)
+				})
 			return nil, ErrLockTableBindChanged
 		}
 
