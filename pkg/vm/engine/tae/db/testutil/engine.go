@@ -227,9 +227,8 @@ func (e *TestEngine) DeleteAll(skipConflict bool) error {
 			pkView.ApplyDeletes()
 			err = rel.DeleteByPhyAddrKeys(view.GetData(), pkView.GetData())
 			assert.NoError(e.t, err)
-			it.Next()
-
 		}
+		it.Next()
 	}
 	// CheckAllColRowsByScan(e.t, rel, 0, true)
 	err := txn.Commit(context.Background())
