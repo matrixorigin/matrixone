@@ -132,6 +132,13 @@ func pickTunnels(tuns tunnelSet, n int) []*tunnel {
 	ret := make([]*tunnel, 0, size)
 	i := 1
 	for t := range tuns {
+		// if the tunnel is in transfer intent state, we need to put it
+		// into the queue to speed up its transfer, and it does not count
+		// in the 'size'.
+		if t.transferIntent() {
+			ret = append(ret, t)
+			continue
+		}
 		ret = append(ret, t)
 		i++
 		if i > size {
