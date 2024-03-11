@@ -76,3 +76,13 @@ length(status)
 null
 null
 drop table orders;
+create table t4 (a enum('abc', 'def'));
+insert into t4 values (0);
+internal error: convert to MySQL enum failed: number 0 overflow enum boundary [1, 2]
+insert into t4 values (1);
+insert into t4 values (2);
+select * from t4;
+a
+abc
+def
+drop table t4;
