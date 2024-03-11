@@ -180,6 +180,8 @@ type S3Parameter struct {
 }
 
 type TailParameter struct {
+	//Charset
+	Charset string
 	//Fields
 	Fields *Fields
 	//Lines
@@ -254,6 +256,12 @@ func (node *Load) Format(ctx *FmtCtx) {
 		ctx.WriteString(" accounts(")
 		node.Accounts.Format(ctx)
 		ctx.WriteByte(')')
+	}
+
+	if len(node.Param.Tail.Charset) != 0 {
+		ctx.WriteByte(' ')
+		ctx.WriteString("character set ")
+		ctx.WriteString(node.Param.Tail.Charset)
 	}
 
 	if node.Param.Tail.Fields != nil {

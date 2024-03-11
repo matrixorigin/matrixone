@@ -106,6 +106,79 @@ func (s *service) TxnExecSQL(
 	s.txnC <- newTxnInfoEvent(op.Txn(), txnExecuteEvent, sql)
 }
 
+func (s *service) TxnConflictChanged(
+	op client.TxnOperator,
+	tableID uint64,
+	lastCommitAt timestamp.Timestamp,
+) {
+	if !s.Enabled(FeatureTraceTxn) {
+		return
+	}
+
+	if s.atomic.closed.Load() {
+		return
+	}
+
+	filters := s.atomic.txnFilters.Load()
+	if skipped := filters.filter(op); skipped {
+		return
+	}
+
+	buf := reuse.Alloc[buffer](nil)
+	table := buf.writeUint(tableID)
+	ts := buf.writeTimestamp(lastCommitAt)
+
+	idx := buf.buf.GetWriteIndex()
+	buf.buf.WriteString("table:")
+	buf.buf.WriteString(table)
+	buf.buf.WriteString(", new-min-snapshot-ts: ")
+	buf.buf.WriteString(ts)
+	info := buf.buf.RawSlice(idx, buf.buf.GetWriteIndex())
+	s.txnC <- newTxnInfoEvent(
+		op.Txn(),
+		txnConflictChanged,
+		util.UnsafeBytesToString(info))
+	s.txnBufC <- buf
+}
+
+func (s *service) TxnNoConflictChanged(
+	op client.TxnOperator,
+	tableID uint64,
+	lockedAt, newSnapshotTS timestamp.Timestamp,
+) {
+	if !s.Enabled(FeatureTraceTxn) {
+		return
+	}
+
+	if s.atomic.closed.Load() {
+		return
+	}
+
+	filters := s.atomic.txnFilters.Load()
+	if skipped := filters.filter(op); skipped {
+		return
+	}
+
+	buf := reuse.Alloc[buffer](nil)
+	table := buf.writeUint(tableID)
+	locked := buf.writeTimestamp(lockedAt)
+	newSnapshot := buf.writeTimestamp(newSnapshotTS)
+
+	idx := buf.buf.GetWriteIndex()
+	buf.buf.WriteString("table:")
+	buf.buf.WriteString(table)
+	buf.buf.WriteString(", locked-ts: ")
+	buf.buf.WriteString(locked)
+	buf.buf.WriteString(", new-min-snapshot-ts: ")
+	buf.buf.WriteString(newSnapshot)
+	info := buf.buf.RawSlice(idx, buf.buf.GetWriteIndex())
+	s.txnC <- newTxnInfoEvent(
+		op.Txn(),
+		txnNoConflictChanged,
+		util.UnsafeBytesToString(info))
+	s.txnBufC <- buf
+}
+
 func (s *service) TxnUpdateSnapshot(
 	op client.TxnOperator,
 	tableID uint64,
@@ -292,7 +365,7 @@ func (s *service) handleTxnUpdateSnapshot(event client.TxnEvent) {
 		return
 	}
 
-	if !event.CostEvent && s.atomic.txnEventEnabled.Load() {
+	if event.CostEvent && s.atomic.txnEventEnabled.Load() {
 		s.txnC <- newTxnSnapshotUpdated(event.Txn)
 	}
 
