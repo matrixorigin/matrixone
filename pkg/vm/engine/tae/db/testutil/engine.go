@@ -214,9 +214,9 @@ func (e *TestEngine) DeleteAll(skipConflict bool) error {
 	it := rel.MakeObjectIt()
 	for it.Valid() {
 		blk := it.GetObject()
+		defer blk.Close()
 		blkCnt := uint16(blk.BlkCnt())
 		for i := uint16(0); i < blkCnt; i++ {
-			defer blk.Close()
 			view, err := blk.GetColumnDataByName(context.Background(), i, catalog.PhyAddrColumnName, common.DefaultAllocator)
 			assert.NoError(e.t, err)
 			defer view.Close()

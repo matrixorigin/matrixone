@@ -584,10 +584,12 @@ type DeltalocChain struct {
 }
 
 func NewDeltalocChain(mvcc *MVCCHandle) *DeltalocChain {
-	return &DeltalocChain{
+	delChain := &DeltalocChain{
 		mvcc:          mvcc,
 		BaseEntryImpl: catalog.NewBaseEntry(func() *catalog.MetadataMVCCNode { return &catalog.MetadataMVCCNode{} }),
 	}
+	delChain.RWMutex = mvcc.RWMutex
+	return delChain
 }
 func (d *DeltalocChain) PrepareCommit() (err error) {
 	d.Lock()
