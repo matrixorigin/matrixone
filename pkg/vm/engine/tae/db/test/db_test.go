@@ -40,6 +40,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -3809,7 +3810,7 @@ func TestDelete3(t *testing.T) {
 	// this task won't affect logic of TestAppend2, it just prints logs about dirty count
 	forest := logtail.NewDirtyCollector(tae.LogtailMgr, opts.Clock, tae.Catalog, new(catalog.LoopProcessor))
 	hb := ops.NewHeartBeaterWithFunc(5*time.Millisecond, func() {
-		forest.Run()
+		forest.Run(0)
 		t.Log(forest.String())
 	}, nil)
 	hb.Start()
@@ -4894,7 +4895,7 @@ func TestWatchDirty(t *testing.T) {
 			t.Errorf("timeout to wait zero")
 			return
 		default:
-			watcher.Run()
+			watcher.Run(0)
 			time.Sleep(5 * time.Millisecond)
 			_, _, blkCnt := watcher.DirtyCount()
 			// find block zero
@@ -4949,7 +4950,7 @@ func TestDirtyWatchRace(t *testing.T) {
 		go func(i int) {
 			for j := 0; j < 300; j++ {
 				time.Sleep(5 * time.Millisecond)
-				watcher.Run()
+				watcher.Run(0)
 				// tbl, obj, blk := watcher.DirtyCount()
 				// t.Logf("t%d: tbl %d, obj %d, blk %d", i, tbl, obj, blk)
 				_, _, _ = watcher.DirtyCount()
@@ -7584,7 +7585,8 @@ func TestGCCatalog1(t *testing.T) {
 	assert.NoError(t, err)
 
 	t.Log(tae.Catalog.SimplePPString(3))
-	tae.Catalog.GCByTS(context.Background(), txn2.GetCommitTS().Next())
+	commitTS := txn2.GetCommitTS()
+	tae.Catalog.GCByTS(context.Background(), commitTS.Next())
 	t.Log(tae.Catalog.SimplePPString(3))
 
 	resetCount()
@@ -7615,7 +7617,8 @@ func TestGCCatalog1(t *testing.T) {
 	assert.NoError(t, err)
 
 	t.Log(tae.Catalog.SimplePPString(3))
-	tae.Catalog.GCByTS(context.Background(), txn3.GetCommitTS().Next())
+	commitTS = txn3.GetCommitTS()
+	tae.Catalog.GCByTS(context.Background(), commitTS.Next())
 	t.Log(tae.Catalog.SimplePPString(3))
 
 	resetCount()
@@ -7642,7 +7645,8 @@ func TestGCCatalog1(t *testing.T) {
 	assert.NoError(t, err)
 
 	t.Log(tae.Catalog.SimplePPString(3))
-	tae.Catalog.GCByTS(context.Background(), txn4.GetCommitTS().Next())
+	commitTS = txn4.GetCommitTS()
+	tae.Catalog.GCByTS(context.Background(), commitTS.Next())
 	t.Log(tae.Catalog.SimplePPString(3))
 
 	resetCount()
@@ -7665,7 +7669,8 @@ func TestGCCatalog1(t *testing.T) {
 	assert.NoError(t, err)
 
 	t.Log(tae.Catalog.SimplePPString(3))
-	tae.Catalog.GCByTS(context.Background(), txn5.GetCommitTS().Next())
+	commitTS = txn5.GetCommitTS()
+	tae.Catalog.GCByTS(context.Background(), commitTS.Next())
 	t.Log(tae.Catalog.SimplePPString(3))
 
 	resetCount()
@@ -8022,7 +8027,8 @@ func TestDedupSnapshot1(t *testing.T) {
 	assert.Equal(t, uint64(0), tae.Wal.GetPenddingCnt())
 
 	txn, rel := tae.GetRelation()
-	txn.SetSnapshotTS(txn.GetStartTS().Next())
+	startTS := txn.GetStartTS()
+	txn.SetSnapshotTS(startTS.Next())
 	txn.SetDedupType(txnif.IncrementalDedup)
 	err := rel.Append(context.Background(), bat)
 	assert.NoError(t, err)
@@ -8064,7 +8070,8 @@ func TestDedupSnapshot2(t *testing.T) {
 	assert.NoError(t, txn.Commit(context.Background()))
 
 	txn, rel = tae.GetRelation()
-	txn.SetSnapshotTS(txn.GetStartTS().Next())
+	startTS := txn.GetStartTS()
+	txn.SetSnapshotTS(startTS.Next())
 	txn.SetDedupType(txnif.IncrementalDedup)
 	err = rel.AddBlksWithMetaLoc(context.Background(), statsVec)
 	assert.NoError(t, err)
@@ -8878,7 +8885,8 @@ func TestColumnCount(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit(context.Background()))
 
-	tae.Catalog.GCByTS(context.Background(), txn.GetCommitTS().Next())
+	commitTS := txn.GetCommitTS()
+	tae.Catalog.GCByTS(context.Background(), commitTS.Next())
 }
 
 func TestCollectDeletesInRange1(t *testing.T) {
@@ -9037,4 +9045,27 @@ func TestGlobalCheckpoint7(t *testing.T) {
 	}
 	assert.Equal(t, 1, len(entries))
 
+}
+
+func TestSplitCommand(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	opts.MaxMessageSize = txnbase.CmdBufReserved + 2*1024
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(2, 1)
+	schema.BlockMaxRows = 50
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 50)
+	defer bat.Close()
+
+	tae.CreateRelAndAppend(bat, true)
+
+	tae.CheckRowsByScan(50, false)
+	t.Log(tae.Catalog.SimplePPString(3))
+	tae.Restart(context.Background())
+	t.Log(tae.Catalog.SimplePPString(3))
+	tae.CheckRowsByScan(50, false)
 }

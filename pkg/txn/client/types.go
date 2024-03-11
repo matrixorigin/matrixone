@@ -176,6 +176,9 @@ type TxnOperator interface {
 	Debug(ctx context.Context, ops []txn.TxnRequest) (*rpc.SendResult, error)
 
 	NextSequence() uint64
+
+	EnterRunSql()
+	ExitRunSql()
 }
 
 // TxnIDGenerator txn id generator

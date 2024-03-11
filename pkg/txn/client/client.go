@@ -302,9 +302,11 @@ func (client *txnClient) New(
 
 	ts, err := client.determineTxnSnapshot(minTS)
 	if err != nil {
+		_ = op.Rollback(ctx)
 		return nil, err
 	}
 	if err := op.UpdateSnapshot(ctx, ts); err != nil {
+		_ = op.Rollback(ctx)
 		return nil, err
 	}
 
@@ -490,6 +492,9 @@ func (client *txnClient) closeTxn(event TxnEvent) {
 	}()
 
 	key := cutil.UnsafeBytesToString(txn.ID)
+	{
+		util.GetLogger().Info("txn closed", zap.String("txn ID", hex.EncodeToString(txn.ID)))
+	}
 	if op, ok := client.mu.activeTxns[key]; ok {
 		v2.TxnLifeCycleDurationHistogram.Observe(time.Since(op.createAt).Seconds())
 
@@ -513,6 +518,8 @@ func (client *txnClient) closeTxn(event TxnEvent) {
 				op.notifyActive()
 			}
 		}
+	} else {
+		util.GetLogger().Fatal("txn closed", zap.String("txn ID", hex.EncodeToString(txn.ID)))
 	}
 }
 
@@ -596,7 +603,7 @@ func (client *txnClient) startLeakChecker() {
 
 func (client *txnClient) addToLeakCheck(op *txnOperator) {
 	if client.leakChecker != nil {
-		client.leakChecker.txnOpened(op.txnID, op.options)
+		client.leakChecker.txnOpened(op, op.txnID, op.options)
 	}
 }
 
