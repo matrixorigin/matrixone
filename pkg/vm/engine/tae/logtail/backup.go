@@ -581,14 +581,6 @@ func ReWriteCheckpointAndBlockFromKey(
 	var files []string
 	isCkpChange := false
 	blkCNMetaInsert := data.bats[BLKCNMetaInsertIDX]
-	blkCNMetaInsertMetaLoc := data.bats[BLKCNMetaInsertIDX].GetVectorByName(catalog.BlockMeta_MetaLoc)
-	blkCNMetaInsertDeltaLoc := data.bats[BLKCNMetaInsertIDX].GetVectorByName(catalog.BlockMeta_DeltaLoc)
-	blkCNMetaInsertEntryState := data.bats[BLKCNMetaInsertIDX].GetVectorByName(catalog.BlockMeta_EntryState)
-	blkCNMetaInsertBlkID := data.bats[BLKCNMetaInsertIDX].GetVectorByName(catalog.BlockMeta_ID)
-
-	blkMetaDelTxnBat := data.bats[BLKMetaDeleteTxnIDX]
-	blkMetaDelTxnTid := blkMetaDelTxnBat.GetVectorByName(SnapshotAttr_TID)
-
 	blkMetaInsTxnBat := data.bats[BLKMetaInsertTxnIDX]
 	blkMetaInsTxnBatTid := blkMetaInsTxnBat.GetVectorByName(SnapshotAttr_TID)
 
@@ -597,7 +589,6 @@ func ReWriteCheckpointAndBlockFromKey(
 	blkMetaInsertDeltaLoc := data.bats[BLKMetaInsertIDX].GetVectorByName(catalog.BlockMeta_DeltaLoc)
 	blkMetaInsertEntryState := data.bats[BLKMetaInsertIDX].GetVectorByName(catalog.BlockMeta_EntryState)
 	blkMetaInsertBlkID := data.bats[BLKMetaInsertIDX].GetVectorByName(catalog.BlockMeta_ID)
-	blkCNMetaInsertCommitTs := data.bats[BLKCNMetaInsertIDX].GetVectorByName(catalog.BlockMeta_CommitTs)
 
 	objInfoData := data.bats[ObjectInfoIDX]
 	objInfoStats := objInfoData.GetVectorByName(ObjectAttr_ObjectStats)
@@ -650,32 +641,8 @@ func ReWriteCheckpointAndBlockFromKey(
 		addObjectToObjectData(stats, isABlk, !deleteAt.IsEmpty(), true, i, tid, &objectsData)
 	}
 
-	for i := 0; i < blkCNMetaInsert.Length(); i++ {
+	if blkCNMetaInsert.Length() > 0 {
 		panic(any("blkCNMetaInsert is not empty"))
-		metaLoc := objectio.Location(blkCNMetaInsertMetaLoc.Get(i).([]byte))
-		deltaLoc := objectio.Location(blkCNMetaInsertDeltaLoc.Get(i).([]byte))
-		isABlk := blkCNMetaInsertEntryState.Get(i).(bool)
-		commits := blkCNMetaInsertCommitTs.Get(i).(types.TS)
-		blkID := blkCNMetaInsertBlkID.Get(i).(types.Blockid)
-		if commits.Less(ts) {
-			panic(any(fmt.Sprintf("commitTs less than ts: %v-%v", commits.ToString(), ts.ToString())))
-		}
-		if deltaLoc.IsEmpty() || metaLoc.IsEmpty() {
-			panic(any(fmt.Sprintf("deltaLoc or metaLoc is empty: %v-%v", deltaLoc.String(), metaLoc.String())))
-		}
-		if !metaLoc.IsEmpty() && softDeletes[metaLoc.Name().String()] {
-			// It has been soft deleted by the previous checkpoint, so it will be skipped and not collected.
-			continue
-		}
-
-		addBlockToObjectData(deltaLoc, isABlk, true, i,
-			blkMetaDelTxnTid.Get(i).(uint64), blkID, objectio.SchemaTombstone, &objectsData)
-		addBlockToObjectData(metaLoc, isABlk, true, i,
-			blkMetaDelTxnTid.Get(i).(uint64), blkID, objectio.SchemaData, &objectsData)
-		name := metaLoc.Name().String()
-		if isABlk && !deltaLoc.IsEmpty() {
-			objectsData[name].data[metaLoc.ID()].tombstone = objectsData[deltaLoc.Name().String()].data[deltaLoc.ID()]
-		}
 	}
 
 	for i := 0; i < blkMetaInsert.Length(); i++ {
@@ -689,7 +656,7 @@ func ReWriteCheckpointAndBlockFromKey(
 		name := objectio.BuildObjectName(blkID.Segment(), blkID.Sequence())
 		if isABlk {
 			if objectsData[name.String()] == nil {
-				panic(any(fmt.Sprintf("object %v not found", name.String())))
+				continue
 			}
 			if !objectsData[name.String()].isDeleteBatch {
 				panic(any(fmt.Sprintf("object %v is not deleteBatch", name.String())))
@@ -699,11 +666,9 @@ func ReWriteCheckpointAndBlockFromKey(
 			objectsData[name.String()].data[blkID.Sequence()].blockId = blkID
 			objectsData[name.String()].data[blkID.Sequence()].tombstone = objectsData[deltaLoc.Name().String()].data[deltaLoc.ID()]
 			if len(objectsData[name.String()].data[blkID.Sequence()].deleteRow) > 0 {
-				logutil.Infof("deleteRow is not empty: %v", objectsData[name.String()].data[blkID.Sequence()].deleteRow)
 				objectsData[name.String()].data[blkID.Sequence()].deleteRow = append(objectsData[name.String()].data[blkID.Sequence()].deleteRow, i)
 			} else {
 				objectsData[name.String()].data[blkID.Sequence()].deleteRow = []int{i}
-				logutil.Infof("deleteRow is empty: %v, row is %d", name.String(), i)
 			}
 		} else {
 			if objectsData[name.String()] != nil {
@@ -711,16 +676,12 @@ func ReWriteCheckpointAndBlockFromKey(
 					logutil.Infof("object %v is deleteBatch", name.String())
 					addBlockToObjectData(deltaLoc, isABlk, true, i,
 						blkMetaInsTxnBatTid.Get(i).(uint64), blkID, objectio.SchemaTombstone, &objectsData)
-				} else {
-					logutil.Infof("object %v is not deleteBatch", name.String())
-					addBlockToObjectData(deltaLoc, isABlk, false, i,
-						blkMetaInsTxnBatTid.Get(i).(uint64), blkID, objectio.SchemaTombstone, &objectsData)
+					continue
 				}
-			} else {
-				logutil.Infof("objectsData[name.String()] is nil %v is not deleteBatch", name.String())
-				addBlockToObjectData(deltaLoc, isABlk, false, i,
-					blkMetaInsTxnBatTid.Get(i).(uint64), blkID, objectio.SchemaTombstone, &objectsData)
 			}
+			logutil.Infof("objectsData[name.String()] is nil %v is not deleteBatch", name.String())
+			addBlockToObjectData(deltaLoc, isABlk, false, i,
+				blkMetaInsTxnBatTid.Get(i).(uint64), blkID, objectio.SchemaTombstone, &objectsData)
 		}
 	}
 
@@ -1036,13 +997,10 @@ func ReWriteCheckpointAndBlockFromKey(
 					continue
 				}
 				if insertBatch[tid] != nil && !insertBatch[tid].insertBlocks[b].apply {
-					//deleteRow := insertBatch[tid].insertBlocks[b].deleteRow
 					insertBatch[tid].insertBlocks[b].apply = true
 					if insertBatch[tid].insertBlocks[b].data == nil {
 
 					} else {
-						//appendValToBatch(data.bats[BLKCNMetaInsertIDX], blkMeta, deleteRow)
-						//appendValToBatch(data.bats[BLKMetaDeleteTxnIDX], blkMetaTxn, deleteRow)
 						i := blkMeta.Vecs[0].Length() - 1
 						if !insertBatch[tid].insertBlocks[b].location.IsEmpty() {
 							sort := true
