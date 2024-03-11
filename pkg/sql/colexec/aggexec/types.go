@@ -174,6 +174,10 @@ func makeSpecialAggExec(
 		if id == aggIdOfGroupConcat {
 			return makeGroupConcat(mg, id, isDistinct, params, getCroupConcatRet(params...), groupConcatSep), true
 		}
+		if id == aggIdOfApproxCount {
+			return makeApproxCount(mg, id, params[0]), true
+		}
+
 	}
 	return nil, false
 }

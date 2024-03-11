@@ -14,6 +14,8 @@
 
 package aggexec
 
+import hll "github.com/axiomhq/hyperloglog"
+
 var _ = MarshalAggFuncExec
 var _ = UnmarshalAggFuncExec
 
@@ -31,31 +33,7 @@ func UnmarshalAggFuncExec(
 
 	info := encoded.GetInfo()
 
-	var exec = MakeAgg(nil, info.Id, info.IsDistinct, info.Args...)
-	//switch encoded.GetExecType() {
-	//case EncodedAggExecType_special_group_concat:
-	//	exec = makeGroupConcat(
-	//		nil, info.Id, info.IsDistinct, info.Args, info.Ret, string(encoded.Groups[0]))
-	//
-	//case EncodedAggExecType_special_count_column:
-	//	exec = makeCount(
-	//		nil, info.Id, info.IsDistinct, info.Args[0])
-	//
-	//case EncodedAggExecType_special_count_star:
-	//	panic("count(*) not implement now.")
-	//
-	//case EncodedAggExecType_single_fixed_fixed, EncodedAggExecType_single_fixed_var,
-	//	EncodedAggExecType_single_var_fixed, EncodedAggExecType_single_var_var:
-	//	exec = makeSingleAgg(
-	//		nil, info.Id, info.IsDistinct, info.Args[0])
-	//
-	//case EncodedAggExecType_multi_return_fixed, EncodedAggExecType_multi_return_var:
-	//	exec = makeMultiAgg(
-	//		nil, info.Id, info.IsDistinct, info.Args)
-	//
-	//default:
-	//	return nil, moerr.NewInternalErrorNoCtx("Unmarshal agg exec failed, unknown exec type %d", encoded.GetExecType())
-	//}
+	exec := MakeAgg(nil, info.Id, info.IsDistinct, info.Args...)
 
 	if encoded.GetExecType() == EncodedAggExecType_special_group_concat {
 		if len(encoded.Groups) > 0 && len(encoded.Groups[0]) > 0 {
@@ -299,4 +277,88 @@ func (exec *countStarExec) marshal() ([]byte, error) {
 
 func (exec *countStarExec) unmarshal(result []byte, groups [][]byte) error {
 	return exec.ret.unmarshal(result)
+}
+
+func (exec *approxCountFixedExec[T]) marshal() ([]byte, error) {
+	d := exec.singleAggInfo.getEncoded()
+	r, err := exec.ret.marshal()
+	if err != nil {
+		return nil, err
+	}
+
+	encoded := &EncodedAgg{
+		ExecType: EncodedAggExecType_special_approx_count,
+		Info:     d,
+		Result:   r,
+		Groups:   nil,
+	}
+	if len(exec.groups) > 0 {
+		encoded.Groups = make([][]byte, len(exec.groups))
+		for i := range encoded.Groups {
+			encoded.Groups[i], err = exec.groups[i].MarshalBinary()
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+	return encoded.Marshal()
+}
+
+func (exec *approxCountFixedExec[T]) unmarshal(result []byte, groups [][]byte) error {
+	err := exec.ret.unmarshal(result)
+	if err != nil {
+		return err
+	}
+	if len(groups) > 0 {
+		exec.groups = make([]*hll.Sketch, len(groups))
+		for i := range exec.groups {
+			exec.groups[i] = hll.New()
+			if err = exec.groups[i].UnmarshalBinary(groups[i]); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (exec *approxCountVarExec) marshal() ([]byte, error) {
+	d := exec.singleAggInfo.getEncoded()
+	r, err := exec.ret.marshal()
+	if err != nil {
+		return nil, err
+	}
+
+	encoded := &EncodedAgg{
+		ExecType: EncodedAggExecType_special_approx_count,
+		Info:     d,
+		Result:   r,
+		Groups:   nil,
+	}
+	if len(exec.groups) > 0 {
+		encoded.Groups = make([][]byte, len(exec.groups))
+		for i := range encoded.Groups {
+			encoded.Groups[i], err = exec.groups[i].MarshalBinary()
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+	return encoded.Marshal()
+}
+
+func (exec *approxCountVarExec) unmarshal(result []byte, groups [][]byte) error {
+	err := exec.ret.unmarshal(result)
+	if err != nil {
+		return err
+	}
+	if len(groups) > 0 {
+		exec.groups = make([]*hll.Sketch, len(groups))
+		for i := range exec.groups {
+			exec.groups[i] = hll.New()
+			if err = exec.groups[i].UnmarshalBinary(groups[i]); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }

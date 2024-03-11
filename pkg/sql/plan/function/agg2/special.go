@@ -27,3 +27,7 @@ func RegisterCountStar(id int64) {
 func RegisterGroupConcat(id int64) {
 	aggexec.RegisterGroupConcatAgg(id, ",")
 }
+
+func RegisterApproxCount(id int64) {
+	aggexec.RegisterApproxCountAgg(id)
+}

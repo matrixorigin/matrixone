@@ -19,6 +19,8 @@ import (
 )
 
 // count is a special agg because it can ignore what the value is but only if it was a null.
+//
+//	but count(distinct) cannot use this agg directly.
 type countColumnExec struct {
 	singleAggInfo
 	singleAggExecOptimized

@@ -111,6 +111,11 @@ func RegisterGroupConcatAgg(id int64, sep string) {
 	groupConcatSep = sep
 }
 
+func RegisterApproxCountAgg(id int64) {
+	specialAgg[id] = true
+	aggIdOfApproxCount = id
+}
+
 type registeredAggInfo struct {
 	isSingleAgg          bool
 	acceptNull           bool
@@ -168,6 +173,7 @@ var (
 	aggIdOfCountColumn = int64(-1)
 	aggIdOfCountStar   = int64(-2)
 	aggIdOfGroupConcat = int64(-3)
+	aggIdOfApproxCount = int64(-4)
 	groupConcatSep     = ","
 	getCroupConcatRet  = func(args ...types.Type) types.Type {
 		for _, p := range args {
