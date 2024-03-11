@@ -140,6 +140,7 @@ func addObjectToObjectData(
 		object.obj.delete = isDelete
 		object.obj.isABlock = isABlk
 		if isABlk {
+			object.data = make(map[uint16]*blockData)
 			object.data[0] = &blockData{
 				num:       0,
 				location:  stats.ObjectLocation(),
