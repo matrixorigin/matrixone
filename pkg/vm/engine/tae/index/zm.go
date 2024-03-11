@@ -488,6 +488,32 @@ func (zm ZM) AnyGE(o ZM) (res bool, ok bool) {
 	return
 }
 
+// zm.min >= k
+func (zm ZM) AnyGEByValue(k []byte) bool {
+	if !zm.IsInited() {
+		return false
+	}
+	if !zm.IsString() || len(k) < 31 {
+		return compute.Compare(zm.GetMaxBuf(), k, zm.GetType(), 0, 0) >= 0
+	}
+	zm2 := BuildZM(zm.GetType(), k)
+	ret, _ := zm.AnyGE(zm2)
+	return ret
+}
+
+// zm.min <= k
+func (zm ZM) AnyLEByValue(k []byte) bool {
+	if !zm.IsInited() {
+		return false
+	}
+	if !zm.IsString() || len(k) < 31 {
+		return compute.Compare(zm.GetMinBuf(), k, zm.GetType(), 0, 0) <= 0
+	}
+	zm2 := BuildZM(zm.GetType(), k)
+	ret, _ := zm.AnyLE(zm2)
+	return ret
+}
+
 func (zm ZM) AnyLT(o ZM) (res bool, ok bool) {
 	if !zm.compareCheck(o) {
 		ok = false

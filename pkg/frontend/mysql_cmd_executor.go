@@ -46,12 +46,15 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/explain"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	txnTrace "github.com/matrixorigin/matrixone/pkg/txn/trace"
 	util2 "github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -84,10 +87,6 @@ func parameterModificationInTxnErrorInfo() string {
 
 func unclassifiedStatementInUncommittedTxnErrorInfo() string {
 	return "unclassified statement appears in uncommitted transaction"
-}
-
-func abortTransactionErrorInfo() string {
-	return "Previous DML conflicts with existing constraints or data format. This transaction has to be aborted"
 }
 
 func writeWriteConflictsErrorInfo() string {
@@ -333,14 +332,14 @@ var RecordParseErrorStatement = func(ctx context.Context, ses *Session, proc *pr
 			if err != nil {
 				return nil, err
 			}
-			motrace.EndStatement(ctx, retErr, 0, 0)
+			motrace.EndStatement(ctx, retErr, 0, 0, 0)
 		}
 	} else {
 		ctx, err = RecordStatement(ctx, ses, proc, nil, envBegin, "", sqlType, true)
 		if err != nil {
 			return nil, err
 		}
-		motrace.EndStatement(ctx, retErr, 0, 0)
+		motrace.EndStatement(ctx, retErr, 0, 0, 0)
 	}
 
 	tenant := ses.GetTenantInfo()
@@ -1967,17 +1966,42 @@ func buildMoExplainQuery(explainColName string, buffer *explain.ExplainDataBuffe
 }
 
 func buildPlan(requestCtx context.Context, ses *Session, ctx plan2.CompilerContext, stmt tree.Statement) (*plan2.Plan, error) {
+	var ret *plan2.Plan
+	var err error
+
+	txnOp := ctx.GetProcess().TxnOperator
 	start := time.Now()
+	seq := uint64(0)
+	if txnOp != nil {
+		seq = txnOp.NextSequence()
+		txnTrace.GetService().AddTxnDurationAction(
+			txnOp,
+			client.BuildPlanEvent,
+			seq,
+			0,
+			0,
+			err)
+	}
+
 	defer func() {
-		v2.TxnStatementBuildPlanDurationHistogram.Observe(time.Since(start).Seconds())
+		cost := time.Since(start)
+
+		if txnOp != nil {
+			txnTrace.GetService().AddTxnDurationAction(
+				txnOp,
+				client.BuildPlanEvent,
+				seq,
+				0,
+				cost,
+				err)
+		}
+		v2.TxnStatementBuildPlanDurationHistogram.Observe(cost.Seconds())
 	}()
 
 	stats := statistic.StatsInfoFromContext(requestCtx)
 	stats.PlanStart()
 	defer stats.PlanEnd()
 
-	var ret *plan2.Plan
-	var err error
 	isPrepareStmt := false
 	if ses != nil {
 		ses.accountId, err = defines.GetAccountId(requestCtx)
@@ -2869,6 +2893,7 @@ func (mce *MysqlCmdExecutor) processLoadLocal(ctx context.Context, param *tree.E
 	if length == 0 {
 		return
 	}
+	ses.CountPayload(len(packet.Payload))
 
 	skipWrite := false
 	// If inner error occurs(unexpected or expected(ctrl-c)), proc.LoadLocalReader will be closed.
@@ -2912,6 +2937,7 @@ func (mce *MysqlCmdExecutor) processLoadLocal(ctx context.Context, param *tree.E
 		}
 		seq = uint8(packet.SequenceID + 1)
 		proto.SetSequenceID(seq)
+		ses.CountPayload(len(packet.Payload))
 
 		writeStart := time.Now()
 		if !skipWrite {
@@ -3172,10 +3198,9 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 		*/
 		if ses.InMultiStmtTransactionMode() && ses.InActiveTransaction() {
 			ses.cleanCache()
-			ses.SetOptionBits(OPTION_ATTACH_ABORT_TRANSACTION_ERROR)
 		}
 		logError(ses, ses.GetDebugString(), err.Error())
-		txnErr := ses.TxnRollbackSingleStatement(stmt)
+		txnErr := ses.TxnRollbackSingleStatement(stmt, err)
 		if txnErr != nil {
 			logStatementStatus(requestCtx, ses, stmt, fail, txnErr)
 			return txnErr
@@ -3223,12 +3248,20 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 		return err
 	}
 
+	// defer transaction state management.
+	defer func() {
+		err = finishTxnFunc()
+	}()
+
+	// statement management
 	_, txnOp, err := ses.GetTxnHandler().GetTxnOperator()
 	if err != nil {
 		return err
 	}
 
+	//non derived statement
 	if txnOp != nil && !ses.IsDerivedStmt() {
+		//startStatement has been called
 		ok, _ := ses.GetTxnHandler().calledStartStmt()
 		if !ok {
 			txnOp.GetWorkspace().StartStatement()
@@ -3246,18 +3279,15 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 			logError(ses, ses.GetDebugString(), err3.Error())
 			return
 		}
+		//non derived statement
 		if txnOp != nil && !ses.IsDerivedStmt() {
+			//startStatement has been called
 			ok, id := ses.GetTxnHandler().calledStartStmt()
 			if ok && bytes.Equal(txnOp.Txn().ID, id) {
 				txnOp.GetWorkspace().EndStatement()
 			}
 		}
 		ses.GetTxnHandler().disableStartStmt()
-	}()
-
-	// defer transaction state mangagement.
-	defer func() {
-		err = finishTxnFunc()
 	}()
 
 	// XXX XXX
@@ -3676,6 +3706,11 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 	if ret, err = cw.Compile(requestCtx, ses, ses.GetOutputCallback()); err != nil {
 		return
 	}
+	defer func() {
+		if c, ok := ret.(*compile.Compile); ok {
+			c.Release()
+		}
+	}()
 	stmt = cw.GetAst()
 	// reset some special stmt for execute statement
 	switch st := stmt.(type) {

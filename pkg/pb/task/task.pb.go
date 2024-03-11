@@ -762,7 +762,6 @@ type Details struct {
 	Username    string `protobuf:"bytes,4,opt,name=Username,proto3" json:"Username,omitempty"`
 	Error       string `protobuf:"bytes,5,opt,name=Error,proto3" json:"Error,omitempty"`
 	// Types that are valid to be assigned to Details:
-	//
 	//	*Details_Connector
 	Details              isDetails_Details `protobuf_oneof:"Details"`
 	XXX_NoUnkeyedLiteral struct{}          `json:"-"`

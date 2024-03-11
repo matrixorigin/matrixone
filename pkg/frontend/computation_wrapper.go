@@ -236,17 +236,21 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 	// See `func (exec *txnExecutor) Exec(sql string)` for details.
 	txnOp := cwft.proc.TxnOperator
 	cwft.ses.SetTxnId(txnOp.Txn().ID)
+	//non derived statement
 	if txnOp != nil && !cwft.ses.IsDerivedStmt() {
+		//startStatement has been called
 		ok, _ := cwft.ses.GetTxnHandler().calledStartStmt()
 		if !ok {
 			txnOp.GetWorkspace().StartStatement()
 			cwft.ses.GetTxnHandler().enableStartStmt(txnOp.Txn().ID)
 		}
 
+		//increase statement id
 		err = txnOp.GetWorkspace().IncrStatementID(requestCtx, false)
 		if err != nil {
 			return nil, err
 		}
+		cwft.ses.GetTxnHandler().enableIncrStmt(txnOp.Txn().ID)
 	}
 
 	cacheHit := cwft.plan != nil
@@ -409,6 +413,7 @@ func (cwft *TxnComputationWrapper) Run(ts uint64) (*util2.RunResult, error) {
 		logDebug(cwft.ses, cwft.ses.GetDebugString(), "compile.Run end")
 	}()
 	runResult, err := cwft.compile.Run(ts)
+	cwft.compile.Release()
 	cwft.runResult = runResult
 	cwft.compile = nil
 	return runResult, err
@@ -439,7 +444,7 @@ func replacePlan(requestCtx context.Context, ses *Session, cwft *TxnComputationW
 	if err != nil {
 		return nil, nil, originSQL, err
 	}
-	if txnTrace.GetService().Enabled() {
+	if txnTrace.GetService().Enabled(txnTrace.FeatureTraceTxn) {
 		originSQL = tree.String(prepareStmt.PrepareStmt, dialect.MYSQL)
 	}
 	preparePlan := prepareStmt.PreparePlan.GetDcl().GetPrepare()

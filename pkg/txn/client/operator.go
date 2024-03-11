@@ -19,11 +19,13 @@ import (
 	"context"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
@@ -71,14 +73,14 @@ var (
 // number of active transactions.
 func WithUserTxn() TxnOption {
 	return func(tc *txnOperator) {
-		tc.option.user = true
+		tc.options = tc.options.WithUserTxn()
 	}
 }
 
 // WithTxnReadyOnly setup readonly flag
 func WithTxnReadyOnly() TxnOption {
 	return func(tc *txnOperator) {
-		tc.option.readyOnly = true
+		tc.options = tc.options.WithReadOnly()
 	}
 }
 
@@ -88,37 +90,36 @@ func WithTxnReadyOnly() TxnOption {
 // client. Partitions' prepared data are committed asynchronously.
 func WithTxnDisable1PCOpt() TxnOption {
 	return func(tc *txnOperator) {
-		tc.option.disable1PCOpt = true
+		tc.options = tc.options.WithDisable1PC()
 	}
 }
 
 // WithTxnCNCoordinator set cn txn coordinator
 func WithTxnCNCoordinator() TxnOption {
 	return func(tc *txnOperator) {
-		tc.option.coordinator = true
-	}
-}
-
-// WithTxnOpenLog set txn open log
-func WithTxnOpenLog() TxnOption {
-	return func(tc *txnOperator) {
-		tc.mu.Lock()
-		defer tc.mu.Unlock()
-		tc.mu.openlog = true
+		tc.coordinator = true
 	}
 }
 
 // WithTxnLockService set txn lock service
 func WithTxnLockService(lockService lockservice.LockService) TxnOption {
 	return func(tc *txnOperator) {
-		tc.option.lockService = lockService
+		tc.lockService = lockService
 	}
 }
 
-// WithTxnCreateBy set txn create by.Used to check leak txn
-func WithTxnCreateBy(createBy string) TxnOption {
+// WithTxnCreateBy set txn create by.
+func WithTxnCreateBy(
+	accountID uint32,
+	userName string,
+	sessionID string,
+	connectionID uint32) TxnOption {
 	return func(tc *txnOperator) {
-		tc.option.createBy = createBy
+		tc.options.CN = runtime.ProcessLevelRuntime().ServiceUUID()
+		tc.options.SessionID = sessionID
+		tc.options.ConnectionID = connectionID
+		tc.options.AccountID = accountID
+		tc.options.UserName = userName
 	}
 }
 
@@ -133,7 +134,7 @@ func WithTxnCreateBy(createBy string) TxnOption {
 //     before commit.
 func WithTxnCacheWrite() TxnOption {
 	return func(tc *txnOperator) {
-		tc.option.enableCacheWrite = true
+		tc.options = tc.options.WithEnableCacheWrite()
 		tc.mu.cachedWrites = make(map[uint64][]txn.TxnRequest)
 	}
 }
@@ -164,46 +165,47 @@ func WithTxnSkipLock(
 	tables []uint64,
 	modes []lock.LockMode) TxnOption {
 	return func(tc *txnOperator) {
-		tc.option.skipLocks = append(tc.option.skipLocks, tables...)
-		tc.option.skipLockModes = append(tc.option.skipLockModes, modes...)
+		tc.options.SkipLockTables = append(tc.options.SkipLockTables, tables...)
+		tc.options.SkipLockTableModes = append(tc.options.SkipLockTableModes, modes...)
 	}
 }
 
-func WithTxnPKDedupCount(count int) TxnOption {
+// WithTxnEnableCheckDup enable check duplicate before commit to TN
+func WithTxnEnableCheckDup() TxnOption {
 	return func(tc *txnOperator) {
-		tc.option.PKDedupCount = count
+		tc.options = tc.options.WithEnableCheckDup()
 	}
 }
 
 func WithDisableTrace(value bool) TxnOption {
 	return func(tc *txnOperator) {
-		tc.mu.txn.DisableTrace = value
+		if value {
+			tc.options = tc.options.WithDisableTrace()
+		}
 	}
 }
 
-func WithDisableLock(value bool) TxnOption {
+func WithSessionInfo(info string) TxnOption {
 	return func(tc *txnOperator) {
-		tc.mu.txn.DisableLock = value
+		tc.options.SessionInfo = info
 	}
 }
 
 type txnOperator struct {
-	sender rpc.TxnSender
-	waiter *waiter
-	txnID  []byte
-
-	option struct {
-		user             bool
-		readyOnly        bool
-		enableCacheWrite bool
-		disable1PCOpt    bool
-		coordinator      bool
-		PKDedupCount     int
-		createBy         string
-		lockService      lockservice.LockService
-		skipLocks        []uint64
-		skipLockModes    []lock.LockMode
-	}
+	sender               rpc.TxnSender
+	waiter               *waiter
+	txnID                []byte
+	coordinator          bool
+	options              txn.TxnOptions
+	cannotCleanWorkspace bool
+	workspace            Workspace
+	timestampWaiter      TimestampWaiter
+	clock                clock.Clock
+	createAt             time.Time
+	commitAt             time.Time
+	commitSeq            uint64
+	lockService          lockservice.LockService
+	sequence             atomic.Uint64
 
 	mu struct {
 		sync.RWMutex
@@ -212,19 +214,15 @@ type txnOperator struct {
 		txn          txn.TxnMeta
 		cachedWrites map[uint64][]txn.TxnRequest
 		lockTables   []lock.LockTable
-		callbacks    map[EventType][]func(txn.TxnMeta, error)
+		callbacks    map[EventType][]func(TxnEvent)
 		retry        bool
-		openlog      bool
-
-		lockSeq   uint64
-		waitLocks map[uint64]Lock
+		lockSeq      uint64
+		waitLocks    map[uint64]Lock
 	}
-	cannotCleanWorkspace bool
-	workspace            Workspace
-	timestampWaiter      TimestampWaiter
-	clock                clock.Clock
-	createAt             time.Time
-	commitAt             time.Time
+
+	commitCounter   counter
+	rollbackCounter counter
+	runSqlCounter   counter
 }
 
 func newTxnOperator(
@@ -243,7 +241,7 @@ func newTxnOperator(
 	tc.adjust()
 	util.LogTxnCreated(tc.mu.txn)
 
-	if tc.option.user {
+	if tc.options.UserTxn() {
 		v2.TxnUserCounter.Inc()
 	} else {
 		v2.TxnInternalCounter.Inc()
@@ -260,21 +258,15 @@ func newTxnOperatorWithSnapshot(
 	}
 
 	tc := &txnOperator{sender: sender}
+	tc.txnID = v.Txn.ID
+	tc.options = v.Options
 	tc.mu.txn = v.Txn
 	tc.mu.txn.Mirror = true
-	tc.txnID = v.Txn.ID
 	tc.mu.lockTables = v.LockTables
-	tc.option.disable1PCOpt = v.Disable1PCOpt
-	tc.option.enableCacheWrite = v.EnableCacheWrite
-	tc.option.readyOnly = v.ReadyOnly
 
 	tc.adjust()
 	util.LogTxnCreated(tc.mu.txn)
 	return tc, nil
-}
-
-func (tc *txnOperator) isUserTxn() bool {
-	return tc.option.user
 }
 
 func (tc *txnOperator) setWaitActive(v bool) {
@@ -284,21 +276,25 @@ func (tc *txnOperator) setWaitActive(v bool) {
 }
 
 func (tc *txnOperator) waitActive(ctx context.Context) error {
-	start := time.Now()
-	defer func() {
-		v2.TxnWaitActiveDurationHistogram.Observe(time.Since(start).Seconds())
-		tc.triggerEvent(ActiveEvent, nil)
-	}()
-
 	if tc.waiter == nil {
 		return nil
 	}
+
 	tc.setWaitActive(true)
 	defer func() {
 		tc.waiter.close()
 		tc.setWaitActive(false)
 	}()
-	return tc.waiter.wait(ctx)
+
+	cost, err := tc.doCostAction(
+		time.Time{},
+		WaitActiveEvent,
+		func() error {
+			return tc.waiter.wait(ctx)
+		},
+		false)
+	v2.TxnWaitActiveDurationHistogram.Observe(cost.Seconds())
+	return err
 }
 
 func (tc *txnOperator) notifyActive() {
@@ -324,10 +320,7 @@ func (tc *txnOperator) adjust() {
 	if len(tc.mu.txn.ID) == 0 {
 		util.GetLogger().Fatal("missing txn id")
 	}
-	if tc.mu.txn.SnapshotTS.IsEmpty() {
-		util.GetLogger().Fatal("missing txn snapshot timestamp")
-	}
-	if tc.option.readyOnly && tc.option.enableCacheWrite {
+	if tc.options.ReadOnly() && tc.options.CacheWriteEnabled() {
 		util.GetLogger().Fatal("readyOnly and delayWrites cannot both be set")
 	}
 }
@@ -361,13 +354,10 @@ func (tc *txnOperator) Snapshot() ([]byte, error) {
 	if err := tc.checkStatus(true); err != nil {
 		return nil, err
 	}
-
 	snapshot := &txn.CNTxnSnapshot{
-		Txn:              tc.mu.txn,
-		ReadyOnly:        tc.option.readyOnly,
-		EnableCacheWrite: tc.option.enableCacheWrite,
-		Disable1PCOpt:    tc.option.disable1PCOpt,
-		LockTables:       tc.mu.lockTables,
+		Txn:        tc.mu.txn,
+		LockTables: tc.mu.lockTables,
+		Options:    tc.options,
 	}
 	return snapshot.Marshal()
 }
@@ -386,20 +376,22 @@ func (tc *txnOperator) UpdateSnapshot(
 		return nil
 	}
 
-	minTS := ts
-	lastSnapshotTS, err := tc.timestampWaiter.GetTimestamp(
-		ctx,
-		minTS)
-	if err != nil {
-		return err
-	}
-	tc.mu.txn.SnapshotTS = lastSnapshotTS
-	tc.triggerEventLocked(SnapshotUpdatedEvent, nil)
-	return nil
+	_, err := tc.doCostAction(
+		time.Time{},
+		UpdateSnapshotEvent,
+		func() error {
+			var err error
+			tc.mu.txn.SnapshotTS, err = tc.timestampWaiter.GetTimestamp(
+				ctx,
+				ts)
+			return err
+		},
+		true)
+	return err
 }
 
 func (tc *txnOperator) ApplySnapshot(data []byte) error {
-	if !tc.option.coordinator {
+	if !tc.coordinator {
 		util.GetLogger().Fatal("apply snapshot on non-coordinator txn operator")
 	}
 
@@ -457,7 +449,7 @@ func (tc *txnOperator) Read(ctx context.Context, requests []txn.TxnRequest) (*rp
 		return nil, err
 	}
 
-	requests = tc.maybeInsertCachedWrites(ctx, requests, false)
+	requests = tc.maybeInsertCachedWrites(requests, false)
 	return tc.trimResponses(tc.handleError(tc.doSend(ctx, requests, false)))
 }
 
@@ -472,37 +464,50 @@ func (tc *txnOperator) WriteAndCommit(ctx context.Context, requests []txn.TxnReq
 	return tc.doWrite(ctx, requests, true)
 }
 
-func (tc *txnOperator) Commit(ctx context.Context) error {
+func (tc *txnOperator) Commit(ctx context.Context) (err error) {
+	tc.commitCounter.addEnter()
+	defer tc.commitCounter.addExit()
+	txn := tc.getTxnMeta(false)
+	util.LogTxnCommit(txn)
+
+	tc.commitSeq = tc.NextSequence()
 	tc.commitAt = time.Now()
+
+	tc.triggerEvent(newEvent(CommitEvent, txn, tc.commitSeq, nil))
 	defer func() {
-		v2.TxnCNCommitDurationHistogram.Observe(time.Since(tc.commitAt).Seconds())
+		cost := time.Since(tc.commitAt)
+		v2.TxnCNCommitDurationHistogram.Observe(cost.Seconds())
+		tc.triggerEvent(newCostEvent(CommitEvent, tc.getTxnMeta(false), tc.commitSeq, err, cost))
 	}()
 
-	util.LogTxnCommit(tc.getTxnMeta(false))
-
-	if tc.option.readyOnly {
+	if tc.options.ReadOnly() {
 		tc.mu.Lock()
 		defer tc.mu.Unlock()
 		tc.closeLocked()
-		return nil
+		return
 	}
 
-	result, err := tc.doWrite(ctx, nil, true)
-	if err != nil {
-		return err
+	result, e := tc.doWrite(ctx, nil, true)
+	if e != nil {
+		err = e
+		return
 	}
+
 	if result != nil {
 		result.Release()
 	}
-	return nil
+	return
 }
 
-func (tc *txnOperator) Rollback(ctx context.Context) error {
+func (tc *txnOperator) Rollback(ctx context.Context) (err error) {
+	tc.rollbackCounter.addEnter()
+	defer tc.rollbackCounter.addExit()
 	v2.TxnRollbackCounter.Inc()
 	txnMeta := tc.getTxnMeta(false)
 	util.LogTxnRollback(txnMeta)
+
 	if tc.workspace != nil && !tc.cannotCleanWorkspace {
-		if err := tc.workspace.Rollback(ctx); err != nil {
+		if err = tc.workspace.Rollback(ctx); err != nil {
 			util.GetLogger().Error("rollback workspace failed",
 				util.TxnIDField(txnMeta), zap.Error(err))
 		}
@@ -514,6 +519,14 @@ func (tc *txnOperator) Rollback(ctx context.Context) error {
 	if tc.mu.closed {
 		return nil
 	}
+
+	seq := tc.NextSequence()
+	start := time.Now()
+	tc.triggerEventLocked(newEvent(RollbackEvent, txnMeta, seq, nil))
+	defer func() {
+		cost := time.Since(start)
+		tc.triggerEventLocked(newCostEvent(RollbackEvent, txnMeta, seq, err, cost))
+	}()
 
 	defer func() {
 		tc.mu.txn.Status = txn.TxnStatus_Aborted
@@ -573,22 +586,6 @@ func (tc *txnOperator) IsRetry() bool {
 	return tc.mu.retry
 }
 
-func (tc *txnOperator) SetOpenLog(openlog bool) {
-	tc.mu.Lock()
-	defer tc.mu.Unlock()
-	tc.mu.openlog = openlog
-}
-
-func (tc *txnOperator) IsOpenLog() bool {
-	tc.mu.RLock()
-	defer tc.mu.RUnlock()
-	return tc.mu.openlog
-}
-
-func (tc *txnOperator) PKDedupCount() int {
-	return tc.option.PKDedupCount
-}
-
 func (tc *txnOperator) doAddLockTableLocked(value lock.LockTable) error {
 	for _, l := range tc.mu.lockTables {
 		if l.Group == value.Group &&
@@ -612,7 +609,7 @@ func (tc *txnOperator) Debug(ctx context.Context, requests []txn.TxnRequest) (*r
 		return nil, err
 	}
 
-	requests = tc.maybeInsertCachedWrites(ctx, requests, false)
+	requests = tc.maybeInsertCachedWrites(requests, false)
 	return tc.trimResponses(tc.handleError(tc.doSend(ctx, requests, false)))
 }
 
@@ -621,7 +618,7 @@ func (tc *txnOperator) doWrite(ctx context.Context, requests []txn.TxnRequest, c
 		requests[idx].Method = txn.TxnMethod_Write
 	}
 
-	if tc.option.readyOnly {
+	if tc.options.ReadOnly() {
 		util.GetLogger().Fatal("can not write on ready only transaction")
 	}
 	var payload []txn.TxnRequest
@@ -675,13 +672,13 @@ func (tc *txnOperator) doWrite(ctx context.Context, requests []txn.TxnRequest, c
 			return nil, nil
 		}
 
-		requests = tc.maybeInsertCachedWrites(ctx, requests, true)
+		requests = tc.maybeInsertCachedWrites(requests, true)
 		requests = append(requests, txn.TxnRequest{
 			Method: txn.TxnMethod_Commit,
 			Flag:   txn.SkipResponseFlag,
 			CommitRequest: &txn.TxnCommitRequest{
 				Payload:       txnReqs,
-				Disable1PCOpt: tc.option.disable1PCOpt,
+				Disable1PCOpt: tc.options.Is1PCDisabled(),
 			}})
 	}
 	return tc.trimResponses(tc.handleError(tc.doSend(ctx, requests, commit)))
@@ -733,9 +730,12 @@ func (tc *txnOperator) checkStatus(locked bool) error {
 }
 
 func (tc *txnOperator) maybeCacheWrites(requests []txn.TxnRequest, locked bool) bool {
-	if tc.option.enableCacheWrite {
-		tc.mu.Lock()
-		defer tc.mu.Unlock()
+	if tc.options.CacheWriteEnabled() {
+		if !locked {
+			tc.mu.Lock()
+			defer tc.mu.Unlock()
+		}
+
 		for idx := range requests {
 			requests[idx].Flag |= txn.SkipResponseFlag
 			tn := requests[idx].CNRequest.Target.ShardID
@@ -746,8 +746,12 @@ func (tc *txnOperator) maybeCacheWrites(requests []txn.TxnRequest, locked bool) 
 	return false
 }
 
-func (tc *txnOperator) maybeInsertCachedWrites(ctx context.Context, requests []txn.TxnRequest, locked bool) []txn.TxnRequest {
-	if len(requests) == 0 || !tc.option.enableCacheWrite {
+func (tc *txnOperator) maybeInsertCachedWrites(
+	requests []txn.TxnRequest,
+	locked bool,
+) []txn.TxnRequest {
+	if len(requests) == 0 ||
+		!tc.options.CacheWriteEnabled() {
 		return requests
 	}
 
@@ -861,17 +865,26 @@ func (tc *txnOperator) handleErrorResponse(resp txn.TxnResponse) error {
 		}
 		return tc.checkTxnError(resp.TxnError, writeTxnErrors)
 	case txn.TxnMethod_Commit:
+		tc.triggerEventLocked(
+			newCostEvent(
+				CommitResponseEvent,
+				tc.mu.txn,
+				tc.commitSeq,
+				nil,
+				time.Since(tc.commitAt)))
+
 		if err := tc.checkResponseTxnStatusForCommit(resp); err != nil {
 			return err
 		}
+
 		err := tc.checkTxnError(resp.TxnError, commitTxnErrors)
 		if err == nil || !tc.mu.txn.IsPessimistic() {
 			return err
 		}
 
 		// commit failed, refresh invalid lock tables
-		if err != nil && moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged) {
-			tc.option.lockService.ForceRefreshLockTableBinds(
+		if moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged) {
+			tc.lockService.ForceRefreshLockTableBinds(
 				resp.CommitResponse.InvalidLockTables,
 				func(bind lock.LockTable) bool {
 					for _, hold := range tc.mu.lockTables {
@@ -885,8 +898,7 @@ func (tc *txnOperator) handleErrorResponse(resp txn.TxnResponse) error {
 
 		if moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict) ||
 			moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry) {
-			tc.triggerEventLocked(CommitFailedEvent, err)
-			v, ok := moruntime.ProcessLevelRuntime().GetGlobalVariables(moruntime.EnableCheckInvalidRCErrors)
+			v, ok := runtime.ProcessLevelRuntime().GetGlobalVariables(runtime.EnableCheckInvalidRCErrors)
 			if ok && v.(bool) {
 				util.GetLogger().Fatal("failed",
 					zap.Error(err),
@@ -1010,9 +1022,16 @@ func (tc *txnOperator) unlock(ctx context.Context) {
 	// rc mode need to see the committed value, so wait logtail applied
 	if tc.mu.txn.IsRCIsolation() &&
 		tc.timestampWaiter != nil {
-		start := time.Now()
-		_, err := tc.timestampWaiter.GetTimestamp(ctx, tc.mu.txn.CommitTS)
-		v2.TxnCNCommitWaitLogtailDurationHistogram.Observe(time.Since(start).Seconds())
+		cost, err := tc.doCostAction(
+			time.Time{},
+			CommitWaitApplyEvent,
+			func() error {
+				_, err := tc.timestampWaiter.GetTimestamp(ctx, tc.mu.txn.CommitTS)
+				return err
+			},
+			true)
+		v2.TxnCNCommitWaitLogtailDurationHistogram.Observe(cost.Seconds())
+
 		if err != nil {
 			util.GetLogger().Error("txn wait committed log applied failed in rc mode",
 				util.TxnField(tc.mu.txn),
@@ -1020,10 +1039,17 @@ func (tc *txnOperator) unlock(ctx context.Context) {
 		}
 	}
 
-	if err := tc.option.lockService.Unlock(
-		ctx,
-		tc.mu.txn.ID,
-		tc.mu.txn.CommitTS); err != nil {
+	_, err := tc.doCostAction(
+		time.Time{},
+		UnlockEvent,
+		func() error {
+			return tc.lockService.Unlock(
+				ctx,
+				tc.mu.txn.ID,
+				tc.mu.txn.CommitTS)
+		},
+		true)
+	if err != nil {
 		util.GetLogger().Error("failed to unlock txn",
 			util.TxnField(tc.mu.txn),
 			zap.Error(err))
@@ -1035,13 +1061,17 @@ func (tc *txnOperator) needUnlockLocked() bool {
 		txn.TxnMode_Optimistic {
 		return false
 	}
-	return tc.option.lockService != nil
+	return tc.lockService != nil
 }
 
 func (tc *txnOperator) closeLocked() {
 	if !tc.mu.closed {
 		tc.mu.closed = true
-		tc.triggerEventLocked(ClosedEvent, nil)
+		tc.triggerEventLocked(
+			TxnEvent{
+				Event: ClosedEvent,
+				Txn:   tc.mu.txn,
+			})
 	}
 }
 
@@ -1077,7 +1107,7 @@ func (tc *txnOperator) GetOverview() TxnOverview {
 	return TxnOverview{
 		CreateAt:  tc.createAt,
 		Meta:      tc.mu.txn,
-		UserTxn:   tc.option.user,
+		UserTxn:   tc.options.UserTxn(),
 		WaitLocks: tc.getWaitLocksLocked(),
 	}
 }
@@ -1097,14 +1127,83 @@ func (tc *txnOperator) getWaitLocksLocked() []Lock {
 func (tc *txnOperator) LockSkipped(
 	tableID uint64,
 	mode lock.LockMode) bool {
-	if len(tc.option.skipLocks) == 0 {
+	if len(tc.options.SkipLockTables) == 0 {
 		return false
 	}
-	for i, id := range tc.option.skipLocks {
+	for i, id := range tc.options.SkipLockTables {
 		if id == tableID &&
-			mode == tc.option.skipLockModes[i] {
+			mode == tc.options.SkipLockTableModes[i] {
 			return true
 		}
 	}
 	return false
+}
+
+func (tc *txnOperator) TxnOptions() txn.TxnOptions {
+	return tc.options
+}
+
+func (tc *txnOperator) NextSequence() uint64 {
+	return tc.sequence.Add(1)
+}
+
+func (tc *txnOperator) doCostAction(
+	startAt time.Time,
+	event EventType,
+	action func() error,
+	locked bool) (time.Duration, error) {
+	if !locked {
+		tc.mu.RLock()
+		defer tc.mu.RUnlock()
+	}
+
+	seq := tc.NextSequence()
+	if startAt == (time.Time{}) {
+		startAt = time.Now()
+	}
+
+	tc.triggerEventLocked(
+		newEvent(
+			event,
+			tc.mu.txn,
+			seq,
+			nil))
+
+	err := action()
+	cost := time.Since(startAt)
+	tc.triggerEventLocked(
+		newCostEvent(
+			event,
+			tc.mu.txn,
+			seq,
+			err,
+			time.Since(startAt)))
+	return cost, err
+}
+
+func (tc *txnOperator) EnterRunSql() {
+	tc.runSqlCounter.addEnter()
+}
+
+func (tc *txnOperator) ExitRunSql() {
+	tc.runSqlCounter.addExit()
+}
+
+func (tc *txnOperator) inRunSql() bool {
+	return tc.runSqlCounter.more()
+}
+
+func (tc *txnOperator) inCommit() bool {
+	return tc.commitCounter.more()
+}
+
+func (tc *txnOperator) inRollback() bool {
+	return tc.rollbackCounter.more()
+}
+
+func (tc *txnOperator) counter() string {
+	return fmt.Sprintf("commit: %s rollback: %s runSql: %s",
+		tc.commitCounter.String(),
+		tc.rollbackCounter.String(),
+		tc.runSqlCounter.String())
 }
