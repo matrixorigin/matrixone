@@ -647,6 +647,7 @@ system_metrics    server_connections    v    accountadmin
 system_metrics    server_storage_usage    v    accountadmin
 system_metrics    sql_statement_cu    r    accountadmin
 system_metrics    sql_statement_errors    v    accountadmin
+system_metrics    sql_statement_duration_total    v    accountadmin
 system_metrics    sql_statement_total    v    accountadmin
 system_metrics    sql_transaction_errors    v    accountadmin
 system_metrics    sql_transaction_total    v    accountadmin
