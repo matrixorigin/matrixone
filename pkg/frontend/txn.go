@@ -169,12 +169,14 @@ func (th *TxnHandler) NewTxnOperator() (context.Context, TxnOperator, error) {
 		accountID = th.ses.GetTenantInfo().TenantID
 		userName = th.ses.GetTenantInfo().User
 	}
+	sessionInfo := th.ses.GetDebugString()
 	opts = append(opts,
 		client.WithTxnCreateBy(
 			accountID,
 			userName,
 			th.ses.GetUUIDString(),
-			connectionID))
+			connectionID),
+		client.WithSessionInfo(sessionInfo))
 
 	if th.ses != nil && th.ses.GetFromRealUser() {
 		opts = append(opts,
