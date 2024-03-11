@@ -71,13 +71,15 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 			arg.buf = batch.NewWithSize(len(ap.Result))
 			for i, pos := range ap.Result {
-				vec := proc.GetVector(*bat.Vecs[pos].GetType())
-				if err := vector.GetUnionAllFunction(*bat.Vecs[pos].GetType(), proc.Mp())(vec, bat.Vecs[pos]); err != nil {
+				srcVec := bat.Vecs[pos]
+				vec := proc.GetVector(*srcVec.GetType())
+				if err := vector.GetUnionAllFunction(*srcVec.GetType(), proc.Mp())(vec, srcVec); err != nil {
 					vec.Free(proc.Mp())
 					return result, err
 				}
 				arg.buf.SetVector(int32(i), vec)
 			}
+			arg.buf.AddRowCount(bat.RowCount())
 			proc.PutBatch(bat)
 			result.Batch = arg.buf
 			anal.Output(arg.buf, arg.GetIsLast())
