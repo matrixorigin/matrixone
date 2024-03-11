@@ -561,7 +561,7 @@ import (
 %type <columnAttribute> column_attribute_elem keys
 %type <columnAttributes> column_attribute_list column_attribute_list_opt
 %type <tableOptions> table_option_list_opt table_option_list stream_option_list_opt stream_option_list
-%type <str> charset_name storage_opt collate_name column_format storage_media algorithm_type able_type space_type lock_type with_type rename_type algorithm_type_2
+%type <str> charset_name storage_opt collate_name column_format storage_media algorithm_type able_type space_type lock_type with_type rename_type algorithm_type_2 load_charset
 %type <rowFormatType> row_format_options
 %type <int64Val> field_length_opt max_file_size_opt
 %type <matchType> match match_opt
@@ -6556,16 +6556,27 @@ infile_or_s3_param:
     }
 
 tail_param_opt:
-    load_fields load_lines ignore_lines columns_or_variable_list_opt load_set_spec_opt
+    load_charset load_fields load_lines ignore_lines columns_or_variable_list_opt load_set_spec_opt
     {
         $$ = &tree.TailParameter{
-            Fields: $1,
-            Lines: $2,
-            IgnoredLines: uint64($3),
-            ColumnList: $4,
-            Assignments: $5,
+            Charset: $1,
+            Fields: $2,
+            Lines: $3,
+            IgnoredLines: uint64($4),
+            ColumnList: $5,
+            Assignments: $6,
         }
     }
+
+load_charset:
+    {
+        $$ = ""
+    }
+|   charset_keyword charset_name
+    {
+    	$$ = $2
+    }
+
 create_sequence_stmt:
     CREATE SEQUENCE not_exists_opt table_name as_datatype_opt increment_by_opt min_value_opt max_value_opt start_with_opt cycle_opt
     {

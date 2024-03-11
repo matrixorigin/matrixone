@@ -30,7 +30,7 @@ enum CmdMethod {
   Query = 0;
   // ShowProcessList represents the show process list query.
   ShowProcessList = 1;
-  // AlterAccount represent set account status as restricted 
+  // AlterAccount represent set account status as restricted
   AlterAccount = 2;
   // KillConn represents the kill connection request.
   KillConn = 3;
@@ -55,6 +55,9 @@ enum CmdMethod {
   // RemoveRemoteLockTable remove remote lock table on all cn
   RemoveRemoteLockTable = 14;
   GetLatestBind         = 15;
+
+  // GetPipelineInfo is the method to get pipeline info from CN
+  GetPipelineInfo = 19;
 }
 
 // QueryRequest is the common query request. It contains the query
@@ -102,6 +105,15 @@ message RunTaskResponse {
   string Result = 1;
 }
 
+
+message GetPipelineInfoRequest {
+}
+
+message GetPipelineInfoResponse {
+  // Count is the total pipelines running in the server
+  int64 Count = 1;
+}
+
 // Request is the query request.
 message Request {
   // RequestID is the request ID.
@@ -132,6 +144,9 @@ message Request {
 
   RemoveRemoteLockTableRequest  RemoveRemoteLockTable = 17;
   GetLatestBindRequest GetLatestBind = 18;
+
+  // cherry-picked from 1.2, field numbers 19~21 has been used in 1.2
+  GetPipelineInfoRequest GetPipelineInfoRequest = 22;
 }
 
 // ShowProcessListResponse is the response of command ShowProcessList.
@@ -169,6 +184,9 @@ message Response {
 
   RemoveRemoteLockTableResponse  RemoveRemoteLockTable = 17;
   GetLatestBindResponse          GetLatestBind         = 18;
+
+  // cherry-picked from 1.2, field numbers 19~21 has been used in 1.2
+  GetPipelineInfoResponse GetPipelineInfoResponse = 22;
 }
 
 // AlterAccountRequest is the "alter account restricted" query request.

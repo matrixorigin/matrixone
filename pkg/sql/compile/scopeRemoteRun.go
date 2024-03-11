@@ -21,6 +21,8 @@ import (
 	"time"
 	"unsafe"
 
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
@@ -122,6 +124,10 @@ func CnServerMessageHandler(
 				zap.String("error", err.Error()))
 			err = errors.Join(err, cs.Close())
 		}
+	}()
+	start := time.Now()
+	defer func() {
+		v2.PipelineServerDurationHistogram.Observe(time.Since(start).Seconds())
 	}()
 
 	msg, ok := message.(*pipeline.Message)
