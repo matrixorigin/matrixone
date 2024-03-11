@@ -102,6 +102,18 @@ func getPrepareStmtName(stmtID uint32) string {
 	return fmt.Sprintf("%s_%d", prefixPrepareStmtName, stmtID)
 }
 
+func parsePrepareStmtID(s string) uint32 {
+	if strings.HasPrefix(s, prefixPrepareStmtName) {
+		ss := strings.Split(s, "_")
+		v, err := strconv.ParseUint(ss[len(ss)-1], 10, 64)
+		if err != nil {
+			return 0
+		}
+		return uint32(v)
+	}
+	return 0
+}
+
 func GetPrepareStmtID(ctx context.Context, name string) (int, error) {
 	idx := len(prefixPrepareStmtName) + 1
 	if idx >= len(name) {
