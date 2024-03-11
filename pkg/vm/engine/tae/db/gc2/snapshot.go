@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package logtail
+package gc
 
 import (
 	"context"
@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"sync"
 )
@@ -57,7 +58,7 @@ func (sl *SnapshotList) Add(snapshot *Snapshot)  {
 
 func mergeCheckpoint(fs fileservice.FileService,ckpClient checkpoint.RunnerReader, snapshotList *SnapshotList) error {
 	gckp := ckpClient.MaxGlobalCheckpoint()
-	_, data, err := LoadCheckpointEntriesFromKey(context.Background(), fs,
+	_, data, err := logtail.LoadCheckpointEntriesFromKey(context.Background(), fs,
 		gckp.GetLocation(), gckp.GetVersion(), nil)
 	if err != nil {
 		return err
@@ -68,7 +69,7 @@ func mergeCheckpoint(fs fileservice.FileService,ckpClient checkpoint.RunnerReade
 	insCreateTSVec := ins.GetVectorByName(catalog.EntryNode_CreateAt).GetDownstreamVector()
 	dbid := ins.GetVectorByName(catalog.SnapshotAttr_DBID).GetDownstreamVector()
 	tid := ins.GetVectorByName(catalog.SnapshotAttr_TID).GetDownstreamVector()
-
+	table := NewGCTable()
 	for i := 0; i < ins.Length(); i++ {
 		var objectStats objectio.ObjectStats
 		buf := ins.GetVectorByName(catalog.ObjectAttr_ObjectStats).Get(i).([]byte)
@@ -83,7 +84,7 @@ func mergeCheckpoint(fs fileservice.FileService,ckpClient checkpoint.RunnerReade
 			db:       vector.GetFixedAt[uint64](dbid, i),
 			table:    vector.GetFixedAt[uint64](tid, i),
 		}
-		t.addObject(objectStats.ObjectName().String(), object, commitTS)
+		table.addObject(objectStats.ObjectName().String(), object, commitTS)
 	}
 
 	return nil
