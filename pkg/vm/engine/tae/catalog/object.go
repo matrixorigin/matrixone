@@ -259,13 +259,18 @@ func (entry *ObjectEntry) NeedPrefetchObjectMetaForObjectInfo(nodes []*MVCCNode[
 	if !lastNode.BaseNode.IsEmpty() {
 		return
 	}
-	if entry.HasPersistedData() {
+	if entry.nodeHasPersistedData(lastNode) {
 		needPrefetch = true
 	}
 
 	return
 }
-
+func (entry *ObjectEntry) nodeHasPersistedData(node *MVCCNode[*ObjectMVCCNode]) bool {
+	if !entry.IsAppendable() {
+		return true
+	}
+	return node.HasDropCommitted()
+}
 func (entry *ObjectEntry) SetObjectStatsForPreviousNode(nodes []*MVCCNode[*ObjectMVCCNode]) {
 	if entry.IsAppendable() || len(nodes) <= 1 {
 		return
