@@ -40,7 +40,10 @@ func TestMutationControllerAppend(t *testing.T) {
 	rowsPerNode := uint32(5)
 	//ts := uint64(2)
 	//ts = 4
-	ts := types.NextGlobalTsForTest().Next().Next()
+
+	ts := types.NextGlobalTsForTest()
+	ts = ts.Next()
+	ts = ts.Next()
 	//queries := make([]uint64, 0)
 	//queries = append(queries, ts-1)
 	queries := make([]types.TS, 0)
@@ -56,7 +59,8 @@ func TestMutationControllerAppend(t *testing.T) {
 		//queries = append(queries, ts+1)
 		queries = append(queries, ts.Next())
 		//ts += 2
-		ts = ts.Next().Next()
+		ts = ts.Next()
+		ts = ts.Next()
 	}
 
 	st := time.Now()

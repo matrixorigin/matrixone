@@ -60,6 +60,7 @@ func (lc *leakChecker) close() {
 }
 
 func (lc *leakChecker) txnOpened(
+	txnOp *txnOperator,
 	txnID []byte,
 	options txn.TxnOptions) {
 	lc.Lock()
@@ -68,6 +69,7 @@ func (lc *leakChecker) txnOpened(
 		options:  options,
 		id:       txnID,
 		createAt: time.Now(),
+		txnOp:    txnOp,
 	})
 }
 
@@ -103,6 +105,12 @@ func (lc *leakChecker) doCheck() {
 	now := time.Now()
 	for _, txn := range lc.actives {
 		if now.Sub(txn.createAt) >= lc.maxActiveAges {
+			if txn.txnOp != nil {
+				txn.options.Counter = txn.txnOp.counter()
+				txn.options.InRunSql = txn.txnOp.inRunSql()
+				txn.options.InCommit = txn.txnOp.inCommit()
+				txn.options.InRollback = txn.txnOp.inRollback()
+			}
 			lc.leakHandleFunc(txn.id, txn.createAt, txn.options)
 		}
 	}
@@ -112,4 +120,5 @@ type activeTxn struct {
 	options  txn.TxnOptions
 	id       []byte
 	createAt time.Time
+	txnOp    *txnOperator
 }
