@@ -675,27 +675,17 @@ func ReWriteCheckpointAndBlockFromKey(
 			panic(any(fmt.Sprintf("deltaLoc is empty: %v-%v", deltaLoc.String(), metaLoc.String())))
 		}
 		if isABlk {
-			if blkID.Sequence() > 0 {
-				panic(any(fmt.Sprintf("The inserted block is an aobject and blkID not 0 : %v", blkID.String())))
+			name := objectio.BuildObjectName(blkID.Segment(), blkID.Sequence())
+			if objectsData[name.String()] == nil {
+				panic(any(fmt.Sprintf("object %v not found", name.String())))
 			}
-			objectName := objectio.BuildObjectName(blkID.Segment(), blkID.Sequence())
-			locationReader, err := blockio.NewFileReader(fs, objectName.String())
-			if err != nil {
-				return nil, nil, nil, err
-			}
-			meta, err := locationReader.GetObjectReader().ReadAllMeta(ctx, nil)
-			if err != nil {
-				return nil, nil, nil, err
-			}
-			dataMeta := meta.MustDataMeta()
-			blockMeta := dataMeta.GetBlockMeta(uint32(blkID.Sequence()))
-			row := blockMeta.GetRows()
-			metaLocation := objectio.BuildLocation(objectName, *locationReader.GetObjectReader().GetMetaExtent(), row, blkID.Sequence())
-			addBlockToObjectData(metaLocation, isABlk, false, i,
-				blkMetaInsTxnBatTid.Get(i).(uint64), blkID, objectio.SchemaData, &objectsData)
+			addBlockToObjectData(deltaLoc, isABlk, true, i,
+				blkMetaInsTxnBatTid.Get(i).(uint64), blkID, objectio.SchemaTombstone, &objectsData)
+			objectsData[name.String()].data[blkID.Sequence()].tombstone = objectsData[deltaLoc.Name().String()].data[deltaLoc.ID()]
+		} else {
+			addBlockToObjectData(deltaLoc, isABlk, false, i,
+				blkMetaInsTxnBatTid.Get(i).(uint64), blkID, objectio.SchemaTombstone, &objectsData)
 		}
-		addBlockToObjectData(deltaLoc, isABlk, false, i,
-			blkMetaInsTxnBatTid.Get(i).(uint64), blkID, objectio.SchemaTombstone, &objectsData)
 	}
 
 	phaseNumber = 3
