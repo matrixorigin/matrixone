@@ -716,6 +716,10 @@ func ReWriteCheckpointAndBlockFromKey(
 					addBlockToObjectData(deltaLoc, isABlk, false, i,
 						blkMetaInsTxnBatTid.Get(i).(uint64), blkID, objectio.SchemaTombstone, &objectsData)
 				}
+			} else {
+				logutil.Infof("objectsData[name.String()] is nil %v is not deleteBatch", name.String())
+				addBlockToObjectData(deltaLoc, isABlk, false, i,
+					blkMetaInsTxnBatTid.Get(i).(uint64), blkID, objectio.SchemaTombstone, &objectsData)
 			}
 		}
 	}
