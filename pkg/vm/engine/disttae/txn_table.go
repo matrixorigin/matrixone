@@ -16,6 +16,8 @@ package disttae
 
 import (
 	"context"
+	"fmt"
+	"regexp"
 	"sort"
 	"strconv"
 	"time"
@@ -613,6 +615,17 @@ func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr) (ranges eng
 		return
 	}
 	ranges = &blocks
+
+	if regexp.MustCompile(`.*sbtest.*`).MatchString(tbl.tableName) {
+		for i := 1; i < blocks.Len(); i++ {
+			blk := blocks.Get(i)
+			logutil.Infof("xxxx table:%s ranges return blks, txn:%s,blkid:%s, entry state:%v",
+				tbl.tableName,
+				tbl.db.txn.op.Txn().DebugString(),
+				blk.BlockID.String(),
+				blk.EntryState)
+		}
+	}
 	return
 }
 
@@ -647,8 +660,47 @@ func (tbl *txnTable) rangesOnePart(
 		if err != nil {
 			return err
 		}
-		deleteObjs, createObjs := state.GetChangedObjsBetween(types.TimestampToTS(tbl.lastTS),
+
+		lastTs := tbl.lastTS
+		deleteObjs, createObjs := state.GetChangedObjsBetween(types.TimestampToTS(lastTs),
 			types.TimestampToTS(tbl.db.txn.op.SnapshotTS()))
+
+		createObjsInfos := ""
+		deleteObjInfos := ""
+		if regexp.MustCompile(`.*sbtest.*`).MatchString(tbl.tableName) {
+			logutil.Infof("xxxx table:%s, txn:%s, lastTs:%s, snapshotTs:%s",
+				tbl.tableName,
+				tbl.db.txn.op.Txn().DebugString(),
+				lastTs.DebugString(),
+				tbl.db.txn.op.SnapshotTS().DebugString())
+			if len(deleteObjs) > 0 || len(createObjs) > 0 {
+				for obj := range deleteObjs {
+					objInfo, ok := state.GetObject(obj)
+					if !ok {
+						logutil.Fatalf("xxxx obj-seg:%s not found in partition state",
+							obj.Segmentid().ToString())
+					}
+					deleteObjInfos = fmt.Sprintf("%s:%s", deleteObjInfos, objInfo.String())
+				}
+				for obj := range createObjs {
+					objInfo, ok := state.GetObject(obj)
+					if !ok {
+						logutil.Fatalf("xxxx obj-seg:%s not found in partition state",
+							obj.Segmentid().ToString())
+					}
+					createObjsInfos = fmt.Sprintf("%s:%s", createObjsInfos, objInfo.String())
+				}
+				logutil.Infof("xxxx table:%s, deleteObjs:%s, xxxx createObjs:%s, txn:%s, lastTs:%s, snapshotTs:%s",
+					tbl.tableName,
+					deleteObjInfos,
+					createObjsInfos,
+					tbl.db.txn.op.Txn().DebugString(),
+					tbl.lastTS.DebugString(),
+					tbl.db.txn.op.SnapshotTS().DebugString())
+
+			}
+		}
+
 		trace.GetService().ApplyFlush(
 			tbl.db.txn.op.Txn().ID,
 			tbl.tableId,
@@ -2394,6 +2446,13 @@ func (tbl *txnTable) updateDeleteInfo(
 					}
 					if ok {
 						newBlockID, _ := newId.Decode()
+
+						if regexp.MustCompile(`.*sbtest.*`).MatchString(tbl.tableName) {
+							logutil.Infof("xxxx table:%s transfer rowid:%s to %s, txn:%s",
+								tbl.tableName,
+								rowid.String(), newId.String(), tbl.db.txn.op.Txn().DebugString())
+						}
+
 						trace.GetService().ApplyTransferRowID(
 							tbl.db.txn.op.Txn().ID,
 							tbl.tableId,

@@ -140,6 +140,10 @@ func (h *Handle) HandleCommit(
 				logutil.Info("Commit with long latency", zap.Duration("duration", time.Since(start)), zap.String("debug", meta.DebugString()))
 			}
 		})
+		if err != nil {
+			logutil.Infof("xxxx HandleCommit failed : %v", err)
+		}
+
 	}()
 	var txn txnif.AsyncTxn
 	if ok {
@@ -897,6 +901,14 @@ func (h *Handle) HandleWrite(
 		common.DoIfDebugEnabled(func() {
 			logutil.Debugf("[precommit] handle write end txn: %s", txn.String())
 		})
+	}()
+	defer func() {
+		if err != nil {
+			logutil.Infof("xxxx handle wirte typ:%v, %d-%s, %d-%s txn: %s, batch:%s",
+				req.Type, req.TableID,
+				req.TableName, req.DatabaseId, req.DatabaseName,
+				txn.String(), common.MoBatchToString(req.Batch, 10))
+		}
 	}()
 
 	dbase, err := txn.GetDatabaseByID(req.DatabaseId)

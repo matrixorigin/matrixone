@@ -16,6 +16,7 @@ package txnentries
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"sync"
 	"time"
 
@@ -196,6 +197,11 @@ func (entry *mergeObjectsEntry) transferBlockDeletes(
 func (entry *mergeObjectsEntry) PrepareCommit() (err error) {
 	blks := make([]handle.Block, len(entry.createdBlks))
 	delTbls := make([]*model.TransDels, len(entry.createdBlks))
+	defer func() {
+		logutil.Infof("xxxx PrepareCommit merge objects txn start ts: %s, parepare ts:%s, err:%v",
+			entry.txn.GetStartTS().ToString(), entry.txn.GetPrepareTS().ToString(), err)
+	}()
+
 	for i, meta := range entry.createdBlks {
 		id := meta.AsCommonID()
 		obj, err := entry.relation.GetObject(id.ObjectID())

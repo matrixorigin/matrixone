@@ -303,7 +303,7 @@ func (blk *ablock) BatchDedup(
 ) (err error) {
 	defer func() {
 		if moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry) {
-			logutil.Debugf("BatchDedup BLK-%s: %v", blk.meta.ID.String(), err)
+			logutil.Infof("xxxx BatchDedup BLK-%s: %v", blk.meta.ID.String(), err)
 		}
 	}()
 	node := blk.PinNode()

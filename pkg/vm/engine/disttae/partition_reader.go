@@ -16,8 +16,9 @@ package disttae
 
 import (
 	"context"
-
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"regexp"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -99,8 +100,18 @@ func (p *PartitionReader) prepare() error {
 				//deletes in txn.Write maybe comes from PartitionState.Rows ,
 				// PartitionReader need to skip them.
 				vs := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
+				log := false
 				for _, v := range vs {
 					deletes[v] = 0
+					if regexp.MustCompile(`.*sbtest.*`).MatchString(p.table.tableName) {
+						if !log {
+							logutil.Infof("xxxx txn:%s table:%s, partition reader: load delete batch:%s",
+								p.table.db.txn.op.Txn().DebugString(),
+								p.table.tableName,
+								common.MoBatchToString(entry.bat, 10))
+							log = true
+						}
+					}
 				}
 			}
 		})
