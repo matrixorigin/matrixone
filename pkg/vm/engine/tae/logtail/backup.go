@@ -651,6 +651,7 @@ func ReWriteCheckpointAndBlockFromKey(
 	}
 
 	for i := 0; i < blkCNMetaInsert.Length(); i++ {
+		panic(any("blkCNMetaInsert is not empty"))
 		metaLoc := objectio.Location(blkCNMetaInsertMetaLoc.Get(i).([]byte))
 		deltaLoc := objectio.Location(blkCNMetaInsertDeltaLoc.Get(i).([]byte))
 		isABlk := blkCNMetaInsertEntryState.Get(i).(bool)
