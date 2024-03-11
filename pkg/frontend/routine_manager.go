@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -40,15 +41,17 @@ import (
 )
 
 type RoutineManager struct {
-	mu             sync.RWMutex
-	ctx            context.Context
-	clients        map[goetty.IOSession]*Routine
-	pu             *config.ParameterUnit
-	tlsConfig      *tls.Config
-	aicm           *defines.AutoIncrCacheManager
-	accountRoutine *AccountRoutineManager
-	baseService    BaseService
-	sessionManager *queryservice.SessionManager
+	mu      sync.RWMutex
+	ctx     context.Context
+	clients map[goetty.IOSession]*Routine
+	// routinesByID keeps the routines by connection ID.
+	routinesByConnID map[uint32]*Routine
+	pu               *config.ParameterUnit
+	tlsConfig        *tls.Config
+	aicm             *defines.AutoIncrCacheManager
+	accountRoutine   *AccountRoutineManager
+	baseService      BaseService
+	sessionManager   *queryservice.SessionManager
 	// reportSystemStatusTime is the time when report system status last time.
 	reportSystemStatusTime atomic.Pointer[time.Time]
 }
@@ -170,16 +173,27 @@ func (rm *RoutineManager) getCtx() context.Context {
 	return rm.ctx
 }
 
-func (rm *RoutineManager) setRoutine(rs goetty.IOSession, r *Routine) {
+func (rm *RoutineManager) setRoutine(rs goetty.IOSession, id uint32, r *Routine) {
 	rm.mu.Lock()
 	defer rm.mu.Unlock()
 	rm.clients[rs] = r
+	rm.routinesByConnID[id] = r
 }
 
 func (rm *RoutineManager) getRoutine(rs goetty.IOSession) *Routine {
 	rm.mu.RLock()
 	defer rm.mu.RUnlock()
 	return rm.clients[rs]
+}
+
+func (rm *RoutineManager) getRoutineByConnID(id uint32) *Routine {
+	rm.mu.RLock()
+	defer rm.mu.RUnlock()
+	r, ok := rm.routinesByConnID[id]
+	if ok {
+		return r
+	}
+	return nil
 }
 
 func (rm *RoutineManager) deleteRoutine(rs goetty.IOSession) *Routine {
@@ -190,6 +204,11 @@ func (rm *RoutineManager) deleteRoutine(rs goetty.IOSession) *Routine {
 	rt, ok = rm.clients[rs]
 	if ok {
 		delete(rm.clients, rs)
+	}
+	connID := rt.getConnectionID()
+	_, ok = rm.routinesByConnID[connID]
+	if ok {
+		delete(rm.routinesByConnID, connID)
 	}
 	return rt
 }
@@ -286,7 +305,7 @@ func (rm *RoutineManager) Created(rs goetty.IOSession) {
 	}
 
 	logDebugf(pro.GetDebugString(), "have sent handshake packet to connection %s", rs.RemoteAddress())
-	rm.setRoutine(rs, routine)
+	rm.setRoutine(rs, pro.connectionID, routine)
 }
 
 /*
@@ -610,6 +629,22 @@ func (rm *RoutineManager) KillRoutineConnections() {
 	rm.cleanKillQueue()
 }
 
+func (rm *RoutineManager) MigrateConnectionTo(req *query.MigrateConnToRequest) error {
+	routine := rm.getRoutineByConnID(req.ConnID)
+	if routine == nil {
+		return moerr.NewInternalError(rm.ctx, "cannot get routine to migrate connection %d", req.ConnID)
+	}
+	return routine.migrateConnectionTo(req)
+}
+
+func (rm *RoutineManager) MigrateConnectionFrom(req *query.MigrateConnFromRequest, resp *query.MigrateConnFromResponse) error {
+	routine, ok := rm.routinesByConnID[req.ConnID]
+	if !ok {
+		return moerr.NewInternalError(rm.ctx, "cannot get routine to migrate connection %d", req.ConnID)
+	}
+	return routine.migrateConnectionFrom(resp)
+}
+
 func NewRoutineManager(ctx context.Context, pu *config.ParameterUnit, aicm *defines.AutoIncrCacheManager) (*RoutineManager, error) {
 	accountRoutine := &AccountRoutineManager{
 		killQueueMu:       sync.RWMutex{},
@@ -619,10 +654,11 @@ func NewRoutineManager(ctx context.Context, pu *config.ParameterUnit, aicm *defi
 		ctx:               ctx,
 	}
 	rm := &RoutineManager{
-		ctx:            ctx,
-		clients:        make(map[goetty.IOSession]*Routine),
-		pu:             pu,
-		accountRoutine: accountRoutine,
+		ctx:              ctx,
+		clients:          make(map[goetty.IOSession]*Routine),
+		routinesByConnID: make(map[uint32]*Routine),
+		pu:               pu,
+		accountRoutine:   accountRoutine,
 	}
 
 	rm.aicm = aicm
