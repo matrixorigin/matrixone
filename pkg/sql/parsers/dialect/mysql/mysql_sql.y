@@ -448,7 +448,6 @@ import (
 // Call
 %token <str> CALL
 
-
 // Time window
 %token <str> PREV SLIDING FILL
 
@@ -565,7 +564,7 @@ import (
 %type <columnAttribute> column_attribute_elem keys
 %type <columnAttributes> column_attribute_list column_attribute_list_opt
 %type <tableOptions> table_option_list_opt table_option_list source_option_list_opt source_option_list
-%type <str> charset_name storage_opt collate_name column_format storage_media algorithm_type able_type space_type lock_type with_type rename_type algorithm_type_2
+%type <str> charset_name storage_opt collate_name column_format storage_media algorithm_type able_type space_type lock_type with_type rename_type algorithm_type_2 load_charset
 %type <rowFormatType> row_format_options
 %type <int64Val> field_length_opt max_file_size_opt
 %type <matchType> match match_opt
@@ -4079,12 +4078,12 @@ table_name_opt_wild:
     ident wild_opt
     {
         prefix := tree.ObjectNamePrefix{ExplicitSchema: false}
-        $$ = tree.NewTableName(tree.Identifier($1.Compare()), prefix)
+        $$ = tree.NewTableName(tree.Identifier($1.Compare()), prefix, nil)
     }
 |    ident '.' ident wild_opt
     {
         prefix := tree.ObjectNamePrefix{SchemaName: tree.Identifier($1.Compare()), ExplicitSchema: true}
-        $$ = tree.NewTableName(tree.Identifier($3.Compare()), prefix)
+        $$ = tree.NewTableName(tree.Identifier($3.Compare()), prefix, nil)
     }
 
 wild_opt:
@@ -5067,7 +5066,7 @@ select_expression:
 from_opt:
     {
         prefix := tree.ObjectNamePrefix{ExplicitSchema: false}
-        tn := tree.NewTableName(tree.Identifier(""), prefix)
+        tn := tree.NewTableName(tree.Identifier(""), prefix, nil)
         $$ = &tree.From{
             Tables: tree.TableExprs{&tree.AliasedTableExpr{Expr: tn}},
         }
@@ -6812,16 +6811,27 @@ infile_or_s3_param:
     }
 
 tail_param_opt:
-    load_fields load_lines ignore_lines columns_or_variable_list_opt load_set_spec_opt
+    load_charset load_fields load_lines ignore_lines columns_or_variable_list_opt load_set_spec_opt
     {
         $$ = &tree.TailParameter{
-            Fields: $1,
-            Lines: $2,
-            IgnoredLines: uint64($3),
-            ColumnList: $4,
-            Assignments: $5,
+            Charset: $1,
+            Fields: $2,
+            Lines: $3,
+            IgnoredLines: uint64($4),
+            ColumnList: $5,
+            Assignments: $6,
         }
     }
+
+load_charset:
+    {
+        $$ = ""
+    }
+|   charset_keyword charset_name
+    {
+    	$$ = $2
+    }
+
 create_sequence_stmt:
     CREATE SEQUENCE not_exists_opt table_name as_datatype_opt increment_by_opt min_value_opt max_value_opt start_with_opt cycle_opt
     {
@@ -7564,12 +7574,60 @@ table_name:
     ident
     {
         prefix := tree.ObjectNamePrefix{ExplicitSchema: false}
-        $$ = tree.NewTableName(tree.Identifier($1.Compare()), prefix)
+        $$ = tree.NewTableName(tree.Identifier($1.Compare()), prefix, nil)
     }
 |   ident '.' ident
     {
         prefix := tree.ObjectNamePrefix{SchemaName: tree.Identifier($1.Compare()), ExplicitSchema: true}
-        $$ = tree.NewTableName(tree.Identifier($3.Compare()), prefix)
+        $$ = tree.NewTableName(tree.Identifier($3.Compare()), prefix, nil)
+    }
+|   ident '@' STRING '@' STRING
+    {
+        prefix := tree.ObjectNamePrefix{ExplicitSchema: false}
+        atType := tree.ATTIMESTAMPNONE
+        if $3 != "" {
+            t := strings.ToLower($3)
+            switch t {
+                case "timestamp":
+                    atType = tree.ATTIMESTAMPTIME
+                case "snapshot":
+                    atType = tree.ATTIMESTAMPSNAPSHOT
+                default:
+                    yylex.Error("Invalid the type of at timestamp")
+                    return 1
+            }
+        }
+        atTs := &tree.AtTimeStampClause{
+            TimeStampExpr: &tree.TimeStampExpr{
+                Type: atType,
+                Expr: $5,
+            },
+        }
+        $$ = tree.NewTableName(tree.Identifier($1.Compare()), prefix, atTs)
+    }
+|   ident '.' ident '@' STRING '@' STRING
+    {
+        prefix := tree.ObjectNamePrefix{SchemaName: tree.Identifier($1.Compare()), ExplicitSchema: true}
+        atType := tree.ATTIMESTAMPNONE
+        if $5 != "" {
+            t := strings.ToLower($5)
+            switch t {
+                case "timestamp":
+                    atType = tree.ATTIMESTAMPTIME
+                case "snapshot":
+                    atType = tree.ATTIMESTAMPSNAPSHOT
+                default:
+                    yylex.Error("Invalid the type of at timestamp")
+                    return 1
+            }
+        }
+        atTs := &tree.AtTimeStampClause{
+            TimeStampExpr: &tree.TimeStampExpr{
+                Type: atType,
+                Expr: $7,
+            },
+        }
+        $$ = tree.NewTableName(tree.Identifier($3.Compare()), prefix, atTs)
     }
 
 table_elem_list_opt:

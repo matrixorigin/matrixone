@@ -255,7 +255,7 @@ func (s *refreshableTaskStorage) AddCronTask(ctx context.Context, tasks ...task.
 	return v, err
 }
 
-func (s *refreshableTaskStorage) QueryCronTask(ctx context.Context) ([]task.CronTask, error) {
+func (s *refreshableTaskStorage) QueryCronTask(ctx context.Context, c ...Condition) ([]task.CronTask, error) {
 	var v []task.CronTask
 	var err error
 	s.mu.RLock()
@@ -263,7 +263,7 @@ func (s *refreshableTaskStorage) QueryCronTask(ctx context.Context) ([]task.Cron
 	if s.mu.store == nil {
 		err = errNotReady
 	} else {
-		v, err = s.mu.store.QueryCronTask(ctx)
+		v, err = s.mu.store.QueryCronTask(ctx, c...)
 	}
 	s.mu.RUnlock()
 	if err != nil {

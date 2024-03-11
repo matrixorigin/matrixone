@@ -124,9 +124,10 @@ func (entry *flushTableTailEntry) PrepareCommit() error {
 			continue
 		}
 		dataBlock := blk.GetBlockData()
+		startTS := entry.txn.GetStartTS()
 		bat, err := dataBlock.CollectDeleteInRange(
 			entry.txn.GetContext(),
-			entry.txn.GetStartTS().Next(),
+			startTS.Next(),
 			entry.txn.GetPrepareTS(),
 			false,
 			common.MergeAllocator,

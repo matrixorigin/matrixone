@@ -52,6 +52,18 @@ func (s tunnelSet) count() int {
 	return len(s)
 }
 
+// countWithoutIntent returns the number of tunnels in tunnelSet whose transfer intent is false.
+// This method needs lock in connManager.
+func (s tunnelSet) countWithoutIntent() int {
+	var r int
+	for t := range s {
+		if !t.transferIntent() {
+			r++
+		}
+	}
+	return r
+}
+
 // cnTunnels defines the type of map cn-uuid => tunnelSet
 type cnTunnels map[string]tunnelSet
 

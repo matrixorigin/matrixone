@@ -208,8 +208,8 @@ func (s *taskService) QueryAsyncTask(ctx context.Context, conds ...Condition) ([
 	return s.store.QueryAsyncTask(ctx, conds...)
 }
 
-func (s *taskService) QueryCronTask(ctx context.Context) ([]task.CronTask, error) {
-	return s.store.QueryCronTask(ctx)
+func (s *taskService) QueryCronTask(ctx context.Context, c ...Condition) ([]task.CronTask, error) {
+	return s.store.QueryCronTask(ctx, c...)
 }
 
 func (s *taskService) UpdateDaemonTask(ctx context.Context, tasks []task.DaemonTask, conds ...Condition) (int, error) {
