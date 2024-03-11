@@ -1028,8 +1028,8 @@ func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
 		if cExpr, ok := node.Limit.Expr.(*plan.Expr_Lit); ok {
 			if c, ok := cExpr.Lit.Value.(*plan.Literal_I64Val); ok {
 				stats.Outcnt = float64(c.I64Val)
-				stats.BlockNum = int32((node.Stats.Outcnt / DefaultBlockMaxRows) + 1)
-				stats.Cost = float64(node.Stats.BlockNum * DefaultBlockMaxRows)
+				stats.BlockNum = int32((stats.Outcnt / DefaultBlockMaxRows) + 1)
+				stats.Cost = float64(stats.BlockNum * DefaultBlockMaxRows)
 			}
 		}
 	}
