@@ -852,10 +852,12 @@ func ReWriteCheckpointAndBlockFromKey(
 					}
 				}
 				ib := &insertBlock{
-					location:  blockLocation,
-					blockId:   *objectio.BuildObjectBlockid(name, blocks[0].GetID()),
-					apply:     false,
-					deleteRow: dataBlocks[0].deleteRow[0],
+					location: blockLocation,
+					blockId:  *objectio.BuildObjectBlockid(name, blocks[0].GetID()),
+					apply:    false,
+				}
+				if len(dataBlocks[0].deleteRow) > 0 {
+					ib.deleteRow = dataBlocks[0].deleteRow[0]
 				}
 				insertBatch[dataBlocks[0].tid].insertBlocks = append(insertBatch[dataBlocks[0].tid].insertBlocks, ib)
 
