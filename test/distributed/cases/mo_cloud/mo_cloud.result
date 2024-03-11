@@ -672,6 +672,7 @@ sql_statement_total    accountadmin
 sql_statement_errors    accountadmin
 sql_transaction_total    accountadmin
 sql_transaction_errors    accountadmin
+sql_statement_duration_total    accountadmin
 server_connections    accountadmin
 server_storage_usage    accountadmin
 SELECT relname AS `name`, mo_table_rows(reldatabase, relname) AS `rows`, mo_table_size(reldatabase, relname) AS `size`, if (role_name IS NULL, '-', role_name) AS `owner` FROM mo_catalog.mo_tables LEFT JOIN mo_catalog.mo_role ON mo_catalog.mo_tables.owner=role_id WHERE relkind IN ('r','e','cluster') AND reldatabase='information_schema';
