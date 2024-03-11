@@ -20,12 +20,15 @@ import (
 	"strings"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/upgrader"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
@@ -410,7 +413,14 @@ func (s *service) registerExecutorsLocked() {
 				return err
 			}
 
-			sql := fmt.Sprintf("select mo_ctl('cn', 'merge', 'db1:t1:xxx')")
+			objs := make([]string, len(mergeTask.ToMergeObjs))
+			for i, b := range mergeTask.ToMergeObjs {
+				stats := objectio.ObjectStats(b)
+				objs[i] = stats.ObjectName().String()
+			}
+			sql := fmt.Sprintf("select mo_ctl('DN', 'MERGEOBJECTS', '%s.%s %s')",
+				mergeTask.DbName, mergeTask.TableName, strings.Join(objs, ","))
+			ctx = defines.AttachAccount(ctx, catalog.System_Account, catalog.System_User, catalog.System_Role)
 			return ieFactory().Exec(ctx, sql, ie.NewOptsBuilder().Finish())
 		},
 	)

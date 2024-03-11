@@ -17,7 +17,6 @@ package merge
 import (
 	"context"
 	"fmt"
-	"math/rand"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -69,9 +68,11 @@ func (tsg *taskServiceGetter) SendMergeTask(ctx context.Context, task *api.Merge
 	}
 	return ts.CreateAsyncTask(ctx,
 		taskpb.TaskMetadata{
-			ID:       "Merge:" + task.TableName + ":" + strconv.Itoa(rand.Int()),
+			ID:       "Merge:" + task.TableName + ":" + strconv.FormatInt(time.Now().Unix(), 10),
 			Executor: taskpb.TaskCode_MergeTablet,
-			Context:  b})
+			Context:  b,
+			Options:  taskpb.TaskOptions{Resource: &taskpb.Resource{Memory: task.EstimatedMemUsage}},
+		})
 }
 
 type TaskHostKind int

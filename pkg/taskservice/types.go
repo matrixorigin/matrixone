@@ -300,7 +300,7 @@ func (c *taskMetadataIDCond) eval(v any) bool {
 }
 
 func (c *taskMetadataIDCond) sql() string {
-	return fmt.Sprintf("task_metadata_id%s'%s'", OpName[c.op], c.taskMetadataID)
+	return fmt.Sprintf("task_metadata_id %s '%s'", OpName[c.op], c.taskMetadataID)
 }
 
 func compare[T constraints.Ordered](op Op, a T, b T) bool {
