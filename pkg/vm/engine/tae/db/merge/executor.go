@@ -32,7 +32,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/jobs"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	"github.com/shirou/gopsutil/v3/cpu"
@@ -48,7 +47,7 @@ type activeTaskStats map[uint64]struct {
 type MergeExecutor struct {
 	tableName           string
 	rt                  *dbutils.Runtime
-	cnSched             mergesort.CNMergeScheduler
+	cnSched             CNMergeScheduler
 	memAvail            int
 	memSpare            int // 15% of total memory
 	cpuPercent          float64
@@ -61,7 +60,7 @@ type MergeExecutor struct {
 	}
 }
 
-func NewMergeExecutor(rt *dbutils.Runtime, sched mergesort.CNMergeScheduler) *MergeExecutor {
+func NewMergeExecutor(rt *dbutils.Runtime, sched CNMergeScheduler) *MergeExecutor {
 	return &MergeExecutor{
 		rt:      rt,
 		cnSched: sched,
@@ -185,9 +184,11 @@ func (e *MergeExecutor) ExecuteFor(entry *catalog.TableEntry, policy Policy) {
 			ToMergeObjs:       stats,
 			EstimatedMemUsage: uint64(esize),
 		}
-		if err := e.cnSched.SendMergeTask(context.TODO(), entry); err != nil {
+		if err := e.cnSched.SendMergeTask(context.TODO(), entry); err == nil {
 			ActiveCNObj.AddActiveCNObj(mobjs)
 			logMergeTask(e.tableName, math.MaxUint64, objectList, blkCnt, osize, esize)
+		} else {
+			logutil.Warnf("mergeblocks send to cn error: %v", err)
 		}
 	} else {
 		scopes := make([]common.ID, blkCnt)

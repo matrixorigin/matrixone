@@ -30,9 +30,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	gc2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/merge"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/gc"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
@@ -75,11 +75,11 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 	}
 
 	db = &DB{
-		Dir:       dirname,
-		Opts:      opts,
-		Closed:    new(atomic.Value),
-		usageMemo: logtail.NewTNUsageMemo(),
-		CNMerger:  mergesort.NewTaskServiceGetter(opts.TaskServiceGetter),
+		Dir:          dirname,
+		Opts:         opts,
+		Closed:       new(atomic.Value),
+		usageMemo:    logtail.NewTNUsageMemo(),
+		CNMergeSched: merge.NewTaskServiceGetter(opts.TaskServiceGetter),
 	}
 	fs := objectio.NewObjectFS(opts.Fs, serviceDir)
 	transferTable := model.NewTransferTable[*model.TransferHashPage](db.Opts.TransferTableTTL)

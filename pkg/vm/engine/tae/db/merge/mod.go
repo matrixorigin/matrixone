@@ -15,17 +15,64 @@
 package merge
 
 import (
+	"context"
+	"fmt"
+	"math/rand"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
+	taskpb "github.com/matrixorigin/matrixone/pkg/pb/task"
+	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 )
 
 var StopMerge atomic.Bool
+
+type CNMergeScheduler interface {
+	SendMergeTask(ctx context.Context, task *api.MergeTaskEntry) error
+}
+
+func NewTaskServiceGetter(getter taskservice.Getter) CNMergeScheduler {
+	return &taskServiceGetter{
+		Getter: getter,
+	}
+}
+
+type taskServiceGetter struct {
+	taskservice.Getter
+}
+
+func (tsg *taskServiceGetter) SendMergeTask(ctx context.Context, task *api.MergeTaskEntry) error {
+	ts, ok := tsg.Getter()
+	if !ok {
+		return taskservice.ErrNotReady
+	}
+	asyncTask, err := ts.QueryAsyncTask(ctx,
+		taskservice.WithTaskMetadataId(taskservice.LIKE, "%"+task.TableName+"%"),
+		taskservice.WithTaskStatusCond(taskpb.TaskStatus_Created, taskpb.TaskStatus_Running))
+	if err != nil {
+		return err
+	}
+	if len(asyncTask) != 0 {
+		return moerr.NewInternalError(context.TODO(), fmt.Sprintf("table %s is merging", task.TableName))
+	}
+	b, err := task.Marshal()
+	if err != nil {
+		return err
+	}
+	return ts.CreateAsyncTask(ctx,
+		taskpb.TaskMetadata{
+			ID:       "Merge:" + task.TableName + ":" + strconv.Itoa(rand.Int()),
+			Executor: taskpb.TaskCode_MergeTablet,
+			Context:  b})
+}
 
 type TaskHostKind int
 
