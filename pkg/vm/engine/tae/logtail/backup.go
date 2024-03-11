@@ -956,16 +956,6 @@ func ReWriteCheckpointAndBlockFromKey(
 					blockLocation = objectio.BuildLocation(objectData.name, extent, blocks[uint16(i)].GetRows(), dataBlocks[i].num)
 				}
 				for _, insertRow := range dataBlocks[i].insertRow {
-					if dataBlocks[uint16(i)].blockType == objectio.SchemaData {
-						data.bats[BLKMetaInsertIDX].GetVectorByName(catalog.BlockMeta_MetaLoc).Update(
-							insertRow,
-							[]byte(blockLocation),
-							false)
-						data.bats[BLKMetaInsertTxnIDX].GetVectorByName(catalog.BlockMeta_MetaLoc).Update(
-							insertRow,
-							[]byte(blockLocation),
-							false)
-					}
 					if dataBlocks[uint16(i)].blockType == objectio.SchemaTombstone {
 						data.bats[BLKMetaInsertIDX].GetVectorByName(catalog.BlockMeta_DeltaLoc).Update(
 							insertRow,
@@ -980,6 +970,10 @@ func ReWriteCheckpointAndBlockFromKey(
 				for _, deleteRow := range dataBlocks[uint16(i)].deleteRow {
 					if dataBlocks[uint16(i)].blockType == objectio.SchemaTombstone {
 						data.bats[BLKMetaInsertIDX].GetVectorByName(catalog.BlockMeta_DeltaLoc).Update(
+							deleteRow,
+							[]byte(blockLocation),
+							false)
+						data.bats[BLKMetaInsertTxnIDX].GetVectorByName(catalog.BlockMeta_DeltaLoc).Update(
 							deleteRow,
 							[]byte(blockLocation),
 							false)
@@ -1065,14 +1059,14 @@ func ReWriteCheckpointAndBlockFromKey(
 				if block.data != nil {
 					for _, cnRow := range block.data.deleteRow {
 						data.bats[BLKMetaInsertIDX].Delete(cnRow)
-						data.bats[BLKMetaDeleteTxnIDX].Delete(cnRow)
+						data.bats[BLKMetaInsertTxnIDX].Delete(cnRow)
 					}
 				}
 			}
 		}
 
 		data.bats[BLKMetaInsertIDX].Compact()
-		data.bats[BLKMetaDeleteTxnIDX].Compact()
+		data.bats[BLKMetaInsertTxnIDX].Compact()
 		tableInsertOff := make(map[uint64]*tableOffset)
 		for i := 0; i < blkMetaTxn.Vecs[0].Length(); i++ {
 			tid := blkMetaTxn.GetVectorByName(SnapshotAttr_TID).Get(i).(uint64)
