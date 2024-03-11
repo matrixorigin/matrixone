@@ -241,7 +241,8 @@ func TestCalculateCU(t *testing.T) {
 
 	// [ 3, 7528422223, 573384797164.000, 0, 1, 247109, 2 ]
 	var stats2 statistic.StatsArray
-	stats2.WithTimeConsumed(123456)
+	stats2.Init()
+	stats2.WithTimeConsumed(7528422223)
 	stats2.WithMemorySize(573384797164)
 	stats2.WithS3IOInputCount(0)
 	stats2.WithS3IOOutputCount(1)
