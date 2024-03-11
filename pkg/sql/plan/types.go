@@ -107,6 +107,7 @@ type CompilerContext interface {
 	// is building the alter view or not
 	// return: yes or no, dbName, viewName
 	GetBuildingAlterView() (bool, string, string)
+	GetStatsCache() *StatsCache
 	GetSubscriptionMeta(dbName string) (*SubscriptionMeta, error)
 	CheckSubscriptionValid(subName, accName string, pubName string) error
 	SetQueryingSubscription(meta *SubscriptionMeta)
@@ -155,10 +156,6 @@ type ExecInfo struct {
 	CnNumbers  int
 }
 
-type emptyType struct{}
-
-var emptyStruct = emptyType{}
-
 type QueryBuilder struct {
 	qry     *plan.Query
 	compCtx CompilerContext
@@ -177,13 +174,14 @@ type QueryBuilder struct {
 	isForUpdate        bool // if it's a query plan for update
 
 	deleteNode map[uint64]int32 //delete node in this query. key is tableId, value is the nodeId of sinkScan node in the delete plan
+	skipStats  bool
 }
 
 type CTERef struct {
 	defaultDatabase string
 	isRecursive     bool
 	ast             *tree.CTE
-	maskedCTEs      map[string]emptyType
+	maskedCTEs      map[string]bool
 }
 
 type aliasItem struct {
@@ -195,7 +193,7 @@ type BindContext struct {
 	binder Binder
 
 	cteByName              map[string]*CTERef
-	maskedCTEs             map[string]emptyType
+	maskedCTEs             map[string]bool
 	normalCTE              bool
 	initSelect             bool
 	recSelect              bool
@@ -370,7 +368,7 @@ type Binding struct {
 	refCnts        []uint
 	colIdByName    map[string]int32
 	isClusterTable bool
-	defaultVals    []string
+	defaults       []string
 }
 
 const (

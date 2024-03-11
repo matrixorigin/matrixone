@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 
@@ -175,7 +176,7 @@ func (tbl *txnTable) TransferDeleteIntent(
 	}
 	rowID, ok := pinned.Item().Transfer(row)
 	if !ok {
-		err = moerr.NewTxnWWConflictNoCtx()
+		err = moerr.NewTxnWWConflictNoCtx(0, "")
 		return
 	}
 	changed = true
@@ -234,7 +235,7 @@ func (tbl *txnTable) recurTransferDelete(
 
 	rowID, ok := page.Transfer(row)
 	if !ok {
-		err := moerr.NewTxnWWConflictNoCtx()
+		err := moerr.NewTxnWWConflictNoCtx(0, "")
 		msg := fmt.Sprintf("table-%d blk-%d delete row-%d depth-%d",
 			id.TableID,
 			id.BlockID,
@@ -789,6 +790,10 @@ func (tbl *txnTable) RangeDelete(
 		// }
 		// This err also captured by txn's write conflict check.
 		if err != nil {
+			if moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict) {
+				err = moerr.NewTxnWWConflictNoCtx(id.TableID, pk.PPString(int(start-end+1)))
+			}
+
 			logutil.Debugf("[ts=%s]: table-%d blk-%s delete rows from %d to %d %v",
 				tbl.store.txn.GetStartTS().ToString(),
 				id.TableID,
@@ -822,6 +827,9 @@ func (tbl *txnTable) RangeDelete(
 		if err = mvcc.CheckNotDeleted(start, end, tbl.store.txn.GetStartTS()); err == nil {
 			node.RangeDeleteLocked(start, end, pk, common.WorkspaceAllocator)
 		}
+		if err != nil && moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict) {
+			logutil.Warn("w-w conflict", zap.String("chain", mvcc.StringLocked()))
+		}
 		mvcc.Unlock()
 		if err != nil {
 			tbl.store.warChecker.Insert(mvcc.GetEntry())
@@ -838,6 +846,9 @@ func (tbl *txnTable) RangeDelete(
 	}
 	blkData := blk.GetBlockData()
 	node2, err := blkData.RangeDelete(tbl.store.txn, start, end, pk, dt)
+	if err != nil && moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict) {
+		logutil.Warn("w-w conflict", zap.String("blk", blkData.PPString(common.PPL2, 0, "")))
+	}
 	if err == nil {
 		if err = tbl.AddDeleteNode(id, node2); err != nil {
 			return

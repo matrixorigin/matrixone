@@ -158,7 +158,7 @@ func (ctr *container) mergeIntoBatches(src *batch.Batch, proc *process.Process) 
 		appendRows := 0
 		length := src.RowCount()
 		for offset < length {
-			ctr.tmpBatch, appendRows, err = proc.AppendBatchFromOffset(ctr.tmpBatch, src, offset)
+			ctr.tmpBatch, appendRows, err = proc.AppendToFixedSizeFromOffset(ctr.tmpBatch, src, offset)
 			if err != nil {
 				return err
 			}
@@ -418,7 +418,7 @@ func (ctr *container) handleRuntimeFilter(ap *Argument, proc *process.Process) e
 		}
 	} else {
 		// Composite primary key
-		if len(ctr.uniqueJoinKeys) > 1 {
+		if ap.RuntimeFilterSenders[0].Spec.Expr.GetF() != nil {
 			bat := batch.NewWithSize(len(ctr.uniqueJoinKeys))
 			bat.SetRowCount(vec.Length())
 			copy(bat.Vecs, ctr.uniqueJoinKeys)

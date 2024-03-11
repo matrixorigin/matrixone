@@ -140,7 +140,7 @@ type GlobalStats struct {
 	// statsInfoMap is the global stats info in engine which
 	// contains all subscribed tables stats info.
 	mu struct {
-		sync.RWMutex
+		sync.Mutex
 
 		// cond is used to wait for stats updated for the first time.
 		// If sync parameter is false, it is unuseful.
@@ -184,19 +184,13 @@ func (gs *GlobalStats) fillConfig() {
 }
 
 func (gs *GlobalStats) Get(ctx context.Context, key pb.StatsInfoKey, sync bool) *pb.StatsInfo {
-	var info *pb.StatsInfo
-	var ok bool
-	if ok = func() bool {
-		gs.mu.RLock()
-		defer gs.mu.RUnlock()
-		info, ok = gs.mu.statsInfoMap[key]
-		return ok
-	}(); ok {
+	gs.mu.Lock()
+	defer gs.mu.Unlock()
+	info, ok := gs.mu.statsInfoMap[key]
+	if ok && info != nil {
 		return info
 	}
 
-	gs.mu.Lock()
-	defer gs.mu.Unlock()
 	// Get stats info from remote node.
 	if gs.KeyRouter != nil {
 		client := gs.engine.qc
@@ -384,10 +378,10 @@ func (gs *GlobalStats) updateTableStats(key pb.StatsInfoKey) {
 		}
 
 		// update the time to current time only if the stats is not nil.
-		if stats.ApproxObjectNumber > 0 {
+		if updated {
 			gs.mu.statsInfoMap[key] = stats
 			gs.statsUpdated.Store(key, time.Now())
-		} else {
+		} else if _, ok := gs.mu.statsInfoMap[key]; !ok {
 			gs.mu.statsInfoMap[key] = nil
 		}
 
@@ -522,6 +516,12 @@ func getMinMaxValueByFloat64(typ types.Type, buf []byte) float64 {
 		return float64(types.DecodeUint64(buf))
 	case types.T_date:
 		return float64(types.DecodeDate(buf))
+	case types.T_time:
+		return float64(types.DecodeTime(buf))
+	case types.T_timestamp:
+		return float64(types.DecodeTimestamp(buf))
+	case types.T_datetime:
+		return float64(types.DecodeDatetime(buf))
 	//case types.T_char, types.T_varchar, types.T_text:
 	//return float64(plan2.ByteSliceToUint64(buf)), true
 	default:
@@ -568,7 +568,7 @@ func updateInfoFromZoneMap(ctx context.Context, req *updateStatsRequest, info *p
 					meta.BlockHeader().BFExtent().Length() + objColMeta.Location().Length())
 				if info.ColumnNDVs[idx] > 100 || info.ColumnNDVs[idx] > 0.1*float64(meta.BlockHeader().Rows()) {
 					switch info.DataTypes[idx].Oid {
-					case types.T_int64, types.T_int32, types.T_int16, types.T_uint64, types.T_uint32, types.T_uint16, types.T_bit:
+					case types.T_int64, types.T_int32, types.T_int16, types.T_uint64, types.T_uint32, types.T_uint16, types.T_time, types.T_timestamp, types.T_date, types.T_datetime:
 						info.ShuffleRanges[idx] = plan2.NewShuffleRange(false)
 						if info.ColumnZMs[idx].IsInited() {
 							minvalue := getMinMaxValueByFloat64(info.DataTypes[idx], info.ColumnZMs[idx].GetMinBuf())
@@ -597,7 +597,7 @@ func updateInfoFromZoneMap(ctx context.Context, req *updateStatsRequest, info *p
 				info.ColumnSize[idx] += int64(objColMeta.Location().Length())
 				if info.ShuffleRanges[idx] != nil {
 					switch info.DataTypes[idx].Oid {
-					case types.T_int64, types.T_int32, types.T_int16, types.T_uint64, types.T_uint32, types.T_uint16, types.T_bit:
+					case types.T_int64, types.T_int32, types.T_int16, types.T_uint64, types.T_uint32, types.T_uint16, types.T_time, types.T_timestamp, types.T_date, types.T_datetime:
 						minvalue := getMinMaxValueByFloat64(info.DataTypes[idx], zm.GetMinBuf())
 						maxvalue := getMinMaxValueByFloat64(info.DataTypes[idx], zm.GetMaxBuf())
 						info.ShuffleRanges[idx].Update(minvalue, maxvalue, int64(meta.BlockHeader().Rows()), int64(objColMeta.NullCnt()))

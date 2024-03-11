@@ -647,6 +647,8 @@ type Relation interface {
 	// If not sure, returns true
 	// Initially added for implementing locking rows by primary keys
 	PrimaryKeysMayBeModified(ctx context.Context, from types.TS, to types.TS, keyVector *vector.Vector) (bool, error)
+
+	ApproxObjectsNum(ctx context.Context) int
 }
 
 type Reader interface {
