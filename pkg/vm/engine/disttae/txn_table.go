@@ -48,6 +48,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"go.uber.org/zap"
 )
 
 const (
@@ -980,6 +981,11 @@ func (tbl *txnTable) tryFastRanges(
 				tbl.proc.Load().Ctx, meta, location, fs,
 			); err2 != nil {
 				return
+			}
+
+			if obj.Rows() == 0 {
+				name := obj.ObjectName()
+				logutil.Warn("UnexpectedObjectStats", zap.Int("rows", 0), zap.String("name", name.String()))
 			}
 
 			var blkIdx int
