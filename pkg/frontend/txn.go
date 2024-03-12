@@ -157,7 +157,8 @@ func (th *TxnHandler) NewTxnOperator() (context.Context, TxnOperator, error) {
 		panic("context should not be nil")
 	}
 	opts = append(opts,
-		client.WithTxnCreateBy(fmt.Sprintf("frontend-session-%p", th.ses)))
+		client.WithTxnCreateBy(fmt.Sprintf("frontend-session-%p", th.ses)),
+		client.WithSessionInfo(th.ses.GetDebugString()))
 
 	if th.ses != nil && th.ses.GetFromRealUser() {
 		opts = append(opts,
