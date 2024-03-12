@@ -234,11 +234,11 @@ func (b *msgBuf) handleEOFPacket(msg []byte) {
 func (b *msgBuf) setTxnStatus(status uint16) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	b.peer.mu.Lock()
+	defer b.peer.mu.Unlock()
 	b.mu.inTxn = status&frontend.SERVER_STATUS_IN_TRANS != 0
 
 	if b.peer != nil {
-		b.peer.mu.Lock()
-		defer b.peer.mu.Unlock()
 		b.peer.mu.inTxn = b.mu.inTxn
 	}
 }
