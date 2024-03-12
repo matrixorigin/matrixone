@@ -14,7 +14,11 @@
 
 package tree
 
-import "github.com/matrixorigin/matrixone/pkg/common/reuse"
+import (
+	"fmt"
+
+	"github.com/matrixorigin/matrixone/pkg/common/reuse"
+)
 
 func init() {
 	reuse.CreatePool[CreateSource](
@@ -120,82 +124,104 @@ func (node CreateSource) TypeName() string { return "tree.CreateSource" }
 
 func (node *CreateSource) reset() {
 	// if node.SourceName != nil {
-	// 	reuse.Free[TableName](node.SourceName, nil)
+	// node.SourceName.Free()
 	// }
 	if node.Options != nil {
 		for _, item := range node.Options {
 			switch opt := item.(type) {
 			case *TableOptionProperties:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *TableOptionEngine:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *TableOptionEngineAttr:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *TableOptionInsertMethod:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *TableOptionSecondaryEngine:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *TableOptionSecondaryEngineNull:
-				reuse.Free(opt, nil)
+				panic("currently not used")
 			case *TableOptionCharset:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *TableOptionCollate:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *TableOptionAUTOEXTEND_SIZE:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *TableOptionAutoIncrement:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *TableOptionComment:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *TableOptionAvgRowLength:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *TableOptionChecksum:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *TableOptionCompression:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *TableOptionConnection:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *TableOptionPassword:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *TableOptionKeyBlockSize:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *TableOptionMaxRows:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *TableOptionMinRows:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *TableOptionDelayKeyWrite:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *TableOptionRowFormat:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *TableOptionStartTrans:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *TableOptionSecondaryEngineAttr:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *TableOptionStatsPersistent:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *TableOptionStatsAutoRecalc:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *TableOptionPackKeys:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *TableOptionTablespace:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *TableOptionDataDirectory:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *TableOptionIndexDirectory:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *TableOptionStorageMedia:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *TableOptionStatsSamplePages:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *TableOptionUnion:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *TableOptionEncryption:
-				reuse.Free(opt, nil)
+				opt.Free()
 			default:
-				panic("should not happen")
+				panic(fmt.Sprintf("miss Free for %v", item))
 			}
 		}
 	}
+
+	if node.Defs != nil {
+		for _, def := range node.Defs {
+			switch d := def.(type) {
+			case *ColumnTableDef:
+				d.Free()
+			case *PrimaryKeyIndex:
+				d.Free()
+			case *Index:
+				d.Free()
+			case *UniqueIndex:
+				d.Free()
+			case *ForeignKey:
+				d.Free()
+			case *FullTextIndex:
+				d.Free()
+			case *CheckIndex:
+				d.Free()
+			}
+		}
+	}
+
 	*node = CreateSource{}
 }
 

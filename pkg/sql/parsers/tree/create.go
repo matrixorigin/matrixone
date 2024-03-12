@@ -888,16 +888,16 @@ func (node *CreateDatabase) reset() {
 		for _, item := range node.CreateOptions {
 			switch opt := item.(type) {
 			case *CreateOptionCharset:
-				reuse.Free[CreateOptionCharset](opt, nil)
+				opt.Free()	
 			case *CreateOptionCollate:
-				reuse.Free[CreateOptionCollate](opt, nil)
+				opt.Free()	
 			case *CreateOptionEncryption:
-				reuse.Free[CreateOptionEncryption](opt, nil)
+				opt.Free()	
 			}
 		}
 	}
 	if node.SubscriptionOption != nil {
-		reuse.Free[SubscriptionOption](node.SubscriptionOption, nil)
+		node.SubscriptionOption.Free()
 	}
 	*node = CreateDatabase{}
 }
@@ -1084,12 +1084,111 @@ func (node *CreateTable) GetQueryType() string { return QueryTypeDDL }
 func (node CreateTable) TypeName() string { return "tree.CreateTable" }
 
 func (node *CreateTable) reset() {
+
+	if node.Defs != nil {
+		for _, def := range node.Defs {
+			switch d := def.(type) {
+			case *ColumnTableDef:
+				d.Free()
+			case *PrimaryKeyIndex:
+				d.Free()
+			case *Index:
+				d.Free()
+			case *UniqueIndex:
+				d.Free()
+			case *ForeignKey:
+				d.Free()
+			case *FullTextIndex:
+				d.Free()
+			case *CheckIndex:
+				d.Free()
+			default:
+				panic(fmt.Sprintf("miss Free for %v", def))
+			}
+		}
+	}
+
+	if node.Options != nil {
+		for _, item := range node.Options {
+			switch opt := item.(type) {
+			case *TableOptionProperties:
+				opt.Free()
+			case *TableOptionEngine:
+				opt.Free()
+			case *TableOptionEngineAttr:
+				opt.Free()
+			case *TableOptionInsertMethod:
+				opt.Free()
+			case *TableOptionSecondaryEngine:
+				opt.Free()
+			case *TableOptionSecondaryEngineNull:
+				panic("currently not used")
+			case *TableOptionCharset:
+				opt.Free()
+			case *TableOptionCollate:
+				opt.Free()
+			case *TableOptionAUTOEXTEND_SIZE:
+				opt.Free()
+			case *TableOptionAutoIncrement:
+				opt.Free()
+			case *TableOptionComment:
+				opt.Free()
+			case *TableOptionAvgRowLength:
+				opt.Free()
+			case *TableOptionChecksum:
+				opt.Free()
+			case *TableOptionCompression:
+				opt.Free()
+			case *TableOptionConnection:
+				opt.Free()
+			case *TableOptionPassword:
+				opt.Free()
+			case *TableOptionKeyBlockSize:
+				opt.Free()
+			case *TableOptionMaxRows:
+				opt.Free()
+			case *TableOptionMinRows:
+				opt.Free()
+			case *TableOptionDelayKeyWrite:
+				opt.Free()
+			case *TableOptionRowFormat:
+				opt.Free()
+			case *TableOptionStartTrans:
+				opt.Free()
+			case *TableOptionSecondaryEngineAttr:
+				opt.Free()
+			case *TableOptionStatsPersistent:
+				opt.Free()
+			case *TableOptionStatsAutoRecalc:
+				opt.Free()
+			case *TableOptionPackKeys:
+				opt.Free()
+			case *TableOptionTablespace:
+				opt.Free()
+			case *TableOptionDataDirectory:
+				opt.Free()
+			case *TableOptionIndexDirectory:
+				opt.Free()
+			case *TableOptionStorageMedia:
+				opt.Free()
+			case *TableOptionStatsSamplePages:
+				opt.Free()
+			case *TableOptionUnion:
+				opt.Free()
+			case *TableOptionEncryption:
+				opt.Free()
+			default:
+				panic(fmt.Sprintf("miss Free for %v", item))
+			}
+		}
+	}
+
 	if node.PartitionOption != nil {
-		reuse.Free[PartitionOption](node.PartitionOption, nil)
+		node.PartitionOption.Free()
 	}
 
 	if node.ClusterByOption != nil {
-		reuse.Free[ClusterByOption](node.ClusterByOption, nil)
+		node.ClusterByOption.Free()
 	}
 
 	// if node.AsSource != nil {
@@ -1100,74 +1199,75 @@ func (node *CreateTable) reset() {
 		for _, item := range node.DTOptions {
 			switch opt := item.(type) {
 			case *TableOptionProperties:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *TableOptionEngine:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *TableOptionEngineAttr:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *TableOptionInsertMethod:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *TableOptionSecondaryEngine:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *TableOptionSecondaryEngineNull:
-				reuse.Free(opt, nil)
+				panic("currently not used")
 			case *TableOptionCharset:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *TableOptionCollate:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *TableOptionAUTOEXTEND_SIZE:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *TableOptionAutoIncrement:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *TableOptionComment:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *TableOptionAvgRowLength:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *TableOptionChecksum:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *TableOptionCompression:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *TableOptionConnection:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *TableOptionPassword:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *TableOptionKeyBlockSize:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *TableOptionMaxRows:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *TableOptionMinRows:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *TableOptionDelayKeyWrite:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *TableOptionRowFormat:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *TableOptionStartTrans:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *TableOptionSecondaryEngineAttr:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *TableOptionStatsPersistent:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *TableOptionStatsAutoRecalc:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *TableOptionPackKeys:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *TableOptionTablespace:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *TableOptionDataDirectory:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *TableOptionIndexDirectory:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *TableOptionStorageMedia:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *TableOptionStatsSamplePages:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *TableOptionUnion:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *TableOptionEncryption:
-				reuse.Free(opt, nil)
+				opt.Free()
+			default:
+				panic(fmt.Sprintf("miss Free for %v", item))
 			}
 		}
-		*node = CreateTable{}
 	}
 
 	*node = CreateTable{}
@@ -1222,43 +1322,45 @@ func (node *ColumnTableDef) reset() {
 		for _, item := range node.Attributes {
 			switch opt := item.(type) {
 			case *AttributeNull:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *AttributeDefault:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *AttributeAutoIncrement:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *AttributeUniqueKey:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *AttributeUnique:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *AttributeKey:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *AttributePrimaryKey:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *AttributeComment:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *AttributeCollate:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *AttributeColumnFormat:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *AttributeStorage:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *AttributeCheckConstraint:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *AttributeGeneratedAlways:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *AttributeLowCardinality:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *AttributeReference:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *AttributeAutoRandom:
-				reuse.Free(opt, nil)
+				panic("currently not used")
 			case *AttributeOnUpdate:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *AttributeVisable:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *KeyPart:
-				reuse.Free(opt, nil)
+				opt.Free()
+			default:
+				panic(fmt.Sprintf("miss Free for %v", item))
 			}
 		}
 	}
@@ -3481,6 +3583,19 @@ func (node *PartitionBy) Format(ctx *FmtCtx) {
 func (node PartitionBy) TypeName() string { return "tree.PartitionBy" }
 
 func (node *PartitionBy) reset() {
+	switch t := node.PType.(type) {
+	case *HashType:
+		t.Free()
+	case *KeyType:
+		t.Free()
+	case *RangeType:
+		t.Free()
+	case *ListType:
+		t.Free()
+	default:
+		panic(fmt.Sprintf("miss Free for %v", node.PType))
+	}
+
 	*node = PartitionBy{}
 }
 
@@ -3604,79 +3719,91 @@ func (node *Partition) reset() {
 		for _, item := range node.Options {
 			switch opt := item.(type) {
 			case *TableOptionProperties:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *TableOptionEngine:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *TableOptionEngineAttr:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *TableOptionInsertMethod:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *TableOptionSecondaryEngine:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *TableOptionSecondaryEngineNull:
-				reuse.Free(opt, nil)
+				panic("currently not used")
 			case *TableOptionCharset:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *TableOptionCollate:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *TableOptionAUTOEXTEND_SIZE:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *TableOptionAutoIncrement:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *TableOptionComment:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *TableOptionAvgRowLength:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *TableOptionChecksum:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *TableOptionCompression:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *TableOptionConnection:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *TableOptionPassword:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *TableOptionKeyBlockSize:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *TableOptionMaxRows:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *TableOptionMinRows:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *TableOptionDelayKeyWrite:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *TableOptionRowFormat:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *TableOptionStartTrans:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *TableOptionSecondaryEngineAttr:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *TableOptionStatsPersistent:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *TableOptionStatsAutoRecalc:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *TableOptionPackKeys:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *TableOptionTablespace:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *TableOptionDataDirectory:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *TableOptionIndexDirectory:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *TableOptionStorageMedia:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *TableOptionStatsSamplePages:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *TableOptionUnion:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *TableOptionEncryption:
-				reuse.Free(opt, nil)
+				opt.Free()
 			default:
-				panic("should not happen")
+				panic(fmt.Sprintf("miss Free for %v", item))
 			}
 		}
 	}
+	
+	if node.Values != nil {
+		switch v := node.Values.(type) {
+			case *ValuesLessThan:
+				v.Free()
+			case *ValuesIn:
+				v.Free()
+			default:
+				panic(fmt.Sprintf("miss Free for %v", node.Values))
+		}
+	}
+
 	if node.Subs != nil {
 		for _, item := range node.Subs {
-			reuse.Free[SubPartition](item, nil)
+			item.Free()
 		}
 	}
 	*node = Partition{}
@@ -3721,71 +3848,73 @@ func (node *SubPartition) reset() {
 		for _, item := range node.Options {
 			switch opt := item.(type) {
 			case *TableOptionProperties:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *TableOptionEngine:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *TableOptionEngineAttr:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *TableOptionInsertMethod:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *TableOptionSecondaryEngine:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *TableOptionSecondaryEngineNull:
-				reuse.Free(opt, nil)
+				panic("currently not used")
 			case *TableOptionCharset:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *TableOptionCollate:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *TableOptionAUTOEXTEND_SIZE:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *TableOptionAutoIncrement:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *TableOptionComment:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *TableOptionAvgRowLength:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *TableOptionChecksum:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *TableOptionCompression:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *TableOptionConnection:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *TableOptionPassword:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *TableOptionKeyBlockSize:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *TableOptionMaxRows:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *TableOptionMinRows:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *TableOptionDelayKeyWrite:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *TableOptionRowFormat:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *TableOptionStartTrans:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *TableOptionSecondaryEngineAttr:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *TableOptionStatsPersistent:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *TableOptionStatsAutoRecalc:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *TableOptionPackKeys:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *TableOptionTablespace:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *TableOptionDataDirectory:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *TableOptionIndexDirectory:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *TableOptionStorageMedia:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *TableOptionStatsSamplePages:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *TableOptionUnion:
-				reuse.Free(opt, nil)
+				opt.Free()
 			case *TableOptionEncryption:
-				reuse.Free(opt, nil)
+				opt.Free()
+			default:
+				panic(fmt.Sprintf("miss Free for %v", item))
 			}
 		}
 	}
@@ -3823,9 +3952,13 @@ func (node *ClusterByOption) reset() {
 	// }
 }
 
+func (node *ClusterByOption) Free() {
+	reuse.Free[ClusterByOption](node, nil)
+}
+
 type PartitionOption struct {
 	statementImpl
-	PartBy     PartitionBy
+	PartBy     *PartitionBy
 	SubPartBy  *PartitionBy
 	Partitions []*Partition
 }
@@ -3851,12 +3984,15 @@ func (node *PartitionOption) Format(ctx *FmtCtx) {
 func (node PartitionOption) TypeName() string { return "tree.PartitionOption" }
 
 func (node *PartitionOption) reset() {
+	if node.PartBy != nil {
+		node.PartBy.Free()
+	}
 	if node.SubPartBy != nil {
-		reuse.Free[PartitionBy](node.SubPartBy, nil)
+		node.SubPartBy.Free()
 	}
 	if node.Partitions != nil {
 		for _, item := range node.Partitions {
-			reuse.Free[Partition](item, nil)
+			item.Free()
 		}
 	}
 	*node = PartitionOption{}
@@ -3868,7 +4004,7 @@ func (node *PartitionOption) Free() {
 
 func NewPartitionOption(pb *PartitionBy, spb *PartitionBy, parts []*Partition) *PartitionOption {
 	p := reuse.Alloc[PartitionOption](nil)
-	p.PartBy = *pb
+	p.PartBy = pb
 	p.SubPartBy = spb
 	p.Partitions = parts
 	return p
@@ -3950,11 +4086,11 @@ func (node CreateIndex) TypeName() string { return "tree.CreateIndex" }
 func (node *CreateIndex) reset() {
 	if node.KeyParts != nil {
 		for _, item := range node.KeyParts {
-			reuse.Free[KeyPart](item, nil)
+			item.Free()
 		}
 	}
 	if node.IndexOption != nil {
-		reuse.Free[IndexOption](node.IndexOption, nil)
+		node.IndexOption.Free()
 	}
 
 	*node = CreateIndex{}
@@ -4038,8 +4174,8 @@ func (node CreateRole) TypeName() string { return "tree.CreateRole" }
 
 func (node *CreateRole) reset() {
 	if node.Roles != nil {
-		for _, item := range node.Roles {
-			reuse.Free[Role](item, nil)
+		for _, role := range node.Roles {
+			role.Free()
 		}
 	}
 	*node = CreateRole{}
@@ -4072,11 +4208,12 @@ func (node *Role) reset() {
 }
 
 func (node *Role) Free() {
-	reuse.Free[Role](node, nil)
+	// reuse.Free[Role](node, nil)
 }
 
 func NewRole(u string) *Role {
-	r := reuse.Alloc[Role](nil)
+	// r := reuse.Alloc[Role](nil)
+	r := new(Role)
 	r.UserName = u
 	return r
 }
@@ -4103,17 +4240,21 @@ func (node User) TypeName() string { return "tree.User" }
 
 func (node *User) reset() {
 	if node.AuthOption != nil {
-		reuse.Free[AccountIdentified](node.AuthOption, nil)
+		node.AuthOption.Free()
 	}
 	*node = User{}
 }
 
 func (node *User) Free() {
-	reuse.Free[User](node, nil)
+	// if node.AuthOption != nil {
+	// 	node.AuthOption.Free()
+	// }
+	// reuse.Free[User](node, nil)
 }
 
 func NewUser(u, h string, a *AccountIdentified) *User {
-	ur := reuse.Alloc[User](nil)
+	// ur := reuse.Alloc[User](nil)
+	ur := new(User)
 	ur.Username = u
 	ur.Hostname = h
 	ur.AuthOption = a
@@ -4823,12 +4964,54 @@ func (node CreateUser) TypeName() string { return "tree.CreateUser" }
 func (node *CreateUser) reset() {
 	if node.Users != nil {
 		for _, item := range node.Users {
-			reuse.Free[User](item, nil)
+			item.Free()
 		}
 	}
+
 	if node.Role != nil {
-		reuse.Free[Role](node.Role, nil)
+		node.Role.Free()
 	}
+
+	if node.MiscOpt != nil {
+		switch mt := node.MiscOpt.(type) {
+		case *UserMiscOptionPasswordExpireNone:
+			mt.Free()
+		case *UserMiscOptionPasswordExpireDefault:
+			mt.Free()
+		case *UserMiscOptionPasswordExpireNever:
+			mt.Free()
+		case *UserMiscOptionPasswordExpireInterval:
+			mt.Free()
+		case *UserMiscOptionPasswordHistoryDefault:
+			mt.Free()
+		case *UserMiscOptionPasswordHistoryCount:
+			mt.Free()
+		case *UserMiscOptionPasswordReuseIntervalDefault:
+			mt.Free()
+		case *UserMiscOptionPasswordReuseIntervalCount:
+			mt.Free()
+		case *UserMiscOptionPasswordRequireCurrentNone:
+			mt.Free()
+		case *UserMiscOptionPasswordRequireCurrentDefault:
+			mt.Free()
+		case *UserMiscOptionPasswordRequireCurrentOptional:
+			mt.Free()
+		case *UserMiscOptionFailedLoginAttempts:
+			mt.Free()
+		case *UserMiscOptionPasswordLockTimeCount:
+			mt.Free()
+		case *UserMiscOptionPasswordLockTimeUnbounded:
+			mt.Free()
+		case *UserMiscOptionAccountLock:
+			mt.Free()
+		case *UserMiscOptionAccountUnlock:
+			mt.Free()
+		default:
+			panic(fmt.Sprintf("miss Free for %v", node.MiscOpt))
+		}
+	}
+
+	node.CommentOrAttribute.Free()
 	*node = CreateUser{}
 }
 
@@ -4940,7 +5123,8 @@ type AccountIdentified struct {
 }
 
 func NewAccountIdentified(t AccountIdentifiedOption, s string) *AccountIdentified {
-	ai := reuse.Alloc[AccountIdentified](nil)
+	// ai := reuse.Alloc[AccountIdentified](nil)
+	ai := new(AccountIdentified)
 	ai.Typ = t
 	ai.Str = s
 	return ai
@@ -4964,7 +5148,7 @@ func (node *AccountIdentified) reset() {
 }
 
 func (node *AccountIdentified) Free() {
-	reuse.Free[AccountIdentified](node, nil)
+	// reuse.Free[AccountIdentified](node, nil)
 }
 
 type AccountStatusOption int
@@ -5055,7 +5239,8 @@ type AccountCommentOrAttribute struct {
 }
 
 func NewAccountCommentOrAttribute(e bool, c bool, s string) *AccountCommentOrAttribute {
-	aca := reuse.Alloc[AccountCommentOrAttribute](nil)
+	// aca := reuse.Alloc[AccountCommentOrAttribute](nil)
+	aca := new(AccountCommentOrAttribute)
 	aca.Exist = e
 	aca.IsComment = c
 	aca.Str = s
@@ -5080,7 +5265,7 @@ func (node *AccountCommentOrAttribute) reset() {
 }
 
 func (node *AccountCommentOrAttribute) Free() {
-	reuse.Free[AccountCommentOrAttribute](node, nil)
+	// reuse.Free[AccountCommentOrAttribute](node, nil)
 }
 
 type CreatePublication struct {
@@ -5132,7 +5317,7 @@ func (node CreatePublication) TypeName() string { return "tree.CreatePublication
 
 func (node *CreatePublication) reset() {
 	if node.AccountsSet != nil {
-		reuse.Free[AccountsSetOption](node.AccountsSet, nil)
+		node.AccountsSet.Free()
 	}
 	*node = CreatePublication{}
 }

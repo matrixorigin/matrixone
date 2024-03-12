@@ -72,10 +72,10 @@ func (node *CreateView) Format(ctx *FmtCtx) {
 
 func (node *CreateView) reset() {
 	// if node.Name != nil {
-	// 	reuse.Free[TableName](node.Name, nil)
+	// node.Name.Free()
 	// }
 	// if node.AsSource != nil {
-	// 	reuse.Free[Select](node.AsSource, nil)
+	// node.AsSource.Free()
 	// }
 	*node = CreateView{}
 }

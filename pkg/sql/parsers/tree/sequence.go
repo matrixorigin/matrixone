@@ -103,19 +103,19 @@ func (node *CreateSequence) Format(ctx *FmtCtx) {
 
 func (node *CreateSequence) reset() {
 	// if node.Name != nil {
-	// 	reuse.Free[TableName](node.Name, nil)
+	// node.Name.Free()
 	// }
 	// if node.IncrementBy != nil {
-	// 	reuse.Free[IncrementByOption](node.IncrementBy, nil)
+	// node.IncrementBy.Free()
 	// }
 	// if node.MinValue != nil {
-	// 	reuse.Free[MinValueOption](node.MinValue, nil)
+	// node.MinValue.Free()
 	// }
 	// if node.MaxValue != nil {
-	// 	reuse.Free[MaxValueOption](node.MaxValue, nil)
+	// node.MaxValue.Free()
 	// }
 	// if node.StartWith != nil {
-	// 	reuse.Free[StartWithOption](node.StartWith, nil)
+	// node.StartWith.Free()
 	// }
 	*node = CreateSequence{}
 }

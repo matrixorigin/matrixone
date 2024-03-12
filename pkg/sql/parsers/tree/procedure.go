@@ -108,7 +108,7 @@ func (node *ProcedureArgDecl) GetType() int {
 
 func (node *ProcedureArgDecl) reset() {
 	// if node.Name != nil {
-	// 	reuse.Free[UnresolvedName](node.Name, nil)
+	// node.Name.Free()
 	// }
 	*node = ProcedureArgDecl{}
 }
@@ -212,7 +212,7 @@ func (node *CreateProcedure) GetQueryType() string { return QueryTypeOth }
 
 func (node *CreateProcedure) reset() {
 	if node.Name != nil {
-		reuse.Free[ProcedureName](node.Name, nil)
+		node.Name.Free()
 	}
 	*node = CreateProcedure{}
 }
@@ -237,7 +237,7 @@ func (node DropProcedure) TypeName() string { return "tree.DropProcedure" }
 
 func (node *DropProcedure) reset() {
 	if node.Name != nil {
-		reuse.Free[ProcedureName](node.Name, nil)
+		node.Name.Free()
 	}
 	*node = DropProcedure{}
 }
@@ -283,7 +283,7 @@ func (node *CallStmt) GetQueryType() string { return QueryTypeOth }
 
 func (node *CallStmt) reset() {
 	if node.Name != nil {
-		reuse.Free[ProcedureName](node.Name, nil)
+		node.Name.Free()
 	}
 	*node = CallStmt{}
 }

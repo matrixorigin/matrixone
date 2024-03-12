@@ -87,10 +87,10 @@ func (node *Use) Free() {
 
 func (node *Use) reset() {
 	// if node.Name != nil {
-	// 	reuse.Free[CStr](node.Name, nil)
+	// node.Free()
 	// }
 	if node.Role != nil {
-		reuse.Free[Role](node.Role, nil)
+		node.Role.Free()
 	}
 	*node = Use{}
 }

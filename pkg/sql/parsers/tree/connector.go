@@ -109,11 +109,11 @@ func (node CreateConnector) TypeName() string { return "tree.CreateConnector" }
 
 func (node *CreateConnector) reset() {
 	// if node.TableName != nil {
-	// 	reuse.Free[TableName](node.TableName, nil)
+	// node.TableName.Free()
 	// }
 	// if node.Options != nil {
 	// 	for _, item := range node.Options {
-	// 		reuse.Free[ConnectorOption](item, nil)
+	// item.Free()
 	// 	}
 	// }
 	*node = CreateConnector{}

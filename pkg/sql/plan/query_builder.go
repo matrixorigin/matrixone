@@ -3489,6 +3489,11 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 				}
 
 				originStmts, err := mysql.Parse(builder.GetContext(), viewData.Stmt, 1)
+				defer func() {
+					for _, s := range originStmts {
+						s.Free()
+					}	
+				}()
 				if err != nil {
 					return 0, err
 				}

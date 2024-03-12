@@ -52,7 +52,7 @@ func (node *TruncateTable) Free() {
 
 func (node *TruncateTable) reset() {
 	// if node.Name != nil {
-	// 	reuse.Free[TableName](node.Name, nil)
+	// node.Name.Free()
 	// }
 	*node = TruncateTable{}
 }

@@ -253,11 +253,11 @@ func (node *DropRole) Free() {
 }
 
 func (node *DropRole) reset() {
-	// if node.Roles != nil {
-	// 	for _, item := range node.Roles {
-	// 		reuse.Free[Role](item, nil)
-	// 	}
-	// }
+	if node.Roles != nil {
+		for _, role := range node.Roles {
+			role.Free()
+		}
+	}
 	*node = DropRole{}
 }
 
@@ -297,11 +297,11 @@ func (node *DropUser) Free() {
 }
 
 func (node *DropUser) reset() {
-	// if node.Users != nil {
-	// for _, item := range node.Users {
-	// 	reuse.Free[User](item, nil)
-	// }
-	// }
+	if node.Users != nil {
+		for _, item := range node.Users {
+			item.Free()
+		}
+	}
 	*node = DropUser{}
 }
 

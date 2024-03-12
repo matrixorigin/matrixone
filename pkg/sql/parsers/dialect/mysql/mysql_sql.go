@@ -18561,9 +18561,9 @@ yydefault:
 			keyTyp := tree.NewKeyType()
 			keyTyp.Linear = yyDollar[1].boolValUnion()
 			keyTyp.Algorithm = yyDollar[3].int64ValUnion()
-			yyLOCAL = &tree.PartitionBy{
-				PType: keyTyp,
-			}
+			yyLOCAL = tree.NewPartitionBy(
+				keyTyp,
+			)
 		}
 		yyVAL.union = yyLOCAL
 	case 1144:

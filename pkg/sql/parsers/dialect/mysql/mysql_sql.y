@@ -7497,9 +7497,9 @@ sub_partition_method:
         keyTyp := tree.NewKeyType()
         keyTyp.Linear = $1
         keyTyp.Algorithm = $3
-        $$ = &tree.PartitionBy{
-            PType: keyTyp,
-        }
+        $$ = tree.NewPartitionBy(
+            keyTyp,
+        )
     }
 |   linear_opt KEY algorithm_opt '(' column_name_list ')'
     {

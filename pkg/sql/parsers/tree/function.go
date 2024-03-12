@@ -105,7 +105,7 @@ func (node FunctionArgDecl) TypeName() string { return "tree.FunctionArgDecl" }
 
 func (node *FunctionArgDecl) reset() {
 	// if node.Name != nil {
-	// 	reuse.Free[UnresolvedName](node.Name, nil)
+	// node.Name.Free()
 	// }
 	*node = FunctionArgDecl{}
 }
@@ -260,10 +260,10 @@ func (node CreateFunction) TypeName() string { return "tree.CreateFunction" }
 
 func (node *CreateFunction) reset() {
 	if node.Name != nil {
-		reuse.Free[FunctionName](node.Name, nil)
+		node.Name.Free()
 	}
 	if node.ReturnType != nil {
-		reuse.Free[ReturnType](node.ReturnType, nil)
+		node.ReturnType.Free()
 	}
 	*node = CreateFunction{}
 }
@@ -286,7 +286,7 @@ func (node *DropFunction) Free() {
 
 func (node *DropFunction) reset() {
 	if node.Name != nil {
-		reuse.Free[FunctionName](node.Name, nil)
+		node.Name.Free()
 	}
 	*node = DropFunction{}
 }

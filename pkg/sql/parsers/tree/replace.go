@@ -72,7 +72,7 @@ func (node *Replace) Free() {
 
 func (node *Replace) reset() {
 	// if node.Rows != nil {
-	// 	reuse.Free[Select](node.Rows, nil)
+	// node.Rows.Free()
 	// }
 	*node = Replace{}
 }

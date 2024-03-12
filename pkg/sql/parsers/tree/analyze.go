@@ -50,7 +50,7 @@ func (node AnalyzeStmt) TypeName() string { return "tree.AnalyzeStmt" }
 
 func (node *AnalyzeStmt) reset() {
 	// if node.Table != nil {
-	// reuse.Free[TableName](node.Table, nil)
+	// node.Table.Free()
 	// }
 	*node = AnalyzeStmt{}
 }
