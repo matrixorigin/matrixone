@@ -812,6 +812,10 @@ func (tbl *txnTable) rangesOnePart(
 					return
 				}
 				meta = objMeta.MustDataMeta()
+				if obj.Rows() == 0 {
+					name := obj.ObjectName()
+					logutil.Warn("UnexpectedObjectStats", zap.Int("rows", 0), zap.String("name", name.String()))
+				}
 			}
 
 			ForeachBlkInObjStatsList(true, meta, func(blk objectio.BlockInfo, blkMeta objectio.BlockObject) bool {
