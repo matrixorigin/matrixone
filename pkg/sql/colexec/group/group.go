@@ -187,7 +187,7 @@ func (ctr *container) generateAggStructures(proc *process.Process, arg *Argument
 		ctr.bat.Aggs[i] = aggexec.MakeAgg(proc,
 			arg.Aggs[i].Op, arg.Aggs[i].Dist, *ctr.aggVecs[i].vec.GetType())
 		if arg.Aggs[i].Config != nil {
-			ctr.bat.Aggs[i].SetPreparedResult(arg.Aggs[i].Config, 0)
+			ctr.bat.Aggs[i].SetExtraInformation(arg.Aggs[i].Config, 0)
 		}
 		i++
 	}

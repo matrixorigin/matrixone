@@ -98,7 +98,7 @@ func (exec *groupConcatExec) BatchFill(offset int, groups []uint64, vectors []*v
 	return nil
 }
 
-func (exec *groupConcatExec) SetPreparedResult(partialResult any, groupIndex int) {
+func (exec *groupConcatExec) SetExtraInformation(partialResult any, groupIndex int) {
 	// todo: too bad here.
 	exec.separator = partialResult.([]byte)
 }

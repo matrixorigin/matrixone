@@ -76,7 +76,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 				if ap.NeedEval {
 					for i, agg := range ctr.bat.Aggs {
 						if ap.PartialResults != nil {
-							agg.SetPreparedResult(ap.PartialResults[i], 0)
+							agg.SetExtraInformation(ap.PartialResults[i], 0)
 						}
 						vec, err := agg.Flush()
 						if err != nil {

@@ -53,11 +53,14 @@ type AggFuncExec interface {
 	// and merges the (offset + i)th group with the (groups[i]-1) group of the current agg.
 	BatchMerge(next AggFuncExec, offset int, groups []uint64) error
 
-	// SetPreparedResult add a partial result to speed up.
+	// SetExtraInformation add an additional information to agg executor.
+	// in most cases, it is used to set the partial result of the aggregation to speed up.
+	// but for the 'group_concat', it was a bad hack to use the method to set the separator.
+	// and for the 'cluster_centers', it was used to set the fields of this agg.
 	// todo: the old implementation is not good, we should use the vector.Vector to replace the any.
-	//  and for the 'group_concat', it was a bad hack to use the method to set the separator.
+	//  and the hacks should be removed.
 	//  but for first version, I will keep it.
-	SetPreparedResult(partialResult any, groupIndex int)
+	SetExtraInformation(partialResult any, groupIndex int)
 
 	// Flush return the aggregation result.
 	Flush() (*vector.Vector, error)

@@ -38,7 +38,7 @@ func RegisterBitXor(id int64) {
 			if t[0].Oid == types.T_binary || t[0].Oid == types.T_varbinary {
 				return t[0]
 			}
-			panic("unexpect type for bit_or()")
+			panic("unexpect type for bit_xor()")
 		},
 		func(args []types.Type, ret types.Type) any {
 			return newAggBitXorBinary

@@ -68,7 +68,7 @@ type singleAggExecOptimized struct {
 	partialResult any
 }
 
-func (optimized *singleAggExecOptimized) SetPreparedResult(partialResult any, groupIndex int) {
+func (optimized *singleAggExecOptimized) SetExtraInformation(partialResult any, groupIndex int) {
 	optimized.partialGroup = groupIndex
 	optimized.partialResult = partialResult
 }
