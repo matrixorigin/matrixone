@@ -81,10 +81,10 @@ func init() {
 		reuse.DefaultOptions[AlterOptionDrop]().
 			WithEnableChecker())
 
-	reuse.CreatePool[AlterTableName](
-		func() *AlterTableName { return &AlterTableName{} },
-		func(a *AlterTableName) { a.reset() },
-		reuse.DefaultOptions[AlterTableName]().
+	reuse.CreatePool[AlterOptionTableName](
+		func() *AlterOptionTableName { return &AlterOptionTableName{} },
+		func(a *AlterOptionTableName) { a.reset() },
+		reuse.DefaultOptions[AlterOptionTableName]().
 			WithEnableChecker())
 
 	reuse.CreatePool[AlterAddCol](
@@ -234,14 +234,53 @@ func (node *AlterUser) Format(ctx *FmtCtx) {
 func (node AlterUser) TypeName() string { return "tree.AlterUser" }
 
 func (node *AlterUser) reset() {
-	// if node.Users != nil {
-	// 	for _, item := range node.Users {
-	//       item.Free()
-	// 	}
-	// }
-	// if node.Role != nil {
-	//       node.Role.Free()
-	// }
+	if node.Users != nil {
+		for _, item := range node.Users {
+	      item.Free()
+		}
+	}
+	if node.Role != nil {
+	      node.Role.Free()
+	}
+	if node.MiscOpt != nil {
+		switch mt := node.MiscOpt.(type) {
+		case *UserMiscOptionPasswordExpireNone:
+			mt.Free()
+		case *UserMiscOptionPasswordExpireDefault:
+			mt.Free()
+		case *UserMiscOptionPasswordExpireNever:
+			mt.Free()
+		case *UserMiscOptionPasswordExpireInterval:
+			mt.Free()
+		case *UserMiscOptionPasswordHistoryDefault:
+			mt.Free()
+		case *UserMiscOptionPasswordHistoryCount:
+			mt.Free()
+		case *UserMiscOptionPasswordReuseIntervalDefault:
+			mt.Free()
+		case *UserMiscOptionPasswordReuseIntervalCount:
+			mt.Free()
+		case *UserMiscOptionPasswordRequireCurrentNone:
+			mt.Free()
+		case *UserMiscOptionPasswordRequireCurrentDefault:
+			mt.Free()
+		case *UserMiscOptionPasswordRequireCurrentOptional:
+			mt.Free()
+		case *UserMiscOptionFailedLoginAttempts:
+			mt.Free()
+		case *UserMiscOptionPasswordLockTimeCount:
+			mt.Free()
+		case *UserMiscOptionPasswordLockTimeUnbounded:
+			mt.Free()
+		case *UserMiscOptionAccountLock:
+			mt.Free()
+		case *UserMiscOptionAccountUnlock:
+			mt.Free()
+		default:
+			panic(fmt.Sprintf("miss Free for %v", node.MiscOpt))
+		}
+	}
+	node.CommentOrAttribute.Free()
 	*node = AlterUser{}
 }
 
@@ -298,7 +337,12 @@ func NewAlterAccount(exist bool, name string, aopt AlterAccountAuthOption, sopt 
 	return a
 }
 
-func (node *AlterAccount) Free() { reuse.Free[AlterAccount](node, nil) }
+func (node *AlterAccount) Free() { 
+	node.AuthOption.Free()
+	node.StatusOption.Free()
+	node.Comment.Free()
+	reuse.Free[AlterAccount](node, nil)
+}
 
 func (node *AlterAccount) Format(ctx *FmtCtx) {
 	ctx.WriteString("alter account ")
@@ -469,6 +513,8 @@ func (node *AlterTable) reset() {
 	if node.Options != nil {
 		for _, option := range node.Options {
 			switch opt := option.(type) {
+			case *AlterOptionTableName:
+				opt.Free()
 			case *AlterOptionAlterIndex:
 				opt.Free()
 			case *AlterOptionAlterReIndex:
@@ -731,6 +777,8 @@ func (node *AlterOptionAdd) reset() {
 		d.Free()
 	case *CheckIndex:
 		d.Free()
+	default:
+		panic(fmt.Sprintf("miss Free for %v", node.Def))
 	}
 	*node = AlterOptionAdd{}
 }
@@ -786,31 +834,34 @@ func (node *AlterOptionDrop) reset() {
 	*node = AlterOptionDrop{}
 }
 
-type AlterTableName struct {
+type AlterOptionTableName struct {
+	alterOptionImpl
 	Name *UnresolvedObjectName
 }
 
-func NewAlterTableName(name *UnresolvedObjectName) *AlterTableName {
+func NewAlterTableName(name *UnresolvedObjectName) *AlterOptionTableName {
 	// a := reuse.Alloc[AlterTableName](nil)
-	a := new(AlterTableName)
+	a := new(AlterOptionTableName)
 	a.Name = name
 	return a
 }
 
-func (node *AlterTableName) Free() { reuse.Free[AlterTableName](node, nil) }
+func (node *AlterOptionTableName) Free() {
+	//  reuse.Free[AlterTableName](node, nil)
+}
 
-func (node *AlterTableName) Format(ctx *FmtCtx) {
+func (node *AlterOptionTableName) Format(ctx *FmtCtx) {
 	ctx.WriteString("rename to ")
 	node.Name.ToTableName().Format(ctx)
 }
 
-func (node AlterTableName) TypeName() string { return "tree.AlterTableName" }
+func (node AlterOptionTableName) TypeName() string { return "tree.AlterTableName" }
 
-func (node *AlterTableName) reset() {
+func (node *AlterOptionTableName) reset() {
 	// if node.Name != nil {
 	// node.Name.Free()
 	// }
-	*node = AlterTableName{}
+	*node = AlterOptionTableName{}
 }
 
 type AlterColPos struct {
@@ -871,9 +922,6 @@ func NewAccountsSetOption(al bool, se, ad, dr IdentifierList) *AccountsSetOption
 func (node AccountsSetOption) TypeName() string { return "tree.AccountsSetOption" }
 
 func (node *AccountsSetOption) reset() {
-	// 	if node.AccountsSet != nil {
-	// node.AccountsSet.Free()
-	// }
 	*node = AccountsSetOption{}
 }
 
@@ -1214,8 +1262,7 @@ type AlterColumnOrder struct {
 }
 
 func NewAlterColumnOrder(column *UnresolvedName, direction Direction) *AlterColumnOrder {
-	// a := reuse.Alloc[AlterColumnOrder](nil)
-	a := new(AlterColumnOrder)
+	a := reuse.Alloc[AlterColumnOrder](nil)
 	a.Column = column
 	a.Direction = direction
 	return a
