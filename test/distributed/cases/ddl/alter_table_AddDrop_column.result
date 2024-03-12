@@ -373,7 +373,6 @@ invalid database ww_conflict
 begin;
 alter table conflict_test drop column b;
 no such table .conflict_test
-Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
 commit;
 alter table conflict_test add column colf int first;
 no such table .conflict_test
@@ -498,16 +497,16 @@ create table transaction01 (c int primary key,d int);
 begin;
 insert into test_11 values(1,1);
 no such table test.test_11
-Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
 insert into test_11 values(2,2);
 no such table test.test_11
 alter table transaction01 rename to `test_transaction`;
 rollback;
 select * from transaction01;
-SQL parser error: table "transaction01" does not exist
-select * from test_transaction;
 c    d
+select * from test_transaction;
+SQL parser error: table "test_transaction" does not exist
 drop table test_transaction;
+no such table test.test_transaction
 drop table if exists transaction03;
 create table transaction03 (c int primary key,d int);
 insert into transaction03 values(1,1);
@@ -518,16 +517,18 @@ insert into transaction03 values(4,2);
 alter table transaction03 rename to `transaction04`;
 select * from transaction04;
 SQL parser error: table "transaction04" does not exist
-Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
 use isolation;
 invalid database isolation
 select * from transaction04;
 not connect to a database
 commit;
 select * from transaction04;
-SQL parser error: table "transaction04" does not exist
+c    d
+1    1
+2    2
+3    1
+4    2
 drop table transaction04;
-no such table test.transaction04
 drop table if exists transaction05;
 create table transaction05(a int not null auto_increment,b varchar(25) not null,c datetime,primary key(a),key bstr (b),key cdate (c) );
 insert into transaction05(b,c) values ('aaaa','2020-09-08');
@@ -539,7 +540,6 @@ invalid database ww_conflict
 begin;
 alter table conflict_test add column colf int first;
 no such table .conflict_test
-Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
 commit;
 alter table conflict_test add column colf int first;
 no such table .conflict_test
