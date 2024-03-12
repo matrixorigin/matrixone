@@ -23,68 +23,6 @@ import (
 
 var supportedAggregateFunctions = []FuncNew{
 	{
-		functionId: BIT_AND,
-		class:      plan.Function_AGG,
-		layout:     STANDARD_FUNCTION,
-		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			return fixedUnaryAggTypeCheck(inputs, functionAgg.AggBitAndSupportedParameters)
-		},
-
-		Overloads: []overload{
-			{
-				overloadId: 0,
-				isAgg:      true,
-				retType:    functionAgg.AggBitAndReturnType,
-				aggFramework: aggregationLogicOfOverload{
-					str:    "bit_and",
-					aggNew: functionAgg.NewAggBitAnd,
-				},
-			},
-		},
-	},
-
-	{
-		functionId: BIT_OR,
-		class:      plan.Function_AGG,
-		layout:     STANDARD_FUNCTION,
-		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			return fixedUnaryAggTypeCheck(inputs, functionAgg.AggBitOrSupportedParameters)
-		},
-
-		Overloads: []overload{
-			{
-				overloadId: 0,
-				isAgg:      true,
-				retType:    functionAgg.AggBitOrReturnType,
-				aggFramework: aggregationLogicOfOverload{
-					str:    "bit_or",
-					aggNew: functionAgg.NewAggBitOr,
-				},
-			},
-		},
-	},
-
-	{
-		functionId: BIT_XOR,
-		class:      plan.Function_AGG,
-		layout:     STANDARD_FUNCTION,
-		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			return fixedUnaryAggTypeCheck(inputs, functionAgg.AggBitXorSupportedParameters)
-		},
-
-		Overloads: []overload{
-			{
-				overloadId: 0,
-				isAgg:      true,
-				retType:    functionAgg.AggBitXorReturnType,
-				aggFramework: aggregationLogicOfOverload{
-					str:    "bit_xor",
-					aggNew: functionAgg.NewAggBitXor,
-				},
-			},
-		},
-	},
-	{
 		functionId: VAR_POP,
 		class:      plan.Function_AGG,
 		layout:     STANDARD_FUNCTION,
@@ -391,6 +329,69 @@ var supportedAggInNewFramework = []FuncNew{
 				aggFramework: aggregationLogicOfOverload{
 					str:         "any_value",
 					aggRegister: agg2.RegisterAnyValue,
+				},
+			},
+		},
+	},
+
+	{
+		functionId: BIT_AND,
+		class:      plan.Function_AGG,
+		layout:     STANDARD_FUNCTION,
+		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
+			return fixedUnaryAggTypeCheck(inputs, functionAgg.AggBitAndSupportedParameters)
+		},
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				isAgg:      true,
+				retType:    functionAgg.AggBitAndReturnType,
+				aggFramework: aggregationLogicOfOverload{
+					str:         "bit_and",
+					aggRegister: agg2.RegisterBitAnd,
+				},
+			},
+		},
+	},
+
+	{
+		functionId: BIT_OR,
+		class:      plan.Function_AGG,
+		layout:     STANDARD_FUNCTION,
+		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
+			return fixedUnaryAggTypeCheck(inputs, functionAgg.AggBitOrSupportedParameters)
+		},
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				isAgg:      true,
+				retType:    functionAgg.AggBitOrReturnType,
+				aggFramework: aggregationLogicOfOverload{
+					str:         "bit_or",
+					aggRegister: agg2.RegisterBitOr,
+				},
+			},
+		},
+	},
+
+	{
+		functionId: BIT_XOR,
+		class:      plan.Function_AGG,
+		layout:     STANDARD_FUNCTION,
+		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
+			return fixedUnaryAggTypeCheck(inputs, functionAgg.AggBitXorSupportedParameters)
+		},
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				isAgg:      true,
+				retType:    functionAgg.AggBitXorReturnType,
+				aggFramework: aggregationLogicOfOverload{
+					str:         "bit_xor",
+					aggRegister: agg2.RegisterBitXor,
 				},
 			},
 		},

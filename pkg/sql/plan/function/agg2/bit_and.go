@@ -32,6 +32,17 @@ func RegisterBitAnd(id int64) {
 	aggexec.RegisterDeterminedSingleAgg(aggexec.MakeDeterminedSingleAggInfo(id, types.T_int64.ToType(), types.T_uint64.ToType(), false, true), newAggBitAnd[int64])
 	aggexec.RegisterDeterminedSingleAgg(aggexec.MakeDeterminedSingleAggInfo(id, types.T_float32.ToType(), types.T_uint64.ToType(), false, true), newAggBitAnd[float32])
 	aggexec.RegisterDeterminedSingleAgg(aggexec.MakeDeterminedSingleAggInfo(id, types.T_float64.ToType(), types.T_uint64.ToType(), false, true), newAggBitAnd[float64])
+	aggexec.RegisterFlexibleSingleAgg(
+		aggexec.MakeFlexibleAggInfo(id, false, true),
+		func(t []types.Type) types.Type {
+			if t[0].Oid == types.T_binary || t[0].Oid == types.T_varbinary {
+				return t[0]
+			}
+			panic("unexpect type for bit_or()")
+		},
+		func(args []types.Type, ret types.Type) any {
+			return newAggBitAndBinary
+		})
 }
 
 type aggBitAnd[T numeric] struct{}
@@ -68,14 +79,34 @@ func (a aggBitAnd[T]) Merge(other aggexec.SingleAggFromFixedRetFixed[T, uint64],
 }
 func (a aggBitAnd[T]) Flush(get aggexec.AggGetter[uint64], set aggexec.AggSetter[uint64]) {}
 
-//type aggBitAndBinary struct{}
-//
-//func newAggBitAndBinary() aggexec.SingleAggFromVarRetVar {
-//	return aggBitAndBinary{}
-//}
-//
-//func (a aggBitAndBinary) Marshal() []byte  { return nil }
-//func (a aggBitAndBinary) Unmarshal([]byte) {}
-//func (a aggBitAndBinary) Init(set aggexec.AggBytesSetter) {
-//	// todo: need type information here.
-//}
+type aggBitAndBinary struct{}
+
+func newAggBitAndBinary() aggexec.SingleAggFromVarRetVar {
+	return aggBitAndBinary{}
+}
+
+func (a aggBitAndBinary) Marshal() []byte  { return nil }
+func (a aggBitAndBinary) Unmarshal([]byte) {}
+func (a aggBitAndBinary) Init(set aggexec.AggBytesSetter, arg types.Type, ret types.Type) {
+	vs := make([]byte, ret.Width)
+	for i := range vs {
+		vs[i] = 1
+	}
+	_ = set(vs)
+}
+func (a aggBitAndBinary) FillBytes(value []byte, get aggexec.AggBytesGetter, set aggexec.AggBytesSetter) {
+	v := get()
+	types.BitAnd(v, v, value)
+}
+func (a aggBitAndBinary) FillNull(get aggexec.AggBytesGetter, set aggexec.AggBytesSetter) {
+}
+func (a aggBitAndBinary) Fills(value []byte, isNull bool, count int, get aggexec.AggBytesGetter, set aggexec.AggBytesSetter) {
+	if !isNull {
+		a.FillBytes(value, get, set)
+	}
+}
+func (a aggBitAndBinary) Merge(other aggexec.SingleAggFromVarRetVar, get1, get2 aggexec.AggBytesGetter, set aggexec.AggBytesSetter) {
+	v1, v2 := get1(), get2()
+	types.BitAnd(v1, v1, v2)
+}
+func (a aggBitAndBinary) Flush(get aggexec.AggBytesGetter, set aggexec.AggBytesSetter) {}
