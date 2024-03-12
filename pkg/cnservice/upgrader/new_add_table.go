@@ -138,6 +138,20 @@ var (
 			table_name  varchar(5000)
 			);`, catalog.MO_CATALOG, catalog.MO_SNAPSHOTS),
 	}
+
+	SqlStatementCUTable = &table.Table{
+		Account:  table.AccountAll,
+		Database: catalog.MO_SYSTEM_METRICS,
+		Table:    catalog.MO_SQL_STMT_CU,
+		CreateTableSql: fmt.Sprintf(`CREATE TABLE %s.%s (
+account VARCHAR(1024) DEFAULT 'sys' COMMENT 'account name',
+collecttime DATETIME NOT NULL COMMENT 'metric data collect time',
+value DOUBLE DEFAULT '0.0' COMMENT 'metric value',
+node VARCHAR(1024) DEFAULT 'monolithic' COMMENT 'mo node uuid',
+role VARCHAR(1024) DEFAULT 'monolithic' COMMENT 'mo node role, like: CN, DN, LOG',
+sql_source_type VARCHAR(1024) NOT NULL COMMENT 'sql_source_type, val like: external_sql, cloud_nonuser_sql, cloud_user_sql, internal_sql, ...'
+) CLUSTER BY (account, collecttime);`, catalog.MO_SYSTEM_METRICS, catalog.MO_SQL_STMT_CU),
+	}
 )
 
 var needUpgradeNewTable = []*table.Table{
@@ -146,6 +160,7 @@ var needUpgradeNewTable = []*table.Table{
 	MoStagesTable,
 	MoForeignKeys,
 	MoSnapshotsTable,
+	SqlStatementCUTable,
 }
 
 var PARTITIONSView = &table.Table{
