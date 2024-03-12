@@ -321,7 +321,7 @@ func (blk *baseBlock) foreachPersistedDeletesCommittedInRange(
 	if deletes == nil || err != nil {
 		return
 	}
-	//defer deletes.Close()
+	defer deletes.Close()
 	if persistedByCN {
 		if deltalocCommitTS.Equal(txnif.UncommitTS) {
 			return
