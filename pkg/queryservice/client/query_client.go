@@ -44,6 +44,8 @@ var methodVersions = map[pb.CmdMethod]int64{
 	pb.CmdMethod_GetProtocolVersion:    defines.MORPCMinVersion, // To make sure these methods are compatible with all versions.
 	pb.CmdMethod_SetProtocolVersion:    defines.MORPCMinVersion,
 	pb.CmdMethod_CoreDumpConfig:        defines.MORPCMinVersion,
+	pb.CmdMethod_MigrateConnFrom:       defines.MORPCVersion1,
+	pb.CmdMethod_MigrateConnTo:         defines.MORPCVersion1,
 }
 
 type queryClient struct {
