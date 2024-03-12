@@ -20,6 +20,33 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 )
 
+type tableFilters struct {
+	filters []EntryFilter
+}
+
+func (f *tableFilters) isEmpty() bool {
+	return f == nil || len(f.filters) == 0
+}
+
+// filter return true means the data need to be skipped.
+// Return true cases:
+// 1. filters is empty
+// 2. all filter skipped
+func (f *tableFilters) filter(data *EntryData) bool {
+	if f.isEmpty() {
+		return true
+	}
+
+	skipped := true
+	for _, f := range f.filters {
+		if !f.Filter(data) {
+			skipped = false
+			break
+		}
+	}
+	return skipped
+}
+
 // NewKeepTableFilter returns a filter that only keeps the specified table and columns.
 // Note: always keep pk column if pk index is specified.
 func NewKeepTableFilter(
@@ -45,7 +72,8 @@ func (f *tableEntryFilter) Filter(entry *EntryData) bool {
 	if entry.id != f.id {
 		return true
 	}
-	if entry == nil {
+
+	if len(entry.columns) == 0 {
 		return false
 	}
 

@@ -350,13 +350,21 @@ func (txn *Transaction) checkDup() error {
 }
 
 // dumpBatch if txn.workspaceSize is larger than threshold, cn will write workspace to s3
+// start from write offset.   Pass in offset -1 to dump all.   Note that dump all will
+// modify txn.writes, so it can only be called right before txn.commit.
 func (txn *Transaction) dumpBatchLocked(offset int) error {
 	var size uint64
 	var pkCount int
 	if txn.workspaceSize < WorkspaceThreshold {
 		return nil
 	}
-	if offset > 0 {
+
+	dumpAll := offset < 0
+	if dumpAll {
+		offset = 0
+	}
+
+	if !dumpAll {
 		for i := offset; i < len(txn.writes); i++ {
 			if txn.writes[i].tableId == catalog.MO_DATABASE_ID ||
 				txn.writes[i].tableId == catalog.MO_TABLES_ID ||
@@ -465,9 +473,11 @@ func (txn *Transaction) dumpBatchLocked(offset int) error {
 			return err
 		}
 	}
-	if offset == 0 {
+
+	if dumpAll {
 		txn.workspaceSize = 0
 		txn.pkCount -= pkCount
+		// modifies txn.writes.
 		writes := txn.writes[:0]
 		for i, write := range txn.writes {
 			if write.bat != nil {
@@ -548,7 +558,6 @@ func (txn *Transaction) WriteFileLocked(
 		for idx := 0; idx < statsListVec.Length(); idx++ {
 			vector.AppendBytes(newBat.Vecs[1], statsListVec.GetBytesAt(idx), false, txn.proc.Mp())
 		}
-
 		newBat.SetRowCount(bat.Vecs[0].Length())
 
 		txn.insertPosForCNBlock(
@@ -628,7 +637,6 @@ func (txn *Transaction) deleteBatch(bat *batch.Batch,
 		return bat
 	}
 	sels := txn.proc.Mp().GetSels()
-	//Delete rows belongs to uncommitted raw data batch in txn's workspace.
 	txn.deleteTableWrites(databaseId, tableId, sels, deleteBlkId, min1, max1, mp)
 
 	sels = sels[:0]
@@ -737,15 +745,16 @@ func (txn *Transaction) mergeTxnWorkspaceLocked() error {
 			}
 		}
 	}
-	return nil
+	return txn.compactionBlksLocked()
 }
 
 // CN blocks compaction for txn
-func (txn *Transaction) mergeCompactionLocked() error {
+func (txn *Transaction) compactionBlksLocked() error {
 	compactedBlks := make(map[tableKey]map[objectio.ObjectLocation][]int64)
 	compactedEntries := make(map[*batch.Batch][]int64)
 	defer func() {
-		txn.deletedBlocks = nil
+		//txn.deletedBlocks = nil
+		txn.deletedBlocks.clean()
 	}()
 	txn.deletedBlocks.iter(
 		func(blkId *types.Blockid, offsets []int64) bool {
@@ -765,7 +774,7 @@ func (txn *Transaction) mergeCompactionLocked() error {
 					map[objectio.ObjectLocation][]int64{pos.blkInfo.MetaLoc: offsets}
 			}
 			compactedEntries[pos.bat] = append(compactedEntries[pos.bat], pos.offset)
-			delete(txn.cnBlkId_Pos, *blkId)
+			//delete(txn.cnBlkId_Pos, *blkId)
 			return true
 		})
 
@@ -776,7 +785,7 @@ func (txn *Transaction) mergeCompactionLocked() error {
 		}
 		//TODO::do parallel compaction for table
 		tbl := rel.(*txnTable)
-		createdBlks, stats, err := tbl.mergeCompaction(blks)
+		createdBlks, stats, err := tbl.compaction(blks)
 		if err != nil {
 			return err
 		}
@@ -857,51 +866,19 @@ func (txn *Transaction) hasUncommittedDeletesOnBlock(id *types.Blockid) bool {
 	return txn.deletedBlocks.hasDeletes(id)
 }
 
-func (txn *Transaction) getUncommitedDataObjectsByTable(
-	databaseId uint64, tableId uint64) (statsList []objectio.ObjectStats, err error) {
+func (txn *Transaction) forEachTableWrites(databaseId uint64, tableId uint64, offset int, f func(Entry)) {
 	txn.Lock()
 	defer txn.Unlock()
-	var stats objectio.ObjectStats
-	for _, entry := range txn.writes {
-		if entry.databaseId != databaseId ||
-			entry.tableId != tableId {
+	for i := 0; i < offset; i++ {
+		e := txn.writes[i]
+		if e.databaseId != databaseId {
 			continue
 		}
-		if entry.bat == nil || entry.bat.IsEmpty() {
+		if e.tableId != tableId {
 			continue
 		}
-
-		if entry.typ == INSERT_TXN {
-			continue
-		}
-
-		if entry.typ != INSERT ||
-			len(entry.bat.Attrs) < 2 ||
-			entry.bat.Attrs[1] != catalog.ObjectMeta_ObjectStats {
-			continue
-		}
-		for i := 0; i < entry.bat.Vecs[1].Length(); i++ {
-			stats.UnMarshal(entry.bat.Vecs[1].GetBytesAt(i))
-			statsList = append(statsList, stats)
-		}
+		f(e)
 	}
-	return statsList, nil
-
-}
-
-func (txn *Transaction) getTableWrites(databaseId uint64, tableId uint64, writes []Entry) []Entry {
-	txn.Lock()
-	defer txn.Unlock()
-	for _, entry := range txn.writes {
-		if entry.databaseId != databaseId {
-			continue
-		}
-		if entry.tableId != tableId {
-			continue
-		}
-		writes = append(writes, entry)
-	}
-	return writes
 }
 
 // getCachedTable returns the cached table in this transaction if it exists, nil otherwise.
@@ -942,15 +919,12 @@ func (txn *Transaction) Commit(ctx context.Context) ([]txn.TxnRequest, error) {
 	if err := txn.mergeTxnWorkspaceLocked(); err != nil {
 		return nil, err
 	}
-	if err := txn.mergeCompactionLocked(); err != nil {
+	if err := txn.dumpBatchLocked(-1); err != nil {
 		return nil, err
 	}
-	if err := txn.dumpBatchLocked(0); err != nil {
-		return nil, err
-	}
-	pkDedupCount := txn.op.PKDedupCount()
+
 	if !txn.hasS3Op.Load() &&
-		pkDedupCount > 0 && txn.pkCount <= pkDedupCount {
+		txn.op.TxnOptions().CheckDupEnabled() {
 		if err := txn.checkDup(); err != nil {
 			return nil, err
 		}
@@ -964,6 +938,10 @@ func (txn *Transaction) Commit(ctx context.Context) ([]txn.TxnRequest, error) {
 
 func (txn *Transaction) Rollback(ctx context.Context) error {
 	logDebugf(txn.op.Txn(), "Transaction.Rollback")
+	//to gc the s3 objs
+	if err := txn.gcObjs(0, ctx); err != nil {
+		panic("Rollback txn failed: to gc objects generated by CN failed")
+	}
 	txn.delTransaction()
 	return nil
 }
@@ -1025,11 +1003,14 @@ func (txn *Transaction) clearTableCache() {
 	})
 }
 
-func (txn *Transaction) getWriteOffset() int {
-	if txn.statementID > 0 {
-		txn.Lock()
-		defer txn.Unlock()
-		return txn.statements[txn.statementID-1]
-	}
-	return 0
+func (txn *Transaction) GetSnapshotWriteOffset() int {
+	txn.Lock()
+	defer txn.Unlock()
+	return txn.snapshotWriteOffset
+}
+
+func (txn *Transaction) UpdateSnapshotWriteOffset() {
+	txn.Lock()
+	defer txn.Unlock()
+	txn.snapshotWriteOffset = len(txn.writes)
 }

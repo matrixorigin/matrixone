@@ -30,109 +30,6 @@ var (
 	textType    = types.T_text.ToType()    // return type of @probe_limit
 )
 
-func (builder *QueryBuilder) applyIndicesForSort(nodeID int32, sortNode *plan.Node, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) int32 {
-
-	// 1. Vector Index Check
-	// Handle Queries like
-	// SELECT id,embedding FROM tbl ORDER BY l2_distance(embedding, "[1,2,3]") LIMIT 10;
-	{
-		scanNode := builder.resolveTableScanWithIndexFromChildren(sortNode)
-
-		// 1.a if there are no table scans with multi-table indexes, skip
-		if scanNode == nil || sortNode == nil || len(sortNode.OrderBy) != 1 {
-			goto END0
-		}
-		multiTableIndexes := make(map[string]*MultiTableIndex)
-		for _, indexDef := range scanNode.TableDef.Indexes {
-			if catalog.IsIvfIndexAlgo(indexDef.IndexAlgo) {
-				if _, ok := multiTableIndexes[indexDef.IndexName]; !ok {
-					multiTableIndexes[indexDef.IndexName] = &MultiTableIndex{
-						IndexAlgo: catalog.ToLower(indexDef.IndexAlgo),
-						IndexDefs: make(map[string]*plan.IndexDef),
-					}
-				}
-				multiTableIndexes[indexDef.IndexName].IndexDefs[catalog.ToLower(indexDef.IndexAlgoTableType)] = indexDef
-			}
-		}
-		if len(multiTableIndexes) == 0 {
-			return nodeID
-		}
-
-		//1.b if sortNode has more than one order by, skip
-		if len(sortNode.OrderBy) != 1 {
-			goto END0
-		}
-
-		// 1.c if sortNode does not have a registered distance function, skip
-		distFnExpr := sortNode.OrderBy[0].Expr.GetF()
-		if distFnExpr == nil {
-			goto END0
-		}
-		if _, ok := distFuncOpTypes[distFnExpr.Func.ObjName]; !ok {
-			goto END0
-		}
-
-		// 1.d if the order by argument order is not of the form dist_func(col, const), swap and see
-		// if that works. if not, skip
-		if isRuntimeConstExpr(distFnExpr.Args[0]) && distFnExpr.Args[1].GetCol() != nil {
-			distFnExpr.Args[0], distFnExpr.Args[1] = distFnExpr.Args[1], distFnExpr.Args[0]
-		}
-		if !isRuntimeConstExpr(distFnExpr.Args[1]) {
-			goto END0
-		}
-		if distFnExpr.Args[0].GetCol() == nil {
-			goto END0
-		}
-		// NOTE: here we assume the first argument is the column to order by
-		colPosOrderBy := distFnExpr.Args[0].GetCol().ColPos
-
-		// 1.d if the distance function in sortNode is not indexed for that column in any of the IVFFLAT index, skip
-		distanceFunctionIndexed := false
-		var multiTableIndexWithSortDistFn *MultiTableIndex
-		for _, multiTableIndex := range multiTableIndexes {
-			switch multiTableIndex.IndexAlgo {
-			case catalog.MoIndexIvfFlatAlgo.ToString():
-				storedParams, err := catalog.IndexParamsStringToMap(multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].IndexAlgoParams)
-				if err != nil {
-					continue
-				}
-				storedOpType, ok := storedParams[catalog.IndexAlgoParamOpType]
-				if !ok {
-					continue
-				}
-
-				// if index is not the order by column, skip
-				idxDef0 := multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata]
-				if scanNode.TableDef.Name2ColIndex[idxDef0.Parts[0]] != colPosOrderBy {
-					continue
-				}
-
-				// if index is of the same distance function in order by, the index is valid
-				if storedOpType == distFuncOpTypes[distFnExpr.Func.ObjName] {
-					distanceFunctionIndexed = true
-					multiTableIndexWithSortDistFn = multiTableIndex
-				}
-			}
-			if distanceFunctionIndexed {
-				break
-			}
-		}
-		if !distanceFunctionIndexed {
-			goto END0
-		}
-
-		return builder.applyIndicesForSortUsingVectorIndex(nodeID, sortNode, scanNode,
-			colRefCnt, idxColMap, multiTableIndexWithSortDistFn, colPosOrderBy)
-	}
-END0:
-	// 2. Regular Index Check
-	{
-
-	}
-
-	return nodeID
-}
-
 // You replace Sort Node with a new Project Node
 func (builder *QueryBuilder) applyIndicesForSortUsingVectorIndex(nodeID int32, sortNode, scanNode *plan.Node,
 	colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr, multiTableIndexWithSortDistFn *MultiTableIndex,
@@ -272,7 +169,7 @@ func makeCentroidsSingleJoinMetaOnCurrVersionOrderByL2DistNormalizeL2(builder *Q
 	joinCond, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{
 		scanCols[0],
 		{
-			Typ: makePlan2Type(&bigIntType),
+			Typ: *makePlan2Type(&bigIntType),
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: idxTags["meta1.project"],
@@ -293,7 +190,7 @@ func makeCentroidsSingleJoinMetaOnCurrVersionOrderByL2DistNormalizeL2(builder *Q
 
 	// 3. Project version, centroid_id, centroid, l2_distance(literal, normalize_l2(col))
 	centroidsCol := &plan.Expr{
-		Typ: DeepCopyType(indexTableDefs[1].Cols[2].Typ),
+		Typ: *indexTableDefs[1].Cols[2].Typ,
 		Expr: &plan.Expr_Col{
 			Col: &plan.ColRef{
 				RelPos: idxTags["centroids.scan"],
@@ -321,7 +218,7 @@ func makeCentroidsSingleJoinMetaOnCurrVersionOrderByL2DistNormalizeL2(builder *Q
 
 	// 4.1 @probe_limit is a system variable
 	probeLimitValueExpr := &plan.Expr{
-		Typ: makePlan2Type(&textType), // T_text
+		Typ: *makePlan2Type(&textType), // T_text
 		Expr: &plan.Expr_V{
 			V: &plan.VarRef{
 				Name:   "probe_limit",
@@ -366,7 +263,7 @@ func makeCentroidsSingleJoinMetaOnCurrVersionOrderByL2DistNormalizeL2(builder *Q
 		OrderBy: []*OrderBySpec{
 			{
 				Expr: &plan.Expr{
-					Typ: makePlan2Type(&float64Type),
+					Typ: *makePlan2Type(&float64Type),
 					Expr: &plan.Expr_Col{
 						Col: &plan.ColRef{
 							RelPos: idxTags["centroids.project"],
@@ -394,7 +291,7 @@ func makeEntriesCrossJoinMetaOnCurrVersion(builder *QueryBuilder, bindCtx *BindC
 	joinCond, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{
 		scanCols[0],
 		{
-			Typ: makePlan2Type(&bigIntType),
+			Typ: *makePlan2Type(&bigIntType),
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: idxTags["meta2.project"],
@@ -428,7 +325,7 @@ func makeEntriesCrossJoinMetaOnCurrVersion(builder *QueryBuilder, bindCtx *BindC
 func makeEntriesCrossJoinCentroidsOnCentroidId(builder *QueryBuilder, bindCtx *BindContext, idxTableDefs []*TableDef, idxTags map[string]int32, entriesForCurrVersion int32, centroidsForCurrVersion int32) int32 {
 	entriesCentroidIdEqCentroidId, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{
 		{
-			Typ: DeepCopyType(idxTableDefs[2].Cols[1].Typ),
+			Typ: *idxTableDefs[2].Cols[1].Typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: idxTags["entries.project"],
@@ -437,7 +334,7 @@ func makeEntriesCrossJoinCentroidsOnCentroidId(builder *QueryBuilder, bindCtx *B
 			},
 		},
 		{
-			Typ: DeepCopyType(idxTableDefs[1].Cols[1].Typ),
+			Typ: *idxTableDefs[1].Cols[1].Typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: idxTags["centroids.project"],
@@ -463,7 +360,7 @@ func makeTblCrossJoinEntriesCentroidOnPK(builder *QueryBuilder, bindCtx *BindCon
 
 	entriesOriginPkEqTblPk, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{
 		{
-			Typ: DeepCopyType(idxTableDefs[2].Cols[2].Typ),
+			Typ: *idxTableDefs[2].Cols[2].Typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: idxTags["entries.project"],
@@ -472,7 +369,7 @@ func makeTblCrossJoinEntriesCentroidOnPK(builder *QueryBuilder, bindCtx *BindCon
 			},
 		},
 		{
-			Typ: DeepCopyType(idxTableDefs[2].Cols[2].Typ),
+			Typ: *idxTableDefs[2].Cols[2].Typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: scanNode.BindingTags[0],
@@ -498,7 +395,7 @@ func makeTblOrderByL2DistNormalizeL2(builder *QueryBuilder, bindCtx *BindContext
 	distFnName := fn.Func.ObjName
 	l2DistanceColLit, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), distFnName, []*plan.Expr{
 		{
-			Typ: DeepCopyType(scanNode.TableDef.Cols[colPosOrderBy].Typ),
+			Typ: *scanNode.TableDef.Cols[colPosOrderBy].Typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: scanNode.BindingTags[0],
@@ -537,7 +434,7 @@ func makeHiddenTblScanWithBindingTag(builder *QueryBuilder, bindCtx *BindContext
 	scanCols := make([]*Expr, len(indexTableDef.Cols))
 	for colIdx, column := range indexTableDef.Cols {
 		scanCols[colIdx] = &plan.Expr{
-			Typ: column.Typ,
+			Typ: *column.Typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: idxTag,

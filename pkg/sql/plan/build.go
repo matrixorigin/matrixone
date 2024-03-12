@@ -200,6 +200,8 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool) (*P
 		return buildShowCreatePublications(stmt, ctx)
 	case *tree.ShowStages:
 		return buildShowStages(stmt, ctx)
+	case *tree.ShowSnapShots:
+		return buildShowSnapShots(stmt, ctx)
 	default:
 		return nil, moerr.NewInternalError(ctx.GetContext(), "statement: '%v'", tree.String(stmt, dialect.MYSQL))
 	}
@@ -227,7 +229,7 @@ func GetResultColumnsFromPlan(p *Plan) []*ColDef {
 		for idx, expr := range lastNode.ProjectList {
 			columns[idx] = &ColDef{
 				Name: query.Headings[idx],
-				Typ:  expr.Typ,
+				Typ:  &expr.Typ,
 			}
 		}
 

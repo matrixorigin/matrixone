@@ -19,6 +19,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
@@ -30,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -89,19 +91,18 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 
 	txnOp := proc.TxnOperator
-	if !txnOp.Txn().IsPessimistic() || txnOp.Txn().DisableLock {
+	if !txnOp.Txn().IsPessimistic() {
 		return arg.GetChildren(0).Call(proc)
 	}
 
 	if !arg.block {
-		return callNonBlocking(arg.GetIdx(), proc, arg)
+		return callNonBlocking(proc, arg)
 	}
 
-	return callBlocking(arg.GetIdx(), proc, arg, arg.GetIsFirst(), arg.GetIsLast())
+	return callBlocking(proc, arg, arg.GetIsFirst(), arg.GetIsLast())
 }
 
 func callNonBlocking(
-	idx int,
 	proc *process.Process,
 	arg *Argument) (vm.CallResult, error) {
 
@@ -130,11 +131,10 @@ func callNonBlocking(
 }
 
 func callBlocking(
-	idx int,
 	proc *process.Process,
 	arg *Argument,
 	isFirst bool,
-	isLast bool) (vm.CallResult, error) {
+	_ bool) (vm.CallResult, error) {
 
 	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
 	anal.Start()
@@ -218,7 +218,6 @@ func performLock(
 		}
 		locked, defChanged, refreshTS, err := doLock(
 			proc.Ctx,
-			arg.block,
 			arg.engine,
 			nil,
 			target.tableID,
@@ -291,8 +290,7 @@ func LockTable(
 	pkType types.Type,
 	changeDef bool) error {
 	txnOp := proc.TxnOperator
-	if !txnOp.Txn().IsPessimistic() ||
-		txnOp.Txn().DisableLock {
+	if !txnOp.Txn().IsPessimistic() {
 		return nil
 	}
 	parker := types.NewPacker(proc.Mp())
@@ -303,7 +301,6 @@ func LockTable(
 		WithFetchLockRowsFunc(GetFetchRowsFunc(pkType))
 	_, defChanged, refreshTS, err := doLock(
 		proc.Ctx,
-		false,
 		eng,
 		nil,
 		tableID,
@@ -337,8 +334,7 @@ func LockRows(
 	group uint32,
 ) error {
 	txnOp := proc.TxnOperator
-	if !txnOp.Txn().IsPessimistic() ||
-		txnOp.Txn().DisableLock {
+	if !txnOp.Txn().IsPessimistic() {
 		return nil
 	}
 
@@ -353,7 +349,6 @@ func LockRows(
 		WithFetchLockRowsFunc(GetFetchRowsFunc(pkType))
 	_, defChanged, refreshTS, err := doLock(
 		proc.Ctx,
-		false,
 		eng,
 		rel,
 		tableID,
@@ -380,7 +375,6 @@ func LockRows(
 // be manipulated has been modified, you need to get the latest data at timestamp.
 func doLock(
 	ctx context.Context,
-	blocking bool,
 	eng engine.Engine,
 	rel engine.Relation,
 	tableID uint64,
@@ -395,6 +389,16 @@ func doLock(
 	if !txnOp.Txn().IsPessimistic() {
 		return false, false, timestamp.Timestamp{}, nil
 	}
+
+	seq := txnOp.NextSequence()
+	startAt := time.Now()
+	trace.GetService().AddTxnDurationAction(
+		txnOp,
+		client.LockEvent,
+		seq,
+		tableID,
+		0,
+		nil)
 
 	//in this case:
 	// create table t1 (a int primary key, b int ,c int, unique key(b,c));
@@ -456,6 +460,15 @@ func doLock(
 		rows,
 		txn.ID,
 		options)
+
+	trace.GetService().AddTxnDurationAction(
+		txnOp,
+		client.LockEvent,
+		seq,
+		tableID,
+		time.Since(startAt),
+		nil)
+
 	if err != nil {
 		return false, false, timestamp.Timestamp{}, err
 	}
@@ -491,14 +504,13 @@ func doLock(
 		if err != nil {
 			return false, false, timestamp.Timestamp{}, err
 		}
-		trace.GetService().ChangedCheck(
-			txn.ID,
-			tableID,
-			snapshotTS,
-			newSnapshotTS,
-			changed)
 
 		if changed {
+			trace.GetService().TxnNoConflictChanged(
+				proc.TxnOperator,
+				tableID,
+				lockedTS,
+				newSnapshotTS)
 			if err := txnOp.UpdateSnapshot(ctx, newSnapshotTS); err != nil {
 				return false, false, timestamp.Timestamp{}, err
 			}
@@ -532,6 +544,11 @@ func doLock(
 
 	// forward rc's snapshot ts
 	snapshotTS = result.Timestamp.Next()
+
+	trace.GetService().TxnConflictChanged(
+		proc.TxnOperator,
+		tableID,
+		snapshotTS)
 	if err := txnOp.UpdateSnapshot(ctx, snapshotTS); err != nil {
 		return false, false, timestamp.Timestamp{}, err
 	}
@@ -775,7 +792,7 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 	arg.rt.FreeMergeTypeOperator(pipelineFailed)
 }
 
-func (arg *Argument) cleanCachedBatch(proc *process.Process) {
+func (arg *Argument) cleanCachedBatch(_ *process.Process) {
 	// do not need clean,  only set nil
 	// for _, bat := range arg.rt.cachedBatches {
 	// 	bat.Clean(proc.Mp())
@@ -784,7 +801,7 @@ func (arg *Argument) cleanCachedBatch(proc *process.Process) {
 }
 
 func (arg *Argument) getBatch(
-	proc *process.Process,
+	_ *process.Process,
 	anal process.Analyze,
 	isFirst bool) (*batch.Batch, error) {
 	fn := arg.rt.batchFetchFunc

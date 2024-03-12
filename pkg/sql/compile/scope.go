@@ -316,12 +316,12 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 						exprs = nil
 						// FIXME: Should give an empty "Data" and then early return
 						s.NodeInfo.Data = nil
-						s.NodeInfo.Data = append(s.NodeInfo.Data, objectio.EmptyBlockInfoBytes...)
 						s.NodeInfo.NeedExpandRanges = false
+						s.DataSource.FilterExpr = plan2.MakeFalseExpr()
 						break FOR_LOOP
 
 					case pbpipeline.RuntimeFilter_IN:
-						inExpr := plan2.MakeInExpr(c.ctx, spec.Expr, filter.Card, filter.Data)
+						inExpr := plan2.MakeInExpr(c.ctx, spec.Expr, filter.Card, filter.Data, spec.MatchPrefix)
 						inExprList = append(inExprList, inExpr)
 
 						// TODO: implement BETWEEN expression
@@ -334,11 +334,12 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 	}
 
 	for i := range inExprList {
-		funcimpl, _ := inExprList[i].Expr.(*plan.Expr_F)
-		col, ok := funcimpl.F.Args[0].Expr.(*plan.Expr_Col)
-		if !ok {
+		fn := inExprList[i].GetF()
+		col := fn.Args[0].GetCol()
+		if col == nil {
 			panic("only support col in runtime filter's left child!")
 		}
+
 		newExpr := plan2.DeepCopyExpr(inExprList[i])
 		//put expr in reader
 		newExprList := []*plan.Expr{newExpr}
@@ -347,7 +348,7 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 		}
 		s.DataSource.FilterExpr = colexec.RewriteFilterExprList(newExprList)
 
-		isFilterOnPK := s.DataSource.TableDef.Pkey != nil && col.Col.Name == s.DataSource.TableDef.Pkey.PkeyColName
+		isFilterOnPK := s.DataSource.TableDef.Pkey != nil && col.Name == s.DataSource.TableDef.Pkey.PkeyColName
 		if !isFilterOnPK {
 			// put expr in filter instruction
 			ins := s.Instructions[0]
@@ -371,8 +372,7 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 		if len(s.DataSource.node.BlockFilterList) > 0 {
 			newExprList = append(newExprList, s.DataSource.node.BlockFilterList...)
 		}
-		s.DataSource.node.BlockFilterList = newExprList
-		ranges, err := c.expandRanges(s.DataSource.node, s.NodeInfo.Rel)
+		ranges, err := c.expandRanges(s.DataSource.node, s.NodeInfo.Rel, newExprList)
 		if err != nil {
 			return err
 		}

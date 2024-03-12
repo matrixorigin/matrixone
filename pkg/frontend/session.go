@@ -34,11 +34,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/pb/status"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
@@ -209,12 +211,18 @@ type Session struct {
 	sentRows atomic.Int64
 	// writeCsvBytes is used to record bytes sent by `select ... into 'file.csv'` for motrace.StatementInfo
 	writeCsvBytes atomic.Int64
+	// packetCounter count the packet communicated with client.
+	packetCounter atomic.Int64
+	// payloadCounter count the payload send by `load data`
+	payloadCounter int64
 
 	createdTime time.Time
 
 	expiredTime time.Time
 
 	planCache *planCache
+
+	statsCache *plan2.StatsCache
 
 	autoIncrCacheManager *defines.AutoIncrCacheManager
 
@@ -289,6 +297,11 @@ type Session struct {
 
 	// insert sql for create table as select stmt
 	createAsSelectSql string
+
+	// FromProxy denotes whether the session is dispatched from proxy
+	fromProxy bool
+
+	disableTrace bool
 }
 
 func (ses *Session) ClearStmtProfile() {
@@ -475,6 +488,32 @@ func (ses *Session) GetSqlHelper() *SqlHelper {
 	return ses.sqlHelper
 }
 
+func (ses *Session) CountPayload(length int) {
+	if ses == nil {
+		return
+	}
+	ses.payloadCounter += int64(length)
+}
+func (ses *Session) CountPacket(delta int64) {
+	if ses == nil {
+		return
+	}
+	ses.packetCounter.Add(delta)
+}
+func (ses *Session) GetPacketCnt() int64 {
+	if ses == nil {
+		return 0
+	}
+	return ses.packetCounter.Load()
+}
+func (ses *Session) ResetPacketCounter() {
+	if ses == nil {
+		return
+	}
+	ses.packetCounter.Store(0)
+	ses.payloadCounter = 0
+}
+
 // The update version. Four function.
 func (ses *Session) SetAutoIncrCacheManager(aicm *defines.AutoIncrCacheManager) {
 	ses.mu.Lock()
@@ -584,6 +623,7 @@ func NewSession(proto Protocol, mp *mpool.MPool, pu *config.ParameterUnit,
 		connType:  ConnTypeUnset,
 
 		timestampMap: map[TS]time.Time{},
+		statsCache:   plan2.NewStatsCache(),
 	}
 	if isNotBackgroundSession {
 		ses.sysVars = gSysVars.CopySysVarsToSession()
@@ -1031,6 +1071,12 @@ func (ses *Session) GenNewStmtId() uint32 {
 	return ses.lastStmtId
 }
 
+func (ses *Session) SetLastStmtID(id uint32) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	ses.lastStmtId = id
+}
+
 func (ses *Session) GetLastStmtId() uint32 {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
@@ -1242,6 +1288,16 @@ func (ses *Session) GetPrepareStmt(name string) (*PrepareStmt, error) {
 	return nil, moerr.NewInvalidState(ses.requestCtx, "prepared statement '%s' does not exist", name)
 }
 
+func (ses *Session) GetPrepareStmts() []*PrepareStmt {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	ret := make([]*PrepareStmt, 0, len(ses.prepareStmts))
+	for _, st := range ses.prepareStmts {
+		ret = append(ret, st)
+	}
+	return ret
+}
+
 func (ses *Session) RemovePrepareStmt(name string) {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
@@ -1296,12 +1352,9 @@ func (ses *Session) GetGlobalVar(name string) (interface{}, error) {
 
 func (ses *Session) GetTxnCompileCtx() *TxnCompilerContext {
 	var compCtx *TxnCompilerContext
-	var proc *process.Process
 	ses.mu.Lock()
 	compCtx = ses.txnCompileCtx
-	proc = ses.proc
 	ses.mu.Unlock()
-	compCtx.SetProcess(proc)
 	return compCtx
 }
 
@@ -2318,6 +2371,7 @@ func (ses *Session) StatusSession() *status.Session {
 				QueryStart:    time.Time{},
 				ClientHost:    ses.GetMysqlProtocol().Peer(),
 				Role:          roleName,
+				FromProxy:     ses.fromProxy,
 			}
 		}
 	}
@@ -2340,6 +2394,7 @@ func (ses *Session) StatusSession() *status.Session {
 		QueryStart:    ses.GetQueryStart(),
 		ClientHost:    ses.GetMysqlProtocol().Peer(),
 		Role:          roleName,
+		FromProxy:     ses.fromProxy,
 	}
 }
 
@@ -2389,4 +2444,69 @@ func checkPlanIsInsertValues(proc *process.Process,
 		}
 	}
 	return false, nil
+}
+
+type dbMigration struct {
+	db string
+}
+
+func (d *dbMigration) Migrate(ses *Session) error {
+	if d.db == "" {
+		return nil
+	}
+	return doUse(ses.requestCtx, ses, d.db)
+}
+
+type prepareStmtMigration struct {
+	name string
+	sql  string
+}
+
+func (p *prepareStmtMigration) Migrate(ses *Session) error {
+	v, err := ses.GetGlobalVar("lower_case_table_names")
+	if err != nil {
+		return err
+	}
+	if !strings.HasPrefix(strings.ToLower(p.sql), "prepare") {
+		p.sql = fmt.Sprintf("prepare %s from %s", p.name, p.sql)
+	}
+	stmts, err := mysql.Parse(ses.requestCtx, p.sql, v.(int64))
+	if err != nil {
+		return err
+	}
+	if _, err = doPrepareStmt(ses.requestCtx, ses, stmts[0].(*tree.PrepareStmt), p.sql); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (ses *Session) Migrate(req *query.MigrateConnToRequest) error {
+	dbm := dbMigration{
+		db: req.DB,
+	}
+	if err := dbm.Migrate(ses); err != nil {
+		return err
+	}
+
+	var maxStmtID uint32
+	for _, p := range req.PrepareStmts {
+		if p == nil {
+			continue
+		}
+		pm := prepareStmtMigration{
+			name: p.Name,
+			sql:  p.SQL,
+		}
+		if err := pm.Migrate(ses); err != nil {
+			return err
+		}
+		id := parsePrepareStmtID(p.Name)
+		if id > maxStmtID {
+			maxStmtID = id
+		}
+	}
+	if maxStmtID > 0 {
+		ses.SetLastStmtID(maxStmtID)
+	}
+	return nil
 }

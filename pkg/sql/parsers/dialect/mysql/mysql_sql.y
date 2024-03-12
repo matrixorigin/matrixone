@@ -253,6 +253,9 @@ import (
     timeSliding *tree.Sliding
     timeFill *tree.Fill
     fillMode tree.FillMode
+
+    snapshotObject tree.ObejectInfo
+
 }
 
 %token LEX_ERROR
@@ -276,7 +279,7 @@ import (
 %right <str> '('
 %left <str> ')'
 %nonassoc LOWER_THAN_STRING
-%nonassoc <str> ID AT_ID AT_AT_ID STRING VALUE_ARG LIST_ARG COMMENT COMMENT_KEYWORD QUOTE_ID STAGE CREDENTIALS STAGES
+%nonassoc <str> ID AT_ID AT_AT_ID STRING VALUE_ARG LIST_ARG COMMENT COMMENT_KEYWORD QUOTE_ID STAGE CREDENTIALS STAGES SNAPSHOTS
 %token <item> INTEGRAL HEX FLOAT
 %token <str>  HEXNUM BIT_LITERAL
 %token <str> NULL TRUE FALSE
@@ -448,7 +451,6 @@ import (
 // Call
 %token <str> CALL
 
-
 // Time window
 %token <str> PREV SLIDING FILL
 
@@ -472,7 +474,7 @@ import (
 %type <statement> create_account_stmt create_user_stmt create_role_stmt
 %type <statement> create_ddl_stmt create_table_stmt create_database_stmt create_index_stmt create_view_stmt create_function_stmt create_extension_stmt create_procedure_stmt create_sequence_stmt
 %type <statement> create_source_stmt create_connector_stmt pause_daemon_task_stmt cancel_daemon_task_stmt resume_daemon_task_stmt
-%type <statement> show_stmt show_create_stmt show_columns_stmt show_databases_stmt show_target_filter_stmt show_table_status_stmt show_grants_stmt show_collation_stmt show_accounts_stmt show_roles_stmt show_stages_stmt
+%type <statement> show_stmt show_create_stmt show_columns_stmt show_databases_stmt show_target_filter_stmt show_table_status_stmt show_grants_stmt show_collation_stmt show_accounts_stmt show_roles_stmt show_stages_stmt show_snapshots_stmt
 %type <statement> show_tables_stmt show_sequences_stmt show_process_stmt show_errors_stmt show_warnings_stmt show_target
 %type <statement> show_procedure_status_stmt show_function_status_stmt show_node_list_stmt show_locks_stmt
 %type <statement> show_table_num_stmt show_column_num_stmt show_table_values_stmt show_table_size_stmt
@@ -518,6 +520,7 @@ import (
 %type <statement> loop_stmt iterate_stmt leave_stmt repeat_stmt while_stmt
 %type <statement> create_publication_stmt drop_publication_stmt alter_publication_stmt show_publications_stmt show_subscriptions_stmt
 %type <statement> create_stage_stmt drop_stage_stmt alter_stage_stmt
+%type <statement> create_snapshot_stmt drop_snapshot_stmt
 %type <str> urlparams
 %type <str> comment_opt view_list_opt view_opt security_opt view_tail check_type
 %type <subscriptionOption> subcription_opt
@@ -565,7 +568,7 @@ import (
 %type <columnAttribute> column_attribute_elem keys
 %type <columnAttributes> column_attribute_list column_attribute_list_opt
 %type <tableOptions> table_option_list_opt table_option_list source_option_list_opt source_option_list
-%type <str> charset_name storage_opt collate_name column_format storage_media algorithm_type able_type space_type lock_type with_type rename_type algorithm_type_2
+%type <str> charset_name storage_opt collate_name column_format storage_media algorithm_type able_type space_type lock_type with_type rename_type algorithm_type_2 load_charset
 %type <rowFormatType> row_format_options
 %type <int64Val> field_length_opt max_file_size_opt
 %type <matchType> match match_opt
@@ -755,6 +758,7 @@ import (
 %type <stageCredentials> stage_credentials_opt
 %type <userIdentified> user_identified user_identified_opt
 %type <accountRole> default_role_opt
+%type <snapshotObject> snapshot_object_opt
 
 %type <indexHintType> index_hint_type
 %type <indexHintScope> index_hint_scope
@@ -894,7 +898,7 @@ normal_stmt:
         $$ = $1
     }
 |   kill_stmt
-|   backup_stmt
+|   backup_stmt   
 
 backup_stmt:
     BACKUP STRING FILESYSTEM STRING PARALLELISM STRING
@@ -914,6 +918,39 @@ backup_stmt:
         	    Option : $5,
         	}
     }
+
+create_snapshot_stmt:
+    CREATE SNAPSHOT not_exists_opt ident FOR snapshot_object_opt
+    {
+        $$ = &tree.CreateSnapShot{
+            IfNotExists: $3,
+            Name: tree.Identifier($4.Compare()),
+            Obeject: $6,
+        }
+    }
+
+snapshot_object_opt:
+    CLUSTER
+    {
+        spLevel := tree.SnapshotLevelType{
+            Level: tree.SNAPSHOTLEVELCLUSTER,
+        }
+        $$ = tree.ObejectInfo{
+            SLevel: spLevel,
+            ObjName: "",
+        }
+    }
+|    ACCOUNT ident
+    {
+        spLevel := tree.SnapshotLevelType{
+            Level: tree.SNAPSHOTLEVELACCOUNT,
+        }
+        $$ = tree.ObejectInfo{
+            SLevel: spLevel,
+            ObjName: tree.Identifier($2.Compare()),
+        }
+    }
+
 
 kill_stmt:
     KILL kill_opt INTEGRAL statement_id_opt
@@ -3423,6 +3460,7 @@ show_stmt:
 |   show_servers_stmt
 |   show_stages_stmt
 |   show_connectors_stmt
+|   show_snapshots_stmt
 
 show_collation_stmt:
     SHOW COLLATION like_opt where_expression_opt
@@ -3438,6 +3476,14 @@ show_stages_stmt:
     {
         $$ = &tree.ShowStages{
             Like: $3,
+        }
+    }
+
+show_snapshots_stmt:
+    SHOW SNAPSHOTS  where_expression_opt
+    {
+        $$ = &tree.ShowSnapShots{
+            Where: $3,
         }
     }
 
@@ -3878,6 +3924,7 @@ drop_ddl_stmt:
 |   drop_procedure_stmt
 |   drop_stage_stmt
 |   drop_connector_stmt
+|   drop_snapshot_stmt
 
 drop_sequence_stmt:
     DROP SEQUENCE exists_opt table_name_list
@@ -4079,12 +4126,12 @@ table_name_opt_wild:
     ident wild_opt
     {
         prefix := tree.ObjectNamePrefix{ExplicitSchema: false}
-        $$ = tree.NewTableName(tree.Identifier($1.Compare()), prefix)
+        $$ = tree.NewTableName(tree.Identifier($1.Compare()), prefix, nil)
     }
 |    ident '.' ident wild_opt
     {
         prefix := tree.ObjectNamePrefix{SchemaName: tree.Identifier($1.Compare()), ExplicitSchema: true}
-        $$ = tree.NewTableName(tree.Identifier($3.Compare()), prefix)
+        $$ = tree.NewTableName(tree.Identifier($3.Compare()), prefix, nil)
     }
 
 wild_opt:
@@ -5067,7 +5114,7 @@ select_expression:
 from_opt:
     {
         prefix := tree.ObjectNamePrefix{ExplicitSchema: false}
-        tn := tree.NewTableName(tree.Identifier(""), prefix)
+        tn := tree.NewTableName(tree.Identifier(""), prefix, nil)
         $$ = &tree.From{
             Tables: tree.TableExprs{&tree.AliasedTableExpr{Expr: tn}},
         }
@@ -5470,6 +5517,7 @@ create_stmt:
 |   create_account_stmt
 |   create_publication_stmt
 |   create_stage_stmt
+|   create_snapshot_stmt
 
 create_ddl_stmt:
     create_table_stmt
@@ -6044,7 +6092,7 @@ alter_publication_accounts_opt:
 
 
 drop_publication_stmt:
-DROP PUBLICATION exists_opt ident
+    DROP PUBLICATION exists_opt ident
     {
         var ifExists = $3
         var name = tree.Identifier($4.Compare())
@@ -6052,11 +6100,19 @@ DROP PUBLICATION exists_opt ident
     }
 
 drop_stage_stmt:
-DROP STAGE exists_opt ident
+    DROP STAGE exists_opt ident
     {
         var ifNotExists = $3
         var name = tree.Identifier($4.Compare())
         $$ = tree.NewDropStage(ifNotExists, name)
+    }
+
+drop_snapshot_stmt:
+   DROP SNAPSHOT exists_opt ident
+   {
+        var ifExists = $3
+        var name = tree.Identifier($4.Compare())
+        $$ = tree.NewDropSnapShot(ifExists, name)
     }
 
 account_role_name:
@@ -6812,16 +6868,27 @@ infile_or_s3_param:
     }
 
 tail_param_opt:
-    load_fields load_lines ignore_lines columns_or_variable_list_opt load_set_spec_opt
+    load_charset load_fields load_lines ignore_lines columns_or_variable_list_opt load_set_spec_opt
     {
         $$ = &tree.TailParameter{
-            Fields: $1,
-            Lines: $2,
-            IgnoredLines: uint64($3),
-            ColumnList: $4,
-            Assignments: $5,
+            Charset: $1,
+            Fields: $2,
+            Lines: $3,
+            IgnoredLines: uint64($4),
+            ColumnList: $5,
+            Assignments: $6,
         }
     }
+
+load_charset:
+    {
+        $$ = ""
+    }
+|   charset_keyword charset_name
+    {
+    	$$ = $2
+    }
+
 create_sequence_stmt:
     CREATE SEQUENCE not_exists_opt table_name as_datatype_opt increment_by_opt min_value_opt max_value_opt start_with_opt cycle_opt
     {
@@ -7564,12 +7631,60 @@ table_name:
     ident
     {
         prefix := tree.ObjectNamePrefix{ExplicitSchema: false}
-        $$ = tree.NewTableName(tree.Identifier($1.Compare()), prefix)
+        $$ = tree.NewTableName(tree.Identifier($1.Compare()), prefix, nil)
     }
 |   ident '.' ident
     {
         prefix := tree.ObjectNamePrefix{SchemaName: tree.Identifier($1.Compare()), ExplicitSchema: true}
-        $$ = tree.NewTableName(tree.Identifier($3.Compare()), prefix)
+        $$ = tree.NewTableName(tree.Identifier($3.Compare()), prefix, nil)
+    }
+|   ident '@' STRING '@' STRING
+    {
+        prefix := tree.ObjectNamePrefix{ExplicitSchema: false}
+        atType := tree.ATTIMESTAMPNONE
+        if $3 != "" {
+            t := strings.ToLower($3)
+            switch t {
+                case "timestamp":
+                    atType = tree.ATTIMESTAMPTIME
+                case "snapshot":
+                    atType = tree.ATTIMESTAMPSNAPSHOT
+                default:
+                    yylex.Error("Invalid the type of at timestamp")
+                    return 1
+            }
+        }
+        atTs := &tree.AtTimeStampClause{
+            TimeStampExpr: &tree.TimeStampExpr{
+                Type: atType,
+                Expr: $5,
+            },
+        }
+        $$ = tree.NewTableName(tree.Identifier($1.Compare()), prefix, atTs)
+    }
+|   ident '.' ident '@' STRING '@' STRING
+    {
+        prefix := tree.ObjectNamePrefix{SchemaName: tree.Identifier($1.Compare()), ExplicitSchema: true}
+        atType := tree.ATTIMESTAMPNONE
+        if $5 != "" {
+            t := strings.ToLower($5)
+            switch t {
+                case "timestamp":
+                    atType = tree.ATTIMESTAMPTIME
+                case "snapshot":
+                    atType = tree.ATTIMESTAMPSNAPSHOT
+                default:
+                    yylex.Error("Invalid the type of at timestamp")
+                    return 1
+            }
+        }
+        atTs := &tree.AtTimeStampClause{
+            TimeStampExpr: &tree.TimeStampExpr{
+                Type: atType,
+                Expr: $7,
+            },
+        }
+        $$ = tree.NewTableName(tree.Identifier($3.Compare()), prefix, atTs)
     }
 
 table_elem_list_opt:
@@ -11048,6 +11163,7 @@ non_reserved_keyword:
 |   DEFINER
 |   SQL
 |   STAGE
+|   SNAPSHOTS
 |   STAGES
 |   BACKUP
 |   FILESYSTEM

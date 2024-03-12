@@ -283,6 +283,27 @@ func (bat *Batch) PreExtend(m *mpool.MPool, rows int) error {
 	return nil
 }
 
+func (bat *Batch) AppendWithCopy(ctx context.Context, mh *mpool.MPool, b *Batch) (*Batch, error) {
+	if bat == nil {
+		return b.Dup(mh)
+	}
+	if len(bat.Vecs) != len(b.Vecs) {
+		return nil, moerr.NewInternalError(ctx, "unexpected error happens in batch append")
+	}
+	if len(bat.Vecs) == 0 {
+		return bat, nil
+	}
+
+	for i := range bat.Vecs {
+		if err := bat.Vecs[i].UnionBatch(b.Vecs[i], 0, b.Vecs[i].Length(), nil, mh); err != nil {
+			return bat, err
+		}
+		bat.Vecs[i].SetSorted(false)
+	}
+	bat.rowCount += b.rowCount
+	return bat, nil
+}
+
 func (bat *Batch) Append(ctx context.Context, mh *mpool.MPool, b *Batch) (*Batch, error) {
 	if bat == nil {
 		return b, nil

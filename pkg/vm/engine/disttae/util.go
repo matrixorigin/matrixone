@@ -33,7 +33,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
@@ -286,7 +285,7 @@ func mustGetFullCompositePK(
 						List: []*plan.Expr{leftPkExpr, rightPkExpr},
 					},
 				},
-				Typ: &plan.Type{
+				Typ: plan.Type{
 					Id: int32(types.T_tuple),
 				},
 			}
@@ -386,7 +385,7 @@ func getPkExpr(
 						List: []*plan.Expr{leftPK, rightPK},
 					},
 				},
-				Typ: &plan.Type{
+				Typ: plan.Type{
 					Id: int32(types.T_tuple),
 				},
 			}
@@ -408,7 +407,7 @@ func getPkExpr(
 					return nil
 				}
 				return &plan.Expr{
-					Typ: plan2.DeepCopyType(exprImpl.F.Args[1].Typ),
+					Typ: exprImpl.F.Args[1].Typ,
 					Expr: &plan.Expr_Lit{
 						Lit: constVal,
 					},
@@ -423,7 +422,7 @@ func getPkExpr(
 					return nil
 				}
 				return &plan.Expr{
-					Typ: plan2.DeepCopyType(exprImpl.F.Args[0].Typ),
+					Typ: exprImpl.F.Args[0].Typ,
 					Expr: &plan.Expr_Lit{
 						Lit: constVal,
 					},
@@ -1102,7 +1101,7 @@ func getConstValueByExpr(expr *plan.Expr,
 
 func getConstExpr(oid int32, c *plan.Literal) *plan.Expr {
 	return &plan.Expr{
-		Typ:  &plan.Type{Id: oid},
+		Typ:  plan.Type{Id: oid},
 		Expr: &plan.Expr_Lit{Lit: c},
 	}
 }
@@ -1330,6 +1329,29 @@ func (i *StatsBlkIter) Entry() objectio.BlockInfo {
 		MetaLoc:   objectio.ObjectLocation(loc),
 	}
 	return blk
+}
+
+func ForeachCommittedObjects(
+	createObjs map[objectio.ObjectNameShort]struct{},
+	delObjs map[objectio.ObjectNameShort]struct{},
+	p *logtailreplay.PartitionState,
+	onObj func(info logtailreplay.ObjectInfo) error) (err error) {
+	for obj := range createObjs {
+		if objInfo, ok := p.GetObject(obj); ok {
+			if err = onObj(objInfo); err != nil {
+				return
+			}
+		}
+	}
+	for obj := range delObjs {
+		if objInfo, ok := p.GetObject(obj); ok {
+			if err = onObj(objInfo); err != nil {
+				return
+			}
+		}
+	}
+	return nil
+
 }
 
 func ForeachSnapshotObjects(
