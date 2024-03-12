@@ -210,9 +210,10 @@ func BuildMoColumnsFilter(curAccountId uint64) tree.Expr {
 	mo_pubs := tree.NewNumValWithType(constant.MakeString("mo_pubs"), "mo_pubs", false, tree.P_char)
 	mo_stored_procedure := tree.NewNumValWithType(constant.MakeString("mo_stored_procedure"), "mo_stored_procedure", false, tree.P_char)
 	mo_stages := tree.NewNumValWithType(constant.MakeString("mo_stages"), "mo_stages", false, tree.P_char)
+	mo_snapshots := tree.NewNumValWithType(constant.MakeString("mo_snapshots"), "mo_snapshots", false, tree.P_char)
 
 	notInValues := tree.NewTuple(tree.Exprs{mo_userConst, mo_roleConst, mo_user_grantConst, mo_role_grantConst, mo_role_privsConst,
-		mo_user_defined_functionConst, mo_mysql_compatibility_modeConst, mo_indexes, mo_table_partitions, mo_pubs, mo_stored_procedure, mo_stages})
+		mo_user_defined_functionConst, mo_mysql_compatibility_modeConst, mo_indexes, mo_table_partitions, mo_pubs, mo_stored_procedure, mo_stages, mo_snapshots})
 
 	notInexpr := tree.NewComparisonExpr(tree.NOT_IN, att_relnameColName, notInValues)
 
