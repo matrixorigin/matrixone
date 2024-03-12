@@ -814,10 +814,10 @@ func (zm ZM) AnyIn(vec *vector.Vector) bool {
 		col := vector.MustFixedCol[types.TS](vec)
 		minVal, maxVal := types.DecodeFixed[types.TS](zm.GetMinBuf()), types.DecodeFixed[types.TS](zm.GetMaxBuf())
 		lowerBound := sort.Search(len(col), func(i int) bool {
-			return minVal.LessEq(col[i])
+			return minVal.LessEq(&col[i])
 		})
 
-		return lowerBound < len(col) && col[lowerBound].LessEq(maxVal)
+		return lowerBound < len(col) && col[lowerBound].LessEq(&maxVal)
 
 	case types.T_uuid:
 		col := vector.MustFixedCol[types.Uuid](vec)

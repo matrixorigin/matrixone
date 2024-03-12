@@ -3928,7 +3928,8 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 										}
 									case types.T_TS:
 										min := types.DecodeFixed[types.TS](zm.GetMinBuf())
-										if min.Less(partialResults[i].(types.TS)) {
+										ts := partialResults[i].(types.TS)
+										if min.Less(&ts) {
 											partialResults[i] = min
 										}
 									case types.T_Rowid:
@@ -4054,7 +4055,8 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 										}
 									case types.T_TS:
 										max := types.DecodeFixed[types.TS](zm.GetMaxBuf())
-										if max.Greater(partialResults[i].(types.TS)) {
+										ts := partialResults[i].(types.TS)
+										if max.Greater(&ts) {
 											partialResults[i] = max
 										}
 									case types.T_Rowid:

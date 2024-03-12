@@ -104,7 +104,7 @@ func (n *MVCCHandle) EstimateMemSizeLocked() (asize int, dsize int) {
 
 func (n *MVCCHandle) UpgradeDeleteChainByTS(flushed types.TS) {
 	n.Lock()
-	if n.persistedTS.Equal(flushed) {
+	if n.persistedTS.Equal(&flushed) {
 		n.Unlock()
 		return
 	}
@@ -240,7 +240,8 @@ func (n *MVCCHandle) CollectDeleteLocked(
 						if minTS.IsEmpty() {
 							minTS = node.GetEnd()
 						} else {
-							if minTS.Greater(node.GetEnd()) {
+							endTS := node.GetEnd()
+							if minTS.Greater(&endTS) {
 								minTS = node.GetEnd()
 							}
 						}
@@ -333,7 +334,8 @@ func (n *MVCCHandle) CollectAppendLocked(
 	aborts *nulls.Bitmap,
 ) {
 	startOffset, node := n.appends.GetNodeToReadByPrepareTS(start)
-	if node != nil && node.GetPrepare().Less(start) {
+	prepareTS := node.GetPrepare()
+	if node != nil && prepareTS.Less(&start) {
 		startOffset++
 	}
 	endOffset, node := n.appends.GetNodeToReadByPrepareTS(end)
@@ -407,7 +409,8 @@ func (n *MVCCHandle) GetVisibleRowLocked(
 				holesMax = an.maxRow
 			}
 		}
-		return !an.Prepare.Greater(txn.GetStartTS())
+		startTS := txn.GetStartTS()
+		return !an.Prepare.Greater(&startTS)
 	}, true)
 	if len(anToWait) != 0 {
 		n.RUnlock()
@@ -530,5 +533,6 @@ func (n *MVCCHandle) AllAppendsCommittedBefore(ts types.TS) bool {
 	}
 
 	// check if the latest appendnode is committed before ts
-	return anode.GetCommitTS().Less(ts)
+	commitTS := anode.GetCommitTS()
+	return commitTS.Less(&ts)
 }
