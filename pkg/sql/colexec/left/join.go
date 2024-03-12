@@ -314,11 +314,11 @@ func (ctr *container) probe(ap *Argument, proc *process.Process, anal process.An
 			} else {
 				sels := mSels[vals[k]-1][ap.sel:]
 				lensels := len(sels)
-				if lensels > 8192 {
-					sels = sels[:8192]
+				if lensels > colexec.DefaultBatchSize {
+					sels = sels[:colexec.DefaultBatchSize]
 					ap.lastpos = i
 					ap.count = k
-					ap.sel += 8192
+					ap.sel += colexec.DefaultBatchSize
 				} else {
 					ap.sel = 0
 				}
@@ -377,7 +377,7 @@ func (ctr *container) probe(ap *Argument, proc *process.Process, anal process.An
 					}
 					rowCount += len(sels)
 				}
-				if lensels > 8192 {
+				if lensels > colexec.DefaultBatchSize {
 					ctr.rbat.AddRowCount(rowCount)
 					anal.Output(ctr.rbat, isLast)
 					result.Batch = ctr.rbat
