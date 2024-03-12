@@ -657,7 +657,6 @@ drop index varchar_index on trans_index_01;
 insert into trans_index_01 values (1,'13456789872',20.23,'5678'),(2,'13456789872',100.00,'23'),(3,NULL,100.00,'23');
 insert into trans_index_01 values (1,'13456789872',20.23,'5678'),(2,'13456789872',100.00,'23'),(3,NULL,100.00,'23');
 Duplicate entry '1' for key 'col1'
-Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
 select * from trans_index_01;
 col1    col2    col3    col4
 1    13456789872    20.23    5678

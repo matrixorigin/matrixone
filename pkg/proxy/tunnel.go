@@ -20,6 +20,7 @@ import (
 	"io"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/log"
@@ -35,11 +36,35 @@ const (
 
 	connClientName = "client"
 	connServerName = "server"
+
+	pipeClientToServer = "c2s"
+	pipeServerToClient = "s2c"
 )
 
 var (
 	// errPipeClosed indicates that the pipe has been closed.
 	errPipeClosed = moerr.NewInternalErrorNoCtx("pipe has been closed")
+)
+
+type tunnelOption func(*tunnel)
+
+func withRebalancer(r *rebalancer) tunnelOption {
+	return func(t *tunnel) {
+		t.rebalancer = r
+	}
+}
+
+func withRebalancePolicy(policy RebalancePolicy) tunnelOption {
+	return func(t *tunnel) {
+		t.rebalancePolicy = policy
+	}
+}
+
+type transferType int
+
+const (
+	transferByRebalance transferType = 0
+	transferByScaling   transferType = 1
 )
 
 // tunnel is used to forward client message to CN server.
@@ -60,6 +85,18 @@ type tunnel struct {
 	closeOnce sync.Once
 	// counterSet counts the events in proxy.
 	counterSet *counterSet
+	// the global rebalancer.
+	rebalancer *rebalancer
+	// transferProactive means that the connection transfer is more proactive.
+	rebalancePolicy RebalancePolicy
+
+	transferType transferType
+
+	// transferIntent indicates that this tunnel was tried to transfer to
+	// other servers, but not safe to. Set it to true to do the transfer
+	// more proactive.
+	// It only works if RebalancePolicy is "active".
+	transferIntent atomic.Bool
 
 	mu struct {
 		sync.Mutex
@@ -67,6 +104,7 @@ type tunnel struct {
 		started bool
 		// inTransfer means a transfer of server connection is in progress.
 		inTransfer bool
+
 		// clientConn is the connection between client and proxy.
 		clientConn *MySQLConn
 		// serverConn is the connection between server and proxy.
@@ -81,7 +119,7 @@ type tunnel struct {
 }
 
 // newTunnel creates a tunnel.
-func newTunnel(ctx context.Context, logger *log.MOLogger, cs *counterSet) *tunnel {
+func newTunnel(ctx context.Context, logger *log.MOLogger, cs *counterSet, opts ...tunnelOption) *tunnel {
 	ctx, cancel := context.WithCancel(ctx)
 	t := &tunnel{
 		ctx:       ctx,
@@ -96,6 +134,9 @@ func newTunnel(ctx context.Context, logger *log.MOLogger, cs *counterSet) *tunne
 		// set the counter set.
 		counterSet: cs,
 	}
+	for _, opt := range opts {
+		opt(t)
+	}
 	return t
 }
 
@@ -109,12 +150,16 @@ func (t *tunnel) run(cc ClientConn, sc ServerConn) error {
 			return t.ctx.Err()
 		}
 		t.cc = cc
+		t.logger = t.logger.With(zap.Uint32("conn ID", cc.ConnID()))
 		t.mu.clientConn = newMySQLConn(connClientName, cc.RawConn(), 0, t.reqC, t.respC)
 		t.mu.serverConn = newMySQLConn(connServerName, sc.RawConn(), 0, t.reqC, t.respC)
 
+		setPeer(t.mu.clientConn.msgBuf, t.mu.serverConn.msgBuf)
+
 		// Create the pipes from client to server and server to client.
-		t.mu.csp = newPipe("client->server", t.mu.clientConn, t.mu.serverConn)
-		t.mu.scp = newPipe("server->client", t.mu.serverConn, t.mu.clientConn)
+		t.mu.csp = t.newPipe(pipeClientToServer, t.mu.clientConn, t.mu.serverConn)
+
+		t.mu.scp = t.newPipe(pipeServerToClient, t.mu.serverConn, t.mu.clientConn)
 
 		return nil
 	}
@@ -188,8 +233,10 @@ func (t *tunnel) replaceServerConn(newServerConn *MySQLConn) {
 	defer t.mu.Unlock()
 	_ = t.mu.serverConn.Close()
 	t.mu.serverConn = newServerConn
-	t.mu.csp = newPipe("client->server", t.mu.clientConn, t.mu.serverConn)
-	t.mu.scp = newPipe("server->client", t.mu.serverConn, t.mu.clientConn)
+	setPeer(t.mu.clientConn.msgBuf, t.mu.serverConn.msgBuf)
+
+	t.mu.csp = t.newPipe(pipeClientToServer, t.mu.clientConn, t.mu.serverConn)
+	t.mu.scp = t.newPipe(pipeServerToClient, t.mu.serverConn, t.mu.clientConn)
 }
 
 // canStartTransfer checks whether the transfer can be started.
@@ -230,29 +277,64 @@ func (t *tunnel) canStartTransfer() bool {
 	return true
 }
 
+func (t *tunnel) setTransferIntent(i bool) {
+	if t.rebalancePolicy == RebalancePolicyPassive &&
+		t.getTransferType() == transferByRebalance {
+		return
+	}
+	t.logger.Info("set tunnel transfer intent", zap.Bool("value", i))
+	t.transferIntent.Store(i)
+	if i {
+		v2.ProxyConnectionsTransferIntentGauge.Inc()
+	} else {
+		v2.ProxyConnectionsTransferIntentGauge.Dec()
+	}
+}
+
+func (t *tunnel) finishTransfer(start time.Time) {
+	t.setTransferIntent(false)
+	t.setTransferType(transferByRebalance)
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.mu.inTransfer = false
+
+	t.logger.Info("transfer end")
+	duration := time.Since(start)
+	if duration > time.Second {
+		t.logger.Info("slow transfer for tunnel",
+			zap.Duration("transfer duration", duration),
+		)
+	}
+	v2.ProxyTransferDurationHistogram.Observe(time.Since(start).Seconds())
+}
+
+func (t *tunnel) doReplaceConnection(ctx context.Context) error {
+	newConn, err := t.getNewServerConn(ctx)
+	if err != nil {
+		t.logger.Error("failed to get a new connection", zap.Error(err))
+		return err
+	}
+	t.replaceServerConn(newConn)
+	t.counterSet.connMigrationSuccess.Add(1)
+	t.logger.Info("transfer to a new CN server",
+		zap.String("addr", newConn.RemoteAddr().String()))
+	return nil
+}
+
 // transfer transfers the serverConn of tunnel to a new one.
 func (t *tunnel) transfer(ctx context.Context) error {
 	t.counterSet.connMigrationRequested.Add(1)
 	// Must check if it is safe to start the transfer.
 	if ok := t.canStartTransfer(); !ok {
+		t.logger.Info("cannot start transfer safely")
+		t.setTransferIntent(true)
 		t.counterSet.connMigrationCannotStart.Add(1)
 		return moerr.GetOkExpectedNotSafeToStartTransfer()
 	}
-	start := time.Now()
-	defer func() {
-		t.mu.Lock()
-		defer t.mu.Unlock()
-		t.mu.inTransfer = false
 
-		duration := time.Since(start)
-		if duration > time.Second {
-			t.logger.Info("slow transfer for tunnel",
-				zap.Any("tunnel", t),
-				zap.Duration("transfer duration", duration),
-			)
-		}
-		v2.ProxyTransferDurationHistogram.Observe(time.Since(start).Seconds())
-	}()
+	start := time.Now()
+	defer t.finishTransfer(start)
+	t.logger.Info("transfer begin")
 
 	ctx, cancel := context.WithTimeout(ctx, defaultTransferTimeout)
 	defer cancel()
@@ -265,20 +347,30 @@ func (t *tunnel) transfer(ctx context.Context) error {
 	if err := scp.pause(ctx); err != nil {
 		return err
 	}
-	newConn, err := t.getNewServerConn(ctx)
-	if err != nil {
-		t.logger.Error("failed to get a new connection", zap.Error(err))
+	if err := t.doReplaceConnection(ctx); err != nil {
 		return err
 	}
-	t.replaceServerConn(newConn)
-	t.counterSet.connMigrationSuccess.Add(1)
-	t.logger.Info("transfer to a new CN server",
-		zap.String("addr", newConn.RemoteAddr().String()))
-
 	// After replace connections, restart pipes.
 	if err := t.kickoff(); err != nil {
 		t.logger.Error("failed to kickoff tunnel", zap.Error(err))
 		_ = t.Close()
+	}
+	return nil
+}
+
+func (t *tunnel) transferSync(ctx context.Context) error {
+	// Must check if it is safe to start the transfer.
+	if ok := t.canStartTransfer(); !ok {
+		t.logger.Info("still cannot start transfer safely in transfer intent state")
+		return moerr.GetOkExpectedNotSafeToStartTransfer()
+	}
+	start := time.Now()
+	defer t.finishTransfer(start)
+	t.logger.Info("transfer begin")
+	ctx, cancel := context.WithTimeout(ctx, defaultTransferTimeout)
+	defer cancel()
+	if err := t.doReplaceConnection(ctx); err != nil {
+		return err
 	}
 	return nil
 }
@@ -293,7 +385,15 @@ func (t *tunnel) getNewServerConn(ctx context.Context) (*MySQLConn, error) {
 	if err != nil {
 		return nil, err
 	}
-	return newMySQLConn("server", newConn.RawConn(), 0, t.reqC, t.respC), nil
+	return newMySQLConn(connServerName, newConn.RawConn(), 0, t.reqC, t.respC), nil
+}
+
+func (t *tunnel) getTransferType() transferType {
+	return t.transferType
+}
+
+func (t *tunnel) setTransferType(typ transferType) {
+	t.transferType = typ
 }
 
 // Close closes the tunnel.
@@ -319,8 +419,8 @@ func (t *tunnel) Close() error {
 
 // pipe must be created through newPipe.
 type pipe struct {
-	// name is for debug
-	name string
+	name   string
+	logger *log.MOLogger
 
 	// source connection and destination connection wrapped
 	// by a message buffer.
@@ -343,17 +443,22 @@ type pipe struct {
 		lastCmdTime time.Time
 	}
 
+	// tun is the tunnel that the pipe belongs to.
+	tun *tunnel
+
 	testHelper struct {
 		beforeSend func()
 	}
 }
 
 // newPipe creates a pipe.
-func newPipe(name string, src, dst *MySQLConn) *pipe {
+func (t *tunnel) newPipe(name string, src, dst *MySQLConn) *pipe {
 	p := &pipe{
-		name: name,
-		src:  src,
-		dst:  dst,
+		name:   name,
+		logger: t.logger.With(zap.String("pipe-direction", name)),
+		src:    src,
+		dst:    dst,
+		tun:    t,
 	}
 	p.mu.cond = sync.NewCond(&p.mu)
 	return p
@@ -438,8 +543,22 @@ func (p *pipe) kickoff(ctx context.Context) (e error) {
 		if _, err := p.src.sendTo(p.dst); err != nil {
 			return moerr.NewInternalErrorNoCtx("send message error:: %v", err)
 		}
+
+		if p.name == pipeServerToClient && p.tun.transferIntent.Load() {
+			if err := p.handleTransferIntent(ctx); err != nil {
+				p.logger.Error("failed to transfer connection", zap.Error(err))
+			}
+		}
 	}
 	return ctx.Err()
+}
+
+func (p *pipe) handleTransferIntent(ctx context.Context) error {
+	// If it is not in a txn and transfer intent is true, transfer it sync.
+	if !p.isInTxn() && p.tun != nil {
+		return p.tun.transferSync(ctx)
+	}
+	return nil
 }
 
 // waitReady waits the pip starts up.
@@ -493,7 +612,6 @@ func (p *pipe) pause(ctx context.Context) error {
 }
 
 // isInTxn indicates whether the session is in transaction.
-// It should only be called by server side, but not client side.
 func (p *pipe) isInTxn() bool {
 	if p.src == nil {
 		return false

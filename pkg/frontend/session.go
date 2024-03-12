@@ -289,6 +289,9 @@ type Session struct {
 
 	// timestampMap record timestamp for statistical purposes
 	timestampMap map[TS]time.Time
+
+	// FromProxy denotes whether the session is dispatched from proxy
+	fromProxy bool
 }
 
 func (ses *Session) ClearStmtProfile() {
@@ -2303,6 +2306,7 @@ func (ses *Session) StatusSession() *status.Session {
 				QueryStart:    time.Time{},
 				ClientHost:    ses.GetMysqlProtocol().Peer(),
 				Role:          roleName,
+				FromProxy:     ses.fromProxy,
 			}
 		}
 	}
@@ -2325,6 +2329,7 @@ func (ses *Session) StatusSession() *status.Session {
 		QueryStart:    ses.GetQueryStart(),
 		ClientHost:    ses.GetMysqlProtocol().Peer(),
 		Role:          roleName,
+		FromProxy:     ses.fromProxy,
 	}
 }
 
