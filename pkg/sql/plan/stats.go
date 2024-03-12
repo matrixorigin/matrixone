@@ -37,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+const DefaultBlockMaxRows = 8192
 const BlockNumForceOneCN = 200
 const highNDVcolumnThreshHold = 0.95
 const statsCacheInitSize = 128
@@ -1021,6 +1022,18 @@ func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
 	stats.Outcnt = stats.Selectivity * stats.TableCnt
 	stats.Cost = stats.TableCnt * blockSel
 	stats.BlockNum = int32(float64(s.BlockNumber)*blockSel) + 1
+
+	// if there is a limit, outcnt is limit number
+	if node.Limit != nil && len(node.FilterList) == 0 {
+		if cExpr, ok := node.Limit.Expr.(*plan.Expr_Lit); ok {
+			if c, ok := cExpr.Lit.Value.(*plan.Literal_I64Val); ok {
+				stats.Outcnt = float64(c.I64Val)
+				stats.BlockNum = int32((stats.Outcnt / DefaultBlockMaxRows) + 1)
+				stats.Cost = float64(stats.BlockNum * DefaultBlockMaxRows)
+			}
+		}
+	}
+
 	return stats
 }
 
