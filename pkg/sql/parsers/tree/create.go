@@ -5068,19 +5068,19 @@ func NewCreateAccount(ife bool, n string, ao AccountAuthOption, so AccountStatus
 	return ca
 }
 
-func (ca *CreateAccount) Format(ctx *FmtCtx) {
+func (node *CreateAccount) Format(ctx *FmtCtx) {
 	ctx.WriteString("create account ")
-	if ca.IfNotExists {
+	if node.IfNotExists {
 		ctx.WriteString("if not exists ")
 	}
-	ctx.WriteString(ca.Name)
-	ca.AuthOption.Format(ctx)
-	ca.StatusOption.Format(ctx)
-	ca.Comment.Format(ctx)
+	ctx.WriteString(node.Name)
+	node.AuthOption.Format(ctx)
+	node.StatusOption.Format(ctx)
+	node.Comment.Format(ctx)
 }
 
-func (ca *CreateAccount) GetStatementType() string { return "Create Account" }
-func (ca *CreateAccount) GetQueryType() string     { return QueryTypeDCL }
+func (node *CreateAccount) GetStatementType() string { return "Create Account" }
+func (node *CreateAccount) GetQueryType() string     { return QueryTypeDCL }
 
 func (node CreateAccount) TypeName() string { return "tree.CreateAccount" }
 
