@@ -54,6 +54,7 @@ use system_metrics;
 show column_number from metric;
 show column_number from sql_statement_total;
 show column_number from sql_statement_errors;
+show column_number from sql_statement_cu;
 show column_number from sql_transaction_total;
 show column_number from sql_transaction_errors;
 show column_number from server_connections;
