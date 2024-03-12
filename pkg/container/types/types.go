@@ -73,7 +73,6 @@ const (
 	T_binary    T = 64
 	T_varbinary T = 65
 	T_enum      T = 66
-	T_bitmap    T = 67
 
 	// blobs
 	T_blob T = 70
