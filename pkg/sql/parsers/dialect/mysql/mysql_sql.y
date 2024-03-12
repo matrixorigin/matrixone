@@ -7348,12 +7348,12 @@ partition:
         var Values = $3
         var Options = $4
         var Subs = $5
-        $$ = &tree.Partition{
+        $$ = tree.NewPartition(
             Name,
             Values,
             Options,
             Subs,
-        }
+        )
     }
 
 sub_partition_list_opt:

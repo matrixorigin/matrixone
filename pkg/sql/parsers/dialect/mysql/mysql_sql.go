@@ -18343,12 +18343,12 @@ yydefault:
 			var Values = yyDollar[3].valuesUnion()
 			var Options = yyDollar[4].tableOptionsUnion()
 			var Subs = yyDollar[5].subPartitionsUnion()
-			yyLOCAL = &tree.Partition{
+			yyLOCAL = tree.NewPartition(
 				Name,
 				Values,
 				Options,
 				Subs,
-			}
+			)
 		}
 		yyVAL.union = yyLOCAL
 	case 1122:
