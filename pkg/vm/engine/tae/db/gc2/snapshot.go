@@ -17,13 +17,9 @@ package gc
 import (
 	"context"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"sync"
 )
 
@@ -34,7 +30,7 @@ type Snapshot struct {
 
 type SnapshotList struct {
 	sync.RWMutex
-	snapshots []*Snapshot
+	snapshots []types.TS
 }
 
 func NewSnapshot(ts types.TS, dbs []uint64) *Snapshot {
@@ -46,11 +42,11 @@ func NewSnapshot(ts types.TS, dbs []uint64) *Snapshot {
 
 func NewSnapshotList() *SnapshotList {
 	return &SnapshotList{
-		snapshots: make([]*Snapshot, 0),
+		snapshots: make([]types.TS, 0),
 	}
 }
 
-func (sl *SnapshotList) Add(snapshot *Snapshot)  {
+func (sl *SnapshotList) Add(snapshot types.TS)  {
 	sl.Lock()
 	defer sl.Unlock()
 	sl.snapshots = append(sl.snapshots, snapshot)
@@ -63,29 +59,23 @@ func mergeCheckpoint(fs fileservice.FileService,ckpClient checkpoint.RunnerReade
 	if err != nil {
 		return err
 	}
-	ins := data.GetObjectBatchs()
-	insCommitTSVec := ins.GetVectorByName(txnbase.SnapshotAttr_CommitTS).GetDownstreamVector()
-	insDeleteTSVec := ins.GetVectorByName(catalog.EntryNode_DeleteAt).GetDownstreamVector()
-	insCreateTSVec := ins.GetVectorByName(catalog.EntryNode_CreateAt).GetDownstreamVector()
-	dbid := ins.GetVectorByName(catalog.SnapshotAttr_DBID).GetDownstreamVector()
-	tid := ins.GetVectorByName(catalog.SnapshotAttr_TID).GetDownstreamVector()
+
 	table := NewGCTable()
-	for i := 0; i < ins.Length(); i++ {
-		var objectStats objectio.ObjectStats
-		buf := ins.GetVectorByName(catalog.ObjectAttr_ObjectStats).Get(i).([]byte)
-		objectStats.UnMarshal(buf)
-		commitTS := vector.GetFixedAt[types.TS](insCommitTSVec, i)
-		deleteTS := vector.GetFixedAt[types.TS](insDeleteTSVec, i)
-		createTS := vector.GetFixedAt[types.TS](insCreateTSVec, i)
-		object := &ObjectEntry{
-			commitTS: commitTS,
-			createTS: createTS,
-			dropTS:   deleteTS,
-			db:       vector.GetFixedAt[uint64](dbid, i),
-			table:    vector.GetFixedAt[uint64](tid, i),
+	table.UpdateTable(data)
+	checkpoints := ckpClient.ICKPSeekLT(gckp.GetEnd(), 10)
+	for _, ckp := range checkpoints {
+		_, data, err = logtail.LoadCheckpointEntriesFromKey(context.Background(), fs,
+			ckp.GetLocation(), ckp.GetVersion(), nil)
+		if err != nil {
+			return err
 		}
-		table.addObject(objectStats.ObjectName().String(), object, commitTS)
+		table.UpdateTableForSnapshot(data, ckp)
 	}
+
+	gcTable := NewGCTable()
+	gcTable.UpdateTable(data)
+	table.SoftGC(gcTable, gckp.GetEnd(), snapshotList.snapshots)
+
 
 	return nil
 }

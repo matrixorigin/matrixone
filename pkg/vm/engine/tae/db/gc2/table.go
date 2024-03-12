@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"sync"
 
@@ -38,6 +39,7 @@ type ObjectEntry struct {
 	dropTS   types.TS
 	db       uint64
 	table    uint64
+	fileIterm map[string][]uint32
 }
 
 // GCTable is a data structure in memory after consuming checkpoint
@@ -65,6 +67,26 @@ func (t *GCTable) addObject(name string, objEntry *ObjectEntry, commitTS types.T
 	if object.commitTS.Less(commitTS) {
 		t.objects[name].commitTS = commitTS
 	}
+}
+
+func (t *GCTable) addObjectForSnapshot(name string, objEntry *ObjectEntry, commitTS types.TS, ckp string, row uint32) {
+	t.Lock()
+	defer t.Unlock()
+	object := t.objects[name]
+	if object == nil {
+		t.objects[name] = objEntry
+		objEntry.fileIterm = make(map[string][]uint32)
+		objEntry.fileIterm[ckp] = append(objEntry.fileIterm[ckp], row)
+		return
+	}
+	t.objects[name] = objEntry
+	if object.commitTS.Less(commitTS) {
+		t.objects[name].commitTS = commitTS
+	}
+	if t.objects[name].fileIterm == nil {
+		objEntry.fileIterm = make(map[string][]uint32)
+	}
+	objEntry.fileIterm[ckp] = append(objEntry.fileIterm[ckp], row)
 }
 
 func (t *GCTable) deleteObject(name string) {
@@ -144,6 +166,33 @@ func (t *GCTable) UpdateTable(data *logtail.CheckpointData) {
 			table:    vector.GetFixedAt[uint64](tid, i),
 		}
 		t.addObject(objectStats.ObjectName().String(), object, commitTS)
+	}
+}
+
+func (t *GCTable) UpdateTableForSnapshot(data *logtail.CheckpointData, checkpoint *checkpoint.CheckpointEntry) {
+	ins := data.GetObjectBatchs()
+	insCommitTSVec := ins.GetVectorByName(txnbase.SnapshotAttr_CommitTS).GetDownstreamVector()
+	insDeleteTSVec := ins.GetVectorByName(catalog.EntryNode_DeleteAt).GetDownstreamVector()
+	insCreateTSVec := ins.GetVectorByName(catalog.EntryNode_CreateAt).GetDownstreamVector()
+	dbid := ins.GetVectorByName(catalog.SnapshotAttr_DBID).GetDownstreamVector()
+	tid := ins.GetVectorByName(catalog.SnapshotAttr_TID).GetDownstreamVector()
+
+	for i := 0; i < ins.Length(); i++ {
+		var objectStats objectio.ObjectStats
+		buf := ins.GetVectorByName(catalog.ObjectAttr_ObjectStats).Get(i).([]byte)
+		objectStats.UnMarshal(buf)
+		commitTS := vector.GetFixedAt[types.TS](insCommitTSVec, i)
+		deleteTS := vector.GetFixedAt[types.TS](insDeleteTSVec, i)
+		createTS := vector.GetFixedAt[types.TS](insCreateTSVec, i)
+		object := &ObjectEntry{
+			commitTS: commitTS,
+			createTS: createTS,
+			dropTS:   deleteTS,
+			db:       vector.GetFixedAt[uint64](dbid, i),
+			table:    vector.GetFixedAt[uint64](tid, i),
+		}
+		t.addObjectForSnapshot(objectStats.ObjectName().String(), object, commitTS, checkpoint.GetStart().ToString(), uint32(i))
+
 	}
 }
 
