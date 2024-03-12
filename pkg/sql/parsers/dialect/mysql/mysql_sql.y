@@ -964,7 +964,7 @@ kill_stmt:
 	    connectionId = uint64(v)
         default:
 	    yylex.Error("parse integral fail")
-	    return 1
+		goto ret1
         }
 
 	$$ = &tree.Kill{
@@ -1255,7 +1255,7 @@ parallel_opt:
             $$ = false
         } else {
             yylex.Error("error parallel flag")
-            return 1
+            goto ret1
         }
     }
 
@@ -1351,7 +1351,7 @@ system_variable:
            r = vs[0]
         } else {
             yylex.Error("variable syntax error")
-            return 1
+            goto ret1
         }
         $$ = &tree.VarExpr{
             Name: r,
@@ -1371,7 +1371,7 @@ user_variable:
 //           r = vs[0]
 //        } else {
 //            yylex.Error("variable syntax error")
-//            return 1
+//            goto ret1
 //        }
         $$ = &tree.VarExpr{
             Name: $1,
@@ -1495,7 +1495,7 @@ field_item:
         str := $4
         if str != "\\" && len(str) > 1 {
             yylex.Error("error field terminator")
-            return 1
+            goto ret1
         }
         var b byte
         if len(str) != 0 {
@@ -1515,7 +1515,7 @@ field_item:
         str := $3
         if str != "\\" && len(str) > 1 {
             yylex.Error("error field terminator")
-            return 1
+            goto ret1
         }
         var b byte
         if len(str) != 0 {
@@ -1534,7 +1534,7 @@ field_item:
         str := $3
         if str != "\\" && len(str) > 1 {
             yylex.Error("error field terminator")
-            return 1
+            goto ret1
         }
         var b byte
         if len(str) != 0 {
@@ -2195,7 +2195,7 @@ var_assignment:
             r = vs[0]
         } else {
             yylex.Error("variable syntax error")
-            return 1
+            goto ret1
         }
         $$ = &tree.VarAssignmentExpr{
             System: false,
@@ -2218,7 +2218,7 @@ var_assignment:
             r = vs[0]
         } else {
             yylex.Error("variable syntax error")
-            return 1
+            goto ret1
         }
         $$ = &tree.VarAssignmentExpr{
             System: true,
@@ -4236,7 +4236,7 @@ replace_data:
 	{
 		if $2 == nil {
 			yylex.Error("the set list of replace can not be empty")
-			return 1
+			goto ret1
 		}
 		var identList tree.IdentifierList
 		var valueList tree.Exprs
@@ -4311,7 +4311,7 @@ insert_data:
     {
         if $2 == nil {
             yylex.Error("the set list of insert can not be empty")
-            return 1
+            goto ret1
         }
         var identList tree.IdentifierList
         var valueList tree.Exprs
@@ -4497,7 +4497,7 @@ export_fields:
         str := $7
         if str != "\\" && len(str) > 1 {
             yylex.Error("export1 error field terminator")
-            return 1
+            goto ret1
         }
         var b byte
         if len(str) != 0 {
@@ -4519,7 +4519,7 @@ export_fields:
         str := $4
         if str != "\\" && len(str) > 1 {
             yylex.Error("export2 error field terminator")
-            return 1
+            goto ret1
         }
         var b byte
         if len(str) != 0 {
@@ -4567,7 +4567,7 @@ header_opt:
             $$ = false
         } else {
             yylex.Error("error header flag")
-            return 1
+            goto ret1
         }
     }
 
@@ -4660,7 +4660,7 @@ interval:
 		v, errStr := util.GetInt64($5)
         if errStr != "" {
            yylex.Error(errStr)
-           return 1
+           goto ret1
         }
 		$$ = &tree.Interval{
 			Col: $3,
@@ -4679,7 +4679,7 @@ sliding_opt:
         v, errStr := util.GetInt64($3)
         if errStr != "" {
             yylex.Error(errStr)
-            return 1
+            goto ret1
         }
 		$$ = &tree.Sliding{
         	Val: tree.NewNumValWithType(constant.MakeInt64(v), str, false, tree.P_int64),
@@ -5665,11 +5665,11 @@ create_function_stmt:
     {
     	if $13 == "" {
             yylex.Error("no function body error")
-            return 1
+            goto ret1
         }
         if $11 == "python" && $14 == "" {
             yylex.Error("no handler error")
-            return 1
+            goto ret1
         }
 
         var Replace = $2
@@ -6792,7 +6792,7 @@ pause_daemon_task_stmt:
     	    taskID = uint64(v)
         default:
     	    yylex.Error("parse integral fail")
-    	    return 1
+    	    goto ret1
         }
         $$ = &tree.PauseDaemonTask{
             TaskID: taskID,
@@ -6810,7 +6810,7 @@ cancel_daemon_task_stmt:
     	    taskID = uint64(v)
         default:
     	    yylex.Error("parse integral fail")
-    	    return 1
+    	    goto ret1
         }
         $$ = &tree.CancelDaemonTask{
             TaskID: taskID,
@@ -6828,7 +6828,7 @@ resume_daemon_task_stmt:
     	    taskID = uint64(v)
         default:
     	    yylex.Error("parse integral fail")
-    	    return 1
+    	    goto ret1
         }
         $$ = &tree.ResumeDaemonTask{
             TaskID: taskID,
@@ -7437,7 +7437,7 @@ sub_partition_num_opt:
         res := $2.(int64)
         if res == 0 {
             yylex.Error("partitions can not be 0")
-            return 1
+            goto ret1
         }
         $$ = res
     }
@@ -7451,7 +7451,7 @@ partition_num_opt:
         res := $2.(int64)
         if res == 0 {
             yylex.Error("partitions can not be 0")
-            return 1
+            goto ret1
         }
         $$ = res
     }
@@ -8018,7 +8018,7 @@ index_def:
                 keyTyp = tree.INDEX_TYPE_BSI
             default:
                 yylex.Error("Invalid the type of index")
-                return 1
+                goto ret1
             }
         }
 
@@ -8057,7 +8057,7 @@ index_def:
 		keyTyp = tree.INDEX_TYPE_BSI
             default:
                 yylex.Error("Invalid type of index")
-                return 1
+                goto ret1
             }
         }
         var IfNotExists = $2
@@ -8771,7 +8771,7 @@ sample_function_expr:
 	val, err := tree.NewSampleRowsFuncExpression(v, true, nil, "block")
 	if err != nil {
 	    yylex.Error(err.Error())
-	    return 1
+	    goto ret1
 	}
 	$$ = val
     }
@@ -8781,7 +8781,7 @@ sample_function_expr:
     	val, err := tree.NewSampleRowsFuncExpression(v, true, nil, $8)
     	if err != nil {
     	    yylex.Error(err.Error())
-    	    return 1
+    	    goto ret1
     	}
     	$$ = val
         }
@@ -8790,7 +8790,7 @@ sample_function_expr:
 	val, err := tree.NewSamplePercentFuncExpression1($5.(int64), true, nil)
 	if err != nil {
 	    yylex.Error(err.Error())
-	    return 1
+	    goto ret1
 	}
 	$$ = val
     }
@@ -8799,7 +8799,7 @@ sample_function_expr:
 	val, err := tree.NewSamplePercentFuncExpression2($5.(float64), true, nil)
 	if err != nil {
 	    yylex.Error(err.Error())
-	    return 1
+	    goto ret1
 	}
 	$$ = val
     }
@@ -8810,7 +8810,7 @@ sample_function_expr:
     	val, err := tree.NewSampleRowsFuncExpression(v, false, $3, "block")
     	if err != nil {
     	    yylex.Error(err.Error())
-    	    return 1
+    	    goto ret1
     	}
     	$$ = val
     }
@@ -8820,7 +8820,7 @@ sample_function_expr:
 	val, err := tree.NewSampleRowsFuncExpression(v, false, $3, $8)
 	if err != nil {
 	    yylex.Error(err.Error())
-	    return 1
+	    goto ret1
 	}
 	$$ = val
     }
@@ -8829,7 +8829,7 @@ sample_function_expr:
         val, err := tree.NewSamplePercentFuncExpression1($5.(int64), false, $3)
         if err != nil {
             yylex.Error(err.Error())
-            return 1
+            goto ret1
         }
         $$ = val
     }
@@ -8838,7 +8838,7 @@ sample_function_expr:
         val, err := tree.NewSamplePercentFuncExpression2($5.(float64), false, $3)
         if err != nil {
             yylex.Error(err.Error())
-            return 1
+            goto ret1
         }
         $$ = val
     }
@@ -9780,7 +9780,7 @@ datetime_scale:
         ival, errStr := util.GetInt64($2)
         if errStr != "" {
             yylex.Error(errStr)
-            return 1
+            goto ret1
         }
         str := fmt.Sprintf("%v", $2)
         $$ = tree.NewNumValWithType(constant.MakeInt64(ival), str, false, tree.P_int64)
@@ -10116,7 +10116,7 @@ num_literal:
             $$ = tree.NewNumValWithType(constant.MakeInt64(v), str, false, tree.P_int64)
         default:
             yylex.Error("parse integral fail")
-            return 1
+            goto ret1
         }
     }
 |   FLOAT
@@ -10144,7 +10144,7 @@ literal:
             $$ = tree.NewNumValWithType(constant.MakeInt64(v), str, false, tree.P_int64)
         default:
             yylex.Error("parse integral fail")
-            return 1
+            goto ret1
         }
     }
 |   FLOAT
@@ -10402,15 +10402,15 @@ decimal_type:
         locale := ""
         if $2.DisplayWith > 255 {
             yylex.Error("Display width for double out of range (max = 255)")
-            return 1
+            goto ret1
         }
         if $2.Scale > 30 {
             yylex.Error("Display scale for double out of range (max = 30)")
-            return 1
+            goto ret1
         }
         if $2.Scale != tree.NotDefineDec && $2.Scale > $2.DisplayWith {
             yylex.Error("For float(M,D), double(M,D) or decimal(M,D), M must be >= D (column 'a'))")
-                return 1
+                goto ret1
         }
         $$ = &tree.T{
             InternalType: tree.InternalType{
@@ -10429,15 +10429,15 @@ decimal_type:
         locale := ""
         if $2.DisplayWith > 255 {
             yylex.Error("Display width for float out of range (max = 255)")
-            return 1
+            goto ret1
         }
         if $2.Scale > 30 {
             yylex.Error("Display scale for float out of range (max = 30)")
-            return 1
+            goto ret1
         }
         if $2.Scale != tree.NotDefineDec && $2.Scale > $2.DisplayWith {
         	yylex.Error("For float(M,D), double(M,D) or decimal(M,D), M must be >= D (column 'a'))")
-        	return 1
+        	goto ret1
         }
         if $2.DisplayWith >= 24 {
             $$ = &tree.T{
@@ -10471,11 +10471,11 @@ decimal_type:
         locale := ""
         if $2.Scale != tree.NotDefineDec && $2.Scale > $2.DisplayWith {
         yylex.Error("For float(M,D), double(M,D) or decimal(M,D), M must be >= D (column 'a'))")
-        return 1
+        goto ret1
         }
         if $2.DisplayWith > 38 || $2.DisplayWith < 0 {
             yylex.Error("For decimal(M), M must between 0 and 38.")
-                return 1
+                goto ret1
         } else if $2.DisplayWith <= 16 {
             $$ = &tree.T{
             InternalType: tree.InternalType{
@@ -10507,11 +10507,11 @@ decimal_type:
         locale := ""
         if $2.Scale != tree.NotDefineDec && $2.Scale > $2.DisplayWith {
         yylex.Error("For float(M,D), double(M,D) or decimal(M,D), M must be >= D (column 'a'))")
-        return 1
+        goto ret1
         }
         if $2.DisplayWith > 38 || $2.DisplayWith < 0 {
             yylex.Error("For decimal(M), M must between 0 and 38.")
-                return 1
+                goto ret1
         } else if $2.DisplayWith <= 16 {
             $$ = &tree.T{
             InternalType: tree.InternalType{
@@ -10572,7 +10572,7 @@ time_type:
         locale := ""
         if $2 < 0 || $2 > 6 {
             yylex.Error("For Time(fsp), fsp must in [0, 6]")
-            return 1
+            goto ret1
         } else {
             $$ = &tree.T{
                 InternalType: tree.InternalType{
@@ -10592,7 +10592,7 @@ time_type:
         locale := ""
         if $2 < 0 || $2 > 6 {
             yylex.Error("For Timestamp(fsp), fsp must in [0, 6]")
-            return 1
+            goto ret1
         } else {
             $$ = &tree.T{
                 InternalType: tree.InternalType{
@@ -10612,7 +10612,7 @@ time_type:
         locale := ""
         if $2 < 0 || $2 > 6 {
             yylex.Error("For Datetime(fsp), fsp must in [0, 6]")
-            return 1
+            goto ret1
         } else {
             $$ = &tree.T{
                 InternalType: tree.InternalType{

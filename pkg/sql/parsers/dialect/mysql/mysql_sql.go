@@ -9578,7 +9578,7 @@ yydefault:
 				connectionId = uint64(v)
 			default:
 				yylex.Error("parse integral fail")
-				return 1
+				goto ret1
 			}
 
 			yyLOCAL = &tree.Kill{
@@ -9972,7 +9972,7 @@ yydefault:
 				yyLOCAL = false
 			} else {
 				yylex.Error("error parallel flag")
-				return 1
+				goto ret1
 			}
 		}
 		yyVAL.union = yyLOCAL
@@ -10115,7 +10115,7 @@ yydefault:
 				r = vs[0]
 			} else {
 				yylex.Error("variable syntax error")
-				return 1
+				goto ret1
 			}
 			yyLOCAL = &tree.VarExpr{
 				Name:   r,
@@ -10137,7 +10137,7 @@ yydefault:
 			//           r = vs[0]
 			//        } else {
 			//            yylex.Error("variable syntax error")
-			//            return 1
+			//            goto ret1
 			//        }
 			yyLOCAL = &tree.VarExpr{
 				Name:   yyDollar[1].str,
@@ -10302,7 +10302,7 @@ yydefault:
 			str := yyDollar[4].str
 			if str != "\\" && len(str) > 1 {
 				yylex.Error("error field terminator")
-				return 1
+				goto ret1
 			}
 			var b byte
 			if len(str) != 0 {
@@ -10326,7 +10326,7 @@ yydefault:
 			str := yyDollar[3].str
 			if str != "\\" && len(str) > 1 {
 				yylex.Error("error field terminator")
-				return 1
+				goto ret1
 			}
 			var b byte
 			if len(str) != 0 {
@@ -10349,7 +10349,7 @@ yydefault:
 			str := yyDollar[3].str
 			if str != "\\" && len(str) > 1 {
 				yylex.Error("error field terminator")
-				return 1
+				goto ret1
 			}
 			var b byte
 			if len(str) != 0 {
@@ -11366,7 +11366,7 @@ yydefault:
 				r = vs[0]
 			} else {
 				yylex.Error("variable syntax error")
-				return 1
+				goto ret1
 			}
 			yyLOCAL = &tree.VarAssignmentExpr{
 				System: false,
@@ -11393,7 +11393,7 @@ yydefault:
 				r = vs[0]
 			} else {
 				yylex.Error("variable syntax error")
-				return 1
+				goto ret1
 			}
 			yyLOCAL = &tree.VarAssignmentExpr{
 				System: true,
@@ -14095,7 +14095,7 @@ yydefault:
 		{
 			if yyDollar[2].assignmentsUnion() == nil {
 				yylex.Error("the set list of replace can not be empty")
-				return 1
+				goto ret1
 			}
 			var identList tree.IdentifierList
 			var valueList tree.Exprs
@@ -14200,7 +14200,7 @@ yydefault:
 		{
 			if yyDollar[2].assignmentsUnion() == nil {
 				yylex.Error("the set list of insert can not be empty")
-				return 1
+				goto ret1
 			}
 			var identList tree.IdentifierList
 			var valueList tree.Exprs
@@ -14473,7 +14473,7 @@ yydefault:
 			str := yyDollar[7].str
 			if str != "\\" && len(str) > 1 {
 				yylex.Error("export1 error field terminator")
-				return 1
+				goto ret1
 			}
 			var b byte
 			if len(str) != 0 {
@@ -14499,7 +14499,7 @@ yydefault:
 			str := yyDollar[4].str
 			if str != "\\" && len(str) > 1 {
 				yylex.Error("export2 error field terminator")
-				return 1
+				goto ret1
 			}
 			var b byte
 			if len(str) != 0 {
@@ -14561,7 +14561,7 @@ yydefault:
 				yyLOCAL = false
 			} else {
 				yylex.Error("error header flag")
-				return 1
+				goto ret1
 			}
 		}
 		yyVAL.union = yyLOCAL
@@ -14707,7 +14707,7 @@ yydefault:
 			v, errStr := util.GetInt64(yyDollar[5].item)
 			if errStr != "" {
 				yylex.Error(errStr)
-				return 1
+				goto ret1
 			}
 			yyLOCAL = &tree.Interval{
 				Col:  yyDollar[3].unresolvedNameUnion(),
@@ -14733,7 +14733,7 @@ yydefault:
 			v, errStr := util.GetInt64(yyDollar[3].item)
 			if errStr != "" {
 				yylex.Error(errStr)
-				return 1
+				goto ret1
 			}
 			yyLOCAL = &tree.Sliding{
 				Val:  tree.NewNumValWithType(constant.MakeInt64(v), str, false, tree.P_int64),
@@ -16137,11 +16137,11 @@ yydefault:
 		{
 			if yyDollar[13].str == "" {
 				yylex.Error("no function body error")
-				return 1
+				goto ret1
 			}
 			if yyDollar[11].str == "python" && yyDollar[14].str == "" {
 				yylex.Error("no handler error")
-				return 1
+				goto ret1
 			}
 
 			var Replace = yyDollar[2].sourceOptionalUnion()
@@ -17534,7 +17534,7 @@ yydefault:
 				taskID = uint64(v)
 			default:
 				yylex.Error("parse integral fail")
-				return 1
+				goto ret1
 			}
 			yyLOCAL = &tree.PauseDaemonTask{
 				TaskID: taskID,
@@ -17554,7 +17554,7 @@ yydefault:
 				taskID = uint64(v)
 			default:
 				yylex.Error("parse integral fail")
-				return 1
+				goto ret1
 			}
 			yyLOCAL = &tree.CancelDaemonTask{
 				TaskID: taskID,
@@ -17574,7 +17574,7 @@ yydefault:
 				taskID = uint64(v)
 			default:
 				yylex.Error("parse integral fail")
-				return 1
+				goto ret1
 			}
 			yyLOCAL = &tree.ResumeDaemonTask{
 				TaskID: taskID,
@@ -18479,7 +18479,7 @@ yydefault:
 			res := yyDollar[2].item.(int64)
 			if res == 0 {
 				yylex.Error("partitions can not be 0")
-				return 1
+				goto ret1
 			}
 			yyLOCAL = res
 		}
@@ -18500,7 +18500,7 @@ yydefault:
 			res := yyDollar[2].item.(int64)
 			if res == 0 {
 				yylex.Error("partitions can not be 0")
-				return 1
+				goto ret1
 			}
 			yyLOCAL = res
 		}
@@ -19365,7 +19365,7 @@ yydefault:
 					keyTyp = tree.INDEX_TYPE_BSI
 				default:
 					yylex.Error("Invalid the type of index")
-					return 1
+					goto ret1
 				}
 			}
 
@@ -19408,7 +19408,7 @@ yydefault:
 					keyTyp = tree.INDEX_TYPE_BSI
 				default:
 					yylex.Error("Invalid type of index")
-					return 1
+					goto ret1
 				}
 			}
 			var IfNotExists = yyDollar[2].ifNotExistsUnion()
@@ -20512,7 +20512,7 @@ yydefault:
 			val, err := tree.NewSampleRowsFuncExpression(v, true, nil, "block")
 			if err != nil {
 				yylex.Error(err.Error())
-				return 1
+				goto ret1
 			}
 			yyLOCAL = val
 		}
@@ -20526,7 +20526,7 @@ yydefault:
 			val, err := tree.NewSampleRowsFuncExpression(v, true, nil, yyDollar[8].str)
 			if err != nil {
 				yylex.Error(err.Error())
-				return 1
+				goto ret1
 			}
 			yyLOCAL = val
 		}
@@ -20539,7 +20539,7 @@ yydefault:
 			val, err := tree.NewSamplePercentFuncExpression1(yyDollar[5].item.(int64), true, nil)
 			if err != nil {
 				yylex.Error(err.Error())
-				return 1
+				goto ret1
 			}
 			yyLOCAL = val
 		}
@@ -20552,7 +20552,7 @@ yydefault:
 			val, err := tree.NewSamplePercentFuncExpression2(yyDollar[5].item.(float64), true, nil)
 			if err != nil {
 				yylex.Error(err.Error())
-				return 1
+				goto ret1
 			}
 			yyLOCAL = val
 		}
@@ -20566,7 +20566,7 @@ yydefault:
 			val, err := tree.NewSampleRowsFuncExpression(v, false, yyDollar[3].exprsUnion(), "block")
 			if err != nil {
 				yylex.Error(err.Error())
-				return 1
+				goto ret1
 			}
 			yyLOCAL = val
 		}
@@ -20580,7 +20580,7 @@ yydefault:
 			val, err := tree.NewSampleRowsFuncExpression(v, false, yyDollar[3].exprsUnion(), yyDollar[8].str)
 			if err != nil {
 				yylex.Error(err.Error())
-				return 1
+				goto ret1
 			}
 			yyLOCAL = val
 		}
@@ -20593,7 +20593,7 @@ yydefault:
 			val, err := tree.NewSamplePercentFuncExpression1(yyDollar[5].item.(int64), false, yyDollar[3].exprsUnion())
 			if err != nil {
 				yylex.Error(err.Error())
-				return 1
+				goto ret1
 			}
 			yyLOCAL = val
 		}
@@ -20606,7 +20606,7 @@ yydefault:
 			val, err := tree.NewSamplePercentFuncExpression2(yyDollar[5].item.(float64), false, yyDollar[3].exprsUnion())
 			if err != nil {
 				yylex.Error(err.Error())
-				return 1
+				goto ret1
 			}
 			yyLOCAL = val
 		}
@@ -21845,7 +21845,7 @@ yydefault:
 			ival, errStr := util.GetInt64(yyDollar[2].item)
 			if errStr != "" {
 				yylex.Error(errStr)
-				return 1
+				goto ret1
 			}
 			str := fmt.Sprintf("%v", yyDollar[2].item)
 			yyLOCAL = tree.NewNumValWithType(constant.MakeInt64(ival), str, false, tree.P_int64)
@@ -22341,7 +22341,7 @@ yydefault:
 				yyLOCAL = tree.NewNumValWithType(constant.MakeInt64(v), str, false, tree.P_int64)
 			default:
 				yylex.Error("parse integral fail")
-				return 1
+				goto ret1
 			}
 		}
 		yyVAL.union = yyLOCAL
@@ -22383,7 +22383,7 @@ yydefault:
 				yyLOCAL = tree.NewNumValWithType(constant.MakeInt64(v), str, false, tree.P_int64)
 			default:
 				yylex.Error("parse integral fail")
-				return 1
+				goto ret1
 			}
 		}
 		yyVAL.union = yyLOCAL
@@ -22741,15 +22741,15 @@ yydefault:
 			locale := ""
 			if yyDollar[2].lengthScaleOptUnion().DisplayWith > 255 {
 				yylex.Error("Display width for double out of range (max = 255)")
-				return 1
+				goto ret1
 			}
 			if yyDollar[2].lengthScaleOptUnion().Scale > 30 {
 				yylex.Error("Display scale for double out of range (max = 30)")
-				return 1
+				goto ret1
 			}
 			if yyDollar[2].lengthScaleOptUnion().Scale != tree.NotDefineDec && yyDollar[2].lengthScaleOptUnion().Scale > yyDollar[2].lengthScaleOptUnion().DisplayWith {
 				yylex.Error("For float(M,D), double(M,D) or decimal(M,D), M must be >= D (column 'a'))")
-				return 1
+				goto ret1
 			}
 			yyLOCAL = &tree.T{
 				InternalType: tree.InternalType{
@@ -22772,15 +22772,15 @@ yydefault:
 			locale := ""
 			if yyDollar[2].lengthScaleOptUnion().DisplayWith > 255 {
 				yylex.Error("Display width for float out of range (max = 255)")
-				return 1
+				goto ret1
 			}
 			if yyDollar[2].lengthScaleOptUnion().Scale > 30 {
 				yylex.Error("Display scale for float out of range (max = 30)")
-				return 1
+				goto ret1
 			}
 			if yyDollar[2].lengthScaleOptUnion().Scale != tree.NotDefineDec && yyDollar[2].lengthScaleOptUnion().Scale > yyDollar[2].lengthScaleOptUnion().DisplayWith {
 				yylex.Error("For float(M,D), double(M,D) or decimal(M,D), M must be >= D (column 'a'))")
-				return 1
+				goto ret1
 			}
 			if yyDollar[2].lengthScaleOptUnion().DisplayWith >= 24 {
 				yyLOCAL = &tree.T{
@@ -22817,11 +22817,11 @@ yydefault:
 			locale := ""
 			if yyDollar[2].lengthScaleOptUnion().Scale != tree.NotDefineDec && yyDollar[2].lengthScaleOptUnion().Scale > yyDollar[2].lengthScaleOptUnion().DisplayWith {
 				yylex.Error("For float(M,D), double(M,D) or decimal(M,D), M must be >= D (column 'a'))")
-				return 1
+				goto ret1
 			}
 			if yyDollar[2].lengthScaleOptUnion().DisplayWith > 38 || yyDollar[2].lengthScaleOptUnion().DisplayWith < 0 {
 				yylex.Error("For decimal(M), M must between 0 and 38.")
-				return 1
+				goto ret1
 			} else if yyDollar[2].lengthScaleOptUnion().DisplayWith <= 16 {
 				yyLOCAL = &tree.T{
 					InternalType: tree.InternalType{
@@ -22857,11 +22857,11 @@ yydefault:
 			locale := ""
 			if yyDollar[2].lengthScaleOptUnion().Scale != tree.NotDefineDec && yyDollar[2].lengthScaleOptUnion().Scale > yyDollar[2].lengthScaleOptUnion().DisplayWith {
 				yylex.Error("For float(M,D), double(M,D) or decimal(M,D), M must be >= D (column 'a'))")
-				return 1
+				goto ret1
 			}
 			if yyDollar[2].lengthScaleOptUnion().DisplayWith > 38 || yyDollar[2].lengthScaleOptUnion().DisplayWith < 0 {
 				yylex.Error("For decimal(M), M must between 0 and 38.")
-				return 1
+				goto ret1
 			} else if yyDollar[2].lengthScaleOptUnion().DisplayWith <= 16 {
 				yyLOCAL = &tree.T{
 					InternalType: tree.InternalType{
@@ -22932,7 +22932,7 @@ yydefault:
 			locale := ""
 			if yyDollar[2].lengthOptUnion() < 0 || yyDollar[2].lengthOptUnion() > 6 {
 				yylex.Error("For Time(fsp), fsp must in [0, 6]")
-				return 1
+				goto ret1
 			} else {
 				yyLOCAL = &tree.T{
 					InternalType: tree.InternalType{
@@ -22956,7 +22956,7 @@ yydefault:
 			locale := ""
 			if yyDollar[2].lengthOptUnion() < 0 || yyDollar[2].lengthOptUnion() > 6 {
 				yylex.Error("For Timestamp(fsp), fsp must in [0, 6]")
-				return 1
+				goto ret1
 			} else {
 				yyLOCAL = &tree.T{
 					InternalType: tree.InternalType{
@@ -22980,7 +22980,7 @@ yydefault:
 			locale := ""
 			if yyDollar[2].lengthOptUnion() < 0 || yyDollar[2].lengthOptUnion() > 6 {
 				yylex.Error("For Datetime(fsp), fsp must in [0, 6]")
-				return 1
+				goto ret1
 			} else {
 				yyLOCAL = &tree.T{
 					InternalType: tree.InternalType{
