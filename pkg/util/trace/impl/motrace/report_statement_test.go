@@ -25,7 +25,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/prashantv/gostub"
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -186,7 +185,7 @@ var dummyNoExecPlanJsonResult = `{"code":200,"message":"no exec plan"}`
 var dummyNoExecPlanJsonResult2 = `{"func":"dummy2","code":200,"message":"no exec plan"}`
 
 var dummyStatsArray = *statistic.NewStatsArray().WithTimeConsumed(1).WithMemorySize(2).WithS3IOInputCount(3).WithS3IOOutputCount(4).
-	WithOutTrafficBytes(5)
+	WithOutTrafficBytes(5).WithCU(44.0161)
 
 var dummySerializeExecPlan = func(_ context.Context, plan any, _ uuid.UUID) ([]byte, statistic.StatsArray, Statistic) {
 	if plan == nil {
@@ -274,11 +273,13 @@ func TestStatementInfo_ExecPlan2Json(t *testing.T) {
 			}
 			s.SetSerializableExecPlan(p)
 			got := s.ExecPlan2Json(ctx)
-			stats := s.ExecPlan2Stats(ctx)
-			assert.Equalf(t, tt.want, util.UnsafeBytesToString(got), "ExecPlan2Json()")
-			assert.Equalf(t, tt.wantStatsByte, stats, "stats")
+			err := s.ExecPlan2Stats(ctx)
+			require.Nil(t, err)
+			stats := s.GetStatsArrayBytes()
+			require.Equal(t, tt.want, util.UnsafeBytesToString(got), "ExecPlan2Json()")
+			require.Equal(t, tt.wantStatsByte, stats, "want, got: %s, %s", tt.wantStatsByte, stats)
 			mapper := new(map[string]any)
-			err := json.Unmarshal([]byte(got), mapper)
+			err = json.Unmarshal([]byte(got), mapper)
 			require.Nil(t, err, "jons.Unmarshal failed")
 		})
 	}
@@ -321,18 +322,18 @@ func TestMergeStats(t *testing.T) {
 		t.Fatalf("mergeStats failed: %v", err)
 	}
 
-	wantBytes := []byte("[4,228295,3600.000,1,0,0,1,3]")
+	wantBytes := []byte("[4,228295,3600.000,1,0,0,1,3,0]")
 	require.Equal(t, wantBytes, e.statsArray.ToJsonString())
 
 	n = &StatementInfo{}
-	n.statsArray.Init().WithTimeConsumed(1).WithMemorySize(1).WithS3IOInputCount(0).WithS3IOOutputCount(0).WithOutPacketCount(10)
+	n.statsArray.Init().WithTimeConsumed(1).WithMemorySize(1).WithS3IOInputCount(0).WithS3IOOutputCount(0).WithOutPacketCount(10).WithCU(1.1234)
 
 	err = mergeStats(e, n)
 	if err != nil {
 		t.Fatalf("mergeStats failed: %v", err)
 	}
 
-	wantBytes = []byte("[4,228296,3601.000,1,0,0,1,13]")
+	wantBytes = []byte("[4,228296,3601.000,1,0,0,1,13,1.1234]")
 	require.Equal(t, wantBytes, e.statsArray.ToJsonString())
 
 }
