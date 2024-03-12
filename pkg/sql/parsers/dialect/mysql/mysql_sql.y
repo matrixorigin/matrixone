@@ -8321,9 +8321,10 @@ simple_expr:
     {
         $$ = tree.NewUnaryExpr(tree.UNARY_MARK, $2)
     }
-|   '{'  STRING expression '}'
+|   '{'  ident expression '}'
     {   
-        switch $2 {
+        hint := strings.ToLower($2.Compare())
+        switch hint {
 		case "d":
             locale := ""
             t := &tree.T{
