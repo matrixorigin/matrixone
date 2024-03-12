@@ -72,9 +72,9 @@ func (builder *QueryBuilder) applyIndicesForFiltersUsingMasterIndex(nodeID int32
 		prevIndexPkCol = DeepCopyExpr(currIndexPkCol)
 		prevLastNodeId = lastNodeId
 	}
-	lastNode := builder.qry.Nodes[lastNodeId]
-	lastNode.Limit = DeepCopyExpr(scanNode.Limit)
-	lastNode.Offset = DeepCopyExpr(scanNode.Offset)
+	lastNodeFromIndexTbl := builder.qry.Nodes[lastNodeId]
+	lastNodeFromIndexTbl.Limit = DeepCopyExpr(scanNode.Limit)
+	lastNodeFromIndexTbl.Offset = DeepCopyExpr(scanNode.Offset)
 	scanNode.Limit, scanNode.Offset = nil, nil
 
 	// 3. SELECT * from tbl INNER JOIN (
@@ -108,6 +108,8 @@ func (builder *QueryBuilder) applyIndicesForFiltersUsingMasterIndex(nodeID int32
 		JoinType: plan.Node_INNER,
 		Children: []int32{scanNode.NodeId, lastNodeId},
 		OnList:   []*Expr{wherePkEqPk},
+		Limit:    DeepCopyExpr(lastNodeFromIndexTbl.Limit),
+		Offset:   DeepCopyExpr(lastNodeFromIndexTbl.Offset),
 	}, builder.ctxByNode[nodeID])
 
 	return lastNodeId
