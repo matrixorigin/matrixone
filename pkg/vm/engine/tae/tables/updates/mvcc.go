@@ -334,9 +334,11 @@ func (n *MVCCHandle) CollectAppendLocked(
 	aborts *nulls.Bitmap,
 ) {
 	startOffset, node := n.appends.GetNodeToReadByPrepareTS(start)
-	prepareTS := node.GetPrepare()
-	if node != nil && prepareTS.Less(&start) {
-		startOffset++
+	if node != nil {
+		prepareTS := node.GetPrepare()
+		if prepareTS.Less(&start) {
+			startOffset++
+		}
 	}
 	endOffset, node := n.appends.GetNodeToReadByPrepareTS(end)
 	if node == nil || startOffset > endOffset {
