@@ -9,7 +9,7 @@ SQL parser error: You have an error in your SQL syntax; check the manual that co
 show accounts;
 account_name    admin_name    created    status    suspended_time    db_count    table_count    size    comment
 tenant_test    root    2023-11-12 12:43:41    open    null    5    56    0.0    tenant_test
-sys    root    2023-11-12 03:33:41    open    null    7    84    13.256612    system account
+sys    root    2023-11-12 03:33:41    open    null    7    72    13.256612    system account
 drop account if exists tenant_test;
 select account_id,relname,relkind from mo_catalog.mo_tables where reldatabase = 'mo_catalog' and relname not like '__mo_index_unique__%' order by relname;
 account_id    relname    relkind
