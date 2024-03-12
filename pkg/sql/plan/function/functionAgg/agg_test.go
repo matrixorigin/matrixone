@@ -20,6 +20,7 @@ import (
 	"math"
 	"testing"
 
+	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/assertx"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -788,7 +789,7 @@ func TestBitmapOr(t *testing.T) {
 	require.NoError(t, testUnaryAggSupported(NewAggBitmapConstruct, AggBitmapConstructSupportedParameters, AggBitmapConstructReturnType))
 	s1 := &sAggBitmapConstruct{}
 	{
-		tr := &simpleAggTester[uint64, []byte]{
+		tr := &simpleAggTester[uint64, *roaring.Bitmap]{
 			source: s1,
 			grow:   s1.Grows,
 			free:   s1.Free,
@@ -796,11 +797,10 @@ func TestBitmapOr(t *testing.T) {
 			merge:  s1.Merge,
 			eval:   s1.Eval,
 		}
-		// 1 << 1 || 1<< 3 || 1 << 6 || 1 << 9 = 01001010 00000010 = 4B 02
 		nsp := nulls.NewWithSize(5)
 		nsp.Add(3)
-		err := tr.testUnaryAgg([]uint64{1, 3, 6, 0, 9}, nsp, func(result []byte, isEmpty bool) bool {
-			return !isEmpty && len(result) == BitmapMaxWidth>>3 && result[0] == 74 && result[1] == 2
+		err := tr.testUnaryAgg([]uint64{1, 3, 6, 0, 9}, nsp, func(result *roaring.Bitmap, isEmpty bool) bool {
+			return !isEmpty && result.GetCardinality() == 4 && result.String() == "{1,3,6,9}"
 		})
 		require.NoError(t, err)
 	}
@@ -808,7 +808,7 @@ func TestBitmapOr(t *testing.T) {
 	require.NoError(t, testUnaryAggSupported(NewAggBitmapOr, AggBitmapOrSupportedParameters, AggBitmapOrReturnType))
 	s2 := &sAggBitmapOr{}
 	{
-		tr := &simpleAggTester[[]byte, []byte]{
+		tr := &simpleAggTester[[]byte, *roaring.Bitmap]{
 			source: s2,
 			grow:   s2.Grows,
 			free:   s2.Free,
@@ -817,20 +817,19 @@ func TestBitmapOr(t *testing.T) {
 			eval:   s2.Eval,
 		}
 
-		genBytes := func(x int) []byte {
-			bytes := make([]byte, BitmapMaxWidth>>3)
-			for i := 0; x > 0; i++ {
-				bytes[i] = byte(x & 0xff)
-				x >>= 8
+		genBytes := func(vals []int) []byte {
+			bmp := roaring.New()
+			for _, val := range vals {
+				bmp.Add(uint32(val))
 			}
+			bytes, _ := bmp.MarshalBinary()
 			return bytes
 		}
-		// 0x7b || 0x1c8 || 0x315 = 0x3ff
-		bytes0 := genBytes(123)
-		bytes1 := genBytes(456)
-		bytes2 := genBytes(789)
-		err := tr.testUnaryAgg([][]byte{bytes0, bytes1, bytes2}, nil, func(result []byte, isEmpty bool) bool {
-			return !isEmpty && result[0] == byte(0xff) && result[1] == byte(0x3)
+		bytes0 := genBytes([]int{1, 3, 5, 7, 9})
+		bytes1 := genBytes([]int{0, 2, 4, 6, 8})
+		bytes2 := genBytes([]int{2, 3, 5, 7, 11})
+		err := tr.testUnaryAgg([][]byte{bytes0, bytes1, bytes2}, nil, func(result *roaring.Bitmap, isEmpty bool) bool {
+			return !isEmpty && result.GetCardinality() == 11 && result.String() == "{0,1,2,3,4,5,6,7,8,9,11}"
 		})
 		require.NoError(t, err)
 	}

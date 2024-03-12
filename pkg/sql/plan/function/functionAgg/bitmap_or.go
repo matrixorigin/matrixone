@@ -21,8 +21,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
 )
 
-const BitmapMaxWidth = 1 << 15
-
 var (
 	AggBitmapConstructSupportedParameters = []types.T{
 		types.T_uint64,
