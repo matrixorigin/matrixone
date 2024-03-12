@@ -99,14 +99,14 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 					continue
 				}
 				ap.bat = bat
-				ap.lastrow = 0
+				ap.lastpos = 0
 			}
 
 			if err := ctr.probe(ap, proc, anal, arg.GetIsFirst(), arg.GetIsLast(), &result); err != nil {
 				proc.PutBatch(ap.bat)
 				return result, err
 			}
-			if ap.lastrow == 0 && ap.count == 0 && ap.sel == 0 {
+			if ap.lastpos == 0 && ap.count == 0 && ap.sel == 0 {
 				proc.PutBatch(ap.bat)
 				ap.bat = nil
 			}
@@ -193,12 +193,13 @@ func (ctr *container) probe(ap *Argument, proc *process.Process, anal process.An
 	count := ap.bat.RowCount()
 	itr := ctr.mp.NewIterator()
 	rowCount := 0
-	for i := ap.lastrow; i < count; i += hashmap.UnitLimit {
+	for i := ap.lastpos; i < count; i += hashmap.UnitLimit {
 		if rowCount >= colexec.DefaultBatchSize {
 			ctr.rbat.AddRowCount(rowCount)
 			anal.Output(ctr.rbat, isLast)
 			result.Batch = ctr.rbat
-			ap.lastrow = i
+			ap.lastpos = i
+			ap.count = 0
 			return nil
 		}
 		n := count - i
@@ -209,7 +210,7 @@ func (ctr *container) probe(ap *Argument, proc *process.Process, anal process.An
 
 		vals, zvals := itr.Find(i, n, ctr.vecs, ctr.inBuckets)
 		k := 0
-		if i == ap.lastrow {
+		if i == ap.lastpos {
 			k = ap.count
 		}
 		for ; k < n; k++ {
@@ -220,7 +221,7 @@ func (ctr *container) probe(ap *Argument, proc *process.Process, anal process.An
 				ctr.rbat.AddRowCount(rowCount)
 				anal.Output(ctr.rbat, isLast)
 				result.Batch = ctr.rbat
-				ap.lastrow = i
+				ap.lastpos = i
 				ap.count = k
 				return nil
 			}
@@ -243,9 +244,10 @@ func (ctr *container) probe(ap *Argument, proc *process.Process, anal process.An
 					rowCount++
 				} else {
 					sels := mSels[idx][ap.sel:]
-					if len(sels) >= 8192 {
+					lensels := len(sels)
+					if lensels > 8192 {
 						sels = sels[:8192]
-						ap.lastrow = i
+						ap.lastpos = i
 						ap.count = k
 						ap.sel += 8192
 					} else {
@@ -266,7 +268,7 @@ func (ctr *container) probe(ap *Argument, proc *process.Process, anal process.An
 						}
 					}
 					rowCount += len(sels)
-					if len(sels) >= 8192 {
+					if lensels > 8192 {
 						ctr.rbat.AddRowCount(rowCount)
 						anal.Output(ctr.rbat, isLast)
 						result.Batch = ctr.rbat
@@ -280,10 +282,11 @@ func (ctr *container) probe(ap *Argument, proc *process.Process, anal process.An
 					}
 					rowCount++
 				} else {
-					sels := mSels[idx]
-					if len(sels) >= 8192 {
+					sels := mSels[idx][ap.sel:]
+					lensels := len(sels)
+					if lensels > 8192 {
 						sels = sels[:8192]
-						ap.lastrow = i
+						ap.lastpos = i
 						ap.count = k
 						ap.sel += 8192
 					} else {
@@ -295,7 +298,7 @@ func (ctr *container) probe(ap *Argument, proc *process.Process, anal process.An
 						}
 					}
 					rowCount += len(sels)
-					if len(sels) >= 8192 {
+					if lensels > 8192 {
 						ctr.rbat.AddRowCount(rowCount)
 						anal.Output(ctr.rbat, isLast)
 						result.Batch = ctr.rbat
@@ -309,7 +312,7 @@ func (ctr *container) probe(ap *Argument, proc *process.Process, anal process.An
 	ctr.rbat.AddRowCount(rowCount)
 	anal.Output(ctr.rbat, isLast)
 	result.Batch = ctr.rbat
-	ap.lastrow = 0
+	ap.lastpos = 0
 	ap.count = 0
 	ap.sel = 0
 	return nil
