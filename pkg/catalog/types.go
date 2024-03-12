@@ -131,6 +131,7 @@ const (
 
 	MO_SYSTEM_METRICS = "system_metrics"
 	MO_METRIC         = "metric"
+	MO_SQL_STMT_CU    = "sql_statement_cu"
 
 	// default database name for catalog
 	MO_CATALOG  = "mo_catalog"
