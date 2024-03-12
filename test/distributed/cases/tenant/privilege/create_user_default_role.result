@@ -37,6 +37,7 @@ mo_pubs
 mo_stored_procedure
 mo_stages
 mo_sessions
+mo_snapshots
 mo_configurations
 mo_locks
 mo_variables
