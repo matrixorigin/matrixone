@@ -39,7 +39,7 @@ func (builder *QueryBuilder) applyIndicesForFiltersUsingMasterIndex(nodeID int32
 		idxObjRef, idxTableDef := builder.compCtx.Resolve(scanNode.ObjRef.SchemaName, indexDef.IndexTableName)
 
 		// 1. SELECT pk from idx WHERE prefix_eq(`__mo_index_idx_col`,serial_full("a","value"))
-		currIdxProjTag, currScanId := makeIndexTblScan(builder, builder.ctxByNode[nodeID], filterExp, idxTableDef, idxObjRef, scanNode)
+		currIdxProjTag, currScanId := makeIndexTblScan(builder, builder.ctxByNode[nodeID], filterExp, idxTableDef, idxObjRef)
 
 		// 2. (SELECT pk from idx1 WHERE prefix_eq(`__mo_index_idx_col`,serial_full("a","value1")) )
 		//    	INNER JOIN
@@ -72,6 +72,9 @@ func (builder *QueryBuilder) applyIndicesForFiltersUsingMasterIndex(nodeID int32
 		prevIndexPkCol = DeepCopyExpr(currIndexPkCol)
 		prevLastNodeId = lastNodeId
 	}
+	lastNode := builder.qry.Nodes[lastNodeId]
+	lastNode.Limit = DeepCopyExpr(scanNode.Limit)
+	lastNode.Offset = DeepCopyExpr(scanNode.Offset)
 	scanNode.Limit, scanNode.Offset = nil, nil
 
 	// 3. SELECT * from tbl INNER JOIN (
@@ -102,7 +105,7 @@ func (builder *QueryBuilder) applyIndicesForFiltersUsingMasterIndex(nodeID int32
 	})
 	lastNodeId = builder.appendNode(&plan.Node{
 		NodeType: plan.Node_JOIN,
-		JoinType: plan.Node_INDEX,
+		JoinType: plan.Node_INNER,
 		Children: []int32{scanNode.NodeId, lastNodeId},
 		OnList:   []*Expr{wherePkEqPk},
 	}, builder.ctxByNode[nodeID])
@@ -111,7 +114,7 @@ func (builder *QueryBuilder) applyIndicesForFiltersUsingMasterIndex(nodeID int32
 }
 
 func makeIndexTblScan(builder *QueryBuilder, bindCtx *BindContext, filterExp *plan.Expr,
-	idxTableDef *TableDef, idxObjRef *ObjectRef, scanNode *plan.Node) (int32, int32) {
+	idxTableDef *TableDef, idxObjRef *ObjectRef) (int32, int32) {
 
 	// a. Scan * WHERE prefix_eq(`__mo_index_idx_col`,serial_full("a","value"))
 	idxScanTag := builder.genNewTag()
@@ -213,8 +216,6 @@ func makeIndexTblScan(builder *QueryBuilder, bindCtx *BindContext, filterExp *pl
 		ObjRef:      idxObjRef,
 		FilterList:  []*plan.Expr{filterList},
 		BindingTags: []int32{idxScanTag},
-		Limit:       DeepCopyExpr(scanNode.Limit),
-		Offset:      DeepCopyExpr(scanNode.Offset),
 	}, bindCtx)
 
 	// b. Project __mo_index_pk_col
