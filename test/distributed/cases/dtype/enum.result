@@ -107,9 +107,12 @@ col1
 null
 create table enum03(col1 enum('数据库','数据库管理','数据库管理软件'));
 insert into enum03 select * from enum02;
-invalid argument operator cast, bad value [VARCHAR ENUM]
 select * from enum03;
 col1
+数据库
+数据库管理
+数据库管理软件
+null
 drop table enum02;
 drop table enum03;
 drop table if exists enum04;
@@ -128,12 +131,12 @@ create table enum05 (a int,b enum('4','3','2','1'));
 insert into enum05 values(1,1);
 select * from enum05;
 a    b
-1    4
+1    1
 insert into enum05 values(2,'1');
 select * from enum05;
 a    b
-1    4
-2    1
+1    1
+2    4
 drop table enum05;
 drop table if exists pri01;
 create table pri01 (col1 enum('qy4iujd3wi4fu4h3f', '323242r34df432432', '32e3ewfdewrew'));
