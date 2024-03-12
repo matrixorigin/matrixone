@@ -101,9 +101,6 @@ type msgBuf struct {
 	mu struct {
 		sync.Mutex
 		inTxn bool
-		// prepared is true means that client just send a prepared cmd and not
-		// execute it yet. After it is executed, set to false.
-		prepared bool
 	}
 }
 
@@ -237,11 +234,11 @@ func (b *msgBuf) handleEOFPacket(msg []byte) {
 func (b *msgBuf) setTxnStatus(status uint16) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	b.peer.mu.Lock()
+	defer b.peer.mu.Unlock()
 	b.mu.inTxn = status&frontend.SERVER_STATUS_IN_TRANS != 0
 
 	if b.peer != nil {
-		b.peer.mu.Lock()
-		defer b.peer.mu.Unlock()
 		b.peer.mu.inTxn = b.mu.inTxn
 	}
 }
@@ -251,20 +248,6 @@ func (b *msgBuf) isInTxn() bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.mu.inTxn
-}
-
-// setPrepared sets the prepared state.
-func (b *msgBuf) setPrepared(p bool) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	b.mu.prepared = p
-}
-
-// isInTxn returns if the session is just prepared and not executed yet.
-func (b *msgBuf) isPrepared() bool {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.mu.prepared
 }
 
 // sendTo sends the data in buffer to destination.

@@ -102,6 +102,18 @@ func getPrepareStmtName(stmtID uint32) string {
 	return fmt.Sprintf("%s_%d", prefixPrepareStmtName, stmtID)
 }
 
+func parsePrepareStmtID(s string) uint32 {
+	if strings.HasPrefix(s, prefixPrepareStmtName) {
+		ss := strings.Split(s, "_")
+		v, err := strconv.ParseUint(ss[len(ss)-1], 10, 64)
+		if err != nil {
+			return 0
+		}
+		return uint32(v)
+	}
+	return 0
+}
+
 func GetPrepareStmtID(ctx context.Context, name string) (int, error) {
 	idx := len(prefixPrepareStmtName) + 1
 	if idx >= len(name) {
@@ -1396,6 +1408,13 @@ func (mce *MysqlCmdExecutor) handleAlterStage(ctx context.Context, as *tree.Alte
 
 func (mce *MysqlCmdExecutor) handleDropStage(ctx context.Context, ds *tree.DropStage) error {
 	return doDropStage(ctx, mce.GetSession(), ds)
+}
+func (mce *MysqlCmdExecutor) handleCreateSnapshot(ctx context.Context, ct *tree.CreateSnapShot) error {
+	return doCreateSnapshot(ctx, mce.GetSession(), ct)
+}
+
+func (mce *MysqlCmdExecutor) handleDropSnapshot(ctx context.Context, ct *tree.DropSnapShot) error {
+	return doDropSnapshot(ctx, mce.GetSession(), ct)
 }
 
 // handleCreateAccount creates a new user-level tenant in the context of the tenant SYS
@@ -3063,7 +3082,7 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 			*tree.ShowProcessList, *tree.ShowStatus, *tree.ShowTableStatus, *tree.ShowGrants, *tree.ShowRolesStmt,
 			*tree.ShowIndex, *tree.ShowCreateView, *tree.ShowTarget, *tree.ValuesStatement,
 			*tree.ExplainFor, *tree.ExplainStmt, *tree.ShowTableNumber, *tree.ShowColumnNumber, *tree.ShowTableValues, *tree.ShowLocks, *tree.ShowNodeList, *tree.ShowFunctionOrProcedureStatus,
-			*tree.ShowPublications, *tree.ShowCreatePublications, *tree.ShowStages, *tree.ExplainAnalyze:
+			*tree.ShowPublications, *tree.ShowCreatePublications, *tree.ShowStages, *tree.ExplainAnalyze, *tree.ShowSnapShots:
 			/*
 				mysql COM_QUERY response: End after the data row has been sent.
 				After all row data has been sent, it sends the EOF or OK packet.
@@ -3086,7 +3105,7 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 			*tree.SetDefaultRole, *tree.SetRole, *tree.SetPassword, *tree.Delete, *tree.TruncateTable, *tree.Use,
 			*tree.BeginTransaction, *tree.CommitTransaction, *tree.RollbackTransaction,
 			*tree.LockTableStmt, *tree.UnLockTableStmt,
-			*tree.CreateStage, *tree.DropStage, *tree.AlterStage, *tree.CreateSource, *tree.AlterSequence:
+			*tree.CreateStage, *tree.DropStage, *tree.AlterStage, *tree.CreateSource, *tree.AlterSequence, *tree.CreateSnapShot, *tree.DropSnapShot:
 			// skip create table as select
 			if createTblStmt, ok := stmt.(*tree.CreateTable); ok && createTblStmt.IsAsSelect {
 				return nil
@@ -3532,6 +3551,16 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 		if err = mce.handleAlterStage(requestCtx, st); err != nil {
 			return
 		}
+	case *tree.CreateSnapShot:
+		selfHandle = true
+		if err = mce.handleCreateSnapshot(requestCtx, st); err != nil {
+			return
+		}
+	case *tree.DropSnapShot:
+		selfHandle = true
+		if err = mce.handleDropSnapshot(requestCtx, st); err != nil {
+			return
+		}
 	case *tree.CreateAccount:
 		selfHandle = true
 		ses.InvalidatePrivilegeCache()
@@ -3877,7 +3906,7 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 		*tree.ShowProcessList, *tree.ShowStatus, *tree.ShowTableStatus, *tree.ShowGrants, *tree.ShowRolesStmt,
 		*tree.ShowIndex, *tree.ShowCreateView, *tree.ShowTarget, *tree.ShowCollation, *tree.ValuesStatement,
 		*tree.ExplainFor, *tree.ShowTableNumber, *tree.ShowColumnNumber, *tree.ShowTableValues, *tree.ShowLocks, *tree.ShowNodeList, *tree.ShowFunctionOrProcedureStatus,
-		*tree.ShowPublications, *tree.ShowCreatePublications, *tree.ShowStages:
+		*tree.ShowPublications, *tree.ShowCreatePublications, *tree.ShowStages, *tree.ShowSnapShots:
 		columns, err = cw.GetColumns()
 		if err != nil {
 			logError(ses, ses.GetDebugString(),
