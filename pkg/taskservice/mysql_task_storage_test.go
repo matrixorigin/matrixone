@@ -72,8 +72,7 @@ func TestBuildWhereClause(t *testing.T) {
 }
 
 const (
-	useDB    = "use mo_task"
-	setTrace = "set session disable_txn_trace=1"
+	useDB = "use mo_task"
 )
 
 var (
@@ -108,7 +107,6 @@ var (
 
 	expectUseDB = func(mock sqlmock.Sqlmock) {
 		mock.ExpectExec(useDB).WillReturnResult(sqlmock.NewResult(0, 1))
-		mock.ExpectExec(setTrace).WillReturnResult(sqlmock.NewResult(0, 1))
 	}
 )
 
