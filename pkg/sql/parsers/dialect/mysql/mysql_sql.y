@@ -3141,7 +3141,7 @@ alter_table_rename:
     table_name_unresolved
     {
         var name = $1
-        $$ = tree.NewAlterTableName(name)
+        $$ = tree.NewAlterOptionTableName(name)
     }
 
 alter_table_drop:

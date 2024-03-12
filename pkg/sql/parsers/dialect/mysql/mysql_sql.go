@@ -12643,7 +12643,7 @@ yydefault:
 //line mysql_sql.y:3142
 		{
 			var name = yyDollar[1].unresolvedObjectNameUnion()
-			yyLOCAL = tree.NewAlterTableName(name)
+			yyLOCAL = tree.NewAlterOptionTableName(name)
 		}
 		yyVAL.union = yyLOCAL
 	case 432:

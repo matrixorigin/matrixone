@@ -839,7 +839,7 @@ type AlterOptionTableName struct {
 	Name *UnresolvedObjectName
 }
 
-func NewAlterTableName(name *UnresolvedObjectName) *AlterOptionTableName {
+func NewAlterOptionTableName(name *UnresolvedObjectName) *AlterOptionTableName {
 	// a := reuse.Alloc[AlterTableName](nil)
 	a := new(AlterOptionTableName)
 	a.Name = name
