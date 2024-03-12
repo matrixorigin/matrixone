@@ -95,7 +95,7 @@ func newAggAvgDecimal128() aggexec.SingleAggFromFixedRetFixed[types.Decimal128, 
 
 func (a *aggAvg[from]) Marshal() []byte       { return types.EncodeInt64(&a.count) }
 func (a *aggAvg[from]) Unmarshal(data []byte) { a.count = types.DecodeInt64(data) }
-func (a *aggAvg[from]) Init(set aggexec.AggSetter[float64]) {
+func (a *aggAvg[from]) Init(set aggexec.AggSetter[float64], arg, ret types.Type) {
 	set(0)
 	a.count = 0
 }
@@ -124,7 +124,7 @@ func (a *aggAvg[from]) Flush(get aggexec.AggGetter[float64], set aggexec.AggSett
 
 func (a *aggAvgDecimal64) Marshal() []byte       { return types.EncodeInt64(&a.count) }
 func (a *aggAvgDecimal64) Unmarshal(data []byte) { a.count = types.DecodeInt64(data) }
-func (a *aggAvgDecimal64) Init(set aggexec.AggSetter[types.Decimal128]) {
+func (a *aggAvgDecimal64) Init(set aggexec.AggSetter[types.Decimal128], arg, ret types.Type) {
 	set(types.Decimal128{B0_63: 0, B64_127: 0})
 	a.count = 0
 }
@@ -163,7 +163,7 @@ func (a *aggAvgDecimal64) Flush(get aggexec.AggGetter[types.Decimal128], set agg
 
 func (a *aggAvgDecimal128) Marshal() []byte       { return types.EncodeInt64(&a.count) }
 func (a *aggAvgDecimal128) Unmarshal(data []byte) { a.count = types.DecodeInt64(data) }
-func (a *aggAvgDecimal128) Init(set aggexec.AggSetter[types.Decimal128]) {
+func (a *aggAvgDecimal128) Init(set aggexec.AggSetter[types.Decimal128], arg, ret types.Type) {
 	set(types.Decimal128{B0_63: 0, B64_127: 0})
 	a.count = 0
 }

@@ -50,7 +50,7 @@ type AggCanMarshal interface {
 type SingleAggFromFixedRetFixed[
 	from types.FixedSizeTExceptStrType, to types.FixedSizeTExceptStrType] interface {
 	AggCanMarshal
-	Init(setter AggSetter[to])
+	Init(setter AggSetter[to], arg, ret types.Type)
 	Fill(from, AggGetter[to], AggSetter[to])
 	FillNull(AggGetter[to], AggSetter[to])
 	Fills(value from, isNull bool, count int, getter AggGetter[to], setter AggSetter[to])
@@ -61,7 +61,7 @@ type SingleAggFromFixedRetFixed[
 type SingleAggFromFixedRetVar[
 	from types.FixedSizeTExceptStrType] interface {
 	AggCanMarshal
-	Init(setter AggBytesSetter)
+	Init(setter AggBytesSetter, arg types.Type, ret types.Type)
 	Fill(from, AggBytesGetter, AggBytesSetter)
 	FillNull(AggBytesGetter, AggBytesSetter)
 	Fills(value from, isNull bool, count int, getter AggBytesGetter, setter AggBytesSetter)
@@ -72,7 +72,7 @@ type SingleAggFromFixedRetVar[
 type SingleAggFromVarRetFixed[
 	to types.FixedSizeTExceptStrType] interface {
 	AggCanMarshal
-	Init(setter AggSetter[to])
+	Init(setter AggSetter[to], arg types.Type, ret types.Type)
 	FillBytes([]byte, AggGetter[to], AggSetter[to])
 	FillNull(AggGetter[to], AggSetter[to])
 	Fills(value []byte, isNull bool, count int, getter AggGetter[to], setter AggSetter[to])
@@ -82,7 +82,7 @@ type SingleAggFromVarRetFixed[
 
 type SingleAggFromVarRetVar interface {
 	AggCanMarshal
-	Init(setter AggBytesSetter)
+	Init(setter AggBytesSetter, arg types.Type, ret types.Type)
 	FillBytes([]byte, AggBytesGetter, AggBytesSetter)
 	FillNull(AggBytesGetter, AggBytesSetter)
 	Fills(value []byte, isNull bool, count int, getter AggBytesGetter, setter AggBytesSetter)
@@ -93,7 +93,7 @@ type SingleAggFromVarRetVar interface {
 type MultiAggRetFixed[
 	to types.FixedSizeTExceptStrType] interface {
 	AggCanMarshal
-	Init(setter AggSetter[to])
+	Init(setter AggSetter[to], args []types.Type, ret types.Type)
 	GetWhichFill(idx int) any                        // return func Fill(MultiAggRetFixed[to], value)
 	GetWhichFillNull(idx int) any                    // return func FillNull(MultiAggRetFixed[to])
 	Eval(getter AggGetter[to], setter AggSetter[to]) // after Fill one row, do eval.
@@ -103,7 +103,7 @@ type MultiAggRetFixed[
 
 type MultiAggRetVar interface {
 	AggCanMarshal
-	Init(setter AggBytesSetter)
+	Init(setter AggBytesSetter, args []types.Type, ret types.Type)
 	GetWhichFill(idx int) any                          // return func Fill(MultiAggRetVar, value)
 	GetWhichFillNull(idx int) any                      // return func FillNull(MultiAggRetVar)
 	Eval(getter AggBytesGetter, setter AggBytesSetter) // after Fill one row, do eval.

@@ -76,7 +76,7 @@ func newAggMaxDecimal128() aggexec.SingleAggFromFixedRetFixed[types.Decimal128, 
 
 func (a aggMax[from]) Marshal() []byte  { return nil }
 func (a aggMax[from]) Unmarshal([]byte) {}
-func (a aggMax[from]) Init(set aggexec.AggSetter[from]) {
+func (a aggMax[from]) Init(set aggexec.AggSetter[from], arg, ret types.Type) {
 	set(getMinValue[from]().(from))
 }
 func (a aggMax[from]) Fill(value from, get aggexec.AggGetter[from], set aggexec.AggSetter[from]) {
@@ -124,7 +124,7 @@ func getMinValue[T canCompare]() interface{} {
 
 func (a aggMaxDecimal64) Marshal() []byte  { return nil }
 func (a aggMaxDecimal64) Unmarshal([]byte) {}
-func (a aggMaxDecimal64) Init(set aggexec.AggSetter[types.Decimal64]) {
+func (a aggMaxDecimal64) Init(set aggexec.AggSetter[types.Decimal64], arg, ret types.Type) {
 	set(types.Decimal64(0))
 }
 func (a aggMaxDecimal64) Fill(value types.Decimal64, get aggexec.AggGetter[types.Decimal64], set aggexec.AggSetter[types.Decimal64]) {
@@ -151,7 +151,7 @@ func (a aggMaxDecimal64) Flush(get aggexec.AggGetter[types.Decimal64], set aggex
 
 func (a aggMaxDecimal128) Marshal() []byte  { return nil }
 func (a aggMaxDecimal128) Unmarshal([]byte) {}
-func (a aggMaxDecimal128) Init(set aggexec.AggSetter[types.Decimal128]) {
+func (a aggMaxDecimal128) Init(set aggexec.AggSetter[types.Decimal128], arg, ret types.Type) {
 	set(types.Decimal128{B0_63: 0, B64_127: 0})
 }
 func (a aggMaxDecimal128) Fill(value types.Decimal128, get aggexec.AggGetter[types.Decimal128], set aggexec.AggSetter[types.Decimal128]) {

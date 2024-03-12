@@ -113,7 +113,7 @@ func (exec *multiAggFuncExec1[T]) GroupGrow(more int) error {
 		moreGroup[i] = exec.gGroup()
 
 		exec.ret.groupToSet = i + len(exec.groups)
-		moreGroup[i].Init(setter)
+		moreGroup[i].Init(setter, exec.argTypes, exec.retType)
 	}
 	exec.groups = append(exec.groups, moreGroup...)
 	return nil
@@ -272,7 +272,7 @@ func (exec *multiAggFuncExec2) GroupGrow(more int) error {
 		moreGroup[i] = exec.gGroup()
 
 		exec.ret.groupToSet = i + len(exec.groups)
-		moreGroup[i].Init(setter)
+		moreGroup[i].Init(setter, exec.argTypes, exec.retType)
 	}
 	exec.groups = append(exec.groups, moreGroup...)
 	return nil

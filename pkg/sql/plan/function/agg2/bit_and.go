@@ -42,7 +42,7 @@ func newAggBitAnd[T numeric]() aggexec.SingleAggFromFixedRetFixed[T, uint64] {
 
 func (a aggBitAnd[T]) Marshal() []byte  { return nil }
 func (a aggBitAnd[T]) Unmarshal([]byte) {}
-func (a aggBitAnd[T]) Init(set aggexec.AggSetter[uint64]) {
+func (a aggBitAnd[T]) Init(set aggexec.AggSetter[uint64], arg, ret types.Type) {
 	set(^uint64(0))
 }
 func (a aggBitAnd[T]) Fill(value T, get aggexec.AggGetter[uint64], set aggexec.AggSetter[uint64]) {

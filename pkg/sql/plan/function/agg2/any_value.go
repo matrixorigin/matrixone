@@ -67,7 +67,7 @@ type aggAnyValue[T types.FixedSizeTExceptStrType] struct {
 
 func (a *aggAnyValue[T]) Marshal() []byte       { return types.EncodeBool(&a.has) }
 func (a *aggAnyValue[T]) Unmarshal(data []byte) { a.has = types.DecodeBool(data) }
-func (a *aggAnyValue[T]) Init(set aggexec.AggSetter[T]) {
+func (a *aggAnyValue[T]) Init(setter aggexec.AggSetter[T], arg, ret types.Type) {
 	a.has = false
 }
 func (a *aggAnyValue[T]) Fill(value T, get aggexec.AggGetter[T], set aggexec.AggSetter[T]) {
@@ -101,7 +101,7 @@ func (a *aggAnyBytesValue) Marshal() []byte { return types.EncodeBool(&a.has) }
 func (a *aggAnyBytesValue) Unmarshal(data []byte) {
 	a.has = types.DecodeBool(data)
 }
-func (a *aggAnyBytesValue) Init(set aggexec.AggBytesSetter) {
+func (a *aggAnyBytesValue) Init(setter aggexec.AggBytesSetter, arg types.Type, ret types.Type) {
 	a.has = false
 }
 func (a *aggAnyBytesValue) FillBytes(value []byte, get aggexec.AggBytesGetter, set aggexec.AggBytesSetter) {

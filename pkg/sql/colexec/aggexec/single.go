@@ -162,7 +162,7 @@ func (exec *singleAggFuncExec1[from, to]) GroupGrow(more int) error {
 		moreGroup[i] = exec.gGroup()
 
 		exec.ret.groupToSet = i + len(exec.groups)
-		moreGroup[i].Init(setter)
+		moreGroup[i].Init(setter, exec.singleAggInfo.argType, exec.singleAggInfo.retType)
 	}
 	exec.groups = append(exec.groups, moreGroup...)
 	return nil
@@ -535,7 +535,7 @@ func (exec *singleAggFuncExec2[from]) GroupGrow(more int) error {
 		moreGroup[i] = exec.gGroup()
 
 		exec.ret.groupToSet = i + len(exec.groups)
-		moreGroup[i].Init(setter)
+		moreGroup[i].Init(setter, exec.singleAggInfo.argType, exec.singleAggInfo.retType)
 	}
 	exec.groups = append(exec.groups, moreGroup...)
 	return nil
@@ -772,7 +772,7 @@ func (exec *singleAggFuncExec3[to]) GroupGrow(more int) error {
 		moreGroup[i] = exec.gGroup()
 
 		exec.ret.groupToSet = i + len(exec.groups)
-		moreGroup[i].Init(setter)
+		moreGroup[i].Init(setter, exec.singleAggInfo.argType, exec.singleAggInfo.retType)
 	}
 	exec.groups = append(exec.groups, moreGroup...)
 	return nil
@@ -1010,7 +1010,7 @@ func (exec *singleAggFuncExec4) GroupGrow(more int) error {
 		moreGroup[i] = exec.gGroup()
 
 		exec.ret.groupToSet = i + len(exec.groups)
-		moreGroup[i].Init(setter)
+		moreGroup[i].Init(setter, exec.singleAggInfo.argType, exec.singleAggInfo.retType)
 	}
 	exec.groups = append(exec.groups, moreGroup...)
 	return nil
