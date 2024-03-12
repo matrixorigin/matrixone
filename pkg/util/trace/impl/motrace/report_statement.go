@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	db_holder "github.com/matrixorigin/matrixone/pkg/util/export/etl/db"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
+	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 
 	"github.com/google/uuid"
@@ -239,6 +240,7 @@ type StatementInfo struct {
 	// keep []byte as elem
 	jsonByte   []byte
 	statsArray statistic.StatsArray
+	stated     bool
 
 	// skipTxnOnce, readonly, for flow control
 	// see more on NeedSkipTxn() and SkipTxnId()
@@ -263,6 +265,7 @@ var stmtPool = sync.Pool{
 func NewStatementInfo() *StatementInfo {
 	s := stmtPool.Get().(*StatementInfo)
 	s.statsArray.Reset()
+	s.stated = false
 	return s
 }
 
@@ -277,6 +280,10 @@ func (s *StatementInfo) Key(duration time.Duration) interface{} {
 
 func (s *StatementInfo) GetName() string {
 	return SingleStatementTable.GetName()
+}
+
+func (s *StatementInfo) IsMoLogger() bool {
+	return s.Account == "sys" && s.User == db_holder.MOLoggerUser
 }
 
 // deltaContentLength approximate value that may gen as table record
@@ -358,6 +365,7 @@ func (s *StatementInfo) free() {
 	// clean []byte
 	s.jsonByte = nil
 	s.statsArray.Reset()
+	s.stated = false
 	// clean skipTxn ctrl
 	s.skipTxnOnce = false
 	s.skipTxnID = nil
@@ -405,7 +413,8 @@ func (s *StatementInfo) FillRow(ctx context.Context, row *table.Row) {
 		float64Val := calculateAggrMemoryBytes(s.AggrMemoryTime, float64(s.Duration))
 		s.statsArray.WithMemorySize(float64Val)
 	}
-	stats := s.ExecPlan2Stats(ctx)
+	// stats := s.ExecPlan2Stats(ctx) // deprecated
+	stats := s.GetStatsArrayBytes()
 	if GetTracerProvider().disableSqlWriter {
 		// Be careful, this two string is unsafe, will be free after Free
 		row.SetColumnVal(execPlanCol, table.StringField(util.UnsafeBytesToString(execPlan)))
@@ -470,16 +479,12 @@ endL:
 
 // ExecPlan2Stats return Stats Serialized int array str
 // and set RowsRead, BytesScan from ExecPlan
-func (s *StatementInfo) ExecPlan2Stats(ctx context.Context) []byte {
+// and CalculateCU
+func (s *StatementInfo) ExecPlan2Stats(ctx context.Context) error {
 	var stats Statistic
 	var statsArray statistic.StatsArray
 
-	if s.ExecPlan == nil {
-		if s.statsArray.GetVersion() == 0 {
-			s.statsArray.Init()
-		}
-		return s.statsArray.ToJsonString()
-	} else {
+	if s.ExecPlan != nil && !s.stated {
 		statsArray, stats = s.ExecPlan.Stats(ctx)
 		if s.statsArray.GetTimeConsumed() > 0 {
 			logutil.GetSkip1Logger().Error("statsArray.GetTimeConsumed() > 0",
@@ -490,8 +495,15 @@ func (s *StatementInfo) ExecPlan2Stats(ctx context.Context) []byte {
 		s.statsArray.WithConnType(s.ConnType)
 		s.RowsRead = stats.RowsRead
 		s.BytesScan = stats.BytesScan
-		return s.statsArray.ToJsonString()
+		s.stated = true
 	}
+	cu := CalculateCU(s.statsArray, int64(s.Duration))
+	s.statsArray.WithCU(cu)
+	return nil
+}
+
+func (s *StatementInfo) GetStatsArrayBytes() []byte {
+	return s.statsArray.ToJsonString()
 }
 
 // SetSkipTxn set skip txn flag, cooperate with SetSkipTxnId()
@@ -550,12 +562,15 @@ func (s *StatementInfo) MarkResponseAt() {
 	}
 }
 
-// ErrorPkgConst = 56 + 13
-// 56: empty mysql tcp package size
-// 13: avg payload prefix of err msg
-const ErrorPkgConst = 69
+// TcpIpv4HeaderSize default tcp header bytes.
+const TcpIpv4HeaderSize = 66
 
-var EndStatement = func(ctx context.Context, err error, sentRows int64, outBytes int64) {
+// ResponseErrPacketSize avg prefix size for mysql packet response error.
+// 66: default tcp header bytes.
+// 13: avg payload prefix of err response
+const ResponseErrPacketSize = TcpIpv4HeaderSize + 13
+
+func EndStatement(ctx context.Context, err error, sentRows int64, outBytes int64, outPacket int64) {
 	if !GetTracerProvider().IsEnable() {
 		return
 	}
@@ -572,9 +587,12 @@ var EndStatement = func(ctx context.Context, err error, sentRows int64, outBytes
 		s.AggrCount = 0
 		s.MarkResponseAt()
 		if err != nil {
-			outBytes += ErrorPkgConst + int64(len(err.Error()))
+			outBytes += ResponseErrPacketSize + int64(len(err.Error()))
 		}
-		s.statsArray.InitIfEmpty().WithOutTrafficBytes(float64(outBytes))
+		outBytes += TcpIpv4HeaderSize * outPacket
+		s.statsArray.InitIfEmpty().WithOutTrafficBytes(float64(outBytes)).WithOutPacketCount(float64(outPacket))
+		s.ExecPlan2Stats(ctx)
+		metric.StatementCUCounter(s.Account, s.SqlSourceType).Add(s.statsArray.GetCU())
 		s.Status = StatementStatusSuccess
 		if err != nil {
 			s.Error = err
@@ -622,9 +640,9 @@ var ReportStatement = func(ctx context.Context, s *StatementInfo) error {
 		return nil
 	}
 	// Filter out the MO_LOGGER SQL statements
-	if s.User == db_holder.MOLoggerUser {
-		goto DiscardAndFreeL
-	}
+	//if s.User == db_holder.MOLoggerUser {
+	//	goto DiscardAndFreeL
+	//}
 
 	// Filter out the statement is empty
 	if s.Statement == "" {
@@ -645,7 +663,7 @@ var ReportStatement = func(ctx context.Context, s *StatementInfo) error {
 	}
 
 	// logging the statement that should not be here anymore
-	if s.exported || s.reported || s.User == db_holder.MOLoggerUser || s.Statement == "" {
+	if s.exported || s.reported || s.Statement == "" {
 		logutil.Error("StatementInfo should not be here anymore", zap.String("StatementInfo", s.Statement), zap.String("statement_id", uuid.UUID(s.StatementID).String()), zap.String("user", s.User), zap.Bool("exported", s.exported), zap.Bool("reported", s.reported))
 	}
 

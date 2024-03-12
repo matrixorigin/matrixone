@@ -16,6 +16,7 @@ package plan
 
 import (
 	"bytes"
+
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"golang.org/x/exp/constraints"
 )
@@ -825,7 +826,7 @@ func DeepCopyExpr(expr *Expr) *Expr {
 		return nil
 	}
 	newExpr := &Expr{
-		Typ:         DeepCopyType(expr.Typ),
+		Typ:         expr.Typ,
 		Ndv:         expr.Ndv,
 		Selectivity: expr.Selectivity,
 	}
@@ -979,9 +980,7 @@ func DeepCopyExpr(expr *Expr) *Expr {
 
 	case *plan.Expr_T:
 		newExpr.Expr = &plan.Expr_T{
-			T: &plan.TargetType{
-				Typ: DeepCopyType(item.T.Typ),
-			},
+			T: &plan.TargetType{},
 		}
 
 	case *plan.Expr_Max:

@@ -177,8 +177,18 @@ func (s *sqlExecutor) adjustOptions(
 	}
 
 	if !opts.HasExistsTxn() {
-		txnOp, err := s.txnClient.New(ctx, opts.MinCommittedTS(),
-			client.WithTxnCreateBy("sql-executor"))
+		txnOpts := opts.ExtraTxnOptions()
+		txnOpts = append(txnOpts,
+			client.WithTxnCreateBy(
+				opts.AccountID(),
+				"",
+				"sql-executor",
+				0),
+			client.WithDisableTrace(true))
+		txnOp, err := s.txnClient.New(
+			ctx,
+			opts.MinCommittedTS(),
+			txnOpts...)
 		if err != nil {
 			return nil, executor.Options{}, err
 		}
@@ -273,6 +283,7 @@ func (exec *txnExecutor) Exec(
 	}
 
 	c := NewCompile(exec.s.addr, exec.getDatabase(), sql, "", "", exec.ctx, exec.s.eng, proc, stmts[0], false, nil, receiveAt)
+	defer c.Release()
 	c.disableRetry = exec.opts.DisableIncrStatement()
 	c.SetBuildPlanFunc(func() (*plan.Plan, error) {
 		return plan.BuildPlan(
@@ -300,7 +311,6 @@ func (exec *txnExecutor) Exec(
 			return nil
 		})
 	if err != nil {
-		c.Release()
 		return executor.Result{}, err
 	}
 	var runResult *util.RunResult

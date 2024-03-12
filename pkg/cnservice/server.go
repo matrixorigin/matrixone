@@ -18,7 +18,12 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
-	"os"
+	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/matrixorigin/matrixone/pkg/util/profile"
+	"go.uber.org/zap"
+	"io"
 	"sync"
 	"time"
 
@@ -49,16 +54,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage"
+	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 	"github.com/matrixorigin/matrixone/pkg/udf"
 	"github.com/matrixorigin/matrixone/pkg/udf/pythonservice"
 	"github.com/matrixorigin/matrixone/pkg/util/address"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
-	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
-	"github.com/matrixorigin/matrixone/pkg/util/profile"
 	"github.com/matrixorigin/matrixone/pkg/util/status"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
-	"go.uber.org/zap"
 )
 
 func NewService(
@@ -381,6 +384,8 @@ func (s *service) handleRequest(
 
 	go func() {
 		defer value.Cancel()
+		s.pipelines.counter.Add(1)
+		defer s.pipelines.counter.Add(-1)
 		s.requestHandler(ctx,
 			s.pipelineServiceServiceAddr(),
 			req,
@@ -616,14 +621,31 @@ func (s *service) getTxnClient() (c client.TxnClient, err error) {
 		if s.cfg.Txn.EnableLeakCheck == 1 {
 			opts = append(opts, client.WithEnableLeakCheck(
 				s.cfg.Txn.MaxActiveAges.Duration,
-				func(txnID []byte, createAt time.Time, createBy string) {
-					// dump all goroutines to stderr
-					profile.ProfileGoroutine(os.Stderr, 2)
-					v2.TxnLeakCounter.Inc()
-					runtime.DefaultRuntime().Logger().Error("found leak txn",
+				func(txnID []byte, createAt time.Time, createBy txn.TxnOptions) {
+					name, _ := uuid.NewV7()
+					profPath := catalog.BuildProfilePath("routine", name.String())
+
+					fields := []zap.Field{
 						zap.String("txn-id", hex.EncodeToString(txnID)),
 						zap.Time("create-at", createAt),
-						zap.String("create-by", createBy))
+						zap.String("options", createBy.String()),
+						zap.String("profile", profPath),
+					}
+					if createBy.InRunSql {
+						//the txn runs sql in compile.Run() and doest not exist
+						v2.TxnLongRunningCounter.Inc()
+						runtime.DefaultRuntime().Logger().Error("found long running txn", fields...)
+					} else if createBy.InCommit {
+						v2.TxnInCommitCounter.Inc()
+						runtime.DefaultRuntime().Logger().Error("found txn in commit", fields...)
+					} else if createBy.InRollback {
+						v2.TxnInRollbackCounter.Inc()
+						runtime.DefaultRuntime().Logger().Error("found txn in rollback", fields...)
+					} else {
+						v2.TxnLeakCounter.Inc()
+						runtime.DefaultRuntime().Logger().Error("found leak txn", fields...)
+					}
+					s.saveProfile(profPath)
 				}))
 		}
 		if s.cfg.Txn.Limit > 0 {
@@ -634,11 +656,17 @@ func (s *service) getTxnClient() (c client.TxnClient, err error) {
 			opts = append(opts,
 				client.WithMaxActiveTxn(s.cfg.Txn.MaxActive))
 		}
-		opts = append(opts,
-			client.WithPKDedupCount(s.cfg.Txn.PkDedupCount))
+		if s.cfg.Txn.PkDedupCount > 0 {
+			opts = append(opts, client.WithCheckDup())
+		}
 		opts = append(opts,
 			client.WithLockService(s.lockService),
 			client.WithNormalStateNoWait(s.cfg.Txn.NormalStateNoWait),
+			client.WithTxnOpenedCallback([]func(op client.TxnOperator){
+				func(op client.TxnOperator) {
+					trace.GetService().TxnCreated(op)
+				},
+			}),
 		)
 		c = client.NewTxnClient(
 			sender,
@@ -740,13 +768,15 @@ func (s *service) initIncrService() {
 		store,
 		s.cfg.AutoIncrement)
 	runtime.ProcessLevelRuntime().SetGlobalVariables(
-		runtime.AutoIncrmentService,
+		runtime.AutoIncrementService,
 		incrService)
 	incrservice.SetAutoIncrementServiceByID(s.cfg.UUID, incrService)
 }
 
 func (s *service) bootstrap() error {
 	s.initIncrService()
+	s.initTxnTraceService()
+
 	rt := runtime.ProcessLevelRuntime()
 	s.bootstrapService = bootstrap.NewService(
 		&locker{hakeeperClient: s._hakeeperClient},
@@ -771,6 +801,49 @@ func (s *service) bootstrap() error {
 			}
 		}
 	})
+}
+
+func (s *service) initTxnTraceService() {
+	rt := runtime.ProcessLevelRuntime()
+	ts, err := trace.NewService(
+		s.options.traceDataPath,
+		s.cfg.UUID,
+		s._txnClient,
+		rt.Clock(),
+		s.sqlExecutor,
+		trace.WithBufferSize(s.cfg.Txn.Trace.BufferSize),
+		trace.WithFlushBytes(int(s.cfg.Txn.Trace.FlushBytes)),
+		trace.WithFlushDuration(s.cfg.Txn.Trace.FlushDuration.Duration))
+	if err != nil {
+		panic(err)
+	}
+	rt.SetGlobalVariables(runtime.TxnTraceService, ts)
+}
+
+func (s *service) saveProfile(profilePath string) {
+	reader, writer := io.Pipe()
+	go func() {
+		// dump all goroutines
+		_ = profile.ProfileGoroutine(writer, 2)
+		_ = writer.Close()
+	}()
+	writeVec := fileservice.IOVector{
+		FilePath: profilePath,
+		Entries: []fileservice.IOEntry{
+			{
+				Offset:         0,
+				ReaderForWrite: reader,
+				Size:           -1,
+			},
+		},
+	}
+	ctx, cancel := context.WithTimeout(context.TODO(), time.Minute*3)
+	defer cancel()
+	err := s.etlFS.Write(ctx, writeVec)
+	if err != nil {
+		logutil.Errorf("save profile %s failed. err:%v", profilePath, err)
+		return
+	}
 }
 
 type locker struct {

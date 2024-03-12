@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"math"
 	"sort"
 	"strings"
@@ -26,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
@@ -35,9 +37,50 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+const DefaultBlockMaxRows = 8192
 const BlockNumForceOneCN = 200
-const blockSelectivityThreshHold = 0.95
 const highNDVcolumnThreshHold = 0.95
+const statsCacheInitSize = 128
+const statsCacheMaxSize = 8192
+
+type StatsCache struct {
+	cache map[uint64]*pb.StatsInfo
+}
+
+func NewStatsCache() *StatsCache {
+	return &StatsCache{
+		cache: make(map[uint64]*pb.StatsInfo, statsCacheInitSize),
+	}
+}
+
+// GetStatsInfo returns the stats info and if the info in the cache needs to be updated.
+func (sc *StatsCache) GetStatsInfo(tableID uint64, create bool) *pb.StatsInfo {
+	if sc == nil {
+		return nil
+	}
+	if s, ok := sc.cache[tableID]; ok {
+		return s
+	}
+	if create {
+		if len(sc.cache) > statsCacheMaxSize {
+			sc.cache = make(map[uint64]*pb.StatsInfo, statsCacheInitSize)
+			logutil.Infof("statscache entries more than %v in long session, release memory and create new cachepool", statsCacheMaxSize)
+		}
+		s := NewStatsInfo()
+		sc.cache[tableID] = s
+		return s
+	} else {
+		return nil
+	}
+}
+
+// SetStatsInfo updates the stats info in the cache.
+func (sc *StatsCache) SetStatsInfo(tableID uint64, s *pb.StatsInfo) {
+	if sc == nil {
+		return
+	}
+	sc.cache[tableID] = s
+}
 
 func NewStatsInfo() *pb.StatsInfo {
 	return &pb.StatsInfo{
@@ -211,19 +254,19 @@ func (builder *QueryBuilder) getStatsInfoByTableID(tableID uint64) *pb.StatsInfo
 	if builder == nil {
 		return nil
 	}
-	obj, _ := builder.compCtx.ResolveById(tableID)
-	if obj == nil {
+	sc := builder.compCtx.GetStatsCache()
+	if sc == nil {
 		return nil
 	}
-	stats, err := builder.compCtx.Stats(obj)
-	if err != nil {
-		return nil
-	}
-	return stats
+	return sc.GetStatsInfo(tableID, false)
 }
 
 func (builder *QueryBuilder) getStatsInfoByCol(col *plan.ColRef) *pb.StatsInfo {
 	if builder == nil {
+		return nil
+	}
+	sc := builder.compCtx.GetStatsCache()
+	if sc == nil {
 		return nil
 	}
 	tableDef, ok := builder.tag2Table[col.RelPos]
@@ -234,7 +277,7 @@ func (builder *QueryBuilder) getStatsInfoByCol(col *plan.ColRef) *pb.StatsInfo {
 	if len(col.Name) == 0 {
 		col.Name = tableDef.Cols[col.ColPos].Name
 	}
-	return builder.getStatsInfoByTableID(tableDef.TblId)
+	return sc.GetStatsInfo(tableDef.TblId, false)
 }
 
 func (builder *QueryBuilder) getColNdv(col *plan.ColRef) float64 {
@@ -463,14 +506,14 @@ func estimateExprSelectivity(expr *plan.Expr, builder *QueryBuilder) float64 {
 			}
 			return 0.5
 		case "in":
-			card := float64(exprImpl.F.Args[1].Expr.(*plan.Expr_Vec).Vec.Len)
+			card := float64(exprImpl.F.Args[1].GetVec().Len)
 			ndv := getExprNdv(expr, builder)
 			if ndv > card {
 				return card / ndv
 			}
 			return 1
 		case "prefix_in":
-			card := float64(exprImpl.F.Args[1].Expr.(*plan.Expr_Vec).Vec.Len)
+			card := float64(exprImpl.F.Args[1].GetVec().Len)
 			ndv := getExprNdv(expr, builder)
 			if ndv > 10*card {
 				return 10 * card / ndv
@@ -527,23 +570,22 @@ func estimateFilterWeight(expr *plan.Expr, w float64) float64 {
 }
 
 // harsh estimate of block selectivity, will improve it in the future
-func estimateFilterBlockSelectivity(ctx context.Context, expr *plan.Expr, tableDef *plan.TableDef) float64 {
+func estimateFilterBlockSelectivity(ctx context.Context, expr *plan.Expr, tableDef *plan.TableDef, s *pb.StatsInfo) float64 {
 	if !ExprIsZonemappable(ctx, expr) {
 		return 1
 	}
-	if expr.Selectivity < 0.01 {
-		return expr.Selectivity * 100
-	}
 	col := extractColRefInFilter(expr)
 	if col != nil {
+		blocksel := calcBlockSelectivityUsingShuffleRange(s.ShuffleRangeMap[col.Name], expr.Selectivity)
 		switch GetSortOrder(tableDef, col.ColPos) {
 		case 0:
-			return math.Min(expr.Selectivity, 0.5)
+			blocksel = math.Min(blocksel, 0.2)
 		case 1:
-			return math.Min(expr.Selectivity*3, 0.5)
+			return math.Min(blocksel, 0.5)
 		case 2:
-			return math.Min(expr.Selectivity*10, 0.5)
+			return math.Min(blocksel, 0.7)
 		}
+		return blocksel
 	}
 	return 1
 }
@@ -946,6 +988,9 @@ func recalcStatsByRuntimeFilter(node *plan.Node, runtimeFilterSel float64) {
 }
 
 func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
+	if builder.skipStats {
+		return DefaultStats()
+	}
 	if InternalTable(node.TableDef) {
 		return DefaultStats()
 	}
@@ -964,8 +1009,8 @@ func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
 	var blockExprList []*plan.Expr
 	for i := range node.FilterList {
 		node.FilterList[i].Selectivity = estimateExprSelectivity(node.FilterList[i], builder)
-		currentBlockSel := estimateFilterBlockSelectivity(builder.GetContext(), node.FilterList[i], node.TableDef)
-		if currentBlockSel < blockSelectivityThreshHold {
+		currentBlockSel := estimateFilterBlockSelectivity(builder.GetContext(), node.FilterList[i], node.TableDef, s)
+		if currentBlockSel < 1 {
 			copyOfExpr := DeepCopyExpr(node.FilterList[i])
 			copyOfExpr.Selectivity = currentBlockSel
 			blockExprList = append(blockExprList, copyOfExpr)
@@ -973,11 +1018,22 @@ func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
 		blockSel = andSelectivity(blockSel, currentBlockSel)
 	}
 	node.BlockFilterList = blockExprList
-	expr := rewriteFiltersForStats(node.FilterList, builder.compCtx.GetProcess())
-	stats.Selectivity = estimateExprSelectivity(expr, builder)
+	stats.Selectivity = estimateExprSelectivity(colexec.RewriteFilterExprList(node.FilterList), builder)
 	stats.Outcnt = stats.Selectivity * stats.TableCnt
 	stats.Cost = stats.TableCnt * blockSel
 	stats.BlockNum = int32(float64(s.BlockNumber)*blockSel) + 1
+
+	// if there is a limit, outcnt is limit number
+	if node.Limit != nil && len(node.FilterList) == 0 {
+		if cExpr, ok := node.Limit.Expr.(*plan.Expr_Lit); ok {
+			if c, ok := cExpr.Lit.Value.(*plan.Literal_I64Val); ok {
+				stats.Outcnt = float64(c.I64Val)
+				stats.BlockNum = int32((stats.Outcnt / DefaultBlockMaxRows) + 1)
+				stats.Cost = float64(stats.BlockNum * DefaultBlockMaxRows)
+			}
+		}
+	}
+
 	return stats
 }
 
@@ -1178,4 +1234,42 @@ func DeepCopyStats(stats *plan.Stats) *plan.Stats {
 		Selectivity:  stats.Selectivity,
 		HashmapStats: hashmapStats,
 	}
+}
+
+func calcBlockSelectivityUsingShuffleRange(s *pb.ShuffleRange, sel float64) float64 {
+	if s == nil {
+		if sel <= 0.01 {
+			return sel * 100
+		} else {
+			return 1
+		}
+	}
+	ret := sel * math.Pow(500, math.Pow(s.Overlap, 2))
+	if ret > 1 {
+		ret = 1
+	}
+	return ret
+}
+
+func (builder *QueryBuilder) canSkipStats() bool {
+	//for now ,only skip stats for select count(*) from xx
+	if len(builder.qry.Steps) != 1 || len(builder.qry.Nodes) != 3 {
+		return false
+	}
+	project := builder.qry.Nodes[builder.qry.Steps[0]]
+	if project.NodeType != plan.Node_PROJECT {
+		return false
+	}
+	agg := builder.qry.Nodes[project.Children[0]]
+	if agg.NodeType != plan.Node_AGG {
+		return false
+	}
+	if len(agg.AggList) != 1 || len(agg.GroupBy) != 0 {
+		return false
+	}
+	if agg.AggList[0].GetF() == nil || agg.AggList[0].GetF().Func.ObjName != "starcount" {
+		return false
+	}
+	scan := builder.qry.Nodes[agg.Children[0]]
+	return scan.NodeType == plan.Node_TABLE_SCAN
 }

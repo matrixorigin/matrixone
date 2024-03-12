@@ -40,11 +40,9 @@ func BenchmarkInsert(b *testing.B) {
 	originStr := "0123456789"
 	testExpr := tree.NewNumValWithType(constant.MakeString(originStr), originStr, false, tree.P_char)
 	targetT := &plan.Expr{
-		Typ: targetType,
+		Typ: *targetType,
 		Expr: &plan.Expr_T{
-			T: &plan.TargetType{
-				Typ: targetType,
-			},
+			T: &plan.TargetType{},
 		},
 	}
 	ctx := context.TODO()
@@ -875,6 +873,8 @@ func TestShow(t *testing.T) {
 		"show grants for ROLE role1",
 		"show function status",
 		"show function status like '%ff'",
+		"show snapshots",
+		"show snapshots where SNAPSHOT_NAME = 'snapshot_07'",
 		// "show procedure status",
 		// "show procedure status like '%ff'",
 		"show roles",

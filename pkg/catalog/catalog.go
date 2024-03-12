@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"regexp"
 	"strconv"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -457,4 +458,9 @@ func BuildQueryResultPath(accountName, statementId string, blockIdx int) string 
 
 func BuildQueryResultMetaPath(accountName, statementId string) string {
 	return fmt.Sprintf(QueryResultMetaPath, accountName, statementId)
+}
+
+func BuildProfilePath(typ, name string) string {
+	now := time.Now().Format(time.RFC3339)
+	return fmt.Sprintf("%s/%s_%s_%s", ProfileDir, typ, name, now)
 }

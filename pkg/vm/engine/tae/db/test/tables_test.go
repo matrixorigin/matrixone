@@ -435,7 +435,7 @@ func TestTxn6(t *testing.T) {
 	}
 }
 
-func TestMergeBlocks1(t *testing.T) {
+func TestFlushAblkMerge(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
@@ -497,11 +497,8 @@ func TestMergeBlocks1(t *testing.T) {
 			assert.Nil(t, txn.Commit(context.Background()))
 		}
 		start := time.Now()
-		factory := jobs.MergeBlocksIntoObjectTaskFctory(blks, nil, db.Runtime)
-		// err = task.WaitDone()
-		// assert.Nil(t, err)
 		{
-			task, err := factory(nil, txn)
+			task, err := jobs.NewFlushTableTailTask(nil, txn, blks, db.Runtime, types.MaxTs())
 			assert.Nil(t, err)
 			err = task.OnExec(context.Background())
 			assert.Nil(t, err)
@@ -683,7 +680,7 @@ func TestCompaction2(t *testing.T) {
 		return dirty.GetTree().Compact()
 	})
 	{
-		txn, _ := db.TxnMgr.StartTxn(nil)
+		txn, _ := db.TxnMgr.StartTxnWithLatestTS(nil)
 		database, _ := txn.GetDatabase("db")
 		rel, _ := database.GetRelationByName(schema.Name)
 		it := rel.MakeBlockIt()
@@ -698,7 +695,7 @@ func TestCompaction2(t *testing.T) {
 		}
 	}
 	{
-		txn, _ := db.TxnMgr.StartTxn(nil)
+		txn, _ := db.TxnMgr.StartTxnWithLatestTS(nil)
 		database, _ := txn.GetDatabase("db")
 		rel, _ := database.GetRelationByName(schema.Name)
 		it := rel.MakeBlockIt()

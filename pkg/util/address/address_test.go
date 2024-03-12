@@ -95,7 +95,7 @@ func TestAddressManager(t *testing.T) {
 	assert.Equal(t, "0.0.0.0:39001", m.ListenAddress(1))
 	assert.Equal(t, "127.0.0.1:39001", m.ServiceAddress(1))
 
-	l, err := net.Listen("tcp4", "127.0.0.1:39002")
+	l, err := net.Listen("tcp4", "0.0.0.0:39002")
 	assert.NoError(t, err)
 	defer func() {
 		err = l.Close()

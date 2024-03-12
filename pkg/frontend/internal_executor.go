@@ -195,6 +195,7 @@ func (ie *internalExecutor) newCmdSession(ctx context.Context, opts ie.SessionOv
 	sess := NewSession(ie.proto, mp, ie.pu, GSysVariables, true, ie.aicm, nil)
 	sess.SetRequestContext(ctx)
 	sess.SetConnectContext(ctx)
+	sess.disableTrace = true
 
 	var t *TenantInfo
 	if accountId, err := defines.GetAccountId(ctx); err == nil {
@@ -437,7 +438,7 @@ func (ip *internalProtocol) ResetStatistics() {
 
 func (ip *internalProtocol) GetStats() string { return "internal unknown stats" }
 
-func (ip *internalProtocol) CalculateOutTrafficBytes() int64 { return 0 }
+func (ip *internalProtocol) CalculateOutTrafficBytes(reset bool) (int64, int64) { return 0, 0 }
 
 func (ip *internalProtocol) sendLocalInfileRequest(filename string) error {
 	return nil
