@@ -208,6 +208,8 @@ type Transaction struct {
 	statementID int
 	//offsets of the txn.writes for statements in a txn.
 	offsets []int
+	// timestamp of the transaction for each statement
+	timestamps []timestamp.Timestamp
 
 	hasS3Op              atomic.Bool
 	removed              bool
@@ -327,6 +329,7 @@ func (txn *Transaction) IncrStatementID(ctx context.Context, commit bool) error 
 	if err := txn.dumpBatchLocked(0); err != nil {
 		return err
 	}
+	txn.timestamps = append(txn.timestamps, txn.op.SnapshotTS())
 	txn.offsets = append(txn.offsets, len(txn.writes))
 	txn.statementID++
 
@@ -459,6 +462,7 @@ func (txn *Transaction) RollbackLastStatement(ctx context.Context) error {
 		}
 		txn.writes = txn.writes[:end]
 		txn.offsets = txn.offsets[:txn.statementID]
+		txn.timestamps = txn.timestamps[:txn.statementID]
 	}
 	// rollback current statement's writes info
 	for b := range txn.batchSelectList {
@@ -612,9 +616,6 @@ type txnTable struct {
 	relKind       string
 	createSql     string
 	constraint    []byte
-
-	// timestamp of the last operation on this table
-	lastTS timestamp.Timestamp
 
 	// this should be the statement id
 	// but seems that we're not maintaining it at the moment

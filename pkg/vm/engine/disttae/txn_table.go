@@ -642,27 +642,6 @@ func (tbl *txnTable) rangesOnePart(
 	blocks *objectio.BlockInfoSlice, // output marshaled block list after filtering
 	proc *process.Process, // process of this transaction
 ) (err error) {
-	if tbl.db.txn.op.Txn().IsRCIsolation() {
-		state, err := tbl.getPartitionState(tbl.proc.Load().Ctx)
-		if err != nil {
-			return err
-		}
-		deleteObjs, createObjs := state.GetChangedObjsBetween(types.TimestampToTS(tbl.lastTS),
-			types.TimestampToTS(tbl.db.txn.op.SnapshotTS()))
-		trace.GetService().ApplyFlush(
-			tbl.db.txn.op.Txn().ID,
-			tbl.tableId,
-			tbl.lastTS,
-			tbl.db.txn.op.SnapshotTS(),
-			len(deleteObjs))
-		if len(deleteObjs) > 0 {
-			if err := tbl.updateDeleteInfo(ctx, state, deleteObjs, createObjs); err != nil {
-				return err
-			}
-		}
-		tbl.lastTS = tbl.db.txn.op.SnapshotTS()
-	}
-
 	var uncommittedObjects []objectio.ObjectStats
 	tbl.db.txn.forEachTableWrites(tbl.db.databaseId, tbl.tableId, tbl.db.txn.GetSnapshotWriteOffset(), func(entry Entry) {
 		stats := objectio.ObjectStats{}

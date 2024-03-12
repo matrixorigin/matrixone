@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 
@@ -899,7 +900,7 @@ func (txn *Transaction) getCachedTable(
 		}
 		val := txn.engine.catalog.GetSchemaVersion(tblKey)
 		if val != nil {
-			if val.Ts.Greater(tbl.lastTS) && val.Version != tbl.version {
+			if val.Version != tbl.version {
 				txn.tableCache.tableMap.Delete(genTableKey(k.accountId, k.name, k.databaseId))
 				return nil
 			}
@@ -1013,4 +1014,30 @@ func (txn *Transaction) UpdateSnapshotWriteOffset() {
 	txn.Lock()
 	defer txn.Unlock()
 	txn.snapshotWriteOffset = len(txn.writes)
+	if txn.statementID > 0 && txn.op.Txn().IsRCIsolation() {
+		ts := txn.timestamps[txn.statementID-1]
+		fn := func(_, value any) bool {
+			tbl := value.(*txnTable)
+			ctx := tbl.proc.Load().Ctx
+			state, err := tbl.getPartitionState(ctx)
+			if err != nil {
+				logutil.Fatalf("getPartitionState failed: %v", err)
+			}
+			deleteObjs, createObjs := state.GetChangedObjsBetween(types.TimestampToTS(ts),
+				types.TimestampToTS(tbl.db.txn.op.SnapshotTS()))
+			trace.GetService().ApplyFlush(
+				tbl.db.txn.op.Txn().ID,
+				tbl.tableId,
+				ts,
+				tbl.db.txn.op.SnapshotTS(),
+				len(deleteObjs))
+			if len(deleteObjs) > 0 {
+				if err := tbl.updateDeleteInfo(ctx, state, deleteObjs, createObjs); err != nil {
+					logutil.Fatalf("updateDeleteInfo failed: %v", err)
+				}
+			}
+			return true
+		}
+		txn.tableCache.tableMap.Range(fn)
+	}
 }

@@ -207,7 +207,6 @@ func (db *txnDatabase) RelationByAccountID(
 		constraint:    item.Constraint,
 		rowid:         item.Rowid,
 		rowids:        item.Rowids,
-		lastTS:        txn.op.SnapshotTS(),
 	}
 	tbl.proc.Store(p)
 
@@ -299,7 +298,6 @@ func (db *txnDatabase) Relation(ctx context.Context, name string, proc any) (eng
 		constraint:    item.Constraint,
 		rowid:         item.Rowid,
 		rowids:        item.Rowids,
-		lastTS:        txn.op.SnapshotTS(),
 	}
 	tbl.proc.Store(p)
 
