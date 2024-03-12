@@ -30,6 +30,7 @@ account_id    relname    relkind
 0    mo_sessions    v
 0    mo_stages    r
 0    mo_stored_procedure    r
+0    mo_snapshots    r
 0    mo_table_partitions    r
 0    mo_tables    r
 0    mo_transactions    v

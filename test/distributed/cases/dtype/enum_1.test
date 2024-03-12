@@ -27,3 +27,32 @@ select count(*),status from orders group by status;
 select substring(status,2,3) from orders;
 select length(status) from orders;
 drop table orders;
+
+
+create table t4 (a enum('abc', 'def'));
+insert into t4 values (0);
+insert into t4 values (1);
+insert into t4 values (2);
+select * from t4;
+drop table t4;
+
+create table t4 (a enum('abc', 'def'));
+create table t5 (col1 int);
+create table t6 (col1 char(10));
+insert into t5 values(1);
+insert into t5 values(2);
+insert into t4 select * from t5;
+select * from t4;
+delete from t4;
+insert into t6 values ('abc');
+insert into t6 values ('def');
+insert into t4 select * from t6;
+select * from t4;
+delete from t4;
+insert into t5 values(3);
+insert into t4 select * from t5;
+insert into t6 values('pkg');
+insert into t4 select * from t6;
+drop table t4;
+drop table t5;
+drop table t6;
