@@ -8299,7 +8299,7 @@ simple_expr:
     }
 |   '(' expression ')'
     {
-        $$ = tree.NewParenExpr($2)
+        $$ = tree.NewParentExpr($2)
     }
 |   '(' expression_list ',' expression ')'
     {

@@ -19867,7 +19867,7 @@ yydefault:
 		var yyLOCAL tree.Expr
 //line mysql_sql.y:8301
 		{
-			yyLOCAL = tree.NewParenExpr(yyDollar[2].exprUnion())
+			yyLOCAL = tree.NewParentExpr(yyDollar[2].exprUnion())
 		}
 		yyVAL.union = yyLOCAL
 	case 1344:
