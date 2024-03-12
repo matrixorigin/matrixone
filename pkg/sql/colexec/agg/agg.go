@@ -15,6 +15,7 @@
 package agg
 
 import (
+	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -340,7 +341,16 @@ func (a *UnaryAgg[T1, T2]) Eval(pool *mpool.MPool) (vec *vector.Vector, err erro
 
 	vec = vector.NewVec(a.outputType)
 	if a.outputType.IsVarlen() {
-		vs := (any)(a.vs).([][]byte)
+		var vs [][]byte
+		if bmps, ok := (any)(a.vs).([]*roaring.Bitmap); ok {
+			for _, bmp := range bmps {
+				bytes, _ := bmp.MarshalBinary()
+				vs = append(vs, bytes)
+			}
+		} else {
+			vs = (any)(a.vs).([][]byte)
+		}
+
 		if err = vector.AppendBytesList(vec, vs, nullList, pool); err != nil {
 			vec.Free(pool)
 			return nil, err

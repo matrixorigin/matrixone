@@ -20,13 +20,13 @@ import (
 	"fmt"
 	"io"
 	"math"
-	"math/bits"
 	"runtime"
 	"strconv"
 	"strings"
 	"time"
 	"unsafe"
 
+	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/system"
@@ -1341,9 +1341,10 @@ func BitmapBucketNumber(parameters []*vector.Vector, result vector.FunctionResul
 
 func BitmapCount(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	return opUnaryBytesToFixed[uint64](parameters, result, proc, length, func(v []byte) (cnt uint64) {
-		for i := range v {
-			cnt += uint64(bits.OnesCount8(v[i]))
+		bmp := roaring.New()
+		if err := bmp.UnmarshalBinary(v); err != nil {
+			return 0
 		}
-		return
+		return bmp.GetCardinality()
 	})
 }
