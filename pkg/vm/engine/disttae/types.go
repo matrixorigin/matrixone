@@ -617,6 +617,9 @@ type txnTable struct {
 	createSql     string
 	constraint    []byte
 
+	// timestamp of the last operation on this table
+	lastTS timestamp.Timestamp
+
 	// this should be the statement id
 	// but seems that we're not maintaining it at the moment
 	// localTS timestamp.Timestamp
