@@ -31,7 +31,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	db_holder "github.com/matrixorigin/matrixone/pkg/util/export/etl/db"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
-	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 
 	"github.com/google/uuid"
@@ -592,7 +591,8 @@ func EndStatement(ctx context.Context, err error, sentRows int64, outBytes int64
 		outBytes += TcpIpv4HeaderSize * outPacket
 		s.statsArray.InitIfEmpty().WithOutTrafficBytes(float64(outBytes)).WithOutPacketCount(float64(outPacket))
 		s.ExecPlan2Stats(ctx)
-		metric.StatementCUCounter(s.Account, s.SqlSourceType).Add(s.statsArray.GetCU())
+		// disable cu metric counter
+		// metric.StatementCUCounter(s.Account, s.SqlSourceType).Add(s.statsArray.GetCU())
 		s.Status = StatementStatusSuccess
 		if err != nil {
 			s.Error = err
