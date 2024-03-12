@@ -111,3 +111,6 @@ internal error: convert to MySQL enum failed: number 3 overflow enum boundary [1
 insert into t6 values('pkg');
 insert into t4 select * from t6;
 internal error: convert to MySQL enum failed: item pkg is not in enum [abc def]
+drop table t4;
+drop table t5;
+drop table t6;
