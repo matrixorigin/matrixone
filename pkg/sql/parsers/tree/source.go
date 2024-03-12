@@ -196,7 +196,9 @@ func (node *CreateSource) reset() {
 			case *TableOptionEncryption:
 				opt.Free()
 			default:
-				panic(fmt.Sprintf("miss Free for %v", item))
+				if opt != nil {
+					panic(fmt.Sprintf("miss Free for %v", item))
+				}
 			}
 		}
 	}

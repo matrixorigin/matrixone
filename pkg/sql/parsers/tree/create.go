@@ -1103,7 +1103,9 @@ func (node *CreateTable) reset() {
 			case *CheckIndex:
 				d.Free()
 			default:
-				panic(fmt.Sprintf("miss Free for %v", def))
+				if d != nil {
+					panic(fmt.Sprintf("miss Free for %v", def))
+				}
 			}
 		}
 	}
@@ -1178,7 +1180,9 @@ func (node *CreateTable) reset() {
 			case *TableOptionEncryption:
 				opt.Free()
 			default:
-				panic(fmt.Sprintf("miss Free for %v", item))
+				if opt != nil {
+					panic(fmt.Sprintf("miss Free for %v", item))
+				}
 			}
 		}
 	}
@@ -1265,7 +1269,9 @@ func (node *CreateTable) reset() {
 			case *TableOptionEncryption:
 				opt.Free()
 			default:
-				panic(fmt.Sprintf("miss Free for %v", item))
+				if opt != nil {
+					panic(fmt.Sprintf("miss Free for %v", item))
+				}
 			}
 		}
 	}
@@ -1360,7 +1366,9 @@ func (node *ColumnTableDef) reset() {
 			case *KeyPart:
 				opt.Free()
 			default:
-				panic(fmt.Sprintf("miss Free for %v", item))
+				if opt != nil {
+					panic(fmt.Sprintf("miss Free for %v", item))
+				}
 			}
 		}
 	}
@@ -3593,7 +3601,9 @@ func (node *PartitionBy) reset() {
 	case *ListType:
 		t.Free()
 	default:
-		panic(fmt.Sprintf("miss Free for %v", node.PType))
+		if t != nil {
+			panic(fmt.Sprintf("miss Free for %v", node.PType))
+		}
 	}
 
 	*node = PartitionBy{}
@@ -3785,7 +3795,9 @@ func (node *Partition) reset() {
 			case *TableOptionEncryption:
 				opt.Free()
 			default:
-				panic(fmt.Sprintf("miss Free for %v", item))
+				if opt != nil {
+					panic(fmt.Sprintf("miss Free for %v", item))
+				}
 			}
 		}
 	}
@@ -3797,7 +3809,9 @@ func (node *Partition) reset() {
 		case *ValuesIn:
 			v.Free()
 		default:
-			panic(fmt.Sprintf("miss Free for %v", node.Values))
+			if v != nil {
+				panic(fmt.Sprintf("miss Free for %v", node.Values))
+			}
 		}
 	}
 
@@ -3914,7 +3928,9 @@ func (node *SubPartition) reset() {
 			case *TableOptionEncryption:
 				opt.Free()
 			default:
-				panic(fmt.Sprintf("miss Free for %v", item))
+				if opt != nil {
+					panic(fmt.Sprintf("miss Free for %v", item))
+				}
 			}
 		}
 	}
@@ -5007,7 +5023,9 @@ func (node *CreateUser) reset() {
 		case *UserMiscOptionAccountUnlock:
 			mt.Free()
 		default:
-			panic(fmt.Sprintf("miss Free for %v", node.MiscOpt))
+			if mt != nil {
+				panic(fmt.Sprintf("miss Free for %v", node.MiscOpt))
+			}
 		}
 	}
 
