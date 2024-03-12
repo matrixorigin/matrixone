@@ -262,8 +262,8 @@ func (txn *Transaction) checkDup() error {
 	//table id is global unique
 	tablesDef := make(map[uint64]*plan.TableDef)
 	pkIndex := make(map[uint64]int)
-	insertPks := make(map[any]bool)
-	delPks := make(map[any]bool)
+	insertPks := make(map[uint64]map[any]bool)
+	delPks := make(map[uint64]map[any]bool)
 
 	for _, e := range txn.writes {
 		if e.bat == nil || e.bat.RowCount() == 0 {
@@ -319,8 +319,11 @@ func (txn *Transaction) checkDup() error {
 					newBat.SetRowCount(bat.Vecs[0].Length())
 					bat = newBat
 				}
+				if _, ok := insertPks[e.tableId]; !ok {
+					insertPks[e.tableId] = make(map[any]bool)
+				}
 				if dup, pk := checkPKDup(
-					insertPks,
+					insertPks[e.tableId],
 					bat.Vecs[index],
 					bat.Attrs[index],
 					0,
@@ -344,8 +347,11 @@ func (txn *Transaction) checkDup() error {
 					e.databaseName, e.tableName)
 				continue
 			}
+			if _, ok := delPks[e.tableId]; !ok {
+				delPks[e.tableId] = make(map[any]bool)
+			}
 			if dup, pk := checkPKDup(
-				delPks,
+				delPks[e.tableId],
 				e.bat.Vecs[1],
 				e.bat.Attrs[1],
 				0,
