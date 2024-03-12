@@ -20,32 +20,32 @@ func init() {
 	reuse.CreatePool[DropProcedure](
 		func() *DropProcedure { return &DropProcedure{} },
 		func(d *DropProcedure) { d.reset() },
-		reuse.DefaultOptions[DropProcedure]().
-			WithEnableChecker())
+		reuse.DefaultOptions[DropProcedure](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[ProcedureArgDecl](
 		func() *ProcedureArgDecl { return &ProcedureArgDecl{} },
 		func(p *ProcedureArgDecl) { p.reset() },
-		reuse.DefaultOptions[ProcedureArgDecl]().
-			WithEnableChecker())
+		reuse.DefaultOptions[ProcedureArgDecl](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[ProcedureName](
 		func() *ProcedureName { return &ProcedureName{} },
 		func(p *ProcedureName) { p.reset() },
-		reuse.DefaultOptions[ProcedureName]().
-			WithEnableChecker())
+		reuse.DefaultOptions[ProcedureName](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[CreateProcedure](
 		func() *CreateProcedure { return &CreateProcedure{} },
 		func(c *CreateProcedure) { c.reset() },
-		reuse.DefaultOptions[CreateProcedure]().
-			WithEnableChecker())
+		reuse.DefaultOptions[CreateProcedure](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[CallStmt](
 		func() *CallStmt { return &CallStmt{} },
 		func(c *CallStmt) { c.reset() },
-		reuse.DefaultOptions[CallStmt]().
-			WithEnableChecker())
+		reuse.DefaultOptions[CallStmt](), //.
+	) //WithEnableChecker()
 }
 
 type InOutArgType int

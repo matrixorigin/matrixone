@@ -20,8 +20,8 @@ func init() {
 	reuse.CreatePool[Use](
 		func() *Use { return &Use{} },
 		func(u *Use) { u.reset() },
-		reuse.DefaultOptions[Use]().
-			WithEnableChecker())
+		reuse.DefaultOptions[Use](), //.
+	) //WithEnableChecker()
 }
 
 type SecondaryRoleType int

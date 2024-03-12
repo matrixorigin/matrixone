@@ -3492,7 +3492,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 				defer func() {
 					for _, s := range originStmts {
 						s.Free()
-					}	
+					}
 				}()
 				if err != nil {
 					return 0, err

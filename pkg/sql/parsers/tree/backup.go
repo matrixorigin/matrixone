@@ -20,8 +20,8 @@ func init() {
 	reuse.CreatePool[BackupStart](
 		func() *BackupStart { return &BackupStart{} },
 		func(b *BackupStart) { b.reset() },
-		reuse.DefaultOptions[BackupStart]().
-			WithEnableChecker())
+		reuse.DefaultOptions[BackupStart](), //.
+	) //WithEnableChecker()
 }
 
 type BackupStart struct {

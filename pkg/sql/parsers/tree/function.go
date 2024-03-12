@@ -25,32 +25,32 @@ func init() {
 	reuse.CreatePool[DropFunction](
 		func() *DropFunction { return &DropFunction{} },
 		func(d *DropFunction) { d.reset() },
-		reuse.DefaultOptions[DropFunction]().
-			WithEnableChecker())
+		reuse.DefaultOptions[DropFunction](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[FunctionArgDecl](
 		func() *FunctionArgDecl { return &FunctionArgDecl{} },
 		func(f *FunctionArgDecl) { f.reset() },
-		reuse.DefaultOptions[FunctionArgDecl]().
-			WithEnableChecker())
+		reuse.DefaultOptions[FunctionArgDecl](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[ReturnType](
 		func() *ReturnType { return &ReturnType{} },
 		func(r *ReturnType) { r.reset() },
-		reuse.DefaultOptions[ReturnType]().
-			WithEnableChecker())
+		reuse.DefaultOptions[ReturnType](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[FunctionName](
 		func() *FunctionName { return &FunctionName{} },
 		func(f *FunctionName) { f.reset() },
-		reuse.DefaultOptions[FunctionName]().
-			WithEnableChecker())
+		reuse.DefaultOptions[FunctionName](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[CreateFunction](
 		func() *CreateFunction { return &CreateFunction{} },
 		func(c *CreateFunction) { c.reset() },
-		reuse.DefaultOptions[CreateFunction]().
-			WithEnableChecker())
+		reuse.DefaultOptions[CreateFunction](), //.
+	) //WithEnableChecker()
 
 }
 

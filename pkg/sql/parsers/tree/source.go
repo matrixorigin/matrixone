@@ -24,26 +24,26 @@ func init() {
 	reuse.CreatePool[CreateSource](
 		func() *CreateSource { return &CreateSource{} },
 		func(c *CreateSource) { c.reset() },
-		reuse.DefaultOptions[CreateSource]().
-			WithEnableChecker())
+		reuse.DefaultOptions[CreateSource](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[CreateSourceWithOption](
 		func() *CreateSourceWithOption { return &CreateSourceWithOption{} },
 		func(c *CreateSourceWithOption) { c.reset() },
-		reuse.DefaultOptions[CreateSourceWithOption]().
-			WithEnableChecker())
+		reuse.DefaultOptions[CreateSourceWithOption](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[AttributeHeader](
 		func() *AttributeHeader { return &AttributeHeader{} },
 		func(a *AttributeHeader) { a.reset() },
-		reuse.DefaultOptions[AttributeHeader]().
-			WithEnableChecker())
+		reuse.DefaultOptions[AttributeHeader](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[AttributeHeaders](
 		func() *AttributeHeaders { return &AttributeHeaders{} },
 		func(a *AttributeHeaders) { a.reset() },
-		reuse.DefaultOptions[AttributeHeaders]().
-			WithEnableChecker())
+		reuse.DefaultOptions[AttributeHeaders](), //.
+	) //WithEnableChecker()
 }
 
 type CreateSource struct {

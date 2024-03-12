@@ -20,20 +20,20 @@ func init() {
 	reuse.CreatePool[DropConnector](
 		func() *DropConnector { return &DropConnector{} },
 		func(d *DropConnector) { d.reset() },
-		reuse.DefaultOptions[DropConnector]().
-			WithEnableChecker())
+		reuse.DefaultOptions[DropConnector](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[CreateConnector](
 		func() *CreateConnector { return &CreateConnector{} },
 		func(c *CreateConnector) { c.reset() },
-		reuse.DefaultOptions[CreateConnector]().
-			WithEnableChecker())
+		reuse.DefaultOptions[CreateConnector](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[ConnectorOption](
 		func() *ConnectorOption { return &ConnectorOption{} },
 		func(c *ConnectorOption) { c.reset() },
-		reuse.DefaultOptions[ConnectorOption]().
-			WithEnableChecker())
+		reuse.DefaultOptions[ConnectorOption](), //.
+	) //WithEnableChecker()
 }
 
 type DropConnector struct {

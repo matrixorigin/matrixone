@@ -20,8 +20,8 @@ func init() {
 	reuse.CreatePool[AnalyzeStmt](
 		func() *AnalyzeStmt { return &AnalyzeStmt{} },
 		func(a *AnalyzeStmt) { a.reset() },
-		reuse.DefaultOptions[AnalyzeStmt]().
-			WithEnableChecker())
+		reuse.DefaultOptions[AnalyzeStmt](), //.
+	) //WithEnableChecker()
 }
 
 // Use statement

@@ -20,8 +20,8 @@ func init() {
 	reuse.CreatePool[CreateView](
 		func() *CreateView { return &CreateView{} },
 		func(c *CreateView) { c.reset() },
-		reuse.DefaultOptions[CreateView]().
-			WithEnableChecker())
+		reuse.DefaultOptions[CreateView](), //.
+	) //WithEnableChecker()
 }
 
 type CreateView struct {

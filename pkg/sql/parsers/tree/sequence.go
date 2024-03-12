@@ -24,20 +24,20 @@ func init() {
 	reuse.CreatePool[AlterSequence](
 		func() *AlterSequence { return &AlterSequence{} },
 		func(a *AlterSequence) { a.reset() },
-		reuse.DefaultOptions[AlterSequence]().
-			WithEnableChecker())
+		reuse.DefaultOptions[AlterSequence](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[CreateSequence](
 		func() *CreateSequence { return &CreateSequence{} },
 		func(c *CreateSequence) { c.reset() },
-		reuse.DefaultOptions[CreateSequence]().
-			WithEnableChecker())
+		reuse.DefaultOptions[CreateSequence](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[DropSequence](
 		func() *DropSequence { return &DropSequence{} },
 		func(a *DropSequence) { a.reset() },
-		reuse.DefaultOptions[DropSequence]().
-			WithEnableChecker())
+		reuse.DefaultOptions[DropSequence](), //.
+	) //WithEnableChecker()
 }
 
 type CreateSequence struct {

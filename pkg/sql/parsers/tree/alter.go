@@ -24,164 +24,164 @@ func init() {
 	reuse.CreatePool[AlterUser](
 		func() *AlterUser { return &AlterUser{} },
 		func(a *AlterUser) { a.reset() },
-		reuse.DefaultOptions[AlterUser]().
-			WithEnableChecker())
+		reuse.DefaultOptions[AlterUser](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[AlterAccount](
 		func() *AlterAccount { return &AlterAccount{} },
 		func(a *AlterAccount) { a.reset() },
-		reuse.DefaultOptions[AlterAccount]().
-			WithEnableChecker())
+		reuse.DefaultOptions[AlterAccount](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[AlterView](
 		func() *AlterView { return &AlterView{} },
 		func(a *AlterView) { a.reset() },
-		reuse.DefaultOptions[AlterView]().
-			WithEnableChecker())
+		reuse.DefaultOptions[AlterView](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[AlterDataBaseConfig](
 		func() *AlterDataBaseConfig { return &AlterDataBaseConfig{} },
 		func(a *AlterDataBaseConfig) { a.reset() },
-		reuse.DefaultOptions[AlterDataBaseConfig]().
-			WithEnableChecker())
+		reuse.DefaultOptions[AlterDataBaseConfig](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[AlterTable](
 		func() *AlterTable { return &AlterTable{} },
 		func(a *AlterTable) { a.reset() },
-		reuse.DefaultOptions[AlterTable]().
-			WithEnableChecker())
+		reuse.DefaultOptions[AlterTable](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[AlterOptionAlterIndex](
 		func() *AlterOptionAlterIndex { return &AlterOptionAlterIndex{} },
 		func(a *AlterOptionAlterIndex) { a.reset() },
-		reuse.DefaultOptions[AlterOptionAlterIndex]().
-			WithEnableChecker())
+		reuse.DefaultOptions[AlterOptionAlterIndex](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[AlterOptionAlterReIndex](
 		func() *AlterOptionAlterReIndex { return &AlterOptionAlterReIndex{} },
 		func(a *AlterOptionAlterReIndex) { a.reset() },
-		reuse.DefaultOptions[AlterOptionAlterReIndex]().
-			WithEnableChecker())
+		reuse.DefaultOptions[AlterOptionAlterReIndex](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[AlterOptionAlterCheck](
 		func() *AlterOptionAlterCheck { return &AlterOptionAlterCheck{} },
 		func(a *AlterOptionAlterCheck) { a.reset() },
-		reuse.DefaultOptions[AlterOptionAlterCheck]().
-			WithEnableChecker())
+		reuse.DefaultOptions[AlterOptionAlterCheck](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[AlterOptionAdd](
 		func() *AlterOptionAdd { return &AlterOptionAdd{} },
 		func(a *AlterOptionAdd) { a.reset() },
-		reuse.DefaultOptions[AlterOptionAdd]().
-			WithEnableChecker())
+		reuse.DefaultOptions[AlterOptionAdd](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[AlterOptionDrop](
 		func() *AlterOptionDrop { return &AlterOptionDrop{} },
 		func(a *AlterOptionDrop) { a.reset() },
-		reuse.DefaultOptions[AlterOptionDrop]().
-			WithEnableChecker())
+		reuse.DefaultOptions[AlterOptionDrop](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[AlterOptionTableName](
 		func() *AlterOptionTableName { return &AlterOptionTableName{} },
 		func(a *AlterOptionTableName) { a.reset() },
-		reuse.DefaultOptions[AlterOptionTableName]().
-			WithEnableChecker())
+		reuse.DefaultOptions[AlterOptionTableName](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[AlterAddCol](
 		func() *AlterAddCol { return &AlterAddCol{} },
 		func(a *AlterAddCol) { a.reset() },
-		reuse.DefaultOptions[AlterAddCol]().
-			WithEnableChecker())
+		reuse.DefaultOptions[AlterAddCol](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[AlterPublication](
 		func() *AlterPublication { return &AlterPublication{} },
 		func(a *AlterPublication) { a.reset() },
-		reuse.DefaultOptions[AlterPublication]().
-			WithEnableChecker())
+		reuse.DefaultOptions[AlterPublication](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[AlterTableModifyColumnClause](
 		func() *AlterTableModifyColumnClause { return &AlterTableModifyColumnClause{} },
 		func(a *AlterTableModifyColumnClause) { a.reset() },
-		reuse.DefaultOptions[AlterTableModifyColumnClause]().
-			WithEnableChecker())
+		reuse.DefaultOptions[AlterTableModifyColumnClause](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[AlterTableChangeColumnClause](
 		func() *AlterTableChangeColumnClause { return &AlterTableChangeColumnClause{} },
 		func(a *AlterTableChangeColumnClause) { a.reset() },
-		reuse.DefaultOptions[AlterTableChangeColumnClause]().
-			WithEnableChecker())
+		reuse.DefaultOptions[AlterTableChangeColumnClause](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[AlterTableAddColumnClause](
 		func() *AlterTableAddColumnClause { return &AlterTableAddColumnClause{} },
 		func(a *AlterTableAddColumnClause) { a.reset() },
-		reuse.DefaultOptions[AlterTableAddColumnClause]().
-			WithEnableChecker())
+		reuse.DefaultOptions[AlterTableAddColumnClause](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[AlterTableRenameColumnClause](
 		func() *AlterTableRenameColumnClause { return &AlterTableRenameColumnClause{} },
 		func(a *AlterTableRenameColumnClause) { a.reset() },
-		reuse.DefaultOptions[AlterTableRenameColumnClause]().
-			WithEnableChecker())
+		reuse.DefaultOptions[AlterTableRenameColumnClause](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[AlterTableAlterColumnClause](
 		func() *AlterTableAlterColumnClause { return &AlterTableAlterColumnClause{} },
 		func(a *AlterTableAlterColumnClause) { a.reset() },
-		reuse.DefaultOptions[AlterTableAlterColumnClause]().
-			WithEnableChecker())
+		reuse.DefaultOptions[AlterTableAlterColumnClause](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[AlterTableOrderByColumnClause](
 		func() *AlterTableOrderByColumnClause { return &AlterTableOrderByColumnClause{} },
 		func(a *AlterTableOrderByColumnClause) { a.reset() },
-		reuse.DefaultOptions[AlterTableOrderByColumnClause]().
-			WithEnableChecker())
+		reuse.DefaultOptions[AlterTableOrderByColumnClause](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[AlterAccountAuthOption](
 		func() *AlterAccountAuthOption { return &AlterAccountAuthOption{} },
 		func(a *AlterAccountAuthOption) { a.reset() },
-		reuse.DefaultOptions[AlterAccountAuthOption]().
-			WithEnableChecker())
+		reuse.DefaultOptions[AlterAccountAuthOption](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[AlterColumnOrder](
 		func() *AlterColumnOrder { return &AlterColumnOrder{} },
 		func(a *AlterColumnOrder) { a.reset() },
-		reuse.DefaultOptions[AlterColumnOrder]().
-			WithEnableChecker())
+		reuse.DefaultOptions[AlterColumnOrder](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[ColumnPosition](
 		func() *ColumnPosition { return &ColumnPosition{} },
 		func(c *ColumnPosition) { c.reset() },
-		reuse.DefaultOptions[ColumnPosition]().
-			WithEnableChecker())
+		reuse.DefaultOptions[ColumnPosition](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[AlterPartitionRedefinePartitionClause](
 		func() *AlterPartitionRedefinePartitionClause { return &AlterPartitionRedefinePartitionClause{} },
 		func(a *AlterPartitionRedefinePartitionClause) { a.reset() },
-		reuse.DefaultOptions[AlterPartitionRedefinePartitionClause]().
-			WithEnableChecker())
+		reuse.DefaultOptions[AlterPartitionRedefinePartitionClause](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[AlterPartitionAddPartitionClause](
 		func() *AlterPartitionAddPartitionClause { return &AlterPartitionAddPartitionClause{} },
 		func(a *AlterPartitionAddPartitionClause) { a.reset() },
-		reuse.DefaultOptions[AlterPartitionAddPartitionClause]().
-			WithEnableChecker())
+		reuse.DefaultOptions[AlterPartitionAddPartitionClause](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[AlterPartitionDropPartitionClause](
 		func() *AlterPartitionDropPartitionClause { return &AlterPartitionDropPartitionClause{} },
 		func(a *AlterPartitionDropPartitionClause) { a.reset() },
-		reuse.DefaultOptions[AlterPartitionDropPartitionClause]().
-			WithEnableChecker())
+		reuse.DefaultOptions[AlterPartitionDropPartitionClause](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[AlterPartitionTruncatePartitionClause](
 		func() *AlterPartitionTruncatePartitionClause { return &AlterPartitionTruncatePartitionClause{} },
 		func(a *AlterPartitionTruncatePartitionClause) { a.reset() },
-		reuse.DefaultOptions[AlterPartitionTruncatePartitionClause]().
-			WithEnableChecker())
+		reuse.DefaultOptions[AlterPartitionTruncatePartitionClause](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[AccountsSetOption](
 		func() *AccountsSetOption { return &AccountsSetOption{} },
 		func(a *AccountsSetOption) { a.reset() },
-		reuse.DefaultOptions[AccountsSetOption]().
-			WithEnableChecker())
+		reuse.DefaultOptions[AccountsSetOption](), //.
+	) //WithEnableChecker()
 }
 
 type AlterUser struct {
@@ -236,11 +236,11 @@ func (node AlterUser) TypeName() string { return "tree.AlterUser" }
 func (node *AlterUser) reset() {
 	if node.Users != nil {
 		for _, item := range node.Users {
-	      item.Free()
+			item.Free()
 		}
 	}
 	if node.Role != nil {
-	      node.Role.Free()
+		node.Role.Free()
 	}
 	if node.MiscOpt != nil {
 		switch mt := node.MiscOpt.(type) {
@@ -337,7 +337,7 @@ func NewAlterAccount(exist bool, name string, aopt AlterAccountAuthOption, sopt 
 	return a
 }
 
-func (node *AlterAccount) Free() { 
+func (node *AlterAccount) Free() {
 	node.AuthOption.Free()
 	node.StatusOption.Free()
 	node.Comment.Free()

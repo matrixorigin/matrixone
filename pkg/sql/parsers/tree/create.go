@@ -26,698 +26,698 @@ func init() {
 	reuse.CreatePool[CreateOptionCharset](
 		func() *CreateOptionCharset { return &CreateOptionCharset{} },
 		func(c *CreateOptionCharset) { c.reset() },
-		reuse.DefaultOptions[CreateOptionCharset]().
-			WithEnableChecker())
+		reuse.DefaultOptions[CreateOptionCharset](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[ClusterByOption](
 		func() *ClusterByOption { return &ClusterByOption{} },
 		func(c *ClusterByOption) { c.reset() },
-		reuse.DefaultOptions[ClusterByOption]().
-			WithEnableChecker())
+		reuse.DefaultOptions[ClusterByOption](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[CreateOptionCollate](
 		func() *CreateOptionCollate { return &CreateOptionCollate{} },
 		func(c *CreateOptionCollate) { c.reset() },
-		reuse.DefaultOptions[CreateOptionCollate]().
-			WithEnableChecker())
+		reuse.DefaultOptions[CreateOptionCollate](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[CreateOptionEncryption](
 		func() *CreateOptionEncryption { return &CreateOptionEncryption{} },
 		func(c *CreateOptionEncryption) { c.reset() },
-		reuse.DefaultOptions[CreateOptionEncryption]().
-			WithEnableChecker())
+		reuse.DefaultOptions[CreateOptionEncryption](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[SubscriptionOption](
 		func() *SubscriptionOption { return &SubscriptionOption{} },
 		func(s *SubscriptionOption) { s.reset() },
-		reuse.DefaultOptions[SubscriptionOption]().
-			WithEnableChecker())
+		reuse.DefaultOptions[SubscriptionOption](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[CreateDatabase](
 		func() *CreateDatabase { return &CreateDatabase{} },
 		func(c *CreateDatabase) { c.reset() },
-		reuse.DefaultOptions[CreateDatabase]().
-			WithEnableChecker())
+		reuse.DefaultOptions[CreateDatabase](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[CreateTable](
 		func() *CreateTable { return &CreateTable{} },
 		func(c *CreateTable) { c.reset() },
-		reuse.DefaultOptions[CreateTable]().
-			WithEnableChecker())
+		reuse.DefaultOptions[CreateTable](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[ColumnTableDef](
 		func() *ColumnTableDef { return &ColumnTableDef{} },
 		func(c *ColumnTableDef) { c.reset() },
-		reuse.DefaultOptions[ColumnTableDef]().
-			WithEnableChecker())
+		reuse.DefaultOptions[ColumnTableDef](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[AttributeNull](
 		func() *AttributeNull { return &AttributeNull{} },
 		func(a *AttributeNull) { a.reset() },
-		reuse.DefaultOptions[AttributeNull]().
-			WithEnableChecker())
+		reuse.DefaultOptions[AttributeNull](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[AttributeDefault](
 		func() *AttributeDefault { return &AttributeDefault{} },
 		func(a *AttributeDefault) { a.reset() },
-		reuse.DefaultOptions[AttributeDefault]().
-			WithEnableChecker())
+		reuse.DefaultOptions[AttributeDefault](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[AttributeAutoIncrement](
 		func() *AttributeAutoIncrement { return &AttributeAutoIncrement{} },
 		func(a *AttributeAutoIncrement) { a.reset() },
-		reuse.DefaultOptions[AttributeAutoIncrement]().
-			WithEnableChecker())
+		reuse.DefaultOptions[AttributeAutoIncrement](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[AttributeUniqueKey](
 		func() *AttributeUniqueKey { return &AttributeUniqueKey{} },
 		func(a *AttributeUniqueKey) { a.reset() },
-		reuse.DefaultOptions[AttributeUniqueKey]().
-			WithEnableChecker())
+		reuse.DefaultOptions[AttributeUniqueKey](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[AttributeUnique](
 		func() *AttributeUnique { return &AttributeUnique{} },
 		func(a *AttributeUnique) { a.reset() },
-		reuse.DefaultOptions[AttributeUnique]().
-			WithEnableChecker())
+		reuse.DefaultOptions[AttributeUnique](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[AttributeKey](
 		func() *AttributeKey { return &AttributeKey{} },
 		func(a *AttributeKey) { a.reset() },
-		reuse.DefaultOptions[AttributeKey]().
-			WithEnableChecker())
+		reuse.DefaultOptions[AttributeKey](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[AttributePrimaryKey](
 		func() *AttributePrimaryKey { return &AttributePrimaryKey{} },
 		func(a *AttributePrimaryKey) { a.reset() },
-		reuse.DefaultOptions[AttributePrimaryKey]().
-			WithEnableChecker())
+		reuse.DefaultOptions[AttributePrimaryKey](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[AttributeComment](
 		func() *AttributeComment { return &AttributeComment{} },
 		func(a *AttributeComment) { a.reset() },
-		reuse.DefaultOptions[AttributeComment]().
-			WithEnableChecker())
+		reuse.DefaultOptions[AttributeComment](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[AttributeCollate](
 		func() *AttributeCollate { return &AttributeCollate{} },
 		func(a *AttributeCollate) { a.reset() },
-		reuse.DefaultOptions[AttributeCollate]().
-			WithEnableChecker())
+		reuse.DefaultOptions[AttributeCollate](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[AttributeColumnFormat](
 		func() *AttributeColumnFormat { return &AttributeColumnFormat{} },
 		func(a *AttributeColumnFormat) { a.reset() },
-		reuse.DefaultOptions[AttributeColumnFormat]().
-			WithEnableChecker())
+		reuse.DefaultOptions[AttributeColumnFormat](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[AttributeStorage](
 		func() *AttributeStorage { return &AttributeStorage{} },
 		func(a *AttributeStorage) { a.reset() },
-		reuse.DefaultOptions[AttributeStorage]().
-			WithEnableChecker())
+		reuse.DefaultOptions[AttributeStorage](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[AttributeCheckConstraint](
 		func() *AttributeCheckConstraint { return &AttributeCheckConstraint{} },
 		func(a *AttributeCheckConstraint) { a.reset() },
-		reuse.DefaultOptions[AttributeCheckConstraint]().
-			WithEnableChecker())
+		reuse.DefaultOptions[AttributeCheckConstraint](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[AttributeGeneratedAlways](
 		func() *AttributeGeneratedAlways { return &AttributeGeneratedAlways{} },
 		func(a *AttributeGeneratedAlways) { a.reset() },
-		reuse.DefaultOptions[AttributeGeneratedAlways]().
-			WithEnableChecker())
+		reuse.DefaultOptions[AttributeGeneratedAlways](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[AttributeLowCardinality](
 		func() *AttributeLowCardinality { return &AttributeLowCardinality{} },
 		func(a *AttributeLowCardinality) { a.reset() },
-		reuse.DefaultOptions[AttributeLowCardinality]().
-			WithEnableChecker())
+		reuse.DefaultOptions[AttributeLowCardinality](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[KeyPart](
 		func() *KeyPart { return &KeyPart{} },
 		func(k *KeyPart) { k.reset() },
-		reuse.DefaultOptions[KeyPart]().
-			WithEnableChecker())
+		reuse.DefaultOptions[KeyPart](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[AttributeReference](
 		func() *AttributeReference { return &AttributeReference{} },
 		func(a *AttributeReference) { a.reset() },
-		reuse.DefaultOptions[AttributeReference]().
-			WithEnableChecker())
+		reuse.DefaultOptions[AttributeReference](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[AttributeOnUpdate](
 		func() *AttributeOnUpdate { return &AttributeOnUpdate{} },
 		func(a *AttributeOnUpdate) { a.reset() },
-		reuse.DefaultOptions[AttributeOnUpdate]().
-			WithEnableChecker())
+		reuse.DefaultOptions[AttributeOnUpdate](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[IndexOption](
 		func() *IndexOption { return &IndexOption{} },
 		func(i *IndexOption) { i.reset() },
-		reuse.DefaultOptions[IndexOption]().
-			WithEnableChecker())
+		reuse.DefaultOptions[IndexOption](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[PrimaryKeyIndex](
 		func() *PrimaryKeyIndex { return &PrimaryKeyIndex{} },
 		func(p *PrimaryKeyIndex) { p.reset() },
-		reuse.DefaultOptions[PrimaryKeyIndex]().
-			WithEnableChecker())
+		reuse.DefaultOptions[PrimaryKeyIndex](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[Index](
 		func() *Index { return &Index{} },
 		func(i *Index) { i.reset() },
-		reuse.DefaultOptions[Index]().
-			WithEnableChecker())
+		reuse.DefaultOptions[Index](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[UniqueIndex](
 		func() *UniqueIndex { return &UniqueIndex{} },
 		func(u *UniqueIndex) { u.reset() },
-		reuse.DefaultOptions[UniqueIndex]().
-			WithEnableChecker())
+		reuse.DefaultOptions[UniqueIndex](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[ForeignKey](
 		func() *ForeignKey { return &ForeignKey{} },
 		func(f *ForeignKey) { f.reset() },
-		reuse.DefaultOptions[ForeignKey]().
-			WithEnableChecker())
+		reuse.DefaultOptions[ForeignKey](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[FullTextIndex](
 		func() *FullTextIndex { return &FullTextIndex{} },
 		func(f *FullTextIndex) { f.reset() },
-		reuse.DefaultOptions[FullTextIndex]().
-			WithEnableChecker())
+		reuse.DefaultOptions[FullTextIndex](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[CheckIndex](
 		func() *CheckIndex { return &CheckIndex{} },
 		func(c *CheckIndex) { c.reset() },
-		reuse.DefaultOptions[CheckIndex]().
-			WithEnableChecker())
+		reuse.DefaultOptions[CheckIndex](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[TableOptionProperties](
 		func() *TableOptionProperties { return &TableOptionProperties{} },
 		func(t *TableOptionProperties) { t.reset() },
-		reuse.DefaultOptions[TableOptionProperties]().
-			WithEnableChecker())
+		reuse.DefaultOptions[TableOptionProperties](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[Property](
 		func() *Property { return &Property{} },
 		func(p *Property) { p.reset() },
-		reuse.DefaultOptions[Property]().
-			WithEnableChecker())
+		reuse.DefaultOptions[Property](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[TableOptionEngine](
 		func() *TableOptionEngine { return &TableOptionEngine{} },
 		func(t *TableOptionEngine) { t.reset() },
-		reuse.DefaultOptions[TableOptionEngine]().
-			WithEnableChecker())
+		reuse.DefaultOptions[TableOptionEngine](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[TableOptionEngineAttr](
 		func() *TableOptionEngineAttr { return &TableOptionEngineAttr{} },
 		func(t *TableOptionEngineAttr) { t.reset() },
-		reuse.DefaultOptions[TableOptionEngineAttr]().
-			WithEnableChecker())
+		reuse.DefaultOptions[TableOptionEngineAttr](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[TableOptionInsertMethod](
 		func() *TableOptionInsertMethod { return &TableOptionInsertMethod{} },
 		func(t *TableOptionInsertMethod) { t.reset() },
-		reuse.DefaultOptions[TableOptionInsertMethod]().
-			WithEnableChecker())
+		reuse.DefaultOptions[TableOptionInsertMethod](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[TableOptionSecondaryEngine](
 		func() *TableOptionSecondaryEngine { return &TableOptionSecondaryEngine{} },
 		func(t *TableOptionSecondaryEngine) { t.reset() },
-		reuse.DefaultOptions[TableOptionSecondaryEngine]().
-			WithEnableChecker())
+		reuse.DefaultOptions[TableOptionSecondaryEngine](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[TableOptionCharset](
 		func() *TableOptionCharset { return &TableOptionCharset{} },
 		func(t *TableOptionCharset) { t.reset() },
-		reuse.DefaultOptions[TableOptionCharset]().
-			WithEnableChecker())
+		reuse.DefaultOptions[TableOptionCharset](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[TableOptionCollate](
 		func() *TableOptionCollate { return &TableOptionCollate{} },
 		func(t *TableOptionCollate) { t.reset() },
-		reuse.DefaultOptions[TableOptionCollate]().
-			WithEnableChecker())
+		reuse.DefaultOptions[TableOptionCollate](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[TableOptionAUTOEXTEND_SIZE](
 		func() *TableOptionAUTOEXTEND_SIZE { return &TableOptionAUTOEXTEND_SIZE{} },
 		func(t *TableOptionAUTOEXTEND_SIZE) { t.reset() },
-		reuse.DefaultOptions[TableOptionAUTOEXTEND_SIZE]().
-			WithEnableChecker())
+		reuse.DefaultOptions[TableOptionAUTOEXTEND_SIZE](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[TableOptionAutoIncrement](
 		func() *TableOptionAutoIncrement { return &TableOptionAutoIncrement{} },
 		func(t *TableOptionAutoIncrement) { t.reset() },
-		reuse.DefaultOptions[TableOptionAutoIncrement]().
-			WithEnableChecker())
+		reuse.DefaultOptions[TableOptionAutoIncrement](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[TableOptionComment](
 		func() *TableOptionComment { return &TableOptionComment{} },
 		func(t *TableOptionComment) { t.reset() },
-		reuse.DefaultOptions[TableOptionComment]().
-			WithEnableChecker())
+		reuse.DefaultOptions[TableOptionComment](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[TableOptionAvgRowLength](
 		func() *TableOptionAvgRowLength { return &TableOptionAvgRowLength{} },
 		func(t *TableOptionAvgRowLength) { t.reset() },
-		reuse.DefaultOptions[TableOptionAvgRowLength]().
-			WithEnableChecker())
+		reuse.DefaultOptions[TableOptionAvgRowLength](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[TableOptionChecksum](
 		func() *TableOptionChecksum { return &TableOptionChecksum{} },
 		func(t *TableOptionChecksum) { t.reset() },
-		reuse.DefaultOptions[TableOptionChecksum]().
-			WithEnableChecker())
+		reuse.DefaultOptions[TableOptionChecksum](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[TableOptionCompression](
 		func() *TableOptionCompression { return &TableOptionCompression{} },
 		func(t *TableOptionCompression) { t.reset() },
-		reuse.DefaultOptions[TableOptionCompression]().
-			WithEnableChecker())
+		reuse.DefaultOptions[TableOptionCompression](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[TableOptionConnection](
 		func() *TableOptionConnection { return &TableOptionConnection{} },
 		func(t *TableOptionConnection) { t.reset() },
-		reuse.DefaultOptions[TableOptionConnection]().
-			WithEnableChecker())
+		reuse.DefaultOptions[TableOptionConnection](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[TableOptionPassword](
 		func() *TableOptionPassword { return &TableOptionPassword{} },
 		func(t *TableOptionPassword) { t.reset() },
-		reuse.DefaultOptions[TableOptionPassword]().
-			WithEnableChecker())
+		reuse.DefaultOptions[TableOptionPassword](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[TableOptionKeyBlockSize](
 		func() *TableOptionKeyBlockSize { return &TableOptionKeyBlockSize{} },
 		func(t *TableOptionKeyBlockSize) { t.reset() },
-		reuse.DefaultOptions[TableOptionKeyBlockSize]().
-			WithEnableChecker())
+		reuse.DefaultOptions[TableOptionKeyBlockSize](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[TableOptionMaxRows](
 		func() *TableOptionMaxRows { return &TableOptionMaxRows{} },
 		func(t *TableOptionMaxRows) { t.reset() },
-		reuse.DefaultOptions[TableOptionMaxRows]().
-			WithEnableChecker())
+		reuse.DefaultOptions[TableOptionMaxRows](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[TableOptionMinRows](
 		func() *TableOptionMinRows { return &TableOptionMinRows{} },
 		func(t *TableOptionMinRows) { t.reset() },
-		reuse.DefaultOptions[TableOptionMinRows]().
-			WithEnableChecker())
+		reuse.DefaultOptions[TableOptionMinRows](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[TableOptionDelayKeyWrite](
 		func() *TableOptionDelayKeyWrite { return &TableOptionDelayKeyWrite{} },
 		func(t *TableOptionDelayKeyWrite) { t.reset() },
-		reuse.DefaultOptions[TableOptionDelayKeyWrite]().
-			WithEnableChecker())
+		reuse.DefaultOptions[TableOptionDelayKeyWrite](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[TableOptionRowFormat](
 		func() *TableOptionRowFormat { return &TableOptionRowFormat{} },
 		func(t *TableOptionRowFormat) { t.reset() },
-		reuse.DefaultOptions[TableOptionRowFormat]().
-			WithEnableChecker())
+		reuse.DefaultOptions[TableOptionRowFormat](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[TableOptionStartTrans](
 		func() *TableOptionStartTrans { return &TableOptionStartTrans{} },
 		func(t *TableOptionStartTrans) { t.reset() },
-		reuse.DefaultOptions[TableOptionStartTrans]().
-			WithEnableChecker())
+		reuse.DefaultOptions[TableOptionStartTrans](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[TableOptionSecondaryEngineAttr](
 		func() *TableOptionSecondaryEngineAttr { return &TableOptionSecondaryEngineAttr{} },
 		func(t *TableOptionSecondaryEngineAttr) { t.reset() },
-		reuse.DefaultOptions[TableOptionSecondaryEngineAttr]().
-			WithEnableChecker())
+		reuse.DefaultOptions[TableOptionSecondaryEngineAttr](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[TableOptionStatsPersistent](
 		func() *TableOptionStatsPersistent { return &TableOptionStatsPersistent{} },
 		func(t *TableOptionStatsPersistent) { t.reset() },
-		reuse.DefaultOptions[TableOptionStatsPersistent]().
-			WithEnableChecker())
+		reuse.DefaultOptions[TableOptionStatsPersistent](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[TableOptionStatsAutoRecalc](
 		func() *TableOptionStatsAutoRecalc { return &TableOptionStatsAutoRecalc{} },
 		func(t *TableOptionStatsAutoRecalc) { t.reset() },
-		reuse.DefaultOptions[TableOptionStatsAutoRecalc]().
-			WithEnableChecker())
+		reuse.DefaultOptions[TableOptionStatsAutoRecalc](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[TableOptionPackKeys](
 		func() *TableOptionPackKeys { return &TableOptionPackKeys{} },
 		func(t *TableOptionPackKeys) { t.reset() },
-		reuse.DefaultOptions[TableOptionPackKeys]().
-			WithEnableChecker())
+		reuse.DefaultOptions[TableOptionPackKeys](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[TableOptionTablespace](
 		func() *TableOptionTablespace { return &TableOptionTablespace{} },
 		func(t *TableOptionTablespace) { t.reset() },
-		reuse.DefaultOptions[TableOptionTablespace]().
-			WithEnableChecker())
+		reuse.DefaultOptions[TableOptionTablespace](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[TableOptionDataDirectory](
 		func() *TableOptionDataDirectory { return &TableOptionDataDirectory{} },
 		func(t *TableOptionDataDirectory) { t.reset() },
-		reuse.DefaultOptions[TableOptionDataDirectory]().
-			WithEnableChecker())
+		reuse.DefaultOptions[TableOptionDataDirectory](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[TableOptionIndexDirectory](
 		func() *TableOptionIndexDirectory { return &TableOptionIndexDirectory{} },
 		func(t *TableOptionIndexDirectory) { t.reset() },
-		reuse.DefaultOptions[TableOptionIndexDirectory]().
-			WithEnableChecker())
+		reuse.DefaultOptions[TableOptionIndexDirectory](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[TableOptionStorageMedia](
 		func() *TableOptionStorageMedia { return &TableOptionStorageMedia{} },
 		func(t *TableOptionStorageMedia) { t.reset() },
-		reuse.DefaultOptions[TableOptionStorageMedia]().
-			WithEnableChecker())
+		reuse.DefaultOptions[TableOptionStorageMedia](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[TableOptionStatsSamplePages](
 		func() *TableOptionStatsSamplePages { return &TableOptionStatsSamplePages{} },
 		func(t *TableOptionStatsSamplePages) { t.reset() },
-		reuse.DefaultOptions[TableOptionStatsSamplePages]().
-			WithEnableChecker())
+		reuse.DefaultOptions[TableOptionStatsSamplePages](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[TableOptionUnion](
 		func() *TableOptionUnion { return &TableOptionUnion{} },
 		func(t *TableOptionUnion) { t.reset() },
-		reuse.DefaultOptions[TableOptionUnion]().
-			WithEnableChecker())
+		reuse.DefaultOptions[TableOptionUnion](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[TableOptionEncryption](
 		func() *TableOptionEncryption { return &TableOptionEncryption{} },
 		func(t *TableOptionEncryption) { t.reset() },
-		reuse.DefaultOptions[TableOptionEncryption]().
-			WithEnableChecker())
+		reuse.DefaultOptions[TableOptionEncryption](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[HashType](
 		func() *HashType { return &HashType{} },
 		func(h *HashType) { h.reset() },
-		reuse.DefaultOptions[HashType]().
-			WithEnableChecker())
+		reuse.DefaultOptions[HashType](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[KeyType](
 		func() *KeyType { return &KeyType{} },
 		func(k *KeyType) { k.reset() },
-		reuse.DefaultOptions[KeyType]().
-			WithEnableChecker())
+		reuse.DefaultOptions[KeyType](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[RangeType](
 		func() *RangeType { return &RangeType{} },
 		func(r *RangeType) { r.reset() },
-		reuse.DefaultOptions[RangeType]().
-			WithEnableChecker())
+		reuse.DefaultOptions[RangeType](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[ListType](
 		func() *ListType { return &ListType{} },
 		func(l *ListType) { l.reset() },
-		reuse.DefaultOptions[ListType]().
-			WithEnableChecker())
+		reuse.DefaultOptions[ListType](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[PartitionBy](
 		func() *PartitionBy { return &PartitionBy{} },
 		func(p *PartitionBy) { p.reset() },
-		reuse.DefaultOptions[PartitionBy]().
-			WithEnableChecker())
+		reuse.DefaultOptions[PartitionBy](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[ValuesLessThan](
 		func() *ValuesLessThan { return &ValuesLessThan{} },
 		func(v *ValuesLessThan) { v.reset() },
-		reuse.DefaultOptions[ValuesLessThan]().
-			WithEnableChecker())
+		reuse.DefaultOptions[ValuesLessThan](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[ValuesIn](
 		func() *ValuesIn { return &ValuesIn{} },
 		func(v *ValuesIn) { v.reset() },
-		reuse.DefaultOptions[ValuesIn]().
-			WithEnableChecker())
+		reuse.DefaultOptions[ValuesIn](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[Partition](
 		func() *Partition { return &Partition{} },
 		func(p *Partition) { p.reset() },
-		reuse.DefaultOptions[Partition]().
-			WithEnableChecker())
+		reuse.DefaultOptions[Partition](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[SubPartition](
 		func() *SubPartition { return &SubPartition{} },
 		func(s *SubPartition) { s.reset() },
-		reuse.DefaultOptions[SubPartition]().
-			WithEnableChecker())
+		reuse.DefaultOptions[SubPartition](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[PartitionOption](
 		func() *PartitionOption { return &PartitionOption{} },
 		func(p *PartitionOption) { p.reset() },
-		reuse.DefaultOptions[PartitionOption]().
-			WithEnableChecker())
+		reuse.DefaultOptions[PartitionOption](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[CreateIndex](
 		func() *CreateIndex { return &CreateIndex{} },
 		func(c *CreateIndex) { c.reset() },
-		reuse.DefaultOptions[CreateIndex]().
-			WithEnableChecker())
+		reuse.DefaultOptions[CreateIndex](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[CreateRole](
 		func() *CreateRole { return &CreateRole{} },
 		func(c *CreateRole) { c.reset() },
-		reuse.DefaultOptions[CreateRole]().
-			WithEnableChecker())
+		reuse.DefaultOptions[CreateRole](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[Role](
 		func() *Role { return &Role{} },
 		func(r *Role) { r.reset() },
-		reuse.DefaultOptions[Role]().
-			WithEnableChecker())
+		reuse.DefaultOptions[Role](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[User](
 		func() *User { return &User{} },
 		func(u *User) { u.reset() },
-		reuse.DefaultOptions[User]().
-			WithEnableChecker())
+		reuse.DefaultOptions[User](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[TlsOptionNone](
 		func() *TlsOptionNone { return &TlsOptionNone{} },
 		func(t *TlsOptionNone) { t.reset() },
-		reuse.DefaultOptions[TlsOptionNone]().
-			WithEnableChecker())
+		reuse.DefaultOptions[TlsOptionNone](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[TlsOptionSSL](
 		func() *TlsOptionSSL { return &TlsOptionSSL{} },
 		func(t *TlsOptionSSL) { t.reset() },
-		reuse.DefaultOptions[TlsOptionSSL]().
-			WithEnableChecker())
+		reuse.DefaultOptions[TlsOptionSSL](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[TlsOptionX509](
 		func() *TlsOptionX509 { return &TlsOptionX509{} },
 		func(t *TlsOptionX509) { t.reset() },
-		reuse.DefaultOptions[TlsOptionX509]().
-			WithEnableChecker())
+		reuse.DefaultOptions[TlsOptionX509](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[TlsOptionCipher](
 		func() *TlsOptionCipher { return &TlsOptionCipher{} },
 		func(t *TlsOptionCipher) { t.reset() },
-		reuse.DefaultOptions[TlsOptionCipher]().
-			WithEnableChecker())
+		reuse.DefaultOptions[TlsOptionCipher](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[TlsOptionIssuer](
 		func() *TlsOptionIssuer { return &TlsOptionIssuer{} },
 		func(t *TlsOptionIssuer) { t.reset() },
-		reuse.DefaultOptions[TlsOptionIssuer]().
-			WithEnableChecker())
+		reuse.DefaultOptions[TlsOptionIssuer](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[TlsOptionSubject](
 		func() *TlsOptionSubject { return &TlsOptionSubject{} },
 		func(t *TlsOptionSubject) { t.reset() },
-		reuse.DefaultOptions[TlsOptionSubject]().
-			WithEnableChecker())
+		reuse.DefaultOptions[TlsOptionSubject](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[TlsOptionSan](
 		func() *TlsOptionSan { return &TlsOptionSan{} },
 		func(t *TlsOptionSan) { t.reset() },
-		reuse.DefaultOptions[TlsOptionSan]().
-			WithEnableChecker())
+		reuse.DefaultOptions[TlsOptionSan](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[ResourceOptionMaxQueriesPerHour](
 		func() *ResourceOptionMaxQueriesPerHour { return &ResourceOptionMaxQueriesPerHour{} },
 		func(r *ResourceOptionMaxQueriesPerHour) { r.reset() },
-		reuse.DefaultOptions[ResourceOptionMaxQueriesPerHour]().
-			WithEnableChecker())
+		reuse.DefaultOptions[ResourceOptionMaxQueriesPerHour](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[ResourceOptionMaxUpdatesPerHour](
 		func() *ResourceOptionMaxUpdatesPerHour { return &ResourceOptionMaxUpdatesPerHour{} },
 		func(r *ResourceOptionMaxUpdatesPerHour) { r.reset() },
-		reuse.DefaultOptions[ResourceOptionMaxUpdatesPerHour]().
-			WithEnableChecker())
+		reuse.DefaultOptions[ResourceOptionMaxUpdatesPerHour](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[ResourceOptionMaxConnectionPerHour](
 		func() *ResourceOptionMaxConnectionPerHour { return &ResourceOptionMaxConnectionPerHour{} },
 		func(r *ResourceOptionMaxConnectionPerHour) { r.reset() },
-		reuse.DefaultOptions[ResourceOptionMaxConnectionPerHour]().
-			WithEnableChecker())
+		reuse.DefaultOptions[ResourceOptionMaxConnectionPerHour](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[ResourceOptionMaxUserConnections](
 		func() *ResourceOptionMaxUserConnections { return &ResourceOptionMaxUserConnections{} },
 		func(r *ResourceOptionMaxUserConnections) { r.reset() },
-		reuse.DefaultOptions[ResourceOptionMaxUserConnections]().
-			WithEnableChecker())
+		reuse.DefaultOptions[ResourceOptionMaxUserConnections](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[UserMiscOptionPasswordExpireNone](
 		func() *UserMiscOptionPasswordExpireNone { return &UserMiscOptionPasswordExpireNone{} },
 		func(u *UserMiscOptionPasswordExpireNone) { u.reset() },
-		reuse.DefaultOptions[UserMiscOptionPasswordExpireNone]().
-			WithEnableChecker())
+		reuse.DefaultOptions[UserMiscOptionPasswordExpireNone](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[UserMiscOptionPasswordExpireDefault](
 		func() *UserMiscOptionPasswordExpireDefault { return &UserMiscOptionPasswordExpireDefault{} },
 		func(u *UserMiscOptionPasswordExpireDefault) { u.reset() },
-		reuse.DefaultOptions[UserMiscOptionPasswordExpireDefault]().
-			WithEnableChecker())
+		reuse.DefaultOptions[UserMiscOptionPasswordExpireDefault](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[UserMiscOptionPasswordExpireNever](
 		func() *UserMiscOptionPasswordExpireNever { return &UserMiscOptionPasswordExpireNever{} },
 		func(u *UserMiscOptionPasswordExpireNever) { u.reset() },
-		reuse.DefaultOptions[UserMiscOptionPasswordExpireNever]().
-			WithEnableChecker())
+		reuse.DefaultOptions[UserMiscOptionPasswordExpireNever](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[UserMiscOptionPasswordExpireInterval](
 		func() *UserMiscOptionPasswordExpireInterval { return &UserMiscOptionPasswordExpireInterval{} },
 		func(u *UserMiscOptionPasswordExpireInterval) { u.reset() },
-		reuse.DefaultOptions[UserMiscOptionPasswordExpireInterval]().
-			WithEnableChecker())
+		reuse.DefaultOptions[UserMiscOptionPasswordExpireInterval](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[UserMiscOptionPasswordHistoryDefault](
 		func() *UserMiscOptionPasswordHistoryDefault { return &UserMiscOptionPasswordHistoryDefault{} },
 		func(u *UserMiscOptionPasswordHistoryDefault) { u.reset() },
-		reuse.DefaultOptions[UserMiscOptionPasswordHistoryDefault]().
-			WithEnableChecker())
+		reuse.DefaultOptions[UserMiscOptionPasswordHistoryDefault](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[UserMiscOptionPasswordHistoryCount](
 		func() *UserMiscOptionPasswordHistoryCount { return &UserMiscOptionPasswordHistoryCount{} },
 		func(u *UserMiscOptionPasswordHistoryCount) { u.reset() },
-		reuse.DefaultOptions[UserMiscOptionPasswordHistoryCount]().
-			WithEnableChecker())
+		reuse.DefaultOptions[UserMiscOptionPasswordHistoryCount](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[UserMiscOptionPasswordReuseIntervalDefault](
 		func() *UserMiscOptionPasswordReuseIntervalDefault {
 			return &UserMiscOptionPasswordReuseIntervalDefault{}
 		},
 		func(u *UserMiscOptionPasswordReuseIntervalDefault) { u.reset() },
-		reuse.DefaultOptions[UserMiscOptionPasswordReuseIntervalDefault]().
-			WithEnableChecker())
+		reuse.DefaultOptions[UserMiscOptionPasswordReuseIntervalDefault](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[UserMiscOptionPasswordReuseIntervalCount](
 		func() *UserMiscOptionPasswordReuseIntervalCount { return &UserMiscOptionPasswordReuseIntervalCount{} },
 		func(u *UserMiscOptionPasswordReuseIntervalCount) { u.reset() },
-		reuse.DefaultOptions[UserMiscOptionPasswordReuseIntervalCount]().
-			WithEnableChecker())
+		reuse.DefaultOptions[UserMiscOptionPasswordReuseIntervalCount](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[UserMiscOptionPasswordRequireCurrentNone](
 		func() *UserMiscOptionPasswordRequireCurrentNone { return &UserMiscOptionPasswordRequireCurrentNone{} },
 		func(u *UserMiscOptionPasswordRequireCurrentNone) { u.reset() },
-		reuse.DefaultOptions[UserMiscOptionPasswordRequireCurrentNone]().
-			WithEnableChecker())
+		reuse.DefaultOptions[UserMiscOptionPasswordRequireCurrentNone](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[UserMiscOptionPasswordRequireCurrentDefault](
 		func() *UserMiscOptionPasswordRequireCurrentDefault {
 			return &UserMiscOptionPasswordRequireCurrentDefault{}
 		},
 		func(u *UserMiscOptionPasswordRequireCurrentDefault) { u.reset() },
-		reuse.DefaultOptions[UserMiscOptionPasswordRequireCurrentDefault]().
-			WithEnableChecker())
+		reuse.DefaultOptions[UserMiscOptionPasswordRequireCurrentDefault](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[UserMiscOptionPasswordRequireCurrentOptional](
 		func() *UserMiscOptionPasswordRequireCurrentOptional {
 			return &UserMiscOptionPasswordRequireCurrentOptional{}
 		},
 		func(u *UserMiscOptionPasswordRequireCurrentOptional) { u.reset() },
-		reuse.DefaultOptions[UserMiscOptionPasswordRequireCurrentOptional]().
-			WithEnableChecker())
+		reuse.DefaultOptions[UserMiscOptionPasswordRequireCurrentOptional](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[UserMiscOptionFailedLoginAttempts](
 		func() *UserMiscOptionFailedLoginAttempts { return &UserMiscOptionFailedLoginAttempts{} },
 		func(u *UserMiscOptionFailedLoginAttempts) { u.reset() },
-		reuse.DefaultOptions[UserMiscOptionFailedLoginAttempts]().
-			WithEnableChecker())
+		reuse.DefaultOptions[UserMiscOptionFailedLoginAttempts](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[UserMiscOptionPasswordLockTimeCount](
 		func() *UserMiscOptionPasswordLockTimeCount { return &UserMiscOptionPasswordLockTimeCount{} },
 		func(u *UserMiscOptionPasswordLockTimeCount) { u.reset() },
-		reuse.DefaultOptions[UserMiscOptionPasswordLockTimeCount]().
-			WithEnableChecker())
+		reuse.DefaultOptions[UserMiscOptionPasswordLockTimeCount](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[UserMiscOptionPasswordLockTimeUnbounded](
 		func() *UserMiscOptionPasswordLockTimeUnbounded { return &UserMiscOptionPasswordLockTimeUnbounded{} },
 		func(u *UserMiscOptionPasswordLockTimeUnbounded) { u.reset() },
-		reuse.DefaultOptions[UserMiscOptionPasswordLockTimeUnbounded]().
-			WithEnableChecker())
+		reuse.DefaultOptions[UserMiscOptionPasswordLockTimeUnbounded](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[UserMiscOptionAccountLock](
 		func() *UserMiscOptionAccountLock { return &UserMiscOptionAccountLock{} },
 		func(u *UserMiscOptionAccountLock) { u.reset() },
-		reuse.DefaultOptions[UserMiscOptionAccountLock]().
-			WithEnableChecker())
+		reuse.DefaultOptions[UserMiscOptionAccountLock](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[UserMiscOptionAccountUnlock](
 		func() *UserMiscOptionAccountUnlock { return &UserMiscOptionAccountUnlock{} },
 		func(u *UserMiscOptionAccountUnlock) { u.reset() },
-		reuse.DefaultOptions[UserMiscOptionAccountUnlock]().
-			WithEnableChecker())
+		reuse.DefaultOptions[UserMiscOptionAccountUnlock](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[CreateUser](
 		func() *CreateUser { return &CreateUser{} },
 		func(c *CreateUser) { c.reset() },
-		reuse.DefaultOptions[CreateUser]().
-			WithEnableChecker())
+		reuse.DefaultOptions[CreateUser](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[CreateAccount](
 		func() *CreateAccount { return &CreateAccount{} },
 		func(c *CreateAccount) { c.reset() },
-		reuse.DefaultOptions[CreateAccount]().
-			WithEnableChecker())
+		reuse.DefaultOptions[CreateAccount](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[AccountAuthOption](
 		func() *AccountAuthOption { return &AccountAuthOption{} },
 		func(a *AccountAuthOption) { a.reset() },
-		reuse.DefaultOptions[AccountAuthOption]().
-			WithEnableChecker())
+		reuse.DefaultOptions[AccountAuthOption](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[AccountIdentified](
 		func() *AccountIdentified { return &AccountIdentified{} },
 		func(a *AccountIdentified) { a.reset() },
-		reuse.DefaultOptions[AccountIdentified]().
-			WithEnableChecker())
+		reuse.DefaultOptions[AccountIdentified](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[AccountStatus](
 		func() *AccountStatus { return &AccountStatus{} },
 		func(a *AccountStatus) { a.reset() },
-		reuse.DefaultOptions[AccountStatus]().
-			WithEnableChecker())
+		reuse.DefaultOptions[AccountStatus](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[AccountComment](
 		func() *AccountComment { return &AccountComment{} },
 		func(a *AccountComment) { a.reset() },
-		reuse.DefaultOptions[AccountComment]().
-			WithEnableChecker())
+		reuse.DefaultOptions[AccountComment](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[AccountCommentOrAttribute](
 		func() *AccountCommentOrAttribute { return &AccountCommentOrAttribute{} },
 		func(a *AccountCommentOrAttribute) { a.reset() },
-		reuse.DefaultOptions[AccountCommentOrAttribute]().
-			WithEnableChecker())
+		reuse.DefaultOptions[AccountCommentOrAttribute](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[CreatePublication](
 		func() *CreatePublication { return &CreatePublication{} },
 		func(c *CreatePublication) { c.reset() },
-		reuse.DefaultOptions[CreatePublication]().
-			WithEnableChecker())
+		reuse.DefaultOptions[CreatePublication](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[AttributeVisable](
 		func() *AttributeVisable { return &AttributeVisable{} },
 		func(a *AttributeVisable) { a.reset() },
-		reuse.DefaultOptions[AttributeVisable]().
-			WithEnableChecker())
+		reuse.DefaultOptions[AttributeVisable](), //.
+	) //WithEnableChecker()
 }
 
 type CreateOption interface {
@@ -888,11 +888,11 @@ func (node *CreateDatabase) reset() {
 		for _, item := range node.CreateOptions {
 			switch opt := item.(type) {
 			case *CreateOptionCharset:
-				opt.Free()	
+				opt.Free()
 			case *CreateOptionCollate:
-				opt.Free()	
+				opt.Free()
 			case *CreateOptionEncryption:
-				opt.Free()	
+				opt.Free()
 			}
 		}
 	}
@@ -3789,15 +3789,15 @@ func (node *Partition) reset() {
 			}
 		}
 	}
-	
+
 	if node.Values != nil {
 		switch v := node.Values.(type) {
-			case *ValuesLessThan:
-				v.Free()
-			case *ValuesIn:
-				v.Free()
-			default:
-				panic(fmt.Sprintf("miss Free for %v", node.Values))
+		case *ValuesLessThan:
+			v.Free()
+		case *ValuesIn:
+			v.Free()
+		default:
+			panic(fmt.Sprintf("miss Free for %v", node.Values))
 		}
 	}
 

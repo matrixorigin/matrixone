@@ -20,8 +20,8 @@ func init() {
 	reuse.CreatePool[Replace](
 		func() *Replace { return &Replace{} },
 		func(r *Replace) { r.reset() },
-		reuse.DefaultOptions[Replace]().
-			WithEnableChecker())
+		reuse.DefaultOptions[Replace](), //.
+	) //WithEnableChecker()
 }
 
 // the REPLACE statement.

@@ -20,14 +20,14 @@ func init() {
 	reuse.CreatePool[CreateExtension](
 		func() *CreateExtension { return &CreateExtension{} },
 		func(c *CreateExtension) { c.reset() },
-		reuse.DefaultOptions[CreateExtension]().
-			WithEnableChecker())
+		reuse.DefaultOptions[CreateExtension](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[LoadExtension](
 		func() *LoadExtension { return &LoadExtension{} },
 		func(l *LoadExtension) { l.reset() },
-		reuse.DefaultOptions[LoadExtension]().
-			WithEnableChecker())
+		reuse.DefaultOptions[LoadExtension](), //.
+	) //WithEnableChecker()
 }
 
 type CreateExtension struct {
