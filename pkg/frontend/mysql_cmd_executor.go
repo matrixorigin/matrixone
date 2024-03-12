@@ -317,6 +317,9 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	if !stm.IsZeroTxnID() {
 		stm.Report(ctx)
 	}
+	if stm.IsMoLogger() && stm.StatementType == "Load" && len(stm.Statement) > 128 {
+		stm.Statement = envStmt[:40] + "..." + envStmt[len(envStmt)-45:]
+	}
 
 	return motrace.ContextWithStatement(ctx, stm), nil
 }
@@ -4706,7 +4709,8 @@ func NewMarshalPlanHandler(ctx context.Context, stmt *motrace.StatementInfo, pla
 		buffer: nil,
 	}
 	// check longQueryTime, need after StatementInfo.MarkResponseAt
-	if stmt.Duration > motrace.GetLongQueryTime() {
+	// MoLogger NOT record ExecPlan
+	if stmt.Duration > motrace.GetLongQueryTime() && !stmt.IsMoLogger() {
 		h.marshalPlan = explain.BuildJsonPlan(ctx, h.uuid, &explain.MarshalPlanOptions, h.query)
 	}
 	return h
