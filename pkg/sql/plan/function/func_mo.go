@@ -501,6 +501,7 @@ var (
 		"mo_indexes":                  0,
 		"mo_pubs":                     0,
 		"mo_stages":                   0,
+		"mo_snapshots":                0,
 	}
 )
 

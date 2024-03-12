@@ -42,6 +42,12 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 
 	ap := arg
 	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
+	if ap.Limit == 0 {
+		result := vm.NewCallResult()
+		result.Batch = nil
+		result.Status = vm.ExecStop
+		return result, nil
+	}
 
 	result, err := arg.GetChildren(0).Call(proc)
 	if err != nil {
