@@ -3,8 +3,8 @@ insert into typec values(1,1);
 insert into typec values(2,'1');
 select * from typec;
 a    b
-1    4
-2    1
+1    1
+2    4
 drop table typec;
 CREATE TABLE orders (
 id INT PRIMARY KEY,
@@ -86,3 +86,28 @@ a
 abc
 def
 drop table t4;
+create table t4 (a enum('abc', 'def'));
+create table t5 (col1 int);
+create table t6 (col1 char(10));
+insert into t5 values(1);
+insert into t5 values(2);
+insert into t4 select * from t5;
+select * from t4;
+a
+abc
+def
+delete from t4;
+insert into t6 values ('abc');
+insert into t6 values ('def');
+insert into t4 select * from t6;
+select * from t4;
+a
+abc
+def
+delete from t4;
+insert into t5 values(3);
+insert into t4 select * from t5;
+internal error: convert to MySQL enum failed: number 3 overflow enum boundary [1, 2]
+insert into t6 values('pkg');
+insert into t4 select * from t6;
+internal error: convert to MySQL enum failed: item pkg is not in enum [abc def]
