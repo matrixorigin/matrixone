@@ -265,7 +265,6 @@ t % 5
 1.070809
 drop table if exists t1;
 create table t1(t timestamp(6));
-table t1 already exists
 insert into t1 values('2020-01-01 23:59:59.999999');
 insert into t1 values('2021-02-03 04:05:06.070809');
 insert into t1 values({ts '2024-01-01 23:59:59'});
