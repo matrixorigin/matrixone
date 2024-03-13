@@ -45,7 +45,7 @@ func (p *PartitionState) PKExistInMemBetween(
 				break
 			}
 
-			if entry.Time.GreaterEq(from) {
+			if entry.Time.GreaterEq(&from) {
 				return true, false
 			}
 
@@ -73,7 +73,7 @@ func (p *PartitionState) PKExistInMemBetween(
 				if !row.RowID.Equal(entry.RowID) {
 					break
 				}
-				if row.Time.GreaterEq(from) {
+				if row.Time.GreaterEq(&from) {
 					rowIter.Release()
 					return true, false
 				}
@@ -87,7 +87,7 @@ func (p *PartitionState) PKExistInMemBetween(
 	p.shared.Lock()
 	lastFlushTimestamp := p.shared.lastFlushTimestamp
 	p.shared.Unlock()
-	if lastFlushTimestamp.LessEq(from) {
+	if lastFlushTimestamp.LessEq(&from) {
 		return false, false
 	}
 	return false, true
