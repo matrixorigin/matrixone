@@ -100,6 +100,13 @@ func genCreateDatabaseTuple(sql string, accountId, userId, roleId uint32,
 			return nil, err
 		}
 	}
+
+	//add the rowid vector as the first one in the batch
+	vec := vector.NewVec(types.T_Rowid.ToType())
+	rowid := types.DecodeFixed[types.Rowid](types.EncodeSlice([]uint64{databaseId}))
+	if err = vector.AppendFixed(vec, rowid, false, m); err != nil {
+		return nil, err
+	}
 	return bat, nil
 }
 
@@ -126,6 +133,12 @@ func genDropDatabaseTuple(id uint64, name string, m *mpool.MPool) (*batch.Batch,
 		if err = vector.AppendBytes(bat.Vecs[idx], []byte(name), false, m); err != nil {
 			return nil, err
 		}
+	}
+	//add the rowid vector as the first one in the batch
+	vec := vector.NewVec(types.T_Rowid.ToType())
+	rowid := types.DecodeFixed[types.Rowid](types.EncodeSlice([]uint64{id}))
+	if err = vector.AppendFixed(vec, rowid, false, m); err != nil {
+		return nil, err
 	}
 	return bat, nil
 }
