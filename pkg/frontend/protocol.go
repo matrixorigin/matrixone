@@ -239,10 +239,6 @@ func (pi *ProtocolImpl) GetSequenceId() uint8 {
 	return uint8(pi.sequenceId.Load())
 }
 
-func (pi *ProtocolImpl) SetSequenceID(value uint8) {
-	pi.sequenceId.Store(uint32(value))
-}
-
 func (pi *ProtocolImpl) getDebugStringUnsafe() string {
 	if pi.tcpConn != nil {
 		return fmt.Sprintf("connectionId %d|%s", pi.connectionID, pi.tcpConn.RemoteAddress())
@@ -504,7 +500,7 @@ func (fp *FakeProtocol) GetStats() string {
 	return ""
 }
 
-func (fp *FakeProtocol) CalculateOutTrafficBytes() int64 { return 0 }
+func (fp *FakeProtocol) CalculateOutTrafficBytes(reset bool) (int64, int64) { return 0, 0 }
 
 func (fp *FakeProtocol) IsEstablished() bool {
 	return true
