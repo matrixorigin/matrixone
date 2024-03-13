@@ -336,7 +336,6 @@ func (mp *MysqlProtocolImpl) getAbortTransactionErrorInfo() string {
 	//update error message in Case1,Case3,Case4.
 	if ses != nil && ses.OptionBitsIsSet(OPTION_ATTACH_ABORT_TRANSACTION_ERROR) {
 		ses.ClearOptionBits(OPTION_ATTACH_ABORT_TRANSACTION_ERROR)
-		return abortTransactionErrorInfo()
 	}
 	return ""
 }

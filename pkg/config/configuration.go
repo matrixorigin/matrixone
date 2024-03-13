@@ -158,6 +158,9 @@ var (
 	defaultLongQueryTime = 1.0
 	// defaultSkipRunningStmt
 	defaultSkipRunningStmt = true
+	// defaultLoggerLabelKey and defaultLoggerLabelVal
+	defaultLoggerLabelKey = "role"
+	defaultLoggerLabelVal = "logging_cn"
 )
 
 // FrontendParameters of the frontend
@@ -531,6 +534,9 @@ type ObservabilityParameters struct {
 	// Disable merge statements
 	EnableStmtMerge bool `toml:"enableStmtMerge"`
 
+	// LabelSelector
+	LabelSelector map[string]string `toml:"labelSelector"`
+
 	OBCollectorConfig
 }
 
@@ -559,6 +565,7 @@ func NewObservabilityParameters() *ObservabilityParameters {
 		AggregationWindow:                  toml.Duration{},
 		SelectAggrThreshold:                toml.Duration{},
 		EnableStmtMerge:                    false,
+		LabelSelector:                      map[string]string{defaultLoggerLabelKey: defaultLoggerLabelVal}, /*role=logging_cn*/
 		OBCollectorConfig:                  *NewOBCollectorConfig(),
 	}
 	op.MetricInternalGatherInterval.Duration = defaultMetricInternalGatherInterval

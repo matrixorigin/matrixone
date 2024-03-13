@@ -5,7 +5,6 @@ insert into ct_01 values(1,'bell'),(2,'app');
 begin;
 insert into ct_01 values(3,'oppo'),(3,'zow');
 Duplicate entry '3' for key 'a'
-Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
 use conflict_transation;
 start transaction ;
 insert into ct_01 values(2,'yooo');
@@ -63,7 +62,6 @@ create table ct_04(a int primary key,b varchar(25));
 begin;
 insert into ct_04 select * from ct_04_temp;
 Duplicate entry '1' for key 'a'
-Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
 commit;
 select * from ct_04;
 a    b
@@ -71,7 +69,6 @@ create table ct_05(a int,b varchar(25) primary key);
 begin;
 load data infile '$resources/load_data/ct_file.csv' into table ct_05;
 Duplicate entry 'apple' for key 'b'
-Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
 commit;
 select * from ct_05;
 a    b
@@ -80,15 +77,15 @@ start transaction ;
 insert into ct_06 select 5678,'high',487,'comment test';
 insert into ct_06 select 5679,'lower',487,'define';
 Duplicate entry '487' for key '__mo_index_idx_col'
-Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
 insert into ct_06 values (897,'number',908,'run tools'),(898,'string',908,'ffff'),(899,'string',918,'while'),(900,'string',948,'word file'),(901,'string',902,'oooo'),(902,'string',87,'dddd'),(903,'string',87,'eeee');
 Duplicate entry '908' for key '__mo_index_idx_col'
-Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
 select * from ct_06;
 a    b    c    d
+5678    high    487    comment test
 commit;
 select * from ct_06;
 a    b    c    d
+5678    high    487    comment test
 begin;
 insert into ct_06 values (500,'number1',908,'ooooffff');
 start transaction ;
@@ -97,24 +94,27 @@ commit;
 select * from ct_06;
 a    b    c    d
 501    number2    908    zzzztttt
+5678    high    487    comment test
 commit;
 w-w conflict
 select * from ct_06;
 a    b    c    d
 501    number2    908    zzzztttt
+5678    high    487    comment test
 create table ct_07(a int,b varchar(25),c date, d double,primary key(a,c));
 insert into ct_07 values (1,'901','2011-09-29',0.01),(2,'187','2011-09-29',1.31),(3,'90','2111-02-09',10.01);
 begin;
 insert into ct_07 values (3,'90','2111-02-09',10.01);
 insert into ct_07 values (4,'11','2011-09-29',7.00),(2,'567','2011-09-29',1.31),(4,'90','2011-09-29',89.3);
 Duplicate entry '(4,2011-09-29)' for key '__mo_cpkey_col'
-Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
 select * from ct_07;
 a    b    c    d
 1    901    2011-09-29    0.01
 2    187    2011-09-29    1.31
 3    90    2111-02-09    10.01
+3    90    2111-02-09    10.01
 commit;
+Duplicate entry '3a150341170bc28c' for key '__mo_cpkey_col'
 select * from ct_07;
 a    b    c    d
 1    901    2011-09-29    0.01

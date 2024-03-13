@@ -1,0 +1,94 @@
+drop database if exists fk_self_refer;
+create database fk_self_refer;
+use fk_self_refer;
+drop table if exists t1;
+create table t1(a int primary key,b int, constraint `c1` foreign key fk1(b) references t1(a));
+show tables;
+Tables_in_fk_self_refer
+t1
+show create table t1;
+Table    Create Table
+t1    CREATE TABLE `t1` (\n`a` INT NOT NULL,\n`b` INT DEFAULT NULL,\nPRIMARY KEY (`a`),\nCONSTRAINT `c1` FOREIGN KEY (`b`) REFERENCES `t1` (`a`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
+insert into t1 values (1,1);
+insert into t1 values (2,1);
+insert into t1 values (3,2);
+insert into t1 values (5,4);
+Cannot add or update a child row: a foreign key constraint fails
+insert into t1 values (4,NULL);
+insert into t1 values (5,4);
+delete from t1 where a= 4;
+internal error: Cannot delete or update a parent row: a foreign key constraint fails
+delete from t1 where a= 5;
+delete from t1 where a= 4;
+insert into t1 values (4,4);
+select * from t1;
+a    b
+1    1
+2    1
+3    2
+4    4
+delete from t1 where a = 4;
+internal error: Cannot delete or update a parent row: a foreign key constraint fails
+update t1 set b = NULL where a= 4;
+delete from t1 where a = 4;
+drop table if exists t1;
+create table t1(a int primary key,b int not null, foreign key fk1(b) references t1(a));
+insert into t1 values (4,4);
+delete from t1 where a= 4;
+internal error: Cannot delete or update a parent row: a foreign key constraint fails
+update t1 set b=NULL where a= 4;
+constraint violation: Column 'b' cannot be null
+update t1 set b=5 where a= 4;
+Cannot add or update a child row: a foreign key constraint fails
+insert into t1 values (3,4);
+update t1 set b = 3 where a= 4;
+select * from t1;
+a    b
+3    4
+4    3
+delete from t1 where a = 3;
+internal error: Cannot delete or update a parent row: a foreign key constraint fails
+delete from t1 where a = 4;
+internal error: Cannot delete or update a parent row: a foreign key constraint fails
+update t1 set b = 4 where a =4;
+delete from t1 where a = 3;
+drop table if exists t1;
+create table t1(a int unique key,b int,constraint `c1` foreign key fk1(b) references t1(a));
+show tables;
+Tables_in_fk_self_refer
+t1
+show create table t1;
+Table    Create Table
+t1    CREATE TABLE `t1` (\n`a` INT DEFAULT NULL,\n`b` INT DEFAULT NULL,\nUNIQUE KEY `a` (`a`),\nCONSTRAINT `c1` FOREIGN KEY (`b`) REFERENCES `t1` (`a`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
+insert into t1 values (1,1);
+insert into t1 values (2,1);
+insert into t1 values (3,2);
+insert into t1 values (5,4);
+Cannot add or update a child row: a foreign key constraint fails
+insert into t1 values (4,NULL);
+insert into t1 values (5,4);
+delete from t1 where a= 4;
+internal error: Cannot delete or update a parent row: a foreign key constraint fails
+delete from t1 where a= 5;
+delete from t1 where a= 4;
+insert into t1 values (4,4);
+select * from t1;
+a    b
+1    1
+2    1
+3    2
+4    4
+delete from t1 where a = 4;
+internal error: Cannot delete or update a parent row: a foreign key constraint fails
+update t1 set b = NULL where a= 4;
+delete from t1 where a = 4;
+update t1 set a = NULL where a = 3;
+insert into t1 values (NULL,NULL);
+insert into t1 values (NULL,3);
+Cannot add or update a child row: a foreign key constraint fails
+insert into t1 values (NULL,2);
+drop table if exists t1;
+create table t1(a int,b int,key (a), foreign key fk1(b) references t1(a));
+internal error: failed to add the foreign key constraint
+drop table if exists t1;
+drop database if exists fk_self_refer;

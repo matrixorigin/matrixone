@@ -22,6 +22,7 @@ import "status.proto";
 import "lock.proto";
 import "txn.proto";
 import "timestamp.proto";
+import "statsinfo.proto";
 import "github.com/gogo/protobuf/gogoproto/gogo.proto";
 import "google/protobuf/timestamp.proto";
 
@@ -55,9 +56,19 @@ enum CmdMethod {
   // RemoveRemoteLockTable remove remote lock table on all cn
   RemoveRemoteLockTable = 14;
   GetLatestBind         = 15;
+  // UnsubscribeTable unsubscribes a table in logtail client.
+  UnsubscribeTable = 16;
+  // GetCacheData is the method to get cached data from fileservice in remote node.
+  GetCacheData = 17;
+  // GetStatsInfo is the method to get stats info from remote node.
+  GetStatsInfo = 18;
 
   // GetPipelineInfo is the method to get pipeline info from CN
   GetPipelineInfo = 19;
+  // MigrateConnFrom get session info from the previous cn node.
+  MigrateConnFrom = 20;
+  // MigrateConnTo migrate the session info to the new cn node.
+  MigrateConnTo = 21;
 }
 
 // QueryRequest is the common query request. It contains the query
@@ -146,7 +157,14 @@ message Request {
   GetLatestBindRequest GetLatestBind = 18;
 
   // cherry-picked from 1.2, field numbers 19~21 has been used in 1.2
+  UnsubscribeTableRequest UnsubscribeTable = 19;
+  // GetCacheDataRequest is the request of getting cache data from remote fileservice.
+  GetCacheDataRequest GetCacheDataRequest = 20;
+  // GetStatsInfoRequest is the request of getting stats info from remote cn node.
+  GetStatsInfoRequest GetStatsInfoRequest = 21;
   GetPipelineInfoRequest GetPipelineInfoRequest = 22;
+  MigrateConnFromRequest MigrateConnFromRequest = 23;
+  MigrateConnToRequest MigrateConnToRequest = 24;
 }
 
 // ShowProcessListResponse is the response of command ShowProcessList.
@@ -186,7 +204,14 @@ message Response {
   GetLatestBindResponse          GetLatestBind         = 18;
 
   // cherry-picked from 1.2, field numbers 19~21 has been used in 1.2
+  UnsubscribeTableResponse UnsubscribeTable = 19;
+  // GetCacheDataResponse is the response of GetCacheDataRequest.
+  GetCacheDataResponse GetCacheDataResponse = 20;
+  // GetStatsInfoResponse is the response of GetStatsInfoRequest.
+  GetStatsInfoResponse GetStatsInfoResponse = 21;
   GetPipelineInfoResponse GetPipelineInfoResponse = 22;
+  MigrateConnFromResponse MigrateConnFromResponse = 23;
+  MigrateConnToResponse MigrateConnToResponse = 24;
 }
 
 // AlterAccountRequest is the "alter account restricted" query request.
@@ -309,4 +334,84 @@ message GetLatestBindRequest {
 
 message GetLatestBindResponse {
   string Bind = 1;
+}
+
+// UnsubscribeTableRequest is the request that unsubscribe a table from
+// logtail client.
+message UnsubscribeTableRequest {
+  // DatabaseID is the ID of the database.
+  uint64 DatabaseID = 1;
+  // TableID is the ID of the table.
+  uint64 TableID = 2;
+}
+
+// UnsubscribeTableResponse is the response of unsubscribe table request.
+message UnsubscribeTableResponse {
+  bool Success = 1;
+}
+
+message CacheKey {
+  string Path = 1;
+  int64 Offset = 2;
+  int64 Sz = 3;
+}
+
+message CacheKeys {
+  repeated CacheKey keys = 1 [(gogoproto.nullable) = false];
+}
+
+message RequestCacheKey {
+  int32 Index = 1;
+  CacheKey CacheKey = 2;
+}
+
+// GetCacheDataRequest is the request that try to get cache from remote node.
+message GetCacheDataRequest {
+  // RequestCacheKey is the requested cache key.
+  repeated RequestCacheKey RequestCacheKey = 1;
+}
+
+// ResponseCacheData is the response of cached data.
+message ResponseCacheData {
+  int32 Index = 1;
+  bool Hit = 2;
+  bytes Data = 3;
+}
+
+// GetCacheDataResponse is the response of get cache data.
+message GetCacheDataResponse {
+  repeated ResponseCacheData ResponseCacheData = 1;
+}
+
+message GetStatsInfoRequest {
+  statsinfo.StatsInfoKey StatsInfoKey = 1;
+}
+
+message GetStatsInfoResponse {
+  statsinfo.StatsInfo StatsInfo = 1;
+}
+
+message PrepareStmt {
+  string Name = 1;
+  string SQL = 2;
+}
+
+message MigrateConnFromRequest {
+  uint32 ConnID = 1;
+}
+
+message MigrateConnFromResponse {
+  string DB = 1;
+  repeated PrepareStmt PrepareStmts = 2;
+}
+
+message MigrateConnToRequest {
+  uint32 ConnID = 1;
+  string DB = 2;
+  repeated string SetVarStmts = 3;
+  repeated PrepareStmt PrepareStmts = 4;
+}
+
+message MigrateConnToResponse {
+  bool Success = 1;
 }

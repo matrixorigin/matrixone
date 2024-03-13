@@ -2960,6 +2960,13 @@ alter_table_drop:
             Name: tree.Identifier($3.Compare()),
         }
     }
+|   CONSTRAINT ident
+        {
+            $$ = &tree.AlterOptionDrop{
+                Typ:  tree.AlterTableDropForeignKey,
+                Name: tree.Identifier($2.Compare()),
+            }
+        }
 |   PRIMARY KEY
     {
         $$ = &tree.AlterOptionDrop{
