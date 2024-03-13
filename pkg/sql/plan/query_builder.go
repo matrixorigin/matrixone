@@ -3444,7 +3444,6 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 
 		if tbl.AtTimeStampClause != nil {
 			atTsHint = true
-
 		}
 
 		obj, tableDef := builder.compCtx.Resolve(schema, table)

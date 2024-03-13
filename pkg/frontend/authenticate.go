@@ -49,6 +49,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -59,6 +60,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/route"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/tidwall/btree"
 	"go.uber.org/zap"
 )
@@ -1598,6 +1600,8 @@ const (
 
 	checkSnapshotFormat = `select snapshot_id from mo_catalog.mo_snapshots where sname = "%s" order by snapshot_id;`
 
+	getSnapshotTsWithSnapshotNameFormat = `select ts from mo_catalog.mo_snapshots where sname = "%s" order by snapshot_id;`
+
 	getDbIdAndTypFormat         = `select dat_id,dat_type from mo_catalog.mo_database where datname = '%s' and account_id = %d;`
 	insertIntoMoPubsFormat      = `insert into mo_catalog.mo_pubs(pub_name,database_name,database_id,all_table,table_list,account_list,created_time,owner,creator,comment) values ('%s','%s',%d,%t,'%s','%s',now(),%d,%d,'%s');`
 	getPubInfoFormat            = `select account_list,comment from mo_catalog.mo_pubs where pub_name = '%s';`
@@ -1674,6 +1678,14 @@ func getSqlForCheckSnapshot(ctx context.Context, snapshot string) (string, error
 		return "", err
 	}
 	return fmt.Sprintf(checkSnapshotFormat, snapshot), nil
+}
+
+func getSqlForGetSnapshotTsWithSnapshotName(ctx context.Context, snapshot string) (string, error) {
+	err := inputNameIsInvalid(ctx, snapshot)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf(getSnapshotTsWithSnapshotNameFormat, snapshot), nil
 }
 
 func getSqlForCheckStageStatus(ctx context.Context, status string) string {
@@ -9784,4 +9796,75 @@ func checkSnapShotExistOrNot(ctx context.Context, bh BackgroundExec, snapshotNam
 		return true, nil
 	}
 	return false, nil
+}
+
+func doResolveSnapshotTsWithSnapShotName(ctx context.Context, ses *Session, spName string) (snapshotTs string, err error) {
+	var sql string
+	var erArray []ExecResult
+	err = inputNameIsInvalid(ctx, spName)
+	if err != nil {
+		return "", err
+	}
+
+	bh := ses.GetBackgroundExec(ctx)
+	defer bh.Close()
+
+	sql, err = getSqlForGetSnapshotTsWithSnapshotName(ctx, spName)
+	if err != nil {
+		return "", err
+	}
+	bh.ClearExecResultSet()
+	err = bh.Exec(ctx, sql)
+	if err != nil {
+		return "", err
+	}
+
+	erArray, err = getResultSet(ctx, bh)
+	if err != nil {
+		return "", err
+	}
+
+	if execResultArrayHasData(erArray) {
+		snapshotTs, err = erArray[0].GetString(ctx, 0, 0)
+		if err != nil {
+			return "", err
+		}
+		return snapshotTs, nil
+	} else {
+		return "", moerr.NewInternalError(ctx, "snapshot %s does not exist", spName)
+	}
+}
+
+func resolveTsExpr(ctx context.Context, atTsHint *tree.AtTimeStampClause, proc *process.Process, ses *Session) (timestamp.Timestamp, error) {
+	if atTsHint == nil || atTsHint.TimeStampExpr == nil || atTsHint.TimeStampExpr.Type == tree.ATTIMESTAMPNONE {
+		return timestamp.Timestamp{}, nil
+	}
+	var ts timestamp.Timestamp
+	tsExpr := atTsHint.TimeStampExpr
+	// if atTsHint is timestamp hint
+	if tsExpr.Type == tree.ATTIMESTAMPTIME {
+		tsValue := tsExpr.Expr
+		// parse timeStamp
+		ts, err := timestamp.ParseTimestamp(tsValue)
+		if err != nil {
+			return timestamp.Timestamp{}, moerr.NewInvalidInput(ctx, "invalid timestamp value")
+		}
+		return ts, nil
+	}
+
+	// if atTsHint is snapshotName hint
+	if tsExpr.Type == tree.ATTIMESTAMPSNAPSHOT {
+		snapshotName := tsExpr.Expr
+		tsValues, err := doResolveSnapshotTsWithSnapShotName(ctx, ses, snapshotName)
+		if err != nil {
+			return timestamp.Timestamp{}, err
+		}
+		ts, err = timestamp.ParseTimestamp(tsValues)
+		if err != nil {
+			return timestamp.Timestamp{}, moerr.NewInvalidInput(ctx, "invalid timestamp value")
+		}
+		return ts, nil
+	}
+
+	return ts, nil
 }
