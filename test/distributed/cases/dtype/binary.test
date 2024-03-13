@@ -570,7 +570,7 @@ drop table varbinary09;
 drop table if exists varbinary10;
 drop table if exists varbinary11;
 create table varbinary10(a binary primary key,b varchar(5));
-create table varbinary11(a int,b varchar(5),c binary, foreign key(c) references varbinary10(a));
+create table varbinary11(a int,b varchar(5),c binary, constraint `c1` foreign key(c) references varbinary10(a));
 insert into varbinary10 values('1','哈哈哈');
 insert into varbinary10 values('1','abcde');
 show create table varbinary11;
