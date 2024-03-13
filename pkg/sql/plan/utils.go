@@ -2012,3 +2012,20 @@ func replaceParamVals(ctx context.Context, plan0 *Plan, paramVals []any) error {
 	}
 	return nil
 }
+
+func resovleAtTsHint(ctx context.Context, atTsHint *tree.AtTimeStampClause, proc *process.Process) (int64, error) {
+	if atTsHint == nil || atTsHint.TimeStampExpr == nil || atTsHint.TimeStampExpr.Type == tree.ATTIMESTAMPNONE {
+		return 0, nil
+	}
+	tsExpr := atTsHint.TimeStampExpr
+	// if atTsHint is timestamp hint
+	if tsExpr.Type == tree.ATTIMESTAMPTIME {
+		tsValue := tsExpr.Expr
+
+	}
+
+	// if atTsHint is snapshotName hint
+	if tsExpr.Type == tree.ATTIMESTAMPSNAPSHOT {
+	}
+
+}
