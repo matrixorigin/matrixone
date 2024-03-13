@@ -618,7 +618,6 @@ func (s *service) getTxnClient() (c client.TxnClient, err error) {
 			opts = append(opts,
 				client.WithEnableRefreshExpression())
 		}
-
 		if s.cfg.Txn.EnableLeakCheck == 1 {
 			opts = append(opts, client.WithEnableLeakCheck(
 				s.cfg.Txn.MaxActiveAges.Duration,
