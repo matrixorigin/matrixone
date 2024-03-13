@@ -16,28 +16,28 @@ package agg2
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"golang.org/x/exp/constraints"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
+	"math"
 )
 
-type numeric interface {
-	types.Ints | types.UInts | types.Floats
+type aggStdVarPopDecimal64 struct {
+	aggVarPopDecimal128
 }
 
-type numericWithMaxScale interface {
-	int64 | uint64 | float64
-}
-
-type canCompare interface {
-	constraints.Integer | constraints.Float | types.Date | types.Datetime | types.Timestamp
-}
-
-func fromD64ToD128(v types.Decimal64) types.Decimal128 {
-	k := types.Decimal128{
-		B0_63:   uint64(v),
-		B64_127: 0,
+func (a *aggStdVarPopDecimal64) Flush(get aggexec.AggGetter[types.Decimal128], set aggexec.AggSetter[types.Decimal128]) {
+	r, err := getVarianceFromSumPowCount(a.sum, get(), a.count)
+	if err != nil {
+		panic(err)
 	}
-	if v.Sign() {
-		k.B64_127 = ^k.B64_127
+	if r.B0_63 == 0 && r.B64_127 == 0 {
+		set(r)
+		return
 	}
-	return k
+	temp, err1 := types.Decimal128FromFloat64(
+		math.Sqrt(types.Decimal128ToFloat64(get(), a.scale)),
+		38, a.scale)
+	if err1 != nil {
+		panic(err1)
+	}
+	set(temp)
 }
