@@ -31,6 +31,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	db_holder "github.com/matrixorigin/matrixone/pkg/util/export/etl/db"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
+	"github.com/matrixorigin/matrixone/pkg/util/metric"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 
 	"github.com/google/uuid"
@@ -159,6 +161,11 @@ func StatementInfoFilter(i Item) bool {
 
 	// Do not aggr the running statement
 	if statementInfo.Status == StatementStatusRunning {
+		return false
+	}
+
+	// for #14926
+	if statementInfo.statsArray.GetCU() < 0 {
 		return false
 	}
 
@@ -591,8 +598,12 @@ func EndStatement(ctx context.Context, err error, sentRows int64, outBytes int64
 		outBytes += TcpIpv4HeaderSize * outPacket
 		s.statsArray.InitIfEmpty().WithOutTrafficBytes(float64(outBytes)).WithOutPacketCount(float64(outPacket))
 		s.ExecPlan2Stats(ctx)
-		// disable cu metric counter
-		// metric.StatementCUCounter(s.Account, s.SqlSourceType).Add(s.statsArray.GetCU())
+		if s.statsArray.GetCU() < 0 {
+			logutil.Warnf("negative cu: %f, %s", s.statsArray.GetCU(), uuid.UUID(s.StatementID).String())
+			v2.GetTraceNegativeCUCounter("cu").Inc()
+		} else {
+			metric.StatementCUCounter(s.Account, s.SqlSourceType).Add(s.statsArray.GetCU())
+		}
 		s.Status = StatementStatusSuccess
 		if err != nil {
 			s.Error = err
