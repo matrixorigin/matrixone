@@ -317,6 +317,9 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	if !stm.IsZeroTxnID() {
 		stm.Report(ctx)
 	}
+	if stm.IsMoLogger() && stm.StatementType == "Load" && len(stm.Statement) > 128 {
+		stm.Statement = envStmt[:40] + "..." + envStmt[len(envStmt)-45:]
+	}
 
 	return motrace.ContextWithStatement(ctx, stm), nil
 }
@@ -4706,7 +4709,8 @@ func NewMarshalPlanHandler(ctx context.Context, stmt *motrace.StatementInfo, pla
 		buffer: nil,
 	}
 	// check longQueryTime, need after StatementInfo.MarkResponseAt
-	if stmt.Duration > motrace.GetLongQueryTime() {
+	// MoLogger NOT record ExecPlan
+	if stmt.Duration > motrace.GetLongQueryTime() && !stmt.IsMoLogger() {
 		h.marshalPlan = explain.BuildJsonPlan(ctx, h.uuid, &explain.MarshalPlanOptions, h.query)
 	}
 	return h
@@ -4797,15 +4801,24 @@ func (h *marshalPlanHandler) Stats(ctx context.Context) (statsByte statistic.Sta
 
 		statsInfo := statistic.StatsInfoFromContext(ctx)
 		if statsInfo != nil {
-
-			statsByte.WithTimeConsumed(
-				statsByte.GetTimeConsumed() +
-					float64(statsInfo.ParseDuration+
-						statsInfo.CompileDuration+
-						statsInfo.PlanDuration) -
-					float64(statsInfo.IOAccessTimeConsumption+statsInfo.LockTimeConsumption))
+			val := int64(statsByte.GetTimeConsumed()) +
+				int64(statsInfo.ParseDuration+
+					statsInfo.CompileDuration+
+					statsInfo.PlanDuration) - (statsInfo.IOAccessTimeConsumption + statsInfo.LockTimeConsumption)
+			if val < 0 {
+				logutil.Warnf(" negative cpu (%s) + statsInfo(%d + %d + %d - %d - %d) = %d",
+					uuid.UUID(h.stmt.StatementID).String(),
+					statsInfo.ParseDuration,
+					statsInfo.CompileDuration,
+					statsInfo.PlanDuration,
+					statsInfo.IOAccessTimeConsumption,
+					statsInfo.LockTimeConsumption,
+					val)
+				v2.GetTraceNegativeCUCounter("cpu").Inc()
+			} else {
+				statsByte.WithTimeConsumed(float64(val))
+			}
 		}
-
 	} else {
 		statsByte = statistic.DefaultStatsArray
 	}
