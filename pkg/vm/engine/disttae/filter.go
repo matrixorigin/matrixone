@@ -1119,14 +1119,17 @@ func ExecuteBlockFilter(
 					}
 				}
 				var rows uint32
-				if blkMeta != nil {
-					rows = blkMeta.GetRows()
-				} else {
+				if objRows := objStats.Rows(); objRows != 0 {
 					if pos < blockCnt-1 {
 						rows = options.DefaultBlockMaxRows
 					} else {
-						rows = objStats.Rows() - options.DefaultBlockMaxRows*uint32(pos)
+						rows = objRows - options.DefaultBlockMaxRows*uint32(pos)
 					}
+				} else {
+					if blkMeta == nil {
+						blkMeta = dataMeta.GetBlockMeta(uint32(pos))
+					}
+					rows = blkMeta.GetRows()
 				}
 				loc := objectio.BuildLocation(name, extent, rows, uint16(pos))
 				blk := objectio.BlockInfo{
