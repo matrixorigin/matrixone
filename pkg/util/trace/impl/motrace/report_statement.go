@@ -32,6 +32,7 @@ import (
 	db_holder "github.com/matrixorigin/matrixone/pkg/util/export/etl/db"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 
 	"github.com/google/uuid"
@@ -160,6 +161,11 @@ func StatementInfoFilter(i Item) bool {
 
 	// Do not aggr the running statement
 	if statementInfo.Status == StatementStatusRunning {
+		return false
+	}
+
+	// for #14926
+	if statementInfo.statsArray.GetCU() < 0 {
 		return false
 	}
 
@@ -593,8 +599,8 @@ func EndStatement(ctx context.Context, err error, sentRows int64, outBytes int64
 		s.statsArray.InitIfEmpty().WithOutTrafficBytes(float64(outBytes)).WithOutPacketCount(float64(outPacket))
 		s.ExecPlan2Stats(ctx)
 		if s.statsArray.GetCU() < 0 {
-			logutil.Warnf("cu overflow: %f, %s", s.statsArray.GetCU(), uuid.UUID(s.StatementID).String())
-			metric.StatementCUNagitiveCounter().Add()
+			logutil.Warnf("negative cu: %f, %s", s.statsArray.GetCU(), uuid.UUID(s.StatementID).String())
+			v2.GetTraceNegativeCUCounter(s.SqlSourceType).Inc()
 		} else {
 			metric.StatementCUCounter(s.Account, s.SqlSourceType).Add(s.statsArray.GetCU())
 		}

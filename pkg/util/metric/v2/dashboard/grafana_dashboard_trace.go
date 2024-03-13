@@ -31,6 +31,7 @@ func (c *DashboardCreator) initTraceDashboard() error {
 		"Trace Metrics",
 		c.withRowOptions(
 			c.initTraceDurationRow(),
+			c.initCUStatusRow(),
 		)...)
 	if err != nil {
 		return err
@@ -65,5 +66,18 @@ func (c *DashboardCreator) initTraceDurationRow() dashboard.Option {
 			[]float32{3, 3, 3, 3, 3},
 			axis.Unit("s"),
 			axis.Min(0))...,
+	)
+}
+
+func (c *DashboardCreator) initCUStatusRow() dashboard.Option {
+	return dashboard.Row(
+		"CU Status",
+		c.withMultiGraph(
+			"Negative CU status",
+			4,
+			[]string{
+				`sum(delta(` + c.getMetricWithFilter("mo_trace_negative_cu_total", "") + `[$interval])) by (type)`,
+			},
+			[]string{}),
 	)
 }
