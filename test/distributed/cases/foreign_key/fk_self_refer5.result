@@ -1,0 +1,27 @@
+drop database if exists fk_self_refer5;
+create database fk_self_refer5;
+use fk_self_refer5;
+create table names(id int PRIMARY KEY,name VARCHAR(255),age int,b int,constraint `c1` foreign key (b) references names(id));
+replace into names(id, name, age, b) values(1,"Abby", 24,1);
+replace into names(id, name, age, b) values(3,"Abby", 24,2);
+Cannot add or update a child row: a foreign key constraint fails
+replace into names(id, name, age, b) values(3,"Abby", 24,1);
+replace into names(id, name, age) values(1,"Bobby", 25);
+internal error: Cannot delete or update a parent row: a foreign key constraint fails
+replace into names set id = 2, name = "Ciro";
+replace into names set id = 2, name = "Ciro", b = 3;
+replace into names set id = 2, name = "Ciro", b = 5;
+Cannot add or update a child row: a foreign key constraint fails
+replace INTO names values (2, "Bob", 19,NULL);
+replace INTO names values (2, "Bobx", 19,4);
+Cannot add or update a child row: a foreign key constraint fails
+replace INTO names values (1, "Bobx", 19,2);
+internal error: Cannot delete or update a parent row: a foreign key constraint fails
+replace INTO names values (2, "Bobx", 19,3);
+replace INTO names values (2, "Bobx", 19,1);
+replace INTO names values (2, "Bobx", 19,3);
+replace INTO names values (3, "Jack", 19,2);
+internal error: Cannot delete or update a parent row: a foreign key constraint fails
+replace INTO names values (1, "Join", 19,2);
+internal error: Cannot delete or update a parent row: a foreign key constraint fails
+drop database if exists fk_self_refer5;

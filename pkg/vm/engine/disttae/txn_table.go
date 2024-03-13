@@ -715,7 +715,8 @@ func (tbl *txnTable) rangesOnePart(
 				return
 			}
 			//deletes in tbl.writes maybe comes from PartitionState.rows or PartitionState.blocks.
-			if entry.fileName == "" {
+			if entry.fileName == "" &&
+				entry.tableId != catalog.MO_DATABASE_ID && entry.tableId != catalog.MO_TABLES_ID && entry.tableId != catalog.MO_COLUMNS_ID {
 				vs := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
 				for _, v := range vs {
 					id, _ := v.Decode()
@@ -2226,13 +2227,8 @@ func (tbl *txnTable) updateDeleteInfo(
 	ctx context.Context,
 	state *logtailreplay.PartitionState,
 	deleteObjs,
-	createObjs []objectio.ObjectNameShort) error {
+	createObjs map[objectio.ObjectNameShort]struct{}) error {
 	var blks []catalog.BlockInfo
-
-	deleteObjsMap := make(map[objectio.ObjectNameShort]struct{})
-	for _, name := range deleteObjs {
-		deleteObjsMap[name] = struct{}{}
-	}
 
 	{
 		fs, err := fileservice.Get[fileservice.FileService](
@@ -2243,7 +2239,7 @@ func (tbl *txnTable) updateDeleteInfo(
 		}
 		var objDataMeta objectio.ObjectDataMeta
 		var objMeta objectio.ObjectMeta
-		for _, name := range createObjs {
+		for name := range createObjs {
 			if obj, ok := state.GetObject(name); ok {
 				location := obj.Location()
 				if objMeta, err = objectio.FastLoadObjectMeta(
@@ -2293,7 +2289,7 @@ func (tbl *txnTable) updateDeleteInfo(
 			rowids := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
 			for i, rowid := range rowids {
 				blkid, _ := rowid.Decode()
-				if _, ok := deleteObjsMap[*objectio.ShortName(&blkid)]; ok {
+				if _, ok := deleteObjs[*objectio.ShortName(&blkid)]; ok {
 					newId, ok, err := tbl.readNewRowid(pkVec, i, blks)
 					if err != nil {
 						return err

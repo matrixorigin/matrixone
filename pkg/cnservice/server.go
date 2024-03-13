@@ -360,6 +360,8 @@ func (s *service) handleRequest(
 
 	go func() {
 		defer value.Cancel()
+		s.pipelines.counter.Add(1)
+		defer s.pipelines.counter.Add(-1)
 		s.requestHandler(ctx,
 			s.pipelineServiceServiceAddr(),
 			req,

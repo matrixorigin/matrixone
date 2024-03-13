@@ -19,6 +19,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/cacheservice"
@@ -581,6 +582,13 @@ type service struct {
 	gossipNode  *gossip.Node
 	cacheServer cacheservice.CacheService
 	config      *util.ConfigData
+
+	// pipelines record running pipelines in the service, used for monitoring.
+	pipelines struct {
+		// counter recording the total number of running pipelines,
+		// details are not recorded for simplicity as suggested by @nnsgmsone
+		counter atomic.Int64
+	}
 }
 
 func dumpCnConfig(cfg Config) (map[string]*logservicepb.ConfigItem, error) {

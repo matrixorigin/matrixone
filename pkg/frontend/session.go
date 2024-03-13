@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/pb/status"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -293,6 +294,9 @@ type Session struct {
 
 	// timestampMap record timestamp for statistical purposes
 	timestampMap map[TS]time.Time
+
+	// FromProxy denotes whether the session is dispatched from proxy
+	fromProxy bool
 }
 
 func (ses *Session) ClearStmtProfile() {
@@ -1059,6 +1063,12 @@ func (ses *Session) GenNewStmtId() uint32 {
 	return ses.lastStmtId
 }
 
+func (ses *Session) SetLastStmtID(id uint32) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	ses.lastStmtId = id
+}
+
 func (ses *Session) GetLastStmtId() uint32 {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
@@ -1268,6 +1278,16 @@ func (ses *Session) GetPrepareStmt(name string) (*PrepareStmt, error) {
 		return prepareStmt, nil
 	}
 	return nil, moerr.NewInvalidState(ses.requestCtx, "prepared statement '%s' does not exist", name)
+}
+
+func (ses *Session) GetPrepareStmts() []*PrepareStmt {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	ret := make([]*PrepareStmt, 0, len(ses.prepareStmts))
+	for _, st := range ses.prepareStmts {
+		ret = append(ret, st)
+	}
+	return ret
 }
 
 func (ses *Session) RemovePrepareStmt(name string) {
@@ -2333,6 +2353,7 @@ func (ses *Session) StatusSession() *status.Session {
 				QueryStart:    time.Time{},
 				ClientHost:    ses.GetMysqlProtocol().Peer(),
 				Role:          roleName,
+				FromProxy:     ses.fromProxy,
 			}
 		}
 	}
@@ -2355,6 +2376,7 @@ func (ses *Session) StatusSession() *status.Session {
 		QueryStart:    ses.GetQueryStart(),
 		ClientHost:    ses.GetMysqlProtocol().Peer(),
 		Role:          roleName,
+		FromProxy:     ses.fromProxy,
 	}
 }
 
@@ -2404,4 +2426,69 @@ func checkPlanIsInsertValues(proc *process.Process,
 		}
 	}
 	return false, nil
+}
+
+type dbMigration struct {
+	db string
+}
+
+func (d *dbMigration) Migrate(ses *Session) error {
+	if d.db == "" {
+		return nil
+	}
+	return doUse(ses.requestCtx, ses, d.db)
+}
+
+type prepareStmtMigration struct {
+	name string
+	sql  string
+}
+
+func (p *prepareStmtMigration) Migrate(ses *Session) error {
+	v, err := ses.GetGlobalVar("lower_case_table_names")
+	if err != nil {
+		return err
+	}
+	if !strings.HasPrefix(strings.ToLower(p.sql), "prepare") {
+		p.sql = fmt.Sprintf("prepare %s from %s", p.name, p.sql)
+	}
+	stmts, err := mysql.Parse(ses.requestCtx, p.sql, v.(int64))
+	if err != nil {
+		return err
+	}
+	if _, err = doPrepareStmt(ses.requestCtx, ses, stmts[0].(*tree.PrepareStmt), p.sql); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (ses *Session) Migrate(req *query.MigrateConnToRequest) error {
+	dbm := dbMigration{
+		db: req.DB,
+	}
+	if err := dbm.Migrate(ses); err != nil {
+		return err
+	}
+
+	var maxStmtID uint32
+	for _, p := range req.PrepareStmts {
+		if p == nil {
+			continue
+		}
+		pm := prepareStmtMigration{
+			name: p.Name,
+			sql:  p.SQL,
+		}
+		if err := pm.Migrate(ses); err != nil {
+			return err
+		}
+		id := parsePrepareStmtID(p.Name)
+		if id > maxStmtID {
+			maxStmtID = id
+		}
+	}
+	if maxStmtID > 0 {
+		ses.SetLastStmtID(maxStmtID)
+	}
+	return nil
 }

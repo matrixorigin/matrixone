@@ -88,10 +88,6 @@ func unclassifiedStatementInUncommittedTxnErrorInfo() string {
 	return "unclassified statement appears in uncommitted transaction"
 }
 
-func abortTransactionErrorInfo() string {
-	return "Previous DML conflicts with existing constraints or data format. This transaction has to be aborted"
-}
-
 func writeWriteConflictsErrorInfo() string {
 	return "Write conflicts detected. Previous transaction need to be aborted."
 }
@@ -103,6 +99,18 @@ const (
 
 func getPrepareStmtName(stmtID uint32) string {
 	return fmt.Sprintf("%s_%d", prefixPrepareStmtName, stmtID)
+}
+
+func parsePrepareStmtID(s string) uint32 {
+	if strings.HasPrefix(s, prefixPrepareStmtName) {
+		ss := strings.Split(s, "_")
+		v, err := strconv.ParseUint(ss[len(ss)-1], 10, 64)
+		if err != nil {
+			return 0
+		}
+		return uint32(v)
+	}
+	return 0
 }
 
 func GetPrepareStmtID(ctx context.Context, name string) (int, error) {
@@ -3068,10 +3076,9 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 		*/
 		if ses.InMultiStmtTransactionMode() && ses.InActiveTransaction() {
 			ses.cleanCache()
-			ses.SetOptionBits(OPTION_ATTACH_ABORT_TRANSACTION_ERROR)
 		}
 		logError(ses, ses.GetDebugString(), err.Error())
-		txnErr := ses.TxnRollbackSingleStatement(stmt)
+		txnErr := ses.TxnRollbackSingleStatement(stmt, err)
 		if txnErr != nil {
 			logStatementStatus(requestCtx, ses, stmt, fail, txnErr)
 			return txnErr
@@ -3119,12 +3126,20 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 		return err
 	}
 
+	// defer transaction state management.
+	defer func() {
+		err = finishTxnFunc()
+	}()
+
+	// statement management
 	_, txnOp, err := ses.GetTxnHandler().GetTxnOperator()
 	if err != nil {
 		return err
 	}
 
+	//non derived statement
 	if txnOp != nil && !ses.IsDerivedStmt() {
+		//startStatement has been called
 		ok, _ := ses.GetTxnHandler().calledStartStmt()
 		if !ok {
 			txnOp.GetWorkspace().StartStatement()
@@ -3142,18 +3157,15 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 			logError(ses, ses.GetDebugString(), err3.Error())
 			return
 		}
+		//non derived statement
 		if txnOp != nil && !ses.IsDerivedStmt() {
+			//startStatement has been called
 			ok, id := ses.GetTxnHandler().calledStartStmt()
 			if ok && bytes.Equal(txnOp.Txn().ID, id) {
 				txnOp.GetWorkspace().EndStatement()
 			}
 		}
 		ses.GetTxnHandler().disableStartStmt()
-	}()
-
-	// defer transaction state mangagement.
-	defer func() {
-		err = finishTxnFunc()
 	}()
 
 	// XXX XXX
