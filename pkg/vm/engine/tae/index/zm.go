@@ -514,7 +514,7 @@ func (zm ZM) AnyGE(o ZM) (res bool, ok bool) {
 	return
 }
 
-// zm.min >= k
+// zm.max >= k
 func (zm ZM) AnyGEByValue(k []byte) bool {
 	if !zm.IsInited() {
 		return false
