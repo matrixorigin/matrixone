@@ -105,7 +105,7 @@ func (builder *QueryBuilder) applyIndicesForFiltersUsingMasterIndex(nodeID int32
 	})
 	lastNodeId = builder.appendNode(&plan.Node{
 		NodeType: plan.Node_JOIN,
-		JoinType: plan.Node_INNER,
+		JoinType: plan.Node_INDEX,
 		Children: []int32{scanNode.NodeId, lastNodeId},
 		OnList:   []*Expr{wherePkEqPk},
 		Limit:    DeepCopyExpr(lastNodeFromIndexTbl.Limit),
