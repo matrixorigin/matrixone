@@ -2162,16 +2162,18 @@ func (tbl *txnTable) PKPersistedBetween(
 
 	//only check data objects.
 	delObjs, cObjs := p.GetChangedObjsBetween(from.Next(), types.MaxTs())
-
+	isFakePK := true
 	if err := ForeachCommittedObjects(cObjs, delObjs, p,
 		func(obj logtailreplay.ObjectInfo) (err2 error) {
 			var zmCkecked bool
-			// if the object info contains a pk zonemap, fast-check with the zonemap
-			if !obj.ZMIsEmpty() {
-				if !obj.SortKeyZoneMap().AnyIn(keys) {
-					return
+			if !isFakePK {
+				// if the object info contains a pk zonemap, fast-check with the zonemap
+				if !obj.ZMIsEmpty() {
+					if !obj.SortKeyZoneMap().AnyIn(keys) {
+						return
+					}
+					zmCkecked = true
 				}
-				zmCkecked = true
 			}
 
 			var objMeta objectio.ObjectMeta
@@ -2196,10 +2198,13 @@ func (tbl *txnTable) PKPersistedBetween(
 			}
 
 			bf = nil
-			if bf, err2 = objectio.LoadBFWithMeta(
-				ctx, meta, location, fs,
-			); err2 != nil {
-				return
+			//fake pk has no bf
+			if !isFakePK {
+				if bf, err2 = objectio.LoadBFWithMeta(
+					ctx, meta, location, fs,
+				); err2 != nil {
+					return
+				}
 			}
 
 			ForeachBlkInObjStatsList(false, meta,
@@ -2208,15 +2213,17 @@ func (tbl *txnTable) PKPersistedBetween(
 						!blkMeta.MustGetColumn(uint16(primaryIdx)).ZoneMap().AnyIn(keys) {
 						return true
 					}
-
-					blkBf := bf.GetBloomFilter(uint32(blk.BlockID.Sequence()))
-					blkBfIdx := index.NewEmptyBinaryFuseFilter()
-					if err2 = index.DecodeBloomFilter(blkBfIdx, blkBf); err2 != nil {
-						return false
-					}
-					var exist bool
-					if exist = blkBfIdx.MayContainsAny(keys); !exist {
-						return true
+					//fake pk has no bf
+					if !isFakePK {
+						blkBf := bf.GetBloomFilter(uint32(blk.BlockID.Sequence()))
+						blkBfIdx := index.NewEmptyBinaryFuseFilter()
+						if err2 = index.DecodeBloomFilter(blkBfIdx, blkBf); err2 != nil {
+							return false
+						}
+						var exist bool
+						if exist = blkBfIdx.MayContainsAny(keys); !exist {
+							return true
+						}
 					}
 
 					blk.Sorted = obj.Sorted
