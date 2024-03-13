@@ -69,8 +69,8 @@ func (arg *Argument) String(buf *bytes.Buffer) {
 func (arg *Argument) Prepare(proc *process.Process) (err error) {
 	arg.InitReceiver(proc, false)
 	rowCount := int64(arg.N)
-	if rowCount < 100000 {
-		rowCount = 100000
+	if rowCount < 1000 {
+		rowCount = 1000
 	}
 
 	if err := arg.generate(proc); err != nil {

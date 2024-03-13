@@ -642,6 +642,9 @@ func (c *Compile) runOnce() error {
 
 	// fuzzy filter not sure whether this insert / load obey duplicate constraints, need double check
 	if c.fuzzy != nil && c.fuzzy.cnt > 0 && err == nil {
+		if c.fuzzy.cnt > 10 {
+			logutil.Warnf("fuzzy filter cnt is %d, may be too high", c.fuzzy.cnt)	
+		}
 		err = c.fuzzy.backgroundSQLCheck(c)
 	}
 	if err != nil {
