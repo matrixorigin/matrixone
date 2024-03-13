@@ -39,7 +39,8 @@ var (
 	sqlWriterDBUser atomic.Value
 	dbAddressFunc   atomic.Value
 
-	db atomic.Value
+	db            atomic.Value
+	dbRefreshTime time.Time
 
 	dbMux sync.Mutex
 
@@ -50,6 +51,8 @@ const MOLoggerUser = "mo_logger"
 const MaxConnectionNumber = 1
 
 const DBConnRetryThreshold = 8
+
+const DBRefreshTime = time.Hour
 
 type DBUser struct {
 	UserName string
@@ -80,8 +83,10 @@ func SetSQLWriterDBAddressFunc(f func(context.Context, bool) (string, error)) {
 func GetSQLWriterDBAddressFunc() func(context.Context, bool) (string, error) {
 	return dbAddressFunc.Load().(func(context.Context, bool) (string, error))
 }
+
 func SetDBConn(conn *sql.DB) {
 	db.Store(conn)
+	dbRefreshTime = time.Now().Add(DBRefreshTime)
 }
 
 func CloseDBConn() {
@@ -96,15 +101,16 @@ func CloseDBConn() {
 }
 
 func GetOrInitDBConn(forceNewConn bool, randomCN bool) (*sql.DB, error) {
+	dbMux.Lock()
+	defer dbMux.Unlock()
 	initFunc := func() error {
-		dbMux.Lock()
-		defer dbMux.Unlock()
 		CloseDBConn()
 		dbUser, _ := GetSQLWriterDBUser()
 		if dbUser == nil {
 			return errNotReady
 		}
 
+		// TODO: trigger with new selected-CN, converge all connections
 		addressFunc := GetSQLWriterDBAddressFunc()
 		if addressFunc == nil {
 			return errNotReady
@@ -135,7 +141,13 @@ func GetOrInitDBConn(forceNewConn bool, randomCN bool) (*sql.DB, error) {
 		if err != nil {
 			return nil, err
 		}
+	} else if time.Now().After(dbRefreshTime) {
+		err := initFunc()
+		if err != nil {
+			return nil, err
+		}
 	}
+
 	dbConn := db.Load().(*sql.DB)
 	return dbConn, nil
 }
