@@ -124,9 +124,6 @@ func NewCompile(
 	c.cnLabel = cnLabel
 	c.startAt = startAt
 	c.disableRetry = false
-	if c.proc.TxnOperator != nil {
-		c.proc.TxnOperator.GetWorkspace().UpdateSnapshotWriteOffset()
-	}
 	return c
 }
 
@@ -424,6 +421,9 @@ func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
 	if txnOp != nil {
 		seq = txnOp.NextSequence()
 		txnOp.EnterRunSql()
+	}
+	if c.proc.TxnOperator != nil {
+		c.proc.TxnOperator.GetWorkspace().UpdateSnapshotWriteOffset()
 	}
 
 	defer func() {
