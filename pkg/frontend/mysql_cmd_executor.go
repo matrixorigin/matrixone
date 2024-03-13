@@ -4983,15 +4983,24 @@ func (h *marshalPlanHandler) Stats(ctx context.Context) (statsByte statistic.Sta
 
 		statsInfo := statistic.StatsInfoFromContext(ctx)
 		if statsInfo != nil {
-
-			statsByte.WithTimeConsumed(
-				statsByte.GetTimeConsumed() +
-					float64(statsInfo.ParseDuration+
-						statsInfo.CompileDuration+
-						statsInfo.PlanDuration) -
-					float64(statsInfo.IOAccessTimeConsumption+statsInfo.LockTimeConsumption))
+			val := int64(statsByte.GetTimeConsumed()) +
+				int64(statsInfo.ParseDuration+
+					statsInfo.CompileDuration+
+					statsInfo.PlanDuration) - (statsInfo.IOAccessTimeConsumption + statsInfo.LockTimeConsumption)
+			if val < 0 {
+				logutil.Warnf(" negative cpu (%s) + statsInfo(%d + %d + %d - %d - %d) = %d",
+					uuid.UUID(h.stmt.StatementID).String(),
+					statsInfo.ParseDuration,
+					statsInfo.CompileDuration,
+					statsInfo.PlanDuration,
+					statsInfo.IOAccessTimeConsumption,
+					statsInfo.LockTimeConsumption,
+					val)
+				v2.GetTraceNegativeCUCounter(h.stmt.SqlSourceType).Inc()
+			} else {
+				statsByte.WithTimeConsumed(float64(val))
+			}
 		}
-
 	} else {
 		statsByte = statistic.DefaultStatsArray
 	}
