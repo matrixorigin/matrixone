@@ -138,15 +138,18 @@ func (b *dirtyBlocksIter) Close() error {
 	return nil
 }
 
-// GetChangedObjsBetween get changed objects between [begin, end]
+// GetChangedObjsBetween get changed objects between [begin, end],
+// notice that if an object is created after begin and deleted before end, it will be ignored
 func (p *PartitionState) GetChangedObjsBetween(
 	begin types.TS,
 	end types.TS,
 ) (
-	deleted []objectio.ObjectNameShort,
-	inserted []objectio.ObjectNameShort,
+	deleted map[objectio.ObjectNameShort]struct{},
+	inserted map[objectio.ObjectNameShort]struct{},
 ) {
 
+	inserted = make(map[objectio.ObjectNameShort]struct{})
+	deleted = make(map[objectio.ObjectNameShort]struct{})
 	iter := p.objectIndexByTS.Copy().Iter()
 	defer iter.Release()
 
@@ -160,15 +163,17 @@ func (p *PartitionState) GetChangedObjsBetween(
 		}
 
 		if entry.IsDelete {
-			deleted = append(deleted, entry.ShortObjName)
-		} else {
-			if !entry.IsAppendable {
-				inserted = append(inserted, entry.ShortObjName)
+			// if the object is inserted and deleted between [begin, end], it will be ignored.
+			if _, ok := inserted[entry.ShortObjName]; !ok {
+				deleted[entry.ShortObjName] = struct{}{}
+			} else {
+				delete(inserted, entry.ShortObjName)
 			}
+		} else {
+			inserted[entry.ShortObjName] = struct{}{}
 		}
 
 	}
-
 	return
 }
 

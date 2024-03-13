@@ -124,7 +124,7 @@ func (c *mockClientConn) GetHandshakePack() *frontend.Packet { return nil }
 func (c *mockClientConn) RawConn() net.Conn                  { return c.conn }
 func (c *mockClientConn) GetTenant() Tenant                  { return c.tenant }
 func (c *mockClientConn) SendErrToClient(err error)          {}
-func (c *mockClientConn) BuildConnWithServer(_ bool) (ServerConn, error) {
+func (c *mockClientConn) BuildConnWithServer(_ string) (ServerConn, error) {
 	cn, err := c.router.Route(context.TODO(), c.clientInfo, nil)
 	if err != nil {
 		return nil, err
@@ -155,14 +155,6 @@ func (c *mockClientConn) HandleEvent(ctx context.Context, e IEvent, resp chan<- 
 		return nil
 	case *setVarEvent:
 		c.redoStmts = append(c.redoStmts, internalStmt{cmdType: cmdQuery, s: ev.stmt})
-		sendResp([]byte("ok"), resp)
-		return nil
-	case *prepareEvent:
-		c.redoStmts = append(c.redoStmts, internalStmt{cmdType: cmdQuery, s: ev.stmt})
-		sendResp([]byte("ok"), resp)
-		return nil
-	case *initDBEvent:
-		c.redoStmts = append(c.redoStmts, internalStmt{cmdType: cmdInitDB, s: ev.db})
 		sendResp([]byte("ok"), resp)
 		return nil
 	default:
@@ -355,7 +347,7 @@ func TestClientConn_ConnectToBackend(t *testing.T) {
 			return nil, moerr.NewInternalErrorNoCtx("123 456")
 		}
 
-		sc, err := cc.BuildConnWithServer(false)
+		sc, err := cc.BuildConnWithServer("aaa")
 		require.ErrorContains(t, err, "123 456")
 		require.Nil(t, sc)
 	})
@@ -390,7 +382,7 @@ func TestClientConn_ConnectToBackend(t *testing.T) {
 			require.Equal(t, len(resp), n)
 		}()
 
-		_, err := cc.BuildConnWithServer(true)
+		_, err := cc.BuildConnWithServer("")
 		require.Error(t, err) // just test client, no router set
 		require.Equal(t, "tenant1", string(cc.GetTenant()))
 		require.NotNil(t, cc.GetHandshakePack())
@@ -525,7 +517,7 @@ func TestClientConn_SendErrToClient(t *testing.T) {
 		require.True(t, strings.Contains(string(b[4+1+2+1+5:n]), "internal error: msg1"))
 	}()
 
-	_, err := cc.BuildConnWithServer(true)
+	_, err := cc.BuildConnWithServer("")
 	require.Error(t, err) // just test client, no router set
 	require.Equal(t, "tenant1", string(cc.GetTenant()))
 	require.NotNil(t, cc.GetHandshakePack())
