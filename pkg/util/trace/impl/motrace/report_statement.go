@@ -600,7 +600,7 @@ func EndStatement(ctx context.Context, err error, sentRows int64, outBytes int64
 		s.ExecPlan2Stats(ctx)
 		if s.statsArray.GetCU() < 0 {
 			logutil.Warnf("negative cu: %f, %s", s.statsArray.GetCU(), uuid.UUID(s.StatementID).String())
-			v2.GetTraceNegativeCUCounter(s.SqlSourceType).Inc()
+			v2.GetTraceNegativeCUCounter("cu").Inc()
 		} else {
 			metric.StatementCUCounter(s.Account, s.SqlSourceType).Add(s.statsArray.GetCU())
 		}

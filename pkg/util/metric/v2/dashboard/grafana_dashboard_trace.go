@@ -78,6 +78,6 @@ func (c *DashboardCreator) initCUStatusRow() dashboard.Option {
 			[]string{
 				`sum(delta(` + c.getMetricWithFilter("mo_trace_negative_cu_total", "") + `[$interval])) by (type)`,
 			},
-			[]string{}),
+			[]string{"{{ type }}"}),
 	)
 }

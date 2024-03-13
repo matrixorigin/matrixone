@@ -4996,7 +4996,7 @@ func (h *marshalPlanHandler) Stats(ctx context.Context) (statsByte statistic.Sta
 					statsInfo.IOAccessTimeConsumption,
 					statsInfo.LockTimeConsumption,
 					val)
-				v2.GetTraceNegativeCUCounter(h.stmt.SqlSourceType).Inc()
+				v2.GetTraceNegativeCUCounter("cpu").Inc()
 			} else {
 				statsByte.WithTimeConsumed(float64(val))
 			}
