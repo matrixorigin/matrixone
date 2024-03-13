@@ -355,6 +355,20 @@ func (mr *MockTxnOperatorMockRecorder) Commit(ctx interface{}) *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Commit", reflect.TypeOf((*MockTxnOperator)(nil).Commit), ctx)
 }
 
+// CreateTS mocks base method.
+func (m *MockTxnOperator) CreateTS() timestamp.Timestamp {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "CreateTS")
+	ret0, _ := ret[0].(timestamp.Timestamp)
+	return ret0
+}
+
+// CreateTS indicates an expected call of CreateTS.
+func (mr *MockTxnOperatorMockRecorder) CreateTS() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreateTS", reflect.TypeOf((*MockTxnOperator)(nil).CreateTS))
+}
+
 // Debug mocks base method.
 func (m *MockTxnOperator) Debug(ctx context.Context, ops []txn.TxnRequest) (*rpc.SendResult, error) {
 	m.ctrl.T.Helper()
