@@ -112,7 +112,7 @@ func (tr *simpleAggTester[in, out]) testUnaryAgg(
 			fmt.Sprintf("agg test failed. merge failed. err is %s", err))
 	}
 
-	results = results[:1]
+	//results = results[:1]
 	results, err = tr.eval(results)
 	if err != nil {
 		return moerr.NewInternalErrorNoCtx(
@@ -789,7 +789,7 @@ func TestBitmapOr(t *testing.T) {
 	require.NoError(t, testUnaryAggSupported(NewAggBitmapConstruct, AggBitmapConstructSupportedParameters, AggBitmapConstructReturnType))
 	s1 := &sAggBitmapConstruct{}
 	{
-		tr := &simpleAggTester[uint64, *roaring.Bitmap]{
+		tr := &simpleAggTester[uint64, []byte]{
 			source: s1,
 			grow:   s1.Grows,
 			free:   s1.Free,
@@ -799,8 +799,10 @@ func TestBitmapOr(t *testing.T) {
 		}
 		nsp := nulls.NewWithSize(5)
 		nsp.Add(3)
-		err := tr.testUnaryAgg([]uint64{1, 3, 6, 0, 9}, nsp, func(result *roaring.Bitmap, isEmpty bool) bool {
-			return !isEmpty && result.GetCardinality() == 4 && result.String() == "{1,3,6,9}"
+		err := tr.testUnaryAgg([]uint64{1, 3, 6, 0, 9}, nsp, func(result []byte, isEmpty bool) bool {
+			bmp := roaring.New()
+			_ = bmp.UnmarshalBinary(result)
+			return !isEmpty && bmp.GetCardinality() == 4 && bmp.String() == "{1,3,6,9}"
 		})
 		require.NoError(t, err)
 	}
@@ -808,7 +810,7 @@ func TestBitmapOr(t *testing.T) {
 	require.NoError(t, testUnaryAggSupported(NewAggBitmapOr, AggBitmapOrSupportedParameters, AggBitmapOrReturnType))
 	s2 := &sAggBitmapOr{}
 	{
-		tr := &simpleAggTester[[]byte, *roaring.Bitmap]{
+		tr := &simpleAggTester[[]byte, []byte]{
 			source: s2,
 			grow:   s2.Grows,
 			free:   s2.Free,
@@ -828,8 +830,10 @@ func TestBitmapOr(t *testing.T) {
 		bytes0 := genBytes([]int{1, 3, 5, 7, 9})
 		bytes1 := genBytes([]int{0, 2, 4, 6, 8})
 		bytes2 := genBytes([]int{2, 3, 5, 7, 11})
-		err := tr.testUnaryAgg([][]byte{bytes0, bytes1, bytes2}, nil, func(result *roaring.Bitmap, isEmpty bool) bool {
-			return !isEmpty && result.GetCardinality() == 11 && result.String() == "{0,1,2,3,4,5,6,7,8,9,11}"
+		err := tr.testUnaryAgg([][]byte{bytes0, bytes1, bytes2}, nil, func(result []byte, isEmpty bool) bool {
+			bmp := roaring.New()
+			_ = bmp.UnmarshalBinary(result)
+			return !isEmpty && bmp.GetCardinality() == 11 && bmp.String() == "{0,1,2,3,4,5,6,7,8,9,11}"
 		})
 		require.NoError(t, err)
 	}

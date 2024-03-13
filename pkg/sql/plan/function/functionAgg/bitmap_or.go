@@ -37,47 +37,48 @@ var (
 func NewAggBitmapConstruct(overloadID int64, dist bool, inputTypes []types.Type, outputType types.Type, _ any) (agg.Agg[any], error) {
 	aggPriv := &sAggBitmapConstruct{}
 	if dist {
-		return agg.NewUnaryDistAgg[uint64, *roaring.Bitmap](overloadID, aggPriv, false, inputTypes[0], outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill), nil
+		return agg.NewUnaryDistAgg[uint64, []byte](overloadID, aggPriv, false, inputTypes[0], outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill), nil
 	}
-	return agg.NewUnaryAgg[uint64, *roaring.Bitmap](overloadID, aggPriv, false, inputTypes[0], outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill), nil
+	return agg.NewUnaryAgg[uint64, []byte](overloadID, aggPriv, false, inputTypes[0], outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill), nil
 }
 
 func NewAggBitmapOr(overloadID int64, dist bool, inputTypes []types.Type, outputType types.Type, _ any) (agg.Agg[any], error) {
 	aggPriv := &sAggBitmapOr{}
 	if dist {
-		return agg.NewUnaryDistAgg[[]byte, *roaring.Bitmap](overloadID, aggPriv, false, inputTypes[0], outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill), nil
+		return agg.NewUnaryDistAgg[[]byte, []byte](overloadID, aggPriv, false, inputTypes[0], outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill), nil
 	}
-	return agg.NewUnaryAgg[[]byte, *roaring.Bitmap](overloadID, aggPriv, false, inputTypes[0], outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill), nil
+	return agg.NewUnaryAgg[[]byte, []byte](overloadID, aggPriv, false, inputTypes[0], outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill), nil
 }
 
-type sAggBitmapConstruct struct{}
+type sAggBitmapConstruct struct {
+	bmps []*roaring.Bitmap
+}
 
 func (s *sAggBitmapConstruct) Dup() agg.AggStruct {
 	return &sAggBitmapConstruct{}
 }
-func (s *sAggBitmapConstruct) Grows(_ int)         {}
+func (s *sAggBitmapConstruct) Grows(count int) {
+	for ; count > 0; count-- {
+		s.bmps = append(s.bmps, roaring.New())
+	}
+}
 func (s *sAggBitmapConstruct) Free(_ *mpool.MPool) {}
-func (s *sAggBitmapConstruct) Fill(groupNumber int64, value uint64, lastResult *roaring.Bitmap, count int64, isEmpty bool, isNull bool) (*roaring.Bitmap, bool, error) {
+func (s *sAggBitmapConstruct) Fill(groupNumber int64, value uint64, lastResult []byte, count int64, isEmpty bool, isNull bool) ([]byte, bool, error) {
 	if !isNull {
-		if isEmpty {
-			lastResult = roaring.New()
-		}
-		lastResult.Add(uint32(value))
+		s.bmps[groupNumber].Add(uint32(value))
 		return lastResult, false, nil
 	}
 	return lastResult, isEmpty, nil
 }
-func (s *sAggBitmapConstruct) Merge(groupNumber1, groupNumber2 int64, result1, result2 *roaring.Bitmap, isEmpty1, isEmpty2 bool, _ any) (*roaring.Bitmap, bool, error) {
-	if isEmpty1 {
-		result1 = roaring.New()
-	}
-	if isEmpty2 {
-		result2 = roaring.New()
-	}
-	result1.Or(result2)
+func (s *sAggBitmapConstruct) Merge(groupNumber1, groupNumber2 int64, result1, result2 []byte, isEmpty1, isEmpty2 bool, priv2 any) ([]byte, bool, error) {
+	s2 := priv2.(*sAggBitmapConstruct)
+	s.bmps[groupNumber1].Or(s2.bmps[groupNumber2])
 	return result1, false, nil
 }
-func (s *sAggBitmapConstruct) Eval(lastResult []*roaring.Bitmap) ([]*roaring.Bitmap, error) {
+func (s *sAggBitmapConstruct) Eval(lastResult [][]byte) ([][]byte, error) {
+	for groupNumber, bmp := range s.bmps {
+		lastResult[groupNumber], _ = bmp.MarshalBinary()
+	}
 	return lastResult, nil
 }
 func (s *sAggBitmapConstruct) MarshalBinary() ([]byte, error) {
@@ -87,39 +88,40 @@ func (s *sAggBitmapConstruct) UnmarshalBinary(_ []byte) error {
 	return nil
 }
 
-type sAggBitmapOr struct{}
+type sAggBitmapOr struct {
+	bmps []*roaring.Bitmap
+}
 
 func (s *sAggBitmapOr) Dup() agg.AggStruct {
 	return &sAggBitmapOr{}
 }
-func (s *sAggBitmapOr) Grows(_ int)         {}
+func (s *sAggBitmapOr) Grows(count int) {
+	for ; count > 0; count-- {
+		s.bmps = append(s.bmps, roaring.New())
+	}
+}
 func (s *sAggBitmapOr) Free(_ *mpool.MPool) {}
-func (s *sAggBitmapOr) Fill(groupNumber int64, value []byte, lastResult *roaring.Bitmap, count int64, isEmpty bool, isNull bool) (*roaring.Bitmap, bool, error) {
+func (s *sAggBitmapOr) Fill(groupNumber int64, value []byte, lastResult []byte, count int64, isEmpty bool, isNull bool) ([]byte, bool, error) {
 	if !isNull {
 		valueBmp := roaring.New()
 		if err := valueBmp.UnmarshalBinary(value); err != nil {
 			return lastResult, isEmpty, nil
 		}
 
-		if isEmpty {
-			lastResult = roaring.New()
-		}
-		lastResult.Or(valueBmp)
+		s.bmps[groupNumber].Or(valueBmp)
 		return lastResult, false, nil
 	}
 	return lastResult, isEmpty, nil
 }
-func (s *sAggBitmapOr) Merge(groupNumber1, groupNumber2 int64, result1, result2 *roaring.Bitmap, isEmpty1, isEmpty2 bool, _ any) (*roaring.Bitmap, bool, error) {
-	if isEmpty1 {
-		result1 = roaring.New()
-	}
-	if isEmpty2 {
-		result2 = roaring.New()
-	}
-	result1.Or(result2)
+func (s *sAggBitmapOr) Merge(groupNumber1, groupNumber2 int64, result1, result2 []byte, isEmpty1, isEmpty2 bool, priv2 any) ([]byte, bool, error) {
+	s2 := priv2.(*sAggBitmapOr)
+	s.bmps[groupNumber1].Or(s2.bmps[groupNumber2])
 	return result1, false, nil
 }
-func (s *sAggBitmapOr) Eval(lastResult []*roaring.Bitmap) ([]*roaring.Bitmap, error) {
+func (s *sAggBitmapOr) Eval(lastResult [][]byte) ([][]byte, error) {
+	for groupNumber, bmp := range s.bmps {
+		lastResult[groupNumber], _ = bmp.MarshalBinary()
+	}
 	return lastResult, nil
 }
 func (s *sAggBitmapOr) MarshalBinary() ([]byte, error) {
