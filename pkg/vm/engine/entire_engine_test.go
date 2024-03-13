@@ -59,6 +59,16 @@ var _ Engine = new(testEngine)
 type testOperator struct {
 }
 
+func (o *testOperator) EnterRunSql() {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (o *testOperator) ExitRunSql() {
+	//TODO implement me
+	panic("implement me")
+}
+
 func TestEntireEngineNew(t *testing.T) {
 	ctx := context.TODO()
 	op := newtestOperator()

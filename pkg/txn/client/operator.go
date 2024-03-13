@@ -19,6 +19,7 @@ import (
 	"context"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	gotrace "runtime/trace"
 	"sync"
 	"time"
@@ -151,6 +152,12 @@ func WithTxnIsolation(value txn.TxnIsolation) TxnOption {
 	}
 }
 
+func WithSessionInfo(info string) TxnOption {
+	return func(tc *txnOperator) {
+		tc.options.SessionInfo = info
+	}
+}
+
 type txnOperator struct {
 	sender rpc.TxnSender
 	waiter *waiter
@@ -185,6 +192,11 @@ type txnOperator struct {
 	clock                clock.Clock
 	createAt             time.Time
 	commitAt             time.Time
+
+	options         txn.TxnOptions
+	commitCounter   counter
+	rollbackCounter counter
+	runSqlCounter   counter
 }
 
 func newTxnOperator(
@@ -443,6 +455,8 @@ func (tc *txnOperator) WriteAndCommit(ctx context.Context, requests []txn.TxnReq
 }
 
 func (tc *txnOperator) Commit(ctx context.Context) error {
+	tc.commitCounter.addEnter()
+	defer tc.commitCounter.addExit()
 	tc.commitAt = time.Now()
 	defer func() {
 		v2.TxnCNCommitDurationHistogram.Observe(time.Since(tc.commitAt).Seconds())
@@ -470,6 +484,8 @@ func (tc *txnOperator) Commit(ctx context.Context) error {
 }
 
 func (tc *txnOperator) Rollback(ctx context.Context) error {
+	tc.rollbackCounter.addEnter()
+	defer tc.rollbackCounter.addExit()
 	v2.TxnRollbackCounter.Inc()
 
 	_, task := gotrace.NewTask(context.TODO(), "transaction.Rollback")
@@ -1050,4 +1066,31 @@ func (tc *txnOperator) getWaitLocksLocked() []Lock {
 		values = append(values, l)
 	}
 	return values
+}
+
+func (tc *txnOperator) EnterRunSql() {
+	tc.runSqlCounter.addEnter()
+}
+
+func (tc *txnOperator) ExitRunSql() {
+	tc.runSqlCounter.addExit()
+}
+
+func (tc *txnOperator) inRunSql() bool {
+	return tc.runSqlCounter.more()
+}
+
+func (tc *txnOperator) inCommit() bool {
+	return tc.commitCounter.more()
+}
+
+func (tc *txnOperator) inRollback() bool {
+	return tc.rollbackCounter.more()
+}
+
+func (tc *txnOperator) counter() string {
+	return fmt.Sprintf("commit: %s rollback: %s runSql: %s",
+		tc.commitCounter.String(),
+		tc.rollbackCounter.String(),
+		tc.runSqlCounter.String())
 }
