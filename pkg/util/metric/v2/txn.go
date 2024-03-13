@@ -26,13 +26,13 @@ var (
 			Name:      "total",
 			Help:      "Total number of txn created.",
 		}, []string{"type"})
-	TxnUserCounter     = txnCounter.WithLabelValues("user")
-	TxnInternalCounter = txnCounter.WithLabelValues("internal")
-	TxnLeakCounter     = txnCounter.WithLabelValues("leak")
+	TxnUserCounter        = txnCounter.WithLabelValues("user")
+	TxnInternalCounter    = txnCounter.WithLabelValues("internal")
+	TxnLeakCounter        = txnCounter.WithLabelValues("leak")
 	TxnLongRunningCounter = txnCounter.WithLabelValues("long running")
 	TxnInCommitCounter    = txnCounter.WithLabelValues("stuck in commit")
 	TxnInRollbackCounter  = txnCounter.WithLabelValues("stuck in rollback")
-	
+
 	txnStatementCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: "mo",

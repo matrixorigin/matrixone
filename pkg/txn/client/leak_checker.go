@@ -73,8 +73,8 @@ func (lc *leakChecker) txnOpened(
 		createBy: createBy,
 		id:       txnID,
 		createAt: time.Now(),
-		txnOp:   txnOp,
-		options: txnOp.options,
+		txnOp:    txnOp,
+		options:  txnOp.options,
 	})
 }
 
@@ -125,6 +125,6 @@ type activeTxn struct {
 	createBy string
 	id       []byte
 	createAt time.Time
-	txnOp   *txnOperator
-	options txn.TxnOptions
+	txnOp    *txnOperator
+	options  txn.TxnOptions
 }
