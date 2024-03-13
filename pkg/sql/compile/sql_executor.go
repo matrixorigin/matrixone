@@ -270,6 +270,7 @@ func (exec *txnExecutor) Exec(
 	proc.SetVectorPoolSize(0)
 	proc.SessionInfo.TimeZone = exec.opts.GetTimeZone()
 	proc.SessionInfo.Buf = exec.s.buf
+	proc.SessionInfo.StorageEngine = exec.s.eng
 	defer func() {
 		proc.CleanValueScanBatchs()
 		proc.FreeVectors()

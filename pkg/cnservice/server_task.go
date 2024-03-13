@@ -20,12 +20,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/upgrader"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -35,6 +33,7 @@ import (
 	moconnector "github.com/matrixorigin/matrixone/pkg/stream/connector"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/util"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/util/export"
 	db_holder "github.com/matrixorigin/matrixone/pkg/util/export/etl/db"
 	"github.com/matrixorigin/matrixone/pkg/util/file"
@@ -420,8 +419,10 @@ func (s *service) registerExecutorsLocked() {
 			}
 			sql := fmt.Sprintf("select mo_ctl('DN', 'MERGEOBJECTS', '%s.%s %s')",
 				mergeTask.DbName, mergeTask.TableName, strings.Join(objs, ","))
-			ctx = defines.AttachAccount(ctx, catalog.System_Account, catalog.System_User, catalog.System_Role)
-			return ieFactory().Exec(ctx, sql, ie.NewOptsBuilder().Finish())
+			ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
+			defer cancel()
+			_, err = s.sqlExecutor.Exec(ctx, sql, executor.Options{})
+			return err
 		},
 	)
 }
