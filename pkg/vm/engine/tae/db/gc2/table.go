@@ -24,7 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"sync"
 
@@ -39,7 +38,7 @@ type ObjectEntry struct {
 	dropTS   types.TS
 	db       uint64
 	table    uint64
-	fileIterm map[string][]uint32
+	fileIterm map[int][]uint32
 }
 
 // GCTable is a data structure in memory after consuming checkpoint
@@ -69,14 +68,14 @@ func (t *GCTable) addObject(name string, objEntry *ObjectEntry, commitTS types.T
 	}
 }
 
-func (t *GCTable) addObjectForSnapshot(name string, objEntry *ObjectEntry, commitTS types.TS, ckp string, row uint32) {
+func (t *GCTable) addObjectForSnapshot(name string, objEntry *ObjectEntry, commitTS types.TS, num int, row uint32) {
 	t.Lock()
 	defer t.Unlock()
 	object := t.objects[name]
 	if object == nil {
 		t.objects[name] = objEntry
-		objEntry.fileIterm = make(map[string][]uint32)
-		objEntry.fileIterm[ckp] = append(objEntry.fileIterm[ckp], row)
+		objEntry.fileIterm = make(map[int][]uint32)
+		objEntry.fileIterm[num] = append(objEntry.fileIterm[num], row)
 		return
 	}
 	t.objects[name] = objEntry
@@ -84,9 +83,9 @@ func (t *GCTable) addObjectForSnapshot(name string, objEntry *ObjectEntry, commi
 		t.objects[name].commitTS = commitTS
 	}
 	if t.objects[name].fileIterm == nil {
-		objEntry.fileIterm = make(map[string][]uint32)
+		objEntry.fileIterm = make(map[int][]uint32)
 	}
-	objEntry.fileIterm[ckp] = append(objEntry.fileIterm[ckp], row)
+	objEntry.fileIterm[num] = append(objEntry.fileIterm[num], row)
 }
 
 func (t *GCTable) deleteObject(name string) {
@@ -169,7 +168,7 @@ func (t *GCTable) UpdateTable(data *logtail.CheckpointData) {
 	}
 }
 
-func (t *GCTable) UpdateTableForSnapshot(data *logtail.CheckpointData, checkpoint *checkpoint.CheckpointEntry) {
+func (t *GCTable) UpdateTableForSnapshot(data *logtail.CheckpointData, num int) {
 	ins := data.GetObjectBatchs()
 	insCommitTSVec := ins.GetVectorByName(txnbase.SnapshotAttr_CommitTS).GetDownstreamVector()
 	insDeleteTSVec := ins.GetVectorByName(catalog.EntryNode_DeleteAt).GetDownstreamVector()
@@ -191,7 +190,7 @@ func (t *GCTable) UpdateTableForSnapshot(data *logtail.CheckpointData, checkpoin
 			db:       vector.GetFixedAt[uint64](dbid, i),
 			table:    vector.GetFixedAt[uint64](tid, i),
 		}
-		t.addObjectForSnapshot(objectStats.ObjectName().String(), object, commitTS, checkpoint.GetStart().ToString(), uint32(i))
+		t.addObjectForSnapshot(objectStats.ObjectName().String(), object, commitTS, num, uint32(i))
 
 	}
 }

@@ -16,6 +16,7 @@ package types
 
 import (
 	"bytes"
+	"encoding/binary"
 	"fmt"
 	"math"
 	"strconv"
@@ -54,6 +55,27 @@ func (ts TS) Compare(rhs TS) int {
 		return 1
 	}
 	l1, l2 := ts.Logical(), rhs.Logical()
+	if l1 < l2 {
+		return -1
+	}
+	if l1 == l2 {
+		return 0
+	}
+	return 1
+}
+
+// Compare physical first then logical.
+func (ts TS) Compare1(rhs TS) int {
+	p1 := int64(binary.LittleEndian.Uint64(ts[4:]))
+	p2 := int64(binary.LittleEndian.Uint64(rhs[4:]))
+	if p1 < p2 {
+		return -1
+	}
+	if p1 > p2 {
+		return 1
+	}
+	l1 := binary.LittleEndian.Uint32(ts[:])
+	l2 := binary.LittleEndian.Uint32(rhs[:])
 	if l1 < l2 {
 		return -1
 	}
