@@ -221,8 +221,24 @@ func (o ObjectIndexByCreateTSEntry) Less(than ObjectIndexByCreateTSEntry) bool {
 }
 
 func (o *ObjectIndexByCreateTSEntry) Visible(ts types.TS) bool {
-	return o.CreateTime.LessEq(ts) &&
-		(o.DeleteTime.IsEmpty() || ts.Less(o.DeleteTime))
+	if !o.DeleteTime.IsEmpty() {
+		if o.DeleteTime.Less(ts) {
+			return false
+		}
+	}
+	return o.CreateTime.LessEq(ts)
+
+	/*
+		Funny: Xu Peng's sysbench profiling shows that ts.Less is actually non-negligible,
+		which means, there are lots of there are lots of deteted objects.   Almost all of
+		them should return false.  The o.CreateTime.LessEq(ts) is almost always true,
+		so we try to eval the more selective condition first.
+
+		ORIG CODE:
+
+		return o.CreateTime.LessEq(ts) &&
+			(o.DeleteTime.IsEmpty() || ts.Less(o.DeleteTime))
+	*/
 }
 
 type PrimaryIndexEntry struct {

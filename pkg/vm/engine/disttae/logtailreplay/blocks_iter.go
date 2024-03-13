@@ -56,13 +56,13 @@ var _ ObjectsIter = new(objectsIter)
 
 func (b *objectsIter) Next() bool {
 	for {
-
-		pivot := ObjectIndexByCreateTSEntry{
-			ObjectInfo{
-				CreateTime: b.ts.Next(),
-			},
-		}
 		if !b.firstCalled {
+			pivot := ObjectIndexByCreateTSEntry{
+				ObjectInfo{
+					CreateTime: b.ts.Next(),
+				},
+			}
+
 			if !b.iter.Seek(pivot) {
 				if !b.iter.Last() {
 					return false
