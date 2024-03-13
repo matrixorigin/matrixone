@@ -505,8 +505,7 @@ col1
 1
 2
 3
-load data infile '$resources/load_data/test_character.csv' into table t1 CHARACTER SET utf-xx FIELDS TERMINATED BY ',' ENCLOSED BY '"' LINES TERMINATED BY '\n';
-SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 133 near "-xx FIELDS TERMINATED BY ',' ENCLOSED BY '"' LINES TERMINATED BY '\n';";
+load data infile '$resources/load_data/test_character.csv' into table t1 CHARACTER SET "utf-xx" FIELDS TERMINATED BY ',' ENCLOSED BY '"' LINES TERMINATED BY '\n';
 select * from t1;
 col1
 1
@@ -524,10 +523,18 @@ col1
 1
 2
 3
-load data infile '$resources/load_data/test_character.csv' into table t1 CHARACTER SET utf-16 FIELDS TERMINATED BY ',' ENCLOSED BY '"' LINES TERMINATED BY '\n';
-SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 133 near "-16 FIELDS TERMINATED BY ',' ENCLOSED BY '"' LINES TERMINATED BY '\n';";
+1
+2
+3
+load data infile '$resources/load_data/test_character.csv' into table t1 CHARACTER SET "utf-16" FIELDS TERMINATED BY ',' ENCLOSED BY '"' LINES TERMINATED BY '\n';
 select * from t1;
 col1
+1
+2
+3
+1
+2
+3
 1
 2
 3
@@ -567,8 +574,7 @@ col1    col2
 3    C
 4    陈
 5    李
-load data infile '$resources/load_data/test_character01.csv' into table t1 CHARACTER SET utf-16 FIELDS TERMINATED BY ',' ENCLOSED BY '"' LINES TERMINATED BY '\n';
-SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 135 near "-16 FIELDS TERMINATED BY ',' ENCLOSED BY '"' LINES TERMINATED BY '\n';";
+load data infile '$resources/load_data/test_character01.csv' into table t1 CHARACTER SET "utf-16" FIELDS TERMINATED BY ',' ENCLOSED BY '"' LINES TERMINATED BY '\n';
 select * from t1;
 col1    col2
 1    A
@@ -581,9 +587,19 @@ col1    col2
 3    C
 4    陈
 5    李
-load data infile '$resources/load_data/test_character01.csv' into table t1 CHARACTER SET utf_xx FIELDS TERMINATED BY ',' ENCLOSED BY '"' LINES TERMINATED BY '\n';
+1    A
+2    B
+3    C
+4    陈
+5    李
+load data infile '$resources/load_data/test_character01.csv' into table t1 CHARACTER SET "utf_xx" FIELDS TERMINATED BY ',' ENCLOSED BY '"' LINES TERMINATED BY '\n';
 select * from t1;
 col1    col2
+1    A
+2    B
+3    C
+4    陈
+5    李
 1    A
 2    B
 3    C
