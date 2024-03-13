@@ -3607,7 +3607,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 						return 0, err
 					}
 					builder.qry.Nodes[nodeID].FilterList = accountFilterExprs
-				} else if dbName == catalog.MO_SYSTEM_METRICS && tableName == catalog.MO_METRIC {
+				} else if dbName == catalog.MO_SYSTEM_METRICS && (tableName == catalog.MO_METRIC || tableName == catalog.MO_SQL_STMT_CU) {
 					motablesFilter := util.BuildSysMetricFilter(acctName)
 					ctx.binder = NewWhereBinder(builder, ctx)
 					accountFilterExprs, err := splitAndBindCondition(motablesFilter, NoAlias, ctx)
