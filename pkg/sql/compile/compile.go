@@ -68,6 +68,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/sample"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/explain"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	mokafka "github.com/matrixorigin/matrixone/pkg/stream/adapter/kafka"
@@ -599,6 +600,12 @@ func (c *Compile) runOnce() error {
 	for _, s := range c.scope {
 		s.SetContextRecursively(c.proc.Ctx)
 	}
+
+	if strings.Contains(c.sql, "select * from t1 where a between \"Congress\" and \"Nightingale\" and b=\"Lane\" and c between \"1\" and \"3\" limit 1") {
+		c.proc.PipelineStr = DebugShowScopes(c.scope)
+		c.proc.PlanStr = explain.DebugPlan(c.pn)
+	}
+
 	for i := range c.scope {
 		wg.Add(1)
 		scope := c.scope[i]
