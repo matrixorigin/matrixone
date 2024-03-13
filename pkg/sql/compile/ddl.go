@@ -667,6 +667,10 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 				for i, idx := range t.Indexes {
 					if alterIndex.IndexName == idx.IndexName {
 						t.Indexes[i].Visible = alterIndex.Visible
+						// NOTE: algo param is same for all the indexDefs of the same indexName.
+						// ie for IVFFLAT: meta, centroids, entries all have same algo params.
+						// so we don't need multiple `alterIndex`.
+						t.Indexes[i].IndexAlgoParams = alterIndex.IndexAlgoParams
 					}
 				}
 			}
