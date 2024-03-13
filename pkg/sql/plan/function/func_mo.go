@@ -263,10 +263,10 @@ func getTableSize(ctx context.Context, db engine.Database, rel engine.Relation) 
 		}
 	}
 
+	var psize, osize int64
 	// check if the current table is partitioned
 	if partitionInfo != nil {
 		var prel engine.Relation
-		var psize uint64
 		// for partition table, the table size is equal to the sum of the partition tables.
 		for _, partitionTable := range partitionInfo.PartitionTableNames {
 			prel, err = db.Relation(ctx, partitionTable, nil)
@@ -279,15 +279,16 @@ func getTableSize(ctx context.Context, db engine.Database, rel engine.Relation) 
 			if psize, err = prel.Size(ctx, AllColumns); err != nil {
 				return 0, err
 			}
-			size += psize
+			size += uint64(psize)
 		}
 	} else {
 		if err = rel.UpdateObjectInfos(ctx); err != nil {
 			return 0, err
 		}
-		if size, err = rel.Size(ctx, AllColumns); err != nil {
+		if osize, err = rel.Size(ctx, AllColumns); err != nil {
 			return 0, err
 		}
+		size = uint64(osize)
 	}
 
 	return size, nil
