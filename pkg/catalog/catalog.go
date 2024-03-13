@@ -16,10 +16,6 @@ package catalog
 
 import (
 	"fmt"
-	"regexp"
-	"strconv"
-	"time"
-
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -27,6 +23,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"regexp"
+	"strconv"
 )
 
 const (
@@ -466,6 +464,5 @@ func BuildQueryResultMetaPath(accountName, statementId string) string {
 }
 
 func BuildProfilePath(typ, name string) string {
-	now := time.Now().Format(time.RFC3339)
-	return fmt.Sprintf("%s/%s_%s_%s", ProfileDir, typ, name, now)
+	return fmt.Sprintf("%s/%s_%s", ProfileDir, typ, name)
 }
