@@ -165,3 +165,14 @@ select t - 1 from t1;
 select t * 10 from t1;
 select t / 10 from t1;
 select t % 5 from t1;
+
+create table t1(t timestamp(6));
+insert into t1 values('2020-01-01 23:59:59.999999');
+insert into t1 values('2021-02-03 04:05:06.070809');
+insert into t1 values({ts '2024-01-01 23:59:59'});
+insert into t1 values({ts '2024-02-03 04:05:06'});
+select * from t1;
+insert into t1 values({ts now()});
+-- @ignore:0
+select * from t1;
+drop table t1;
