@@ -57,7 +57,7 @@ func (s tunnelSet) count() int {
 func (s tunnelSet) countWithoutIntent() int {
 	var r int
 	for t := range s {
-		if !t.transferIntent() {
+		if !t.transferIntent.Load() {
 			r++
 		}
 	}

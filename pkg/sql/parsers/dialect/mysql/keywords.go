@@ -106,6 +106,7 @@ func init() {
 		"subpartition":               SUBPARTITION,
 		"subpartitions":              SUBPARTITIONS,
 		"snapshot":                   SNAPSHOT,
+		"snapshots":                  SNAPSHOTS,
 		"sysdate":                    SYSDATE,
 		"create":                     CREATE,
 		"cluster":                    CLUSTER,
