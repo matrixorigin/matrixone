@@ -253,6 +253,9 @@ import (
     timeSliding *tree.Sliding
     timeFill *tree.Fill
     fillMode tree.FillMode
+
+    snapshotObject tree.ObejectInfo
+
 }
 
 %token LEX_ERROR
@@ -276,7 +279,7 @@ import (
 %right <str> '('
 %left <str> ')'
 %nonassoc LOWER_THAN_STRING
-%nonassoc <str> ID AT_ID AT_AT_ID STRING VALUE_ARG LIST_ARG COMMENT COMMENT_KEYWORD QUOTE_ID STAGE CREDENTIALS STAGES
+%nonassoc <str> ID AT_ID AT_AT_ID STRING VALUE_ARG LIST_ARG COMMENT COMMENT_KEYWORD QUOTE_ID STAGE CREDENTIALS STAGES SNAPSHOTS
 %token <item> INTEGRAL HEX FLOAT
 %token <str>  HEXNUM BIT_LITERAL
 %token <str> NULL TRUE FALSE
@@ -471,7 +474,7 @@ import (
 %type <statement> create_account_stmt create_user_stmt create_role_stmt
 %type <statement> create_ddl_stmt create_table_stmt create_database_stmt create_index_stmt create_view_stmt create_function_stmt create_extension_stmt create_procedure_stmt create_sequence_stmt
 %type <statement> create_source_stmt create_connector_stmt pause_daemon_task_stmt cancel_daemon_task_stmt resume_daemon_task_stmt
-%type <statement> show_stmt show_create_stmt show_columns_stmt show_databases_stmt show_target_filter_stmt show_table_status_stmt show_grants_stmt show_collation_stmt show_accounts_stmt show_roles_stmt show_stages_stmt
+%type <statement> show_stmt show_create_stmt show_columns_stmt show_databases_stmt show_target_filter_stmt show_table_status_stmt show_grants_stmt show_collation_stmt show_accounts_stmt show_roles_stmt show_stages_stmt show_snapshots_stmt
 %type <statement> show_tables_stmt show_sequences_stmt show_process_stmt show_errors_stmt show_warnings_stmt show_target
 %type <statement> show_procedure_status_stmt show_function_status_stmt show_node_list_stmt show_locks_stmt
 %type <statement> show_table_num_stmt show_column_num_stmt show_table_values_stmt show_table_size_stmt
@@ -517,6 +520,7 @@ import (
 %type <statement> loop_stmt iterate_stmt leave_stmt repeat_stmt while_stmt
 %type <statement> create_publication_stmt drop_publication_stmt alter_publication_stmt show_publications_stmt show_subscriptions_stmt
 %type <statement> create_stage_stmt drop_stage_stmt alter_stage_stmt
+%type <statement> create_snapshot_stmt drop_snapshot_stmt
 %type <str> urlparams
 %type <str> comment_opt view_list_opt view_opt security_opt view_tail check_type
 %type <subscriptionOption> subcription_opt
@@ -754,6 +758,7 @@ import (
 %type <stageCredentials> stage_credentials_opt
 %type <userIdentified> user_identified user_identified_opt
 %type <accountRole> default_role_opt
+%type <snapshotObject> snapshot_object_opt
 
 %type <indexHintType> index_hint_type
 %type <indexHintScope> index_hint_scope
@@ -893,7 +898,7 @@ normal_stmt:
         $$ = $1
     }
 |   kill_stmt
-|   backup_stmt
+|   backup_stmt   
 
 backup_stmt:
     BACKUP STRING FILESYSTEM STRING PARALLELISM STRING
@@ -913,6 +918,39 @@ backup_stmt:
         	    Option : $5,
         	}
     }
+
+create_snapshot_stmt:
+    CREATE SNAPSHOT not_exists_opt ident FOR snapshot_object_opt
+    {
+        $$ = &tree.CreateSnapShot{
+            IfNotExists: $3,
+            Name: tree.Identifier($4.Compare()),
+            Obeject: $6,
+        }
+    }
+
+snapshot_object_opt:
+    CLUSTER
+    {
+        spLevel := tree.SnapshotLevelType{
+            Level: tree.SNAPSHOTLEVELCLUSTER,
+        }
+        $$ = tree.ObejectInfo{
+            SLevel: spLevel,
+            ObjName: "",
+        }
+    }
+|    ACCOUNT ident
+    {
+        spLevel := tree.SnapshotLevelType{
+            Level: tree.SNAPSHOTLEVELACCOUNT,
+        }
+        $$ = tree.ObejectInfo{
+            SLevel: spLevel,
+            ObjName: tree.Identifier($2.Compare()),
+        }
+    }
+
 
 kill_stmt:
     KILL kill_opt INTEGRAL statement_id_opt
@@ -3422,6 +3460,7 @@ show_stmt:
 |   show_servers_stmt
 |   show_stages_stmt
 |   show_connectors_stmt
+|   show_snapshots_stmt
 
 show_collation_stmt:
     SHOW COLLATION like_opt where_expression_opt
@@ -3437,6 +3476,14 @@ show_stages_stmt:
     {
         $$ = &tree.ShowStages{
             Like: $3,
+        }
+    }
+
+show_snapshots_stmt:
+    SHOW SNAPSHOTS  where_expression_opt
+    {
+        $$ = &tree.ShowSnapShots{
+            Where: $3,
         }
     }
 
@@ -3877,6 +3924,7 @@ drop_ddl_stmt:
 |   drop_procedure_stmt
 |   drop_stage_stmt
 |   drop_connector_stmt
+|   drop_snapshot_stmt
 
 drop_sequence_stmt:
     DROP SEQUENCE exists_opt table_name_list
@@ -5469,6 +5517,7 @@ create_stmt:
 |   create_account_stmt
 |   create_publication_stmt
 |   create_stage_stmt
+|   create_snapshot_stmt
 
 create_ddl_stmt:
     create_table_stmt
@@ -6043,7 +6092,7 @@ alter_publication_accounts_opt:
 
 
 drop_publication_stmt:
-DROP PUBLICATION exists_opt ident
+    DROP PUBLICATION exists_opt ident
     {
         var ifExists = $3
         var name = tree.Identifier($4.Compare())
@@ -6051,11 +6100,19 @@ DROP PUBLICATION exists_opt ident
     }
 
 drop_stage_stmt:
-DROP STAGE exists_opt ident
+    DROP STAGE exists_opt ident
     {
         var ifNotExists = $3
         var name = tree.Identifier($4.Compare())
         $$ = tree.NewDropStage(ifNotExists, name)
+    }
+
+drop_snapshot_stmt:
+   DROP SNAPSHOT exists_opt ident
+   {
+        var ifExists = $3
+        var name = tree.Identifier($4.Compare())
+        $$ = tree.NewDropSnapShot(ifExists, name)
     }
 
 account_role_name:
@@ -11148,6 +11205,7 @@ non_reserved_keyword:
 |   DEFINER
 |   SQL
 |   STAGE
+|   SNAPSHOTS
 |   STAGES
 |   BACKUP
 |   FILESYSTEM
