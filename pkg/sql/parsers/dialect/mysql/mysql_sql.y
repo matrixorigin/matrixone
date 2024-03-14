@@ -8645,7 +8645,7 @@ simple_expr:
     }
 |   '(' expression ')'
     {
-        $$ = tree.NewParenExpr($2)
+        $$ = tree.NewParentExpr($2)
     }
 |   '(' expression_list ',' expression ')'
     {
@@ -8666,6 +8666,48 @@ simple_expr:
 |   '!' simple_expr %prec UNARY
     {
         $$ = tree.NewUnaryExpr(tree.UNARY_MARK, $2)
+    }
+|   '{'  ident expression '}'
+    {   
+        hint := strings.ToLower($2.Compare())
+        switch hint {
+		case "d":
+            locale := ""
+            t := &tree.T{
+                InternalType: tree.InternalType{
+                   Family: tree.TimestampFamily,
+                   FamilyString: "DATETIME",
+                   Locale: &locale,
+                   Oid: uint32(defines.MYSQL_TYPE_DATETIME),
+                },
+            }
+            $$ = tree.NewCastExpr($3, t)
+        case "t":
+            locale := ""
+            t := &tree.T{
+                InternalType: tree.InternalType{
+                   Family: tree.TimeFamily,
+                   FamilyString: "TIME",
+                   Locale: &locale,
+                   Oid: uint32(defines.MYSQL_TYPE_TIME),
+               },
+            }    
+            $$ = tree.NewCastExpr($3, t)
+        case "ts":
+            locale := ""
+            t := &tree.T{
+                InternalType: tree.InternalType{
+                    Family: tree.TimestampFamily,
+                    FamilyString: "TIMESTAMP",
+                    Locale:  &locale,
+                    Oid: uint32(defines.MYSQL_TYPE_TIMESTAMP),
+                },
+            }
+            $$ = tree.NewCastExpr($3, t) 
+        default:
+            yylex.Error("Invalid type")
+            return 1
+        }
     }
 |   interval_expr
     {

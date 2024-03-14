@@ -152,7 +152,7 @@ func (cleaner *DiskCleaner) replay() error {
 	for _, dir := range dirs {
 		start, end, ext := blockio.DecodeGCMetadataFileName(dir.Name)
 		if ext == blockio.GCFullExt {
-			if minMergedStart.IsEmpty() || minMergedStart.Less(start) {
+			if minMergedStart.IsEmpty() || minMergedStart.Less(&start) {
 				minMergedStart = start
 				minMergedEnd = end
 				maxConsumedStart = start
@@ -171,8 +171,8 @@ func (cleaner *DiskCleaner) replay() error {
 		if ext == blockio.GCFullExt {
 			continue
 		}
-		if (maxConsumedStart.IsEmpty() || maxConsumedStart.Less(end)) &&
-			minMergedEnd.Less(end) {
+		if (maxConsumedStart.IsEmpty() || maxConsumedStart.Less(&end)) &&
+			minMergedEnd.Less(&end) {
 			maxConsumedStart = start
 			maxConsumedEnd = end
 			readDirs = append(readDirs, dir)
@@ -435,7 +435,8 @@ func (cleaner *DiskCleaner) mergeGCFile() error {
 	deleteFiles := make([]string, 0)
 	for _, dir := range dirs {
 		_, end := blockio.DecodeCheckpointMetadataFileName(dir.Name)
-		if end.LessEq(maxConsumed.GetEnd()) {
+		endTs := maxConsumed.GetEnd()
+		if end.LessEq(&endTs) {
 			deleteFiles = append(deleteFiles, GCMetaDir+dir.Name)
 		}
 	}
@@ -481,14 +482,16 @@ func (cleaner *DiskCleaner) CheckGC() error {
 		return moerr.NewInternalErrorNoCtx("GC has not yet run")
 	}
 	for i, ckp := range debugCandidates {
-		if ckp.GetEnd().Equal(maxConsumed.GetEnd()) {
+		endTs := ckp.GetEnd()
+		maxConsumedEndTS := maxConsumed.GetEnd()
+		if endTs.Equal(&maxConsumedEndTS) {
 			debugCandidates = debugCandidates[:i+1]
 			break
 		}
 	}
 	start1 := debugCandidates[len(debugCandidates)-1].GetEnd()
 	start2 := maxConsumed.GetEnd()
-	if !start1.Equal(start2) {
+	if !start1.Equal(&start2) {
 		logutil.Info("[DiskCleaner]", common.OperationField("Compare not equal"),
 			common.OperandField(start1.ToString()), common.OperandField(start2.ToString()))
 		return moerr.NewInternalErrorNoCtx("TS Compare not equal")
