@@ -60,7 +60,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/route"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/tidwall/btree"
 	"go.uber.org/zap"
 )
@@ -9835,7 +9834,7 @@ func doResolveSnapshotTsWithSnapShotName(ctx context.Context, ses *Session, spNa
 	}
 }
 
-func resolveTsExpr(ctx context.Context, atTsHint *tree.AtTimeStampClause, proc *process.Process, ses *Session) (timestamp.Timestamp, error) {
+func resolveTsExpr(ctx context.Context, atTsHint *tree.AtTimeStampClause, ses *Session) (timestamp.Timestamp, error) {
 	if atTsHint == nil || atTsHint.TimeStampExpr == nil || atTsHint.TimeStampExpr.Type == tree.ATTIMESTAMPNONE {
 		return timestamp.Timestamp{}, nil
 	}

@@ -3223,7 +3223,6 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 		}
 
 	case *tree.TableName:
-		var atTsHint bool
 		schema := string(tbl.SchemaName)
 		table := string(tbl.ObjectName)
 		if len(table) == 0 || table == "dual" { //special table name
@@ -3440,10 +3439,6 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 		schema, err = databaseIsValid(schema, builder.compCtx)
 		if err != nil {
 			return 0, err
-		}
-
-		if tbl.AtTimeStampClause != nil {
-			atTsHint = true
 		}
 
 		obj, tableDef := builder.compCtx.Resolve(schema, table)
