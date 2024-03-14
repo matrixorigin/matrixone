@@ -346,8 +346,18 @@ var MoCacheView = &table.Table{
 	CreateTableSql: "drop view if exists `mo_catalog`.`mo_cache`;",
 }
 
+var transactionMetricView = &table.Table{
+	Account:  table.AccountAll,
+	Database: catalog.MO_SYSTEM_METRICS,
+	Table:    "sql_statement_duration_total",
+	CreateViewSql: "CREATE VIEW IF NOT EXISTS `system_metrics`.`sql_statement_duration_total` as " +
+		"SELECT `collecttime`, `value`, `node`, `role`, `account`, `type` " +
+		"from `system_metrics`.`metric` " +
+		"where `metric_name` = 'sql_statement_duration_total'",
+}
+
 var registeredViews = []*table.Table{processlistView, MoLocksView, MoVariablesView, MoTransactionsView, MoCacheView}
-var needUpgradeNewView = []*table.Table{PARTITIONSView, STATISTICSView, MoSessionsView, SqlStatementHotspotView, MoLocksView, MoConfigurationsView, MoVariablesView, MoTransactionsView, MoCacheView}
+var needUpgradeNewView = []*table.Table{transactionMetricView, PARTITIONSView, STATISTICSView, MoSessionsView, SqlStatementHotspotView, MoLocksView, MoConfigurationsView, MoVariablesView, MoTransactionsView, MoCacheView}
 
 var InformationSchemaSCHEMATA = &table.Table{
 	Account:  table.AccountAll,

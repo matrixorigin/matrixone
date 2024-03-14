@@ -594,7 +594,7 @@ mo_catalog    21    -
 mo_mo    0    accountadmin
 mysql    5    accountadmin
 system    1    accountadmin
-system_metrics    8    accountadmin
+system_metrics    9    accountadmin
 SELECT mo_catalog.mo_database.datname,mo_catalog.mo_tables.relname,mo_catalog.mo_tables.relkind, if (role_name IS NULL,'-', role_name) AS `owner` FROM mo_catalog.mo_database LEFT JOIN mo_catalog.mo_tables ON mo_catalog.mo_database.datname = mo_catalog.mo_tables.reldatabase LEFT JOIN mo_catalog.mo_role ON mo_catalog.mo_tables.owner=role_id WHERE (relname NOT LIKE "__mo_index_secondary_%" AND relname NOT LIKE "__mo_index_unique_%" OR relname IS NULL) ORDER BY reldatabase, relname;
 datname    relname    relkind    owner
 mo_mo    null    null    -
@@ -647,6 +647,7 @@ system_metrics    server_connections    v    accountadmin
 system_metrics    server_storage_usage    v    accountadmin
 system_metrics    sql_statement_cu    r    accountadmin
 system_metrics    sql_statement_errors    v    accountadmin
+system_metrics    sql_statement_duration_total    v    accountadmin
 system_metrics    sql_statement_total    v    accountadmin
 system_metrics    sql_transaction_errors    v    accountadmin
 system_metrics    sql_transaction_total    v    accountadmin
@@ -671,6 +672,7 @@ sql_statement_total    accountadmin
 sql_statement_errors    accountadmin
 sql_transaction_total    accountadmin
 sql_transaction_errors    accountadmin
+sql_statement_duration_total    accountadmin
 server_connections    accountadmin
 server_storage_usage    accountadmin
 SELECT relname AS `name`, mo_table_rows(reldatabase, relname) AS `rows`, mo_table_size(reldatabase, relname) AS `size`, if (role_name IS NULL, '-', role_name) AS `owner` FROM mo_catalog.mo_tables LEFT JOIN mo_catalog.mo_role ON mo_catalog.mo_tables.owner=role_id WHERE relkind IN ('r','e','cluster') AND reldatabase='information_schema';
