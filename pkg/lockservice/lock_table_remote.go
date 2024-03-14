@@ -84,7 +84,6 @@ func (l *remoteLockTable) lock(
 	req.Lock.TxnID = txn.txnID
 	req.Lock.ServiceID = l.serviceID
 	req.Lock.Rows = rows
-	req.Lock.SnapShotTs = opts.SnapShotTs
 
 	// rpc maybe wait too long, to avoid deadlock, we need unlock txn, and lock again
 	// after rpc completed
