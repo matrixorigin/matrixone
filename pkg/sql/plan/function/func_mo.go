@@ -252,7 +252,7 @@ func MoTableSize(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 					if err != nil {
 						return err
 					}
-					if prel.UpdateObjectInfos(ctx); err != nil {
+					if err = prel.UpdateObjectInfos(ctx); err != nil {
 						return err
 					}
 					if psize, err = prel.Size(ctx, AllColumns); err != nil {
@@ -501,6 +501,7 @@ var (
 		"mo_indexes":                  0,
 		"mo_pubs":                     0,
 		"mo_stages":                   0,
+		"mo_snapshots":                0,
 	}
 )
 

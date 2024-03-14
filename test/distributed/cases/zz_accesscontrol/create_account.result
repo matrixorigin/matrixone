@@ -170,6 +170,7 @@ mo_mysql_compatibility_mode
 mo_pubs
 mo_stored_procedure
 mo_stages
+mo_snapshots
 mo_database
 mo_columns
 mo_sessions
@@ -178,6 +179,7 @@ mo_locks
 mo_variables
 mo_transactions
 mo_cache
+mo_foreign_keys
 select user_name,authentication_string,owner from mo_user;
 user_name    authentication_string    owner
 admin    *6BB4837EB74329105EE4568DDA7DC67ED2CA2AD9    2

@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -64,7 +65,7 @@ func init() {
 
 type Collector interface {
 	String() string
-	Run()
+	Run(lag time.Duration)
 	ScanInRange(from, to types.TS) (*DirtyTreeEntry, int)
 	ScanInRangePruned(from, to types.TS) *DirtyTreeEntry
 	IsCommitted(from, to types.TS) bool
@@ -97,10 +98,10 @@ func NewDirtyTreeEntry(start, end types.TS, tree *model.Tree) *DirtyTreeEntry {
 }
 
 func (entry *DirtyTreeEntry) Merge(o *DirtyTreeEntry) {
-	if entry.start.Greater(o.start) {
+	if entry.start.Greater(&o.start) {
 		entry.start = o.start
 	}
-	if entry.end.Less(o.end) {
+	if entry.end.Less(&o.end) {
 		entry.end = o.end
 	}
 	entry.tree.Merge(o.tree)
@@ -159,7 +160,7 @@ func NewDirtyCollector(
 	}
 	collector.storage.entries = btree.NewBTreeGOptions(
 		func(a, b *DirtyTreeEntry) bool {
-			return a.start.Less(b.start) && a.end.Less(b.end)
+			return a.start.Less(&b.start) && a.end.Less(&b.end)
 		}, btree.Options{
 			NoLocks: true,
 		})
@@ -170,8 +171,8 @@ func NewDirtyCollector(
 func (d *dirtyCollector) Init(maxts types.TS) {
 	d.storage.maxTs = maxts
 }
-func (d *dirtyCollector) Run() {
-	from, to := d.findRange()
+func (d *dirtyCollector) Run(lag time.Duration) {
+	from, to := d.findRange(lag)
 
 	// stale range found, skip this run
 	if to.IsEmpty() {
@@ -239,7 +240,7 @@ func (d *dirtyCollector) GetAndRefreshMerged() (merged *DirtyTreeEntry) {
 	d.storage.RLock()
 	maxTs := d.storage.maxTs
 	d.storage.RUnlock()
-	if maxTs.LessEq(merged.end) {
+	if maxTs.LessEq(&merged.end) {
 		return
 	}
 	merged = d.Merge()
@@ -270,7 +271,7 @@ func (d *dirtyCollector) tryUpdateMerged(merged *DirtyTreeEntry) (updated bool) 
 	var old *DirtyTreeEntry
 	for {
 		old = d.merged.Load()
-		if old.end.GreaterEq(merged.end) {
+		if old.end.GreaterEq(&merged.end) {
 			break
 		}
 		if d.merged.CompareAndSwap(old, merged) {
@@ -281,14 +282,18 @@ func (d *dirtyCollector) tryUpdateMerged(merged *DirtyTreeEntry) (updated bool) 
 	return
 }
 
-func (d *dirtyCollector) findRange() (from, to types.TS) {
+func (d *dirtyCollector) findRange(lagDuration time.Duration) (from, to types.TS) {
 	now := d.clock.Alloc()
+	// a deliberate lag is made here for flushing and checkpoint to
+	// avoid fierce competition on the very new ablock, whose PrepareCompact probably
+	// returns false
+	lag := types.BuildTS(now.Physical()-int64(lagDuration), now.Logical())
 	d.storage.RLock()
 	defer d.storage.RUnlock()
-	if now.LessEq(d.storage.maxTs) {
+	if lag.LessEq(&d.storage.maxTs) {
 		return
 	}
-	from, to = d.storage.maxTs.Next(), now
+	from, to = d.storage.maxTs.Next(), lag
 	return
 }
 
@@ -306,7 +311,8 @@ func (d *dirtyCollector) tryStoreEntry(entry *DirtyTreeEntry) (ok bool) {
 	defer d.storage.Unlock()
 
 	// storage was updated before
-	if !entry.start.Equal(d.storage.maxTs.Next()) {
+	maxTS := d.storage.maxTs.Next()
+	if !entry.start.Equal(&maxTS) {
 		ok = false
 		return
 	}
@@ -408,7 +414,7 @@ func (d *dirtyCollector) tryCompactTree(
 
 		tbl.Stats.RLock()
 		lastFlush := tbl.Stats.LastFlush
-		if lastFlush.GreaterEq(to) {
+		if lastFlush.GreaterEq(&to) {
 			tree.Shrink(id)
 			tbl.Stats.RUnlock()
 			continue
@@ -456,7 +462,7 @@ func (d *dirtyCollector) tryCompactTree(
 				}
 				if !blk.IsAppendable() {
 					newFrom := from
-					if lastFlush.Greater(newFrom) {
+					if lastFlush.Greater(&newFrom) {
 						newFrom = lastFlush
 					}
 					// sometimes, delchain is no cleared after flushing table tail.

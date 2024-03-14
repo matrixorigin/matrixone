@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"math"
 	"testing"
 	"time"
@@ -807,58 +808,57 @@ func TestSession_updateTimeZone(t *testing.T) {
 	assert.Equal(t, ses.GetTimeZone().String(), "UTC")
 }
 
-func TestTxnHandler_TxnOpenLog(t *testing.T) {
-	convey.Convey("txn open log", t, func() {
-		ctrl := gomock.NewController(t)
-		defer ctrl.Finish()
-
-		ctx := defines.AttachAccountId(context.TODO(), sysAccountID)
-		txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
-		txnOperator.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
-		txnOperator.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
-		txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
-		// txnOperator.EXPECT().SetOpenLog(gomock.Any())
-		txnOperator.EXPECT().IsOpenLog().Return(true).AnyTimes()
-		txnClient := mock_frontend.NewMockTxnClient(ctrl)
-		cnt := 0
-		txnClient.EXPECT().New(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
-			func(_ context.Context, _ timestamp.Timestamp, ootions ...client.TxnOption) (client.TxnOperator, error) {
-				cnt++
-				if cnt%2 != 0 {
-					return txnOperator, nil
-				} else {
-					return nil, moerr.NewInternalError(ctx, "startTxn failed")
-				}
-			}).AnyTimes()
-		eng := mock_frontend.NewMockEngine(ctrl)
-		eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-		eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-		eng.EXPECT().Hints().Return(engine.Hints{
-			CommitOrRollbackTimeout: time.Second,
-		}).AnyTimes()
-
+func TestSession_Migrate(t *testing.T) {
+	genSession := func(ctrl *gomock.Controller, gSysVars *GlobalSystemVariables) *Session {
 		ioses := mock_frontend.NewMockIOSession(ctrl)
 		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
 		ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 		ioses.EXPECT().RemoteAddress().Return("").AnyTimes()
 		ioses.EXPECT().Ref().AnyTimes()
-
-		pu, err := getParameterUnit("test/system_vars_config.toml", eng, txnClient)
-		convey.So(err, convey.ShouldBeNil)
-
-		var gSys GlobalSystemVariables
-		InitGlobalSystemVariables(&gSys)
-		gSys.sysVars["transaction_operator_open_log"] = 1
-		txn := InitTxnHandler(eng, txnClient, nil, nil)
-		txn.ses = &Session{
-			requestCtx: ctx,
-			pu:         pu,
-			connectCtx: ctx,
-			gSysVars:   &gSys,
+		sv, err := getSystemVariables("test/system_vars_config.toml")
+		if err != nil {
+			t.Error(err)
 		}
+		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
+		txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+		txnOperator.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
+		txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
+		txnClient := mock_frontend.NewMockTxnClient(ctrl)
+		txnClient.EXPECT().New(gomock.Any(), gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
+		eng := mock_frontend.NewMockEngine(ctrl)
+		hints := engine.Hints{CommitOrRollbackTimeout: time.Second * 10}
+		db := mock_frontend.NewMockDatabase(ctrl)
+		eng.EXPECT().Hints().Return(hints).AnyTimes()
+		eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		eng.EXPECT().Database(gomock.Any(), gomock.Any(), gomock.Any()).Return(db, nil).AnyTimes()
+		rel := mock_frontend.NewMockRelation(ctrl)
+		rel.EXPECT().GetTableDef(gomock.Any()).Return(&plan.TableDef{}).AnyTimes()
+		rel.EXPECT().TableDefs(gomock.Any()).Return(nil, nil).AnyTimes()
+		var tid uint64
+		rel.EXPECT().GetTableID(gomock.Any()).Return(tid).AnyTimes()
+		db.EXPECT().IsSubscription(gomock.Any()).Return(false).AnyTimes()
+		db.EXPECT().Relation(gomock.Any(), gomock.Any(), gomock.Any()).Return(rel, nil).AnyTimes()
+		session := NewSession(proto, nil, config.NewParameterUnit(&config.FrontendParameters{}, eng, txnClient, nil), gSysVars, true, nil, nil)
+		ctx := defines.AttachAccountId(context.Background(), sysAccountID)
+		session.SetRequestContext(ctx)
+		session.SetConnectContext(ctx)
+		session.txnCompileCtx.SetProcess(testutil.NewProc())
+		return session
+	}
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
 
-		_, op, err := txn.NewTxnOperator()
-		convey.So(err, convey.ShouldBeNil)
-		convey.So(op.IsOpenLog(), convey.ShouldBeTrue)
+	gSysVars := &GlobalSystemVariables{}
+	InitGlobalSystemVariables(gSysVars)
+	s := genSession(ctrl, gSysVars)
+	err := s.Migrate(&query.MigrateConnToRequest{
+		DB: "d1",
+		PrepareStmts: []*query.PrepareStmt{
+			{Name: "p1", SQL: `select ?`},
+			{Name: "p2", SQL: `select ?`},
+		},
 	})
+	assert.NoError(t, err)
+	assert.Equal(t, "d1", s.GetDatabaseName())
+	assert.Equal(t, 2, len(s.prepareStmts))
 }

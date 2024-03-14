@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -35,7 +36,7 @@ func TestLeakCheck(t *testing.T) {
 	c := NewTxnClient(ts,
 		WithEnableLeakCheck(
 			time.Millisecond*200,
-			func(txnID []byte, createAt time.Time, createBy string) {
+			func(txnID []byte, createAt time.Time, options txn.TxnOptions) {
 				close(cc)
 			}))
 	c.Resume()
@@ -56,7 +57,7 @@ func TestLeakCheckWithNoLeak(t *testing.T) {
 	c := NewTxnClient(ts,
 		WithEnableLeakCheck(
 			time.Millisecond*200,
-			func(txnID []byte, createAt time.Time, createBy string) {
+			func(txnID []byte, createAt time.Time, options txn.TxnOptions) {
 				n++
 			}))
 	c.Resume()

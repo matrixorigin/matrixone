@@ -241,12 +241,12 @@ func NewRunner(
 		wal:       wal,
 	}
 	r.storage.entries = btree.NewBTreeGOptions(func(a, b *CheckpointEntry) bool {
-		return a.end.Less(b.end)
+		return a.end.Less(&b.end)
 	}, btree.Options{
 		NoLocks: true,
 	})
 	r.storage.globals = btree.NewBTreeGOptions(func(a, b *CheckpointEntry) bool {
-		return a.end.Less(b.end)
+		return a.end.Less(&b.end)
 	}, btree.Options{
 		NoLocks: true,
 	})
@@ -330,11 +330,11 @@ func (r *runner) getTSTOGC() (ts types.TS, needGC bool) {
 		return
 	}
 	tsTOGC := r.getTSToGC()
-	if tsTOGC.Less(ts) {
+	if tsTOGC.Less(&ts) {
 		ts = tsTOGC
 	}
 	gcedTS := r.getGCedTS()
-	if gcedTS.GreaterEq(ts) {
+	if gcedTS.GreaterEq(&ts) {
 		return
 	}
 	needGC = true
@@ -687,7 +687,10 @@ func (r *runner) tryAddNewIncrementalCheckpointEntry(entry *CheckpointEntry) (su
 
 	// if it is not the right candidate, skip this request
 	// [startTs, endTs] --> [endTs+1, ?]
-	if !maxEntry.GetEnd().Next().Equal(entry.GetStart()) {
+	endTS := maxEntry.GetEnd()
+	startTS := entry.GetStart()
+	nextTS := endTS.Next()
+	if !nextTS.Equal(&startTS) {
 		success = false
 		return
 	}
@@ -999,8 +1002,12 @@ func (r *runner) onDirtyEntries(entries ...any) {
 }
 
 func (r *runner) crontask(ctx context.Context) {
+	lag := 2 * time.Second
+	if r.options.maxFlushInterval < time.Second {
+		lag = 0 * time.Second
+	}
 	hb := w.NewHeartBeaterWithFunc(r.options.collectInterval, func() {
-		r.source.Run()
+		r.source.Run(lag)
 		entry := r.source.GetAndRefreshMerged()
 		_, endts := entry.GetTimeRange()
 		if entry.IsEmpty() {

@@ -76,6 +76,8 @@ func (m *MockCompilerContext) ResolveVariable(varName string, isSystemVar, isGlo
 		vars["sql_mode"] = "ONLY_FULL_GROUP_BY"
 	}
 
+	vars["foreign_key_checks"] = int64(1)
+
 	if result, ok := vars[varName]; ok {
 		return result, nil
 	}
@@ -416,6 +418,18 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 			{"stage_status", types.T_varchar, false, 50, 0},
 			{"created_time", types.T_timestamp, false, 0, 0},
 			{"comment", types.T_varchar, false, 2048, 0},
+		},
+	}
+
+	moSchema["mo_snapshots"] = &Schema{
+		cols: []col{
+			{"snapshot_id", types.T_uuid, false, 100, 0},
+			{"sname", types.T_varchar, false, 64, 0},
+			{"ts", types.T_timestamp, false, 50, 0},
+			{"level", types.T_enum, false, 50, 0},
+			{"account_name", types.T_varchar, false, 50, 0},
+			{"database_name", types.T_varchar, false, 50, 0},
+			{"table_name", types.T_varchar, false, 50, 0},
 		},
 	}
 

@@ -34,4 +34,16 @@ var (
 	TraceCollectorGenerateDurationHistogram             = traceCollectorDurationHistogram.WithLabelValues("generate")
 	TraceCollectorGenerateDiscardDurationHistogram      = traceCollectorDurationHistogram.WithLabelValues("generate_discard")
 	TraceCollectorExportDurationHistogram               = traceCollectorDurationHistogram.WithLabelValues("export")
+
+	traceNegativeCUCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "trace",
+			Name:      "negative_cu_total",
+			Help:      "Count of negative cu to backend",
+		}, []string{"type"})
 )
+
+func GetTraceNegativeCUCounter(typ string) prometheus.Counter {
+	return traceNegativeCUCounter.WithLabelValues(typ)
+}

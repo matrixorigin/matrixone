@@ -398,8 +398,8 @@ func getPkExpr(
 			return getPkExpr(exprImpl.F.Args[1], pkName, proc)
 
 		case "=":
-			if leftExpr, ok := exprImpl.F.Args[0].Expr.(*plan.Expr_Col); ok {
-				if !compPkCol(leftExpr.Col.Name, pkName) {
+			if col := exprImpl.F.Args[0].GetCol(); col != nil {
+				if !compPkCol(col.Name, pkName) {
 					return nil
 				}
 				constVal := getConstValueByExpr(exprImpl.F.Args[1], proc)
@@ -413,8 +413,8 @@ func getPkExpr(
 					},
 				}
 			}
-			if rightExpr, ok := exprImpl.F.Args[1].Expr.(*plan.Expr_Col); ok {
-				if !compPkCol(rightExpr.Col.Name, pkName) {
+			if col := exprImpl.F.Args[1].GetCol(); col != nil {
+				if !compPkCol(col.Name, pkName) {
 					return nil
 				}
 				constVal := getConstValueByExpr(exprImpl.F.Args[0], proc)
@@ -431,15 +431,16 @@ func getPkExpr(
 			return nil
 
 		case "in":
-			if leftExpr, ok := exprImpl.F.Args[0].Expr.(*plan.Expr_Col); ok {
-				if !compPkCol(leftExpr.Col.Name, pkName) {
+			if col := exprImpl.F.Args[0].GetCol(); col != nil {
+				if !compPkCol(col.Name, pkName) {
 					return nil
 				}
 				return exprImpl.F.Args[1]
 			}
-		case "prefix_eq":
-			if leftExpr, ok := exprImpl.F.Args[0].Expr.(*plan.Expr_Col); ok {
-				if !compPkCol(leftExpr.Col.Name, pkName) {
+
+		case "prefix_eq", "prefix_between", "prefix_in":
+			if col := exprImpl.F.Args[0].GetCol(); col != nil {
+				if !compPkCol(col.Name, pkName) {
 					return nil
 				}
 				return expr
@@ -509,10 +510,20 @@ func getNonCompositePKSearchFuncByExpr(
 		}
 
 	case *plan.Expr_F:
-		if exprImpl.F.Func.ObjName == "prefix_eq" {
-			expr := exprImpl.F.Args[1].Expr.(*plan.Expr_Lit)
-			val := util.UnsafeStringToBytes(expr.Lit.Value.(*plan.Literal_Sval).Sval)
-			searchPKFunc = vector.CollectOffsetsByOnePrefixFactory(val)
+		switch exprImpl.F.Func.ObjName {
+		case "prefix_eq":
+			val := util.UnsafeStringToBytes(exprImpl.F.Args[1].GetLit().GetSval())
+			searchPKFunc = vector.CollectOffsetsByPrefixEqFactory(val)
+
+		case "prefix_between":
+			lval := util.UnsafeStringToBytes(exprImpl.F.Args[1].GetLit().GetSval())
+			rval := util.UnsafeStringToBytes(exprImpl.F.Args[2].GetLit().GetSval())
+			searchPKFunc = vector.CollectOffsetsByPrefixBetweenFactory(lval, rval)
+
+		case "prefix_in":
+			vec := vector.NewVec(types.T_any.ToType())
+			vec.UnmarshalBinary(exprImpl.F.Args[1].GetVec().Data)
+			searchPKFunc = vector.CollectOffsetsByPrefixInFactory(vec)
 		}
 
 	case *plan.Expr_Vec:
@@ -1329,6 +1340,29 @@ func (i *StatsBlkIter) Entry() objectio.BlockInfo {
 		MetaLoc:   objectio.ObjectLocation(loc),
 	}
 	return blk
+}
+
+func ForeachCommittedObjects(
+	createObjs map[objectio.ObjectNameShort]struct{},
+	delObjs map[objectio.ObjectNameShort]struct{},
+	p *logtailreplay.PartitionState,
+	onObj func(info logtailreplay.ObjectInfo) error) (err error) {
+	for obj := range createObjs {
+		if objInfo, ok := p.GetObject(obj); ok {
+			if err = onObj(objInfo); err != nil {
+				return
+			}
+		}
+	}
+	for obj := range delObjs {
+		if objInfo, ok := p.GetObject(obj); ok {
+			if err = onObj(objInfo); err != nil {
+				return
+			}
+		}
+	}
+	return nil
+
 }
 
 func ForeachSnapshotObjects(

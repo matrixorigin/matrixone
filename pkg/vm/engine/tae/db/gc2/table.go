@@ -63,7 +63,7 @@ func (t *GCTable) addObject(name string, objEntry *ObjectEntry, commitTS types.T
 		return
 	}
 	t.objects[name] = objEntry
-	if object.commitTS.Less(commitTS) {
+	if object.commitTS.Less(&commitTS) {
 		t.objects[name].commitTS = commitTS
 	}
 }
@@ -79,7 +79,7 @@ func (t *GCTable) addObjectForSnapshot(name string, objEntry *ObjectEntry, commi
 		return
 	}
 	t.objects[name] = objEntry
-	if object.commitTS.Less(commitTS) {
+	if object.commitTS.Less(&commitTS) {
 		t.objects[name].commitTS = commitTS
 	}
 	if t.objects[name].fileIterm == nil {
@@ -116,7 +116,7 @@ func (t *GCTable) SoftGC(table *GCTable, ts types.TS, snapShotList []types.TS) [
 	}
 	for name, entry := range objects {
 		objectEntry := table.objects[name]
-		if objectEntry == nil && entry.commitTS.Less(ts) && !isSnapshotRefers(entry, snapShotList) {
+		if objectEntry == nil && entry.commitTS.Less(&ts) && !isSnapshotRefers(entry, snapShotList) {
 			logutil.Infof("SoftGC: %s, entry create %v, drop %v", name, entry.createTS.ToString(), entry.dropTS.ToString())
 			gc = append(gc, name)
 			t.deleteObject(name)
@@ -129,10 +129,10 @@ func isSnapshotRefers(obj *ObjectEntry, snapShotList []types.TS) bool {
 	left, right := 0, len(snapShotList)-1
 	for left <= right {
 		mid := left + (right-left)/2
-		if snapShotList[mid].GreaterEq(obj.createTS) && snapShotList[mid].Less(obj.dropTS) {
+		if snapShotList[mid].GreaterEq(&obj.createTS) && snapShotList[mid].Less(&obj.dropTS) {
 			logutil.Infof("isSnapshotRefers: %s, create %v, drop %v", snapShotList[mid].ToString(), obj.createTS.ToString(), obj.dropTS.ToString())
 			return false
-		} else if snapShotList[mid].Less(obj.createTS) {
+		} else if snapShotList[mid].Less(&obj.createTS) {
 			left = mid + 1
 		} else {
 			right = mid - 1
@@ -337,7 +337,7 @@ func (t *GCTable) Compare(table *GCTable) bool {
 		if object == nil {
 			return false
 		}
-		if !entry.commitTS.Equal(object.commitTS) {
+		if !entry.commitTS.Equal(&object.commitTS) {
 			return false
 		}
 	}

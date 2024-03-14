@@ -103,6 +103,17 @@ a    b
 2    2
 2147483647    max
 1    1_1
+CREATE table t10 (c char(5) not null default 'a\'b') as select a from t1;
+desc t10;
+Field    Type    Null    Key    Default    Extra    Comment
+c    CHAR(5)    NO        'a'b'        
+a    INT(32)    YES        123        
+select * from t10;
+c    a
+a'b    1
+a'b    2
+a'b    2147483647
+a'b    1
 drop table t1;
 drop table t2;
 drop table t3;
@@ -111,4 +122,5 @@ drop table t6;
 drop table t7;
 drop table t8;
 drop table t9;
+drop table t10;
 drop database test;

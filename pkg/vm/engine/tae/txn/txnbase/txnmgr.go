@@ -364,7 +364,7 @@ func (mgr *TxnManager) onBindPrepareTimeStamp(op *OpTxn) (ts types.TS) {
 
 	ts = mgr.TsAlloc.Alloc()
 	if !mgr.prevPrepareTS.IsEmpty() {
-		if ts.Less(mgr.prevPrepareTS) {
+		if ts.Less(&mgr.prevPrepareTS) {
 			panic(fmt.Sprintf("timestamp rollback current %v, previous %v", ts.ToString(), mgr.prevPrepareTS.ToString()))
 		}
 	}
@@ -450,7 +450,7 @@ func (mgr *TxnManager) on1PCPrepared(op *OpTxn) {
 }
 func (mgr *TxnManager) OnCommitTxn(txn txnif.AsyncTxn) {
 	new := txn.GetCommitTS()
-	for old := mgr.MaxCommittedTS.Load(); new.Greater(*old); old = mgr.MaxCommittedTS.Load() {
+	for old := mgr.MaxCommittedTS.Load(); new.Greater(old); old = mgr.MaxCommittedTS.Load() {
 		if mgr.MaxCommittedTS.CompareAndSwap(old, &new) {
 			return
 		}
@@ -512,7 +512,8 @@ func (mgr *TxnManager) dequeuePreparing(items ...any) {
 		}
 		if !op.Txn.IsReplay() {
 			if !mgr.prevPrepareTSInPreparing.IsEmpty() {
-				if op.Txn.GetPrepareTS().Less(mgr.prevPrepareTSInPreparing) {
+				prepareTS := op.Txn.GetPrepareTS()
+				if prepareTS.Less(&mgr.prevPrepareTSInPreparing) {
 					panic(fmt.Sprintf("timestamp rollback current %v, previous %v", op.Txn.GetPrepareTS().ToString(), mgr.prevPrepareTSInPreparing.ToString()))
 				}
 			}
@@ -550,7 +551,8 @@ func (mgr *TxnManager) onPrepareWAL(items ...any) {
 
 			if !op.Txn.IsReplay() {
 				if !mgr.prevPrepareTSInPrepareWAL.IsEmpty() {
-					if op.Txn.GetPrepareTS().Less(mgr.prevPrepareTSInPrepareWAL) {
+					prepareTS := op.Txn.GetPrepareTS()
+					if prepareTS.Less(&mgr.prevPrepareTSInPrepareWAL) {
 						panic(fmt.Sprintf("timestamp rollback current %v, previous %v", op.Txn.GetPrepareTS().ToString(), mgr.prevPrepareTSInPrepareWAL.ToString()))
 					}
 				}
@@ -636,7 +638,7 @@ func (mgr *TxnManager) MinTSForTest() types.TS {
 	minTS := types.MaxTs()
 	for _, txn := range mgr.IDMap {
 		startTS := txn.GetStartTS()
-		if startTS.Less(minTS) {
+		if startTS.Less(&minTS) {
 			minTS = startTS
 		}
 	}

@@ -119,7 +119,7 @@ func (c *checkpointCleaner) Replay() error {
 	for _, dir := range dirs {
 		start, end, ext := blockio.DecodeGCMetadataFileName(dir.Name)
 		if ext == blockio.GCFullExt {
-			if minMergedStart.IsEmpty() || minMergedStart.Less(start) {
+			if minMergedStart.IsEmpty() || minMergedStart.Less(&start) {
 				minMergedStart = start
 				minMergedEnd = end
 				maxConsumedStart = start
@@ -137,8 +137,8 @@ func (c *checkpointCleaner) Replay() error {
 		if ext == blockio.GCFullExt {
 			continue
 		}
-		if (maxConsumedStart.IsEmpty() || maxConsumedStart.Less(end)) &&
-			minMergedEnd.Less(end) {
+		if (maxConsumedStart.IsEmpty() || maxConsumedStart.Less(&end)) &&
+			minMergedEnd.Less(&end) {
 			maxConsumedStart = start
 			maxConsumedEnd = end
 			readDirs = append(readDirs, dir)
@@ -238,7 +238,8 @@ func (c *checkpointCleaner) mergeGCFile() error {
 	deleteFiles := make([]string, 0)
 	for _, dir := range dirs {
 		_, end := blockio.DecodeCheckpointMetadataFileName(dir.Name)
-		if end.LessEq(maxConsumed.GetEnd()) {
+		maxEnd := maxConsumed.GetEnd()
+		if end.LessEq(&maxEnd) {
 			deleteFiles = append(deleteFiles, GCMetaDir+dir.Name)
 		}
 	}
@@ -383,7 +384,9 @@ func (c *checkpointCleaner) CheckGC() error {
 	gcTable := NewGCTable()
 	gcTable.UpdateTable(data)
 	for i, ckp := range debugCandidates {
-		if ckp.GetEnd().Equal(maxConsumed.GetEnd()) {
+		maxEnd := maxConsumed.GetEnd()
+		ckpEnd := ckp.GetEnd()
+		if ckpEnd.Equal(&maxEnd) {
 			debugCandidates = debugCandidates[:i+1]
 			break
 		}
@@ -391,7 +394,7 @@ func (c *checkpointCleaner) CheckGC() error {
 	start1 := debugCandidates[len(debugCandidates)-1].GetEnd()
 	start2 := maxConsumed.GetEnd()
 	logutil.Infof("gckp is %v, maxConsumed is %v, start1 is %v", gCkp.String(), maxConsumed.String(), debugCandidates[len(debugCandidates)-1].String())
-	if !start1.Equal(start2) {
+	if !start1.Equal(&start2) {
 		logutil.Info("[DiskCleaner]", common.OperationField("Compare not equal"),
 			common.OperandField(start1.ToString()), common.OperandField(start2.ToString()))
 		return moerr.NewInternalErrorNoCtx("TS Compare not equal")
@@ -468,7 +471,11 @@ func (c *checkpointCleaner) Process() {
 		compareTS = minMerged.GetEnd()
 	}
 	maxGlobalCKP := c.ckpClient.MaxGlobalCheckpoint()
-	if maxGlobalCKP != nil && compareTS.Less(maxGlobalCKP.GetEnd()) {
+	if maxGlobalCKP == nil {
+		return
+	}
+	maxEnd := maxGlobalCKP.GetEnd()
+	if maxGlobalCKP != nil && compareTS.Less(&maxEnd) {
 		logutil.Infof("maxGlobalCKP is %v, compareTS is %v", maxGlobalCKP.String(), compareTS.ToString())
 		data, err := c.collectGlobalCkpData(maxGlobalCKP)
 		if err != nil {
