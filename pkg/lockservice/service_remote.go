@@ -17,7 +17,6 @@ package lockservice
 import (
 	"bytes"
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"strings"
 	"time"
 
@@ -29,18 +28,15 @@ import (
 )
 
 var methodVersions = map[pb.Method]int64{
-	pb.Method_Lock:               defines.MORPCVersion1,
-	pb.Method_ForwardLock:        defines.MORPCVersion1,
-	pb.Method_Unlock:             defines.MORPCVersion1,
-	pb.Method_GetTxnLock:         defines.MORPCVersion1,
-	pb.Method_GetWaitingList:     defines.MORPCVersion1,
-	pb.Method_KeepRemoteLock:     defines.MORPCVersion1,
-	pb.Method_GetBind:            defines.MORPCVersion1,
-	pb.Method_KeepLockTableBind:  defines.MORPCVersion1,
-	pb.Method_ForwardUnlock:      defines.MORPCVersion1,
-	pb.Method_SetRestartService:  defines.MORPCVersion2,
-	pb.Method_CanRestartService:  defines.MORPCVersion2,
-	pb.Method_RemainTxnInService: defines.MORPCVersion2,
+	pb.Method_Lock:              defines.MORPCVersion1,
+	pb.Method_ForwardLock:       defines.MORPCVersion1,
+	pb.Method_Unlock:            defines.MORPCVersion1,
+	pb.Method_GetTxnLock:        defines.MORPCVersion1,
+	pb.Method_GetWaitingList:    defines.MORPCVersion1,
+	pb.Method_KeepRemoteLock:    defines.MORPCVersion1,
+	pb.Method_GetBind:           defines.MORPCVersion1,
+	pb.Method_KeepLockTableBind: defines.MORPCVersion1,
+	pb.Method_ForwardUnlock:     defines.MORPCVersion1,
 }
 
 func (s *service) initRemote() {
@@ -62,8 +58,7 @@ func (s *service) initRemote() {
 		rpcClient,
 		s.cfg.KeepBindDuration.Duration,
 		s.cfg.KeepRemoteLockDuration.Duration,
-		s.tableGroups,
-		s)
+		s.tableGroups)
 	s.initRemoteHandler()
 	if err := s.remote.server.Start(); err != nil {
 		panic(err)
@@ -94,11 +89,6 @@ func (s *service) handleRemoteLock(
 	req *pb.Request,
 	resp *pb.Response,
 	cs morpc.ClientSession) {
-	if !s.canLockOnServiceStatus(req.Lock.TxnID, req.Lock.SnapShotTs) {
-		writeResponse(ctx, cancel, resp, moerr.NewRetryForCNRollingRestart(), cs)
-		return
-	}
-
 	l, err := s.getLocalLockTable(req, resp)
 	if err != nil ||
 		l == nil {
@@ -137,11 +127,6 @@ func (s *service) handleForwardLock(
 	req *pb.Request,
 	resp *pb.Response,
 	cs morpc.ClientSession) {
-	if !s.canLockOnServiceStatus(req.Lock.TxnID, req.Lock.SnapShotTs) {
-		writeResponse(ctx, cancel, resp, moerr.NewRetryForCNRollingRestart(), cs)
-		return
-	}
-
 	l, err := s.getLockTable(
 		req.LockTable.Group,
 		req.LockTable.Table)
