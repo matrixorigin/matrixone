@@ -479,7 +479,7 @@ func readBlockData(
 		aborts := vector.MustFixedCol[bool](loaded.Vecs[len(loaded.Vecs)-1])
 		commits := vector.MustFixedCol[types.TS](loaded.Vecs[len(loaded.Vecs)-2])
 		for i := 0; i < len(commits); i++ {
-			if aborts[i] || commits[i].Greater(ts) {
+			if aborts[i] || commits[i].Greater(&ts) {
 				deletes.Add(uint64(i))
 			}
 		}
@@ -546,7 +546,7 @@ func EvalDeleteRowsByTimestamp(deletes *batch.Batch, ts types.TS, blockid *types
 
 	for i := start; i < end; i++ {
 		abort := vector.GetFixedAt[bool](aborts, i)
-		if abort || tss[i].Greater(ts) {
+		if abort || tss[i].Greater(&ts) {
 			continue
 		}
 		row := rowids[i].GetRowOffset()
@@ -556,7 +556,7 @@ func EvalDeleteRowsByTimestamp(deletes *batch.Batch, ts types.TS, blockid *types
 }
 
 func EvalDeleteRowsByTimestampForDeletesPersistedByCN(deletes *batch.Batch, ts types.TS, committs types.TS) (rows *nulls.Bitmap) {
-	if deletes == nil || ts.Less(committs) {
+	if deletes == nil || ts.Less(&committs) {
 		return
 	}
 	// record visible delete rows
