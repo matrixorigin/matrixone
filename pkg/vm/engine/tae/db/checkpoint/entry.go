@@ -98,13 +98,13 @@ func (e *CheckpointEntry) IsCommitted() bool {
 	return e.state == ST_Finished
 }
 func (e *CheckpointEntry) HasOverlap(from, to types.TS) bool {
-	if e.start.Greater(to) || e.end.Less(from) {
+	if e.start.Greater(&to) || e.end.Less(&from) {
 		return false
 	}
 	return true
 }
 func (e *CheckpointEntry) LessEq(ts types.TS) bool {
-	return e.end.LessEq(ts)
+	return e.end.LessEq(&ts)
 }
 func (e *CheckpointEntry) SetLocation(cn, tn objectio.Location) {
 	e.Lock()

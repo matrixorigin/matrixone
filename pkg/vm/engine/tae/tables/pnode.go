@@ -215,7 +215,8 @@ func (node *persistedNode) GetRowByFilter(
 	var deleted bool
 	for _, offset := range rows {
 		commitTS := commitTSVec.Get(int(offset)).(types.TS)
-		if commitTS.Greater(txn.GetStartTS()) {
+		startTS := txn.GetStartTS()
+		if commitTS.Greater(&startTS) {
 			break
 		}
 		deleted = view.IsDeleted(int(offset))

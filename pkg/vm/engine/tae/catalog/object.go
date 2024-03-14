@@ -220,7 +220,7 @@ func (entry *ObjectEntry) CheckAndLoad() error {
 func (entry *ObjectEntry) NeedPrefetchObjectMetaForObjectInfo(nodes []*MVCCNode[*ObjectMVCCNode]) (needPrefetch bool, blk *BlockEntry) {
 	lastNode := nodes[0]
 	for _, n := range nodes {
-		if n.Start.Greater(lastNode.Start) {
+		if n.Start.Greater(&lastNode.Start) {
 			lastNode = n
 		}
 	}
@@ -252,7 +252,7 @@ func (entry *ObjectEntry) SetObjectStatsForPreviousNode(nodes []*MVCCNode[*Objec
 	}
 	lastNode := nodes[0]
 	for _, n := range nodes {
-		if n.Start.Greater(lastNode.Start) {
+		if n.Start.Greater(&lastNode.Start) {
 			lastNode = n
 		}
 	}
