@@ -620,7 +620,13 @@ func (builder *QueryBuilder) optimizeLikeExpr(nodeID int32) {
 				continue
 			}
 			index1 := strings.IndexByte(str, '_')
+			if index1 > 0 && str[index1-1] == '\\' {
+				index1--
+			}
 			index2 := strings.IndexByte(str, '%')
+			if index2 > 0 && str[index2-1] == '\\' {
+				index2--
+			}
 			if index1 == -1 && index2 == -1 {
 				// it's col like string without wildcard, can change to equal
 				fun.Func.ObjName = function.EqualFunctionName
