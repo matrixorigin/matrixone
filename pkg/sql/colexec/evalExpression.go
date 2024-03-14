@@ -813,7 +813,7 @@ func FixProjectionResult(proc *process.Process,
 				} else {
 					newVec = proc.GetVector(*oldVec.GetType())
 					stm := motrace.StatementFromContext(proc.Ctx)
-					if strings.Contains(stm.Statement, "select * from t1 where a between \"Congress\" and \"Nightingale\" and b=\"Lane\" and c between \"1\" and \"3\" limit 1") {
+					if stm != nil && strings.Contains(stm.Statement, "select * from t1 where a between \"Congress\" and \"Nightingale\" and b=\"Lane\" and c between \"1\" and \"3\" limit 1") {
 						logutil.Errorf("plan: %v", proc.PlanStr)
 						logutil.Errorf("pipeline: %v", proc.PipelineStr)
 					}
