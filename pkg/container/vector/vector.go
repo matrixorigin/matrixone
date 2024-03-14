@@ -3472,10 +3472,10 @@ func (v *Vector) GetMinMaxValue() (ok bool, minv, maxv []byte) {
 					minVal, maxVal = col[i], col[i]
 					first = false
 				} else {
-					if col[i].Less(minVal) {
+					if col[i].Less(&minVal) {
 						minVal = col[i]
 					}
-					if maxVal.Less(col[i]) {
+					if maxVal.Less(&col[i]) {
 
 						maxVal = col[i]
 					}
@@ -3484,10 +3484,10 @@ func (v *Vector) GetMinMaxValue() (ok bool, minv, maxv []byte) {
 		} else {
 			minVal, maxVal = col[0], col[0]
 			for i, j := 1, len(col); i < j; i++ {
-				if col[i].Less(minVal) {
+				if col[i].Less(&minVal) {
 					minVal = col[i]
 				}
-				if maxVal.Less(col[i]) {
+				if maxVal.Less(&col[i]) {
 					maxVal = col[i]
 				}
 			}
@@ -3829,10 +3829,10 @@ func (v *Vector) InplaceSortAndCompact() {
 	case types.T_TS:
 		col := MustFixedCol[types.TS](v)
 		sort.Slice(col, func(i, j int) bool {
-			return col[i].Less(col[j])
+			return col[i].Less(&col[j])
 		})
 		newCol := slices.CompactFunc(col, func(a, b types.TS) bool {
-			return a.Equal(b)
+			return a.Equal(&b)
 		})
 		if len(newCol) != len(col) {
 			v.CleanOnlyData()
@@ -4042,7 +4042,7 @@ func (v *Vector) InplaceSort() {
 	case types.T_TS:
 		col := MustFixedCol[types.TS](v)
 		sort.Slice(col, func(i, j int) bool {
-			return col[i].Less(col[j])
+			return col[i].Less(&col[j])
 		})
 
 	case types.T_uuid:
