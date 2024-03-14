@@ -461,6 +461,24 @@ func (l *lockTableAllocator) initServer(cfg morpc.Config) {
 	}
 }
 
+func (l *lockTableAllocator) canGetBind(group uint32, tableID uint64) bool {
+	g := l.getGroup(group)
+	if g == nil {
+		return true
+	}
+	serviceID := g[tableID].ServiceID
+	if len(serviceID) == 0 {
+		return true
+	}
+	b := l.getServiceBinds(serviceID)
+	if b != nil &&
+		b.active() &&
+		!b.isStatus(pb.Status_ServiceLockEnable) {
+		return false
+	}
+	return true
+}
+
 func (l *lockTableAllocator) initHandler() {
 	l.server.RegisterMethodHandler(
 		pb.Method_GetBind,
@@ -493,14 +511,8 @@ func (l *lockTableAllocator) handleGetBind(
 	req *pb.Request,
 	resp *pb.Response,
 	cs morpc.ClientSession) {
-	if t, ok := l.getLockTablesLocked(req.GetBind.Group)[req.GetBind.Table]; ok {
-		b := l.getServiceBinds(t.ServiceID)
-		if b != nil &&
-			b.active() &&
-			!b.isStatus(pb.Status_ServiceLockEnable) {
-			writeResponse(ctx, cancel, resp, moerr.NewRetryForCNRollingRestart(), cs)
-			return
-		}
+	if !l.canGetBind(req.GetBind.Group, req.GetBind.Table) {
+		writeResponse(ctx, cancel, resp, moerr.NewRetryForCNRollingRestart(), cs)
 	}
 	resp.GetBind.LockTable = l.Get(
 		req.GetBind.ServiceID,
@@ -580,4 +592,12 @@ func (l *lockTableAllocator) getLockTablesLocked(group uint32) map[uint64]pb.Loc
 	m = make(map[uint64]pb.LockTable, 10240)
 	l.mu.lockTables[group] = m
 	return m
+}
+
+func (l *lockTableAllocator) getGroup(group uint32) map[uint64]pb.LockTable {
+	m, ok := l.mu.lockTables[group]
+	if ok {
+		return m
+	}
+	return nil
 }
