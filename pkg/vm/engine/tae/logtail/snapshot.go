@@ -79,9 +79,10 @@ func (sm *SnapshotMeta)Update(data *CheckpointData) *SnapshotMeta {
 	return nil
 }
 
-func (sm *SnapshotMeta) GetSnapshot(fs fileservice.FileService) ([]*snapshot,error){
+func (sm *SnapshotMeta) GetSnapshot(fs fileservice.FileService) (map[uint64][]snapshot,error){
 	sm.RLock()
 	defer sm.RUnlock()
+	snapshotList := make(map[uint64][]snapshot)
 	for _, object := range sm.object {
 		location := object.stats.ObjectLocation()
 		for i := uint32(0); i < object.stats.BlkCnt(); i++ {
@@ -96,15 +97,23 @@ func (sm *SnapshotMeta) GetSnapshot(fs fileservice.FileService) ([]*snapshot,err
 			if err != nil {
 				return nil, err
 			}
-			blockid := objectio.BuildObjectBlockid(object.stats.ObjectName(), uint16(i))
-			deleteRows := blockio.EvalDeleteRowsByTimestamp(deletes, object.checkpointTS, blockid)
+			blockID := objectio.BuildObjectBlockid(object.stats.ObjectName(), uint16(i))
+			deleteRows := blockio.EvalDeleteRowsByTimestamp(deletes, object.checkpointTS, blockID)
 			if deleteRows == nil {
 				continue
 			}
 			for n := range bat.Vecs {
 				bat.Vecs[n].Shrink(deleteRows.ToI64Arrary(), true)
+				for r := 0; r < bat.Vecs[n].Length(); r++ {
+					tid := vector.GetFixedAt[uint64](bat.Vecs[0], r)
+					ts := vector.GetFixedAt[types.TS](bat.Vecs[1], r)
+					if len(snapshotList[tid]) == 0 {
+						snapshotList[tid] = make([]snapshot, 0)
+					}
+					snapshotList[tid] = append(snapshotList[tid], snapshot{ts, tid})
+				}
 			}
 		}
 	}
-	return nil, nil
+	return snapshotList, nil
 }
