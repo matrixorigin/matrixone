@@ -1148,9 +1148,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 			ReleaseScopes(right)
 		}
 	}()
-
 	n := ns[curNodeIdx]
-
 	switch n.NodeType {
 	case plan.Node_VALUE_SCAN:
 		var bat *batch.Batch
