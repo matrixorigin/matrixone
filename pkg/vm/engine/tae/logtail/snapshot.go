@@ -41,6 +41,7 @@ type objectInfo struct {
 type SnapshotMeta struct {
 	sync.RWMutex
 	object map[string]*objectInfo
+	tid uint64
 }
 
 func (sm *SnapshotMeta)Update(data *CheckpointData) *SnapshotMeta {
@@ -53,7 +54,7 @@ func (sm *SnapshotMeta)Update(data *CheckpointData) *SnapshotMeta {
 	for i:=0; i<ins.Length(); i++ {
 		var objectStats *objectio.ObjectStats
 		table := vector.GetFixedAt[uint64](types.T_uint64, tid, i)
-		if table != 000 {
+		if table != sm.tid {
 			continue
 		}
 		buf := ins.GetVectorByName(catalog.ObjectAttr_ObjectStats).Get(i).([]byte)
