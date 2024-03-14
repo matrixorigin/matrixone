@@ -124,9 +124,6 @@ func NewCompile(
 	c.cnLabel = cnLabel
 	c.startAt = startAt
 	c.disableRetry = false
-	if c.proc.TxnOperator != nil {
-		c.proc.TxnOperator.GetWorkspace().UpdateSnapshotWriteOffset()
-	}
 	return c
 }
 
@@ -436,6 +433,7 @@ func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
 	if sql == "" {
 		sql = c.sql
 	}
+	fmt.Printf("%x run sql: %s\n", txnOp.Txn().ID, sql)
 	txnTrace.GetService().TxnExecSQL(txnOp, sql)
 
 	var writeOffset uint64
@@ -583,6 +581,9 @@ func (c *Compile) canRetry(err error) bool {
 func (c *Compile) runOnce() error {
 	var wg sync.WaitGroup
 
+	if c.proc.TxnOperator != nil {
+		c.proc.TxnOperator.GetWorkspace().UpdateSnapshotWriteOffset()
+	}
 	err := c.lockMetaTables()
 	if err != nil {
 		return err

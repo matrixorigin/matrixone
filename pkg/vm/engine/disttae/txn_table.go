@@ -16,7 +16,6 @@ package disttae
 
 import (
 	"context"
-	"fmt"
 	"regexp"
 	"sort"
 	"strconv"
@@ -655,66 +654,6 @@ func (tbl *txnTable) rangesOnePart(
 	blocks *objectio.BlockInfoSlice, // output marshaled block list after filtering
 	proc *process.Process, // process of this transaction
 ) (err error) {
-	if tbl.db.txn.op.Txn().IsRCIsolation() {
-		state, err := tbl.getPartitionState(tbl.proc.Load().Ctx)
-		if err != nil {
-			return err
-		}
-
-		lastTs := tbl.lastTS
-		deleteObjs, createObjs := state.GetChangedObjsBetween(types.TimestampToTS(lastTs),
-			types.TimestampToTS(tbl.db.txn.op.SnapshotTS()))
-
-		createObjsInfos := ""
-		deleteObjInfos := ""
-		if regexp.MustCompile(`.*sbtest.*`).MatchString(tbl.tableName) {
-			logutil.Infof("xxxx table:%s, txn:%s, lastTs:%s, snapshotTs:%s",
-				tbl.tableName,
-				tbl.db.txn.op.Txn().DebugString(),
-				lastTs.DebugString(),
-				tbl.db.txn.op.SnapshotTS().DebugString())
-			if len(deleteObjs) > 0 || len(createObjs) > 0 {
-				for obj := range deleteObjs {
-					objInfo, ok := state.GetObject(obj)
-					if !ok {
-						logutil.Fatalf("xxxx obj-seg:%s not found in partition state",
-							obj.Segmentid().ToString())
-					}
-					deleteObjInfos = fmt.Sprintf("%s:%s", deleteObjInfos, objInfo.String())
-				}
-				for obj := range createObjs {
-					objInfo, ok := state.GetObject(obj)
-					if !ok {
-						logutil.Fatalf("xxxx obj-seg:%s not found in partition state",
-							obj.Segmentid().ToString())
-					}
-					createObjsInfos = fmt.Sprintf("%s:%s", createObjsInfos, objInfo.String())
-				}
-				logutil.Infof("xxxx table:%s, deleteObjs:%s, xxxx createObjs:%s, txn:%s, lastTs:%s, snapshotTs:%s",
-					tbl.tableName,
-					deleteObjInfos,
-					createObjsInfos,
-					tbl.db.txn.op.Txn().DebugString(),
-					tbl.lastTS.DebugString(),
-					tbl.db.txn.op.SnapshotTS().DebugString())
-
-			}
-		}
-
-		trace.GetService().ApplyFlush(
-			tbl.db.txn.op.Txn().ID,
-			tbl.tableId,
-			tbl.lastTS,
-			tbl.db.txn.op.SnapshotTS(),
-			len(deleteObjs))
-		if len(deleteObjs) > 0 {
-			if err := tbl.updateDeleteInfo(ctx, state, deleteObjs, createObjs); err != nil {
-				return err
-			}
-		}
-		tbl.lastTS = tbl.db.txn.op.SnapshotTS()
-	}
-
 	var uncommittedObjects []objectio.ObjectStats
 	tbl.db.txn.forEachTableWrites(tbl.db.databaseId, tbl.tableId, tbl.db.txn.GetSnapshotWriteOffset(), func(entry Entry) {
 		stats := objectio.ObjectStats{}

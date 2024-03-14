@@ -16,7 +16,10 @@ package disttae
 
 import (
 	"context"
+	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 	"math"
+	"regexp"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -1013,4 +1016,69 @@ func (txn *Transaction) UpdateSnapshotWriteOffset() {
 	txn.Lock()
 	defer txn.Unlock()
 	txn.snapshotWriteOffset = len(txn.writes)
+
+	if txn.statementID > 0 && txn.op.Txn().IsRCIsolation() {
+		ts := txn.timestamps[txn.statementID-1]
+		fn := func(_, value any) bool {
+			tbl := value.(*txnTable)
+			ctx := tbl.proc.Load().Ctx
+			state, err := tbl.getPartitionState(ctx)
+			if err != nil {
+				logutil.Fatalf("getPartitionState failed: %v", err)
+			}
+			deleteObjs, createObjs := state.GetChangedObjsBetween(types.TimestampToTS(ts),
+				types.TimestampToTS(tbl.db.txn.op.SnapshotTS()))
+
+			createObjsInfos := ""
+			deleteObjInfos := ""
+			if regexp.MustCompile(`.*sbtest.*`).MatchString(tbl.tableName) {
+				logutil.Infof("xxxx table:%s, txn:%s, lastTs:%s, snapshotTs:%s",
+					tbl.tableName,
+					tbl.db.txn.op.Txn().DebugString(),
+					ts.DebugString(),
+					tbl.db.txn.op.SnapshotTS().DebugString())
+				if len(deleteObjs) > 0 || len(createObjs) > 0 {
+					for obj := range deleteObjs {
+						objInfo, ok := state.GetObject(obj)
+						if !ok {
+							logutil.Fatalf("xxxx obj-seg:%s not found in partition state",
+								obj.Segmentid().ToString())
+						}
+						deleteObjInfos = fmt.Sprintf("%s:%s", deleteObjInfos, objInfo.String())
+					}
+					for obj := range createObjs {
+						objInfo, ok := state.GetObject(obj)
+						if !ok {
+							logutil.Fatalf("xxxx obj-seg:%s not found in partition state",
+								obj.Segmentid().ToString())
+						}
+						createObjsInfos = fmt.Sprintf("%s:%s", createObjsInfos, objInfo.String())
+					}
+					logutil.Infof("xxxx table:%s, deleteObjs:%s, xxxx createObjs:%s, txn:%s, lastTs:%s, snapshotTs:%s",
+						tbl.tableName,
+						deleteObjInfos,
+						createObjsInfos,
+						tbl.db.txn.op.Txn().DebugString(),
+						ts.DebugString(),
+						tbl.db.txn.op.SnapshotTS().DebugString())
+
+				}
+			}
+
+			trace.GetService().ApplyFlush(
+				tbl.db.txn.op.Txn().ID,
+				tbl.tableId,
+				ts,
+				tbl.db.txn.op.SnapshotTS(),
+				len(deleteObjs))
+			if len(deleteObjs) > 0 {
+				if err := tbl.updateDeleteInfo(ctx, state, deleteObjs, createObjs); err != nil {
+					logutil.Fatalf("updateDeleteInfo failed: %v", err)
+				}
+			}
+			return true
+		}
+		txn.tableCache.tableMap.Range(fn)
+	}
+
 }
