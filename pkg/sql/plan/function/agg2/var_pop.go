@@ -21,7 +21,7 @@ import (
 	"math"
 )
 
-func RegisterStdDevPop(id int64) {
+func RegisterVarPop(id int64) {
 	aggexec.RegisterDeterminedSingleAgg(aggexec.MakeDeterminedSingleAggInfo(id, types.T_bit.ToType(), types.T_float64.ToType(), false, true), newAggVarPop[uint64])
 	aggexec.RegisterDeterminedSingleAgg(aggexec.MakeDeterminedSingleAggInfo(id, types.T_int8.ToType(), types.T_float64.ToType(), false, true), newAggVarPop[int8])
 	aggexec.RegisterDeterminedSingleAgg(aggexec.MakeDeterminedSingleAggInfo(id, types.T_int16.ToType(), types.T_float64.ToType(), false, true), newAggAvg[int16])
@@ -101,10 +101,12 @@ func (a *aggVarPop[T]) Merge(other aggexec.SingleAggFromFixedRetFixed[T, float64
 	set(get1() + get2())
 }
 func (a *aggVarPop[T]) Flush(get aggexec.AggGetter[float64], set aggexec.AggSetter[float64]) {
-	if a.count != 0 {
-		avg := a.sum / float64(a.count)
-		set(get()/float64(a.count) - math.Pow(avg, 2))
+	if a.count == 0 {
+		set(0)
+		return
 	}
+	avg := a.sum / float64(a.count)
+	set(get()/float64(a.count) - math.Pow(avg, 2))
 }
 
 type aggVarPopDecimal128 struct {

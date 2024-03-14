@@ -23,48 +23,6 @@ import (
 
 var supportedAggregateFunctions = []FuncNew{
 	{
-		functionId: VAR_POP,
-		class:      plan.Function_AGG,
-		layout:     STANDARD_FUNCTION,
-		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			return fixedUnaryAggTypeCheck(inputs, functionAgg.AggVarianceSupportedParameters)
-		},
-
-		Overloads: []overload{
-			{
-				overloadId: 0,
-				isAgg:      true,
-				retType:    functionAgg.AggVarianceReturnType,
-				aggFramework: aggregationLogicOfOverload{
-					str:    "var_pop",
-					aggNew: functionAgg.NewAggVarPop,
-				},
-			},
-		},
-	},
-
-	{
-		functionId: STDDEV_POP,
-		class:      plan.Function_AGG,
-		layout:     STANDARD_FUNCTION,
-		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			return fixedUnaryAggTypeCheck(inputs, functionAgg.AggStdDevSupportedParameters)
-		},
-
-		Overloads: []overload{
-			{
-				overloadId: 0,
-				isAgg:      true,
-				retType:    functionAgg.AggStdDevReturnType,
-				aggFramework: aggregationLogicOfOverload{
-					str:    "stddev_pop",
-					aggNew: functionAgg.NewAggStdDevPop,
-				},
-			},
-		},
-	},
-
-	{
 		functionId: MEDIAN,
 		class:      plan.Function_AGG,
 		layout:     STANDARD_FUNCTION,
@@ -392,6 +350,48 @@ var supportedAggInNewFramework = []FuncNew{
 				aggFramework: aggregationLogicOfOverload{
 					str:         "bit_xor",
 					aggRegister: agg2.RegisterBitXor,
+				},
+			},
+		},
+	},
+
+	{
+		functionId: VAR_POP,
+		class:      plan.Function_AGG,
+		layout:     STANDARD_FUNCTION,
+		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
+			return fixedUnaryAggTypeCheck(inputs, functionAgg.AggVarianceSupportedParameters)
+		},
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				isAgg:      true,
+				retType:    functionAgg.AggVarianceReturnType,
+				aggFramework: aggregationLogicOfOverload{
+					str:         "var_pop",
+					aggRegister: agg2.RegisterVarPop,
+				},
+			},
+		},
+	},
+
+	{
+		functionId: STDDEV_POP,
+		class:      plan.Function_AGG,
+		layout:     STANDARD_FUNCTION,
+		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
+			return fixedUnaryAggTypeCheck(inputs, functionAgg.AggStdDevSupportedParameters)
+		},
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				isAgg:      true,
+				retType:    functionAgg.AggStdDevReturnType,
+				aggFramework: aggregationLogicOfOverload{
+					str:         "stddev_pop",
+					aggRegister: agg2.RegisterStdVarPop,
 				},
 			},
 		},
