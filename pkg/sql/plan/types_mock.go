@@ -355,6 +355,21 @@ func (m *MockCompilerContext2) ResolveUdf(name string, args []*plan.Expr) (*func
 	return ret0, ret1
 }
 
+// ResolveSnapshotTsWithSnapShotName mocks base method.
+func (m *MockCompilerContext2) ResolveSnapshotTsWithSnapShotName(snapshotName string) (string, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ResolveSnapshotTsWithSnapShotName", snapshotName)
+	ret0, _ := ret[0].(string)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// ResolveSnapshotTsWithSnapShotName indicates an expected call of ResolveSnapshotTsWithSnapShotName.
+func (mr *MockCompilerContext2MockRecorder) ResolveSnapshotTsWithSnapShotName(snapshotName interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ResolveSnapshotTsWithSnapShotName", reflect.TypeOf((*MockCompilerContext2)(nil).ResolveSnapshotTsWithSnapShotName), snapshotName)
+}
+
 // ResolveUdf indicates an expected call of ResolveUdf.
 func (mr *MockCompilerContext2MockRecorder) ResolveUdf(name, args interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()

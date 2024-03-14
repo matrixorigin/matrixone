@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -3223,6 +3224,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 		}
 
 	case *tree.TableName:
+		var ts timestamp.Timestamp
 		schema := string(tbl.SchemaName)
 		table := string(tbl.ObjectName)
 		if len(table) == 0 || table == "dual" { //special table name
@@ -3441,6 +3443,13 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 			return 0, err
 		}
 
+		if tbl.AtTsExpr != nil {
+			ts, err = builder.resolveTsHint(builder.GetContext(), tbl.AtTsExpr.Expr)
+			if err != nil {
+				return 0, err
+			}
+		}
+
 		obj, tableDef := builder.compCtx.Resolve(schema, table)
 		if tableDef == nil {
 			return 0, moerr.NewParseError(builder.GetContext(), "table %q does not exist", table)
@@ -3546,6 +3555,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 			ObjRef:      obj,
 			TableDef:    tableDef,
 			BindingTags: []int32{builder.genNewTag()},
+			ScanTS:      &ts,
 		}, ctx)
 
 	case *tree.JoinTableExpr:
@@ -4004,4 +4014,66 @@ func (builder *QueryBuilder) checkExprCanPushdown(expr *Expr, node *Node) bool {
 		}
 		return false
 	}
+}
+
+func (builder *QueryBuilder) resolveTsHint(ctx context.Context, tsExpr tree.Expr) (timestamp.Timestamp, error) {
+	if tsExpr == nil {
+		return timestamp.Timestamp{}, nil
+	}
+
+	conds := splitAstConjunction(tsExpr)
+	if len(conds) != 1 {
+		return timestamp.Timestamp{}, moerr.NewParseError(ctx, "invalid timestamp hint")
+	}
+
+	bindCtx := NewBindContext(builder, nil)
+	expr, err := bindCtx.binder.BindExpr(conds[0], 0, true)
+	if err != nil {
+		return timestamp.Timestamp{}, err
+	}
+
+	// must equal condition
+	fn := expr.GetF()
+	if fn == nil || fn.GetFunc().GetObjName() != "=" {
+		return timestamp.Timestamp{}, moerr.NewParseError(ctx, "invalid timestamp hint")
+	}
+
+	// left and right must be Timestamp or Snapshot
+	left := fn.GetArgs()[0]
+	leftParam := strings.ToLower(left.GetP().String())
+	if !(leftParam == "timestamp" || leftParam == "snapshot") {
+		return timestamp.Timestamp{}, moerr.NewParseError(ctx, "invalid timestamp hint")
+	}
+
+	// timestamp par§am
+	if leftParam == "timestamp" {
+		// resovle right expr
+		right := fn.GetArgs()[1]
+		// todo: resolve non plan.Expr_P expr
+		rightParam := strings.ToLower(right.GetP().String())
+		ts, err := timestamp.ParseTimestamp(rightParam)
+		if err != nil {
+			return timestamp.Timestamp{}, err
+		}
+		return ts, nil
+	}
+
+	// snapshot param
+	if leftParam == "snapshot" {
+		// resovle right expr
+		right := fn.GetArgs()[1]
+		rightParam := strings.ToLower(right.GetP().String())
+		tsValue, err := builder.compCtx.ResolveSnapshotTsWithSnapShotName(rightParam)
+		if err != nil {
+			return timestamp.Timestamp{}, err
+		}
+		ts, err := timestamp.ParseTimestamp(tsValue)
+		if err != nil {
+			return timestamp.Timestamp{}, err
+		}
+		return ts, nil
+	}
+
+	return timestamp.Timestamp{}, nil
+
 }

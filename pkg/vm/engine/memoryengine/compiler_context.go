@@ -54,6 +54,11 @@ func (c *CompilerContext) IsPublishing(dbName string) (bool, error) {
 	panic("implement me")
 }
 
+func (c *CompilerContext) ResolveSnapshotTsWithSnapShotName(snapshotName string) (string, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
 func (c *CompilerContext) SetQueryingSubscription(meta *plan.SubscriptionMeta) {
 	//TODO implement me
 	panic("implement me")

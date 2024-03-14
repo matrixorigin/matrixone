@@ -49,7 +49,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -9832,38 +9831,4 @@ func doResolveSnapshotTsWithSnapShotName(ctx context.Context, ses *Session, spNa
 	} else {
 		return "", moerr.NewInternalError(ctx, "snapshot %s does not exist", spName)
 	}
-}
-
-func resolveTsExpr(ctx context.Context, atTsHint *tree.AtTimeStampClause, ses *Session) (timestamp.Timestamp, error) {
-	if atTsHint == nil || atTsHint.TimeStampExpr == nil || atTsHint.TimeStampExpr.Type == tree.ATTIMESTAMPNONE {
-		return timestamp.Timestamp{}, nil
-	}
-	var ts timestamp.Timestamp
-	tsExpr := atTsHint.TimeStampExpr
-	// if atTsHint is timestamp hint
-	if tsExpr.Type == tree.ATTIMESTAMPTIME {
-		tsValue := tsExpr.Expr
-		// parse timeStamp
-		ts, err := timestamp.ParseTimestamp(tsValue)
-		if err != nil {
-			return timestamp.Timestamp{}, moerr.NewInvalidInput(ctx, "invalid timestamp value")
-		}
-		return ts, nil
-	}
-
-	// if atTsHint is snapshotName hint
-	if tsExpr.Type == tree.ATTIMESTAMPSNAPSHOT {
-		snapshotName := tsExpr.Expr
-		tsValues, err := doResolveSnapshotTsWithSnapShotName(ctx, ses, snapshotName)
-		if err != nil {
-			return timestamp.Timestamp{}, err
-		}
-		ts, err = timestamp.ParseTimestamp(tsValues)
-		if err != nil {
-			return timestamp.Timestamp{}, moerr.NewInvalidInput(ctx, "invalid timestamp value")
-		}
-		return ts, nil
-	}
-
-	return ts, nil
 }

@@ -915,6 +915,10 @@ func (m *MockCompilerContext) IsPublishing(dbName string) (bool, error) {
 	return false, nil
 }
 
+func (m *MockCompilerContext) ResolveSnapshotTsWithSnapShotName(snapshotName string) (string, error) {
+	return "", nil
+}
+
 type MockOptimizer struct {
 	ctxt MockCompilerContext
 }

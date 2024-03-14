@@ -15,8 +15,9 @@
 package plan
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"sort"
+
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -236,6 +237,7 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 		return nodeID
 	}
 
+	ts := node.GetScanTS()
 	var pkPos int32 = -1
 	if len(node.TableDef.Pkey.Names) == 1 {
 		pkPos = node.TableDef.Name2ColIndex[node.TableDef.Pkey.Names[0]]
@@ -383,6 +385,7 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 				Limit:        node.Limit,
 				Offset:       node.Offset,
 				BindingTags:  []int32{idxTag},
+				ScanTS:       ts,
 			}, builder.ctxByNode[nodeID])
 
 			return idxTableNodeID
@@ -522,6 +525,7 @@ END0:
 			Limit:        node.Limit,
 			Offset:       node.Offset,
 			BindingTags:  []int32{idxTag},
+			ScanTS:       ts,
 		}, builder.ctxByNode[nodeID])
 
 		node.Limit, node.Offset = nil, nil
@@ -645,6 +649,7 @@ END0:
 			Limit:        node.Limit,
 			Offset:       node.Offset,
 			BindingTags:  []int32{idxTag},
+			ScanTS:       ts,
 		}, builder.ctxByNode[nodeID])
 
 		node.Limit, node.Offset = nil, nil
@@ -694,6 +699,7 @@ func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node,
 	if leftChild.NodeType != plan.Node_TABLE_SCAN || leftChild.TableDef.Pkey == nil {
 		return nodeID
 	}
+	ts := leftChild.GetScanTS()
 
 	rightChild := builder.qry.Nodes[node.Children[1]]
 
@@ -865,6 +871,7 @@ func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node,
 			Limit:    leftChild.Limit,
 			Offset:   leftChild.Offset,
 			OnList:   []*plan.Expr{pkJoinCond},
+			ScanTS:   ts,
 		}, builder.ctxByNode[nodeID])
 
 		leftChild.Limit, leftChild.Offset = nil, nil
