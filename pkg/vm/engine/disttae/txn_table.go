@@ -886,7 +886,8 @@ func (tbl *txnTable) collectDirtyBlocks(
 				return
 			}
 			//deletes in tbl.writes maybe comes from PartitionState.rows or PartitionState.blocks.
-			if entry.fileName == "" {
+			if entry.fileName == "" &&
+				entry.tableId != catalog.MO_DATABASE_ID && entry.tableId != catalog.MO_TABLES_ID && entry.tableId != catalog.MO_COLUMNS_ID {
 				vs := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
 				for _, v := range vs {
 					id, _ := v.Decode()
