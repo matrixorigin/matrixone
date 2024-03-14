@@ -2164,15 +2164,10 @@ func (tbl *txnTable) PKPersistedBetween(
 	delObjs, cObjs := p.GetChangedObjsBetween(from.Next(), types.MaxTs())
 	isFakePK := func() bool {
 		tblDef := tbl.GetTableDef(nil)
-		for _, colDef := range tblDef.Cols {
-			if colDef.Name == tblDef.Pkey.PkeyColName {
-				if colDef.Name == catalog.FakePrimaryKeyColName {
-					return true
-				}
-			}
+		if tblDef.Pkey.PkeyColName == catalog.FakePrimaryKeyColName {
+			return true
 		}
 		return false
-
 	}()
 
 	if err := ForeachCommittedObjects(cObjs, delObjs, p,
