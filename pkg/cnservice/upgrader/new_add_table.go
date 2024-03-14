@@ -84,12 +84,27 @@ var (
 			primary key(stage_id)
 		  );`, catalog.MO_CATALOG, catalog.MO_STAGES),
 	}
+
+	SqlStatementCUTable = &table.Table{
+		Account:  table.AccountAll,
+		Database: catalog.MO_SYSTEM_METRICS,
+		Table:    catalog.MO_SQL_STMT_CU,
+		CreateTableSql: fmt.Sprintf(`CREATE TABLE %s.%s (
+account VARCHAR(1024) DEFAULT 'sys' COMMENT 'account name',
+collecttime DATETIME NOT NULL COMMENT 'metric data collect time',
+value DOUBLE DEFAULT '0.0' COMMENT 'metric value',
+node VARCHAR(1024) DEFAULT 'monolithic' COMMENT 'mo node uuid',
+role VARCHAR(1024) DEFAULT 'monolithic' COMMENT 'mo node role, like: CN, DN, LOG',
+sql_source_type VARCHAR(1024) NOT NULL COMMENT 'sql_source_type, val like: external_sql, cloud_nonuser_sql, cloud_user_sql, internal_sql, ...'
+) CLUSTER BY (account, collecttime);`, catalog.MO_SYSTEM_METRICS, catalog.MO_SQL_STMT_CU),
+	}
 )
 
 var needUpgradeNewTable = []*table.Table{
 	MoTablePartitionsTable,
 	SysDaemonTaskTable,
 	MoStagesTable,
+	SqlStatementCUTable,
 }
 
 var PARTITIONSView = &table.Table{
@@ -331,8 +346,18 @@ var MoCacheView = &table.Table{
 	CreateTableSql: "drop view if exists `mo_catalog`.`mo_cache`;",
 }
 
+var transactionMetricView = &table.Table{
+	Account:  table.AccountAll,
+	Database: catalog.MO_SYSTEM_METRICS,
+	Table:    "sql_statement_duration_total",
+	CreateViewSql: "CREATE VIEW IF NOT EXISTS `system_metrics`.`sql_statement_duration_total` as " +
+		"SELECT `collecttime`, `value`, `node`, `role`, `account`, `type` " +
+		"from `system_metrics`.`metric` " +
+		"where `metric_name` = 'sql_statement_duration_total'",
+}
+
 var registeredViews = []*table.Table{processlistView, MoLocksView, MoVariablesView, MoTransactionsView, MoCacheView}
-var needUpgradeNewView = []*table.Table{PARTITIONSView, STATISTICSView, MoSessionsView, SqlStatementHotspotView, MoLocksView, MoConfigurationsView, MoVariablesView, MoTransactionsView, MoCacheView}
+var needUpgradeNewView = []*table.Table{transactionMetricView, PARTITIONSView, STATISTICSView, MoSessionsView, SqlStatementHotspotView, MoLocksView, MoConfigurationsView, MoVariablesView, MoTransactionsView, MoCacheView}
 
 var InformationSchemaSCHEMATA = &table.Table{
 	Account:  table.AccountAll,

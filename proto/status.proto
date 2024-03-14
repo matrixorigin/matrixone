@@ -82,4 +82,6 @@ message Session {
 	string ClientHost = 17;
 	// Role of the user
 	string Role = 18;
+	// FromProxy denotes whether the session is dispatched from proxy
+	bool FromProxy = 19;
 }

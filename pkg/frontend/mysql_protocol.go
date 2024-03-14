@@ -195,7 +195,9 @@ type MysqlProtocol interface {
 
 	GetStats() string
 
-	CalculateOutTrafficBytes() int64
+	// CalculateOutTrafficBytes return bytes, mysql packet num send back to client
+	// reset marks Do reset counter after calculation or not.
+	CalculateOutTrafficBytes(reset bool) (int64, int64)
 
 	ParseExecuteData(ctx context.Context, proc *process.Process, stmt *PrepareStmt, data []byte, pos int) error
 
@@ -368,7 +370,13 @@ func (mp *MysqlProtocolImpl) SetCapability(cap uint32) {
 }
 
 func (mp *MysqlProtocolImpl) AddSequenceId(a uint8) {
+	mp.ses.CountPacket(int64(a))
 	mp.sequenceId.Add(uint32(a))
+}
+
+func (mp *MysqlProtocolImpl) SetSequenceID(value uint8) {
+	mp.ses.CountPacket(1)
+	mp.sequenceId.Store(uint32(value))
 }
 
 func (mp *MysqlProtocolImpl) GetDatabaseName() string {
@@ -401,12 +409,19 @@ func (mp *MysqlProtocolImpl) GetStats() string {
 		mp.String())
 }
 
-// CalculateOutTrafficBytes calculate the bytes of the last out traffic
-func (mp *MysqlProtocolImpl) CalculateOutTrafficBytes() int64 {
+// CalculateOutTrafficBytes calculate the bytes of the last out traffic, the number of mysql packets
+func (mp *MysqlProtocolImpl) CalculateOutTrafficBytes(reset bool) (bytes int64, packets int64) {
+	ses := mp.GetSession()
 	// Case 1: send data as ResultSet
-	return int64(mp.writeBytes) + int64(mp.bytesInOutBuffer-mp.startOffsetInBuffer) +
+	bytes = int64(mp.writeBytes) + int64(mp.bytesInOutBuffer-mp.startOffsetInBuffer) +
 		// Case 2: send data as CSV
-		mp.GetSession().writeCsvBytes.Load()
+		ses.writeCsvBytes.Load()
+	// mysql packet num + length(sql) / 16KiB + payload / 16 KiB
+	packets = ses.GetPacketCnt() + int64(len(ses.sql)>>14) + int64(ses.payloadCounter>>14)
+	if reset {
+		ses.ResetPacketCounter()
+	}
+	return
 }
 
 func (mp *MysqlProtocolImpl) ResetStatistics() {
@@ -2737,6 +2752,8 @@ func (mp *MysqlProtocolImpl) receiveExtraInfo(rs goetty.IOSession) {
 		return
 	}
 
+	// must from proxy if extraInfo is received
+	mp.GetSession().fromProxy = true
 	salt, ok := ve.ExtraInfo.GetSalt()
 	if ok {
 		mp.SetSalt(salt)
