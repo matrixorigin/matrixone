@@ -493,14 +493,9 @@ func (l *lockTableAllocator) handleGetBind(
 	req *pb.Request,
 	resp *pb.Response,
 	cs morpc.ClientSession) {
-	if t, ok := l.getLockTablesLocked(req.GetBind.Group)[req.GetBind.Table]; ok {
-		b := l.getServiceBinds(t.ServiceID)
-		if b != nil &&
-			b.active() &&
-			!b.isStatus(pb.Status_ServiceLockEnable) {
-			writeResponse(ctx, cancel, resp, moerr.NewRetryForCNRollingRestart(), cs)
-			return
-		}
+	if !l.canGetBind(req.GetBind.Group, req.GetBind.Table) {
+		writeResponse(ctx, cancel, resp, moerr.NewRetryForCNRollingRestart(), cs)
+		return
 	}
 	resp.GetBind.LockTable = l.Get(
 		req.GetBind.ServiceID,
@@ -580,4 +575,21 @@ func (l *lockTableAllocator) getLockTablesLocked(group uint32) map[uint64]pb.Loc
 	m = make(map[uint64]pb.LockTable, 10240)
 	l.mu.lockTables[group] = m
 	return m
+}
+
+func (l *lockTableAllocator) canGetBind(group uint32, tableID uint64) bool {
+	l.mu.RLock()
+	l.mu.RUnlock()
+
+	t, ok := l.mu.lockTables[group][tableID]
+	if !ok {
+		return true
+	}
+	b := l.mu.services[t.ServiceID]
+	if b != nil &&
+		!b.disabled &&
+		!(b.status != pb.Status_ServiceLockEnable) {
+		return false
+	}
+	return true
 }
