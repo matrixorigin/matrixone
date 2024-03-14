@@ -394,6 +394,17 @@ func (c *Compile) run(s *Scope) error {
 
 // Run is an important function of the compute-layer, it executes a single sql according to its scope
 func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
+	txnOp := c.proc.TxnOperator
+	if txnOp != nil {
+		txnOp.EnterRunSql()
+	}
+
+	defer func() {
+		if txnOp != nil {
+			txnOp.ExitRunSql()
+		}
+	}()
+
 	var writeOffset uint64
 
 	start := time.Now()
