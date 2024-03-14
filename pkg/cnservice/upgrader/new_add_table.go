@@ -347,7 +347,7 @@ var MoCacheView = &table.Table{
 }
 
 var registeredViews = []*table.Table{processlistView, MoLocksView, MoVariablesView, MoTransactionsView, MoCacheView}
-var needUpgradeNewView = []*table.Table{PARTITIONSView, STATISTICSView, MoSessionsView, SqlStatementHotspotView, MoLocksView, MoConfigurationsView, MoVariablesView, MoTransactionsView, MoCacheView}
+var needUpgradeNewView = []*table.Table{transactionMetricView, PARTITIONSView, STATISTICSView, MoSessionsView, SqlStatementHotspotView, MoLocksView, MoConfigurationsView, MoVariablesView, MoTransactionsView, MoCacheView}
 
 var InformationSchemaSCHEMATA = &table.Table{
 	Account:  table.AccountAll,
