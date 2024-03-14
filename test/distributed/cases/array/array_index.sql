@@ -635,6 +635,10 @@ show create table vector_index_04;
 alter table vector_index_04 alter reindex idx01 ivfflat lists=8;
 show create table vector_index_04;
 
+-- 40. Add Index and Alter table add column
+create table vector_index_08(a int primary key, b vecf32(128),c int,key c_k(c));
+create index idx01 using ivfflat on vector_index_08(b) lists=3 op_type "vector_l2_ops";
+alter table vector_index_08 add column d vecf32(3) not null after c;
 
 -- post
 drop database vecdb2;
