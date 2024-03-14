@@ -605,7 +605,7 @@ func constructFuzzyFilter(c *Compile, n, left, right *plan.Node) *fuzzyfilter.Ar
 	arg := fuzzyfilter.NewArgument()
 	arg.PkName = pkName
 	arg.PkTyp = pkTyp
-	arg.N = right.Stats.Cost
+	arg.N = right.Stats.Outcnt
 	registerRuntimeFilters(arg, c, n.RuntimeFilterBuildList, 0)
 
 	return arg

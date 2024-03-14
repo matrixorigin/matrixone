@@ -117,10 +117,10 @@ func (r RowEntry) Less(than RowEntry) bool {
 		return false
 	}
 	// desc
-	if than.Time.Less(r.Time) {
+	if than.Time.Less(&r.Time) {
 		return true
 	}
-	if r.Time.Less(than.Time) {
+	if r.Time.Less(&than.Time) {
 		return false
 	}
 	return false
@@ -184,8 +184,8 @@ func (o ObjectEntry) Less(than ObjectEntry) bool {
 }
 
 func (o *ObjectEntry) Visible(ts types.TS) bool {
-	return o.CreateTime.LessEq(ts) &&
-		(o.DeleteTime.IsEmpty() || ts.Less(o.DeleteTime))
+	return o.CreateTime.LessEq(&ts) &&
+		(o.DeleteTime.IsEmpty() || ts.Less(&o.DeleteTime))
 }
 
 func (o ObjectEntry) Location() objectio.Location {
@@ -202,11 +202,11 @@ type ObjectIndexByCreateTSEntry struct {
 
 func (o ObjectIndexByCreateTSEntry) Less(than ObjectIndexByCreateTSEntry) bool {
 	//asc
-	if o.CreateTime.Less(than.CreateTime) {
+	if o.CreateTime.Less(&than.CreateTime) {
 
 		return true
 	}
-	if than.CreateTime.Less(o.CreateTime) {
+	if than.CreateTime.Less(&o.CreateTime) {
 		return false
 	}
 
@@ -221,8 +221,8 @@ func (o ObjectIndexByCreateTSEntry) Less(than ObjectIndexByCreateTSEntry) bool {
 }
 
 func (o *ObjectIndexByCreateTSEntry) Visible(ts types.TS) bool {
-	return o.CreateTime.LessEq(ts) &&
-		(o.DeleteTime.IsEmpty() || ts.Less(o.DeleteTime))
+	return o.CreateTime.LessEq(&ts) &&
+		(o.DeleteTime.IsEmpty() || ts.Less(&o.DeleteTime))
 }
 
 type PrimaryIndexEntry struct {
@@ -254,10 +254,10 @@ type ObjectIndexByTSEntry struct {
 
 func (b ObjectIndexByTSEntry) Less(than ObjectIndexByTSEntry) bool {
 	// asc
-	if b.Time.Less(than.Time) {
+	if b.Time.Less(&than.Time) {
 		return true
 	}
-	if than.Time.Less(b.Time) {
+	if than.Time.Less(&b.Time) {
 		return false
 	}
 
@@ -332,7 +332,7 @@ func (p *PartitionState) RowExists(rowID types.Rowid, ts types.TS) bool {
 		if entry.RowID != rowID {
 			break
 		}
-		if entry.Time.Greater(ts) {
+		if entry.Time.Greater(&ts) {
 			// not visible
 			continue
 		}
@@ -417,7 +417,7 @@ func (p *PartitionState) HandleObjectInsert(ctx context.Context, bat *api.Batch,
 
 	for idx := 0; idx < len(stateCol); idx++ {
 		p.shared.Lock()
-		if t := commitTSCol[idx]; t.Greater(p.shared.lastFlushTimestamp) {
+		if t := commitTSCol[idx]; t.Greater(&p.shared.lastFlushTimestamp) {
 			p.shared.lastFlushTimestamp = t
 		}
 		p.shared.Unlock()
@@ -491,7 +491,7 @@ func (p *PartitionState) HandleObjectInsert(ctx context.Context, bat *api.Batch,
 				// if the inserting block is non-appendable and has delta location, need to delete
 				// the deletes for it.
 				if objEntry.EntryState {
-					if entry.Time.LessEq(trunctPoint) {
+					if entry.Time.LessEq(&trunctPoint) {
 						// delete the row
 						p.rows.Delete(entry)
 
@@ -702,7 +702,7 @@ func (p *PartitionState) HandleMetadataInsert(
 	var numInserted, numDeleted int64
 	for i, blockID := range blockIDVector {
 		p.shared.Lock()
-		if t := commitTimeVector[i]; t.Greater(p.shared.lastFlushTimestamp) {
+		if t := commitTimeVector[i]; t.Greater(&p.shared.lastFlushTimestamp) {
 			p.shared.lastFlushTimestamp = t
 		}
 		p.shared.Unlock()
@@ -716,7 +716,7 @@ func (p *PartitionState) HandleMetadataInsert(
 			if !ok {
 				blockEntry = pivot
 				numInserted++
-			} else if blockEntry.CommitTs.GreaterEq(commitTimeVector[i]) {
+			} else if blockEntry.CommitTs.GreaterEq(&commitTimeVector[i]) {
 				// it possible to get an older version blk from lazy loaded checkpoint
 				return
 			}
@@ -769,7 +769,7 @@ func (p *PartitionState) HandleMetadataInsert(
 					// if the inserting block is non-appendable and has delta location, need to delete
 					// the deletes for it.
 					if isAppendable || (!isAppendable && !isEmptyDelta) {
-						if entry.Time.LessEq(trunctPoint) {
+						if entry.Time.LessEq(&trunctPoint) {
 							// delete the row
 							p.rows.Delete(entry)
 
@@ -892,7 +892,7 @@ func (p *PartitionState) objectDeleteHelper(
 		}
 	} else {
 		// update deletetime, if incoming delete ts is less
-		if objEntry.DeleteTime.Greater(deleteTime) {
+		if objEntry.DeleteTime.Greater(&deleteTime) {
 			old := ObjectIndexByTSEntry{
 				Time:         objEntry.DeleteTime,
 				ShortObjName: *objEntry.ObjectShortName(),
@@ -913,7 +913,7 @@ func (p *PartitionState) objectDeleteHelper(
 				IsAppendable: objEntry.EntryState,
 			}
 			p.objectIndexByTS.Set(new)
-		} else if objEntry.DeleteTime.Equal(deleteTime) {
+		} else if objEntry.DeleteTime.Equal(&deleteTime) {
 			//FIXME:: should we do something here?
 			e := ObjectIndexByTSEntry{
 				Time:         objEntry.DeleteTime,
@@ -978,7 +978,7 @@ func (p *PartitionState) consumeCheckpoints(
 }
 
 func (p *PartitionState) truncate(ids [2]uint64, ts types.TS) {
-	if p.minTS.Greater(ts) {
+	if p.minTS.Greater(&ts) {
 		logutil.Errorf("logic error: current minTS %v, incoming ts %v", p.minTS.ToString(), ts.ToString())
 		return
 	}
@@ -998,7 +998,7 @@ func (p *PartitionState) truncate(ids [2]uint64, ts types.TS) {
 	objectsToDelete := ""
 	for ; ok; ok = iter.Prev() {
 		entry := iter.Item()
-		if entry.Time.Greater(ts) {
+		if entry.Time.Greater(&ts) {
 			continue
 		}
 		if entry.IsDelete {
@@ -1018,7 +1018,7 @@ func (p *PartitionState) truncate(ids [2]uint64, ts types.TS) {
 	}
 	for ; ok; ok = iter.Prev() {
 		entry := iter.Item()
-		if entry.Time.Greater(ts) {
+		if entry.Time.Greater(&ts) {
 			continue
 		}
 		if _, ok := objIDsToDelete[entry.ShortObjName]; ok {
@@ -1047,7 +1047,7 @@ func (p *PartitionState) truncate(ids [2]uint64, ts types.TS) {
 
 		objEntry := objIter.Item()
 
-		if !objEntry.DeleteTime.IsEmpty() && objEntry.DeleteTime.LessEq(ts) {
+		if !objEntry.DeleteTime.IsEmpty() && objEntry.DeleteTime.LessEq(&ts) {
 			p.dataObjects.Delete(objEntry)
 			//p.dataObjectsByCreateTS.Delete(ObjectIndexByCreateTSEntry{
 			//	//CreateTime:   objEntry.CreateTime,
