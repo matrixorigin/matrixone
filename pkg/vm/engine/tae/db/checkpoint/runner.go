@@ -241,12 +241,12 @@ func NewRunner(
 		wal:       wal,
 	}
 	r.storage.entries = btree.NewBTreeGOptions(func(a, b *CheckpointEntry) bool {
-		return a.end.Less(b.end)
+		return a.end.Less(&b.end)
 	}, btree.Options{
 		NoLocks: true,
 	})
 	r.storage.globals = btree.NewBTreeGOptions(func(a, b *CheckpointEntry) bool {
-		return a.end.Less(b.end)
+		return a.end.Less(&b.end)
 	}, btree.Options{
 		NoLocks: true,
 	})
@@ -330,11 +330,11 @@ func (r *runner) getTSTOGC() (ts types.TS, needGC bool) {
 		return
 	}
 	tsTOGC := r.getTSToGC()
-	if tsTOGC.Less(ts) {
+	if tsTOGC.Less(&ts) {
 		ts = tsTOGC
 	}
 	gcedTS := r.getGCedTS()
-	if gcedTS.GreaterEq(ts) {
+	if gcedTS.GreaterEq(&ts) {
 		return
 	}
 	needGC = true
@@ -688,7 +688,9 @@ func (r *runner) tryAddNewIncrementalCheckpointEntry(entry *CheckpointEntry) (su
 	// if it is not the right candidate, skip this request
 	// [startTs, endTs] --> [endTs+1, ?]
 	endTS := maxEntry.GetEnd()
-	if !endTS.Next().Equal(entry.GetStart()) {
+	startTS := entry.GetStart()
+	nextTS := endTS.Next()
+	if !nextTS.Equal(&startTS) {
 		success = false
 		return
 	}
