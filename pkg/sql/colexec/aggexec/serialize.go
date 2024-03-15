@@ -402,3 +402,12 @@ func (exec *medianColumnExecSelf[T, R]) unmarshal(result []byte, groups [][]byte
 	}
 	return exec.ret.unmarshal(result)
 }
+
+func (exec *clusterCentersExec) marshal() ([]byte, error) {
+	// todo: 还没搞
+	return nil, nil
+}
+
+func (exec *clusterCentersExec) unmarshal(result []byte, groups [][]byte) error {
+	return nil
+}
