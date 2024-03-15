@@ -20,14 +20,14 @@ func init() {
 	reuse.CreatePool[PrepareStmt](
 		func() *PrepareStmt { return &PrepareStmt{} },
 		func(p *PrepareStmt) { p.reset() },
-		reuse.DefaultOptions[PrepareStmt]().
-			WithEnableChecker())
+		reuse.DefaultOptions[PrepareStmt](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[PrepareString](
 		func() *PrepareString { return &PrepareString{} },
 		func(p *PrepareString) { p.reset() },
-		reuse.DefaultOptions[PrepareString]().
-			WithEnableChecker())
+		reuse.DefaultOptions[PrepareString](), //.
+	) //WithEnableChecker()
 }
 
 type Prepare interface {

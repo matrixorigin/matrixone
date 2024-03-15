@@ -1,0 +1,28 @@
+drop database if exists d1;
+create database d1;
+use d1;
+drop table if exists t1;
+create table t1(c1 int primary key, c2 varchar(10), c3 int, key(c2,c3));
+insert into t1 select *,*,* from generate_series(1,100000) g;
+-- @separator:table
+select mo_ctl('dn', 'flush', 'd1.t1');
+select Sleep(1);
+-- @separator:table
+explain select * from t1 where c2 like '1%';
+select count(*) from t1 where c2 like '1%';
+-- @separator:table
+explain select * from t1 where c2 like '1_';
+select * from t1 where c2 like '1_';
+-- @separator:table
+explain select * from t1 where c2 like '1_2';
+select * from t1 where c2 like '1_2';
+-- @separator:table
+explain select * from t1 where c2 like '%12';
+select count(*) from t1 where c2 like '%12';
+-- @separator:table
+explain select * from t1 where c2 like '1_2%3';
+select count(*) from t1 where c2 like '1_2%3';
+-- @separator:table
+explain select * from t1 where c2 like '123';
+select * from t1 where c2 like '123';
+drop database if exists d1;
