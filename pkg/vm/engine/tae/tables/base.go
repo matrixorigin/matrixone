@@ -160,7 +160,8 @@ func (blk *baseBlock) GetMeta() any { return blk.meta }
 func (blk *baseBlock) CheckFlushTaskRetry(startts types.TS) bool {
 	blk.RLock()
 	defer blk.RUnlock()
-	return blk.mvcc.GetLatestAppendPrepareTSLocked().Greater(startts)
+	x := blk.mvcc.GetLatestAppendPrepareTSLocked()
+	return x.Greater(&startts)
 }
 func (blk *baseBlock) GetFs() *objectio.ObjectFS { return blk.rt.Fs }
 func (blk *baseBlock) GetID() *common.ID         { return blk.meta.AsCommonID() }
