@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+	"github.com/panjf2000/ants/v2"
 	"runtime"
 	"strings"
 	"sync"
@@ -97,6 +98,11 @@ func New(
 			},
 		),
 	}
+	pool, err := ants.NewPool(GCPoolSize)
+	if err != nil {
+		panic(err)
+	}
+	e.gcPool = pool
 
 	if err := e.init(ctx); err != nil {
 		panic(err)

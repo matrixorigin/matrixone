@@ -1716,7 +1716,7 @@ func (tbl *txnTable) EnhanceDelete(bat *batch.Batch, name string) error {
 }
 
 // TODO:: do prefetch read and parallel compaction
-func (tbl *txnTable) mergeCompaction(
+func (tbl *txnTable) compaction(
 	compactedBlks map[catalog.BlockInfo][]int64) ([]catalog.BlockInfo, []objectio.ObjectStats, error) {
 	s3writer := &colexec.S3Writer{}
 	s3writer.SetTableName(tbl.tableName)
