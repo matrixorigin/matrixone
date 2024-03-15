@@ -1016,9 +1016,15 @@ func (txn *Transaction) UpdateSnapshotWriteOffset() {
 	txn.Lock()
 	defer txn.Unlock()
 	txn.snapshotWriteOffset = len(txn.writes)
-
+	txn.timestamps = append(txn.timestamps, txn.op.SnapshotTS())
 	if txn.statementID > 0 && txn.op.Txn().IsRCIsolation() {
-		ts := txn.timestamps[txn.statementID-1]
+		var ts timestamp.Timestamp
+		if txn.statementID == 1 {
+			ts = txn.timestamps[0]
+			// statementID > 1
+		} else {
+			ts = txn.timestamps[txn.statementID-2]
+		}
 		fn := func(_, value any) bool {
 			tbl := value.(*txnTable)
 			ctx := tbl.proc.Load().Ctx
