@@ -229,11 +229,11 @@ func newAggVarPopDecimal64() aggexec.SingleAggFromFixedRetFixed[types.Decimal64,
 }
 
 func (a *aggVarPopDecimal64) Fill(value types.Decimal64, get aggexec.AggGetter[types.Decimal128], set aggexec.AggSetter[types.Decimal128]) {
-	a.aggVarPopDecimal128.Fill(fromD64ToD128(value), get, set)
+	a.aggVarPopDecimal128.Fill(aggexec.FromD64ToD128(value), get, set)
 }
 
 func (a *aggVarPopDecimal64) Fills(value types.Decimal64, isNull bool, count int, get aggexec.AggGetter[types.Decimal128], set aggexec.AggSetter[types.Decimal128]) {
-	a.aggVarPopDecimal128.Fills(fromD64ToD128(value), isNull, count, get, set)
+	a.aggVarPopDecimal128.Fills(aggexec.FromD64ToD128(value), isNull, count, get, set)
 }
 
 func (a *aggVarPopDecimal64) Merge(other aggexec.SingleAggFromFixedRetFixed[types.Decimal64, types.Decimal128], get1, get2 aggexec.AggGetter[types.Decimal128], set aggexec.AggSetter[types.Decimal128]) {

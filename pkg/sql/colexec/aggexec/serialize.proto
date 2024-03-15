@@ -45,6 +45,7 @@ enum EncodedAggExecType {
     special_count_column = 7;
     special_count_star = 8;
     special_approx_count = 9;
+    special_median = 10;
 }
 
 message EncodedAgg {

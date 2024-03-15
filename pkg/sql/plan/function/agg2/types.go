@@ -30,14 +30,3 @@ type numericWithMaxScale interface {
 type canCompare interface {
 	constraints.Integer | constraints.Float | types.Date | types.Datetime | types.Timestamp
 }
-
-func fromD64ToD128(v types.Decimal64) types.Decimal128 {
-	k := types.Decimal128{
-		B0_63:   uint64(v),
-		B64_127: 0,
-	}
-	if v.Sign() {
-		k.B64_127 = ^k.B64_127
-	}
-	return k
-}

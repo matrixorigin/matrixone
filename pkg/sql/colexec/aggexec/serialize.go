@@ -14,7 +14,10 @@
 
 package aggexec
 
-import hll "github.com/axiomhq/hyperloglog"
+import (
+	hll "github.com/axiomhq/hyperloglog"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+)
 
 var _ = MarshalAggFuncExec
 var _ = UnmarshalAggFuncExec
@@ -361,4 +364,41 @@ func (exec *approxCountVarExec) unmarshal(result []byte, groups [][]byte) error 
 		}
 	}
 	return nil
+}
+
+func (exec *medianColumnExecSelf[T, R]) marshal() ([]byte, error) {
+	d := exec.singleAggInfo.getEncoded()
+	r, err := exec.ret.marshal()
+	if err != nil {
+		return nil, err
+	}
+
+	encoded := &EncodedAgg{
+		ExecType: EncodedAggExecType_special_median,
+		Info:     d,
+		Result:   r,
+		Groups:   nil,
+	}
+	if len(exec.groups) > 0 {
+		encoded.Groups = make([][]byte, len(exec.groups))
+		for i := range encoded.Groups {
+			if encoded.Groups[i], err = exec.groups[i].MarshalBinary(); err != nil {
+				return nil, err
+			}
+		}
+	}
+	return encoded.Marshal()
+}
+
+func (exec *medianColumnExecSelf[T, R]) unmarshal(result []byte, groups [][]byte) error {
+	if len(exec.groups) > 0 {
+		exec.groups = make([]*vector.Vector, len(groups))
+		for i := range exec.groups {
+			exec.groups[i] = vector.NewVec(exec.singleAggInfo.argType)
+			if err := exec.groups[i].UnmarshalBinary(groups[i]); err != nil {
+				return err
+			}
+		}
+	}
+	return exec.ret.unmarshal(result)
 }

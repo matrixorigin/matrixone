@@ -17,32 +17,12 @@ package function
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/agg2"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionAgg"
 )
 
 var supportedAggregateFunctions = []FuncNew{
-	{
-		functionId: MEDIAN,
-		class:      plan.Function_AGG,
-		layout:     STANDARD_FUNCTION,
-		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			return fixedUnaryAggTypeCheck(inputs, functionAgg.AggMedianSupportedParameters)
-		},
-
-		Overloads: []overload{
-			{
-				overloadId: 0,
-				isAgg:      true,
-				retType:    functionAgg.AggMedianReturnType,
-				aggFramework: aggregationLogicOfOverload{
-					str:    "median",
-					aggNew: functionAgg.NewAggMedian,
-				},
-			},
-		},
-	},
-
 	{
 		functionId: CLUSTER_CENTERS,
 		class:      plan.Function_AGG,
@@ -392,6 +372,27 @@ var supportedAggInNewFramework = []FuncNew{
 				aggFramework: aggregationLogicOfOverload{
 					str:         "stddev_pop",
 					aggRegister: agg2.RegisterStdVarPop,
+				},
+			},
+		},
+	},
+
+	{
+		functionId: MEDIAN,
+		class:      plan.Function_AGG,
+		layout:     STANDARD_FUNCTION,
+		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
+			return fixedUnaryAggTypeCheck(inputs, aggexec.MedianSupportedType)
+		},
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				isAgg:      true,
+				retType:    aggexec.MedianReturnType,
+				aggFramework: aggregationLogicOfOverload{
+					str:         "median",
+					aggRegister: agg2.RegisterMedian,
 				},
 			},
 		},

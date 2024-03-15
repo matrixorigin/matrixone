@@ -93,15 +93,19 @@ func MakeAgg(
 	aggID int64, isDistinct bool,
 	param ...types.Type) AggFuncExec {
 
-	if exec, ok := makeSpecialAggExec(mg, aggID, isDistinct, param...); ok {
+	exec, ok, err := makeSpecialAggExec(mg, aggID, isDistinct, param...)
+	if err != nil {
+		panic(err)
+	}
+	if ok {
 		return exec
 	}
 
-	if _, ok := singleAgg[aggID]; ok && len(param) == 1 {
+	if _, ok = singleAgg[aggID]; ok && len(param) == 1 {
 		return makeSingleAgg(mg, aggID, isDistinct, param[0])
 	}
 
-	if _, ok := multiAgg[aggID]; ok && len(param) > 0 {
+	if _, ok = multiAgg[aggID]; ok && len(param) > 0 {
 		return makeMultiAgg(mg, aggID, isDistinct, param)
 	}
 
@@ -166,23 +170,26 @@ func makeMultiAgg(
 
 func makeSpecialAggExec(
 	mg AggMemoryManager,
-	id int64, isDistinct bool, params ...types.Type) (AggFuncExec, bool) {
+	id int64, isDistinct bool, params ...types.Type) (AggFuncExec, bool, error) {
 	if _, ok := specialAgg[id]; ok {
 		if id == aggIdOfCountColumn {
-			return makeCount(mg, false, id, isDistinct, params[0]), true
+			return makeCount(mg, false, id, isDistinct, params[0]), true, nil
 		}
 		if id == aggIdOfCountStar {
-			return makeCount(mg, true, id, isDistinct, params[0]), true
+			return makeCount(mg, true, id, isDistinct, params[0]), true, nil
+		}
+		if id == aggIdOfMedian {
+			exec, err := makeMedian(mg, id, isDistinct, params[0])
+			return exec, true, err
 		}
 		if id == aggIdOfGroupConcat {
-			return makeGroupConcat(mg, id, isDistinct, params, getCroupConcatRet(params...), groupConcatSep), true
+			return makeGroupConcat(mg, id, isDistinct, params, getCroupConcatRet(params...), groupConcatSep), true, nil
 		}
 		if id == aggIdOfApproxCount {
-			return makeApproxCount(mg, id, params[0]), true
+			return makeApproxCount(mg, id, params[0]), true, nil
 		}
-
 	}
-	return nil, false
+	return nil, false, nil
 }
 
 // makeGroupConcat is one special case of makeMultiAgg.
@@ -218,4 +225,16 @@ func makeCount(
 		return newCountStarExec(mg, info)
 	}
 	return newCountColumnExecExec(mg, info)
+}
+
+func makeMedian(
+	mg AggMemoryManager, aggID int64, isDistinct bool, param types.Type) (AggFuncExec, error) {
+	info := singleAggInfo{
+		aggID:     aggID,
+		distinct:  isDistinct,
+		argType:   param,
+		retType:   MedianReturnType([]types.Type{param}),
+		emptyNull: true,
+	}
+	return newMedianExecutor(mg, info)
 }

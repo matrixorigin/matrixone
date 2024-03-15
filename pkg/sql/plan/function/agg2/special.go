@@ -31,3 +31,7 @@ func RegisterGroupConcat(id int64) {
 func RegisterApproxCount(id int64) {
 	aggexec.RegisterApproxCountAgg(id)
 }
+
+func RegisterMedian(id int64) {
+	aggexec.RegisterMedian(id)
+}
