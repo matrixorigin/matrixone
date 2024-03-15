@@ -1106,7 +1106,7 @@ drop table if exists test;
 create table test as select * from sys_tbl_1;
 -- @session
 
--- @session:id=2&user=acc0:root&password=111
+-- @session:id=3&user=acc0:root&password=111
 drop database sub1;
 -- @session
 drop account acc0;
@@ -1143,13 +1143,13 @@ grant show databases on account * to role_r1;
 grant connect on account * to role_r1;
 grant create table, drop table on database *.* to role_r1;
 grant show tables on database * to role_r1;
--- @session:id=2&user=sys:role_u1:role_r1&password=111
+-- @session:id=4&user=sys:role_u1:role_r1&password=111
 drop table if exists t2;
 create table t2 as select * from t1;
 -- @session
 grant select on table * to role_r1;
 grant insert on table * to role_r1;
--- @session:id=2&user=sys:role_u1:role_r1&password=111
+-- @session:id=5&user=sys:role_u1:role_r1&password=111
 drop table if exists t2;
 create table t2 as select * from t1;
 -- @session
@@ -1179,12 +1179,12 @@ grant create table, drop table on database *.* to role_r1;
 grant show tables on database * to role_r1;
 grant select on table * to role_r1;
 grant insert on table * to role_r1;
--- @session:id=1&user=sys:role_u1:role_r1&password=111
+-- @session:id=6&user=sys:role_u1:role_r1&password=111
 use db2;
 drop table if exists t2;
 create table t2 as select * from t1;
 -- @session
--- @session:id=2&user=sys:role_u2:role_r2&password=111
+-- @session:id=7&user=sys:role_u2:role_r2&password=111
 use db2;
 drop table if exists t3;
 create table t3 as select * from t2;
@@ -1197,7 +1197,7 @@ grant create table, drop table on database *.* to role_r2;
 grant show tables on database * to role_r2;
 grant select on table * to role_r2;
 grant insert on table * to role_r2;
--- @session:id=3&user=sys:role_u2:role_r2&password=111
+-- @session:id=8&user=sys:role_u2:role_r2&password=111
 use db2;
 drop table if exists t3;
 create table t3 as select * from t2;
