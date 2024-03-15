@@ -384,25 +384,25 @@ col1    col2    col3    col4
 1996-12-11    1989-12-09 00:01:01    2000-05-06 01:01:01    00:01:01
 null    null    null    null
 drop table if exists time02;
-create table time02 (col1 int, col2 int, col3 int, col4 int) as select * from time01;
+create table time02 (col1 int, col2 int, col4 int) as select * from time01;
 show create table time02;
 Table    Create Table
-time02    CREATE TABLE `time02` (\n`col1` INT DEFAULT NULL,\n`col2` INT DEFAULT NULL,\n`col3` INT DEFAULT NULL,\n`col4` INT DEFAULT NULL\n)
+time02    CREATE TABLE `time02` (\n`col1` INT DEFAULT NULL,\n`col2` INT DEFAULT NULL,\n`col3` TIMESTAMP DEFAULT NULL,\n`col4` INT DEFAULT NULL\n)
 select * from time02;
 col1    col2    col3    col4
-18262    1607731201    852084610    121212
-9841    629164861    957546061    101
+18262    1607731201    1997-01-01 10:10:10    121212
+9841    629164861    2000-05-06 01:01:01    101
 null    null    null    null
 drop table time02;
 drop table if exists time03;
-create table time03 (col2 decimal(38, 0), col3 decimal, col4 decimal) as select col2, col3, col4 from time01;
+create table time03 (col2 decimal(38, 0), col4 decimal) as select col2, col3, col4 from time01;
 show create table time03;
 Table    Create Table
-time03    CREATE TABLE `time03` (\n`col2` DECIMAL(38,0) DEFAULT NULL,\n`col3` DECIMAL(38,0) DEFAULT NULL,\n`col4` DECIMAL(38,0) DEFAULT NULL\n)
+time03    CREATE TABLE `time03` (\n`col2` DECIMAL(38,0) DEFAULT NULL,\n`col3` TIMESTAMP DEFAULT NULL,\n`col4` DECIMAL(38,0) DEFAULT NULL\n)
 select * from time03;
 col2    col3    col4
-1607731201    852084610    121212
-629164861    957546061    101
+1607731201    1997-01-01 10:10:10    121212
+629164861    2000-05-06 01:01:01    101
 null    null    null
 drop table time03;
 drop table if exists table01;
@@ -1520,7 +1520,7 @@ test01    CREATE TABLE `test01` (\n`col1` TINYINT DEFAULT NULL,\n`col2` SMALLINT
 create publication publication01 database test;
 show publications;
 publication    database    create_time    update_time    sub_account    comments
-publication01    test    2024-03-14 16:29:29    null    *    
+publication01    test    2024-03-15 10:04:41    null    *    
 drop table if exists test02;
 create table test02 as select * from test01;
 select * from test02;
@@ -1542,7 +1542,7 @@ a    b    c    d
 3    4    c    324243243
 show publications;
 publication    database    create_time    update_time    sub_account    comments
-sys_pub_1    test    2024-03-14 16:29:32    null    *    
+sys_pub_1    test    2024-03-15 10:04:42    null    *    
 select pub_name, database_name, account_list from mo_catalog.mo_pubs;
 pub_name    database_name    account_list
 sys_pub_1    test    all

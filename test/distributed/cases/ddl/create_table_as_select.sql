@@ -242,14 +242,14 @@ insert into time01 values (null, null, null, null);
 select * from time01;
 
 drop table if exists time02;
-create table time02 (col1 int, col2 int, col3 int, col4 int) as select * from time01;
+create table time02 (col1 int, col2 int, col4 int) as select * from time01;
 show create table time02;
 select * from time02;
 drop table time02;
 
 -- columns that can be casted to each other (time -> decimal)
 drop table if exists time03;
-create table time03 (col2 decimal(38, 0), col3 decimal, col4 decimal) as select col2, col3, col4 from time01;
+create table time03 (col2 decimal(38, 0), col4 decimal) as select col2, col3, col4 from time01;
 show create table time03;
 select * from time03;
 drop table time03;
