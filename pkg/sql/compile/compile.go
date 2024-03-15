@@ -124,9 +124,6 @@ func NewCompile(
 	c.cnLabel = cnLabel
 	c.startAt = startAt
 	c.disableRetry = false
-	if c.proc.TxnOperator != nil {
-		c.proc.TxnOperator.GetWorkspace().UpdateSnapshotWriteOffset()
-	}
 	return c
 }
 
@@ -590,6 +587,10 @@ func (c *Compile) canRetry(err error) bool {
 // run once
 func (c *Compile) runOnce() error {
 	var wg sync.WaitGroup
+
+	if c.proc.TxnOperator != nil {
+		c.proc.TxnOperator.GetWorkspace().UpdateSnapshotWriteOffset()
+	}
 
 	err := c.lockMetaTables()
 	if err != nil {
