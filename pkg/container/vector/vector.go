@@ -23,6 +23,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
@@ -264,7 +265,8 @@ func GetArrayAt[T types.RealNumbers](v *Vector, i int) []T {
 }
 
 func NewVec(typ types.Type) *Vector {
-	vec := &Vector{
+	vec := NewVecFromReuse()
+	*vec = Vector{
 		typ:   typ,
 		class: FLAT,
 	}
@@ -273,7 +275,8 @@ func NewVec(typ types.Type) *Vector {
 }
 
 func NewConstNull(typ types.Type, length int, mp *mpool.MPool) *Vector {
-	vec := &Vector{
+	vec := NewVecFromReuse()
+	*vec = Vector{
 		typ:    typ,
 		class:  CONSTANT,
 		length: length,
@@ -283,7 +286,8 @@ func NewConstNull(typ types.Type, length int, mp *mpool.MPool) *Vector {
 }
 
 func NewConstFixed[T any](typ types.Type, val T, length int, mp *mpool.MPool) (vec *Vector, err error) {
-	vec = &Vector{
+	vec = NewVecFromReuse()
+	*vec = Vector{
 		typ:   typ,
 		class: CONSTANT,
 	}
@@ -296,7 +300,8 @@ func NewConstFixed[T any](typ types.Type, val T, length int, mp *mpool.MPool) (v
 }
 
 func NewConstBytes(typ types.Type, val []byte, length int, mp *mpool.MPool) (vec *Vector, err error) {
-	vec = &Vector{
+	vec = NewVecFromReuse()
+	*vec = Vector{
 		typ:   typ,
 		class: CONSTANT,
 	}
@@ -310,7 +315,8 @@ func NewConstBytes(typ types.Type, val []byte, length int, mp *mpool.MPool) (vec
 
 // NewConstArray Creates a Const_Array Vector
 func NewConstArray[T types.RealNumbers](typ types.Type, val []T, length int, mp *mpool.MPool) (vec *Vector, err error) {
-	vec = &Vector{
+	vec = NewVecFromReuse()
+	*vec = Vector{
 		typ:   typ,
 		class: CONSTANT,
 	}
@@ -422,6 +428,8 @@ func (v *Vector) Free(mp *mpool.MPool) {
 
 	v.nsp.Reset()
 	v.sorted = false
+
+	reuse.Free[Vector](v, nil)
 }
 
 func (v *Vector) MarshalBinary() ([]byte, error) {
@@ -629,7 +637,8 @@ func (v *Vector) Dup(mp *mpool.MPool) (*Vector, error) {
 
 	var err error
 
-	w := &Vector{
+	w := NewVecFromReuse()
+	*w = Vector{
 		class:  v.class,
 		typ:    v.typ,
 		length: v.length,

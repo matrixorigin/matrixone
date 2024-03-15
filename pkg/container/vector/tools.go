@@ -246,7 +246,8 @@ func VectorToProtoVector(vec *Vector) (ret api.Vector, err error) {
 }
 
 func ProtoVectorToVector(vec api.Vector) (*Vector, error) {
-	rvec := &Vector{
+	rvec := NewVecFromReuse()
+	*rvec = Vector{
 		area:         vec.Area,
 		length:       int(vec.Len),
 		typ:          ProtoTypeToType(vec.Type),
