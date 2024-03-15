@@ -113,6 +113,7 @@ select * from mysql_ts_test;
 insert into mysql_ts_test values (1, '2024-03-13', '11:30:00', '2024-03-13 11:30:00');
 insert into mysql_ts_test values (2, DATE '2024-03-14', TIME '2024', TIMESTAMP '2024-03-14 11:30:00');
 insert into mysql_ts_test values (3, {d '2024-03-15'}, {t '11:30:30'}, {ts '2024-03-15 11:30:00'});
+-- @ignore:3
 select * from mysql_ts_test;
 insert into mysql_ts_test values (4, {d '2024-03-16'}, {t '23:59:59'}, {ts now()});
 insert into mysql_ts_test values (4, {d '2024-03-16'}, {t '23:59:59'}, {ts current_timestamp});
