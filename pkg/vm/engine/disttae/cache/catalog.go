@@ -283,6 +283,7 @@ func (cc *CatalogCache) GetDatabase(db *DatabaseItem) bool {
 			item.Name == db.Name {
 			find = true
 			db.Id = item.Id
+			db.Rowid = item.Rowid
 			db.CreateSql = item.CreateSql
 			db.Typ = item.Typ
 		}
