@@ -16,6 +16,8 @@ package plan
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"strings"
 )
 
 func (builder *QueryBuilder) countColRefs(nodeID int32, colRefCnt map[[2]int32]int) {
@@ -588,4 +590,80 @@ func (builder *QueryBuilder) rewriteEffectlessAggToProject(nodeID int32) {
 	node.BindingTags = node.BindingTags[:1]
 	node.ProjectList = node.GroupBy
 	node.GroupBy = nil
+}
+
+func (builder *QueryBuilder) optimizeLikeExpr(nodeID int32) {
+	// for a like "abc%", change it to prefix_equal(a,"abc")
+	// for a like "abc%def", add an extra filter prefix_equal(a,"abc")
+	node := builder.qry.Nodes[nodeID]
+
+	for _, childID := range node.Children {
+		builder.optimizeLikeExpr(childID)
+	}
+	if node.NodeType != plan.Node_TABLE_SCAN || len(node.FilterList) == 0 {
+		return
+	}
+	var newFilters []*plan.Expr
+	for i := range node.FilterList {
+		expr := node.FilterList[i]
+		fun := expr.GetF()
+		if fun != nil && fun.Func.ObjName == "like" {
+			col := fun.Args[0].GetCol()
+			if col == nil {
+				continue
+			}
+			if fun.Args[1].GetLit() == nil {
+				continue
+			}
+			str := fun.Args[1].GetLit().GetSval()
+			if len(str) == 0 {
+				continue
+			}
+			index1 := strings.IndexByte(str, '_')
+			if index1 > 0 && str[index1-1] == '\\' {
+				index1--
+			}
+			index2 := strings.IndexByte(str, '%')
+			if index2 > 0 && str[index2-1] == '\\' {
+				index2--
+			}
+			if index1 == -1 && index2 == -1 {
+				// it's col like string without wildcard, can change to equal
+				fun.Func.ObjName = function.EqualFunctionName
+				fun.Func.Obj = function.EqualFunctionEncodedID
+				continue
+			}
+
+			indexOfWildCard := index1
+			if index1 == -1 {
+				indexOfWildCard = index2
+			}
+			if index2 != -1 && index2 < index1 {
+				indexOfWildCard = index2
+			}
+			if indexOfWildCard <= 0 {
+				continue
+			}
+			newStr := str[:indexOfWildCard]
+
+			newFilter := node.FilterList[i]
+			// if no _ and % in the last, we can replace the origin filter
+			replaceOrigin := (index1 == -1) && (index2 == len(str)-1)
+			if !replaceOrigin {
+				newFilter = DeepCopyExpr(newFilter)
+				newFilters = append(newFilters, newFilter)
+			}
+			newFunc := newFilter.GetF()
+			newFunc.Func.ObjName = function.PrefixEqualFunctionName
+			newFunc.Func.Obj = function.PrefixEqualFunctionEncodedID
+			newFunc.Args[1].GetLit().Value.(*plan.Literal_Sval).Sval = newStr
+			if replaceOrigin {
+				node.BlockFilterList = append(node.BlockFilterList, DeepCopyExpr(newFilter))
+			}
+		}
+	}
+	if len(newFilters) > 0 {
+		node.FilterList = append(node.FilterList, newFilters...)
+		node.BlockFilterList = append(node.BlockFilterList, DeepCopyExprList(newFilters)...)
+	}
 }
