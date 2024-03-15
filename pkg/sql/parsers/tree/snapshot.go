@@ -22,8 +22,8 @@ func init() {
 	reuse.CreatePool[DropSnapShot](
 		func() *DropSnapShot { return &DropSnapShot{} },
 		func(d *DropSnapShot) { d.reset() },
-		reuse.DefaultOptions[DropSnapShot]().
-			WithEnableChecker())
+		reuse.DefaultOptions[DropSnapShot](), //.
+	) //WithEnableChecker()
 }
 
 type SnapshotLevel int

@@ -597,6 +597,7 @@ func NewObservabilityParameters() *ObservabilityParameters {
 func (op *ObservabilityParameters) SetDefaultValues(version string) {
 	op.OBCollectorConfig.SetDefaultValues()
 	op.CU.SetDefaultValues()
+	op.CUv1.SetDefaultValues()
 
 	op.MoVersion = version
 
