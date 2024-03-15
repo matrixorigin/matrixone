@@ -1160,7 +1160,6 @@ drop table t1;
 drop table t2;
 drop database db1;
 
--- @bvt:issue#14988
 -- cross-db cross-tenant
 drop database if exists db2;
 create database db2;
@@ -1214,6 +1213,5 @@ drop table t3;
 drop role role_r1;
 drop role role_r2;
 drop user role_u1;
-drop user role_r2;
+drop user role_u2;
 drop database db2;
--- @bvt:issue
