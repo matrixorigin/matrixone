@@ -111,8 +111,8 @@ type deleteNodeInfo struct {
 func buildInsertPlans(
 	ctx CompilerContext, builder *QueryBuilder, bindCtx *BindContext,
 	objRef *ObjectRef, tableDef *TableDef, lastNodeId int32,
-	checkInsertPkDup bool, pkFilterExpr []*Expr, newPartitionExpr *Expr, isInsertWithoutAutoPkCol bool, insertWithoutUniqueKeyMap map[string]bool) error {
-
+	checkInsertPkDup bool, pkFilterExpr []*Expr, newPartitionExpr *Expr, isInsertWithoutAutoPkCol bool, insertWithoutUniqueKeyMap map[string]bool, insertColumns []string,
+) error {
 	// add plan: -> preinsert -> sink
 	lastNodeId = appendPreInsertNode(builder, bindCtx, objRef, tableDef, lastNodeId, false)
 
@@ -121,7 +121,7 @@ func buildInsertPlans(
 
 	// make insert plans
 	insertBindCtx := NewBindContext(builder, nil)
-	err := makeInsertPlan(ctx, builder, insertBindCtx, objRef, tableDef, 0, sourceStep, true, false, checkInsertPkDup, true, pkFilterExpr, newPartitionExpr, isInsertWithoutAutoPkCol, !builder.qry.LoadTag, nil, nil, insertWithoutUniqueKeyMap)
+	err := makeInsertPlan(ctx, builder, insertBindCtx, objRef, tableDef, 0, sourceStep, true, false, checkInsertPkDup, true, pkFilterExpr, newPartitionExpr, isInsertWithoutAutoPkCol, !builder.qry.LoadTag, nil, nil, insertWithoutUniqueKeyMap, insertColumns)
 	return err
 }
 
@@ -200,7 +200,7 @@ func buildUpdatePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 	// build insert plan.
 	insertBindCtx := NewBindContext(builder, nil)
 	err = makeInsertPlan(ctx, builder, insertBindCtx, updatePlanCtx.objRef, updatePlanCtx.tableDef, updatePlanCtx.updateColLength,
-		sourceStep, false, updatePlanCtx.isFkRecursionCall, updatePlanCtx.checkInsertPkDup, updatePlanCtx.updatePkCol, updatePlanCtx.pkFilterExprs, nil, false, true, nil, nil, nil)
+		sourceStep, false, updatePlanCtx.isFkRecursionCall, updatePlanCtx.checkInsertPkDup, updatePlanCtx.updatePkCol, updatePlanCtx.pkFilterExprs, nil, false, true, nil, nil, nil, nil)
 	return err
 }
 
@@ -407,7 +407,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 							}
 						}
 						_checkInsertPKDupForHiddenIndexTable := indexdef.Unique // only check PK uniqueness for UK. SK will not check PK uniqueness.
-						err = makeInsertPlan(ctx, builder, bindCtx, uniqueObjRef, insertUniqueTableDef, 1, preUKStep, false, false, _checkInsertPKDupForHiddenIndexTable, true, nil, nil, false, _checkInsertPKDupForHiddenIndexTable, nil, nil, nil)
+						err = makeInsertPlan(ctx, builder, bindCtx, uniqueObjRef, insertUniqueTableDef, 1, preUKStep, false, false, _checkInsertPKDupForHiddenIndexTable, true, nil, nil, false, _checkInsertPKDupForHiddenIndexTable, nil, nil, nil, nil)
 						if err != nil {
 							return err
 						}
@@ -924,6 +924,7 @@ func makeInsertPlan(
 	indexSourceColTypes []*plan.Type,
 	fuzzymessage *OriginTableMessageForFuzzy,
 	insertWithoutUniqueKeyMap map[string]bool,
+	insertColumns []string,
 ) error {
 	var lastNodeId int32
 	var err error
@@ -1005,6 +1006,8 @@ func makeInsertPlan(
 
 				var originTableMessageForFuzzy *OriginTableMessageForFuzzy
 
+				_checkInsertPkDupForHiddenTable := indexdef.Unique // only check PK uniqueness for UK. SK will not check PK uniqueness.
+
 				// The way to guarantee the uniqueness of the unique key is to create a hidden table,
 				// with the primary key of the hidden table as the unique key.
 				// package contains some information needed by the fuzzy filter to run background SQL.
@@ -1012,25 +1015,55 @@ func makeInsertPlan(
 					originTableMessageForFuzzy = &OriginTableMessageForFuzzy{
 						ParentTableName: tableDef.Name,
 					}
+					autoUniqueNameSet := make(map[string]bool)
+					uniqueNameSet := make(map[string]int)
 					partialUniqueCols := make([]*plan.ColDef, len(indexdef.Parts))
-					set := make(map[string]int)
+
 					for i, n := range indexdef.Parts {
-						set[n] = i
+						uniqueNameSet[n] = i
 					}
 					for _, c := range tableDef.Cols { // sort
-						if i, ok := set[c.Name]; ok {
+						if i, ok := uniqueNameSet[c.Name]; ok {
 							partialUniqueCols[i] = c
+							if c.Typ.AutoIncr {
+								autoUniqueNameSet[c.Name] = true
+							}
 						}
 					}
 					originTableMessageForFuzzy.ParentUniqueCols = partialUniqueCols
+
+					if insertColumns != nil && len(autoUniqueNameSet) > 0 {
+						atLeastOneHasNoValue := false
+
+						// for those unique key
+						for n := range autoUniqueNameSet {
+							if atLeastOneHasNoValue {
+								break
+							}
+
+							found := false
+							// check if at least one auto unique has no value
+							for _, c := range insertColumns {
+								if c == n {
+									found = true
+								}
+							}
+							if !found {
+								atLeastOneHasNoValue = true
+							}
+						}
+
+						if atLeastOneHasNoValue {
+							_checkInsertPkDupForHiddenTable = false // if so, no need to check dup
+						}
+					}
 				}
 
-				_checkInsertPkDupForHiddenTable := indexdef.Unique // only check PK uniqueness for UK. SK will not check PK uniqueness.
 				colTypes := make([]*plan.Type, len(tableDef.Cols))
 				for i := range tableDef.Cols {
 					colTypes[i] = tableDef.Cols[i].Typ
 				}
-				err = makeInsertPlan(ctx, builder, bindCtx, idxRef, idxTableDef, 0, newSourceStep, false, false, checkInsertPkDupForHiddenIndexTable, true, nil, nil, false, _checkInsertPkDupForHiddenTable, colTypes, originTableMessageForFuzzy, nil)
+				err = makeInsertPlan(ctx, builder, bindCtx, idxRef, idxTableDef, 0, newSourceStep, false, false, checkInsertPkDupForHiddenIndexTable, true, nil, nil, false, _checkInsertPkDupForHiddenTable, colTypes, originTableMessageForFuzzy, nil, insertColumns)
 				if err != nil {
 					return err
 				}
@@ -1048,13 +1081,13 @@ func makeInsertPlan(
 			return err
 		}
 
-		//if the all fk are fk self refer, the lastNodeId is -1.
-		//skip fk self refer here
+		// if the all fk are fk self refer, the lastNodeId is -1.
+		// skip fk self refer here
 		if lastNodeId >= 0 {
 			lastNode := builder.qry.Nodes[lastNodeId]
 			beginIdx := len(lastNode.ProjectList) - len(tableDef.Fkeys)
 
-			//get filter exprs
+			// get filter exprs
 			rowIdTyp := types.T_Rowid.ToType()
 			filters := make([]*Expr, len(tableDef.Fkeys))
 			errExpr := makePlan2StringConstExprWithType("Cannot add or update a child row: a foreign key constraint fails")
@@ -1064,7 +1097,7 @@ func makeInsertPlan(
 					Expr: &plan.Expr_Col{
 						Col: &plan.ColRef{
 							ColPos: int32(beginIdx + i),
-							//Name:   catalog.Row_ID,
+							// Name:   catalog.Row_ID,
 						},
 					},
 				}
