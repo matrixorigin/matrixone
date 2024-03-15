@@ -62,7 +62,7 @@ func ModifyColumn(ctx CompilerContext, alterPlan *plan.AlterTable, spec *tree.Al
 		return moerr.NewNotSupported(ctx.GetContext(), "unsupport alter partition part column currently")
 	}
 
-	if err = checkChangeTypeCompatible(ctx.GetContext(), col.Typ, newCol.Typ); err != nil {
+	if err = checkChangeTypeCompatible(ctx.GetContext(), &col.Typ, &newCol.Typ); err != nil {
 		return err
 	}
 

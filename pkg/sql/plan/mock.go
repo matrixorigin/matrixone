@@ -660,7 +660,7 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 			for idx, col := range table.cols {
 				colDefs = append(colDefs, &ColDef{
 					ColId: uint64(idx),
-					Typ: &plan.Type{
+					Typ: plan.Type{
 						Id:          int32(col.Id),
 						NotNullable: !col.Nullable,
 						Width:       col.Width,
