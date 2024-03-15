@@ -352,7 +352,7 @@ func (bj ByteJson) query(cur []ByteJson, path *Path) []ByteJson {
 		switch sub.tp {
 		case subPathIdx:
 			idx, _, last := sub.idx.genIndex(cnt)
-			if last && idx < 0 {
+			if last && idx < 0 || cnt == idx {
 				tmp := ByteJson{Type: TpCodeLiteral, Data: []byte{LiteralNull}}
 				cur = append(cur, tmp)
 				return cur
