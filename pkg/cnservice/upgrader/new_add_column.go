@@ -19,30 +19,18 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 )
 
-var (
-	// conditionalUpgradeV1SQLs is adding 3 columns
-	// (catalog.IndexAlgoName,catalog.IndexAlgoTableType,catalog.IndexAlgoParams) to mo_indexes table.
-	conditionalUpgradeV1SQLs = []struct {
-		ifEmpty string
-		then    []string
-	}{
-		{
-			ifEmpty: fmt.Sprintf(`SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = "%s" AND TABLE_NAME = "%s" AND COLUMN_NAME = "%s";`, catalog.MO_CATALOG, catalog.MO_INDEXES, catalog.IndexAlgoName),
-			then: []string{
-				fmt.Sprintf(`alter table %s.%s add column %s varchar(11) after type;`, catalog.MO_CATALOG, catalog.MO_INDEXES, catalog.IndexAlgoName),
-			},
-		},
-		{
-			ifEmpty: fmt.Sprintf(`SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = "%s" AND TABLE_NAME = "%s" AND COLUMN_NAME = "%s";`, catalog.MO_CATALOG, catalog.MO_INDEXES, catalog.IndexAlgoTableType),
-			then: []string{
-				fmt.Sprintf(`alter table %s.%s add column %s varchar(11) after %s;`, catalog.MO_CATALOG, catalog.MO_INDEXES, catalog.IndexAlgoTableType, catalog.IndexAlgoName),
-			},
-		},
-		{
-			ifEmpty: fmt.Sprintf(`SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = "%s" AND TABLE_NAME = "%s" AND COLUMN_NAME = "%s";`, catalog.MO_CATALOG, catalog.MO_INDEXES, catalog.IndexAlgoParams),
-			then: []string{
-				fmt.Sprintf(`alter table %s.%s add column %s varchar(2048) after %s;`, catalog.MO_CATALOG, catalog.MO_INDEXES, catalog.IndexAlgoParams, catalog.IndexAlgoTableType),
-			},
-		},
-	}
-)
+// conditionalUpgradeV1SQLs is adding 3 columns
+// (catalog.IndexAlgoName,catalog.IndexAlgoTableType,catalog.IndexAlgoParams) to mo_indexes table.
+func conditionalUpgradeV1SQLs(tenantId int) ([]string, [][]string) {
+	var ifEmpty = make([]string, 3)
+	var then = make([][]string, 3)
+
+	ifEmpty[0] = fmt.Sprintf(`SELECT attname FROM mo_catalog.mo_columns WHERE att_database = "%s" AND att_relname = "%s" AND attname = "%s" AND account_id=%d;`, catalog.MO_CATALOG, catalog.MO_INDEXES, catalog.IndexAlgoName, tenantId)
+	ifEmpty[1] = fmt.Sprintf(`SELECT attname FROM mo_catalog.mo_columns WHERE att_database = "%s" AND att_relname = "%s" AND attname = "%s" AND account_id=%d;`, catalog.MO_CATALOG, catalog.MO_INDEXES, catalog.IndexAlgoTableType, tenantId)
+	ifEmpty[2] = fmt.Sprintf(`SELECT attname FROM mo_catalog.mo_columns WHERE att_database = "%s" AND att_relname = "%s" AND attname = "%s" AND account_id=%d;`, catalog.MO_CATALOG, catalog.MO_INDEXES, catalog.IndexAlgoParams, tenantId)
+
+	then[0] = []string{fmt.Sprintf(`alter table %s.%s add column %s varchar(11) after type;`, catalog.MO_CATALOG, catalog.MO_INDEXES, catalog.IndexAlgoName)}
+	then[1] = []string{fmt.Sprintf(`alter table %s.%s add column %s varchar(11) after %s;`, catalog.MO_CATALOG, catalog.MO_INDEXES, catalog.IndexAlgoTableType, catalog.IndexAlgoName)}
+	then[2] = []string{fmt.Sprintf(`alter table %s.%s add column %s varchar(2048) after %s;`, catalog.MO_CATALOG, catalog.MO_INDEXES, catalog.IndexAlgoParams, catalog.IndexAlgoTableType)}
+	return ifEmpty, then
+}
