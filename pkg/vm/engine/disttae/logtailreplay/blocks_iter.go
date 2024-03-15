@@ -41,7 +41,7 @@ func (p *PartitionState) ApproxObjectsNum() int {
 }
 
 func (p *PartitionState) NewObjectsIter(ts types.TS) (*objectsIter, error) {
-	if ts.Less(p.minTS) {
+	if ts.Less(&p.minTS) {
 		return nil, moerr.NewTxnStaleNoCtx()
 	}
 	iter := p.dataObjectsByCreateTS.Copy().Iter()
@@ -158,7 +158,7 @@ func (p *PartitionState) GetChangedObjsBetween(
 	}); ok; ok = iter.Next() {
 		entry := iter.Item()
 
-		if entry.Time.Greater(end) {
+		if entry.Time.Greater(&end) {
 			break
 		}
 

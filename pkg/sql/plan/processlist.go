@@ -44,7 +44,7 @@ func (builder *QueryBuilder) buildProcesslist(tbl *tree.TableFunction, ctx *Bind
 		SessionsColTypes[i] = typ
 		sessionsColDefs[i] = &plan.ColDef{
 			Name: strings.ToLower(status.SessionField_name[i]),
-			Typ: &plan.Type{
+			Typ: plan.Type{
 				Id:    int32(typ.Oid),
 				Width: typ.Width,
 			},
