@@ -112,8 +112,11 @@ func (n *AppendMVCCHandle) CollectAppendLocked(
 	aborts *nulls.Bitmap,
 ) {
 	startOffset, node := n.appends.GetNodeToReadByPrepareTS(start)
-	if node != nil && node.GetPrepare().Less(start) {
-		startOffset++
+	if node != nil {
+		prepareTS := node.GetPrepare()
+		if prepareTS.Less(&start) {
+			startOffset++
+		}
 	}
 	endOffset, node := n.appends.GetNodeToReadByPrepareTS(end)
 	if node == nil || startOffset > endOffset {
@@ -177,7 +180,8 @@ func (n *AppendMVCCHandle) GetVisibleRowLocked(
 				holesMax = an.maxRow
 			}
 		}
-		return !an.Prepare.Greater(txn.GetStartTS())
+		startTS := txn.GetStartTS()
+		return !an.Prepare.Greater(&startTS)
 	}, true)
 	if len(anToWait) != 0 {
 		n.RUnlock()
@@ -300,7 +304,8 @@ func (n *AppendMVCCHandle) AllAppendsCommittedBefore(ts types.TS) bool {
 	}
 
 	// check if the latest appendnode is committed before ts
-	return anode.GetCommitTS().Less(ts)
+	commitTS := anode.GetCommitTS()
+	return commitTS.Less(&ts)
 }
 
 func (n *AppendMVCCHandle) StringLocked() string {

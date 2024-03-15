@@ -215,7 +215,8 @@ func dedupABlkBytesFunc(args ...any) func([]byte, bool, int) error {
 					}
 				}
 				commitTS := tsVec.Get(row).(types.TS)
-				if commitTS.Greater(txn.GetStartTS()) {
+				startTS := txn.GetStartTS()
+				if commitTS.Greater(&startTS) {
 					return txnif.ErrTxnWWConflict
 				}
 				entry := common.TypeStringValue(*vec.GetType(), any(v1), false)
@@ -252,7 +253,8 @@ func dedupABlkFuncFactory[T types.FixedSizeT](comp func(T, T) int) func(args ...
 						}
 					}
 					commitTS := tsVec.Get(row).(types.TS)
-					if commitTS.Greater(txn.GetStartTS()) {
+					startTS := txn.GetStartTS()
+					if commitTS.Greater(&startTS) {
 						return txnif.ErrTxnWWConflict
 					}
 					entry := common.TypeStringValue(*vec.GetType(), any(v1), false)
@@ -308,7 +310,8 @@ func dedupABlkClosureFactory(
 					}
 				}
 				commitTS := tsVec.Get(row).(types.TS)
-				if commitTS.Greater(txn.GetStartTS()) {
+				startTS := txn.GetStartTS()
+				if commitTS.Greater(&startTS) {
 					return txnif.ErrTxnWWConflict
 				}
 				entry := common.TypeStringValue(*vec.GetType(), v1, false)

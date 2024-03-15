@@ -100,7 +100,8 @@ func (e *TestEngine) Restart(ctx context.Context) {
 			min := e.DB.TxnMgr.MinTSForTest()
 			ckp := item.(*checkpoint.CheckpointEntry)
 			//logutil.Infof("min: %v, checkpoint: %v", min.ToString(), checkpoint.GetStart().ToString())
-			return !ckp.GetEnd().GreaterEq(min)
+			end := ckp.GetEnd()
+			return !end.GreaterEq(&min)
 		})
 	assert.NoError(e.t, err)
 }
@@ -358,7 +359,8 @@ func InitTestDBWithDir(
 			min := db.TxnMgr.MinTSForTest()
 			ckp := item.(*checkpoint.CheckpointEntry)
 			//logutil.Infof("min: %v, checkpoint: %v", min.ToString(), checkpoint.GetStart().ToString())
-			return !ckp.GetEnd().GreaterEq(min)
+			end := ckp.GetEnd()
+			return !end.GreaterEq(&min)
 		})
 	return db
 }
@@ -377,7 +379,8 @@ func InitTestDB(
 			min := db.TxnMgr.MinTSForTest()
 			ckp := item.(*checkpoint.CheckpointEntry)
 			//logutil.Infof("min: %v, checkpoint: %v", min.ToString(), checkpoint.GetStart().ToString())
-			return !ckp.GetEnd().GreaterEq(min)
+			end := ckp.GetEnd()
+			return !end.GreaterEq(&min)
 		})
 	return db
 }

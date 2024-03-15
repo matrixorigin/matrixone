@@ -259,7 +259,7 @@ func trimObjectsData(
 					if err != nil {
 						return isCkpChange, err
 					}
-					if commitTs.Greater(ts) {
+					if commitTs.Greater(&ts) {
 						windowCNBatch(bat, 0, uint64(v))
 						logutil.Debugf("blkCommitTs %v ts %v , block is %v",
 							commitTs.ToString(), ts.ToString(), location.String())
@@ -294,7 +294,7 @@ func trimObjectsData(
 					if err != nil {
 						return isCkpChange, err
 					}
-					if commitTs.Greater(ts) {
+					if commitTs.Greater(&ts) {
 						logutil.Debugf("delete row %v, commitTs %v, location %v",
 							v, commitTs.ToString(), block.location.String())
 						isChange = true
@@ -326,7 +326,7 @@ func trimObjectsData(
 					if err != nil {
 						return isCkpChange, err
 					}
-					if commitTs.Greater(ts) {
+					if commitTs.Greater(&ts) {
 						windowCNBatch(bat, 0, uint64(v))
 						logutil.Debugf("blkCommitTs %v ts %v , block is %v",
 							commitTs.ToString(), ts.ToString(), block.location.String())
@@ -604,7 +604,7 @@ func ReWriteCheckpointAndBlockFromKey(
 		deleteAt := objInfoDelete.Get(i).(types.TS)
 		commitTS := objInfoCommit.Get(i).(types.TS)
 		tid := objInfoTid.Get(i).(uint64)
-		if commitTS.Less(ts) {
+		if commitTS.Less(&ts) {
 			panic(any(fmt.Sprintf("commitTs less than ts: %v-%v", commitTS.ToString(), ts.ToString())))
 		}
 
@@ -628,7 +628,7 @@ func ReWriteCheckpointAndBlockFromKey(
 		tid := tnObjInfoTid.Get(i).(uint64)
 		commitTS := tnObjInfoCommit.Get(i).(types.TS)
 
-		if commitTS.Less(ts) {
+		if commitTS.Less(&ts) {
 			panic(any(fmt.Sprintf("commitTs less than ts: %v-%v", commitTS.ToString(), ts.ToString())))
 		}
 

@@ -273,7 +273,7 @@ func (catalog *Catalog) onReplayCreateDB(
 	db, _ := catalog.GetDatabaseByID(dbid)
 	if db != nil {
 		dbCreatedAt := db.GetCreatedAtLocked()
-		if !dbCreatedAt.Equal(txnNode.End) {
+		if !dbCreatedAt.Equal(&txnNode.End) {
 			panic(moerr.NewInternalErrorNoCtx("logic err expect %s, get %s",
 				txnNode.End.ToString(), dbCreatedAt.ToString()))
 		}
@@ -311,7 +311,7 @@ func (catalog *Catalog) onReplayDeleteDB(dbid uint64, txnNode *txnbase.TxnMVCCNo
 	}
 	dbDeleteAt := db.GetDeleteAt()
 	if !dbDeleteAt.IsEmpty() {
-		if !dbDeleteAt.Equal(txnNode.End) {
+		if !dbDeleteAt.Equal(&txnNode.End) {
 			panic(moerr.NewInternalErrorNoCtx("logic err expect %s, get %s", txnNode.End.ToString(), dbDeleteAt.ToString()))
 		}
 		return
@@ -432,7 +432,7 @@ func (catalog *Catalog) onReplayCreateTable(dbid, tid uint64, schema *Schema, tx
 	tbl, _ := db.GetTableEntryByID(tid)
 	if tbl != nil {
 		tblCreatedAt := tbl.GetCreatedAtLocked()
-		if tblCreatedAt.Greater(txnNode.End) {
+		if tblCreatedAt.Greater(&txnNode.End) {
 			panic(moerr.NewInternalErrorNoCtx("logic err expect %s, get %s", txnNode.End.ToString(), tblCreatedAt.ToString()))
 		}
 		// alter table
@@ -493,7 +493,7 @@ func (catalog *Catalog) onReplayDeleteTable(dbid, tid uint64, txnNode *txnbase.T
 	}
 	tableDeleteAt := tbl.GetDeleteAt()
 	if !tableDeleteAt.IsEmpty() {
-		if !tableDeleteAt.Equal(txnNode.End) {
+		if !tableDeleteAt.Equal(&txnNode.End) {
 			panic(moerr.NewInternalErrorNoCtx("logic err expect %s, get %s", txnNode.End.ToString(), tableDeleteAt.ToString()))
 		}
 		return
@@ -709,8 +709,8 @@ func (catalog *Catalog) onReplayUpdateBlock(
 		cmd.mvccNode.Prepare,
 		cmd.mvccNode.BaseNode.MetaLoc,
 		true,
-		cmd.mvccNode.CreatedAt.Equal(txnif.UncommitTS),
-		cmd.mvccNode.DeletedAt.Equal(txnif.UncommitTS),
+		cmd.mvccNode.CreatedAt.Equal(&txnif.UncommitTS),
+		cmd.mvccNode.DeletedAt.Equal(&txnif.UncommitTS),
 		cmd.mvccNode.Txn,
 		dataFactory)
 	if !cmd.mvccNode.BaseNode.DeltaLoc.IsEmpty() {

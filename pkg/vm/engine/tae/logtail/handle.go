@@ -149,7 +149,7 @@ func HandleSyncLogTailReq(
 	tableEntry.RLock()
 	createTS := tableEntry.GetCreatedAtLocked()
 	tableEntry.RUnlock()
-	if start.Less(createTS) {
+	if start.Less(&createTS) {
 		start = createTS
 	}
 
@@ -158,7 +158,7 @@ func HandleSyncLogTailReq(
 		return
 	}
 
-	if checkpointed.GreaterEq(end) {
+	if checkpointed.GreaterEq(&end) {
 		return api.SyncLogTailResp{
 			CkpLocation: ckpLoc,
 		}, nil, err

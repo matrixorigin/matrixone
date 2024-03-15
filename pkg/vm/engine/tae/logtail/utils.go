@@ -2780,7 +2780,7 @@ func (collector *BaseCollector) VisitDB(entry *catalog.DBEntry) error {
 		var created, dropped bool
 		if dbNode.HasDropCommitted() {
 			dropped = true
-			if dbNode.CreatedAt.Equal(dbNode.DeletedAt) {
+			if dbNode.CreatedAt.Equal(&dbNode.DeletedAt) {
 				created = true
 			}
 		} else {
@@ -2859,7 +2859,7 @@ func (collector *BaseCollector) VisitTable(entry *catalog.TableEntry) (err error
 		var created, dropped bool
 		if tblNode.HasDropCommitted() {
 			dropped = true
-			if tblNode.CreatedAt.Equal(tblNode.DeletedAt) {
+			if tblNode.CreatedAt.Equal(&tblNode.DeletedAt) {
 				created = true
 			}
 		} else {
@@ -3098,7 +3098,8 @@ func (collector *BaseCollector) fillObjectInfoBatch(entry *catalog.ObjectEntry, 
 
 func (collector *BaseCollector) VisitObjForBackup(entry *catalog.ObjectEntry) (err error) {
 	entry.RLock()
-	if entry.GetCreatedAtLocked().Greater(collector.start) {
+	createTS := entry.GetCreatedAtLocked()
+	if createTS.Greater(&collector.start) {
 		entry.RUnlock()
 		return nil
 	}

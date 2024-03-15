@@ -296,7 +296,8 @@ func (chain *DeleteChain) CollectDeletesInRange(
 		chain.LoopChain(func(n *DeleteNode) bool {
 			// Merged node is a loop breaker
 			if n.IsMerged() {
-				if n.GetCommitTSLocked().Greater(endTs) {
+				commitTS := n.GetCommitTSLocked()
+				if commitTS.Greater(&endTs) {
 					return true
 				}
 				if mask == nil {
@@ -403,7 +404,7 @@ func (chain *DeleteChain) CollectDeletesLocked(
 							continue
 						}
 						// if the ts can't see the del, then remove it from merged
-						if committs.Greater(ts) {
+						if committs.Greater(&ts) {
 							merged.Del(uint64(row))
 						}
 					}
