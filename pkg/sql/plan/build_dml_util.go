@@ -1272,6 +1272,8 @@ func buildInsertPlansWithRelatedHiddenTable(
 					return err
 				}
 
+				needCheckPkDupForHiddenTable := indexdef.Unique // only check PK uniqueness for UK. SK will not check PK uniqueness.
+				var insertColsNameFromStmt []string
 				var pkFilterExprForHiddenTable []*Expr
 				var originTableMessageForFuzzy *OriginTableMessageForFuzzy
 
@@ -1302,15 +1304,30 @@ func buildInsertPlansWithRelatedHiddenTable(
 						}
 					}
 					originTableMessageForFuzzy.ParentUniqueCols = uniqueCols
+					uniqueColLocationMap := newLocationMap(tableDef, indexdef)
 					if stmt != nil {
-						insertColsNameFromStmt, err := getInsertColsFromStmt(ctx.GetContext(), stmt, tableDef)
+						insertColsNameFromStmt, err = getInsertColsFromStmt(ctx.GetContext(), stmt, tableDef)
 						if err != nil {
 							return err
 						}
 
+						// check if this unique key need to check dup
+						for name, oi := range uniqueColLocationMap.m {
+							if tableDef.Cols[oi.index].Typ.AutoIncr {
+								found := false
+								for _, inserted := range insertColsNameFromStmt {
+									if inserted == name {
+										found = true
+									}
+								}
+								if !found { // still need to check dup for auto incr unique if contains value, else no need
+									needCheckPkDupForHiddenTable = false
+								}
+							}
+						}
+
 						// try to build pk filter epxr for hidden table created by unique key
-						if canUsePkFilter(builder, ctx, stmt, tableDef, insertColsNameFromStmt, indexdef) {
-							uniqueColLocationMap := newLocationMap(tableDef, indexdef)
+						if needCheckPkDupForHiddenTable && canUsePkFilter(builder, ctx, stmt, tableDef, insertColsNameFromStmt, indexdef) {
 							pkFilterExprForHiddenTable, err = getPkValueExpr(builder, ctx, tableDef, uniqueColLocationMap, insertColsNameFromStmt)
 							if err != nil {
 								return err
@@ -1319,7 +1336,6 @@ func buildInsertPlansWithRelatedHiddenTable(
 					}
 				}
 
-				_checkPkDupForHiddenTable := indexdef.Unique // only check PK uniqueness for UK. SK will not check PK uniqueness.
 				colTypes := make([]*plan.Type, len(tableDef.Cols))
 				for i := range tableDef.Cols {
 					colTypes[i] = &tableDef.Cols[i].Typ
@@ -1333,7 +1349,7 @@ func buildInsertPlansWithRelatedHiddenTable(
 				var partitionExpr *Expr
 				err = makeOneInsertPlan(ctx, builder, bindCtx, idxRef, idxTableDef,
 					updateColLength, newSourceStep, addAffectedRows, isFkRecursionCall, updatePkCol,
-					pkFilterExprForHiddenTable, partitionExpr, ifExistAutoPkCol, _checkPkDupForHiddenTable,
+					pkFilterExprForHiddenTable, partitionExpr, ifExistAutoPkCol, needCheckPkDupForHiddenTable,
 					colTypes, originTableMessageForFuzzy)
 
 				if err != nil {

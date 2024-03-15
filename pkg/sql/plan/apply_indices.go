@@ -511,8 +511,6 @@ END0:
 			})
 		}
 
-		calcScanStats(node, builder)
-
 		idxTableNodeID := builder.appendNode(&plan.Node{
 			NodeType:     plan.Node_TABLE_SCAN,
 			TableDef:     idxTableDef,
@@ -634,7 +632,6 @@ END0:
 				idxFilter, _ = bindFuncExprAndConstFold(builder.GetContext(), builder.compCtx.GetProcess(), "prefix_between", fn.Args)
 			}
 		}
-		calcScanStats(node, builder)
 
 		idxTableNodeID := builder.appendNode(&plan.Node{
 			NodeType:     plan.Node_TABLE_SCAN,

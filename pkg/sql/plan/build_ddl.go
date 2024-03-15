@@ -3004,7 +3004,7 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 					},
 				},
 			}
-		case *tree.AlterTableName:
+		case *tree.AlterOptionTableName:
 			oldName := tableDef.Name
 			newName := string(opt.Name.ToTableName().ObjectName)
 			alterTable.Actions[i] = &plan.AlterTable_Action{
