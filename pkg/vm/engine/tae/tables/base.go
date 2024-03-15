@@ -435,10 +435,10 @@ func (blk *baseObject) foreachPersistedDeletesCommittedInRange(
 			return
 		}
 		if persistedByCN {
-			if deltalocCommitTS.Equal(txnif.UncommitTS) {
+			if deltalocCommitTS.Equal(&txnif.UncommitTS) {
 				return
 			}
-			if deltalocCommitTS.Less(start) || deltalocCommitTS.Greater(end) {
+			if deltalocCommitTS.Less(&start) || deltalocCommitTS.Greater(&end) {
 				return
 			}
 		}
@@ -853,7 +853,7 @@ func (blk *baseObject) CollectDeleteInRange(
 			return nil, nil, err
 		}
 		currentEnd := end
-		if !minTS.IsEmpty() && currentEnd.Greater(minTS) {
+		if !minTS.IsEmpty() && currentEnd.Greater(&minTS) {
 			currentEnd = minTS.Prev()
 		}
 		deletes, err = blk.PersistedCollectDeleteInRange(
@@ -884,20 +884,6 @@ func (blk *baseObject) CollectDeleteInRange(
 			deletes.Close()
 		}
 	}
-<<<<<<< HEAD
-=======
-	if !minTS.IsEmpty() && end.Greater(&minTS) {
-		end = minTS.Prev()
-	}
-	bat, err = blk.persistedCollectDeleteInRange(
-		ctx,
-		bat,
-		start,
-		end,
-		withAborted,
-		mp,
-	)
->>>>>>> main
 	return
 }
 
@@ -914,30 +900,10 @@ func (blk *baseObject) CollectDeleteInRangeAfterDeltalocation(
 	withAborted bool,
 	mp *mpool.MPool,
 ) (bat *containers.Batch, err error) {
-<<<<<<< HEAD
 	for i := uint16(0); i < uint16(blk.meta.BlockCnt()); i++ {
 		// persisted is persistedTS of deletes of the blk
 		// it equals startTS of the last delta location
 		deletes, _, persisted, err := blk.inMemoryCollectDeleteInRange(
-=======
-	// persisted is persistedTS of deletes of the blk
-	// it equals startTS of the last delta location
-	bat, _, persisted, err := blk.inMemoryCollectDeleteInRange(
-		ctx,
-		start,
-		end,
-		withAborted,
-		mp,
-	)
-	if err != nil {
-		return
-	}
-	// if persisted > start,
-	// there's another delta location committed.
-	// It includes more deletes than former delta location.
-	if persisted.Greater(&start) {
-		bat, err = blk.persistedCollectDeleteInRange(
->>>>>>> main
 			ctx,
 			i,
 			start,
@@ -951,7 +917,7 @@ func (blk *baseObject) CollectDeleteInRangeAfterDeltalocation(
 		// if persisted > start,
 		// there's another delta location committed.
 		// It includes more deletes than former delta location.
-		if persisted.Greater(start) {
+		if persisted.Greater(&start) {
 			deletes, err = blk.PersistedCollectDeleteInRange(
 				ctx,
 				deletes,

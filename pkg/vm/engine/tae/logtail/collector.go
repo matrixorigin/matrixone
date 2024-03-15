@@ -448,7 +448,7 @@ func (d *dirtyCollector) tryCompactTree(
 			}
 			if !obj.IsAppendable() {
 				newFrom := from
-				if lastFlush.Greater(newFrom) {
+				if lastFlush.Greater(&newFrom) {
 					newFrom = lastFlush
 				}
 				// sometimes, delchain is no cleared after flushing table tail.

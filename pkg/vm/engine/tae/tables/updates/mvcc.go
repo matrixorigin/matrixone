@@ -402,7 +402,7 @@ func (n *ObjectMVCCHandle) GetDeltaPersistedTS() types.TS {
 	persisted := types.TS{}
 	for _, deletes := range n.deletes {
 		ts := deletes.getDeltaPersistedTS()
-		if ts.Greater(persisted) {
+		if ts.Greater(&persisted) {
 			persisted = ts
 		}
 	}
@@ -520,7 +520,8 @@ func (n *ObjectMVCCHandle) VisitDeletes(
 			}
 			newest := nodes[len(nodes)-1]
 			// block has newer delta data on s3, no need to collect data
-			skipData = newest.GetStart().GreaterEq(end)
+			startTS := newest.GetStart()
+			skipData = startTS.GreaterEq(&end)
 			start = newest.GetStart()
 		}
 		if !skipData && !skipInMemory {
@@ -705,7 +706,7 @@ func (n *MVCCHandle) getDeltaPersistedTS() types.TS {
 }
 
 func (n *MVCCHandle) upgradeDeleteChainByTS(flushed types.TS) {
-	if n.persistedTS.Equal(flushed) {
+	if n.persistedTS.Equal(&flushed) {
 		return
 	}
 	n.deletes = n.deletes.shrinkDeleteChainByTS(flushed)
@@ -830,7 +831,8 @@ func (n *MVCCHandle) CollectDeleteLocked(
 						if minTS.IsEmpty() {
 							minTS = node.GetEnd()
 						} else {
-							if minTS.Greater(node.GetEnd()) {
+							end := node.GetEnd()
+							if minTS.Greater(&end) {
 								minTS = node.GetEnd()
 							}
 						}
@@ -906,7 +908,7 @@ func (n *MVCCHandle) CollectDeleteInRangeAfterDeltalocation(
 	// if persisted > start,
 	// there's another delta location committed.
 	// It includes more deletes than former delta location.
-	if persisted.Greater(start) {
+	if persisted.Greater(&start) {
 		deletes, err = n.meta.GetObjectData().PersistedCollectDeleteInRange(
 			ctx,
 			deletes,
