@@ -12,8 +12,8 @@ mo_ctl(dn, flush, d1.t1)
 select mo_ctl('dn', 'flush', 'd1.t2');
 mo_ctl(dn, flush, d1.t2)
 {\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
-select Sleep(5);
-sleep(5)
+select Sleep(1);
+sleep(1)
 0
 explain select * from t1 order by c1 limit 100 offset 200;
 QUERY PLAN
