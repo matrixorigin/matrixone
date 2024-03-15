@@ -54,7 +54,7 @@ var (
 	defaultColDefs = []*plan.ColDef{
 		{
 			Name: "col",
-			Typ: &plan.Type{
+			Typ: plan.Type{
 				Id:          int32(types.T_varchar),
 				NotNullable: false,
 				Width:       4,
@@ -62,14 +62,14 @@ var (
 		},
 		{
 			Name: "seq",
-			Typ: &plan.Type{
+			Typ: plan.Type{
 				Id:          int32(types.T_int32),
 				NotNullable: false,
 			},
 		},
 		{
 			Name: "key",
-			Typ: &plan.Type{
+			Typ: plan.Type{
 				Id:          int32(types.T_varchar),
 				NotNullable: false,
 				Width:       256,
@@ -77,7 +77,7 @@ var (
 		},
 		{
 			Name: "path",
-			Typ: &plan.Type{
+			Typ: plan.Type{
 				Id:          int32(types.T_varchar),
 				NotNullable: false,
 				Width:       256,
@@ -85,14 +85,14 @@ var (
 		},
 		{
 			Name: "index",
-			Typ: &plan.Type{
+			Typ: plan.Type{
 				Id:          int32(types.T_int32),
 				NotNullable: false,
 			},
 		},
 		{
 			Name: "value",
-			Typ: &plan.Type{
+			Typ: plan.Type{
 				Id:          int32(types.T_varchar),
 				NotNullable: false,
 				Width:       1024,
@@ -100,7 +100,7 @@ var (
 		},
 		{
 			Name: "this",
-			Typ: &plan.Type{
+			Typ: plan.Type{
 				Id:          int32(types.T_varchar),
 				NotNullable: false,
 				Width:       1024,
