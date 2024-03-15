@@ -7639,53 +7639,21 @@ table_name:
         prefix := tree.ObjectNamePrefix{SchemaName: tree.Identifier($1.Compare()), ExplicitSchema: true}
         $$ = tree.NewTableName(tree.Identifier($3.Compare()), prefix, nil)
     }
-|   ident '@' STRING '@' STRING
+|   ident '{' expression '}'
     {
         prefix := tree.ObjectNamePrefix{ExplicitSchema: false}
-        atType := tree.ATTIMESTAMPNONE
-        if $3 != "" {
-            t := strings.ToLower($3)
-            switch t {
-                case "timestamp":
-                    atType = tree.ATTIMESTAMPTIME
-                case "snapshot":
-                    atType = tree.ATTIMESTAMPSNAPSHOT
-                default:
-                    yylex.Error("Invalid the type of at timestamp")
-                    return 1
-            }
-        }
-        atTs := &tree.AtTimeStampClause{
-            TimeStampExpr: &tree.TimeStampExpr{
-                Type: atType,
-                Expr: $5,
-            },
+        atTs := &tree.AtTimeStamp{
+            Expr: $3,
         }
         $$ = tree.NewTableName(tree.Identifier($1.Compare()), prefix, atTs)
     }
-|   ident '.' ident '@' STRING '@' STRING
+|   ident '.' ident '{' expression '}'
     {
         prefix := tree.ObjectNamePrefix{SchemaName: tree.Identifier($1.Compare()), ExplicitSchema: true}
-        atType := tree.ATTIMESTAMPNONE
-        if $5 != "" {
-            t := strings.ToLower($5)
-            switch t {
-                case "timestamp":
-                    atType = tree.ATTIMESTAMPTIME
-                case "snapshot":
-                    atType = tree.ATTIMESTAMPSNAPSHOT
-                default:
-                    yylex.Error("Invalid the type of at timestamp")
-                    return 1
-            }
+         atTs := &tree.AtTimeStamp{
+            Expr: $5,
         }
-        atTs := &tree.AtTimeStampClause{
-            TimeStampExpr: &tree.TimeStampExpr{
-                Type: atType,
-                Expr: $7,
-            },
-        }
-        $$ = tree.NewTableName(tree.Identifier($3.Compare()), prefix, atTs)
+        $$ = tree.NewTableName(tree.Identifier($3.Compare()), prefix, atTS)
     }
 
 table_elem_list_opt:
