@@ -118,7 +118,7 @@ func buildAlterTableCopy(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, err
 			return nil, moerr.NewInvalidInput(ctx.GetContext(), "Do not support this stmt now. %v", spec)
 		case *tree.TableOptionComment:
 			return nil, moerr.NewInvalidInput(ctx.GetContext(), "Do not support this stmt now. %v", spec)
-		case *tree.AlterTableName:
+		case *tree.AlterOptionTableName:
 			return nil, moerr.NewInvalidInput(ctx.GetContext(), "Do not support this stmt now. %v", spec)
 		case *tree.AlterAddCol:
 			err = AddColumn(ctx, alterTablePlan, option, alterTableCtx)
@@ -704,7 +704,7 @@ func ResolveAlterTableAlgorithm(ctx context.Context, validAlterSpecs []tree.Alte
 			algorithm = plan.AlterTable_INPLACE
 		case *tree.TableOptionComment:
 			algorithm = plan.AlterTable_INPLACE
-		case *tree.AlterTableName:
+		case *tree.AlterOptionTableName:
 			algorithm = plan.AlterTable_INPLACE
 		case *tree.AlterAddCol:
 			algorithm = plan.AlterTable_COPY
