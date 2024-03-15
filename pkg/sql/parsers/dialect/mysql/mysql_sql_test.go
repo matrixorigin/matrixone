@@ -1519,11 +1519,13 @@ var (
 		}, {
 			input: "select * from t",
 		}, {
-			input:  "select * from t@'timestamp'@'2024-01-01 00:00:00'",
-			output: "select * from t@timestamp@2024-01-01 00:00:00",
+			input:  "select * from t{timestamp = '2024-01-01 00:00:00'}",
+			output: "select * from t{timestamp = 2024-01-01 00:00:00}",
 		}, {
-			input:  "select * from t@'snapshot'@'snapshot1'",
-			output: "select * from t@snapshot@snapshot1",
+			input:  "select * from t{snapshot = 'snapshot1'}",
+			output: "select * from t{snapshot = snapshot1}",
+		}, {
+			input: "select * from t{timestamp = now()}",
 		}, {
 			input:  "select c1, c2, c3 from t1, t as t2 where t1.c1 = 1 group by c2 having c2 > 10",
 			output: "select c1, c2, c3 from t1 cross join t as t2 where t1.c1 = 1 group by c2 having c2 > 10",
