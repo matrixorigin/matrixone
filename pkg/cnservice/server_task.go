@@ -135,7 +135,10 @@ func (s *service) upgrade() {
 			return frontend.NewInternalExecutor(pu, nil)
 		},
 	}
-	ug.Upgrade(moServerCtx)
+	err := ug.Upgrade(moServerCtx)
+	if err != nil {
+		panic(err)
+	}
 }
 
 func (s *service) canClaimDaemonTask(taskAccount string) bool {
