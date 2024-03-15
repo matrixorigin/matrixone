@@ -242,6 +242,7 @@ func (exec *medianColumnNumericExec[T]) Flush() (*vector.Vector, error) {
 			continue
 		}
 
+		exec.ret.empty[i] = false
 		sort.Sort(generateSortableSlice(vector.MustFixedCol[T](exec.groups[i])))
 		srcs := vector.MustFixedCol[T](exec.groups[i])
 		if rows&1 == 1 {
@@ -275,6 +276,7 @@ func (exec *medianColumnDecimalExec[T]) Flush() (*vector.Vector, error) {
 			continue
 		}
 
+		exec.ret.empty[i] = false
 		sort.Sort(generateSortableSlice2(vector.MustFixedCol[T](exec.groups[i])))
 		if argIsDecimal128 {
 			srcs := vector.MustFixedCol[types.Decimal128](exec.groups[i])
