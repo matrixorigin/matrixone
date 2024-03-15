@@ -559,6 +559,8 @@ type txnDatabase struct {
 	databaseType      string
 	databaseCreateSql string
 	txn               *Transaction
+
+	rowId types.Rowid
 }
 
 type tableKey struct {
