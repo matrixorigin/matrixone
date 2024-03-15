@@ -20,8 +20,8 @@ func init() {
 	reuse.CreatePool[AnalyzeStmt](
 		func() *AnalyzeStmt { return &AnalyzeStmt{} },
 		func(a *AnalyzeStmt) { a.reset() },
-		reuse.DefaultOptions[AnalyzeStmt]().
-			WithEnableChecker())
+		reuse.DefaultOptions[AnalyzeStmt](), //.
+	) //WithEnableChecker()
 }
 
 // Use statement
@@ -50,10 +50,11 @@ func (node AnalyzeStmt) TypeName() string { return "tree.AnalyzeStmt" }
 
 func (node *AnalyzeStmt) reset() {
 	// if node.Table != nil {
-	// reuse.Free[TableName](node.Table, nil)
+	// node.Table.Free()
 	// }
 	*node = AnalyzeStmt{}
 }
+
 func NewAnalyzeStmt(tbl *TableName, cols IdentifierList) *AnalyzeStmt {
 	analyzestmt := reuse.Alloc[AnalyzeStmt](nil)
 	analyzestmt.Table = tbl

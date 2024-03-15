@@ -20,50 +20,50 @@ func init() {
 	reuse.CreatePool[DropDatabase](
 		func() *DropDatabase { return &DropDatabase{} },
 		func(d *DropDatabase) { d.reset() },
-		reuse.DefaultOptions[DropDatabase]().
-			WithEnableChecker())
+		reuse.DefaultOptions[DropDatabase](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[DropTable](
 		func() *DropTable { return &DropTable{} },
 		func(d *DropTable) { d.reset() },
-		reuse.DefaultOptions[DropTable]().
-			WithEnableChecker())
+		reuse.DefaultOptions[DropTable](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[DropView](
 		func() *DropView { return &DropView{} },
 		func(d *DropView) { d.reset() },
-		reuse.DefaultOptions[DropView]().
-			WithEnableChecker())
+		reuse.DefaultOptions[DropView](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[DropIndex](
 		func() *DropIndex { return &DropIndex{} },
 		func(d *DropIndex) { d.reset() },
-		reuse.DefaultOptions[DropIndex]().
-			WithEnableChecker())
+		reuse.DefaultOptions[DropIndex](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[DropRole](
 		func() *DropRole { return &DropRole{} },
 		func(d *DropRole) { d.reset() },
-		reuse.DefaultOptions[DropRole]().
-			WithEnableChecker())
+		reuse.DefaultOptions[DropRole](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[DropUser](
 		func() *DropUser { return &DropUser{} },
 		func(d *DropUser) { d.reset() },
-		reuse.DefaultOptions[DropUser]().
-			WithEnableChecker())
+		reuse.DefaultOptions[DropUser](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[DropAccount](
 		func() *DropAccount { return &DropAccount{} },
 		func(d *DropAccount) { d.reset() },
-		reuse.DefaultOptions[DropAccount]().
-			WithEnableChecker())
+		reuse.DefaultOptions[DropAccount](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[DropPublication](
 		func() *DropPublication { return &DropPublication{} },
 		func(d *DropPublication) { d.reset() },
-		reuse.DefaultOptions[DropPublication]().
-			WithEnableChecker())
+		reuse.DefaultOptions[DropPublication](), //.
+	) //WithEnableChecker()
 }
 
 // DROP Database statement
@@ -253,11 +253,11 @@ func (node *DropRole) Free() {
 }
 
 func (node *DropRole) reset() {
-	// if node.Roles != nil {
-	// 	for _, item := range node.Roles {
-	// 		reuse.Free[Role](item, nil)
-	// 	}
-	// }
+	if node.Roles != nil {
+		for _, role := range node.Roles {
+			role.Free()
+		}
+	}
 	*node = DropRole{}
 }
 
@@ -297,11 +297,11 @@ func (node *DropUser) Free() {
 }
 
 func (node *DropUser) reset() {
-	// if node.Users != nil {
-	// for _, item := range node.Users {
-	// 	reuse.Free[User](item, nil)
-	// }
-	// }
+	if node.Users != nil {
+		for _, item := range node.Users {
+			item.Free()
+		}
+	}
 	*node = DropUser{}
 }
 
