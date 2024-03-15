@@ -18,7 +18,707 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+
+	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 )
+
+func init() {
+	reuse.CreatePool[CreateOptionCharset](
+		func() *CreateOptionCharset { return &CreateOptionCharset{} },
+		func(c *CreateOptionCharset) { c.reset() },
+		reuse.DefaultOptions[CreateOptionCharset](), //.
+	) //WithEnableChecker()
+
+	reuse.CreatePool[ClusterByOption](
+		func() *ClusterByOption { return &ClusterByOption{} },
+		func(c *ClusterByOption) { c.reset() },
+		reuse.DefaultOptions[ClusterByOption](), //.
+	) //WithEnableChecker()
+
+	reuse.CreatePool[CreateOptionCollate](
+		func() *CreateOptionCollate { return &CreateOptionCollate{} },
+		func(c *CreateOptionCollate) { c.reset() },
+		reuse.DefaultOptions[CreateOptionCollate](), //.
+	) //WithEnableChecker()
+
+	reuse.CreatePool[CreateOptionEncryption](
+		func() *CreateOptionEncryption { return &CreateOptionEncryption{} },
+		func(c *CreateOptionEncryption) { c.reset() },
+		reuse.DefaultOptions[CreateOptionEncryption](), //.
+	) //WithEnableChecker()
+
+	reuse.CreatePool[SubscriptionOption](
+		func() *SubscriptionOption { return &SubscriptionOption{} },
+		func(s *SubscriptionOption) { s.reset() },
+		reuse.DefaultOptions[SubscriptionOption](), //.
+	) //WithEnableChecker()
+
+	reuse.CreatePool[CreateDatabase](
+		func() *CreateDatabase { return &CreateDatabase{} },
+		func(c *CreateDatabase) { c.reset() },
+		reuse.DefaultOptions[CreateDatabase](), //.
+	) //WithEnableChecker()
+
+	reuse.CreatePool[CreateTable](
+		func() *CreateTable { return &CreateTable{} },
+		func(c *CreateTable) { c.reset() },
+		reuse.DefaultOptions[CreateTable](), //.
+	) //WithEnableChecker()
+
+	reuse.CreatePool[ColumnTableDef](
+		func() *ColumnTableDef { return &ColumnTableDef{} },
+		func(c *ColumnTableDef) { c.reset() },
+		reuse.DefaultOptions[ColumnTableDef](), //.
+	) //WithEnableChecker()
+
+	reuse.CreatePool[AttributeNull](
+		func() *AttributeNull { return &AttributeNull{} },
+		func(a *AttributeNull) { a.reset() },
+		reuse.DefaultOptions[AttributeNull](), //.
+	) //WithEnableChecker()
+
+	reuse.CreatePool[AttributeDefault](
+		func() *AttributeDefault { return &AttributeDefault{} },
+		func(a *AttributeDefault) { a.reset() },
+		reuse.DefaultOptions[AttributeDefault](), //.
+	) //WithEnableChecker()
+
+	reuse.CreatePool[AttributeAutoIncrement](
+		func() *AttributeAutoIncrement { return &AttributeAutoIncrement{} },
+		func(a *AttributeAutoIncrement) { a.reset() },
+		reuse.DefaultOptions[AttributeAutoIncrement](), //.
+	) //WithEnableChecker()
+
+	reuse.CreatePool[AttributeUniqueKey](
+		func() *AttributeUniqueKey { return &AttributeUniqueKey{} },
+		func(a *AttributeUniqueKey) { a.reset() },
+		reuse.DefaultOptions[AttributeUniqueKey](), //.
+	) //WithEnableChecker()
+
+	reuse.CreatePool[AttributeUnique](
+		func() *AttributeUnique { return &AttributeUnique{} },
+		func(a *AttributeUnique) { a.reset() },
+		reuse.DefaultOptions[AttributeUnique](), //.
+	) //WithEnableChecker()
+
+	reuse.CreatePool[AttributeKey](
+		func() *AttributeKey { return &AttributeKey{} },
+		func(a *AttributeKey) { a.reset() },
+		reuse.DefaultOptions[AttributeKey](), //.
+	) //WithEnableChecker()
+
+	reuse.CreatePool[AttributePrimaryKey](
+		func() *AttributePrimaryKey { return &AttributePrimaryKey{} },
+		func(a *AttributePrimaryKey) { a.reset() },
+		reuse.DefaultOptions[AttributePrimaryKey](), //.
+	) //WithEnableChecker()
+
+	reuse.CreatePool[AttributeComment](
+		func() *AttributeComment { return &AttributeComment{} },
+		func(a *AttributeComment) { a.reset() },
+		reuse.DefaultOptions[AttributeComment](), //.
+	) //WithEnableChecker()
+
+	reuse.CreatePool[AttributeCollate](
+		func() *AttributeCollate { return &AttributeCollate{} },
+		func(a *AttributeCollate) { a.reset() },
+		reuse.DefaultOptions[AttributeCollate](), //.
+	) //WithEnableChecker()
+
+	reuse.CreatePool[AttributeColumnFormat](
+		func() *AttributeColumnFormat { return &AttributeColumnFormat{} },
+		func(a *AttributeColumnFormat) { a.reset() },
+		reuse.DefaultOptions[AttributeColumnFormat](), //.
+	) //WithEnableChecker()
+
+	reuse.CreatePool[AttributeStorage](
+		func() *AttributeStorage { return &AttributeStorage{} },
+		func(a *AttributeStorage) { a.reset() },
+		reuse.DefaultOptions[AttributeStorage](), //.
+	) //WithEnableChecker()
+
+	reuse.CreatePool[AttributeCheckConstraint](
+		func() *AttributeCheckConstraint { return &AttributeCheckConstraint{} },
+		func(a *AttributeCheckConstraint) { a.reset() },
+		reuse.DefaultOptions[AttributeCheckConstraint](), //.
+	) //WithEnableChecker()
+
+	reuse.CreatePool[AttributeGeneratedAlways](
+		func() *AttributeGeneratedAlways { return &AttributeGeneratedAlways{} },
+		func(a *AttributeGeneratedAlways) { a.reset() },
+		reuse.DefaultOptions[AttributeGeneratedAlways](), //.
+	) //WithEnableChecker()
+
+	reuse.CreatePool[AttributeLowCardinality](
+		func() *AttributeLowCardinality { return &AttributeLowCardinality{} },
+		func(a *AttributeLowCardinality) { a.reset() },
+		reuse.DefaultOptions[AttributeLowCardinality](), //.
+	) //WithEnableChecker()
+
+	reuse.CreatePool[KeyPart](
+		func() *KeyPart { return &KeyPart{} },
+		func(k *KeyPart) { k.reset() },
+		reuse.DefaultOptions[KeyPart](), //.
+	) //WithEnableChecker()
+
+	reuse.CreatePool[AttributeReference](
+		func() *AttributeReference { return &AttributeReference{} },
+		func(a *AttributeReference) { a.reset() },
+		reuse.DefaultOptions[AttributeReference](), //.
+	) //WithEnableChecker()
+
+	reuse.CreatePool[AttributeOnUpdate](
+		func() *AttributeOnUpdate { return &AttributeOnUpdate{} },
+		func(a *AttributeOnUpdate) { a.reset() },
+		reuse.DefaultOptions[AttributeOnUpdate](), //.
+	) //WithEnableChecker()
+
+	reuse.CreatePool[IndexOption](
+		func() *IndexOption { return &IndexOption{} },
+		func(i *IndexOption) { i.reset() },
+		reuse.DefaultOptions[IndexOption](), //.
+	) //WithEnableChecker()
+
+	reuse.CreatePool[PrimaryKeyIndex](
+		func() *PrimaryKeyIndex { return &PrimaryKeyIndex{} },
+		func(p *PrimaryKeyIndex) { p.reset() },
+		reuse.DefaultOptions[PrimaryKeyIndex](), //.
+	) //WithEnableChecker()
+
+	reuse.CreatePool[Index](
+		func() *Index { return &Index{} },
+		func(i *Index) { i.reset() },
+		reuse.DefaultOptions[Index](), //.
+	) //WithEnableChecker()
+
+	reuse.CreatePool[UniqueIndex](
+		func() *UniqueIndex { return &UniqueIndex{} },
+		func(u *UniqueIndex) { u.reset() },
+		reuse.DefaultOptions[UniqueIndex](), //.
+	) //WithEnableChecker()
+
+	reuse.CreatePool[ForeignKey](
+		func() *ForeignKey { return &ForeignKey{} },
+		func(f *ForeignKey) { f.reset() },
+		reuse.DefaultOptions[ForeignKey](), //.
+	) //WithEnableChecker()
+
+	reuse.CreatePool[FullTextIndex](
+		func() *FullTextIndex { return &FullTextIndex{} },
+		func(f *FullTextIndex) { f.reset() },
+		reuse.DefaultOptions[FullTextIndex](), //.
+	) //WithEnableChecker()
+
+	reuse.CreatePool[CheckIndex](
+		func() *CheckIndex { return &CheckIndex{} },
+		func(c *CheckIndex) { c.reset() },
+		reuse.DefaultOptions[CheckIndex](), //.
+	) //WithEnableChecker()
+
+	reuse.CreatePool[TableOptionProperties](
+		func() *TableOptionProperties { return &TableOptionProperties{} },
+		func(t *TableOptionProperties) { t.reset() },
+		reuse.DefaultOptions[TableOptionProperties](), //.
+	) //WithEnableChecker()
+
+	reuse.CreatePool[Property](
+		func() *Property { return &Property{} },
+		func(p *Property) { p.reset() },
+		reuse.DefaultOptions[Property](), //.
+	) //WithEnableChecker()
+
+	reuse.CreatePool[TableOptionEngine](
+		func() *TableOptionEngine { return &TableOptionEngine{} },
+		func(t *TableOptionEngine) { t.reset() },
+		reuse.DefaultOptions[TableOptionEngine](), //.
+	) //WithEnableChecker()
+
+	reuse.CreatePool[TableOptionEngineAttr](
+		func() *TableOptionEngineAttr { return &TableOptionEngineAttr{} },
+		func(t *TableOptionEngineAttr) { t.reset() },
+		reuse.DefaultOptions[TableOptionEngineAttr](), //.
+	) //WithEnableChecker()
+
+	reuse.CreatePool[TableOptionInsertMethod](
+		func() *TableOptionInsertMethod { return &TableOptionInsertMethod{} },
+		func(t *TableOptionInsertMethod) { t.reset() },
+		reuse.DefaultOptions[TableOptionInsertMethod](), //.
+	) //WithEnableChecker()
+
+	reuse.CreatePool[TableOptionSecondaryEngine](
+		func() *TableOptionSecondaryEngine { return &TableOptionSecondaryEngine{} },
+		func(t *TableOptionSecondaryEngine) { t.reset() },
+		reuse.DefaultOptions[TableOptionSecondaryEngine](), //.
+	) //WithEnableChecker()
+
+	reuse.CreatePool[TableOptionCharset](
+		func() *TableOptionCharset { return &TableOptionCharset{} },
+		func(t *TableOptionCharset) { t.reset() },
+		reuse.DefaultOptions[TableOptionCharset](), //.
+	) //WithEnableChecker()
+
+	reuse.CreatePool[TableOptionCollate](
+		func() *TableOptionCollate { return &TableOptionCollate{} },
+		func(t *TableOptionCollate) { t.reset() },
+		reuse.DefaultOptions[TableOptionCollate](), //.
+	) //WithEnableChecker()
+
+	reuse.CreatePool[TableOptionAUTOEXTEND_SIZE](
+		func() *TableOptionAUTOEXTEND_SIZE { return &TableOptionAUTOEXTEND_SIZE{} },
+		func(t *TableOptionAUTOEXTEND_SIZE) { t.reset() },
+		reuse.DefaultOptions[TableOptionAUTOEXTEND_SIZE](), //.
+	) //WithEnableChecker()
+
+	reuse.CreatePool[TableOptionAutoIncrement](
+		func() *TableOptionAutoIncrement { return &TableOptionAutoIncrement{} },
+		func(t *TableOptionAutoIncrement) { t.reset() },
+		reuse.DefaultOptions[TableOptionAutoIncrement](), //.
+	) //WithEnableChecker()
+
+	reuse.CreatePool[TableOptionComment](
+		func() *TableOptionComment { return &TableOptionComment{} },
+		func(t *TableOptionComment) { t.reset() },
+		reuse.DefaultOptions[TableOptionComment](), //.
+	) //WithEnableChecker()
+
+	reuse.CreatePool[TableOptionAvgRowLength](
+		func() *TableOptionAvgRowLength { return &TableOptionAvgRowLength{} },
+		func(t *TableOptionAvgRowLength) { t.reset() },
+		reuse.DefaultOptions[TableOptionAvgRowLength](), //.
+	) //WithEnableChecker()
+
+	reuse.CreatePool[TableOptionChecksum](
+		func() *TableOptionChecksum { return &TableOptionChecksum{} },
+		func(t *TableOptionChecksum) { t.reset() },
+		reuse.DefaultOptions[TableOptionChecksum](), //.
+	) //WithEnableChecker()
+
+	reuse.CreatePool[TableOptionCompression](
+		func() *TableOptionCompression { return &TableOptionCompression{} },
+		func(t *TableOptionCompression) { t.reset() },
+		reuse.DefaultOptions[TableOptionCompression](), //.
+	) //WithEnableChecker()
+
+	reuse.CreatePool[TableOptionConnection](
+		func() *TableOptionConnection { return &TableOptionConnection{} },
+		func(t *TableOptionConnection) { t.reset() },
+		reuse.DefaultOptions[TableOptionConnection](), //.
+	) //WithEnableChecker()
+
+	reuse.CreatePool[TableOptionPassword](
+		func() *TableOptionPassword { return &TableOptionPassword{} },
+		func(t *TableOptionPassword) { t.reset() },
+		reuse.DefaultOptions[TableOptionPassword](), //.
+	) //WithEnableChecker()
+
+	reuse.CreatePool[TableOptionKeyBlockSize](
+		func() *TableOptionKeyBlockSize { return &TableOptionKeyBlockSize{} },
+		func(t *TableOptionKeyBlockSize) { t.reset() },
+		reuse.DefaultOptions[TableOptionKeyBlockSize](), //.
+	) //WithEnableChecker()
+
+	reuse.CreatePool[TableOptionMaxRows](
+		func() *TableOptionMaxRows { return &TableOptionMaxRows{} },
+		func(t *TableOptionMaxRows) { t.reset() },
+		reuse.DefaultOptions[TableOptionMaxRows](), //.
+	) //WithEnableChecker()
+
+	reuse.CreatePool[TableOptionMinRows](
+		func() *TableOptionMinRows { return &TableOptionMinRows{} },
+		func(t *TableOptionMinRows) { t.reset() },
+		reuse.DefaultOptions[TableOptionMinRows](), //.
+	) //WithEnableChecker()
+
+	reuse.CreatePool[TableOptionDelayKeyWrite](
+		func() *TableOptionDelayKeyWrite { return &TableOptionDelayKeyWrite{} },
+		func(t *TableOptionDelayKeyWrite) { t.reset() },
+		reuse.DefaultOptions[TableOptionDelayKeyWrite](), //.
+	) //WithEnableChecker()
+
+	reuse.CreatePool[TableOptionRowFormat](
+		func() *TableOptionRowFormat { return &TableOptionRowFormat{} },
+		func(t *TableOptionRowFormat) { t.reset() },
+		reuse.DefaultOptions[TableOptionRowFormat](), //.
+	) //WithEnableChecker()
+
+	reuse.CreatePool[TableOptionStartTrans](
+		func() *TableOptionStartTrans { return &TableOptionStartTrans{} },
+		func(t *TableOptionStartTrans) { t.reset() },
+		reuse.DefaultOptions[TableOptionStartTrans](), //.
+	) //WithEnableChecker()
+
+	reuse.CreatePool[TableOptionSecondaryEngineAttr](
+		func() *TableOptionSecondaryEngineAttr { return &TableOptionSecondaryEngineAttr{} },
+		func(t *TableOptionSecondaryEngineAttr) { t.reset() },
+		reuse.DefaultOptions[TableOptionSecondaryEngineAttr](), //.
+	) //WithEnableChecker()
+
+	reuse.CreatePool[TableOptionStatsPersistent](
+		func() *TableOptionStatsPersistent { return &TableOptionStatsPersistent{} },
+		func(t *TableOptionStatsPersistent) { t.reset() },
+		reuse.DefaultOptions[TableOptionStatsPersistent](), //.
+	) //WithEnableChecker()
+
+	reuse.CreatePool[TableOptionStatsAutoRecalc](
+		func() *TableOptionStatsAutoRecalc { return &TableOptionStatsAutoRecalc{} },
+		func(t *TableOptionStatsAutoRecalc) { t.reset() },
+		reuse.DefaultOptions[TableOptionStatsAutoRecalc](), //.
+	) //WithEnableChecker()
+
+	reuse.CreatePool[TableOptionPackKeys](
+		func() *TableOptionPackKeys { return &TableOptionPackKeys{} },
+		func(t *TableOptionPackKeys) { t.reset() },
+		reuse.DefaultOptions[TableOptionPackKeys](), //.
+	) //WithEnableChecker()
+
+	reuse.CreatePool[TableOptionTablespace](
+		func() *TableOptionTablespace { return &TableOptionTablespace{} },
+		func(t *TableOptionTablespace) { t.reset() },
+		reuse.DefaultOptions[TableOptionTablespace](), //.
+	) //WithEnableChecker()
+
+	reuse.CreatePool[TableOptionDataDirectory](
+		func() *TableOptionDataDirectory { return &TableOptionDataDirectory{} },
+		func(t *TableOptionDataDirectory) { t.reset() },
+		reuse.DefaultOptions[TableOptionDataDirectory](), //.
+	) //WithEnableChecker()
+
+	reuse.CreatePool[TableOptionIndexDirectory](
+		func() *TableOptionIndexDirectory { return &TableOptionIndexDirectory{} },
+		func(t *TableOptionIndexDirectory) { t.reset() },
+		reuse.DefaultOptions[TableOptionIndexDirectory](), //.
+	) //WithEnableChecker()
+
+	reuse.CreatePool[TableOptionStorageMedia](
+		func() *TableOptionStorageMedia { return &TableOptionStorageMedia{} },
+		func(t *TableOptionStorageMedia) { t.reset() },
+		reuse.DefaultOptions[TableOptionStorageMedia](), //.
+	) //WithEnableChecker()
+
+	reuse.CreatePool[TableOptionStatsSamplePages](
+		func() *TableOptionStatsSamplePages { return &TableOptionStatsSamplePages{} },
+		func(t *TableOptionStatsSamplePages) { t.reset() },
+		reuse.DefaultOptions[TableOptionStatsSamplePages](), //.
+	) //WithEnableChecker()
+
+	reuse.CreatePool[TableOptionUnion](
+		func() *TableOptionUnion { return &TableOptionUnion{} },
+		func(t *TableOptionUnion) { t.reset() },
+		reuse.DefaultOptions[TableOptionUnion](), //.
+	) //WithEnableChecker()
+
+	reuse.CreatePool[TableOptionEncryption](
+		func() *TableOptionEncryption { return &TableOptionEncryption{} },
+		func(t *TableOptionEncryption) { t.reset() },
+		reuse.DefaultOptions[TableOptionEncryption](), //.
+	) //WithEnableChecker()
+
+	reuse.CreatePool[HashType](
+		func() *HashType { return &HashType{} },
+		func(h *HashType) { h.reset() },
+		reuse.DefaultOptions[HashType](), //.
+	) //WithEnableChecker()
+
+	reuse.CreatePool[KeyType](
+		func() *KeyType { return &KeyType{} },
+		func(k *KeyType) { k.reset() },
+		reuse.DefaultOptions[KeyType](), //.
+	) //WithEnableChecker()
+
+	reuse.CreatePool[RangeType](
+		func() *RangeType { return &RangeType{} },
+		func(r *RangeType) { r.reset() },
+		reuse.DefaultOptions[RangeType](), //.
+	) //WithEnableChecker()
+
+	reuse.CreatePool[ListType](
+		func() *ListType { return &ListType{} },
+		func(l *ListType) { l.reset() },
+		reuse.DefaultOptions[ListType](), //.
+	) //WithEnableChecker()
+
+	reuse.CreatePool[PartitionBy](
+		func() *PartitionBy { return &PartitionBy{} },
+		func(p *PartitionBy) { p.reset() },
+		reuse.DefaultOptions[PartitionBy](), //.
+	) //WithEnableChecker()
+
+	reuse.CreatePool[ValuesLessThan](
+		func() *ValuesLessThan { return &ValuesLessThan{} },
+		func(v *ValuesLessThan) { v.reset() },
+		reuse.DefaultOptions[ValuesLessThan](), //.
+	) //WithEnableChecker()
+
+	reuse.CreatePool[ValuesIn](
+		func() *ValuesIn { return &ValuesIn{} },
+		func(v *ValuesIn) { v.reset() },
+		reuse.DefaultOptions[ValuesIn](), //.
+	) //WithEnableChecker()
+
+	reuse.CreatePool[Partition](
+		func() *Partition { return &Partition{} },
+		func(p *Partition) { p.reset() },
+		reuse.DefaultOptions[Partition](), //.
+	) //WithEnableChecker()
+
+	reuse.CreatePool[SubPartition](
+		func() *SubPartition { return &SubPartition{} },
+		func(s *SubPartition) { s.reset() },
+		reuse.DefaultOptions[SubPartition](), //.
+	) //WithEnableChecker()
+
+	reuse.CreatePool[PartitionOption](
+		func() *PartitionOption { return &PartitionOption{} },
+		func(p *PartitionOption) { p.reset() },
+		reuse.DefaultOptions[PartitionOption](), //.
+	) //WithEnableChecker()
+
+	reuse.CreatePool[CreateIndex](
+		func() *CreateIndex { return &CreateIndex{} },
+		func(c *CreateIndex) { c.reset() },
+		reuse.DefaultOptions[CreateIndex](), //.
+	) //WithEnableChecker()
+
+	reuse.CreatePool[CreateRole](
+		func() *CreateRole { return &CreateRole{} },
+		func(c *CreateRole) { c.reset() },
+		reuse.DefaultOptions[CreateRole](), //.
+	) //WithEnableChecker()
+
+	reuse.CreatePool[Role](
+		func() *Role { return &Role{} },
+		func(r *Role) { r.reset() },
+		reuse.DefaultOptions[Role](), //.
+	) //WithEnableChecker()
+
+	reuse.CreatePool[User](
+		func() *User { return &User{} },
+		func(u *User) { u.reset() },
+		reuse.DefaultOptions[User](), //.
+	) //WithEnableChecker()
+
+	reuse.CreatePool[TlsOptionNone](
+		func() *TlsOptionNone { return &TlsOptionNone{} },
+		func(t *TlsOptionNone) { t.reset() },
+		reuse.DefaultOptions[TlsOptionNone](), //.
+	) //WithEnableChecker()
+
+	reuse.CreatePool[TlsOptionSSL](
+		func() *TlsOptionSSL { return &TlsOptionSSL{} },
+		func(t *TlsOptionSSL) { t.reset() },
+		reuse.DefaultOptions[TlsOptionSSL](), //.
+	) //WithEnableChecker()
+
+	reuse.CreatePool[TlsOptionX509](
+		func() *TlsOptionX509 { return &TlsOptionX509{} },
+		func(t *TlsOptionX509) { t.reset() },
+		reuse.DefaultOptions[TlsOptionX509](), //.
+	) //WithEnableChecker()
+
+	reuse.CreatePool[TlsOptionCipher](
+		func() *TlsOptionCipher { return &TlsOptionCipher{} },
+		func(t *TlsOptionCipher) { t.reset() },
+		reuse.DefaultOptions[TlsOptionCipher](), //.
+	) //WithEnableChecker()
+
+	reuse.CreatePool[TlsOptionIssuer](
+		func() *TlsOptionIssuer { return &TlsOptionIssuer{} },
+		func(t *TlsOptionIssuer) { t.reset() },
+		reuse.DefaultOptions[TlsOptionIssuer](), //.
+	) //WithEnableChecker()
+
+	reuse.CreatePool[TlsOptionSubject](
+		func() *TlsOptionSubject { return &TlsOptionSubject{} },
+		func(t *TlsOptionSubject) { t.reset() },
+		reuse.DefaultOptions[TlsOptionSubject](), //.
+	) //WithEnableChecker()
+
+	reuse.CreatePool[TlsOptionSan](
+		func() *TlsOptionSan { return &TlsOptionSan{} },
+		func(t *TlsOptionSan) { t.reset() },
+		reuse.DefaultOptions[TlsOptionSan](), //.
+	) //WithEnableChecker()
+
+	reuse.CreatePool[ResourceOptionMaxQueriesPerHour](
+		func() *ResourceOptionMaxQueriesPerHour { return &ResourceOptionMaxQueriesPerHour{} },
+		func(r *ResourceOptionMaxQueriesPerHour) { r.reset() },
+		reuse.DefaultOptions[ResourceOptionMaxQueriesPerHour](), //.
+	) //WithEnableChecker()
+
+	reuse.CreatePool[ResourceOptionMaxUpdatesPerHour](
+		func() *ResourceOptionMaxUpdatesPerHour { return &ResourceOptionMaxUpdatesPerHour{} },
+		func(r *ResourceOptionMaxUpdatesPerHour) { r.reset() },
+		reuse.DefaultOptions[ResourceOptionMaxUpdatesPerHour](), //.
+	) //WithEnableChecker()
+
+	reuse.CreatePool[ResourceOptionMaxConnectionPerHour](
+		func() *ResourceOptionMaxConnectionPerHour { return &ResourceOptionMaxConnectionPerHour{} },
+		func(r *ResourceOptionMaxConnectionPerHour) { r.reset() },
+		reuse.DefaultOptions[ResourceOptionMaxConnectionPerHour](), //.
+	) //WithEnableChecker()
+
+	reuse.CreatePool[ResourceOptionMaxUserConnections](
+		func() *ResourceOptionMaxUserConnections { return &ResourceOptionMaxUserConnections{} },
+		func(r *ResourceOptionMaxUserConnections) { r.reset() },
+		reuse.DefaultOptions[ResourceOptionMaxUserConnections](), //.
+	) //WithEnableChecker()
+
+	reuse.CreatePool[UserMiscOptionPasswordExpireNone](
+		func() *UserMiscOptionPasswordExpireNone { return &UserMiscOptionPasswordExpireNone{} },
+		func(u *UserMiscOptionPasswordExpireNone) { u.reset() },
+		reuse.DefaultOptions[UserMiscOptionPasswordExpireNone](), //.
+	) //WithEnableChecker()
+
+	reuse.CreatePool[UserMiscOptionPasswordExpireDefault](
+		func() *UserMiscOptionPasswordExpireDefault { return &UserMiscOptionPasswordExpireDefault{} },
+		func(u *UserMiscOptionPasswordExpireDefault) { u.reset() },
+		reuse.DefaultOptions[UserMiscOptionPasswordExpireDefault](), //.
+	) //WithEnableChecker()
+
+	reuse.CreatePool[UserMiscOptionPasswordExpireNever](
+		func() *UserMiscOptionPasswordExpireNever { return &UserMiscOptionPasswordExpireNever{} },
+		func(u *UserMiscOptionPasswordExpireNever) { u.reset() },
+		reuse.DefaultOptions[UserMiscOptionPasswordExpireNever](), //.
+	) //WithEnableChecker()
+
+	reuse.CreatePool[UserMiscOptionPasswordExpireInterval](
+		func() *UserMiscOptionPasswordExpireInterval { return &UserMiscOptionPasswordExpireInterval{} },
+		func(u *UserMiscOptionPasswordExpireInterval) { u.reset() },
+		reuse.DefaultOptions[UserMiscOptionPasswordExpireInterval](), //.
+	) //WithEnableChecker()
+
+	reuse.CreatePool[UserMiscOptionPasswordHistoryDefault](
+		func() *UserMiscOptionPasswordHistoryDefault { return &UserMiscOptionPasswordHistoryDefault{} },
+		func(u *UserMiscOptionPasswordHistoryDefault) { u.reset() },
+		reuse.DefaultOptions[UserMiscOptionPasswordHistoryDefault](), //.
+	) //WithEnableChecker()
+
+	reuse.CreatePool[UserMiscOptionPasswordHistoryCount](
+		func() *UserMiscOptionPasswordHistoryCount { return &UserMiscOptionPasswordHistoryCount{} },
+		func(u *UserMiscOptionPasswordHistoryCount) { u.reset() },
+		reuse.DefaultOptions[UserMiscOptionPasswordHistoryCount](), //.
+	) //WithEnableChecker()
+
+	reuse.CreatePool[UserMiscOptionPasswordReuseIntervalDefault](
+		func() *UserMiscOptionPasswordReuseIntervalDefault {
+			return &UserMiscOptionPasswordReuseIntervalDefault{}
+		},
+		func(u *UserMiscOptionPasswordReuseIntervalDefault) { u.reset() },
+		reuse.DefaultOptions[UserMiscOptionPasswordReuseIntervalDefault](), //.
+	) //WithEnableChecker()
+
+	reuse.CreatePool[UserMiscOptionPasswordReuseIntervalCount](
+		func() *UserMiscOptionPasswordReuseIntervalCount { return &UserMiscOptionPasswordReuseIntervalCount{} },
+		func(u *UserMiscOptionPasswordReuseIntervalCount) { u.reset() },
+		reuse.DefaultOptions[UserMiscOptionPasswordReuseIntervalCount](), //.
+	) //WithEnableChecker()
+
+	reuse.CreatePool[UserMiscOptionPasswordRequireCurrentNone](
+		func() *UserMiscOptionPasswordRequireCurrentNone { return &UserMiscOptionPasswordRequireCurrentNone{} },
+		func(u *UserMiscOptionPasswordRequireCurrentNone) { u.reset() },
+		reuse.DefaultOptions[UserMiscOptionPasswordRequireCurrentNone](), //.
+	) //WithEnableChecker()
+
+	reuse.CreatePool[UserMiscOptionPasswordRequireCurrentDefault](
+		func() *UserMiscOptionPasswordRequireCurrentDefault {
+			return &UserMiscOptionPasswordRequireCurrentDefault{}
+		},
+		func(u *UserMiscOptionPasswordRequireCurrentDefault) { u.reset() },
+		reuse.DefaultOptions[UserMiscOptionPasswordRequireCurrentDefault](), //.
+	) //WithEnableChecker()
+
+	reuse.CreatePool[UserMiscOptionPasswordRequireCurrentOptional](
+		func() *UserMiscOptionPasswordRequireCurrentOptional {
+			return &UserMiscOptionPasswordRequireCurrentOptional{}
+		},
+		func(u *UserMiscOptionPasswordRequireCurrentOptional) { u.reset() },
+		reuse.DefaultOptions[UserMiscOptionPasswordRequireCurrentOptional](), //.
+	) //WithEnableChecker()
+
+	reuse.CreatePool[UserMiscOptionFailedLoginAttempts](
+		func() *UserMiscOptionFailedLoginAttempts { return &UserMiscOptionFailedLoginAttempts{} },
+		func(u *UserMiscOptionFailedLoginAttempts) { u.reset() },
+		reuse.DefaultOptions[UserMiscOptionFailedLoginAttempts](), //.
+	) //WithEnableChecker()
+
+	reuse.CreatePool[UserMiscOptionPasswordLockTimeCount](
+		func() *UserMiscOptionPasswordLockTimeCount { return &UserMiscOptionPasswordLockTimeCount{} },
+		func(u *UserMiscOptionPasswordLockTimeCount) { u.reset() },
+		reuse.DefaultOptions[UserMiscOptionPasswordLockTimeCount](), //.
+	) //WithEnableChecker()
+
+	reuse.CreatePool[UserMiscOptionPasswordLockTimeUnbounded](
+		func() *UserMiscOptionPasswordLockTimeUnbounded { return &UserMiscOptionPasswordLockTimeUnbounded{} },
+		func(u *UserMiscOptionPasswordLockTimeUnbounded) { u.reset() },
+		reuse.DefaultOptions[UserMiscOptionPasswordLockTimeUnbounded](), //.
+	) //WithEnableChecker()
+
+	reuse.CreatePool[UserMiscOptionAccountLock](
+		func() *UserMiscOptionAccountLock { return &UserMiscOptionAccountLock{} },
+		func(u *UserMiscOptionAccountLock) { u.reset() },
+		reuse.DefaultOptions[UserMiscOptionAccountLock](), //.
+	) //WithEnableChecker()
+
+	reuse.CreatePool[UserMiscOptionAccountUnlock](
+		func() *UserMiscOptionAccountUnlock { return &UserMiscOptionAccountUnlock{} },
+		func(u *UserMiscOptionAccountUnlock) { u.reset() },
+		reuse.DefaultOptions[UserMiscOptionAccountUnlock](), //.
+	) //WithEnableChecker()
+
+	reuse.CreatePool[CreateUser](
+		func() *CreateUser { return &CreateUser{} },
+		func(c *CreateUser) { c.reset() },
+		reuse.DefaultOptions[CreateUser](), //.
+	) //WithEnableChecker()
+
+	reuse.CreatePool[CreateAccount](
+		func() *CreateAccount { return &CreateAccount{} },
+		func(c *CreateAccount) { c.reset() },
+		reuse.DefaultOptions[CreateAccount](), //.
+	) //WithEnableChecker()
+
+	reuse.CreatePool[AccountAuthOption](
+		func() *AccountAuthOption { return &AccountAuthOption{} },
+		func(a *AccountAuthOption) { a.reset() },
+		reuse.DefaultOptions[AccountAuthOption](), //.
+	) //WithEnableChecker()
+
+	reuse.CreatePool[AccountIdentified](
+		func() *AccountIdentified { return &AccountIdentified{} },
+		func(a *AccountIdentified) { a.reset() },
+		reuse.DefaultOptions[AccountIdentified](), //.
+	) //WithEnableChecker()
+
+	reuse.CreatePool[AccountStatus](
+		func() *AccountStatus { return &AccountStatus{} },
+		func(a *AccountStatus) { a.reset() },
+		reuse.DefaultOptions[AccountStatus](), //.
+	) //WithEnableChecker()
+
+	reuse.CreatePool[AccountComment](
+		func() *AccountComment { return &AccountComment{} },
+		func(a *AccountComment) { a.reset() },
+		reuse.DefaultOptions[AccountComment](), //.
+	) //WithEnableChecker()
+
+	reuse.CreatePool[AccountCommentOrAttribute](
+		func() *AccountCommentOrAttribute { return &AccountCommentOrAttribute{} },
+		func(a *AccountCommentOrAttribute) { a.reset() },
+		reuse.DefaultOptions[AccountCommentOrAttribute](), //.
+	) //WithEnableChecker()
+
+	reuse.CreatePool[CreatePublication](
+		func() *CreatePublication { return &CreatePublication{} },
+		func(c *CreatePublication) { c.reset() },
+		reuse.DefaultOptions[CreatePublication](), //.
+	) //WithEnableChecker()
+
+	reuse.CreatePool[AttributeVisable](
+		func() *AttributeVisable { return &AttributeVisable{} },
+		func(a *AttributeVisable) { a.reset() },
+		reuse.DefaultOptions[AttributeVisable](), //.
+	) //WithEnableChecker()
+}
 
 type CreateOption interface {
 	NodeFormatter
@@ -46,10 +746,21 @@ func (node *CreateOptionCharset) Format(ctx *FmtCtx) {
 	ctx.WriteString(node.Charset)
 }
 
-func NewCreateOptionCharset(c string) *CreateOptionCharset {
-	return &CreateOptionCharset{
-		Charset: c,
-	}
+func (node CreateOptionCharset) TypeName() string { return "tree.CreateOptionCharset" }
+
+func (node *CreateOptionCharset) reset() {
+	*node = CreateOptionCharset{}
+}
+
+func (node *CreateOptionCharset) Free() {
+	reuse.Free[CreateOptionCharset](node, nil)
+}
+
+func NewCreateOptionCharset(i bool, c string) *CreateOptionCharset {
+	cc := reuse.Alloc[CreateOptionCharset](nil)
+	cc.IsDefault = i
+	cc.Charset = c
+	return cc
 }
 
 type CreateOptionCollate struct {
@@ -66,10 +777,21 @@ func (node *CreateOptionCollate) Format(ctx *FmtCtx) {
 	ctx.WriteString(node.Collate)
 }
 
-func NewCreateOptionCollate(c string) *CreateOptionCollate {
-	return &CreateOptionCollate{
-		Collate: c,
-	}
+func (node CreateOptionCollate) TypeName() string { return "tree.CreateOptionCollate" }
+
+func (node *CreateOptionCollate) reset() {
+	*node = CreateOptionCollate{}
+}
+
+func (node *CreateOptionCollate) Free() {
+	reuse.Free[CreateOptionCollate](node, nil)
+}
+
+func NewCreateOptionCollate(i bool, c string) *CreateOptionCollate {
+	cc := reuse.Alloc[CreateOptionCollate](nil)
+	cc.IsDefault = i
+	cc.Collate = c
+	return cc
 }
 
 type CreateOptionEncryption struct {
@@ -82,10 +804,20 @@ func (node *CreateOptionEncryption) Format(ctx *FmtCtx) {
 	ctx.WriteString(node.Encrypt)
 }
 
+func (node CreateOptionEncryption) TypeName() string { return "tree.CreateOptionEncryption" }
+
+func (node *CreateOptionEncryption) reset() {
+	*node = CreateOptionEncryption{}
+}
+
+func (node *CreateOptionEncryption) Free() {
+	reuse.Free[CreateOptionEncryption](node, nil)
+}
+
 func NewCreateOptionEncryption(e string) *CreateOptionEncryption {
-	return &CreateOptionEncryption{
-		Encrypt: e,
-	}
+	cr := reuse.Alloc[CreateOptionEncryption](nil)
+	cr.Encrypt = e
+	return cr
 }
 
 type SubscriptionOption struct {
@@ -94,11 +826,28 @@ type SubscriptionOption struct {
 	Publication Identifier
 }
 
+func NewSubscriptionOption(from Identifier, publication Identifier) *SubscriptionOption {
+	s := reuse.Alloc[SubscriptionOption](nil)
+	s.From = from
+	s.Publication = publication
+	return s
+}
+
 func (node *SubscriptionOption) Format(ctx *FmtCtx) {
 	ctx.WriteString(" from ")
 	node.From.Format(ctx)
 	ctx.WriteString(" publication ")
 	node.Publication.Format(ctx)
+}
+
+func (node SubscriptionOption) TypeName() string { return "tree.SubscriptionOption" }
+
+func (node *SubscriptionOption) reset() {
+	*node = SubscriptionOption{}
+}
+
+func (node *SubscriptionOption) Free() {
+	reuse.Free[SubscriptionOption](node, nil)
 }
 
 type CreateDatabase struct {
@@ -132,12 +881,38 @@ func (node *CreateDatabase) Format(ctx *FmtCtx) {
 func (node *CreateDatabase) GetStatementType() string { return "Create Database" }
 func (node *CreateDatabase) GetQueryType() string     { return QueryTypeDDL }
 
-func NewCreateDatabase(ine bool, name Identifier, opts []CreateOption) *CreateDatabase {
-	return &CreateDatabase{
-		IfNotExists:   ine,
-		Name:          name,
-		CreateOptions: opts,
+func (node CreateDatabase) TypeName() string { return "tree.CreateDatabase" }
+
+func (node *CreateDatabase) reset() {
+	if node.CreateOptions != nil {
+		for _, item := range node.CreateOptions {
+			switch opt := item.(type) {
+			case *CreateOptionCharset:
+				opt.Free()
+			case *CreateOptionCollate:
+				opt.Free()
+			case *CreateOptionEncryption:
+				opt.Free()
+			}
+		}
 	}
+	if node.SubscriptionOption != nil {
+		node.SubscriptionOption.Free()
+	}
+	*node = CreateDatabase{}
+}
+
+func (node *CreateDatabase) Free() {
+	reuse.Free[CreateDatabase](node, nil)
+}
+
+func NewCreateDatabase(ine bool, name Identifier, sub *SubscriptionOption, opts []CreateOption) *CreateDatabase {
+	cr := reuse.Alloc[CreateDatabase](nil)
+	cr.IfNotExists = ine
+	cr.Name = name
+	cr.SubscriptionOption = sub
+	cr.CreateOptions = opts
+	return cr
 }
 
 type CreateTable struct {
@@ -159,6 +934,10 @@ type CreateTable struct {
 	IsDynamicTable  bool
 	DTOptions       []TableOption
 	IsAsSelect      bool
+}
+
+func NewCreateTable() *CreateTable {
+	return reuse.Alloc[CreateTable](nil)
 }
 
 func (node *CreateTable) Format(ctx *FmtCtx) {
@@ -299,7 +1078,210 @@ func (node *CreateTable) Format(ctx *FmtCtx) {
 }
 
 func (node *CreateTable) GetStatementType() string { return "Create Table" }
-func (node *CreateTable) GetQueryType() string     { return QueryTypeDDL }
+
+func (node *CreateTable) GetQueryType() string { return QueryTypeDDL }
+
+func (node CreateTable) TypeName() string { return "tree.CreateTable" }
+
+func (node *CreateTable) reset() {
+
+	if node.Defs != nil {
+		for _, def := range node.Defs {
+			switch d := def.(type) {
+			case *ColumnTableDef:
+				d.Free()
+			case *PrimaryKeyIndex:
+				d.Free()
+			case *Index:
+				d.Free()
+			case *UniqueIndex:
+				d.Free()
+			case *ForeignKey:
+				d.Free()
+			case *FullTextIndex:
+				d.Free()
+			case *CheckIndex:
+				d.Free()
+			default:
+				if d != nil {
+					panic(fmt.Sprintf("miss Free for %v", def))
+				}
+			}
+		}
+	}
+
+	if node.Options != nil {
+		for _, item := range node.Options {
+			switch opt := item.(type) {
+			case *TableOptionProperties:
+				opt.Free()
+			case *TableOptionEngine:
+				opt.Free()
+			case *TableOptionEngineAttr:
+				opt.Free()
+			case *TableOptionInsertMethod:
+				opt.Free()
+			case *TableOptionSecondaryEngine:
+				opt.Free()
+			case *TableOptionSecondaryEngineNull:
+				panic("currently not used")
+			case *TableOptionCharset:
+				opt.Free()
+			case *TableOptionCollate:
+				opt.Free()
+			case *TableOptionAUTOEXTEND_SIZE:
+				opt.Free()
+			case *TableOptionAutoIncrement:
+				opt.Free()
+			case *TableOptionComment:
+				opt.Free()
+			case *TableOptionAvgRowLength:
+				opt.Free()
+			case *TableOptionChecksum:
+				opt.Free()
+			case *TableOptionCompression:
+				opt.Free()
+			case *TableOptionConnection:
+				opt.Free()
+			case *TableOptionPassword:
+				opt.Free()
+			case *TableOptionKeyBlockSize:
+				opt.Free()
+			case *TableOptionMaxRows:
+				opt.Free()
+			case *TableOptionMinRows:
+				opt.Free()
+			case *TableOptionDelayKeyWrite:
+				opt.Free()
+			case *TableOptionRowFormat:
+				opt.Free()
+			case *TableOptionStartTrans:
+				opt.Free()
+			case *TableOptionSecondaryEngineAttr:
+				opt.Free()
+			case *TableOptionStatsPersistent:
+				opt.Free()
+			case *TableOptionStatsAutoRecalc:
+				opt.Free()
+			case *TableOptionPackKeys:
+				opt.Free()
+			case *TableOptionTablespace:
+				opt.Free()
+			case *TableOptionDataDirectory:
+				opt.Free()
+			case *TableOptionIndexDirectory:
+				opt.Free()
+			case *TableOptionStorageMedia:
+				opt.Free()
+			case *TableOptionStatsSamplePages:
+				opt.Free()
+			case *TableOptionUnion:
+				opt.Free()
+			case *TableOptionEncryption:
+				opt.Free()
+			default:
+				if opt != nil {
+					panic(fmt.Sprintf("miss Free for %v", item))
+				}
+			}
+		}
+	}
+
+	if node.PartitionOption != nil {
+		node.PartitionOption.Free()
+	}
+
+	if node.ClusterByOption != nil {
+		node.ClusterByOption.Free()
+	}
+
+	// if node.AsSource != nil {
+	// 	reuse.Free[Select](node.AsSource, nil)
+	// }
+
+	if node.DTOptions != nil {
+		for _, item := range node.DTOptions {
+			switch opt := item.(type) {
+			case *TableOptionProperties:
+				opt.Free()
+			case *TableOptionEngine:
+				opt.Free()
+			case *TableOptionEngineAttr:
+				opt.Free()
+			case *TableOptionInsertMethod:
+				opt.Free()
+			case *TableOptionSecondaryEngine:
+				opt.Free()
+			case *TableOptionSecondaryEngineNull:
+				panic("currently not used")
+			case *TableOptionCharset:
+				opt.Free()
+			case *TableOptionCollate:
+				opt.Free()
+			case *TableOptionAUTOEXTEND_SIZE:
+				opt.Free()
+			case *TableOptionAutoIncrement:
+				opt.Free()
+			case *TableOptionComment:
+				opt.Free()
+			case *TableOptionAvgRowLength:
+				opt.Free()
+			case *TableOptionChecksum:
+				opt.Free()
+			case *TableOptionCompression:
+				opt.Free()
+			case *TableOptionConnection:
+				opt.Free()
+			case *TableOptionPassword:
+				opt.Free()
+			case *TableOptionKeyBlockSize:
+				opt.Free()
+			case *TableOptionMaxRows:
+				opt.Free()
+			case *TableOptionMinRows:
+				opt.Free()
+			case *TableOptionDelayKeyWrite:
+				opt.Free()
+			case *TableOptionRowFormat:
+				opt.Free()
+			case *TableOptionStartTrans:
+				opt.Free()
+			case *TableOptionSecondaryEngineAttr:
+				opt.Free()
+			case *TableOptionStatsPersistent:
+				opt.Free()
+			case *TableOptionStatsAutoRecalc:
+				opt.Free()
+			case *TableOptionPackKeys:
+				opt.Free()
+			case *TableOptionTablespace:
+				opt.Free()
+			case *TableOptionDataDirectory:
+				opt.Free()
+			case *TableOptionIndexDirectory:
+				opt.Free()
+			case *TableOptionStorageMedia:
+				opt.Free()
+			case *TableOptionStatsSamplePages:
+				opt.Free()
+			case *TableOptionUnion:
+				opt.Free()
+			case *TableOptionEncryption:
+				opt.Free()
+			default:
+				if opt != nil {
+					panic(fmt.Sprintf("miss Free for %v", item))
+				}
+			}
+		}
+	}
+
+	*node = CreateTable{}
+}
+
+func (node *CreateTable) Free() {
+	reuse.Free[CreateTable](node, nil)
+}
 
 type TableDef interface {
 	NodeFormatter
@@ -336,12 +1318,73 @@ func (node *ColumnTableDef) Format(ctx *FmtCtx) {
 	}
 }
 
-func NewColumnTableDef(n *UnresolvedName, t ResolvableTypeReference, a []ColumnAttribute) *ColumnTableDef {
-	return &ColumnTableDef{
-		Name:       n,
-		Type:       t,
-		Attributes: a,
+func (node ColumnTableDef) TypeName() string { return "tree.ColumnTableDef" }
+
+func (node *ColumnTableDef) reset() {
+	// if node.Name != nil {
+	// 	reuse.Free[UnresolvedName](node.Name, nil)
+	// }
+	if node.Attributes != nil {
+		for _, item := range node.Attributes {
+			switch opt := item.(type) {
+			case *AttributeNull:
+				opt.Free()
+			case *AttributeDefault:
+				opt.Free()
+			case *AttributeAutoIncrement:
+				opt.Free()
+			case *AttributeUniqueKey:
+				opt.Free()
+			case *AttributeUnique:
+				opt.Free()
+			case *AttributeKey:
+				opt.Free()
+			case *AttributePrimaryKey:
+				opt.Free()
+			case *AttributeComment:
+				opt.Free()
+			case *AttributeCollate:
+				opt.Free()
+			case *AttributeColumnFormat:
+				opt.Free()
+			case *AttributeStorage:
+				opt.Free()
+			case *AttributeCheckConstraint:
+				opt.Free()
+			case *AttributeGeneratedAlways:
+				opt.Free()
+			case *AttributeLowCardinality:
+				opt.Free()
+			case *AttributeReference:
+				opt.Free()
+			case *AttributeAutoRandom:
+				panic("currently not used")
+			case *AttributeOnUpdate:
+				opt.Free()
+			case *AttributeVisable:
+				opt.Free()
+			case *KeyPart:
+				opt.Free()
+			default:
+				if opt != nil {
+					panic(fmt.Sprintf("miss Free for %v", item))
+				}
+			}
+		}
 	}
+	*node = ColumnTableDef{}
+}
+
+func (node *ColumnTableDef) Free() {
+	reuse.Free[ColumnTableDef](node, nil)
+}
+
+func NewColumnTableDef(n *UnresolvedName, t ResolvableTypeReference, a []ColumnAttribute) *ColumnTableDef {
+	co := reuse.Alloc[ColumnTableDef](nil)
+	co.Name = n
+	co.Type = t
+	co.Attributes = a
+	return co
 }
 
 // column attribute
@@ -355,7 +1398,7 @@ type columnAttributeImpl struct {
 
 type AttributeNull struct {
 	columnAttributeImpl
-	Is bool //true NULL (default); false NOT NULL
+	Is bool // true NULL (default); false NOT NULL
 }
 
 func (node *AttributeNull) Format(ctx *FmtCtx) {
@@ -366,10 +1409,20 @@ func (node *AttributeNull) Format(ctx *FmtCtx) {
 	}
 }
 
+func (node AttributeNull) TypeName() string { return "tree.AttributeNull" }
+
+func (node *AttributeNull) reset() {
+	*node = AttributeNull{}
+}
+
+func (node *AttributeNull) Free() {
+	reuse.Free[AttributeNull](node, nil)
+}
+
 func NewAttributeNull(b bool) *AttributeNull {
-	return &AttributeNull{
-		Is: b,
-	}
+	a := reuse.Alloc[AttributeNull](nil)
+	a.Is = b
+	return a
 }
 
 type AttributeDefault struct {
@@ -382,10 +1435,20 @@ func (node *AttributeDefault) Format(ctx *FmtCtx) {
 	node.Expr.Format(ctx)
 }
 
+func (node AttributeDefault) TypeName() string { return "tree.AttributeDefault" }
+
+func (node *AttributeDefault) reset() {
+	*node = AttributeDefault{}
+}
+
+func (node *AttributeDefault) Free() {
+	reuse.Free[AttributeDefault](node, nil)
+}
+
 func NewAttributeDefault(e Expr) *AttributeDefault {
-	return &AttributeDefault{
-		Expr: e,
-	}
+	a := reuse.Alloc[AttributeDefault](nil)
+	a.Expr = e
+	return a
 }
 
 type AttributeAutoIncrement struct {
@@ -397,8 +1460,18 @@ func (node *AttributeAutoIncrement) Format(ctx *FmtCtx) {
 	ctx.WriteString("auto_increment")
 }
 
+func (node AttributeAutoIncrement) TypeName() string { return "tree.AttributeAutoIncrement" }
+
+func (node *AttributeAutoIncrement) reset() {
+	*node = AttributeAutoIncrement{}
+}
+
+func (node *AttributeAutoIncrement) Free() {
+	reuse.Free[AttributeAutoIncrement](node, nil)
+}
+
 func NewAttributeAutoIncrement() *AttributeAutoIncrement {
-	return &AttributeAutoIncrement{}
+	return reuse.Alloc[AttributeAutoIncrement](nil)
 }
 
 type AttributeUniqueKey struct {
@@ -409,8 +1482,18 @@ func (node *AttributeUniqueKey) Format(ctx *FmtCtx) {
 	ctx.WriteString("unique key")
 }
 
+func (node AttributeUniqueKey) TypeName() string { return "tree.AttributeUniqueKey" }
+
+func (node *AttributeUniqueKey) reset() {
+	*node = AttributeUniqueKey{}
+}
+
+func (node *AttributeUniqueKey) Free() {
+	reuse.Free[AttributeUniqueKey](node, nil)
+}
+
 func NewAttributeUniqueKey() *AttributeUniqueKey {
-	return &AttributeUniqueKey{}
+	return reuse.Alloc[AttributeUniqueKey](nil)
 }
 
 type AttributeUnique struct {
@@ -421,8 +1504,18 @@ func (node *AttributeUnique) Format(ctx *FmtCtx) {
 	ctx.WriteString("unique")
 }
 
+func (node AttributeUnique) TypeName() string { return "tree.AttributeUnique" }
+
+func (node *AttributeUnique) reset() {
+	*node = AttributeUnique{}
+}
+
+func (node *AttributeUnique) Free() {
+	reuse.Free[AttributeUnique](node, nil)
+}
+
 func NewAttributeUnique() *AttributeUnique {
-	return &AttributeUnique{}
+	return reuse.Alloc[AttributeUnique](nil)
 }
 
 type AttributeKey struct {
@@ -433,8 +1526,18 @@ func (node *AttributeKey) Format(ctx *FmtCtx) {
 	ctx.WriteString("key")
 }
 
+func (node AttributeKey) TypeName() string { return "tree.AttributeKey" }
+
+func (node *AttributeKey) reset() {
+	*node = AttributeKey{}
+}
+
+func (node *AttributeKey) Free() {
+	reuse.Free[AttributeKey](node, nil)
+}
+
 func NewAttributeKey() *AttributeKey {
-	return &AttributeKey{}
+	return reuse.Alloc[AttributeKey](nil)
 }
 
 type AttributePrimaryKey struct {
@@ -445,8 +1548,18 @@ func (node *AttributePrimaryKey) Format(ctx *FmtCtx) {
 	ctx.WriteString("primary key")
 }
 
+func (node AttributePrimaryKey) TypeName() string { return "tree.AttributePrimaryKey" }
+
+func (node *AttributePrimaryKey) reset() {
+	*node = AttributePrimaryKey{}
+}
+
+func (node *AttributePrimaryKey) Free() {
+	reuse.Free[AttributePrimaryKey](node, nil)
+}
+
 func NewAttributePrimaryKey() *AttributePrimaryKey {
-	return &AttributePrimaryKey{}
+	return reuse.Alloc[AttributePrimaryKey](nil)
 }
 
 type AttributeComment struct {
@@ -459,10 +1572,20 @@ func (node *AttributeComment) Format(ctx *FmtCtx) {
 	node.CMT.Format(ctx)
 }
 
+func (node AttributeComment) TypeName() string { return "tree.AttributeComment" }
+
+func (node *AttributeComment) reset() {
+	*node = AttributeComment{}
+}
+
+func (node *AttributeComment) Free() {
+	reuse.Free[AttributeComment](node, nil)
+}
+
 func NewAttributeComment(c Expr) *AttributeComment {
-	return &AttributeComment{
-		CMT: c,
-	}
+	ac := reuse.Alloc[AttributeComment](nil)
+	ac.CMT = c
+	return ac
 }
 
 type AttributeCollate struct {
@@ -475,10 +1598,20 @@ func (node *AttributeCollate) Format(ctx *FmtCtx) {
 	ctx.WriteString(node.Collate)
 }
 
+func (node AttributeCollate) TypeName() string { return "tree.AttributeCollate" }
+
+func (node *AttributeCollate) reset() {
+	*node = AttributeCollate{}
+}
+
+func (node *AttributeCollate) Free() {
+	reuse.Free[AttributeCollate](node, nil)
+}
+
 func NewAttributeCollate(c string) *AttributeCollate {
-	return &AttributeCollate{
-		Collate: c,
-	}
+	ac := reuse.Alloc[AttributeCollate](nil)
+	ac.Collate = c
+	return ac
 }
 
 type AttributeColumnFormat struct {
@@ -491,10 +1624,20 @@ func (node *AttributeColumnFormat) Format(ctx *FmtCtx) {
 	ctx.WriteString(node.ColumnFormat)
 }
 
+func (node AttributeColumnFormat) TypeName() string { return "tree.AttributeColumnFormat" }
+
+func (node *AttributeColumnFormat) reset() {
+	*node = AttributeColumnFormat{}
+}
+
+func (node *AttributeColumnFormat) Free() {
+	reuse.Free[AttributeColumnFormat](node, nil)
+}
+
 func NewAttributeColumnFormat(f string) *AttributeColumnFormat {
-	return &AttributeColumnFormat{
-		ColumnFormat: f,
-	}
+	ac := reuse.Alloc[AttributeColumnFormat](nil)
+	ac.ColumnFormat = f
+	return ac
 }
 
 type AttributeStorage struct {
@@ -507,10 +1650,20 @@ func (node *AttributeStorage) Format(ctx *FmtCtx) {
 	ctx.WriteString(node.Storage)
 }
 
+func (node AttributeStorage) TypeName() string { return "tree.AttributeStorage" }
+
+func (node *AttributeStorage) reset() {
+	*node = AttributeStorage{}
+}
+
+func (node *AttributeStorage) Free() {
+	reuse.Free[AttributeStorage](node, nil)
+}
+
 func NewAttributeStorage(s string) *AttributeStorage {
-	return &AttributeStorage{
-		Storage: s,
-	}
+	as := reuse.Alloc[AttributeStorage](nil)
+	as.Storage = s
+	return as
 }
 
 type AttributeCheckConstraint struct {
@@ -538,12 +1691,22 @@ func (node *AttributeCheckConstraint) Format(ctx *FmtCtx) {
 	}
 }
 
-func NewAttributeCheck(e Expr, f bool, n string) *AttributeCheckConstraint {
-	return &AttributeCheckConstraint{
-		Name:     n,
-		Expr:     e,
-		Enforced: f,
-	}
+func (node AttributeCheckConstraint) TypeName() string { return "tree.AttributeCheckConstraint" }
+
+func (node *AttributeCheckConstraint) reset() {
+	*node = AttributeCheckConstraint{}
+}
+
+func (node *AttributeCheckConstraint) Free() {
+	reuse.Free[AttributeCheckConstraint](node, nil)
+}
+
+func NewAttributeCheckConstraint(e Expr, f bool, n string) *AttributeCheckConstraint {
+	ac := reuse.Alloc[AttributeCheckConstraint](nil)
+	ac.Name = n
+	ac.Expr = e
+	ac.Enforced = f
+	return ac
 }
 
 type AttributeGeneratedAlways struct {
@@ -556,11 +1719,21 @@ func (node *AttributeGeneratedAlways) Format(ctx *FmtCtx) {
 	node.Expr.Format(ctx)
 }
 
+func (node AttributeGeneratedAlways) TypeName() string { return "tree.AttributeGeneratedAlways" }
+
+func (node *AttributeGeneratedAlways) reset() {
+	*node = AttributeGeneratedAlways{}
+}
+
+func (node *AttributeGeneratedAlways) Free() {
+	reuse.Free[AttributeGeneratedAlways](node, nil)
+}
+
 func NewAttributeGeneratedAlways(e Expr, s bool) *AttributeGeneratedAlways {
-	return &AttributeGeneratedAlways{
-		Expr:   e,
-		Stored: s,
-	}
+	ag := reuse.Alloc[AttributeGeneratedAlways](nil)
+	ag.Expr = e
+	ag.Stored = s
+	return ag
 }
 
 type AttributeLowCardinality struct {
@@ -571,8 +1744,18 @@ func (node *AttributeLowCardinality) Format(ctx *FmtCtx) {
 	ctx.WriteString("low_cardinality")
 }
 
+func (node AttributeLowCardinality) TypeName() string { return "tree.AttributeLowCardinality" }
+
+func (node *AttributeLowCardinality) reset() {
+	*node = AttributeLowCardinality{}
+}
+
+func (node *AttributeLowCardinality) Free() {
+	reuse.Free[AttributeLowCardinality](node, nil)
+}
+
 func NewAttributeLowCardinality() *AttributeLowCardinality {
-	return &AttributeLowCardinality{}
+	return reuse.Alloc[AttributeLowCardinality](nil)
 }
 
 type KeyPart struct {
@@ -612,12 +1795,26 @@ func (node *KeyPart) Format(ctx *FmtCtx) {
 	}
 }
 
-func NewKeyPart(c *UnresolvedName, l int, e Expr) *KeyPart {
-	return &KeyPart{
-		ColName: c,
-		Length:  l,
-		Expr:    e,
-	}
+func (node KeyPart) TypeName() string { return "tree.KeyPart" }
+
+func (node *KeyPart) reset() {
+	// if node.ColName != nil {
+	// 	reuse.Free[UnresolvedName](node.ColName, nil)
+	// }
+	*node = KeyPart{}
+}
+
+func (node *KeyPart) Free() {
+	reuse.Free[KeyPart](node, nil)
+}
+
+func NewKeyPart(c *UnresolvedName, l int, d Direction, e Expr) *KeyPart {
+	kp := reuse.Alloc[KeyPart](nil)
+	kp.ColName = c
+	kp.Length = l
+	kp.Direction = d
+	kp.Expr = e
+	return kp
 }
 
 // in reference definition
@@ -708,15 +1905,34 @@ func (node *AttributeReference) Format(ctx *FmtCtx) {
 	}
 }
 
-func NewAttributeReference(t *TableName, kps []*KeyPart, m MatchType,
-	od ReferenceOptionType, ou ReferenceOptionType) *AttributeReference {
-	return &AttributeReference{
-		TableName: t,
-		KeyParts:  kps,
-		Match:     m,
-		OnDelete:  od,
-		OnUpdate:  ou,
+func (node AttributeReference) TypeName() string { return "tree.AttributeReference" }
+
+func (node *AttributeReference) reset() {
+	// if node.TableName != nil {
+	// 	reuse.Free[TableName](node.TableName, nil)
+	// }
+	if node.KeyParts != nil {
+		for _, item := range node.KeyParts {
+			reuse.Free[KeyPart](item, nil)
+		}
 	}
+	*node = AttributeReference{}
+}
+
+func (node *AttributeReference) Free() {
+	reuse.Free[AttributeReference](node, nil)
+}
+
+func NewAttributeReference(t *TableName, kps []*KeyPart, m MatchType,
+	od ReferenceOptionType, ou ReferenceOptionType,
+) *AttributeReference {
+	ar := reuse.Alloc[AttributeReference](nil)
+	ar.TableName = t
+	ar.KeyParts = kps
+	ar.Match = m
+	ar.OnDelete = od
+	ar.OnUpdate = ou
+	return ar
 }
 
 type ReferenceOnRecord struct {
@@ -730,10 +1946,12 @@ type AttributeAutoRandom struct {
 }
 
 func NewAttributeAutoRandom(b int) *AttributeAutoRandom {
-	return &AttributeAutoRandom{
-		BitLength: b,
-	}
+	aa := reuse.Alloc[AttributeAutoRandom](nil)
+	aa.BitLength = b
+	return aa
 }
+
+func (node AttributeAutoRandom) TypeName() string { return "tree.AttributeAutoRandom" }
 
 type AttributeOnUpdate struct {
 	columnAttributeImpl
@@ -745,10 +1963,20 @@ func (node *AttributeOnUpdate) Format(ctx *FmtCtx) {
 	node.Expr.Format(ctx)
 }
 
+func (node AttributeOnUpdate) TypeName() string { return "tree.AttributeOnUpdate" }
+
+func (node *AttributeOnUpdate) reset() {
+	*node = AttributeOnUpdate{}
+}
+
+func (node *AttributeOnUpdate) Free() {
+	reuse.Free[AttributeOnUpdate](node, nil)
+}
+
 func NewAttributeOnUpdate(e Expr) *AttributeOnUpdate {
-	return &AttributeOnUpdate{
-		Expr: e,
-	}
+	ao := reuse.Alloc[AttributeOnUpdate](nil)
+	ao.Expr = e
+	return ao
 }
 
 type IndexType int
@@ -856,16 +2084,18 @@ func (node *IndexOption) Format(ctx *FmtCtx) {
 	}
 }
 
-func NewIndexOption(k uint64, i IndexType, p string, c string, v VisibleType, e string, se string) *IndexOption {
-	return &IndexOption{
-		KeyBlockSize:             k,
-		IType:                    i,
-		ParserName:               p,
-		Comment:                  c,
-		Visible:                  v,
-		EngineAttribute:          e,
-		SecondaryEngineAttribute: se,
-	}
+func (node IndexOption) TypeName() string { return "tree.IndexOption" }
+
+func (node *IndexOption) reset() {
+	*node = IndexOption{}
+}
+
+func (node *IndexOption) Free() {
+	reuse.Free[IndexOption](node, nil)
+}
+
+func NewIndexOption() *IndexOption {
+	return reuse.Alloc[IndexOption](nil)
 }
 
 type PrimaryKeyIndex struct {
@@ -904,13 +2134,31 @@ func (node *PrimaryKeyIndex) Format(ctx *FmtCtx) {
 	}
 }
 
-func NewPrimaryKeyIndex(k []*KeyPart, n string, e bool, io *IndexOption) *PrimaryKeyIndex {
-	return &PrimaryKeyIndex{
-		KeyParts:    k,
-		Name:        n,
-		Empty:       e,
-		IndexOption: io,
+func (node PrimaryKeyIndex) TypeName() string { return "tree.PrimaryKeyIndex" }
+
+func (node *PrimaryKeyIndex) reset() {
+	if node.KeyParts != nil {
+		for _, item := range node.KeyParts {
+			reuse.Free[KeyPart](item, nil)
+		}
 	}
+	if node.IndexOption != nil {
+		reuse.Free[IndexOption](node.IndexOption, nil)
+	}
+	*node = PrimaryKeyIndex{}
+}
+
+func (node *PrimaryKeyIndex) Free() {
+	reuse.Free[PrimaryKeyIndex](node, nil)
+}
+
+func NewPrimaryKeyIndex(k []*KeyPart, n string, e bool, io *IndexOption) *PrimaryKeyIndex {
+	pki := reuse.Alloc[PrimaryKeyIndex](nil)
+	pki.KeyParts = k
+	pki.Name = n
+	pki.Empty = e
+	pki.IndexOption = io
+	return pki
 }
 
 type Index struct {
@@ -950,13 +2198,32 @@ func (node *Index) Format(ctx *FmtCtx) {
 	}
 }
 
-func NewIndex(k []*KeyPart, n string, t IndexType, io *IndexOption) *Index {
-	return &Index{
-		KeyParts:    k,
-		Name:        n,
-		KeyType:     t,
-		IndexOption: io,
+func (node Index) TypeName() string { return "tree.Index" }
+
+func (node *Index) reset() {
+	if node.KeyParts != nil {
+		for _, item := range node.KeyParts {
+			reuse.Free[KeyPart](item, nil)
+		}
 	}
+	if node.IndexOption != nil {
+		reuse.Free[IndexOption](node.IndexOption, nil)
+	}
+	*node = Index{}
+}
+
+func (node *Index) Free() {
+	reuse.Free[Index](node, nil)
+}
+
+func NewIndex(ifn bool, k []*KeyPart, n string, t IndexType, io *IndexOption) *Index {
+	i := reuse.Alloc[Index](nil)
+	i.IfNotExists = ifn
+	i.KeyParts = k
+	i.Name = n
+	i.KeyType = t
+	i.IndexOption = io
+	return i
 }
 
 type UniqueIndex struct {
@@ -1003,13 +2270,31 @@ func (node *UniqueIndex) GetIndexName() string {
 	}
 }
 
-func NewUniqueIndex(k []*KeyPart, n string, e bool, io *IndexOption) *UniqueIndex {
-	return &UniqueIndex{
-		KeyParts:    k,
-		Name:        n,
-		Empty:       e,
-		IndexOption: io,
+func (node UniqueIndex) TypeName() string { return "tree.UniqueIndex" }
+
+func (node *UniqueIndex) reset() {
+	if node.KeyParts != nil {
+		for _, item := range node.KeyParts {
+			reuse.Free[KeyPart](item, nil)
+		}
 	}
+	if node.IndexOption != nil {
+		reuse.Free[IndexOption](node.IndexOption, nil)
+	}
+	*node = UniqueIndex{}
+}
+
+func (node *UniqueIndex) Free() {
+	reuse.Free[UniqueIndex](node, nil)
+}
+
+func NewUniqueIndex(k []*KeyPart, n string, e bool, io *IndexOption) *UniqueIndex {
+	ui := reuse.Alloc[UniqueIndex](nil)
+	ui.KeyParts = k
+	ui.Name = n
+	ui.Empty = e
+	ui.IndexOption = io
+	return ui
 }
 
 type ForeignKey struct {
@@ -1052,14 +2337,32 @@ func (node *ForeignKey) Format(ctx *FmtCtx) {
 	}
 }
 
-func NewForeignKey(ine bool, k []*KeyPart, n string, r *AttributeReference, e bool) *ForeignKey {
-	return &ForeignKey{
-		IfNotExists: ine,
-		KeyParts:    k,
-		Name:        n,
-		Refer:       r,
-		Empty:       e,
+func (node ForeignKey) TypeName() string { return "tree.ForeignKey" }
+
+func (node *ForeignKey) reset() {
+	if node.KeyParts != nil {
+		for _, item := range node.KeyParts {
+			reuse.Free[KeyPart](item, nil)
+		}
 	}
+	if node.Refer != nil {
+		reuse.Free[AttributeReference](node.Refer, nil)
+	}
+	*node = ForeignKey{}
+}
+
+func (node *ForeignKey) Free() {
+	reuse.Free[ForeignKey](node, nil)
+}
+
+func NewForeignKey(ine bool, k []*KeyPart, n string, r *AttributeReference, e bool) *ForeignKey {
+	fk := reuse.Alloc[ForeignKey](nil)
+	fk.IfNotExists = ine
+	fk.KeyParts = k
+	fk.Name = n
+	fk.Refer = r
+	fk.Empty = e
+	return fk
 }
 
 type FullTextIndex struct {
@@ -1094,13 +2397,31 @@ func (node *FullTextIndex) Format(ctx *FmtCtx) {
 	}
 }
 
-func NewFullTextIndex(k []*KeyPart, n string, e bool, io *IndexOption) *FullTextIndex {
-	return &FullTextIndex{
-		KeyParts:    k,
-		Name:        n,
-		Empty:       e,
-		IndexOption: io,
+func (node FullTextIndex) TypeName() string { return "tree.FullTextIndex" }
+
+func (node *FullTextIndex) reset() {
+	if node.KeyParts != nil {
+		for _, item := range node.KeyParts {
+			reuse.Free[KeyPart](item, nil)
+		}
 	}
+	if node.IndexOption != nil {
+		reuse.Free[IndexOption](node.IndexOption, nil)
+	}
+	*node = FullTextIndex{}
+}
+
+func (node *FullTextIndex) Free() {
+	reuse.Free[FullTextIndex](node, nil)
+}
+
+func NewFullTextIndex(k []*KeyPart, n string, e bool, io *IndexOption) *FullTextIndex {
+	fi := reuse.Alloc[FullTextIndex](nil)
+	fi.KeyParts = k
+	fi.Name = n
+	fi.Empty = e
+	fi.IndexOption = io
+	return fi
 }
 
 type CheckIndex struct {
@@ -1118,11 +2439,21 @@ func (node *CheckIndex) Format(ctx *FmtCtx) {
 	}
 }
 
+func (node CheckIndex) TypeName() string { return "tree.CheckIndex" }
+
+func (node *CheckIndex) reset() {
+	*node = CheckIndex{}
+}
+
+func (node *CheckIndex) Free() {
+	reuse.Free[CheckIndex](node, nil)
+}
+
 func NewCheckIndex(e Expr, en bool) *CheckIndex {
-	return &CheckIndex{
-		Expr:     e,
-		Enforced: en,
-	}
+	ci := reuse.Alloc[CheckIndex](nil)
+	ci.Expr = e
+	ci.Enforced = en
+	return ci
 }
 
 type TableOption interface {
@@ -1138,6 +2469,12 @@ type TableOptionProperties struct {
 	Preperties []Property
 }
 
+func NewTableOptionProperties(p []Property) *TableOptionProperties {
+	tp := reuse.Alloc[TableOptionProperties](nil)
+	tp.Preperties = p
+	return tp
+}
+
 func (node *TableOptionProperties) Format(ctx *FmtCtx) {
 	ctx.WriteString("properties")
 	if node.Preperties != nil {
@@ -1151,15 +2488,47 @@ func (node *TableOptionProperties) Format(ctx *FmtCtx) {
 	}
 }
 
+func (node TableOptionProperties) TypeName() string { return "tree.TableOptionProperties" }
+
+func (node *TableOptionProperties) reset() {
+	if node.Preperties != nil {
+		for _, item := range node.Preperties {
+			reuse.Free[Property](&item, nil)
+		}
+	}
+	*node = TableOptionProperties{}
+}
+
+func (node *TableOptionProperties) Free() {
+	reuse.Free[TableOptionProperties](node, nil)
+}
+
 type Property struct {
 	Key   string
 	Value string
+}
+
+func NewProperty(k, v string) *Property {
+	p := reuse.Alloc[Property](nil)
+	p.Key = k
+	p.Value = v
+	return p
 }
 
 func (node *Property) Format(ctx *FmtCtx) {
 	ctx.WriteString(node.Key)
 	ctx.WriteString(" = ")
 	ctx.WriteString(node.Value)
+}
+
+func (node Property) TypeName() string { return "tree.Property" }
+
+func (node *Property) reset() {
+	*node = Property{}
+}
+
+func (node *Property) Free() {
+	reuse.Free[Property](node, nil)
 }
 
 type TableOptionEngine struct {
@@ -1172,10 +2541,20 @@ func (node *TableOptionEngine) Format(ctx *FmtCtx) {
 	ctx.WriteString(node.Engine)
 }
 
+func (node TableOptionEngine) TypeName() string { return "tree.TableOptionEngine" }
+
+func (node *TableOptionEngine) reset() {
+	*node = TableOptionEngine{}
+}
+
+func (node *TableOptionEngine) Free() {
+	reuse.Free[TableOptionEngine](node, nil)
+}
+
 func NewTableOptionEngine(s string) *TableOptionEngine {
-	return &TableOptionEngine{
-		Engine: s,
-	}
+	tb := reuse.Alloc[TableOptionEngine](nil)
+	tb.Engine = s
+	return tb
 }
 
 type TableOptionEngineAttr struct {
@@ -1188,10 +2567,20 @@ func (node *TableOptionEngineAttr) Format(ctx *FmtCtx) {
 	ctx.WriteString(node.Engine)
 }
 
+func (node TableOptionEngineAttr) TypeName() string { return "tree.TableOptionEngineAttr" }
+
+func (node *TableOptionEngineAttr) reset() {
+	*node = TableOptionEngineAttr{}
+}
+
+func (node *TableOptionEngineAttr) Free() {
+	reuse.Free[TableOptionEngineAttr](node, nil)
+}
+
 func NewTableOptionEngineAttr(s string) *TableOptionEngineAttr {
-	return &TableOptionEngineAttr{
-		Engine: s,
-	}
+	tba := reuse.Alloc[TableOptionEngineAttr](nil)
+	tba.Engine = s
+	return tba
 }
 
 type TableOptionInsertMethod struct {
@@ -1204,10 +2593,20 @@ func (node *TableOptionInsertMethod) Format(ctx *FmtCtx) {
 	ctx.WriteString(node.Method)
 }
 
+func (node TableOptionInsertMethod) TypeName() string { return "tree.TableOptionInsertMethod" }
+
+func (node *TableOptionInsertMethod) reset() {
+	*node = TableOptionInsertMethod{}
+}
+
+func (node *TableOptionInsertMethod) Free() {
+	reuse.Free[TableOptionInsertMethod](node, nil)
+}
+
 func NewTableOptionInsertMethod(s string) *TableOptionInsertMethod {
-	return &TableOptionInsertMethod{
-		Method: s,
-	}
+	t := reuse.Alloc[TableOptionInsertMethod](nil)
+	t.Method = s
+	return t
 }
 
 type TableOptionSecondaryEngine struct {
@@ -1220,18 +2619,32 @@ func (node *TableOptionSecondaryEngine) Format(ctx *FmtCtx) {
 	ctx.WriteString(node.Engine)
 }
 
+func (node TableOptionSecondaryEngine) TypeName() string { return "tree.TableOptionSecondaryEngine" }
+
+func (node *TableOptionSecondaryEngine) reset() {
+	*node = TableOptionSecondaryEngine{}
+}
+
+func (node *TableOptionSecondaryEngine) Free() {
+	reuse.Free[TableOptionSecondaryEngine](node, nil)
+}
+
 func NewTableOptionSecondaryEngine(s string) *TableOptionSecondaryEngine {
-	return &TableOptionSecondaryEngine{
-		Engine: s,
-	}
+	t := reuse.Alloc[TableOptionSecondaryEngine](nil)
+	t.Engine = s
+	return t
 }
 
 type TableOptionSecondaryEngineNull struct {
 	tableOptionImpl
 }
 
+func (node TableOptionSecondaryEngineNull) TypeName() string {
+	return "tree.TableOptionSecondaryEngineNull"
+}
+
 func NewTableOptionSecondaryEngineNull() *TableOptionSecondaryEngineNull {
-	return &TableOptionSecondaryEngineNull{}
+	return reuse.Alloc[TableOptionSecondaryEngineNull](nil)
 }
 
 type TableOptionCharset struct {
@@ -1244,8 +2657,20 @@ func (node *TableOptionCharset) Format(ctx *FmtCtx) {
 	ctx.WriteString(node.Charset)
 }
 
+func (node TableOptionCharset) TypeName() string { return "tree.TableOptionCharset" }
+
+func (node *TableOptionCharset) reset() {
+	*node = TableOptionCharset{}
+}
+
+func (node *TableOptionCharset) Free() {
+	reuse.Free[TableOptionCharset](node, nil)
+}
+
 func NewTableOptionCharset(s string) *TableOptionCharset {
-	return &TableOptionCharset{Charset: s}
+	t := reuse.Alloc[TableOptionCharset](nil)
+	t.Charset = s
+	return t
 }
 
 type TableOptionCollate struct {
@@ -1258,10 +2683,20 @@ func (node *TableOptionCollate) Format(ctx *FmtCtx) {
 	ctx.WriteString(node.Collate)
 }
 
+func (node TableOptionCollate) TypeName() string { return "tree.TableOptionCollate" }
+
+func (node *TableOptionCollate) reset() {
+	*node = TableOptionCollate{}
+}
+
+func (node *TableOptionCollate) Free() {
+	reuse.Free[TableOptionCollate](node, nil)
+}
+
 func NewTableOptionCollate(s string) *TableOptionCollate {
-	return &TableOptionCollate{
-		Collate: s,
-	}
+	t := reuse.Alloc[TableOptionCollate](nil)
+	t.Collate = s
+	return t
 }
 
 type TableOptionAUTOEXTEND_SIZE struct {
@@ -1274,10 +2709,20 @@ func (node *TableOptionAUTOEXTEND_SIZE) Format(ctx *FmtCtx) {
 	ctx.WriteString(strconv.FormatUint(node.Value, 10))
 }
 
+func (node TableOptionAUTOEXTEND_SIZE) TypeName() string { return "tree.TableOptionAUTOEXTEND_SIZE" }
+
+func (node *TableOptionAUTOEXTEND_SIZE) reset() {
+	*node = TableOptionAUTOEXTEND_SIZE{}
+}
+
+func (node *TableOptionAUTOEXTEND_SIZE) Free() {
+	reuse.Free[TableOptionAUTOEXTEND_SIZE](node, nil)
+}
+
 func NewTableOptionAUTOEXTEND_SIZE(v uint64) *TableOptionAUTOEXTEND_SIZE {
-	return &TableOptionAUTOEXTEND_SIZE{
-		Value: v,
-	}
+	t := reuse.Alloc[TableOptionAUTOEXTEND_SIZE](nil)
+	t.Value = v
+	return t
 }
 
 type TableOptionAutoIncrement struct {
@@ -1290,10 +2735,20 @@ func (node *TableOptionAutoIncrement) Format(ctx *FmtCtx) {
 	ctx.WriteString(strconv.FormatUint(node.Value, 10))
 }
 
+func (node TableOptionAutoIncrement) TypeName() string { return "tree.TableOptionAutoIncrement" }
+
+func (node *TableOptionAutoIncrement) reset() {
+	*node = TableOptionAutoIncrement{}
+}
+
+func (node *TableOptionAutoIncrement) Free() {
+	reuse.Free[TableOptionAutoIncrement](node, nil)
+}
+
 func NewTableOptionAutoIncrement(v uint64) *TableOptionAutoIncrement {
-	return &TableOptionAutoIncrement{
-		Value: v,
-	}
+	t := reuse.Alloc[TableOptionAutoIncrement](nil)
+	t.Value = v
+	return t
 }
 
 type TableOptionComment struct {
@@ -1303,13 +2758,22 @@ type TableOptionComment struct {
 
 func (node *TableOptionComment) Format(ctx *FmtCtx) {
 	ctx.WriteString("comment = '" + node.Comment + "'")
-	//ctx.WriteString(node.Comment + "'")
+}
+
+func (node TableOptionComment) TypeName() string { return "tree.TableOptionComment" }
+
+func (node *TableOptionComment) reset() {
+	*node = TableOptionComment{}
+}
+
+func (node *TableOptionComment) Free() {
+	reuse.Free[TableOptionComment](node, nil)
 }
 
 func NewTableOptionComment(c string) *TableOptionComment {
-	return &TableOptionComment{
-		Comment: c,
-	}
+	t := reuse.Alloc[TableOptionComment](nil)
+	t.Comment = c
+	return t
 }
 
 type TableOptionAvgRowLength struct {
@@ -1322,10 +2786,20 @@ func (node *TableOptionAvgRowLength) Format(ctx *FmtCtx) {
 	ctx.WriteString(strconv.FormatUint(node.Length, 10))
 }
 
+func (node TableOptionAvgRowLength) TypeName() string { return "tree.TableOptionAvgRowLength" }
+
+func (node *TableOptionAvgRowLength) reset() {
+	*node = TableOptionAvgRowLength{}
+}
+
+func (node *TableOptionAvgRowLength) Free() {
+	reuse.Free[TableOptionAvgRowLength](node, nil)
+}
+
 func NewTableOptionAvgRowLength(l uint64) *TableOptionAvgRowLength {
-	return &TableOptionAvgRowLength{
-		Length: l,
-	}
+	t := reuse.Alloc[TableOptionAvgRowLength](nil)
+	t.Length = l
+	return t
 }
 
 type TableOptionChecksum struct {
@@ -1338,10 +2812,20 @@ func (node *TableOptionChecksum) Format(ctx *FmtCtx) {
 	ctx.WriteString(strconv.FormatUint(node.Value, 10))
 }
 
+func (node TableOptionChecksum) TypeName() string { return "tree.TableOptionChecksum" }
+
+func (node *TableOptionChecksum) reset() {
+	*node = TableOptionChecksum{}
+}
+
+func (node *TableOptionChecksum) Free() {
+	reuse.Free[TableOptionChecksum](node, nil)
+}
+
 func NewTableOptionChecksum(v uint64) *TableOptionChecksum {
-	return &TableOptionChecksum{
-		Value: v,
-	}
+	t := reuse.Alloc[TableOptionChecksum](nil)
+	t.Value = v
+	return t
 }
 
 type TableOptionCompression struct {
@@ -1354,10 +2838,20 @@ func (node *TableOptionCompression) Format(ctx *FmtCtx) {
 	ctx.WriteString(node.Compression)
 }
 
+func (node TableOptionCompression) TypeName() string { return "tree.TableOptionCompression" }
+
+func (node *TableOptionCompression) reset() {
+	*node = TableOptionCompression{}
+}
+
+func (node *TableOptionCompression) Free() {
+	reuse.Free[TableOptionCompression](node, nil)
+}
+
 func NewTableOptionCompression(c string) *TableOptionCompression {
-	return &TableOptionCompression{
-		Compression: c,
-	}
+	t := reuse.Alloc[TableOptionCompression](nil)
+	t.Compression = c
+	return t
 }
 
 type TableOptionConnection struct {
@@ -1370,10 +2864,20 @@ func (node *TableOptionConnection) Format(ctx *FmtCtx) {
 	ctx.WriteString(node.Connection)
 }
 
+func (node TableOptionConnection) TypeName() string { return "tree.TableOptionConnection" }
+
+func (node *TableOptionConnection) reset() {
+	*node = TableOptionConnection{}
+}
+
+func (node *TableOptionConnection) Free() {
+	reuse.Free[TableOptionConnection](node, nil)
+}
+
 func NewTableOptionConnection(c string) *TableOptionConnection {
-	return &TableOptionConnection{
-		Connection: c,
-	}
+	t := reuse.Alloc[TableOptionConnection](nil)
+	t.Connection = c
+	return t
 }
 
 type TableOptionPassword struct {
@@ -1386,10 +2890,20 @@ func (node *TableOptionPassword) Format(ctx *FmtCtx) {
 	ctx.WriteString(node.Password)
 }
 
+func (node TableOptionPassword) TypeName() string { return "tree.TableOptionPassword" }
+
+func (node *TableOptionPassword) reset() {
+	*node = TableOptionPassword{}
+}
+
+func (node *TableOptionPassword) Free() {
+	reuse.Free[TableOptionPassword](node, nil)
+}
+
 func NewTableOptionPassword(p string) *TableOptionPassword {
-	return &TableOptionPassword{
-		Password: p,
-	}
+	t := reuse.Alloc[TableOptionPassword](nil)
+	t.Password = p
+	return t
 }
 
 type TableOptionKeyBlockSize struct {
@@ -1402,10 +2916,20 @@ func (node *TableOptionKeyBlockSize) Format(ctx *FmtCtx) {
 	ctx.WriteString(strconv.FormatUint(node.Value, 10))
 }
 
+func (node TableOptionKeyBlockSize) TypeName() string { return "tree.TableOptionKeyBlockSize" }
+
+func (node *TableOptionKeyBlockSize) reset() {
+	*node = TableOptionKeyBlockSize{}
+}
+
+func (node *TableOptionKeyBlockSize) Free() {
+	reuse.Free[TableOptionKeyBlockSize](node, nil)
+}
+
 func NewTableOptionKeyBlockSize(v uint64) *TableOptionKeyBlockSize {
-	return &TableOptionKeyBlockSize{
-		Value: v,
-	}
+	t := reuse.Alloc[TableOptionKeyBlockSize](nil)
+	t.Value = v
+	return t
 }
 
 type TableOptionMaxRows struct {
@@ -1418,10 +2942,20 @@ func (node *TableOptionMaxRows) Format(ctx *FmtCtx) {
 	ctx.WriteString(strconv.FormatUint(node.Value, 10))
 }
 
+func (node TableOptionMaxRows) TypeName() string { return "tree.TableOptionMaxRows" }
+
+func (node *TableOptionMaxRows) reset() {
+	*node = TableOptionMaxRows{}
+}
+
+func (node *TableOptionMaxRows) Free() {
+	reuse.Free[TableOptionMaxRows](node, nil)
+}
+
 func NewTableOptionMaxRows(v uint64) *TableOptionMaxRows {
-	return &TableOptionMaxRows{
-		Value: v,
-	}
+	t := reuse.Alloc[TableOptionMaxRows](nil)
+	t.Value = v
+	return t
 }
 
 type TableOptionMinRows struct {
@@ -1434,10 +2968,20 @@ func (node *TableOptionMinRows) Format(ctx *FmtCtx) {
 	ctx.WriteString(strconv.FormatUint(node.Value, 10))
 }
 
+func (node TableOptionMinRows) TypeName() string { return "tree.TableOptionMinRows" }
+
+func (node *TableOptionMinRows) reset() {
+	*node = TableOptionMinRows{}
+}
+
+func (node *TableOptionMinRows) Free() {
+	reuse.Free[TableOptionMinRows](node, nil)
+}
+
 func NewTableOptionMinRows(v uint64) *TableOptionMinRows {
-	return &TableOptionMinRows{
-		Value: v,
-	}
+	t := reuse.Alloc[TableOptionMinRows](nil)
+	t.Value = v
+	return t
 }
 
 type TableOptionDelayKeyWrite struct {
@@ -1450,10 +2994,20 @@ func (node *TableOptionDelayKeyWrite) Format(ctx *FmtCtx) {
 	ctx.WriteString(strconv.FormatUint(node.Value, 10))
 }
 
+func (node TableOptionDelayKeyWrite) TypeName() string { return "tree.TableOptionDelayKeyWrite" }
+
+func (node *TableOptionDelayKeyWrite) reset() {
+	*node = TableOptionDelayKeyWrite{}
+}
+
+func (node *TableOptionDelayKeyWrite) Free() {
+	reuse.Free[TableOptionDelayKeyWrite](node, nil)
+}
+
 func NewTableOptionDelayKeyWrite(v uint64) *TableOptionDelayKeyWrite {
-	return &TableOptionDelayKeyWrite{
-		Value: v,
-	}
+	t := reuse.Alloc[TableOptionDelayKeyWrite](nil)
+	t.Value = v
+	return t
 }
 
 type RowFormatType uint64
@@ -1496,10 +3050,20 @@ func (node *TableOptionRowFormat) Format(ctx *FmtCtx) {
 	ctx.WriteString(node.Value.ToString())
 }
 
+func (node TableOptionRowFormat) TypeName() string { return "tree.TableOptionRowFormat" }
+
+func (node *TableOptionRowFormat) reset() {
+	*node = TableOptionRowFormat{}
+}
+
+func (node *TableOptionRowFormat) Free() {
+	reuse.Free[TableOptionRowFormat](node, nil)
+}
+
 func NewTableOptionRowFormat(v RowFormatType) *TableOptionRowFormat {
-	return &TableOptionRowFormat{
-		Value: v,
-	}
+	t := reuse.Alloc[TableOptionRowFormat](nil)
+	t.Value = v
+	return t
 }
 
 type TableOptionStartTrans struct {
@@ -1511,10 +3075,20 @@ func (node *TableOptionStartTrans) Format(ctx *FmtCtx) {
 	ctx.WriteString("START TRANSACTION")
 }
 
+func (node TableOptionStartTrans) TypeName() string { return "tree.TableOptionStartTrans" }
+
+func (node *TableOptionStartTrans) reset() {
+	*node = TableOptionStartTrans{}
+}
+
+func (node *TableOptionStartTrans) Free() {
+	reuse.Free[TableOptionStartTrans](node, nil)
+}
+
 func NewTTableOptionStartTrans(v bool) *TableOptionStartTrans {
-	return &TableOptionStartTrans{
-		Value: v,
-	}
+	t := reuse.Alloc[TableOptionStartTrans](nil)
+	t.Value = v
+	return t
 }
 
 type TableOptionSecondaryEngineAttr struct {
@@ -1527,10 +3101,22 @@ func (node *TableOptionSecondaryEngineAttr) Format(ctx *FmtCtx) {
 	ctx.WriteString(node.Attr)
 }
 
+func (node TableOptionSecondaryEngineAttr) TypeName() string {
+	return "tree.TableOptionSecondaryEngineAttr"
+}
+
+func (node *TableOptionSecondaryEngineAttr) reset() {
+	*node = TableOptionSecondaryEngineAttr{}
+}
+
+func (node *TableOptionSecondaryEngineAttr) Free() {
+	reuse.Free[TableOptionSecondaryEngineAttr](node, nil)
+}
+
 func NewTTableOptionSecondaryEngineAttr(v string) *TableOptionSecondaryEngineAttr {
-	return &TableOptionSecondaryEngineAttr{
-		Attr: v,
-	}
+	t := reuse.Alloc[TableOptionSecondaryEngineAttr](nil)
+	t.Attr = v
+	return t
 }
 
 type TableOptionStatsPersistent struct {
@@ -1548,14 +3134,24 @@ func (node *TableOptionStatsPersistent) Format(ctx *FmtCtx) {
 	}
 }
 
+func (node TableOptionStatsPersistent) TypeName() string { return "tree.TableOptionStatsPersistent" }
+
+func (node *TableOptionStatsPersistent) reset() {
+	*node = TableOptionStatsPersistent{}
+}
+
+func (node *TableOptionStatsPersistent) Free() {
+	reuse.Free[TableOptionStatsPersistent](node, nil)
+}
+
 func NewTableOptionStatsPersistent() *TableOptionStatsPersistent {
-	return &TableOptionStatsPersistent{}
+	return reuse.Alloc[TableOptionStatsPersistent](nil)
 }
 
 type TableOptionStatsAutoRecalc struct {
 	tableOptionImpl
 	Value   uint64
-	Default bool //false -- see Value; true -- Value is useless
+	Default bool // false -- see Value; true -- Value is useless
 }
 
 func (node *TableOptionStatsAutoRecalc) Format(ctx *FmtCtx) {
@@ -1567,11 +3163,18 @@ func (node *TableOptionStatsAutoRecalc) Format(ctx *FmtCtx) {
 	}
 }
 
-func NewTableOptionStatsAutoRecalc(v uint64, d bool) *TableOptionStatsAutoRecalc {
-	return &TableOptionStatsAutoRecalc{
-		Value:   v,
-		Default: d,
-	}
+func (node TableOptionStatsAutoRecalc) TypeName() string { return "tree.TableOptionStatsAutoRecalc" }
+
+func (node *TableOptionStatsAutoRecalc) reset() {
+	*node = TableOptionStatsAutoRecalc{}
+}
+
+func (node *TableOptionStatsAutoRecalc) Free() {
+	reuse.Free[TableOptionStatsAutoRecalc](node, nil)
+}
+
+func NewTableOptionStatsAutoRecalc() *TableOptionStatsAutoRecalc {
+	return reuse.Alloc[TableOptionStatsAutoRecalc](nil)
 }
 
 type TableOptionPackKeys struct {
@@ -1589,8 +3192,18 @@ func (node *TableOptionPackKeys) Format(ctx *FmtCtx) {
 	}
 }
 
-func NewTableOptionPackKeys(value int64) *TableOptionPackKeys {
-	return &TableOptionPackKeys{Value: value}
+func (node TableOptionPackKeys) TypeName() string { return "tree.TableOptionPackKeys" }
+
+func (node *TableOptionPackKeys) reset() {
+	*node = TableOptionPackKeys{}
+}
+
+func (node *TableOptionPackKeys) Free() {
+	reuse.Free[TableOptionPackKeys](node, nil)
+}
+
+func NewTableOptionPackKeys() *TableOptionPackKeys {
+	return reuse.Alloc[TableOptionPackKeys](nil)
 }
 
 type TableOptionTablespace struct {
@@ -1605,8 +3218,21 @@ func (node *TableOptionTablespace) Format(ctx *FmtCtx) {
 	ctx.WriteString(node.StorageOpt)
 }
 
+func (node TableOptionTablespace) TypeName() string { return "tree.TableOptionTablespace" }
+
+func (node *TableOptionTablespace) reset() {
+	*node = TableOptionTablespace{}
+}
+
+func (node *TableOptionTablespace) Free() {
+	reuse.Free[TableOptionTablespace](node, nil)
+}
+
 func NewTableOptionTablespace(n string, s string) *TableOptionTablespace {
-	return &TableOptionTablespace{Name: n, StorageOpt: s}
+	t := reuse.Alloc[TableOptionTablespace](nil)
+	t.Name = n
+	t.StorageOpt = s
+	return t
 }
 
 type TableOptionDataDirectory struct {
@@ -1619,8 +3245,20 @@ func (node *TableOptionDataDirectory) Format(ctx *FmtCtx) {
 	ctx.WriteString(node.Dir)
 }
 
+func (node TableOptionDataDirectory) TypeName() string { return "tree.TableOptionDataDirectory" }
+
+func (node *TableOptionDataDirectory) reset() {
+	*node = TableOptionDataDirectory{}
+}
+
+func (node *TableOptionDataDirectory) Free() {
+	reuse.Free[TableOptionDataDirectory](node, nil)
+}
+
 func NewTableOptionDataDirectory(d string) *TableOptionDataDirectory {
-	return &TableOptionDataDirectory{Dir: d}
+	t := reuse.Alloc[TableOptionDataDirectory](nil)
+	t.Dir = d
+	return t
 }
 
 type TableOptionIndexDirectory struct {
@@ -1633,10 +3271,20 @@ func (node *TableOptionIndexDirectory) Format(ctx *FmtCtx) {
 	ctx.WriteString(node.Dir)
 }
 
+func (node TableOptionIndexDirectory) TypeName() string { return "tree.TableOptionIndexDirectory" }
+
+func (node *TableOptionIndexDirectory) reset() {
+	*node = TableOptionIndexDirectory{}
+}
+
+func (node *TableOptionIndexDirectory) Free() {
+	reuse.Free[TableOptionIndexDirectory](node, nil)
+}
+
 func NewTableOptionIndexDirectory(d string) *TableOptionIndexDirectory {
-	return &TableOptionIndexDirectory{
-		Dir: d,
-	}
+	t := reuse.Alloc[TableOptionIndexDirectory](nil)
+	t.Dir = d
+	return t
 }
 
 type TableOptionStorageMedia struct {
@@ -1649,14 +3297,26 @@ func (node *TableOptionStorageMedia) Format(ctx *FmtCtx) {
 	ctx.WriteString(node.Media)
 }
 
+func (node TableOptionStorageMedia) TypeName() string { return "tree.TableOptionStorageMedia" }
+
+func (node *TableOptionStorageMedia) reset() {
+	*node = TableOptionStorageMedia{}
+}
+
+func (node *TableOptionStorageMedia) Free() {
+	reuse.Free[TableOptionStorageMedia](node, nil)
+}
+
 func NewTableOptionStorageMedia(m string) *TableOptionStorageMedia {
-	return &TableOptionStorageMedia{Media: m}
+	t := reuse.Alloc[TableOptionStorageMedia](nil)
+	t.Media = m
+	return t
 }
 
 type TableOptionStatsSamplePages struct {
 	tableOptionImpl
 	Value   uint64
-	Default bool //false -- see Value; true -- Value is useless
+	Default bool // false -- see Value; true -- Value is useless
 }
 
 func (node *TableOptionStatsSamplePages) Format(ctx *FmtCtx) {
@@ -1668,11 +3328,18 @@ func (node *TableOptionStatsSamplePages) Format(ctx *FmtCtx) {
 	}
 }
 
-func NewTableOptionStatsSamplePages(v uint64, d bool) *TableOptionStatsSamplePages {
-	return &TableOptionStatsSamplePages{
-		Value:   v,
-		Default: d,
-	}
+func (node TableOptionStatsSamplePages) TypeName() string { return "tree.TableOptionStatsSamplePages" }
+
+func (node *TableOptionStatsSamplePages) reset() {
+	*node = TableOptionStatsSamplePages{}
+}
+
+func (node *TableOptionStatsSamplePages) Free() {
+	reuse.Free[TableOptionStatsSamplePages](node, nil)
+}
+
+func NewTableOptionStatsSamplePages() *TableOptionStatsSamplePages {
+	return reuse.Alloc[TableOptionStatsSamplePages](nil)
 }
 
 type TableOptionUnion struct {
@@ -1686,8 +3353,20 @@ func (node *TableOptionUnion) Format(ctx *FmtCtx) {
 	ctx.WriteByte(')')
 }
 
+func (node TableOptionUnion) TypeName() string { return "tree.TableOptionUnion" }
+
+func (node *TableOptionUnion) reset() {
+	*node = TableOptionUnion{}
+}
+
+func (node *TableOptionUnion) Free() {
+	reuse.Free[TableOptionUnion](node, nil)
+}
+
 func NewTableOptionUnion(n TableNames) *TableOptionUnion {
-	return &TableOptionUnion{Names: n}
+	t := reuse.Alloc[TableOptionUnion](nil)
+	t.Names = n
+	return t
 }
 
 type TableOptionEncryption struct {
@@ -1700,8 +3379,20 @@ func (node *TableOptionEncryption) Format(ctx *FmtCtx) {
 	ctx.WriteString(node.Encryption)
 }
 
+func (node TableOptionEncryption) TypeName() string { return "tree.TableOptionEncryption" }
+
+func (node *TableOptionEncryption) reset() {
+	*node = TableOptionEncryption{}
+}
+
+func (node *TableOptionEncryption) Free() {
+	reuse.Free[TableOptionEncryption](node, nil)
+}
+
 func NewTableOptionEncryption(e string) *TableOptionEncryption {
-	return &TableOptionEncryption{Encryption: e}
+	t := reuse.Alloc[TableOptionEncryption](nil)
+	t.Encryption = e
+	return t
 }
 
 type PartitionType interface {
@@ -1730,11 +3421,21 @@ func (node *HashType) Format(ctx *FmtCtx) {
 	}
 }
 
+func (node HashType) TypeName() string { return "tree.HashType" }
+
+func (node *HashType) reset() {
+	*node = HashType{}
+}
+
+func (node *HashType) Free() {
+	reuse.Free[HashType](node, nil)
+}
+
 func NewHashType(l bool, e Expr) *HashType {
-	return &HashType{
-		Linear: l,
-		Expr:   e,
-	}
+	h := reuse.Alloc[HashType](nil)
+	h.Linear = l
+	h.Expr = e
+	return h
 }
 
 type KeyType struct {
@@ -1764,11 +3465,23 @@ func (node *KeyType) Format(ctx *FmtCtx) {
 	}
 }
 
-func NewKeyType(l bool, c []*UnresolvedName) *KeyType {
-	return &KeyType{
-		Linear:     l,
-		ColumnList: c,
-	}
+func (node KeyType) TypeName() string { return "tree.KeyType" }
+
+func (node *KeyType) reset() {
+	// if node.ColumnList != nil {
+	// 	for _, item := range node.ColumnList {
+	// 		reuse.Free[UnresolvedName](item, nil)
+	// 	}
+	// }
+	*node = KeyType{}
+}
+
+func (node *KeyType) Free() {
+	reuse.Free[KeyType](node, nil)
+}
+
+func NewKeyType() *KeyType {
+	return reuse.Alloc[KeyType](nil)
 }
 
 type RangeType struct {
@@ -1795,11 +3508,23 @@ func (node *RangeType) Format(ctx *FmtCtx) {
 	}
 }
 
-func NewRangeType(e Expr, c []*UnresolvedName) *RangeType {
-	return &RangeType{
-		Expr:       e,
-		ColumnList: c,
-	}
+func (node RangeType) TypeName() string { return "tree.RangeType" }
+
+func (node *RangeType) reset() {
+	// if node.ColumnList != nil {
+	// 	for _, item := range node.ColumnList {
+	// 		reuse.Free[UnresolvedName](item, nil)
+	// 	}
+	// }
+	*node = RangeType{}
+}
+
+func (node *RangeType) Free() {
+	reuse.Free[RangeType](node, nil)
+}
+
+func NewRangeType() *RangeType {
+	return reuse.Alloc[RangeType](nil)
 }
 
 type ListType struct {
@@ -1826,11 +3551,23 @@ func (node *ListType) Format(ctx *FmtCtx) {
 	}
 }
 
-func NewListType(e Expr, c []*UnresolvedName) *ListType {
-	return &ListType{
-		Expr:       e,
-		ColumnList: c,
-	}
+func (node ListType) TypeName() string { return "tree.ListType" }
+
+func (node *ListType) reset() {
+	// if node.ColumnList != nil {
+	// 	for _, item := range node.ColumnList {
+	// 		reuse.Free[UnresolvedName](item, nil)
+	// 	}
+	// }
+	*node = ListType{}
+}
+
+func (node *ListType) Free() {
+	reuse.Free[ListType](node, nil)
+}
+
+func NewListType() *ListType {
+	return reuse.Alloc[ListType](nil)
 }
 
 type PartitionBy struct {
@@ -1851,17 +3588,44 @@ func (node *PartitionBy) Format(ctx *FmtCtx) {
 	}
 }
 
-func NewPartitionBy(pt PartitionType, n uint64) *PartitionBy {
-	return &PartitionBy{
-		PType: pt,
-		Num:   n,
+func (node PartitionBy) TypeName() string { return "tree.PartitionBy" }
+
+func (node *PartitionBy) reset() {
+	switch t := node.PType.(type) {
+	case *HashType:
+		t.Free()
+	case *KeyType:
+		t.Free()
+	case *RangeType:
+		t.Free()
+	case *ListType:
+		t.Free()
+	default:
+		if t != nil {
+			panic(fmt.Sprintf("miss Free for %v", node.PType))
+		}
 	}
+
+	*node = PartitionBy{}
 }
 
-//type SubpartitionBy struct {
-//	SubPType PartitionType
-//	Num uint64
-//}
+func (node *PartitionBy) Free() {
+	reuse.Free[PartitionBy](node, nil)
+}
+
+func NewPartitionBy(typ PartitionType) *PartitionBy {
+	pb := reuse.Alloc[PartitionBy](nil)
+	pb.PType = typ
+	return pb
+}
+
+func NewPartitionBy2(issub bool, pt PartitionType, n uint64) *PartitionBy {
+	pb := reuse.Alloc[PartitionBy](nil)
+	pb.IsSubPartition = issub
+	pb.PType = pt
+	pb.Num = n
+	return pb
+}
 
 type Values interface {
 	NodeFormatter
@@ -1882,10 +3646,20 @@ func (node *ValuesLessThan) Format(ctx *FmtCtx) {
 	ctx.WriteByte(')')
 }
 
+func (node ValuesLessThan) TypeName() string { return "tree.ValuesLessThan" }
+
+func (node *ValuesLessThan) reset() {
+	*node = ValuesLessThan{}
+}
+
+func (node *ValuesLessThan) Free() {
+	reuse.Free[ValuesLessThan](node, nil)
+}
+
 func NewValuesLessThan(vl Exprs) *ValuesLessThan {
-	return &ValuesLessThan{
-		ValueList: vl,
-	}
+	v := reuse.Alloc[ValuesLessThan](nil)
+	v.ValueList = vl
+	return v
 }
 
 type ValuesIn struct {
@@ -1899,10 +3673,20 @@ func (node *ValuesIn) Format(ctx *FmtCtx) {
 	ctx.WriteByte(')')
 }
 
+func (node ValuesIn) TypeName() string { return "tree.ValuesIn" }
+
+func (node *ValuesIn) reset() {
+	*node = ValuesIn{}
+}
+
+func (node *ValuesIn) Free() {
+	reuse.Free[ValuesIn](node, nil)
+}
+
 func NewValuesIn(vl Exprs) *ValuesIn {
-	return &ValuesIn{
-		ValueList: vl,
-	}
+	vi := reuse.Alloc[ValuesIn](nil)
+	vi.ValueList = vl
+	return vi
 }
 
 type Partition struct {
@@ -1938,13 +3722,118 @@ func (node *Partition) Format(ctx *FmtCtx) {
 	}
 }
 
-func NewPartition(n Identifier, v Values, o []TableOption, s []*SubPartition) *Partition {
-	return &Partition{
-		Name:    n,
-		Values:  v,
-		Options: o,
-		Subs:    s,
+func (node Partition) TypeName() string { return "tree.Partition" }
+
+func (node *Partition) reset() {
+	if node.Options != nil {
+		for _, item := range node.Options {
+			switch opt := item.(type) {
+			case *TableOptionProperties:
+				opt.Free()
+			case *TableOptionEngine:
+				opt.Free()
+			case *TableOptionEngineAttr:
+				opt.Free()
+			case *TableOptionInsertMethod:
+				opt.Free()
+			case *TableOptionSecondaryEngine:
+				opt.Free()
+			case *TableOptionSecondaryEngineNull:
+				panic("currently not used")
+			case *TableOptionCharset:
+				opt.Free()
+			case *TableOptionCollate:
+				opt.Free()
+			case *TableOptionAUTOEXTEND_SIZE:
+				opt.Free()
+			case *TableOptionAutoIncrement:
+				opt.Free()
+			case *TableOptionComment:
+				opt.Free()
+			case *TableOptionAvgRowLength:
+				opt.Free()
+			case *TableOptionChecksum:
+				opt.Free()
+			case *TableOptionCompression:
+				opt.Free()
+			case *TableOptionConnection:
+				opt.Free()
+			case *TableOptionPassword:
+				opt.Free()
+			case *TableOptionKeyBlockSize:
+				opt.Free()
+			case *TableOptionMaxRows:
+				opt.Free()
+			case *TableOptionMinRows:
+				opt.Free()
+			case *TableOptionDelayKeyWrite:
+				opt.Free()
+			case *TableOptionRowFormat:
+				opt.Free()
+			case *TableOptionStartTrans:
+				opt.Free()
+			case *TableOptionSecondaryEngineAttr:
+				opt.Free()
+			case *TableOptionStatsPersistent:
+				opt.Free()
+			case *TableOptionStatsAutoRecalc:
+				opt.Free()
+			case *TableOptionPackKeys:
+				opt.Free()
+			case *TableOptionTablespace:
+				opt.Free()
+			case *TableOptionDataDirectory:
+				opt.Free()
+			case *TableOptionIndexDirectory:
+				opt.Free()
+			case *TableOptionStorageMedia:
+				opt.Free()
+			case *TableOptionStatsSamplePages:
+				opt.Free()
+			case *TableOptionUnion:
+				opt.Free()
+			case *TableOptionEncryption:
+				opt.Free()
+			default:
+				if opt != nil {
+					panic(fmt.Sprintf("miss Free for %v", item))
+				}
+			}
+		}
 	}
+
+	if node.Values != nil {
+		switch v := node.Values.(type) {
+		case *ValuesLessThan:
+			v.Free()
+		case *ValuesIn:
+			v.Free()
+		default:
+			if v != nil {
+				panic(fmt.Sprintf("miss Free for %v", node.Values))
+			}
+		}
+	}
+
+	if node.Subs != nil {
+		for _, item := range node.Subs {
+			item.Free()
+		}
+	}
+	*node = Partition{}
+}
+
+func (node *Partition) Free() {
+	reuse.Free[Partition](node, nil)
+}
+
+func NewPartition(n Identifier, v Values, o []TableOption, s []*SubPartition) *Partition {
+	p := reuse.Alloc[Partition](nil)
+	p.Name = n
+	p.Values = v
+	p.Options = o
+	p.Subs = s
+	return p
 }
 
 type SubPartition struct {
@@ -1966,20 +3855,126 @@ func (node *SubPartition) Format(ctx *FmtCtx) {
 	}
 }
 
-func NewSubPartition(n Identifier, o []TableOption) *SubPartition {
-	return &SubPartition{
-		Name:    n,
-		Options: o,
+func (node SubPartition) TypeName() string { return "tree.SubPartition" }
+
+func (node *SubPartition) reset() {
+	if node.Options != nil {
+		for _, item := range node.Options {
+			switch opt := item.(type) {
+			case *TableOptionProperties:
+				opt.Free()
+			case *TableOptionEngine:
+				opt.Free()
+			case *TableOptionEngineAttr:
+				opt.Free()
+			case *TableOptionInsertMethod:
+				opt.Free()
+			case *TableOptionSecondaryEngine:
+				opt.Free()
+			case *TableOptionSecondaryEngineNull:
+				panic("currently not used")
+			case *TableOptionCharset:
+				opt.Free()
+			case *TableOptionCollate:
+				opt.Free()
+			case *TableOptionAUTOEXTEND_SIZE:
+				opt.Free()
+			case *TableOptionAutoIncrement:
+				opt.Free()
+			case *TableOptionComment:
+				opt.Free()
+			case *TableOptionAvgRowLength:
+				opt.Free()
+			case *TableOptionChecksum:
+				opt.Free()
+			case *TableOptionCompression:
+				opt.Free()
+			case *TableOptionConnection:
+				opt.Free()
+			case *TableOptionPassword:
+				opt.Free()
+			case *TableOptionKeyBlockSize:
+				opt.Free()
+			case *TableOptionMaxRows:
+				opt.Free()
+			case *TableOptionMinRows:
+				opt.Free()
+			case *TableOptionDelayKeyWrite:
+				opt.Free()
+			case *TableOptionRowFormat:
+				opt.Free()
+			case *TableOptionStartTrans:
+				opt.Free()
+			case *TableOptionSecondaryEngineAttr:
+				opt.Free()
+			case *TableOptionStatsPersistent:
+				opt.Free()
+			case *TableOptionStatsAutoRecalc:
+				opt.Free()
+			case *TableOptionPackKeys:
+				opt.Free()
+			case *TableOptionTablespace:
+				opt.Free()
+			case *TableOptionDataDirectory:
+				opt.Free()
+			case *TableOptionIndexDirectory:
+				opt.Free()
+			case *TableOptionStorageMedia:
+				opt.Free()
+			case *TableOptionStatsSamplePages:
+				opt.Free()
+			case *TableOptionUnion:
+				opt.Free()
+			case *TableOptionEncryption:
+				opt.Free()
+			default:
+				if opt != nil {
+					panic(fmt.Sprintf("miss Free for %v", item))
+				}
+			}
+		}
 	}
+	*node = SubPartition{}
+}
+
+func (node *SubPartition) Free() {
+	reuse.Free[SubPartition](node, nil)
+}
+
+func NewSubPartition(n Identifier, o []TableOption) *SubPartition {
+	s := reuse.Alloc[SubPartition](nil)
+	s.Name = n
+	s.Options = o
+	return s
 }
 
 type ClusterByOption struct {
 	ColumnList []*UnresolvedName
 }
 
+func NewClusterByOption(c []*UnresolvedName) *ClusterByOption {
+	cb := reuse.Alloc[ClusterByOption](nil)
+	cb.ColumnList = c
+	return cb
+}
+
+func (node ClusterByOption) TypeName() string { return "tree.ClusterByOption" }
+
+func (node *ClusterByOption) reset() {
+	// if node.ColumnList != nil {
+	// 	for _, item := range node.ColumnList {
+	// 		reuse.Free[UnresolvedName](item, nil)
+	// 	}
+	// }
+}
+
+func (node *ClusterByOption) Free() {
+	reuse.Free[ClusterByOption](node, nil)
+}
+
 type PartitionOption struct {
 	statementImpl
-	PartBy     PartitionBy
+	PartBy     *PartitionBy
 	SubPartBy  *PartitionBy
 	Partitions []*Partition
 }
@@ -2002,12 +3997,33 @@ func (node *PartitionOption) Format(ctx *FmtCtx) {
 	}
 }
 
-func NewPartitionOption(pb *PartitionBy, spb *PartitionBy, parts []*Partition) *PartitionOption {
-	return &PartitionOption{
-		PartBy:     *pb,
-		SubPartBy:  spb,
-		Partitions: parts,
+func (node PartitionOption) TypeName() string { return "tree.PartitionOption" }
+
+func (node *PartitionOption) reset() {
+	if node.PartBy != nil {
+		node.PartBy.Free()
 	}
+	if node.SubPartBy != nil {
+		node.SubPartBy.Free()
+	}
+	if node.Partitions != nil {
+		for _, item := range node.Partitions {
+			item.Free()
+		}
+	}
+	*node = PartitionOption{}
+}
+
+func (node *PartitionOption) Free() {
+	reuse.Free[PartitionOption](node, nil)
+}
+
+func NewPartitionOption(pb *PartitionBy, spb *PartitionBy, parts []*Partition) *PartitionOption {
+	p := reuse.Alloc[PartitionOption](nil)
+	p.PartBy = pb
+	p.SubPartBy = spb
+	p.Partitions = parts
+	return p
 }
 
 type IndexCategory int
@@ -2081,16 +4097,35 @@ func (node *CreateIndex) Format(ctx *FmtCtx) {
 func (node *CreateIndex) GetStatementType() string { return "Create Index" }
 func (node *CreateIndex) GetQueryType() string     { return QueryTypeDDL }
 
-func NewCreateIndex(n Identifier, t *TableName, ife bool, it IndexCategory, k []*KeyPart, i *IndexOption, m []MiscOption) *CreateIndex {
-	return &CreateIndex{
-		Name:        n,
-		Table:       t,
-		IfNotExists: ife,
-		IndexCat:    it,
-		KeyParts:    k,
-		IndexOption: i,
-		MiscOption:  m,
+func (node CreateIndex) TypeName() string { return "tree.CreateIndex" }
+
+func (node *CreateIndex) reset() {
+	if node.KeyParts != nil {
+		for _, item := range node.KeyParts {
+			item.Free()
+		}
 	}
+	if node.IndexOption != nil {
+		node.IndexOption.Free()
+	}
+
+	*node = CreateIndex{}
+}
+
+func (node *CreateIndex) Free() {
+	reuse.Free[CreateIndex](node, nil)
+}
+
+func NewCreateIndex(n Identifier, t *TableName, ife bool, it IndexCategory, k []*KeyPart, i *IndexOption, m []MiscOption) *CreateIndex {
+	c := reuse.Alloc[CreateIndex](nil)
+	c.Name = n
+	c.Table = t
+	c.IfNotExists = ife
+	c.IndexCat = it
+	c.KeyParts = k
+	c.IndexOption = i
+	c.MiscOption = m
+	return c
 }
 
 type MiscOption interface {
@@ -2151,11 +4186,26 @@ func (node *CreateRole) Format(ctx *FmtCtx) {
 func (node *CreateRole) GetStatementType() string { return "Create Role" }
 func (node *CreateRole) GetQueryType() string     { return QueryTypeDCL }
 
-func NewCreateRole(ife bool, r []*Role) *CreateRole {
-	return &CreateRole{
-		IfNotExists: ife,
-		Roles:       r,
+func (node CreateRole) TypeName() string { return "tree.CreateRole" }
+
+func (node *CreateRole) reset() {
+	if node.Roles != nil {
+		for _, role := range node.Roles {
+			role.Free()
+		}
 	}
+	*node = CreateRole{}
+}
+
+func (node *CreateRole) Free() {
+	reuse.Free[CreateRole](node, nil)
+}
+
+func NewCreateRole(ife bool, r []*Role) *CreateRole {
+	cr := reuse.Alloc[CreateRole](nil)
+	cr.IfNotExists = ife
+	cr.Roles = r
+	return cr
 }
 
 type Role struct {
@@ -2167,10 +4217,21 @@ func (node *Role) Format(ctx *FmtCtx) {
 	ctx.WriteString(node.UserName)
 }
 
+func (node Role) TypeName() string { return "tree.Role" }
+
+func (node *Role) reset() {
+	*node = Role{}
+}
+
+func (node *Role) Free() {
+	// reuse.Free[Role](node, nil)
+}
+
 func NewRole(u string) *Role {
-	return &Role{
-		UserName: u,
-	}
+	// r := reuse.Alloc[Role](nil)
+	r := new(Role)
+	r.UserName = u
+	return r
 }
 
 type User struct {
@@ -2191,11 +4252,29 @@ func (node *User) Format(ctx *FmtCtx) {
 	}
 }
 
-func NewUser(u, h string) *User {
-	return &User{
-		Username: u,
-		Hostname: h,
+func (node User) TypeName() string { return "tree.User" }
+
+func (node *User) reset() {
+	if node.AuthOption != nil {
+		node.AuthOption.Free()
 	}
+	*node = User{}
+}
+
+func (node *User) Free() {
+	// if node.AuthOption != nil {
+	// 	node.AuthOption.Free()
+	// }
+	// reuse.Free[User](node, nil)
+}
+
+func NewUser(u, h string, a *AccountIdentified) *User {
+	// ur := reuse.Alloc[User](nil)
+	ur := new(User)
+	ur.Username = u
+	ur.Hostname = h
+	ur.AuthOption = a
+	return ur
 }
 
 type UsernameRecord struct {
@@ -2226,6 +4305,16 @@ func (node *TlsOptionNone) Format(ctx *FmtCtx) {
 	ctx.WriteString("none")
 }
 
+func (node TlsOptionNone) TypeName() string { return "tree.TlsOptionNone" }
+
+func (node *TlsOptionNone) reset() {
+	*node = TlsOptionNone{}
+}
+
+func (node *TlsOptionNone) Free() {
+	reuse.Free[TlsOptionNone](node, nil)
+}
+
 type TlsOptionSSL struct {
 	tlsOptionImpl
 }
@@ -2234,12 +4323,32 @@ func (node *TlsOptionSSL) Format(ctx *FmtCtx) {
 	ctx.WriteString("ssl")
 }
 
+func (node TlsOptionSSL) TypeName() string { return "tree.TlsOptionSSL" }
+
+func (node *TlsOptionSSL) reset() {
+	*node = TlsOptionSSL{}
+}
+
+func (node *TlsOptionSSL) Free() {
+	reuse.Free[TlsOptionSSL](node, nil)
+}
+
 type TlsOptionX509 struct {
 	tlsOptionImpl
 }
 
 func (node *TlsOptionX509) Format(ctx *FmtCtx) {
 	ctx.WriteString("x509")
+}
+
+func (node TlsOptionX509) TypeName() string { return "tree.TlsOptionX509" }
+
+func (node *TlsOptionX509) reset() {
+	*node = TlsOptionX509{}
+}
+
+func (node *TlsOptionX509) Free() {
+	reuse.Free[TlsOptionX509](node, nil)
 }
 
 type TlsOptionCipher struct {
@@ -2252,6 +4361,16 @@ func (node *TlsOptionCipher) Format(ctx *FmtCtx) {
 	ctx.WriteString(node.Cipher)
 }
 
+func (node TlsOptionCipher) TypeName() string { return "tree.TlsOptionCipher" }
+
+func (node *TlsOptionCipher) reset() {
+	*node = TlsOptionCipher{}
+}
+
+func (node *TlsOptionCipher) Free() {
+	reuse.Free[TlsOptionCipher](node, nil)
+}
+
 type TlsOptionIssuer struct {
 	tlsOptionImpl
 	Issuer string
@@ -2260,6 +4379,16 @@ type TlsOptionIssuer struct {
 func (node *TlsOptionIssuer) Format(ctx *FmtCtx) {
 	ctx.WriteString("issuer ")
 	ctx.WriteString(node.Issuer)
+}
+
+func (node TlsOptionIssuer) TypeName() string { return "tree.TlsOptionIssuer" }
+
+func (node *TlsOptionIssuer) reset() {
+	*node = TlsOptionIssuer{}
+}
+
+func (node *TlsOptionIssuer) Free() {
+	reuse.Free[TlsOptionIssuer](node, nil)
 }
 
 type TlsOptionSubject struct {
@@ -2272,6 +4401,16 @@ func (node *TlsOptionSubject) Format(ctx *FmtCtx) {
 	ctx.WriteString(node.Subject)
 }
 
+func (node TlsOptionSubject) TypeName() string { return "tree.TlsOptionSubject" }
+
+func (node *TlsOptionSubject) reset() {
+	*node = TlsOptionSubject{}
+}
+
+func (node *TlsOptionSubject) Free() {
+	reuse.Free[TlsOptionSubject](node, nil)
+}
+
 type TlsOptionSan struct {
 	tlsOptionImpl
 	San string
@@ -2280,6 +4419,16 @@ type TlsOptionSan struct {
 func (node *TlsOptionSan) Format(ctx *FmtCtx) {
 	ctx.WriteString("san ")
 	ctx.WriteString(node.San)
+}
+
+func (node TlsOptionSan) TypeName() string { return "tree.TlsOptionSan" }
+
+func (node *TlsOptionSan) reset() {
+	*node = TlsOptionSan{}
+}
+
+func (node *TlsOptionSan) Free() {
+	reuse.Free[TlsOptionSan](node, nil)
 }
 
 type ResourceOption interface {
@@ -2300,6 +4449,18 @@ func (node *ResourceOptionMaxQueriesPerHour) Format(ctx *FmtCtx) {
 	ctx.WriteString(strconv.FormatInt(node.Count, 10))
 }
 
+func (node ResourceOptionMaxQueriesPerHour) TypeName() string {
+	return "tree.ResourceOptionMaxQueriesPerHour"
+}
+
+func (node *ResourceOptionMaxQueriesPerHour) reset() {
+	*node = ResourceOptionMaxQueriesPerHour{}
+}
+
+func (node *ResourceOptionMaxQueriesPerHour) Free() {
+	reuse.Free[ResourceOptionMaxQueriesPerHour](node, nil)
+}
+
 type ResourceOptionMaxUpdatesPerHour struct {
 	resourceOptionImpl
 	Count int64
@@ -2308,6 +4469,18 @@ type ResourceOptionMaxUpdatesPerHour struct {
 func (node *ResourceOptionMaxUpdatesPerHour) Format(ctx *FmtCtx) {
 	ctx.WriteString("max_updates_per_hour ")
 	ctx.WriteString(strconv.FormatInt(node.Count, 10))
+}
+
+func (node ResourceOptionMaxUpdatesPerHour) TypeName() string {
+	return "tree.ResourceOptionMaxUpdatesPerHour"
+}
+
+func (node *ResourceOptionMaxUpdatesPerHour) reset() {
+	*node = ResourceOptionMaxUpdatesPerHour{}
+}
+
+func (node *ResourceOptionMaxUpdatesPerHour) Free() {
+	reuse.Free[ResourceOptionMaxUpdatesPerHour](node, nil)
 }
 
 type ResourceOptionMaxConnectionPerHour struct {
@@ -2320,6 +4493,18 @@ func (node *ResourceOptionMaxConnectionPerHour) Format(ctx *FmtCtx) {
 	ctx.WriteString(strconv.FormatInt(node.Count, 10))
 }
 
+func (node ResourceOptionMaxConnectionPerHour) TypeName() string {
+	return "tree.ResourceOptionMaxConnectionPerHour"
+}
+
+func (node *ResourceOptionMaxConnectionPerHour) reset() {
+	*node = ResourceOptionMaxConnectionPerHour{}
+}
+
+func (node *ResourceOptionMaxConnectionPerHour) Free() {
+	reuse.Free[ResourceOptionMaxConnectionPerHour](node, nil)
+}
+
 type ResourceOptionMaxUserConnections struct {
 	resourceOptionImpl
 	Count int64
@@ -2328,6 +4513,18 @@ type ResourceOptionMaxUserConnections struct {
 func (node *ResourceOptionMaxUserConnections) Format(ctx *FmtCtx) {
 	ctx.WriteString("max_user_connections ")
 	ctx.WriteString(strconv.FormatInt(node.Count, 10))
+}
+
+func (node ResourceOptionMaxUserConnections) TypeName() string {
+	return "tree.ResourceOptionMaxUserConnections"
+}
+
+func (node *ResourceOptionMaxUserConnections) reset() {
+	*node = ResourceOptionMaxUserConnections{}
+}
+
+func (node *ResourceOptionMaxUserConnections) Free() {
+	reuse.Free[ResourceOptionMaxUserConnections](node, nil)
 }
 
 type UserMiscOption interface {
@@ -2342,29 +4539,83 @@ type UserMiscOptionPasswordExpireNone struct {
 	userMiscOptionImpl
 }
 
+func NewUserMiscOptionPasswordExpireNone() *UserMiscOptionPasswordExpireNone {
+	return reuse.Alloc[UserMiscOptionPasswordExpireNone](nil)
+}
+
 func (node *UserMiscOptionPasswordExpireNone) Format(ctx *FmtCtx) {
 	ctx.WriteString("password expire")
+}
+
+func (node UserMiscOptionPasswordExpireNone) TypeName() string {
+	return "tree.UserMiscOptionPasswordExpireNone"
+}
+
+func (node *UserMiscOptionPasswordExpireNone) reset() {
+	*node = UserMiscOptionPasswordExpireNone{}
+}
+
+func (node *UserMiscOptionPasswordExpireNone) Free() {
+	reuse.Free[UserMiscOptionPasswordExpireNone](node, nil)
 }
 
 type UserMiscOptionPasswordExpireDefault struct {
 	userMiscOptionImpl
 }
 
+func NewUserMiscOptionPasswordExpireDefault() *UserMiscOptionPasswordExpireDefault {
+	return reuse.Alloc[UserMiscOptionPasswordExpireDefault](nil)
+}
+
 func (node *UserMiscOptionPasswordExpireDefault) Format(ctx *FmtCtx) {
 	ctx.WriteString("password expire default")
+}
+
+func (node UserMiscOptionPasswordExpireDefault) TypeName() string {
+	return "tree.UserMiscOptionPasswordExpireDefault"
+}
+
+func (node *UserMiscOptionPasswordExpireDefault) reset() {
+	*node = UserMiscOptionPasswordExpireDefault{}
+}
+
+func (node *UserMiscOptionPasswordExpireDefault) Free() {
+	reuse.Free[UserMiscOptionPasswordExpireDefault](node, nil)
 }
 
 type UserMiscOptionPasswordExpireNever struct {
 	userMiscOptionImpl
 }
 
+func NewUserMiscOptionPasswordExpireNever() *UserMiscOptionPasswordExpireNever {
+	return reuse.Alloc[UserMiscOptionPasswordExpireNever](nil)
+}
+
 func (node *UserMiscOptionPasswordExpireNever) Format(ctx *FmtCtx) {
 	ctx.WriteString("password expire never")
+}
+
+func (node UserMiscOptionPasswordExpireNever) TypeName() string {
+	return "tree.UserMiscOptionPasswordExpireNever"
+}
+
+func (node *UserMiscOptionPasswordExpireNever) reset() {
+	*node = UserMiscOptionPasswordExpireNever{}
+}
+
+func (node *UserMiscOptionPasswordExpireNever) Free() {
+	reuse.Free[UserMiscOptionPasswordExpireNever](node, nil)
 }
 
 type UserMiscOptionPasswordExpireInterval struct {
 	userMiscOptionImpl
 	Value int64
+}
+
+func NewUserMiscOptionPasswordExpireInterval(v int64) *UserMiscOptionPasswordExpireInterval {
+	pi := reuse.Alloc[UserMiscOptionPasswordExpireInterval](nil)
+	pi.Value = v
+	return pi
 }
 
 func (node *UserMiscOptionPasswordExpireInterval) Format(ctx *FmtCtx) {
@@ -2373,12 +4624,40 @@ func (node *UserMiscOptionPasswordExpireInterval) Format(ctx *FmtCtx) {
 	ctx.WriteString(" day")
 }
 
+func (node UserMiscOptionPasswordExpireInterval) TypeName() string {
+	return "tree.UserMiscOptionPasswordExpireInterval"
+}
+
+func (node *UserMiscOptionPasswordExpireInterval) reset() {
+	*node = UserMiscOptionPasswordExpireInterval{}
+}
+
+func (node *UserMiscOptionPasswordExpireInterval) Free() {
+	reuse.Free[UserMiscOptionPasswordExpireInterval](node, nil)
+}
+
 type UserMiscOptionPasswordHistoryDefault struct {
 	userMiscOptionImpl
 }
 
+func NewUserMiscOptionPasswordHistoryDefault() *UserMiscOptionPasswordHistoryDefault {
+	return reuse.Alloc[UserMiscOptionPasswordHistoryDefault](nil)
+}
+
 func (node *UserMiscOptionPasswordHistoryDefault) Format(ctx *FmtCtx) {
 	ctx.WriteString("password history default")
+}
+
+func (node UserMiscOptionPasswordHistoryDefault) TypeName() string {
+	return "tree.UserMiscOptionPasswordHistoryDefault"
+}
+
+func (node *UserMiscOptionPasswordHistoryDefault) reset() {
+	*node = UserMiscOptionPasswordHistoryDefault{}
+}
+
+func (node *UserMiscOptionPasswordHistoryDefault) Free() {
+	reuse.Free[UserMiscOptionPasswordHistoryDefault](node, nil)
 }
 
 type UserMiscOptionPasswordHistoryCount struct {
@@ -2386,16 +4665,50 @@ type UserMiscOptionPasswordHistoryCount struct {
 	Value int64
 }
 
+func NewUserMiscOptionPasswordHistoryCount(v int64) *UserMiscOptionPasswordHistoryCount {
+	phc := reuse.Alloc[UserMiscOptionPasswordHistoryCount](nil)
+	phc.Value = v
+	return phc
+}
+
 func (node *UserMiscOptionPasswordHistoryCount) Format(ctx *FmtCtx) {
 	ctx.WriteString(fmt.Sprintf("password history %d", node.Value))
+}
+
+func (node UserMiscOptionPasswordHistoryCount) TypeName() string {
+	return "tree.UserMiscOptionPasswordHistoryCount"
+}
+
+func (node *UserMiscOptionPasswordHistoryCount) reset() {
+	*node = UserMiscOptionPasswordHistoryCount{}
+}
+
+func (node *UserMiscOptionPasswordHistoryCount) Free() {
+	reuse.Free[UserMiscOptionPasswordHistoryCount](node, nil)
 }
 
 type UserMiscOptionPasswordReuseIntervalDefault struct {
 	userMiscOptionImpl
 }
 
+func NewUserMiscOptionPasswordReuseIntervalDefault() *UserMiscOptionPasswordReuseIntervalDefault {
+	return reuse.Alloc[UserMiscOptionPasswordReuseIntervalDefault](nil)
+}
+
 func (node *UserMiscOptionPasswordReuseIntervalDefault) Format(ctx *FmtCtx) {
 	ctx.WriteString("password reuse interval default")
+}
+
+func (node UserMiscOptionPasswordReuseIntervalDefault) TypeName() string {
+	return "tree.UserMiscOptionPasswordReuseIntervalDefault"
+}
+
+func (node *UserMiscOptionPasswordReuseIntervalDefault) reset() {
+	*node = UserMiscOptionPasswordReuseIntervalDefault{}
+}
+
+func (node *UserMiscOptionPasswordReuseIntervalDefault) Free() {
+	reuse.Free[UserMiscOptionPasswordReuseIntervalDefault](node, nil)
 }
 
 type UserMiscOptionPasswordReuseIntervalCount struct {
@@ -2403,32 +4716,98 @@ type UserMiscOptionPasswordReuseIntervalCount struct {
 	Value int64
 }
 
+func NewUserMiscOptionPasswordReuseIntervalCount(v int64) *UserMiscOptionPasswordReuseIntervalCount {
+	pr := reuse.Alloc[UserMiscOptionPasswordReuseIntervalCount](nil)
+	pr.Value = v
+	return pr
+}
+
 func (node *UserMiscOptionPasswordReuseIntervalCount) Format(ctx *FmtCtx) {
 	ctx.WriteString(fmt.Sprintf("password reuse interval %d day", node.Value))
+}
+
+func (node UserMiscOptionPasswordReuseIntervalCount) TypeName() string {
+	return "tree.UserMiscOptionPasswordReuseIntervalCount"
+}
+
+func (node *UserMiscOptionPasswordReuseIntervalCount) reset() {
+	*node = UserMiscOptionPasswordReuseIntervalCount{}
+}
+
+func (node *UserMiscOptionPasswordReuseIntervalCount) Free() {
+	reuse.Free[UserMiscOptionPasswordReuseIntervalCount](node, nil)
 }
 
 type UserMiscOptionPasswordRequireCurrentNone struct {
 	userMiscOptionImpl
 }
 
+func NewUserMiscOptionPasswordRequireCurrentNone() *UserMiscOptionPasswordRequireCurrentNone {
+	return reuse.Alloc[UserMiscOptionPasswordRequireCurrentNone](nil)
+}
+
 func (node *UserMiscOptionPasswordRequireCurrentNone) Format(ctx *FmtCtx) {
 	ctx.WriteString("password require current")
+}
+
+func (node UserMiscOptionPasswordRequireCurrentNone) TypeName() string {
+	return "tree.UserMiscOptionPasswordRequireCurrentNone"
+}
+
+func (node *UserMiscOptionPasswordRequireCurrentNone) reset() {
+	*node = UserMiscOptionPasswordRequireCurrentNone{}
+}
+
+func (node *UserMiscOptionPasswordRequireCurrentNone) Free() {
+	reuse.Free[UserMiscOptionPasswordRequireCurrentNone](node, nil)
 }
 
 type UserMiscOptionPasswordRequireCurrentDefault struct {
 	userMiscOptionImpl
 }
 
+func NewUserMiscOptionPasswordRequireCurrentDefault() *UserMiscOptionPasswordRequireCurrentDefault {
+	return reuse.Alloc[UserMiscOptionPasswordRequireCurrentDefault](nil)
+}
+
 func (node *UserMiscOptionPasswordRequireCurrentDefault) Format(ctx *FmtCtx) {
 	ctx.WriteString("password require current default")
+}
+
+func (node UserMiscOptionPasswordRequireCurrentDefault) TypeName() string {
+	return "tree.UserMiscOptionPasswordRequireCurrentDefault"
+}
+
+func (node *UserMiscOptionPasswordRequireCurrentDefault) reset() {
+	*node = UserMiscOptionPasswordRequireCurrentDefault{}
+}
+
+func (node *UserMiscOptionPasswordRequireCurrentDefault) Free() {
+	reuse.Free[UserMiscOptionPasswordRequireCurrentDefault](node, nil)
 }
 
 type UserMiscOptionPasswordRequireCurrentOptional struct {
 	userMiscOptionImpl
 }
 
+func NewUserMiscOptionPasswordRequireCurrentOptional() *UserMiscOptionPasswordRequireCurrentOptional {
+	return reuse.Alloc[UserMiscOptionPasswordRequireCurrentOptional](nil)
+}
+
 func (node *UserMiscOptionPasswordRequireCurrentOptional) Format(ctx *FmtCtx) {
 	ctx.WriteString("password require current optional")
+}
+
+func (node UserMiscOptionPasswordRequireCurrentOptional) TypeName() string {
+	return "tree.UserMiscOptionPasswordRequireCurrentOptional"
+}
+
+func (node *UserMiscOptionPasswordRequireCurrentOptional) reset() {
+	*node = UserMiscOptionPasswordRequireCurrentOptional{}
+}
+
+func (node *UserMiscOptionPasswordRequireCurrentOptional) Free() {
+	reuse.Free[UserMiscOptionPasswordRequireCurrentOptional](node, nil)
 }
 
 type UserMiscOptionFailedLoginAttempts struct {
@@ -2436,8 +4815,26 @@ type UserMiscOptionFailedLoginAttempts struct {
 	Value int64
 }
 
+func NewUserMiscOptionFailedLoginAttempts(v int64) *UserMiscOptionFailedLoginAttempts {
+	fla := reuse.Alloc[UserMiscOptionFailedLoginAttempts](nil)
+	fla.Value = v
+	return fla
+}
+
 func (node *UserMiscOptionFailedLoginAttempts) Format(ctx *FmtCtx) {
 	ctx.WriteString(fmt.Sprintf("failed_login_attempts %d", node.Value))
+}
+
+func (node UserMiscOptionFailedLoginAttempts) TypeName() string {
+	return "tree.UserMiscOptionFailedLoginAttempts"
+}
+
+func (node *UserMiscOptionFailedLoginAttempts) reset() {
+	*node = UserMiscOptionFailedLoginAttempts{}
+}
+
+func (node *UserMiscOptionFailedLoginAttempts) Free() {
+	reuse.Free[UserMiscOptionFailedLoginAttempts](node, nil)
 }
 
 type UserMiscOptionPasswordLockTimeCount struct {
@@ -2445,24 +4842,73 @@ type UserMiscOptionPasswordLockTimeCount struct {
 	Value int64
 }
 
+func NewUserMiscOptionPasswordLockTimeCount(v int64) *UserMiscOptionPasswordLockTimeCount {
+	ua := reuse.Alloc[UserMiscOptionPasswordLockTimeCount](nil)
+	ua.Value = v
+	return ua
+}
+
 func (node *UserMiscOptionPasswordLockTimeCount) Format(ctx *FmtCtx) {
 	ctx.WriteString(fmt.Sprintf("password_lock_time %d", node.Value))
+}
+
+func (node UserMiscOptionPasswordLockTimeCount) TypeName() string {
+	return "tree.UserMiscOptionPasswordLockTimeCount"
+}
+
+func (node *UserMiscOptionPasswordLockTimeCount) reset() {
+	*node = UserMiscOptionPasswordLockTimeCount{}
+}
+
+func (node *UserMiscOptionPasswordLockTimeCount) Free() {
+	reuse.Free[UserMiscOptionPasswordLockTimeCount](node, nil)
 }
 
 type UserMiscOptionPasswordLockTimeUnbounded struct {
 	userMiscOptionImpl
 }
 
+func NewUserMiscOptionPasswordLockTimeUnbounded() *UserMiscOptionPasswordLockTimeUnbounded {
+	return reuse.Alloc[UserMiscOptionPasswordLockTimeUnbounded](nil)
+}
+
 func (node *UserMiscOptionPasswordLockTimeUnbounded) Format(ctx *FmtCtx) {
 	ctx.WriteString("password_lock_time unbounded")
+}
+
+func (node UserMiscOptionPasswordLockTimeUnbounded) TypeName() string {
+	return "tree.UserMiscOptionPasswordLockTimeUnbounded"
+}
+
+func (node *UserMiscOptionPasswordLockTimeUnbounded) reset() {
+	*node = UserMiscOptionPasswordLockTimeUnbounded{}
+}
+
+func (node *UserMiscOptionPasswordLockTimeUnbounded) Free() {
+	reuse.Free[UserMiscOptionPasswordLockTimeUnbounded](node, nil)
 }
 
 type UserMiscOptionAccountLock struct {
 	userMiscOptionImpl
 }
 
+func NewUserMiscOptionAccountLock() *UserMiscOptionAccountLock {
+	ua := reuse.Alloc[UserMiscOptionAccountLock](nil)
+	return ua
+}
+
 func (node *UserMiscOptionAccountLock) Format(ctx *FmtCtx) {
 	ctx.WriteString("lock")
+}
+
+func (node UserMiscOptionAccountLock) TypeName() string { return "tree.UserMiscOptionAccountLock" }
+
+func (node *UserMiscOptionAccountLock) reset() {
+	*node = UserMiscOptionAccountLock{}
+}
+
+func (node *UserMiscOptionAccountLock) Free() {
+	reuse.Free[UserMiscOptionAccountLock](node, nil)
 }
 
 type UserMiscOptionAccountUnlock struct {
@@ -2471,6 +4917,21 @@ type UserMiscOptionAccountUnlock struct {
 
 func (node *UserMiscOptionAccountUnlock) Format(ctx *FmtCtx) {
 	ctx.WriteString("unlock")
+}
+
+func NewUserMiscOptionAccountUnlock() *UserMiscOptionAccountUnlock {
+	ua := reuse.Alloc[UserMiscOptionAccountUnlock](nil)
+	return ua
+}
+
+func (node UserMiscOptionAccountUnlock) TypeName() string { return "tree.UserMiscOptionAccountUnlock" }
+
+func (node *UserMiscOptionAccountUnlock) reset() {
+	*node = UserMiscOptionAccountUnlock{}
+}
+
+func (node *UserMiscOptionAccountUnlock) Free() {
+	reuse.Free[UserMiscOptionAccountUnlock](node, nil)
 }
 
 type CreateUser struct {
@@ -2514,13 +4975,76 @@ func (node *CreateUser) Format(ctx *FmtCtx) {
 func (node *CreateUser) GetStatementType() string { return "Create User" }
 func (node *CreateUser) GetQueryType() string     { return QueryTypeDCL }
 
-func NewCreateUser(ife bool, u []*User, r *Role, misc UserMiscOption) *CreateUser {
-	return &CreateUser{
-		IfNotExists: ife,
-		Users:       u,
-		Role:        r,
-		MiscOpt:     misc,
+func (node CreateUser) TypeName() string { return "tree.CreateUser" }
+
+func (node *CreateUser) reset() {
+	if node.Users != nil {
+		for _, item := range node.Users {
+			item.Free()
+		}
 	}
+
+	if node.Role != nil {
+		node.Role.Free()
+	}
+
+	if node.MiscOpt != nil {
+		switch mt := node.MiscOpt.(type) {
+		case *UserMiscOptionPasswordExpireNone:
+			mt.Free()
+		case *UserMiscOptionPasswordExpireDefault:
+			mt.Free()
+		case *UserMiscOptionPasswordExpireNever:
+			mt.Free()
+		case *UserMiscOptionPasswordExpireInterval:
+			mt.Free()
+		case *UserMiscOptionPasswordHistoryDefault:
+			mt.Free()
+		case *UserMiscOptionPasswordHistoryCount:
+			mt.Free()
+		case *UserMiscOptionPasswordReuseIntervalDefault:
+			mt.Free()
+		case *UserMiscOptionPasswordReuseIntervalCount:
+			mt.Free()
+		case *UserMiscOptionPasswordRequireCurrentNone:
+			mt.Free()
+		case *UserMiscOptionPasswordRequireCurrentDefault:
+			mt.Free()
+		case *UserMiscOptionPasswordRequireCurrentOptional:
+			mt.Free()
+		case *UserMiscOptionFailedLoginAttempts:
+			mt.Free()
+		case *UserMiscOptionPasswordLockTimeCount:
+			mt.Free()
+		case *UserMiscOptionPasswordLockTimeUnbounded:
+			mt.Free()
+		case *UserMiscOptionAccountLock:
+			mt.Free()
+		case *UserMiscOptionAccountUnlock:
+			mt.Free()
+		default:
+			if mt != nil {
+				panic(fmt.Sprintf("miss Free for %v", node.MiscOpt))
+			}
+		}
+	}
+
+	node.CommentOrAttribute.Free()
+	*node = CreateUser{}
+}
+
+func (node *CreateUser) Free() {
+	reuse.Free[CreateUser](node, nil)
+}
+
+func NewCreateUser(ife bool, u []*User, r *Role, misc UserMiscOption, c AccountCommentOrAttribute) *CreateUser {
+	cu := reuse.Alloc[CreateUser](nil)
+	cu.IfNotExists = ife
+	cu.Users = u
+	cu.Role = r
+	cu.MiscOpt = misc
+	cu.CommentOrAttribute = c
+	return cu
 }
 
 type CreateAccount struct {
@@ -2528,30 +5052,58 @@ type CreateAccount struct {
 	IfNotExists bool
 	Name        string
 	AuthOption  AccountAuthOption
-	//status_option or not
+	// status_option or not
 	StatusOption AccountStatus
-	//comment or not
+	// comment or not
 	Comment AccountComment
 }
 
-func (ca *CreateAccount) Format(ctx *FmtCtx) {
-	ctx.WriteString("create account ")
-	if ca.IfNotExists {
-		ctx.WriteString("if not exists ")
-	}
-	ctx.WriteString(ca.Name)
-	ca.AuthOption.Format(ctx)
-	ca.StatusOption.Format(ctx)
-	ca.Comment.Format(ctx)
+func NewCreateAccount(ife bool, n string, ao AccountAuthOption, so AccountStatus, c AccountComment) *CreateAccount {
+	ca := reuse.Alloc[CreateAccount](nil)
+	ca.IfNotExists = ife
+	ca.Name = n
+	ca.AuthOption = ao
+	ca.StatusOption = so
+	ca.Comment = c
+	return ca
 }
 
-func (ca *CreateAccount) GetStatementType() string { return "Create Account" }
-func (ca *CreateAccount) GetQueryType() string     { return QueryTypeDCL }
+func (node *CreateAccount) Format(ctx *FmtCtx) {
+	ctx.WriteString("create account ")
+	if node.IfNotExists {
+		ctx.WriteString("if not exists ")
+	}
+	ctx.WriteString(node.Name)
+	node.AuthOption.Format(ctx)
+	node.StatusOption.Format(ctx)
+	node.Comment.Format(ctx)
+}
+
+func (node *CreateAccount) GetStatementType() string { return "Create Account" }
+func (node *CreateAccount) GetQueryType() string     { return QueryTypeDCL }
+
+func (node CreateAccount) TypeName() string { return "tree.CreateAccount" }
+
+func (node *CreateAccount) reset() {
+	*node = CreateAccount{}
+}
+
+func (node *CreateAccount) Free() {
+	reuse.Free[CreateAccount](node, nil)
+}
 
 type AccountAuthOption struct {
 	Equal          string
 	AdminName      string
 	IdentifiedType AccountIdentified
+}
+
+func NewAccountAuthOption(e string, an string, it AccountIdentified) *AccountAuthOption {
+	ao := reuse.Alloc[AccountAuthOption](nil)
+	ao.Equal = e
+	ao.AdminName = an
+	ao.IdentifiedType = it
+	return ao
 }
 
 func (node *AccountAuthOption) Format(ctx *FmtCtx) {
@@ -2563,7 +5115,16 @@ func (node *AccountAuthOption) Format(ctx *FmtCtx) {
 
 	ctx.WriteString(fmt.Sprintf(" '%s'", node.AdminName))
 	node.IdentifiedType.Format(ctx)
+}
 
+func (node AccountAuthOption) TypeName() string { return "tree.AccountAuthOption" }
+
+func (node *AccountAuthOption) reset() {
+	*node = AccountAuthOption{}
+}
+
+func (node *AccountAuthOption) Free() {
+	reuse.Free[AccountAuthOption](node, nil)
 }
 
 type AccountIdentifiedOption int
@@ -2579,6 +5140,14 @@ type AccountIdentified struct {
 	Str string
 }
 
+func NewAccountIdentified(t AccountIdentifiedOption, s string) *AccountIdentified {
+	// ai := reuse.Alloc[AccountIdentified](nil)
+	ai := new(AccountIdentified)
+	ai.Typ = t
+	ai.Str = s
+	return ai
+}
+
 func (node *AccountIdentified) Format(ctx *FmtCtx) {
 	switch node.Typ {
 	case AccountIdentifiedByPassword:
@@ -2588,6 +5157,16 @@ func (node *AccountIdentified) Format(ctx *FmtCtx) {
 	case AccountIdentifiedWithSSL:
 		ctx.WriteString(" identified with '******'")
 	}
+}
+
+func (node AccountIdentified) TypeName() string { return "tree.AccountIdentified" }
+
+func (node *AccountIdentified) reset() {
+	*node = AccountIdentified{}
+}
+
+func (node *AccountIdentified) Free() {
+	// reuse.Free[AccountIdentified](node, nil)
 }
 
 type AccountStatusOption int
@@ -2616,6 +5195,11 @@ type AccountStatus struct {
 	Option AccountStatusOption
 }
 
+func NewAccountStatus() *AccountStatus {
+	as := reuse.Alloc[AccountStatus](nil)
+	return as
+}
+
 func (node *AccountStatus) Format(ctx *FmtCtx) {
 	if node.Exist {
 		switch node.Option {
@@ -2629,9 +5213,24 @@ func (node *AccountStatus) Format(ctx *FmtCtx) {
 	}
 }
 
+func (node AccountStatus) TypeName() string { return "tree.AccountStatus" }
+
+func (node *AccountStatus) reset() {
+	*node = AccountStatus{}
+}
+
+func (node *AccountStatus) Free() {
+	reuse.Free[AccountStatus](node, nil)
+}
+
 type AccountComment struct {
 	Exist   bool
 	Comment string
+}
+
+func NewAccountComment() *AccountComment {
+	ac := reuse.Alloc[AccountComment](nil)
+	return ac
 }
 
 func (node *AccountComment) Format(ctx *FmtCtx) {
@@ -2641,10 +5240,29 @@ func (node *AccountComment) Format(ctx *FmtCtx) {
 	}
 }
 
+func (node AccountComment) TypeName() string { return "tree.AccountComment" }
+
+func (node *AccountComment) reset() {
+	*node = AccountComment{}
+}
+
+func (node *AccountComment) Free() {
+	reuse.Free[AccountComment](node, nil)
+}
+
 type AccountCommentOrAttribute struct {
 	Exist     bool
 	IsComment bool
 	Str       string
+}
+
+func NewAccountCommentOrAttribute(e bool, c bool, s string) *AccountCommentOrAttribute {
+	// aca := reuse.Alloc[AccountCommentOrAttribute](nil)
+	aca := new(AccountCommentOrAttribute)
+	aca.Exist = e
+	aca.IsComment = c
+	aca.Str = s
+	return aca
 }
 
 func (node *AccountCommentOrAttribute) Format(ctx *FmtCtx) {
@@ -2658,6 +5276,16 @@ func (node *AccountCommentOrAttribute) Format(ctx *FmtCtx) {
 	}
 }
 
+func (node AccountCommentOrAttribute) TypeName() string { return "tree.AccountCommentOrAttribute" }
+
+func (node *AccountCommentOrAttribute) reset() {
+	*node = AccountCommentOrAttribute{}
+}
+
+func (node *AccountCommentOrAttribute) Free() {
+	// reuse.Free[AccountCommentOrAttribute](node, nil)
+}
+
 type CreatePublication struct {
 	statementImpl
 	IfNotExists bool
@@ -2665,6 +5293,16 @@ type CreatePublication struct {
 	Database    Identifier
 	AccountsSet *AccountsSetOption
 	Comment     string
+}
+
+func NewCreatePublication(ife bool, n Identifier, db Identifier, as *AccountsSetOption, c string) *CreatePublication {
+	cp := reuse.Alloc[CreatePublication](nil)
+	cp.IfNotExists = ife
+	cp.Name = n
+	cp.Database = db
+	cp.AccountsSet = as
+	cp.Comment = c
+	return cp
 }
 
 func (node *CreatePublication) Format(ctx *FmtCtx) {
@@ -2690,9 +5328,25 @@ func (node *CreatePublication) Format(ctx *FmtCtx) {
 	}
 }
 
+func (node *CreatePublication) GetStatementType() string { return "Create Publication" }
+func (node *CreatePublication) GetQueryType() string     { return QueryTypeDCL }
+
+func (node CreatePublication) TypeName() string { return "tree.CreatePublication" }
+
+func (node *CreatePublication) reset() {
+	if node.AccountsSet != nil {
+		node.AccountsSet.Free()
+	}
+	*node = CreatePublication{}
+}
+
+func (node *CreatePublication) Free() {
+	reuse.Free[CreatePublication](node, nil)
+}
+
 type AttributeVisable struct {
 	columnAttributeImpl
-	Is bool //true NULL (default); false NOT NULL
+	Is bool // true NULL (default); false NOT NULL
 }
 
 func (node *AttributeVisable) Format(ctx *FmtCtx) {
@@ -2703,11 +5357,18 @@ func (node *AttributeVisable) Format(ctx *FmtCtx) {
 	}
 }
 
-func NewAttributeVisable(b bool) *AttributeVisable {
-	return &AttributeVisable{
-		Is: b,
-	}
+func (node AttributeVisable) TypeName() string { return "tree.AttributeVisable" }
+
+func (node *AttributeVisable) reset() {
+	*node = AttributeVisable{}
 }
 
-func (node *CreatePublication) GetStatementType() string { return "Create Publication" }
-func (node *CreatePublication) GetQueryType() string     { return QueryTypeDCL }
+func (node *AttributeVisable) Free() {
+	reuse.Free[AttributeVisable](node, nil)
+}
+
+func NewAttributeVisable(b bool) *AttributeVisable {
+	av := reuse.Alloc[AttributeVisable](nil)
+	av.Is = b
+	return av
+}
