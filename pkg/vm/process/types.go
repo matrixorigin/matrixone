@@ -342,8 +342,6 @@ type Process struct {
 
 	MessageBoard *MessageBoard
 
-	PipelineStr string
-	PlanStr     string
 }
 
 type vectorPool struct {

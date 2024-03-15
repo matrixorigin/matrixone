@@ -27,12 +27,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
-	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -812,11 +810,6 @@ func FixProjectionResult(proc *process.Process,
 					sbat.ReplaceVector(oldVec, nil)
 				} else {
 					newVec = proc.GetVector(*oldVec.GetType())
-					stm := motrace.StatementFromContext(proc.Ctx)
-					if stm != nil && strings.Contains(stm.Statement, "select * from t1 where a between \"Congress\" and \"Nightingale\" and b=\"Lane\" and c between \"1\" and \"3\" limit 1") {
-						logutil.Errorf("plan: %v", proc.PlanStr)
-						logutil.Errorf("pipeline: %v", proc.PipelineStr)
-					}
 					err = uafs[i](newVec, oldVec)
 					if err != nil {
 						for j := range finalVectors {

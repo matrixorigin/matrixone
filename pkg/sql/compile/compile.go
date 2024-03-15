@@ -601,11 +601,6 @@ func (c *Compile) runOnce() error {
 		s.SetContextRecursively(c.proc.Ctx)
 	}
 
-	if strings.Contains(c.sql, "select * from t1 where a between \"Congress\" and \"Nightingale\" and b=\"Lane\" and c between \"1\" and \"3\" limit 1") {
-		c.proc.PipelineStr = DebugShowScopes(c.scope)
-		c.proc.PlanStr = explain.DebugPlan(c.pn)
-	}
-
 	for i := range c.scope {
 		wg.Add(1)
 		scope := c.scope[i]
