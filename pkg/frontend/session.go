@@ -1833,6 +1833,19 @@ func (ses *Session) InitGlobalSystemVariables() error {
 		pu := ses.GetParameterUnit()
 		mp := ses.GetMemPool()
 
+		updateSqls := ses.getUpdateVariableSqlsByToml()
+		for _, sql := range updateSqls {
+			_, err = executeSQLInBackgroundSession(
+				sysTenantCtx,
+				ses,
+				mp,
+				pu,
+				sql)
+			if err != nil {
+				return err
+			}
+		}
+
 		rsset, err = executeSQLInBackgroundSession(
 			sysTenantCtx,
 			ses,
@@ -1879,6 +1892,19 @@ func (ses *Session) InitGlobalSystemVariables() error {
 		pu := ses.GetParameterUnit()
 		mp := ses.GetMemPool()
 
+		updateSqls := ses.getUpdateVariableSqlsByToml()
+		for _, sql := range updateSqls {
+			_, err = executeSQLInBackgroundSession(
+				tenantCtx,
+				ses,
+				mp,
+				pu,
+				sql)
+			if err != nil {
+				return err
+			}
+		}
+
 		rsset, err = executeSQLInBackgroundSession(
 			tenantCtx,
 			ses,
@@ -1918,6 +1944,16 @@ func (ses *Session) InitGlobalSystemVariables() error {
 		}
 	}
 	return err
+}
+
+func (ses *Session) getUpdateVariableSqlsByToml() []string {
+	updateSqls := make([]string, 0)
+	if ses.pu.SV.SqlMode != gSysVarsDefs["sql_mode"].Default {
+		tenantInfo := ses.GetTenantInfo()
+		sqlForUpdate := getSqlForUpdateSystemVariableValue(ses.pu.SV.SqlMode, uint64(tenantInfo.GetTenantID()), "sql_mode")
+		updateSqls = append(updateSqls, sqlForUpdate)
+	}
+	return updateSqls
 }
 
 func (ses *Session) GetPrivilege() *privilege {
