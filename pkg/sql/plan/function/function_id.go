@@ -354,6 +354,13 @@ const (
 	MO_MEMORY
 	MO_CPU_DUMP
 
+	// bitmap function
+	BITMAP_BIT_POSITION
+	BITMAP_BUCKET_NUMBER
+	BITMAP_COUNT
+	BITMAP_CONSTRUCT_AGG
+	BITMAP_OR_AGG
+
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
 	FUNCTION_END_NUMBER
@@ -641,4 +648,10 @@ var functionIdRegister = map[string]int32{
 	"mo_cpu":      MO_CPU,
 	"mo_memory":   MO_MEMORY,
 	"mo_cpu_dump": MO_CPU_DUMP,
+	// bitmap function
+	"bitmap_bit_position":  BITMAP_BIT_POSITION,
+	"bitmap_bucket_number": BITMAP_BUCKET_NUMBER,
+	"bitmap_count":         BITMAP_COUNT,
+	"bitmap_construct_agg": BITMAP_CONSTRUCT_AGG,
+	"bitmap_or_agg":        BITMAP_OR_AGG,
 }
