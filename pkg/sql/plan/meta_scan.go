@@ -30,35 +30,35 @@ var (
 	MetaColDefs = []*plan.ColDef{
 		{
 			Name: catalog.MetaColNames[catalog.QUERY_ID_IDX],
-			Typ: &plan.Type{
+			Typ: plan.Type{
 				Id:          int32(catalog.MetaColTypes[catalog.QUERY_ID_IDX].Oid),
 				NotNullable: false,
 			},
 		},
 		{
 			Name: catalog.MetaColNames[catalog.STATEMENT_IDX],
-			Typ: &plan.Type{
+			Typ: plan.Type{
 				Id:          int32(catalog.MetaColTypes[catalog.STATEMENT_IDX].Oid),
 				NotNullable: false,
 			},
 		},
 		{
 			Name: catalog.MetaColNames[catalog.ACCOUNT_ID_IDX],
-			Typ: &plan.Type{
+			Typ: plan.Type{
 				Id:          int32(catalog.MetaColTypes[catalog.ACCOUNT_ID_IDX].Oid),
 				NotNullable: false,
 			},
 		},
 		{
 			Name: catalog.MetaColNames[catalog.ROLE_ID_IDX],
-			Typ: &plan.Type{
+			Typ: plan.Type{
 				Id:          int32(catalog.MetaColTypes[catalog.ROLE_ID_IDX].Oid),
 				NotNullable: false,
 			},
 		},
 		{
 			Name: catalog.MetaColNames[catalog.RESULT_PATH_IDX],
-			Typ: &plan.Type{
+			Typ: plan.Type{
 				Id:          int32(catalog.MetaColTypes[catalog.RESULT_PATH_IDX].Oid),
 				NotNullable: false,
 				Width:       4,
@@ -66,42 +66,42 @@ var (
 		},
 		{
 			Name: catalog.MetaColNames[catalog.CREATE_TIME_IDX],
-			Typ: &plan.Type{
+			Typ: plan.Type{
 				Id:          int32(catalog.MetaColTypes[catalog.CREATE_TIME_IDX].Oid),
 				NotNullable: false,
 			},
 		},
 		{
 			Name: catalog.MetaColNames[catalog.RESULT_SIZE_IDX],
-			Typ: &plan.Type{
+			Typ: plan.Type{
 				Id:          int32(catalog.MetaColTypes[catalog.RESULT_SIZE_IDX].Oid),
 				NotNullable: false,
 			},
 		},
 		{
 			Name: catalog.MetaColNames[catalog.TABLES_IDX],
-			Typ: &plan.Type{
+			Typ: plan.Type{
 				Id:          int32(catalog.MetaColTypes[catalog.TABLES_IDX].Oid),
 				NotNullable: false,
 			},
 		},
 		{
 			Name: catalog.MetaColNames[catalog.USER_ID_IDX],
-			Typ: &plan.Type{
+			Typ: plan.Type{
 				Id:          int32(catalog.MetaColTypes[catalog.USER_ID_IDX].Oid),
 				NotNullable: false,
 			},
 		},
 		{
 			Name: catalog.MetaColNames[catalog.EXPIRED_TIME_IDX],
-			Typ: &plan.Type{
+			Typ: plan.Type{
 				Id:          int32(catalog.MetaColTypes[catalog.EXPIRED_TIME_IDX].Oid),
 				NotNullable: false,
 			},
 		},
 		{
 			Name: catalog.MetaColNames[catalog.COLUMN_MAP_IDX],
-			Typ: &plan.Type{
+			Typ: plan.Type{
 				Id:          int32(catalog.MetaColTypes[catalog.COLUMN_MAP_IDX].Oid),
 				NotNullable: false,
 			},

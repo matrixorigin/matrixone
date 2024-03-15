@@ -43,7 +43,7 @@ func TestBuildTable_AlterView(t *testing.T) {
 			Cols: []*ColDef{
 				{
 					Name: "a",
-					Typ: &plan.Type{
+					Typ: plan.Type{
 						Id:    int32(types.T_varchar),
 						Width: types.MaxVarcharLen,
 						Table: "a",

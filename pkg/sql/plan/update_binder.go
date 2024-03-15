@@ -53,7 +53,7 @@ func (b *UpdateBinder) bindColRef(astExpr *tree.UnresolvedName, _ int32, _ bool)
 	for i, c := range b.cols {
 		if c.Name == col {
 			idx = i
-			typ = c.Typ
+			typ = &c.Typ
 			break
 		}
 	}
