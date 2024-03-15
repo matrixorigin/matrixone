@@ -5,6 +5,7 @@ drop table if exists t1;
 create table t1(c1 int primary key, c2 varchar(10), c3 int, key(c2,c3));
 insert into t1 select *,*,* from generate_series(1,100000) g;
 select mo_ctl('dn', 'flush', 'd1.t1');
+mo_ctl(dn, flush, d1.t1)
 {\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
 select Sleep(1);
 sleep(1)
