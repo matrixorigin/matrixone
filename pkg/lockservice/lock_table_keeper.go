@@ -169,9 +169,6 @@ func (k *lockTableKeeper) doKeepRemoteLock(
 }
 
 func (k *lockTableKeeper) doKeepLockTableBind(ctx context.Context) {
-	if k.service.isStatus(pb.Status_ServiceCanRestart) {
-		return
-	}
 	if k.service.isStatus(pb.Status_ServiceLockWaiting) &&
 		k.service.activeTxnHolder.empty() {
 		k.service.setStatus(pb.Status_ServiceUnLockSucc)
@@ -196,7 +193,8 @@ func (k *lockTableKeeper) doKeepLockTableBind(ctx context.Context) {
 	req.KeepLockTableBind.ServiceID = k.serviceID
 	req.KeepLockTableBind.Status = k.service.getStatus()
 	if !k.service.isStatus(pb.Status_ServiceLockEnable) {
-		req.KeepLockTableBind.TxnIDs = k.service.activeTxnHolder.getAllTxn()
+		req.KeepLockTableBind.LockTables = k.service.popGroupTables()
+		req.KeepLockTableBind.TxnIDs = k.service.activeTxnHolder.getAllTxnID()
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, k.keepLockTableBindInterval)
@@ -215,6 +213,7 @@ func (k *lockTableKeeper) doKeepLockTableBind(ctx context.Context) {
 			if k.service.isStatus(pb.Status_ServiceLockEnable) {
 				k.service.setRestartTime()
 				k.service.setStatus(pb.Status_ServiceLockWaiting)
+				go k.service.checkCanMoveGroupTables()
 			}
 		default:
 			k.service.setStatus(resp.KeepLockTableBind.Status)

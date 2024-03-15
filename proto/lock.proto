@@ -156,7 +156,6 @@ message LockRequest {
   repeated  bytes     Rows        = 3;
   // LockOptions lock options
   LockOptions         Options     = 4 [(gogoproto.nullable) = false];
-  timestamp.Timestamp SnapShotTs  = 5 [(gogoproto.nullable) = false];
 }
 
 // LockResponse lock response
@@ -226,6 +225,7 @@ message KeepLockTableBindRequest {
   string ServiceID = 1;
   Status Status = 2;
   repeated bytes TxnIDs = 3;
+  repeated LockTable LockTables = 4 [(gogoproto.nullable) = false];
 }
 
 // KeepLockTableBindResponse keep lock table bind response. TN -> CN
@@ -295,8 +295,4 @@ message ExtraMutation {
   bytes key       = 1;
   bool  skip      = 2;
   bytes replaceTo = 3;
-}
-
-message LockTableHolders {
-  string service = 1;
 }

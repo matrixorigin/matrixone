@@ -94,7 +94,7 @@ func (s *service) handleRemoteLock(
 	req *pb.Request,
 	resp *pb.Response,
 	cs morpc.ClientSession) {
-	if !s.canLockOnServiceStatus(req.Lock.TxnID, req.Lock.SnapShotTs) {
+	if !s.canLockOnServiceStatus(req.Lock.TxnID, req.Lock.Options, req.LockTable.Table, req.Lock.Rows) {
 		writeResponse(ctx, cancel, resp, moerr.NewRetryForCNRollingRestart(), cs)
 		return
 	}
@@ -137,7 +137,7 @@ func (s *service) handleForwardLock(
 	req *pb.Request,
 	resp *pb.Response,
 	cs morpc.ClientSession) {
-	if !s.canLockOnServiceStatus(req.Lock.TxnID, req.Lock.SnapShotTs) {
+	if !s.canLockOnServiceStatus(req.Lock.TxnID, req.Lock.Options, req.LockTable.Table, req.Lock.Rows) {
 		writeResponse(ctx, cancel, resp, moerr.NewRetryForCNRollingRestart(), cs)
 		return
 	}

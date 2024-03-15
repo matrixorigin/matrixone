@@ -43,9 +43,7 @@ func TestGetBindInRestartService(t *testing.T) {
 			a.Get("s1", 0, 1, 0, pb.Sharding_None)
 			a.setRestartService("s1")
 			l := a.getLockTablesLocked(0)[1]
-			assert.Equal(t,
-				true,
-				!a.getServiceBinds(l.ServiceID).isStatus(pb.Status_ServiceLockEnable))
+			assert.False(t, a.getServiceBinds(l.ServiceID).isStatus(pb.Status_ServiceLockEnable))
 		})
 }
 

@@ -111,7 +111,7 @@ func TestCanRestartServiceRPCSend(t *testing.T) {
 			defer cancel()
 			resp, err := c.Send(ctx,
 				&lock.Request{
-					SetRestartService: lock.SetRestartServiceRequest{ServiceID: "s1"},
+					CanRestartService: lock.CanRestartServiceRequest{ServiceID: "s1"},
 					Method:            lock.Method_CanRestartService})
 			require.NoError(t, err)
 			assert.NotNil(t, resp)
@@ -141,8 +141,8 @@ func TestRemainTxnServiceRPCSend(t *testing.T) {
 			defer cancel()
 			resp, err := c.Send(ctx,
 				&lock.Request{
-					SetRestartService: lock.SetRestartServiceRequest{ServiceID: "s1"},
-					Method:            lock.Method_RemainTxnInService})
+					RemainTxnInService: lock.RemainTxnInServiceRequest{ServiceID: "s1"},
+					Method:             lock.Method_RemainTxnInService})
 			require.NoError(t, err)
 			assert.NotNil(t, resp)
 			require.Equal(t, int32(-1), resp.RemainTxnInService.RemainTxn)
