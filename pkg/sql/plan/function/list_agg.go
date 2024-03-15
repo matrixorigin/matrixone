@@ -405,4 +405,52 @@ var supportedAggregateFunctions = []FuncNew{
 			},
 		},
 	},
+
+	// function `BITMAP_CONSTRUCT_AGG`
+	{
+		functionId: BITMAP_CONSTRUCT_AGG,
+		class:      plan.Function_AGG,
+		layout:     STANDARD_FUNCTION,
+		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
+			return fixedUnaryAggTypeCheck(inputs, functionAgg.AggBitmapConstructSupportedParameters)
+		},
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       functionAgg.AggBitmapConstructSupportedParameters,
+				retType:    functionAgg.AggBitmapConstructReturnType,
+
+				isAgg: true,
+				aggFramework: aggregationLogicOfOverload{
+					str:    "bitmap_construct_agg",
+					aggNew: functionAgg.NewAggBitmapConstruct,
+				},
+			},
+		},
+	},
+
+	// function `BITMAP_OR_AGG`
+	{
+		functionId: BITMAP_OR_AGG,
+		class:      plan.Function_AGG,
+		layout:     STANDARD_FUNCTION,
+		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
+			return fixedUnaryAggTypeCheck(inputs, functionAgg.AggBitmapOrSupportedParameters)
+		},
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       functionAgg.AggBitmapOrSupportedParameters,
+				retType:    functionAgg.AggBitmapOrReturnType,
+
+				isAgg: true,
+				aggFramework: aggregationLogicOfOverload{
+					str:    "bitmap_or_agg",
+					aggNew: functionAgg.NewAggBitmapOr,
+				},
+			},
+		},
+	},
 }
