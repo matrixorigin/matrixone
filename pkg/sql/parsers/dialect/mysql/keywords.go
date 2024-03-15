@@ -620,5 +620,8 @@ func init() {
 		"percent":                    PERCENT,
 		"master":                     MASTER,
 		"parallelism":                PARALLELISM,
+		"bitmap_bit_position":        BITMAP_BIT_POSITION,
+		"bitmap_bucket_number":       BITMAP_BUCKET_NUMBER,
+		"bitmap_count":               BITMAP_COUNT,
 	}
 }
