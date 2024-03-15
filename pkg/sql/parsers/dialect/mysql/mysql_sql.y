@@ -7650,10 +7650,10 @@ table_name:
 |   ident '.' ident '{' expression '}'
     {
         prefix := tree.ObjectNamePrefix{SchemaName: tree.Identifier($1.Compare()), ExplicitSchema: true}
-         atTs := &tree.AtTimeStamp{
+        atTs := &tree.AtTimeStamp{
             Expr: $5,
         }
-        $$ = tree.NewTableName(tree.Identifier($3.Compare()), prefix, atTS)
+        $$ = tree.NewTableName(tree.Identifier($3.Compare()), prefix, atTs)
     }
 
 table_elem_list_opt:

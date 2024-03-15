@@ -19012,7 +19012,7 @@ yydefault:
 			atTs := &tree.AtTimeStamp{
 				Expr: yyDollar[5].exprUnion(),
 			}
-			yyLOCAL = tree.NewTableName(tree.Identifier(yyDollar[3].cstrUnion().Compare()), prefix, atTS)
+			yyLOCAL = tree.NewTableName(tree.Identifier(yyDollar[3].cstrUnion().Compare()), prefix, atTs)
 		}
 		yyVAL.union = yyLOCAL
 	case 1221:
