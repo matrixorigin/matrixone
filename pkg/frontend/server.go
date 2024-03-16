@@ -57,6 +57,8 @@ type BaseService interface {
 	CheckTenantUpgrade(ctx context.Context, tenantID int64) error
 	// GetFinalVersion Get mo final version, which is based on the current code
 	GetFinalVersion() string
+	// UpgradeTenant used to upgrade tenant
+	UpgradeTenant(ctx context.Context, tenantName string, isALLAccount bool) error
 }
 
 func (mo *MOServer) GetRoutineManager() *RoutineManager {

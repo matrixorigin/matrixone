@@ -73,19 +73,19 @@ func (v *versionHandle) Prepare(
 	}
 
 	// get all tenantIDs in mo system, including system tenants
-	//tenants, err := versions.FetchAllTenants(txn)
-	//if err != nil {
-	//	return err
-	//}
-	//for _, tenantID := range tenants {
-	//	//ctx = defines.AttachAccountId(ctx, uint32(tenantID))
-	//	for _, upgEntry := range tenantUpgEntries {
-	//		err = upgEntry.Upgrade(txn, uint32(tenantID))
-	//		if err != nil {
-	//			return err
-	//		}
-	//	}
-	//}
+	tenants, err := versions.FetchAllTenants(txn)
+	if err != nil {
+		return err
+	}
+	for _, tenantID := range tenants {
+		//ctx = defines.AttachAccountId(ctx, uint32(tenantID))
+		for _, upgEntry := range tenantUpgEntries {
+			err = upgEntry.Upgrade(txn, uint32(tenantID))
+			if err != nil {
+				return err
+			}
+		}
+	}
 	return nil
 }
 

@@ -152,6 +152,8 @@ import (
     subPartition *tree.SubPartition
     subPartitions []*tree.SubPartition
 
+    upgrade_target *tree.Target
+
     subquery *tree.Subquery
     funcExpr *tree.FuncExpr
 
@@ -416,6 +418,9 @@ import (
 // Match
 %token <str> MATCH AGAINST BOOLEAN LANGUAGE WITH QUERY EXPANSION WITHOUT VALIDATION
 
+// upgrade
+%token <str> UPGRADE RETRY
+
 // Built-in function
 %token <str> ADDDATE BIT_AND BIT_OR BIT_XOR CAST COUNT APPROX_COUNT APPROX_COUNT_DISTINCT SERIAL_EXTRACT
 %token <str> APPROX_PERCENTILE CURDATE CURTIME DATE_ADD DATE_SUB EXTRACT
@@ -465,7 +470,7 @@ import (
 
 %type <statement> stmt block_stmt block_type_stmt normal_stmt
 %type <statements> stmt_list stmt_list_return
-%type <statement> create_stmt insert_stmt delete_stmt drop_stmt alter_stmt truncate_table_stmt alter_sequence_stmt
+%type <statement> create_stmt insert_stmt delete_stmt drop_stmt alter_stmt truncate_table_stmt alter_sequence_stmt upgrade_stmt
 %type <statement> delete_without_using_stmt delete_with_using_stmt
 %type <statement> drop_ddl_stmt drop_database_stmt drop_table_stmt drop_index_stmt drop_prepare_stmt drop_view_stmt drop_connector_stmt drop_function_stmt drop_procedure_stmt drop_sequence_stmt
 %type <statement> drop_account_stmt drop_role_stmt drop_user_stmt
@@ -539,6 +544,7 @@ import (
 %type <identifierList> column_list column_list_opt partition_clause_opt partition_id_list insert_column_list accounts_list
 %type <joinCond> join_condition join_condition_opt on_expression_opt
 %type <selectLockInfo> select_lock_opt
+%type <upgrade_target> target
 
 %type <functionName> func_name
 %type <funcArgs> func_args_list_opt func_args_list
@@ -675,7 +681,7 @@ import (
 %type <frameBound> frame_bound frame_bound_start
 %type <frameType> frame_type
 %type <str> fields_or_columns
-%type <int64Val> algorithm_opt partition_num_opt sub_partition_num_opt
+%type <int64Val> algorithm_opt partition_num_opt sub_partition_num_opt opt_retry
 %type <boolVal> linear_opt
 %type <partition> partition
 %type <partitions> partition_list_opt partition_list
@@ -864,6 +870,7 @@ stmt:
 
 normal_stmt:
     create_stmt
+|   upgrade_stmt
 |   call_stmt
 |   mo_dump_stmt
 |   insert_stmt
@@ -895,6 +902,7 @@ normal_stmt:
     }
 |   kill_stmt
 |   backup_stmt
+
 
 backup_stmt:
     BACKUP STRING FILESYSTEM STRING PARALLELISM STRING
@@ -2727,6 +2735,46 @@ analyze_stmt:
     {
         $$ = tree.NewAnalyzeStmt($3, $5)
     }
+
+upgrade_stmt:
+    UPGRADE ACCOUNT target opt_retry
+    {
+        $$ = &tree.UpgradeStatement{
+        	Target: $3,
+        	Retry: $4,
+        }
+    }
+
+target:
+    STRING
+    {
+        $$ = &tree.Target{
+        	AccountName: $1,
+        	IsALLAccount: false,
+        }
+    }
+    | ALL
+    {
+        $$ = &tree.Target{
+        	AccountName: "",
+        	IsALLAccount: true,
+        }
+    }
+
+opt_retry:
+    {
+        $$ = -1
+    }
+|   WITH RETRY INTEGRAL
+    {
+    	res := $3.(int64)
+    	if res <= 0 {
+            yylex.Error("retry value can not less than 0")
+            $$ = -1
+        }
+        $$ = res
+    }
+
 
 alter_stmt:
     alter_user_stmt
@@ -6637,6 +6685,9 @@ replace_opt:
     {
         $$ = true
     }
+
+
+
 
 create_table_stmt:
     CREATE temporary_opt TABLE not_exists_opt table_name '(' table_elem_list_opt ')' table_option_list_opt partition_by_opt cluster_by_opt
@@ -11234,6 +11285,7 @@ not_keyword:
 |   HEADERS
 |   SERIAL_EXTRACT
 |   BIT_CAST
+
 
 //mo_keywords:
 //    PROPERTIES

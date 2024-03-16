@@ -7480,6 +7480,11 @@ func (m *MockBaseService) GetFinalVersion() string {
 	return "1.2.0"
 }
 
+func (s *MockBaseService) UpgradeTenant(ctx context.Context, tenantName string, isALLAccount bool) error {
+	//TODO implement me
+	panic("implement me")
+}
+
 func newBh(ctrl *gomock.Controller, sql2result map[string]ExecResult) BackgroundExec {
 	var currentSql string
 	bh := mock_frontend.NewMockBackgroundExec(ctrl)

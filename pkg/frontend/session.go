@@ -1523,7 +1523,7 @@ func (ses *Session) AuthenticateUser(userInput string, dbName string, authRespon
 	var userID int64
 	var pwd, accountStatus string
 	var accountVersion uint64
-	var createVersion string
+	//var createVersion string
 	var pwdBytes []byte
 	var isSpecial bool
 	var specialAccount *TenantInfo
@@ -1590,16 +1590,16 @@ func (ses *Session) AuthenticateUser(userInput string, dbName string, authRespon
 	}
 
 	// current Tenant system version
-	createVersion, err = rsset[0].GetString(sysTenantCtx, 0, 5)
-	if err != nil {
-		return nil, err
-	}
+	//createVersion, err = rsset[0].GetString(sysTenantCtx, 0, 5)
+	//if err != nil {
+	//	return nil, err
+	//}
 
 	//------------------------------------------------------------------------------------------------------------------
-	err = ses.MaybeUpgradeTenant(sysTenantCtx, createVersion, tenantID)
-	if err != nil {
-		return nil, err
-	}
+	//err = ses.MaybeUpgradeTenant(sysTenantCtx, createVersion, tenantID)
+	//if err != nil {
+	//	return nil, err
+	//}
 	//------------------------------------------------------------------------------------------------------------------
 
 	if strings.ToLower(accountStatus) == tree.AccountStatusSuspend.String() {
@@ -1789,6 +1789,11 @@ func (ses *Session) MaybeUpgradeTenant(ctx context.Context, curVersion string, t
 		return ses.rm.baseService.CheckTenantUpgrade(ctx, tenantID)
 	}
 	return nil
+}
+
+func (ses *Session) UpgradeTenant(ctx context.Context, tenantName string, isALLAccount bool) error {
+	// Get mo final version, which is based on the current code version
+	return ses.rm.baseService.UpgradeTenant(ctx, tenantName, isALLAccount)
 }
 
 func (ses *Session) InitGlobalSystemVariables() error {

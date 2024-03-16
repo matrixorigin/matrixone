@@ -619,5 +619,7 @@ func init() {
 		"percent":                    PERCENT,
 		"master":                     MASTER,
 		"parallelism":                PARALLELISM,
+		"upgrade":                    UPGRADE,
+		"retry":                      RETRY,
 	}
 }

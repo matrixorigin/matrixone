@@ -262,6 +262,9 @@ type Config struct {
 	// LogtailUpdateStatsThreshold is the number that logtail entries received
 	// to trigger stats updating.
 	LogtailUpdateStatsThreshold int `toml:"logtail-update-stats-threshold"`
+
+	// Whether to automatically upgrade when system startup
+	AutomaticUpgrade bool `toml:"auto-upgrade"`
 }
 
 func (c *Config) Validate() error {

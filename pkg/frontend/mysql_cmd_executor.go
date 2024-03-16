@@ -3590,6 +3590,12 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 		if err = mce.handleCallProcedure(requestCtx, st, proc, i, len(cws)); err != nil {
 			return
 		}
+
+	case *tree.UpgradeStatement:
+		selfHandle = true
+		if err = mce.handleExecUpgrade(requestCtx, st, proc, i, len(cws)); err != nil {
+			return
+		}
 	case *tree.Grant:
 		selfHandle = true
 		ses.InvalidatePrivilegeCache()
@@ -4949,5 +4955,21 @@ func (mce *MysqlCmdExecutor) handleSetOption(ctx context.Context, data []byte) (
 		return moerr.NewInternalError(ctx, "invalid cmd_set_option data")
 	}
 
+	return nil
+}
+
+func (mce *MysqlCmdExecutor) handleExecUpgrade(ctx context.Context, st *tree.UpgradeStatement, proc *process.Process, i int, i2 int) error {
+	ses := mce.GetSession()
+	proto := ses.GetMysqlProtocol()
+
+	err := ses.UpgradeTenant(ctx, st.Target.AccountName, st.Target.IsALLAccount)
+	if err != nil {
+		return err
+	}
+
+	resp := NewGeneralOkResponse(COM_QUERY, mce.ses.GetServerStatus())
+	if err = proto.SendResponse(ses.requestCtx, resp); err != nil {
+		return moerr.NewInternalError(ses.requestCtx, "routine send response failed. error:%v ", err)
+	}
 	return nil
 }
