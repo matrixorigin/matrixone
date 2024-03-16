@@ -291,6 +291,10 @@ func (s *StorageTxnOperator) AddLockTable(lock.LockTable) error {
 	panic("should not call")
 }
 
+func (s *StorageTxnOperator) LockTableCount() int32 {
+	panic("should not call")
+}
+
 func (s *StorageTxnOperator) UpdateSnapshot(ctx context.Context, ts timestamp.Timestamp) error {
 	panic("should not call")
 }

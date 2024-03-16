@@ -301,10 +301,13 @@ func logCheckDeadLockFailed(
 	}
 }
 
-func logKeepBindFailed(err error) {
+func logKeepBindFailed(
+	serviceID string,
+	err error) {
 	logger := getWithSkipLogger()
 	if logger.Enabled(zap.ErrorLevel) {
 		logger.Error("failed to keep lock table bind",
+			zap.String("serviceID", serviceID),
 			zap.Error(err))
 	}
 }

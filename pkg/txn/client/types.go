@@ -146,6 +146,8 @@ type TxnOperator interface {
 	AddWaitLock(tableID uint64, rows [][]byte, opt lock.LockOptions) uint64
 	// RemoveWaitLock remove wait lock for current txn
 	RemoveWaitLock(key uint64)
+	// LockTableCount get quality of lock table
+	LockTableCount() int32
 
 	// AddWorkspace for the transaction
 	AddWorkspace(workspace Workspace)

@@ -436,6 +436,20 @@ func (mr *MockTxnOperatorMockRecorder) IsRetry() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "IsRetry", reflect.TypeOf((*MockTxnOperator)(nil).IsRetry))
 }
 
+// LockTableCount mocks base method.
+func (m *MockTxnOperator) LockTableCount() int32 {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "LockTableCount")
+	ret0, _ := ret[0].(int32)
+	return ret0
+}
+
+// LockTableCount indicates an expected call of LockTableCount.
+func (mr *MockTxnOperatorMockRecorder) LockTableCount() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "LockTableCount", reflect.TypeOf((*MockTxnOperator)(nil).LockTableCount))
+}
+
 // Read mocks base method.
 func (m *MockTxnOperator) Read(ctx context.Context, ops []txn.TxnRequest) (*rpc.SendResult, error) {
 	m.ctrl.T.Helper()
