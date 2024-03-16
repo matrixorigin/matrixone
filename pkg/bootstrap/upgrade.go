@@ -16,14 +16,13 @@ package bootstrap
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v1_2_0"
-	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v1_2_1"
 )
 
 // initUpgrade all versions need create a upgrade handle in pkg/bootstrap/versions
 // package. And register the upgrade logic into handles.
 func (s *service) initUpgrade() {
 	s.handles = append(s.handles, v1_2_0.Handler)
-	s.handles = append(s.handles, v1_2_1.Handler)
+	//s.handles = append(s.handles, v1_2_1.Handler)
 }
 
 func (s *service) getFinalVersionHandle() VersionHandle {
