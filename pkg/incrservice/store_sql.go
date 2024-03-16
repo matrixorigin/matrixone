@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -216,6 +217,12 @@ func (s *sqlStore) Allocate(
 			},
 			opts)
 		if err != nil {
+			// retry ww conflict if the txn is not pessimistic
+			if !txnOp.Txn().IsPessimistic() &&
+				moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict) {
+				continue
+			}
+
 			return 0, 0, err
 		}
 		if ok {
