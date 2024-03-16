@@ -1551,7 +1551,7 @@ func GenUniqueColJoinExpr(ctx context.Context, tableDef *TableDef, uniqueCols []
 		for _, colIdx := range uniqueColMap {
 			col := tableDef.Cols[colIdx]
 			leftExpr := &Expr{
-				Typ: *col.Typ,
+				Typ: col.Typ,
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
 						RelPos: leftTag,
@@ -1560,7 +1560,7 @@ func GenUniqueColJoinExpr(ctx context.Context, tableDef *TableDef, uniqueCols []
 				},
 			}
 			rightExpr := &plan.Expr{
-				Typ: *col.Typ,
+				Typ: col.Typ,
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
 						RelPos: rightTag,
@@ -1610,7 +1610,7 @@ func GenUniqueColCheckExpr(ctx context.Context, tableDef *TableDef, uniqueCols [
 			col := tableDef.Cols[colIdx]
 			// insert values
 			leftExpr := &Expr{
-				Typ: *col.Typ,
+				Typ: col.Typ,
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
 						RelPos: 0,
@@ -1619,7 +1619,7 @@ func GenUniqueColCheckExpr(ctx context.Context, tableDef *TableDef, uniqueCols [
 				},
 			}
 			rightExpr := &plan.Expr{
-				Typ: *col.Typ,
+				Typ: col.Typ,
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
 						RelPos: 1,
@@ -1898,6 +1898,29 @@ func HasFkSelfReferOnly(tableDef *TableDef) bool {
 		}
 	}
 	return true
+}
+
+func IsFalseExpr(e *Expr) bool {
+	if e == nil || e.GetTyp().Id != int32(types.T_bool) || e.GetLit() == nil {
+		return false
+	}
+	if x, ok := e.GetLit().GetValue().(*plan.Literal_Bval); ok {
+		return !x.Bval
+	}
+	return false
+}
+func MakeFalseExpr() *Expr {
+	return &plan.Expr{
+		Typ: plan.Type{
+			Id: int32(types.T_bool),
+		},
+		Expr: &plan.Expr_Lit{
+			Lit: &plan.Literal{
+				Isnull: false,
+				Value:  &plan.Literal_Bval{Bval: false},
+			},
+		},
+	}
 }
 
 func MakeInExpr(ctx context.Context, left *Expr, length int32, data []byte, matchPrefix bool) *Expr {

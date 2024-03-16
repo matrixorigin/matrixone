@@ -16,12 +16,13 @@ package disttae
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/panjf2000/ants/v2"
 	"math"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/panjf2000/ants/v2"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 
@@ -322,7 +323,7 @@ func (txn *Transaction) IncrStatementID(ctx context.Context, commit bool) error 
 	if err := txn.mergeTxnWorkspaceLocked(); err != nil {
 		return err
 	}
-	//flushing writes into S3 for the last statement
+	// dump batch to s3, starting from 0 (begining of the workspace)
 	if err := txn.dumpBatchLocked(0); err != nil {
 		return err
 	}
@@ -558,6 +559,8 @@ type txnDatabase struct {
 	databaseType      string
 	databaseCreateSql string
 	txn               *Transaction
+
+	rowId types.Rowid
 }
 
 type tableKey struct {

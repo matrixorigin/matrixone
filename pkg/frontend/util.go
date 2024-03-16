@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"math/rand"
 	"os"
 	"runtime"
 	"strconv"
@@ -627,6 +628,14 @@ func getVariableValue(varDefault interface{}) string {
 		return fmt.Sprintf("%d", val)
 	case int8:
 		return fmt.Sprintf("%d", val)
+	case float64:
+		// 0.1 => 0.100000
+		// 0.0000001 -> 1.000000e-7
+		if val >= 1e-6 {
+			return fmt.Sprintf("%.6f", val)
+		} else {
+			return fmt.Sprintf("%.6e", val)
+		}
 	case string:
 		return val
 	default:
@@ -798,39 +807,39 @@ func mysqlColDef2PlanResultColDef(mr *MysqlResultSet) *plan.ResultColDef {
 		}
 		switch col.ColumnType() {
 		case defines.MYSQL_TYPE_VAR_STRING:
-			resultCols[i].Typ = &plan.Type{
+			resultCols[i].Typ = plan.Type{
 				Id: int32(types.T_varchar),
 			}
 		case defines.MYSQL_TYPE_LONG:
-			resultCols[i].Typ = &plan.Type{
+			resultCols[i].Typ = plan.Type{
 				Id: int32(types.T_int32),
 			}
 		case defines.MYSQL_TYPE_LONGLONG:
-			resultCols[i].Typ = &plan.Type{
+			resultCols[i].Typ = plan.Type{
 				Id: int32(types.T_int64),
 			}
 		case defines.MYSQL_TYPE_DOUBLE:
-			resultCols[i].Typ = &plan.Type{
+			resultCols[i].Typ = plan.Type{
 				Id: int32(types.T_float64),
 			}
 		case defines.MYSQL_TYPE_FLOAT:
-			resultCols[i].Typ = &plan.Type{
+			resultCols[i].Typ = plan.Type{
 				Id: int32(types.T_float32),
 			}
 		case defines.MYSQL_TYPE_DATE:
-			resultCols[i].Typ = &plan.Type{
+			resultCols[i].Typ = plan.Type{
 				Id: int32(types.T_date),
 			}
 		case defines.MYSQL_TYPE_TIME:
-			resultCols[i].Typ = &plan.Type{
+			resultCols[i].Typ = plan.Type{
 				Id: int32(types.T_time),
 			}
 		case defines.MYSQL_TYPE_DATETIME:
-			resultCols[i].Typ = &plan.Type{
+			resultCols[i].Typ = plan.Type{
 				Id: int32(types.T_datetime),
 			}
 		case defines.MYSQL_TYPE_TIMESTAMP:
-			resultCols[i].Typ = &plan.Type{
+			resultCols[i].Typ = plan.Type{
 				Id: int32(types.T_timestamp),
 			}
 		default:
@@ -839,5 +848,53 @@ func mysqlColDef2PlanResultColDef(mr *MysqlResultSet) *plan.ResultColDef {
 	}
 	return &plan.ResultColDef{
 		ResultCols: resultCols,
+	}
+}
+
+// errCodeRollbackWholeTxn denotes that the error code
+// that should rollback the whole txn
+var errCodeRollbackWholeTxn = map[uint16]bool{
+	moerr.ErrDeadLockDetected:     false,
+	moerr.ErrLockTableBindChanged: false,
+	moerr.ErrLockTableNotFound:    false,
+	moerr.ErrDeadlockCheckBusy:    false,
+	moerr.ErrLockConflict:         false,
+}
+
+func isErrorRollbackWholeTxn(inputErr error) bool {
+	if inputErr == nil {
+		return false
+	}
+	me, ok := inputErr.(*moerr.Error)
+	if !ok {
+		// This is not a moerr
+		return false
+	}
+	if _, has := errCodeRollbackWholeTxn[me.ErrorCode()]; has {
+		return true
+	}
+	return false
+}
+
+func getRandomErrorRollbackWholeTxn() error {
+	rand.NewSource(time.Now().UnixNano())
+	x := rand.Intn(len(errCodeRollbackWholeTxn))
+	arr := make([]uint16, 0, len(errCodeRollbackWholeTxn))
+	for k := range errCodeRollbackWholeTxn {
+		arr = append(arr, k)
+	}
+	switch arr[x] {
+	case moerr.ErrDeadLockDetected:
+		return moerr.NewDeadLockDetectedNoCtx()
+	case moerr.ErrLockTableBindChanged:
+		return moerr.NewLockTableBindChangedNoCtx()
+	case moerr.ErrLockTableNotFound:
+		return moerr.NewLockTableNotFoundNoCtx()
+	case moerr.ErrDeadlockCheckBusy:
+		return moerr.NewDeadlockCheckBusyNoCtx()
+	case moerr.ErrLockConflict:
+		return moerr.NewLockConflictNoCtx()
+	default:
+		panic(fmt.Sprintf("usp error code %d", arr[x]))
 	}
 }

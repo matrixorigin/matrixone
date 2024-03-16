@@ -316,8 +316,8 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 						exprs = nil
 						// FIXME: Should give an empty "Data" and then early return
 						s.NodeInfo.Data = nil
-						s.NodeInfo.Data = append(s.NodeInfo.Data, objectio.EmptyBlockInfoBytes...)
 						s.NodeInfo.NeedExpandRanges = false
+						s.DataSource.FilterExpr = plan2.MakeFalseExpr()
 						break FOR_LOOP
 
 					case pbpipeline.RuntimeFilter_IN:
@@ -372,8 +372,7 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 		if len(s.DataSource.node.BlockFilterList) > 0 {
 			newExprList = append(newExprList, s.DataSource.node.BlockFilterList...)
 		}
-		s.DataSource.node.BlockFilterList = newExprList
-		ranges, err := c.expandRanges(s.DataSource.node, s.NodeInfo.Rel)
+		ranges, err := c.expandRanges(s.DataSource.node, s.NodeInfo.Rel, newExprList)
 		if err != nil {
 			return err
 		}

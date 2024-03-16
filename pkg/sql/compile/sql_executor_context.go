@@ -165,7 +165,7 @@ func (c *compilerContext) GetPrimaryKeyDef(
 	for _, key := range priKeys {
 		priDefs = append(priDefs, &plan.ColDef{
 			Name: key.Name,
-			Typ: &plan.Type{
+			Typ: plan.Type{
 				Id:    int32(key.Type.Oid),
 				Width: key.Type.Width,
 				Scale: key.Type.Scale,
@@ -219,7 +219,7 @@ func (c *compilerContext) Resolve(dbName string, tableName string) (*plan.Object
 }
 
 func (c *compilerContext) ResolveVariable(varName string, isSystemVar bool, isGlobalVar bool) (interface{}, error) {
-	return "", nil
+	return nil, nil
 }
 
 func (c *compilerContext) SetBuildingAlterView(yesOrNo bool, dbName, viewName string) {
@@ -294,7 +294,7 @@ func (c *compilerContext) getTableDef(
 			col := &plan.ColDef{
 				ColId: attr.Attr.ID,
 				Name:  attr.Attr.Name,
-				Typ: &plan.Type{
+				Typ: plan.Type{
 					Id:          int32(attr.Attr.Type.Oid),
 					Width:       attr.Attr.Type.Width,
 					Scale:       attr.Attr.Type.Scale,

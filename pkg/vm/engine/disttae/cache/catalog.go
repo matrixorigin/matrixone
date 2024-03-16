@@ -299,6 +299,7 @@ func (cc *CatalogCache) GetDatabase(db *DatabaseItem) bool {
 			item.Name == db.Name {
 			find = true
 			db.Id = item.Id
+			db.Rowid = item.Rowid
 			db.CreateSql = item.CreateSql
 			db.Typ = item.Typ
 		}
@@ -669,7 +670,7 @@ func getTableDef(tblItem *TableItem, coldefs []engine.TableDef) *plan.TableDef {
 			cols = append(cols, &plan.ColDef{
 				ColId: attr.Attr.ID,
 				Name:  attr.Attr.Name,
-				Typ: &plan.Type{
+				Typ: plan.Type{
 					Id:          int32(attr.Attr.Type.Oid),
 					Width:       attr.Attr.Type.Width,
 					Scale:       attr.Attr.Type.Scale,

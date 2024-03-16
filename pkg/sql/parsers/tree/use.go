@@ -20,8 +20,8 @@ func init() {
 	reuse.CreatePool[Use](
 		func() *Use { return &Use{} },
 		func(u *Use) { u.reset() },
-		reuse.DefaultOptions[Use]().
-			WithEnableChecker())
+		reuse.DefaultOptions[Use](), //.
+	) //WithEnableChecker()
 }
 
 type SecondaryRoleType int
@@ -87,11 +87,11 @@ func (node *Use) Free() {
 
 func (node *Use) reset() {
 	// if node.Name != nil {
-	// 	reuse.Free[CStr](node.Name, nil)
+	// node.Free()
 	// }
-	// if node.Role != nil {
-	// 	reuse.Free[Role](node.Role, nil)
-	// }
+	if node.Role != nil {
+		node.Role.Free()
+	}
 	*node = Use{}
 }
 

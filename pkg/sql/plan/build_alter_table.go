@@ -118,7 +118,7 @@ func buildAlterTableCopy(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, err
 			return nil, moerr.NewInvalidInput(ctx.GetContext(), "Do not support this stmt now. %v", spec)
 		case *tree.TableOptionComment:
 			return nil, moerr.NewInvalidInput(ctx.GetContext(), "Do not support this stmt now. %v", spec)
-		case *tree.AlterTableName:
+		case *tree.AlterOptionTableName:
 			return nil, moerr.NewInvalidInput(ctx.GetContext(), "Do not support this stmt now. %v", spec)
 		case *tree.AlterAddCol:
 			err = AddColumn(ctx, alterTablePlan, option, alterTableCtx)
@@ -167,7 +167,9 @@ func buildAlterTableCopy(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, err
 	alterTablePlan.InsertDataSql = insertDml
 
 	alterTablePlan.ChangeTblColIdMap = alterTableCtx.changColDefMap
-
+	alterTablePlan.UpdateFkSqls = append(alterTablePlan.UpdateFkSqls, alterTableCtx.UpdateSqls...)
+	//delete copy table records from mo_catalog.mo_foreign_keys
+	alterTablePlan.UpdateFkSqls = append(alterTablePlan.UpdateFkSqls, getSqlForDeleteTable(schemaName, alterTableCtx.copyTableName))
 	return &Plan{
 		Plan: &plan.Plan_Ddl{
 			Ddl: &plan.DataDefinition{
@@ -557,6 +559,7 @@ type AlterTableContext struct {
 	copyTableName   string
 	// key oldColId -> new ColDef
 	changColDefMap map[uint64]*ColDef
+	UpdateSqls     []string
 }
 
 type exprType int
@@ -701,7 +704,7 @@ func ResolveAlterTableAlgorithm(ctx context.Context, validAlterSpecs []tree.Alte
 			algorithm = plan.AlterTable_INPLACE
 		case *tree.TableOptionComment:
 			algorithm = plan.AlterTable_INPLACE
-		case *tree.AlterTableName:
+		case *tree.AlterOptionTableName:
 			algorithm = plan.AlterTable_INPLACE
 		case *tree.AlterAddCol:
 			algorithm = plan.AlterTable_COPY

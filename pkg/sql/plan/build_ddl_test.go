@@ -17,6 +17,8 @@ package plan
 import (
 	"context"
 	"encoding/json"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"testing"
 
 	"github.com/golang/mock/gomock"
@@ -78,7 +80,7 @@ func TestBuildAlterView(t *testing.T) {
 			Cols: []*ColDef{
 				{
 					Name: "a",
-					Typ: &plan.Type{
+					Typ: plan.Type{
 						Id:    int32(types.T_varchar),
 						Width: types.MaxVarcharLen,
 						Table: "a",
@@ -172,7 +174,7 @@ func TestBuildLockTables(t *testing.T) {
 			Cols: []*ColDef{
 				{
 					Name: "a",
-					Typ: &plan.Type{
+					Typ: plan.Type{
 						Id:    int32(types.T_varchar),
 						Width: types.MaxVarcharLen,
 						Table: "t1",
@@ -216,7 +218,7 @@ func TestBuildLockTables(t *testing.T) {
 			Cols: []*ColDef{
 				{
 					Name: "a",
-					Typ: &plan.Type{
+					Typ: plan.Type{
 						Id:    int32(types.T_varchar),
 						Width: types.MaxVarcharLen,
 						Table: "t2",
@@ -237,7 +239,11 @@ func TestBuildLockTables(t *testing.T) {
 
 func TestBuildCreateTable(t *testing.T) {
 	mock := NewMockOptimizer(false)
-
+	rt := moruntime.DefaultRuntime()
+	moruntime.SetupProcessLevelRuntime(rt)
+	moruntime.ProcessLevelRuntime().SetGlobalVariables(moruntime.InternalSQLExecutor, executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+		return executor.Result{}, nil
+	}))
 	sqls := []string{
 		`CREATE TABLE t3(
 					col1 INT NOT NULL,

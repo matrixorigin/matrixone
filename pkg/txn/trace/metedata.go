@@ -44,6 +44,8 @@ var (
 	txnUpdateSnapshotEvent       = "update-snapshot"
 	txnExecuteEvent              = "execute"
 	txnUpdateSnapshotReasonEvent = "update-snapshot-reason"
+	txnNoConflictChanged         = "no-conflict-changed"
+	txnConflictChanged           = "conflict-changed"
 
 	entryApplyEvent         = "apply"
 	entryCommitEvent        = "commit"

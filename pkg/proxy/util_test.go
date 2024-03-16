@@ -39,18 +39,6 @@ func makeSimplePacket(payload string) []byte {
 	return data
 }
 
-func makeInitDBPacket(db string) []byte {
-	l := 1 + len(db)
-	data := make([]byte, l+4)
-	data[4] = byte(cmdInitDB)
-	copy(data[5:], db)
-	data[0] = byte(l)
-	data[1] = byte(l >> 8)
-	data[2] = byte(l >> 16)
-	data[3] = 0
-	return data
-}
-
 func packetLen(data []byte) (int32, error) {
 	if len(data) < 3 {
 		return 0, moerr.NewInternalErrorNoCtx("invalid data")

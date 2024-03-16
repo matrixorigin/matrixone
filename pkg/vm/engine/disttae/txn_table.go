@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+	"sort"
 	"strconv"
 	"time"
 	"unsafe"
@@ -725,7 +726,8 @@ func (tbl *txnTable) rangesOnePart(
 				return
 			}
 			//deletes in tbl.writes maybe comes from PartitionState.rows or PartitionState.blocks.
-			if entry.fileName == "" {
+			if entry.fileName == "" &&
+				entry.tableId != catalog.MO_DATABASE_ID && entry.tableId != catalog.MO_TABLES_ID && entry.tableId != catalog.MO_COLUMNS_ID {
 				vs := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
 				for _, v := range vs {
 					id, _ := v.Decode()
@@ -980,33 +982,56 @@ func (tbl *txnTable) tryFastRanges(
 				return
 			}
 
-			ForeachBlkInObjStatsList(false, meta, func(blk objectio.BlockInfo, blkMeta objectio.BlockObject) bool {
+			var blkIdx int
+			blockCnt := int(meta.BlockCount())
+			if !isVec {
+				blkIdx = sort.Search(blockCnt, func(j int) bool {
+					return meta.GetBlockMeta(uint32(j)).MustGetColumn(uint16(tbl.primaryIdx)).ZoneMap().AnyGEByValue(val)
+				})
+			}
+			if blkIdx >= blockCnt {
+				return
+			}
+			for ; blkIdx < blockCnt; blkIdx++ {
+				blkMeta := meta.GetBlockMeta(uint32(blkIdx))
+				zm := blkMeta.MustGetColumn(uint16(tbl.primaryIdx)).ZoneMap()
+				if !isVec && !zm.AnyLEByValue(val) {
+					break
+				}
 				if isVec {
-					if !blkMeta.IsEmpty() && !blkMeta.MustGetColumn(uint16(tbl.primaryIdx)).ZoneMap().AnyIn(vec) {
-						return true
+					if !zm.AnyIn(vec) {
+						continue
 					}
 				} else {
-					if !blkMeta.IsEmpty() && !blkMeta.MustGetColumn(uint16(tbl.primaryIdx)).ZoneMap().ContainsKey(val) {
-						return true
+					if !zm.ContainsKey(val) {
+						continue
 					}
 				}
 
-				blkBf := bf.GetBloomFilter(uint32(blk.BlockID.Sequence()))
+				blkBf := bf.GetBloomFilter(uint32(blkIdx))
 				blkBfIdx := index.NewEmptyBinaryFuseFilter()
 				if err2 = index.DecodeBloomFilter(blkBfIdx, blkBf); err2 != nil {
-					return false
+					return
 				}
 				var exist bool
 				if isVec {
 					if exist = blkBfIdx.MayContainsAny(vec); !exist {
-						return true
+						continue
 					}
 				} else {
 					if exist, err2 = blkBfIdx.MayContainsKey(val); err2 != nil {
-						return false
+						return
 					} else if !exist {
-						return true
+						continue
 					}
+				}
+
+				name := obj.ObjectName()
+				loc := objectio.BuildLocation(name, obj.Extent(), blkMeta.GetRows(), uint16(blkIdx))
+				blk := objectio.BlockInfo{
+					BlockID:   *objectio.BuildObjectBlockid(name, uint16(blkIdx)),
+					SegmentID: name.SegmentId(),
+					MetaLoc:   objectio.ObjectLocation(loc),
 				}
 
 				blk.Sorted = obj.Sorted
@@ -1021,8 +1046,7 @@ func (tbl *txnTable) tryFastRanges(
 				}
 				blk.PartitionNum = -1
 				blocks.AppendBlockInfo(blk)
-				return true
-			}, obj.ObjectStats)
+			}
 
 			return
 		},
@@ -1123,7 +1147,7 @@ func (tbl *txnTable) GetTableDef(ctx context.Context) *plan.TableDef {
 				cols = append(cols, &plan.ColDef{
 					ColId: attr.Attr.ID,
 					Name:  attr.Attr.Name,
-					Typ: &plan.Type{
+					Typ: plan.Type{
 						Id:          int32(attr.Attr.Type.Oid),
 						Width:       attr.Attr.Type.Width,
 						Scale:       attr.Attr.Type.Scale,
@@ -1626,7 +1650,7 @@ func (tbl *txnTable) compaction(
 		for i := 0; i < len(tbl.tableDef.Cols)-1; i++ {
 			col := tbl.tableDef.Cols[i]
 			idxs = append(idxs, uint16(col.Seqnum))
-			typs = append(typs, vector.ProtoTypeToType(col.Typ))
+			typs = append(typs, vector.ProtoTypeToType(&col.Typ))
 		}
 		tbl.seqnums = idxs
 		tbl.typs = typs
@@ -1709,7 +1733,7 @@ func (tbl *txnTable) GetDBID(ctx context.Context) uint64 {
 func (tbl *txnTable) NewReader(ctx context.Context, num int, expr *plan.Expr, ranges []byte, orderedScan bool) ([]engine.Reader, error) {
 	encodedPK, hasNull, _ := tbl.makeEncodedPK(expr)
 	blkArray := objectio.BlockInfoSlice(ranges)
-	if hasNull {
+	if hasNull || plan2.IsFalseExpr(expr) {
 		return []engine.Reader{new(emptyReader)}, nil
 	}
 	if blkArray.Len() == 0 {
@@ -2118,7 +2142,150 @@ func (tbl *txnTable) updateLogtail(ctx context.Context) (err error) {
 	return nil
 }
 
-func (tbl *txnTable) PrimaryKeysMayBeModified(ctx context.Context, from types.TS, to types.TS, keysVector *vector.Vector) (bool, error) {
+func (tbl *txnTable) PKPersistedBetween(
+	p *logtailreplay.PartitionState,
+	from types.TS,
+	to types.TS,
+	keys *vector.Vector,
+) (bool, error) {
+
+	ctx := tbl.proc.Load().Ctx
+	fs := tbl.db.txn.engine.fs
+	primaryIdx := tbl.primaryIdx
+
+	var (
+		meta objectio.ObjectDataMeta
+		bf   objectio.BloomFilter
+	)
+
+	candidateBlks := make(map[types.Blockid]*objectio.BlockInfo)
+
+	//only check data objects.
+	delObjs, cObjs := p.GetChangedObjsBetween(from.Next(), types.MaxTs())
+
+	if err := ForeachCommittedObjects(cObjs, delObjs, p,
+		func(obj logtailreplay.ObjectInfo) (err2 error) {
+			var zmCkecked bool
+			// if the object info contains a pk zonemap, fast-check with the zonemap
+			if !obj.ZMIsEmpty() {
+				if !obj.SortKeyZoneMap().AnyIn(keys) {
+					return
+				}
+				zmCkecked = true
+			}
+
+			var objMeta objectio.ObjectMeta
+			location := obj.Location()
+
+			// load object metadata
+			if objMeta, err2 = objectio.FastLoadObjectMeta(
+				ctx, &location, false, fs,
+			); err2 != nil {
+				return
+			}
+
+			// reset bloom filter to nil for each object
+			meta = objMeta.MustDataMeta()
+
+			// check whether the object is skipped by zone map
+			// If object zone map doesn't contains the pk value, we need to check bloom filter
+			if !zmCkecked {
+				if !meta.MustGetColumn(uint16(primaryIdx)).ZoneMap().AnyIn(keys) {
+					return
+				}
+			}
+
+			bf = nil
+			if bf, err2 = objectio.LoadBFWithMeta(
+				ctx, meta, location, fs,
+			); err2 != nil {
+				return
+			}
+
+			ForeachBlkInObjStatsList(false, meta,
+				func(blk objectio.BlockInfo, blkMeta objectio.BlockObject) bool {
+					if !blkMeta.IsEmpty() &&
+						!blkMeta.MustGetColumn(uint16(primaryIdx)).ZoneMap().AnyIn(keys) {
+						return true
+					}
+
+					blkBf := bf.GetBloomFilter(uint32(blk.BlockID.Sequence()))
+					blkBfIdx := index.NewEmptyBinaryFuseFilter()
+					if err2 = index.DecodeBloomFilter(blkBfIdx, blkBf); err2 != nil {
+						return false
+					}
+					var exist bool
+					if exist = blkBfIdx.MayContainsAny(keys); !exist {
+						return true
+					}
+
+					blk.Sorted = obj.Sorted
+					blk.EntryState = obj.EntryState
+					blk.CommitTs = obj.CommitTS
+					if obj.HasDeltaLoc {
+						deltaLoc, commitTs, ok := p.GetBockDeltaLoc(blk.BlockID)
+						if ok {
+							blk.DeltaLoc = deltaLoc
+							blk.CommitTs = commitTs
+						}
+					}
+					blk.PartitionNum = -1
+					candidateBlks[blk.BlockID] = &blk
+					return true
+				}, obj.ObjectStats)
+
+			return
+		}); err != nil {
+		return true, err
+	}
+
+	//read block ,check if keys exist in the block.
+	pkDef := tbl.tableDef.Cols[tbl.primaryIdx]
+	pkSeq := pkDef.Seqnum
+	pkType := types.T(pkDef.Typ.Id).ToType()
+	for _, blk := range candidateBlks {
+		bat, err := blockio.LoadColumns(
+			ctx,
+			[]uint16{uint16(pkSeq)},
+			[]types.Type{pkType},
+			fs,
+			blk.MetaLocation(),
+			tbl.proc.Load().GetMPool(),
+			fileservice.Policy(0),
+		)
+		if err != nil {
+			return true, err
+		}
+
+		colExpr := newColumnExpr(0, plan2.MakePlan2Type(keys.GetType()), "pk")
+
+		keys.InplaceSort()
+		bytes, _ := keys.MarshalBinary()
+		inExpr := plan2.MakeInExpr(
+			tbl.proc.Load().Ctx,
+			colExpr,
+			int32(keys.Length()),
+			bytes,
+			false)
+
+		_, _, filter := getNonCompositePKSearchFuncByExpr(
+			inExpr,
+			"pk",
+			keys.GetType().Oid,
+			tbl.proc.Load())
+		sels := filter(bat.Vecs)
+		if len(sels) > 0 {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func (tbl *txnTable) PrimaryKeysMayBeModified(
+	ctx context.Context,
+	from types.TS,
+	to types.TS,
+	keysVector *vector.Vector) (bool, error) {
 	part, err := tbl.db.txn.engine.lazyLoad(ctx, tbl)
 	if err != nil {
 		return false, err
@@ -2131,10 +2298,25 @@ func (tbl *txnTable) PrimaryKeysMayBeModified(ctx context.Context, from types.TS
 	packer.Reset()
 
 	keys := logtailreplay.EncodePrimaryKeyVector(keysVector, packer)
-	if snap.PrimaryKeyMayBeModified(from, to, keys) {
+	exist, flushed := snap.PKExistInMemBetween(from, to, keys)
+	if exist {
 		return true, nil
 	}
-	return false, nil
+	if !flushed {
+		return false, nil
+	}
+	//need check pk whether exist on S3 block.
+	if tbl.tableName == catalog.MO_DATABASE ||
+		tbl.tableName == catalog.MO_TABLES ||
+		tbl.tableName == catalog.MO_COLUMNS {
+		logutil.Warnf("mo table:%s always exist in memory", tbl.tableName)
+		return true, nil
+	}
+	return tbl.PKPersistedBetween(
+		snap,
+		from,
+		to,
+		keysVector)
 }
 
 func (tbl *txnTable) updateDeleteInfo(
@@ -2250,7 +2432,7 @@ func (tbl *txnTable) readNewRowid(vec *vector.Vector, row int,
 	tableDef := tbl.GetTableDef(context.TODO())
 	for _, col := range tableDef.Cols {
 		if col.Name == tableDef.Pkey.PkeyColName {
-			typ = col.Typ
+			typ = &col.Typ
 			columns = append(columns, uint16(col.Seqnum))
 			colTypes = append(colTypes, types.T(col.Typ.Id).ToType())
 		}

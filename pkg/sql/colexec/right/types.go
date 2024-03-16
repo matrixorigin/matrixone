@@ -83,6 +83,8 @@ type Argument struct {
 	bat        *batch.Batch
 	rbat       []*batch.Batch
 	lastpos    int
+	count      int
+	sel        int
 
 	IsMerger bool
 	Channel  chan *bitmap.Bitmap

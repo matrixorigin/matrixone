@@ -238,6 +238,7 @@ mo_pubs
 mo_stored_procedure
 mo_stages
 mo_sessions
+mo_snapshots
 mo_configurations
 mo_locks
 mo_variables
@@ -247,9 +248,10 @@ mo_version
 mo_upgrade
 mo_upgrade_tenant
 mo_account
+mo_foreign_keys
 show table_number from mo_catalog;
 Number of tables in mo_catalog
-25
+27
 show column_number from mo_database;
 Number of columns in mo_database
 9

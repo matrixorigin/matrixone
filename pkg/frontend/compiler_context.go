@@ -205,7 +205,7 @@ func (tcc *TxnCompilerContext) getRelation(dbName string, tableName string, sub 
 	if dbName == catalog.MO_SYSTEM && tableName == catalog.MO_STATEMENT {
 		txnCtx = defines.AttachAccountId(txnCtx, uint32(sysAccountID))
 	}
-	if dbName == catalog.MO_SYSTEM_METRICS && tableName == catalog.MO_METRIC {
+	if dbName == catalog.MO_SYSTEM_METRICS && (tableName == catalog.MO_METRIC || tableName == catalog.MO_SQL_STMT_CU) {
 		txnCtx = defines.AttachAccountId(txnCtx, uint32(sysAccountID))
 	}
 
@@ -605,7 +605,7 @@ func (tcc *TxnCompilerContext) GetPrimaryKeyDef(dbName string, tableName string)
 	for _, key := range priKeys {
 		priDefs = append(priDefs, &plan2.ColDef{
 			Name: key.Name,
-			Typ: &plan2.Type{
+			Typ: plan2.Type{
 				Id:    int32(key.Type.Oid),
 				Width: key.Type.Width,
 				Scale: key.Type.Scale,

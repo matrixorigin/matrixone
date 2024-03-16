@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+	"encoding/hex"
 	"math"
 	"time"
 
@@ -131,22 +132,22 @@ func checkPKDupGeneric[T comparable](
 	t *types.Type,
 	attr string,
 	vals []T,
-	start, count int) error {
+	start, count int) (bool, string) {
 	for _, v := range vals[start : start+count] {
 		if _, ok := mp[v]; ok {
 			entry := common.TypeStringValue(*t, v, false)
-			return moerr.NewDuplicateEntryNoCtx(entry, attr)
+			return true, entry
 		}
 		mp[v] = true
 	}
-	return nil
+	return false, ""
 }
 
 func checkPKDup(
 	mp map[any]bool,
 	pk *vector.Vector,
 	attr string,
-	start, count int) error {
+	start, count int) (bool, string) {
 	colType := pk.GetType()
 	switch colType.Oid {
 	case types.T_bool:
@@ -224,7 +225,7 @@ func checkPKDup(
 			v := pk.GetStringAt(i)
 			if _, ok := mp[v]; ok {
 				entry := common.TypeStringValue(*colType, []byte(v), false)
-				return moerr.NewDuplicateEntryNoCtx(entry, attr)
+				return true, entry
 			}
 			mp[v] = true
 		}
@@ -233,7 +234,7 @@ func checkPKDup(
 			v := types.ArrayToString[float32](vector.GetArrayAt[float32](pk, i))
 			if _, ok := mp[v]; ok {
 				entry := common.TypeStringValue(*colType, pk.GetBytesAt(i), false)
-				return moerr.NewDuplicateEntryNoCtx(entry, attr)
+				return true, entry
 			}
 			mp[v] = true
 		}
@@ -242,14 +243,14 @@ func checkPKDup(
 			v := types.ArrayToString[float64](vector.GetArrayAt[float64](pk, i))
 			if _, ok := mp[v]; ok {
 				entry := common.TypeStringValue(*colType, pk.GetBytesAt(i), false)
-				return moerr.NewDuplicateEntryNoCtx(entry, attr)
+				return true, entry
 			}
 			mp[v] = true
 		}
 	default:
 		panic(moerr.NewInternalErrorNoCtx("%s not supported", pk.GetType().String()))
 	}
-	return nil
+	return false, ""
 }
 
 // checkDup check whether the txn.writes has duplicate pk entry
@@ -261,8 +262,8 @@ func (txn *Transaction) checkDup() error {
 	//table id is global unique
 	tablesDef := make(map[uint64]*plan.TableDef)
 	pkIndex := make(map[uint64]int)
-	insertPks := make(map[any]bool)
-	delPks := make(map[any]bool)
+	insertPks := make(map[uint64]map[any]bool)
+	delPks := make(map[uint64]map[any]bool)
 
 	for _, e := range txn.writes {
 		if e.bat == nil || e.bat.RowCount() == 0 {
@@ -318,13 +319,23 @@ func (txn *Transaction) checkDup() error {
 					newBat.SetRowCount(bat.Vecs[0].Length())
 					bat = newBat
 				}
-				if err := checkPKDup(
-					insertPks,
+				if _, ok := insertPks[e.tableId]; !ok {
+					insertPks[e.tableId] = make(map[any]bool)
+				}
+				if dup, pk := checkPKDup(
+					insertPks[e.tableId],
 					bat.Vecs[index],
 					bat.Attrs[index],
 					0,
-					bat.RowCount()); err != nil {
-					return err
+					bat.RowCount()); dup {
+					logutil.Errorf("txn:%s wants to insert duplicate primary key:%s in table:[%v-%v:%s-%s]",
+						hex.EncodeToString(txn.op.Txn().ID),
+						pk,
+						e.databaseId,
+						e.tableId,
+						e.databaseName,
+						e.tableName)
+					return moerr.NewDuplicateEntryNoCtx(pk, bat.Attrs[index])
 				}
 			}
 			continue
@@ -332,17 +343,27 @@ func (txn *Transaction) checkDup() error {
 		//if entry.tyep is DELETE, then e.bat.Vecs[0] is rowid,e.bat.Vecs[1] is PK
 		if e.typ == DELETE || e.typ == DELETE_TXN {
 			if len(e.bat.Vecs) < 2 {
-				logutil.Warnf("delete entry has no pk, database:%s, table:%s",
+				logutil.Warnf("delete has no pk, database:%s, table:%s",
 					e.databaseName, e.tableName)
 				continue
 			}
-			if err := checkPKDup(
-				delPks,
+			if _, ok := delPks[e.tableId]; !ok {
+				delPks[e.tableId] = make(map[any]bool)
+			}
+			if dup, pk := checkPKDup(
+				delPks[e.tableId],
 				e.bat.Vecs[1],
 				e.bat.Attrs[1],
 				0,
-				e.bat.RowCount()); err != nil {
-				return err
+				e.bat.RowCount()); dup {
+				logutil.Errorf("txn:%s wants to delete duplicate primary key:%s in table:[%v-%v:%s-%s]",
+					hex.EncodeToString(txn.op.Txn().ID),
+					pk,
+					e.databaseId,
+					e.tableId,
+					e.databaseName,
+					e.tableName)
+				return moerr.NewDuplicateEntryNoCtx(pk, e.bat.Attrs[1])
 			}
 		}
 	}
@@ -350,13 +371,21 @@ func (txn *Transaction) checkDup() error {
 }
 
 // dumpBatch if txn.workspaceSize is larger than threshold, cn will write workspace to s3
+// start from write offset.   Pass in offset -1 to dump all.   Note that dump all will
+// modify txn.writes, so it can only be called right before txn.commit.
 func (txn *Transaction) dumpBatchLocked(offset int) error {
 	var size uint64
 	var pkCount int
 	if txn.workspaceSize < WorkspaceThreshold {
 		return nil
 	}
-	if offset > 0 {
+
+	dumpAll := offset < 0
+	if dumpAll {
+		offset = 0
+	}
+
+	if !dumpAll {
 		for i := offset; i < len(txn.writes); i++ {
 			if txn.writes[i].tableId == catalog.MO_DATABASE_ID ||
 				txn.writes[i].tableId == catalog.MO_TABLES_ID ||
@@ -465,9 +494,11 @@ func (txn *Transaction) dumpBatchLocked(offset int) error {
 			return err
 		}
 	}
-	if offset == 0 {
+
+	if dumpAll {
 		txn.workspaceSize = 0
 		txn.pkCount -= pkCount
+		// modifies txn.writes.
 		writes := txn.writes[:0]
 		for i, write := range txn.writes {
 			if write.bat != nil {
@@ -909,7 +940,7 @@ func (txn *Transaction) Commit(ctx context.Context) ([]txn.TxnRequest, error) {
 	if err := txn.mergeTxnWorkspaceLocked(); err != nil {
 		return nil, err
 	}
-	if err := txn.dumpBatchLocked(0); err != nil {
+	if err := txn.dumpBatchLocked(-1); err != nil {
 		return nil, err
 	}
 

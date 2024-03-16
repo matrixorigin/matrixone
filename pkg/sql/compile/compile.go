@@ -417,12 +417,21 @@ func (c *Compile) allocOperatorID() int32 {
 }
 
 // Run is an important function of the compute-layer, it executes a single sql according to its scope
+// Need call Release() after call this function.
 func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
 	txnOp := c.proc.TxnOperator
 	seq := uint64(0)
 	if txnOp != nil {
 		seq = txnOp.NextSequence()
+		txnOp.EnterRunSql()
 	}
+
+	defer func() {
+		if txnOp != nil {
+			txnOp.ExitRunSql()
+		}
+	}()
+
 	txnTrace.GetService().AddTxnDurationAction(
 		txnOp,
 		client.ExecuteSQLEvent,
@@ -483,7 +492,6 @@ func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
 	c.ctx, span = trace.Start(c.ctx, "Compile.Run", trace.WithKind(trace.SpanKindStatement))
 	_, task := gotrace.NewTask(context.TODO(), "pipeline.Run")
 	defer func() {
-		c.Release()
 		releaseRunC()
 
 		task.End()
@@ -634,6 +642,9 @@ func (c *Compile) runOnce() error {
 
 	// fuzzy filter not sure whether this insert / load obey duplicate constraints, need double check
 	if c.fuzzy != nil && c.fuzzy.cnt > 0 && err == nil {
+		if c.fuzzy.cnt > 10 {
+			logutil.Warnf("fuzzy filter cnt is %d, may be too high", c.fuzzy.cnt)
+		}
 		err = c.fuzzy.backgroundSQLCheck(c)
 	}
 	if err != nil {
@@ -3561,28 +3572,33 @@ func (c *Compile) fillAnalyzeInfo() {
 }
 
 func (c *Compile) determinExpandRanges(n *plan.Node, rel engine.Relation) bool {
-	if plan2.InternalTable(n.TableDef) {
-		return true
-	}
-	if n.TableDef.Partition != nil {
-		return true
-	}
-	if len(n.RuntimeFilterProbeList) == 0 {
-		return true
-	}
-	if n.Stats.BlockNum > plan2.BlockNumForceOneCN && len(c.cnList) > 1 {
-		return true
-	}
-	if rel.GetEngineType() != engine.Disttae {
-		return true
-	}
-	if n.AggList != nil { //need to handle partial results
-		return true
-	}
-	return false
+	// for some reason, revert this function to avoid bug, maybe fix this in the future
+	return true
+	/*
+		if plan2.InternalTable(n.TableDef) {
+			return true
+		}
+		if n.TableDef.Partition != nil {
+			return true
+		}
+		if len(n.RuntimeFilterProbeList) == 0 {
+			return true
+		}
+		if n.Stats.BlockNum > plan2.BlockNumForceOneCN && len(c.cnList) > 1 {
+			return true
+		}
+		if rel.GetEngineType() != engine.Disttae {
+			return true
+		}
+		if n.AggList != nil { //need to handle partial results
+			return true
+		}
+		return false
+
+	*/
 }
 
-func (c *Compile) expandRanges(n *plan.Node, rel engine.Relation) (engine.Ranges, error) {
+func (c *Compile) expandRanges(n *plan.Node, rel engine.Relation, blockFilterList []*plan.Expr) (engine.Ranges, error) {
 	var err error
 	var db engine.Database
 	var ranges engine.Ranges
@@ -3601,7 +3617,7 @@ func (c *Compile) expandRanges(n *plan.Node, rel engine.Relation) (engine.Ranges
 	if err != nil {
 		return nil, err
 	}
-	ranges, err = rel.Ranges(ctx, n.BlockFilterList)
+	ranges, err = rel.Ranges(ctx, blockFilterList)
 	if err != nil {
 		return nil, err
 	}
@@ -3705,7 +3721,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 	}
 
 	if c.determinExpandRanges(n, rel) {
-		ranges, err = c.expandRanges(n, rel)
+		ranges, err = c.expandRanges(n, rel, n.BlockFilterList)
 		if err != nil {
 			return nil, nil, nil, err
 		}
@@ -3915,7 +3931,8 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 										}
 									case types.T_TS:
 										min := types.DecodeFixed[types.TS](zm.GetMinBuf())
-										if min.Less(partialResults[i].(types.TS)) {
+										ts := partialResults[i].(types.TS)
+										if min.Less(&ts) {
 											partialResults[i] = min
 										}
 									case types.T_Rowid:
@@ -4041,7 +4058,8 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 										}
 									case types.T_TS:
 										max := types.DecodeFixed[types.TS](zm.GetMaxBuf())
-										if max.Greater(partialResults[i].(types.TS)) {
+										ts := partialResults[i].(types.TS)
+										if max.Greater(&ts) {
 											partialResults[i] = max
 										}
 									case types.T_Rowid:
@@ -4569,6 +4587,28 @@ func runDetectSql(c *Compile, sql string) error {
 			yes := vector.GetFixedAt[bool](vs[0], 0)
 			if !yes {
 				return moerr.NewErrFKNoReferencedRow2(c.ctx)
+			}
+		}
+	}
+	return nil
+}
+
+// runDetectFkReferToDBSql runs the fk detecting sql
+func runDetectFkReferToDBSql(c *Compile, sql string) error {
+	res, err := c.runSqlWithResult(sql)
+	if err != nil {
+		logutil.Errorf("The sql that caused the fk self refer check failed is %s, and generated background sql is %s", c.sql, sql)
+		return err
+	}
+	defer res.Close()
+
+	if res.Batches != nil {
+		vs := res.Batches[0].Vecs
+		if vs != nil && vs[0].Length() > 0 {
+			yes := vector.GetFixedAt[bool](vs[0], 0)
+			if yes {
+				return moerr.NewInternalError(c.ctx,
+					"can not drop database. It has been referenced by foreign keys")
 			}
 		}
 	}
