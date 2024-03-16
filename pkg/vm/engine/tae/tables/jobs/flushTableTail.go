@@ -82,6 +82,47 @@ type flushTableTailTask struct {
 	mergeRowsCnt, ablksDeletesCnt, nblksDeletesCnt int
 }
 
+// A note about flush start timestamp
+//
+// As the last **committed** time, not the newest allcated time,
+// is used in NewFlushTableTailTask, there will be a situation that
+// some commiting appends prepared between committed-time and ablk-freeze-time
+// are ignored during the data collection stage of flushing,
+// which leads to transfer-row-not-found problem.
+//
+// The proposed solution is to add a check function in NewFlushTableTailTask
+// to figure out if there exist an AppendNode with a bigger prepared time
+// than flush-start-ts, and if so, retry the flush task
+//
+// Two question:
+//
+// 1. How about deletes prepared in that special time range?
+//    Never mind, deletes will be transfered when committing the flush task
+// 2. Is it guaranteed that the check function is able to see all possible AppendNodes?
+//    Probably no, because getting appender and attaching AppendNode are not atomic group opertions.
+//    Imagine:
+//
+//                freeze  check
+// committed  x1     |     |     x2
+// prepared          |     |  o2
+// preparing    i2   |     |
+//
+// - x1 is the last committed time.
+// - getting appender(i2 in graph) is before the freezing
+// - attaching AppendNode successfully (o2 in graph) after the check
+// - finishing commit at x2
+//
+// So in order for the check function to work, a dedicated lock is added
+// on ablock to ensure that NO AppendNode will be attatched to ablock
+// after the very moment when the ablock is freezed.
+//
+// In the first version proposal, the check in NewFlushTableTailTask is omitted,
+// because the existing PrepareCompact in ablock already handles that thing.
+// If the last AppendNode in an ablock is not committed, PrepareCompact will
+// return false to reschedule the task. However, commiting AppendNode doesn't
+// guarantee that the committs has been updated. It's still possible to get a
+// old startts which is not able to collect all appends in the ablock.
+
 func NewFlushTableTailTask(
 	ctx *tasks.Context,
 	txn txnif.AsyncTxn,
@@ -123,6 +164,9 @@ func NewFlushTableTailTask(
 		if blk.IsAppendable() {
 			task.ablksMetas = append(task.ablksMetas, blk)
 			task.ablksHandles = append(task.ablksHandles, hdl)
+			if blk.GetBlockData().CheckFlushTaskRetry(txn.GetStartTS()) {
+				return nil, txnif.ErrTxnNeedRetry
+			}
 		} else {
 			task.delSrcMetas = append(task.delSrcMetas, blk)
 			task.delSrcHandles = append(task.delSrcHandles, hdl)
