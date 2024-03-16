@@ -62,8 +62,10 @@ func (s *sqlStore) SelectAll(
 	txnOp client.TxnOperator) (string, error) {
 	fetchSQL := fmt.Sprintf(`select col_name, table_id from %s`, incrTableName)
 	opts := executor.Options{}.WithDatabase(database).WithTxn(txnOp)
+	txnInfo := ""
 	if txnOp != nil {
 		opts = opts.WithDisableIncrStatement()
+		txnInfo = txnOp.Txn().DebugString()
 	}
 	res, err := s.exec.Exec(ctx, fetchSQL, opts)
 	if err != nil {
@@ -76,7 +78,7 @@ func (s *sqlStore) SelectAll(
 		return "", err
 	}
 	str := fmt.Sprintf("Cannot find tableID %d in table %s, accountid %d, txn: %s", tableID, incrTableName,
-		accountId, txnOp.Txn().DebugString())
+		accountId, txnInfo)
 	res.ReadRows(func(_ int, cols []*vector.Vector) bool {
 		str += fmt.Sprintf("\tcol_name: %s, table_id: %d\n",
 			executor.GetStringRows(cols[0])[0],
@@ -218,7 +220,7 @@ func (s *sqlStore) Allocate(
 			opts)
 		if err != nil {
 			// retry ww conflict if the txn is not pessimistic
-			if !txnOp.Txn().IsPessimistic() &&
+			if txnOp != nil && !txnOp.Txn().IsPessimistic() &&
 				moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict) {
 				continue
 			}
