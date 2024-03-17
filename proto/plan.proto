@@ -245,7 +245,7 @@ message ColDef {
 	string name 		= 2;
 	bool hidden			= 3;
 	CompressType alg 	= 4;
-	Type typ			= 5;
+	Type typ			= 5 [(gogoproto.nullable) = false];
 	bool not_null		= 6;
 	Default default 	= 7;
 	string comment		= 8;
