@@ -124,6 +124,9 @@ func NewCompile(
 	c.cnLabel = cnLabel
 	c.startAt = startAt
 	c.disableRetry = false
+	if c.proc.TxnOperator != nil {
+		c.proc.TxnOperator.GetWorkspace().UpdateSnapshotWriteOffset()
+	}
 	return c
 }
 
@@ -589,7 +592,7 @@ func (c *Compile) runOnce() error {
 	var wg sync.WaitGroup
 
 	if c.proc.TxnOperator != nil {
-		c.proc.TxnOperator.GetWorkspace().UpdateSnapshotWriteOffset()
+		c.proc.TxnOperator.GetWorkspace().TransferRowID()
 	}
 
 	err := c.lockMetaTables()

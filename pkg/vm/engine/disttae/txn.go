@@ -1010,11 +1010,7 @@ func (txn *Transaction) GetSnapshotWriteOffset() int {
 	return txn.snapshotWriteOffset
 }
 
-func (txn *Transaction) UpdateSnapshotWriteOffset() {
-	txn.Lock()
-	defer txn.Unlock()
-	txn.snapshotWriteOffset = len(txn.writes)
-
+func (txn *Transaction) TransferRowID() {
 	txn.timestamps = append(txn.timestamps, txn.op.SnapshotTS())
 	if txn.statementID > 0 && txn.op.Txn().IsRCIsolation() {
 		var ts timestamp.Timestamp
@@ -1050,4 +1046,10 @@ func (txn *Transaction) UpdateSnapshotWriteOffset() {
 		}
 		txn.tableCache.tableMap.Range(fn)
 	}
+}
+
+func (txn *Transaction) UpdateSnapshotWriteOffset() {
+	txn.Lock()
+	defer txn.Unlock()
+	txn.snapshotWriteOffset = len(txn.writes)
 }
