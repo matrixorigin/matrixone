@@ -202,6 +202,13 @@ func (t *GCTable) makeBatchWithGCTable() []*containers.Batch {
 	return bats
 }
 
+func (t *GCTable) makeBatchWithGCTableV1() []*containers.Batch {
+	bats := make([]*containers.Batch, 1)
+	bats[CreateBlock] = containers.NewBatch()
+	bats[DeleteBlock] = containers.NewBatch()
+	return bats
+}
+
 func (t *GCTable) closeBatch(bs []*containers.Batch) {
 	for i := range bs {
 		bs[i].Close()
@@ -342,15 +349,21 @@ func (t *GCTable) ReadTable(ctx context.Context, name string, size int64, fs *ob
 	if err != nil {
 		return err
 	}
-	bats := t.makeBatchWithGCTable()
+	if len(bs) == 1 {
+		bats := t.makeBatchWithGCTable()
+		defer t.closeBatch(bats)
+		err = t.replayData(ctx, CreateBlock, BlockSchemaAttr, BlockSchemaTypes, bats, bs, reader)
+		if err != nil {
+			return err
+		}
+		t.rebuildTableV2(bats)
+		return nil
+	}
+	bats := t.makeBatchWithGCTableV1()
 	defer t.closeBatch(bats)
 	err = t.replayData(ctx, CreateBlock, BlockSchemaAttr, BlockSchemaTypes, bats, bs, reader)
 	if err != nil {
 		return err
-	}
-	if len(bs) == 1 {
-		t.rebuildTableV2(bats)
-		return nil
 	}
 	err = t.replayData(ctx, DeleteBlock, BlockSchemaAttr, BlockSchemaTypes, bats, bs, reader)
 	if err != nil {
