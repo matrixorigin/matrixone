@@ -203,7 +203,7 @@ func (t *GCTable) makeBatchWithGCTable() []*containers.Batch {
 }
 
 func (t *GCTable) makeBatchWithGCTableV1() []*containers.Batch {
-	bats := make([]*containers.Batch, 1)
+	bats := make([]*containers.Batch, 2)
 	bats[CreateBlock] = containers.NewBatch()
 	bats[DeleteBlock] = containers.NewBatch()
 	return bats
