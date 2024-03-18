@@ -375,15 +375,14 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 			}
 
 			idxTableNodeID := builder.appendNode(&plan.Node{
-				NodeType:        plan.Node_TABLE_SCAN,
-				TableDef:        idxTableDef,
-				ObjRef:          idxObjRef,
-				ParentObjRef:    node.ObjRef,
-				FilterList:      node.FilterList,
-				BlockFilterList: DeepCopyExprList(node.FilterList),
-				Limit:           node.Limit,
-				Offset:          node.Offset,
-				BindingTags:     []int32{idxTag},
+				NodeType:     plan.Node_TABLE_SCAN,
+				TableDef:     idxTableDef,
+				ObjRef:       idxObjRef,
+				ParentObjRef: node.ObjRef,
+				FilterList:   node.FilterList,
+				Limit:        node.Limit,
+				Offset:       node.Offset,
+				BindingTags:  []int32{idxTag},
 			}, builder.ctxByNode[nodeID])
 
 			return idxTableNodeID
@@ -513,15 +512,14 @@ END0:
 		}
 
 		idxTableNodeID := builder.appendNode(&plan.Node{
-			NodeType:        plan.Node_TABLE_SCAN,
-			TableDef:        idxTableDef,
-			ObjRef:          idxObjRef,
-			ParentObjRef:    DeepCopyObjectRef(node.ObjRef),
-			FilterList:      []*plan.Expr{idxFilter},
-			BlockFilterList: []*plan.Expr{DeepCopyExpr(idxFilter)},
-			Limit:           node.Limit,
-			Offset:          node.Offset,
-			BindingTags:     []int32{idxTag},
+			NodeType:     plan.Node_TABLE_SCAN,
+			TableDef:     idxTableDef,
+			ObjRef:       idxObjRef,
+			ParentObjRef: DeepCopyObjectRef(node.ObjRef),
+			FilterList:   []*plan.Expr{idxFilter},
+			Limit:        node.Limit,
+			Offset:       node.Offset,
+			BindingTags:  []int32{idxTag},
 		}, builder.ctxByNode[nodeID])
 
 		node.Limit, node.Offset = nil, nil
@@ -636,15 +634,14 @@ END0:
 		}
 
 		idxTableNodeID := builder.appendNode(&plan.Node{
-			NodeType:        plan.Node_TABLE_SCAN,
-			TableDef:        idxTableDef,
-			ObjRef:          idxObjRef,
-			ParentObjRef:    DeepCopyObjectRef(node.ObjRef),
-			FilterList:      []*plan.Expr{idxFilter},
-			BlockFilterList: []*plan.Expr{DeepCopyExpr(idxFilter)},
-			Limit:           node.Limit,
-			Offset:          node.Offset,
-			BindingTags:     []int32{idxTag},
+			NodeType:     plan.Node_TABLE_SCAN,
+			TableDef:     idxTableDef,
+			ObjRef:       idxObjRef,
+			ParentObjRef: DeepCopyObjectRef(node.ObjRef),
+			FilterList:   []*plan.Expr{idxFilter},
+			Limit:        node.Limit,
+			Offset:       node.Offset,
+			BindingTags:  []int32{idxTag},
 		}, builder.ctxByNode[nodeID])
 
 		node.Limit, node.Offset = nil, nil
