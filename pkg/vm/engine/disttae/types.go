@@ -502,7 +502,7 @@ func (txn *Transaction) handleRCSnapshot(ctx context.Context, commit bool) error
 		needResetSnapshot = true
 	}
 	if !commit && txn.op.Txn().IsRCIsolation() &&
-		(txn.GetSQLCount() > 1 || needResetSnapshot) {
+		(txn.GetSQLCount() > 0 || needResetSnapshot) {
 		trace.GetService().TxnUpdateSnapshot(
 			txn.op,
 			0,
