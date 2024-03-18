@@ -28,6 +28,7 @@ import (
 )
 
 func (s *service) UpgradeTenant(ctx context.Context, tenantName string, isALLAccount bool) (bool, error) {
+	// Before manually upgrade, check if there are unready upgrade tasks in system upgrade environment
 	err := s.UpgradePreCheck(ctx)
 	if err != nil {
 		return true, err

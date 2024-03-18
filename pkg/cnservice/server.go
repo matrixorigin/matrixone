@@ -316,6 +316,7 @@ func (s *service) CheckTenantUpgrade(_ context.Context, tenantID int64) error {
 	return nil
 }
 
+// UpgradeTenant Manual command tenant upgrade entrance
 func (s *service) UpgradeTenant(ctx context.Context, tenantName string, isALLAccount bool) error {
 	ctx, cancel := context.WithTimeout(ctx, time.Minute*5)
 	defer cancel()
@@ -823,28 +824,17 @@ func (s *service) bootstrap() error {
 
 	if s.cfg.AutomaticUpgrade {
 		return s.stopper.RunTask(func(ctx context.Context) {
-			ctx, cancel := context.WithTimeout(ctx, time.Minute*5)
+			ctx, cancel := context.WithTimeout(ctx, time.Minute*60)
 			defer cancel()
 			if err := s.bootstrapService.BootstrapUpgrade(ctx); err != nil {
 				if err != context.Canceled {
-					runtime.DefaultRuntime().Logger().Error("bootstrap system upgrade failed by: ", zap.Error(err))
-					panic(err)
+					runtime.DefaultRuntime().Logger().Error("bootstrap system automatic upgrade failed by: ", zap.Error(err))
+					//panic(err)
 				}
 			}
 		})
 	}
 	return nil
-
-	//return s.stopper.RunTask(func(ctx context.Context) {
-	//	ctx, cancel := context.WithTimeout(ctx, time.Minute*5)
-	//	defer cancel()
-	//	if err := s.bootstrapService.BootstrapUpgrade(ctx); err != nil {
-	//		if err != context.Canceled {
-	//			runtime.DefaultRuntime().Logger().Error("bootstrap system upgrade failed by: ", zap.Error(err))
-	//			panic(err)
-	//		}
-	//	}
-	//})
 }
 
 func (s *service) initTxnTraceService() {

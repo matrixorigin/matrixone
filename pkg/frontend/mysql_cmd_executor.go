@@ -3652,7 +3652,6 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 		if err = mce.handleCallProcedure(requestCtx, st, proc, i, len(cws)); err != nil {
 			return
 		}
-
 	case *tree.UpgradeStatement:
 		selfHandle = true
 		if err = mce.handleExecUpgrade(requestCtx, st, proc, i, len(cws)); err != nil {
