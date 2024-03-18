@@ -60,9 +60,9 @@ func RegisterAvg(id int64) {
 		func(args []types.Type, ret types.Type) any {
 			switch args[0].Oid {
 			case types.T_decimal64:
-				return newAggAvgDecimal64()
+				return newAggAvgDecimal64
 			case types.T_decimal128:
-				return newAggAvgDecimal128()
+				return newAggAvgDecimal128
 			default:
 				panic("unexpected type for avg()")
 			}

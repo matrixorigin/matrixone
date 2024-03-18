@@ -41,6 +41,10 @@ func RegisterAnyValue(id int64) {
 			switch t[0].Oid {
 			case types.T_decimal64, types.T_decimal128:
 				return t[0]
+			case types.T_varchar, types.T_char, types.T_blob, types.T_text, types.T_binary, types.T_varbinary:
+				return t[0]
+			case types.T_Rowid, types.T_enum:
+				return t[0]
 			default:
 				panic("unexpected type for any_value()")
 			}
@@ -51,6 +55,12 @@ func RegisterAnyValue(id int64) {
 				return newAggAnyValue[types.Decimal64]
 			case types.T_decimal128:
 				return newAggAnyValue[types.Decimal128]
+			case types.T_Rowid:
+				return newAggAnyValue[types.Rowid]
+			case types.T_enum:
+				return newAggAnyValue[types.Enum]
+			case types.T_varchar, types.T_char, types.T_blob, types.T_text, types.T_binary, types.T_varbinary:
+				return newAggAnyBytesValue
 			default:
 				panic("unexpected type for any_value()")
 			}
@@ -95,6 +105,10 @@ func (a *aggAnyValue[T]) Flush(get aggexec.AggGetter[T], set aggexec.AggSetter[T
 
 type aggAnyBytesValue struct {
 	has bool
+}
+
+func newAggAnyBytesValue() aggexec.SingleAggFromVarRetVar {
+	return &aggAnyBytesValue{}
 }
 
 func (a *aggAnyBytesValue) Marshal() []byte { return types.EncodeBool(&a.has) }

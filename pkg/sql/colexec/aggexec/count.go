@@ -75,13 +75,12 @@ func (exec *countColumnExec) BatchFill(offset int, groups []uint64, vectors []*v
 		return nil
 	}
 
-	param := vector.GenerateFunctionFixedTypeParameter[int64](vectors[0])
-	if param.WithAnyNullValue() {
+	if vectors[0].HasNull() {
+		nsp := vectors[0].GetNulls()
 		u64Offset := uint64(offset)
 		for i, j := uint64(0), uint64(len(groups)); i < j; i++ {
 			if groups[i] != GroupNotMatched {
-				_, null := param.GetValue(i + u64Offset)
-				if !null {
+				if !nsp.Contains(i + u64Offset) {
 					vs[groups[i]-1]++
 				}
 			}
@@ -98,8 +97,11 @@ func (exec *countColumnExec) BatchFill(offset int, groups []uint64, vectors []*v
 }
 
 func (exec *countColumnExec) Merge(next AggFuncExec, groupIdx1, groupIdx2 int) error {
+	other := next.(*countColumnExec)
+
 	exec.ret.groupToSet = groupIdx1
-	exec.ret.aggSet(exec.ret.aggGet() + next.(*countColumnExec).ret.aggGet())
+	other.ret.groupToSet = groupIdx2
+	exec.ret.aggSet(exec.ret.aggGet() + other.ret.aggGet())
 	return nil
 }
 

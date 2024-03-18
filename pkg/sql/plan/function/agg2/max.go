@@ -15,6 +15,7 @@
 package agg2
 
 import (
+	"bytes"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"math"
@@ -40,6 +41,10 @@ func RegisterMax(id int64) {
 			switch t[0].Oid {
 			case types.T_decimal64, types.T_decimal128:
 				return t[0]
+			case types.T_varchar, types.T_char, types.T_blob, types.T_text, types.T_binary, types.T_varbinary:
+				return t[0]
+			case types.T_uuid:
+				return t[0]
 			default:
 				panic("unexpect type for max()")
 			}
@@ -50,6 +55,10 @@ func RegisterMax(id int64) {
 				return newAggMaxDecimal64
 			case types.T_decimal128:
 				return newAggMaxDecimal128
+			case types.T_varchar, types.T_char, types.T_blob, types.T_text, types.T_binary, types.T_varbinary:
+				return newAggBytesMax
+			case types.T_uuid:
+				return newAggUuidMax
 			default:
 				panic("unexpect type for max()")
 			}
@@ -72,6 +81,22 @@ type aggMaxDecimal128 struct{}
 
 func newAggMaxDecimal128() aggexec.SingleAggFromFixedRetFixed[types.Decimal128, types.Decimal128] {
 	return aggMaxDecimal128{}
+}
+
+type aggBytesMax struct{
+	isEmpty bool
+}
+
+func newAggBytesMax() aggexec.SingleAggFromVarRetVar {
+	return &aggBytesMax{}
+}
+
+type aggUuidMax struct {
+	isEmpty bool
+}
+
+func newAggUuidMax() aggexec.SingleAggFromFixedRetFixed[types.Uuid, types.Uuid] {
+	return &aggUuidMax{}
 }
 
 func (a aggMax[from]) Marshal() []byte  { return nil }
@@ -176,3 +201,87 @@ func (a aggMaxDecimal128) Merge(other aggexec.SingleAggFromFixedRetFixed[types.D
 }
 func (a aggMaxDecimal128) Flush(get aggexec.AggGetter[types.Decimal128], set aggexec.AggSetter[types.Decimal128]) {
 }
+
+func (a *aggBytesMax) Marshal() []byte  { return types.EncodeBool(&a.isEmpty) }
+func (a *aggBytesMax) Unmarshal(bs []byte) { a.isEmpty = types.DecodeBool(bs) }
+func (a *aggBytesMax) Init(setter aggexec.AggBytesSetter, arg types.Type, ret types.Type) {
+	a.isEmpty = true
+}
+func (a *aggBytesMax) FillBytes(value []byte, get aggexec.AggBytesGetter, set aggexec.AggBytesSetter) {
+	if a.isEmpty {
+		a.isEmpty = false
+		_ = set(value)
+	} else {
+		if bytes.Compare(value, get()) > 0 {
+			_ = set(value)
+		}
+	}
+}
+func (a *aggBytesMax) FillNull(get aggexec.AggBytesGetter, set aggexec.AggBytesSetter) {}
+func (a *aggBytesMax) Fills(value []byte, isNull bool, count int, get aggexec.AggBytesGetter, set aggexec.AggBytesSetter) {
+	if isNull {
+		return
+	}
+	if a.isEmpty {
+		a.isEmpty = false
+		_ = set(value)
+	} else {
+		if !isNull && bytes.Compare(value, get()) > 0 {
+			_ = set(value)
+		}
+	}
+}
+func (a *aggBytesMax) Merge(other aggexec.SingleAggFromVarRetVar, get1, get2 aggexec.AggBytesGetter, set aggexec.AggBytesSetter) {
+	next := other.(*aggBytesMax)
+	if a.isEmpty && !next.isEmpty {
+		a.isEmpty = false
+		_ = set(get2())
+	} else if !a.isEmpty && !next.isEmpty {
+		if bytes.Compare(get1(), get2()) < 0 {
+			_ = set(get2())
+		}
+	}
+}
+func (a *aggBytesMax) Flush(get aggexec.AggBytesGetter, set aggexec.AggBytesSetter) {}
+
+func (a *aggUuidMax) Marshal() []byte  { return types.EncodeBool(&a.isEmpty) }
+func (a *aggUuidMax) Unmarshal(bs []byte) { a.isEmpty = types.DecodeBool(bs) }
+func (a *aggUuidMax) Init(setter aggexec.AggSetter[types.Uuid], arg types.Type, ret types.Type) {
+	a.isEmpty = true
+}
+func (a *aggUuidMax) Fill(value types.Uuid, get aggexec.AggGetter[types.Uuid], set aggexec.AggSetter[types.Uuid]) {
+	if a.isEmpty {
+		a.isEmpty = false
+		set(value)
+	} else {
+		if value.Compare(get()) > 0 {
+			set(value)
+		}
+	}
+}
+func (a *aggUuidMax) FillNull(get aggexec.AggGetter[types.Uuid], set aggexec.AggSetter[types.Uuid]) {}
+func (a *aggUuidMax) Fills(value types.Uuid, isNull bool, count int, get aggexec.AggGetter[types.Uuid], set aggexec.AggSetter[types.Uuid]) {
+	if isNull {
+		return
+	}
+	if a.isEmpty {
+		a.isEmpty = false
+		set(value)
+	} else {
+		if !isNull && value.Compare(get()) > 0 {
+			set(value)
+		}
+	}
+}
+func (a *aggUuidMax) Merge(other aggexec.SingleAggFromFixedRetFixed[types.Uuid, types.Uuid], get1, get2 aggexec.AggGetter[types.Uuid], set aggexec.AggSetter[types.Uuid]) {
+	next := other.(*aggUuidMax)
+	if a.isEmpty && !next.isEmpty {
+		a.isEmpty = false
+		set(get2())
+	} else if !a.isEmpty && !next.isEmpty {
+		if get1().Compare(get2()) < 0 {
+			set(get2())
+		}
+	}
+}
+func (a *aggUuidMax) Flush(get aggexec.AggGetter[types.Uuid], set aggexec.AggSetter[types.Uuid]) {}

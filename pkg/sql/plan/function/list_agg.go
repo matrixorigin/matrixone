@@ -22,8 +22,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionAgg"
 )
 
-var supportedAggregateFunctions = []FuncNew{}
-
 var supportedAggInNewFramework = []FuncNew{
 	{
 		functionId: COUNT,

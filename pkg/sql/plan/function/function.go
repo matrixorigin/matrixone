@@ -51,9 +51,6 @@ func initAllSupportedFunctions() {
 	for _, fn := range supportedOthersBuiltIns {
 		allSupportedFunctions[fn.functionId] = fn
 	}
-	for _, fn := range supportedAggregateFunctions {
-		allSupportedFunctions[fn.functionId] = fn
-	}
 	for _, fn := range supportedWindowFunctions {
 		allSupportedFunctions[fn.functionId] = fn
 	}

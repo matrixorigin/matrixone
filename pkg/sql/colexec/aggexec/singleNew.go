@@ -71,6 +71,12 @@ func newSingleAggFuncExec1WithKnownResultType[to types.FixedSizeTExceptStrType](
 			e.init(mg, info, opt, g)
 			return e
 		}
+	case types.T_bit:
+		if g, ok := f.(func() SingleAggFromFixedRetFixed[uint64, to]); ok {
+			e := &singleAggFuncExec1[uint64, to]{}
+			e.init(mg, info, opt, g)
+			return e
+		}
 	case types.T_int8:
 		if g, ok := f.(func() SingleAggFromFixedRetFixed[int8, to]); ok {
 			e := &singleAggFuncExec1[int8, to]{}
@@ -182,6 +188,12 @@ func newSingleAggFuncExec2(
 			e.init(mg, info, opt, g)
 			return e
 		}
+	case types.T_bit:
+		if g, ok := f.(func() SingleAggFromFixedRetVar[uint64]); ok {
+			e := &singleAggFuncExec2[uint64]{}
+			e.init(mg, info, opt, g)
+			return e
+		}
 	case types.T_int8:
 		if g, ok := f.(func() SingleAggFromFixedRetVar[int8]); ok {
 			e := &singleAggFuncExec2[int8]{}
@@ -288,6 +300,12 @@ func newSingleAggFuncExec3(
 	case types.T_bool:
 		if g, ok := f.(func() SingleAggFromVarRetFixed[bool]); ok {
 			e := &singleAggFuncExec3[bool]{}
+			e.init(mg, info, opt, g)
+			return e
+		}
+	case types.T_bit:
+		if g, ok := f.(func() SingleAggFromVarRetFixed[uint64]); ok {
+			e := &singleAggFuncExec3[uint64]{}
 			e.init(mg, info, opt, g)
 			return e
 		}
