@@ -576,6 +576,10 @@ func (c *Compile) canRetry(err error) bool {
 func (c *Compile) runOnce() error {
 	var wg sync.WaitGroup
 
+	if c.proc.TxnOperator != nil {
+		c.proc.TxnOperator.GetWorkspace().TransferRowID()
+	}
+
 	err := c.lockMetaTables()
 	if err != nil {
 		return err
