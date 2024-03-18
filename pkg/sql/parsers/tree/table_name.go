@@ -74,9 +74,32 @@ func NewTableName(name Identifier, prefix ObjectNamePrefix, AtTsExpr *AtTimeStam
 }
 
 type AtTimeStamp struct {
+	Type ATTimeStampType
 	Expr Expr
 }
 
 func (node *AtTimeStamp) Format(ctx *FmtCtx) {
+	ctx.WriteString(node.Type.String())
+	ctx.WriteString(" = ")
 	node.Expr.Format(ctx)
+}
+
+type ATTimeStampType int
+
+const (
+	ATTIMESTAMPNONE ATTimeStampType = iota
+	ATTIMESTAMPTIME
+	ATTIMESTAMPSNAPSHOT
+)
+
+func (a ATTimeStampType) String() string {
+	switch a {
+	case ATTIMESTAMPNONE:
+		return "none"
+	case ATTIMESTAMPTIME:
+		return "timestamp"
+	case ATTIMESTAMPSNAPSHOT:
+		return "snapshot"
+	}
+	return "unknown"
 }

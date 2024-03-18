@@ -21,6 +21,7 @@ import (
 	"go/constant"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -3445,7 +3446,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 		}
 
 		if tbl.AtTsExpr != nil {
-			ts, err = builder.resolveTsHint(builder.GetContext(), tbl.AtTsExpr.Expr)
+			ts, err = builder.resolveTsHint(tbl.AtTsExpr)
 			if err != nil {
 				return 0, err
 			}
@@ -4022,64 +4023,46 @@ func (builder *QueryBuilder) checkExprCanPushdown(expr *Expr, node *Node) bool {
 	}
 }
 
-func (builder *QueryBuilder) resolveTsHint(ctx context.Context, tsExpr tree.Expr) (timestamp.Timestamp, error) {
+func (builder *QueryBuilder) resolveTsHint(tsExpr *tree.AtTimeStamp) (timestamp.Timestamp, error) {
 	if tsExpr == nil {
 		return timestamp.Timestamp{}, nil
 	}
 
-	conds := splitAstConjunction(tsExpr)
+	conds := splitAstConjunction(tsExpr.Expr)
 	if len(conds) != 1 {
-		return timestamp.Timestamp{}, moerr.NewParseError(ctx, "invalid timestamp hint")
+		return timestamp.Timestamp{}, moerr.NewParseError(builder.GetContext(), "invalid timestamp hint")
 	}
 
-	bindCtx := NewBindContext(builder, nil)
-	expr, err := bindCtx.binder.BindExpr(conds[0], 0, true)
+	binder := NewDefaultBinder(builder.GetContext(), nil, nil, nil, nil)
+	binder.builder = builder
+	defExpr, err := binder.BindExpr(conds[0], 0, false)
 	if err != nil {
 		return timestamp.Timestamp{}, err
 	}
-
-	// must equal condition
-	fn := expr.GetF()
-	if fn == nil || fn.GetFunc().GetObjName() != "=" {
-		return timestamp.Timestamp{}, moerr.NewParseError(ctx, "invalid timestamp hint")
-	}
-
-	// left and right must be Timestamp or Snapshot
-	left := fn.GetArgs()[0]
-	leftParam := strings.ToLower(left.GetP().String())
-	if !(leftParam == "timestamp" || leftParam == "snapshot") {
-		return timestamp.Timestamp{}, moerr.NewParseError(ctx, "invalid timestamp hint")
-	}
-
-	// timestamp par§am
-	if leftParam == "timestamp" {
-		// resovle right expr
-		right := fn.GetArgs()[1]
-		// todo: resolve non plan.Expr_P expr
-		rightParam := strings.ToLower(right.GetP().String())
-		ts, err := timestamp.ParseTimestamp(rightParam)
-		if err != nil {
-			return timestamp.Timestamp{}, err
+	if exprLit, ok := defExpr.Expr.(*plan.Expr_Lit); !ok {
+		return timestamp.Timestamp{}, moerr.NewParseError(builder.GetContext(), "invalid timestamp hint")
+	} else {
+		if lit, ok := exprLit.Lit.Value.(*plan.Literal_Sval); !ok {
+			return timestamp.Timestamp{}, moerr.NewParseError(builder.GetContext(), "invalid timestamp hint")
+		} else {
+			if tsExpr.Type == tree.ATTIMESTAMPTIME {
+				ts, err := types.ParseTimestamp(time.Local, lit.Sval, 0)
+				if err != nil {
+					return timestamp.Timestamp{}, err
+				}
+				return timestamp.Timestamp{LogicalTime: uint32(ts)}, nil
+			} else if tsExpr.Type == tree.ATTIMESTAMPSNAPSHOT {
+				tsValue, err := builder.compCtx.ResolveSnapshotTsWithSnapShotName(lit.Sval)
+				if err != nil {
+					return timestamp.Timestamp{}, err
+				}
+				ts, err := types.ParseTimestamp(time.Local, tsValue, 0)
+				if err != nil {
+					return timestamp.Timestamp{}, err
+				}
+				return timestamp.Timestamp{LogicalTime: uint32(ts)}, nil
+			}
 		}
-		return ts, nil
 	}
-
-	// snapshot param
-	if leftParam == "snapshot" {
-		// resovle right expr
-		right := fn.GetArgs()[1]
-		rightParam := strings.ToLower(right.GetP().String())
-		tsValue, err := builder.compCtx.ResolveSnapshotTsWithSnapShotName(rightParam)
-		if err != nil {
-			return timestamp.Timestamp{}, err
-		}
-		ts, err := timestamp.ParseTimestamp(tsValue)
-		if err != nil {
-			return timestamp.Timestamp{}, err
-		}
-		return ts, nil
-	}
-
 	return timestamp.Timestamp{}, nil
-
 }

@@ -7881,19 +7881,39 @@ table_name:
         prefix := tree.ObjectNamePrefix{SchemaName: tree.Identifier($1.Compare()), ExplicitSchema: true}
         $$ = tree.NewTableName(tree.Identifier($3.Compare()), prefix, nil)
     }
-|   ident '{' expression '}'
+|   ident '{' TIMESTAMP '=' expression '}'
     {
         prefix := tree.ObjectNamePrefix{ExplicitSchema: false}
         atTs := &tree.AtTimeStamp{
-            Expr: $3,
+            Type: tree.ATTIMESTAMPTIME,
+            Expr: $5,
         }
         $$ = tree.NewTableName(tree.Identifier($1.Compare()), prefix, atTs)
     }
-|   ident '.' ident '{' expression '}'
+|   ident '{' SNAPSHOT '=' expression '}'
+    {
+        prefix := tree.ObjectNamePrefix{ExplicitSchema: false}
+        atTs := &tree.AtTimeStamp{
+            Type: tree.ATTIMESTAMPSNAPSHOT,
+            Expr: $5,
+        }
+        $$ = tree.NewTableName(tree.Identifier($1.Compare()), prefix, atTs)
+    }    
+|   ident '.' ident '{' TIMESTAMP '=' expression '}'
     {
         prefix := tree.ObjectNamePrefix{SchemaName: tree.Identifier($1.Compare()), ExplicitSchema: true}
         atTs := &tree.AtTimeStamp{
-            Expr: $5,
+            Type: tree.ATTIMESTAMPTIME,
+            Expr: $7,
+        }
+        $$ = tree.NewTableName(tree.Identifier($3.Compare()), prefix, atTs)
+    }
+|   ident '.' ident '{' SNAPSHOT '=' expression '}'
+    {
+        prefix := tree.ObjectNamePrefix{SchemaName: tree.Identifier($1.Compare()), ExplicitSchema: true}
+        atTs := &tree.AtTimeStamp{
+            Type: tree.ATTIMESTAMPSNAPSHOT,
+            Expr: $7,
         }
         $$ = tree.NewTableName(tree.Identifier($3.Compare()), prefix, atTs)
     }
