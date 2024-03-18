@@ -419,6 +419,11 @@ func (c *Compile) allocOperatorID() int32 {
 // Run is an important function of the compute-layer, it executes a single sql according to its scope
 // Need call Release() after call this function.
 func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
+	sql := c.originSQL
+	if sql == "" {
+		sql = c.sql
+	}
+
 	txnOp := c.proc.TxnOperator
 	seq := uint64(0)
 	if txnOp != nil {
@@ -432,20 +437,6 @@ func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
 		}
 	}()
 
-	txnTrace.GetService().AddTxnDurationAction(
-		txnOp,
-		client.ExecuteSQLEvent,
-		seq,
-		0,
-		0,
-		err)
-
-	sql := c.originSQL
-	if sql == "" {
-		sql = c.sql
-	}
-	txnTrace.GetService().TxnExecSQL(txnOp, sql)
-
 	var writeOffset uint64
 
 	start := time.Now()
@@ -454,18 +445,12 @@ func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
 	stats := statistic.StatsInfoFromContext(c.proc.Ctx)
 	stats.ExecutionStart()
 
+	txnTrace.GetService().TxnStatementStart(txnOp, sql, seq)
 	defer func() {
 		stats.ExecutionEnd()
 
 		cost := time.Since(start)
-		txnTrace.GetService().AddTxnDurationAction(
-			txnOp,
-			client.ExecuteSQLEvent,
-			seq,
-			0,
-			cost,
-			err)
-
+		txnTrace.GetService().TxnStatementCompleted(txnOp, sql, cost, seq, err)
 		v2.TxnStatementExecuteDurationHistogram.Observe(cost.Seconds())
 	}()
 
@@ -590,6 +575,10 @@ func (c *Compile) canRetry(err error) bool {
 // run once
 func (c *Compile) runOnce() error {
 	var wg sync.WaitGroup
+
+	if c.proc.TxnOperator != nil {
+		c.proc.TxnOperator.GetWorkspace().TransferRowID()
+	}
 
 	err := c.lockMetaTables()
 	if err != nil {

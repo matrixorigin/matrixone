@@ -140,7 +140,7 @@ func (e *MergeExecutor) ManuallyExecute(entry *catalog.TableEntry, objs []*catal
 	} else if err != nil {
 		return moerr.NewInternalErrorNoCtx("schedule error: %v", err)
 	}
-	logMergeTask(entry.GetLastestSchema().Name, task.ID(), mobjs, len(mergedBlks), osize, esize)
+	logMergeTask(entry.GetLastestSchemaLocked().Name, task.ID(), mobjs, len(mergedBlks), osize, esize)
 	if err = task.WaitDone(context.Background()); err != nil {
 		return moerr.NewInternalErrorNoCtx("merge error: %v", err)
 	}
