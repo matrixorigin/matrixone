@@ -349,7 +349,7 @@ func (t *GCTable) ReadTable(ctx context.Context, name string, size int64, fs *ob
 	if err != nil {
 		return err
 	}
-
+		logutil.Infof("rebuild table v2 %v", len(bats[CreateBlock].Vecs))
 	if len(bats[CreateBlock].Vecs) == 7 {
 		t.rebuildTableV2(bats)
 		return nil
