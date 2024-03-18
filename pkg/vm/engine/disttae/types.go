@@ -593,7 +593,7 @@ type txnTable struct {
 	tableDef   *plan.TableDef
 	seqnums    []uint16
 	typs       []types.Type
-	_partState *logtailreplay.PartitionState
+	_partState atomic.Pointer[logtailreplay.PartitionState]
 
 	// objInofs stores all the data object infos for this table of this transaction
 	// it is only generated when the table is not created by this transaction
@@ -602,9 +602,9 @@ type txnTable struct {
 
 	// specify whether the objInfos is updated. once it is updated, it will not be updated again
 	//TODO::remove it in next PR.
-	objInfosUpdated bool
+	objInfosUpdated atomic.Bool
 	// specify whether the logtail is updated. once it is updated, it will not be updated again
-	logtailUpdated bool
+	logtailUpdated atomic.Bool
 
 	primaryIdx    int // -1 means no primary key
 	primarySeqnum int // -1 means no primary key
