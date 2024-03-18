@@ -34,8 +34,8 @@ import (
 )
 
 var (
-	i64typ     = &plan.Type{Id: int32(types.T_int64)}
-	varchartyp = &plan.Type{Id: int32(types.T_varchar)}
+	i64typ     = plan.Type{Id: int32(types.T_int64)}
+	varchartyp = plan.Type{Id: int32(types.T_varchar)}
 )
 
 func TestPreInsertNormal(t *testing.T) {

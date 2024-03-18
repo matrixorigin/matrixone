@@ -456,7 +456,7 @@ func makeBatch(param *ExternalParam, batchSize int, proc *process.Process) (bat 
 	bat = batch.New(false, param.Attrs)
 	//alloc space for vector
 	for i := range param.Attrs {
-		typ := makeType(param.Cols[i].Typ, param.ParallelLoad)
+		typ := makeType(&param.Cols[i].Typ, param.ParallelLoad)
 		bat.Vecs[i] = proc.GetVector(typ)
 		err = bat.Vecs[i].PreExtend(batchSize, proc.GetMPool())
 		if err != nil {
@@ -655,7 +655,7 @@ func getBatchFromZonemapFile(ctx context.Context, param *ExternalParam, proc *pr
 	var sels []int32
 	for i := 0; i < len(param.Attrs); i++ {
 		if param.Extern.SysTable && uint16(param.Name2ColIndex[param.Attrs[i]]) >= colCnt {
-			vecTmp, err = proc.AllocVectorOfRows(makeType(param.Cols[i].Typ, false), rows, nil)
+			vecTmp, err = proc.AllocVectorOfRows(makeType(&param.Cols[i].Typ, false), rows, nil)
 			if err != nil {
 				return nil, err
 			}
@@ -666,7 +666,7 @@ func getBatchFromZonemapFile(ctx context.Context, param *ExternalParam, proc *pr
 			if rows == 0 {
 				rows = tmpBat.Vecs[i].Length()
 			}
-			vecTmp, err = proc.AllocVectorOfRows(makeType(param.Cols[i].Typ, false), rows, nil)
+			vecTmp, err = proc.AllocVectorOfRows(makeType(&param.Cols[i].Typ, false), rows, nil)
 			if err != nil {
 				return nil, err
 			}
