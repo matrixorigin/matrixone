@@ -188,14 +188,30 @@ func (space *tableSpace) prepareApplyANode(node *anode) error {
 		if !appender.IsSameColumns(space.table.GetLocalSchema()) {
 			return moerr.NewInternalErrorNoCtx("schema changed, please rollback and retry")
 		}
+
+		// see more notes in flushtabletail.go
+		/// ----------- Choose a ablock ---------
+		appender.LockFreeze()
+		// no one can touch freeze for now, check it
+		if appender.CheckFreeze() {
+			// freezed, try to find another ablock
+			appender.UnlockFreeze()
+			continue
+		}
+
+		// hold freezelock to attach AppendNode
 		//PrepareAppend: It is very important that appending a AppendNode into
 		// block's MVCCHandle before applying data into block.
 		anode, created, toAppend, err := appender.PrepareAppend(
 			node.Rows()-appended,
 			space.table.store.txn)
 		if err != nil {
+			appender.UnlockFreeze()
 			return err
 		}
+		appender.UnlockFreeze()
+		/// ------- Attach AppendNode Successfully -----
+
 		blockId := appender.GetMeta().(*catalog.BlockEntry).ID
 		col := space.table.store.rt.VectorPool.Small.GetVector(&objectio.RowidType)
 		defer col.Close()
@@ -488,12 +504,12 @@ func (space *tableSpace) GetByFilter(filter *handle.Filter) (id *common.ID, offs
 }
 
 func (space *tableSpace) GetPKColumn() containers.Vector {
-	schema := space.table.entry.GetLastestSchema()
+	schema := space.table.entry.GetLastestSchemaLocked()
 	return space.index.KeyToVector(schema.GetSingleSortKeyType())
 }
 
 func (space *tableSpace) GetPKVecs() []containers.Vector {
-	schema := space.table.entry.GetLastestSchema()
+	schema := space.table.entry.GetLastestSchemaLocked()
 	return space.index.KeyToVectors(schema.GetSingleSortKeyType())
 }
 
