@@ -51,7 +51,7 @@ func newMemoryNode(block *baseObject) *memoryNode {
 	impl.block = block
 
 	// Get the lastest schema, it will not be modified, so just keep the pointer
-	schema := block.meta.GetSchema()
+	schema := block.meta.GetSchemaLocked()
 	impl.writeSchema = schema
 	// impl.data = containers.BuildBatchWithPool(
 	// 	schema.AllNames(), schema.AllTypes(), 0, block.rt.VectorPool.Memtable,

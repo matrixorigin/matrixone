@@ -860,7 +860,7 @@ func (n *MVCCHandle) InMemoryCollectDeleteInRange(
 	mp *mpool.MPool,
 ) (bat *containers.Batch, minTS, persisitedTS types.TS, err error) {
 	n.RLock()
-	schema := n.meta.GetSchema()
+	schema := n.meta.GetSchemaLocked()
 	pkDef := schema.GetPrimaryKey()
 	rowID, ts, pk, abort, abortedMap, deletes, minTS, persisitedTS := n.CollectDeleteLocked(start, end, pkDef.Type, mp)
 	n.RUnlock()

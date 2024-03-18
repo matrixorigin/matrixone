@@ -562,6 +562,9 @@ func (entry *ObjectEntry) GetTerminationTS() (ts types.TS, terminated bool) {
 func (entry *ObjectEntry) GetSchema() *Schema {
 	return entry.table.GetLastestSchema()
 }
+func (entry *ObjectEntry) GetSchemaLocked() *Schema {
+	return entry.table.GetLastestSchemaLocked()
+}
 
 // PrepareCompact is performance insensitive
 // a block can be compacted:
