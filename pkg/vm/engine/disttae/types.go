@@ -460,6 +460,7 @@ func (txn *Transaction) RollbackLastStatement(ctx context.Context) error {
 		}
 		txn.writes = txn.writes[:end]
 		txn.offsets = txn.offsets[:txn.statementID]
+		txn.timestamps = txn.timestamps[:txn.statementID]
 	}
 	// rollback current statement's writes info
 	for b := range txn.batchSelectList {
