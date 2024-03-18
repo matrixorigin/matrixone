@@ -403,7 +403,7 @@ func (s *service) registerExecutorsLocked() {
 	// streaming connector task
 	s.task.runner.RegisterExecutor(task.TaskCode_ConnectorKafkaSink,
 		moconnector.KafkaSinkConnectorExecutor(s.logger, ts, ieFactory, s.task.runner.Attach))
-	s.task.runner.RegisterExecutor(task.TaskCode_MergeTablet,
+	s.task.runner.RegisterExecutor(task.TaskCode_MergeObject,
 		func(ctx context.Context, task task.Task) error {
 			metadata := task.GetMetadata()
 			var mergeTask api.MergeTaskEntry

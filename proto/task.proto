@@ -61,8 +61,8 @@ import "metadata.proto";
    MetricStorageUsage = 3;
    // ConnectorKafkaSink is for the streaming connector task.
    ConnectorKafkaSink = 4;
-   // MergeTablet is for the merge tablet task.
-   MergeTablet = 5;
+   // MergeObject is for the merge object task.
+   MergeObject = 5;
  }
  
  // TaskMetadata is a task metadata abstraction that can be scheduled for execution at any CN node.

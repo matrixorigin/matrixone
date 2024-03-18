@@ -54,8 +54,9 @@ func (tsg *taskServiceGetter) SendMergeTask(ctx context.Context, task *api.Merge
 	if !ok {
 		return taskservice.ErrNotReady
 	}
+	taskIDPrefix := "Merge:" + task.TableName
 	asyncTask, err := ts.QueryAsyncTask(ctx,
-		taskservice.WithTaskMetadataId(taskservice.LIKE, "%"+task.TableName+"%"),
+		taskservice.WithTaskMetadataId(taskservice.LIKE, taskIDPrefix+"%"),
 		taskservice.WithTaskStatusCond(taskpb.TaskStatus_Created, taskpb.TaskStatus_Running))
 	if err != nil {
 		return err
@@ -69,8 +70,8 @@ func (tsg *taskServiceGetter) SendMergeTask(ctx context.Context, task *api.Merge
 	}
 	return ts.CreateAsyncTask(ctx,
 		taskpb.TaskMetadata{
-			ID:       "Merge:" + task.TableName + ":" + strconv.FormatInt(time.Now().Unix(), 10),
-			Executor: taskpb.TaskCode_MergeTablet,
+			ID:       taskIDPrefix + ":" + strconv.FormatInt(time.Now().Unix(), 10),
+			Executor: taskpb.TaskCode_MergeObject,
 			Context:  b,
 			Options:  taskpb.TaskOptions{Resource: &taskpb.Resource{Memory: task.EstimatedMemUsage}},
 		})
