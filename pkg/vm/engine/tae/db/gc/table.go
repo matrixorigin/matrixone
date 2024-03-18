@@ -300,7 +300,7 @@ func (t *GCTable) rebuildTable(bats []*containers.Batch, ts types.TS) {
 	}
 	for i := 0; i < bats[DeleteBlock].Length(); i++ {
 		name := string(bats[DeleteBlock].GetVectorByName(GCAttrObjectName).Get(i).([]byte))
-		if t.objects[name] != nil {
+		if t.objects[name] == nil {
 			logutil.Fatalf("delete object should not be nil")
 		}
 		object := &ObjectEntry{
