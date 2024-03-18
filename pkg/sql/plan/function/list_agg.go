@@ -22,31 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionAgg"
 )
 
-var supportedAggregateFunctions = []FuncNew{
-	{
-		functionId: CLUSTER_CENTERS,
-		class:      plan.Function_AGG,
-		layout:     STANDARD_FUNCTION,
-		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			if len(inputs) > 0 {
-				return newCheckResultWithSuccess(0)
-			}
-			return newCheckResultWithFailure(failedAggParametersWrong)
-		},
-
-		Overloads: []overload{
-			{
-				overloadId: 0,
-				isAgg:      true,
-				retType:    functionAgg.AggClusterCentersReturnType,
-				aggFramework: aggregationLogicOfOverload{
-					str:    "cluster_centers",
-					aggNew: functionAgg.NewAggClusterCenters,
-				},
-			},
-		},
-	},
-}
+var supportedAggregateFunctions = []FuncNew{}
 
 var supportedAggInNewFramework = []FuncNew{
 	{
@@ -393,6 +369,27 @@ var supportedAggInNewFramework = []FuncNew{
 				aggFramework: aggregationLogicOfOverload{
 					str:         "median",
 					aggRegister: agg2.RegisterMedian,
+				},
+			},
+		},
+	},
+
+	{
+		functionId: CLUSTER_CENTERS,
+		class:      plan.Function_AGG,
+		layout:     STANDARD_FUNCTION,
+		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
+			return fixedUnaryAggTypeCheck(inputs, aggexec.ClusterCentersSupportTypes)
+		},
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				isAgg:      true,
+				retType:    aggexec.ClusterCentersReturnType,
+				aggFramework: aggregationLogicOfOverload{
+					str:         "cluster_centers",
+					aggRegister: agg2.RegisterClusterCenters,
 				},
 			},
 		},

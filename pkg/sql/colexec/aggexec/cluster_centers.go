@@ -15,10 +15,14 @@
 package aggexec
 
 import (
+	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionAgg/algos/kmeans"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionAgg/algos/kmeans/elkans"
+	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
 	"strconv"
 	"strings"
 )
@@ -35,6 +39,10 @@ const (
 )
 
 var (
+	ClusterCentersSupportTypes = []types.T{
+		types.T_array_float32, types.T_array_float64,
+	}
+
 	distTypeStrToEnum = map[string]kmeans.DistanceType{
 		"vector_l2_ops": kmeans.L2Distance,
 	}
@@ -44,6 +52,10 @@ var (
 		"kmeansplusplus": kmeans.KmeansPlusPlus,
 	}
 )
+
+func ClusterCentersReturnType(argType []types.Type) types.Type {
+	return types.T_varchar.ToType()
+}
 
 type clusterCentersExec struct {
 	singleAggInfo
@@ -61,11 +73,25 @@ type clusterCentersExec struct {
 	normalize  bool
 }
 
+func newClusterCentersExecutor(mg AggMemoryManager, info singleAggInfo) (AggFuncExec, error) {
+	if info.distinct {
+		return nil, moerr.NewInternalErrorNoCtx("do not support distinct for cluster_centers()")
+	}
+	return &clusterCentersExec{
+		singleAggInfo: info,
+		ret:           initBytesAggFuncResult(mg, info.retType, true),
+		clusterCnt:    defaultKmeansClusterCnt,
+		distType:      defaultKmeansDistanceType,
+		initType:      defaultKmeansInitType,
+		normalize:     defaultKmeansNormalize,
+	}, nil
+}
+
 func (exec *clusterCentersExec) GroupGrow(more int) error {
 	if err := exec.ret.grows(more); err != nil {
 		return err
 	}
-	exec.groupData = append(exec.groupData, exec.ret.mg.GetVector(types.T_float64.ToType()))
+	exec.groupData = append(exec.groupData, exec.ret.mg.GetVector(types.T_varchar.ToType()))
 	return nil
 }
 
@@ -139,6 +165,179 @@ func (exec *clusterCentersExec) BatchFill(offset int, groups []uint64, vectors [
 		idx++
 	}
 	return nil
+}
+
+func (exec *clusterCentersExec) Merge(next AggFuncExec, groupIdx1 int, groupIdx2 int) error {
+	other := next.(*clusterCentersExec)
+	if other.groupData[groupIdx2] == nil || other.groupData[groupIdx2].Length() == 0 {
+		return nil
+	}
+
+	if exec.groupData[groupIdx1] == nil || exec.groupData[groupIdx1].Length() == 0 {
+		exec.groupData[groupIdx1] = other.groupData[groupIdx2]
+		other.groupData[groupIdx2] = nil
+		return nil
+	}
+
+	bts := vector.MustBytesCol(other.groupData[groupIdx2])
+	if err := vector.AppendBytesList(exec.groupData[groupIdx1], bts, nil, exec.ret.mp); err != nil {
+		return err
+	}
+	other.groupData[groupIdx2] = nil
+	return nil
+}
+
+func (exec *clusterCentersExec) BatchMerge(next AggFuncExec, offset int, groups []uint64) error {
+	for i, group := range groups {
+		if group != GroupNotMatched {
+			if err := exec.Merge(next, int(group)-1, i+offset); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (exec *clusterCentersExec) Flush() (*vector.Vector, error) {
+	switch exec.singleAggInfo.argType.Oid {
+	case types.T_array_float32:
+		if err := exec.flushArray32(); err != nil {
+			return nil, err
+		}
+	case types.T_array_float64:
+		if err := exec.flushArray64(); err != nil {
+			return nil, err
+		}
+	default:
+		return nil, moerr.NewInternalErrorNoCtx(
+			"unsupported type '%s' for cluster_centers", exec.singleAggInfo.argType.String())
+	}
+
+	return exec.ret.flush(), nil
+}
+
+func (exec *clusterCentersExec) flushArray32() error {
+	for i, group := range exec.groupData {
+		exec.ret.groupToSet = i
+
+		if group == nil || group.Length() == 0 {
+			continue
+		}
+
+		bts := vector.MustBytesCol(group)
+		// todo: it's bad here this f64s is out of the memory control.
+		f64s := make([][]float64, group.Length())
+		for i := range f64s {
+			f32s := types.BytesToArray[float32](bts[i])
+			f64s[i] = make([]float64, len(f32s))
+			for j := range f32s {
+				f64s[i][j] = float64(f32s[j])
+			}
+		}
+
+		centers, err := exec.getCentersByKmeansAlgorithm(f64s)
+		if err != nil {
+			return err
+		}
+		res, err := exec.arraysToString(centers)
+		if err != nil {
+			return err
+		}
+		if err = exec.ret.aggSet(util.UnsafeStringToBytes(res)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (exec *clusterCentersExec) flushArray64() error {
+	for i, group := range exec.groupData {
+		exec.ret.groupToSet = i
+
+		if group == nil || group.Length() == 0 {
+			continue
+		}
+
+		bts := vector.MustBytesCol(group)
+		f64s := make([][]float64, group.Length())
+		for i := range f64s {
+			f64s[i] = types.BytesToArray[float64](bts[i])
+		}
+
+		centers, err := exec.getCentersByKmeansAlgorithm(f64s)
+		if err != nil {
+			return err
+		}
+		res, err := exec.arraysToString(centers)
+		if err != nil {
+			return err
+		}
+		if err = exec.ret.aggSet(util.UnsafeStringToBytes(res)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (exec *clusterCentersExec) getCentersByKmeansAlgorithm(f64s [][]float64) ([][]float64, error) {
+	var clusterer kmeans.Clusterer
+	var centers [][]float64
+	var err error
+
+	if clusterer, err = elkans.NewKMeans(
+		f64s, int(exec.clusterCnt),
+		defaultKmeansMaxIteration,
+		defaultKmeansDeltaThreshold,
+		exec.distType,
+		exec.initType,
+		exec.normalize); err != nil {
+		return nil, err
+	}
+	if centers, err = clusterer.Cluster(); err != nil {
+		return nil, err
+	}
+
+	return centers, nil
+}
+
+// converts [][]float64 to json string.
+func (exec *clusterCentersExec) arraysToString(centers [][]float64) (res string, err error) {
+	switch exec.singleAggInfo.argType.Oid {
+	case types.T_array_float32:
+		// cast [][]float64 to [][]float32
+		_centers := make([][]float32, len(centers))
+		for i, center := range centers {
+			_centers[i], err = moarray.Cast[float64, float32](center)
+			if err != nil {
+				return "", err
+			}
+		}
+
+		// comments that copied from old code.
+		// create json string for [][]float32
+		// NOTE: here we can't use jsonMarshall as it does not accept precision as done in ArraysToString
+		// We need precision here, as it is the final output that will be printed on SQL console.
+		res = fmt.Sprintf("[ %s ]", types.ArraysToString[float32](_centers, ","))
+
+	case types.T_array_float64:
+		res = fmt.Sprintf("[ %s ]", types.ArraysToString[float64](centers, ","))
+	}
+	return res, nil
+}
+
+func (exec *clusterCentersExec) Free() {
+	exec.ret.free()
+	for _, v := range exec.groupData {
+		if v == nil {
+			continue
+		}
+
+		if v.NeedDup() {
+			v.Free(exec.ret.mp)
+		} else {
+			exec.ret.mg.PutVector(v)
+		}
+	}
 }
 
 func (exec *clusterCentersExec) SetExtraInformation(partialResult any, groupIndex int) {

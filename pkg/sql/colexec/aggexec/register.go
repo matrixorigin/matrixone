@@ -121,6 +121,11 @@ func RegisterMedian(id int64) {
 	aggIdOfMedian = id
 }
 
+func RegisterClusterCenters(id int64) {
+	specialAgg[id] = true
+	aggIdOfClusterCenters = id
+}
+
 type registeredAggInfo struct {
 	isSingleAgg          bool
 	acceptNull           bool
@@ -175,13 +180,14 @@ var (
 	multiAgg   = make(map[int64]bool)
 	specialAgg = make(map[int64]bool)
 
-	aggIdOfCountColumn = int64(-1)
-	aggIdOfCountStar   = int64(-2)
-	aggIdOfGroupConcat = int64(-3)
-	aggIdOfApproxCount = int64(-4)
-	aggIdOfMedian      = int64(-5)
-	groupConcatSep     = ","
-	getCroupConcatRet  = func(args ...types.Type) types.Type {
+	aggIdOfCountColumn    = int64(-1)
+	aggIdOfCountStar      = int64(-2)
+	aggIdOfGroupConcat    = int64(-3)
+	aggIdOfApproxCount    = int64(-4)
+	aggIdOfMedian         = int64(-5)
+	aggIdOfClusterCenters = int64(-6)
+	groupConcatSep        = ","
+	getCroupConcatRet     = func(args ...types.Type) types.Type {
 		for _, p := range args {
 			if p.Oid == types.T_binary || p.Oid == types.T_varbinary || p.Oid == types.T_blob {
 				return types.T_blob.ToType()

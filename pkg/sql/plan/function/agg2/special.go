@@ -35,3 +35,7 @@ func RegisterApproxCount(id int64) {
 func RegisterMedian(id int64) {
 	aggexec.RegisterMedian(id)
 }
+
+func RegisterClusterCenters(id int64) {
+	aggexec.RegisterClusterCenters(id)
+}
