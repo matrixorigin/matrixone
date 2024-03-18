@@ -1106,6 +1106,18 @@ func (mr *MockWorkspaceMockRecorder) StartStatement() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "StartStatement", reflect.TypeOf((*MockWorkspace)(nil).StartStatement))
 }
 
+// TransferRowID mocks base method.
+func (m *MockWorkspace) TransferRowID() {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "TransferRowID")
+}
+
+// TransferRowID indicates an expected call of TransferRowID.
+func (mr *MockWorkspaceMockRecorder) TransferRowID() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "TransferRowID", reflect.TypeOf((*MockWorkspace)(nil).TransferRowID))
+}
+
 // UpdateSnapshotWriteOffset mocks base method.
 func (m *MockWorkspace) UpdateSnapshotWriteOffset() {
 	m.ctrl.T.Helper()

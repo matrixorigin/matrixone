@@ -769,7 +769,7 @@ func Test_fliterByAccountAndFilename(t *testing.T) {
 				Cols: []*plan.ColDef{
 					{
 						Name: catalog.ExternalFilePath,
-						Typ: &plan.Type{
+						Typ: plan.Type{
 							Id:    int32(types.T_varchar),
 							Width: types.MaxVarcharLen,
 							Table: tableName,
