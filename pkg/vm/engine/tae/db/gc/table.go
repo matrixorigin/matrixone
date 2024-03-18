@@ -361,11 +361,11 @@ func (t *GCTable) ReadTable(ctx context.Context, name string, size int64, fs *ob
 	}
 	bats := t.makeBatchWithGCTableV1()
 	defer t.closeBatch(bats)
-	err = t.replayData(ctx, CreateBlock, BlockSchemaAttr, BlockSchemaTypes, bats, bs, reader)
+	err = t.replayData(ctx, CreateBlock, BlockSchemaAttrV1, BlockSchemaTypesV1, bats, bs, reader)
 	if err != nil {
 		return err
 	}
-	err = t.replayData(ctx, DeleteBlock, BlockSchemaAttr, BlockSchemaTypes, bats, bs, reader)
+	err = t.replayData(ctx, DeleteBlock, BlockSchemaAttrV1, BlockSchemaTypesV1, bats, bs, reader)
 	if err != nil {
 		return err
 	}
