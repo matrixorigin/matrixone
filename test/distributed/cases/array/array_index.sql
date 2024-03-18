@@ -640,5 +640,12 @@ create table vector_index_08(a int primary key, b vecf32(128),c int,key c_k(c));
 create index idx01 using ivfflat on vector_index_08(b) lists=3 op_type "vector_l2_ops";
 alter table vector_index_08 add column d vecf32(3) not null after c;
 
+-- 41. Create Index with no lists argument. However lists=0 will fail.
+create table vector_index_07(a int primary key, b vecf32(128),c int,key c_k(c));
+create index idx01 using ivfflat on vector_index_07(b);
+create index idx02 using ivfflat on vector_index_07(b) lists=0;
+alter table vector_index_07 reindex idx01 ivfflat lists=0;
+alter table vector_index_07 reindex idx01 ivfflat;
+
 -- post
 drop database vecdb2;

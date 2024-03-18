@@ -145,7 +145,6 @@ insert into tbl values(2, "[1,2,4]","[1,2,4]");
 insert into tbl values(3, "[1,2.4,4]","[1,2.4,4]");
 insert into tbl values(4, "[1,2,5]","[1,2,5]");
 create index idx7 using IVFFLAT on tbl(b);
-internal error: invalid list. list must be > 0
 drop table if exists tbl;
 create table tbl(a int primary key, b vecf32(3));
 insert into tbl values(1, "[1,2,3]");
@@ -585,4 +584,12 @@ vector_index_04    CREATE TABLE `vector_index_04` (\n`a` INT NOT NULL,\n`b` VECF
 create table vector_index_08(a int primary key, b vecf32(128),c int,key c_k(c));
 create index idx01 using ivfflat on vector_index_08(b) lists=3 op_type "vector_l2_ops";
 alter table vector_index_08 add column d vecf32(3) not null after c;
+create table vector_index_07(a int primary key, b vecf32(128),c int,key c_k(c));
+create index idx01 using ivfflat on vector_index_07(b);
+create index idx02 using ivfflat on vector_index_07(b) lists=0;
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. LISTS should be greater than 0 at line 1 column 62 near "0;";
+alter table vector_index_07 reindex idx01 ivfflat lists=0;
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 35 near " reindex idx01 ivfflat lists=0;";
+alter table vector_index_07 reindex idx01 ivfflat;
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 35 near " reindex idx01 ivfflat;";
 drop database vecdb2;
