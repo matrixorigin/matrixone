@@ -342,14 +342,6 @@ func CopyFile(ctx context.Context, srcFs, dstFs fileservice.FileService, dentry 
 	return hasher.Sum(nil), nil
 }
 
-func mergeGCFile(gcFiles []string, gcFileMap map[string]string) {
-	for _, gcFile := range gcFiles {
-		if gcFileMap[gcFile] == "" {
-			gcFileMap[gcFile] = gcFile
-		}
-	}
-}
-
 func isGC(gcFileMap map[string]string, name string) bool {
 	return gcFileMap[name] != ""
 }
