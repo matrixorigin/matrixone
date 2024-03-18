@@ -327,13 +327,13 @@ func Test_hash_buildEvalPartitionExpression(t *testing.T) {
 
 	addCol(tableDef, &ColDef{
 		Name: "col1",
-		Typ: &plan.Type{
+		Typ: plan.Type{
 			Id: int32(types.T_int8),
 		},
 	})
 	addCol(tableDef, &ColDef{
 		Name: "col2",
-		Typ: &plan.Type{
+		Typ: plan.Type{
 			Id: int32(types.T_int8),
 		},
 	})

@@ -182,6 +182,12 @@ func (blk *baseObject) TryUpgrade() (err error) {
 }
 
 func (blk *baseObject) GetMeta() any              { return blk.meta }
+func (blk *baseObject) CheckFlushTaskRetry(startts types.TS) bool {
+	blk.RLock()
+	defer blk.RUnlock()
+	x := blk.appendMVCC.GetLatestAppendPrepareTSLocked()
+	return x.Greater(&startts)
+}
 func (blk *baseObject) GetFs() *objectio.ObjectFS { return blk.rt.Fs }
 func (blk *baseObject) GetID() *common.ID         { return blk.meta.AsCommonID() }
 

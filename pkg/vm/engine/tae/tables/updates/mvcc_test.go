@@ -15,6 +15,7 @@
 package updates
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -65,7 +66,7 @@ func TestMutationControllerAppend(t *testing.T) {
 
 	st := time.Now()
 	for i, qts := range queries {
-		row, ok, _, _ := mc.GetVisibleRowLocked(MockTxnWithStartTS(qts))
+		row, ok, _, _ := mc.GetVisibleRowLocked(context.TODO(), MockTxnWithStartTS(qts))
 		if i == 0 {
 			assert.False(t, ok)
 		} else {
@@ -109,14 +110,14 @@ func TestGetVisibleRow(t *testing.T) {
 	an4.Aborted = true
 
 	// ts=1 maxrow=1, holes={}
-	maxrow, visible, holes, err := n.GetVisibleRowLocked(MockTxnWithStartTS(types.BuildTS(1, 0)))
+	maxrow, visible, holes, err := n.GetVisibleRowLocked(context.TODO(), MockTxnWithStartTS(types.BuildTS(1, 0)))
 	assert.NoError(t, err)
 	assert.Equal(t, uint32(1), maxrow)
 	assert.True(t, visible)
 	assert.Equal(t, 0, holes.GetCardinality())
 
 	// ts=4 maxrow=3, holes={1}
-	maxrow, visible, holes, err = n.GetVisibleRowLocked(MockTxnWithStartTS(types.BuildTS(4, 0)))
+	maxrow, visible, holes, err = n.GetVisibleRowLocked(context.TODO(), MockTxnWithStartTS(types.BuildTS(4, 0)))
 	assert.NoError(t, err)
 	assert.Equal(t, uint32(3), maxrow)
 	assert.True(t, visible)
@@ -124,7 +125,7 @@ func TestGetVisibleRow(t *testing.T) {
 	assert.True(t, holes.Contains(1))
 
 	// ts=5 maxrow=3, holes={}
-	maxrow, visible, holes, err = n.GetVisibleRowLocked(MockTxnWithStartTS(types.BuildTS(5, 0)))
+	maxrow, visible, holes, err = n.GetVisibleRowLocked(context.TODO(), MockTxnWithStartTS(types.BuildTS(5, 0)))
 	assert.NoError(t, err)
 	assert.Equal(t, uint32(3), maxrow)
 	assert.True(t, visible)

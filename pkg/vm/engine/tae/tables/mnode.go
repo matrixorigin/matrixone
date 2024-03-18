@@ -522,6 +522,7 @@ func (node *memoryNode) CollectAppendInRange(
 
 // Note: With PinNode Context
 func (node *memoryNode) resolveInMemoryColumnDatas(
+	ctx context.Context,
 	txn txnif.TxnReader,
 	readSchema *catalog.Schema,
 	colIdxes []int,
@@ -530,7 +531,7 @@ func (node *memoryNode) resolveInMemoryColumnDatas(
 ) (view *containers.BlockView, err error) {
 	node.block.RLock()
 	defer node.block.RUnlock()
-	maxRow, visible, deSels, err := node.block.appendMVCC.GetVisibleRowLocked(txn)
+	maxRow, visible, deSels, err := node.block.appendMVCC.GetVisibleRowLocked(ctx, txn)
 	if !visible || err != nil {
 		// blk.RUnlock()
 		return
@@ -571,7 +572,7 @@ func (node *memoryNode) resolveInMemoryColumnData(
 ) (view *containers.ColumnView, err error) {
 	node.block.RLock()
 	defer node.block.RUnlock()
-	maxRow, visible, deSels, err := node.block.appendMVCC.GetVisibleRowLocked(txn)
+	maxRow, visible, deSels, err := node.block.appendMVCC.GetVisibleRowLocked(context.TODO(), txn)
 	if !visible || err != nil {
 		return
 	}

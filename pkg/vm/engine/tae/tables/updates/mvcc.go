@@ -156,6 +156,7 @@ func (n *AppendMVCCHandle) CollectAppendLocked(
 // holes: is the bitmap of the holes that the txn cannot see
 // holes exists only if any append node was rollbacked
 func (n *AppendMVCCHandle) GetVisibleRowLocked(
+	ctx context.Context,
 	txn txnif.TxnReader,
 ) (maxrow uint32, visible bool, holes *nulls.Bitmap, err error) {
 	var holesMax uint32
@@ -267,6 +268,10 @@ func (n *AppendMVCCHandle) AddAppendNodeLocked(
 // Pending appendnode is not visible for compaction txn.
 func (n *AppendMVCCHandle) PrepareCompact() bool {
 	return n.allAppendsCommitted()
+}
+
+func (n *MVCCHandle) GetLatestAppendPrepareTSLocked() types.TS {
+	return n.appends.GetUpdateNodeLocked().Prepare
 }
 
 // check if all appendnodes are committed.

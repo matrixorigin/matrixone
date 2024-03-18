@@ -17,6 +17,7 @@ package tables
 import (
 	"context"
 	"fmt"
+	"sync"
 	"sync/atomic"
 
 	"github.com/RoaringBitmap/roaring"
@@ -39,6 +40,7 @@ import (
 type aobject struct {
 	*baseObject
 	frozen atomic.Bool
+	freezelock sync.Mutex
 }
 
 func newABlock(
@@ -109,8 +111,14 @@ func (blk *aobject) PrepareCompact() bool {
 	if blk.RefCount() > 0 {
 		return false
 	}
+
+	// see more notes in flushtabletail.go
+	blk.freezelock.Lock()
 	blk.FreezeAppend()
-	if !blk.meta.PrepareCompact() || !blk.appendMVCC.PrepareCompact() {
+	blk.freezelock.Unlock()
+
+	if !blk.meta.PrepareCompact() ||
+		!blk.appendMVCC.PrepareCompact() /* all appends are committed */ {
 		return false
 	}
 	return blk.RefCount() == 0
@@ -172,6 +180,7 @@ func (blk *aobject) resolveColumnDatas(
 
 	if !node.IsPersisted() {
 		return node.MustMNode().resolveInMemoryColumnDatas(
+			ctx,
 			txn, readSchema, colIdxes, skipDeletes, mp,
 		)
 	} else {
