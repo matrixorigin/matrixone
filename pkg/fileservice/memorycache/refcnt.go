@@ -12,16 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//go:build !race
-// +build !race
-
 package memorycache
 
-import (
-	"fmt"
-	"sync/atomic"
-)
-
+/*
 // refcnt is an atomic reference counter
 type refcnt struct {
 	val atomic.Int32
@@ -52,3 +45,4 @@ func (r *refcnt) release() bool {
 		return false
 	}
 }
+*/

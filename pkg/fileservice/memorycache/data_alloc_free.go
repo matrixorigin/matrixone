@@ -12,18 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//go:build !race
-// +build !race
-
 package memorycache
 
-import (
-	"sync/atomic"
-	"unsafe"
-
-	"github.com/matrixorigin/matrixone/pkg/common/malloc"
-)
-
+/*
 const dataSize = int(unsafe.Sizeof(Data{}))
 
 func newData(n int, size *atomic.Int64) *Data {
@@ -45,3 +36,4 @@ func (d *Data) free(size *atomic.Int64) {
 	d.buf = nil
 	malloc.Free(buf)
 }
+*/
