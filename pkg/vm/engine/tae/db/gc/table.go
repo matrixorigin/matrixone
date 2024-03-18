@@ -117,7 +117,6 @@ func (t *GCTable) SoftGC(table *GCTable, ts types.TS, snapShotList []types.TS) [
 	for name, entry := range objects {
 		objectEntry := table.objects[name]
 		if objectEntry == nil && entry.commitTS.Less(&ts) && !isSnapshotRefers(entry, snapShotList) {
-			logutil.Infof("SoftGC: %s, entry create %v, drop %v", name, entry.createTS.ToString(), entry.dropTS.ToString())
 			gc = append(gc, name)
 			t.deleteObject(name)
 		}

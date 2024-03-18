@@ -117,7 +117,7 @@ func execBackup(ctx context.Context, srcFs, dstFs fileservice.FileService, names
 			continue
 		}
 		ckpStr := strings.Split(name, ":")
-		if len(ckpStr) != 3 && i > 0 {
+		if len(ckpStr) != 2 && i > 0 {
 			return moerr.NewInternalError(ctx, fmt.Sprintf("invalid checkpoint string: %v", ckpStr))
 		}
 		metaLoc := ckpStr[0]
