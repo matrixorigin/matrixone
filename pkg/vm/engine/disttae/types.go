@@ -207,7 +207,8 @@ type Transaction struct {
 	//current statement id
 	statementID int
 	//offsets of the txn.writes for statements in a txn.
-	offsets []int
+	offsets    []int
+	timestamps []timestamp.Timestamp
 
 	hasS3Op              atomic.Bool
 	removed              bool
@@ -559,6 +560,8 @@ type txnDatabase struct {
 	databaseType      string
 	databaseCreateSql string
 	txn               *Transaction
+
+	rowId types.Rowid
 }
 
 type tableKey struct {

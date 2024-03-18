@@ -124,7 +124,7 @@ func (arg *Argument) Prepare(proc *process.Process) error {
 
 	retSchema := make([]types.Type, len(tblArg.Rets))
 	for i := range tblArg.Rets {
-		retSchema[i] = dupType(tblArg.Rets[i].Typ)
+		retSchema[i] = dupType(&tblArg.Rets[i].Typ)
 	}
 	tblArg.retSchema = retSchema
 

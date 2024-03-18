@@ -244,7 +244,7 @@ func (builder *QueryBuilder) generateRuntimeFilters(nodeID int32) {
 	leftChild.RuntimeFilterProbeList = append(leftChild.RuntimeFilterProbeList, &plan.RuntimeFilterSpec{
 		Tag: rfTag,
 		Expr: &plan.Expr{
-			Typ: *tableDef.Cols[pkIdx].Typ,
+			Typ: tableDef.Cols[pkIdx].Typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: leftChild.BindingTags[0],

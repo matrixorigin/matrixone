@@ -129,7 +129,10 @@ func AlterColumn(ctx CompilerContext, alterPlan *plan.AlterTable, spec *tree.Alt
 			colDef := DeepCopyColDef(col)
 			if spec.OptionType == tree.AlterColumnOptionSetDefault {
 				tmpColumnDef := tree.NewColumnTableDef(spec.ColumnName, nil, []tree.ColumnAttribute{spec.DefalutExpr})
-				defaultValue, err := buildDefaultExpr(tmpColumnDef, colDef.Typ, ctx.GetProcess())
+				defer func() {
+					tmpColumnDef.Free()
+				}()
+				defaultValue, err := buildDefaultExpr(tmpColumnDef, &colDef.Typ, ctx.GetProcess())
 				if err != nil {
 					return err
 				}
