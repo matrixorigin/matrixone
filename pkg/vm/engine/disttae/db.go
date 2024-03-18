@@ -16,6 +16,8 @@ package disttae
 
 import (
 	"context"
+	"runtime/trace"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
@@ -267,8 +269,10 @@ func (e *Engine) getPartition(databaseId, tableId uint64) *logtailreplay.Partiti
 }
 
 func (e *Engine) lazyLoad(ctx context.Context, tbl *txnTable) (*logtailreplay.Partition, error) {
-	part := e.getPartition(tbl.db.databaseId, tbl.tableId)
+	ctx, task := trace.NewTask(ctx, "Engine.lazyLoad")
+	defer task.End()
 
+	part := e.getPartition(tbl.db.databaseId, tbl.tableId)
 	if err := part.ConsumeCheckpoints(
 		ctx,
 		func(checkpoint string, state *logtailreplay.PartitionState) error {
