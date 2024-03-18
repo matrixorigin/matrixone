@@ -17,6 +17,7 @@ package disttae
 import (
 	"context"
 	"encoding/hex"
+	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 	"math"
 	"time"
 
@@ -1028,6 +1029,44 @@ func (txn *Transaction) GetSnapshotWriteOffset() int {
 	txn.Lock()
 	defer txn.Unlock()
 	return txn.snapshotWriteOffset
+}
+
+func (txn *Transaction) TransferRowID() {
+	txn.timestamps = append(txn.timestamps, txn.op.SnapshotTS())
+	if txn.statementID > 0 && txn.op.Txn().IsRCIsolation() {
+		var ts timestamp.Timestamp
+		if txn.statementID == 1 {
+			ts = txn.timestamps[0]
+			// statementID > 1
+		} else {
+			ts = txn.timestamps[txn.statementID-2]
+		}
+		fn := func(_, value any) bool {
+			tbl := value.(*txnTable)
+			ctx := tbl.proc.Load().Ctx
+			state, err := tbl.getPartitionState(ctx)
+			if err != nil {
+				logutil.Fatalf("getPartitionState failed: %v", err)
+			}
+			deleteObjs, createObjs := state.GetChangedObjsBetween(types.TimestampToTS(ts),
+				types.TimestampToTS(tbl.db.txn.op.SnapshotTS()))
+
+			trace.GetService().ApplyFlush(
+				tbl.db.txn.op.Txn().ID,
+				tbl.tableId,
+				ts,
+				tbl.db.txn.op.SnapshotTS(),
+				len(deleteObjs))
+
+			if len(deleteObjs) > 0 {
+				if err := tbl.transferRowid(ctx, state, deleteObjs, createObjs); err != nil {
+					logutil.Fatalf("updateDeleteInfo failed: %v", err)
+				}
+			}
+			return true
+		}
+		txn.tableCache.tableMap.Range(fn)
+	}
 }
 
 func (txn *Transaction) UpdateSnapshotWriteOffset() {
