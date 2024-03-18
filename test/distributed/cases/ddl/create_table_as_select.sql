@@ -639,7 +639,7 @@ insert into table01 (col1, col2, col3, col4, col5, col6, col7, col8, col9, col10
 ('Value2', 456, 78.90, '2023-10-24', false, 'banana', 'Another text', '2022-01-01 01:01:01.000', 'More binary data', 'D'),
 ('Value3', 789, 12.34, '2023-10-25', true, 'orange', 'Yet another text', '1979-01-01 01:01:01.123', 'Even more binary data', 'E');
 -- @bvt:issue#14970
-create table table02 as select * from table01;
+create table test.table02 as select * from table01;
 show create table table02;
 select * from table02;
 insert into table02 values (12, 'Value1', 123, 45.67, '2023-10-23', TRUE, 'apple', 'This is a text', '2019-01-01 01:01:01.000', 'Some binary data', 'C');
@@ -711,7 +711,7 @@ show create table student_course_enrollments_inner;
 select * from student_course_enrollments;
 
 drop table if exists student_course_enrollments_right;
-create table student_course_enrollments_right AS
+create table test.student_course_enrollments_right AS
 select
     s.student_id,
     s.student_name,
@@ -787,7 +787,7 @@ from
 select * from sal;
 
 drop table if exists sal;
-create table sal as
+create table test.sal as
 select
     col1,
     col2,
@@ -930,7 +930,7 @@ drop table if exists abnormal01;
 create table abnormal01 (col1 int default null );
 insert into abnormal01 values (1), (null);
 drop table if exists abnormal02;
-create table abnormal02 (col1 int not null) as select col1 from abnormal01;
+create table test.abnormal02 (col1 int not null) as select col1 from abnormal01;
 drop table abnormal01;
 
 -- abnormal test: normal column to pk column
@@ -993,6 +993,7 @@ drop table if exists time_window02;
 create table time_window02 as select _wstart, _wend, max(col2), min(col2) from time_window01 where ts > '2020-01-11 12:00:12.000' and ts < '2021-01-13 00:00:00.000' interval(ts, 100, day) fill(prev);
 select * from time_window02;
 drop table time_window01;
+drop table time_window02;
 
 drop table if exists time_window03;
 create table time_window03 (ts timestamp primary key , col2 bool);
@@ -1002,13 +1003,13 @@ insert into time_window03 values ('2023-10-26 10:20:00.000', null);
 insert into time_window03 values ('2023-10-26 10:30:00.000', true);
 select * from time_window03;
 drop table if exists time_window04;
-create table time_window04 as select _wstart, _wend, max(col2), min(col2) from time_window02 where ts > '2020-01-11 12:00:12.000' and ts < '2024-01-13 00:00:00.000' interval(ts, 10, second) fill(prev);
+create table time_window04 as select _wstart, _wend, max(col2), min(col2) from time_window03 where ts > '2020-01-11 12:00:12.000' and ts < '2024-01-13 00:00:00.000' interval(ts, 10, second) fill(prev);
 select * from time_window04;
-drop table time_window02;
+select * from time_window03;
 drop table time_window03;
 drop table time_window04;
 
-drop table if exists window01;
+drop table if exists test.window01;
 create table window01 (user_id integer not null, date date);
 insert into window01 values (1, '2002-06-09');
 insert into window01 values (2, '2002-06-09');
@@ -1211,3 +1212,47 @@ drop role role_r2;
 drop user role_u1;
 drop user role_u2;
 drop database db2;
+
+-- privilege
+drop role if exists role_r1;
+drop user if exists role_u1;
+create role role_r1;
+create user role_u1 identified by '111' default role role_r1;
+grant show databases on account * to role_r1;
+grant connect on account * to role_r1;
+grant show tables on database * to role_r1;
+grant create database, drop database on account * to role_r1;
+-- @session:id=9&user=sys:role_u1:role_r1&password=111
+drop database if exists db3;
+create database db3;
+drop database if exists db4;
+create database db4;
+-- @session
+use db3;
+grant create table, drop table on database db3 to role_r1;
+grant create table, drop table on database db4 to role_r1;
+grant select on table * to role_r1;
+grant insert on table * to role_r1;
+use db4;
+grant select on table * to role_r1;
+grant insert on table * to role_r1;
+-- @session:id=9&user=sys:role_u1:role_r1&password=111
+use db3;
+drop table if exists t1;
+create table t1(col1 int);
+insert into t1 values(1);
+insert into t1 values(2);
+drop database if exists db4;
+create database db4;
+use db4;
+drop table if exists t2;
+create table t2 as select * from db3.t1;
+use db3;
+drop table t1;
+-- @session
+use db4;
+select * from t2;
+drop table t2;
+drop role role_r1;
+drop user role_u1;
+drop database db3;
