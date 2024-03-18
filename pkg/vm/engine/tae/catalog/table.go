@@ -153,7 +153,7 @@ func (entry *TableEntry) IsVirtual() bool {
 	if !entry.db.IsSystemDB() {
 		return false
 	}
-	name := entry.GetLastestSchema().Name
+	name := entry.GetLastestSchemaLocked().Name
 	return name == pkgcatalog.MO_DATABASE ||
 		name == pkgcatalog.MO_TABLES ||
 		name == pkgcatalog.MO_COLUMNS
@@ -249,8 +249,16 @@ func (entry *TableEntry) deleteEntryLocked(objectEntry *ObjectEntry) error {
 	return nil
 }
 
-// GetLastestSchema returns the latest committed schema
+// GetLastestSchemaLocked returns the latest committed schema with entry Not locked
+func (entry *TableEntry) GetLastestSchemaLocked() *Schema {
+	return entry.schema.Load()
+}
+
+// GetLastestSchema returns the latest committed schema with entry locked
 func (entry *TableEntry) GetLastestSchema() *Schema {
+	entry.Lock()
+	defer entry.Unlock()
+
 	return entry.schema.Load()
 }
 
@@ -281,12 +289,12 @@ func (entry *TableEntry) GetVersionSchema(ver uint32) *Schema {
 }
 
 func (entry *TableEntry) GetColDefs() []*ColDef {
-	return entry.GetLastestSchema().ColDefs
+	return entry.GetLastestSchemaLocked().ColDefs
 }
 
 func (entry *TableEntry) GetFullName() string {
 	if len(entry.fullName) == 0 {
-		schema := entry.GetLastestSchema()
+		schema := entry.GetLastestSchemaLocked()
 		entry.fullName = genTblFullName(schema.AcInfo.TenantID, schema.Name)
 	}
 	return entry.fullName
@@ -324,7 +332,7 @@ func (entry *TableEntry) ObjectStats(level common.PPLevel, start, end int) (stat
 
 	it := entry.MakeObjectIt(true)
 	zonemapKind := common.ZonemapPrintKindNormal
-	if schema := entry.GetLastestSchema(); schema.HasSortKey() && strings.HasPrefix(schema.GetSingleSortKey().Name, "__") {
+	if schema := entry.GetLastestSchemaLocked(); schema.HasSortKey() && strings.HasPrefix(schema.GetSingleSortKey().Name, "__") {
 		zonemapKind = common.ZonemapPrintKindCompose
 	}
 
@@ -408,7 +416,7 @@ func (entry *TableEntry) StringWithLevel(level common.PPLevel) string {
 	return entry.StringLockedWithLevel(level)
 }
 func (entry *TableEntry) StringLockedWithLevel(level common.PPLevel) string {
-	name := entry.GetLastestSchema().Name
+	name := entry.GetLastestSchemaLocked().Name
 	if level <= common.PPL1 {
 		return fmt.Sprintf("TBL[%d][name=%s][C@%s,D@%s]",
 			entry.ID, name, entry.GetCreatedAtLocked().ToString(), entry.GetDeleteAt().ToString())
