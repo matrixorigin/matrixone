@@ -47,6 +47,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
@@ -2601,6 +2602,46 @@ func (tbl *txnTable) MergeObjects(ctx context.Context, objstats []objectio.Objec
 	err = mergesort.DoMergeAndWrite(ctx, sortkeyPos, int(options.DefaultBlockMaxRows), taskHost)
 	if err != nil {
 		return nil, err
+	}
+
+	// if transfer info is too large, write it down to s3
+	if size := taskHost.commitEntry.Booking.ProtoSize(); size > 60*common.Const1MBytes {
+		logutil.Infof("mergeblocks on cn: write s3 transfer info %v", common.HumanReadableBytes(size))
+		t := types.T_varchar.ToType()
+		v, releasev := taskHost.GetVector(&t)
+		defer releasev()
+		vectorRowCnt := 1
+		data, err := taskHost.commitEntry.Booking.Marshal()
+		if err != nil {
+			return taskHost.commitEntry, err
+		}
+		vector.AppendBytes(v, data, false, taskHost.GetMPool())
+		taskHost.commitEntry.Booking.Marshal()
+		name := objectio.BuildObjectName(objectio.NewSegmentid(), 0)
+		writer, err := blockio.NewBlockWriterNew(taskHost.fs, name, 0, nil)
+		if err != nil {
+			return taskHost.commitEntry, err
+		}
+
+		batch := batch.New(true, []string{"payload"})
+		batch.SetRowCount(vectorRowCnt)
+		batch.Vecs[0] = v
+		_, err = writer.WriteTombstoneBatch(batch)
+		if err != nil {
+			return taskHost.commitEntry, err
+		}
+		blocks, _, err := writer.Sync(ctx)
+		if err != nil {
+			return taskHost.commitEntry, err
+		}
+		location := blockio.EncodeLocation(
+			name,
+			blocks[0].GetExtent(),
+			uint32(vectorRowCnt),
+			blocks[0].GetID())
+		taskHost.commitEntry.BookingLoc = make([]byte, len(location))
+		copy(taskHost.commitEntry.BookingLoc[:], location[:])
+		taskHost.commitEntry.Booking = nil
 	}
 
 	// commit this to tn

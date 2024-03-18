@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/merge"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -65,16 +66,28 @@ func handleMerge() handleFunc {
 		func(_ string) ([]uint64, error) {
 			return nil, nil
 		},
-		func(tnShardID uint64, parameter string, proc *process.Process) ([]byte, error) {
+		func(tnShardID uint64, parameter string, proc *process.Process) (payload []byte, err error) {
 			txnOp := proc.TxnOperator
 			if proc.TxnOperator == nil {
 				return nil, moerr.NewInternalError(proc.Ctx, "handleFlush: txn operator is nil")
 			}
-
 			db, tbl, targets, err := parseArg(parameter)
 			if err != nil {
 				return nil, err
 			}
+			defer func() {
+				if err != nil {
+					e := &api.MergeCommitEntry{
+						Err: err.Error(),
+					}
+					for _, o := range targets {
+						e.MergedObjs = append(e.MergedObjs, o.Clone().Marshal())
+					}
+					// No matter success or not, we should return the merge result to DN
+					payload, _ = e.MarshalBinary()
+					err = nil
+				}
+			}()
 			database, err := proc.SessionInfo.StorageEngine.Database(proc.Ctx, db, txnOp)
 			if err != nil {
 				return nil, err
@@ -85,9 +98,10 @@ func handleMerge() handleFunc {
 			}
 			entry, err := rel.MergeObjects(proc.Ctx, targets)
 			if err != nil {
+				merge.CleanUpUselessFiles(entry, proc.FileService)
 				return nil, err
 			}
-			payload, err := entry.MarshalBinary()
+			payload, err = entry.MarshalBinary()
 			if err != nil {
 				return nil, err
 			}

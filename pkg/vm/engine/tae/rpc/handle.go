@@ -375,6 +375,12 @@ func (h *Handle) HandleCommitMerge(
 	req *api.MergeCommitEntry,
 	resp *db.InspectResp) (cb func(), err error) {
 
+	defer func() {
+		logutil.Info("mergeblocks handle commit merge",
+			zap.String("table", fmt.Sprintf("%v-%v", req.TblId, req.TableName)),
+			zap.String("start-ts", req.StartTs.String()),
+			zap.String("error", err.Error()))
+	}()
 	txn, err := h.db.GetOrCreateTxnWithMeta(nil, meta.GetID(),
 		types.TimestampToTS(meta.GetSnapshotTS()))
 	if err != nil {
@@ -386,6 +392,32 @@ func (h *Handle) HandleCommitMerge(
 		ids = append(ids, *stat.ObjectName().ObjectId())
 	}
 	merge.ActiveCNObj.RemoveActiveCNObj(ids)
+	if req.Err != "" {
+		resp.Message = req.Err
+		err = moerr.NewInternalError(ctx, "merge err in cn: %s", req.Err)
+		return
+	}
+
+	if len(req.BookingLoc) > 0 {
+		// load transfer info from s3
+		if req.Booking != nil {
+			logutil.Error("mergeblocks booking loc is not empty, but booking is not nil")
+		}
+		loc := objectio.Location(req.BookingLoc)
+		bat, err := blockio.LoadTombstoneColumns(ctx, []uint16{0}, nil, h.db.Runtime.Fs.Service, loc, nil)
+		if err != nil {
+			resp.Message = err.Error()
+			merge.CleanUpUselessFiles(req, h.db.Runtime.Fs.Service)
+		}
+		req.Booking = &api.BlkTransferBooking{}
+		if err = req.Booking.Unmarshal(bat.Vecs[0].GetBytesAt(0)); err != nil {
+			resp.Message = err.Error()
+			merge.CleanUpUselessFiles(req, h.db.Runtime.Fs.Service)
+		}
+		h.db.Runtime.Fs.Service.Delete(ctx, loc.Name().String())
+		bat = nil
+	}
+
 	_, err = jobs.HandleMergeEntryInTxn(txn, req, h.db.Runtime)
 	if err != nil {
 		return
@@ -394,6 +426,7 @@ func (h *Handle) HandleCommitMerge(
 	if err != nil {
 		txn.Rollback(ctx)
 		resp.Message = err.Error()
+		merge.CleanUpUselessFiles(req, h.db.Runtime.Fs.Service)
 	} else {
 		b := &bytes.Buffer{}
 		b.WriteString("merged success\n")

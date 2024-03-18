@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	taskpb "github.com/matrixorigin/matrixone/pkg/pb/task"
@@ -116,6 +117,27 @@ func (e *ActiveCNObjMap) CheckOverlapOnCNActive(entries []*catalog.ObjectEntry) 
 		}
 	}
 	return false
+}
+
+func CleanUpUselessFiles(entry *api.MergeCommitEntry, fs fileservice.FileService) {
+	if entry == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	if len(entry.BookingLoc) != 0 {
+		loc := objectio.Location(entry.BookingLoc)
+		_ = fs.Delete(ctx, loc.Name().String())
+	}
+	if len(entry.CreatedObjs) != 0 {
+		for _, obj := range entry.CreatedObjs {
+			if len(obj) == 0 {
+				continue
+			}
+			s := objectio.ObjectStats(obj)
+			_ = fs.Delete(ctx, s.ObjectName().String())
+		}
+	}
 }
 
 const (

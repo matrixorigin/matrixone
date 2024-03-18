@@ -391,6 +391,8 @@ message MergeCommitEntry {
     repeated bytes merged_objs = 5;
     repeated bytes created_objs = 6;
     BlkTransferBooking booking = 7;
+    bytes booking_loc = 8;
+    string err = 9;
 }
 
 message MergeTaskEntry {
