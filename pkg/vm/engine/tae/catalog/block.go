@@ -260,7 +260,9 @@ func (entry *BlockEntry) InitData(factory DataFactory) {
 	entry.blkData = dataFactory(entry)
 }
 func (entry *BlockEntry) GetBlockData() data.Block { return entry.blkData }
-func (entry *BlockEntry) GetSchema() *Schema       { return entry.GetObject().GetTable().GetLastestSchema() }
+func (entry *BlockEntry) GetSchema() *Schema {
+	return entry.GetObject().GetTable().GetLastestSchemaLocked()
+}
 func (entry *BlockEntry) PrepareRollback() (err error) {
 	var empty bool
 	empty, err = entry.BaseEntryImpl.PrepareRollback()
