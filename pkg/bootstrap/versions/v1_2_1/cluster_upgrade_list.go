@@ -55,7 +55,6 @@ var upg_test_view = versions.UpgradeEntry{
 	Schema:    "information_schema",
 	TableName: "wuxiliang_cluster_view_v121",
 	UpgType:   versions.CREATE_VIEW,
-	TableType: versions.SYSTEM_VIEW,
 	UpgSql:    test_view_sql,
 	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
 		isExisted, _, err := versions.CheckViewDefinition(txn, accountId, "information_schema", "wuxiliang_cluster_view_v121")
@@ -74,7 +73,6 @@ var upg_test_table = versions.UpgradeEntry{
 	Schema:    "mo_catalog",
 	TableName: "wuxiliang_cluster_table_v121",
 	UpgType:   versions.CREATE_NEW_TABLE,
-	TableType: versions.BASE_TABLE,
 	UpgSql: fmt.Sprintf("CREATE TABLE IF NOT EXISTS `%s`.`%s` ("+
 		"SPECIFIC_CATALOG varchar(64),"+
 		"SPECIFIC_SCHEMA varchar(64),"+

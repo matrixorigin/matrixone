@@ -32,7 +32,6 @@ var upg_wuxiliang_test = versions.UpgradeEntry{
 	Schema:    INFORMATION_SCHEMA,
 	TableName: `wuxiliang_tenant_view_v121`,
 	UpgType:   versions.CREATE_VIEW,
-	TableType: versions.SYSTEM_VIEW,
 	UpgSql: fmt.Sprintf("CREATE VIEW IF NOT EXISTS `%s`.`%s` as "+
 		"select rel_id as view_id, "+
 		"relname as view_name, "+
@@ -60,7 +59,6 @@ var upg_sql_wuxiliang_append_v121 = versions.UpgradeEntry{
 	Schema:    `system_metrics`,
 	TableName: `sql_wuxiliang_append_v121`,
 	UpgType:   versions.CREATE_VIEW,
-	TableType: versions.SYSTEM_VIEW,
 	UpgSql: fmt.Sprintf("CREATE VIEW IF NOT EXISTS `%s`.`%s` as "+
 		"select `collecttime`, `value`, `node`, `role`, `account`, `type` "+
 		"from `system_metrics`.`metric` "+

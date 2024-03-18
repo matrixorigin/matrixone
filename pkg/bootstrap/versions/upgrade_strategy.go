@@ -61,14 +61,6 @@ const (
 	T_enum          = "ENUM"
 )
 
-type TableType int8
-
-const (
-	BASE_TABLE TableType = iota
-	SYSTEM_VIEW
-	VIEW
-)
-
 type UpgradeType int8
 
 const (
@@ -94,6 +86,9 @@ const (
 	MODIFY_VIEW
 	CREATE_VIEW
 	DROP_VIEW
+
+	CREATE_DATABASE
+	MODIFY_METADATA
 )
 
 // ColumnInfo Describe the detailed information of the table column
@@ -118,14 +113,15 @@ type UpgradeEntry struct {
 	Schema    string
 	TableName string
 	// UpgType declare the type of upgrade
-	UpgType   UpgradeType
-	TableType TableType
+	UpgType UpgradeType
 	// UpgSql is used to perform upgrade operations
 	UpgSql string
 	// CheckFunc was used to check whether an upgrade is required
 	// return true if the system is already in the final state and does not need to be upgraded,
 	// otherwise return false
 	CheckFunc func(txn executor.TxnExecutor, accountId uint32) (bool, error)
+	PreSql    string
+	PostSql   string
 }
 
 // Upgrade entity execution upgrade entrance

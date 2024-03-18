@@ -21,7 +21,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"go.uber.org/zap"
 	"time"
@@ -47,7 +46,7 @@ func (s *service) UpgradeTenant(ctx context.Context, tenantName string, isALLAcc
 			return true, err
 		}
 
-		if _, err = s.UpgradeOneTenant(ctx, tenantID, nil); err != nil {
+		if err = s.UpgradeOneTenant(ctx, tenantID); err != nil {
 			return true, err
 		}
 	}
@@ -69,20 +68,17 @@ func (s *service) CheckAndUpgradeCluster(ctx context.Context) error {
 	return nil
 }
 
-func (s *service) UpgradeOneTenant(
-	ctx context.Context,
-	tenantID int32,
-	txnOp client.TxnOperator) (bool, error) {
-
+func (s *service) UpgradeOneTenant(ctx context.Context, tenantID int32) error {
 	s.mu.RLock()
 	checked := s.mu.tenants[tenantID]
 	s.mu.RUnlock()
 	if checked {
-		return false, nil
+		return nil
 	}
 
-	upgraded := false
-	opts := executor.Options{}.WithTxn(txnOp)
+	opts := executor.Options{}.
+		WithMinCommittedTS(s.now()).
+		WithWaitCommittedLogApplied()
 	err := s.exec.ExecTxn(
 		ctx,
 		func(txn executor.TxnExecutor) error {
@@ -118,7 +114,6 @@ func (s *service) UpgradeOneTenant(
 					")")
 			}
 
-			upgraded = true
 			for {
 				// upgrade completed
 				if s.upgrade.finalVersionCompleted.Load() {
@@ -160,12 +155,12 @@ func (s *service) UpgradeOneTenant(
 		},
 		opts)
 	if err != nil {
-		return false, err
+		return err
 	}
 	s.mu.Lock()
 	s.mu.tenants[tenantID] = true
 	s.mu.Unlock()
-	return upgraded, nil
+	return nil
 }
 
 // CheckUpgradeAccount Custom upgrade account Check if the tenant name exists and is legal
