@@ -348,7 +348,7 @@ func (t *GCTable) ReadTable(ctx context.Context, name string, size int64, fs *ob
 	if err != nil {
 		return err
 	}
-	if len(bats) == 1 {
+	if len(bs) == 1 {
 		t.rebuildTableV2(bats)
 		return nil
 	}
