@@ -30,6 +30,7 @@ import (
 const (
 	DefaultMinRowsQualified = 40960
 	DefaultMaxRowsObj       = 8192 * 500
+	DefaultMinCNMergeSize   = 512 // 256 MB
 	DefaultMaxMergeObjN     = 2
 
 	Const1GBytes = 1 << 30
@@ -40,6 +41,7 @@ var (
 	RuntimeMaxMergeObjN     atomic.Int32
 	RuntimeMinRowsQualified atomic.Int32
 	RuntimeMaxRowsObj       atomic.Int32
+	RuntimeMinCNMergeSize   atomic.Int64
 	Epsilon                 float64
 )
 
@@ -47,6 +49,7 @@ func init() {
 	RuntimeMaxMergeObjN.Store(DefaultMaxMergeObjN)
 	RuntimeMinRowsQualified.Store(DefaultMinRowsQualified)
 	RuntimeMaxRowsObj.Store(DefaultMaxRowsObj)
+	RuntimeMinCNMergeSize.Store(DefaultMinCNMergeSize * Const1MBytes)
 	Epsilon = math.Nextafter(1, 2) - 1
 }
 

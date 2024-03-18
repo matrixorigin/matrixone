@@ -132,3 +132,18 @@ type Policy interface {
 	SetConfig(*catalog.TableEntry, func() txnif.AsyncTxn, any)
 	GetConfig(*catalog.TableEntry) any
 }
+
+func NewUpdatePolicyReq(c *BasicPolicyConfig) *api.AlterTableReq {
+	return &api.AlterTableReq{
+		Kind: api.AlterKind_UpdatePolicy,
+		Operation: &api.AlterTableReq_UpdatePolicy{
+			UpdatePolicy: &api.AlterTablePolicy{
+				MinRowsQuailifed: uint32(c.ObjectMinRows),
+				MaxObjOnerun:     uint32(c.MergeMaxOneRun),
+				MaxRowsMergedObj: uint32(c.MaxRowsMergedObj),
+				MinCnMergeSize:   uint64(c.MinCNMergeSize),
+				Hints:            c.MergeHints,
+			},
+		},
+	}
+}

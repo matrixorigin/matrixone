@@ -286,6 +286,7 @@ message AlterTablePolicy {
     uint32 max_obj_onerun = 2;
     uint32 max_rows_merged_obj = 3; 
     repeated MergeHint hints = 4;
+    uint64 min_cn_merge_size = 5;
 }
 
 message AlterTableConstraint {
@@ -359,6 +360,7 @@ message SchemaExtra {
     uint32 max_obj_onerun = 6;
     uint32 max_rows_merged_obj = 7;
     repeated MergeHint hints = 8;
+    uint64 min_cn_merge_size = 9;
 }
 
 // Int64Map mainly used in unit test
