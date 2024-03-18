@@ -376,10 +376,13 @@ func (h *Handle) HandleCommitMerge(
 	resp *db.InspectResp) (cb func(), err error) {
 
 	defer func() {
-		logutil.Info("mergeblocks handle commit merge",
-			zap.String("table", fmt.Sprintf("%v-%v", req.TblId, req.TableName)),
-			zap.String("start-ts", req.StartTs.String()),
-			zap.String("error", err.Error()))
+		if err != nil {
+			logutil.Error("mergeblocks err handle commit merge",
+				zap.String("table", fmt.Sprintf("%v-%v", req.TblId, req.TableName)),
+				zap.String("start-ts", req.StartTs.String()),
+				zap.String("error", err.Error()))
+		}
+
 	}()
 	txn, err := h.db.GetOrCreateTxnWithMeta(nil, meta.GetID(),
 		types.TimestampToTS(meta.GetSnapshotTS()))

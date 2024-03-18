@@ -20,11 +20,13 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/merge"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"go.uber.org/zap"
 )
 
 // parameter should be "DbName.TableName obj1,obj2,obj3..."
@@ -77,6 +79,7 @@ func handleMerge() handleFunc {
 			}
 			defer func() {
 				if err != nil {
+					logutil.Error("mergeblocks err on cn", zap.String("err", err.Error()))
 					e := &api.MergeCommitEntry{
 						Err: err.Error(),
 					}
