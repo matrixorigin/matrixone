@@ -121,7 +121,7 @@ require (
 	github.com/dgryski/go-metro v0.0.0-20180109044635-280f6062b5bc // indirect
 	github.com/getsentry/sentry-go v0.12.0 // indirect
 	github.com/go-ole/go-ole v1.2.6 // indirect
-	github.com/golang/protobuf v1.5.3
+	github.com/golang/protobuf v1.5.3 // indirect
 	github.com/golang/snappy v0.0.4 // indirect
 	github.com/gopherjs/gopherjs v1.12.80 // indirect
 	github.com/hashicorp/errwrap v1.1.0 // indirect
