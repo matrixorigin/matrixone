@@ -1257,3 +1257,47 @@ drop role role_r1;
 drop user role_u1;
 drop database db3;
 drop database db4;
+
+-- privilege
+drop database if exists db;
+create database db;
+use db;
+drop role if exists role_r1;
+drop role if exists role_r2;
+drop user if exists role_u1;
+drop user if exists role_u2;
+create role role_r1;
+create user role_u1 identified by '111' default role role_r1;
+create role role_r2;
+create user role_u2 identified by '111' default role role_r2;
+grant create database, drop database on account * to role_r1;
+grant show databases on account * to role_r1;
+grant connect on account * to role_r1;
+grant create table, drop table on database *.* to role_r1;
+grant show tables on database * to role_r1;
+grant select on table * to role_r1;
+grant insert on table * to role_r1;
+-- @session:id=20&user=sys:role_u1:role_r1&password=111
+drop database if exists db5;
+create database db5;
+use db5;
+drop table if exists t1;
+create table t1 (col1 int);
+insert into t1 values (1);
+insert into t1 values (2);
+-- @session
+grant role_r1 to role_r2;
+-- @session:id=22&user=sys:role_u2:role_r2&password=111
+drop database if exists db6;
+create database db6;
+use db6;
+create table t2 as select * from db5.t1;
+-- @session
+select * from db6.t2;
+drop role role_r1;
+drop role role_r2;
+drop user role_u1;
+drop user role_u2;
+drop database db;
+drop database db5;
+drop database db6;
