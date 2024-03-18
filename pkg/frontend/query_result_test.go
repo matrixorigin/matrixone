@@ -131,7 +131,7 @@ func Test_saveQueryResultMeta(t *testing.T) {
 	for i, ty := range typs {
 		colDefs[i] = &plan.ColDef{
 			Name: fmt.Sprintf("a_%d", i),
-			Typ: &plan.Type{
+			Typ: plan.Type{
 				Id:    int32(ty.Oid),
 				Scale: ty.Scale,
 				Width: ty.Width,

@@ -48,14 +48,13 @@ enum Sharding {
 
 // LockOptions lock options
 message LockOptions {
-  Granularity         Granularity       = 1;
-  LockMode            Mode              = 2;
-  WaitPolicy          Policy            = 3;
-  string              ForwardTo         = 4;
-  bool                TableDefChanged   = 5;
-  uint32              Group             = 6;
-  Sharding            Sharding          = 7;
-  timestamp.Timestamp SnapShotTs        = 8 [(gogoproto.nullable) = false];
+  Granularity Granularity       = 1;
+  LockMode    Mode              = 2;
+  WaitPolicy  Policy            = 3;
+  string      ForwardTo         = 4;
+  bool        TableDefChanged   = 5;
+  uint32      Group             = 6;
+  Sharding    Sharding          = 7;
 }
 
 // LockTable describes which CN manages a Table's Locks.
@@ -76,87 +75,67 @@ message LockTable {
 // Method lock table operations
 enum Method {
   // Lock lock rows on remote lock table
-  Lock               = 0;
+  Lock              = 0;
   // Write unlock rows from remote lock table
-  Unlock             = 1;
+  Unlock            = 1;
   // GetTxnLock get lock data on a special lock
-  GetTxnLock         = 2;
+  GetTxnLock        = 2;
   // GetWaitingList get waiting txns on a special lock
-  GetWaitingList     = 3;
+  GetWaitingList    = 3;
   // KeepRemoteLock keep remote lock on remote lock service 
-  KeepRemoteLock     = 4;
+  KeepRemoteLock    = 4;
   // GetBind get or create lock table bind from lock table allocator
-  GetBind            = 5;
+  GetBind           = 5;
   // KeepLockTableBind keep the lock table bind on lock table allocator
-  KeepLockTableBind  = 6;
+  KeepLockTableBind = 6;
   // ForwardLock forward lock request to another service
-  ForwardLock        = 7;
+  ForwardLock       = 7;
   // ForwardUnlock forward unlock request to another service
-  ForwardUnlock      = 8;
-  // SetRestartService set restart lock service
-  SetRestartService  = 9;
-  // RemainTxnInService get remain txn in lock service
-  RemainTxnInService = 10;
-  // canRestartService judge if can restart lock service
-  CanRestartService  = 11;
-}
-
-enum Status {
-  ServiceLockEnable        = 0;
-  ServiceLockWaiting       = 1;
-  ServiceUnLockSucc        = 2;
-  ServiceCanRestart        = 3;
+  ForwardUnlock     = 8;
 }
 
 // Request is used to send a request for a LockTable related operation to another 
 // service.
 message Request {
   // RequestID request id
-  uint64                     RequestID           = 1;
+  uint64                   RequestID           = 1;
   // LockTable lock target table
-  LockTable                  LockTable           = 2  [(gogoproto.nullable) = false];
-  Method                     Method              = 3;
-  LockRequest                Lock                = 4  [(gogoproto.nullable) = false];
-  UnlockRequest              Unlock              = 5  [(gogoproto.nullable) = false];
-  GetTxnLockRequest          GetTxnLock          = 6  [(gogoproto.nullable) = false];
-  GetWaitingListRequest      GetWaitingList      = 7  [(gogoproto.nullable) = false];
-  GetBindRequest             GetBind             = 8  [(gogoproto.nullable) = false];
-  KeepLockTableBindRequest   KeepLockTableBind   = 9  [(gogoproto.nullable) = false];
-  KeepRemoteLockRequest      KeepRemoteLock      = 10 [(gogoproto.nullable) = false];
-  SetRestartServiceRequest   SetRestartService   = 11 [(gogoproto.nullable) = false];
-  CanRestartServiceRequest   CanRestartService   = 12 [(gogoproto.nullable) = false];
-  RemainTxnInServiceRequest  RemainTxnInService  = 13 [(gogoproto.nullable) = false];
+  LockTable                LockTable           = 2  [(gogoproto.nullable) = false];
+  Method                   Method              = 3;
+  LockRequest              Lock                = 4  [(gogoproto.nullable) = false];
+  UnlockRequest            Unlock              = 5  [(gogoproto.nullable) = false];
+  GetTxnLockRequest        GetTxnLock          = 6  [(gogoproto.nullable) = false];
+  GetWaitingListRequest    GetWaitingList      = 7  [(gogoproto.nullable) = false];
+  GetBindRequest           GetBind             = 8  [(gogoproto.nullable) = false];
+  KeepLockTableBindRequest KeepLockTableBind   = 9  [(gogoproto.nullable) = false];
+  KeepRemoteLockRequest    KeepRemoteLock      = 10 [(gogoproto.nullable) = false];
 }
 
 // Response response
 message Response {
     // RequestID corresponding request id
-    uint64                     RequestID            = 1;
-    Method                     Method               = 2;
+    uint64                    RequestID         = 1;
+    Method                    Method            = 2;
     // Error we use this field to send moerr from service to another cn. Set with 
     // moerr.MarshalBinary, and use moerr.UnmarshalBinary to restore moerr.
-    bytes                      Error                = 3;
-    LockTable                  NewBind              = 4;
-    LockResponse               Lock                 = 5  [(gogoproto.nullable) = false];
-    UnlockResponse             Unlock               = 6  [(gogoproto.nullable) = false];
-    GetTxnLockResponse         GetTxnLock           = 7  [(gogoproto.nullable) = false];
-    GetWaitingListResponse     GetWaitingList       = 8  [(gogoproto.nullable) = false];
-    GetBindResponse            GetBind              = 9  [(gogoproto.nullable) = false];
-    KeepLockTableBindResponse  KeepLockTableBind    = 10 [(gogoproto.nullable) = false];
-    KeepRemoteLockResponse     KeepRemoteLock       = 11 [(gogoproto.nullable) = false];
-    SetRestartServiceResponse  SetRestartService    = 12 [(gogoproto.nullable) = false];
-    CanRestartServiceResponse  CanRestartService    = 13 [(gogoproto.nullable) = false];
-    RemainTxnInServiceResponse RemainTxnInService  = 14 [(gogoproto.nullable) = false];
+    bytes                     Error             = 3;
+    LockTable                 NewBind           = 4;
+    LockResponse              Lock              = 5  [(gogoproto.nullable) = false];
+    UnlockResponse            Unlock            = 6  [(gogoproto.nullable) = false];
+    GetTxnLockResponse        GetTxnLock        = 7  [(gogoproto.nullable) = false];
+    GetWaitingListResponse    GetWaitingList    = 8  [(gogoproto.nullable) = false];
+    GetBindResponse           GetBind           = 9  [(gogoproto.nullable) = false];
+    KeepLockTableBindResponse KeepLockTableBind = 10 [(gogoproto.nullable) = false];
+    KeepRemoteLockResponse    KeepRemoteLock    = 11 [(gogoproto.nullable) = false];
 }
 
 // LockRequest lock request
 message LockRequest {
-  bytes               TxnID       = 1;
-  string              ServiceID   = 2;
-  repeated  bytes     Rows        = 3;
+  bytes           TxnID     = 1;
+  string          ServiceID = 2;
+  repeated  bytes Rows      = 3;
   // LockOptions lock options
-  LockOptions         Options     = 4 [(gogoproto.nullable) = false];
-  timestamp.Timestamp SnapShotTs  = 5 [(gogoproto.nullable) = false];
+  LockOptions     Options   = 4 [(gogoproto.nullable) = false];
 }
 
 // LockResponse lock response
@@ -224,44 +203,11 @@ message GetBindResponse {
 // KeepLockTableBindRequest keep lock table bind request. CN -> TN
 message KeepLockTableBindRequest {
   string ServiceID = 1;
-  Status Status = 2;
-  repeated bytes TxnIDs = 3;
 }
 
 // KeepLockTableBindResponse keep lock table bind response. TN -> CN
 message KeepLockTableBindResponse {
   bool OK = 1;
-  Status Status = 2;
-}
-
-// SetRestartServiceRequest set restart lock service request from allocator request. operator -> TN
-message SetRestartServiceRequest {
-  string ServiceID = 1;
-}
-
-// SetRestartServiceResponse set restart lock service request from allocator response. TN -> operator
-message SetRestartServiceResponse {
-  bool OK = 1;
-}
-
-// CanRestartServiceRequest can restart lock service request from allocator request. operator -> TN
-message CanRestartServiceRequest {
-  string ServiceID = 1;
-}
-
-// CanRestartServiceResponse can restart lock service request from allocator response. TN -> operator
-message CanRestartServiceResponse {
-  bool OK = 1;
-}
-
-// RemainTxnInServiceRequest get remain txn in service request from allocator request. operator -> TN
-message RemainTxnInServiceRequest {
-  string ServiceID = 1;
-}
-
-// RemainTxnInServiceResponse get remain txn in service request from allocator response. TN -> operator
-message RemainTxnInServiceResponse {
-  int32 RemainTxn = 1;
 }
 
 // KeepRemoteLockRequest keep lock on remote lockservice request. CN -> CN
@@ -295,8 +241,4 @@ message ExtraMutation {
   bytes key       = 1;
   bool  skip      = 2;
   bytes replaceTo = 3;
-}
-
-message LockTableHolders {
-  string service = 1;
 }

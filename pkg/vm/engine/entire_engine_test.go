@@ -359,10 +359,6 @@ func (o *testOperator) SnapshotTS() timestamp.Timestamp {
 	panic("should not call")
 }
 
-func (o *testOperator) CreateTS() timestamp.Timestamp {
-	panic("should not call")
-}
-
 func (o *testOperator) Status() txn.TxnStatus {
 	panic("should not call")
 }

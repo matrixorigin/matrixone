@@ -20,8 +20,32 @@ func init() {
 	reuse.CreatePool[DropProcedure](
 		func() *DropProcedure { return &DropProcedure{} },
 		func(d *DropProcedure) { d.reset() },
-		reuse.DefaultOptions[DropProcedure]().
-			WithEnableChecker())
+		reuse.DefaultOptions[DropProcedure](), //.
+	) //WithEnableChecker()
+
+	reuse.CreatePool[ProcedureArgDecl](
+		func() *ProcedureArgDecl { return &ProcedureArgDecl{} },
+		func(p *ProcedureArgDecl) { p.reset() },
+		reuse.DefaultOptions[ProcedureArgDecl](), //.
+	) //WithEnableChecker()
+
+	reuse.CreatePool[ProcedureName](
+		func() *ProcedureName { return &ProcedureName{} },
+		func(p *ProcedureName) { p.reset() },
+		reuse.DefaultOptions[ProcedureName](), //.
+	) //WithEnableChecker()
+
+	reuse.CreatePool[CreateProcedure](
+		func() *CreateProcedure { return &CreateProcedure{} },
+		func(c *CreateProcedure) { c.reset() },
+		reuse.DefaultOptions[CreateProcedure](), //.
+	) //WithEnableChecker()
+
+	reuse.CreatePool[CallStmt](
+		func() *CallStmt { return &CallStmt{} },
+		func(c *CallStmt) { c.reset() },
+		reuse.DefaultOptions[CallStmt](), //.
+	) //WithEnableChecker()
 }
 
 type InOutArgType int
@@ -56,33 +80,6 @@ type ProcedureArgDecl struct {
 	InOutType InOutArgType
 }
 
-type ProcedureArgForMarshal struct {
-	Name      *UnresolvedName
-	Type      ResolvableTypeReference
-	InOutType InOutArgType
-}
-
-type ProcedureName struct {
-	Name objName
-}
-
-func NewProcedureName(name Identifier, prefix ObjectNamePrefix) *ProcedureName {
-	return &ProcedureName{
-		Name: objName{
-			ObjectName:       name,
-			ObjectNamePrefix: prefix,
-		},
-	}
-}
-
-func NewProcedureArgDecl(f InOutArgType, n *UnresolvedName, t ResolvableTypeReference) *ProcedureArgDecl {
-	return &ProcedureArgDecl{
-		Name:      n,
-		Type:      t,
-		InOutType: f,
-	}
-}
-
 func (node *ProcedureArgDecl) Format(ctx *FmtCtx) {
 	// in out type
 	switch node.InOutType {
@@ -109,6 +106,29 @@ func (node *ProcedureArgDecl) GetType() int {
 	return int(node.InOutType)
 }
 
+func (node *ProcedureArgDecl) reset() {
+	// if node.Name != nil {
+	// node.Name.Free()
+	// }
+	*node = ProcedureArgDecl{}
+}
+
+func (node ProcedureArgDecl) TypeName() string { return "tree.ProcedureArgDecl" }
+
+func (node *ProcedureArgDecl) Free() {
+	reuse.Free[ProcedureArgDecl](node, nil)
+}
+
+type ProcedureArgForMarshal struct {
+	Name      *UnresolvedName
+	Type      ResolvableTypeReference
+	InOutType InOutArgType
+}
+
+type ProcedureName struct {
+	Name objName
+}
+
 func (node *ProcedureName) Format(ctx *FmtCtx) {
 	if node.Name.ExplicitCatalog {
 		ctx.WriteString(string(node.Name.CatalogName))
@@ -125,6 +145,33 @@ func (node *ProcedureName) HasNoNameQualifier() bool {
 	return !node.Name.ExplicitCatalog && !node.Name.ExplicitSchema
 }
 
+func (node *ProcedureName) reset() {
+	*node = ProcedureName{}
+}
+
+func (node ProcedureName) TypeName() string { return "tree.ProcedureName" }
+
+func (node *ProcedureName) Free() {
+	reuse.Free[ProcedureName](node, nil)
+}
+
+func NewProcedureName(name Identifier, prefix ObjectNamePrefix) *ProcedureName {
+	return &ProcedureName{
+		Name: objName{
+			ObjectName:       name,
+			ObjectNamePrefix: prefix,
+		},
+	}
+}
+
+func NewProcedureArgDecl(f InOutArgType, n *UnresolvedName, t ResolvableTypeReference) *ProcedureArgDecl {
+	return &ProcedureArgDecl{
+		Name:      n,
+		Type:      t,
+		InOutType: f,
+	}
+}
+
 type CreateProcedure struct {
 	statementImpl
 	Name *ProcedureName
@@ -132,14 +179,12 @@ type CreateProcedure struct {
 	Body string
 }
 
-type DropProcedure struct {
-	statementImpl
-	Name     *ProcedureName
-	IfExists bool
-}
-
-func (node *DropProcedure) Free() {
-	reuse.Free[DropProcedure](node, nil)
+func NewCreateProcedure(n *ProcedureName, a ProcedureArgs, b string) *CreateProcedure {
+	createProcedure := reuse.Alloc[CreateProcedure](nil)
+	createProcedure.Name = n
+	createProcedure.Args = a
+	createProcedure.Body = b
+	return createProcedure
 }
 
 func (node *CreateProcedure) Format(ctx *FmtCtx) {
@@ -161,20 +206,40 @@ func (node *CreateProcedure) Format(ctx *FmtCtx) {
 	ctx.WriteString("'")
 }
 
+func (node *CreateProcedure) GetStatementType() string { return "Create Procedure" }
+
+func (node *CreateProcedure) GetQueryType() string { return QueryTypeOth }
+
+func (node *CreateProcedure) reset() {
+	if node.Name != nil {
+		node.Name.Free()
+	}
+	*node = CreateProcedure{}
+}
+
+func (node CreateProcedure) TypeName() string { return "tree.CreateProcedure" }
+
+func (node *CreateProcedure) Free() {
+	reuse.Free[CreateProcedure](node, nil)
+}
+
+type DropProcedure struct {
+	statementImpl
+	Name     *ProcedureName
+	IfExists bool
+}
+
+func (node *DropProcedure) Free() {
+	reuse.Free[DropProcedure](node, nil)
+}
+
 func (node DropProcedure) TypeName() string { return "tree.DropProcedure" }
 
 func (node *DropProcedure) reset() {
-	// if node.Name != nil {
-	// 	reuse.Free[ProcedureName](node.Name, nil)
-	// }
+	if node.Name != nil {
+		node.Name.Free()
+	}
 	*node = DropProcedure{}
-}
-
-func NewDropProcedure(n *ProcedureName, i bool) *DropProcedure {
-	dropProcedure := reuse.Alloc[DropProcedure](nil)
-	dropProcedure.Name = n
-	dropProcedure.IfExists = i
-	return dropProcedure
 }
 
 func (node *DropProcedure) Format(ctx *FmtCtx) {
@@ -185,10 +250,16 @@ func (node *DropProcedure) Format(ctx *FmtCtx) {
 	node.Name.Format(ctx)
 }
 
-func (node *CreateProcedure) GetStatementType() string { return "Create Procedure" }
-func (node *CreateProcedure) GetQueryType() string     { return QueryTypeOth }
-func (node *DropProcedure) GetStatementType() string   { return "Create Procedure" }
-func (node *DropProcedure) GetQueryType() string       { return QueryTypeOth }
+func (node *DropProcedure) GetStatementType() string { return "Create Procedure" }
+
+func (node *DropProcedure) GetQueryType() string { return QueryTypeOth }
+
+func NewDropProcedure(n *ProcedureName, i bool) *DropProcedure {
+	dropProcedure := reuse.Alloc[DropProcedure](nil)
+	dropProcedure.Name = n
+	dropProcedure.IfExists = i
+	return dropProcedure
+}
 
 type CallStmt struct {
 	statementImpl
@@ -207,4 +278,18 @@ func (node *CallStmt) Format(ctx *FmtCtx) {
 }
 
 func (node *CallStmt) GetStatementType() string { return "Call" }
-func (node *CallStmt) GetQueryType() string     { return QueryTypeOth }
+
+func (node *CallStmt) GetQueryType() string { return QueryTypeOth }
+
+func (node *CallStmt) reset() {
+	if node.Name != nil {
+		node.Name.Free()
+	}
+	*node = CallStmt{}
+}
+
+func (node CallStmt) TypeName() string { return "tree.CallStmt" }
+
+func (node *CallStmt) Free() {
+	reuse.Free[CallStmt](node, nil)
+}

@@ -598,7 +598,7 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 			col := &plan.ColDef{
 				Name: act.AddColumn.Name,
 				Alg:  plan.CompressType_Lz4,
-				Typ:  act.AddColumn.Type,
+				Typ:  *act.AddColumn.Type,
 			}
 			var pos int32
 			cols, pos, err = getAddColPos(cols, col, act.AddColumn.PreName, act.AddColumn.Pos)
@@ -667,6 +667,10 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 				for i, idx := range t.Indexes {
 					if alterIndex.IndexName == idx.IndexName {
 						t.Indexes[i].Visible = alterIndex.Visible
+						// NOTE: algo param is same for all the indexDefs of the same indexName.
+						// ie for IVFFLAT: meta, centroids, entries all have same algo params.
+						// so we don't need multiple `alterIndex`.
+						t.Indexes[i].IndexAlgoParams = alterIndex.IndexAlgoParams
 					}
 				}
 			}
@@ -2443,7 +2447,7 @@ func makeSequenceAlterBatch(ctx context.Context, stmt *tree.AlterSequence, table
 	bat.Attrs = attrs
 
 	// typ is sequenece's type now
-	typ := plan2.MakeTypeByPlan2Type(tableDef.Cols[0].Typ)
+	typ := plan2.MakeTypeByPlan2Type(&tableDef.Cols[0].Typ)
 	vecs := make([]*vector.Vector, len(plan2.Sequence_cols_name))
 
 	switch typ.Oid {
@@ -2552,7 +2556,7 @@ func makeSequenceInitBatch(ctx context.Context, stmt *tree.CreateSequence, table
 	}
 	bat.Attrs = attrs
 
-	typ := plan2.MakeTypeByPlan2Type(tableDef.Cols[0].Typ)
+	typ := plan2.MakeTypeByPlan2Type(&tableDef.Cols[0].Typ)
 	sequence_cols_num := 7
 	vecs := make([]*vector.Vector, sequence_cols_num)
 
