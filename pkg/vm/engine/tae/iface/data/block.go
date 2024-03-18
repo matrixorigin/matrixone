@@ -42,6 +42,10 @@ type CheckpointUnit interface {
 type BlockAppender interface {
 	GetID() *common.ID
 	GetMeta() any
+	// see more notes in flushtabletail.go
+	LockFreeze()
+	UnlockFreeze()
+	CheckFreeze() bool
 	IsSameColumns(otherSchema any /*avoid import cycle*/) bool
 	PrepareAppend(rows uint32,
 		txn txnif.AsyncTxn) (
@@ -72,6 +76,8 @@ type Block interface {
 	IsAppendable() bool
 	PrepareCompact() bool
 	PrepareCompactInfo() (bool, string)
+
+	CheckFlushTaskRetry(startts types.TS) bool
 
 	Rows() int
 	GetColumnDataById(
