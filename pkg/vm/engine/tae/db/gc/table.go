@@ -33,11 +33,11 @@ import (
 )
 
 type ObjectEntry struct {
-	commitTS types.TS
-	createTS types.TS
-	dropTS   types.TS
-	db       uint64
-	table    uint64
+	commitTS  types.TS
+	createTS  types.TS
+	dropTS    types.TS
+	db        uint64
+	table     uint64
 	fileIterm map[int][]uint32
 }
 
@@ -304,10 +304,10 @@ func (t *GCTable) rebuildTable(bats []*containers.Batch, ts types.TS) {
 			logutil.Fatalf("delete object should not be nil")
 		}
 		object := &ObjectEntry{
-			dropTS: ts,
+			dropTS:   ts,
 			commitTS: ts,
 		}
-		t.addObject(name,object,  ts)
+		t.addObject(name, object, ts)
 	}
 }
 
