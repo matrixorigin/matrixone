@@ -184,7 +184,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			remapping.addColRef(internalRemapping.localToGlobal[i])
 
 			node.ProjectList = append(node.ProjectList, &plan.Expr{
-				Typ: *col.Typ,
+				Typ: col.Typ,
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
 						RelPos: 0,
@@ -201,7 +201,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 				remapping.addColRef(globalRef)
 
 				node.ProjectList = append(node.ProjectList, &plan.Expr{
-					Typ: *node.TableDef.Cols[0].Typ,
+					Typ: node.TableDef.Cols[0].Typ,
 					Expr: &plan.Expr_Col{
 						Col: &plan.ColRef{
 							RelPos: 0,
@@ -213,7 +213,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			} else {
 				remapping.addColRef(internalRemapping.localToGlobal[0])
 				node.ProjectList = append(node.ProjectList, &plan.Expr{
-					Typ: *node.TableDef.Cols[0].Typ,
+					Typ: node.TableDef.Cols[0].Typ,
 					Expr: &plan.Expr_Col{
 						Col: &plan.ColRef{
 							RelPos: 0,
@@ -321,7 +321,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			remapping.addColRef(internalRemapping.localToGlobal[i])
 
 			node.ProjectList = append(node.ProjectList, &plan.Expr{
-				Typ: *col.Typ,
+				Typ: col.Typ,
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
 						RelPos: 0,
@@ -338,7 +338,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 				remapping.addColRef(globalRef)
 
 				node.ProjectList = append(node.ProjectList, &plan.Expr{
-					Typ: *node.TableDef.Cols[0].Typ,
+					Typ: node.TableDef.Cols[0].Typ,
 					Expr: &plan.Expr_Col{
 						Col: &plan.ColRef{
 							RelPos: 0,
@@ -350,7 +350,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			} else {
 				remapping.addColRef(internalRemapping.localToGlobal[0])
 				node.ProjectList = append(node.ProjectList, &plan.Expr{
-					Typ: *node.TableDef.Cols[0].Typ,
+					Typ: node.TableDef.Cols[0].Typ,
 					Expr: &plan.Expr_Col{
 						Col: &plan.ColRef{
 							RelPos: 0,
@@ -1236,7 +1236,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 				remapping.addColRef(internalRemapping.localToGlobal[i])
 
 				node.ProjectList = append(node.ProjectList, &plan.Expr{
-					Typ: *col.Typ,
+					Typ: col.Typ,
 					Expr: &plan.Expr_Col{
 						Col: &plan.ColRef{
 							RelPos: 0,
@@ -1407,7 +1407,7 @@ func (builder *QueryBuilder) rewriteStarApproxCount(nodeID int32) {
 						switch expr := agg.Args[0].Expr.(type) {
 						case *plan.Expr_Col:
 							expr.Col.RelPos = child.BindingTags[0]
-							agg.Args[0].Typ = *child.TableDef.Cols[expr.Col.ColPos].Typ
+							agg.Args[0].Typ = child.TableDef.Cols[expr.Col.ColPos].Typ
 						}
 					}
 				}
@@ -1474,6 +1474,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 
 		builder.partitionPrune(rootID)
 
+		builder.optimizeLikeExpr(rootID)
 		rootID = builder.applyIndices(rootID, colRefCnt, make(map[[2]int32]*plan.Expr))
 		ReCalcNodeStats(rootID, builder, true, false, true)
 
@@ -2152,7 +2153,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 			tableDef.Cols[i] = &plan.ColDef{
 				ColId: 0,
 				Name:  colName,
-				Typ:   strTyp,
+				Typ:   *strTyp,
 			}
 		}
 		bat.SetRowCount(rowCount)
@@ -3464,7 +3465,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 			nodeType = plan.Node_EXTERNAL_SCAN
 			col := &ColDef{
 				Name: catalog.ExternalFilePath,
-				Typ: &plan.Type{
+				Typ: plan.Type{
 					Id:    int32(types.T_varchar),
 					Width: types.MaxVarcharLen,
 					Table: table,
@@ -3498,6 +3499,11 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 				}
 
 				originStmts, err := mysql.Parse(builder.GetContext(), viewData.Stmt, 1)
+				defer func() {
+					for _, s := range originStmts {
+						s.Free()
+					}
+				}()
 				if err != nil {
 					return 0, err
 				}
@@ -3743,7 +3749,7 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 				cols[i] = col.Name
 			}
 			colIsHidden[i] = col.Hidden
-			types[i] = col.Typ
+			types[i] = &col.Typ
 			if col.Default != nil {
 				defaultVals[i] = col.Default.OriginString
 			}

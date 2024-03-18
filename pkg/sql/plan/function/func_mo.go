@@ -15,6 +15,7 @@
 package function
 
 import (
+	"context"
 	"strconv"
 	"strings"
 
@@ -220,60 +221,93 @@ func MoTableSize(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 				return err
 			}
 
-			// get the table definition information and check whether the current table is a partition table
-			var engineDefs []engine.TableDef
-			engineDefs, err = rel.TableDefs(ctx)
-			if err != nil {
+			var oSize, iSize uint64
+			if oSize, err = originalTableSize(ctx, dbo, rel); err != nil {
 				return err
 			}
-			var partitionInfo *plan.PartitionByDef
-			for _, def := range engineDefs {
-				if partitionDef, ok := def.(*engine.PartitionDef); ok {
-					if partitionDef.Partitioned > 0 {
-						p := &plan.PartitionByDef{}
-						err = p.UnMarshalPartitionInfo(([]byte)(partitionDef.Partition))
-						if err != nil {
-							return err
-						}
-						partitionInfo = p
-					}
-				}
+			if iSize, err = indexesTableSize(ctx, dbo, rel); err != nil {
+				return err
 			}
 
-			var size uint64
-
-			// check if the current table is partitioned
-			if partitionInfo != nil {
-				var prel engine.Relation
-				var psize uint64
-				// for partition table, the table size is equal to the sum of the partition tables.
-				for _, partitionTable := range partitionInfo.PartitionTableNames {
-					prel, err = dbo.Relation(ctx, partitionTable, nil)
-					if err != nil {
-						return err
-					}
-					if err = prel.UpdateObjectInfos(ctx); err != nil {
-						return err
-					}
-					if psize, err = prel.Size(ctx, AllColumns); err != nil {
-						return err
-					}
-					size += psize
-				}
-			} else {
-				if err = rel.UpdateObjectInfos(ctx); err != nil {
-					return err
-				}
-				if size, err = rel.Size(ctx, AllColumns); err != nil {
-					return err
-				}
-			}
-			if err = rs.Append(int64(size), false); err != nil {
+			if err = rs.Append(int64(oSize+iSize), false); err != nil {
 				return err
 			}
 		}
 	}
 	return nil
+}
+
+func originalTableSize(ctx context.Context, db engine.Database, rel engine.Relation) (size uint64, err error) {
+	return getTableSize(ctx, db, rel)
+}
+
+func getTableSize(ctx context.Context, db engine.Database, rel engine.Relation) (size uint64, err error) {
+	// get the table definition information and check whether the current table is a partition table
+	var engineDefs []engine.TableDef
+	engineDefs, err = rel.TableDefs(ctx)
+	if err != nil {
+		return 0, err
+	}
+	var partitionInfo *plan.PartitionByDef
+	for _, def := range engineDefs {
+		if partitionDef, ok := def.(*engine.PartitionDef); ok {
+			if partitionDef.Partitioned > 0 {
+				p := &plan.PartitionByDef{}
+				err = p.UnMarshalPartitionInfo(([]byte)(partitionDef.Partition))
+				if err != nil {
+					return 0, err
+				}
+				partitionInfo = p
+			}
+		}
+	}
+
+	// check if the current table is partitioned
+	if partitionInfo != nil {
+		var prel engine.Relation
+		var psize uint64
+		// for partition table, the table size is equal to the sum of the partition tables.
+		for _, partitionTable := range partitionInfo.PartitionTableNames {
+			prel, err = db.Relation(ctx, partitionTable, nil)
+			if err != nil {
+				return 0, err
+			}
+			if err = prel.UpdateObjectInfos(ctx); err != nil {
+				return 0, err
+			}
+			if psize, err = prel.Size(ctx, AllColumns); err != nil {
+				return 0, err
+			}
+			size += psize
+		}
+	} else {
+		if err = rel.UpdateObjectInfos(ctx); err != nil {
+			return 0, err
+		}
+		if size, err = rel.Size(ctx, AllColumns); err != nil {
+			return 0, err
+		}
+	}
+
+	return size, nil
+}
+
+func indexesTableSize(ctx context.Context, db engine.Database, rel engine.Relation) (totalSize uint64, err error) {
+	var irel engine.Relation
+	var size uint64
+	for _, idef := range rel.GetTableDef(ctx).Indexes {
+		if irel, err = db.Relation(ctx, idef.IndexTableName, nil); err != nil {
+			return 0, err
+		}
+
+		if size, err = getTableSize(ctx, db, irel); err != nil {
+			return 0, err
+		}
+
+		totalSize += size
+	}
+
+	return totalSize, nil
 }
 
 // MoTableColMax return the max value of the column

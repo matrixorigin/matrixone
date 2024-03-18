@@ -186,25 +186,6 @@ func (mgr *TxnManager) StartTxn(info []byte) (txn txnif.AsyncTxn, err error) {
 	return
 }
 
-// StartTxn starts a local transaction initiated by DN
-func (mgr *TxnManager) StartTxnWithLatestTS(info []byte) (txn txnif.AsyncTxn, err error) {
-	if exp := mgr.Exception.Load(); exp != nil {
-		err = exp.(error)
-		logutil.Warnf("StartTxn: %v", err)
-		return
-	}
-	mgr.Lock()
-	defer mgr.Unlock()
-	txnId := mgr.IdAlloc.Alloc()
-	startTs := mgr.TsAlloc.Alloc()
-
-	store := mgr.TxnStoreFactory()
-	txn = mgr.TxnFactory(mgr, store, txnId, startTs, types.TS{})
-	store.BindTxn(txn)
-	mgr.IDMap[string(txnId)] = txn
-	return
-}
-
 func (mgr *TxnManager) StartTxnWithStartTSAndSnapshotTS(
 	info []byte,
 	startTS, snapshotTS types.TS,
@@ -364,7 +345,7 @@ func (mgr *TxnManager) onBindPrepareTimeStamp(op *OpTxn) (ts types.TS) {
 
 	ts = mgr.TsAlloc.Alloc()
 	if !mgr.prevPrepareTS.IsEmpty() {
-		if ts.Less(mgr.prevPrepareTS) {
+		if ts.Less(&mgr.prevPrepareTS) {
 			panic(fmt.Sprintf("timestamp rollback current %v, previous %v", ts.ToString(), mgr.prevPrepareTS.ToString()))
 		}
 	}
@@ -450,7 +431,7 @@ func (mgr *TxnManager) on1PCPrepared(op *OpTxn) {
 }
 func (mgr *TxnManager) OnCommitTxn(txn txnif.AsyncTxn) {
 	new := txn.GetCommitTS()
-	for old := mgr.MaxCommittedTS.Load(); new.Greater(*old); old = mgr.MaxCommittedTS.Load() {
+	for old := mgr.MaxCommittedTS.Load(); new.Greater(old); old = mgr.MaxCommittedTS.Load() {
 		if mgr.MaxCommittedTS.CompareAndSwap(old, &new) {
 			return
 		}
@@ -512,7 +493,8 @@ func (mgr *TxnManager) dequeuePreparing(items ...any) {
 		}
 		if !op.Txn.IsReplay() {
 			if !mgr.prevPrepareTSInPreparing.IsEmpty() {
-				if op.Txn.GetPrepareTS().Less(mgr.prevPrepareTSInPreparing) {
+				prepareTS := op.Txn.GetPrepareTS()
+				if prepareTS.Less(&mgr.prevPrepareTSInPreparing) {
 					panic(fmt.Sprintf("timestamp rollback current %v, previous %v", op.Txn.GetPrepareTS().ToString(), mgr.prevPrepareTSInPreparing.ToString()))
 				}
 			}
@@ -550,7 +532,8 @@ func (mgr *TxnManager) onPrepareWAL(items ...any) {
 
 			if !op.Txn.IsReplay() {
 				if !mgr.prevPrepareTSInPrepareWAL.IsEmpty() {
-					if op.Txn.GetPrepareTS().Less(mgr.prevPrepareTSInPrepareWAL) {
+					prepareTS := op.Txn.GetPrepareTS()
+					if prepareTS.Less(&mgr.prevPrepareTSInPrepareWAL) {
 						panic(fmt.Sprintf("timestamp rollback current %v, previous %v", op.Txn.GetPrepareTS().ToString(), mgr.prevPrepareTSInPrepareWAL.ToString()))
 					}
 				}
@@ -636,7 +619,7 @@ func (mgr *TxnManager) MinTSForTest() types.TS {
 	minTS := types.MaxTs()
 	for _, txn := range mgr.IDMap {
 		startTS := txn.GetStartTS()
-		if startTS.Less(minTS) {
+		if startTS.Less(&minTS) {
 			minTS = startTS
 		}
 	}

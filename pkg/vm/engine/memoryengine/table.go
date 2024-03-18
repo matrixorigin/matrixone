@@ -266,7 +266,7 @@ func (t *Table) GetTableDef(ctx context.Context) *plan.TableDef {
 			col := &plan2.ColDef{
 				ColId: attr.Attr.ID,
 				Name:  attr.Attr.Name,
-				Typ: &plan2.Type{
+				Typ: plan2.Type{
 					Id:          int32(attr.Attr.Type.Oid),
 					Width:       attr.Attr.Type.Width,
 					Scale:       attr.Attr.Type.Scale,
