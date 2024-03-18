@@ -260,7 +260,7 @@ func (t *GCTable) SaveFullTable(start, end types.TS, fs *objectio.ObjectFS, file
 	return blocks, err
 }
 
-func (t *GCTable) rebuildTable(bats []*containers.Batch) {
+func (t *GCTable) rebuildTableV2(bats []*containers.Batch) {
 	for i := 0; i < bats[CreateBlock].Length(); i++ {
 		name := string(bats[CreateBlock].GetVectorByName(GCAttrObjectName).Get(i).([]byte))
 		creatTS := bats[CreateBlock].GetVectorByName(GCCreateTS).Get(i).(types.TS)
@@ -275,6 +275,31 @@ func (t *GCTable) rebuildTable(bats []*containers.Batch) {
 			commitTS: commitTS,
 		}
 		t.addObject(name, object, commitTS)
+	}
+}
+
+func (t *GCTable) rebuildTable(bats []*containers.Batch, ts types.TS) {
+	for i := 0; i < bats[CreateBlock].Length(); i++ {
+		name := string(bats[CreateBlock].GetVectorByName(GCAttrObjectName).Get(i).([]byte))
+		if t.objects[name] != nil {
+			continue
+		}
+		object := &ObjectEntry{
+			createTS: ts,
+			commitTS: ts,
+		}
+		t.addObject(name, object, ts)
+	}
+	for i := 0; i < bats[DeleteBlock].Length(); i++ {
+		name := string(bats[DeleteBlock].GetVectorByName(GCAttrObjectName).Get(i).([]byte))
+		if t.objects[name] != nil {
+			logutil.Fatalf("delete object should not be nil")
+		}
+		object := &ObjectEntry{
+			dropTS: ts,
+			commitTS: ts,
+		}
+		t.addObject(name,object,  ts)
 	}
 }
 
@@ -307,7 +332,7 @@ func (t *GCTable) replayData(ctx context.Context,
 }
 
 // ReadTable reads an s3 file and replays a GCTable in memory
-func (t *GCTable) ReadTable(ctx context.Context, name string, size int64, fs *objectio.ObjectFS) error {
+func (t *GCTable) ReadTable(ctx context.Context, name string, size int64, fs *objectio.ObjectFS, ts types.TS) error {
 	reader, err := blockio.NewFileReaderNoCache(fs.Service, name)
 	if err != nil {
 		return err
@@ -323,7 +348,15 @@ func (t *GCTable) ReadTable(ctx context.Context, name string, size int64, fs *ob
 		return err
 	}
 
-	t.rebuildTable(bats)
+	if len(bats[CreateBlock].Vecs) == 7 {
+		t.rebuildTableV2(bats)
+		return nil
+	}
+	err = t.replayData(ctx, DeleteBlock, BlockSchemaAttr, BlockSchemaTypes, bats, bs, reader)
+	if err != nil {
+		return err
+	}
+	t.rebuildTable(bats, ts)
 	return nil
 }
 

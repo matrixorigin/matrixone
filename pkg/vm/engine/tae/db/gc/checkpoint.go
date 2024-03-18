@@ -149,7 +149,8 @@ func (c *checkpointCleaner) Replay() error {
 	}
 	for _, dir := range readDirs {
 		table := NewGCTable()
-		err = table.ReadTable(c.ctx, GCMetaDir+dir.Name, dir.Size, c.fs)
+		_, end, _ := blockio.DecodeGCMetadataFileName(dir.Name)
+		err = table.ReadTable(c.ctx, GCMetaDir+dir.Name, dir.Size, c.fs, end)
 		if err != nil {
 			return err
 		}
