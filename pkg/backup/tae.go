@@ -38,7 +38,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 )
 
@@ -102,7 +101,6 @@ func execBackup(ctx context.Context, srcFs, dstFs fileservice.FileService, names
 	trimInfo := names[1]
 	names = names[1:]
 	files := make(map[string]*fileservice.DirEntry, 0)
-	table := gc.NewGCTable()
 	gcFileMap := make(map[string]string)
 	softDeletes := make(map[string]bool)
 	var loadDuration, copyDuration, reWriteDuration time.Duration
@@ -119,7 +117,7 @@ func execBackup(ctx context.Context, srcFs, dstFs fileservice.FileService, names
 			continue
 		}
 		ckpStr := strings.Split(name, ":")
-		if len(ckpStr) != 2 && i > 0 {
+		if len(ckpStr) != 3 && i > 0 {
 			return moerr.NewInternalError(ctx, fmt.Sprintf("invalid checkpoint string: %v", ckpStr))
 		}
 		metaLoc := ckpStr[0]
@@ -142,9 +140,6 @@ func execBackup(ctx context.Context, srcFs, dstFs fileservice.FileService, names
 			return err
 		}
 		defer data.Close()
-		table.UpdateTable(data)
-		gcFiles := table.SoftGC()
-		mergeGCFile(gcFiles, gcFileMap)
 		oNames = append(oNames, oneNames...)
 	}
 	loadDuration += time.Since(now)
