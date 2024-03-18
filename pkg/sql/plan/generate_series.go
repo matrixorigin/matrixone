@@ -29,21 +29,21 @@ func init() {
 	GSColDefs[0] = []*plan.ColDef{
 		{
 			Name: "result",
-			Typ:  makePlan2Type(&retTyp),
+			Typ:  *makePlan2Type(&retTyp),
 		},
 	}
 	retTyp = types.T_datetime.ToType()
 	GSColDefs[1] = []*plan.ColDef{
 		{
 			Name: "result",
-			Typ:  makePlan2Type(&retTyp),
+			Typ:  *makePlan2Type(&retTyp),
 		},
 	}
 	retTyp = types.T_varchar.ToType()
 	GSColDefs[2] = []*plan.ColDef{
 		{
 			Name: "result",
-			Typ:  makePlan2Type(&retTyp),
+			Typ:  *makePlan2Type(&retTyp),
 		},
 	}
 }

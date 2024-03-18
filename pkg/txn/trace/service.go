@@ -73,6 +73,8 @@ type service struct {
 	entryBufC     chan *buffer
 	txnActionC    chan csvEvent
 	txnActionBufC chan *buffer
+	statementC    chan csvEvent
+	statementBufC chan *buffer
 
 	loadC  chan loadAction
 	seq    atomic.Uint64
@@ -83,8 +85,10 @@ type service struct {
 		txnEventEnabled       atomic.Bool
 		txnActionEventEnabled atomic.Bool
 		dataEventEnabled      atomic.Bool
+		statementEnabled      atomic.Bool
 		tableFilters          atomic.Pointer[tableFilters]
 		txnFilters            atomic.Pointer[txnFilters]
+		statementFilters      atomic.Pointer[statementFilters]
 		closed                atomic.Bool
 		complexPKTables       sync.Map // uint64 -> bool
 	}
@@ -140,6 +144,8 @@ func NewService(
 	s.txnC = make(chan csvEvent, s.options.bufferSize)
 	s.txnActionC = make(chan csvEvent, s.options.bufferSize)
 	s.txnActionBufC = make(chan *buffer, s.options.bufferSize)
+	s.statementC = make(chan csvEvent, s.options.bufferSize)
+	s.statementBufC = make(chan *buffer, s.options.bufferSize)
 
 	if err := s.stopper.RunTask(s.handleTxnEvents); err != nil {
 		panic(err)
@@ -151,6 +157,9 @@ func NewService(
 		panic(err)
 	}
 	if err := s.stopper.RunTask(s.handleLoad); err != nil {
+		panic(err)
+	}
+	if err := s.stopper.RunTask(s.handleStatements); err != nil {
 		panic(err)
 	}
 	if err := s.stopper.RunTask(s.watch); err != nil {
@@ -175,6 +184,8 @@ func (s *service) Enabled(feature string) bool {
 		return s.atomic.txnEventEnabled.Load()
 	case FeatureTraceTxnAction:
 		return s.atomic.txnActionEventEnabled.Load()
+	case FeatureTraceStatement:
+		return s.atomic.statementEnabled.Load()
 	}
 	return false
 }
@@ -410,6 +421,8 @@ func (s *service) watch(ctx context.Context) {
 					s.atomic.txnEventEnabled.Store(enable)
 				case FeatureTraceTxnAction:
 					s.atomic.txnActionEventEnabled.Store(enable)
+				case FeatureTraceStatement:
+					s.atomic.statementEnabled.Store(enable)
 				}
 			}
 
@@ -423,6 +436,11 @@ func (s *service) watch(ctx context.Context) {
 					s.logger.Error("failed to refresh txn filters",
 						zap.Error(err))
 				}
+
+				if err := s.RefreshStatementFilters(); err != nil {
+					s.logger.Error("failed to refresh statement filters",
+						zap.Error(err))
+				}
 			}
 		}
 	}
@@ -430,7 +448,7 @@ func (s *service) watch(ctx context.Context) {
 
 func (s *service) updateState(feature, state string) error {
 	switch feature {
-	case FeatureTraceData, FeatureTraceTxnAction, FeatureTraceTxn:
+	case FeatureTraceData, FeatureTraceTxnAction, FeatureTraceTxn, FeatureTraceStatement:
 	default:
 		return moerr.NewNotSupportedNoCtx("feature %s", feature)
 	}

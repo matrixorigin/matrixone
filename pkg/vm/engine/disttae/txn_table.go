@@ -642,27 +642,6 @@ func (tbl *txnTable) rangesOnePart(
 	blocks *objectio.BlockInfoSlice, // output marshaled block list after filtering
 	proc *process.Process, // process of this transaction
 ) (err error) {
-	if tbl.db.txn.op.Txn().IsRCIsolation() {
-		state, err := tbl.getPartitionState(tbl.proc.Load().Ctx)
-		if err != nil {
-			return err
-		}
-		deleteObjs, createObjs := state.GetChangedObjsBetween(types.TimestampToTS(tbl.lastTS),
-			types.TimestampToTS(tbl.db.txn.op.SnapshotTS()))
-		trace.GetService().ApplyFlush(
-			tbl.db.txn.op.Txn().ID,
-			tbl.tableId,
-			tbl.lastTS,
-			tbl.db.txn.op.SnapshotTS(),
-			len(deleteObjs))
-		if len(deleteObjs) > 0 {
-			if err := tbl.updateDeleteInfo(ctx, state, deleteObjs, createObjs); err != nil {
-				return err
-			}
-		}
-		tbl.lastTS = tbl.db.txn.op.SnapshotTS()
-	}
-
 	var uncommittedObjects []objectio.ObjectStats
 	tbl.db.txn.forEachTableWrites(tbl.db.databaseId, tbl.tableId, tbl.db.txn.GetSnapshotWriteOffset(), func(entry Entry) {
 		stats := objectio.ObjectStats{}
@@ -1147,7 +1126,7 @@ func (tbl *txnTable) GetTableDef(ctx context.Context) *plan.TableDef {
 				cols = append(cols, &plan.ColDef{
 					ColId: attr.Attr.ID,
 					Name:  attr.Attr.Name,
-					Typ: &plan.Type{
+					Typ: plan.Type{
 						Id:          int32(attr.Attr.Type.Oid),
 						Width:       attr.Attr.Type.Width,
 						Scale:       attr.Attr.Type.Scale,
@@ -1650,7 +1629,7 @@ func (tbl *txnTable) compaction(
 		for i := 0; i < len(tbl.tableDef.Cols)-1; i++ {
 			col := tbl.tableDef.Cols[i]
 			idxs = append(idxs, uint16(col.Seqnum))
-			typs = append(typs, vector.ProtoTypeToType(col.Typ))
+			typs = append(typs, vector.ProtoTypeToType(&col.Typ))
 		}
 		tbl.seqnums = idxs
 		tbl.typs = typs
@@ -2319,7 +2298,7 @@ func (tbl *txnTable) PrimaryKeysMayBeModified(
 		keysVector)
 }
 
-func (tbl *txnTable) updateDeleteInfo(
+func (tbl *txnTable) transferRowid(
 	ctx context.Context,
 	state *logtailreplay.PartitionState,
 	deleteObjs,
@@ -2411,7 +2390,7 @@ func (tbl *txnTable) updateDeleteInfo(
 				}
 			}
 			if beTransfered != toTransfer {
-				logutil.Fatalf("xxxx transfer rowid failed, beTransfered:%d, toTransfer:%d, total %d",
+				logutil.Fatalf("xxxx transfer rowid failed,beTransfered:%d, toTransfer:%d, total %d",
 					beTransfered, toTransfer, len(rowids))
 			}
 
@@ -2432,7 +2411,7 @@ func (tbl *txnTable) readNewRowid(vec *vector.Vector, row int,
 	tableDef := tbl.GetTableDef(context.TODO())
 	for _, col := range tableDef.Cols {
 		if col.Name == tableDef.Pkey.PkeyColName {
-			typ = col.Typ
+			typ = &col.Typ
 			columns = append(columns, uint16(col.Seqnum))
 			colTypes = append(colTypes, types.T(col.Typ.Id).ToType())
 		}

@@ -1904,7 +1904,7 @@ func (mce *MysqlCmdExecutor) handleEmptyStmt(ctx context.Context, stmt *tree.Emp
 
 func GetExplainColumns(ctx context.Context, explainColName string) ([]interface{}, error) {
 	cols := []*plan2.ColDef{
-		{Typ: &plan2.Type{Id: int32(types.T_varchar)}, Name: explainColName},
+		{Typ: plan2.Type{Id: int32(types.T_varchar)}, Name: explainColName},
 	}
 	columns := make([]interface{}, len(cols))
 	var err error = nil

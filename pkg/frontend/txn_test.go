@@ -48,6 +48,11 @@ func (txn *testWorkspace) UpdateSnapshotWriteOffset() {
 	panic("implement me")
 }
 
+func (txn *testWorkspace) TransferRowID() {
+	//TODO implement me
+	panic("implement me")
+}
+
 func (txn *testWorkspace) GetSnapshotWriteOffset() int {
 	//TODO implement me
 	panic("implement me")
