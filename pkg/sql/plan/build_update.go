@@ -148,9 +148,16 @@ func rewriteUpdateQueryLastNode(builder *QueryBuilder, planCtxs []*dmlPlanCtx, l
 					lastNode.ProjectList[pos] = col.OnUpdate.Expr
 				}
 
-				lastNode.ProjectList[pos], err = forceCastExpr(builder.GetContext(), lastNode.ProjectList[pos], &col.Typ)
-				if err != nil {
-					return err
+				if col != nil && col.Typ.Id == int32(types.T_enum) {
+					lastNode.ProjectList[pos], err = funcCastForEnumType(builder.GetContext(), lastNode.ProjectList[pos], &col.Typ)
+					if err != nil {
+						return err
+					}
+				} else {
+					lastNode.ProjectList[pos], err = forceCastExpr(builder.GetContext(), lastNode.ProjectList[pos], &col.Typ)
+					if err != nil {
+						return err
+					}
 				}
 			}
 		}
