@@ -126,6 +126,9 @@ func (t *GCTable) SoftGC(table *GCTable, ts types.TS, snapShotList []types.TS) [
 }
 
 func isSnapshotRefers(obj *ObjectEntry, snapShotList []types.TS) bool {
+	if len(snapShotList) == 0 {
+		return false
+	}
 	left, right := 0, len(snapShotList)-1
 	for left <= right {
 		mid := left + (right-left)/2
@@ -138,7 +141,6 @@ func isSnapshotRefers(obj *ObjectEntry, snapShotList []types.TS) bool {
 			right = mid - 1
 		}
 	}
-	logutil.Infof(" create %v, drop %v", obj.createTS.ToString(), obj.dropTS.ToString())
 	return true
 }
 
