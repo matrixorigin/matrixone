@@ -1,0 +1,83 @@
+drop database if exists d1;
+create database d1;
+use d1;
+drop table if exists t1;
+create table t1(c1 int primary key, c2 varchar(10), c3 int, key(c2,c3));
+insert into t1 select *,*,* from generate_series(1,100000) g;
+select mo_ctl('dn', 'flush', 'd1.t1');
+mo_ctl(dn, flush, d1.t1)
+{\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
+select Sleep(1);
+sleep(1)
+0
+explain select * from t1 where c2 like '1%';
+QUERY PLAN
+Project
+  ->  Table Scan on d1.t1
+        Filter Cond: prefix_eq(t1.c2, '1')
+        Block Filter Cond: prefix_eq(t1.c2, '1')
+select count(*) from t1 where c2 like '1%';
+count(*)
+11112
+explain select * from t1 where c2 like '1_';
+QUERY PLAN
+Project
+  ->  Table Scan on d1.t1
+        Filter Cond: (t1.c2 like '1_'), prefix_eq(t1.c2, '1')
+        Block Filter Cond: prefix_eq(t1.c2, '1')
+select * from t1 where c2 like '1_';
+c1    c2    c3
+10    10    10
+11    11    11
+12    12    12
+13    13    13
+14    14    14
+15    15    15
+16    16    16
+17    17    17
+18    18    18
+19    19    19
+explain select * from t1 where c2 like '1_2';
+QUERY PLAN
+Project
+  ->  Table Scan on d1.t1
+        Filter Cond: (t1.c2 like '1_2'), prefix_eq(t1.c2, '1')
+        Block Filter Cond: prefix_eq(t1.c2, '1')
+select * from t1 where c2 like '1_2';
+c1    c2    c3
+102    102    102
+112    112    112
+122    122    122
+132    132    132
+142    142    142
+152    152    152
+162    162    162
+172    172    172
+182    182    182
+192    192    192
+explain select * from t1 where c2 like '%12';
+QUERY PLAN
+Project
+  ->  Table Scan on d1.t1
+        Filter Cond: (t1.c2 like '%12')
+select count(*) from t1 where c2 like '%12';
+count(*)
+1000
+explain select * from t1 where c2 like '1_2%3';
+QUERY PLAN
+Project
+  ->  Table Scan on d1.t1
+        Filter Cond: (t1.c2 like '1_2%3'), prefix_eq(t1.c2, '1')
+        Block Filter Cond: prefix_eq(t1.c2, '1')
+select count(*) from t1 where c2 like '1_2%3';
+count(*)
+110
+explain select * from t1 where c2 like '123';
+QUERY PLAN
+Project
+  ->  Table Scan on d1.t1
+        Filter Cond: (t1.c2 = '123')
+select * from t1 where c2 like '123';
+c1    c2    c3
+123    123    123
+drop database if exists d1;

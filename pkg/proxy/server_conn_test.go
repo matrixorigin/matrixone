@@ -318,8 +318,8 @@ func (h *testHandler) handleShowVar() {
 		return
 	}
 	cols := []*plan.ColDef{
-		{Typ: &plan.Type{Id: int32(types.T_char)}, Name: "Variable_name"},
-		{Typ: &plan.Type{Id: int32(types.T_char)}, Name: "Value"},
+		{Typ: plan.Type{Id: int32(types.T_char)}, Name: "Variable_name"},
+		{Typ: plan.Type{Id: int32(types.T_char)}, Name: "Value"},
 	}
 	columns := make([]interface{}, len(cols))
 	res := &frontend.MysqlResultSet{}
@@ -366,8 +366,8 @@ func (h *testHandler) handleShowGlobalVar() {
 		return
 	}
 	cols := []*plan.ColDef{
-		{Typ: &plan.Type{Id: int32(types.T_char)}, Name: "Variable_name"},
-		{Typ: &plan.Type{Id: int32(types.T_char)}, Name: "Value"},
+		{Typ: plan.Type{Id: int32(types.T_char)}, Name: "Variable_name"},
+		{Typ: plan.Type{Id: int32(types.T_char)}, Name: "Value"},
 	}
 	columns := make([]interface{}, len(cols))
 	res := &frontend.MysqlResultSet{}

@@ -97,7 +97,7 @@ func buildAddColumnAndConstraint(ctx CompilerContext, alterPlan *plan.AlterTable
 		//Comment:  originalCol.Comment,
 		//OnUpdate: originalCol.OnUpdate,
 		Name: newColName,
-		Typ:  colType,
+		Typ:  *colType,
 		Alg:  plan.CompressType_Lz4,
 	}
 
