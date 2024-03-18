@@ -36,9 +36,10 @@ func (f *txnFilters) isEmpty() bool {
 // filter return true means the txn need to be skipped.
 // Return true cases:
 // 1. any filter skipped
+// 2. filters is empty
 func (f *txnFilters) filter(op client.TxnOperator) bool {
 	if f.isEmpty() {
-		return false
+		return true
 	}
 
 	for _, v := range f.filters {

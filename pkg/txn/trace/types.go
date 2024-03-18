@@ -27,15 +27,18 @@ import (
 )
 
 var (
-	DebugDB               = "mo_debug"
-	featuresTables        = "trace_features"
-	traceTableFilterTable = "trace_table_filters"
-	traceTxnFilterTable   = "trace_txn_filters"
-	eventTxnTable         = "trace_event_txn"
-	eventDataTable        = "trace_event_data"
-	eventErrorTable       = "trace_event_error"
-	eventTxnActionTable   = "trace_event_txn_action"
+	DebugDB                   = "mo_debug"
+	featuresTables            = "trace_features"
+	traceTableFilterTable     = "trace_table_filters"
+	traceTxnFilterTable       = "trace_txn_filters"
+	traceStatementFilterTable = "trace_statement_filters"
+	traceStatementTable       = "trace_statement"
+	eventTxnTable             = "trace_event_txn"
+	eventDataTable            = "trace_event_data"
+	eventErrorTable           = "trace_event_error"
+	eventTxnActionTable       = "trace_event_txn_action"
 
+	FeatureTraceStatement = "statement"
 	FeatureTraceTxn       = "txn"
 	FeatureTraceTxnAction = "txn-action"
 	FeatureTraceData      = "data"
@@ -82,10 +85,23 @@ var (
 		)`, DebugDB, traceTxnFilterTable),
 
 		fmt.Sprintf(`create table %s.%s(
+			id             bigint UNSIGNED primary key auto_increment,
+			method         varchar(50)     not null,
+			value          varchar(500)    not null
+		)`, DebugDB, traceStatementFilterTable),
+
+		fmt.Sprintf(`create table %s.%s(
 			ts 			          bigint          not null,
 			txn_id                varchar(50)     not null,
 			error_info            varchar(1000)   not null
 		)`, DebugDB, eventErrorTable),
+
+		fmt.Sprintf(`create table %s.%s(
+			ts 			   bigint          not null,
+			txn_id         varchar(50)     not null,
+			sql            varchar(1000)   not null,
+			cost_us        bigint          not null
+		)`, DebugDB, traceStatementTable),
 
 		fmt.Sprintf(`create table %s.%s(
 			ts 			          bigint          not null,
@@ -121,6 +137,12 @@ var (
 			featuresTables,
 			FeatureTraceData,
 			stateDisable),
+
+		fmt.Sprintf(`insert into %s.%s (name, state) values ('%s', '%s')`,
+			DebugDB,
+			featuresTables,
+			FeatureTraceStatement,
+			stateDisable),
 	}
 )
 
@@ -134,7 +156,6 @@ func GetService() Service {
 
 type txnEventService interface {
 	TxnCreated(op client.TxnOperator)
-	TxnExecSQL(op client.TxnOperator, sql string)
 	TxnNoConflictChanged(op client.TxnOperator, tableID uint64, lockedAt, newSnapshotTS timestamp.Timestamp)
 	TxnConflictChanged(op client.TxnOperator, tableID uint64, lastCommitAt timestamp.Timestamp)
 	TxnUpdateSnapshot(op client.TxnOperator, tableID uint64, why string)
@@ -142,6 +163,9 @@ type txnEventService interface {
 	TxnRead(op client.TxnOperator, snapshotTS timestamp.Timestamp, tableID uint64, columns []string, bat *batch.Batch)
 	TxnReadBlock(op client.TxnOperator, tableID uint64, block []byte)
 	TxnError(op client.TxnOperator, err error)
+
+	TxnStatementStart(op client.TxnOperator, sql string, seq uint64)
+	TxnStatementCompleted(op client.TxnOperator, sql string, cost time.Duration, seq uint64, err error)
 
 	AddTxnDurationAction(op client.TxnOperator, eventType client.EventType, seq uint64, tableID uint64, value time.Duration, err error)
 	AddTxnAction(op client.TxnOperator, eventType client.EventType, seq uint64, tableID uint64, value int64, unit string, err error)
@@ -162,9 +186,17 @@ type dataEventService interface {
 	RefreshTableFilters() error
 }
 
+type statementService interface {
+	AddStatement(op client.TxnOperator, statement string, cost time.Duration)
+	AddStatementFilter(method, value string) error
+	ClearStatementFilters() error
+	RefreshStatementFilters() error
+}
+
 type Service interface {
 	txnEventService
 	dataEventService
+	statementService
 
 	Enable(feature string) error
 	Disable(feature string) error
@@ -189,6 +221,11 @@ type EntryFilter interface {
 type TxnFilter interface {
 	// Filter returns true means the txn should be skipped.
 	Filter(op client.TxnOperator) bool
+}
+
+type StatementFilter interface {
+	// Filter returns true means the txn should be skipped.
+	Filter(op client.TxnOperator, sql string, cost time.Duration) bool
 }
 
 type csvEvent interface {
