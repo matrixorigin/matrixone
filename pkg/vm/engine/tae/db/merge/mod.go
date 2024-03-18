@@ -15,6 +15,7 @@
 package merge
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"strconv"
@@ -84,19 +85,68 @@ const (
 	TaskHostDN
 )
 
+type activeEntry struct {
+	tid      uint64
+	insertAt time.Time
+}
+
 var ActiveCNObj ActiveCNObjMap = ActiveCNObjMap{
-	o: make(map[objectio.ObjectId]struct{}),
+	o: make(map[objectio.ObjectId]activeEntry),
 }
 
 type ActiveCNObjMap struct {
 	sync.Mutex
-	o map[objectio.ObjectId]struct{}
+	o map[objectio.ObjectId]activeEntry
+}
+
+func (e *ActiveCNObjMap) Prune(id uint64, ago time.Duration) {
+	e.Lock()
+	defer e.Unlock()
+	now := time.Now()
+	if ago == 0 {
+		for k, v := range e.o {
+			if v.tid == id {
+				delete(e.o, k)
+			}
+		}
+		return
+	}
+
+	if id == 0 && ago > 1*time.Second {
+		for k, v := range e.o {
+			if now.Sub(v.insertAt) > ago {
+				delete(e.o, k)
+			}
+		}
+		return
+	}
+	for k, v := range e.o {
+		if v.tid == id && now.Sub(v.insertAt) > ago {
+			delete(e.o, k)
+		}
+	}
+}
+
+func (e *ActiveCNObjMap) String() string {
+	e.Lock()
+	defer e.Unlock()
+
+	b := &bytes.Buffer{}
+	now := time.Now()
+	for k, v := range e.o {
+		b.WriteString(fmt.Sprintf(" id: %v, table: %v, insertAt: %s ago\n",
+			k.String(), v.tid, now.Sub(v.insertAt).String()))
+	}
+	return b.String()
 }
 
 func (e *ActiveCNObjMap) AddActiveCNObj(entries []*catalog.ObjectEntry) {
 	e.Lock()
 	for _, entry := range entries {
-		e.o[entry.ID] = struct{}{}
+		e.o[entry.ID] = activeEntry{
+			entry.GetTable().ID,
+			time.Now(),
+		}
 	}
 	e.Unlock()
 }

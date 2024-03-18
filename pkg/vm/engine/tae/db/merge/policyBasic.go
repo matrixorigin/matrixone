@@ -160,7 +160,7 @@ func (o *Basic) OnObject(obj *catalog.ObjectEntry) {
 		if rowsLeftOnObj < obj.GetRows()/2 {
 			return true
 		}
-		if obj.GetOriginSize() > 120*common.Const1MBytes {
+		if obj.GetOriginSize() > 110*common.Const1MBytes {
 			return false
 		}
 		if rowsLeftOnObj < o.config.ObjectMinRows {
