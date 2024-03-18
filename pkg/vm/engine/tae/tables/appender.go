@@ -38,6 +38,16 @@ func (appender *blockAppender) GetMeta() any {
 	return appender.blk.meta
 }
 
+func (appender *blockAppender) LockFreeze() {
+	appender.blk.freezelock.Lock()
+}
+func (appender *blockAppender) UnlockFreeze() {
+	appender.blk.freezelock.Unlock()
+}
+func (appender *blockAppender) CheckFreeze() bool {
+	return appender.blk.frozen.Load()
+}
+
 func (appender *blockAppender) GetID() *common.ID {
 	return appender.blk.meta.AsCommonID()
 }

@@ -100,9 +100,7 @@ func (s *service) TxnExecSQL(
 		return
 	}
 
-	if len(sql) > 1000 {
-		sql = sql[:1000]
-	}
+	sql = truncateSQL(sql)
 	s.txnC <- newTxnInfoEvent(op.Txn(), txnExecuteEvent, sql)
 }
 
@@ -478,6 +476,53 @@ func (s *service) doAddTxnError(
 	}
 }
 
+func (s *service) TxnStatementStart(
+	op client.TxnOperator,
+	sql string,
+	seq uint64,
+) {
+	if !s.Enabled(FeatureTraceTxnAction) &&
+		!s.Enabled(FeatureTraceTxn) {
+		return
+	}
+
+	s.TxnExecSQL(op, sql)
+	s.AddTxnDurationAction(
+		op,
+		client.ExecuteSQLEvent,
+		seq,
+		0,
+		0,
+		nil)
+}
+
+func (s *service) TxnStatementCompleted(
+	op client.TxnOperator,
+	sql string,
+	cost time.Duration,
+	seq uint64,
+	err error,
+) {
+	if !s.Enabled(FeatureTraceTxnAction) &&
+		!s.Enabled(FeatureTraceTxn) &&
+		!s.Enabled(FeatureTraceStatement) {
+		return
+	}
+
+	s.AddTxnDurationAction(
+		op,
+		client.ExecuteSQLEvent,
+		seq,
+		0,
+		cost,
+		err)
+
+	s.AddStatement(
+		op,
+		sql,
+		cost)
+}
+
 func (s *service) AddTxnDurationAction(
 	op client.TxnOperator,
 	eventType client.EventType,
@@ -538,7 +583,7 @@ func (s *service) doTxnEventAction(event client.TxnEvent) {
 		event.Event.Name,
 		event.Sequence,
 		0,
-		event.Cost.Milliseconds(),
+		event.Cost.Microseconds(),
 		unit,
 		event.Err)
 }
@@ -569,6 +614,12 @@ func (s *service) doAddTxnAction(
 }
 
 func (s *service) AddTxnFilter(method, value string) error {
+	switch method {
+	case sessionMethod, connectionMethod, tenantMethod, userMethod:
+	default:
+		return moerr.NewNotSupportedNoCtx("method %s not support", method)
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 

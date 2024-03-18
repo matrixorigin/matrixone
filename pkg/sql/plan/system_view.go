@@ -80,7 +80,7 @@ func (builder *QueryBuilder) buildMoLocks(tbl *tree.TableFunction, ctx *BindCont
 	for i, name := range MoLocksColNames {
 		colDefs = append(colDefs, &plan.ColDef{
 			Name: name,
-			Typ: &plan.Type{
+			Typ: plan.Type{
 				Id:    int32(MoLocksColTypes[i].Oid),
 				Width: MoLocksColTypes[i].Width,
 			},
@@ -150,7 +150,7 @@ func (builder *QueryBuilder) buildMoConfigurations(tbl *tree.TableFunction, ctx 
 	for i, name := range MoConfigColNames {
 		colDefs = append(colDefs, &plan.ColDef{
 			Name: name,
-			Typ: &plan.Type{
+			Typ: plan.Type{
 				Id:    int32(MoConfigColTypes[i].Oid),
 				Width: MoConfigColTypes[i].Width,
 			},
@@ -252,7 +252,7 @@ func (builder *QueryBuilder) buildMoTransactions(tbl *tree.TableFunction, ctx *B
 	for i, name := range MoTransactionsColNames {
 		colDefs = append(colDefs, &plan.ColDef{
 			Name: name,
-			Typ: &plan.Type{
+			Typ: plan.Type{
 				Id:    int32(MoTransactionsColTypes[i].Oid),
 				Width: MoTransactionsColTypes[i].Width,
 			},
@@ -322,7 +322,7 @@ func (builder *QueryBuilder) buildMoCache(tbl *tree.TableFunction, ctx *BindCont
 	for i, name := range MoCacheColNames {
 		colDefs = append(colDefs, &plan.ColDef{
 			Name: name,
-			Typ: &plan.Type{
+			Typ: plan.Type{
 				Id:    int32(MoCacheColTypes[i].Oid),
 				Width: MoCacheColTypes[i].Width,
 			},

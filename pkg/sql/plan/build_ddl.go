@@ -58,7 +58,7 @@ func genDynamicTableDef(ctx CompilerContext, stmt *tree.Select) (*plan.TableDef,
 		cols[idx] = &plan.ColDef{
 			Name: strings.ToLower(query.Headings[idx]),
 			Alg:  plan.CompressType_Lz4,
-			Typ:  DeepCopyType(&expr.Typ),
+			Typ:  expr.Typ,
 			Default: &plan.Default{
 				NullAbility:  !expr.Typ.NotNullable,
 				Expr:         nil,
@@ -120,7 +120,7 @@ func genViewTableDef(ctx CompilerContext, stmt *tree.Select) (*plan.TableDef, er
 		cols[idx] = &plan.ColDef{
 			Name: strings.ToLower(query.Headings[idx]),
 			Alg:  plan.CompressType_Lz4,
-			Typ:  DeepCopyType(&expr.Typ),
+			Typ:  expr.Typ,
 			Default: &plan.Default{
 				NullAbility:  !expr.Typ.NotNullable,
 				Expr:         nil,
@@ -221,7 +221,7 @@ func genAsSelectCols(ctx CompilerContext, stmt *tree.Select) ([]*ColDef, error) 
 		cols[i] = &plan.ColDef{
 			Name: strings.ToLower(bindCtx.headings[i]),
 			Alg:  plan.CompressType_Lz4,
-			Typ:  typ,
+			Typ:  *typ,
 			Default: &plan.Default{
 				NullAbility:  !expr.Typ.NotNullable,
 				Expr:         nil,
@@ -319,7 +319,7 @@ func buildSourceDefs(stmt *tree.CreateSource, ctx CompilerContext, createStream 
 			col := &ColDef{
 				Name: colName,
 				Alg:  plan.CompressType_Lz4,
-				Typ:  colType,
+				Typ:  *colType,
 			}
 			colMap[colName] = col
 			for _, attr := range def.Attributes {
@@ -403,7 +403,7 @@ func buildSequenceTableDef(stmt *tree.CreateSequence, ctx CompilerContext, cs *p
 		cols[i] = &plan.ColDef{
 			Name: Sequence_cols_name[i],
 			Alg:  plan.CompressType_Lz4,
-			Typ:  typ,
+			Typ:  *typ,
 			Default: &plan.Default{
 				NullAbility:  true,
 				Expr:         nil,
@@ -414,7 +414,7 @@ func buildSequenceTableDef(stmt *tree.CreateSequence, ctx CompilerContext, cs *p
 	cols[4] = &plan.ColDef{
 		Name: Sequence_cols_name[4],
 		Alg:  plan.CompressType_Lz4,
-		Typ: &plan.Type{
+		Typ: plan.Type{
 			Id:    int32(types.T_int64),
 			Width: 0,
 			Scale: 0,
@@ -434,7 +434,7 @@ func buildSequenceTableDef(stmt *tree.CreateSequence, ctx CompilerContext, cs *p
 		cols[i] = &plan.ColDef{
 			Name: Sequence_cols_name[i],
 			Alg:  plan.CompressType_Lz4,
-			Typ: &plan.Type{
+			Typ: plan.Type{
 				Id:    int32(types.T_bool),
 				Width: 0,
 				Scale: 0,
@@ -482,7 +482,7 @@ func buildAlterSequenceTableDef(stmt *tree.AlterSequence, ctx CompilerContext, a
 		if tableDef == nil {
 			return moerr.NewInvalidInput(ctx.GetContext(), "no such sequence %s", as.TableDef.Name)
 		} else {
-			typ = tableDef.Cols[0].GetTyp()
+			typ = &tableDef.Cols[0].Typ
 		}
 	} else {
 		typ, err = getTypeFromAst(ctx.GetContext(), stmt.Type.Type)
@@ -498,7 +498,7 @@ func buildAlterSequenceTableDef(stmt *tree.AlterSequence, ctx CompilerContext, a
 		cols[i] = &plan.ColDef{
 			Name: Sequence_cols_name[i],
 			Alg:  plan.CompressType_Lz4,
-			Typ:  typ,
+			Typ:  *typ,
 			Default: &plan.Default{
 				NullAbility:  true,
 				Expr:         nil,
@@ -509,7 +509,7 @@ func buildAlterSequenceTableDef(stmt *tree.AlterSequence, ctx CompilerContext, a
 	cols[4] = &plan.ColDef{
 		Name: Sequence_cols_name[4],
 		Alg:  plan.CompressType_Lz4,
-		Typ: &plan.Type{
+		Typ: plan.Type{
 			Id:    int32(types.T_int64),
 			Width: 0,
 			Scale: 0,
@@ -529,7 +529,7 @@ func buildAlterSequenceTableDef(stmt *tree.AlterSequence, ctx CompilerContext, a
 		cols[i] = &plan.ColDef{
 			Name: Sequence_cols_name[i],
 			Alg:  plan.CompressType_Lz4,
-			Typ: &plan.Type{
+			Typ: plan.Type{
 				Id:    int32(types.T_bool),
 				Width: 0,
 				Scale: 0,
@@ -1089,7 +1089,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 			col := &ColDef{
 				Name:     def.Name.Parts[0],
 				Alg:      plan.CompressType_Lz4,
-				Typ:      colType,
+				Typ:      *colType,
 				Default:  defaultValue,
 				OnUpdate: onUpdateExpr,
 				Comment:  comment,
@@ -1241,7 +1241,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 		colDef := &ColDef{
 			Name:    util.GetClusterTableAttributeName(),
 			Alg:     plan.CompressType_Lz4,
-			Typ:     colType,
+			Typ:     *colType,
 			NotNull: true,
 			Default: &plan.Default{
 				Expr: &Expr{
@@ -1313,7 +1313,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 				ColId:  uint64(len(createTable.TableDef.Cols)),
 				Name:   pkeyName,
 				Hidden: true,
-				Typ: &Type{
+				Typ: Type{
 					Id:       int32(types.T_uint64),
 					AutoIncr: true,
 				},
@@ -1529,7 +1529,7 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 			colDef := &ColDef{
 				Name: keyName,
 				Alg:  plan.CompressType_Lz4,
-				Typ: &Type{
+				Typ: Type{
 					Id:    colMap[indexInfo.KeyParts[0].ColName.Parts[0]].Typ.Id,
 					Width: colMap[indexInfo.KeyParts[0].ColName.Parts[0]].Typ.Width,
 				},
@@ -1549,7 +1549,7 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 			colDef := &ColDef{
 				Name: keyName,
 				Alg:  plan.CompressType_Lz4,
-				Typ: &Type{
+				Typ: Type{
 					Id:    int32(types.T_varchar),
 					Width: types.MaxVarcharLen,
 				},
@@ -1662,7 +1662,7 @@ func buildMasterSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, co
 	colDef := &ColDef{
 		Name: keyName,
 		Alg:  plan.CompressType_Lz4,
-		Typ: &Type{
+		Typ: Type{
 			Id:    int32(types.T_varchar),
 			Width: types.MaxVarcharLen,
 		},
@@ -1795,7 +1795,7 @@ func buildRegularSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, c
 		colDef := &ColDef{
 			Name: keyName,
 			Alg:  plan.CompressType_Lz4,
-			Typ: &Type{
+			Typ: Type{
 				Id:    int32(types.T_varchar),
 				Width: types.MaxVarcharLen,
 			},
@@ -1907,7 +1907,7 @@ func buildIvfFlatSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, c
 		tableDefs[0].Cols[0] = &ColDef{
 			Name: catalog.SystemSI_IVFFLAT_TblCol_Metadata_key,
 			Alg:  plan.CompressType_Lz4,
-			Typ: &Type{
+			Typ: Type{
 				Id:    int32(types.T_varchar),
 				Width: types.MaxVarcharLen,
 			},
@@ -1921,7 +1921,7 @@ func buildIvfFlatSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, c
 		tableDefs[0].Cols[1] = &ColDef{
 			Name: catalog.SystemSI_IVFFLAT_TblCol_Metadata_val,
 			Alg:  plan.CompressType_Lz4,
-			Typ: &Type{
+			Typ: Type{
 				Id:    int32(types.T_varchar),
 				Width: types.MaxVarcharLen,
 			},
@@ -1962,7 +1962,7 @@ func buildIvfFlatSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, c
 		tableDefs[1].Cols[0] = &ColDef{
 			Name: catalog.SystemSI_IVFFLAT_TblCol_Centroids_version,
 			Alg:  plan.CompressType_Lz4,
-			Typ: &plan.Type{
+			Typ: plan.Type{
 				Id:    int32(types.T_int64),
 				Width: 0,
 				Scale: 0,
@@ -1976,7 +1976,7 @@ func buildIvfFlatSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, c
 		tableDefs[1].Cols[1] = &ColDef{
 			Name: catalog.SystemSI_IVFFLAT_TblCol_Centroids_id,
 			Alg:  plan.CompressType_Lz4,
-			Typ: &plan.Type{
+			Typ: plan.Type{
 				Id:    int32(types.T_int64),
 				Width: 0,
 				Scale: 0,
@@ -1990,7 +1990,7 @@ func buildIvfFlatSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, c
 		tableDefs[1].Cols[2] = &ColDef{
 			Name: catalog.SystemSI_IVFFLAT_TblCol_Centroids_centroid,
 			Alg:  plan.CompressType_Lz4,
-			Typ: &Type{
+			Typ: Type{
 				Id:    colMap[indexInfo.KeyParts[0].ColName.Parts[0]].Typ.Id,
 				Width: colMap[indexInfo.KeyParts[0].ColName.Parts[0]].Typ.Width,
 			},
@@ -2036,7 +2036,7 @@ func buildIvfFlatSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, c
 		tableDefs[2].Cols[0] = &ColDef{
 			Name: catalog.SystemSI_IVFFLAT_TblCol_Entries_version,
 			Alg:  plan.CompressType_Lz4,
-			Typ: &plan.Type{
+			Typ: plan.Type{
 				Id:    int32(types.T_int64),
 				Width: 0,
 				Scale: 0,
@@ -2050,7 +2050,7 @@ func buildIvfFlatSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, c
 		tableDefs[2].Cols[1] = &ColDef{
 			Name: catalog.SystemSI_IVFFLAT_TblCol_Entries_id,
 			Alg:  plan.CompressType_Lz4,
-			Typ: &plan.Type{
+			Typ: plan.Type{
 				Id:    int32(types.T_int64),
 				Width: 0,
 				Scale: 0,
@@ -3004,7 +3004,7 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 					},
 				},
 			}
-		case *tree.AlterTableName:
+		case *tree.AlterOptionTableName:
 			oldName := tableDef.Name
 			newName := string(opt.Name.ToTableName().ObjectName)
 			alterTable.Actions[i] = &plan.AlterTable_Action{
@@ -3103,7 +3103,7 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 			col := &ColDef{
 				Name:     opt.Column.Name.Parts[0],
 				Alg:      plan.CompressType_Lz4,
-				Typ:      colType,
+				Typ:      *colType,
 				Default:  defaultValue,
 				OnUpdate: onUpdateExpr,
 				Comment:  comment,
@@ -3327,7 +3327,7 @@ func getForeignKeyData(ctx CompilerContext, dbName string, tableDef *TableDef, d
 			//column name from tableDef
 			fkData.Cols.Cols[i] = colDef.Name
 			//column type from tableDef
-			fkData.ColTyps[i] = colDef.Typ
+			fkData.ColTyps[i] = &colDef.Typ
 		} else {
 			return nil, moerr.NewInternalError(ctx.GetContext(), "column '%v' no exists in the creating table '%v'", colName, tableDef.Name)
 		}
@@ -3556,7 +3556,7 @@ func buildFkDataOfForwardRefer(ctx CompilerContext,
 			//column name from tableDef
 			fkData.Cols.Cols[i] = colDef.Name
 			//column type from tableDef
-			fkData.ColTyps[i] = colDef.Typ
+			fkData.ColTyps[i] = &colDef.Typ
 		} else {
 			return nil, moerr.NewInternalError(ctx.GetContext(), "column '%v' no exists in table '%v'", fkDef.Col, fkDefs[0].Tbl)
 		}

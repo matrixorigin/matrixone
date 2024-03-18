@@ -506,20 +506,6 @@ func (mr *MockTxnOperatorMockRecorder) Commit(ctx interface{}) *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Commit", reflect.TypeOf((*MockTxnOperator)(nil).Commit), ctx)
 }
 
-// CreateTS mocks base method.
-func (m *MockTxnOperator) CreateTS() timestamp.Timestamp {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "CreateTS")
-	ret0, _ := ret[0].(timestamp.Timestamp)
-	return ret0
-}
-
-// CreateTS indicates an expected call of CreateTS.
-func (mr *MockTxnOperatorMockRecorder) CreateTS() *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreateTS", reflect.TypeOf((*MockTxnOperator)(nil).CreateTS))
-}
-
 // Debug mocks base method.
 func (m *MockTxnOperator) Debug(ctx context.Context, ops []txn.TxnRequest) (*rpc.SendResult, error) {
 	m.ctrl.T.Helper()
@@ -1118,6 +1104,18 @@ func (m *MockWorkspace) StartStatement() {
 func (mr *MockWorkspaceMockRecorder) StartStatement() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "StartStatement", reflect.TypeOf((*MockWorkspace)(nil).StartStatement))
+}
+
+// TransferRowID mocks base method.
+func (m *MockWorkspace) TransferRowID() {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "TransferRowID")
+}
+
+// TransferRowID indicates an expected call of TransferRowID.
+func (mr *MockWorkspaceMockRecorder) TransferRowID() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "TransferRowID", reflect.TypeOf((*MockWorkspace)(nil).TransferRowID))
 }
 
 // UpdateSnapshotWriteOffset mocks base method.
