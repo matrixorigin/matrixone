@@ -3776,6 +3776,13 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 		logInfo(ses, ses.GetDebugString(), fmt.Sprintf("time of Exec.Build : %s", time.Since(cmpBegin).String()))
 	}
 
+	defer func() {
+		// Serialize the execution plan as json
+		if cwft, ok := cw.(*TxnComputationWrapper); ok {
+			_ = cwft.RecordExecPlan(requestCtx)
+		}
+	}()
+
 	mrs = ses.GetMysqlResultSet()
 	ep := ses.GetExportConfig()
 	// cw.Compile might rewrite sql, here we fetch the latest version
@@ -3830,13 +3837,6 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 			}
 
 			runResult = &util2.RunResult{AffectRows: ep.RowCount}
-
-			/*
-			   Serialize the execution plan by json
-			*/
-			if cwft, ok := cw.(*TxnComputationWrapper); ok {
-				_ = cwft.RecordExecPlan(requestCtx)
-			}
 
 		} else {
 			columns, err = cw.GetColumns()
@@ -3897,12 +3897,6 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 				logInfo(ses, ses.GetDebugString(), fmt.Sprintf("time of Exec.Run : %s", time.Since(runBegin).String()))
 			}
 
-			/*
-				Step 4: Serialize the execution plan by json
-			*/
-			if cwft, ok := cw.(*TxnComputationWrapper); ok {
-				_ = cwft.RecordExecPlan(requestCtx)
-			}
 		}
 
 	case *tree.ShowCreateTable, *tree.ShowCreateDatabase, *tree.ShowTables, *tree.ShowSequences, *tree.ShowDatabases, *tree.ShowColumns,
@@ -3975,12 +3969,6 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 			logInfo(ses, ses.GetDebugString(), fmt.Sprintf("time of Exec.Run : %s", time.Since(runBegin).String()))
 		}
 
-		/*
-			Step 4: Serialize the execution plan by json
-		*/
-		if cwft, ok := cw.(*TxnComputationWrapper); ok {
-			_ = cwft.RecordExecPlan(requestCtx)
-		}
 	//just status, no result set
 	case *tree.CreateTable, *tree.DropTable, *tree.CreateDatabase, *tree.DropDatabase,
 		*tree.CreateIndex, *tree.DropIndex,
@@ -4069,12 +4057,6 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 
 		logDebug(ses, ses.GetDebugString(), fmt.Sprintf("time of SendResponse %s", time.Since(echoTime).String()))
 
-		/*
-			Step 4: Serialize the execution plan by json
-		*/
-		if cwft, ok := cw.(*TxnComputationWrapper); ok {
-			_ = cwft.RecordExecPlan(requestCtx)
-		}
 	case *tree.ExplainAnalyze:
 		explainColName := "QUERY PLAN"
 		columns, err = GetExplainColumns(requestCtx, explainColName)
