@@ -124,6 +124,9 @@ func NewCompile(
 	c.cnLabel = cnLabel
 	c.startAt = startAt
 	c.disableRetry = false
+	if c.proc.TxnOperator != nil {
+		c.proc.TxnOperator.GetWorkspace().UpdateSnapshotWriteOffset()
+	}
 	return c
 }
 
@@ -420,7 +423,15 @@ func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
 	seq := uint64(0)
 	if txnOp != nil {
 		seq = txnOp.NextSequence()
+		txnOp.EnterRunSql()
 	}
+
+	defer func() {
+		if txnOp != nil {
+			txnOp.ExitRunSql()
+		}
+	}()
+
 	txnTrace.GetService().AddTxnDurationAction(
 		txnOp,
 		client.ExecuteSQLEvent,
@@ -582,8 +593,9 @@ func (c *Compile) runOnce() error {
 	var wg sync.WaitGroup
 
 	if c.proc.TxnOperator != nil {
-		c.proc.TxnOperator.GetWorkspace().UpdateSnapshotWriteOffset()
+		c.proc.TxnOperator.GetWorkspace().TransferRowID()
 	}
+
 	err := c.lockMetaTables()
 	if err != nil {
 		return err
@@ -635,6 +647,9 @@ func (c *Compile) runOnce() error {
 
 	// fuzzy filter not sure whether this insert / load obey duplicate constraints, need double check
 	if c.fuzzy != nil && c.fuzzy.cnt > 0 && err == nil {
+		if c.fuzzy.cnt > 10 {
+			logutil.Warnf("fuzzy filter cnt is %d, may be too high", c.fuzzy.cnt)
+		}
 		err = c.fuzzy.backgroundSQLCheck(c)
 	}
 	if err != nil {
@@ -3921,7 +3936,8 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 										}
 									case types.T_TS:
 										min := types.DecodeFixed[types.TS](zm.GetMinBuf())
-										if min.Less(partialResults[i].(types.TS)) {
+										ts := partialResults[i].(types.TS)
+										if min.Less(&ts) {
 											partialResults[i] = min
 										}
 									case types.T_Rowid:
@@ -4047,7 +4063,8 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 										}
 									case types.T_TS:
 										max := types.DecodeFixed[types.TS](zm.GetMaxBuf())
-										if max.Greater(partialResults[i].(types.TS)) {
+										ts := partialResults[i].(types.TS)
+										if max.Greater(&ts) {
 											partialResults[i] = max
 										}
 									case types.T_Rowid:

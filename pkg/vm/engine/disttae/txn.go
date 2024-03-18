@@ -16,7 +16,7 @@ package disttae
 
 import (
 	"context"
-	"fmt"
+	"encoding/hex"
 	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 	"math"
 	"regexp"
@@ -134,22 +134,22 @@ func checkPKDupGeneric[T comparable](
 	t *types.Type,
 	attr string,
 	vals []T,
-	start, count int) error {
+	start, count int) (bool, string) {
 	for _, v := range vals[start : start+count] {
 		if _, ok := mp[v]; ok {
 			entry := common.TypeStringValue(*t, v, false)
-			return moerr.NewDuplicateEntryNoCtx(entry, attr)
+			return true, entry
 		}
 		mp[v] = true
 	}
-	return nil
+	return false, ""
 }
 
 func checkPKDup(
 	mp map[any]bool,
 	pk *vector.Vector,
 	attr string,
-	start, count int) error {
+	start, count int) (bool, string) {
 	colType := pk.GetType()
 	switch colType.Oid {
 	case types.T_bool:
@@ -227,7 +227,7 @@ func checkPKDup(
 			v := pk.GetStringAt(i)
 			if _, ok := mp[v]; ok {
 				entry := common.TypeStringValue(*colType, []byte(v), false)
-				return moerr.NewDuplicateEntryNoCtx(entry, attr)
+				return true, entry
 			}
 			mp[v] = true
 		}
@@ -236,7 +236,7 @@ func checkPKDup(
 			v := types.ArrayToString[float32](vector.GetArrayAt[float32](pk, i))
 			if _, ok := mp[v]; ok {
 				entry := common.TypeStringValue(*colType, pk.GetBytesAt(i), false)
-				return moerr.NewDuplicateEntryNoCtx(entry, attr)
+				return true, entry
 			}
 			mp[v] = true
 		}
@@ -245,14 +245,14 @@ func checkPKDup(
 			v := types.ArrayToString[float64](vector.GetArrayAt[float64](pk, i))
 			if _, ok := mp[v]; ok {
 				entry := common.TypeStringValue(*colType, pk.GetBytesAt(i), false)
-				return moerr.NewDuplicateEntryNoCtx(entry, attr)
+				return true, entry
 			}
 			mp[v] = true
 		}
 	default:
 		panic(moerr.NewInternalErrorNoCtx("%s not supported", pk.GetType().String()))
 	}
-	return nil
+	return false, ""
 }
 
 // checkDup check whether the txn.writes has duplicate pk entry
@@ -264,8 +264,8 @@ func (txn *Transaction) checkDup() error {
 	//table id is global unique
 	tablesDef := make(map[uint64]*plan.TableDef)
 	pkIndex := make(map[uint64]int)
-	insertPks := make(map[any]bool)
-	delPks := make(map[any]bool)
+	insertPks := make(map[uint64]map[any]bool)
+	delPks := make(map[uint64]map[any]bool)
 
 	for _, e := range txn.writes {
 		if e.bat == nil || e.bat.RowCount() == 0 {
@@ -321,13 +321,23 @@ func (txn *Transaction) checkDup() error {
 					newBat.SetRowCount(bat.Vecs[0].Length())
 					bat = newBat
 				}
-				if err := checkPKDup(
-					insertPks,
+				if _, ok := insertPks[e.tableId]; !ok {
+					insertPks[e.tableId] = make(map[any]bool)
+				}
+				if dup, pk := checkPKDup(
+					insertPks[e.tableId],
 					bat.Vecs[index],
 					bat.Attrs[index],
 					0,
-					bat.RowCount()); err != nil {
-					return err
+					bat.RowCount()); dup {
+					logutil.Errorf("txn:%s wants to insert duplicate primary key:%s in table:[%v-%v:%s-%s]",
+						hex.EncodeToString(txn.op.Txn().ID),
+						pk,
+						e.databaseId,
+						e.tableId,
+						e.databaseName,
+						e.tableName)
+					return moerr.NewDuplicateEntryNoCtx(pk, bat.Attrs[index])
 				}
 			}
 			continue
@@ -335,17 +345,27 @@ func (txn *Transaction) checkDup() error {
 		//if entry.tyep is DELETE, then e.bat.Vecs[0] is rowid,e.bat.Vecs[1] is PK
 		if e.typ == DELETE || e.typ == DELETE_TXN {
 			if len(e.bat.Vecs) < 2 {
-				logutil.Warnf("delete entry has no pk, database:%s, table:%s",
+				logutil.Warnf("delete has no pk, database:%s, table:%s",
 					e.databaseName, e.tableName)
 				continue
 			}
-			if err := checkPKDup(
-				delPks,
+			if _, ok := delPks[e.tableId]; !ok {
+				delPks[e.tableId] = make(map[any]bool)
+			}
+			if dup, pk := checkPKDup(
+				delPks[e.tableId],
 				e.bat.Vecs[1],
 				e.bat.Attrs[1],
 				0,
-				e.bat.RowCount()); err != nil {
-				return err
+				e.bat.RowCount()); dup {
+				logutil.Errorf("txn:%s wants to delete duplicate primary key:%s in table:[%v-%v:%s-%s]",
+					hex.EncodeToString(txn.op.Txn().ID),
+					pk,
+					e.databaseId,
+					e.tableId,
+					e.databaseName,
+					e.tableName)
+				return moerr.NewDuplicateEntryNoCtx(pk, e.bat.Attrs[1])
 			}
 		}
 	}
@@ -1012,10 +1032,7 @@ func (txn *Transaction) GetSnapshotWriteOffset() int {
 	return txn.snapshotWriteOffset
 }
 
-func (txn *Transaction) UpdateSnapshotWriteOffset() {
-	txn.Lock()
-	defer txn.Unlock()
-	txn.snapshotWriteOffset = len(txn.writes)
+func (txn *Transaction) TransferRowID() {
 	txn.timestamps = append(txn.timestamps, txn.op.SnapshotTS())
 	if txn.statementID > 0 && txn.op.Txn().IsRCIsolation() {
 		var ts timestamp.Timestamp
@@ -1035,50 +1052,15 @@ func (txn *Transaction) UpdateSnapshotWriteOffset() {
 			deleteObjs, createObjs := state.GetChangedObjsBetween(types.TimestampToTS(ts),
 				types.TimestampToTS(tbl.db.txn.op.SnapshotTS()))
 
-			createObjsInfos := ""
-			deleteObjInfos := ""
-			if regexp.MustCompile(`.*sbtest.*`).MatchString(tbl.tableName) {
-				logutil.Infof("xxxx table:%s, txn:%s, lastTs:%s, snapshotTs:%s",
-					tbl.tableName,
-					tbl.db.txn.op.Txn().DebugString(),
-					ts.DebugString(),
-					tbl.db.txn.op.SnapshotTS().DebugString())
-				if len(deleteObjs) > 0 || len(createObjs) > 0 {
-					for obj := range deleteObjs {
-						objInfo, ok := state.GetObject(obj)
-						if !ok {
-							logutil.Fatalf("xxxx obj-seg:%s not found in partition state",
-								obj.Segmentid().ToString())
-						}
-						deleteObjInfos = fmt.Sprintf("%s:%s", deleteObjInfos, objInfo.String())
-					}
-					for obj := range createObjs {
-						objInfo, ok := state.GetObject(obj)
-						if !ok {
-							logutil.Fatalf("xxxx obj-seg:%s not found in partition state",
-								obj.Segmentid().ToString())
-						}
-						createObjsInfos = fmt.Sprintf("%s:%s", createObjsInfos, objInfo.String())
-					}
-					logutil.Infof("xxxx table:%s, deleteObjs:%s, xxxx createObjs:%s, txn:%s, lastTs:%s, snapshotTs:%s",
-						tbl.tableName,
-						deleteObjInfos,
-						createObjsInfos,
-						tbl.db.txn.op.Txn().DebugString(),
-						ts.DebugString(),
-						tbl.db.txn.op.SnapshotTS().DebugString())
-
-				}
-			}
-
 			trace.GetService().ApplyFlush(
 				tbl.db.txn.op.Txn().ID,
 				tbl.tableId,
 				ts,
 				tbl.db.txn.op.SnapshotTS(),
 				len(deleteObjs))
+
 			if len(deleteObjs) > 0 {
-				if err := tbl.updateDeleteInfo(ctx, state, deleteObjs, createObjs); err != nil {
+				if err := tbl.transferRowid(ctx, state, deleteObjs, createObjs); err != nil {
 					logutil.Fatalf("updateDeleteInfo failed: %v", err)
 				}
 			}
@@ -1086,5 +1068,10 @@ func (txn *Transaction) UpdateSnapshotWriteOffset() {
 		}
 		txn.tableCache.tableMap.Range(fn)
 	}
+}
 
+func (txn *Transaction) UpdateSnapshotWriteOffset() {
+	txn.Lock()
+	defer txn.Unlock()
+	txn.snapshotWriteOffset = len(txn.writes)
 }

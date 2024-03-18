@@ -107,6 +107,9 @@ func (w *Ws) Rollback(ctx context.Context) error {
 func (w *Ws) UpdateSnapshotWriteOffset() {
 }
 
+func (w *Ws) TransferRowID() {
+}
+
 func (w *Ws) GetSnapshotWriteOffset() int {
 	return 0
 }
@@ -132,7 +135,8 @@ func TestCompile(t *testing.T) {
 	txnOperator.EXPECT().ResetRetry(gomock.Any()).AnyTimes()
 	txnOperator.EXPECT().TxnOptions().Return(txn.TxnOptions{}).AnyTimes()
 	txnOperator.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()
-
+	txnOperator.EXPECT().EnterRunSql().Return().AnyTimes()
+	txnOperator.EXPECT().ExitRunSql().Return().AnyTimes()
 	txnClient := mock_frontend.NewMockTxnClient(ctrl)
 	txnClient.EXPECT().New(gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
 	for _, tc := range tcs {

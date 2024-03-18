@@ -19,6 +19,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
 var (
@@ -38,7 +39,7 @@ func (builder *QueryBuilder) applyIndicesForFiltersUsingMasterIndex(nodeID int32
 		idxObjRef, idxTableDef := builder.compCtx.Resolve(scanNode.ObjRef.SchemaName, indexDef.IndexTableName)
 
 		// 1. SELECT pk from idx WHERE prefix_eq(`__mo_index_idx_col`,serial_full("a","value"))
-		currIdxProjTag, currScanId := makeIndexTblScan(builder, builder.ctxByNode[nodeID], filterExp, idxTableDef, idxObjRef, scanNode)
+		currIdxProjTag, currScanId := makeIndexTblScan(builder, builder.ctxByNode[nodeID], filterExp, idxTableDef, idxObjRef)
 
 		// 2. (SELECT pk from idx1 WHERE prefix_eq(`__mo_index_idx_col`,serial_full("a","value1")) )
 		//    	INNER JOIN
@@ -47,7 +48,7 @@ func (builder *QueryBuilder) applyIndicesForFiltersUsingMasterIndex(nodeID int32
 		//    ...
 		lastNodeId = currScanId
 		currIndexPkCol := &Expr{
-			Typ: *DeepCopyType(pkType),
+			Typ: pkType,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: currIdxProjTag,
@@ -71,6 +72,9 @@ func (builder *QueryBuilder) applyIndicesForFiltersUsingMasterIndex(nodeID int32
 		prevIndexPkCol = DeepCopyExpr(currIndexPkCol)
 		prevLastNodeId = lastNodeId
 	}
+	lastNodeFromIndexTbl := builder.qry.Nodes[lastNodeId]
+	lastNodeFromIndexTbl.Limit = DeepCopyExpr(scanNode.Limit)
+	lastNodeFromIndexTbl.Offset = DeepCopyExpr(scanNode.Offset)
 	scanNode.Limit, scanNode.Offset = nil, nil
 
 	// 3. SELECT * from tbl INNER JOIN (
@@ -81,7 +85,7 @@ func (builder *QueryBuilder) applyIndicesForFiltersUsingMasterIndex(nodeID int32
 	//    ) ON tbl.pk = idx1.pk
 	wherePkEqPk, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{
 		{
-			Typ: *DeepCopyType(pkType),
+			Typ: pkType,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: scanNode.BindingTags[0],
@@ -90,7 +94,7 @@ func (builder *QueryBuilder) applyIndicesForFiltersUsingMasterIndex(nodeID int32
 			},
 		},
 		{
-			Typ: *DeepCopyType(pkType),
+			Typ: pkType,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: prevIndexPkCol.GetCol().RelPos, // last idxTbl (may be join) relPos
@@ -104,13 +108,15 @@ func (builder *QueryBuilder) applyIndicesForFiltersUsingMasterIndex(nodeID int32
 		JoinType: plan.Node_INDEX,
 		Children: []int32{scanNode.NodeId, lastNodeId},
 		OnList:   []*Expr{wherePkEqPk},
+		Limit:    DeepCopyExpr(lastNodeFromIndexTbl.Limit),
+		Offset:   DeepCopyExpr(lastNodeFromIndexTbl.Offset),
 	}, builder.ctxByNode[nodeID])
 
 	return lastNodeId
 }
 
 func makeIndexTblScan(builder *QueryBuilder, bindCtx *BindContext, filterExp *plan.Expr,
-	idxTableDef *TableDef, idxObjRef *ObjectRef, scanNode *plan.Node) (int32, int32) {
+	idxTableDef *TableDef, idxObjRef *ObjectRef) (int32, int32) {
 
 	// a. Scan * WHERE prefix_eq(`__mo_index_idx_col`,serial_full("a","value"))
 	idxScanTag := builder.genNewTag()
@@ -155,40 +161,55 @@ func makeIndexTblScan(builder *QueryBuilder, bindCtx *BindContext, filterExp *pl
 		})
 
 	case "in":
+		// Since this master index specifically for varchar, we assume the `IN` to contain only varchar values.
+		inVecType := types.T_varchar.ToType()
 
-		// NOTE: here we assume that args[1] is of type vector[varchar]. It is because master index is only
-		// applicable for string type columns.
-		origVec := vector.NewVec(types.T_varchar.ToType())
-		_ = origVec.UnmarshalBinary(args[1].GetVec().GetData())
+		// a. varchar vector ("value1", "value2", "value3")
+		arg1AsColValuesVec := vector.NewVec(inVecType)
+		_ = arg1AsColValuesVec.UnmarshalBinary(args[1].GetVec().GetData())
+		inExprListLen := arg1AsColValuesVec.Length()
 
-		concatVec := vector.NewVec(types.T_varchar.ToType())
-		mp := mpool.MustNewZero() //TODO: is this the right way to use mpool?
-		for i := 0; i < origVec.Length(); i++ {
-			newBytes := origVec.GetBytesAt(i)
-			newBytes = append([]byte(args[0].GetCol().Name), newBytes...) //concat("a","value1")
-			_ = vector.AppendBytes(concatVec, newBytes, false, mp)
+		// b. const vector "a"
+		mp := mpool.MustNewZero()
+		arg0AsColNameVec, _ := vector.NewConstBytes(inVecType, []byte(args[0].GetCol().Name), inExprListLen, mp)
+
+		// c. (serial_full("a","value1"), serial_full("a","value2"), serial_full("a","value3"))
+		ps := types.NewPackerArray(inExprListLen, mp)
+		defer func() {
+			for _, p := range ps {
+				p.FreeMem()
+			}
+		}()
+		function.SerialHelper(arg0AsColNameVec, nil, ps, true)
+		function.SerialHelper(arg1AsColValuesVec, nil, ps, true)
+		arg1ForPrefixInVec := vector.NewVec(inVecType)
+		for i := 0; i < inExprListLen; i++ {
+			_ = vector.AppendBytes(arg1ForPrefixInVec, ps[i].Bytes(), false, mp)
 		}
 
-		newLen := concatVec.Length()
-		newData, _ := concatVec.MarshalBinary()
-		concatVec.Free(mp) // here we free the memory allocated by mpool.
-
-		newLiteralVecExpr := &plan.Expr{
+		// d. convert result vector to LiteralVec
+		arg1ForPrefixInBytes, _ := arg1ForPrefixInVec.MarshalBinary()
+		arg1ForPrefixInLitVec := &plan.Expr{
 			Typ: *makePlan2Type(&varcharType),
 			Expr: &plan.Expr_Vec{
 				Vec: &plan.LiteralVec{
-					Len:  int32(newLen),
-					Data: newData,
+					Len:  int32(len(arg1ForPrefixInBytes)),
+					Data: arg1ForPrefixInBytes,
 				},
 			},
 		}
-		serialExpr, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "serial_full", []*plan.Expr{newLiteralVecExpr})
+
+		// e. free memory for arg0, arg1 vector. Packer's memory is freed in defer.
+		arg1ForPrefixInVec.Free(mp)
+		arg0AsColNameVec.Free(mp)
 
 		filterList, _ = bindFuncExprAndConstFold(builder.GetContext(), builder.compCtx.GetProcess(), "prefix_in", []*Expr{
-			indexKeyCol, // __mo_index_idx_col
-			serialExpr,  // serial_full( concat("a","value1"), concat("a","value2"), ... )
+			indexKeyCol,           // __mo_index_idx_col
+			arg1ForPrefixInLitVec, // (serial_full("a","value1"), serial_full("a","value2"), serial_full("a","value3"))
 		})
 
+	default:
+		panic("unsupported filter expression")
 	}
 
 	scanId := builder.appendNode(&Node{
@@ -197,8 +218,6 @@ func makeIndexTblScan(builder *QueryBuilder, bindCtx *BindContext, filterExp *pl
 		ObjRef:      idxObjRef,
 		FilterList:  []*plan.Expr{filterList},
 		BindingTags: []int32{idxScanTag},
-		Limit:       DeepCopyExpr(scanNode.Limit),
-		Offset:      DeepCopyExpr(scanNode.Offset),
 	}, bindCtx)
 
 	// b. Project __mo_index_pk_col

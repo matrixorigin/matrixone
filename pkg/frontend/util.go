@@ -807,39 +807,39 @@ func mysqlColDef2PlanResultColDef(mr *MysqlResultSet) *plan.ResultColDef {
 		}
 		switch col.ColumnType() {
 		case defines.MYSQL_TYPE_VAR_STRING:
-			resultCols[i].Typ = &plan.Type{
+			resultCols[i].Typ = plan.Type{
 				Id: int32(types.T_varchar),
 			}
 		case defines.MYSQL_TYPE_LONG:
-			resultCols[i].Typ = &plan.Type{
+			resultCols[i].Typ = plan.Type{
 				Id: int32(types.T_int32),
 			}
 		case defines.MYSQL_TYPE_LONGLONG:
-			resultCols[i].Typ = &plan.Type{
+			resultCols[i].Typ = plan.Type{
 				Id: int32(types.T_int64),
 			}
 		case defines.MYSQL_TYPE_DOUBLE:
-			resultCols[i].Typ = &plan.Type{
+			resultCols[i].Typ = plan.Type{
 				Id: int32(types.T_float64),
 			}
 		case defines.MYSQL_TYPE_FLOAT:
-			resultCols[i].Typ = &plan.Type{
+			resultCols[i].Typ = plan.Type{
 				Id: int32(types.T_float32),
 			}
 		case defines.MYSQL_TYPE_DATE:
-			resultCols[i].Typ = &plan.Type{
+			resultCols[i].Typ = plan.Type{
 				Id: int32(types.T_date),
 			}
 		case defines.MYSQL_TYPE_TIME:
-			resultCols[i].Typ = &plan.Type{
+			resultCols[i].Typ = plan.Type{
 				Id: int32(types.T_time),
 			}
 		case defines.MYSQL_TYPE_DATETIME:
-			resultCols[i].Typ = &plan.Type{
+			resultCols[i].Typ = plan.Type{
 				Id: int32(types.T_datetime),
 			}
 		case defines.MYSQL_TYPE_TIMESTAMP:
-			resultCols[i].Typ = &plan.Type{
+			resultCols[i].Typ = plan.Type{
 				Id: int32(types.T_timestamp),
 			}
 		default:

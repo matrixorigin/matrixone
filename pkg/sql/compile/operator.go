@@ -591,12 +591,12 @@ func constructFuzzyFilter(c *Compile, n, left, right *plan.Node) *fuzzyfilter.Ar
 	pkName := n.TableDef.Pkey.PkeyColName
 	var pkTyp *plan.Type
 	if pkName == catalog.CPrimaryKeyColName {
-		pkTyp = n.TableDef.Pkey.CompPkeyCol.Typ
+		pkTyp = &n.TableDef.Pkey.CompPkeyCol.Typ
 	} else {
 		cols := n.TableDef.Cols
 		for _, c := range cols {
 			if c.Name == pkName {
-				pkTyp = c.Typ
+				pkTyp = &c.Typ
 			}
 		}
 	}
@@ -604,7 +604,7 @@ func constructFuzzyFilter(c *Compile, n, left, right *plan.Node) *fuzzyfilter.Ar
 	arg := fuzzyfilter.NewArgument()
 	arg.PkName = pkName
 	arg.PkTyp = pkTyp
-	arg.N = right.Stats.Cost
+	arg.N = right.Stats.Outcnt
 	registerRuntimeFilters(arg, c, n.RuntimeFilterBuildList, 0)
 
 	return arg

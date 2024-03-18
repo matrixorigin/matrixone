@@ -176,6 +176,9 @@ type TxnOperator interface {
 	Debug(ctx context.Context, ops []txn.TxnRequest) (*rpc.SendResult, error)
 
 	NextSequence() uint64
+
+	EnterRunSql()
+	ExitRunSql()
 }
 
 // TxnIDGenerator txn id generator
@@ -238,6 +241,8 @@ type Workspace interface {
 
 	UpdateSnapshotWriteOffset()
 	GetSnapshotWriteOffset() int
+
+	TransferRowID()
 
 	// Adjust adjust workspace, adjust update's delete+insert to correct order and merge workspace.
 	Adjust(writeOffset uint64) error

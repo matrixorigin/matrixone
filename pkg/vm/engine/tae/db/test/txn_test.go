@@ -679,7 +679,9 @@ func TestTxn9(t *testing.T) {
 			cnt++
 			it.Next()
 		}
-		if txn2.GetStartTS().Greater(txn.GetPrepareTS()) {
+		startTS := txn2.GetStartTS()
+		prepareTS := txn.GetPrepareTS()
+		if startTS.Greater(&prepareTS) {
 			assert.Equal(t, 2, cnt)
 		} else {
 			assert.Equal(t, 1, cnt)
@@ -693,7 +695,9 @@ func TestTxn9(t *testing.T) {
 		db, _ := txn.GetDatabase("db")
 		rel, _ := db.GetRelationByName(schema.Name)
 		if waitTxn != nil {
-			if txn.GetStartTS().Greater(waitTxn.GetPrepareTS()) {
+			startTS := txn.GetStartTS()
+			prepareTS := waitTxn.GetPrepareTS()
+			if startTS.Greater(&prepareTS) {
 				testutil.CheckAllColRowsByScan(t, rel, waitExpect, true)
 			} else {
 				testutil.CheckAllColRowsByScan(t, rel, nowaitExpect, true)

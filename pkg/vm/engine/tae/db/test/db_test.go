@@ -40,6 +40,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -6149,9 +6150,13 @@ func TestGCWithCheckpoint(t *testing.T) {
 		if manager.GetMaxConsumed() == nil {
 			return false
 		}
-		return entries[num-1].GetEnd().Equal(manager.GetMaxConsumed().GetEnd())
+		end := entries[num-1].GetEnd()
+		maxEnd := manager.GetMaxConsumed().GetEnd()
+		return end.Equal(&maxEnd)
 	})
-	assert.True(t, entries[num-1].GetEnd().Equal(manager.GetMaxConsumed().GetEnd()))
+	end := entries[num-1].GetEnd()
+	maxEnd := manager.GetMaxConsumed().GetEnd()
+	assert.True(t, end.Equal(&maxEnd))
 	manager2 := gc.NewDiskCleaner(context.Background(), tae.Runtime.Fs, tae.BGCheckpointRunner, tae.Catalog, false)
 	manager2.Start()
 	defer manager2.Stop()
@@ -6159,9 +6164,13 @@ func TestGCWithCheckpoint(t *testing.T) {
 		if manager2.GetMaxConsumed() == nil {
 			return false
 		}
-		return entries[num-1].GetEnd().Equal(manager2.GetMaxConsumed().GetEnd())
+		end := entries[num-1].GetEnd()
+		maxEnd := manager2.GetMaxConsumed().GetEnd()
+		return end.Equal(&maxEnd)
 	})
-	assert.True(t, entries[num-1].GetEnd().Equal(manager2.GetMaxConsumed().GetEnd()))
+	end = entries[num-1].GetEnd()
+	maxEnd = manager2.GetMaxConsumed().GetEnd()
+	assert.True(t, end.Equal(&maxEnd))
 	tables1 := manager.GetInputs()
 	tables2 := manager2.GetInputs()
 	assert.True(t, tables1.Compare(tables2))
@@ -6206,9 +6215,13 @@ func TestGCDropDB(t *testing.T) {
 		if manager.GetMaxConsumed() == nil {
 			return false
 		}
-		return entries[num-1].GetEnd().Equal(manager.GetMaxConsumed().GetEnd())
+		end := entries[num-1].GetEnd()
+		maxEnd := manager.GetMaxConsumed().GetEnd()
+		return end.Equal(&maxEnd)
 	})
-	assert.True(t, entries[num-1].GetEnd().Equal(manager.GetMaxConsumed().GetEnd()))
+	end := entries[num-1].GetEnd()
+	maxEnd := manager.GetMaxConsumed().GetEnd()
+	assert.True(t, end.Equal(&maxEnd))
 	manager2 := gc.NewDiskCleaner(context.Background(), tae.Runtime.Fs, tae.BGCheckpointRunner, tae.Catalog, false)
 	manager2.Start()
 	defer manager2.Stop()
@@ -6216,9 +6229,13 @@ func TestGCDropDB(t *testing.T) {
 		if manager2.GetMaxConsumed() == nil {
 			return false
 		}
-		return entries[num-1].GetEnd().Equal(manager2.GetMaxConsumed().GetEnd())
+		end := entries[num-1].GetEnd()
+		maxEnd := manager2.GetMaxConsumed().GetEnd()
+		return end.Equal(&maxEnd)
 	})
-	assert.True(t, entries[num-1].GetEnd().Equal(manager2.GetMaxConsumed().GetEnd()))
+	end = entries[num-1].GetEnd()
+	maxEnd = manager2.GetMaxConsumed().GetEnd()
+	assert.True(t, end.Equal(&maxEnd))
 	tables1 := manager.GetInputs()
 	tables2 := manager2.GetInputs()
 	assert.True(t, tables1.Compare(tables2))
@@ -6279,9 +6296,13 @@ func TestGCDropTable(t *testing.T) {
 		if manager.GetMaxConsumed() == nil {
 			return false
 		}
-		return entries[num-1].GetEnd().Equal(manager.GetMaxConsumed().GetEnd())
+		end := entries[num-1].GetEnd()
+		maxEnd := manager.GetMaxConsumed().GetEnd()
+		return end.Equal(&maxEnd)
 	})
-	assert.True(t, entries[num-1].GetEnd().Equal(manager.GetMaxConsumed().GetEnd()))
+	end := entries[num-1].GetEnd()
+	maxEnd := manager.GetMaxConsumed().GetEnd()
+	assert.True(t, end.Equal(&maxEnd))
 	manager2 := gc.NewDiskCleaner(context.Background(), tae.Runtime.Fs, tae.BGCheckpointRunner, tae.Catalog, false)
 	manager2.Start()
 	defer manager2.Stop()
@@ -6289,9 +6310,13 @@ func TestGCDropTable(t *testing.T) {
 		if manager2.GetMaxConsumed() == nil {
 			return false
 		}
-		return entries[num-1].GetEnd().Equal(manager2.GetMaxConsumed().GetEnd())
+		end := entries[num-1].GetEnd()
+		maxEnd := manager2.GetMaxConsumed().GetEnd()
+		return end.Equal(&maxEnd)
 	})
-	assert.True(t, entries[num-1].GetEnd().Equal(manager2.GetMaxConsumed().GetEnd()))
+	end = entries[num-1].GetEnd()
+	maxEnd = manager2.GetMaxConsumed().GetEnd()
+	assert.True(t, end.Equal(&maxEnd))
 	tables1 := manager.GetInputs()
 	tables2 := manager2.GetInputs()
 	assert.True(t, tables1.Compare(tables2))
@@ -7046,9 +7071,13 @@ func TestAppendAndGC(t *testing.T) {
 		if db.DiskCleaner.GetMaxConsumed() == nil {
 			return false
 		}
-		return db.DiskCleaner.GetMaxConsumed().GetEnd().GreaterEq(minMerged.GetEnd())
+		end := db.DiskCleaner.GetMaxConsumed().GetEnd()
+		minEnd := minMerged.GetEnd()
+		return end.GreaterEq(&minEnd)
 	})
-	assert.True(t, db.DiskCleaner.GetMaxConsumed().GetEnd().GreaterEq(minMerged.GetEnd()))
+	end := db.DiskCleaner.GetMaxConsumed().GetEnd()
+	minEnd := minMerged.GetEnd()
+	assert.True(t, end.GreaterEq(&minEnd))
 	err = db.DiskCleaner.CheckGC()
 	assert.Nil(t, err)
 
@@ -7405,7 +7434,9 @@ func TestGCCheckpoint1(t *testing.T) {
 
 	globals := tae.BGCheckpointRunner.GetAllGlobalCheckpoints()
 	assert.Equal(t, 1, len(globals))
-	assert.True(t, maxGlobal.GetEnd().Equal(globals[0].GetEnd()))
+	end := maxGlobal.GetEnd()
+	maxEnd := globals[0].GetEnd()
+	assert.True(t, end.Equal(&maxEnd))
 	for _, global := range globals {
 		t.Log(global.String())
 	}
@@ -7413,7 +7444,9 @@ func TestGCCheckpoint1(t *testing.T) {
 	incrementals := tae.BGCheckpointRunner.GetAllIncrementalCheckpoints()
 	prevEnd := maxGlobal.GetEnd().Prev()
 	for _, incremental := range incrementals {
-		assert.True(t, incremental.GetStart().Equal(prevEnd.Next()))
+		startTS := incremental.GetStart()
+		prevEndNextTS := prevEnd.Next()
+		assert.True(t, startTS.Equal(&prevEndNextTS))
 		t.Log(incremental.String())
 	}
 }
@@ -8969,4 +9002,27 @@ func TestGlobalCheckpoint7(t *testing.T) {
 	}
 	assert.Equal(t, 1, len(entries))
 
+}
+
+func TestSplitCommand(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	ctx := context.Background()
+
+	opts := config.WithLongScanAndCKPOpts(nil)
+	opts.MaxMessageSize = txnbase.CmdBufReserved + 2*1024
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(2, 1)
+	schema.BlockMaxRows = 50
+	tae.BindSchema(schema)
+	bat := catalog.MockBatch(schema, 50)
+	defer bat.Close()
+
+	tae.CreateRelAndAppend(bat, true)
+
+	tae.CheckRowsByScan(50, false)
+	t.Log(tae.Catalog.SimplePPString(3))
+	tae.Restart(context.Background())
+	t.Log(tae.Catalog.SimplePPString(3))
+	tae.CheckRowsByScan(50, false)
 }

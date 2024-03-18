@@ -15,13 +15,13 @@ split_part(axbxcxd, xc, 2)
 xd
 select split_part('axbxcxd','xc',3);
 split_part(axbxcxd, xc, 3)
-
+null
 select split_part('axbxcxd','asas',1);
 split_part(axbxcxd, asas, 1)
 axbxcxd
 select split_part('axbxcxd','asas',2);
 split_part(axbxcxd, asas, 2)
-
+null
 select split_part(null,'asas',3);
 split_part(null, asas, 3)
 null
@@ -50,9 +50,9 @@ b
 c
 axb
 xd
-
+null
 axbxcxd
-
+null
 null
 null
 null

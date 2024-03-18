@@ -717,7 +717,8 @@ func (tbl *txnTable) rangesOnePart(
 				return
 			}
 			//deletes in tbl.writes maybe comes from PartitionState.rows or PartitionState.blocks.
-			if entry.fileName == "" {
+			if entry.fileName == "" &&
+				entry.tableId != catalog.MO_DATABASE_ID && entry.tableId != catalog.MO_TABLES_ID && entry.tableId != catalog.MO_COLUMNS_ID {
 				vs := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
 				for _, v := range vs {
 					id, _ := v.Decode()
@@ -1137,7 +1138,7 @@ func (tbl *txnTable) GetTableDef(ctx context.Context) *plan.TableDef {
 				cols = append(cols, &plan.ColDef{
 					ColId: attr.Attr.ID,
 					Name:  attr.Attr.Name,
-					Typ: &plan.Type{
+					Typ: plan.Type{
 						Id:          int32(attr.Attr.Type.Oid),
 						Width:       attr.Attr.Type.Width,
 						Scale:       attr.Attr.Type.Scale,
@@ -1640,7 +1641,7 @@ func (tbl *txnTable) compaction(
 		for i := 0; i < len(tbl.tableDef.Cols)-1; i++ {
 			col := tbl.tableDef.Cols[i]
 			idxs = append(idxs, uint16(col.Seqnum))
-			typs = append(typs, vector.ProtoTypeToType(col.Typ))
+			typs = append(typs, vector.ProtoTypeToType(&col.Typ))
 		}
 		tbl.seqnums = idxs
 		tbl.typs = typs
@@ -2249,6 +2250,7 @@ func (tbl *txnTable) PKPersistedBetween(
 
 		colExpr := newColumnExpr(0, plan2.MakePlan2Type(keys.GetType()), "pk")
 
+		keys.InplaceSort()
 		bytes, _ := keys.MarshalBinary()
 		inExpr := plan2.MakeInExpr(
 			tbl.proc.Load().Ctx,
@@ -2308,7 +2310,7 @@ func (tbl *txnTable) PrimaryKeysMayBeModified(
 		keysVector)
 }
 
-func (tbl *txnTable) updateDeleteInfo(
+func (tbl *txnTable) transferRowid(
 	ctx context.Context,
 	state *logtailreplay.PartitionState,
 	deleteObjs,
@@ -2407,7 +2409,7 @@ func (tbl *txnTable) updateDeleteInfo(
 				}
 			}
 			if beTransfered != toTransfer {
-				logutil.Fatalf("xxxx transfer rowid failed, beTransfered:%d, toTransfer:%d, total %d",
+				logutil.Fatalf("xxxx transfer rowid failed,beTransfered:%d, toTransfer:%d, total %d",
 					beTransfered, toTransfer, len(rowids))
 			}
 
@@ -2428,7 +2430,7 @@ func (tbl *txnTable) readNewRowid(vec *vector.Vector, row int,
 	tableDef := tbl.GetTableDef(context.TODO())
 	for _, col := range tableDef.Cols {
 		if col.Name == tableDef.Pkey.PkeyColName {
-			typ = col.Typ
+			typ = &col.Typ
 			columns = append(columns, uint16(col.Seqnum))
 			colTypes = append(colTypes, types.T(col.Typ.Id).ToType())
 		}

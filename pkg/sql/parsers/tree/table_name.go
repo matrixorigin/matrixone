@@ -17,7 +17,7 @@ package tree
 type TableName struct {
 	TableExpr
 	objName
-	AtTimeStampClause *AtTimeStampClause
+	AtTsExpr *AtTimeStamp
 }
 
 func (tn TableName) Format(ctx *FmtCtx) {
@@ -30,8 +30,10 @@ func (tn TableName) Format(ctx *FmtCtx) {
 		ctx.WriteByte('.')
 	}
 	ctx.WriteString(string(tn.ObjectName))
-	if tn.AtTimeStampClause != nil {
-		tn.AtTimeStampClause.Format(ctx)
+	if tn.AtTsExpr != nil {
+		ctx.WriteString("{")
+		tn.AtTsExpr.Format(ctx)
+		ctx.WriteString("}")
 	}
 }
 
@@ -61,56 +63,20 @@ func (node *TableNames) Format(ctx *FmtCtx) {
 	}
 }
 
-func NewTableName(name Identifier, prefix ObjectNamePrefix, atTs *AtTimeStampClause) *TableName {
+func NewTableName(name Identifier, prefix ObjectNamePrefix, AtTsExpr *AtTimeStamp) *TableName {
 	return &TableName{
 		objName: objName{
 			ObjectName:       name,
 			ObjectNamePrefix: prefix,
 		},
-		AtTimeStampClause: atTs,
+		AtTsExpr: AtTsExpr,
 	}
 }
 
-type AtTimeStampClause struct {
-	TimeStampExpr *TimeStampExpr
+type AtTimeStamp struct {
+	Expr Expr
 }
 
-func (node *AtTimeStampClause) Format(ctx *FmtCtx) {
-	ctx.WriteString("@")
-	if node.TimeStampExpr != nil {
-		node.TimeStampExpr.Format(ctx)
-	}
-}
-
-type TimeStampExpr struct {
-	Type ATTimeStampType
-	Expr string
-}
-
-func (node *TimeStampExpr) Format(ctx *FmtCtx) {
-	ctx.WriteString(node.Type.String())
-	if node.Expr != "" {
-		ctx.WriteByte('@')
-		ctx.WriteString(node.Expr)
-	}
-}
-
-type ATTimeStampType int
-
-const (
-	ATTIMESTAMPNONE ATTimeStampType = iota
-	ATTIMESTAMPTIME
-	ATTIMESTAMPSNAPSHOT
-)
-
-func (a ATTimeStampType) String() string {
-	switch a {
-	case ATTIMESTAMPNONE:
-		return "none"
-	case ATTIMESTAMPTIME:
-		return "timestamp"
-	case ATTIMESTAMPSNAPSHOT:
-		return "snapshot"
-	}
-	return "unknown"
+func (node *AtTimeStamp) Format(ctx *FmtCtx) {
+	node.Expr.Format(ctx)
 }

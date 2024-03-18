@@ -117,7 +117,8 @@ func (blk *block) GetColumnDataById(
 func (blk *block) CoarseCheckAllRowsCommittedBefore(ts types.TS) bool {
 	blk.meta.RLock()
 	defer blk.meta.RUnlock()
-	return blk.meta.GetCreatedAtLocked().Less(ts)
+	creatTS := blk.meta.GetCreatedAtLocked()
+	return creatTS.Less(&ts)
 }
 
 func (blk *block) BatchDedup(

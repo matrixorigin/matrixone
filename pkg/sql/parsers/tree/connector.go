@@ -20,20 +20,20 @@ func init() {
 	reuse.CreatePool[DropConnector](
 		func() *DropConnector { return &DropConnector{} },
 		func(d *DropConnector) { d.reset() },
-		reuse.DefaultOptions[DropConnector]().
-			WithEnableChecker())
+		reuse.DefaultOptions[DropConnector](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[CreateConnector](
 		func() *CreateConnector { return &CreateConnector{} },
 		func(c *CreateConnector) { c.reset() },
-		reuse.DefaultOptions[CreateConnector]().
-			WithEnableChecker())
+		reuse.DefaultOptions[CreateConnector](), //.
+	) //WithEnableChecker()
 
 	reuse.CreatePool[ConnectorOption](
 		func() *ConnectorOption { return &ConnectorOption{} },
 		func(c *ConnectorOption) { c.reset() },
-		reuse.DefaultOptions[ConnectorOption]().
-			WithEnableChecker())
+		reuse.DefaultOptions[ConnectorOption](), //.
+	) //WithEnableChecker()
 }
 
 type DropConnector struct {
@@ -77,6 +77,13 @@ type CreateConnector struct {
 	Options   []*ConnectorOption
 }
 
+func NewCreateConnector(t *TableName, o []*ConnectorOption) *CreateConnector {
+	createView := reuse.Alloc[CreateConnector](nil)
+	createView.TableName = t
+	createView.Options = o
+	return createView
+}
+
 func (node *CreateConnector) Format(ctx *FmtCtx) {
 	ctx.WriteString("create connector for ")
 	node.TableName.Format(ctx)
@@ -102,11 +109,11 @@ func (node CreateConnector) TypeName() string { return "tree.CreateConnector" }
 
 func (node *CreateConnector) reset() {
 	// if node.TableName != nil {
-	// 	reuse.Free[TableName](node.TableName, nil)
+	// node.TableName.Free()
 	// }
 	// if node.Options != nil {
 	// 	for _, item := range node.Options {
-	// 		reuse.Free[ConnectorOption](item, nil)
+	// item.Free()
 	// 	}
 	// }
 	*node = CreateConnector{}
@@ -116,6 +123,13 @@ type ConnectorOption struct {
 	createOptionImpl
 	Key Identifier
 	Val Expr
+}
+
+func NewConnectorOption(k Identifier, v Expr) *ConnectorOption {
+	option := reuse.Alloc[ConnectorOption](nil)
+	option.Key = k
+	option.Val = v
+	return option
 }
 
 func (node *ConnectorOption) Format(ctx *FmtCtx) {

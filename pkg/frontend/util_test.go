@@ -634,6 +634,7 @@ func TestGetExprValue(t *testing.T) {
 		ws.EXPECT().GetSnapshotWriteOffset().Return(0).AnyTimes()
 		ws.EXPECT().UpdateSnapshotWriteOffset().AnyTimes()
 		ws.EXPECT().Adjust(gomock.Any()).AnyTimes()
+		ws.EXPECT().TransferRowID().AnyTimes()
 
 		txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
 		txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
@@ -643,7 +644,8 @@ func TestGetExprValue(t *testing.T) {
 		txnOperator.EXPECT().ResetRetry(gomock.Any()).AnyTimes()
 		txnOperator.EXPECT().TxnOptions().Return(txn.TxnOptions{}).AnyTimes()
 		txnOperator.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()
-
+		txnOperator.EXPECT().EnterRunSql().Return().AnyTimes()
+		txnOperator.EXPECT().ExitRunSql().Return().AnyTimes()
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
 		txnClient.EXPECT().New(gomock.Any(), gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
 
@@ -739,6 +741,7 @@ func TestGetExprValue(t *testing.T) {
 		ws.EXPECT().Adjust(uint64(0)).AnyTimes()
 		ws.EXPECT().IncrSQLCount().AnyTimes()
 		ws.EXPECT().GetSQLCount().AnyTimes()
+		ws.EXPECT().TransferRowID().AnyTimes()
 
 		txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
 		txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
@@ -748,7 +751,8 @@ func TestGetExprValue(t *testing.T) {
 		txnOperator.EXPECT().ResetRetry(gomock.Any()).AnyTimes()
 		txnOperator.EXPECT().TxnOptions().Return(txn.TxnOptions{}).AnyTimes()
 		txnOperator.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()
-
+		txnOperator.EXPECT().EnterRunSql().Return().AnyTimes()
+		txnOperator.EXPECT().ExitRunSql().Return().AnyTimes()
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
 		txnClient.EXPECT().New(gomock.Any(), gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
 

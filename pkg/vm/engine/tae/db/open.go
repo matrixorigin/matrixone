@@ -181,7 +181,8 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 		func(item any) bool {
 			checkpoint := item.(*checkpoint.CheckpointEntry)
 			ts := types.BuildTS(time.Now().UTC().UnixNano()-int64(opts.GCCfg.GCTTL), 0)
-			return !checkpoint.GetEnd().GreaterEq(ts)
+			endTS := checkpoint.GetEnd()
+			return !endTS.GreaterEq(&ts)
 		})
 	// Init gc manager at last
 	// TODO: clean-try-gc requires configuration parameters
