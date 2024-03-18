@@ -160,7 +160,7 @@ func NewFlushTableTailTask(
 		if hdl.IsAppendable() {
 			task.ablksMetas = append(task.ablksMetas, blk)
 			task.ablksHandles = append(task.ablksHandles, hdl)
-			if blk.GetBlockData().CheckFlushTaskRetry(txn.GetStartTS()) {
+			if blk.GetObjectData().CheckFlushTaskRetry(txn.GetStartTS()) {
 				return nil, txnif.ErrTxnNeedRetry
 			}
 		} else {

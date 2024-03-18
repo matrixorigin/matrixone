@@ -39,7 +39,7 @@ import (
 
 type aobject struct {
 	*baseObject
-	frozen atomic.Bool
+	frozen     atomic.Bool
 	freezelock sync.Mutex
 }
 

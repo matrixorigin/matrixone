@@ -270,7 +270,7 @@ func (n *AppendMVCCHandle) PrepareCompact() bool {
 	return n.allAppendsCommitted()
 }
 
-func (n *MVCCHandle) GetLatestAppendPrepareTSLocked() types.TS {
+func (n *AppendMVCCHandle) GetLatestAppendPrepareTSLocked() types.TS {
 	return n.appends.GetUpdateNodeLocked().Prepare
 }
 

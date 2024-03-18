@@ -181,7 +181,7 @@ func (blk *baseObject) TryUpgrade() (err error) {
 	return
 }
 
-func (blk *baseObject) GetMeta() any              { return blk.meta }
+func (blk *baseObject) GetMeta() any { return blk.meta }
 func (blk *baseObject) CheckFlushTaskRetry(startts types.TS) bool {
 	blk.RLock()
 	defer blk.RUnlock()
