@@ -50,10 +50,10 @@ func (sm *SnapshotMeta)Update(data *CheckpointData) *SnapshotMeta {
 	ins := data.GetObjectBatchs()
 	insDeleteTSVec := ins.GetVectorByName(catalog.EntryNode_DeleteAt).GetDownstreamVector()
 	insCreateTSVec := ins.GetVectorByName(catalog.EntryNode_CreateAt).GetDownstreamVector()
-	tid := ins.GetVectorByName(catalog.SnapshotAttr_TID).GetDownstreamVector()
+	insTableIDVec := ins.GetVectorByName(SnapshotAttr_TID).GetDownstreamVector()
 	for i:=0; i<ins.Length(); i++ {
 		var objectStats *objectio.ObjectStats
-		table := vector.GetFixedAt[uint64](types.T_uint64, tid, i)
+		table := vector.GetFixedAt[uint64](insTableIDVec, i)
 		if table != sm.tid {
 			continue
 		}
