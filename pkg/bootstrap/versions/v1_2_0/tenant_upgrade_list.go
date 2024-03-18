@@ -128,19 +128,3 @@ var upg_sql_statement_cu = versions.UpgradeEntry{
 		return false, nil
 	},
 }
-
-// CREATE VIEW IF NOT EXISTS `system_metrics`.`sql_statement_duration_total` as select `collecttime`, `value`, `node`, `role`, `account`, `type` from `system_metrics`.`metric` where `metric_name` = "sql_statement_duration_total"
-//var upg_sql_dut_total = versions.UpgradeEntry{
-//	Schema:    `system_metrics`,
-//	TableName: `sql_statement_duration_total`,
-//	UpgType:   versions.CREATE_VIEW,
-//	TableType: versions.SYSTEM_VIEW,
-//	UpgSql: fmt.Sprintf("CREATE VIEW IF NOT EXISTS `%s`.`%s` as "+
-//		"select `collecttime`, `value`, `node`, `role`, `account`, `type` "+
-//		"from `system_metrics`.`metric` "+
-//		"where `metric_name` = 'sql_statement_duration_total'",
-//		catalog.MO_SYSTEM_METRICS, "sql_statement_duration_total"),
-//	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
-//		return false, nil
-//	},
-//}

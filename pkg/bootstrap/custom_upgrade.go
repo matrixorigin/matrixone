@@ -28,15 +28,20 @@ import (
 )
 
 func (s *service) UpgradeTenant(ctx context.Context, tenantName string, isALLAccount bool) (bool, error) {
+	err := s.UpgradePreCheck(ctx)
+	if err != nil {
+		return true, err
+	}
+
 	if isALLAccount {
 		return true, s.BootstrapUpgrade(ctx)
 	} else {
-		err := s.CheckAndUpgradeCluster(ctx)
+		err = s.CheckAndUpgradeCluster(ctx)
 		if err != nil {
 			return true, err
 		}
 
-		tenantID, err := s.UpgradeAccountPreCheck(ctx, tenantName)
+		tenantID, err := s.CheckUpgradeAccount(ctx, tenantName)
 		if err != nil {
 			return true, err
 		}
@@ -48,6 +53,8 @@ func (s *service) UpgradeTenant(ctx context.Context, tenantName string, isALLAcc
 	return true, nil
 }
 
+// CheckAndUpgradeCluster Before manually upgrade, it is necessary to ensure that the cluster upgrade is completed.
+// When performing the cluster upgrade, the tenant upgrade task will be initialized
 func (s *service) CheckAndUpgradeCluster(ctx context.Context) error {
 	s.adjustUpgrade()
 
@@ -117,7 +124,7 @@ func (s *service) UpgradeOneTenant(
 					break
 				}
 
-				upgrades, err := versions.GetUpgradeVersions(latestVersion.Version, txn, false, true)
+				upgrades, err := versions.GetUpgradeVersions(latestVersion.Version, latestVersion.VersionOffset, txn, false, true)
 				if err != nil {
 					return err
 				}
@@ -160,8 +167,8 @@ func (s *service) UpgradeOneTenant(
 	return upgraded, nil
 }
 
-// UpgradeAccountPreCheck Custom upgrade account pre check
-func (s *service) UpgradeAccountPreCheck(ctx context.Context, accountName string) (int32, error) {
+// CheckUpgradeAccount Custom upgrade account Check if the tenant name exists and is legal
+func (s *service) CheckUpgradeAccount(ctx context.Context, accountName string) (int32, error) {
 	var accountId int32
 
 	opts := executor.Options{}.
@@ -174,6 +181,8 @@ func (s *service) UpgradeAccountPreCheck(ctx context.Context, accountName string
 			var err error = nil
 			accountId, err = GetAccountIdByName(accountName, txn)
 			if err != nil {
+				getUpgradeLogger().Error("failed to get accountId by accountName when upgrade account",
+					zap.Error(err))
 				return err
 			}
 			return nil
@@ -182,6 +191,7 @@ func (s *service) UpgradeAccountPreCheck(ctx context.Context, accountName string
 	return accountId, err
 }
 
+// GetAccountIdByName get accountId by accountName when upgrade account
 func GetAccountIdByName(accountName string, txn executor.TxnExecutor) (int32, error) {
 	sql := fmt.Sprintf("select account_id, account_name from %s.%s where account_name = '%s'",
 		catalog.MO_CATALOG, catalog.MOAccountTable, accountName)
@@ -201,4 +211,66 @@ func GetAccountIdByName(accountName string, txn executor.TxnExecutor) (int32, er
 		return -1, moerr.NewInvalidInputNoCtx("The input account name '%s' is invalid, please check input!", accountName)
 	}
 	return accountId, nil
+}
+
+// UpgradePreCheck Manual upgrade environment pre check, check if there are any unready upgrade tasks in upgrade environment.
+// If there are, the unready upgrade tasks need to be processed first
+func (s *service) UpgradePreCheck(ctx context.Context) error {
+	opts := executor.Options{}.
+		WithDatabase(catalog.MO_CATALOG).
+		WithMinCommittedTS(s.now()).
+		WithWaitCommittedLogApplied()
+	err := s.exec.ExecTxn(
+		ctx,
+		func(txn executor.TxnExecutor) error {
+			created, err := versions.IsFrameworkTablesCreated(txn)
+			if err != nil {
+				getUpgradeLogger().Error("failed to check upgrade framework",
+					zap.Error(err))
+				return err
+			}
+			if !created {
+				return nil
+			}
+
+			unReady, err := checkUpgradeEnvUnReady(txn)
+			if err != nil {
+				getUpgradeLogger().Error("failed to check task status in pgrade environment", zap.Error(err))
+				return err
+			}
+
+			if unReady {
+				getUpgradeLogger().Info("There are unexecuted tenant upgrade tasks in upgrade environment, start asynchronous supplementary execution")
+				s.adjustUpgrade()
+				if err := s.stopper.RunTask(s.asyncUpgradeTask); err != nil {
+					return err
+				}
+				for i := 0; i < s.upgrade.upgradeTenantTasks; i++ {
+					if err := s.stopper.RunTask(s.asyncUpgradeTenantTask); err != nil {
+						return err
+					}
+				}
+				return moerr.NewInternalError(ctx, "There is an untrigged upgrade tasks in the system, execution started, Please try again later")
+			}
+			return nil
+		},
+		opts)
+	return err
+}
+
+// checkUpgradeEnvUnReady Check if the upgrade environment is ready
+func checkUpgradeEnvUnReady(txn executor.TxnExecutor) (bool, error) {
+	sql := fmt.Sprintf("select id, from_version, to_version, final_version, final_version_offset from %s.%s where state = 1",
+		catalog.MO_CATALOG, catalog.MOUpgradeTable)
+	res, err := txn.Exec(sql, executor.StatementOption{})
+	if err != nil {
+		return false, err
+	}
+
+	var loaded bool
+	res.ReadRows(func(rows int, cols []*vector.Vector) bool {
+		loaded = true
+		return false
+	})
+	return loaded, nil
 }

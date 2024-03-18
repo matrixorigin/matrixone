@@ -31,7 +31,8 @@ var (
 			Version:           "1.2.0",
 			MinUpgradeVersion: "1.1.0",
 			UpgradeCluster:    versions.Yes,
-			UpgradeTenant:     versions.No,
+			UpgradeTenant:     versions.Yes,
+			VersionOffset:     uint32(len(clusterUpgEntries) + len(tenantUpgEntries)),
 		},
 	}
 )
@@ -72,6 +73,8 @@ func (v *versionHandle) Prepare(
 	}
 	//-------------------------------1. all tenants prepare process-------------------------------------
 	for _, tenantID := range tenants {
+		// NOTE: The `alter table` statements used for upgrading system table rely on `mo_foreign_keys`,
+		// so preprocessing is performed first
 		err = upg_mo_foreign_keys.Upgrade(txn, uint32(tenantID))
 		if err != nil {
 			return err

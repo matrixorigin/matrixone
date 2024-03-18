@@ -16,6 +16,8 @@ package versions
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
@@ -145,32 +147,56 @@ func (u *UpgradeEntry) Upgrade(txn executor.TxnExecutor, accountId uint32) error
 	return nil
 }
 
+func (u *UpgradeEntry) String() string {
+	return fmt.Sprintf("UpgradeEntry info: \nupgrade type:%v schema: %s.%s, upgrade sql:\n %s",
+		u.UpgType,
+		u.Schema,
+		u.TableName,
+		u.UpgSql)
+}
+
 // CheckTableColumn Check if the columns in the table exist, and if so,
-// return the detailed information of the columns
+// return the detailed information of the column
 func CheckTableColumn(txn executor.TxnExecutor,
 	accountId uint32,
 	schema string,
 	tableName string,
 	columnName string) (ColumnInfo, error) {
-
 	colInfo := ColumnInfo{
 		IsExits: false,
 		Name:    columnName,
 	}
 
-	sql := fmt.Sprintf(`select data_type,
-       			is_nullable,
-    			character_maximum_length, 
-       			numeric_precision, 
-       			numeric_scale, 
-       			datetime_precision, 
-       			ordinal_position,
-       			column_default,
-       			extra,
-				column_comment
-				from information_schema.columns 
-                where table_schema = '%s' and table_name = '%s' and column_name = '%s'`,
-		schema, tableName, columnName)
+	sql := fmt.Sprintf(`SELECT mo_show_visible_bin(atttyp, 2) AS DATA_TYPE, 
+       CASE WHEN attnotnull != 0 THEN 'NO' ELSE 'YES' END AS IS_NULLABLE, 
+       internal_char_length(atttyp) AS CHARACTER_MAXIMUM_LENGTH, 
+       internal_numeric_precision(atttyp) AS NUMERIC_PRECISION, 
+       internal_numeric_scale(atttyp) AS NUMERIC_SCALE, 
+       internal_datetime_scale(atttyp) AS DATETIME_PRECISION, 
+       attnum AS ORDINAL_POSITION, 
+       mo_show_visible_bin(att_default, 1) AS COLUMN_DEFAULT, 
+       CASE WHEN att_is_auto_increment = 1 THEN 'auto_increment' ELSE '' END AS EXTRA, 
+       att_comment AS COLUMN_COMMENT FROM mo_catalog.mo_columns 
+            WHERE att_relname != 'mo_increment_columns' AND att_relname NOT LIKE '__mo_cpkey_%%' 
+            AND attname != '__mo_rowid' 
+            AND att_database = '%s' and att_relname = '%s' and attname = '%s';`, schema, tableName, columnName)
+
+	if accountId == catalog.System_Account {
+		sql = fmt.Sprintf(`SELECT mo_show_visible_bin(atttyp, 2) AS DATA_TYPE, 
+       CASE WHEN attnotnull != 0 THEN 'NO' ELSE 'YES' END AS IS_NULLABLE, 
+       internal_char_length(atttyp) AS CHARACTER_MAXIMUM_LENGTH, 
+       internal_numeric_precision(atttyp) AS NUMERIC_PRECISION, 
+       internal_numeric_scale(atttyp) AS NUMERIC_SCALE, 
+       internal_datetime_scale(atttyp) AS DATETIME_PRECISION, 
+       attnum AS ORDINAL_POSITION, 
+       mo_show_visible_bin(att_default, 1) AS COLUMN_DEFAULT, 
+       CASE WHEN att_is_auto_increment = 1 THEN 'auto_increment' ELSE '' END AS EXTRA, 
+       att_comment AS COLUMN_COMMENT FROM mo_catalog.mo_columns 
+            WHERE att_relname != 'mo_increment_columns' AND att_relname NOT LIKE '__mo_cpkey_%%' 
+            AND attname != '__mo_rowid' AND account_id = 0 
+            AND att_database = '%s' and att_relname = '%s' and attname = '%s';`, schema, tableName, columnName)
+	}
+
 	res, err := txn.Exec(sql, executor.StatementOption{}.WithAccountID(accountId))
 	if err != nil {
 		return colInfo, err
@@ -208,8 +234,11 @@ func CheckTableColumn(txn executor.TxnExecutor,
 
 // CheckViewDefinition Check if the view exists, if so, return true and return the view definition
 func CheckViewDefinition(txn executor.TxnExecutor, accountId uint32, schema string, viewName string) (bool, string, error) {
-	sql := fmt.Sprintf(`select view_definition from information_schema.views
-                       where table_schema = '%s' and table_name = '%s'`, schema, viewName)
+	sql := fmt.Sprintf("SELECT tbl.rel_createsql AS `VIEW_DEFINITION` FROM mo_catalog.mo_tables tbl LEFT JOIN mo_catalog.mo_user usr ON tbl.creator = usr.user_id WHERE tbl.relkind = 'v' AND tbl.reldatabase = '%s'  AND  tbl.relname = '%s'", schema, viewName)
+	if accountId == catalog.System_Account {
+		sql = fmt.Sprintf("SELECT tbl.rel_createsql AS `VIEW_DEFINITION` FROM mo_catalog.mo_tables tbl LEFT JOIN mo_catalog.mo_user usr ON tbl.creator = usr.user_id WHERE tbl.relkind = 'v' AND account_id = 0 AND tbl.reldatabase = '%s'  AND  tbl.relname = '%s'", schema, viewName)
+	}
+
 	res, err := txn.Exec(sql, executor.StatementOption{}.WithAccountID(accountId))
 	if err != nil {
 		return false, "", err
@@ -232,9 +261,49 @@ func CheckViewDefinition(txn executor.TxnExecutor, accountId uint32, schema stri
 	return loaded, view_def, nil
 }
 
-// CheckTableDefinition Check if the table exists, return true if it exists
+// CheckTableDefinition is used to check if the specified table definition exists in the specified database. If it exists,
+// return true; otherwise, return false.
 func CheckTableDefinition(txn executor.TxnExecutor, accountId uint32, schema string, tableName string) (bool, error) {
-	sql := fmt.Sprintf(`select * from information_schema.tables where table_schema = '%s' and table_name = '%s'`, schema, tableName)
+	if schema == "" || tableName == "" {
+		return false, moerr.NewInternalErrorNoCtx("schema name or table name is empty")
+	}
+
+	sql := fmt.Sprintf(`SELECT reldatabase, relname, account_id FROM mo_catalog.mo_tables tbl 
+                              WHERE tbl.relname NOT LIKE '__mo_index_%%' AND tbl.relkind != 'partition' 
+                              AND reldatabase = '%s' AND relname = '%s'`, schema, tableName)
+	if accountId == catalog.System_Account {
+		sql = fmt.Sprintf(`SELECT reldatabase, relname, account_id FROM mo_catalog.mo_tables tbl 
+                                  WHERE tbl.relname NOT LIKE '__mo_index_%%' AND tbl.relkind != 'partition' 
+                                  AND account_id = 0 AND reldatabase = '%s' AND relname = '%s'`, schema, tableName)
+	}
+
+	res, err := txn.Exec(sql, executor.StatementOption{}.WithAccountID(accountId))
+	if err != nil {
+		return false, err
+	}
+	defer res.Close()
+
+	loaded := false
+	res.ReadRows(func(rows int, cols []*vector.Vector) bool {
+		loaded = true
+		return false
+	})
+
+	return loaded, nil
+}
+
+// CheckDatabaseDefinition This function is used to check if the database definition exists.
+// If it exists, return true; otherwise, return false.
+func CheckDatabaseDefinition(txn executor.TxnExecutor, accountId uint32, schema string) (bool, error) {
+	if schema == "" {
+		return false, moerr.NewInternalErrorNoCtx("schema name is empty")
+	}
+
+	sql := fmt.Sprintf(`select datname from mo_catalog.mo_database where datname = '%s'`, schema)
+	if accountId == catalog.System_Account {
+		sql = fmt.Sprintf(`select datname from mo_catalog.mo_database where account_id = 0 and datname = '%s'`, schema)
+	}
+
 	res, err := txn.Exec(sql, executor.StatementOption{}.WithAccountID(accountId))
 	if err != nil {
 		return false, err

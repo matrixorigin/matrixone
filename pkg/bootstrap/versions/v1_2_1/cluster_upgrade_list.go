@@ -21,7 +21,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
 
-var clusterUpgEntries = []versions.UpgradeEntry{upg_test_view, upg_test_table}
+var clusterUpgEntries = []versions.UpgradeEntry{
+	upg_test_view,
+	upg_test_table,
+}
 
 var test_view_sql = fmt.Sprintf("CREATE VIEW information_schema.wuxiliang_cluster_view_v121 AS select "+
 	"'def' as TABLE_CATALOG,"+

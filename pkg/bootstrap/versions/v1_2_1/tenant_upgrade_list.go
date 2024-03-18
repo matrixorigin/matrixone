@@ -17,10 +17,14 @@ package v1_2_1
 import (
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
 
-var tenantUpgEntries = []versions.UpgradeEntry{upg_wuxiliang_test}
+var tenantUpgEntries = []versions.UpgradeEntry{
+	upg_wuxiliang_test,
+	upg_sql_wuxiliang_append_v121,
+}
 
 const INFORMATION_SCHEMA = "information_schema"
 
@@ -47,6 +51,22 @@ var upg_wuxiliang_test = versions.UpgradeEntry{
 		if isExisted {
 			return true, nil
 		}
+		return false, nil
+	},
+}
+
+// CREATE VIEW IF NOT EXISTS `system_metrics`.`sql_statement_duration_total` as select `collecttime`, `value`, `node`, `role`, `account`, `type` from `system_metrics`.`metric` where `metric_name` = "sql_statement_duration_total"
+var upg_sql_wuxiliang_append_v121 = versions.UpgradeEntry{
+	Schema:    `system_metrics`,
+	TableName: `sql_wuxiliang_append_v121`,
+	UpgType:   versions.CREATE_VIEW,
+	TableType: versions.SYSTEM_VIEW,
+	UpgSql: fmt.Sprintf("CREATE VIEW IF NOT EXISTS `%s`.`%s` as "+
+		"select `collecttime`, `value`, `node`, `role`, `account`, `type` "+
+		"from `system_metrics`.`metric` "+
+		"where `metric_name` = 'sql_statement_duration_total'",
+		catalog.MO_SYSTEM_METRICS, "sql_wuxiliang_append_v121"),
+	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
 		return false, nil
 	},
 }

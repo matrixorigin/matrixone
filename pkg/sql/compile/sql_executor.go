@@ -230,6 +230,8 @@ func (exec *txnExecutor) Exec(
 	statementOption executor.StatementOption) (executor.Result, error) {
 
 	//-----------------------------------------------------------------------------------------
+	// NOTE: This code is to restore tenantID information in the Context when temporarily switching tenants
+	// so that it can be restored to its original state after completing the task.
 	recoverAccount := func(exec *txnExecutor, accId uint32) {
 		exec.ctx = context.WithValue(exec.ctx, defines.TenantIDKey{}, accId)
 	}
@@ -247,6 +249,7 @@ func (exec *txnExecutor) Exec(
 		defer recoverAccount(exec, originAccountID)
 	}
 	//-----------------------------------------------------------------------------------------
+
 	receiveAt := time.Now()
 	stmts, err := parsers.Parse(exec.ctx, dialect.MYSQL, sql, 1)
 	defer func() {

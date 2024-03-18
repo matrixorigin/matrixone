@@ -84,7 +84,7 @@ func (s *service) MaybeUpgradeTenant(
 					break
 				}
 
-				upgrades, err := versions.GetUpgradeVersions(latestVersion.Version, txn, false, true)
+				upgrades, err := versions.GetUpgradeVersions(latestVersion.Version, latestVersion.VersionOffset, txn, false, true)
 				if err != nil {
 					return err
 				}
@@ -193,7 +193,7 @@ func (s *service) asyncUpgradeTenantTask(ctx context.Context) {
 						zap.String("upgrade", upgrade.String()))
 
 					// createVersion >= upgrade.ToVersion already upgrade
-					if versions.Compare(createVersion, upgrade.ToVersion) >= 0 {
+					if versions.Compare(createVersion, upgrade.ToVersion) > 0 {
 						continue
 					}
 

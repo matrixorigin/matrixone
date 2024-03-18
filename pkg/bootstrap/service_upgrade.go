@@ -157,11 +157,11 @@ func (s *service) doCheckUpgrade(ctx context.Context) error {
 			// 1: already checked, version exists
 			// 2: add upgrades from latest version to final version
 			checker := func() (bool, error) {
-				if v.Version == final.Version {
+				if v.Version == final.Version && v.VersionOffset >= final.VersionOffset {
 					return true, nil
 				}
 
-				state, ok, err := versions.GetVersionState(final.Version, txn, false)
+				state, ok, err := versions.GetVersionState(final.Version, final.VersionOffset, txn, false)
 				if err == nil && ok && state == versions.StateReady {
 					s.upgrade.finalVersionCompleted.Store(true)
 				}
@@ -174,7 +174,7 @@ func (s *service) doCheckUpgrade(ctx context.Context) error {
 			}
 
 			addUpgradesToFinalVersion := func() error {
-				if err := versions.AddVersion(final.Version, versions.StateCreated, txn); err != nil {
+				if err := versions.AddVersion(final.Version, final.VersionOffset, versions.StateCreated, txn); err != nil {
 					getUpgradeLogger().Error("failed to add final version",
 						zap.String("final", final.Version),
 						zap.Error(err))
@@ -194,20 +194,22 @@ func (s *service) doCheckUpgrade(ctx context.Context) error {
 
 				getUpgradeLogger().Info("current latest ready version loaded",
 					zap.String("latest", latest),
-					zap.String("final", final.Version))
+					zap.String("final", final.Version),
+					zap.Int32("versionOffset", int32(final.VersionOffset)))
 
 				var upgrades []versions.VersionUpgrade
 				from := latest
 				append := func(v versions.Version) {
 					order := int32(len(upgrades))
 					u := versions.VersionUpgrade{
-						FromVersion:    from,
-						ToVersion:      v.Version,
-						FinalVersion:   final.Version,
-						State:          versions.StateCreated,
-						UpgradeOrder:   order,
-						UpgradeCluster: v.UpgradeCluster,
-						UpgradeTenant:  v.UpgradeTenant,
+						FromVersion:        from,
+						ToVersion:          v.Version,
+						FinalVersion:       final.Version,
+						FinalVersionOffset: final.VersionOffset,
+						State:              versions.StateCreated,
+						UpgradeOrder:       order,
+						UpgradeCluster:     v.UpgradeCluster,
+						UpgradeTenant:      v.UpgradeTenant,
 					}
 					upgrades = append(upgrades, u)
 
@@ -298,21 +300,24 @@ func (s *service) performUpgrade(
 	final := s.getFinalVersionHandle().Metadata()
 
 	// make sure only one cn can execute upgrade logic
-	state, ok, err := versions.GetVersionState(final.Version, txn, true)
+	state, ok, err := versions.GetVersionState(final.Version, final.VersionOffset, txn, true)
 	if err != nil {
 		getUpgradeLogger().Error("failed to load final version state",
 			zap.String("final", final.Version),
+			zap.Int32("versionOffset", int32(final.VersionOffset)),
 			zap.Error(err))
 		return false, err
 	}
 	if !ok {
 		getUpgradeLogger().Info("final version not found, retry later",
-			zap.String("final", final.Version))
+			zap.String("final", final.Version),
+			zap.Int32("versionOffset", int32(final.VersionOffset)))
 		return false, nil
 	}
 
 	getUpgradeLogger().Info("final version state loaded",
 		zap.String("final", final.Version),
+		zap.Int32("versionOffset", int32(final.VersionOffset)),
 		zap.Int32("state", state))
 
 	if state == versions.StateReady {
@@ -320,7 +325,7 @@ func (s *service) performUpgrade(
 	}
 
 	// get upgrade steps, and perform upgrade one by one
-	upgrades, err := versions.GetUpgradeVersions(final.Version, txn, true, true)
+	upgrades, err := versions.GetUpgradeVersions(final.Version, final.VersionOffset, txn, true, true)
 	if err != nil {
 		getUpgradeLogger().Error("failed to load upgrades",
 			zap.String("final", final.Version),
@@ -360,7 +365,7 @@ func (s *service) performUpgrade(
 	}
 
 	// all upgrades completed, update final version to ready state.
-	if err := versions.UpdateVersionState(final.Version, versions.StateReady, txn); err != nil {
+	if err := versions.UpdateVersionState(final.Version, final.VersionOffset, versions.StateReady, txn); err != nil {
 		getUpgradeLogger().Error("failed to update state",
 			zap.String("final", final.Version),
 			zap.Error(err))

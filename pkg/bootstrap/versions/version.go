@@ -45,20 +45,23 @@ func (v Version) CanDirectUpgrade(version string) bool {
 }
 
 func (v Version) GetInsertSQL(state int32) string {
-	return fmt.Sprintf(`insert into %s values ('%s', %d, current_timestamp(), current_timestamp())`,
+	return fmt.Sprintf(`insert into %s values ('%s', %d, %d, current_timestamp(), current_timestamp())`,
 		catalog.MOVersionTable,
 		v.Version,
+		v.VersionOffset,
 		state,
 	)
 }
 
 func AddVersion(
 	version string,
+	versionOffset uint32,
 	state int32,
 	txn executor.TxnExecutor) error {
-	sql := fmt.Sprintf(`insert into %s values ('%s', %d, current_timestamp(), current_timestamp())`,
+	sql := fmt.Sprintf(`insert into %s values ('%s', %d, %d, current_timestamp(), current_timestamp())`,
 		catalog.MOVersionTable,
 		version,
+		versionOffset,
 		state)
 	res, err := txn.Exec(sql, executor.StatementOption{})
 	if err != nil {
@@ -69,7 +72,7 @@ func AddVersion(
 }
 
 func GetLatestVersion(txn executor.TxnExecutor) (Version, error) {
-	sql := fmt.Sprintf(`select version, state from %s order by create_at desc limit 1`, catalog.MOVersionTable)
+	sql := fmt.Sprintf(`select version, version_offset, state from %s order by create_at desc limit 1`, catalog.MOVersionTable)
 	res, err := txn.Exec(sql, executor.StatementOption{})
 	if err != nil {
 		return Version{}, err
@@ -79,7 +82,8 @@ func GetLatestVersion(txn executor.TxnExecutor) (Version, error) {
 	var version Version
 	res.ReadRows(func(rows int, cols []*vector.Vector) bool {
 		version.Version = cols[0].GetStringAt(0)
-		version.State = vector.GetFixedAt[int32](cols[1], 0)
+		version.VersionOffset = vector.GetFixedAt[uint32](cols[1], 0)
+		version.State = vector.GetFixedAt[int32](cols[2], 0)
 		return true
 	})
 	return version, nil
@@ -130,15 +134,17 @@ func MustGetLatestReadyVersion(
 
 func GetVersionState(
 	version string,
+	versionOffset uint32,
 	txn executor.TxnExecutor,
 	forUpdate bool) (int32, bool, error) {
 	withForUpdate := ""
 	if forUpdate {
 		withForUpdate = "for update"
 	}
-	sql := fmt.Sprintf(`select state from %s where version = '%s' %s`,
+	sql := fmt.Sprintf(`select state from %s where version = '%s' and version_offset = %d %s`,
 		catalog.MOVersionTable,
 		version,
+		versionOffset,
 		withForUpdate)
 
 	res, err := txn.Exec(sql, executor.StatementOption{})
@@ -164,12 +170,14 @@ func GetVersionState(
 
 func UpdateVersionState(
 	version string,
+	versionOffset uint32,
 	state int32,
 	txn executor.TxnExecutor) error {
-	sql := fmt.Sprintf("update %s set state = %d, update_at = current_timestamp() where version = '%s'",
+	sql := fmt.Sprintf("update %s set state = %d, update_at = current_timestamp() where version = '%s' and version_offset = %d",
 		catalog.MOVersionTable,
 		state,
-		version)
+		version,
+		versionOffset)
 	res, err := txn.Exec(sql, executor.StatementOption{})
 	if err != nil {
 		return err

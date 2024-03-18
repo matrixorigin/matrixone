@@ -21,26 +21,51 @@ import (
 
 var (
 	FrameworkInitSQLs = []string{
-		fmt.Sprintf(`create table %s.%s (
-			version             varchar(50) not null primary key,
-			state               int,
-			create_at           timestamp not null,
-			update_at           timestamp not null
-		)`, catalog.MO_CATALOG, catalog.MOVersionTable),
+		//fmt.Sprintf(`create table %s.%s (
+		//	version             varchar(50) not null primary key,
+		//	state               int,
+		//	create_at           timestamp not null,
+		//	update_at           timestamp not null
+		//)`, catalog.MO_CATALOG, catalog.MOVersionTable),
 
 		fmt.Sprintf(`create table %s.%s (
-			id                  bigint unsigned not null primary key auto_increment,
-			from_version        varchar(50) not null,
-			to_version          varchar(50) not null,
-			final_version       varchar(50) not null,
+			version             varchar(50) not null,
+		    version_offset      int unsigned default 0,
 			state               int,
-			upgrade_cluster     int,
-			upgrade_tenant      int,
-			upgrade_order       int,
-			total_tenant        int,
-			ready_tenant        int,
 			create_at           timestamp not null,
-			update_at           timestamp not null
+			update_at           timestamp not null,
+			primary key(version, version_offset)
+		)`, catalog.MO_CATALOG, catalog.MOVersionTable),
+
+		//fmt.Sprintf(`create table %s.%s (
+		//	id                  bigint unsigned not null primary key auto_increment,
+		//	from_version        varchar(50) not null,
+		//	to_version          varchar(50) not null,
+		//	final_version       varchar(50) not null,
+		//	state               int,
+		//	upgrade_cluster     int,
+		//	upgrade_tenant      int,
+		//	upgrade_order       int,
+		//	total_tenant        int,
+		//	ready_tenant        int,
+		//	create_at           timestamp not null,
+		//	update_at           timestamp not null
+		//)`, catalog.MO_CATALOG, catalog.MOUpgradeTable),
+
+		fmt.Sprintf(`create table %s.%s (
+			id                   bigint unsigned not null primary key auto_increment,
+			from_version         varchar(50) not null,
+			to_version           varchar(50) not null,
+			final_version        varchar(50) not null,
+            final_version_offset int unsigned default 0,
+			state                int,
+			upgrade_cluster      int,
+			upgrade_tenant       int,
+			upgrade_order        int,
+			total_tenant         int,
+			ready_tenant         int,
+			create_at            timestamp not null,
+			update_at            timestamp not null
 		)`, catalog.MO_CATALOG, catalog.MOUpgradeTable),
 
 		fmt.Sprintf(`create table %s.%s (
@@ -81,6 +106,8 @@ type Version struct {
 	// UpgradeTenant tenant need upgrade. The upgrade framework is responsible for upgrading
 	// all tenants in parallel.
 	UpgradeTenant int32
+	// Tenant upgrade version upgrade Offset location
+	VersionOffset uint32
 }
 
 type VersionUpgrade struct {
@@ -92,6 +119,8 @@ type VersionUpgrade struct {
 	ToVersion string
 	// FinalVersion upgrade final version
 	FinalVersion string
+	// FinalVersionOffset upgrade final version
+	FinalVersionOffset uint32
 	// State.
 	State int32
 	// UpgradeOrder upgrade order
