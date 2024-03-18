@@ -341,7 +341,6 @@ type Process struct {
 	WaitPolicy lock.WaitPolicy
 
 	MessageBoard *MessageBoard
-
 }
 
 type vectorPool struct {
