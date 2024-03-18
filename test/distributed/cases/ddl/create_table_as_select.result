@@ -1713,3 +1713,4 @@ drop table t2;
 drop role role_r1;
 drop user role_u1;
 drop database db3;
+drop database db4;
