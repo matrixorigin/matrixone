@@ -142,7 +142,7 @@ func (c *CompilerContext) GetPrimaryKeyDef(dbName string, tableName string) (def
 		if !attr.Primary {
 			continue
 		}
-		defs = append(defs, engineAttrToPlanColDef(i, attr))
+		defs = append(defs, engineAttrToPlanColDef(i, attr, dbName+"."+tableName))
 	}
 	return
 }
@@ -207,7 +207,7 @@ func (c *CompilerContext) Resolve(schemaName string, tableName string) (objRef *
 				Names:       []string{attr.Name},
 			}
 		}
-		tableDef.Cols = append(tableDef.Cols, engineAttrToPlanColDef(i, attr))
+		tableDef.Cols = append(tableDef.Cols, engineAttrToPlanColDef(i, attr, schemaName+"."+tableName))
 	}
 
 	//TODO properties
@@ -256,7 +256,7 @@ func (c *CompilerContext) GetBuildingAlterView() (bool, string, string) {
 	return false, "", ""
 }
 
-func engineAttrToPlanColDef(idx int, attr *engine.Attribute) *plan.ColDef {
+func engineAttrToPlanColDef(idx int, attr *engine.Attribute, tblName string) *plan.ColDef {
 	return &plan.ColDef{
 		ColId: uint64(attr.ID),
 		Name:  attr.Name,
@@ -266,6 +266,7 @@ func engineAttrToPlanColDef(idx int, attr *engine.Attribute) *plan.ColDef {
 			Width:       attr.Type.Width,
 			Scale:       attr.Type.Scale,
 			Enumvalues:  attr.EnumVlaues,
+			Table:       tblName,
 		},
 		Default:   attr.Default,
 		Primary:   attr.Primary,
