@@ -417,7 +417,7 @@ func (d *dirtyCollector) tryCompactTree(
 		tbl.Stats.RUnlock()
 
 		if x := ctx.Value(TempFKey{}); x != nil && TempF.Check(tbl.ID) {
-			logutil.Infof("temp filter skip table %v-%v", tbl.ID, tbl.GetLastestSchema().Name)
+			logutil.Infof("temp filter skip table %v-%v", tbl.ID, tbl.GetLastestSchemaLocked().Name)
 			tree.Shrink(id)
 			continue
 		}

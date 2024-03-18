@@ -137,7 +137,7 @@ func (blk *block) BatchDedup(
 	defer func() {
 		if moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry) {
 			logutil.Infof("BatchDedup %s (%v)BLK-%s: %v",
-				blk.meta.GetTable().GetLastestSchema().Name,
+				blk.meta.GetTable().GetLastestSchemaLocked().Name,
 				blk.IsAppendable(),
 				blk.meta.ID.String(),
 				err)

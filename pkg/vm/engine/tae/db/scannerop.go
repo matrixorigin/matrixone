@@ -187,7 +187,7 @@ func (s *MergeTaskBuilder) resetForTable(entry *catalog.TableEntry) {
 	if entry != nil {
 		s.tid = entry.ID
 		s.tbl = entry
-		s.name = entry.GetLastestSchema().Name
+		s.name = entry.GetLastestSchemaLocked().Name
 		s.tableRowCnt = 0
 		s.tableRowDel = 0
 	}

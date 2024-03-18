@@ -185,7 +185,7 @@ func HandleSyncLogTailReq(
 
 	if canRetry && scope == ScopeUserTables { // check simple conditions first
 		_, name, forceFlush := fault.TriggerFault("logtail_max_size")
-		if (forceFlush && name == tableEntry.GetLastestSchema().Name) || resp.ProtoSize() > Size90M {
+		if (forceFlush && name == tableEntry.GetLastestSchemaLocked().Name) || resp.ProtoSize() > Size90M {
 			_ = ckpClient.FlushTable(ctx, did, tid, end)
 			// try again after flushing
 			newResp, closeCB, err := HandleSyncLogTailReq(ctx, ckpClient, mgr, c, req, false)
@@ -463,7 +463,7 @@ func NewTableLogtailRespBuilder(ctx context.Context, ckp string, start, end type
 	b.did = tbl.GetDB().GetID()
 	b.tid = tbl.ID
 	b.dname = tbl.GetDB().GetName()
-	b.tname = tbl.GetLastestSchema().Name
+	b.tname = tbl.GetLastestSchemaLocked().Name
 
 	b.dataInsBatches = make(map[uint32]*containers.Batch)
 	b.blkMetaInsBatch = makeRespBatchFromSchema(BlkMetaSchema, common.LogtailAllocator)
@@ -569,7 +569,7 @@ func visitObject(batch *containers.Batch, entry *catalog.ObjectEntry, node *cata
 	batch.GetVectorByName(SnapshotAttr_TID).Append(entry.GetTable().ID, false)
 	batch.GetVectorByName(ObjectAttr_State).Append(entry.IsAppendable(), false)
 	sorted := false
-	if entry.GetTable().GetLastestSchema().HasSortKey() && !entry.IsAppendable() {
+	if entry.GetTable().GetLastestSchemaLocked().HasSortKey() && !entry.IsAppendable() {
 		sorted = true
 	}
 	batch.GetVectorByName(ObjectAttr_Sorted).Append(sorted, false)

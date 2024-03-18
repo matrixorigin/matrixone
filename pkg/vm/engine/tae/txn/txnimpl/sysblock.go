@@ -51,7 +51,7 @@ func bool2i8(v bool) int8 {
 }
 
 func (blk *txnSysBlock) isSysTable() bool {
-	return isSysTable(blk.table.entry.GetLastestSchema().Name)
+	return isSysTable(blk.table.entry.GetLastestSchemaLocked().Name)
 }
 
 func (blk *txnSysBlock) GetTotalChanges() int {
