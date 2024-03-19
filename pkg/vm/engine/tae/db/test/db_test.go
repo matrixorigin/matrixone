@@ -7123,11 +7123,10 @@ func TestGlobalCheckpoint2(t *testing.T) {
 	require.Equal(t, "mock_3", newschema.Extra.DroppedAttrs[0])
 	require.NoError(t, txn.Commit(context.Background()))
 
-	txn, err = tae.StartTxn(nil)
+	currTs := types.BuildTS(time.Now().UTC().UnixNano(), 0)
 	assert.NoError(t, err)
-	tae.IncrementalCheckpoint(txn.GetStartTS(), false, true, true)
-	tae.GlobalCheckpoint(txn.GetStartTS(), 0, false)
-	assert.NoError(t, txn.Commit(context.Background()))
+	tae.IncrementalCheckpoint(currTs, false, true, true)
+	tae.GlobalCheckpoint(currTs, time.Duration(1), false)
 
 	p := &catalog.LoopProcessor{}
 	tableExisted := false
