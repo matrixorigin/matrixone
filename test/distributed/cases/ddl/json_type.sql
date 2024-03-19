@@ -214,3 +214,10 @@ select * from unnest_table_1;
 --Exception:parameter is not of json type
 select * from unnest('abc',"$.*") as u;
 select unnest('abc',"$.*") ;
+
+select json_extract('[1,2,3]', '$[0]');
+select json_extract('[1,2,3]', '$[1]');
+select json_extract('[1,2,3]', '$[2]');
+select json_extract('[1,2,3]', '$[3]');
+SELECT JSON_EXTRACT('["apple", "banana", "cherry"]', '$[0]') AS FRUIT; 
+SELECT JSON_EXTRACT('["apple", "banana", "cherry"]', '$[1]') AS FRUIT;
