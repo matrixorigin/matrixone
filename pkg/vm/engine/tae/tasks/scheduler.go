@@ -45,6 +45,8 @@ type TaskScheduler interface {
 	ScheduleFn(ctx *Context, taskType TaskType, fn func() error) (Task, error)
 	ScheduleScopedFn(ctx *Context, taskType TaskType, scope *common.ID, fn func() error) (Task, error)
 
+	CheckAsyncScopes(scopes []common.ID) error
+
 	GetCheckpointedLSN() uint64
 	GetPenddingLSNCnt() uint64
 	GetCheckpointTS() types.TS

@@ -172,9 +172,14 @@ func (e *MergeExecutor) ExecuteFor(entry *catalog.TableEntry, policy Policy) {
 	osize, esize, _ := estimateMergeConsume(mobjs)
 	if kind == TaskHostCN {
 		stats := make([][]byte, 0, len(mobjs))
+		cids := make([]common.ID, 0, len(mobjs))
 		for _, obj := range mobjs {
 			stat := obj.GetObjectStats()
 			stats = append(stats, stat.Clone().Marshal())
+			cids = append(cids, *obj.AsCommonID())
+		}
+		if e.rt.Scheduler.CheckAsyncScopes(cids) != nil {
+			return
 		}
 		schema := entry.GetLastestSchema()
 		cntask := &api.MergeTaskEntry{
