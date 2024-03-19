@@ -43,10 +43,6 @@ mo_locks
 mo_variables
 mo_transactions
 mo_cache
-mo_version
-mo_upgrade
-mo_upgrade_tenant
-mo_account
 mo_foreign_keys
 create database t;
 internal error: do not have privilege to execute the statement
