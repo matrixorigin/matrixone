@@ -440,7 +440,6 @@ func (c *checkpointCleaner) Process() {
 		ts = maxConsumed.GetEnd()
 	}
 
-	logutil.Infof("checkpointCleaner Process start ts: %v", ts.ToString())
 	checkpoints := c.ckpClient.ICKPSeekLT(ts, 10)
 
 	if len(checkpoints) == 0 {
