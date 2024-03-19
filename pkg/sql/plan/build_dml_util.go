@@ -269,7 +269,6 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 		builder.deleteNode[delCtx.tableDef.TblId] = builder.qry.Steps[delCtx.sourceStep]
 	}
 	isUpdate := delCtx.updateColLength > 0
-	var err error
 
 	// delete unique/secondary index table
 	// Refer to this PR:https://github.com/matrixorigin/matrixone/pull/12093
@@ -277,27 +276,13 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 	// both UK and SK. To handle SK case, we will have flags to indicate if it's UK or SK.
 	hasUniqueKey := haveUniqueKey(delCtx.tableDef)
 	hasSecondaryKey := haveSecondaryKey(delCtx.tableDef)
-	//
-	//canTruncate := delCtx.isDeleteWithoutFilters
-
-	//accountId, err := ctx.GetAccountId()
-	//if err != nil {
-	//	return err
-	//}
 
 	enabled, err := IsForeignKeyChecksEnabled(ctx)
 	if err != nil {
 		return err
 	}
 
-	//if enabled && len(delCtx.tableDef.RefChildTbls) > 0 ||
-	//	delCtx.tableDef.ViewSql != nil ||
-	//	(util.TableIsClusterTable(delCtx.tableDef.GetTableType()) && accountId != catalog.System_Account) ||
-	//	delCtx.objRef.PubInfo != nil {
-	//	canTruncate = false
-	//}
-
-	if hasUniqueKey || hasSecondaryKey /*&& !canTruncate*/ {
+	if hasUniqueKey || hasSecondaryKey {
 		typMap := make(map[string]*plan.Type)
 		posMap := make(map[string]int)
 		colMap := make(map[string]*ColDef)
@@ -1127,7 +1112,6 @@ func makeInsertPlan(
 					Expr: &plan.Expr_Col{
 						Col: &plan.ColRef{
 							ColPos: int32(beginIdx + i),
-							//Name:   catalog.Row_ID,
 						},
 					},
 				}
