@@ -419,6 +419,11 @@ func (c *Compile) allocOperatorID() int32 {
 // Run is an important function of the compute-layer, it executes a single sql according to its scope
 // Need call Release() after call this function.
 func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
+	sql := c.originSQL
+	if sql == "" {
+		sql = c.sql
+	}
+
 	txnOp := c.proc.TxnOperator
 	seq := uint64(0)
 	if txnOp != nil {
@@ -431,22 +436,7 @@ func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
 			txnOp.ExitRunSql()
 		}
 	}()
-
-	txnTrace.GetService().AddTxnDurationAction(
-		txnOp,
-		client.ExecuteSQLEvent,
-		seq,
-		0,
-		0,
-		err)
-
-	sql := c.originSQL
-	if sql == "" {
-		sql = c.sql
-	}
-	//fmt.Printf("%x run sql: %s\n", txnOp.Txn().ID, sql)
 	fmt.Printf("%x run sql: %s\n", txnOp.Txn().ID, sql)
-	txnTrace.GetService().TxnExecSQL(txnOp, sql)
 
 	var writeOffset uint64
 
@@ -456,18 +446,12 @@ func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
 	stats := statistic.StatsInfoFromContext(c.proc.Ctx)
 	stats.ExecutionStart()
 
+	txnTrace.GetService().TxnStatementStart(txnOp, sql, seq)
 	defer func() {
 		stats.ExecutionEnd()
 
 		cost := time.Since(start)
-		txnTrace.GetService().AddTxnDurationAction(
-			txnOp,
-			client.ExecuteSQLEvent,
-			seq,
-			0,
-			cost,
-			err)
-
+		txnTrace.GetService().TxnStatementCompleted(txnOp, sql, cost, seq, err)
 		v2.TxnStatementExecuteDurationHistogram.Observe(cost.Seconds())
 	}()
 
@@ -3578,30 +3562,25 @@ func (c *Compile) fillAnalyzeInfo() {
 }
 
 func (c *Compile) determinExpandRanges(n *plan.Node, rel engine.Relation) bool {
-	// for some reason, revert this function to avoid bug, maybe fix this in the future
-	return true
-	/*
-		if plan2.InternalTable(n.TableDef) {
-			return true
-		}
-		if n.TableDef.Partition != nil {
-			return true
-		}
-		if len(n.RuntimeFilterProbeList) == 0 {
-			return true
-		}
-		if n.Stats.BlockNum > plan2.BlockNumForceOneCN && len(c.cnList) > 1 {
-			return true
-		}
-		if rel.GetEngineType() != engine.Disttae {
-			return true
-		}
-		if n.AggList != nil { //need to handle partial results
-			return true
-		}
-		return false
-
-	*/
+	if plan2.InternalTable(n.TableDef) {
+		return true
+	}
+	if n.TableDef.Partition != nil {
+		return true
+	}
+	if len(n.RuntimeFilterProbeList) == 0 {
+		return true
+	}
+	if n.Stats.BlockNum > plan2.BlockNumForceOneCN && len(c.cnList) > 1 {
+		return true
+	}
+	if rel.GetEngineType() != engine.Disttae {
+		return true
+	}
+	if n.AggList != nil { //need to handle partial results
+		return true
+	}
+	return false
 }
 
 func (c *Compile) expandRanges(n *plan.Node, rel engine.Relation, blockFilterList []*plan.Expr) (engine.Ranges, error) {

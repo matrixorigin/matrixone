@@ -78,7 +78,7 @@ func (entry *mergeObjectsEntry) prepareTransferPage() {
 			panic("cannot tranfer empty block")
 		}
 		tblEntry := blk.GetObject().GetTable()
-		isTransient := !tblEntry.GetLastestSchema().HasPK()
+		isTransient := !tblEntry.GetLastestSchemaLocked().HasPK()
 		id := blk.AsCommonID()
 		page := model.NewTransferHashPage(id, time.Now(), isTransient)
 		for srcRow, dst := range mapping {

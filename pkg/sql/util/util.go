@@ -67,6 +67,8 @@ func TableIsLoggingTable(dbName string, tableName string) bool {
 		return true
 	} else if tableName == "metric" && dbName == "system_metrics" {
 		return true
+	} else if tableName == catalog.MO_SQL_STMT_CU && dbName == catalog.MO_SYSTEM_METRICS {
+		return true
 	}
 	return false
 }
