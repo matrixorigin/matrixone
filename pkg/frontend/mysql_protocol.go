@@ -488,12 +488,6 @@ type response320 struct {
 }
 
 func (mp *MysqlProtocolImpl) SendPrepareResponse(ctx context.Context, stmt *PrepareStmt) error {
-	mp.disableAutoFlush = true
-	defer func() {
-		mp.disableAutoFlush = false
-		mp.tcpConn.Flush(0)
-	}()
-
 	dcPrepare, ok := stmt.PreparePlan.GetDcl().Control.(*planPb.DataControl_Prepare)
 	if !ok {
 		return moerr.NewInternalError(ctx, "can not get Prepare plan in prepareStmt")
@@ -2324,12 +2318,6 @@ func (mp *MysqlProtocolImpl) SendResultSetTextBatchRow(mrs *MysqlResultSet, cnt 
 		return nil
 	}
 
-	mp.disableAutoFlush = true
-	defer func() {
-		mp.disableAutoFlush = false
-		mp.tcpConn.Flush(0)
-	}()
-
 	mp.m.Lock()
 	defer mp.m.Unlock()
 	var err error = nil
@@ -2346,12 +2334,6 @@ func (mp *MysqlProtocolImpl) SendResultSetTextBatchRowSpeedup(mrs *MysqlResultSe
 	if cnt == 0 {
 		return nil
 	}
-
-	mp.disableAutoFlush = true
-	defer func() {
-		mp.disableAutoFlush = false
-		mp.tcpConn.Flush(0)
-	}()
 
 	cmd := mp.GetSession().GetCmd()
 	mp.m.Lock()
