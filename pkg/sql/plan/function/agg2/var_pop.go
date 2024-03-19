@@ -112,7 +112,8 @@ func (a *aggVarPop[T]) Flush(get aggexec.AggGetter[float64], set aggexec.AggSett
 type aggVarPopDecimal128 struct {
 	sum   types.Decimal128
 	count int64
-	scale int32
+	argScale int32
+	retScale int32
 	// if true, any middle result is out of range
 	power2OutOfRange bool
 }
@@ -124,33 +125,37 @@ func newAggVarPopDecimal128() aggexec.SingleAggFromFixedRetFixed[types.Decimal12
 func (a *aggVarPopDecimal128) Marshal() []byte {
 	bs := types.EncodeInt64(&a.count)
 	bs = append(bs, types.EncodeBool(&a.power2OutOfRange)...)
-	bs = append(bs, types.EncodeInt32(&a.scale)...)
+	bs = append(bs, types.EncodeInt32(&a.argScale)...)
+	bs = append(bs, types.EncodeInt32(&a.retScale)...)
 	bs = append(bs, types.EncodeDecimal128(&a.sum)...)
 	return bs
 }
 func (a *aggVarPopDecimal128) Unmarshal(bs []byte) {
 	a.count = types.DecodeInt64(bs[:8])
 	a.power2OutOfRange = types.DecodeBool(bs[8:9])
-	a.scale = types.DecodeInt32(bs[9:13])
-	a.sum = types.DecodeDecimal128(bs[13:])
+	a.argScale = types.DecodeInt32(bs[9:13])
+	a.retScale = types.DecodeInt32(bs[13:17])
+	a.sum = types.DecodeDecimal128(bs[17:])
 }
 func (a *aggVarPopDecimal128) Init(set aggexec.AggSetter[types.Decimal128], arg, ret types.Type) {
 	a.sum = types.Decimal128{B0_63: 0, B64_127: 0}
 	a.count = 0
 	a.power2OutOfRange = false
-	a.scale = ret.Scale
+	a.argScale = arg.Scale
+	a.retScale = ret.Scale
 	set(a.sum)
 }
 func (a *aggVarPopDecimal128) Fill(value types.Decimal128, get aggexec.AggGetter[types.Decimal128], set aggexec.AggSetter[types.Decimal128]) {
 	if !a.power2OutOfRange {
 		a.count++
-		newSum, newPow2, outOfRange := getNewValueSumAndNewPower2(a.sum, get(), value, 1)
+		newSum, newPow2, outOfRange := getNewValueSumAndNewPower2(a.sum, get(), value, a.argScale, 1)
 		if !outOfRange {
 			a.sum = newSum
 			set(newPow2)
 			return
 		}
 		a.power2OutOfRange = true
+		return
 	}
 	err := moerr.NewInternalErrorNoCtx("agg: out of range")
 	panic(err)
@@ -162,7 +167,7 @@ func (a *aggVarPopDecimal128) Fills(value types.Decimal128, isNull bool, count i
 		if !a.power2OutOfRange {
 			a.count += int64(count)
 
-			newSum, newPow2, outOfRange := getNewValueSumAndNewPower2(a.sum, get(), value, count)
+			newSum, newPow2, outOfRange := getNewValueSumAndNewPower2(a.sum, get(), value, a.argScale, count)
 			if !outOfRange {
 				a.sum = newSum
 				set(newPow2)
@@ -213,7 +218,7 @@ func (a *aggVarPopDecimal128) Merge(other aggexec.SingleAggFromFixedRetFixed[typ
 	set(newPow2)
 }
 func (a *aggVarPopDecimal128) Flush(get aggexec.AggGetter[types.Decimal128], set aggexec.AggSetter[types.Decimal128]) {
-	r, err := getVarianceFromSumPowCount(a.sum, get(), a.count)
+	r, err := getVarianceFromSumPowCount(a.sum, get(), a.count, a.argScale)
 	if err != nil {
 		panic(err)
 	}
@@ -242,14 +247,15 @@ func (a *aggVarPopDecimal64) Merge(other aggexec.SingleAggFromFixedRetFixed[type
 }
 
 func getNewValueSumAndNewPower2(
-	oldSum types.Decimal128, oldPow2 types.Decimal128, value types.Decimal128, count int) (
+	oldSum types.Decimal128, oldPow2 types.Decimal128, value types.Decimal128, valueScale int32, count int) (
 	newSum types.Decimal128, newPow2 types.Decimal128, outOfRange bool) {
 	var err error
 
 	valueMulCount := value
+	valueMulCountScale := valueScale
 	if count > 1 {
 		count128 := types.Decimal128{B0_63: uint64(count), B64_127: 0}
-		valueMulCount, err = value.Mul128(count128)
+		valueMulCount, valueMulCountScale, err = value.Mul(count128, valueScale, 0)
 		if err != nil {
 			return oldSum, oldPow2, true
 		}
@@ -260,31 +266,35 @@ func getNewValueSumAndNewPower2(
 		return oldSum, oldPow2, true
 	}
 
-	newPow2, err = oldPow2.Mul128(value)
+	newPow2, _, err = valueMulCount.Mul(value, valueMulCountScale, valueScale)
 	if err != nil {
 		return oldSum, oldPow2, true
 	}
 
-	newPow2, err = newPow2.Add128(newPow2)
+	newPow2, err = newPow2.Add128(oldPow2)
 	return newSum, newPow2, err != nil
 }
 
 func getVarianceFromSumPowCount(
-	sum types.Decimal128, pow types.Decimal128, count int64) (types.Decimal128, error) {
+	sum types.Decimal128, pow types.Decimal128, count int64, argScale int32) (types.Decimal128, error) {
 	if count <= 1 {
 		return types.Decimal128{B0_63: 0, B64_127: 0}, nil
 	}
-	avg, err := sum.Div128(types.Decimal128{B0_63: uint64(count), B64_127: 0})
+
+	_, powScale, _ := types.Decimal128{}.Mul(types.Decimal128{}, argScale, argScale)
+
+	avg, avgScale, err := sum.Div(types.Decimal128{B0_63: uint64(count), B64_127: 0}, argScale, 0)
 	if err != nil {
 		return types.Decimal128{B0_63: 0, B64_127: 0}, err
 	}
-	part1, err := pow.Div128(types.Decimal128{B0_63: uint64(count), B64_127: 0})
+	part1, part1Scale, err := pow.Div(types.Decimal128{B0_63: uint64(count), B64_127: 0}, powScale, 0)
 	if err != nil {
 		return types.Decimal128{B0_63: 0, B64_127: 0}, err
 	}
-	part2, err := avg.Mul128(avg)
+	part2, part2Scale, err := avg.Mul(avg, avgScale, avgScale)
 	if err != nil {
 		return types.Decimal128{B0_63: 0, B64_127: 0}, err
 	}
-	return part1.Sub128(part2)
+	result, _, err := part1.Sub(part2, part1Scale, part2Scale)
+	return result, err
 }

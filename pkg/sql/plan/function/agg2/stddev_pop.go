@@ -82,7 +82,7 @@ func newAggStdVarPopDecimal64() aggexec.SingleAggFromFixedRetFixed[types.Decimal
 }
 
 func (a *aggStdVarPopDecimal64) Flush(get aggexec.AggGetter[types.Decimal128], set aggexec.AggSetter[types.Decimal128]) {
-	r, err := getVarianceFromSumPowCount(a.sum, get(), a.count)
+	r, err := getVarianceFromSumPowCount(a.sum, get(), a.count, a.argScale)
 	if err != nil {
 		panic(err)
 	}
@@ -91,8 +91,8 @@ func (a *aggStdVarPopDecimal64) Flush(get aggexec.AggGetter[types.Decimal128], s
 		return
 	}
 	temp, err1 := types.Decimal128FromFloat64(
-		math.Sqrt(types.Decimal128ToFloat64(get(), a.scale)),
-		38, a.scale)
+		math.Sqrt(types.Decimal128ToFloat64(get(), a.retScale)),
+		38, a.retScale)
 	if err1 != nil {
 		panic(err1)
 	}
@@ -108,7 +108,7 @@ func newAggStdVarPopDecimal128() aggexec.SingleAggFromFixedRetFixed[types.Decima
 }
 
 func (a *aggStdVarPopDecimal128) Flush(get aggexec.AggGetter[types.Decimal128], set aggexec.AggSetter[types.Decimal128]) {
-	r, err := getVarianceFromSumPowCount(a.sum, get(), a.count)
+	r, err := getVarianceFromSumPowCount(a.sum, get(), a.count, a.argScale)
 	if err != nil {
 		panic(err)
 	}
@@ -117,8 +117,8 @@ func (a *aggStdVarPopDecimal128) Flush(get aggexec.AggGetter[types.Decimal128], 
 		return
 	}
 	temp, err1 := types.Decimal128FromFloat64(
-		math.Sqrt(types.Decimal128ToFloat64(get(), a.scale)),
-		38, a.scale)
+		math.Sqrt(types.Decimal128ToFloat64(get(), a.retScale)),
+		38, a.retScale)
 	if err1 != nil {
 		panic(err1)
 	}
