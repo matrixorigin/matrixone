@@ -377,10 +377,11 @@ func (h *Handle) HandleCommitMerge(
 
 	defer func() {
 		if err != nil {
+			e := moerr.DowncastError(err)
 			logutil.Error("mergeblocks err handle commit merge",
 				zap.String("table", fmt.Sprintf("%v-%v", req.TblId, req.TableName)),
-				zap.String("start-ts", req.StartTs.String()),
-				zap.String("error", err.Error()))
+				zap.String("start-ts", req.StartTs.DebugString()),
+				zap.String("error", e.Display()))
 		}
 
 	}()

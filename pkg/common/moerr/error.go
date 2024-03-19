@@ -515,6 +515,13 @@ func (e *Error) Detail() string {
 	return e.detail
 }
 
+func (e *Error) Display() string {
+	if len(e.detail) == 0 {
+		return e.message
+	}
+	return fmt.Sprintf("%s: %s", e.message, e.detail)
+}
+
 func (e *Error) ErrorCode() uint16 {
 	return e.code
 }
@@ -568,6 +575,14 @@ func IsMoErrCode(e error, rc uint16) bool {
 		return false
 	}
 	return me.code == rc
+}
+
+func DowncastError(e error) *Error {
+	if err, ok := e.(*Error); ok {
+		return err
+	}
+	return newError(Context(), ErrInternal, "downcast error failed: %v", e)
+
 }
 
 // ConvertPanicError converts a runtime panic to internal error.

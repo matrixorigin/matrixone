@@ -79,9 +79,11 @@ func handleMerge() handleFunc {
 			}
 			defer func() {
 				if err != nil {
-					logutil.Error("mergeblocks err on cn", zap.String("err", err.Error()))
+					logutil.Error("mergeblocks err on cn",
+						zap.String("err", err.Error()), zap.String("parameter", parameter))
 					e := &api.MergeCommitEntry{
-						Err: err.Error(),
+						StartTs: txnOp.SnapshotTS(),
+						Err:     err.Error(),
 					}
 					for _, o := range targets {
 						e.MergedObjs = append(e.MergedObjs, o.Clone().Marshal())
@@ -93,10 +95,12 @@ func handleMerge() handleFunc {
 			}()
 			database, err := proc.SessionInfo.StorageEngine.Database(proc.Ctx, db, txnOp)
 			if err != nil {
+				logutil.Errorf("mergeblocks err on cn, db %s, err %s", db, err.Error())
 				return nil, err
 			}
 			rel, err := database.Relation(proc.Ctx, tbl, nil)
 			if err != nil {
+				logutil.Errorf("mergeblocks err on cn, table %s, err %s", db, err.Error())
 				return nil, err
 			}
 			entry, err := rel.MergeObjects(proc.Ctx, targets)

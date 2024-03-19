@@ -412,7 +412,7 @@ func (tbl *txnTable) GetObject(id *types.Objectid) (obj handle.Object, err error
 		return
 	}
 	if !ok {
-		err = moerr.NewNotFoundNoCtx()
+		err = moerr.NewNotFoundNoCtxDetail(id.String())
 		return
 	}
 	obj = newObject(tbl, meta)
