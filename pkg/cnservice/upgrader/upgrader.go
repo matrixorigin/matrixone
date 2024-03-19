@@ -200,8 +200,10 @@ func (u *Upgrader) Upgrade(ctx context.Context) error {
 	}
 
 	if errs := u.UpgradeMoIndexesSchema(ctx, allTenants); len(errs) > 0 {
-		logutil.Errorf("upgrade mo_indexes failed")
-		errors = append(errors, errs...)
+		// NOTE: if index upgrade failed, we should panic and stop the system. Else it will more issues.
+		panic("Upgrade failed during system startup! " + convErrsToFormatMsg(errs))
+		//logutil.Errorf("upgrade mo_indexes failed")
+		//errors = append(errors, errs...)
 	}
 
 	if errs := u.RunUpgradeSqls(ctx); len(errs) > 0 {
