@@ -272,13 +272,15 @@ func (tbl *txnTable) recurTransferDelete(
 		return err
 	}
 	common.DoIfInfoEnabled(func() {
-		logutil.Infof("depth-%d %s transfer delete from blk-%s row-%d to blk-%s row-%d",
+		logutil.Infof("txn-%s depth-%d %s transfer delete from blk-%s row-%d to blk-%s row-%d pk-%s",
+			tbl.store.txn.GetStartTS().ToString(),
 			depth,
 			tbl.schema.Name,
 			id.BlockID.String(),
 			row,
 			blockID.String(),
-			offset)
+			offset,
+			common.MoVectorToString(pk.GetDownstreamVector(), 1))
 	})
 	return nil
 }
