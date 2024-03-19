@@ -16,11 +16,12 @@ package frontend
 
 import (
 	"context"
-	"go.uber.org/zap"
 	"io"
 	"strings"
 	"sync/atomic"
 	"time"
+
+	"go.uber.org/zap"
 
 	"github.com/fagongzi/goetty/v2"
 	"github.com/matrixorigin/matrixone/pkg/config"
