@@ -1825,9 +1825,9 @@ func (ses *Session) MaybeUpgradeTenant(ctx context.Context, curVersion string, t
 	return nil
 }
 
-func (ses *Session) UpgradeTenant(ctx context.Context, tenantName string, isALLAccount bool) error {
+func (ses *Session) UpgradeTenant(ctx context.Context, tenantName string, retryCount uint32, isALLAccount bool) error {
 	// Get mo final version, which is based on the current code version
-	return ses.rm.baseService.UpgradeTenant(ctx, tenantName, isALLAccount)
+	return ses.rm.baseService.UpgradeTenant(ctx, tenantName, retryCount, isALLAccount)
 }
 
 func (ses *Session) InitGlobalSystemVariables() error {

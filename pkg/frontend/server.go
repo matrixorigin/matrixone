@@ -58,7 +58,7 @@ type BaseService interface {
 	// GetFinalVersion Get mo final version, which is based on the current code
 	GetFinalVersion() string
 	// UpgradeTenant used to upgrade tenant
-	UpgradeTenant(ctx context.Context, tenantName string, isALLAccount bool) error
+	UpgradeTenant(ctx context.Context, tenantName string, retryCount uint32, isALLAccount bool) error
 }
 
 func (mo *MOServer) GetRoutineManager() *RoutineManager {

@@ -27,7 +27,7 @@ import (
 	"go.uber.org/zap"
 )
 
-func (s *service) UpgradeTenant(ctx context.Context, tenantName string, isALLAccount bool) (bool, error) {
+func (s *service) UpgradeTenant(ctx context.Context, tenantName string, retryCount uint32, isALLAccount bool) (bool, error) {
 	// Before manually upgrade, check if there are unready upgrade tasks in system upgrade environment
 	err := s.UpgradePreCheck(ctx)
 	if err != nil {
@@ -47,10 +47,13 @@ func (s *service) UpgradeTenant(ctx context.Context, tenantName string, isALLAcc
 			return true, err
 		}
 
-		//s.stopper.RunNamedRetryTask("UpgradeOneTenant", tenantID, 1, s.UpgradeOneTenant(ctx, tenantID))
-		if err = s.UpgradeOneTenant(ctx, tenantID); err != nil {
+		err = s.stopper.RunNamedRetryTask("UpgradeTenant", tenantID, retryCount, s.UpgradeOneTenant)
+		if err != nil {
 			return true, err
 		}
+		//if err = s.UpgradeOneTenant(ctx, tenantID); err != nil {
+		//	return true, err
+		//}
 	}
 	return true, nil
 }

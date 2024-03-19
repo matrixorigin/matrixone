@@ -51,7 +51,7 @@ type Service interface {
 		tenantFetchFunc func() (int32, string, error),
 		txnOp client.TxnOperator) (bool, error)
 	// UpgradeTenant used to manual upgrade tenant metadata
-	UpgradeTenant(ctx context.Context, tenantName string, isALLAccount bool) (bool, error)
+	UpgradeTenant(ctx context.Context, tenantName string, retryCount uint32, isALLAccount bool) (bool, error)
 	// GetFinalVersion Get mo final version, which is based on the current code
 	GetFinalVersion() string
 	// Close close bootstrap service

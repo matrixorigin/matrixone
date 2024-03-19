@@ -5039,7 +5039,11 @@ func (mce *MysqlCmdExecutor) handleExecUpgrade(ctx context.Context, st *tree.Upg
 	ses := mce.GetSession()
 	proto := ses.GetMysqlProtocol()
 
-	err := ses.UpgradeTenant(ctx, st.Target.AccountName, st.Target.IsALLAccount)
+	retryCount := st.Retry
+	if st.Retry <= 0 {
+		retryCount = 1
+	}
+	err := ses.UpgradeTenant(ctx, st.Target.AccountName, uint32(retryCount), st.Target.IsALLAccount)
 	if err != nil {
 		return err
 	}
