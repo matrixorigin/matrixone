@@ -214,7 +214,7 @@ type txnOperator struct {
 		txn          txn.TxnMeta
 		cachedWrites map[uint64][]txn.TxnRequest
 		lockTables   []lock.LockTable
-		callbacks    map[EventType][]func(TxnEvent)
+		callbacks    []eventCallback
 		retry        bool
 		lockSeq      uint64
 		waitLocks    map[uint64]Lock

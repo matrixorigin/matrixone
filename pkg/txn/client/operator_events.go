@@ -20,6 +20,20 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 )
 
+type eventCallback struct {
+	typ       EventType
+	callbacks []func(TxnEvent)
+}
+
+func (ec eventCallback) call(event TxnEvent) {
+	if ec.typ.Value != event.Event.Value {
+		return
+	}
+	for _, cb := range ec.callbacks {
+		cb(event)
+	}
+}
+
 // TxnEvent txn events
 type EventType struct {
 	Value int
@@ -52,10 +66,10 @@ func (tc *txnOperator) AppendEventCallback(
 	if tc.mu.closed {
 		panic("append callback on closed txn")
 	}
-	if tc.mu.callbacks == nil {
-		tc.mu.callbacks = make(map[EventType][]func(TxnEvent), 1)
+	if len(tc.mu.callbacks) == 0 {
+		tc.mu.callbacks = make([]eventCallback, 0, 32)
 	}
-	tc.mu.callbacks[event] = append(tc.mu.callbacks[event], callbacks...)
+	tc.mu.callbacks = append(tc.mu.callbacks, eventCallback{event, callbacks})
 }
 
 func (tc *txnOperator) triggerEvent(event TxnEvent) {
@@ -68,8 +82,8 @@ func (tc *txnOperator) triggerEventLocked(event TxnEvent) {
 	if tc.mu.callbacks == nil {
 		return
 	}
-	for _, cb := range tc.mu.callbacks[event.Event] {
-		cb(event)
+	for _, cb := range tc.mu.callbacks {
+		cb.call(event)
 	}
 }
 
