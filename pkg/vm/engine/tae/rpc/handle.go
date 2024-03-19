@@ -402,21 +402,29 @@ func (h *Handle) HandleCommitMerge(
 		return
 	}
 
+	defer func() {
+		if err != nil {
+			txn.Rollback(ctx)
+			resp.Message = err.Error()
+			merge.CleanUpUselessFiles(req, h.db.Runtime.Fs.Service)
+		}
+	}()
+
 	if len(req.BookingLoc) > 0 {
 		// load transfer info from s3
 		if req.Booking != nil {
-			logutil.Error("mergeblocks booking loc is not empty, but booking is not nil")
+			logutil.Error("mergeblocks err booking loc is not empty, but booking is not nil")
 		}
 		loc := objectio.Location(req.BookingLoc)
-		bat, err := blockio.LoadTombstoneColumns(ctx, []uint16{0}, nil, h.db.Runtime.Fs.Service, loc, nil)
+		var bat *batch.Batch
+		bat, err = blockio.LoadTombstoneColumns(ctx, []uint16{0}, nil, h.db.Runtime.Fs.Service, loc, nil)
 		if err != nil {
-			resp.Message = err.Error()
-			merge.CleanUpUselessFiles(req, h.db.Runtime.Fs.Service)
+			return
 		}
 		req.Booking = &api.BlkTransferBooking{}
-		if err = req.Booking.Unmarshal(bat.Vecs[0].GetBytesAt(0)); err != nil {
-			resp.Message = err.Error()
-			merge.CleanUpUselessFiles(req, h.db.Runtime.Fs.Service)
+		err = req.Booking.Unmarshal(bat.Vecs[0].GetBytesAt(0))
+		if err != nil {
+			return
 		}
 		h.db.Runtime.Fs.Service.Delete(ctx, loc.Name().String())
 		bat = nil
@@ -427,11 +435,7 @@ func (h *Handle) HandleCommitMerge(
 		return
 	}
 	err = txn.Commit(ctx)
-	if err != nil {
-		txn.Rollback(ctx)
-		resp.Message = err.Error()
-		merge.CleanUpUselessFiles(req, h.db.Runtime.Fs.Service)
-	} else {
+	if err == nil {
 		b := &bytes.Buffer{}
 		b.WriteString("merged success\n")
 		for _, o := range req.CreatedObjs {
