@@ -632,6 +632,7 @@ func TestGetExprValue(t *testing.T) {
 		ws.EXPECT().GetSnapshotWriteOffset().Return(0).AnyTimes()
 		ws.EXPECT().UpdateSnapshotWriteOffset().AnyTimes()
 		ws.EXPECT().Adjust(gomock.Any()).AnyTimes()
+		ws.EXPECT().TransferRowID().AnyTimes()
 
 		txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
 		txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
@@ -737,6 +738,7 @@ func TestGetExprValue(t *testing.T) {
 		ws.EXPECT().Adjust(uint64(0)).AnyTimes()
 		ws.EXPECT().IncrSQLCount().AnyTimes()
 		ws.EXPECT().GetSQLCount().AnyTimes()
+		ws.EXPECT().TransferRowID().AnyTimes()
 
 		txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
 		txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
