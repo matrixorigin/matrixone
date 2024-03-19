@@ -177,7 +177,7 @@ func (s *service) CheckUpgradeAccount(ctx context.Context, accountName string) (
 	err := s.exec.ExecTxn(
 		ctx,
 		func(txn executor.TxnExecutor) error {
-			var err error = nil
+			var err error
 			accountId, err = GetAccountIdByName(accountName, txn)
 			if err != nil {
 				getUpgradeLogger().Error("failed to get accountId by accountName when upgrade account",
