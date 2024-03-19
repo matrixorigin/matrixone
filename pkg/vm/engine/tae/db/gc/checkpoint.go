@@ -414,10 +414,10 @@ func (c *checkpointCleaner) CheckGC() error {
 		for _, table := range c.inputs.tables {
 			mergeTable.Merge(table)
 		}
-		mergeTable.SoftGC(gcTable, gCkp.GetEnd(), snapshots)
 	} else {
 		mergeTable = c.inputs.tables[0]
 	}
+	mergeTable.SoftGC(gcTable, gCkp.GetEnd(), snapshots)
 	if !mergeTable.Compare(debugTable) {
 		logutil.Errorf("inputs :%v", c.inputs.tables[0].String())
 		logutil.Errorf("debugTable :%v", debugTable.String())
