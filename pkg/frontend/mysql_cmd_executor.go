@@ -3654,6 +3654,7 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 		}
 	case *tree.UpgradeStatement:
 		selfHandle = true
+		ses.InvalidatePrivilegeCache()
 		if err = mce.handleExecUpgrade(requestCtx, st, proc, i, len(cws)); err != nil {
 			return
 		}

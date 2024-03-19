@@ -134,11 +134,30 @@ func (u *UpgradeEntry) Upgrade(txn executor.TxnExecutor, accountId uint32) error
 	if exist {
 		return nil
 	} else {
+		// 1. First, judge whether there is prefix sql
+		if u.PreSql != "" {
+			res, err := txn.Exec(u.PreSql, executor.StatementOption{}.WithAccountID(accountId))
+			if err != nil {
+				return err
+			}
+			res.Close()
+		}
+
+		// 2. Second, Execute upgrade sql
 		res, err := txn.Exec(u.UpgSql, executor.StatementOption{}.WithAccountID(accountId))
 		if err != nil {
 			return err
 		}
 		res.Close()
+
+		// 2. Third, after the upgrade is completed, judge whether there is post-sql
+		if u.PostSql != "" {
+			res, err = txn.Exec(u.PostSql, executor.StatementOption{}.WithAccountID(accountId))
+			if err != nil {
+				return err
+			}
+			res.Close()
+		}
 	}
 	return nil
 }
@@ -298,6 +317,28 @@ func CheckDatabaseDefinition(txn executor.TxnExecutor, accountId uint32, schema 
 	sql := fmt.Sprintf(`select datname from mo_catalog.mo_database where datname = '%s'`, schema)
 	if accountId == catalog.System_Account {
 		sql = fmt.Sprintf(`select datname from mo_catalog.mo_database where account_id = 0 and datname = '%s'`, schema)
+	}
+
+	res, err := txn.Exec(sql, executor.StatementOption{}.WithAccountID(accountId))
+	if err != nil {
+		return false, err
+	}
+	defer res.Close()
+
+	loaded := false
+	res.ReadRows(func(rows int, cols []*vector.Vector) bool {
+		loaded = true
+		return false
+	})
+
+	return loaded, nil
+}
+
+// CheckTableDataExist Used to checks whether a table contains specific data
+// This function executes the given SQL query, returns true if the result set is not empty, otherwise returns false.
+func CheckTableDataExist(txn executor.TxnExecutor, accountId uint32, sql string) (bool, error) {
+	if sql == "" {
+		return false, moerr.NewInternalErrorNoCtx("check table data sql is empty")
 	}
 
 	res, err := txn.Exec(sql, executor.StatementOption{}.WithAccountID(accountId))

@@ -138,7 +138,8 @@ func (s *service) asyncUpgradeTenantTask(ctx context.Context) {
 		opts := executor.Options{}.
 			WithDatabase(catalog.MO_CATALOG).
 			WithMinCommittedTS(s.now()).
-			WithWaitCommittedLogApplied()
+			WithWaitCommittedLogApplied().
+			WithTimeZone(time.Local)
 		err := s.exec.ExecTxn(
 			ctx,
 			func(txn executor.TxnExecutor) error {

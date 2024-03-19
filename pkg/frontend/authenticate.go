@@ -585,6 +585,7 @@ const (
 	PrivilegeTypeExecute
 	PrivilegeTypeCanGrantRoleToOthersInCreateUser // used in checking the privilege of CreateUser with the default role
 	PrivilegeTypeValues
+	PrivilegeTypeUpgradeAccount
 )
 
 type PrivilegeScope uint8
@@ -642,6 +643,8 @@ func (pt PrivilegeType) String() string {
 		return "drop account"
 	case PrivilegeTypeAlterAccount:
 		return "alter account"
+	case PrivilegeTypeUpgradeAccount:
+		return "upgrade account"
 	case PrivilegeTypeCreateUser:
 		return "create user"
 	case PrivilegeTypeDropUser:
@@ -729,6 +732,8 @@ func (pt PrivilegeType) Scope() PrivilegeScope {
 	case PrivilegeTypeDropAccount:
 		return PrivilegeScopeSys
 	case PrivilegeTypeAlterAccount:
+		return PrivilegeScopeSys
+	case PrivilegeTypeUpgradeAccount:
 		return PrivilegeScopeSys
 	case PrivilegeTypeCreateUser:
 		return PrivilegeScopeAccount
@@ -1635,9 +1640,10 @@ var (
 
 	// the privileges that can not be granted or revoked
 	bannedPrivileges = map[PrivilegeType]int8{
-		PrivilegeTypeCreateAccount: 0,
-		PrivilegeTypeAlterAccount:  0,
-		PrivilegeTypeDropAccount:   0,
+		PrivilegeTypeCreateAccount:  0,
+		PrivilegeTypeAlterAccount:   0,
+		PrivilegeTypeDropAccount:    0,
+		PrivilegeTypeUpgradeAccount: 0,
 	}
 )
 
@@ -2294,6 +2300,7 @@ var (
 		PrivilegeTypeCreateAccount:     {PrivilegeTypeCreateAccount, privilegeLevelStar, objectTypeAccount, objectIDAll, false, "", "", privilegeEntryTypeGeneral, nil},
 		PrivilegeTypeDropAccount:       {PrivilegeTypeDropAccount, privilegeLevelStar, objectTypeAccount, objectIDAll, false, "", "", privilegeEntryTypeGeneral, nil},
 		PrivilegeTypeAlterAccount:      {PrivilegeTypeAlterAccount, privilegeLevelStar, objectTypeAccount, objectIDAll, false, "", "", privilegeEntryTypeGeneral, nil},
+		PrivilegeTypeUpgradeAccount:    {PrivilegeTypeUpgradeAccount, privilegeLevelStar, objectTypeAccount, objectIDAll, false, "", "", privilegeEntryTypeGeneral, nil},
 		PrivilegeTypeCreateUser:        {PrivilegeTypeCreateUser, privilegeLevelStar, objectTypeAccount, objectIDAll, true, "", "", privilegeEntryTypeGeneral, nil},
 		PrivilegeTypeDropUser:          {PrivilegeTypeDropUser, privilegeLevelStar, objectTypeAccount, objectIDAll, true, "", "", privilegeEntryTypeGeneral, nil},
 		PrivilegeTypeAlterUser:         {PrivilegeTypeAlterUser, privilegeLevelStar, objectTypeAccount, objectIDAll, true, "", "", privilegeEntryTypeGeneral, nil},
@@ -2339,6 +2346,7 @@ var (
 		PrivilegeTypeCreateAccount,
 		PrivilegeTypeDropAccount,
 		PrivilegeTypeAlterAccount,
+		PrivilegeTypeUpgradeAccount,
 		PrivilegeTypeCreateUser,
 		PrivilegeTypeDropUser,
 		PrivilegeTypeAlterUser,
@@ -5701,6 +5709,8 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		typs = append(typs, PrivilegeTypeDropAccount)
 	case *tree.AlterAccount:
 		typs = append(typs, PrivilegeTypeAlterAccount)
+	case *tree.UpgradeStatement:
+		typs = append(typs, PrivilegeTypeUpgradeAccount)
 	case *tree.CreateUser:
 		if st.Role == nil {
 			typs = append(typs, PrivilegeTypeCreateUser, PrivilegeTypeAccountAll /*, PrivilegeTypeAccountOwnership*/)
@@ -5783,7 +5793,7 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		typs = append(typs, PrivilegeTypeConnect, PrivilegeTypeAccountAll /*, PrivilegeTypeAccountOwnership*/)
 		canExecInRestricted = true
 	case *tree.ShowTables, *tree.ShowCreateTable, *tree.ShowColumns, *tree.ShowCreateView, *tree.ShowCreateDatabase,
-		*tree.ShowCreatePublications, *tree.ShowAccountUpgrade:
+		*tree.ShowCreatePublications:
 		objType = objectTypeDatabase
 		typs = append(typs, PrivilegeTypeShowTables, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
 		canExecInRestricted = true
@@ -5962,6 +5972,11 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		kind = privilegeKindSpecial
 		special = specialTagAdmin
 		canExecInRestricted = true
+	case *tree.ShowAccountUpgrade:
+		objType = objectTypeNone
+		kind = privilegeKindSpecial
+		special = specialTagAdmin
+		canExecInRestricted = true
 	case *tree.ExplainFor, *tree.ExplainAnalyze, *tree.ExplainStmt:
 		objType = objectTypeNone
 		kind = privilegeKindNone
@@ -6028,9 +6043,6 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		objType = objectTypeNone
 		kind = privilegeKindNone
 	case *tree.EmptyStmt:
-		objType = objectTypeNone
-		kind = privilegeKindNone
-	case *tree.UpgradeStatement:
 		objType = objectTypeNone
 		kind = privilegeKindNone
 	default:
@@ -7240,6 +7252,8 @@ func getSqlForCheckRoleHasPrivilegeWGODependsOnPrivType(privType PrivilegeType) 
 		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShip(int64(privType), int64(PrivilegeTypeAccountAll), int64(PrivilegeTypeAccountOwnership))
 	case PrivilegeTypeAlterAccount:
 		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShip(int64(privType), int64(PrivilegeTypeAccountAll), int64(PrivilegeTypeAccountOwnership))
+	case PrivilegeTypeUpgradeAccount:
+		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShip(int64(privType), int64(PrivilegeTypeAccountAll), int64(PrivilegeTypeAccountOwnership))
 	case PrivilegeTypeCreateUser:
 		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShip(int64(privType), int64(PrivilegeTypeAccountAll), int64(PrivilegeTypeAccountOwnership))
 	case PrivilegeTypeDropUser:
@@ -7469,6 +7483,8 @@ func convertAstPrivilegeTypeToPrivilegeType(ctx context.Context, priv tree.Privi
 		privType = PrivilegeTypeDropAccount
 	case tree.PRIVILEGE_TYPE_STATIC_ALTER_ACCOUNT:
 		privType = PrivilegeTypeAlterAccount
+	case tree.PRIVILEGE_TYPE_STATIC_UPGRADE_ACCOUNT:
+		privType = PrivilegeTypeUpgradeAccount
 	case tree.PRIVILEGE_TYPE_STATIC_CREATE_USER:
 		privType = PrivilegeTypeCreateUser
 	case tree.PRIVILEGE_TYPE_STATIC_DROP_USER:
@@ -7606,6 +7622,8 @@ func authenticateUserCanExecuteStatementWithObjectTypeNone(ctx context.Context, 
 			return checkRevokePrivilege()
 		case *tree.ShowAccounts:
 			return checkShowAccountsPrivilege()
+		case *tree.ShowAccountUpgrade:
+			return tenant.IsMoAdminRole(), nil
 		}
 	}
 

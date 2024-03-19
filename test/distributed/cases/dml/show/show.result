@@ -75,6 +75,7 @@ GRANT show databases ON account  `dump`@`localhost`
 GRANT connect ON account  `dump`@`localhost`
 GRANT manage grants ON account  `dump`@`localhost`
 GRANT account all ON account  `dump`@`localhost`
+GRANT upgrade account ON account  `dump`@`localhost`
 GRANT show tables ON database * `dump`@`localhost`
 GRANT create table ON database * `dump`@`localhost`
 GRANT drop table ON database * `dump`@`localhost`
@@ -111,6 +112,7 @@ GRANT show databases ON account  `root`@`localhost`
 GRANT connect ON account  `root`@`localhost`
 GRANT manage grants ON account  `root`@`localhost`
 GRANT account all ON account  `root`@`localhost`
+GRANT upgrade account ON account  `root`@`localhost`
 GRANT show tables ON database * `root`@`localhost`
 GRANT create table ON database * `root`@`localhost`
 GRANT drop table ON database * `root`@`localhost`

@@ -447,7 +447,7 @@ func (s *service) doAddTxnError(
 	}
 
 	sql := fmt.Sprintf("insert into %s (ts, txn_id, error_info) values (%d, '%x', '%s')",
-		eventErrorTable,
+		EventErrorTable,
 		ts,
 		txnID,
 		escape(msg))
@@ -652,7 +652,7 @@ func (s *service) ClearTxnFilters() error {
 			txn.Use(DebugDB)
 			res, err := txn.Exec(
 				fmt.Sprintf("truncate table %s",
-					traceTxnFilterTable),
+					TraceTxnFilterTable),
 				executor.StatementOption{})
 			if err != nil {
 				return err
@@ -685,7 +685,7 @@ func (s *service) RefreshTxnFilters() error {
 			txn.Use(DebugDB)
 			res, err := txn.Exec(
 				fmt.Sprintf("select method, value from %s",
-					traceTxnFilterTable),
+					TraceTxnFilterTable),
 				executor.StatementOption{})
 			if err != nil {
 				return err
@@ -745,7 +745,7 @@ func (s *service) handleTxnEvents(ctx context.Context) {
 		ctx,
 		s.txnCSVFile,
 		8,
-		eventTxnTable,
+		EventTxnTable,
 		s.txnC,
 		s.txnBufC)
 }
@@ -755,7 +755,7 @@ func (s *service) handleTxnActionEvents(ctx context.Context) {
 		ctx,
 		s.txnActionCSVFile,
 		9,
-		eventTxnActionTable,
+		EventTxnActionTable,
 		s.txnActionC,
 		s.txnActionBufC)
 }
@@ -773,7 +773,7 @@ func addTxnFilterSQL(
 	value string,
 ) string {
 	return fmt.Sprintf("insert into %s (method, value) values ('%s', '%s')",
-		traceTxnFilterTable,
+		TraceTxnFilterTable,
 		method,
 		value)
 }

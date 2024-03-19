@@ -1778,6 +1778,10 @@ priv_type:
         {
                 $$ = tree.PRIVILEGE_TYPE_STATIC_ALTER_ACCOUNT
         }
+|    UPGRADE ACCOUNT
+	{
+		$$ = tree.PRIVILEGE_TYPE_STATIC_UPGRADE_ACCOUNT
+	}
 |    ALL PRIVILEGES
     {
         $$ = tree.PRIVILEGE_TYPE_STATIC_ALL

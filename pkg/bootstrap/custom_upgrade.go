@@ -46,6 +46,7 @@ func (s *service) UpgradeTenant(ctx context.Context, tenantName string, isALLAcc
 			return true, err
 		}
 
+		//s.stopper.RunNamedRetryTask("UpgradeOneTenant", tenantID, 1, s.UpgradeOneTenant(ctx, tenantID))
 		if err = s.UpgradeOneTenant(ctx, tenantID); err != nil {
 			return true, err
 		}
@@ -78,7 +79,8 @@ func (s *service) UpgradeOneTenant(ctx context.Context, tenantID int32) error {
 
 	opts := executor.Options{}.
 		WithMinCommittedTS(s.now()).
-		WithWaitCommittedLogApplied()
+		WithWaitCommittedLogApplied().
+		WithTimeZone(time.Local)
 	err := s.exec.ExecTxn(
 		ctx,
 		func(txn executor.TxnExecutor) error {
@@ -170,7 +172,8 @@ func (s *service) CheckUpgradeAccount(ctx context.Context, accountName string) (
 	opts := executor.Options{}.
 		WithDatabase(catalog.MO_CATALOG).
 		WithMinCommittedTS(s.now()).
-		WithWaitCommittedLogApplied()
+		WithWaitCommittedLogApplied().
+		WithTimeZone(time.Local)
 	err := s.exec.ExecTxn(
 		ctx,
 		func(txn executor.TxnExecutor) error {
@@ -215,7 +218,8 @@ func (s *service) UpgradePreCheck(ctx context.Context) error {
 	opts := executor.Options{}.
 		WithDatabase(catalog.MO_CATALOG).
 		WithMinCommittedTS(s.now()).
-		WithWaitCommittedLogApplied()
+		WithWaitCommittedLogApplied().
+		WithTimeZone(time.Local)
 	err := s.exec.ExecTxn(
 		ctx,
 		func(txn executor.TxnExecutor) error {
@@ -229,7 +233,8 @@ func (s *service) UpgradePreCheck(ctx context.Context) error {
 				return nil
 			}
 
-			unReady, err := checkUpgradeEnvUnReady(txn)
+			final := s.getFinalVersionHandle().Metadata()
+			unReady, err := checkUpgradePerVersionUnready(txn, final)
 			if err != nil {
 				getUpgradeLogger().Error("failed to check task status in pgrade environment", zap.Error(err))
 				return err
@@ -255,9 +260,10 @@ func (s *service) UpgradePreCheck(ctx context.Context) error {
 }
 
 // checkUpgradeEnvUnReady Check if the upgrade environment is ready
-func checkUpgradeEnvUnReady(txn executor.TxnExecutor) (bool, error) {
-	sql := fmt.Sprintf("select id, from_version, to_version, final_version, final_version_offset from %s.%s where state = 1",
-		catalog.MO_CATALOG, catalog.MOUpgradeTable)
+func checkUpgradePerVersionUnready(txn executor.TxnExecutor, final versions.Version) (bool, error) {
+	sql := fmt.Sprintf("select id, from_version, to_version, final_version, final_version_offset from %s.%s "+
+		"where state = 1 and final_version != '%s' and final_version_offset != %d",
+		catalog.MO_CATALOG, catalog.MOUpgradeTable, final.Version, final.VersionOffset)
 	res, err := txn.Exec(sql, executor.StatementOption{})
 	if err != nil {
 		return false, err

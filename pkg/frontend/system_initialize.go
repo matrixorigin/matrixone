@@ -196,3 +196,43 @@ func checkSysExistsOrNot2(ctx context.Context, txn executor.TxnExecutor) (bool, 
 	}
 	return false, nil
 }
+
+// GenSQLForInsertUpgradeAccountPrivilege generates SQL statements for inserting upgrade account permissions
+func GenSQLForInsertUpgradeAccountPrivilege() string {
+	entry := privilegeEntry{
+		privilegeId:       PrivilegeTypeUpgradeAccount,
+		privilegeLevel:    privilegeLevelStar,
+		objType:           objectTypeAccount,
+		objId:             objectIDAll,
+		withGrantOption:   false,
+		databaseName:      "",
+		tableName:         "",
+		privilegeEntryTyp: privilegeEntryTypeGeneral,
+		compound:          nil,
+	}
+	return fmt.Sprintf(initMoRolePrivFormat,
+		moAdminRoleID, moAdminRoleName,
+		entry.objType, entry.objId,
+		entry.privilegeId, entry.privilegeId.String(), entry.privilegeLevel,
+		rootID, types.CurrentTimestamp().String2(time.UTC, 0),
+		entry.withGrantOption)
+}
+
+// GenSQLForCheckUpgradeAccountPrivilegeExist generates an SQL statement to check for the existence of upgrade account permissions.
+func GenSQLForCheckUpgradeAccountPrivilegeExist() string {
+	entry := privilegeEntry{
+		privilegeId:       PrivilegeTypeUpgradeAccount,
+		privilegeLevel:    privilegeLevelStar,
+		objType:           objectTypeAccount,
+		objId:             objectIDAll,
+		withGrantOption:   false,
+		databaseName:      "",
+		tableName:         "",
+		privilegeEntryTyp: privilegeEntryTypeGeneral,
+		compound:          nil,
+	}
+
+	sql := fmt.Sprintf("select * from mo_catalog.mo_role_privs where role_id = %d and obj_type = '%s' and obj_id = %d and privilege_id = %d and privilege_level = '%s'",
+		moAdminRoleID, entry.objType, entry.objId, entry.privilegeId, entry.privilegeLevel)
+	return sql
+}

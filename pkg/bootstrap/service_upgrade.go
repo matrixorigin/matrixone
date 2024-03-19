@@ -82,7 +82,8 @@ func (s *service) doCheckUpgrade(ctx context.Context) error {
 	opts := executor.Options{}.
 		WithDatabase(catalog.MO_CATALOG).
 		WithMinCommittedTS(s.now()).
-		WithWaitCommittedLogApplied()
+		WithWaitCommittedLogApplied().
+		WithTimeZone(time.Local)
 	return s.exec.ExecTxn(
 		ctx,
 		func(txn executor.TxnExecutor) error {
@@ -256,7 +257,8 @@ func (s *service) asyncUpgradeTask(ctx context.Context) {
 		opts := executor.Options{}.
 			WithDatabase(catalog.MO_CATALOG).
 			WithMinCommittedTS(s.now()).
-			WithWaitCommittedLogApplied()
+			WithWaitCommittedLogApplied().
+			WithTimeZone(time.Local)
 		err = s.exec.ExecTxn(
 			ctx,
 			func(txn executor.TxnExecutor) error {

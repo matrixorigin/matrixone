@@ -173,7 +173,7 @@ func (s *service) Enable(feature string) error {
 }
 
 func (s *service) Disable(feature string) error {
-	return s.updateState(feature, stateDisable)
+	return s.updateState(feature, StateDisable)
 }
 
 func (s *service) Enabled(feature string) bool {
@@ -375,7 +375,7 @@ func (s *service) watch(ctx context.Context) {
 		err := s.executor.ExecTxn(
 			ctx,
 			func(txn executor.TxnExecutor) error {
-				sql := fmt.Sprintf("select name, state from %s", featuresTables)
+				sql := fmt.Sprintf("select name, state from %s", FeaturesTables)
 				res, err := txn.Exec(sql, executor.StatementOption{})
 				if err != nil {
 					return err
@@ -462,7 +462,7 @@ func (s *service) updateState(feature, state string) error {
 		func(txn executor.TxnExecutor) error {
 			res, err := txn.Exec(
 				fmt.Sprintf("update %s set state = '%s' where name = '%s'",
-					featuresTables,
+					FeaturesTables,
 					state,
 					feature),
 				executor.StatementOption{})
