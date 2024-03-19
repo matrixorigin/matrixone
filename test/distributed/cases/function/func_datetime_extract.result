@@ -111,6 +111,7 @@ reverse(concat_ws(,, extract(year, 20090702)))
 9002
 create table t1 (d date, dt datetime, t timestamp, c char(10));
 insert ignore into t1 values ("0000-00-00", "0000-00-00", "0000-00-00", "0000-00-00");
+invalid argument parsedate, bad value 0000-00-00
 select extract(MONTH FROM "0000-00-00"),extract(MONTH FROM d),extract(MONTH FROM dt),extract(MONTH FROM t),extract(MONTH FROM c) from t1;
 internal error: invalid input
 drop table t1;
