@@ -1696,7 +1696,7 @@ func (tbl *txnTable) ensureSeqnumsAndTypesExpectRowid() {
 	for i := 0; i < len(tbl.tableDef.Cols)-1; i++ {
 		col := tbl.tableDef.Cols[i]
 		idxs = append(idxs, uint16(col.Seqnum))
-		typs = append(typs, vector.ProtoTypeToType(col.Typ))
+		typs = append(typs, vector.ProtoTypeToType(&col.Typ))
 	}
 	tbl.seqnums = idxs
 	tbl.typs = typs
@@ -2571,7 +2571,7 @@ func (tbl *txnTable) MergeObjects(ctx context.Context, objstats []objectio.Objec
 	objInfos := make([]logtailreplay.ObjectInfo, 0, len(objstats))
 	for _, objstat := range objstats {
 		info, exist := state.GetObject(*objstat.ObjectShortName())
-		if !exist || info.DeleteTime.Greater(snapshot) {
+		if !exist || info.DeleteTime.Greater(&snapshot) {
 			return nil, moerr.NewInternalErrorNoCtx("object %s not exist", objstat.ObjectName().String())
 		}
 		objInfos = append(objInfos, info)
