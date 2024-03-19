@@ -24,15 +24,15 @@ import (
 func RegisterVarPop(id int64) {
 	aggexec.RegisterDeterminedSingleAgg(aggexec.MakeDeterminedSingleAggInfo(id, types.T_bit.ToType(), types.T_float64.ToType(), false, true), newAggVarPop[uint64])
 	aggexec.RegisterDeterminedSingleAgg(aggexec.MakeDeterminedSingleAggInfo(id, types.T_int8.ToType(), types.T_float64.ToType(), false, true), newAggVarPop[int8])
-	aggexec.RegisterDeterminedSingleAgg(aggexec.MakeDeterminedSingleAggInfo(id, types.T_int16.ToType(), types.T_float64.ToType(), false, true), newAggAvg[int16])
-	aggexec.RegisterDeterminedSingleAgg(aggexec.MakeDeterminedSingleAggInfo(id, types.T_int32.ToType(), types.T_float64.ToType(), false, true), newAggAvg[int32])
-	aggexec.RegisterDeterminedSingleAgg(aggexec.MakeDeterminedSingleAggInfo(id, types.T_int64.ToType(), types.T_float64.ToType(), false, true), newAggAvg[int64])
-	aggexec.RegisterDeterminedSingleAgg(aggexec.MakeDeterminedSingleAggInfo(id, types.T_uint8.ToType(), types.T_float64.ToType(), false, true), newAggAvg[uint8])
-	aggexec.RegisterDeterminedSingleAgg(aggexec.MakeDeterminedSingleAggInfo(id, types.T_uint16.ToType(), types.T_float64.ToType(), false, true), newAggAvg[uint16])
-	aggexec.RegisterDeterminedSingleAgg(aggexec.MakeDeterminedSingleAggInfo(id, types.T_uint32.ToType(), types.T_float64.ToType(), false, true), newAggAvg[uint32])
-	aggexec.RegisterDeterminedSingleAgg(aggexec.MakeDeterminedSingleAggInfo(id, types.T_uint64.ToType(), types.T_float64.ToType(), false, true), newAggAvg[uint64])
-	aggexec.RegisterDeterminedSingleAgg(aggexec.MakeDeterminedSingleAggInfo(id, types.T_float32.ToType(), types.T_float64.ToType(), false, true), newAggAvg[float32])
-	aggexec.RegisterDeterminedSingleAgg(aggexec.MakeDeterminedSingleAggInfo(id, types.T_float64.ToType(), types.T_float64.ToType(), false, true), newAggAvg[float64])
+	aggexec.RegisterDeterminedSingleAgg(aggexec.MakeDeterminedSingleAggInfo(id, types.T_int16.ToType(), types.T_float64.ToType(), false, true), newAggVarPop[int16])
+	aggexec.RegisterDeterminedSingleAgg(aggexec.MakeDeterminedSingleAggInfo(id, types.T_int32.ToType(), types.T_float64.ToType(), false, true), newAggVarPop[int32])
+	aggexec.RegisterDeterminedSingleAgg(aggexec.MakeDeterminedSingleAggInfo(id, types.T_int64.ToType(), types.T_float64.ToType(), false, true), newAggVarPop[int64])
+	aggexec.RegisterDeterminedSingleAgg(aggexec.MakeDeterminedSingleAggInfo(id, types.T_uint8.ToType(), types.T_float64.ToType(), false, true), newAggVarPop[uint8])
+	aggexec.RegisterDeterminedSingleAgg(aggexec.MakeDeterminedSingleAggInfo(id, types.T_uint16.ToType(), types.T_float64.ToType(), false, true), newAggVarPop[uint16])
+	aggexec.RegisterDeterminedSingleAgg(aggexec.MakeDeterminedSingleAggInfo(id, types.T_uint32.ToType(), types.T_float64.ToType(), false, true), newAggVarPop[uint32])
+	aggexec.RegisterDeterminedSingleAgg(aggexec.MakeDeterminedSingleAggInfo(id, types.T_uint64.ToType(), types.T_float64.ToType(), false, true), newAggVarPop[uint64])
+	aggexec.RegisterDeterminedSingleAgg(aggexec.MakeDeterminedSingleAggInfo(id, types.T_float32.ToType(), types.T_float64.ToType(), false, true), newAggVarPop[float32])
+	aggexec.RegisterDeterminedSingleAgg(aggexec.MakeDeterminedSingleAggInfo(id, types.T_float64.ToType(), types.T_float64.ToType(), false, true), newAggVarPop[float64])
 	aggexec.RegisterFlexibleSingleAgg(
 		aggexec.MakeFlexibleAggInfo(id, false, true),
 		func(t []types.Type) types.Type {
@@ -63,7 +63,7 @@ type aggVarPop[T numeric] struct {
 	count int64
 }
 
-func newAggVarPop[T numeric](t types.Type) aggexec.SingleAggFromFixedRetFixed[T, float64] {
+func newAggVarPop[T numeric]() aggexec.SingleAggFromFixedRetFixed[T, float64] {
 	return &aggVarPop[T]{}
 }
 
