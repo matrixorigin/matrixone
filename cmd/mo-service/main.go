@@ -76,6 +76,8 @@ func main() {
 	maybePrintVersion()
 	maybeRunInDaemonMode()
 
+	uuid.EnableRandPool()
+
 	if *cpuProfilePathFlag != "" {
 		stop := startCPUProfile()
 		defer stop()
