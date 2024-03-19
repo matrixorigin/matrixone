@@ -19,6 +19,8 @@ import (
 	"fmt"
 	"math"
 	"math/rand"
+	"os"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -38,11 +40,12 @@ const (
 )
 
 var (
-	RuntimeMaxMergeObjN     atomic.Int32
-	RuntimeMinRowsQualified atomic.Int32
-	RuntimeMaxRowsObj       atomic.Int32
-	RuntimeMinCNMergeSize   atomic.Int64
-	Epsilon                 float64
+	RuntimeMaxMergeObjN      atomic.Int32
+	RuntimeMinRowsQualified  atomic.Int32
+	RuntimeMaxRowsObj        atomic.Int32
+	RuntimeMinCNMergeSize    atomic.Int64
+	RuntimeCNMergeMemControl atomic.Int64
+	Epsilon                  float64
 )
 
 func init() {
@@ -51,6 +54,28 @@ func init() {
 	RuntimeMaxRowsObj.Store(DefaultMaxRowsObj)
 	RuntimeMinCNMergeSize.Store(DefaultMinCNMergeSize * Const1MBytes)
 	Epsilon = math.Nextafter(1, 2) - 1
+
+	controlsize := EnvOrDefaultInt[int64]("MO_MERGE_MEM_CONTROL", 5*1024)
+	RuntimeCNMergeMemControl.Store(controlsize * Const1MBytes)
+}
+
+func EnvOrDefaultInt[T int32 | int64](key string, defaultValue T) T {
+	val, ok := os.LookupEnv(key)
+	if !ok {
+		return defaultValue
+	}
+	var size int
+	switch any(&defaultValue).(type) {
+	case int32:
+		size = 32
+	case int64:
+		size = 64
+	}
+	i, err := strconv.ParseInt(val, 10, size)
+	if err != nil {
+		return defaultValue
+	}
+	return T(i)
 }
 
 type Number interface {

@@ -221,7 +221,7 @@ func (o *Basic) Revise(cpu, mem int64) ([]*catalog.ObjectEntry, TaskHostKind) {
 
 	osize, _, _ := estimateMergeConsume(objs)
 	if osize > o.config.MinCNMergeSize {
-		objs = o.controlMem(objs, common.Const1GBytes*5)
+		objs = o.controlMem(objs, common.RuntimeCNMergeMemControl.Load())
 		objs = o.optimize(objs)
 		return objs, TaskHostCN
 	}
@@ -283,30 +283,28 @@ func (o *Basic) controlMem(objs []*catalog.ObjectEntry, mem int64) []*catalog.Ob
 	if mem > constMaxMemCap {
 		mem = constMaxMemCap
 	}
-	memPop := false
+
 	needPopout := func(ss []*catalog.ObjectEntry) bool {
 		osize, esize, _ := estimateMergeConsume(ss)
 		if esize > int(2*mem/3) {
-			memPop = true
 			return true
 		}
 
 		if len(ss) <= 2 {
 			return false
 		}
+		// make object averaged size
 		return osize > 120*common.Const1MBytes
 	}
-	popCnt := 0
 	for needPopout(objs) {
 		objs = objs[:len(objs)-1]
-		popCnt++
 	}
-	if popCnt > 0 && memPop {
-		logutil.Infof(
-			"mergeblocks skip %d-%s pop %d out of %d objects due to %s mem cap",
-			o.id, o.schema.Name, popCnt, len(objs)+popCnt, common.HumanReadableBytes(int(mem)),
-		)
-	}
+	// if popCnt > 0 && memPop {
+	// 	logutil.Infof(
+	// 		"mergeblocks skip %d-%s pop %d out of %d objects due to %s mem cap",
+	// 		o.id, o.schema.Name, popCnt, len(objs)+popCnt, common.HumanReadableBytes(int(mem)),
+	// 	)
+	// }
 	return objs
 }
 
