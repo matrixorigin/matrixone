@@ -23,6 +23,7 @@ import (
 
 var tenantUpgEntries = []versions.UpgradeEntry{
 	upg_mo_foreign_keys,
+	upg_system_metrics_sql_statement_duration_total,
 	upg_mo_snapshots,
 	upg_sql_statement_cu,
 }
@@ -74,6 +75,20 @@ var upg_mo_foreign_keys = versions.UpgradeEntry{
 		if isExist {
 			return true, nil
 		}
+		return false, nil
+	},
+}
+
+var upg_system_metrics_sql_statement_duration_total = versions.UpgradeEntry{
+	Schema:    catalog.MO_SYSTEM_METRICS,
+	TableName: "sql_statement_duration_total",
+	UpgType:   versions.CREATE_VIEW,
+	UpgSql: fmt.Sprintf("CREATE VIEW IF NOT EXISTS `%s`.`%s` as "+
+		"SELECT `collecttime`, `value`, `node`, `role`, `account`, `type` "+
+		"from `system_metrics`.`metric` "+
+		"where `metric_name` = 'sql_statement_duration_total'",
+		catalog.MO_SYSTEM_METRICS, "sql_statement_duration_total"),
+	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
 		return false, nil
 	},
 }
