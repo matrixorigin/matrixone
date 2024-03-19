@@ -133,4 +133,5 @@ func (ctr *container) cleanExes() {
 			ctr.exes[i].Free()
 		}
 	}
+	ctr.exes = nil
 }
