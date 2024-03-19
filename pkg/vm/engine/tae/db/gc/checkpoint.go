@@ -300,16 +300,15 @@ func (c *checkpointCleaner) TryGC() error {
 		if err != nil {
 			return err
 		}
-		err = c.tryGC(data, maxGlobalCKP.GetEnd())
+		err = c.tryGC(data, maxGlobalCKP)
 		if err != nil {
 			return err
 		}
-		c.updateMaxCompared(maxGlobalCKP)
 	}
 	return nil
 }
 
-func (c *checkpointCleaner) tryGC(data *logtail.CheckpointData, ts types.TS) error {
+func (c *checkpointCleaner) tryGC(data *logtail.CheckpointData, gckp *checkpoint.CheckpointEntry) error {
 	if !c.delWorker.Start() {
 		return nil
 	}
@@ -320,7 +319,7 @@ func (c *checkpointCleaner) tryGC(data *logtail.CheckpointData, ts types.TS) err
 		logutil.Errorf("GetSnapshots failed: %v", err.Error())
 		return nil
 	}
-	gc := c.softGC(gcTable, ts, snapshots)
+	gc := c.softGC(gcTable, gckp, snapshots)
 	// Delete files after softGC
 	// TODO:Requires Physical Removal Policy
 	err = c.delWorker.ExecDelete(c.ctx, gc, c.disableGC)
@@ -330,7 +329,7 @@ func (c *checkpointCleaner) tryGC(data *logtail.CheckpointData, ts types.TS) err
 	return nil
 }
 
-func (c *checkpointCleaner) softGC(t *GCTable, ts types.TS, snapshots []types.TS) []string {
+func (c *checkpointCleaner) softGC(t *GCTable, gckp *checkpoint.CheckpointEntry, snapshots []types.TS) []string {
 	c.inputs.Lock()
 	defer c.inputs.Unlock()
 	if len(c.inputs.tables) == 0 {
@@ -340,9 +339,10 @@ func (c *checkpointCleaner) softGC(t *GCTable, ts types.TS, snapshots []types.TS
 	for _, table := range c.inputs.tables {
 		mergeTable.Merge(table)
 	}
-	gc := mergeTable.SoftGC(t, ts, snapshots)
+	gc := mergeTable.SoftGC(t, gckp.GetEnd(), snapshots)
 	c.inputs.tables = make([]*GCTable, 0)
 	c.inputs.tables = append(c.inputs.tables, mergeTable)
+	c.updateMaxCompared(gckp)
 	//logutil.Infof("SoftGC is %v, merge table: %v", gc, mergeTable.String())
 	return gc
 }
@@ -480,13 +480,13 @@ func (c *checkpointCleaner) Process() {
 		logutil.Infof("maxGlobalCKP is %v, compareTS is %v", maxGlobalCKP.String(), compareTS.ToString())
 		data, err := c.collectGlobalCkpData(maxGlobalCKP)
 		if err != nil {
+			c.inputs.RUnlock()
 			return
 		}
-		err = c.tryGC(data, maxGlobalCKP.GetEnd())
+		err = c.tryGC(data, maxGlobalCKP)
 		if err != nil {
 			return
 		}
-		c.updateMaxCompared(maxGlobalCKP)
 	}
 	err = c.mergeGCFile()
 	if err != nil {
