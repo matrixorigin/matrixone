@@ -26,8 +26,7 @@ func init() {
 		func(v *Vector) {
 			*v = Vector{}
 		},
-		reuse.DefaultOptions[Vector]().
-			WithEnableChecker(),
+		reuse.DefaultOptions[Vector](),
 	)
 
 }
