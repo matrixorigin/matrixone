@@ -260,9 +260,6 @@ func expandObjectList(objs []*catalog.ObjectEntry) (
 }
 
 func logMergeTask(name string, taskId uint64, merges []*catalog.ObjectEntry, blkn, osize, esize int) {
-	v2.TaskMergeScheduledByCounter.Inc()
-	v2.TaskMergedBlocksCounter.Add(float64(blkn))
-	v2.TasKMergedSizeCounter.Add(float64(osize))
 
 	rows := 0
 	infoBuf := &bytes.Buffer{}
@@ -274,6 +271,13 @@ func logMergeTask(name string, taskId uint64, merges []*catalog.ObjectEntry, blk
 	platform := fmt.Sprintf("t%d", taskId)
 	if taskId == math.MaxUint64 {
 		platform = "CN"
+		v2.TaskCNMergeScheduledByCounter.Inc()
+		v2.TaskCNMergedBlocksCounter.Add(float64(blkn))
+		v2.TaskCNMergedSizeCounter.Add(float64(osize))
+	} else {
+		v2.TaskDNMergeScheduledByCounter.Inc()
+		v2.TaskDNMergedBlocksCounter.Add(float64(blkn))
+		v2.TaskDNMergedSizeCounter.Add(float64(osize))
 	}
 	logutil.Infof(
 		"[Mergeblocks] Scheduled %v [%v|on%d,bn%d|%s,%s], merged(%v): %s", name,
