@@ -82,8 +82,8 @@ func (it *txnRelationIt) Next() {
 		entry.RLock()
 		// SystemDB can hold table created by different tenant, filter needed.
 		// while the 3 shared tables are not affected
-		if it.txnDB.entry.IsSystemDB() && !isSysTable(entry.GetLastestSchema().Name) &&
-			entry.GetLastestSchema().AcInfo.TenantID != txn.GetTenantID() {
+		if it.txnDB.entry.IsSystemDB() && !isSysTable(entry.GetLastestSchemaLocked().Name) &&
+			entry.GetLastestSchemaLocked().AcInfo.TenantID != txn.GetTenantID() {
 			entry.RUnlock()
 			continue
 		}
@@ -154,7 +154,7 @@ func (h *txnRelation) BatchDedup(col containers.Vector) error {
 }
 
 func (h *txnRelation) Append(ctx context.Context, data *containers.Batch) error {
-	if !h.table.GetLocalSchema().IsSameColumns(h.table.GetMeta().GetLastestSchema()) {
+	if !h.table.GetLocalSchema().IsSameColumns(h.table.GetMeta().GetLastestSchemaLocked()) {
 		return moerr.NewInternalErrorNoCtx("schema changed, please rollback and retry")
 	}
 	return h.Txn.GetStore().Append(ctx, h.table.entry.GetDB().ID, h.table.entry.GetID(), data)
