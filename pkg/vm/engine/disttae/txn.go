@@ -19,7 +19,6 @@ import (
 	"encoding/hex"
 	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 	"math"
-	"regexp"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"

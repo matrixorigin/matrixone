@@ -444,6 +444,7 @@ func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
 	if sql == "" {
 		sql = c.sql
 	}
+	//fmt.Printf("%x run sql: %s\n", txnOp.Txn().ID, sql)
 	fmt.Printf("%x run sql: %s\n", txnOp.Txn().ID, sql)
 	txnTrace.GetService().TxnExecSQL(txnOp, sql)
 
