@@ -356,6 +356,7 @@ const (
 type Binding struct {
 	tag            int32
 	nodeId         int32
+	db             string
 	table          string
 	tableID        uint64
 	cols           []string

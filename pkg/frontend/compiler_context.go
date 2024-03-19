@@ -306,10 +306,7 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 	if tableDef.IsTemporary {
 		tableDef.Name = tableName
 	}
-	// add dbName.tblName to every col
-	for _, col := range tableDef.Cols {
-		col.Typ.Table = dbName + "." + tableName
-	}
+	tableDef.DbName = dbName
 
 	// convert
 	var subscriptionName string
