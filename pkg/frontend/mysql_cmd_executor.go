@@ -1277,31 +1277,38 @@ func (mce *MysqlCmdExecutor) handleExplainStmt(requestCtx context.Context, stmt 
 		return err
 	}
 
-	//	Step 1 : send column count and column definition.
-	//send column count
-	colCnt := uint64(len(columns))
-	err = protocol.SendColumnCountPacket(colCnt)
-	if err != nil {
-		return err
-	}
-	//send columns
-	//column_count * Protocol::ColumnDefinition packets
-	cmd := ses.GetCmd()
-	mrs := ses.GetMysqlResultSet()
-	for _, c := range columns {
-		mysqlc := c.(Column)
-		mrs.AddColumn(mysqlc)
-		//	mysql COM_QUERY response: send the column definition per column
-		err := protocol.SendColumnDefinitionPacket(requestCtx, mysqlc, int(cmd))
+	write := func() error {
+		//	Step 1 : send column count and column definition.
+		//send column count
+		colCnt := uint64(len(columns))
+		err := protocol.SendColumnCountPacket(colCnt)
 		if err != nil {
 			return err
 		}
+		//send columns
+		//column_count * Protocol::ColumnDefinition packets
+		cmd := ses.GetCmd()
+		mrs := ses.GetMysqlResultSet()
+		for _, c := range columns {
+			mysqlc := c.(Column)
+			mrs.AddColumn(mysqlc)
+			//	mysql COM_QUERY response: send the column definition per column
+			err := protocol.SendColumnDefinitionPacket(requestCtx, mysqlc, int(cmd))
+			if err != nil {
+				return err
+			}
+		}
+
+		//	mysql COM_QUERY response: End after the column has been sent.
+		//	send EOF packet
+		return protocol.SendEOFPacketIf(0, ses.GetServerStatus())
 	}
 
-	//	mysql COM_QUERY response: End after the column has been sent.
-	//	send EOF packet
-	err = protocol.SendEOFPacketIf(0, ses.GetServerStatus())
-	if err != nil {
+	if err := write(); err != nil {
+		return err
+	}
+
+	if err := protocol.Flush(); err != nil {
 		return err
 	}
 
@@ -3849,36 +3856,47 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 			if c, ok := cw.(*TxnComputationWrapper); ok {
 				ses.rs = &plan.ResultColDef{ResultCols: plan2.GetResultColumnsFromPlan(c.plan)}
 			}
-			/*
-				Step 1 : send column count and column definition.
-			*/
-			//send column count
-			colCnt := uint64(len(columns))
-			err = proto.SendColumnCountPacket(colCnt)
-			if err != nil {
-				return
-			}
-			//send columns
-			//column_count * Protocol::ColumnDefinition packets
-			cmd := ses.GetCmd()
-			for _, c := range columns {
-				mysqlc := c.(Column)
-				mrs.AddColumn(mysqlc)
+
+			write := func() error {
+				proto.DisableAutoFlush()
+				defer proto.EnableAutoFlush()
+
 				/*
-					mysql COM_QUERY response: send the column definition per column
+					Step 1 : send column count and column definition.
 				*/
-				err = proto.SendColumnDefinitionPacket(requestCtx, mysqlc, int(cmd))
+				//send column count
+				colCnt := uint64(len(columns))
+				err := proto.SendColumnCountPacket(colCnt)
 				if err != nil {
-					return
+					return err
 				}
+				//send columns
+				//column_count * Protocol::ColumnDefinition packets
+				cmd := ses.GetCmd()
+				for _, c := range columns {
+					mysqlc := c.(Column)
+					mrs.AddColumn(mysqlc)
+					/*
+						mysql COM_QUERY response: send the column definition per column
+					*/
+					err := proto.SendColumnDefinitionPacket(requestCtx, mysqlc, int(cmd))
+					if err != nil {
+						return err
+					}
+				}
+
+				/*
+					mysql COM_QUERY response: End after the column has been sent.
+					send EOF packet
+				*/
+				return proto.SendEOFPacketIf(0, ses.GetServerStatus())
 			}
 
-			/*
-				mysql COM_QUERY response: End after the column has been sent.
-				send EOF packet
-			*/
-			err = proto.SendEOFPacketIf(0, ses.GetServerStatus())
-			if err != nil {
+			if err = write(); err != nil {
+				return
+			}
+
+			if err = proto.Flush(); err != nil {
 				return
 			}
 
@@ -3920,36 +3938,47 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 		if c, ok := cw.(*TxnComputationWrapper); ok {
 			ses.rs = &plan.ResultColDef{ResultCols: plan2.GetResultColumnsFromPlan(c.plan)}
 		}
-		/*
-			Step 1 : send column count and column definition.
-		*/
-		//send column count
-		colCnt := uint64(len(columns))
-		err = proto.SendColumnCountPacket(colCnt)
-		if err != nil {
-			return
-		}
-		//send columns
-		//column_count * Protocol::ColumnDefinition packets
-		cmd := ses.GetCmd()
-		for _, c := range columns {
-			mysqlc := c.(Column)
-			mrs.AddColumn(mysqlc)
+
+		write := func() error {
+			proto.DisableAutoFlush()
+			defer proto.EnableAutoFlush()
+
 			/*
-				mysql COM_QUERY response: send the column definition per column
+				Step 1 : send column count and column definition.
 			*/
-			err = proto.SendColumnDefinitionPacket(requestCtx, mysqlc, int(cmd))
+			//send column count
+			colCnt := uint64(len(columns))
+			err := proto.SendColumnCountPacket(colCnt)
 			if err != nil {
-				return
+				return err
 			}
+			//send columns
+			//column_count * Protocol::ColumnDefinition packets
+			cmd := ses.GetCmd()
+			for _, c := range columns {
+				mysqlc := c.(Column)
+				mrs.AddColumn(mysqlc)
+				/*
+					mysql COM_QUERY response: send the column definition per column
+				*/
+				err := proto.SendColumnDefinitionPacket(requestCtx, mysqlc, int(cmd))
+				if err != nil {
+					return err
+				}
+			}
+
+			/*
+				mysql COM_QUERY response: End after the column has been sent.
+				send EOF packet
+			*/
+			return proto.SendEOFPacketIf(0, ses.GetServerStatus())
 		}
 
-		/*
-			mysql COM_QUERY response: End after the column has been sent.
-			send EOF packet
-		*/
-		err = proto.SendEOFPacketIf(0, ses.GetServerStatus())
-		if err != nil {
+		if err = write(); err != nil {
+			return
+		}
+
+		if err = proto.Flush(); err != nil {
 			return
 		}
 
@@ -4084,35 +4113,46 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 				zap.Error(err))
 			return
 		}
-		/*
-			Step 1 : send column count and column definition.
-		*/
-		//send column count
-		colCnt := uint64(len(columns))
-		err = proto.SendColumnCountPacket(colCnt)
-		if err != nil {
+
+		write := func() error {
+			proto.DisableAutoFlush()
+			defer proto.EnableAutoFlush()
+
+			/*
+				Step 1 : send column count and column definition.
+			*/
+			//send column count
+			colCnt := uint64(len(columns))
+			err := proto.SendColumnCountPacket(colCnt)
+			if err != nil {
+				return err
+			}
+			//send columns
+			//column_count * Protocol::ColumnDefinition packets
+			cmd := ses.GetCmd()
+			for _, c := range columns {
+				mysqlc := c.(Column)
+				mrs.AddColumn(mysqlc)
+				/*
+					mysql COM_QUERY response: send the column definition per column
+				*/
+				err := proto.SendColumnDefinitionPacket(requestCtx, mysqlc, int(cmd))
+				if err != nil {
+					return err
+				}
+			}
+			/*
+				mysql COM_QUERY response: End after the column has been sent.
+				send EOF packet
+			*/
+			return proto.SendEOFPacketIf(0, ses.GetServerStatus())
+		}
+
+		if err = write(); err != nil {
 			return
 		}
-		//send columns
-		//column_count * Protocol::ColumnDefinition packets
-		cmd := ses.GetCmd()
-		for _, c := range columns {
-			mysqlc := c.(Column)
-			mrs.AddColumn(mysqlc)
-			/*
-				mysql COM_QUERY response: send the column definition per column
-			*/
-			err = proto.SendColumnDefinitionPacket(requestCtx, mysqlc, int(cmd))
-			if err != nil {
-				return
-			}
-		}
-		/*
-			mysql COM_QUERY response: End after the column has been sent.
-			send EOF packet
-		*/
-		err = proto.SendEOFPacketIf(0, ses.GetServerStatus())
-		if err != nil {
+
+		if err = proto.Flush(); err != nil {
 			return
 		}
 

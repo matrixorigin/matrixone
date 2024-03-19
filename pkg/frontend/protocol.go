@@ -404,6 +404,18 @@ func (mp *MysqlProtocolImpl) SendResponse(ctx context.Context, resp *Response) e
 	}
 }
 
+func (mp *MysqlProtocolImpl) DisableAutoFlush() {
+	mp.disableAutoFlush = true
+}
+
+func (mp *MysqlProtocolImpl) EnableAutoFlush() {
+	mp.disableAutoFlush = false
+}
+
+func (mp *MysqlProtocolImpl) Flush() error {
+	return mp.tcpConn.Flush(0)
+}
+
 var _ MysqlProtocol = &FakeProtocol{}
 
 const (
@@ -555,5 +567,15 @@ func (fp *FakeProtocol) sendLocalInfileRequest(filename string) error {
 func (fp *FakeProtocol) incDebugCount(int) {}
 
 func (fp *FakeProtocol) resetDebugCount() []uint64 {
+	return nil
+}
+
+func (fp *FakeProtocol) DisableAutoFlush() {
+}
+
+func (fp *FakeProtocol) EnableAutoFlush() {
+}
+
+func (fp *FakeProtocol) Flush() error {
 	return nil
 }

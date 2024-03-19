@@ -203,6 +203,10 @@ type MysqlProtocol interface {
 	ParseExecuteData(ctx context.Context, proc *process.Process, stmt *PrepareStmt, data []byte, pos int) error
 
 	ParseSendLongData(ctx context.Context, proc *process.Process, stmt *PrepareStmt, data []byte, pos int) error
+
+	DisableAutoFlush()
+	EnableAutoFlush()
+	Flush() error
 }
 
 var _ MysqlProtocol = &MysqlProtocolImpl{}
