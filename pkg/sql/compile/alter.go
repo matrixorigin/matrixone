@@ -200,7 +200,7 @@ func (s *Scope) AlterTable(c *Compile) (err error) {
 		return err
 	}
 
-	if plan2.IsFkBannedDatabase(qry.Database) {
+	if !plan2.IsFkBannedDatabase(qry.Database) {
 		//update the mo_foreign_keys
 		for _, sql := range qry.UpdateFkSqls {
 			err = c.runSql(sql)
