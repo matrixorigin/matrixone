@@ -25,6 +25,16 @@ var (
 		false,
 	)
 
+	StatementDurationFactory = NewCounterVec(
+		CounterOpts{
+			Subsystem: "sql",
+			Name:      "statement_duration_total",
+			Help:      "Statement duration of each query type for each account",
+		},
+		[]string{constTenantKey, "type"},
+		false,
+	)
+
 	TransactionCounterFactory = NewCounterVec(
 		CounterOpts{
 			Subsystem: "sql",
@@ -85,6 +95,10 @@ var (
 // StatementCounter accept t as tree.QueryType
 func StatementCounter(tenant string, t string) Counter {
 	return StatementCounterFactory.WithLabelValues(tenant, t)
+}
+
+func StatementDuration(tenant string, t string) Counter {
+	return StatementDurationFactory.WithLabelValues(tenant, t)
 }
 
 func TransactionCounter(tenant string) Counter {
