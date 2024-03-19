@@ -369,3 +369,21 @@ select * from unnest('abc',"$.*") as u;
 invalid input: json text abc
 select unnest('abc',"$.*") ;
 not supported: function or operator 'unnest'
+select json_extract('[1,2,3]', '$[0]');
+json_extract([1,2,3], $[0])
+1
+select json_extract('[1,2,3]', '$[1]');
+json_extract([1,2,3], $[1])
+2
+select json_extract('[1,2,3]', '$[2]');
+json_extract([1,2,3], $[2])
+3
+select json_extract('[1,2,3]', '$[3]');
+json_extract([1,2,3], $[3])
+null
+SELECT JSON_EXTRACT('["apple", "banana", "cherry"]', '$[0]') AS FRUIT;
+FRUIT
+"apple"
+SELECT JSON_EXTRACT('["apple", "banana", "cherry"]', '$[1]') AS FRUIT;
+FRUIT
+"banana"
