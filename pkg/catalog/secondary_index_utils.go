@@ -174,10 +174,17 @@ func indexParamsToMap(def *tree.Index) (map[string]string, error) {
 	case tree.INDEX_TYPE_MASTER:
 		// do nothing
 	case tree.INDEX_TYPE_IVFFLAT:
-		if def.IndexOption.AlgoParamList <= 0 {
-			return nil, moerr.NewInternalErrorNoCtx("invalid list. list must be > 0")
-		} else {
+		if def.IndexOption.AlgoParamList == 0 {
+			// NOTE:
+			// 1. In the parser, we added the failure check for list=0 scenario. So if user tries to explicit
+			// set list=0, it will fail.
+			// 2. However, if user didn't use the list option (we will get it as 0 here), then we will
+			// set the default value as 1.
+			res[IndexAlgoParamLists] = strconv.FormatInt(1, 10)
+		} else if def.IndexOption.AlgoParamList > 0 {
 			res[IndexAlgoParamLists] = strconv.FormatInt(def.IndexOption.AlgoParamList, 10)
+		} else {
+			return nil, moerr.NewInternalErrorNoCtx("invalid list. list must be > 0")
 		}
 
 		if len(def.IndexOption.AlgoParamVectorOpType) > 0 {
