@@ -276,10 +276,10 @@ func (s *Scope) RemoteRun(c *Compile) error {
 }
 
 func DeterminRuntimeDOP(cpunum, blocks int) int {
-	if cpunum <= 0 || blocks <= 16 {
+	if cpunum <= 0 || blocks <= 32 {
 		return 1
 	}
-	ret := blocks/16 + 1
+	ret := blocks/32 + 1
 	if ret < cpunum {
 		return ret
 	}
