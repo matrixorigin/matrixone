@@ -76,6 +76,7 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 				arg.ctr.projExecutors[i].Free()
 			}
 		}
+		arg.ctr.projExecutors = nil
 	}
 	if arg.buf != nil {
 		arg.buf.Clean(proc.Mp())
