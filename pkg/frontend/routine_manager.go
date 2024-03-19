@@ -198,14 +198,15 @@ func (rm *RoutineManager) deleteRoutine(rs goetty.IOSession) *Routine {
 	var ok bool
 	rm.mu.Lock()
 	defer rm.mu.Unlock()
-	rt, ok = rm.clients[rs]
-	if ok {
+	if rt, ok = rm.clients[rs]; ok {
 		delete(rm.clients, rs)
 	}
-	connID := rt.getConnectionID()
-	_, ok = rm.routinesByConnID[connID]
-	if ok {
-		delete(rm.routinesByConnID, connID)
+
+	if rt != nil {
+		connID := rt.getConnectionID()
+		if _, ok = rm.routinesByConnID[connID]; ok {
+			delete(rm.routinesByConnID, connID)
+		}
 	}
 	return rt
 }

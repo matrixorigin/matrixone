@@ -154,6 +154,7 @@ func initRPCMetrics() {
 
 func initTraceMetrics() {
 	registry.MustRegister(traceCollectorDurationHistogram)
+	registry.MustRegister(traceNegativeCUCounter)
 }
 
 func initProxyMetrics() {

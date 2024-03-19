@@ -840,7 +840,6 @@ func (s *Scope) CreateTable(c *Compile) error {
 				colNameToId[attr.Attr.Name] = attr.Attr.ID
 			}
 		}
-		//old colId -> colName
 		colId2Name := make(map[uint64]string)
 		for _, col := range planCols {
 			colId2Name[col.ColId] = col.Name
@@ -860,7 +859,6 @@ func (s *Scope) CreateTable(c *Compile) error {
 				OnUpdate:    fkey.OnUpdate,
 			}
 			copy(newDef.ForeignCols, fkey.ForeignCols)
-
 			//if it is fk self, the parent table is same as the child table.
 			//refresh the ForeignCols also.
 			if fkey.ForeignTbl == 0 {
@@ -1821,7 +1819,6 @@ func (s *Scope) DropTable(c *Compile) error {
 		if err != nil {
 			return err
 		}
-
 		err = s.removeChildTblIdFromParentTable(c, fkRelation, tblId)
 		if err != nil {
 			return err

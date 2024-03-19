@@ -146,6 +146,8 @@ type TxnOperator interface {
 	AddWaitLock(tableID uint64, rows [][]byte, opt lock.LockOptions) uint64
 	// RemoveWaitLock remove wait lock for current txn
 	RemoveWaitLock(key uint64)
+	// LockTableCount get quality of lock table
+	LockTableCount() int32
 
 	// AddWorkspace for the transaction
 	AddWorkspace(workspace Workspace)
@@ -162,6 +164,9 @@ type TxnOperator interface {
 	// Debug send debug request to DN, after use, SendResult needs to call the Release
 	// method.
 	Debug(ctx context.Context, ops []txn.TxnRequest) (*rpc.SendResult, error)
+
+	EnterRunSql()
+	ExitRunSql()
 }
 
 // TxnIDGenerator txn id generator
@@ -224,6 +229,8 @@ type Workspace interface {
 
 	UpdateSnapshotWriteOffset()
 	GetSnapshotWriteOffset() int
+
+	TransferRowID()
 
 	// Adjust adjust workspace, adjust update's delete+insert to correct order and merge workspace.
 	Adjust(writeOffset uint64) error

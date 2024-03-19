@@ -578,15 +578,15 @@ func (tbl *txnTable) reset(newId uint64) {
 		tbl.oldTableId = tbl.tableId
 	}
 	tbl.tableId = newId
-	tbl._partState = nil
+	tbl._partState.Store(nil)
 	//tbl.objInfos = nil
-	tbl.objInfosUpdated = false
+	tbl.objInfosUpdated.Store(false)
 }
 
 func (tbl *txnTable) resetSnapshot() {
-	tbl._partState = nil
+	tbl._partState.Store(nil)
 	//tbl.objInfos = nil
-	tbl.objInfosUpdated = false
+	tbl.objInfosUpdated.Store(false)
 }
 
 // return all unmodified blocks
@@ -660,21 +660,6 @@ func (tbl *txnTable) rangesOnePart(
 	ranges *[][]byte, // output marshaled block list after filtering
 	proc *process.Process, // process of this transaction
 ) (err error) {
-	if tbl.db.txn.op.Txn().IsRCIsolation() {
-		state, err := tbl.getPartitionState(tbl.proc.Load().Ctx)
-		if err != nil {
-			return err
-		}
-		deleteObjs, createObjs := state.GetChangedObjsBetween(types.TimestampToTS(tbl.lastTS),
-			types.TimestampToTS(tbl.db.txn.op.SnapshotTS()))
-		if len(deleteObjs) > 0 {
-			if err := tbl.updateDeleteInfo(ctx, state, deleteObjs, createObjs); err != nil {
-				return err
-			}
-		}
-		tbl.lastTS = tbl.db.txn.op.SnapshotTS()
-	}
-
 	dirtyBlks := make(map[types.Blockid]struct{})
 	//collect partitionState.dirtyBlocks which may be invisible to this txn into dirtyBlks.
 	{
@@ -1716,7 +1701,7 @@ func (tbl *txnTable) EnhanceDelete(bat *batch.Batch, name string) error {
 }
 
 // TODO:: do prefetch read and parallel compaction
-func (tbl *txnTable) mergeCompaction(
+func (tbl *txnTable) compaction(
 	compactedBlks map[catalog.BlockInfo][]int64) ([]catalog.BlockInfo, []objectio.ObjectStats, error) {
 	s3writer := &colexec.S3Writer{}
 	s3writer.SetTableName(tbl.tableName)
@@ -2118,13 +2103,13 @@ func (tbl *txnTable) newReader(
 // get the table's snapshot.
 // it is only initialized once for a transaction and will not change.
 func (tbl *txnTable) getPartitionState(ctx context.Context) (*logtailreplay.PartitionState, error) {
-	if tbl._partState == nil {
+	if tbl._partState.Load() == nil {
 		if err := tbl.updateLogtail(ctx); err != nil {
 			return nil, err
 		}
-		tbl._partState = tbl.db.txn.engine.getPartition(tbl.db.databaseId, tbl.tableId).Snapshot()
+		tbl._partState.Store(tbl.db.txn.engine.getPartition(tbl.db.databaseId, tbl.tableId).Snapshot())
 	}
-	return tbl._partState, nil
+	return tbl._partState.Load(), nil
 }
 
 func (tbl *txnTable) UpdateObjectInfos(ctx context.Context) (err error) {
@@ -2139,18 +2124,18 @@ func (tbl *txnTable) UpdateObjectInfos(ctx context.Context) (err error) {
 	// 1. update logtail
 	// 2. generate block infos
 	// 3. update the blockInfosUpdated and blockInfos fields of the table
-	if !created && !tbl.objInfosUpdated {
+	if !created && !tbl.objInfosUpdated.Load() {
 		if err = tbl.updateLogtail(ctx); err != nil {
 			return
 		}
-		tbl.objInfosUpdated = true
+		tbl.objInfosUpdated.Store(true)
 	}
 	return
 }
 
 func (tbl *txnTable) updateLogtail(ctx context.Context) (err error) {
 	// if the logtail is updated, skip
-	if tbl.logtailUpdated {
+	if tbl.logtailUpdated.Load() {
 		return
 	}
 
@@ -2200,7 +2185,7 @@ func (tbl *txnTable) updateLogtail(ctx context.Context) (err error) {
 		return
 	}
 
-	tbl.logtailUpdated = true
+	tbl.logtailUpdated.Store(true)
 	return nil
 }
 
@@ -2223,7 +2208,7 @@ func (tbl *txnTable) PrimaryKeysMayBeModified(ctx context.Context, from types.TS
 	return false, nil
 }
 
-func (tbl *txnTable) updateDeleteInfo(
+func (tbl *txnTable) transferRowid(
 	ctx context.Context,
 	state *logtailreplay.PartitionState,
 	deleteObjs,
