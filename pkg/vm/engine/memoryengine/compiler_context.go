@@ -142,7 +142,7 @@ func (c *CompilerContext) GetPrimaryKeyDef(dbName string, tableName string) (def
 		if !attr.Primary {
 			continue
 		}
-		defs = append(defs, engineAttrToPlanColDef(i, attr, dbName+"."+tableName))
+		defs = append(defs, engineAttrToPlanColDef(i, attr))
 	}
 	return
 }
@@ -182,7 +182,8 @@ func (c *CompilerContext) Resolve(schemaName string, tableName string) (objRef *
 	}
 
 	tableDef = &plan.TableDef{
-		Name: tableName,
+		Name:   tableName,
+		DbName: schemaName,
 	}
 
 	attrs, err := c.getTableAttrs(schemaName, tableName)
@@ -207,7 +208,7 @@ func (c *CompilerContext) Resolve(schemaName string, tableName string) (objRef *
 				Names:       []string{attr.Name},
 			}
 		}
-		tableDef.Cols = append(tableDef.Cols, engineAttrToPlanColDef(i, attr, schemaName+"."+tableName))
+		tableDef.Cols = append(tableDef.Cols, engineAttrToPlanColDef(i, attr))
 	}
 
 	//TODO properties
@@ -256,7 +257,7 @@ func (c *CompilerContext) GetBuildingAlterView() (bool, string, string) {
 	return false, "", ""
 }
 
-func engineAttrToPlanColDef(idx int, attr *engine.Attribute, tblName string) *plan.ColDef {
+func engineAttrToPlanColDef(idx int, attr *engine.Attribute) *plan.ColDef {
 	return &plan.ColDef{
 		ColId: uint64(attr.ID),
 		Name:  attr.Name,
@@ -266,7 +267,6 @@ func engineAttrToPlanColDef(idx int, attr *engine.Attribute, tblName string) *pl
 			Width:       attr.Type.Width,
 			Scale:       attr.Type.Scale,
 			Enumvalues:  attr.EnumVlaues,
-			Table:       tblName,
 		},
 		Default:   attr.Default,
 		Primary:   attr.Primary,

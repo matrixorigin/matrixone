@@ -164,18 +164,13 @@ func (cwft *TxnComputationWrapper) GetColumns() ([]interface{}, error) {
 	}
 	columns := make([]interface{}, len(cols))
 	for i, col := range cols {
-		dbName, tblName := col.Typ.Table, cwft.ses.GetTxnCompileCtx().DefaultDatabase()
-		if splits := strings.Split(col.Typ.Table, "."); len(splits) == 2 {
-			dbName, tblName = splits[0], splits[1]
-		}
-
 		c := new(MysqlColumn)
 		c.SetName(col.Name)
 		c.SetOrgName(col.Name)
-		c.SetTable(tblName)
-		c.SetOrgTable(tblName)
+		c.SetTable(col.TblName)
+		c.SetOrgTable(col.TblName)
 		c.SetAutoIncr(col.Typ.AutoIncr)
-		c.SetSchema(dbName)
+		c.SetSchema(col.DbName)
 		err = convertEngineTypeToMysqlType(cwft.ses.requestCtx, types.T(col.Typ.Id), c)
 		if err != nil {
 			return nil, err
