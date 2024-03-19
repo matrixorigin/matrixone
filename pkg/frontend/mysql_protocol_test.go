@@ -67,7 +67,7 @@ func (tRM *TestRoutineManager) Created(rs goetty.IOSession) {
 	routine := NewRoutine(context.TODO(), pro, exe, tRM.pu.SV, rs)
 
 	hsV10pkt := pro.makeHandshakeV10Payload()
-	err := pro.writePackets(hsV10pkt)
+	err := pro.writePackets(hsV10pkt, true)
 	if err != nil {
 		panic(err)
 	}
@@ -1809,7 +1809,7 @@ func Test_writePackets(t *testing.T) {
 		}
 
 		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
-		err = proto.writePackets(make([]byte, MaxPayloadSize))
+		err = proto.writePackets(make([]byte, MaxPayloadSize), true)
 		convey.So(err, convey.ShouldBeNil)
 	})
 	convey.Convey("writepackets 16MB failed", t, func() {
@@ -1835,7 +1835,7 @@ func Test_writePackets(t *testing.T) {
 		}
 
 		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
-		err = proto.writePackets(make([]byte, MaxPayloadSize))
+		err = proto.writePackets(make([]byte, MaxPayloadSize), true)
 		convey.So(err, convey.ShouldBeError)
 	})
 
@@ -1855,7 +1855,7 @@ func Test_writePackets(t *testing.T) {
 		}
 
 		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
-		err = proto.writePackets(make([]byte, MaxPayloadSize))
+		err = proto.writePackets(make([]byte, MaxPayloadSize), true)
 		convey.So(err, convey.ShouldBeError)
 	})
 }

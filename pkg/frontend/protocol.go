@@ -337,6 +337,12 @@ func (mp *MysqlProtocolImpl) getAbortTransactionErrorInfo() string {
 }
 
 func (mp *MysqlProtocolImpl) SendResponse(ctx context.Context, resp *Response) error {
+	mp.disableAutoFlush = true
+	defer func() {
+		mp.disableAutoFlush = false
+		mp.tcpConn.Flush(0)
+	}()
+
 	//move here to prohibit potential recursive lock
 	var attachAbort string
 	if resp.GetCategory() == ErrorResponse {

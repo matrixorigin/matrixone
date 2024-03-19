@@ -350,6 +350,8 @@ type MysqlProtocolImpl struct {
 	SV *config.FrontendParameters
 
 	ses *Session
+
+	disableAutoFlush bool
 }
 
 func (mp *MysqlProtocolImpl) GetSession() *Session {
@@ -482,6 +484,12 @@ type response320 struct {
 }
 
 func (mp *MysqlProtocolImpl) SendPrepareResponse(ctx context.Context, stmt *PrepareStmt) error {
+	mp.disableAutoFlush = true
+	defer func() {
+		mp.disableAutoFlush = false
+		mp.tcpConn.Flush(0)
+	}()
+
 	dcPrepare, ok := stmt.PreparePlan.GetDcl().Control.(*planPb.DataControl_Prepare)
 	if !ok {
 		return moerr.NewInternalError(ctx, "can not get Prepare plan in prepareStmt")
@@ -508,7 +516,7 @@ func (mp *MysqlProtocolImpl) SendPrepareResponse(ctx context.Context, stmt *Prep
 	data = append(data, 0)
 	// warning count
 	data = append(data, 0, 0) // TODO support warning count
-	if err := mp.writePackets(data); err != nil {
+	if err := mp.writePackets(data, false); err != nil {
 		return err
 	}
 
@@ -1663,7 +1671,7 @@ func (mp *MysqlProtocolImpl) makeAuthSwitchRequestPayload(authMethodName string)
 func (mp *MysqlProtocolImpl) negotiateAuthenticationMethod(ctx context.Context) ([]byte, error) {
 	var err error
 	aswPkt := mp.makeAuthSwitchRequestPayload(AuthNativePassword)
-	err = mp.writePackets(aswPkt)
+	err = mp.writePackets(aswPkt, true)
 	if err != nil {
 		return nil, err
 	}
@@ -1748,18 +1756,18 @@ func (mp *MysqlProtocolImpl) makeLocalInfileRequestPayload(filename string) []by
 
 func (mp *MysqlProtocolImpl) sendLocalInfileRequest(filename string) error {
 	req := mp.makeLocalInfileRequestPayload(filename)
-	return mp.writePackets(req)
+	return mp.writePackets(req, true)
 }
 
 func (mp *MysqlProtocolImpl) sendOKPacketWithEof(affectedRows, lastInsertId uint64, status, warnings uint16, message string) error {
 	okPkt := mp.makeOKPayloadWithEof(affectedRows, lastInsertId, status, warnings, message)
-	return mp.writePackets(okPkt)
+	return mp.writePackets(okPkt, true)
 }
 
 // send OK packet to the client
 func (mp *MysqlProtocolImpl) sendOKPacket(affectedRows, lastInsertId uint64, status, warnings uint16, message string) error {
 	okPkt := mp.makeOKPayload(affectedRows, lastInsertId, status, warnings, message)
-	return mp.writePackets(okPkt)
+	return mp.writePackets(okPkt, true)
 }
 
 // make Err packet
@@ -1798,7 +1806,7 @@ func (mp *MysqlProtocolImpl) sendErrPacket(errorCode uint16, sqlState, errorMess
 		mp.ses.GetErrInfo().push(errorCode, errorMessage)
 	}
 	errPkt := mp.makeErrPayload(errorCode, sqlState, errorMessage)
-	return mp.writePackets(errPkt)
+	return mp.writePackets(errPkt, true)
 }
 
 func (mp *MysqlProtocolImpl) makeEOFPayload(warnings, status uint16) []byte {
@@ -1814,7 +1822,7 @@ func (mp *MysqlProtocolImpl) makeEOFPayload(warnings, status uint16) []byte {
 
 func (mp *MysqlProtocolImpl) sendEOFPacket(warnings, status uint16) error {
 	data := mp.makeEOFPayload(warnings, status)
-	return mp.writePackets(data)
+	return mp.writePackets(data, true)
 }
 
 func (mp *MysqlProtocolImpl) SendEOFPacketIf(warnings, status uint16) error {
@@ -1940,7 +1948,7 @@ func (mp *MysqlProtocolImpl) SendColumnDefinitionPacket(ctx context.Context, col
 		data = mp.makeColumnDefinition41Payload(mysqlColumn, cmd)
 	}
 
-	return mp.writePackets(data)
+	return mp.writePackets(data, true)
 }
 
 // SendColumnCountPacket makes the column count packet
@@ -1949,7 +1957,7 @@ func (mp *MysqlProtocolImpl) SendColumnCountPacket(count uint64) error {
 	pos := HeaderOffset
 	pos = mp.writeIntLenEnc(data, pos, count)
 
-	return mp.writePackets(data[:pos])
+	return mp.writePackets(data[:pos], true)
 }
 
 func (mp *MysqlProtocolImpl) sendColumns(ctx context.Context, mrs *MysqlResultSet, cmd int, warnings, status uint16) error {
@@ -2312,6 +2320,12 @@ func (mp *MysqlProtocolImpl) SendResultSetTextBatchRow(mrs *MysqlResultSet, cnt 
 		return nil
 	}
 
+	mp.disableAutoFlush = true
+	defer func() {
+		mp.disableAutoFlush = false
+		mp.tcpConn.Flush(0)
+	}()
+
 	mp.m.Lock()
 	defer mp.m.Unlock()
 	var err error = nil
@@ -2328,6 +2342,12 @@ func (mp *MysqlProtocolImpl) SendResultSetTextBatchRowSpeedup(mrs *MysqlResultSe
 	if cnt == 0 {
 		return nil
 	}
+
+	mp.disableAutoFlush = true
+	defer func() {
+		mp.disableAutoFlush = false
+		mp.tcpConn.Flush(0)
+	}()
 
 	cmd := mp.GetSession().GetCmd()
 	mp.m.Lock()
@@ -2669,7 +2689,11 @@ func (mp *MysqlProtocolImpl) sendResultSet(ctx context.Context, set ResultSet, c
 }
 
 // the server sends the payload to the client
-func (mp *MysqlProtocolImpl) writePackets(payload []byte) error {
+func (mp *MysqlProtocolImpl) writePackets(payload []byte, flush bool) error {
+	if flush {
+		flush = !mp.disableAutoFlush
+	}
+
 	//protocol header length
 	var headerLen = HeaderOffset
 	var header [4]byte
@@ -2694,7 +2718,7 @@ func (mp *MysqlProtocolImpl) writePackets(payload []byte) error {
 		var packet = append(header[:], payload[i:i+curLen]...)
 
 		mp.incDebugCount(4)
-		err := mp.tcpConn.Write(packet, goetty.WriteOptions{Flush: true})
+		err := mp.tcpConn.Write(packet, goetty.WriteOptions{Flush: false})
 		mp.incDebugCount(5)
 		if err != nil {
 			return err
@@ -2720,6 +2744,10 @@ func (mp *MysqlProtocolImpl) writePackets(payload []byte) error {
 			mp.AddSequenceId(1)
 		}
 	}
+
+	if flush {
+		return mp.tcpConn.Flush(0)
+	}
 	return nil
 }
 
@@ -2730,7 +2758,7 @@ func (mp *MysqlProtocolImpl) MakeHandshakePayload() []byte {
 
 // WritePacket exposes (*MysqlProtocolImpl).writePackets() function.
 func (mp *MysqlProtocolImpl) WritePacket(payload []byte) error {
-	return mp.writePackets(payload)
+	return mp.writePackets(payload, true)
 }
 
 // MakeOKPayload exposes (*MysqlProtocolImpl).makeOKPayload() function.
