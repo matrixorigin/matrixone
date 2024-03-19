@@ -1315,7 +1315,6 @@ func (ses *Session) GetGlobalVar(name string) (interface{}, error) {
 func (ses *Session) GetTxnCompileCtx() *TxnCompilerContext {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
-	ses.txnCompileCtx.proc = ses.proc
 	return ses.txnCompileCtx
 }
 

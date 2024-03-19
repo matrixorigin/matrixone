@@ -863,6 +863,7 @@ var (
 		"mo_variables":                0,
 		"mo_transactions":             0,
 		"mo_cache":                    0,
+		catalog.MOForeignKeys:         0,
 	}
 	createDbInformationSchemaSql = "create database information_schema;"
 	createAutoTableSql           = fmt.Sprintf(`create table if not exists %s (

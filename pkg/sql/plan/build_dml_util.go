@@ -3404,9 +3404,9 @@ var fkBannedDatabase = map[string]bool{
 	"mysql":                   true,
 }
 
-// isFkBannedDatabase denotes the database should not have any
+// IsFkBannedDatabase denotes the database should not have any
 // foreign keys
-func isFkBannedDatabase(db string) bool {
+func IsFkBannedDatabase(db string) bool {
 	if _, has := fkBannedDatabase[db]; has {
 		return true
 	}
