@@ -16,12 +16,12 @@ package disttae
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -1061,19 +1061,9 @@ func ExecuteBlockFilter(
 			if seekOp != nil {
 				pos = seekOp(dataMeta)
 			}
-			// TODO: cannot remove now. fix me later
-			if dataMeta == nil && obj.Rows() == 0 {
-				location := obj.ObjectLocation()
-				if meta, err2 = objectio.FastLoadObjectMeta(
-					proc.Ctx, &location, false, fs,
-				); err2 != nil {
-					return
-				}
-				dataMeta = meta.MustDataMeta()
-			}
 
 			if objStats.Rows() == 0 {
-				logutil.Fatalf("obj rows is 0, details: %s", obj.String())
+				logutil.Fatalf("object stats has zero rows, detail: %s", obj.String())
 			}
 
 			for ; pos < blockCnt; pos++ {
