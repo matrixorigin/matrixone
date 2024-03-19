@@ -176,7 +176,11 @@ func (e *MergeExecutor) ExecuteFor(entry *catalog.TableEntry, policy Policy) {
 			stat := obj.GetObjectStats()
 			stats = append(stats, stat.Clone().Marshal())
 		}
-		entry := &api.MergeTaskEntry{
+		schema := entry.GetLastestSchema()
+		cntask := &api.MergeTaskEntry{
+			AccountId:         schema.AcInfo.TenantID,
+			UserId:            schema.AcInfo.UserID,
+			RoleId:            schema.AcInfo.RoleID,
 			TblId:             entry.ID,
 			DbId:              entry.GetDB().GetID(),
 			TableName:         entry.GetLastestSchema().Name,
@@ -184,11 +188,12 @@ func (e *MergeExecutor) ExecuteFor(entry *catalog.TableEntry, policy Policy) {
 			ToMergeObjs:       stats,
 			EstimatedMemUsage: uint64(esize),
 		}
-		if err := e.cnSched.SendMergeTask(context.TODO(), entry); err == nil {
+		if err := e.cnSched.SendMergeTask(context.TODO(), cntask); err == nil {
 			ActiveCNObj.AddActiveCNObj(mobjs)
 			logMergeTask(e.tableName, math.MaxUint64, objectList, blkCnt, osize, esize)
 		} else {
 			logutil.Warnf("mergeblocks send to cn error: %v", err)
+			return
 		}
 	} else {
 		scopes := make([]common.ID, blkCnt)

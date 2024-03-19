@@ -403,4 +403,7 @@ message MergeTaskEntry {
     // ObjectStats
     repeated bytes to_merge_objs = 5;
     uint64 estimated_mem_usage = 6;
+    uint32 account_id = 7;
+    uint32 user_id = 8;
+    uint32 role_id = 9;
 }

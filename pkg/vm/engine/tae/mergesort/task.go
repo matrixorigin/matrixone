@@ -98,7 +98,7 @@ func DoMergeAndWrite(
 	}
 	tableDesc := fmt.Sprintf("%v-%v", commitEntry.TblId, commitEntry.TableName)
 	logutil.Info("[Start] Mergeblocks",
-		zap.String("table", commitEntry.TableName),
+		zap.String("table", tableDesc),
 		zap.String("on", mergehost.HostHintName()),
 		zap.String("txn-start-ts", commitEntry.StartTs.DebugString()),
 		zap.String("from-objs", fromObjsDesc),

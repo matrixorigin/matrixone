@@ -21,6 +21,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -144,7 +145,7 @@ func (entry *mergeObjectsEntry) transferBlockDeletes(
 	dropped *catalog.BlockEntry,
 	blks []handle.Block,
 	delTbls []*model.TransDels,
-	blkidx int) (err error) {
+	blkidx int) (count int, err error) {
 
 	mapping := entry.transMappings.Mappings[blkidx].M
 	if len(mapping) == 0 {
@@ -162,10 +163,10 @@ func (entry *mergeObjectsEntry) transferBlockDeletes(
 		common.MergeAllocator,
 	)
 	if err != nil {
-		return err
+		return
 	}
 	if bat == nil || bat.Length() == 0 {
-		return nil
+		return
 	}
 
 	tblEntry.Stats.Lock()
@@ -174,7 +175,7 @@ func (entry *mergeObjectsEntry) transferBlockDeletes(
 	rowid := vector.MustFixedCol[types.Rowid](bat.GetVectorByName(catalog.PhyAddrColumnName).GetDownstreamVector())
 	ts := vector.MustFixedCol[types.TS](bat.GetVectorByName(catalog.AttrCommitTs).GetDownstreamVector())
 
-	count := len(rowid)
+	count = len(rowid)
 	for i := 0; i < count; i++ {
 		row := rowid[i].GetRowOffset()
 		destpos, ok := mapping[int32(row)]
@@ -188,7 +189,7 @@ func (entry *mergeObjectsEntry) transferBlockDeletes(
 		if err = blks[destpos.Idx].RangeDelete(
 			uint32(destpos.Row), uint32(destpos.Row), handle.DT_MergeCompact, common.MergeAllocator,
 		); err != nil {
-			return err
+			return 0, err
 		}
 	}
 	return
@@ -217,18 +218,21 @@ func (entry *mergeObjectsEntry) PrepareCommit() (err error) {
 		panic(fmt.Sprintf("bad length %v != %v", len(entry.droppedBlks), len(entry.transMappings.Mappings)))
 	}
 
+	total_trans := 0
 	for idx, dropped := range entry.droppedBlks {
 		if len(entry.transMappings.Mappings[idx].M) == 0 {
 			continue
 		}
-		if err = entry.transferBlockDeletes(
+		count, err := entry.transferBlockDeletes(
 			dropped,
 			blks,
 			delTbls,
 			idx,
-		); err != nil {
+		)
+		if err != nil {
 			break
 		}
+		total_trans += count
 		ids = append(ids, dropped.AsCommonID())
 	}
 	if err == nil {
@@ -238,6 +242,12 @@ func (entry *mergeObjectsEntry) PrepareCommit() (err error) {
 				entry.rt.TransferDelsMap.SetDelsForBlk(destid, delTbl)
 			}
 		}
+		logutil.Infof("mergeblocks commit %v, [%v,%v], trans %d",
+			entry.relation.ID(),
+			entry.txn.GetStartTS().ToString(),
+			entry.txn.GetCommitTS().ToString(),
+			total_trans,
+		)
 	}
 	if err != nil {
 		for _, id := range ids {
