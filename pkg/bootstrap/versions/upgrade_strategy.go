@@ -16,6 +16,7 @@ package versions
 
 import (
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -354,18 +355,6 @@ func CheckTableDataExist(txn executor.TxnExecutor, accountId uint32, sql string)
 	})
 
 	return loaded, nil
-}
-
-// DropView Execute the delete view operation
-func DropView(txn executor.TxnExecutor, accountId uint32, schema string, viewName string) error {
-	// Delete the current view
-	sql := fmt.Sprintf("drop view `%s`.`%s`", schema, viewName)
-	res, err := txn.Exec(sql, executor.StatementOption{}.WithAccountID(accountId))
-	if err != nil {
-		return err
-	}
-	defer res.Close()
-	return nil
 }
 
 func checkInput(input string) bool {

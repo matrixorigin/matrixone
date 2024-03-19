@@ -17,13 +17,14 @@ package bootstrap
 import (
 	"context"
 	"fmt"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"go.uber.org/zap"
-	"time"
 )
 
 func (s *service) UpgradeTenant(ctx context.Context, tenantName string, isALLAccount bool) (bool, error) {
@@ -69,6 +70,7 @@ func (s *service) CheckAndUpgradeCluster(ctx context.Context) error {
 	return nil
 }
 
+// UpgradeOneTenant Perform metadata upgrade for individual tenants
 func (s *service) UpgradeOneTenant(ctx context.Context, tenantID int32) error {
 	s.mu.RLock()
 	checked := s.mu.tenants[tenantID]
@@ -76,6 +78,9 @@ func (s *service) UpgradeOneTenant(ctx context.Context, tenantID int32) error {
 	if checked {
 		return nil
 	}
+
+	ctx, cancel := context.WithTimeout(ctx, time.Hour*12)
+	defer cancel()
 
 	opts := executor.Options{}.
 		WithMinCommittedTS(s.now()).
@@ -93,17 +98,13 @@ func (s *service) UpgradeOneTenant(ctx context.Context, tenantID int32) error {
 
 			// tenant create at current cn, can work correctly
 			currentCN := s.getFinalVersionHandle().Metadata()
-			if currentCN.Version == version {
-				return nil
-			} else if versions.Compare(currentCN.Version, version) < 0 {
+			if versions.Compare(currentCN.Version, version) < 0 {
 				// tenant create at 1.4.0, current tenant version 1.5.0, it must be cannot work
 				return moerr.NewInvalidInputNoCtx("tenant version %s is greater than current cn version %s",
 					version, currentCN.Version)
 			}
 
-			// arrive here means tenant version < current cn version, need upgrade.
-			// and currentCN.Version == last cluster version
-
+			// arrive here means tenant version <= current cn version, need upgrade.
 			latestVersion, err := versions.GetLatestVersion(txn)
 			if err != nil {
 				return err
@@ -142,7 +143,7 @@ func (s *service) UpgradeOneTenant(ctx context.Context, tenantID int32) error {
 			}
 			from := version
 			for _, v := range s.handles {
-				if versions.Compare(v.Metadata().Version, from) > 0 &&
+				if versions.Compare(v.Metadata().Version, from) >= 0 &&
 					v.Metadata().CanDirectUpgrade(from) {
 					if err := v.HandleTenantUpgrade(ctx, tenantID, txn); err != nil {
 						return err

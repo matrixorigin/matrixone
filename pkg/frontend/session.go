@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"runtime"
 	"strings"
 	"sync"
@@ -26,6 +25,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -1635,19 +1635,6 @@ func (ses *Session) AuthenticateUser(userInput string, dbName string, authRespon
 	if err != nil {
 		return nil, err
 	}
-
-	// current Tenant system version
-	//createVersion, err = rsset[0].GetString(sysTenantCtx, 0, 5)
-	//if err != nil {
-	//	return nil, err
-	//}
-
-	//------------------------------------------------------------------------------------------------------------------
-	//err = ses.MaybeUpgradeTenant(sysTenantCtx, createVersion, tenantID)
-	//if err != nil {
-	//	return nil, err
-	//}
-	//------------------------------------------------------------------------------------------------------------------
 
 	if strings.ToLower(accountStatus) == tree.AccountStatusSuspend.String() {
 		return nil, moerr.NewInternalError(sysTenantCtx, "Account %s is suspended", tenant.GetTenant())

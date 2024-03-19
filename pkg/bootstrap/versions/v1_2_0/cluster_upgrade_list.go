@@ -16,12 +16,13 @@ package v1_2_0
 
 import (
 	"fmt"
+	"strings"
+
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
-	"strings"
 )
 
 var clusterUpgEntries = []versions.UpgradeEntry{
@@ -106,15 +107,6 @@ var upg_mo_role_privs = versions.UpgradeEntry{
 		return versions.CheckTableDataExist(txn, accountId, sql)
 	},
 }
-
-//var upg_mo_task_db = versions.UpgradeEntry{
-//	Schema:  trace.DebugDB,
-//	UpgType: versions.CREATE_DATABASE,
-//	UpgSql:  fmt.Sprintf("create database %s", trace.DebugDB),
-//	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
-//		return versions.CheckDatabaseDefinition(txn, accountId, trace.DebugDB)
-//	},
-//}
 
 var upg_mo_debug_eventTxnTable = versions.UpgradeEntry{
 	Schema:    trace.DebugDB,

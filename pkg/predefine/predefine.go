@@ -17,12 +17,13 @@ package predefine
 import (
 	"encoding/json"
 	"fmt"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/util/export"
 	"github.com/matrixorigin/matrixone/pkg/util/metric/mometric"
 	"github.com/robfig/cron/v3"
-	"time"
 )
 
 // genInitCronTaskSQL Generate `insert` statement for creating system cron tasks, which works on the `mo_task`.`sys_cron_task` table.

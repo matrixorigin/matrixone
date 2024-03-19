@@ -17,14 +17,15 @@ package frontend
 import (
 	"context"
 	"fmt"
+	"os"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
-	"os"
-	"time"
 )
 
 // InitSysTenant initializes the tenant SYS before any tenants and accepting any requests

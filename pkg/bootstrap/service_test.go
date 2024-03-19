@@ -30,33 +30,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-/*
-func TestBootstrap(t *testing.T) {
-	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
-
-	n := 0
-	exec := executor.NewMemExecutor(func(sql string) (executor.Result, error) {
-		n++
-		return executor.Result{}, nil
-	})
-
-	fs, err := fileservice.NewMemoryFS(defines.LocalFileServiceName, fileservice.DisabledCacheConfig, nil)
-	assert.NoError(t, err)
-
-	b := NewService(
-		&memLocker{},
-		clock.NewHLCClock(func() int64 { return 0 }, 0),
-		nil,
-		exec,
-		fs)
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
-	defer cancel()
-
-	require.NoError(t, b.Bootstrap(ctx))
-	assert.Equal(t, len(step1InitSQLs)+len(step2InitSQLs)+1+len(trace.InitSQLs), n)
-}
-*/
-
 func TestBootstrapAlreadyBootstrapped(t *testing.T) {
 	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
 

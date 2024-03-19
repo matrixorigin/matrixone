@@ -16,18 +16,12 @@ package versions
 
 import (
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 )
 
 var (
 	FrameworkInitSQLs = []string{
-		//fmt.Sprintf(`create table %s.%s (
-		//	version             varchar(50) not null primary key,
-		//	state               int,
-		//	create_at           timestamp not null,
-		//	update_at           timestamp not null
-		//)`, catalog.MO_CATALOG, catalog.MOVersionTable),
-
 		fmt.Sprintf(`create table %s.%s (
 			version             varchar(50) not null,
 		    version_offset      int unsigned default 0,
@@ -36,21 +30,6 @@ var (
 			update_at           timestamp not null,
 			primary key(version, version_offset)
 		)`, catalog.MO_CATALOG, catalog.MOVersionTable),
-
-		//fmt.Sprintf(`create table %s.%s (
-		//	id                  bigint unsigned not null primary key auto_increment,
-		//	from_version        varchar(50) not null,
-		//	to_version          varchar(50) not null,
-		//	final_version       varchar(50) not null,
-		//	state               int,
-		//	upgrade_cluster     int,
-		//	upgrade_tenant      int,
-		//	upgrade_order       int,
-		//	total_tenant        int,
-		//	ready_tenant        int,
-		//	create_at           timestamp not null,
-		//	update_at           timestamp not null
-		//)`, catalog.MO_CATALOG, catalog.MOUpgradeTable),
 
 		fmt.Sprintf(`create table %s.%s (
 			id                   bigint unsigned not null primary key auto_increment,
@@ -78,8 +57,6 @@ var (
 			create_at           timestamp not null,
 			update_at           timestamp not null
 		)`, catalog.MO_CATALOG, catalog.MOUpgradeTenantTable),
-
-		//`alter table mo_account add column create_version varchar(50) default '1.2.0' after suspended_time`,
 	}
 )
 
