@@ -173,7 +173,7 @@ func (s *sqlStore) Allocate(
 			opts)
 		if err != nil {
 			// retry ww conflict if the txn is not pessimistic
-			if !txnOp.Txn().IsPessimistic() &&
+			if txnOp != nil && !txnOp.Txn().IsPessimistic() &&
 				moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict) {
 				continue
 			}
