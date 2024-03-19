@@ -862,6 +862,7 @@ func runTestHandle(funName string, t *testing.T, handleFun func(*MysqlCmdExecuto
 		ses.SetRequestContext(ctx)
 		ses.SetConnectContext(ctx)
 		ses.mrs = &MysqlResultSet{}
+		ses.txnCompileCtx.proc = testutil.NewProc()
 		mce := &MysqlCmdExecutor{}
 		mce.SetSession(ses)
 
