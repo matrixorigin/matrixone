@@ -62,13 +62,17 @@ func newAggSum[from numeric, to numericWithMaxScale]() aggexec.SingleAggFromFixe
 	return aggSum[from, to]{}
 }
 
-type aggSumDecimal64 struct{}
+type aggSumDecimal64 struct {
+	argScale int32
+}
 
 func newAggSumDecimal64() aggexec.SingleAggFromFixedRetFixed[types.Decimal64, types.Decimal128] {
 	return aggSumDecimal64{}
 }
 
-type aggSumDecimal128 struct{}
+type aggSumDecimal128 struct {
+	argScale int32
+}
 
 func newAggSumDecimal128() aggexec.SingleAggFromFixedRetFixed[types.Decimal128, types.Decimal128] {
 	return aggSumDecimal128{}
@@ -91,9 +95,11 @@ func (a aggSum[from, to]) Merge(other aggexec.SingleAggFromFixedRetFixed[from, t
 }
 func (a aggSum[from, to]) Flush(get aggexec.AggGetter[to], setter aggexec.AggSetter[to]) {}
 
-func (a aggSumDecimal64) Marshal() []byte                                                  { return nil }
-func (a aggSumDecimal64) Unmarshal(bytes []byte)                                           {}
-func (a aggSumDecimal64) Init(aggexec.AggSetter[types.Decimal128], types.Type, types.Type) {}
+func (a aggSumDecimal64) Marshal() []byte     { return types.EncodeInt32(&a.argScale) }
+func (a aggSumDecimal64) Unmarshal(bs []byte) { a.argScale = types.DecodeInt32(bs) }
+func (a aggSumDecimal64) Init(set aggexec.AggSetter[types.Decimal128], arg types.Type, ret types.Type) {
+	a.argScale = arg.Scale
+}
 func (a aggSumDecimal64) Fill(from types.Decimal64, get aggexec.AggGetter[types.Decimal128], set aggexec.AggSetter[types.Decimal128]) {
 	r, _ := get().Add64(from)
 	set(r)
@@ -106,7 +112,7 @@ func (a aggSumDecimal64) Fills(value types.Decimal64, isNull bool, count int, ge
 		if value.Sign() {
 			v.B64_127 = ^v.B64_127
 		}
-		r, _ := v.Mul128(types.Decimal128{B0_63: uint64(count), B64_127: 0})
+		r, _, _ := v.Mul(types.Decimal128{B0_63: uint64(count), B64_127: 0}, a.argScale, 0)
 		r, _ = get().Add128(r)
 		set(r)
 	}
@@ -116,9 +122,11 @@ func (a aggSumDecimal64) Merge(other aggexec.SingleAggFromFixedRetFixed[types.De
 func (a aggSumDecimal64) Flush(get aggexec.AggGetter[types.Decimal128], set aggexec.AggSetter[types.Decimal128]) {
 }
 
-func (a aggSumDecimal128) Marshal() []byte                                                  { return nil }
-func (a aggSumDecimal128) Unmarshal(bytes []byte)                                           {}
-func (a aggSumDecimal128) Init(aggexec.AggSetter[types.Decimal128], types.Type, types.Type) {}
+func (a aggSumDecimal128) Marshal() []byte     { return types.EncodeInt32(&a.argScale) }
+func (a aggSumDecimal128) Unmarshal(bs []byte) { a.argScale = types.DecodeInt32(bs) }
+func (a aggSumDecimal128) Init(set aggexec.AggSetter[types.Decimal128], arg types.Type, ret types.Type) {
+	a.argScale = arg.Scale
+}
 func (a aggSumDecimal128) Fill(from types.Decimal128, get aggexec.AggGetter[types.Decimal128], set aggexec.AggSetter[types.Decimal128]) {
 	r, _ := get().Add128(from)
 	set(r)
@@ -127,7 +135,7 @@ func (a aggSumDecimal128) FillNull(get aggexec.AggGetter[types.Decimal128], set 
 }
 func (a aggSumDecimal128) Fills(value types.Decimal128, isNull bool, count int, get aggexec.AggGetter[types.Decimal128], set aggexec.AggSetter[types.Decimal128]) {
 	if !isNull {
-		r, _, _ := value.Mul(types.Decimal128{B0_63: uint64(count), B64_127: 0}, 0, 0)
+		r, _, _ := value.Mul(types.Decimal128{B0_63: uint64(count), B64_127: 0}, a.argScale, 0)
 		r, _ = get().Add128(r)
 		set(r)
 	}

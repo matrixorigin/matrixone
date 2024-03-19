@@ -79,34 +79,44 @@ func (a aggBitOr[T]) Merge(other aggexec.SingleAggFromFixedRetFixed[T, uint64], 
 }
 func (a aggBitOr[T]) Flush(get aggexec.AggGetter[uint64], set aggexec.AggSetter[uint64]) {}
 
-type aggBitOrBinary struct{}
+type aggBitOrBinary struct {
+	aggBitBinary
+}
 
 func newAggBitOrBinary() aggexec.SingleAggFromVarRetVar {
-	return aggBitOrBinary{}
+	return &aggBitOrBinary{}
 }
 
-func (a aggBitOrBinary) Marshal() []byte  { return nil }
-func (a aggBitOrBinary) Unmarshal([]byte) {}
-func (a aggBitOrBinary) Init(set aggexec.AggBytesSetter, arg types.Type, ret types.Type) {
-	vs := make([]byte, ret.Width)
-	for i := range vs {
-		vs[i] = 0
+func (a *aggBitOrBinary) FillBytes(value []byte, get aggexec.AggBytesGetter, set aggexec.AggBytesSetter) {
+	if a.isEmpty {
+		vs := make([]byte, len(value))
+		for i := range vs {
+			vs[i] = 0
+		}
+		_ = set(vs)
+		a.isEmpty = false
 	}
-	_ = set(vs)
-}
-func (a aggBitOrBinary) FillBytes(value []byte, get aggexec.AggBytesGetter, set aggexec.AggBytesSetter) {
 	v := get()
 	types.BitOr(v, v, value)
 }
-func (a aggBitOrBinary) FillNull(get aggexec.AggBytesGetter, set aggexec.AggBytesSetter) {
+func (a *aggBitOrBinary) FillNull(get aggexec.AggBytesGetter, set aggexec.AggBytesSetter) {
 }
-func (a aggBitOrBinary) Fills(value []byte, isNull bool, count int, get aggexec.AggBytesGetter, set aggexec.AggBytesSetter) {
+func (a *aggBitOrBinary) Fills(value []byte, isNull bool, count int, get aggexec.AggBytesGetter, set aggexec.AggBytesSetter) {
 	if !isNull {
 		a.FillBytes(value, get, set)
 	}
 }
-func (a aggBitOrBinary) Merge(other aggexec.SingleAggFromVarRetVar, get1, get2 aggexec.AggBytesGetter, set aggexec.AggBytesSetter) {
+func (a *aggBitOrBinary) Merge(other aggexec.SingleAggFromVarRetVar, get1, get2 aggexec.AggBytesGetter, set aggexec.AggBytesSetter) {
+	next := other.(*aggBitOrBinary)
+	if next.isEmpty {
+		return
+	}
+	if a.isEmpty {
+		_ = set(get2())
+		a.isEmpty = false
+		return
+	}
 	v1, v2 := get1(), get2()
 	types.BitOr(v1, v1, v2)
 }
-func (a aggBitOrBinary) Flush(get aggexec.AggBytesGetter, set aggexec.AggBytesSetter) {}
+func (a *aggBitOrBinary) Flush(get aggexec.AggBytesGetter, set aggexec.AggBytesSetter) {}

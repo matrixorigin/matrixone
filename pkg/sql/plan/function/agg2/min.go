@@ -83,8 +83,7 @@ func newAggMinDecimal128() aggexec.SingleAggFromFixedRetFixed[types.Decimal128, 
 	return aggMinDecimal128{}
 }
 
-
-type aggBytesMin struct{
+type aggBytesMin struct {
 	isEmpty bool
 }
 
@@ -213,7 +212,7 @@ func (a aggMinDecimal128) Merge(other aggexec.SingleAggFromFixedRetFixed[types.D
 func (a aggMinDecimal128) Flush(get aggexec.AggGetter[types.Decimal128], set aggexec.AggSetter[types.Decimal128]) {
 }
 
-func (a *aggBytesMin) Marshal() []byte  { return types.EncodeBool(&a.isEmpty) }
+func (a *aggBytesMin) Marshal() []byte     { return types.EncodeBool(&a.isEmpty) }
 func (a *aggBytesMin) Unmarshal(bs []byte) { a.isEmpty = types.DecodeBool(bs) }
 func (a *aggBytesMin) Init(setter aggexec.AggBytesSetter, arg types.Type, ret types.Type) {
 	a.isEmpty = true
@@ -255,8 +254,8 @@ func (a *aggBytesMin) Merge(other aggexec.SingleAggFromVarRetVar, get1, get2 agg
 }
 func (a *aggBytesMin) Flush(get aggexec.AggBytesGetter, set aggexec.AggBytesSetter) {}
 
-func (a *aggUuidMin) Marshal() []byte  { return types.EncodeBool(&a.isEmpty) }
-func (a *aggUuidMin) Unmarshal(bs []byte) { a.isEmpty = types.DecodeBool(bs)}
+func (a *aggUuidMin) Marshal() []byte     { return types.EncodeBool(&a.isEmpty) }
+func (a *aggUuidMin) Unmarshal(bs []byte) { a.isEmpty = types.DecodeBool(bs) }
 func (a *aggUuidMin) Init(setter aggexec.AggSetter[types.Uuid], arg types.Type, ret types.Type) {
 	a.isEmpty = true
 }

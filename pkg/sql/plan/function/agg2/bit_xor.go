@@ -83,38 +83,55 @@ func (a aggBitXor[T]) Merge(other aggexec.SingleAggFromFixedRetFixed[T, uint64],
 }
 func (a aggBitXor[T]) Flush(get aggexec.AggGetter[uint64], set aggexec.AggSetter[uint64]) {}
 
-type aggBitXorBinary struct{}
+type aggBitXorBinary struct {
+	aggBitBinary
+}
 
 func newAggBitXorBinary() aggexec.SingleAggFromVarRetVar {
-	return aggBitXorBinary{}
+	return &aggBitXorBinary{}
 }
 
-func (a aggBitXorBinary) Marshal() []byte  { return nil }
-func (a aggBitXorBinary) Unmarshal([]byte) {}
-func (a aggBitXorBinary) Init(set aggexec.AggBytesSetter, arg types.Type, ret types.Type) {
-	vs := make([]byte, ret.Width)
-	for i := range vs {
-		vs[i] = 0
+func (a *aggBitXorBinary) FillBytes(value []byte, get aggexec.AggBytesGetter, set aggexec.AggBytesSetter) {
+	if a.isEmpty {
+		vs := make([]byte, len(value))
+		for i := range vs {
+			vs[i] = 0
+		}
+		_ = set(vs)
+		a.isEmpty = false
 	}
-	_ = set(vs)
-}
-func (a aggBitXorBinary) FillBytes(value []byte, get aggexec.AggBytesGetter, set aggexec.AggBytesSetter) {
 	v := get()
 	types.BitXor(v, v, value)
 }
-func (a aggBitXorBinary) FillNull(get aggexec.AggBytesGetter, set aggexec.AggBytesSetter) {
+func (a *aggBitXorBinary) FillNull(get aggexec.AggBytesGetter, set aggexec.AggBytesSetter) {
 }
-func (a aggBitXorBinary) Fills(value []byte, isNull bool, count int, get aggexec.AggBytesGetter, set aggexec.AggBytesSetter) {
+func (a *aggBitXorBinary) Fills(value []byte, isNull bool, count int, get aggexec.AggBytesGetter, set aggexec.AggBytesSetter) {
 	if !isNull {
 		if count%2 == 1 {
 			a.FillBytes(value, get, set)
 			return
 		}
-		_ = set(get())
+		if a.isEmpty {
+			vs := make([]byte, len(value))
+			for i := range vs {
+				vs[i] = 0
+			}
+			_ = set(vs)
+			a.isEmpty = false
+		}
 	}
 }
-func (a aggBitXorBinary) Merge(other aggexec.SingleAggFromVarRetVar, get1, get2 aggexec.AggBytesGetter, set aggexec.AggBytesSetter) {
+func (a *aggBitXorBinary) Merge(other aggexec.SingleAggFromVarRetVar, get1, get2 aggexec.AggBytesGetter, set aggexec.AggBytesSetter) {
+	next := other.(*aggBitXorBinary)
+	if next.isEmpty {
+		return
+	}
+	if a.isEmpty {
+		_ = set(get2())
+		a.isEmpty = false
+		return
+	}
 	v1, v2 := get1(), get2()
 	types.BitXor(v1, v1, v2)
 }
-func (a aggBitXorBinary) Flush(get aggexec.AggBytesGetter, set aggexec.AggBytesSetter) {}
+func (a *aggBitXorBinary) Flush(get aggexec.AggBytesGetter, set aggexec.AggBytesSetter) {}
