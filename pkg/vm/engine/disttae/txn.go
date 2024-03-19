@@ -17,8 +17,10 @@ package disttae
 import (
 	"context"
 	"encoding/hex"
+	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 	"math"
+	"regexp"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -1050,6 +1052,42 @@ func (txn *Transaction) TransferRowID() {
 			}
 			deleteObjs, createObjs := state.GetChangedObjsBetween(types.TimestampToTS(ts),
 				types.TimestampToTS(tbl.db.txn.op.SnapshotTS()))
+			deleteObjInfos := ""
+			createObjsInfos := ""
+			if regexp.MustCompile(`.*sbtest.*`).MatchString(tbl.tableName) {
+
+				logutil.Infof("xxxx table:%s, txn:%s, lastTs:%s, snapshotTs:%s",
+					tbl.tableName,
+					tbl.db.txn.op.Txn().DebugString(),
+					ts.DebugString(),
+					tbl.db.txn.op.SnapshotTS().DebugString())
+
+				if len(deleteObjs) > 0 || len(createObjs) > 0 {
+					for obj := range deleteObjs {
+						objInfo, ok := state.GetObject(obj)
+						if !ok {
+							logutil.Fatalf("xxxx obj-seg:%s not found in partition state",
+								obj.Segmentid().ToString())
+						}
+						deleteObjInfos = fmt.Sprintf("%s:%s", deleteObjInfos, objInfo.String())
+					}
+					for obj := range createObjs {
+						objInfo, ok := state.GetObject(obj)
+						if !ok {
+							logutil.Fatalf("xxxx obj-seg:%s not found in partition state",
+								obj.Segmentid().ToString())
+						}
+						createObjsInfos = fmt.Sprintf("%s:%s", createObjsInfos, objInfo.String())
+					}
+					logutil.Infof("xxxx table:%s, deleteObjs:%s, xxxx createObjs:%s, txn:%s, lastTs:%s, snapshotTs:%s",
+						tbl.tableName,
+						deleteObjInfos,
+						createObjsInfos,
+						tbl.db.txn.op.Txn().DebugString(),
+						ts,
+						tbl.db.txn.op.SnapshotTS().DebugString())
+				}
+			}
 
 			trace.GetService().ApplyFlush(
 				tbl.db.txn.op.Txn().ID,
