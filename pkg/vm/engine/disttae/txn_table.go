@@ -535,15 +535,14 @@ func (tbl *txnTable) reset(newId uint64) {
 		tbl.oldTableId = tbl.tableId
 	}
 	tbl.tableId = newId
-	tbl._partState = nil
+	tbl._partState.Store(nil)
 	//tbl.objInfos = nil
-	tbl.objInfosUpdated = false
+	tbl.objInfosUpdated.Store(false)
 }
 
 func (tbl *txnTable) resetSnapshot() {
-	tbl._partState = nil
-	//tbl.objInfos = nil
-	tbl.objInfosUpdated = false
+	tbl._partState.Store(nil)
+	tbl.objInfosUpdated.Store(false)
 }
 
 // return all unmodified blocks
@@ -596,12 +595,6 @@ func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr) (ranges eng
 	var blocks objectio.BlockInfoSlice
 	blocks.AppendBlockInfo(objectio.EmptyBlockInfo)
 
-	// for dynamic parameter, substitute param ref and const fold cast expression here to improve performance
-	newExprs, err := plan2.ConstandFoldList(exprs, tbl.proc.Load(), true)
-	if err == nil {
-		exprs = newExprs
-	}
-
 	if err = tbl.rangesOnePart(
 		ctx,
 		part,
@@ -639,82 +632,34 @@ func (tbl *txnTable) rangesOnePart(
 	state *logtailreplay.PartitionState, // snapshot state of this transaction
 	tableDef *plan.TableDef, // table definition (schema)
 	exprs []*plan.Expr, // filter expression
-	blocks *objectio.BlockInfoSlice, // output marshaled block list after filtering
+	outBlocks *objectio.BlockInfoSlice, // output marshaled block list after filtering
 	proc *process.Process, // process of this transaction
 ) (err error) {
-	var uncommittedObjects []objectio.ObjectStats
-	tbl.db.txn.forEachTableWrites(tbl.db.databaseId, tbl.tableId, tbl.db.txn.GetSnapshotWriteOffset(), func(entry Entry) {
-		stats := objectio.ObjectStats{}
-		if entry.bat == nil || entry.bat.IsEmpty() {
-			return
-		}
-		if entry.typ == INSERT_TXN {
-			return
-		}
-		if entry.typ != INSERT ||
-			len(entry.bat.Attrs) < 2 ||
-			entry.bat.Attrs[1] != catalog.ObjectMeta_ObjectStats {
-			return
-		}
-		for i := 0; i < entry.bat.Vecs[1].Length(); i++ {
-			stats.UnMarshal(entry.bat.Vecs[1].GetBytesAt(i))
-			uncommittedObjects = append(uncommittedObjects, stats)
-		}
-	})
 
-	if done, err := tbl.tryFastRanges(
-		exprs, state, uncommittedObjects, blocks, tbl.db.txn.engine.fs,
+	uncommittedObjects := tbl.collectUnCommittedObjects()
+	dirtyBlks := tbl.collectDirtyBlocks(state, uncommittedObjects)
+
+	done, err := tbl.tryFastFilterBlocks(
+		exprs, state, uncommittedObjects, dirtyBlks, outBlocks, tbl.db.txn.engine.fs)
+	if err != nil {
+		return err
+	} else if done {
+		return nil
+	}
+
+	if done, err = tbl.tryFastRanges(
+		exprs, state, uncommittedObjects, dirtyBlks, outBlocks, tbl.db.txn.engine.fs,
 	); err != nil {
 		return err
 	} else if done {
 		return nil
 	}
 
-	dirtyBlks := make(map[types.Blockid]struct{})
-	//collect partitionState.dirtyBlocks which may be invisible to this txn into dirtyBlks.
-	{
-		iter := state.NewDirtyBlocksIter()
-		for iter.Next() {
-			entry := iter.Entry()
-			//lazy load deletes for block.
-			dirtyBlks[entry] = struct{}{}
-		}
-		iter.Close()
-
+	// for dynamic parameter, substitute param ref and const fold cast expression here to improve performance
+	newExprs, err := plan2.ConstandFoldList(exprs, tbl.proc.Load(), true)
+	if err == nil {
+		exprs = newExprs
 	}
-
-	//only collect dirty blocks in PartitionState.blocks into dirtyBlks.
-	for _, bid := range tbl.GetDirtyPersistedBlks(state) {
-		dirtyBlks[bid] = struct{}{}
-	}
-
-	if tbl.db.txn.hasDeletesOnUncommitedObject() {
-		ForeachBlkInObjStatsList(true, nil, func(blk objectio.BlockInfo, _ objectio.BlockObject) bool {
-			if tbl.db.txn.hasUncommittedDeletesOnBlock(&blk.BlockID) {
-				dirtyBlks[blk.BlockID] = struct{}{}
-			}
-			return true
-		}, uncommittedObjects...)
-	}
-
-	tbl.db.txn.forEachTableWrites(tbl.db.databaseId, tbl.tableId, tbl.db.txn.GetSnapshotWriteOffset(), func(entry Entry) {
-		// the CN workspace can only handle `INSERT` and `DELETE` operations. Other operations will be skipped,
-		// TODO Adjustments will be made here in the future
-		if entry.typ == DELETE || entry.typ == DELETE_TXN {
-			if entry.isGeneratedByTruncate() {
-				return
-			}
-			//deletes in tbl.writes maybe comes from PartitionState.rows or PartitionState.blocks.
-			if entry.fileName == "" &&
-				entry.tableId != catalog.MO_DATABASE_ID && entry.tableId != catalog.MO_TABLES_ID && entry.tableId != catalog.MO_COLUMNS_ID {
-				vs := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
-				for _, v := range vs {
-					id, _ := v.Decode()
-					dirtyBlks[id] = struct{}{}
-				}
-			}
-		}
-	})
 
 	var (
 		objMeta  objectio.ObjectMeta
@@ -826,13 +771,13 @@ func (tbl *txnTable) rangesOnePart(
 						blk.CanRemote = true
 					}
 					blk.PartitionNum = -1
-					blocks.AppendBlockInfo(blk)
+					outBlocks.AppendBlockInfo(blk)
 					return true
 				}
 				// store the block in ranges
 				blk.CanRemote = true
 				blk.PartitionNum = -1
-				blocks.AppendBlockInfo(blk)
+				outBlocks.AppendBlockInfo(blk)
 
 				return true
 
@@ -847,7 +792,7 @@ func (tbl *txnTable) rangesOnePart(
 		return
 	}
 
-	bhit, btotal := blocks.Len()-1, int(s3BlkCnt)
+	bhit, btotal := outBlocks.Len()-1, int(s3BlkCnt)
 	v2.TaskSelBlockTotal.Add(float64(btotal))
 	v2.TaskSelBlockHit.Add(float64(btotal - bhit))
 	blockio.RecordBlockSelectivity(bhit, btotal)
@@ -858,13 +803,115 @@ func (tbl *txnTable) rangesOnePart(
 	return
 }
 
+func (tbl *txnTable) collectUnCommittedObjects() []objectio.ObjectStats {
+	var unCommittedObjects []objectio.ObjectStats
+	tbl.db.txn.forEachTableWrites(tbl.db.databaseId, tbl.tableId, tbl.db.txn.GetSnapshotWriteOffset(), func(entry Entry) {
+		stats := objectio.ObjectStats{}
+		if entry.bat == nil || entry.bat.IsEmpty() {
+			return
+		}
+		if entry.typ == INSERT_TXN {
+			return
+		}
+		if entry.typ != INSERT ||
+			len(entry.bat.Attrs) < 2 ||
+			entry.bat.Attrs[1] != catalog.ObjectMeta_ObjectStats {
+			return
+		}
+		for i := 0; i < entry.bat.Vecs[1].Length(); i++ {
+			stats.UnMarshal(entry.bat.Vecs[1].GetBytesAt(i))
+			unCommittedObjects = append(unCommittedObjects, stats)
+		}
+	})
+
+	return unCommittedObjects
+}
+
+func (tbl *txnTable) collectDirtyBlocks(
+	state *logtailreplay.PartitionState,
+	uncommittedObjects []objectio.ObjectStats) map[types.Blockid]struct{} {
+	dirtyBlks := make(map[types.Blockid]struct{})
+	//collect partitionState.dirtyBlocks which may be invisible to this txn into dirtyBlks.
+	{
+		iter := state.NewDirtyBlocksIter()
+		for iter.Next() {
+			entry := iter.Entry()
+			//lazy load deletes for block.
+			dirtyBlks[entry] = struct{}{}
+		}
+		iter.Close()
+
+	}
+
+	//only collect dirty blocks in PartitionState.blocks into dirtyBlks.
+	for _, bid := range tbl.GetDirtyPersistedBlks(state) {
+		dirtyBlks[bid] = struct{}{}
+	}
+
+	if tbl.db.txn.hasDeletesOnUncommitedObject() {
+		ForeachBlkInObjStatsList(true, nil, func(blk objectio.BlockInfo, _ objectio.BlockObject) bool {
+			if tbl.db.txn.hasUncommittedDeletesOnBlock(&blk.BlockID) {
+				dirtyBlks[blk.BlockID] = struct{}{}
+			}
+			return true
+		}, uncommittedObjects...)
+	}
+
+	tbl.db.txn.forEachTableWrites(tbl.db.databaseId, tbl.tableId, tbl.db.txn.GetSnapshotWriteOffset(), func(entry Entry) {
+		// the CN workspace can only handle `INSERT` and `DELETE` operations. Other operations will be skipped,
+		// TODO Adjustments will be made here in the future
+		if entry.typ == DELETE || entry.typ == DELETE_TXN {
+			if entry.isGeneratedByTruncate() {
+				return
+			}
+			//deletes in tbl.writes maybe comes from PartitionState.rows or PartitionState.blocks.
+			if entry.fileName == "" &&
+				entry.tableId != catalog.MO_DATABASE_ID && entry.tableId != catalog.MO_TABLES_ID && entry.tableId != catalog.MO_COLUMNS_ID {
+				vs := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
+				for _, v := range vs {
+					id, _ := v.Decode()
+					dirtyBlks[id] = struct{}{}
+				}
+			}
+		}
+	})
+
+	return dirtyBlks
+}
+
+// tryFastFilterBlocks is going to replace the tryFastRanges completely soon, in progress now.
+func (tbl *txnTable) tryFastFilterBlocks(
+	exprs []*plan.Expr,
+	snapshot *logtailreplay.PartitionState,
+	uncommittedObjects []objectio.ObjectStats,
+	dirtyBlocks map[types.Blockid]struct{},
+	outBlocks *objectio.BlockInfoSlice,
+	fs fileservice.FileService) (done bool, err error) {
+	// TODO: refactor this code if composite key can be pushdown
+	if tbl.tableDef.Pkey == nil || tbl.tableDef.Pkey.CompPkeyCol == nil {
+		return TryFastFilterBlocks(
+			tbl.db.txn.op.SnapshotTS(),
+			tbl.tableDef,
+			exprs,
+			snapshot,
+			uncommittedObjects,
+			dirtyBlocks,
+			outBlocks,
+			fs,
+			tbl.proc.Load(),
+		)
+	}
+	return
+}
+
 // tryFastRanges only handle equal expression filter on zonemap and bloomfilter in tp scenario;
 // it filters out only a small number of blocks which should not be distributed to remote CNs.
 func (tbl *txnTable) tryFastRanges(
 	exprs []*plan.Expr,
 	snapshot *logtailreplay.PartitionState,
 	uncommittedObjects []objectio.ObjectStats,
-	blocks *objectio.BlockInfoSlice,
+	dirtyBlocks map[types.Blockid]struct{},
+	outBlocks *objectio.BlockInfoSlice,
 	fs fileservice.FileService,
 ) (done bool, err error) {
 	if tbl.primaryIdx == -1 || len(exprs) == 0 {
@@ -880,8 +927,18 @@ func (tbl *txnTable) tryFastRanges(
 		tbl.db.txn.engine.packerPool,
 	)
 	if len(val) == 0 {
-		done = false
-		return
+		// TODO: refactor this code if composite key can be pushdown
+		return TryFastFilterBlocks(
+			tbl.db.txn.op.SnapshotTS(),
+			tbl.tableDef,
+			exprs,
+			snapshot,
+			uncommittedObjects,
+			dirtyBlocks,
+			outBlocks,
+			fs,
+			tbl.proc.Load(),
+		)
 	}
 
 	var (
@@ -903,6 +960,8 @@ func (tbl *txnTable) tryFastRanges(
 		vec = vector.NewVec(types.T_any.ToType())
 		_ = vec.UnmarshalBinary(val)
 	}
+
+	hasDeletes := len(dirtyBlocks) > 0
 
 	if err = ForeachSnapshotObjects(
 		tbl.db.txn.op.SnapshotTS(),
@@ -1023,8 +1082,19 @@ func (tbl *txnTable) tryFastRanges(
 						blk.CommitTs = commitTs
 					}
 				}
+
+				if hasDeletes {
+					if _, ok := dirtyBlocks[blk.BlockID]; !ok {
+						blk.CanRemote = true
+					}
+					blk.PartitionNum = -1
+					outBlocks.AppendBlockInfo(blk)
+					return
+				}
+				// store the block in ranges
+				blk.CanRemote = true
 				blk.PartitionNum = -1
-				blocks.AppendBlockInfo(blk)
+				outBlocks.AppendBlockInfo(blk)
 			}
 
 			return
@@ -1036,7 +1106,7 @@ func (tbl *txnTable) tryFastRanges(
 	}
 
 	done = true
-	bhit, btotal := blocks.Len()-1, int(blockCnt)
+	bhit, btotal := outBlocks.Len()-1, int(blockCnt)
 	v2.TaskSelBlockTotal.Add(float64(btotal))
 	v2.TaskSelBlockHit.Add(float64(btotal - bhit))
 	blockio.RecordBlockSelectivity(bhit, btotal)
@@ -2030,13 +2100,13 @@ func (tbl *txnTable) newReader(
 // get the table's snapshot.
 // it is only initialized once for a transaction and will not change.
 func (tbl *txnTable) getPartitionState(ctx context.Context) (*logtailreplay.PartitionState, error) {
-	if tbl._partState == nil {
+	if tbl._partState.Load() == nil {
 		if err := tbl.updateLogtail(ctx); err != nil {
 			return nil, err
 		}
-		tbl._partState = tbl.db.txn.engine.getPartition(tbl.db.databaseId, tbl.tableId).Snapshot()
+		tbl._partState.Store(tbl.db.txn.engine.getPartition(tbl.db.databaseId, tbl.tableId).Snapshot())
 	}
-	return tbl._partState, nil
+	return tbl._partState.Load(), nil
 }
 
 func (tbl *txnTable) UpdateObjectInfos(ctx context.Context) (err error) {
@@ -2051,11 +2121,11 @@ func (tbl *txnTable) UpdateObjectInfos(ctx context.Context) (err error) {
 	// 1. update logtail
 	// 2. generate block infos
 	// 3. update the blockInfosUpdated and blockInfos fields of the table
-	if !created && !tbl.objInfosUpdated {
+	if !created && !tbl.objInfosUpdated.Load() {
 		if err = tbl.updateLogtail(ctx); err != nil {
 			return
 		}
-		tbl.objInfosUpdated = true
+		tbl.objInfosUpdated.Store(true)
 	}
 	return
 }
@@ -2064,11 +2134,11 @@ func (tbl *txnTable) updateLogtail(ctx context.Context) (err error) {
 	defer func() {
 		if err == nil {
 			tbl.db.txn.engine.globalStats.notifyLogtailUpdate(tbl.tableId)
-			tbl.logtailUpdated = true
+			tbl.logtailUpdated.Store(true)
 		}
 	}()
 	// if the logtail is updated, skip
-	if tbl.logtailUpdated {
+	if tbl.logtailUpdated.Load() {
 		return
 	}
 

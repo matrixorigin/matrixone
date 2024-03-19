@@ -3200,8 +3200,13 @@ alter_table_alter:
     }
 | REINDEX ident IVFFLAT LISTS equal_opt INTEGRAL
     {
+    	val := int64($6.(int64))
+    	if val <= 0 {
+		yylex.Error("LISTS should be greater than 0")
+		return 1
+    	}
         var keyType = tree.INDEX_TYPE_IVFFLAT
-        var algoParamList = int64($6.(int64))
+        var algoParamList = val
         var name = tree.Identifier($2.Compare())
         $$ = tree.NewAlterOptionAlterReIndex(name, keyType, algoParamList)
     }
@@ -6569,9 +6574,15 @@ index_option:
     }
 |   LISTS equal_opt INTEGRAL
     {
-        io := tree.NewIndexOption()
-        io.AlgoParamList = int64($3.(int64))
-        $$ = io
+    	val:= int64($3.(int64))
+    	if val <= 0 {
+    		yylex.Error("LISTS should be greater than 0")
+    		return 1
+    	}
+
+	io := tree.NewIndexOption()
+	io.AlgoParamList = val
+	$$ = io
     }
 |   OP_TYPE STRING
     {
