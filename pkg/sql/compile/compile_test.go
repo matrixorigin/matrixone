@@ -105,6 +105,9 @@ func (w *Ws) Rollback(ctx context.Context) error {
 func (w *Ws) UpdateSnapshotWriteOffset() {
 }
 
+func (w *Ws) TransferRowID() {
+}
+
 func (w *Ws) GetSnapshotWriteOffset() int {
 	return 0
 }
