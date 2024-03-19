@@ -104,10 +104,13 @@ func (s *sqlStore) Allocate(
 			return false
 		}
 	}
+	var execTxn client.TxnOperator
 	for {
 		err := s.exec.ExecTxn(
 			ctx,
 			func(te executor.TxnExecutor) error {
+				execTxn = te.Txn()
+
 				start := time.Now()
 				res, err := te.Exec(fetchSQL)
 				if err != nil {
@@ -173,7 +176,7 @@ func (s *sqlStore) Allocate(
 			opts)
 		if err != nil {
 			// retry ww conflict if the txn is not pessimistic
-			if txnOp != nil && !txnOp.Txn().IsPessimistic() &&
+			if execTxn != nil && !execTxn.Txn().IsPessimistic() &&
 				moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict) {
 				continue
 			}
