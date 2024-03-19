@@ -4261,6 +4261,14 @@ insert_stmt:
         ins.OnDuplicateUpdate = $5
         $$ = ins
     }
+|   INSERT IGNORE into_table_name partition_clause_opt insert_data
+    {
+        ins := $5
+        ins.Table = $3
+        ins.PartitionNames = $4
+        ins.OnDuplicateUpdate = []*tree.UpdateExpr{nil}
+        $$ = ins
+    }
 
 accounts_list:
     account_name
