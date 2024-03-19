@@ -63,7 +63,7 @@ func (tsg *taskServiceGetter) SendMergeTask(ctx context.Context, task *api.Merge
 		return err
 	}
 	if len(asyncTask) != 0 {
-		return moerr.NewInternalError(context.TODO(), fmt.Sprintf("table %s is merging", task.TableName))
+		return moerr.NewInternalError(ctx, fmt.Sprintf("table %q is merging", task.TableName))
 	}
 	b, err := task.Marshal()
 	if err != nil {

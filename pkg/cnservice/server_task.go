@@ -421,7 +421,8 @@ func (s *service) registerExecutorsLocked() {
 				mergeTask.DbName, mergeTask.TableName, strings.Join(objs, ","))
 			ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 			defer cancel()
-			_, err = s.sqlExecutor.Exec(ctx, sql, executor.Options{})
+			opts := executor.Options{}.WithAccountID(mergeTask.AccountId)
+			_, err = s.sqlExecutor.Exec(ctx, sql, opts)
 			return err
 		},
 	)
