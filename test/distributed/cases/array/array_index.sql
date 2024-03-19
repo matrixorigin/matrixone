@@ -619,5 +619,26 @@ SELECT id,id2, embedding FROM tbl ORDER BY l2_distance(embedding,'[120,51,70]') 
 SET @test_limit = 3;
 SELECT id from tbl LIMIT @test_limit;
 
+-- 38. Alter Reindex on Empty Table
+create table vector_index_05(a int primary key, b vecf32(3),c vecf32(4));
+create index idx01 using ivfflat on vector_index_05(c) lists=4 op_type "vector_l2_ops";
+show create table vector_index_05;
+alter table vector_index_05 alter reindex idx01 ivfflat lists=5;
+show create table vector_index_05;
+
+-- 39. Alter Reindex Verify List update on `Show Create Table`
+create table vector_index_04(a int primary key, b vecf32(3),c vecf32(4));
+insert into vector_index_04 values(1,"[56,23,6]","[0.25,0.14,0.88,0.0001]"),(2,"[77,45,3]","[1.25,5.25,8.699,4.25]"),(3,"[8,56,3]","[9.66,5.22,1.22,7.02]");
+create index idx01 using ivfflat on vector_index_04(c) lists=5 op_type "vector_l2_ops";
+insert into vector_index_04 values(4,"[156,213,61]","[10.25,0.14,0.88,10.0001]"),(5,"[177,425,30]","[11.25,51.25,80.699,44.25]"),(6,"[80,56,3]","[90.686,5.212,19.22,7.02]");
+show create table vector_index_04;
+alter table vector_index_04 alter reindex idx01 ivfflat lists=8;
+show create table vector_index_04;
+
+-- 40. Add Index and Alter table add column
+create table vector_index_08(a int primary key, b vecf32(128),c int,key c_k(c));
+create index idx01 using ivfflat on vector_index_08(b) lists=3 op_type "vector_l2_ops";
+alter table vector_index_08 add column d vecf32(3) not null after c;
+
 -- post
 drop database vecdb2;
