@@ -1255,7 +1255,7 @@ func appendPrimaryConstrantPlan(
 
 			countType := types.T_int64.ToType()
 			countColExpr := &plan.Expr{
-				Typ: makePlan2TypeValue(&countType),
+				Typ: makePlan2Type(&countType),
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
 						Name: tableDef.Pkey.PkeyColName,
@@ -1412,8 +1412,7 @@ func appendPrimaryConstrantPlan(
 			if len(pkFilterExprs) == 0 {
 				fuzzyFilterNode.RuntimeFilterBuildList = []*plan.RuntimeFilterSpec{
 					{
-						Tag:        rfTag,
-						UpperLimit: GetInFilterCardLimitOnPK(scanNode.Stats.TableCnt),
+						Tag: rfTag,
 						Expr: &plan.Expr{
 							Typ: pkTyp,
 							Expr: &plan.Expr_Col{
@@ -1538,8 +1537,7 @@ func appendPrimaryConstrantPlan(
 					ProjectList: []*Expr{rowIdExpr, rightRowIdExpr, pkColExpr},
 					RuntimeFilterBuildList: []*plan.RuntimeFilterSpec{
 						{
-							Tag:        rfTag,
-							UpperLimit: GetInFilterCardLimitOnPK(scanNode.Stats.TableCnt),
+							Tag: rfTag,
 							Expr: &plan.Expr{
 								Typ: pkTyp,
 								Expr: &plan.Expr_Col{
