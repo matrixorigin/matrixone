@@ -65,7 +65,7 @@ func (o *customConfigProvider) GetConfig(tbl *catalog.TableEntry) *BasicPolicyCo
 	defer o.Unlock()
 	p, ok := o.configs[tbl.ID]
 	if !ok {
-		extra := tbl.GetLastestSchema().Extra
+		extra := tbl.GetLastestSchemaLocked().Extra
 		if extra.MaxObjOnerun != 0 || extra.MinRowsQuailifed != 0 {
 			p = &BasicPolicyConfig{
 				ObjectMinRows:    int(extra.MinRowsQuailifed),
@@ -182,7 +182,7 @@ func (o *Basic) SetConfig(tbl *catalog.TableEntry, f func() txnif.AsyncTxn, c an
 		ctx,
 		api.NewUpdatePolicyReq(cfg.ObjectMinRows, cfg.MergeMaxOneRun, cfg.MaxRowsMergedObj, cfg.MergeHints...),
 	)
-	logutil.Infof("mergeblocks set %v-%v config: %v", tbl.ID, tbl.GetLastestSchema().Name, cfg)
+	logutil.Infof("mergeblocks set %v-%v config: %v", tbl.ID, tbl.GetLastestSchemaLocked().Name, cfg)
 	txn.Commit(ctx)
 	o.configProvider.InvalidCache(tbl)
 }
@@ -290,7 +290,7 @@ func (o *Basic) controlMem(objs []*catalog.ObjectEntry, mem int64) []*catalog.Ob
 
 func (o *Basic) ResetForTable(entry *catalog.TableEntry) {
 	o.id = entry.ID
-	o.schema = entry.GetLastestSchema()
+	o.schema = entry.GetLastestSchemaLocked()
 	o.hist = entry.Stats.GetLastMerge()
 	o.objHeap.reset()
 

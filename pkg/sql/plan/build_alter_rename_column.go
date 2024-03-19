@@ -132,7 +132,7 @@ func AlterColumn(ctx CompilerContext, alterPlan *plan.AlterTable, spec *tree.Alt
 				defer func() {
 					tmpColumnDef.Free()
 				}()
-				defaultValue, err := buildDefaultExpr(tmpColumnDef, colDef.Typ, ctx.GetProcess())
+				defaultValue, err := buildDefaultExpr(tmpColumnDef, &colDef.Typ, ctx.GetProcess())
 				if err != nil {
 					return err
 				}

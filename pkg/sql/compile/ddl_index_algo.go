@@ -162,12 +162,20 @@ func (s *Scope) handleIvfIndexCentroidsTable(c *Compile, indexDef *plan.IndexDef
 	// 1.b init centroids table with default centroid, if centroids are not enough.
 	// NOTE: we can run re-index to improve the centroid quality.
 	if totalCnt == 0 || totalCnt < int64(centroidParamsLists) {
-		initSQL := fmt.Sprintf("insert into `%s`.`%s` (`%s`, `%s`, `%s`) VALUES(0,1,NULL);",
+		initSQL := fmt.Sprintf("INSERT INTO `%s`.`%s` (`%s`, `%s`, `%s`) "+
+			"SELECT "+
+			"(SELECT CAST(`%s` AS BIGINT) FROM `%s`.`%s` WHERE `%s` = 'version'), "+
+			"1, NULL;",
 			qryDatabase,
 			indexDef.IndexTableName,
 			catalog.SystemSI_IVFFLAT_TblCol_Centroids_version,
 			catalog.SystemSI_IVFFLAT_TblCol_Centroids_id,
 			catalog.SystemSI_IVFFLAT_TblCol_Centroids_centroid,
+
+			catalog.SystemSI_IVFFLAT_TblCol_Metadata_val,
+			qryDatabase,
+			metadataTableName,
+			catalog.SystemSI_IVFFLAT_TblCol_Metadata_key,
 		)
 		err := c.runSql(initSQL)
 		if err != nil {
