@@ -149,6 +149,14 @@ var (
 			PRIMARY KEY (Host,Db,User,Table_name),
 			KEY Grantor (Grantor)
 		  );`,
+		`CREATE TABLE IF NOT EXISTS role_edges (
+			FROM_HOST char(255) NOT NULL DEFAULT '',
+			FROM_USER char(32) NOT NULL DEFAULT '',
+			TO_HOST char(255) NOT NULL DEFAULT '',
+			TO_USER char(32) NOT NULL DEFAULT '',
+			WITH_ADMIN_OPTION enum('N','Y') NOT NULL DEFAULT 'N',
+			PRIMARY KEY (FROM_HOST,FROM_USER,TO_HOST,TO_USER)
+		);`,
 	}
 	InitInformationSchemaSysTables = []string{
 		"CREATE TABLE IF NOT EXISTS KEY_COLUMN_USAGE(" +
@@ -425,6 +433,30 @@ var (
 		"CREATE TABLE IF NOT EXISTS KEYWORDS (" +
 			"WORD varchar(64)," +
 			"RESERVED int unsigned" +
+			");",
+		"CREATE TABLE IF NOT EXISTS `SCHEMA_PRIVILEGES` (" +
+			"`GRANTEE` varchar(292) NOT NULL DEFAULT ''," +
+			"`TABLE_CATALOG` varchar(512) NOT NULL DEFAULT ''," +
+			"`TABLE_SCHEMA` varchar(64) NOT NULL DEFAULT ''," +
+			"`PRIVILEGE_TYPE` varchar(64) NOT NULL DEFAULT ''," +
+			"`IS_GRANTABLE` varchar(3) NOT NULL DEFAULT ''" +
+			");",
+		"CREATE TABLE IF NOT EXISTS `TABLE_PRIVILEGES` (" +
+			"`GRANTEE` varchar(292) NOT NULL DEFAULT ''," +
+			"`TABLE_CATALOG` varchar(512) NOT NULL DEFAULT ''," +
+			"`TABLE_SCHEMA` varchar(64) NOT NULL DEFAULT ''," +
+			"`TABLE_NAME` varchar(64) NOT NULL DEFAULT ''," +
+			"`PRIVILEGE_TYPE` varchar(64) NOT NULL DEFAULT ''," +
+			"`IS_GRANTABLE` varchar(3) NOT NULL DEFAULT ''" +
+			");",
+		"CREATE TABLE IF NOT EXISTS `COLUMN_PRIVILEGES` (" +
+			"`GRANTEE` varchar(292) NOT NULL DEFAULT ''," +
+			"`TABLE_CATALOG` varchar(512) NOT NULL DEFAULT ''," +
+			"`TABLE_SCHEMA` varchar(64) NOT NULL DEFAULT ''," +
+			"`TABLE_NAME` varchar(64) NOT NULL DEFAULT ''," +
+			"`COLUMN_NAME` varchar(64) NOT NULL DEFAULT ''," +
+			"`PRIVILEGE_TYPE` varchar(64) NOT NULL DEFAULT ''," +
+			"`IS_GRANTABLE` varchar(3) NOT NULL DEFAULT ''" +
 			");",
 		informationSchemaKeywordsData,
 	}
