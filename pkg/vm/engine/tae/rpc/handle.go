@@ -1071,9 +1071,10 @@ func (h *Handle) HandleWrite(
 	// TODO: debug for #13342, remove me later
 	if h.IsPrintLogTable(tb.Schema().(*catalog2.Schema).Name) {
 		if tb.Schema().(*catalog2.Schema).HasPK() {
+			idx := tb.Schema().(*catalog2.Schema).GetSingleSortKeyIdx()
 			for i := 0; i < rowIDVec.Length(); i++ {
 				rowID := objectio.HackBytes2Rowid(req.Batch.Vecs[0].GetRawBytesAt(i))
-				if req.Batch.Vecs[1].GetType().Oid == types.T_tuple {
+				if tb.Schema().(*catalog2.Schema).ColDefs[idx].GetType().Oid == types.T_tuple {
 					pk, _, _, _ := types.DecodeTuple(req.Batch.Vecs[1].GetRawBytesAt(i))
 					logutil.Infof("op2 %v %v %v", txn.GetStartTS().ToString(), PrintTuple(pk), rowID.String())
 				} else {
