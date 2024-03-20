@@ -431,15 +431,14 @@ func (p *PartitionState) HandleObjectInsert(ctx context.Context, bat *api.Batch,
 		if objEntry.ObjectStats.BlkCnt() == 0 || objEntry.ObjectStats.Rows() == 0 {
 			continue
 		}
+		objEntry.EntryState = stateCol[idx]
+		objEntry.CreateTime = createTSCol[idx]
+		objEntry.DeleteTime = deleteTSCol[idx]
+		objEntry.CommitTS = commitTSCol[idx]
+		objEntry.Sorted = sortedCol[idx]
 
 		old, exist := p.dataObjects.Get(objEntry)
 		if exist && !old.IsEmpty() {
-			objEntry.EntryState = stateCol[idx]
-			objEntry.CreateTime = createTSCol[idx]
-			objEntry.DeleteTime = deleteTSCol[idx]
-			objEntry.CommitTS = commitTSCol[idx]
-			objEntry.Sorted = sortedCol[idx]
-			objEntry.HasDeltaLoc = old.HasDeltaLoc
 			// why check the deleteTime here? consider this situation:
 			// 		1. insert on an object, then these insert operations recorded into a CKP.
 			// 		2. and delete this object, this operation recorded into WAL.
