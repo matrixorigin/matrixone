@@ -42,6 +42,7 @@ var (
 	BackupMethod        = "BACKUP"
 	TraceSpanMethod     = "TRACESPAN"
 	CoreDumpMethod      = "COREDUMP"
+	PrintLogMethod      = "PRINTLOG"
 
 	GetProtocolVersionMethod = "GETPROTOCOLVERSION"
 	SetProtocolVersionMethod = "SETPROTOCOLVERSION"
@@ -75,6 +76,7 @@ var (
 		SyncCommitMethod:    handleSyncCommit,
 		AddFaultPointMethod: handleAddFaultPoint(),
 		BackupMethod:        handleBackup(),
+		PrintLogMethod:      handlePrintLog(),
 		TraceSpanMethod:     handleTraceSpan,
 		CoreDumpMethod:      handleCoreDump,
 
