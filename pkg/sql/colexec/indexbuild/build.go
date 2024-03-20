@@ -32,7 +32,7 @@ func (arg *Argument) String(buf *bytes.Buffer) {
 
 func (arg *Argument) Prepare(proc *process.Process) (err error) {
 	ap := arg
-	if len(ap.RuntimeFilterSenders) == 0 {
+	if ap.RuntimeFilterSpec == nil {
 		panic("there must be runtime filter in index build!")
 	}
 
@@ -109,7 +109,7 @@ func (ctr *container) collectBuildBatches(ap *Argument, proc *process.Process, a
 			return err
 		}
 		proc.PutBatch(currentBatch)
-		if ctr.batch.RowCount() > int(ap.RuntimeFilterSenders[0].Spec.UpperLimit) {
+		if ctr.batch.RowCount() > int(ap.RuntimeFilterSpec.UpperLimit) {
 			// for index build, can exit early
 			return nil
 		}
@@ -127,9 +127,9 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 
 func (ctr *container) handleRuntimeFilter(ap *Argument, proc *process.Process) error {
 	var runtimeFilter process.RuntimeFilterMessage
-	runtimeFilter.Tag = ap.RuntimeFilterSenders[0].Spec.Tag
+	runtimeFilter.Tag = ap.RuntimeFilterSpec.Tag
 
-	if ap.RuntimeFilterSenders[0].Spec.Expr == nil {
+	if ap.RuntimeFilterSpec.Expr == nil {
 		runtimeFilter.Typ = process.RuntimeFilter_PASS
 		sendFilter(ap, proc, runtimeFilter)
 		return nil
@@ -139,7 +139,7 @@ func (ctr *container) handleRuntimeFilter(ap *Argument, proc *process.Process) e
 		return nil
 	}
 
-	inFilterCardLimit := ap.RuntimeFilterSenders[0].Spec.UpperLimit
+	inFilterCardLimit := ap.RuntimeFilterSpec.UpperLimit
 
 	if ctr.batch.RowCount() > int(inFilterCardLimit) {
 		runtimeFilter.Typ = process.RuntimeFilter_PASS

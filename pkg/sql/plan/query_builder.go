@@ -1474,7 +1474,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		builder.partitionPrune(rootID)
 
 		builder.optimizeLikeExpr(rootID)
-		rootID = builder.applyIndices(rootID, colRefCnt, make(map[[2]int32]*plan.Expr))
+		//rootID = builder.applyIndices(rootID, colRefCnt, make(map[[2]int32]*plan.Expr))
 		ReCalcNodeStats(rootID, builder, true, false, true)
 
 		determineHashOnPK(rootID, builder)
@@ -1483,7 +1483,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		// after determine shuffle, be careful when calling ReCalcNodeStats again.
 		// needResetHashMapStats should always be false from here
 
-		builder.generateRuntimeFilters(rootID)
+		//builder.generateRuntimeFilters(rootID)
 		ReCalcNodeStats(rootID, builder, true, false, false)
 
 		builder.handleMessgaes(rootID)

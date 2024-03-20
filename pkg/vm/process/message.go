@@ -73,6 +73,12 @@ type MessageBoard struct {
 	Cond     *sync.Cond    //for block message
 }
 
+func (m *MessageBoard) Reset() {
+	m.RwMutex.Lock()
+	defer m.RwMutex.Unlock()
+	m.Messages = m.Messages[:0]
+}
+
 type MessageReceiver struct {
 	offset   int32
 	tags     []int32

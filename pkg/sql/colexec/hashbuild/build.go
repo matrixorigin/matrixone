@@ -297,7 +297,7 @@ func (ctr *container) buildHashmap(ap *Argument, proc *process.Process) error {
 			}
 		}
 
-		if len(ap.RuntimeFilterSenders) > 0 && ap.RuntimeFilterSenders[0].Spec.Expr != nil {
+		if ap.RuntimeFilterSpec != nil {
 			if len(ap.ctr.uniqueJoinKeys) == 0 {
 				ap.ctr.uniqueJoinKeys = make([]*vector.Vector, len(ctr.executor))
 				for j, vec := range ctr.vecs[vecIdx1] {
@@ -361,17 +361,18 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 }
 
 func (ctr *container) handleRuntimeFilter(ap *Argument, proc *process.Process) error {
-	if len(ap.RuntimeFilterSenders) == 0 {
+	if ap.RuntimeFilterSpec == nil {
 		ctr.state = SendHashMap
 		return nil
 	}
 
 	var runtimeFilter process.RuntimeFilterMessage
-	runtimeFilter.Tag = ap.RuntimeFilterSenders[0].Spec.Tag
+	runtimeFilter.Tag = ap.RuntimeFilterSpec.Tag
 
-	if ap.RuntimeFilterSenders[0].Spec.Expr == nil {
+	if ap.RuntimeFilterSpec.Expr == nil {
 		runtimeFilter.Typ = process.RuntimeFilter_PASS
 		sendFilter(ap, proc, runtimeFilter)
+		return nil
 	} else if ctr.inputBatchRowCount == 0 || len(ctr.uniqueJoinKeys) == 0 || ctr.uniqueJoinKeys[0].Length() == 0 {
 		runtimeFilter.Typ = process.RuntimeFilter_DROP
 		sendFilter(ap, proc, runtimeFilter)
@@ -385,7 +386,7 @@ func (ctr *container) handleRuntimeFilter(ap *Argument, proc *process.Process) e
 		hashmapCount = ctr.strHashMap.GroupCount()
 	}
 
-	inFilterCardLimit := ap.RuntimeFilterSenders[0].Spec.UpperLimit
+	inFilterCardLimit := ap.RuntimeFilterSpec.UpperLimit
 	//inFilterCardLimit := plan.GetInFilterCardLimit()
 	//bloomFilterCardLimit := int64(plan.BloomFilterCardLimit)
 	//v, ok = runtime.ProcessLevelRuntime().GetGlobalVariables("runtime_filter_limit_bloom_filter")
@@ -406,12 +407,12 @@ func (ctr *container) handleRuntimeFilter(ap *Argument, proc *process.Process) e
 		return nil
 	} else {
 		// Composite primary key
-		if ap.RuntimeFilterSenders[0].Spec.Expr.GetF() != nil {
+		if ap.RuntimeFilterSpec.Expr.GetF() != nil {
 			bat := batch.NewWithSize(len(ctr.uniqueJoinKeys))
 			bat.SetRowCount(vec.Length())
 			copy(bat.Vecs, ctr.uniqueJoinKeys)
 
-			newVec, err := colexec.EvalExpressionOnce(proc, ap.RuntimeFilterSenders[0].Spec.Expr, []*batch.Batch{bat})
+			newVec, err := colexec.EvalExpressionOnce(proc, ap.RuntimeFilterSpec.Expr, []*batch.Batch{bat})
 			if err != nil {
 				return err
 			}

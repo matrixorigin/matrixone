@@ -24,7 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -285,11 +284,11 @@ func (arg *Argument) filterByRoaring(proc *process.Process, anal process.Analyze
 // utils functions
 
 func (arg *Argument) appendPassToRuntimeFilter(v *vector.Vector, proc *process.Process) {
-	if arg.pass2RuntimeFilter != nil && len(arg.RuntimeFilterSenders) > 0 {
+	if arg.pass2RuntimeFilter != nil && arg.RuntimeFilterSpec != nil {
 		el := arg.pass2RuntimeFilter.Length()
 		al := v.Length()
 
-		if int64(el)+int64(al) <= int64(arg.RuntimeFilterSenders[0].Spec.UpperLimit) {
+		if int64(el)+int64(al) <= int64(arg.RuntimeFilterSpec.UpperLimit) {
 			arg.pass2RuntimeFilter.UnionMulti(v, 0, al, proc.Mp())
 		} else {
 			proc.PutVector(arg.pass2RuntimeFilter)
@@ -317,20 +316,17 @@ func (arg *Argument) generate(proc *process.Process) error {
 func (arg *Argument) handleRuntimeFilter(proc *process.Process) error {
 	ctr := arg
 
-	if len(arg.RuntimeFilterSenders) == 0 {
+	if arg.RuntimeFilterSpec == nil {
 		ctr.state = Probe
 		return nil
 	}
 
-	var runtimeFilter *pipeline.RuntimeFilter
-	//                                                 the number of data insert is greater than inFilterCardLimit
-	if arg.RuntimeFilterSenders[0].Spec.Expr == nil || arg.pass2RuntimeFilter == nil {
-		runtimeFilter = &pipeline.RuntimeFilter{
-			Typ: pipeline.RuntimeFilter_PASS,
-		}
-	}
+	var runtimeFilter process.RuntimeFilterMessage
+	runtimeFilter.Tag = arg.RuntimeFilterSpec.Tag
 
-	if runtimeFilter != nil {
+	//                                                 the number of data insert is greater than inFilterCardLimit
+	if arg.RuntimeFilterSpec.Expr == nil || arg.pass2RuntimeFilter == nil {
+		runtimeFilter.Typ = process.RuntimeFilter_PASS
 		sendFilter(ctr, proc, runtimeFilter)
 		return nil
 	}
@@ -347,26 +343,16 @@ func (arg *Argument) handleRuntimeFilter(proc *process.Process) error {
 		return err
 	}
 
-	runtimeFilter = &pipeline.RuntimeFilter{
-		Typ:  pipeline.RuntimeFilter_IN,
-		Data: data,
-	}
-
+	runtimeFilter.Typ = process.RuntimeFilter_IN
+	runtimeFilter.Data = data
 	sendFilter(ctr, proc, runtimeFilter)
 	return nil
 
 }
 
-func sendFilter(ap *Argument, proc *process.Process, runtimeFilter *pipeline.RuntimeFilter) {
+func sendFilter(ap *Argument, proc *process.Process, runtimeFilter process.RuntimeFilterMessage) {
 	anal := proc.GetAnalyze(ap.GetIdx(), ap.GetParallelIdx(), ap.GetParallelMajor())
 	sendRuntimeFilterStart := time.Now()
-
-	select {
-	case <-proc.Ctx.Done():
-		ap.state = End
-
-	case ap.RuntimeFilterSenders[0].Chan <- runtimeFilter:
-		ap.state = Probe
-	}
+	proc.SendMessage(runtimeFilter)
 	anal.WaitStop(sendRuntimeFilterStart)
 }
