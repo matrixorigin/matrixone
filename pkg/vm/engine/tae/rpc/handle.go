@@ -983,9 +983,16 @@ func (h *Handle) HandleWrite(
 		}
 		// TODO: debug for #13342, remove me later
 		if h.IsPrintLogTable(tb.Schema().(*catalog2.Schema).Name) {
-			for i := 0; i < req.Batch.Vecs[0].Length(); i++ {
-				pk, _, _, _ := types.DecodeTuple(req.Batch.Vecs[11].GetRawBytesAt(i))
-				logutil.Infof("op1 %v %v", txn.GetStartTS().ToString(), PrintTuple(pk))
+			if tb.Schema().(*catalog2.Schema).HasPK() {
+				idx := tb.Schema().(*catalog2.Schema).GetSingleSortKeyIdx()
+				for i := 0; i < req.Batch.Vecs[0].Length(); i++ {
+					if req.Batch.Vecs[idx].GetType().Oid == types.T_tuple {
+						pk, _, _, _ := types.DecodeTuple(req.Batch.Vecs[idx].GetRawBytesAt(i))
+						logutil.Infof("op1 %v %v", txn.GetStartTS().ToString(), PrintTuple(pk))
+					} else {
+						logutil.Infof("op1 %v, %v", txn.GetStartTS().ToString(), req.Batch.Vecs[idx].String())
+					}
+				}
 			}
 		}
 		//Appends a batch of data into table.
@@ -1063,11 +1070,16 @@ func (h *Handle) HandleWrite(
 	//defer pkVec.Close()
 	// TODO: debug for #13342, remove me later
 	if h.IsPrintLogTable(tb.Schema().(*catalog2.Schema).Name) {
-		for i := 0; i < rowIDVec.Length(); i++ {
-
-			rowID := objectio.HackBytes2Rowid(req.Batch.Vecs[0].GetRawBytesAt(i))
-			pk, _, _, _ := types.DecodeTuple(req.Batch.Vecs[1].GetRawBytesAt(i))
-			logutil.Infof("op2 %v %v %v", txn.GetStartTS().ToString(), PrintTuple(pk), rowID.String())
+		if tb.Schema().(*catalog2.Schema).HasPK() {
+			for i := 0; i < rowIDVec.Length(); i++ {
+				rowID := objectio.HackBytes2Rowid(req.Batch.Vecs[0].GetRawBytesAt(i))
+				if req.Batch.Vecs[1].GetType().Oid == types.T_tuple {
+					pk, _, _, _ := types.DecodeTuple(req.Batch.Vecs[1].GetRawBytesAt(i))
+					logutil.Infof("op2 %v %v %v", txn.GetStartTS().ToString(), PrintTuple(pk), rowID.String())
+				} else {
+					logutil.Infof("op2 %v %v %v", txn.GetStartTS().ToString(), req.Batch.Vecs[1].String(), rowID.String())
+				}
+			}
 		}
 	}
 	err = tb.DeleteByPhyAddrKeys(rowIDVec, pkVec)
