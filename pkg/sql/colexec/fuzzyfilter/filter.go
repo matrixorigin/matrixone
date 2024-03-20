@@ -154,6 +154,7 @@ func (arg *Argument) filterByBloom(proc *process.Process, anal process.Analyze) 
 			if err := arg.handleRuntimeFilter(proc); err != nil {
 				return result, err
 			}
+			arg.state = Probe
 
 		case Probe:
 
@@ -240,6 +241,7 @@ func (arg *Argument) filterByRoaring(proc *process.Process, anal process.Analyze
 			if err := arg.handleRuntimeFilter(proc); err != nil {
 				return result, err
 			}
+			arg.state = Probe
 
 		case Probe:
 
@@ -317,7 +319,6 @@ func (arg *Argument) handleRuntimeFilter(proc *process.Process) error {
 	ctr := arg
 
 	if arg.RuntimeFilterSpec == nil {
-		ctr.state = Probe
 		return nil
 	}
 
