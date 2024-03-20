@@ -305,7 +305,6 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 				case process.RuntimeFilter_PASS:
 					continue
 				case process.RuntimeFilter_DROP:
-					exprs = nil
 					// FIXME: Should give an empty "Data" and then early return
 					s.NodeInfo.Data = nil
 					s.NodeInfo.NeedExpandRanges = false
