@@ -109,6 +109,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 			if err := ctr.handleRuntimeFilter(ap, proc); err != nil {
 				return result, err
 			}
+			ctr.state = SendHashMap
 
 		case SendHashMap:
 			result.Batch = batch.NewWithSize(0)
@@ -362,7 +363,6 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 
 func (ctr *container) handleRuntimeFilter(ap *Argument, proc *process.Process) error {
 	if ap.RuntimeFilterSpec == nil {
-		ctr.state = SendHashMap
 		return nil
 	}
 
