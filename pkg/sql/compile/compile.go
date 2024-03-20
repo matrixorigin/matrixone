@@ -414,7 +414,6 @@ func (c *Compile) allocOperatorID() int32 {
 // Run is an important function of the compute-layer, it executes a single sql according to its scope
 // Need call Release() after call this function.
 func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
-	c.proc.MessageBoard.Reset()
 	sql := c.originSQL
 	if sql == "" {
 		sql = c.sql
@@ -571,7 +570,7 @@ func (c *Compile) canRetry(err error) bool {
 // run once
 func (c *Compile) runOnce() error {
 	var wg sync.WaitGroup
-
+	c.MessageBoard.Reset()
 	if c.proc.TxnOperator != nil {
 		c.proc.TxnOperator.GetWorkspace().TransferRowID()
 	}
