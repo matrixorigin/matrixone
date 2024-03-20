@@ -101,6 +101,18 @@ func (m *Checkpoint) UnmarshalBinary(data []byte) error {
 	return m.Unmarshal(data)
 }
 
+type PrintLog struct {
+	TableName string
+}
+
+func (m *PrintLog) MarshalBinary() ([]byte, error) {
+	return m.Marshal()
+}
+
+func (m *PrintLog) UnmarshalBinary(data []byte) error {
+	return m.Unmarshal(data)
+}
+
 type InspectTN struct {
 	AccessInfo AccessInfo
 	Operation  string

@@ -22,6 +22,7 @@ import (
 	"regexp"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -66,6 +67,24 @@ type Handle struct {
 	db        *db.DB
 	txnCtxs   *common.Map[string, *txnContext]
 	GCManager *gc.Manager
+
+	printMatchRegexp atomic.Pointer[regexp.Regexp]
+}
+
+func (h *Handle) IsPrintLogTable(name string) bool {
+	printMatchRegexp := h.getPrintMatchRegexp()
+	if printMatchRegexp == nil {
+		return false
+	}
+	return printMatchRegexp.MatchString(name)
+}
+
+func (h *Handle) getPrintMatchRegexp() *regexp.Regexp {
+	return h.printMatchRegexp.Load()
+}
+
+func (h *Handle) UpdatePrintMatchRegexp(name string) {
+	h.printMatchRegexp.Store(regexp.MustCompile(fmt.Sprintf("`.*%s.*`", name)))
 }
 
 var _ rpchandle.Handler = (*Handle)(nil)
@@ -427,6 +446,17 @@ func (h *Handle) HandleBackup(
 		locations += ";"
 	}
 	resp.CkpLocation = locations
+	return nil, err
+}
+
+func (h *Handle) HandlePrintLog(
+	ctx context.Context,
+	meta txn.TxnMeta,
+	req *db.PrintLog,
+	resp *api.SyncLogTailResp) (cb func(), err error) {
+
+	name := req.TableName
+	h.UpdatePrintMatchRegexp(name)
 	return nil, err
 }
 
@@ -839,13 +869,6 @@ func (h *Handle) HandleDropOrTruncateRelation(
 	return err
 }
 
-// TODO: debug for #13342, remove me later
-var districtMatchRegexp = regexp.MustCompile(`.*bmsql_district.*`)
-
-func IsDistrictTable(name string) bool {
-	return districtMatchRegexp.MatchString(name)
-}
-
 func PrintTuple(tuple types.Tuple) string {
 	res := "("
 	for i, t := range tuple {
@@ -954,7 +977,7 @@ func (h *Handle) HandleWrite(
 			}
 		}
 		// TODO: debug for #13342, remove me later
-		if IsDistrictTable(tb.Schema().(*catalog2.Schema).Name) {
+		if h.IsPrintLogTable(tb.Schema().(*catalog2.Schema).Name) {
 			for i := 0; i < req.Batch.Vecs[0].Length(); i++ {
 				pk, _, _, _ := types.DecodeTuple(req.Batch.Vecs[11].GetRawBytesAt(i))
 				logutil.Infof("op1 %v %v", txn.GetStartTS().ToString(), PrintTuple(pk))
@@ -1034,7 +1057,7 @@ func (h *Handle) HandleWrite(
 	pkVec := containers.ToTNVector(req.Batch.GetVector(1), common.WorkspaceAllocator)
 	//defer pkVec.Close()
 	// TODO: debug for #13342, remove me later
-	if IsDistrictTable(tb.Schema().(*catalog2.Schema).Name) {
+	if h.IsPrintLogTable(tb.Schema().(*catalog2.Schema).Name) {
 		for i := 0; i < rowIDVec.Length(); i++ {
 
 			rowID := objectio.HackBytes2Rowid(req.Batch.Vecs[0].GetRawBytesAt(i))

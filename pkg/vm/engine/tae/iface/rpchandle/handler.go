@@ -117,4 +117,11 @@ type Handler interface {
 		req *db.StorageUsageReq,
 		resp *db.StorageUsageResp,
 	) (func(), error)
+
+	HandlePrintLog(
+		ctx context.Context,
+		meta txn.TxnMeta,
+		req *db.PrintLog,
+		resp *apipb.SyncLogTailResp,
+	) (func(), error)
 }

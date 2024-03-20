@@ -39,6 +39,7 @@ enum OpCode {
     OpBackup        = 2006;
     OpTraceSpan     = 2007;
     OpStorageUsage  = 2008;
+    OpPrintLog      = 2009;
 }
 
 // TNPingRequest ping request
