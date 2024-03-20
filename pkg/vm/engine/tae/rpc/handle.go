@@ -1078,7 +1078,7 @@ func (h *Handle) HandleWrite(
 					pk, _, _, _ := types.DecodeTuple(req.Batch.Vecs[1].GetRawBytesAt(i))
 					logutil.Infof("op2 %v %v %v", txn.GetStartTS().ToString(), PrintTuple(pk), rowID.String())
 				} else {
-					logutil.Infof("op2 %v %v %v %d", txn.GetStartTS().ToString(), req.Batch.Vecs[1].String(), rowID.String(), tb.Schema().(*catalog2.Schema).ColDefs[idx].GetType().Oid)
+					logutil.Infof("op2 %v %v %v %d", txn.GetStartTS().ToString(), common.MoVectorToString(req.Batch.Vecs[1], i), rowID.String(), tb.Schema().(*catalog2.Schema).ColDefs[idx].GetType().Oid)
 				}
 			}
 		}
