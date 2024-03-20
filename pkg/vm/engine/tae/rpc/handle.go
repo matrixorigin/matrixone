@@ -76,7 +76,6 @@ func (h *Handle) IsPrintLogTable(name string) bool {
 	if printMatchRegexp == nil {
 		return false
 	}
-	logutil.Infof("IsPrintLogTable is %v", name)
 	return printMatchRegexp.MatchString(name)
 }
 
@@ -90,7 +89,7 @@ func (h *Handle) UpdatePrintMatchRegexp(name string) {
 		h.printMatchRegexp.Store(nil)
 		return
 	}
-	h.printMatchRegexp.Store(regexp.MustCompile(fmt.Sprintf("`.*%s.*`", name)))
+	h.printMatchRegexp.Store(regexp.MustCompile(fmt.Sprintf(`.*%s.*`, name)))
 }
 
 var _ rpchandle.Handler = (*Handle)(nil)
