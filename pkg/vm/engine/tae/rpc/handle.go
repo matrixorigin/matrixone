@@ -84,6 +84,10 @@ func (h *Handle) getPrintMatchRegexp() *regexp.Regexp {
 }
 
 func (h *Handle) UpdatePrintMatchRegexp(name string) {
+	if name == "" {
+		h.printMatchRegexp.Store(nil)
+		return
+	}
 	h.printMatchRegexp.Store(regexp.MustCompile(fmt.Sprintf("`.*%s.*`", name)))
 }
 
