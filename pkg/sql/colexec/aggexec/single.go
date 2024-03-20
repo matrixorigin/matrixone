@@ -491,19 +491,9 @@ func (exec *singleAggFuncExec1[from, to]) Flush() (*vector.Vector, error) {
 	setter := exec.ret.aggSet
 	getter := exec.ret.aggGet
 
-	if exec.ret.emptyBeNull {
-		for i, group := range exec.groups {
-			if exec.ret.groupIsEmpty(i) {
-				continue
-			}
-			exec.ret.groupToSet = i
-			group.Flush(getter, setter)
-		}
-	} else {
-		for i, group := range exec.groups {
-			exec.ret.groupToSet = i
-			group.Flush(getter, setter)
-		}
+	for i, group := range exec.groups {
+		exec.ret.groupToSet = i
+		group.Flush(getter, setter)
 	}
 	return exec.ret.flush(), nil
 }
@@ -728,19 +718,9 @@ func (exec *singleAggFuncExec2[from]) Flush() (*vector.Vector, error) {
 
 	setter := exec.ret.aggSet
 	getter := exec.ret.aggGet
-	if exec.ret.emptyBeNull {
-		for i, group := range exec.groups {
-			if exec.ret.groupIsEmpty(i) {
-				continue
-			}
-			exec.ret.groupToSet = i
-			group.Flush(getter, setter)
-		}
-	} else {
-		for i, group := range exec.groups {
-			exec.ret.groupToSet = i
-			group.Flush(getter, setter)
-		}
+	for i, group := range exec.groups {
+		exec.ret.groupToSet = i
+		group.Flush(getter, setter)
 	}
 	return exec.ret.flush(), nil
 }
@@ -965,19 +945,9 @@ func (exec *singleAggFuncExec3[to]) Flush() (*vector.Vector, error) {
 
 	setter := exec.ret.aggSet
 	getter := exec.ret.aggGet
-	if exec.ret.emptyBeNull {
-		for i, group := range exec.groups {
-			if exec.ret.groupIsEmpty(i) {
-				continue
-			}
-			exec.ret.groupToSet = i
-			group.Flush(getter, setter)
-		}
-	} else {
-		for i, group := range exec.groups {
-			exec.ret.groupToSet = i
-			group.Flush(getter, setter)
-		}
+	for i, group := range exec.groups {
+		exec.ret.groupToSet = i
+		group.Flush(getter, setter)
 	}
 
 	return exec.ret.flush(), nil
@@ -1203,19 +1173,9 @@ func (exec *singleAggFuncExec4) Flush() (*vector.Vector, error) {
 
 	setter := exec.ret.aggSet
 	getter := exec.ret.aggGet
-	if exec.ret.emptyBeNull {
-		for i, group := range exec.groups {
-			if exec.ret.groupIsEmpty(i) {
-				continue
-			}
-			exec.ret.groupToSet = i
-			group.Flush(getter, setter)
-		}
-	} else {
-		for i, group := range exec.groups {
-			exec.ret.groupToSet = i
-			group.Flush(getter, setter)
-		}
+	for i, group := range exec.groups {
+		exec.ret.groupToSet = i
+		group.Flush(getter, setter)
 	}
 
 	return exec.ret.flush(), nil

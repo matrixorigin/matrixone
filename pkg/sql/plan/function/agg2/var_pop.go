@@ -101,7 +101,7 @@ func (a *aggVarPop[T]) Merge(other aggexec.SingleAggFromFixedRetFixed[T, float64
 	set(get1() + get2())
 }
 func (a *aggVarPop[T]) Flush(get aggexec.AggGetter[float64], set aggexec.AggSetter[float64]) {
-	if a.count == 0 {
+	if a.count <= 1 {
 		set(0)
 		return
 	}
