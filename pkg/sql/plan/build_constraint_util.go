@@ -1330,6 +1330,15 @@ func appendPrimaryConstrantPlan(
 				scanTableDef.Partition.PartitionExpression = partitionExpr
 			}
 
+			probeExpr := &plan.Expr{
+				Typ: *pkTyp,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						Name: tableDef.Pkey.PkeyColName,
+					},
+				},
+			}
+
 			scanNode := &plan.Node{
 				NodeType: plan.Node_TABLE_SCAN,
 				Stats:    &plan.Stats{},
@@ -1344,19 +1353,7 @@ func appendPrimaryConstrantPlan(
 						},
 					},
 				}},
-				RuntimeFilterProbeList: []*plan.RuntimeFilterSpec{
-					{
-						Tag: rfTag,
-						Expr: &plan.Expr{
-							Typ: *pkTyp,
-							Expr: &plan.Expr_Col{
-								Col: &plan.ColRef{
-									Name: tableDef.Pkey.PkeyColName,
-								},
-							},
-						},
-					},
-				},
+				RuntimeFilterProbeList: []*plan.RuntimeFilterSpec{MakeRuntimeFilter(rfTag, false, 0, probeExpr)},
 			}
 
 			var tableScanId int32
@@ -1396,21 +1393,16 @@ func appendPrimaryConstrantPlan(
 			}
 
 			if len(pkFilterExprs) == 0 {
-				fuzzyFilterNode.RuntimeFilterBuildList = []*plan.RuntimeFilterSpec{
-					{
-						Tag:        rfTag,
-						UpperLimit: GetInFilterCardLimitOnPK(scanNode.Stats.TableCnt),
-						Expr: &plan.Expr{
-							Typ: *pkTyp,
-							Expr: &plan.Expr_Col{
-								Col: &plan.ColRef{
-									RelPos: 0,
-									ColPos: 0,
-								},
-							},
+				buildExpr := &plan.Expr{
+					Typ: *pkTyp,
+					Expr: &plan.Expr_Col{
+						Col: &plan.ColRef{
+							RelPos: 0,
+							ColPos: 0,
 						},
 					},
 				}
+				fuzzyFilterNode.RuntimeFilterBuildList = []*plan.RuntimeFilterSpec{MakeRuntimeFilter(rfTag, false, GetInFilterCardLimitOnPK(scanNode.Stats.TableCnt), buildExpr)}
 			}
 
 			lastNodeId = builder.appendNode(fuzzyFilterNode, bindCtx)
@@ -1452,25 +1444,21 @@ func appendPrimaryConstrantPlan(
 						},
 					},
 				}
-				scanNode := &Node{
-					NodeType:    plan.Node_TABLE_SCAN,
-					Stats:       &plan.Stats{},
-					ObjRef:      objRef,
-					TableDef:    scanTableDef,
-					ProjectList: []*Expr{scanPkExpr, scanRowIdExpr},
-					RuntimeFilterProbeList: []*plan.RuntimeFilterSpec{
-						{
-							Tag: rfTag,
-							Expr: &plan.Expr{
-								Typ: *pkTyp,
-								Expr: &plan.Expr_Col{
-									Col: &plan.ColRef{
-										Name: tableDef.Pkey.PkeyColName,
-									},
-								},
-							},
+				probeExpr := &plan.Expr{
+					Typ: *pkTyp,
+					Expr: &plan.Expr_Col{
+						Col: &plan.ColRef{
+							Name: tableDef.Pkey.PkeyColName,
 						},
 					},
+				}
+				scanNode := &Node{
+					NodeType:               plan.Node_TABLE_SCAN,
+					Stats:                  &plan.Stats{},
+					ObjRef:                 objRef,
+					TableDef:               scanTableDef,
+					ProjectList:            []*Expr{scanPkExpr, scanRowIdExpr},
+					RuntimeFilterProbeList: []*plan.RuntimeFilterSpec{MakeRuntimeFilter(rfTag, false, 0, probeExpr)},
 				}
 				rightId := builder.appendNode(scanNode, bindCtx)
 
@@ -1516,27 +1504,23 @@ func appendPrimaryConstrantPlan(
 					},
 				}
 
-				joinNode := &plan.Node{
-					NodeType:    plan.Node_JOIN,
-					Children:    []int32{rightId, lastNodeId},
-					JoinType:    plan.Node_RIGHT,
-					OnList:      []*Expr{condExpr},
-					ProjectList: []*Expr{rowIdExpr, rightRowIdExpr, pkColExpr},
-					RuntimeFilterBuildList: []*plan.RuntimeFilterSpec{
-						{
-							Tag:        rfTag,
-							UpperLimit: GetInFilterCardLimitOnPK(scanNode.Stats.TableCnt),
-							Expr: &plan.Expr{
-								Typ: *pkTyp,
-								Expr: &plan.Expr_Col{
-									Col: &plan.ColRef{
-										RelPos: 0,
-										ColPos: 0,
-									},
-								},
-							},
+				buildExpr := &plan.Expr{
+					Typ: *pkTyp,
+					Expr: &plan.Expr_Col{
+						Col: &plan.ColRef{
+							RelPos: 0,
+							ColPos: 0,
 						},
 					},
+				}
+
+				joinNode := &plan.Node{
+					NodeType:               plan.Node_JOIN,
+					Children:               []int32{rightId, lastNodeId},
+					JoinType:               plan.Node_RIGHT,
+					OnList:                 []*Expr{condExpr},
+					ProjectList:            []*Expr{rowIdExpr, rightRowIdExpr, pkColExpr},
+					RuntimeFilterBuildList: []*plan.RuntimeFilterSpec{MakeRuntimeFilter(rfTag, false, GetInFilterCardLimitOnPK(scanNode.Stats.TableCnt), buildExpr)},
 				}
 				lastNodeId = builder.appendNode(joinNode, bindCtx)
 

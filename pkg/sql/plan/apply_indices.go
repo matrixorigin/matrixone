@@ -802,35 +802,25 @@ func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node,
 			rfBuildExpr, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", serialArgs)
 		}
 
-		idxTableNodeID := builder.appendNode(&plan.Node{
-			NodeType:     plan.Node_TABLE_SCAN,
-			TableDef:     idxTableDef,
-			ObjRef:       idxObjRef,
-			ParentObjRef: DeepCopyObjectRef(leftChild.ObjRef),
-			BindingTags:  []int32{idxTag},
-			RuntimeFilterProbeList: []*plan.RuntimeFilterSpec{
-				{
-					Tag:         rfTag,
-					MatchPrefix: len(condIdx) < numParts,
-					Expr: &plan.Expr{
-						Typ: idxTableDef.Cols[0].Typ,
-						Expr: &plan.Expr_Col{
-							Col: &plan.ColRef{
-								RelPos: idxTag,
-								ColPos: 0,
-							},
-						},
-					},
+		probeExpr := &plan.Expr{
+			Typ: idxTableDef.Cols[0].Typ,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: idxTag,
+					ColPos: 0,
 				},
 			},
+		}
+		idxTableNodeID := builder.appendNode(&plan.Node{
+			NodeType:               plan.Node_TABLE_SCAN,
+			TableDef:               idxTableDef,
+			ObjRef:                 idxObjRef,
+			ParentObjRef:           DeepCopyObjectRef(leftChild.ObjRef),
+			BindingTags:            []int32{idxTag},
+			RuntimeFilterProbeList: []*plan.RuntimeFilterSpec{MakeRuntimeFilter(rfTag, len(condIdx) < numParts, 0, probeExpr)},
 		}, builder.ctxByNode[nodeID])
 
-		node.RuntimeFilterBuildList = append(node.RuntimeFilterBuildList, &plan.RuntimeFilterSpec{
-			Tag:         rfTag,
-			MatchPrefix: len(condIdx) < numParts,
-			UpperLimit:  GetInFilterCardLimitOnPK(leftChild.Stats.TableCnt),
-			Expr:        rfBuildExpr,
-		})
+		node.RuntimeFilterBuildList = append(node.RuntimeFilterBuildList, MakeRuntimeFilter(rfTag, len(condIdx) < numParts, GetInFilterCardLimitOnPK(leftChild.Stats.TableCnt), rfBuildExpr))
 
 		pkIdx := leftChild.TableDef.Name2ColIndex[leftChild.TableDef.Pkey.PkeyColName]
 		pkExpr := &plan.Expr{
