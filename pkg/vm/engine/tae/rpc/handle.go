@@ -84,6 +84,7 @@ func (h *Handle) getPrintMatchRegexp() *regexp.Regexp {
 }
 
 func (h *Handle) UpdatePrintMatchRegexp(name string) {
+	logutil.Infof("UpdatePrintMatchRegexp name is %v", name)
 	if name == "" {
 		h.printMatchRegexp.Store(nil)
 		return
