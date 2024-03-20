@@ -57,6 +57,16 @@ func (a *allocator) allocate(
 	key string,
 	count int,
 	txnOp client.TxnOperator) (uint64, uint64, error) {
+	{
+		accountId, _ := defines.GetAccountId(ctx)
+		getLogger().Info("allocate",
+			zap.Uint64("tableID", tableID),
+			zap.String("key", key),
+			zap.Int("count", count),
+			zap.Uint32("accountID", accountId),
+			zap.String("txnOp", txnOp.Txn().DebugString()))
+	}
+
 	c := make(chan struct{})
 	//UT test find race here
 	var from, to atomic.Uint64
@@ -98,6 +108,16 @@ func (a *allocator) asyncAllocate(
 	accountId, err := getAccountID(ctx)
 	if err != nil {
 		return err
+	}
+	{
+		accountId, _ := defines.GetAccountId(ctx)
+		getLogger().Info("async allocate",
+			zap.Uint64("tableID", tableID),
+			zap.String("col", col),
+			zap.Int("count", count),
+			zap.Uint32("accountID", accountId),
+			zap.String("txnOp", txnOp.Txn().DebugString()))
+
 	}
 	a.c <- action{
 		txnOp:         txnOp,

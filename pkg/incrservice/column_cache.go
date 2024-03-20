@@ -96,6 +96,15 @@ func (col *columnCache) insertAutoValues(
 	vec *vector.Vector,
 	rows int,
 	txnOp client.TxnOperator) (uint64, error) {
+	{
+		accountId, _ := defines.GetAccountId(ctx)
+		col.logger.Info("insertAutoValues",
+			zap.Uint64("tableID", tableID),
+			zap.String("col", col.col.ColName),
+			zap.Int("rows", rows),
+			zap.Uint32("accountID", accountId),
+			zap.String("txnOp", txnOp.Txn().DebugString()))
+	}
 	switch vec.GetType().Oid {
 	case types.T_int8:
 		return insertAutoValues[int8](
@@ -378,6 +387,15 @@ func (col *columnCache) allocateLocked(
 	count int,
 	beforeApplyCount uint64,
 	txnOp client.TxnOperator) error {
+	{
+		accountId, _ := defines.GetAccountId(ctx)
+		getLogger().Info("allocateLocked",
+			zap.Uint64("tableID", tableID),
+			zap.String("col", col.col.ColName),
+			zap.Int("count", count),
+			zap.Uint32("accountID", accountId),
+			zap.String("txnOp", txnOp.Txn().DebugString()))
+	}
 	if err := col.waitPrevAllocatingLocked(ctx); err != nil {
 		return err
 	}

@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -117,6 +118,13 @@ func (arg *Argument) Call(proc *proc) (vm.CallResult, error) {
 }
 
 func genAutoIncrCol(bat *batch.Batch, proc *proc, arg *Argument) error {
+	{
+		accountId, _ := defines.GetAccountId(proc.Ctx)
+		logutil.GetLogger().Info("insert auto values",
+			zap.Uint64("tableID", arg.TableDef.TblId),
+			zap.Uint32("accountID", accountId),
+			zap.String("txnOp", proc.TxnOperator.Txn().DebugString()))
+	}
 	lastInsertValue, err := proc.IncrService.InsertValues(
 		proc.Ctx,
 		arg.TableDef.TblId,

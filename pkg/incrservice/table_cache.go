@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"go.uber.org/zap"
 )
 
 type tableCache struct {
@@ -90,6 +91,13 @@ func (c *tableCache) insertAutoValues(
 	bat *batch.Batch) (uint64, error) {
 	lastInsert := uint64(0)
 	txnOp := c.getTxn()
+	{
+		accountId, _ := getAccountID(ctx)
+		getLogger().Info("insert auto values",
+			zap.Uint64("tableID", tableID),
+			zap.Uint32("accountID", accountId),
+			zap.String("txnOp", txnOp.Txn().DebugString()))
+	}
 	for _, col := range c.cols {
 		cc := c.getColumnCache(col.ColName)
 		if cc == nil {
