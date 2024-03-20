@@ -164,7 +164,7 @@ func (s *Scope) handleIvfIndexCentroidsTable(c *Compile, indexDef *plan.IndexDef
 	if totalCnt == 0 || totalCnt < int64(centroidParamsLists) {
 		initSQL := fmt.Sprintf("INSERT INTO `%s`.`%s` (`%s`, `%s`, `%s`) "+
 			"SELECT "+
-			"(SELECT CAST(`%s` AS BIGINT) + 1 FROM `%s`.`%s` WHERE `%s` = 'version'), "+
+			"(SELECT CAST(`%s` AS BIGINT) FROM `%s`.`%s` WHERE `%s` = 'version'), "+
 			"1, NULL;",
 			qryDatabase,
 			indexDef.IndexTableName,
