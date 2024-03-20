@@ -184,6 +184,7 @@ func (ctr *container) cleanAggVectors() {
 		}
 		ctr.aggVecs[i].vec = nil
 	}
+	ctr.aggVecs = nil
 }
 
 func (ctr *container) cleanMultiAggVecs() {
@@ -204,6 +205,7 @@ func (ctr *container) cleanGroupVectors() {
 		}
 		ctr.groupVecs[i].vec = nil
 	}
+	ctr.groupVecs = nil
 }
 
 func (ctr *container) cleanHashMap() {
