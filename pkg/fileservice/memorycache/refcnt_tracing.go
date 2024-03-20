@@ -14,6 +14,9 @@
 
 // use race flag to enable refcnt tracing
 
+//go:build race
+// +build race
+
 package memorycache
 
 import (

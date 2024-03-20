@@ -12,6 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// use race flag to enable data alloc/free tracing
+
+//go:build race
+// +build race
+
 package memorycache
 
 import (
