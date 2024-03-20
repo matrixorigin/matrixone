@@ -249,16 +249,11 @@ func (a *aggVarPopDecimal64) Merge(other aggexec.SingleAggFromFixedRetFixed[type
 func getNewValueSumAndNewPower2(
 	oldSum types.Decimal128, oldPow2 types.Decimal128, value types.Decimal128, valueScale int32, count int) (
 	newSum types.Decimal128, newPow2 types.Decimal128, outOfRange bool) {
-	var err error
 
-	valueMulCount := value
-	valueMulCountScale := valueScale
-	if count > 1 {
-		count128 := types.Decimal128{B0_63: uint64(count), B64_127: 0}
-		valueMulCount, valueMulCountScale, err = value.Mul(count128, valueScale, 0)
-		if err != nil {
-			return oldSum, oldPow2, true
-		}
+	count128 := types.Decimal128{B0_63: uint64(count), B64_127: 0}
+	valueMulCount, valueMulCountScale, err := value.Mul(count128, valueScale, 0)
+	if err != nil {
+		return oldSum, oldPow2, true
 	}
 
 	newSum, err = oldSum.Add128(valueMulCount)

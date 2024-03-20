@@ -91,7 +91,7 @@ func (a *aggStdVarPopDecimal64) Flush(get aggexec.AggGetter[types.Decimal128], s
 		return
 	}
 	temp, err1 := types.Decimal128FromFloat64(
-		math.Sqrt(types.Decimal128ToFloat64(get(), a.retScale)),
+		math.Sqrt(types.Decimal128ToFloat64(r, a.retScale)),
 		38, a.retScale)
 	if err1 != nil {
 		panic(err1)
@@ -117,7 +117,7 @@ func (a *aggStdVarPopDecimal128) Flush(get aggexec.AggGetter[types.Decimal128], 
 		return
 	}
 	temp, err1 := types.Decimal128FromFloat64(
-		math.Sqrt(types.Decimal128ToFloat64(get(), a.retScale)),
+		math.Sqrt(types.Decimal128ToFloat64(r, a.retScale)),
 		38, a.retScale)
 	if err1 != nil {
 		panic(err1)
