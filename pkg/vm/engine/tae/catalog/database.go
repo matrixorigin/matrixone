@@ -540,7 +540,7 @@ func (e *DBEntry) AddEntryLocked(table *TableEntry, txn txnif.TxnReader, skipDed
 		nn.CreateNode(table.ID)
 	} else {
 		if !skipDedup {
-			name := table.GetLastestSchema().Name
+			name := table.GetLastestSchemaLocked().Name
 			err = e.checkAddNameConflictLocked(name, table.ID, nn, txn)
 			if err != nil {
 				return
