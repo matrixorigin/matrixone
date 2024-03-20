@@ -53,7 +53,7 @@ message Checkpoint {
     int64 FlushDuration         = 1 [(gogoproto.casttype) = "time.Duration"];
 }
 
-message PrintLog {
+message InterceptCommit {
     option (gogoproto.typedecl) = false;
     string TableName             = 1;
 }

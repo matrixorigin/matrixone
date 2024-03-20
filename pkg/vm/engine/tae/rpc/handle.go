@@ -68,28 +68,27 @@ type Handle struct {
 	txnCtxs   *common.Map[string, *txnContext]
 	GCManager *gc.Manager
 
-	printMatchRegexp atomic.Pointer[regexp.Regexp]
+	interceptMatchRegexp atomic.Pointer[regexp.Regexp]
 }
 
-func (h *Handle) IsPrintLogTable(name string) bool {
-	printMatchRegexp := h.getPrintMatchRegexp()
+func (h *Handle) IsInterceptTable(name string) bool {
+	printMatchRegexp := h.getInterceptMatchRegexp()
 	if printMatchRegexp == nil {
 		return false
 	}
 	return printMatchRegexp.MatchString(name)
 }
 
-func (h *Handle) getPrintMatchRegexp() *regexp.Regexp {
-	return h.printMatchRegexp.Load()
+func (h *Handle) getInterceptMatchRegexp() *regexp.Regexp {
+	return h.interceptMatchRegexp.Load()
 }
 
-func (h *Handle) UpdatePrintMatchRegexp(name string) {
-	logutil.Infof("UpdatePrintMatchRegexp name is %v", name)
+func (h *Handle) UpdateInterceptMatchRegexp(name string) {
 	if name == "" {
-		h.printMatchRegexp.Store(nil)
+		h.interceptMatchRegexp.Store(nil)
 		return
 	}
-	h.printMatchRegexp.Store(regexp.MustCompile(fmt.Sprintf(`.*%s.*`, name)))
+	h.interceptMatchRegexp.Store(regexp.MustCompile(fmt.Sprintf(`.*%s.*`, name)))
 }
 
 var _ rpchandle.Handler = (*Handle)(nil)
@@ -454,14 +453,14 @@ func (h *Handle) HandleBackup(
 	return nil, err
 }
 
-func (h *Handle) HandlePrintLog(
+func (h *Handle) HandleInterceptCommit(
 	ctx context.Context,
 	meta txn.TxnMeta,
-	req *db.PrintLog,
+	req *db.InterceptCommit,
 	resp *api.SyncLogTailResp) (cb func(), err error) {
 
 	name := req.TableName
-	h.UpdatePrintMatchRegexp(name)
+	h.UpdateInterceptMatchRegexp(name)
 	return nil, err
 }
 
@@ -982,7 +981,7 @@ func (h *Handle) HandleWrite(
 			}
 		}
 		// TODO: debug for #13342, remove me later
-		if h.IsPrintLogTable(tb.Schema().(*catalog2.Schema).Name) {
+		if h.IsInterceptTable(tb.Schema().(*catalog2.Schema).Name) {
 			if tb.Schema().(*catalog2.Schema).HasPK() {
 				idx := tb.Schema().(*catalog2.Schema).GetSingleSortKeyIdx()
 				for i := 0; i < req.Batch.Vecs[0].Length(); i++ {
@@ -1064,7 +1063,7 @@ func (h *Handle) HandleWrite(
 	pkVec := containers.ToTNVector(req.Batch.GetVector(1), common.WorkspaceAllocator)
 	//defer pkVec.Close()
 	// TODO: debug for #13342, remove me later
-	if h.IsPrintLogTable(tb.Schema().(*catalog2.Schema).Name) {
+	if h.IsInterceptTable(tb.Schema().(*catalog2.Schema).Name) {
 		if tb.Schema().(*catalog2.Schema).HasPK() {
 			for i := 0; i < rowIDVec.Length(); i++ {
 				rowID := objectio.HackBytes2Rowid(req.Batch.Vecs[0].GetRawBytesAt(i))

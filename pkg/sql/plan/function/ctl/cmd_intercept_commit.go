@@ -21,15 +21,15 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func handlePrintLog() handleFunc {
+func handleInterceptCommit() handleFunc {
 	return GetTNHandlerFunc(
-		api.OpCode_OpPrintLog,
+		api.OpCode_OpInterceptCommit,
 		func(_ string) ([]uint64, error) {
 			return nil, nil
 		},
 		func(dnShardID uint64, parameter string, proc *process.Process) ([]byte, error) {
 			var err error
-			payload, err := types.Encode(&db.PrintLog{
+			payload, err := types.Encode(&db.InterceptCommit{
 				TableName: parameter,
 			})
 			return payload, err

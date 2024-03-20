@@ -118,10 +118,10 @@ type Handler interface {
 		resp *db.StorageUsageResp,
 	) (func(), error)
 
-	HandlePrintLog(
+	HandleInterceptCommit(
 		ctx context.Context,
 		meta txn.TxnMeta,
-		req *db.PrintLog,
+		req *db.InterceptCommit,
 		resp *apipb.SyncLogTailResp,
 	) (func(), error)
 }

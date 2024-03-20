@@ -101,15 +101,15 @@ func (m *Checkpoint) UnmarshalBinary(data []byte) error {
 	return m.Unmarshal(data)
 }
 
-type PrintLog struct {
+type InterceptCommit struct {
 	TableName string
 }
 
-func (m *PrintLog) MarshalBinary() ([]byte, error) {
+func (m *InterceptCommit) MarshalBinary() ([]byte, error) {
 	return m.Marshal()
 }
 
-func (m *PrintLog) UnmarshalBinary(data []byte) error {
+func (m *InterceptCommit) UnmarshalBinary(data []byte) error {
 	return m.Unmarshal(data)
 }
 
