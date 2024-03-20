@@ -37,7 +37,6 @@ func Alloc(n int) []byte {
 	if e1 != 0 {
 		throw("out of memory")
 	}
-	//nolint: unsafe.Pointer: possible misuse of unsafe.Pointer
 	return unsafe.Slice((*byte)(unsafe.Pointer(r0)), n)
 }
 
