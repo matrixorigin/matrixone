@@ -107,7 +107,7 @@ func (exec *multiAggFuncExec1[T]) GroupGrow(more int) error {
 	if err := exec.ret.grows(more); err != nil {
 		return err
 	}
-	setter := exec.ret.aggInit
+	setter := exec.ret.aggSet
 	moreGroup := make([]MultiAggRetFixed[T], more)
 	for i := 0; i < more; i++ {
 		moreGroup[i] = exec.gGroup()
@@ -128,7 +128,10 @@ func (exec *multiAggFuncExec1[T]) Fill(groupIndex int, row int, vectors []*vecto
 		}
 	}
 	exec.ret.groupToSet = groupIndex
-	exec.groups[groupIndex].Eval(exec.ret.aggGet, exec.ret.aggSet)
+	if exec.groups[groupIndex].Valid() {
+		exec.ret.setGroupNotEmpty(groupIndex)
+		exec.groups[groupIndex].Eval(exec.ret.aggGet, exec.ret.aggSet)
+	}
 
 	return nil
 }
@@ -148,7 +151,10 @@ func (exec *multiAggFuncExec1[T]) BulkFill(groupIndex int, vectors []*vector.Vec
 				return err
 			}
 		}
-		exec.groups[groupIndex].Eval(getter, setter)
+		if exec.groups[groupIndex].Valid() {
+			exec.ret.setGroupNotEmpty(groupIndex)
+			exec.groups[groupIndex].Eval(getter, setter)
+		}
 	}
 
 	return nil
@@ -171,7 +177,10 @@ func (exec *multiAggFuncExec1[T]) BatchFill(offset int, groups []uint64, vectors
 				}
 			}
 			exec.ret.groupToSet = groupIdx
-			exec.groups[groupIdx].Eval(getter, setter)
+			if exec.groups[groupIdx].Valid() {
+				exec.ret.setGroupNotEmpty(groupIdx)
+				exec.groups[groupIdx].Eval(getter, setter)
+			}
 
 		}
 		idx++
@@ -266,7 +275,7 @@ func (exec *multiAggFuncExec2) GroupGrow(more int) error {
 	if err := exec.ret.grows(more); err != nil {
 		return err
 	}
-	setter := exec.ret.aggInit
+	setter := exec.ret.aggSet
 	moreGroup := make([]MultiAggRetVar, more)
 	for i := 0; i < more; i++ {
 		moreGroup[i] = exec.gGroup()
@@ -287,7 +296,10 @@ func (exec *multiAggFuncExec2) Fill(groupIndex int, row int, vectors []*vector.V
 		}
 	}
 	exec.ret.groupToSet = groupIndex
-	exec.groups[groupIndex].Eval(exec.ret.aggGet, exec.ret.aggSet)
+	if exec.groups[groupIndex].Valid() {
+		exec.ret.setGroupNotEmpty(groupIndex)
+		exec.groups[groupIndex].Eval(exec.ret.aggGet, exec.ret.aggSet)
+	}
 
 	return nil
 }
@@ -310,7 +322,10 @@ func (exec *multiAggFuncExec2) BulkFill(groupIndex int, vectors []*vector.Vector
 				return err
 			}
 		}
-		exec.groups[groupIndex].Eval(getter, setter)
+		if exec.groups[groupIndex].Valid() {
+			exec.ret.setGroupNotEmpty(groupIndex)
+			exec.groups[groupIndex].Eval(getter, setter)
+		}
 	}
 
 	return nil
@@ -333,7 +348,10 @@ func (exec *multiAggFuncExec2) BatchFill(offset int, groups []uint64, vectors []
 				}
 			}
 			exec.ret.groupToSet = groupIdx
-			exec.groups[groupIdx].Eval(getter, setter)
+			if exec.groups[groupIdx].Valid() {
+				exec.ret.setGroupNotEmpty(groupIdx)
+				exec.groups[groupIdx].Eval(getter, setter)
+			}
 
 		}
 		idx++

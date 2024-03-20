@@ -96,6 +96,7 @@ type MultiAggRetFixed[
 	Init(setter AggSetter[to], args []types.Type, ret types.Type)
 	GetWhichFill(idx int) any                        // return func Fill(MultiAggRetFixed[to], value)
 	GetWhichFillNull(idx int) any                    // return func FillNull(MultiAggRetFixed[to])
+	Valid() bool                                     // return true if the row is valid.
 	Eval(getter AggGetter[to], setter AggSetter[to]) // after Fill one row, do eval.
 	Merge(other MultiAggRetFixed[to], getter1, getter2 AggGetter[to], setter AggSetter[to])
 	Flush(getter AggGetter[to], setter AggSetter[to]) // return the result.
@@ -106,6 +107,7 @@ type MultiAggRetVar interface {
 	Init(setter AggBytesSetter, args []types.Type, ret types.Type)
 	GetWhichFill(idx int) any                          // return func Fill(MultiAggRetVar, value)
 	GetWhichFillNull(idx int) any                      // return func FillNull(MultiAggRetVar)
+	Valid() bool                                       // return true if the row is valid.
 	Eval(getter AggBytesGetter, setter AggBytesSetter) // after Fill one row, do eval.
 	Merge(other MultiAggRetVar, getter1, getter2 AggBytesGetter, setter AggBytesSetter)
 	Flush(getter AggBytesGetter, setter AggBytesSetter) error // return the result.

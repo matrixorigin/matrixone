@@ -73,6 +73,10 @@ func (r *basicResult) groupIsEmpty(i int) bool {
 	return r.empty[i]
 }
 
+func (r *basicResult) setGroupNotEmpty(i int) {
+	r.empty[i] = false
+}
+
 func (r *basicResult) flush() *vector.Vector {
 	if r.emptyBeNull {
 		nsp := nulls.NewWithSize(len(r.empty))
@@ -175,17 +179,12 @@ func (r *aggFuncResult[T]) grows(more int) error {
 	return nil
 }
 
-func (r *aggFuncResult[T]) aggInit(v T) {
-	r.values[r.groupToSet] = v
-}
-
 func (r *aggFuncResult[T]) aggGet() T {
 	return r.values[r.groupToSet]
 }
 
 // for agg private structure's Fill.
 func (r *aggFuncResult[T]) aggSet(v T) {
-	r.empty[r.groupToSet] = false
 	r.values[r.groupToSet] = v
 }
 
@@ -219,10 +218,6 @@ func (r *aggFuncBytesResult) grows(more int) error {
 	return nil
 }
 
-func (r *aggFuncBytesResult) aggInit(v []byte) error {
-	return vector.SetBytesAt(r.res, r.groupToSet, v, r.mp)
-}
-
 func (r *aggFuncBytesResult) aggGet() []byte {
 	// todo: we cannot do simple optimization to get bytes here because result was not read-only.
 	//  the set method may change the max length of the vector.
@@ -231,7 +226,6 @@ func (r *aggFuncBytesResult) aggGet() []byte {
 }
 
 func (r *aggFuncBytesResult) aggSet(v []byte) error {
-	r.empty[r.groupToSet] = false
 	return vector.SetBytesAt(r.res, r.groupToSet, v, r.mp)
 }
 

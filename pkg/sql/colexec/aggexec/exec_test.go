@@ -168,10 +168,10 @@ func (t *testMultiAggPrivate1) GetWhichFillNull(idx int) any {
 	}
 	panic("invalid idx")
 }
+func (t *testMultiAggPrivate1) Valid() bool {
+	return !t.firstIsNull
+}
 func (t *testMultiAggPrivate1) Eval(getter AggGetter[int64], setter AggSetter[int64]) {
-	if t.firstIsNull {
-		return
-	}
 	setter(getter() + 1)
 }
 func (t *testMultiAggPrivate1) Merge(other MultiAggRetFixed[int64], getter1 AggGetter[int64], getter2 AggGetter[int64], setter AggSetter[int64]) {

@@ -110,8 +110,8 @@ func (a *aggVarPop[T]) Flush(get aggexec.AggGetter[float64], set aggexec.AggSett
 }
 
 type aggVarPopDecimal128 struct {
-	sum   types.Decimal128
-	count int64
+	sum      types.Decimal128
+	count    int64
 	argScale int32
 	retScale int32
 	// if true, any middle result is out of range
@@ -157,7 +157,7 @@ func (a *aggVarPopDecimal128) Fill(value types.Decimal128, get aggexec.AggGetter
 		a.power2OutOfRange = true
 		return
 	}
-	err := moerr.NewInternalErrorNoCtx("agg: out of range")
+	err := moerr.NewInternalErrorNoCtx("Decimal128 overflowed")
 	panic(err)
 }
 func (a *aggVarPopDecimal128) FillNull(get aggexec.AggGetter[types.Decimal128], set aggexec.AggSetter[types.Decimal128]) {
@@ -178,7 +178,7 @@ func (a *aggVarPopDecimal128) Fills(value types.Decimal128, isNull bool, count i
 				return
 			}
 		}
-		err := moerr.NewInternalErrorNoCtx("agg: out of range")
+		err := moerr.NewInternalErrorNoCtx("Decimal128 overflowed")
 		panic(err)
 	}
 }
@@ -196,7 +196,7 @@ func (a *aggVarPopDecimal128) Merge(other aggexec.SingleAggFromFixedRetFixed[typ
 	}
 
 	if a.power2OutOfRange || next.power2OutOfRange {
-		err := moerr.NewInternalErrorNoCtx("agg: out of range")
+		err := moerr.NewInternalErrorNoCtx("Decimal128 overflowed")
 		panic(err)
 	}
 	a.count += next.count
@@ -211,7 +211,7 @@ func (a *aggVarPopDecimal128) Merge(other aggexec.SingleAggFromFixedRetFixed[typ
 			a.power2OutOfRange = true
 			return
 		}
-		err = moerr.NewInternalErrorNoCtx("agg: out of range")
+		err = moerr.NewInternalErrorNoCtx("Decimal128 overflowed")
 		panic(err)
 	}
 

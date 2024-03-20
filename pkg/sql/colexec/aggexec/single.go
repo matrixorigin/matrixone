@@ -156,7 +156,7 @@ func (exec *singleAggFuncExec1[from, to]) GroupGrow(more int) error {
 	if err := exec.ret.grows(more); err != nil {
 		return err
 	}
-	setter := exec.ret.aggInit
+	setter := exec.ret.aggSet
 	moreGroup := make([]SingleAggFromFixedRetFixed[from, to], more)
 	for i := 0; i < more; i++ {
 		moreGroup[i] = exec.gGroup()
@@ -180,11 +180,13 @@ func (exec *singleAggFuncExec1[from, to]) Fill(groupIndex int, row int, vectors 
 
 	if vec.IsConstNull() || vec.GetNulls().Contains(uint64(row)) {
 		if exec.receiveNull {
+			exec.ret.setGroupNotEmpty(groupIndex)
 			exec.groups[groupIndex].FillNull(getter, setter)
 		}
 		return nil
 	}
 
+	exec.ret.setGroupNotEmpty(groupIndex)
 	exec.groups[groupIndex].Fill(vector.MustFixedCol[from](vec)[row], getter, setter)
 	return nil
 }
@@ -192,6 +194,9 @@ func (exec *singleAggFuncExec1[from, to]) Fill(groupIndex int, row int, vectors 
 func (exec *singleAggFuncExec1[from, to]) BulkFill(groupIndex int, vectors []*vector.Vector) error {
 	vec := vectors[0]
 	length := vec.Length()
+	if length == 0 {
+		return nil
+	}
 
 	exec.ret.groupToSet = groupIndex
 	getter := exec.ret.aggGet
@@ -201,9 +206,11 @@ func (exec *singleAggFuncExec1[from, to]) BulkFill(groupIndex int, vectors []*ve
 		if vec.IsConstNull() {
 			var value from
 			if exec.receiveNull {
+				exec.ret.setGroupNotEmpty(groupIndex)
 				exec.groups[groupIndex].Fills(value, true, length, getter, setter)
 			}
 		} else {
+			exec.ret.setGroupNotEmpty(groupIndex)
 			exec.groups[groupIndex].Fills(vector.MustFixedCol[from](vec)[0], false, length, getter, setter)
 		}
 		return nil
@@ -212,6 +219,7 @@ func (exec *singleAggFuncExec1[from, to]) BulkFill(groupIndex int, vectors []*ve
 	exec.arg.prepare(vec)
 	if exec.arg.w.WithAnyNullValue() {
 		if exec.receiveNull {
+			exec.ret.setGroupNotEmpty(groupIndex)
 			for i, j := uint64(0), uint64(length); i < j; i++ {
 				v, null := exec.arg.w.GetValue(i)
 				if null {
@@ -221,16 +229,22 @@ func (exec *singleAggFuncExec1[from, to]) BulkFill(groupIndex int, vectors []*ve
 				}
 			}
 		} else {
+			mustNotEmpty := false
 			for i, j := uint64(0), uint64(length); i < j; i++ {
 				v, null := exec.arg.w.GetValue(i)
 				if !null {
+					mustNotEmpty = true
 					exec.groups[groupIndex].Fill(v, getter, setter)
 				}
+			}
+			if mustNotEmpty {
+				exec.ret.setGroupNotEmpty(groupIndex)
 			}
 		}
 		return nil
 	}
 
+	exec.ret.setGroupNotEmpty(groupIndex)
 	for i, j := uint64(0), uint64(length); i < j; i++ {
 		v, _ := exec.arg.w.GetValue(i)
 		exec.groups[groupIndex].Fill(v, getter, setter)
@@ -250,6 +264,7 @@ func (exec *singleAggFuncExec1[from, to]) BatchFill(offset int, groups []uint64,
 					if groups[i] != GroupNotMatched {
 						groupIdx := int(groups[i] - 1)
 						exec.ret.groupToSet = groupIdx
+						exec.ret.setGroupNotEmpty(groupIdx)
 						exec.groups[groupIdx].FillNull(getter, setter)
 					}
 				}
@@ -262,6 +277,7 @@ func (exec *singleAggFuncExec1[from, to]) BatchFill(offset int, groups []uint64,
 			if groups[i] != GroupNotMatched {
 				groupIdx := int(groups[i] - 1)
 				exec.ret.groupToSet = groupIdx
+				exec.ret.setGroupNotEmpty(groupIdx)
 				exec.groups[groupIdx].Fill(value, getter, setter)
 			}
 		}
@@ -276,6 +292,7 @@ func (exec *singleAggFuncExec1[from, to]) BatchFill(offset int, groups []uint64,
 					v, null := exec.arg.w.GetValue(i)
 					groupIdx := int(groups[idx] - 1)
 					exec.ret.groupToSet = groupIdx
+					exec.ret.setGroupNotEmpty(groupIdx)
 					if null {
 						exec.groups[groupIdx].FillNull(getter, setter)
 					} else {
@@ -293,6 +310,7 @@ func (exec *singleAggFuncExec1[from, to]) BatchFill(offset int, groups []uint64,
 				if !null {
 					groupIdx := int(groups[idx] - 1)
 					exec.ret.groupToSet = groupIdx
+					exec.ret.setGroupNotEmpty(groupIdx)
 					exec.groups[groupIdx].Fill(v, getter, setter)
 				}
 			}
@@ -306,6 +324,7 @@ func (exec *singleAggFuncExec1[from, to]) BatchFill(offset int, groups []uint64,
 			v, _ := exec.arg.w.GetValue(i)
 			groupIdx := int(groups[idx] - 1)
 			exec.ret.groupToSet = groupIdx
+			exec.ret.setGroupNotEmpty(groupIdx)
 			exec.groups[groupIdx].Fill(v, getter, setter)
 		}
 		idx++
@@ -485,16 +504,28 @@ func (exec *singleAggFuncExec1[from, to]) BatchMerge(next AggFuncExec, offset in
 func (exec *singleAggFuncExec1[from, to]) Flush() (*vector.Vector, error) {
 	if exec.partialResult != nil {
 		exec.ret.groupToSet = exec.partialGroup
+		exec.ret.setGroupNotEmpty(exec.partialGroup)
 		exec.groups[exec.partialGroup].Fill(exec.partialResult.(from), exec.ret.aggGet, exec.ret.aggSet)
 	}
 
 	setter := exec.ret.aggSet
 	getter := exec.ret.aggGet
 
-	for i, group := range exec.groups {
-		exec.ret.groupToSet = i
-		group.Flush(getter, setter)
+	if exec.ret.emptyBeNull {
+		for i, group := range exec.groups {
+			if exec.ret.groupIsEmpty(i) {
+				continue
+			}
+			exec.ret.groupToSet = i
+			group.Flush(getter, setter)
+		}
+	} else {
+		for i, group := range exec.groups {
+			exec.ret.groupToSet = i
+			group.Flush(getter, setter)
+		}
 	}
+
 	return exec.ret.flush(), nil
 }
 
@@ -519,7 +550,7 @@ func (exec *singleAggFuncExec2[from]) GroupGrow(more int) error {
 	if err := exec.ret.grows(more); err != nil {
 		return err
 	}
-	setter := exec.ret.aggInit
+	setter := exec.ret.aggSet
 	moreGroup := make([]SingleAggFromFixedRetVar[from], more)
 	for i := 0; i < more; i++ {
 		moreGroup[i] = exec.gGroup()
@@ -543,11 +574,13 @@ func (exec *singleAggFuncExec2[from]) Fill(groupIndex int, row int, vectors []*v
 
 	if vec.IsConstNull() || vec.GetNulls().Contains(uint64(row)) {
 		if exec.receiveNull {
+			exec.ret.setGroupNotEmpty(groupIndex)
 			exec.groups[groupIndex].FillNull(getter, setter)
 		}
 		return nil
 	}
 
+	exec.ret.setGroupNotEmpty(groupIndex)
 	exec.groups[groupIndex].Fill(vector.MustFixedCol[from](vec)[row], getter, setter)
 	return nil
 }
@@ -555,6 +588,10 @@ func (exec *singleAggFuncExec2[from]) Fill(groupIndex int, row int, vectors []*v
 func (exec *singleAggFuncExec2[from]) BulkFill(groupIndex int, vectors []*vector.Vector) error {
 	vec := vectors[0]
 	length := vec.Length()
+	if length == 0 {
+		return nil
+	}
+
 	exec.ret.groupToSet = groupIndex
 	setter := exec.ret.aggSet
 	getter := exec.ret.aggGet
@@ -563,9 +600,11 @@ func (exec *singleAggFuncExec2[from]) BulkFill(groupIndex int, vectors []*vector
 		if vec.IsConstNull() {
 			var value from
 			if exec.receiveNull {
+				exec.ret.setGroupNotEmpty(groupIndex)
 				exec.groups[groupIndex].Fills(value, true, length, getter, setter)
 			}
 		} else {
+			exec.ret.setGroupNotEmpty(groupIndex)
 			exec.groups[groupIndex].Fills(vector.MustFixedCol[from](vec)[0], false, length, getter, setter)
 		}
 		return nil
@@ -574,6 +613,7 @@ func (exec *singleAggFuncExec2[from]) BulkFill(groupIndex int, vectors []*vector
 	exec.arg.prepare(vec)
 	if exec.arg.w.WithAnyNullValue() {
 		if exec.receiveNull {
+			exec.ret.setGroupNotEmpty(groupIndex)
 			for i, j := uint64(0), uint64(length); i < j; i++ {
 				v, null := exec.arg.w.GetValue(i)
 				if null {
@@ -583,16 +623,22 @@ func (exec *singleAggFuncExec2[from]) BulkFill(groupIndex int, vectors []*vector
 				}
 			}
 		} else {
+			mustNotEmpty := false
 			for i, j := uint64(0), uint64(length); i < j; i++ {
 				v, null := exec.arg.w.GetValue(i)
 				if !null {
+					mustNotEmpty = true
 					exec.groups[groupIndex].Fill(v, getter, setter)
 				}
+			}
+			if mustNotEmpty {
+				exec.ret.setGroupNotEmpty(groupIndex)
 			}
 		}
 		return nil
 	}
 
+	exec.ret.setGroupNotEmpty(groupIndex)
 	for i, j := uint64(0), uint64(length); i < j; i++ {
 		v, _ := exec.arg.w.GetValue(i)
 		exec.groups[groupIndex].Fill(v, getter, setter)
@@ -612,6 +658,7 @@ func (exec *singleAggFuncExec2[from]) BatchFill(offset int, groups []uint64, vec
 					if groups[i] != GroupNotMatched {
 						groupIdx := int(groups[i] - 1)
 						exec.ret.groupToSet = groupIdx
+						exec.ret.setGroupNotEmpty(groupIdx)
 						exec.groups[groupIdx].FillNull(getter, setter)
 					}
 				}
@@ -624,6 +671,7 @@ func (exec *singleAggFuncExec2[from]) BatchFill(offset int, groups []uint64, vec
 			if groups[i] != GroupNotMatched {
 				groupIdx := int(groups[i] - 1)
 				exec.ret.groupToSet = groupIdx
+				exec.ret.setGroupNotEmpty(groupIdx)
 				exec.groups[groupIdx].Fill(value, getter, setter)
 			}
 		}
@@ -638,6 +686,7 @@ func (exec *singleAggFuncExec2[from]) BatchFill(offset int, groups []uint64, vec
 					v, null := exec.arg.w.GetValue(i)
 					groupIdx := int(groups[idx] - 1)
 					exec.ret.groupToSet = groupIdx
+					exec.ret.setGroupNotEmpty(groupIdx)
 					if null {
 						exec.groups[groupIdx].FillNull(getter, setter)
 					} else {
@@ -655,6 +704,7 @@ func (exec *singleAggFuncExec2[from]) BatchFill(offset int, groups []uint64, vec
 				if !null {
 					groupIdx := int(groups[idx] - 1)
 					exec.ret.groupToSet = groupIdx
+					exec.ret.setGroupNotEmpty(groupIdx)
 					exec.groups[groupIdx].Fill(v, getter, setter)
 				}
 			}
@@ -668,6 +718,7 @@ func (exec *singleAggFuncExec2[from]) BatchFill(offset int, groups []uint64, vec
 			v, _ := exec.arg.w.GetValue(i)
 			groupIdx := int(groups[idx] - 1)
 			exec.ret.groupToSet = groupIdx
+			exec.ret.setGroupNotEmpty(groupIdx)
 			exec.groups[groupIdx].Fill(v, getter, setter)
 		}
 		idx++
@@ -713,14 +764,25 @@ func (exec *singleAggFuncExec2[from]) BatchMerge(next AggFuncExec, offset int, g
 func (exec *singleAggFuncExec2[from]) Flush() (*vector.Vector, error) {
 	if exec.partialResult != nil {
 		exec.ret.groupToSet = exec.partialGroup
+		exec.ret.setGroupNotEmpty(exec.partialGroup)
 		exec.groups[exec.partialGroup].Fill(exec.partialResult.(from), exec.ret.aggGet, exec.ret.aggSet)
 	}
 
 	setter := exec.ret.aggSet
 	getter := exec.ret.aggGet
-	for i, group := range exec.groups {
-		exec.ret.groupToSet = i
-		group.Flush(getter, setter)
+	if exec.ret.emptyBeNull {
+		for i, group := range exec.groups {
+			if exec.ret.groupIsEmpty(i) {
+				continue
+			}
+			exec.ret.groupToSet = i
+			group.Flush(getter, setter)
+		}
+	} else {
+		for i, group := range exec.groups {
+			exec.ret.groupToSet = i
+			group.Flush(getter, setter)
+		}
 	}
 	return exec.ret.flush(), nil
 }
@@ -746,7 +808,7 @@ func (exec *singleAggFuncExec3[to]) GroupGrow(more int) error {
 	if err := exec.ret.grows(more); err != nil {
 		return err
 	}
-	setter := exec.ret.aggInit
+	setter := exec.ret.aggSet
 	moreGroup := make([]SingleAggFromVarRetFixed[to], more)
 	for i := 0; i < more; i++ {
 		moreGroup[i] = exec.gGroup()
@@ -770,11 +832,13 @@ func (exec *singleAggFuncExec3[to]) Fill(groupIndex int, row int, vectors []*vec
 
 	if vec.IsConstNull() || vec.GetNulls().Contains(uint64(row)) {
 		if exec.receiveNull {
+			exec.ret.setGroupNotEmpty(groupIndex)
 			exec.groups[groupIndex].FillNull(getter, setter)
 		}
 		return nil
 	}
 
+	exec.ret.setGroupNotEmpty(groupIndex)
 	exec.groups[groupIndex].FillBytes(vec.GetBytesAt(row), getter, setter)
 	return nil
 }
@@ -782,6 +846,9 @@ func (exec *singleAggFuncExec3[to]) Fill(groupIndex int, row int, vectors []*vec
 func (exec *singleAggFuncExec3[to]) BulkFill(groupIndex int, vectors []*vector.Vector) error {
 	vec := vectors[0]
 	length := vec.Length()
+	if length == 0 {
+		return nil
+	}
 
 	exec.ret.groupToSet = groupIndex
 	setter := exec.ret.aggSet
@@ -790,9 +857,11 @@ func (exec *singleAggFuncExec3[to]) BulkFill(groupIndex int, vectors []*vector.V
 	if vec.IsConst() {
 		if vec.IsConstNull() {
 			if exec.receiveNull {
+				exec.ret.setGroupNotEmpty(groupIndex)
 				exec.groups[groupIndex].Fills(nil, true, length, getter, setter)
 			}
 		} else {
+			exec.ret.setGroupNotEmpty(groupIndex)
 			exec.groups[groupIndex].Fills(vec.GetBytesAt(0), false, length, getter, setter)
 		}
 		return nil
@@ -801,6 +870,7 @@ func (exec *singleAggFuncExec3[to]) BulkFill(groupIndex int, vectors []*vector.V
 	exec.arg.prepare(vec)
 	if exec.arg.w.WithAnyNullValue() {
 		if exec.receiveNull {
+			exec.ret.setGroupNotEmpty(groupIndex)
 			for i, j := uint64(0), uint64(length); i < j; i++ {
 				v, null := exec.arg.w.GetStrValue(i)
 				if null {
@@ -810,16 +880,22 @@ func (exec *singleAggFuncExec3[to]) BulkFill(groupIndex int, vectors []*vector.V
 				}
 			}
 		} else {
+			mustNotEmpty := false
 			for i, j := uint64(0), uint64(length); i < j; i++ {
 				v, null := exec.arg.w.GetStrValue(i)
 				if !null {
+					mustNotEmpty = true
 					exec.groups[groupIndex].FillBytes(v, getter, setter)
 				}
+			}
+			if mustNotEmpty {
+				exec.ret.setGroupNotEmpty(groupIndex)
 			}
 		}
 		return nil
 	}
 
+	exec.ret.setGroupNotEmpty(groupIndex)
 	for i, j := uint64(0), uint64(length); i < j; i++ {
 		v, _ := exec.arg.w.GetStrValue(i)
 		exec.groups[groupIndex].FillBytes(v, getter, setter)
@@ -839,6 +915,7 @@ func (exec *singleAggFuncExec3[to]) BatchFill(offset int, groups []uint64, vecto
 					if groups[i] != GroupNotMatched {
 						groupIdx := int(groups[i] - 1)
 						exec.ret.groupToSet = groupIdx
+						exec.ret.setGroupNotEmpty(groupIdx)
 						exec.groups[groupIdx].FillNull(getter, setter)
 					}
 				}
@@ -851,6 +928,7 @@ func (exec *singleAggFuncExec3[to]) BatchFill(offset int, groups []uint64, vecto
 			if groups[i] != GroupNotMatched {
 				groupIdx := int(groups[i] - 1)
 				exec.ret.groupToSet = groupIdx
+				exec.ret.setGroupNotEmpty(groupIdx)
 				exec.groups[groupIdx].FillBytes(value, getter, setter)
 			}
 		}
@@ -865,6 +943,7 @@ func (exec *singleAggFuncExec3[to]) BatchFill(offset int, groups []uint64, vecto
 					v, null := exec.arg.w.GetStrValue(i)
 					groupIdx := int(groups[idx] - 1)
 					exec.ret.groupToSet = groupIdx
+					exec.ret.setGroupNotEmpty(groupIdx)
 					if null {
 						exec.groups[groupIdx].FillNull(getter, setter)
 					} else {
@@ -882,6 +961,7 @@ func (exec *singleAggFuncExec3[to]) BatchFill(offset int, groups []uint64, vecto
 				if !null {
 					groupIdx := int(groups[idx] - 1)
 					exec.ret.groupToSet = groupIdx
+					exec.ret.setGroupNotEmpty(groupIdx)
 					exec.groups[groupIdx].FillBytes(v, getter, setter)
 				}
 			}
@@ -895,6 +975,7 @@ func (exec *singleAggFuncExec3[to]) BatchFill(offset int, groups []uint64, vecto
 			v, _ := exec.arg.w.GetStrValue(i)
 			groupIdx := int(groups[idx] - 1)
 			exec.ret.groupToSet = groupIdx
+			exec.ret.setGroupNotEmpty(groupIdx)
 			exec.groups[groupIdx].FillBytes(v, getter, setter)
 		}
 		idx++
@@ -940,14 +1021,25 @@ func (exec *singleAggFuncExec3[to]) BatchMerge(next AggFuncExec, offset int, gro
 func (exec *singleAggFuncExec3[to]) Flush() (*vector.Vector, error) {
 	if exec.partialResult != nil {
 		exec.ret.groupToSet = exec.partialGroup
+		exec.ret.setGroupNotEmpty(exec.partialGroup)
 		exec.groups[exec.partialGroup].FillBytes(exec.partialResult.([]byte), exec.ret.aggGet, exec.ret.aggSet)
 	}
 
 	setter := exec.ret.aggSet
 	getter := exec.ret.aggGet
-	for i, group := range exec.groups {
-		exec.ret.groupToSet = i
-		group.Flush(getter, setter)
+	if exec.ret.emptyBeNull {
+		for i, group := range exec.groups {
+			if exec.ret.groupIsEmpty(i) {
+				continue
+			}
+			exec.ret.groupToSet = i
+			group.Flush(getter, setter)
+		}
+	} else {
+		for i, group := range exec.groups {
+			exec.ret.groupToSet = i
+			group.Flush(getter, setter)
+		}
 	}
 
 	return exec.ret.flush(), nil
@@ -974,7 +1066,7 @@ func (exec *singleAggFuncExec4) GroupGrow(more int) error {
 	if err := exec.ret.grows(more); err != nil {
 		return err
 	}
-	setter := exec.ret.aggInit
+	setter := exec.ret.aggSet
 	moreGroup := make([]SingleAggFromVarRetVar, more)
 	for i := 0; i < more; i++ {
 		moreGroup[i] = exec.gGroup()
@@ -998,11 +1090,13 @@ func (exec *singleAggFuncExec4) Fill(groupIndex int, row int, vectors []*vector.
 
 	if vec.IsConstNull() || vec.GetNulls().Contains(uint64(row)) {
 		if exec.receiveNull {
+			exec.ret.setGroupNotEmpty(groupIndex)
 			exec.groups[groupIndex].FillNull(getter, setter)
 		}
 		return nil
 	}
 
+	exec.ret.setGroupNotEmpty(groupIndex)
 	exec.groups[groupIndex].FillBytes(vec.GetBytesAt(row), getter, setter)
 	return nil
 }
@@ -1010,6 +1104,9 @@ func (exec *singleAggFuncExec4) Fill(groupIndex int, row int, vectors []*vector.
 func (exec *singleAggFuncExec4) BulkFill(groupIndex int, vectors []*vector.Vector) error {
 	vec := vectors[0]
 	length := vec.Length()
+	if length == 0 {
+		return nil
+	}
 
 	exec.ret.groupToSet = groupIndex
 	setter := exec.ret.aggSet
@@ -1018,9 +1115,11 @@ func (exec *singleAggFuncExec4) BulkFill(groupIndex int, vectors []*vector.Vecto
 	if vec.IsConst() {
 		if vec.IsConstNull() {
 			if exec.receiveNull {
+				exec.ret.setGroupNotEmpty(groupIndex)
 				exec.groups[groupIndex].Fills(nil, true, length, getter, setter)
 			}
 		} else {
+			exec.ret.setGroupNotEmpty(groupIndex)
 			exec.groups[groupIndex].Fills(vec.GetBytesAt(0), false, length, getter, setter)
 		}
 		return nil
@@ -1029,6 +1128,7 @@ func (exec *singleAggFuncExec4) BulkFill(groupIndex int, vectors []*vector.Vecto
 	exec.arg.prepare(vec)
 	if exec.arg.w.WithAnyNullValue() {
 		if exec.receiveNull {
+			exec.ret.setGroupNotEmpty(groupIndex)
 			for i, j := uint64(0), uint64(length); i < j; i++ {
 				v, null := exec.arg.w.GetStrValue(i)
 				if null {
@@ -1038,16 +1138,22 @@ func (exec *singleAggFuncExec4) BulkFill(groupIndex int, vectors []*vector.Vecto
 				}
 			}
 		} else {
+			mustNotEmpty := false
 			for i, j := uint64(0), uint64(length); i < j; i++ {
 				v, null := exec.arg.w.GetStrValue(i)
 				if !null {
+					mustNotEmpty = true
 					exec.groups[groupIndex].FillBytes(v, getter, setter)
 				}
+			}
+			if mustNotEmpty {
+				exec.ret.setGroupNotEmpty(groupIndex)
 			}
 		}
 		return nil
 	}
 
+	exec.ret.setGroupNotEmpty(groupIndex)
 	for i, j := uint64(0), uint64(length); i < j; i++ {
 		v, _ := exec.arg.w.GetStrValue(i)
 		exec.groups[groupIndex].FillBytes(v, getter, setter)
@@ -1067,6 +1173,7 @@ func (exec *singleAggFuncExec4) BatchFill(offset int, groups []uint64, vectors [
 					if groups[i] != GroupNotMatched {
 						groupIdx := int(groups[i] - 1)
 						exec.ret.groupToSet = groupIdx
+						exec.ret.setGroupNotEmpty(groupIdx)
 						exec.groups[groupIdx].FillNull(getter, setter)
 					}
 				}
@@ -1079,6 +1186,7 @@ func (exec *singleAggFuncExec4) BatchFill(offset int, groups []uint64, vectors [
 			if groups[i] != GroupNotMatched {
 				groupIdx := int(groups[i] - 1)
 				exec.ret.groupToSet = groupIdx
+				exec.ret.setGroupNotEmpty(groupIdx)
 				exec.groups[groupIdx].FillBytes(value, getter, setter)
 			}
 		}
@@ -1093,6 +1201,7 @@ func (exec *singleAggFuncExec4) BatchFill(offset int, groups []uint64, vectors [
 					v, null := exec.arg.w.GetStrValue(i)
 					groupIdx := int(groups[idx] - 1)
 					exec.ret.groupToSet = groupIdx
+					exec.ret.setGroupNotEmpty(groupIdx)
 					if null {
 						exec.groups[groupIdx].FillNull(getter, setter)
 					} else {
@@ -1110,6 +1219,7 @@ func (exec *singleAggFuncExec4) BatchFill(offset int, groups []uint64, vectors [
 				if !null {
 					groupIdx := int(groups[idx] - 1)
 					exec.ret.groupToSet = groupIdx
+					exec.ret.setGroupNotEmpty(groupIdx)
 					exec.groups[groupIdx].FillBytes(v, getter, setter)
 				}
 			}
@@ -1123,6 +1233,7 @@ func (exec *singleAggFuncExec4) BatchFill(offset int, groups []uint64, vectors [
 			v, _ := exec.arg.w.GetStrValue(i)
 			groupIdx := int(groups[idx] - 1)
 			exec.ret.groupToSet = groupIdx
+			exec.ret.setGroupNotEmpty(groupIdx)
 			exec.groups[groupIdx].FillBytes(v, getter, setter)
 		}
 		idx++
@@ -1168,14 +1279,25 @@ func (exec *singleAggFuncExec4) BatchMerge(next AggFuncExec, offset int, groups 
 func (exec *singleAggFuncExec4) Flush() (*vector.Vector, error) {
 	if exec.partialResult != nil {
 		exec.ret.groupToSet = exec.partialGroup
+		exec.ret.setGroupNotEmpty(exec.partialGroup)
 		exec.groups[exec.partialGroup].FillBytes(exec.partialResult.([]byte), exec.ret.aggGet, exec.ret.aggSet)
 	}
 
 	setter := exec.ret.aggSet
 	getter := exec.ret.aggGet
-	for i, group := range exec.groups {
-		exec.ret.groupToSet = i
-		group.Flush(getter, setter)
+	if exec.ret.emptyBeNull {
+		for i, group := range exec.groups {
+			if exec.ret.groupIsEmpty(i) {
+				continue
+			}
+			exec.ret.groupToSet = i
+			group.Flush(getter, setter)
+		}
+	} else {
+		for i, group := range exec.groups {
+			exec.ret.groupToSet = i
+			group.Flush(getter, setter)
+		}
 	}
 
 	return exec.ret.flush(), nil

@@ -62,6 +62,7 @@ func (exec *medianColumnExecSelf[T, R]) Fill(groupIndex int, row int, vectors []
 	if vectors[0].IsConst() {
 		row = 0
 	}
+	exec.ret.setGroupNotEmpty(groupIndex)
 	value := vector.MustFixedCol[T](vectors[0])[row]
 
 	return vector.AppendFixed[T](exec.groups[groupIndex], value, false, exec.ret.mp)
@@ -73,19 +74,25 @@ func (exec *medianColumnExecSelf[T, R]) BulkFill(groupIndex int, vectors []*vect
 	}
 
 	if vectors[0].IsConst() {
+		exec.ret.setGroupNotEmpty(groupIndex)
 		value := vector.MustFixedCol[T](vectors[0])[0]
 		return vector.AppendMultiFixed[T](exec.groups[0], value, false, vectors[0].Length(), exec.ret.mp)
 	}
 
 	exec.arg.prepare(vectors[0])
+	mustNotEmpty := false
 	for i, j := uint64(0), uint64(vectors[0].Length()); i < j; i++ {
 		v, null := exec.arg.w.GetValue(i)
 		if null {
 			continue
 		}
+		mustNotEmpty = true
 		if err := vector.AppendFixed[T](exec.groups[groupIndex], v, false, exec.ret.mp); err != nil {
 			return err
 		}
+	}
+	if mustNotEmpty {
+		exec.ret.setGroupNotEmpty(groupIndex)
 	}
 	return nil
 }
@@ -99,8 +106,10 @@ func (exec *medianColumnExecSelf[T, R]) BatchFill(offset int, groups []uint64, v
 		value := vector.MustFixedCol[T](vectors[0])[0]
 		for i := 0; i < len(groups); i++ {
 			if groups[i] != GroupNotMatched {
+				groupIndex := groups[i] - 1
+				exec.ret.setGroupNotEmpty(int(groupIndex))
 				if err := vector.AppendFixed[T](
-					exec.groups[groups[i]-1],
+					exec.groups[groupIndex],
 					value, false, exec.ret.mp); err != nil {
 					return err
 				}
@@ -114,7 +123,9 @@ func (exec *medianColumnExecSelf[T, R]) BatchFill(offset int, groups []uint64, v
 		if groups[idx] != GroupNotMatched {
 			v, null := exec.arg.w.GetValue(i)
 			if !null {
-				if err := vector.AppendFixed[T](exec.groups[groups[idx]-1], v, false, exec.ret.mp); err != nil {
+				groupIndex := groups[idx] - 1
+				exec.ret.setGroupNotEmpty(int(groupIndex))
+				if err := vector.AppendFixed[T](exec.groups[groupIndex], v, false, exec.ret.mp); err != nil {
 					return err
 				}
 			}
@@ -271,7 +282,6 @@ func (exec *medianColumnDecimalExec[T]) Flush() (*vector.Vector, error) {
 	for i := range exec.groups {
 		rows := exec.groups[i].Length()
 		if rows == 0 {
-			vs[i] = types.Decimal128{B0_63: 0, B64_127: 0}
 			continue
 		}
 
