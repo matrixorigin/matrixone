@@ -161,7 +161,7 @@ func getMaxValue[T canCompare]() interface{} {
 func (a aggMinDecimal64) Marshal() []byte  { return nil }
 func (a aggMinDecimal64) Unmarshal([]byte) {}
 func (a aggMinDecimal64) Init(set aggexec.AggSetter[types.Decimal64], arg, ret types.Type) {
-	set(types.Decimal64(math.MaxUint64))
+	set(types.Decimal64Max)
 }
 func (a aggMinDecimal64) Fill(value types.Decimal64, get aggexec.AggGetter[types.Decimal64], set aggexec.AggSetter[types.Decimal64]) {
 	if value.Compare(get()) < 0 {
@@ -188,7 +188,7 @@ func (a aggMinDecimal64) Flush(get aggexec.AggGetter[types.Decimal64], set aggex
 func (a aggMinDecimal128) Marshal() []byte  { return nil }
 func (a aggMinDecimal128) Unmarshal([]byte) {}
 func (a aggMinDecimal128) Init(set aggexec.AggSetter[types.Decimal128], arg, ret types.Type) {
-	set(types.Decimal128{B0_63: math.MaxUint64, B64_127: math.MaxUint64})
+	set(types.Decimal128Max)
 }
 func (a aggMinDecimal128) Fill(value types.Decimal128, get aggexec.AggGetter[types.Decimal128], set aggexec.AggSetter[types.Decimal128]) {
 	if value.Compare(get()) < 0 {

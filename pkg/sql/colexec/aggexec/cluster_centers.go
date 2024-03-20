@@ -153,13 +153,12 @@ func (exec *clusterCentersExec) BatchFill(offset int, groups []uint64, vectors [
 	for i, j, idx := uint64(offset), uint64(offset+len(groups)), 0; i < j; i++ {
 		if groups[idx] != GroupNotMatched {
 			v, null := exec.arg.w.GetStrValue(i)
-			if null {
-				continue
-			}
-			if err := vector.AppendBytes(
-				exec.groupData[groups[idx]-1],
-				v, false, exec.ret.mp); err != nil {
-				return err
+			if !null {
+				if err := vector.AppendBytes(
+					exec.groupData[groups[idx]-1],
+					v, false, exec.ret.mp); err != nil {
+					return err
+				}
 			}
 		}
 		idx++

@@ -113,11 +113,10 @@ func (exec *medianColumnExecSelf[T, R]) BatchFill(offset int, groups []uint64, v
 	for i, j, idx := uint64(offset), uint64(offset+len(groups)), 0; i < j; i++ {
 		if groups[idx] != GroupNotMatched {
 			v, null := exec.arg.w.GetValue(i)
-			if null {
-				continue
-			}
-			if err := vector.AppendFixed[T](exec.groups[groups[idx]-1], v, false, exec.ret.mp); err != nil {
-				return err
+			if !null {
+				if err := vector.AppendFixed[T](exec.groups[groups[idx]-1], v, false, exec.ret.mp); err != nil {
+					return err
+				}
 			}
 		}
 		idx++
@@ -189,7 +188,7 @@ func newMedianColumnDecimalExec[T types.Decimal64 | types.Decimal128](mg AggMemo
 
 func newMedianExecutor(mg AggMemoryManager, info singleAggInfo) (AggFuncExec, error) {
 	if info.distinct {
-		return nil, moerr.NewInternalErrorNoCtx("do not support distinct for median()")
+		return nil, moerr.NewNotSupportedNoCtx("median in distinct mode")
 	}
 
 	switch info.argType.Oid {
@@ -306,7 +305,9 @@ func (exec *medianColumnDecimalExec[T]) Flush() (*vector.Vector, error) {
 		} else {
 			srcs := vector.MustFixedCol[types.Decimal64](exec.groups[i])
 			if rows&1 == 1 {
-				vs[i] = FromD64ToD128(srcs[rows>>1])
+				if vs[i], err = FromD64ToD128(srcs[rows>>1]).Scale(1); err != nil {
+					return nil, err
+				}
 			} else {
 				v1, v2 := FromD64ToD128(srcs[rows>>1-1]), FromD64ToD128(srcs[rows>>1])
 				if vs[i], err = v1.Add128(v2); err != nil {

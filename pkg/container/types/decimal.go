@@ -46,6 +46,11 @@ var Pow10 = [20]uint64{
 	10000000000000000000,
 }
 
+var Decimal64Min = Decimal64(uint64(1) << 63)
+var Decimal64Max = ^Decimal64Min
+var Decimal128Min = Decimal128{0, uint64(1) << 63}
+var Decimal128Max = Decimal128{^uint64(0), ^Decimal128Min.B64_127}
+
 var FloatHigh = float64(1<<63) * 2
 
 func (x Decimal64) Sign() bool {
