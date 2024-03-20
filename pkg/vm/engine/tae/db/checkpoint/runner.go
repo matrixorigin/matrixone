@@ -241,12 +241,12 @@ func NewRunner(
 		wal:       wal,
 	}
 	r.storage.entries = btree.NewBTreeGOptions(func(a, b *CheckpointEntry) bool {
-		return a.end.Less(b.end)
+		return a.end.Less(&b.end)
 	}, btree.Options{
 		NoLocks: true,
 	})
 	r.storage.globals = btree.NewBTreeGOptions(func(a, b *CheckpointEntry) bool {
-		return a.end.Less(b.end)
+		return a.end.Less(&b.end)
 	}, btree.Options{
 		NoLocks: true,
 	})
@@ -330,11 +330,11 @@ func (r *runner) getTSTOGC() (ts types.TS, needGC bool) {
 		return
 	}
 	tsTOGC := r.getTSToGC()
-	if tsTOGC.Less(ts) {
+	if tsTOGC.Less(&ts) {
 		ts = tsTOGC
 	}
 	gcedTS := r.getGCedTS()
-	if gcedTS.GreaterEq(ts) {
+	if gcedTS.GreaterEq(&ts) {
 		return
 	}
 	needGC = true
@@ -688,7 +688,9 @@ func (r *runner) tryAddNewIncrementalCheckpointEntry(entry *CheckpointEntry) (su
 	// if it is not the right candidate, skip this request
 	// [startTs, endTs] --> [endTs+1, ?]
 	endTS := maxEntry.GetEnd()
-	if !endTS.Next().Equal(entry.GetStart()) {
+	startTS := entry.GetStart()
+	nextTS := endTS.Next()
+	if !nextTS.Equal(&startTS) {
 		success = false
 		return
 	}
@@ -861,7 +863,7 @@ func (r *runner) fireFlushTabletail(table *catalog.TableEntry, tree *model.Table
 	scopes := make([]common.ID, 0, len(metas))
 	for _, meta := range metas {
 		if !meta.GetBlockData().PrepareCompact() {
-			logutil.Infof("[FlushTabletail] %d-%s / %s false prepareCompact ", table.ID, table.GetLastestSchema().Name, meta.ID.String())
+			logutil.Infof("[FlushTabletail] %d-%s / %s false prepareCompact ", table.ID, table.GetLastestSchemaLocked().Name, meta.ID.String())
 			return moerr.GetOkExpectedEOB()
 		}
 		scopes = append(scopes, *meta.AsCommonID())
@@ -870,7 +872,7 @@ func (r *runner) fireFlushTabletail(table *catalog.TableEntry, tree *model.Table
 	factory := jobs.FlushTableTailTaskFactory(metas, r.rt, endTs)
 	if _, err := r.rt.Scheduler.ScheduleMultiScopedTxnTask(nil, tasks.DataCompactionTask, scopes, factory); err != nil {
 		if err != tasks.ErrScheduleScopeConflict {
-			logutil.Infof("[FlushTabletail] %d-%s %v", table.ID, table.GetLastestSchema().Name, err)
+			logutil.Infof("[FlushTabletail] %d-%s %v", table.ID, table.GetLastestSchemaLocked().Name, err)
 		}
 		return moerr.GetOkExpectedEOB()
 	}
@@ -932,14 +934,14 @@ func (r *runner) tryCompactTree(entry *logtail.DirtyTreeEntry, force bool) {
 		// debug log, delete later
 		if !stats.LastFlush.IsEmpty() && asize+dsize > 2*1000*1024 {
 			logutil.Infof("[flushtabletail] %v(%v) %v dels  FlushCountDown %v",
-				table.GetLastestSchema().Name,
+				table.GetLastestSchemaLocked().Name,
 				common.HumanReadableBytes(asize+dsize),
 				common.HumanReadableBytes(dsize),
 				time.Until(stats.FlushDeadline))
 		}
 
 		if force {
-			logutil.Infof("[flushtabletail] force flush %v-%s", table.ID, table.GetLastestSchema().Name)
+			logutil.Infof("[flushtabletail] force flush %v-%s", table.ID, table.GetLastestSchemaLocked().Name)
 			if err := r.fireFlushTabletail(table, dirtyTree, endTs); err == nil {
 				stats.ResetDeadlineWithLock()
 			}

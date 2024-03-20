@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"math"
 	"testing"
 	"time"
@@ -805,4 +806,59 @@ func TestSession_updateTimeZone(t *testing.T) {
 	err = updateTimeZone(ses, ses.GetSysVars(), "time_zone", "")
 	assert.NoError(t, err)
 	assert.Equal(t, ses.GetTimeZone().String(), "UTC")
+}
+
+func TestSession_Migrate(t *testing.T) {
+	genSession := func(ctrl *gomock.Controller, gSysVars *GlobalSystemVariables) *Session {
+		ioses := mock_frontend.NewMockIOSession(ctrl)
+		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
+		ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		ioses.EXPECT().RemoteAddress().Return("").AnyTimes()
+		ioses.EXPECT().Ref().AnyTimes()
+		sv, err := getSystemVariables("test/system_vars_config.toml")
+		if err != nil {
+			t.Error(err)
+		}
+		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
+		txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+		txnOperator.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
+		txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
+		txnClient := mock_frontend.NewMockTxnClient(ctrl)
+		txnClient.EXPECT().New(gomock.Any(), gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
+		eng := mock_frontend.NewMockEngine(ctrl)
+		hints := engine.Hints{CommitOrRollbackTimeout: time.Second * 10}
+		db := mock_frontend.NewMockDatabase(ctrl)
+		eng.EXPECT().Hints().Return(hints).AnyTimes()
+		eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		eng.EXPECT().Database(gomock.Any(), gomock.Any(), gomock.Any()).Return(db, nil).AnyTimes()
+		rel := mock_frontend.NewMockRelation(ctrl)
+		rel.EXPECT().GetTableDef(gomock.Any()).Return(&plan.TableDef{}).AnyTimes()
+		rel.EXPECT().TableDefs(gomock.Any()).Return(nil, nil).AnyTimes()
+		var tid uint64
+		rel.EXPECT().GetTableID(gomock.Any()).Return(tid).AnyTimes()
+		db.EXPECT().IsSubscription(gomock.Any()).Return(false).AnyTimes()
+		db.EXPECT().Relation(gomock.Any(), gomock.Any(), gomock.Any()).Return(rel, nil).AnyTimes()
+		session := NewSession(proto, nil, config.NewParameterUnit(&config.FrontendParameters{}, eng, txnClient, nil), gSysVars, true, nil, nil)
+		ctx := defines.AttachAccountId(context.Background(), sysAccountID)
+		session.SetRequestContext(ctx)
+		session.SetConnectContext(ctx)
+		session.txnCompileCtx.SetProcess(testutil.NewProc())
+		return session
+	}
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	gSysVars := &GlobalSystemVariables{}
+	InitGlobalSystemVariables(gSysVars)
+	s := genSession(ctrl, gSysVars)
+	err := s.Migrate(&query.MigrateConnToRequest{
+		DB: "d1",
+		PrepareStmts: []*query.PrepareStmt{
+			{Name: "p1", SQL: `select ?`},
+			{Name: "p2", SQL: `select ?`},
+		},
+	})
+	assert.NoError(t, err)
+	assert.Equal(t, "d1", s.GetDatabaseName())
+	assert.Equal(t, 2, len(s.prepareStmts))
 }

@@ -16,6 +16,7 @@ package hashbuild
 
 import (
 	"bytes"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -379,14 +380,7 @@ func (ctr *container) handleRuntimeFilter(ap *Argument, proc *process.Process) e
 	}
 
 	if runtimeFilter != nil {
-		select {
-		case <-proc.Ctx.Done():
-			ctr.state = End
-
-		case ap.RuntimeFilterSenders[0].Chan <- runtimeFilter:
-			ctr.state = SendHashMap
-		}
-
+		sendFilter(ap, proc, runtimeFilter)
 		return nil
 	}
 
@@ -449,13 +443,7 @@ func (ctr *container) handleRuntimeFilter(ap *Argument, proc *process.Process) e
 		ctr.runtimeFilterIn = true
 	}
 
-	select {
-	case <-proc.Ctx.Done():
-		ctr.state = End
-
-	case ap.RuntimeFilterSenders[0].Chan <- runtimeFilter:
-		ctr.state = SendHashMap
-	}
+	sendFilter(ap, proc, runtimeFilter)
 
 	return nil
 }
@@ -467,11 +455,24 @@ func (ctr *container) evalJoinCondition(proc *process.Process) error {
 		for idx2 := range ctr.executor {
 			vec, err := ctr.executor[idx2].Eval(proc, []*batch.Batch{ctr.batches[idx1]})
 			if err != nil {
-				ctr.cleanEvalVectors(proc.Mp())
 				return err
 			}
 			ctr.vecs[idx1][idx2] = vec
 		}
 	}
 	return nil
+}
+
+func sendFilter(ap *Argument, proc *process.Process, runtimeFilter *pipeline.RuntimeFilter) {
+	anal := proc.GetAnalyze(ap.GetIdx(), ap.GetParallelIdx(), ap.GetParallelMajor())
+	sendRuntimeFilterStart := time.Now()
+
+	select {
+	case <-proc.Ctx.Done():
+		ap.ctr.state = End
+
+	case ap.RuntimeFilterSenders[0].Chan <- runtimeFilter:
+		ap.ctr.state = SendHashMap
+	}
+	anal.WaitStop(sendRuntimeFilterStart)
 }

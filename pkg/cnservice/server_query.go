@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pblock "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/pb/status"
@@ -74,6 +75,8 @@ func (s *service) initQueryCommandHandler() {
 	s.queryService.AddHandleFunc(query.CmdMethod_GetCacheData, s.handleGetCacheData, false)
 	s.queryService.AddHandleFunc(query.CmdMethod_GetStatsInfo, s.handleGetStatsInfo, false)
 	s.queryService.AddHandleFunc(query.CmdMethod_GetPipelineInfo, s.handleGetPipelineInfo, false)
+	s.queryService.AddHandleFunc(query.CmdMethod_MigrateConnFrom, s.handleMigrateConnFrom, false)
+	s.queryService.AddHandleFunc(query.CmdMethod_MigrateConnTo, s.handleMigrateConnTo, false)
 }
 
 func (s *service) handleKillConn(ctx context.Context, req *query.Request, resp *query.Response) error {
@@ -394,6 +397,38 @@ func (s *service) handleGetPipelineInfo(ctx context.Context, req *query.Request,
 	count := s.pipelines.counter.Load()
 	resp.GetPipelineInfoResponse = &query.GetPipelineInfoResponse{
 		Count: count,
+	}
+	return nil
+}
+
+func (s *service) handleMigrateConnFrom(
+	ctx context.Context, req *query.Request, resp *query.Response,
+) error {
+	if req.MigrateConnFromRequest == nil {
+		return moerr.NewInternalError(ctx, "bad request")
+	}
+	rm := s.mo.GetRoutineManager()
+	resp.MigrateConnFromResponse = &query.MigrateConnFromResponse{}
+	if err := rm.MigrateConnectionFrom(req.MigrateConnFromRequest, resp.MigrateConnFromResponse); err != nil {
+		logutil.Errorf("failed to migrate conn from: %v", err)
+		return err
+	}
+	return nil
+}
+
+func (s *service) handleMigrateConnTo(
+	ctx context.Context, req *query.Request, resp *query.Response,
+) error {
+	if req.MigrateConnToRequest == nil {
+		return moerr.NewInternalError(ctx, "bad request")
+	}
+	rm := s.mo.GetRoutineManager()
+	if err := rm.MigrateConnectionTo(req.MigrateConnToRequest); err != nil {
+		logutil.Errorf("failed to migrate conn to: %v", err)
+		return err
+	}
+	resp.MigrateConnToResponse = &query.MigrateConnToResponse{
+		Success: true,
 	}
 	return nil
 }

@@ -207,7 +207,8 @@ type Transaction struct {
 	//current statement id
 	statementID int
 	//offsets of the txn.writes for statements in a txn.
-	offsets []int
+	offsets    []int
+	timestamps []timestamp.Timestamp
 
 	hasS3Op              atomic.Bool
 	removed              bool
@@ -459,6 +460,7 @@ func (txn *Transaction) RollbackLastStatement(ctx context.Context) error {
 		}
 		txn.writes = txn.writes[:end]
 		txn.offsets = txn.offsets[:txn.statementID]
+		txn.timestamps = txn.timestamps[:txn.statementID]
 	}
 	// rollback current statement's writes info
 	for b := range txn.batchSelectList {
@@ -500,7 +502,7 @@ func (txn *Transaction) handleRCSnapshot(ctx context.Context, commit bool) error
 		needResetSnapshot = true
 	}
 	if !commit && txn.op.Txn().IsRCIsolation() &&
-		(txn.GetSQLCount() > 1 || needResetSnapshot) {
+		(txn.GetSQLCount() > 0 || needResetSnapshot) {
 		trace.GetService().TxnUpdateSnapshot(
 			txn.op,
 			0,
@@ -559,6 +561,8 @@ type txnDatabase struct {
 	databaseType      string
 	databaseCreateSql string
 	txn               *Transaction
+
+	rowId types.Rowid
 }
 
 type tableKey struct {
@@ -589,7 +593,7 @@ type txnTable struct {
 	tableDef   *plan.TableDef
 	seqnums    []uint16
 	typs       []types.Type
-	_partState *logtailreplay.PartitionState
+	_partState atomic.Pointer[logtailreplay.PartitionState]
 
 	// objInofs stores all the data object infos for this table of this transaction
 	// it is only generated when the table is not created by this transaction
@@ -598,9 +602,9 @@ type txnTable struct {
 
 	// specify whether the objInfos is updated. once it is updated, it will not be updated again
 	//TODO::remove it in next PR.
-	objInfosUpdated bool
+	objInfosUpdated atomic.Bool
 	// specify whether the logtail is updated. once it is updated, it will not be updated again
-	logtailUpdated bool
+	logtailUpdated atomic.Bool
 
 	primaryIdx    int // -1 means no primary key
 	primarySeqnum int // -1 means no primary key

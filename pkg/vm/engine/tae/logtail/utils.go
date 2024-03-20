@@ -2772,7 +2772,7 @@ func (collector *BaseCollector) VisitDB(entry *catalog.DBEntry) error {
 		var created, dropped bool
 		if dbNode.HasDropCommitted() {
 			dropped = true
-			if dbNode.CreatedAt.Equal(dbNode.DeletedAt) {
+			if dbNode.CreatedAt.Equal(&dbNode.DeletedAt) {
 				created = true
 			}
 		} else {
@@ -2815,6 +2815,7 @@ func (collector *GlobalCollector) isEntryDeletedBeforeThreshold(entry catalog.Ba
 }
 func (collector *GlobalCollector) VisitDB(entry *catalog.DBEntry) error {
 	if collector.isEntryDeletedBeforeThreshold(entry.BaseEntryImpl) {
+		collector.Usage.Deletes = append(collector.Usage.Deletes, entry)
 		return nil
 	}
 
@@ -2850,7 +2851,7 @@ func (collector *BaseCollector) VisitTable(entry *catalog.TableEntry) (err error
 		var created, dropped bool
 		if tblNode.HasDropCommitted() {
 			dropped = true
-			if tblNode.CreatedAt.Equal(tblNode.DeletedAt) {
+			if tblNode.CreatedAt.Equal(&tblNode.DeletedAt) {
 				created = true
 			}
 		} else {
@@ -2879,9 +2880,9 @@ func (collector *BaseCollector) VisitTable(entry *catalog.TableEntry) (err error
 			}
 
 			tableColInsTxnBat.GetVectorByName(
-				SnapshotAttr_BlockMaxRow).Append(entry.GetLastestSchema().BlockMaxRows, false)
+				SnapshotAttr_BlockMaxRow).Append(entry.GetLastestSchemaLocked().BlockMaxRows, false)
 			tableColInsTxnBat.GetVectorByName(
-				SnapshotAttr_ObjectMaxBlock).Append(entry.GetLastestSchema().ObjectMaxBlocks, false)
+				SnapshotAttr_ObjectMaxBlock).Append(entry.GetLastestSchemaLocked().ObjectMaxBlocks, false)
 			tableColInsTxnBat.GetVectorByName(
 				SnapshotAttr_SchemaExtra).Append(tblNode.BaseNode.Schema.MustGetExtraBytes(), false)
 
@@ -2936,6 +2937,7 @@ func (collector *BaseCollector) VisitTable(entry *catalog.TableEntry) (err error
 
 func (collector *GlobalCollector) VisitTable(entry *catalog.TableEntry) error {
 	if collector.isEntryDeletedBeforeThreshold(entry.BaseEntryImpl) {
+		collector.Usage.Deletes = append(collector.Usage.Deletes, entry)
 		return nil
 	}
 	if collector.isEntryDeletedBeforeThreshold(entry.GetDB().BaseEntryImpl) {
@@ -3086,7 +3088,8 @@ func (collector *BaseCollector) fillObjectInfoBatch(entry *catalog.ObjectEntry, 
 
 func (collector *BaseCollector) VisitObjForBackup(entry *catalog.ObjectEntry) (err error) {
 	entry.RLock()
-	if entry.GetCreatedAtLocked().Greater(collector.start) {
+	createTS := entry.GetCreatedAtLocked()
+	if createTS.Greater(&collector.start) {
 		entry.RUnlock()
 		return nil
 	}
@@ -3101,7 +3104,6 @@ func (collector *BaseCollector) VisitObj(entry *catalog.ObjectEntry) (err error)
 
 func (collector *GlobalCollector) VisitObj(entry *catalog.ObjectEntry) error {
 	if collector.isEntryDeletedBeforeThreshold(entry.BaseEntryImpl) {
-		collector.Usage.ObjDeletes = append(collector.Usage.ObjDeletes, entry)
 		return nil
 	}
 	if collector.isEntryDeletedBeforeThreshold(entry.GetTable().BaseEntryImpl) {
@@ -3423,7 +3425,8 @@ func (collector *BaseCollector) visitBlockEntry(entry *catalog.BlockEntry) {
 					collector.data.allocator,
 				)
 				memTrucate := metaNode.Start
-				if !entry.IsAppendable() && metaNode.DeletedAt.Equal(metaNode.GetEnd()) {
+				endTS := metaNode.GetEnd()
+				if !entry.IsAppendable() && metaNode.DeletedAt.Equal(&endTS) {
 					memTrucate = types.TS{}
 				}
 				vector.AppendFixed(blkCNMetaInsMemTruncVec, memTrucate, false, collector.data.allocator)
@@ -3526,7 +3529,8 @@ func (collector *BaseCollector) visitBlockEntry(entry *catalog.BlockEntry) {
 
 func (collector *BaseCollector) VisitBlkForBackup(entry *catalog.BlockEntry) (err error) {
 	entry.RLock()
-	if entry.GetCreatedAtLocked().Greater(collector.start) {
+	createTS := entry.GetCreatedAtLocked()
+	if createTS.Greater(&collector.start) {
 		entry.RUnlock()
 		return nil
 	}

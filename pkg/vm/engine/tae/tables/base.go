@@ -156,7 +156,13 @@ func (blk *baseBlock) TryUpgrade() (err error) {
 	return
 }
 
-func (blk *baseBlock) GetMeta() any              { return blk.meta }
+func (blk *baseBlock) GetMeta() any { return blk.meta }
+func (blk *baseBlock) CheckFlushTaskRetry(startts types.TS) bool {
+	blk.RLock()
+	defer blk.RUnlock()
+	x := blk.mvcc.GetLatestAppendPrepareTSLocked()
+	return x.Greater(&startts)
+}
 func (blk *baseBlock) GetFs() *objectio.ObjectFS { return blk.rt.Fs }
 func (blk *baseBlock) GetID() *common.ID         { return blk.meta.AsCommonID() }
 
@@ -323,10 +329,10 @@ func (blk *baseBlock) foreachPersistedDeletesCommittedInRange(
 	}
 	defer deletes.Close()
 	if persistedByCN {
-		if deltalocCommitTS.Equal(txnif.UncommitTS) {
+		if deltalocCommitTS.Equal(&txnif.UncommitTS) {
 			return
 		}
-		if deltalocCommitTS.Less(start) || deltalocCommitTS.Greater(end) {
+		if deltalocCommitTS.Less(&start) || deltalocCommitTS.Greater(&end) {
 			return
 		}
 		rowIdVec := deletes.Vecs[0].GetDownstreamVector()
@@ -351,7 +357,7 @@ func (blk *baseBlock) foreachPersistedDeletesCommittedInRange(
 				}
 			}
 			commitTS := vector.GetFixedAt[types.TS](commitTsVec, i)
-			if commitTS.GreaterEq(start) && commitTS.LessEq(end) {
+			if commitTS.GreaterEq(&start) && commitTS.LessEq(&end) {
 				loopOp(i, rowIdVec)
 			}
 		}
@@ -656,7 +662,7 @@ func (blk *baseBlock) CollectDeleteInRange(
 	if err != nil {
 		return
 	}
-	if !minTS.IsEmpty() && end.Greater(minTS) {
+	if !minTS.IsEmpty() && end.Greater(&minTS) {
 		end = minTS.Prev()
 	}
 	bat, err = blk.persistedCollectDeleteInRange(
@@ -698,7 +704,7 @@ func (blk *baseBlock) CollectDeleteInRangeAfterDeltalocation(
 	// if persisted > start,
 	// there's another delta location committed.
 	// It includes more deletes than former delta location.
-	if persisted.Greater(start) {
+	if persisted.Greater(&start) {
 		bat, err = blk.persistedCollectDeleteInRange(
 			ctx,
 			bat,

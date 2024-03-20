@@ -18,7 +18,6 @@ import (
 	"fmt"
 	"regexp"
 	"strconv"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -167,8 +166,8 @@ func genCreateDatabases(rows [][]any) []CreateDatabase {
 func genDropDatabases(rows [][]any) []DropDatabase {
 	cmds := make([]DropDatabase, len(rows))
 	for i, row := range rows {
-		cmds[i].Id = row[MO_DATABASE_DAT_ID_IDX].(uint64)
-		cmds[i].Name = string(row[MO_DATABASE_DAT_NAME_IDX].([]byte))
+		cmds[i].Id = row[SKIP_ROWID_OFFSET+MO_DATABASE_DAT_ID_IDX].(uint64)
+		cmds[i].Name = string(row[SKIP_ROWID_OFFSET+MO_DATABASE_DAT_NAME_IDX].([]byte))
 	}
 	return cmds
 }
@@ -461,6 +460,5 @@ func BuildQueryResultMetaPath(accountName, statementId string) string {
 }
 
 func BuildProfilePath(typ, name string) string {
-	now := time.Now().Format(time.RFC3339)
-	return fmt.Sprintf("%s/%s_%s_%s", ProfileDir, typ, name, now)
+	return fmt.Sprintf("%s/%s_%s", ProfileDir, typ, name)
 }

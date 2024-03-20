@@ -421,6 +421,18 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 		},
 	}
 
+	moSchema["mo_snapshots"] = &Schema{
+		cols: []col{
+			{"snapshot_id", types.T_uuid, false, 100, 0},
+			{"sname", types.T_varchar, false, 64, 0},
+			{"ts", types.T_timestamp, false, 50, 0},
+			{"level", types.T_enum, false, 50, 0},
+			{"account_name", types.T_varchar, false, 50, 0},
+			{"database_name", types.T_varchar, false, 50, 0},
+			{"table_name", types.T_varchar, false, 50, 0},
+		},
+	}
+
 	//---------------------------------------------constraint test schema---------------------------------------------------------
 	/*
 		create table emp(
@@ -648,7 +660,7 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 			for idx, col := range table.cols {
 				colDefs = append(colDefs, &ColDef{
 					ColId: uint64(idx),
-					Typ: &plan.Type{
+					Typ: plan.Type{
 						Id:          int32(col.Id),
 						NotNullable: !col.Nullable,
 						Width:       col.Width,

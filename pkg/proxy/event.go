@@ -32,10 +32,6 @@ func (t eventType) String() string {
 		return "KillQuery"
 	case TypeSetVar:
 		return "SetVar"
-	case TypePrepare:
-		return "Prepare"
-	case TypeInitDB:
-		return "Use"
 	}
 	return "Unknown"
 }
@@ -47,10 +43,6 @@ const (
 	TypeKillQuery eventType = 1
 	// TypeSetVar indicates the set variable statement.
 	TypeSetVar eventType = 2
-	// TypePrepare indicates the prepare statement.
-	TypePrepare eventType = 5
-	// TypeInitDB indicates the use database statement.
-	TypeInitDB eventType = 6
 )
 
 // IEvent is the event interface.
@@ -103,19 +95,9 @@ func makeEvent(msg []byte, b *msgBuf) (IEvent, bool) {
 		case *tree.SetVar:
 			// This event should be sent to dst, so return false,
 			return makeSetVarEvent(sql), false
-		case *tree.PrepareString:
-			return makePrepareEvent(sql), false
-		case *tree.Use:
-			return makeInitDBEvent(s.Name.Origin()), false
 		default:
 			return nil, false
 		}
-	} else if isCmdInitDB(msg) {
-		return makeInitDBEvent(getStatement(msg)), false
-	} else if isCmdStmtPrepare(msg) && b != nil {
-		b.setPrepared(true)
-	} else if isCmdStmtClose(msg) && b != nil {
-		b.setPrepared(false)
 	}
 	return nil, false
 }
@@ -167,44 +149,4 @@ func makeSetVarEvent(stmt string) IEvent {
 // eventType implements the IEvent interface.
 func (e *setVarEvent) eventType() eventType {
 	return TypeSetVar
-}
-
-// prepareEvent is the event that execute a prepare statement.
-type prepareEvent struct {
-	baseEvent
-	stmt string
-}
-
-// makePrepareEvent creates an event with TypePrepare type.
-func makePrepareEvent(stmt string) IEvent {
-	e := &prepareEvent{
-		stmt: stmt,
-	}
-	e.typ = TypePrepare
-	return e
-}
-
-// eventType implements the IEvent interface.
-func (e *prepareEvent) eventType() eventType {
-	return TypePrepare
-}
-
-// initDBEvent is the event that execute a use statement.
-type initDBEvent struct {
-	baseEvent
-	db string
-}
-
-// makeUseEvent creates an event with TypeUse type.
-func makeInitDBEvent(db string) IEvent {
-	e := &initDBEvent{
-		db: db,
-	}
-	e.typ = TypeInitDB
-	return e
-}
-
-// eventType implements the IEvent interface.
-func (e *initDBEvent) eventType() eventType {
-	return TypeInitDB
 }

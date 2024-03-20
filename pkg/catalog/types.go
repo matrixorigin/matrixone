@@ -118,6 +118,9 @@ const (
 
 	// MO_PUBS publication meta table
 	MO_PUBS = "mo_pubs"
+
+	// MO_SNAPSHOTS
+	MO_SNAPSHOTS = "mo_snapshots"
 )
 
 const (
@@ -128,6 +131,7 @@ const (
 
 	MO_SYSTEM_METRICS = "system_metrics"
 	MO_METRIC         = "metric"
+	MO_SQL_STMT_CU    = "sql_statement_cu"
 
 	// default database name for catalog
 	MO_CATALOG  = "mo_catalog"
