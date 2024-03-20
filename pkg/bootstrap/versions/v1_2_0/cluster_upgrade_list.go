@@ -42,12 +42,12 @@ var clusterUpgEntries = []versions.UpgradeEntry{
 }
 
 var upg_mo_account = versions.UpgradeEntry{
-	Schema:    "mo_catalog",
-	TableName: "mo_account",
+	Schema:    catalog.MO_CATALOG,
+	TableName: catalog.MOAccountTable,
 	UpgType:   versions.ADD_COLUMN,
 	UpgSql:    "alter table `mo_account` add column `create_version` varchar(50) default '1.2.0' after suspended_time",
 	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
-		colInfo, err := versions.CheckTableColumn(txn, accountId, "mo_catalog", "mo_account", "create_version")
+		colInfo, err := versions.CheckTableColumn(txn, accountId, catalog.MO_CATALOG, catalog.MOAccountTable, "create_version")
 		if err != nil {
 			return false, err
 		}
@@ -60,12 +60,12 @@ var upg_mo_account = versions.UpgradeEntry{
 }
 
 var upg_mo_pub = versions.UpgradeEntry{
-	Schema:    "mo_catalog",
-	TableName: "mo_pubs",
+	Schema:    catalog.MO_CATALOG,
+	TableName: catalog.MO_PUBS,
 	UpgType:   versions.ADD_COLUMN,
 	UpgSql:    "alter table `mo_catalog`.`mo_pubs` add column `update_time` timestamp",
 	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
-		colInfo, err := versions.CheckTableColumn(txn, accountId, "mo_catalog", "mo_pubs", "update_time")
+		colInfo, err := versions.CheckTableColumn(txn, accountId, "mo_catalog", catalog.MO_PUBS, "update_time")
 		if err != nil {
 			return false, err
 		}
@@ -78,12 +78,12 @@ var upg_mo_pub = versions.UpgradeEntry{
 }
 
 var upg_sys_async_task = versions.UpgradeEntry{
-	Schema:    "mo_task",
-	TableName: "sys_async_task",
+	Schema:    catalog.MOTaskDB,
+	TableName: catalog.MOSysAsyncTask,
 	UpgType:   versions.MODIFY_COLUMN,
 	UpgSql:    "alter table `mo_task`.`sys_async_task` modify task_id bigint auto_increment",
 	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
-		colInfo, err := versions.CheckTableColumn(txn, accountId, "mo_task", "sys_async_task", "task_id")
+		colInfo, err := versions.CheckTableColumn(txn, accountId, catalog.MOTaskDB, catalog.MOSysAsyncTask, "task_id")
 		if err != nil {
 			return false, err
 		}

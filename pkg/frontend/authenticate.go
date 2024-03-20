@@ -7692,9 +7692,10 @@ func checkSysExistsOrNot(ctx context.Context, bh BackgroundExec, pu *config.Para
 	return false, nil
 }
 
-// InitSysTenant initializes the tenant SYS before any tenants and accepting any requests
+// InitSysTenantOld initializes the tenant SYS before any tenants and accepting any requests
 // during the system is booting.
-func InitSysTenant(ctx context.Context, aicm *defines.AutoIncrCacheManager, finalVersion string) (err error) {
+// Deprecated: Use InitSysTenant instead
+func InitSysTenantOld(ctx context.Context, aicm *defines.AutoIncrCacheManager, finalVersion string) (err error) {
 	var exists bool
 	var mp *mpool.MPool
 	pu := config.GetParameterUnit(ctx)
@@ -7752,7 +7753,7 @@ func InitSysTenant(ctx context.Context, aicm *defines.AutoIncrCacheManager, fina
 	}
 
 	if !exists {
-		err = createTablesInMoCatalog(ctx, bh, tenant, pu, finalVersion)
+		err = createTablesInMoCatalogOld(ctx, bh, tenant, pu, finalVersion)
 		if err != nil {
 			return err
 		}
@@ -7761,8 +7762,9 @@ func InitSysTenant(ctx context.Context, aicm *defines.AutoIncrCacheManager, fina
 	return err
 }
 
-// createTablesInMoCatalog creates catalog tables in the database mo_catalog.
-func createTablesInMoCatalog(ctx context.Context, bh BackgroundExec, tenant *TenantInfo, pu *config.ParameterUnit, finalVersion string) error {
+// createTablesInMoCatalogOld creates catalog tables in the database mo_catalog.
+// Deprecated: Use createTablesInMoCatalog instead
+func createTablesInMoCatalogOld(ctx context.Context, bh BackgroundExec, tenant *TenantInfo, pu *config.ParameterUnit, finalVersion string) error {
 	var err error
 	var initMoAccount string
 	var initDataSqls []string

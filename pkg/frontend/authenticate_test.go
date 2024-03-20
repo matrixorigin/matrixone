@@ -229,7 +229,7 @@ func Test_checkSysExistsOrNot(t *testing.T) {
 		// A mock autoIncrCaches.
 		aicm := &defines.AutoIncrCacheManager{}
 		finalVersion := "1.2.0"
-		err = InitSysTenant(ctx, aicm, finalVersion)
+		err = InitSysTenantOld(ctx, aicm, finalVersion)
 		convey.So(err, convey.ShouldBeNil)
 	})
 }

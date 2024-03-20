@@ -30,7 +30,7 @@ import (
 
 // InitSysTenant initializes the tenant SYS before any tenants and accepting any requests
 // during the system is booting.
-func InitSysTenant2(ctx context.Context, txn executor.TxnExecutor, finalVersion string) (err error) {
+func InitSysTenant(ctx context.Context, txn executor.TxnExecutor, finalVersion string) (err error) {
 	txn.Use(catalog.MO_CATALOG)
 	res, err := txn.Exec(createDbInformationSchemaSql, executor.StatementOption{})
 	if err != nil {
@@ -38,21 +38,21 @@ func InitSysTenant2(ctx context.Context, txn executor.TxnExecutor, finalVersion 
 	}
 	res.Close()
 
-	exists, err := checkSysExistsOrNot2(ctx, txn)
+	exists, err := checkSysExistsOrNotWithTxn(ctx, txn)
 	if err != nil {
 		return err
 	}
 
 	if !exists {
-		if err = createTablesInMoCatalog2(ctx, txn, finalVersion); err != nil {
+		if err = createTablesInMoCatalog(ctx, txn, finalVersion); err != nil {
 			return err
 		}
 	}
 	return err
 }
 
-// createTablesInMoCatalog2 creates catalog tables in the database mo_catalog.
-func createTablesInMoCatalog2(ctx context.Context, txn executor.TxnExecutor, finalVersion string) error {
+// createTablesInMoCatalog creates catalog tables in the database mo_catalog.
+func createTablesInMoCatalog(ctx context.Context, txn executor.TxnExecutor, finalVersion string) error {
 	var initMoAccount string
 	var initDataSqls []string
 
@@ -153,7 +153,7 @@ func createTablesInMoCatalog2(ctx context.Context, txn executor.TxnExecutor, fin
 }
 
 // checkSysExistsOrNot checks the SYS tenant exists or not.
-func checkSysExistsOrNot2(ctx context.Context, txn executor.TxnExecutor) (bool, error) {
+func checkSysExistsOrNotWithTxn(ctx context.Context, txn executor.TxnExecutor) (bool, error) {
 	if res, err := txn.Exec("show databases;", executor.StatementOption{}); err != nil {
 		return false, err
 	} else {

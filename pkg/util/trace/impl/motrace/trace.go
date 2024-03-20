@@ -167,7 +167,7 @@ func InitSchema(ctx context.Context, sqlExecutor func() ie.InternalExecutor) err
 
 // InitSchema2
 // PS: only in system bootstrap init schema with `executor.TxnExecutor`
-func InitSchema2(ctx context.Context, txn executor.TxnExecutor) error {
+func InitSchemaWithTxn(ctx context.Context, txn executor.TxnExecutor) error {
 	_, err := txn.Exec(sqlCreateDBConst, executor.StatementOption{})
 	if err != nil {
 		return err

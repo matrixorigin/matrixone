@@ -331,7 +331,7 @@ func (s *service) execBootstrap(ctx context.Context) error {
 		if err := initPreprocessSQL(ctx, txn); err != nil {
 			return err
 		}
-		if err := frontend.InitSysTenant2(ctx, txn, s.GetFinalVersion()); err != nil {
+		if err := frontend.InitSysTenant(ctx, txn, s.GetFinalVersion()); err != nil {
 			return err
 		}
 		if err := sysview.InitSchema(ctx, txn); err != nil {
@@ -340,7 +340,7 @@ func (s *service) execBootstrap(ctx context.Context) error {
 		if err := mometric.InitSchema(ctx, txn); err != nil {
 			return err
 		}
-		if err := motrace.InitSchema2(ctx, txn); err != nil {
+		if err := motrace.InitSchemaWithTxn(ctx, txn); err != nil {
 			return err
 		}
 		return nil

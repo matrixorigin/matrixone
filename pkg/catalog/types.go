@@ -114,6 +114,9 @@ const (
 	// MOSysDaemonTask is the table name of daemon task table in mo_task.
 	MOSysDaemonTask = "sys_daemon_task"
 
+	// MOSysAsyncTask is the table name of async task table in mo_task.
+	MOSysAsyncTask = "sys_async_task"
+
 	// MOStages if the table name of mo_stages table in mo_cataglog.
 	MO_STAGES = "mo_stages"
 
