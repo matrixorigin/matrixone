@@ -592,6 +592,8 @@ func EndStatement(ctx context.Context, err error, sentRows int64, outBytes int64
 		s.ResultCount = sentRows
 		s.AggrCount = 0
 		s.MarkResponseAt()
+		// duration is filled in s.MarkResponseAt()
+		addStatementDurationCounter(s.Account, s.QueryType, s.Duration)
 		if err != nil {
 			outBytes += ResponseErrPacketSize + int64(len(err.Error()))
 		}
@@ -614,6 +616,10 @@ func EndStatement(ctx context.Context, err error, sentRows int64, outBytes int64
 			s.Report(ctx)
 		}
 	}
+}
+
+func addStatementDurationCounter(tenant, querytype string, duration time.Duration) {
+	metric.StatementDuration(tenant, querytype).Add(float64(duration))
 }
 
 type StatementInfoStatus int
@@ -667,7 +673,7 @@ var ReportStatement = func(ctx context.Context, s *StatementInfo) error {
 
 	// Filter out part of the internal SQL statements
 	// Todo: review how to aggregate the internal SQL statements logging
-	if s.User == "internal" {
+	if s.User == "internal" && s.Account == "sys" {
 		if s.StatementType == "Commit" || s.StatementType == "Start Transaction" || s.StatementType == "Use" {
 			goto DiscardAndFreeL
 		}

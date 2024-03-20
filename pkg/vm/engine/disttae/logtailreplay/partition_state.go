@@ -434,9 +434,40 @@ func (p *PartitionState) HandleObjectInsert(ctx context.Context, bat *api.Batch,
 
 		old, exist := p.dataObjects.Get(objEntry)
 		if exist && !old.IsEmpty() {
+			objEntry.EntryState = stateCol[idx]
+			objEntry.CreateTime = createTSCol[idx]
+			objEntry.DeleteTime = deleteTSCol[idx]
+			objEntry.CommitTS = commitTSCol[idx]
+			objEntry.Sorted = sortedCol[idx]
 			objEntry.HasDeltaLoc = old.HasDeltaLoc
+			// why check the deleteTime here? consider this situation:
+			// 		1. insert on an object, then these insert operations recorded into a CKP.
+			// 		2. and delete this object, this operation recorded into WAL.
+			// 		3. restart
+			// 		4. replay CKP(lazily) into partition state --> replay WAL into partition state
+			// the delete record in WAL could be overwritten by insert record in CKP,
+			// causing logic err of the objects' visibility(dead object back to life!!).
+			//
+			// if this happened, just skip this object will be fine, why chose to
+			// update the object Stats and leave others unchanged?
+			//
+			// in single txn, the pushed log tail has orders: meta insert, object insert.
+			// as long as delta location generated, there will be meta insert followed by object insert pushed to cn.
+			// in the normal case, the handleMetaInsert will construct objects with empty stats(rows = 0)
+			// and will be updated by HandleObjectInsert later. if we skip this object in such case (non-above situation),
+			// the object stats will be remained empty, has potential impact on where the stats.rows be used.
+			//
+			// so the final logic is that only update the object stats
+			// when an object already exists in the partition state and has the deleteTime value.
 			if !old.DeleteTime.IsEmpty() {
-				continue
+				// leave these field unchanged
+				objEntry.DeleteTime = old.DeleteTime
+				objEntry.CommitTS = old.CommitTS
+				objEntry.EntryState = old.EntryState
+				objEntry.CreateTime = old.CreateTime
+				objEntry.Sorted = old.Sorted
+
+				// only update object stats
 			}
 		} else {
 			if exist {
@@ -455,12 +486,6 @@ func (p *PartitionState) HandleObjectInsert(ctx context.Context, bat *api.Batch,
 		if err := blockio.PrefetchMeta(fs, objEntry.Location()); err != nil {
 			logutil.Errorf("prefetch object meta failed. %v", err)
 		}
-
-		objEntry.EntryState = stateCol[idx]
-		objEntry.CreateTime = createTSCol[idx]
-		objEntry.DeleteTime = deleteTSCol[idx]
-		objEntry.CommitTS = commitTSCol[idx]
-		objEntry.Sorted = sortedCol[idx]
 
 		p.dataObjects.Set(objEntry)
 		p.dataObjectsByCreateTS.Set(ObjectIndexByCreateTSEntry(objEntry))

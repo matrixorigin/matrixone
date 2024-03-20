@@ -588,6 +588,7 @@ func (c *Compile) runOnce() error {
 	for _, s := range c.scope {
 		s.SetContextRecursively(c.proc.Ctx)
 	}
+
 	for i := range c.scope {
 		wg.Add(1)
 		scope := c.scope[i]
@@ -3561,30 +3562,25 @@ func (c *Compile) fillAnalyzeInfo() {
 }
 
 func (c *Compile) determinExpandRanges(n *plan.Node, rel engine.Relation) bool {
-	// for some reason, revert this function to avoid bug, maybe fix this in the future
-	return true
-	/*
-		if plan2.InternalTable(n.TableDef) {
-			return true
-		}
-		if n.TableDef.Partition != nil {
-			return true
-		}
-		if len(n.RuntimeFilterProbeList) == 0 {
-			return true
-		}
-		if n.Stats.BlockNum > plan2.BlockNumForceOneCN && len(c.cnList) > 1 {
-			return true
-		}
-		if rel.GetEngineType() != engine.Disttae {
-			return true
-		}
-		if n.AggList != nil { //need to handle partial results
-			return true
-		}
-		return false
-
-	*/
+	if plan2.InternalTable(n.TableDef) {
+		return true
+	}
+	if n.TableDef.Partition != nil {
+		return true
+	}
+	if len(n.RuntimeFilterProbeList) == 0 {
+		return true
+	}
+	if n.Stats.BlockNum > plan2.BlockNumForceOneCN && len(c.cnList) > 1 {
+		return true
+	}
+	if rel.GetEngineType() != engine.Disttae {
+		return true
+	}
+	if n.AggList != nil { //need to handle partial results
+		return true
+	}
+	return false
 }
 
 func (c *Compile) expandRanges(n *plan.Node, rel engine.Relation, blockFilterList []*plan.Expr) (engine.Ranges, error) {
