@@ -210,6 +210,7 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 func (ctr *container) cleanExprExecutor() {
 	if ctr.expr != nil {
 		ctr.expr.Free()
+		ctr.expr = nil
 	}
 }
 
@@ -248,7 +249,9 @@ func (ctr *container) cleanEvalVectors() {
 		if ctr.evecs[i].executor != nil {
 			ctr.evecs[i].executor.Free()
 		}
+		ctr.evecs[i].vec = nil
 	}
+	ctr.evecs = nil
 }
 
 func (ctr *container) cleanEqVectors() {
@@ -256,5 +259,6 @@ func (ctr *container) cleanEqVectors() {
 		if ctr.buildEqEvecs[i].executor != nil {
 			ctr.buildEqEvecs[i].executor.Free()
 		}
+		ctr.buildEqEvecs[i].vec = nil
 	}
 }

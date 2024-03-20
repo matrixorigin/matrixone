@@ -16,9 +16,9 @@ package gc
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 )
@@ -31,11 +31,11 @@ type GCWorker struct {
 	// The status of GCWorker, only one delete worker can be running
 	state CleanerState
 
-	cleaner *DiskCleaner
+	cleaner *checkpointCleaner
 	fs      *objectio.ObjectFS
 }
 
-func NewGCWorker(fs *objectio.ObjectFS, cleaner *DiskCleaner) *GCWorker {
+func NewGCWorker(fs *objectio.ObjectFS, cleaner *checkpointCleaner) *GCWorker {
 	return &GCWorker{
 		state:   Idle,
 		fs:      fs,

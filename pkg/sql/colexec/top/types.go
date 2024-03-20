@@ -96,6 +96,11 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 	if ctr != nil {
 		mp := proc.Mp()
 		ctr.cleanBatch(mp)
+
+		for i := range ctr.executorsForOrderColumn {
+			ctr.executorsForOrderColumn[i].Free()
+		}
+		ctr.executorsForOrderColumn = nil
 	}
 }
 
