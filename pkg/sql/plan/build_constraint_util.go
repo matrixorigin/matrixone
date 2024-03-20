@@ -1286,7 +1286,7 @@ func appendPrimaryConstrantPlan(
 		}
 
 		if needCheck && useFuzzyFilter {
-			rfTag := builder.genNewTag()
+			rfTag := builder.genNewMsgTag()
 
 			// sink_scan
 			sinkScanNode := &Node{
@@ -1415,7 +1415,7 @@ func appendPrimaryConstrantPlan(
 	// make plan: sink_scan -> join -> filter	// check if pk is unique in rows & snapshot
 	if CNPrimaryCheck {
 		if pkPos, pkTyp := getPkPos(tableDef, true); pkPos != -1 {
-			rfTag := builder.genNewTag()
+			rfTag := builder.genNewMsgTag()
 
 			if isUpdate && updatePkCol { // update stmt && pk included in update cols
 				lastNodeId = appendSinkScanNode(builder, bindCtx, sourceStep)

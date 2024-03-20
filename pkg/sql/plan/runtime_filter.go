@@ -118,7 +118,7 @@ func (builder *QueryBuilder) generateRuntimeFilters(nodeID int32) {
 		return
 	}
 
-	rfTag := builder.genNewTag()
+	rfTag := builder.genNewMsgTag()
 
 	type_tuple := types.New(types.T_tuple, 0, 0)
 	for i := range probeExprs {

@@ -773,7 +773,7 @@ func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node,
 		builder.nameByColRef[[2]int32{idxTag, 0}] = idxTableDef.Name + "." + idxTableDef.Cols[0].Name
 		builder.nameByColRef[[2]int32{idxTag, 1}] = idxTableDef.Name + "." + idxTableDef.Cols[1].Name
 
-		rfTag := builder.genNewTag()
+		rfTag := builder.genNewMsgTag()
 
 		var rfBuildExpr *plan.Expr
 		if numParts == 1 {
