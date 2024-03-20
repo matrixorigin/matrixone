@@ -297,6 +297,17 @@ jobs:
           echo "ssb_tpch_account=ssb_tpch_test:admin" >> $GITHUB_OUTPUT
           echo "ssb_tpch_password=111" >> $GITHUB_OUTPUT
 
+      - name: Enable CN TXN Trace
+        timeout-minutes: 2
+        run: |
+          export MYSQL_PWD='111'
+          echo "select mo_ctl('cn', 'txn-trace', 'add-table mo_increment_columns');" >> enable_txn_trace.sql;
+          echo "select mo_ctl('cn', 'txn-trace', 'enable txn');" >> enable_txn_trace.sql;
+          echo "select mo_ctl('cn', 'txn-trace', 'enable data');" >> enable_txn_trace.sql;
+          cat enable_txn_trace.sql;
+          echo "===================";
+          mysql -h ${{ needs.setup_mo_test_env.outputs.mo_svc_ip }} -u dump -P 6001 < enable_txn_trace.sql
+
       - name: Modify Tool's Setting And Set PATH
         run: |
           cd $GITHUB_WORKSPACE/mo-load-data
