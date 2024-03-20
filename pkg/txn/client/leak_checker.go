@@ -110,6 +110,7 @@ func (lc *leakChecker) doCheck() {
 				txn.options.InRunSql = txn.txnOp.inRunSql()
 				txn.options.InCommit = txn.txnOp.inCommit()
 				txn.options.InRollback = txn.txnOp.inRollback()
+				txn.options.SessionInfo = txn.txnOp.options.SessionInfo
 			}
 			lc.leakHandleFunc(txn.id, txn.createAt, txn.options)
 		}
