@@ -5711,6 +5711,10 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		typs = append(typs, PrivilegeTypeAlterAccount)
 	case *tree.UpgradeStatement:
 		typs = append(typs, PrivilegeTypeUpgradeAccount)
+		objType = objectTypeNone
+		kind = privilegeKindSpecial
+		special = specialTagAdmin
+		canExecInRestricted = true
 	case *tree.CreateUser:
 		if st.Role == nil {
 			typs = append(typs, PrivilegeTypeCreateUser, PrivilegeTypeAccountAll /*, PrivilegeTypeAccountOwnership*/)
@@ -7623,6 +7627,8 @@ func authenticateUserCanExecuteStatementWithObjectTypeNone(ctx context.Context, 
 		case *tree.ShowAccounts:
 			return checkShowAccountsPrivilege()
 		case *tree.ShowAccountUpgrade:
+			return tenant.IsMoAdminRole(), nil
+		case *tree.UpgradeStatement:
 			return tenant.IsMoAdminRole(), nil
 		}
 	}
