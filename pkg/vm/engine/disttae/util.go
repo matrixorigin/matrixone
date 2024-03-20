@@ -56,6 +56,18 @@ func getPosInCompositPK(name string, pks []string) int {
 	return -1
 }
 
+func getColDefByName(name string, tableDef *plan.TableDef) *plan.ColDef {
+	idx := strings.Index(name, ".")
+	var pos int32
+	if idx >= 0 {
+		subName := name[idx+1:]
+		pos = tableDef.Name2ColIndex[subName]
+	} else {
+		pos = tableDef.Name2ColIndex[name]
+	}
+	return tableDef.Cols[pos]
+}
+
 func getValidCompositePKCnt(vals []*plan.Literal) int {
 	if len(vals) == 0 {
 		return 0
@@ -398,8 +410,8 @@ func getPkExpr(
 			return getPkExpr(exprImpl.F.Args[1], pkName, proc)
 
 		case "=":
-			if leftExpr, ok := exprImpl.F.Args[0].Expr.(*plan.Expr_Col); ok {
-				if !compPkCol(leftExpr.Col.Name, pkName) {
+			if col := exprImpl.F.Args[0].GetCol(); col != nil {
+				if !compPkCol(col.Name, pkName) {
 					return nil
 				}
 				constVal := getConstValueByExpr(exprImpl.F.Args[1], proc)
@@ -413,8 +425,8 @@ func getPkExpr(
 					},
 				}
 			}
-			if rightExpr, ok := exprImpl.F.Args[1].Expr.(*plan.Expr_Col); ok {
-				if !compPkCol(rightExpr.Col.Name, pkName) {
+			if col := exprImpl.F.Args[1].GetCol(); col != nil {
+				if !compPkCol(col.Name, pkName) {
 					return nil
 				}
 				constVal := getConstValueByExpr(exprImpl.F.Args[0], proc)
@@ -431,15 +443,16 @@ func getPkExpr(
 			return nil
 
 		case "in":
-			if leftExpr, ok := exprImpl.F.Args[0].Expr.(*plan.Expr_Col); ok {
-				if !compPkCol(leftExpr.Col.Name, pkName) {
+			if col := exprImpl.F.Args[0].GetCol(); col != nil {
+				if !compPkCol(col.Name, pkName) {
 					return nil
 				}
 				return exprImpl.F.Args[1]
 			}
-		case "prefix_eq":
-			if leftExpr, ok := exprImpl.F.Args[0].Expr.(*plan.Expr_Col); ok {
-				if !compPkCol(leftExpr.Col.Name, pkName) {
+
+		case "prefix_eq", "prefix_between", "prefix_in":
+			if col := exprImpl.F.Args[0].GetCol(); col != nil {
+				if !compPkCol(col.Name, pkName) {
 					return nil
 				}
 				return expr
@@ -509,10 +522,20 @@ func getNonCompositePKSearchFuncByExpr(
 		}
 
 	case *plan.Expr_F:
-		if exprImpl.F.Func.ObjName == "prefix_eq" {
-			expr := exprImpl.F.Args[1].Expr.(*plan.Expr_Lit)
-			val := util.UnsafeStringToBytes(expr.Lit.Value.(*plan.Literal_Sval).Sval)
-			searchPKFunc = vector.CollectOffsetsByOnePrefixFactory(val)
+		switch exprImpl.F.Func.ObjName {
+		case "prefix_eq":
+			val := util.UnsafeStringToBytes(exprImpl.F.Args[1].GetLit().GetSval())
+			searchPKFunc = vector.CollectOffsetsByPrefixEqFactory(val)
+
+		case "prefix_between":
+			lval := util.UnsafeStringToBytes(exprImpl.F.Args[1].GetLit().GetSval())
+			rval := util.UnsafeStringToBytes(exprImpl.F.Args[2].GetLit().GetSval())
+			searchPKFunc = vector.CollectOffsetsByPrefixBetweenFactory(lval, rval)
+
+		case "prefix_in":
+			vec := vector.NewVec(types.T_any.ToType())
+			vec.UnmarshalBinary(exprImpl.F.Args[1].GetVec().Data)
+			searchPKFunc = vector.CollectOffsetsByPrefixInFactory(vec)
 		}
 
 	case *plan.Expr_Vec:
@@ -571,8 +594,85 @@ func getNonCompositePKSearchFuncByExpr(
 	return false, false, nil
 }
 
-func evalLiteralExpr(expr *plan.Expr_Lit, oid types.T) (canEval bool, val any) {
-	switch val := expr.Lit.Value.(type) {
+func evalLiteralExpr2(expr *plan.Literal, oid types.T) (ret []byte, can bool) {
+	can = true
+	switch val := expr.Value.(type) {
+	case *plan.Literal_I8Val:
+		i8 := int8(val.I8Val)
+		ret = types.EncodeInt8(&i8)
+	case *plan.Literal_I16Val:
+		i16 := int16(val.I16Val)
+		ret = types.EncodeInt16(&i16)
+	case *plan.Literal_I32Val:
+		i32 := int32(val.I32Val)
+		ret = types.EncodeInt32(&i32)
+	case *plan.Literal_I64Val:
+		i64 := int64(val.I64Val)
+		ret = types.EncodeInt64(&i64)
+	case *plan.Literal_Dval:
+		if oid == types.T_float32 {
+			fval := float32(val.Dval)
+			ret = types.EncodeFloat32(&fval)
+		} else {
+			dval := val.Dval
+			ret = types.EncodeFloat64(&dval)
+		}
+	case *plan.Literal_Sval:
+		ret = util.UnsafeStringToBytes(val.Sval)
+	case *plan.Literal_Bval:
+		ret = types.EncodeBool(&val.Bval)
+	case *plan.Literal_U8Val:
+		u8 := uint8(val.U8Val)
+		ret = types.EncodeUint8(&u8)
+	case *plan.Literal_U16Val:
+		u16 := uint16(val.U16Val)
+		ret = types.EncodeUint16(&u16)
+	case *plan.Literal_U32Val:
+		u32 := uint32(val.U32Val)
+		ret = types.EncodeUint32(&u32)
+	case *plan.Literal_U64Val:
+		u64 := uint64(val.U64Val)
+		ret = types.EncodeUint64(&u64)
+	case *plan.Literal_Fval:
+		if oid == types.T_float32 {
+			fval := float32(val.Fval)
+			ret = types.EncodeFloat32(&fval)
+		} else {
+			fval := float64(val.Fval)
+			ret = types.EncodeFloat64(&fval)
+		}
+	case *plan.Literal_Dateval:
+		v := types.Date(val.Dateval)
+		ret = types.EncodeDate(&v)
+	case *plan.Literal_Timeval:
+		v := types.Time(val.Timeval)
+		ret = types.EncodeTime(&v)
+	case *plan.Literal_Datetimeval:
+		v := types.Datetime(val.Datetimeval)
+		ret = types.EncodeDatetime(&v)
+	case *plan.Literal_Timestampval:
+		v := types.Timestamp(val.Timestampval)
+		ret = types.EncodeTimestamp(&v)
+	case *plan.Literal_Decimal64Val:
+		v := types.Decimal64(val.Decimal64Val.A)
+		ret = types.EncodeDecimal64(&v)
+	case *plan.Literal_Decimal128Val:
+		v := types.Decimal128{B0_63: uint64(val.Decimal128Val.A), B64_127: uint64(val.Decimal128Val.B)}
+		ret = types.EncodeDecimal128(&v)
+	case *plan.Literal_EnumVal:
+		v := types.Enum(val.EnumVal)
+		ret = types.EncodeEnum(&v)
+	case *plan.Literal_Jsonval:
+		ret = util.UnsafeStringToBytes(val.Jsonval)
+	default:
+		can = false
+	}
+
+	return
+}
+
+func evalLiteralExpr(expr *plan.Literal, oid types.T) (canEval bool, val any) {
+	switch val := expr.Value.(type) {
 	case *plan.Literal_I8Val:
 		return transferIval(val.I8Val, oid)
 	case *plan.Literal_I16Val:
@@ -635,7 +735,7 @@ func getPkValueByExpr(
 		if exprImpl.Lit.Isnull {
 			return false, true, false, nil
 		}
-		canEval, val := evalLiteralExpr(exprImpl, oid)
+		canEval, val := evalLiteralExpr(exprImpl.Lit, oid)
 		if canEval {
 			return true, false, false, val
 		} else {
@@ -656,9 +756,7 @@ func getPkValueByExpr(
 			if exprLit.Isnull {
 				return false, true, false, nil
 			}
-			canEval, val := evalLiteralExpr(&plan.Expr_Lit{
-				Lit: exprLit,
-			}, oid)
+			canEval, val := evalLiteralExpr(exprLit, oid)
 			if canEval {
 				return true, false, false, val
 			}
@@ -709,7 +807,7 @@ func recurEvalExprList(
 	for _, expr := range inputExpr.List.List {
 		switch expr2 := expr.Expr.(type) {
 		case *plan.Expr_Lit:
-			canEval, val := evalLiteralExpr(expr2, oid)
+			canEval, val := evalLiteralExpr(expr2.Lit, oid)
 			if !canEval {
 				return false, outputVec
 			}
@@ -1085,17 +1183,18 @@ func serialTupleByConstExpr(expr *plan.Literal, packer *types.Packer) {
 	}
 }
 
-func getConstValueByExpr(expr *plan.Expr,
-	proc *process.Process) *plan.Literal {
+func getConstValueByExpr(
+	expr *plan.Expr, proc *process.Process,
+) *plan.Literal {
 	exec, err := colexec.NewExpressionExecutor(proc, expr)
 	if err != nil {
 		return nil
 	}
+	defer exec.Free()
 	vec, err := exec.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch})
 	if err != nil {
 		return nil
 	}
-	defer exec.Free()
 	return rule.GetConstantValue(vec, true, 0)
 }
 

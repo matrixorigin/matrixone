@@ -328,4 +328,38 @@ internal error: Cannot add or update a child row: a foreign key constraint fails
 drop table product_order;
 drop table customer;
 drop table product;
+drop table if exists organization;
+create table organization (
+id int auto_increment primary key,
+name varchar(255) not null ,
+parent_id int default null,
+foreign key (parent_id) references organization(id)
+);
+insert into organization (id, name, parent_id ) values (1, 'ceo', null);
+insert into organization (id, name, parent_id ) values (2, 'cto', null);
+insert into organization (id, name, parent_id ) values (3, 'dev', 2);
+insert into organization (id, name, parent_id ) values (4, 'test', 2);
+insert into organization (id, name, parent_id ) values (5, 'marketing', 1);
+insert into organization (id, name, parent_id ) values (6, 'finance', 1);
+select * from organization;
+id    name    parent_id
+1    ceo    null
+2    cto    null
+3    dev    2
+4    test    2
+5    marketing    1
+6    finance    1
+insert into organization (id, name, parent_id ) values (7, 'unknown', 99);
+Cannot add or update a child row: a foreign key constraint fails
+insert into organization (id, name ) values (8, 'unknown');
+select * from organization;
+id    name    parent_id
+1    ceo    null
+2    cto    null
+3    dev    2
+4    test    2
+5    marketing    1
+6    finance    1
+8    unknown    null
+drop table organization;
 drop database if exists db8;

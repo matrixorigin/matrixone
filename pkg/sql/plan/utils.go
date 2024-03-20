@@ -600,9 +600,9 @@ func extractColRefInFilter(expr *plan.Expr) *ColRef {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
 		switch exprImpl.F.Func.ObjName {
-		case "=", ">", "<", ">=", "<=", "prefix_eq", "between":
+		case "=", ">", "<", ">=", "<=", "prefix_eq", "between", "in", "prefix_in":
 			switch e := exprImpl.F.Args[1].Expr.(type) {
-			case *plan.Expr_Lit, *plan.Expr_P, *plan.Expr_V:
+			case *plan.Expr_Lit, *plan.Expr_P, *plan.Expr_V, *plan.Expr_Vec:
 				return extractColRefInFilter(exprImpl.F.Args[0])
 			case *plan.Expr_F:
 				switch e.F.Func.ObjName {
@@ -1551,7 +1551,7 @@ func GenUniqueColJoinExpr(ctx context.Context, tableDef *TableDef, uniqueCols []
 		for _, colIdx := range uniqueColMap {
 			col := tableDef.Cols[colIdx]
 			leftExpr := &Expr{
-				Typ: *col.Typ,
+				Typ: col.Typ,
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
 						RelPos: leftTag,
@@ -1560,7 +1560,7 @@ func GenUniqueColJoinExpr(ctx context.Context, tableDef *TableDef, uniqueCols []
 				},
 			}
 			rightExpr := &plan.Expr{
-				Typ: *col.Typ,
+				Typ: col.Typ,
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
 						RelPos: rightTag,
@@ -1610,7 +1610,7 @@ func GenUniqueColCheckExpr(ctx context.Context, tableDef *TableDef, uniqueCols [
 			col := tableDef.Cols[colIdx]
 			// insert values
 			leftExpr := &Expr{
-				Typ: *col.Typ,
+				Typ: col.Typ,
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
 						RelPos: 0,
@@ -1619,7 +1619,7 @@ func GenUniqueColCheckExpr(ctx context.Context, tableDef *TableDef, uniqueCols [
 				},
 			}
 			rightExpr := &plan.Expr{
-				Typ: *col.Typ,
+				Typ: col.Typ,
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
 						RelPos: 1,
@@ -1712,6 +1712,15 @@ func ResetAuxIdForExpr(expr *plan.Expr) {
 // 	}
 // 	return expr
 // }
+
+func FormatExprs(exprs []*plan.Expr) string {
+	var w bytes.Buffer
+	for _, expr := range exprs {
+		w.WriteString(FormatExpr(expr))
+		w.WriteByte('\n')
+	}
+	return w.String()
+}
 
 func FormatExpr(expr *plan.Expr) string {
 	var w bytes.Buffer

@@ -149,7 +149,7 @@ func HandleSyncLogTailReq(
 	tableEntry.RLock()
 	createTS := tableEntry.GetCreatedAtLocked()
 	tableEntry.RUnlock()
-	if start.Less(createTS) {
+	if start.Less(&createTS) {
 		start = createTS
 	}
 
@@ -158,7 +158,7 @@ func HandleSyncLogTailReq(
 		return
 	}
 
-	if checkpointed.GreaterEq(end) {
+	if checkpointed.GreaterEq(&end) {
 		return api.SyncLogTailResp{
 			CkpLocation: ckpLoc,
 		}, nil, err
@@ -185,7 +185,7 @@ func HandleSyncLogTailReq(
 
 	if canRetry && scope == ScopeUserTables { // check simple conditions first
 		_, name, forceFlush := fault.TriggerFault("logtail_max_size")
-		if (forceFlush && name == tableEntry.GetLastestSchema().Name) || resp.ProtoSize() > Size90M {
+		if (forceFlush && name == tableEntry.GetLastestSchemaLocked().Name) || resp.ProtoSize() > Size90M {
 			_ = ckpClient.FlushTable(ctx, did, tid, end)
 			// try again after flushing
 			newResp, closeCB, err := HandleSyncLogTailReq(ctx, ckpClient, mgr, c, req, false)
@@ -464,7 +464,7 @@ func NewTableLogtailRespBuilder(ctx context.Context, ckp string, start, end type
 	b.did = tbl.GetDB().GetID()
 	b.tid = tbl.ID
 	b.dname = tbl.GetDB().GetName()
-	b.tname = tbl.GetLastestSchema().Name
+	b.tname = tbl.GetLastestSchemaLocked().Name
 
 	b.dataInsBatches = make(map[uint32]*containers.Batch)
 	b.dataDelBatch = makeRespBatchFromSchema(DelSchema, common.LogtailAllocator)
@@ -537,7 +537,7 @@ func visitObject(batch *containers.Batch, entry *catalog.ObjectEntry, node *cata
 	batch.GetVectorByName(SnapshotAttr_TID).Append(entry.GetTable().ID, false)
 	batch.GetVectorByName(ObjectAttr_State).Append(entry.IsAppendable(), false)
 	sorted := false
-	if entry.GetTable().GetLastestSchema().HasSortKey() && !entry.IsAppendable() {
+	if entry.GetTable().GetLastestSchemaLocked().HasSortKey() && !entry.IsAppendable() {
 		sorted = true
 	}
 	batch.GetVectorByName(ObjectAttr_Sorted).Append(sorted, false)
@@ -551,7 +551,7 @@ func (b *TableLogtailRespBuilder) visitBlkMeta(e *catalog.BlockEntry) (types.TS,
 	// try to find new end
 	if newest := e.GetLatestCommittedNode(); newest != nil {
 		latestPrepareTs := newest.GetPrepare()
-		if latestPrepareTs.Greater(b.end) {
+		if latestPrepareTs.Greater(&b.end) {
 			newEnd = latestPrepareTs
 		}
 	}
@@ -574,7 +574,8 @@ func (b *TableLogtailRespBuilder) visitBlkMeta(e *catalog.BlockEntry) (types.TS,
 			}
 		} else {
 			if !newest.BaseNode.DeltaLoc.IsEmpty() {
-				if newest.GetStart().GreaterEq(b.end) {
+				startTS := newest.GetStart()
+				if startTS.GreaterEq(&b.end) {
 					// non-appendable block has newer delta data on s3, no need to collect data
 					return types.MaxTs(), true
 				} else {
@@ -612,7 +613,7 @@ func visitBlkMeta(e *catalog.BlockEntry, node *catalog.MVCCNode[*catalog.Metadat
 	// for appendable block(deleted, because we skip empty metaloc), non-dropped non-appendabled blocks, those new nodes are
 	// produced by flush table tail, it's safe to truncate mem data in CN
 	memTruncTs := node.Start
-	if !e.IsAppendable() && committs.Equal(deletets) {
+	if !e.IsAppendable() && committs.Equal(&deletets) {
 		// for deleted non-appendable block, it must be produced by merging blocks. In this case,
 		// do not truncate any data in CN, because merging blocks didn't flush deletes to disk.
 		memTruncTs = types.TS{}
@@ -653,7 +654,8 @@ func (b *TableLogtailRespBuilder) visitBlkData(ctx context.Context, ts types.TS,
 		}
 	}
 	var delBatch *containers.Batch
-	if !ts.Equal(types.MaxTs()) {
+	maxTS := types.MaxTs()
+	if !ts.Equal(&maxTS) {
 		delBatch, err = block.CollectDeleteInRangeAfterDeltalocation(ctx, ts, b.end, false, common.LogtailAllocator)
 	} else {
 		delBatch, err = block.CollectDeleteInRange(ctx, b.start, b.end, false, common.LogtailAllocator)

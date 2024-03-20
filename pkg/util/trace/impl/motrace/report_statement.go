@@ -31,6 +31,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	db_holder "github.com/matrixorigin/matrixone/pkg/util/export/etl/db"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
+	"github.com/matrixorigin/matrixone/pkg/util/metric"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 
 	"github.com/google/uuid"
@@ -159,6 +161,11 @@ func StatementInfoFilter(i Item) bool {
 
 	// Do not aggr the running statement
 	if statementInfo.Status == StatementStatusRunning {
+		return false
+	}
+
+	// for #14926
+	if statementInfo.statsArray.GetCU() < 0 {
 		return false
 	}
 
@@ -585,14 +592,20 @@ func EndStatement(ctx context.Context, err error, sentRows int64, outBytes int64
 		s.ResultCount = sentRows
 		s.AggrCount = 0
 		s.MarkResponseAt()
+		// duration is filled in s.MarkResponseAt()
+		addStatementDurationCounter(s.Account, s.QueryType, s.Duration)
 		if err != nil {
 			outBytes += ResponseErrPacketSize + int64(len(err.Error()))
 		}
 		outBytes += TcpIpv4HeaderSize * outPacket
 		s.statsArray.InitIfEmpty().WithOutTrafficBytes(float64(outBytes)).WithOutPacketCount(float64(outPacket))
 		s.ExecPlan2Stats(ctx)
-		// disable cu metric counter
-		// metric.StatementCUCounter(s.Account, s.SqlSourceType).Add(s.statsArray.GetCU())
+		if s.statsArray.GetCU() < 0 {
+			logutil.Warnf("negative cu: %f, %s", s.statsArray.GetCU(), uuid.UUID(s.StatementID).String())
+			v2.GetTraceNegativeCUCounter("cu").Inc()
+		} else {
+			metric.StatementCUCounter(s.Account, s.SqlSourceType).Add(s.statsArray.GetCU())
+		}
 		s.Status = StatementStatusSuccess
 		if err != nil {
 			s.Error = err
@@ -603,6 +616,10 @@ func EndStatement(ctx context.Context, err error, sentRows int64, outBytes int64
 			s.Report(ctx)
 		}
 	}
+}
+
+func addStatementDurationCounter(tenant, querytype string, duration time.Duration) {
+	metric.StatementDuration(tenant, querytype).Add(float64(duration))
 }
 
 type StatementInfoStatus int
@@ -656,7 +673,7 @@ var ReportStatement = func(ctx context.Context, s *StatementInfo) error {
 
 	// Filter out part of the internal SQL statements
 	// Todo: review how to aggregate the internal SQL statements logging
-	if s.User == "internal" {
+	if s.User == "internal" && s.Account == "sys" {
 		if s.StatementType == "Commit" || s.StatementType == "Start Transaction" || s.StatementType == "Use" {
 			goto DiscardAndFreeL
 		}

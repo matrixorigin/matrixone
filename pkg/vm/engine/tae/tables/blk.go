@@ -117,7 +117,8 @@ func (blk *block) GetColumnDataById(
 func (blk *block) CoarseCheckAllRowsCommittedBefore(ts types.TS) bool {
 	blk.meta.RLock()
 	defer blk.meta.RUnlock()
-	return blk.meta.GetCreatedAtLocked().Less(ts)
+	creatTS := blk.meta.GetCreatedAtLocked()
+	return creatTS.Less(&ts)
 }
 
 func (blk *block) BatchDedup(
@@ -132,7 +133,7 @@ func (blk *block) BatchDedup(
 ) (err error) {
 	defer func() {
 		if moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry) {
-			logutil.Infof("BatchDedup %s (%v)BLK-%s: %v", blk.meta.GetObject().GetTable().GetLastestSchema().Name, blk.IsAppendable(), blk.meta.ID.String(), err)
+			logutil.Infof("BatchDedup %s (%v)BLK-%s: %v", blk.meta.GetObject().GetTable().GetLastestSchemaLocked().Name, blk.IsAppendable(), blk.meta.ID.String(), err)
 		}
 	}()
 	return blk.PersistedBatchDedup(

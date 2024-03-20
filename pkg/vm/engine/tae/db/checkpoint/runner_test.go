@@ -52,12 +52,12 @@ func TestCkpCheck(t *testing.T) {
 
 	loc, e, err := r.CollectCheckpointsInRange(ctx, types.BuildTS(4, 0), types.BuildTS(5, 0))
 	assert.NoError(t, err)
-	assert.True(t, e.Equal(types.BuildTS(9, 0)))
+	assert.True(t, e.Equal(types.BuildTSForTest(9, 0)))
 	assert.Equal(t, "loc-0;1", loc)
 
 	loc, e, err = r.CollectCheckpointsInRange(ctx, types.BuildTS(12, 0), types.BuildTS(25, 0))
 	assert.NoError(t, err)
-	assert.True(t, e.Equal(types.BuildTS(29, 0)))
+	assert.True(t, e.Equal(types.BuildTSForTest(29, 0)))
 	assert.Equal(t, "loc-10;1;loc-20;1", loc)
 }
 
@@ -96,7 +96,7 @@ func TestGetCheckpoints1(t *testing.T) {
 	t.Log(location)
 	t.Log(checkpointed.ToString())
 	assert.Equal(t, "ckp0;1", location)
-	assert.True(t, checkpointed.Equal(types.BuildTS(10, 0)))
+	assert.True(t, checkpointed.Equal(types.BuildTSForTest(10, 0)))
 
 	// [45,50]
 	location, checkpointed, err = r.CollectCheckpointsInRange(ctx, types.BuildTS(45, 0), types.BuildTS(50, 0))
@@ -112,7 +112,7 @@ func TestGetCheckpoints1(t *testing.T) {
 	t.Log(location)
 	t.Log(checkpointed.ToString())
 	assert.Equal(t, "ckp3;1", location)
-	assert.True(t, checkpointed.Equal(types.BuildTS(40, 0)))
+	assert.True(t, checkpointed.Equal(types.BuildTSForTest(40, 0)))
 
 	// [25,45]
 	location, checkpointed, err = r.CollectCheckpointsInRange(ctx, types.BuildTS(25, 1), types.BuildTS(45, 0))
@@ -120,7 +120,7 @@ func TestGetCheckpoints1(t *testing.T) {
 	t.Log(location)
 	t.Log(checkpointed.ToString())
 	assert.Equal(t, "ckp2;1;ckp3;1", location)
-	assert.True(t, checkpointed.Equal(types.BuildTS(40, 0)))
+	assert.True(t, checkpointed.Equal(types.BuildTSForTest(40, 0)))
 
 	// [22,25]
 	location, checkpointed, err = r.CollectCheckpointsInRange(ctx, types.BuildTS(22, 1), types.BuildTS(25, 0))
@@ -128,7 +128,7 @@ func TestGetCheckpoints1(t *testing.T) {
 	t.Log(location)
 	t.Log(checkpointed.ToString())
 	assert.Equal(t, "ckp2;1", location)
-	assert.True(t, checkpointed.Equal(types.BuildTS(30, 0)))
+	assert.True(t, checkpointed.Equal(types.BuildTSForTest(30, 0)))
 
 	// [22,35]
 	location, checkpointed, err = r.CollectCheckpointsInRange(ctx, types.BuildTS(22, 1), types.BuildTS(35, 0))
@@ -136,7 +136,7 @@ func TestGetCheckpoints1(t *testing.T) {
 	t.Log(location)
 	t.Log(checkpointed.ToString())
 	assert.Equal(t, "ckp2;1;ckp3;1", location)
-	assert.True(t, checkpointed.Equal(types.BuildTS(40, 0)))
+	assert.True(t, checkpointed.Equal(types.BuildTSForTest(40, 0)))
 }
 func TestGetCheckpoints2(t *testing.T) {
 	defer testutils.AfterTest(t)()
@@ -192,7 +192,7 @@ func TestGetCheckpoints2(t *testing.T) {
 	t.Log(location)
 	t.Log(checkpointed.ToString())
 	assert.Equal(t, "global3;100", location)
-	assert.True(t, checkpointed.Equal(types.BuildTS(30, 1)))
+	assert.True(t, checkpointed.Equal(types.BuildTSForTest(30, 1)))
 
 	// [45,50]
 	location, checkpointed, err = r.CollectCheckpointsInRange(ctx, types.BuildTS(45, 0), types.BuildTS(50, 0))
@@ -208,7 +208,7 @@ func TestGetCheckpoints2(t *testing.T) {
 	t.Log(location)
 	t.Log(checkpointed.ToString())
 	assert.Equal(t, "ckp3;3", location)
-	assert.True(t, checkpointed.Equal(types.BuildTS(40, 0)))
+	assert.True(t, checkpointed.Equal(types.BuildTSForTest(40, 0)))
 
 	// [25,45]
 	location, checkpointed, err = r.CollectCheckpointsInRange(ctx, types.BuildTS(25, 1), types.BuildTS(45, 0))
@@ -216,7 +216,7 @@ func TestGetCheckpoints2(t *testing.T) {
 	t.Log(location)
 	t.Log(checkpointed.ToString())
 	assert.Equal(t, "global3;100;ckp3;3", location)
-	assert.True(t, checkpointed.Equal(types.BuildTS(40, 0)))
+	assert.True(t, checkpointed.Equal(types.BuildTSForTest(40, 0)))
 
 	// [22,25]
 	location, checkpointed, err = r.CollectCheckpointsInRange(ctx, types.BuildTS(22, 1), types.BuildTS(25, 0))
@@ -224,7 +224,7 @@ func TestGetCheckpoints2(t *testing.T) {
 	t.Log(location)
 	t.Log(checkpointed.ToString())
 	assert.Equal(t, "global3;100", location)
-	assert.True(t, checkpointed.Equal(types.BuildTS(30, 1)))
+	assert.True(t, checkpointed.Equal(types.BuildTSForTest(30, 1)))
 
 	// [22,35]
 	location, checkpointed, err = r.CollectCheckpointsInRange(ctx, types.BuildTS(22, 1), types.BuildTS(35, 0))
@@ -232,7 +232,7 @@ func TestGetCheckpoints2(t *testing.T) {
 	t.Log(location)
 	t.Log(checkpointed.ToString())
 	assert.Equal(t, "global3;100;ckp3;3", location)
-	assert.True(t, checkpointed.Equal(types.BuildTS(40, 0)))
+	assert.True(t, checkpointed.Equal(types.BuildTSForTest(40, 0)))
 
 	// [22,29]
 	location, checkpointed, err = r.CollectCheckpointsInRange(ctx, types.BuildTS(22, 1), types.BuildTS(29, 0))
@@ -240,7 +240,7 @@ func TestGetCheckpoints2(t *testing.T) {
 	t.Log(location)
 	t.Log(checkpointed.ToString())
 	assert.Equal(t, "global3;100", location)
-	assert.True(t, checkpointed.Equal(types.BuildTS(30, 1)))
+	assert.True(t, checkpointed.Equal(types.BuildTSForTest(30, 1)))
 }
 func TestICKPSeekLT(t *testing.T) {
 	defer testutils.AfterTest(t)()

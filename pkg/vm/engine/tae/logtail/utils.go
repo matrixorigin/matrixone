@@ -2778,7 +2778,7 @@ func (collector *BaseCollector) VisitDB(entry *catalog.DBEntry) error {
 		var created, dropped bool
 		if dbNode.HasDropCommitted() {
 			dropped = true
-			if dbNode.CreatedAt.Equal(dbNode.DeletedAt) {
+			if dbNode.CreatedAt.Equal(&dbNode.DeletedAt) {
 				created = true
 			}
 		} else {
@@ -2857,7 +2857,7 @@ func (collector *BaseCollector) VisitTable(entry *catalog.TableEntry) (err error
 		var created, dropped bool
 		if tblNode.HasDropCommitted() {
 			dropped = true
-			if tblNode.CreatedAt.Equal(tblNode.DeletedAt) {
+			if tblNode.CreatedAt.Equal(&tblNode.DeletedAt) {
 				created = true
 			}
 		} else {
@@ -2886,9 +2886,9 @@ func (collector *BaseCollector) VisitTable(entry *catalog.TableEntry) (err error
 			}
 
 			tableColInsTxnBat.GetVectorByName(
-				SnapshotAttr_BlockMaxRow).Append(entry.GetLastestSchema().BlockMaxRows, false)
+				SnapshotAttr_BlockMaxRow).Append(entry.GetLastestSchemaLocked().BlockMaxRows, false)
 			tableColInsTxnBat.GetVectorByName(
-				SnapshotAttr_ObjectMaxBlock).Append(entry.GetLastestSchema().ObjectMaxBlocks, false)
+				SnapshotAttr_ObjectMaxBlock).Append(entry.GetLastestSchemaLocked().ObjectMaxBlocks, false)
 			tableColInsTxnBat.GetVectorByName(
 				SnapshotAttr_SchemaExtra).Append(tblNode.BaseNode.Schema.MustGetExtraBytes(), false)
 
@@ -3094,7 +3094,8 @@ func (collector *BaseCollector) fillObjectInfoBatch(entry *catalog.ObjectEntry, 
 
 func (collector *BaseCollector) VisitObjForBackup(entry *catalog.ObjectEntry) (err error) {
 	entry.RLock()
-	if entry.GetCreatedAtLocked().Greater(collector.start) {
+	createTS := entry.GetCreatedAtLocked()
+	if createTS.Greater(&collector.start) {
 		entry.RUnlock()
 		return nil
 	}
@@ -3430,7 +3431,8 @@ func (collector *BaseCollector) visitBlockEntry(entry *catalog.BlockEntry) {
 					collector.data.allocator,
 				)
 				memTrucate := metaNode.Start
-				if !entry.IsAppendable() && metaNode.DeletedAt.Equal(metaNode.GetEnd()) {
+				endTS := metaNode.GetEnd()
+				if !entry.IsAppendable() && metaNode.DeletedAt.Equal(&endTS) {
 					memTrucate = types.TS{}
 				}
 				vector.AppendFixed(blkCNMetaInsMemTruncVec, memTrucate, false, collector.data.allocator)
@@ -3533,7 +3535,8 @@ func (collector *BaseCollector) visitBlockEntry(entry *catalog.BlockEntry) {
 
 func (collector *BaseCollector) VisitBlkForBackup(entry *catalog.BlockEntry) (err error) {
 	entry.RLock()
-	if entry.GetCreatedAtLocked().Greater(collector.start) {
+	createTS := entry.GetCreatedAtLocked()
+	if createTS.Greater(&collector.start) {
 		entry.RUnlock()
 		return nil
 	}

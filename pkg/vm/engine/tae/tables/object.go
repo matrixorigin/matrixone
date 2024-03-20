@@ -40,7 +40,7 @@ func BuildObjectCompactionTaskFactory(meta *catalog.ObjectEntry, rt *dbutils.Run
 	filter.AddBlockFilter(catalog.NonAppendableBlkFilter)
 	filter.AddCommitFilter(catalog.ActiveWithNoTxnFilter)
 	blks := meta.CollectBlockEntries(filter.FilteCommit, filter.FilteBlock)
-	if len(blks) < int(meta.GetTable().GetLastestSchema().ObjectMaxBlocks) {
+	if len(blks) < int(meta.GetTable().GetLastestSchemaLocked().ObjectMaxBlocks) {
 		return
 	}
 	for _, blk := range blks {

@@ -161,6 +161,9 @@ var (
 	// defaultLoggerLabelKey and defaultLoggerLabelVal
 	defaultLoggerLabelKey = "role"
 	defaultLoggerLabelVal = "logging_cn"
+
+	// default sql_mode
+	dafaultSqlMode = "ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES"
 )
 
 // FrontendParameters of the frontend
@@ -284,6 +287,9 @@ type FrontendParameters struct {
 
 	// disable select into
 	DisableSelectInto bool `toml:"disable-select-into"`
+
+	// default sql_mode default value
+	SqlMode string `toml:"sql-mode"`
 }
 
 func (fp *FrontendParameters) SetDefaultValues() {
@@ -398,6 +404,10 @@ func (fp *FrontendParameters) SetDefaultValues() {
 
 	if fp.CleanKillQueueInterval == 0 {
 		fp.CleanKillQueueInterval = defaultCleanKillQueueInterval
+	}
+
+	if fp.SqlMode == "" {
+		fp.SqlMode = dafaultSqlMode
 	}
 }
 
@@ -587,6 +597,7 @@ func NewObservabilityParameters() *ObservabilityParameters {
 func (op *ObservabilityParameters) SetDefaultValues(version string) {
 	op.OBCollectorConfig.SetDefaultValues()
 	op.CU.SetDefaultValues()
+	op.CUv1.SetDefaultValues()
 
 	op.MoVersion = version
 
