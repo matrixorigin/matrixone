@@ -302,16 +302,10 @@ func (client *txnClient) New(
 
 	ts, err := client.determineTxnSnapshot(minTS)
 	if err != nil {
-		{
-			util.GetLogger().Info("txn closed", zap.String("txn ID", hex.EncodeToString(op.txnID)))
-		}
 		_ = op.Rollback(ctx)
 		return nil, err
 	}
 	if err := op.UpdateSnapshot(ctx, ts); err != nil {
-		{
-			util.GetLogger().Info("txn closed", zap.String("txn ID", hex.EncodeToString(op.txnID)))
-		}
 		_ = op.Rollback(ctx)
 		return nil, err
 	}
@@ -499,10 +493,6 @@ func (client *txnClient) closeTxn(event TxnEvent) {
 
 	key := string(txn.ID)
 	op, ok := client.mu.activeTxns[key]
-	{
-		util.GetLogger().Info("txn closed", zap.String("txn ID", hex.EncodeToString(txn.ID)),
-			zap.Bool("ok", ok))
-	}
 	if ok {
 		v2.TxnLifeCycleDurationHistogram.Observe(time.Since(op.createAt).Seconds())
 
