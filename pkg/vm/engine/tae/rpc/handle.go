@@ -76,6 +76,7 @@ func (h *Handle) IsPrintLogTable(name string) bool {
 	if printMatchRegexp == nil {
 		return false
 	}
+	logutil.Infof("IsPrintLogTable is %v", name)
 	return printMatchRegexp.MatchString(name)
 }
 
