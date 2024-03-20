@@ -117,6 +117,9 @@ func (mr *MessageReceiver) receiveMessageNonBlock() []Message {
 	var result []Message
 	lenMessages := int32(len(mr.mb.Messages))
 	for ; mr.offset < lenMessages; mr.offset++ {
+		if mr.mb.Messages[mr.offset] == nil {
+			continue
+		}
 		message := *mr.mb.Messages[mr.offset]
 		if !MatchAddress(message, mr.addr) {
 			continue
