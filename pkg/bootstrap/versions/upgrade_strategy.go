@@ -178,6 +178,18 @@ func CheckTableColumn(txn executor.TxnExecutor,
 	schema string,
 	tableName string,
 	columnName string) (ColumnInfo, error) {
+
+	checkInput := func(input string) bool {
+		switch input {
+		case "YES", "yes":
+			return true
+		case "NO", "no":
+			return false
+		default:
+			return false
+		}
+	}
+
 	colInfo := ColumnInfo{
 		IsExits: false,
 		Name:    columnName,
@@ -355,15 +367,4 @@ func CheckTableDataExist(txn executor.TxnExecutor, accountId uint32, sql string)
 	})
 
 	return loaded, nil
-}
-
-func checkInput(input string) bool {
-	switch input {
-	case "YES", "yes":
-		return true
-	case "NO", "no":
-		return false
-	default:
-		return false
-	}
 }
