@@ -1573,7 +1573,7 @@ drop account acc0;
 drop publication sys_pub_1;
 show variables like 'lower_case_table_names';
 Variable_name    Value
-lower_case_table_names    0
+lower_case_table_names    1
 set @@global.lower_case_table_names = 0;
 use test;
 drop table if exists alias01;
