@@ -5308,6 +5308,28 @@ var supportedOthersBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `mo_show_visible_bin`
+	{
+		functionId: MO_SHOW_VISIBLE_BIN_ENUM,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				volatile:   true,
+				args:       []types.T{types.T_varchar, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return builtInMoShowVisibleBinEnum
+				},
+			},
+		},
+	},
+
 	// function `cast_index_to_value`
 	{
 		functionId: CAST_INDEX_TO_VALUE,

@@ -173,6 +173,63 @@ func builtInMoShowVisibleBin(parameters []*vector.Vector, result vector.Function
 	return nil
 }
 
+func builtInMoShowVisibleBinEnum(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	p1 := vector.GenerateFunctionStrParameter(parameters[0])
+	enumVal := vector.GenerateFunctionStrParameter(parameters[1])
+
+	var f func([]byte, string) ([]byte, error)
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	f = func(s []byte, enumStr string) ([]byte, error) {
+		typ := new(types.Type)
+		err := types.Decode(s, typ)
+		if err != nil {
+			return nil, err
+		}
+		if typ.Oid != types.T_enum {
+			return nil, moerr.NewNotSupported(proc.Ctx, "show visible bin enum, the type must be enum, but got %s", typ.String())
+		}
+
+		// get enum values
+		enums := strings.Split(enumStr, ",")
+		enumVal := ""
+		for _, e := range enums {
+			enumVal += e
+			if e != enums[len(enums)-1] {
+				enumVal += ","
+			}
+		}
+		ret := fmt.Sprintf("%s(%s)", typ.String(), enumVal)
+		return functionUtil.QuickStrToBytes(ret), nil
+	}
+
+	for i := uint64(0); i < uint64(length); i++ {
+		v1, null1 := p1.GetStrValue(i)
+		enumStr, null2 := enumVal.GetStrValue(i)
+		if null1 || null2 || len(v1) == 0 || len(enumStr) == 0 {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+		} else {
+			enumString := functionUtil.QuickBytesToStr(enumStr)
+			b, err := f(v1, enumString)
+			if err != nil {
+				return err
+			}
+			if b == nil {
+				if err := rs.AppendBytes(nil, true); err != nil {
+					return err
+				}
+			} else {
+				if err = rs.AppendBytes(b, false); err != nil {
+					return err
+				}
+			}
+		}
+	}
+
+	return nil
+}
+
 func builtInInternalCharLength(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
 	rs := vector.MustFunctionResult[int64](result)
