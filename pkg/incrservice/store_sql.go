@@ -79,10 +79,12 @@ func (s *sqlStore) SelectAll(
 	}
 	str := fmt.Sprintf("Cannot find tableID %d in table %s, accountid %d, txn: %s", tableID, incrTableName,
 		accountId, txnInfo)
-	res.ReadRows(func(_ int, cols []*vector.Vector) bool {
-		str += fmt.Sprintf("\tcol_name: %s, table_id: %d\n",
-			executor.GetStringRows(cols[0])[0],
-			executor.GetFixedRows[uint64](cols[1])[0])
+	res.ReadRows(func(rows int, cols []*vector.Vector) bool {
+		for i := 0; i < rows; i++ {
+			str += fmt.Sprintf("\tcol_name: %s, table_id: %d\n",
+				executor.GetStringRows(cols[0])[i],
+				executor.GetFixedRows[uint64](cols[1])[i])
+		}
 		return true
 	})
 	return str, nil
