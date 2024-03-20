@@ -1,6 +1,6 @@
 module github.com/matrixorigin/matrixone
 
-go 1.21.6
+go 1.21.5
 
 require (
 	github.com/BurntSushi/toml v1.2.1
@@ -44,7 +44,7 @@ require (
 	github.com/matrixorigin/simdcsv v0.0.0-20230210060146-09b8e45209dd
 	github.com/minio/minio-go/v7 v7.0.63
 	github.com/mohae/deepcopy v0.0.0-20170929034955-c48cc78d4826
-	github.com/nnsgmsone/mmap v0.0.0-20240320060341-275a2cc86254
+	github.com/nnsgmsone/mmap v0.0.0-20240320062533-014db7c18236
 	github.com/panjf2000/ants/v2 v2.7.4
 	github.com/petermattis/goid v0.0.0-20230518223814-80aa455d8761
 	github.com/pierrec/lz4/v4 v4.1.17
