@@ -17,6 +17,7 @@ package frontend
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"errors"
 	"sync"
 
@@ -405,7 +406,10 @@ func (th *TxnHandler) CommitTxn() error {
 	}
 	if txnOp != nil {
 		th.ses.SetTxnId(txnOp.Txn().ID)
+		idStr := hex.EncodeToString(txnOp.Txn().ID)
+		logInfo(ses, sessionInfo, "commit 1 %v", zap.String("txnId", idStr))
 		err = txnOp.Commit(ctx2)
+		logInfo(ses, sessionInfo, "commit 1 %v", zap.String("txnId", idStr))
 		if err != nil {
 			txnId := txnOp.Txn().DebugString()
 			th.SetTxnOperatorInvalid()
@@ -473,7 +477,10 @@ func (th *TxnHandler) RollbackTxn() error {
 	}
 	if txnOp != nil {
 		th.ses.SetTxnId(txnOp.Txn().ID)
+		idStr := hex.EncodeToString(txnOp.Txn().ID)
+		logInfo(ses, sessionInfo, "rollback 1 %v", zap.String("txnId", idStr))
 		err = txnOp.Rollback(ctx2)
+		logInfo(ses, sessionInfo, "rollback 2 %v", zap.String("txnId", idStr))
 		if err != nil {
 			txnId := txnOp.Txn().DebugString()
 			th.SetTxnOperatorInvalid()

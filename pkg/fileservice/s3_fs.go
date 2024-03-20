@@ -119,7 +119,6 @@ func (s *S3FS) initCaches(ctx context.Context, config CacheConfig) error {
 	config.setDefaults()
 
 	// Init the remote cache first, because the callback needs to be set for mem and disk cache.
-	/* disable Remote cache for debug
 	if config.RemoteCacheEnabled {
 		if config.QueryClient == nil {
 			return moerr.NewInternalError(ctx, "query client is nil")
@@ -129,7 +128,6 @@ func (s *S3FS) initCaches(ctx context.Context, config CacheConfig) error {
 			zap.Any("fs-name", s.name),
 		)
 	}
-	*/
 
 	// memory cache
 	if *config.MemoryCapacity > DisableCacheCapacity {
