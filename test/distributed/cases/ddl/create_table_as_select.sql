@@ -1302,3 +1302,4 @@ drop user role_u2;
 drop database db;
 drop database db5;
 drop database db6;
+set @@global.lower_case_table_names = 1;
