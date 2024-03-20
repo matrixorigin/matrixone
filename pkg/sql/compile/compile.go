@@ -588,6 +588,7 @@ func (c *Compile) runOnce() error {
 	for _, s := range c.scope {
 		s.SetContextRecursively(c.proc.Ctx)
 	}
+
 	for i := range c.scope {
 		wg.Add(1)
 		scope := c.scope[i]

@@ -1190,11 +1190,11 @@ func getConstValueByExpr(
 	if err != nil {
 		return nil
 	}
+	defer exec.Free()
 	vec, err := exec.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch})
 	if err != nil {
 		return nil
 	}
-	defer exec.Free()
 	return rule.GetConstantValue(vec, true, 0)
 }
 
