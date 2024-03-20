@@ -16,6 +16,7 @@ package indexjoin
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -39,6 +40,7 @@ type Argument struct {
 	ctr                *container
 	Result             []int32
 	Typs               []types.Type
+	buf                *batch.Batch
 	RuntimeFilterSpecs []*plan.RuntimeFilterSpec
 	vm.OperatorBase
 }
@@ -78,5 +80,8 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 	ctr := arg.ctr
 	if ctr != nil {
 		ctr.FreeAllReg()
+	}
+	if arg.buf != nil {
+		arg.buf.Clean(proc.Mp())
 	}
 }
