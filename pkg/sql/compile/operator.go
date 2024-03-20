@@ -1608,23 +1608,9 @@ func registerRuntimeFilters[T runtimeFilterSenderSetter](arg T, c *Compile, spec
 
 	RuntimeFilterSenders := make([]*colexec.RuntimeFilterChan, 0, len(specs))
 	for _, rfSpec := range specs {
-		c.lock.Lock()
-		receiver, ok := c.runtimeFilterReceiverMap[rfSpec.Tag]
-		if !ok {
-			if shuffleCnt == 0 {
-				shuffleCnt = 1
-			}
-			receiver = &runtimeFilterReceiver{
-				size: shuffleCnt,
-				ch:   make(chan *pipeline.RuntimeFilter),
-			}
-			c.runtimeFilterReceiverMap[rfSpec.Tag] = receiver
-		}
-		c.lock.Unlock()
 
 		RuntimeFilterSenders = append(RuntimeFilterSenders, &colexec.RuntimeFilterChan{
 			Spec: rfSpec,
-			Chan: receiver.ch,
 		})
 	}
 

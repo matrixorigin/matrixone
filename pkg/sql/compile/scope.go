@@ -290,46 +290,37 @@ func (s *Scope) handleRuntimeFilter(c *Compile) error {
 	var err error
 	var inExprList []*plan.Expr
 	exprs := make([]*plan.Expr, 0, len(s.DataSource.RuntimeFilterSpecs))
-	filters := make([]*pbpipeline.RuntimeFilter, 0, len(exprs))
+	filters := make([]process.RuntimeFilterMessage, 0, len(exprs))
 
 	if len(s.DataSource.RuntimeFilterSpecs) > 0 {
 		for _, spec := range s.DataSource.RuntimeFilterSpecs {
-			c.lock.RLock()
-			receiver, ok := c.runtimeFilterReceiverMap[spec.Tag]
-			c.lock.RUnlock()
-			if !ok {
-				continue
-			}
-
-		FOR_LOOP:
-			for i := 0; i < receiver.size; i++ {
-				select {
-				case <-s.Proc.Ctx.Done():
-					return nil
-
-				case filter := <-receiver.ch:
-					switch filter.Typ {
-					case pbpipeline.RuntimeFilter_PASS:
-						continue
-
-					case pbpipeline.RuntimeFilter_DROP:
-						exprs = nil
-						// FIXME: Should give an empty "Data" and then early return
-						s.NodeInfo.Data = nil
-						s.NodeInfo.NeedExpandRanges = false
-						s.DataSource.FilterExpr = plan2.MakeFalseExpr()
-						break FOR_LOOP
-
-					case pbpipeline.RuntimeFilter_IN:
-						inExpr := plan2.MakeInExpr(c.ctx, spec.Expr, filter.Card, filter.Data, spec.MatchPrefix)
-						inExprList = append(inExprList, inExpr)
-
-						// TODO: implement BETWEEN expression
-					}
-					exprs = append(exprs, spec.Expr)
-					filters = append(filters, filter)
+			msgReceiver := c.proc.NewMessageReceiver([]int32{spec.Tag}, process.AddrBroadCastOnCurrentCN())
+			msgs := msgReceiver.ReceiveMessage(true)
+			for i := range msgs {
+				msg, ok := msgs[i].(process.RuntimeFilterMessage)
+				if !ok {
+					panic("expect runtime filter message, receive unknown message!")
 				}
+				switch msg.Typ {
+				case process.RuntimeFilter_PASS:
+					continue
+				case process.RuntimeFilter_DROP:
+					exprs = nil
+					// FIXME: Should give an empty "Data" and then early return
+					s.NodeInfo.Data = nil
+					s.NodeInfo.NeedExpandRanges = false
+					s.DataSource.FilterExpr = plan2.MakeFalseExpr()
+					return nil
+				case process.RuntimeFilter_IN:
+					inExpr := plan2.MakeInExpr(c.ctx, spec.Expr, msg.Card, msg.Data, spec.MatchPrefix)
+					inExprList = append(inExprList, inExpr)
+
+					// TODO: implement BETWEEN expression
+				}
+				exprs = append(exprs, spec.Expr)
+				filters = append(filters, msg)
 			}
+			msgReceiver.Free()
 		}
 	}
 

@@ -22,7 +22,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -367,19 +366,14 @@ func (ctr *container) handleRuntimeFilter(ap *Argument, proc *process.Process) e
 		return nil
 	}
 
-	var runtimeFilter *pipeline.RuntimeFilter
+	var runtimeFilter process.RuntimeFilterMessage
+	runtimeFilter.Tag = ap.RuntimeFilterSenders[0].Spec.Tag
 
 	if ap.RuntimeFilterSenders[0].Spec.Expr == nil {
-		runtimeFilter = &pipeline.RuntimeFilter{
-			Typ: pipeline.RuntimeFilter_PASS,
-		}
+		runtimeFilter.Typ = process.RuntimeFilter_PASS
+		sendFilter(ap, proc, runtimeFilter)
 	} else if ctr.inputBatchRowCount == 0 || len(ctr.uniqueJoinKeys) == 0 || ctr.uniqueJoinKeys[0].Length() == 0 {
-		runtimeFilter = &pipeline.RuntimeFilter{
-			Typ: pipeline.RuntimeFilter_DROP,
-		}
-	}
-
-	if runtimeFilter != nil {
+		runtimeFilter.Typ = process.RuntimeFilter_DROP
 		sendFilter(ap, proc, runtimeFilter)
 		return nil
 	}
@@ -407,9 +401,9 @@ func (ctr *container) handleRuntimeFilter(ap *Argument, proc *process.Process) e
 	}()
 
 	if hashmapCount > uint64(inFilterCardLimit) {
-		runtimeFilter = &pipeline.RuntimeFilter{
-			Typ: pipeline.RuntimeFilter_PASS,
-		}
+		runtimeFilter.Typ = process.RuntimeFilter_PASS
+		sendFilter(ap, proc, runtimeFilter)
+		return nil
 	} else {
 		// Composite primary key
 		if ap.RuntimeFilterSenders[0].Spec.Expr.GetF() != nil {
@@ -435,16 +429,12 @@ func (ctr *container) handleRuntimeFilter(ap *Argument, proc *process.Process) e
 			return err
 		}
 
-		runtimeFilter = &pipeline.RuntimeFilter{
-			Typ:  pipeline.RuntimeFilter_IN,
-			Card: int32(vec.Length()),
-			Data: data,
-		}
+		runtimeFilter.Typ = process.RuntimeFilter_IN
+		runtimeFilter.Card = int32(vec.Length())
+		runtimeFilter.Data = data
+		sendFilter(ap, proc, runtimeFilter)
 		ctr.runtimeFilterIn = true
 	}
-
-	sendFilter(ap, proc, runtimeFilter)
-
 	return nil
 }
 
@@ -463,16 +453,9 @@ func (ctr *container) evalJoinCondition(proc *process.Process) error {
 	return nil
 }
 
-func sendFilter(ap *Argument, proc *process.Process, runtimeFilter *pipeline.RuntimeFilter) {
+func sendFilter(ap *Argument, proc *process.Process, runtimeFilter process.RuntimeFilterMessage) {
 	anal := proc.GetAnalyze(ap.GetIdx(), ap.GetParallelIdx(), ap.GetParallelMajor())
 	sendRuntimeFilterStart := time.Now()
-
-	select {
-	case <-proc.Ctx.Done():
-		ap.ctr.state = End
-
-	case ap.RuntimeFilterSenders[0].Chan <- runtimeFilter:
-		ap.ctr.state = SendHashMap
-	}
+	proc.SendMessage(runtimeFilter)
 	anal.WaitStop(sendRuntimeFilterStart)
 }

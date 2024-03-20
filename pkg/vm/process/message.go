@@ -36,6 +36,8 @@ func (m MsgType) MessageName() string {
 	switch m {
 	case MsgTopValue:
 		return "MsgTopValue"
+	case MsgRuntimeFilter:
+		return "MsgRuntimeFilter"
 	}
 	return "unknown message type"
 }
