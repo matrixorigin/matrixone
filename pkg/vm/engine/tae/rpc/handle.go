@@ -986,12 +986,7 @@ func (h *Handle) HandleWrite(
 			if tb.Schema().(*catalog2.Schema).HasPK() {
 				idx := tb.Schema().(*catalog2.Schema).GetSingleSortKeyIdx()
 				for i := 0; i < req.Batch.Vecs[0].Length(); i++ {
-					if req.Batch.Vecs[idx].GetType().Oid == types.T_tuple {
-						pk, _, _, _ := types.DecodeTuple(req.Batch.Vecs[idx].GetRawBytesAt(i))
-						logutil.Infof("op1 %v %v", txn.GetStartTS().ToString(), PrintTuple(pk))
-					} else {
-						logutil.Infof("op1 %v, %v", txn.GetStartTS().ToString(), req.Batch.Vecs[idx].String())
-					}
+					logutil.Infof("op1 %v, %v", txn.GetStartTS().ToString(), common.MoVectorToString(req.Batch.Vecs[idx], i))
 				}
 			}
 		}
@@ -1071,15 +1066,9 @@ func (h *Handle) HandleWrite(
 	// TODO: debug for #13342, remove me later
 	if h.IsPrintLogTable(tb.Schema().(*catalog2.Schema).Name) {
 		if tb.Schema().(*catalog2.Schema).HasPK() {
-			idx := tb.Schema().(*catalog2.Schema).GetSingleSortKeyIdx()
 			for i := 0; i < rowIDVec.Length(); i++ {
 				rowID := objectio.HackBytes2Rowid(req.Batch.Vecs[0].GetRawBytesAt(i))
-				if tb.Schema().(*catalog2.Schema).ColDefs[idx].GetType().Oid == types.T_tuple {
-					pk, _, _, _ := types.DecodeTuple(req.Batch.Vecs[1].GetRawBytesAt(i))
-					logutil.Infof("op2 %v %v %v", txn.GetStartTS().ToString(), PrintTuple(pk), rowID.String())
-				} else {
-					logutil.Infof("op2 %v %v %v %d", txn.GetStartTS().ToString(), common.MoVectorToString(req.Batch.Vecs[1], i), rowID.String(), tb.Schema().(*catalog2.Schema).ColDefs[idx].GetType().Oid)
-				}
+				logutil.Infof("op2 %v %v %v", txn.GetStartTS().ToString(), common.MoVectorToString(req.Batch.Vecs[1], i), rowID.String())
 			}
 		}
 	}
