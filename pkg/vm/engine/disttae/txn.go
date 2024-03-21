@@ -1084,7 +1084,7 @@ func (txn *Transaction) TransferRowID() {
 						deleteObjInfos,
 						createObjsInfos,
 						tbl.db.txn.op.Txn().DebugString(),
-						ts,
+						ts.DebugString(),
 						tbl.db.txn.op.SnapshotTS().DebugString())
 				}
 			}

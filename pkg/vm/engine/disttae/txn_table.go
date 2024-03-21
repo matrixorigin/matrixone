@@ -611,11 +611,13 @@ func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr) (ranges eng
 	if regexp.MustCompile(`.*sbtest.*`).MatchString(tbl.tableName) {
 		for i := 1; i < blocks.Len(); i++ {
 			blk := blocks.Get(i)
-			logutil.Infof("xxxx table:%s ranges return blks, txn:%s,blkid:%s, entry state:%v",
+			logutil.Infof("xxxx table:%s ranges return blks, "+
+				"txn:%s,blkid:%s, entry state:%v, can remote:%v",
 				tbl.tableName,
 				tbl.db.txn.op.Txn().DebugString(),
 				blk.BlockID.String(),
-				blk.EntryState)
+				blk.EntryState,
+				blk.CanRemote)
 		}
 	}
 	return
