@@ -2061,15 +2061,18 @@ func buildIvfFlatSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, c
 				OriginString: "",
 			},
 		}
-		pkType := plan.Type{
-			Id:    colMap[pkeyName].Typ.Id,
-			Width: colMap[pkeyName].Typ.Width,
-			Scale: colMap[pkeyName].Typ.Scale,
-		}
+
 		tableDefs[2].Cols[2] = &ColDef{
 			Name: catalog.SystemSI_IVFFLAT_TblCol_Entries_pk,
 			Alg:  plan.CompressType_Lz4,
-			Typ:  pkType,
+			Typ: plan.Type{
+				//NOTE: don't directly copy the Type from Original Table's PK column.
+				// If you do that, we can get the AutoIncrement property from the original table's PK column.
+				// This results in a bug when you try to insert data into entries table.
+				Id:    colMap[pkeyName].Typ.Id,
+				Width: colMap[pkeyName].Typ.Width,
+				Scale: colMap[pkeyName].Typ.Scale,
+			},
 			Default: &plan.Default{
 				NullAbility:  false,
 				Expr:         nil,
