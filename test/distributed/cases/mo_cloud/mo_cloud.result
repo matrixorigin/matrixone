@@ -599,8 +599,11 @@ SELECT mo_catalog.mo_database.datname,mo_catalog.mo_tables.relname,mo_catalog.mo
 datname    relname    relkind    owner
 mo_mo    null    null    -
 information_schema    character_sets    r    accountadmin
+information_schema    collations    r    accountadmin
+information_schema    column_privileges    r    accountadmin
 information_schema    columns    v    accountadmin
 information_schema    engines    r    accountadmin
+information_schema    events    r    accountadmin
 information_schema    key_column_usage    r    accountadmin
 information_schema    keywords    r    accountadmin
 information_schema    parameters    r    accountadmin
@@ -608,8 +611,11 @@ information_schema    partitions    v    accountadmin
 information_schema    processlist    v    accountadmin
 information_schema    profiling    r    accountadmin
 information_schema    routines    r    accountadmin
+information_schema    schema_privileges    r    accountadmin
 information_schema    schemata    v    accountadmin
 information_schema    statistics    v    accountadmin
+information_schema    table_constraints    r    accountadmin
+information_schema    table_privileges    r    accountadmin
 information_schema    tables    v    accountadmin
 information_schema    triggers    r    accountadmin
 information_schema    user_privileges    r    accountadmin
@@ -640,6 +646,7 @@ mo_catalog    mo_variables    v    accountadmin
 mysql    columns_priv    r    accountadmin
 mysql    db    r    accountadmin
 mysql    procs_priv    r    accountadmin
+mysql    role_edges    r    accountadmin
 mysql    tables_priv    r    accountadmin
 mysql    user    r    accountadmin
 system    statement_info    r    accountadmin
@@ -647,8 +654,8 @@ system_metrics    metric    r    accountadmin
 system_metrics    server_connections    v    accountadmin
 system_metrics    server_storage_usage    v    accountadmin
 system_metrics    sql_statement_cu    r    accountadmin
-system_metrics    sql_statement_errors    v    accountadmin
 system_metrics    sql_statement_duration_total    v    accountadmin
+system_metrics    sql_statement_errors    v    accountadmin
 system_metrics    sql_statement_total    v    accountadmin
 system_metrics    sql_transaction_errors    v    accountadmin
 system_metrics    sql_transaction_total    v    accountadmin
@@ -687,6 +694,12 @@ engines    0    0    accountadmin
 routines    0    0    accountadmin
 parameters    0    0    accountadmin
 keywords    747    45171    accountadmin
+schema_privileges    0    0    accountadmin
+table_privileges    0    0    accountadmin
+column_privileges    0    0    accountadmin
+collations    0    0    accountadmin
+table_constraints    0    0    accountadmin
+events    0    0    accountadmin
 SELECT relname AS `name`, mo_table_rows(reldatabase, relname) AS `rows`, mo_table_size(reldatabase, relname) AS `size`, if (role_name IS NULL, '-', role_name) AS `owner` FROM mo_catalog.mo_tables LEFT JOIN mo_catalog.mo_role ON mo_catalog.mo_tables.owner=role_id WHERE relkind IN ('r','e','cluster') AND reldatabase='mo_sample_data_tpch_sf1';
 name    rows    size    owner
 SELECT relname AS `name`, mo_table_rows(reldatabase, relname) AS `rows`, mo_table_size(reldatabase, relname) AS `size`, if (role_name IS NULL, '-', role_name) AS `owner` FROM mo_catalog.mo_tables LEFT JOIN mo_catalog.mo_role ON mo_catalog.mo_tables.owner=role_id WHERE relkind IN ('r','e','cluster') AND reldatabase='mysql';
@@ -696,6 +709,7 @@ db    0    0    accountadmin
 procs_priv    0    0    accountadmin
 columns_priv    0    0    accountadmin
 tables_priv    0    0    accountadmin
+role_edges    0    0    accountadmin
 SELECT relname AS `name`, mo_table_rows(reldatabase, relname) AS `rows`, mo_table_size(reldatabase, relname) AS `size`, if (role_name IS NULL, '-', role_name) AS `owner` FROM mo_catalog.mo_tables LEFT JOIN mo_catalog.mo_role ON mo_catalog.mo_tables.owner=role_id WHERE relkind IN ('r','e','cluster') AND reldatabase='system';
 name    rows    size    owner
 statement_info    0    0    accountadmin
