@@ -116,7 +116,6 @@ func (ctr *container) cleanExecutors() {
 	for i := range ctr.executorsForArgs {
 		ctr.executorsForArgs[i].Free()
 	}
-	ctr.executorsForArgs = nil
 }
 
 type unnestParam struct {

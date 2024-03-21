@@ -21,7 +21,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	util2 "github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -106,38 +105,45 @@ func NewExpressionExecutor(proc *process.Process, planExpr *plan.Expr) (Expressi
 		if err != nil {
 			return nil, err
 		}
-		return NewFixedVectorExpressionExecutor(proc.Mp(), false, vec), nil
+		return &FixedVectorExpressionExecutor{
+			m:            proc.Mp(),
+			resultVector: vec,
+		}, nil
 
 	case *plan.Expr_T:
 		typ := types.New(types.T(planExpr.Typ.Id), planExpr.Typ.Width, planExpr.Typ.Scale)
 		vec := vector.NewConstNull(typ, 1, proc.Mp())
-		return NewFixedVectorExpressionExecutor(proc.Mp(), false, vec), nil
+		return &FixedVectorExpressionExecutor{
+			m:            proc.Mp(),
+			resultVector: vec,
+		}, nil
 
 	case *plan.Expr_Col:
 		typ := types.New(types.T(planExpr.Typ.Id), planExpr.Typ.Width, planExpr.Typ.Scale)
-		ce := NewColumnExpressionExecutor()
-		*ce = ColumnExpressionExecutor{
+		return &ColumnExpressionExecutor{
 			mp:       proc.Mp(),
 			relIndex: int(t.Col.RelPos),
 			colIndex: int(t.Col.ColPos),
 			typ:      typ,
-		}
-		return ce, nil
+		}, nil
 
 	case *plan.Expr_P:
-		return NewParamExpressionExecutor(proc.Mp(), int(t.P.Pos), types.T_text.ToType()), nil
+		return &ParamExpressionExecutor{
+			mp:  proc.Mp(),
+			vec: nil,
+			pos: int(t.P.Pos),
+			typ: types.T_text.ToType(),
+		}, nil
 
 	case *plan.Expr_V:
 		typ := types.New(types.T(planExpr.Typ.Id), planExpr.Typ.Width, planExpr.Typ.Scale)
-		ve := NewVarExpressionExecutor()
-		*ve = VarExpressionExecutor{
+		return &VarExpressionExecutor{
 			mp:     proc.Mp(),
 			name:   t.V.Name,
 			system: t.V.System,
 			global: t.V.Global,
 			typ:    typ,
-		}
-		return ve, nil
+		}, nil
 
 	case *plan.Expr_Vec:
 		vec := vector.NewVec(types.T_any.ToType())
@@ -145,7 +151,11 @@ func NewExpressionExecutor(proc *process.Process, planExpr *plan.Expr) (Expressi
 		if err != nil {
 			return nil, err
 		}
-		return NewFixedVectorExpressionExecutor(proc.Mp(), true, vec), nil
+		return &FixedVectorExpressionExecutor{
+			m:            proc.Mp(),
+			fixed:        true,
+			resultVector: vec,
+		}, nil
 
 	case *plan.Expr_F:
 		overload, err := function.GetFunctionById(proc.Ctx, t.F.GetFunc().GetObj())
@@ -153,17 +163,18 @@ func NewExpressionExecutor(proc *process.Process, planExpr *plan.Expr) (Expressi
 			return nil, err
 		}
 
-		executor := NewFunctionExpressionExecutor()
+		executor := &FunctionExpressionExecutor{}
 		typ := types.New(types.T(planExpr.Typ.Id), planExpr.Typ.Width, planExpr.Typ.Scale)
 		if err = executor.Init(proc, len(t.F.Args), typ, overload.GetExecuteMethod()); err != nil {
-			executor.Free()
 			return nil, err
 		}
 
 		for i := range executor.parameterExecutor {
 			subExecutor, paramErr := NewExpressionExecutor(proc, t.F.Args[i])
 			if paramErr != nil {
-				executor.Free()
+				for j := 0; j < i; j++ {
+					executor.parameterExecutor[j].Free()
+				}
 				return nil, paramErr
 			}
 			executor.SetParameter(i, subExecutor)
@@ -198,7 +209,9 @@ func NewExpressionExecutor(proc *process.Process, planExpr *plan.Expr) (Expressi
 				mp := proc.Mp()
 
 				result := executor.resultVector.GetResultVector()
-				fixed := NewFixedVectorExpressionExecutor(mp, false, nil)
+				fixed := &FixedVectorExpressionExecutor{
+					m: mp,
+				}
 
 				if execLen == 1 {
 					// ToConst just returns a new pointer to the same memory.
@@ -226,14 +239,10 @@ func NewExpressionExecutor(proc *process.Process, planExpr *plan.Expr) (Expressi
 
 func EvalExpressionOnce(proc *process.Process, planExpr *plan.Expr, batches []*batch.Batch) (*vector.Vector, error) {
 	executor, err := NewExpressionExecutor(proc, planExpr)
-	defer func() {
-		if executor != nil {
-			executor.Free()
-		}
-	}()
 	if err != nil {
 		return nil, err
 	}
+	defer executor.Free()
 
 	vec, err := executor.Eval(proc, batches)
 	if err != nil {
@@ -361,10 +370,6 @@ func (expr *ParamExpressionExecutor) EvalWithoutResultReusing(proc *process.Proc
 }
 
 func (expr *ParamExpressionExecutor) Free() {
-	if expr == nil {
-		return
-	}
-
 	if expr.vec != nil {
 		expr.vec.Free(expr.mp)
 		expr.vec = nil
@@ -373,7 +378,6 @@ func (expr *ParamExpressionExecutor) Free() {
 		expr.null.Free(expr.mp)
 		expr.null = nil
 	}
-	reuse.Free[ParamExpressionExecutor](expr, nil)
 }
 
 func (expr *ParamExpressionExecutor) IsColumnExpr() bool {
@@ -433,9 +437,6 @@ func (expr *VarExpressionExecutor) EvalWithoutResultReusing(proc *process.Proces
 }
 
 func (expr *VarExpressionExecutor) Free() {
-	if expr == nil {
-		return
-	}
 	if expr.vec != nil {
 		expr.vec.Free(expr.mp)
 		expr.vec = nil
@@ -444,7 +445,6 @@ func (expr *VarExpressionExecutor) Free() {
 		expr.null.Free(expr.mp)
 		expr.null = nil
 	}
-	reuse.Free[VarExpressionExecutor](expr, nil)
 }
 
 func (expr *VarExpressionExecutor) IsColumnExpr() bool {
@@ -501,19 +501,13 @@ func (expr *FunctionExpressionExecutor) EvalWithoutResultReusing(proc *process.P
 }
 
 func (expr *FunctionExpressionExecutor) Free() {
-	if expr == nil {
-		return
-	}
 	if expr.resultVector != nil {
 		expr.resultVector.Free()
 		expr.resultVector = nil
 	}
 	for _, p := range expr.parameterExecutor {
-		if p != nil {
-			p.Free()
-		}
+		p.Free()
 	}
-	reuse.Free[FunctionExpressionExecutor](expr, nil)
 }
 
 func (expr *FunctionExpressionExecutor) SetParameter(index int, executor ExpressionExecutor) {
@@ -563,14 +557,10 @@ func (expr *ColumnExpressionExecutor) EvalWithoutResultReusing(proc *process.Pro
 }
 
 func (expr *ColumnExpressionExecutor) Free() {
-	if expr == nil {
-		return
-	}
 	if expr.nullVecCache != nil {
 		expr.nullVecCache.Free(expr.mp)
 		expr.nullVecCache = nil
 	}
-	reuse.Free[ColumnExpressionExecutor](expr, nil)
 }
 
 func (expr *ColumnExpressionExecutor) IsColumnExpr() bool {
@@ -593,10 +583,6 @@ func (expr *FixedVectorExpressionExecutor) EvalWithoutResultReusing(proc *proces
 }
 
 func (expr *FixedVectorExpressionExecutor) Free() {
-	if expr == nil {
-		return
-	}
-	defer reuse.Free[FixedVectorExpressionExecutor](expr, nil)
 	if expr.resultVector == nil {
 		return
 	}

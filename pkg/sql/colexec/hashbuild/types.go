@@ -145,7 +145,6 @@ func (ctr *container) cleanEvalVectors(mp *mpool.MPool) {
 			ctr.executor[i].Free()
 		}
 	}
-	ctr.executor = nil
 }
 
 func (ctr *container) cleanHashMap() {

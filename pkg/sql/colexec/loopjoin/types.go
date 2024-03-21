@@ -120,5 +120,4 @@ func (ctr *container) cleanExprExecutor() {
 		ctr.expr.Free()
 		ctr.expr = nil
 	}
-	ctr.expr = nil
 }
