@@ -207,10 +207,6 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 		trace.WithKind(trace.SpanKindStatement))
 	defer span.End(trace.WithStatementExtra(cwft.ses.GetTxnId(), cwft.ses.GetStmtId(), cwft.ses.GetSqlOfStmt()))
 
-	stats := statistic.StatsInfoFromContext(requestCtx)
-	stats.CompileStart()
-	defer stats.CompileEnd()
-
 	var err error
 	defer RecordStatementTxnID(requestCtx, cwft.ses)
 	if cwft.ses.IfInitedTempEngine() {
@@ -313,6 +309,10 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 	if tInfo != nil {
 		tenant = tInfo.GetTenant()
 	}
+
+	stats := statistic.StatsInfoFromContext(requestCtx)
+	stats.CompileStart()
+	defer stats.CompileEnd()
 	cwft.compile = compile.NewCompile(
 		addr,
 		cwft.ses.GetDatabaseName(),
