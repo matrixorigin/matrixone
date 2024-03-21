@@ -451,37 +451,45 @@ func (r *taskRunner) run(rt runningTask) {
 				zap.Duration("cost", time.Since(start)))
 		}()
 
-		executor, err := r.getExecutor(rt.task.Metadata.Executor)
-		result := &task.ExecuteResult{Code: task.ResultCode_Success}
-		if err == nil {
-			if err = executor(rt.ctx, &rt.task); err == nil {
-				goto taskDone
-			}
+		if executor, err := r.getExecutor(rt.task.Metadata.Executor); err != nil {
+			r.taskExecResult(rt, err, false)
+		} else if err := executor(rt.ctx, &rt.task); err != nil {
+			r.taskExecResult(rt, err, true)
+		} else {
+			r.taskExecResult(rt, nil, false)
 		}
-
-		// task failed
-		r.logger.Error("run task failed",
-			zap.String("task", rt.task.DebugString()),
-			zap.Error(err))
-		if rt.canRetry() {
-			rt.retryTimes++
-			rt.retryAt = time.Now().Add(time.Duration(rt.task.Metadata.Options.RetryInterval))
-			if !r.addRetryTask(rt) {
-				// retry queue is full, let scheduler re-allocate.
-				r.removeRunningTask(rt.task.ID)
-				r.releaseParallel()
-			}
-			return
-		}
-		result.Code = task.ResultCode_Failed
-		result.Error = err.Error()
-	taskDone:
-		rt.task.ExecuteResult = result
-		r.addDoneTask(rt)
 	})
 	if err != nil {
 		r.logger.Error("run task failed", zap.Error(err))
 	}
+}
+
+func (r *taskRunner) taskExecResult(rt runningTask, err error, mayRetry bool) {
+	if err == nil {
+		rt.task.ExecuteResult = &task.ExecuteResult{
+			Code: task.ResultCode_Success,
+		}
+	} else {
+		r.logger.Error("run task failed",
+			zap.String("task", rt.task.DebugString()),
+			zap.Error(err))
+		rt.task.ExecuteResult = &task.ExecuteResult{
+			Code:  task.ResultCode_Failed,
+			Error: err.Error(),
+		}
+	}
+
+	if mayRetry && rt.canRetry() {
+		rt.retryTimes++
+		rt.retryAt = time.Now().Add(time.Duration(rt.task.Metadata.Options.RetryInterval))
+		if !r.addRetryTask(rt) {
+			// retry queue is full, let scheduler re-allocate.
+			r.removeRunningTask(rt.task.ID)
+			r.releaseParallel()
+		}
+		return
+	}
+	r.addDoneTask(rt)
 }
 
 func (r *taskRunner) addDoneTask(rt runningTask) {
@@ -540,6 +548,9 @@ func (r *taskRunner) doTaskDone(ctx context.Context, rt runningTask) bool {
 			err := r.service.Complete(rt.ctx, r.runnerID, rt.task, *rt.task.ExecuteResult)
 			if err == nil || moerr.IsMoErrCode(err, moerr.ErrInvalidTask) {
 				r.removeRunningTask(rt.task.ID)
+				r.logger.Info("task completed",
+					zap.String("task", rt.task.DebugString()),
+					zap.Error(err))
 				return true
 			}
 
