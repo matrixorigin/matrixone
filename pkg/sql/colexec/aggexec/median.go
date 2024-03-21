@@ -40,7 +40,7 @@ type numeric interface {
 
 type medianColumnExecSelf[T numeric | types.Decimal64 | types.Decimal128, R float64 | types.Decimal128] struct {
 	singleAggInfo
-	singleAggExecOptimized
+	singleAggExecExtraInformation
 	arg sFixedArg[T]
 	ret aggFuncResult[R]
 

@@ -57,6 +57,7 @@ func (exec *groupConcatExec) Fill(groupIndex int, row int, vectors []*vector.Vec
 	}
 
 	exec.ret.groupToSet = groupIndex
+	exec.ret.setGroupNotEmpty(groupIndex)
 	r := exec.ret.aggGet()
 	if len(r) > 0 {
 		r = append(r, exec.separator...)

@@ -20,7 +20,7 @@ import (
 )
 
 func RegisterSum(id int64) {
-	aggexec.RegisterDeterminedSingleAgg(aggexec.MakeDeterminedSingleAggInfo(id, types.T_bit.ToType(), types.T_int64.ToType(), false, true), newAggSum[int8, int64])
+	aggexec.RegisterDeterminedSingleAgg(aggexec.MakeDeterminedSingleAggInfo(id, types.T_bit.ToType(), types.T_uint64.ToType(), false, true), newAggSum[uint64, uint64])
 	aggexec.RegisterDeterminedSingleAgg(aggexec.MakeDeterminedSingleAggInfo(id, types.T_int8.ToType(), types.T_int64.ToType(), false, true), newAggSum[int8, int64])
 	aggexec.RegisterDeterminedSingleAgg(aggexec.MakeDeterminedSingleAggInfo(id, types.T_int16.ToType(), types.T_int64.ToType(), false, true), newAggSum[int16, int64])
 	aggexec.RegisterDeterminedSingleAgg(aggexec.MakeDeterminedSingleAggInfo(id, types.T_int32.ToType(), types.T_int64.ToType(), false, true), newAggSum[int32, int64])

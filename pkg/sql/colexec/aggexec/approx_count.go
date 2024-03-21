@@ -23,7 +23,7 @@ import (
 // approx_count() returns the approximate number of count(distinct) values in a group.
 type approxCountFixedExec[T types.FixedSizeTExceptStrType] struct {
 	singleAggInfo
-	singleAggExecOptimized
+	singleAggExecExtraInformation
 	arg sFixedArg[T]
 	ret aggFuncResult[uint64]
 
@@ -32,7 +32,7 @@ type approxCountFixedExec[T types.FixedSizeTExceptStrType] struct {
 
 type approxCountVarExec struct {
 	singleAggInfo
-	singleAggExecOptimized
+	singleAggExecExtraInformation
 	arg sBytesArg
 	ret aggFuncResult[uint64]
 

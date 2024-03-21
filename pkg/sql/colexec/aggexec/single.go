@@ -63,12 +63,12 @@ type singleAggOptimizedInfo struct {
 	receiveNull bool
 }
 
-type singleAggExecOptimized struct {
+type singleAggExecExtraInformation struct {
 	partialGroup  int
 	partialResult any
 }
 
-func (optimized *singleAggExecOptimized) SetExtraInformation(partialResult any, groupIndex int) {
+func (optimized *singleAggExecExtraInformation) SetExtraInformation(partialResult any, groupIndex int) {
 	optimized.partialGroup = groupIndex
 	optimized.partialResult = partialResult
 }
@@ -81,7 +81,7 @@ func (optimized *singleAggExecOptimized) SetExtraInformation(partialResult any, 
 type singleAggFuncExec1[from, to types.FixedSizeTExceptStrType] struct {
 	singleAggInfo
 	singleAggOptimizedInfo
-	singleAggExecOptimized
+	singleAggExecExtraInformation
 
 	arg    sFixedArg[from]
 	ret    aggFuncResult[to]
@@ -95,7 +95,7 @@ type singleAggFuncExec1[from, to types.FixedSizeTExceptStrType] struct {
 type singleAggFuncExec2[from types.FixedSizeTExceptStrType] struct {
 	singleAggInfo
 	singleAggOptimizedInfo
-	singleAggExecOptimized
+	singleAggExecExtraInformation
 
 	arg    sFixedArg[from]
 	ret    aggFuncBytesResult
@@ -107,7 +107,7 @@ type singleAggFuncExec2[from types.FixedSizeTExceptStrType] struct {
 type singleAggFuncExec3[to types.FixedSizeTExceptStrType] struct {
 	singleAggInfo
 	singleAggOptimizedInfo
-	singleAggExecOptimized
+	singleAggExecExtraInformation
 
 	arg    sBytesArg
 	ret    aggFuncResult[to]
@@ -119,7 +119,7 @@ type singleAggFuncExec3[to types.FixedSizeTExceptStrType] struct {
 type singleAggFuncExec4 struct {
 	singleAggInfo
 	singleAggOptimizedInfo
-	singleAggExecOptimized
+	singleAggExecExtraInformation
 
 	arg    sBytesArg
 	ret    aggFuncBytesResult
@@ -137,6 +137,7 @@ func (exec *singleAggFuncExec1[from, to]) init(
 
 	exec.singleAggInfo = info
 	exec.singleAggOptimizedInfo = opt
+	exec.singleAggExecExtraInformation = emptyExtraInfo
 	exec.ret = initFixedAggFuncResult[to](mg, info.retType, info.emptyNull)
 	exec.groups = make([]SingleAggFromFixedRetFixed[from, to], 0, 1)
 	exec.gGroup = nm
@@ -504,8 +505,10 @@ func (exec *singleAggFuncExec1[from, to]) BatchMerge(next AggFuncExec, offset in
 func (exec *singleAggFuncExec1[from, to]) Flush() (*vector.Vector, error) {
 	if exec.partialResult != nil {
 		exec.ret.groupToSet = exec.partialGroup
-		exec.ret.setGroupNotEmpty(exec.partialGroup)
-		exec.groups[exec.partialGroup].Fill(exec.partialResult.(from), exec.ret.aggGet, exec.ret.aggSet)
+		if vs, ok := exec.partialResult.(from); ok {
+			exec.ret.setGroupNotEmpty(exec.partialGroup)
+			exec.groups[exec.partialGroup].Fill(vs, exec.ret.aggGet, exec.ret.aggSet)
+		}
 	}
 
 	setter := exec.ret.aggSet
@@ -541,6 +544,7 @@ func (exec *singleAggFuncExec2[from]) init(
 
 	exec.singleAggInfo = info
 	exec.singleAggOptimizedInfo = opt
+	exec.singleAggExecExtraInformation = emptyExtraInfo
 	exec.ret = initBytesAggFuncResult(mg, info.retType, info.emptyNull)
 	exec.groups = make([]SingleAggFromFixedRetVar[from], 0, 1)
 	exec.gGroup = nm
@@ -764,8 +768,10 @@ func (exec *singleAggFuncExec2[from]) BatchMerge(next AggFuncExec, offset int, g
 func (exec *singleAggFuncExec2[from]) Flush() (*vector.Vector, error) {
 	if exec.partialResult != nil {
 		exec.ret.groupToSet = exec.partialGroup
-		exec.ret.setGroupNotEmpty(exec.partialGroup)
-		exec.groups[exec.partialGroup].Fill(exec.partialResult.(from), exec.ret.aggGet, exec.ret.aggSet)
+		if vs, ok := exec.partialResult.(from); ok {
+			exec.ret.setGroupNotEmpty(exec.partialGroup)
+			exec.groups[exec.partialGroup].Fill(vs, exec.ret.aggGet, exec.ret.aggSet)
+		}
 	}
 
 	setter := exec.ret.aggSet
@@ -799,6 +805,7 @@ func (exec *singleAggFuncExec3[to]) init(
 
 	exec.singleAggInfo = info
 	exec.singleAggOptimizedInfo = opt
+	exec.singleAggExecExtraInformation = emptyExtraInfo
 	exec.ret = initFixedAggFuncResult[to](mg, info.retType, info.emptyNull)
 	exec.groups = make([]SingleAggFromVarRetFixed[to], 0, 1)
 	exec.gGroup = nm
@@ -1021,8 +1028,10 @@ func (exec *singleAggFuncExec3[to]) BatchMerge(next AggFuncExec, offset int, gro
 func (exec *singleAggFuncExec3[to]) Flush() (*vector.Vector, error) {
 	if exec.partialResult != nil {
 		exec.ret.groupToSet = exec.partialGroup
-		exec.ret.setGroupNotEmpty(exec.partialGroup)
-		exec.groups[exec.partialGroup].FillBytes(exec.partialResult.([]byte), exec.ret.aggGet, exec.ret.aggSet)
+		if vs, ok := exec.partialResult.([]byte); ok {
+			exec.ret.setGroupNotEmpty(exec.partialGroup)
+			exec.groups[exec.partialGroup].FillBytes(vs, exec.ret.aggGet, exec.ret.aggSet)
+		}
 	}
 
 	setter := exec.ret.aggSet
@@ -1057,6 +1066,7 @@ func (exec *singleAggFuncExec4) init(
 
 	exec.singleAggInfo = info
 	exec.singleAggOptimizedInfo = opt
+	exec.singleAggExecExtraInformation = emptyExtraInfo
 	exec.ret = initBytesAggFuncResult(mg, info.retType, info.emptyNull)
 	exec.groups = make([]SingleAggFromVarRetVar, 0, 1)
 	exec.gGroup = nm
@@ -1279,8 +1289,10 @@ func (exec *singleAggFuncExec4) BatchMerge(next AggFuncExec, offset int, groups 
 func (exec *singleAggFuncExec4) Flush() (*vector.Vector, error) {
 	if exec.partialResult != nil {
 		exec.ret.groupToSet = exec.partialGroup
-		exec.ret.setGroupNotEmpty(exec.partialGroup)
-		exec.groups[exec.partialGroup].FillBytes(exec.partialResult.([]byte), exec.ret.aggGet, exec.ret.aggSet)
+		if vs, ok := exec.partialResult.([]byte); ok {
+			exec.ret.setGroupNotEmpty(exec.partialGroup)
+			exec.groups[exec.partialGroup].FillBytes(vs, exec.ret.aggGet, exec.ret.aggSet)
+		}
 	}
 
 	setter := exec.ret.aggSet

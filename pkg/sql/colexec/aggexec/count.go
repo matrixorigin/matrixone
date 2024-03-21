@@ -23,7 +23,7 @@ import (
 //	but count(distinct) cannot use this agg directly.
 type countColumnExec struct {
 	singleAggInfo
-	singleAggExecOptimized
+	singleAggExecExtraInformation
 	ret aggFuncResult[int64]
 }
 
@@ -134,7 +134,7 @@ func (exec *countColumnExec) Free() {
 
 type countStarExec struct {
 	singleAggInfo
-	singleAggExecOptimized
+	singleAggExecExtraInformation
 	ret aggFuncResult[int64]
 }
 

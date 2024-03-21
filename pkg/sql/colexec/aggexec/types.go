@@ -80,6 +80,13 @@ var (
 	_ AggFuncExec = &groupConcatExec{}
 )
 
+var (
+	emptyExtraInfo = singleAggExecExtraInformation{
+		partialGroup:  0,
+		partialResult: nil,
+	}
+)
+
 type AggMemoryManager interface {
 	Mp() *mpool.MPool
 	GetVector(typ types.Type) *vector.Vector
