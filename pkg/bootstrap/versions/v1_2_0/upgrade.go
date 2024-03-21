@@ -17,12 +17,12 @@ package v1_2_0
 import (
 	"context"
 	"fmt"
-
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"go.uber.org/zap"
 )
 
 var (
@@ -62,13 +62,16 @@ func (v *versionHandle) Prepare(
 		// Just return error, and upgrade framework will retry.
 		err = v.createFrameworkTables(txn, final)
 		if err != nil {
+			getLogger().Error("create upgrade FrameworkTables error", zap.Error(err))
 			return err
 		}
+		getLogger().Info("create upgrade FrameworkTables success")
 	}
 
 	// get all tenantIDs in mo system, including system tenants
 	tenants, err := versions.FetchAllTenants(txn)
 	if err != nil {
+		getLogger().Error("fetch all account ids error", zap.Error(err))
 		return err
 	}
 	//-------------------------------1. all tenants prepare process-------------------------------------
@@ -77,6 +80,7 @@ func (v *versionHandle) Prepare(
 		// so preprocessing is performed first
 		err = upg_mo_foreign_keys.Upgrade(txn, uint32(tenantID))
 		if err != nil {
+			getLogger().Error("prepare process `mo_foreign_key` error", zap.Error(err), zap.String("upgrade entry", upg_mo_foreign_keys.String()))
 			return err
 		}
 	}
@@ -87,19 +91,23 @@ func (v *versionHandle) Prepare(
 	for _, upgEntry := range clusterUpgEntries {
 		err = upgEntry.Upgrade(txn, catalog.System_Account)
 		if err != nil {
+			getLogger().Error("cluster upgrade entry execute error", zap.Error(err), zap.String("upgrade entry", upg_mo_foreign_keys.String()))
 			return err
 		}
 	}
+	getLogger().Info("cluster upgrade success", zap.String("version", "1.2.0"))
 
 	// ------------------------------3. tenant metadata upgrade----------------------------------------
 	for _, tenantID := range tenants {
 		for _, upgEntry := range tenantUpgEntries {
 			err = upgEntry.Upgrade(txn, uint32(tenantID))
 			if err != nil {
+				getLogger().Error("account upgrade entry execute error", zap.Error(err), zap.Int32("AccountId", tenantID), zap.String("upgrade entry", upg_mo_foreign_keys.String()))
 				return err
 			}
 		}
 	}
+	getLogger().Info("upgrade all account success", zap.String("version", "1.2.0"))
 	return nil
 }
 

@@ -164,7 +164,7 @@ func (u *UpgradeEntry) Upgrade(txn executor.TxnExecutor, accountId uint32) error
 }
 
 func (u *UpgradeEntry) String() string {
-	return fmt.Sprintf("UpgradeEntry info: \nupgrade type:%v schema: %s.%s, upgrade sql:\n %s",
+	return fmt.Sprintf("UpgradeEntry type:%v schema: %s.%s, upgrade sql: %s",
 		u.UpgType,
 		u.Schema,
 		u.TableName,
