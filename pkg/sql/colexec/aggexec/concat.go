@@ -15,9 +15,15 @@
 package aggexec
 
 import (
+	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"math"
+)
+
+const (
+	groupConcatMaxLen = 1024
 )
 
 // group_concat is a special string aggregation function.
@@ -26,6 +32,15 @@ type groupConcatExec struct {
 	ret aggFuncBytesResult
 
 	separator []byte
+}
+
+func GroupConcatReturnType(args []types.Type) types.Type {
+	for _, p := range args {
+		if p.Oid == types.T_binary || p.Oid == types.T_varbinary || p.Oid == types.T_blob {
+			return types.T_blob.ToType()
+		}
+	}
+	return types.T_text.ToType()
 }
 
 func newGroupConcatExec(mg AggMemoryManager, info multiAggInfo, separator string) AggFuncExec {
@@ -59,17 +74,20 @@ func (exec *groupConcatExec) Fill(groupIndex int, row int, vectors []*vector.Vec
 	exec.ret.groupToSet = groupIndex
 	exec.ret.setGroupNotEmpty(groupIndex)
 	r := exec.ret.aggGet()
+	if len(r) > groupConcatMaxLen {
+		return nil
+	}
 	if len(r) > 0 {
 		r = append(r, exec.separator...)
 	}
-	for _, v := range vectors {
-		value := v.GetBytesAt(row)
-		if err := isValidGroupConcatUnit(value); err != nil {
+
+	var err error
+	for i, v := range vectors {
+		if r, err = oidToConcatFunc[exec.multiAggInfo.argTypes[i].Oid](v, row, r); err != nil {
 			return err
 		}
-		r = append(r, value...)
 	}
-	if err := exec.ret.aggSet(r); err != nil {
+	if err = exec.ret.aggSet(r); err != nil {
 		return err
 	}
 	return nil
@@ -110,7 +128,7 @@ func (exec *groupConcatExec) merge(other *groupConcatExec, idx1, idx2 int) error
 
 	v1 := exec.ret.aggGet()
 	v2 := other.ret.aggGet()
-	if len(v1) == 0 && len(v2) == 0 {
+	if len(v2) == 0 || len(v1) > groupConcatMaxLen {
 		return nil
 	}
 	if len(v1) > 0 && len(v2) > 0 {
@@ -147,4 +165,84 @@ func (exec *groupConcatExec) Flush() (*vector.Vector, error) {
 
 func (exec *groupConcatExec) Free() {
 	exec.ret.free()
+}
+
+var GroupConcatUnsupportedTypes = []types.T {
+	types.T_tuple,
+}
+
+func IsGroupConcatSupported(t types.Type) bool {
+	for _, unsupported := range GroupConcatUnsupportedTypes {
+		if t.Oid == unsupported {
+			return false
+		}
+	}
+	return true
+}
+
+var oidToConcatFunc = map[types.T]func(*vector.Vector, int, []byte) ([]byte, error) {
+	types.T_bit:	concatFixed[uint64],
+	types.T_bool:   concatFixed[bool],
+	types.T_int8:   concatFixed[int8],
+	types.T_int16:  concatFixed[int16],
+	types.T_int32:  concatFixed[int32],
+	types.T_int64:  concatFixed[int64],
+	types.T_uint8:  concatFixed[uint8],
+	types.T_uint16: concatFixed[uint16],
+	types.T_uint32: concatFixed[uint32],
+	types.T_uint64: concatFixed[uint64],
+	types.T_float32: concatFixed[float32],
+	types.T_float64: concatFixed[float64],
+	types.T_decimal64: concatDecimal64,
+	types.T_decimal128: concatDecimal128,
+	types.T_date:    concatTime[types.Date],
+	types.T_datetime: concatTime[types.Datetime],
+	types.T_timestamp: concatTime[types.Timestamp],
+	types.T_time:    concatTime[types.Time],
+	types.T_varchar: concatVar,
+	types.T_char:    concatVar,
+	types.T_blob:    concatVar,
+	types.T_text:    concatVar,
+	types.T_varbinary: concatVar,
+	types.T_binary:  concatVar,
+	types.T_json:   concatVar,
+	types.T_enum:  concatVar,
+	types.T_interval: concatFixed[types.IntervalType],
+	types.T_TS:    concatFixed[types.TS],
+	types.T_Rowid: concatFixed[types.Rowid],
+	types.T_Blockid: concatFixed[types.Blockid],
+	types.T_array_float32: concatVar,
+	types.T_array_float64: concatVar,
+}
+
+func concatFixed[T types.FixedSizeTExceptStrType](v *vector.Vector, row int, src []byte) ([]byte, error) {
+	value := vector.GetFixedAt[T](v, row)
+	return fmt.Appendf(src, "%v", value), nil
+}
+
+func concatVar(v *vector.Vector, row int, src []byte) ([]byte, error) {
+	value := v.GetBytesAt(row)
+
+	debug := string(value)
+	_ = debug
+
+	if err := isValidGroupConcatUnit(value); err != nil {
+		return nil, err
+	}
+	return append(src, value...), nil
+}
+
+func concatDecimal64(v *vector.Vector, row int, src []byte) ([]byte, error) {
+	value := vector.GetFixedAt[types.Decimal64](v, row)
+	return fmt.Appendf(src, "%v", value.Format(v.GetType().Scale)), nil
+}
+
+func concatDecimal128(v *vector.Vector, row int, src []byte) ([]byte, error) {
+	value := vector.GetFixedAt[types.Decimal128](v, row)
+	return fmt.Appendf(src, "%v", value.Format(v.GetType().Scale)), nil
+}
+
+func concatTime[T fmt.Stringer](v *vector.Vector, row int, src []byte) ([]byte, error) {
+	value := vector.GetFixedAt[T](v, row)
+	return fmt.Appendf(src, "%v", value.String()), nil
 }

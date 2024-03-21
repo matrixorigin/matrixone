@@ -170,12 +170,16 @@ var supportedAggInNewFramework = []FuncNew{
 				kk := make([]types.Type, len(inputs))
 				needCast := false
 				for i, in := range inputs {
-					if in.IsVarlen() {
-						kk[i] = in
-					} else {
+					if in.Oid == types.T_any {
 						needCast = true
 						kk[i] = types.T_text.ToType()
+						continue
 					}
+					if !aggexec.IsGroupConcatSupported(in) {
+						return newCheckResultWithFailure(failedAggParametersWrong)
+					}
+
+					kk[i] = in
 				}
 				if needCast {
 					return newCheckResultWithCast(0, kk)
@@ -189,7 +193,7 @@ var supportedAggInNewFramework = []FuncNew{
 			{
 				overloadId: 0,
 				isAgg:      true,
-				retType:    functionAgg.AggGroupConcatReturnType,
+				retType:    aggexec.GroupConcatReturnType,
 				aggFramework: aggregationLogicOfOverload{
 					str:         "group_concat",
 					aggRegister: agg2.RegisterGroupConcat,
