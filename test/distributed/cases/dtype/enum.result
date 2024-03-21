@@ -40,7 +40,7 @@ create table enum01 (col1 enum('red','blue','green'));
 insert into enum01 values ('red'),('blue'),('green');
 desc enum01;
 Field    Type    Null    Key    Default    Extra    Comment
-col1    ENUM(0)    YES        null        
+col1    ENUM(red,blue,green)    YES        null        
 select * from enum01;
 col1
 red
@@ -88,7 +88,7 @@ Table    Create Table
 enum03    CREATE TABLE `enum03` (\n`col1` ENUM('ejwuijfew','ewrwrewretr','werwre') NOT NULL\n)
 show columns from enum03;
 Field    Type    Null    Key    Default    Extra    Comment
-col1    ENUM(0)    NO        null        
+col1    ENUM(ejwuijfew,ewrwrewretr,werwre)    NO        null        
 select table_name, COLUMN_NAME, data_type, is_nullable from information_schema.columns where table_name like 'enum02' and COLUMN_NAME not like '__mo%';
 table_name    column_name    data_type    is_nullable
 drop table enum03;
@@ -158,7 +158,7 @@ Table    Create Table
 pri01    CREATE TABLE `pri01` (\n`col1` ENUM('qy4iujd3wi4fu4h3f','323242r34df432432','32e3ewfdewrew') DEFAULT NULL\n)
 show columns from pri01;
 Field    Type    Null    Key    Default    Extra    Comment
-col1    ENUM(0)    YES        null        
+col1    ENUM(qy4iujd3wi4fu4h3f,323242r34df432432,32e3ewfdewrew)    YES        null        
 drop table pri01;
 drop table if exists pri02;
 create table pri02 (col1 int, col2 enum('数据库', '数据库系统', '数据库管理系统'));
@@ -178,7 +178,7 @@ pri02    CREATE TABLE `pri02` (\n`col1` INT DEFAULT NULL,\n`col2` ENUM('数据�
 show columns from pri02;
 Field    Type    Null    Key    Default    Extra    Comment
 col1    INT(32)    YES        null        
-col2    ENUM(0)    YES        null        
+col2    ENUM(数据库,数据库系统,数据库管理系统)    YES        null        
 select table_name, COLUMN_NAME, data_type, is_nullable from information_schema.columns where table_name like 'pri02' and COLUMN_NAME not like '__mo%';
 table_name    column_name    data_type    is_nullable
 pri02    col1    INT    YES
@@ -202,7 +202,7 @@ pri03    CREATE TABLE `pri03` (\n`col1` INT DEFAULT NULL,\n`col2` ENUM('数据�
 show columns from pri03;
 Field    Type    Null    Key    Default    Extra    Comment
 col1    INT(32)    YES        null        
-col2    ENUM(0)    YES        null        
+col2    ENUM(数据库,数据库系统,数据库管理系统)    YES        null        
 select table_name, COLUMN_NAME, data_type, is_nullable from information_schema.columns where table_name like 'pri03' and COLUMN_NAME not like '__mo%';
 table_name    column_name    data_type    is_nullable
 pri03    col1    INT    YES
@@ -221,7 +221,7 @@ pri04    CREATE TABLE `pri04` (\n`col1` INT DEFAULT NULL,\n`col2` ENUM('database
 show columns from pri04;
 Field    Type    Null    Key    Default    Extra    Comment
 col1    INT(32)    YES        null        
-col2    ENUM(0)    YES        null        
+col2    ENUM(database,database management,database management system)    YES        null        
 select * from pri04 where col2 = 'database';
 col1    col2
 1    database
@@ -249,7 +249,7 @@ show columns from insert01;
 Field    Type    Null    Key    Default    Extra    Comment
 id    INT(32)    NO    PRI    null        
 order_number    VARCHAR(20)    YES        null        
-status    ENUM(0)    YES        null        
+status    ENUM(Pending,Processing,Completed,Cancelled)    YES        null        
 delete from insert01 where status=3;
 invalid argument cast to int, bad value Pending
 update insert01 set status='Pending' where status=2;
@@ -269,7 +269,7 @@ drop table if exists default01;
 create table default01 (`col1` enum('T', 'E') not null default 'T');
 desc default01;
 Field    Type    Null    Key    Default    Extra    Comment
-col1    ENUM(0)    NO        'T'        
+col1    ENUM(T,E)    NO        'T'        
 insert into default01 values(default);
 select * from default01;
 col1
@@ -279,7 +279,7 @@ drop table if exists default02;
 create table default02 (`col1` enum('T', 'E') not null default '1');
 desc default02;
 Field    Type    Null    Key    Default    Extra    Comment
-col1    ENUM(0)    NO        '1'        
+col1    ENUM(T,E)    NO        '1'        
 insert into default02 values(default);
 select * from default02;
 col1
@@ -289,7 +289,7 @@ drop table if exists default03;
 create table default03 (`col1` enum('T', 'E') not null default 1);
 desc default03;
 Field    Type    Null    Key    Default    Extra    Comment
-col1    ENUM(0)    NO        1        
+col1    ENUM(T,E)    NO        1        
 insert into default03 values(default);
 select * from default03;
 col1
@@ -299,7 +299,7 @@ drop table if exists default04;
 create table default04 (`col1` enum('T', 'E') not null default 2);
 desc default04;
 Field    Type    Null    Key    Default    Extra    Comment
-col1    ENUM(0)    NO        2        
+col1    ENUM(T,E)    NO        2        
 insert into default04 values(default);
 select * from default04;
 col1
@@ -309,7 +309,7 @@ drop table if exists default05;
 create table default05 (`col1` enum('T', 'E') not null default '2');
 desc default05;
 Field    Type    Null    Key    Default    Extra    Comment
-col1    ENUM(0)    NO        '2'        
+col1    ENUM(T,E)    NO        '2'        
 insert into default05 values(default);
 select * from default05;
 col1
