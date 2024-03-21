@@ -929,37 +929,58 @@ insert into table01 (col1, col2, col3, col4, col5, col6, col7, col8, col9, col10
 ('Value2', 456, 78.90, '2023-10-24', false, 'banana', 'Another text', '2022-01-01 01:01:01.000', 'More binary data', 'D'),
 ('Value3', 789, 12.34, '2023-10-25', true, 'orange', 'Yet another text', '1979-01-01 01:01:01.123', 'Even more binary data', 'E');
 create table test.table02 as select * from table01;
-
 show create table table02;
-
+Table    Create Table
+table02    CREATE TABLE `table02` (\n`id` INT NOT NULL AUTO_INCREMENT,\n`col1` VARCHAR(255) NOT NULL,\n`col2` INT DEFAULT NULL,\n`col3` DECIMAL(10,2) DEFAULT NULL,\n`col4` DATE DEFAULT NULL,\n`col5` BOOL DEFAULT NULL,\n`col6` ENUM('apple','banana','orange') DEFAULT NULL,\n`col7` TEXT DEFAULT NULL,\n`col8` TIMESTAMP DEFAULT NULL,\n`col9` BLOB DEFAULT NULL,\n`col10` CHAR(1) DEFAULT NULL\n)
 select * from table02;
-
+id    col1    col2    col3    col4    col5    col6    col7    col8    col9    col10
+1    Value2    456    78.90    2023-10-24    false    banana    Another text    2022-01-01 01:01:01    More binary data    D
+2    Value3    789    12.34    2023-10-25    true    orange    Yet another text    1979-01-01 01:01:01    Even more binary data    E
 insert into table02 values (12, 'Value1', 123, 45.67, '2023-10-23', TRUE, 'apple', 'This is a text', '2019-01-01 01:01:01.000', 'Some binary data', 'C');
-
 select * from table02;
-
+id    col1    col2    col3    col4    col5    col6    col7    col8    col9    col10
+1    Value2    456    78.90    2023-10-24    false    banana    Another text    2022-01-01 01:01:01    More binary data    D
+2    Value3    789    12.34    2023-10-25    true    orange    Yet another text    1979-01-01 01:01:01    Even more binary data    E
+12    Value1    123    45.67    2023-10-23    true    apple    This is a text    2019-01-01 01:01:01    Some binary data    C
 update table02 set col1 = 'newvalue' where col2 = 456;
-
 delete from table02 where col10 = 'D';
-
 select * from table02;
-
+id    col1    col2    col3    col4    col5    col6    col7    col8    col9    col10
+2    Value3    789    12.34    2023-10-25    true    orange    Yet another text    1979-01-01 01:01:01    Even more binary data    E
+12    Value1    123    45.67    2023-10-23    true    apple    This is a text    2019-01-01 01:01:01    Some binary data    C
 alter table table02 add column newcolumn int after col3, drop column col4;
-
+You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 8 column 14 near " ,
+`col7` TEXT ,
+`col8` TIMESTAMP ,
+`col9` BLOB ,
+`col10` CHAR(1) 
+)";
 show create table table02;
-
+Table    Create Table
+table02    CREATE TABLE `table02` (\n`id` INT NOT NULL AUTO_INCREMENT,\n`col1` VARCHAR(255) NOT NULL,\n`col2` INT DEFAULT NULL,\n`col3` DECIMAL(10,2) DEFAULT NULL,\n`col4` DATE DEFAULT NULL,\n`col5` BOOL DEFAULT NULL,\n`col6` ENUM('apple','banana','orange') DEFAULT NULL,\n`col7` TEXT DEFAULT NULL,\n`col8` TIMESTAMP DEFAULT NULL,\n`col9` BLOB DEFAULT NULL,\n`col10` CHAR(1) DEFAULT NULL\n)
 alter table table02 modify column newcolumn bigint;
-
+Unknown column 'newcolumn' in 'table02'
 desc table02;
-
+Field    Type    Null    Key    Default    Extra    Comment
+id    INT(32)    NO        null        
+col1    VARCHAR(255)    NO        null        
+col2    INT(32)    YES        null        
+col3    DECIMAL64(10)    YES        null        
+col4    DATE(0)    YES        null        
+col5    BOOL(0)    YES        null        
+col6    ENUM(0)    YES        null        
+col7    TEXT(0)    YES        null        
+col8    TIMESTAMP(0)    YES        null        
+col9    BLOB(0)    YES        null        
+col10    CHAR(1)    YES        null        
 select * from table02;
-
+id    col1    col2    col3    col4    col5    col6    col7    col8    col9    col10
+2    Value3    789    12.34    2023-10-25    true    orange    Yet another text    1979-01-01 01:01:01    Even more binary data    E
+12    Value1    123    45.67    2023-10-23    true    apple    This is a text    2019-01-01 01:01:01    Some binary data    C
 truncate table02;
-
 select * from table02;
-
+id    col1    col2    col3    col4    col5    col6    col7    col8    col9    col10
 drop table table02;
-
 drop table table01;
 drop table if exists students;
 create table students (student_id int primary key , student_name varchar(20), student_age int);
@@ -1528,7 +1549,7 @@ test01    CREATE TABLE `test01` (\n`col1` TINYINT DEFAULT NULL,\n`col2` SMALLINT
 create publication publication01 database test;
 show publications;
 publication    database    create_time    update_time    sub_account    comments
-publication01    test    2024-03-18 16:55:09    null    *    
+publication01    test    2024-03-20 10:42:22    null    *    
 drop table if exists test02;
 create table test02 as select * from test01;
 select * from test02;
@@ -1571,23 +1592,18 @@ drop database sub1;
 drop account acc0;
 drop publication sys_pub_1;
 drop table if exists alias01;
-
 create table alias01 (col1 int, col2 decimal);
-
 insert into alias01 values (1,2);
-
 insert into alias01 values (2,3);
-
 drop table if exists alias02;
-
 create table alias02 (NewCol int) as select * from alias01;
-
 show create table alias02;
 
 select * from alias02;
-
+newcol    col1    col2
+null    1    2
+null    2    3
 drop table alias01;
-
 drop database test;
 drop database if exists db1;
 create database db1;
