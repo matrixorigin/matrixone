@@ -16,6 +16,7 @@ package morpc
 
 import (
 	"context"
+	"runtime/debug"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -182,6 +183,8 @@ func (c *client) maybeInitBackends() error {
 
 func (c *client) Send(ctx context.Context, backend string, request Message) (*Future, error) {
 	if backend == "" {
+		stackInfo := debug.Stack()
+		getLogger().Error(moerr.NewBackendCannotConnectNoCtx().Error(), zap.String("Detailed Stack Trace", string(stackInfo)))
 		return nil, moerr.NewBackendCannotConnectNoCtx()
 	}
 

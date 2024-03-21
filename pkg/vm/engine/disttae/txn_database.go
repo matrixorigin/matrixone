@@ -16,6 +16,8 @@ package disttae
 
 import (
 	"context"
+	"go.uber.org/zap"
+	"runtime/debug"
 	"strconv"
 	"strings"
 
@@ -228,7 +230,11 @@ func (db *txnDatabase) Relation(ctx context.Context, name string, proc any) (eng
 	key := genTableKey(accountId, name, db.databaseId)
 	// check the table is deleted or not
 	if _, exist := db.txn.deletedTableMap.Load(key); exist {
-		return nil, moerr.NewParseError(ctx, "table %q does not exist", name)
+		if strings.Contains(name, "_copy_") {
+			stackInfo := debug.Stack()
+			logutil.Error(moerr.NewParseError(ctx, "table %q does not exists", name).Error(), zap.String("Stack Trace", string(stackInfo)))
+		}
+		return nil, moerr.NewParseError(ctx, "table %q does not exists", name)
 	}
 
 	p := db.txn.proc
@@ -271,11 +277,16 @@ func (db *txnDatabase) Relation(ctx context.Context, name string, proc any) (eng
 		AccountId:  accountId,
 		Ts:         db.txn.op.SnapshotTS(),
 	}
+
 	if ok := db.txn.engine.catalog.GetTable(item); !ok {
 		logutil.Debugf("txnDatabase.Relation table %q(acc %d db %d) does not exist",
 			name,
 			accountId,
 			db.databaseId)
+		if strings.Contains(name, "_copy_") {
+			stackInfo := debug.Stack()
+			logutil.Error(moerr.NewParseError(ctx, "table %q does not exist", name).Error(), zap.String("Stack Trace", string(stackInfo)))
+		}
 		return nil, moerr.NewParseError(ctx, "table %q does not exist", name)
 	}
 

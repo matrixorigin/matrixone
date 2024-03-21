@@ -15,10 +15,9 @@
 package v1_2_0
 
 import (
-	"sync"
-	
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"sync"
 )
 
 var (
