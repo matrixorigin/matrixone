@@ -405,22 +405,39 @@ var RecordStatementTxnID = func(ctx context.Context, ses *Session) error {
 }
 
 func handleShowTableStatus(ses *Session, stmt *tree.ShowTableStatus, proc *process.Process) error {
-	db, err := ses.GetStorage().Database(ses.requestCtx, stmt.DbName, proc.TxnOperator)
-	if err != nil {
-		return err
+	var db engine.Database
+	var err error
+
+	ctx := ses.requestCtx
+	if db, err = ses.GetParameterUnit().StorageEngine.Database(ctx, stmt.DbName, proc.TxnOperator); err != nil {
+		//echo client. no such database
+		return moerr.NewBadDB(ctx, stmt.DbName)
+	}
+	if db.IsSubscription(ctx) {
+		subMeta, err := checkSubscriptionValid(ctx, ses, db.GetCreateSql(ctx))
+		if err != nil {
+			return err
+		}
+
+		// as pub account
+		ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(subMeta.AccountId))
+		// get db as pub account
+		if db, err = ses.GetStorage().Database(ctx, subMeta.DbName, proc.TxnOperator); err != nil {
+			return err
+		}
 	}
 	mrs := ses.GetMysqlResultSet()
 	for _, row := range ses.data {
 		tableName := string(row[0].([]byte))
-		r, err := db.Relation(ses.requestCtx, tableName, nil)
+		r, err := db.Relation(ctx, tableName, nil)
 		if err != nil {
 			return err
 		}
-		err = r.UpdateObjectInfos(ses.requestCtx)
+		err = r.UpdateObjectInfos(ctx)
 		if err != nil {
 			return err
 		}
-		row[3], err = r.Rows(ses.requestCtx)
+		row[3], err = r.Rows(ctx)
 		if err != nil {
 			return err
 		}

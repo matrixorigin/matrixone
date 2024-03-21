@@ -83,6 +83,8 @@ message ColRef {
 	int32	rel_pos	= 1;
 	int32	col_pos	= 2;
 	string	name	= 3;
+	string	tbl_name = 4;
+	string	db_name	= 5;
 }
 
 // Reference a column by its internal table id and column id
@@ -255,6 +257,9 @@ message ColDef {
 	int32 pkidx 		= 14;
 	bool headers = 15;
 	string header = 16;
+
+	string tbl_name = 17;
+	string db_name = 18;
 }
 
 message Default {
@@ -443,6 +448,8 @@ message TableDef {
 	bool is_temporary = 29;
 
 	uint64 auto_incr_offset = 30;
+
+	string db_name = 31;
 }
 
 message TableFunction{
