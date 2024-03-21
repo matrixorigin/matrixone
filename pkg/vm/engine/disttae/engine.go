@@ -366,7 +366,8 @@ func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tab
 	txn.databaseMap.Range(func(k, _ any) bool {
 		key := k.(databaseKey)
 		dbName = key.name
-		if key.accountId == accountId {
+		// the mo_catalog now can be accessed by all accounts
+		if dbName == catalog.MO_CATALOG || key.accountId == accountId {
 			db, err = e.Database(noRepCtx, key.name, op)
 			if err != nil {
 				return false
@@ -408,7 +409,7 @@ func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tab
 			logutil.Errorf("tables: %v, tableIds: %v", tbls, tblIds)
 			util.CoreDump()
 		}
-		return "", "", nil, moerr.NewInternalError(ctx, "can not find table by id %d", tableId)
+		return "", "", nil, moerr.NewInternalError(ctx, "can not find table by id %d: accountId: %v ", tableId, accountId)
 	}
 	return
 }

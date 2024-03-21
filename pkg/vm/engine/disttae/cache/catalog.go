@@ -185,6 +185,9 @@ func (cc *CatalogCache) Databases(accountId uint32, ts timestamp.Timestamp) []st
 		}
 		return true
 	})
+	if _, ok := mp[catalog.MO_CATALOG]; !ok {
+		rs = append(rs, catalog.MO_CATALOG)
+	}
 	return rs
 }
 
