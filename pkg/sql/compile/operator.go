@@ -17,7 +17,6 @@ package compile
 import (
 	"context"
 	"fmt"
-
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/indexbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/indexjoin"
 
@@ -1089,11 +1088,9 @@ func constructWindow(ctx context.Context, n *plan.Node, proc *process.Process) *
 				}
 				vec, err := executor.Eval(proc, []*batch.Batch{constBat})
 				if err != nil {
-					executor.Free()
 					panic(err)
 				}
 				cfg = []byte(vec.GetStringAt(0))
-				executor.Free()
 			}
 
 			e = f.F.Args[0]
@@ -1172,11 +1169,9 @@ func constructGroup(ctx context.Context, n, cn *plan.Node, ibucket, nbucket int,
 					}
 					vec, err := executor.Eval(proc, []*batch.Batch{constBat})
 					if err != nil {
-						executor.Free()
 						panic(err)
 					}
 					cfg = []byte(vec.GetStringAt(0))
-					executor.Free()
 				}
 			}
 

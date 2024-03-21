@@ -441,7 +441,6 @@ func (r *RecomputeRealTimeRelatedFuncRule) ApplyExpr(e *plan.Expr) (*plan.Expr, 
 				if err != nil {
 					return nil, err
 				}
-				defer executor.Free()
 				vec, err := executor.Eval(r.proc, []*batch.Batch{r.bat})
 				if err != nil {
 					return nil, err

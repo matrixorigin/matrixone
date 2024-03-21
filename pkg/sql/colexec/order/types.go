@@ -90,9 +90,6 @@ func (arg *Argument) Free(proc *process.Process, _ bool, err error) {
 				ctr.sortExprExecutor[i].Free()
 			}
 		}
-
-		ctr.sortExprExecutor = nil
-
 		if ctr.batWaitForSort != nil {
 			ctr.batWaitForSort.Clean(proc.Mp())
 			ctr.batWaitForSort = nil

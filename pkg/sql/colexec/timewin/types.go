@@ -173,7 +173,6 @@ func (ctr *container) cleanTsVector() {
 		ctr.tsExe.Free()
 	}
 	ctr.tsVec = nil
-	ctr.tsExe = nil
 }
 
 func (ctr *container) cleanAggVector() {
@@ -183,7 +182,6 @@ func (ctr *container) cleanAggVector() {
 		}
 	}
 	ctr.aggVec = nil
-	ctr.aggExe = nil
 }
 
 func (ctr *container) cleanWin() {

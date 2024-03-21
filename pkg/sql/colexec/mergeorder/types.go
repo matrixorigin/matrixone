@@ -116,7 +116,6 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 				ctr.executors[i].Free()
 			}
 		}
-		ctr.executors = nil
 
 		if ctr.buf != nil {
 			ctr.buf.Clean(proc.Mp())

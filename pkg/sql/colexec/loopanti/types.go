@@ -113,6 +113,5 @@ func (ctr *container) cleanBatch(mp *mpool.MPool) {
 func (ctr *container) cleanExprExecutor() {
 	if ctr.expr != nil {
 		ctr.expr.Free()
-		ctr.expr = nil
 	}
 }

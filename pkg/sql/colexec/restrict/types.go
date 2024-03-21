@@ -81,5 +81,4 @@ func (ctr *container) cleanExecutor() {
 			ctr.executors[i].Free()
 		}
 	}
-	ctr.executors = nil
 }

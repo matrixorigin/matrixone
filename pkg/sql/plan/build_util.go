@@ -302,11 +302,11 @@ func buildOnUpdate(col *tree.ColumnTableDef, typ *plan.Type, proc *process.Proce
 	if err != nil {
 		return nil, err
 	}
-	defer executor.Free()
 	_, err = executor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch})
 	if err != nil {
 		return nil, err
 	}
+	executor.Free()
 
 	ret := &plan.OnUpdate{
 		Expr:         onUpdateExpr,
