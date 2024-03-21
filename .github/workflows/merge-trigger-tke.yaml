@@ -134,6 +134,7 @@ jobs:
             if mysql -h ${{ steps.get_mo_addr.outputs.mo_svc_ip }} -P 6001 -u dump -e "select mo_ctl('cn', 'txn-trace', 'add-txn user admin');"; then
               break;
             fi
+          sleep 1;
           done
 
       - name: Prepare Data in cn-0
@@ -306,7 +307,12 @@ jobs:
           echo "select mo_ctl('cn', 'txn-trace', 'enable data');" >> enable_txn_trace.sql;
           cat enable_txn_trace.sql;
           echo "===================";
-          mysql -h ${{ needs.setup_mo_test_env.outputs.mo_svc_ip }} -u dump -P 6001 < enable_txn_trace.sql
+          for i in {1..300}; do
+            if mysql -h ${{ needs.setup_mo_test_env.outputs.mo_svc_ip }} -u dump -P 6001 < enable_txn_trace.sql; then
+              break;
+            fi
+          sleep 1;
+          done
 
       - name: Modify Tool's Setting And Set PATH
         run: |
@@ -528,7 +534,12 @@ jobs:
           echo "select mo_ctl('cn', 'txn-trace', 'enable data');" >> enable_txn_trace.sql;
           cat enable_txn_trace.sql;
           echo "===================";
-          mysql -h ${{ needs.setup_mo_test_env.outputs.mo_svc_ip }} -u dump -P 6001 < enable_txn_trace.sql
+          for i in {1..300}; do
+            if mysql -h ${{ needs.setup_mo_test_env.outputs.mo_svc_ip }} -u dump -P 6001 < enable_txn_trace.sql; then
+              break;
+            fi
+          sleep 1;
+          done
  
       # start sysbench test
       - name: Start OLTP Mixed Test With 100 Threads
@@ -659,7 +670,12 @@ jobs:
           echo "select mo_ctl('cn', 'txn-trace', 'enable data');" >> enable_txn_trace.sql;
           cat enable_txn_trace.sql;
           echo "===================";
-          mysql -h ${{ needs.setup_mo_test_env.outputs.mo_svc_ip }} -u dump -P 6001 < enable_txn_trace.sql
+          for i in {1..300}; do
+            if mysql -h ${{ needs.setup_mo_test_env.outputs.mo_svc_ip }} -u dump -P 6001 < enable_txn_trace.sql; then
+              break;
+            fi
+          sleep 1;
+          done
 
       - name: Start TPCC 10 Warehouses 100 terminals Test
         if: ${{ always() && !cancelled() && steps.load_tpcc_data.conclusion == 'success' }}
