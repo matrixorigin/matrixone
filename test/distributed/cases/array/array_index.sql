@@ -665,5 +665,26 @@ insert into vector_index_07 values(9774 ,"[1, 0, 1, 6, 6, 17, 47, 39, 2, 0, 1, 2
 insert into vector_index_07 values(9777, " [16, 15, 0, 0, 5, 46, 5, 5, 4, 0, 0, 0, 28, 118, 12, 5, 75, 44, 5, 0, 6, 32, 6, 49, 41, 74, 9, 1, 0, 0, 0, 9, 1, 9, 16, 41, 71, 80, 3, 0, 0, 4, 3, 5, 51, 106, 11, 3, 112, 28, 13, 1, 4, 8, 3, 104, 118, 14, 1, 1, 0, 0, 0, 88, 3, 27, 46, 118, 108, 49, 2, 0, 1, 46, 118, 118, 27, 12, 0, 0, 33, 118, 118, 8, 0, 0, 0, 4, 118, 95, 40, 0, 0, 0, 1, 11, 27, 38, 12, 12, 18, 29, 3, 2, 13, 30, 94, 78, 30, 19, 9, 3, 31, 45, 70, 42, 15, 1, 3, 12, 14, 22, 16, 2, 3, 17, 24, 13]",4),(9778,"[41, 0, 0, 7, 1, 1, 20, 67, 9, 0, 0, 0, 0, 31, 120, 61, 25, 0, 0, 0, 0, 10, 120, 90, 32, 0, 0, 1, 13, 11, 22, 50, 4, 0, 2, 93, 40, 15, 37, 18, 12, 2, 2, 19, 8, 44, 120, 25, 120, 5, 0, 0, 0, 2, 48, 97, 102, 14, 3, 3, 11, 9, 34, 41, 0, 0, 4, 120, 56, 3, 4, 5, 6, 15, 37, 116, 28, 0, 0, 3, 120, 120, 24, 6, 2, 0, 1, 28, 53, 90, 51, 11, 11, 2, 12, 14, 8, 6, 4, 30, 9, 1, 4, 22, 25, 79, 120, 66, 5, 0, 0, 6, 42, 120, 91, 43, 15, 2, 4, 39, 12, 9, 9, 12, 15, 5, 24, 36]",4);
 select * from vector_index_07 order by  L2_DISTANCE(b, "abc") ASC LIMIT 2;
 
+-- 44. Auto Increment PK type
+
+
+-- 45. Auto Incr PK type vs non-auto Incr PK type
+drop table if exists vector_index_08;
+create table vector_index_08(a int primary key, b vecf32(3),c int);
+insert into vector_index_08 values(1 ,"[1, 2, 3]",11);
+insert into vector_index_08 values(2 ,"[1, 2, 3]",12);
+insert into vector_index_08 values(3 ,"[1, 2, 3]",13);
+create index idx01 using ivfflat on vector_index_08(b)  lists = 2 op_type 'vector_l2_ops';
+alter table vector_index_08 add column d vecf32(3) not null after c;
+
+drop table if exists vector_index_08;
+create table vector_index_08(a int auto_increment primary key, b vecf32(3),c int);
+insert into vector_index_08 values(1 ,"[1, 2, 3]",11);
+insert into vector_index_08 values(2 ,"[1, 2, 3]",12);
+insert into vector_index_08 values(3 ,"[1, 2, 3]",13);
+create index idx01 using ivfflat on vector_index_08(b)  lists = 2 op_type 'vector_l2_ops';
+alter table vector_index_08 add column d vecf32(3) not null after c;
+
+
 -- post
 drop database vecdb2;

@@ -2061,10 +2061,15 @@ func buildIvfFlatSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, c
 				OriginString: "",
 			},
 		}
+		pkType := plan.Type{
+			Id:    colMap[pkeyName].Typ.Id,
+			Width: colMap[pkeyName].Typ.Width,
+			Scale: colMap[pkeyName].Typ.Scale,
+		}
 		tableDefs[2].Cols[2] = &ColDef{
 			Name: catalog.SystemSI_IVFFLAT_TblCol_Entries_pk,
 			Alg:  plan.CompressType_Lz4,
-			Typ:  colMap[pkeyName].Typ,
+			Typ:  pkType,
 			Default: &plan.Default{
 				NullAbility:  false,
 				Expr:         nil,
