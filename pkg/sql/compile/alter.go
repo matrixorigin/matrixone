@@ -16,6 +16,7 @@ package compile
 
 import (
 	"fmt"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -199,13 +200,16 @@ func (s *Scope) AlterTable(c *Compile) (err error) {
 		return err
 	}
 
-	//update the mo_foreign_keys
-	for _, sql := range qry.UpdateFkSqls {
-		err = c.runSql(sql)
-		if err != nil {
-			return err
+	if !plan2.IsFkBannedDatabase(qry.Database) {
+		//update the mo_foreign_keys
+		for _, sql := range qry.UpdateFkSqls {
+			err = c.runSql(sql)
+			if err != nil {
+				return err
+			}
 		}
 	}
+
 	return err
 }
 
