@@ -163,6 +163,8 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	ses.SetSqlOfStmt(text)
 
 	//note: txn id here may be empty
+	// add by #9907, set the result of last_query_id(), this will pass those isCmdFieldListSql() from client.
+	// fixme: this op leads all internal/background executor got NULL result if call last_query_id().
 	if sqlType != constant.InternalSql {
 		ses.pushQueryId(types.Uuid(stmID).ToString())
 	}
@@ -211,15 +213,13 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 		// fix original issue #8165
 		stm.User = ""
 	}
-	if sqlType != constant.InternalSql {
-		ses.SetTStmt(stm)
-	}
 	if !stm.IsZeroTxnID() {
 		stm.Report(ctx)
 	}
 	if stm.IsMoLogger() && stm.StatementType == "Load" && len(stm.Statement) > 128 {
 		stm.Statement = envStmt[:40] + "..." + envStmt[len(envStmt)-45:]
 	}
+	ses.SetTStmt(stm)
 
 	return ctx, nil
 }
