@@ -638,7 +638,6 @@ create table table01 (
 insert into table01 (col1, col2, col3, col4, col5, col6, col7, col8, col9, col10) values
 ('Value2', 456, 78.90, '2023-10-24', false, 'banana', 'Another text', '2022-01-01 01:01:01.000', 'More binary data', 'D'),
 ('Value3', 789, 12.34, '2023-10-25', true, 'orange', 'Yet another text', '1979-01-01 01:01:01.123', 'Even more binary data', 'E');
--- @bvt:issue#14970
 create table test.table02 as select * from table01;
 show create table table02;
 select * from table02;
@@ -655,7 +654,6 @@ select * from table02;
 truncate table02;
 select * from table02;
 drop table table02;
--- @bvt:issue
 drop table table01;
 
 -- cras combines with join
