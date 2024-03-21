@@ -16,6 +16,7 @@ package logtail
 
 import (
 	"context"
+	catalog2 "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -66,7 +67,7 @@ func (sm *SnapshotMeta) Update(data *CheckpointData) *SnapshotMeta {
 			if !deleteTS.IsEmpty() {
 				continue
 			}
-			sm.object[objectStats.ObjectName().String()] = &objectInfo{
+			sm.object[objectStats.ObjectName().SegmentId().ToString()] = &objectInfo{
 				stats:    objectStats,
 				createAt: createTS,
 			}
@@ -76,6 +77,17 @@ func (sm *SnapshotMeta) Update(data *CheckpointData) *SnapshotMeta {
 			panic(any("deleteTS is empty"))
 		}
 		delete(sm.object, objectStats.ObjectName().String())
+	}
+
+	del, _, _, _ := data.GetBlkBatchs()
+	delBlockIDVec := del.GetVectorByName(catalog2.BlockMeta_ID).GetDownstreamVector()
+	delDeltaVec := del.GetVectorByName(catalog2.BlockMeta_DeltaLoc).GetDownstreamVector()
+	for i := 0; i < del.Length(); i++ {
+		blockID := vector.GetFixedAt[types.Blockid](delBlockIDVec, i)
+		deltaLoc := vector.GetFixedAt[objectio.Location](delDeltaVec, i)
+		if sm.object[blockID.Segment().ToString()] != nil {
+			sm.object[blockID.Segment().ToString()].deltaLocation[uint32(blockID.Sequence())] = &deltaLoc
+		}
 	}
 	return nil
 }
