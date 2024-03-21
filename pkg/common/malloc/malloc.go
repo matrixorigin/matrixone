@@ -29,5 +29,6 @@ func Free(b []byte) {
 	if cap(b) == 0 {
 		return
 	}
+	b = b[:cap(b)]
 	mmap.Free(b)
 }
