@@ -161,6 +161,9 @@ var (
 	// defaultLoggerLabelKey and defaultLoggerLabelVal
 	defaultLoggerLabelKey = "role"
 	defaultLoggerLabelVal = "logging_cn"
+
+	// default lower_case_table_names
+	defaultLowerCaseTableNames = "1"
 )
 
 // FrontendParameters of the frontend
@@ -261,7 +264,7 @@ type FrontendParameters struct {
 
 	AutoIncrCacheSize uint64 `toml:"autoIncrCacheSize"`
 
-	LowerCaseTableNames int64 `toml:"lowerCaseTableNames" user_setting:"advanced"`
+	LowerCaseTableNames string `toml:"lowerCaseTableNames" user_setting:"advanced"`
 
 	PrintDebug bool `toml:"printDebug"`
 
@@ -384,8 +387,8 @@ func (fp *FrontendParameters) SetDefaultValues() {
 		fp.AutoIncrCacheSize = 3000000
 	}
 
-	if fp.LowerCaseTableNames == 0 {
-		fp.LowerCaseTableNames = 1
+	if fp.LowerCaseTableNames == "" {
+		fp.LowerCaseTableNames = defaultLowerCaseTableNames
 	}
 
 	if fp.PrintDebugInterval == 0 {
