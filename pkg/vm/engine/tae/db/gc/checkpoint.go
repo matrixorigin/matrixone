@@ -79,9 +79,10 @@ type checkpointCleaner struct {
 
 	disableGC bool
 
-	snapshots struct {
+	snapshot struct {
 		sync.RWMutex
-		snapshots []types.TS
+		snapshotMeta *logtail.SnapshotMeta
+		snapshots    []types.TS
 	}
 }
 
@@ -540,14 +541,40 @@ func (c *checkpointCleaner) createNewInput(
 	return
 }
 
+func (c *checkpointCleaner) updateSnapshot(ckp checkpoint.CheckpointEntry) error {
+	c.snapshot.Lock()
+	defer c.snapshot.Unlock()
+	_, data, err := logtail.LoadCheckpointEntriesFromKey(c.ctx, c.fs.Service,
+		ckp.GetLocation(), ckp.GetVersion(), nil)
+	if err != nil {
+		return err
+	}
+	c.snapshot.snapshotMeta.Update(data)
+	return nil
+}
+
 func (c *checkpointCleaner) GetSnapshots() ([]types.TS, error) {
-	c.snapshots.Lock()
-	defer c.snapshots.Unlock()
-	return c.snapshots.snapshots, nil
+	c.snapshot.RLock()
+	defer c.snapshot.RUnlock()
+	snapshots, err := c.snapshot.snapshotMeta.GetSnapshot(c.fs.Service)
+	if err != nil {
+		return nil, err
+	}
+	snapNum := len(snapshots)
+	if snapNum == 0 {
+		return nil, err
+	}
+	sList := make([]types.TS, 0)
+	for _, snapshot := range snapshots {
+		for _, ts := range snapshot {
+			sList = append(sList, ts.TS)
+		}
+	}
+	return sList, nil
 }
 
 func (c *checkpointCleaner) SnapshotForTest(snapshot types.TS) {
-	c.snapshots.Lock()
-	defer c.snapshots.Unlock()
-	c.snapshots.snapshots = append(c.snapshots.snapshots, snapshot)
+	c.snapshot.Lock()
+	defer c.snapshot.Unlock()
+	c.snapshot.snapshots = append(c.snapshot.snapshots, snapshot)
 }

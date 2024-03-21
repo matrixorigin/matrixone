@@ -25,9 +25,9 @@ import (
 	"sync"
 )
 
-type snapshot struct {
-	ts  types.TS
-	tid uint64
+type Snapshot struct {
+	TS  types.TS
+	Tid uint64
 }
 
 type objectInfo struct {
@@ -80,10 +80,10 @@ func (sm *SnapshotMeta) Update(data *CheckpointData) *SnapshotMeta {
 	return nil
 }
 
-func (sm *SnapshotMeta) GetSnapshot(fs fileservice.FileService) (map[uint64][]snapshot, error) {
+func (sm *SnapshotMeta) GetSnapshot(fs fileservice.FileService) (map[uint64][]Snapshot, error) {
 	sm.RLock()
 	defer sm.RUnlock()
-	snapshotList := make(map[uint64][]snapshot)
+	snapshotList := make(map[uint64][]Snapshot)
 	for _, object := range sm.object {
 		location := object.stats.ObjectLocation()
 		for i := uint32(0); i < object.stats.BlkCnt(); i++ {
@@ -109,9 +109,9 @@ func (sm *SnapshotMeta) GetSnapshot(fs fileservice.FileService) (map[uint64][]sn
 					tid := vector.GetFixedAt[uint64](bat.Vecs[0], r)
 					ts := vector.GetFixedAt[types.TS](bat.Vecs[1], r)
 					if len(snapshotList[tid]) == 0 {
-						snapshotList[tid] = make([]snapshot, 0)
+						snapshotList[tid] = make([]Snapshot, 0)
 					}
-					snapshotList[tid] = append(snapshotList[tid], snapshot{ts, tid})
+					snapshotList[tid] = append(snapshotList[tid], Snapshot{ts, tid})
 				}
 			}
 		}
