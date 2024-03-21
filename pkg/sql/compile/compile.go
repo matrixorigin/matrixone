@@ -4301,3 +4301,25 @@ func runDetectSql(c *Compile, sql string) error {
 	}
 	return nil
 }
+
+// runDetectFkReferToDBSql runs the fk detecting sql
+func runDetectFkReferToDBSql(c *Compile, sql string) error {
+	res, err := c.runSqlWithResult(sql)
+	if err != nil {
+		logutil.Errorf("The sql that caused the fk self refer check failed is %s, and generated background sql is %s", c.sql, sql)
+		return err
+	}
+	defer res.Close()
+
+	if res.Batches != nil {
+		vs := res.Batches[0].Vecs
+		if vs != nil && vs[0].Length() > 0 {
+			yes := vector.GetFixedAt[bool](vs[0], 0)
+			if yes {
+				return moerr.NewInternalError(c.ctx,
+					"can not drop database. It has been referenced by foreign keys")
+			}
+		}
+	}
+	return nil
+}
