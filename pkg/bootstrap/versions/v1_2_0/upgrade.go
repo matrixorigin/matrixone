@@ -72,7 +72,7 @@ func (v *versionHandle) Prepare(
 			for _, upgEntry := range tenantUpgPrepareEntres {
 				err = upgEntry.Upgrade(txn, uint32(tenantID))
 				if err != nil {
-					getLogger().Error("account prepare upgrade entry execute error", zap.Error(err), zap.Int32("AccountId", tenantID), zap.String("upgrade entry", upg_mo_foreign_keys.String()))
+					getLogger().Error("account prepare upgrade entry execute error", zap.Error(err), zap.Int32("AccountId", tenantID), zap.String("upgrade entry", upgEntry.String()))
 					return err
 				}
 			}
@@ -94,7 +94,7 @@ func (v *versionHandle) Prepare(
 	for _, upgEntry := range clusterUpgEntries {
 		err = upgEntry.Upgrade(txn, catalog.System_Account)
 		if err != nil {
-			getLogger().Error("cluster upgrade entry execute error", zap.Error(err), zap.String("upgrade entry", upg_mo_foreign_keys.String()))
+			getLogger().Error("cluster upgrade entry execute error", zap.Error(err), zap.String("upgrade entry", upgEntry.String()))
 			return err
 		}
 	}
@@ -105,7 +105,7 @@ func (v *versionHandle) Prepare(
 		for _, upgEntry := range tenantUpgEntries {
 			err = upgEntry.Upgrade(txn, uint32(tenantID))
 			if err != nil {
-				getLogger().Error("account upgrade entry execute error", zap.Error(err), zap.Int32("AccountId", tenantID), zap.String("upgrade entry", upg_mo_foreign_keys.String()))
+				getLogger().Error("account upgrade entry execute error", zap.Error(err), zap.Int32("AccountId", tenantID), zap.String("upgrade entry", upgEntry.String()))
 				return err
 			}
 		}
