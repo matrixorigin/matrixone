@@ -2051,7 +2051,12 @@ func executeStmtInSameSession(ctx context.Context, mce *MysqlCmdExecutor, ses *S
 	// inherit database
 	ses.SetDatabaseName(prevDB)
 	//restore normal protocol and output callback
+	proc := ses.GetTxnCompileCtx().GetProcess()
 	defer func() {
+		//@todo we need to improve: make one session, one proc, one txnOperator
+		p := ses.GetTxnCompileCtx().GetProcess()
+		p.FreeVectors()
+		ses.GetTxnCompileCtx().SetProcess(proc)
 		ses.SetOptionBits(prevOptionBits)
 		ses.SetServerStatus(prevServerStatus)
 		ses.SetOutputCallback(getDataFromPipeline)
