@@ -36,7 +36,7 @@ disableMetric = true
 [cn]
 uuid = "dd1dccb5-4d3c-41f8-b482-5251dc7a41bf"
 port-base = 18200
-auto-upgrade = false
+
 [cn.Engine]
 type = "distributed-tae"
 
