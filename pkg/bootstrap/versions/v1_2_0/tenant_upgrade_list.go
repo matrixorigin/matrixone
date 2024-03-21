@@ -23,10 +23,20 @@ import (
 )
 
 var tenantUpgEntries = []versions.UpgradeEntry{
+	upg_mo_indexes_add_IndexAlgoName,
+	upg_mo_indexes_add_IndexAlgoTableType,
+	upg_mo_indexes_add_IndexAlgoParams,
 	upg_mo_foreign_keys,
 	upg_system_metrics_sql_statement_duration_total,
 	upg_mo_snapshots,
 	upg_sql_statement_cu,
+}
+
+var tenantUpgPrepareEntres = []versions.UpgradeEntry{
+	upg_mo_indexes_add_IndexAlgoName,
+	upg_mo_indexes_add_IndexAlgoTableType,
+	upg_mo_indexes_add_IndexAlgoParams,
+	upg_mo_foreign_keys,
 }
 
 // MOForeignKeys = "mo_foreign_keys"
@@ -74,6 +84,60 @@ var upg_mo_foreign_keys = versions.UpgradeEntry{
 		}
 
 		if isExist {
+			return true, nil
+		}
+		return false, nil
+	},
+}
+
+var upg_mo_indexes_add_IndexAlgoName = versions.UpgradeEntry{
+	Schema:    catalog.MO_CATALOG,
+	TableName: catalog.MO_INDEXES,
+	UpgType:   versions.ADD_COLUMN,
+	UpgSql:    fmt.Sprintf(`alter table %s.%s add column %s varchar(11) after type;`, catalog.MO_CATALOG, catalog.MO_INDEXES, catalog.IndexAlgoName),
+	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+		colInfo, err := versions.CheckTableColumn(txn, accountId, catalog.MO_CATALOG, catalog.MO_INDEXES, catalog.IndexAlgoName)
+		if err != nil {
+			return false, err
+		}
+
+		if colInfo.IsExits {
+			return true, nil
+		}
+		return false, nil
+	},
+}
+
+var upg_mo_indexes_add_IndexAlgoTableType = versions.UpgradeEntry{
+	Schema:    catalog.MO_CATALOG,
+	TableName: catalog.MO_INDEXES,
+	UpgType:   versions.ADD_COLUMN,
+	UpgSql:    fmt.Sprintf(`alter table %s.%s add column %s varchar(11) after %s;`, catalog.MO_CATALOG, catalog.MO_INDEXES, catalog.IndexAlgoTableType, catalog.IndexAlgoName),
+	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+		colInfo, err := versions.CheckTableColumn(txn, accountId, catalog.MO_CATALOG, catalog.MO_INDEXES, catalog.IndexAlgoTableType)
+		if err != nil {
+			return false, err
+		}
+
+		if colInfo.IsExits {
+			return true, nil
+		}
+		return false, nil
+	},
+}
+
+var upg_mo_indexes_add_IndexAlgoParams = versions.UpgradeEntry{
+	Schema:    catalog.MO_CATALOG,
+	TableName: catalog.MO_INDEXES,
+	UpgType:   versions.ADD_COLUMN,
+	UpgSql:    fmt.Sprintf(`alter table %s.%s add column %s varchar(2048) after %s;`, catalog.MO_CATALOG, catalog.MO_INDEXES, catalog.IndexAlgoParams, catalog.IndexAlgoTableType),
+	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+		colInfo, err := versions.CheckTableColumn(txn, accountId, catalog.MO_CATALOG, catalog.MO_INDEXES, catalog.IndexAlgoParams)
+		if err != nil {
+			return false, err
+		}
+
+		if colInfo.IsExits {
 			return true, nil
 		}
 		return false, nil

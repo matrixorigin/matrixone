@@ -55,9 +55,29 @@ func (v *versionHandle) Prepare(
 		return err
 	}
 
+	// get all tenantIDs in mo system, including system tenants
+	tenants, err := versions.FetchAllTenants(txn)
+	if err != nil {
+		getLogger().Error("fetch all account ids error", zap.Error(err))
+		return err
+	}
+
 	// create new upgrade framework tables for the first time,
 	// which means using v1.2.0 for the first time
 	if !created {
+		//-------------------------------1. all tenants prepare process-------------------------------------
+		for _, tenantID := range tenants {
+			// NOTE: The `alter table` statements used for upgrading system table rely on `mo_foreign_keys`,
+			// so preprocessing is performed first
+			for _, upgEntry := range tenantUpgPrepareEntres {
+				err = upgEntry.Upgrade(txn, uint32(tenantID))
+				if err != nil {
+					getLogger().Error("account prepare upgrade entry execute error", zap.Error(err), zap.Int32("AccountId", tenantID), zap.String("upgrade entry", upg_mo_foreign_keys.String()))
+					return err
+				}
+			}
+		}
+
 		// Many cn maybe create framework tables parallel, only one can create success.
 		// Just return error, and upgrade framework will retry.
 		err = v.createFrameworkTables(txn, final)
@@ -66,23 +86,6 @@ func (v *versionHandle) Prepare(
 			return err
 		}
 		getLogger().Info("create upgrade FrameworkTables success")
-	}
-
-	// get all tenantIDs in mo system, including system tenants
-	tenants, err := versions.FetchAllTenants(txn)
-	if err != nil {
-		getLogger().Error("fetch all account ids error", zap.Error(err))
-		return err
-	}
-	//-------------------------------1. all tenants prepare process-------------------------------------
-	for _, tenantID := range tenants {
-		// NOTE: The `alter table` statements used for upgrading system table rely on `mo_foreign_keys`,
-		// so preprocessing is performed first
-		err = upg_mo_foreign_keys.Upgrade(txn, uint32(tenantID))
-		if err != nil {
-			getLogger().Error("prepare process `mo_foreign_key` error", zap.Error(err), zap.String("upgrade entry", upg_mo_foreign_keys.String()))
-			return err
-		}
 	}
 
 	//-------------------------------2. cluster metadata upgrade----------------------------------------
