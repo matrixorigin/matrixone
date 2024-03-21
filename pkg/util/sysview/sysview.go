@@ -458,6 +458,50 @@ var (
 			"`PRIVILEGE_TYPE` varchar(64) NOT NULL DEFAULT ''," +
 			"`IS_GRANTABLE` varchar(3) NOT NULL DEFAULT ''" +
 			");",
+		"CREATE TABLE IF NOT EXISTS COLLATIONS (" +
+			"COLLATION_NAME varchar(64) NOT NULL," +
+			"CHARACTER_SET_NAME varchar(64) NOT NULL," +
+			"ID bigint unsigned NOT NULL DEFAULT 0," +
+			"IS_DEFAULT varchar(3) NOT NULL DEFAULT ''," +
+			"IS_COMPILED varchar(3) NOT NULL DEFAULT ''," +
+			"SORTLEN int unsigned NOT NULL," +
+			"PAD_ATTRIBUTE enum('PAD SPACE','NO PAD') NOT NULL" +
+			");",
+		"CREATE TABLE IF NOT EXISTS TABLE_CONSTRAINTS (" +
+			"CONSTRAINT_CATALOG varchar(64)," +
+			"CONSTRAINT_SCHEMA varchar(64)," +
+			"CONSTRAINT_NAME varchar(64)," +
+			"TABLE_SCHEMA varchar(64)," +
+			"TABLE_NAME varchar(64)," +
+			"CONSTRAINT_TYPE varchar(11) NOT NULL DEFAULT ''," +
+			"ENFORCED varchar(3) NOT NULL DEFAULT ''" +
+			");",
+		"CREATE TABLE IF NOT EXISTS EVENTS (" +
+			"EVENT_CATALOG varchar(64)," +
+			"EVENT_SCHEMA varchar(64)," +
+			"EVENT_NAME varchar(64) NOT NULL," +
+			"`DEFINER` varchar(288) NOT NULL," +
+			"TIME_ZONE varchar(64) NOT NULL," +
+			"EVENT_BODY varchar(3) NOT NULL DEFAULT ''," +
+			"EVENT_DEFINITION longtext NOT NULL," +
+			"EVENT_TYPE varchar(9) NOT NULL DEFAULT ''," +
+			"EXECUTE_AT datetime," +
+			"INTERVAL_VALUE varchar(256)," +
+			"INTERVAL_FIELD enum('YEAR','QUARTER','MONTH','DAY','HOUR','MINUTE','WEEK','SECOND','MICROSECOND','YEAR_MONTH','DAY_HOUR','DAY_MINUTE','DAY_SECOND','HOUR_MINUTE','HOUR_SECOND','MINUTE_SECOND','DAY_MICROSECOND','HOUR_MICROSECOND','MINUTE_MICROSECOND','SECOND_MICROSECOND')," +
+			"SQL_MODE varchar(64) NOT NULL," +
+			"STARTS datetime," +
+			"ENDS datetime," +
+			"STATUS varchar(21) NOT NULL DEFAULT ''," +
+			"ON_COMPLETION varchar(12) NOT NULL DEFAULT ''," +
+			"CREATED timestamp NOT NULL," +
+			"LAST_ALTERED timestamp NOT NULL," +
+			"LAST_EXECUTED datetime," +
+			"EVENT_COMMENT varchar(2048) NOT NULL," +
+			"ORIGINATOR int unsigned NOT NULL," +
+			"CHARACTER_SET_CLIENT varchar(64) NOT NULL," +
+			"COLLATION_CONNECTION varchar(64) NOT NULL," +
+			"DATABASE_COLLATION varchar(64) NOT NULL" +
+			");",
 		informationSchemaKeywordsData,
 	}
 )
