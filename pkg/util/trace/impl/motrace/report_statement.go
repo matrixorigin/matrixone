@@ -577,7 +577,7 @@ const TcpIpv4HeaderSize = 66
 // 13: avg payload prefix of err response
 const ResponseErrPacketSize = TcpIpv4HeaderSize + 13
 
-var EndStatement = func(ctx context.Context, s *StatementInfo, err error, sentRows int64, outBytes int64, outPacket int64) {
+func (s *StatementInfo) EndStatement(ctx context.Context, err error, sentRows int64, outBytes int64, outPacket int64) {
 	if !GetTracerProvider().IsEnable() {
 		return
 	}

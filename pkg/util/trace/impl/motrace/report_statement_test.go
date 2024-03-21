@@ -175,7 +175,7 @@ func TestStatementInfo_Report_EndStatement(t *testing.T) {
 			require.Equal(t, tt.fields.doReport, s.reported)
 			require.Equal(t, tt.fields.doExport, s.exported)
 
-			EndStatement(tt.args.ctx, s, tt.args.err, 0, 0, 0)
+			s.EndStatement(tt.args.ctx, tt.args.err, 0, 0, 0)
 			require.Equal(t, tt.wantReportCntAfterEnd, gotCnt)
 		})
 	}
