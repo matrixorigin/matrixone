@@ -1159,7 +1159,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 			if len(asSelectCols) != 0 {
 				return moerr.NewNYI(ctx.GetContext(), "add foreign key in create table ... as select statement")
 			}
-			if isFkBannedDatabase(createTable.Database) {
+			if IsFkBannedDatabase(createTable.Database) {
 				return moerr.NewInternalError(ctx.GetContext(), "can not create foreign keys in %s", createTable.Database)
 			}
 			err := adjustConstraintName(ctx.GetContext(), def)
@@ -1439,7 +1439,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 		}
 	}
 
-	skip := isFkBannedDatabase(createTable.Database)
+	skip := IsFkBannedDatabase(createTable.Database)
 	if !skip {
 		fks, err := GetFkReferredTo(ctx, createTable.Database, createTable.TableDef.Name)
 		if err != nil {
@@ -3347,7 +3347,7 @@ func getForeignKeyData(ctx CompilerContext, dbName string, tableDef *TableDef, d
 		parentDbName = ctx.DefaultDatabase()
 	}
 
-	if isFkBannedDatabase(parentDbName) {
+	if IsFkBannedDatabase(parentDbName) {
 		return nil, moerr.NewInternalError(ctx.GetContext(), "can not refer foreign keys in %s", parentDbName)
 	}
 
