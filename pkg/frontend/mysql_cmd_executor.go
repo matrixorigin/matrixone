@@ -1092,7 +1092,7 @@ func doShowVariables(ses *Session, proc *process.Process, sv *tree.ShowVariables
 		}
 		executor.Free()
 
-		bat.Shrink(sels, false)
+		bat.Shrink(sels)
 		proc.Mp().PutSels(sels)
 		v0 := vector.MustStrCol(bat.Vecs[0])
 		v1 := vector.MustStrCol(bat.Vecs[1])
@@ -1728,7 +1728,7 @@ func doShowCollation(ses *Session, proc *process.Process, sc *tree.ShowCollation
 		}
 		executor.Free()
 
-		bat.Shrink(sels, false)
+		bat.Shrink(sels)
 		proc.Mp().PutSels(sels)
 		v0 := vector.MustStrCol(bat.Vecs[0])
 		v1 := vector.MustStrCol(bat.Vecs[1])

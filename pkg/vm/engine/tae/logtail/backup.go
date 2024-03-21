@@ -292,7 +292,7 @@ func trimObjectsData(
 					}
 				}
 				if len(deleteRow) != bat.Vecs[0].Length() {
-					bat.Shrink(deleteRow, false)
+					bat.Shrink(deleteRow)
 				}
 			} else {
 				// As long as there is an aBlk to be deleted, isCkpChange must be set to true.
@@ -352,7 +352,7 @@ func applyDelete(dataBatch *batch.Batch, deleteBatch *batch.Batch, id string) er
 			deleteRow = append(deleteRow, int64(i))
 		}
 	}
-	dataBatch.Shrink(deleteRow, true)
+	dataBatch.AntiShrink(deleteRow)
 	return nil
 }
 

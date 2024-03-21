@@ -199,6 +199,7 @@ type Transaction struct {
 		sync.RWMutex
 		data map[types.Blockid][]*batch.Batch
 	}
+	//blockId_tn_delete_metaLoc_batch map[types.Blockid][]*batch.Batch
 	//select list for raw batch comes from txn.writes.batch.
 	batchSelectList map[*batch.Batch][]int64
 	toFreeBatches   map[tableKey][]*batch.Batch
