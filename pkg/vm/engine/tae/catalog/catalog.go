@@ -627,7 +627,7 @@ func (catalog *Catalog) onReplayCheckpointObject(
 			blkCount = 1
 		}
 		leftRows := stats.Rows()
-		blkMaxRow := rel.GetLastestSchema().BlockMaxRows
+		blkMaxRow := rel.GetLastestSchemaLocked().BlockMaxRows
 		for i := 0; i < int(blkCount); i++ {
 			blkID := objectio.NewBlockidWithObjectID(objid, uint16(i))
 			rows := blkMaxRow
@@ -645,7 +645,7 @@ func (catalog *Catalog) onReplayCheckpointObject(
 		stats := objNode.ObjectStats
 		blkCount := stats.BlkCnt()
 		leftRows := stats.Rows()
-		blkMaxRow := rel.GetLastestSchema().BlockMaxRows
+		blkMaxRow := rel.GetLastestSchemaLocked().BlockMaxRows
 		for i := 0; i < int(blkCount); i++ {
 			blkID := objectio.NewBlockidWithObjectID(objid, uint16(i))
 			rows := blkMaxRow

@@ -140,25 +140,25 @@ func (cwft *TxnComputationWrapper) GetColumns() ([]interface{}, error) {
 	case *tree.ShowColumns:
 		if len(cols) == 7 {
 			cols = []*plan2.ColDef{
-				{Typ: &plan2.Type{Id: int32(types.T_char)}, Name: "Field"},
-				{Typ: &plan2.Type{Id: int32(types.T_char)}, Name: "Type"},
-				{Typ: &plan2.Type{Id: int32(types.T_char)}, Name: "Null"},
-				{Typ: &plan2.Type{Id: int32(types.T_char)}, Name: "Key"},
-				{Typ: &plan2.Type{Id: int32(types.T_char)}, Name: "Default"},
-				{Typ: &plan2.Type{Id: int32(types.T_char)}, Name: "Extra"},
-				{Typ: &plan2.Type{Id: int32(types.T_char)}, Name: "Comment"},
+				{Typ: plan2.Type{Id: int32(types.T_char)}, Name: "Field"},
+				{Typ: plan2.Type{Id: int32(types.T_char)}, Name: "Type"},
+				{Typ: plan2.Type{Id: int32(types.T_char)}, Name: "Null"},
+				{Typ: plan2.Type{Id: int32(types.T_char)}, Name: "Key"},
+				{Typ: plan2.Type{Id: int32(types.T_char)}, Name: "Default"},
+				{Typ: plan2.Type{Id: int32(types.T_char)}, Name: "Extra"},
+				{Typ: plan2.Type{Id: int32(types.T_char)}, Name: "Comment"},
 			}
 		} else {
 			cols = []*plan2.ColDef{
-				{Typ: &plan2.Type{Id: int32(types.T_char)}, Name: "Field"},
-				{Typ: &plan2.Type{Id: int32(types.T_char)}, Name: "Type"},
-				{Typ: &plan2.Type{Id: int32(types.T_char)}, Name: "Collation"},
-				{Typ: &plan2.Type{Id: int32(types.T_char)}, Name: "Null"},
-				{Typ: &plan2.Type{Id: int32(types.T_char)}, Name: "Key"},
-				{Typ: &plan2.Type{Id: int32(types.T_char)}, Name: "Default"},
-				{Typ: &plan2.Type{Id: int32(types.T_char)}, Name: "Extra"},
-				{Typ: &plan2.Type{Id: int32(types.T_char)}, Name: "Privileges"},
-				{Typ: &plan2.Type{Id: int32(types.T_char)}, Name: "Comment"},
+				{Typ: plan2.Type{Id: int32(types.T_char)}, Name: "Field"},
+				{Typ: plan2.Type{Id: int32(types.T_char)}, Name: "Type"},
+				{Typ: plan2.Type{Id: int32(types.T_char)}, Name: "Collation"},
+				{Typ: plan2.Type{Id: int32(types.T_char)}, Name: "Null"},
+				{Typ: plan2.Type{Id: int32(types.T_char)}, Name: "Key"},
+				{Typ: plan2.Type{Id: int32(types.T_char)}, Name: "Default"},
+				{Typ: plan2.Type{Id: int32(types.T_char)}, Name: "Extra"},
+				{Typ: plan2.Type{Id: int32(types.T_char)}, Name: "Privileges"},
+				{Typ: plan2.Type{Id: int32(types.T_char)}, Name: "Comment"},
 			}
 		}
 	}
@@ -206,10 +206,6 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 	requestCtx, span = trace.Start(requestCtx, "TxnComputationWrapper.Compile",
 		trace.WithKind(trace.SpanKindStatement))
 	defer span.End(trace.WithStatementExtra(cwft.ses.GetTxnId(), cwft.ses.GetStmtId(), cwft.ses.GetSqlOfStmt()))
-
-	stats := statistic.StatsInfoFromContext(requestCtx)
-	stats.CompileStart()
-	defer stats.CompileEnd()
 
 	var err error
 	defer RecordStatementTxnID(requestCtx, cwft.ses)
@@ -313,6 +309,10 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 	if tInfo != nil {
 		tenant = tInfo.GetTenant()
 	}
+
+	stats := statistic.StatsInfoFromContext(requestCtx)
+	stats.CompileStart()
+	defer stats.CompileEnd()
 	cwft.compile = compile.NewCompile(
 		addr,
 		cwft.ses.GetDatabaseName(),

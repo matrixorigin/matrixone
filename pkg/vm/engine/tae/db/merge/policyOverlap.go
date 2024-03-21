@@ -66,7 +66,7 @@ func (o *Overlap) Revise(cpu, mem int64) []*catalog.ObjectEntry {
 
 func (o *Overlap) ResetForTable(entry *catalog.TableEntry) {
 	o.id = entry.ID
-	o.schema = entry.GetLastestSchema()
+	o.schema = entry.GetLastestSchemaLocked()
 	o.analyzer.reset()
 }
 

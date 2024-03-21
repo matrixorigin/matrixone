@@ -30,7 +30,7 @@ func makeMetaTblScanWhereKeyEqVersion(builder *QueryBuilder, bindCtx *BindContex
 	scanNodeProjections := make([]*Expr, len(indexTableDefs[0].Cols))
 	for colIdx, column := range indexTableDefs[0].Cols {
 		scanNodeProjections[colIdx] = &plan.Expr{
-			Typ: *column.Typ,
+			Typ: column.Typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					ColPos: int32(colIdx),
@@ -80,7 +80,7 @@ func makeCentroidsTblScan(builder *QueryBuilder, bindCtx *BindContext, indexTabl
 	scanNodeProjections := make([]*Expr, len(indexTableDefs[1].Cols))
 	for colIdx, column := range indexTableDefs[1].Cols {
 		scanNodeProjections[colIdx] = &plan.Expr{
-			Typ: *column.Typ,
+			Typ: column.Typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					ColPos: int32(colIdx),

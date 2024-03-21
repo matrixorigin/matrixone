@@ -94,7 +94,7 @@ func (e *TestEngine) Restart(ctx context.Context) {
 	var err error
 	e.DB, err = db.Open(ctx, e.Dir, e.Opts)
 	// only ut executes this checker
-	e.DB.DiskCleaner.AddChecker(
+	e.DB.DiskCleaner.GetCleaner().AddChecker(
 		func(item any) bool {
 			min := e.DB.TxnMgr.MinTSForTest()
 			ckp := item.(*checkpoint.CheckpointEntry)
@@ -209,7 +209,7 @@ func (e *TestEngine) TryAppend(bat *containers.Batch) {
 }
 func (e *TestEngine) DeleteAll(skipConflict bool) error {
 	txn, rel := e.GetRelation()
-	schema := rel.GetMeta().(*catalog.TableEntry).GetLastestSchema()
+	schema := rel.GetMeta().(*catalog.TableEntry).GetLastestSchemaLocked()
 	pkName := schema.GetPrimaryKey().Name
 	it := rel.MakeBlockIt()
 	for it.Valid() {
@@ -351,7 +351,7 @@ func InitTestDBWithDir(
 ) *db.DB {
 	db, _ := db.Open(ctx, dir, opts)
 	// only ut executes this checker
-	db.DiskCleaner.AddChecker(
+	db.DiskCleaner.GetCleaner().AddChecker(
 		func(item any) bool {
 			min := db.TxnMgr.MinTSForTest()
 			ckp := item.(*checkpoint.CheckpointEntry)
@@ -371,7 +371,7 @@ func InitTestDB(
 	dir := testutils.InitTestEnv(moduleName, t)
 	db, _ := db.Open(ctx, dir, opts)
 	// only ut executes this checker
-	db.DiskCleaner.AddChecker(
+	db.DiskCleaner.GetCleaner().AddChecker(
 		func(item any) bool {
 			min := db.TxnMgr.MinTSForTest()
 			ckp := item.(*checkpoint.CheckpointEntry)
