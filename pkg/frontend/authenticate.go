@@ -863,6 +863,7 @@ var (
 		"mo_variables":                0,
 		"mo_transactions":             0,
 		"mo_cache":                    0,
+		catalog.MOForeignKeys:         0,
 	}
 	createDbInformationSchemaSql = "create database information_schema;"
 	createAutoTableSql           = fmt.Sprintf(`create table if not exists %s (
@@ -893,6 +894,41 @@ var (
 				index_table_name varchar(5000),
 				primary key(id, column_name)
 			);`, catalog.MO_INDEXES)
+
+	createMoForeignKeysSql = fmt.Sprintf(`create table %s(
+				constraint_name varchar(5000) not null,
+				constraint_id BIGINT UNSIGNED not null,
+				db_name varchar(5000) not null,
+				db_id BIGINT UNSIGNED not null,
+				table_name varchar(5000) not null,
+				table_id BIGINT UNSIGNED not null,
+				column_name varchar(256) not null,
+				column_id BIGINT UNSIGNED not null,
+				refer_db_name varchar(5000) not null,
+				refer_db_id BIGINT UNSIGNED not null,
+				refer_table_name varchar(5000) not null,
+				refer_table_id BIGINT UNSIGNED not null,
+				refer_column_name varchar(256) not null,
+				refer_column_id BIGINT UNSIGNED not null,
+				on_delete varchar(128) not null,
+				on_update varchar(128) not null,
+		
+				primary key(
+					constraint_name,
+					constraint_id,
+					db_name,
+					db_id,
+					table_name,
+					table_id,
+					column_name,
+					column_id,
+					refer_db_name,
+					refer_db_id,
+					refer_table_name,
+					refer_table_id,
+					refer_column_name,
+					refer_column_id)
+			);`, catalog.MOForeignKeys)
 
 	createMoTablePartitionsSql = fmt.Sprintf(`CREATE TABLE %s (
 			  table_id bigint unsigned NOT NULL,
@@ -1070,6 +1106,7 @@ var (
 	dropAutoIcrColSql               = fmt.Sprintf("drop table if exists mo_catalog.`%s`;", catalog.MOAutoIncrTable)
 	dropMoIndexes                   = fmt.Sprintf(`drop table if exists %s.%s;`, catalog.MO_CATALOG, catalog.MO_INDEXES)
 	dropMoTablePartitions           = fmt.Sprintf(`drop table if exists %s.%s;`, catalog.MO_CATALOG, catalog.MO_TABLE_PARTITIONS)
+	dropMoForeignKeys               = `drop table if exists mo_catalog.mo_foreign_keys;`
 
 	initMoMysqlCompatbilityModeFormat = `insert into mo_catalog.mo_mysql_compatibility_mode(
 		account_id,
@@ -4246,6 +4283,11 @@ func doDropAccount(ctx context.Context, ses *Session, da *tree.DropAccount) (err
 
 		// drop mo_catalog.mo_table_partitions under general tenant
 		rtnErr = bh.Exec(deleteCtx, dropMoTablePartitions)
+		if rtnErr != nil {
+			return rtnErr
+		}
+
+		rtnErr = bh.Exec(deleteCtx, dropMoForeignKeys)
 		if rtnErr != nil {
 			return rtnErr
 		}
@@ -7777,6 +7819,11 @@ func InitGeneralTenant(ctx context.Context, ses *Session, ca *tree.CreateAccount
 		}
 
 		rtnErr = bh.Exec(newTenantCtx, createAutoTableSql)
+		if rtnErr != nil {
+			return rtnErr
+		}
+
+		rtnErr = bh.Exec(newTenantCtx, createMoForeignKeysSql)
 		if rtnErr != nil {
 			return rtnErr
 		}

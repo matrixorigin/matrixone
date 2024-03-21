@@ -85,6 +85,46 @@ var (
 		  );`, catalog.MO_CATALOG, catalog.MO_STAGES),
 	}
 
+	MoForeignKeys = &table.Table{
+		Account:  table.AccountAll,
+		Database: catalog.MO_CATALOG,
+		Table:    catalog.MOForeignKeys,
+		CreateTableSql: fmt.Sprintf(`create table %s.%s(
+			constraint_name varchar(5000) not null,
+			constraint_id BIGINT UNSIGNED not null default 0,
+			db_name varchar(5000) not null,
+			db_id BIGINT UNSIGNED not null default 0,
+			table_name varchar(5000) not null,
+			table_id BIGINT UNSIGNED not null default 0,
+			column_name varchar(256) not null,
+			column_id BIGINT UNSIGNED not null default 0,
+			refer_db_name varchar(5000) not null,
+			refer_db_id BIGINT UNSIGNED not null default 0,
+			refer_table_name varchar(5000) not null,
+			refer_table_id BIGINT UNSIGNED not null default 0,
+			refer_column_name varchar(256) not null,
+			refer_column_id BIGINT UNSIGNED not null default 0,
+			on_delete varchar(128) not null,
+			on_update varchar(128) not null,
+	
+			primary key(
+				constraint_name,
+				constraint_id,
+				db_name,
+				db_id,
+				table_name,
+				table_id,
+				column_name,
+				column_id,
+				refer_db_name,
+				refer_db_id,
+				refer_table_name,
+				refer_table_id,
+				refer_column_name,
+				refer_column_id)
+			);`, catalog.MO_CATALOG, catalog.MOForeignKeys),
+	}
+
 	SqlStatementCUTable = &table.Table{
 		Account:  table.AccountAll,
 		Database: catalog.MO_SYSTEM_METRICS,
@@ -104,6 +144,7 @@ var needUpgradeNewTable = []*table.Table{
 	MoTablePartitionsTable,
 	SysDaemonTaskTable,
 	MoStagesTable,
+	MoForeignKeys,
 	SqlStatementCUTable,
 }
 
