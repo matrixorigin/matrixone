@@ -270,7 +270,7 @@ func (s *service) TxnRead(
 	tableID uint64,
 	columns []string,
 	bat *batch.Batch) {
-	if !s.Enabled(FeatureTraceTxn) {
+	if !s.Enabled(FeatureTraceData) {
 		return
 	}
 
@@ -338,6 +338,101 @@ func (s *service) TxnReadBlock(
 		tableID,
 		buf.writeHexWithBytes(block))
 	s.entryBufC <- buf
+}
+
+func (s *service) TxnWrite(
+	op client.TxnOperator,
+	tableID uint64,
+	typ string,
+	bat *batch.Batch,
+) {
+	if !s.Enabled(FeatureTraceTxnWorkspace) {
+		return
+	}
+
+	if s.atomic.closed.Load() {
+		return
+	}
+
+	filters := s.atomic.txnFilters.Load()
+	if skipped := filters.filter(op); skipped {
+		return
+	}
+
+	entryData := newWriteEntryData(tableID, bat, time.Now().UnixNano())
+	defer func() {
+		entryData.close()
+	}()
+
+	tableFilters := s.atomic.tableFilters.Load()
+	if skipped := tableFilters.filter(entryData); skipped {
+		return
+	}
+
+	buf := reuse.Alloc[buffer](nil)
+	entryData.createWrite(
+		op.Txn().ID,
+		buf,
+		typ,
+		func(e dataEvent) {
+			s.entryC <- e
+		},
+		&s.atomic.complexPKTables)
+	s.entryBufC <- buf
+}
+func (s *service) TxnAdjustWorkspace(
+	op client.TxnOperator,
+	adjustCount int,
+	writes func() (tableID uint64, typ string, bat *batch.Batch, more bool),
+) {
+	if !s.Enabled(FeatureTraceTxnWorkspace) {
+		return
+	}
+
+	if s.atomic.closed.Load() {
+		return
+	}
+
+	filters := s.atomic.txnFilters.Load()
+	if skipped := filters.filter(op); skipped {
+		return
+	}
+
+	at := time.Now().UnixNano()
+
+	offsetCount := 0
+	for {
+		tableID, typ, bat, more := writes()
+		if !more {
+			return
+		}
+
+		func() {
+			entryData := newWorkspaceEntryData(tableID, bat, at)
+			defer func() {
+				entryData.close()
+			}()
+
+			tableFilters := s.atomic.tableFilters.Load()
+			if skipped := tableFilters.filter(entryData); skipped {
+				return
+			}
+
+			buf := reuse.Alloc[buffer](nil)
+			entryData.createWorkspace(
+				op.Txn().ID,
+				buf,
+				typ,
+				adjustCount,
+				offsetCount,
+				func(e dataEvent) {
+					s.entryC <- e
+				},
+				&s.atomic.complexPKTables)
+			s.entryBufC <- buf
+		}()
+		offsetCount++
+	}
 }
 
 func (s *service) TxnEventEnabled() bool {

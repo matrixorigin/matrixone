@@ -17,9 +17,10 @@ package disttae
 import (
 	"context"
 	"encoding/hex"
-	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 	"math"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -119,6 +120,8 @@ func (txn *Transaction) WriteBatch(
 	}
 	txn.writes = append(txn.writes, e)
 	txn.pkCount += bat.RowCount()
+
+	trace.GetService().TxnWrite(txn.op, tableId, typesNames[typ], bat)
 	return nil
 }
 
@@ -626,6 +629,8 @@ func (txn *Transaction) WriteFile(
 
 func (txn *Transaction) deleteBatch(bat *batch.Batch,
 	databaseId, tableId uint64) *batch.Batch {
+	trace.GetService().TxnWrite(txn.op, tableId, typesNames[DELETE], bat)
+
 	mp := make(map[types.Rowid]uint8)
 	deleteBlkId := make(map[types.Blockid]bool)
 	rowids := vector.MustFixedCol[types.Rowid](bat.GetVector(0))
@@ -944,6 +949,8 @@ func (txn *Transaction) Commit(ctx context.Context) ([]txn.TxnRequest, error) {
 	if err := txn.dumpBatchLocked(-1); err != nil {
 		return nil, err
 	}
+
+	txn.traceWorkspaceLocked(true)
 
 	if !txn.hasS3Op.Load() &&
 		txn.op.TxnOptions().CheckDupEnabled() {
