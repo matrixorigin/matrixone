@@ -64,13 +64,8 @@ func New(
 	keyRouter client2.KeyRouter[pb.StatsInfoKey],
 	threshold int,
 ) *Engine {
-	var services []metadata.TNService
 	cluster := clusterservice.GetMOCluster()
-	cluster.GetTNService(clusterservice.NewSelector(),
-		func(d metadata.TNService) bool {
-			services = append(services, d)
-			return true
-		})
+	services := cluster.GetAllTNServices()
 
 	var tnID string
 	if len(services) > 0 {
@@ -643,14 +638,8 @@ func (e *Engine) getTransaction(op client.TxnOperator) *Transaction {
 }
 
 func (e *Engine) getTNServices() []DNStore {
-	var values []DNStore
 	cluster := clusterservice.GetMOCluster()
-	cluster.GetTNService(clusterservice.NewSelector(),
-		func(d metadata.TNService) bool {
-			values = append(values, d)
-			return true
-		})
-	return values
+	return cluster.GetAllTNServices()
 }
 
 func (e *Engine) setPushClientStatus(ready bool) {
