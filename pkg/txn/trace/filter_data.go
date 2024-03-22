@@ -118,14 +118,3 @@ func (f *tableEntryFilter) Filter(entry *EntryData) bool {
 func (f *tableEntryFilter) Name() string {
 	return fmt.Sprintf("table[%d]: %+v\n", f.id, f.columns)
 }
-
-type allTableFilter struct {
-}
-
-func (f *allTableFilter) Filter(entry *EntryData) bool {
-	return false
-}
-
-func (f *allTableFilter) Name() string {
-	return "all"
-}
