@@ -151,14 +151,13 @@ func (t *tunnel) run(cc ClientConn, sc ServerConn) error {
 		}
 		t.cc = cc
 		t.logger = t.logger.With(zap.Uint32("conn ID", cc.ConnID()))
-		t.mu.clientConn = newMySQLConn(connClientName, cc.RawConn(), 0, t.reqC, t.respC)
-		t.mu.serverConn = newMySQLConn(connServerName, sc.RawConn(), 0, t.reqC, t.respC)
+		t.mu.clientConn = newMySQLConn(connClientName, cc.RawConn(), 0, t.reqC, t.respC, nil)
+		t.mu.serverConn = newMySQLConn(connServerName, sc.RawConn(), 0, t.reqC, t.respC, nil)
 
 		setPeer(t.mu.clientConn.msgBuf, t.mu.serverConn.msgBuf)
 
 		// Create the pipes from client to server and server to client.
 		t.mu.csp = t.newPipe(pipeClientToServer, t.mu.clientConn, t.mu.serverConn)
-
 		t.mu.scp = t.newPipe(pipeServerToClient, t.mu.serverConn, t.mu.clientConn)
 
 		return nil
@@ -228,19 +227,24 @@ func (t *tunnel) kickoff() error {
 }
 
 // replaceServerConn replaces the CN server.
-func (t *tunnel) replaceServerConn(newServerConn *MySQLConn) {
+func (t *tunnel) replaceServerConn(newServerConn *MySQLConn, sync bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	_ = t.mu.serverConn.Close()
 	t.mu.serverConn = newServerConn
 	setPeer(t.mu.clientConn.msgBuf, t.mu.serverConn.msgBuf)
 
-	t.mu.csp = t.newPipe(pipeClientToServer, t.mu.clientConn, t.mu.serverConn)
-	t.mu.scp = t.newPipe(pipeServerToClient, t.mu.serverConn, t.mu.clientConn)
+	if sync {
+		t.mu.csp.dst = t.mu.serverConn
+		t.mu.scp.src = t.mu.serverConn
+	} else {
+		t.mu.csp = t.newPipe(pipeClientToServer, t.mu.clientConn, t.mu.serverConn)
+		t.mu.scp = t.newPipe(pipeServerToClient, t.mu.serverConn, t.mu.clientConn)
+	}
 }
 
 // canStartTransfer checks whether the transfer can be started.
-func (t *tunnel) canStartTransfer() bool {
+func (t *tunnel) canStartTransfer(sync bool) bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
@@ -266,14 +270,17 @@ func (t *tunnel) canStartTransfer() bool {
 	}
 
 	// We are now in a transaction.
-	if scp.isInTxn() {
+	if !scp.safeToTransfer() {
 		return false
 	}
 
 	// Set the tunnel in transfer and the pipes paused directly.
 	t.mu.inTransfer = true
-	csp.mu.paused = true
-	scp.mu.paused = true
+	if !sync {
+		csp.mu.paused = true
+		scp.mu.paused = true
+	}
+
 	return true
 }
 
@@ -297,6 +304,13 @@ func (t *tunnel) finishTransfer(start time.Time) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.mu.inTransfer = false
+	resume := func(p *pipe) {
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		p.mu.paused = false
+	}
+	resume(t.mu.scp)
+	resume(t.mu.csp)
 
 	t.logger.Info("transfer end")
 	duration := time.Since(start)
@@ -308,13 +322,13 @@ func (t *tunnel) finishTransfer(start time.Time) {
 	v2.ProxyTransferDurationHistogram.Observe(time.Since(start).Seconds())
 }
 
-func (t *tunnel) doReplaceConnection(ctx context.Context) error {
+func (t *tunnel) doReplaceConnection(ctx context.Context, sync bool) error {
 	newConn, err := t.getNewServerConn(ctx)
 	if err != nil {
 		t.logger.Error("failed to get a new connection", zap.Error(err))
 		return err
 	}
-	t.replaceServerConn(newConn)
+	t.replaceServerConn(newConn, sync)
 	t.counterSet.connMigrationSuccess.Add(1)
 	t.logger.Info("transfer to a new CN server",
 		zap.String("addr", newConn.RemoteAddr().String()))
@@ -325,7 +339,7 @@ func (t *tunnel) doReplaceConnection(ctx context.Context) error {
 func (t *tunnel) transfer(ctx context.Context) error {
 	t.counterSet.connMigrationRequested.Add(1)
 	// Must check if it is safe to start the transfer.
-	if ok := t.canStartTransfer(); !ok {
+	if ok := t.canStartTransfer(false); !ok {
 		t.logger.Info("cannot start transfer safely")
 		t.setTransferIntent(true)
 		t.counterSet.connMigrationCannotStart.Add(1)
@@ -347,7 +361,7 @@ func (t *tunnel) transfer(ctx context.Context) error {
 	if err := scp.pause(ctx); err != nil {
 		return err
 	}
-	if err := t.doReplaceConnection(ctx); err != nil {
+	if err := t.doReplaceConnection(ctx, false); err != nil {
 		return err
 	}
 	// After replace connections, restart pipes.
@@ -360,8 +374,7 @@ func (t *tunnel) transfer(ctx context.Context) error {
 
 func (t *tunnel) transferSync(ctx context.Context) error {
 	// Must check if it is safe to start the transfer.
-	if ok := t.canStartTransfer(); !ok {
-		t.logger.Info("still cannot start transfer safely in transfer intent state")
+	if ok := t.canStartTransfer(true); !ok {
 		return moerr.GetOkExpectedNotSafeToStartTransfer()
 	}
 	start := time.Now()
@@ -369,7 +382,7 @@ func (t *tunnel) transferSync(ctx context.Context) error {
 	t.logger.Info("transfer begin")
 	ctx, cancel := context.WithTimeout(ctx, defaultTransferTimeout)
 	defer cancel()
-	if err := t.doReplaceConnection(ctx); err != nil {
+	if err := t.doReplaceConnection(ctx, true); err != nil {
 		return err
 	}
 	return nil
@@ -385,7 +398,10 @@ func (t *tunnel) getNewServerConn(ctx context.Context) (*MySQLConn, error) {
 	if err != nil {
 		return nil, err
 	}
-	return newMySQLConn(connServerName, newConn.RawConn(), 0, t.reqC, t.respC), nil
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	p := t.mu.scp
+	return newMySQLConn(connServerName, newConn.RawConn(), 0, t.reqC, t.respC, p.src.msgBuf), nil
 }
 
 func (t *tunnel) getTransferType() transferType {
@@ -534,20 +550,21 @@ func (p *pipe) kickoff(ctx context.Context) (e error) {
 	defer finish()
 
 	for ctx.Err() == nil {
+		src := p.src
+		dst := p.dst
+		if p.name == pipeServerToClient && p.tun.transferIntent.Load() && src.writeAvail() > 0 {
+			if err := p.handleTransferIntent(ctx); err != nil {
+				p.logger.Error("failed to transfer connection", zap.Error(err))
+			}
+		}
 		if terminate, err := prepareNextMessage(); err != nil || terminate {
 			return err
 		}
 		if p.testHelper.beforeSend != nil {
 			p.testHelper.beforeSend()
 		}
-		if _, err := p.src.sendTo(p.dst); err != nil {
-			return moerr.NewInternalErrorNoCtx("send message error:: %v", err)
-		}
-
-		if p.name == pipeServerToClient && p.tun.transferIntent.Load() {
-			if err := p.handleTransferIntent(ctx); err != nil {
-				p.logger.Error("failed to transfer connection", zap.Error(err))
-			}
+		if _, err := src.sendTo(dst); err != nil {
+			return moerr.NewInternalErrorNoCtx("send message error: %v", err)
 		}
 	}
 	return ctx.Err()
@@ -555,7 +572,7 @@ func (p *pipe) kickoff(ctx context.Context) (e error) {
 
 func (p *pipe) handleTransferIntent(ctx context.Context) error {
 	// If it is not in a txn and transfer intent is true, transfer it sync.
-	if !p.isInTxn() && p.tun != nil {
+	if p.safeToTransfer() && p.tun != nil {
 		return p.tun.transferSync(ctx)
 	}
 	return nil
@@ -611,10 +628,11 @@ func (p *pipe) pause(ctx context.Context) error {
 	return nil
 }
 
-// isInTxn indicates whether the session is in transaction.
-func (p *pipe) isInTxn() bool {
+// safeToTransfer indicates whether it is safe to transfer the session.
+// NB: the pipe MUST be server-to-client pipe.
+func (p *pipe) safeToTransfer() bool {
 	if p.src == nil {
 		return false
 	}
-	return p.src.isInTxn()
+	return !p.src.isInTxn()
 }
