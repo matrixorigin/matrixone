@@ -737,37 +737,39 @@ message Node {
 	int32 node_id = 2;
 	Stats stats = 3;
 	repeated int32 children = 4;
+	repeated ColRef output_list = 5 [(gogoproto.nullable) = false];
 
-	// PROJECT
-	repeated Expr project_list = 5;
-
-	// JOIN
-	JoinType join_type = 6;
-	repeated Expr on_list = 7;
-	bool build_on_left = 8;
+	// SCAN
+	TableDef table_def = 6;
+	ObjectRef obj_ref = 7;
+	ObjectRef parent_obj_ref = 8;
+	RowsetData rowset_data = 9;
 
 	// FILTER
-	repeated Expr filter_list = 9;
+	repeated Expr filter_list = 10;
+
+	// JOIN
+	JoinType join_type = 11;
+	repeated Expr on_list = 12;
+	bool build_on_left = 13;
 
 	// AGG
-	repeated Expr group_by = 10;
-	repeated Expr grouping_set = 11;
-	repeated Expr agg_list = 12;
+	repeated Expr group_by = 14;
+	repeated Expr grouping_set = 15;
+	repeated Expr agg_list = 16;
 
 	// WINDOW
-	repeated Expr win_spec_list = 13;
+	repeated Expr win_spec_list = 17;
+
+	// PROJECT
+	repeated Expr project_list = 18;
 
 	// SORT
-	repeated OrderBySpec order_by = 14;
+	repeated OrderBySpec order_by = 19;
 
 	// LIMIT
-	Expr limit = 15;
-	Expr offset = 16;
-
-	TableDef table_def = 17;
-	ObjectRef obj_ref = 18;
-	ObjectRef parent_obj_ref = 19;
-	RowsetData rowset_data = 20;
+	Expr limit = 20;
+	Expr offset = 21;
 
 	string extra_options = 22;
 	DeleteCtx delete_ctx = 23;

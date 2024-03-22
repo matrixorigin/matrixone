@@ -1325,25 +1325,6 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 	return remapping, nil
 }
 
-func (builder *QueryBuilder) markSinkProject(nodeID int32, step int32, colRefBool map[[2]int32]bool) {
-	node := builder.qry.Nodes[nodeID]
-
-	switch node.NodeType {
-	case plan.Node_SINK_SCAN, plan.Node_RECURSIVE_SCAN, plan.Node_RECURSIVE_CTE:
-		for _, i := range node.SourceStep {
-			if i >= step {
-				for _, expr := range node.ProjectList {
-					colRefBool[[2]int32{i, expr.GetCol().ColPos}] = true
-				}
-			}
-		}
-	default:
-		for i := range node.Children {
-			builder.markSinkProject(node.Children[i], step, colRefBool)
-		}
-	}
-}
-
 func (builder *QueryBuilder) rewriteStarApproxCount(nodeID int32) {
 	node := builder.qry.Nodes[nodeID]
 
@@ -1420,7 +1401,7 @@ func (builder *QueryBuilder) rewriteStarApproxCount(nodeID int32) {
 }
 
 func (builder *QueryBuilder) createQuery() (*Query, error) {
-	colRefBool := make(map[[2]int32]bool)
+	sinkColUsed := make(map[[2]int32]bool)
 	sinkColRef := make(map[[2]int32]int)
 
 	for i, rootID := range builder.qry.Steps {
@@ -1463,6 +1444,16 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		rootID = builder.pushdownSemiAntiJoins(rootID)
 		builder.optimizeDistinctAgg(rootID)
 		ReCalcNodeStats(rootID, builder, true, false, true)
+
+		{
+			rootNode := builder.qry.Nodes[rootID]
+			resultTag := rootNode.BindingTags[0]
+			colRefCnt := make(map[[2]int32]int)
+			for j := range rootNode.ProjectList {
+				colRefCnt[[2]int32{resultTag, int32(j)}] = 1
+			}
+			builder.pruneUnneededColumns(rootID, int32(i), colRefCnt, sinkColUsed)
+		}
 		builder.determineBuildAndProbeSide(rootID, true)
 
 		builder.qry.Steps[i] = rootID
@@ -1491,18 +1482,17 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		builder.rewriteStarApproxCount(rootID)
 
 		rootNode := builder.qry.Nodes[rootID]
-
 		for j := range rootNode.ProjectList {
-			colRefBool[[2]int32{int32(i), int32(j)}] = false
+			sinkColUsed[[2]int32{int32(i), int32(j)}] = false
 			if i == len(builder.qry.Steps)-1 {
-				colRefBool[[2]int32{int32(i), int32(j)}] = true
+				sinkColUsed[[2]int32{int32(i), int32(j)}] = true
 			}
 		}
 	}
 
 	for i := range builder.qry.Steps {
 		rootID := builder.qry.Steps[i]
-		builder.markSinkProject(rootID, int32(i), colRefBool)
+		builder.markSinkProject(rootID, int32(i), sinkColUsed)
 	}
 
 	for i := len(builder.qry.Steps) - 1; i >= 0; i-- {
@@ -1513,7 +1503,8 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		for j := range rootNode.ProjectList {
 			colRefCnt[[2]int32{resultTag, int32(j)}] = 1
 		}
-		_, err := builder.remapAllColRefs(rootID, int32(i), colRefCnt, colRefBool, sinkColRef)
+
+		_, err := builder.remapAllColRefs(rootID, int32(i), colRefCnt, sinkColUsed, sinkColRef)
 		if err != nil {
 			return nil, err
 		}
