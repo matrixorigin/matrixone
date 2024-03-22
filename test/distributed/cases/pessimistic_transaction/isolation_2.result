@@ -178,8 +178,8 @@ null    fffff
 begin;
 create view  aaa as select * from dis_table_02;
 show create table aaa ;
-View    Create View
-aaa    create view  aaa as select * from dis_table_02;
+View    Create View    character_set_client    collation_connection
+aaa    create view  aaa as select * from dis_table_02;    utf8mb4    utf8mb4_general_ci
 use isolation_2;
 insert into  dis_table_02(b,c) values ('vvv','2000-09-08');
 begin ;

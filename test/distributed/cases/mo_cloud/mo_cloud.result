@@ -253,17 +253,17 @@ SHOW CREATE TABLE system_metrics.metric;
 Table    Create Table
 metric    CREATE TABLE `metric` (\n`metric_name` VARCHAR(1024) DEFAULT 'sys' COMMENT 'metric name, like: sql_statement_total, server_connections, process_cpu_percent, sys_memory_used, ...',\n`collecttime` DATETIME NOT NULL COMMENT 'metric data collect time',\n`value` DOUBLE DEFAULT '0.0' COMMENT 'metric value',\n`node` VARCHAR(1024) DEFAULT 'monolithic' COMMENT 'mo node uuid',\n`role` VARCHAR(1024) DEFAULT 'monolithic' COMMENT 'mo node role, like: CN, DN, LOG',\n`account` VARCHAR(1024) DEFAULT 'sys' COMMENT 'account name',\n`type` VARCHAR(1024) NOT NULL COMMENT 'sql type, like: insert, select, ...'\n) CLUSTER BY (`collecttime`, `metric_name`, `account`)
 SHOW CREATE TABLE system_metrics.server_connections;
-View    Create View
-server_connections    CREATE VIEW IF NOT EXISTS `system_metrics`.`server_connections` as select `collecttime`, `value`, `node`, `role`, `account` from `system_metrics`.`metric` where `metric_name` = "server_connections"
+View    Create View    character_set_client    collation_connection
+server_connections    CREATE VIEW IF NOT EXISTS `system_metrics`.`server_connections` as select `collecttime`, `value`, `node`, `role`, `account` from `system_metrics`.`metric` where `metric_name` = "server_connections"    utf8mb4    utf8mb4_general_ci
 SHOW CREATE TABLE system_metrics.server_storage_usage;
-View    Create View
-server_storage_usage    CREATE VIEW IF NOT EXISTS `system_metrics`.`server_storage_usage` as select `collecttime`, `value`, `node`, `role`, `account` from `system_metrics`.`metric` where `metric_name` = "server_storage_usage"
+View    Create View    character_set_client    collation_connection
+server_storage_usage    CREATE VIEW IF NOT EXISTS `system_metrics`.`server_storage_usage` as select `collecttime`, `value`, `node`, `role`, `account` from `system_metrics`.`metric` where `metric_name` = "server_storage_usage"    utf8mb4    utf8mb4_general_ci
 SHOW CREATE TABLE system_metrics.sql_statement_errors;
-View    Create View
-sql_statement_errors    CREATE VIEW IF NOT EXISTS `system_metrics`.`sql_statement_errors` as select `collecttime`, `value`, `node`, `role`, `account`, `type` from `system_metrics`.`metric` where `metric_name` = "sql_statement_errors"
+View    Create View    character_set_client    collation_connection
+sql_statement_errors    CREATE VIEW IF NOT EXISTS `system_metrics`.`sql_statement_errors` as select `collecttime`, `value`, `node`, `role`, `account`, `type` from `system_metrics`.`metric` where `metric_name` = "sql_statement_errors"    utf8mb4    utf8mb4_general_ci
 SHOW CREATE TABLE system_metrics.sql_transaction_total;
-View    Create View
-sql_transaction_total    CREATE VIEW IF NOT EXISTS `system_metrics`.`sql_transaction_total` as select `collecttime`, `value`, `node`, `role`, `account` from `system_metrics`.`metric` where `metric_name` = "sql_transaction_total"
+View    Create View    character_set_client    collation_connection
+sql_transaction_total    CREATE VIEW IF NOT EXISTS `system_metrics`.`sql_transaction_total` as select `collecttime`, `value`, `node`, `role`, `account` from `system_metrics`.`metric` where `metric_name` = "sql_transaction_total"    utf8mb4    utf8mb4_general_ci
 SHOW GLOBAL VARIABLES LIKE 'save_query_result';
 Variable_name    Value
 save_query_result    off
@@ -589,10 +589,10 @@ count(*)
 0
 SELECT datname AS name, IF (table_cnt IS NULL, 0, table_cnt) AS tables, role_name AS owner FROM (SELECT dat_id, datname, mo_database.created_time, IF(role_name IS NULL, '-', role_name) AS role_name FROM mo_catalog.mo_database LEFT JOIN mo_catalog.mo_role ON mo_database.owner = role_id) AS x LEFT JOIN(SELECT count(*) AS table_cnt, reldatabase_id FROM mo_catalog.mo_tables WHERE relkind IN ('r','v','e','cluster') GROUP BY reldatabase_id) AS y ON x.dat_id = y.reldatabase_id order by name;
 name    tables    owner
-information_schema    16    accountadmin
-mysql    5    accountadmin
-mo_mo    0    accountadmin
+information_schema    22    accountadmin
 mo_catalog    22    -
+mo_mo    0    accountadmin
+mysql    6    accountadmin
 system    1    accountadmin
 system_metrics    9    accountadmin
 SELECT mo_catalog.mo_database.datname,mo_catalog.mo_tables.relname,mo_catalog.mo_tables.relkind, if (role_name IS NULL,'-', role_name) AS `owner` FROM mo_catalog.mo_database LEFT JOIN mo_catalog.mo_tables ON mo_catalog.mo_database.datname = mo_catalog.mo_tables.reldatabase LEFT JOIN mo_catalog.mo_role ON mo_catalog.mo_tables.owner=role_id WHERE (relname NOT LIKE "__mo_index_secondary_%" AND relname NOT LIKE "__mo_index_unique_%" OR relname IS NULL) ORDER BY reldatabase, relname;
@@ -676,13 +676,13 @@ SELECT relname AS `name`, IF (role_name IS NULL, '-', role_name) AS `owner` FROM
 name    owner
 SELECT relname AS `name`, IF (role_name IS NULL, '-', role_name) AS `owner` FROM mo_catalog.mo_tables LEFT JOIN mo_catalog.mo_role ON mo_catalog.mo_tables.owner=role_id WHERE relkind IN ('v') AND reldatabase='system_metrics';
 name    owner
+server_connections    accountadmin
+server_storage_usage    accountadmin
 sql_statement_total    accountadmin
 sql_statement_errors    accountadmin
 sql_transaction_total    accountadmin
 sql_transaction_errors    accountadmin
 sql_statement_duration_total    accountadmin
-server_connections    accountadmin
-server_storage_usage    accountadmin
 SELECT relname AS `name`, mo_table_rows(reldatabase, relname) AS `rows`, mo_table_size(reldatabase, relname) AS `size`, if (role_name IS NULL, '-', role_name) AS `owner` FROM mo_catalog.mo_tables LEFT JOIN mo_catalog.mo_role ON mo_catalog.mo_tables.owner=role_id WHERE relkind IN ('r','e','cluster') AND reldatabase='information_schema';
 name    rows    size    owner
 key_column_usage    0    0    accountadmin
