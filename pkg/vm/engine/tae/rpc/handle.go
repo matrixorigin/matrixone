@@ -388,6 +388,20 @@ func (h *Handle) HandleFlushTable(
 	return nil, err
 }
 
+func (h *Handle) HandleForceGlobalCheckpoint(
+	ctx context.Context,
+	meta txn.TxnMeta,
+	req *db.Checkpoint,
+	resp *api.SyncLogTailResp) (cb func(), err error) {
+
+	timeout := req.FlushDuration
+
+	currTs := types.BuildTS(time.Now().UTC().UnixNano(), 0)
+
+	err = h.db.ForceGlobalCheckpoint(ctx, currTs, timeout)
+	return nil, err
+}
+
 func (h *Handle) HandleForceCheckpoint(
 	ctx context.Context,
 	meta txn.TxnMeta,

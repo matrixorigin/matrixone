@@ -35,19 +35,21 @@ func (f *txnFilters) isEmpty() bool {
 
 // filter return true means the txn need to be skipped.
 // Return true cases:
-// 1. any filter skipped
+// 1. all filter skipped
 // 2. filters is empty
 func (f *txnFilters) filter(op client.TxnOperator) bool {
 	if f.isEmpty() {
 		return true
 	}
 
-	for _, v := range f.filters {
-		if v.Filter(op) {
-			return true
+	skipped := true
+	for _, f := range f.filters {
+		if !f.Filter(op) {
+			skipped = false
+			break
 		}
 	}
-	return false
+	return skipped
 }
 
 type sessionIDFilter struct {
@@ -97,4 +99,11 @@ func (f *disableFilter) Filter(op client.TxnOperator) bool {
 	return op == nil ||
 		op.TxnOptions().TraceDisabled() ||
 		op.TxnOptions().UserName == ""
+}
+
+type allTxnFilter struct {
+}
+
+func (f *allTxnFilter) Filter(op client.TxnOperator) bool {
+	return false
 }
