@@ -80,6 +80,14 @@ create table trace_features (
   
   关闭：`select mo_ctl('cn', 'txn-trace', 'disable txn-action')`
 
+* txn-workspace
+
+  跟踪事务的生命周期中，workspace的所有数据变更。
+  
+  开启：`select mo_ctl('cn', 'txn-trace', 'enable txn-workspace')`
+  
+  关闭：`select mo_ctl('cn', 'txn-trace', 'disable txn-workspace')`
+
 * statement
  
   跟踪满足条件的statement的耗时。用于和txn-action特性配合，跟踪statement执行的每个阶段的开销，以便于性能调优。
