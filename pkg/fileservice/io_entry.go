@@ -38,8 +38,10 @@ func (i *IOEntry) setCachedData() error {
 func (i *IOEntry) ReadFromOSFile(file *os.File) error {
 	r := io.LimitReader(file, i.Size)
 
-	if len(i.Data) < int(i.Size) {
+	if cap(i.Data) < int(i.Size) {
 		i.Data = make([]byte, i.Size)
+	} else {
+		i.Data = i.Data[:i.Size]
 	}
 
 	n, err := io.ReadFull(r, i.Data)

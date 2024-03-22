@@ -464,14 +464,15 @@ func mergeStats(e, n *StatementInfo) error {
 	return nil
 }
 
+var noExecPlan = []byte(`{"code":200,"message":"NO ExecPlan Serialize function","steps":null}`)
+
 // ExecPlan2Json return ExecPlan Serialized json-str //
 // please used in s.mux.Lock()
 func (s *StatementInfo) ExecPlan2Json(ctx context.Context) []byte {
 	if s.jsonByte != nil {
 		goto endL
 	} else if s.ExecPlan == nil {
-		uuidStr := uuid.UUID(s.StatementID).String()
-		return []byte(fmt.Sprintf(`{"code":200,"message":"NO ExecPlan Serialize function","steps":null,"uuid":%q}`, uuidStr))
+		return noExecPlan
 	} else {
 		s.jsonByte = s.ExecPlan.Marshal(ctx)
 		//if queryTime := GetTracerProvider().longQueryTime; queryTime > int64(s.Duration) {
@@ -592,6 +593,8 @@ func EndStatement(ctx context.Context, err error, sentRows int64, outBytes int64
 		s.ResultCount = sentRows
 		s.AggrCount = 0
 		s.MarkResponseAt()
+		// duration is filled in s.MarkResponseAt()
+		addStatementDurationCounter(s.Account, s.QueryType, s.Duration)
 		if err != nil {
 			outBytes += ResponseErrPacketSize + int64(len(err.Error()))
 		}
@@ -614,6 +617,10 @@ func EndStatement(ctx context.Context, err error, sentRows int64, outBytes int64
 			s.Report(ctx)
 		}
 	}
+}
+
+func addStatementDurationCounter(tenant, querytype string, duration time.Duration) {
+	metric.StatementDuration(tenant, querytype).Add(float64(duration))
 }
 
 type StatementInfoStatus int
@@ -667,7 +674,7 @@ var ReportStatement = func(ctx context.Context, s *StatementInfo) error {
 
 	// Filter out part of the internal SQL statements
 	// Todo: review how to aggregate the internal SQL statements logging
-	if s.User == "internal" {
+	if s.User == "internal" && s.Account == "sys" {
 		if s.StatementType == "Commit" || s.StatementType == "Start Transaction" || s.StatementType == "Use" {
 			goto DiscardAndFreeL
 		}

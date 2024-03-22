@@ -12,7 +12,7 @@ Number of tables in mo_catalog
 27
 show table_number from system_metrics;
 Number of tables in system_metrics
-21
+22
 show table_number from system;
 Number of tables in system
 6
@@ -355,7 +355,7 @@ Number of tables in mo_catalog
 23
 show table_number from system_metrics;
 Number of tables in system_metrics
-8
+9
 show table_number from system;
 Number of tables in system
 1
