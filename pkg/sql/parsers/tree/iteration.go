@@ -21,31 +21,31 @@ func init() {
 		func() *RepeatStmt { return &RepeatStmt{} },
 		func(r *RepeatStmt) { r.reset() },
 		reuse.DefaultOptions[RepeatStmt](),
-		)
+	)
 
 	reuse.CreatePool[WhileStmt](
 		func() *WhileStmt { return &WhileStmt{} },
 		func(w *WhileStmt) { w.reset() },
 		reuse.DefaultOptions[WhileStmt](),
-		)
+	)
 
 	reuse.CreatePool[LoopStmt](
 		func() *LoopStmt { return &LoopStmt{} },
 		func(l *LoopStmt) { l.reset() },
 		reuse.DefaultOptions[LoopStmt](),
-		)
+	)
 
 	reuse.CreatePool[IterateStmt](
 		func() *IterateStmt { return &IterateStmt{} },
 		func(i *IterateStmt) { i.reset() },
 		reuse.DefaultOptions[IterateStmt](),
-		)
+	)
 
 	reuse.CreatePool[LeaveStmt](
 		func() *LeaveStmt { return &LeaveStmt{} },
 		func(l *LeaveStmt) { l.reset() },
 		reuse.DefaultOptions[LeaveStmt](),
-		)
+	)
 }
 
 type RepeatStmt struct {
@@ -98,9 +98,9 @@ func (node *RepeatStmt) Free() {
 
 func (node *RepeatStmt) GetStatementType() string { return "Repeat Statement" }
 
-func (node *RepeatStmt) GetQueryType() string     { return QueryTypeTCL }
+func (node *RepeatStmt) GetQueryType() string { return QueryTypeTCL }
 
-func (node RepeatStmt) TypeName() string { return "tree.RepeatStmt"}
+func (node RepeatStmt) TypeName() string { return "tree.RepeatStmt" }
 
 type WhileStmt struct {
 	statementImpl
@@ -153,10 +153,9 @@ func (node *WhileStmt) Free() {
 
 func (node *WhileStmt) GetStatementType() string { return "While Statement" }
 
-func (node *WhileStmt) GetQueryType() string     { return QueryTypeTCL }
+func (node *WhileStmt) GetQueryType() string { return QueryTypeTCL }
 
-func (node WhileStmt) TypeName() string { return "tree.WhileStmt"}
-
+func (node WhileStmt) TypeName() string { return "tree.WhileStmt" }
 
 type LoopStmt struct {
 	statementImpl
@@ -205,9 +204,9 @@ func (node *LoopStmt) Free() {
 
 func (node *LoopStmt) GetStatementType() string { return "Loop Statement" }
 
-func (node *LoopStmt) GetQueryType() string     { return QueryTypeTCL }
+func (node *LoopStmt) GetQueryType() string { return QueryTypeTCL }
 
-func (node LoopStmt) TypeName() string { return "tree.LoopStmt"}
+func (node LoopStmt) TypeName() string { return "tree.LoopStmt" }
 
 type IterateStmt struct {
 	statementImpl
@@ -235,9 +234,9 @@ func (node *IterateStmt) Free() {
 
 func (node *IterateStmt) GetStatementType() string { return "Iterate Statement" }
 
-func (node *IterateStmt) GetQueryType() string     { return QueryTypeTCL }
+func (node *IterateStmt) GetQueryType() string { return QueryTypeTCL }
 
-func (node IterateStmt) TypeName() string { return "tree.IterateStmt"}
+func (node IterateStmt) TypeName() string { return "tree.IterateStmt" }
 
 type LeaveStmt struct {
 	statementImpl
@@ -265,6 +264,6 @@ func (node *LeaveStmt) Free() {
 
 func (node *LeaveStmt) GetStatementType() string { return "Leave Statement" }
 
-func (node *LeaveStmt) GetQueryType() string     { return QueryTypeTCL }
+func (node *LeaveStmt) GetQueryType() string { return QueryTypeTCL }
 
-func (node LeaveStmt) TypeName() string { return "tree.LeaveStmt"}
+func (node LeaveStmt) TypeName() string { return "tree.LeaveStmt" }

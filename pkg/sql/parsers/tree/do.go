@@ -54,11 +54,11 @@ func (node *Do) GetQueryType() string { return QueryTypeOth }
 func (node Do) TypeName() string { return "tree.Do" }
 
 func (node *Do) reset() {
-	if node.Exprs != nil {
-		// for _, item := range node.Exprs {
-		// switch item.(type) {
-		// case *IntVal:
-		// }
-	}
+	// if node.Exprs != nil {
+	// for _, item := range node.Exprs {
+	// switch item.(type) {
+	// case *IntVal:
+	// }
+	// }
 	*node = Do{}
 }

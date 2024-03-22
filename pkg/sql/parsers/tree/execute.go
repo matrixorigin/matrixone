@@ -68,11 +68,11 @@ func NewExecuteWithVariables(name Identifier, variables []*VarExpr) *Execute {
 }
 
 func (node *Execute) reset() {
-	if node.Variables != nil {
-		// for _, item := range node.Variables {
-		// switch item.(type) {
-		// case *IntVal:
-		// }
-	}
+	// if node.Variables != nil {
+	// for _, item := range node.Variables {
+	// switch item.(type) {
+	// case *IntVal:
+	// }
+	// }
 	*node = Execute{}
 }

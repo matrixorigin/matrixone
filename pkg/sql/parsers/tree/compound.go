@@ -47,7 +47,7 @@ func (node *CompoundStmt) Format(ctx *FmtCtx) {
 
 func (node *CompoundStmt) GetStatementType() string { return "compound" }
 
-func (node *CompoundStmt) GetQueryType() string     { return QueryTypeTCL }
+func (node *CompoundStmt) GetQueryType() string { return QueryTypeTCL }
 
 func (node *BeginCompound) Format(ctx *FmtCtx) {
 	ctx.WriteString("begin")
@@ -55,7 +55,7 @@ func (node *BeginCompound) Format(ctx *FmtCtx) {
 
 func (node *BeginCompound) GetStatementType() string { return "begin" }
 
-func (node *BeginCompound) GetQueryType() string     { return QueryTypeTCL }
+func (node *BeginCompound) GetQueryType() string { return QueryTypeTCL }
 
 func (node *EndCompound) Format(ctx *FmtCtx) {
 	ctx.WriteString("end")
@@ -63,4 +63,4 @@ func (node *EndCompound) Format(ctx *FmtCtx) {
 
 func (node *EndCompound) GetStatementType() string { return "end" }
 
-func (node *EndCompound) GetQueryType() string     { return QueryTypeTCL }
+func (node *EndCompound) GetQueryType() string { return QueryTypeTCL }

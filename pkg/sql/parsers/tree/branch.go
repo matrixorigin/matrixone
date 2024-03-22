@@ -61,9 +61,9 @@ func (node *ElseIfStmt) reset() {
 			item.Free()
 		}
 	}
-	if node.Cond != nil {
-		// node.Cond.Free()
-	}
+	// if node.Cond != nil {
+	// node.Cond.Free()
+	// }
 	*node = ElseIfStmt{}
 }
 

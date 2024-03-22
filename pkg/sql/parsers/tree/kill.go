@@ -68,9 +68,9 @@ func NewKillOption() *KillOption {
 	return ko
 }
 
-func (ko KillOption) Format(ctx *FmtCtx) {
-	if ko.Exist {
-		ctx.WriteString(ko.Typ.String())
+func (node KillOption) Format(ctx *FmtCtx) {
+	if node.Exist {
+		ctx.WriteString(node.Typ.String())
 	}
 }
 
@@ -98,9 +98,9 @@ func (node *StatementOption) reset() {
 	*node = StatementOption{}
 }
 
-func (so StatementOption) Format(ctx *FmtCtx) {
-	if so.Exist {
-		ctx.WriteString(so.StatementId)
+func (node StatementOption) Format(ctx *FmtCtx) {
+	if node.Exist {
+		ctx.WriteString(node.StatementId)
 	}
 }
 
@@ -125,18 +125,18 @@ func NewKill(o KillOption, id uint64, so StatementOption) *Kill {
 	return k
 }
 
-func (k *Kill) Format(ctx *FmtCtx) {
+func (node *Kill) Format(ctx *FmtCtx) {
 	ctx.WriteString("kill")
-	if k.Option.Exist {
+	if node.Option.Exist {
 		ctx.WriteByte(' ')
-		k.Option.Format(ctx)
+		node.Option.Format(ctx)
 	}
 	ctx.WriteByte(' ')
-	ctx.WriteString(fmt.Sprintf("%d", k.ConnectionId))
-	if k.StmtOption.Exist {
+	ctx.WriteString(fmt.Sprintf("%d", node.ConnectionId))
+	if node.StmtOption.Exist {
 		ctx.WriteByte(' ')
 		ctx.WriteByte('"')
-		ctx.WriteString(k.StmtOption.StatementId)
+		ctx.WriteString(node.StmtOption.StatementId)
 		ctx.WriteByte('"')
 	}
 }
@@ -151,8 +151,8 @@ func (node *Kill) Free() {
 	reuse.Free[Kill](node, nil)
 }
 
-func (k *Kill) GetStatementType() string { return "kill" }
+func (node *Kill) GetStatementType() string { return "kill" }
 
-func (k *Kill) GetQueryType() string { return QueryTypeOth }
+func (node *Kill) GetQueryType() string { return QueryTypeOth }
 
 func (node Kill) TypeName() string { return "tree.Kill" }

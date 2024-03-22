@@ -26,31 +26,31 @@ func init() {
 		func() *Revoke { return &Revoke{} },
 		func(r *Revoke) { r.reset() },
 		reuse.DefaultOptions[Revoke](),
-		)
+	)
 
 	reuse.CreatePool[RevokePrivilege](
 		func() *RevokePrivilege { return &RevokePrivilege{} },
 		func(r *RevokePrivilege) { r.reset() },
 		reuse.DefaultOptions[RevokePrivilege](),
-		)
+	)
 
 	reuse.CreatePool[RevokeRole](
 		func() *RevokeRole { return &RevokeRole{} },
 		func(r *RevokeRole) { r.reset() },
 		reuse.DefaultOptions[RevokeRole](),
-		)
+	)
 
 	reuse.CreatePool[PrivilegeLevel](
 		func() *PrivilegeLevel { return &PrivilegeLevel{} },
 		func(p *PrivilegeLevel) { p.reset() },
 		reuse.DefaultOptions[PrivilegeLevel](),
-		)
+	)
 
 	reuse.CreatePool[Privilege](
 		func() *Privilege { return &Privilege{} },
 		func(p *Privilege) { p.reset() },
 		reuse.DefaultOptions[Privilege](),
-		)
+	)
 }
 
 type RevokeType int
@@ -86,9 +86,9 @@ func (node *Revoke) Free() {
 
 func (node *Revoke) GetStatementType() string { return "Revoke" }
 
-func (node *Revoke) GetQueryType() string     { return QueryTypeDCL }
+func (node *Revoke) GetQueryType() string { return QueryTypeDCL }
 
-func (node Revoke) TypeName() string { return "tree.Revoke"}
+func (node Revoke) TypeName() string { return "tree.Revoke" }
 
 type RevokePrivilege struct {
 	statementImpl
@@ -167,9 +167,9 @@ func (node *RevokePrivilege) Format(ctx *FmtCtx) {
 
 func (node *RevokePrivilege) GetStatementType() string { return "Revoke Privilege" }
 
-func (node *RevokePrivilege) GetQueryType() string     { return QueryTypeDCL }
+func (node *RevokePrivilege) GetQueryType() string { return QueryTypeDCL }
 
-func (node RevokePrivilege) TypeName() string { return "tree.RevokePrivilege"}
+func (node RevokePrivilege) TypeName() string { return "tree.RevokePrivilege" }
 
 func NewRevoke(t RevokeType) *Revoke {
 	r := reuse.Alloc[Revoke](nil)
@@ -230,16 +230,15 @@ func (node *RevokeRole) reset() {
 	*node = RevokeRole{}
 }
 
-
 func (node *RevokeRole) Free() {
 	reuse.Free[RevokeRole](node, nil)
 }
 
 func (node *RevokeRole) GetStatementType() string { return "Revoke Role" }
 
-func (node *RevokeRole) GetQueryType() string     { return QueryTypeDCL }
+func (node *RevokeRole) GetQueryType() string { return QueryTypeDCL }
 
-func (node RevokeRole) TypeName() string { return "tree.RevokeRole"}
+func (node RevokeRole) TypeName() string { return "tree.RevokeRole" }
 
 type PrivilegeLevel struct {
 	NodeFormatter
@@ -284,7 +283,7 @@ func NewPrivilegeLevel(l PrivilegeLevelType) *PrivilegeLevel {
 	return p
 }
 
-func (node PrivilegeLevel) TypeName() string { return "tree.PrivilegeLevel"}
+func (node PrivilegeLevel) TypeName() string { return "tree.PrivilegeLevel" }
 
 type PrivilegeLevelType int
 
@@ -340,7 +339,7 @@ func (node *Privilege) Free() {
 	reuse.Free[Privilege](node, nil)
 }
 
-func (node Privilege) TypeName() string { return "tree.Privilege"}
+func (node Privilege) TypeName() string { return "tree.Privilege" }
 
 type ObjectType int
 
