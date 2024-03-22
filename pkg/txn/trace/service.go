@@ -220,6 +220,22 @@ func (s *service) Enabled(feature string) bool {
 	return false
 }
 
+func (s *service) Sync() {
+	if !s.Enabled(FeatureTraceTxn) &&
+		!s.Enabled(FeatureTraceData) &&
+		!s.Enabled(FeatureTraceTxnAction) &&
+		!s.Enabled(FeatureTraceStatement) &&
+		!s.Enabled(FeatureTraceTxnWorkspace) {
+		return
+	}
+
+	if s.atomic.closed.Load() {
+		return
+	}
+
+	time.Sleep(s.options.flushDuration * 2)
+}
+
 func (s *service) DecodeHexComplexPK(hexPK string) (string, error) {
 	v, err := hex.DecodeString(hexPK)
 	if err != nil {

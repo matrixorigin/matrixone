@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"go.uber.org/zap"
 )
@@ -183,6 +184,7 @@ func (s *sqlStore) Allocate(
 					if err != nil {
 						return err
 					}
+					trace.GetService().Sync()
 					getLogger().Fatal("BUG: read incr record invalid",
 						zap.String("fetch-sql", fetchSQL),
 						zap.Any("account", accountId),
@@ -219,6 +221,7 @@ func (s *sqlStore) Allocate(
 					if err != nil {
 						return err
 					}
+					trace.GetService().Sync()
 					getLogger().Fatal("BUG: update incr record returns invalid affected rows",
 						zap.String("update-sql", sql),
 						zap.Any("account", accountId),
