@@ -112,8 +112,8 @@ c int,
 primary key(a)
 );
 show indexes from t;
-Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
-t    0    PRIMARY    1    a    A    0    NULL    NULL                    YES    NULL
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
+t    0    PRIMARY    1    a    A    0    NULL    NULL                        YES    NULL
 create account acc_idx ADMIN_NAME 'root' IDENTIFIED BY '123456';
 create database db1;
 use db1;
@@ -125,29 +125,35 @@ c int,
 primary key(a)
 );
 show indexes from t;
-Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
-t    0    PRIMARY    1    a    A    0    NULL    NULL                    YES    NULL
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
+t    0    PRIMARY    1    a    A    0    NULL    NULL                        YES    NULL
 drop database db1;
 drop account acc_idx;
 use information_schema;
 show tables;
 Tables_in_information_schema
-key_column_usage
-columns
-profiling
-processlist
-user_privileges
-schemata
 character_sets
-triggers
-tables
-partitions
-views
-statistics
+collations
+column_privileges
+columns
 engines
-routines
-parameters
+events
+key_column_usage
 keywords
+parameters
+partitions
+processlist
+profiling
+routines
+schema_privileges
+schemata
+statistics
+table_constraints
+table_privileges
+tables
+triggers
+user_privileges
+views
 desc key_column_usage;
 Field    Type    Null    Key    Default    Extra    Comment
 constraint_catalog    VARCHAR(64)    YES        null        
@@ -246,10 +252,10 @@ grantee    table_catalog
 desc schemata;
 Field    Type    Null    Key    Default    Extra    Comment
 catalog_name    VARCHAR(5000)    YES        null        
-schema_name    VARCHAR(5000)    YES        null
+schema_name    VARCHAR(5000)    YES        null        
 default_character_set_name    VARCHAR(7)    NO        null        
 default_collation_name    VARCHAR(18)    NO        null        
-sql_path    CHAR(0)    YES        null
+sql_path    CHAR(0)    YES        null        
 default_encryption    VARCHAR(3)    NO        null        
 select catalog_name, schema_name from schemata where schema_name = 'mo_catalog' or schema_name = 'mo_task' order by catalog_name, schema_name;
 catalog_name    schema_name
