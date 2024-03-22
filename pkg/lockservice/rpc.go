@@ -148,12 +148,10 @@ func (c *client) AsyncSend(ctx context.Context, request *pb.Request) (*morpc.Fut
 					return false
 				})
 		default:
-			c.cluster.GetTNService(
-				clusterservice.NewSelector(),
-				func(d metadata.TNService) bool {
-					address = d.LockServiceAddress
-					return false
-				})
+			values := c.cluster.GetAllTNServices()
+			if len(values) > 0 {
+				address = values[0].LockServiceAddress
+			}
 		}
 		if address != "" {
 			break

@@ -259,10 +259,11 @@ var upg_mo_debug_featuresTables = versions.UpgradeEntry{
 		return versions.CheckTableDefinition(txn, accountId, trace.DebugDB, trace.FeaturesTables)
 	},
 	PostSql: fmt.Sprintf(`insert into %s.%s (name, state) values 
-			('%s', '%s'), ('%s', '%s'), ('%s', '%s'), ('%s', '%s')`,
+			('%s', '%s'), ('%s', '%s'), ('%s', '%s'), ('%s', '%s'), ('%s', '%s')`,
 		trace.DebugDB, trace.FeaturesTables,
 		trace.FeatureTraceTxn, trace.StateDisable,
 		trace.FeatureTraceTxnAction, trace.StateDisable,
 		trace.FeatureTraceData, trace.StateDisable,
-		trace.FeatureTraceStatement, trace.StateDisable),
+		trace.FeatureTraceStatement, trace.StateDisable,
+		trace.FeatureTraceTxnWorkspace, trace.StateDisable),
 }

@@ -18,14 +18,15 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
+	"io"
+	"sync"
+	"time"
+
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/profile"
 	"go.uber.org/zap"
-	"io"
-	"sync"
-	"time"
 
 	"github.com/fagongzi/goetty/v2"
 	"github.com/matrixorigin/matrixone/pkg/bootstrap"
@@ -845,6 +846,7 @@ func (s *service) initTxnTraceService() {
 		s._txnClient,
 		rt.Clock(),
 		s.sqlExecutor,
+		trace.WithEnable(s.cfg.Txn.Trace.Enable, s.cfg.Txn.Trace.Tables),
 		trace.WithBufferSize(s.cfg.Txn.Trace.BufferSize),
 		trace.WithFlushBytes(int(s.cfg.Txn.Trace.FlushBytes)),
 		trace.WithFlushDuration(s.cfg.Txn.Trace.FlushDuration.Duration))

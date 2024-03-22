@@ -185,7 +185,7 @@ func (s *sqlExecutor) adjustOptions(
 				"",
 				"sql-executor",
 				0),
-			client.WithDisableTrace(true))
+			client.WithDisableTrace(!opts.EnableTrace()))
 		txnOp, err := s.txnClient.New(
 			ctx,
 			opts.MinCommittedTS(),
@@ -385,6 +385,10 @@ func (exec *txnExecutor) LockTable(table string) error {
 		proc.FreeVectors()
 	}()
 	return doLockTable(exec.s.eng, proc, rel, false)
+}
+
+func (exec *txnExecutor) Txn() client.TxnOperator {
+	return exec.opts.Txn()
 }
 
 func (exec *txnExecutor) commit() error {
