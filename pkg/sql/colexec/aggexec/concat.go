@@ -167,7 +167,7 @@ func (exec *groupConcatExec) Free() {
 	exec.ret.free()
 }
 
-var GroupConcatUnsupportedTypes = []types.T {
+var GroupConcatUnsupportedTypes = []types.T{
 	types.T_tuple,
 }
 
@@ -180,37 +180,37 @@ func IsGroupConcatSupported(t types.Type) bool {
 	return true
 }
 
-var oidToConcatFunc = map[types.T]func(*vector.Vector, int, []byte) ([]byte, error) {
-	types.T_bit:	concatFixed[uint64],
-	types.T_bool:   concatFixed[bool],
-	types.T_int8:   concatFixed[int8],
-	types.T_int16:  concatFixed[int16],
-	types.T_int32:  concatFixed[int32],
-	types.T_int64:  concatFixed[int64],
-	types.T_uint8:  concatFixed[uint8],
-	types.T_uint16: concatFixed[uint16],
-	types.T_uint32: concatFixed[uint32],
-	types.T_uint64: concatFixed[uint64],
-	types.T_float32: concatFixed[float32],
-	types.T_float64: concatFixed[float64],
-	types.T_decimal64: concatDecimal64,
-	types.T_decimal128: concatDecimal128,
-	types.T_date:    concatTime[types.Date],
-	types.T_datetime: concatTime[types.Datetime],
-	types.T_timestamp: concatTime[types.Timestamp],
-	types.T_time:    concatTime[types.Time],
-	types.T_varchar: concatVar,
-	types.T_char:    concatVar,
-	types.T_blob:    concatVar,
-	types.T_text:    concatVar,
-	types.T_varbinary: concatVar,
-	types.T_binary:  concatVar,
-	types.T_json:   concatVar,
-	types.T_enum:  concatVar,
-	types.T_interval: concatFixed[types.IntervalType],
-	types.T_TS:    concatFixed[types.TS],
-	types.T_Rowid: concatFixed[types.Rowid],
-	types.T_Blockid: concatFixed[types.Blockid],
+var oidToConcatFunc = map[types.T]func(*vector.Vector, int, []byte) ([]byte, error){
+	types.T_bit:           concatFixed[uint64],
+	types.T_bool:          concatFixed[bool],
+	types.T_int8:          concatFixed[int8],
+	types.T_int16:         concatFixed[int16],
+	types.T_int32:         concatFixed[int32],
+	types.T_int64:         concatFixed[int64],
+	types.T_uint8:         concatFixed[uint8],
+	types.T_uint16:        concatFixed[uint16],
+	types.T_uint32:        concatFixed[uint32],
+	types.T_uint64:        concatFixed[uint64],
+	types.T_float32:       concatFixed[float32],
+	types.T_float64:       concatFixed[float64],
+	types.T_decimal64:     concatDecimal64,
+	types.T_decimal128:    concatDecimal128,
+	types.T_date:          concatTime[types.Date],
+	types.T_datetime:      concatTime[types.Datetime],
+	types.T_timestamp:     concatTime[types.Timestamp],
+	types.T_time:          concatTime[types.Time],
+	types.T_varchar:       concatVar,
+	types.T_char:          concatVar,
+	types.T_blob:          concatVar,
+	types.T_text:          concatVar,
+	types.T_varbinary:     concatVar,
+	types.T_binary:        concatVar,
+	types.T_json:          concatVar,
+	types.T_enum:          concatVar,
+	types.T_interval:      concatFixed[types.IntervalType],
+	types.T_TS:            concatFixed[types.TS],
+	types.T_Rowid:         concatFixed[types.Rowid],
+	types.T_Blockid:       concatFixed[types.Blockid],
 	types.T_array_float32: concatVar,
 	types.T_array_float64: concatVar,
 }

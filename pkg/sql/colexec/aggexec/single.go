@@ -17,7 +17,6 @@ package aggexec
 import (
 	"fmt"
 
-	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
@@ -82,12 +81,11 @@ type singleAggFuncExec1[from, to types.FixedSizeTExceptStrType] struct {
 	singleAggInfo
 	singleAggOptimizedInfo
 	singleAggExecExtraInformation
+	distinctHash
 
 	arg    sFixedArg[from]
 	ret    aggFuncResult[to]
 	groups []SingleAggFromFixedRetFixed[from, to]
-
-	hashmaps []*hashmap.StrHashMap
 
 	// method to new the private structure for group growing.
 	gGroup func() SingleAggFromFixedRetFixed[from, to]
@@ -96,6 +94,7 @@ type singleAggFuncExec2[from types.FixedSizeTExceptStrType] struct {
 	singleAggInfo
 	singleAggOptimizedInfo
 	singleAggExecExtraInformation
+	distinctHash
 
 	arg    sFixedArg[from]
 	ret    aggFuncBytesResult
@@ -108,6 +107,7 @@ type singleAggFuncExec3[to types.FixedSizeTExceptStrType] struct {
 	singleAggInfo
 	singleAggOptimizedInfo
 	singleAggExecExtraInformation
+	distinctHash
 
 	arg    sBytesArg
 	ret    aggFuncResult[to]
@@ -120,6 +120,7 @@ type singleAggFuncExec4 struct {
 	singleAggInfo
 	singleAggOptimizedInfo
 	singleAggExecExtraInformation
+	distinctHash
 
 	arg    sBytesArg
 	ret    aggFuncBytesResult
@@ -141,16 +142,16 @@ func (exec *singleAggFuncExec1[from, to]) init(
 	exec.ret = initFixedAggFuncResult[to](mg, info.retType, info.emptyNull)
 	exec.groups = make([]SingleAggFromFixedRetFixed[from, to], 0, 1)
 	exec.gGroup = nm
+
+	if info.distinct {
+		exec.distinctHash = newDistinctHash(mg.Mp(), opt.receiveNull)
+	}
 }
 
 func (exec *singleAggFuncExec1[from, to]) GroupGrow(more int) error {
 	if exec.IsDistinct() {
-		for i := 0; i < more; i++ {
-			strMap, err := hashmap.NewStrMap(true, 0, 0, exec.ret.mp)
-			if err != nil {
-				return err
-			}
-			exec.hashmaps = append(exec.hashmaps, strMap)
+		if err := exec.distinctHash.grows(more); err != nil {
+			return err
 		}
 	}
 
@@ -175,6 +176,12 @@ func (exec *singleAggFuncExec1[from, to]) Fill(groupIndex int, row int, vectors 
 		row = 0
 	}
 
+	if exec.IsDistinct() {
+		if need, err := exec.distinctHash.fill(groupIndex, vectors, row); !need || err != nil {
+			return err
+		}
+	}
+
 	exec.ret.groupToSet = groupIndex
 	getter := exec.ret.aggGet
 	setter := exec.ret.aggSet
@@ -193,12 +200,16 @@ func (exec *singleAggFuncExec1[from, to]) Fill(groupIndex int, row int, vectors 
 }
 
 func (exec *singleAggFuncExec1[from, to]) BulkFill(groupIndex int, vectors []*vector.Vector) error {
-	vec := vectors[0]
-	length := vec.Length()
+	length := vectors[0].Length()
 	if length == 0 {
 		return nil
 	}
 
+	if exec.IsDistinct() {
+		return exec.distinctBulkFill(groupIndex, vectors, length)
+	}
+
+	vec := vectors[0]
 	exec.ret.groupToSet = groupIndex
 	getter := exec.ret.aggGet
 	setter := exec.ret.aggSet
@@ -254,6 +265,10 @@ func (exec *singleAggFuncExec1[from, to]) BulkFill(groupIndex int, vectors []*ve
 }
 
 func (exec *singleAggFuncExec1[from, to]) BatchFill(offset int, groups []uint64, vectors []*vector.Vector) error {
+	if exec.IsDistinct() {
+		return exec.distinctBatchFill(offset, groups, vectors)
+	}
+
 	vec := vectors[0]
 	setter := exec.ret.aggSet
 	getter := exec.ret.aggGet
@@ -333,140 +348,6 @@ func (exec *singleAggFuncExec1[from, to]) BatchFill(offset int, groups []uint64,
 	return nil
 }
 
-func (exec *singleAggFuncExec1[from, to]) DistinctFill(groupIndex int, row int, vectors []*vector.Vector) error {
-
-	vec := vectors[0]
-	if vec.IsConst() {
-		row = 0
-	}
-
-	isNew, err := exec.hashmaps[groupIndex].Insert(vectors, row)
-	if err != nil {
-		return err
-	}
-	if !isNew {
-		return nil
-	}
-
-	exec.ret.groupToSet = groupIndex
-	getter := exec.ret.aggGet
-	setter := exec.ret.aggSet
-
-	if vec.IsConstNull() || vec.GetNulls().Contains(uint64(row)) {
-		if exec.receiveNull {
-			exec.groups[groupIndex].FillNull(getter, setter)
-		}
-		return nil
-	}
-
-	exec.groups[groupIndex].Fill(vector.MustFixedCol[from](vec)[row], getter, setter)
-	return nil
-}
-
-func (exec *singleAggFuncExec1[from, to]) DistinctBulkFill(groupIndex int, vectors []*vector.Vector) error {
-	for i := range vectors {
-		if err := exec.DistinctFill(groupIndex, i, vectors); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (exec *singleAggFuncExec1[from, to]) DistinctBatchFill(offset int, groups []uint64, vectors []*vector.Vector) error {
-	if !exec.IsDistinct() {
-		return nil
-	}
-
-	vec := vectors[0]
-	setter := exec.ret.aggSet
-	getter := exec.ret.aggGet
-
-	shouldBeFilled := make([]bool, len(groups))
-
-	for vecIdx, idx := uint64(offset), 0; vecIdx < uint64(offset+len(groups)); vecIdx++ {
-		if groups[vecIdx] != GroupNotMatched {
-			groupIdx := int(groups[idx] - 1)
-			isNew, err := exec.hashmaps[groupIdx].Insert(vectors, int(vecIdx))
-			if err != nil {
-				return err
-			}
-			if isNew {
-				shouldBeFilled[idx] = true
-			}
-		}
-		idx++
-	}
-
-	if vec.IsConst() {
-		if vec.IsConstNull() {
-			if exec.receiveNull {
-				for i := 0; i < len(groups); i++ {
-					if shouldBeFilled[i] {
-						groupIdx := int(groups[i] - 1)
-						exec.ret.groupToSet = groupIdx
-						exec.groups[groupIdx].FillNull(getter, setter)
-					}
-				}
-			}
-			return nil
-		}
-
-		value := vector.MustFixedCol[from](vec)[0]
-		for i := 0; i < len(groups); i++ {
-			if shouldBeFilled[i] {
-				groupIdx := int(groups[i] - 1)
-				exec.ret.groupToSet = groupIdx
-				exec.groups[groupIdx].Fill(value, getter, setter)
-			}
-		}
-		return nil
-	}
-
-	exec.arg.prepare(vec)
-	if exec.arg.w.WithAnyNullValue() {
-		if exec.receiveNull {
-			for i, j, idx := uint64(offset), uint64(offset+len(groups)), 0; i < j; i++ {
-				if shouldBeFilled[idx] {
-					v, null := exec.arg.w.GetValue(i)
-					groupIdx := int(groups[idx] - 1)
-					exec.ret.groupToSet = groupIdx
-					if null {
-						exec.groups[groupIdx].FillNull(getter, setter)
-					} else {
-						exec.groups[groupIdx].Fill(v, getter, setter)
-					}
-				}
-				idx++
-			}
-			return nil
-		}
-
-		for i, j, idx := uint64(offset), uint64(offset+len(groups)), 0; i < j; i++ {
-			if shouldBeFilled[idx] {
-				v, null := exec.arg.w.GetValue(i)
-				if !null {
-					groupIdx := int(groups[idx] - 1)
-					exec.ret.groupToSet = groupIdx
-					exec.groups[groupIdx].Fill(v, getter, setter)
-				}
-			}
-			idx++
-		}
-		return nil
-	}
-
-	for i, j, idx := uint64(offset), uint64(offset+len(groups)), 0; i < j; i++ {
-		if shouldBeFilled[idx] {
-			v, _ := exec.arg.w.GetValue(i)
-			groupIdx := int(groups[idx] - 1)
-			exec.ret.groupToSet = groupIdx
-			exec.groups[groupIdx].Fill(v, getter, setter)
-		}
-		idx++
-	}
-	return nil
-}
-
 func (exec *singleAggFuncExec1[from, to]) Merge(next AggFuncExec, groupIdx1, groupIdx2 int) error {
 	other := next.(*singleAggFuncExec1[from, to])
 	exec.ret.groupToSet = groupIdx1
@@ -477,7 +358,7 @@ func (exec *singleAggFuncExec1[from, to]) Merge(next AggFuncExec, groupIdx1, gro
 		other.groups[groupIdx2],
 		exec.ret.aggGet, other.ret.aggGet,
 		exec.ret.aggSet)
-	return nil
+	return exec.distinctHash.merge(&other.distinctHash)
 }
 
 func (exec *singleAggFuncExec1[from, to]) BatchMerge(next AggFuncExec, offset int, groups []uint64) error {
@@ -499,7 +380,7 @@ func (exec *singleAggFuncExec1[from, to]) BatchMerge(next AggFuncExec, offset in
 			getter1, getter2,
 			setter)
 	}
-	return nil
+	return exec.distinctHash.merge(&other.distinctHash)
 }
 
 func (exec *singleAggFuncExec1[from, to]) Flush() (*vector.Vector, error) {
@@ -534,6 +415,7 @@ func (exec *singleAggFuncExec1[from, to]) Flush() (*vector.Vector, error) {
 
 func (exec *singleAggFuncExec1[from, to]) Free() {
 	exec.ret.free()
+	exec.distinctHash.free()
 }
 
 func (exec *singleAggFuncExec2[from]) init(
@@ -548,9 +430,19 @@ func (exec *singleAggFuncExec2[from]) init(
 	exec.ret = initBytesAggFuncResult(mg, info.retType, info.emptyNull)
 	exec.groups = make([]SingleAggFromFixedRetVar[from], 0, 1)
 	exec.gGroup = nm
+
+	if info.distinct {
+		exec.distinctHash = newDistinctHash(mg.Mp(), opt.receiveNull)
+	}
 }
 
 func (exec *singleAggFuncExec2[from]) GroupGrow(more int) error {
+	if exec.IsDistinct() {
+		if err := exec.distinctHash.grows(more); err != nil {
+			return err
+		}
+	}
+
 	if err := exec.ret.grows(more); err != nil {
 		return err
 	}
@@ -570,6 +462,12 @@ func (exec *singleAggFuncExec2[from]) Fill(groupIndex int, row int, vectors []*v
 	vec := vectors[0]
 	if vec.IsConst() {
 		row = 0
+	}
+
+	if exec.IsDistinct() {
+		if need, err := exec.distinctHash.fill(groupIndex, vectors, row); !need || err != nil {
+			return err
+		}
 	}
 
 	exec.ret.groupToSet = groupIndex
@@ -594,6 +492,10 @@ func (exec *singleAggFuncExec2[from]) BulkFill(groupIndex int, vectors []*vector
 	length := vec.Length()
 	if length == 0 {
 		return nil
+	}
+
+	if exec.IsDistinct() {
+		return exec.distinctBulkFill(groupIndex, vectors, length)
 	}
 
 	exec.ret.groupToSet = groupIndex
@@ -651,6 +553,10 @@ func (exec *singleAggFuncExec2[from]) BulkFill(groupIndex int, vectors []*vector
 }
 
 func (exec *singleAggFuncExec2[from]) BatchFill(offset int, groups []uint64, vectors []*vector.Vector) error {
+	if exec.IsDistinct() {
+		return exec.distinctBatchFill(offset, groups, vectors)
+	}
+
 	vec := vectors[0]
 	setter := exec.ret.aggSet
 	getter := exec.ret.aggGet
@@ -740,7 +646,7 @@ func (exec *singleAggFuncExec2[from]) Merge(next AggFuncExec, groupIdx1, groupId
 		other.groups[groupIdx2],
 		exec.ret.aggGet, other.ret.aggGet,
 		exec.ret.aggSet)
-	return nil
+	return exec.distinctHash.merge(&other.distinctHash)
 }
 
 func (exec *singleAggFuncExec2[from]) BatchMerge(next AggFuncExec, offset int, groups []uint64) error {
@@ -762,7 +668,7 @@ func (exec *singleAggFuncExec2[from]) BatchMerge(next AggFuncExec, offset int, g
 			getter1, getter2,
 			setter)
 	}
-	return nil
+	return exec.distinctHash.merge(&other.distinctHash)
 }
 
 func (exec *singleAggFuncExec2[from]) Flush() (*vector.Vector, error) {
@@ -795,6 +701,7 @@ func (exec *singleAggFuncExec2[from]) Flush() (*vector.Vector, error) {
 
 func (exec *singleAggFuncExec2[from]) Free() {
 	exec.ret.free()
+	exec.distinctHash.free()
 }
 
 func (exec *singleAggFuncExec3[to]) init(
@@ -809,9 +716,19 @@ func (exec *singleAggFuncExec3[to]) init(
 	exec.ret = initFixedAggFuncResult[to](mg, info.retType, info.emptyNull)
 	exec.groups = make([]SingleAggFromVarRetFixed[to], 0, 1)
 	exec.gGroup = nm
+
+	if info.distinct {
+		exec.distinctHash = newDistinctHash(mg.Mp(), opt.receiveNull)
+	}
 }
 
 func (exec *singleAggFuncExec3[to]) GroupGrow(more int) error {
+	if exec.IsDistinct() {
+		if err := exec.distinctHash.grows(more); err != nil {
+			return err
+		}
+	}
+
 	if err := exec.ret.grows(more); err != nil {
 		return err
 	}
@@ -831,6 +748,12 @@ func (exec *singleAggFuncExec3[to]) Fill(groupIndex int, row int, vectors []*vec
 	vec := vectors[0]
 	if vec.IsConst() {
 		row = 0
+	}
+
+	if exec.IsDistinct() {
+		if need, err := exec.distinctHash.fill(groupIndex, vectors, row); !need || err != nil {
+			return err
+		}
 	}
 
 	exec.ret.groupToSet = groupIndex
@@ -855,6 +778,10 @@ func (exec *singleAggFuncExec3[to]) BulkFill(groupIndex int, vectors []*vector.V
 	length := vec.Length()
 	if length == 0 {
 		return nil
+	}
+
+	if exec.IsDistinct() {
+		return exec.distinctBulkFill(groupIndex, vectors, length)
 	}
 
 	exec.ret.groupToSet = groupIndex
@@ -911,6 +838,10 @@ func (exec *singleAggFuncExec3[to]) BulkFill(groupIndex int, vectors []*vector.V
 }
 
 func (exec *singleAggFuncExec3[to]) BatchFill(offset int, groups []uint64, vectors []*vector.Vector) error {
+	if exec.IsDistinct() {
+		return exec.distinctBatchFill(offset, groups, vectors)
+	}
+
 	vec := vectors[0]
 	setter := exec.ret.aggSet
 	getter := exec.ret.aggGet
@@ -1000,7 +931,7 @@ func (exec *singleAggFuncExec3[to]) Merge(next AggFuncExec, groupIdx1, groupIdx2
 		other.groups[groupIdx2],
 		exec.ret.aggGet, other.ret.aggGet,
 		exec.ret.aggSet)
-	return nil
+	return exec.distinctHash.merge(&other.distinctHash)
 }
 
 func (exec *singleAggFuncExec3[to]) BatchMerge(next AggFuncExec, offset int, groups []uint64) error {
@@ -1022,7 +953,7 @@ func (exec *singleAggFuncExec3[to]) BatchMerge(next AggFuncExec, offset int, gro
 			getter1, getter2,
 			setter)
 	}
-	return nil
+	return exec.distinctHash.merge(&other.distinctHash)
 }
 
 func (exec *singleAggFuncExec3[to]) Flush() (*vector.Vector, error) {
@@ -1056,6 +987,7 @@ func (exec *singleAggFuncExec3[to]) Flush() (*vector.Vector, error) {
 
 func (exec *singleAggFuncExec3[to]) Free() {
 	exec.ret.free()
+	exec.distinctHash.free()
 }
 
 func (exec *singleAggFuncExec4) init(
@@ -1070,9 +1002,19 @@ func (exec *singleAggFuncExec4) init(
 	exec.ret = initBytesAggFuncResult(mg, info.retType, info.emptyNull)
 	exec.groups = make([]SingleAggFromVarRetVar, 0, 1)
 	exec.gGroup = nm
+
+	if info.distinct {
+		exec.distinctHash = newDistinctHash(mg.Mp(), opt.receiveNull)
+	}
 }
 
 func (exec *singleAggFuncExec4) GroupGrow(more int) error {
+	if exec.IsDistinct() {
+		if err := exec.distinctHash.grows(more); err != nil {
+			return err
+		}
+	}
+
 	if err := exec.ret.grows(more); err != nil {
 		return err
 	}
@@ -1092,6 +1034,12 @@ func (exec *singleAggFuncExec4) Fill(groupIndex int, row int, vectors []*vector.
 	vec := vectors[0]
 	if vec.IsConst() {
 		row = 0
+	}
+
+	if exec.IsDistinct() {
+		if need, err := exec.distinctHash.fill(groupIndex, vectors, row); !need || err != nil {
+			return err
+		}
 	}
 
 	exec.ret.groupToSet = groupIndex
@@ -1116,6 +1064,10 @@ func (exec *singleAggFuncExec4) BulkFill(groupIndex int, vectors []*vector.Vecto
 	length := vec.Length()
 	if length == 0 {
 		return nil
+	}
+
+	if exec.IsDistinct() {
+		return exec.distinctBulkFill(groupIndex, vectors, length)
 	}
 
 	exec.ret.groupToSet = groupIndex
@@ -1172,6 +1124,10 @@ func (exec *singleAggFuncExec4) BulkFill(groupIndex int, vectors []*vector.Vecto
 }
 
 func (exec *singleAggFuncExec4) BatchFill(offset int, groups []uint64, vectors []*vector.Vector) error {
+	if exec.IsDistinct() {
+		return exec.distinctBatchFill(offset, groups, vectors)
+	}
+
 	vec := vectors[0]
 	setter := exec.ret.aggSet
 	getter := exec.ret.aggGet
@@ -1261,7 +1217,7 @@ func (exec *singleAggFuncExec4) Merge(next AggFuncExec, groupIdx1, groupIdx2 int
 		other.groups[groupIdx2],
 		exec.ret.aggGet, other.ret.aggGet,
 		exec.ret.aggSet)
-	return nil
+	return exec.distinctHash.merge(&other.distinctHash)
 }
 
 func (exec *singleAggFuncExec4) BatchMerge(next AggFuncExec, offset int, groups []uint64) error {
@@ -1283,7 +1239,7 @@ func (exec *singleAggFuncExec4) BatchMerge(next AggFuncExec, offset int, groups 
 			getter1, getter2,
 			setter)
 	}
-	return nil
+	return exec.distinctHash.merge(&other.distinctHash)
 }
 
 func (exec *singleAggFuncExec4) Flush() (*vector.Vector, error) {
@@ -1317,4 +1273,5 @@ func (exec *singleAggFuncExec4) Flush() (*vector.Vector, error) {
 
 func (exec *singleAggFuncExec4) Free() {
 	exec.ret.free()
+	exec.distinctHash.free()
 }

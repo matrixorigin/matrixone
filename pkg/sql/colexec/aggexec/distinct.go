@@ -24,6 +24,17 @@ import (
 type distinctHash struct {
 	mp   *mpool.MPool
 	maps []*hashmap.StrHashMap
+
+	// optimized for bulk and batch insertions.
+	bs  []bool
+	bs1 []bool
+}
+
+func newDistinctHash(mp *mpool.MPool, containNullValue bool) distinctHash {
+	return distinctHash{
+		mp:   mp,
+		maps: nil,
+	}
 }
 
 func (d *distinctHash) grows(more int) error {
@@ -31,9 +42,10 @@ func (d *distinctHash) grows(more int) error {
 	d.maps = append(d.maps, make([]*hashmap.StrHashMap, more)...)
 
 	var err error
+	// we set the hasNull to be true here for supporting multi-columns agg next day.
 	for i := oldLen; i < newLen; i++ {
 		if d.maps[i], err = hashmap.NewStrMap(
-			false, 0, 0, d.mp); err != nil {
+			true, 0, 0, d.mp); err != nil {
 			return err
 		}
 	}
@@ -43,8 +55,71 @@ func (d *distinctHash) grows(more int) error {
 // fill inserts the row into the hash map.
 // return true if this is a new value.
 func (d *distinctHash) fill(group int, vs []*vector.Vector, row int) (bool, error) {
-	insertOK, err := d.maps[group].Insert(vs, row)
-	return !insertOK, err
+	return d.maps[group].Insert(vs, row)
+}
+
+func (d *distinctHash) bulkFill(group int, vs []*vector.Vector) ([]bool, error) {
+	rowCount := vs[0].Length()
+
+	if cap(d.bs) < rowCount {
+		d.bs = make([]bool, rowCount)
+	}
+	if cap(d.bs1) < hashmap.UnitLimit {
+		d.bs1 = make([]bool, hashmap.UnitLimit)
+	}
+	d.bs = d.bs[:rowCount]
+	d.bs1 = d.bs1[:hashmap.UnitLimit]
+
+	iterator := d.maps[group].NewIterator()
+
+	for i := 0; i < rowCount; i += hashmap.UnitLimit {
+		n := rowCount - i
+		if n > hashmap.UnitLimit {
+			n = hashmap.UnitLimit
+		}
+		for j := 0; j < n; j++ {
+			d.bs1[j] = false
+		}
+
+		oldLen := d.maps[group].GroupCount()
+		values, _, err := iterator.Insert(i, n, vs)
+		if err != nil {
+			return nil, err
+		}
+
+		dd := d.bs[i:]
+		for k, v := range values {
+			if v > oldLen && !d.bs1[v-oldLen] {
+				d.bs1[v-oldLen] = true
+				dd[k] = true
+			}
+		}
+	}
+	return d.bs, nil
+}
+
+func (d *distinctHash) batchFill(vs []*vector.Vector, offset int, groups []uint64) ([]bool, error) {
+	rowCount := len(groups)
+
+	if cap(d.bs) < rowCount {
+		d.bs = make([]bool, rowCount)
+	}
+	d.bs = d.bs[:0]
+
+	for _, group := range groups {
+		if group != GroupNotMatched {
+			ok, err := d.fill(int(group-1), vs, offset)
+			if err != nil {
+				return nil, err
+			}
+			d.bs = append(d.bs, ok)
+		} else {
+			d.bs = append(d.bs, false)
+		}
+		offset++
+	}
+
+	return d.bs, nil
 }
 
 // merge was the method to merge two groups of distinct agg.
