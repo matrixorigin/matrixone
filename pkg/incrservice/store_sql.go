@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -63,10 +64,12 @@ func (s *sqlStore) SelectAll(
 	opts := executor.Options{}.
 		WithDatabase(database).
 		WithTxn(txnOp)
+	txnInfo := ""
 	if txnOp != nil {
 		opts = opts.WithDisableIncrStatement()
 	} else {
 		opts = opts.WithEnableTrace()
+		txnInfo = txnOp.Txn().DebugString()
 	}
 	res, err := s.exec.Exec(ctx, fetchSQL, opts)
 	if err != nil {
@@ -231,6 +234,12 @@ func (s *sqlStore) Allocate(
 			},
 			opts)
 		if err != nil {
+			// retry ww conflict if the txn is not pessimistic
+			if txnOp != nil && !txnOp.Txn().IsPessimistic() &&
+				moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict) {
+				continue
+			}
+
 			return 0, 0, err
 		}
 		if ok {
