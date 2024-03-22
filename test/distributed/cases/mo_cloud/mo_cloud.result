@@ -253,22 +253,22 @@ SHOW CREATE TABLE system_metrics.metric;
 Table    Create Table
 metric    CREATE TABLE `metric` (\n`metric_name` VARCHAR(1024) DEFAULT 'sys' COMMENT 'metric name, like: sql_statement_total, server_connections, process_cpu_percent, sys_memory_used, ...',\n`collecttime` DATETIME NOT NULL COMMENT 'metric data collect time',\n`value` DOUBLE DEFAULT '0.0' COMMENT 'metric value',\n`node` VARCHAR(1024) DEFAULT 'monolithic' COMMENT 'mo node uuid',\n`role` VARCHAR(1024) DEFAULT 'monolithic' COMMENT 'mo node role, like: CN, DN, LOG',\n`account` VARCHAR(1024) DEFAULT 'sys' COMMENT 'account name',\n`type` VARCHAR(1024) NOT NULL COMMENT 'sql type, like: insert, select, ...'\n) CLUSTER BY (`collecttime`, `metric_name`, `account`)
 SHOW CREATE TABLE system_metrics.server_connections;
-View    Create View
-server_connections    CREATE VIEW IF NOT EXISTS `system_metrics`.`server_connections` as select `collecttime`, `value`, `node`, `role`, `account` from `system_metrics`.`metric` where `metric_name` = "server_connections"
+View    Create View    character_set_client    collation_connection
+server_connections    CREATE VIEW IF NOT EXISTS `system_metrics`.`server_connections` as select `collecttime`, `value`, `node`, `role`, `account` from `system_metrics`.`metric` where `metric_name` = "server_connections"    utf8mb4    utf8mb4_general_ci
 SHOW CREATE TABLE system_metrics.server_storage_usage;
-View    Create View
-server_storage_usage    CREATE VIEW IF NOT EXISTS `system_metrics`.`server_storage_usage` as select `collecttime`, `value`, `node`, `role`, `account` from `system_metrics`.`metric` where `metric_name` = "server_storage_usage"
+View    Create View    character_set_client    collation_connection
+server_storage_usage    CREATE VIEW IF NOT EXISTS `system_metrics`.`server_storage_usage` as select `collecttime`, `value`, `node`, `role`, `account` from `system_metrics`.`metric` where `metric_name` = "server_storage_usage"    utf8mb4    utf8mb4_general_ci
 SHOW CREATE TABLE system_metrics.sql_statement_errors;
-View    Create View
-sql_statement_errors    CREATE VIEW IF NOT EXISTS `system_metrics`.`sql_statement_errors` as select `collecttime`, `value`, `node`, `role`, `account`, `type` from `system_metrics`.`metric` where `metric_name` = "sql_statement_errors"
+View    Create View    character_set_client    collation_connection
+sql_statement_errors    CREATE VIEW IF NOT EXISTS `system_metrics`.`sql_statement_errors` as select `collecttime`, `value`, `node`, `role`, `account`, `type` from `system_metrics`.`metric` where `metric_name` = "sql_statement_errors"    utf8mb4    utf8mb4_general_ci
 SHOW CREATE TABLE system_metrics.sql_transaction_total;
-View    Create View
-sql_transaction_total    CREATE VIEW IF NOT EXISTS `system_metrics`.`sql_transaction_total` as select `collecttime`, `value`, `node`, `role`, `account` from `system_metrics`.`metric` where `metric_name` = "sql_transaction_total"
+View    Create View    character_set_client    collation_connection
+sql_transaction_total    CREATE VIEW IF NOT EXISTS `system_metrics`.`sql_transaction_total` as select `collecttime`, `value`, `node`, `role`, `account` from `system_metrics`.`metric` where `metric_name` = "sql_transaction_total"    utf8mb4    utf8mb4_general_ci
 SHOW GLOBAL VARIABLES LIKE 'save_query_result';
 Variable_name    Value
 save_query_result    off
 SHOW SUBSCRIPTIONS;
-Name    From_Account
+pub_name    pub_account    pub_database    pub_time    sub_name    sub_time
 SHOW TABLES FROM mo_sample_data_tpch_sf1;
 invalid database mo_sample_data_tpch_sf1
 UPDATE `mo_mo`.`operation` SET `created_at`='2023-07-28 05:00:13.704',`statement_id`='a3055a4e-2d03-11ee-9e81-96ce077ba0f3',`connection_id`=11349,`db`='mo_sample_data_tpch_sf10',`run_status`='success' WHERE `id` = '3b30a3c1-4dca-4ded-9576-51a99e47b53a';
