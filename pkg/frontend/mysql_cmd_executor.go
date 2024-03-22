@@ -4973,9 +4973,9 @@ func (h *marshalPlanHandler) allocBufferIfNeeded() {
 
 func (h *marshalPlanHandler) Marshal(ctx context.Context) (jsonBytes []byte) {
 	var err error
-	h.allocBufferIfNeeded()
-	h.buffer.Reset()
 	if h.marshalPlan != nil {
+		h.allocBufferIfNeeded()
+		h.buffer.Reset()
 		var jsonBytesLen = 0
 		// XXX, `buffer` can be used repeatedly as a global variable in the future
 		// Provide a relatively balanced initial capacity [8192] for byte slice to prevent multiple memory requests
@@ -4996,12 +4996,17 @@ func (h *marshalPlanHandler) Marshal(ctx context.Context) (jsonBytes []byte) {
 			jsonBytes = h.buffer.Next(jsonBytesLen)
 		}
 	} else if h.query != nil {
-		jsonBytes = buildErrorJsonPlan(h.buffer, h.uuid, moerr.ErrWarn, "sql query ignore execution plan")
+		// DO NOT use h.buffer
+		return sqlQueryIgnoreExecPlan
 	} else {
-		jsonBytes = buildErrorJsonPlan(h.buffer, h.uuid, moerr.ErrWarn, "sql query no record execution plan")
+		// DO NOT use h.buffer
+		return sqlQueryNoRecordExecPlan
 	}
 	return
 }
+
+var sqlQueryIgnoreExecPlan = []byte(`{"code":200,"message":"sql query ignore execution plan","steps":null}`)
+var sqlQueryNoRecordExecPlan = []byte(`{"code":200,"message":"sql query no record execution plan","steps":null}`)
 
 func (h *marshalPlanHandler) Stats(ctx context.Context) (statsByte statistic.StatsArray, stats motrace.Statistic) {
 	if h.query != nil {
