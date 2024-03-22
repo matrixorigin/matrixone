@@ -2378,6 +2378,7 @@ func LoadSpecifiedCkpBatch(
 			if err = data.bats[batchIdx].Append(bats[i]); err != nil {
 				return
 			}
+			defer bats[i].Close()
 		}
 	}
 
@@ -2491,11 +2492,6 @@ func (data *CheckpointData) readAll(
 			); err != nil {
 				return
 			}
-			defer func() {
-				for i := range bats {
-					bats[i].Close()
-				}
-			}()
 			if version == CheckpointVersion1 {
 				if uint16(idx) == TBLInsertIDX {
 					for _, bat := range bats {
@@ -2594,6 +2590,7 @@ func (data *CheckpointData) readAll(
 			}
 			for i := range bats {
 				data.bats[idx].Append(bats[i])
+				bats[i].Close()
 			}
 		}
 		logutil.Info("read-checkpoint", common.OperationField("read"),
