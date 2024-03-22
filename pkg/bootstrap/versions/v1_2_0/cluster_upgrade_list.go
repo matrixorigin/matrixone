@@ -26,7 +26,6 @@ import (
 )
 
 var clusterUpgEntries = []versions.UpgradeEntry{
-	upg_mo_account,
 	upg_mo_pub,
 	upg_sys_async_task,
 	upg_mo_role_privs,
@@ -41,23 +40,23 @@ var clusterUpgEntries = []versions.UpgradeEntry{
 	upg_mo_debug_featuresTables,
 }
 
-var upg_mo_account = versions.UpgradeEntry{
-	Schema:    catalog.MO_CATALOG,
-	TableName: catalog.MOAccountTable,
-	UpgType:   versions.ADD_COLUMN,
-	UpgSql:    "alter table `mo_account` add column `create_version` varchar(50) default '1.2.0' after suspended_time",
-	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
-		colInfo, err := versions.CheckTableColumn(txn, accountId, catalog.MO_CATALOG, catalog.MOAccountTable, "create_version")
-		if err != nil {
-			return false, err
-		}
-
-		if colInfo.IsExits {
-			return true, nil
-		}
-		return false, nil
-	},
-}
+//var upg_mo_account = versions.UpgradeEntry{
+//	Schema:    catalog.MO_CATALOG,
+//	TableName: catalog.MOAccountTable,
+//	UpgType:   versions.ADD_COLUMN,
+//	UpgSql:    "alter table `mo_account` add column `create_version` varchar(50) default '1.2.0' after suspended_time",
+//	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+//		colInfo, err := versions.CheckTableColumn(txn, accountId, catalog.MO_CATALOG, catalog.MOAccountTable, "create_version")
+//		if err != nil {
+//			return false, err
+//		}
+//
+//		if colInfo.IsExits {
+//			return true, nil
+//		}
+//		return false, nil
+//	},
+//}
 
 var upg_mo_pub = versions.UpgradeEntry{
 	Schema:    catalog.MO_CATALOG,

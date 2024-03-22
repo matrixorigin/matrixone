@@ -319,7 +319,7 @@ func (s *service) CheckTenantUpgrade(_ context.Context, tenantID int64) error {
 
 // UpgradeTenant Manual command tenant upgrade entrance
 func (s *service) UpgradeTenant(ctx context.Context, tenantName string, retryCount uint32, isALLAccount bool) error {
-	ctx, cancel := context.WithTimeout(ctx, time.Minute*60)
+	ctx, cancel := context.WithTimeout(ctx, time.Minute*120)
 	defer cancel()
 	if _, err := s.bootstrapService.UpgradeTenant(ctx, tenantName, retryCount, isALLAccount); err != nil {
 		return err
@@ -825,7 +825,7 @@ func (s *service) bootstrap() error {
 
 	if s.cfg.AutomaticUpgrade {
 		return s.stopper.RunTask(func(ctx context.Context) {
-			ctx, cancel := context.WithTimeout(ctx, time.Minute*60)
+			ctx, cancel := context.WithTimeout(ctx, time.Minute*120)
 			defer cancel()
 			if err := s.bootstrapService.BootstrapUpgrade(ctx); err != nil {
 				if err != context.Canceled {

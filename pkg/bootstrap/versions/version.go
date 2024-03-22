@@ -44,11 +44,11 @@ func (v Version) CanDirectUpgrade(version string) bool {
 	return Compare(v.MinUpgradeVersion, version) <= 0
 }
 
-func (v Version) GetInsertSQL(state int32) string {
+func (v Version) GetInitVersionSQL(state int32) string {
 	return fmt.Sprintf(`insert into %s values ('%s', %d, %d, current_timestamp(), current_timestamp())`,
 		catalog.MOVersionTable,
-		v.Version,
-		v.VersionOffset,
+		v.MinUpgradeVersion,
+		0,
 		state,
 	)
 }

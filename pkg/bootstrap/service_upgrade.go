@@ -26,7 +26,7 @@ import (
 )
 
 var (
-	defaultUpgradeTenantBatch         = 256
+	defaultUpgradeTenantBatch         = 16
 	defaultCheckUpgradeDuration       = time.Second * 5
 	defaultCheckUpgradeTenantDuration = time.Second * 10
 	defaultUpgradeTenantTasks         = 4
@@ -57,6 +57,12 @@ func (s *service) BootstrapUpgrade(ctx context.Context) error {
 	// number of tenants is huge. So the whole tenant upgrade is asynchronous and will
 	// be grouped for all tenants and concurrently executed on multiple CNs at the same
 	// time.
+
+	//if err := retryRun(ctx, "check and init upgrade framework", s.initFramework); err != nil {
+	//	getUpgradeLogger().Error("check and init upgrade framework", zap.Error(err))
+	//	return err
+	//}
+
 	if err := retryRun(ctx, "doCheckUpgrade", s.doCheckUpgrade); err != nil {
 		getUpgradeLogger().Error("check upgrade failed", zap.Error(err))
 		return err
@@ -89,14 +95,6 @@ func (s *service) doCheckUpgrade(ctx context.Context) error {
 		func(txn executor.TxnExecutor) error {
 			final := s.getFinalVersionHandle().Metadata()
 
-			// First version as a genesis version, always need to be PREPARE.
-			// Because the first version need to init upgrade framework tables.
-			if len(s.handles) == 1 {
-				getUpgradeLogger().Info("init upgrade framework",
-					zap.String("final-version", final.Version))
-				return s.handles[0].Prepare(ctx, txn, true)
-			}
-
 			// Deploy mo first time without 1.2.0, init framework first.
 			// And upgrade to current version.
 			created, err := versions.IsFrameworkTablesCreated(txn)
@@ -105,21 +103,25 @@ func (s *service) doCheckUpgrade(ctx context.Context) error {
 					zap.Error(err))
 				return err
 			}
+
+			// First version as a genesis version, always need to be PREPARE.
+			// Because the first version need to init upgrade framework tables.
 			if !created {
 				getUpgradeLogger().Info("init upgrade framework",
 					zap.String("final-version", final.Version))
 
-				if err := s.handles[0].Prepare(ctx, txn, false); err != nil {
-					getUpgradeLogger().Error("failed to init upgrade framework",
-						zap.Error(err))
+				// create new upgrade framework tables for the first time,
+				// which means using v1.2.0 for the first time
+				s.getFinalVersionHandle().HandleCreateFrameworkDeps(txn)
+
+				// Many cn maybe create framework tables parallel, only one can create success.
+				// Just return error, and upgrade framework will retry.
+				err = createFrameworkTables(txn, final)
+				if err != nil {
+					getLogger().Error("create upgrade framework tables error", zap.Error(err))
 					return err
 				}
-
-				res, err := txn.Exec(final.GetInsertSQL(versions.StateReady), executor.StatementOption{})
-				if err == nil {
-					res.Close()
-				}
-				return err
+				getLogger().Info("create upgrade framework tables success")
 			}
 
 			// lock version table
@@ -500,4 +502,22 @@ func (s *service) adjustUpgrade() {
 		zap.Duration("check-upgrade-tenant-duration", s.upgrade.checkUpgradeTenantDuration),
 		zap.Int("upgrade-tenant-tasks", s.upgrade.upgradeTenantTasks),
 		zap.Int("tenant-batch", s.upgrade.upgradeTenantBatch))
+}
+
+// createFrameworkTables When init upgrade framework for the first time,
+// create the tables that the upgrade framework depends on
+func createFrameworkTables(
+	txn executor.TxnExecutor,
+	final versions.Version) error {
+	values := versions.FrameworkInitSQLs
+	values = append(values, final.GetInitVersionSQL(versions.StateReady))
+
+	for _, sql := range values {
+		r, err := txn.Exec(sql, executor.StatementOption{})
+		if err != nil {
+			return err
+		}
+		r.Close()
+	}
+	return nil
 }
