@@ -31,14 +31,15 @@ enum OpCode {
     OpPreCommit  = 1001;
 
     // Debug
-    OpPing          = 2000;
-    OpFlush         = 2001;
-    OpCheckpoint    = 2003;
-    OpInspect       = 2004;
-    OpAddFaultPoint = 2005;
-    OpBackup        = 2006;
-    OpTraceSpan     = 2007;
-    OpStorageUsage  = 2008;
+    OpPing             = 2000;
+    OpFlush            = 2001;
+    OpCheckpoint       = 2003;
+    OpInspect          = 2004;
+    OpAddFaultPoint    = 2005;
+    OpBackup           = 2006;
+    OpTraceSpan        = 2007;
+    OpStorageUsage     = 2008;
+    OpGlobalCheckpoint = 2009;
 }
 
 // TNPingRequest ping request
