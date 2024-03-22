@@ -114,10 +114,10 @@ func (node *FunctionArgDecl) reset() {
 	// if node.Name != nil {
 	// node.Name.Free()
 	// }
-	if node.DefaultVal != nil {
-		// switch item.(type) {
-		// case *IntVal:
-	}
+	// if node.DefaultVal != nil {
+	// switch item.(type) {
+	// case *IntVal:
+	// }
 	*node = FunctionArgDecl{}
 }
 

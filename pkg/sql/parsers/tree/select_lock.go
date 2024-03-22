@@ -85,10 +85,10 @@ func (node *SelectLockInfo) Free() {
 func (node SelectLockInfo) TypeName() string { return "tree.SelectLockInfo" }
 
 func (node *SelectLockInfo) reset() {
-	if node.Tables != nil {
-		// for _, item := range node.Tables {
-		// 	item.Free()
-		// }
-	}
+	// if node.Tables != nil {
+	// for _, item := range node.Tables {
+	// 	item.Free()
+	// }
+	// }
 	*node = SelectLockInfo{}
 }
