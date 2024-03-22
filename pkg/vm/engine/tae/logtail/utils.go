@@ -2491,6 +2491,7 @@ func (data *CheckpointData) readAll(
 			); err != nil {
 				return
 			}
+			defer data.Close()
 			if version == CheckpointVersion1 {
 				if uint16(idx) == TBLInsertIDX {
 					for _, bat := range bats {
