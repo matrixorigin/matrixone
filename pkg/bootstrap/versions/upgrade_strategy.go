@@ -379,7 +379,7 @@ func CheckIndexDefinition(txn executor.TxnExecutor, accountId uint32, schema str
 	sql := fmt.Sprintf("select distinct `idx`.`name` from `mo_catalog`.`mo_indexes` `idx` "+
 		"left join `mo_catalog`.`mo_tables` `tbl` on `idx`.`table_id` = `tbl`.`rel_id` "+
 		"where `tbl`.`reldatabase` = '%s' AND `tbl`.`relname` = '%s' AND `idx`.`name` = '%s'",
-		accountId, schema, tableName, indexName)
+		schema, tableName, indexName)
 	if accountId == catalog.System_Account {
 		sql = fmt.Sprintf("select distinct `idx`.`name` from `mo_catalog`.`mo_indexes` `idx` "+
 			"left join `mo_catalog`.`mo_tables` `tbl` on `idx`.`table_id` = `tbl`.`rel_id` "+
