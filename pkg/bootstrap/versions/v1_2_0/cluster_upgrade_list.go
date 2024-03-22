@@ -27,7 +27,13 @@ import (
 
 var clusterUpgEntries = []versions.UpgradeEntry{
 	upg_mo_pub,
-	upg_sys_async_task,
+	upg_sys_modify_async_task,
+	upg_create_index1_async_task,
+	upg_create_index2_async_task,
+	upg_create_index3_async_task,
+	upg_create_index4_async_task,
+	upg_create_index1_daemon_task,
+	upg_create_index2_daemon_task,
 	upg_mo_role_privs,
 	upg_mo_debug_eventTxnTable,
 	upg_mo_debug_eventDataTable,
@@ -76,7 +82,7 @@ var upg_mo_pub = versions.UpgradeEntry{
 	},
 }
 
-var upg_sys_async_task = versions.UpgradeEntry{
+var upg_sys_modify_async_task = versions.UpgradeEntry{
 	Schema:    catalog.MOTaskDB,
 	TableName: catalog.MOSysAsyncTask,
 	UpgType:   versions.MODIFY_COLUMN,
@@ -96,6 +102,68 @@ var upg_sys_async_task = versions.UpgradeEntry{
 	},
 }
 
+// ------------------------------------------------------------------------------------------------------------
+var upg_create_index1_async_task = versions.UpgradeEntry{
+	Schema:    catalog.MOTaskDB,
+	TableName: catalog.MOSysAsyncTask,
+	UpgType:   versions.ADD_INDEX,
+	UpgSql:    fmt.Sprintf(`create index idx_task_status on %s.%s(task_status)`, catalog.MOTaskDB, catalog.MOSysAsyncTask),
+	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+		return versions.CheckIndexDefinition(txn, accountId, catalog.MOTaskDB, catalog.MOSysAsyncTask, "idx_task_status")
+	},
+}
+
+var upg_create_index2_async_task = versions.UpgradeEntry{
+	Schema:    catalog.MOTaskDB,
+	TableName: catalog.MOSysAsyncTask,
+	UpgType:   versions.ADD_INDEX,
+	UpgSql:    fmt.Sprintf(`create index idx_task_runner on %s.%s(task_runner)`, catalog.MOTaskDB, catalog.MOSysAsyncTask),
+	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+		return versions.CheckIndexDefinition(txn, accountId, catalog.MOTaskDB, catalog.MOSysAsyncTask, "idx_task_runner")
+	},
+}
+
+var upg_create_index3_async_task = versions.UpgradeEntry{
+	Schema:    catalog.MOTaskDB,
+	TableName: catalog.MOSysAsyncTask,
+	UpgType:   versions.ADD_INDEX,
+	UpgSql:    fmt.Sprintf(`create index idx_task_executor on %s.%s(task_metadata_executor)`, catalog.MOTaskDB, catalog.MOSysAsyncTask),
+	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+		return versions.CheckIndexDefinition(txn, accountId, catalog.MOTaskDB, catalog.MOSysAsyncTask, "idx_task_executor")
+	},
+}
+
+var upg_create_index4_async_task = versions.UpgradeEntry{
+	Schema:    catalog.MOTaskDB,
+	TableName: catalog.MOSysAsyncTask,
+	UpgType:   versions.ADD_INDEX,
+	UpgSql:    fmt.Sprintf(`create index idx_task_epoch on %s.%s(task_epoch)`, catalog.MOTaskDB, catalog.MOSysAsyncTask),
+	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+		return versions.CheckIndexDefinition(txn, accountId, catalog.MOTaskDB, catalog.MOSysAsyncTask, "idx_task_epoch")
+	},
+}
+
+var upg_create_index1_daemon_task = versions.UpgradeEntry{
+	Schema:    catalog.MOTaskDB,
+	TableName: catalog.MOSysDaemonTask,
+	UpgType:   versions.ADD_INDEX,
+	UpgSql:    fmt.Sprintf(`create index idx_account_id on %s.%s(account_id)`, catalog.MOTaskDB, catalog.MOSysDaemonTask),
+	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+		return versions.CheckIndexDefinition(txn, accountId, catalog.MOTaskDB, catalog.MOSysDaemonTask, "idx_account_id")
+	},
+}
+
+var upg_create_index2_daemon_task = versions.UpgradeEntry{
+	Schema:    catalog.MOTaskDB,
+	TableName: catalog.MOSysDaemonTask,
+	UpgType:   versions.ADD_INDEX,
+	UpgSql:    fmt.Sprintf(`create index idx_last_heartbeat on %s.%s(last_heartbeat)`, catalog.MOTaskDB, catalog.MOSysDaemonTask),
+	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+		return versions.CheckIndexDefinition(txn, accountId, catalog.MOTaskDB, catalog.MOSysDaemonTask, "idx_last_heartbeat")
+	},
+}
+
+// ------------------------------------------------------------------------------------------------------------
 var upg_mo_role_privs = versions.UpgradeEntry{
 	Schema:    catalog.MO_CATALOG,
 	TableName: "mo_role_privs",

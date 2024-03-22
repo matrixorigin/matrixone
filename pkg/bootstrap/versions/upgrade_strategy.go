@@ -368,3 +368,34 @@ func CheckTableDataExist(txn executor.TxnExecutor, accountId uint32, sql string)
 
 	return loaded, nil
 }
+
+// CheckIndexDefinition Used to check if a certain index is defined in the table
+// This function executes the given SQL query, returns true if the result set is not empty, otherwise returns false.
+func CheckIndexDefinition(txn executor.TxnExecutor, accountId uint32, schema string, tableName string, indexName string) (bool, error) {
+	if schema == "" || tableName == "" || indexName == "" {
+		return false, moerr.NewInternalErrorNoCtx("schema name or table name or indexName is empty")
+	}
+
+	sql := fmt.Sprintf("select distinct `idx`.`name` from `mo_catalog`.`mo_indexes` `idx` "+
+		"left join `mo_catalog`.`mo_tables` `tbl` on `idx`.`table_id` = `tbl`.`rel_id` "+
+		"where `tbl`.`reldatabase` = '%s' AND `tbl`.`relname` = '%s' AND `idx`.`name` = '%s'",
+		accountId, schema, tableName, indexName)
+	if accountId == catalog.System_Account {
+		sql = fmt.Sprintf("select distinct `idx`.`name` from `mo_catalog`.`mo_indexes` `idx` "+
+			"left join `mo_catalog`.`mo_tables` `tbl` on `idx`.`table_id` = `tbl`.`rel_id` "+
+			"where `tbl`.`account_id` = %d AND `tbl`.`reldatabase` = '%s' AND `tbl`.`relname` = '%s' AND `idx`.`name` = '%s'",
+			accountId, schema, tableName, indexName)
+	}
+	res, err := txn.Exec(sql, executor.StatementOption{}.WithAccountID(accountId))
+	if err != nil {
+		return false, err
+	}
+	defer res.Close()
+
+	loaded := false
+	res.ReadRows(func(rows int, cols []*vector.Vector) bool {
+		loaded = true
+		return false
+	})
+	return loaded, nil
+}
