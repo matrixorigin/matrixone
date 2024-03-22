@@ -2349,6 +2349,15 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 			ctx.projectByExpr[exprStr] = int32(i)
 		}
 
+		if exprCol, ok := proj.Expr.(*plan.Expr_Col); ok {
+			if col := exprCol.Col; col != nil {
+				if binding, ok := ctx.bindingByTag[col.RelPos]; ok {
+					col.DbName = binding.db
+					col.TblName = binding.table
+				}
+			}
+		}
+
 		if !notCacheable {
 			if detectedExprWhetherTimeRelated(proj) {
 				notCacheable = true
@@ -3747,7 +3756,8 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 			builder.nameByColRef[[2]int32{tag, int32(i)}] = name
 		}
 
-		binding = NewBinding(tag, nodeID, table, node.TableDef.TblId, cols, colIsHidden, types, util.TableIsClusterTable(node.TableDef.TableType), defaultVals)
+		binding = NewBinding(tag, nodeID, node.TableDef.DbName, table, node.TableDef.TblId, cols, colIsHidden, types,
+			util.TableIsClusterTable(node.TableDef.TableType), defaultVals)
 	} else {
 		// Subquery
 		subCtx := builder.ctxByNode[nodeID]
@@ -3789,7 +3799,7 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 			builder.nameByColRef[[2]int32{tag, int32(i)}] = name
 		}
 
-		binding = NewBinding(tag, nodeID, table, 0, cols, colIsHidden, types, false, defaultVals)
+		binding = NewBinding(tag, nodeID, "", table, 0, cols, colIsHidden, types, false, defaultVals)
 	}
 
 	ctx.bindings = append(ctx.bindings, binding)
