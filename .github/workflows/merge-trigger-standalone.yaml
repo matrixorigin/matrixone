@@ -18,7 +18,7 @@ jobs:
     name: e2e BVT Test on Darwin/ARM64(LAUNCH, PESSIMISTIC)
     timeout-minutes: 60
     env:
-      mo_reuse_enable_checker_verbose: true
+      mo_reuse_enable_checker: true
     steps:
       - name: checkout matrixorigin/matrixone
         uses: actions/checkout@v3
@@ -116,7 +116,7 @@ jobs:
     needs: [pessimistic-bvt-darwin-arm64]
     name: Multi-CN e2e BVT(Race) Test on Linux/x64
     env:
-      mo_reuse_enable_checker_verbose: true
+      mo_reuse_enable_checker: true
     steps:
       - name: checkout head
         uses: actions/checkout@v3
