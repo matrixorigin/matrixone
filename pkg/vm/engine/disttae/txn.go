@@ -20,24 +20,23 @@ import (
 	"math"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/txn/trace"
-
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/txn/trace"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
 
 //func (txn *Transaction) getObjInfos(
@@ -84,6 +83,25 @@ func (txn *Transaction) WriteBatch(
 	primaryIdx int, // pass -1 to indicate no primary key or disable primary key checking
 	insertBatchHasRowId bool,
 	truncate bool) error {
+	start := time.Now()
+	seq := txn.op.NextSequence()
+	trace.GetService().AddTxnDurationAction(
+		txn.op,
+		client.WorkspaceWriteEvent,
+		seq,
+		tableId,
+		0,
+		nil)
+	defer func() {
+		trace.GetService().AddTxnDurationAction(
+			txn.op,
+			client.WorkspaceWriteEvent,
+			seq,
+			tableId,
+			time.Since(start),
+			nil)
+	}()
+
 	txn.readOnly.Store(false)
 	bat.Cnt = 1
 	txn.Lock()
@@ -629,6 +647,25 @@ func (txn *Transaction) WriteFile(
 
 func (txn *Transaction) deleteBatch(bat *batch.Batch,
 	databaseId, tableId uint64) *batch.Batch {
+	start := time.Now()
+	seq := txn.op.NextSequence()
+	trace.GetService().AddTxnDurationAction(
+		txn.op,
+		client.WorkspaceWriteEvent,
+		seq,
+		tableId,
+		0,
+		nil)
+	defer func() {
+		trace.GetService().AddTxnDurationAction(
+			txn.op,
+			client.WorkspaceWriteEvent,
+			seq,
+			tableId,
+			time.Since(start),
+			nil)
+	}()
+
 	trace.GetService().TxnWrite(txn.op, tableId, typesNames[DELETE], bat)
 
 	mp := make(map[types.Rowid]uint8)

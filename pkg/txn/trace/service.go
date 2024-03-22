@@ -50,6 +50,7 @@ func WithEnable(
 		s.atomic.dataEventEnabled.Store(value)
 		s.atomic.txnEventEnabled.Store(value)
 		s.atomic.txnWorkspaceEnabled.Store(value)
+		s.atomic.txnActionEventEnabled.Store(value)
 
 		if value {
 			s.atomic.txnFilters.Store(&txnFilters{
@@ -213,6 +214,8 @@ func (s *service) Enabled(feature string) bool {
 		return s.atomic.txnActionEventEnabled.Load()
 	case FeatureTraceStatement:
 		return s.atomic.statementEnabled.Load()
+	case FeatureTraceTxnWorkspace:
+		return s.atomic.txnWorkspaceEnabled.Load()
 	}
 	return false
 }

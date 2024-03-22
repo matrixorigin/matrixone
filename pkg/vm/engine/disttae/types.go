@@ -357,6 +357,25 @@ func (txn *Transaction) WriteOffset() uint64 {
 
 // Adjust adjust writes order after the current statement finished.
 func (txn *Transaction) Adjust(writeOffset uint64) error {
+	start := time.Now()
+	seq := txn.op.NextSequence()
+	trace.GetService().AddTxnDurationAction(
+		txn.op,
+		client.WorkspaceAdjustEvent,
+		seq,
+		0,
+		0,
+		nil)
+	defer func() {
+		trace.GetService().AddTxnDurationAction(
+			txn.op,
+			client.WorkspaceAdjustEvent,
+			seq,
+			0,
+			time.Since(start),
+			nil)
+	}()
+
 	txn.Lock()
 	defer txn.Unlock()
 	if err := txn.adjustUpdateOrderLocked(writeOffset); err != nil {

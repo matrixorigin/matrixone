@@ -81,6 +81,8 @@ func (s *service) TxnCreated(op client.TxnOperator) {
 		op.AppendEventCallback(client.ExecuteSQLEvent, s.handleTxnActionEvent)
 		op.AppendEventCallback(client.CompileEvent, s.handleTxnActionEvent)
 		op.AppendEventCallback(client.TableScanEvent, s.handleTxnActionEvent)
+		op.AppendEventCallback(client.WorkspaceWriteEvent, s.handleTxnActionEvent)
+		op.AppendEventCallback(client.WorkspaceAdjustEvent, s.handleTxnActionEvent)
 	}
 }
 
@@ -380,6 +382,7 @@ func (s *service) TxnWrite(
 		&s.atomic.complexPKTables)
 	s.entryBufC <- buf
 }
+
 func (s *service) TxnAdjustWorkspace(
 	op client.TxnOperator,
 	adjustCount int,
