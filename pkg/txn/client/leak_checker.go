@@ -93,12 +93,14 @@ func (lc *leakChecker) check(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-time.After(lc.maxActiveAges):
-			lc.doCheck()
+			if txn, ok := lc.doCheck(); ok {
+				lc.leakHandleFunc(txn.id, txn.createAt, txn.options)
+			}
 		}
 	}
 }
 
-func (lc *leakChecker) doCheck() {
+func (lc *leakChecker) doCheck() (activeTxn, bool) {
 	lc.RLock()
 	defer lc.RUnlock()
 
@@ -110,10 +112,12 @@ func (lc *leakChecker) doCheck() {
 				txn.options.InRunSql = txn.txnOp.inRunSql()
 				txn.options.InCommit = txn.txnOp.inCommit()
 				txn.options.InRollback = txn.txnOp.inRollback()
+				txn.options.SessionInfo = txn.txnOp.options.SessionInfo
 			}
-			lc.leakHandleFunc(txn.id, txn.createAt, txn.options)
+			return txn, true
 		}
 	}
+	return activeTxn{}, false
 }
 
 type activeTxn struct {

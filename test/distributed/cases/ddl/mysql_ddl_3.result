@@ -4,8 +4,8 @@ create table mysql_ddl_test_t31(id int);
 /*!50001 DROP VIEW IF EXISTS mysql_ddl_test_v31 */;
 /*!50001 CREATE DEFINER = `root`@`%` VIEW mysql_ddl_test_v31 AS Select id from mysql_ddl_test_t31 */;
 show create view mysql_ddl_test_v31;
-View    Create View
-mysql_ddl_test_v31    /*!50001 CREATE DEFINER = `root`@`%` VIEW mysql_ddl_test_v31 AS Select id from mysql_ddl_test_t31 */;
+View    Create View    character_set_client    collation_connection
+mysql_ddl_test_v31    /*!50001 CREATE DEFINER = `root`@`%` VIEW mysql_ddl_test_v31 AS Select id from mysql_ddl_test_t31 */;    utf8mb4    utf8mb4_general_ci
 DROP TABLE IF EXISTS `mysql_ddl_test_t32`;
 CREATE TABLE `mysql_ddl_test_t32` (
 `id` bigint(20) unsigned NOT NULL AUTO_INCREMENT COMMENT '主键id',
@@ -264,8 +264,8 @@ id    name
 3    cindy
 CREATE VIEW mysql_ddl_test_v32 AS select convert(`mysql_ddl_test_t39`.`name` using utf8mb4) as converted_name from mysql_ddl_test_t39;
 SHOW CREATE VIEW mysql_ddl_test_v32;
-View    Create View
-mysql_ddl_test_v32    CREATE VIEW mysql_ddl_test_v32 AS select convert(`mysql_ddl_test_t39`.`name` using utf8mb4) as converted_name from mysql_ddl_test_t39;
+View    Create View    character_set_client    collation_connection
+mysql_ddl_test_v32    CREATE VIEW mysql_ddl_test_v32 AS select convert(`mysql_ddl_test_t39`.`name` using utf8mb4) as converted_name from mysql_ddl_test_t39;    utf8mb4    utf8mb4_general_ci
 select * from mysql_ddl_test_v32;
 converted_name
 ashley
