@@ -661,6 +661,16 @@ select * from test05;
 col1    col2
 John Doe    Programmer, Software Engineer
 Jane Smith    Data Scientist, , Data Analyst
+John Doe    Programmer, ，Software Engineer
+Jane Smith    Data Scientist,,Data Analyst
+Bob    Data Scientist, ,Data Analyst
+Mary    Manager,Teacher
+DO Smith    Data Manager,,Teacher
+DO Smith    Doctor,\,Operator
+BenJa    Analyst,%,Operator
+ewfhwj    __ewur4f
+Steve    'wr43vew43g43
+yyWGfve    ""vdvrervevre
 drop table test05;
 drop table if exists test06;
 
@@ -689,3 +699,10 @@ select * from test08;
 
 drop table test08;
 
+drop table if exists test09;
+create table test09(col1 int, col2 varchar(20));
+load data infile '$resources/load_data/test_starting_by04.csv' into table test09 CHARACTER SET "utf_8" fields terminated by ',' lines starting by ' ';
+internal error: the input value '@@ db"' is not int32 type for column 0
+select * from test09;
+col1    col2
+drop table test09;

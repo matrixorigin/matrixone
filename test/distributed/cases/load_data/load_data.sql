@@ -315,3 +315,9 @@ load data infile '$resources/load_data/test_enclosed_by01.csv' into table test08
 select * from test08;
 drop table test08;
 -- @bvt:issue
+
+drop table if exists test09;
+create table test09(col1 int, col2 varchar(20));
+load data infile '$resources/load_data/test_starting_by04.csv' into table test09 CHARACTER SET "utf_8" fields terminated by ',' lines starting by ' ';
+select * from test09;
+drop table test09;
