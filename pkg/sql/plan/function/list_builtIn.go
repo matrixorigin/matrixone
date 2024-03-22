@@ -5308,7 +5308,7 @@ var supportedOthersBuiltIns = []FuncNew{
 		},
 	},
 
-	// function `mo_show_visible_bin`
+	// function `mo_show_visible_bin_enum`
 	{
 		functionId: MO_SHOW_VISIBLE_BIN_ENUM,
 		class:      plan.Function_STRICT,
