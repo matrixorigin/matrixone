@@ -184,15 +184,7 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 		}
 
 		if typ.Oid.IsEnum() {
-			enums := strings.Split(col.Typ.GetEnumvalues(), ",")
-			typeStr += "("
-			for i, enum := range enums {
-				typeStr += fmt.Sprintf("'%s'", enum)
-				if i < len(enums)-1 {
-					typeStr += ","
-				}
-			}
-			typeStr += ")"
+			typeStr += fmt.Sprintf("(%s)", col.Typ.GetEnumvalues())
 		}
 
 		updateOpt := ""
