@@ -476,3 +476,53 @@ func BenchmarkDiskCacheReadRandomOffsetAtLargeFile(b *testing.B) {
 		benchmarkDiskCacheReadRandomOffsetAtLargeFile(b, 1<<30, 16<<20)
 	})
 }
+
+func BenchmarkDiskCacheMultipleIOEntries(b *testing.B) {
+	dir := b.TempDir()
+	ctx := context.Background()
+
+	cache, err := NewDiskCache(
+		ctx,
+		dir,
+		8<<30,
+		nil,
+	)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	err = cache.SetFile(ctx, "foo", func(ctx context.Context) (io.ReadCloser, error) {
+		return io.NopCloser(bytes.NewReader(bytes.Repeat([]byte("a"), 1<<20))), nil
+	})
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	b.ResetTimer()
+
+	for i := 0; i < b.N; i++ {
+		var entries []IOEntry
+		for i := 0; i < 64; i++ {
+			entries = append(entries, IOEntry{
+				Offset: 0,
+				Size:   4096,
+			})
+		}
+		var counter perfcounter.CounterSet
+		ctx := perfcounter.WithCounterSet(ctx, &counter)
+		err := cache.Read(
+			ctx,
+			&IOVector{
+				FilePath: "foo",
+				Entries:  entries,
+			},
+		)
+		if err != nil {
+			b.Fatal(err)
+		}
+		numOpen := counter.FileService.Cache.Disk.OpenFullFile.Load()
+		if numOpen != 1 {
+			b.Fatal()
+		}
+	}
+}
