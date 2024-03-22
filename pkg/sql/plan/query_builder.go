@@ -3571,7 +3571,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 	case *tree.ParenTableExpr:
 		return builder.buildTable(tbl.Expr, ctx, preNodeId, leftCtx)
 
-	case *tree.AliasedTableExpr: //allways AliasedTableExpr first
+	case *tree.AliasedTableExpr: // always AliasedTableExpr first
 		if _, ok := tbl.Expr.(*tree.Select); ok {
 			if tbl.As.Alias == "" {
 				return 0, moerr.NewSyntaxError(builder.GetContext(), "subquery in FROM must have an alias: %T", stmt)

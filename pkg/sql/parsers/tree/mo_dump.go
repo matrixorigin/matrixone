@@ -14,9 +14,26 @@
 
 package tree
 
+import "github.com/matrixorigin/matrixone/pkg/common/reuse"
+
+func init () {
+	reuse.CreatePool[MoDump](
+		func() *MoDump { return &MoDump{} },
+		func(m *MoDump) { m.reset() },
+		reuse.DefaultOptions[MoDump](),
+		)
+
+}
+
 type MoDump struct {
 	statementImpl
 	ExportParams *ExportParam
+}
+
+func NewMoDump(exportParams *ExportParam) *MoDump {
+	m := reuse.Alloc[MoDump](nil)
+	m.ExportParams = exportParams
+	return m
 }
 
 func (node *MoDump) Format(ctx *FmtCtx) {
@@ -29,4 +46,18 @@ func (node *MoDump) Format(ctx *FmtCtx) {
 }
 
 func (node *MoDump) GetStatementType() string { return "MoDump" }
+
 func (node *MoDump) GetQueryType() string     { return QueryTypeDQL }
+
+func (node MoDump) TypeName() string { return "tree.MoDump"}
+
+func (node *MoDump) Free() {
+	reuse.Free[MoDump](node, nil)
+}
+
+func (node *MoDump) reset() {
+	// if node.ExportParams != nil {
+	// 	reuse.Free[ExportParam](node.ExportParams, nil)
+	// }
+	*node = MoDump{}
+}

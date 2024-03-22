@@ -17,8 +17,41 @@ package tree
 import (
 	"fmt"
 
+	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 )
+
+func init() {
+	reuse.CreatePool[Revoke](
+		func() *Revoke { return &Revoke{} },
+		func(r *Revoke) { r.reset() },
+		reuse.DefaultOptions[Revoke](),
+		)
+
+	reuse.CreatePool[RevokePrivilege](
+		func() *RevokePrivilege { return &RevokePrivilege{} },
+		func(r *RevokePrivilege) { r.reset() },
+		reuse.DefaultOptions[RevokePrivilege](),
+		)
+
+	reuse.CreatePool[RevokeRole](
+		func() *RevokeRole { return &RevokeRole{} },
+		func(r *RevokeRole) { r.reset() },
+		reuse.DefaultOptions[RevokeRole](),
+		)
+
+	reuse.CreatePool[PrivilegeLevel](
+		func() *PrivilegeLevel { return &PrivilegeLevel{} },
+		func(p *PrivilegeLevel) { p.reset() },
+		reuse.DefaultOptions[PrivilegeLevel](),
+		)
+
+	reuse.CreatePool[Privilege](
+		func() *Privilege { return &Privilege{} },
+		func(p *Privilege) { p.reset() },
+		reuse.DefaultOptions[Privilege](),
+		)
+}
 
 type RevokeType int
 
@@ -42,8 +75,20 @@ func (node *Revoke) Format(ctx *FmtCtx) {
 		node.RevokeRole.Format(ctx)
 	}
 }
+
+func (node *Revoke) reset() {
+	*node = Revoke{}
+}
+
+func (node *Revoke) Free() {
+	reuse.Free[Revoke](node, nil)
+}
+
 func (node *Revoke) GetStatementType() string { return "Revoke" }
+
 func (node *Revoke) GetQueryType() string     { return QueryTypeDCL }
+
+func (node Revoke) TypeName() string { return "tree.Revoke"}
 
 type RevokePrivilege struct {
 	statementImpl
@@ -52,6 +97,37 @@ type RevokePrivilege struct {
 	ObjType    ObjectType
 	Level      *PrivilegeLevel
 	Roles      []*Role
+}
+
+func NewRevokePrivilege(ifExists bool, p []*Privilege, o ObjectType, l *PrivilegeLevel, r []*Role) *RevokePrivilege {
+	re := reuse.Alloc[RevokePrivilege](nil)
+	re.IfExists = ifExists
+	re.Privileges = p
+	re.ObjType = o
+	re.Level = l
+	re.Roles = r
+	return re
+}
+
+func (node *RevokePrivilege) reset() {
+	if node.Privileges != nil {
+		for _, item := range node.Privileges {
+			item.Free()
+		}
+	}
+	if node.Level != nil {
+		node.Level.Free()
+	}
+	if node.Roles != nil {
+		for _, item := range node.Roles {
+			item.Free()
+		}
+	}
+	*node = RevokePrivilege{}
+}
+
+func (node *RevokePrivilege) Free() {
+	reuse.Free[RevokePrivilege](node, nil)
 }
 
 func (node *RevokePrivilege) Format(ctx *FmtCtx) {
@@ -90,10 +166,15 @@ func (node *RevokePrivilege) Format(ctx *FmtCtx) {
 }
 
 func (node *RevokePrivilege) GetStatementType() string { return "Revoke Privilege" }
+
 func (node *RevokePrivilege) GetQueryType() string     { return QueryTypeDCL }
 
-func NewRevoke() *Revoke {
-	return &Revoke{}
+func (node RevokePrivilege) TypeName() string { return "tree.RevokePrivilege"}
+
+func NewRevoke(t RevokeType) *Revoke {
+	r := reuse.Alloc[Revoke](nil)
+	r.Typ = t
+	return r
 }
 
 type RevokeRole struct {
@@ -101,6 +182,14 @@ type RevokeRole struct {
 	IfExists bool
 	Roles    []*Role
 	Users    []*User
+}
+
+func NewRevokeRole(ifExists bool, r []*Role, u []*User) *RevokeRole {
+	re := reuse.Alloc[RevokeRole](nil)
+	re.IfExists = ifExists
+	re.Roles = r
+	re.Users = u
+	return re
 }
 
 func (node *RevokeRole) Format(ctx *FmtCtx) {
@@ -127,8 +216,30 @@ func (node *RevokeRole) Format(ctx *FmtCtx) {
 	}
 }
 
+func (node *RevokeRole) reset() {
+	if node.Roles != nil {
+		for _, item := range node.Roles {
+			item.Free()
+		}
+	}
+	if node.Users != nil {
+		for _, item := range node.Users {
+			item.Free()
+		}
+	}
+	*node = RevokeRole{}
+}
+
+
+func (node *RevokeRole) Free() {
+	reuse.Free[RevokeRole](node, nil)
+}
+
 func (node *RevokeRole) GetStatementType() string { return "Revoke Role" }
+
 func (node *RevokeRole) GetQueryType() string     { return QueryTypeDCL }
+
+func (node RevokeRole) TypeName() string { return "tree.RevokeRole"}
 
 type PrivilegeLevel struct {
 	NodeFormatter
@@ -136,6 +247,10 @@ type PrivilegeLevel struct {
 	DbName      string
 	TabName     string
 	RoutineName string
+}
+
+func (node *PrivilegeLevel) Free() {
+	reuse.Free[PrivilegeLevel](node, nil)
 }
 
 func (node *PrivilegeLevel) Format(ctx *FmtCtx) {
@@ -153,20 +268,23 @@ func (node *PrivilegeLevel) Format(ctx *FmtCtx) {
 	}
 }
 
+func (node *PrivilegeLevel) reset() {
+	*node = PrivilegeLevel{}
+}
+
 func (node *PrivilegeLevel) String() string {
 	fmtCtx := NewFmtCtx(dialect.MYSQL)
 	node.Format(fmtCtx)
 	return fmtCtx.String()
 }
 
-func NewPrivilegeLevel(l PrivilegeLevelType, d, t, r string) *PrivilegeLevel {
-	return &PrivilegeLevel{
-		Level:       l,
-		DbName:      d,
-		TabName:     t,
-		RoutineName: r,
-	}
+func NewPrivilegeLevel(l PrivilegeLevelType) *PrivilegeLevel {
+	p := reuse.Alloc[PrivilegeLevel](nil)
+	p.Level = l
+	return p
 }
+
+func (node PrivilegeLevel) TypeName() string { return "tree.PrivilegeLevel"}
 
 type PrivilegeLevelType int
 
@@ -189,6 +307,13 @@ type Privilege struct {
 	ColumnList []*UnresolvedName
 }
 
+func NewPrivilege(t PrivilegeType, c []*UnresolvedName) *Privilege {
+	p := reuse.Alloc[Privilege](nil)
+	p.Type = t
+	p.ColumnList = c
+	return p
+}
+
 func (node *Privilege) Format(ctx *FmtCtx) {
 	ctx.WriteString(node.Type.ToString())
 	if node.ColumnList != nil {
@@ -202,12 +327,20 @@ func (node *Privilege) Format(ctx *FmtCtx) {
 	}
 }
 
-func NewPrivilege(t PrivilegeType, c []*UnresolvedName) *Privilege {
-	return &Privilege{
-		Type:       t,
-		ColumnList: c,
+func (node *Privilege) reset() {
+	if node.ColumnList != nil {
+		// for _, item := range node.ColumnList {
+		// 	item.Free()
+		// }
 	}
+	*node = Privilege{}
 }
+
+func (node *Privilege) Free() {
+	reuse.Free[Privilege](node, nil)
+}
+
+func (node Privilege) TypeName() string { return "tree.Privilege"}
 
 type ObjectType int
 

@@ -14,7 +14,31 @@
 
 package tree
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/matrixorigin/matrixone/pkg/common/reuse"
+)
+
+func init() {
+	reuse.CreatePool[KillOption](
+		func() *KillOption { return &KillOption{} },
+		func(k *KillOption) { k.reset() },
+		reuse.DefaultOptions[KillOption](),
+	)
+
+	reuse.CreatePool[StatementOption](
+		func() *StatementOption { return &StatementOption{} },
+		func(s *StatementOption) { s.reset() },
+		reuse.DefaultOptions[StatementOption](),
+	)
+
+	reuse.CreatePool[Kill](
+		func() *Kill { return &Kill{} },
+		func(k *Kill) { k.reset() },
+		reuse.DefaultOptions[Kill](),
+	)
+}
 
 type KillType int
 
@@ -39,15 +63,39 @@ type KillOption struct {
 	Typ   KillType
 }
 
+func NewKillOption() *KillOption {
+	ko := reuse.Alloc[KillOption](nil)
+	return ko
+}
+
 func (ko KillOption) Format(ctx *FmtCtx) {
 	if ko.Exist {
 		ctx.WriteString(ko.Typ.String())
 	}
 }
 
+func (node *KillOption) reset() {
+	*node = KillOption{}
+}
+
+func (node *KillOption) Free() {
+	reuse.Free[KillOption](node, nil)
+}
+
+func (node KillOption) TypeName() string { return "tree.KillOption" }
+
 type StatementOption struct {
 	Exist       bool
 	StatementId string
+}
+
+func NewStatementOption() *StatementOption {
+	so := reuse.Alloc[StatementOption](nil)
+	return so
+}
+
+func (node *StatementOption) reset() {
+	*node = StatementOption{}
 }
 
 func (so StatementOption) Format(ctx *FmtCtx) {
@@ -56,11 +104,25 @@ func (so StatementOption) Format(ctx *FmtCtx) {
 	}
 }
 
+func (node *StatementOption) Free() {
+	reuse.Free[StatementOption](node, nil)
+}
+
+func (node StatementOption) TypeName() string { return "tree.StatementOption" }
+
 type Kill struct {
 	statementImpl
 	Option       KillOption
 	ConnectionId uint64
 	StmtOption   StatementOption
+}
+
+func NewKill(o KillOption, id uint64, so StatementOption) *Kill {
+	k := reuse.Alloc[Kill](nil)
+	k.Option = o
+	k.ConnectionId = id
+	k.StmtOption = so
+	return k
 }
 
 func (k *Kill) Format(ctx *FmtCtx) {
@@ -79,5 +141,18 @@ func (k *Kill) Format(ctx *FmtCtx) {
 	}
 }
 
+func (node *Kill) reset() {
+	node.Option.Free()
+	node.StmtOption.Free()
+	*node = Kill{}
+}
+
+func (node *Kill) Free() {
+	reuse.Free[Kill](node, nil)
+}
+
 func (k *Kill) GetStatementType() string { return "kill" }
-func (k *Kill) GetQueryType() string     { return QueryTypeOth }
+
+func (k *Kill) GetQueryType() string { return QueryTypeOth }
+
+func (node Kill) TypeName() string { return "tree.Kill" }
