@@ -941,7 +941,11 @@ func (txn *Transaction) forEachTableHasDeletesLocked(f func(tbl *txnTable) error
 		if _, ok := tables[e.tableId]; ok {
 			continue
 		}
-		_, _, rel, err := txn.engine.GetRelationById(txn.proc.Ctx, txn.op, e.tableId)
+		db, err := txn.engine.Database(txn.proc.Ctx, e.databaseName, txn.op)
+		if err != nil {
+			return err
+		}
+		rel, err := db.Relation(txn.proc.Ctx, e.tableName, nil)
 		if err != nil {
 			return err
 		}
