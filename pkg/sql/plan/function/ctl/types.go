@@ -35,6 +35,7 @@ var (
 	UseSnapshotMethod   = "USESNAPSHOT"
 	GetSnapshotMethod   = "GETSNAPSHOT"
 	CheckpointMethod    = "CHECKPOINT"
+	GlobalCheckpointMethod = "GLOBALCHECKPOINT"
 	ForceGCMethod       = "FORCEGC"
 	InspectMethod       = "INSPECT"
 	LabelMethod         = "LABEL"
@@ -63,6 +64,7 @@ var (
 		UseSnapshotMethod:     handleUseSnapshotTS,
 		GetSnapshotMethod:     handleGetSnapshotTS,
 		CheckpointMethod:      handleCheckpoint(),
+		GlobalCheckpointMethod: handleGlobalCheckpoint(),
 		ForceGCMethod:         handleCNGC,
 		InspectMethod:         handleInspectTN(),
 		LabelMethod:           handleSetLabel,
