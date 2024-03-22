@@ -142,16 +142,16 @@ func (mr *MessageReceiver) Free() {
 	mr.mb.RwMutex.Lock()
 	defer mr.mb.RwMutex.Unlock()
 	for i := range mr.received {
-		mr.mb.Messages[i] = nil
+		mr.mb.Messages[mr.received[i]] = nil
 	}
 	mr.received = nil
 }
 
 func (mr *MessageReceiver) ReceiveMessage(needBlock bool) []Message {
-	if !needBlock {
-		return mr.receiveMessageNonBlock()
+	var result = mr.receiveMessageNonBlock()
+	if !needBlock || len(result) > 0 {
+		return result
 	}
-	var result []Message
 	for len(result) == 0 {
 		mr.mb.Cond.L.Lock()
 		mr.mb.Cond.Wait()
