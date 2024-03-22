@@ -34,6 +34,10 @@ func (s *service) GetFinalVersion() string {
 	return s.handles[len(s.handles)-1].Metadata().Version
 }
 
+func (s *service) GetFinalVersionOffset() int32 {
+	return int32(s.handles[len(s.handles)-1].Metadata().VersionOffset)
+}
+
 func (s *service) getVersionHandle(version string) VersionHandle {
 	for _, h := range s.handles {
 		if h.Metadata().Version == version {

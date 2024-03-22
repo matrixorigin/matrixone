@@ -17,6 +17,7 @@ package bootstrap
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/predefine"
@@ -200,12 +201,53 @@ var (
 			catalog.MOTaskDB),
 	}
 
+	step3InitSQLs = []string{
+		fmt.Sprintf(`create table %s.%s (
+			version             varchar(50) not null,
+		    version_offset      int unsigned default 0,
+			state               int,
+			create_at           timestamp not null,
+			update_at           timestamp not null,
+			primary key(version, version_offset)
+		)`, catalog.MO_CATALOG, catalog.MOVersionTable),
+
+		fmt.Sprintf(`create table %s.%s (
+			id                   bigint unsigned not null primary key auto_increment,
+			from_version         varchar(50) not null,
+			to_version           varchar(50) not null,
+			final_version        varchar(50) not null,
+            final_version_offset int unsigned default 0,
+			state                int,
+			upgrade_cluster      int,
+			upgrade_tenant       int,
+			upgrade_order        int,
+			total_tenant         int,
+			ready_tenant         int,
+			create_at            timestamp not null,
+			update_at            timestamp not null
+		)`, catalog.MO_CATALOG, catalog.MOUpgradeTable),
+
+		fmt.Sprintf(`create table %s.%s (
+			id                  bigint unsigned not null primary key auto_increment,
+			upgrade_id		    bigint unsigned not null,
+			target_version      varchar(50) not null,
+			from_account_id     int not null,
+			to_account_id       int not null,
+			ready               int,
+			create_at           timestamp not null,
+			update_at           timestamp not null
+		)`, catalog.MO_CATALOG, catalog.MOUpgradeTenantTable),
+	}
+
+	initMoVersionFormat = `insert into %s.%s values ('%s', %d, %d, current_timestamp(), current_timestamp())`
+
 	initSQLs []string
 )
 
 func init() {
 	initSQLs = append(initSQLs, step1InitSQLs...)
 	initSQLs = append(initSQLs, step2InitSQLs...)
+	initSQLs = append(initSQLs, step3InitSQLs...)
 
 	// generate system cron tasks sql
 	sql, err := predefine.GenInitCronTaskSQL()
@@ -328,7 +370,7 @@ func (s *service) execBootstrap(ctx context.Context) error {
 		WithAccountID(catalog.System_Account)
 
 	err := s.exec.ExecTxn(ctx, func(txn executor.TxnExecutor) error {
-		if err := initPreprocessSQL(ctx, txn); err != nil {
+		if err := initPreprocessSQL(ctx, txn, s.GetFinalVersion(), s.GetFinalVersionOffset()); err != nil {
 			return err
 		}
 		if err := frontend.InitSysTenant(ctx, txn, s.GetFinalVersion()); err != nil {
@@ -375,18 +417,23 @@ func (s *service) Close() error {
 }
 
 // initPreprocessSQL  Execute preprocessed SQL, which typically must be completed before system tenant initialization
-func initPreprocessSQL(ctx context.Context, txn executor.TxnExecutor) error {
+func initPreprocessSQL(ctx context.Context, txn executor.TxnExecutor, finalVersion string, finalVersonOffset int32) error {
 	var timeCost time.Duration
 	defer func() {
 		logutil.Debugf("Initialize system pre SQL: create cost %d ms", timeCost.Milliseconds())
 	}()
 
 	begin := time.Now()
-
+	var initMoVersion string
 	for _, sql := range initSQLs {
 		if _, err := txn.Exec(sql, executor.StatementOption{}); err != nil {
 			return err
 		}
+	}
+
+	initMoVersion = fmt.Sprintf(initMoVersionFormat, catalog.MO_CATALOG, catalog.MOVersionTable, finalVersion, finalVersonOffset, versions.StateReady)
+	if _, err := txn.Exec(initMoVersion, executor.StatementOption{}); err != nil {
+		return err
 	}
 
 	timeCost = time.Since(begin)

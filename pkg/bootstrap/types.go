@@ -54,6 +54,8 @@ type Service interface {
 	UpgradeTenant(ctx context.Context, tenantName string, retryCount uint32, isALLAccount bool) (bool, error)
 	// GetFinalVersion Get mo final version, which is based on the current code
 	GetFinalVersion() string
+	// GetFinalVersionOffset Get mo final version offset, which is based on the current code
+	GetFinalVersionOffset() int32
 	// Close close bootstrap service
 	Close() error
 }

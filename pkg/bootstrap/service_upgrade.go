@@ -57,12 +57,6 @@ func (s *service) BootstrapUpgrade(ctx context.Context) error {
 	// number of tenants is huge. So the whole tenant upgrade is asynchronous and will
 	// be grouped for all tenants and concurrently executed on multiple CNs at the same
 	// time.
-
-	//if err := retryRun(ctx, "check and init upgrade framework", s.initFramework); err != nil {
-	//	getUpgradeLogger().Error("check and init upgrade framework", zap.Error(err))
-	//	return err
-	//}
-
 	if err := retryRun(ctx, "doCheckUpgrade", s.doCheckUpgrade); err != nil {
 		getUpgradeLogger().Error("check upgrade failed", zap.Error(err))
 		return err
