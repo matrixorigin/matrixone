@@ -288,3 +288,7 @@ func (h *testVersionHandle) HandleTenantUpgrade(ctx context.Context, tenantID in
 	h.callHandleTenantUpgrade.Add(1)
 	return nil
 }
+
+func (h *testVersionHandle) HandleCreateFrameworkDeps(txn executor.TxnExecutor) error {
+	return nil
+}

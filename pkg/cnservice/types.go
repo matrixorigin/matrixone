@@ -268,7 +268,8 @@ type Config struct {
 	LogtailUpdateStatsThreshold int `toml:"logtail-update-stats-threshold"`
 
 	// Whether to automatically upgrade when system startup
-	AutomaticUpgrade bool `toml:"auto-upgrade"`
+	AutomaticUpgrade       bool `toml:"auto-upgrade"`
+	UpgradeTenantBatchSize int  `toml:"upgrade-tenant-batch"`
 }
 
 func (c *Config) Validate() error {
@@ -537,6 +538,12 @@ func (c *Config) SetDefaultValue() {
 
 	if !metadata.ValidStateString(c.InitWorkState) {
 		c.InitWorkState = metadata.WorkState_Working.String()
+	}
+
+	if c.UpgradeTenantBatchSize <= 0 {
+		c.UpgradeTenantBatchSize = 16
+	} else if c.UpgradeTenantBatchSize >= 32 {
+		c.UpgradeTenantBatchSize = 32
 	}
 
 	c.Frontend.SetDefaultValues()
