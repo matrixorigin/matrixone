@@ -300,6 +300,7 @@ func (c *checkpointCleaner) TryGC() error {
 		if err != nil {
 			return err
 		}
+		defer data.Close()
 		err = c.tryGC(data, maxGlobalCKP)
 		if err != nil {
 			return err
@@ -382,6 +383,7 @@ func (c *checkpointCleaner) CheckGC() error {
 	if err != nil {
 		return err
 	}
+	defer data.Close()
 	gcTable := NewGCTable()
 	gcTable.UpdateTable(data)
 	for i, ckp := range debugCandidates {
