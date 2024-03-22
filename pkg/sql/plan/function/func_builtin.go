@@ -190,7 +190,15 @@ func builtInMoShowVisibleBinEnum(parameters []*vector.Vector, result vector.Func
 		}
 
 		// get enum values
-		ret := fmt.Sprintf("%s(%s)", typ.String(), enumStr)
+		enums := strings.Split(enumStr, ",")
+		enumVal := ""
+		for i, e := range enums {
+			enumVal += fmt.Sprintf("'%s'", e)
+			if i < len(enums)-1 {
+				enumVal += ","
+			}
+		}
+		ret := fmt.Sprintf("%s(%s)", typ.String(), enumVal)
 		return functionUtil.QuickStrToBytes(ret), nil
 	}
 
