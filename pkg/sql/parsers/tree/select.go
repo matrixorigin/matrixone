@@ -184,7 +184,7 @@ type Order struct {
 	Expr          Expr
 	Direction     Direction
 	NullsPosition NullsPosition
-	//without order
+	// without order
 	NullOrder bool
 }
 
