@@ -240,6 +240,9 @@ type Config struct {
 			BufferSize    int           `toml:"buffer-size"`
 			FlushBytes    toml.ByteSize `toml:"flush-bytes"`
 			FlushDuration toml.Duration `toml:"force-flush-duration"`
+			Dir           string        `toml:"dir"`
+			Enable        bool          `toml:"enable"`
+			Tables        []uint64      `toml:"tables"`
 		} `toml:"trace"`
 	} `toml:"txn"`
 
