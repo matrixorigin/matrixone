@@ -31,7 +31,7 @@ func init() {
 
 }
 
-func (v Vector) TypeName() string {
+func (vec Vector) TypeName() string {
 	return "Vector"
 }
 
