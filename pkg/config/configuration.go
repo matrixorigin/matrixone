@@ -162,6 +162,9 @@ var (
 	defaultLoggerLabelKey = "role"
 	defaultLoggerLabelVal = "logging_cn"
 
+	// default lower_case_table_names
+	defaultLowerCaseTableNames = "1"
+
 	// default sql_mode
 	dafaultSqlMode = "ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES"
 )
@@ -264,7 +267,7 @@ type FrontendParameters struct {
 
 	AutoIncrCacheSize uint64 `toml:"autoIncrCacheSize"`
 
-	LowerCaseTableNames int64 `toml:"lowerCaseTableNames" user_setting:"advanced"`
+	LowerCaseTableNames string `toml:"lowerCaseTableNames" user_setting:"advanced"`
 
 	PrintDebug bool `toml:"printDebug"`
 
@@ -390,8 +393,8 @@ func (fp *FrontendParameters) SetDefaultValues() {
 		fp.AutoIncrCacheSize = 3000000
 	}
 
-	if fp.LowerCaseTableNames == 0 {
-		fp.LowerCaseTableNames = 1
+	if fp.LowerCaseTableNames == "" {
+		fp.LowerCaseTableNames = defaultLowerCaseTableNames
 	}
 
 	if fp.PrintDebugInterval == 0 {
