@@ -38,6 +38,9 @@ uuid = "dd1dccb%d-4d3c-41f8-b482-5251dc7a41bf"
 port-base = %d
 service-host = "cn%d"
 
+[cn.txn.trace]
+dir = "trace%d"
+
 [cn.Engine]
 type = "distributed-tae"
 
