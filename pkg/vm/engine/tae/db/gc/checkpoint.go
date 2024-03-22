@@ -467,9 +467,9 @@ func (c *checkpointCleaner) Process() {
 	c.updateMaxConsumed(candidates[len(candidates)-1])
 
 	var compareTS types.TS
-	minMerged := c.minMerged.Load()
-	if minMerged != nil {
-		compareTS = minMerged.GetEnd()
+	maxCompared := c.maxCompared.Load()
+	if maxCompared != nil {
+		compareTS = maxCompared.GetEnd()
 	}
 	maxGlobalCKP := c.ckpClient.MaxGlobalCheckpoint()
 	if maxGlobalCKP == nil {
@@ -483,6 +483,7 @@ func (c *checkpointCleaner) Process() {
 			c.inputs.RUnlock()
 			return
 		}
+		defer data.Close()
 		err = c.tryGC(data, maxGlobalCKP)
 		if err != nil {
 			return
