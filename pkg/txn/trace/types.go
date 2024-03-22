@@ -38,12 +38,13 @@ var (
 	eventErrorTable           = "trace_event_error"
 	eventTxnActionTable       = "trace_event_txn_action"
 
-	FeatureTraceStatement = "statement"
-	FeatureTraceTxn       = "txn"
-	FeatureTraceTxnAction = "txn-action"
-	FeatureTraceData      = "data"
-	stateEnable           = "enable"
-	stateDisable          = "disable"
+	FeatureTraceStatement    = "statement"
+	FeatureTraceTxn          = "txn"
+	FeatureTraceTxnWorkspace = "txn-workspace"
+	FeatureTraceTxnAction    = "txn-action"
+	FeatureTraceData         = "data"
+	stateEnable              = "enable"
+	stateDisable             = "disable"
 
 	InitSQLs = []string{
 		fmt.Sprintf("create database %s", DebugDB),
@@ -143,6 +144,12 @@ var (
 			featuresTables,
 			FeatureTraceStatement,
 			stateDisable),
+
+		fmt.Sprintf(`insert into %s.%s (name, state) values ('%s', '%s')`,
+			DebugDB,
+			featuresTables,
+			FeatureTraceTxnWorkspace,
+			stateDisable),
 	}
 )
 
@@ -162,6 +169,8 @@ type txnEventService interface {
 	TxnCommit(op client.TxnOperator, entries []*api.Entry)
 	TxnRead(op client.TxnOperator, snapshotTS timestamp.Timestamp, tableID uint64, columns []string, bat *batch.Batch)
 	TxnReadBlock(op client.TxnOperator, tableID uint64, block []byte)
+	TxnWrite(op client.TxnOperator, tableID uint64, typ string, bat *batch.Batch)
+	TxnAdjustWorkspace(op client.TxnOperator, index int, writes func() (tableID uint64, typ string, bat *batch.Batch, more bool))
 	TxnError(op client.TxnOperator, err error)
 
 	TxnStatementStart(op client.TxnOperator, sql string, seq uint64)
@@ -198,6 +207,7 @@ type Service interface {
 	dataEventService
 	statementService
 
+	EnableFlush()
 	Enable(feature string) error
 	Disable(feature string) error
 	Enabled(feature string) bool
