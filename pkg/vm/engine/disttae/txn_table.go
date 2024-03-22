@@ -2368,7 +2368,8 @@ func (tbl *txnTable) PrimaryKeysMayBeModified(
 		keysVector)
 }
 
-func (tbl *txnTable) transferRowid(
+// TODO::refactor in next PR
+func (tbl *txnTable) transferDeletes(
 	ctx context.Context,
 	state *logtailreplay.PartitionState,
 	deleteObjs,
@@ -2460,10 +2461,8 @@ func (tbl *txnTable) transferRowid(
 				}
 			}
 			if beTransfered != toTransfer {
-				logutil.Fatalf("xxxx transfer rowid failed,beTransfered:%d, toTransfer:%d, total %d",
-					beTransfered, toTransfer, len(rowids))
+				return moerr.NewInternalErrorNoCtx("transfer deletes failed")
 			}
-
 		}
 	}
 	return nil
