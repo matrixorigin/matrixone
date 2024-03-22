@@ -893,67 +893,6 @@ func (blk *baseObject) CollectDeleteInRange(
 	return
 }
 
-// CollectDeleteInRangeAfterDeltalocation collects deletes after
-// a certain delta location and committed in [start,end]
-// When subscribe a table, it collects delta location, then it collects deletes.
-// To avoid collecting duplicate deletes,
-// it collects after start ts of the delta location.
-// If the delta location is from CN, deletes is committed after startTS.
-// CollectDeleteInRange still collect duplicate deletes.
-func (blk *baseObject) CollectDeleteInRangeAfterDeltalocation(
-	ctx context.Context,
-	start, end types.TS, // start is startTS of deltalocation
-	withAborted bool,
-	mp *mpool.MPool,
-) (bat *containers.Batch, err error) {
-	for i := uint16(0); i < uint16(blk.meta.BlockCnt()); i++ {
-		// persisted is persistedTS of deletes of the blk
-		// it equals startTS of the last delta location
-		deletes, _, persisted, err := blk.inMemoryCollectDeleteInRange(
-			ctx,
-			i,
-			start,
-			end,
-			withAborted,
-			mp,
-		)
-		if err != nil {
-			return nil, err
-		}
-		// if persisted > start,
-		// there's another delta location committed.
-		// It includes more deletes than former delta location.
-		if persisted.Greater(&start) {
-			deletes, err = blk.PersistedCollectDeleteInRange(
-				ctx,
-				deletes,
-				i,
-				start,
-				end,
-				withAborted,
-				mp,
-			)
-		}
-		if err != nil {
-			return nil, err
-		}
-		if deletes != nil && deletes.Length() != 0 {
-			if bat == nil {
-				bat = containers.NewBatch()
-				bat.AddVector(catalog.AttrRowID, containers.MakeVector(types.T_Rowid.ToType(), mp))
-				bat.AddVector(catalog.AttrCommitTs, containers.MakeVector(types.T_TS.ToType(), mp))
-				bat.AddVector(catalog.AttrPKVal, containers.MakeVector(*deletes.GetVectorByName(catalog.AttrPKVal).GetType(), mp))
-				if withAborted {
-					bat.AddVector(catalog.AttrAborted, containers.MakeVector(types.T_bool.ToType(), mp))
-				}
-			}
-			bat.Extend(deletes)
-			deletes.Close()
-		}
-	}
-	return
-}
-
 func (blk *baseObject) inMemoryCollectDeleteInRange(
 	ctx context.Context,
 	blkID uint16,

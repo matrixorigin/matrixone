@@ -512,11 +512,11 @@ func (n *ObjectMVCCHandle) VisitDeletes(
 	deltalocBat *containers.Batch,
 	tnInsertBat *containers.Batch,
 	skipInMemory bool) (delBatch *containers.Batch, deltalocStart, deltalocEnd int, err error) {
-	n.RLock()
-	defer n.RUnlock()
 	deltalocStart = deltalocBat.Length()
 	for blkOffset, mvcc := range n.deletes {
+		n.RLock()
 		nodes := mvcc.deltaloc.ClonePreparedInRange(start, end)
+		n.RUnlock()
 		var skipData bool
 		if len(nodes) != 0 {
 			blkID := objectio.NewBlockidWithObjectID(&n.meta.ID, blkOffset)
@@ -892,6 +892,13 @@ func (n *MVCCHandle) InMemoryCollectDeleteInRange(
 	return
 }
 
+// CollectDeleteInRangeAfterDeltalocation collects deletes after
+// a certain delta location and committed in [start,end]
+// When subscribe a table, it collects delta location, then it collects deletes.
+// To avoid collecting duplicate deletes,
+// it collects after start ts of the delta location.
+// If the delta location is from CN, deletes is committed after startTS.
+// CollectDeleteInRange still collect duplicate deletes.
 func (n *MVCCHandle) CollectDeleteInRangeAfterDeltalocation(
 	ctx context.Context,
 	start, end types.TS, // start is startTS of deltalocation
