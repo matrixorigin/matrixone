@@ -20,13 +20,14 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
+	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v1_2_0"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"go.uber.org/zap"
 )
 
 var (
-	defaultUpgradeTenantBatch         = 256
+	defaultUpgradeTenantBatch         = 16
 	defaultCheckUpgradeDuration       = time.Second * 5
 	defaultCheckUpgradeTenantDuration = time.Second * 10
 	defaultUpgradeTenantTasks         = 4
@@ -57,6 +58,12 @@ func (s *service) BootstrapUpgrade(ctx context.Context) error {
 	// number of tenants is huge. So the whole tenant upgrade is asynchronous and will
 	// be grouped for all tenants and concurrently executed on multiple CNs at the same
 	// time.
+
+	//if err := retryRun(ctx, "check and init upgrade framework", s.initFramework); err != nil {
+	//	getUpgradeLogger().Error("check and init upgrade framework", zap.Error(err))
+	//	return err
+	//}
+
 	if err := retryRun(ctx, "doCheckUpgrade", s.doCheckUpgrade); err != nil {
 		getUpgradeLogger().Error("check upgrade failed", zap.Error(err))
 		return err
@@ -89,14 +96,6 @@ func (s *service) doCheckUpgrade(ctx context.Context) error {
 		func(txn executor.TxnExecutor) error {
 			final := s.getFinalVersionHandle().Metadata()
 
-			// First version as a genesis version, always need to be PREPARE.
-			// Because the first version need to init upgrade framework tables.
-			if len(s.handles) == 1 {
-				getUpgradeLogger().Info("init upgrade framework",
-					zap.String("final-version", final.Version))
-				return s.handles[0].Prepare(ctx, txn, true)
-			}
-
 			// Deploy mo first time without 1.2.0, init framework first.
 			// And upgrade to current version.
 			created, err := versions.IsFrameworkTablesCreated(txn)
@@ -105,21 +104,33 @@ func (s *service) doCheckUpgrade(ctx context.Context) error {
 					zap.Error(err))
 				return err
 			}
-			if !created {
+
+			// First version as a genesis version, always need to be PREPARE.
+			// Because the first version need to init upgrade framework tables.
+			if len(s.handles) == 1 || !created {
 				getUpgradeLogger().Info("init upgrade framework",
 					zap.String("final-version", final.Version))
 
-				if err := s.handles[0].Prepare(ctx, txn, false); err != nil {
-					getUpgradeLogger().Error("failed to init upgrade framework",
-						zap.Error(err))
-					return err
+				// create new upgrade framework tables for the first time,
+				// which means using v1.2.0 for the first time
+				// NOTE: The `alter table` statements used for upgrading system table rely on `mo_foreign_keys`,
+				// so preprocessing is performed first
+				for _, upgEntry := range v1_2_0.TenantUpgPrepareEntres {
+					err = upgEntry.Upgrade(txn, catalog.System_Account)
+					if err != nil {
+						getLogger().Error("prepare upgrade entry execute error", zap.Error(err), zap.String("upgrade entry", upgEntry.String()))
+						return err
+					}
 				}
 
-				res, err := txn.Exec(final.GetInsertSQL(versions.StateReady), executor.StatementOption{})
-				if err == nil {
-					res.Close()
+				// Many cn maybe create framework tables parallel, only one can create success.
+				// Just return error, and upgrade framework will retry.
+				err = createFrameworkTables(txn, final)
+				if err != nil {
+					getLogger().Error("create upgrade FrameworkTables error", zap.Error(err))
+					return err
 				}
-				return err
+				getLogger().Info("create upgrade FrameworkTables success")
 			}
 
 			// lock version table

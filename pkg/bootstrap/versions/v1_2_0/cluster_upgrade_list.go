@@ -26,7 +26,7 @@ import (
 )
 
 var clusterUpgEntries = []versions.UpgradeEntry{
-	upg_mo_account,
+	//upg_mo_account,
 	upg_mo_pub,
 	upg_sys_async_task,
 	upg_mo_role_privs,

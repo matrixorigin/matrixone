@@ -32,7 +32,7 @@ var tenantUpgEntries = []versions.UpgradeEntry{
 	upg_sql_statement_cu,
 }
 
-var tenantUpgPrepareEntres = []versions.UpgradeEntry{
+var TenantUpgPrepareEntres = []versions.UpgradeEntry{
 	upg_mo_indexes_add_IndexAlgoName,
 	upg_mo_indexes_add_IndexAlgoTableType,
 	upg_mo_indexes_add_IndexAlgoParams,

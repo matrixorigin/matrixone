@@ -57,6 +57,8 @@ var (
 			create_at           timestamp not null,
 			update_at           timestamp not null
 		)`, catalog.MO_CATALOG, catalog.MOUpgradeTenantTable),
+
+		"alter table `mo_account` add column `create_version` varchar(50) default '1.1.0' after suspended_time",
 	}
 )
 

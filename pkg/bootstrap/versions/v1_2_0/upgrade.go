@@ -17,6 +17,7 @@ package v1_2_0
 import (
 	"context"
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -49,68 +50,70 @@ func (v *versionHandle) Prepare(
 	ctx context.Context,
 	txn executor.TxnExecutor,
 	final bool) error {
-	txn.Use(catalog.MO_CATALOG)
-	created, err := versions.IsFrameworkTablesCreated(txn)
-	if err != nil {
-		return err
-	}
+	/*
+		txn.Use(catalog.MO_CATALOG)
+		created, err := versions.IsFrameworkTablesCreated(txn)
+		if err != nil {
+			return err
+		}
 
-	// get all tenantIDs in mo system, including system tenants
-	tenants, err := versions.FetchAllTenants(txn)
-	if err != nil {
-		getLogger().Error("fetch all account ids error", zap.Error(err))
-		return err
-	}
+		// get all tenantIDs in mo system, including system tenants
+		tenants, err := versions.FetchAllTenants(txn)
+		if err != nil {
+			getLogger().Error("fetch all account ids error", zap.Error(err))
+			return err
+		}
 
-	// create new upgrade framework tables for the first time,
-	// which means using v1.2.0 for the first time
-	if !created {
-		//-------------------------------1. all tenants prepare process-------------------------------------
+		// create new upgrade framework tables for the first time,
+		// which means using v1.2.0 for the first time
+		if !created {
+			//-------------------------------1. all tenants prepare process-------------------------------------
+			for _, tenantID := range tenants {
+				// NOTE: The `alter table` statements used for upgrading system table rely on `mo_foreign_keys`,
+				// so preprocessing is performed first
+				for _, upgEntry := range TenantUpgPrepareEntres {
+					err = upgEntry.Upgrade(txn, uint32(tenantID))
+					if err != nil {
+						getLogger().Error("account prepare upgrade entry execute error", zap.Error(err), zap.Int32("AccountId", tenantID), zap.String("upgrade entry", upgEntry.String()))
+						return err
+					}
+				}
+			}
+
+			// Many cn maybe create framework tables parallel, only one can create success.
+			// Just return error, and upgrade framework will retry.
+			err = v.createFrameworkTables(txn, final)
+			if err != nil {
+				getLogger().Error("create upgrade FrameworkTables error", zap.Error(err))
+				return err
+			}
+			getLogger().Info("create upgrade FrameworkTables success")
+		}
+
+		//-------------------------------2. cluster metadata upgrade----------------------------------------
+		// First version as a genesis version, always need to be PREPARE.
+		// Because the first version need to init upgrade framework tables.
+		for _, upgEntry := range clusterUpgEntries {
+			err = upgEntry.Upgrade(txn, catalog.System_Account)
+			if err != nil {
+				getLogger().Error("cluster upgrade entry execute error", zap.Error(err), zap.String("upgrade entry", upgEntry.String()))
+				return err
+			}
+		}
+		getLogger().Info("cluster upgrade success", zap.String("version", "1.2.0"))
+
+		// ------------------------------3. tenant metadata upgrade----------------------------------------
 		for _, tenantID := range tenants {
-			// NOTE: The `alter table` statements used for upgrading system table rely on `mo_foreign_keys`,
-			// so preprocessing is performed first
-			for _, upgEntry := range tenantUpgPrepareEntres {
+			for _, upgEntry := range tenantUpgEntries {
 				err = upgEntry.Upgrade(txn, uint32(tenantID))
 				if err != nil {
-					getLogger().Error("account prepare upgrade entry execute error", zap.Error(err), zap.Int32("AccountId", tenantID), zap.String("upgrade entry", upgEntry.String()))
+					getLogger().Error("account upgrade entry execute error", zap.Error(err), zap.Int32("AccountId", tenantID), zap.String("upgrade entry", upgEntry.String()))
 					return err
 				}
 			}
 		}
-
-		// Many cn maybe create framework tables parallel, only one can create success.
-		// Just return error, and upgrade framework will retry.
-		err = v.createFrameworkTables(txn, final)
-		if err != nil {
-			getLogger().Error("create upgrade FrameworkTables error", zap.Error(err))
-			return err
-		}
-		getLogger().Info("create upgrade FrameworkTables success")
-	}
-
-	//-------------------------------2. cluster metadata upgrade----------------------------------------
-	// First version as a genesis version, always need to be PREPARE.
-	// Because the first version need to init upgrade framework tables.
-	for _, upgEntry := range clusterUpgEntries {
-		err = upgEntry.Upgrade(txn, catalog.System_Account)
-		if err != nil {
-			getLogger().Error("cluster upgrade entry execute error", zap.Error(err), zap.String("upgrade entry", upgEntry.String()))
-			return err
-		}
-	}
-	getLogger().Info("cluster upgrade success", zap.String("version", "1.2.0"))
-
-	// ------------------------------3. tenant metadata upgrade----------------------------------------
-	for _, tenantID := range tenants {
-		for _, upgEntry := range tenantUpgEntries {
-			err = upgEntry.Upgrade(txn, uint32(tenantID))
-			if err != nil {
-				getLogger().Error("account upgrade entry execute error", zap.Error(err), zap.Int32("AccountId", tenantID), zap.String("upgrade entry", upgEntry.String()))
-				return err
-			}
-		}
-	}
-	getLogger().Info("upgrade all account success", zap.String("version", "1.2.0"))
+		getLogger().Info("upgrade all account success", zap.String("version", "1.2.0"))
+	*/
 	return nil
 }
 
@@ -119,17 +122,33 @@ func (v *versionHandle) HandleTenantUpgrade(
 	tenantID int32,
 	txn executor.TxnExecutor) error {
 
+	for _, upgEntry := range tenantUpgEntries {
+		err := upgEntry.Upgrade(txn, uint32(tenantID))
+		if err != nil {
+			getLogger().Error("account upgrade entry execute error", zap.Error(err), zap.Int32("AccountId", tenantID), zap.String("upgrade entry", upgEntry.String()))
+			return err
+		}
+	}
+
 	return nil
 }
 
 func (v *versionHandle) HandleClusterUpgrade(
 	ctx context.Context,
 	txn executor.TxnExecutor) error {
-	if err := handleCreateIndexesForTaskTables(ctx, txn); err != nil {
-		return err
-	}
-	if err := v.handleCreateTxnTrace(txn); err != nil {
-		return err
+	//if err := handleCreateIndexesForTaskTables(ctx, txn); err != nil {
+	//	return err
+	//}
+	//if err := v.handleCreateTxnTrace(txn); err != nil {
+	//	return err
+	//}
+	txn.Use(catalog.MO_CATALOG)
+	for _, upgEntry := range clusterUpgEntries {
+		err := upgEntry.Upgrade(txn, catalog.System_Account)
+		if err != nil {
+			getLogger().Error("cluster upgrade entry execute error", zap.Error(err), zap.String("upgrade entry", upgEntry.String()))
+			return err
+		}
 	}
 	return nil
 }
