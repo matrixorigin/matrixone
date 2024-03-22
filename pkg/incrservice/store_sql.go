@@ -67,9 +67,9 @@ func (s *sqlStore) SelectAll(
 	txnInfo := ""
 	if txnOp != nil {
 		opts = opts.WithDisableIncrStatement()
+		txnInfo = txnOp.Txn().DebugString()
 	} else {
 		opts = opts.WithEnableTrace()
-		txnInfo = txnOp.Txn().DebugString()
 	}
 	res, err := s.exec.Exec(ctx, fetchSQL, opts)
 	if err != nil {
