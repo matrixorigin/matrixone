@@ -131,7 +131,7 @@ jobs:
         run: |
           export MYSQL_PWD=111;
           for i in {1..300}; do
-            if mysql -h ${{ steps.get_mo_addr.outputs.mo_svc_ip }} -P 6001 -u dump -e "select mo_ctl('cn', 'txn-trace', 'add-txn user admin');"; then
+            if mysql -h ${{ steps.get_mo_addr.outputs.mo_svc_ip }} -P 6001 -u dump -e "select mo_ctl('cn', 'txn-trace', 'add-txn user dump');select mo_ctl('cn', 'txn-trace', 'add-txn user admin');select mo_ctl('cn', 'txn-trace', 'add-txn connection sql-executor,0');select mo_ctl('cn', 'txn-trace', 'enable txn');select mo_ctl('cn', 'txn-trace', 'enable data');"; then
               break;
             fi
           sleep 1;
@@ -303,8 +303,6 @@ jobs:
         run: |
           export MYSQL_PWD='111'
           echo "select mo_ctl('cn', 'txn-trace', 'add-table mo_increment_columns');" >> enable_txn_trace.sql;
-          echo "select mo_ctl('cn', 'txn-trace', 'enable txn');" >> enable_txn_trace.sql;
-          echo "select mo_ctl('cn', 'txn-trace', 'enable data');" >> enable_txn_trace.sql;
           cat enable_txn_trace.sql;
           echo "===================";
           for i in {1..300}; do
@@ -530,8 +528,6 @@ jobs:
           for i in {1..10}; do
             echo "select mo_ctl('cn', 'txn-trace', 'add-table sbtest$i');" >> enable_txn_trace.sql;
           done
-          echo "select mo_ctl('cn', 'txn-trace', 'enable txn');" >> enable_txn_trace.sql;
-          echo "select mo_ctl('cn', 'txn-trace', 'enable data');" >> enable_txn_trace.sql;
           cat enable_txn_trace.sql;
           echo "===================";
           for i in {1..300}; do
@@ -666,8 +662,6 @@ jobs:
           for table in ${tpcc_tables[@]}; do
             echo "select mo_ctl('cn', 'txn-trace', 'add-table $table');" >> enable_txn_trace.sql;
           done
-          echo "select mo_ctl('cn', 'txn-trace', 'enable txn');" >> enable_txn_trace.sql;
-          echo "select mo_ctl('cn', 'txn-trace', 'enable data');" >> enable_txn_trace.sql;
           cat enable_txn_trace.sql;
           echo "===================";
           for i in {1..300}; do
