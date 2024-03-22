@@ -45,6 +45,7 @@ type TxnExecutor interface {
 	Use(db string)
 	LockTable(table string) error
 	Exec(sql string, options StatementOption) (Result, error)
+	Txn() client.TxnOperator
 }
 
 // Options execute options.
@@ -59,6 +60,7 @@ type Options struct {
 	timeZone                *time.Location
 	statementOptions        StatementOption
 	txnOpts                 []client.TxnOption
+	enableTrace             bool
 }
 
 // StatementOption statement execute option.
