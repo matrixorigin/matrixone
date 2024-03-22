@@ -43,6 +43,29 @@ import (
 	"go.uber.org/zap"
 )
 
+func WithEnable(
+	value bool,
+	tables []uint64) Option {
+	return func(s *service) {
+		s.atomic.dataEventEnabled.Store(value)
+		s.atomic.txnEventEnabled.Store(value)
+		s.atomic.txnWorkspaceEnabled.Store(value)
+		s.atomic.txnActionEventEnabled.Store(value)
+
+		if value {
+			s.atomic.txnFilters.Store(&txnFilters{
+				filters: []TxnFilter{&allTxnFilter{}},
+			})
+			f := &tableFilters{}
+			for _, id := range tables {
+				f.filters = append(f.filters,
+					NewKeepTableFilter(id, nil))
+			}
+			s.atomic.tableFilters.Store(f)
+		}
+	}
+}
+
 func WithBufferSize(value int) Option {
 	return func(s *service) {
 		s.options.bufferSize = value
@@ -82,7 +105,9 @@ type service struct {
 	logger *log.MOLogger
 
 	atomic struct {
+		flushEnabled          atomic.Bool
 		txnEventEnabled       atomic.Bool
+		txnWorkspaceEnabled   atomic.Bool
 		txnActionEventEnabled atomic.Bool
 		dataEventEnabled      atomic.Bool
 		statementEnabled      atomic.Bool
@@ -135,9 +160,8 @@ func NewService(
 		s.options.flushBytes = 16 * 1024 * 1024
 	}
 	if s.options.bufferSize == 0 {
-		s.options.bufferSize = 100000
+		s.options.bufferSize = 1000000
 	}
-
 	s.txnBufC = make(chan *buffer, s.options.bufferSize)
 	s.entryBufC = make(chan *buffer, s.options.bufferSize)
 	s.entryC = make(chan csvEvent, s.options.bufferSize)
@@ -168,6 +192,10 @@ func NewService(
 	return s, nil
 }
 
+func (s *service) EnableFlush() {
+	s.atomic.flushEnabled.Store(true)
+}
+
 func (s *service) Enable(feature string) error {
 	return s.updateState(feature, stateEnable)
 }
@@ -186,6 +214,8 @@ func (s *service) Enabled(feature string) bool {
 		return s.atomic.txnActionEventEnabled.Load()
 	case FeatureTraceStatement:
 		return s.atomic.statementEnabled.Load()
+	case FeatureTraceTxnWorkspace:
+		return s.atomic.txnWorkspaceEnabled.Load()
 	}
 	return false
 }
@@ -291,7 +321,9 @@ func (s *service) handleEvent(
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			flush()
+			if s.atomic.flushEnabled.Load() {
+				flush()
+			}
 		case e := <-csvC:
 			e.toCSVRecord(s.cn, buf, records)
 			if err := w.Write(records); err != nil {
@@ -300,7 +332,8 @@ func (s *service) handleEvent(
 			}
 
 			sum += bytes()
-			if sum > s.options.flushBytes {
+			if sum > s.options.flushBytes &&
+				s.atomic.flushEnabled.Load() {
 				flush()
 			}
 
@@ -401,6 +434,10 @@ func (s *service) watch(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			if !s.atomic.flushEnabled.Load() {
+				continue
+			}
+
 			features, states, err := fetch()
 			if err != nil {
 				s.logger.Error("failed to fetch trace state",
@@ -417,6 +454,8 @@ func (s *service) watch(ctx context.Context) {
 				switch feature {
 				case FeatureTraceData:
 					s.atomic.dataEventEnabled.Store(enable)
+				case FeatureTraceTxnWorkspace:
+					s.atomic.txnWorkspaceEnabled.Store(enable)
 				case FeatureTraceTxn:
 					s.atomic.txnEventEnabled.Store(enable)
 				case FeatureTraceTxnAction:
@@ -448,7 +487,7 @@ func (s *service) watch(ctx context.Context) {
 
 func (s *service) updateState(feature, state string) error {
 	switch feature {
-	case FeatureTraceData, FeatureTraceTxnAction, FeatureTraceTxn, FeatureTraceStatement:
+	case FeatureTraceData, FeatureTraceTxnAction, FeatureTraceTxn, FeatureTraceStatement, FeatureTraceTxnWorkspace:
 	default:
 		return moerr.NewNotSupportedNoCtx("feature %s", feature)
 	}
@@ -512,6 +551,34 @@ func newReadEntryData(
 	l.id = tableID
 	l.columns = append(l.columns, columns...)
 	l.vecs = append(l.vecs, bat.Vecs...)
+	return l
+}
+
+func newWriteEntryData(
+	tableID uint64,
+	bat *batch.Batch,
+	at int64) *EntryData {
+	l := reuse.Alloc[EntryData](nil)
+	l.at = at
+	l.id = tableID
+	if bat != nil && bat.RowCount() > 0 {
+		l.columns = append(l.columns, bat.Attrs...)
+		l.vecs = append(l.vecs, bat.Vecs...)
+	}
+	return l
+}
+
+func newWorkspaceEntryData(
+	tableID uint64,
+	bat *batch.Batch,
+	at int64) *EntryData {
+	l := reuse.Alloc[EntryData](nil)
+	l.at = at
+	l.id = tableID
+	if bat != nil && bat.RowCount() > 0 {
+		l.columns = append(l.columns, bat.Attrs...)
+		l.vecs = append(l.vecs, bat.Vecs...)
+	}
 	return l
 }
 
@@ -614,9 +681,64 @@ func (l *EntryData) createRead(
 				l.at,
 				txnID,
 				l.id,
-				l.entryType,
 				data,
 				l.snapshotTS)
+		},
+		fn,
+		completedPKTables)
+}
+
+func (l *EntryData) createWrite(
+	txnID []byte,
+	buf *buffer,
+	typ string,
+	fn func(e dataEvent),
+	completedPKTables *sync.Map) {
+
+	if typ == "delete" {
+		l.entryType = api.Entry_Delete
+	}
+
+	l.writeToBuf(
+		buf,
+		func(data []byte, row int) dataEvent {
+			return newWriteEntryEvent(
+				l.at,
+				txnID,
+				typ,
+				l.id,
+				data)
+		},
+		fn,
+		completedPKTables)
+}
+
+func (l *EntryData) createWorkspace(
+	txnID []byte,
+	buf *buffer,
+	typ string,
+	adjustCount int,
+	offsetCount int,
+	fn func(e dataEvent),
+	completedPKTables *sync.Map) {
+	l.writeToBuf(
+		buf,
+		func(data []byte, row int) dataEvent {
+			adjust := buf.writeInt(int64(adjustCount))
+			offset := buf.writeInt(int64(offsetCount))
+			idx := buf.buf.GetWriteIndex()
+			buf.buf.WriteString(adjust)
+			buf.buf.WriteString("-")
+			buf.buf.WriteString(offset)
+			buf.buf.WriteString(": ")
+			buf.buf.Write(data)
+			data = buf.buf.RawSlice(idx, buf.buf.GetWriteIndex())
+			return newWorkspaceEntryEvent(
+				l.at,
+				txnID,
+				typ,
+				l.id,
+				data)
 		},
 		fn,
 		completedPKTables)
@@ -628,6 +750,7 @@ func (l *EntryData) writeToBuf(
 	fn func(e dataEvent),
 	completedPKTables *sync.Map) {
 	if len(l.vecs) == 0 {
+		fn(factory([]byte(""), 0))
 		return
 	}
 
@@ -645,9 +768,9 @@ func (l *EntryData) writeToBuf(
 			buf.buf.WriteString(name)
 			buf.buf.WriteString(":")
 			if isComplexColumn(name) ||
-				(ok &&
-					l.entryType == api.Entry_Delete &&
-					isDeletePKColumn(name)) {
+				(isDeletePKColumn(name) &&
+					ok &&
+					l.entryType == api.Entry_Delete) {
 				writeCompletedValue(columnsData.GetBytesAt(row), buf, dst)
 				isCompletedPKTable = true
 			} else {
@@ -657,8 +780,10 @@ func (l *EntryData) writeToBuf(
 				buf.buf.WriteString(", ")
 			}
 		}
-		data := buf.buf.RawSlice(idx, buf.buf.GetWriteIndex())
-		fn(factory(data, row))
+		if buf.buf.GetWriteIndex() > idx {
+			data := buf.buf.RawSlice(idx, buf.buf.GetWriteIndex())
+			fn(factory(data, row))
+		}
 	}
 	if !ok && isCompletedPKTable {
 		completedPKTables.Store(l.id, true)

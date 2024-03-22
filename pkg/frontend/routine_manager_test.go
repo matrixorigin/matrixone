@@ -34,6 +34,7 @@ func create_test_server() *MOServer {
 	if err != nil {
 		panic(err)
 	}
+	pu.SV.SetDefaultValues()
 
 	address := fmt.Sprintf("%s:%d", pu.SV.Host, pu.SV.Port)
 	moServerCtx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)

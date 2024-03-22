@@ -449,3 +449,13 @@ func (ip *internalProtocol) incDebugCount(int) {}
 func (ip *internalProtocol) resetDebugCount() []uint64 {
 	return nil
 }
+
+func (ip *internalProtocol) DisableAutoFlush() {
+}
+
+func (ip *internalProtocol) EnableAutoFlush() {
+}
+
+func (ip *internalProtocol) Flush() error {
+	return nil
+}
