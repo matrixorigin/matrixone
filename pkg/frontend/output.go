@@ -103,6 +103,9 @@ func (oq *outputQueue) getEmptyRow() ([]interface{}, error) {
 flush will force the data flushed into the protocol.
 */
 func (oq *outputQueue) flush() error {
+	oq.proto.DisableAutoFlush()
+	defer oq.proto.EnableAutoFlush()
+
 	if oq.rowIdx <= 0 {
 		return nil
 	}
