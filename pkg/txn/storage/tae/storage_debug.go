@@ -110,6 +110,14 @@ func (s *taeStorage) Debug(ctx context.Context,
 		resp, _ := handleRead(ctx, txnMeta, data, s.taeHandler.HandleStorageUsage)
 		return resp.Read()
 
+	case uint32(api.OpCode_OpInterceptCommit):
+		resp, err := handleRead(ctx, txnMeta, data, s.taeHandler.HandleInterceptCommit)
+		if err != nil {
+			return types.Encode(&api.SyncLogTailResp{
+				CkpLocation: "Failed",
+			})
+		}
+		return resp.Read()
 	default:
 		return nil, moerr.NewNotSupportedNoCtx("TAEStorage not support ctl method %d", opCode)
 	}
