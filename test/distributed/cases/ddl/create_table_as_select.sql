@@ -837,9 +837,7 @@ select * from test05;
 insert into test05 values (2, 39304.3424);
 
 alter table test01 rename column col1 to newCol;
--- @bvt:issue#14955
 show create table test01;
--- @bvt:issue
 
 drop table if exists test06;
 create table test06 (col1 int not null default 100) as select col1 from test01;
@@ -1112,17 +1110,20 @@ drop account acc0;
 drop publication sys_pub_1;
 
 -- alias
+show variables like 'lower_case_table_names';
+set @@global.lower_case_table_names = 0;
+-- @session:id=24&user=sys:dump&password=111
+use test;
 drop table if exists alias01;
 create table alias01 (col1 int, col2 decimal);
 insert into alias01 values (1,2);
 insert into alias01 values (2,3);
 drop table if exists alias02;
 create table alias02 (NewCol int) as select * from alias01;
--- @bvt:issue#14955
 show create table alias02;
--- @bvt:issue
 select * from alias02;
 drop table alias01;
+-- @session
 drop database test;
 
 -- privilege
@@ -1299,3 +1300,4 @@ drop user role_u2;
 drop database db;
 drop database db5;
 drop database db6;
+set @@global.lower_case_table_names = 1;
