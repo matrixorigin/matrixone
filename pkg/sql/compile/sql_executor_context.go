@@ -416,6 +416,7 @@ func (c *compilerContext) getTableDef(
 		ClusterBy:    clusterByDef,
 		Indexes:      indexes,
 		Version:      schemaVersion,
+		DbName:       dbName,
 	}
 	return obj, tableDef
 }

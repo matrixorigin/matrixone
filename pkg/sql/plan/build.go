@@ -233,6 +233,13 @@ func GetResultColumnsFromPlan(p *Plan) []*ColDef {
 				Name: query.Headings[idx],
 				Typ:  expr.Typ,
 			}
+
+			if exprCol, ok := expr.Expr.(*plan.Expr_Col); ok {
+				if col := exprCol.Col; col != nil {
+					columns[idx].TblName = col.TblName
+					columns[idx].DbName = col.DbName
+				}
+			}
 		}
 
 		return columns

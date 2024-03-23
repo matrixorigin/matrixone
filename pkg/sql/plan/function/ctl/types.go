@@ -43,6 +43,7 @@ var (
 	BackupMethod           = "BACKUP"
 	TraceSpanMethod        = "TRACESPAN"
 	CoreDumpMethod         = "COREDUMP"
+	InterceptCommitMethod  = "INTERCEPTCOMMIT"
 
 	GetProtocolVersionMethod = "GETPROTOCOLVERSION"
 	SetProtocolVersionMethod = "SETPROTOCOLVERSION"
@@ -79,6 +80,7 @@ var (
 		BackupMethod:           handleBackup(),
 		TraceSpanMethod:        handleTraceSpan,
 		CoreDumpMethod:         handleCoreDump,
+		InterceptCommitMethod:  handleInterceptCommit(),
 
 		GetProtocolVersionMethod: handleGetProtocolVersion,
 		SetProtocolVersionMethod: handleSetProtocolVersion,
