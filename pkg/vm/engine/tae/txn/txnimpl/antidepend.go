@@ -47,8 +47,9 @@ func readWriteConfilictCheck[T catalog.BaseNode[T]](entry *catalog.BaseEntryImpl
 }
 
 type warChecker struct {
-	txn         txnif.AsyncTxn
-	catalog     *catalog.Catalog
+	txn     txnif.AsyncTxn
+	catalog *catalog.Catalog
+	// conflictSet is a set of blocks that had been deleted and committed,in order to fast check conflict.
 	conflictSet map[types.Blockid]bool
 	readSet     map[types.Blockid]*catalog.BlockEntry
 	cache       map[types.Blockid]*catalog.BlockEntry

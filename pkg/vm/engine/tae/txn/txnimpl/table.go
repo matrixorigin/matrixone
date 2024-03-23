@@ -214,7 +214,7 @@ func (tbl *txnTable) TransferDeletes(ts types.TS, phase string) (err error) {
 			// nil: transferred successfully
 			// ErrTxnRWConflict: the target block was also be compacted
 			// ErrTxnWWConflict: w-w error
-			if _, err = tbl.TransferDeleteNode(&id, node, offset, nodes.idx[offset], phase); err != nil {
+			if _, err = tbl.TransferDeleteNode(&id, node, offset, nodes.idx[offset], phase, ts); err != nil {
 				return
 			}
 
@@ -226,10 +226,11 @@ func (tbl *txnTable) TransferDeletes(ts types.TS, phase string) (err error) {
 func (tbl *txnTable) recurTransferDelete(
 	memo map[types.Blockid]*common.PinnedItem[*model.TransferHashPage],
 	page *model.TransferHashPage,
-	id *common.ID,
+	id *common.ID, // the block had been deleted and committed.
 	row uint32,
 	pk containers.Vector,
-	depth int) error {
+	depth int,
+	ts types.TS) error {
 
 	var page2 *common.PinnedItem[*model.TransferHashPage]
 
@@ -252,43 +253,54 @@ func (tbl *txnTable) recurTransferDelete(
 		TableID: id.TableID,
 		BlockID: blockID,
 	}
-	var err error
+
+	//check if the newID had been soft deleted and committed before ts,
+	//if not, transfer the delete to the newID block,
+	//otherwise recursively transfer the delete to the target block.
+	err := tbl.store.warChecker.checkOne(newID, ts)
+	if err == nil {
+		//transfer the delete node to the target block.
+		if err = tbl.RangeDelete(newID, offset, offset, pk, handle.DT_Normal); err != nil {
+			return err
+		}
+		tbl.store.warChecker.conflictSet[newID.BlockID] = true
+		common.DoIfInfoEnabled(func() {
+			logutil.Infof("depth-%d %s transfer delete from blk-%s row-%d to blk-%s row-%d",
+				depth,
+				tbl.schema.Name,
+				id.BlockID.String(),
+				row,
+				blockID.String(),
+				offset)
+		})
+	}
+	//recursively transfer the delete to the target block.
 	if page2, ok = memo[blockID]; !ok {
 		page2, err = tbl.store.rt.TransferTable.Pin(*newID)
-		if err == nil {
-			memo[blockID] = page2
+		if err != nil {
+			return err
 		}
+		memo[blockID] = page2
 	}
-	if page2 != nil {
-		return tbl.recurTransferDelete(
-			memo,
-			page2.Item(),
-			newID,
-			offset,
-			pk,
-			depth+1)
-	}
-	if err = tbl.RangeDelete(newID, offset, offset, pk, handle.DT_Normal); err != nil {
-		return err
-	}
-	common.DoIfInfoEnabled(func() {
-		logutil.Infof("depth-%d %s transfer delete from blk-%s row-%d to blk-%s row-%d",
-			depth,
-			tbl.schema.Name,
-			id.BlockID.String(),
-			row,
-			blockID.String(),
-			offset)
-	})
-	return nil
+	//caudal recursion
+	return tbl.recurTransferDelete(
+		memo,
+		page2.Item(),
+		newID,
+		offset,
+		pk,
+		depth+1,
+		ts)
 }
 
+// TransferDeleteNode TODO::transfer persisted deletes to target block.
 func (tbl *txnTable) TransferDeleteNode(
-	id *common.ID, node txnif.DeleteNode, offset, idx int, phase string,
+	id *common.ID, node txnif.DeleteNode,
+	offset, idx int, phase string, ts types.TS,
 ) (transferred bool, err error) {
 	rows := node.DeletedRows()
 	pk := node.DeletedPK()
-	if transferred, err = tbl.TransferDeleteRows(id, rows, pk, phase); err != nil {
+	if transferred, err = tbl.TransferDeleteRows(id, rows, pk, phase, ts); err != nil {
 		return
 	}
 
@@ -307,7 +319,8 @@ func (tbl *txnTable) TransferDeleteRows(
 	id *common.ID,
 	rows []uint32,
 	pk map[uint32]containers.Vector,
-	phase string) (transferred bool, err error) {
+	phase string,
+	ts types.TS) (transferred bool, err error) {
 	memo := make(map[types.Blockid]*common.PinnedItem[*model.TransferHashPage])
 	common.DoIfInfoEnabled(func() {
 		logutil.Info("[Start]",
@@ -343,7 +356,7 @@ func (tbl *txnTable) TransferDeleteRows(
 	page := pinned.Item()
 	depth := 0
 	for _, row := range rows {
-		if err = tbl.recurTransferDelete(memo, page, id, row, pk[row], depth); err != nil {
+		if err = tbl.recurTransferDelete(memo, page, id, row, pk[row], depth, ts); err != nil {
 			return
 		}
 	}
