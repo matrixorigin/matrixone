@@ -137,6 +137,7 @@ type remoteBackend struct {
 	metrics      *metrics
 	logger       *zap.Logger
 	codec        Codec
+	local        bool
 	conn         goetty.IOSession
 	writeC       chan *Future
 	stopWriteC   chan struct{}
@@ -233,7 +234,13 @@ func NewRemoteBackend(
 		rb.options.goettyOptions = append(rb.options.goettyOptions,
 			goetty.WithSessionDisableAutoResetInBuffer())
 	}
-	rb.conn = goetty.NewIOSession(rb.options.goettyOptions...)
+
+	if !local.isLocal(remote) {
+		rb.conn = goetty.NewIOSession(rb.options.goettyOptions...)
+	} else {
+		rb.conn = newChannelBasedIOSession(remote)
+		rb.local = true
+	}
 
 	if err := rb.resetConn(); err != nil {
 		rb.logger.Error("connect to remote failed")
@@ -442,7 +449,8 @@ func (rb *remoteBackend) writeLoop(ctx context.Context) {
 	defer func() {
 		if err := recover(); err != nil {
 			rb.logger.Fatal("write loop failed",
-				zap.Any("err", err))
+				zap.Any("err", err),
+				zap.Stack("stack"))
 		}
 	}()
 
@@ -526,9 +534,11 @@ func (rb *remoteBackend) doWrite(id uint64, f *Future) time.Duration {
 	// For PayloadMessage, the internal Codec will write the Payload directly to the underlying socket
 	// instead of copying it to the buffer, so the write deadline of the underlying conn needs to be reset
 	// here, otherwise an old deadline will be out causing io/timeout.
-	conn := rb.conn.RawConn()
-	if _, ok := f.send.Message.(PayloadMessage); ok && conn != nil {
-		conn.SetWriteDeadline(time.Now().Add(v))
+	if !rb.local {
+		conn := rb.conn.RawConn()
+		if _, ok := f.send.Message.(PayloadMessage); ok && conn != nil {
+			conn.SetWriteDeadline(time.Now().Add(v))
+		}
 	}
 	if ce := rb.logger.Check(zap.DebugLevel, "write request"); ce != nil {
 		ce.Write(zap.Uint64("request-id", id),
@@ -754,9 +764,7 @@ func (rb *remoteBackend) requestDone(
 	}()
 
 	response := msg.Message
-	if msg.Cancel != nil {
-		defer msg.Cancel()
-	}
+	defer msg.Cancel()
 	if ce := rb.logger.Check(zap.DebugLevel, "read response"); ce != nil {
 		debugStr := ""
 		if response != nil {
@@ -1146,9 +1154,7 @@ func (s *stream) done(
 		s.cleanCLocked()
 	}
 	response := message.Message
-	if message.Cancel != nil {
-		defer message.Cancel()
-	}
+	defer message.Cancel()
 	if response != nil && !message.stream {
 		panic("BUG")
 	}

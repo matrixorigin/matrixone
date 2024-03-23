@@ -64,7 +64,7 @@ type PayloadMessage interface {
 type RPCMessage struct {
 	// Ctx context
 	Ctx    context.Context
-	Cancel context.CancelFunc
+	cancel context.CancelFunc
 	// Message raw rpc message
 	Message Message
 
@@ -78,6 +78,12 @@ type RPCMessage struct {
 // InternalMessage returns true means the rpc message is the internal message in morpc.
 func (m RPCMessage) InternalMessage() bool {
 	return m.internal
+}
+
+func (m RPCMessage) Cancel() {
+	if m.cancel != nil {
+		m.cancel()
+	}
 }
 
 // RPCClient morpc is not a normal remote method call, rather it is a message-based asynchronous

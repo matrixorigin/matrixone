@@ -46,6 +46,7 @@ func (s *service) initRemote() {
 	}
 	rpcServer, err := NewServer(
 		s.cfg.ListenAddress,
+		s.cfg.ServiceAddress,
 		s.cfg.RPC)
 	if err != nil {
 		panic(err)

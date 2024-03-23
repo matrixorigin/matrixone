@@ -193,7 +193,7 @@ func runRPCTests(
 				}))
 		runtime.ProcessLevelRuntime().SetGlobalVariables(runtime.ClusterService, cluster)
 
-		s, err := NewServer(testSockets, morpc.Config{}, opts...)
+		s, err := NewServer(testSockets, "", morpc.Config{}, opts...)
 		require.NoError(t, err)
 		defer func() {
 			assert.NoError(t, s.Close())

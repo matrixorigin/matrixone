@@ -218,7 +218,7 @@ func runValidBenchmark(b *testing.B, name string, tables int) {
 				return time.Now().UTC().UnixNano()
 			}, 0))))
 		testSockets := fmt.Sprintf("unix:///tmp/%d.sock", time.Now().Nanosecond())
-		a := NewLockTableAllocator(testSockets, time.Hour, morpc.Config{})
+		a := NewLockTableAllocator(testSockets, "", time.Hour, morpc.Config{})
 		defer func() {
 			assert.NoError(b, a.Close())
 		}()
@@ -268,7 +268,7 @@ func runLockTableAllocatorTest(
 				}))
 		runtime.ProcessLevelRuntime().SetGlobalVariables(runtime.ClusterService, cluster)
 
-		a := NewLockTableAllocator(testSockets, timeout, morpc.Config{})
+		a := NewLockTableAllocator(testSockets, "", timeout, morpc.Config{})
 		defer func() {
 			assert.NoError(t, a.Close())
 		}()
