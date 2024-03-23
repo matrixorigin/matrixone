@@ -273,6 +273,7 @@ func (tbl *txnTable) recurTransferDelete(
 				blockID.String(),
 				offset)
 		})
+		return nil
 	}
 	//recursively transfer the delete to the target block.
 	if page2, ok = memo[blockID]; !ok {
@@ -281,6 +282,17 @@ func (tbl *txnTable) recurTransferDelete(
 			return err
 		}
 		memo[blockID] = page2
+	}
+
+	rowID, ok = page2.Item().Transfer(offset)
+	if !ok {
+		return moerr.NewTxnWWConflictNoCtx(0, "")
+	}
+	blockID, offset = rowID.Decode()
+	newID = &common.ID{
+		DbID:    id.DbID,
+		TableID: id.TableID,
+		BlockID: blockID,
 	}
 	//caudal recursion
 	return tbl.recurTransferDelete(
