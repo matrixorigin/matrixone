@@ -263,7 +263,6 @@ func (tbl *txnTable) recurTransferDelete(
 		if err = tbl.RangeDelete(newID, offset, offset, pk, handle.DT_Normal); err != nil {
 			return err
 		}
-		tbl.store.warChecker.conflictSet[newID.BlockID] = true
 		common.DoIfInfoEnabled(func() {
 			logutil.Infof("depth-%d %s transfer delete from blk-%s row-%d to blk-%s row-%d",
 				depth,
@@ -275,6 +274,7 @@ func (tbl *txnTable) recurTransferDelete(
 		})
 		return nil
 	}
+	tbl.store.warChecker.conflictSet[newID.BlockID] = true
 	//recursively transfer the delete to the target block.
 	if page2, ok = memo[blockID]; !ok {
 		page2, err = tbl.store.rt.TransferTable.Pin(*newID)
