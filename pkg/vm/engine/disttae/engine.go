@@ -319,6 +319,7 @@ func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tab
 		dbName = key.name
 		// the mo_catalog now can be accessed by all accounts
 		if dbName == catalog.MO_CATALOG || key.accountId == accountId {
+			db, err = e.Database(noRepCtx, key.name, op)
 			if err != nil {
 				return false
 			}
