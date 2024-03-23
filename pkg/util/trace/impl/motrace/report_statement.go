@@ -73,6 +73,7 @@ func StatementInfoNew(i Item, ctx context.Context) Item {
 
 		// copy value
 		stmt := s.CloneWithoutExecPlan() // Get a new statement from the pool
+		stmt.exported = false
 
 		// initialize the AggrCount as 0 here since aggr is not started
 		stmt.AggrCount = 0
