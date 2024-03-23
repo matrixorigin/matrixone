@@ -254,9 +254,9 @@ func (tbl *txnTable) recurTransferDelete(
 		BlockID: blockID,
 	}
 
-	//check if the newID had been soft deleted and committed before ts,
-	//if not, transfer the delete to the newID block,
-	//otherwise recursively transfer the delete to the target block.
+	//check if the target block had been soft deleted and committed before ts,
+	//if not, transfer the delete to the target block,
+	//otherwise recursively transfer the delete to the next target block.
 	err := tbl.store.warChecker.checkOne(newID, ts)
 	if err == nil {
 		//transfer the delete node to the target block.
