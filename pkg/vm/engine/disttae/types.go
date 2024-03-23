@@ -219,7 +219,8 @@ type Transaction struct {
 	//current statement id
 	statementID int
 	//offsets of the txn.writes for statements in a txn.
-	offsets    []int
+	offsets []int
+	//for RC isolation, the txn's snapshot TS for each statement.
 	timestamps []timestamp.Timestamp
 
 	hasS3Op              atomic.Bool
@@ -568,6 +569,10 @@ func (txn *Transaction) handleRCSnapshot(ctx context.Context, commit bool) error
 			return err
 		}
 		txn.resetSnapshot()
+	}
+	//Transfer row ids for deletes in RC isolation
+	if !commit {
+		return txn.transferDeletesLocked()
 	}
 	return nil
 }
