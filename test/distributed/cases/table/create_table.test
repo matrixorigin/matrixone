@@ -163,6 +163,6 @@ drop table products;
 drop database if exists test_creatsql;
 create database test_creatsql;
 use test_creatsql;
-/*comments*/create table /*comments*/ t(a int)/*comments*/;select 1;
+/*comments*/create table /*comments*/ t(a int)/*comments*/;
 select rel_createsql from mo_catalog.mo_tables where relname = 't' and reldatabase = 'test_creatsql';
 drop database test_creatsql;
