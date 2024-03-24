@@ -200,7 +200,10 @@ func (h *Handle) HandleCommit(
 			}
 			logutil.Infof("retry txn %X with new txn %X", string(meta.GetID()), txn.GetID())
 			//Handle precommit-write command for 1PC
-			h.handleRequests(ctx, txn, txnCtx)
+			err = h.handleRequests(ctx, txn, txnCtx)
+			if err != nil && !moerr.IsMoErrCode(err, moerr.ErrTAENeedRetry) {
+				break
+			}
 			//if txn is 2PC ,need to set commit timestamp passed by coordinator.
 			if txn.Is2PC() {
 				txn.SetCommitTS(types.TimestampToTS(meta.GetCommitTS()))
