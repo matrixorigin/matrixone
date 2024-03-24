@@ -303,7 +303,8 @@ col8 bigint unsigned
 load data infile '$resources/load_data/integer_numbers_3.csv' into table t1 fields terminated by ',';
 select * from t1;
 drop table t1;
-create database ssb;use ssb;
+create database ssb;
+use ssb;
 create table t2(c1 int) cluster by c1;
 insert into t2 values(3),(5),(1),(4),(2);
 select * from t2;
