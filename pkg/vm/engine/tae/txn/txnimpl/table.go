@@ -222,6 +222,9 @@ func (tbl *txnTable) TransferDeletes(ts types.TS, phase string) (err error) {
 	return
 }
 
+// recurTransferDelete recursively transfer the deletes to the target block.
+// memo stores the pined transfer hash page for deleted and committed blocks.
+// id is the deleted and committed block to transfer
 func (tbl *txnTable) recurTransferDelete(
 	memo map[types.Blockid]*common.PinnedItem[*model.TransferHashPage],
 	page *model.TransferHashPage,
@@ -254,11 +257,11 @@ func (tbl *txnTable) recurTransferDelete(
 	}
 
 	//check if the target block had been soft deleted and committed before ts,
-	//if not, transfer the delete to the target block,
-	//otherwise recursively transfer the delete to the next target block.
+	//if not, transfer the deletes to the target block,
+	//otherwise recursively transfer the deletes to the next target block.
 	err := tbl.store.warChecker.checkOne(newID, ts)
 	if err == nil {
-		//transfer the delete node to the target block.
+		//transfer the deletes to the target block.
 		if err = tbl.RangeDelete(newID, offset, offset, pk, handle.DT_Normal); err != nil {
 			return err
 		}
@@ -273,8 +276,8 @@ func (tbl *txnTable) recurTransferDelete(
 		})
 		return nil
 	}
-	tbl.store.warChecker.conflictSet[newID.BlockID] = true
-	//recursively transfer the delete to the target block.
+	tbl.store.warChecker.conflictSet[*newID.ObjectID()] = true
+	//prepare for recursively transfer the deletes to the next target block.
 	if page2, ok = memo[blockID]; !ok {
 		page2, err = tbl.store.rt.TransferTable.Pin(*newID)
 		if err != nil {
@@ -285,7 +288,16 @@ func (tbl *txnTable) recurTransferDelete(
 
 	rowID, ok = page2.Item().Transfer(offset)
 	if !ok {
-		return moerr.NewTxnWWConflictNoCtx(0, "")
+		err := moerr.NewTxnWWConflictNoCtx(0, "")
+		msg := fmt.Sprintf("table-%d blk-%d delete row-%d depth-%d",
+			newID.TableID,
+			newID.BlockID,
+			offset,
+			depth)
+		logutil.Warnf("[ts=%s]TransferDeleteNode: %v",
+			tbl.store.txn.GetStartTS().ToString(),
+			msg)
+		return err
 	}
 	blockID, offset = rowID.Decode()
 	newID = &common.ID{
