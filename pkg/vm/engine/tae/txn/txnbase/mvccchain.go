@@ -243,6 +243,9 @@ func (be *MVCCChain[T]) IsCreatingOrAborted() bool {
 }
 
 func (be *MVCCChain[T]) CheckConflict(txn txnif.TxnReader) (err error) {
+	if be.IsEmpty() {
+		return
+	}
 	node := be.GetLatestNodeLocked()
 	err = node.CheckConflict(txn)
 	return
