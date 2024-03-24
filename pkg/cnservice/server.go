@@ -82,6 +82,7 @@ func NewService(
 
 	configKVMap, _ := dumpCnConfig(*cfg)
 	options = append(options, WithConfigData(configKVMap))
+	options = append(options, WithBootstrapOptions(bootstrap.WithUpgradeTenantBatch(cfg.UpgradeTenantBatchSize)))
 
 	// get metadata fs
 	metadataFS, err := fileservice.Get[fileservice.ReplaceableFileService](fileService, defines.LocalFileServiceName)
