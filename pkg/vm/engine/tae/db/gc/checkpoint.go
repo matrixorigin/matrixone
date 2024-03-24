@@ -331,7 +331,7 @@ func (c *checkpointCleaner) tryGC(data *logtail.CheckpointData, gckp *checkpoint
 	return nil
 }
 
-func (c *checkpointCleaner) softGC(t *GCTable, gckp *checkpoint.CheckpointEntry, snapshots []types.TS) []string {
+func (c *checkpointCleaner) softGC(t *GCTable, gckp *checkpoint.CheckpointEntry, snapshots map[uint64][]types.TS) []string {
 	c.inputs.Lock()
 	defer c.inputs.Unlock()
 	if len(c.inputs.tables) == 0 {
@@ -409,8 +409,8 @@ func (c *checkpointCleaner) CheckGC() error {
 		// TODO
 		return moerr.NewInternalErrorNoCtx("processing clean %s: %v", debugCandidates[0].String(), err)
 	}
-	snapshots, _ := c.GetSnapshots()
-	debugTable.SoftGC(gcTable, gCkp.GetEnd(), snapshots)
+	snapshots := c.GetSnapshotsForTest()
+	debugTable.SoftGCForTest(gcTable, gCkp.GetEnd(), snapshots)
 	var mergeTable *GCTable
 	if len(c.inputs.tables) > 1 {
 		mergeTable = NewGCTable()
@@ -420,7 +420,7 @@ func (c *checkpointCleaner) CheckGC() error {
 	} else {
 		mergeTable = c.inputs.tables[0]
 	}
-	mergeTable.SoftGC(gcTable, gCkp.GetEnd(), snapshots)
+	mergeTable.SoftGCForTest(gcTable, gCkp.GetEnd(), snapshots)
 	if !mergeTable.Compare(debugTable) {
 		logutil.Errorf("inputs :%v", c.inputs.tables[0].String())
 		logutil.Errorf("debugTable :%v", debugTable.String())
@@ -556,28 +556,20 @@ func (c *checkpointCleaner) updateSnapshot(ckp checkpoint.CheckpointEntry) error
 	return nil
 }
 
-func (c *checkpointCleaner) GetSnapshots() ([]types.TS, error) {
+func (c *checkpointCleaner) GetSnapshots() (map[uint64][]types.TS, error) {
 	c.snapshot.RLock()
 	defer c.snapshot.RUnlock()
-	snapshots, err := c.snapshot.snapshotMeta.GetSnapshot(c.fs.Service)
-	if err != nil {
-		return nil, err
-	}
-	snapNum := len(snapshots)
-	if snapNum == 0 {
-		return nil, err
-	}
-	sList := make([]types.TS, 0)
-	for _, snapshot := range snapshots {
-		for _, ts := range snapshot {
-			sList = append(sList, ts.TS)
-		}
-	}
-	return sList, nil
+	return c.snapshot.snapshotMeta.GetSnapshot(c.fs.Service)
 }
 
 func (c *checkpointCleaner) SnapshotForTest(snapshot types.TS) {
 	c.snapshot.Lock()
 	defer c.snapshot.Unlock()
 	c.snapshot.snapshots = append(c.snapshot.snapshots, snapshot)
+}
+
+func (c *checkpointCleaner) GetSnapshotsForTest() []types.TS {
+	c.snapshot.Lock()
+	defer c.snapshot.Unlock()
+	return c.snapshot.snapshots
 }

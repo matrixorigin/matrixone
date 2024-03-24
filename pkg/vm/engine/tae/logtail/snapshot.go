@@ -92,10 +92,10 @@ func (sm *SnapshotMeta) Update(data *CheckpointData) *SnapshotMeta {
 	return nil
 }
 
-func (sm *SnapshotMeta) GetSnapshot(fs fileservice.FileService) (map[uint64][]Snapshot, error) {
+func (sm *SnapshotMeta) GetSnapshot(fs fileservice.FileService) (map[uint64][]types.TS, error) {
 	sm.RLock()
 	defer sm.RUnlock()
-	snapshotList := make(map[uint64][]Snapshot)
+	snapshotList := make(map[uint64][]types.TS)
 	for _, object := range sm.object {
 		location := object.stats.ObjectLocation()
 		for i := uint32(0); i < object.stats.BlkCnt(); i++ {
@@ -121,9 +121,9 @@ func (sm *SnapshotMeta) GetSnapshot(fs fileservice.FileService) (map[uint64][]Sn
 					tid := vector.GetFixedAt[uint64](bat.Vecs[0], r)
 					ts := vector.GetFixedAt[types.TS](bat.Vecs[1], r)
 					if len(snapshotList[tid]) == 0 {
-						snapshotList[tid] = make([]Snapshot, 0)
+						snapshotList[tid] = make([]types.TS, 0)
 					}
-					snapshotList[tid] = append(snapshotList[tid], Snapshot{ts, tid})
+					snapshotList[tid] = append(snapshotList[tid], ts)
 				}
 			}
 		}
