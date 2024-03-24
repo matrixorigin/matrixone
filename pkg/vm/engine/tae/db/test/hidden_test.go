@@ -20,12 +20,11 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/testutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/stretchr/testify/assert"
 )
@@ -55,10 +54,10 @@ func TestHiddenWithPK1(t *testing.T) {
 	err := rel.Append(context.Background(), bats[0])
 	{
 		offsets := make([]uint32, 0)
-		it := rel.MakeBlockIt()
+		it := rel.MakeObjectIt()
 		for it.Valid() {
-			blk := it.GetBlock()
-			view, err := blk.GetColumnDataById(context.Background(), schema.PhyAddrKey.Idx, common.DefaultAllocator)
+			blk := it.GetObject()
+			view, err := blk.GetColumnDataById(context.Background(), 0, schema.PhyAddrKey.Idx, common.DefaultAllocator)
 			assert.NoError(t, err)
 			defer view.Close()
 			fp := blk.Fingerprint()
@@ -80,8 +79,8 @@ func TestHiddenWithPK1(t *testing.T) {
 
 	txn, rel = testutil.GetDefaultRelation(t, tae, schema.Name)
 	{
-		blk := testutil.GetOneBlock(rel)
-		view, err := blk.GetColumnDataByName(context.Background(), catalog.PhyAddrColumnName, common.DefaultAllocator)
+		blk := testutil.GetOneObject(rel)
+		view, err := blk.GetColumnDataByName(context.Background(), 0, catalog.PhyAddrColumnName, common.DefaultAllocator)
 		assert.NoError(t, err)
 		defer view.Close()
 		offsets := make([]uint32, 0)
@@ -117,30 +116,38 @@ func TestHiddenWithPK1(t *testing.T) {
 
 	testutil.CompactBlocks(t, 0, tae, "db", schema, false)
 
+	t.Log(tae.Catalog.SimplePPString(3))
 	txn, rel = testutil.GetDefaultRelation(t, tae, schema.Name)
 	{
-		it := rel.MakeBlockIt()
+		it := rel.MakeObjectIt()
 		for it.Valid() {
-			blk := it.GetBlock()
-			view, err := blk.GetColumnDataByName(context.Background(), catalog.PhyAddrColumnName, common.DefaultAllocator)
-			assert.NoError(t, err)
-			defer view.Close()
-			offsets := make([]uint32, 0)
-			meta := blk.GetMeta().(*catalog.BlockEntry)
-			t.Log(meta.String())
-			_ = view.GetData().Foreach(func(v any, _ bool, _ int) (err error) {
-				rid := v.(types.Rowid)
-				bid, offset := rid.Decode()
-				// t.Logf("sid=%d,bid=%d,offset=%d", sid, bid, offset)
-				assert.Equal(t, meta.ID, bid)
-				offsets = append(offsets, offset)
-				return
-			}, nil)
-			sort.Slice(offsets, func(i, j int) bool { return offsets[i] < offsets[j] })
-			if meta.IsAppendable() {
-				assert.Equal(t, []uint32{0, 1, 2, 3}, offsets)
-			} else {
-				assert.Equal(t, []uint32{0, 1, 2, 3, 4, 5, 6, 7, 8, 9}, offsets)
+			blk := it.GetObject()
+			for j := 0; j < blk.BlkCnt(); j++ {
+				view, err := blk.GetColumnDataByName(context.Background(), uint16(j), catalog.PhyAddrColumnName, common.DefaultAllocator)
+				assert.NoError(t, err)
+				defer view.Close()
+				offsets := make([]uint32, 0)
+				meta := blk.GetMeta().(*catalog.ObjectEntry)
+				t.Logf("%v, blk %d", meta.String(), j)
+				_ = view.GetData().Foreach(func(v any, _ bool, _ int) (err error) {
+					rid := v.(types.Rowid)
+					bid, offset := rid.Decode()
+					// t.Logf("sid=%d,bid=%d,offset=%d", sid, bid, offset)
+					expectedBid := objectio.NewBlockidWithObjectID(&meta.ID, uint16(j))
+					assert.Equal(t, *expectedBid, bid, "expect %v, get %v", expectedBid.String(), bid.String())
+					offsets = append(offsets, offset)
+					return
+				}, nil)
+				sort.Slice(offsets, func(i, j int) bool { return offsets[i] < offsets[j] })
+				if meta.IsAppendable() {
+					assert.Equal(t, []uint32{0, 1, 2, 3}, offsets)
+				} else {
+					if j != 2 {
+						assert.Equal(t, []uint32{0, 1, 2, 3, 4, 5, 6, 7, 8, 9}, offsets)
+					} else {
+						assert.Equal(t, []uint32{0, 1, 2, 3}, offsets)
+					}
+				}
 			}
 			it.Next()
 		}
@@ -154,29 +161,36 @@ func TestHiddenWithPK1(t *testing.T) {
 
 	txn, rel = testutil.GetDefaultRelation(t, tae, schema.Name)
 	{
-		it := rel.MakeBlockIt()
+		it := rel.MakeObjectIt()
 		for it.Valid() {
-			blk := it.GetBlock()
-			view, err := blk.GetColumnDataByName(context.Background(), catalog.PhyAddrColumnName, common.DefaultAllocator)
-			assert.NoError(t, err)
-			defer view.Close()
-			offsets := make([]uint32, 0)
-			meta := blk.GetMeta().(*catalog.BlockEntry)
-			t.Log(meta.String())
-			t.Log(meta.GetObject().String())
-			_ = view.GetData().Foreach(func(v any, _ bool, _ int) (err error) {
-				rid := v.(types.Rowid)
-				bid, offset := rid.Decode()
-				// t.Logf("sid=%d,bid=%d,offset=%d", sid, bid, offset)
-				assert.Equal(t, meta.ID, bid)
-				offsets = append(offsets, offset)
-				return
-			}, nil)
-			sort.Slice(offsets, func(i, j int) bool { return offsets[i] < offsets[j] })
-			if meta.IsAppendable() {
-				assert.Equal(t, []uint32{0, 1, 2, 3}, offsets)
-			} else {
-				assert.Equal(t, []uint32{0, 1, 2, 3, 4, 5, 6, 7, 8, 9}, offsets)
+			blk := it.GetObject()
+			for j := 0; j < blk.BlkCnt(); j++ {
+				view, err := blk.GetColumnDataByName(context.Background(), uint16(j), catalog.PhyAddrColumnName, common.DefaultAllocator)
+				assert.NoError(t, err)
+				defer view.Close()
+				offsets := make([]uint32, 0)
+				meta := blk.GetMeta().(*catalog.ObjectEntry)
+				t.Log(meta.String())
+				t.Log(meta.String())
+				_ = view.GetData().Foreach(func(v any, _ bool, _ int) (err error) {
+					rid := v.(types.Rowid)
+					bid, offset := rid.Decode()
+					// t.Logf("sid=%d,bid=%d,offset=%d", sid, bid, offset)
+					assert.Equal(t, *objectio.NewBlockidWithObjectID(&meta.ID, uint16(j)), bid)
+					offsets = append(offsets, offset)
+					return
+				}, nil)
+				sort.Slice(offsets, func(i, j int) bool { return offsets[i] < offsets[j] })
+				if meta.IsAppendable() {
+					assert.Equal(t, []uint32{0, 1, 2, 3}, offsets)
+				} else {
+					if j != 2 {
+						assert.Equal(t, []uint32{0, 1, 2, 3, 4, 5, 6, 7, 8, 9}, offsets)
+					} else {
+						assert.Equal(t, []uint32{0, 1, 2, 3}, offsets)
+					}
+				}
+
 			}
 			it.Next()
 		}
@@ -206,10 +220,10 @@ func TestHidden2(t *testing.T) {
 	txn, _, rel := testutil.CreateRelationNoCommit(t, tae, testutil.DefaultTestDB, schema, true)
 	err := rel.Append(context.Background(), bats[0])
 	{
-		blk := testutil.GetOneBlock(rel)
+		blk := testutil.GetOneObject(rel)
 		var hidden *containers.ColumnView
 		for _, def := range schema.ColDefs {
-			view, err := blk.GetColumnDataById(context.Background(), def.Idx, common.DefaultAllocator)
+			view, err := blk.GetColumnDataById(context.Background(), 0, def.Idx, common.DefaultAllocator)
 			assert.NoError(t, err)
 			defer view.Close()
 			assert.Equal(t, bats[0].Length(), view.Length())
@@ -231,7 +245,7 @@ func TestHidden2(t *testing.T) {
 			return
 		}, nil)
 		for _, def := range schema.ColDefs {
-			view, err := blk.GetColumnDataById(context.Background(), def.Idx, common.DefaultAllocator)
+			view, err := blk.GetColumnDataById(context.Background(), 0, def.Idx, common.DefaultAllocator)
 			assert.NoError(t, err)
 			defer view.Close()
 			view.ApplyDeletes()
@@ -243,10 +257,10 @@ func TestHidden2(t *testing.T) {
 
 	txn, rel = testutil.GetDefaultRelation(t, tae, schema.Name)
 	{
-		blk := testutil.GetOneBlock(rel)
+		blk := testutil.GetOneObject(rel)
 		var hidden *containers.ColumnView
 		for _, def := range schema.ColDefs {
-			view, err := blk.GetColumnDataById(context.Background(), def.Idx, common.DefaultAllocator)
+			view, err := blk.GetColumnDataById(context.Background(), 0, def.Idx, common.DefaultAllocator)
 			assert.NoError(t, err)
 			defer view.Close()
 			assert.Equal(t, bats[0].Length()-1, view.Length())
@@ -283,43 +297,23 @@ func TestHidden2(t *testing.T) {
 	assert.NoError(t, txn.Commit(context.Background()))
 
 	testutil.CompactBlocks(t, 0, tae, "db", schema, false)
+	testutil.MergeBlocks(t, 0, tae, "db", schema, false)
 
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))
+
 	txn, rel = testutil.GetDefaultRelation(t, tae, schema.Name)
 	{
 		it := rel.MakeObjectIt()
-		objs := make([]*catalog.ObjectEntry, 0)
-		for it.Valid() {
-			obj := it.GetObject().GetMeta().(*catalog.ObjectEntry)
-			objs = append(objs, obj)
-			it.Next()
-		}
-		for _, obj := range objs {
-			factory, taskType, scopes, err := tables.BuildObjectCompactionTaskFactory(obj, tae.Runtime)
-			assert.NoError(t, err)
-			if factory == nil {
-				continue
-			}
-			task, err := tae.Runtime.Scheduler.ScheduleMultiScopedTxnTask(tasks.WaitableCtx, taskType, scopes, factory)
-			assert.NoError(t, err)
-			err = task.WaitDone(ctx)
-			assert.NoError(t, err)
-		}
-
-	}
-	assert.NoError(t, txn.Commit(context.Background()))
-
-	txn, rel = testutil.GetDefaultRelation(t, tae, schema.Name)
-	{
-		it := rel.MakeBlockIt()
 		rows := 0
 		for it.Valid() {
-			blk := it.GetBlock()
-			hidden, err := blk.GetColumnDataById(context.Background(), schema.PhyAddrKey.Idx, common.DefaultAllocator)
-			assert.NoError(t, err)
-			defer hidden.Close()
-			hidden.ApplyDeletes()
-			rows += hidden.Length()
+			blk := it.GetObject()
+			for j := 0; j < blk.BlkCnt(); j++ {
+				hidden, err := blk.GetColumnDataById(context.Background(), uint16(j), schema.PhyAddrKey.Idx, common.DefaultAllocator)
+				assert.NoError(t, err)
+				defer hidden.Close()
+				hidden.ApplyDeletes()
+				rows += hidden.Length()
+			}
 			it.Next()
 		}
 		assert.Equal(t, 26, rows)
