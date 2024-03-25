@@ -63,6 +63,7 @@ func Test_SendResponse(t *testing.T) {
 		ioses := mock_frontend.NewMockIOSession(ctrl)
 		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
 		ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		ioses.EXPECT().Flush(gomock.Any()).AnyTimes()
 
 		mp := &MysqlProtocolImpl{}
 		mp.io = iopackage

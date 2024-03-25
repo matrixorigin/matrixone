@@ -25,20 +25,19 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 )
 
 type txnSysBlock struct {
-	*txnBlock
+	*txnObject
 	table   *txnTable
 	catalog *catalog.Catalog
 }
 
-func newSysBlock(table *txnTable, meta *catalog.BlockEntry) *txnSysBlock {
+func newSysObject(table *txnTable, meta *catalog.ObjectEntry) *txnSysBlock {
 	blk := &txnSysBlock{
-		txnBlock: newBlock(table, meta),
-		table:    table,
-		catalog:  meta.GetObject().GetTable().GetCatalog(),
+		txnObject: newObject(table, meta),
+		table:     table,
+		catalog:   meta.GetTable().GetCatalog(),
 	}
 	return blk
 }
@@ -59,35 +58,14 @@ func (blk *txnSysBlock) GetTotalChanges() int {
 	if blk.isSysTable() {
 		panic("not supported")
 	}
-	return blk.txnBlock.GetTotalChanges()
+	return blk.txnObject.GetTotalChanges()
 }
 
-func (blk *txnSysBlock) RangeDelete(start, end uint32, dt handle.DeleteType, mp *mpool.MPool) (err error) {
+func (blk *txnSysBlock) RangeDelete(blkID uint16, start, end uint32, dt handle.DeleteType, mp *mpool.MPool) (err error) {
 	if blk.isSysTable() {
 		panic("not supported")
 	}
-	return blk.txnBlock.RangeDelete(start, end, dt, mp)
-}
-
-func (blk *txnSysBlock) Update(row uint32, col uint16, v any) (err error) {
-	if blk.isSysTable() {
-		panic("not supported")
-	}
-	return blk.txnBlock.Update(row, col, v)
-}
-
-func (blk *txnSysBlock) dbRows() int {
-	return blk.catalog.CoarseDBCnt()
-}
-
-func (blk *txnSysBlock) tableRows() int {
-	rows := 0
-	fn := func(db *catalog.DBEntry) error {
-		rows += db.CoarseTableCnt()
-		return nil
-	}
-	_ = blk.processDB(fn, true)
-	return rows
+	return blk.txnObject.RangeDelete(blkID, start, end, dt, mp)
 }
 
 func (blk *txnSysBlock) processDB(fn func(*catalog.DBEntry) error, ignoreErr bool) (err error) {
@@ -122,35 +100,6 @@ func (blk *txnSysBlock) processTable(entry *catalog.DBEntry, fn func(*catalog.Ta
 		it.Next()
 	}
 	return
-}
-
-func (blk *txnSysBlock) columnRows() int {
-	rows := 0
-	fn := func(table *catalog.TableEntry) error {
-		rows += len(table.GetLastestSchemaLocked().ColDefs)
-		return nil
-	}
-	dbFn := func(db *catalog.DBEntry) error {
-		_ = blk.processTable(db, fn, true)
-		return nil
-	}
-	_ = blk.processDB(dbFn, true)
-	return rows
-}
-
-func (blk *txnSysBlock) Rows() int {
-	if !blk.isSysTable() {
-		return blk.txnBlock.Rows()
-	}
-	if blk.table.GetID() == pkgcatalog.MO_DATABASE_ID {
-		return blk.dbRows()
-	} else if blk.table.GetID() == pkgcatalog.MO_TABLES_ID {
-		return blk.tableRows()
-	} else if blk.table.GetID() == pkgcatalog.MO_COLUMNS_ID {
-		return blk.columnRows()
-	} else {
-		panic("not supported")
-	}
 }
 
 func FillColumnRow(table *catalog.TableEntry, node *catalog.MVCCNode[*catalog.TableMVCCNode], attr string, colData containers.Vector) {
@@ -383,10 +332,10 @@ func (blk *txnSysBlock) getDBTableData(
 }
 
 func (blk *txnSysBlock) GetColumnDataById(
-	ctx context.Context, colIdx int, mp *mpool.MPool,
+	ctx context.Context, blkID uint16, colIdx int, mp *mpool.MPool,
 ) (view *containers.ColumnView, err error) {
 	if !blk.isSysTable() {
-		return blk.txnBlock.GetColumnDataById(ctx, colIdx, mp)
+		return blk.txnObject.GetColumnDataById(ctx, blkID, colIdx, mp)
 	}
 	if blk.table.GetID() == pkgcatalog.MO_DATABASE_ID {
 		return blk.getDBTableData(colIdx, mp)
@@ -404,17 +353,17 @@ func (blk *txnSysBlock) Prefetch(idxes []int) error {
 }
 
 func (blk *txnSysBlock) GetColumnDataByName(
-	ctx context.Context, attr string, mp *mpool.MPool,
+	ctx context.Context, blkID uint16, attr string, mp *mpool.MPool,
 ) (view *containers.ColumnView, err error) {
 	colIdx := blk.entry.GetSchema().GetColIdx(attr)
-	return blk.GetColumnDataById(ctx, colIdx, mp)
+	return blk.GetColumnDataById(ctx, blkID, colIdx, mp)
 }
 
 func (blk *txnSysBlock) GetColumnDataByNames(
-	ctx context.Context, attrs []string, mp *mpool.MPool,
+	ctx context.Context, blkID uint16, attrs []string, mp *mpool.MPool,
 ) (view *containers.BlockView, err error) {
 	if !blk.isSysTable() {
-		return blk.txnBlock.GetColumnDataByNames(ctx, attrs, mp)
+		return blk.txnObject.GetColumnDataByNames(ctx, blkID, attrs, mp)
 	}
 	view = containers.NewBlockView()
 	ts := blk.Txn.GetStartTS()
@@ -450,11 +399,4 @@ func (blk *txnSysBlock) GetColumnDataByNames(
 		panic("not supported")
 	}
 	return
-}
-
-func (blk *txnSysBlock) LogTxnEntry(entry txnif.TxnEntry, readed []*common.ID) (err error) {
-	if !blk.isSysTable() {
-		return blk.txnBlock.LogTxnEntry(entry, readed)
-	}
-	panic("not supported")
 }

@@ -468,8 +468,8 @@ create view v0 as select view01.a, view02.a as b from view01 left join view02 us
 invalid input: column 'a' specified in USING clause does not exist in left table
 create view v0 as select view01.cwhuenwjfdwcweffcfwef, view02.cwhuenwjfdwcweffcfwef as b from view01 left join view02 using(cwhuenwjfdwcweffcfwef);
 show create view v0;
-View    Create View
-v0    create view v0 as select view01.cwhuenwjfdwcweffcfwef, view02.cwhuenwjfdwcweffcfwef as b from view01 left join view02 using(cwhuenwjfdwcweffcfwef);
+View    Create View    character_set_client    collation_connection
+v0    create view v0 as select view01.cwhuenwjfdwcweffcfwef, view02.cwhuenwjfdwcweffcfwef as b from view01 left join view02 using(cwhuenwjfdwcweffcfwef);    utf8mb4    utf8mb4_general_ci
 drop table view01;
 drop table view02;
 drop role if exists role_r1;

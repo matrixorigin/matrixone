@@ -63,7 +63,7 @@ func NewDiskCache(
 		path:            path,
 		perfCounterSets: perfCounterSets,
 
-		cache: fifocache.New[string, struct{}](
+		cache: fifocache.New(
 			capacity,
 			func(path string, _ struct{}) {
 				err := os.Remove(path)
@@ -146,13 +146,20 @@ func (d *DiskCache) Read(
 		return err
 	}
 
-	for i, entry := range vector.Entries {
+	openedFiles := make(map[string]*os.File)
+	defer func() {
+		for _, file := range openedFiles {
+			_ = file.Close()
+		}
+	}()
+
+	fillEntry := func(entry *IOEntry) error {
 		if entry.done {
-			continue
+			return nil
 		}
 		if entry.Size < 0 {
 			// ignore size unknown entry
-			continue
+			return nil
 		}
 
 		t0 := time.Now()
@@ -161,34 +168,56 @@ func (d *DiskCache) Read(
 		var file *os.File
 
 		// entry file
-		diskPath := d.pathForIOEntry(path.File, entry)
-		d.waitUpdateComplete(diskPath)
-		diskFile, err := os.Open(diskPath)
-		if err == nil {
-			file = diskFile
-			defer diskFile.Close()
-			numOpenIOEntry++
-		}
-
-		if file == nil {
-			// full file
-			diskPath = d.pathForFile(path.File)
+		diskPath := d.pathForIOEntry(path.File, *entry)
+		if f, ok := openedFiles[diskPath]; ok {
+			// use opened file
+			_, err = file.Seek(entry.Offset, io.SeekStart)
+			if err == nil {
+				file = f
+			}
+		} else {
+			// open file
 			d.waitUpdateComplete(diskPath)
 			diskFile, err := os.Open(diskPath)
 			if err == nil {
-				defer diskFile.Close()
-				numOpenFull++
-				// seek
-				_, err = diskFile.Seek(entry.Offset, io.SeekStart)
+				file = diskFile
+				defer func() {
+					openedFiles[diskPath] = diskFile
+				}()
+				numOpenIOEntry++
+			}
+		}
+
+		if file == nil {
+			// try full file
+			diskPath = d.pathForFile(path.File)
+			if f, ok := openedFiles[diskPath]; ok {
+				// use opened file
+				_, err = f.Seek(entry.Offset, io.SeekStart)
 				if err == nil {
-					file = diskFile
+					file = f
+				}
+			} else {
+				// open file
+				d.waitUpdateComplete(diskPath)
+				diskFile, err := os.Open(diskPath)
+				if err == nil {
+					defer func() {
+						openedFiles[diskPath] = diskFile
+					}()
+					numOpenFull++
+					// seek
+					_, err = diskFile.Seek(entry.Offset, io.SeekStart)
+					if err == nil {
+						file = diskFile
+					}
 				}
 			}
 		}
 
 		if file == nil {
 			// no file available
-			continue
+			return nil
 		}
 
 		if _, ok := d.cache.Get(diskPath); !ok {
@@ -204,14 +233,21 @@ func (d *DiskCache) Read(
 			// ignore error
 			numError++
 			logutil.Warn("read disk cache error", zap.Any("error", err))
-			continue
+			return nil
 		}
 
 		entry.done = true
 		entry.fromCache = d
-		vector.Entries[i] = entry
 		numHit++
 		d.cacheHit(time.Since(t0))
+
+		return nil
+	}
+
+	for i := range vector.Entries {
+		if err := fillEntry(&vector.Entries[i]); err != nil {
+			return err
+		}
 	}
 
 	return nil

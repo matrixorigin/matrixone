@@ -37,6 +37,8 @@ var (
 	ExecuteSQLEvent      = EventType{7, "execute-sql"}
 	CompileEvent         = EventType{8, "compile"}
 	TableScanEvent       = EventType{9, "table-scan"}
+	WorkspaceWriteEvent  = EventType{10, "workspace-write"}
+	WorkspaceAdjustEvent = EventType{11, "workspace-adjust"}
 	CommitEvent          = EventType{95, "commit"}
 	CommitResponseEvent  = EventType{96, "commit-response"}
 	CommitWaitApplyEvent = EventType{97, "wait-applied"}
