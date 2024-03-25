@@ -5,3 +5,4 @@ use testdb;
 create table hhh (a int, b int, index(`b`));
 insert into hhh select *,* from generate_series(1, 81920)g;
 select a from hhh where b = 999;
+drop database testdb;
