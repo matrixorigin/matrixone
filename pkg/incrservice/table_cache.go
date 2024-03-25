@@ -58,6 +58,7 @@ func newTableCache(
 			tableID,
 			col,
 			cfg,
+			committed,
 			allocator,
 			txnOp)
 		if err != nil {
@@ -76,6 +77,11 @@ func (c *tableCache) commit() {
 	}
 	c.mu.committed = true
 	c.mu.txnOp = nil
+	for _, col := range c.mu.cols {
+		col.Lock()
+		col.committed = true
+		col.Unlock()
+	}
 }
 
 func (c *tableCache) getTxn() client.TxnOperator {

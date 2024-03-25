@@ -2208,7 +2208,8 @@ func (tbl *txnTable) PrimaryKeysMayBeModified(ctx context.Context, from types.TS
 	return false, nil
 }
 
-func (tbl *txnTable) transferRowid(
+// TODO::refactor in next PR
+func (tbl *txnTable) transferDeletes(
 	ctx context.Context,
 	state *logtailreplay.PartitionState,
 	deleteObjs,

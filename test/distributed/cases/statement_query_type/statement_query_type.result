@@ -21,8 +21,8 @@ show create table test_table;
 Table    Create Table
 test_table    CREATE TABLE `test_table` (\n`col1` INT DEFAULT NULL,\n`col2` VARCHAR(65535) DEFAULT NULL\n)
 show create view test_view;
-View    Create View
-test_view    create view test_view as select * from test_table;
+View    Create View    character_set_client    collation_connection
+test_view    create view test_view as select * from test_table;    utf8mb4    utf8mb4_general_ci
 show triggers;
 Trigger    Event    Table    Statement    Timing    Created    sql_mode    Definer    character_set_client    collation_connection    Database Collation
 show procedure status;
@@ -48,7 +48,7 @@ show collation like 'utf8mb4_general_ci%';
 Collation    Charset    Id    Default    Compiled    Sortlen    Pad_attribute
 utf8mb4_general_ci    utf8mb4    45        Yes    1    PAD SPACE
 show index from test_table;
-Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
 values row(1,1), row(2,2), row(3,3) order by column_0 desc;
 column_0    column_1
 3    3
@@ -153,7 +153,7 @@ Tables_in_test_db
 test_table
 test_view
 show index from test_table;
-Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
 values row(1,1), row(2,2), row(3,3) order by column_0 desc;
 column_0    column_1
 3    3
@@ -338,8 +338,8 @@ test_db    CREATE DATABASE `test_db`
 Table    Create Table
 test_table    CREATE TABLE `test_table` (\n`col1` INT DEFAULT NULL,\n`col2` VARCHAR(65535) DEFAULT NULL\n)
 /* cloud_user */ show create view test_view;
-View    Create View
-test_view    /* cloud_user */ create view test_view as select * from test_table;
+View    Create View    character_set_client    collation_connection
+test_view    /* cloud_user */ create view test_view as select * from test_table;    utf8mb4    utf8mb4_general_ci
 /* cloud_user */ show triggers;
 Trigger    Event    Table    Statement    Timing    Created    sql_mode    Definer    character_set_client    collation_connection    Database Collation
 /* cloud_user */ show procedure status;
@@ -365,7 +365,7 @@ utf8mb4_general_ci    utf8mb4    45        Yes    1    PAD SPACE
 Collation    Charset    Id    Default    Compiled    Sortlen    Pad_attribute
 utf8mb4_general_ci    utf8mb4    45        Yes    1    PAD SPACE
 /* cloud_user */ show index from test_table;
-Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
 /* cloud_user */ values row(1,1), row(2,2), row(3,3) order by column_0 desc;
 column_0    column_1
 3    3
@@ -518,8 +518,8 @@ test_db    CREATE DATABASE `test_db`
 Table    Create Table
 test_table    CREATE TABLE `test_table` (\n`col1` INT DEFAULT NULL,\n`col2` VARCHAR(65535) DEFAULT NULL\n)
 /* cloud_nonuser */ show create view test_view;
-View    Create View
-test_view    /* cloud_nonuser */ create view test_view as select * from test_table;
+View    Create View    character_set_client    collation_connection
+test_view    /* cloud_nonuser */ create view test_view as select * from test_table;    utf8mb4    utf8mb4_general_ci
 /* cloud_nonuser */ show triggers;
 Trigger    Event    Table    Statement    Timing    Created    sql_mode    Definer    character_set_client    collation_connection    Database Collation
 /* cloud_nonuser */ show procedure status;
@@ -545,7 +545,7 @@ utf8mb4_general_ci    utf8mb4    45        Yes    1    PAD SPACE
 Collation    Charset    Id    Default    Compiled    Sortlen    Pad_attribute
 utf8mb4_general_ci    utf8mb4    45        Yes    1    PAD SPACE
 /* cloud_nonuser */ show index from test_table;
-Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
 /* cloud_nonuser */ values row(1,1), row(2,2), row(3,3) order by column_0 desc;
 column_0    column_1
 3    3
@@ -685,8 +685,8 @@ use statement_query_type;
 create table test_table(col1 int,col2 varchar);
 create view test_view as select * from test_table;
 show create view test_view;
-View    Create View
-test_view    create view test_view as select * from test_table;
+View    Create View    character_set_client    collation_connection
+test_view    create view test_view as select * from test_table;    utf8mb4    utf8mb4_general_ci
 show collation like 'utf8mb4_general_ci';
 Collation    Charset    Id    Default    Compiled    Sortlen    Pad_attribute
 utf8mb4_general_ci    utf8mb4    45        Yes    1    PAD SPACE
