@@ -16,9 +16,9 @@ package disttae
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"sort"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
