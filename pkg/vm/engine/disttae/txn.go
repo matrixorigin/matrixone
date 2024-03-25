@@ -605,37 +605,28 @@ func (txn *Transaction) compactionBlksLocked() error {
 	return nil
 }
 
-func (txn *Transaction) getInsertedObjectListForTable(
-	databaseId uint64, tableId uint64) (statsList []objectio.ObjectStats, err error) {
-	txn.Lock()
-	defer txn.Unlock()
-	var stats objectio.ObjectStats
-	for _, entry := range txn.writes {
-		if entry.databaseId != databaseId ||
-			entry.tableId != tableId {
-			continue
-		}
+func (tbl *txnTable) collectUnCommittedObjects() []objectio.ObjectStats {
+	var unCommittedObjects []objectio.ObjectStats
+	tbl.db.txn.forEachTableWrites(tbl.db.databaseId, tbl.tableId, tbl.db.txn.GetSnapshotWriteOffset(), func(entry Entry) {
+		stats := objectio.ObjectStats{}
 		if entry.bat == nil || entry.bat.IsEmpty() {
-			continue
+			return
 		}
-
 		if entry.typ == INSERT_TXN {
-			continue
+			return
 		}
-
 		if entry.typ != INSERT ||
 			len(entry.bat.Attrs) < 2 ||
 			entry.bat.Attrs[1] != catalog.ObjectMeta_ObjectStats {
-			continue
+			return
 		}
 		for i := 0; i < entry.bat.Vecs[1].Length(); i++ {
 			stats.UnMarshal(entry.bat.Vecs[1].GetBytesAt(i))
-			statsList = append(statsList, stats)
+			unCommittedObjects = append(unCommittedObjects, stats)
 		}
+	})
 
-	}
-	return statsList, nil
-
+	return unCommittedObjects
 }
 
 func (txn *Transaction) forEachTableWrites(databaseId uint64, tableId uint64, offset int, f func(Entry)) {
