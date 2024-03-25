@@ -35,7 +35,7 @@ services:
     environment:
       - AWS_ACCESS_KEY_ID=minio
       - AWS_SECRET_ACCESS_KEY=minio123
-      - mo_reuse_enable_checker_verbose=true
+      - mo_reuse_enable_checker=true
     networks:
       monet:
         aliases:
@@ -57,7 +57,7 @@ services:
     environment:
       - AWS_ACCESS_KEY_ID=minio
       - AWS_SECRET_ACCESS_KEY=minio123
-      - mo_reuse_enable_checker_verbose=true
+      - mo_reuse_enable_checker=true
     networks:
       monet:
         aliases:
@@ -78,7 +78,7 @@ services:
     environment:
       - AWS_ACCESS_KEY_ID=minio
       - AWS_SECRET_ACCESS_KEY=minio123
-      - mo_reuse_enable_checker_verbose=true
+      - mo_reuse_enable_checker=true
     networks:
       monet:
         aliases:
@@ -101,7 +101,7 @@ services:
     environment:
       - AWS_ACCESS_KEY_ID=minio
       - AWS_SECRET_ACCESS_KEY=minio123
-      - mo_reuse_enable_checker_verbose=true
+      - mo_reuse_enable_checker=true
     networks:
       monet:
         aliases:

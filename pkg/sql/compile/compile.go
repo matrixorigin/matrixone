@@ -576,11 +576,6 @@ func (c *Compile) canRetry(err error) bool {
 // run once
 func (c *Compile) runOnce() error {
 	var wg sync.WaitGroup
-
-	if c.proc.TxnOperator != nil {
-		c.proc.TxnOperator.GetWorkspace().TransferRowID()
-	}
-
 	err := c.lockMetaTables()
 	if err != nil {
 		return err
@@ -589,6 +584,7 @@ func (c *Compile) runOnce() error {
 	for _, s := range c.scope {
 		s.SetContextRecursively(c.proc.Ctx)
 	}
+
 	for i := range c.scope {
 		wg.Add(1)
 		scope := c.scope[i]

@@ -226,11 +226,14 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 				executor.Free()
 			}
 		}
+		arg.ctr.sampleExecutors = nil
+
 		for _, executor := range arg.ctr.groupExecutors {
 			if executor != nil {
 				executor.Free()
 			}
 		}
+		arg.ctr.groupExecutors = nil
 
 		if arg.ctr.samplePool != nil {
 			arg.ctr.samplePool.Free()
