@@ -220,8 +220,8 @@ func (o *Basic) Revise(cpu, mem int64) ([]*catalog.ObjectEntry, TaskHostKind) {
 	})
 
 	osize, _, _ := estimateMergeConsume(objs)
-	if osize > o.config.MinCNMergeSize {
-		objs = o.controlMem(objs, common.RuntimeCNMergeMemControl.Load())
+	if !common.IsStandaloneBoost.Load() && osize > o.config.MinCNMergeSize {
+		objs = o.controlMem(objs, int64(common.RuntimeCNMergeMemControl.Load()))
 		objs = o.optimize(objs)
 		return objs, TaskHostCN
 	}

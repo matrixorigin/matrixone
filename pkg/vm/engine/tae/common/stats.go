@@ -19,8 +19,6 @@ import (
 	"fmt"
 	"math"
 	"math/rand"
-	"os"
-	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -30,10 +28,11 @@ import (
 )
 
 const (
-	DefaultMinRowsQualified = 40960
-	DefaultMaxRowsObj       = 8192 * 500
-	DefaultMinCNMergeSize   = 200 // 200 MB
-	DefaultMaxMergeObjN     = 2
+	DefaultMinRowsQualified      = 40960
+	DefaultMaxRowsObj            = 8192 * 500
+	DefaultMinCNMergeSize        = 200  // MB
+	DefaultCNMergeMemControlHint = 8192 // MB
+	DefaultMaxMergeObjN          = 2
 
 	Const1GBytes = 1 << 30
 	Const1MBytes = 1 << 20
@@ -43,8 +42,10 @@ var (
 	RuntimeMaxMergeObjN      atomic.Int32
 	RuntimeMinRowsQualified  atomic.Int32
 	RuntimeMaxRowsObj        atomic.Int32
-	RuntimeMinCNMergeSize    atomic.Int64
-	RuntimeCNMergeMemControl atomic.Int64
+	RuntimeMinCNMergeSize    atomic.Uint64
+	RuntimeCNMergeMemControl atomic.Uint64
+	RuntimeCNTakeOverAll     atomic.Bool
+	IsStandaloneBoost        atomic.Bool
 	Epsilon                  float64
 )
 
@@ -52,30 +53,7 @@ func init() {
 	RuntimeMaxMergeObjN.Store(DefaultMaxMergeObjN)
 	RuntimeMinRowsQualified.Store(DefaultMinRowsQualified)
 	RuntimeMaxRowsObj.Store(DefaultMaxRowsObj)
-	RuntimeMinCNMergeSize.Store(DefaultMinCNMergeSize * Const1MBytes)
 	Epsilon = math.Nextafter(1, 2) - 1
-
-	controlsize := EnvOrDefaultInt[int64]("MO_MERGE_MEM_CONTROL", 5*1024)
-	RuntimeCNMergeMemControl.Store(controlsize * Const1MBytes)
-}
-
-func EnvOrDefaultInt[T int32 | int64](key string, defaultValue T) T {
-	val, ok := os.LookupEnv(key)
-	if !ok {
-		return defaultValue
-	}
-	var size int
-	switch any(&defaultValue).(type) {
-	case int32:
-		size = 32
-	case int64:
-		size = 64
-	}
-	i, err := strconv.ParseInt(val, 10, size)
-	if err != nil {
-		return defaultValue
-	}
-	return T(i)
 }
 
 type Number interface {

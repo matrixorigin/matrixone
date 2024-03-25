@@ -15,11 +15,13 @@
 package db
 
 import (
+	"bytes"
 	"context"
 	"path"
 	"sync/atomic"
 	"time"
 
+	"github.com/BurntSushi/toml"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -46,6 +48,18 @@ const (
 	WALDir = "wal"
 )
 
+func fillRuntimeOptions(opts *options.Options) {
+	common.RuntimeCNMergeMemControl.Store(opts.MergeCfg.CNMergeMemControlHint)
+	common.RuntimeMinCNMergeSize.Store(opts.MergeCfg.CNTakeOverExceed)
+	common.RuntimeCNTakeOverAll.Store(opts.MergeCfg.CNTakeOverAll)
+	if opts.IsStandalone {
+		common.IsStandaloneBoost.Store(opts.IsStandalone)
+	}
+	w := &bytes.Buffer{}
+	toml.NewEncoder(w).Encode(opts.MergeCfg)
+	logutil.Info("merge options", common.OperandField(w.String()))
+}
+
 func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, err error) {
 	dbLocker, err := createDBLock(dirname)
 
@@ -67,6 +81,7 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 	}()
 
 	opts = opts.FillDefaults(dirname)
+	fillRuntimeOptions(opts)
 
 	serviceDir := path.Join(dirname, "data")
 	if opts.Fs == nil {

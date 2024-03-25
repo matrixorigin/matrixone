@@ -16,11 +16,12 @@ package tnservice
 
 import (
 	"context"
-	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
-	"github.com/matrixorigin/matrixone/pkg/util"
 	"path/filepath"
 	"strings"
 	"time"
+
+	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"github.com/matrixorigin/matrixone/pkg/util"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -121,6 +122,12 @@ type Config struct {
 		GCTTL          toml.Duration `toml:"gc-ttl"`
 		ScanGCInterval toml.Duration `toml:"scan-gc-interval"`
 		DisableGC      bool          `toml:"disable-gc"`
+	}
+
+	Merge struct {
+		CNTakeOverAll    bool          `toml:"offload-all"`
+		CNTakeOverExceed toml.ByteSize `toml:"offload-exceed"`
+		CNMergeMemHint   toml.ByteSize `toml:"offload-mem-hint"`
 	}
 
 	LogtailServer struct {

@@ -674,7 +674,7 @@ func (c *mergePolicyArg) Run() error {
 	if c.tbl == nil {
 		common.RuntimeMaxMergeObjN.Store(c.maxMergeObjN)
 		common.RuntimeMinRowsQualified.Store(c.minRowsQualified)
-		common.RuntimeMinCNMergeSize.Store(int64(c.cnMinMergeSize) * common.Const1MBytes)
+		common.RuntimeMinCNMergeSize.Store(uint64(c.cnMinMergeSize) * common.Const1MBytes)
 		if c.maxMergeObjN == 0 && c.minRowsQualified == 0 {
 			merge.StopMerge.Store(true)
 		} else {

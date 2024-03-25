@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage"
 	taestorage "github.com/matrixorigin/matrixone/pkg/txn/storage/tae"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/logservicedriver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"go.uber.org/zap"
 )
@@ -127,6 +128,12 @@ func (s *store) newMemKVStorage(shard metadata.TNShard, logClient logservice.Cli
 }
 
 func (s *store) newTAEStorage(ctx context.Context, shard metadata.TNShard, factory logservice.ClientFactory) (storage.TxnStorage, error) {
+	// use s3 as main fs
+	fs, err := fileservice.Get[fileservice.FileService](s.fileService, defines.SharedFileServiceName)
+	if err != nil {
+		return nil, err
+	}
+
 	ckpcfg := &options.CheckpointCfg{
 		MinCount:              s.cfg.Ckp.MinCount,
 		ScanInterval:          s.cfg.Ckp.ScanInterval.Duration,
@@ -141,6 +148,13 @@ func (s *store) newTAEStorage(ctx context.Context, shard metadata.TNShard, facto
 		ScanGCInterval: s.cfg.GCCfg.ScanGCInterval.Duration,
 		DisableGC:      s.cfg.GCCfg.DisableGC,
 	}
+
+	mergeCfg := &options.MergeConfig{
+		CNMergeMemControlHint: uint64(s.cfg.Merge.CNMergeMemHint),
+		CNTakeOverAll:         s.cfg.Merge.CNTakeOverAll,
+		CNTakeOverExceed:      uint64(s.cfg.Merge.CNTakeOverExceed),
+	}
+
 	logtailServerAddr := s.logtailServiceListenAddr()
 	logtailServerCfg := &options.LogtailServerCfg{
 		RpcMaxMessageSize:      int64(s.cfg.LogtailServer.RpcMaxMessageSize),
@@ -150,25 +164,29 @@ func (s *store) newTAEStorage(ctx context.Context, shard metadata.TNShard, facto
 		ResponseSendTimeout:    s.cfg.LogtailServer.LogtailResponseSendTimeout.Duration,
 	}
 
-	// use s3 as main fs
-	fs, err := fileservice.Get[fileservice.FileService](s.fileService, defines.SharedFileServiceName)
-	if err != nil {
-		return nil, err
+	opt := &options.Options{
+		Clock:             s.rt.Clock(),
+		Fs:                fs,
+		Lc:                logservicedriver.LogServiceClientFactory(factory),
+		Shard:             shard,
+		CheckpointCfg:     ckpcfg,
+		GCCfg:             gcCfg,
+		MergeCfg:          mergeCfg,
+		LogStoreT:         options.LogstoreLogservice,
+		IncrementalDedup:  s.cfg.Txn.IncrementalDedup == "true",
+		IsStandalone:      s.cfg.InStandalone,
+		Ctx:               ctx,
+		MaxMessageSize:    uint64(s.cfg.RPC.MaxMessageSize),
+		TaskServiceGetter: s.GetTaskService,
 	}
 
 	return taestorage.NewTAEStorage(
 		ctx,
 		s.cfg.Txn.Storage.dataDir,
+		opt,
 		shard,
-		factory,
-		fs,
 		s.rt,
-		ckpcfg,
-		gcCfg,
 		logtailServerAddr,
 		logtailServerCfg,
-		s.cfg.Txn.IncrementalDedup == "true",
-		uint64(s.cfg.RPC.MaxMessageSize),
-		s.GetTaskService,
 	)
 }
