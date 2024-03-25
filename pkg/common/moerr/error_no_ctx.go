@@ -275,12 +275,6 @@ func NewNotFoundNoCtx() *Error {
 	return newError(Context(), ErrNotFound)
 }
 
-func NewNotFoundNoCtxDetail(detail string) *Error {
-	e := newError(Context(), ErrNotFound)
-	e.detail = detail
-	return e
-}
-
 func NewDuplicateNoCtx() *Error {
 	return newError(Context(), ErrDuplicate)
 }
