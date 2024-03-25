@@ -638,7 +638,6 @@ create table table01 (
 insert into table01 (col1, col2, col3, col4, col5, col6, col7, col8, col9, col10) values
 ('Value2', 456, 78.90, '2023-10-24', false, 'banana', 'Another text', '2022-01-01 01:01:01.000', 'More binary data', 'D'),
 ('Value3', 789, 12.34, '2023-10-25', true, 'orange', 'Yet another text', '1979-01-01 01:01:01.123', 'Even more binary data', 'E');
--- @bvt:issue#14970
 create table test.table02 as select * from table01;
 show create table table02;
 select * from table02;
@@ -655,7 +654,6 @@ select * from table02;
 truncate table02;
 select * from table02;
 drop table table02;
--- @bvt:issue
 drop table table01;
 
 -- cras combines with join
@@ -839,9 +837,7 @@ select * from test05;
 insert into test05 values (2, 39304.3424);
 
 alter table test01 rename column col1 to newCol;
--- @bvt:issue#14955
 show create table test01;
--- @bvt:issue
 
 drop table if exists test06;
 create table test06 (col1 int not null default 100) as select col1 from test01;
@@ -1114,7 +1110,10 @@ drop account acc0;
 drop publication sys_pub_1;
 
 -- alias
--- @bvt:issue#14955
+show variables like 'lower_case_table_names';
+set @@global.lower_case_table_names = 0;
+-- @session:id=24&user=sys:dump&password=111
+use test;
 drop table if exists alias01;
 create table alias01 (col1 int, col2 decimal);
 insert into alias01 values (1,2);
@@ -1124,7 +1123,7 @@ create table alias02 (NewCol int) as select * from alias01;
 show create table alias02;
 select * from alias02;
 drop table alias01;
--- @bvt:issue
+-- @session
 drop database test;
 
 -- privilege
@@ -1301,3 +1300,4 @@ drop user role_u2;
 drop database db;
 drop database db5;
 drop database db6;
+set @@global.lower_case_table_names = 1;

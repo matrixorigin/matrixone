@@ -55,9 +55,9 @@ func TestCheckpoint1(t *testing.T) {
 		txn, _ := db.StartTxn(nil)
 		database, _ := txn.GetDatabase("db")
 		rel, _ := database.GetRelationByName(schema.Name)
-		it := rel.MakeBlockIt()
-		blk := it.GetBlock()
-		err := blk.RangeDelete(3, 3, handle.DT_Normal, common.DefaultAllocator)
+		it := rel.MakeObjectIt()
+		blk := it.GetObject()
+		err := blk.RangeDelete(0, 3, 3, handle.DT_Normal, common.DefaultAllocator)
 		assert.Nil(t, err)
 		assert.Nil(t, txn.Commit(context.Background()))
 	}
@@ -65,12 +65,12 @@ func TestCheckpoint1(t *testing.T) {
 	blockCnt := 0
 	fn := func() bool {
 		blockCnt = 0
-		blockFn := func(entry *catalog.BlockEntry) error {
-			blockCnt++
+		objectFn := func(entry *catalog.ObjectEntry) error {
+			blockCnt += entry.BlockCnt()
 			return nil
 		}
 		processor := new(catalog.LoopProcessor)
-		processor.BlockFn = blockFn
+		processor.ObjectFn = objectFn
 		err := db.Catalog.RecurLoop(processor)
 		assert.NoError(t, err)
 		return blockCnt == 2+3
@@ -125,7 +125,7 @@ func TestCheckpoint2(t *testing.T) {
 		}
 		testutil.AppendClosure(t, data, name, tae, nil)()
 	}
-	var meta *catalog.BlockEntry
+	var meta *catalog.ObjectEntry
 	testutils.WaitExpect(1000, func() bool {
 		return tae.Wal.GetPenddingCnt() == 9
 	})
@@ -140,11 +140,10 @@ func TestCheckpoint2(t *testing.T) {
 		assert.Nil(t, err)
 		rel, err := db.GetRelationByName(schema1.Name)
 		assert.Nil(t, err)
-		it := rel.MakeBlockIt()
-		blk := it.GetBlock()
-		meta = blk.GetMeta().(*catalog.BlockEntry)
-		assert.Equal(t, 10, blk.Rows())
-		task, err := jobs.NewFlushTableTailTask(tasks.WaitableCtx, txn, []*catalog.BlockEntry{meta}, tae.Runtime, txn.GetStartTS())
+		it := rel.MakeObjectIt()
+		blk := it.GetObject()
+		meta = blk.GetMeta().(*catalog.ObjectEntry)
+		task, err := jobs.NewFlushTableTailTask(tasks.WaitableCtx, txn, []*catalog.ObjectEntry{meta}, tae.Runtime, txn.GetStartTS())
 		assert.Nil(t, err)
 		err = tae.Runtime.Scheduler.Schedule(task)
 		assert.Nil(t, err)
@@ -157,7 +156,7 @@ func TestCheckpoint2(t *testing.T) {
 	// 	return tae.Wal.GetPenddingCnt() == 1
 	// })
 	// t.Log(tae.Wal.GetPenddingCnt())
-	// err := meta.GetBlockData().Destroy()
+	// err := meta.GetObjectData().Destroy()
 	// assert.Nil(t, err)
 	// task, err := tae.Runtime.Scheduler.ScheduleScopedFn(tasks.WaitableCtx, tasks.CheckpointTask, nil, tae.Catalog.CheckpointClosure(tae.Runtime.Scheduler.GetCheckpointTS()))
 	// assert.Nil(t, err)

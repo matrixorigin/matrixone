@@ -219,7 +219,7 @@ func (t *GCTable) closeBatch(bs []*containers.Batch) {
 func (t *GCTable) collectData(files []string) []*containers.Batch {
 	bats := t.makeBatchWithGCTable()
 	for i, attr := range BlockSchemaAttr {
-		bats[CreateBlock].AddVector(attr, containers.MakeVector(BlockSchemaTypes[i], common.CheckpointAllocator))
+		bats[CreateBlock].AddVector(attr, containers.MakeVector(BlockSchemaTypes[i], common.DefaultAllocator))
 	}
 	for name, entry := range t.objects {
 		bats[CreateBlock].GetVectorByName(GCAttrObjectName).Append([]byte(name), false)
@@ -322,17 +322,18 @@ func (t *GCTable) replayData(ctx context.Context,
 	for i := range attrs {
 		idxes[i] = uint16(i)
 	}
-	mobat, _, err := reader.LoadColumns(ctx, idxes, nil, bs[typ].GetID(), common.DefaultAllocator)
+	mobat, release, err := reader.LoadColumns(ctx, idxes, nil, bs[typ].GetID(), common.DefaultAllocator)
 	if err != nil {
 		return err
 	}
+	defer release()
 	for i := range attrs {
 		pkgVec := mobat.Vecs[i]
 		var vec containers.Vector
 		if pkgVec.Length() == 0 {
-			vec = containers.MakeVector(types[i], common.CheckpointAllocator)
+			vec = containers.MakeVector(types[i], common.DefaultAllocator)
 		} else {
-			vec = containers.ToTNVector(pkgVec, common.CheckpointAllocator)
+			vec = containers.ToTNVector(pkgVec, common.DefaultAllocator)
 		}
 		bats[typ].AddVector(attrs[i], vec)
 	}
