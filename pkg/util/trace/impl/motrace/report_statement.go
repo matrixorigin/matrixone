@@ -597,7 +597,9 @@ func EndStatement(ctx context.Context, err error, sentRows int64, outBytes int64
 		if err != nil {
 			outBytes += ResponseErrPacketSize + int64(len(err.Error()))
 		}
-		outBytes += TcpIpv4HeaderSize * outPacket
+		if GetTracerProvider().tcpPacket {
+			outBytes += TcpIpv4HeaderSize * outPacket
+		}
 		s.statsArray.InitIfEmpty().WithOutTrafficBytes(float64(outBytes)).WithOutPacketCount(float64(outPacket))
 		s.ExecPlan2Stats(ctx)
 		if s.statsArray.GetCU() < 0 {
