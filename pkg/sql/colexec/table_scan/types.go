@@ -36,6 +36,8 @@ type Argument struct {
 	buf    *batch.Batch
 	tmpBuf *batch.Batch
 
+	maxAllocSize int
+
 	vm.OperatorBase
 }
 
@@ -84,4 +86,6 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 	if arg.msgReceiver != nil {
 		arg.msgReceiver.Free()
 	}
+	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
+	anal.Alloc(int64(arg.maxAllocSize))
 }
