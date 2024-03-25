@@ -3638,6 +3638,13 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 		logInfo(ses, ses.GetDebugString(), fmt.Sprintf("time of Exec.Build : %s", time.Since(cmpBegin).String()))
 	}
 
+	defer func() {
+		// Serialize the execution plan as json
+		if cwft, ok := cw.(*TxnComputationWrapper); ok {
+			_ = cwft.RecordExecPlan(requestCtx)
+		}
+	}()
+
 	mrs = ses.GetMysqlResultSet()
 	ep := ses.GetExportConfig()
 	// cw.Compile might rewrite sql, here we fetch the latest version
@@ -3689,13 +3696,6 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 			}
 			if err = ep.File.Close(); err != nil {
 				return
-			}
-
-			/*
-			   Serialize the execution plan by json
-			*/
-			if cwft, ok := cw.(*TxnComputationWrapper); ok {
-				_ = cwft.RecordExecPlan(requestCtx)
 			}
 
 		} else {
@@ -3766,13 +3766,6 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 			err = proto.sendEOFOrOkPacket(0, extendStatus(ses.GetServerStatus()))
 			if err != nil {
 				return
-			}
-
-			/*
-				Step 4: Serialize the execution plan by json
-			*/
-			if cwft, ok := cw.(*TxnComputationWrapper); ok {
-				_ = cwft.RecordExecPlan(requestCtx)
 			}
 		}
 
@@ -3857,12 +3850,6 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 			return
 		}
 
-		/*
-			Step 4: Serialize the execution plan by json
-		*/
-		if cwft, ok := cw.(*TxnComputationWrapper); ok {
-			_ = cwft.RecordExecPlan(requestCtx)
-		}
 	//just status, no result set
 	case *tree.CreateTable, *tree.DropTable, *tree.CreateDatabase, *tree.DropDatabase,
 		*tree.CreateIndex, *tree.DropIndex,
@@ -3933,12 +3920,6 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 
 		logDebug(ses, ses.GetDebugString(), fmt.Sprintf("time of SendResponse %s", time.Since(echoTime).String()))
 
-		/*
-			Step 4: Serialize the execution plan by json
-		*/
-		if cwft, ok := cw.(*TxnComputationWrapper); ok {
-			_ = cwft.RecordExecPlan(requestCtx)
-		}
 	case *tree.ExplainAnalyze:
 		explainColName := "QUERY PLAN"
 		columns, err = GetExplainColumns(requestCtx, explainColName)
