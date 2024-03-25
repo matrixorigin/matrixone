@@ -122,7 +122,7 @@ func (ctr *container) receiveHashMap(proc *process.Process, anal process.Analyze
 	}
 	if bat != nil && bat.AuxData != nil {
 		ctr.mp = bat.DupJmAuxData()
-		anal.Alloc(ctr.mp.Size())
+		ctr.maxAllocSize = max(ctr.maxAllocSize, ctr.mp.Size())
 	}
 	return nil
 }

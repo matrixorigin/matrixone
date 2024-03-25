@@ -968,7 +968,7 @@ col2    INT(32)    YES        null
 col3    DECIMAL64(10)    YES        null        
 col4    DATE(0)    YES        null        
 col5    BOOL(0)    YES        null        
-col6    ENUM(0)    YES        null        
+col6    ENUM('apple','banana','orange')    YES        null        
 col7    TEXT(0)    YES        null        
 col8    TIMESTAMP(0)    YES        null        
 col9    BLOB(0)    YES        null        
