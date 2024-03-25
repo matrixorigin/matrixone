@@ -2653,11 +2653,6 @@ var GetStmtExecList = func(db, sql, user string, eng engine.Engine, proc *proces
 	return stmtExecList, nil
 }
 
-// Deprecated
-func incStatementCounter(tenant string, stmt tree.Statement) {
-	metric.StatementCounter(tenant, getStatementType(stmt).GetQueryType()).Inc()
-}
-
 func incTransactionCounter(tenant string) {
 	metric.TransactionCounter(tenant).Inc()
 }
