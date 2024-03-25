@@ -30,10 +30,14 @@ type countColumnExec struct {
 }
 
 func newCountColumnExecExec(mg AggMemoryManager, info singleAggInfo) AggFuncExec {
-	return &countColumnExec{
+	exec := &countColumnExec{
 		singleAggInfo: info,
 		ret:           initFixedAggFuncResult[int64](mg, info.retType, false),
 	}
+	if info.distinct {
+		exec.distinctHash = newDistinctHash(mg.Mp(), false)
+	}
+	return exec
 }
 
 func (exec *countColumnExec) GroupGrow(more int) error {

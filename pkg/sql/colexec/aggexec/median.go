@@ -48,6 +48,17 @@ type medianColumnExecSelf[T numeric | types.Decimal64 | types.Decimal128, R floa
 	groups []*vector.Vector
 }
 
+func newMedianColumnExecSelf[T numeric | types.Decimal64 | types.Decimal128, R float64 | types.Decimal128](mg AggMemoryManager, info singleAggInfo) medianColumnExecSelf[T, R] {
+	s := medianColumnExecSelf[T, R]{
+		singleAggInfo: info,
+		ret:           initFixedAggFuncResult[R](mg, info.retType, info.emptyNull),
+	}
+	if info.IsDistinct() {
+		s.distinctHash = newDistinctHash(mg.Mp(), false)
+	}
+	return s
+}
+
 func (exec *medianColumnExecSelf[T, R]) GroupGrow(more int) error {
 	if exec.IsDistinct() {
 		if err := exec.distinctHash.grows(more); err != nil {
@@ -278,10 +289,7 @@ type medianColumnNumericExec[T numeric] struct {
 
 func newMedianColumnNumericExec[T numeric](mg AggMemoryManager, info singleAggInfo) AggFuncExec {
 	return &medianColumnNumericExec[T]{
-		medianColumnExecSelf: medianColumnExecSelf[T, float64]{
-			singleAggInfo: info,
-			ret:           initFixedAggFuncResult[float64](mg, info.retType, info.emptyNull),
-		},
+		medianColumnExecSelf: newMedianColumnExecSelf[T, float64](mg, info),
 	}
 }
 
@@ -291,10 +299,7 @@ type medianColumnDecimalExec[T types.Decimal64 | types.Decimal128] struct {
 
 func newMedianColumnDecimalExec[T types.Decimal64 | types.Decimal128](mg AggMemoryManager, info singleAggInfo) AggFuncExec {
 	return &medianColumnDecimalExec[T]{
-		medianColumnExecSelf: medianColumnExecSelf[T, types.Decimal128]{
-			singleAggInfo: info,
-			ret:           initFixedAggFuncResult[types.Decimal128](mg, info.retType, info.emptyNull),
-		},
+		medianColumnExecSelf: newMedianColumnExecSelf[T, types.Decimal128](mg, info),
 	}
 }
 
