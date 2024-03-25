@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -96,6 +97,9 @@ func init() {
 }
 
 func isSortedKey(colDef *plan.ColDef) (isPK, isSorted bool) {
+	if colDef.Name == catalog.FakePrimaryKeyColName {
+		return false, false
+	}
 	isPK, isCluster := colDef.Primary, colDef.ClusterBy
 	isSorted = isPK || isCluster
 	return
