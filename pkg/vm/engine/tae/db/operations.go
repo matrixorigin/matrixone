@@ -101,6 +101,18 @@ func (m *Checkpoint) UnmarshalBinary(data []byte) error {
 	return m.Unmarshal(data)
 }
 
+type InterceptCommit struct {
+	TableName string
+}
+
+func (m *InterceptCommit) MarshalBinary() ([]byte, error) {
+	return m.Marshal()
+}
+
+func (m *InterceptCommit) UnmarshalBinary(data []byte) error {
+	return m.Unmarshal(data)
+}
+
 type InspectTN struct {
 	AccessInfo AccessInfo
 	Operation  string

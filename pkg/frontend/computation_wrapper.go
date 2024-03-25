@@ -167,10 +167,10 @@ func (cwft *TxnComputationWrapper) GetColumns() ([]interface{}, error) {
 		c := new(MysqlColumn)
 		c.SetName(col.Name)
 		c.SetOrgName(col.Name)
-		c.SetTable(col.Typ.Table)
-		c.SetOrgTable(col.Typ.Table)
+		c.SetTable(col.TblName)
+		c.SetOrgTable(col.TblName)
 		c.SetAutoIncr(col.Typ.AutoIncr)
-		c.SetSchema(cwft.ses.GetTxnCompileCtx().DefaultDatabase())
+		c.SetSchema(col.DbName)
 		err = convertEngineTypeToMysqlType(cwft.ses.requestCtx, types.T(col.Typ.Id), c)
 		if err != nil {
 			return nil, err

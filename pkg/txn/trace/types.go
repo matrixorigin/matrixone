@@ -211,6 +211,7 @@ type Service interface {
 	Enable(feature string) error
 	Disable(feature string) error
 	Enabled(feature string) bool
+	Sync()
 
 	DecodeHexComplexPK(hex string) (string, error)
 
