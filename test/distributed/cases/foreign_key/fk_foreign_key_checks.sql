@@ -291,3 +291,4 @@ drop table qrtz_blob_triggers;
 drop table qrtz_simple_triggers;
 drop table qrtz_simprop_triggers;
 SET FOREIGN_KEY_CHECKS=1;
+drop database qrtz_fk_testdb;
