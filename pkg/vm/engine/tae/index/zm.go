@@ -249,7 +249,9 @@ func (zm ZM) GetBuf() []byte {
 func (zm ZM) MaxTruncated() bool {
 	return zm[61]&0x80 != 0
 }
-
+func (zm ZM) SetMaxTruncated() {
+	zm[61] |= 0x80
+}
 func (zm ZM) Encode() []byte {
 	return zm[:]
 }

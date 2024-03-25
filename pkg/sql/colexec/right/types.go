@@ -68,6 +68,8 @@ type container struct {
 	matched *bitmap.Bitmap
 
 	handledLast bool
+
+	maxAllocSize int64
 }
 
 type Argument struct {
@@ -147,6 +149,9 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 		ctr.cleanExprExecutor()
 		ctr.FreeAllReg()
 		ctr.cleanEvalVectors()
+
+		anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
+		anal.Alloc(ctr.maxAllocSize)
 	}
 }
 

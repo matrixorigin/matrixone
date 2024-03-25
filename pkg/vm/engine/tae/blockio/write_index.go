@@ -86,6 +86,9 @@ func (b *ObjectColumnMetasBuilder) UpdateZm(idx int, zm index.ZM) {
 	}
 	index.UpdateZM(b.zms[idx], zm.GetMinBuf())
 	index.UpdateZM(b.zms[idx], zm.GetMaxBuf())
+	if zm.IsString() && zm.MaxTruncated() {
+		b.zms[idx].SetMaxTruncated()
+	}
 	b.zms[idx].SetSum(zm.GetSumBuf())
 }
 
