@@ -324,7 +324,7 @@ func DeepCopyColDef(col *plan.ColDef) *plan.ColDef {
 		ColId:     col.ColId,
 		Name:      col.Name,
 		Alg:       col.Alg,
-		Typ:       DeepCopyType(col.Typ),
+		Typ:       col.Typ,
 		Default:   DeepCopyDefault(col.Default),
 		Primary:   col.Primary,
 		Pkidx:     col.Pkidx,
@@ -333,6 +333,8 @@ func DeepCopyColDef(col *plan.ColDef) *plan.ColDef {
 		ClusterBy: col.ClusterBy,
 		Hidden:    col.Hidden,
 		Seqnum:    col.Seqnum,
+		TblName:   col.TblName,
+		DbName:    col.DbName,
 	}
 }
 
@@ -463,6 +465,7 @@ func DeepCopyTableDef(table *plan.TableDef, withCols bool) *plan.TableDef {
 		TableLockType:  table.TableLockType,
 		IsTemporary:    table.IsTemporary,
 		AutoIncrOffset: table.AutoIncrOffset,
+		DbName:         table.DbName,
 	}
 
 	copy(newTable.RefChildTbls, table.RefChildTbls)

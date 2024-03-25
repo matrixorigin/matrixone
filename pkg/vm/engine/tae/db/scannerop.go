@@ -136,7 +136,6 @@ func newMergeTaskBuiler(db *DB) *MergeTaskBuilder {
 
 	op.DatabaseFn = op.onDataBase
 	op.TableFn = op.onTable
-	op.BlockFn = op.onBlock
 	op.ObjectFn = op.onObject
 	op.PostObjectFn = op.onPostObject
 	op.PostTableFn = op.onPostTable
@@ -188,7 +187,7 @@ func (s *MergeTaskBuilder) resetForTable(entry *catalog.TableEntry) {
 	if entry != nil {
 		s.tid = entry.ID
 		s.tbl = entry
-		s.name = entry.GetLastestSchema().Name
+		s.name = entry.GetLastestSchemaLocked().Name
 		s.tableRowCnt = 0
 		s.tableRowDel = 0
 	}
@@ -252,7 +251,35 @@ func (s *MergeTaskBuilder) onObject(objectEntry *catalog.ObjectEntry) (err error
 	}
 
 	s.ObjectHelper.resetForNewObj()
-	s.ObjectHelper.objNonAppend = !objectEntry.IsAppendable()
+	if objectEntry.IsAppendable() {
+		return
+	}
+
+	// for sorted Objects, we just collect the rows and dels on this Object
+	// for non-sorted Objects, flushTableTail will take care of them, here we just check if it is deletable(having no active blocks)
+
+	// it has active blk, this obj can't be deleted
+	// active object have active blks
+	s.ObjectHelper.hintNonDropBlock()
+	if !objectEntry.IsCommitted() || !catalog.ActiveObjectWithNoTxnFilter(objectEntry.BaseEntryImpl) {
+		// txn appending metalocs
+		s.ObjectHelper.isCreating = true
+		return moerr.GetOkStopCurrRecur()
+	}
+	if !catalog.NonAppendableBlkFilter(objectEntry) {
+		panic("append block in sorted Object")
+	}
+	// nblks in appenable objs or non-sorted non-appendable objs
+	// these blks are formed by continuous append
+	objectEntry.RUnlock()
+	rows, err := objectEntry.GetObjectData().Rows()
+	if err != nil {
+		return
+	}
+	dels := objectEntry.GetObjectData().GetTotalChanges()
+	objectEntry.RLock()
+	s.ObjectHelper.objRowCnt += rows
+	s.ObjectHelper.objRowDel += dels
 	return
 }
 
@@ -270,43 +297,5 @@ func (s *MergeTaskBuilder) onPostObject(obj *catalog.ObjectEntry) (err error) {
 	s.tableRowDel += s.ObjectHelper.objRowDel
 
 	s.objPolicy.OnObject(obj)
-	return nil
-}
-
-// for sorted Objects, we just collect the rows and dels on this Object
-// for non-sorted Objects, flushTableTail will take care of them, here we just check if it is deletable(having no active blocks)
-func (s *MergeTaskBuilder) onBlock(entry *catalog.BlockEntry) (err error) {
-	if !entry.IsActive() {
-		return
-	}
-	// it has active blk, this obj can't be deleted
-	s.ObjectHelper.hintNonDropBlock()
-
-	// this blk is not in a s3 object
-	if !s.ObjectHelper.objNonAppend {
-		return
-	}
-
-	entry.RLock()
-	defer entry.RUnlock()
-
-	// Skip uncommitted entries and appendable block
-	if !entry.IsCommitted() || !catalog.ActiveWithNoTxnFilter(&entry.BaseEntryImpl) {
-		// txn appending metalocs
-		s.ObjectHelper.isCreating = true
-		return
-	}
-	if !catalog.NonAppendableBlkFilter(entry) {
-		panic("append block in sorted Object")
-	}
-
-	// nblks in appenable objs or non-sorted non-appendable objs
-	// these blks are formed by continuous append
-	entry.RUnlock()
-	rows := entry.GetBlockData().Rows()
-	dels := entry.GetBlockData().GetTotalChanges()
-	entry.RLock()
-	s.ObjectHelper.objRowCnt += rows
-	s.ObjectHelper.objRowDel += dels
 	return nil
 }

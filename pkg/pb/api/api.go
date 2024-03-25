@@ -19,13 +19,15 @@ import (
 
 var (
 	OpMethodName = map[OpCode]string{
-		OpCode_OpPing:          "Ping",
-		OpCode_OpFlush:         "Flush",
-		OpCode_OpCheckpoint:    "Checkpoint",
-		OpCode_OpInspect:       "Inspect",
-		OpCode_OpAddFaultPoint: "AddFaultPoint",
-		OpCode_OpBackup:        "Backup",
-		OpCode_OpTraceSpan:     "TraceSpan",
+		OpCode_OpPing:             "Ping",
+		OpCode_OpFlush:            "Flush",
+		OpCode_OpCheckpoint:       "Checkpoint",
+		OpCode_OpInspect:          "Inspect",
+		OpCode_OpAddFaultPoint:    "AddFaultPoint",
+		OpCode_OpBackup:           "Backup",
+		OpCode_OpTraceSpan:        "TraceSpan",
+		OpCode_OpGlobalCheckpoint: "GlobalCheckpoint",
+		OpCode_OpInterceptCommit:  "InterceptCommit",
 	}
 )
 
@@ -85,7 +87,7 @@ func NewAddColumnReq(did, tid uint64, name string, typ *plan.Type, insertAt int3
 			&AlterTableAddColumn{
 				Column: &plan.ColDef{
 					Name: name,
-					Typ:  typ,
+					Typ:  *typ,
 					Default: &plan.Default{
 						NullAbility:  true,
 						Expr:         nil,

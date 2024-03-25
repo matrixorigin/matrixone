@@ -296,7 +296,8 @@ const (
 	// see builtin.ctl.ctl.go to get detail.
 	MO_CTL
 
-	MO_SHOW_VISIBLE_BIN // parse type/onUpdate/default []byte to visible string
+	MO_SHOW_VISIBLE_BIN      // parse type/onUpdate/default []byte to visible string
+	MO_SHOW_VISIBLE_BIN_ENUM //  parse type/onUpdate/default []byte to visible string for enum
 
 	MO_TABLE_ROWS    // table rows
 	MO_TABLE_SIZE    // table size
@@ -306,6 +307,8 @@ const (
 	MO_LOG_DATE // parse date from string, like __mo_filepath
 	MO_CHECH_LEVEL
 	PURGE_LOG // purge mo internal log, like rawlog, statement_info, metric
+	MO_CU
+	MO_CU_V1
 
 	GIT_VERSION
 	BUILD_VERSION
@@ -351,6 +354,13 @@ const (
 	MO_CPU
 	MO_MEMORY
 	MO_CPU_DUMP
+
+	// bitmap function
+	BITMAP_BIT_POSITION
+	BITMAP_BUCKET_NUMBER
+	BITMAP_COUNT
+	BITMAP_CONSTRUCT_AGG
+	BITMAP_OR_AGG
 
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
@@ -576,6 +586,7 @@ var functionIdRegister = map[string]int32{
 	"mo_disable_memory_usage_detail": MO_DISABLE_MEMORY_USAGE_DETAIL,
 	"mo_ctl":                         MO_CTL,
 	"mo_show_visible_bin":            MO_SHOW_VISIBLE_BIN,
+	"mo_show_visible_bin_enum":       MO_SHOW_VISIBLE_BIN_ENUM,
 	"substring_index":                SUBSTRING_INDEX,
 	"field":                          FIELD,
 	"format":                         FORMAT,
@@ -597,6 +608,8 @@ var functionIdRegister = map[string]int32{
 	"mo_log_date":                    MO_LOG_DATE,
 	"mo_check_level":                 MO_CHECH_LEVEL,
 	"purge_log":                      PURGE_LOG,
+	"mo_cu":                          MO_CU,
+	"mo_cu_v1":                       MO_CU_V1,
 	"git_version":                    GIT_VERSION,
 	"build_version":                  BUILD_VERSION,
 	"values":                         VALUES,
@@ -637,4 +650,10 @@ var functionIdRegister = map[string]int32{
 	"mo_cpu":      MO_CPU,
 	"mo_memory":   MO_MEMORY,
 	"mo_cpu_dump": MO_CPU_DUMP,
+	// bitmap function
+	"bitmap_bit_position":  BITMAP_BIT_POSITION,
+	"bitmap_bucket_number": BITMAP_BUCKET_NUMBER,
+	"bitmap_count":         BITMAP_COUNT,
+	"bitmap_construct_agg": BITMAP_CONSTRUCT_AGG,
+	"bitmap_or_agg":        BITMAP_OR_AGG,
 }

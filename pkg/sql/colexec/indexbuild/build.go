@@ -16,6 +16,7 @@ package indexbuild
 
 import (
 	"bytes"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
@@ -103,7 +104,7 @@ func (ctr *container) collectBuildBatches(ap *Argument, proc *process.Process, a
 			continue
 		}
 		anal.Input(currentBatch, isFirst)
-		anal.Alloc(int64(currentBatch.Size()))
+		// anal.Alloc(int64(currentBatch.Size())) @todo we need to redesin annalyze memory size
 		ctr.batch, err = ctr.batch.AppendWithCopy(proc.Ctx, proc.Mp(), currentBatch)
 		if err != nil {
 			return err
@@ -139,12 +140,7 @@ func (ctr *container) handleRuntimeFilter(ap *Argument, proc *process.Process) e
 	}
 
 	if runtimeFilter != nil {
-		select {
-		case <-proc.Ctx.Done():
-			ctr.state = End
-		case ap.RuntimeFilterSenders[0].Chan <- runtimeFilter:
-			ctr.state = End
-		}
+		sendFilter(ap, proc, runtimeFilter)
 		return nil
 	}
 
@@ -171,11 +167,19 @@ func (ctr *container) handleRuntimeFilter(ap *Argument, proc *process.Process) e
 			Data: data,
 		}
 	}
+	sendFilter(ap, proc, runtimeFilter)
+	return nil
+}
+
+func sendFilter(ap *Argument, proc *process.Process, runtimeFilter *pipeline.RuntimeFilter) {
+	anal := proc.GetAnalyze(ap.GetIdx(), ap.GetParallelIdx(), ap.GetParallelMajor())
+	sendRuntimeFilterStart := time.Now()
+
 	select {
 	case <-proc.Ctx.Done():
-		ctr.state = End
+		ap.ctr.state = End
 	case ap.RuntimeFilterSenders[0].Chan <- runtimeFilter:
-		ctr.state = End
+		ap.ctr.state = End
 	}
-	return nil
+	anal.WaitStop(sendRuntimeFilterStart)
 }

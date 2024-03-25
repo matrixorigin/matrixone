@@ -62,6 +62,8 @@ type container struct {
 	vecs  []*vector.Vector
 
 	mp *hashmap.JoinMap
+
+	maxAllocSize int64
 }
 
 type Argument struct {
@@ -73,7 +75,9 @@ type Argument struct {
 	Cond       *plan.Expr
 	Conditions [][]*plan.Expr
 	bat        *batch.Batch
-	lastrow    int
+	lastpos    int
+	count      int
+	sel        int
 
 	HashOnPK           bool
 	IsShuffle          bool
@@ -121,12 +125,16 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 		ctr.cleanHashMap()
 		ctr.cleanExprExecutor()
 		ctr.FreeAllReg()
+
+		anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
+		anal.Alloc(ctr.maxAllocSize)
 	}
 }
 
 func (ctr *container) cleanExprExecutor() {
 	if ctr.expr != nil {
 		ctr.expr.Free()
+		ctr.expr = nil
 	}
 }
 
@@ -158,6 +166,10 @@ func (ctr *container) cleanHashMap() {
 
 func (ctr *container) cleanEvalVectors() {
 	for i := range ctr.evecs {
-		ctr.evecs[i].executor.Free()
+		if ctr.evecs[i].executor != nil {
+			ctr.evecs[i].executor.Free()
+		}
+		ctr.evecs[i].vec = nil
 	}
+	ctr.evecs = nil
 }

@@ -67,6 +67,8 @@ func TableIsLoggingTable(dbName string, tableName string) bool {
 		return true
 	} else if tableName == "metric" && dbName == "system_metrics" {
 		return true
+	} else if tableName == catalog.MO_SQL_STMT_CU && dbName == catalog.MO_SYSTEM_METRICS {
+		return true
 	}
 	return false
 }
@@ -125,7 +127,7 @@ func BuildMoDataBaseFilter(curAccountId uint64) tree.Expr {
 	andExpr := tree.NewAndExpr(accountIdEqulZero, inExpr)
 
 	// right is:(account_id = 0 and datname in ('mo_catalog'))
-	right := tree.NewParenExpr(andExpr)
+	right := tree.NewParentExpr(andExpr)
 	// return is: account_id = cur_accountId or (account_id = 0 and datname in ('mo_catalog'))
 	return tree.NewOrExpr(left, right)
 }
@@ -164,14 +166,14 @@ func BuildMoTablesFilter(curAccountId uint64) tree.Expr {
 
 	// (relname in ('mo_tables','mo_database','mo_columns') or relkind = 'cluster')
 	tempExpr := tree.NewOrExpr(inExpr, relkindEqualAst)
-	tempExpr2 := tree.NewParenExpr(tempExpr)
+	tempExpr2 := tree.NewParentExpr(tempExpr)
 	// account_id = 0
 	accountIdEqulZero := makeAccountIdEqualAst(0)
 	// andExpr is: account_id = 0 and (relname in ('mo_tables','mo_database','mo_columns') or relkind = 'cluster')
 	andExpr := tree.NewAndExpr(accountIdEqulZero, tempExpr2)
 
 	// right is: (account_id = 0 and (relname in ('mo_tables','mo_database','mo_columns') or relkind = 'cluster'))
-	right := tree.NewParenExpr(andExpr)
+	right := tree.NewParentExpr(andExpr)
 
 	// return is: account_id = cur_account_id or (account_id = 0 and (relname in ('mo_tables','mo_database','mo_columns') or relkind = 'cluster'));
 	return tree.NewOrExpr(left, right)
@@ -224,7 +226,7 @@ func BuildMoColumnsFilter(curAccountId uint64) tree.Expr {
 	andExpr = tree.NewAndExpr(andExpr, notInexpr)
 
 	// right is:(account_id = 0 and datname in ('mo_catalog'))
-	right := tree.NewParenExpr(andExpr)
+	right := tree.NewParentExpr(andExpr)
 	// return is: account_id = cur_accountId or (account_id = 0 and datname in ('mo_catalog'))
 	return tree.NewOrExpr(left, right)
 }

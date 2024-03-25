@@ -23,8 +23,8 @@ import (
 func NewUnaryAgg[T1, T2 any](
 	overloadID int64,
 	aggPrivateStructure AggStruct,
-	isCount bool, inputTypes,
-	outputType types.Type,
+	isCount bool,
+	inputTypes, outputType types.Type,
 	grows func(int),
 	eval func([]T2) ([]T2, error),
 	merge func(int64, int64, T2, T2, bool, bool, any) (T2, bool, error),
@@ -341,6 +341,7 @@ func (a *UnaryAgg[T1, T2]) Eval(pool *mpool.MPool) (vec *vector.Vector, err erro
 	vec = vector.NewVec(a.outputType)
 	if a.outputType.IsVarlen() {
 		vs := (any)(a.vs).([][]byte)
+
 		if err = vector.AppendBytesList(vec, vs, nullList, pool); err != nil {
 			vec.Free(pool)
 			return nil, err

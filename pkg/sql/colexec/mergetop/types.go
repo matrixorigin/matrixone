@@ -108,6 +108,9 @@ func (ctr *container) cleanBatch(mp *mpool.MPool) {
 
 func (ctr *container) cleanExecutors() {
 	for i := range ctr.executorsForOrderList {
+		if ctr.executorsForOrderList[i] == nil {
+			continue
+		}
 		ctr.executorsForOrderList[i].Free()
 	}
 }

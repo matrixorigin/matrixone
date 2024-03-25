@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/indexbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/indexjoin"
 
@@ -591,12 +592,12 @@ func constructFuzzyFilter(c *Compile, n, left, right *plan.Node) *fuzzyfilter.Ar
 	pkName := n.TableDef.Pkey.PkeyColName
 	var pkTyp *plan.Type
 	if pkName == catalog.CPrimaryKeyColName {
-		pkTyp = n.TableDef.Pkey.CompPkeyCol.Typ
+		pkTyp = &n.TableDef.Pkey.CompPkeyCol.Typ
 	} else {
 		cols := n.TableDef.Cols
 		for _, c := range cols {
 			if c.Name == pkName {
-				pkTyp = c.Typ
+				pkTyp = &c.Typ
 			}
 		}
 	}
@@ -604,7 +605,7 @@ func constructFuzzyFilter(c *Compile, n, left, right *plan.Node) *fuzzyfilter.Ar
 	arg := fuzzyfilter.NewArgument()
 	arg.PkName = pkName
 	arg.PkTyp = pkTyp
-	arg.N = right.Stats.Cost
+	arg.N = right.Stats.Outcnt
 	registerRuntimeFilters(arg, c, n.RuntimeFilterBuildList, 0)
 
 	return arg
@@ -1088,9 +1089,11 @@ func constructWindow(ctx context.Context, n *plan.Node, proc *process.Process) *
 				}
 				vec, err := executor.Eval(proc, []*batch.Batch{constBat})
 				if err != nil {
+					executor.Free()
 					panic(err)
 				}
 				cfg = []byte(vec.GetStringAt(0))
+				executor.Free()
 			}
 
 			e = f.F.Args[0]
@@ -1169,9 +1172,11 @@ func constructGroup(ctx context.Context, n, cn *plan.Node, ibucket, nbucket int,
 					}
 					vec, err := executor.Eval(proc, []*batch.Batch{constBat})
 					if err != nil {
+						executor.Free()
 						panic(err)
 					}
 					cfg = []byte(vec.GetStringAt(0))
+					executor.Free()
 				}
 			}
 

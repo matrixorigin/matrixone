@@ -201,14 +201,15 @@ func (rm *RoutineManager) deleteRoutine(rs goetty.IOSession) *Routine {
 	var ok bool
 	rm.mu.Lock()
 	defer rm.mu.Unlock()
-	rt, ok = rm.clients[rs]
-	if ok {
+	if rt, ok = rm.clients[rs]; ok {
 		delete(rm.clients, rs)
 	}
-	connID := rt.getConnectionID()
-	_, ok = rm.routinesByConnID[connID]
-	if ok {
-		delete(rm.routinesByConnID, connID)
+
+	if rt != nil {
+		connID := rt.getConnectionID()
+		if _, ok = rm.routinesByConnID[connID]; ok {
+			delete(rm.routinesByConnID, connID)
+		}
 	}
 	return rt
 }
@@ -295,7 +296,7 @@ func (rm *RoutineManager) Created(rs goetty.IOSession) {
 	}
 
 	hsV10pkt := pro.makeHandshakeV10Payload()
-	err = pro.writePackets(hsV10pkt)
+	err = pro.writePackets(hsV10pkt, true)
 	if err != nil {
 		logError(pro.ses, pro.GetDebugString(),
 			"Failed to handshake with server, quitting routine...",

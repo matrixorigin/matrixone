@@ -155,7 +155,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 				}
 
 				// clean
-				ctr.cleanOrderVectors(proc.Mp())
+				ctr.cleanOrderVectors()
 			}
 
 			anal.Output(ctr.bat, arg.GetIsLast())

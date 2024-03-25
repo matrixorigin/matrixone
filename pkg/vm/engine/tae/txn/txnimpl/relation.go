@@ -82,8 +82,8 @@ func (it *txnRelationIt) Next() {
 		entry.RLock()
 		// SystemDB can hold table created by different tenant, filter needed.
 		// while the 3 shared tables are not affected
-		if it.txnDB.entry.IsSystemDB() && !isSysTable(entry.GetLastestSchema().Name) &&
-			entry.GetLastestSchema().AcInfo.TenantID != txn.GetTenantID() {
+		if it.txnDB.entry.IsSystemDB() && !isSysTable(entry.GetLastestSchemaLocked().Name) &&
+			entry.GetLastestSchemaLocked().AcInfo.TenantID != txn.GetTenantID() {
 			entry.RUnlock()
 			continue
 		}
@@ -131,11 +131,11 @@ func (h *txnRelation) SimplePPString(level common.PPLevel) string {
 	if level < common.PPL1 {
 		return s
 	}
-	it := h.MakeBlockIt()
+	it := h.MakeObjectIt()
 	for it.Valid() {
-		block := it.GetBlock()
-		defer block.Close()
-		s = fmt.Sprintf("%s\n%s", s, block.String())
+		object := it.GetObject()
+		defer object.Close()
+		s = fmt.Sprintf("%s\n%s", s, object.String())
 		it.Next()
 	}
 	return s
@@ -154,7 +154,7 @@ func (h *txnRelation) BatchDedup(col containers.Vector) error {
 }
 
 func (h *txnRelation) Append(ctx context.Context, data *containers.Batch) error {
-	if !h.table.GetLocalSchema().IsSameColumns(h.table.GetMeta().GetLastestSchema()) {
+	if !h.table.GetLocalSchema().IsSameColumns(h.table.GetMeta().GetLastestSchemaLocked()) {
 		return moerr.NewInternalErrorNoCtx("schema changed, please rollback and retry")
 	}
 	return h.Txn.GetStore().Append(ctx, h.table.entry.GetDB().ID, h.table.entry.GetID(), data)
@@ -195,10 +195,6 @@ func (h *txnRelation) MakeObjectItOnSnap() handle.ObjectIt {
 
 func (h *txnRelation) MakeObjectIt() handle.ObjectIt {
 	return newObjectIt(h.table)
-}
-
-func (h *txnRelation) MakeBlockIt() handle.BlockIt {
-	return newRelationBlockIt(h)
 }
 
 func (h *txnRelation) GetByFilter(

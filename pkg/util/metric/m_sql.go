@@ -25,6 +25,16 @@ var (
 		false,
 	)
 
+	StatementDurationFactory = NewCounterVec(
+		CounterOpts{
+			Subsystem: "sql",
+			Name:      "statement_duration_total",
+			Help:      "Statement duration of each query type for each account",
+		},
+		[]string{constTenantKey, "type"},
+		false,
+	)
+
 	TransactionCounterFactory = NewCounterVec(
 		CounterOpts{
 			Subsystem: "sql",
@@ -54,6 +64,16 @@ var (
 		[]string{constTenantKey, "type"},
 		false,
 	)
+
+	StatementCUCounterFactory = NewCounterVec(
+		CounterOpts{
+			Subsystem: "sql",
+			Name:      "statement_cu",
+			Help:      "Counter of executed sql statement cu",
+		},
+		[]string{constTenantKey, "sql_source_type"},
+		false,
+	)
 )
 
 type SQLType string
@@ -77,6 +97,10 @@ func StatementCounter(tenant string, t string) Counter {
 	return StatementCounterFactory.WithLabelValues(tenant, t)
 }
 
+func StatementDuration(tenant string, t string) Counter {
+	return StatementDurationFactory.WithLabelValues(tenant, t)
+}
+
 func TransactionCounter(tenant string) Counter {
 	return TransactionCounterFactory.WithLabelValues(tenant)
 }
@@ -88,4 +112,11 @@ func TransactionErrorsCounter(account string, t SQLType) Counter {
 // StatementErrorsCounter accept t as tree.QueryType
 func StatementErrorsCounter(account string, t string) Counter {
 	return StatementErrorsFactory.WithLabelValues(account, t)
+}
+
+// StatementCUCounter accept @account, @sqlSourceType
+// @account is the account name of the user who executes the sql statement.
+// @sqlSourceType is the type of sql source, such as InternalSql, CloudNoUserSql, ExternalSql, CloudUserSql etc.
+func StatementCUCounter(account string, sqlSourceType string) Counter {
+	return StatementCUCounterFactory.WithLabelValues(account, sqlSourceType)
 }

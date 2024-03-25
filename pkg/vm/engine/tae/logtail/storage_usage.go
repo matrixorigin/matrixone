@@ -1234,7 +1234,8 @@ func EliminateErrorsOnCache(c *catalog.Catalog, end types.TS) int {
 		}
 
 		entry.Lock()
-		if entry.GetCreatedAtLocked().GreaterEq(end) {
+		createTS := entry.GetCreatedAtLocked()
+		if createTS.GreaterEq(&end) {
 			entry.Unlock()
 			return nil
 		}

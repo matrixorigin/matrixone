@@ -42,13 +42,13 @@ type flushTableTailEntry struct {
 	tableEntry *catalog.TableEntry
 
 	transMappings      *api.BlkTransferBooking
-	ablksMetas         []*catalog.BlockEntry
-	delSrcMetas        []*catalog.BlockEntry
-	ablksHandles       []handle.Block
-	delSrcHandles      []handle.Block
-	createdBlkHandles  []handle.Block
+	ablksMetas         []*catalog.ObjectEntry
+	delSrcMetas        []*catalog.ObjectEntry
+	ablksHandles       []handle.Object
+	delSrcHandles      []handle.Object
+	createdBlkHandles  handle.Object
 	pageIds            []*common.ID
-	nextRoundDirties   []*catalog.BlockEntry
+	nextRoundDirties   []*catalog.ObjectEntry
 	createdDeletesFile string
 	createdMergeFile   string
 	dirtyLen           int
@@ -61,11 +61,11 @@ func NewFlushTableTailEntry(
 	taskID uint64,
 	mapping *api.BlkTransferBooking,
 	tableEntry *catalog.TableEntry,
-	ablksMetas []*catalog.BlockEntry,
-	nblksMetas []*catalog.BlockEntry,
-	ablksHandles []handle.Block,
-	nblksHandles []handle.Block,
-	createdBlkHandles []handle.Block,
+	ablksMetas []*catalog.ObjectEntry,
+	nblksMetas []*catalog.ObjectEntry,
+	ablksHandles []handle.Object,
+	nblksHandles []handle.Object,
+	createdBlkHandles handle.Object,
 	createdDeletesFile string,
 	createdMergeFile string,
 	dirtyLen int,
@@ -93,9 +93,9 @@ func NewFlushTableTailEntry(
 	return entry
 }
 
-// add transfer pages for dropped ablocks
+// add transfer pages for dropped aobjects
 func (entry *flushTableTailEntry) addTransferPages() {
-	isTransient := !entry.tableEntry.GetLastestSchema().HasPK()
+	isTransient := !entry.tableEntry.GetLastestSchemaLocked().HasPK()
 	for i, mcontainer := range entry.transMappings.Mappings {
 		m := mcontainer.M
 		if len(m) == 0 {
@@ -105,8 +105,8 @@ func (entry *flushTableTailEntry) addTransferPages() {
 		entry.pageIds = append(entry.pageIds, id)
 		page := model.NewTransferHashPage(id, time.Now(), isTransient)
 		for srcRow, dst := range m {
-			blkid := entry.createdBlkHandles[dst.Idx].ID()
-			page.Train(uint32(srcRow), *objectio.NewRowid(&blkid, uint32(dst.Row)))
+			blkid := objectio.NewBlockidWithObjectID(entry.createdBlkHandles.GetID(), uint16(dst.Idx))
+			page.Train(uint32(srcRow), *objectio.NewRowid(blkid, uint32(dst.Row)))
 		}
 		entry.rt.TransferTable.AddPage(page)
 	}
@@ -114,18 +114,25 @@ func (entry *flushTableTailEntry) addTransferPages() {
 
 // PrepareCommit check deletes between start ts and commit ts
 func (entry *flushTableTailEntry) PrepareCommit() error {
+	if len(entry.ablksHandles) == 0 {
+		return nil
+	}
+	// if created blk handles is nil, all rows in ablks are deleted
+	if entry.createdBlkHandles == nil {
+		return nil
+	}
 	var aconflictCnt, totalTrans int
-	// transfer deletes in (startts .. committs] for ablocks
-	delTbls := make([]*model.TransDels, len(entry.createdBlkHandles))
+	// transfer deletes in (startts .. committs] for aobjects
+	delTbls := make([]*model.TransDels, entry.createdBlkHandles.GetMeta().(*catalog.ObjectEntry).BlockCnt())
 	for i, blk := range entry.ablksMetas {
 		mapping := entry.transMappings.Mappings[i].M
 		if len(mapping) == 0 {
-			// empty frozen ablocks, it can not has any more deletes
+			// empty frozen aobjects, it can not has any more deletes
 			continue
 		}
-		dataBlock := blk.GetBlockData()
+		dataBlock := blk.GetObjectData()
 		startTS := entry.txn.GetStartTS()
-		bat, err := dataBlock.CollectDeleteInRange(
+		bat, _, err := dataBlock.CollectDeleteInRange(
 			entry.txn.GetContext(),
 			startTS.Next(),
 			entry.txn.GetPrepareTS(),
@@ -154,8 +161,8 @@ func (entry *flushTableTailEntry) PrepareCommit() error {
 				delTbls[destpos.Idx] = model.NewTransDels(entry.txn.GetPrepareTS())
 			}
 			delTbls[destpos.Idx].Mapping[int(destpos.Row)] = ts[i]
-			if err = entry.createdBlkHandles[destpos.Idx].RangeDelete(
-				uint32(destpos.Row), uint32(destpos.Row), handle.DT_MergeCompact, common.MergeAllocator,
+			if err = entry.createdBlkHandles.RangeDelete(
+				uint16(destpos.Idx), uint32(destpos.Row), uint32(destpos.Row), handle.DT_MergeCompact, common.MergeAllocator,
 			); err != nil {
 				return err
 			}
@@ -164,8 +171,8 @@ func (entry *flushTableTailEntry) PrepareCommit() error {
 	}
 	for i, delTbl := range delTbls {
 		if delTbl != nil {
-			destid := entry.createdBlkHandles[i].ID()
-			entry.rt.TransferDelsMap.SetDelsForBlk(destid, delTbl)
+			destid := objectio.NewBlockidWithObjectID(entry.createdBlkHandles.GetID(), uint16(i))
+			entry.rt.TransferDelsMap.SetDelsForBlk(*destid, delTbl)
 		}
 	}
 
@@ -193,7 +200,7 @@ func (entry *flushTableTailEntry) PrepareRollback() (err error) {
 	// remove written file
 	fs := entry.rt.Fs.Service
 
-	// object for snapshot read of ablocks
+	// object for snapshot read of aobjects
 	ablkNames := make([]string, 0, len(entry.ablksMetas))
 	for _, blk := range entry.ablksMetas {
 		if !blk.HasPersistedData() {
@@ -201,8 +208,7 @@ func (entry *flushTableTailEntry) PrepareRollback() (err error) {
 			continue
 		}
 		seg := blk.ID.Segment()
-		num, _ := blk.ID.Offsets()
-		name := objectio.BuildObjectName(seg, num).String()
+		name := objectio.BuildObjectName(seg, 0).String()
 		ablkNames = append(ablkNames, name)
 	}
 
@@ -227,13 +233,13 @@ func (entry *flushTableTailEntry) PrepareRollback() (err error) {
 
 // ApplyCommit Gc in memory deletes and update table compact status
 func (entry *flushTableTailEntry) ApplyCommit() (err error) {
-	for i, blk := range entry.ablksMetas {
-		_ = blk.GetBlockData().TryUpgrade()
-		blk.GetBlockData().GCInMemeoryDeletesByTS(entry.ablksHandles[i].GetDeltaPersistedTS())
+	for _, blk := range entry.ablksMetas {
+		_ = blk.GetObjectData().TryUpgrade()
+		blk.GetObjectData().UpgradeAllDeleteChain()
 	}
 
-	for i, blk := range entry.delSrcMetas {
-		blk.GetBlockData().GCInMemeoryDeletesByTS(entry.delSrcHandles[i].GetDeltaPersistedTS())
+	for _, blk := range entry.delSrcMetas {
+		blk.GetObjectData().UpgradeAllDeleteChain()
 	}
 
 	tbl := entry.tableEntry

@@ -180,7 +180,7 @@ func (c *catalogArg) FromCommand(cmd *cobra.Command) (err error) {
 func (c *catalogArg) String() string {
 	t := "*"
 	if c.tbl != nil {
-		t = fmt.Sprintf("%d-%s", c.tbl.ID, c.tbl.GetLastestSchema().Name)
+		t = fmt.Sprintf("%d-%s", c.tbl.ID, c.tbl.GetLastestSchemaLocked().Name)
 	}
 	f := "nil"
 	if c.outfile != nil {
@@ -256,7 +256,7 @@ func (c *objStatArg) FromCommand(cmd *cobra.Command) (err error) {
 func (c *objStatArg) String() string {
 	t := "*"
 	if c.tbl != nil {
-		t = fmt.Sprintf("%d-%s", c.tbl.ID, c.tbl.GetLastestSchema().Name)
+		t = fmt.Sprintf("%d-%s", c.tbl.ID, c.tbl.GetLastestSchemaLocked().Name)
 	}
 	return t
 }
@@ -417,7 +417,7 @@ func (c *manualyIgnoreArg) Run() error {
 type infoArg struct {
 	ctx     *inspectContext
 	tbl     *catalog.TableEntry
-	blk     *catalog.BlockEntry
+	obj     *catalog.ObjectEntry
 	verbose common.PPLevel
 }
 
@@ -429,7 +429,7 @@ func (c *infoArg) PrepareCommand() *cobra.Command {
 	}
 	cmd.Flags().CountP("verbose", "v", "verbose level")
 	cmd.Flags().StringP("target", "t", "*", "format: table-id")
-	cmd.Flags().StringP("blk", "b", "", "format: <objectId>_<fineN>_<blkN>")
+	cmd.Flags().StringP("obj", "b", "", "format: <objectId>_<fineN>")
 	return cmd
 }
 
@@ -459,7 +459,7 @@ func (c *infoArg) FromCommand(cmd *cobra.Command) (err error) {
 	}
 
 	baddress, _ := cmd.Flags().GetString("blk")
-	c.blk, err = parseBlkTarget(baddress, c.tbl)
+	c.obj, err = parseBlkTarget(baddress, c.tbl)
 	if err != nil {
 		return err
 	}
@@ -470,11 +470,11 @@ func (c *infoArg) FromCommand(cmd *cobra.Command) (err error) {
 func (c *infoArg) String() string {
 	t := "*"
 	if c.tbl != nil {
-		t = fmt.Sprintf("%d-%s", c.tbl.ID, c.tbl.GetLastestSchema().Name)
+		t = fmt.Sprintf("%d-%s", c.tbl.ID, c.tbl.GetLastestSchemaLocked().Name)
 	}
 
-	if c.blk != nil {
-		t = fmt.Sprintf("%s %s", t, c.blk.ID.String())
+	if c.obj != nil {
+		t = fmt.Sprintf("%s %s", t, c.obj.ID.String())
 	}
 
 	return fmt.Sprintf("info: %v", t)
@@ -486,19 +486,22 @@ func (c *infoArg) Run() error {
 		b.WriteString(fmt.Sprintf("last_merge: %v\n", c.tbl.Stats.GetLastMerge().String()))
 		b.WriteString(fmt.Sprintf("last_flush: %v\n", c.tbl.Stats.GetLastFlush().ToString()))
 	}
-	if c.blk != nil {
+	if c.obj != nil {
 		b.WriteRune('\n')
-		b.WriteString(fmt.Sprintf("persisted_ts: %v\n", c.blk.GetDeltaPersistedTS().ToString()))
-		r, reason := c.blk.GetBlockData().PrepareCompactInfo()
-		rows := c.blk.GetBlockData().Rows()
-		dels := c.blk.GetBlockData().GetTotalChanges()
+		b.WriteString(fmt.Sprintf("persisted_ts: %v\n", c.obj.GetObjectData().GetDeltaPersistedTS().ToString()))
+		r, reason := c.obj.GetObjectData().PrepareCompactInfo()
+		rows, err := c.obj.GetObjectData().Rows()
+		if err != nil {
+			logutil.Warnf("get object rows failed, obj: %v, err %v", c.obj.ID.String(), err)
+		}
+		dels := c.obj.GetObjectData().GetTotalChanges()
 		b.WriteString(fmt.Sprintf("prepareCompact: %v, %q\n", r, reason))
 		b.WriteString(fmt.Sprintf("left rows: %v\n", rows-dels))
-		b.WriteString(fmt.Sprintf("ppstring: %v\n", c.blk.GetBlockData().PPString(c.verbose, 0, "")))
+		b.WriteString(fmt.Sprintf("ppstring: %v\n", c.obj.GetObjectData().PPString(c.verbose, 0, "")))
 
-		schema := c.blk.GetSchema()
+		schema := c.obj.GetSchema()
 		if schema.HasSortKey() {
-			zm, err := c.blk.GetPKZoneMap(context.Background(), c.blk.GetBlockData().GetFs().Service)
+			zm, err := c.obj.GetPKZoneMap(context.Background(), c.obj.GetObjectData().GetFs().Service)
 			var zmstr string
 			if err != nil {
 				zmstr = err.Error()
@@ -570,7 +573,7 @@ func (c *manuallyMergeArg) FromCommand(cmd *cobra.Command) (err error) {
 			return moerr.NewInvalidInputNoCtx("not found object %s", o)
 		}
 		for _, obj := range objects {
-			if !obj.IsActive() || obj.IsAppendable() || obj.GetNextObjectIndex() != 1 {
+			if !obj.IsActive() || obj.IsAppendable() {
 				return moerr.NewInvalidInputNoCtx("object is deleted or not a flushed one %s", o)
 			}
 			objs = append(objs, obj)
@@ -584,7 +587,7 @@ func (c *manuallyMergeArg) FromCommand(cmd *cobra.Command) (err error) {
 func (c *manuallyMergeArg) String() string {
 	t := "*"
 	if c.tbl != nil {
-		t = fmt.Sprintf("%d-%s", c.tbl.ID, c.tbl.GetLastestSchema().Name)
+		t = fmt.Sprintf("%d-%s", c.tbl.ID, c.tbl.GetLastestSchemaLocked().Name)
 	}
 
 	b := &bytes.Buffer{}
@@ -602,7 +605,7 @@ func (c *manuallyMergeArg) Run() error {
 	}
 	c.ctx.resp.Payload = []byte(fmt.Sprintf(
 		"success. see more to run select mo_ctl('dn', 'inspect', 'object -t %s.%s')\\G",
-		c.tbl.GetDB().GetName(), c.tbl.GetLastestSchema().Name,
+		c.tbl.GetDB().GetName(), c.tbl.GetLastestSchemaLocked().Name,
 	))
 	return nil
 }
@@ -653,7 +656,7 @@ func (c *compactPolicyArg) FromCommand(cmd *cobra.Command) (err error) {
 func (c *compactPolicyArg) String() string {
 	t := "*"
 	if c.tbl != nil {
-		t = fmt.Sprintf("%d-%s", c.tbl.ID, c.tbl.GetLastestSchema().Name)
+		t = fmt.Sprintf("%d-%s", c.tbl.ID, c.tbl.GetLastestSchemaLocked().Name)
 	}
 	return fmt.Sprintf(
 		"(%s) maxMergeObjN: %v, minRowsQualified: %v, hints: %v",
@@ -713,7 +716,7 @@ func (c *RenameColArg) PrepareCommand() *cobra.Command {
 }
 
 func (c *RenameColArg) String() string {
-	return fmt.Sprintf("rename col: %v, %v,%v,%v", c.tbl.GetLastestSchema().Name, c.oldName, c.newName, c.seq)
+	return fmt.Sprintf("rename col: %v, %v,%v,%v", c.tbl.GetLastestSchemaLocked().Name, c.oldName, c.newName, c.seq)
 }
 
 func (c *RenameColArg) Run() (err error) {
@@ -727,7 +730,7 @@ func (c *RenameColArg) Run() (err error) {
 	if err != nil {
 		return err
 	}
-	tblHdl, err := dbHdl.GetRelationByName(c.tbl.GetLastestSchema().Name)
+	tblHdl, err := dbHdl.GetRelationByName(c.tbl.GetLastestSchemaLocked().Name)
 	if err != nil {
 		return err
 	}
@@ -738,7 +741,7 @@ func (c *RenameColArg) Run() (err error) {
 	return txn.Commit(context.Background())
 }
 
-func parseBlkTarget(address string, tbl *catalog.TableEntry) (*catalog.BlockEntry, error) {
+func parseBlkTarget(address string, tbl *catalog.TableEntry) (*catalog.ObjectEntry, error) {
 	if address == "" {
 		return nil, nil
 	}
@@ -760,15 +763,11 @@ func parseBlkTarget(address string, tbl *catalog.TableEntry) (*catalog.BlockEntr
 	}
 	bid := objectio.NewBlockid(&uid, uint16(fn), uint16(bn))
 	objid := bid.Object()
-	sentry, err := tbl.GetObjectByID(objid)
+	oentry, err := tbl.GetObjectByID(objid)
 	if err != nil {
 		return nil, err
 	}
-	bentry, err := sentry.GetBlockEntryByID(bid)
-	if err != nil {
-		return nil, err
-	}
-	return bentry, nil
+	return oentry, nil
 }
 
 func parseTableTarget(address string, ac *db.AccessInfo, db *db.DB) (*catalog.TableEntry, error) {

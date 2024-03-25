@@ -249,7 +249,9 @@ func (zm ZM) GetBuf() []byte {
 func (zm ZM) MaxTruncated() bool {
 	return zm[61]&0x80 != 0
 }
-
+func (zm ZM) SetMaxTruncated() {
+	zm[61] |= 0x80
+}
 func (zm ZM) Encode() []byte {
 	return zm[:]
 }
@@ -337,6 +339,32 @@ func (zm ZM) ContainsKey(k []byte) bool {
 	t := types.T(zm[63])
 	return compute.Compare(k, zm.GetMinBuf(), t, 0, 0) >= 0 &&
 		compute.Compare(k, zm.GetMaxBuf(), t, 0, 0) <= 0
+}
+
+// zm.min < k
+func (zm ZM) AnyLTByValue(k []byte) bool {
+	if !zm.IsInited() {
+		return false
+	}
+	if !zm.IsString() || len(k) < 31 {
+		return compute.Compare(zm.GetMinBuf(), k, zm.GetType(), 0, 0) < 0
+	}
+	zm2 := BuildZM(zm.GetType(), k)
+	ret, _ := zm.AnyLT(zm2)
+	return ret
+}
+
+// zm.max > k
+func (zm ZM) AnyGTByValue(k []byte) bool {
+	if !zm.IsInited() {
+		return false
+	}
+	if !zm.IsString() || len(k) < 31 {
+		return compute.Compare(zm.GetMaxBuf(), k, zm.GetType(), 0, 0) > 0
+	}
+	zm2 := BuildZM(zm.GetType(), k)
+	ret, _ := zm.AnyGT(zm2)
+	return ret
 }
 
 func (zm ZM) IsInited() bool {
@@ -605,36 +633,42 @@ func (zm ZM) Or(o ZM) (res bool, ok bool) {
 	return
 }
 
-func PrefixCompare(lhs, rhs []byte) int {
-	if len(lhs) > len(rhs) {
-		lhs = lhs[:len(rhs)]
-	}
-
-	return bytes.Compare(lhs, rhs)
-}
-
 func (zm ZM) PrefixEq(s []byte) bool {
 	zmin := zm.GetMinBuf()
 	zmax := zm.GetMaxBuf()
 
-	return PrefixCompare(zmin, s) <= 0 && PrefixCompare(s, zmax) <= 0
+	return types.PrefixCompare(zmin, s) <= 0 && types.PrefixCompare(s, zmax) <= 0
 }
 
 func (zm ZM) PrefixBetween(lb, ub []byte) bool {
 	zmin := zm.GetMinBuf()
 	zmax := zm.GetMaxBuf()
 
-	return PrefixCompare(lb, zmax) <= 0 && PrefixCompare(zmin, ub) <= 0
+	return types.PrefixCompare(lb, zmax) <= 0 && types.PrefixCompare(zmin, ub) <= 0
+}
+
+func (zm ZM) Between(lb, ub []byte) bool {
+	oth := BuildZM(zm.GetType(), lb)
+	if zm.IsString() {
+		oth.updateMinString(lb)
+		oth.updateMaxString(ub)
+	} else {
+		oth.updateMinFixed(lb)
+		oth.updateMaxFixed(ub)
+	}
+
+	ok1, ok2 := zm.Intersect(oth)
+	return ok1 && ok2
 }
 
 func (zm ZM) PrefixIn(vec *vector.Vector) bool {
 	col, area := vector.MustVarlenaRawData(vec)
 	minVal, maxVal := zm.GetMinBuf(), zm.GetMaxBuf()
 	lowerBound := sort.Search(len(col), func(i int) bool {
-		return PrefixCompare(minVal, col[i].GetByteSlice(area)) <= 0
+		return types.PrefixCompare(minVal, col[i].GetByteSlice(area)) <= 0
 	})
 
-	return lowerBound < len(col) && PrefixCompare(col[lowerBound].GetByteSlice(area), maxVal) <= 0
+	return lowerBound < len(col) && types.PrefixCompare(col[lowerBound].GetByteSlice(area), maxVal) <= 0
 }
 
 func (zm ZM) AnyIn(vec *vector.Vector) bool {
@@ -814,10 +848,10 @@ func (zm ZM) AnyIn(vec *vector.Vector) bool {
 		col := vector.MustFixedCol[types.TS](vec)
 		minVal, maxVal := types.DecodeFixed[types.TS](zm.GetMinBuf()), types.DecodeFixed[types.TS](zm.GetMaxBuf())
 		lowerBound := sort.Search(len(col), func(i int) bool {
-			return minVal.LessEq(col[i])
+			return minVal.LessEq(&col[i])
 		})
 
-		return lowerBound < len(col) && col[lowerBound].LessEq(maxVal)
+		return lowerBound < len(col) && col[lowerBound].LessEq(&maxVal)
 
 	case types.T_uuid:
 		col := vector.MustFixedCol[types.Uuid](vec)
@@ -844,7 +878,7 @@ func (zm ZM) AnyIn(vec *vector.Vector) bool {
 			return bytes.Compare(minVal, col[i].GetByteSlice(area)) <= 0
 		})
 
-		return lowerBound < len(col) && PrefixCompare(col[lowerBound].GetByteSlice(area), maxVal) <= 0
+		return lowerBound < len(col) && types.PrefixCompare(col[lowerBound].GetByteSlice(area), maxVal) <= 0
 
 	case types.T_array_float32:
 		col := vector.MustArrayCol[float32](vec)

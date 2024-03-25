@@ -15,11 +15,13 @@
 package updates
 
 import (
+	"context"
 	"testing"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/stretchr/testify/assert"
 )
@@ -27,7 +29,13 @@ import (
 func TestMutationControllerAppend(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
-	mc := NewMVCCHandle(nil)
+	schema := catalog.MockSchema(1, 0)
+	c := catalog.MockCatalog()
+	defer c.Close()
+	db, _ := c.CreateDBEntry("db", "", "", nil)
+	table, _ := db.CreateTableEntry(schema, nil, nil)
+	obj, _ := table.CreateObject(nil, catalog.ES_Appendable, nil, nil)
+	mc := NewAppendMVCCHandle(obj)
 
 	nodeCnt := 10000
 	rowsPerNode := uint32(5)
@@ -58,7 +66,7 @@ func TestMutationControllerAppend(t *testing.T) {
 
 	st := time.Now()
 	for i, qts := range queries {
-		row, ok, _, _ := mc.GetVisibleRowLocked(MockTxnWithStartTS(qts))
+		row, ok, _, _ := mc.GetVisibleRowLocked(context.TODO(), MockTxnWithStartTS(qts))
 		if i == 0 {
 			assert.False(t, ok)
 		} else {
@@ -76,7 +84,13 @@ func TestMutationControllerAppend(t *testing.T) {
 // a4 1,5,5 true
 func TestGetVisibleRow(t *testing.T) {
 	defer testutils.AfterTest(t)()
-	n := NewMVCCHandle(nil)
+	schema := catalog.MockSchema(1, 0)
+	c := catalog.MockCatalog()
+	defer c.Close()
+	db, _ := c.CreateDBEntry("db", "", "", nil)
+	table, _ := db.CreateTableEntry(schema, nil, nil)
+	obj, _ := table.CreateObject(nil, catalog.ES_Appendable, nil, nil)
+	n := NewAppendMVCCHandle(obj)
 	an1, _ := n.AddAppendNodeLocked(nil, 0, 1)
 	an1.Start = types.BuildTS(1, 0)
 	an1.Prepare = types.BuildTS(1, 0)
@@ -96,14 +110,14 @@ func TestGetVisibleRow(t *testing.T) {
 	an4.Aborted = true
 
 	// ts=1 maxrow=1, holes={}
-	maxrow, visible, holes, err := n.GetVisibleRowLocked(MockTxnWithStartTS(types.BuildTS(1, 0)))
+	maxrow, visible, holes, err := n.GetVisibleRowLocked(context.TODO(), MockTxnWithStartTS(types.BuildTS(1, 0)))
 	assert.NoError(t, err)
 	assert.Equal(t, uint32(1), maxrow)
 	assert.True(t, visible)
 	assert.Equal(t, 0, holes.GetCardinality())
 
 	// ts=4 maxrow=3, holes={1}
-	maxrow, visible, holes, err = n.GetVisibleRowLocked(MockTxnWithStartTS(types.BuildTS(4, 0)))
+	maxrow, visible, holes, err = n.GetVisibleRowLocked(context.TODO(), MockTxnWithStartTS(types.BuildTS(4, 0)))
 	assert.NoError(t, err)
 	assert.Equal(t, uint32(3), maxrow)
 	assert.True(t, visible)
@@ -111,7 +125,7 @@ func TestGetVisibleRow(t *testing.T) {
 	assert.True(t, holes.Contains(1))
 
 	// ts=5 maxrow=3, holes={}
-	maxrow, visible, holes, err = n.GetVisibleRowLocked(MockTxnWithStartTS(types.BuildTS(5, 0)))
+	maxrow, visible, holes, err = n.GetVisibleRowLocked(context.TODO(), MockTxnWithStartTS(types.BuildTS(5, 0)))
 	assert.NoError(t, err)
 	assert.Equal(t, uint32(3), maxrow)
 	assert.True(t, visible)

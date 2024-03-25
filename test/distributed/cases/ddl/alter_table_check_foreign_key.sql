@@ -225,4 +225,25 @@ drop table product_order;
 drop table customer;
 drop table product;
 
+drop table if exists organization;
+create table organization (
+    id int auto_increment primary key,
+    name varchar(255) not null ,
+    parent_id int default null,
+    foreign key (parent_id) references organization(id)
+);
+
+insert into organization (id, name, parent_id ) values (1, 'ceo', null);
+insert into organization (id, name, parent_id ) values (2, 'cto', null);
+insert into organization (id, name, parent_id ) values (3, 'dev', 2);
+insert into organization (id, name, parent_id ) values (4, 'test', 2);
+insert into organization (id, name, parent_id ) values (5, 'marketing', 1);
+insert into organization (id, name, parent_id ) values (6, 'finance', 1);
+
+select * from organization;
+insert into organization (id, name, parent_id ) values (7, 'unknown', 99);
+insert into organization (id, name ) values (8, 'unknown');
+select * from organization;
+drop table organization;
+
 drop database if exists db8;
