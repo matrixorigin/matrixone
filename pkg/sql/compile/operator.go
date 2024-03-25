@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/indexbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/indexjoin"
@@ -135,8 +136,7 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 		arg.Nbucket = t.Nbucket
 		arg.Exprs = t.Exprs
 		arg.Types = t.Types
-		arg.Aggs = t.Aggs
-		arg.MultiAggs = t.MultiAggs
+		arg.AggsNew = t.AggsNew
 		res.Arg = arg
 	case vm.Sample:
 		t := sourceIns.Arg.(*sample.Argument)
@@ -1154,40 +1154,34 @@ func constructSample(n *plan.Node, outputRowCount bool) *sample.Argument {
 }
 
 func constructGroup(ctx context.Context, n, cn *plan.Node, ibucket, nbucket int, needEval bool, shuffleDop int, proc *process.Process) *group.Argument {
-	aggs := make([]agg.Aggregate, len(n.AggList))
-	var cfg []byte = nil
+	aggregationExpressions := make([]aggexec.AggFuncExecExpression, len(n.AggList))
+
 	for i, expr := range n.AggList {
 		if f, ok := expr.Expr.(*plan.Expr_F); ok {
-			distinct := (uint64(f.F.Func.Obj) & function.Distinct) != 0
-			obj := int64(uint64(f.F.Func.Obj) & function.DistinctMask)
+			isDistinct := (uint64(f.F.Func.Obj) & function.Distinct) != 0
+			functionID := int64(uint64(f.F.Func.Obj) & function.DistinctMask)
+
+			var cfg []byte = nil
 			if len(f.F.Args) > 0 {
 				//for group_concat, the last arg is separator string
 				//for cluster_centers, the last arg is kmeans_args string
 				if (f.F.Func.ObjName == plan2.NameGroupConcat ||
 					f.F.Func.ObjName == plan2.NameClusterCenters) && len(f.F.Args) > 1 {
 					argExpr := f.F.Args[len(f.F.Args)-1]
-					executor, err := colexec.NewExpressionExecutor(proc, argExpr)
+					vec, err := colexec.EvalExpressionOnce(proc, argExpr, []*batch.Batch{constBat})
 					if err != nil {
-						panic(err)
-					}
-					vec, err := executor.Eval(proc, []*batch.Batch{constBat})
-					if err != nil {
-						executor.Free()
 						panic(err)
 					}
 					cfg = []byte(vec.GetStringAt(0))
-					executor.Free()
+					vec.Free(proc.Mp())
 				}
 			}
 
-			aggs[i] = agg.Aggregate{
-				E:      f.F.Args[0],
-				Dist:   distinct,
-				Op:     obj,
-				Config: cfg,
-			}
+			aggregationExpressions[i] = aggexec.MakeAggFunctionExpression(
+				functionID, isDistinct, f.F.Args, cfg)
 		}
 	}
+
 	typs := make([]types.Type, len(cn.ProjectList))
 	for i, e := range cn.ProjectList {
 		typs[i] = types.New(types.T(e.Typ.Id), e.Typ.Width, e.Typ.Scale)
@@ -1205,7 +1199,7 @@ func constructGroup(ctx context.Context, n, cn *plan.Node, ibucket, nbucket int,
 	}
 
 	arg := group.NewArgument()
-	arg.Aggs = aggs
+	arg.AggsNew = aggregationExpressions
 	arg.Types = typs
 	arg.NeedEval = needEval
 	arg.Exprs = n.GroupBy

@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/indexjoin"
 	"time"
 	"unsafe"
@@ -42,7 +43,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/anti"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
@@ -832,8 +832,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			Nbucket:      t.Nbucket,
 			Exprs:        t.Exprs,
 			Types:        convertToPlanTypes(t.Types),
-			Aggs:         convertToPipelineAggregates(t.Aggs),
-			MultiAggs:    convertPipelineMultiAggs(t.MultiAggs),
+			Aggs:         convertToPipelineAggregates(t.AggsNew),
 		}
 	case *sample.Argument:
 		t.ConvertToPipelineOperator(in)
@@ -1277,8 +1276,7 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 		arg.Nbucket = t.Nbucket
 		arg.Exprs = t.Exprs
 		arg.Types = convertToTypes(t.Types)
-		arg.Aggs = convertToAggregates(t.Aggs)
-		arg.MultiAggs = convertToMultiAggs(t.MultiAggs)
+		arg.AggsNew = convertToAggregates(t.Aggs)
 		v.Arg = arg
 	case vm.Sample:
 		v.Arg = sample.GenerateFromPipelineOperator(opr)
@@ -1587,30 +1585,25 @@ func convertToTypes(ts []*plan.Type) []types.Type {
 	return result
 }
 
-// convert []agg.Aggregate to []*pipeline.Aggregate
-func convertToPipelineAggregates(ags []agg.Aggregate) []*pipeline.Aggregate {
+// convert []aggexec.AggFuncExecExpression to []*pipeline.Aggregate
+func convertToPipelineAggregates(ags []aggexec.AggFuncExecExpression) []*pipeline.Aggregate {
 	result := make([]*pipeline.Aggregate, len(ags))
 	for i, a := range ags {
 		result[i] = &pipeline.Aggregate{
-			Op:     a.Op,
-			Dist:   a.Dist,
-			Expr:   a.E,
-			Config: a.Config,
+			Op:     a.GetAggID(),
+			Dist:   a.IsDistinct(),
+			Expr:   a.GetArgExpressions(),
+			Config: a.GetExtraConfig(),
 		}
 	}
 	return result
 }
 
-// convert []*pipeline.Aggregate to []agg.Aggregate
-func convertToAggregates(ags []*pipeline.Aggregate) []agg.Aggregate {
-	result := make([]agg.Aggregate, len(ags))
+// convert []*pipeline.Aggregate to []aggexec.AggFuncExecExpression
+func convertToAggregates(ags []*pipeline.Aggregate) []aggexec.AggFuncExecExpression {
+	result := make([]aggexec.AggFuncExecExpression, len(ags))
 	for i, a := range ags {
-		result[i] = agg.Aggregate{
-			Op:     a.Op,
-			Dist:   a.Dist,
-			E:      a.Expr,
-			Config: a.Config,
-		}
+		result[i] = aggexec.MakeAggFunctionExpression(a.Op, a.Dist, a.Expr, a.Config)
 	}
 	return result
 }

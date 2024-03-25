@@ -23,8 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_col/group_concat"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -37,14 +36,33 @@ const (
 	HIndex
 )
 
-const (
-	UnaryAgg = iota
-	MultiAgg
-)
-
 type evalVector struct {
-	executor colexec.ExpressionExecutor
-	vec      *vector.Vector
+	executor []colexec.ExpressionExecutor
+	vec      []*vector.Vector
+	typ      []types.Type
+}
+
+func makeEvalVector(proc *process.Process, expressions []*plan.Expr) (ev evalVector, err error) {
+	ev.executor, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, expressions)
+	if err != nil {
+		return
+	}
+	ev.vec = make([]*vector.Vector, len(ev.executor))
+	ev.typ = make([]types.Type, len(ev.executor))
+	for i, expr := range expressions {
+		ev.typ[i] = types.New(types.T(expr.Typ.Id), expr.Typ.Width, expr.Typ.Scale)
+	}
+	return
+}
+
+func (ev *evalVector) Free() {
+	for i := range ev.executor {
+		if ev.executor[i] == nil {
+			continue
+		}
+		ev.executor[i].Free()
+		ev.executor[i] = nil
+	}
 }
 
 type container struct {
@@ -56,23 +74,16 @@ type container struct {
 	strHashMap *hashmap.StrHashMap
 	// idx        *index.LowCardinalityIndex
 
-	aggVecs           []evalVector
-	groupVecs         []evalVector
-	keyWidth          int // keyWidth is the width of group by columns, it determines which hash map to use.
+	aggVecs   []evalVector
+	groupVecs evalVector
+
+	// keyWidth is the width of group by columns, it determines which hash map to use.
+	keyWidth          int
 	groupVecsNullable bool
-
-	// multiVecs are used for group_concat,
-	// cause that group_concat can have many cols like group(a,b,c)
-	// in this cases, len(multiVecs[0]) will be 3
-	multiVecs [][]evalVector
-
-	vecs []*vector.Vector
 
 	bat *batch.Batch
 
 	hasAggResult bool
-
-	tmpVecs []*vector.Vector // for reuse
 
 	state vm.CtrState
 }
@@ -86,8 +97,7 @@ type Argument struct {
 	Nbucket      uint64
 	Exprs        []*plan.Expr // group Expressions
 	Types        []types.Type
-	Aggs         []agg.Aggregate         // aggregations
-	MultiAggs    []group_concat.Argument // multiAggs, for now it's group_concat
+	AggsNew      []aggexec.AggFuncExecExpression
 
 	vm.OperatorBase
 }
@@ -117,11 +127,6 @@ func NewArgument() *Argument {
 	return reuse.Alloc[Argument](nil)
 }
 
-func (arg *Argument) WithAggs(aggs []agg.Aggregate) *Argument {
-	arg.Aggs = aggs
-	return arg
-}
-
 func (arg *Argument) WithExprs(exprs []*plan.Expr) *Argument {
 	arg.Exprs = exprs
 	return arg
@@ -132,8 +137,8 @@ func (arg *Argument) WithTypes(types []types.Type) *Argument {
 	return arg
 }
 
-func (arg *Argument) WithMultiAggs(multiAggs []group_concat.Argument) *Argument {
-	arg.MultiAggs = multiAggs
+func (arg *Argument) WithAggsNew(aggs []aggexec.AggFuncExecExpression) *Argument {
+	arg.AggsNew = aggs
 	return arg
 }
 
@@ -151,23 +156,7 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 		ctr.cleanHashMap()
 		ctr.cleanAggVectors()
 		ctr.cleanGroupVectors()
-		ctr.cleanMultiAggVecs()
-		ctr.tmpVecs = nil
 	}
-}
-
-func (ctr *container) ToInputType(idx int) (t []types.Type) {
-	for i := range ctr.multiVecs[idx] {
-		t = append(t, *ctr.multiVecs[idx][i].vec.GetType())
-	}
-	return
-}
-
-func (ctr *container) ToVectors(idx int) (vecs []*vector.Vector) {
-	for i := range ctr.multiVecs[idx] {
-		vecs = append(vecs, ctr.multiVecs[idx][i].vec)
-	}
-	return
 }
 
 func (ctr *container) cleanBatch(mp *mpool.MPool) {
@@ -179,33 +168,13 @@ func (ctr *container) cleanBatch(mp *mpool.MPool) {
 
 func (ctr *container) cleanAggVectors() {
 	for i := range ctr.aggVecs {
-		if ctr.aggVecs[i].executor != nil {
-			ctr.aggVecs[i].executor.Free()
-		}
-		ctr.aggVecs[i].vec = nil
+		ctr.aggVecs[i].Free()
 	}
 	ctr.aggVecs = nil
 }
 
-func (ctr *container) cleanMultiAggVecs() {
-	for i := range ctr.multiVecs {
-		for j := range ctr.multiVecs[i] {
-			if ctr.multiVecs[i][j].executor != nil {
-				ctr.multiVecs[i][j].executor.Free()
-			}
-			ctr.multiVecs[i][j].vec = nil
-		}
-	}
-}
-
 func (ctr *container) cleanGroupVectors() {
-	for i := range ctr.groupVecs {
-		if ctr.groupVecs[i].executor != nil {
-			ctr.groupVecs[i].executor.Free()
-		}
-		ctr.groupVecs[i].vec = nil
-	}
-	ctr.groupVecs = nil
+	ctr.groupVecs.Free()
 }
 
 func (ctr *container) cleanHashMap() {

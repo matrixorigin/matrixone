@@ -16,6 +16,7 @@ package group
 
 import (
 	"bytes"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
@@ -144,7 +145,7 @@ func BenchmarkGroup(b *testing.B) {
 	}
 }
 
-func newTestCase(flgs []bool, ts []types.Type, exprs []*plan.Expr, aggs []agg.Aggregate) groupTestCase {
+func newTestCase(flgs []bool, ts []types.Type, exprs []*plan.Expr, aggs []aggexec.AggFuncExecExpression) groupTestCase {
 	for _, expr := range exprs {
 		if col, ok := expr.Expr.(*plan.Expr_Col); ok {
 			idx := col.Col.ColPos
@@ -159,9 +160,9 @@ func newTestCase(flgs []bool, ts []types.Type, exprs []*plan.Expr, aggs []agg.Ag
 		flgs: flgs,
 		proc: testutil.NewProcessWithMPool(mpool.MustNewZero()),
 		arg: &Argument{
-			Exprs: exprs,
-			Types: ts,
-			Aggs:  aggs,
+			Exprs:   exprs,
+			Types:   ts,
+			AggsNew: aggs,
 			OperatorBase: vm.OperatorBase{
 				OperatorInfo: vm.OperatorInfo{
 					Idx:     1,

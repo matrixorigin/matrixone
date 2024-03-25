@@ -19,6 +19,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
 const (
@@ -26,6 +27,40 @@ const (
 	// if the group is GroupNotMatched, the BatchFill method will ignore the row.
 	GroupNotMatched = 0
 )
+
+// AggFuncExecExpression is the exporting structure for the aggregation information.
+// it is used to indicate the information of the aggregation function for the operators like 'group' or 'merge group'.
+type AggFuncExecExpression struct {
+	aggID          int64
+	isDistinct     bool
+	argExpressions []*plan.Expr
+	extraConfig    []byte
+}
+
+func MakeAggFunctionExpression(id int64, isDistinct bool, args []*plan.Expr, config []byte) AggFuncExecExpression {
+	return AggFuncExecExpression{
+		aggID:          id,
+		isDistinct:     isDistinct,
+		argExpressions: args,
+		extraConfig:    config,
+	}
+}
+
+func (expr AggFuncExecExpression) GetAggID() int64 {
+	return expr.aggID
+}
+
+func (expr AggFuncExecExpression) IsDistinct() bool {
+	return expr.isDistinct
+}
+
+func (expr AggFuncExecExpression) GetArgExpressions() []*plan.Expr {
+	return expr.argExpressions
+}
+
+func (expr AggFuncExecExpression) GetExtraConfig() []byte {
+	return expr.extraConfig
+}
 
 // AggFuncExec is an interface to do execution for aggregation.
 // todo: use vector... to replace the []*vector.Vector may be better.
@@ -93,7 +128,7 @@ type AggMemoryManager interface {
 	PutVector(v *vector.Vector)
 }
 
-// MakeAgg creates an aggregation function executor.
+// MakeAgg is the only exporting method to create an aggregation function executor.
 // all the aggID should be registered before calling this function.
 func MakeAgg(
 	mg AggMemoryManager,
