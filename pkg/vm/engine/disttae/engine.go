@@ -64,13 +64,8 @@ func New(
 	keyRouter client2.KeyRouter[pb.StatsInfoKey],
 	threshold int,
 ) *Engine {
-	var services []metadata.TNService
 	cluster := clusterservice.GetMOCluster()
-	cluster.GetTNService(clusterservice.NewSelector(),
-		func(d metadata.TNService) bool {
-			services = append(services, d)
-			return true
-		})
+	services := cluster.GetAllTNServices()
 
 	var tnID string
 	if len(services) > 0 {
@@ -366,7 +361,8 @@ func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tab
 	txn.databaseMap.Range(func(k, _ any) bool {
 		key := k.(databaseKey)
 		dbName = key.name
-		if key.accountId == accountId {
+		// the mo_catalog now can be accessed by all accounts
+		if dbName == catalog.MO_CATALOG || key.accountId == accountId {
 			db, err = e.Database(noRepCtx, key.name, op)
 			if err != nil {
 				return false
@@ -385,18 +381,29 @@ func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tab
 
 	if rel == nil {
 		dbNames := e.catalog.Databases(accountId, txn.op.SnapshotTS())
-		for _, dbName = range dbNames {
+		fn := func(dbName string) error {
 			db, err = e.Database(noRepCtx, dbName, op)
 			if err != nil {
-				return "", "", nil, err
+				return err
 			}
 			distDb := db.(*txnDatabase)
 			tableName, rel, err = distDb.getRelationById(noRepCtx, tableId)
 			if err != nil {
+				return err
+			}
+			return nil
+		}
+		for _, dbName = range dbNames {
+			if err := fn(dbName); err != nil {
 				return "", "", nil, err
 			}
 			if rel != nil {
 				break
+			}
+		}
+		if rel == nil {
+			if err := fn(catalog.MO_CATALOG); err != nil {
+				return "", "", nil, err
 			}
 		}
 	}
@@ -408,7 +415,7 @@ func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tab
 			logutil.Errorf("tables: %v, tableIds: %v", tbls, tblIds)
 			util.CoreDump()
 		}
-		return "", "", nil, moerr.NewInternalError(ctx, "can not find table by id %d", tableId)
+		return "", "", nil, moerr.NewInternalError(ctx, "can not find table by id %d: accountId: %v ", tableId, accountId)
 	}
 	return
 }
@@ -631,14 +638,8 @@ func (e *Engine) getTransaction(op client.TxnOperator) *Transaction {
 }
 
 func (e *Engine) getTNServices() []DNStore {
-	var values []DNStore
 	cluster := clusterservice.GetMOCluster()
-	cluster.GetTNService(clusterservice.NewSelector(),
-		func(d metadata.TNService) bool {
-			values = append(values, d)
-			return true
-		})
-	return values
+	return cluster.GetAllTNServices()
 }
 
 func (e *Engine) setPushClientStatus(ready bool) {

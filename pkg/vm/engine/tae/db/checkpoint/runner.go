@@ -843,26 +843,19 @@ func (r *runner) onWaitWaitableItems(items ...any) {
 }
 
 func (r *runner) fireFlushTabletail(table *catalog.TableEntry, tree *model.TableTree, endTs types.TS) error {
-	metas := make([]*catalog.BlockEntry, 0, 10)
+	metas := make([]*catalog.ObjectEntry, 0, 10)
 	for _, obj := range tree.Objs {
-		Object, err := table.GetObjectByID(obj.ID)
+		object, err := table.GetObjectByID(obj.ID)
 		if err != nil {
 			panic(err)
 		}
-		for blk := range obj.Blks {
-			bid := objectio.NewBlockidWithObjectID(obj.ID, blk)
-			block, err := Object.GetBlockEntryByID(bid)
-			if err != nil {
-				panic(err)
-			}
-			metas = append(metas, block)
-		}
+		metas = append(metas, object)
 	}
 
 	// freeze all append
 	scopes := make([]common.ID, 0, len(metas))
 	for _, meta := range metas {
-		if !meta.GetBlockData().PrepareCompact() {
+		if !meta.GetObjectData().PrepareCompact() {
 			logutil.Infof("[FlushTabletail] %d-%s / %s false prepareCompact ", table.ID, table.GetLastestSchemaLocked().Name, meta.ID.String())
 			return moerr.GetOkExpectedEOB()
 		}
@@ -881,20 +874,13 @@ func (r *runner) fireFlushTabletail(table *catalog.TableEntry, tree *model.Table
 
 func (r *runner) EstimateTableMemSize(table *catalog.TableEntry, tree *model.TableTree) (asize int, dsize int) {
 	for _, obj := range tree.Objs {
-		Object, err := table.GetObjectByID(obj.ID)
+		object, err := table.GetObjectByID(obj.ID)
 		if err != nil {
 			panic(err)
 		}
-		for blk := range obj.Blks {
-			bid := objectio.NewBlockidWithObjectID(obj.ID, blk)
-			block, err := Object.GetBlockEntryByID(bid)
-			if err != nil {
-				panic(err)
-			}
-			a, d := block.GetBlockData().EstimateMemSize()
-			asize += a
-			dsize += d
-		}
+		a, d := object.GetObjectData().EstimateMemSize()
+		asize += a
+		dsize += d
 	}
 	return
 }

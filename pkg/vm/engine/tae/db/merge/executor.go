@@ -130,16 +130,15 @@ func (e *MergeExecutor) ManuallyExecute(entry *catalog.TableEntry, objs []*catal
 		return moerr.NewInternalErrorNoCtx("no enough mem to merge. osize %d, mem %d", osize, mem)
 	}
 
-	mergedBlks, mobjs := expandObjectList(objs)
-	blkCnt := len(mergedBlks)
+	objCnt := len(objs)
 
-	scopes := make([]common.ID, blkCnt)
-	for i, blk := range mergedBlks {
-		scopes[i] = *blk.AsCommonID()
+	scopes := make([]common.ID, objCnt)
+	for i, obj := range objs {
+		scopes[i] = *obj.AsCommonID()
 	}
 
 	factory := func(ctx *tasks.Context, txn txnif.AsyncTxn) (tasks.Task, error) {
-		return jobs.NewMergeObjectsTask(ctx, txn, mobjs, e.rt)
+		return jobs.NewMergeObjectsTask(ctx, txn, objs, e.rt)
 	}
 	task, err := e.rt.Scheduler.ScheduleMultiScopedTxnTask(tasks.WaitableCtx, tasks.DataCompactionTask, scopes, factory)
 	if err == tasks.ErrScheduleScopeConflict {
@@ -147,7 +146,12 @@ func (e *MergeExecutor) ManuallyExecute(entry *catalog.TableEntry, objs []*catal
 	} else if err != nil {
 		return moerr.NewInternalErrorNoCtx("schedule error: %v", err)
 	}
-	logMergeTask(entry.GetLastestSchemaLocked().Name, task.ID(), mobjs, len(mergedBlks), osize, esize)
+
+	blkn := 0
+	for _, obj := range objs {
+		blkn += obj.BlockCnt()
+	}
+	logMergeTask(entry.GetLastestSchemaLocked().Name, task.ID(), objs, blkn, osize, esize)
 	if err = task.WaitDone(context.Background()); err != nil {
 		return moerr.NewInternalErrorNoCtx("merge error: %v", err)
 	}
@@ -157,10 +161,8 @@ func (e *MergeExecutor) ManuallyExecute(entry *catalog.TableEntry, objs []*catal
 func (e *MergeExecutor) ExecuteFor(entry *catalog.TableEntry, policy Policy) {
 	e.tableName = fmt.Sprintf("%v-%v", entry.ID, entry.GetLastestSchema().Name)
 
-	objectList, kind := policy.Revise(int64(e.cpuPercent), int64(e.MemAvailBytes()))
-	mergedBlks, mobjs := expandObjectList(objectList)
-	blkCnt := len(mergedBlks)
-	if blkCnt == 0 {
+	mobjs, kind := policy.Revise(int64(e.cpuPercent), int64(e.MemAvailBytes()))
+	if len(mobjs) == 0 {
 		return
 	}
 
@@ -170,6 +172,10 @@ func (e *MergeExecutor) ExecuteFor(entry *catalog.TableEntry, policy Policy) {
 	}
 
 	osize, esize, _ := estimateMergeConsume(mobjs)
+	blkCnt := 0
+	for _, obj := range mobjs {
+		blkCnt += obj.BlockCnt()
+	}
 	if kind == TaskHostCN {
 		stats := make([][]byte, 0, len(mobjs))
 		cids := make([]common.ID, 0, len(mobjs))
@@ -195,15 +201,15 @@ func (e *MergeExecutor) ExecuteFor(entry *catalog.TableEntry, policy Policy) {
 		}
 		if err := e.cnSched.SendMergeTask(context.TODO(), cntask); err == nil {
 			ActiveCNObj.AddActiveCNObj(mobjs)
-			logMergeTask(e.tableName, math.MaxUint64, objectList, blkCnt, osize, esize)
+			logMergeTask(e.tableName, math.MaxUint64, mobjs, blkCnt, osize, esize)
 		} else {
 			logutil.Warnf("mergeblocks send to cn error: %v", err)
 			return
 		}
 	} else {
-		scopes := make([]common.ID, blkCnt)
-		for i, blk := range mergedBlks {
-			scopes[i] = *blk.AsCommonID()
+		scopes := make([]common.ID, len(mobjs))
+		for i, obj := range mobjs {
+			scopes[i] = *obj.AsCommonID()
 		}
 
 		factory := func(ctx *tasks.Context, txn txnif.AsyncTxn) (tasks.Task, error) {
@@ -218,10 +224,10 @@ func (e *MergeExecutor) ExecuteFor(entry *catalog.TableEntry, policy Policy) {
 		}
 		e.AddActiveTask(task.ID(), blkCnt, esize)
 		task.AddObserver(e)
-		logMergeTask(e.tableName, task.ID(), objectList, blkCnt, osize, esize)
+		logMergeTask(e.tableName, task.ID(), mobjs, blkCnt, osize, esize)
 	}
 
-	entry.Stats.AddMerge(osize, len(objectList), blkCnt)
+	entry.Stats.AddMerge(osize, len(mobjs), blkCnt)
 }
 
 func (e *MergeExecutor) MemAvailBytes() int {
@@ -233,34 +239,7 @@ func (e *MergeExecutor) MemAvailBytes() int {
 	return avail
 }
 
-func expandObjectList(objs []*catalog.ObjectEntry) (
-	mblks []*catalog.BlockEntry, mobjs []*catalog.ObjectEntry,
-) {
-	if len(objs) < 2 {
-		return
-	}
-	mobjs = objs
-	mblks = make([]*catalog.BlockEntry, 0, len(objs)*constMergeMinBlks)
-	for _, obj := range objs {
-		blkit := obj.MakeBlockIt(true)
-		for ; blkit.Valid(); blkit.Next() {
-			entry := blkit.Get().GetPayload()
-			if !entry.IsActive() {
-				continue
-			}
-			entry.RLock()
-			if entry.IsCommitted() &&
-				catalog.ActiveWithNoTxnFilter(&entry.BaseEntryImpl) {
-				mblks = append(mblks, entry)
-			}
-			entry.RUnlock()
-		}
-	}
-	return
-}
-
 func logMergeTask(name string, taskId uint64, merges []*catalog.ObjectEntry, blkn, osize, esize int) {
-
 	rows := 0
 	infoBuf := &bytes.Buffer{}
 	for _, obj := range merges {

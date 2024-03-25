@@ -318,6 +318,9 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 			{"att_is_hidden", types.T_bool, false, 0, 0},
 			{"attr_has_update", types.T_int8, false, 0, 0},
 			{"attr_update", types.T_varchar, false, 2048, 0},
+			{"att_attr_is_clusterby", types.T_int8, false, 0, 0},
+			{"attr_seqnum", types.T_int8, false, 0, 0},
+			{"attr_enum", types.T_varchar, false, 2048, 0},
 			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
 		},
 	}

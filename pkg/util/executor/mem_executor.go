@@ -68,6 +68,10 @@ func (te *memTxnExecutor) LockTable(table string) error {
 	return nil
 }
 
+func (te *memTxnExecutor) Txn() client.TxnOperator {
+	return nil
+}
+
 // MemResult used to test. Construct a Result from memory.
 type MemResult struct {
 	cols  int

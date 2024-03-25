@@ -31,6 +31,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 )
 
+const (
+	UpgradeUser = "upgrader"
+)
+
 var registeredTable = []*table.Table{motrace.SingleRowLogTable, MoPubsTable}
 
 type Upgrader struct {
@@ -200,8 +204,11 @@ func (u *Upgrader) Upgrade(ctx context.Context) error {
 	}
 
 	if errs := u.UpgradeMoIndexesSchema(ctx, allTenants); len(errs) > 0 {
-		logutil.Errorf("upgrade mo_indexes failed")
-		errors = append(errors, errs...)
+		// NOTE: if index upgrade failed, we should panic and stop the system.
+		// Else we will end up with inconsistent state.
+		panic("Upgrade failed during system startup! " + convErrsToFormatMsg(errs))
+		//logutil.Errorf("upgrade mo_indexes failed")
+		//errors = append(errors, errs...)
 	}
 
 	if errs := u.RunUpgradeSqls(ctx); len(errs) > 0 {
@@ -360,7 +367,7 @@ func (u *Upgrader) UpgradeNewTable(ctx context.Context, tenants []*frontend.Tena
 			if err := u.upgradeFunc(ctx, tbl, false, &frontend.TenantInfo{
 				Tenant:        frontend.GetDefaultTenant(),
 				TenantID:      catalog.System_Account,
-				User:          "internal",
+				User:          UpgradeUser,
 				UserID:        frontend.GetUserRootId(),
 				DefaultRoleID: frontend.GetDefaultRoleId(),
 				DefaultRole:   frontend.GetDefaultRole(),
@@ -455,12 +462,12 @@ func (u *Upgrader) UpgradeMoIndexesSchema(ctx context.Context, tenants []*fronte
 		ctx = attachAccount(ctx, tenant)
 		opts := makeOptions(tenant)
 
-		for _, conditionalUpgradeSQL := range conditionalUpgradeV1SQLs {
-
-			if columnNotPresent, err1 := ifEmpty(conditionalUpgradeSQL.ifEmpty, opts); err1 != nil {
+		ifEmptyStmt, thenStmt := conditionalUpgradeV1SQLs(int(tenant.TenantID))
+		for i := 0; i < len(ifEmptyStmt); i++ {
+			if columnNotPresent, err1 := ifEmpty(ifEmptyStmt[i], opts); err1 != nil {
 				errors = append(errors, moerr.NewUpgrateError(ctx, "mo_catalog", "mo_indexes", frontend.GetDefaultTenant(), catalog.System_Account, err1.Error()))
 			} else if columnNotPresent {
-				err2 := execTxn(conditionalUpgradeSQL.then, opts)
+				err2 := execTxn(thenStmt[i], opts)
 				if err2 != nil {
 					errors = append(errors, moerr.NewUpgrateError(ctx, "mo_catalog", "mo_indexes", frontend.GetDefaultTenant(), catalog.System_Account, err2.Error()))
 				}
@@ -613,7 +620,7 @@ func (u *Upgrader) GetAllTenantInfo(ctx context.Context) ([]*frontend.TenantInfo
 			tenantInfos = append(tenantInfos, &frontend.TenantInfo{
 				Tenant:        tenantName,
 				TenantID:      uint32(accountId),
-				User:          "internal",
+				User:          UpgradeUser,
 				UserID:        frontend.GetAdminUserId(),
 				DefaultRoleID: frontend.GetAccountAdminRoleId(),
 				DefaultRole:   frontend.GetAccountAdminRole(),

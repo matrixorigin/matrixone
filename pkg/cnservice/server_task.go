@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	moconnector "github.com/matrixorigin/matrixone/pkg/stream/connector"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
+	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/util/export"
@@ -281,6 +282,7 @@ func (s *service) waitSystemInitCompleted(ctx context.Context) {
 						[]byte("OK")); err != nil {
 						panic(err)
 					}
+					trace.GetService().EnableFlush()
 					return
 				}
 			}

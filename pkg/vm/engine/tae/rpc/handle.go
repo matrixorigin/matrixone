@@ -22,6 +22,7 @@ import (
 	"regexp"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -68,6 +69,28 @@ type Handle struct {
 	db        *db.DB
 	txnCtxs   *common.Map[string, *txnContext]
 	GCManager *gc.Manager
+
+	interceptMatchRegexp atomic.Pointer[regexp.Regexp]
+}
+
+func (h *Handle) IsInterceptTable(name string) bool {
+	printMatchRegexp := h.getInterceptMatchRegexp()
+	if printMatchRegexp == nil {
+		return false
+	}
+	return printMatchRegexp.MatchString(name)
+}
+
+func (h *Handle) getInterceptMatchRegexp() *regexp.Regexp {
+	return h.interceptMatchRegexp.Load()
+}
+
+func (h *Handle) UpdateInterceptMatchRegexp(name string) {
+	if name == "" {
+		h.interceptMatchRegexp.Store(nil)
+		return
+	}
+	h.interceptMatchRegexp.Store(regexp.MustCompile(fmt.Sprintf(`.*%s.*`, name)))
 }
 
 var _ rpchandle.Handler = (*Handle)(nil)
@@ -179,7 +202,10 @@ func (h *Handle) HandleCommit(
 			}
 			logutil.Infof("retry txn %X with new txn %X", string(meta.GetID()), txn.GetID())
 			//Handle precommit-write command for 1PC
-			h.handleRequests(ctx, txn, txnCtx)
+			err = h.handleRequests(ctx, txn, txnCtx)
+			if err != nil && !moerr.IsMoErrCode(err, moerr.ErrTAENeedRetry) {
+				break
+			}
 			//if txn is 2PC ,need to set commit timestamp passed by coordinator.
 			if txn.Is2PC() {
 				txn.SetCommitTS(types.TimestampToTS(meta.GetCommitTS()))
@@ -473,6 +499,20 @@ func (h *Handle) HandleFlushTable(
 	return nil, err
 }
 
+func (h *Handle) HandleForceGlobalCheckpoint(
+	ctx context.Context,
+	meta txn.TxnMeta,
+	req *db.Checkpoint,
+	resp *api.SyncLogTailResp) (cb func(), err error) {
+
+	timeout := req.FlushDuration
+
+	currTs := types.BuildTS(time.Now().UTC().UnixNano(), 0)
+
+	err = h.db.ForceGlobalCheckpoint(ctx, currTs, timeout)
+	return nil, err
+}
+
 func (h *Handle) HandleForceCheckpoint(
 	ctx context.Context,
 	meta txn.TxnMeta,
@@ -512,6 +552,17 @@ func (h *Handle) HandleBackup(
 		locations += ";"
 	}
 	resp.CkpLocation = locations
+	return nil, err
+}
+
+func (h *Handle) HandleInterceptCommit(
+	ctx context.Context,
+	meta txn.TxnMeta,
+	req *db.InterceptCommit,
+	resp *api.SyncLogTailResp) (cb func(), err error) {
+
+	name := req.TableName
+	h.UpdateInterceptMatchRegexp(name)
 	return nil, err
 }
 
@@ -924,13 +975,6 @@ func (h *Handle) HandleDropOrTruncateRelation(
 	return err
 }
 
-// TODO: debug for #13342, remove me later
-var districtMatchRegexp = regexp.MustCompile(`.*bmsql_district.*`)
-
-func IsDistrictTable(name string) bool {
-	return districtMatchRegexp.MatchString(name)
-}
-
 func PrintTuple(tuple types.Tuple) string {
 	res := "("
 	for i, t := range tuple {
@@ -1039,10 +1083,12 @@ func (h *Handle) HandleWrite(
 			}
 		}
 		// TODO: debug for #13342, remove me later
-		if IsDistrictTable(tb.Schema().(*catalog2.Schema).Name) {
-			for i := 0; i < req.Batch.Vecs[0].Length(); i++ {
-				pk, _, _, _ := types.DecodeTuple(req.Batch.Vecs[11].GetRawBytesAt(i))
-				logutil.Infof("op1 %v %v", txn.GetStartTS().ToString(), PrintTuple(pk))
+		if h.IsInterceptTable(tb.Schema().(*catalog2.Schema).Name) {
+			if tb.Schema().(*catalog2.Schema).HasPK() {
+				idx := tb.Schema().(*catalog2.Schema).GetSingleSortKeyIdx()
+				for i := 0; i < req.Batch.Vecs[0].Length(); i++ {
+					logutil.Infof("op1 %v, %v", txn.GetStartTS().ToString(), common.MoVectorToString(req.Batch.Vecs[idx], i))
+				}
 			}
 		}
 		//Appends a batch of data into table.
@@ -1119,12 +1165,12 @@ func (h *Handle) HandleWrite(
 	pkVec := containers.ToTNVector(req.Batch.GetVector(1), common.WorkspaceAllocator)
 	//defer pkVec.Close()
 	// TODO: debug for #13342, remove me later
-	if IsDistrictTable(tb.Schema().(*catalog2.Schema).Name) {
-		for i := 0; i < rowIDVec.Length(); i++ {
-
-			rowID := objectio.HackBytes2Rowid(req.Batch.Vecs[0].GetRawBytesAt(i))
-			pk, _, _, _ := types.DecodeTuple(req.Batch.Vecs[1].GetRawBytesAt(i))
-			logutil.Infof("op2 %v %v %v", txn.GetStartTS().ToString(), PrintTuple(pk), rowID.String())
+	if h.IsInterceptTable(tb.Schema().(*catalog2.Schema).Name) {
+		if tb.Schema().(*catalog2.Schema).HasPK() {
+			for i := 0; i < rowIDVec.Length(); i++ {
+				rowID := objectio.HackBytes2Rowid(req.Batch.Vecs[0].GetRawBytesAt(i))
+				logutil.Infof("op2 %v %v %v", txn.GetStartTS().ToString(), common.MoVectorToString(req.Batch.Vecs[1], i), rowID.String())
+			}
 		}
 	}
 	err = tb.DeleteByPhyAddrKeys(rowIDVec, pkVec)
