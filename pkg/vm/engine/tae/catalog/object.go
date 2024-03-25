@@ -31,7 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
 
-type BlockDataFactory = func(meta *ObjectEntry) data.Block
+type ObjectDataFactory = func(meta *ObjectEntry) data.Block
 type TombstoneFactory = func(meta *ObjectEntry) data.Tombstone
 type ObjectEntry struct {
 	ID     types.Objectid
@@ -111,7 +111,7 @@ func NewObjectEntry(
 	id *objectio.ObjectId,
 	txn txnif.AsyncTxn,
 	state EntryState,
-	dataFactory BlockDataFactory,
+	dataFactory ObjectDataFactory,
 ) *ObjectEntry {
 	e := &ObjectEntry{
 		ID: *id,
@@ -136,7 +136,7 @@ func NewObjectEntryByMetaLocation(
 	start, end types.TS,
 	state EntryState,
 	metalocation objectio.Location,
-	dataFactory BlockDataFactory,
+	dataFactory ObjectDataFactory,
 ) *ObjectEntry {
 	e := &ObjectEntry{
 		ID: *id,
@@ -215,7 +215,7 @@ func (entry *ObjectEntry) InitData(factory DataFactory) {
 	if factory == nil {
 		return
 	}
-	dataFactory := factory.MakeBlockFactory()
+	dataFactory := factory.MakeObjectFactory()
 	entry.blkData = dataFactory(entry)
 }
 func (entry *ObjectEntry) HasPersistedData() bool {

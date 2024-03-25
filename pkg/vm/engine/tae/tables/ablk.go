@@ -43,12 +43,12 @@ type aobject struct {
 	freezelock sync.Mutex
 }
 
-func newABlock(
+func newAObject(
 	meta *catalog.ObjectEntry,
 	rt *dbutils.Runtime,
 ) *aobject {
 	blk := &aobject{}
-	blk.baseObject = newBaseBlock(blk, meta, rt)
+	blk.baseObject = newBaseObject(blk, meta, rt)
 	if blk.meta.HasDropCommitted() {
 		pnode := newPersistedNode(blk.baseObject)
 		node := NewNode(pnode)

@@ -7588,7 +7588,7 @@ func TestDeduplication(t *testing.T) {
 	obj, err := tbl.CreateObject(
 		txn,
 		catalog.ES_Appendable,
-		new(objectio.CreateObjOpt).WithId(ObjectIDs[0]), dataFactory.MakeBlockFactory())
+		new(objectio.CreateObjOpt).WithId(ObjectIDs[0]), dataFactory.MakeObjectFactory())
 	assert.NoError(t, err)
 	txn.GetStore().AddTxnEntry(txnif.TxnType_Normal, obj)
 	txn.GetStore().IncreateWriteCnt()

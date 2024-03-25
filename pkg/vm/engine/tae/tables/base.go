@@ -64,7 +64,7 @@ type baseObject struct {
 	node atomic.Pointer[Node]
 }
 
-func newBaseBlock(
+func newBaseObject(
 	impl data.Block,
 	meta *catalog.ObjectEntry,
 	rt *dbutils.Runtime,

@@ -438,9 +438,9 @@ func (tbl *txnTable) CreateNonAppendableObject(is1PC bool, opts *objectio.Create
 }
 
 func (tbl *txnTable) createObject(state catalog.EntryState, is1PC bool, opts *objectio.CreateObjOpt) (obj handle.Object, err error) {
-	var factory catalog.BlockDataFactory
+	var factory catalog.ObjectDataFactory
 	if tbl.store.dataFactory != nil {
-		factory = tbl.store.dataFactory.MakeBlockFactory()
+		factory = tbl.store.dataFactory.MakeObjectFactory()
 	}
 	var meta *catalog.ObjectEntry
 	if meta, err = tbl.entry.CreateObject(tbl.store.txn, state, opts, factory); err != nil {
