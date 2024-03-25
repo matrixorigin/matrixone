@@ -112,6 +112,7 @@ func (lc *leakChecker) doCheck() (activeTxn, bool) {
 				txn.options.InRunSql = txn.txnOp.inRunSql()
 				txn.options.InCommit = txn.txnOp.inCommit()
 				txn.options.InRollback = txn.txnOp.inRollback()
+				txn.options.SessionInfo = txn.txnOp.options.SessionInfo
 			}
 			return txn, true
 		}

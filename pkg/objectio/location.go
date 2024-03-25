@@ -70,6 +70,9 @@ func (l Location) Extent() Extent {
 func (l Location) Rows() uint32 {
 	return types.DecodeUint32(l[RowsOff : RowsOff+RowsLen])
 }
+func (l Location) SetRows(rows uint32) {
+	copy(l[RowsOff:RowsOff+RowsLen], types.EncodeUint32(&rows))
+}
 
 func (l Location) ID() uint16 {
 	return types.DecodeUint16(l[BlockIDOff : BlockIDOff+BlockIDLen])

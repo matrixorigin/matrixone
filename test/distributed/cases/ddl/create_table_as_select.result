@@ -1225,7 +1225,8 @@ insert into test05 values (2, 39304.3424);
 Duplicate entry ('\d\w\d{38}'|'\(\d\,\d{5}\)') for key '__mo_cpkey_col'
 alter table test01 rename column col1 to newCol;
 show create table test01;
-
+Table    Create Table
+test01    CREATE TABLE `test01` (\n`newcol` INT DEFAULT NULL,\n`col2` DECIMAL(38,0) DEFAULT NULL,\n`col3` VARCHAR(50) DEFAULT NULL\n)
 drop table if exists test06;
 create table test06 (col1 int not null default 100) as select col1 from test01;
 invalid input: column col1 does not exist
@@ -1549,7 +1550,7 @@ test01    CREATE TABLE `test01` (\n`col1` TINYINT DEFAULT NULL,\n`col2` SMALLINT
 create publication publication01 database test;
 show publications;
 publication    database    create_time    update_time    sub_account    comments
-publication01    test    2024-03-20 10:42:22    null    *    
+publication01    test    2024-03-18 16:55:09    null    *    
 drop table if exists test02;
 create table test02 as select * from test01;
 select * from test02;
@@ -1571,7 +1572,7 @@ a    b    c    d
 3    4    c    324243243
 show publications;
 publication    database    create_time    update_time    sub_account    comments
-sys_pub_1    test    2024-03-18 12:38:34    null    *    
+sys_pub_1    test    2024-03-20 11:20:56    null    *    
 select pub_name, database_name, account_list from mo_catalog.mo_pubs;
 pub_name    database_name    account_list
 sys_pub_1    test    all
@@ -1591,6 +1592,11 @@ internal error: cannot create table in subscription database
 drop database sub1;
 drop account acc0;
 drop publication sys_pub_1;
+show variables like 'lower_case_table_names';
+Variable_name    Value
+lower_case_table_names    1
+set @@global.lower_case_table_names = 0;
+use test;
 drop table if exists alias01;
 create table alias01 (col1 int, col2 decimal);
 insert into alias01 values (1,2);
@@ -1598,9 +1604,10 @@ insert into alias01 values (2,3);
 drop table if exists alias02;
 create table alias02 (NewCol int) as select * from alias01;
 show create table alias02;
-
+Table    Create Table
+alias02    CREATE TABLE `alias02` (\n`NewCol` INT DEFAULT NULL,\n`col1` INT DEFAULT NULL,\n`col2` DECIMAL(38,0) DEFAULT NULL\n)
 select * from alias02;
-newcol    col1    col2
+NewCol    col1    col2
 null    1    2
 null    2    3
 drop table alias01;
@@ -1771,3 +1778,4 @@ drop user role_u2;
 drop database db;
 drop database db5;
 drop database db6;
+set @@global.lower_case_table_names = 1;
