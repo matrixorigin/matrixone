@@ -122,7 +122,7 @@ func (ctr *container) build(proc *process.Process, anal process.Analyze) error {
 
 		ctr.bat = bat
 		ctr.mp = bat.DupJmAuxData()
-		anal.Alloc(ctr.mp.Size())
+		ctr.maxAllocSize = max(ctr.maxAllocSize, ctr.mp.Size())
 	}
 	return nil
 }

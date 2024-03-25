@@ -143,7 +143,7 @@ func (ctr *container) build(ap *Argument, proc *process.Process, analyze process
 		ctr.mp = bat.DupJmAuxData()
 		ctr.matched = &bitmap.Bitmap{}
 		ctr.matched.InitWithSize(int64(bat.RowCount()))
-		analyze.Alloc(ctr.mp.Size())
+		ctr.maxAllocSize = max(ctr.maxAllocSize, ctr.mp.Size())
 	}
 	return nil
 }

@@ -114,7 +114,7 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 		ctr.bat = bat
 		ctr.mp = bat.DupJmAuxData()
 		ctr.hasNull = ctr.mp.HasNull()
-		anal.Alloc(ctr.mp.Size())
+		ctr.maxAllocSize = max(ctr.maxAllocSize, ctr.mp.Size())
 	}
 	return nil
 }

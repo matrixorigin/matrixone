@@ -32,6 +32,8 @@ type Argument struct {
 	info     *vm.OperatorInfo
 	children []vm.Operator
 	buf      *batch.Batch
+
+	maxAllocSize int
 }
 
 func (arg *Argument) SetInfo(info *vm.OperatorInfo) {
@@ -59,4 +61,6 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 		arg.buf.Clean(proc.Mp())
 		arg.buf = nil
 	}
+	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
+	anal.Alloc(int64(arg.maxAllocSize))
 }

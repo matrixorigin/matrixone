@@ -164,6 +164,7 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 		//ctr.bat = bat
 		//ctr.mp = bat.Ht.(*hashmap.JoinMap).Dup()
 		//anal.Alloc(ctr.mp.Map().Size())
+		ctr.maxAllocSize = max(ctr.maxAllocSize, ctr.mp.Size())
 	}
 	return nil
 }

@@ -58,6 +58,8 @@ type container struct {
 	vecs            []*vector.Vector
 
 	mp *hashmap.JoinMap
+
+	maxAllocSize int64
 }
 
 type Argument struct {
@@ -92,6 +94,9 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 		ctr.cleanHashMap()
 		ctr.cleanExprExecutor()
 		ctr.FreeAllReg()
+
+		anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
+		anal.Alloc(ctr.maxAllocSize)
 	}
 }
 

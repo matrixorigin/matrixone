@@ -164,7 +164,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 
 	if arg.buf != nil {
 		anal.Output(arg.buf, arg.info.IsLast)
-		anal.Alloc(int64(arg.buf.Size()))
+		arg.maxAllocSize = max(arg.maxAllocSize, arg.buf.Size())
 	}
 	result.Batch = arg.buf
 	if result.Batch != nil {
