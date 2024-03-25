@@ -61,6 +61,6 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 		arg.buf.Clean(proc.Mp())
 		arg.buf = nil
 	}
-	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
+	anal := proc.GetAnalyze(arg.info.Idx, arg.info.ParallelIdx, arg.info.ParallelMajor)
 	anal.Alloc(int64(arg.maxAllocSize))
 }

@@ -84,7 +84,9 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		bat.Cnt = 1
 		anal.S3IOByte(bat)
 		batSize := bat.Size()
-		arg.maxAllocSize = max(arg.maxAllocSize, batSize)
+		if batSize > arg.maxAllocSize {
+			arg.maxAllocSize = batSize
+		}
 
 		if arg.tmpBuf == nil {
 			arg.tmpBuf = bat
