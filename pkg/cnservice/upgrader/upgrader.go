@@ -31,6 +31,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 )
 
+const (
+	UpgradeUser = "upgrader"
+)
+
 var registeredTable = []*table.Table{motrace.SingleRowLogTable, MoPubsTable}
 
 type Upgrader struct {
@@ -363,7 +367,7 @@ func (u *Upgrader) UpgradeNewTable(ctx context.Context, tenants []*frontend.Tena
 			if err := u.upgradeFunc(ctx, tbl, false, &frontend.TenantInfo{
 				Tenant:        frontend.GetDefaultTenant(),
 				TenantID:      catalog.System_Account,
-				User:          "internal",
+				User:          UpgradeUser,
 				UserID:        frontend.GetUserRootId(),
 				DefaultRoleID: frontend.GetDefaultRoleId(),
 				DefaultRole:   frontend.GetDefaultRole(),
@@ -616,7 +620,7 @@ func (u *Upgrader) GetAllTenantInfo(ctx context.Context) ([]*frontend.TenantInfo
 			tenantInfos = append(tenantInfos, &frontend.TenantInfo{
 				Tenant:        tenantName,
 				TenantID:      uint32(accountId),
-				User:          "internal",
+				User:          UpgradeUser,
 				UserID:        frontend.GetAdminUserId(),
 				DefaultRoleID: frontend.GetAccountAdminRoleId(),
 				DefaultRole:   frontend.GetAccountAdminRole(),

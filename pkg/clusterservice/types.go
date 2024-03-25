@@ -70,6 +70,8 @@ type MOCluster interface {
 	// Since the query result may be a Slice, to avoid memory allocation overhead,
 	// we use apply to notify the caller of a Service that satisfies the condition.
 	GetTNService(selector Selector, apply func(metadata.TNService) bool)
+	// GetAllTNServices get all tn services
+	GetAllTNServices() []metadata.TNService
 	// GetCNServiceWithoutWorkingState get services by selector, and the applyFunc used to save the
 	// cn service that matches the selector's conditions.
 	//
