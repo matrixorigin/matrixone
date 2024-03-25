@@ -16,9 +16,10 @@ package tree
 
 import (
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"math"
 	"strconv"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 // AST for the expression
@@ -878,7 +879,7 @@ func (node *ParenExpr) Accept(v Visitor) (Expr, bool) {
 	return v.Exit(node)
 }
 
-func NewParenExpr(e Expr) *ParenExpr {
+func NewParentExpr(e Expr) *ParenExpr {
 	return &ParenExpr{
 		Expr: e,
 	}

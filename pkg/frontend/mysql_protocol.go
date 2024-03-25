@@ -195,7 +195,9 @@ type MysqlProtocol interface {
 
 	GetStats() string
 
-	CalculateOutTrafficBytes() int64
+	// CalculateOutTrafficBytes return bytes, mysql packet num send back to client
+	// reset marks Do reset counter after calculation or not.
+	CalculateOutTrafficBytes(reset bool) (int64, int64)
 
 	ParseExecuteData(ctx context.Context, proc *process.Process, stmt *PrepareStmt, data []byte, pos int) error
 
@@ -368,7 +370,13 @@ func (mp *MysqlProtocolImpl) SetCapability(cap uint32) {
 }
 
 func (mp *MysqlProtocolImpl) AddSequenceId(a uint8) {
+	mp.ses.CountPacket(int64(a))
 	mp.sequenceId.Add(uint32(a))
+}
+
+func (mp *MysqlProtocolImpl) SetSequenceID(value uint8) {
+	mp.ses.CountPacket(1)
+	mp.sequenceId.Store(uint32(value))
 }
 
 func (mp *MysqlProtocolImpl) GetDatabaseName() string {
@@ -401,12 +409,19 @@ func (mp *MysqlProtocolImpl) GetStats() string {
 		mp.String())
 }
 
-// CalculateOutTrafficBytes calculate the bytes of the last out traffic
-func (mp *MysqlProtocolImpl) CalculateOutTrafficBytes() int64 {
+// CalculateOutTrafficBytes calculate the bytes of the last out traffic, the number of mysql packets
+func (mp *MysqlProtocolImpl) CalculateOutTrafficBytes(reset bool) (bytes int64, packets int64) {
+	ses := mp.GetSession()
 	// Case 1: send data as ResultSet
-	return int64(mp.writeBytes) + int64(mp.bytesInOutBuffer-mp.startOffsetInBuffer) +
+	bytes = int64(mp.writeBytes) + int64(mp.bytesInOutBuffer-mp.startOffsetInBuffer) +
 		// Case 2: send data as CSV
-		mp.GetSession().writeCsvBytes.Load()
+		ses.writeCsvBytes.Load()
+	// mysql packet num + length(sql) / 16KiB + payload / 16 KiB
+	packets = ses.GetPacketCnt() + int64(len(ses.sql)>>14) + int64(ses.payloadCounter>>14)
+	if reset {
+		ses.ResetPacketCounter()
+	}
+	return
 }
 
 func (mp *MysqlProtocolImpl) ResetStatistics() {
@@ -1666,6 +1681,13 @@ func (mp *MysqlProtocolImpl) negotiateAuthenticationMethod(ctx context.Context) 
 	return data, nil
 }
 
+// extendStatus extends a flag to the status variable.
+// SERVER_QUERY_WAS_SLOW and SERVER_STATUS_NO_GOOD_INDEX_USED is not used in other modules,
+// so we use it to mark the packet MUST be OK/EOF.
+func extendStatus(old uint16) uint16 {
+	return old & SERVER_QUERY_WAS_SLOW & SERVER_STATUS_NO_GOOD_INDEX_USED
+}
+
 // make a OK packet
 func (mp *MysqlProtocolImpl) makeOKPayload(affectedRows, lastInsertId uint64, statusFlags, warnings uint16, message string) []byte {
 	data := make([]byte, HeaderOffset+128+len(message)+10)
@@ -1673,6 +1695,7 @@ func (mp *MysqlProtocolImpl) makeOKPayload(affectedRows, lastInsertId uint64, st
 	pos = mp.io.WriteUint8(data, pos, defines.OKHeader)
 	pos = mp.writeIntLenEnc(data, pos, affectedRows)
 	pos = mp.writeIntLenEnc(data, pos, lastInsertId)
+	statusFlags = extendStatus(statusFlags)
 	if (mp.capability & CLIENT_PROTOCOL_41) != 0 {
 		pos = mp.io.WriteUint16(data, pos, statusFlags)
 		pos = mp.io.WriteUint16(data, pos, warnings)
@@ -1696,6 +1719,7 @@ func (mp *MysqlProtocolImpl) makeOKPayloadWithEof(affectedRows, lastInsertId uin
 	pos = mp.io.WriteUint8(data, pos, defines.EOFHeader)
 	pos = mp.writeIntLenEnc(data, pos, affectedRows)
 	pos = mp.writeIntLenEnc(data, pos, lastInsertId)
+	statusFlags = extendStatus(statusFlags)
 	if (mp.capability & CLIENT_PROTOCOL_41) != 0 {
 		pos = mp.io.WriteUint16(data, pos, statusFlags)
 		pos = mp.io.WriteUint16(data, pos, warnings)
@@ -1782,7 +1806,7 @@ func (mp *MysqlProtocolImpl) makeEOFPayload(warnings, status uint16) []byte {
 	pos = mp.io.WriteUint8(data, pos, defines.EOFHeader)
 	if mp.capability&CLIENT_PROTOCOL_41 != 0 {
 		pos = mp.io.WriteUint16(data, pos, warnings)
-		pos = mp.io.WriteUint16(data, pos, status)
+		pos = mp.io.WriteUint16(data, pos, extendStatus(status))
 	}
 	return data[:pos]
 }
@@ -2737,6 +2761,8 @@ func (mp *MysqlProtocolImpl) receiveExtraInfo(rs goetty.IOSession) {
 		return
 	}
 
+	// must from proxy if extraInfo is received
+	mp.GetSession().fromProxy = true
 	salt, ok := ve.ExtraInfo.GetSalt()
 	if ok {
 		mp.SetSalt(salt)

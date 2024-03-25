@@ -88,10 +88,6 @@ func unclassifiedStatementInUncommittedTxnErrorInfo() string {
 	return "unclassified statement appears in uncommitted transaction"
 }
 
-func abortTransactionErrorInfo() string {
-	return "Previous DML conflicts with existing constraints or data format. This transaction has to be aborted"
-}
-
 func writeWriteConflictsErrorInfo() string {
 	return "Write conflicts detected. Previous transaction need to be aborted."
 }
@@ -103,6 +99,18 @@ const (
 
 func getPrepareStmtName(stmtID uint32) string {
 	return fmt.Sprintf("%s_%d", prefixPrepareStmtName, stmtID)
+}
+
+func parsePrepareStmtID(s string) uint32 {
+	if strings.HasPrefix(s, prefixPrepareStmtName) {
+		ss := strings.Split(s, "_")
+		v, err := strconv.ParseUint(ss[len(ss)-1], 10, 64)
+		if err != nil {
+			return 0
+		}
+		return uint32(v)
+	}
+	return 0
 }
 
 func GetPrepareStmtID(ctx context.Context, name string) (int, error) {
@@ -309,6 +317,9 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	if !stm.IsZeroTxnID() {
 		stm.Report(ctx)
 	}
+	if stm.IsMoLogger() && stm.StatementType == "Load" && len(stm.Statement) > 128 {
+		stm.Statement = envStmt[:40] + "..." + envStmt[len(envStmt)-45:]
+	}
 
 	return motrace.ContextWithStatement(ctx, stm), nil
 }
@@ -335,14 +346,14 @@ var RecordParseErrorStatement = func(ctx context.Context, ses *Session, proc *pr
 			if err != nil {
 				return nil, err
 			}
-			motrace.EndStatement(ctx, retErr, 0, 0)
+			motrace.EndStatement(ctx, retErr, 0, 0, 0)
 		}
 	} else {
 		ctx, err = RecordStatement(ctx, ses, proc, nil, envBegin, "", sqlType, true)
 		if err != nil {
 			return nil, err
 		}
-		motrace.EndStatement(ctx, retErr, 0, 0)
+		motrace.EndStatement(ctx, retErr, 0, 0, 0)
 	}
 
 	tenant := ses.GetTenantInfo()
@@ -394,22 +405,39 @@ var RecordStatementTxnID = func(ctx context.Context, ses *Session) error {
 }
 
 func handleShowTableStatus(ses *Session, stmt *tree.ShowTableStatus, proc *process.Process) error {
-	db, err := ses.GetStorage().Database(ses.requestCtx, stmt.DbName, proc.TxnOperator)
-	if err != nil {
-		return err
+	var db engine.Database
+	var err error
+
+	ctx := ses.requestCtx
+	if db, err = ses.GetParameterUnit().StorageEngine.Database(ctx, stmt.DbName, proc.TxnOperator); err != nil {
+		//echo client. no such database
+		return moerr.NewBadDB(ctx, stmt.DbName)
+	}
+	if db.IsSubscription(ctx) {
+		subMeta, err := checkSubscriptionValid(ctx, ses, db.GetCreateSql(ctx))
+		if err != nil {
+			return err
+		}
+
+		// as pub account
+		ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(subMeta.AccountId))
+		// get db as pub account
+		if db, err = ses.GetStorage().Database(ctx, subMeta.DbName, proc.TxnOperator); err != nil {
+			return err
+		}
 	}
 	mrs := ses.GetMysqlResultSet()
 	for _, row := range ses.data {
 		tableName := string(row[0].([]byte))
-		r, err := db.Relation(ses.requestCtx, tableName, nil)
+		r, err := db.Relation(ctx, tableName, nil)
 		if err != nil {
 			return err
 		}
-		err = r.UpdateObjectInfos(ses.requestCtx)
+		err = r.UpdateObjectInfos(ctx)
 		if err != nil {
 			return err
 		}
-		row[3], err = r.Rows(ses.requestCtx)
+		row[3], err = r.Rows(ctx)
 		if err != nil {
 			return err
 		}
@@ -2793,6 +2821,7 @@ func (mce *MysqlCmdExecutor) processLoadLocal(ctx context.Context, param *tree.E
 	if length == 0 {
 		return
 	}
+	ses.CountPayload(len(packet.Payload))
 
 	skipWrite := false
 	// If inner error occurs(unexpected or expected(ctrl-c)), proc.LoadLocalReader will be closed.
@@ -2836,6 +2865,7 @@ func (mce *MysqlCmdExecutor) processLoadLocal(ctx context.Context, param *tree.E
 		}
 		seq = uint8(packet.SequenceID + 1)
 		proto.SetSequenceID(seq)
+		ses.CountPayload(len(packet.Payload))
 
 		writeStart := time.Now()
 		if !skipWrite {
@@ -3066,10 +3096,9 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 		*/
 		if ses.InMultiStmtTransactionMode() && ses.InActiveTransaction() {
 			ses.cleanCache()
-			ses.SetOptionBits(OPTION_ATTACH_ABORT_TRANSACTION_ERROR)
 		}
 		logError(ses, ses.GetDebugString(), err.Error())
-		txnErr := ses.TxnRollbackSingleStatement(stmt)
+		txnErr := ses.TxnRollbackSingleStatement(stmt, err)
 		if txnErr != nil {
 			logStatementStatus(requestCtx, ses, stmt, fail, txnErr)
 			return txnErr
@@ -3117,12 +3146,20 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 		return err
 	}
 
+	// defer transaction state management.
+	defer func() {
+		err = finishTxnFunc()
+	}()
+
+	// statement management
 	_, txnOp, err := ses.GetTxnHandler().GetTxnOperator()
 	if err != nil {
 		return err
 	}
 
+	//non derived statement
 	if txnOp != nil && !ses.IsDerivedStmt() {
+		//startStatement has been called
 		ok, _ := ses.GetTxnHandler().calledStartStmt()
 		if !ok {
 			txnOp.GetWorkspace().StartStatement()
@@ -3140,18 +3177,15 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 			logError(ses, ses.GetDebugString(), err3.Error())
 			return
 		}
+		//non derived statement
 		if txnOp != nil && !ses.IsDerivedStmt() {
+			//startStatement has been called
 			ok, id := ses.GetTxnHandler().calledStartStmt()
 			if ok && bytes.Equal(txnOp.Txn().ID, id) {
 				txnOp.GetWorkspace().EndStatement()
 			}
 		}
 		ses.GetTxnHandler().disableStartStmt()
-	}()
-
-	// defer transaction state mangagement.
-	defer func() {
-		err = finishTxnFunc()
 	}()
 
 	// XXX XXX
@@ -4076,7 +4110,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, input *UserI
 
 	proc.SessionInfo.User = userNameOnly
 	proc.SessionInfo.QueryId = ses.getQueryId(input.isInternal())
-	ses.txnCompileCtx.SetProcess(ses.proc)
+	ses.txnCompileCtx.SetProcess(proc)
 	ses.proc.SessionInfo = proc.SessionInfo
 
 	statsInfo := statistic.StatsInfo{ParseStartTime: beginInstant}
@@ -4692,7 +4726,8 @@ func NewMarshalPlanHandler(ctx context.Context, stmt *motrace.StatementInfo, pla
 		buffer: nil,
 	}
 	// check longQueryTime, need after StatementInfo.MarkResponseAt
-	if stmt.Duration > motrace.GetLongQueryTime() {
+	// MoLogger NOT record ExecPlan
+	if stmt.Duration > motrace.GetLongQueryTime() && !stmt.IsMoLogger() {
 		h.marshalPlan = explain.BuildJsonPlan(ctx, h.uuid, &explain.MarshalPlanOptions, h.query)
 	}
 	return h
@@ -4783,15 +4818,24 @@ func (h *marshalPlanHandler) Stats(ctx context.Context) (statsByte statistic.Sta
 
 		statsInfo := statistic.StatsInfoFromContext(ctx)
 		if statsInfo != nil {
-
-			statsByte.WithTimeConsumed(
-				statsByte.GetTimeConsumed() +
-					float64(statsInfo.ParseDuration+
-						statsInfo.CompileDuration+
-						statsInfo.PlanDuration) -
-					float64(statsInfo.IOAccessTimeConsumption+statsInfo.LockTimeConsumption))
+			val := int64(statsByte.GetTimeConsumed()) +
+				int64(statsInfo.ParseDuration+
+					statsInfo.CompileDuration+
+					statsInfo.PlanDuration) - (statsInfo.IOAccessTimeConsumption + statsInfo.LockTimeConsumption)
+			if val < 0 {
+				logutil.Warnf(" negative cpu (%s) + statsInfo(%d + %d + %d - %d - %d) = %d",
+					uuid.UUID(h.stmt.StatementID).String(),
+					statsInfo.ParseDuration,
+					statsInfo.CompileDuration,
+					statsInfo.PlanDuration,
+					statsInfo.IOAccessTimeConsumption,
+					statsInfo.LockTimeConsumption,
+					val)
+				v2.GetTraceNegativeCUCounter("cpu").Inc()
+			} else {
+				statsByte.WithTimeConsumed(float64(val))
+			}
 		}
-
 	} else {
 		statsByte = statistic.DefaultStatsArray
 	}

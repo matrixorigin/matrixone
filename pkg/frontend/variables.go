@@ -347,6 +347,14 @@ func (svit SystemVariableIntType) Convert(value interface{}) (interface{}, error
 		return nil, errorConvertToIntFailed
 	}
 
+	cv3 := func(x string) (interface{}, error) {
+		convertVal, err := strconv.ParseInt(x, 10, 64)
+		if err != nil {
+			return nil, errorConvertToIntFailed
+		}
+		return cv1(convertVal)
+	}
+
 	switch v := value.(type) {
 	case int:
 		return cv1(int64(v))
@@ -372,6 +380,8 @@ func (svit SystemVariableIntType) Convert(value interface{}) (interface{}, error
 		return cv2(float64(v))
 	case float64:
 		return cv2(v)
+	case string:
+		return cv3(v)
 	}
 	return nil, errorConvertToIntFailed
 }

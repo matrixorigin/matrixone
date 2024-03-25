@@ -276,7 +276,16 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 		for i, colId := range fk.Cols {
 			colNames[i] = colIdToName[colId]
 		}
-		_, fkTableDef := ctx.ResolveById(fk.ForeignTbl)
+
+		var fkTableDef *TableDef
+
+		//fk self reference
+		if fk.ForeignTbl == 0 {
+			fkTableDef = tableDef
+		} else {
+			_, fkTableDef = ctx.ResolveById(fk.ForeignTbl)
+		}
+
 		fkColIdToName := make(map[uint64]string)
 		for _, col := range fkTableDef.Cols {
 			fkColIdToName[col.ColId] = col.Name
@@ -407,7 +416,7 @@ func buildShowCreateView(stmt *tree.ShowCreateView, ctx CompilerContext) (*Plan,
 	if tableDef == nil || tableDef.TableType != catalog.SystemViewRel {
 		return nil, moerr.NewInvalidInput(ctx.GetContext(), "show view '%s' is not a valid view", tblName)
 	}
-	sqlStr := "select \"%s\" as `View`, \"%s\" as `Create View`"
+	sqlStr := "select \"%s\" as `View`, \"%s\" as `Create View`, 'utf8mb4' as `character_set_client`, 'utf8mb4_general_ci' as `collation_connection`"
 	var viewStr string
 	if tableDef.TableType == catalog.SystemViewRel {
 		viewStr = tableDef.ViewSql.View

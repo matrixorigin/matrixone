@@ -158,7 +158,7 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 	// append hidden column to tableDef
 	newTableDef := DeepCopyTableDef(tableDef, true)
 	checkInsertPkDup := false
-	err = buildInsertPlans(ctx, builder, bindCtx, objRef, newTableDef, lastNodeId, checkInsertPkDup, nil, nil, isInsertWithoutAutoPkCol, nil)
+	err = buildInsertPlans(ctx, builder, bindCtx, objRef, newTableDef, lastNodeId, checkInsertPkDup, nil, nil, isInsertWithoutAutoPkCol, nil, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -176,6 +176,12 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 	}
 
 	query := builder.qry
+	sqls, err := genSqlsForCheckFKSelfRefer(ctx.GetContext(),
+		objRef.SchemaName, newTableDef.Name, newTableDef.Cols, newTableDef.Fkeys)
+	if err != nil {
+		return nil, err
+	}
+	query.DetectSqls = sqls
 	reduceSinkSinkScanNodes(query)
 	query.StmtType = plan.Query_INSERT
 

@@ -285,7 +285,7 @@ func SetInsertValue(proc *process.Process, numVal *tree.NumVal, vec *vector.Vect
 	case types.T_timestamp:
 		return setInsertValueTimeStamp(proc, numVal, vec)
 	case types.T_enum:
-		return setInsertValueNumber[types.Enum](proc, numVal, vec)
+		return false, nil
 	}
 
 	return false, nil

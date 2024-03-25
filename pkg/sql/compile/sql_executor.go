@@ -283,6 +283,10 @@ func (exec *txnExecutor) Exec(sql string) (executor.Result, error) {
 	return result, nil
 }
 
+func (exec *txnExecutor) Txn() client.TxnOperator {
+	return exec.opts.Txn()
+}
+
 func (exec *txnExecutor) commit() error {
 	if exec.opts.ExistsTxn() {
 		return nil

@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"go.uber.org/zap"
@@ -64,6 +65,8 @@ type Routine struct {
 	restricted atomic.Bool
 
 	printInfoOnce bool
+
+	migrateOnce sync.Once
 }
 
 func (rt *Routine) needPrintSessionInfo() bool {
@@ -211,8 +214,6 @@ func (rt *Routine) handleRequest(req *Request) error {
 	defer span.End()
 
 	parameters := rt.getParameters()
-	mpi := rt.getProtocol()
-	mpi.SetSequenceID(req.seq)
 	cancelRequestCtx, cancelRequestFunc := context.WithTimeout(routineCtx, parameters.SessionTimeout.Duration)
 	executor := rt.getCmdExecutor()
 	executor.SetCancelFunc(cancelRequestFunc)
@@ -377,6 +378,27 @@ func (rt *Routine) cleanup() {
 			ses.Close()
 		}
 	})
+}
+
+func (rt *Routine) migrateConnectionTo(req *query.MigrateConnToRequest) error {
+	var err error
+	rt.migrateOnce.Do(func() {
+		ses := rt.getSession()
+		err = ses.Migrate(req)
+	})
+	return err
+}
+
+func (rt *Routine) migrateConnectionFrom(resp *query.MigrateConnFromResponse) error {
+	ses := rt.getSession()
+	resp.DB = ses.GetDatabaseName()
+	for _, st := range ses.GetPrepareStmts() {
+		resp.PrepareStmts = append(resp.PrepareStmts, &query.PrepareStmt{
+			Name: st.Name,
+			SQL:  st.Sql,
+		})
+	}
+	return nil
 }
 
 func NewRoutine(ctx context.Context, protocol MysqlProtocol, executor CmdExecutor, parameters *config.FrontendParameters, rs goetty.IOSession) *Routine {

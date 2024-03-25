@@ -179,8 +179,8 @@ func genCreateDatabases(rows [][]any) []CreateDatabase {
 func genDropDatabases(rows [][]any) []DropDatabase {
 	cmds := make([]DropDatabase, len(rows))
 	for i, row := range rows {
-		cmds[i].Id = row[MO_DATABASE_DAT_ID_IDX].(uint64)
-		cmds[i].Name = string(row[MO_DATABASE_DAT_NAME_IDX].([]byte))
+		cmds[i].Id = row[SKIP_ROWID_OFFSET+MO_DATABASE_DAT_ID_IDX].(uint64)
+		cmds[i].Name = string(row[SKIP_ROWID_OFFSET+MO_DATABASE_DAT_NAME_IDX].([]byte))
 	}
 	return cmds
 }
@@ -462,4 +462,8 @@ func BuildQueryResultPath(accountName, statementId string, blockIdx int) string 
 
 func BuildQueryResultMetaPath(accountName, statementId string) string {
 	return fmt.Sprintf(QueryResultMetaPath, accountName, statementId)
+}
+
+func BuildProfilePath(typ, name string) string {
+	return fmt.Sprintf("%s/%s_%s", ProfileDir, typ, name)
 }

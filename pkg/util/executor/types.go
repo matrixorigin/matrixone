@@ -38,6 +38,7 @@ type SQLExecutor interface {
 // TxnExecutor exec all sql in a transaction.
 type TxnExecutor interface {
 	Exec(sql string) (Result, error)
+	Txn() client.TxnOperator
 }
 
 // Options execute options.

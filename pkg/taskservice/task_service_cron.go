@@ -213,7 +213,16 @@ func (j *cronJob) Run() {
 
 func (j *cronJob) doRun() {
 	now := time.Now()
-	cronTask := j.task
+	cronTasks, err := j.s.QueryCronTask(context.Background(), WithCronTaskId(EQ, j.task.ID))
+	if err != nil {
+		j.s.rt.Logger().Error("failed to query cron task", zap.Error(err))
+		return
+	}
+	if len(cronTasks) != 1 {
+		j.s.rt.Logger().Panic(fmt.Sprintf("query cron_task_id = %d, return %d records", j.task.ID, len(cronTasks)))
+		return
+	}
+	cronTask := cronTasks[0]
 	cronTask.UpdateAt = now.UnixMilli()
 	cronTask.NextTime = j.schedule.Next(now).UnixMilli()
 
@@ -225,7 +234,7 @@ func (j *cronJob) doRun() {
 	asyncTask.ParentTaskID = asyncTask.Metadata.ID
 	asyncTask.Metadata.ID = fmt.Sprintf("%s:%d", asyncTask.ParentTaskID, cronTask.TriggerTimes)
 
-	_, err := j.s.store.UpdateCronTask(ctx, cronTask, asyncTask)
+	_, err = j.s.store.UpdateCronTask(ctx, cronTask, asyncTask)
 	if err != nil {
 		j.s.rt.Logger().Error("trigger cron task failed",
 			zap.String("cron-task", j.task.DebugString()),

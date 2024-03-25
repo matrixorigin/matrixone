@@ -59,6 +59,16 @@ var _ Engine = new(testEngine)
 type testOperator struct {
 }
 
+func (o *testOperator) EnterRunSql() {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (o *testOperator) ExitRunSql() {
+	//TODO implement me
+	panic("implement me")
+}
+
 func TestEntireEngineNew(t *testing.T) {
 	ctx := context.TODO()
 	op := newtestOperator()
@@ -348,6 +358,10 @@ func (o *testOperator) Write(ctx context.Context, ops []txn.TxnRequest) (*rpc.Se
 
 func (o *testOperator) AddLockTable(lock.LockTable) error {
 	return nil
+}
+
+func (o *testOperator) LockTableCount() int32 {
+	return 0
 }
 
 func (o *testOperator) UpdateSnapshot(ctx context.Context, ts timestamp.Timestamp) error {
