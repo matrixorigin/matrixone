@@ -419,7 +419,7 @@ func (ip *internalProtocol) ResetStatistics() {
 
 func (ip *internalProtocol) GetStats() string { return "internal unknown stats" }
 
-func (ip *internalProtocol) CalculateOutTrafficBytes() int64 { return 0 }
+func (ip *internalProtocol) CalculateOutTrafficBytes(reset bool) (int64, int64) { return 0, 0 }
 
 func (ip *internalProtocol) sendLocalInfileRequest(filename string) error {
 	return nil

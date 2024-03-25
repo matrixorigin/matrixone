@@ -91,7 +91,8 @@ func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *pla
 			}
 			defer vec.Free(proc.Mp())
 
-			colexec.SortInFilter(vec)
+			vec.InplaceSortAndCompact()
+
 			data, err := vec.MarshalBinary()
 			if err != nil {
 				return expr
@@ -121,8 +122,10 @@ func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *pla
 	if f.IsRealTimeRelated() && r.isPrepared {
 		return expr
 	}
+	isVec := false
 	for i := range fn.Args {
 		fn.Args[i] = r.constantFold(fn.Args[i], proc)
+		isVec = isVec || fn.Args[i].GetVec() != nil
 	}
 	if !IsConstant(expr, false) {
 		return expr
@@ -134,7 +137,7 @@ func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *pla
 	}
 	defer vec.Free(proc.Mp())
 
-	if !vec.IsConst() && vec.Length() > 1 {
+	if isVec {
 		data, err := vec.MarshalBinary()
 		if err != nil {
 			return expr

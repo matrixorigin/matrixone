@@ -1908,7 +1908,7 @@ var supportedOperators = []FuncNew{
 	// operator `is null`
 	{
 		functionId: ISNULL,
-		class:      plan.Function_PRODUCE_NO_NULL,
+		class:      plan.Function_PRODUCE_NO_NULL | plan.Function_ZONEMAPPABLE,
 		layout:     IS_EXPRESSION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) == 1 {
@@ -1933,7 +1933,7 @@ var supportedOperators = []FuncNew{
 	// operator `is not null`
 	{
 		functionId: ISNOTNULL,
-		class:      plan.Function_PRODUCE_NO_NULL,
+		class:      plan.Function_PRODUCE_NO_NULL | plan.Function_ZONEMAPPABLE,
 		layout:     IS_NOT_EXPRESSION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) == 1 {

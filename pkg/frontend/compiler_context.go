@@ -196,7 +196,7 @@ func (tcc *TxnCompilerContext) getRelation(dbName string, tableName string, sub 
 	if dbName == catalog.MO_SYSTEM && tableName == catalog.MO_STATEMENT {
 		txnCtx = defines.AttachAccountId(txnCtx, uint32(sysAccountID))
 	}
-	if dbName == catalog.MO_SYSTEM_METRICS && tableName == catalog.MO_METRIC {
+	if dbName == catalog.MO_SYSTEM_METRICS && (tableName == catalog.MO_METRIC || tableName == catalog.MO_SQL_STMT_CU) {
 		txnCtx = defines.AttachAccountId(txnCtx, uint32(sysAccountID))
 	}
 
@@ -284,7 +284,7 @@ func (tcc *TxnCompilerContext) ResolveById(tableId uint64) (*plan2.ObjectRef, *p
 		ObjName:    tableName,
 		Obj:        int64(tableId),
 	}
-	tableDef := table.GetTableDef(txnCtx)
+	tableDef := table.CopyTableDef(txnCtx)
 	return obj, tableDef
 }
 
@@ -302,10 +302,11 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 	if err != nil {
 		return nil, nil
 	}
-	tableDef := table.GetTableDef(ctx)
+	tableDef := table.CopyTableDef(ctx)
 	if tableDef.IsTemporary {
 		tableDef.Name = tableName
 	}
+	tableDef.DbName = dbName
 
 	// convert
 	var subscriptionName string

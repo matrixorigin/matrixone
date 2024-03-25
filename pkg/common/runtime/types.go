@@ -42,6 +42,9 @@ const (
 
 	// EnableCheckInvalidRCErrors enable check rc errors
 	EnableCheckInvalidRCErrors = "enable-check-rc-invalid-error"
+
+	// BackgroundCNSelector is the labels of the CN handing the background requests, including mo-logger, task-service.
+	BackgroundCNSelector = "background-cn-selector"
 )
 
 // Runtime contains the runtime environment for a MO service. Each CN/DN/LOG service

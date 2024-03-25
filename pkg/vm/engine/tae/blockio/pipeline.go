@@ -473,7 +473,6 @@ func (p *IoPipeline) crontask(ctx context.Context) {
 		// if wdrops > 0 {
 		// 	logutil.Infof("PrefetchDropStats: %d", wdrops)
 		// }
-		logutil.Info(objectio.ExportCacheStats())
 	}, nil)
 	hb.Start()
 	<-ctx.Done()

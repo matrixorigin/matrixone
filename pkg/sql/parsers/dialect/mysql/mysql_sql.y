@@ -561,7 +561,7 @@ import (
 %type <columnAttribute> column_attribute_elem keys
 %type <columnAttributes> column_attribute_list column_attribute_list_opt
 %type <tableOptions> table_option_list_opt table_option_list stream_option_list_opt stream_option_list
-%type <str> charset_name storage_opt collate_name column_format storage_media algorithm_type able_type space_type lock_type with_type rename_type algorithm_type_2
+%type <str> charset_name storage_opt collate_name column_format storage_media algorithm_type able_type space_type lock_type with_type rename_type algorithm_type_2 load_charset
 %type <rowFormatType> row_format_options
 %type <int64Val> field_length_opt max_file_size_opt
 %type <matchType> match match_opt
@@ -757,7 +757,7 @@ import (
 
 %token <str> KILL
 %type <killOption> kill_opt
-%token <str> BACKUP FILESYSTEM
+%token <str> BACKUP FILESYSTEM PARALLELISM
 %type <statementOption> statement_id_opt
 %token <str> QUERY_RESULT
 %type<tableLock> table_lock_elem
@@ -891,12 +891,13 @@ normal_stmt:
 |   backup_stmt
 
 backup_stmt:
-    BACKUP STRING FILESYSTEM STRING
+    BACKUP STRING FILESYSTEM STRING PARALLELISM STRING
 	{
 		$$ = &tree.BackupStart{
 		    Timestamp: $2,
 		    IsS3 : false,
 		    Dir: $4,
+            Parallelism: $6,
 		}
 	}
     | BACKUP STRING S3OPTION '{' infile_or_s3_params '}'
@@ -2959,6 +2960,13 @@ alter_table_drop:
             Name: tree.Identifier($3.Compare()),
         }
     }
+|   CONSTRAINT ident
+        {
+            $$ = &tree.AlterOptionDrop{
+                Typ:  tree.AlterTableDropForeignKey,
+                Name: tree.Identifier($2.Compare()),
+            }
+        }
 |   PRIMARY KEY
     {
         $$ = &tree.AlterOptionDrop{
@@ -3968,6 +3976,14 @@ insert_stmt:
         ins.Table = $2
         ins.PartitionNames = $3
         ins.OnDuplicateUpdate = $5
+        $$ = ins
+    }
+|   INSERT IGNORE into_table_name partition_clause_opt insert_data
+    {
+        ins := $5
+        ins.Table = $3
+        ins.PartitionNames = $4
+        ins.OnDuplicateUpdate = []*tree.UpdateExpr{nil}
         $$ = ins
     }
 
@@ -6548,16 +6564,27 @@ infile_or_s3_param:
     }
 
 tail_param_opt:
-    load_fields load_lines ignore_lines columns_or_variable_list_opt load_set_spec_opt
+    load_charset load_fields load_lines ignore_lines columns_or_variable_list_opt load_set_spec_opt
     {
         $$ = &tree.TailParameter{
-            Fields: $1,
-            Lines: $2,
-            IgnoredLines: uint64($3),
-            ColumnList: $4,
-            Assignments: $5,
+            Charset: $1,
+            Fields: $2,
+            Lines: $3,
+            IgnoredLines: uint64($4),
+            ColumnList: $5,
+            Assignments: $6,
         }
     }
+
+load_charset:
+    {
+        $$ = ""
+    }
+|   charset_keyword charset_name
+    {
+    	$$ = $2
+    }
+
 create_sequence_stmt:
     CREATE SEQUENCE not_exists_opt table_name as_datatype_opt increment_by_opt min_value_opt max_value_opt start_with_opt cycle_opt
     {
@@ -7968,7 +7995,7 @@ simple_expr:
     }
 |   '(' expression ')'
     {
-        $$ = tree.NewParenExpr($2)
+        $$ = tree.NewParentExpr($2)
     }
 |   '(' expression_list ',' expression ')'
     {
@@ -7989,6 +8016,48 @@ simple_expr:
 |   '!' simple_expr %prec UNARY
     {
         $$ = tree.NewUnaryExpr(tree.UNARY_MARK, $2)
+    }
+|   '{'  ident expression '}'
+    {   
+        hint := strings.ToLower($2.Compare())
+        switch hint {
+		case "d":
+            locale := ""
+            t := &tree.T{
+                InternalType: tree.InternalType{
+                   Family: tree.TimestampFamily,
+                   FamilyString: "DATETIME",
+                   Locale: &locale,
+                   Oid: uint32(defines.MYSQL_TYPE_DATETIME),
+                },
+            }
+            $$ = tree.NewCastExpr($3, t)
+        case "t":
+            locale := ""
+            t := &tree.T{
+                InternalType: tree.InternalType{
+                   Family: tree.TimeFamily,
+                   FamilyString: "TIME",
+                   Locale: &locale,
+                   Oid: uint32(defines.MYSQL_TYPE_TIME),
+               },
+            }    
+            $$ = tree.NewCastExpr($3, t)
+        case "ts":
+            locale := ""
+            t := &tree.T{
+                InternalType: tree.InternalType{
+                    Family: tree.TimestampFamily,
+                    FamilyString: "TIMESTAMP",
+                    Locale:  &locale,
+                    Oid: uint32(defines.MYSQL_TYPE_TIMESTAMP),
+                },
+            }
+            $$ = tree.NewCastExpr($3, t) 
+        default:
+            yylex.Error("Invalid type")
+            return 1
+        }
     }
 |   interval_expr
     {
@@ -8054,7 +8123,11 @@ simple_expr:
     }
 |   sample_function_expr
     {
-	$$ = $1
+        $$ = $1
+    }
+|   simple_expr COLLATE collate_name
+    {
+        $$ = $1
     }
 
 function_call_window:
@@ -10754,6 +10827,7 @@ non_reserved_keyword:
 |   STAGES
 |   BACKUP
 |   FILESYSTEM
+|   PARALLELISM
 |	VALUE
 |	REFERENCE
 |	MODIFY

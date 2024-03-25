@@ -208,7 +208,7 @@ func (c *compilerContext) Resolve(dbName string, tableName string) (*plan.Object
 }
 
 func (c *compilerContext) ResolveVariable(varName string, isSystemVar bool, isGlobalVar bool) (interface{}, error) {
-	return "", nil
+	return nil, nil
 }
 
 func (c *compilerContext) SetBuildingAlterView(yesOrNo bool, dbName, viewName string) {
@@ -405,6 +405,7 @@ func (c *compilerContext) getTableDef(
 		ClusterBy:    clusterByDef,
 		Indexes:      indexes,
 		Version:      schemaVersion,
+		DbName:       dbName,
 	}
 	return obj, tableDef
 }

@@ -550,7 +550,7 @@ sal decimal(7,2),
 comm decimal(7,2),
 deptno varchar(20),
 primary key(empno),
-FOREIGN KEY (deptno) REFERENCES dept(deptno)
+constraint `c1` FOREIGN KEY (deptno) REFERENCES dept(deptno)
 );
 INSERT INTO emp VALUES (7369,'SMITH','CLERK',7902,'1980-12-17',800,NULL,20);
 INSERT INTO emp VALUES (7499,'ALLEN','SALESMAN',7698,'1981-02-20',1600,300,30);
@@ -567,11 +567,11 @@ INSERT INTO emp VALUES (7900,'JAMES','CLERK',7698,'1981-12-03',950,NULL,30);
 INSERT INTO emp VALUES (7902,'FORD','ANALYST',7566,'1981-12-03',3000,NULL,20);
 INSERT INTO emp VALUES (7934,'MILLER','CLERK',7782,'1982-01-23',1300,NULL,10);
 alter table emp change deptno deptno char(20);
-Cannot change column 'deptno': used in a foreign key constraint ''
+Cannot change column 'deptno': used in a foreign key constraint 'c1'
 alter table emp change deptno deptno int;
-Cannot change column 'deptno': used in a foreign key constraint ''
+Cannot change column 'deptno': used in a foreign key constraint 'c1'
 alter table emp change deptno deptno varchar(10);
-Cannot change column 'deptno': used in a foreign key constraint ''
+Cannot change column 'deptno': used in a foreign key constraint 'c1'
 alter table emp change deptno deptno varchar(25);
 desc emp;
 Field    Type    Null    Key    Default    Extra    Comment
@@ -731,7 +731,7 @@ show index from t1;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
 t1    0    a    1    a    A    0    NULL    NULL                        YES    NULL
 t1    0    a    2    b    A    0    NULL    NULL    YES                    YES    NULL
-t1    0    PRIMARY    1    a    A    0    NULL    NULL                    YES    NULL
+t1    0    PRIMARY    1    a    A    0    NULL    NULL                        YES    NULL
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    NO    PRI    null        
@@ -1453,13 +1453,13 @@ drop table if exists foreign02;
 create table foreign02(col1 int,
 col2 int,
 col3 int primary key,
-foreign key(col1) references foreign01(col1));
+constraint `c1` foreign key(col1) references foreign01(col1));
 show create table foreign01;
 Table    Create Table
 foreign01    CREATE TABLE `foreign01` (\n`col1` INT NOT NULL,\n`col2` VARCHAR(20) DEFAULT NULL,\n`col3` INT DEFAULT NULL,\n`col4` BIGINT DEFAULT NULL,\nPRIMARY KEY (`col1`)\n)
 show create table foreign02;
 Table    Create Table
-foreign02    CREATE TABLE `foreign02` (\n`col1` INT DEFAULT NULL,\n`col2` INT DEFAULT NULL,\n`col3` INT NOT NULL,\nPRIMARY KEY (`col3`),\nCONSTRAINT `` FOREIGN KEY (`col1`) REFERENCES `foreign01` (`col1`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
+foreign02    CREATE TABLE `foreign02` (\n`col1` INT DEFAULT NULL,\n`col2` INT DEFAULT NULL,\n`col3` INT NOT NULL,\nPRIMARY KEY (`col3`),\nCONSTRAINT `c1` FOREIGN KEY (`col1`) REFERENCES `foreign01` (`col1`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
 insert into foreign01 values(1,'sfhuwe',1,1);
 insert into foreign01 values(2,'37829901k3d',2,2);
 insert into foreign02 values(1,1,1);
@@ -1475,13 +1475,13 @@ col1    col2    col3
 alter table foreign01 change col1 col1New decimal;
 Columns participating in a foreign key are renamed
 alter table foreign02 change col1 col1New float after col3;
-Cannot change column 'col1': used in a foreign key constraint ''
+Cannot change column 'col1': used in a foreign key constraint 'c1'
 show create table foreign01;
 Table    Create Table
 foreign01    CREATE TABLE `foreign01` (\n`col1` INT NOT NULL,\n`col2` VARCHAR(20) DEFAULT NULL,\n`col3` INT DEFAULT NULL,\n`col4` BIGINT DEFAULT NULL,\nPRIMARY KEY (`col1`)\n)
 show create table foreign02;
 Table    Create Table
-foreign02    CREATE TABLE `foreign02` (\n`col1` INT DEFAULT NULL,\n`col2` INT DEFAULT NULL,\n`col3` INT NOT NULL,\nPRIMARY KEY (`col3`),\nCONSTRAINT `` FOREIGN KEY (`col1`) REFERENCES `foreign01` (`col1`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
+foreign02    CREATE TABLE `foreign02` (\n`col1` INT DEFAULT NULL,\n`col2` INT DEFAULT NULL,\n`col3` INT NOT NULL,\nPRIMARY KEY (`col3`),\nCONSTRAINT `c1` FOREIGN KEY (`col1`) REFERENCES `foreign01` (`col1`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
 alter table foreign01 change col2 col2New varchar(100);
 alter table foreign02 change col2 col2new double after col3;
 insert into foreign01 values(3,'bcguwgheinwqneku678',2,2);
@@ -1506,7 +1506,7 @@ Table    Create Table
 foreign01    CREATE TABLE `foreign01` (\n`col1` INT NOT NULL,\n`col2new` VARCHAR(100) DEFAULT NULL,\n`col3` INT DEFAULT NULL,\n`col4` BIGINT DEFAULT NULL,\nPRIMARY KEY (`col1`)\n)
 show create table foreign02;
 Table    Create Table
-foreign02    CREATE TABLE `foreign02` (\n`col1` INT DEFAULT NULL,\n`col3` INT NOT NULL,\n`col2new` DOUBLE DEFAULT NULL,\nPRIMARY KEY (`col3`),\nCONSTRAINT `` FOREIGN KEY (`col1`) REFERENCES `foreign01` (`col1`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
+foreign02    CREATE TABLE `foreign02` (\n`col1` INT DEFAULT NULL,\n`col3` INT NOT NULL,\n`col2new` DOUBLE DEFAULT NULL,\nPRIMARY KEY (`col3`),\nCONSTRAINT `c1` FOREIGN KEY (`col1`) REFERENCES `foreign01` (`col1`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'foreign01' and COLUMN_NAME not like '__mo%';
 table_name    column_name    data_type    is_nullable
 foreign01    col1    INT    NO
@@ -1717,9 +1717,9 @@ null    93024232    -32    324242132321
 234    32718    100    32894323237289
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'cast02' and COLUMN_NAME not like '__mo%';
 table_name    column_name    data_type    is_nullable
-cast02    col22361738278472874382    BIGINT    YES
 cast02    col1new    INT UNSIGNED    YES
 cast02    col3vhejwh4i3uh4r    BIGINT UNSIGNED    YES
+cast02    col22361738278472874382    BIGINT    YES
 cast02    col4cdhewjruekhwjf    SMALLINT    YES
 drop table cast02;
 drop table if exists cast03;
@@ -1917,7 +1917,7 @@ col1    col2
 {"x": [3, 5, 7]}    b
 show create table abnormal04;
 Table    Create Table
-abnormal04    CREATE TABLE `abnormal04` (\n`col1` JSON DEFAULT NULL,\n`col2` ENUM DEFAULT NULL\n)
+abnormal04    CREATE TABLE `abnormal04` (\n`col1` JSON DEFAULT NULL,\n`col2` ENUM('a','b') DEFAULT NULL\n)
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'abnormal04' and COLUMN_NAME not like '__mo%';
 table_name    column_name    data_type    is_nullable
 abnormal04    col1    JSON    YES
@@ -1955,15 +1955,15 @@ create table view02 (a int);
 insert into view02 values (1);
 create view v0 as select view01.a, view02.a as b from view01 left join view02 using(a);
 show create view v0;
-View    Create View
-v0    create view v0 as select view01.a, view02.a as b from view01 left join view02 using(a);
+View    Create View    character_set_client    collation_connection
+v0    create view v0 as select view01.a, view02.a as b from view01 left join view02 using(a);    utf8mb4    utf8mb4_general_ci
 alter table view01 change a aCOL float;
 show create table view01;
 Table    Create Table
 view01    CREATE TABLE `view01` (\n`acol` FLOAT DEFAULT NULL\n)
 show create view v0;
-View    Create View
-v0    create view v0 as select view01.a, view02.a as b from view01 left join view02 using(a);
+View    Create View    character_set_client    collation_connection
+v0    create view v0 as select view01.a, view02.a as b from view01 left join view02 using(a);    utf8mb4    utf8mb4_general_ci
 drop table view01;
 drop table view02;
 drop view v0;
@@ -1982,8 +1982,8 @@ col2worejnfenrororiri    iwijwehfndatabasectm
 -2893428.0    2.0
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'cluster01' and COLUMN_NAME not like '__mo%';
 table_name    column_name    data_type    is_nullable
-cluster01    col2worejnfenrororiri    FLOAT    YES
 cluster01    iwijwehfndatabasectm    DOUBLE    YES
+cluster01    col2worejnfenrororiri    FLOAT    YES
 drop table cluster01;
 drop table if exists time01;
 create table time01 (col1 date, col2 datetime, col3 timestamp, col4 time);

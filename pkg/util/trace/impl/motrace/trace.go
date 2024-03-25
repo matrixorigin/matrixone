@@ -67,6 +67,8 @@ func InitWithConfig(ctx context.Context, SV *config.ObservabilityParameters, opt
 		WithAggregatorWindow(SV.AggregationWindow.Duration),
 		WithSelectThreshold(SV.SelectAggrThreshold.Duration),
 		WithStmtMergeEnable(SV.EnableStmtMerge),
+		WithCUConfig(SV.CU, SV.CUv1),
+		WithTCPPacket(SV.TCPPacket),
 
 		DebugMode(SV.EnableTraceDebug),
 		WithBufferSizeThreshold(SV.BufferSize),
@@ -103,6 +105,7 @@ func Init(ctx context.Context, opts ...TracerProviderOption) (err error, act boo
 	SetDefaultSpanContext(&sc)
 	serviceCtx := context.Background()
 	SetDefaultContext(trace.ContextWithSpanContext(serviceCtx, sc))
+	SetCuConfig(&config.cuConfig, &config.cuConfigV1)
 
 	// init Exporter
 	if err := initExporter(ctx, config); err != nil {

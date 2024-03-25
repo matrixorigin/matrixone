@@ -33,8 +33,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+const DefaultBlockMaxRows = 8192
 const BlockNumForceOneCN = 200
-const blockNDVThreshHold = 100
 const blockSelectivityThreshHold = 0.95
 const highNDVcolumnThreshHold = 0.95
 
@@ -253,6 +253,29 @@ func getColNdv(col *plan.ColRef, builder *QueryBuilder) float64 {
 	return s.NdvMap[col.Name]
 }
 
+func getNullSelectivity(arg *plan.Expr, builder *QueryBuilder, isnull bool) float64 {
+	switch exprImpl := arg.Expr.(type) {
+	case *plan.Expr_Col:
+		col := exprImpl.Col
+		s := getStatsInfoByCol(col, builder)
+		if s == nil {
+			break
+		}
+		nullCnt := float64(s.NullCntMap[col.Name])
+		if isnull {
+			return nullCnt / s.TableCnt
+		} else {
+			return 1 - (nullCnt / s.TableCnt)
+		}
+	}
+
+	if isnull {
+		return 0.1
+	} else {
+		return 0.9
+	}
+}
+
 // this function is used to calculate the ndv of expressions,
 // like year(l_orderdate), substring(phone_number), and assume col is the first argument
 // if only the ndv of column is needed, please call getColNDV
@@ -455,6 +478,10 @@ func estimateExprSelectivity(expr *plan.Expr, builder *QueryBuilder) float64 {
 			return 0.5
 		case "prefix_between":
 			return 0.1
+		case "isnull", "is_null":
+			return getNullSelectivity(exprImpl.F.Args[0], builder, true)
+		case "isnotnull", "is_not_null":
+			return getNullSelectivity(exprImpl.F.Args[0], builder, false)
 		default:
 			return 0.15
 		}
@@ -500,9 +527,12 @@ func estimateFilterWeight(expr *plan.Expr, w float64) float64 {
 }
 
 // harsh estimate of block selectivity, will improve it in the future
-func estimateFilterBlockSelectivity(ctx context.Context, expr *plan.Expr, tableDef *plan.TableDef, builder *QueryBuilder) float64 {
+func estimateFilterBlockSelectivity(ctx context.Context, expr *plan.Expr, tableDef *plan.TableDef) float64 {
 	if !ExprIsZonemappable(ctx, expr) {
 		return 1
+	}
+	if expr.Selectivity < 0.01 {
+		return expr.Selectivity * 100
 	}
 	col := extractColRefInFilter(expr)
 	if col != nil {
@@ -515,11 +545,7 @@ func estimateFilterBlockSelectivity(ctx context.Context, expr *plan.Expr, tableD
 			return math.Min(expr.Selectivity*10, 0.5)
 		}
 	}
-	if getExprNdv(expr, builder) < blockNDVThreshHold {
-		return 1
-	}
-	// do not know selectivity for this expr, default 0.5
-	return 0.5
+	return 1
 }
 
 func rewriteFilterListByStats(ctx context.Context, nodeID int32, builder *QueryBuilder) {
@@ -949,7 +975,7 @@ func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
 	var blockExprList []*plan.Expr
 	for i := range node.FilterList {
 		node.FilterList[i].Selectivity = estimateExprSelectivity(node.FilterList[i], builder)
-		currentBlockSel := estimateFilterBlockSelectivity(builder.GetContext(), node.FilterList[i], node.TableDef, builder)
+		currentBlockSel := estimateFilterBlockSelectivity(builder.GetContext(), node.FilterList[i], node.TableDef)
 		if currentBlockSel < blockSelectivityThreshHold {
 			copyOfExpr := DeepCopyExpr(node.FilterList[i])
 			copyOfExpr.Selectivity = currentBlockSel
@@ -963,6 +989,18 @@ func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
 	stats.Outcnt = stats.Selectivity * stats.TableCnt
 	stats.Cost = stats.TableCnt * blockSel
 	stats.BlockNum = int32(float64(s.BlockNumber)*blockSel) + 1
+
+	// if there is a limit, outcnt is limit number
+	if node.Limit != nil && len(node.FilterList) == 0 {
+		if cExpr, ok := node.Limit.Expr.(*plan.Expr_Lit); ok {
+			if c, ok := cExpr.Lit.Value.(*plan.Literal_I64Val); ok {
+				stats.Outcnt = float64(c.I64Val)
+				stats.BlockNum = int32((stats.Outcnt / DefaultBlockMaxRows) + 1)
+				stats.Cost = float64(stats.BlockNum * DefaultBlockMaxRows)
+			}
+		}
+	}
+
 	return stats
 }
 
