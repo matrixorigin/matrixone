@@ -19,6 +19,7 @@ import (
 	"encoding"
 	"fmt"
 	"math/bits"
+	"sync/atomic"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -59,12 +60,14 @@ var rightmost_one_pos_8 = [256]uint8{
 
 func (n *Bitmap) InitWith(other *Bitmap) {
 	n.len = other.len
+	n.emptyFlag = new(atomic.Int32)
 	n.emptyFlag.Store(other.emptyFlag.Load())
 	n.data = append([]uint64(nil), other.data...)
 }
 
 func (n *Bitmap) InitWithSize(len int64) {
 	n.len = len
+	n.emptyFlag = new(atomic.Int32)
 	n.emptyFlag.Store(kEmptyFlagEmpty)
 	n.data = make([]uint64, (len+63)/64)
 }
