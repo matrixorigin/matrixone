@@ -35,6 +35,50 @@ import (
 	"golang.org/x/exp/rand"
 )
 
+func TestGetBindInRestartService(t *testing.T) {
+	runLockTableAllocatorTest(
+		t,
+		time.Hour,
+		func(a *lockTableAllocator) {
+			a.Get("s1", 0, 1, 0, pb.Sharding_None)
+			a.setRestartService("s1")
+			l := a.getLockTablesLocked(0)[1]
+			assert.False(t, a.getServiceBinds(l.ServiceID).isStatus(pb.Status_ServiceLockEnable))
+		})
+}
+
+func TestSetRestartService(t *testing.T) {
+	runLockTableAllocatorTest(
+		t,
+		time.Hour,
+		func(a *lockTableAllocator) {
+			a.setRestartService("s1")
+			assert.True(t, a.canRestartService("s1"))
+		})
+}
+
+func TestCanRestartService(t *testing.T) {
+	runLockTableAllocatorTest(
+		t,
+		time.Hour,
+		func(a *lockTableAllocator) {
+			a.Get("s1", 0, 1, 0, pb.Sharding_None)
+			a.setRestartService("s1")
+			assert.False(t, a.canRestartService("s1"))
+		})
+}
+
+func TestRemainTxnInService(t *testing.T) {
+	runLockTableAllocatorTest(
+		t,
+		time.Hour,
+		func(a *lockTableAllocator) {
+			a.Get("s1", 0, 1, 0, pb.Sharding_None)
+			a.setRestartService("s1")
+			assert.Equal(t, int32(-1), a.remainTxnInService("s1"))
+		})
+}
+
 func TestGetWithNoBind(t *testing.T) {
 	runLockTableAllocatorTest(
 		t,
@@ -142,7 +186,7 @@ func TestKeepaliveBind(t *testing.T) {
 					bind,
 					c,
 					func(lt pb.LockTable) {}))
-			k := NewLockTableKeeper("s1", c, interval/5, interval/5, m)
+			k := NewLockTableKeeper("s1", c, interval/5, interval/5, m, &service{})
 
 			binds := a.getServiceBinds("s1")
 			assert.NotNil(t, binds)
