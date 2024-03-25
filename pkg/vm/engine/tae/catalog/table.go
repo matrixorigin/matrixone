@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
+	"github.com/tidwall/btree"
 )
 
 type TableDataFactory = func(meta *TableEntry) data.Table
@@ -54,9 +55,20 @@ type TableEntry struct {
 	tableData data.Table
 	rows      atomic.Uint64
 	// used for the next flush table tail.
-	DeletedDirties []*BlockEntry
+	DeletedDirties []*ObjectEntry
 	// fullname is format as 'tenantID-tableName', the tenantID prefix is only used 'mo_catalog' database
 	fullName string
+
+	deleteList *btree.BTreeG[DeleteEntry]
+}
+
+type DeleteEntry struct {
+	ObjectID objectio.ObjectId
+	data.Tombstone
+}
+
+func (d DeleteEntry) Less(o DeleteEntry) bool {
+	return bytes.Compare(d.ObjectID[:], o.ObjectID[:]) < 0
 }
 
 func genTblFullName(tenantID uint32, name string) string {
@@ -78,15 +90,19 @@ func NewTableEntryWithTableId(db *DBEntry, schema *Schema, txnCtx txnif.AsyncTxn
 		schema.AcInfo.UserID, schema.AcInfo.RoleID = txnCtx.GetUserAndRoleID()
 	}
 	schema.AcInfo.CreateAt = types.CurrentTimestamp()
+	opts := btree.Options{
+		Degree: 4,
+	}
 	e := &TableEntry{
 		ID: tableId,
 		BaseEntryImpl: NewBaseEntry(
 			func() *TableMVCCNode { return &TableMVCCNode{} }),
-		db:        db,
-		TableNode: &TableNode{},
-		link:      common.NewGenericSortedDList((*ObjectEntry).Less),
-		entries:   make(map[types.Objectid]*common.GenericDLNode[*ObjectEntry]),
-		Stats:     common.NewTableCompactStat(),
+		db:         db,
+		TableNode:  &TableNode{},
+		link:       common.NewGenericSortedDList((*ObjectEntry).Less),
+		entries:    make(map[types.Objectid]*common.GenericDLNode[*ObjectEntry]),
+		deleteList: btree.NewBTreeGOptions(DeleteEntry.Less, opts),
+		Stats:      common.NewTableCompactStat(),
 	}
 	e.TableNode.schema.Store(schema)
 	if dataFactory != nil {
@@ -97,15 +113,19 @@ func NewTableEntryWithTableId(db *DBEntry, schema *Schema, txnCtx txnif.AsyncTxn
 }
 
 func NewSystemTableEntry(db *DBEntry, id uint64, schema *Schema) *TableEntry {
+	opts := btree.Options{
+		Degree: 4,
+	}
 	e := &TableEntry{
 		ID: id,
 		BaseEntryImpl: NewBaseEntry(
 			func() *TableMVCCNode { return &TableMVCCNode{} }),
-		db:        db,
-		TableNode: &TableNode{},
-		link:      common.NewGenericSortedDList((*ObjectEntry).Less),
-		entries:   make(map[types.Objectid]*common.GenericDLNode[*ObjectEntry]),
-		Stats:     common.NewTableCompactStat(),
+		db:         db,
+		TableNode:  &TableNode{},
+		link:       common.NewGenericSortedDList((*ObjectEntry).Less),
+		entries:    make(map[types.Objectid]*common.GenericDLNode[*ObjectEntry]),
+		deleteList: btree.NewBTreeGOptions(DeleteEntry.Less, opts),
+		Stats:      common.NewTableCompactStat(),
 	}
 	e.TableNode.schema.Store(schema)
 	e.CreateWithTS(types.SystemDBTS, &TableMVCCNode{Schema: schema})
@@ -125,12 +145,16 @@ func NewSystemTableEntry(db *DBEntry, id uint64, schema *Schema) *TableEntry {
 }
 
 func NewReplayTableEntry() *TableEntry {
+	opts := btree.Options{
+		Degree: 4,
+	}
 	e := &TableEntry{
 		BaseEntryImpl: NewReplayBaseEntry(
 			func() *TableMVCCNode { return &TableMVCCNode{} }),
-		link:    common.NewGenericSortedDList((*ObjectEntry).Less),
-		entries: make(map[types.Objectid]*common.GenericDLNode[*ObjectEntry]),
-		Stats:   common.NewTableCompactStat(),
+		link:       common.NewGenericSortedDList((*ObjectEntry).Less),
+		entries:    make(map[types.Objectid]*common.GenericDLNode[*ObjectEntry]),
+		deleteList: btree.NewBTreeGOptions(DeleteEntry.Less, opts),
+		Stats:      common.NewTableCompactStat(),
 	}
 	return e
 }
@@ -138,16 +162,43 @@ func NewReplayTableEntry() *TableEntry {
 func MockStaloneTableEntry(id uint64, schema *Schema) *TableEntry {
 	node := &TableNode{}
 	node.schema.Store(schema)
+	opts := btree.Options{
+		Degree: 4,
+	}
 	return &TableEntry{
 		ID: id,
 		BaseEntryImpl: NewBaseEntry(
 			func() *TableMVCCNode { return &TableMVCCNode{} }),
-		TableNode: node,
-		link:      common.NewGenericSortedDList((*ObjectEntry).Less),
-		entries:   make(map[types.Objectid]*common.GenericDLNode[*ObjectEntry]),
-		Stats:     common.NewTableCompactStat(),
+		TableNode:  node,
+		link:       common.NewGenericSortedDList((*ObjectEntry).Less),
+		entries:    make(map[types.Objectid]*common.GenericDLNode[*ObjectEntry]),
+		deleteList: btree.NewBTreeGOptions(DeleteEntry.Less, opts),
+		Stats:      common.NewTableCompactStat(),
 	}
 }
+func (entry *TableEntry) GetDeleteList() *btree.BTreeG[DeleteEntry] {
+	return entry.deleteList.Copy()
+}
+func (entry *TableEntry) TryGetTombstone(oid objectio.ObjectId) data.Tombstone {
+	pivot := DeleteEntry{ObjectID: oid}
+	tombstone, ok := entry.deleteList.Get(pivot)
+	if !ok {
+		return nil
+	}
+	return tombstone.Tombstone
+}
+
+func (entry *TableEntry) GetOrCreateTombstone(obj *ObjectEntry, factory TombstoneFactory) data.Tombstone {
+	pivot := DeleteEntry{ObjectID: obj.ID}
+	delete, ok := entry.deleteList.Get(pivot)
+	if ok {
+		return delete.Tombstone
+	}
+	pivot.Tombstone = factory(obj)
+	entry.deleteList.Set(pivot)
+	return pivot.Tombstone
+}
+
 func (entry *TableEntry) GetID() uint64 { return entry.ID }
 func (entry *TableEntry) IsVirtual() bool {
 	if !entry.db.IsSystemDB() {
@@ -207,6 +258,7 @@ func (entry *TableEntry) CreateObject(
 	txn txnif.AsyncTxn,
 	state EntryState,
 	opts *objectio.CreateObjOpt,
+	dataFactory BlockDataFactory,
 ) (created *ObjectEntry, err error) {
 	entry.Lock()
 	defer entry.Unlock()
@@ -216,7 +268,7 @@ func (entry *TableEntry) CreateObject(
 	} else {
 		id = objectio.NewObjectid()
 	}
-	created = NewObjectEntry(entry, id, txn, state)
+	created = NewObjectEntry(entry, id, txn, state, dataFactory)
 	entry.AddEntryLocked(created)
 	return
 }
@@ -316,6 +368,19 @@ func (entry *TableEntry) PPString(level common.PPLevel, depth int, prefix string
 		_ = w.WriteByte('\n')
 		_, _ = w.WriteString(objectEntry.PPString(level, depth+1, prefix))
 		it.Next()
+	}
+	if level > common.PPL2 {
+		_ = w.WriteByte('\n')
+		it2 := entry.deleteList.Copy().Iter()
+		for it2.Next() {
+			w.WriteString(common.RepeatStr("\t", depth+1))
+			w.WriteString(prefix)
+			objID := it2.Item().ObjectID
+			w.WriteString(fmt.Sprintf("Tombstone[%s]\n", objID.String()))
+			it2.Item().GetObject().(*ObjectEntry).RLock()
+			w.WriteString(it2.Item().StringLocked(level, depth+1, prefix))
+			it2.Item().GetObject().(*ObjectEntry).RUnlock()
+		}
 	}
 	return w.String()
 }
@@ -469,22 +534,17 @@ func (entry *TableEntry) RecurLoop(processor Processor) (err error) {
 			}
 			return err
 		}
-		blkIt := objectEntry.MakeBlockIt(true)
-		for blkIt.Valid() {
-			block := blkIt.Get().GetPayload()
-			if err := processor.OnBlock(block); err != nil {
-				if moerr.IsMoErrCode(err, moerr.OkStopCurrRecur) {
-					blkIt.Next()
-					continue
-				}
-				return err
-			}
-			blkIt.Next()
-		}
 		if err := processor.OnPostObject(objectEntry); err != nil {
 			return err
 		}
 		objIt.Next()
+	}
+	tombstones := entry.deleteList.Copy().Items()
+	for _, deletes := range tombstones {
+		err = processor.OnTombstone(deletes)
+		if err != nil {
+			return
+		}
 	}
 	return
 }
@@ -593,12 +653,7 @@ func (entry *TableEntry) FreezeAppend() {
 		// nothing to freeze
 		return
 	}
-	blk := obj.LastAppendableBlock()
-	if blk == nil {
-		// nothing to freeze
-		return
-	}
-	blk.GetBlockData().FreezeAppend()
+	obj.GetObjectData().FreezeAppend()
 }
 
 // IsActive is coarse API: no consistency check

@@ -244,8 +244,6 @@ type Workspace interface {
 	UpdateSnapshotWriteOffset()
 	GetSnapshotWriteOffset() int
 
-	TransferRowID()
-
 	// Adjust adjust workspace, adjust update's delete+insert to correct order and merge workspace.
 	Adjust(writeOffset uint64) error
 

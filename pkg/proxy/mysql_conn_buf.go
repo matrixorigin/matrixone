@@ -20,6 +20,7 @@ import (
 	"io"
 	"net"
 	"sync"
+	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
@@ -61,12 +62,18 @@ type MySQLConn struct {
 // newMySQLConn creates a new MySQLConn. reqC and respC are used for client
 // connection to handle events from client.
 func newMySQLConn(
-	name string, c net.Conn, sz int, reqC chan IEvent, respC chan []byte,
+	name string, c net.Conn, sz int, reqC chan IEvent, respC chan []byte, prevBuf *msgBuf,
 ) *MySQLConn {
-	return &MySQLConn{
+	mc := &MySQLConn{
 		Conn:   c,
-		msgBuf: newMsgBuf(name, c, sz, reqC, respC),
+		msgBuf: prevBuf,
 	}
+	if mc.msgBuf == nil {
+		mc.msgBuf = newMsgBuf(name, c, sz, reqC, respC)
+	} else {
+		mc.msgBuf.src = c
+	}
+	return mc
 }
 
 // msgBuf holds a buffer to save MySQL packets. It is mainly used to
@@ -98,10 +105,7 @@ type msgBuf struct {
 	respC chan []byte
 	// inTxn is the session txn state which is updated by the OK and EOF packet from server.
 	// It is used to check if we should start a connection transfer.
-	mu struct {
-		sync.Mutex
-		inTxn bool
-	}
+	inTxn atomic.Bool
 }
 
 // newMsgBuf creates a new message buffer.
@@ -197,6 +201,8 @@ func (b *msgBuf) consumeMsg(msg []byte) bool {
 			b.handleOKPacket(msg)
 		} else if isEOFPacket(msg) {
 			b.handleEOFPacket(msg)
+		} else {
+			b.setTxnStatus(0)
 		}
 	}
 	return false
@@ -208,16 +214,16 @@ func (b *msgBuf) handleOKPacket(msg []byte) {
 	pos := 5
 	_, pos, ok := mp.ReadIntLenEnc(msg, pos)
 	if !ok {
+		b.setTxnStatus(0)
 		return
 	}
 	_, pos, ok = mp.ReadIntLenEnc(msg, pos)
 	if !ok {
+		b.setTxnStatus(0)
 		return
 	}
-	// FIXME: the result set packet may pretend as OK packet if the first field is null.
-	// The example is the line 16 in file test/distributed/resources/load_data/char_varchar_1.csv.
-	// After fix, remove the following 3 lines.
 	if len(msg[pos:]) < 2 {
+		b.setTxnStatus(0)
 		return
 	}
 	status := binary.LittleEndian.Uint16(msg[pos:])
@@ -226,28 +232,31 @@ func (b *msgBuf) handleOKPacket(msg []byte) {
 
 // handleEOFPacket handles the EOF packet from server to update the txn state.
 func (b *msgBuf) handleEOFPacket(msg []byte) {
-	status := binary.LittleEndian.Uint16(msg[7:])
-	b.setTxnStatus(status)
+	if len(msg) < 9 {
+		b.setTxnStatus(0)
+		return
+	}
+	b.setTxnStatus(binary.LittleEndian.Uint16(msg[7:]))
 }
 
 // setTxnStatus sets the txn state according to the incoming status.
 func (b *msgBuf) setTxnStatus(status uint16) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	b.peer.mu.Lock()
-	defer b.peer.mu.Unlock()
-	b.mu.inTxn = status&frontend.SERVER_STATUS_IN_TRANS != 0
-
+	// assume it is in txn by priority.
+	v := true
+	if status&frontend.SERVER_QUERY_WAS_SLOW != 0 &&
+		status&frontend.SERVER_STATUS_NO_GOOD_INDEX_USED != 0 &&
+		status&frontend.SERVER_STATUS_IN_TRANS == 0 {
+		v = false
+	}
+	b.inTxn.Store(v)
 	if b.peer != nil {
-		b.peer.mu.inTxn = b.mu.inTxn
+		b.peer.inTxn.Store(v)
 	}
 }
 
 // isInTxn returns if the session is in a transaction.
 func (b *msgBuf) isInTxn() bool {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.mu.inTxn
+	return b.inTxn.Load()
 }
 
 // sendTo sends the data in buffer to destination.

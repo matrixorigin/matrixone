@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"go.uber.org/zap"
 )
@@ -61,11 +62,15 @@ func (s *sqlStore) SelectAll(
 	tableID uint64,
 	txnOp client.TxnOperator) (string, error) {
 	fetchSQL := fmt.Sprintf(`select col_name, table_id from %s`, incrTableName)
-	opts := executor.Options{}.WithDatabase(database).WithTxn(txnOp)
+	opts := executor.Options{}.
+		WithDatabase(database).
+		WithTxn(txnOp)
 	txnInfo := ""
 	if txnOp != nil {
 		opts = opts.WithDisableIncrStatement()
 		txnInfo = txnOp.Txn().DebugString()
+	} else {
+		opts = opts.WithEnableTrace()
 	}
 	res, err := s.exec.Exec(ctx, fetchSQL, opts)
 	if err != nil {
@@ -95,9 +100,14 @@ func (s *sqlStore) Create(
 	tableID uint64,
 	cols []AutoColumn,
 	txnOp client.TxnOperator) error {
-	opts := executor.Options{}.WithDatabase(database).WithTxn(txnOp).WithWaitCommittedLogApplied()
+	opts := executor.Options{}.
+		WithDatabase(database).
+		WithTxn(txnOp).
+		WithWaitCommittedLogApplied()
 	if txnOp != nil {
 		opts = opts.WithDisableIncrStatement()
+	} else {
+		opts = opts.WithEnableTrace()
 	}
 
 	return s.exec.ExecTxn(
@@ -134,7 +144,10 @@ func (s *sqlStore) Allocate(
 		WithWaitCommittedLogApplied() // make sure the update is visible to the subsequence txn, wait log tail applied
 	if txnOp != nil {
 		opts = opts.WithDisableIncrStatement()
+	} else {
+		opts = opts.WithEnableTrace()
 	}
+
 	ctxDone := func() bool {
 		select {
 		case <-ctx.Done():
@@ -147,6 +160,7 @@ func (s *sqlStore) Allocate(
 		err := s.exec.ExecTxn(
 			ctx,
 			func(te executor.TxnExecutor) error {
+				txnOp = te.Txn()
 				start := time.Now()
 				res, err := te.Exec(fetchSQL, executor.StatementOption{})
 				if err != nil {
@@ -170,6 +184,7 @@ func (s *sqlStore) Allocate(
 					if err != nil {
 						return err
 					}
+					trace.GetService().Sync()
 					getLogger().Fatal("BUG: read incr record invalid",
 						zap.String("fetch-sql", fetchSQL),
 						zap.Any("account", accountId),
@@ -206,6 +221,7 @@ func (s *sqlStore) Allocate(
 					if err != nil {
 						return err
 					}
+					trace.GetService().Sync()
 					getLogger().Fatal("BUG: update incr record returns invalid affected rows",
 						zap.String("update-sql", sql),
 						zap.Any("account", accountId),
@@ -244,12 +260,16 @@ func (s *sqlStore) UpdateMinValue(
 	col string,
 	minValue uint64,
 	txnOp client.TxnOperator) error {
-	opts := executor.Options{}.WithDatabase(database).WithTxn(txnOp)
+	opts := executor.Options{}.
+		WithDatabase(database).
+		WithTxn(txnOp)
+
 	// txnOp is nil means the auto increment metadata is already insert into catalog.MOAutoIncrTable and committed.
 	// So updateMinValue will use a new txn to update the min value. To avoid w-w conflict, we need to wait this
 	// committed log tail applied to ensure subsequence txn must get a snapshot ts which is large than this commit.
 	if txnOp == nil {
-		opts = opts.WithWaitCommittedLogApplied()
+		opts = opts.WithWaitCommittedLogApplied().
+			WithEnableTrace()
 	} else {
 		opts = opts.WithDisableIncrStatement()
 	}
@@ -274,6 +294,7 @@ func (s *sqlStore) Delete(
 	tableID uint64) error {
 	opts := executor.Options{}.
 		WithDatabase(database).
+		WithEnableTrace().
 		WithWaitCommittedLogApplied()
 	res, err := s.exec.Exec(
 		ctx,
@@ -294,9 +315,14 @@ func (s *sqlStore) GetColumns(
 	fetchSQL := fmt.Sprintf(`select col_name, col_index, offset, step from %s where table_id = %d order by col_index`,
 		incrTableName,
 		tableID)
-	opts := executor.Options{}.WithDatabase(database).WithTxn(txnOp)
+	opts := executor.Options{}.
+		WithDatabase(database).
+		WithTxn(txnOp)
+
 	if txnOp != nil {
 		opts = opts.WithDisableIncrStatement()
+	} else {
+		opts = opts.WithEnableTrace()
 	}
 
 	res, err := s.exec.Exec(ctx, fetchSQL, opts)
@@ -309,7 +335,7 @@ func (s *sqlStore) GetColumns(
 	var indexes []int32
 	var offsets []uint64
 	var steps []uint64
-	res.ReadRows(func(_ int, cols []*vector.Vector) bool {
+	res.ReadRows(func(rows int, cols []*vector.Vector) bool {
 		colNames = append(colNames, executor.GetStringRows(cols[0])...)
 		indexes = append(indexes, executor.GetFixedRows[int32](cols[1])...)
 		offsets = append(offsets, executor.GetFixedRows[uint64](cols[2])...)
