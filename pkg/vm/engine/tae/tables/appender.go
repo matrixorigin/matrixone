@@ -22,15 +22,16 @@ import (
 )
 
 type blockAppender struct {
-	blk         *ablock
+	blk         *aobject
 	placeholder uint32
 	rows        uint32
 }
 
-func newAppender(ablk *ablock) *blockAppender {
+func newAppender(ablk *aobject) *blockAppender {
 	appender := new(blockAppender)
 	appender.blk = ablk
-	appender.rows = uint32(ablk.Rows())
+	rows, _ := ablk.Rows()
+	appender.rows = uint32(rows)
 	return appender
 }
 
@@ -81,7 +82,7 @@ func (appender *blockAppender) PrepareAppend(
 	}
 	appender.blk.Lock()
 	defer appender.blk.Unlock()
-	node, created = appender.blk.mvcc.AddAppendNodeLocked(
+	node, created = appender.blk.appendMVCC.AddAppendNodeLocked(
 		txn,
 		appender.rows+appender.placeholder,
 		appender.placeholder+appender.rows+n)
@@ -95,7 +96,7 @@ func (appender *blockAppender) ReplayAppend(
 		return
 	}
 	// TODO: Remove ReplayAppend
-	appender.blk.meta.GetObject().GetTable().AddRows(uint64(bat.Length()))
+	appender.blk.meta.GetTable().AddRows(uint64(bat.Length()))
 	return
 }
 func (appender *blockAppender) ApplyAppend(

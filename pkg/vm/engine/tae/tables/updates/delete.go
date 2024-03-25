@@ -125,7 +125,7 @@ func (node *DeleteNode) IsNil() bool            { return node == nil }
 func (node *DeleteNode) GetPrepareTS() types.TS {
 	return node.TxnMVCCNode.GetPrepare()
 }
-func (node *DeleteNode) GetMeta() *catalog.BlockEntry { return node.chain.Load().mvcc.meta }
+func (node *DeleteNode) GetMeta() *catalog.ObjectEntry { return node.chain.Load().mvcc.meta }
 func (node *DeleteNode) GetID() *common.ID {
 	return node.id
 }
@@ -175,6 +175,10 @@ func (node *DeleteNode) IsDeletedLocked(row uint32) bool {
 	return node.mask.Contains(row)
 }
 
+func (node *DeleteNode) GetBlockID() *objectio.Blockid {
+	return objectio.NewBlockidWithObjectID(&node.GetMeta().ID, node.chain.Load().mvcc.blkID)
+}
+
 func (node *DeleteNode) RangeDeleteLocked(
 	start, end uint32, pk containers.Vector, mp *mpool.MPool,
 ) {
@@ -219,11 +223,6 @@ func (node *DeleteNode) GetCardinalityLocked() uint32 { return uint32(node.mask.
 func (node *DeleteNode) PrepareCommit() (err error) {
 	node.chain.Load().mvcc.Lock()
 	defer node.chain.Load().mvcc.Unlock()
-	if node.nt == NT_Persisted {
-		if found, _ := node.chain.Load().HasDeleteIntentsPreparedInLocked(node.Start, node.Txn.GetPrepareTS()); found {
-			return txnif.ErrTxnNeedRetry
-		}
-	}
 	_, err = node.TxnMVCCNode.PrepareCommit()
 	if err != nil {
 		return
@@ -279,7 +278,7 @@ func (node *DeleteNode) setPersistedRows() {
 		node.Txn.GetContext(),
 		[]uint16{0},
 		nil,
-		node.chain.Load().mvcc.meta.GetBlockData().GetFs().Service,
+		node.chain.Load().mvcc.meta.GetObjectData().GetFs().Service,
 		node.deltaloc,
 		false,
 		nil,
@@ -291,7 +290,7 @@ func (node *DeleteNode) setPersistedRows() {
 				node.Txn.GetContext(),
 				[]uint16{0},
 				nil,
-				node.chain.Load().mvcc.meta.GetBlockData().GetFs().Service,
+				node.chain.Load().mvcc.meta.GetObjectData().GetFs().Service,
 				node.deltaloc,
 				false,
 				nil,
@@ -499,7 +498,7 @@ func (node *DeleteNode) MakeCommand(id uint32) (cmd txnif.TxnCmd, err error) {
 	return
 }
 func (node *DeleteNode) GetPrefix() []byte {
-	return node.chain.Load().mvcc.meta.MakeKey()
+	return objectio.NewBlockidWithObjectID(&node.GetMeta().ID, node.chain.Load().mvcc.blkID)[:]
 }
 func (node *DeleteNode) Set1PC()     { node.TxnMVCCNode.Set1PC() }
 func (node *DeleteNode) Is1PC() bool { return node.TxnMVCCNode.Is1PC() }
