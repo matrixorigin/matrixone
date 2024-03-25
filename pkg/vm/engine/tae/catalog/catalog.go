@@ -548,13 +548,13 @@ func (catalog *Catalog) onReplayUpdateObject(
 			node.BaseNode.Update(un.BaseNode)
 		}
 	}
-	if obj.blkData == nil {
-		obj.blkData = dataFactory.MakeObjectFactory()(obj)
+	if obj.objData == nil {
+		obj.objData = dataFactory.MakeObjectFactory()(obj)
 	} else {
 		deleteAt := obj.GetDeleteAt()
 		if !obj.IsAppendable() || (obj.IsAppendable() && !deleteAt.IsEmpty()) {
-			obj.blkData.TryUpgrade()
-			obj.blkData.UpgradeAllDeleteChain()
+			obj.objData.TryUpgrade()
+			obj.objData.UpgradeAllDeleteChain()
 		}
 	}
 }
@@ -619,13 +619,13 @@ func (catalog *Catalog) onReplayCheckpointObject(
 	} else {
 		node.BaseNode.Update(un.BaseNode)
 	}
-	if obj.blkData == nil {
-		obj.blkData = dataFactory.MakeObjectFactory()(obj)
+	if obj.objData == nil {
+		obj.objData = dataFactory.MakeObjectFactory()(obj)
 	} else {
 		deleteAt := obj.GetDeleteAt()
 		if !obj.IsAppendable() || (obj.IsAppendable() && !deleteAt.IsEmpty()) {
-			obj.blkData.TryUpgrade()
-			obj.blkData.UpgradeAllDeleteChain()
+			obj.objData.TryUpgrade()
+			obj.objData.UpgradeAllDeleteChain()
 		}
 	}
 }
@@ -678,13 +678,13 @@ func (catalog *Catalog) replayObjectByBlock(
 	}
 	_, blkOffset := blkID.Offsets()
 	obj.tryUpdateBlockCnt(int(blkOffset) + 1)
-	if obj.blkData == nil {
-		obj.blkData = dataFactory.MakeObjectFactory()(obj)
+	if obj.objData == nil {
+		obj.objData = dataFactory.MakeObjectFactory()(obj)
 	} else {
 		deleteAt := obj.GetDeleteAt()
 		if !obj.IsAppendable() || (obj.IsAppendable() && !deleteAt.IsEmpty()) {
-			obj.blkData.TryUpgrade()
-			obj.blkData.UpgradeAllDeleteChain()
+			obj.objData.TryUpgrade()
+			obj.objData.UpgradeAllDeleteChain()
 		}
 	}
 }

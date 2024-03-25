@@ -31,7 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
 
-type ObjectDataFactory = func(meta *ObjectEntry) data.Block
+type ObjectDataFactory = func(meta *ObjectEntry) data.Object
 type TombstoneFactory = func(meta *ObjectEntry) data.Tombstone
 type ObjectEntry struct {
 	ID     types.Objectid
@@ -39,7 +39,7 @@ type ObjectEntry struct {
 	*BaseEntryImpl[*ObjectMVCCNode]
 	table *TableEntry
 	*ObjectNode
-	blkData data.Block
+	objData data.Object
 }
 
 func (entry *ObjectEntry) GetLoaded() bool {
@@ -125,7 +125,7 @@ func NewObjectEntry(
 	}
 	e.CreateWithTxn(txn, NewObjectInfoWithObjectID(id))
 	if dataFactory != nil {
-		e.blkData = dataFactory(e)
+		e.objData = dataFactory(e)
 	}
 	return e
 }
@@ -151,7 +151,7 @@ func NewObjectEntryByMetaLocation(
 	}
 	e.CreateWithStartAndEnd(start, end, NewObjectInfoWithMetaLocation(metalocation, id))
 	if dataFactory != nil {
-		e.blkData = dataFactory(e)
+		e.objData = dataFactory(e)
 	}
 	return e
 }
@@ -216,12 +216,12 @@ func (entry *ObjectEntry) InitData(factory DataFactory) {
 		return
 	}
 	dataFactory := factory.MakeObjectFactory()
-	entry.blkData = dataFactory(entry)
+	entry.objData = dataFactory(entry)
 }
 func (entry *ObjectEntry) HasPersistedData() bool {
 	return entry.ObjectPersisted()
 }
-func (entry *ObjectEntry) GetObjectData() data.Block { return entry.blkData }
+func (entry *ObjectEntry) GetObjectData() data.Object { return entry.objData }
 func (entry *ObjectEntry) GetObjectStats() (stats objectio.ObjectStats) {
 	entry.RLock()
 	defer entry.RUnlock()
@@ -308,7 +308,7 @@ func (entry *ObjectEntry) LoadObjectInfoWithTxnTS(startTS types.TS) (objectio.Ob
 	}
 	metaLoc := entry.GetLatestCommittedNode().BaseNode.ObjectStats.ObjectLocation()
 
-	objMeta, err := objectio.FastLoadObjectMeta(context.Background(), &metaLoc, false, entry.blkData.GetFs().Service)
+	objMeta, err := objectio.FastLoadObjectMeta(context.Background(), &metaLoc, false, entry.objData.GetFs().Service)
 	if err != nil {
 		return *objectio.NewObjectStats(), err
 	}

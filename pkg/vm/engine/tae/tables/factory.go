@@ -41,7 +41,7 @@ func (factory *DataFactory) MakeTableFactory() catalog.TableDataFactory {
 }
 
 func (factory *DataFactory) MakeObjectFactory() catalog.ObjectDataFactory {
-	return func(meta *catalog.ObjectEntry) data.Block {
+	return func(meta *catalog.ObjectEntry) data.Object {
 		if meta.IsAppendable() {
 			return newAObject(meta, factory.rt)
 		} else {
