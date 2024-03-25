@@ -703,55 +703,6 @@ func TestObject2(t *testing.T) {
 	t.Log(c.SimplePPString(common.PPL1))
 }
 
-func TestBlock1(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	ctx := context.Background()
-	testutils.EnsureNoLeak(t)
-	dir := testutils.InitTestEnv(ModuleName, t)
-	c, mgr, driver := initTestContext(ctx, t, dir)
-	defer driver.Close()
-	defer mgr.Stop()
-	defer c.Close()
-
-	txn1, _ := mgr.StartTxn(nil)
-	db, _ := txn1.CreateDatabase("db", "", "")
-	schema := catalog.MockSchema(1, 0)
-	rel, _ := db.CreateRelation(schema)
-	obj, _ := rel.CreateNonAppendableObject(false, nil)
-
-	blkCnt := 100
-	for i := 0; i < blkCnt; i++ {
-		_, err := obj.CreateNonAppendableBlock(new(objectio.CreateBlockOpt).WithBlkIdx(uint16(i)))
-		assert.Nil(t, err)
-	}
-
-	it := obj.MakeBlockIt()
-	cnt := 0
-	for it.Valid() {
-		cnt++
-		it.Next()
-	}
-	assert.Equal(t, blkCnt, cnt)
-
-	err := txn1.Commit(context.Background())
-	assert.Nil(t, err)
-	txn2, _ := mgr.StartTxn(nil)
-	db, _ = txn2.GetDatabase("db")
-	rel, _ = db.GetRelationByName(schema.Name)
-	objIt := rel.MakeObjectIt()
-	cnt = 0
-	for objIt.Valid() {
-		obj = objIt.GetObject()
-		it = obj.MakeBlockIt()
-		for it.Valid() {
-			cnt++
-			it.Next()
-		}
-		objIt.Next()
-	}
-	assert.Equal(t, blkCnt, cnt)
-}
-
 func TestDedup1(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	ctx := context.Background()

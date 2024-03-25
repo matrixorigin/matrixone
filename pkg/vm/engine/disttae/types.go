@@ -67,6 +67,18 @@ const (
 	DELETE_TXN // Only for CN workspace consumption, not sent to DN
 )
 
+var (
+	typesNames = map[int]string{
+		INSERT:        "insert",
+		DELETE:        "delete",
+		COMPACTION_CN: "compaction_cn",
+		UPDATE:        "update",
+		ALTER:         "alter",
+		INSERT_TXN:    "insert_txn",
+		DELETE_TXN:    "delete_txn",
+	}
+)
+
 const (
 	SMALL = iota
 	NORMAL
@@ -207,7 +219,8 @@ type Transaction struct {
 	//current statement id
 	statementID int
 	//offsets of the txn.writes for statements in a txn.
-	offsets    []int
+	offsets []int
+	//for RC isolation, the txn's snapshot TS for each statement.
 	timestamps []timestamp.Timestamp
 
 	hasS3Op              atomic.Bool
@@ -216,6 +229,8 @@ type Transaction struct {
 	incrStatementCalled  bool
 	syncCommittedTSCount uint64
 	pkCount              int
+
+	adjustCount int
 }
 
 type Pos struct {
@@ -343,6 +358,25 @@ func (txn *Transaction) WriteOffset() uint64 {
 
 // Adjust adjust writes order after the current statement finished.
 func (txn *Transaction) Adjust(writeOffset uint64) error {
+	start := time.Now()
+	seq := txn.op.NextSequence()
+	trace.GetService().AddTxnDurationAction(
+		txn.op,
+		client.WorkspaceAdjustEvent,
+		seq,
+		0,
+		0,
+		nil)
+	defer func() {
+		trace.GetService().AddTxnDurationAction(
+			txn.op,
+			client.WorkspaceAdjustEvent,
+			seq,
+			0,
+			time.Since(start),
+			nil)
+	}()
+
 	txn.Lock()
 	defer txn.Unlock()
 	if err := txn.adjustUpdateOrderLocked(writeOffset); err != nil {
@@ -353,7 +387,29 @@ func (txn *Transaction) Adjust(writeOffset uint64) error {
 	if err := txn.mergeTxnWorkspaceLocked(); err != nil {
 		return err
 	}
+
+	txn.traceWorkspaceLocked(false)
 	return nil
+}
+
+func (txn *Transaction) traceWorkspaceLocked(commit bool) {
+	index := txn.adjustCount
+	if commit {
+		index = -1
+	}
+	idx := 0
+	trace.GetService().TxnAdjustWorkspace(
+		txn.op,
+		index,
+		func() (tableID uint64, typ string, bat *batch.Batch, more bool) {
+			if idx == len(txn.writes) {
+				return 0, "", nil, false
+			}
+			e := txn.writes[idx]
+			idx++
+			return e.tableId, typesNames[e.typ], e.bat, true
+		})
+	txn.adjustCount++
 }
 
 // The current implementation, update's delete and insert are executed concurrently, inside workspace it
@@ -513,6 +569,10 @@ func (txn *Transaction) handleRCSnapshot(ctx context.Context, commit bool) error
 			return err
 		}
 		txn.resetSnapshot()
+	}
+	//Transfer row ids for deletes in RC isolation
+	if !commit {
+		return txn.transferDeletesLocked()
 	}
 	return nil
 }

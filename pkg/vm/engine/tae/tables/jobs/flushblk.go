@@ -33,7 +33,7 @@ type flushBlkTask struct {
 	*tasks.BaseTask
 	data      *containers.Batch
 	delta     *containers.Batch
-	meta      *catalog.BlockEntry
+	meta      *catalog.ObjectEntry
 	fs        *objectio.ObjectFS
 	name      objectio.ObjectName
 	blocks    []objectio.BlockObject
@@ -50,7 +50,7 @@ func NewFlushBlkTask(
 	schemaVer uint32,
 	seqnums []uint16,
 	fs *objectio.ObjectFS,
-	meta *catalog.BlockEntry,
+	meta *catalog.ObjectEntry,
 	data *containers.Batch,
 	delta *containers.Batch,
 	isABlk bool,
@@ -75,8 +75,7 @@ func (task *flushBlkTask) Execute(ctx context.Context) (err error) {
 		time.Sleep(time.Duration(rand.Intn(200)) * time.Millisecond)
 	}
 	seg := task.meta.ID.Segment()
-	num, _ := task.meta.ID.Offsets()
-	name := objectio.BuildObjectName(seg, num)
+	name := objectio.BuildObjectName(seg, 0)
 	task.name = name
 	writer, err := blockio.NewBlockWriterNew(task.fs.Service, name, task.schemaVer, task.seqnums)
 	if err != nil {
