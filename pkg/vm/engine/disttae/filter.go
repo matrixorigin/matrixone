@@ -18,6 +18,7 @@ import (
 	"context"
 	"sort"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -96,6 +97,9 @@ func init() {
 }
 
 func isSortedKey(colDef *plan.ColDef) (isPK, isSorted bool) {
+	if colDef.Name == catalog.FakePrimaryKeyColName {
+		return false, false
+	}
 	isPK, isCluster := colDef.Primary, colDef.ClusterBy
 	isSorted = isPK || isCluster
 	return
