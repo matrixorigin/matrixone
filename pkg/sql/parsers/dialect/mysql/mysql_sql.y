@@ -8765,7 +8765,11 @@ simple_expr:
     }
 |   sample_function_expr
     {
-	$$ = $1
+	    $$ = $1
+    }
+|   simple_expr COLLATE collate_name
+    {
+        $$ = $1
     }
 
 function_call_window:
