@@ -548,14 +548,14 @@ func TestAddBlksWithMetaLoc(t *testing.T) {
 		worker.SendOp(task1)
 		err = task1.WaitDone(context.Background())
 		assert.NoError(t, err)
-		newBlockFp1 = task1.GetCreatedBlocks().Fingerprint()
-		stats1 = task1.GetCreatedBlocks().GetMeta().(*catalog.ObjectEntry).GetLatestNodeLocked().BaseNode.ObjectStats
-		metaLoc1 = task1.GetCreatedBlocks().GetMeta().(*catalog.ObjectEntry).GetLocation()
+		newBlockFp1 = task1.GetCreatedObjects().Fingerprint()
+		stats1 = task1.GetCreatedObjects().GetMeta().(*catalog.ObjectEntry).GetLatestNodeLocked().BaseNode.ObjectStats
+		metaLoc1 = task1.GetCreatedObjects().GetMeta().(*catalog.ObjectEntry).GetLocation()
 		metaLoc1.SetID(0)
 		metaLoc1.SetRows(schema.BlockMaxRows)
-		newBlockFp2 = task1.GetCreatedBlocks().Fingerprint()
+		newBlockFp2 = task1.GetCreatedObjects().Fingerprint()
 		newBlockFp2.SetBlockOffset(1)
-		stats2 = task1.GetCreatedBlocks().GetMeta().(*catalog.ObjectEntry).GetLatestNodeLocked().BaseNode.ObjectStats
+		stats2 = task1.GetCreatedObjects().GetMeta().(*catalog.ObjectEntry).GetLatestNodeLocked().BaseNode.ObjectStats
 		assert.Nil(t, txn.Commit(context.Background()))
 	}
 	//read new non-appendable block data and check
@@ -714,7 +714,7 @@ func TestCompactMemAlter(t *testing.T) {
 		err = task.WaitDone(ctx)
 		assert.NoError(t, err)
 		assert.NoError(t, txn.Commit(context.Background()))
-		newBlockFp = task.GetCreatedBlocks().Fingerprint()
+		newBlockFp = task.GetCreatedObjects().Fingerprint()
 	}
 	{
 		txn, rel := testutil.GetDefaultRelation(t, db, schema.Name)
@@ -4473,7 +4473,7 @@ func TestCompactDeltaBlk(t *testing.T) {
 		assert.NoError(t, err)
 		assert.False(t, meta.GetLatestNodeLocked().BaseNode.IsEmpty())
 		assert.False(t, rel.GetMeta().(*catalog.TableEntry).TryGetTombstone(meta.ID).GetLatestDeltaloc(0).IsEmpty())
-		created := task.GetCreatedBlocks().GetMeta().(*catalog.ObjectEntry)
+		created := task.GetCreatedObjects().GetMeta().(*catalog.ObjectEntry)
 		assert.False(t, created.GetLatestNodeLocked().BaseNode.IsEmpty())
 		assert.Nil(t, rel.GetMeta().(*catalog.TableEntry).TryGetTombstone(created.ID))
 		err = txn.Commit(context.Background())
