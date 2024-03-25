@@ -98,7 +98,7 @@ func (b *TxnLogtailRespBuilder) CollectLogtail(txn txnif.AsyncTxn) (*[]logtail.T
 		b.visitDatabase,
 		b.visitTable,
 		b.rotateTable,
-		b.visitMetadata,
+		b.visitDeltaloc,
 		b.visitObject,
 		b.visitAppend,
 		b.visitDelete)
@@ -129,31 +129,21 @@ func (b *TxnLogtailRespBuilder) visitObject(iobj any) {
 	visitObject(b.batches[objectInfoBatch], obj, node, true, b.txn.GetPrepareTS())
 }
 
-func (b *TxnLogtailRespBuilder) visitMetadata(iblk any) {
-	blk := iblk.(*catalog.BlockEntry)
-	node := blk.GetLatestNodeLocked()
-	if node.BaseNode.MetaLoc.IsEmpty() {
-		return
-	}
+func (b *TxnLogtailRespBuilder) visitDeltaloc(ideltalocChain any) {
+	deltalocChain := ideltalocChain.(*updates.DeltalocChain)
+	node := deltalocChain.GetLatestNodeLocked()
 	if node.BaseNode.DeltaLoc.IsEmpty() {
 		return
 	}
 	if b.batches[blkMetaInsBatch] == nil {
 		b.batches[blkMetaInsBatch] = makeRespBatchFromSchema(BlkMetaSchema, common.LogtailAllocator)
 	}
-	if b.batches[blkMetaDelBatch] == nil {
-		b.batches[blkMetaDelBatch] = makeRespBatchFromSchema(DelSchema, common.LogtailAllocator)
-	}
 	commitTS := b.txn.GetPrepareTS()
 	createAt := node.CreatedAt
 	if createAt.Equal(&txnif.UncommitTS) {
 		createAt = b.txn.GetPrepareTS()
 	}
-	deleteAt := node.DeletedAt
-	if deleteAt.Equal(&txnif.UncommitTS) {
-		deleteAt = b.txn.GetPrepareTS()
-	}
-	visitBlkMeta(blk, node, b.batches[blkMetaInsBatch], b.batches[blkMetaDelBatch], node.DeletedAt.Equal(&txnif.UncommitTS), commitTS, createAt, deleteAt)
+	updates.VisitDeltaloc(b.batches[blkMetaInsBatch], nil, deltalocChain.GetMeta(), deltalocChain.GetBlockID(), node, commitTS, createAt)
 }
 
 func (b *TxnLogtailRespBuilder) visitAppend(ibat any) {
@@ -204,6 +194,7 @@ func (b *TxnLogtailRespBuilder) visitDelete(ctx context.Context, vnode txnif.Del
 	schema := meta.GetSchema()
 	pkDef := schema.GetPrimaryKey()
 	deletes := node.GetRowMaskRefLocked()
+	blkID := node.GetBlockID()
 
 	batch := b.batches[dataDelBatch]
 	rowIDVec := batch.GetVectorByName(catalog.AttrRowID)
@@ -220,7 +211,7 @@ func (b *TxnLogtailRespBuilder) visitDelete(ctx context.Context, vnode txnif.Del
 	rowid2PK := node.DeletedPK()
 	for it.HasNext() {
 		del := it.Next()
-		rowid := objectio.NewRowid(&meta.ID, del)
+		rowid := objectio.NewRowid(blkID, del)
 		rowIDVec.Append(*rowid, false)
 		commitTSVec.Append(b.txn.GetPrepareTS(), false)
 
@@ -234,7 +225,7 @@ func (b *TxnLogtailRespBuilder) visitDelete(ctx context.Context, vnode txnif.Del
 		//pkVec.Extend(v)
 	}
 
-	//_ = meta.GetBlockData().Foreach(
+	//_ = meta.GetObjectData().Foreach(
 	//	ctx,
 	//	schema,
 	//	pkDef.Idx,

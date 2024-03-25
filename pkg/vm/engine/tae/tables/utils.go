@@ -160,16 +160,16 @@ func LoadPersistedDeletes(
 
 func MakeImmuIndex(
 	ctx context.Context,
-	meta *catalog.BlockEntry,
+	meta *catalog.ObjectEntry,
 	bf objectio.BloomFilter,
 	rt *dbutils.Runtime,
 ) (idx indexwrapper.ImmutIndex, err error) {
-	pkZM, err := meta.GetPKZoneMap(ctx, rt.Fs.Service)
+	stats, err := meta.MustGetObjectStats()
 	if err != nil {
 		return
 	}
 	idx = indexwrapper.NewImmutIndex(
-		*pkZM, bf, meta.GetMetaLoc(),
+		stats.SortKeyZoneMap(), bf, stats.ObjectLocation(),
 	)
 	return
 }

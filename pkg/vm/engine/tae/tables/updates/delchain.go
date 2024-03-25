@@ -354,6 +354,8 @@ func (chain *DeleteChain) HasDeleteIntentsPreparedInLocked(from, to types.TS) (f
 	return
 }
 
+func (chain *DeleteChain) ResetPersistedMask() { chain.persistedMask = &nulls.Bitmap{} }
+
 func mergeDelete(mask *nulls.Bitmap, node *DeleteNode) {
 	if node == nil || node.mask == nil {
 		return
@@ -388,8 +390,8 @@ func (chain *DeleteChain) CollectDeletesLocked(
 					}
 				} else {
 					ts := txn.GetStartTS()
-					rt := chain.mvcc.meta.GetBlockData().GetRuntime()
-					tsMapping := rt.TransferDelsMap.GetDelsForBlk(chain.mvcc.meta.ID).Mapping
+					rt := chain.mvcc.meta.GetObjectData().GetRuntime()
+					tsMapping := rt.TransferDelsMap.GetDelsForBlk(*objectio.NewBlockidWithObjectID(&chain.mvcc.meta.ID, chain.mvcc.blkID)).Mapping
 					if tsMapping == nil {
 						logutil.Warnf("flushtabletail check special dels for %s, no tsMapping", chain.mvcc.meta.ID.String())
 						return true

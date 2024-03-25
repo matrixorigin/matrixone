@@ -26,24 +26,17 @@ import (
 func TestTree(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	tree := NewTree()
-	obj1 := objectio.NewObjectid()
 	obj2 := objectio.NewObjectid()
-	blk0 := objectio.NewBlockidWithObjectID(obj1, 0)
-	blk1 := objectio.NewBlockidWithObjectID(obj1, 1)
-	blk2 := objectio.NewBlockidWithObjectID(obj1, 2)
 	tree.AddObject(1, 2, obj2)
-	tree.AddBlock(4, 5, blk0)
-	tree.AddBlock(4, 5, blk1)
-	tree.AddBlock(4, 5, blk2)
 	t.Log(tree.String())
-	assert.Equal(t, 2, tree.TableCount())
+	assert.Equal(t, 1, tree.TableCount())
 
 	var w bytes.Buffer
 	_, err := tree.WriteTo(&w)
 	assert.NoError(t, err)
 
 	tree2 := NewTree()
-	_, err = tree2.ReadFromWithVersion(&w, MemoTreeVersion2)
+	_, err = tree2.ReadFromWithVersion(&w, MemoTreeVersion3)
 	assert.NoError(t, err)
 	t.Log(tree2.String())
 	assert.True(t, tree.Equal(tree2))

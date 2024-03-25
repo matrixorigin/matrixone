@@ -123,4 +123,11 @@ type Handler interface {
 		req *db.StorageUsageReq,
 		resp *db.StorageUsageResp,
 	) (func(), error)
+
+	HandleInterceptCommit(
+		ctx context.Context,
+		meta txn.TxnMeta,
+		req *db.InterceptCommit,
+		resp *apipb.SyncLogTailResp,
+	) (func(), error)
 }
