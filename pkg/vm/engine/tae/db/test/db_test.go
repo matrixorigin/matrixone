@@ -503,7 +503,7 @@ func TestCreateObject(t *testing.T) {
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))
 }
 
-func TestAddBlksWithMetaLoc(t *testing.T) {
+func TestAddObjsWithMetaLoc(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
@@ -588,7 +588,7 @@ func TestAddBlksWithMetaLoc(t *testing.T) {
 		vec1 := containers.MakeVector(types.T_varchar.ToType(), common.DefaultAllocator)
 		vec1.Append(stats1[:], false)
 		defer vec1.Close()
-		err := rel.AddBlksWithMetaLoc(context.Background(), vec1)
+		err := rel.AddObjsWithMetaLoc(context.Background(), vec1)
 		assert.Nil(t, err)
 		err = rel.Append(context.Background(), bats[0])
 		assert.Nil(t, err)
@@ -596,7 +596,7 @@ func TestAddBlksWithMetaLoc(t *testing.T) {
 		vec2 := containers.MakeVector(types.T_varchar.ToType(), common.DefaultAllocator)
 		vec2.Append(stats2[:], false)
 		defer vec1.Close()
-		err = rel.AddBlksWithMetaLoc(context.Background(), vec2)
+		err = rel.AddObjsWithMetaLoc(context.Background(), vec2)
 		assert.Nil(t, err)
 		err = rel.Append(context.Background(), bats[1])
 		assert.Nil(t, err)
@@ -621,7 +621,7 @@ func TestAddBlksWithMetaLoc(t *testing.T) {
 		vec3.Append(stats1[:], false)
 		vec3.Append(stats2[:], false)
 		defer vec1.Close()
-		err = rel.AddBlksWithMetaLoc(context.Background(), vec3)
+		err = rel.AddObjsWithMetaLoc(context.Background(), vec3)
 		assert.NotNil(t, err)
 
 		//check blk count.
@@ -5154,7 +5154,7 @@ func TestMergeMemsize(t *testing.T) {
 		assert.NoError(t, err)
 		tbl, err := db.CreateRelation(schema)
 		assert.NoError(t, err)
-		assert.NoError(t, tbl.AddBlksWithMetaLoc(context.Background(), statsVec))
+		assert.NoError(t, tbl.AddObjsWithMetaLoc(context.Background(), statsVec))
 		assert.NoError(t, txn.Commit(context.Background()))
 	}
 	statsVec.Close()
@@ -5224,7 +5224,7 @@ func TestCollectDeletesAfterCKP(t *testing.T) {
 		assert.NoError(t, err)
 		tbl, err := db.CreateRelation(schema)
 		assert.NoError(t, err)
-		assert.NoError(t, tbl.AddBlksWithMetaLoc(context.Background(), statsVec))
+		assert.NoError(t, tbl.AddObjsWithMetaLoc(context.Background(), statsVec))
 		assert.NoError(t, txn.Commit(context.Background()))
 	}
 
@@ -5330,7 +5330,7 @@ func TestAlwaysUpdate(t *testing.T) {
 	tbl, err := db.CreateRelation(schema)
 	// tid = tbl.ID()
 	assert.NoError(t, err)
-	assert.NoError(t, tbl.AddBlksWithMetaLoc(context.Background(), statsVec))
+	assert.NoError(t, tbl.AddObjsWithMetaLoc(context.Background(), statsVec))
 	assert.NoError(t, txn.Commit(context.Background()))
 
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))
@@ -7393,12 +7393,12 @@ func TestCommitS3Blocks(t *testing.T) {
 
 	for _, vec := range statsVecs {
 		txn, rel := tae.GetRelation()
-		rel.AddBlksWithMetaLoc(context.Background(), vec)
+		rel.AddObjsWithMetaLoc(context.Background(), vec)
 		assert.NoError(t, txn.Commit(context.Background()))
 	}
 	for _, vec := range statsVecs {
 		txn, rel := tae.GetRelation()
-		err := rel.AddBlksWithMetaLoc(context.Background(), vec)
+		err := rel.AddObjsWithMetaLoc(context.Background(), vec)
 		assert.Error(t, err)
 		assert.NoError(t, txn.Commit(context.Background()))
 	}
@@ -7464,7 +7464,7 @@ func TestDedupSnapshot2(t *testing.T) {
 	statsVec.Append(writer.GetObjectStats()[objectio.SchemaData][:], false)
 
 	txn, rel := tae.GetRelation()
-	err = rel.AddBlksWithMetaLoc(context.Background(), statsVec)
+	err = rel.AddObjsWithMetaLoc(context.Background(), statsVec)
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit(context.Background()))
 
@@ -7472,7 +7472,7 @@ func TestDedupSnapshot2(t *testing.T) {
 	startTS := txn.GetStartTS()
 	txn.SetSnapshotTS(startTS.Next())
 	txn.SetDedupType(txnif.IncrementalDedup)
-	err = rel.AddBlksWithMetaLoc(context.Background(), statsVec)
+	err = rel.AddObjsWithMetaLoc(context.Background(), statsVec)
 	assert.NoError(t, err)
 	_ = txn.Commit(context.Background())
 }
@@ -7572,7 +7572,7 @@ func TestDeduplication(t *testing.T) {
 	statsVec.Append(writer.GetObjectStats()[objectio.SchemaData][:], false)
 
 	txn, rel := tae.GetRelation()
-	err = rel.AddBlksWithMetaLoc(context.Background(), statsVec)
+	err = rel.AddObjsWithMetaLoc(context.Background(), statsVec)
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit(context.Background()))
 
