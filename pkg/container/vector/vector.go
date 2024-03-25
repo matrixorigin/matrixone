@@ -431,7 +431,6 @@ func (v *Vector) Free(mp *mpool.MPool) {
 
 	v.nsp.Reset()
 	v.sorted = false
-	v.Debug="has been freed"
 
 	reuse.Free[Vector](v, nil)
 }
