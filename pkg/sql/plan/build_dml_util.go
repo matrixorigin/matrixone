@@ -1303,6 +1303,11 @@ func makeInsertPlan(
 				scanNode.RuntimeFilterProbeList = nil // can not use both
 			} else {
 				tableScanId = builder.appendNode(scanNode, bindCtx)
+
+				// temporary solution for the plan of dml go without optimizer
+				// prevent table scan from running on multiple CNs.
+				// because the runtime filter can only run on one now.
+				scanNode.Stats = DefaultMinimalStats()
 			}
 
 			// Perform partition pruning on the full table scan of the partitioned table in the insert statement
