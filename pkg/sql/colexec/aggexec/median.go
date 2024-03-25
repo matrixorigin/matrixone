@@ -41,6 +41,7 @@ type numeric interface {
 type medianColumnExecSelf[T numeric | types.Decimal64 | types.Decimal128, R float64 | types.Decimal128] struct {
 	singleAggInfo
 	singleAggExecExtraInformation
+	distinctHash
 	arg sFixedArg[T]
 	ret aggFuncResult[R]
 
@@ -48,6 +49,12 @@ type medianColumnExecSelf[T numeric | types.Decimal64 | types.Decimal128, R floa
 }
 
 func (exec *medianColumnExecSelf[T, R]) GroupGrow(more int) error {
+	if exec.IsDistinct() {
+		if err := exec.distinctHash.grows(more); err != nil {
+			return err
+		}
+	}
+
 	for i := 0; i < more; i++ {
 		v := exec.ret.mg.GetVector(exec.singleAggInfo.argType)
 		exec.groups = append(exec.groups, v)
@@ -62,6 +69,12 @@ func (exec *medianColumnExecSelf[T, R]) Fill(groupIndex int, row int, vectors []
 	if vectors[0].IsConst() {
 		row = 0
 	}
+	if exec.IsDistinct() {
+		if need, err := exec.distinctHash.fill(groupIndex, vectors, row); err != nil || !need {
+			return err
+		}
+	}
+
 	exec.ret.setGroupNotEmpty(groupIndex)
 	value := vector.MustFixedCol[T](vectors[0])[row]
 
@@ -71,6 +84,10 @@ func (exec *medianColumnExecSelf[T, R]) Fill(groupIndex int, row int, vectors []
 func (exec *medianColumnExecSelf[T, R]) BulkFill(groupIndex int, vectors []*vector.Vector) error {
 	if vectors[0].IsConstNull() {
 		return nil
+	}
+
+	if exec.IsDistinct() {
+		return exec.distinctBulkFill(groupIndex, vectors)
 	}
 
 	if vectors[0].IsConst() {
@@ -97,9 +114,50 @@ func (exec *medianColumnExecSelf[T, R]) BulkFill(groupIndex int, vectors []*vect
 	return nil
 }
 
+func (exec *medianColumnExecSelf[T, R]) distinctBulkFill(groupIndex int, vectors []*vector.Vector) error {
+	if vectors[0].IsConst() {
+		if need, err := exec.distinctHash.fill(groupIndex, vectors, 0); err != nil || !need {
+			return err
+		}
+
+		exec.ret.setGroupNotEmpty(groupIndex)
+		value := vector.MustFixedCol[T](vectors[0])[0]
+		return vector.AppendMultiFixed[T](exec.groups[groupIndex], value, false, vectors[0].Length(), exec.ret.mp)
+	}
+
+	needs, err := exec.distinctHash.bulkFill(groupIndex, vectors)
+	if err != nil {
+		return err
+	}
+	exec.arg.prepare(vectors[0])
+	mustNotEmpty := false
+	for i, j := uint64(0), uint64(vectors[0].Length()); i < j; i++ {
+		if !needs[i] {
+			continue
+		}
+
+		v, null := exec.arg.w.GetValue(i)
+		if null {
+			continue
+		}
+		mustNotEmpty = true
+		if err = vector.AppendFixed[T](exec.groups[groupIndex], v, false, exec.ret.mp); err != nil {
+			return err
+		}
+	}
+	if mustNotEmpty {
+		exec.ret.setGroupNotEmpty(groupIndex)
+	}
+	return nil
+}
+
 func (exec *medianColumnExecSelf[T, R]) BatchFill(offset int, groups []uint64, vectors []*vector.Vector) error {
 	if vectors[0].IsConstNull() {
 		return nil
+	}
+
+	if exec.IsDistinct() {
+		return exec.distinctBatchFill(offset, groups, vectors)
 	}
 
 	if vectors[0].IsConst() {
@@ -135,7 +193,49 @@ func (exec *medianColumnExecSelf[T, R]) BatchFill(offset int, groups []uint64, v
 	return nil
 }
 
+func (exec *medianColumnExecSelf[T, R]) distinctBatchFill(offset int, groups []uint64, vectors []*vector.Vector) error {
+	needs, err := exec.distinctHash.batchFill(vectors, offset, groups)
+	if err != nil {
+		return err
+	}
+
+	if vectors[0].IsConst() {
+		value := vector.MustFixedCol[T](vectors[0])[0]
+		for i := 0; i < len(groups); i++ {
+			if needs[i] && groups[i] != GroupNotMatched {
+				groupIndex := groups[i] - 1
+				exec.ret.setGroupNotEmpty(int(groupIndex))
+				if err = vector.AppendFixed[T](
+					exec.groups[groupIndex],
+					value, false, exec.ret.mp); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}
+
+	exec.arg.prepare(vectors[0])
+	for i, j, idx := uint64(offset), uint64(offset+len(groups)), 0; i < j; i++ {
+		if needs[idx] && groups[idx] != GroupNotMatched {
+			v, null := exec.arg.w.GetValue(i)
+			if !null {
+				groupIndex := groups[idx] - 1
+				exec.ret.setGroupNotEmpty(int(groupIndex))
+				if err := vector.AppendFixed[T](exec.groups[groupIndex], v, false, exec.ret.mp); err != nil {
+					return err
+				}
+			}
+		}
+		idx++
+	}
+	return nil
+}
+
 func (exec *medianColumnExecSelf[T, R]) Merge(other *medianColumnExecSelf[T, R], groupIdx1, groupIdx2 int) error {
+	if exec.IsDistinct() {
+		return exec.distinctHash.merge(&other.distinctHash)
+	}
 	if other.groups[groupIdx2].Length() == 0 {
 		return nil
 	}
@@ -169,6 +269,7 @@ func (exec *medianColumnExecSelf[T, R]) Free() {
 		}
 	}
 	exec.ret.free()
+	exec.distinctHash.free()
 }
 
 type medianColumnNumericExec[T numeric] struct {

@@ -69,19 +69,27 @@ func (exec *countColumnExec) BulkFill(groupIndex int, vectors []*vector.Vector) 
 
 	old := exec.ret.aggGet()
 	if exec.IsDistinct() {
-		needs, err := exec.distinctHash.bulkFill(groupIndex, vectors)
-		if err != nil {
-			return err
-		}
-		nsp := vectors[0].GetNulls()
-		for i, j := uint64(0), uint64(len(needs)); i < j; i++ {
-			if needs[i] && !nsp.Contains(i) {
-				old++
+		if vectors[0].IsConst() {
+			if need, err := exec.distinctHash.fill(groupIndex, vectors, 0); err != nil || !need {
+				return err
+			}
+			old++
+
+		} else {
+			needs, err := exec.distinctHash.bulkFill(groupIndex, vectors)
+			if err != nil {
+				return err
+			}
+			nsp := vectors[0].GetNulls()
+			for i, j := uint64(0), uint64(len(needs)); i < j; i++ {
+				if needs[i] && !nsp.Contains(i) {
+					old++
+				}
 			}
 		}
 
 	} else {
-		old += int64(vectors[0].Length()-vectors[0].GetNulls().Count())
+		old += int64(vectors[0].Length() - vectors[0].GetNulls().Count())
 	}
 	exec.ret.aggSet(old)
 	return nil

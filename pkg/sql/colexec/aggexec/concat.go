@@ -81,14 +81,14 @@ func (exec *groupConcatExec) Fill(groupIndex int, row int, vectors []*vector.Vec
 		}
 	}
 
-	exec.ret.groupToSet = groupIndex
-	exec.ret.setGroupNotEmpty(groupIndex)
 	if exec.IsDistinct() {
 		if need, err := exec.distinctHash.fill(groupIndex, vectors, row); err != nil || !need {
 			return err
 		}
 	}
 
+	exec.ret.groupToSet = groupIndex
+	exec.ret.setGroupNotEmpty(groupIndex)
 	r := exec.ret.aggGet()
 	if len(r) > groupConcatMaxLen {
 		return nil
@@ -111,24 +111,6 @@ func (exec *groupConcatExec) Fill(groupIndex int, row int, vectors []*vector.Vec
 
 func (exec *groupConcatExec) BulkFill(groupIndex int, vectors []*vector.Vector) error {
 	exec.ret.groupToSet = groupIndex
-
-	if exec.IsDistinct() {
-		needs, err := exec.distinctHash.bulkFill(groupIndex, vectors)
-		if err != nil {
-			return err
-		}
-		for row, end := 0, vectors[0].Length(); row < end; row++ {
-			if !needs[row] {
-				continue
-			}
-
-			if err = exec.Fill(groupIndex, row, vectors); err != nil {
-				return err
-			}
-		}
-		return nil
-	}
-
 	for row, end := 0, vectors[0].Length(); row < end; row++ {
 		if err := exec.Fill(groupIndex, row, vectors); err != nil {
 			return err
@@ -138,23 +120,6 @@ func (exec *groupConcatExec) BulkFill(groupIndex int, vectors []*vector.Vector) 
 }
 
 func (exec *groupConcatExec) BatchFill(offset int, groups []uint64, vectors []*vector.Vector) error {
-	if exec.IsDistinct() {
-		needs, err := exec.distinctHash.batchFill(vectors, offset, groups)
-		if err != nil {
-			return err
-		}
-
-		for i, j, idx := offset, offset+len(groups), 0; i < j; i++ {
-			if needs[idx] && groups[idx] != GroupNotMatched {
-				if err = exec.Fill(int(groups[idx]-1), i, vectors); err != nil {
-					return err
-				}
-			}
-			idx++
-		}
-		return nil
-	}
-
 	for i, j, idx := offset, offset+len(groups), 0; i < j; i++ {
 		if groups[idx] != GroupNotMatched {
 			if err := exec.Fill(int(groups[idx]-1), i, vectors); err != nil {

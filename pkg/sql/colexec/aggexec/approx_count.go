@@ -49,7 +49,7 @@ func newApproxCountFixedExec[T types.FixedSizeTExceptStrType](mg AggMemoryManage
 func makeApproxCount(mg AggMemoryManager, id int64, arg types.Type) AggFuncExec {
 	info := singleAggInfo{
 		aggID:     id,
-		distinct:  true,
+		distinct:  false,
 		argType:   arg,
 		retType:   types.T_uint64.ToType(),
 		emptyNull: false,
