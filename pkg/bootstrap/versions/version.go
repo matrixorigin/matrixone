@@ -214,25 +214,86 @@ func parseVersion(version string) (int, int, int) {
 }
 
 func IsFrameworkTablesCreated(txn executor.TxnExecutor) (bool, error) {
-	res, err := txn.Exec("show tables", executor.StatementOption{})
+	//res, err := txn.Exec("show tables", executor.StatementOption{})
+	//if err != nil {
+	//	return false, err
+	//}
+	//defer res.Close()
+	//
+	//var tables []string
+	//res.ReadRows(func(rows int, cols []*vector.Vector) bool {
+	//	for i := 0; i < rows; i++ {
+	//		tables = append(tables, cols[0].GetStringAt(i))
+	//	}
+	//	return true
+	//})
+	//for _, t := range tables {
+	//	if strings.EqualFold(t, catalog.MOVersionTable) {
+	//		return true, nil
+	//	}
+	//}
+	//return false, nil
+	//------------------------------------------------------------------------------------------------------------
+
+	// Check if the `mo_version` table exists
+	tableExist, err := CheckTableDefinition(txn, catalog.System_Account, catalog.MO_CATALOG, catalog.MOVersionTable)
 	if err != nil {
 		return false, err
 	}
-	defer res.Close()
 
-	var tables []string
-	res.ReadRows(func(rows int, cols []*vector.Vector) bool {
-		for i := 0; i < rows; i++ {
-			tables = append(tables, cols[0].GetStringAt(i))
+	// If the `mo_version` table exists
+	if tableExist {
+		// Check if the `version_offset` column exists
+		colInfo, err := CheckTableColumn(txn, catalog.System_Account, catalog.MO_CATALOG, catalog.MOVersionTable, "version_offset")
+		if err != nil {
+			return false, err
 		}
-		return true
-	})
-	for _, t := range tables {
-		if strings.EqualFold(t, catalog.MOVersionTable) {
+
+		// If the `version_offset column` exists, it indicates that the framework table has been created
+		if colInfo.IsExits {
 			return true, nil
 		}
+
+		// If the `version_offset` column does not exist, it means the framework table needs to be recreated
+		// and the existing framework table needs to be deleted first
+		res, err := txn.Exec("DROP TABLE IF EXISTS mo_catalog.mo_version", executor.StatementOption{})
+		if err != nil {
+			return false, err
+		}
+		res.Close()
+
+		res, err = txn.Exec("DROP TABLE IF EXISTS mo_catalog.mo_upgrade", executor.StatementOption{})
+		if err != nil {
+			return false, err
+		}
+		res.Close()
+
+		res, err = txn.Exec("DROP TABLE IF EXISTS mo_catalog.mo_upgrade_tenant", executor.StatementOption{})
+		if err != nil {
+			return false, err
+		}
+		res.Close()
+
+		// Check if it is necessary to delete the `create_version` column of the `mo_account` table
+		column, err := CheckTableColumn(txn, catalog.System_Account, catalog.MO_CATALOG, catalog.MOAccountTable, "create_version")
+		if err != nil {
+			return false, err
+		}
+
+		// If the `create_version` column exists, delete it
+		if column.IsExits {
+			res, err = txn.Exec("ALTER TABLE `mo_catalog`.`mo_account` DROP COLUMN `create_version`", executor.StatementOption{})
+			if err != nil {
+				return false, err
+			}
+			res.Close()
+		}
+		// Return the status of the framework table that has not been created
+		return false, nil
 	}
+	// Return the status of the framework table that has not been created
 	return false, nil
+
 }
 
 // FetchAllTenants get all tenantIDs in mo system, including system tenants

@@ -106,7 +106,11 @@ func (s *service) doCheckUpgrade(ctx context.Context) error {
 
 				// create new upgrade framework tables for the first time,
 				// which means using v1.2.0 for the first time
-				s.getFinalVersionHandle().HandleCreateFrameworkDeps(txn)
+				err = s.getFinalVersionHandle().HandleCreateFrameworkDeps(txn)
+				if err != nil {
+					getLogger().Error("execute pre dependencies error when creating a new upgrade framework", zap.Error(err))
+					return err
+				}
 
 				// Many cn maybe create framework tables parallel, only one can create success.
 				// Just return error, and upgrade framework will retry.
