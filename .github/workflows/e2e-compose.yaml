@@ -39,7 +39,7 @@ jobs:
 
           mkdir -p ${{ github.workspace }}/docker-compose-log
           docker-compose -f etc/launch-tae-compose/compose.yaml --profile launch-multi-cn up -d --build
-          
+          sleep 10
           # wait for ready
           i=1
           while [ $(mysql -h 127.0.0.1 -P 6001 -u dump -p111 --execute 'create database if not exists compose_test;use compose_test; create table if not exists compose_test_table(col1 int auto_increment primary key);show tables;' 2>&1 | tee /dev/stderr | grep 'compose_test_table' | wc -l) -lt 1 ]; do
@@ -50,7 +50,7 @@ jobs:
                exit 1;
              fi
              i=$(($i+1))
-             sleep 1
+             sleep 2
           done
           docker ps
 
@@ -137,7 +137,7 @@ jobs:
           cat ./etc/launch-tae-compose/config/tn.toml
           mkdir -p ${{ github.workspace }}/docker-compose-log
           docker-compose -f etc/launch-tae-compose/compose.yaml --profile launch-multi-cn up -d --build
-          
+          sleep 10
           # wait for ready
           i=1
           while [ $(mysql -h 127.0.0.1 -P 6001 -u dump -p111 --execute 'create database if not exists compose_test;use compose_test; create table if not exists compose_test_table(col1 int auto_increment primary key);show tables;' 2>&1 | tee /dev/stderr | grep 'compose_test_table' | wc -l) -lt 1 ]; do
@@ -148,7 +148,7 @@ jobs:
                exit 1;
              fi
              i=$(($i+1))
-             sleep 1
+             sleep 2
           done
           docker ps
       - name: Clone test-tool repository

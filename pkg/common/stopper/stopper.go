@@ -176,6 +176,20 @@ func (s *Stopper) RunNamedTask(name string, task func(context.Context)) error {
 	return nil
 }
 
+func (s *Stopper) RunNamedRetryTask(name string, accountId int32, retryLimit uint32, task func(context.Context, int32) error) error {
+	// we use read lock here for avoid race
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if s.mu.state != running {
+		return ErrUnavailable
+	}
+
+	id, ctx := s.allocate()
+	s.doRunCancelableRetryTask(ctx, id, name, accountId, retryLimit, task)
+	return nil
+}
+
 // Stop stops all task, and wait to all tasks canceled. If some tasks do not exit within the specified time,
 // the names of these tasks will be print to the given logger.
 func (s *Stopper) Stop() {
@@ -261,6 +275,39 @@ func (s *Stopper) doRunCancelableTask(ctx context.Context, taskID uint64, name s
 		}()
 
 		task(ctx)
+	}()
+}
+
+// doRunCancelableRetryTask Canceleable and able to retry execute asynchronous tasks
+func (s *Stopper) doRunCancelableRetryTask(ctx context.Context,
+	taskID uint64,
+	name string,
+	accountId int32,
+	retryLimit uint32,
+	task func(context.Context, int32) error) {
+	s.setupTask(taskID, name)
+	go func() {
+		defer func() {
+			s.shutdownTask(taskID)
+		}()
+
+		wait := time.Second
+		maxWait := time.Second * 10
+		for i := 0; i < int(retryLimit); i++ {
+			if err := task(ctx, accountId); err == nil {
+				return
+			}
+			time.Sleep(wait)
+			wait *= 2
+			if wait > maxWait {
+				wait = maxWait
+			}
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
+		}
 	}()
 }
 

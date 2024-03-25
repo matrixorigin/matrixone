@@ -709,6 +709,17 @@ func (node *ShowAccounts) Format(ctx *FmtCtx) {
 func (node *ShowAccounts) GetStatementType() string { return "Show Accounts" }
 func (node *ShowAccounts) GetQueryType() string     { return QueryTypeOth }
 
+type ShowAccountUpgrade struct {
+	statementImpl
+}
+
+func (node *ShowAccountUpgrade) Format(ctx *FmtCtx) {
+	ctx.WriteString("show upgrade")
+}
+
+func (node *ShowAccountUpgrade) GetStatementType() string { return "show upgrade" }
+func (node *ShowAccountUpgrade) GetQueryType() string     { return QueryTypeOth }
+
 type ShowPublications struct {
 	showImpl
 	Like *ComparisonExpr

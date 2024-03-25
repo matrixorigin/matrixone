@@ -256,7 +256,7 @@ func (s *service) ClearTableFilters() error {
 			txn.Use(DebugDB)
 			res, err := txn.Exec(
 				fmt.Sprintf("truncate table %s",
-					traceTableFilterTable),
+					TraceTableFilterTable),
 				executor.StatementOption{})
 			if err != nil {
 				return err
@@ -287,7 +287,7 @@ func (s *service) RefreshTableFilters() error {
 			txn.Use(DebugDB)
 			res, err := txn.Exec(
 				fmt.Sprintf("select table_id, columns from %s",
-					traceTableFilterTable),
+					TraceTableFilterTable),
 				executor.StatementOption{})
 			if err != nil {
 				return err
@@ -321,7 +321,7 @@ func (s *service) handleDataEvents(ctx context.Context) {
 		ctx,
 		s.dataCSVFile,
 		9,
-		eventDataTable,
+		EventDataTable,
 		s.entryC,
 		s.entryBufC)
 }
@@ -335,7 +335,7 @@ func addTableFilterSQL(
 	name string,
 	columns []string) string {
 	return fmt.Sprintf("insert into %s (table_id, table_name, columns) values (%d, '%s', '%s')",
-		traceTableFilterTable,
+		TraceTableFilterTable,
 		id,
 		name,
 		strings.Join(columns, ","))

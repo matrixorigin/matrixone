@@ -17,6 +17,7 @@ package compile
 import (
 	"fmt"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -76,17 +77,34 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 	// 3. create temporary replica table which doesn't have foreign key constraints
 	err = c.runSql(qry.CreateTmpTableSql)
 	if err != nil {
+		getLogger().Info("Create copy table for alter table",
+			zap.String("databaseName", c.db),
+			zap.String("origin tableName", qry.GetTableDef().Name),
+			zap.String("copy tableName", qry.CopyTableDef.Name),
+			zap.String("CreateTmpTableSql", qry.CreateTmpTableSql),
+			zap.Error(err))
 		return err
 	}
 
 	// 4. copy the original table data to the temporary replica table
 	err = c.runSql(qry.InsertTmpDataSql)
 	if err != nil {
+		getLogger().Info("insert data to copy table for alter table",
+			zap.String("databaseName", c.db),
+			zap.String("origin tableName", qry.GetTableDef().Name),
+			zap.String("copy tableName", qry.CopyTableDef.Name),
+			zap.String("InsertTmpDataSql", qry.InsertTmpDataSql),
+			zap.Error(err))
 		return err
 	}
 
 	// 5. drop original table
 	if err = dbSource.Delete(c.ctx, tblName); err != nil {
+		getLogger().Info("drop original table for alter table",
+			zap.String("databaseName", c.db),
+			zap.String("origin tableName", qry.GetTableDef().Name),
+			zap.String("copy tableName", qry.CopyTableDef.Name),
+			zap.Error(err))
 		return err
 	}
 
@@ -96,6 +114,12 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 			deleteSql := fmt.Sprintf(deleteMoIndexesWithTableIdFormat, qry.GetTableDef().TblId)
 			err = c.runSql(deleteSql)
 			if err != nil {
+				getLogger().Info("delete all index meta data of origin table in `mo_indexes` for alter table",
+					zap.String("databaseName", c.db),
+					zap.String("origin tableName", qry.GetTableDef().Name),
+					zap.String("delete all index sql", deleteSql),
+					zap.Error(err))
+
 				return err
 			}
 		}
@@ -106,6 +130,11 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 		for _, indexdef := range qry.TableDef.Indexes {
 			if indexdef.TableExist {
 				if err = dbSource.Delete(c.ctx, indexdef.IndexTableName); err != nil {
+					getLogger().Info("delete all index table of origin table for alter table",
+						zap.String("databaseName", c.db),
+						zap.String("origin tableName", qry.GetTableDef().Name),
+						zap.String("origin tableName index table", indexdef.IndexTableName),
+						zap.Error(err))
 					return err
 				}
 			}
@@ -115,6 +144,11 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 	//6. obtain relation for new tables
 	newRel, err := dbSource.Relation(c.ctx, qry.CopyTableDef.Name, nil)
 	if err != nil {
+		getLogger().Info("obtain new relation for copy table for alter table",
+			zap.String("databaseName", c.db),
+			zap.String("origin tableName", qry.GetTableDef().Name),
+			zap.String("copy table name", qry.CopyTableDef.Name),
+			zap.Error(err))
 		return err
 	}
 
@@ -130,6 +164,10 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 	constraint = append(constraint, tmp)
 	err = newRel.TableRenameInTxn(c.ctx, constraint)
 	if err != nil {
+		getLogger().Info("Rename copy tableName to origin tableName in for alter table",
+			zap.String("origin tableName", qry.GetTableDef().Name),
+			zap.String("copy table name", qry.CopyTableDef.Name),
+			zap.Error(err))
 		return err
 	}
 	//--------------------------------------------------------------------------------------------------------------
@@ -155,6 +193,11 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 				err = s.handleVectorIvfFlatIndex(c, multiTableIndex.IndexDefs, qry.Database, newTableDef, nil)
 			}
 			if err != nil {
+				getLogger().Info("invoke reindex for the new table for alter table",
+					zap.String("origin tableName", qry.GetTableDef().Name),
+					zap.String("copy table name", qry.CopyTableDef.Name),
+					zap.String("indexAlgo", multiTableIndex.IndexAlgo),
+					zap.Error(err))
 				return err
 			}
 		}
@@ -162,18 +205,30 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 
 	// get and update the change mapping information of table colIds
 	if err = updateNewTableColId(c, newRel, qry.ChangeTblColIdMap); err != nil {
+		getLogger().Info("get and update the change mapping information of table colIds for alter table",
+			zap.String("origin tableName", qry.GetTableDef().Name),
+			zap.String("copy table name", qry.CopyTableDef.Name),
+			zap.Error(err))
 		return err
 	}
 
 	if len(qry.CopyTableDef.RefChildTbls) > 0 {
 		// Restore the original table's foreign key child table ids to the copy table definition
 		if err = restoreNewTableRefChildTbls(c, newRel, qry.CopyTableDef.RefChildTbls); err != nil {
+			getLogger().Info("Restore original table's foreign key child table ids to copyTable definition for alter table",
+				zap.String("origin tableName", qry.GetTableDef().Name),
+				zap.String("copy table name", qry.CopyTableDef.Name),
+				zap.Error(err))
 			return err
 		}
 
 		// update foreign key child table references to the current table
 		for _, tblId := range qry.CopyTableDef.RefChildTbls {
 			if err = updateTableForeignKeyColId(c, qry.ChangeTblColIdMap, tblId, originRel.GetTableID(c.ctx), newRel.GetTableID(c.ctx)); err != nil {
+				getLogger().Info("update foreign key child table references to the current table for alter table",
+					zap.String("origin tableName", qry.GetTableDef().Name),
+					zap.String("copy table name", qry.CopyTableDef.Name),
+					zap.Error(err))
 				return err
 			}
 		}
@@ -182,6 +237,10 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 	if len(qry.TableDef.Fkeys) > 0 {
 		for _, fkey := range qry.CopyTableDef.Fkeys {
 			if err = notifyParentTableFkTableIdChange(c, fkey, originRel.GetTableID(c.ctx), newRel.GetTableID(c.ctx)); err != nil {
+				getLogger().Info("notify parent table foreign key TableId Change for alter table",
+					zap.String("origin tableName", qry.GetTableDef().Name),
+					zap.String("copy table name", qry.CopyTableDef.Name),
+					zap.Error(err))
 				return err
 			}
 		}

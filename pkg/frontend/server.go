@@ -16,11 +16,12 @@ package frontend
 
 import (
 	"context"
-	"go.uber.org/zap"
 	"io"
 	"strings"
 	"sync/atomic"
 	"time"
+
+	"go.uber.org/zap"
 
 	"github.com/fagongzi/goetty/v2"
 	"github.com/matrixorigin/matrixone/pkg/config"
@@ -53,6 +54,12 @@ type BaseService interface {
 	SQLAddress() string
 	// SessionMgr returns the session manager instance of the service.
 	SessionMgr() *queryservice.SessionManager
+	// CheckTenantUpgrade used to upgrade tenant metadata if the tenant is old version.
+	CheckTenantUpgrade(ctx context.Context, tenantID int64) error
+	// GetFinalVersion Get mo final version, which is based on the current code
+	GetFinalVersion() string
+	// UpgradeTenant used to upgrade tenant
+	UpgradeTenant(ctx context.Context, tenantName string, retryCount uint32, isALLAccount bool) error
 }
 
 func (mo *MOServer) GetRoutineManager() *RoutineManager {

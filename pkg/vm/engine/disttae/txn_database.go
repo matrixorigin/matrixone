@@ -271,6 +271,7 @@ func (db *txnDatabase) Relation(ctx context.Context, name string, proc any) (eng
 		AccountId:  accountId,
 		Ts:         db.txn.op.SnapshotTS(),
 	}
+
 	if ok := db.txn.engine.catalog.GetTable(item); !ok {
 		logutil.Debugf("txnDatabase.Relation table %q(acc %d db %d) does not exist",
 			name,
