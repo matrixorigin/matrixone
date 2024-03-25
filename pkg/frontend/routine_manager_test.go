@@ -35,6 +35,7 @@ func create_test_server() *MOServer {
 		panic(err)
 	}
 	pu.SV.SetDefaultValues()
+	gPu = pu
 
 	address := fmt.Sprintf("%s:%d", pu.SV.Host, pu.SV.Port)
 	moServerCtx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
@@ -46,7 +47,7 @@ func create_test_server() *MOServer {
 
 func Test_Closed(t *testing.T) {
 	mo := create_test_server()
-	mo.rm.pu.SV.SkipCheckUser = true
+	gPu.SV.SkipCheckUser = true
 	wg := sync.WaitGroup{}
 	wg.Add(1)
 	cf := &CloseFlag{}

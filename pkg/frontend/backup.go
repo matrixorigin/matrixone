@@ -16,25 +16,26 @@ package frontend
 
 import (
 	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/backup"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
-func (mce *MysqlCmdExecutor) handleStartBackup(ctx context.Context, sb *tree.BackupStart) error {
-	return doBackup(ctx, mce.GetSession(), sb)
+func handleStartBackup(ctx context.Context, ses *Session, sb *tree.BackupStart) error {
+	return doBackup(ctx, ses, sb)
 }
 
-func doBackup(ctx context.Context, ses *Session, bs *tree.BackupStart) error {
+func doBackup(ctx context.Context, ses FeSession, bs *tree.BackupStart) error {
 	var (
 		err error
 	)
 	conf := &backup.Config{
-		HAkeeper: ses.GetParameterUnit().HAKeeperClient,
+		HAkeeper: gPu.HAKeeperClient,
 		Metas:    backup.NewMetas(),
 	}
-	conf.SharedFs, err = fileservice.Get[fileservice.FileService](ses.GetParameterUnit().FileService, defines.SharedFileServiceName)
+	conf.SharedFs, err = fileservice.Get[fileservice.FileService](gPu.FileService, defines.SharedFileServiceName)
 	if err != nil {
 		return err
 	}

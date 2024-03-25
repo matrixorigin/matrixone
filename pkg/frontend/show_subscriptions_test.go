@@ -170,6 +170,8 @@ func (m *mockedBackgroundHandler) initLike(mp *mpool.MPool) {
 	m.subBatches = []*batch.Batch{b}
 }
 
+func (m *mockedBackgroundHandler) Clear() {}
+
 var _ BackgroundExec = &mockedBackgroundHandler{}
 
 var bh = &mockedBackgroundHandler{}
@@ -194,6 +196,7 @@ func TestDoShowSubscriptions(t *testing.T) {
 	ses.SetTimeZone(time.UTC)
 	ses.SetTenantInfo(tenant)
 	ses.SetMysqlResultSet(&MysqlResultSet{})
+	ses.connectCtx = ctx
 	defer ses.Close()
 
 	mp := ses.GetMemPool()

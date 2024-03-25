@@ -40,14 +40,14 @@ func mockResultSet() *MysqlResultSet {
 }
 
 type miniExec struct {
-	sess *Session
+	sess FeSession
 }
 
 func (e *miniExec) doComQuery(context.Context, *UserInput) error {
 	_ = e.sess.GetMysqlProtocol()
 	return nil
 }
-func (e *miniExec) SetSession(sess *Session) {
+func (e *miniExec) SetSession(sess FeSession) {
 	e.sess = sess
 }
 
@@ -56,29 +56,26 @@ func TestIe(t *testing.T) {
 
 	ctx := context.TODO()
 	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
-
-	// Mock autoIncrCaches
-	aicm := &defines.AutoIncrCacheManager{}
-
-	executor := newIe(pu, &miniExec{}, aicm)
+	gPu = pu
+	executor := newIe()
 	executor.ApplySessionOverride(ie.NewOptsBuilder().Username("dump").Finish())
 	sess := executor.newCmdSession(ctx, ie.NewOptsBuilder().Database("mo_catalog").Internal(true).Finish())
 	assert.Equal(t, "dump", sess.GetMysqlProtocol().GetUserName())
 
 	err := executor.Exec(ctx, "whatever", ie.NewOptsBuilder().Finish())
-	assert.NoError(t, err)
+	assert.Error(t, err)
 	res := executor.Query(ctx, "whatever", ie.NewOptsBuilder().Finish())
-	assert.NoError(t, err)
+	assert.Error(t, err)
 	assert.Equal(t, uint64(0), res.RowCount())
 }
 
 func TestIeProto(t *testing.T) {
-	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+	gPu = config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 
 	// Mock autoIncrCaches
-	aicm := &defines.AutoIncrCacheManager{}
+	gAicm = &defines.AutoIncrCacheManager{}
 
-	executor := NewInternalExecutor(pu, aicm)
+	executor := NewInternalExecutor()
 	p := executor.proto
 	assert.True(t, p.IsEstablished())
 	p.SetEstablished()

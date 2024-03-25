@@ -150,6 +150,7 @@ func Test_ConnectionCount(t *testing.T) {
 	pu, err := getParameterUnit("test/system_vars_config.toml", eng, txnClient)
 	require.NoError(t, err)
 	pu.SV.SkipCheckUser = true
+	gPu = pu
 
 	noResultSet := make(map[string]bool)
 	resultSet := make(map[string]*result)
@@ -184,8 +185,8 @@ func Test_ConnectionCount(t *testing.T) {
 	ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
 	// A mock autoincrcache manager.
-	aicm := &defines.AutoIncrCacheManager{}
-	rm, _ := NewRoutineManager(ctx, pu, aicm)
+	gAicm = &defines.AutoIncrCacheManager{}
+	rm, _ := NewRoutineManager(ctx)
 
 	wg := sync.WaitGroup{}
 	wg.Add(1)

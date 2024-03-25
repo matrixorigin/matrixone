@@ -23,9 +23,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 )
 
-func (mce *MysqlCmdExecutor) handlePauseDaemonTask(ctx context.Context, st *tree.PauseDaemonTask) error {
-	ses := mce.ses
-	ts := ses.pu.TaskService
+func handlePauseDaemonTask(ctx context.Context, ses *Session, st *tree.PauseDaemonTask) error {
+	ts := gPu.TaskService
 	if ts == nil {
 		return moerr.NewInternalError(ses.requestCtx,
 			"task service not ready yet, please try again later.")
@@ -60,9 +59,8 @@ func (mce *MysqlCmdExecutor) handlePauseDaemonTask(ctx context.Context, st *tree
 	return nil
 }
 
-func (mce *MysqlCmdExecutor) handleCancelDaemonTask(ctx context.Context, taskID uint64) error {
-	ses := mce.ses
-	ts := ses.pu.TaskService
+func handleCancelDaemonTask(ctx context.Context, ses *Session, taskID uint64) error {
+	ts := gPu.TaskService
 	if ts == nil {
 		return moerr.NewInternalError(ses.requestCtx,
 			"task service not ready yet, please try again later.")
@@ -95,9 +93,8 @@ func (mce *MysqlCmdExecutor) handleCancelDaemonTask(ctx context.Context, taskID 
 	return nil
 }
 
-func (mce *MysqlCmdExecutor) handleResumeDaemonTask(ctx context.Context, st *tree.ResumeDaemonTask) error {
-	ses := mce.ses
-	ts := ses.pu.TaskService
+func handleResumeDaemonTask(ctx context.Context, ses *Session, st *tree.ResumeDaemonTask) error {
+	ts := gPu.TaskService
 	if ts == nil {
 		return moerr.NewInternalError(ses.requestCtx,
 			"task service not ready yet, please try again later.")

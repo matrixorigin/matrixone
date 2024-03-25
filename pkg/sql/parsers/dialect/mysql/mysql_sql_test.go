@@ -2822,6 +2822,8 @@ func TestValid(t *testing.T) {
 		if tcase.output != out {
 			t.Errorf("Parsing failed. \nExpected/Got:\n%s\n%s", tcase.output, out)
 		}
+		ast.HandleType()
+		ast.ResultType()
 	}
 }
 

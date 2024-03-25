@@ -40,9 +40,6 @@ type Routine struct {
 	//protocol layer
 	protocol MysqlProtocol
 
-	//execution layer
-	executor CmdExecutor
-
 	cancelRoutineCtx  context.Context
 	cancelRoutineFunc context.CancelFunc
 	cancelRequestFunc context.CancelFunc
@@ -150,12 +147,6 @@ func (rt *Routine) getProtocol() MysqlProtocol {
 	return rt.protocol
 }
 
-func (rt *Routine) getCmdExecutor() CmdExecutor {
-	rt.mu.Lock()
-	defer rt.mu.Unlock()
-	return rt.executor
-}
-
 func (rt *Routine) getConnectionID() uint32 {
 	return rt.getProtocol().ConnectionID()
 }
@@ -258,8 +249,6 @@ func (rt *Routine) handleRequest(req *Request) error {
 
 	parameters := rt.getParameters()
 	cancelRequestCtx, cancelRequestFunc := context.WithTimeout(routineCtx, parameters.SessionTimeout.Duration)
-	executor := rt.getCmdExecutor()
-	executor.SetCancelFunc(cancelRequestFunc)
 	rt.setCancelRequestFunc(cancelRequestFunc)
 	ses = rt.getSession()
 	ses.UpdateDebugString()
@@ -275,16 +264,17 @@ func (rt *Routine) handleRequest(req *Request) error {
 	}
 	tenantCtx := defines.AttachAccount(nodeCtx, tenant.GetTenantID(), tenant.GetUserID(), tenant.GetDefaultRoleID())
 	ses.SetRequestContext(tenantCtx)
-	executor.SetSession(ses)
 
 	rt.increaseCount(func() {
 		metric.ConnectionCounter(ses.GetTenantInfo().GetTenant()).Inc()
 	})
 
-	if resp, err = executor.ExecRequest(tenantCtx, ses, req); err != nil {
-		logError(ses, ses.GetDebugString(),
-			"Failed to execute request",
-			zap.Error(err))
+	if resp, err = ExecRequest(tenantCtx, ses, req); err != nil {
+		if !skipClientQuit(err.Error()) {
+			logError(ses, ses.GetDebugString(),
+				"Failed to execute request",
+				zap.Error(err))
+		}
 	}
 
 	if resp != nil {
@@ -316,7 +306,7 @@ func (rt *Routine) handleRequest(req *Request) error {
 
 		//ensure cleaning the transaction
 		logError(ses, ses.GetDebugString(), "rollback the txn.")
-		err = ses.TxnRollback()
+		err = ses.GetTxnHandler().TxnRollback()
 		if err != nil {
 			logError(ses, ses.GetDebugString(),
 				"Failed to rollback txn",
@@ -397,7 +387,7 @@ func (rt *Routine) cleanup() {
 		ses := rt.getSession()
 		//step A: rollback the txn
 		if ses != nil {
-			err := ses.TxnRollback()
+			err := ses.GetTxnHandler().TxnRollback()
 			if err != nil {
 				logError(ses, ses.GetDebugString(),
 					"Failed to rollback txn",
@@ -422,6 +412,12 @@ func (rt *Routine) cleanup() {
 			ses.Close()
 			rt.ses = nil
 		}
+		rt.protocol = nil
+		rt.cancelRoutineCtx = nil
+		rt.cancelRoutineFunc = nil
+		rt.cancelRequestFunc = nil
+		rt.parameters = nil
+		rt.ses = nil
 	})
 }
 
@@ -447,12 +443,11 @@ func (rt *Routine) migrateConnectionFrom(resp *query.MigrateConnFromResponse) er
 	return nil
 }
 
-func NewRoutine(ctx context.Context, protocol MysqlProtocol, executor CmdExecutor, parameters *config.FrontendParameters, rs goetty.IOSession) *Routine {
+func NewRoutine(ctx context.Context, protocol MysqlProtocol, parameters *config.FrontendParameters, rs goetty.IOSession) *Routine {
 	ctx = trace.Generate(ctx) // fill span{trace_id} in ctx
 	cancelRoutineCtx, cancelRoutineFunc := context.WithCancel(ctx)
 	ri := &Routine{
 		protocol:          protocol,
-		executor:          executor,
 		cancelRoutineCtx:  cancelRoutineCtx,
 		cancelRoutineFunc: cancelRoutineFunc,
 		parameters:        parameters,

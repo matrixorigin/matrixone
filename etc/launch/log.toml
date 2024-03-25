@@ -3,4 +3,4 @@ service-type = "LOG"
 data-dir = "./mo-data"
 
 [log]
-level = "info"
+level = "error"

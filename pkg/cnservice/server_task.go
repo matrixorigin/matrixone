@@ -20,7 +20,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/cnservice/upgrader"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
@@ -37,8 +36,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/file"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/matrixorigin/matrixone/pkg/util/metric/mometric"
-	"github.com/matrixorigin/matrixone/pkg/util/sysview"
-	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"go.uber.org/zap"
 )
 
@@ -116,27 +113,6 @@ func (s *service) initSqlWriterFactory() {
 func (s *service) createSQLLogger(command *logservicepb.CreateTaskService) {
 	frontend.SetSpecialUser(db_holder.MOLoggerUser, []byte(command.User.Password))
 	db_holder.SetSQLWriterDBUser(db_holder.MOLoggerUser, command.User.Password)
-}
-
-func (s *service) upgrade() {
-	pu := config.NewParameterUnit(
-		&s.cfg.Frontend,
-		nil,
-		nil,
-		nil)
-	pu.StorageEngine = s.storeEngine
-	pu.TxnClient = s._txnClient
-	s.cfg.Frontend.SetDefaultValues()
-	pu.FileService = s.fileService
-	pu.LockService = s.lockService
-	moServerCtx := context.WithValue(context.Background(), config.ParameterUnitKey, pu)
-
-	ug := &upgrader.Upgrader{
-		IEFactory: func() ie.InternalExecutor {
-			return frontend.NewInternalExecutor(pu, nil)
-		},
-	}
-	ug.Upgrade(moServerCtx)
 }
 
 func (s *service) canClaimDaemonTask(taskAccount string) bool {
@@ -320,78 +296,14 @@ func (s *service) registerExecutorsLocked() {
 	s.cfg.Frontend.SetDefaultValues()
 	pu.FileService = s.fileService
 	pu.LockService = s.lockService
-	moServerCtx := context.WithValue(context.Background(), config.ParameterUnitKey, pu)
 	ieFactory := func() ie.InternalExecutor {
-		return frontend.NewInternalExecutor(pu, s.mo.GetRoutineManager().GetAutoIncrCacheManager())
+		return frontend.NewInternalExecutor()
 	}
 
 	ts, ok := s.task.holder.Get()
 	if !ok {
 		panic(moerr.NewInternalErrorNoCtx("task Service not ok"))
 	}
-	s.task.runner.RegisterExecutor(
-		task.TaskCode_SystemInit,
-		func(
-			ctx context.Context,
-			t task.Task) error {
-			// FIXME: use same txn to system init, it's too hack.
-			ready := 0
-			fn := func() error {
-				if ready == 0 {
-					if err := frontend.InitSysTenant(moServerCtx, s.mo.GetRoutineManager().GetAutoIncrCacheManager()); err != nil {
-						return err
-					}
-					ready++
-				}
-
-				if ready == 1 {
-					if err := sysview.InitSchema(moServerCtx, ieFactory); err != nil {
-						return err
-					}
-					ready++
-				}
-
-				if ready == 2 {
-					if err := mometric.InitSchema(moServerCtx, ieFactory); err != nil {
-						return err
-					}
-					ready++
-				}
-
-				if ready == 3 {
-					if err := motrace.InitSchema(moServerCtx, ieFactory); err != nil {
-						return err
-					}
-					ready++
-				}
-
-				if ready == 4 {
-					// init metric/log merge task cron rule
-					if err := export.CreateCronTask(moServerCtx, task.TaskCode_MetricLogMerge, ts); err != nil {
-						return err
-					}
-					ready++
-				}
-
-				if ready == 5 {
-					// init metric task
-					if err := mometric.CreateCronTask(moServerCtx, task.TaskCode_MetricStorageUsage, ts); err != nil {
-						return err
-					}
-					ready++
-				}
-				return nil
-			}
-
-			for {
-				err := fn()
-				if err == nil {
-					return nil
-				}
-				s.logger.Error("system init failed", zap.Error(err))
-				time.Sleep(time.Second)
-			}
-		})
 
 	// init metric/log merge task executor
 	s.task.runner.RegisterExecutor(task.TaskCode_MetricLogMerge,

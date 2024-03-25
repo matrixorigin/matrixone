@@ -211,15 +211,6 @@ type MysqlProtocol interface {
 
 var _ MysqlProtocol = &MysqlProtocolImpl{}
 
-func (ses *Session) GetMysqlProtocol() MysqlProtocol {
-	ses.mu.Lock()
-	defer ses.mu.Unlock()
-	if ses.protocol != nil {
-		return ses.protocol.(MysqlProtocol)
-	}
-	return nil
-}
-
 type debugStats struct {
 	writeCount uint64
 	// record 2 cases data, all belong to flush op.
@@ -535,7 +526,7 @@ func (mp *MysqlProtocolImpl) SendPrepareResponse(ctx context.Context, stmt *Prep
 		}
 	}
 	if numParams > 0 {
-		if err := mp.SendEOFPacketIf(0, mp.GetSession().GetServerStatus()); err != nil {
+		if err := mp.SendEOFPacketIf(0, mp.GetSession().GetTxnHandler().GetServerStatus()); err != nil {
 			return err
 		}
 	}
@@ -555,7 +546,7 @@ func (mp *MysqlProtocolImpl) SendPrepareResponse(ctx context.Context, stmt *Prep
 		}
 	}
 	if numColumns > 0 {
-		if err := mp.SendEOFPacketIf(0, mp.GetSession().GetServerStatus()); err != nil {
+		if err := mp.SendEOFPacketIf(0, mp.GetSession().GetTxnHandler().GetServerStatus()); err != nil {
 			return err
 		}
 	}

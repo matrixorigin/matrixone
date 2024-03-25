@@ -72,6 +72,10 @@ func nextConnectionID() uint32 {
 	return atomic.AddUint32(&initConnectionID, 1)
 }
 
+var gRtMgr *RoutineManager
+var gPu *config.ParameterUnit
+var gAicm *defines.AutoIncrCacheManager
+
 func NewMOServer(
 	ctx context.Context,
 	addr string,
@@ -79,11 +83,14 @@ func NewMOServer(
 	aicm *defines.AutoIncrCacheManager,
 	baseService BaseService,
 ) *MOServer {
+	gPu = pu
+	gAicm = aicm
 	codec := NewSqlCodec()
-	rm, err := NewRoutineManager(ctx, pu, aicm)
+	rm, err := NewRoutineManager(ctx)
 	if err != nil {
 		logutil.Panicf("start server failed with %+v", err)
 	}
+	gRtMgr = rm
 	rm.setBaseService(baseService)
 	if baseService != nil {
 		rm.setSessionMgr(baseService.SessionMgr())
@@ -144,7 +151,7 @@ func (mo *MOServer) handleMessage(rs goetty.IOSession) error {
 
 		err = mo.rm.Handler(rs, msg, received)
 		if err != nil {
-			if strings.Contains(err.Error(), quitStr) {
+			if skipClientQuit(err.Error()) {
 				return nil
 			} else {
 				logutil.Error("session handle failed, close this session", zap.Error(err))

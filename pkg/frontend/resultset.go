@@ -584,3 +584,87 @@ func NewMysqlExecutionResult(status uint16, insertid, rows uint64, warnings uint
 		mrs:          mrs,
 	}
 }
+
+/*
+convert the type in computation engine to the type in mysql.
+*/
+func convertEngineTypeToMysqlType(ctx context.Context, engineType types.T, col *MysqlColumn) error {
+	switch engineType {
+	case types.T_any:
+		col.SetColumnType(defines.MYSQL_TYPE_NULL)
+	case types.T_json:
+		col.SetColumnType(defines.MYSQL_TYPE_JSON)
+	case types.T_bool:
+		col.SetColumnType(defines.MYSQL_TYPE_BOOL)
+	case types.T_bit:
+		col.SetColumnType(defines.MYSQL_TYPE_BIT)
+		col.SetSigned(false)
+	case types.T_int8:
+		col.SetColumnType(defines.MYSQL_TYPE_TINY)
+	case types.T_uint8:
+		col.SetColumnType(defines.MYSQL_TYPE_TINY)
+		col.SetSigned(false)
+	case types.T_int16:
+		col.SetColumnType(defines.MYSQL_TYPE_SHORT)
+	case types.T_uint16:
+		col.SetColumnType(defines.MYSQL_TYPE_SHORT)
+		col.SetSigned(false)
+	case types.T_int32:
+		col.SetColumnType(defines.MYSQL_TYPE_LONG)
+	case types.T_uint32:
+		col.SetColumnType(defines.MYSQL_TYPE_LONG)
+		col.SetSigned(false)
+	case types.T_int64:
+		col.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
+	case types.T_uint64:
+		col.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
+		col.SetSigned(false)
+	case types.T_float32:
+		col.SetColumnType(defines.MYSQL_TYPE_FLOAT)
+	case types.T_float64:
+		col.SetColumnType(defines.MYSQL_TYPE_DOUBLE)
+	case types.T_char:
+		col.SetColumnType(defines.MYSQL_TYPE_STRING)
+	case types.T_varchar:
+		col.SetColumnType(defines.MYSQL_TYPE_VAR_STRING)
+	case types.T_array_float32, types.T_array_float64:
+		col.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	case types.T_binary:
+		col.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	case types.T_varbinary:
+		col.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	case types.T_date:
+		col.SetColumnType(defines.MYSQL_TYPE_DATE)
+	case types.T_datetime:
+		col.SetColumnType(defines.MYSQL_TYPE_DATETIME)
+	case types.T_time:
+		col.SetColumnType(defines.MYSQL_TYPE_TIME)
+	case types.T_timestamp:
+		col.SetColumnType(defines.MYSQL_TYPE_TIMESTAMP)
+	case types.T_decimal64:
+		col.SetColumnType(defines.MYSQL_TYPE_DECIMAL)
+	case types.T_decimal128:
+		col.SetColumnType(defines.MYSQL_TYPE_DECIMAL)
+	case types.T_blob:
+		col.SetColumnType(defines.MYSQL_TYPE_BLOB)
+	case types.T_text:
+		col.SetColumnType(defines.MYSQL_TYPE_TEXT)
+	case types.T_uuid:
+		col.SetColumnType(defines.MYSQL_TYPE_UUID)
+	case types.T_TS:
+		col.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	case types.T_Blockid:
+		col.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	case types.T_enum:
+		col.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	default:
+		return moerr.NewInternalError(ctx, "RunWhileSend : unsupported type %d", engineType)
+	}
+	return nil
+}
+
+func convertMysqlTextTypeToBlobType(col *MysqlColumn) {
+	if col.ColumnType() == defines.MYSQL_TYPE_TEXT {
+		col.SetColumnType(defines.MYSQL_TYPE_BLOB)
+	}
+}

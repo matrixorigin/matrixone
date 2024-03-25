@@ -104,7 +104,7 @@ func saveQueryResult(ses *Session, bat *batch.Batch) error {
 		logInfo(ses, ses.GetDebugString(), "open save query result", zap.Float64("current result size:", s))
 		return nil
 	}
-	fs := ses.GetParameterUnit().FileService
+	fs := gPu.FileService
 	// write query result
 	path := catalog.BuildQueryResultPath(ses.GetTenantInfo().GetTenant(), uuid.UUID(ses.tStmt.StatementID).String(), ses.GetIncBlockIdx())
 	logInfo(ses, ses.GetDebugString(), "open save query result", zap.String("statemant id is:", uuid.UUID(ses.tStmt.StatementID).String()), zap.String("fileservice name is:", fs.Name()), zap.String("write path is:", path), zap.Float64("current result size:", s))
@@ -137,7 +137,7 @@ func saveQueryResultMeta(ses *Session) error {
 		ses.tStmt = nil
 		ses.curResultSize = 0
 	}()
-	fs := ses.GetParameterUnit().FileService
+	fs := gPu.FileService
 	// write query result meta
 	colMap := buildColumnMap(ses.rs)
 	b, err := ses.rs.Marshal()
@@ -181,7 +181,7 @@ func saveQueryResultMeta(ses *Session) error {
 		Ast:         string(st),
 		ColumnMap:   colMap,
 	}
-	metaBat, err := buildQueryResultMetaBatch(m, ses.mp)
+	metaBat, err := buildQueryResultMetaBatch(m, ses.pool)
 	if err != nil {
 		return err
 	}
@@ -253,7 +253,7 @@ func isResultQuery(p *plan.Plan) []string {
 }
 
 func checkPrivilege(uuids []string, requestCtx context.Context, ses *Session) error {
-	f := ses.GetParameterUnit().FileService
+	f := gPu.FileService
 	for _, id := range uuids {
 		// var size int64 = -1
 		path := catalog.BuildQueryResultMetaPath(ses.GetTenantInfo().GetTenant(), id)
@@ -436,6 +436,10 @@ type resultFileInfo struct {
 	blockIndex int64
 }
 
+func handleDump(requestCtx context.Context, ses FeSession, dump *tree.MoDump) error {
+	return doDumpQueryResult(requestCtx, ses.(*Session), dump.ExportParams)
+}
+
 // doDumpQueryResult reads data from the query result, converts it into csv and saves it into
 // the file designated by the path.
 func doDumpQueryResult(ctx context.Context, ses *Session, eParam *tree.ExportParam) error {
@@ -492,9 +496,9 @@ func doDumpQueryResult(ctx context.Context, ses *Session, eParam *tree.ExportPar
 	oq.reset()
 	oq.ep.OutTofile = true
 	//prepare export param
-	exportParam.DefaultBufSize = ses.GetParameterUnit().SV.ExportDataDefaultFlushSize
+	exportParam.DefaultBufSize = gPu.SV.ExportDataDefaultFlushSize
 	exportParam.UseFileService = true
-	exportParam.FileService = ses.GetParameterUnit().FileService
+	exportParam.FileService = gPu.FileService
 	exportParam.Ctx = ctx
 	defer func() {
 		exportParam.LineBuffer = nil
@@ -583,7 +587,7 @@ func openResultMeta(ctx context.Context, ses *Session, queryId string) (*plan.Re
 	}
 	metaFile := catalog.BuildQueryResultMetaPath(account.GetTenant(), queryId)
 	// read meta's meta
-	reader, err := blockio.NewFileReader(ses.GetParameterUnit().FileService, metaFile)
+	reader, err := blockio.NewFileReader(gPu.FileService, metaFile)
 	if err != nil {
 		return nil, err
 	}
@@ -623,7 +627,7 @@ func getResultFiles(ctx context.Context, ses *Session, queryId string) ([]result
 	}
 	rti := make([]resultFileInfo, 0, len(fileList))
 	for i, file := range fileList {
-		e, err := ses.GetParameterUnit().FileService.StatFile(ctx, file)
+		e, err := gPu.FileService.StatFile(ctx, file)
 		if err != nil {
 			if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
 				return nil, moerr.NewResultFileNotFound(ctx, file)
@@ -644,7 +648,7 @@ func getResultFiles(ctx context.Context, ses *Session, queryId string) ([]result
 func openResultFile(ctx context.Context, ses *Session, fileName string, fileSize int64) (*blockio.BlockReader, []objectio.BlockObject, error) {
 	// read result's blocks
 	filePath := getPathOfQueryResultFile(fileName)
-	reader, err := blockio.NewFileReader(ses.GetParameterUnit().FileService, filePath)
+	reader, err := blockio.NewFileReader(gPu.FileService, filePath)
 	if err != nil {
 		return nil, nil, err
 	}

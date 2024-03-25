@@ -23,9 +23,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/BurntSushi/toml"
 	"github.com/fagongzi/goetty/v2"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/stretchr/testify/assert"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 
@@ -220,7 +222,7 @@ func Test_checkSysExistsOrNot(t *testing.T) {
 			return []interface{}{rs[old]}
 		}).AnyTimes()
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		exists, err := checkSysExistsOrNot(ctx, bh, pu)
@@ -228,9 +230,7 @@ func Test_checkSysExistsOrNot(t *testing.T) {
 		convey.So(err, convey.ShouldBeNil)
 
 		// A mock autoIncrCaches.
-		aicm := &defines.AutoIncrCacheManager{}
-
-		err = InitSysTenant(ctx, aicm)
+		err = InitSysTenant(ctx)
 		convey.So(err, convey.ShouldBeNil)
 	})
 }
@@ -242,6 +242,7 @@ func Test_checkTenantExistsOrNot(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		gPu = pu
 
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
@@ -255,7 +256,7 @@ func Test_checkTenantExistsOrNot(t *testing.T) {
 		bh.EXPECT().GetExecResultSet().Return([]interface{}{mrs1}).AnyTimes()
 		bh.EXPECT().ClearExecResultSet().Return().AnyTimes()
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		exists, err := checkTenantExistsOrNot(ctx, bh, "test")
@@ -309,7 +310,7 @@ func Test_checkDatabaseExistsOrNot(t *testing.T) {
 		bh.EXPECT().GetExecResultSet().Return([]interface{}{mrs1}).AnyTimes()
 		bh.EXPECT().ClearExecResultSet().Return().AnyTimes()
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		exists, err := checkDatabaseExistsOrNot(ctx, bh, "test")
@@ -337,7 +338,7 @@ func Test_createTablesInMoCatalogOfGeneralTenant(t *testing.T) {
 		})
 		bh.EXPECT().GetExecResultSet().Return([]interface{}{msr}).AnyTimes()
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		//tenant := &TenantInfo{
@@ -384,7 +385,7 @@ func Test_initFunction(t *testing.T) {
 		rs.EXPECT().GetRowCount().Return(uint64(0)).AnyTimes()
 		bh.EXPECT().GetExecResultSet().Return([]interface{}{rs}).AnyTimes()
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		locale := ""
@@ -421,10 +422,13 @@ func Test_initFunction(t *testing.T) {
 			DefaultRoleID: moAdminRoleID,
 		}
 
-		ses := &Session{tenant: tenant}
-		mce := &MysqlCmdExecutor{}
-		err := mce.InitFunction(ctx, ses, tenant, cu)
-		convey.So(err, convey.ShouldNotBeNil)
+		ses := &Session{
+			feSessionImpl: feSessionImpl{
+				tenant: tenant,
+			},
+		}
+		err := InitFunction(ctx, ses, tenant, cu)
+		convey.So(err, convey.ShouldBeNil)
 	})
 }
 
@@ -474,7 +478,7 @@ func Test_initUser(t *testing.T) {
 
 		bh := newBh(ctrl, sql2result)
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		tenant := &TenantInfo{
@@ -510,7 +514,7 @@ func Test_initRole(t *testing.T) {
 		rs.EXPECT().GetRowCount().Return(uint64(0)).AnyTimes()
 		bh.EXPECT().GetExecResultSet().Return([]interface{}{rs}).AnyTimes()
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		tenant := &TenantInfo{
@@ -632,7 +636,7 @@ func Test_determineCreateAccount(t *testing.T) {
 
 		bh := newBh(ctrl, sql2result)
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		ok, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
@@ -666,7 +670,7 @@ func Test_determineCreateAccount(t *testing.T) {
 
 		bh := newBh(ctrl, sql2result)
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		ok, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
@@ -703,7 +707,7 @@ func Test_determineCreateUser(t *testing.T) {
 
 		bh := newBh(ctrl, sql2result)
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		ok, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
@@ -748,7 +752,7 @@ func Test_determineCreateUser(t *testing.T) {
 
 		bh := newBh(ctrl, sql2result)
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		ok, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
@@ -800,7 +804,7 @@ func Test_determineCreateUser(t *testing.T) {
 
 		bh := newBh(ctrl, sql2result)
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		ok, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
@@ -838,7 +842,7 @@ func Test_determineDropUser(t *testing.T) {
 
 		bh := newBh(ctrl, sql2result)
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		ok, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
@@ -883,7 +887,7 @@ func Test_determineDropUser(t *testing.T) {
 
 		bh := newBh(ctrl, sql2result)
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		ok, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
@@ -935,7 +939,7 @@ func Test_determineDropUser(t *testing.T) {
 
 		bh := newBh(ctrl, sql2result)
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		ok, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
@@ -972,7 +976,7 @@ func Test_determineCreateRole(t *testing.T) {
 
 		bh := newBh(ctrl, sql2result)
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		ok, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
@@ -1017,7 +1021,7 @@ func Test_determineCreateRole(t *testing.T) {
 
 		bh := newBh(ctrl, sql2result)
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		ok, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
@@ -1069,7 +1073,7 @@ func Test_determineCreateRole(t *testing.T) {
 
 		bh := newBh(ctrl, sql2result)
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		ok, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
@@ -1106,7 +1110,7 @@ func Test_determineDropRole(t *testing.T) {
 
 		bh := newBh(ctrl, sql2result)
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		ok, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
@@ -1151,7 +1155,7 @@ func Test_determineDropRole(t *testing.T) {
 
 		bh := newBh(ctrl, sql2result)
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		ok, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
@@ -1203,7 +1207,7 @@ func Test_determineDropRole(t *testing.T) {
 
 		bh := newBh(ctrl, sql2result)
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		ok, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
@@ -1242,7 +1246,7 @@ func Test_determineGrantRole(t *testing.T) {
 
 		bh := newBh(ctrl, sql2result)
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		ok, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
@@ -1289,7 +1293,7 @@ func Test_determineGrantRole(t *testing.T) {
 			roleIdsInMoRoleGrant, rowsOfMoRoleGrant, nil, nil)
 		bh := newBh(ctrl, sql2result)
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		ok, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
@@ -1391,7 +1395,7 @@ func Test_determineGrantRole(t *testing.T) {
 
 		bh := newBh(ctrl, sql2result)
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		ok, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, g)
@@ -1493,7 +1497,7 @@ func Test_determineGrantRole(t *testing.T) {
 
 		bh := newBh(ctrl, sql2result)
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		ok, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, g)
@@ -1592,7 +1596,7 @@ func Test_determineGrantRole(t *testing.T) {
 
 		bh := newBh(ctrl, sql2result)
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		ok, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, g)
@@ -1692,7 +1696,7 @@ func Test_determineGrantRole(t *testing.T) {
 
 		bh := newBh(ctrl, sql2result)
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		ok, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, g)
@@ -1729,7 +1733,7 @@ func Test_determineRevokeRole(t *testing.T) {
 
 		bh := newBh(ctrl, sql2result)
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		ok, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
@@ -1775,7 +1779,7 @@ func Test_determineRevokeRole(t *testing.T) {
 
 		bh := newBh(ctrl, sql2result)
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		ok, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
@@ -1828,7 +1832,7 @@ func Test_determineRevokeRole(t *testing.T) {
 
 		bh := newBh(ctrl, sql2result)
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		ok, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
@@ -1890,7 +1894,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		stmts := []*tree.GrantPrivilege{
@@ -1992,7 +1996,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		stmts := []*tree.GrantPrivilege{
@@ -2103,7 +2107,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		stmts := []*tree.GrantPrivilege{
@@ -2185,7 +2189,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		stmts := []*tree.GrantPrivilege{
@@ -2277,7 +2281,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		stmts := []*tree.GrantPrivilege{
@@ -2338,7 +2342,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		stmts := []*tree.GrantPrivilege{
@@ -2471,7 +2475,7 @@ func Test_determineCreateDatabase(t *testing.T) {
 
 		bh := newBh(ctrl, sql2result)
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		ok, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
@@ -2516,7 +2520,7 @@ func Test_determineCreateDatabase(t *testing.T) {
 
 		bh := newBh(ctrl, sql2result)
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		ok, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
@@ -2568,7 +2572,7 @@ func Test_determineCreateDatabase(t *testing.T) {
 
 		bh := newBh(ctrl, sql2result)
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		ok, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
@@ -2606,7 +2610,7 @@ func Test_determineDropDatabase(t *testing.T) {
 
 		bh := newBh(ctrl, sql2result)
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		ok, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
@@ -2650,7 +2654,7 @@ func Test_determineDropDatabase(t *testing.T) {
 		sql2result := makeSql2ExecResult2(0, rowsOfMoUserGrant, roleIdsInMoRolePrivs, priv.entries, rowsOfMoRolePrivs, roleIdsInMoRoleGrant, rowsOfMoRoleGrant, nil, nil)
 
 		bh := newBh(ctrl, sql2result)
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		ok, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
@@ -2701,7 +2705,7 @@ func Test_determineDropDatabase(t *testing.T) {
 		sql2result := makeSql2ExecResult2(0, rowsOfMoUserGrant, roleIdsInMoRolePrivs, priv.entries, rowsOfMoRolePrivs, roleIdsInMoRoleGrant, rowsOfMoRoleGrant, nil, nil)
 		bh := newBh(ctrl, sql2result)
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		ok, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
@@ -2739,7 +2743,7 @@ func Test_determineShowDatabase(t *testing.T) {
 
 		bh := newBh(ctrl, sql2result)
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		ok, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
@@ -2784,7 +2788,7 @@ func Test_determineShowDatabase(t *testing.T) {
 
 		bh := newBh(ctrl, sql2result)
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		ok, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
@@ -2836,7 +2840,7 @@ func Test_determineShowDatabase(t *testing.T) {
 
 		bh := newBh(ctrl, sql2result)
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		ok, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
@@ -2876,7 +2880,7 @@ func Test_determineUseDatabase(t *testing.T) {
 
 		bh := newBh(ctrl, sql2result)
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		ok, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
@@ -2923,7 +2927,7 @@ func Test_determineUseDatabase(t *testing.T) {
 
 		bh := newBh(ctrl, sql2result)
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		ok, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
@@ -2977,7 +2981,7 @@ func Test_determineUseDatabase(t *testing.T) {
 
 		bh := newBh(ctrl, sql2result)
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		ok, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
@@ -3042,7 +3046,7 @@ func Test_determineCreateTable(t *testing.T) {
 
 		bh := newBh(ctrl, sql2result)
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		ok, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
@@ -3116,7 +3120,7 @@ func Test_determineCreateTable(t *testing.T) {
 
 		bh := newBh(ctrl, sql2result)
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		ok, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
@@ -3195,7 +3199,7 @@ func Test_determineCreateTable(t *testing.T) {
 
 		bh := newBh(ctrl, sql2result)
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		ok, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
@@ -3256,7 +3260,7 @@ func Test_determineDropTable(t *testing.T) {
 		sql2result[sql] = newMrsForInheritedRoleIdOfRoleId([][]interface{}{})
 
 		bh := newBh(ctrl, sql2result)
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		ok, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
@@ -3330,7 +3334,7 @@ func Test_determineDropTable(t *testing.T) {
 
 		bh := newBh(ctrl, sql2result)
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		ok, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
@@ -3409,7 +3413,7 @@ func Test_determineDropTable(t *testing.T) {
 
 		bh := newBh(ctrl, sql2result)
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		ok, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
@@ -3550,7 +3554,7 @@ func Test_determineDML(t *testing.T) {
 			sql2result[sql] = newMrsForInheritedRoleIdOfRoleId([][]interface{}{})
 
 			bh := newBh(ctrl, sql2result)
-			bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+			bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 			defer bhStub.Reset()
 
 			ok, err := authenticateUserCanExecuteStatementWithObjectTypeDatabaseAndTable(ses.GetRequestContext(), ses, a.stmt, a.p)
@@ -3648,7 +3652,7 @@ func Test_determineDML(t *testing.T) {
 
 			bh := newBh(ctrl, sql2result)
 
-			bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+			bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 			defer bhStub.Reset()
 
 			ok, err := authenticateUserCanExecuteStatementWithObjectTypeDatabaseAndTable(ses.GetRequestContext(), ses, a.stmt, a.p)
@@ -3738,7 +3742,7 @@ func Test_determineDML(t *testing.T) {
 
 			bh := newBh(ctrl, sql2result)
 
-			bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+			bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 			defer bhStub.Reset()
 
 			ok, err := authenticateUserCanExecuteStatementWithObjectTypeDatabaseAndTable(ses.GetRequestContext(), ses, a.stmt, a.p)
@@ -3756,7 +3760,7 @@ func Test_doGrantRole(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		stmt := &tree.GrantRole{
@@ -3825,7 +3829,7 @@ func Test_doGrantRole(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		stmt := &tree.GrantRole{
@@ -3905,7 +3909,7 @@ func Test_doGrantRole(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		stmt := &tree.GrantRole{
@@ -4011,7 +4015,7 @@ func Test_doGrantRole(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		stmt := &tree.GrantRole{
@@ -4120,7 +4124,7 @@ func Test_doGrantRole(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		stmt := &tree.GrantRole{
@@ -4235,7 +4239,7 @@ func Test_doGrantRole(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		stmt := &tree.GrantRole{
@@ -4300,7 +4304,7 @@ func Test_doGrantRole(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		stmt := &tree.GrantRole{
@@ -4416,7 +4420,7 @@ func Test_doGrantRole(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		stmt := &tree.GrantRole{
@@ -4483,7 +4487,7 @@ func Test_doGrantRole(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		stmt := &tree.GrantRole{
@@ -4560,7 +4564,7 @@ func Test_doRevokeRole(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		stmt := &tree.RevokeRole{
@@ -4622,7 +4626,7 @@ func Test_doRevokeRole(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		stmt := &tree.RevokeRole{
@@ -4686,7 +4690,7 @@ func Test_doRevokeRole(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		stmt := &tree.RevokeRole{
@@ -4754,7 +4758,7 @@ func Test_doRevokeRole(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		stmt := &tree.RevokeRole{
@@ -4826,7 +4830,7 @@ func Test_doRevokeRole(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		stmt := &tree.RevokeRole{
@@ -4895,7 +4899,7 @@ func Test_doGrantPrivilege(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		stmt := &tree.GrantPrivilege{
@@ -4945,7 +4949,7 @@ func Test_doGrantPrivilege(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		stmts := []*tree.GrantPrivilege{
@@ -5060,7 +5064,7 @@ func Test_doGrantPrivilege(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		dbName := "d"
@@ -5197,7 +5201,7 @@ func Test_doRevokePrivilege(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		stmt := &tree.RevokePrivilege{
@@ -5247,7 +5251,7 @@ func Test_doRevokePrivilege(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		stmts := []*tree.RevokePrivilege{
@@ -5362,7 +5366,7 @@ func Test_doRevokePrivilege(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		dbName := "d"
@@ -5503,7 +5507,7 @@ func Test_doDropFunctionWithDB(t *testing.T) {
 
 		bh := &backgroundExecTest{}
 		bh.init()
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		stmt := &tree.DropDatabase{
@@ -5537,7 +5541,7 @@ func Test_doDropFunction(t *testing.T) {
 		rs.EXPECT().GetRowCount().Return(uint64(0)).AnyTimes()
 		bh.EXPECT().GetExecResultSet().Return([]interface{}{rs}).AnyTimes()
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		cu := &tree.DropFunction{
@@ -5566,7 +5570,7 @@ func Test_doDropRole(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		stmt := &tree.DropRole{
@@ -5610,7 +5614,7 @@ func Test_doDropRole(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		stmt := &tree.DropRole{
@@ -5661,7 +5665,7 @@ func Test_doDropRole(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		stmt := &tree.DropRole{
@@ -5715,7 +5719,7 @@ func Test_doDropUser(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		stmt := &tree.DropUser{
@@ -5763,7 +5767,7 @@ func Test_doDropUser(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		stmt := &tree.DropUser{
@@ -5818,7 +5822,7 @@ func Test_doDropUser(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		stmt := &tree.DropUser{
@@ -5876,7 +5880,7 @@ func Test_doInterpretCall(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 		call := &tree.CallStmt{
 			Name: tree.NewProcedureName("test_if_hit_elseif_first_elseif", tree.ObjectNamePrefix{}),
@@ -5885,15 +5889,14 @@ func Test_doInterpretCall(t *testing.T) {
 		priv := determinePrivilegeSetOfStatement(call)
 		ses := newSes(priv, ctrl)
 		proc := testutil.NewProcess()
-		proc.FileService = ses.pu.FileService
+		proc.FileService = gPu.FileService
 		ses.GetTxnCompileCtx().SetProcess(proc)
 		ses.GetTxnCompileCtx().GetProcess().SessionInfo = process.SessionInfo{Account: sysAccountName}
 		ses.SetDatabaseName("procedure_test")
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		aicm := &defines.AutoIncrCacheManager{}
-		rm, _ := NewRoutineManager(ctx, pu, aicm)
+		rm, _ := NewRoutineManager(ctx)
 		ses.rm = rm
 
 		//no result set
@@ -5917,7 +5920,7 @@ func Test_doInterpretCall(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 		call := &tree.CallStmt{
 			Name: tree.NewProcedureName("test_if_hit_elseif_first_elseif", tree.ObjectNamePrefix{}),
@@ -5926,15 +5929,15 @@ func Test_doInterpretCall(t *testing.T) {
 		priv := determinePrivilegeSetOfStatement(call)
 		ses := newSes(priv, ctrl)
 		proc := testutil.NewProcess()
-		proc.FileService = ses.pu.FileService
+		proc.FileService = gPu.FileService
 		ses.GetTxnCompileCtx().SetProcess(proc)
 		ses.GetTxnCompileCtx().GetProcess().SessionInfo = process.SessionInfo{Account: sysAccountName}
 		ses.SetDatabaseName("procedure_test")
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		aicm := &defines.AutoIncrCacheManager{}
-		rm, _ := NewRoutineManager(ctx, pu, aicm)
+
+		rm, _ := NewRoutineManager(ctx)
 		ses.rm = rm
 
 		//no result set
@@ -5970,7 +5973,7 @@ func Test_doInterpretCall(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 		call := &tree.CallStmt{
 			Name: tree.NewProcedureName("test_if_hit_elseif_first_elseif", tree.ObjectNamePrefix{}),
@@ -5979,15 +5982,15 @@ func Test_doInterpretCall(t *testing.T) {
 		priv := determinePrivilegeSetOfStatement(call)
 		ses := newSes(priv, ctrl)
 		proc := testutil.NewProcess()
-		proc.FileService = ses.pu.FileService
+		proc.FileService = gPu.FileService
 		ses.GetTxnCompileCtx().SetProcess(proc)
 		ses.GetTxnCompileCtx().GetProcess().SessionInfo = process.SessionInfo{Account: sysAccountName}
 		ses.SetDatabaseName("procedure_test")
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		aicm := &defines.AutoIncrCacheManager{}
-		rm, _ := NewRoutineManager(ctx, pu, aicm)
+
+		rm, _ := NewRoutineManager(ctx)
 		ses.rm = rm
 
 		//no result set
@@ -6035,7 +6038,7 @@ func Test_initProcedure(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 		cp := &tree.CreateProcedure{
 			Name: tree.NewProcedureName("test_if_hit_elseif_first_elseif", tree.ObjectNamePrefix{}),
@@ -6062,7 +6065,7 @@ func Test_initProcedure(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 		cp := &tree.CreateProcedure{
 			Name: tree.NewProcedureName("test_if_hit_elseif_first_elseif", tree.ObjectNamePrefix{}),
@@ -6095,7 +6098,7 @@ func TestDoSetSecondaryRoleAll(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		stmt := &tree.SetRole{
@@ -6136,7 +6139,7 @@ func TestDoSetSecondaryRoleAll(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		stmt := &tree.SetRole{
@@ -6177,7 +6180,7 @@ func TestDoGrantPrivilegeImplicitly(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		stmt := &tree.CreateDatabase{
@@ -6216,7 +6219,7 @@ func TestDoGrantPrivilegeImplicitly(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		stmt := &tree.CreateTable{}
@@ -6255,7 +6258,7 @@ func TestDoRevokePrivilegeImplicitly(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		stmt := &tree.DropDatabase{
@@ -6294,7 +6297,7 @@ func TestDoRevokePrivilegeImplicitly(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		stmt := &tree.DropTable{
@@ -6337,7 +6340,7 @@ func TestDoGetGlobalSystemVariable(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		stmt := &tree.ShowVariables{
@@ -6369,7 +6372,7 @@ func TestDoSetGlobalSystemVariable(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		stmt := &tree.SetVar{
@@ -6406,7 +6409,7 @@ func TestDoSetGlobalSystemVariable(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		stmt := &tree.SetVar{
@@ -6445,7 +6448,7 @@ func Test_doAlterUser(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		stmt := &tree.AlterUser{
@@ -6459,8 +6462,8 @@ func Test_doAlterUser(t *testing.T) {
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		aicm := &defines.AutoIncrCacheManager{}
-		rm, _ := NewRoutineManager(ctx, pu, aicm)
+
+		rm, _ := NewRoutineManager(ctx)
 		ses.rm = rm
 
 		//no result set
@@ -6498,7 +6501,7 @@ func Test_doAlterUser(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		stmt := &tree.AlterUser{
@@ -6514,8 +6517,8 @@ func Test_doAlterUser(t *testing.T) {
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		aicm := &defines.AutoIncrCacheManager{}
-		rm, _ := NewRoutineManager(ctx, pu, aicm)
+
+		rm, _ := NewRoutineManager(ctx)
 		ses.rm = rm
 
 		//no result set
@@ -6551,7 +6554,7 @@ func Test_doAlterUser(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		stmt := &tree.AlterUser{
@@ -6565,8 +6568,8 @@ func Test_doAlterUser(t *testing.T) {
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		aicm := &defines.AutoIncrCacheManager{}
-		rm, _ := NewRoutineManager(ctx, pu, aicm)
+
+		rm, _ := NewRoutineManager(ctx)
 		ses.rm = rm
 
 		//no result set
@@ -6604,7 +6607,7 @@ func Test_doAlterAccount(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		stmt := &tree.AlterAccount{
@@ -6624,8 +6627,8 @@ func Test_doAlterAccount(t *testing.T) {
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		aicm := &defines.AutoIncrCacheManager{}
-		rm, _ := NewRoutineManager(ctx, pu, aicm)
+
+		rm, _ := NewRoutineManager(ctx)
 		ses.rm = rm
 
 		//no result set
@@ -6658,7 +6661,7 @@ func Test_doAlterAccount(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		stmt := &tree.AlterAccount{
@@ -6678,8 +6681,8 @@ func Test_doAlterAccount(t *testing.T) {
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		aicm := &defines.AutoIncrCacheManager{}
-		rm, _ := NewRoutineManager(ctx, pu, aicm)
+
+		rm, _ := NewRoutineManager(ctx)
 		ses.rm = rm
 
 		//no result set
@@ -6712,7 +6715,7 @@ func Test_doAlterAccount(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		stmt := &tree.AlterAccount{
@@ -6732,8 +6735,8 @@ func Test_doAlterAccount(t *testing.T) {
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		aicm := &defines.AutoIncrCacheManager{}
-		rm, _ := NewRoutineManager(ctx, pu, aicm)
+
+		rm, _ := NewRoutineManager(ctx)
 		ses.rm = rm
 
 		//no result set
@@ -6761,7 +6764,7 @@ func Test_doAlterAccount(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		stmt := &tree.AlterAccount{
@@ -6782,8 +6785,8 @@ func Test_doAlterAccount(t *testing.T) {
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		aicm := &defines.AutoIncrCacheManager{}
-		rm, _ := NewRoutineManager(ctx, pu, aicm)
+
+		rm, _ := NewRoutineManager(ctx)
 		ses.rm = rm
 
 		//no result set
@@ -6812,7 +6815,7 @@ func Test_doAlterAccount(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		stmt := &tree.AlterAccount{
@@ -6833,8 +6836,8 @@ func Test_doAlterAccount(t *testing.T) {
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		aicm := &defines.AutoIncrCacheManager{}
-		rm, _ := NewRoutineManager(ctx, pu, aicm)
+
+		rm, _ := NewRoutineManager(ctx)
 		ses.rm = rm
 
 		//no result set
@@ -6867,7 +6870,7 @@ func Test_doAlterAccount(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		stmt := &tree.AlterAccount{
@@ -6880,8 +6883,8 @@ func Test_doAlterAccount(t *testing.T) {
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		aicm := &defines.AutoIncrCacheManager{}
-		rm, _ := NewRoutineManager(ctx, pu, aicm)
+
+		rm, _ := NewRoutineManager(ctx)
 		ses.rm = rm
 
 		//no result set
@@ -6909,7 +6912,7 @@ func Test_doAlterAccount(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		stmt := &tree.AlterAccount{
@@ -6934,8 +6937,8 @@ func Test_doAlterAccount(t *testing.T) {
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		aicm := &defines.AutoIncrCacheManager{}
-		rm, _ := NewRoutineManager(ctx, pu, aicm)
+
+		rm, _ := NewRoutineManager(ctx)
 		ses.rm = rm
 
 		//no result set
@@ -6962,7 +6965,7 @@ func Test_doAlterAccount(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		stmt := &tree.AlterAccount{
@@ -6978,8 +6981,8 @@ func Test_doAlterAccount(t *testing.T) {
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		aicm := &defines.AutoIncrCacheManager{}
-		rm, _ := NewRoutineManager(ctx, pu, aicm)
+
+		rm, _ := NewRoutineManager(ctx)
 		ses.rm = rm
 
 		//no result set
@@ -7010,7 +7013,7 @@ func Test_doAlterAccount(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		stmt := &tree.AlterAccount{
@@ -7026,8 +7029,8 @@ func Test_doAlterAccount(t *testing.T) {
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		aicm := &defines.AutoIncrCacheManager{}
-		rm, _ := NewRoutineManager(ctx, pu, aicm)
+
+		rm, _ := NewRoutineManager(ctx)
 		ses.rm = rm
 
 		//no result set
@@ -7058,7 +7061,7 @@ func Test_doAlterAccount(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		stmt := &tree.AlterAccount{
@@ -7074,8 +7077,8 @@ func Test_doAlterAccount(t *testing.T) {
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		aicm := &defines.AutoIncrCacheManager{}
-		rm, _ := NewRoutineManager(ctx, pu, aicm)
+
+		rm, _ := NewRoutineManager(ctx)
 		ses.rm = rm
 
 		//no result set
@@ -7120,7 +7123,7 @@ func Test_doDropAccount(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		stmt := &tree.DropAccount{
@@ -7132,8 +7135,8 @@ func Test_doDropAccount(t *testing.T) {
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		aicm := &defines.AutoIncrCacheManager{}
-		rm, _ := NewRoutineManager(ctx, pu, aicm)
+
+		rm, _ := NewRoutineManager(ctx)
 		ses.rm = rm
 
 		//no result set
@@ -7169,7 +7172,7 @@ func Test_doDropAccount(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		stmt := &tree.DropAccount{
@@ -7182,8 +7185,8 @@ func Test_doDropAccount(t *testing.T) {
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		aicm := &defines.AutoIncrCacheManager{}
-		rm, _ := NewRoutineManager(ctx, pu, aicm)
+
+		rm, _ := NewRoutineManager(ctx)
 		ses.rm = rm
 
 		//no result set
@@ -7214,7 +7217,7 @@ func Test_doDropAccount(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		stmt := &tree.DropAccount{
@@ -7226,8 +7229,8 @@ func Test_doDropAccount(t *testing.T) {
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		aicm := &defines.AutoIncrCacheManager{}
-		rm, _ := NewRoutineManager(ctx, pu, aicm)
+
+		rm, _ := NewRoutineManager(ctx)
 		ses.rm = rm
 
 		//no result set
@@ -7422,8 +7425,10 @@ func Test_genRevokeCases(t *testing.T) {
 func newSes(priv *privilege, ctrl *gomock.Controller) *Session {
 	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 	pu.SV.SetDefaultValues()
+	gPu = pu
 
 	ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+	ctx = defines.AttachAccountId(ctx, 0)
 	ioses := mock_frontend.NewMockIOSession(ctrl)
 	ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
 	ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
@@ -7431,7 +7436,7 @@ func newSes(priv *privilege, ctrl *gomock.Controller) *Session {
 	ioses.EXPECT().Ref().AnyTimes()
 	proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
 
-	ses := NewSession(proto, nil, pu, GSysVariables, true, nil, nil)
+	ses := NewSession(proto, nil, GSysVariables, true, nil)
 	tenant := &TenantInfo{
 		Tenant:        sysAccountName,
 		User:          rootName,
@@ -7487,6 +7492,8 @@ func (bt *backgroundExecTest) init() {
 
 func (bt *backgroundExecTest) Close() {
 }
+
+func (bt *backgroundExecTest) Clear() {}
 
 func (bt *backgroundExecTest) Exec(ctx context.Context, s string) error {
 	bt.currentSql = s
@@ -8188,7 +8195,7 @@ func TestDoCreatePublication(t *testing.T) {
 	bh.init()
 	sql2, err := getSqlForInsertIntoMoPubs(ctx, string(sa.Name), string(sa.Database), 0, true, "", "a1, a2", tenant.GetDefaultRoleID(), tenant.GetUserID(), sa.Comment, true)
 	require.NoError(t, err)
-	bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+	bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 	defer bhStub.Reset()
 
 	bh.sql2result["begin;"] = nil
@@ -8243,7 +8250,7 @@ func TestDoDropPublication(t *testing.T) {
 	require.NoError(t, err)
 	bh := &backgroundExecTest{}
 	bh.init()
-	bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+	bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 	defer bhStub.Reset()
 
 	bh.sql2result["begin;"] = nil
@@ -8358,7 +8365,7 @@ func TestDoAlterPublication(t *testing.T) {
 
 		bh := &backgroundExecTest{}
 		bh.init()
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		bh.sql2result["begin;"] = nil
@@ -8580,7 +8587,7 @@ func TestCheckSubscriptionValid(t *testing.T) {
 
 		bh := &backgroundExecTest{}
 		bh.init()
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		bh.sql2result["begin;"] = nil
@@ -8668,14 +8675,14 @@ func TestCheckRoleWhetherTableOwner(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		aicm := &defines.AutoIncrCacheManager{}
-		rm, _ := NewRoutineManager(ctx, pu, aicm)
+
+		rm, _ := NewRoutineManager(ctx)
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -8708,14 +8715,14 @@ func TestCheckRoleWhetherTableOwner(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		aicm := &defines.AutoIncrCacheManager{}
-		rm, _ := NewRoutineManager(ctx, pu, aicm)
+
+		rm, _ := NewRoutineManager(ctx)
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -8756,14 +8763,14 @@ func TestCheckRoleWhetherTableOwner(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		aicm := &defines.AutoIncrCacheManager{}
-		rm, _ := NewRoutineManager(ctx, pu, aicm)
+
+		rm, _ := NewRoutineManager(ctx)
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -8799,14 +8806,14 @@ func TestCheckRoleWhetherDatabaseOwner(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		aicm := &defines.AutoIncrCacheManager{}
-		rm, _ := NewRoutineManager(ctx, pu, aicm)
+
+		rm, _ := NewRoutineManager(ctx)
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -8840,14 +8847,14 @@ func TestCheckRoleWhetherDatabaseOwner(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		aicm := &defines.AutoIncrCacheManager{}
-		rm, _ := NewRoutineManager(ctx, pu, aicm)
+
+		rm, _ := NewRoutineManager(ctx)
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -8888,14 +8895,14 @@ func TestCheckRoleWhetherDatabaseOwner(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		aicm := &defines.AutoIncrCacheManager{}
-		rm, _ := NewRoutineManager(ctx, pu, aicm)
+
+		rm, _ := NewRoutineManager(ctx)
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -8952,14 +8959,14 @@ func TestDoAlterDatabaseConfig(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		aicm := &defines.AutoIncrCacheManager{}
-		rm, _ := NewRoutineManager(ctx, pu, aicm)
+
+		rm, _ := NewRoutineManager(ctx)
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -9008,14 +9015,14 @@ func TestDoAlterDatabaseConfig(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		aicm := &defines.AutoIncrCacheManager{}
-		rm, _ := NewRoutineManager(ctx, pu, aicm)
+
+		rm, _ := NewRoutineManager(ctx)
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -9066,14 +9073,14 @@ func TestDoAlterAccountConfig(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		aicm := &defines.AutoIncrCacheManager{}
-		rm, _ := NewRoutineManager(ctx, pu, aicm)
+
+		rm, _ := NewRoutineManager(ctx)
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -9123,14 +9130,14 @@ func TestInsertRecordToMoMysqlCompatibilityMode(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		aicm := &defines.AutoIncrCacheManager{}
-		rm, _ := NewRoutineManager(ctx, pu, aicm)
+
+		rm, _ := NewRoutineManager(ctx)
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -9174,14 +9181,14 @@ func TestDeleteRecordToMoMysqlCompatbilityMode(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		aicm := &defines.AutoIncrCacheManager{}
-		rm, _ := NewRoutineManager(ctx, pu, aicm)
+
+		rm, _ := NewRoutineManager(ctx)
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -9225,14 +9232,14 @@ func TestGetVersionCompatibility(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		aicm := &defines.AutoIncrCacheManager{}
-		rm, _ := NewRoutineManager(ctx, pu, aicm)
+
+		rm, _ := NewRoutineManager(ctx)
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -9272,14 +9279,14 @@ func TestCheckStageExistOrNot(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		aicm := &defines.AutoIncrCacheManager{}
-		rm, _ := NewRoutineManager(ctx, pu, aicm)
+
+		rm, _ := NewRoutineManager(ctx)
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -9318,14 +9325,14 @@ func TestCheckStageExistOrNot(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		aicm := &defines.AutoIncrCacheManager{}
-		rm, _ := NewRoutineManager(ctx, pu, aicm)
+
+		rm, _ := NewRoutineManager(ctx)
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -9395,14 +9402,14 @@ func TestDoDropStage(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		aicm := &defines.AutoIncrCacheManager{}
-		rm, _ := NewRoutineManager(ctx, pu, aicm)
+
+		rm, _ := NewRoutineManager(ctx)
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -9449,14 +9456,14 @@ func TestDoDropStage(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		aicm := &defines.AutoIncrCacheManager{}
-		rm, _ := NewRoutineManager(ctx, pu, aicm)
+
+		rm, _ := NewRoutineManager(ctx)
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -9503,14 +9510,14 @@ func TestDoDropStage(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		aicm := &defines.AutoIncrCacheManager{}
-		rm, _ := NewRoutineManager(ctx, pu, aicm)
+
+		rm, _ := NewRoutineManager(ctx)
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -9555,14 +9562,14 @@ func TestDoDropStage(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		aicm := &defines.AutoIncrCacheManager{}
-		rm, _ := NewRoutineManager(ctx, pu, aicm)
+
+		rm, _ := NewRoutineManager(ctx)
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -9611,14 +9618,14 @@ func TestDoCreateStage(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		aicm := &defines.AutoIncrCacheManager{}
-		rm, _ := NewRoutineManager(ctx, pu, aicm)
+
+		rm, _ := NewRoutineManager(ctx)
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -9669,14 +9676,14 @@ func TestDoCreateStage(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		aicm := &defines.AutoIncrCacheManager{}
-		rm, _ := NewRoutineManager(ctx, pu, aicm)
+
+		rm, _ := NewRoutineManager(ctx)
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -9729,14 +9736,14 @@ func TestDoCreateStage(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		aicm := &defines.AutoIncrCacheManager{}
-		rm, _ := NewRoutineManager(ctx, pu, aicm)
+
+		rm, _ := NewRoutineManager(ctx)
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -9787,14 +9794,14 @@ func TestDoCreateStage(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		aicm := &defines.AutoIncrCacheManager{}
-		rm, _ := NewRoutineManager(ctx, pu, aicm)
+
+		rm, _ := NewRoutineManager(ctx)
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -9847,14 +9854,14 @@ func TestDoCreateStage(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		aicm := &defines.AutoIncrCacheManager{}
-		rm, _ := NewRoutineManager(ctx, pu, aicm)
+
+		rm, _ := NewRoutineManager(ctx)
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -9907,14 +9914,14 @@ func TestDoAlterStage(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		aicm := &defines.AutoIncrCacheManager{}
-		rm, _ := NewRoutineManager(ctx, pu, aicm)
+
+		rm, _ := NewRoutineManager(ctx)
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -9970,14 +9977,14 @@ func TestDoAlterStage(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		aicm := &defines.AutoIncrCacheManager{}
-		rm, _ := NewRoutineManager(ctx, pu, aicm)
+
+		rm, _ := NewRoutineManager(ctx)
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -10033,14 +10040,14 @@ func TestDoAlterStage(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		aicm := &defines.AutoIncrCacheManager{}
-		rm, _ := NewRoutineManager(ctx, pu, aicm)
+
+		rm, _ := NewRoutineManager(ctx)
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -10094,14 +10101,14 @@ func TestDoAlterStage(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		aicm := &defines.AutoIncrCacheManager{}
-		rm, _ := NewRoutineManager(ctx, pu, aicm)
+
+		rm, _ := NewRoutineManager(ctx)
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -10155,14 +10162,14 @@ func TestDoAlterStage(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		aicm := &defines.AutoIncrCacheManager{}
-		rm, _ := NewRoutineManager(ctx, pu, aicm)
+
+		rm, _ := NewRoutineManager(ctx)
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -10217,14 +10224,14 @@ func TestDoAlterStage(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		aicm := &defines.AutoIncrCacheManager{}
-		rm, _ := NewRoutineManager(ctx, pu, aicm)
+
+		rm, _ := NewRoutineManager(ctx)
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -10283,14 +10290,14 @@ func TestDoCheckFilePath(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		aicm := &defines.AutoIncrCacheManager{}
-		rm, _ := NewRoutineManager(ctx, pu, aicm)
+
+		rm, _ := NewRoutineManager(ctx)
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -10325,14 +10332,14 @@ func TestDoCheckFilePath(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		aicm := &defines.AutoIncrCacheManager{}
-		rm, _ := NewRoutineManager(ctx, pu, aicm)
+
+		rm, _ := NewRoutineManager(ctx)
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -10375,14 +10382,14 @@ func TestDoCheckFilePath(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		aicm := &defines.AutoIncrCacheManager{}
-		rm, _ := NewRoutineManager(ctx, pu, aicm)
+
+		rm, _ := NewRoutineManager(ctx)
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -10427,14 +10434,14 @@ func TestDoCheckFilePath(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		aicm := &defines.AutoIncrCacheManager{}
-		rm, _ := NewRoutineManager(ctx, pu, aicm)
+
+		rm, _ := NewRoutineManager(ctx)
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -10477,14 +10484,14 @@ func TestDoCheckFilePath(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		aicm := &defines.AutoIncrCacheManager{}
-		rm, _ := NewRoutineManager(ctx, pu, aicm)
+
+		rm, _ := NewRoutineManager(ctx)
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -10529,14 +10536,14 @@ func TestDoCheckFilePath(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		aicm := &defines.AutoIncrCacheManager{}
-		rm, _ := NewRoutineManager(ctx, pu, aicm)
+
+		rm, _ := NewRoutineManager(ctx)
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -10665,16 +10672,29 @@ func TestUpload(t *testing.T) {
 		proto := &FakeProtocol{
 			ioses: ioses,
 		}
-		mce := NewMysqlCmdExecutor()
 		fs, err := fileservice.NewLocalFS(proc.Ctx, defines.SharedFileServiceName, t.TempDir(), fileservice.DisabledCacheConfig, nil)
 		convey.So(err, convey.ShouldBeNil)
 		proc.FileService = fs
-		ses := &Session{
-			protocol: proto,
-			proc:     proc,
+
+		//parameter
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		_, err = toml.DecodeFile("test/system_vars_config.toml", pu.SV)
+		assert.Nil(t, err)
+		pu.SV.SetDefaultValues()
+		pu.SV.SaveQueryResult = "on"
+		if err != nil {
+			assert.Nil(t, err)
 		}
-		mce.ses = ses
-		fp, err := mce.Upload(proc.Ctx, "test.py", "test")
+		//file service
+		pu.FileService = fs
+		gPu = pu
+		ses := &Session{
+			feSessionImpl: feSessionImpl{
+				proto: proto,
+			},
+			proc: proc,
+		}
+		fp, err := Upload(proc.Ctx, ses, "test.py", "test")
 		convey.So(err, convey.ShouldBeNil)
 		iovec := &fileservice.IOVector{
 			FilePath: fp,
@@ -10702,14 +10722,15 @@ func TestCheckSnapshotExistOrNot(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		aicm := &defines.AutoIncrCacheManager{}
-		rm, _ := NewRoutineManager(ctx, pu, aicm)
+		gPu = pu
+
+		rm, _ := NewRoutineManager(ctx)
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -10748,14 +10769,14 @@ func TestCheckSnapshotExistOrNot(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		gPu = pu
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		aicm := &defines.AutoIncrCacheManager{}
-		rm, _ := NewRoutineManager(ctx, pu, aicm)
+		rm, _ := NewRoutineManager(ctx)
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -10794,14 +10815,14 @@ func TestDoDropSnapshot(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		gPu = pu
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		aicm := &defines.AutoIncrCacheManager{}
-		rm, _ := NewRoutineManager(ctx, pu, aicm)
+		rm, _ := NewRoutineManager(ctx)
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -10848,14 +10869,14 @@ func TestDoDropSnapshot(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		gPu = pu
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		aicm := &defines.AutoIncrCacheManager{}
-		rm, _ := NewRoutineManager(ctx, pu, aicm)
+		rm, _ := NewRoutineManager(ctx)
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -10902,14 +10923,14 @@ func TestDoDropSnapshot(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		gPu = pu
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		aicm := &defines.AutoIncrCacheManager{}
-		rm, _ := NewRoutineManager(ctx, pu, aicm)
+		rm, _ := NewRoutineManager(ctx)
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -10954,14 +10975,14 @@ func TestDoDropSnapshot(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		gPu = pu
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		aicm := &defines.AutoIncrCacheManager{}
-		rm, _ := NewRoutineManager(ctx, pu, aicm)
+		rm, _ := NewRoutineManager(ctx)
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -11010,14 +11031,14 @@ func TestDoCreateSnapshot(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		gPu = pu
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		aicm := &defines.AutoIncrCacheManager{}
-		rm, _ := NewRoutineManager(ctx, pu, aicm)
+		rm, _ := NewRoutineManager(ctx)
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -11071,14 +11092,14 @@ func TestDoCreateSnapshot(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		gPu = pu
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		aicm := &defines.AutoIncrCacheManager{}
-		rm, _ := NewRoutineManager(ctx, pu, aicm)
+		rm, _ := NewRoutineManager(ctx)
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -11132,14 +11153,14 @@ func TestDoCreateSnapshot(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		gPu = pu
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		aicm := &defines.AutoIncrCacheManager{}
-		rm, _ := NewRoutineManager(ctx, pu, aicm)
+		rm, _ := NewRoutineManager(ctx)
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -11197,14 +11218,14 @@ func TestDoCreateSnapshot(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		gPu = pu
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		aicm := &defines.AutoIncrCacheManager{}
-		rm, _ := NewRoutineManager(ctx, pu, aicm)
+		rm, _ := NewRoutineManager(ctx)
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -11262,14 +11283,14 @@ func TestDoCreateSnapshot(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		gPu = pu
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		aicm := &defines.AutoIncrCacheManager{}
-		rm, _ := NewRoutineManager(ctx, pu, aicm)
+		rm, _ := NewRoutineManager(ctx)
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -11328,14 +11349,14 @@ func TestDoCreateSnapshot(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		gPu = pu
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		aicm := &defines.AutoIncrCacheManager{}
-		rm, _ := NewRoutineManager(ctx, pu, aicm)
+		rm, _ := NewRoutineManager(ctx)
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -11394,14 +11415,14 @@ func TestDoCreateSnapshot(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		gPu = pu
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		aicm := &defines.AutoIncrCacheManager{}
-		rm, _ := NewRoutineManager(ctx, pu, aicm)
+		rm, _ := NewRoutineManager(ctx)
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -11441,7 +11462,7 @@ func TestDoCreateSnapshot(t *testing.T) {
 		bh.sql2result[sql] = mrs
 
 		sql2, _ := getSqlForCheckTenant(ctx, "acc1")
-		mrs2 := newMrsForPasswordOfUser([][]interface{}{{}})
+		mrs2 := newMrsForPasswordOfUser([][]interface{}{{0}})
 		bh.sql2result[sql2] = mrs2
 
 		err := doCreateSnapshot(ctx, ses, cs)

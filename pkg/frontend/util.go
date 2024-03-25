@@ -23,9 +23,10 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/frontend/constant"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -34,23 +35,35 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 
 	"github.com/BurntSushi/toml"
-	"github.com/google/uuid"
-	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	mo_config "github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
-	db_holder "github.com/matrixorigin/matrixone/pkg/util/export/etl/db"
-	"github.com/matrixorigin/matrixone/pkg/util/trace"
-	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"go.uber.org/zap"
 )
+
+func createDropDatabaseErrorInfo() string {
+	return "CREATE/DROP of database is not supported in transactions"
+}
+
+func onlyCreateStatementErrorInfo() string {
+	return "Only CREATE of DDL is supported in transactions"
+}
+
+func administrativeCommandIsUnsupportedInTxnErrorInfo() string {
+	return "administrative command is unsupported in transactions"
+}
+
+func unclassifiedStatementInUncommittedTxnErrorInfo() string {
+	return "unclassified statement appears in uncommitted transaction"
+}
+
+func writeWriteConflictsErrorInfo() string {
+	return "Write conflicts detected. Previous transaction need to be aborted."
+}
 
 type CloseFlag struct {
 	//closed flag
@@ -189,27 +202,6 @@ var PathExists = func(path string) (bool, bool, error) {
 	return false, false, err
 }
 
-/*
-MakeDebugInfo prints bytes in multi-lines.
-*/
-func MakeDebugInfo(data []byte, bytesCount int, bytesPerLine int) string {
-	if len(data) == 0 || bytesCount == 0 || bytesPerLine == 0 {
-		return ""
-	}
-	pl := Min(bytesCount, len(data))
-	ps := ""
-	for i := 0; i < pl; i++ {
-		if i > 0 && (i%bytesPerLine == 0) {
-			ps += "\n"
-		}
-		if i%bytesPerLine == 0 {
-			ps += fmt.Sprintf("%d", i/bytesPerLine) + " : "
-		}
-		ps += fmt.Sprintf("%02x ", data[i])
-	}
-	return ps
-}
-
 func getSystemVariables(configFile string) (*mo_config.FrontendParameters, error) {
 	sv := &mo_config.FrontendParameters{}
 	var err error
@@ -278,7 +270,7 @@ func WildcardMatch(pattern, target string) bool {
 }
 
 // getExprValue executes the expression and returns the value.
-func getExprValue(e tree.Expr, mce *MysqlCmdExecutor, ses *Session) (interface{}, error) {
+func getExprValue(e tree.Expr, ses *Session) (interface{}, error) {
 	/*
 		CORNER CASE:
 			SET character_set_results = utf8; // e = tree.UnresolvedName{'utf8'}.
@@ -322,7 +314,7 @@ func getExprValue(e tree.Expr, mce *MysqlCmdExecutor, ses *Session) (interface{}
 
 	//run the statement in the same session
 	ses.ClearResultBatches()
-	err = executeStmtInSameSession(ctx, mce, ses, compositedSelect)
+	err = executeStmtInSameSession(ctx, ses, compositedSelect)
 	if err != nil {
 		return nil, err
 	}
@@ -466,130 +458,6 @@ func getValueFromVector(vec *vector.Vector, ses *Session, expr *plan2.Expr) (int
 		return vector.MustFixedCol[types.Enum](vec)[0], nil
 	default:
 		return nil, moerr.NewInvalidArg(ses.GetRequestContext(), "variable type", vec.GetType().Oid.String())
-	}
-}
-
-type statementStatus int
-
-const (
-	success statementStatus = iota
-	fail
-	sessionId = "session_id"
-
-	txnId       = "txn_id"
-	statementId = "statement_id"
-)
-
-func (s statementStatus) String() string {
-	switch s {
-	case success:
-		return "success"
-	case fail:
-		return "fail"
-	}
-	return "running"
-}
-
-// logStatementStatus prints the status of the statement into the log.
-func logStatementStatus(ctx context.Context, ses *Session, stmt tree.Statement, status statementStatus, err error) {
-	var stmtStr string
-	stm := motrace.StatementFromContext(ctx)
-	if stm == nil {
-		fmtCtx := tree.NewFmtCtx(dialect.MYSQL)
-		stmt.Format(fmtCtx)
-		stmtStr = fmtCtx.String()
-	} else {
-		stmtStr = stm.Statement
-	}
-	logStatementStringStatus(ctx, ses, stmtStr, status, err)
-}
-
-func logStatementStringStatus(ctx context.Context, ses *Session, stmtStr string, status statementStatus, err error) {
-	str := SubStringFromBegin(stmtStr, int(ses.GetParameterUnit().SV.LengthOfQueryPrinted))
-	outBytes, outPacket := ses.GetMysqlProtocol().CalculateOutTrafficBytes(true)
-	if status == success {
-		logDebug(ses, ses.GetDebugString(), "query trace status", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.StatementField(str), logutil.StatusField(status.String()), trace.ContextField(ctx))
-		err = nil // make sure: it is nil for EndStatement
-	} else {
-		logError(ses, ses.GetDebugString(), "query trace status", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.StatementField(str), logutil.StatusField(status.String()), logutil.ErrorField(err), trace.ContextField(ctx))
-	}
-	// pls make sure: NO ONE use the ses.tStmt after EndStatement
-	motrace.EndStatement(ctx, err, ses.sentRows.Load(), outBytes, outPacket)
-	// need just below EndStatement
-	ses.SetTStmt(nil)
-}
-
-var logger *log.MOLogger
-var loggerOnce sync.Once
-
-func getLogger() *log.MOLogger {
-	loggerOnce.Do(initLogger)
-	return logger
-}
-
-func initLogger() {
-	rt := moruntime.ProcessLevelRuntime()
-	if rt == nil {
-		rt = moruntime.DefaultRuntime()
-	}
-	logger = rt.Logger().Named("frontend")
-}
-
-func appendSessionField(fields []zap.Field, ses *Session) []zap.Field {
-	if ses != nil {
-		if ses.tStmt != nil {
-			fields = append(fields, zap.String(sessionId, uuid.UUID(ses.tStmt.SessionID).String()))
-			fields = append(fields, zap.String(statementId, uuid.UUID(ses.tStmt.StatementID).String()))
-			txnInfo := ses.GetTxnInfo()
-			if txnInfo != "" {
-				fields = append(fields, zap.String(txnId, txnInfo))
-			}
-		} else {
-			fields = append(fields, zap.String(sessionId, uuid.UUID(ses.GetUUID()).String()))
-		}
-	}
-	return fields
-}
-
-func logInfo(ses *Session, info string, msg string, fields ...zap.Field) {
-	if ses != nil && ses.tenant != nil && ses.tenant.User == db_holder.MOLoggerUser {
-		return
-	}
-	fields = append(fields, zap.String("session_info", info))
-	fields = appendSessionField(fields, ses)
-	getLogger().Log(msg, log.DefaultLogOptions().WithLevel(zap.InfoLevel).AddCallerSkip(1), fields...)
-}
-
-func logInfof(info string, msg string, fields ...zap.Field) {
-	if logutil.GetSkip1Logger().Core().Enabled(zap.InfoLevel) {
-		fields = append(fields, zap.String("session_info", info))
-		getLogger().Log(msg, log.DefaultLogOptions().WithLevel(zap.InfoLevel).AddCallerSkip(1), fields...)
-	}
-}
-
-func logDebug(ses *Session, info string, msg string, fields ...zap.Field) {
-	if ses != nil && ses.tenant != nil && ses.tenant.User == db_holder.MOLoggerUser {
-		return
-	}
-	fields = append(fields, zap.String("session_info", info))
-	fields = appendSessionField(fields, ses)
-	getLogger().Log(msg, log.DefaultLogOptions().WithLevel(zap.DebugLevel).AddCallerSkip(1), fields...)
-}
-
-func logError(ses *Session, info string, msg string, fields ...zap.Field) {
-	if ses != nil && ses.tenant != nil && ses.tenant.User == db_holder.MOLoggerUser {
-		return
-	}
-	fields = append(fields, zap.String("session_info", info))
-	fields = appendSessionField(fields, ses)
-	getLogger().Log(msg, log.DefaultLogOptions().WithLevel(zap.ErrorLevel).AddCallerSkip(1), fields...)
-}
-
-// todo: remove this function after all the logDebugf are replaced by logDebug
-func logDebugf(info string, msg string, fields ...interface{}) {
-	if logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
-		fields = append(fields, info)
-		logutil.Debugf(msg+" %s", fields...)
 	}
 }
 
@@ -737,7 +605,7 @@ func needConvertedToAccessDeniedError(errMsg string) bool {
 }
 
 const (
-	quitStr = "!!!COM_QUIT!!!"
+	quitStr = "MysqlClientQuit"
 )
 
 // makeExecuteSql appends the PREPARE sql and its values of parameters for the EXECUTE statement.
@@ -897,4 +765,84 @@ func getRandomErrorRollbackWholeTxn() error {
 	default:
 		panic(fmt.Sprintf("usp error code %d", arr[x]))
 	}
+}
+
+func skipClientQuit(info string) bool {
+	return strings.Contains(info, quitStr)
+}
+
+// UserInput
+// normally, just use the sql.
+// for some special statement, like 'set_var', we need to use the stmt.
+// if the stmt is not nil, we neglect the sql.
+type UserInput struct {
+	sql           string
+	stmt          tree.Statement
+	sqlSourceType []string
+}
+
+func (ui *UserInput) getSql() string {
+	return ui.sql
+}
+
+// getStmt if the stmt is not nil, we neglect the sql.
+func (ui *UserInput) getStmt() tree.Statement {
+	return ui.stmt
+}
+
+func (ui *UserInput) getSqlSourceTypes() []string {
+	return ui.sqlSourceType
+}
+
+// isInternal return true if the stmt is not nil.
+// it means the statement is not from any client.
+// currently, we use it to handle the 'set_var' statement.
+func (ui *UserInput) isInternal() bool {
+	return ui.getStmt() != nil
+}
+
+func (ui *UserInput) genSqlSourceType(ses FeSession) {
+	sql := ui.getSql()
+	ui.sqlSourceType = nil
+	if ui.getStmt() != nil {
+		ui.sqlSourceType = append(ui.sqlSourceType, constant.InternalSql)
+		return
+	}
+	tenant := ses.GetTenantInfo()
+	if tenant == nil || strings.HasPrefix(sql, cmdFieldListSql) {
+		ui.sqlSourceType = append(ui.sqlSourceType, constant.InternalSql)
+		return
+	}
+	flag, _, _ := isSpecialUser(tenant.User)
+	if flag {
+		ui.sqlSourceType = append(ui.sqlSourceType, constant.InternalSql)
+		return
+	}
+	for len(sql) > 0 {
+		p1 := strings.Index(sql, "/*")
+		p2 := strings.Index(sql, "*/")
+		if p1 < 0 || p2 < 0 || p2 <= p1+1 {
+			ui.sqlSourceType = append(ui.sqlSourceType, constant.ExternSql)
+			return
+		}
+		source := strings.TrimSpace(sql[p1+2 : p2])
+		if source == cloudUserTag {
+			ui.sqlSourceType = append(ui.sqlSourceType, constant.CloudUserSql)
+		} else if source == cloudNoUserTag {
+			ui.sqlSourceType = append(ui.sqlSourceType, constant.CloudNoUserSql)
+		} else if source == saveResultTag {
+			ui.sqlSourceType = append(ui.sqlSourceType, constant.CloudUserSql)
+		} else {
+			ui.sqlSourceType = append(ui.sqlSourceType, constant.ExternSql)
+		}
+		sql = sql[p2+2:]
+	}
+}
+
+func (ui *UserInput) getSqlSourceType(i int) string {
+	sqlType := constant.ExternSql
+	if i < len(ui.sqlSourceType) {
+		sqlType = ui.sqlSourceType[i]
+	}
+	return sqlType
 }

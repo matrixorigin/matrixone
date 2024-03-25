@@ -40,13 +40,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"go.uber.org/zap"
 )
 
 type TxnCompilerContext struct {
 	dbName               string
 	txnHandler           *TxnHandler
-	ses                  *Session
+	ses                  FeSession
 	proc                 *process.Process
 	buildAlterView       bool
 	dbOfView, nameOfView string
@@ -59,14 +58,14 @@ type TxnCompilerContext struct {
 var _ plan2.CompilerContext = &TxnCompilerContext{}
 
 func (tcc *TxnCompilerContext) ReplacePlan(execPlan *plan.Execute) (*plan.Plan, tree.Statement, error) {
-	p, st, _, err := replacePlan(tcc.ses.GetRequestContext(), tcc.ses, tcc.tcw, execPlan)
+	p, st, _, err := replacePlan(tcc.ses.GetRequestContext(), tcc.ses.(*Session), tcc.tcw, execPlan)
 	return p, st, err
 }
 
 func (tcc *TxnCompilerContext) GetStatsCache() *plan2.StatsCache {
 	tcc.mu.Lock()
 	defer tcc.mu.Unlock()
-	return tcc.ses.statsCache
+	return tcc.ses.GetStatsCache()
 }
 
 func InitTxnCompilerContext(txn *TxnHandler, db string) *TxnCompilerContext {
@@ -87,13 +86,13 @@ func (tcc *TxnCompilerContext) GetBuildingAlterView() (bool, string, string) {
 	return tcc.buildAlterView, tcc.dbOfView, tcc.nameOfView
 }
 
-func (tcc *TxnCompilerContext) SetSession(ses *Session) {
+func (tcc *TxnCompilerContext) SetSession(ses FeSession) {
 	tcc.mu.Lock()
 	defer tcc.mu.Unlock()
 	tcc.ses = ses
 }
 
-func (tcc *TxnCompilerContext) GetSession() *Session {
+func (tcc *TxnCompilerContext) GetSession() FeSession {
 	tcc.mu.Lock()
 	defer tcc.mu.Unlock()
 	return tcc.ses
@@ -128,11 +127,11 @@ func (tcc *TxnCompilerContext) GetRootSql() string {
 }
 
 func (tcc *TxnCompilerContext) GetAccountId() (uint32, error) {
-	return tcc.ses.accountId, nil
+	return tcc.ses.GetAccountId(), nil
 }
 
 func (tcc *TxnCompilerContext) GetContext() context.Context {
-	return tcc.ses.requestCtx
+	return tcc.ses.GetRequestContext()
 }
 
 func (tcc *TxnCompilerContext) DatabaseExists(name string) bool {
@@ -144,13 +143,8 @@ func (tcc *TxnCompilerContext) DatabaseExists(name string) bool {
 		return false
 	}
 	//open database
-	ses := tcc.GetSession()
 	_, err = tcc.GetTxnHandler().GetStorage().Database(txnCtx, name, txn)
 	if err != nil {
-		logError(ses, ses.GetDebugString(),
-			"Failed to get database",
-			zap.String("databaseName", name),
-			zap.Error(err))
 		return false
 	}
 
@@ -212,10 +206,6 @@ func (tcc *TxnCompilerContext) getRelation(dbName string, tableName string, sub 
 	//open database
 	db, err := tcc.GetTxnHandler().GetStorage().Database(txnCtx, dbName, txn)
 	if err != nil {
-		logError(ses, ses.GetDebugString(),
-			"Failed to get database",
-			zap.String("databaseName", dbName),
-			zap.Error(err))
 		return nil, nil, err
 	}
 
@@ -230,10 +220,6 @@ func (tcc *TxnCompilerContext) getRelation(dbName string, tableName string, sub 
 	if err != nil {
 		tmpTable, e := tcc.getTmpRelation(txnCtx, engine.GetTempTableName(dbName, tableName))
 		if e != nil {
-			logError(ses, ses.GetDebugString(),
-				"Failed to get table",
-				zap.String("tableName", tableName),
-				zap.Error(err))
 			return nil, nil, err
 		} else {
 			table = tmpTable
@@ -243,16 +229,13 @@ func (tcc *TxnCompilerContext) getRelation(dbName string, tableName string, sub 
 }
 
 func (tcc *TxnCompilerContext) getTmpRelation(_ context.Context, tableName string) (engine.Relation, error) {
-	e := tcc.ses.storage
+	e := tcc.ses.GetStorage()
 	txnCtx, txn, err := tcc.txnHandler.GetTxn()
 	if err != nil {
 		return nil, err
 	}
 	db, err := e.Database(txnCtx, defines.TEMPORARY_DBNAME, txn)
 	if err != nil {
-		logError(tcc.ses, tcc.ses.GetDebugString(),
-			"Failed to get temp database",
-			zap.Error(err))
 		return nil, err
 	}
 	table, err := db.Relation(txnCtx, tableName, nil)

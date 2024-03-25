@@ -16,6 +16,9 @@ package frontend
 
 import (
 	"context"
+	"math"
+	"testing"
+
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -26,8 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"math"
-	"testing"
 )
 
 func Test_getSqlForAccountInfo(t *testing.T) {
@@ -124,9 +125,9 @@ func Test_mergeResult(t *testing.T) {
 	defer ses.Close()
 
 	outputBatch := batch.NewWithSize(finalColumnCount)
-	accountInfo, err := newAccountInfo(ses.mp)
+	accountInfo, err := newAccountInfo(ses.pool)
 	assert.Nil(t, err)
-	tableStatsResult, err := newTableStatsResult(ses.mp)
+	tableStatsResult, err := newTableStatsResult(ses.pool)
 	assert.Nil(t, err)
 
 	err = mergeOutputResult(ses, outputBatch, accountInfo, []*batch.Batch{tableStatsResult})
@@ -142,11 +143,11 @@ func Test_embeddingSizeToBatch(t *testing.T) {
 	bat := &batch.Batch{}
 	for i := 0; i <= finalColumnCount; i++ {
 		bat.Vecs = append(bat.Vecs, vector.NewVec(types.T_float64.ToType()))
-		vector.AppendFixed(bat.Vecs[i], float64(99), false, ses.mp)
+		vector.AppendFixed(bat.Vecs[i], float64(99), false, ses.pool)
 	}
 
 	size := uint64(1024 * 1024 * 11235)
-	embeddingSizeToBatch(bat, size, ses.mp)
+	embeddingSizeToBatch(bat, size, ses.pool)
 
 	require.Equal(t, math.Round(float64(size)/1048576.0*1e6)/1e6, vector.GetFixedAt[float64](bat.Vecs[idxOfSize], 0))
 }
