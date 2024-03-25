@@ -24,6 +24,7 @@ import (
 type distinctHash struct {
 	mp   *mpool.MPool
 	maps []*hashmap.StrHashMap
+	hashHasNull bool
 
 	// optimized for bulk and batch insertions.
 	bs  []bool
@@ -34,6 +35,7 @@ func newDistinctHash(mp *mpool.MPool, containNullValue bool) distinctHash {
 	return distinctHash{
 		mp:   mp,
 		maps: nil,
+		hashHasNull: containNullValue,
 	}
 }
 
@@ -45,7 +47,7 @@ func (d *distinctHash) grows(more int) error {
 	// we set the hasNull to be true here for supporting multi-columns agg next day.
 	for i := oldLen; i < newLen; i++ {
 		if d.maps[i], err = hashmap.NewStrMap(
-			true, 0, 0, d.mp); err != nil {
+			d.hashHasNull, 0, 0, d.mp); err != nil {
 			return err
 		}
 	}

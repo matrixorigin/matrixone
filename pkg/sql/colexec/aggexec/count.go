@@ -24,6 +24,8 @@ import (
 type countColumnExec struct {
 	singleAggInfo
 	singleAggExecExtraInformation
+	distinctHash
+
 	ret aggFuncResult[int64]
 }
 
@@ -35,12 +37,23 @@ func newCountColumnExecExec(mg AggMemoryManager, info singleAggInfo) AggFuncExec
 }
 
 func (exec *countColumnExec) GroupGrow(more int) error {
+	if exec.IsDistinct() {
+		if err := exec.distinctHash.grows(more); err != nil {
+			return err
+		}
+	}
 	return exec.ret.grows(more)
 }
 
 func (exec *countColumnExec) Fill(groupIndex int, row int, vectors []*vector.Vector) error {
 	if vectors[0].IsNull(uint64(row)) {
 		return nil
+	}
+
+	if exec.IsDistinct() {
+		if need, err := exec.distinctHash.fill(groupIndex, vectors, row); err != nil || !need {
+			return err
+		}
 	}
 
 	exec.ret.groupToSet = groupIndex
@@ -55,8 +68,22 @@ func (exec *countColumnExec) BulkFill(groupIndex int, vectors []*vector.Vector) 
 	exec.ret.groupToSet = groupIndex
 
 	old := exec.ret.aggGet()
-	next := old + int64(vectors[0].Length()-vectors[0].GetNulls().Count())
-	exec.ret.aggSet(next)
+	if exec.IsDistinct() {
+		needs, err := exec.distinctHash.bulkFill(groupIndex, vectors)
+		if err != nil {
+			return err
+		}
+		nsp := vectors[0].GetNulls()
+		for i, j := uint64(0), uint64(len(needs)); i < j; i++ {
+			if needs[i] && !nsp.Contains(i) {
+				old++
+			}
+		}
+
+	} else {
+		old += int64(vectors[0].Length()-vectors[0].GetNulls().Count())
+	}
+	exec.ret.aggSet(old)
 	return nil
 }
 
@@ -67,10 +94,49 @@ func (exec *countColumnExec) BatchFill(offset int, groups []uint64, vectors []*v
 
 	vs := exec.ret.values
 	if vectors[0].IsConst() || vectors[0].GetNulls().IsEmpty() {
+		if exec.IsDistinct() {
+			needs, err := exec.distinctHash.batchFill(vectors, offset, groups)
+			if err != nil {
+				return err
+			}
+			for i, group := range groups {
+				if needs[i] && group != GroupNotMatched {
+					vs[group-1]++
+				}
+			}
+			return nil
+		}
+
 		for _, group := range groups {
 			if group != GroupNotMatched {
 				vs[group-1]++
 			}
+		}
+		return nil
+	}
+
+	if exec.IsDistinct() {
+		needs, err := exec.distinctHash.batchFill(vectors, offset, groups)
+		if err != nil {
+			return err
+		}
+
+		if vectors[0].HasNull() {
+			nsp := vectors[0].GetNulls()
+			u64Offset := uint64(offset)
+			for i, j := uint64(0), uint64(len(groups)); i < j; i++ {
+				if needs[i] && !nsp.Contains(i+u64Offset) && groups[i] != GroupNotMatched {
+					vs[groups[i]-1]++
+				}
+			}
+
+		} else {
+			for i, group := range groups {
+				if needs[i] && group != GroupNotMatched {
+					vs[group-1]++
+				}
+			}
+			return nil
 		}
 		return nil
 	}
@@ -102,7 +168,7 @@ func (exec *countColumnExec) Merge(next AggFuncExec, groupIdx1, groupIdx2 int) e
 	exec.ret.groupToSet = groupIdx1
 	other.ret.groupToSet = groupIdx2
 	exec.ret.aggSet(exec.ret.aggGet() + other.ret.aggGet())
-	return nil
+	return exec.distinctHash.merge(&other.distinctHash)
 }
 
 func (exec *countColumnExec) BatchMerge(next AggFuncExec, offset int, groups []uint64) error {
@@ -118,7 +184,7 @@ func (exec *countColumnExec) BatchMerge(next AggFuncExec, offset int, groups []u
 		exec.ret.mergeEmpty(other.ret.basicResult, g1, g2)
 		vs1[g1] += vs2[g2]
 	}
-	return nil
+	return exec.distinctHash.merge(&other.distinctHash)
 }
 
 func (exec *countColumnExec) Flush() (*vector.Vector, error) {
@@ -130,6 +196,7 @@ func (exec *countColumnExec) Flush() (*vector.Vector, error) {
 
 func (exec *countColumnExec) Free() {
 	exec.ret.free()
+	exec.distinctHash.free()
 }
 
 type countStarExec struct {
@@ -139,6 +206,7 @@ type countStarExec struct {
 }
 
 func newCountStarExec(mg AggMemoryManager, info singleAggInfo) AggFuncExec {
+	// todo: should we check if `distinct` here ?
 	return &countStarExec{
 		singleAggInfo: info,
 		ret:           initFixedAggFuncResult[int64](mg, info.retType, false),

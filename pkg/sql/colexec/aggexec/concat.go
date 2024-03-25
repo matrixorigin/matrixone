@@ -30,6 +30,7 @@ const (
 type groupConcatExec struct {
 	multiAggInfo
 	ret aggFuncBytesResult
+	distinctHash
 
 	separator []byte
 }
@@ -44,11 +45,15 @@ func GroupConcatReturnType(args []types.Type) types.Type {
 }
 
 func newGroupConcatExec(mg AggMemoryManager, info multiAggInfo, separator string) AggFuncExec {
-	return &groupConcatExec{
+	exec := &groupConcatExec{
 		multiAggInfo: info,
 		ret:          initBytesAggFuncResult(mg, info.retType, info.emptyNull),
 		separator:    []byte(separator),
 	}
+	if info.distinct {
+		exec.distinctHash = newDistinctHash(mg.Mp(), false)
+	}
+	return exec
 }
 
 func isValidGroupConcatUnit(value []byte) error {
@@ -59,6 +64,11 @@ func isValidGroupConcatUnit(value []byte) error {
 }
 
 func (exec *groupConcatExec) GroupGrow(more int) error {
+	if exec.IsDistinct() {
+		if err := exec.distinctHash.grows(more); err != nil {
+			return err
+		}
+	}
 	return exec.ret.grows(more)
 }
 
@@ -73,6 +83,12 @@ func (exec *groupConcatExec) Fill(groupIndex int, row int, vectors []*vector.Vec
 
 	exec.ret.groupToSet = groupIndex
 	exec.ret.setGroupNotEmpty(groupIndex)
+	if exec.IsDistinct() {
+		if need, err := exec.distinctHash.fill(groupIndex, vectors, row); err != nil || !need {
+			return err
+		}
+	}
+
 	r := exec.ret.aggGet()
 	if len(r) > groupConcatMaxLen {
 		return nil
@@ -95,17 +111,50 @@ func (exec *groupConcatExec) Fill(groupIndex int, row int, vectors []*vector.Vec
 
 func (exec *groupConcatExec) BulkFill(groupIndex int, vectors []*vector.Vector) error {
 	exec.ret.groupToSet = groupIndex
-	for _, v := range vectors {
-		for row, end := 0, v.Length(); row < end; row++ {
-			if err := exec.Fill(groupIndex, row, vectors); err != nil {
+
+	if exec.IsDistinct() {
+		needs, err := exec.distinctHash.bulkFill(groupIndex, vectors)
+		if err != nil {
+			return err
+		}
+		for row, end := 0, vectors[0].Length(); row < end; row++ {
+			if !needs[row] {
+				continue
+			}
+
+			if err = exec.Fill(groupIndex, row, vectors); err != nil {
 				return err
 			}
+		}
+		return nil
+	}
+
+	for row, end := 0, vectors[0].Length(); row < end; row++ {
+		if err := exec.Fill(groupIndex, row, vectors); err != nil {
+			return err
 		}
 	}
 	return nil
 }
 
 func (exec *groupConcatExec) BatchFill(offset int, groups []uint64, vectors []*vector.Vector) error {
+	if exec.IsDistinct() {
+		needs, err := exec.distinctHash.batchFill(vectors, offset, groups)
+		if err != nil {
+			return err
+		}
+
+		for i, j, idx := offset, offset+len(groups), 0; i < j; i++ {
+			if needs[idx] && groups[idx] != GroupNotMatched {
+				if err = exec.Fill(int(groups[idx]-1), i, vectors); err != nil {
+					return err
+				}
+			}
+			idx++
+		}
+		return nil
+	}
+
 	for i, j, idx := offset, offset+len(groups), 0; i < j; i++ {
 		if groups[idx] != GroupNotMatched {
 			if err := exec.Fill(int(groups[idx]-1), i, vectors); err != nil {
@@ -125,6 +174,9 @@ func (exec *groupConcatExec) SetExtraInformation(partialResult any, groupIndex i
 func (exec *groupConcatExec) merge(other *groupConcatExec, idx1, idx2 int) error {
 	exec.ret.groupToSet = idx1
 	other.ret.groupToSet = idx2
+	if err := exec.distinctHash.merge(&other.distinctHash); err != nil {
+		return err
+	}
 
 	v1 := exec.ret.aggGet()
 	v2 := other.ret.aggGet()
@@ -164,6 +216,7 @@ func (exec *groupConcatExec) Flush() (*vector.Vector, error) {
 }
 
 func (exec *groupConcatExec) Free() {
+	exec.distinctHash.free()
 	exec.ret.free()
 }
 

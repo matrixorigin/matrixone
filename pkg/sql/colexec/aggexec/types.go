@@ -165,9 +165,13 @@ func makeMultiAgg(
 		panic(err)
 	}
 
+	if isDistinct {
+		panic("multi-column agg do not support `distinct`")
+	}
+
 	info := multiAggInfo{
 		aggID:     aggID,
-		distinct:  isDistinct,
+		distinct:  false,
 		argTypes:  param,
 		retType:   result,
 		emptyNull: rInfo.setNullForEmptyGroup,
