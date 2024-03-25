@@ -1174,6 +1174,8 @@ func constructGroup(ctx context.Context, n, cn *plan.Node, ibucket, nbucket int,
 					}
 					cfg = []byte(vec.GetStringAt(0))
 					vec.Free(proc.Mp())
+
+					f.F.Args = f.F.Args[:len(f.F.Args)-1]
 				}
 			}
 
