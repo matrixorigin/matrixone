@@ -125,8 +125,10 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 		ctr.FreeAllReg()
 		ctr.tmpBatches = nil
 
-		anal := proc.GetAnalyze(arg.info.Idx, arg.info.ParallelIdx, arg.info.ParallelMajor)
-		anal.Alloc(ctr.maxAllocSize)
+		if arg.info != nil {
+			anal := proc.GetAnalyze(arg.info.Idx, arg.info.ParallelIdx, arg.info.ParallelMajor)
+			anal.Alloc(ctr.maxAllocSize)
+		}
 	}
 }
 
