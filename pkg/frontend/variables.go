@@ -3548,6 +3548,14 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableBoolType("disable_txn_trace"),
 		Default:           int64(0),
 	},
+	"keep_user_target_list_in_result": {
+		Name:              "keep_user_target_list_in_result",
+		Scope:             ScopeGlobal,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableBoolType("keep_user_target_list_in_result"),
+		Default:           int64(0),
+	},
 }
 
 func updateTimeZone(sess *Session, vars map[string]interface{}, name string, val interface{}) error {
