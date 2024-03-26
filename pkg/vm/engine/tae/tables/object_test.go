@@ -50,7 +50,7 @@ func TestGetActiveRow(t *testing.T) {
 		meta:       obj,
 	}
 	mnode := &memoryNode{
-		block: b,
+		object: b,
 	}
 	blk := &aobject{baseObject: b}
 
