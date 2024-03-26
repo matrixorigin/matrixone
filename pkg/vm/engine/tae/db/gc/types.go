@@ -112,6 +112,5 @@ type Cleaner interface {
 	GetMinMerged() *checkpoint.CheckpointEntry
 	CheckGC() error
 	GetInputs() *GCTable
-	SnapshotForTest(snapshots types.TS)
 	SetTid(tid uint64)
 }

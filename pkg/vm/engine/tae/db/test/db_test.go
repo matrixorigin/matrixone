@@ -6438,7 +6438,7 @@ func TestAppendAndGC(t *testing.T) {
 
 }
 
-func TestSnapshotGC2(t *testing.T) {
+func TestSnapshotGC(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
@@ -6475,7 +6475,6 @@ func TestSnapshotGC2(t *testing.T) {
 		assert.Nil(t, txn.Commit(context.Background()))
 	}
 	db.DiskCleaner.GetCleaner().SetTid(rel3.ID())
-	logutil.Infof("snapshotSchema is %v, id is %d", snapshotSchema.Name, rel3.ID())
 	bat := catalog.MockBatch(schema1, int(schema1.BlockMaxRows*10-1))
 	defer bat.Close()
 	bats := bat.Split(bat.Length())
@@ -6499,7 +6498,6 @@ func TestSnapshotGC2(t *testing.T) {
 			i++
 			time.Sleep(250 * time.Millisecond)
 			snapshot := types.BuildTS(time.Now().UTC().UnixNano(), 0)
-			db.DiskCleaner.GetCleaner().SnapshotForTest(snapshot)
 			attrs := []string{"tid", "ts"}
 			vecTypes := []types.Type{types.T_uint64.ToType(), types.T_TS.ToType()}
 			opt := containers.Options{}
@@ -6547,9 +6545,6 @@ func TestSnapshotGC2(t *testing.T) {
 	snapWG.Wait()
 	tae.Restart(ctx)
 	db = tae.DB
-	for _, snapshot := range snapshots {
-		db.DiskCleaner.GetCleaner().SnapshotForTest(snapshot)
-	}
 	db.DiskCleaner.GetCleaner().SetMinMergeCountForTest(2)
 	testutils.WaitExpect(5000, func() bool {
 		if db.DiskCleaner.GetCleaner().GetMaxConsumed() == nil {

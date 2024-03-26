@@ -581,15 +581,3 @@ func (c *checkpointCleaner) GetSnapshots() (map[uint64][]types.TS, error) {
 	defer c.snapshot.RUnlock()
 	return c.snapshot.snapshotMeta.GetSnapshot(c.fs.Service)
 }
-
-func (c *checkpointCleaner) SnapshotForTest(snapshot types.TS) {
-	c.snapshot.Lock()
-	defer c.snapshot.Unlock()
-	c.snapshot.snapshots = append(c.snapshot.snapshots, snapshot)
-}
-
-func (c *checkpointCleaner) GetSnapshotsForTest() []types.TS {
-	c.snapshot.Lock()
-	defer c.snapshot.Unlock()
-	return c.snapshot.snapshots
-}
