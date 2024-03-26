@@ -2444,8 +2444,9 @@ func (d *dbMigration) Migrate(ses *Session) error {
 }
 
 type prepareStmtMigration struct {
-	name string
-	sql  string
+	name       string
+	sql        string
+	paramTypes []byte
 }
 
 func (p *prepareStmtMigration) Migrate(ses *Session) error {
@@ -2460,7 +2461,7 @@ func (p *prepareStmtMigration) Migrate(ses *Session) error {
 	if err != nil {
 		return err
 	}
-	if _, err = doPrepareStmt(ses.requestCtx, ses, stmts[0].(*tree.PrepareStmt), p.sql); err != nil {
+	if _, err = doPrepareStmt(ses.requestCtx, ses, stmts[0].(*tree.PrepareStmt), p.sql, p.paramTypes); err != nil {
 		return err
 	}
 	return nil
@@ -2480,8 +2481,9 @@ func (ses *Session) Migrate(req *query.MigrateConnToRequest) error {
 			continue
 		}
 		pm := prepareStmtMigration{
-			name: p.Name,
-			sql:  p.SQL,
+			name:       p.Name,
+			sql:        p.SQL,
+			paramTypes: p.ParamTypes,
 		}
 		if err := pm.Migrate(ses); err != nil {
 			return err
