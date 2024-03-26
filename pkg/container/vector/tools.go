@@ -19,6 +19,7 @@ import (
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -253,6 +254,8 @@ func ProtoVectorToVector(vec api.Vector) (*Vector, error) {
 		typ:          ProtoTypeToType(vec.Type),
 		cantFreeData: true,
 		cantFreeArea: true,
+		nsp:          *nulls.New(),
+		FreeMsg:      rvec.FreeMsg,
 	}
 	if vec.IsConst {
 		rvec.class = CONSTANT

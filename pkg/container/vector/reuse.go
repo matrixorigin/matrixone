@@ -24,7 +24,10 @@ func init() {
 			return &Vector{}
 		},
 		func(v *Vector) {
-			*v = Vector{}
+			freeMsg := v.FreeMsg
+			*v = Vector{
+				FreeMsg: freeMsg,
+			}
 		},
 		reuse.DefaultOptions[Vector](),
 	)
