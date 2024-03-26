@@ -35,15 +35,7 @@ func RegisterVarPop(id int64) {
 	aggexec.RegisterDeterminedSingleAgg(aggexec.MakeDeterminedSingleAggInfo(id, types.T_float64.ToType(), types.T_float64.ToType(), false, true), newAggVarPop[float64])
 	aggexec.RegisterFlexibleSingleAgg(
 		aggexec.MakeFlexibleAggInfo(id, false, true),
-		func(t []types.Type) types.Type {
-			if t[0].IsDecimal() {
-				if t[0].Scale > 12 {
-					return types.New(types.T_decimal128, 38, t[0].Scale)
-				}
-				return types.New(types.T_decimal128, 38, 12)
-			}
-			panic("unexpected type for var_pop()")
-		},
+		VarPopReturnType,
 		func(args []types.Type, ret types.Type) any {
 			switch args[0].Oid {
 			case types.T_decimal64:
@@ -54,6 +46,25 @@ func RegisterVarPop(id int64) {
 				panic("unexpected type for var_pop()")
 			}
 		})
+}
+
+var VarPopSupportedParameters = []types.T{
+	types.T_bit,
+	types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+	types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+	types.T_float32, types.T_float64,
+	types.T_decimal64, types.T_decimal128,
+}
+
+func VarPopReturnType(typs []types.Type) types.Type {
+	if typs[0].IsDecimal() {
+		s := int32(12)
+		if typs[0].Scale > s {
+			s = typs[0].Scale
+		}
+		return types.New(types.T_decimal128, 38, s)
+	}
+	return types.New(types.T_float64, 0, 0)
 }
 
 // variance = E(X^2) - (E(X))^2

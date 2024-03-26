@@ -15,12 +15,17 @@
 package aggexec
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
+var (
+	CountReturnType = func(_ []types.Type) types.Type {
+		return types.T_int64.ToType()
+	}
+)
+
 // count is a special agg because it can ignore what the value is but only if it was a null.
-//
-//	but count(distinct) cannot use this agg directly.
 type countColumnExec struct {
 	singleAggInfo
 	singleAggExecExtraInformation

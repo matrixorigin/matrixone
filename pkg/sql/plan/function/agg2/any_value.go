@@ -37,18 +37,7 @@ func RegisterAnyValue(id int64) {
 	aggexec.RegisterDeterminedSingleAgg(aggexec.MakeDeterminedSingleAggInfo(id, types.T_timestamp.ToType(), types.T_timestamp.ToType(), false, true), newAggAnyValue[types.Timestamp])
 	aggexec.RegisterDeterminedSingleAgg(aggexec.MakeDeterminedSingleAggInfo(id, types.T_time.ToType(), types.T_time.ToType(), false, true), newAggAnyValue[types.Time])
 	aggexec.RegisterFlexibleSingleAgg(aggexec.MakeFlexibleAggInfo(id, false, true),
-		func(t []types.Type) types.Type {
-			switch t[0].Oid {
-			case types.T_decimal64, types.T_decimal128:
-				return t[0]
-			case types.T_varchar, types.T_char, types.T_blob, types.T_text, types.T_binary, types.T_varbinary:
-				return t[0]
-			case types.T_Rowid, types.T_enum:
-				return t[0]
-			default:
-				panic("unexpected type for any_value()")
-			}
-		},
+		AnyValueReturnType,
 		func(args []types.Type, ret types.Type) any {
 			switch args[0].Oid {
 			case types.T_decimal64:
@@ -65,6 +54,25 @@ func RegisterAnyValue(id int64) {
 				panic("unexpected type for any_value()")
 			}
 		})
+}
+
+var AnyValueSupportedTypes = []types.T{
+	types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+	types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+	types.T_float32, types.T_float64,
+	types.T_date, types.T_datetime,
+	types.T_timestamp, types.T_time,
+	types.T_decimal64, types.T_decimal128,
+	types.T_bool,
+	types.T_bit,
+	types.T_varchar, types.T_char, types.T_blob, types.T_text,
+	types.T_uuid,
+	types.T_binary, types.T_varbinary,
+	types.T_Rowid,
+}
+
+func AnyValueReturnType(typs []types.Type) types.Type {
+	return typs[0]
 }
 
 func newAggAnyValue[T types.FixedSizeTExceptStrType]() aggexec.SingleAggFromFixedRetFixed[T, T] {

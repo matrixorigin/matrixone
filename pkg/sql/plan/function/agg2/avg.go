@@ -33,30 +33,7 @@ func RegisterAvg(id int64) {
 	aggexec.RegisterDeterminedSingleAgg(aggexec.MakeDeterminedSingleAggInfo(id, types.T_float64.ToType(), types.T_float64.ToType(), false, true), newAggAvg[float64])
 	aggexec.RegisterFlexibleSingleAgg(
 		aggexec.MakeFlexibleAggInfo(id, false, true),
-		func(t []types.Type) types.Type {
-			switch t[0].Oid {
-			case types.T_decimal64:
-				s := int32(12)
-				if s < t[0].Scale {
-					s = t[0].Scale
-				}
-				if s > t[0].Scale+6 {
-					s = t[0].Scale + 6
-				}
-				return types.New(types.T_decimal128, 18, s)
-			case types.T_decimal128:
-				s := int32(12)
-				if s < t[0].Scale {
-					s = t[0].Scale
-				}
-				if s > t[0].Scale+6 {
-					s = t[0].Scale + 6
-				}
-				return types.New(types.T_decimal128, 18, s)
-			default:
-				panic("unexpected type for avg()")
-			}
-		},
+		AvgReturnType,
 		func(args []types.Type, ret types.Type) any {
 			switch args[0].Oid {
 			case types.T_decimal64:
@@ -67,6 +44,39 @@ func RegisterAvg(id int64) {
 				panic("unexpected type for avg()")
 			}
 		})
+}
+
+var AvgSupportedTypes = []types.T{
+	types.T_bit,
+	types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+	types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+	types.T_float32, types.T_float64,
+	types.T_decimal64, types.T_decimal128,
+}
+
+func AvgReturnType(typs []types.Type) types.Type {
+	switch typs[0].Oid {
+	case types.T_decimal64:
+		s := int32(12)
+		if s < typs[0].Scale {
+			s = typs[0].Scale
+		}
+		if s > typs[0].Scale+6 {
+			s = typs[0].Scale + 6
+		}
+		return types.New(types.T_decimal128, 18, s)
+	case types.T_decimal128:
+		s := int32(12)
+		if s < typs[0].Scale {
+			s = typs[0].Scale
+		}
+		if s > typs[0].Scale+6 {
+			s = typs[0].Scale + 6
+		}
+		return types.New(types.T_decimal128, 18, s)
+	default:
+		return types.T_float64.ToType()
+	}
 }
 
 type aggAvg[from numeric] struct {

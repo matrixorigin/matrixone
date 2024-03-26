@@ -37,18 +37,7 @@ func RegisterMin(id int64) {
 	aggexec.RegisterDeterminedSingleAgg(aggexec.MakeDeterminedSingleAggInfo(id, types.T_timestamp.ToType(), types.T_timestamp.ToType(), false, true), newAggMin[types.Timestamp])
 	aggexec.RegisterFlexibleSingleAgg(
 		aggexec.MakeFlexibleAggInfo(id, false, true),
-		func(t []types.Type) types.Type {
-			switch t[0].Oid {
-			case types.T_decimal64, types.T_decimal128:
-				return t[0]
-			case types.T_varchar, types.T_char, types.T_blob, types.T_text, types.T_binary, types.T_varbinary:
-				return t[0]
-			case types.T_uuid:
-				return t[0]
-			default:
-				panic("unexpect type for min()")
-			}
-		},
+		MinReturnType,
 		func(args []types.Type, ret types.Type) any {
 			switch args[0].Oid {
 			case types.T_decimal64:
@@ -63,6 +52,24 @@ func RegisterMin(id int64) {
 				panic("unexpect type for min()")
 			}
 		})
+}
+
+var MinSupportedTypes = []types.T{
+	types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+	types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+	types.T_float32, types.T_float64,
+	types.T_date, types.T_datetime,
+	types.T_timestamp, types.T_time,
+	types.T_decimal64, types.T_decimal128,
+	types.T_bool,
+	types.T_bit,
+	types.T_varchar, types.T_char, types.T_blob, types.T_text,
+	types.T_uuid,
+	types.T_binary, types.T_varbinary,
+}
+
+func MinReturnType(typs []types.Type) types.Type {
+	return typs[0]
 }
 
 type aggMin[from canCompare] struct{}

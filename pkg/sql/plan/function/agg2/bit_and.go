@@ -34,15 +34,25 @@ func RegisterBitAnd(id int64) {
 	aggexec.RegisterDeterminedSingleAgg(aggexec.MakeDeterminedSingleAggInfo(id, types.T_float64.ToType(), types.T_uint64.ToType(), false, true), newAggBitAnd[float64])
 	aggexec.RegisterFlexibleSingleAgg(
 		aggexec.MakeFlexibleAggInfo(id, false, true),
-		func(t []types.Type) types.Type {
-			if t[0].Oid == types.T_binary || t[0].Oid == types.T_varbinary {
-				return t[0]
-			}
-			panic("unexpect type for bit_or()")
-		},
+		BitAndReturnType,
 		func(args []types.Type, ret types.Type) any {
 			return newAggBitAndBinary
 		})
+}
+
+var BitAndSupportedParameters = []types.T{
+	types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+	types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+	types.T_float32, types.T_float64,
+	types.T_binary, types.T_varbinary,
+	types.T_bit,
+}
+
+func BitAndReturnType(typs []types.Type) types.Type {
+	if typs[0].Oid == types.T_binary || typs[0].Oid == types.T_varbinary {
+		return typs[0]
+	}
+	return types.T_uint64.ToType()
 }
 
 type aggBitAnd[T numeric] struct{}

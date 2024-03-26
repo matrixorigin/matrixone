@@ -15,6 +15,7 @@
 package agg2
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 )
@@ -33,14 +34,7 @@ func RegisterSum(id int64) {
 	aggexec.RegisterDeterminedSingleAgg(aggexec.MakeDeterminedSingleAggInfo(id, types.T_float64.ToType(), types.T_float64.ToType(), false, true), newAggSum[float64, float64])
 	aggexec.RegisterFlexibleSingleAgg(
 		aggexec.MakeFlexibleAggInfo(id, false, true),
-		func(t []types.Type) types.Type {
-			switch t[0].Oid {
-			case types.T_decimal64, types.T_decimal128:
-				return types.New(types.T_decimal128, 38, t[0].Scale)
-			default:
-				panic("unexpect type for sum()")
-			}
-		},
+		SumReturnType,
 		func(args []types.Type, ret types.Type) any {
 			switch args[0].Oid {
 			case types.T_decimal64:
@@ -52,6 +46,33 @@ func RegisterSum(id int64) {
 			}
 		})
 }
+
+var (
+	SumSupportedTypes = []types.T{
+		types.T_bit,
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_float32, types.T_float64,
+		types.T_decimal64, types.T_decimal128,
+	}
+	SumReturnType = func(typs []types.Type) types.Type {
+		switch typs[0].Oid {
+		case types.T_float32, types.T_float64:
+			return types.T_float64.ToType()
+		case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
+			return types.T_int64.ToType()
+		case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
+			return types.T_uint64.ToType()
+		case types.T_bit:
+			return types.T_uint64.ToType()
+		case types.T_decimal64:
+			return types.New(types.T_decimal128, 38, typs[0].Scale)
+		case types.T_decimal128:
+			return types.New(types.T_decimal128, 38, typs[0].Scale)
+		}
+		panic(moerr.NewInternalErrorNoCtx("unsupported type '%v' for sum", typs[0]))
+	}
+)
 
 var _ aggexec.SingleAggFromFixedRetFixed[int32, int64] = aggSum[int32, int64]{}
 var _ aggexec.SingleAggFromFixedRetFixed[types.Decimal64, types.Decimal128] = aggSumDecimal64{}
