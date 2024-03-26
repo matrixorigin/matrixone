@@ -60,7 +60,7 @@ func NewMinioSDK(
 
 	// credentials
 	var credentialProviders []credentials.Provider
-	if !args.NoDefaultCredentials {
+	if args.shouldLoadDefaultCredentials() {
 		credentialProviders = append(credentialProviders,
 			// aws env
 			new(credentials.EnvAWS),
