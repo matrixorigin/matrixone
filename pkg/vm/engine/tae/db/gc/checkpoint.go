@@ -100,7 +100,14 @@ func NewCheckpointCleaner(
 	}
 	cleaner.delWorker = NewGCWorker(fs, cleaner)
 	cleaner.minMergeCount.count = MinMergeCount
+	cleaner.snapshot.snapshotMeta = &logtail.SnapshotMeta{}
 	return cleaner
+}
+
+func (c *checkpointCleaner) SetTid(tid uint64) {
+	c.snapshot.Lock()
+	defer c.snapshot.Unlock()
+	c.snapshot.snapshotMeta.SetTid(tid)
 }
 
 func (c *checkpointCleaner) Replay() error {

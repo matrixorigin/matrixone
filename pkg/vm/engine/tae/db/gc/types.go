@@ -113,4 +113,5 @@ type Cleaner interface {
 	CheckGC() error
 	GetInputs() *GCTable
 	SnapshotForTest(snapshots types.TS)
+	SetTid(tid uint64)
 }

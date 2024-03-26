@@ -130,3 +130,7 @@ func (sm *SnapshotMeta) GetSnapshot(fs fileservice.FileService) (map[uint64][]ty
 	}
 	return snapshotList, nil
 }
+
+func (sm *SnapshotMeta) SetTid(tid uint64) {
+	sm.tid = tid
+}
