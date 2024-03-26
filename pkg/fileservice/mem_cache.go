@@ -18,19 +18,19 @@ import (
 	"context"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/fileservice/memorycache"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/memorycache/checks/interval"
-	"github.com/matrixorigin/matrixone/pkg/fileservice/memorycache/lrucache"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
 
 type MemCache struct {
-	cache       DataCache
+	cache       *memorycache.Cache
 	counterSets []*perfcounter.CounterSet
 }
 
 func NewMemCache(
-	dataCache DataCache,
+	dataCache *memorycache.Cache,
 	counterSets []*perfcounter.CounterSet,
 ) *MemCache {
 	ret := &MemCache{
@@ -40,18 +40,18 @@ func NewMemCache(
 	return ret
 }
 
-func NewLRUCache(
+func NewMemoryCache(
 	capacity int64,
 	checkOverlaps bool,
 	callbacks *CacheCallbacks,
-) *lrucache.LRU[CacheKey, CacheData] {
+) *memorycache.Cache {
 
 	var overlapChecker *interval.OverlapChecker
 	if checkOverlaps {
 		overlapChecker = interval.NewOverlapChecker("MemCache_LRU")
 	}
 
-	postSetFn := func(key CacheKey, value CacheData) {
+	postSetFn := func(key CacheKey, value memorycache.CacheData) {
 		if overlapChecker != nil {
 			if err := overlapChecker.Insert(key.Path, key.Offset, key.Offset+key.Sz); err != nil {
 				panic(err)
@@ -65,7 +65,7 @@ func NewLRUCache(
 		}
 	}
 
-	postGetFn := func(key CacheKey, value CacheData) {
+	postGetFn := func(key CacheKey, value memorycache.CacheData) {
 		if callbacks != nil {
 			for _, fn := range callbacks.PostGet {
 				fn(key, value)
@@ -73,9 +73,7 @@ func NewLRUCache(
 		}
 	}
 
-	postEvictFn := func(key CacheKey, value CacheData) {
-		value.Release()
-
+	postEvictFn := func(key CacheKey, value memorycache.CacheData) {
 		if overlapChecker != nil {
 			if err := overlapChecker.Remove(key.Path, key.Offset, key.Offset+key.Sz); err != nil {
 				panic(err)
@@ -88,11 +86,14 @@ func NewLRUCache(
 			}
 		}
 	}
-
-	return lrucache.New[CacheKey, CacheData](capacity, postSetFn, postGetFn, postEvictFn)
+	return memorycache.NewCache(capacity, postSetFn, postGetFn, postEvictFn)
 }
 
 var _ IOVectorCache = new(MemCache)
+
+func (m *MemCache) Alloc(n int) memorycache.CacheData {
+	return m.cache.Alloc(n)
+}
 
 func (m *MemCache) Read(
 	ctx context.Context,

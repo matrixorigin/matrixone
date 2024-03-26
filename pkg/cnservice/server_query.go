@@ -365,9 +365,15 @@ func (s *service) handleGetCacheData(ctx context.Context, req *query.Request, re
 	if err != nil {
 		return err
 	}
-	return fileservice.HandleRemoteRead(ctx, sharedFS, req, &query.WrappedResponse{
+	wr := &query.WrappedResponse{
 		Response: resp,
-	})
+	}
+	err = fileservice.HandleRemoteRead(ctx, sharedFS, req, wr)
+	if err != nil {
+		return err
+	}
+	s.queryService.SetReleaseFunc(resp, wr.ReleaseFunc)
+	return nil
 }
 
 func (s *service) handleGetStatsInfo(ctx context.Context, req *query.Request, resp *query.Response) error {
