@@ -397,7 +397,6 @@ func (c *checkpointCleaner) CheckGC() error {
 	}
 	start1 := debugCandidates[len(debugCandidates)-1].GetEnd()
 	start2 := maxConsumed.GetEnd()
-	logutil.Infof("gckp is %v, maxConsumed is %v, start1 is %v", gCkp.String(), maxConsumed.String(), debugCandidates[len(debugCandidates)-1].String())
 	if !start1.Equal(&start2) {
 		logutil.Info("[DiskCleaner]", common.OperationField("Compare not equal"),
 			common.OperandField(start1.ToString()), common.OperandField(start2.ToString()))
