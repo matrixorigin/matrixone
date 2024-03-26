@@ -1685,7 +1685,7 @@ func (mp *MysqlProtocolImpl) negotiateAuthenticationMethod(ctx context.Context) 
 // SERVER_QUERY_WAS_SLOW and SERVER_STATUS_NO_GOOD_INDEX_USED is not used in other modules,
 // so we use it to mark the packet MUST be OK/EOF.
 func extendStatus(old uint16) uint16 {
-	return old & SERVER_QUERY_WAS_SLOW & SERVER_STATUS_NO_GOOD_INDEX_USED
+	return old | SERVER_QUERY_WAS_SLOW | SERVER_STATUS_NO_GOOD_INDEX_USED
 }
 
 // make a OK packet
