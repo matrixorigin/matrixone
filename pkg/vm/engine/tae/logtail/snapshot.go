@@ -61,16 +61,17 @@ func (sm *SnapshotMeta) Update(data *CheckpointData) *SnapshotMeta {
 	insTableIDVec := ins.GetVectorByName(SnapshotAttr_TID).GetDownstreamVector()
 	for i := 0; i < ins.Length(); i++ {
 		table := vector.GetFixedAt[uint64](insTableIDVec, i)
-		logutil.Infof("tabletable is %d", table)
 		if table != sm.tid {
 			continue
 		}
+		logutil.Infof("tabletable is %d", table)
 		var objectStats objectio.ObjectStats
 		buf := ins.GetVectorByName(catalog.ObjectAttr_ObjectStats).Get(i).([]byte)
 		objectStats.UnMarshal(buf)
 		var deleteTS types.TS
 		deleteTS = vector.GetFixedAt[types.TS](insDeleteTSVec, i)
 		createTS := vector.GetFixedAt[types.TS](insCreateTSVec, i)
+		logutil.Infof("objectStats is %v, deleteTS is %v", objectStats.String(), deleteTS.ToString())
 		if sm.object[objectStats.ObjectName().SegmentId().ToString()] == nil {
 			if !deleteTS.IsEmpty() {
 				continue
@@ -87,6 +88,7 @@ func (sm *SnapshotMeta) Update(data *CheckpointData) *SnapshotMeta {
 		delete(sm.object, objectStats.ObjectName().SegmentId().ToString())
 	}
 
+	logutil.Infof("sm.object is %v", sm.object)
 	del, _, _, _ := data.GetBlkBatchs()
 	delBlockIDVec := del.GetVectorByName(catalog2.BlockMeta_ID).GetDownstreamVector()
 	delDeltaVec := del.GetVectorByName(catalog2.BlockMeta_DeltaLoc).GetDownstreamVector()
@@ -112,6 +114,16 @@ func (sm *SnapshotMeta) GetSnapshot(fs fileservice.FileService) (map[uint64][]ty
 				return nil, err
 			}
 			if object.deltaLocation[i] == nil {
+				for n := range bat.Vecs {
+					for r := 0; r < bat.Vecs[n].Length(); r++ {
+						tid := vector.GetFixedAt[uint64](bat.Vecs[0], r)
+						ts := vector.GetFixedAt[types.TS](bat.Vecs[1], r)
+						if len(snapshotList[tid]) == 0 {
+							snapshotList[tid] = make([]types.TS, 0)
+						}
+						snapshotList[tid] = append(snapshotList[tid], ts)
+					}
+				}
 				continue
 			}
 			deletes, err := blockio.LoadOneBlock(context.Background(), fs, *object.deltaLocation[i], objectio.SchemaTombstone)

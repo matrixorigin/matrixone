@@ -6493,6 +6493,7 @@ func TestSnapshotGC(t *testing.T) {
 		for {
 			if i > 3 {
 				snapWG.Done()
+				db.DiskCleaner.GetCleaner().SetGCForTest()
 				break
 			}
 			i++
@@ -6527,6 +6528,7 @@ func TestSnapshotGC(t *testing.T) {
 		assert.Nil(t, err)
 	}
 	wg.Wait()
+	snapWG.Wait()
 	testutils.WaitExpect(10000, func() bool {
 		return db.Runtime.Scheduler.GetPenddingLSNCnt() == 0
 	})
@@ -6542,7 +6544,6 @@ func TestSnapshotGC(t *testing.T) {
 		return db.DiskCleaner.GetCleaner().GetMinMerged() != nil
 	})
 	assert.NotNil(t, minMerged)
-	snapWG.Wait()
 	tae.Restart(ctx)
 	db = tae.DB
 	db.DiskCleaner.GetCleaner().SetMinMergeCountForTest(2)

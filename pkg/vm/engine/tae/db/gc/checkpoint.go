@@ -78,11 +78,11 @@ type checkpointCleaner struct {
 	delWorker *GCWorker
 
 	disableGC bool
+	enableGC  bool
 
 	snapshot struct {
 		sync.RWMutex
 		snapshotMeta *logtail.SnapshotMeta
-		snapshots    []types.TS
 	}
 }
 
@@ -108,6 +108,10 @@ func (c *checkpointCleaner) SetTid(tid uint64) {
 	c.snapshot.Lock()
 	defer c.snapshot.Unlock()
 	c.snapshot.snapshotMeta.SetTid(tid)
+}
+
+func (c *checkpointCleaner) SetGCForTest() {
+	c.enableGC = true
 }
 
 func (c *checkpointCleaner) Replay() error {
@@ -451,6 +455,9 @@ func (c *checkpointCleaner) CheckGC() error {
 
 func (c *checkpointCleaner) Process() {
 	var ts types.TS
+	if !c.enableGC {
+		return
+	}
 	maxConsumed := c.maxConsumed.Load()
 	if maxConsumed != nil {
 		ts = maxConsumed.GetEnd()
@@ -542,7 +549,14 @@ func (c *checkpointCleaner) createNewInput(
 		}
 		defer data.Close()
 		input.UpdateTable(data)
-		c.updateSnapshotForData(data)
+		c.updateSnapshot(data)
+		snapshot, _ := c.GetSnapshots()
+		for _, snap := range snapshot {
+			for _, s := range snap {
+				logutil.Infof("snapshot is %v checkpoint is %v - %v", s.ToString(), candidate.GetEnd().ToString(), candidate.GetStart().ToString())
+			}
+		}
+
 	}
 	files := c.GetAndClearOutputs()
 	_, err = input.SaveTable(
@@ -558,18 +572,7 @@ func (c *checkpointCleaner) createNewInput(
 	return
 }
 
-func (c *checkpointCleaner) updateSnapshot(ckp checkpoint.CheckpointEntry) error {
-	c.snapshot.Lock()
-	defer c.snapshot.Unlock()
-	_, data, err := logtail.LoadCheckpointEntriesFromKey(c.ctx, c.fs.Service,
-		ckp.GetLocation(), ckp.GetVersion(), nil)
-	if err != nil {
-		return err
-	}
-	c.snapshot.snapshotMeta.Update(data)
-	return nil
-}
-func (c *checkpointCleaner) updateSnapshotForData(data *logtail.CheckpointData) error {
+func (c *checkpointCleaner) updateSnapshot(data *logtail.CheckpointData) error {
 	c.snapshot.Lock()
 	defer c.snapshot.Unlock()
 	c.snapshot.snapshotMeta.Update(data)

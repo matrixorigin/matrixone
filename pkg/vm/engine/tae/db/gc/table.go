@@ -113,24 +113,8 @@ func (t *GCTable) SoftGC(table *GCTable, ts types.TS, snapShotList map[uint64][]
 	objects := t.getObjects()
 	for name, entry := range objects {
 		objectEntry := table.objects[name]
+		logutil.Infof("SoftGC: %s, commit %v, create %v, drop %v", name, entry.commitTS.ToString(), entry.createTS.ToString(), entry.dropTS.ToString())
 		if objectEntry == nil && entry.commitTS.Less(&ts) && !isSnapshotRefers(entry, snapShotList[entry.table]) {
-			gc = append(gc, name)
-			t.deleteObject(name)
-		}
-	}
-	return gc
-}
-
-// SoftGC is to remove objectentry that can be deleted from GCTable
-func (t *GCTable) SoftGCForTest(table *GCTable, ts types.TS, snapShotList []types.TS) []string {
-	gc := make([]string, 0)
-	objects := t.getObjects()
-	for _, snap := range snapShotList {
-		logutil.Infof("SoftGC: snap %v", snap.ToString())
-	}
-	for name, entry := range objects {
-		objectEntry := table.objects[name]
-		if objectEntry == nil && entry.commitTS.Less(&ts) && !isSnapshotRefers(entry, snapShotList) {
 			gc = append(gc, name)
 			t.deleteObject(name)
 		}
@@ -140,7 +124,7 @@ func (t *GCTable) SoftGCForTest(table *GCTable, ts types.TS, snapShotList []type
 
 func isSnapshotRefers(obj *ObjectEntry, snapShotList []types.TS) bool {
 	if len(snapShotList) == 0 {
-		return false
+		return true
 	}
 	left, right := 0, len(snapShotList)-1
 	for left <= right {
