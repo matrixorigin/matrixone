@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/util"
 	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -1067,7 +1068,10 @@ func ExecuteBlockFilter(
 			}
 
 			if objStats.Rows() == 0 {
-				logutil.Fatalf("object stats has zero rows, detail: %s", obj.String())
+				logutil.Errorf("object stats has zero rows, isCommitted: %v, detail: %s",
+					isCommitted, obj.String())
+				util.EnableCoreDump()
+				util.CoreDump()
 			}
 
 			for ; pos < blockCnt; pos++ {
