@@ -261,6 +261,21 @@ func (txn *activeTxn) isRemoteLocked() bool {
 	return txn.remoteService != ""
 }
 
+func (txn *activeTxn) incLockTableRef(m map[uint32]map[uint64]uint64, serviceID string) {
+	txn.RLock()
+	defer txn.RUnlock()
+	for _, h := range txn.lockHolders {
+		for _, l := range h.tableBinds {
+			if serviceID == l.ServiceID {
+				if _, ok := m[l.Group]; !ok {
+					m[l.Group] = make(map[uint64]uint64, 1024)
+				}
+				m[l.Group][l.Table]++
+			}
+		}
+	}
+}
+
 // ============================================================================================================================
 // the above methods are called in the Lock and Unlock processes, where txn holds the mutex at the beginning of the process.
 // The following methods are called concurrently in processes that are concurrent with the Lock and Unlock processes.

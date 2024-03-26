@@ -108,14 +108,6 @@ func (store *NoopTxnStore) CreateObject(dbId, tid uint64, is1PC bool) (obj handl
 func (store *NoopTxnStore) CreateNonAppendableObject(dbId, tid uint64, _ bool, _ *objectio.CreateObjOpt) (obj handle.Object, err error) {
 	return
 }
-func (store *NoopTxnStore) GetBlock(id *common.ID) (blk handle.Block, err error) { return }
-func (store *NoopTxnStore) CreateBlock(*common.ID, bool) (blk handle.Block, err error) {
-	return
-}
-func (store *NoopTxnStore) CreateNonAppendableBlock(*common.ID, *objectio.CreateBlockOpt) (blk handle.Block, err error) {
-	return
-}
-
 func (store *NoopTxnStore) UpdateMetaLoc(id *common.ID, un objectio.Location) (err error) {
 	return
 }

@@ -464,14 +464,15 @@ func mergeStats(e, n *StatementInfo) error {
 	return nil
 }
 
+var noExecPlan = []byte(`{"code":200,"message":"NO ExecPlan Serialize function","steps":null}`)
+
 // ExecPlan2Json return ExecPlan Serialized json-str //
 // please used in s.mux.Lock()
 func (s *StatementInfo) ExecPlan2Json(ctx context.Context) []byte {
 	if s.jsonByte != nil {
 		goto endL
 	} else if s.ExecPlan == nil {
-		uuidStr := uuid.UUID(s.StatementID).String()
-		return []byte(fmt.Sprintf(`{"code":200,"message":"NO ExecPlan Serialize function","steps":null,"uuid":%q}`, uuidStr))
+		return noExecPlan
 	} else {
 		s.jsonByte = s.ExecPlan.Marshal(ctx)
 		//if queryTime := GetTracerProvider().longQueryTime; queryTime > int64(s.Duration) {
@@ -673,7 +674,7 @@ var ReportStatement = func(ctx context.Context, s *StatementInfo) error {
 
 	// Filter out part of the internal SQL statements
 	// Todo: review how to aggregate the internal SQL statements logging
-	if s.User == "internal" {
+	if s.User == "internal" && s.Account == "sys" {
 		if s.StatementType == "Commit" || s.StatementType == "Start Transaction" || s.StatementType == "Use" {
 			goto DiscardAndFreeL
 		}

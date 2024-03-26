@@ -535,15 +535,14 @@ func (tbl *txnTable) reset(newId uint64) {
 		tbl.oldTableId = tbl.tableId
 	}
 	tbl.tableId = newId
-	tbl._partState = nil
+	tbl._partState.Store(nil)
 	//tbl.objInfos = nil
-	tbl.objInfosUpdated = false
+	tbl.objInfosUpdated.Store(false)
 }
 
 func (tbl *txnTable) resetSnapshot() {
-	tbl._partState = nil
-	//tbl.objInfos = nil
-	tbl.objInfosUpdated = false
+	tbl._partState.Store(nil)
+	tbl.objInfosUpdated.Store(false)
 }
 
 // return all unmodified blocks
@@ -2101,13 +2100,13 @@ func (tbl *txnTable) newReader(
 // get the table's snapshot.
 // it is only initialized once for a transaction and will not change.
 func (tbl *txnTable) getPartitionState(ctx context.Context) (*logtailreplay.PartitionState, error) {
-	if tbl._partState == nil {
+	if tbl._partState.Load() == nil {
 		if err := tbl.updateLogtail(ctx); err != nil {
 			return nil, err
 		}
-		tbl._partState = tbl.db.txn.engine.getPartition(tbl.db.databaseId, tbl.tableId).Snapshot()
+		tbl._partState.Store(tbl.db.txn.engine.getPartition(tbl.db.databaseId, tbl.tableId).Snapshot())
 	}
-	return tbl._partState, nil
+	return tbl._partState.Load(), nil
 }
 
 func (tbl *txnTable) UpdateObjectInfos(ctx context.Context) (err error) {
@@ -2122,11 +2121,11 @@ func (tbl *txnTable) UpdateObjectInfos(ctx context.Context) (err error) {
 	// 1. update logtail
 	// 2. generate block infos
 	// 3. update the blockInfosUpdated and blockInfos fields of the table
-	if !created && !tbl.objInfosUpdated {
+	if !created && !tbl.objInfosUpdated.Load() {
 		if err = tbl.updateLogtail(ctx); err != nil {
 			return
 		}
-		tbl.objInfosUpdated = true
+		tbl.objInfosUpdated.Store(true)
 	}
 	return
 }
@@ -2135,11 +2134,11 @@ func (tbl *txnTable) updateLogtail(ctx context.Context) (err error) {
 	defer func() {
 		if err == nil {
 			tbl.db.txn.engine.globalStats.notifyLogtailUpdate(tbl.tableId)
-			tbl.logtailUpdated = true
+			tbl.logtailUpdated.Store(true)
 		}
 	}()
 	// if the logtail is updated, skip
-	if tbl.logtailUpdated {
+	if tbl.logtailUpdated.Load() {
 		return
 	}
 
@@ -2212,16 +2211,19 @@ func (tbl *txnTable) PKPersistedBetween(
 
 	//only check data objects.
 	delObjs, cObjs := p.GetChangedObjsBetween(from.Next(), types.MaxTs())
+	isFakePK := tbl.GetTableDef(ctx).Pkey.PkeyColName == catalog.FakePrimaryKeyColName
 
 	if err := ForeachCommittedObjects(cObjs, delObjs, p,
 		func(obj logtailreplay.ObjectInfo) (err2 error) {
 			var zmCkecked bool
-			// if the object info contains a pk zonemap, fast-check with the zonemap
-			if !obj.ZMIsEmpty() {
-				if !obj.SortKeyZoneMap().AnyIn(keys) {
-					return
+			if !isFakePK {
+				// if the object info contains a pk zonemap, fast-check with the zonemap
+				if !obj.ZMIsEmpty() {
+					if !obj.SortKeyZoneMap().AnyIn(keys) {
+						return
+					}
+					zmCkecked = true
 				}
-				zmCkecked = true
 			}
 
 			var objMeta objectio.ObjectMeta
@@ -2246,10 +2248,13 @@ func (tbl *txnTable) PKPersistedBetween(
 			}
 
 			bf = nil
-			if bf, err2 = objectio.LoadBFWithMeta(
-				ctx, meta, location, fs,
-			); err2 != nil {
-				return
+			//fake pk has no bf
+			if !isFakePK {
+				if bf, err2 = objectio.LoadBFWithMeta(
+					ctx, meta, location, fs,
+				); err2 != nil {
+					return
+				}
 			}
 
 			ForeachBlkInObjStatsList(false, meta,
@@ -2258,15 +2263,17 @@ func (tbl *txnTable) PKPersistedBetween(
 						!blkMeta.MustGetColumn(uint16(primaryIdx)).ZoneMap().AnyIn(keys) {
 						return true
 					}
-
-					blkBf := bf.GetBloomFilter(uint32(blk.BlockID.Sequence()))
-					blkBfIdx := index.NewEmptyBinaryFuseFilter()
-					if err2 = index.DecodeBloomFilter(blkBfIdx, blkBf); err2 != nil {
-						return false
-					}
-					var exist bool
-					if exist = blkBfIdx.MayContainsAny(keys); !exist {
-						return true
+					//fake pk has no bf
+					if !isFakePK {
+						blkBf := bf.GetBloomFilter(uint32(blk.BlockID.Sequence()))
+						blkBfIdx := index.NewEmptyBinaryFuseFilter()
+						if err2 = index.DecodeBloomFilter(blkBfIdx, blkBf); err2 != nil {
+							return false
+						}
+						var exist bool
+						if exist = blkBfIdx.MayContainsAny(keys); !exist {
+							return true
+						}
 					}
 
 					blk.Sorted = obj.Sorted
@@ -2369,7 +2376,8 @@ func (tbl *txnTable) PrimaryKeysMayBeModified(
 		keysVector)
 }
 
-func (tbl *txnTable) transferRowid(
+// TODO::refactor in next PR
+func (tbl *txnTable) transferDeletes(
 	ctx context.Context,
 	state *logtailreplay.PartitionState,
 	deleteObjs,
@@ -2461,10 +2469,8 @@ func (tbl *txnTable) transferRowid(
 				}
 			}
 			if beTransfered != toTransfer {
-				logutil.Fatalf("xxxx transfer rowid failed,beTransfered:%d, toTransfer:%d, total %d",
-					beTransfered, toTransfer, len(rowids))
+				return moerr.NewInternalErrorNoCtx("transfer deletes failed")
 			}
-
 		}
 	}
 	return nil

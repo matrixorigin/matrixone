@@ -106,7 +106,7 @@ func (p *PartitionReader) prepare() error {
 		})
 		//deletes maybe comes from PartitionState.rows, PartitionReader need to skip them;
 		// so, here only load deletes which don't belong to PartitionState.blks.
-		if err := p.table.LoadDeletesForMemBlocksIn(p.table._partState, deletes); err != nil {
+		if err := p.table.LoadDeletesForMemBlocksIn(p.table._partState.Load(), deletes); err != nil {
 			return err
 		}
 		p.inserts = inserts
