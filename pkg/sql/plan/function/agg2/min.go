@@ -45,9 +45,9 @@ func RegisterMin(id int64) {
 			case types.T_decimal128:
 				return newAggMinDecimal128
 			case types.T_varchar, types.T_char, types.T_blob, types.T_text, types.T_binary, types.T_varbinary:
-				return newaggBytesMin
+				return newAggBytesMin
 			case types.T_uuid:
-				return newaggUuidMin
+				return newAggUuidMin
 			default:
 				panic("unexpect type for min()")
 			}
@@ -94,7 +94,7 @@ type aggBytesMin struct {
 	isEmpty bool
 }
 
-func newaggBytesMin() aggexec.SingleAggFromVarRetVar {
+func newAggBytesMin() aggexec.SingleAggFromVarRetVar {
 	return &aggBytesMin{}
 }
 
@@ -102,7 +102,7 @@ type aggUuidMin struct {
 	isEmpty bool
 }
 
-func newaggUuidMin() aggexec.SingleAggFromFixedRetFixed[types.Uuid, types.Uuid] {
+func newAggUuidMin() aggexec.SingleAggFromFixedRetFixed[types.Uuid, types.Uuid] {
 	return &aggUuidMin{}
 }
 
