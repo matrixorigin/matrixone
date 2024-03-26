@@ -72,7 +72,7 @@ func (rel *TxnRelation) MakeObjectIt() handle.ObjectIt                          
 func (rel *TxnRelation) MakeObjectItOnSnap() handle.ObjectIt                      { return nil }
 func (rel *TxnRelation) BatchDedup(containers.Vector) error                       { return nil }
 func (rel *TxnRelation) Append(ctx context.Context, data *containers.Batch) error { return nil }
-func (rel *TxnRelation) AddBlksWithMetaLoc(context.Context, containers.Vector) error {
+func (rel *TxnRelation) AddObjsWithMetaLoc(context.Context, containers.Vector) error {
 	return nil
 }
 func (rel *TxnRelation) GetMeta() any                                                { return nil }
