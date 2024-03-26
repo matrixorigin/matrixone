@@ -394,6 +394,7 @@ message GetStatsInfoResponse {
 message PrepareStmt {
   string Name = 1;
   string SQL = 2;
+  bytes ParamTypes = 3;
 }
 
 message MigrateConnFromRequest {
