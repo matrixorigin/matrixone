@@ -210,8 +210,8 @@ func (o *Objectid) String() string {
 	return fmt.Sprintf("%v_%d", o.Segment().ToString(), o.Offset())
 }
 func (o *Objectid) ShortStringEx() string {
-	var shortuuid [8]byte
-	hex.Encode(shortuuid[:], o[:4])
+	var shortuuid [12]byte
+	hex.Encode(shortuuid[:], o[10:16])
 	return string(shortuuid[:])
 }
 func (o *Objectid) Offset() uint16 {

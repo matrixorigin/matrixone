@@ -162,7 +162,7 @@ func (e *MergeExecutor) ExecuteFor(entry *catalog.TableEntry, policy Policy) {
 	e.tableName = fmt.Sprintf("%v-%v", entry.ID, entry.GetLastestSchema().Name)
 
 	mobjs, kind := policy.Revise(int64(e.cpuPercent), int64(e.MemAvailBytes()))
-	if len(mobjs) == 0 {
+	if len(mobjs) < 2 {
 		return
 	}
 
