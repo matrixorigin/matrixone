@@ -100,7 +100,7 @@ func NewCheckpointCleaner(
 	}
 	cleaner.delWorker = NewGCWorker(fs, cleaner)
 	cleaner.minMergeCount.count = MinMergeCount
-	cleaner.snapshot.snapshotMeta = &logtail.SnapshotMeta{}
+	cleaner.snapshot.snapshotMeta = logtail.NewSnapshotMeta()
 	return cleaner
 }
 
@@ -328,6 +328,7 @@ func (c *checkpointCleaner) tryGC(data *logtail.CheckpointData, gckp *checkpoint
 		logutil.Errorf("GetSnapshots failed: %v", err.Error())
 		return nil
 	}
+	logutil.Infof("snapshots is %v", snapshots)
 	gc := c.softGC(gcTable, gckp, snapshots)
 	// Delete files after softGC
 	// TODO:Requires Physical Removal Policy
@@ -415,8 +416,12 @@ func (c *checkpointCleaner) CheckGC() error {
 		// TODO
 		return moerr.NewInternalErrorNoCtx("processing clean %s: %v", debugCandidates[0].String(), err)
 	}
-	snapshots := c.GetSnapshotsForTest()
-	debugTable.SoftGCForTest(gcTable, gCkp.GetEnd(), snapshots)
+	snapshots, err := c.GetSnapshots()
+	if err != nil {
+		logutil.Errorf("processing clean %s: %v", debugCandidates[0].String(), err)
+		return moerr.NewInternalErrorNoCtx("processing clean GetSnapshots %s: %v", debugCandidates[0].String(), err)
+	}
+	debugTable.SoftGC(gcTable, gCkp.GetEnd(), snapshots)
 	var mergeTable *GCTable
 	if len(c.inputs.tables) > 1 {
 		mergeTable = NewGCTable()
@@ -426,14 +431,16 @@ func (c *checkpointCleaner) CheckGC() error {
 	} else {
 		mergeTable = c.inputs.tables[0]
 	}
-	mergeTable.SoftGCForTest(gcTable, gCkp.GetEnd(), snapshots)
+	mergeTable.SoftGC(gcTable, gCkp.GetEnd(), snapshots)
 	if !mergeTable.Compare(debugTable) {
 		logutil.Errorf("inputs :%v", c.inputs.tables[0].String())
 		logutil.Errorf("debugTable :%v", debugTable.String())
 		return moerr.NewInternalErrorNoCtx("Compare is failed")
 	} else {
 		for _, snapshot := range snapshots {
-			logutil.Infof("snapshot is %v", snapshot.ToString())
+			for _, s := range snapshot {
+				logutil.Infof("snapshot is %v", s.ToString())
+			}
 		}
 		logutil.Info("[DiskCleaner]", common.OperationField("Compare is End"),
 			common.AnyField("table :", debugTable.String()),
@@ -535,6 +542,7 @@ func (c *checkpointCleaner) createNewInput(
 		}
 		defer data.Close()
 		input.UpdateTable(data)
+		c.updateSnapshotForData(data)
 	}
 	files := c.GetAndClearOutputs()
 	_, err = input.SaveTable(
@@ -558,6 +566,12 @@ func (c *checkpointCleaner) updateSnapshot(ckp checkpoint.CheckpointEntry) error
 	if err != nil {
 		return err
 	}
+	c.snapshot.snapshotMeta.Update(data)
+	return nil
+}
+func (c *checkpointCleaner) updateSnapshotForData(data *logtail.CheckpointData) error {
+	c.snapshot.Lock()
+	defer c.snapshot.Unlock()
 	c.snapshot.snapshotMeta.Update(data)
 	return nil
 }

@@ -976,7 +976,7 @@ func MockSchema(colCnt int, pkIdx int) *Schema {
 }
 
 func MockSnapShotSchema() *Schema {
-	schema := NewEmptySchema(time.Now().String())
+	schema := NewEmptySchema("mo_snapshot")
 
 	constraintDef := &engine.ConstraintDef{
 		Cts: make([]engine.Constraint, 0),

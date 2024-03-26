@@ -20,6 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -32,7 +33,7 @@ type Snapshot struct {
 }
 
 type objectInfo struct {
-	stats         *objectio.ObjectStats
+	stats         objectio.ObjectStats
 	deltaLocation map[uint32]*objectio.Location
 	createAt      types.TS
 	deleteAt      types.TS
@@ -45,6 +46,12 @@ type SnapshotMeta struct {
 	tid    uint64
 }
 
+func NewSnapshotMeta() *SnapshotMeta {
+	return &SnapshotMeta{
+		object: make(map[string]*objectInfo),
+	}
+}
+
 func (sm *SnapshotMeta) Update(data *CheckpointData) *SnapshotMeta {
 	sm.Lock()
 	defer sm.Unlock()
@@ -53,17 +60,18 @@ func (sm *SnapshotMeta) Update(data *CheckpointData) *SnapshotMeta {
 	insCreateTSVec := ins.GetVectorByName(catalog.EntryNode_CreateAt).GetDownstreamVector()
 	insTableIDVec := ins.GetVectorByName(SnapshotAttr_TID).GetDownstreamVector()
 	for i := 0; i < ins.Length(); i++ {
-		var objectStats *objectio.ObjectStats
 		table := vector.GetFixedAt[uint64](insTableIDVec, i)
+		logutil.Infof("tabletable is %d", table)
 		if table != sm.tid {
 			continue
 		}
+		var objectStats objectio.ObjectStats
 		buf := ins.GetVectorByName(catalog.ObjectAttr_ObjectStats).Get(i).([]byte)
 		objectStats.UnMarshal(buf)
 		var deleteTS types.TS
 		deleteTS = vector.GetFixedAt[types.TS](insDeleteTSVec, i)
 		createTS := vector.GetFixedAt[types.TS](insCreateTSVec, i)
-		if sm.object[objectStats.ObjectName().String()] == nil {
+		if sm.object[objectStats.ObjectName().SegmentId().ToString()] == nil {
 			if !deleteTS.IsEmpty() {
 				continue
 			}
@@ -76,7 +84,7 @@ func (sm *SnapshotMeta) Update(data *CheckpointData) *SnapshotMeta {
 		if deleteTS.IsEmpty() {
 			panic(any("deleteTS is empty"))
 		}
-		delete(sm.object, objectStats.ObjectName().String())
+		delete(sm.object, objectStats.ObjectName().SegmentId().ToString())
 	}
 
 	del, _, _, _ := data.GetBlkBatchs()
