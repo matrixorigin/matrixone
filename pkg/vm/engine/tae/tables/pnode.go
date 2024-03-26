@@ -103,6 +103,7 @@ func (node *persistedNode) Foreach(
 	); err != nil {
 		return
 	}
+	defer data.Close()
 	for _, row := range sel {
 		val := data.Get(int(row))
 		isNull := data.IsNull(int(row))

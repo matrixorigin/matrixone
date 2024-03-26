@@ -37,7 +37,7 @@ var (
 	// The default value of rebalnce tolerance.
 	defaultRebalanceTolerance = 0.3
 	// The default value of rebalance policy.
-	defaultRebalancePolicy = "active"
+	defaultRebalancePolicy = "passive"
 	// The default value of heartbeat interval.
 	defaultHeartbeatInterval = time.Second * 3
 	// The default value of heartbeat timeout.
