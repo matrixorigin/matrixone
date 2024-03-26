@@ -69,6 +69,8 @@ type container struct {
 	handledLast bool
 
 	tmpBatches []*batch.Batch // for reuse
+
+	maxAllocSize int64
 }
 
 type Argument struct {
@@ -122,6 +124,11 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 		ctr.cleanExprExecutor()
 		ctr.FreeAllReg()
 		ctr.tmpBatches = nil
+
+		if arg.info != nil {
+			anal := proc.GetAnalyze(arg.info.Idx, arg.info.ParallelIdx, arg.info.ParallelMajor)
+			anal.Alloc(ctr.maxAllocSize)
+		}
 	}
 }
 
