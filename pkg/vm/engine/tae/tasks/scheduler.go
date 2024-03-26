@@ -18,7 +18,6 @@ import (
 	"context"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -47,7 +46,6 @@ type TaskScheduler interface {
 
 	GetCheckpointedLSN() uint64
 	GetPenddingLSNCnt() uint64
-	GetCheckpointTS() types.TS
 }
 
 type BaseScheduler struct {
