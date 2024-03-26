@@ -31,6 +31,13 @@ type Nulls struct {
 	np bitmap.Bitmap
 }
 
+func New() *Nulls {
+	b := &Nulls{
+		np: bitmap.New(),
+	}
+	return b
+}
+
 func (nsp *Nulls) Clone() *Nulls {
 	if nsp == nil {
 		return nil

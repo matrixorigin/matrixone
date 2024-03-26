@@ -61,8 +61,8 @@ func NewDeleteChain(rwlocker *sync.RWMutex, mvcc *MVCCHandle) *DeleteChain {
 		MVCCChain:     txnbase.NewMVCCChain((*DeleteNode).Less, NewEmptyDeleteNode),
 		links:         make(map[uint32]*DeleteNode),
 		mvcc:          mvcc,
-		mask:          &nulls.Bitmap{},
-		persistedMask: &nulls.Bitmap{},
+		mask:          nulls.New(),
+		persistedMask: nulls.New(),
 	}
 	return chain
 }
@@ -354,7 +354,7 @@ func (chain *DeleteChain) HasDeleteIntentsPreparedInLocked(from, to types.TS) (f
 	return
 }
 
-func (chain *DeleteChain) ResetPersistedMask() { chain.persistedMask = &nulls.Bitmap{} }
+func (chain *DeleteChain) ResetPersistedMask() { chain.persistedMask = nulls.New() }
 
 func mergeDelete(mask *nulls.Bitmap, node *DeleteNode) {
 	if node == nil || node.mask == nil {

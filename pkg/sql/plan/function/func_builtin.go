@@ -987,7 +987,7 @@ func builtInSerial(parameters []*vector.Vector, result vector.FunctionResultWrap
 		}
 	}()
 
-	bitMap := new(nulls.Nulls)
+	bitMap := nulls.New()
 
 	for _, v := range parameters {
 		if v.IsConstNull() {

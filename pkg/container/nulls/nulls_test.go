@@ -118,16 +118,16 @@ func TestContains(t *testing.T) {
 
 func TestAdd(t *testing.T) {
 	t.Run("Contains test", func(t *testing.T) {
-		n := Nulls{}
-		assert.EqualValues(t, false, Contains(&n, 2))
-		Add(&n, 2)
-		assert.EqualValues(t, true, Contains(&n, 2))
+		n := New()
+		assert.EqualValues(t, false, Contains(n, 2))
+		Add(n, 2)
+		assert.EqualValues(t, true, Contains(n, 2))
 	})
 }
 
 func TestDel(t *testing.T) {
 	t.Run("Contains test", func(t *testing.T) {
-		n := &Nulls{}
+		n := New()
 		Add(n, 2)
 		assert.EqualValues(t, true, Contains(n, 2))
 		Del(n, 2)
@@ -137,9 +137,9 @@ func TestDel(t *testing.T) {
 
 func TestSet(t *testing.T) {
 	t.Run("set test", func(t *testing.T) {
-		n := &Nulls{}
+		n := New()
 		Add(n, 2)
-		m := &Nulls{}
+		m := New()
 		Add(m, 5)
 		Set(n, m)
 		assert.Equal(t, 2, n.Count())
