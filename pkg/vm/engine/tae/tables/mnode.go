@@ -38,7 +38,7 @@ var _ NodeT = (*memoryNode)(nil)
 
 type memoryNode struct {
 	common.RefHelper
-	block       *baseObject
+	object      *baseObject
 	writeSchema *catalog.Schema
 	data        *containers.Batch
 
@@ -46,15 +46,15 @@ type memoryNode struct {
 	pkIndex *indexwrapper.MutIndex
 }
 
-func newMemoryNode(block *baseObject) *memoryNode {
+func newMemoryNode(object *baseObject) *memoryNode {
 	impl := new(memoryNode)
-	impl.block = block
+	impl.object = object
 
 	// Get the lastest schema, it will not be modified, so just keep the pointer
-	schema := block.meta.GetSchemaLocked()
+	schema := object.meta.GetSchemaLocked()
 	impl.writeSchema = schema
 	// impl.data = containers.BuildBatchWithPool(
-	// 	schema.AllNames(), schema.AllTypes(), 0, block.rt.VectorPool.Memtable,
+	// 	schema.AllNames(), schema.AllTypes(), 0, object.rt.VectorPool.Memtable,
 	// )
 	impl.initPKIndex(schema)
 	impl.OnZeroCB = impl.close
@@ -84,8 +84,8 @@ func (node *memoryNode) initPKIndex(schema *catalog.Schema) {
 }
 
 func (node *memoryNode) close() {
-	mvcc := node.block.appendMVCC
-	logutil.Debugf("Releasing Memorynode BLK-%s", node.block.meta.ID.String())
+	mvcc := node.object.appendMVCC
+	logutil.Debugf("Releasing Memorynode BLK-%s", node.object.meta.ID.String())
 	if node.data != nil {
 		node.data.Close()
 		node.data = nil
@@ -94,7 +94,7 @@ func (node *memoryNode) close() {
 		node.pkIndex.Close()
 		node.pkIndex = nil
 	}
-	node.block = nil
+	node.object = nil
 	mvcc.ReleaseAppends()
 }
 
@@ -202,7 +202,7 @@ func (node *memoryNode) GetColumnDataWindow(
 		return
 	}
 	data := node.data.Vecs[idx]
-	vec = data.CloneWindowWithPool(int(from), int(to-from), node.block.rt.VectorPool.Transient)
+	vec = data.CloneWindowWithPool(int(from), int(to-from), node.object.rt.VectorPool.Transient)
 	// vec = data.CloneWindow(int(from), int(to-from), common.MutMemAllocator)
 	return
 }
@@ -225,7 +225,7 @@ func (node *memoryNode) GetDataWindowOnWriteSchema(
 			Batch:      inner,
 		}, nil
 	}
-	inner := node.data.CloneWindowWithPool(int(from), int(to-from), node.block.rt.VectorPool.Transient)
+	inner := node.data.CloneWindowWithPool(int(from), int(to-from), node.object.rt.VectorPool.Transient)
 	// inner := node.data.CloneWindow(int(from), int(to-from), common.MutMemAllocator)
 	bat = &containers.BatchWithVersion{
 		Version:    node.writeSchema.Version,
@@ -265,7 +265,7 @@ func (node *memoryNode) GetDataWindow(
 		if !ok {
 			vec = containers.NewConstNullVector(colDef.Type, int(to-from), mp)
 		} else {
-			vec = node.data.Vecs[idx].CloneWindowWithPool(int(from), int(to-from), node.block.rt.VectorPool.Transient)
+			vec = node.data.Vecs[idx].CloneWindowWithPool(int(from), int(to-from), node.object.rt.VectorPool.Transient)
 		}
 		bat.AddVector(colDef.Name, vec)
 	}
@@ -297,7 +297,7 @@ func (node *memoryNode) PrepareAppend(rows uint32) (n uint32, err error) {
 func (node *memoryNode) FillPhyAddrColumn(startRow, length uint32) (err error) {
 	var col *vector.Vector
 	if col, err = objectio.ConstructRowidColumn(
-		objectio.NewBlockidWithObjectID(&node.block.meta.ID, 0),
+		objectio.NewBlockidWithObjectID(&node.object.meta.ID, 0),
 		startRow,
 		length,
 		common.MutMemAllocator,
@@ -328,8 +328,8 @@ func (node *memoryNode) GetRowByFilter(
 	filter *handle.Filter,
 	mp *mpool.MPool,
 ) (blkID uint16, row uint32, err error) {
-	node.block.RLock()
-	defer node.block.RUnlock()
+	node.object.RLock()
+	defer node.object.RUnlock()
 	rows, err := node.GetRowsByKey(filter.Val)
 	if err != nil && !moerr.IsMoErrCode(err, moerr.ErrNotFound) {
 		return
@@ -338,12 +338,12 @@ func (node *memoryNode) GetRowByFilter(
 	waitFn := func(n *updates.AppendNode) {
 		txn := n.Txn
 		if txn != nil {
-			node.block.RUnlock()
+			node.object.RUnlock()
 			txn.GetTxnState(true)
-			node.block.RLock()
+			node.object.RLock()
 		}
 	}
-	if anyWaitable := node.block.appendMVCC.CollectUncommittedANodesPreparedBefore(
+	if anyWaitable := node.object.appendMVCC.CollectUncommittedANodesPreparedBefore(
 		txn.GetStartTS(),
 		waitFn); anyWaitable {
 		rows, err = node.GetRowsByKey(filter.Val)
@@ -354,17 +354,17 @@ func (node *memoryNode) GetRowByFilter(
 
 	for i := len(rows) - 1; i >= 0; i-- {
 		row = rows[i]
-		appendnode := node.block.appendMVCC.GetAppendNodeByRow(row)
+		appendnode := node.object.appendMVCC.GetAppendNodeByRow(row)
 		needWait, waitTxn := appendnode.NeedWaitCommitting(txn.GetStartTS())
 		if needWait {
-			node.block.RUnlock()
+			node.object.RUnlock()
 			waitTxn.GetTxnState(true)
-			node.block.RLock()
+			node.object.RLock()
 		}
 		if appendnode.IsAborted() || !appendnode.IsVisible(txn) {
 			continue
 		}
-		objMVCC := node.block.tryGetMVCC()
+		objMVCC := node.object.tryGetMVCC()
 		if objMVCC == nil {
 			return
 		}
@@ -390,8 +390,8 @@ func (node *memoryNode) BatchDedup(
 	bf objectio.BloomFilter,
 ) (err error) {
 	var dupRow uint32
-	node.block.RLock()
-	defer node.block.RUnlock()
+	node.object.RLock()
+	defer node.object.RUnlock()
 	_, err = node.doBatchDedup(
 		ctx,
 		keys,
@@ -419,7 +419,7 @@ func (node *memoryNode) checkConflictAndDupClosure(
 		if rowmask != nil && rowmask.Contains(row) {
 			return nil
 		}
-		appendnode := node.block.appendMVCC.GetAppendNodeByRow(row)
+		appendnode := node.object.appendMVCC.GetAppendNodeByRow(row)
 		var visible bool
 		if visible, err = node.checkConflictAandVisibility(
 			appendnode,
@@ -430,7 +430,7 @@ func (node *memoryNode) checkConflictAndDupClosure(
 		if appendnode.IsAborted() || !visible {
 			return nil
 		}
-		objMVCC := node.block.tryGetMVCC()
+		objMVCC := node.object.tryGetMVCC()
 		if objMVCC == nil {
 			*dupRow = row
 			return moerr.GetOkExpectedDup()
@@ -470,16 +470,16 @@ func (node *memoryNode) checkConflictAandVisibility(
 		needWait := n.IsCommitting()
 		if needWait {
 			txn := n.GetTxn()
-			node.block.RUnlock()
+			node.object.RUnlock()
 			txn.GetTxnState(true)
-			node.block.RLock()
+			node.object.RLock()
 		}
 	} else {
 		needWait, txn := n.NeedWaitCommitting(txn.GetStartTS())
 		if needWait {
-			node.block.RUnlock()
+			node.object.RUnlock()
 			txn.GetTxnState(true)
-			node.block.RLock()
+			node.object.RLock()
 		}
 	}
 	if err = n.CheckConflict(txn); err != nil {
@@ -496,15 +496,15 @@ func (node *memoryNode) checkConflictAandVisibility(
 func (node *memoryNode) CollectAppendInRange(
 	start, end types.TS, withAborted bool, mp *mpool.MPool,
 ) (batWithVer *containers.BatchWithVersion, err error) {
-	node.block.RLock()
+	node.object.RLock()
 	minRow, maxRow, commitTSVec, abortVec, abortedMap :=
-		node.block.appendMVCC.CollectAppendLocked(start, end, mp)
+		node.object.appendMVCC.CollectAppendLocked(start, end, mp)
 	batWithVer, err = node.GetDataWindowOnWriteSchema(minRow, maxRow, mp)
 	if err != nil {
-		node.block.RUnlock()
+		node.object.RUnlock()
 		return nil, err
 	}
-	node.block.RUnlock()
+	node.object.RUnlock()
 
 	batWithVer.Seqnums = append(batWithVer.Seqnums, objectio.SEQNUM_COMMITTS)
 	batWithVer.AddVector(catalog.AttrCommitTs, commitTSVec)
@@ -529,9 +529,9 @@ func (node *memoryNode) resolveInMemoryColumnDatas(
 	skipDeletes bool,
 	mp *mpool.MPool,
 ) (view *containers.BlockView, err error) {
-	node.block.RLock()
-	defer node.block.RUnlock()
-	maxRow, visible, deSels, err := node.block.appendMVCC.GetVisibleRowLocked(ctx, txn)
+	node.object.RLock()
+	defer node.object.RUnlock()
+	maxRow, visible, deSels, err := node.object.appendMVCC.GetVisibleRowLocked(ctx, txn)
 	if !visible || err != nil {
 		// blk.RUnlock()
 		return
@@ -548,7 +548,7 @@ func (node *memoryNode) resolveInMemoryColumnDatas(
 		return
 	}
 
-	err = node.block.fillInMemoryDeletesLocked(txn, 0, view.BaseView, node.block.RWMutex)
+	err = node.object.fillInMemoryDeletesLocked(txn, 0, view.BaseView, node.object.RWMutex)
 	if err != nil {
 		return
 	}
@@ -570,9 +570,9 @@ func (node *memoryNode) resolveInMemoryColumnData(
 	skipDeletes bool,
 	mp *mpool.MPool,
 ) (view *containers.ColumnView, err error) {
-	node.block.RLock()
-	defer node.block.RUnlock()
-	maxRow, visible, deSels, err := node.block.appendMVCC.GetVisibleRowLocked(context.TODO(), txn)
+	node.object.RLock()
+	defer node.object.RUnlock()
+	maxRow, visible, deSels, err := node.object.appendMVCC.GetVisibleRowLocked(context.TODO(), txn)
 	if !visible || err != nil {
 		return
 	}
@@ -593,7 +593,7 @@ func (node *memoryNode) resolveInMemoryColumnData(
 		return
 	}
 
-	err = node.block.fillInMemoryDeletesLocked(txn, 0, view.BaseView, node.block.RWMutex)
+	err = node.object.fillInMemoryDeletesLocked(txn, 0, view.BaseView, node.object.RWMutex)
 	if err != nil {
 		return
 	}
@@ -615,16 +615,16 @@ func (node *memoryNode) getInMemoryValue(
 	row, col int,
 	mp *mpool.MPool,
 ) (v any, isNull bool, err error) {
-	node.block.RLock()
+	node.object.RLock()
 	deleted := false
-	objMVCC := node.block.tryGetMVCC()
+	objMVCC := node.object.tryGetMVCC()
 	if objMVCC != nil {
 		mvcc := objMVCC.TryGetDeleteChain(0)
 		if mvcc != nil {
 			deleted, err = mvcc.IsDeletedLocked(uint32(row), txn)
 		}
 	}
-	node.block.RUnlock()
+	node.object.RUnlock()
 	if err != nil {
 		return
 	}
@@ -642,7 +642,7 @@ func (node *memoryNode) getInMemoryValue(
 }
 
 func (node *memoryNode) allRowsCommittedBefore(ts types.TS) bool {
-	node.block.RLock()
-	defer node.block.RUnlock()
-	return node.block.appendMVCC.AllAppendsCommittedBefore(ts)
+	node.object.RLock()
+	defer node.object.RUnlock()
+	return node.object.appendMVCC.AllAppendsCommittedBefore(ts)
 }

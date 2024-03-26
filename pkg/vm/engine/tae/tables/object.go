@@ -19,4 +19,4 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 )
 
-type BlockDataFactory = func(meta *catalog.ObjectEntry) data.Block
+type BlockDataFactory = func(meta *catalog.ObjectEntry) data.Object
