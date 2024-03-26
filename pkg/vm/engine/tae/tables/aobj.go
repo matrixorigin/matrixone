@@ -43,56 +43,56 @@ type aobject struct {
 	freezelock sync.Mutex
 }
 
-func newABlock(
+func newAObject(
 	meta *catalog.ObjectEntry,
 	rt *dbutils.Runtime,
 ) *aobject {
-	blk := &aobject{}
-	blk.baseObject = newBaseBlock(blk, meta, rt)
-	if blk.meta.HasDropCommitted() {
-		pnode := newPersistedNode(blk.baseObject)
+	obj := &aobject{}
+	obj.baseObject = newBaseObject(obj, meta, rt)
+	if obj.meta.HasDropCommitted() {
+		pnode := newPersistedNode(obj.baseObject)
 		node := NewNode(pnode)
 		node.Ref()
-		blk.node.Store(node)
-		blk.FreezeAppend()
+		obj.node.Store(node)
+		obj.FreezeAppend()
 	} else {
-		mnode := newMemoryNode(blk.baseObject)
+		mnode := newMemoryNode(obj.baseObject)
 		node := NewNode(mnode)
 		node.Ref()
-		blk.node.Store(node)
+		obj.node.Store(node)
 	}
-	return blk
+	return obj
 }
 
-func (blk *aobject) FreezeAppend() {
-	blk.frozen.Store(true)
+func (obj *aobject) FreezeAppend() {
+	obj.frozen.Store(true)
 }
 
-func (blk *aobject) IsAppendFrozen() bool {
-	return blk.frozen.Load()
+func (obj *aobject) IsAppendFrozen() bool {
+	return obj.frozen.Load()
 }
 
-func (blk *aobject) IsAppendable() bool {
-	if blk.IsAppendFrozen() {
+func (obj *aobject) IsAppendable() bool {
+	if obj.IsAppendFrozen() {
 		return false
 	}
-	node := blk.PinNode()
+	node := obj.PinNode()
 	defer node.Unref()
 	if node.IsPersisted() {
 		return false
 	}
 	rows, _ := node.Rows()
-	return rows < blk.meta.GetSchema().BlockMaxRows
+	return rows < obj.meta.GetSchema().BlockMaxRows
 }
 
-func (blk *aobject) PrepareCompactInfo() (result bool, reason string) {
-	if n := blk.RefCount(); n > 0 {
+func (obj *aobject) PrepareCompactInfo() (result bool, reason string) {
+	if n := obj.RefCount(); n > 0 {
 		reason = fmt.Sprintf("entering refcount %d", n)
 		return
 	}
-	blk.FreezeAppend()
-	if !blk.meta.PrepareCompact() || !blk.appendMVCC.PrepareCompact() {
-		if !blk.meta.PrepareCompact() {
+	obj.FreezeAppend()
+	if !obj.meta.PrepareCompact() || !obj.appendMVCC.PrepareCompact() {
+		if !obj.meta.PrepareCompact() {
 			reason = "meta preparecomp false"
 		} else {
 			reason = "mvcc preparecomp false"
@@ -100,38 +100,38 @@ func (blk *aobject) PrepareCompactInfo() (result bool, reason string) {
 		return
 	}
 
-	if n := blk.RefCount(); n != 0 {
+	if n := obj.RefCount(); n != 0 {
 		reason = fmt.Sprintf("ending refcount %d", n)
 		return
 	}
-	return blk.RefCount() == 0, reason
+	return obj.RefCount() == 0, reason
 }
 
-func (blk *aobject) PrepareCompact() bool {
-	if blk.RefCount() > 0 {
+func (obj *aobject) PrepareCompact() bool {
+	if obj.RefCount() > 0 {
 		return false
 	}
 
 	// see more notes in flushtabletail.go
-	blk.freezelock.Lock()
-	blk.FreezeAppend()
-	blk.freezelock.Unlock()
+	obj.freezelock.Lock()
+	obj.FreezeAppend()
+	obj.freezelock.Unlock()
 
-	if !blk.meta.PrepareCompact() ||
-		!blk.appendMVCC.PrepareCompact() /* all appends are committed */ {
+	if !obj.meta.PrepareCompact() ||
+		!obj.appendMVCC.PrepareCompact() /* all appends are committed */ {
 		return false
 	}
-	return blk.RefCount() == 0
+	return obj.RefCount() == 0
 }
 
-func (blk *aobject) Pin() *common.PinnedItem[*aobject] {
-	blk.Ref()
+func (obj *aobject) Pin() *common.PinnedItem[*aobject] {
+	obj.Ref()
 	return &common.PinnedItem[*aobject]{
-		Val: blk,
+		Val: obj,
 	}
 }
 
-func (blk *aobject) GetColumnDataByIds(
+func (obj *aobject) GetColumnDataByIds(
 	ctx context.Context,
 	txn txnif.AsyncTxn,
 	readSchema any,
@@ -139,7 +139,7 @@ func (blk *aobject) GetColumnDataByIds(
 	colIdxes []int,
 	mp *mpool.MPool,
 ) (view *containers.BlockView, err error) {
-	return blk.resolveColumnDatas(
+	return obj.resolveColumnDatas(
 		ctx,
 		txn,
 		readSchema.(*catalog.Schema),
@@ -149,7 +149,7 @@ func (blk *aobject) GetColumnDataByIds(
 	)
 }
 
-func (blk *aobject) GetColumnDataById(
+func (obj *aobject) GetColumnDataById(
 	ctx context.Context,
 	txn txnif.AsyncTxn,
 	readSchema any,
@@ -157,7 +157,7 @@ func (blk *aobject) GetColumnDataById(
 	col int,
 	mp *mpool.MPool,
 ) (view *containers.ColumnView, err error) {
-	return blk.resolveColumnData(
+	return obj.resolveColumnData(
 		ctx,
 		txn,
 		readSchema.(*catalog.Schema),
@@ -167,7 +167,7 @@ func (blk *aobject) GetColumnDataById(
 	)
 }
 
-func (blk *aobject) resolveColumnDatas(
+func (obj *aobject) resolveColumnDatas(
 	ctx context.Context,
 	txn txnif.TxnReader,
 	readSchema *catalog.Schema,
@@ -175,7 +175,7 @@ func (blk *aobject) resolveColumnDatas(
 	skipDeletes bool,
 	mp *mpool.MPool,
 ) (view *containers.BlockView, err error) {
-	node := blk.PinNode()
+	node := obj.PinNode()
 	defer node.Unref()
 
 	if !node.IsPersisted() {
@@ -184,7 +184,7 @@ func (blk *aobject) resolveColumnDatas(
 			txn, readSchema, colIdxes, skipDeletes, mp,
 		)
 	} else {
-		return blk.ResolvePersistedColumnDatas(
+		return obj.ResolvePersistedColumnDatas(
 			ctx,
 			txn,
 			readSchema,
@@ -200,13 +200,13 @@ func (blk *aobject) resolveColumnDatas(
 // here we assume that the ts is greater equal than the block's
 // create ts and less than the block's delete ts
 // it is a coarse-grained check
-func (blk *aobject) CoarseCheckAllRowsCommittedBefore(ts types.TS) bool {
+func (obj *aobject) CoarseCheckAllRowsCommittedBefore(ts types.TS) bool {
 	// if the block is not frozen, always return false
-	if !blk.IsAppendFrozen() {
+	if !obj.IsAppendFrozen() {
 		return false
 	}
 
-	node := blk.PinNode()
+	node := obj.PinNode()
 	defer node.Unref()
 
 	// if the block is in memory, check with the in-memory node
@@ -220,7 +220,7 @@ func (blk *aobject) CoarseCheckAllRowsCommittedBefore(ts types.TS) bool {
 	return false
 }
 
-func (blk *aobject) resolveColumnData(
+func (obj *aobject) resolveColumnData(
 	ctx context.Context,
 	txn txnif.TxnReader,
 	readSchema *catalog.Schema,
@@ -228,7 +228,7 @@ func (blk *aobject) resolveColumnData(
 	skipDeletes bool,
 	mp *mpool.MPool,
 ) (view *containers.ColumnView, err error) {
-	node := blk.PinNode()
+	node := obj.PinNode()
 	defer node.Unref()
 
 	if !node.IsPersisted() {
@@ -236,7 +236,7 @@ func (blk *aobject) resolveColumnData(
 			txn, readSchema, col, skipDeletes, mp,
 		)
 	} else {
-		return blk.ResolvePersistedColumnData(
+		return obj.ResolvePersistedColumnData(
 			ctx,
 			txn,
 			readSchema,
@@ -248,7 +248,7 @@ func (blk *aobject) resolveColumnData(
 	}
 }
 
-func (blk *aobject) GetValue(
+func (obj *aobject) GetValue(
 	ctx context.Context,
 	txn txnif.AsyncTxn,
 	readSchema any,
@@ -256,20 +256,20 @@ func (blk *aobject) GetValue(
 	row, col int,
 	mp *mpool.MPool,
 ) (v any, isNull bool, err error) {
-	node := blk.PinNode()
+	node := obj.PinNode()
 	defer node.Unref()
 	schema := readSchema.(*catalog.Schema)
 	if !node.IsPersisted() {
 		return node.MustMNode().getInMemoryValue(txn, schema, row, col, mp)
 	} else {
-		return blk.getPersistedValue(
+		return obj.getPersistedValue(
 			ctx, txn, schema, 0, row, col, true, mp,
 		)
 	}
 }
 
 // GetByFilter will read pk column, which seqnum will not change, no need to pass the read schema.
-func (blk *aobject) GetByFilter(
+func (obj *aobject) GetByFilter(
 	ctx context.Context,
 	txn txnif.AsyncTxn,
 	filter *handle.Filter,
@@ -278,19 +278,19 @@ func (blk *aobject) GetByFilter(
 	if filter.Op != handle.FilterEq {
 		panic("logic error")
 	}
-	if blk.meta.GetSchema().SortKey == nil {
+	if obj.meta.GetSchema().SortKey == nil {
 		rid := filter.Val.(types.Rowid)
 		offset = rid.GetRowOffset()
 		return
 	}
 
-	node := blk.PinNode()
+	node := obj.PinNode()
 	defer node.Unref()
 	_, offset, err = node.GetRowByFilter(ctx, txn, filter, mp)
 	return
 }
 
-func (blk *aobject) BatchDedup(
+func (obj *aobject) BatchDedup(
 	ctx context.Context,
 	txn txnif.AsyncTxn,
 	keys containers.Vector,
@@ -302,10 +302,10 @@ func (blk *aobject) BatchDedup(
 ) (err error) {
 	defer func() {
 		if moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry) {
-			logutil.Debugf("BatchDedup BLK-%s: %v", blk.meta.ID.String(), err)
+			logutil.Debugf("BatchDedup obj-%s: %v", obj.meta.ID.String(), err)
 		}
 	}()
-	node := blk.PinNode()
+	node := obj.PinNode()
 	defer node.Unref()
 	if !node.IsPersisted() {
 		return node.BatchDedup(
@@ -318,7 +318,7 @@ func (blk *aobject) BatchDedup(
 			bf,
 		)
 	} else {
-		return blk.PersistedBatchDedup(
+		return obj.PersistedBatchDedup(
 			ctx,
 			txn,
 			precommit,
@@ -332,37 +332,37 @@ func (blk *aobject) BatchDedup(
 	}
 }
 
-func (blk *aobject) CollectAppendInRange(
+func (obj *aobject) CollectAppendInRange(
 	start, end types.TS,
 	withAborted bool,
 	mp *mpool.MPool,
 ) (*containers.BatchWithVersion, error) {
-	node := blk.PinNode()
+	node := obj.PinNode()
 	defer node.Unref()
 	return node.CollectAppendInRange(start, end, withAborted, mp)
 }
 
-func (blk *aobject) estimateRawScore() (score int, dropped bool, err error) {
-	if blk.meta.HasDropCommitted() {
+func (obj *aobject) estimateRawScore() (score int, dropped bool, err error) {
+	if obj.meta.HasDropCommitted() {
 		dropped = true
 		return
 	}
-	blk.meta.RLock()
-	atLeastOneCommitted := blk.meta.HasCommittedNode()
-	blk.meta.RUnlock()
+	obj.meta.RLock()
+	atLeastOneCommitted := obj.meta.HasCommittedNode()
+	obj.meta.RUnlock()
 	if !atLeastOneCommitted {
 		score = 1
 		return
 	}
 
-	rows, err := blk.Rows()
-	if rows == int(blk.meta.GetSchema().BlockMaxRows) {
+	rows, err := obj.Rows()
+	if rows == int(obj.meta.GetSchema().BlockMaxRows) {
 		score = 100
 		return
 	}
 
 	changesCnt := uint32(0)
-	objectMVCC := blk.tryGetMVCC()
+	objectMVCC := obj.tryGetMVCC()
 	if objectMVCC != nil {
 		changesCnt = objectMVCC.GetChangeIntentionCnt()
 	}
@@ -373,26 +373,26 @@ func (blk *aobject) estimateRawScore() (score int, dropped bool, err error) {
 	}
 
 	if score > 0 {
-		if _, terminated := blk.meta.GetTerminationTS(); terminated {
+		if _, terminated := obj.meta.GetTerminationTS(); terminated {
 			score = 100
 		}
 	}
 	return
 }
 
-func (blk *aobject) RunCalibration() (score int, err error) {
-	score, _, err = blk.estimateRawScore()
+func (obj *aobject) RunCalibration() (score int, err error) {
+	score, _, err = obj.estimateRawScore()
 	return
 }
 
-func (blk *aobject) OnReplayAppend(node txnif.AppendNode) (err error) {
+func (obj *aobject) OnReplayAppend(node txnif.AppendNode) (err error) {
 	an := node.(*updates.AppendNode)
-	blk.appendMVCC.OnReplayAppendNode(an)
+	obj.appendMVCC.OnReplayAppendNode(an)
 	return
 }
 
-func (blk *aobject) OnReplayAppendPayload(bat *containers.Batch) (err error) {
-	appender, err := blk.MakeAppender()
+func (obj *aobject) OnReplayAppendPayload(bat *containers.Batch) (err error) {
+	appender, err := obj.MakeAppender()
 	if err != nil {
 		return
 	}
@@ -400,37 +400,37 @@ func (blk *aobject) OnReplayAppendPayload(bat *containers.Batch) (err error) {
 	return
 }
 
-func (blk *aobject) MakeAppender() (appender data.ObjectAppender, err error) {
-	if blk == nil {
+func (obj *aobject) MakeAppender() (appender data.ObjectAppender, err error) {
+	if obj == nil {
 		err = moerr.GetOkExpectedEOB()
 		return
 	}
-	appender = newAppender(blk)
+	appender = newAppender(obj)
 	return
 }
 
-func (blk *aobject) Init() (err error) { return }
+func (obj *aobject) Init() (err error) { return }
 
-func (blk *aobject) EstimateMemSize() (int, int) {
-	node := blk.PinNode()
+func (obj *aobject) EstimateMemSize() (int, int) {
+	node := obj.PinNode()
 	defer node.Unref()
-	blk.RLock()
-	defer blk.RUnlock()
+	obj.RLock()
+	defer obj.RUnlock()
 	dsize := 0
-	objMVCC := blk.tryGetMVCC()
+	objMVCC := obj.tryGetMVCC()
 	if objMVCC != nil {
 		dsize = objMVCC.EstimateMemSizeLocked()
 	}
-	asize := blk.appendMVCC.EstimateMemSizeLocked()
+	asize := obj.appendMVCC.EstimateMemSizeLocked()
 	if !node.IsPersisted() {
 		asize += node.MustMNode().EstimateMemSize()
 	}
 	return asize, dsize
 }
 
-func (blk *aobject) GetRowsOnReplay() uint64 {
-	rows := uint64(blk.appendMVCC.GetTotalRow())
-	fileRows := uint64(blk.meta.GetLatestCommittedNode().
+func (obj *aobject) GetRowsOnReplay() uint64 {
+	rows := uint64(obj.appendMVCC.GetTotalRow())
+	fileRows := uint64(obj.meta.GetLatestCommittedNode().
 		BaseNode.ObjectStats.Rows())
 	if rows > fileRows {
 		return rows
