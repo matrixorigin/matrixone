@@ -42,7 +42,7 @@ func (store *NoopTxnStore) Close() error                                 { retur
 func (store *NoopTxnStore) Append(ctx context.Context, dbId, id uint64, data *containers.Batch) error {
 	return nil
 }
-func (store *NoopTxnStore) AddBlksWithMetaLoc(
+func (store *NoopTxnStore) AddObjsWithMetaLoc(
 	ctx context.Context,
 	dbId, tid uint64,
 	stats containers.Vector,

@@ -113,7 +113,7 @@ func (db *txnDB) Append(ctx context.Context, id uint64, bat *containers.Batch) e
 	return table.Append(ctx, bat)
 }
 
-func (db *txnDB) AddBlksWithMetaLoc(
+func (db *txnDB) AddObjsWithMetaLoc(
 	ctx context.Context,
 	tid uint64,
 	stats containers.Vector) error {
@@ -124,7 +124,7 @@ func (db *txnDB) AddBlksWithMetaLoc(
 	if table.IsDeleted() {
 		return moerr.NewNotFoundNoCtx()
 	}
-	return table.AddBlksWithMetaLoc(ctx, stats)
+	return table.AddObjsWithMetaLoc(ctx, stats)
 }
 
 // func (db *txnDB) DeleteOne(table *txnTable, id *common.ID, row uint32, dt handle.DeleteType) (err error) {
