@@ -455,7 +455,6 @@ func (ctr *container) evalJoinCondition(proc *process.Process) error {
 		for idx2 := range ctr.executor {
 			vec, err := ctr.executor[idx2].Eval(proc, []*batch.Batch{ctr.batches[idx1]})
 			if err != nil {
-				ctr.cleanEvalVectors(proc.Mp())
 				return err
 			}
 			ctr.vecs[idx1][idx2] = vec

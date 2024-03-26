@@ -131,11 +131,11 @@ func (h *txnRelation) SimplePPString(level common.PPLevel) string {
 	if level < common.PPL1 {
 		return s
 	}
-	it := h.MakeBlockIt()
+	it := h.MakeObjectIt()
 	for it.Valid() {
-		block := it.GetBlock()
-		defer block.Close()
-		s = fmt.Sprintf("%s\n%s", s, block.String())
+		object := it.GetObject()
+		defer object.Close()
+		s = fmt.Sprintf("%s\n%s", s, object.String())
 		it.Next()
 	}
 	return s
@@ -160,8 +160,8 @@ func (h *txnRelation) Append(ctx context.Context, data *containers.Batch) error 
 	return h.Txn.GetStore().Append(ctx, h.table.entry.GetDB().ID, h.table.entry.GetID(), data)
 }
 
-func (h *txnRelation) AddBlksWithMetaLoc(ctx context.Context, stats containers.Vector) error {
-	return h.Txn.GetStore().AddBlksWithMetaLoc(
+func (h *txnRelation) AddObjsWithMetaLoc(ctx context.Context, stats containers.Vector) error {
+	return h.Txn.GetStore().AddObjsWithMetaLoc(
 		ctx,
 		h.table.entry.GetDB().ID,
 		h.table.entry.GetID(),
@@ -195,10 +195,6 @@ func (h *txnRelation) MakeObjectItOnSnap() handle.ObjectIt {
 
 func (h *txnRelation) MakeObjectIt() handle.ObjectIt {
 	return newObjectIt(h.table)
-}
-
-func (h *txnRelation) MakeBlockIt() handle.BlockIt {
-	return newRelationBlockIt(h)
 }
 
 func (h *txnRelation) GetByFilter(

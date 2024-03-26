@@ -83,4 +83,48 @@ load data infile '$resources/vector/vector.csv' into table vtab64_1 fields termi
 select * from vtab64_1;
 (select * from vtab64) except (select * from vtab64_1);
 
+create table vector_exp_01(c1 int,c2 vecf32(5),c3 tinyint unsigned,c4 bigint,c5 decimal(4,2),c6 float,c7 double);
+insert into vector_exp_01 values(10 ,"[1, 0, 1, 6, 6]",3,10,7.1,0.36,2.10),(60,"[6, 0, 8, 10,129]",2,5,3.26,4.89,1.26),(20,"[ 9, 18, 1, 4, 132]",6,1,9.36,6.9,5.6);
+insert into vector_exp_01 values(34, "[995.3, 0.005, 0, 85.36, 5.12]",30,52,61.1,9.36,20.10),(102,"[50.01, 4.417, 930.21, 20.14, 15.02]",90,120,30.1,74.36,72.10);
+select c2 from vector_exp_01;
+select c2+2364 from vector_exp_01;
+select c2-4 from vector_exp_01;
+select c2*25 from vector_exp_01;
+select c2/5 from vector_exp_01;
+select c2/0 from vector_exp_01;
+
+select c2+63.2548 from vector_exp_01;
+select c2-0.1258 from vector_exp_01;
+select c2*2.698 from vector_exp_01;
+select c2/2.41 from vector_exp_01;
+select c2/0.0 from vector_exp_01;
+-- vector +/-* int
+select c2+c1 from vector_exp_01;
+select c2-c1 from vector_exp_01;
+select c2*c1 from vector_exp_01;
+select c2/c1 from vector_exp_01;
+-- vector +/-* tinyint unsigned
+-- @bvt:issue#15115
+select c2+c3 from vector_exp_01;
+select c2-c3 from vector_exp_01;
+select c2*c3 from vector_exp_01;
+select c2/c3 from vector_exp_01;
+-- @bvt:issue
+-- vector +/-* bigint
+select c2+c4 from vector_exp_01;
+select c2-c4 from vector_exp_01;
+select c2*c4 from vector_exp_01;
+select c2/c4 from vector_exp_01;
+-- vector +/-* decimal
+select c2+c5 from vector_exp_01;
+select c2-c5 from vector_exp_01;
+select c2*c5 from vector_exp_01;
+select c2/c5 from vector_exp_01;
+-- vector +/-* double and float
+select c2+c6,c2+c7 from vector_exp_01;
+select c2-c6,c2-c7 from vector_exp_01;
+select c2*c6,c2*c7 from vector_exp_01;
+select c2/c6,c2/c7 from vector_exp_01;
+
+select cast("[76875768584509877574546435800000005,8955885757767774774774774456466]" as vecf32(2)) *623;
 

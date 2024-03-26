@@ -144,7 +144,7 @@ func (ctr *container) receiveHashMap(proc *process.Process, anal process.Analyze
 	}
 	if bat != nil && bat.AuxData != nil {
 		ctr.mp = bat.DupJmAuxData()
-		anal.Alloc(ctr.mp.Size())
+		ctr.maxAllocSize = max(ctr.maxAllocSize, ctr.mp.Size())
 	}
 	return nil
 }
@@ -382,7 +382,6 @@ func (ctr *container) evalJoinCondition(bat *batch.Batch, proc *process.Process)
 	for i := range ctr.evecs {
 		vec, err := ctr.evecs[i].executor.Eval(proc, []*batch.Batch{bat})
 		if err != nil {
-			ctr.cleanEvalVectors()
 			return err
 		}
 		ctr.vecs[i] = vec

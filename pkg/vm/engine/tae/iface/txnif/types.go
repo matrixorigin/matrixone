@@ -263,7 +263,7 @@ type TxnStore interface {
 	BatchDedup(dbId, id uint64, pk containers.Vector) error
 
 	Append(ctx context.Context, dbId, id uint64, data *containers.Batch) error
-	AddBlksWithMetaLoc(ctx context.Context, dbId, id uint64, stats containers.Vector) error
+	AddObjsWithMetaLoc(ctx context.Context, dbId, id uint64, stats containers.Vector) error
 
 	RangeDelete(
 		id *common.ID, start, end uint32, pkVec containers.Vector, dt handle.DeleteType,
@@ -292,12 +292,8 @@ type TxnStore interface {
 	GetObject(id *common.ID) (handle.Object, error)
 	CreateObject(dbId, tid uint64, is1PC bool) (handle.Object, error)
 	CreateNonAppendableObject(dbId, tid uint64, is1PC bool, opt *objectio.CreateObjOpt) (handle.Object, error)
-	CreateBlock(id *common.ID, is1PC bool) (handle.Block, error)
-	GetBlock(id *common.ID) (handle.Block, error)
-	CreateNonAppendableBlock(id *common.ID, opts *objectio.CreateBlockOpt) (handle.Block, error)
 	SoftDeleteObject(id *common.ID) error
 	SoftDeleteBlock(id *common.ID) error
-	UpdateMetaLoc(id *common.ID, metaLoc objectio.Location) (err error)
 	UpdateDeltaLoc(id *common.ID, deltaLoc objectio.Location) (err error)
 
 	AddTxnEntry(TxnEntryType, TxnEntry)

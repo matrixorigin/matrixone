@@ -98,6 +98,10 @@ func (ui *UserInput) genSqlSourceType(ses *Session) {
 		ui.sqlSourceType = append(ui.sqlSourceType, constant.InternalSql)
 		return
 	}
+	if tenant.Tenant == sysAccountName && tenant.User == "internal" {
+		ui.sqlSourceType = append(ui.sqlSourceType, constant.InternalSql)
+		return
+	}
 	for len(sql) > 0 {
 		p1 := strings.Index(sql, "/*")
 		p2 := strings.Index(sql, "*/")
@@ -228,9 +232,9 @@ func Execute(ctx context.Context, ses *Session, proc *process.Process, stmtExec 
 		logInfo(ses, ses.GetDebugString(), fmt.Sprintf("time of Exec.Run : %s", time.Since(runBegin).String()))
 	}
 
+handleRet:
 	_ = stmtExec.RecordExecPlan(ctx)
 
-handleRet:
 	stmtExec.SetStatus(err)
 	err2 = stmtExec.CommitOrRollbackTxn(ctx, ses)
 	if err2 != nil {

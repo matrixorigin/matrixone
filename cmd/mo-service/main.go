@@ -251,7 +251,7 @@ func startCNService(
 			cnservice.WithLogger(logutil.GetGlobalLogger().Named("cn-service").With(zap.String("uuid", cfg.CN.UUID))),
 			cnservice.WithMessageHandle(compile.CnServerMessageHandler),
 			cnservice.WithConfigData(commonConfigKVMap),
-			cnservice.WithTxnTraceData(filepath.Join(cfg.DataDir, "trace")),
+			cnservice.WithTxnTraceData(filepath.Join(cfg.DataDir, c.Txn.Trace.Dir)),
 		)
 		if err != nil {
 			panic(err)
