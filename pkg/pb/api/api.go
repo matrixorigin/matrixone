@@ -19,13 +19,14 @@ import (
 
 var (
 	OpMethodName = map[OpCode]string{
-		OpCode_OpPing:          "Ping",
-		OpCode_OpFlush:         "Flush",
-		OpCode_OpCheckpoint:    "Checkpoint",
-		OpCode_OpInspect:       "Inspect",
-		OpCode_OpAddFaultPoint: "AddFaultPoint",
-		OpCode_OpBackup:        "Backup",
-		OpCode_OpTraceSpan:     "TraceSpan",
+		OpCode_OpPing:             "Ping",
+		OpCode_OpFlush:            "Flush",
+		OpCode_OpCheckpoint:       "Checkpoint",
+		OpCode_OpInspect:          "Inspect",
+		OpCode_OpAddFaultPoint:    "AddFaultPoint",
+		OpCode_OpBackup:           "Backup",
+		OpCode_OpTraceSpan:        "TraceSpan",
+		OpCode_OpGlobalCheckpoint: "GlobalCheckpoint",
 	}
 )
 
