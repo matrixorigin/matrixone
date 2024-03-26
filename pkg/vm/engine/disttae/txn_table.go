@@ -1560,7 +1560,7 @@ func (tbl *txnTable) TableRenameInTxn(ctx context.Context, constraint [][]byte) 
 
 		if newtbl.db.txn.writes[i].tableName == oldTableName {
 			newtbl.db.txn.writes[i].tableName = tbl.tableName
-			break
+			logutil.Infof("copy table '%s' has been rename to '%s' in txn", oldTableName, tbl.tableName)
 		}
 	}
 	//---------------------------------------------------------------------------------
