@@ -51,10 +51,13 @@ func initAllSupportedFunctions() {
 	for _, fn := range supportedOthersBuiltIns {
 		allSupportedFunctions[fn.functionId] = fn
 	}
-	for _, fn := range supportedWindowFunctions {
+
+	for _, fn := range supportedWindowInNewFramework {
+		for _, ov := range fn.Overloads {
+			ov.aggFramework.aggRegister(encodeOverloadID(int32(fn.functionId), int32(ov.overloadId)))
+		}
 		allSupportedFunctions[fn.functionId] = fn
 	}
-
 	for _, fn := range supportedAggInNewFramework {
 		for _, ov := range fn.Overloads {
 			ov.aggFramework.aggRegister(encodeOverloadID(int32(fn.functionId), int32(ov.overloadId)))
@@ -62,7 +65,7 @@ func initAllSupportedFunctions() {
 		allSupportedFunctions[fn.functionId] = fn
 	}
 
-	agg.InitAggFramework(generateAggExecutorWithoutConfig, generateAggExecutor, GetFunctionIsWinOrderFunById)
+	//agg.InitAggFramework(generateAggExecutorWithoutConfig, generateAggExecutor, GetFunctionIsWinOrderFunById)
 }
 
 func GetFunctionIsAggregateByName(name string) bool {

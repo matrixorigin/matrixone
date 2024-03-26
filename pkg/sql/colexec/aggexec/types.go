@@ -16,6 +16,7 @@ package aggexec
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -238,6 +239,10 @@ func makeSpecialAggExec(
 			exec, err := makeClusterCenters(mg, id, isDistinct, params[0])
 			return exec, true, err
 		}
+		if id == winIdOfRowNumber || id == winIdOfRank || id == winIdOfDenseRank {
+			exec, err := makeWindowExec(mg, id, isDistinct)
+			return exec, true, err
+		}
 	}
 	return nil, false, nil
 }
@@ -299,4 +304,20 @@ func makeClusterCenters(
 		emptyNull: true,
 	}
 	return newClusterCentersExecutor(mg, info)
+}
+
+func makeWindowExec(
+	mg AggMemoryManager, aggID int64, isDistinct bool) (AggFuncExec, error) {
+	if isDistinct {
+		return nil, moerr.NewInternalErrorNoCtx("window function does not support `distinct`")
+	}
+
+	info := singleAggInfo{
+		aggID:     aggID,
+		distinct:  false,
+		argType:   types.T_int64.ToType(),
+		retType:   types.T_int64.ToType(),
+		emptyNull: false,
+	}
+	return makeRankDenseRankRowNumber(mg, info), nil
 }

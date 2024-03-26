@@ -126,6 +126,21 @@ func RegisterClusterCenters(id int64) {
 	aggIdOfClusterCenters = id
 }
 
+func RegisterRowNumberWin(id int64) {
+	specialAgg[id] = true
+	winIdOfRowNumber = id
+}
+
+func RegisterRankWin(id int64) {
+	specialAgg[id] = true
+	winIdOfRank = id
+}
+
+func RegisterDenseRankWin(id int64) {
+	specialAgg[id] = true
+	winIdOfDenseRank = id
+}
+
 type registeredAggInfo struct {
 	isSingleAgg          bool
 	acceptNull           bool
@@ -186,6 +201,9 @@ var (
 	aggIdOfApproxCount    = int64(-4)
 	aggIdOfMedian         = int64(-5)
 	aggIdOfClusterCenters = int64(-6)
+	winIdOfRowNumber      = int64(-7)
+	winIdOfRank           = int64(-8)
+	winIdOfDenseRank      = int64(-9)
 	groupConcatSep        = ","
 	getCroupConcatRet     = func(args ...types.Type) types.Type {
 		for _, p := range args {
