@@ -686,7 +686,7 @@ func (c *mergePolicyArg) Run() error {
 			MergeMaxOneRun:   int(c.maxMergeObjN),
 			ObjectMinRows:    int(c.minRowsQualified),
 			MaxRowsMergedObj: int(c.maxRowsObj),
-			MinCNMergeSize:   int(c.cnMinMergeSize) * common.Const1MBytes,
+			MinCNMergeSize:   uint64(c.cnMinMergeSize) * common.Const1MBytes,
 			MergeHints:       c.hints,
 		})
 	}

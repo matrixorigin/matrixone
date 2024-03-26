@@ -44,7 +44,7 @@ type BasicPolicyConfig struct {
 	ObjectMinRows    int
 	MergeMaxOneRun   int
 	MaxRowsMergedObj int
-	MinCNMergeSize   int
+	MinCNMergeSize   uint64
 	FromUser         bool
 	MergeHints       []api.MergeHint
 }
@@ -53,7 +53,7 @@ func (c *BasicPolicyConfig) String() string {
 	return fmt.Sprintf(
 		"minRowsObj:%d, maxOneRun:%d, cnSize:%v, hints: %v",
 		c.ObjectMinRows, c.MergeMaxOneRun,
-		common.HumanReadableBytes(c.MinCNMergeSize),
+		common.HumanReadableBytes(int(c.MinCNMergeSize)),
 		c.MergeHints,
 	)
 }
@@ -84,7 +84,7 @@ func (o *customConfigProvider) GetConfig(tbl *catalog.TableEntry) *BasicPolicyCo
 				ObjectMinRows:    int(extra.MinRowsQuailifed),
 				MergeMaxOneRun:   int(extra.MaxObjOnerun),
 				MaxRowsMergedObj: int(extra.MaxRowsMergedObj),
-				MinCNMergeSize:   int(cnSize),
+				MinCNMergeSize:   cnSize,
 				FromUser:         true,
 				MergeHints:       extra.Hints,
 			}
@@ -207,7 +207,7 @@ func (o *Basic) GetConfig(tbl *catalog.TableEntry) any {
 		r = &BasicPolicyConfig{
 			ObjectMinRows:  int(common.RuntimeMinRowsQualified.Load()),
 			MergeMaxOneRun: int(common.RuntimeMaxMergeObjN.Load()),
-			MinCNMergeSize: int(common.RuntimeMinCNMergeSize.Load()),
+			MinCNMergeSize: common.RuntimeMinCNMergeSize.Load(),
 		}
 	}
 	return r
@@ -219,21 +219,29 @@ func (o *Basic) Revise(cpu, mem int64) ([]*catalog.ObjectEntry, TaskHostKind) {
 		return objs[i].GetRemainingRows() < objs[j].GetRemainingRows()
 	})
 
-	osize, _, _ := estimateMergeConsume(objs)
-	if !common.IsStandaloneBoost.Load() && osize > o.config.MinCNMergeSize {
-		objs = o.controlMem(objs, int64(common.RuntimeCNMergeMemControl.Load()))
-		objs = o.optimize(objs)
-		return objs, TaskHostCN
+	isStandalone := common.IsStandaloneBoost.Load()
+
+	dnobjs := o.controlMem(objs, mem)
+	dnobjs = o.optimize(dnobjs)
+
+	dnosize, _, _ := estimateMergeConsume(dnobjs)
+
+	if isStandalone {
+		if cpu > 85 {
+			if dnosize > 25*common.Const1MBytes {
+				logutil.Infof("mergeblocks skip big merge for high level cpu usage, %d", cpu)
+				return nil, TaskHostDN
+			}
+		}
+		return objs, TaskHostDN
 	}
 
-	objs = o.controlMem(objs, mem)
-	if cpu > 85 {
-		if osize > 25*common.Const1MBytes {
-			logutil.Infof("mergeblocks skip big merge for high level cpu usage, %d", cpu)
-			return nil, TaskHostDN
-		}
+	if common.RuntimeCNTakeOverAll.Load() || dnosize > int(common.RuntimeMinCNMergeSize.Load()) {
+		cnobjs := o.controlMem(objs, int64(common.RuntimeCNMergeMemControl.Load()))
+		cnobjs = o.optimize(cnobjs)
+		return cnobjs, TaskHostCN
 	}
-	objs = o.optimize(objs)
+
 	return objs, TaskHostDN
 }
 
@@ -320,7 +328,7 @@ func (o *Basic) ResetForTable(entry *catalog.TableEntry) {
 		if o.config == nil {
 			o.config = &BasicPolicyConfig{
 				name:           o.schema.Name,
-				MinCNMergeSize: int(common.RuntimeMinCNMergeSize.Load()),
+				MinCNMergeSize: common.RuntimeMinCNMergeSize.Load(),
 			}
 		}
 		o.config.ObjectMinRows = min
@@ -341,7 +349,7 @@ func (o *Basic) ResetForTable(entry *catalog.TableEntry) {
 			o.config.ObjectMinRows = determineObjectMinRows(o.schema)
 			o.config.MaxRowsMergedObj = int(common.RuntimeMaxRowsObj.Load())
 			o.config.MergeMaxOneRun = int(common.RuntimeMaxMergeObjN.Load())
-			o.config.MinCNMergeSize = int(common.RuntimeMinCNMergeSize.Load())
+			o.config.MinCNMergeSize = common.RuntimeMinCNMergeSize.Load()
 			o.configProvider.InvalidCache(entry)
 		}
 	}
