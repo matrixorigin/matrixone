@@ -84,3 +84,8 @@ update table02 set col6 = 'apple' where col2 = 789;
 select * from table02;
 drop table table01;
 drop table table02;
+drop table if exists table01;
+create table table03(type enum('1','2','3','4','5') not null comment 'type');
+show create table table03;
+desc table03;
+drop table table03;
