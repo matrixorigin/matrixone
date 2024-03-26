@@ -315,8 +315,8 @@ func (space *tableSpace) Append(data *containers.Batch) (err error) {
 	return
 }
 
-// AddBlksWithMetaLoc transfers blocks with meta location into non-appendable nodes
-func (space *tableSpace) AddBlksWithMetaLoc(
+// AddObjsWithMetaLoc transfers blocks with meta location into non-appendable nodes
+func (space *tableSpace) AddObjsWithMetaLoc(
 	pkVecs []containers.Vector,
 	stats objectio.ObjectStats,
 ) (err error) {
@@ -473,7 +473,7 @@ func (space *tableSpace) BatchDedup(key containers.Vector) error {
 }
 
 func (space *tableSpace) GetColumnDataByIds(
-	blk *catalog.ObjectEntry,
+	obj *catalog.ObjectEntry,
 	colIdxes []int,
 	mp *mpool.MPool,
 ) (view *containers.BlockView, err error) {
@@ -483,7 +483,7 @@ func (space *tableSpace) GetColumnDataByIds(
 
 func (space *tableSpace) GetColumnDataById(
 	ctx context.Context,
-	blk *catalog.ObjectEntry,
+	obj *catalog.ObjectEntry,
 	colIdx int,
 	mp *mpool.MPool,
 ) (view *containers.ColumnView, err error) {
@@ -491,14 +491,9 @@ func (space *tableSpace) GetColumnDataById(
 	return n.GetColumnDataById(ctx, colIdx, mp)
 }
 
-func (space *tableSpace) Prefetch(blk *catalog.ObjectEntry, idxes []uint16) error {
+func (space *tableSpace) Prefetch(obj *catalog.ObjectEntry, idxes []uint16) error {
 	n := space.nodes[0]
 	return n.Prefetch(idxes)
-}
-
-func (space *tableSpace) GetBlockRows(blk *catalog.ObjectEntry) int {
-	n := space.nodes[0]
-	return int(n.Rows())
 }
 
 func (space *tableSpace) GetValue(row uint32, col uint16) (any, bool, error) {
