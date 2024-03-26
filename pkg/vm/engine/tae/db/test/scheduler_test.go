@@ -151,22 +151,6 @@ func TestCheckpoint2(t *testing.T) {
 		assert.Nil(t, err)
 		assert.Nil(t, txn.Commit(context.Background()))
 	}
-
-	// testutils.WaitExpect(1000, func() bool {
-	// 	return tae.Wal.GetPenddingCnt() == 1
-	// })
-	// t.Log(tae.Wal.GetPenddingCnt())
-	// err := meta.GetObjectData().Destroy()
-	// assert.Nil(t, err)
-	// task, err := tae.Runtime.Scheduler.ScheduleScopedFn(tasks.WaitableCtx, tasks.CheckpointTask, nil, tae.Catalog.CheckpointClosure(tae.Runtime.Scheduler.GetCheckpointTS()))
-	// assert.Nil(t, err)
-	// err = task.WaitDone()
-	// assert.Nil(t, err)
-	// testutils.WaitExpect(1000, func() bool {
-	// 	return tae.Wal.GetPenddingCnt() == 4
-	// })
-	// t.Log(tae.Wal.GetPenddingCnt())
-	// assert.Equal(t, uint64(4), tae.Wal.GetPenddingCnt())
 }
 
 func TestSchedule1(t *testing.T) {
