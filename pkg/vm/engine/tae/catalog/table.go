@@ -258,7 +258,7 @@ func (entry *TableEntry) CreateObject(
 	txn txnif.AsyncTxn,
 	state EntryState,
 	opts *objectio.CreateObjOpt,
-	dataFactory BlockDataFactory,
+	dataFactory ObjectDataFactory,
 ) (created *ObjectEntry, err error) {
 	entry.Lock()
 	defer entry.Unlock()

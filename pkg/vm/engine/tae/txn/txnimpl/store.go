@@ -16,11 +16,12 @@ package txnimpl
 
 import (
 	"context"
-	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"runtime/trace"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"go.uber.org/zap"
@@ -297,7 +298,7 @@ func (store *txnStore) Append(ctx context.Context, dbId, id uint64, data *contai
 	return db.Append(ctx, id, data)
 }
 
-func (store *txnStore) AddBlksWithMetaLoc(
+func (store *txnStore) AddObjsWithMetaLoc(
 	ctx context.Context,
 	dbId, tid uint64,
 	stats containers.Vector,
@@ -307,7 +308,7 @@ func (store *txnStore) AddBlksWithMetaLoc(
 	if err != nil {
 		return err
 	}
-	return db.AddBlksWithMetaLoc(ctx, tid, stats)
+	return db.AddObjsWithMetaLoc(ctx, tid, stats)
 }
 
 func (store *txnStore) RangeDelete(
