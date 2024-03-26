@@ -59,13 +59,13 @@ type baseObject struct {
 	rt         *dbutils.Runtime
 	meta       *catalog.ObjectEntry
 	appendMVCC *updates.AppendMVCCHandle
-	impl       data.Block
+	impl       data.Object
 
 	node atomic.Pointer[Node]
 }
 
-func newBaseBlock(
-	impl data.Block,
+func newBaseObject(
+	impl data.Object,
 	meta *catalog.ObjectEntry,
 	rt *dbutils.Runtime,
 ) *baseObject {

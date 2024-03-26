@@ -541,11 +541,6 @@ func sizeToIdx(size int) int {
 }
 
 func (mp *MPool) Alloc(sz int) ([]byte, error) {
-	start := time.Now()
-	defer func() {
-		v2.TxnMpoolAllocDurationHistogram.Observe(time.Since(start).Seconds())
-	}()
-
 	// reject unexpected alloc size.
 	if sz < 0 || sz > GB {
 		logutil.Errorf("Invalid alloc size %d: %s", sz, string(debug.Stack()))
@@ -599,11 +594,6 @@ func (mp *MPool) Alloc(sz int) ([]byte, error) {
 }
 
 func (mp *MPool) Free(bs []byte) {
-	start := time.Now()
-	defer func() {
-		v2.TxnMpoolFreeDurationHistogram.Observe(time.Since(start).Seconds())
-	}()
-
 	if bs == nil || cap(bs) == 0 {
 		return
 	}
