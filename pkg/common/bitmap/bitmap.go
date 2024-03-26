@@ -344,6 +344,9 @@ func (n *Bitmap) TryExpandWithSize(size int) {
 	if int(n.len) >= size {
 		return
 	}
+	if n.emptyFlag == nil {
+		n.emptyFlag = new(atomic.Int32)
+	}
 	newCap := (size + 63) / 64
 	n.len = int64(size)
 	if newCap > cap(n.data) {
