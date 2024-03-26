@@ -42,6 +42,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnimpl"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
+	"go.uber.org/zap"
 )
 
 const (
@@ -57,7 +58,7 @@ func fillRuntimeOptions(opts *options.Options) {
 	}
 	w := &bytes.Buffer{}
 	toml.NewEncoder(w).Encode(opts.MergeCfg)
-	logutil.Info("merge options", common.OperandField(w.String()))
+	logutil.Info("mergeblocks options", zap.String("toml", w.String()), zap.Bool("standalone", opts.IsStandalone))
 }
 
 func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, err error) {
