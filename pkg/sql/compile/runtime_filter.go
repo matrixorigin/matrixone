@@ -22,7 +22,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -56,14 +55,14 @@ func ApplyRuntimeFilters(
 	tableDef *plan.TableDef,
 	blockInfos objectio.BlockInfoSlice,
 	exprs []*plan.Expr,
-	runtimeFilters []*pipeline.RuntimeFilter,
+	runtimeFilters []process.RuntimeFilterMessage,
 ) ([]byte, error) {
 	var err error
 	evaluators := make([]RuntimeFilterEvaluator, len(runtimeFilters))
 
 	for i, filter := range runtimeFilters {
 		switch filter.Typ {
-		case pipeline.RuntimeFilter_IN:
+		case process.RuntimeFilter_IN:
 			vec := vector.NewVec(types.T_any.ToType())
 			err = vec.UnmarshalBinary(filter.Data)
 			if err != nil {
@@ -73,7 +72,7 @@ func ApplyRuntimeFilters(
 				InList: vec,
 			}
 
-		case pipeline.RuntimeFilter_MIN_MAX:
+		case process.RuntimeFilter_MIN_MAX:
 			evaluators[i] = &RuntimeZonemapFilter{
 				Zm: filter.Data,
 			}

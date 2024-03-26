@@ -17,6 +17,7 @@ package indexbuild
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -38,8 +39,8 @@ type container struct {
 }
 
 type Argument struct {
-	ctr                  *container
-	RuntimeFilterSenders []*colexec.RuntimeFilterChan
+	ctr               *container
+	RuntimeFilterSpec *plan.RuntimeFilterSpec
 	vm.OperatorBase
 }
 
@@ -72,10 +73,6 @@ func (arg *Argument) Release() {
 	if arg != nil {
 		reuse.Free[Argument](arg, nil)
 	}
-}
-
-func (arg *Argument) SetRuntimeFilterSenders(rfs []*colexec.RuntimeFilterChan) {
-	arg.RuntimeFilterSenders = rfs
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {

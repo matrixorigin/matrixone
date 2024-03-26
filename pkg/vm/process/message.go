@@ -36,6 +36,8 @@ func (m MsgType) MessageName() string {
 	switch m {
 	case MsgTopValue:
 		return "MsgTopValue"
+	case MsgRuntimeFilter:
+		return "MsgRuntimeFilter"
 	}
 	return "unknown message type"
 }
@@ -69,6 +71,12 @@ type MessageBoard struct {
 	RwMutex  *sync.RWMutex // for nonblock message
 	Mutex    *sync.Mutex   // for block message
 	Cond     *sync.Cond    //for block message
+}
+
+func (m *MessageBoard) Reset() {
+	m.RwMutex.Lock()
+	defer m.RwMutex.Unlock()
+	m.Messages = m.Messages[:0]
 }
 
 type MessageReceiver struct {
@@ -109,6 +117,9 @@ func (mr *MessageReceiver) receiveMessageNonBlock() []Message {
 	var result []Message
 	lenMessages := int32(len(mr.mb.Messages))
 	for ; mr.offset < lenMessages; mr.offset++ {
+		if mr.mb.Messages[mr.offset] == nil {
+			continue
+		}
 		message := *mr.mb.Messages[mr.offset]
 		if !MatchAddress(message, mr.addr) {
 			continue
@@ -131,16 +142,16 @@ func (mr *MessageReceiver) Free() {
 	mr.mb.RwMutex.Lock()
 	defer mr.mb.RwMutex.Unlock()
 	for i := range mr.received {
-		mr.mb.Messages[i] = nil
+		mr.mb.Messages[mr.received[i]] = nil
 	}
 	mr.received = nil
 }
 
 func (mr *MessageReceiver) ReceiveMessage(needBlock bool) []Message {
-	if !needBlock {
-		return mr.receiveMessageNonBlock()
+	var result = mr.receiveMessageNonBlock()
+	if !needBlock || len(result) > 0 {
+		return result
 	}
-	var result []Message
 	for len(result) == 0 {
 		mr.mb.Cond.L.Lock()
 		mr.mb.Cond.Wait()
