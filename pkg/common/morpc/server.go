@@ -324,7 +324,7 @@ func (s *server) startWriteLoop(cs *clientSession) error {
 						fields = append(fields, zap.String("client", cs.conn.RemoteAddress()))
 					}
 
-					written := 0
+					written := responses[:0]
 					timeout := time.Duration(0)
 					for _, f := range responses {
 						s.metrics.writeLatencyDurationHistogram.Observe(start.Sub(f.send.createAt).Seconds())
@@ -361,23 +361,21 @@ func (s *server) startWriteLoop(cs *clientSession) error {
 							f.messageSent(err)
 							return
 						}
-						written++
+						written = append(written, f)
 					}
 
-					if written > 0 {
+					if len(written) > 0 {
 						err := cs.conn.Flush(timeout)
 						if err != nil {
 							if ce != nil {
 								fields = append(fields, zap.Error(err))
 							}
-							for _, f := range responses {
-								if s.options.filter(f.send.Message) {
-									id := f.getSendMessageID()
-									s.logger.Error("write response failed",
-										zap.Uint64("request-id", id),
-										zap.Error(err))
-									f.messageSent(err)
-								}
+							for _, f := range written {
+								id := f.getSendMessageID()
+								s.logger.Error("write response failed",
+									zap.Uint64("request-id", id),
+									zap.Error(err))
+								f.messageSent(err)
 							}
 						}
 						if ce != nil {
@@ -388,7 +386,7 @@ func (s *server) startWriteLoop(cs *clientSession) error {
 						}
 					}
 
-					for _, f := range responses {
+					for _, f := range written {
 						f.messageSent(nil)
 					}
 
