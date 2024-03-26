@@ -138,7 +138,8 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 
 		bat.Cnt = 1
 		anal.S3IOByte(bat)
-		anal.Alloc(int64(bat.Size()))
+		batSize := bat.Size()
+		arg.maxAllocSize = max(arg.maxAllocSize, batSize)
 
 		if arg.tmpBuf == nil {
 			arg.tmpBuf = bat
@@ -146,7 +147,6 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		}
 
 		tmpSize := arg.tmpBuf.Size()
-		batSize := bat.Size()
 		if arg.tmpBuf.RowCount()+bat.RowCount() < colexec.DefaultBatchSize && tmpSize+batSize < maxBatchMemSize {
 			_, err := arg.tmpBuf.Append(proc.Ctx, proc.GetMPool(), bat)
 			proc.PutBatch(bat)
