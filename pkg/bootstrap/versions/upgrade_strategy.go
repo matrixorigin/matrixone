@@ -16,6 +16,7 @@ package versions
 
 import (
 	"fmt"
+	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -129,6 +130,7 @@ type UpgradeEntry struct {
 func (u *UpgradeEntry) Upgrade(txn executor.TxnExecutor, accountId uint32) error {
 	exist, err := u.CheckFunc(txn, accountId)
 	if err != nil {
+		getLogger().Error("execute upgrade entry check error", zap.Error(err), zap.String("upgrade entry", u.String()))
 		return err
 	}
 
@@ -147,6 +149,7 @@ func (u *UpgradeEntry) Upgrade(txn executor.TxnExecutor, accountId uint32) error
 		// 2. Second, Execute upgrade sql
 		res, err := txn.Exec(u.UpgSql, executor.StatementOption{}.WithAccountID(accountId))
 		if err != nil {
+			getLogger().Error("execute upgrade entry sql error", zap.Error(err), zap.String("upgrade entry", u.String()))
 			return err
 		}
 		res.Close()
