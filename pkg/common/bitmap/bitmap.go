@@ -23,6 +23,7 @@ import (
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 )
 
 //
@@ -205,6 +206,9 @@ func (n *Bitmap) EmptyByFlag() bool {
 
 // IsEmpty returns true if no bit in the Bitmap is set, otherwise it will return false.
 func (n *Bitmap) IsEmpty() bool {
+	if n.emptyFlag == nil {
+		return true
+	}
 	flag := n.emptyFlag.Load()
 	if flag == kEmptyFlagEmpty {
 		return true
@@ -343,9 +347,6 @@ func (n *Bitmap) TryExpand(m *Bitmap) {
 func (n *Bitmap) TryExpandWithSize(size int) {
 	if int(n.len) >= size {
 		return
-	}
-	if n.emptyFlag == nil {
-		n.emptyFlag = new(atomic.Int32)
 	}
 	newCap := (size + 63) / 64
 	n.len = int64(size)

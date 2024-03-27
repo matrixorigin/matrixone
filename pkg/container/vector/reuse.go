@@ -16,18 +16,22 @@ package vector
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 )
 
 func init() {
 	reuse.CreatePool[Vector](
 		func() *Vector {
-			return &Vector{}
+			res := &Vector{}
+			res.nsp = *nulls.New()
+			return res
 		},
 		func(v *Vector) {
 			freeMsg := v.FreeMsg
 			*v = Vector{
 				FreeMsg: freeMsg,
 			}
+			v.nsp = *nulls.New()
 		},
 		reuse.DefaultOptions[Vector](),
 	)

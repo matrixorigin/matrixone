@@ -449,6 +449,7 @@ func readBlockData(
 	policy fileservice.Policy,
 ) (bat *batch.Batch, rowidPos int, deleteMask nulls.Bitmap, release func(), err error) {
 	rowidPos, idxes, typs := getRowsIdIndex(colIndexes, colTypes)
+	deleteMask = *nulls.New()
 
 	readColumns := func(cols []uint16) (result *batch.Batch, loaded *batch.Batch, err error) {
 		if len(cols) == 0 && rowidPos >= 0 {
@@ -478,6 +479,7 @@ func readBlockData(
 		var loaded *batch.Batch
 		// appendable block should be filtered by committs
 		cols = append(cols, objectio.SEQNUM_COMMITTS, objectio.SEQNUM_ABORT) // committs, aborted
+		deletes = *nulls.New()
 
 		// no need to add typs, the two columns won't be generated
 		if result, loaded, err = readColumns(cols); err != nil {
