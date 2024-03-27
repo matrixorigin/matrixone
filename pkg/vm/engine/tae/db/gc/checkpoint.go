@@ -192,11 +192,12 @@ func (c *checkpointCleaner) Replay() error {
 		c.updateInputs(table)
 	}
 	if snapFile != "" {
-		logutil.Infof("Replay snapshot file: %s", snapFile)
 		err = c.snapshot.snapshotMeta.ReadMeta(c.ctx, GCMetaDir+snapFile, c.fs.Service)
 		if err != nil {
 			return err
 		}
+		c.GetSnapshots()
+		logutil.Infof("Replay snapshot file: %s", snapFile)
 	}
 	ckp := checkpoint.NewCheckpointEntry(maxConsumedStart, maxConsumedEnd, checkpoint.ET_Incremental)
 	c.updateMaxConsumed(ckp)
