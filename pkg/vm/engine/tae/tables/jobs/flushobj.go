@@ -29,7 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
 
-type flushBlkTask struct {
+type flushObjTask struct {
 	*tasks.BaseTask
 	data      *containers.Batch
 	delta     *containers.Batch
@@ -40,12 +40,12 @@ type flushBlkTask struct {
 	schemaVer uint32
 	seqnums   []uint16
 	stat      objectio.ObjectStats
-	isABlk    bool
+	isAObj    bool
 
 	Stats objectio.ObjectStats
 }
 
-func NewFlushBlkTask(
+func NewFlushObjTask(
 	ctx *tasks.Context,
 	schemaVer uint32,
 	seqnums []uint16,
@@ -53,24 +53,24 @@ func NewFlushBlkTask(
 	meta *catalog.ObjectEntry,
 	data *containers.Batch,
 	delta *containers.Batch,
-	isABlk bool,
-) *flushBlkTask {
-	task := &flushBlkTask{
+	isAObj bool,
+) *flushObjTask {
+	task := &flushObjTask{
 		schemaVer: schemaVer,
 		seqnums:   seqnums,
 		data:      data,
 		meta:      meta,
 		fs:        fs,
 		delta:     delta,
-		isABlk:    isABlk,
+		isAObj:    isAObj,
 	}
 	task.BaseTask = tasks.NewBaseTask(task, tasks.IOTask, ctx)
 	return task
 }
 
-func (task *flushBlkTask) Scope() *common.ID { return task.meta.AsCommonID() }
+func (task *flushObjTask) Scope() *common.ID { return task.meta.AsCommonID() }
 
-func (task *flushBlkTask) Execute(ctx context.Context) (err error) {
+func (task *flushObjTask) Execute(ctx context.Context) (err error) {
 	if v := ctx.Value(TestFlushBailoutPos1{}); v != nil {
 		time.Sleep(time.Duration(rand.Intn(200)) * time.Millisecond)
 	}
@@ -81,7 +81,7 @@ func (task *flushBlkTask) Execute(ctx context.Context) (err error) {
 	if err != nil {
 		return err
 	}
-	if task.isABlk {
+	if task.isAObj {
 		writer.SetAppendable()
 	}
 	if task.meta.GetSchema().HasPK() {
