@@ -113,6 +113,9 @@ func (t *GCTable) SoftGC(table *GCTable, ts types.TS, snapShotList map[uint64][]
 	objects := t.getObjects()
 	for name, entry := range objects {
 		objectEntry := table.objects[name]
+		if len(snapShotList[entry.table]) == 0 {
+			logutil.Infof("SoftGC: snapShotList is empty %d", entry.table)
+		}
 		if objectEntry == nil && entry.commitTS.Less(&ts) && !isSnapshotRefers(entry, snapShotList[entry.table]) {
 			gc = append(gc, name)
 			t.deleteObject(name)

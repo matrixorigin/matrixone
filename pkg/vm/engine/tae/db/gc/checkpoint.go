@@ -618,9 +618,9 @@ func (c *checkpointCleaner) GetSnapshots() (map[uint64][]types.TS, error) {
 	c.snapshot.RLock()
 	defer c.snapshot.RUnlock()
 	snapshotList, err := c.snapshot.snapshotMeta.GetSnapshot(c.fs.Service)
-	for _, snapshot := range snapshotList {
+	for tid, snapshot := range snapshotList {
 		for _, s := range snapshot {
-			logutil.Infof("GetSnapshots is %v", s.ToString())
+			logutil.Infof("GetSnapshots is %v, num is %d", s.ToString(), tid)
 		}
 	}
 	return snapshotList, err
