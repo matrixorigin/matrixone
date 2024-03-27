@@ -224,6 +224,10 @@ func (b *msgBuf) consumeServer(msg []byte, transfer *atomic.Bool, wg *sync.WaitG
 // handleOKPacket handles the OK packet from server to update the txn state.
 func (b *msgBuf) handleOKPacket(msg []byte) bool {
 	var mp *frontend.MysqlProtocolImpl
+	// the sequence ID should be 1 for OK packet.
+	if msg[3] != 1 {
+		return b.setTxnStatus(0)
+	}
 	pos := 5
 	_, pos, ok := mp.ReadIntLenEnc(msg, pos)
 	if !ok {

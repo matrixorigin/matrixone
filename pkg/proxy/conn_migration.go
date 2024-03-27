@@ -27,7 +27,7 @@ import (
 
 func (c *clientConn) getQueryAddress(addr string) string {
 	var queryAddr string
-	c.moCluster.GetCNService(clusterservice.NewSelector(), func(service metadata.CNService) bool {
+	c.moCluster.GetCNService(clusterservice.NewSelectAll(), func(service metadata.CNService) bool {
 		if service.SQLAddress == addr {
 			queryAddr = service.QueryAddress
 			return false
@@ -37,14 +37,14 @@ func (c *clientConn) getQueryAddress(addr string) string {
 	return queryAddr
 }
 
-func (c *clientConn) migrateConnFrom(addr string) (*query.MigrateConnFromResponse, error) {
+func (c *clientConn) migrateConnFrom(sqlAddr string) (*query.MigrateConnFromResponse, error) {
 	req := c.queryService.NewRequest(query.CmdMethod_MigrateConnFrom)
 	req.MigrateConnFromRequest = &query.MigrateConnFromRequest{
 		ConnID: c.connID,
 	}
 	ctx, cancel := context.WithTimeout(c.ctx, time.Second*3)
 	defer cancel()
-	addr = c.getQueryAddress(addr)
+	addr := c.getQueryAddress(sqlAddr)
 	if addr == "" {
 		return nil, moerr.NewInternalError(c.ctx, "cannot get query service address")
 	}

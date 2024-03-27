@@ -359,6 +359,8 @@ func (s *service) handleMigrateConnTo(
 		logutil.Errorf("failed to migrate conn to: %v", err)
 		return err
 	}
+	logutil.Infof("migrate ok, conn ID: %d, DB: %s",
+		req.MigrateConnToRequest.ConnID, req.MigrateConnToRequest.DB)
 	resp.MigrateConnToResponse = &query.MigrateConnToResponse{
 		Success: true,
 	}
