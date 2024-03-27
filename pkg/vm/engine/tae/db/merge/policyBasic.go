@@ -220,13 +220,14 @@ func (o *Basic) Revise(cpu, mem int64) ([]*catalog.ObjectEntry, TaskHostKind) {
 	})
 
 	isStandalone := common.IsStandaloneBoost.Load()
+	mergeOnDNIfStandalone := !common.ShouldStandaloneCNTakeOver.Load()
 
 	dnobjs := o.controlMem(objs, mem)
 	dnobjs = o.optimize(dnobjs)
 
 	dnosize, _, _ := estimateMergeConsume(dnobjs)
 
-	if isStandalone {
+	if isStandalone && mergeOnDNIfStandalone {
 		if cpu > 85 {
 			if dnosize > 25*common.Const1MBytes {
 				logutil.Infof("mergeblocks skip big merge for high level cpu usage, %d", cpu)

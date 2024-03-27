@@ -39,14 +39,15 @@ const (
 )
 
 var (
-	RuntimeMaxMergeObjN      atomic.Int32
-	RuntimeMinRowsQualified  atomic.Int32
-	RuntimeMaxRowsObj        atomic.Int32
-	RuntimeMinCNMergeSize    atomic.Uint64
-	RuntimeCNMergeMemControl atomic.Uint64
-	RuntimeCNTakeOverAll     atomic.Bool
-	IsStandaloneBoost        atomic.Bool
-	Epsilon                  float64
+	RuntimeMaxMergeObjN        atomic.Int32
+	RuntimeMinRowsQualified    atomic.Int32
+	RuntimeMaxRowsObj          atomic.Int32
+	RuntimeMinCNMergeSize      atomic.Uint64
+	RuntimeCNMergeMemControl   atomic.Uint64
+	RuntimeCNTakeOverAll       atomic.Bool
+	IsStandaloneBoost          atomic.Bool
+	ShouldStandaloneCNTakeOver atomic.Bool
+	Epsilon                    float64
 )
 
 func init() {

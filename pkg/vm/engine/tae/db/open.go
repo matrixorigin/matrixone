@@ -54,7 +54,10 @@ func fillRuntimeOptions(opts *options.Options) {
 	common.RuntimeMinCNMergeSize.Store(opts.MergeCfg.CNTakeOverExceed)
 	common.RuntimeCNTakeOverAll.Store(opts.MergeCfg.CNTakeOverAll)
 	if opts.IsStandalone {
-		common.IsStandaloneBoost.Store(opts.IsStandalone)
+		common.IsStandaloneBoost.Store(true)
+	}
+	if opts.MergeCfg.CNStandaloneTake {
+		common.ShouldStandaloneCNTakeOver.Store(true)
 	}
 	w := &bytes.Buffer{}
 	toml.NewEncoder(w).Encode(opts.MergeCfg)

@@ -153,6 +153,7 @@ func (s *store) newTAEStorage(ctx context.Context, shard metadata.TNShard, facto
 		CNMergeMemControlHint: uint64(s.cfg.Merge.CNMergeMemHint),
 		CNTakeOverAll:         s.cfg.Merge.CNTakeOverAll,
 		CNTakeOverExceed:      uint64(s.cfg.Merge.CNTakeOverExceed),
+		CNStandaloneTake:      s.cfg.Merge.CNStandaloneTake,
 	}
 
 	logtailServerAddr := s.logtailServiceListenAddr()
