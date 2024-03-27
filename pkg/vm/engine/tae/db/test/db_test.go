@@ -6475,7 +6475,7 @@ func TestSnapshotGC(t *testing.T) {
 		assert.Nil(t, txn.Commit(context.Background()))
 	}
 	db.DiskCleaner.GetCleaner().SetTid(rel3.ID())
-	db.DiskCleaner.GetCleaner().DisableGCGCForTest()
+	db.DiskCleaner.GetCleaner().DisableGCForTest()
 	bat := catalog.MockBatch(schema1, int(schema1.BlockMaxRows*10-1))
 	defer bat.Close()
 	bats := bat.Split(bat.Length())

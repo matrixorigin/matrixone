@@ -121,10 +121,16 @@ func (c *checkpointCleaner) EnableGCForTest() {
 	c.option.enableGC = true
 }
 
-func (c *checkpointCleaner) DisableGCGCForTest() {
+func (c *checkpointCleaner) DisableGCForTest() {
 	c.option.Lock()
 	defer c.option.Unlock()
 	c.option.enableGC = false
+}
+
+func (c *checkpointCleaner) isEnableGC() bool {
+	c.option.Lock()
+	defer c.option.Unlock()
+	return c.option.enableGC
 }
 
 func (c *checkpointCleaner) Replay() error {
@@ -482,7 +488,7 @@ func (c *checkpointCleaner) CheckGC() error {
 
 func (c *checkpointCleaner) Process() {
 	var ts types.TS
-	if !c.enableGC {
+	if !c.isEnableGC() {
 		return
 	}
 	maxConsumed := c.maxConsumed.Load()

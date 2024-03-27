@@ -115,5 +115,5 @@ type Cleaner interface {
 	GetInputs() *GCTable
 	SetTid(tid uint64)
 	EnableGCForTest()
-	DisableGCGCForTest()
+	DisableGCForTest()
 }

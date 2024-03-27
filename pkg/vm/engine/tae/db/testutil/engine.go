@@ -110,7 +110,7 @@ func (e *TestEngine) RestartDisableGC(ctx context.Context) {
 	var err error
 	e.DB, err = db.Open(ctx, e.Dir, e.Opts)
 	// only ut executes this checker
-	e.DB.DiskCleaner.GetCleaner().DisableGCGCForTest()
+	e.DB.DiskCleaner.GetCleaner().DisableGCForTest()
 	e.DB.DiskCleaner.GetCleaner().AddChecker(
 		func(item any) bool {
 			min := e.DB.TxnMgr.MinTSForTest()
