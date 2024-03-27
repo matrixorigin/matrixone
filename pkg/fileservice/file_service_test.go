@@ -34,6 +34,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/fileservice/memorycache"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/stretchr/testify/assert"
@@ -687,7 +688,7 @@ func testFileService(
 			Entries: []IOEntry{
 				{
 					Size: int64(len(data)),
-					ToCacheData: func(r io.Reader, data []byte, allocator CacheDataAllocator) (CacheData, error) {
+					ToCacheData: func(r io.Reader, data []byte, allocator CacheDataAllocator) (memorycache.CacheData, error) {
 						bs, err := io.ReadAll(r)
 						assert.Nil(t, err)
 						if len(data) > 0 {
@@ -713,6 +714,8 @@ func testFileService(
 		assert.Equal(t, 1, len(m.M))
 		assert.Equal(t, int64(42), m.M[42])
 
+		vec.Release()
+
 		// ReadCache
 		vec = &IOVector{
 			FilePath: "foo",
@@ -728,7 +731,8 @@ func testFileService(
 		if vec.Entries[0].CachedData != nil {
 			assert.Equal(t, data, vec.Entries[0].CachedData.Bytes())
 		}
-
+		vec.Release()
+		fs.Close()
 	})
 
 	t.Run("ignore", func(t *testing.T) {

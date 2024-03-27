@@ -438,6 +438,7 @@ func doLock(
 		TableDefChanged: opts.changeDef,
 		Sharding:        opts.sharding,
 		Group:           opts.group,
+		SnapShotTs:      txnOp.CreateTS(),
 	}
 	if txn.Mirror {
 		options.ForwardTo = txn.LockService
@@ -454,13 +455,19 @@ func doLock(
 	key := txnOp.AddWaitLock(tableID, rows, options)
 	defer txnOp.RemoveWaitLock(key)
 
-	result, err := lockService.Lock(
-		ctx,
-		tableID,
-		rows,
-		txn.ID,
-		options)
-
+	var err error
+	var result lock.Result
+	for {
+		result, err = lockService.Lock(
+			ctx,
+			tableID,
+			rows,
+			txn.ID,
+			options)
+		if !moerr.IsMoErrCode(err, moerr.ErrRetryForCNRollingRestart) {
+			break
+		}
+	}
 	trace.GetService().AddTxnDurationAction(
 		txnOp,
 		client.LockEvent,
@@ -468,13 +475,12 @@ func doLock(
 		tableID,
 		time.Since(startAt),
 		nil)
-
 	if err != nil {
 		return false, false, timestamp.Timestamp{}, err
 	}
 
 	// add bind locks
-	if err := txnOp.AddLockTable(result.LockedOn); err != nil {
+	if err = txnOp.AddLockTable(result.LockedOn); err != nil {
 		return false, false, timestamp.Timestamp{}, err
 	}
 

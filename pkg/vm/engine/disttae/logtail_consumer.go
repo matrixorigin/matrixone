@@ -17,6 +17,7 @@ package disttae
 import (
 	"context"
 	"fmt"
+	"runtime/trace"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -1385,6 +1386,9 @@ func consumeLogTailOfPushWithoutLazyLoad(
 	tableId uint64,
 	tableName string,
 ) (err error) {
+	ctx, task := trace.NewTask(ctx, "consumeLogTailOfPushWithoutLazyLoad")
+	defer task.End()
+
 	var entries []*api.Entry
 	var closeCBs []func()
 	if entries, closeCBs, err = taeLogtail.LoadCheckpointEntries(
@@ -1413,7 +1417,11 @@ func hackConsumeLogtail(
 	primarySeqnum int,
 	engine *Engine,
 	state *logtailreplay.PartitionState,
-	lt *logtail.TableLogtail) error {
+	lt *logtail.TableLogtail,
+) error {
+	ctx, task := trace.NewTask(ctx, "hackConsumeLogtail")
+	defer task.End()
+
 	var packer *types.Packer
 	put := engine.packerPool.Get(&packer)
 	defer put.Put()

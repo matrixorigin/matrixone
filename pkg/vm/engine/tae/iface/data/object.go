@@ -58,15 +58,15 @@ type ObjectAppender interface {
 	Close()
 }
 
-type BlockReplayer interface {
+type ObjectReplayer interface {
 	OnReplayDelete(blkID uint16, node txnif.DeleteNode) (err error)
 	OnReplayAppend(node txnif.AppendNode) (err error)
 	OnReplayAppendPayload(bat *containers.Batch) (err error)
 }
 
-type Block interface {
+type Object interface {
 	CheckpointUnit
-	BlockReplayer
+	ObjectReplayer
 
 	DeletesInfo() string
 
@@ -100,12 +100,12 @@ type Block interface {
 	HasDeleteIntentsPreparedIn(from, to types.TS) (bool, bool)
 
 	// check if all rows are committed before ts
-	// NOTE: here we assume that the block is visible to the ts
-	// if the block is an appendable block:
-	// 1. if the block is not frozen, return false
-	// 2. if the block is frozen and in-memory, check with the max ts committed
-	// 3. if the block is persisted, return false
-	// if the block is not an appendable block:
+	// NOTE: here we assume that the object is visible to the ts
+	// if the object is an appendable object:
+	// 1. if the object is not frozen, return false
+	// 2. if the object is frozen and in-memory, check with the max ts committed
+	// 3. if the object is persisted, return false
+	// if the object is not an appendable object:
 	// only check with the created ts
 	CoarseCheckAllRowsCommittedBefore(ts types.TS) bool
 

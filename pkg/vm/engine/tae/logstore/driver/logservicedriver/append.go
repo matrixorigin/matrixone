@@ -69,7 +69,7 @@ func (d *LogServiceDriver) onAppendQueue(appender *driverAppender) {
 }
 
 func (d *LogServiceDriver) getClient() (client *clientWithRecord, lsn uint64) {
-	lsn, err := d.retryAllocateAppendLsnWithTimeout(uint64(d.config.AppenderMaxCount), time.Second)
+	lsn, err := d.retryAllocateAppendLsnWithTimeout(uint64(d.config.ClientMaxCount), time.Second)
 	if err != nil {
 		panic(err)
 	}
