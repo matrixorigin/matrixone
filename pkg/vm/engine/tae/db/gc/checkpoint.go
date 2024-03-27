@@ -601,5 +601,11 @@ func (c *checkpointCleaner) updateSnapshot(data *logtail.CheckpointData) error {
 func (c *checkpointCleaner) GetSnapshots() (map[uint64][]types.TS, error) {
 	c.snapshot.RLock()
 	defer c.snapshot.RUnlock()
-	return c.snapshot.snapshotMeta.GetSnapshot(c.fs.Service)
+	snapshotList, err := c.snapshot.snapshotMeta.GetSnapshot(c.fs.Service)
+	for _, snapshot := range snapshotList {
+		for _, s := range snapshot {
+			logutil.Infof("GetSnapshots is %v", s.ToString())
+		}
+	}
+	return snapshotList, err
 }
