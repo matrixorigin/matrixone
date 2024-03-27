@@ -345,7 +345,7 @@ func (c *DashboardCreator) getMetricWithFilter(name string, filter string) strin
 }
 
 func (c *DashboardCreator) getCloudFilters() string {
-	return `matrixone_cloud_main_cluster=~"$physicalCluster", matrixorigin_io_owner=~"$owner", matrixone_cloud_=~"$pod"`
+	return `matrixone_cloud_main_cluster=~"$physicalCluster", matrixorigin_io_owner=~"$owner", pod=~"$pod"`
 }
 
 func (c *DashboardCreator) initCloudFilterOptions() {
