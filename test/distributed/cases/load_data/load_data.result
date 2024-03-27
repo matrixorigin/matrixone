@@ -616,3 +616,94 @@ col1    col2
 4    陈
 5    李
 drop table t1;
+drop table if exists test01;
+create table test01(col1 int, col2 varchar(20));
+load data infile '$resources/load_data/test_starting_by02.csv' into table test01 CHARACTER SET "utf_8" fields terminated by ',' lines starting by 'cha';
+select * from test01;
+col1    col2
+null    chai
+3    yicha
+drop table test01;
+drop table if exists test02;
+create table test02(col1 int, col2 bigint, col3 varchar(30));
+load data infile '$resources/load_data/test_starting_by03.csv' into table test02 fields terminated by '|' lines starting by '1' terminated by '\n';
+select * from test02;
+col1    col2    col3
+1    2    2342424124312
+234    242324    3243vevewvw
+0    123123    32424234234
+110    234323    csrvevreerev
+drop table test02;
+drop table if exists test03;
+create table test03(col1 varchar(20), col2 varchar(20));
+load data infile '$resources/load_data/test_starting_by01.csv' into table test03 CHARACTER SET "utf_8" fields terminated by ',' lines terminated by '\n';
+select * from test03;
+col1    col2
+cha1    chai
+2    测试
+cha3    yicha
+4    chayige
+drop table test03;
+drop table if exists test04;
+
+create table test04 (col1 varchar(20), col2 varchar(60));
+
+load data infile '$resources/load_data/test_escaped_by01.csv' into table test04 fields terminated by ',' enclosed by '"' escaped by '\\' lines terminated by '\n';
+
+select * from test04;
+
+drop table test04;
+
+drop table if exists test05;
+create table test05 (col1 varchar(20), col2 varchar(60));
+load data infile '$resources/load_data/test_escaped_by02.csv' into table test05 fields terminated by ',' enclosed by '"' escaped by '\\' lines terminated by '\n';
+select * from test05;
+col1    col2
+John Doe    Programmer, Software Engineer
+Jane Smith    Data Scientist, , Data Analyst
+John Doe    Programmer, ，Software Engineer
+Jane Smith    Data Scientist,,Data Analyst
+Bob    Data Scientist, ,Data Analyst
+Mary    Manager,Teacher
+DO Smith    Data Manager,,Teacher
+DO Smith    Doctor,\,Operator
+BenJa    Analyst,%,Operator
+ewfhwj    __ewur4f
+Steve    'wr43vew43g43
+yyWGfve    ""vdvrervevre
+drop table test05;
+drop table if exists test06;
+
+create table test06(col1 varchar(20), col2 varchar(20));
+
+load data infile '$resources/load_data/test_enclosed_by01.csv' into table test06 fields terminated by ',' enclosed by '"' escaped by '\\' lines terminated by '\n';
+
+select * from test06;
+
+drop table test06;
+
+drop table if exists test07;
+create table test07(col1 varchar(20), col2 varchar(20));
+load data infile '$resources/load_data/test_enclosed_by02.csv' into table test07 fields terminated by ',' enclosed by '`' lines terminated by '\n';
+select * from test07;
+col1    col2
+hello ,    
+drop table test07;
+drop table if exists test08;
+
+create table test08 (col1 varchar(20), col2 varchar(20));
+
+load data infile '$resources/load_data/test_enclosed_by01.csv' into table test08 fields terminated by ',' enclosed by '`' lines terminated by '\n';
+
+select * from test08;
+
+drop table test08;
+
+drop table if exists test09;
+create table test09(col1 varchar(20), col2 varchar(20));
+load data infile '$resources/load_data/test_starting_by04.csv' into table test09 CHARACTER SET "utf_8" fields terminated by ',' lines starting by ' ';
+select * from test09;
+col1    col2
+@@ db"    -234242
+   32423"    3283
+drop table test09;

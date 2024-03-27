@@ -18,6 +18,7 @@ import (
 	"context"
 	"sort"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -25,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
@@ -96,6 +98,9 @@ func init() {
 }
 
 func isSortedKey(colDef *plan.ColDef) (isPK, isSorted bool) {
+	if colDef.Name == catalog.FakePrimaryKeyColName {
+		return false, false
+	}
 	isPK, isCluster := colDef.Primary, colDef.ClusterBy
 	isSorted = isPK || isCluster
 	return
@@ -1063,7 +1068,10 @@ func ExecuteBlockFilter(
 			}
 
 			if objStats.Rows() == 0 {
-				logutil.Fatalf("object stats has zero rows, detail: %s", obj.String())
+				logutil.Errorf("object stats has zero rows, isCommitted: %v, detail: %s",
+					isCommitted, obj.String())
+				util.EnableCoreDump()
+				util.CoreDump()
 			}
 
 			for ; pos < blockCnt; pos++ {

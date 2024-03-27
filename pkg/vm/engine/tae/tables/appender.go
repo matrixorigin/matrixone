@@ -21,56 +21,56 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 )
 
-type blockAppender struct {
-	blk         *aobject
+type objectAppender struct {
+	obj         *aobject
 	placeholder uint32
 	rows        uint32
 }
 
-func newAppender(ablk *aobject) *blockAppender {
-	appender := new(blockAppender)
-	appender.blk = ablk
-	rows, _ := ablk.Rows()
+func newAppender(aobj *aobject) *objectAppender {
+	appender := new(objectAppender)
+	appender.obj = aobj
+	rows, _ := aobj.Rows()
 	appender.rows = uint32(rows)
 	return appender
 }
 
-func (appender *blockAppender) GetMeta() any {
-	return appender.blk.meta
+func (appender *objectAppender) GetMeta() any {
+	return appender.obj.meta
 }
 
-func (appender *blockAppender) LockFreeze() {
-	appender.blk.freezelock.Lock()
+func (appender *objectAppender) LockFreeze() {
+	appender.obj.freezelock.Lock()
 }
-func (appender *blockAppender) UnlockFreeze() {
-	appender.blk.freezelock.Unlock()
+func (appender *objectAppender) UnlockFreeze() {
+	appender.obj.freezelock.Unlock()
 }
-func (appender *blockAppender) CheckFreeze() bool {
-	return appender.blk.frozen.Load()
-}
-
-func (appender *blockAppender) GetID() *common.ID {
-	return appender.blk.meta.AsCommonID()
+func (appender *objectAppender) CheckFreeze() bool {
+	return appender.obj.frozen.Load()
 }
 
-func (appender *blockAppender) IsAppendable() bool {
-	return appender.rows+appender.placeholder < appender.blk.meta.GetSchema().BlockMaxRows
+func (appender *objectAppender) GetID() *common.ID {
+	return appender.obj.meta.AsCommonID()
 }
 
-func (appender *blockAppender) Close() {
-	appender.blk.Unref()
+func (appender *objectAppender) IsAppendable() bool {
+	return appender.rows+appender.placeholder < appender.obj.meta.GetSchema().BlockMaxRows
 }
 
-func (appender *blockAppender) IsSameColumns(other any) bool {
-	n := appender.blk.PinNode()
+func (appender *objectAppender) Close() {
+	appender.obj.Unref()
+}
+
+func (appender *objectAppender) IsSameColumns(other any) bool {
+	n := appender.obj.PinNode()
 	defer n.Unref()
 	return n.MustMNode().writeSchema.IsSameColumns(other.(*catalog.Schema))
 }
 
-func (appender *blockAppender) PrepareAppend(
+func (appender *objectAppender) PrepareAppend(
 	rows uint32,
 	txn txnif.AsyncTxn) (node txnif.AppendNode, created bool, n uint32, err error) {
-	left := appender.blk.meta.GetSchema().BlockMaxRows - appender.rows - appender.placeholder
+	left := appender.obj.meta.GetSchema().BlockMaxRows - appender.rows - appender.placeholder
 	if left == 0 {
 		// n = rows
 		return
@@ -80,34 +80,34 @@ func (appender *blockAppender) PrepareAppend(
 	} else {
 		n = rows
 	}
-	appender.blk.Lock()
-	defer appender.blk.Unlock()
-	node, created = appender.blk.appendMVCC.AddAppendNodeLocked(
+	appender.obj.Lock()
+	defer appender.obj.Unlock()
+	node, created = appender.obj.appendMVCC.AddAppendNodeLocked(
 		txn,
 		appender.rows+appender.placeholder,
 		appender.placeholder+appender.rows+n)
 	appender.placeholder += n
 	return
 }
-func (appender *blockAppender) ReplayAppend(
+func (appender *objectAppender) ReplayAppend(
 	bat *containers.Batch,
 	txn txnif.AsyncTxn) (from int, err error) {
 	if from, err = appender.ApplyAppend(bat, txn); err != nil {
 		return
 	}
 	// TODO: Remove ReplayAppend
-	appender.blk.meta.GetTable().AddRows(uint64(bat.Length()))
+	appender.obj.meta.GetTable().AddRows(uint64(bat.Length()))
 	return
 }
-func (appender *blockAppender) ApplyAppend(
+func (appender *objectAppender) ApplyAppend(
 	bat *containers.Batch,
 	txn txnif.AsyncTxn) (from int, err error) {
-	n := appender.blk.PinNode()
+	n := appender.obj.PinNode()
 	defer n.Unref()
 
 	node := n.MustMNode()
-	appender.blk.Lock()
-	defer appender.blk.Unlock()
+	appender.obj.Lock()
+	defer appender.obj.Unlock()
 	from, err = node.ApplyAppend(bat, txn)
 
 	schema := node.writeSchema
