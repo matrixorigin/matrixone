@@ -369,8 +369,8 @@ github.com/lufia/plan9stats v0.0.0-20211012122336-39d0f177ccd0/go.mod h1:zJYVVT2
 github.com/magiconair/properties v1.8.0/go.mod h1:PppfXfuXeibc/6YijjN8zIbojt8czPbwD3XqdrwzmxQ=
 github.com/magiconair/properties v1.8.6 h1:5ibWZ6iY0NctNGWo87LalDlEZ6R41TqbbDamhfG/Qzo=
 github.com/magiconair/properties v1.8.6/go.mod h1:y3VJvCyxH9uVvJTWEGAELF3aiYNyPKd5NZ3oSwXrF60=
-github.com/matrixorigin/dragonboat/v4 v4.0.0-20230426084722-d189534f8004 h1:HwxzjxWB6oYwdA4gBXDgjjZiwpGKzBUfpGNzDbuJMwo=
-github.com/matrixorigin/dragonboat/v4 v4.0.0-20230426084722-d189534f8004/go.mod h1:bR6ZGoUwApH4/P4+AezNGT0xehljg+j+Z/Q2Fz+Y4a0=
+github.com/matrixorigin/dragonboat/v4 v4.0.0-20240312080931-1b40809d7cea h1:xsbOnW95FvN+kxHVonA+ooI8LPySQV8P+YbzG9BEJHI=
+github.com/matrixorigin/dragonboat/v4 v4.0.0-20240312080931-1b40809d7cea/go.mod h1:bR6ZGoUwApH4/P4+AezNGT0xehljg+j+Z/Q2Fz+Y4a0=
 github.com/matrixorigin/goetty/v2 v2.0.0-20231122095211-6a25dc9130ca h1:Umz9yzhDh/wxoZxUePptSGZN9fim7cq9u0EowC/QYo0=
 github.com/matrixorigin/goetty/v2 v2.0.0-20231122095211-6a25dc9130ca/go.mod h1:OwIBpVwRW1HjF/Jhc2Av3UvG2NygMg+bdqGxZaqwhU0=
 github.com/matrixorigin/gosigar v0.14.3-0.20231205085924-69ea5558fb97 h1:yx+DAToxqqOCHLiHiA1TDMkT+dESg5DaaLPayZJgPa0=
