@@ -565,8 +565,8 @@ func (db *txnDatabase) openSysTable(p *process.Process, id uint64, name string,
 		tableId:       id,
 		tableName:     name,
 		defs:          defs,
-		primaryIdx:    -1,
-		primarySeqnum: -1,
+		primaryIdx:    0,
+		primarySeqnum: 0,
 		clusterByIdx:  -1,
 	}
 	tbl.GetTableDef(context.TODO())
@@ -578,7 +578,6 @@ func (db *txnDatabase) openSysTable(p *process.Process, id uint64, name string,
 			PkeyColId:   0,
 			PkeyColName: catalog.SystemDBAttr_ID,
 			Names:       []string{catalog.SystemDBAttr_ID},
-			CompPkeyCol: tbl.tableDef.Cols[0],
 		}
 	case catalog.MO_TABLES:
 		tbl.tableDef.Pkey = &plan.PrimaryKeyDef{
@@ -586,7 +585,6 @@ func (db *txnDatabase) openSysTable(p *process.Process, id uint64, name string,
 			PkeyColId:   0,
 			PkeyColName: catalog.SystemRelAttr_ID,
 			Names:       []string{catalog.SystemRelAttr_ID},
-			CompPkeyCol: tbl.tableDef.Cols[0],
 		}
 	case catalog.MO_COLUMNS:
 		tbl.tableDef.Pkey = &plan.PrimaryKeyDef{
@@ -594,7 +592,6 @@ func (db *txnDatabase) openSysTable(p *process.Process, id uint64, name string,
 			PkeyColId:   0,
 			PkeyColName: catalog.SystemColAttr_UniqName,
 			Names:       []string{catalog.SystemColAttr_UniqName},
-			CompPkeyCol: tbl.tableDef.Cols[0],
 		}
 	}
 	return tbl

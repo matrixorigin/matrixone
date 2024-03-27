@@ -889,7 +889,7 @@ func (tbl *txnTable) tryFastFilterBlocks(
 	outBlocks *objectio.BlockInfoSlice,
 	fs fileservice.FileService) (done bool, err error) {
 	// TODO: refactor this code if composite key can be pushdown
-	if tbl.tableDef.Pkey == nil || tbl.tableDef.Pkey.CompPkeyCol == nil {
+	if tbl.tableDef.Pkey.CompPkeyCol == nil {
 		return TryFastFilterBlocks(
 			tbl.db.txn.op.SnapshotTS(),
 			tbl.tableDef,
