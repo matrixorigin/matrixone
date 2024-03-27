@@ -4560,7 +4560,9 @@ func (mce *MysqlCmdExecutor) SetCancelFunc(cancelFunc context.CancelFunc) {
 	mce.cancelRequestFunc = cancelFunc
 }
 
-func (mce *MysqlCmdExecutor) Close() {}
+func (mce *MysqlCmdExecutor) Close() {
+	mce.ses = nil
+}
 
 /*
 convert the type in computation engine to the type in mysql.

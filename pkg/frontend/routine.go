@@ -372,10 +372,12 @@ func (rt *Routine) cleanup() {
 
 		//step D: clean protocol
 		rt.protocol.Quit()
+		rt.protocol = nil
 
 		//step E: release the resources related to the session
 		if ses != nil {
 			ses.Close()
+			rt.ses = nil
 		}
 	})
 }
