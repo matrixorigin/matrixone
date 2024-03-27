@@ -54,6 +54,12 @@ func (a *driverAppender) append(retryTimout, appendTimeout time.Duration) {
 		task.End()
 	}()
 
+	for _, e := range a.entry.entries {
+		if err := e.Entry.ExecutePreCallbacks(); err != nil {
+			panic(err)
+		}
+	}
+
 	size := a.entry.prepareRecord()
 	// if size > int(common.K)*20 { //todo
 	// 	panic(moerr.NewInternalError("record size %d, larger than max size 20K", size))

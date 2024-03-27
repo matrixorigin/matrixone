@@ -60,17 +60,24 @@ func (mgr *commandManager) ApplyTxnRecord(txn txnif.AsyncTxn) (logEntry entry.En
 	}
 	t1 := time.Now()
 	mgr.cmd.SetTxn(txn)
-	var buf []byte
-	if buf, err = mgr.cmd.MarshalBinary(); err != nil {
-		return
-	}
+
 	// logutil.Info("", common.OperationField("suxi-replay-cmd"),
 	// common.OperandField(mgr.cmd.Desc()))
 	logEntry = entry.GetBase()
 	logEntry.SetType(IOET_WALEntry_TxnRecord)
-	if err = logEntry.SetPayload(buf); err != nil {
-		return
-	}
+
+	logEntry.AppendPreCallback(func() error {
+		var buf []byte
+		if buf, err = mgr.cmd.MarshalBinary(); err != nil {
+			return err
+		}
+		if err = logEntry.SetPayload(buf); err != nil {
+			return err
+		}
+
+		return nil
+	})
+
 	info := &entry.Info{
 		Group: wal.GroupPrepare,
 	}
@@ -92,6 +99,6 @@ func (mgr *commandManager) ApplyTxnRecord(txn txnif.AsyncTxn) (logEntry entry.En
 			zap.String("txn", txn.String()),
 		)
 	}
-	logutil.Debugf("ApplyTxnRecord LSN=%d, Size=%d", mgr.lsn, len(buf))
+	logutil.Debugf("ApplyTxnRecord LSN=%d, Cmd=%s", mgr.lsn, mgr.cmd.String())
 	return
 }

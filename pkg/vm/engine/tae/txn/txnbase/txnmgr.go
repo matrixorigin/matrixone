@@ -445,6 +445,7 @@ func (mgr *TxnManager) on2PCPrepared(op *OpTxn) {
 // OpPrepare: the prepare of 2PC txn
 // OPRollback:the rollback of 2PC or 1PC
 func (mgr *TxnManager) dequeuePreparing(items ...any) {
+
 	now := time.Now()
 	for _, item := range items {
 		op := item.(*OpTxn)
