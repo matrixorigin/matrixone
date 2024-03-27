@@ -63,14 +63,15 @@ func newAggStdVarPop[T numeric]() aggexec.SingleAggFromFixedRetFixed[T, float64]
 	return &aggStdVarPop[T]{}
 }
 
-func (a *aggStdVarPop[T]) Flush(get aggexec.AggGetter[float64], set aggexec.AggSetter[float64]) {
+func (a *aggStdVarPop[T]) Flush(get aggexec.AggGetter[float64], set aggexec.AggSetter[float64]) error {
 	if a.count == 0 {
 		set(0)
-		return
+		return nil
 	}
 	avg := a.sum / float64(a.count)
 	variance := get()/float64(a.count) - math.Pow(avg, 2)
 	set(math.Sqrt(variance))
+	return nil
 }
 
 type aggStdVarPopDecimal64 struct {
@@ -81,22 +82,23 @@ func newAggStdVarPopDecimal64() aggexec.SingleAggFromFixedRetFixed[types.Decimal
 	return &aggStdVarPopDecimal64{}
 }
 
-func (a *aggStdVarPopDecimal64) Flush(get aggexec.AggGetter[types.Decimal128], set aggexec.AggSetter[types.Decimal128]) {
+func (a *aggStdVarPopDecimal64) Flush(get aggexec.AggGetter[types.Decimal128], set aggexec.AggSetter[types.Decimal128]) error {
 	r, err := getVarianceFromSumPowCount(a.sum, get(), a.count, a.argScale)
 	if err != nil {
-		panic(err)
+		return err
 	}
 	if r.B0_63 == 0 && r.B64_127 == 0 {
 		set(r)
-		return
+		return nil
 	}
 	temp, err1 := types.Decimal128FromFloat64(
 		math.Sqrt(types.Decimal128ToFloat64(r, a.retScale)),
 		38, a.retScale)
 	if err1 != nil {
-		panic(err1)
+		return err1
 	}
 	set(temp)
+	return nil
 }
 
 type aggStdVarPopDecimal128 struct {
@@ -107,20 +109,21 @@ func newAggStdVarPopDecimal128() aggexec.SingleAggFromFixedRetFixed[types.Decima
 	return &aggStdVarPopDecimal128{}
 }
 
-func (a *aggStdVarPopDecimal128) Flush(get aggexec.AggGetter[types.Decimal128], set aggexec.AggSetter[types.Decimal128]) {
+func (a *aggStdVarPopDecimal128) Flush(get aggexec.AggGetter[types.Decimal128], set aggexec.AggSetter[types.Decimal128]) error {
 	r, err := getVarianceFromSumPowCount(a.sum, get(), a.count, a.argScale)
 	if err != nil {
-		panic(err)
+		return err
 	}
 	if r.B0_63 == 0 && r.B64_127 == 0 {
 		set(r)
-		return
+		return nil
 	}
 	temp, err1 := types.Decimal128FromFloat64(
 		math.Sqrt(types.Decimal128ToFloat64(r, a.retScale)),
 		38, a.retScale)
 	if err1 != nil {
-		panic(err1)
+		return err1
 	}
 	set(temp)
+	return nil
 }

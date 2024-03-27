@@ -48,31 +48,39 @@ func newAggBitOr[T numeric]() aggexec.SingleAggFromFixedRetFixed[T, uint64] {
 
 func (a aggBitOr[T]) Marshal() []byte  { return nil }
 func (a aggBitOr[T]) Unmarshal([]byte) {}
-func (a aggBitOr[T]) Init(set aggexec.AggSetter[uint64], arg, ret types.Type) {
+func (a aggBitOr[T]) Init(set aggexec.AggSetter[uint64], arg, ret types.Type) error {
 	set(0)
+	return nil
 }
-func (a aggBitOr[T]) Fill(value T, get aggexec.AggGetter[uint64], set aggexec.AggSetter[uint64]) {
+func (a aggBitOr[T]) Fill(value T, get aggexec.AggGetter[uint64], set aggexec.AggSetter[uint64]) error {
 	vv := float64(value)
 	if vv > math.MaxUint64 {
 		set(math.MaxInt64)
-		return
+		return nil
 	}
 	if vv < 0 {
 		set(uint64(int64(value)) | get())
-		return
+		return nil
 	}
 	set(uint64(value) | get())
+	return nil
 }
-func (a aggBitOr[T]) FillNull(get aggexec.AggGetter[uint64], set aggexec.AggSetter[uint64]) {}
-func (a aggBitOr[T]) Fills(value T, isNull bool, count int, get aggexec.AggGetter[uint64], set aggexec.AggSetter[uint64]) {
+func (a aggBitOr[T]) FillNull(get aggexec.AggGetter[uint64], set aggexec.AggSetter[uint64]) error {
+	return nil
+}
+func (a aggBitOr[T]) Fills(value T, isNull bool, count int, get aggexec.AggGetter[uint64], set aggexec.AggSetter[uint64]) error {
 	if !isNull {
-		a.Fill(value, get, set)
+		return a.Fill(value, get, set)
 	}
+	return nil
 }
-func (a aggBitOr[T]) Merge(other aggexec.SingleAggFromFixedRetFixed[T, uint64], get1, get2 aggexec.AggGetter[uint64], set aggexec.AggSetter[uint64]) {
+func (a aggBitOr[T]) Merge(other aggexec.SingleAggFromFixedRetFixed[T, uint64], get1, get2 aggexec.AggGetter[uint64], set aggexec.AggSetter[uint64]) error {
 	set(get1() | get2())
+	return nil
 }
-func (a aggBitOr[T]) Flush(get aggexec.AggGetter[uint64], set aggexec.AggSetter[uint64]) {}
+func (a aggBitOr[T]) Flush(get aggexec.AggGetter[uint64], set aggexec.AggSetter[uint64]) error {
+	return nil
+}
 
 type aggBitOrBinary struct {
 	aggBitBinary
@@ -82,36 +90,41 @@ func newAggBitOrBinary() aggexec.SingleAggFromVarRetVar {
 	return &aggBitOrBinary{}
 }
 
-func (a *aggBitOrBinary) FillBytes(value []byte, get aggexec.AggBytesGetter, set aggexec.AggBytesSetter) {
+func (a *aggBitOrBinary) FillBytes(value []byte, get aggexec.AggBytesGetter, set aggexec.AggBytesSetter) error {
 	if a.isEmpty {
 		vs := make([]byte, len(value))
 		for i := range vs {
 			vs[i] = 0
 		}
-		_ = set(vs)
 		a.isEmpty = false
+		return set(vs)
 	}
 	v := get()
 	types.BitOr(v, v, value)
+	return nil
 }
-func (a *aggBitOrBinary) FillNull(get aggexec.AggBytesGetter, set aggexec.AggBytesSetter) {
+func (a *aggBitOrBinary) FillNull(get aggexec.AggBytesGetter, set aggexec.AggBytesSetter) error {
+	return nil
 }
-func (a *aggBitOrBinary) Fills(value []byte, isNull bool, count int, get aggexec.AggBytesGetter, set aggexec.AggBytesSetter) {
+func (a *aggBitOrBinary) Fills(value []byte, isNull bool, count int, get aggexec.AggBytesGetter, set aggexec.AggBytesSetter) error {
 	if !isNull {
-		a.FillBytes(value, get, set)
+		return a.FillBytes(value, get, set)
 	}
+	return nil
 }
-func (a *aggBitOrBinary) Merge(other aggexec.SingleAggFromVarRetVar, get1, get2 aggexec.AggBytesGetter, set aggexec.AggBytesSetter) {
+func (a *aggBitOrBinary) Merge(other aggexec.SingleAggFromVarRetVar, get1, get2 aggexec.AggBytesGetter, set aggexec.AggBytesSetter) error {
 	next := other.(*aggBitOrBinary)
 	if next.isEmpty {
-		return
+		return nil
 	}
 	if a.isEmpty {
-		_ = set(get2())
 		a.isEmpty = false
-		return
+		return set(get2())
 	}
 	v1, v2 := get1(), get2()
 	types.BitOr(v1, v1, v2)
+	return nil
 }
-func (a *aggBitOrBinary) Flush(get aggexec.AggBytesGetter, set aggexec.AggBytesSetter) {}
+func (a *aggBitOrBinary) Flush(get aggexec.AggBytesGetter, set aggexec.AggBytesSetter) error {
+	return nil
+}

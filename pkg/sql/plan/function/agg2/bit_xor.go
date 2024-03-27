@@ -53,35 +53,42 @@ func newAggBitXor[T numeric]() aggexec.SingleAggFromFixedRetFixed[T, uint64] {
 
 func (a aggBitXor[T]) Marshal() []byte  { return nil }
 func (a aggBitXor[T]) Unmarshal([]byte) {}
-func (a aggBitXor[T]) Init(set aggexec.AggSetter[uint64], arg, ret types.Type) {
+func (a aggBitXor[T]) Init(set aggexec.AggSetter[uint64], arg, ret types.Type) error {
 	set(0)
+	return nil
 }
-func (a aggBitXor[T]) Fill(value T, get aggexec.AggGetter[uint64], set aggexec.AggSetter[uint64]) {
+func (a aggBitXor[T]) Fill(value T, get aggexec.AggGetter[uint64], set aggexec.AggSetter[uint64]) error {
 	vv := float64(value)
 	if vv > math.MaxUint64 {
 		set(math.MaxInt64 ^ get())
-		return
+		return nil
 	}
 	if vv < 0 {
 		set(uint64(int64(value)) ^ get())
-		return
+		return nil
 	}
 	set(uint64(value) ^ get())
+	return nil
 }
-func (a aggBitXor[T]) FillNull(get aggexec.AggGetter[uint64], set aggexec.AggSetter[uint64]) {}
-func (a aggBitXor[T]) Fills(value T, isNull bool, count int, get aggexec.AggGetter[uint64], set aggexec.AggSetter[uint64]) {
+func (a aggBitXor[T]) FillNull(get aggexec.AggGetter[uint64], set aggexec.AggSetter[uint64]) error {
+	return nil
+}
+func (a aggBitXor[T]) Fills(value T, isNull bool, count int, get aggexec.AggGetter[uint64], set aggexec.AggSetter[uint64]) error {
 	if !isNull {
 		if count%2 == 1 {
-			a.Fill(value, get, set)
-			return
+			return a.Fill(value, get, set)
 		}
 		set(get())
 	}
+	return nil
 }
-func (a aggBitXor[T]) Merge(other aggexec.SingleAggFromFixedRetFixed[T, uint64], get1, get2 aggexec.AggGetter[uint64], set aggexec.AggSetter[uint64]) {
+func (a aggBitXor[T]) Merge(other aggexec.SingleAggFromFixedRetFixed[T, uint64], get1, get2 aggexec.AggGetter[uint64], set aggexec.AggSetter[uint64]) error {
 	set(get1() ^ get2())
+	return nil
 }
-func (a aggBitXor[T]) Flush(get aggexec.AggGetter[uint64], set aggexec.AggSetter[uint64]) {}
+func (a aggBitXor[T]) Flush(get aggexec.AggGetter[uint64], set aggexec.AggSetter[uint64]) error {
+	return nil
+}
 
 type aggBitXorBinary struct {
 	aggBitBinary
@@ -91,47 +98,51 @@ func newAggBitXorBinary() aggexec.SingleAggFromVarRetVar {
 	return &aggBitXorBinary{}
 }
 
-func (a *aggBitXorBinary) FillBytes(value []byte, get aggexec.AggBytesGetter, set aggexec.AggBytesSetter) {
+func (a *aggBitXorBinary) FillBytes(value []byte, get aggexec.AggBytesGetter, set aggexec.AggBytesSetter) error {
 	if a.isEmpty {
 		vs := make([]byte, len(value))
 		for i := range vs {
 			vs[i] = 0
 		}
-		_ = set(vs)
 		a.isEmpty = false
+		return set(vs)
 	}
 	v := get()
 	types.BitXor(v, v, value)
+	return nil
 }
-func (a *aggBitXorBinary) FillNull(get aggexec.AggBytesGetter, set aggexec.AggBytesSetter) {
+func (a *aggBitXorBinary) FillNull(get aggexec.AggBytesGetter, set aggexec.AggBytesSetter) error {
+	return nil
 }
-func (a *aggBitXorBinary) Fills(value []byte, isNull bool, count int, get aggexec.AggBytesGetter, set aggexec.AggBytesSetter) {
+func (a *aggBitXorBinary) Fills(value []byte, isNull bool, count int, get aggexec.AggBytesGetter, set aggexec.AggBytesSetter) error {
 	if !isNull {
 		if count%2 == 1 {
-			a.FillBytes(value, get, set)
-			return
+			return a.FillBytes(value, get, set)
 		}
 		if a.isEmpty {
 			vs := make([]byte, len(value))
 			for i := range vs {
 				vs[i] = 0
 			}
-			_ = set(vs)
 			a.isEmpty = false
+			return set(vs)
 		}
 	}
+	return nil
 }
-func (a *aggBitXorBinary) Merge(other aggexec.SingleAggFromVarRetVar, get1, get2 aggexec.AggBytesGetter, set aggexec.AggBytesSetter) {
+func (a *aggBitXorBinary) Merge(other aggexec.SingleAggFromVarRetVar, get1, get2 aggexec.AggBytesGetter, set aggexec.AggBytesSetter) error {
 	next := other.(*aggBitXorBinary)
 	if next.isEmpty {
-		return
+		return nil
 	}
 	if a.isEmpty {
-		_ = set(get2())
 		a.isEmpty = false
-		return
+		return set(get2())
 	}
 	v1, v2 := get1(), get2()
 	types.BitXor(v1, v1, v2)
+	return nil
 }
-func (a *aggBitXorBinary) Flush(get aggexec.AggBytesGetter, set aggexec.AggBytesSetter) {}
+func (a *aggBitXorBinary) Flush(get aggexec.AggBytesGetter, set aggexec.AggBytesSetter) error {
+	return nil
+}

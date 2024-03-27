@@ -47,20 +47,28 @@ type testSingleAggPrivate1 struct{}
 func gTesSingleAggPrivate1() SingleAggFromFixedRetFixed[int32, int64] {
 	return &testSingleAggPrivate1{}
 }
-func (t *testSingleAggPrivate1) Init(AggSetter[int64], types.Type, types.Type) {}
-func (t *testSingleAggPrivate1) Fill(from int32, getter AggGetter[int64], setter AggSetter[int64]) {
-	setter(getter() + 1)
+func (t *testSingleAggPrivate1) Init(AggSetter[int64], types.Type, types.Type) error {
+	return nil
 }
-func (t *testSingleAggPrivate1) FillNull(getter AggGetter[int64], setter AggSetter[int64]) {
+func (t *testSingleAggPrivate1) Fill(from int32, getter AggGetter[int64], setter AggSetter[int64]) error {
 	setter(getter() + 1)
+	return nil
 }
-func (t *testSingleAggPrivate1) Fills(value int32, isNull bool, count int, getter AggGetter[int64], setter AggSetter[int64]) {
+func (t *testSingleAggPrivate1) FillNull(getter AggGetter[int64], setter AggSetter[int64]) error {
+	setter(getter() + 1)
+	return nil
+}
+func (t *testSingleAggPrivate1) Fills(value int32, isNull bool, count int, getter AggGetter[int64], setter AggSetter[int64]) error {
 	setter(getter() + int64(count))
+	return nil
 }
-func (t *testSingleAggPrivate1) Merge(other SingleAggFromFixedRetFixed[int32, int64], getter1 AggGetter[int64], getter2 AggGetter[int64], setter AggSetter[int64]) {
+func (t *testSingleAggPrivate1) Merge(other SingleAggFromFixedRetFixed[int32, int64], getter1 AggGetter[int64], getter2 AggGetter[int64], setter AggSetter[int64]) error {
 	setter(getter1() + getter2())
+	return nil
 }
-func (t *testSingleAggPrivate1) Flush(getter AggGetter[int64], setter AggSetter[int64]) {}
+func (t *testSingleAggPrivate1) Flush(getter AggGetter[int64], setter AggSetter[int64]) error {
+	return nil
+}
 func (t *testSingleAggPrivate1) Marshal() []byte {
 	return nil
 }

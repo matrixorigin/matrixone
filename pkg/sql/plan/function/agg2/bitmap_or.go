@@ -46,27 +46,35 @@ func (a *aggBitmapOr) Unmarshal(bs []byte) {
 	a.bmp = roaring.New()
 	_ = a.bmp.UnmarshalBinary(bs)
 }
-func (a *aggBitmapOr) Init(set aggexec.AggBytesSetter, arg, ret types.Type) {
+func (a *aggBitmapOr) Init(set aggexec.AggBytesSetter, arg, ret types.Type) error {
 	a.bmp = roaring.New()
+	return nil
 }
-func (a *aggBitmapOr) FillBytes(value []byte, get aggexec.AggBytesGetter, set aggexec.AggBytesSetter) {
+func (a *aggBitmapOr) FillBytes(value []byte, get aggexec.AggBytesGetter, set aggexec.AggBytesSetter) error {
 	bmp := roaring.New()
-	_ = bmp.UnmarshalBinary(value)
-	a.bmp.Or(bmp)
-}
-func (a *aggBitmapOr) FillNull(get aggexec.AggBytesGetter, set aggexec.AggBytesSetter) {}
-func (a *aggBitmapOr) Fills(value []byte, isNull bool, count int, get aggexec.AggBytesGetter, set aggexec.AggBytesSetter) {
-	if isNull {
-		return
+	if err := bmp.UnmarshalBinary(value); err != nil {
+		return err
 	}
-	bmp := roaring.New()
-	_ = bmp.UnmarshalBinary(value)
 	a.bmp.Or(bmp)
+	return nil
 }
-func (a *aggBitmapOr) Merge(other aggexec.SingleAggFromVarRetVar, get1, get2 aggexec.AggBytesGetter, set aggexec.AggBytesSetter) {
+func (a *aggBitmapOr) FillNull(get aggexec.AggBytesGetter, set aggexec.AggBytesSetter) error {
+	return nil
+}
+func (a *aggBitmapOr) Fills(value []byte, isNull bool, count int, get aggexec.AggBytesGetter, set aggexec.AggBytesSetter) error {
+	if isNull {
+		return nil
+	}
+	return a.FillBytes(value, get, set)
+}
+func (a *aggBitmapOr) Merge(other aggexec.SingleAggFromVarRetVar, get1, get2 aggexec.AggBytesGetter, set aggexec.AggBytesSetter) error {
 	a.bmp.Or(other.(*aggBitmapOr).bmp)
+	return nil
 }
-func (a *aggBitmapOr) Flush(get aggexec.AggBytesGetter, set aggexec.AggBytesSetter) {
-	b, _ := a.bmp.MarshalBinary()
-	_ = set(b)
+func (a *aggBitmapOr) Flush(get aggexec.AggBytesGetter, set aggexec.AggBytesSetter) error {
+	b, err := a.bmp.MarshalBinary()
+	if err != nil {
+		return err
+	}
+	return set(b)
 }

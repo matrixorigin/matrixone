@@ -117,28 +117,36 @@ func newAggMaxBool() aggexec.SingleAggFromFixedRetFixed[bool, bool] {
 
 func (a aggMax[from]) Marshal() []byte  { return nil }
 func (a aggMax[from]) Unmarshal([]byte) {}
-func (a aggMax[from]) Init(set aggexec.AggSetter[from], arg, ret types.Type) {
+func (a aggMax[from]) Init(set aggexec.AggSetter[from], arg, ret types.Type) error {
 	set(getMinValue[from]().(from))
+	return nil
 }
-func (a aggMax[from]) Fill(value from, get aggexec.AggGetter[from], set aggexec.AggSetter[from]) {
+func (a aggMax[from]) Fill(value from, get aggexec.AggGetter[from], set aggexec.AggSetter[from]) error {
 	if value > get() {
 		set(value)
 	}
+	return nil
 }
-func (a aggMax[from]) FillNull(get aggexec.AggGetter[from], set aggexec.AggSetter[from]) {}
-func (a aggMax[from]) Fills(value from, isNull bool, count int, get aggexec.AggGetter[from], set aggexec.AggSetter[from]) {
+func (a aggMax[from]) FillNull(get aggexec.AggGetter[from], set aggexec.AggSetter[from]) error {
+	return nil
+}
+func (a aggMax[from]) Fills(value from, isNull bool, count int, get aggexec.AggGetter[from], set aggexec.AggSetter[from]) error {
 	if !isNull && value > get() {
 		set(value)
 	}
+	return nil
 }
-func (a aggMax[from]) Merge(other aggexec.SingleAggFromFixedRetFixed[from, from], get1, get2 aggexec.AggGetter[from], set aggexec.AggSetter[from]) {
+func (a aggMax[from]) Merge(other aggexec.SingleAggFromFixedRetFixed[from, from], get1, get2 aggexec.AggGetter[from], set aggexec.AggSetter[from]) error {
 	if get1() > get2() {
 		set(get1())
 	} else {
 		set(get2())
 	}
+	return nil
 }
-func (a aggMax[from]) Flush(get aggexec.AggGetter[from], set aggexec.AggSetter[from]) {}
+func (a aggMax[from]) Flush(get aggexec.AggGetter[from], set aggexec.AggSetter[from]) error {
+	return nil
+}
 
 func getMinValue[T canCompare]() interface{} {
 	var t T
@@ -165,107 +173,125 @@ func getMinValue[T canCompare]() interface{} {
 
 func (a aggMaxDecimal64) Marshal() []byte  { return nil }
 func (a aggMaxDecimal64) Unmarshal([]byte) {}
-func (a aggMaxDecimal64) Init(set aggexec.AggSetter[types.Decimal64], arg, ret types.Type) {
+func (a aggMaxDecimal64) Init(set aggexec.AggSetter[types.Decimal64], arg, ret types.Type) error {
 	set(types.Decimal64Min)
+	return nil
 }
-func (a aggMaxDecimal64) Fill(value types.Decimal64, get aggexec.AggGetter[types.Decimal64], set aggexec.AggSetter[types.Decimal64]) {
+func (a aggMaxDecimal64) Fill(value types.Decimal64, get aggexec.AggGetter[types.Decimal64], set aggexec.AggSetter[types.Decimal64]) error {
 	if value.Compare(get()) > 0 {
 		set(value)
 	}
+	return nil
 }
-func (a aggMaxDecimal64) FillNull(get aggexec.AggGetter[types.Decimal64], set aggexec.AggSetter[types.Decimal64]) {
+func (a aggMaxDecimal64) FillNull(get aggexec.AggGetter[types.Decimal64], set aggexec.AggSetter[types.Decimal64]) error {
+	return nil
 }
-func (a aggMaxDecimal64) Fills(value types.Decimal64, isNull bool, count int, get aggexec.AggGetter[types.Decimal64], set aggexec.AggSetter[types.Decimal64]) {
+func (a aggMaxDecimal64) Fills(value types.Decimal64, isNull bool, count int, get aggexec.AggGetter[types.Decimal64], set aggexec.AggSetter[types.Decimal64]) error {
 	if !isNull && value.Compare(get()) > 0 {
 		set(value)
 	}
+	return nil
 }
-func (a aggMaxDecimal64) Merge(other aggexec.SingleAggFromFixedRetFixed[types.Decimal64, types.Decimal64], get1, get2 aggexec.AggGetter[types.Decimal64], set aggexec.AggSetter[types.Decimal64]) {
+func (a aggMaxDecimal64) Merge(other aggexec.SingleAggFromFixedRetFixed[types.Decimal64, types.Decimal64], get1, get2 aggexec.AggGetter[types.Decimal64], set aggexec.AggSetter[types.Decimal64]) error {
 	if get1().Compare(get2()) > 0 {
 		set(get1())
 	} else {
 		set(get2())
 	}
+	return nil
 }
-func (a aggMaxDecimal64) Flush(get aggexec.AggGetter[types.Decimal64], set aggexec.AggSetter[types.Decimal64]) {
+func (a aggMaxDecimal64) Flush(get aggexec.AggGetter[types.Decimal64], set aggexec.AggSetter[types.Decimal64]) error {
+	return nil
 }
 
 func (a aggMaxDecimal128) Marshal() []byte  { return nil }
 func (a aggMaxDecimal128) Unmarshal([]byte) {}
-func (a aggMaxDecimal128) Init(set aggexec.AggSetter[types.Decimal128], arg, ret types.Type) {
+func (a aggMaxDecimal128) Init(set aggexec.AggSetter[types.Decimal128], arg, ret types.Type) error {
 	set(types.Decimal128Min)
+	return nil
 }
-func (a aggMaxDecimal128) Fill(value types.Decimal128, get aggexec.AggGetter[types.Decimal128], set aggexec.AggSetter[types.Decimal128]) {
+func (a aggMaxDecimal128) Fill(value types.Decimal128, get aggexec.AggGetter[types.Decimal128], set aggexec.AggSetter[types.Decimal128]) error {
 	if value.Compare(get()) > 0 {
 		set(value)
 	}
+	return nil
 }
-func (a aggMaxDecimal128) FillNull(get aggexec.AggGetter[types.Decimal128], set aggexec.AggSetter[types.Decimal128]) {
-
+func (a aggMaxDecimal128) FillNull(get aggexec.AggGetter[types.Decimal128], set aggexec.AggSetter[types.Decimal128]) error {
+	return nil
 }
-func (a aggMaxDecimal128) Fills(value types.Decimal128, isNull bool, count int, get aggexec.AggGetter[types.Decimal128], set aggexec.AggSetter[types.Decimal128]) {
+func (a aggMaxDecimal128) Fills(value types.Decimal128, isNull bool, count int, get aggexec.AggGetter[types.Decimal128], set aggexec.AggSetter[types.Decimal128]) error {
 	if !isNull && value.Compare(get()) > 0 {
 		set(value)
 	}
+	return nil
 }
-func (a aggMaxDecimal128) Merge(other aggexec.SingleAggFromFixedRetFixed[types.Decimal128, types.Decimal128], get1, get2 aggexec.AggGetter[types.Decimal128], set aggexec.AggSetter[types.Decimal128]) {
+func (a aggMaxDecimal128) Merge(other aggexec.SingleAggFromFixedRetFixed[types.Decimal128, types.Decimal128], get1, get2 aggexec.AggGetter[types.Decimal128], set aggexec.AggSetter[types.Decimal128]) error {
 	if get1().Compare(get2()) > 0 {
 		set(get1())
 	} else {
 		set(get2())
 	}
+	return nil
 }
-func (a aggMaxDecimal128) Flush(get aggexec.AggGetter[types.Decimal128], set aggexec.AggSetter[types.Decimal128]) {
+func (a aggMaxDecimal128) Flush(get aggexec.AggGetter[types.Decimal128], set aggexec.AggSetter[types.Decimal128]) error {
+	return nil
 }
 
 func (a *aggBytesMax) Marshal() []byte     { return types.EncodeBool(&a.isEmpty) }
 func (a *aggBytesMax) Unmarshal(bs []byte) { a.isEmpty = types.DecodeBool(bs) }
-func (a *aggBytesMax) Init(setter aggexec.AggBytesSetter, arg types.Type, ret types.Type) {
+func (a *aggBytesMax) Init(setter aggexec.AggBytesSetter, arg types.Type, ret types.Type) error {
 	a.isEmpty = true
+	return nil
 }
-func (a *aggBytesMax) FillBytes(value []byte, get aggexec.AggBytesGetter, set aggexec.AggBytesSetter) {
+func (a *aggBytesMax) FillBytes(value []byte, get aggexec.AggBytesGetter, set aggexec.AggBytesSetter) error {
 	if a.isEmpty {
 		a.isEmpty = false
-		_ = set(value)
-	} else {
-		if bytes.Compare(value, get()) > 0 {
-			_ = set(value)
-		}
+		return set(value)
 	}
+	if bytes.Compare(value, get()) > 0 {
+		return set(value)
+	}
+	return nil
 }
-func (a *aggBytesMax) FillNull(get aggexec.AggBytesGetter, set aggexec.AggBytesSetter) {}
-func (a *aggBytesMax) Fills(value []byte, isNull bool, count int, get aggexec.AggBytesGetter, set aggexec.AggBytesSetter) {
+func (a *aggBytesMax) FillNull(get aggexec.AggBytesGetter, set aggexec.AggBytesSetter) error {
+	return nil
+}
+func (a *aggBytesMax) Fills(value []byte, isNull bool, count int, get aggexec.AggBytesGetter, set aggexec.AggBytesSetter) error {
 	if isNull {
-		return
+		return nil
 	}
 	if a.isEmpty {
 		a.isEmpty = false
-		_ = set(value)
-	} else {
-		if !isNull && bytes.Compare(value, get()) > 0 {
-			_ = set(value)
-		}
+		return set(value)
 	}
+	if !isNull && bytes.Compare(value, get()) > 0 {
+		return set(value)
+	}
+	return nil
 }
-func (a *aggBytesMax) Merge(other aggexec.SingleAggFromVarRetVar, get1, get2 aggexec.AggBytesGetter, set aggexec.AggBytesSetter) {
+func (a *aggBytesMax) Merge(other aggexec.SingleAggFromVarRetVar, get1, get2 aggexec.AggBytesGetter, set aggexec.AggBytesSetter) error {
 	next := other.(*aggBytesMax)
 	if a.isEmpty && !next.isEmpty {
 		a.isEmpty = false
-		_ = set(get2())
+		return set(get2())
 	} else if !a.isEmpty && !next.isEmpty {
 		if bytes.Compare(get1(), get2()) < 0 {
-			_ = set(get2())
+			return set(get2())
 		}
 	}
+	return nil
 }
-func (a *aggBytesMax) Flush(get aggexec.AggBytesGetter, set aggexec.AggBytesSetter) {}
+func (a *aggBytesMax) Flush(get aggexec.AggBytesGetter, set aggexec.AggBytesSetter) error {
+	return nil
+}
 
 func (a *aggUuidMax) Marshal() []byte     { return types.EncodeBool(&a.isEmpty) }
 func (a *aggUuidMax) Unmarshal(bs []byte) { a.isEmpty = types.DecodeBool(bs) }
-func (a *aggUuidMax) Init(setter aggexec.AggSetter[types.Uuid], arg types.Type, ret types.Type) {
+func (a *aggUuidMax) Init(setter aggexec.AggSetter[types.Uuid], arg types.Type, ret types.Type) error {
 	a.isEmpty = true
+	return nil
 }
-func (a *aggUuidMax) Fill(value types.Uuid, get aggexec.AggGetter[types.Uuid], set aggexec.AggSetter[types.Uuid]) {
+func (a *aggUuidMax) Fill(value types.Uuid, get aggexec.AggGetter[types.Uuid], set aggexec.AggSetter[types.Uuid]) error {
 	if a.isEmpty {
 		a.isEmpty = false
 		set(value)
@@ -274,11 +300,14 @@ func (a *aggUuidMax) Fill(value types.Uuid, get aggexec.AggGetter[types.Uuid], s
 			set(value)
 		}
 	}
+	return nil
 }
-func (a *aggUuidMax) FillNull(get aggexec.AggGetter[types.Uuid], set aggexec.AggSetter[types.Uuid]) {}
-func (a *aggUuidMax) Fills(value types.Uuid, isNull bool, count int, get aggexec.AggGetter[types.Uuid], set aggexec.AggSetter[types.Uuid]) {
+func (a *aggUuidMax) FillNull(get aggexec.AggGetter[types.Uuid], set aggexec.AggSetter[types.Uuid]) error {
+	return nil
+}
+func (a *aggUuidMax) Fills(value types.Uuid, isNull bool, count int, get aggexec.AggGetter[types.Uuid], set aggexec.AggSetter[types.Uuid]) error {
 	if isNull {
-		return
+		return nil
 	}
 	if a.isEmpty {
 		a.isEmpty = false
@@ -288,8 +317,9 @@ func (a *aggUuidMax) Fills(value types.Uuid, isNull bool, count int, get aggexec
 			set(value)
 		}
 	}
+	return nil
 }
-func (a *aggUuidMax) Merge(other aggexec.SingleAggFromFixedRetFixed[types.Uuid, types.Uuid], get1, get2 aggexec.AggGetter[types.Uuid], set aggexec.AggSetter[types.Uuid]) {
+func (a *aggUuidMax) Merge(other aggexec.SingleAggFromFixedRetFixed[types.Uuid, types.Uuid], get1, get2 aggexec.AggGetter[types.Uuid], set aggexec.AggSetter[types.Uuid]) error {
 	next := other.(*aggUuidMax)
 	if a.isEmpty && !next.isEmpty {
 		a.isEmpty = false
@@ -299,31 +329,42 @@ func (a *aggUuidMax) Merge(other aggexec.SingleAggFromFixedRetFixed[types.Uuid, 
 			set(get2())
 		}
 	}
+	return nil
 }
-func (a *aggUuidMax) Flush(get aggexec.AggGetter[types.Uuid], set aggexec.AggSetter[types.Uuid]) {}
+func (a *aggUuidMax) Flush(get aggexec.AggGetter[types.Uuid], set aggexec.AggSetter[types.Uuid]) error {
+	return nil
+}
 
 func (a aggMaxBool) Marshal() []byte     { return nil }
 func (a aggMaxBool) Unmarshal(bs []byte) {}
-func (a aggMaxBool) Init(setter aggexec.AggSetter[bool], arg types.Type, ret types.Type) {
+func (a aggMaxBool) Init(setter aggexec.AggSetter[bool], arg types.Type, ret types.Type) error {
 	setter(false)
+	return nil
 }
-func (a aggMaxBool) Fill(value bool, get aggexec.AggGetter[bool], set aggexec.AggSetter[bool]) {
+func (a aggMaxBool) Fill(value bool, get aggexec.AggGetter[bool], set aggexec.AggSetter[bool]) error {
 	if value {
 		set(true)
 	}
+	return nil
 }
-func (a aggMaxBool) FillNull(get aggexec.AggGetter[bool], set aggexec.AggSetter[bool]) {}
-func (a aggMaxBool) Fills(value bool, isNull bool, count int, get aggexec.AggGetter[bool], set aggexec.AggSetter[bool]) {
+func (a aggMaxBool) FillNull(get aggexec.AggGetter[bool], set aggexec.AggSetter[bool]) error {
+	return nil
+}
+func (a aggMaxBool) Fills(value bool, isNull bool, count int, get aggexec.AggGetter[bool], set aggexec.AggSetter[bool]) error {
 	if isNull {
-		return
+		return nil
 	}
 	if value {
 		set(true)
 	}
+	return nil
 }
-func (a aggMaxBool) Merge(other aggexec.SingleAggFromFixedRetFixed[bool, bool], get1, get2 aggexec.AggGetter[bool], set aggexec.AggSetter[bool]) {
+func (a aggMaxBool) Merge(other aggexec.SingleAggFromFixedRetFixed[bool, bool], get1, get2 aggexec.AggGetter[bool], set aggexec.AggSetter[bool]) error {
 	if get2() {
 		set(true)
 	}
+	return nil
 }
-func (a aggMaxBool) Flush(get aggexec.AggGetter[bool], set aggexec.AggSetter[bool]) {}
+func (a aggMaxBool) Flush(get aggexec.AggGetter[bool], set aggexec.AggSetter[bool]) error {
+	return nil
+}

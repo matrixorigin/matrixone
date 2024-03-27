@@ -85,31 +85,38 @@ type aggAnyValue[T types.FixedSizeTExceptStrType] struct {
 
 func (a *aggAnyValue[T]) Marshal() []byte       { return types.EncodeBool(&a.has) }
 func (a *aggAnyValue[T]) Unmarshal(data []byte) { a.has = types.DecodeBool(data) }
-func (a *aggAnyValue[T]) Init(setter aggexec.AggSetter[T], arg, ret types.Type) {
+func (a *aggAnyValue[T]) Init(setter aggexec.AggSetter[T], arg, ret types.Type) error {
 	a.has = false
+	return nil
 }
-func (a *aggAnyValue[T]) Fill(value T, get aggexec.AggGetter[T], set aggexec.AggSetter[T]) {
+func (a *aggAnyValue[T]) Fill(value T, get aggexec.AggGetter[T], set aggexec.AggSetter[T]) error {
 	if !a.has {
 		a.has = true
 		set(value)
 	}
+	return nil
 }
-func (a *aggAnyValue[T]) FillNull(get aggexec.AggGetter[T], set aggexec.AggSetter[T]) {
+func (a *aggAnyValue[T]) FillNull(get aggexec.AggGetter[T], set aggexec.AggSetter[T]) error {
+	return nil
 }
-func (a *aggAnyValue[T]) Fills(value T, isNull bool, count int, get aggexec.AggGetter[T], set aggexec.AggSetter[T]) {
+func (a *aggAnyValue[T]) Fills(value T, isNull bool, count int, get aggexec.AggGetter[T], set aggexec.AggSetter[T]) error {
 	if !isNull && !a.has {
 		a.has = true
 		set(value)
 	}
+	return nil
 }
-func (a *aggAnyValue[T]) Merge(other aggexec.SingleAggFromFixedRetFixed[T, T], get1, get2 aggexec.AggGetter[T], set aggexec.AggSetter[T]) {
+func (a *aggAnyValue[T]) Merge(other aggexec.SingleAggFromFixedRetFixed[T, T], get1, get2 aggexec.AggGetter[T], set aggexec.AggSetter[T]) error {
 	next := other.(*aggAnyValue[T])
 	if !a.has && next.has {
 		a.has = true
 		set(get2())
 	}
+	return nil
 }
-func (a *aggAnyValue[T]) Flush(get aggexec.AggGetter[T], set aggexec.AggSetter[T]) {}
+func (a *aggAnyValue[T]) Flush(get aggexec.AggGetter[T], set aggexec.AggSetter[T]) error {
+	return nil
+}
 
 type aggAnyBytesValue struct {
 	has bool
@@ -123,28 +130,35 @@ func (a *aggAnyBytesValue) Marshal() []byte { return types.EncodeBool(&a.has) }
 func (a *aggAnyBytesValue) Unmarshal(data []byte) {
 	a.has = types.DecodeBool(data)
 }
-func (a *aggAnyBytesValue) Init(setter aggexec.AggBytesSetter, arg types.Type, ret types.Type) {
+func (a *aggAnyBytesValue) Init(setter aggexec.AggBytesSetter, arg types.Type, ret types.Type) error {
 	a.has = false
+	return nil
 }
-func (a *aggAnyBytesValue) FillBytes(value []byte, get aggexec.AggBytesGetter, set aggexec.AggBytesSetter) {
+func (a *aggAnyBytesValue) FillBytes(value []byte, get aggexec.AggBytesGetter, set aggexec.AggBytesSetter) error {
 	if !a.has {
 		a.has = true
 		_ = set(value)
 	}
+	return nil
 }
-func (a *aggAnyBytesValue) FillNull(get aggexec.AggBytesGetter, set aggexec.AggBytesSetter) {
+func (a *aggAnyBytesValue) FillNull(get aggexec.AggBytesGetter, set aggexec.AggBytesSetter) error {
+	return nil
 }
-func (a *aggAnyBytesValue) Fills(value []byte, isNull bool, count int, get aggexec.AggBytesGetter, set aggexec.AggBytesSetter) {
+func (a *aggAnyBytesValue) Fills(value []byte, isNull bool, count int, get aggexec.AggBytesGetter, set aggexec.AggBytesSetter) error {
 	if !isNull && !a.has {
 		a.has = true
 		_ = set(value)
 	}
+	return nil
 }
-func (a *aggAnyBytesValue) Merge(other aggexec.SingleAggFromVarRetVar, get1, get2 aggexec.AggBytesGetter, set aggexec.AggBytesSetter) {
+func (a *aggAnyBytesValue) Merge(other aggexec.SingleAggFromVarRetVar, get1, get2 aggexec.AggBytesGetter, set aggexec.AggBytesSetter) error {
 	next := other.(*aggAnyBytesValue)
 	if !a.has && next.has {
 		a.has = true
 		_ = set(get2())
 	}
+	return nil
 }
-func (a *aggAnyBytesValue) Flush(get aggexec.AggBytesGetter, set aggexec.AggBytesSetter) {}
+func (a *aggAnyBytesValue) Flush(get aggexec.AggBytesGetter, set aggexec.AggBytesSetter) error {
+	return nil
+}

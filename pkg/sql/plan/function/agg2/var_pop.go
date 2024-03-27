@@ -87,37 +87,44 @@ func (a *aggVarPop[T]) Unmarshal(bs []byte) {
 	a.sum = types.DecodeFloat64(bs[:8])
 	a.count = types.DecodeInt64(bs[8:])
 }
-func (a *aggVarPop[T]) Init(set aggexec.AggSetter[float64], arg, ret types.Type) {
+func (a *aggVarPop[T]) Init(set aggexec.AggSetter[float64], arg, ret types.Type) error {
 	a.sum = 0
 	a.count = 0
 	set(0)
+	return nil
 }
-func (a *aggVarPop[T]) Fill(value T, get aggexec.AggGetter[float64], set aggexec.AggSetter[float64]) {
+func (a *aggVarPop[T]) Fill(value T, get aggexec.AggGetter[float64], set aggexec.AggSetter[float64]) error {
 	a.sum += float64(value)
 	a.count++
 	set(get() + math.Pow(float64(value), 2))
+	return nil
 }
-func (a *aggVarPop[T]) FillNull(get aggexec.AggGetter[float64], set aggexec.AggSetter[float64]) {}
-func (a *aggVarPop[T]) Fills(value T, isNull bool, count int, get aggexec.AggGetter[float64], set aggexec.AggSetter[float64]) {
+func (a *aggVarPop[T]) FillNull(get aggexec.AggGetter[float64], set aggexec.AggSetter[float64]) error {
+	return nil
+}
+func (a *aggVarPop[T]) Fills(value T, isNull bool, count int, get aggexec.AggGetter[float64], set aggexec.AggSetter[float64]) error {
 	if !isNull {
 		a.sum += float64(value) * float64(count)
 		a.count += int64(count)
 		set(get() + math.Pow(float64(value), 2)*float64(count))
 	}
+	return nil
 }
-func (a *aggVarPop[T]) Merge(other aggexec.SingleAggFromFixedRetFixed[T, float64], get1, get2 aggexec.AggGetter[float64], set aggexec.AggSetter[float64]) {
+func (a *aggVarPop[T]) Merge(other aggexec.SingleAggFromFixedRetFixed[T, float64], get1, get2 aggexec.AggGetter[float64], set aggexec.AggSetter[float64]) error {
 	next := other.(*aggVarPop[T])
 	a.sum += next.sum
 	a.count += next.count
 	set(get1() + get2())
+	return nil
 }
-func (a *aggVarPop[T]) Flush(get aggexec.AggGetter[float64], set aggexec.AggSetter[float64]) {
+func (a *aggVarPop[T]) Flush(get aggexec.AggGetter[float64], set aggexec.AggSetter[float64]) error {
 	if a.count <= 1 {
 		set(0)
-		return
+		return nil
 	}
 	avg := a.sum / float64(a.count)
 	set(get()/float64(a.count) - math.Pow(avg, 2))
+	return nil
 }
 
 type aggVarPopDecimal128 struct {
@@ -148,32 +155,33 @@ func (a *aggVarPopDecimal128) Unmarshal(bs []byte) {
 	a.retScale = types.DecodeInt32(bs[13:17])
 	a.sum = types.DecodeDecimal128(bs[17:])
 }
-func (a *aggVarPopDecimal128) Init(set aggexec.AggSetter[types.Decimal128], arg, ret types.Type) {
+func (a *aggVarPopDecimal128) Init(set aggexec.AggSetter[types.Decimal128], arg, ret types.Type) error {
 	a.sum = types.Decimal128{B0_63: 0, B64_127: 0}
 	a.count = 0
 	a.power2OutOfRange = false
 	a.argScale = arg.Scale
 	a.retScale = ret.Scale
 	set(a.sum)
+	return nil
 }
-func (a *aggVarPopDecimal128) Fill(value types.Decimal128, get aggexec.AggGetter[types.Decimal128], set aggexec.AggSetter[types.Decimal128]) {
+func (a *aggVarPopDecimal128) Fill(value types.Decimal128, get aggexec.AggGetter[types.Decimal128], set aggexec.AggSetter[types.Decimal128]) error {
 	if !a.power2OutOfRange {
 		a.count++
 		newSum, newPow2, outOfRange := getNewValueSumAndNewPower2(a.sum, get(), value, a.argScale, 1)
 		if !outOfRange {
 			a.sum = newSum
 			set(newPow2)
-			return
+			return nil
 		}
 		a.power2OutOfRange = true
-		return
+		return nil
 	}
-	err := moerr.NewInternalErrorNoCtx("Decimal128 overflowed")
-	panic(err)
+	return moerr.NewInternalErrorNoCtx("Decimal128 overflowed")
 }
-func (a *aggVarPopDecimal128) FillNull(get aggexec.AggGetter[types.Decimal128], set aggexec.AggSetter[types.Decimal128]) {
+func (a *aggVarPopDecimal128) FillNull(get aggexec.AggGetter[types.Decimal128], set aggexec.AggSetter[types.Decimal128]) error {
+	return nil
 }
-func (a *aggVarPopDecimal128) Fills(value types.Decimal128, isNull bool, count int, get aggexec.AggGetter[types.Decimal128], set aggexec.AggSetter[types.Decimal128]) {
+func (a *aggVarPopDecimal128) Fills(value types.Decimal128, isNull bool, count int, get aggexec.AggGetter[types.Decimal128], set aggexec.AggSetter[types.Decimal128]) error {
 	if !isNull {
 		if !a.power2OutOfRange {
 			a.count += int64(count)
@@ -182,33 +190,32 @@ func (a *aggVarPopDecimal128) Fills(value types.Decimal128, isNull bool, count i
 			if !outOfRange {
 				a.sum = newSum
 				set(newPow2)
-				return
+				return nil
 			}
 			if a.count == 1 {
 				a.power2OutOfRange = true
-				return
+				return nil
 			}
 		}
-		err := moerr.NewInternalErrorNoCtx("Decimal128 overflowed")
-		panic(err)
+		return moerr.NewInternalErrorNoCtx("Decimal128 overflowed")
 	}
+	return nil
 }
-func (a *aggVarPopDecimal128) Merge(other aggexec.SingleAggFromFixedRetFixed[types.Decimal128, types.Decimal128], get1, get2 aggexec.AggGetter[types.Decimal128], set aggexec.AggSetter[types.Decimal128]) {
+func (a *aggVarPopDecimal128) Merge(other aggexec.SingleAggFromFixedRetFixed[types.Decimal128, types.Decimal128], get1, get2 aggexec.AggGetter[types.Decimal128], set aggexec.AggSetter[types.Decimal128]) error {
 	next := other.(*aggVarPopDecimal128)
 	if next.count == 0 {
-		return
+		return nil
 	}
 	if a.count == 0 {
 		a.count = next.count
 		a.sum = next.sum
 		a.power2OutOfRange = next.power2OutOfRange
 		set(get2())
-		return
+		return nil
 	}
 
 	if a.power2OutOfRange || next.power2OutOfRange {
-		err := moerr.NewInternalErrorNoCtx("Decimal128 overflowed")
-		panic(err)
+		return moerr.NewInternalErrorNoCtx("Decimal128 overflowed")
 	}
 	a.count += next.count
 	var err error
@@ -220,20 +227,21 @@ func (a *aggVarPopDecimal128) Merge(other aggexec.SingleAggFromFixedRetFixed[typ
 	if err != nil {
 		if a.count == 1 {
 			a.power2OutOfRange = true
-			return
+			return nil
 		}
-		err = moerr.NewInternalErrorNoCtx("Decimal128 overflowed")
-		panic(err)
+		return moerr.NewInternalErrorNoCtx("Decimal128 overflowed")
 	}
 
 	set(newPow2)
+	return nil
 }
-func (a *aggVarPopDecimal128) Flush(get aggexec.AggGetter[types.Decimal128], set aggexec.AggSetter[types.Decimal128]) {
+func (a *aggVarPopDecimal128) Flush(get aggexec.AggGetter[types.Decimal128], set aggexec.AggSetter[types.Decimal128]) error {
 	r, err := getVarianceFromSumPowCount(a.sum, get(), a.count, a.argScale)
 	if err != nil {
-		panic(err)
+		return err
 	}
 	set(r)
+	return nil
 }
 
 type aggVarPopDecimal64 struct {
@@ -244,17 +252,17 @@ func newAggVarPopDecimal64() aggexec.SingleAggFromFixedRetFixed[types.Decimal64,
 	return &aggVarPopDecimal64{}
 }
 
-func (a *aggVarPopDecimal64) Fill(value types.Decimal64, get aggexec.AggGetter[types.Decimal128], set aggexec.AggSetter[types.Decimal128]) {
-	a.aggVarPopDecimal128.Fill(aggexec.FromD64ToD128(value), get, set)
+func (a *aggVarPopDecimal64) Fill(value types.Decimal64, get aggexec.AggGetter[types.Decimal128], set aggexec.AggSetter[types.Decimal128]) error {
+	return a.aggVarPopDecimal128.Fill(aggexec.FromD64ToD128(value), get, set)
 }
 
-func (a *aggVarPopDecimal64) Fills(value types.Decimal64, isNull bool, count int, get aggexec.AggGetter[types.Decimal128], set aggexec.AggSetter[types.Decimal128]) {
-	a.aggVarPopDecimal128.Fills(aggexec.FromD64ToD128(value), isNull, count, get, set)
+func (a *aggVarPopDecimal64) Fills(value types.Decimal64, isNull bool, count int, get aggexec.AggGetter[types.Decimal128], set aggexec.AggSetter[types.Decimal128]) error {
+	return a.aggVarPopDecimal128.Fills(aggexec.FromD64ToD128(value), isNull, count, get, set)
 }
 
-func (a *aggVarPopDecimal64) Merge(other aggexec.SingleAggFromFixedRetFixed[types.Decimal64, types.Decimal128], get1, get2 aggexec.AggGetter[types.Decimal128], set aggexec.AggSetter[types.Decimal128]) {
+func (a *aggVarPopDecimal64) Merge(other aggexec.SingleAggFromFixedRetFixed[types.Decimal64, types.Decimal128], get1, get2 aggexec.AggGetter[types.Decimal128], set aggexec.AggSetter[types.Decimal128]) error {
 	next := other.(*aggVarPopDecimal64)
-	a.aggVarPopDecimal128.Merge(&next.aggVarPopDecimal128, get1, get2, set)
+	return a.aggVarPopDecimal128.Merge(&next.aggVarPopDecimal128, get1, get2, set)
 }
 
 func getNewValueSumAndNewPower2(
