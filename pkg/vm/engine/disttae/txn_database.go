@@ -20,7 +20,6 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	txn2 "github.com/matrixorigin/matrixone/pkg/pb/txn"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -569,30 +568,15 @@ func (db *txnDatabase) openSysTable(p *process.Process, id uint64, name string,
 		primarySeqnum: 0,
 		clusterByIdx:  -1,
 	}
-	tbl.GetTableDef(context.TODO())
-	tbl.proc.Store(p)
 	switch name {
 	case catalog.MO_DATABASE:
-		tbl.tableDef.Pkey = &plan.PrimaryKeyDef{
-			Cols:        []uint64{0},
-			PkeyColId:   0,
-			PkeyColName: catalog.SystemDBAttr_ID,
-			Names:       []string{catalog.SystemDBAttr_ID},
-		}
+		tbl.constraint = catalog.MoDatabaseConstraint
 	case catalog.MO_TABLES:
-		tbl.tableDef.Pkey = &plan.PrimaryKeyDef{
-			Cols:        []uint64{0},
-			PkeyColId:   0,
-			PkeyColName: catalog.SystemRelAttr_ID,
-			Names:       []string{catalog.SystemRelAttr_ID},
-		}
+		tbl.constraint = catalog.MoTableConstraint
 	case catalog.MO_COLUMNS:
-		tbl.tableDef.Pkey = &plan.PrimaryKeyDef{
-			Cols:        []uint64{0},
-			PkeyColId:   0,
-			PkeyColName: catalog.SystemColAttr_UniqName,
-			Names:       []string{catalog.SystemColAttr_UniqName},
-		}
+		tbl.constraint = catalog.MoColumnConstraint
 	}
+	tbl.GetTableDef(context.TODO())
+	tbl.proc.Store(p)
 	return tbl
 }
