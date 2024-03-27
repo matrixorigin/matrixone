@@ -449,6 +449,7 @@ func (mp *MysqlProtocolImpl) Quit() {
 	if mp.binaryNullBuffer != nil {
 		mp.binaryNullBuffer = nil
 	}
+	mp.ses = nil
 }
 
 func (mp *MysqlProtocolImpl) SetSession(ses *Session) {
