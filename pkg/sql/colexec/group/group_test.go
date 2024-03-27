@@ -160,9 +160,9 @@ func newTestCase(flgs []bool, ts []types.Type, exprs []*plan.Expr, aggs []aggexe
 		flgs: flgs,
 		proc: testutil.NewProcessWithMPool(mpool.MustNewZero()),
 		arg: &Argument{
-			Exprs:   exprs,
-			Types:   ts,
-			AggsNew: aggs,
+			Exprs: exprs,
+			Types: ts,
+			Aggs:  aggs,
 			OperatorBase: vm.OperatorBase{
 				OperatorInfo: vm.OperatorInfo{
 					Idx:     1,

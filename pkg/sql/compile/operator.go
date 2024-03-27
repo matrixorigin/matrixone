@@ -136,7 +136,7 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 		arg.Nbucket = t.Nbucket
 		arg.Exprs = t.Exprs
 		arg.Types = t.Types
-		arg.AggsNew = t.AggsNew
+		arg.Aggs = t.Aggs
 		res.Arg = arg
 	case vm.Sample:
 		t := sourceIns.Arg.(*sample.Argument)
@@ -1067,15 +1067,16 @@ func constructTimeWindow(ctx context.Context, n *plan.Node, proc *process.Proces
 }
 
 func constructWindow(ctx context.Context, n *plan.Node, proc *process.Process) *window.Argument {
-	aggs := make([]agg.Aggregate, len(n.WinSpecList))
+	aggregationExpressions := make([]aggexec.AggFuncExecExpression, len(n.WinSpecList))
 	typs := make([]types.Type, len(n.WinSpecList))
+
 	for i, expr := range n.WinSpecList {
 		f := expr.Expr.(*plan.Expr_W).W.WindowFunc.Expr.(*plan.Expr_F)
-		distinct := (uint64(f.F.Func.Obj) & function.Distinct) != 0
-		obj := int64(uint64(f.F.Func.Obj) & function.DistinctMask)
+		isDistinct := (uint64(f.F.Func.Obj) & function.Distinct) != 0
+		functionID := int64(uint64(f.F.Func.Obj) & function.DistinctMask)
+
 		var e *plan.Expr = nil
 		var cfg []byte = nil
-
 		if len(f.F.Args) > 0 {
 
 			//for group_concat, the last arg is separator string
@@ -1083,34 +1084,28 @@ func constructWindow(ctx context.Context, n *plan.Node, proc *process.Process) *
 			if (f.F.Func.ObjName == plan2.NameGroupConcat ||
 				f.F.Func.ObjName == plan2.NameClusterCenters) && len(f.F.Args) > 1 {
 				argExpr := f.F.Args[len(f.F.Args)-1]
-				executor, err := colexec.NewExpressionExecutor(proc, argExpr)
+				vec, err := colexec.EvalExpressionOnce(proc, argExpr, []*batch.Batch{constBat})
 				if err != nil {
-					panic(err)
-				}
-				vec, err := executor.Eval(proc, []*batch.Batch{constBat})
-				if err != nil {
-					executor.Free()
 					panic(err)
 				}
 				cfg = []byte(vec.GetStringAt(0))
-				executor.Free()
+				vec.Free(proc.Mp())
+
+				f.F.Args = f.F.Args[:len(f.F.Args)-1]
 			}
 
 			e = f.F.Args[0]
 		}
-		aggs[i] = agg.Aggregate{
-			E:      e,
-			Dist:   distinct,
-			Op:     obj,
-			Config: cfg,
-		}
+		aggregationExpressions[i] = aggexec.MakeAggFunctionExpression(
+			functionID, isDistinct, f.F.Args, cfg)
+
 		if e != nil {
 			typs[i] = types.New(types.T(e.Typ.Id), e.Typ.Width, e.Typ.Scale)
 		}
 	}
 	arg := window.NewArgument()
 	arg.Types = typs
-	arg.Aggs = aggs
+	arg.Aggs = aggregationExpressions
 	arg.WinSpecList = n.WinSpecList
 	return arg
 }
@@ -1201,7 +1196,7 @@ func constructGroup(ctx context.Context, n, cn *plan.Node, ibucket, nbucket int,
 	}
 
 	arg := group.NewArgument()
-	arg.AggsNew = aggregationExpressions
+	arg.Aggs = aggregationExpressions
 	arg.Types = typs
 	arg.NeedEval = needEval
 	arg.Exprs = n.GroupBy

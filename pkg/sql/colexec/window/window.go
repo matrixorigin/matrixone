@@ -17,6 +17,7 @@ package window
 import (
 	"bytes"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -26,7 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/partition"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sort"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -45,17 +45,11 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 	ap.ctr.InitReceiver(proc, true)
 
 	ctr := ap.ctr
-	ctr.aggVecs = make([]evalVector, len(ap.Aggs))
+	ctr.aggVecs = make([]group.ExprEvalVector, len(ap.Aggs))
 	for i, ag := range ap.Aggs {
-		if ag.E != nil {
-			ctr.aggVecs[i].executor, err = colexec.NewExpressionExecutor(proc, ag.E)
-			if err != nil {
-				return err
-			}
-			// very bad code.
-			exprTyp := ag.E.Typ
-			typ := types.New(types.T(exprTyp.Id), exprTyp.Width, exprTyp.Scale)
-			ctr.aggVecs[i].vec = proc.GetVector(typ)
+		expressions := ag.GetArgExpressions()
+		if ctr.aggVecs[i], err = group.MakeEvalVector(proc, expressions); err != nil {
+			return err
 		}
 	}
 	w := ap.WinSpecList[0].Expr.(*plan.Expr_W).W
@@ -125,9 +119,9 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 
 			ctr.bat.Aggs = make([]aggexec.AggFuncExec, len(ap.Aggs))
 			for i, ag := range ap.Aggs {
-				ctr.bat.Aggs[i] = aggexec.MakeAgg(proc, ag.Op, ag.Dist, ap.Types[i])
-				if ag.Config != nil {
-					ctr.bat.Aggs[i].SetExtraInformation(ag.Config, 0)
+				ctr.bat.Aggs[i] = aggexec.MakeAgg(proc, ag.GetAggID(), ag.IsDistinct(), ap.Types[i])
+				if config := ag.GetExtraConfig(); len(config) > 0 {
+					ctr.bat.Aggs[i].SetExtraInformation(config, 0)
 				}
 				if err = ctr.bat.Aggs[i].GroupGrow(ctr.bat.RowCount()); err != nil {
 					return result, err
@@ -137,9 +131,9 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 			for i, w := range ap.WinSpecList {
 				// sort and partitions
 				if ap.Fs = makeOrderBy(w); ap.Fs != nil {
-					ctr.orderVecs = make([]evalVector, len(ap.Fs))
+					ctr.orderVecs = make([]group.ExprEvalVector, len(ap.Fs))
 					for j := range ctr.orderVecs {
-						ctr.orderVecs[j].executor, err = colexec.NewExpressionExecutor(proc, ap.Fs[j].Expr)
+						ctr.orderVecs[j], err = group.MakeEvalVector(proc, []*plan.Expr{ap.Fs[j].Expr})
 						if err != nil {
 							return result, err
 						}
@@ -216,8 +210,8 @@ func (ctr *container) processFunc(idx int, ap *Argument, proc *process.Process, 
 			}
 		}
 	} else {
-		nullVec := vector.NewConstNull(*ctr.aggVecs[idx].vec.GetType(), 1, proc.Mp())
-		defer nullVec.Free(proc.Mp())
+		//nullVec := vector.NewConstNull(*ctr.aggVecs[idx].Vec[0].GetType(), 1, proc.Mp())
+		//defer nullVec.Free(proc.Mp())
 
 		// plan.Function_AGG, plan.Function_WIN_VALUE
 		for j := 0; j < n; j++ {
@@ -234,9 +228,10 @@ func (ctr *container) processFunc(idx int, ap *Argument, proc *process.Process, 
 			}
 
 			if right < start || left > end || left >= right {
-				if err = ctr.bat.Aggs[idx].Fill(j, 0, []*vector.Vector{nullVec}); err != nil {
-					return err
-				}
+				// todo: I commented this out because it was a waste of time to fill a null value.
+				//if err = ctr.bat.Aggs[idx].Fill(j, 0, []*vector.Vector{nullVec}); err != nil {
+				//	return err
+				//}
 				continue
 			}
 
@@ -248,7 +243,7 @@ func (ctr *container) processFunc(idx int, ap *Argument, proc *process.Process, 
 			}
 
 			for k := left; k < right; k++ {
-				if err = ctr.bat.Aggs[idx].Fill(j, k, []*vector.Vector{ctr.aggVecs[idx].vec}); err != nil {
+				if err = ctr.bat.Aggs[idx].Fill(j, k, ctr.aggVecs[idx].Vec); err != nil {
 					return err
 				}
 			}
@@ -320,19 +315,19 @@ func (ctr *container) buildRangeInterval(rowIdx int, start, end int, frame *plan
 	var err error
 	switch frame.Start.Type {
 	case plan.FrameBound_CURRENT_ROW:
-		start, err = searchLeft(start, end, rowIdx, ctr.orderVecs[len(ctr.orderVecs)-1].vec, nil, false)
+		start, err = searchLeft(start, end, rowIdx, ctr.orderVecs[len(ctr.orderVecs)-1].Vec[0], nil, false)
 		if err != nil {
 			return start, end, err
 		}
 	case plan.FrameBound_PRECEDING:
 		if !frame.Start.UnBounded {
-			start, err = searchLeft(start, end, rowIdx, ctr.orderVecs[len(ctr.orderVecs)-1].vec, frame.Start.Val, false)
+			start, err = searchLeft(start, end, rowIdx, ctr.orderVecs[len(ctr.orderVecs)-1].Vec[0], frame.Start.Val, false)
 			if err != nil {
 				return start, end, err
 			}
 		}
 	case plan.FrameBound_FOLLOWING:
-		start, err = searchLeft(start, end, rowIdx, ctr.orderVecs[len(ctr.orderVecs)-1].vec, frame.Start.Val, true)
+		start, err = searchLeft(start, end, rowIdx, ctr.orderVecs[len(ctr.orderVecs)-1].Vec[0], frame.Start.Val, true)
 		if err != nil {
 			return start, end, err
 		}
@@ -340,18 +335,18 @@ func (ctr *container) buildRangeInterval(rowIdx int, start, end int, frame *plan
 
 	switch frame.End.Type {
 	case plan.FrameBound_CURRENT_ROW:
-		end, err = searchRight(start, end, rowIdx, ctr.orderVecs[len(ctr.orderVecs)-1].vec, nil, false)
+		end, err = searchRight(start, end, rowIdx, ctr.orderVecs[len(ctr.orderVecs)-1].Vec[0], nil, false)
 		if err != nil {
 			return start, end, err
 		}
 	case plan.FrameBound_PRECEDING:
-		end, err = searchRight(start, end, rowIdx, ctr.orderVecs[len(ctr.orderVecs)-1].vec, frame.End.Val, true)
+		end, err = searchRight(start, end, rowIdx, ctr.orderVecs[len(ctr.orderVecs)-1].Vec[0], frame.End.Val, true)
 		if err != nil {
 			return start, end, err
 		}
 	case plan.FrameBound_FOLLOWING:
 		if !frame.End.UnBounded {
-			end, err = searchRight(start, end, rowIdx, ctr.orderVecs[len(ctr.orderVecs)-1].vec, frame.End.Val, false)
+			end, err = searchRight(start, end, rowIdx, ctr.orderVecs[len(ctr.orderVecs)-1].Vec[0], frame.End.Val, false)
 			if err != nil {
 				return start, end, err
 			}
@@ -379,14 +374,15 @@ func buildPartitionInterval(ps []int64, j int, l int) (int, int) {
 	return left, right
 }
 
-func (ctr *container) evalAggVector(bat *batch.Batch, proc *process.Process) error {
+func (ctr *container) evalAggVector(bat *batch.Batch, proc *process.Process) (err error) {
+	input := []*batch.Batch{bat}
+
 	for i := range ctr.aggVecs {
-		if ctr.aggVecs[i].executor != nil {
-			vec, err := ctr.aggVecs[i].executor.Eval(proc, []*batch.Batch{bat})
+		for j := range ctr.aggVecs[i].Executor {
+			ctr.aggVecs[i].Vec[j], err = ctr.aggVecs[i].Executor[j].Eval(proc, input)
 			if err != nil {
 				return err
 			}
-			ctr.aggVecs[i].vec = vec
 		}
 	}
 	return nil
@@ -426,18 +422,21 @@ func makeFlagsOne(n int) []uint8 {
 func (ctr *container) processOrder(idx int, ap *Argument, bat *batch.Batch, proc *process.Process) (bool, error) {
 	makeArgFs(ap)
 
+	var err error
+	input := []*batch.Batch{bat}
 	for i := range ctr.orderVecs {
-		vec, err := ctr.orderVecs[i].executor.Eval(proc, []*batch.Batch{bat})
-		if err != nil {
-			return false, err
+		for j := range ctr.orderVecs[i].Executor {
+			ctr.orderVecs[i].Vec[j], err = ctr.orderVecs[i].Executor[j].Eval(proc, input)
+			if err != nil {
+				return false, err
+			}
 		}
-		ctr.orderVecs[i].vec = vec
 	}
 	if bat.RowCount() < 2 {
 		return false, nil
 	}
 
-	ovec := ctr.orderVecs[0].vec
+	ovec := ctr.orderVecs[0].Vec[0]
 	var strCol []string
 
 	rowCount := bat.RowCount()
@@ -473,7 +472,7 @@ func (ctr *container) processOrder(idx int, ap *Argument, bat *batch.Batch, proc
 		desc := ctr.desc[i]
 		nullsLast := ctr.nullsLast[i]
 		ps = partition.Partition(ctr.sels, ds, ps, ovec)
-		vec := ctr.orderVecs[i].vec
+		vec := ctr.orderVecs[i].Vec[0]
 		// skip sort for const vector
 		if !vec.IsConst() {
 			nullCnt := vec.GetNulls().Count()
@@ -519,16 +518,16 @@ func (ctr *container) processOrder(idx int, ap *Argument, bat *batch.Batch, proc
 
 	// shuffle agg vector
 	for k := idx; k < len(ctr.aggVecs); k++ {
-		if ctr.aggVecs[k].vec != nil && !ctr.aggVecs[k].executor.IsColumnExpr() {
-			if err := ctr.aggVecs[k].vec.Shuffle(ctr.sels, proc.Mp()); err != nil {
+		if ctr.aggVecs[k].Vec[0] != nil && !ctr.aggVecs[k].Executor[0].IsColumnExpr() {
+			if err := ctr.aggVecs[k].Vec[0].Shuffle(ctr.sels, proc.Mp()); err != nil {
 				panic(err)
 			}
 		}
 	}
 
 	t := len(ctr.orderVecs) - 1
-	if ctr.orderVecs[t].vec != nil && !ctr.orderVecs[t].executor.IsColumnExpr() {
-		if err := ctr.orderVecs[t].vec.Shuffle(ctr.sels, proc.Mp()); err != nil {
+	if ctr.orderVecs[t].Vec[0] != nil && !ctr.orderVecs[t].Executor[0].IsColumnExpr() {
+		if err := ctr.orderVecs[t].Vec[0].Shuffle(ctr.sels, proc.Mp()); err != nil {
 			panic(err)
 		}
 	}

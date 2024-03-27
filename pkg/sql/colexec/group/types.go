@@ -36,32 +36,32 @@ const (
 	HIndex
 )
 
-type evalVector struct {
-	executor []colexec.ExpressionExecutor
-	vec      []*vector.Vector
-	typ      []types.Type
+type ExprEvalVector struct {
+	Executor []colexec.ExpressionExecutor
+	Vec      []*vector.Vector
+	Typ      []types.Type
 }
 
-func makeEvalVector(proc *process.Process, expressions []*plan.Expr) (ev evalVector, err error) {
-	ev.executor, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, expressions)
+func MakeEvalVector(proc *process.Process, expressions []*plan.Expr) (ev ExprEvalVector, err error) {
+	ev.Executor, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, expressions)
 	if err != nil {
 		return
 	}
-	ev.vec = make([]*vector.Vector, len(ev.executor))
-	ev.typ = make([]types.Type, len(ev.executor))
+	ev.Vec = make([]*vector.Vector, len(ev.Executor))
+	ev.Typ = make([]types.Type, len(ev.Executor))
 	for i, expr := range expressions {
-		ev.typ[i] = types.New(types.T(expr.Typ.Id), expr.Typ.Width, expr.Typ.Scale)
+		ev.Typ[i] = types.New(types.T(expr.Typ.Id), expr.Typ.Width, expr.Typ.Scale)
 	}
 	return
 }
 
-func (ev *evalVector) Free() {
-	for i := range ev.executor {
-		if ev.executor[i] == nil {
+func (ev *ExprEvalVector) Free() {
+	for i := range ev.Executor {
+		if ev.Executor[i] == nil {
 			continue
 		}
-		ev.executor[i].Free()
-		ev.executor[i] = nil
+		ev.Executor[i].Free()
+		ev.Executor[i] = nil
 	}
 }
 
@@ -74,8 +74,8 @@ type container struct {
 	strHashMap *hashmap.StrHashMap
 	// idx        *index.LowCardinalityIndex
 
-	aggVecs   []evalVector
-	groupVecs evalVector
+	aggVecs   []ExprEvalVector
+	groupVecs ExprEvalVector
 
 	// keyWidth is the width of group by columns, it determines which hash map to use.
 	keyWidth          int
@@ -97,7 +97,7 @@ type Argument struct {
 	Nbucket      uint64
 	Exprs        []*plan.Expr // group Expressions
 	Types        []types.Type
-	AggsNew      []aggexec.AggFuncExecExpression
+	Aggs         []aggexec.AggFuncExecExpression
 
 	vm.OperatorBase
 }
@@ -138,7 +138,7 @@ func (arg *Argument) WithTypes(types []types.Type) *Argument {
 }
 
 func (arg *Argument) WithAggsNew(aggs []aggexec.AggFuncExecExpression) *Argument {
-	arg.AggsNew = aggs
+	arg.Aggs = aggs
 	return arg
 }
 

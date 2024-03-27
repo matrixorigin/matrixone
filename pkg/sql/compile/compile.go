@@ -2906,7 +2906,7 @@ func (c *Compile) compileMergeGroup(n *plan.Node, ss []*Scope, ns []*plan.Node) 
 	// todo: I cannot remove the merge-group action directly, because the merge-group action is used to fill the partial result.
 	groupInfo := constructGroup(c.ctx, n, ns[n.Children[0]], 0, 0, false, 0, c.proc)
 	defer groupInfo.Release()
-	if aggregations := groupInfo.AggsNew; len(aggregations) > 0 {
+	if aggregations := groupInfo.Aggs; len(aggregations) > 0 {
 		hasDistinct := false
 
 		for _, agg := range aggregations {
@@ -2932,8 +2932,7 @@ func (c *Compile) compileMergeGroup(n *plan.Node, ss []*Scope, ns []*plan.Node) 
 					Idx:     c.anal.curr,
 					IsFirst: c.anal.isFirst,
 					Arg:     constructGroup(c.ctx, n, ns[n.Children[0]], 0, 0, false, 0, c.proc),
-			})
-
+				})
 
 			rs := c.newMergeScope([]*Scope{mergeToGroup})
 			arg := constructMergeGroup(true)

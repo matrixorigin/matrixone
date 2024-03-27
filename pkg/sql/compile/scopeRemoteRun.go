@@ -832,7 +832,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			Nbucket:      t.Nbucket,
 			Exprs:        t.Exprs,
 			Types:        convertToPlanTypes(t.Types),
-			Aggs:         convertToPipelineAggregates(t.AggsNew),
+			Aggs:         convertToPipelineAggregates(t.Aggs),
 		}
 	case *sample.Argument:
 		t.ConvertToPipelineOperator(in)
@@ -1276,7 +1276,7 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 		arg.Nbucket = t.Nbucket
 		arg.Exprs = t.Exprs
 		arg.Types = convertToTypes(t.Types)
-		arg.AggsNew = convertToAggregates(t.Aggs)
+		arg.Aggs = convertToAggregates(t.Aggs)
 		v.Arg = arg
 	case vm.Sample:
 		v.Arg = sample.GenerateFromPipelineOperator(opr)

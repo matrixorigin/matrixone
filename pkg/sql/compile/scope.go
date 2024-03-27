@@ -808,7 +808,7 @@ func newParallelScope(c *Compile, s *Scope, ss []*Scope) (*Scope, error) {
 					Arg: group.NewArgument().
 						WithExprs(arg.Exprs).
 						WithTypes(arg.Types).
-						WithAggsNew(arg.AggsNew),
+						WithAggsNew(arg.Aggs),
 
 					CnAddr:      in.CnAddr,
 					OperatorID:  in.OperatorID,
