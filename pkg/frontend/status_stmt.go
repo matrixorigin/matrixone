@@ -300,7 +300,22 @@ type CreateAccountExecutor struct {
 }
 
 func (cae *CreateAccountExecutor) ExecuteImpl(ctx context.Context, ses *Session) error {
-	return InitGeneralTenant(ctx, ses, cae.ca)
+	create := &CreateAccount{
+		IfNotExists:  cae.ca.IfNotExists,
+		AuthOption:   cae.ca.AuthOption,
+		StatusOption: cae.ca.StatusOption,
+		Comment:      cae.ca.Comment,
+	}
+
+	params := cae.GetProcess().GetPrepareParams()
+	switch val := cae.ca.Name.(type) {
+	case *tree.NumVal:
+		create.Name = val.OrigString()
+	case *tree.ParamExpr:
+		create.Name = params.GetStringAt(val.Offset - 1)
+	}
+
+	return InitGeneralTenant(ctx, ses, create)
 }
 
 type DropAccountExecutor struct {

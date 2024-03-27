@@ -2742,7 +2742,7 @@ func normalizeName(ctx context.Context, name string) (string, error) {
 	return s, nil
 }
 
-func normalizeNameOfAccount(ctx context.Context, ca *tree.CreateAccount) error {
+func normalizeNameOfAccount(ctx context.Context, ca *CreateAccount) error {
 	s := strings.TrimSpace(ca.Name)
 	if len(s) == 0 {
 		return moerr.NewInternalError(ctx, `the name "%s" is invalid`, ca.Name)
@@ -7894,8 +7894,16 @@ func checkDatabaseExistsOrNot(ctx context.Context, bh BackgroundExec, dbName str
 	return false, nil
 }
 
+type CreateAccount struct {
+	IfNotExists  bool
+	Name         string
+	AuthOption   tree.AccountAuthOption
+	StatusOption tree.AccountStatus
+	Comment      tree.AccountComment
+}
+
 // InitGeneralTenant initializes the application level tenant
-func InitGeneralTenant(ctx context.Context, ses *Session, ca *tree.CreateAccount) (err error) {
+func InitGeneralTenant(ctx context.Context, ses *Session, ca *CreateAccount) (err error) {
 	var exists bool
 	var newTenant *TenantInfo
 	var newTenantCtx context.Context
@@ -8038,7 +8046,7 @@ func InitGeneralTenant(ctx context.Context, ses *Session, ca *tree.CreateAccount
 }
 
 // createTablesInMoCatalogOfGeneralTenant creates catalog tables in the database mo_catalog.
-func createTablesInMoCatalogOfGeneralTenant(ctx context.Context, bh BackgroundExec, ca *tree.CreateAccount) (*TenantInfo, context.Context, error) {
+func createTablesInMoCatalogOfGeneralTenant(ctx context.Context, bh BackgroundExec, ca *CreateAccount) (*TenantInfo, context.Context, error) {
 	var err error
 	var initMoAccount string
 	var erArray []ExecResult
@@ -8123,7 +8131,7 @@ func createTablesInMoCatalogOfGeneralTenant(ctx context.Context, bh BackgroundEx
 	return newTenant, newTenantCtx, err
 }
 
-func createTablesInMoCatalogOfGeneralTenant2(bh BackgroundExec, ca *tree.CreateAccount, newTenantCtx context.Context, newTenant *TenantInfo, pu *config.ParameterUnit) error {
+func createTablesInMoCatalogOfGeneralTenant2(bh BackgroundExec, ca *CreateAccount, newTenantCtx context.Context, newTenant *TenantInfo, pu *config.ParameterUnit) error {
 	var err error
 	var initDataSqls []string
 	newTenantCtx, span := trace.Debug(newTenantCtx, "createTablesInMoCatalogOfGeneralTenant2")

@@ -1429,9 +1429,24 @@ func (mce *MysqlCmdExecutor) handleDropSnapshot(ctx context.Context, ct *tree.Dr
 
 // handleCreateAccount creates a new user-level tenant in the context of the tenant SYS
 // which has been initialized.
-func (mce *MysqlCmdExecutor) handleCreateAccount(ctx context.Context, ca *tree.CreateAccount) error {
+func (mce *MysqlCmdExecutor) handleCreateAccount(ctx context.Context, ca *tree.CreateAccount, proc *process.Process) error {
 	//step1 : create new account.
-	return InitGeneralTenant(ctx, mce.GetSession(), ca)
+	create := &CreateAccount{
+		IfNotExists:  ca.IfNotExists,
+		AuthOption:   ca.AuthOption,
+		StatusOption: ca.StatusOption,
+		Comment:      ca.Comment,
+	}
+
+	params := proc.GetPrepareParams()
+	switch val := ca.Name.(type) {
+	case *tree.NumVal:
+		create.Name = val.OrigString()
+	case *tree.ParamExpr:
+		create.Name = params.GetStringAt(val.Offset - 1)
+	}
+
+	return InitGeneralTenant(ctx, mce.GetSession(), create)
 }
 
 // handleDropAccount drops a new user-level tenant
@@ -3584,7 +3599,7 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 	case *tree.CreateAccount:
 		selfHandle = true
 		ses.InvalidatePrivilegeCache()
-		if err = mce.handleCreateAccount(requestCtx, st); err != nil {
+		if err = mce.handleCreateAccount(requestCtx, st, proc); err != nil {
 			return
 		}
 	case *tree.DropAccount:
@@ -3779,6 +3794,13 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 		}
 	case *tree.ShowErrors, *tree.ShowWarnings:
 		err = mce.handleShowErrors(i, len(cws))
+		if err != nil {
+			return
+		} else {
+			return
+		}
+	case *tree.CreateAccount:
+		err = mce.handleCreateAccount(requestCtx, st, proc)
 		if err != nil {
 			return
 		} else {
