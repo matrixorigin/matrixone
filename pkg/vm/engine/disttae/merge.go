@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
@@ -153,10 +154,12 @@ func (t *CNMergeTask) readAllData() ([]*batch.Batch, []*nulls.Nulls, error) {
 					blk.CommitTs = commitTs
 				}
 			}
-			bat, delmask, innerErr := t.readblock(&blk)
-			if innerErr != nil {
+			bat, delmask, err := t.readblock(&blk)
+			if err != nil {
+				innerErr = err
 				return false
 			}
+
 			blkBatches = append(blkBatches, bat)
 			blkDels = append(blkDels, delmask)
 			return true
@@ -192,6 +195,10 @@ func (t *CNMergeTask) readblock(info *objectio.BlockInfo) (bat *batch.Batch, del
 		}
 	}
 
+	if dels == nil {
+		dels = nulls.NewWithSize(128)
+	}
+	deltalocDel := dels.Count()
 	// read tombstone in memory
 	iter := t.state.NewRowsIter(t.snapshot, &info.BlockID, true)
 	for iter.Next() {
@@ -200,6 +207,10 @@ func (t *CNMergeTask) readblock(info *objectio.BlockInfo) (bat *batch.Batch, del
 		dels.Add(uint64(offset))
 	}
 	iter.Close()
+	if dels.Count() > 0 {
+		logutil.Infof("mergeblocks read block %v, %d deleted(%d from disk)", info.BlockID.ShortStringEx(), dels.Count(), deltalocDel)
+	}
+
 	bat.SetAttributes(t.colattrs)
 	return
 }
