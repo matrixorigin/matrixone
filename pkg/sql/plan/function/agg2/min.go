@@ -22,19 +22,22 @@ import (
 )
 
 func RegisterMin(id int64) {
-	aggexec.RegisterDeterminedSingleAgg(aggexec.MakeDeterminedSingleAggInfo(id, types.T_int8.ToType(), types.T_int8.ToType(), false, true), newAggMin[int8])
-	aggexec.RegisterDeterminedSingleAgg(aggexec.MakeDeterminedSingleAggInfo(id, types.T_int16.ToType(), types.T_int16.ToType(), false, true), newAggMin[int16])
-	aggexec.RegisterDeterminedSingleAgg(aggexec.MakeDeterminedSingleAggInfo(id, types.T_int32.ToType(), types.T_int32.ToType(), false, true), newAggMin[int32])
-	aggexec.RegisterDeterminedSingleAgg(aggexec.MakeDeterminedSingleAggInfo(id, types.T_int64.ToType(), types.T_int64.ToType(), false, true), newAggMin[int64])
 	aggexec.RegisterDeterminedSingleAgg(aggexec.MakeDeterminedSingleAggInfo(id, types.T_uint8.ToType(), types.T_uint8.ToType(), false, true), newAggMin[uint8])
 	aggexec.RegisterDeterminedSingleAgg(aggexec.MakeDeterminedSingleAggInfo(id, types.T_uint16.ToType(), types.T_uint16.ToType(), false, true), newAggMin[uint16])
 	aggexec.RegisterDeterminedSingleAgg(aggexec.MakeDeterminedSingleAggInfo(id, types.T_uint32.ToType(), types.T_uint32.ToType(), false, true), newAggMin[uint32])
 	aggexec.RegisterDeterminedSingleAgg(aggexec.MakeDeterminedSingleAggInfo(id, types.T_uint64.ToType(), types.T_uint64.ToType(), false, true), newAggMin[uint64])
+	aggexec.RegisterDeterminedSingleAgg(aggexec.MakeDeterminedSingleAggInfo(id, types.T_int8.ToType(), types.T_int8.ToType(), false, true), newAggMin[int8])
+	aggexec.RegisterDeterminedSingleAgg(aggexec.MakeDeterminedSingleAggInfo(id, types.T_int16.ToType(), types.T_int16.ToType(), false, true), newAggMin[int16])
+	aggexec.RegisterDeterminedSingleAgg(aggexec.MakeDeterminedSingleAggInfo(id, types.T_int32.ToType(), types.T_int32.ToType(), false, true), newAggMin[int32])
+	aggexec.RegisterDeterminedSingleAgg(aggexec.MakeDeterminedSingleAggInfo(id, types.T_int64.ToType(), types.T_int64.ToType(), false, true), newAggMin[int64])
 	aggexec.RegisterDeterminedSingleAgg(aggexec.MakeDeterminedSingleAggInfo(id, types.T_float32.ToType(), types.T_float32.ToType(), false, true), newAggMin[float32])
 	aggexec.RegisterDeterminedSingleAgg(aggexec.MakeDeterminedSingleAggInfo(id, types.T_float64.ToType(), types.T_float64.ToType(), false, true), newAggMin[float64])
 	aggexec.RegisterDeterminedSingleAgg(aggexec.MakeDeterminedSingleAggInfo(id, types.T_date.ToType(), types.T_date.ToType(), false, true), newAggMin[types.Date])
 	aggexec.RegisterDeterminedSingleAgg(aggexec.MakeDeterminedSingleAggInfo(id, types.T_datetime.ToType(), types.T_datetime.ToType(), false, true), newAggMin[types.Datetime])
 	aggexec.RegisterDeterminedSingleAgg(aggexec.MakeDeterminedSingleAggInfo(id, types.T_timestamp.ToType(), types.T_timestamp.ToType(), false, true), newAggMin[types.Timestamp])
+	aggexec.RegisterDeterminedSingleAgg(aggexec.MakeDeterminedSingleAggInfo(id, types.T_time.ToType(), types.T_time.ToType(), false, true), newAggMin[types.Time])
+	aggexec.RegisterDeterminedSingleAgg(aggexec.MakeDeterminedSingleAggInfo(id, types.T_bool.ToType(), types.T_bool.ToType(), false, true), newAggMinBool)
+	aggexec.RegisterDeterminedSingleAgg(aggexec.MakeDeterminedSingleAggInfo(id, types.T_bit.ToType(), types.T_bit.ToType(), false, true), newAggMin[uint64])
 	aggexec.RegisterFlexibleSingleAgg(
 		aggexec.MakeFlexibleAggInfo(id, false, true),
 		MinReturnType,
@@ -106,6 +109,12 @@ func newAggUuidMin() aggexec.SingleAggFromFixedRetFixed[types.Uuid, types.Uuid] 
 	return &aggUuidMin{}
 }
 
+type aggMinBool struct{}
+
+func newAggMinBool() aggexec.SingleAggFromFixedRetFixed[bool, bool] {
+	return aggMinBool{}
+}
+
 func (a aggMin[from]) Marshal() []byte  { return nil }
 func (a aggMin[from]) Unmarshal([]byte) {}
 func (a aggMin[from]) Init(set aggexec.AggSetter[from], arg, ret types.Type) {
@@ -161,6 +170,8 @@ func getMaxValue[T canCompare]() interface{} {
 		return types.Datetime(math.MaxInt64)
 	case *types.Timestamp:
 		return types.Timestamp(math.MaxInt64)
+	case *types.Time:
+		return types.Time(math.MaxInt64)
 	}
 	panic("unexpected type")
 }
@@ -302,3 +313,29 @@ func (a *aggUuidMin) Merge(other aggexec.SingleAggFromFixedRetFixed[types.Uuid, 
 	}
 }
 func (a *aggUuidMin) Flush(get aggexec.AggGetter[types.Uuid], set aggexec.AggSetter[types.Uuid]) {}
+
+func (a aggMinBool) Marshal() []byte     { return nil }
+func (a aggMinBool) Unmarshal(bs []byte) {}
+func (a aggMinBool) Init(setter aggexec.AggSetter[bool], arg types.Type, ret types.Type) {
+	setter(true)
+}
+func (a aggMinBool) Fill(value bool, get aggexec.AggGetter[bool], set aggexec.AggSetter[bool]) {
+	if !value {
+		set(false)
+	}
+}
+func (a aggMinBool) FillNull(get aggexec.AggGetter[bool], set aggexec.AggSetter[bool]) {}
+func (a aggMinBool) Fills(value bool, isNull bool, count int, get aggexec.AggGetter[bool], set aggexec.AggSetter[bool]) {
+	if isNull {
+		return
+	}
+	if !value {
+		set(false)
+	}
+}
+func (a aggMinBool) Merge(other aggexec.SingleAggFromFixedRetFixed[bool, bool], get1, get2 aggexec.AggGetter[bool], set aggexec.AggSetter[bool]) {
+	if !get2() {
+		set(false)
+	}
+}
+func (a aggMinBool) Flush(get aggexec.AggGetter[bool], set aggexec.AggSetter[bool]) {}

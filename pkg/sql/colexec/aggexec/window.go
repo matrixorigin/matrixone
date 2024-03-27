@@ -184,13 +184,10 @@ func (exec *singleWindowExec) flushRowNumber() (*vector.Vector, error) {
 			continue
 		}
 
-		for i := 1; i < len(group); i++ {
-			m := group[i] - group[i-1]
-
-			for j := int64(1); j <= m; j++ {
-				values[idx] = j
-				idx++
-			}
+		n := group[len(group)-1] - group[0]
+		for j := int64(1); j <= n; j++ {
+			values[idx] = j
+			idx++
 		}
 	}
 	return exec.ret.flush(), nil
