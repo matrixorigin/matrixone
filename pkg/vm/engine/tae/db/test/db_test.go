@@ -6475,6 +6475,7 @@ func TestSnapshotGC(t *testing.T) {
 		assert.Nil(t, txn.Commit(context.Background()))
 	}
 	db.DiskCleaner.GetCleaner().SetTid(rel3.ID())
+	db.DiskCleaner.GetCleaner().DisableGCGCForTest()
 	bat := catalog.MockBatch(schema1, int(schema1.BlockMaxRows*10-1))
 	defer bat.Close()
 	bats := bat.Split(bat.Length())
@@ -6493,7 +6494,7 @@ func TestSnapshotGC(t *testing.T) {
 		for {
 			if i > 3 {
 				snapWG.Done()
-				db.DiskCleaner.GetCleaner().SetGCForTest()
+				db.DiskCleaner.GetCleaner().EnableGCForTest()
 				break
 			}
 			i++
@@ -6547,6 +6548,7 @@ func TestSnapshotGC(t *testing.T) {
 	tae.Restart(ctx)
 	db = tae.DB
 	db.DiskCleaner.GetCleaner().SetMinMergeCountForTest(2)
+	db.DiskCleaner.GetCleaner().SetTid(rel3.ID())
 	testutils.WaitExpect(5000, func() bool {
 		if db.DiskCleaner.GetCleaner().GetMaxConsumed() == nil {
 			return false

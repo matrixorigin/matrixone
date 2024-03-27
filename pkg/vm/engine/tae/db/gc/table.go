@@ -113,7 +113,6 @@ func (t *GCTable) SoftGC(table *GCTable, ts types.TS, snapShotList map[uint64][]
 	objects := t.getObjects()
 	for name, entry := range objects {
 		objectEntry := table.objects[name]
-		logutil.Infof("SoftGC: %s, commit %v, create %v, drop %v", name, entry.commitTS.ToString(), entry.createTS.ToString(), entry.dropTS.ToString())
 		if objectEntry == nil && entry.commitTS.Less(&ts) && !isSnapshotRefers(entry, snapShotList[entry.table]) {
 			gc = append(gc, name)
 			t.deleteObject(name)
@@ -124,7 +123,7 @@ func (t *GCTable) SoftGC(table *GCTable, ts types.TS, snapShotList map[uint64][]
 
 func isSnapshotRefers(obj *ObjectEntry, snapShotList []types.TS) bool {
 	if len(snapShotList) == 0 {
-		return true
+		return false
 	}
 	left, right := 0, len(snapShotList)-1
 	for left <= right {

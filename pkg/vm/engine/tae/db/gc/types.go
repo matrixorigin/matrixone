@@ -20,8 +20,9 @@ import (
 )
 
 const (
-	PrefixGCMeta = "gc"
-	GCMetaDir    = "gc/"
+	PrefixGCMeta   = "gc"
+	PrefixSnapMeta = "snap"
+	GCMetaDir      = "gc/"
 )
 
 type BatchType int8
@@ -113,5 +114,6 @@ type Cleaner interface {
 	CheckGC() error
 	GetInputs() *GCTable
 	SetTid(tid uint64)
-	SetGCForTest()
+	EnableGCForTest()
+	DisableGCGCForTest()
 }

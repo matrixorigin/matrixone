@@ -24,13 +24,25 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"sync"
 )
 
-type Snapshot struct {
-	TS  types.TS
-	Tid uint64
-}
+var (
+	objectInfoSchemaAttr = []string{
+		catalog.ObjectAttr_ObjectStats,
+		catalog.EntryNode_CreateAt,
+		catalog.EntryNode_DeleteAt,
+		catalog2.BlockMeta_DeltaLoc,
+	}
+	objectInfoSchemaTypes = []types.Type{
+		types.New(types.T_varchar, types.MaxVarcharLen, 0),
+		types.New(types.T_TS, types.MaxVarcharLen, 0),
+		types.New(types.T_TS, types.MaxVarcharLen, 0),
+		types.New(types.T_varchar, 5000, 0),
+	}
+)
 
 type objectInfo struct {
 	stats         objectio.ObjectStats
@@ -55,6 +67,9 @@ func NewSnapshotMeta() *SnapshotMeta {
 func (sm *SnapshotMeta) Update(data *CheckpointData) *SnapshotMeta {
 	sm.Lock()
 	defer sm.Unlock()
+	if sm.tid == 0 {
+		return sm
+	}
 	ins := data.GetObjectBatchs()
 	insDeleteTSVec := ins.GetVectorByName(catalog.EntryNode_DeleteAt).GetDownstreamVector()
 	insCreateTSVec := ins.GetVectorByName(catalog.EntryNode_CreateAt).GetDownstreamVector()
@@ -64,7 +79,6 @@ func (sm *SnapshotMeta) Update(data *CheckpointData) *SnapshotMeta {
 		if table != sm.tid {
 			continue
 		}
-		logutil.Infof("tabletable is %d", table)
 		var objectStats objectio.ObjectStats
 		buf := ins.GetVectorByName(catalog.ObjectAttr_ObjectStats).Get(i).([]byte)
 		objectStats.UnMarshal(buf)
@@ -88,7 +102,6 @@ func (sm *SnapshotMeta) Update(data *CheckpointData) *SnapshotMeta {
 		delete(sm.object, objectStats.ObjectName().SegmentId().ToString())
 	}
 
-	logutil.Infof("sm.object is %v", sm.object)
 	del, _, _, _ := data.GetBlkBatchs()
 	delBlockIDVec := del.GetVectorByName(catalog2.BlockMeta_ID).GetDownstreamVector()
 	delDeltaVec := del.GetVectorByName(catalog2.BlockMeta_DeltaLoc).GetDownstreamVector()
@@ -153,4 +166,85 @@ func (sm *SnapshotMeta) GetSnapshot(fs fileservice.FileService) (map[uint64][]ty
 
 func (sm *SnapshotMeta) SetTid(tid uint64) {
 	sm.tid = tid
+}
+
+func (sm *SnapshotMeta) SaveMeta(name string, fs fileservice.FileService) error {
+	if len(sm.object) == 0 {
+		return nil
+	}
+	bat := containers.NewBatch()
+	for i, attr := range objectInfoSchemaAttr {
+		bat.AddVector(attr, containers.MakeVector(objectInfoSchemaTypes[i], common.DefaultAllocator))
+	}
+	for _, entry := range sm.object {
+		bat.GetVectorByName(catalog.ObjectAttr_ObjectStats).Append(entry.stats[:], false)
+		bat.GetVectorByName(catalog.EntryNode_CreateAt).Append(entry.createAt, false)
+		bat.GetVectorByName(catalog.EntryNode_DeleteAt).Append(entry.deleteAt, false)
+		if entry.deltaLocation[0] == nil {
+			bat.GetVectorByName(catalog2.BlockMeta_DeltaLoc).Append([]byte(objectio.Location{}), false)
+		} else {
+			bat.GetVectorByName(catalog2.BlockMeta_DeltaLoc).Append([]byte(*entry.deltaLocation[0]), false)
+		}
+	}
+	defer bat.Close()
+	writer, err := objectio.NewObjectWriterSpecial(objectio.WriterGC, name, fs)
+	if err != nil {
+		return err
+	}
+	if _, err = writer.WriteWithoutSeqnum(containers.ToCNBatch(bat)); err != nil {
+		return err
+	}
+
+	_, err = writer.WriteEnd(context.Background())
+	return err
+}
+
+func (sm *SnapshotMeta) Rebuild(ins *containers.Batch) {
+	insCreateTSVec := ins.GetVectorByName(catalog.EntryNode_CreateAt).GetDownstreamVector()
+	for i := 0; i < ins.Length(); i++ {
+		var objectStats objectio.ObjectStats
+		buf := ins.GetVectorByName(catalog.ObjectAttr_ObjectStats).Get(i).([]byte)
+		objectStats.UnMarshal(buf)
+		createTS := vector.GetFixedAt[types.TS](insCreateTSVec, i)
+		if sm.object[objectStats.ObjectName().SegmentId().ToString()] == nil {
+			sm.object[objectStats.ObjectName().SegmentId().ToString()] = &objectInfo{
+				stats:    objectStats,
+				createAt: createTS,
+			}
+			continue
+		}
+	}
+}
+
+func (sm *SnapshotMeta) ReadMeta(ctx context.Context, name string, fs fileservice.FileService) error {
+	reader, err := blockio.NewFileReaderNoCache(fs, name)
+	if err != nil {
+		return err
+	}
+	bs, err := reader.LoadAllBlocks(ctx, common.DefaultAllocator)
+	if err != nil {
+		return err
+	}
+	idxes := make([]uint16, len(objectInfoSchemaAttr))
+	for i := range objectInfoSchemaAttr {
+		idxes[i] = uint16(i)
+	}
+	mobat, release, err := reader.LoadColumns(ctx, idxes, nil, bs[0].GetID(), common.DefaultAllocator)
+	if err != nil {
+		return err
+	}
+	defer release()
+	bat := containers.NewBatch()
+	for i := range objectInfoSchemaAttr {
+		pkgVec := mobat.Vecs[i]
+		var vec containers.Vector
+		if pkgVec.Length() == 0 {
+			vec = containers.MakeVector(objectInfoSchemaTypes[i], common.DefaultAllocator)
+		} else {
+			vec = containers.ToTNVector(pkgVec, common.DefaultAllocator)
+		}
+		bat.AddVector(objectInfoSchemaAttr[i], vec)
+	}
+	sm.Rebuild(bat)
+	return nil
 }
