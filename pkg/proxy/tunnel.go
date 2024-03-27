@@ -151,8 +151,8 @@ func (t *tunnel) run(cc ClientConn, sc ServerConn) error {
 		}
 		t.cc = cc
 		t.logger = t.logger.With(zap.Uint32("conn ID", cc.ConnID()))
-		t.mu.clientConn = newMySQLConn(connClientName, cc.RawConn(), 0, t.reqC, t.respC, nil)
-		t.mu.serverConn = newMySQLConn(connServerName, sc.RawConn(), 0, t.reqC, t.respC, nil)
+		t.mu.clientConn = newMySQLConn(connClientName, cc.RawConn(), 0, t.reqC, t.respC, nil, cc.ConnID())
+		t.mu.serverConn = newMySQLConn(connServerName, sc.RawConn(), 0, t.reqC, t.respC, nil, sc.ConnID())
 
 		setPeer(t.mu.clientConn.msgBuf, t.mu.serverConn.msgBuf)
 
@@ -206,13 +206,13 @@ func (t *tunnel) setError(err error) {
 func (t *tunnel) kickoff() error {
 	csp, scp := t.getPipes()
 	go func() {
-		if err := csp.kickoff(t.ctx); err != nil {
+		if err := csp.kickoff(t.ctx, scp); err != nil {
 			v2.ProxyClientDisconnectCounter.Inc()
 			t.setError(withCode(err, codeClientDisconnect))
 		}
 	}()
 	go func() {
-		if err := scp.kickoff(t.ctx); err != nil {
+		if err := scp.kickoff(t.ctx, csp); err != nil {
 			v2.ProxyServerDisconnectCounter.Inc()
 			t.setError(withCode(err, codeServerDisconnect))
 		}
@@ -401,7 +401,7 @@ func (t *tunnel) getNewServerConn(ctx context.Context) (*MySQLConn, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	p := t.mu.scp
-	return newMySQLConn(connServerName, newConn.RawConn(), 0, t.reqC, t.respC, p.src.msgBuf), nil
+	return newMySQLConn(connServerName, newConn.RawConn(), 0, t.reqC, t.respC, p.src.msgBuf, newConn.ConnID()), nil
 }
 
 func (t *tunnel) getTransferType() transferType {
@@ -462,6 +462,8 @@ type pipe struct {
 	// tun is the tunnel that the pipe belongs to.
 	tun *tunnel
 
+	wg sync.WaitGroup
+
 	testHelper struct {
 		beforeSend func()
 	}
@@ -481,7 +483,7 @@ func (t *tunnel) newPipe(name string, src, dst *MySQLConn) *pipe {
 }
 
 // kickoff starts up the pipe and the data would flow in it.
-func (p *pipe) kickoff(ctx context.Context) (e error) {
+func (p *pipe) kickoff(ctx context.Context, peer *pipe) (e error) {
 	start := func() (bool, error) {
 		p.mu.Lock()
 		defer p.mu.Unlock()
@@ -550,10 +552,8 @@ func (p *pipe) kickoff(ctx context.Context) (e error) {
 	defer finish()
 
 	for ctx.Err() == nil {
-		src := p.src
-		dst := p.dst
-		if p.name == pipeServerToClient && p.tun.transferIntent.Load() && src.writeAvail() > 0 {
-			if err := p.handleTransferIntent(ctx); err != nil {
+		if p.name == pipeServerToClient && p.tun.transferIntent.Load() && p.src.writeAvail() > 0 {
+			if err := p.handleTransferIntent(ctx, &peer.wg); err != nil {
 				p.logger.Error("failed to transfer connection", zap.Error(err))
 			}
 		}
@@ -563,17 +563,27 @@ func (p *pipe) kickoff(ctx context.Context) (e error) {
 		if p.testHelper.beforeSend != nil {
 			p.testHelper.beforeSend()
 		}
-		if _, err := src.sendTo(dst); err != nil {
+		// If the server is in transfer, we wait here until the transfer is finished.
+		p.wg.Wait()
+
+		var peerWg *sync.WaitGroup
+		if peer != nil {
+			peerWg = &peer.wg
+		}
+
+		if _, err := p.src.sendTo(p.dst, &p.tun.transferIntent, peerWg); err != nil {
 			return moerr.NewInternalErrorNoCtx("send message error: %v", err)
 		}
 	}
 	return ctx.Err()
 }
 
-func (p *pipe) handleTransferIntent(ctx context.Context) error {
+func (p *pipe) handleTransferIntent(ctx context.Context, wg *sync.WaitGroup) error {
 	// If it is not in a txn and transfer intent is true, transfer it sync.
 	if p.safeToTransfer() && p.tun != nil {
-		return p.tun.transferSync(ctx)
+		err := p.tun.transferSync(ctx)
+		wg.Done()
+		return err
 	}
 	return nil
 }
