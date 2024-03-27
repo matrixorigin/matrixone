@@ -78,7 +78,11 @@ type checkpointCleaner struct {
 	delWorker *GCWorker
 
 	disableGC bool
-	enableGC  bool
+
+	option struct {
+		sync.RWMutex
+		enableGC bool
+	}
 
 	snapshot struct {
 		sync.RWMutex
@@ -97,11 +101,11 @@ func NewCheckpointCleaner(
 		fs:        fs,
 		ckpClient: ckpClient,
 		disableGC: disableGC,
-		enableGC:  true,
 	}
 	cleaner.delWorker = NewGCWorker(fs, cleaner)
 	cleaner.minMergeCount.count = MinMergeCount
 	cleaner.snapshot.snapshotMeta = logtail.NewSnapshotMeta()
+	cleaner.option.enableGC = true
 	return cleaner
 }
 
@@ -112,11 +116,15 @@ func (c *checkpointCleaner) SetTid(tid uint64) {
 }
 
 func (c *checkpointCleaner) EnableGCForTest() {
-	c.enableGC = true
+	c.option.Lock()
+	defer c.option.Unlock()
+	c.option.enableGC = true
 }
 
 func (c *checkpointCleaner) DisableGCGCForTest() {
-	c.enableGC = false
+	c.option.Lock()
+	defer c.option.Unlock()
+	c.option.enableGC = false
 }
 
 func (c *checkpointCleaner) Replay() error {
