@@ -469,14 +469,10 @@ func (c *DashboardCreator) initTxnMpoolRow() dashboard.Option {
 		c.getMultiHistogram(
 			[]string{
 				c.getMetricWithFilter(`mo_txn_mpool_duration_seconds_bucket`, `type="new"`),
-				c.getMetricWithFilter(`mo_txn_mpool_duration_seconds_bucket`, `type="alloc"`),
-				c.getMetricWithFilter(`mo_txn_mpool_duration_seconds_bucket`, `type="free"`),
 				c.getMetricWithFilter(`mo_txn_mpool_duration_seconds_bucket`, `type="delete"`),
 			},
 			[]string{
 				"new",
-				"alloc",
-				"free",
 				"delete",
 			},
 			[]float64{0.50, 0.8, 0.90, 0.99},

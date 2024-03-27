@@ -35,12 +35,12 @@ var _ NodeT = (*persistedNode)(nil)
 
 type persistedNode struct {
 	common.RefHelper
-	block *baseObject
+	object *baseObject
 }
 
-func newPersistedNode(block *baseObject) *persistedNode {
+func newPersistedNode(object *baseObject) *persistedNode {
 	node := &persistedNode{
-		block: block,
+		object: object,
 	}
 	node.OnZeroCB = node.close
 	return node
@@ -49,11 +49,11 @@ func newPersistedNode(block *baseObject) *persistedNode {
 func (node *persistedNode) close() {}
 
 func (node *persistedNode) Rows() (uint32, error) {
-	stats, err := node.block.meta.MustGetObjectStats()
+	stats, err := node.object.meta.MustGetObjectStats()
 	if err != nil {
 		return 0, err
 	}
-	return stats.BlkCnt(), nil
+	return stats.Rows(), nil
 }
 
 func (node *persistedNode) BatchDedup(
@@ -69,11 +69,11 @@ func (node *persistedNode) BatchDedup(
 }
 
 func (node *persistedNode) ContainsKey(ctx context.Context, key any, blkID uint32) (ok bool, err error) {
-	pkIndex, err := MakeImmuIndex(ctx, node.block.meta, nil, node.block.rt)
+	pkIndex, err := MakeImmuIndex(ctx, node.object.meta, nil, node.object.rt)
 	if err != nil {
 		return
 	}
-	if err = pkIndex.Dedup(ctx, key, node.block.rt, blkID); err == nil {
+	if err = pkIndex.Dedup(ctx, key, node.object.rt, blkID); err == nil {
 		return
 	}
 	if !moerr.IsMoErrCode(err, moerr.OkExpectedPossibleDup) {
@@ -94,7 +94,7 @@ func (node *persistedNode) Foreach(
 	mp *mpool.MPool,
 ) (err error) {
 	var data containers.Vector
-	if data, err = node.block.LoadPersistedColumnData(
+	if data, err = node.object.LoadPersistedColumnData(
 		ctx,
 		readSchema,
 		colIdx,
@@ -150,7 +150,7 @@ func (node *persistedNode) GetRowByFilter(
 	filter *handle.Filter,
 	mp *mpool.MPool,
 ) (blkID uint16, row uint32, err error) {
-	for blkID = uint16(0); blkID < uint16(node.block.meta.BlockCnt()); blkID++ {
+	for blkID = uint16(0); blkID < uint16(node.object.meta.BlockCnt()); blkID++ {
 		var ok bool
 		ok, err = node.ContainsKey(ctx, filter.Val, uint32(blkID))
 		if err != nil {
@@ -160,9 +160,9 @@ func (node *persistedNode) GetRowByFilter(
 			continue
 		}
 		// Note: sort key do not change
-		schema := node.block.meta.GetSchema()
+		schema := node.object.meta.GetSchema()
 		var sortKey containers.Vector
-		sortKey, err = node.block.LoadPersistedColumnData(ctx, schema, schema.GetSingleSortKeyIdx(), mp, blkID)
+		sortKey, err = node.object.LoadPersistedColumnData(ctx, schema, schema.GetSingleSortKeyIdx(), mp, blkID)
 		if err != nil {
 			return
 		}
@@ -185,7 +185,7 @@ func (node *persistedNode) GetRowByFilter(
 
 		// Load persisted commit ts
 		var commitTSVec containers.Vector
-		commitTSVec, err = node.block.LoadPersistedCommitTS(blkID)
+		commitTSVec, err = node.object.LoadPersistedCommitTS(blkID)
 		if err != nil {
 			return
 		}
@@ -193,7 +193,7 @@ func (node *persistedNode) GetRowByFilter(
 
 		// Load persisted deletes
 		view := containers.NewColumnView(0)
-		if err = node.block.FillPersistedDeletes(ctx, blkID, txn, view.BaseView, mp); err != nil {
+		if err = node.object.FillPersistedDeletes(ctx, blkID, txn, view.BaseView, mp); err != nil {
 			return
 		}
 
