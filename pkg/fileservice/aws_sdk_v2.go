@@ -741,7 +741,7 @@ func (o ObjectStorageArguments) credentialsProviderForAwsSDKv2(
 		return credentials.NewStaticCredentialsProvider(o.KeyID, o.KeySecret, o.SessionToken), nil
 	}
 
-	if o.NoDefaultCredentials {
+	if !o.shouldLoadDefaultCredentials() {
 		return nil, moerr.NewInvalidInputNoCtx(
 			"no valid credentials",
 		)

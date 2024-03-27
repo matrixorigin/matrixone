@@ -568,7 +568,7 @@ func (o ObjectStorageArguments) credentialProviderForAliyunSDK(
 
 	if config.Type == nil {
 
-		if o.NoDefaultCredentials {
+		if !o.shouldLoadDefaultCredentials() {
 			return nil, moerr.NewInvalidInputNoCtx(
 				"no valid credentials",
 			)
