@@ -87,6 +87,7 @@ transaction_isolation    REPEATABLE-READ
 transaction_operator_open_log    off
 transaction_prealloc_size    4096
 transaction_read_only    0
+transferred    off
 show variables like 'transaction_isolation';
 Variable_name    Value
 transaction_isolation    REPEATABLE-READ

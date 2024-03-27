@@ -38,6 +38,7 @@ var (
 	ForceGCMethod          = "FORCEGC"
 	InspectMethod          = "INSPECT"
 	LabelMethod            = "LABEL"
+	WorkStateMethod        = "WORKSTATE"
 	SyncCommitMethod       = "SYNCCOMMIT"
 	AddFaultPointMethod    = "ADDFAULTPOINT"
 	BackupMethod           = "BACKUP"
@@ -76,6 +77,7 @@ var (
 		ForceGCMethod:          handleCNGC,
 		InspectMethod:          handleInspectTN(),
 		LabelMethod:            handleSetLabel,
+		WorkStateMethod:        handleSetWorkState,
 		SyncCommitMethod:       handleSyncCommit,
 		AddFaultPointMethod:    handleAddFaultPoint(),
 		BackupMethod:           handleBackup(),

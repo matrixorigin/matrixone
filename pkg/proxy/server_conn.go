@@ -16,14 +16,16 @@ package proxy
 
 import (
 	"context"
-	"github.com/fagongzi/goetty/v2"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/config"
-	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"net"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/fagongzi/goetty/v2"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/frontend"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 )
 
 // serverBaseConnID is the base connection ID for server.
@@ -42,6 +44,7 @@ type ServerConn interface {
 	// After it finished, server connection should be closed immediately because
 	// it is a temp connection.
 	// The first return value indicates that if the execution result is OK.
+	// NB: the stmt can only be simple stmt, which returns OK or Err only.
 	ExecStmt(stmt internalStmt, resp chan<- []byte) (bool, error)
 	// Close closes the connection to CN server.
 	Close() error
@@ -149,6 +152,8 @@ func (s *serverConn) HandleHandshake(
 	case <-ch:
 		return r, err
 	case <-ctx.Done():
+		logutil.Errorf("handshake to cn %s timeout %v, conn ID: %d",
+			s.cnServer.addr, timeout, s.connID)
 		// Return a retryable error.
 		return nil, newConnectErr(context.DeadlineExceeded)
 	}

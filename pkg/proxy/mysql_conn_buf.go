@@ -24,6 +24,8 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"go.uber.org/zap"
 )
 
 const (
@@ -62,18 +64,12 @@ type MySQLConn struct {
 // newMySQLConn creates a new MySQLConn. reqC and respC are used for client
 // connection to handle events from client.
 func newMySQLConn(
-	name string, c net.Conn, sz int, reqC chan IEvent, respC chan []byte, prevBuf *msgBuf, cid uint32,
+	name string, c net.Conn, sz int, reqC chan IEvent, respC chan []byte, cid uint32,
 ) *MySQLConn {
-	mc := &MySQLConn{
+	return &MySQLConn{
 		Conn:   c,
-		msgBuf: prevBuf,
+		msgBuf: newMsgBuf(name, c, sz, reqC, respC, cid),
 	}
-	if mc.msgBuf == nil {
-		mc.msgBuf = newMsgBuf(name, c, sz, reqC, respC, cid)
-	} else {
-		mc.msgBuf.src = c
-	}
-	return mc
 }
 
 // msgBuf holds a buffer to save MySQL packets. It is mainly used to
@@ -174,17 +170,19 @@ func (b *msgBuf) preRecv() (int, error) {
 }
 
 // consumeMsg consumes the MySQL packet in the buffer, handles it by event
-// mechanism. Returns true if the command is handled, means it does not need
+// mechanism.
+// The first return value is true if the command is handled, means it does not need
 // to be sent through tunnel anymore; false otherwise.
-func (b *msgBuf) consumeMsg(msg []byte, transfer *atomic.Bool, wg *sync.WaitGroup) bool {
+// The second return value is true means that the transfer happened.
+func (b *msgBuf) consumeMsg(msg []byte, transfer *atomic.Bool, wg *sync.WaitGroup) (bool, bool) {
 	if b.reqC == nil {
-		return false
+		return false, false
 	}
 	// For the client->server pipe, we catch some statements to do some more actions.
 	if b.name == connClientName {
-		return b.consumeClient(msg)
+		return b.consumeClient(msg), false
 	} else {
-		return b.consumeServer(msg, transfer, wg)
+		return false, b.consumeServer(msg, transfer, wg)
 	}
 }
 
@@ -216,14 +214,18 @@ func (b *msgBuf) consumeServer(msg []byte, transfer *atomic.Bool, wg *sync.WaitG
 
 	if wg != nil && transfer != nil && !inTxn && transfer.Load() {
 		wg.Add(1)
+		return true
 	}
-
 	return false
 }
 
 // handleOKPacket handles the OK packet from server to update the txn state.
 func (b *msgBuf) handleOKPacket(msg []byte) bool {
 	var mp *frontend.MysqlProtocolImpl
+	// the sequence ID should be 1 for OK packet.
+	if msg[3] != 1 {
+		return b.setTxnStatus(0)
+	}
 	pos := 5
 	_, pos, ok := mp.ReadIntLenEnc(msg, pos)
 	if !ok {
@@ -269,6 +271,19 @@ func (b *msgBuf) isInTxn() bool {
 	return b.inTxn.Load()
 }
 
+func (b *msgBuf) debugLogs(data []byte, dataLeft int) {
+	logger := logutil.GetSkip1Logger()
+	if logger.Core().Enabled(zap.DebugLevel) {
+		if b.name == connClientName {
+			logutil.Debugf("proxy debug: client, conn ID: %d, data left: %d, data: %v",
+				b.cid, dataLeft, data)
+		} else {
+			logutil.Debugf("proxy debug: server, conn ID: %d, in txn: %v, data left: %d, data: %v",
+				b.cid, b.isInTxn(), dataLeft, data)
+		}
+	}
+}
+
 // sendTo sends the data in buffer to destination.
 func (b *msgBuf) sendTo(dst io.Writer, transfer *atomic.Bool, wg *sync.WaitGroup) (bool, error) {
 	l, err := b.preRecv()
@@ -302,8 +317,19 @@ func (b *msgBuf) sendTo(dst io.Writer, transfer *atomic.Bool, wg *sync.WaitGroup
 		writePos += extraLen
 		dataLeft = 0
 	}
-	if dataLeft == 0 && b.consumeMsg(b.buf[readPos:writePos], transfer, wg) {
-		return false, nil
+
+	// add debug logs
+	b.debugLogs(b.buf[readPos:writePos], dataLeft)
+
+	var handled bool
+	var transferred bool
+
+	if dataLeft == 0 {
+		handled, transferred = b.consumeMsg(b.buf[readPos:writePos], transfer, wg)
+		// r is true, means the query has been handled and no transfer happened.
+		if handled {
+			return false, nil
+		}
 	}
 
 	b.writeMu.Lock()
@@ -327,7 +353,7 @@ func (b *msgBuf) sendTo(dst io.Writer, transfer *atomic.Bool, wg *sync.WaitGroup
 			return false, io.ErrShortWrite
 		}
 	}
-	return false, err
+	return transferred, err
 }
 
 // receive receives a MySQL packet. This is used in test only.
