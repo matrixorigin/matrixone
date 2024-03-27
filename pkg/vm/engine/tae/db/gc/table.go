@@ -130,14 +130,14 @@ func isSnapshotRefers(obj *ObjectEntry, snapShotList []types.TS) bool {
 		mid := left + (right-left)/2
 		if snapShotList[mid].GreaterEq(&obj.createTS) && snapShotList[mid].Less(&obj.dropTS) {
 			logutil.Infof("isSnapshotRefers: %s, create %v, drop %v", snapShotList[mid].ToString(), obj.createTS.ToString(), obj.dropTS.ToString())
-			return false
+			return true
 		} else if snapShotList[mid].Less(&obj.createTS) {
 			left = mid + 1
 		} else {
 			right = mid - 1
 		}
 	}
-	return true
+	return false
 }
 
 func (t *GCTable) UpdateTable(data *logtail.CheckpointData) {
@@ -373,17 +373,19 @@ func (t *GCTable) ReadTable(ctx context.Context, name string, size int64, fs *ob
 
 // For test
 func (t *GCTable) Compare(table *GCTable) bool {
-	if len(t.objects) != len(table.objects) {
-		return false
-	}
-	for name, entry := range t.objects {
-		object := table.objects[name]
+	for name, entry := range table.objects {
+		object := t.objects[name]
 		if object == nil {
+			logutil.Infof("object %s is nil", name)
 			return false
 		}
 		if !entry.commitTS.Equal(&object.commitTS) {
+			logutil.Infof("object %s commitTS is not equal", name)
 			return false
 		}
+	}
+	if len(t.objects) != len(table.objects) {
+		return false
 	}
 	return true
 }

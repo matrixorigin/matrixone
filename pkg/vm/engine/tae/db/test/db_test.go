@@ -6439,7 +6439,6 @@ func TestAppendAndGC(t *testing.T) {
 }
 
 func TestSnapshotGC(t *testing.T) {
-	t.Skip("Will be fixed in Refactor GC codes phase 2")
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
@@ -6453,7 +6452,7 @@ func TestSnapshotGC(t *testing.T) {
 	db.DiskCleaner.GetCleaner().SetMinMergeCountForTest(2)
 
 	snapshotSchema := catalog.MockSnapShotSchema()
-	snapshotSchema.BlockMaxRows = 1
+	snapshotSchema.BlockMaxRows = 2
 	snapshotSchema.ObjectMaxBlocks = 1
 	schema1 := catalog.MockSchemaAll(13, 2)
 	schema1.BlockMaxRows = 10
@@ -6499,7 +6498,7 @@ func TestSnapshotGC(t *testing.T) {
 				break
 			}
 			i++
-			time.Sleep(250 * time.Millisecond)
+			time.Sleep(350 * time.Millisecond)
 			snapshot := types.BuildTS(time.Now().UTC().UnixNano(), 0)
 			attrs := []string{"tid", "ts"}
 			vecTypes := []types.Type{types.T_uint64.ToType(), types.T_TS.ToType()}
@@ -6546,7 +6545,7 @@ func TestSnapshotGC(t *testing.T) {
 		return db.DiskCleaner.GetCleaner().GetMinMerged() != nil
 	})
 	assert.NotNil(t, minMerged)
-	tae.Restart(ctx)
+	tae.RestartDisableGC(ctx)
 	db = tae.DB
 	db.DiskCleaner.GetCleaner().SetMinMergeCountForTest(2)
 	db.DiskCleaner.GetCleaner().SetTid(rel3.ID())

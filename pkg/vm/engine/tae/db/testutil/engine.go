@@ -105,6 +105,22 @@ func (e *TestEngine) Restart(ctx context.Context) {
 		})
 	assert.NoError(e.t, err)
 }
+func (e *TestEngine) RestartDisableGC(ctx context.Context) {
+	_ = e.DB.Close()
+	var err error
+	e.DB, err = db.Open(ctx, e.Dir, e.Opts)
+	// only ut executes this checker
+	e.DB.DiskCleaner.GetCleaner().DisableGCGCForTest()
+	e.DB.DiskCleaner.GetCleaner().AddChecker(
+		func(item any) bool {
+			min := e.DB.TxnMgr.MinTSForTest()
+			ckp := item.(*checkpoint.CheckpointEntry)
+			//logutil.Infof("min: %v, checkpoint: %v", min.ToString(), checkpoint.GetStart().ToString())
+			end := ckp.GetEnd()
+			return !end.GreaterEq(&min)
+		})
+	assert.NoError(e.t, err)
+}
 
 func (e *TestEngine) Close() error {
 	err := e.DB.Close()
