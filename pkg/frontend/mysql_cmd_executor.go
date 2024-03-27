@@ -3800,6 +3800,7 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 			return
 		}
 	case *tree.CreateAccount:
+		ses.InvalidatePrivilegeCache()
 		err = mce.handleCreateAccount(requestCtx, st, proc)
 		if err != nil {
 			return
