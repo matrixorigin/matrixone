@@ -313,7 +313,9 @@ func (m *mysqlTaskStorage) UpdateAsyncTask(ctx context.Context, tasks []task.Asy
 	n := 0
 	for _, t := range tasks {
 		err := func() error {
-			execResult := &task.ExecuteResult{}
+			execResult := &task.ExecuteResult{
+				Code: task.ResultCode_Success,
+			}
 			if t.ExecuteResult != nil {
 				execResult.Code = t.ExecuteResult.Code
 				execResult.Error = t.ExecuteResult.Error

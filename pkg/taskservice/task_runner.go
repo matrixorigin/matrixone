@@ -138,6 +138,8 @@ type taskRunner struct {
 	runningTasks struct {
 		sync.RWMutex
 		m map[uint64]runningTask
+
+		completedTasks map[uint64]struct{}
 	}
 
 	retryTasks struct {
@@ -188,6 +190,7 @@ func NewTaskRunner(runnerID string, service TaskService, claimFn func(string) bo
 	r.waitTasksC = make(chan runningTask, r.options.maxWaitTasks)
 	r.doneC = make(chan runningTask, r.options.maxWaitTasks)
 	r.runningTasks.m = make(map[uint64]runningTask)
+	r.runningTasks.completedTasks = make(map[uint64]struct{})
 	r.pendingTaskHandle = make(chan TaskHandler, 20)
 	r.daemonTasks.m = make(map[uint64]*daemonTask)
 	return r
@@ -326,7 +329,9 @@ func (r *taskRunner) fetch(ctx context.Context) {
 				r.logger.Error("fetch task failed", zap.Error(err))
 				break
 			}
-			r.addTasks(ctx, tasks)
+			for _, t := range tasks {
+				r.addToWait(ctx, t)
+			}
 		}
 	}
 }
@@ -342,25 +347,26 @@ func (r *taskRunner) doFetch() ([]task.AsyncTask, error) {
 		return nil, err
 	}
 	newTasks := tasks[:0]
-	r.runningTasks.RLock()
+	r.runningTasks.Lock()
 	for _, t := range tasks {
 		if _, ok := r.runningTasks.m[t.ID]; !ok {
-			newTasks = append(newTasks, t)
+			if _, ok := r.runningTasks.completedTasks[t.ID]; !ok {
+				r.logger.Info("new task fetched",
+					zap.String("task", t.DebugString()))
+				newTasks = append(newTasks, t)
+			}
 		}
 	}
-	r.runningTasks.RUnlock()
+	for k := range r.runningTasks.completedTasks {
+		delete(r.runningTasks.completedTasks, k)
+	}
+	r.runningTasks.Unlock()
+
 	if len(newTasks) == 0 {
 		return nil, nil
 	}
 
-	r.logger.Debug("new task fetched", zap.Int("count", len(newTasks)))
 	return newTasks, nil
-}
-
-func (r *taskRunner) addTasks(ctx context.Context, tasks []task.AsyncTask) {
-	for _, t := range tasks {
-		r.addToWait(ctx, t)
-	}
 }
 
 func (r *taskRunner) addToWait(ctx context.Context, task task.AsyncTask) bool {
@@ -378,7 +384,8 @@ func (r *taskRunner) addToWait(ctx context.Context, task task.AsyncTask) bool {
 		r.runningTasks.Lock()
 		r.runningTasks.m[task.ID] = rt
 		r.runningTasks.Unlock()
-		r.logger.Debug("task added", zap.String("task", task.DebugString()))
+		r.logger.Info("task added to wait queue",
+			zap.String("task", task.DebugString()))
 		return true
 	}
 }
@@ -595,7 +602,9 @@ func (r *taskRunner) doHeartbeat(ctx context.Context) {
 				r.removeRunningTask(rt.task.ID)
 				rt.cancel()
 			}
-			r.logger.Error("task heartbeat failed", zap.Error(err))
+			r.logger.Error("task heartbeat failed",
+				zap.String("task", rt.task.DebugString()),
+				zap.Error(err))
 		}
 	}
 }
@@ -604,6 +613,8 @@ func (r *taskRunner) removeRunningTask(id uint64) {
 	r.runningTasks.Lock()
 	defer r.runningTasks.Unlock()
 	delete(r.runningTasks.m, id)
+	r.runningTasks.completedTasks[id] = struct{}{}
+	r.logger.Info("task removed", zap.Uint64("task-id", id))
 }
 
 func (r *taskRunner) getExecutor(code task.TaskCode) (TaskExecutor, error) {
