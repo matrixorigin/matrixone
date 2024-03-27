@@ -2895,6 +2895,64 @@ func (c *Compile) compileSample(n *plan.Node, ss []*Scope) []*Scope {
 
 func (c *Compile) compileMergeGroup(n *plan.Node, ss []*Scope, ns []*plan.Node) []*Scope {
 	currentFirstFlag := c.anal.isFirst
+
+	// for less memory usage while merge group,
+	// we do not run the group-operator in parallel once this has a distinct aggregation.
+	// because the parallel need to store all the source data in the memory for merging.
+	// we construct a pipeline like the following description for this case:
+	//
+	// all the operators from ss[0] to ss[last] send the data to only one group-operator.
+	// this group-operator sends its result to the merge-group-operator.
+	// todo: I cannot remove the merge-group action directly, because the merge-group action is used to fill the partial result.
+	groupInfo := constructGroup(c.ctx, n, ns[n.Children[0]], 0, 0, false, 0, c.proc)
+	defer groupInfo.Release()
+	if aggregations := groupInfo.AggsNew; len(aggregations) > 0 {
+		hasDistinct := false
+
+		for _, agg := range aggregations {
+			if agg.IsDistinct() {
+				hasDistinct = true
+				break
+			}
+		}
+
+		if hasDistinct {
+			for i := range ss {
+				c.anal.isFirst = currentFirstFlag
+				if containBrokenNode(ss[i]) {
+					ss[i] = c.newMergeScope([]*Scope{ss[i]})
+				}
+			}
+			c.anal.isFirst = false
+
+			mergeToGroup := c.newMergeScope(ss)
+			mergeToGroup.appendInstruction(
+				vm.Instruction{
+					Op:      vm.Group,
+					Idx:     c.anal.curr,
+					IsFirst: c.anal.isFirst,
+					Arg:     constructGroup(c.ctx, n, ns[n.Children[0]], 0, 0, false, 0, c.proc),
+			})
+
+
+			rs := c.newMergeScope([]*Scope{mergeToGroup})
+			arg := constructMergeGroup(true)
+			if ss[0].PartialResults != nil {
+				arg.PartialResults = ss[0].PartialResults
+				arg.PartialResultTypes = ss[0].PartialResultTypes
+				ss[0].PartialResults = nil
+				ss[0].PartialResultTypes = nil
+			}
+			rs.Instructions[0].Arg.Release()
+			rs.Instructions[0] = vm.Instruction{
+				Op:  vm.MergeGroup,
+				Idx: c.anal.curr,
+				Arg: arg,
+			}
+			return []*Scope{rs}
+		}
+	}
+
 	for i := range ss {
 		c.anal.isFirst = currentFirstFlag
 		if containBrokenNode(ss[i]) {
