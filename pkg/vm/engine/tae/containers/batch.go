@@ -383,7 +383,7 @@ func (bat *Batch) ReadFrom(r io.Reader) (n int64, err error) {
 	if size == 0 {
 		return
 	}
-	bat.Deletes = &nulls.Bitmap{}
+	bat.Deletes = nulls.New()
 	buf = make([]byte, size)
 	if _, err = r.Read(buf); err != nil {
 		return

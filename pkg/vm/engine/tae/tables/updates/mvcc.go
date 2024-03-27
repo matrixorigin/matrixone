@@ -125,7 +125,7 @@ func (n *AppendMVCCHandle) CollectAppendLocked(
 	minRow = n.appends.GetNodeByOffset(startOffset).startRow
 	maxRow = node.maxRow
 
-	aborts = &nulls.Bitmap{}
+	aborts = nulls.New()
 	commitTSVec = containers.MakeVector(types.T_TS.ToType(), mp)
 	abortVec = containers.MakeVector(types.T_bool.ToType(), mp)
 	n.appends.LoopOffsetRange(
@@ -795,7 +795,7 @@ func (n *MVCCHandle) CollectDeleteLocked(
 			pkVec.Close()
 		}
 		pkVec = containers.MakeVector(pkType, mp)
-		aborts = &nulls.Bitmap{}
+		aborts = nulls.New()
 		id := objectio.NewBlockidWithObjectID(&n.meta.ID, n.blkID)
 		n.deletes.LoopChain(
 			func(node *DeleteNode) bool {

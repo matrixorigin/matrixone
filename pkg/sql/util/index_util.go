@@ -86,7 +86,6 @@ func BuildUniqueKeyBatch(vecs []*vector.Vector, attrs []string, parts []string, 
 	if len(parts) > 1 {
 		isCompoundIndex = true
 	}
-	//bitMap := new(nulls.Nulls)
 	var bitMap *nulls.Nulls
 	if isCompoundIndex {
 		cIndexVecMap := make(map[string]*vector.Vector)
@@ -158,7 +157,7 @@ func serialWithCompacted(vs []*vector.Vector, proc *process.Process, packers *Pa
 			packers.ps[i].Reset()
 		}
 	}()
-	bitMap := new(nulls.Nulls)
+	bitMap := nulls.New()
 
 	ps := packers.ps
 	for _, v := range vs {
@@ -491,7 +490,7 @@ func serialWithCompacted(vs []*vector.Vector, proc *process.Process, packers *Pa
 func serialWithoutCompacted(vs []*vector.Vector, proc *process.Process, packers *PackerList) (*vector.Vector, *nulls.Nulls, error) {
 	if len(vs) == 0 {
 		// return empty vector and empty bitmap
-		return proc.GetVector(types.T_varchar.ToType()), new(nulls.Nulls), nil
+		return proc.GetVector(types.T_varchar.ToType()), nulls.New(), nil
 	}
 
 	rowCount := vs[0].Length()
@@ -528,7 +527,7 @@ func serialWithoutCompacted(vs []*vector.Vector, proc *process.Process, packers 
 		}
 	}
 
-	return vec, new(nulls.Nulls), nil
+	return vec, nulls.New(), nil
 }
 
 func compactSingleIndexCol(v *vector.Vector, proc *process.Process) (*vector.Vector, *nulls.Nulls, error) {

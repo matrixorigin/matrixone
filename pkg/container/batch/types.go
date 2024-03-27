@@ -110,7 +110,7 @@ func (m *EncodeBatch) UnmarshalBinary(data []byte) error {
 		size := types.DecodeInt32(buf[:4])
 		buf = buf[4:]
 
-		vec := new(vector.Vector)
+		vec := vector.NewEmptyVec()
 		if err := vec.UnmarshalBinary(buf[:size]); err != nil {
 			return err
 		}

@@ -17,14 +17,17 @@ package vector
 import (
 	"bytes"
 	"fmt"
+	"runtime/debug"
 	"slices"
 	"sort"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/shuffle"
 )
@@ -61,6 +64,10 @@ type Vector struct {
 
 	// FIXME: Bad design! Will be deleted soon.
 	isBin bool
+
+	Debug string
+
+	FreeMsg string
 }
 
 type typedSlice struct {
@@ -117,7 +124,7 @@ func (v *Vector) ResetWithNewType(t *types.Type) {
 	if v.area != nil {
 		v.area = v.area[:0]
 	}
-	v.nsp = nulls.Nulls{}
+	v.nsp.Reset()
 	v.length = 0
 	v.capacity = cap(v.data) / v.typ.TypeSize()
 	v.sorted = false
@@ -263,29 +270,44 @@ func GetArrayAt[T types.RealNumbers](v *Vector, i int) []T {
 	return types.GetArray[T](&bs[i], v.area)
 }
 
+func NewEmptyVec() *Vector {
+	vec := NewVecFromReuse()
+	vec.nsp = *nulls.New()
+	return vec
+}
+
 func NewVec(typ types.Type) *Vector {
-	vec := &Vector{
-		typ:   typ,
-		class: FLAT,
+	vec := NewVecFromReuse()
+	*vec = Vector{
+		typ:     typ,
+		class:   FLAT,
+		nsp:     *nulls.New(),
+		FreeMsg: vec.FreeMsg,
 	}
 
 	return vec
 }
 
 func NewConstNull(typ types.Type, length int, mp *mpool.MPool) *Vector {
-	vec := &Vector{
-		typ:    typ,
-		class:  CONSTANT,
-		length: length,
+	vec := NewVecFromReuse()
+	*vec = Vector{
+		typ:     typ,
+		class:   CONSTANT,
+		length:  length,
+		nsp:     *nulls.New(),
+		FreeMsg: vec.FreeMsg,
 	}
 
 	return vec
 }
 
 func NewConstFixed[T any](typ types.Type, val T, length int, mp *mpool.MPool) (vec *Vector, err error) {
-	vec = &Vector{
-		typ:   typ,
-		class: CONSTANT,
+	vec = NewVecFromReuse()
+	*vec = Vector{
+		typ:     typ,
+		class:   CONSTANT,
+		nsp:     *nulls.New(),
+		FreeMsg: vec.FreeMsg,
 	}
 
 	if length > 0 {
@@ -296,9 +318,12 @@ func NewConstFixed[T any](typ types.Type, val T, length int, mp *mpool.MPool) (v
 }
 
 func NewConstBytes(typ types.Type, val []byte, length int, mp *mpool.MPool) (vec *Vector, err error) {
-	vec = &Vector{
-		typ:   typ,
-		class: CONSTANT,
+	vec = NewVecFromReuse()
+	*vec = Vector{
+		typ:     typ,
+		class:   CONSTANT,
+		nsp:     *nulls.New(),
+		FreeMsg: vec.FreeMsg,
 	}
 
 	if length > 0 {
@@ -310,9 +335,12 @@ func NewConstBytes(typ types.Type, val []byte, length int, mp *mpool.MPool) (vec
 
 // NewConstArray Creates a Const_Array Vector
 func NewConstArray[T types.RealNumbers](typ types.Type, val []T, length int, mp *mpool.MPool) (vec *Vector, err error) {
-	vec = &Vector{
-		typ:   typ,
-		class: CONSTANT,
+	vec = NewVecFromReuse()
+	*vec = Vector{
+		typ:     typ,
+		class:   CONSTANT,
+		nsp:     *nulls.New(),
+		FreeMsg: vec.FreeMsg,
 	}
 
 	if length > 0 {
@@ -422,6 +450,9 @@ func (v *Vector) Free(mp *mpool.MPool) {
 
 	v.nsp.Reset()
 	v.sorted = false
+	v.FreeMsg = string(debug.Stack())
+
+	reuse.Free[Vector](v, nil)
 }
 
 func (v *Vector) MarshalBinary() ([]byte, error) {
@@ -629,11 +660,14 @@ func (v *Vector) Dup(mp *mpool.MPool) (*Vector, error) {
 
 	var err error
 
-	w := &Vector{
-		class:  v.class,
-		typ:    v.typ,
-		length: v.length,
-		sorted: v.sorted,
+	w := NewVecFromReuse()
+	*w = Vector{
+		class:   v.class,
+		typ:     v.typ,
+		length:  v.length,
+		sorted:  v.sorted,
+		nsp:     *nulls.New(),
+		FreeMsg: w.FreeMsg,
 	}
 	w.GetNulls().InitWith(v.GetNulls())
 
@@ -2150,6 +2184,9 @@ func (v *Vector) UnionOne(w *Vector, sel int64, mp *mpool.MPool) error {
 		var vs, ws []types.Varlena
 		ToSlice(v, &vs)
 		ToSlice(w, &ws)
+		if len(ws) <= int(sel) {
+			logutil.Infof("bad")
+		}
 		err := BuildVarlenaFromValena(v, &vs[oldLen], &ws[sel], &w.area, mp)
 		if err != nil {
 			return err

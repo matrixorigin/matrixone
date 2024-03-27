@@ -50,15 +50,6 @@ func resetGenerateSeriesState(proc *process.Process, arg *Argument) error {
 		arg.generateSeries.state = genBatch
 
 		defer func() {
-			if startVec != nil {
-				startVec.Free(proc.Mp())
-			}
-			if endVec != nil {
-				endVec.Free(proc.Mp())
-			}
-			if stepVec != nil {
-				stepVec.Free(proc.Mp())
-			}
 			if startVecTmp != nil {
 				startVecTmp.Free(proc.Mp())
 			}
