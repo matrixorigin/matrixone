@@ -75,10 +75,7 @@ type Argument struct {
 	Cond       *plan.Expr
 	Conditions [][]*plan.Expr
 	bat        *batch.Batch
-	lastpos    int
-	count      int
-	sel        int
-	matched    bool
+	lastrow    int
 
 	HashOnPK           bool
 	IsShuffle          bool
