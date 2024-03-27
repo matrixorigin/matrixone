@@ -384,10 +384,8 @@ func (t *GCTable) Compare(table *GCTable) bool {
 			return false
 		}
 	}
-	if len(t.objects) != len(table.objects) {
-		return false
-	}
-	return true
+
+	return len(t.objects) == len(table.objects)
 }
 
 func (t *GCTable) String() string {

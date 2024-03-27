@@ -351,7 +351,6 @@ func (c *checkpointCleaner) tryGC(data *logtail.CheckpointData, gckp *checkpoint
 		logutil.Errorf("GetSnapshots failed: %v", err.Error())
 		return nil
 	}
-	logutil.Infof("snapshots is %v", snapshots)
 	gc := c.softGC(gcTable, gckp, snapshots)
 	// Delete files after softGC
 	// TODO:Requires Physical Removal Policy
@@ -506,7 +505,6 @@ func (c *checkpointCleaner) Process() {
 		// TODO
 		return
 	}
-	logutil.Infof("input is %v", input.String())
 	c.updateInputs(input)
 	c.updateMaxConsumed(candidates[len(candidates)-1])
 
