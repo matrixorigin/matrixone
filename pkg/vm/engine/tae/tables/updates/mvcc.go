@@ -1019,7 +1019,7 @@ func (n *MVCCHandle) TryDeleteByDeltaloc(txn txnif.AsyncTxn, deltaLoc objectio.L
 	if err != nil {
 		return
 	}
-	bat, err := blockio.LoadTombstoneColumns(
+	bat, release, err := blockio.LoadTombstoneColumns(
 		txn.GetContext(),
 		[]uint16{0},
 		nil,
@@ -1027,6 +1027,7 @@ func (n *MVCCHandle) TryDeleteByDeltaloc(txn txnif.AsyncTxn, deltaLoc objectio.L
 		deltaLoc,
 		nil,
 	)
+	defer release()
 	if err == nil {
 		ok = true
 	}
