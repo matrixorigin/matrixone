@@ -485,7 +485,7 @@ func (blk *baseObject) foreachPersistedDeletes(
 	if deletes == nil || err != nil {
 		return
 	}
-	//defer deletes.Close()
+	defer deletes.Close()
 	if persistedByCN {
 		if !visible {
 			return

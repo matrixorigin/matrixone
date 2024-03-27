@@ -53,7 +53,7 @@ func (node *persistedNode) Rows() (uint32, error) {
 	if err != nil {
 		return 0, err
 	}
-	return stats.BlkCnt(), nil
+	return stats.Rows(), nil
 }
 
 func (node *persistedNode) BatchDedup(
