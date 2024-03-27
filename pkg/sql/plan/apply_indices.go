@@ -241,7 +241,6 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 		pkPos = node.TableDef.Name2ColIndex[node.TableDef.Pkey.Names[0]]
 	}
 
-	oldTags := node.BindingTags
 	indexes := node.TableDef.Indexes
 	sort.Slice(indexes, func(i, j int) bool {
 		return (indexes[i].Unique && !indexes[j].Unique) || (indexes[i].Unique == indexes[j].Unique && len(indexes[i].Parts) > len(indexes[j].Parts))
@@ -549,11 +548,10 @@ END0:
 			},
 		})
 		joinNodeID := builder.appendNode(&plan.Node{
-			NodeType:    plan.Node_JOIN,
-			Children:    []int32{nodeID, idxTableNodeID},
-			JoinType:    plan.Node_INDEX,
-			OnList:      []*plan.Expr{joinCond},
-			BindingTags: oldTags,
+			NodeType: plan.Node_JOIN,
+			Children: []int32{nodeID, idxTableNodeID},
+			JoinType: plan.Node_INDEX,
+			OnList:   []*plan.Expr{joinCond},
 		}, builder.ctxByNode[nodeID])
 
 		return joinNodeID
@@ -672,11 +670,10 @@ END0:
 			},
 		})
 		joinNodeID := builder.appendNode(&plan.Node{
-			NodeType:    plan.Node_JOIN,
-			Children:    []int32{nodeID, idxTableNodeID},
-			JoinType:    plan.Node_INDEX,
-			OnList:      []*plan.Expr{joinCond},
-			BindingTags: oldTags,
+			NodeType: plan.Node_JOIN,
+			Children: []int32{nodeID, idxTableNodeID},
+			JoinType: plan.Node_INDEX,
+			OnList:   []*plan.Expr{joinCond},
 		}, builder.ctxByNode[nodeID])
 
 		return joinNodeID
