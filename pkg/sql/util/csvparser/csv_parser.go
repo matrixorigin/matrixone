@@ -29,9 +29,9 @@ import (
 )
 
 var (
-	errUnterminatedQuotedField = moerr.NewSyntaxErrorNoCtx("syntax error: unterminated quoted field")
-	errDanglingBackslash       = moerr.NewSyntaxErrorNoCtx("syntax error: no character after backslash")
-	errUnexpectedQuoteField    = moerr.NewSyntaxErrorNoCtx("syntax error: cannot have consecutive fields without separator")
+	errUnterminatedQuotedField = moerr.NewInvalidInputNoCtx("csvParser error: unterminated quoted field")
+	errDanglingBackslash       = moerr.NewInvalidInputNoCtx("csvParser error: no character after backslash")
+	errUnexpectedQuoteField    = moerr.NewInvalidInputNoCtx("csvParser error: cannot have consecutive fields without separator")
 	// LargestEntryLimit is the max size for reading file to buf
 	LargestEntryLimit       = 120 * 1024 * 1024
 	BufferSizeScale         = int64(5)

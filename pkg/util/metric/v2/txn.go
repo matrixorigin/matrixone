@@ -287,8 +287,6 @@ var (
 			Buckets:   getDurationBuckets(),
 		}, []string{"type"})
 	TxnMpoolNewDurationHistogram    = txnMpoolDurationHistogram.WithLabelValues("new")
-	TxnMpoolAllocDurationHistogram  = txnMpoolDurationHistogram.WithLabelValues("alloc")
-	TxnMpoolFreeDurationHistogram   = txnMpoolDurationHistogram.WithLabelValues("free")
 	TxnMpoolDeleteDurationHistogram = txnMpoolDurationHistogram.WithLabelValues("delete")
 
 	txnReaderDurationHistogram = prometheus.NewHistogramVec(
