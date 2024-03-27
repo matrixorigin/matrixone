@@ -1265,7 +1265,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			return nil, err
 		}
 
-		tableDef := preNode.GetTableDef()
+		tableDef := node.GetTableDef()
 		if tableDef.Partition != nil {
 			partitionIdx := len(preNode.ProjectList)
 			partitionExpr := DeepCopyExpr(tableDef.Partition.PartitionExpression)
