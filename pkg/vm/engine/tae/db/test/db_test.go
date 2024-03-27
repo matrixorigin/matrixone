@@ -6489,8 +6489,8 @@ func TestSnapshotGC(t *testing.T) {
 	start := types.BuildTS(0, 0)
 	snapshots = append(snapshots, start)
 	var snapWG sync.WaitGroup
+	snapWG.Add(1)
 	go func() {
-		snapWG.Add(1)
 		i := 0
 		for {
 			if i > 3 {
