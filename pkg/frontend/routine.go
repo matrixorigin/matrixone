@@ -437,8 +437,9 @@ func (rt *Routine) migrateConnectionFrom(resp *query.MigrateConnFromResponse) er
 	resp.DB = ses.GetDatabaseName()
 	for _, st := range ses.GetPrepareStmts() {
 		resp.PrepareStmts = append(resp.PrepareStmts, &query.PrepareStmt{
-			Name: st.Name,
-			SQL:  st.Sql,
+			Name:       st.Name,
+			SQL:        st.Sql,
+			ParamTypes: st.ParamTypes,
 		})
 	}
 	return nil
