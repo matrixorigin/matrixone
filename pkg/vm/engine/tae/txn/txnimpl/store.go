@@ -775,15 +775,12 @@ func (store *txnStore) PrepareWAL() (err error) {
 	}
 
 	// Apply the record from the command list.
-	// Split the commands by max message size.
-	for store.cmdMgr.cmd.MoreCmds() {
-		logEntry, err := store.cmdMgr.ApplyTxnRecord(store.txn)
-		if err != nil {
-			return err
-		}
-		if logEntry != nil {
-			store.logs = append(store.logs, logEntry)
-		}
+	logEntry, err := store.cmdMgr.ApplyTxnRecord(store.txn)
+	if err != nil {
+		return err
+	}
+	if logEntry != nil {
+		store.logs = append(store.logs, logEntry)
 	}
 
 	t1 := time.Now()

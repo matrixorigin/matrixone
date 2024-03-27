@@ -66,7 +66,8 @@ func (mgr *commandManager) ApplyTxnRecord(txn txnif.AsyncTxn) (logEntry entry.En
 	logEntry = entry.GetBase()
 	logEntry.SetType(IOET_WALEntry_TxnRecord)
 
-	logEntry.AppendPreCallback(func() error {
+	// delay and parallelize the marshal call
+	logEntry.RegisterPreCallback(func() error {
 		var buf []byte
 		if buf, err = mgr.cmd.MarshalBinary(); err != nil {
 			return err

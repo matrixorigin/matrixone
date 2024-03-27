@@ -245,7 +245,7 @@ func GetBase() *Base {
 	return b
 }
 
-func (b *Base) AppendPreCallback(cb func() error) {
+func (b *Base) RegisterPreCallback(cb func() error) {
 	b.preCallbacks = append(b.preCallbacks, cb)
 }
 
@@ -279,6 +279,7 @@ func (b *Base) reset() {
 	b.t0 = time.Time{}
 	b.printTime = false
 	b.err = nil
+	b.preCallbacks = nil
 }
 func (b *Base) GetInfoBuf() []byte {
 	return b.infobuf
@@ -450,7 +451,8 @@ func (b *Base) ReadAt(r *os.File, offset int) (int, error) {
 }
 
 func (b *Base) PrepareWrite() {
-	b.AppendPreCallback(func() error {
+	// delay and parallelize the marshal call
+	b.RegisterPreCallback(func() error {
 		if b.info == nil {
 			return nil
 		}

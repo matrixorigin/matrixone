@@ -298,12 +298,19 @@ func (r *recordEntry) replay(replayer *replayer) (addr *common.ClosedIntervals) 
 }
 func (r *recordEntry) append(e *entry.Entry) {
 	r.entries = append(r.entries, e)
-	r.meta.addr[e.Lsn] = uint64(r.payloadSize)
-	r.payloadSize += uint64(e.GetSize())
 }
 
 func (r *recordEntry) prepareRecord() (size int) {
 	var err error
+
+	for _, e := range r.entries {
+		if err := e.Entry.ExecutePreCallbacks(); err != nil {
+			panic(err)
+		}
+		r.meta.addr[e.Lsn] = uint64(r.payloadSize)
+		r.payloadSize += uint64(e.GetSize())
+	}
+
 	r.payload, err = r.Marshal()
 	if err != nil {
 		panic(err)

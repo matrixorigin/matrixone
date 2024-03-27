@@ -31,7 +31,7 @@ var (
 	defaultSendQueueSize         = 10240
 	defaultBufferSize            = 1024
 	defaultPayloadCopyBufferSize = 16 * 1024
-	defaultMaxMessageSize        = 1024 * 1024 * 100 // 100MB
+	defaultMaxMessageSize        = 1024 * 1024 * 1024 * 10 // 10GB
 )
 
 // Config rpc client config
