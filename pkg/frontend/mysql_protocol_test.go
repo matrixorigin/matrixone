@@ -38,7 +38,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
@@ -2164,7 +2163,6 @@ func FuzzParseExecuteData(f *testing.F) {
 		Name:        preparePlan.GetDcl().GetPrepare().GetName(),
 		PreparePlan: preparePlan,
 		PrepareStmt: stmts[0],
-		params:      vector.NewVec(types.T_varchar.ToType()),
 	}
 
 	var testData []byte
@@ -2201,8 +2199,6 @@ func FuzzParseExecuteData(f *testing.F) {
 	})
 }
 
-/* FIXME The prepare process has undergone some modifications,
-  	so the unit tests for prepare need to be refactored, and the subsequent pr I will resubmit a reasonable ut
 func TestParseExecuteData(t *testing.T) {
 	ctx := context.TODO()
 	convey.Convey("parseExecuteData succ", t, func() {
@@ -2237,7 +2233,6 @@ func TestParseExecuteData(t *testing.T) {
 			Name:        preparePlan.GetDcl().GetPrepare().GetName(),
 			PreparePlan: preparePlan,
 			PrepareStmt: stmts[0],
-			params:      vector.NewVec(types.T_varchar.ToType()),
 		}
 
 		var testData []byte
@@ -2256,9 +2251,7 @@ func TestParseExecuteData(t *testing.T) {
 		err = proto.ParseExecuteData(ctx, proc, prepareStmt, testData, 0)
 		convey.So(err, convey.ShouldBeNil)
 	})
-
 }
-*/
 
 func Test_resultset(t *testing.T) {
 	ctx := context.TODO()
