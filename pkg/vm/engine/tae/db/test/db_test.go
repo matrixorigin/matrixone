@@ -6449,7 +6449,7 @@ func TestSnapshotGC(t *testing.T) {
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
 	db := tae.DB
-	db.DiskCleaner.GetCleaner().SetMinMergeCountForTest(2)
+	db.DiskCleaner.GetCleaner().SetMinMergeCountForTest(1)
 
 	snapshotSchema := catalog.MockSnapShotSchema()
 	snapshotSchema.BlockMaxRows = 2
@@ -6484,9 +6484,6 @@ func TestSnapshotGC(t *testing.T) {
 	assert.Nil(t, err)
 	defer pool.Release()
 	var wg sync.WaitGroup
-	snapshots := make([]types.TS, 0)
-	start := types.BuildTS(0, 0)
-	snapshots = append(snapshots, start)
 	var snapWG sync.WaitGroup
 	snapWG.Add(1)
 	go func() {
@@ -6494,7 +6491,6 @@ func TestSnapshotGC(t *testing.T) {
 		for {
 			if i > 3 {
 				snapWG.Done()
-				db.DiskCleaner.GetCleaner().EnableGCForTest()
 				break
 			}
 			i++
@@ -6517,7 +6513,6 @@ func TestSnapshotGC(t *testing.T) {
 			err = rel.Append(context.Background(), data)
 			assert.Nil(t, err)
 			assert.Nil(t, txn1.Commit(context.Background()))
-			snapshots = append(snapshots, snapshot)
 		}
 	}()
 	for _, data := range bats {
@@ -6533,10 +6528,9 @@ func TestSnapshotGC(t *testing.T) {
 	testutils.WaitExpect(10000, func() bool {
 		return db.Runtime.Scheduler.GetPenddingLSNCnt() == 0
 	})
+	db.DiskCleaner.GetCleaner().EnableGCForTest()
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))
 	assert.Equal(t, uint64(0), db.Runtime.Scheduler.GetPenddingLSNCnt())
-	err = db.DiskCleaner.GetCleaner().CheckGC()
-	assert.Nil(t, err)
 	testutils.WaitExpect(5000, func() bool {
 		return db.DiskCleaner.GetCleaner().GetMinMerged() != nil
 	})
@@ -6545,9 +6539,11 @@ func TestSnapshotGC(t *testing.T) {
 		return db.DiskCleaner.GetCleaner().GetMinMerged() != nil
 	})
 	assert.NotNil(t, minMerged)
+	err = db.DiskCleaner.GetCleaner().CheckGC()
+	assert.Nil(t, err)
 	tae.RestartDisableGC(ctx)
 	db = tae.DB
-	db.DiskCleaner.GetCleaner().SetMinMergeCountForTest(2)
+	db.DiskCleaner.GetCleaner().SetMinMergeCountForTest(1)
 	db.DiskCleaner.GetCleaner().SetTid(rel3.ID())
 	testutils.WaitExpect(5000, func() bool {
 		if db.DiskCleaner.GetCleaner().GetMaxConsumed() == nil {

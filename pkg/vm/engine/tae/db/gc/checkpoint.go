@@ -169,7 +169,7 @@ func (c *checkpointCleaner) Replay() error {
 	}
 	for _, dir := range dirs {
 		start, end, ext := blockio.DecodeGCMetadataFileName(dir.Name)
-		if ext == blockio.GCFullExt {
+		if ext == blockio.GCFullExt || ext == blockio.SnapshotExt {
 			continue
 		}
 		if (maxConsumedStart.IsEmpty() || maxConsumedStart.Less(&end)) &&
@@ -469,16 +469,16 @@ func (c *checkpointCleaner) CheckGC() error {
 		mergeTable = c.inputs.tables[0]
 	}
 	mergeTable.SoftGC(gcTable, gCkp.GetEnd(), snapshots)
+	for _, snapshot := range snapshots {
+		for _, s := range snapshot {
+			logutil.Infof("snapshot is %v", s.ToString())
+		}
+	}
 	if !mergeTable.Compare(debugTable) {
 		logutil.Errorf("inputs :%v", c.inputs.tables[0].String())
 		logutil.Errorf("debugTable :%v", debugTable.String())
 		return moerr.NewInternalErrorNoCtx("Compare is failed")
 	} else {
-		for _, snapshot := range snapshots {
-			for _, s := range snapshot {
-				logutil.Infof("snapshot is %v", s.ToString())
-			}
-		}
 		logutil.Info("[DiskCleaner]", common.OperationField("Compare is End"),
 			common.AnyField("table :", debugTable.String()),
 			common.OperandField(start1.ToString()))

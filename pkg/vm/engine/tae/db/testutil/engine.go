@@ -108,9 +108,9 @@ func (e *TestEngine) Restart(ctx context.Context) {
 func (e *TestEngine) RestartDisableGC(ctx context.Context) {
 	_ = e.DB.Close()
 	var err error
+	e.Opts.GCCfg.GCTTL = 100 * time.Second
 	e.DB, err = db.Open(ctx, e.Dir, e.Opts)
 	// only ut executes this checker
-	e.DB.DiskCleaner.GetCleaner().DisableGCForTest()
 	e.DB.DiskCleaner.GetCleaner().AddChecker(
 		func(item any) bool {
 			min := e.DB.TxnMgr.MinTSForTest()
