@@ -338,26 +338,13 @@ func (rm *RoutineManager) Closed(rs goetty.IOSession) {
 	}
 }
 
-func (rm *RoutineManager) getRoutineById(id uint64) *Routine {
-	var rt *Routine = nil
-	rm.mu.RLock()
-	defer rm.mu.RUnlock()
-	for _, value := range rm.clients {
-		if uint64(value.getConnectionID()) == id {
-			rt = value
-			break
-		}
-	}
-	return rt
-}
-
 /*
 kill a connection or query.
 if killConnection is true, the query will be canceled first, then the network will be closed.
 if killConnection is false, only the query will be canceled. the connection keeps intact.
 */
 func (rm *RoutineManager) kill(ctx context.Context, killConnection bool, idThatKill, id uint64, statementId string) error {
-	rt := rm.getRoutineById(id)
+	rt := rm.getRoutineByConnID(uint32(id))
 
 	killMyself := idThatKill == id
 	if rt != nil {
