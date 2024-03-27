@@ -259,6 +259,9 @@ func (bs *baseStore) Append(e *entry.Entry) error {
 	// 	logutil.Infof("append entry takes %dms", e.Duration().Milliseconds())
 	// 	e.StartTime()
 	// }
+	if err := e.Entry.ExecutePreCallbacks(); err != nil {
+		return err
+	}
 	_, err := bs.flushQueue.Enqueue(e)
 	if err != nil {
 		panic(err)
