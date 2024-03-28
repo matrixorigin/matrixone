@@ -19,6 +19,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/csv"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -128,6 +129,10 @@ func GetOrInitDBConn(forceNewConn bool, randomCN bool) (*sql.DB, error) {
 		if err != nil {
 			return err
 		}
+		if _, err := newDBConn.Exec("set session disable_txn_trace=1"); err != nil {
+			return errors.Join(err, newDBConn.Close())
+		}
+
 		//45s suggest by xzxiong
 		newDBConn.SetConnMaxLifetime(45 * time.Second)
 		newDBConn.SetMaxOpenConns(MaxConnectionNumber)
@@ -298,4 +303,14 @@ func isStatementExisted(ctx context.Context, db *sql.DB, stmtId string, status s
 		return false, err
 	}
 	return exists, nil
+}
+
+var gLabels map[string]string = nil
+
+func SetLabelSelector(labels map[string]string) {
+	gLabels = labels
+}
+
+func GetLabelSelector() map[string]string {
+	return gLabels
 }
