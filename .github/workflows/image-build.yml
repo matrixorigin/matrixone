@@ -16,7 +16,9 @@ jobs:
   build:
     uses: matrixorigin/CI/.github/workflows/image-build.yaml@main
     with:
-      role: ${{ secrets.AWS_ROLE }}
+      repo: "matrixone"
+      region: "us-east-1"
+      alias: "p4n7f8j9"
     secrets:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
       DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
