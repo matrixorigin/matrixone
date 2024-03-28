@@ -81,6 +81,7 @@ func (cleaner *DiskCleaner) process(items ...any) {
 		if err != nil {
 			panic(err)
 		}
+		cleaner.cleaner.TryGC()
 		if len(items) == 1 {
 			return
 		}
