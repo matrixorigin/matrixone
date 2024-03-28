@@ -18,6 +18,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"gonum.org/v1/gonum/mat"
+	"math"
 )
 
 func ToGonumVector[T types.RealNumbers](arr1 []T) *mat.VecDense {
@@ -57,20 +58,28 @@ func ToGonumVectors[T types.RealNumbers](arrays ...[]T) (res []*mat.VecDense, er
 	return res, nil
 }
 
-func ToMoArray[T types.RealNumbers](vec *mat.VecDense) (arr []T) {
+func ToMoArray[T types.RealNumbers](vec *mat.VecDense) (arr []T, err error) {
 	n := vec.Len()
 	arr = make([]T, n)
 	for i := 0; i < n; i++ {
 		//TODO: @arjun optimize this cast
 		arr[i] = T(vec.AtVec(i))
+
+		if math.IsInf(float64(arr[i]), 0) {
+			return nil, moerr.NewInternalErrorNoCtx("vector contains infinity values")
+		}
 	}
-	return
+	return arr, nil
 }
 
-func ToMoArrays[T types.RealNumbers](vecs []*mat.VecDense) [][]T {
+func ToMoArrays[T types.RealNumbers](vecs []*mat.VecDense) ([][]T, error) {
 	moVectors := make([][]T, len(vecs))
+	var err error
 	for i, vec := range vecs {
-		moVectors[i] = ToMoArray[T](vec)
+		moVectors[i], err = ToMoArray[T](vec)
+		if err != nil {
+			return nil, err
+		}
 	}
-	return moVectors
+	return moVectors, nil
 }

@@ -237,5 +237,8 @@ insert into vector_index_08 values(9777, "[16, 15, 0, 0, 5, 46, 5, 5, 4, 0, 0, 0
 alter table vector_index_08 add column d vecf32(3) not null after c;
 select * from vector_index_08;
 
+-- infinity scenario
+select cast("[76875768584509877574546435800000005,8955885757767774774774774456466]" as vecf32(2)) *623585864455;
+
 -- post
 drop database vecdb;
