@@ -72,7 +72,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergerecursive"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergetop"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minus"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_col/group_concat"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/onduplicatekey"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/order"
@@ -607,22 +606,6 @@ func Test_mergeAnalyseInfo(t *testing.T) {
 	}
 	mergeAnalyseInfo(target, ana)
 	require.Equal(t, len(ana.List), 1)
-}
-
-func Test_convertPipelineMultiAggs(t *testing.T) {
-	multiAggs := []group_concat.Argument{
-		{},
-	}
-	aggs := convertPipelineMultiAggs(multiAggs)
-	require.Equal(t, len(aggs), 1)
-}
-
-func Test_convertToMultiAggs(t *testing.T) {
-	multiAggs := []*pipeline.MultiArguemnt{
-		{},
-	}
-	aggs := convertToMultiAggs(multiAggs)
-	require.Equal(t, len(aggs), 1)
 }
 
 func Test_convertToProcessLimitation(t *testing.T) {

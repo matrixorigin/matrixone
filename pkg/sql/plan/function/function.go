@@ -22,7 +22,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -230,22 +229,6 @@ func RunFunctionDirectly(proc *process.Process, overloadID int64, inputs []*vect
 	return vec, nil
 }
 
-func generateAggExecutor(
-	overloadID int64, isDistinct bool, inputTypes []types.Type, config any) (agg.Agg[any], error) {
-	f, exist := GetFunctionByIdWithoutError(overloadID)
-	if !exist {
-		return nil, moerr.NewInvalidInputNoCtx("function id '%d' not found", overloadID)
-	}
-
-	outputTyp := f.retType(inputTypes)
-	return f.aggFramework.aggNew(overloadID, isDistinct, inputTypes, outputTyp, config)
-}
-
-func generateAggExecutorWithoutConfig(
-	overloadID int64, isDistinct bool, inputTypes []types.Type) (agg.Agg[any], error) {
-	return generateAggExecutor(overloadID, isDistinct, inputTypes, nil)
-}
-
 func GetAggFunctionNameByID(overloadID int64) string {
 	f, exist := GetFunctionByIdWithoutError(overloadID)
 	if !exist {
@@ -355,9 +338,6 @@ type executeLogicOfOverload func(parameters []*vector.Vector,
 type aggregationLogicOfOverload struct {
 	// agg related string for error message.
 	str string
-
-	// newAgg is used to create a new aggregation structure for agg framework.
-	aggNew func(overloadID int64, dist bool, inputTypes []types.Type, outputType types.Type, config any) (agg.Agg[any], error)
 
 	// how to register the aggregation.
 	aggRegister func(overloadID int64)

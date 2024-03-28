@@ -73,7 +73,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergerecursive"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergetop"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minus"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_col/group_concat"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/onduplicatekey"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/order"
@@ -1604,36 +1603,6 @@ func convertToAggregates(ags []*pipeline.Aggregate) []aggexec.AggFuncExecExpress
 	result := make([]aggexec.AggFuncExecExpression, len(ags))
 	for i, a := range ags {
 		result[i] = aggexec.MakeAggFunctionExpression(a.Op, a.Dist, a.Expr, a.Config)
-	}
-	return result
-}
-
-// for now, it's group_concat
-func convertPipelineMultiAggs(multiAggs []group_concat.Argument) []*pipeline.MultiArguemnt {
-	result := make([]*pipeline.MultiArguemnt, len(multiAggs))
-	for i, a := range multiAggs {
-		result[i] = &pipeline.MultiArguemnt{
-			Dist:        a.Dist,
-			GroupExpr:   a.GroupExpr,
-			OrderByExpr: a.OrderByExpr,
-			Separator:   a.Separator,
-			OrderId:     a.OrderId,
-		}
-	}
-	return result
-}
-
-func convertToMultiAggs(multiAggs []*pipeline.MultiArguemnt) []group_concat.Argument {
-	result := make([]group_concat.Argument, len(multiAggs))
-	for i, a := range multiAggs {
-		// can not reuse
-		result[i] = group_concat.Argument{
-			Dist:        a.Dist,
-			GroupExpr:   a.GroupExpr,
-			OrderByExpr: a.OrderByExpr,
-			Separator:   a.Separator,
-			OrderId:     a.OrderId,
-		}
 	}
 	return result
 }

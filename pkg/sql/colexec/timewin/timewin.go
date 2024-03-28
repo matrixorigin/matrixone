@@ -45,8 +45,8 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 
 	ctr.aggExe = make([]colexec.ExpressionExecutor, len(ap.Aggs))
 	for i, ag := range ap.Aggs {
-		if ag.E != nil {
-			ctr.aggExe[i], err = colexec.NewExpressionExecutor(proc, ag.E)
+		if expressions := ag.GetArgExpressions(); len(expressions) > 0{
+			ctr.aggExe[i], err = colexec.NewExpressionExecutor(proc, expressions[0])
 			if err != nil {
 				return err
 			}
@@ -150,9 +150,9 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 			ctr.aggs = make([]aggexec.AggFuncExec, len(ap.Aggs))
 			for i, ag := range ap.Aggs {
-				ctr.aggs[i] = aggexec.MakeAgg(proc, ag.Op, ag.Dist, ap.Types[i])
-				if ag.Config != nil {
-					ctr.aggs[i].SetExtraInformation(ag.Config, 0)
+				ctr.aggs[i] = aggexec.MakeAgg(proc, ag.GetAggID(), ag.IsDistinct(), ap.Types[i])
+				if config := ag.GetExtraConfig(); len(config) > 0 {
+					ctr.aggs[i].SetExtraInformation(config, 0)
 				}
 			}
 			ctr.status = evalTag
@@ -196,9 +196,9 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 			ctr.aggs = make([]aggexec.AggFuncExec, len(ap.Aggs))
 			for i, ag := range ap.Aggs {
-				ctr.aggs[i] = aggexec.MakeAgg(proc, ag.Op, ag.Dist, ap.Types[i])
-				if ag.Config != nil {
-					ctr.aggs[i].SetExtraInformation(ag.Config, 0)
+				ctr.aggs[i] = aggexec.MakeAgg(proc, ag.GetAggID(), ag.IsDistinct(), ap.Types[i])
+				if config := ag.GetExtraConfig(); len(config) > 0 {
+					ctr.aggs[i].SetExtraInformation(config, 0)
 				}
 			}
 			ctr.wstart = append(ctr.wstart, ctr.start)
@@ -284,9 +284,9 @@ func eval[T constraints.Integer](ctr *container, ap *Argument, proc *process.Pro
 				}
 				ctr.aggs = make([]aggexec.AggFuncExec, len(ap.Aggs))
 				for i, ag := range ap.Aggs {
-					ctr.aggs[i] = aggexec.MakeAgg(proc, ag.Op, ag.Dist, ap.Types[i])
-					if ag.Config != nil {
-						ctr.aggs[i].SetExtraInformation(ag.Config, 0)
+					ctr.aggs[i] = aggexec.MakeAgg(proc, ag.GetAggID(), ag.IsDistinct(), ap.Types[i])
+					if config := ag.GetExtraConfig(); len(config) > 0 {
+						ctr.aggs[i].SetExtraInformation(config, 0)
 					}
 				}
 				ctr.group = 0
