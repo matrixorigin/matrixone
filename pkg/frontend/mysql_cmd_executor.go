@@ -3757,6 +3757,9 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 				mysql COM_QUERY response: End after the data row has been sent.
 				After all row data has been sent, it sends the EOF or OK packet.
 			*/
+			if ses.ServerStatusIsSet(SERVER_STATUS_AUTOCOMMIT) {
+				ses.ClearServerStatus(SERVER_STATUS_IN_TRANS)
+			}
 			err = proto.sendEOFOrOkPacket(0, ses.GetServerStatus())
 			if err != nil {
 				return
@@ -3845,6 +3848,9 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 			mysql COM_QUERY response: End after the data row has been sent.
 			After all row data has been sent, it sends the EOF or OK packet.
 		*/
+		if ses.ServerStatusIsSet(SERVER_STATUS_AUTOCOMMIT) {
+			ses.ClearServerStatus(SERVER_STATUS_IN_TRANS)
+		}
 		err = proto.sendEOFOrOkPacket(0, ses.GetServerStatus())
 		if err != nil {
 			return
@@ -4014,6 +4020,9 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 				mysql COM_QUERY response: End after the data row has been sent.
 				After all row data has been sent, it sends the EOF or OK packet.
 			*/
+			if ses.ServerStatusIsSet(SERVER_STATUS_AUTOCOMMIT) || ses.GetSessionVar("autocommit") {
+				ses.ClearServerStatus(SERVER_STATUS_IN_TRANS)
+			}
 			err = proto.sendEOFOrOkPacket(0, ses.GetServerStatus())
 			if err != nil {
 				return

@@ -206,6 +206,20 @@ func (c *cluster) DebugUpdateCNLabel(uuid string, kvs map[string][]string) error
 	return nil
 }
 
+func (c *cluster) DebugUpdateCNWorkState(uuid string, state int) error {
+	ctx, cancel := context.WithTimeout(context.TODO(), time.Second*3)
+	defer cancel()
+	wstate := logpb.CNWorkState{
+		UUID:  uuid,
+		State: metadata.WorkState(state),
+	}
+	proxyClient := c.client.(labelSupportedClient)
+	if err := proxyClient.UpdateCNWorkState(ctx, wstate); err != nil {
+		return err
+	}
+	return nil
+}
+
 func (c *cluster) RemoveCN(id string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()

@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -32,6 +33,15 @@ type cnLabel struct {
 	uuid   string
 	key    string
 	values []string
+}
+
+type cnWorkState struct {
+	uuid  string
+	state int
+}
+
+type parser1 interface {
+	parse1() cnWorkState
 }
 
 type parser interface {
@@ -59,6 +69,14 @@ func (s *singleValue) parse() cnLabel {
 	return c
 }
 
+func (s *singleValue) parse1() cnWorkState {
+	items := s.reg.FindStringSubmatch(s.s)
+	var c cnWorkState
+	c.uuid = items[1]
+	c.state, _ = strconv.Atoi(items[2])
+	return c
+}
+
 type multiValues struct {
 	s   string
 	reg *regexp.Regexp
@@ -83,11 +101,14 @@ func (m *multiValues) parse() cnLabel {
 const (
 	singlePattern   = `^([a-zA-Z0-9\-_]+):([a-zA-Z0-9_]+):([a-zA-Z0-9_]+)$`
 	multiplePattern = `^([a-zA-Z0-9\-_]+):([a-zA-Z0-9_]+):\[([a-zA-Z0-9_]+(,[a-zA-Z0-9_]+)*)\]$`
+
+	singlePattern1 = `^([a-zA-Z0-9\-_]+):([0-9]+)$`
 )
 
 var (
-	singlePatternReg = regexp.MustCompile(singlePattern)
-	multiPatternReg  = regexp.MustCompile(multiplePattern)
+	singlePatternReg  = regexp.MustCompile(singlePattern)
+	multiPatternReg   = regexp.MustCompile(multiplePattern)
+	single1PatternReg = regexp.MustCompile(singlePattern1)
 )
 
 func identifyParser(param string) parser {
@@ -96,6 +117,13 @@ func identifyParser(param string) parser {
 	}
 	if matched := multiPatternReg.MatchString(param); matched {
 		return newMultiValue(param, multiPatternReg)
+	}
+	return nil
+}
+
+func identifyParser1(param string) parser1 {
+	if matched := single1PatternReg.MatchString(param); matched {
+		return newSingleValue(param, single1PatternReg)
 	}
 	return nil
 }
@@ -122,6 +150,32 @@ func handleSetLabel(proc *process.Process,
 	kvs := make(map[string][]string, 1)
 	kvs[c.key] = c.values
 	if err := cluster.DebugUpdateCNLabel(c.uuid, kvs); err != nil {
+		return Result{}, err
+	}
+	return Result{
+		Method: LabelMethod,
+		Data:   "OK",
+	}, nil
+}
+
+func parseCNWorkState(param string) (cnWorkState, error) {
+	p := identifyParser1(param)
+	if p == nil {
+		return cnWorkState{}, moerr.NewInternalErrorNoCtx("format is: cn:key:value or cn:key:[v1,v2,...]")
+	}
+	return p.parse1(), nil
+}
+
+func handleSetWorkState(proc *process.Process,
+	service serviceType,
+	parameter string,
+	sender requestSender) (Result, error) {
+	cluster := clusterservice.GetMOCluster()
+	c, err := parseCNWorkState(parameter)
+	if err != nil {
+		return Result{}, err
+	}
+	if err := cluster.DebugUpdateCNWorkState(c.uuid, c.state); err != nil {
 		return Result{}, err
 	}
 	return Result{

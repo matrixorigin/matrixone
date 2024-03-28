@@ -17,6 +17,7 @@ package proxy
 import (
 	"encoding/binary"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"io"
 	"net"
 	"sync"
@@ -189,6 +190,7 @@ func (b *msgBuf) consumeMsg(msg []byte, transfer *atomic.Bool, wg *sync.WaitGrou
 }
 
 func (b *msgBuf) consumeClient(msg []byte) bool {
+	logutil.Infof("liubo: %d, client, %v", b.cid, msg)
 	e, r := makeEvent(msg, b)
 	if e == nil {
 		return false
@@ -201,6 +203,7 @@ func (b *msgBuf) consumeClient(msg []byte) bool {
 }
 
 func (b *msgBuf) consumeServer(msg []byte, transfer *atomic.Bool, wg *sync.WaitGroup) bool {
+	logutil.Infof("liubo: %d, server, %v", b.cid, msg)
 	inTxn := true
 
 	// For the server->client pipe, we should the transaction status from the
@@ -213,6 +216,7 @@ func (b *msgBuf) consumeServer(msg []byte, transfer *atomic.Bool, wg *sync.WaitG
 	} else {
 		b.setTxnStatus(0)
 	}
+	logutil.Infof("liubo: %d, server, inTxn: %v, tran: %v", b.cid, inTxn, transfer.Load())
 
 	if wg != nil && transfer != nil && !inTxn && transfer.Load() {
 		wg.Add(1)
