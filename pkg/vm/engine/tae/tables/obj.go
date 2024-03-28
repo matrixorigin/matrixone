@@ -136,11 +136,11 @@ func (obj *object) BatchDedup(
 ) (err error) {
 	defer func() {
 		if moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry) {
-			logutil.Infof("xxxx txn:%s,BatchDedup %s (%v)BLK-%s: %v",
+			logutil.Infof("xxxx txn:%s,BatchDedup %s (%v)Obj-%s: %v",
 				txn.String(),
-				blk.meta.GetTable().GetLastestSchemaLocked().Name,
-				blk.IsAppendable(),
-				blk.meta.ID.String(),
+				obj.meta.GetTable().GetLastestSchemaLocked().Name,
+				obj.IsAppendable(),
+				obj.meta.ID.String(),
 				err)
 		}
 	}()
