@@ -219,6 +219,9 @@ func checkPrimaryKeyPartType(ctx context.Context, colType *plan.Type, columnName
 	if colType.GetId() == int32(types.T_json) {
 		return moerr.NewNotSupported(ctx, fmt.Sprintf("JSON column '%s' cannot be in primary key", columnName))
 	}
+	if colType.GetId() == int32(types.T_enum) {
+		return moerr.NewNotSupported(ctx, fmt.Sprintf("ENUM column '%s' cannot be in primary key", columnName))
+	}
 	return nil
 }
 
