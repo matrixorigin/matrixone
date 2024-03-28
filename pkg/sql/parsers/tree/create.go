@@ -5050,7 +5050,7 @@ func NewCreateUser(ife bool, u []*User, r *Role, misc UserMiscOption, c AccountC
 type CreateAccount struct {
 	statementImpl
 	IfNotExists bool
-	Name        string
+	Name        Expr
 	AuthOption  AccountAuthOption
 	// status_option or not
 	StatusOption AccountStatus
@@ -5058,7 +5058,7 @@ type CreateAccount struct {
 	Comment AccountComment
 }
 
-func NewCreateAccount(ife bool, n string, ao AccountAuthOption, so AccountStatus, c AccountComment) *CreateAccount {
+func NewCreateAccount(ife bool, n Expr, ao AccountAuthOption, so AccountStatus, c AccountComment) *CreateAccount {
 	ca := reuse.Alloc[CreateAccount](nil)
 	ca.IfNotExists = ife
 	ca.Name = n
@@ -5073,7 +5073,7 @@ func (node *CreateAccount) Format(ctx *FmtCtx) {
 	if node.IfNotExists {
 		ctx.WriteString("if not exists ")
 	}
-	ctx.WriteString(node.Name)
+	node.Name.Format(ctx)
 	node.AuthOption.Format(ctx)
 	node.StatusOption.Format(ctx)
 	node.Comment.Format(ctx)
