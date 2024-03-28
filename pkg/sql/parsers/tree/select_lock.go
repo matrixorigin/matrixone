@@ -14,8 +14,18 @@
 
 package tree
 
+import "github.com/matrixorigin/matrixone/pkg/common/reuse"
+
 // SelectLockType is the lock type for SelectStmt.
 type SelectLockType int
+
+func init() {
+	reuse.CreatePool[SelectLockInfo](
+		func() *SelectLockInfo { return &SelectLockInfo{} },
+		func(s *SelectLockInfo) { s.reset() },
+		reuse.DefaultOptions[SelectLockInfo](),
+	)
+}
 
 // Select lock types.
 const (
@@ -58,6 +68,27 @@ type SelectLockInfo struct {
 	Tables   []*TableName
 }
 
+func NewSelectLockInfo(lt SelectLockType) *SelectLockInfo {
+	s := reuse.Alloc[SelectLockInfo](nil)
+	s.LockType = lt
+	return s
+}
+
 func (node *SelectLockInfo) Format(ctx *FmtCtx) {
 	ctx.WriteString(node.LockType.String())
+}
+
+func (node *SelectLockInfo) Free() {
+	reuse.Free[SelectLockInfo](node, nil)
+}
+
+func (node SelectLockInfo) TypeName() string { return "tree.SelectLockInfo" }
+
+func (node *SelectLockInfo) reset() {
+	// if node.Tables != nil {
+	// for _, item := range node.Tables {
+	// 	item.Free()
+	// }
+	// }
+	*node = SelectLockInfo{}
 }

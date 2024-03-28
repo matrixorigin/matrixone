@@ -14,6 +14,28 @@
 
 package tree
 
+import "github.com/matrixorigin/matrixone/pkg/common/reuse"
+
+func init() {
+	reuse.CreatePool[TableLock](
+		func() *TableLock { return &TableLock{} },
+		func(l *TableLock) { l.reset() },
+		reuse.DefaultOptions[TableLock](),
+	)
+
+	reuse.CreatePool[LockTableStmt](
+		func() *LockTableStmt { return &LockTableStmt{} },
+		func(l *LockTableStmt) { l.reset() },
+		reuse.DefaultOptions[LockTableStmt](),
+	)
+
+	reuse.CreatePool[UnLockTableStmt](
+		func() *UnLockTableStmt { return &UnLockTableStmt{} },
+		func(u *UnLockTableStmt) { u.reset() },
+		reuse.DefaultOptions[UnLockTableStmt](),
+	)
+}
+
 // TableLockType is the type of the table lock.
 type TableLockType int32
 
@@ -54,9 +76,33 @@ type TableLock struct {
 	LockType TableLockType
 }
 
+func NewTableLock(table TableName, lockType TableLockType) *TableLock {
+	l := reuse.Alloc[TableLock](nil)
+	l.Table = table
+	l.LockType = lockType
+	return l
+}
+
+func (node *TableLock) reset() {
+	// node.Table.Free()
+	*node = TableLock{}
+}
+
+func (node *TableLock) Free() {
+	reuse.Free[TableLock](node, nil)
+}
+
+func (node TableLock) TypeName() string { return "tree.TableLock" }
+
 type LockTableStmt struct {
 	statementImpl
 	TableLocks []TableLock
+}
+
+func NewLockTableStmt(tableLocks []TableLock) *LockTableStmt {
+	l := reuse.Alloc[LockTableStmt](nil)
+	l.TableLocks = tableLocks
+	return l
 }
 
 func (node *LockTableStmt) Format(ctx *FmtCtx) {
@@ -73,11 +119,36 @@ func (node *LockTableStmt) Format(ctx *FmtCtx) {
 	}
 }
 
+func (node *LockTableStmt) reset() {
+	if node.TableLocks != nil {
+		for _, item := range node.TableLocks {
+			item.Free()
+		}
+	}
+	*node = LockTableStmt{}
+}
+
+func (node *LockTableStmt) Free() {
+	reuse.Free[LockTableStmt](node, nil)
+}
+
 func (node *LockTableStmt) GetStatementType() string { return "Lock Tables" }
-func (node *LockTableStmt) GetQueryType() string     { return QueryTypeOth }
+
+func (node *LockTableStmt) GetQueryType() string { return QueryTypeOth }
+
+func (node LockTableStmt) TypeName() string { return "tree.LockTableStmt" }
 
 type UnLockTableStmt struct {
 	statementImpl
+}
+
+func NewUnLockTableStmt() *UnLockTableStmt {
+	u := reuse.Alloc[UnLockTableStmt](nil)
+	return u
+}
+
+func (node *UnLockTableStmt) reset() {
+	*node = UnLockTableStmt{}
 }
 
 func (node *UnLockTableStmt) Format(ctx *FmtCtx) {
@@ -85,4 +156,11 @@ func (node *UnLockTableStmt) Format(ctx *FmtCtx) {
 }
 
 func (node *UnLockTableStmt) GetStatementType() string { return "UnLock Tables" }
-func (node *UnLockTableStmt) GetQueryType() string     { return QueryTypeOth }
+
+func (node *UnLockTableStmt) GetQueryType() string { return QueryTypeOth }
+
+func (node UnLockTableStmt) TypeName() string { return "tree.UnLockTableStmt" }
+
+func (node *UnLockTableStmt) Free() {
+	reuse.Free[UnLockTableStmt](node, nil)
+}

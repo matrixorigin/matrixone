@@ -21,31 +21,31 @@ func init() {
 		func() *DropProcedure { return &DropProcedure{} },
 		func(d *DropProcedure) { d.reset() },
 		reuse.DefaultOptions[DropProcedure](), //.
-	) //WithEnableChecker()
+	) // WithEnableChecker()
 
 	reuse.CreatePool[ProcedureArgDecl](
 		func() *ProcedureArgDecl { return &ProcedureArgDecl{} },
 		func(p *ProcedureArgDecl) { p.reset() },
 		reuse.DefaultOptions[ProcedureArgDecl](), //.
-	) //WithEnableChecker()
+	) // WithEnableChecker()
 
 	reuse.CreatePool[ProcedureName](
 		func() *ProcedureName { return &ProcedureName{} },
 		func(p *ProcedureName) { p.reset() },
 		reuse.DefaultOptions[ProcedureName](), //.
-	) //WithEnableChecker()
+	) // WithEnableChecker()
 
 	reuse.CreatePool[CreateProcedure](
 		func() *CreateProcedure { return &CreateProcedure{} },
 		func(c *CreateProcedure) { c.reset() },
 		reuse.DefaultOptions[CreateProcedure](), //.
-	) //WithEnableChecker()
+	) // WithEnableChecker()
 
 	reuse.CreatePool[CallStmt](
 		func() *CallStmt { return &CallStmt{} },
 		func(c *CallStmt) { c.reset() },
 		reuse.DefaultOptions[CallStmt](), //.
-	) //WithEnableChecker()
+	) // WithEnableChecker()
 }
 
 type InOutArgType int
@@ -156,20 +156,18 @@ func (node *ProcedureName) Free() {
 }
 
 func NewProcedureName(name Identifier, prefix ObjectNamePrefix) *ProcedureName {
-	return &ProcedureName{
-		Name: objName{
-			ObjectName:       name,
-			ObjectNamePrefix: prefix,
-		},
-	}
+	pc := reuse.Alloc[ProcedureName](nil)
+	pc.Name.ObjectName = name
+	pc.Name.ObjectNamePrefix = prefix
+	return pc
 }
 
 func NewProcedureArgDecl(f InOutArgType, n *UnresolvedName, t ResolvableTypeReference) *ProcedureArgDecl {
-	return &ProcedureArgDecl{
-		Name:      n,
-		Type:      t,
-		InOutType: f,
-	}
+	pa := reuse.Alloc[ProcedureArgDecl](nil)
+	pa.Name = n
+	pa.Type = t
+	pa.InOutType = f
+	return pa
 }
 
 type CreateProcedure struct {
@@ -280,6 +278,13 @@ func (node *CallStmt) Format(ctx *FmtCtx) {
 func (node *CallStmt) GetStatementType() string { return "Call" }
 
 func (node *CallStmt) GetQueryType() string { return QueryTypeOth }
+
+func NewCallStmt(n *ProcedureName, a Exprs) *CallStmt {
+	ca := reuse.Alloc[CallStmt](nil)
+	ca.Name = n
+	ca.Args = a
+	return ca
+}
 
 func (node *CallStmt) reset() {
 	if node.Name != nil {
