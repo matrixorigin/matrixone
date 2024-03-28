@@ -1077,6 +1077,7 @@ func constructWindow(ctx context.Context, n *plan.Node, proc *process.Process) *
 
 		var e *plan.Expr = nil
 		var cfg []byte = nil
+		var args = f.F.Args
 		if len(f.F.Args) > 0 {
 
 			//for group_concat, the last arg is separator string
@@ -1091,13 +1092,13 @@ func constructWindow(ctx context.Context, n *plan.Node, proc *process.Process) *
 				cfg = []byte(vec.GetStringAt(0))
 				vec.Free(proc.Mp())
 
-				f.F.Args = f.F.Args[:len(f.F.Args)-1]
+				args = f.F.Args[:len(f.F.Args)-1]
 			}
 
 			e = f.F.Args[0]
 		}
 		aggregationExpressions[i] = aggexec.MakeAggFunctionExpression(
-			functionID, isDistinct, f.F.Args, cfg)
+			functionID, isDistinct, args, cfg)
 
 		if e != nil {
 			typs[i] = types.New(types.T(e.Typ.Id), e.Typ.Width, e.Typ.Scale)
@@ -1157,6 +1158,7 @@ func constructGroup(ctx context.Context, n, cn *plan.Node, ibucket, nbucket int,
 			functionID := int64(uint64(f.F.Func.Obj) & function.DistinctMask)
 
 			var cfg []byte = nil
+			var args = f.F.Args
 			if len(f.F.Args) > 0 {
 				//for group_concat, the last arg is separator string
 				//for cluster_centers, the last arg is kmeans_args string
@@ -1170,12 +1172,12 @@ func constructGroup(ctx context.Context, n, cn *plan.Node, ibucket, nbucket int,
 					cfg = []byte(vec.GetStringAt(0))
 					vec.Free(proc.Mp())
 
-					f.F.Args = f.F.Args[:len(f.F.Args)-1]
+					args = f.F.Args[:len(f.F.Args)-1]
 				}
 			}
 
 			aggregationExpressions[i] = aggexec.MakeAggFunctionExpression(
-				functionID, isDistinct, f.F.Args, cfg)
+				functionID, isDistinct, args, cfg)
 		}
 	}
 
