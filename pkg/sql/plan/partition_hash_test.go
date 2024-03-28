@@ -17,13 +17,14 @@ package plan
 import (
 	"context"
 	"fmt"
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 func TestCreateHashPartitionTable(t *testing.T) {
@@ -281,7 +282,7 @@ func Test_hash_buildPartitionDefs(t *testing.T) {
 	hpb := &hashPartitionBuilder{}
 
 	for _, k := range kases {
-		one, err := parsers.ParseOne(context.TODO(), dialect.MYSQL, k.sql, 1)
+		one, err := parsers.ParseOne(context.TODO(), dialect.MYSQL, k.sql, 1, 0)
 		require.Nil(t, err)
 		syntaxDefs := one.(*tree.CreateTable).PartitionOption.Partitions
 		err = hpb.buildPartitionDefs(context.TODO(), nil, k.def, syntaxDefs)
@@ -310,7 +311,7 @@ func Test_hash_buildPartitionDefs(t *testing.T) {
 
 func Test_hash_buildEvalPartitionExpression(t *testing.T) {
 	sql1 := " create table a(col1 int,col2 int) partition by hash(col1+col2)"
-	one, err := parsers.ParseOne(context.TODO(), dialect.MYSQL, sql1, 1)
+	one, err := parsers.ParseOne(context.TODO(), dialect.MYSQL, sql1, 1, 0)
 	require.Nil(t, err)
 
 	/*

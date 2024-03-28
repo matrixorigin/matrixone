@@ -2964,6 +2964,8 @@ func appendSelectList(
 			} else {
 				if selectExpr.As != nil && !selectExpr.As.Empty() {
 					ctx.headings = append(ctx.headings, selectExpr.As.Origin())
+				} else if expr.CStrParts[0] != nil {
+					ctx.headings = append(ctx.headings, expr.CStrParts[0].Compare())
 				} else {
 					ctx.headings = append(ctx.headings, expr.Parts[0])
 				}
@@ -3498,7 +3500,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 					return 0, err
 				}
 
-				originStmts, err := mysql.Parse(builder.GetContext(), viewData.Stmt, 1)
+				originStmts, err := mysql.Parse(builder.GetContext(), viewData.Stmt, 1, 0)
 				defer func() {
 					for _, s := range originStmts {
 						s.Free()

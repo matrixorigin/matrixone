@@ -322,7 +322,7 @@ func runTestShouldPass(opt plan.Optimizer, t *testing.T, sqls []string) {
 
 func runOneStmt(opt plan.Optimizer, t *testing.T, sql string) error {
 	t.Logf("SQL: %v\n", sql)
-	stmts, err := mysql.Parse(opt.CurrentContext().GetContext(), sql, 1)
+	stmts, err := mysql.Parse(opt.CurrentContext().GetContext(), sql, 1, 0)
 	if err != nil {
 		t.Fatalf("%+v", err)
 	}

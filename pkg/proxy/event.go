@@ -82,7 +82,7 @@ func makeEvent(msg []byte, b *msgBuf) (IEvent, bool) {
 	}
 	if isCmdQuery(msg) {
 		sql := getStatement(msg)
-		stmts, err := parsers.Parse(context.Background(), dialect.MYSQL, sql, 0)
+		stmts, err := parsers.Parse(context.Background(), dialect.MYSQL, sql, 0, 0)
 		if err != nil {
 			return nil, false
 		}
