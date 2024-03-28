@@ -1,0 +1,43 @@
+create table tt(aa int, bb int, cc int);
+insert into tt values (1, 1, 1);
+select * from tt;
+aa    bb    cc
+1    1    1
+select aa from tt;
+aa
+1
+select aA from tt;
+aa
+1
+select count(*) from tt;
+count(*)
+1
+select COUNT(*)  from tt;
+count(*)
+1
+show variables like 'keep_user_target%';
+Variable_name    Value
+keep_user_target_list_in_result    0
+set global keep_user_target_list_in_result = 1;
+select aa from tt;
+aa
+1
+select aA from tt;
+aA
+1
+select AA from tt;
+AA
+1
+select Aa from tt;
+Aa
+1
+select count(*) from tt;
+count(*)
+1
+select COUNT(*)  from tt;
+COUNT(*)
+1
+select cOuNt(*)  from tt;
+cOuNt(*)
+1
+drop table tt;
