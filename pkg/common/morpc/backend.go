@@ -1068,6 +1068,7 @@ func (s *stream) Send(ctx context.Context, request Message) error {
 	s.mu.RLock()
 	if s.mu.closed {
 		s.mu.RUnlock()
+		s.rb.logger.Warn("stream is closed on send", zap.Uint64("stream-id", s.id))
 		return moerr.NewStreamClosedNoCtx()
 	}
 
@@ -1105,6 +1106,7 @@ func (s *stream) Receive() (chan Message, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	if s.mu.closed {
+		s.rb.logger.Warn("stream is closed on receive", zap.Uint64("stream-id", s.id))
 		return nil, moerr.NewStreamClosedNoCtx()
 	}
 	return s.c, nil
@@ -1112,6 +1114,7 @@ func (s *stream) Receive() (chan Message, error) {
 
 func (s *stream) Close(closeConn bool) error {
 	if closeConn {
+		s.rb.logger.Info("stream call closed on client", zap.Uint64("stream-id", s.id))
 		s.rb.Close()
 	}
 	s.mu.Lock()

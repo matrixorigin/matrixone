@@ -1319,7 +1319,7 @@ func (mce *MysqlCmdExecutor) handleExplainStmt(requestCtx context.Context, stmt 
 	return nil
 }
 
-func doPrepareStmt(ctx context.Context, ses *Session, st *tree.PrepareStmt, sql string) (*PrepareStmt, error) {
+func doPrepareStmt(ctx context.Context, ses *Session, st *tree.PrepareStmt, sql string, paramTypes []byte) (*PrepareStmt, error) {
 	preparePlan, err := buildPlan(ctx, ses, ses.GetTxnCompileCtx(), st)
 	if err != nil {
 		return nil, err
@@ -1332,6 +1332,9 @@ func doPrepareStmt(ctx context.Context, ses *Session, st *tree.PrepareStmt, sql 
 		PrepareStmt:         st.Stmt,
 		getFromSendLongData: make(map[int]struct{}),
 	}
+	if len(paramTypes) > 0 {
+		prepareStmt.ParamTypes = paramTypes
+	}
 	prepareStmt.InsertBat = ses.GetTxnCompileCtx().GetProcess().GetPrepareBatch()
 	err = ses.SetPrepareStmt(preparePlan.GetDcl().GetPrepare().GetName(), prepareStmt)
 
@@ -1340,7 +1343,7 @@ func doPrepareStmt(ctx context.Context, ses *Session, st *tree.PrepareStmt, sql 
 
 // handlePrepareStmt
 func (mce *MysqlCmdExecutor) handlePrepareStmt(ctx context.Context, st *tree.PrepareStmt, sql string) (*PrepareStmt, error) {
-	return doPrepareStmt(ctx, mce.GetSession(), st, sql)
+	return doPrepareStmt(ctx, mce.GetSession(), st, sql, nil)
 }
 
 func doPrepareString(ctx context.Context, ses *Session, st *tree.PrepareString) (*PrepareStmt, error) {
@@ -4761,7 +4764,9 @@ func (mce *MysqlCmdExecutor) SetCancelFunc(cancelFunc context.CancelFunc) {
 	mce.cancelRequestFunc = cancelFunc
 }
 
-func (mce *MysqlCmdExecutor) Close() {}
+func (mce *MysqlCmdExecutor) Close() {
+	mce.ses = nil
+}
 
 /*
 convert the type in computation engine to the type in mysql.

@@ -17,7 +17,7 @@
 //go:build race
 // +build race
 
-package fileservice
+package memorycache
 
 import (
 	"fmt"
@@ -61,6 +61,9 @@ func (r *refcnt) release() bool {
 }
 
 func (r *refcnt) trace(msg string) {
+	if !EnableTracing {
+		return
+	}
 	traceMsg := fmt.Sprintf("%s: refs=%d\n%s", msg, r.refs(), string(debug.Stack()))
 	r.Lock()
 	r.msgs = append(r.msgs, traceMsg)

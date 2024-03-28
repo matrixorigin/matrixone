@@ -34,52 +34,52 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
 
-type block struct {
+type object struct {
 	*baseObject
 }
 
-func newBlock(
+func newObject(
 	meta *catalog.ObjectEntry,
 	rt *dbutils.Runtime,
-) *block {
-	blk := &block{}
-	blk.baseObject = newBaseBlock(blk, meta, rt)
-	pnode := newPersistedNode(blk.baseObject)
+) *object {
+	obj := &object{}
+	obj.baseObject = newBaseObject(obj, meta, rt)
+	pnode := newPersistedNode(obj.baseObject)
 	node := NewNode(pnode)
 	node.Ref()
-	blk.node.Store(node)
-	return blk
+	obj.node.Store(node)
+	return obj
 }
 
-func (blk *block) Init() (err error) {
+func (obj *object) Init() (err error) {
 	return
 }
 
-func (blk *block) OnApplyDelete(
+func (obj *object) OnApplyDelete(
 	deleted uint64,
 	ts types.TS) (err error) {
-	blk.meta.GetTable().RemoveRows(deleted)
+	obj.meta.GetTable().RemoveRows(deleted)
 	return
 }
 
-func (blk *block) PrepareCompact() bool {
-	return blk.meta.PrepareCompact()
+func (obj *object) PrepareCompact() bool {
+	return obj.meta.PrepareCompact()
 }
 
-func (blk *block) PrepareCompactInfo() (result bool, reason string) {
-	return blk.meta.PrepareCompact(), ""
+func (obj *object) PrepareCompactInfo() (result bool, reason string) {
+	return obj.meta.PrepareCompact(), ""
 }
 
-func (blk *block) FreezeAppend() {}
+func (obj *object) FreezeAppend() {}
 
-func (blk *block) Pin() *common.PinnedItem[*block] {
-	blk.Ref()
-	return &common.PinnedItem[*block]{
-		Val: blk,
+func (obj *object) Pin() *common.PinnedItem[*object] {
+	obj.Ref()
+	return &common.PinnedItem[*object]{
+		Val: obj,
 	}
 }
 
-func (blk *block) GetColumnDataByIds(
+func (obj *object) GetColumnDataByIds(
 	ctx context.Context,
 	txn txnif.AsyncTxn,
 	readSchema any,
@@ -87,18 +87,18 @@ func (blk *block) GetColumnDataByIds(
 	colIdxes []int,
 	mp *mpool.MPool,
 ) (view *containers.BlockView, err error) {
-	node := blk.PinNode()
+	node := obj.PinNode()
 	defer node.Unref()
 	schema := readSchema.(*catalog.Schema)
-	return blk.ResolvePersistedColumnDatas(
+	return obj.ResolvePersistedColumnDatas(
 		ctx, txn, schema, blkID, colIdxes, false, mp,
 	)
 }
 
 // GetColumnDataById Get the snapshot at txn's start timestamp of column data.
-// Notice that for non-appendable block, if it is visible to txn,
-// then all the block data pointed by meta location also be visible to txn;
-func (blk *block) GetColumnDataById(
+// Notice that for non-appendable object, if it is visible to txn,
+// then all the object data pointed by meta location also be visible to txn;
+func (obj *object) GetColumnDataById(
 	ctx context.Context,
 	txn txnif.AsyncTxn,
 	readSchema any,
@@ -107,7 +107,7 @@ func (blk *block) GetColumnDataById(
 	mp *mpool.MPool,
 ) (view *containers.ColumnView, err error) {
 	schema := readSchema.(*catalog.Schema)
-	return blk.ResolvePersistedColumnData(
+	return obj.ResolvePersistedColumnData(
 		ctx,
 		txn,
 		schema,
@@ -117,14 +117,14 @@ func (blk *block) GetColumnDataById(
 		mp,
 	)
 }
-func (blk *block) CoarseCheckAllRowsCommittedBefore(ts types.TS) bool {
-	blk.meta.RLock()
-	defer blk.meta.RUnlock()
-	creatTS := blk.meta.GetCreatedAtLocked()
+func (obj *object) CoarseCheckAllRowsCommittedBefore(ts types.TS) bool {
+	obj.meta.RLock()
+	defer obj.meta.RUnlock()
+	creatTS := obj.meta.GetCreatedAtLocked()
 	return creatTS.Less(&ts)
 }
 
-func (blk *block) BatchDedup(
+func (obj *object) BatchDedup(
 	ctx context.Context,
 	txn txnif.AsyncTxn,
 	keys containers.Vector,
@@ -136,14 +136,14 @@ func (blk *block) BatchDedup(
 ) (err error) {
 	defer func() {
 		if moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry) {
-			logutil.Infof("BatchDedup %s (%v)BLK-%s: %v",
-				blk.meta.GetTable().GetLastestSchemaLocked().Name,
-				blk.IsAppendable(),
-				blk.meta.ID.String(),
+			logutil.Infof("BatchDedup %s (%v)obj-%s: %v",
+				obj.meta.GetTable().GetLastestSchemaLocked().Name,
+				obj.IsAppendable(),
+				obj.meta.ID.String(),
 				err)
 		}
 	}()
-	return blk.PersistedBatchDedup(
+	return obj.PersistedBatchDedup(
 		ctx,
 		txn,
 		precommit,
@@ -156,7 +156,7 @@ func (blk *block) BatchDedup(
 	)
 }
 
-func (blk *block) GetValue(
+func (obj *object) GetValue(
 	ctx context.Context,
 	txn txnif.AsyncTxn,
 	readSchema any,
@@ -164,31 +164,31 @@ func (blk *block) GetValue(
 	row, col int,
 	mp *mpool.MPool,
 ) (v any, isNull bool, err error) {
-	node := blk.PinNode()
+	node := obj.PinNode()
 	defer node.Unref()
 	schema := readSchema.(*catalog.Schema)
-	return blk.getPersistedValue(
+	return obj.getPersistedValue(
 		ctx, txn, schema, blkID, row, col, false, mp,
 	)
 }
 
-func (blk *block) RunCalibration() (score int, err error) {
-	score, _ = blk.estimateRawScore()
+func (obj *object) RunCalibration() (score int, err error) {
+	score, _ = obj.estimateRawScore()
 	return
 }
 
-func (blk *block) estimateRawScore() (score int, dropped bool) {
-	if blk.meta.HasDropCommitted() {
+func (obj *object) estimateRawScore() (score int, dropped bool) {
+	if obj.meta.HasDropCommitted() {
 		dropped = true
 		return
 	}
 	changeCnt := uint32(0)
-	blk.RLock()
-	objectMVCC := blk.tryGetMVCC()
+	obj.RLock()
+	objectMVCC := obj.tryGetMVCC()
 	if objectMVCC != nil {
 		changeCnt = objectMVCC.GetChangeIntentionCnt()
 	}
-	blk.RUnlock()
+	obj.RUnlock()
 	if changeCnt == 0 {
 		// No deletes found
 		score = 0
@@ -197,17 +197,17 @@ func (blk *block) estimateRawScore() (score int, dropped bool) {
 		score = 1
 	}
 
-	// If any delete found and the table or database of the block had
-	// been deleted. Force checkpoint the block
+	// If any delete found and the table or database of the object had
+	// been deleted. Force checkpoint the object
 	if score > 0 {
-		if _, terminated := blk.meta.GetTerminationTS(); terminated {
+		if _, terminated := obj.meta.GetTerminationTS(); terminated {
 			score = 100
 		}
 	}
 	return
 }
 
-func (blk *block) GetByFilter(
+func (obj *object) GetByFilter(
 	ctx context.Context,
 	txn txnif.AsyncTxn,
 	filter *handle.Filter,
@@ -216,18 +216,18 @@ func (blk *block) GetByFilter(
 	if filter.Op != handle.FilterEq {
 		panic("logic error")
 	}
-	if blk.meta.GetSchema().SortKey == nil {
+	if obj.meta.GetSchema().SortKey == nil {
 		rid := filter.Val.(types.Rowid)
 		offset = rid.GetRowOffset()
 		return
 	}
 
-	node := blk.PinNode()
+	node := obj.PinNode()
 	defer node.Unref()
-	return blk.getPersistedRowByFilter(ctx, node.MustPNode(), txn, filter, mp)
+	return obj.getPersistedRowByFilter(ctx, node.MustPNode(), txn, filter, mp)
 }
 
-func (blk *block) getPersistedRowByFilter(
+func (obj *object) getPersistedRowByFilter(
 	ctx context.Context,
 	pnode *persistedNode,
 	txn txnif.TxnReader,
@@ -235,10 +235,10 @@ func (blk *block) getPersistedRowByFilter(
 	mp *mpool.MPool,
 ) (blkID uint16, offset uint32, err error) {
 	var sortKey containers.Vector
-	schema := blk.meta.GetSchema()
+	schema := obj.meta.GetSchema()
 	idx := schema.GetSingleSortKeyIdx()
-	objMVCC := blk.tryGetMVCC()
-	for blkID = uint16(0); blkID < uint16(blk.meta.BlockCnt()); blkID++ {
+	objMVCC := obj.tryGetMVCC()
+	for blkID = uint16(0); blkID < uint16(obj.meta.BlockCnt()); blkID++ {
 		var ok bool
 		ok, err = pnode.ContainsKey(ctx, filter.Val, uint32(blkID))
 		if err != nil {
@@ -247,7 +247,7 @@ func (blk *block) getPersistedRowByFilter(
 		if !ok {
 			continue
 		}
-		if sortKey, err = blk.LoadPersistedColumnData(ctx, schema, idx, mp, blkID); err != nil {
+		if sortKey, err = obj.LoadPersistedColumnData(ctx, schema, idx, mp, blkID); err != nil {
 			continue
 		}
 		defer sortKey.Close()
@@ -271,7 +271,7 @@ func (blk *block) getPersistedRowByFilter(
 			continue
 		}
 		var deletes *nulls.Nulls
-		deletes, err = blk.persistedCollectDeleteMaskInRange(ctx, blkID, types.TS{}, txn.GetStartTS(), mp)
+		deletes, err = obj.persistedCollectDeleteMaskInRange(ctx, blkID, types.TS{}, txn.GetStartTS(), mp)
 		if err != nil {
 			return
 		}
@@ -284,12 +284,12 @@ func (blk *block) getPersistedRowByFilter(
 	return
 }
 
-func (blk *block) EstimateMemSize() (int, int) {
-	node := blk.PinNode()
+func (obj *object) EstimateMemSize() (int, int) {
+	node := obj.PinNode()
 	defer node.Unref()
-	blk.RLock()
-	defer blk.RUnlock()
-	objMVCC := blk.tryGetMVCC()
+	obj.RLock()
+	defer obj.RUnlock()
+	objMVCC := obj.tryGetMVCC()
 	if objMVCC == nil {
 		return 0, 0
 	}
@@ -297,8 +297,8 @@ func (blk *block) EstimateMemSize() (int, int) {
 	return 0, dsize
 }
 
-func (blk *block) GetRowsOnReplay() uint64 {
-	fileRows := uint64(blk.meta.GetLatestCommittedNode().
+func (obj *object) GetRowsOnReplay() uint64 {
+	fileRows := uint64(obj.meta.GetLatestCommittedNode().
 		BaseNode.ObjectStats.Rows())
 	return fileRows
 }

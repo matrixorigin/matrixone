@@ -158,3 +158,18 @@ func (o *ObjectStorageArguments) validate() error {
 
 	return nil
 }
+
+func (o *ObjectStorageArguments) shouldLoadDefaultCredentials() bool {
+
+	// default credentials enabled
+	if !o.NoDefaultCredentials {
+		return true
+	}
+
+	// default credentials disabled, but role arn is not empty
+	if o.RoleARN != "" {
+		return true
+	}
+
+	return false
+}

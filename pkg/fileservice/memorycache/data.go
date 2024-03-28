@@ -12,18 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package fileservice
+package memorycache
 
 import (
 	"sync/atomic"
 )
 
-// Data is a reference counted byte buffer
-type Data struct {
-	buf []byte
-	// reference counta for the Data, the Data is free
-	// when the reference count is 0
-	ref refcnt
+func (d *Data) Bytes() []byte {
+	return d.Buf()
 }
 
 // Buf returns the underlying buffer of the Data

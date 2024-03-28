@@ -353,17 +353,17 @@ func GetSingleSortKeyValue(bat *containers.Batch, schema *catalog.Schema, row in
 
 func MockCNDeleteInS3(
 	fs *objectio.ObjectFS,
-	blk data.Block,
+	obj data.Object,
 	blkOffset uint16,
 	schema *catalog.Schema,
 	txn txnif.AsyncTxn,
 	deleteRows []uint32,
 ) (location objectio.Location, err error) {
 	pkDef := schema.GetPrimaryKey()
-	view, err := blk.GetColumnDataById(context.Background(), txn, schema, blkOffset, pkDef.Idx, common.DefaultAllocator)
+	view, err := obj.GetColumnDataById(context.Background(), txn, schema, blkOffset, pkDef.Idx, common.DefaultAllocator)
 	pkVec := containers.MakeVector(pkDef.Type, common.DefaultAllocator)
 	rowIDVec := containers.MakeVector(types.T_Rowid.ToType(), common.DefaultAllocator)
-	objID := &blk.GetMeta().(*catalog.ObjectEntry).ID
+	objID := &obj.GetMeta().(*catalog.ObjectEntry).ID
 	blkID := objectio.NewBlockidWithObjectID(objID, blkOffset)
 	if err != nil {
 		return
