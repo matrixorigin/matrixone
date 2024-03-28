@@ -14,6 +14,7 @@ select Aa from tt;
 select count(*) from tt;
 select COUNT(*)  from tt;
 select cOuNt(*)  from tt;
+set global keep_user_target_list_in_result = default;
 drop table tt;
 
 

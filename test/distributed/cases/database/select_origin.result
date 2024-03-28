@@ -40,4 +40,5 @@ COUNT(*)
 select cOuNt(*)  from tt;
 cOuNt(*)
 1
+set global keep_user_target_list_in_result = default;
 drop table tt;
