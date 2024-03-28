@@ -118,12 +118,8 @@ func newAggBitAndBinary() aggexec.SingleAggFromVarRetVar {
 
 func (a *aggBitAndBinary) FillBytes(value []byte, get aggexec.AggBytesGetter, set aggexec.AggBytesSetter) error {
 	if a.isEmpty {
-		vs := make([]byte, len(value))
-		for i := range vs {
-			vs[i] = 1
-		}
 		a.isEmpty = false
-		return set(vs)
+		return set(value)
 	}
 	v := get()
 	types.BitAnd(v, v, value)
