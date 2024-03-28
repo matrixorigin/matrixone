@@ -77,6 +77,7 @@ func NewLexer(dialectType dialect.DialectType, sql string, lower int64, useOrigi
 		scanner:    NewScanner(dialectType, sql),
 		paramIndex: 0,
 		lower:      lower,
+		useOrigin:  useOrigin,
 	}
 }
 
