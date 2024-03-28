@@ -44,6 +44,7 @@ type S3FS struct {
 	storage   ObjectStorage
 	keyPrefix string
 
+	allocator   CacheDataAllocator
 	memCache    *MemCache
 	diskCache   *DiskCache
 	remoteCache *RemoteCache
@@ -105,6 +106,11 @@ func NewS3FS(
 			return nil, err
 		}
 	}
+	if fs.memCache != nil {
+		fs.allocator = fs.memCache
+	} else {
+		fs.allocator = DefaultCacheDataAllocator
+	}
 
 	return fs, nil
 }
@@ -126,7 +132,7 @@ func (s *S3FS) initCaches(ctx context.Context, config CacheConfig) error {
 	// memory cache
 	if *config.MemoryCapacity > DisableCacheCapacity {
 		s.memCache = NewMemCache(
-			NewLRUCache(int64(*config.MemoryCapacity), true, &config.CacheCallbacks),
+			NewMemoryCache(int64(*config.MemoryCapacity), true, &config.CacheCallbacks),
 			s.perfCounterSets,
 		)
 		logutil.Info("fileservice: memory cache initialized",
@@ -408,6 +414,14 @@ func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
 	}
 	stats := statistic.StatsInfoFromContext(ctx)
 	stats.AddLockTimeConsumption(time.Since(startLock))
+
+	allocator := s.allocator
+	if vector.Policy.Any(SkipMemoryCache) {
+		allocator = DefaultCacheDataAllocator
+	}
+	for i := range vector.Entries {
+		vector.Entries[i].allocator = allocator
+	}
 
 	for _, cache := range vector.Caches {
 		cache := cache
@@ -796,6 +810,10 @@ var _ ETLFileService = new(S3FS)
 func (*S3FS) ETLCompatible() {}
 
 var _ CachingFileService = new(S3FS)
+
+func (s *S3FS) Close() {
+	s.FlushCache()
+}
 
 func (s *S3FS) FlushCache() {
 	if s.memCache != nil {
