@@ -18,6 +18,7 @@ import (
 	"strings"
 )
 
+type CStrParts [4]*CStr
 type CStr struct {
 	o string
 	c string

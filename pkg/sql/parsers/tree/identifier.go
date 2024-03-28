@@ -64,13 +64,26 @@ type UnresolvedName struct {
 
 	// Parts are the name components (at most 4: column, table, db/schema, catalog.), in reverse order.
 	Parts NameParts
+
+	CStrParts CStrParts
 }
 
 func (node *UnresolvedName) Format(ctx *FmtCtx) {
-	for i := node.NumParts - 1; i >= 0; i-- {
-		ctx.WriteString(node.Parts[i])
-		if i > 0 {
-			ctx.WriteByte('.')
+	if node.CStrParts[0] != nil {
+		for i := node.NumParts - 1; i >= 0; i-- {
+			if node.CStrParts[i] != nil {
+				ctx.WriteString(node.CStrParts[i].Origin())
+				if i > 0 {
+					ctx.WriteByte('.')
+				}
+			}
+		}
+	} else {
+		for i := node.NumParts - 1; i >= 0; i-- {
+			ctx.WriteString(node.Parts[i])
+			if i > 0 {
+				ctx.WriteByte('.')
+			}
 		}
 	}
 	if node.Star && node.NumParts > 0 {
@@ -118,10 +131,17 @@ func SetUnresolvedName(parts ...string) *UnresolvedName {
 		NumParts: len(parts),
 		Star:     false,
 	}
-	for i := 0; i < len(parts); i++ {
+	for i := 0; i < l; i++ {
 		u.Parts[i] = parts[l-1-i]
 	}
 	return u
+}
+
+func (u *UnresolvedName) SetUnresolvedNameCStrParts(parts ...string) {
+	l := len(parts)
+	for i := 0; i < l; i++ {
+		u.CStrParts[i] = NewCStr(parts[l-1-i], 1)
+	}
 }
 
 func NewUnresolvedNameWithStar(ctx context.Context, parts ...string) (*UnresolvedName, error) {
