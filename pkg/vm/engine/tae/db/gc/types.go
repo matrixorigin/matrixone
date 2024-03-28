@@ -20,8 +20,9 @@ import (
 )
 
 const (
-	PrefixGCMeta = "gc"
-	GCMetaDir    = "gc/"
+	PrefixGCMeta   = "gc"
+	PrefixSnapMeta = "snap"
+	GCMetaDir      = "gc/"
 )
 
 type BatchType int8
@@ -56,12 +57,14 @@ var (
 		GCCreateTS,
 		GCDeleteTS,
 		GCAttrCommitTS,
+		GCAttrTableId,
 	}
 	BlockSchemaTypes = []types.Type{
 		types.New(types.T_varchar, 5000, 0),
 		types.New(types.T_TS, types.MaxVarcharLen, 0),
 		types.New(types.T_TS, types.MaxVarcharLen, 0),
 		types.New(types.T_TS, types.MaxVarcharLen, 0),
+		types.New(types.T_uint64, 0, 0),
 	}
 
 	BlockSchemaAttrV1 = []string{
@@ -112,5 +115,7 @@ type Cleaner interface {
 	GetMinMerged() *checkpoint.CheckpointEntry
 	CheckGC() error
 	GetInputs() *GCTable
-	SnapshotForTest(snapshots types.TS)
+	SetTid(tid uint64)
+	EnableGCForTest()
+	DisableGCForTest()
 }
