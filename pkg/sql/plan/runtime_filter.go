@@ -199,7 +199,7 @@ func (builder *QueryBuilder) generateRuntimeFilters(nodeID int32) {
 	}
 
 	tableDef := leftChild.TableDef
-	if tableDef.Pkey == nil || len(tableDef.Pkey.Names) < len(probeExprs) {
+	if len(tableDef.Pkey.Names) < len(probeExprs) {
 		return
 	}
 

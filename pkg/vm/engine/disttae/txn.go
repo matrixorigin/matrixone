@@ -314,14 +314,6 @@ func (txn *Transaction) checkDup() error {
 			tableDef := tablesDef[e.tableId]
 			if _, ok := pkIndex[e.tableId]; !ok {
 				for idx, colDef := range tableDef.Cols {
-					//FIXME::tableDef.PKey is nil if table is mo_tables, mo_columns, mo_database?
-					if tableDef.Pkey == nil {
-						if colDef.Primary {
-							pkIndex[e.tableId] = idx
-							break
-						}
-						continue
-					}
 					if colDef.Name == tableDef.Pkey.PkeyColName {
 						if colDef.Name == catalog.FakePrimaryKeyColName {
 							pkIndex[e.tableId] = -1

@@ -244,7 +244,7 @@ func selectUpdateTables(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.
 		}
 
 		// we don't known if update pk if tableDef.Pkey is nil. just set true and let check pk dup work
-		updatePkCol = tableDef.Pkey == nil || updatePkColCount > 0
+		updatePkCol = updatePkColCount > 0
 
 		// append  table.* to project list
 		upPlanCtx := getDmlPlanCtx()

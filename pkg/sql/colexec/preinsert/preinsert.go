@@ -134,7 +134,7 @@ func genAutoIncrCol(bat *batch.Batch, proc *proc, arg *Argument) error {
 
 func genCompositePrimaryKey(bat *batch.Batch, proc *proc, tableDef *pb.TableDef) error {
 	// Check whether the composite primary key column is included
-	if tableDef.Pkey == nil || tableDef.Pkey.CompPkeyCol == nil {
+	if tableDef.Pkey.CompPkeyCol == nil {
 		return nil
 	}
 
