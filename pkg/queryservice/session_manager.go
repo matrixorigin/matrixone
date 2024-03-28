@@ -90,6 +90,20 @@ func (sm *SessionManager) GetAllSessions() []Session {
 	return sessions
 }
 
+// GetAllStatusSessions returns all status sessions in the manager.
+func (sm *SessionManager) GetAllStatusSessions() []*status.Session {
+	if sm == nil {
+		return nil
+	}
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+	sessions := make([]*status.Session, 0, len(sm.mu.sessionsByID))
+	for _, session := range sm.mu.sessionsByID {
+		sessions = append(sessions, session.StatusSession())
+	}
+	return sessions
+}
+
 // GetSessionsByTenant returns the sessions belongs to the tenant.
 func (sm *SessionManager) GetSessionsByTenant(tenant string) []Session {
 	if sm == nil {
@@ -100,6 +114,20 @@ func (sm *SessionManager) GetSessionsByTenant(tenant string) []Session {
 	sessions := make([]Session, 0, len(sm.mu.sessionsByTenant[tenant]))
 	for session := range sm.mu.sessionsByTenant[tenant] {
 		sessions = append(sessions, session)
+	}
+	return sessions
+}
+
+// GetStatusSessionsByTenant returns the status sessions belongs to the tenant.
+func (sm *SessionManager) GetStatusSessionsByTenant(tenant string) []*status.Session {
+	if sm == nil {
+		return nil
+	}
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+	sessions := make([]*status.Session, 0, len(sm.mu.sessionsByTenant[tenant]))
+	for session := range sm.mu.sessionsByTenant[tenant] {
+		sessions = append(sessions, session.StatusSession())
 	}
 	return sessions
 }
