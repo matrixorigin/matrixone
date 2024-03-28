@@ -176,3 +176,19 @@ id    name
 1    null
 2    B
 drop table t3;
+create table t1(name varchar(25));
+insert into t1 values ('A'),('B'),('C');
+select * from t1;
+name
+A
+B
+C
+alter table t1 modify column name enum('A','B');
+internal error: convert to MySQL enum failed: item C is not in enum [A B]
+alter table t1 modify column name enum('A','B','C');
+select * from t1;
+name
+A
+B
+C
+drop table t1;
