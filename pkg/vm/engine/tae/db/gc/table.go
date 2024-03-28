@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
+	"sort"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -113,10 +114,6 @@ func (t *GCTable) SoftGC(table *GCTable, ts types.TS, snapShotList map[uint64][]
 	objects := t.getObjects()
 	for name, entry := range objects {
 		objectEntry := table.objects[name]
-		if len(snapShotList[entry.table]) == 0 {
-			logutil.Infof("SoftGC: snapShotList is empty %d", entry.table)
-		}
-		logutil.Infof("SoftGC: name is %v, table is %d, create %v, drop %v", name, entry.table, entry.createTS.ToString(), entry.dropTS.ToString())
 		if objectEntry == nil && entry.commitTS.Less(&ts) && !isSnapshotRefers(entry, snapShotList[entry.table]) {
 			gc = append(gc, name)
 			t.deleteObject(name)
@@ -129,11 +126,15 @@ func isSnapshotRefers(obj *ObjectEntry, snapShotList []types.TS) bool {
 	if len(snapShotList) == 0 {
 		return false
 	}
+	sort.Slice(snapShotList, func(i, j int) bool {
+		return snapShotList[i].Less(&snapShotList[j])
+	})
 	left, right := 0, len(snapShotList)-1
 	for left <= right {
 		mid := left + (right-left)/2
 		if snapShotList[mid].GreaterEq(&obj.createTS) && snapShotList[mid].Less(&obj.dropTS) {
-			logutil.Infof("isSnapshotRefers: %s, create %v, drop %v", snapShotList[mid].ToString(), obj.createTS.ToString(), obj.dropTS.ToString())
+			logutil.Infof("isSnapshotRefers: %s, create %v, drop %v",
+				snapShotList[mid].ToString(), obj.createTS.ToString(), obj.dropTS.ToString())
 			return true
 		} else if snapShotList[mid].Less(&obj.createTS) {
 			left = mid + 1
@@ -141,7 +142,6 @@ func isSnapshotRefers(obj *ObjectEntry, snapShotList []types.TS) bool {
 			right = mid - 1
 		}
 	}
-	logutil.Infof("name is %v, create %v, drop %v", obj.table, obj.createTS.ToString(), obj.dropTS.ToString())
 	return false
 }
 

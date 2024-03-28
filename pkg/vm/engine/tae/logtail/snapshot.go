@@ -20,6 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -83,10 +84,12 @@ func (sm *SnapshotMeta) Update(data *CheckpointData) *SnapshotMeta {
 		objectStats.UnMarshal(buf)
 		deleteTS := vector.GetFixedAt[types.TS](insDeleteTSVec, i)
 		createTS := vector.GetFixedAt[types.TS](insCreateTSVec, i)
+		logutil.Infof("update111 object %s, deleteTS is %v", objectStats.ObjectName().SegmentId().ToString(), deleteTS.ToString())
 		if sm.object[objectStats.ObjectName().SegmentId().ToString()] == nil {
 			if !deleteTS.IsEmpty() {
 				continue
 			}
+			logutil.Infof("update object %s, deleteTS is %v", objectStats.ObjectName().SegmentId().ToString(), deleteTS.ToString())
 			sm.object[objectStats.ObjectName().SegmentId().ToString()] = &objectInfo{
 				stats:    objectStats,
 				createAt: createTS,
@@ -124,15 +127,13 @@ func (sm *SnapshotMeta) GetSnapshot(fs fileservice.FileService) (map[uint64][]ty
 				return nil, err
 			}
 			if object.deltaLocation[i] == nil {
-				for n := range bat.Vecs {
-					for r := 0; r < bat.Vecs[n].Length(); r++ {
-						tid := vector.GetFixedAt[uint64](bat.Vecs[0], r)
-						ts := vector.GetFixedAt[types.TS](bat.Vecs[1], r)
-						if len(snapshotList[tid]) == 0 {
-							snapshotList[tid] = make([]types.TS, 0)
-						}
-						snapshotList[tid] = append(snapshotList[tid], ts)
+				for r := 0; r < bat.Vecs[0].Length(); r++ {
+					tid := vector.GetFixedAt[uint64](bat.Vecs[0], r)
+					ts := vector.GetFixedAt[types.TS](bat.Vecs[1], r)
+					if len(snapshotList[tid]) == 0 {
+						snapshotList[tid] = make([]types.TS, 0)
 					}
+					snapshotList[tid] = append(snapshotList[tid], ts)
 				}
 				continue
 			}

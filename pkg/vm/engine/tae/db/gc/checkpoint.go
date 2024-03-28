@@ -197,7 +197,6 @@ func (c *checkpointCleaner) Replay() error {
 			return err
 		}
 		c.GetSnapshots()
-		logutil.Infof("Replay snapshot file: %s", snapFile)
 	}
 	ckp := checkpoint.NewCheckpointEntry(maxConsumedStart, maxConsumedEnd, checkpoint.ET_Incremental)
 	c.updateMaxConsumed(ckp)
@@ -301,7 +300,14 @@ func (c *checkpointCleaner) mergeGCFile() error {
 		return nil
 	}
 	// tables[0] has always been a full GCTable
-	mergeTable = c.inputs.tables[0]
+	if len(c.inputs.tables) > 1 {
+		mergeTable = NewGCTable()
+		for _, table := range c.inputs.tables {
+			mergeTable.Merge(table)
+		}
+	} else {
+		mergeTable = c.inputs.tables[0]
+	}
 	c.inputs.RUnlock()
 	logutil.Info("[DiskCleaner]",
 		common.OperationField("MergeGCFile start"),
@@ -370,12 +376,6 @@ func (c *checkpointCleaner) tryGC(data *logtail.CheckpointData, gckp *checkpoint
 	gc := c.softGC(gcTable, gckp, snapshots)
 	// Delete files after softGC
 	// TODO:Requires Physical Removal Policy
-	logutil.Infof("gc files: %v", gc)
-	for snapshotID, snapshot := range snapshots {
-		for _, ts := range snapshot {
-			logutil.Infof("snapshotID: %v, ts: %v", snapshotID, ts.ToString())
-		}
-	}
 	err = c.delWorker.ExecDelete(c.ctx, gc, c.disableGC)
 	if err != nil {
 		return err
@@ -465,7 +465,6 @@ func (c *checkpointCleaner) CheckGC() error {
 		logutil.Errorf("processing clean %s: %v", debugCandidates[0].String(), err)
 		return moerr.NewInternalErrorNoCtx("processing clean GetSnapshots %s: %v", debugCandidates[0].String(), err)
 	}
-	logutil.Infof("snapshots1 is %v", snapshots)
 	debugTable.SoftGC(gcTable, gCkp.GetEnd(), snapshots)
 	var mergeTable *GCTable
 	if len(c.inputs.tables) > 1 {
@@ -477,11 +476,6 @@ func (c *checkpointCleaner) CheckGC() error {
 		mergeTable = c.inputs.tables[0]
 	}
 	mergeTable.SoftGC(gcTable, gCkp.GetEnd(), snapshots)
-	for _, snapshot := range snapshots {
-		for _, s := range snapshot {
-			logutil.Infof("snapshot is %v", s.ToString())
-		}
-	}
 	if !mergeTable.Compare(debugTable) {
 		logutil.Errorf("inputs :%v", c.inputs.tables[0].String())
 		logutil.Errorf("debugTable :%v", debugTable.String())
@@ -623,11 +617,5 @@ func (c *checkpointCleaner) updateSnapshot(data *logtail.CheckpointData) error {
 func (c *checkpointCleaner) GetSnapshots() (map[uint64][]types.TS, error) {
 	c.snapshot.RLock()
 	defer c.snapshot.RUnlock()
-	snapshotList, err := c.snapshot.snapshotMeta.GetSnapshot(c.fs.Service)
-	for tid, snapshot := range snapshotList {
-		for _, s := range snapshot {
-			logutil.Infof("GetSnapshots is %v, num is %d", s.ToString(), tid)
-		}
-	}
-	return snapshotList, err
+	return c.snapshot.snapshotMeta.GetSnapshot(c.fs.Service)
 }

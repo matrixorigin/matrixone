@@ -6483,6 +6483,7 @@ func TestSnapshotGC(t *testing.T) {
 	pool, err := ants.NewPool(20)
 	assert.Nil(t, err)
 	defer pool.Release()
+	snapshots := make([]types.TS, 0)
 	var wg sync.WaitGroup
 	var snapWG sync.WaitGroup
 	snapWG.Add(1)
@@ -6494,25 +6495,9 @@ func TestSnapshotGC(t *testing.T) {
 				break
 			}
 			i++
-			time.Sleep(350 * time.Millisecond)
+			time.Sleep(200 * time.Millisecond)
 			snapshot := types.BuildTS(time.Now().UTC().UnixNano(), 0)
-			attrs := []string{"tid", "ts"}
-			vecTypes := []types.Type{types.T_uint64.ToType(), types.T_TS.ToType()}
-			opt := containers.Options{}
-			opt.Capacity = 0
-			data := containers.BuildBatch(attrs, vecTypes, opt)
-			if i == 2 {
-				data.Vecs[0].Append(rel2.ID(), false)
-			} else {
-				data.Vecs[0].Append(rel1.ID(), false)
-			}
-			data.Vecs[1].Append(snapshot, false)
-			txn1, _ := db.StartTxn(nil)
-			database, _ := txn1.GetDatabase("db")
-			rel, _ := database.GetRelationByName(snapshotSchema.Name)
-			err = rel.Append(context.Background(), data)
-			assert.Nil(t, err)
-			assert.Nil(t, txn1.Commit(context.Background()))
+			snapshots = append(snapshots, snapshot)
 		}
 	}()
 	for _, data := range bats {
@@ -6523,8 +6508,29 @@ func TestSnapshotGC(t *testing.T) {
 		err = pool.Submit(testutil.AppendClosure(t, data, schema2.Name, db, &wg))
 		assert.Nil(t, err)
 	}
-	wg.Wait()
 	snapWG.Wait()
+	for i, snapshot := range snapshots {
+		attrs := []string{"tid", "ts"}
+		vecTypes := []types.Type{types.T_uint64.ToType(), types.T_TS.ToType()}
+		opt := containers.Options{}
+		opt.Capacity = 0
+		data1 := containers.BuildBatch(attrs, vecTypes, opt)
+		if i == 2 {
+			data1.Vecs[0].Append(rel2.ID(), false)
+		} else {
+			data1.Vecs[0].Append(rel1.ID(), false)
+		}
+		logutil.Infof("add snapshot %v", snapshot.ToString())
+		data1.Vecs[1].Append(snapshot, false)
+		txn1, _ := db.StartTxn(nil)
+		database, _ := txn1.GetDatabase("db")
+		rel, _ := database.GetRelationByName(snapshotSchema.Name)
+		err = rel.Append(context.Background(), data1)
+		data1.Close()
+		assert.Nil(t, err)
+		assert.Nil(t, txn1.Commit(context.Background()))
+	}
+	wg.Wait()
 	testutils.WaitExpect(10000, func() bool {
 		return db.Runtime.Scheduler.GetPenddingLSNCnt() == 0
 	})
