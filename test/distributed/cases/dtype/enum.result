@@ -169,9 +169,7 @@ col1    col2
 1    数据库
 2    数据库
 alter table pri02 add primary key (col2);
-You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 3 column 16 near " NOT NULL,
-PRIMARY KEY (`col2`)
-)";
+Duplicate entry '1' for key 'col2'
 show create table pri02;
 Table    Create Table
 pri02    CREATE TABLE `pri02` (\n`col1` INT DEFAULT NULL,\n`col2` ENUM('数据库','数据库系统','数据库管理系统') DEFAULT NULL\n)
@@ -193,20 +191,17 @@ col1    col2
 1    数据库
 2    数据库系统
 alter table pri03 add primary key (col2);
-You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 3 column 16 near " NOT NULL,
-PRIMARY KEY (`col2`)
-)";
 show create table pri03;
 Table    Create Table
-pri03    CREATE TABLE `pri03` (\n`col1` INT DEFAULT NULL,\n`col2` ENUM('数据库','数据库系统','数据库管理系统') DEFAULT NULL\n)
+pri03    CREATE TABLE `pri03` (\n`col1` INT DEFAULT NULL,\n`col2` ENUM('数据库','数据库系统','数据库管理系统') NOT NULL,\nPRIMARY KEY (`col2`)\n)
 show columns from pri03;
 Field    Type    Null    Key    Default    Extra    Comment
-col1    INT(32)    YES        null        
-col2    ENUM('数据库','数据库系统','数据库管理系统')    YES        null        
+col1    INT(32)    YES        null     
+col2    ENUM('数据库','数据库系统','数据库管理系统')    NO    PRI    null     
 select table_name, COLUMN_NAME, data_type, is_nullable from information_schema.columns where table_name like 'pri03' and COLUMN_NAME not like '__mo%';
 table_name    column_name    data_type    is_nullable
 pri03    col1    INT    YES
-pri03    col2    ENUM    YES
+pri03    col2    ENUM    NO
 drop table pri03;
 drop table if exists pri04;
 create table pri04 (col1 int, col2 enum('database', 'database management', 'database management system'));
