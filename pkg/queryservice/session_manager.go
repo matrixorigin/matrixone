@@ -93,7 +93,7 @@ func (sm *SessionManager) GetAllSessions() []Session {
 // GetAllStatusSessions returns all status sessions in the manager.
 func (sm *SessionManager) GetAllStatusSessions() []*status.Session {
 	if sm == nil {
-		return nil
+		return []*status.Session{}
 	}
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
@@ -121,7 +121,7 @@ func (sm *SessionManager) GetSessionsByTenant(tenant string) []Session {
 // GetStatusSessionsByTenant returns the status sessions belongs to the tenant.
 func (sm *SessionManager) GetStatusSessionsByTenant(tenant string) []*status.Session {
 	if sm == nil {
-		return nil
+		return []*status.Session{}
 	}
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
