@@ -204,11 +204,11 @@ func NewExpressionExecutor(proc *process.Process, planExpr *plan.Expr) (Expressi
 					// ToConst just returns a new pointer to the same memory.
 					// so we need to duplicate it.
 					fixed.resultVector, err = result.ToConst(0, 1, mp).Dup(mp)
+					executor.Free()
 				} else {
 					fixed.fixed = true
 					fixed.resultVector = result
 				}
-				executor.Free()
 				if err != nil {
 					return nil, err
 				}
@@ -843,10 +843,17 @@ func FixProjectionResult(proc *process.Process,
 			}
 
 			finalVectors = append(finalVectors, newVec)
-			indexOfNewVec := len(finalVectors) - 1
+			// indexOfNewVec := len(finalVectors) - 1
+			// avoid double free
 			for j := range rbat.Vecs {
 				if rbat.Vecs[j] == oldVec {
-					alreadySet[j] = indexOfNewVec
+					anotherVec, err := newVec.Dup(proc.Mp())
+					if err != nil {
+						return -1, err
+					}
+					finalVectors = append(finalVectors, anotherVec)
+					dupSize += anotherVec.Size()
+					alreadySet[j] = len(finalVectors) - 1
 				}
 			}
 		}

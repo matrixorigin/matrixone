@@ -15,8 +15,9 @@
 package table_function
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"strings"
+
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -52,12 +53,6 @@ func metadataScan(_ int, proc *process.Process, arg *Argument, result *vm.CallRe
 	defer func() {
 		if err != nil && rbat != nil {
 			rbat.Clean(proc.Mp())
-		}
-		if source != nil {
-			source.Free(proc.Mp())
-		}
-		if col != nil {
-			col.Free(proc.Mp())
 		}
 	}()
 

@@ -17,7 +17,6 @@ package vector
 import (
 	"bytes"
 	"fmt"
-	"runtime/debug"
 	"slices"
 	"sort"
 	"unsafe"
@@ -67,7 +66,10 @@ type Vector struct {
 
 	Debug string
 
-	FreeMsg string
+	FreeMsg  []string
+	AllocMsg []string
+	PutMsg   []string
+	GetMsg   []string
 }
 
 type typedSlice struct {
@@ -272,44 +274,30 @@ func GetArrayAt[T types.RealNumbers](v *Vector, i int) []T {
 
 func NewEmptyVec() *Vector {
 	vec := NewVecFromReuse()
-	vec.nsp = *nulls.New()
 	return vec
 }
 
 func NewVec(typ types.Type) *Vector {
 	vec := NewVecFromReuse()
-	*vec = Vector{
-		typ:     typ,
-		class:   FLAT,
-		nsp:     *nulls.New(),
-		FreeMsg: vec.FreeMsg,
-	}
+	vec.typ = typ
+	vec.class = FLAT
 
 	return vec
 }
 
 func NewConstNull(typ types.Type, length int, mp *mpool.MPool) *Vector {
 	vec := NewVecFromReuse()
-	*vec = Vector{
-		typ:     typ,
-		class:   CONSTANT,
-		length:  length,
-		nsp:     *nulls.New(),
-		FreeMsg: vec.FreeMsg,
-	}
+	vec.typ = typ
+	vec.class = CONSTANT
+	vec.length = length
 
 	return vec
 }
 
 func NewConstFixed[T any](typ types.Type, val T, length int, mp *mpool.MPool) (vec *Vector, err error) {
 	vec = NewVecFromReuse()
-	*vec = Vector{
-		typ:     typ,
-		class:   CONSTANT,
-		nsp:     *nulls.New(),
-		FreeMsg: vec.FreeMsg,
-	}
-
+	vec.typ = typ
+	vec.class = CONSTANT
 	if length > 0 {
 		err = SetConstFixed(vec, val, length, mp)
 	}
@@ -319,12 +307,8 @@ func NewConstFixed[T any](typ types.Type, val T, length int, mp *mpool.MPool) (v
 
 func NewConstBytes(typ types.Type, val []byte, length int, mp *mpool.MPool) (vec *Vector, err error) {
 	vec = NewVecFromReuse()
-	*vec = Vector{
-		typ:     typ,
-		class:   CONSTANT,
-		nsp:     *nulls.New(),
-		FreeMsg: vec.FreeMsg,
-	}
+	vec.typ = typ
+	vec.class = CONSTANT
 
 	if length > 0 {
 		err = SetConstBytes(vec, val, length, mp)
@@ -336,12 +320,8 @@ func NewConstBytes(typ types.Type, val []byte, length int, mp *mpool.MPool) (vec
 // NewConstArray Creates a Const_Array Vector
 func NewConstArray[T types.RealNumbers](typ types.Type, val []T, length int, mp *mpool.MPool) (vec *Vector, err error) {
 	vec = NewVecFromReuse()
-	*vec = Vector{
-		typ:     typ,
-		class:   CONSTANT,
-		nsp:     *nulls.New(),
-		FreeMsg: vec.FreeMsg,
-	}
+	vec.typ = typ
+	vec.class = CONSTANT
 
 	if length > 0 {
 		err = SetConstArray[T](vec, val, length, mp)
@@ -439,6 +419,7 @@ func (v *Vector) Free(mp *mpool.MPool) {
 	if !v.cantFreeArea {
 		mp.Free(v.area)
 	}
+	f := v.class
 	v.class = FLAT
 	v.col = typedSlice{}
 	v.data = nil
@@ -450,9 +431,14 @@ func (v *Vector) Free(mp *mpool.MPool) {
 
 	v.nsp.Reset()
 	v.sorted = false
-	v.FreeMsg = string(debug.Stack())
+	// if len(v.FreeMsg) > 3 {
+	// 	v.FreeMsg = v.FreeMsg[1:]
+	// }
+	// v.FreeMsg = append(v.FreeMsg, time.Now().String()+" : "+string(debug.Stack()))
 
-	reuse.Free[Vector](v, nil)
+	if f == FLAT {
+		reuse.Free[Vector](v, nil)
+	}
 }
 
 func (v *Vector) MarshalBinary() ([]byte, error) {
@@ -661,14 +647,11 @@ func (v *Vector) Dup(mp *mpool.MPool) (*Vector, error) {
 	var err error
 
 	w := NewVecFromReuse()
-	*w = Vector{
-		class:   v.class,
-		typ:     v.typ,
-		length:  v.length,
-		sorted:  v.sorted,
-		nsp:     *nulls.New(),
-		FreeMsg: w.FreeMsg,
-	}
+	w.class = v.class
+	w.typ = v.typ
+	w.length = v.length
+	w.sorted = v.sorted
+
 	w.GetNulls().InitWith(v.GetNulls())
 
 	dataLen := v.typ.TypeSize()

@@ -613,6 +613,11 @@ func getBatchFromZonemapFile(ctx context.Context, param *ExternalParam, proc *pr
 	defer func() {
 		span.End()
 		if tmpBat != nil {
+			for i, v := range tmpBat.Vecs {
+				if v == vecTmp {
+					tmpBat.Vecs[i] = nil
+				}
+			}
 			tmpBat.Clean(mp)
 		}
 		if vecTmp != nil {
