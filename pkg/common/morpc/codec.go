@@ -463,6 +463,11 @@ func (c *baseCodec) readMessage(
 	if offset == len(data) {
 		return nil
 	}
+	// invalid body packet
+	if offset >= len(data)-payloadSize {
+		return moerr.NewInvalidInputNoCtx("invalid body packet, offset %d, len %d, payload size %d",
+			offset, len(data), payloadSize)
+	}
 
 	body := data[offset : len(data)-payloadSize]
 	payload := data[len(data)-payloadSize:]
