@@ -50,6 +50,7 @@ type Argument struct {
 	// UniqueSource []engine.Relation
 	// Ref          *plan.ObjectRef
 	TableDef        *plan.TableDef
+	ColIndex        []int32
 	OnDuplicateIdx  []int32
 	OnDuplicateExpr map[string]*plan.Expr
 

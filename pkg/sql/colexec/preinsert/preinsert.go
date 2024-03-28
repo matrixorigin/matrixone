@@ -86,7 +86,7 @@ func (arg *Argument) Call(proc *proc) (vm.CallResult, error) {
 		}
 	}
 	// check new rows not null
-	err = colexec.BatchDataNotNullCheck(arg.buf, arg.TableDef, proc.Ctx)
+	err = colexec.BatchDataNotNullCheck(arg.buf, arg.TableDef, proc.Ctx, arg.ColIndex)
 	if err != nil {
 		return result, err
 	}

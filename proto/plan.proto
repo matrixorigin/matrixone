@@ -579,6 +579,7 @@ message OnDuplicateKeyCtx {
 	repeated int32 on_duplicate_idx		= 2;
 	map<string, Expr> on_duplicate_expr	= 3;
 	bool is_ignore 						= 4;
+	repeated int32 col_index = 5;
 }
 
 message InsertCtx {
@@ -586,10 +587,11 @@ message InsertCtx {
 	bool add_affected_rows 	= 2;
 	bool is_cluster_table	= 3;
 	TableDef table_def		= 4;
+	repeated int32 col_index = 5;
 	// Align array index with the partition number
-	repeated uint64 partition_table_ids = 5;
-	repeated string partition_table_names = 6;
-	int32 partition_idx = 7;
+	repeated uint64 partition_table_ids = 6;
+	repeated string partition_table_names = 7;
+	int32 partition_idx = 8;
 }
 
 message ReplaceCtx {
@@ -765,18 +767,20 @@ message Node {
 	Expr offset = 16;
 
 	TableDef table_def = 17;
-	ObjectRef obj_ref = 18;
-	ObjectRef parent_obj_ref = 19;
-	RowsetData rowset_data = 20;
+	repeated int32 col_index = 18;
+	Expr partition_expression = 19;
+	ObjectRef obj_ref = 20;
+	ObjectRef parent_obj_ref = 21;
+	RowsetData rowset_data = 22;
 
-	string extra_options = 22;
-	DeleteCtx delete_ctx = 23;
+	string extra_options = 23;
+	DeleteCtx delete_ctx = 24;
 
-	repeated int32 binding_tags = 24;
+	repeated int32 binding_tags = 25;
 
-	AnalyzeInfo analyze_info = 25;
+	AnalyzeInfo analyze_info = 26;
 
-	repeated Expr tbl_func_expr_list = 26;
+	repeated Expr tbl_func_expr_list = 27;
 
 	ClusterTable cluster_table = 28;
 	bool not_cacheable = 29;
@@ -854,6 +858,7 @@ message PreInsertUkCtx {
 	Type pk_type 			= 3;
 	Type uk_type			= 4;
 	TableDef table_def 		= 5;
+	repeated int32 col_index = 6;
 }
 
 message PreDeleteCtx {
@@ -866,6 +871,7 @@ message PreInsertCtx {
 	TableDef table_def 		= 2;
 	bool has_auto_col		= 3;
 	bool is_update			= 4;
+	repeated int32 col_index = 5;
 }
 
 message RuntimeFilterSpec {
@@ -896,6 +902,7 @@ message DeleteCtx {
 	int32 primary_key_idx = 9;
 	TruncateTable truncate_table = 10;
 	TableDef table_def 	= 11;
+	repeated int32 col_index = 12;
 }
 
 message Query {

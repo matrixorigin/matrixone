@@ -1090,7 +1090,8 @@ func constructValueScanBatch(ctx context.Context, proc *process.Process, node *p
 	}
 	// select * from (values row(1,1), row(2,2), row(3,3)) a;
 	tableDef := node.TableDef
-	colCount := len(tableDef.Cols)
+	colIndex := node.ColIndex
+	colCount := tableDef.GetColLength(colIndex)
 	colsData := node.RowsetData.Cols
 	copy(nodeId[:], node.Uuid)
 	bat := proc.GetPrepareBatch()
@@ -2127,8 +2128,8 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node) (*Sco
 	var db engine.Database
 	var rel engine.Relation
 
-	attrs := make([]string, len(n.TableDef.Cols))
-	for j, col := range n.TableDef.Cols {
+	attrs := make([]string, n.TableDef.GetColLength(n.ColIndex))
+	for j, col := range n.TableDef.GetColsByIndex(n.ColIndex) {
 		attrs[j] = col.Name
 	}
 	if c.proc != nil && c.proc.TxnOperator != nil {
@@ -3782,7 +3783,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 					partialResults = nil
 					break
 				}
-				columnMap[int(col.Col.ColPos)] = int(n.TableDef.Cols[int(col.Col.ColPos)].Seqnum)
+				columnMap[int(col.Col.ColPos)] = int(n.TableDef.GetColsByIndex(n.ColIndex)[int(col.Col.ColPos)].Seqnum)
 			}
 			for i := 1; i < ranges.Len(); i++ {
 				if partialResults == nil {

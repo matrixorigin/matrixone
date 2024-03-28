@@ -440,6 +440,7 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 		t := sourceIns.Arg.(*source.Argument)
 		arg := source.NewArgument()
 		arg.TblDef = t.TblDef
+		arg.ColIndex = t.ColIndex
 		arg.Limit = t.Limit
 		arg.Offset = t.Offset
 		arg.Configs = t.Configs
@@ -497,6 +498,7 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 		arg := preinsert.NewArgument()
 		arg.SchemaName = t.SchemaName
 		arg.TableDef = t.TableDef
+		arg.ColIndex = t.ColIndex
 		arg.Attrs = t.Attrs
 		arg.IsUpdate = t.IsUpdate
 		arg.HasAutoCol = t.HasAutoCol
@@ -583,6 +585,7 @@ func constructOnduplicateKey(n *plan.Node, eg engine.Engine) *onduplicatekey.Arg
 	arg.OnDuplicateIdx = oldCtx.OnDuplicateIdx
 	arg.OnDuplicateExpr = oldCtx.OnDuplicateExpr
 	arg.TableDef = oldCtx.TableDef
+	arg.ColIndex = oldCtx.ColIndex
 	arg.IsIgnore = oldCtx.IsIgnore
 	return arg
 }
@@ -593,7 +596,7 @@ func constructFuzzyFilter(c *Compile, n, left, right *plan.Node) *fuzzyfilter.Ar
 	if pkName == catalog.CPrimaryKeyColName {
 		pkTyp = n.TableDef.Pkey.CompPkeyCol.Typ
 	} else {
-		cols := n.TableDef.Cols
+		cols := n.TableDef.GetColsByIndex(n.ColIndex)
 		for _, c := range cols {
 			if c.Name == pkName {
 				pkTyp = c.Typ
@@ -616,7 +619,7 @@ func constructPreInsert(n *plan.Node, eg engine.Engine, proc *process.Process) (
 
 	//var attrs []string
 	attrs := make([]string, 0)
-	for _, col := range preCtx.TableDef.Cols {
+	for _, col := range preCtx.TableDef.GetColsByIndex(n.ColIndex) {
 		if col.Hidden && col.Name != catalog.FakePrimaryKeyColName {
 			continue
 		}
@@ -638,6 +641,7 @@ func constructPreInsert(n *plan.Node, eg engine.Engine, proc *process.Process) (
 	arg.HasAutoCol = preCtx.HasAutoCol
 	arg.SchemaName = schemaName
 	arg.TableDef = preCtx.TableDef
+	arg.ColIndex = preCtx.ColIndex
 	arg.Attrs = attrs
 	arg.IsUpdate = preCtx.IsUpdate
 
@@ -689,7 +693,7 @@ func constructInsert(n *plan.Node, eg engine.Engine, proc *process.Process) (*in
 	ctx := proc.Ctx
 
 	var attrs []string
-	for _, col := range oldCtx.TableDef.Cols {
+	for _, col := range oldCtx.TableDef.GetColsByIndex(oldCtx.ColIndex) {
 		if col.Name != catalog.Row_ID {
 			attrs = append(attrs, col.Name)
 		}
@@ -707,6 +711,7 @@ func constructInsert(n *plan.Node, eg engine.Engine, proc *process.Process) (*in
 		PartitionTableNames:   oldCtx.PartitionTableNames,
 		PartitionIndexInBatch: int(oldCtx.PartitionIdx),
 		TableDef:              oldCtx.TableDef,
+		ColIndex:              oldCtx.ColIndex,
 	}
 	if len(oldCtx.PartitionTableNames) > 0 {
 		dbSource, err := eg.Database(proc.Ctx, oldCtx.Ref.SchemaName, proc.TxnOperator)
@@ -737,15 +742,15 @@ func constructProjection(n *plan.Node) *projection.Argument {
 }
 
 func constructExternal(n *plan.Node, param *tree.ExternParam, ctx context.Context, fileList []string, FileSize []int64, fileOffset []*pipeline.FileOffset) *external.Argument {
-	attrs := make([]string, len(n.TableDef.Cols))
-	for j, col := range n.TableDef.Cols {
+	attrs := make([]string, n.TableDef.GetColLength(n.ColIndex))
+	for j, col := range n.TableDef.GetColsByIndex(n.ColIndex) {
 		attrs[j] = col.Name
 	}
 	return external.NewArgument().WithEs(
 		&external.ExternalParam{
 			ExParamConst: external.ExParamConst{
 				Attrs:           attrs,
-				Cols:            n.TableDef.Cols,
+				Cols:            n.TableDef.GetColsByIndex(n.ColIndex),
 				Extern:          param,
 				Name2ColIndex:   n.TableDef.Name2ColIndex,
 				FileOffsetTotal: fileOffset,
@@ -768,19 +773,20 @@ func constructExternal(n *plan.Node, param *tree.ExternParam, ctx context.Contex
 func constructStream(n *plan.Node, p [2]int64) *source.Argument {
 	arg := source.NewArgument()
 	arg.TblDef = n.TableDef
+	arg.ColIndex = n.ColIndex
 	arg.Offset = p[0]
 	arg.Limit = p[1]
 	return arg
 }
 
 func constructTableFunction(n *plan.Node) *table_function.Argument {
-	attrs := make([]string, len(n.TableDef.Cols))
-	for j, col := range n.TableDef.Cols {
+	attrs := make([]string, n.TableDef.GetColLength(n.ColIndex))
+	for j, col := range n.TableDef.GetColsByIndex(n.ColIndex) {
 		attrs[j] = col.Name
 	}
 	arg := table_function.NewArgument()
 	arg.Attrs = attrs
-	arg.Rets = n.TableDef.Cols
+	arg.Rets = n.TableDef.GetColsByIndex(n.ColIndex)
 	arg.Args = n.TblFuncExprList
 	arg.FuncName = n.TableDef.TblFunc.Name
 	arg.Params = n.TableDef.TblFunc.Param

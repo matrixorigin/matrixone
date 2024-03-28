@@ -89,6 +89,7 @@ type InsertCtx struct {
 	PartitionIndexInBatch int               // The array index position of the partition expression column
 	PartitionSources      []engine.Relation // Align array index with the partition number
 	TableDef              *plan.TableDef
+	ColIndex              []int32
 }
 
 // The Argument for insert data directly to s3 can not be free when this function called as some datastructure still needed.

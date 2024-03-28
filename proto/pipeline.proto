@@ -125,6 +125,7 @@ message Insert{
   int32 partition_idx = 8;
   bool is_end         = 9;
   plan.TableDef table_def = 10;
+  repeated int32 col_index = 11;
 }
 
 message Array{
@@ -162,6 +163,7 @@ message PreInsert {
   repeated string attrs   = 4;
   bool has_auto_col       = 5;
   bool is_update          = 6;
+  repeated int32 col_index = 7;
 }
 
 message LockTarget {
@@ -193,6 +195,7 @@ message OnDuplicateKey{
   repeated int32 on_duplicate_idx           = 2;
   map<string, plan.Expr> on_duplicate_expr  = 3;
   bool is_ignore                            = 4;
+  repeated int32 col_index                  = 5;
 }
 
 message FuzzyFilter {
@@ -380,6 +383,7 @@ message StreamScan {
   plan.TableDef tbl_def = 1;
   int64 offset = 2;
   int64 limit = 3;
+  repeated int32 col_index = 4;
 }
 
 message SampleFunc {

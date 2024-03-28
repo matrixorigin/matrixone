@@ -37,10 +37,10 @@ func (arg *Argument) Prepare(proc *process.Process) error {
 	defer span.End()
 
 	p := arg
-	p.attrs = make([]string, len(p.TblDef.Cols))
-	p.types = make([]types.Type, len(p.TblDef.Cols))
+	p.attrs = make([]string, p.TblDef.GetColLength(p.ColIndex))
+	p.types = make([]types.Type, p.TblDef.GetColLength(p.ColIndex))
 	p.Configs = make(map[string]interface{})
-	for i, col := range p.TblDef.Cols {
+	for i, col := range p.TblDef.GetColsByIndex(p.ColIndex) {
 		p.attrs[i] = col.Name
 		p.types[i] = types.Type{
 			Oid:   types.T(col.Typ.Id),

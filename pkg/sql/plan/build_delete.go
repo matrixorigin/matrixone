@@ -83,6 +83,7 @@ func buildDelete(stmt *tree.Delete, ctx CompilerContext, isPrepareStmt bool) (*P
 		delPlanCtx.allDelTables = allDelTables
 		delPlanCtx.lockTable = needLockTable
 		delPlanCtx.isDeleteWithoutFilters = isDeleteWithoutFilters
+		delPlanCtx.colIndex = tblInfo.colIndex[i]
 
 		if tableDef.Partition != nil {
 			partTableIds := make([]uint64, tableDef.Partition.PartitionNum)
@@ -111,7 +112,7 @@ func buildDelete(stmt *tree.Delete, ctx CompilerContext, isPrepareStmt bool) (*P
 		if err != nil {
 			return nil, err
 		}
-		beginIdx = beginIdx + len(tableDef.Cols)
+		beginIdx = beginIdx + len(delPlanCtx.colIndex)
 		putDmlPlanCtx(delPlanCtx)
 	}
 

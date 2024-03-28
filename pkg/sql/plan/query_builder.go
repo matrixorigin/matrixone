@@ -2206,7 +2206,8 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 
 		if builder.isForUpdate {
 			tableDef := builder.qry.Nodes[nodeID].GetTableDef()
-			pkPos, pkTyp := getPkPos(tableDef, false)
+			colIndex := builder.qry.Nodes[nodeID].GetColIndex()
+			pkPos, pkTyp := getPkPos(tableDef, false, colIndex)
 			lockTarget := &plan.LockTarget{
 				TableId:            tableDef.TblId,
 				PrimaryColIdxInBat: int32(pkPos),
@@ -2219,6 +2220,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 				NodeType:    plan.Node_LOCK_OP,
 				Children:    []int32{nodeID},
 				TableDef:    tableDef,
+				ColIndex:    colIndex,
 				LockTargets: []*plan.LockTarget{lockTarget},
 				BindingTags: []int32{builder.genNewTag()},
 			}

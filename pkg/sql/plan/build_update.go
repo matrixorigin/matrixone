@@ -114,8 +114,9 @@ func rewriteUpdateQueryLastNode(builder *QueryBuilder, planCtxs []*dmlPlanCtx, l
 	idx := 0
 	for _, planCtx := range planCtxs {
 		tableDef := planCtx.tableDef
+		colIndex := planCtx.colIndex
 
-		for colIdx, col := range tableDef.Cols {
+		for colIdx, col := range tableDef.GetColsByIndex(colIndex) {
 			if offset, ok := planCtx.updateColPosMap[col.Name]; ok {
 				pos := idx + offset
 				posExpr := lastNode.ProjectList[pos]
@@ -147,7 +148,7 @@ func rewriteUpdateQueryLastNode(builder *QueryBuilder, planCtxs []*dmlPlanCtx, l
 				}
 			}
 		}
-		idx = planCtx.updateColLength + len(tableDef.Cols)
+		idx = planCtx.updateColLength + tableDef.GetColLength(colIndex)
 	}
 	return nil
 }
@@ -166,11 +167,12 @@ func selectUpdateTables(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.
 	updatePlanCtxs := make([]*dmlPlanCtx, len(aliasList))
 	for i, alias := range aliasList {
 		tableDef := tableInfo.tableDefs[i]
+		colIndex := tableInfo.colIndex[i]
 		updateKeys := tableInfo.updateKeys[i]
 
 		// append  table.* to project list
 		rowIdPos := -1
-		for idx, col := range tableDef.Cols {
+		for idx, col := range tableDef.GetColsByIndex(colIndex) {
 			e, _ := tree.NewUnresolvedName(builder.GetContext(), alias, col.Name)
 			selectList = append(selectList, tree.SelectExpr{
 				Expr: e,
@@ -182,7 +184,7 @@ func selectUpdateTables(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.
 
 		// add update expr to project list
 		updateColPosMap := make(map[string]int)
-		offset := len(tableDef.Cols)
+		offset := tableDef.GetColLength(colIndex)
 		updatePkCol := false
 		updatePkColCount := 0
 		var pkNameMap = make(map[string]struct{})
@@ -193,7 +195,7 @@ func selectUpdateTables(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.
 		}
 
 		for colName, updateKey := range updateKeys {
-			for _, coldef := range tableDef.Cols {
+			for _, coldef := range tableDef.GetColsByIndex(colIndex) {
 				if coldef.Name == colName && coldef.Typ.Id == int32(types.T_enum) {
 					binder := NewDefaultBinder(builder.GetContext(), nil, nil, coldef.Typ, nil)
 					updateKeyExpr, err := binder.BindExpr(updateKey, 0, false)
@@ -245,8 +247,9 @@ func selectUpdateTables(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.
 		upPlanCtx.allDelTables = map[FkReferKey]struct{}{}
 		upPlanCtx.checkInsertPkDup = true
 		upPlanCtx.updatePkCol = updatePkCol
+		upPlanCtx.colIndex = colIndex
 
-		for idx, col := range tableDef.Cols {
+		for idx, col := range tableDef.GetColsByIndex(colIndex) {
 			// row_id、compPrimaryKey、clusterByKey will not inserted from old data
 			if col.Hidden && col.Name != catalog.FakePrimaryKeyColName {
 				continue

@@ -721,6 +721,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			PartitionTableNames: t.InsertCtx.PartitionTableNames,
 			PartitionIdx:        int32(t.InsertCtx.PartitionIndexInBatch),
 			TableDef:            t.InsertCtx.TableDef,
+			ColIndex:            t.InsertCtx.ColIndex,
 		}
 	case *deletion.Argument:
 		in.Delete = &pipeline.Deletion{
@@ -742,6 +743,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 	case *onduplicatekey.Argument:
 		in.OnDuplicateKey = &pipeline.OnDuplicateKey{
 			TableDef:        t.TableDef,
+			ColIndex:        t.ColIndex,
 			OnDuplicateIdx:  t.OnDuplicateIdx,
 			OnDuplicateExpr: t.OnDuplicateExpr,
 		}
@@ -755,6 +757,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 		in.PreInsert = &pipeline.PreInsert{
 			SchemaName: t.SchemaName,
 			TableDef:   t.TableDef,
+			ColIndex:   t.ColIndex,
 			HasAutoCol: t.HasAutoCol,
 			IsUpdate:   t.IsUpdate,
 			Attrs:      t.Attrs,
@@ -1098,9 +1101,10 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 		}
 	case *source.Argument:
 		in.StreamScan = &pipeline.StreamScan{
-			TblDef: t.TblDef,
-			Limit:  t.Limit,
-			Offset: t.Offset,
+			TblDef:   t.TblDef,
+			ColIndex: t.ColIndex,
+			Limit:    t.Limit,
+			Offset:   t.Offset,
 		}
 	default:
 		return -1, nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf("unexpected operator: %v", opr.Op))
@@ -1153,6 +1157,7 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 			PartitionTableNames:   t.PartitionTableNames,
 			PartitionIndexInBatch: int(t.PartitionIdx),
 			TableDef:              t.TableDef,
+			ColIndex:              t.ColIndex,
 		}
 		v.Arg = arg
 	case vm.PreInsert:
@@ -1160,6 +1165,7 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 		arg := preinsert.NewArgument()
 		arg.SchemaName = t.GetSchemaName()
 		arg.TableDef = t.GetTableDef()
+		arg.ColIndex = t.GetColIndex()
 		arg.Attrs = t.GetAttrs()
 		arg.HasAutoCol = t.GetHasAutoCol()
 		arg.IsUpdate = t.GetIsUpdate()
@@ -1192,6 +1198,7 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 		t := opr.GetOnDuplicateKey()
 		arg := onduplicatekey.NewArgument()
 		arg.TableDef = t.TableDef
+		arg.ColIndex = t.ColIndex
 		arg.OnDuplicateIdx = t.OnDuplicateIdx
 		arg.OnDuplicateExpr = t.OnDuplicateExpr
 		arg.IsIgnore = t.IsIgnore
@@ -1556,6 +1563,7 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 		t := opr.GetStreamScan()
 		arg := source.NewArgument()
 		arg.TblDef = t.TblDef
+		arg.ColIndex = t.ColIndex
 		arg.Limit = t.Limit
 		arg.Offset = t.Offset
 		v.Arg = arg

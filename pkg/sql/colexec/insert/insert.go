@@ -41,14 +41,14 @@ func (arg *Argument) Prepare(proc *process.Process) error {
 	if arg.ToWriteS3 {
 		if len(arg.InsertCtx.PartitionTableIDs) > 0 {
 			// If the target is partition table, just only apply writers for all partitioned sub tables
-			s3Writers, err := colexec.AllocPartitionS3Writer(proc, arg.InsertCtx.TableDef)
+			s3Writers, err := colexec.AllocPartitionS3Writer(proc, arg.InsertCtx.TableDef, nil)
 			if err != nil {
 				return err
 			}
 			arg.ctr.partitionS3Writers = s3Writers
 		} else {
 			// If the target is not partition table, you only need to operate the main table
-			s3Writer, err := colexec.AllocS3Writer(proc, arg.InsertCtx.TableDef)
+			s3Writer, err := colexec.AllocS3Writer(proc, arg.InsertCtx.TableDef, arg.InsertCtx.ColIndex)
 			if err != nil {
 				return err
 			}

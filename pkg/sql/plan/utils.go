@@ -1515,12 +1515,13 @@ func ReadDir(param *tree.ExternParam) (fileList []string, fileSize []int64, err 
 // GetUniqueColAndIdxFromTableDef
 // if get table:  t1(a int primary key, b int, c int, d int, unique key(b,c));
 // return : []map[string]int { {'a'=1},  {'b'=2,'c'=3} }
-func GetUniqueColAndIdxFromTableDef(tableDef *TableDef) []map[string]int {
-	uniqueCols := make([]map[string]int, 0, len(tableDef.Cols))
+func GetUniqueColAndIdxFromTableDef(tableDef *TableDef, colIndex []int32) []map[string]int {
+	uniqueCols := make([]map[string]int, 0, tableDef.GetColLength(colIndex))
+	name2ColIndex := tableDef.GetName2ColIndexByColIdx(colIndex)
 	if tableDef.Pkey != nil && !onlyHasHiddenPrimaryKey(tableDef) {
 		pkMap := make(map[string]int)
 		for _, colName := range tableDef.Pkey.Names {
-			pkMap[colName] = int(tableDef.Name2ColIndex[colName])
+			pkMap[colName] = int(name2ColIndex[colName])
 		}
 		uniqueCols = append(uniqueCols, pkMap)
 	}
@@ -1529,7 +1530,7 @@ func GetUniqueColAndIdxFromTableDef(tableDef *TableDef) []map[string]int {
 		if index.Unique {
 			pkMap := make(map[string]int)
 			for _, part := range index.Parts {
-				pkMap[part] = int(tableDef.Name2ColIndex[part])
+				pkMap[part] = int(name2ColIndex[part])
 			}
 			uniqueCols = append(uniqueCols, pkMap)
 		}
@@ -1600,14 +1601,14 @@ func GenUniqueColJoinExpr(ctx context.Context, tableDef *TableDef, uniqueCols []
 // if get table:  t1(a int primary key, b int, c int, d int, unique key(b,c));
 // we get batch like [1,2,3,4, origin_a, origin_b, origin_c, origin_d, row_id ....]。
 // we get expr like:  []*Expr{ 1=origin_a ,  (2 = origin_b and 3 = origin_c) }
-func GenUniqueColCheckExpr(ctx context.Context, tableDef *TableDef, uniqueCols []map[string]int, colCount int) ([]*Expr, error) {
+func GenUniqueColCheckExpr(ctx context.Context, tableDef *TableDef, uniqueCols []map[string]int, colCount int, colIndex []int32) ([]*Expr, error) {
 	checkExpr := make([]*Expr, len(uniqueCols))
-
+	cols := tableDef.GetColsByIndex(colIndex)
 	for i, uniqueColMap := range uniqueCols {
 		var condExpr *Expr
 		condIdx := int(0)
 		for _, colIdx := range uniqueColMap {
-			col := tableDef.Cols[colIdx]
+			col := cols[colIdx]
 			// insert values
 			leftExpr := &Expr{
 				Typ: *col.Typ,

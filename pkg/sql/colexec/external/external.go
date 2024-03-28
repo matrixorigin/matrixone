@@ -218,7 +218,7 @@ func getAccountCol(filepath string) string {
 }
 
 func makeFilepathBatch(node *plan.Node, proc *process.Process, fileList []string) (bat *batch.Batch, err error) {
-	num := len(node.TableDef.Cols)
+	num := node.TableDef.GetColLength(node.ColIndex)
 	bat = &batch.Batch{
 		Attrs: make([]string, num),
 		Vecs:  make([]*vector.Vector, num),
@@ -228,9 +228,9 @@ func makeFilepathBatch(node *plan.Node, proc *process.Process, fileList []string
 	var buf bytes.Buffer
 	mp := proc.GetMPool()
 	for i := 0; i < num; i++ {
-		bat.Attrs[i] = node.TableDef.Cols[i].Name
+		bat.Attrs[i] = node.TableDef.GetColsByIndex(node.ColIndex)[i].Name
 		if bat.Attrs[i] == STATEMENT_ACCOUNT {
-			typ := types.New(types.T(node.TableDef.Cols[i].Typ.Id), node.TableDef.Cols[i].Typ.Width, node.TableDef.Cols[i].Typ.Scale)
+			typ := types.New(types.T(node.TableDef.GetColsByIndex(node.ColIndex)[i].Typ.Id), node.TableDef.Cols[i].Typ.Width, node.TableDef.Cols[i].Typ.Scale)
 			bat.Vecs[i], err = proc.AllocVectorOfRows(typ, len(fileList), nil)
 			if err != nil {
 				bat.Clean(mp)

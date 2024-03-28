@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"time"
 
 	"github.com/google/uuid"
@@ -29,7 +30,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
-	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
 
@@ -66,6 +66,7 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 		tblInfo: tblInfo,
 	}
 	tableDef := tblInfo.tableDefs[0]
+	colIndex := tblInfo.colIndex[0]
 	// clusterTable, err := getAccountInfoOfClusterTable(ctx, stmt.Accounts, tableDef, tblInfo.isClusterTable[0])
 	// if err != nil {
 	// 	return nil, err
@@ -93,7 +94,8 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 	objRef := tblInfo.objRef[0]
 	if len(rewriteInfo.onDuplicateIdx) > 0 {
 		// append on duplicate key node
-		tableDef = DeepCopyTableDef(tableDef, true)
+		// TODO: resolve this part
+		objRef, tableDef = builder.compCtx.Resolve(objRef.SchemaName, objRef.ObjName)
 		if tableDef.Pkey != nil && tableDef.Pkey.PkeyColName == catalog.CPrimaryKeyColName {
 			tableDef.Cols = append(tableDef.Cols, tableDef.Pkey.CompPkeyCol)
 		}
@@ -182,10 +184,8 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 		updateColPosMap := make(map[string]int)
 		var insertColPos []int
 		var projectProjection []*Expr
-		tableDef = DeepCopyTableDef(tableDef, true)
-		tableDef.Cols = append(tableDef.Cols, MakeRowIdColDef())
 		colLength := len(tableDef.Cols)
-		rowIdPos := colLength - 1
+		rowIdPos := getRowIdPos(tableDef)
 		for _, col := range tableDef.Cols {
 			if col.Hidden && col.Name != catalog.FakePrimaryKeyColName {
 				continue
@@ -249,7 +249,7 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 
 		query.StmtType = plan.Query_UPDATE
 	} else {
-		err = buildInsertPlans(ctx, builder, bindCtx, stmt, objRef, tableDef, rewriteInfo.rootId, ifExistAutoPkCol, insertWithoutUniqueKeyMap)
+		err = buildInsertPlans(ctx, builder, bindCtx, stmt, objRef, tableDef, rewriteInfo.rootId, ifExistAutoPkCol, insertWithoutUniqueKeyMap, colIndex)
 		if err != nil {
 			return nil, err
 		}
@@ -279,14 +279,15 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 // If the INSERT statement specifies the columns, it validates the column names against the table definition
 // and returns an error if any of the column names are invalid.
 // The function returns the list of insert columns and an error, if any.
-func getInsertColsFromStmt(ctx context.Context, stmt *tree.Insert, tableDef *TableDef) ([]string, error) {
+// TODO：mark as checked
+func getInsertColsFromStmt(ctx context.Context, stmt *tree.Insert, tableDef *TableDef, colIndex []int32) ([]string, error) {
 	var insertColsName []string
 	colToIdx := make(map[string]int)
-	for i, col := range tableDef.Cols {
+	for i, col := range tableDef.GetColsByIndex(colIndex) {
 		colToIdx[col.Name] = i
 	}
 	if stmt.Columns == nil {
-		for _, col := range tableDef.Cols {
+		for _, col := range tableDef.GetColsByIndex(colIndex) {
 			if col.Name != catalog.FakePrimaryKeyColName {
 				insertColsName = append(insertColsName, col.Name)
 			}
@@ -319,7 +320,7 @@ func getInsertColsFromStmt(ctx context.Context, stmt *tree.Insert, tableDef *Tab
 //  5. for hidden table created by unique index, need to contain the inserted data column
 //
 // Otherwise, the primary key filter cannot be used.
-func canUsePkFilter(builder *QueryBuilder, ctx CompilerContext, stmt *tree.Insert, tableDef *TableDef, insertColsName []string, uniqueIndexDef *IndexDef) bool {
+func canUsePkFilter(builder *QueryBuilder, ctx CompilerContext, stmt *tree.Insert, tableDef *TableDef, insertColsName []string, uniqueIndexDef *IndexDef, colIndex []int32) bool {
 	var isCompound bool
 	var used4UniqueIndex bool // mark if this pkfilter is used for hidden table created by unique index
 
@@ -385,7 +386,7 @@ func canUsePkFilter(builder *QueryBuilder, ctx CompilerContext, stmt *tree.Inser
 		}
 	} else {
 		// check for auto increment primary key
-		pkPos, pkTyp := getPkPos(tableDef, true)
+		pkPos, pkTyp := getPkPos(tableDef, true, colIndex)
 		if pkPos == -1 {
 			if tableDef.Pkey.PkeyColName != catalog.CPrimaryKeyColName {
 				return false // break condition 2
@@ -397,7 +398,7 @@ func canUsePkFilter(builder *QueryBuilder, ctx CompilerContext, stmt *tree.Inser
 			}
 
 			autoIncIdx := -1
-			for _, col := range tableDef.Cols {
+			for _, col := range tableDef.GetColsByIndex(colIndex) {
 				if _, ok := pkNameMap[col.Name]; ok {
 					if col.Typ.AutoIncr {
 						foundInStmt := false
@@ -480,7 +481,7 @@ func canUsePkFilter(builder *QueryBuilder, ctx CompilerContext, stmt *tree.Inser
 				toCheckColName = uniqueIndexDef.Parts[0]
 			}
 
-			for i, col := range tableDef.Cols {
+			for i, col := range tableDef.GetColsByIndex(colIndex) {
 				if col.Name == toCheckColName {
 					typ := tableDef.Cols[i].Typ
 					switch typ.Id {
@@ -552,7 +553,7 @@ func (p *locationMap) getPkOrderInValues(insertColsNameFromStmt []string) map[in
 
 // need to check if the primary key filter can be used before calling this function.
 // also need to consider both origin table and hidden table for unique key
-func newLocationMap(tableDef *TableDef, uniqueIndexDef *IndexDef) *locationMap {
+func newLocationMap(tableDef *TableDef, uniqueIndexDef *IndexDef, colIndex []int32) *locationMap {
 	if uniqueIndexDef != nil && !uniqueIndexDef.Unique {
 		panic("uniqueIndexDef.Unique must be true")
 	}
@@ -571,7 +572,7 @@ func newLocationMap(tableDef *TableDef, uniqueIndexDef *IndexDef) *locationMap {
 		}
 	}
 
-	for i, col := range tableDef.Cols {
+	for i, col := range tableDef.GetColsByIndex(colIndex) {
 		if _, ok := name2Order[col.Name]; ok {
 			name2Indx[col.Name] = i
 		}
@@ -850,6 +851,7 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 // ------------------- partition relatived -------------------
 
 // remapPartitionExpr Remap partition expression column references
+// TODO: move this to
 func remapPartitionExpr(builder *QueryBuilder, tableDef *TableDef, pkPosInValues map[int]int) *Expr {
 	if builder.qry.Nodes[0].NodeType != plan.Node_VALUE_SCAN {
 		return nil

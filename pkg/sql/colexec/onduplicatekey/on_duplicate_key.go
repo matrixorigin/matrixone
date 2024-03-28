@@ -110,17 +110,18 @@ func resetInsertBatchForOnduplicateKey(proc *process.Process, originBatch *batch
 	}
 
 	tableDef := insertArg.TableDef
+	colIndex := insertArg.ColIndex
 	insertColCount := 0 //columns without hidden columns
 	if insertArg.ctr.rbat == nil {
 		attrs := make([]string, 0, len(originBatch.Vecs))
-		for _, col := range tableDef.Cols {
+		for _, col := range tableDef.GetColsByIndex(colIndex) {
 			if col.Hidden && col.Name != catalog.FakePrimaryKeyColName {
 				continue
 			}
 			attrs = append(attrs, col.Name)
 			insertColCount++
 		}
-		for _, col := range tableDef.Cols {
+		for _, col := range tableDef.GetColsByIndex(colIndex) {
 			attrs = append(attrs, col.Name)
 		}
 		attrs = append(attrs, catalog.Row_ID)
@@ -138,15 +139,15 @@ func resetInsertBatchForOnduplicateKey(proc *process.Process, originBatch *batch
 			insertArg.ctr.checkConflictBat.SetVector(int32(i), ckVec)
 		}
 	} else {
-		for _, col := range tableDef.Cols {
+		for _, col := range tableDef.GetColsByIndex(colIndex) {
 			if col.Hidden && col.Name != catalog.FakePrimaryKeyColName {
 				continue
 			}
 			insertColCount++
 		}
 	}
-	uniqueCols := plan2.GetUniqueColAndIdxFromTableDef(tableDef)
-	checkExpr, err := plan2.GenUniqueColCheckExpr(proc.Ctx, tableDef, uniqueCols, insertColCount)
+	uniqueCols := plan2.GetUniqueColAndIdxFromTableDef(tableDef, nil)
+	checkExpr, err := plan2.GenUniqueColCheckExpr(proc.Ctx, tableDef, uniqueCols, insertColCount, colIndex)
 	if err != nil {
 		return err
 	}

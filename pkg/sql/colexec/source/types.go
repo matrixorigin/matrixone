@@ -31,9 +31,10 @@ const (
 )
 
 type Argument struct {
-	TblDef *plan.TableDef
-	Offset int64
-	Limit  int64
+	TblDef   *plan.TableDef
+	ColIndex []int32
+	Offset   int64
+	Limit    int64
 
 	// end     bool
 	attrs   []string

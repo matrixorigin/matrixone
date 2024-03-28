@@ -100,3 +100,37 @@ func (p *PartitionByDef) GenPartitionExprString() string {
 		return ""
 	}
 }
+
+func (tableDef *TableDef) GetColsByIndex(colIndex []int32) []*ColDef {
+	// colIndex == nil means all columns, colIndex == [] means no columns
+	if colIndex == nil {
+		return tableDef.Cols
+	}
+	cols := make([]*ColDef, len(colIndex))
+	for i, idx := range colIndex {
+		cols[i] = tableDef.Cols[idx]
+	}
+	return cols
+}
+
+func (tableDef *TableDef) GetPartitionExprByIndex(colIndex []int32) *Expr {
+	if colIndex == nil {
+		return tableDef.Partition.PartitionExpression
+	}
+	return nil
+}
+
+func (tableDef *TableDef) GetColLength(colIndex []int32) int {
+	if colIndex == nil {
+		return len(tableDef.Cols)
+	}
+	return len(colIndex)
+}
+
+func (tableDef *TableDef) GetName2ColIndexByColIdx(colIndex []int32) map[string]int32 {
+	name2ColIndex := make(map[string]int32)
+	for i, col := range tableDef.GetColsByIndex(colIndex) {
+		name2ColIndex[col.Name] = int32(i)
+	}
+	return name2ColIndex
+}

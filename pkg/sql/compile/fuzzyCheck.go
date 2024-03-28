@@ -52,7 +52,7 @@ func newFuzzyCheck(n *plan.Node) (*fuzzyCheck, error) {
 	f.db = f.wrapup(dbName)
 	f.attr = n.TableDef.Pkey.PkeyColName
 
-	for _, c := range n.TableDef.Cols {
+	for _, c := range n.TableDef.GetColsByIndex(n.ColIndex) {
 		if c.Name == n.TableDef.Pkey.PkeyColName {
 			f.col = c
 		}
@@ -62,7 +62,7 @@ func newFuzzyCheck(n *plan.Node) (*fuzzyCheck, error) {
 	// for Decimal type, we need colDef to get the scale
 	if n.TableDef.Pkey.PkeyColName == catalog.CPrimaryKeyColName {
 		f.isCompound = true
-		f.compoundCols = f.sortColDef(n.TableDef.Pkey.Names, n.TableDef.Cols)
+		f.compoundCols = f.sortColDef(n.TableDef.Pkey.Names, n.TableDef.GetColsByIndex(n.ColIndex))
 	}
 
 	if n.Fuzzymessage != nil {

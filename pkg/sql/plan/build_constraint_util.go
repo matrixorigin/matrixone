@@ -55,6 +55,7 @@ type dmlTableInfo struct {
 	typ            string
 	objRef         []*ObjectRef
 	tableDefs      []*TableDef
+	colIndex       [][]int32 //each tableDef has a colIndex, which is the index of the useful tableDef's cols
 	isClusterTable []bool
 	haveConstraint bool
 	isMulti        bool
@@ -262,22 +263,22 @@ func setTableExprToDmlTableInfo(ctx CompilerContext, tbl tree.TableExpr, tblInfo
 		return moerr.NewInvalidInput(ctx.GetContext(), "Cannot insert/update/delete from sequence")
 	}
 
-	var newCols []*ColDef
-	for _, col := range tableDef.Cols {
+	var colIndex []int32
+	for idx, col := range tableDef.Cols {
 		if col.Hidden && tblInfo.typ == "insert" {
 			if col.Name == catalog.FakePrimaryKeyColName {
 				// fake pk is auto increment, need to fill.
 				// TODO(fagongzi): we need to use a separate tag to mark the columns
 				// for these behaviors, instead of using column names, which needs to
 				// be changed after 0.8
-				newCols = append(newCols, col)
+				colIndex = append(colIndex, int32(idx))
 			}
 		} else {
-			newCols = append(newCols, col)
+			colIndex = append(colIndex, int32(idx))
 		}
 	}
+
 	// note: the `rowId` column has been excluded from `TableDef` in the `insert` statement
-	tableDef.Cols = newCols
 
 	isClusterTable := util.TableIsClusterTable(tableDef.GetTableType())
 	accountId, err := ctx.GetAccountId()
@@ -318,6 +319,7 @@ func setTableExprToDmlTableInfo(ctx CompilerContext, tbl tree.TableExpr, tblInfo
 		ObjName:    tblName,
 	})
 	tblInfo.tableDefs = append(tblInfo.tableDefs, tableDef)
+	tblInfo.colIndex = append(tblInfo.colIndex, colIndex)
 	key := dbName + "." + tblName
 	tblInfo.nameToIdx[key] = nowIdx
 	tblInfo.idToName[tableDef.TblId] = key
@@ -329,6 +331,12 @@ func setTableExprToDmlTableInfo(ctx CompilerContext, tbl tree.TableExpr, tblInfo
 	return nil
 }
 
+// TODO: modify change about tableInfo
+// getUpdateTableInfo
+// buildDelete
+// buildInsert
+// buildLoad
+// buildReplace
 func getDmlTableInfo(ctx CompilerContext, tableExprs tree.TableExprs, with *tree.With, aliasMap map[string][2]string, typ string) (*dmlTableInfo, error) {
 	tblInfo := &dmlTableInfo{
 		typ:       typ,
@@ -362,13 +370,16 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 	var insertColumns []string
 	tableDef := info.tblInfo.tableDefs[0]
 	tableObjRef := info.tblInfo.objRef[0]
+	colIndex := info.tblInfo.colIndex[0]
+	cols := tableDef.GetColsByIndex(colIndex)
+
 	colToIdx := make(map[string]int)
 	oldColPosMap := make(map[string]int)
-	tableDef.Name2ColIndex = make(map[string]int32)
-	for i, col := range tableDef.Cols {
+	name2ColIndex := make(map[string]int32)
+	for i, col := range cols {
 		colToIdx[col.Name] = i
 		oldColPosMap[col.Name] = i
-		tableDef.Name2ColIndex[col.Name] = int32(i)
+		name2ColIndex[col.Name] = int32(i)
 	}
 	info.tblInfo.oldColPosMap = append(info.tblInfo.oldColPosMap, oldColPosMap)
 	info.tblInfo.newColPosMap = append(info.tblInfo.newColPosMap, oldColPosMap)
@@ -376,7 +387,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 	ifExistAutoPkCol := false
 	insertWithoutUniqueKeyMap := make(map[string]bool)
 
-	if insertColumns, err = getInsertColsFromStmt(builder.GetContext(), stmt, tableDef); err != nil {
+	if insertColumns, err = getInsertColsFromStmt(builder.GetContext(), stmt, tableDef, colIndex); err != nil {
 		return false, nil, err
 	}
 	if stmt.Columns != nil {
@@ -412,7 +423,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 		if isAllDefault && syntaxHasColumnNames {
 			return false, nil, moerr.NewInvalidInput(builder.GetContext(), "insert values does not match the number of columns")
 		}
-		err = buildValueScan(isAllDefault, info, builder, bindCtx, tableDef, slt, insertColumns, colToIdx, stmt.OnDuplicateUpdate)
+		err = buildValueScan(isAllDefault, info, builder, bindCtx, tableDef, slt, insertColumns, colToIdx, stmt.OnDuplicateUpdate, colIndex)
 		if err != nil {
 			return false, nil, err
 		}
@@ -467,13 +478,13 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 				},
 			},
 		}
-		if tableDef.Cols[colIdx].Typ.Id == int32(types.T_enum) {
-			projExpr, err = funcCastForEnumType(builder.GetContext(), projExpr, tableDef.Cols[colIdx].Typ)
+		if cols[colIdx].Typ.Id == int32(types.T_enum) {
+			projExpr, err = funcCastForEnumType(builder.GetContext(), projExpr, cols[colIdx].Typ)
 			if err != nil {
 				return false, nil, err
 			}
 		} else {
-			projExpr, err = forceCastExpr(builder.GetContext(), projExpr, tableDef.Cols[colIdx].Typ)
+			projExpr, err = forceCastExpr(builder.GetContext(), projExpr, cols[colIdx].Typ)
 			if err != nil {
 				return false, nil, err
 			}
@@ -496,7 +507,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 				} else {
 					// insert without unique
 					// then need check col is not auto_incr & default is not null
-					col := tableDef.Cols[tableDef.Name2ColIndex[name]]
+					col := cols[name2ColIndex[name]]
 					if col.Typ.AutoIncr || (col.Default.Expr != nil && !isNullExpr(col.Default.Expr)) {
 						withoutUniqueCol = false
 						break
@@ -514,7 +525,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 	// rewrite 'insert into t1(b) values (1)' to
 	// select 'select 0, _t.column_0 from (select * from values (1)) _t(column_0)
 	projectList := make([]*Expr, 0, len(tableDef.Cols))
-	for _, col := range tableDef.Cols {
+	for _, col := range cols {
 		if oldExpr, exists := insertColToExpr[col.Name]; exists {
 			projectList = append(projectList, oldExpr)
 		} else {
@@ -567,22 +578,19 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 			stmt.OnDuplicateUpdate = nil
 		}
 
-		rightTableDef := DeepCopyTableDef(tableDef, true)
-		rightObjRef := DeepCopyObjectRef(tableObjRef)
-		uniqueCols := GetUniqueColAndIdxFromTableDef(rightTableDef)
-		if rightTableDef.Pkey != nil && rightTableDef.Pkey.PkeyColName == catalog.CPrimaryKeyColName {
+		// resolve table as TableDef not contains hidden col in insert stmt
+		rightTblColIdx := colIndex
+		uniqueCols := GetUniqueColAndIdxFromTableDef(tableDef, colIndex)
+
+		if tableDef.Pkey != nil && tableDef.Pkey.PkeyColName == catalog.CPrimaryKeyColName {
 			// rightTableDef.Cols = append(rightTableDef.Cols, MakeHiddenColDefByName(catalog.CPrimaryKeyColName))
-			rightTableDef.Cols = append(rightTableDef.Cols, rightTableDef.Pkey.CompPkeyCol)
+			rightTblColIdx = append(rightTblColIdx, int32(getCPkPos(tableDef, nil)))
 		}
-		if rightTableDef.ClusterBy != nil && util.JudgeIsCompositeClusterByColumn(rightTableDef.ClusterBy.Name) {
+		if tableDef.ClusterBy != nil && util.JudgeIsCompositeClusterByColumn(tableDef.ClusterBy.Name) {
 			// rightTableDef.Cols = append(rightTableDef.Cols, MakeHiddenColDefByName(rightTableDef.ClusterBy.Name))
-			rightTableDef.Cols = append(rightTableDef.Cols, rightTableDef.ClusterBy.CompCbkeyCol)
+			rightTblColIdx = append(rightTblColIdx, int32(getCompCbkeyPos(tableDef, nil)))
 		}
-		rightTableDef.Cols = append(rightTableDef.Cols, MakeRowIdColDef())
-		rightTableDef.Name2ColIndex = map[string]int32{}
-		for i, col := range rightTableDef.Cols {
-			rightTableDef.Name2ColIndex[col.Name] = int32(i)
-		}
+		rightTblColIdx = append(rightTblColIdx, int32(getRowIdPos(tableDef)))
 
 		// if table have unique columns, we do the rewrite. if not, do nothing(do not throw error)
 		if len(uniqueCols) > 0 {
@@ -591,8 +599,9 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 			rightCtx := NewBindContext(builder, joinCtx)
 			rightId := builder.appendNode(&plan.Node{
 				NodeType:    plan.Node_TABLE_SCAN,
-				ObjRef:      rightObjRef,
-				TableDef:    rightTableDef,
+				ObjRef:      tableObjRef,
+				TableDef:    tableDef,
+				ColIndex:    rightTblColIdx,
 				BindingTags: []int32{builder.genNewTag()},
 			}, rightCtx)
 			rightTag := builder.qry.Nodes[rightId].BindingTags[0]
@@ -606,13 +615,13 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 			}
 
 			var defExpr *Expr
-			idxs := make([]int32, len(rightTableDef.Cols))
+			idxs := make([]int32, tableDef.GetColLength(rightTblColIdx))
 			updateExprs := make(map[string]*Expr)
-			for i, col := range rightTableDef.Cols {
+			for i, col := range tableDef.GetColsByIndex(rightTblColIdx) {
 				info.idx = info.idx + 1
 				idxs[i] = info.idx
 				if updateExpr, exists := updateCols[col.Name]; exists {
-					binder := NewUpdateBinder(builder.GetContext(), nil, nil, rightTableDef.Cols)
+					binder := NewUpdateBinder(builder.GetContext(), nil, nil, tableDef.GetColsByIndex(rightTblColIdx))
 					binder.builder = builder
 					if _, ok := updateExpr.(*tree.DefaultVal); ok {
 						defExpr, err = getDefaultExpr(builder.GetContext(), col)
@@ -645,11 +654,12 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 			// get join condition
 			var joinConds *Expr
 			joinIdx := 0
+			rightTblCols := tableDef.GetColsByIndex(rightTblColIdx)
 			for _, uniqueColMap := range uniqueCols {
 				var condExpr *Expr
 				condIdx := int(0)
 				for _, colIdx := range uniqueColMap {
-					col := rightTableDef.Cols[colIdx]
+					col := rightTblCols[colIdx]
 					leftExpr := &Expr{
 						Typ: *col.Typ,
 						Expr: &plan.Expr_Col{
@@ -887,6 +897,7 @@ func forceCastExpr(ctx context.Context, expr *Expr, targetType *Type) (*Expr, er
 	}, nil
 }
 
+// TODO: mark as checked
 func buildValueScan(
 	isAllDefault bool,
 	info *dmlSelectInfo,
@@ -897,6 +908,7 @@ func buildValueScan(
 	updateColumns []string,
 	colToIdx map[string]int,
 	OnDuplicateUpdate tree.UpdateExprs,
+	colIndex []int32,
 ) error {
 	var err error
 
@@ -917,8 +929,10 @@ func buildValueScan(
 	projectList := make([]*Expr, colCount)
 	bat := batch.NewWithSize(len(updateColumns))
 
+	cols := tableDef.GetColsByIndex(colIndex)
+
 	for i, colName := range updateColumns {
-		col := tableDef.Cols[colToIdx[colName]]
+		col := cols[colToIdx[colName]]
 		colTyp := makeTypeByPlan2Type(col.Typ)
 		vec := proc.GetVector(colTyp)
 		bat.Vecs[i] = vec
@@ -1051,7 +1065,7 @@ func buildValueScan(
 	if builder.isPrepareStatement && !(len(OnDuplicateUpdate) == 1 && OnDuplicateUpdate[0] == nil) {
 		for _, expr := range OnDuplicateUpdate {
 			var updateExpr *plan.Expr
-			col := tableDef.Cols[colToIdx[expr.Names[0].Parts[0]]]
+			col := cols[colToIdx[expr.Names[0].Parts[0]]]
 			if nv, ok := expr.Expr.(*tree.ParamExpr); ok {
 				updateExpr = &plan.Expr{
 					Typ: *constTextType,
@@ -1119,16 +1133,10 @@ func buildValueScan(
 	return nil
 }
 
+// TODO: mark as checked
 // if table have fk. then append join node & filter node
 // sink_scan -> join -> filter
-func appendForeignConstrantPlan(
-	builder *QueryBuilder,
-	bindCtx *BindContext,
-	tableDef *TableDef,
-	objRef *ObjectRef,
-	sourceStep int32,
-	isFkRecursionCall bool,
-) error {
+func appendForeignConstrantPlan(builder *QueryBuilder, bindCtx *BindContext, tableDef *TableDef, objRef *ObjectRef, sourceStep int32, isFkRecursionCall bool, colIndex []int32) error {
 	enabled, err := IsForeignKeyChecksEnabled(builder.compCtx)
 	if err != nil {
 		return err
@@ -1137,7 +1145,7 @@ func appendForeignConstrantPlan(
 	if enabled && !isFkRecursionCall && len(tableDef.Fkeys) > 0 {
 		lastNodeId := appendSinkScanNode(builder, bindCtx, sourceStep)
 
-		lastNodeId, err := appendJoinNodeForParentFkCheck(builder, bindCtx, objRef, tableDef, lastNodeId)
+		lastNodeId, err := appendJoinNodeForParentFkCheck(builder, bindCtx, objRef, tableDef, lastNodeId, colIndex)
 		if err != nil {
 			return err
 		}
@@ -1206,13 +1214,14 @@ func appendPrimaryConstrantPlan(
 	isUpdate bool,
 	updatePkCol bool,
 	fuzzymessage *OriginTableMessageForFuzzy,
+	colIndex []int32,
 ) error {
 	var lastNodeId int32
 	var err error
 
 	// need more comments here to explain checkCondition, for example, why updatePkCol is needed
 	// we should not checkInsertPkDup any more, insert into t values (1) checkInsertPkDup is false, however it may still conflict with pk already exists
-	if pkPos, pkTyp := getPkPos(tableDef, true); pkPos != -1 {
+	if pkPos, pkTyp := getPkPos(tableDef, true, colIndex); pkPos != -1 {
 		// needCheck := true
 		needCheck := !builder.qry.LoadTag
 		useFuzzyFilter := CNPrimaryCheck
@@ -1315,31 +1324,28 @@ func appendPrimaryConstrantPlan(
 			if pkSize > 1 {
 				pkSize++
 			}
-			scanTableDef := DeepCopyTableDef(tableDef, false)
-			scanTableDef.Cols = make([]*ColDef, pkSize)
-			for _, col := range tableDef.Cols {
+
+			scanTblColIdx := make([]int32, pkSize)
+			for idx, col := range tableDef.GetColsByIndex(colIndex) {
 				if i, ok := pkNameMap[col.Name]; ok {
-					scanTableDef.Cols[i] = DeepCopyColDef(col)
-				} else if col.Name == scanTableDef.Pkey.PkeyColName {
-					scanTableDef.Cols[pkSize-1] = DeepCopyColDef(col)
+					scanTblColIdx[i] = int32(idx)
+				} else if col.Name == tableDef.Pkey.PkeyColName {
+					scanTblColIdx[pkSize-1] = int32(idx)
 					break
 				}
-			}
-
-			if scanTableDef.Partition != nil && partitionExpr != nil {
-				scanTableDef.Partition.PartitionExpression = partitionExpr
 			}
 
 			scanNode := &plan.Node{
 				NodeType: plan.Node_TABLE_SCAN,
 				Stats:    &plan.Stats{},
 				ObjRef:   objRef,
-				TableDef: scanTableDef,
+				TableDef: tableDef,
+				ColIndex: colIndex,
 				ProjectList: []*Expr{{
 					Typ: *pkTyp,
 					Expr: &plan.Expr_Col{
 						Col: &ColRef{
-							ColPos: int32(len(scanTableDef.Cols) - 1),
+							ColPos: int32(len(colIndex) - 1),
 							Name:   tableDef.Pkey.PkeyColName,
 						},
 					},
@@ -1359,6 +1365,10 @@ func appendPrimaryConstrantPlan(
 				},
 			}
 
+			if tableDef.Partition != nil && partitionExpr != nil {
+				scanNode.PartitionExpression = partitionExpr
+			}
+
 			var tableScanId int32
 
 			if len(pkFilterExprs) > 0 {
@@ -1376,7 +1386,8 @@ func appendPrimaryConstrantPlan(
 			}
 
 			// Perform partition pruning on the full table scan of the partitioned table in the insert statement
-			if scanTableDef.Partition != nil && partitionExpr != nil {
+
+			if tableDef.Partition != nil && tableDef.GetPartitionExprByIndex(colIndex) != nil {
 				builder.partitionPrune(tableScanId)
 			}
 
@@ -1385,6 +1396,7 @@ func appendPrimaryConstrantPlan(
 				NodeType: plan.Node_FUZZY_FILTER,
 				Children: []int32{tableScanId, lastNodeId}, // right table build hash
 				TableDef: tableDef,
+				ColIndex: colIndex,
 				ObjRef:   objRef,
 			}
 
@@ -1422,19 +1434,18 @@ func appendPrimaryConstrantPlan(
 	//  so the original logic is retained. should be deleted later
 	// make plan: sink_scan -> join -> filter	// check if pk is unique in rows & snapshot
 	if CNPrimaryCheck {
-		if pkPos, pkTyp := getPkPos(tableDef, true); pkPos != -1 {
+		if pkPos, pkTyp := getPkPos(tableDef, true, colIndex); pkPos != -1 {
 			rfTag := builder.genNewTag()
 
 			if isUpdate && updatePkCol { // update stmt && pk included in update cols
 				lastNodeId = appendSinkScanNode(builder, bindCtx, sourceStep)
-				scanTableDef := DeepCopyTableDef(tableDef, false)
 
-				rowIdIdx := len(tableDef.Cols)
-				rowIdDef := MakeRowIdColDef()
-				tableDef.Cols = append(tableDef.Cols, rowIdDef)
+				scanTblColIdx := make([]int32, 0)
 
-				scanTableDef.Cols = []*plan.ColDef{DeepCopyColDef(tableDef.Cols[pkPos]), DeepCopyColDef(rowIdDef)}
-
+				rowIdIdx := tableDef.GetColLength(colIndex)
+				colIndex = append(colIndex, int32(getRowIdPos(tableDef)))
+				rowIdDef := tableDef.GetColsByIndex(colIndex)[rowIdIdx]
+				scanTblColIdx = append(scanTblColIdx, colIndex[pkPos], colIndex[rowIdIdx])
 				scanPkExpr := &Expr{
 					Typ: *pkTyp,
 					Expr: &plan.Expr_Col{
@@ -1456,7 +1467,8 @@ func appendPrimaryConstrantPlan(
 					NodeType:    plan.Node_TABLE_SCAN,
 					Stats:       &plan.Stats{},
 					ObjRef:      objRef,
-					TableDef:    scanTableDef,
+					TableDef:    tableDef,
+					ColIndex:    scanTblColIdx,
 					ProjectList: []*Expr{scanPkExpr, scanRowIdExpr},
 					RuntimeFilterProbeList: []*plan.RuntimeFilterSpec{
 						{

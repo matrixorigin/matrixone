@@ -126,10 +126,10 @@ func (w *S3Writer) SetSeqnums(seqnums []uint16) {
 	logutil.Debugf("s3 table set directly %q seqnums: %+v", w.tablename, w.seqnums)
 }
 
-func AllocS3Writer(proc *process.Process, tableDef *plan.TableDef) (*S3Writer, error) {
+func AllocS3Writer(proc *process.Process, tableDef *plan.TableDef, colIndex []int32) (*S3Writer, error) {
 	writer := &S3Writer{
 		tablename:      tableDef.GetName(),
-		seqnums:        make([]uint16, 0, len(tableDef.Cols)),
+		seqnums:        make([]uint16, 0, tableDef.GetColLength(colIndex)),
 		schemaVersion:  tableDef.Version,
 		sortIndex:      -1,
 		pk:             -1,
@@ -137,12 +137,12 @@ func AllocS3Writer(proc *process.Process, tableDef *plan.TableDef) (*S3Writer, e
 	}
 
 	writer.ResetBlockInfoBat(proc)
-	for i, colDef := range tableDef.Cols {
+	for i, colDef := range tableDef.GetColsByIndex(colIndex) {
 		if colDef.Name != catalog.Row_ID {
 			writer.seqnums = append(writer.seqnums, uint16(colDef.Seqnum))
 		} else {
 			// check rowid as the last column
-			if i != len(tableDef.Cols)-1 {
+			if i != tableDef.GetColLength(colIndex)-1 {
 				logutil.Errorf("bad rowid position for %q, %+v", writer.tablename, colDef)
 			}
 		}
@@ -150,7 +150,7 @@ func AllocS3Writer(proc *process.Process, tableDef *plan.TableDef) (*S3Writer, e
 	logutil.Debugf("s3 table set from AllocS3Writer %q seqnums: %+v", writer.tablename, writer.seqnums)
 
 	// Get Single Col pk index
-	for idx, colDef := range tableDef.Cols {
+	for idx, colDef := range tableDef.GetColsByIndex(colIndex) {
 		// Maybe current table are `mo_cloumns`, `mo_tables` or `mo_databases`, these table's `TableDef.Pkey` is NULL
 		if tableDef.Pkey == nil {
 			if colDef.Primary {
@@ -173,7 +173,7 @@ func AllocS3Writer(proc *process.Process, tableDef *plan.TableDef) (*S3Writer, e
 		// the `rowId` column has been excluded from target table's `TableDef` for insert statements (insert, load),
 		// link: `/pkg/sql/plan/build_constraint_util.go` -> func setTableExprToDmlTableInfo
 		// and the `sortIndex` position can be directly obtained using a name that matches the sorting key
-		for idx, colDef := range tableDef.Cols {
+		for idx, colDef := range tableDef.GetColsByIndex(colIndex) {
 			if colDef.Name == tableDef.ClusterBy.Name {
 				writer.sortIndex = idx
 			}
@@ -184,13 +184,13 @@ func AllocS3Writer(proc *process.Process, tableDef *plan.TableDef) (*S3Writer, e
 }
 
 // AllocPartitionS3Writer Alloc S3 writers for partitioned table.
-func AllocPartitionS3Writer(proc *process.Process, tableDef *plan.TableDef) ([]*S3Writer, error) {
+func AllocPartitionS3Writer(proc *process.Process, tableDef *plan.TableDef, colIndex []int32) ([]*S3Writer, error) {
 	partitionNum := len(tableDef.Partition.PartitionTableNames)
 	writers := make([]*S3Writer, partitionNum)
 	for i := range writers {
 		writers[i] = &S3Writer{
 			tablename:      tableDef.GetName(),
-			seqnums:        make([]uint16, 0, len(tableDef.Cols)),
+			seqnums:        make([]uint16, 0, tableDef.GetColLength(colIndex)),
 			schemaVersion:  tableDef.Version,
 			sortIndex:      -1,
 			pk:             -1,
@@ -198,12 +198,12 @@ func AllocPartitionS3Writer(proc *process.Process, tableDef *plan.TableDef) ([]*
 		}
 
 		writers[i].ResetBlockInfoBat(proc)
-		for j, colDef := range tableDef.Cols {
+		for j, colDef := range tableDef.GetColsByIndex(colIndex) {
 			if colDef.Name != catalog.Row_ID {
 				writers[i].seqnums = append(writers[i].seqnums, uint16(colDef.Seqnum))
 			} else {
 				// check rowid as the last column
-				if j != len(tableDef.Cols)-1 {
+				if j != tableDef.GetColLength(colIndex)-1 {
 					logutil.Errorf("bad rowid position for %q, %+v", writers[j].tablename, colDef)
 				}
 			}
@@ -211,7 +211,7 @@ func AllocPartitionS3Writer(proc *process.Process, tableDef *plan.TableDef) ([]*
 		logutil.Debugf("s3 table set from AllocS3WriterP%d %q seqnums: %+v", i, writers[i].tablename, writers[i].seqnums)
 
 		// Get Single Col pk index
-		for idx, colDef := range tableDef.Cols {
+		for idx, colDef := range tableDef.GetColsByIndex(colIndex) {
 			if colDef.Name == tableDef.Pkey.PkeyColName {
 				if colDef.Name != catalog.FakePrimaryKeyColName {
 					writers[i].sortIndex = idx
@@ -225,9 +225,9 @@ func AllocPartitionS3Writer(proc *process.Process, tableDef *plan.TableDef) ([]*
 			writers[i].isClusterBy = true
 			if util.JudgeIsCompositeClusterByColumn(tableDef.ClusterBy.Name) {
 				// the serialized clusterby col is located in the last of the bat.vecs
-				writers[i].sortIndex = len(tableDef.Cols) - 1
+				writers[i].sortIndex = tableDef.GetColLength(colIndex) - 1
 			} else {
-				for idx, colDef := range tableDef.Cols {
+				for idx, colDef := range tableDef.GetColsByIndex(colIndex) {
 					if colDef.Name == tableDef.ClusterBy.Name {
 						writers[i].sortIndex = idx
 					}
