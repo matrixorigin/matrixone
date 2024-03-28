@@ -207,7 +207,7 @@ jobs:
         if: ${{ steps.ut-pr.outputs.paths != '' && failure() && steps.test_ut.conclusion != 'failure' && steps.test_bvt_start.conclusion != 'failure' && steps.test_bvt_stop.conclusion != 'failure' }}
         continue-on-error: true
         with:
-          name: code-coverage-reports-${{ github.event.pull_request.number}}-${{ github.run_id }}.zip
+          name: PR-Unit-Test-Coverage-reports-${{ github.event.pull_request.number}}-${{ github.run_id }}.zip
           path: |
             ${{ github.workspace }}/matrixone/code_coverage_reports_${{ github.event.pull_request.number}}_${{ github.run_id }}.zip
           retention-days: 7

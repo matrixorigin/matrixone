@@ -19,6 +19,7 @@ import (
 	"io"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/fileservice/memorycache"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/stretchr/testify/assert"
@@ -59,7 +60,7 @@ func testCachingFileService(
 			Entries: []IOEntry{
 				{
 					Size: int64(len(data)),
-					ToCacheData: func(r io.Reader, data []byte, allocator CacheDataAllocator) (CacheData, error) {
+					ToCacheData: func(r io.Reader, data []byte, allocator CacheDataAllocator) (memorycache.CacheData, error) {
 						bs, err := io.ReadAll(r)
 						assert.Nil(t, err)
 						if len(data) > 0 {
@@ -87,6 +88,8 @@ func testCachingFileService(
 	assert.Equal(t, int64(0), counterSet.FileService.Cache.Read.Load())
 	assert.Equal(t, int64(0), counterSet.FileService.Cache.Hit.Load())
 
+	vec.Release()
+
 	// read, not hit
 	vec = makeVec()
 	err = fs.Read(ctx, vec)
@@ -98,6 +101,8 @@ func testCachingFileService(
 	assert.Equal(t, int64(1), counterSet.FileService.Cache.Read.Load())
 	assert.Equal(t, int64(0), counterSet.FileService.Cache.Hit.Load())
 
+	vec.Release()
+
 	// read again, hit cache
 	vec = makeVec()
 	err = fs.Read(ctx, vec)
@@ -108,6 +113,8 @@ func testCachingFileService(
 	assert.Equal(t, int64(42), m.M[42])
 	assert.Equal(t, int64(2), counterSet.FileService.Cache.Read.Load())
 	assert.Equal(t, int64(1), counterSet.FileService.Cache.Hit.Load())
+
+	vec.Release()
 
 	// flush
 	fs.FlushCache()
