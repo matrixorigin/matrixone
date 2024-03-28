@@ -116,6 +116,7 @@ func (t *GCTable) SoftGC(table *GCTable, ts types.TS, snapShotList map[uint64][]
 		if len(snapShotList[entry.table]) == 0 {
 			logutil.Infof("SoftGC: snapShotList is empty %d", entry.table)
 		}
+		logutil.Infof("SoftGC: name is %v, table is %d, create %v, drop %v", name, entry.table, entry.createTS.ToString(), entry.dropTS.ToString())
 		if objectEntry == nil && entry.commitTS.Less(&ts) && !isSnapshotRefers(entry, snapShotList[entry.table]) {
 			gc = append(gc, name)
 			t.deleteObject(name)
@@ -140,6 +141,7 @@ func isSnapshotRefers(obj *ObjectEntry, snapShotList []types.TS) bool {
 			right = mid - 1
 		}
 	}
+	logutil.Infof("name is %v, create %v, drop %v", obj.table, obj.createTS.ToString(), obj.dropTS.ToString())
 	return false
 }
 
@@ -226,6 +228,7 @@ func (t *GCTable) collectData(files []string) []*containers.Batch {
 		bats[CreateBlock].GetVectorByName(GCCreateTS).Append(entry.createTS, false)
 		bats[CreateBlock].GetVectorByName(GCDeleteTS).Append(entry.dropTS, false)
 		bats[CreateBlock].GetVectorByName(GCAttrCommitTS).Append(entry.commitTS, false)
+		bats[CreateBlock].GetVectorByName(GCAttrTableId).Append(entry.table, false)
 	}
 	return bats
 }
@@ -274,6 +277,7 @@ func (t *GCTable) rebuildTableV2(bats []*containers.Batch) {
 		creatTS := bats[CreateBlock].GetVectorByName(GCCreateTS).Get(i).(types.TS)
 		deleteTS := bats[CreateBlock].GetVectorByName(GCDeleteTS).Get(i).(types.TS)
 		commitTS := bats[CreateBlock].GetVectorByName(GCAttrCommitTS).Get(i).(types.TS)
+		tid := bats[CreateBlock].GetVectorByName(GCAttrTableId).Get(i).(uint64)
 		if t.objects[name] != nil {
 			continue
 		}
@@ -281,6 +285,7 @@ func (t *GCTable) rebuildTableV2(bats []*containers.Batch) {
 			createTS: creatTS,
 			dropTS:   deleteTS,
 			commitTS: commitTS,
+			table:    tid,
 		}
 		t.addObject(name, object, commitTS)
 	}

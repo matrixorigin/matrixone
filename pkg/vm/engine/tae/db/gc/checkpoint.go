@@ -370,6 +370,12 @@ func (c *checkpointCleaner) tryGC(data *logtail.CheckpointData, gckp *checkpoint
 	gc := c.softGC(gcTable, gckp, snapshots)
 	// Delete files after softGC
 	// TODO:Requires Physical Removal Policy
+	logutil.Infof("gc files: %v", gc)
+	for snapshotID, snapshot := range snapshots {
+		for _, ts := range snapshot {
+			logutil.Infof("snapshotID: %v, ts: %v", snapshotID, ts.ToString())
+		}
+	}
 	err = c.delWorker.ExecDelete(c.ctx, gc, c.disableGC)
 	if err != nil {
 		return err

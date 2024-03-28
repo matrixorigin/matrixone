@@ -57,12 +57,14 @@ var (
 		GCCreateTS,
 		GCDeleteTS,
 		GCAttrCommitTS,
+		GCAttrTableId,
 	}
 	BlockSchemaTypes = []types.Type{
 		types.New(types.T_varchar, 5000, 0),
 		types.New(types.T_TS, types.MaxVarcharLen, 0),
 		types.New(types.T_TS, types.MaxVarcharLen, 0),
 		types.New(types.T_TS, types.MaxVarcharLen, 0),
+		types.New(types.T_uint64, 0, 0),
 	}
 
 	BlockSchemaAttrV1 = []string{
