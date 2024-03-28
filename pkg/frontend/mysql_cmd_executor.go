@@ -3753,6 +3753,13 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 		return
 	}
 
+	defer func() {
+		// Serialize the execution plan as json
+		if cwft, ok := cw.(*TxnComputationWrapper); ok {
+			_ = cwft.RecordExecPlan(requestCtx)
+		}
+	}()
+
 	cmpBegin = time.Now()
 
 	if ret, err = cw.Compile(requestCtx, ses, ses.GetOutputCallback()); err != nil {
@@ -3795,13 +3802,6 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 	if time.Since(cmpBegin) > time.Second {
 		logInfo(ses, ses.GetDebugString(), fmt.Sprintf("time of Exec.Build : %s", time.Since(cmpBegin).String()))
 	}
-
-	defer func() {
-		// Serialize the execution plan as json
-		if cwft, ok := cw.(*TxnComputationWrapper); ok {
-			_ = cwft.RecordExecPlan(requestCtx)
-		}
-	}()
 
 	mrs = ses.GetMysqlResultSet()
 	ep := ses.GetExportConfig()
@@ -5010,30 +5010,30 @@ func (h *marshalPlanHandler) Stats(ctx context.Context) (statsByte statistic.Sta
 				stats.BytesScan += bytes
 			}
 		}
-
-		statsInfo := statistic.StatsInfoFromContext(ctx)
-		if statsInfo != nil {
-			val := int64(statsByte.GetTimeConsumed()) +
-				int64(statsInfo.ParseDuration+
-					statsInfo.CompileDuration+
-					statsInfo.PlanDuration) - (statsInfo.IOAccessTimeConsumption + statsInfo.LockTimeConsumption)
-			if val < 0 {
-				logutil.Warnf(" negative cpu (%s) + statsInfo(%d + %d + %d - %d - %d) = %d",
-					uuid.UUID(h.stmt.StatementID).String(),
-					statsInfo.ParseDuration,
-					statsInfo.CompileDuration,
-					statsInfo.PlanDuration,
-					statsInfo.IOAccessTimeConsumption,
-					statsInfo.LockTimeConsumption,
-					val)
-				v2.GetTraceNegativeCUCounter("cpu").Inc()
-			} else {
-				statsByte.WithTimeConsumed(float64(val))
-			}
-		}
 	} else {
 		statsByte = statistic.DefaultStatsArray
 	}
+	statsInfo := statistic.StatsInfoFromContext(ctx)
+	if statsInfo != nil {
+		val := int64(statsByte.GetTimeConsumed()) +
+			int64(statsInfo.ParseDuration+
+				statsInfo.CompileDuration+
+				statsInfo.PlanDuration) - (statsInfo.IOAccessTimeConsumption + statsInfo.LockTimeConsumption)
+		if val < 0 {
+			logutil.Warnf(" negative cpu (%s) + statsInfo(%d + %d + %d - %d - %d) = %d",
+				uuid.UUID(h.stmt.StatementID).String(),
+				statsInfo.ParseDuration,
+				statsInfo.CompileDuration,
+				statsInfo.PlanDuration,
+				statsInfo.IOAccessTimeConsumption,
+				statsInfo.LockTimeConsumption,
+				val)
+			v2.GetTraceNegativeCUCounter("cpu").Inc()
+		} else {
+			statsByte.WithTimeConsumed(float64(val))
+		}
+	}
+
 	return
 }
 
