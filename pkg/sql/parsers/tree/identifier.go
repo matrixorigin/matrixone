@@ -69,21 +69,10 @@ type UnresolvedName struct {
 }
 
 func (node *UnresolvedName) Format(ctx *FmtCtx) {
-	if node.CStrParts[0] != nil {
-		for i := node.NumParts - 1; i >= 0; i-- {
-			if node.CStrParts[i] != nil {
-				ctx.WriteString(node.CStrParts[i].Origin())
-				if i > 0 {
-					ctx.WriteByte('.')
-				}
-			}
-		}
-	} else {
-		for i := node.NumParts - 1; i >= 0; i-- {
-			ctx.WriteString(node.Parts[i])
-			if i > 0 {
-				ctx.WriteByte('.')
-			}
+	for i := node.NumParts - 1; i >= 0; i-- {
+		ctx.WriteString(node.Parts[i])
+		if i > 0 {
+			ctx.WriteByte('.')
 		}
 	}
 	if node.Star && node.NumParts > 0 {
