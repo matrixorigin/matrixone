@@ -66,8 +66,11 @@ func TestPartitionStateRowsIter(t *testing.T) {
 	{
 		// insert number i at time i with (i+1) row id
 		rowIDVec := vector.NewVec(types.T_Rowid.ToType())
+		defer rowIDVec.Free(pool)
 		tsVec := vector.NewVec(types.T_TS.ToType())
+		defer tsVec.Free(pool)
 		vec1 := vector.NewVec(types.T_int64.ToType())
+		defer vec1.Free(pool)
 		for i := 0; i < num; i++ {
 			vector.AppendFixed(rowIDVec, buildRowID(i+1), false, pool)
 			vector.AppendFixed(tsVec, types.BuildTS(int64(i), 0), false, pool)
@@ -119,8 +122,11 @@ func TestPartitionStateRowsIter(t *testing.T) {
 	{
 		// insert duplicated rows
 		rowIDVec := vector.NewVec(types.T_Rowid.ToType())
+		defer rowIDVec.Free(pool)
 		tsVec := vector.NewVec(types.T_TS.ToType())
+		defer tsVec.Free(pool)
 		vec1 := vector.NewVec(types.T_int64.ToType())
+		defer vec1.Free(pool)
 		for i := 0; i < num; i++ {
 			vector.AppendFixed(rowIDVec, buildRowID(i+1), false, pool)
 			vector.AppendFixed(tsVec, types.BuildTS(int64(i), 1), false, pool)
@@ -155,7 +161,9 @@ func TestPartitionStateRowsIter(t *testing.T) {
 	{
 		// delete number i at (deleteAt+i) with (i+1) row id
 		rowIDVec := vector.NewVec(types.T_Rowid.ToType())
+		defer rowIDVec.Free(pool)
 		tsVec := vector.NewVec(types.T_TS.ToType())
+		defer tsVec.Free(pool)
 		for i := 0; i < num; i++ {
 			vector.AppendFixed(rowIDVec, buildRowID(i+1), false, pool)
 			vector.AppendFixed(tsVec, types.BuildTS(int64(deleteAt+i), 1), false, pool)
@@ -231,7 +239,9 @@ func TestPartitionStateRowsIter(t *testing.T) {
 	{
 		// duplicate delete
 		rowIDVec := vector.NewVec(types.T_Rowid.ToType())
+		defer rowIDVec.Free(pool)
 		tsVec := vector.NewVec(types.T_TS.ToType())
+		defer tsVec.Free(pool)
 		for i := 0; i < num; i++ {
 			vector.AppendFixed(rowIDVec, buildRowID(i+1), false, pool)
 			vector.AppendFixed(tsVec, types.BuildTS(int64(deleteAt+i), 1), false, pool)
@@ -282,8 +292,11 @@ func TestInsertAndDeleteAtTheSameTimestamp(t *testing.T) {
 	{
 		// insert number i at time i with (i+1) row id
 		rowIDVec := vector.NewVec(types.T_Rowid.ToType())
+		defer rowIDVec.Free(pool)
 		tsVec := vector.NewVec(types.T_TS.ToType())
+		defer tsVec.Free(pool)
 		vec1 := vector.NewVec(types.T_int64.ToType())
+		defer vec1.Free(pool)
 		for i := 0; i < num; i++ {
 			vector.AppendFixed(rowIDVec, buildRowID(i+1), false, pool)
 			vector.AppendFixed(tsVec, types.BuildTS(int64(i), 0), false, pool)
@@ -302,7 +315,9 @@ func TestInsertAndDeleteAtTheSameTimestamp(t *testing.T) {
 	{
 		// delete number i at the same time
 		rowIDVec := vector.NewVec(types.T_Rowid.ToType())
+		defer rowIDVec.Free(pool)
 		tsVec := vector.NewVec(types.T_TS.ToType())
+		defer tsVec.Free(pool)
 		for i := 0; i < num; i++ {
 			vector.AppendFixed(rowIDVec, buildRowID(i+1), false, pool)
 			vector.AppendFixed(tsVec, types.BuildTS(int64(i), 1), false, pool)
@@ -374,7 +389,9 @@ func TestDeleteBeforeInsertAtTheSameTime(t *testing.T) {
 	{
 		// delete number i at time i with (i+1) row id
 		rowIDVec := vector.NewVec(types.T_Rowid.ToType())
+		defer rowIDVec.Free(pool)
 		tsVec := vector.NewVec(types.T_TS.ToType())
+		defer tsVec.Free(pool)
 		for i := 0; i < num; i++ {
 			vector.AppendFixed(rowIDVec, buildRowID(i+1), false, pool)
 			vector.AppendFixed(tsVec, types.BuildTS(int64(i), 1), false, pool)
@@ -391,8 +408,11 @@ func TestDeleteBeforeInsertAtTheSameTime(t *testing.T) {
 	{
 		// insert number i at time i with (i+1) row id
 		rowIDVec := vector.NewVec(types.T_Rowid.ToType())
+		defer rowIDVec.Free(pool)
 		tsVec := vector.NewVec(types.T_TS.ToType())
+		defer tsVec.Free(pool)
 		vec1 := vector.NewVec(types.T_int64.ToType())
+		defer vec1.Free(pool)
 		for i := 0; i < num; i++ {
 			vector.AppendFixed(rowIDVec, buildRowID(i+1), false, pool)
 			vector.AppendFixed(tsVec, types.BuildTS(int64(i), 0), false, pool)
@@ -466,8 +486,11 @@ func TestPrimaryKeyModifiedWithDeleteOnly(t *testing.T) {
 	{
 		// delete number i at time i with (i+1) row id
 		rowIDVec := vector.NewVec(types.T_Rowid.ToType())
+		defer rowIDVec.Free(pool)
 		tsVec := vector.NewVec(types.T_TS.ToType())
+		defer tsVec.Free(pool)
 		primaryKeyVec := vector.NewVec(types.T_int64.ToType())
+		defer primaryKeyVec.Free(pool)
 		for i := 0; i < num; i++ {
 			vector.AppendFixed(rowIDVec, buildRowID(i+1), false, pool)
 			vector.AppendFixed(tsVec, types.BuildTS(int64(i), 1), false, pool)

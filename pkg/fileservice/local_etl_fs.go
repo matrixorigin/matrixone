@@ -80,6 +80,9 @@ func (l *LocalETLFS) Name() string {
 	return l.name
 }
 
+func (l *LocalETLFS) Close() {
+}
+
 func (l *LocalETLFS) Write(ctx context.Context, vector IOVector) error {
 	select {
 	case <-ctx.Done():

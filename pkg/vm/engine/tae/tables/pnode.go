@@ -35,12 +35,12 @@ var _ NodeT = (*persistedNode)(nil)
 
 type persistedNode struct {
 	common.RefHelper
-	block *baseBlock
+	object *baseObject
 }
 
-func newPersistedNode(block *baseBlock) *persistedNode {
+func newPersistedNode(object *baseObject) *persistedNode {
 	node := &persistedNode{
-		block: block,
+		object: object,
 	}
 	node.OnZeroCB = node.close
 	return node
@@ -48,9 +48,12 @@ func newPersistedNode(block *baseBlock) *persistedNode {
 
 func (node *persistedNode) close() {}
 
-func (node *persistedNode) Rows() uint32 {
-	location := node.block.meta.GetMetaLoc()
-	return uint32(ReadPersistedBlockRow(location))
+func (node *persistedNode) Rows() (uint32, error) {
+	stats, err := node.object.meta.MustGetObjectStats()
+	if err != nil {
+		return 0, err
+	}
+	return stats.Rows(), nil
 }
 
 func (node *persistedNode) BatchDedup(
@@ -65,12 +68,12 @@ func (node *persistedNode) BatchDedup(
 	panic("should not be called")
 }
 
-func (node *persistedNode) ContainsKey(ctx context.Context, key any) (ok bool, err error) {
-	pkIndex, err := MakeImmuIndex(ctx, node.block.meta, nil, node.block.rt)
+func (node *persistedNode) ContainsKey(ctx context.Context, key any, blkID uint32) (ok bool, err error) {
+	pkIndex, err := MakeImmuIndex(ctx, node.object.meta, nil, node.object.rt)
 	if err != nil {
 		return
 	}
-	if err = pkIndex.Dedup(ctx, key, node.block.rt); err == nil {
+	if err = pkIndex.Dedup(ctx, key, node.object.rt, blkID); err == nil {
 		return
 	}
 	if !moerr.IsMoErrCode(err, moerr.OkExpectedPossibleDup) {
@@ -81,45 +84,26 @@ func (node *persistedNode) ContainsKey(ctx context.Context, key any) (ok bool, e
 	return
 }
 
-func (node *persistedNode) GetColumnDataWindow(
-	readSchema *catalog.Schema,
-	from uint32,
-	to uint32,
-	col int,
-	mp *mpool.MPool,
-) (vec containers.Vector, err error) {
-	var data containers.Vector
-	if data, err = node.block.LoadPersistedColumnData(
-		context.Background(), readSchema, col, mp,
-	); err != nil {
-		return
-	}
-	if to-from == uint32(data.Length()) {
-		vec = data
-	} else {
-		vec = data.CloneWindow(int(from), int(to-from), mp)
-		data.Close()
-	}
-	return
-}
-
 func (node *persistedNode) Foreach(
 	ctx context.Context,
 	readSchema *catalog.Schema,
+	blkID uint16,
 	colIdx int,
 	op func(v any, isNull bool, row int) error,
 	sel []uint32,
 	mp *mpool.MPool,
 ) (err error) {
 	var data containers.Vector
-	if data, err = node.block.LoadPersistedColumnData(
+	if data, err = node.object.LoadPersistedColumnData(
 		ctx,
 		readSchema,
 		colIdx,
 		mp,
+		blkID,
 	); err != nil {
 		return
 	}
+	defer data.Close()
 	for _, row := range sel {
 		val := data.Get(int(row))
 		isNull := data.IsNull(int(row))
@@ -165,70 +149,74 @@ func (node *persistedNode) GetRowByFilter(
 	txn txnif.TxnReader,
 	filter *handle.Filter,
 	mp *mpool.MPool,
-) (row uint32, err error) {
-	ok, err := node.ContainsKey(ctx, filter.Val)
-	if err != nil {
-		return
-	}
-	if !ok {
-		err = moerr.NewNotFoundNoCtx()
-		return
-	}
-	// Note: sort key do not change
-	schema := node.block.meta.GetSchema()
-	sortKey, err := node.block.LoadPersistedColumnData(ctx, schema, schema.GetSingleSortKeyIdx(), mp)
-	if err != nil {
-		return
-	}
-	defer sortKey.Close()
-	rows := make([]uint32, 0)
-	err = sortKey.Foreach(func(v any, _ bool, offset int) error {
-		if compute.CompareGeneric(v, filter.Val, sortKey.GetType().Oid) == 0 {
-			row := uint32(offset)
-			rows = append(rows, row)
+) (blkID uint16, row uint32, err error) {
+	for blkID = uint16(0); blkID < uint16(node.object.meta.BlockCnt()); blkID++ {
+		var ok bool
+		ok, err = node.ContainsKey(ctx, filter.Val, uint32(blkID))
+		if err != nil {
+			return
+		}
+		if !ok {
+			continue
+		}
+		// Note: sort key do not change
+		schema := node.object.meta.GetSchema()
+		var sortKey containers.Vector
+		sortKey, err = node.object.LoadPersistedColumnData(ctx, schema, schema.GetSingleSortKeyIdx(), mp, blkID)
+		if err != nil {
+			return
+		}
+		defer sortKey.Close()
+		rows := make([]uint32, 0)
+		err = sortKey.Foreach(func(v any, _ bool, offset int) error {
+			if compute.CompareGeneric(v, filter.Val, sortKey.GetType().Oid) == 0 {
+				row := uint32(offset)
+				rows = append(rows, row)
+				return nil
+			}
 			return nil
+		}, nil)
+		if err != nil && !moerr.IsMoErrCode(err, moerr.OkExpectedDup) {
+			return
 		}
-		return nil
-	}, nil)
-	if err != nil && !moerr.IsMoErrCode(err, moerr.OkExpectedDup) {
-		return
-	}
-	if len(rows) == 0 {
-		err = moerr.NewNotFoundNoCtx()
-		return
-	}
-
-	// Load persisted commit ts
-	commitTSVec, err := node.block.LoadPersistedCommitTS()
-	if err != nil {
-		return
-	}
-	defer commitTSVec.Close()
-
-	// Load persisted deletes
-	view := containers.NewColumnView(0)
-	if err = node.block.FillPersistedDeletes(ctx, txn, view.BaseView, mp); err != nil {
-		return
-	}
-
-	exist := false
-	var deleted bool
-	for _, offset := range rows {
-		commitTS := commitTSVec.Get(int(offset)).(types.TS)
-		startTS := txn.GetStartTS()
-		if commitTS.Greater(&startTS) {
-			break
+		if len(rows) == 0 {
+			continue
 		}
-		deleted = view.IsDeleted(int(offset))
-		if !deleted {
-			exist = true
-			row = offset
-			break
+
+		// Load persisted commit ts
+		var commitTSVec containers.Vector
+		commitTSVec, err = node.object.LoadPersistedCommitTS(blkID)
+		if err != nil {
+			return
+		}
+		defer commitTSVec.Close()
+
+		// Load persisted deletes
+		view := containers.NewColumnView(0)
+		if err = node.object.FillPersistedDeletes(ctx, blkID, txn, view.BaseView, mp); err != nil {
+			return
+		}
+
+		exist := false
+		var deleted bool
+		for _, offset := range rows {
+			commitTS := commitTSVec.Get(int(offset)).(types.TS)
+			startTS := txn.GetStartTS()
+			if commitTS.Greater(&startTS) {
+				break
+			}
+			deleted = view.IsDeleted(int(offset))
+			if !deleted {
+				exist = true
+				row = offset
+				break
+			}
+		}
+		if exist {
+			return
 		}
 	}
-	if !exist {
-		err = moerr.NewNotFoundNoCtx()
-	}
+	err = moerr.NewNotFoundNoCtx()
 	return
 }
 

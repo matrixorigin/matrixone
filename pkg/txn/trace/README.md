@@ -56,7 +56,7 @@ create table trace_features (
   
   Tracks transaction metadata change events over the lifetime of the transaction.
 
-  Enabled: ``select mo_ctl('cn', 'txn-trace', 'enable txn') ``
+  Enable : `select mo_ctl('cn', 'txn-trace', 'enable txn') `
   
   Disable: `select mo_ctl('cn', 'txn-trace', 'disable txn')`
 
@@ -65,15 +65,23 @@ create table trace_features (
 
   Trace data change events such as commit, apply logtail, flush, etc.
   
-  Enabled: `select mo_ctl('cn', 'txn-trace', 'enable data')`
+  Enable : `select mo_ctl('cn', 'txn-trace', 'enable data')`
   
   Disable: `select mo_ctl('cn', 'txn-trace', 'disable data')`
+
+* txn-workspace
+
+  Tracks all data changes to the workspace during the lifecycle of the transaction.
+  
+  Enable:  `select mo_ctl('cn', 'txn-trace', 'enable txn-workspace')`
+  
+  Disable: `select mo_ctl('cn', 'txn-trace', 'disable txn-workspace')`
 
 * txn-action
 
   Trace the overhead of all actions in the transaction's lifecycle (time consumed, number of data blocks read, etc.).
   
-  Enabled: `select mo_ctl('cn', 'txn-trace', 'enable txn-action') `
+  Enable:   `select mo_ctl('cn', 'txn-trace', 'enable txn-action') `
   
   Disabled: `select mo_ctl('cn', 'txn-trace', 'disable txn-action')`
 
@@ -81,7 +89,7 @@ create table trace_features (
  
   Trace the elapsed time of a statement that satisfies a condition. Used in conjunction with the txn-action feature to track the overhead of each stage of statement execution for performance tuning.
   
-  Enabled: `select mo_ctl('cn', 'txn-trace', 'enable statement')`
+  Enable:  `select mo_ctl('cn', 'txn-trace', 'enable statement')`
   
   Disable: `select mo_ctl('cn', 'txn-trace', 'disable statement')`
 

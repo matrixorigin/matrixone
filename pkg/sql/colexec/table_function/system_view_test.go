@@ -43,6 +43,9 @@ var _ queryservice.QueryService = &mockQueryService{}
 type mockQueryService struct {
 }
 
+func (m *mockQueryService) SetReleaseFunc(_ *query.Response, _ func()) {
+}
+
 func (m *mockQueryService) SendMessage(ctx context.Context, address string, req *query.Request) (*query.Response, error) {
 	return nil, nil
 }
@@ -76,6 +79,9 @@ func (m *mockQueryService) Close() error {
 }
 
 func (m *mockQueryService) AddHandleFunc(method query.CmdMethod, h func(context.Context, *query.Request, *query.Response) error, async bool) {
+}
+
+func (m *mockQueryService) AddReleaseFunc(method query.CmdMethod, f func()) {
 }
 
 func (m *mockQueryService) ServiceID() string {
