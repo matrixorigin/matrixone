@@ -1269,11 +1269,15 @@ normal_ident:
     }
 |   ident '.' ident
     {
-        $$ = tree.SetUnresolvedName($1.Compare(), $3.Compare())
+        unResolve := tree.SetUnresolvedName($1.Compare(), $3.Compare())
+        unResolve.SetUnresolvedNameCStrParts($1.Origin(), $3.Origin())
+        $$ = unResolve
     }
 |   ident '.' ident '.' ident
     {
-        $$ = tree.SetUnresolvedName($1.Compare(), $3.Compare(), $5.Compare())
+        unResolve := tree.SetUnresolvedName($1.Compare(), $3.Compare(), $5.Compare())
+        unResolve.SetUnresolvedNameCStrParts($1.Origin(), $3.Origin(), $5.Origin())
+        $$ = unResolve
     }
 
 columns_or_variable_list_opt:
@@ -8234,15 +8238,21 @@ column_def:
 column_name_unresolved:
     ident
     {
-        $$ = tree.SetUnresolvedName($1.Compare())
+        unResolve := tree.SetUnresolvedName($1.Compare())
+        unResolve.SetUnresolvedNameCStrParts($1.Origin())
+        $$ = unResolve
     }
 |   ident '.' ident
     {
-        $$ = tree.SetUnresolvedName($1.Compare(), $3.Compare())
+        unResolve := tree.SetUnresolvedName($1.Compare(), $3.Compare())
+        unResolve.SetUnresolvedNameCStrParts($1.Origin(), $3.Origin())
+        $$ = unResolve
     }
 |   ident '.' ident '.' ident
     {
-        $$ = tree.SetUnresolvedName($1.Compare(), $3.Compare(), $5.Compare())
+        unResolve := tree.SetUnresolvedName($1.Compare(), $3.Compare(), $5.Compare())
+        unResolve.SetUnresolvedNameCStrParts($1.Origin(), $3.Origin(), $5.Origin())
+        $$ = unResolve
     }
 
 ident:
@@ -8266,15 +8276,21 @@ ident:
 column_name:
     ident
     {
-        $$ = tree.SetUnresolvedName($1.Compare())
+        unResolve := tree.SetUnresolvedName($1.Compare())
+        unResolve.SetUnresolvedNameCStrParts($1.Origin())
+        $$ = unResolve
     }
 |   ident '.' ident
     {
-        $$ = tree.SetUnresolvedName($1.Compare(), $3.Compare())
+        unResolve := tree.SetUnresolvedName($1.Compare(), $3.Compare())
+        unResolve.SetUnresolvedNameCStrParts($1.Origin(), $3.Origin())
+        $$ = unResolve
     }
 |   ident '.' ident '.' ident
     {
-        $$ = tree.SetUnresolvedName($1.Compare(), $3.Compare(), $5.Compare())
+        unResolve := tree.SetUnresolvedName($1.Compare(), $3.Compare(), $5.Compare())
+        unResolve.SetUnresolvedNameCStrParts($1.Origin(), $3.Origin(), $5.Origin())
+        $$ = unResolve
     }
 
 column_attribute_list_opt:
