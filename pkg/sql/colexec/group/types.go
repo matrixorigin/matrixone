@@ -43,6 +43,10 @@ type ExprEvalVector struct {
 }
 
 func MakeEvalVector(proc *process.Process, expressions []*plan.Expr) (ev ExprEvalVector, err error) {
+	if len(expressions) == 0 {
+		return
+	}
+
 	ev.Executor, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, expressions)
 	if err != nil {
 		return
