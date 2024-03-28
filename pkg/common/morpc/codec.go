@@ -15,6 +15,7 @@
 package morpc
 
 import (
+	"encoding/hex"
 	"io"
 	"sync"
 
@@ -26,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/pierrec/lz4/v4"
+	"go.uber.org/zap"
 )
 
 const (
@@ -465,6 +467,11 @@ func (c *baseCodec) readMessage(
 	}
 	// invalid body packet
 	if offset >= len(data)-payloadSize {
+		getLogger().Warn("invalid body packet",
+			zap.Int("offset", offset),
+			zap.Int("len", len(data)),
+			zap.Int("payloadSize", payloadSize),
+			zap.String("data-hex", hex.EncodeToString(data)))
 		return moerr.NewInvalidInputNoCtx("invalid body packet, offset %d, len %d, payload size %d",
 			offset, len(data), payloadSize)
 	}
