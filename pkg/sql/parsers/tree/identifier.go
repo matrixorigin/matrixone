@@ -137,10 +137,10 @@ func SetUnresolvedName(parts ...string) *UnresolvedName {
 	return u
 }
 
-func (u *UnresolvedName) SetUnresolvedNameCStrParts(parts ...string) {
+func (u *UnresolvedName) SetUnresolvedNameCStrParts(useOrigin int64, parts ...string) {
 	l := len(parts)
 	for i := 0; i < l; i++ {
-		u.CStrParts[i] = NewCStr(parts[l-1-i], 1)
+		u.CStrParts[i] = NewCStrUseOrigin(parts[l-1-i], useOrigin)
 	}
 }
 

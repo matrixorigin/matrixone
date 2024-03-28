@@ -3553,7 +3553,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Scope:             ScopeGlobal,
 		Dynamic:           true,
 		SetVarHintApplies: false,
-		Type:              InitSystemVariableBoolType("keep_user_target_list_in_result"),
+		Type:              InitSystemVariableIntType("keep_user_target_list_in_result", 0, 2, false),
 		Default:           int64(0),
 	},
 }

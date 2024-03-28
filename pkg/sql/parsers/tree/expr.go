@@ -954,7 +954,7 @@ type FuncExpr struct {
 }
 
 func (node *FuncExpr) Format(ctx *FmtCtx) {
-	ctx.WriteString(node.FuncName.Origin())
+	ctx.WriteString(node.FuncName.Compare())
 
 	ctx.WriteString("(")
 	if node.Type != FUNC_TYPE_DEFAULT && node.Type != FUNC_TYPE_TABLE {
