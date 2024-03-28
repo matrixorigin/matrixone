@@ -12,18 +12,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package agg2
+package agg
 
-import "github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
+import (
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"golang.org/x/exp/constraints"
+)
 
-func RegisterRank(id int64) {
-	aggexec.RegisterRankWin(id)
+type numeric interface {
+	types.Ints | types.UInts | types.Floats
 }
 
-func RegisterRowNumber(id int64) {
-	aggexec.RegisterRowNumberWin(id)
+type numericWithMaxScale interface {
+	int64 | uint64 | float64
 }
 
-func RegisterDenseRank(id int64) {
-	aggexec.RegisterDenseRankWin(id)
+type canCompare interface {
+	constraints.Integer | constraints.Float | types.Date | types.Datetime | types.Timestamp
 }

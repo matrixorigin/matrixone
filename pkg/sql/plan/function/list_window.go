@@ -18,7 +18,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/agg2"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/agg"
 )
 
 var supportedWindowInNewFramework = []FuncNew{
@@ -39,7 +39,7 @@ var supportedWindowInNewFramework = []FuncNew{
 				retType:    aggexec.SingleWindowReturnType,
 				aggFramework: aggregationLogicOfOverload{
 					str:         "rank",
-					aggRegister: agg2.RegisterRank,
+					aggRegister: agg.RegisterRank,
 				},
 			},
 		},
@@ -61,7 +61,7 @@ var supportedWindowInNewFramework = []FuncNew{
 				retType:    aggexec.SingleWindowReturnType,
 				aggFramework: aggregationLogicOfOverload{
 					str:         "row_number",
-					aggRegister: agg2.RegisterRowNumber,
+					aggRegister: agg.RegisterRowNumber,
 				},
 			},
 		},
@@ -83,7 +83,7 @@ var supportedWindowInNewFramework = []FuncNew{
 				retType:    aggexec.SingleWindowReturnType,
 				aggFramework: aggregationLogicOfOverload{
 					str:         "dense_rank",
-					aggRegister: agg2.RegisterDenseRank,
+					aggRegister: agg.RegisterDenseRank,
 				},
 			},
 		},

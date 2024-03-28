@@ -18,7 +18,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/agg2"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/agg"
 )
 
 var supportedAggInNewFramework = []FuncNew{
@@ -43,7 +43,7 @@ var supportedAggInNewFramework = []FuncNew{
 				retType:    aggexec.CountReturnType,
 				aggFramework: aggregationLogicOfOverload{
 					str:         "count",
-					aggRegister: agg2.RegisterCountColumn,
+					aggRegister: agg.RegisterCountColumn,
 				},
 			},
 		},
@@ -70,7 +70,7 @@ var supportedAggInNewFramework = []FuncNew{
 				retType:    aggexec.CountReturnType,
 				aggFramework: aggregationLogicOfOverload{
 					str:         "count(*)",
-					aggRegister: agg2.RegisterCountStar,
+					aggRegister: agg.RegisterCountStar,
 				},
 			},
 		},
@@ -81,17 +81,17 @@ var supportedAggInNewFramework = []FuncNew{
 		class:      plan.Function_AGG,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			return fixedUnaryAggTypeCheck(inputs, agg2.MinSupportedTypes)
+			return fixedUnaryAggTypeCheck(inputs, agg.MinSupportedTypes)
 		},
 
 		Overloads: []overload{
 			{
 				overloadId: 0,
 				isAgg:      true,
-				retType:    agg2.MinReturnType,
+				retType:    agg.MinReturnType,
 				aggFramework: aggregationLogicOfOverload{
 					str:         "min",
-					aggRegister: agg2.RegisterMin,
+					aggRegister: agg.RegisterMin,
 				},
 			},
 		},
@@ -102,17 +102,17 @@ var supportedAggInNewFramework = []FuncNew{
 		class:      plan.Function_AGG,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			return fixedUnaryAggTypeCheck(inputs, agg2.MaxSupportedTypes)
+			return fixedUnaryAggTypeCheck(inputs, agg.MaxSupportedTypes)
 		},
 
 		Overloads: []overload{
 			{
 				overloadId: 0,
 				isAgg:      true,
-				retType:    agg2.MaxReturnType,
+				retType:    agg.MaxReturnType,
 				aggFramework: aggregationLogicOfOverload{
 					str:         "max",
-					aggRegister: agg2.RegisterMax,
+					aggRegister: agg.RegisterMax,
 				},
 			},
 		},
@@ -123,17 +123,17 @@ var supportedAggInNewFramework = []FuncNew{
 		class:      plan.Function_AGG,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			return fixedUnaryAggTypeCheck(inputs, agg2.SumSupportedTypes)
+			return fixedUnaryAggTypeCheck(inputs, agg.SumSupportedTypes)
 		},
 
 		Overloads: []overload{
 			{
 				overloadId: 0,
 				isAgg:      true,
-				retType:    agg2.SumReturnType,
+				retType:    agg.SumReturnType,
 				aggFramework: aggregationLogicOfOverload{
 					str:         "sum",
-					aggRegister: agg2.RegisterSum,
+					aggRegister: agg.RegisterSum,
 				},
 			},
 		},
@@ -144,17 +144,17 @@ var supportedAggInNewFramework = []FuncNew{
 		class:      plan.Function_AGG,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			return fixedUnaryAggTypeCheck(inputs, agg2.AvgSupportedTypes)
+			return fixedUnaryAggTypeCheck(inputs, agg.AvgSupportedTypes)
 		},
 
 		Overloads: []overload{
 			{
 				overloadId: 0,
 				isAgg:      true,
-				retType:    agg2.AvgReturnType,
+				retType:    agg.AvgReturnType,
 				aggFramework: aggregationLogicOfOverload{
 					str:         "avg",
-					aggRegister: agg2.RegisterAvg,
+					aggRegister: agg.RegisterAvg,
 				},
 			},
 		},
@@ -195,7 +195,7 @@ var supportedAggInNewFramework = []FuncNew{
 				retType:    aggexec.GroupConcatReturnType,
 				aggFramework: aggregationLogicOfOverload{
 					str:         "group_concat",
-					aggRegister: agg2.RegisterGroupConcat,
+					aggRegister: agg.RegisterGroupConcat,
 				},
 			},
 		},
@@ -222,7 +222,7 @@ var supportedAggInNewFramework = []FuncNew{
 				retType:    aggexec.CountReturnType,
 				aggFramework: aggregationLogicOfOverload{
 					str:         "approx_count",
-					aggRegister: agg2.RegisterApproxCount,
+					aggRegister: agg.RegisterApproxCount,
 				},
 			},
 		},
@@ -250,7 +250,7 @@ var supportedAggInNewFramework = []FuncNew{
 				retType:    aggexec.CountReturnType,
 				aggFramework: aggregationLogicOfOverload{
 					str:         "approx_count_distinct",
-					aggRegister: agg2.RegisterApproxCount,
+					aggRegister: agg.RegisterApproxCount,
 				},
 			},
 		},
@@ -261,17 +261,17 @@ var supportedAggInNewFramework = []FuncNew{
 		class:      plan.Function_AGG,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			return fixedUnaryAggTypeCheck(inputs, agg2.AnyValueSupportedTypes)
+			return fixedUnaryAggTypeCheck(inputs, agg.AnyValueSupportedTypes)
 		},
 
 		Overloads: []overload{
 			{
 				overloadId: 0,
 				isAgg:      true,
-				retType:    agg2.AnyValueReturnType,
+				retType:    agg.AnyValueReturnType,
 				aggFramework: aggregationLogicOfOverload{
 					str:         "any_value",
-					aggRegister: agg2.RegisterAnyValue,
+					aggRegister: agg.RegisterAnyValue,
 				},
 			},
 		},
@@ -282,17 +282,17 @@ var supportedAggInNewFramework = []FuncNew{
 		class:      plan.Function_AGG,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			return fixedUnaryAggTypeCheck(inputs, agg2.BitAndSupportedParameters)
+			return fixedUnaryAggTypeCheck(inputs, agg.BitAndSupportedParameters)
 		},
 
 		Overloads: []overload{
 			{
 				overloadId: 0,
 				isAgg:      true,
-				retType:    agg2.BitAndReturnType,
+				retType:    agg.BitAndReturnType,
 				aggFramework: aggregationLogicOfOverload{
 					str:         "bit_and",
-					aggRegister: agg2.RegisterBitAnd,
+					aggRegister: agg.RegisterBitAnd,
 				},
 			},
 		},
@@ -303,17 +303,17 @@ var supportedAggInNewFramework = []FuncNew{
 		class:      plan.Function_AGG,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			return fixedUnaryAggTypeCheck(inputs, agg2.BitAndSupportedParameters)
+			return fixedUnaryAggTypeCheck(inputs, agg.BitAndSupportedParameters)
 		},
 
 		Overloads: []overload{
 			{
 				overloadId: 0,
 				isAgg:      true,
-				retType:    agg2.BitAndReturnType,
+				retType:    agg.BitAndReturnType,
 				aggFramework: aggregationLogicOfOverload{
 					str:         "bit_or",
-					aggRegister: agg2.RegisterBitOr,
+					aggRegister: agg.RegisterBitOr,
 				},
 			},
 		},
@@ -324,17 +324,17 @@ var supportedAggInNewFramework = []FuncNew{
 		class:      plan.Function_AGG,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			return fixedUnaryAggTypeCheck(inputs, agg2.BitAndSupportedParameters)
+			return fixedUnaryAggTypeCheck(inputs, agg.BitAndSupportedParameters)
 		},
 
 		Overloads: []overload{
 			{
 				overloadId: 0,
 				isAgg:      true,
-				retType:    agg2.BitAndReturnType,
+				retType:    agg.BitAndReturnType,
 				aggFramework: aggregationLogicOfOverload{
 					str:         "bit_xor",
-					aggRegister: agg2.RegisterBitXor,
+					aggRegister: agg.RegisterBitXor,
 				},
 			},
 		},
@@ -345,17 +345,17 @@ var supportedAggInNewFramework = []FuncNew{
 		class:      plan.Function_AGG,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			return fixedUnaryAggTypeCheck(inputs, agg2.VarPopSupportedParameters)
+			return fixedUnaryAggTypeCheck(inputs, agg.VarPopSupportedParameters)
 		},
 
 		Overloads: []overload{
 			{
 				overloadId: 0,
 				isAgg:      true,
-				retType:    agg2.VarPopReturnType,
+				retType:    agg.VarPopReturnType,
 				aggFramework: aggregationLogicOfOverload{
 					str:         "var_pop",
-					aggRegister: agg2.RegisterVarPop,
+					aggRegister: agg.RegisterVarPop,
 				},
 			},
 		},
@@ -366,17 +366,17 @@ var supportedAggInNewFramework = []FuncNew{
 		class:      plan.Function_AGG,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			return fixedUnaryAggTypeCheck(inputs, agg2.VarPopSupportedParameters)
+			return fixedUnaryAggTypeCheck(inputs, agg.VarPopSupportedParameters)
 		},
 
 		Overloads: []overload{
 			{
 				overloadId: 0,
 				isAgg:      true,
-				retType:    agg2.VarPopReturnType,
+				retType:    agg.VarPopReturnType,
 				aggFramework: aggregationLogicOfOverload{
 					str:         "stddev_pop",
-					aggRegister: agg2.RegisterStdVarPop,
+					aggRegister: agg.RegisterStdVarPop,
 				},
 			},
 		},
@@ -397,7 +397,7 @@ var supportedAggInNewFramework = []FuncNew{
 				retType:    aggexec.MedianReturnType,
 				aggFramework: aggregationLogicOfOverload{
 					str:         "median",
-					aggRegister: agg2.RegisterMedian,
+					aggRegister: agg.RegisterMedian,
 				},
 			},
 		},
@@ -418,7 +418,7 @@ var supportedAggInNewFramework = []FuncNew{
 				retType:    aggexec.ClusterCentersReturnType,
 				aggFramework: aggregationLogicOfOverload{
 					str:         "cluster_centers",
-					aggRegister: agg2.RegisterClusterCenters,
+					aggRegister: agg.RegisterClusterCenters,
 				},
 			},
 		},
@@ -430,19 +430,19 @@ var supportedAggInNewFramework = []FuncNew{
 		class:      plan.Function_AGG,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			return fixedUnaryAggTypeCheck(inputs, agg2.BitmapConstructSupportedTypes)
+			return fixedUnaryAggTypeCheck(inputs, agg.BitmapConstructSupportedTypes)
 		},
 
 		Overloads: []overload{
 			{
 				overloadId: 0,
-				args:       agg2.BitmapConstructSupportedTypes,
-				retType:    agg2.BitmapConstructReturnType,
+				args:       agg.BitmapConstructSupportedTypes,
+				retType:    agg.BitmapConstructReturnType,
 
 				isAgg: true,
 				aggFramework: aggregationLogicOfOverload{
 					str:         "bitmap_construct_agg",
-					aggRegister: agg2.RegisterBitmapConstruct,
+					aggRegister: agg.RegisterBitmapConstruct,
 				},
 			},
 		},
@@ -454,19 +454,19 @@ var supportedAggInNewFramework = []FuncNew{
 		class:      plan.Function_AGG,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			return fixedUnaryAggTypeCheck(inputs, agg2.BitmapOrSupportedTypes)
+			return fixedUnaryAggTypeCheck(inputs, agg.BitmapOrSupportedTypes)
 		},
 
 		Overloads: []overload{
 			{
 				overloadId: 0,
-				args:       agg2.BitmapOrSupportedTypes,
-				retType:    agg2.BitmapConstructReturnType,
+				args:       agg.BitmapOrSupportedTypes,
+				retType:    agg.BitmapConstructReturnType,
 
 				isAgg: true,
 				aggFramework: aggregationLogicOfOverload{
 					str:         "bitmap_or_agg",
-					aggRegister: agg2.RegisterBitmapOr,
+					aggRegister: agg.RegisterBitmapOr,
 				},
 			},
 		},

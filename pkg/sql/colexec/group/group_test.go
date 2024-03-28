@@ -22,7 +22,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 
@@ -52,42 +51,42 @@ var (
 
 func init() {
 	tcs = []groupTestCase{
-		newTestCase([]bool{false}, []types.Type{types.T_int8.ToType()}, []*plan.Expr{}, []agg.Aggregate{{Op: function.AggSumOverloadID, E: newExpression(0)}}),
-		newTestCase([]bool{false}, []types.Type{types.T_int8.ToType()}, []*plan.Expr{newExpression(0)}, []agg.Aggregate{{Op: function.AggSumOverloadID, E: newExpression(0)}}),
+		newTestCase([]bool{false}, []types.Type{types.T_int8.ToType()}, nil, 0),
+		newTestCase([]bool{false}, []types.Type{types.T_int8.ToType()}, []int{0}, 0),
 		newTestCase([]bool{false, true, false, true}, []types.Type{
 			types.T_int8.ToType(),
 			types.T_int16.ToType(),
-		}, []*plan.Expr{newExpression(0), newExpression(1)}, []agg.Aggregate{{Op: function.AggSumOverloadID, E: newExpression(0)}}),
+		}, []int{0, 1}, 0),
 		newTestCase([]bool{false, true, false, true}, []types.Type{
 			types.T_int8.ToType(),
 			types.T_int16.ToType(),
 			types.T_int32.ToType(),
 			types.T_int64.ToType(),
-		}, []*plan.Expr{newExpression(0), newExpression(3)}, []agg.Aggregate{{Op: function.AggSumOverloadID, E: newExpression(0)}}),
+		}, []int{0, 3}, 0),
 		newTestCase([]bool{false, true, false, true}, []types.Type{
 			types.T_int64.ToType(),
 			types.T_int64.ToType(),
 			types.T_int64.ToType(),
 			types.T_decimal128.ToType(),
-		}, []*plan.Expr{newExpression(1), newExpression(3)}, []agg.Aggregate{{Op: function.AggSumOverloadID, E: newExpression(0)}}),
+		}, []int{1, 3}, 0),
 		newTestCase([]bool{false, true, false, true}, []types.Type{
 			types.T_int64.ToType(),
 			types.T_int64.ToType(),
 			types.T_int64.ToType(),
 			types.T_decimal128.ToType(),
-		}, []*plan.Expr{newExpression(1), newExpression(2), newExpression(3)}, []agg.Aggregate{{Op: function.AggSumOverloadID, E: newExpression(0)}}),
+		}, []int{1, 2, 3}, 0),
 		newTestCase([]bool{false, true, false, true}, []types.Type{
 			types.T_int64.ToType(),
 			types.T_int64.ToType(),
 			types.New(types.T_varchar, 2, 0),
 			types.T_decimal128.ToType(),
-		}, []*plan.Expr{newExpression(1), newExpression(2), newExpression(3)}, []agg.Aggregate{{Op: function.AggSumOverloadID, E: newExpression(0)}}),
+		}, []int{1, 2, 3}, 0),
 		newTestCase([]bool{false, true, false, true}, []types.Type{
 			types.T_int64.ToType(),
 			types.T_int64.ToType(),
 			types.T_varchar.ToType(),
 			types.T_decimal128.ToType(),
-		}, []*plan.Expr{newExpression(1), newExpression(2), newExpression(3)}, []agg.Aggregate{{Op: function.AggSumOverloadID, E: newExpression(0)}}),
+		}, []int{1, 2, 3}, 0),
 	}
 }
 
@@ -122,8 +121,8 @@ func TestGroup(t *testing.T) {
 func BenchmarkGroup(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		tcs = []groupTestCase{
-			newTestCase([]bool{false}, []types.Type{types.T_int8.ToType()}, []*plan.Expr{}, []agg.Aggregate{{Op: function.AggSumOverloadID, E: newExpression(0)}}),
-			newTestCase([]bool{false}, []types.Type{types.T_int8.ToType()}, []*plan.Expr{newExpression(0)}, []agg.Aggregate{{Op: function.AggSumOverloadID, E: newExpression(0)}}),
+			newTestCase([]bool{false}, []types.Type{types.T_int8.ToType()}, nil, 0),
+			newTestCase([]bool{false}, []types.Type{types.T_int8.ToType()}, []int{0}, 0),
 		}
 		t := new(testing.T)
 		for _, tc := range tcs {
@@ -145,7 +144,14 @@ func BenchmarkGroup(b *testing.B) {
 	}
 }
 
-func newTestCase(flgs []bool, ts []types.Type, exprs []*plan.Expr, aggs []aggexec.AggFuncExecExpression) groupTestCase {
+func newTestCase(flgs []bool, ts []types.Type, exprIdx []int, pos int32) groupTestCase {
+	exprs := []*plan.Expr{}
+	for _, idx := range exprIdx {
+		exprs = append(exprs, newExpression(int32(idx), ts))
+	}
+	aggs := []aggexec.AggFuncExecExpression{
+		aggexec.MakeAggFunctionExpression(function.AggSumOverloadID, false, []*plan.Expr{newExpression(pos, ts)}, nil)}
+
 	for _, expr := range exprs {
 		if col, ok := expr.Expr.(*plan.Expr_Col); ok {
 			idx := col.Col.ColPos
@@ -174,9 +180,9 @@ func newTestCase(flgs []bool, ts []types.Type, exprs []*plan.Expr, aggs []aggexe
 	}
 }
 
-func newExpression(pos int32) *plan.Expr {
+func newExpression(pos int32, typs []types.Type) *plan.Expr {
 	return &plan.Expr{
-		Typ: plan.Type{},
+		Typ: plan.Type{Id: int32(typs[pos].Oid)},
 		Expr: &plan.Expr_Col{
 			Col: &plan.ColRef{
 				ColPos: pos,

@@ -12,30 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package agg2
+package agg
 
 import "github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 
-func RegisterCountColumn(id int64) {
-	aggexec.RegisterCountColumnAgg(id)
+func RegisterRank(id int64) {
+	aggexec.RegisterRankWin(id)
 }
 
-func RegisterCountStar(id int64) {
-	aggexec.RegisterCountStarAgg(id)
+func RegisterRowNumber(id int64) {
+	aggexec.RegisterRowNumberWin(id)
 }
 
-func RegisterGroupConcat(id int64) {
-	aggexec.RegisterGroupConcatAgg(id, ",")
-}
-
-func RegisterApproxCount(id int64) {
-	aggexec.RegisterApproxCountAgg(id)
-}
-
-func RegisterMedian(id int64) {
-	aggexec.RegisterMedian(id)
-}
-
-func RegisterClusterCenters(id int64) {
-	aggexec.RegisterClusterCenters(id)
+func RegisterDenseRank(id int64) {
+	aggexec.RegisterDenseRankWin(id)
 }

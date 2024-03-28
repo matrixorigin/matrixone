@@ -45,7 +45,7 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 
 	ctr.aggExe = make([]colexec.ExpressionExecutor, len(ap.Aggs))
 	for i, ag := range ap.Aggs {
-		if expressions := ag.GetArgExpressions(); len(expressions) > 0{
+		if expressions := ag.GetArgExpressions(); len(expressions) > 0 {
 			ctr.aggExe[i], err = colexec.NewExpressionExecutor(proc, expressions[0])
 			if err != nil {
 				return err

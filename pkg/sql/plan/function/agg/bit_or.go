@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions Or
 // limitations under the License.
 
-package agg2
+package agg
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
