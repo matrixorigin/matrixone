@@ -313,6 +313,8 @@ func (cae *CreateAccountExecutor) ExecuteImpl(ctx context.Context, ses *Session)
 		create.Name = val.OrigString()
 	case *tree.ParamExpr:
 		create.Name = params.GetStringAt(val.Offset - 1)
+	default:
+		return moerr.NewInternalError(ctx, "invalid params type")
 	}
 
 	return InitGeneralTenant(ctx, ses, create)

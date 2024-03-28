@@ -1444,6 +1444,8 @@ func (mce *MysqlCmdExecutor) handleCreateAccount(ctx context.Context, ca *tree.C
 		create.Name = val.OrigString()
 	case *tree.ParamExpr:
 		create.Name = params.GetStringAt(val.Offset - 1)
+	default:
+		return moerr.NewInternalError(ctx, "invalid params type")
 	}
 
 	return InitGeneralTenant(ctx, mce.GetSession(), create)
