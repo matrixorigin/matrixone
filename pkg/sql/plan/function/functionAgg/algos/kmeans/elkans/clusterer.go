@@ -158,7 +158,7 @@ func (km *ElkanClusterer) Cluster() ([][]float64, error) {
 	}
 
 	if km.vectorCnt == km.clusterCnt {
-		return moarray.ToMoArrays[float64](km.vectorList), nil
+		return moarray.ToMoArrays[float64](km.vectorList)
 	}
 
 	err := km.InitCentroids() // step 0.1
@@ -173,7 +173,7 @@ func (km *ElkanClusterer) Cluster() ([][]float64, error) {
 		return nil, err
 	}
 
-	return moarray.ToMoArrays[float64](res), nil
+	return moarray.ToMoArrays[float64](res)
 }
 
 func (km *ElkanClusterer) elkansCluster() ([]*mat.VecDense, error) {

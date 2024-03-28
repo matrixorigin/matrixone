@@ -31,7 +31,7 @@ func Add[T types.RealNumbers](v1, v2 []T) ([]T, error) {
 	}
 
 	vec[0].AddVec(vec[0], vec[1])
-	return ToMoArray[T](vec[0]), nil
+	return ToMoArray[T](vec[0])
 }
 
 func Subtract[T types.RealNumbers](v1, v2 []T) ([]T, error) {
@@ -41,7 +41,7 @@ func Subtract[T types.RealNumbers](v1, v2 []T) ([]T, error) {
 	}
 
 	vec[0].SubVec(vec[0], vec[1])
-	return ToMoArray[T](vec[0]), nil
+	return ToMoArray[T](vec[0])
 }
 
 func Multiply[T types.RealNumbers](v1, v2 []T) ([]T, error) {
@@ -51,7 +51,7 @@ func Multiply[T types.RealNumbers](v1, v2 []T) ([]T, error) {
 	}
 
 	vec[0].MulElemVec(vec[0], vec[1])
-	return ToMoArray[T](vec[0]), nil
+	return ToMoArray[T](vec[0])
 }
 
 func Divide[T types.RealNumbers](v1, v2 []T) ([]T, error) {
@@ -68,7 +68,7 @@ func Divide[T types.RealNumbers](v1, v2 []T) ([]T, error) {
 	}
 
 	vec[0].DivElemVec(vec[0], vec[1])
-	return ToMoArray[T](vec[0]), nil
+	return ToMoArray[T](vec[0])
 }
 
 // Compare returns an integer comparing two arrays/vectors lexicographically.
@@ -208,7 +208,7 @@ func NormalizeL2[T types.RealNumbers](v1 []T) ([]T, error) {
 
 	vec.ScaleVec(1/norm, vec)
 
-	return ToMoArray[T](vec), nil
+	return ToMoArray[T](vec)
 }
 
 // L1Norm returns l1 distance to origin.
@@ -256,7 +256,7 @@ func ScalarOp[T types.RealNumbers](v []T, operation string, scalar float64) ([]T
 	default:
 		return nil, moerr.NewInternalErrorNoCtx("scale_vector: invalid operation")
 	}
-	return ToMoArray[T](vec), nil
+	return ToMoArray[T](vec)
 }
 
 /* ------------ [END] Performance critical functions. ------- */
