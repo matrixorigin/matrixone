@@ -360,7 +360,6 @@ var RecordParseErrorStatement = func(ctx context.Context, ses *Session, proc *pr
 	if tenant == nil {
 		tenant, _ = GetTenantInfo(ctx, "internal")
 	}
-	incStatementCounter(tenant.GetTenant(), nil)
 	incStatementErrorsCounter(tenant.GetTenant(), nil)
 	return ctx, nil
 }
@@ -1250,7 +1249,7 @@ func (mce *MysqlCmdExecutor) handleExplainStmt(requestCtx context.Context, stmt 
 	return nil
 }
 
-func doPrepareStmt(ctx context.Context, ses *Session, st *tree.PrepareStmt, sql string) (*PrepareStmt, error) {
+func doPrepareStmt(ctx context.Context, ses *Session, st *tree.PrepareStmt, sql string, paramTypes []byte) (*PrepareStmt, error) {
 	preparePlan, err := buildPlan(ctx, ses, ses.GetTxnCompileCtx(), st)
 	if err != nil {
 		return nil, err
@@ -1263,6 +1262,9 @@ func doPrepareStmt(ctx context.Context, ses *Session, st *tree.PrepareStmt, sql 
 		PrepareStmt:         st.Stmt,
 		getFromSendLongData: make(map[int]struct{}),
 	}
+	if len(paramTypes) > 0 {
+		prepareStmt.ParamTypes = paramTypes
+	}
 	prepareStmt.InsertBat = ses.GetTxnCompileCtx().GetProcess().GetPrepareBatch()
 	err = ses.SetPrepareStmt(preparePlan.GetDcl().GetPrepare().GetName(), prepareStmt)
 
@@ -1271,7 +1273,7 @@ func doPrepareStmt(ctx context.Context, ses *Session, st *tree.PrepareStmt, sql 
 
 // handlePrepareStmt
 func (mce *MysqlCmdExecutor) handlePrepareStmt(ctx context.Context, st *tree.PrepareStmt, sql string) (*PrepareStmt, error) {
-	return doPrepareStmt(ctx, mce.GetSession(), st, sql)
+	return doPrepareStmt(ctx, mce.GetSession(), st, sql, nil)
 }
 
 func doPrepareString(ctx context.Context, ses *Session, st *tree.PrepareString) (*PrepareStmt, error) {
@@ -2654,10 +2656,6 @@ var GetStmtExecList = func(db, sql, user string, eng engine.Engine, proc *proces
 	return stmtExecList, nil
 }
 
-func incStatementCounter(tenant string, stmt tree.Statement) {
-	metric.StatementCounter(tenant, getStatementType(stmt).GetQueryType()).Inc()
-}
-
 func incTransactionCounter(tenant string) {
 	metric.TransactionCounter(tenant).Inc()
 }
@@ -3082,7 +3080,6 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 
 	//get errors during the transaction. rollback the transaction
 	rollbackTxnFunc := func() error {
-		incStatementCounter(tenant, stmt)
 		incStatementErrorsCounter(tenant, stmt)
 		/*
 			Cases    | set Autocommit = 1/0 | BEGIN statement |
@@ -3118,7 +3115,6 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 		}()
 
 		//load data handle txn failure internally
-		incStatementCounter(tenant, stmt)
 		retErr = ses.TxnCommitSingleStatement(stmt)
 		if retErr != nil {
 			logStatementStatus(requestCtx, ses, stmt, fail, retErr)
@@ -4564,7 +4560,9 @@ func (mce *MysqlCmdExecutor) SetCancelFunc(cancelFunc context.CancelFunc) {
 	mce.cancelRequestFunc = cancelFunc
 }
 
-func (mce *MysqlCmdExecutor) Close() {}
+func (mce *MysqlCmdExecutor) Close() {
+	mce.ses = nil
+}
 
 /*
 convert the type in computation engine to the type in mysql.

@@ -372,10 +372,12 @@ func (rt *Routine) cleanup() {
 
 		//step D: clean protocol
 		rt.protocol.Quit()
+		rt.protocol = nil
 
 		//step E: release the resources related to the session
 		if ses != nil {
 			ses.Close()
+			rt.ses = nil
 		}
 	})
 }
@@ -394,8 +396,9 @@ func (rt *Routine) migrateConnectionFrom(resp *query.MigrateConnFromResponse) er
 	resp.DB = ses.GetDatabaseName()
 	for _, st := range ses.GetPrepareStmts() {
 		resp.PrepareStmts = append(resp.PrepareStmts, &query.PrepareStmt{
-			Name: st.Name,
-			SQL:  st.Sql,
+			Name:       st.Name,
+			SQL:        st.Sql,
+			ParamTypes: st.ParamTypes,
 		})
 	}
 	return nil

@@ -378,8 +378,11 @@ func (c *clientConn) connectToBackend(prevAdd string) (ServerConn, error) {
 	}
 
 	badCNServers := make(map[string]struct{})
-	filterFn := func(uuid string) bool {
-		if _, ok := badCNServers[uuid]; ok {
+	if prevAdd != "" {
+		badCNServers[prevAdd] = struct{}{}
+	}
+	filterFn := func(str string) bool {
+		if _, ok := badCNServers[str]; ok {
 			return true
 		}
 		return false
@@ -413,7 +416,7 @@ func (c *clientConn) connectToBackend(prevAdd string) (ServerConn, error) {
 		if err != nil {
 			if isRetryableErr(err) {
 				v2.ProxyConnectRetryCounter.Inc()
-				badCNServers[cn.uuid] = struct{}{}
+				badCNServers[cn.addr] = struct{}{}
 				c.log.Warn("failed to connect to CN server, will retry",
 					zap.String("current server uuid", cn.uuid),
 					zap.String("current server address", cn.addr),

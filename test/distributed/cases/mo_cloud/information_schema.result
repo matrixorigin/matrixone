@@ -1,3 +1,122 @@
+select
+collation_name,
+character_set_name,
+lower(is_default) = 'yes' as is_default
+from
+information_schema.collations;
+collation_name    character_set_name    is_default
+select
+grantee,
+table_schema,
+privilege_type,
+is_grantable
+from
+information_schema.schema_privileges;
+grantee    table_schema    privilege_type    is_grantable
+select
+from_host,
+from_user,
+to_host,
+to_user,
+with_admin_option
+from
+mysql.role_edges
+order by
+to_user,
+to_host;
+from_host    from_user    to_host    to_user    with_admin_option
+select
+event_name,
+event_comment,
+definer,
+event_type = 'RECURRING' recurring,
+interval_value,
+interval_field,
+cast(coalesce(starts, execute_at) as char) starts,
+cast(ends as char) ends,
+status,
+on_completion = 'PRESERVE' preserve,
+last_executed
+from
+information_schema.events
+where
+event_schema = 'system';
+event_name    event_comment    definer    recurring    interval_value    interval_field    starts    ends    status    preserve    last_executed
+select
+c.constraint_name,
+c.constraint_schema,
+c.table_name,
+c.constraint_type,
+c.enforced = 'YES' enforced
+from
+information_schema.table_constraints c
+where
+c.table_schema = 'system';
+constraint_name    constraint_schema    table_name    constraint_type    enforced
+select
+from_host,
+from_user,
+to_host,
+to_user,
+with_admin_option
+from
+mysql.role_edges
+order by
+to_user,
+to_host;
+from_host    from_user    to_host    to_user    with_admin_option
+select
+grantee,
+table_name,
+column_name,
+privilege_type,
+is_grantable
+from
+information_schema.column_privileges
+where
+table_schema = 'system'
+union all
+select
+grantee,
+table_name,
+'' column_name,
+privilege_type,
+is_grantable
+from
+information_schema.table_privileges
+where
+table_schema = 'system'
+order by
+table_name,
+grantee,
+privilege_type;
+grantee    table_name    column_name    privilege_type    is_grantable
+select
+grantee,
+table_name,
+column_name,
+privilege_type,
+is_grantable
+from
+information_schema.column_privileges
+where
+table_schema = 'system_metrics'
+union all
+select
+grantee,
+table_name,
+'' column_name,
+privilege_type,
+is_grantable
+from
+information_schema.table_privileges
+where
+table_schema = 'system_metrics'
+order by
+table_name,
+grantee,
+privilege_type;
+grantee    table_name    column_name    privilege_type    is_grantable
 select table_name from information_schema.tables where table_schema collate utf8_general_ci = 'information_schema' and table_name collate utf8_general_ci = 'parameters';
 table_name
 parameters
