@@ -23,15 +23,15 @@ func init() {
 	reuse.CreatePool[Vector](
 		func() *Vector {
 			res := &Vector{}
-			res.nsp = *nulls.New()
 			return res
 		},
 		func(v *Vector) {
-			freeMsg := v.FreeMsg
 			*v = Vector{
-				FreeMsg: freeMsg,
+				FreeMsg:  v.FreeMsg,
+				AllocMsg: v.AllocMsg,
+				PutMsg:   v.PutMsg,
+				GetMsg:   v.GetMsg,
 			}
-			v.nsp = *nulls.New()
 		},
 		reuse.DefaultOptions[Vector](),
 	)
@@ -44,5 +44,10 @@ func (v Vector) TypeName() string {
 
 func NewVecFromReuse() *Vector {
 	v := reuse.Alloc[Vector](nil)
+	// if len(v.AllocMsg) > 3 {
+	// 	v.AllocMsg = v.AllocMsg[1:]
+	// }
+	// v.AllocMsg = append(v.AllocMsg, time.Now().String()+" : "+string(debug.Stack()))
+	v.nsp = *nulls.New()
 	return v
 }

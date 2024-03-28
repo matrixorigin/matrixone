@@ -19,7 +19,6 @@ import (
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -156,6 +155,9 @@ func MustVarlenaRawData(v *Vector) (data []types.Varlena, area []byte) {
 
 // XXX extend will extend the vector's Data to accommodate rows more entry.
 func extend(v *Vector, rows int, m *mpool.MPool) error {
+	if v.cantFreeArea || v.cantFreeData {
+		panic("vector can not extend")
+	}
 	if tgtCap := v.length + rows; tgtCap > v.capacity {
 		sz := v.typ.TypeSize()
 		ndata, err := m.Grow(v.data, tgtCap*sz)
@@ -248,15 +250,12 @@ func VectorToProtoVector(vec *Vector) (ret api.Vector, err error) {
 
 func ProtoVectorToVector(vec api.Vector) (*Vector, error) {
 	rvec := NewVecFromReuse()
-	*rvec = Vector{
-		area:         vec.Area,
-		length:       int(vec.Len),
-		typ:          ProtoTypeToType(vec.Type),
-		cantFreeData: true,
-		cantFreeArea: true,
-		nsp:          *nulls.New(),
-		FreeMsg:      rvec.FreeMsg,
-	}
+	rvec.area = vec.Area
+	rvec.length = int(vec.Len)
+	rvec.typ = ProtoTypeToType(vec.Type)
+	rvec.cantFreeData = true
+	rvec.cantFreeArea = true
+
 	if vec.IsConst {
 		rvec.class = CONSTANT
 	} else {

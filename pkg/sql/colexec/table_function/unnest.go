@@ -104,15 +104,6 @@ func unnestCall(_ int, proc *process.Process, arg *Argument, result *vm.CallResu
 		if err != nil && rbat != nil {
 			rbat.Clean(proc.Mp())
 		}
-		// if jsonVec != nil {
-		// 	jsonVec.Free(proc.Mp())
-		// }
-		// if pathVec != nil {
-		// 	pathVec.Free(proc.Mp())
-		// }
-		// if outerVec != nil {
-		// 	outerVec.Free(proc.Mp())
-		// }
 	}()
 	if bat == nil {
 		return true, nil
