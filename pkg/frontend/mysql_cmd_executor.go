@@ -1319,7 +1319,7 @@ func (mce *MysqlCmdExecutor) handleExplainStmt(requestCtx context.Context, stmt 
 	return nil
 }
 
-func doPrepareStmt(ctx context.Context, ses *Session, st *tree.PrepareStmt, sql string) (*PrepareStmt, error) {
+func doPrepareStmt(ctx context.Context, ses *Session, st *tree.PrepareStmt, sql string, paramTypes []byte) (*PrepareStmt, error) {
 	preparePlan, err := buildPlan(ctx, ses, ses.GetTxnCompileCtx(), st)
 	if err != nil {
 		return nil, err
@@ -1332,6 +1332,9 @@ func doPrepareStmt(ctx context.Context, ses *Session, st *tree.PrepareStmt, sql 
 		PrepareStmt:         st.Stmt,
 		getFromSendLongData: make(map[int]struct{}),
 	}
+	if len(paramTypes) > 0 {
+		prepareStmt.ParamTypes = paramTypes
+	}
 	prepareStmt.InsertBat = ses.GetTxnCompileCtx().GetProcess().GetPrepareBatch()
 	err = ses.SetPrepareStmt(preparePlan.GetDcl().GetPrepare().GetName(), prepareStmt)
 
@@ -1340,7 +1343,7 @@ func doPrepareStmt(ctx context.Context, ses *Session, st *tree.PrepareStmt, sql 
 
 // handlePrepareStmt
 func (mce *MysqlCmdExecutor) handlePrepareStmt(ctx context.Context, st *tree.PrepareStmt, sql string) (*PrepareStmt, error) {
-	return doPrepareStmt(ctx, mce.GetSession(), st, sql)
+	return doPrepareStmt(ctx, mce.GetSession(), st, sql, nil)
 }
 
 func doPrepareString(ctx context.Context, ses *Session, st *tree.PrepareString) (*PrepareStmt, error) {
@@ -3818,6 +3821,13 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 		logInfo(ses, ses.GetDebugString(), fmt.Sprintf("time of Exec.Build : %s", time.Since(cmpBegin).String()))
 	}
 
+	defer func() {
+		// Serialize the execution plan as json
+		if cwft, ok := cw.(*TxnComputationWrapper); ok {
+			_ = cwft.RecordExecPlan(requestCtx)
+		}
+	}()
+
 	mrs = ses.GetMysqlResultSet()
 	ep := ses.GetExportConfig()
 	// cw.Compile might rewrite sql, here we fetch the latest version
@@ -3872,13 +3882,6 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 			}
 
 			runResult = &util2.RunResult{AffectRows: ep.RowCount}
-
-			/*
-			   Serialize the execution plan by json
-			*/
-			if cwft, ok := cw.(*TxnComputationWrapper); ok {
-				_ = cwft.RecordExecPlan(requestCtx)
-			}
 
 		} else {
 			columns, err = cw.GetColumns()
@@ -3946,12 +3949,6 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 				logInfo(ses, ses.GetDebugString(), fmt.Sprintf("time of Exec.Run : %s", time.Since(runBegin).String()))
 			}
 
-			/*
-				Step 4: Serialize the execution plan by json
-			*/
-			if cwft, ok := cw.(*TxnComputationWrapper); ok {
-				_ = cwft.RecordExecPlan(requestCtx)
-			}
 		}
 
 	case *tree.ShowCreateTable, *tree.ShowCreateDatabase, *tree.ShowTables, *tree.ShowSequences, *tree.ShowDatabases, *tree.ShowColumns,
@@ -4031,12 +4028,6 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 			logInfo(ses, ses.GetDebugString(), fmt.Sprintf("time of Exec.Run : %s", time.Since(runBegin).String()))
 		}
 
-		/*
-			Step 4: Serialize the execution plan by json
-		*/
-		if cwft, ok := cw.(*TxnComputationWrapper); ok {
-			_ = cwft.RecordExecPlan(requestCtx)
-		}
 	//just status, no result set
 	case *tree.CreateTable, *tree.DropTable, *tree.CreateDatabase, *tree.DropDatabase,
 		*tree.CreateIndex, *tree.DropIndex,
@@ -4125,12 +4116,6 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 
 		logDebug(ses, ses.GetDebugString(), fmt.Sprintf("time of SendResponse %s", time.Since(echoTime).String()))
 
-		/*
-			Step 4: Serialize the execution plan by json
-		*/
-		if cwft, ok := cw.(*TxnComputationWrapper); ok {
-			_ = cwft.RecordExecPlan(requestCtx)
-		}
 	case *tree.ExplainAnalyze:
 		explainColName := "QUERY PLAN"
 		columns, err = GetExplainColumns(requestCtx, explainColName)
@@ -4789,7 +4774,9 @@ func (mce *MysqlCmdExecutor) SetCancelFunc(cancelFunc context.CancelFunc) {
 	mce.cancelRequestFunc = cancelFunc
 }
 
-func (mce *MysqlCmdExecutor) Close() {}
+func (mce *MysqlCmdExecutor) Close() {
+	mce.ses = nil
+}
 
 /*
 convert the type in computation engine to the type in mysql.
