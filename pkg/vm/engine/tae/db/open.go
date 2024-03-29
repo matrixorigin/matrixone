@@ -253,7 +253,23 @@ func Open(ctx context.Context, dirname string, opts *options.Options) (db *DB, e
 	go TaeMetricsTask(ctx)
 
 	// For debug or test
-	// logutil.Info(db.Catalog.SimplePPString(common.PPL2))
+	// logutil.Info(db.Catalog.SimplePPString(common.PPL3))
+	// p := &catalog.LoopProcessor{}
+	// p.ObjectFn = func(oe *catalog.ObjectEntry) error {
+	// 	if oe.ID.String() != "018e8822-22eb-7997-9909-3fcd1b02703d-0" {
+	// 		return nil
+	// 	}
+	// 	logutil.Infof("start %v dropped %v", oe.GetCreatedAtLocked().ToString(), oe.GetDeleteAt().ToString())
+	// 	txn, _ := db.StartTxn(nil)
+	// 	tb := oe.GetTable()
+	// 	txn.SetSnapshotTS(oe.GetDeleteAt().Prev())
+	// 	view, _ := oe.GetObjectData().GetColumnDataById(context.Background(), txn, tb.GetLastestSchema(), 0, 0, common.DebugAllocator)
+	// 	logutil.Infof("view %v, %v", view.GetData().Length(), view.DeleteMask)
+	// 	txn.Commit(context.Background())
+	// 	return nil
+	// }
+	// db.Catalog.RecurLoop(p)
+	// panic("debug")
 	return
 }
 
