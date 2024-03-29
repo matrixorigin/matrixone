@@ -458,10 +458,6 @@ func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
 		s.SetOperatorInfoRecursively(c.allocOperatorID)
 	}
 
-	// if strings.Contains(c.sql, "insert into t2") {
-	// 	fmt.Print("dd")
-	// }
-
 	if c.proc.TxnOperator != nil {
 		writeOffset = uint64(c.proc.TxnOperator.GetWorkspace().GetSnapshotWriteOffset())
 	}
