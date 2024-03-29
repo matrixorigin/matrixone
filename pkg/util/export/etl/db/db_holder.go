@@ -307,6 +307,11 @@ func SetLabelSelector(labels map[string]string) {
 	gLabels = labels
 }
 
+// GetLabelSelector
+// Tips: more details in route.RouteForSuperTenant function. It mainly depends on S1.
+// Tips: gLabels MUST NOT contain {"account":"sys"}.
+// - Because clusterservice.Selector not support regex-match in route.RouteForSuperTenant
+// - If you use labels{"account":"sys", "role":"ob"}, the Selector will NOT match those pods, which have labels{"account":"*", "role":"ob"}
 func GetLabelSelector() map[string]string {
 	return gLabels
 }
