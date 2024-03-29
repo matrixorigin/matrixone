@@ -25,10 +25,6 @@ import (
 
 var StopMerge atomic.Bool
 
-func init() {
-	StopMerge.Store(true)
-}
-
 const (
 	constMergeMinBlks       = 5
 	constMergeExpansionRate = 6

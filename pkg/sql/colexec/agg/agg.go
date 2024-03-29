@@ -422,7 +422,7 @@ func (a *UnaryAgg[T1, T2]) MarshalBinary() ([]byte, error) {
 		IsCount:    a.isCount,
 	}
 	switch {
-	case a.outputType.Oid.IsMySQLString():
+	case a.inputTypes[0].Oid.IsMySQLString() && a.outputType.Oid.IsMySQLString():
 		source.Da = types.EncodeStringSlice(getUnaryAggStrVs(a))
 	default:
 		source.Da = a.da
@@ -468,8 +468,9 @@ func getUnaryAggStrVs(strUnaryAgg any) []string {
 }
 
 func setAggValues[T1, T2 any](agg any, typ types.Type) {
+	a := agg.(*UnaryAgg[T1, T2])
 	switch {
-	case typ.Oid.IsMySQLString():
+	case a.inputTypes[0].Oid.IsMySQLString() && a.outputType.Oid.IsMySQLString():
 		a := agg.(*UnaryAgg[[]byte, []byte])
 		values := types.DecodeStringSlice(a.da)
 		a.vs = make([][]byte, len(values))
@@ -477,7 +478,6 @@ func setAggValues[T1, T2 any](agg any, typ types.Type) {
 			a.vs[i] = []byte(values[i])
 		}
 	default:
-		a := agg.(*UnaryAgg[T1, T2])
 		a.vs = types.DecodeSlice[T2](a.da)
 	}
 }
