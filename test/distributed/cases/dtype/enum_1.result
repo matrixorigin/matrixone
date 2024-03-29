@@ -162,3 +162,33 @@ desc table03;
 Field    Type    Null    Key    Default    Extra    Comment
 type    ENUM('1','2','3','4','5')    NO        null        type
 drop table table03;
+create table t3 (id int);
+insert into t3 values (1);
+alter table t3 add column name enum ('A','B','C');
+select * from t3;
+id    name
+1    null
+insert into t3 values (2,'B');
+insert into t3 values (3,'D');
+internal error: convert to MySQL enum failed: item D is not in enum [A B C]
+select * from t3;
+id    name
+1    null
+2    B
+drop table t3;
+create table t1(name varchar(25));
+insert into t1 values ('A'),('B'),('C');
+select * from t1;
+name
+A
+B
+C
+alter table t1 modify column name enum('A','B');
+internal error: convert to MySQL enum failed: item C is not in enum [A B]
+alter table t1 modify column name enum('A','B','C');
+select * from t1;
+name
+A
+B
+C
+drop table t1;
