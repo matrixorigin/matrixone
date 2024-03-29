@@ -414,7 +414,6 @@ func (v *Vector) Free(mp *mpool.MPool) {
 	if !v.cantFreeArea {
 		mp.Free(v.area)
 	}
-	f := v.class
 	v.class = FLAT
 	v.col = typedSlice{}
 	v.data = nil
@@ -427,9 +426,7 @@ func (v *Vector) Free(mp *mpool.MPool) {
 	v.nsp.Reset()
 	v.sorted = false
 
-	if f == FLAT {
-		reuse.Free[Vector](v, nil)
-	}
+	reuse.Free[Vector](v, nil)
 }
 
 func (v *Vector) MarshalBinary() ([]byte, error) {
