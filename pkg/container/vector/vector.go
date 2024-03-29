@@ -65,11 +65,6 @@ type Vector struct {
 	isBin bool
 
 	Debug string
-
-	FreeMsg  []string
-	AllocMsg []string
-	PutMsg   []string
-	GetMsg   []string
 }
 
 type typedSlice struct {
@@ -431,10 +426,6 @@ func (v *Vector) Free(mp *mpool.MPool) {
 
 	v.nsp.Reset()
 	v.sorted = false
-	// if len(v.FreeMsg) > 3 {
-	// 	v.FreeMsg = v.FreeMsg[1:]
-	// }
-	// v.FreeMsg = append(v.FreeMsg, time.Now().String()+" : "+string(debug.Stack()))
 
 	if f == FLAT {
 		reuse.Free[Vector](v, nil)

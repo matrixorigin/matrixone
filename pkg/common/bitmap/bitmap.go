@@ -169,9 +169,9 @@ func (itr *BitmapIterator) Next() uint64 {
 // Reset set n.data to nil
 func (n *Bitmap) Reset() {
 	n.len = 0
-	if n.emptyFlag == nil {
-		panic("emptyFlag is nil")
-	}
+	// if n.emptyFlag == nil {
+	// 	panic("emptyFlag is nil")
+	// }
 	n.emptyFlag.Store(kEmptyFlagEmpty)
 	n.data = nil
 }
@@ -205,9 +205,9 @@ func (n *Bitmap) EmptyByFlag() bool {
 
 // IsEmpty returns true if no bit in the Bitmap is set, otherwise it will return false.
 func (n *Bitmap) IsEmpty() bool {
-	if n.emptyFlag == nil {
-		panic("emptyFlag is nil")
-	}
+	// if n.emptyFlag == nil {
+	// 	panic("emptyFlag is nil")
+	// }
 	flag := n.emptyFlag.Load()
 	if flag == kEmptyFlagEmpty {
 		return true
