@@ -60,6 +60,10 @@ func (info multiAggInfo) getEncoded() *EncodedBasicInfo {
 	}
 }
 
+// for sca.
+var _ = multiAggFuncExec1[int8]{}
+var _ = multiAggFuncExec2{}
+
 // multiAggFuncExec1 and multiAggFuncExec2 are the executors of multi columns agg.
 // 1's return type is a fixed length type.
 // 2's return type is bytes.
@@ -427,8 +431,4 @@ func (exec *multiAggFuncExec2) Flush() (*vector.Vector, error) {
 
 func (exec *multiAggFuncExec2) Free() {
 	exec.ret.free()
-}
-
-func (exec *multiAggFuncExec1[T]) fills(groupIndex int, row uint64) error {
-	return nil
 }

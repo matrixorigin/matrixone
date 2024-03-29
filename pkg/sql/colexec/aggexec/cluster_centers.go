@@ -59,7 +59,6 @@ func ClusterCentersReturnType(argType []types.Type) types.Type {
 
 type clusterCentersExec struct {
 	singleAggInfo
-	singleAggOptimizedInfo
 	arg sBytesArg
 	ret aggFuncBytesResult
 

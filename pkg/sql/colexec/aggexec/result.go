@@ -126,7 +126,7 @@ func (r *basicResult) marshal() ([]byte, error) {
 	d = append(d, types.EncodeUint32(&length)...)
 	d = append(d, d1...)
 	d = append(d, d2...)
-	return r.res.MarshalBinary()
+	return d, nil
 }
 
 func (r *basicResult) unmarshal0(data []byte) error {
