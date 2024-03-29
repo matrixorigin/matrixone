@@ -17,14 +17,15 @@ package plan
 import (
 	"context"
 	"fmt"
+	"math"
+	"strings"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
-	"math"
-	"strings"
 )
 
 // AddColumn will add a new column to the table.
@@ -217,6 +218,9 @@ func checkPrimaryKeyPartType(ctx context.Context, colType *plan.Type, columnName
 	}
 	if colType.GetId() == int32(types.T_json) {
 		return moerr.NewNotSupported(ctx, fmt.Sprintf("JSON column '%s' cannot be in primary key", columnName))
+	}
+	if colType.GetId() == int32(types.T_enum) {
+		return moerr.NewNotSupported(ctx, fmt.Sprintf("ENUM column '%s' cannot be in primary key", columnName))
 	}
 	return nil
 }
