@@ -1133,3 +1133,4 @@ a    b
 1    1
 2    2
 drop table t1;
+drop database test;
