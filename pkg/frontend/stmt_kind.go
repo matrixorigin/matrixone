@@ -131,7 +131,7 @@ func statementCanBeExecutedInUncommittedTransaction(ses *Session, stmt tree.Stat
 	switch st := stmt.(type) {
 	//ddl statement
 	case *tree.CreateTable, *tree.CreateIndex, *tree.CreateView, *tree.AlterView, *tree.AlterTable:
-		if createTblStmt, ok := stmt.(*tree.CreateTable); ok && createTblStmt.IsAsSelect {
+		if createTblStmt, ok := stmt.(*tree.CreateTable); ok && (createTblStmt.IsAsSelect || createTblStmt.IsAsLike) {
 			return false, nil
 		}
 		return true, nil
