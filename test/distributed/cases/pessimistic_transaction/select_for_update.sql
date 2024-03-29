@@ -791,3 +791,4 @@ insert into t1 select result, result from generate_series(1,10000)g;
 select mo_ctl('dn','flush','test.t1');
 select * from t1 where b in (1,2) for update;
 drop table t1;
+drop database test;
