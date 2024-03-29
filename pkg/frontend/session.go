@@ -1593,7 +1593,7 @@ func (ses *Session) AuthenticateUser(userInput string, dbName string, authRespon
 	isSpecial, pwdBytes, specialAccount = isSpecialUser(tenant.GetUser())
 	if isSpecial && specialAccount.IsMoAdminRole() {
 		ses.SetTenantInfo(specialAccount)
-		if specialAccount.User == db_holder.MOLoggerUser {
+		if len(ses.requestLabel) == 0 {
 			ses.requestLabel = db_holder.GetLabelSelector()
 		}
 		return GetPassWord(HashPassWordWithByte(pwdBytes))
