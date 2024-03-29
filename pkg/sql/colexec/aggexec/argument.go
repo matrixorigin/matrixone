@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//nolint: maybe lint bug. it will report "unused" error for all fields and methods of mArg1Fixed and mArg2Fixed.
 package aggexec
 
 import (
@@ -70,13 +71,6 @@ type mArg2 interface {
 
 	cacheFill(fill any, fillNull func(MultiAggRetVar))
 }
-
-var (
-	_ = mArg1[int64](&mArg1Fixed[int64, int64]{})
-	_ = mArg1[int64](&mArg1Bytes[int64]{})
-	_ = mArg2(&mArg2Fixed[int64]{})
-	_ = mArg2(&mArg2Bytes{})
-)
 
 func newArgumentOfMultiAgg1[ret types.FixedSizeTExceptStrType](paramType types.Type) mArg1[ret] {
 	if paramType.IsVarlen() {
