@@ -1285,7 +1285,7 @@ func buildInsertPlansWithRelatedHiddenTable(
 						}
 					}
 					originTableMessageForFuzzy.ParentUniqueCols = uniqueCols
-					uniqueColLocationMap := newLocationMap(tableDef, indexdef)
+					uniqueColLocationMap := newLocationMap(tableDef, indexdef, colIndex)
 					if stmt != nil {
 						insertColsNameFromStmt, err = getInsertColsFromStmt(ctx.GetContext(), stmt, tableDef, colIndex)
 						if err != nil {
