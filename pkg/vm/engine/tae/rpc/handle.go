@@ -1060,7 +1060,7 @@ func (h *Handle) HandleWrite(
 				err = moerr.NewInternalError(ctx, "object stats doesn't match meta locations")
 				return
 			}
-			err = tb.AddBlksWithMetaLoc(ctx, statsVec)
+			err = tb.AddObjsWithMetaLoc(ctx, statsVec)
 			return
 		}
 		//check the input batch passed by cn is valid.

@@ -123,16 +123,16 @@ func (e *TestEngine) CheckRowsByScan(exp int, applyDelete bool) {
 	assert.NoError(e.t, txn.Commit(context.Background()))
 }
 func (e *TestEngine) ForceCheckpoint() {
-	err := e.BGCheckpointRunner.ForceFlushWithInterval(e.TxnMgr.StatMaxCommitTS(), context.Background(), time.Second*2, time.Millisecond*10)
+	err := e.BGCheckpointRunner.ForceFlushWithInterval(e.TxnMgr.Now(), context.Background(), time.Second*2, time.Millisecond*10)
 	assert.NoError(e.t, err)
-	err = e.BGCheckpointRunner.ForceIncrementalCheckpoint(e.TxnMgr.StatMaxCommitTS(), false)
+	err = e.BGCheckpointRunner.ForceIncrementalCheckpoint(e.TxnMgr.Now(), false)
 	assert.NoError(e.t, err)
 }
 
 func (e *TestEngine) ForceLongCheckpoint() {
-	err := e.BGCheckpointRunner.ForceFlush(e.TxnMgr.StatMaxCommitTS(), context.Background(), 20*time.Second)
+	err := e.BGCheckpointRunner.ForceFlush(e.TxnMgr.Now(), context.Background(), 20*time.Second)
 	assert.NoError(e.t, err)
-	err = e.BGCheckpointRunner.ForceIncrementalCheckpoint(e.TxnMgr.StatMaxCommitTS(), false)
+	err = e.BGCheckpointRunner.ForceIncrementalCheckpoint(e.TxnMgr.Now(), false)
 	assert.NoError(e.t, err)
 }
 

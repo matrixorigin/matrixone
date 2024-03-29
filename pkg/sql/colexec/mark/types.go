@@ -107,6 +107,8 @@ type container struct {
 
 	nullWithBatch *batch.Batch
 	rewriteCond   *plan.Expr
+
+	maxAllocSize int64
 }
 
 // // for join operator, it's a two-ary operator, we will reference to two table
@@ -203,6 +205,9 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 		ctr.cleanHashMap()
 		ctr.cleanExprExecutor()
 		ctr.FreeAllReg()
+
+		anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
+		anal.Alloc(ctr.maxAllocSize)
 		arg.ctr = nil
 	}
 }
