@@ -53,7 +53,7 @@ var (
 		output string
 	}{
 		input:  "select A from t1",
-		output: "select a from t1",
+		output: "select A from t1",
 	}
 )
 
@@ -62,7 +62,7 @@ func TestOriginSQL(t *testing.T) {
 	if orginSQL.output == "" {
 		orginSQL.output = orginSQL.input
 	}
-	ast, err := ParseOne(context.TODO(), orginSQL.input, 0, 0)
+	ast, err := ParseOne(context.TODO(), orginSQL.input, 0, 1)
 	if err != nil {
 		t.Errorf("Parse(%q) err: %v", orginSQL.input, err)
 		return
