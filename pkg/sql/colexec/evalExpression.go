@@ -790,79 +790,81 @@ func FixProjectionResult(proc *process.Process,
 	rbat *batch.Batch, sbat *batch.Batch) (dupSize int, err error) {
 	dupSize = 0
 
-	alreadySet := make([]int, len(rbat.Vecs))
+	alreadySet := make([]bool, len(rbat.Vecs))
 	for i := range alreadySet {
-		alreadySet[i] = -1
+		alreadySet[i] = false
 	}
 
-	finalVectors := make([]*vector.Vector, 0, len(rbat.Vecs))
-	for i, oldVec := range rbat.Vecs {
-		if alreadySet[i] < 0 {
-			newVec := (*vector.Vector)(nil)
-			if columnExpr, ok := executors[i].(*ColumnExpressionExecutor); ok {
-				if sbat.GetCnt() == 1 {
-					newVec = oldVec
-					if columnExpr.nullVecCache != nil && oldVec == columnExpr.nullVecCache {
-						newVec = vector.NewConstNull(columnExpr.typ, oldVec.Length(), proc.Mp())
-						dupSize += newVec.Size()
-					}
-					sbat.ReplaceVector(oldVec, nil)
-				} else {
-					newVec = proc.GetVector(*oldVec.GetType())
-					err = uafs[i](newVec, oldVec)
-					if err != nil {
-						for j := range finalVectors {
-							finalVectors[j].Free(proc.Mp())
-						}
-						newVec.Free(proc.Mp())
-						return 0, err
-					}
-				}
-				dupSize += newVec.Size()
-			} else if functionExpr, ok := executors[i].(*FunctionExpressionExecutor); ok {
-				// if projection, we can get the result directly
-				newVec = functionExpr.resultVector.GetResultVector()
-				functionExpr.resultVector.SetResultVector(nil)
-			} else {
-				if uafs[i] != nil {
-					newVec = proc.GetVector(*oldVec.GetType())
-					err = uafs[i](newVec, oldVec)
-				} else {
-					newVec, err = oldVec.Dup(proc.Mp())
-				}
-				if err != nil {
-					for j := range finalVectors {
-						finalVectors[j].Free(proc.Mp())
-					}
-					if newVec != nil {
-						newVec.Free(proc.Mp())
-					}
-					return 0, err
-				}
-				dupSize += newVec.Size()
-			}
-
-			finalVectors = append(finalVectors, newVec)
-			// indexOfNewVec := len(finalVectors) - 1
-			// avoid double free
-			for j := range rbat.Vecs {
-				if rbat.Vecs[j] == oldVec {
-					anotherVec, err := newVec.Dup(proc.Mp())
-					if err != nil {
-						return -1, err
-					}
-					finalVectors = append(finalVectors, anotherVec)
-					dupSize += anotherVec.Size()
-					alreadySet[j] = len(finalVectors) - 1
-				}
-			}
+	getNewVec := func(idx int, oldVec *vector.Vector) (*vector.Vector, error) {
+		if uafs[idx] != nil {
+			retVec := proc.GetVector(*oldVec.GetType())
+			retErr := uafs[idx](retVec, oldVec)
+			return retVec, retErr
+		} else {
+			return oldVec.Dup(proc.Mp())
 		}
 	}
 
-	// use new vector to replace the old vector.
-	for i, idx := range alreadySet {
-		rbat.Vecs[i] = finalVectors[idx]
+	for i, oldVec := range rbat.Vecs {
+		if !alreadySet[i] {
+			newVec := (*vector.Vector)(nil)
+			if columnExpr, ok := executors[i].(*ColumnExpressionExecutor); ok {
+				if sbat.GetCnt() == 1 {
+					if columnExpr.nullVecCache != nil && oldVec == columnExpr.nullVecCache {
+						newVec = vector.NewConstNull(columnExpr.typ, oldVec.Length(), proc.Mp())
+						dupSize += newVec.Size()
+						rbat.Vecs[i] = newVec
+					} else {
+						rplTimes := 0
+						for j := range rbat.Vecs {
+							if rbat.Vecs[j] == oldVec {
+								if rplTimes > 0 {
+									newVec, err = getNewVec(i, oldVec)
+									if err != nil {
+										if newVec != nil {
+											newVec.Free(proc.Mp())
+										}
+										return
+									}
+									dupSize += newVec.Size()
+									rbat.Vecs[j] = newVec
+								}
+								rplTimes++
+								alreadySet[j] = true
+							}
+						}
+						sbat.ReplaceVector(oldVec, nil)
+					}
+				} else {
+					newVec, err = getNewVec(i, oldVec)
+					if err != nil {
+						if newVec != nil {
+							newVec.Free(proc.Mp())
+						}
+						return
+					}
+					dupSize += newVec.Size()
+					rbat.Vecs[i] = newVec
+				}
+			} else if functionExpr, ok := executors[i].(*FunctionExpressionExecutor); ok {
+				// if projection, we can get the result directly
+				// newVec = functionExpr.resultVector.GetResultVector()
+				functionExpr.resultVector.SetResultVector(nil)
+			} else {
+				newVec, err = getNewVec(i, oldVec)
+				if err != nil {
+					if newVec != nil {
+						newVec.Free(proc.Mp())
+					}
+					return
+				}
+				dupSize += newVec.Size()
+				rbat.Vecs[i] = newVec
+			}
+			alreadySet[i] = true
+		}
 	}
+
 	return dupSize, nil
 }
 
