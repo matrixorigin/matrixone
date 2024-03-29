@@ -70,7 +70,11 @@ type UnresolvedName struct {
 
 func (node *UnresolvedName) Format(ctx *FmtCtx) {
 	for i := node.NumParts - 1; i >= 0; i-- {
-		ctx.WriteString(node.Parts[i])
+		if node.CStrParts[i] != nil {
+			ctx.WriteString(node.CStrParts[i].Compare())
+		} else {
+			ctx.WriteString(node.Parts[i])
+		}
 		if i > 0 {
 			ctx.WriteByte('.')
 		}
