@@ -10071,7 +10071,7 @@ expression:
         name := tree.SetUnresolvedName(strings.ToLower("concat"))
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
-            FuncName: tree.NewCStrUseOrigin($2,yylex.(*Lexer).useOrigin),
+            FuncName: tree.NewCStrUseOrigin("concat",yylex.(*Lexer).useOrigin),
             Exprs: tree.Exprs{$1, $3},
         }
     }

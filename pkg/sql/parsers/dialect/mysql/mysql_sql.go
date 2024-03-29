@@ -12945,7 +12945,7 @@ yydefault:
 //line mysql_sql.y:3291
 		{
 			assignments := []*tree.VarAssignmentExpr{
-				{
+				&tree.VarAssignmentExpr{
 					System: true,
 					Global: true,
 					Name:   yyDollar[6].str,
@@ -13254,7 +13254,7 @@ yydefault:
 		{
 			s := &tree.ShowGrants{}
 			roles := []*tree.Role{
-				{UserName: yyDollar[5].cstrUnion().Compare()},
+				&tree.Role{UserName: yyDollar[5].cstrUnion().Compare()},
 			}
 			s.Roles = roles
 			s.ShowGrantType = tree.GrantForRole
@@ -22269,7 +22269,7 @@ yydefault:
 			name := tree.SetUnresolvedName(strings.ToLower("concat"))
 			yyLOCAL = &tree.FuncExpr{
 				Func:     tree.FuncName2ResolvableFunctionReference(name),
-				FuncName: tree.NewCStrUseOrigin(yyDollar[2].str, yylex.(*Lexer).useOrigin),
+				FuncName: tree.NewCStrUseOrigin("concat", yylex.(*Lexer).useOrigin),
 				Exprs:    tree.Exprs{yyDollar[1].exprUnion(), yyDollar[3].exprUnion()},
 			}
 		}
