@@ -408,7 +408,20 @@ var supportedAggInNewFramework = []FuncNew{
 		class:      plan.Function_AGG,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			return fixedUnaryAggTypeCheck(inputs, aggexec.ClusterCentersSupportTypes)
+			if len(inputs) == 1 {
+				return fixedUnaryAggTypeCheck(inputs, aggexec.ClusterCentersSupportTypes)
+			}
+			if len(inputs) == 2 && inputs[1].IsVarlen() {
+				result := fixedUnaryAggTypeCheck(inputs[:1], aggexec.ClusterCentersSupportTypes)
+				if result.status == succeedMatched {
+					return result
+				}
+				if result.status == succeedWithCast {
+					result.finalType = append(result.finalType, types.T_varchar.ToType())
+					return result
+				}
+			}
+			return newCheckResultWithFailure(failedAggParametersWrong)
 		},
 
 		Overloads: []overload{

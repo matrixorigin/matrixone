@@ -16,6 +16,7 @@ package aggexec
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
@@ -224,7 +225,7 @@ func getSingleAggImplByInfo(
 		ret = info.getReturnType([]types.Type{arg})
 		return info.getImplementation([]types.Type{arg}, ret), ret, info.registeredAggInfo, nil
 	}
-	return nil, ret, raInfo, fmt.Errorf("no implementation for aggID %d with argType %s", id, arg)
+	return nil, ret, raInfo, moerr.NewInternalErrorNoCtx("no implementation for aggID %d with argType %s", id, arg)
 }
 
 func getMultiArgAggImplByInfo(
@@ -236,7 +237,7 @@ func getMultiArgAggImplByInfo(
 		ret = info.getReturnType(args)
 		return info.getImplementation(args, ret), ret, info.registeredAggInfo, nil
 	}
-	return nil, ret, raInfo, fmt.Errorf("no implementation for aggID %d with argTypes %v", id, args)
+	return nil, ret, raInfo, moerr.NewInternalErrorNoCtx("no implementation for aggID %d with argTypes %v", id, args)
 }
 
 var (
