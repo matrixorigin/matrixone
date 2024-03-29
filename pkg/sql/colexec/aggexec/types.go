@@ -181,11 +181,11 @@ func makeSingleAgg(
 		return newSingleAggFuncExec4(mg, info, opt, implementationAllocator)
 	}
 
-	if pIsVarLen && !rIsVarLen {
+	if !pIsVarLen && rIsVarLen {
 		return newSingleAggFuncExec2(mg, info, opt, implementationAllocator)
 	}
 
-	if !pIsVarLen && rIsVarLen {
+	if pIsVarLen && !rIsVarLen {
 		return newSingleAggFuncExec3(mg, info, opt, implementationAllocator)
 	}
 	return newSingleAggFuncExec1(mg, info, opt, implementationAllocator)
