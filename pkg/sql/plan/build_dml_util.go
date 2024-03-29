@@ -2824,7 +2824,6 @@ func appendPreInsertUkPlan(
 				PkColumn: int32(pkColumn),
 				PkType:   originPkType,
 				UkType:   ukType,
-				TableDef: tableDef,
 			},
 		}
 	} else {
@@ -2839,7 +2838,6 @@ func appendPreInsertUkPlan(
 				PkColumn: int32(pkColumn),
 				PkType:   originPkType,
 				UkType:   ukType,
-				TableDef: tableDef,
 			},
 		}
 	}
