@@ -151,7 +151,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 			ctr.aggs = make([]aggexec.AggFuncExec, len(ap.Aggs))
 			for i, ag := range ap.Aggs {
 				ctr.aggs[i] = aggexec.MakeAgg(proc, ag.GetAggID(), ag.IsDistinct(), ap.Types[i])
-				if config := ag.GetExtraConfig(); len(config) > 0 {
+				if config := ag.GetExtraConfig(); config != nil {
 					if err = ctr.aggs[i].SetExtraInformation(config, 0); err != nil {
 						return result, err
 					}
@@ -199,7 +199,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 			ctr.aggs = make([]aggexec.AggFuncExec, len(ap.Aggs))
 			for i, ag := range ap.Aggs {
 				ctr.aggs[i] = aggexec.MakeAgg(proc, ag.GetAggID(), ag.IsDistinct(), ap.Types[i])
-				if config := ag.GetExtraConfig(); len(config) > 0 {
+				if config := ag.GetExtraConfig(); config != nil {
 					if err = ctr.aggs[i].SetExtraInformation(config, 0); err != nil {
 						return result, err
 					}
@@ -289,7 +289,7 @@ func eval[T constraints.Integer](ctr *container, ap *Argument, proc *process.Pro
 				ctr.aggs = make([]aggexec.AggFuncExec, len(ap.Aggs))
 				for i, ag := range ap.Aggs {
 					ctr.aggs[i] = aggexec.MakeAgg(proc, ag.GetAggID(), ag.IsDistinct(), ap.Types[i])
-					if config := ag.GetExtraConfig(); len(config) > 0 {
+					if config := ag.GetExtraConfig(); config != nil {
 						if err = ctr.aggs[i].SetExtraInformation(config, 0); err != nil {
 							return err
 						}

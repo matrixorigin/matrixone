@@ -244,6 +244,9 @@ func (exec *groupConcatExec) marshal() ([]byte, error) {
 }
 
 func (exec *groupConcatExec) unmarshal(result []byte, groups [][]byte) error {
+	if err := exec.SetExtraInformation(groups[0], 0); err != nil {
+		return err
+	}
 	return exec.ret.unmarshal(result)
 }
 

@@ -120,7 +120,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 			ctr.bat.Aggs = make([]aggexec.AggFuncExec, len(ap.Aggs))
 			for i, ag := range ap.Aggs {
 				ctr.bat.Aggs[i] = aggexec.MakeAgg(proc, ag.GetAggID(), ag.IsDistinct(), ap.Types[i])
-				if config := ag.GetExtraConfig(); len(config) > 0 {
+				if config := ag.GetExtraConfig(); config != nil {
 					if err = ctr.bat.Aggs[i].SetExtraInformation(config, 0); err != nil {
 						return result, err
 					}

@@ -139,7 +139,7 @@ func (ctr *container) generateAggStructures(proc *process.Process, arg *Argument
 			proc,
 			ag.GetAggID(), ag.IsDistinct(), ctr.aggVecs[i].Typ...)
 
-		if config := ag.GetExtraConfig(); len(config) > 0 {
+		if config := ag.GetExtraConfig(); config != nil {
 			if err := ctr.bat.Aggs[i].SetExtraInformation(config, 0); err != nil {
 				return err
 			}
