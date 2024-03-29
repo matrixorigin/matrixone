@@ -292,12 +292,14 @@ func (s *Scope) handleIvfIndexEntriesTable(c *Compile, indexDef *plan.IndexDef, 
 
 	// 3. insert into entries table
 	indexColumnName := indexDef.Parts[0]
-	insertSQL := fmt.Sprintf("insert into `%s`.`%s` (`%s`, `%s`, `%s`) ",
+	insertSQL := fmt.Sprintf("insert into `%s`.`%s` (`%s`, `%s`, `%s`, `%s`) ",
 		qryDatabase,
 		indexDef.IndexTableName,
 		catalog.SystemSI_IVFFLAT_TblCol_Entries_version,
 		catalog.SystemSI_IVFFLAT_TblCol_Entries_id,
-		catalog.SystemSI_IVFFLAT_TblCol_Entries_pk)
+		catalog.SystemSI_IVFFLAT_TblCol_Entries_pk,
+		catalog.SystemSI_IVFFLAT_TblCol_Entries_entry,
+	)
 
 	// 4. centroids table with latest version
 	centroidsTableForCurrentVersionSql := fmt.Sprintf("(select * from "+
@@ -315,14 +317,22 @@ func (s *Scope) handleIvfIndexEntriesTable(c *Compile, indexDef *plan.IndexDef, 
 	)
 
 	// 5. original table with normalized SK
-	originalTableWithNormalizedSkSql := fmt.Sprintf("(select %s as `%s`, "+
-		"normalize_l2(`%s`.`%s`) as `%s` from `%s`.`%s`) as `%s`",
+	normalizedVecColName := "__mo_org_tbl_norm_vec_col"
+	originalTableWithNormalizedSkSql := fmt.Sprintf("(select "+
+		"%s as `%s`, "+
+		"normalize_l2(`%s`.`%s`) as `%s`, "+
+		"`%s`.`%s`"+
+		" from `%s`.`%s`) as `%s`",
 		originalTblPkColMaySerial,
 		originalTblPkColMaySerialColNameAlias,
 
 		originalTableDef.Name,
 		indexColumnName,
+		normalizedVecColName,
+
+		originalTableDef.Name,
 		indexColumnName,
+
 		qryDatabase,
 		originalTableDef.Name,
 		originalTableDef.Name,
@@ -330,23 +340,36 @@ func (s *Scope) handleIvfIndexEntriesTable(c *Compile, indexDef *plan.IndexDef, 
 
 	/*
 		Sample SQL:
-		INSERT INTO `a`.`entries_tbl`(`__mo_index_centroid_fk_version`, `__mo_index_centroid_fk_id`, `__mo_index_pri_col`)
-		SELECT     `centroids_tbl`.`__mo_index_centroid_version`,
-		           serial_extract( min( serial( l2_distance(`centroids_tbl`.`__mo_index_centroid`,`tbl`.embedding ), `centroids_tbl`.`__mo_index_centroid_id`)), 1 AS bigint),
-		           `tbl`.`__mo_org_tbl_pk_may_serial_col`
-		FROM
-			(SELECT `tbl`.`id` AS `__mo_org_tbl_pk_may_serial_col`, normalize_l2(`tbl`.embedding) AS `embedding` FROM `a`.`tbl`) AS `tbl`
-		CROSS JOIN
-			(SELECT * FROM   `a`.`centroids_tbl` WHERE  `__mo_index_centroid_version` = 0) AS `centroids_tbl`
-		GROUP BY   `tbl`.`__mo_org_tbl_pk_may_serial_col`;
 
+		INSERT INTO `a`.`entries`
+		            (
+		                        `__mo_index_centroid_fk_version`,
+		                        `__mo_index_centroid_fk_id`,
+		                        `__mo_index_pri_col`,
+		                        `__mo_index_centroid_fk_entry`
+		            )
+		SELECT     `centroids`.`__mo_index_centroid_version`,
+		           serial_extract( min( serial_full( l2_distance(`centroids`.`__mo_index_centroid`, `tbl`.`__mo_org_tbl_norm_vec_col`), `centroids`.`__mo_index_centroid_id`)), 1 AS bigint),
+		           __mo_org_tbl_pk_may_serial_col ,
+		           `tbl`.`embedding`
+		FROM       (
+		                  SELECT `tbl`.`id` AS `__mo_org_tbl_pk_may_serial_col`, normalize_l2(`tbl`.`embedding`) AS `__mo_org_tbl_norm_vec_col`, `tbl`.`embedding` FROM   `a`.`tbl`) AS `tbl`
+		CROSS JOIN
+		           (
+		                  SELECT * FROM   `a`.`centroids`
+		                  WHERE  `__mo_index_centroid_version` =(SELECT cast(__mo_index_val AS bigint) FROM   `a`.`meta` WHERE  `__mo_index_key` = 'version')) AS `centroids`
+		GROUP BY   __mo_org_tbl_pk_may_serial_col,
+		           `centroids`.`__mo_index_centroid_version`,
+		           `tbl`.`embedding`;
 	*/
 	// 6. final SQL
 	mappingSQL := fmt.Sprintf("%s "+
 		"select `%s`.`__mo_index_centroid_version`, "+
-		"serial_extract( min( serial_full( %s(`%s`.`%s`, `%s`.%s), `%s`.`%s`)), 1 as bigint), "+
-		"%s "+
-		"from %s CROSS JOIN %s group by %s, `%s`.`__mo_index_centroid_version`;",
+		"serial_extract( min( serial_full( %s(`%s`.`%s`, `%s`.`%s`), `%s`.`%s`)), 1 as bigint), "+
+		"%s ,"+
+		"`%s`.`%s` "+
+		"from %s CROSS JOIN %s group by "+
+		" %s, `%s`.`__mo_index_centroid_version`, `%s`.`%s`;",
 		insertSQL,
 
 		centroidsTableName,
@@ -355,16 +378,22 @@ func (s *Scope) handleIvfIndexEntriesTable(c *Compile, indexDef *plan.IndexDef, 
 		centroidsTableName,
 		catalog.SystemSI_IVFFLAT_TblCol_Centroids_centroid,
 		originalTableDef.Name,
-		indexColumnName,
+		normalizedVecColName,
 		centroidsTableName,
 		catalog.SystemSI_IVFFLAT_TblCol_Centroids_id,
 
 		originalTblPkColMaySerialColNameAlias, // NOTE: no need to add tableName here, because it could be serial()
 
+		originalTableDef.Name,
+		indexColumnName,
+
 		originalTableWithNormalizedSkSql,
 		centroidsTableForCurrentVersionSql,
+
 		originalTblPkColMaySerialColNameAlias,
 		centroidsTableName,
+		originalTableDef.Name,
+		indexColumnName,
 	)
 
 	err = s.logTimestamp(c, qryDatabase, metadataTableName, "mapping_start")
