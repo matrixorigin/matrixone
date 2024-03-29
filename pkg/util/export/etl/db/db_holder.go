@@ -19,7 +19,6 @@ import (
 	"context"
 	"database/sql"
 	"encoding/csv"
-	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -128,9 +127,6 @@ func GetOrInitDBConn(forceNewConn bool, randomCN bool) (*sql.DB, error) {
 		newDBConn, err := sql.Open("mysql", dsn)
 		if err != nil {
 			return err
-		}
-		if _, err := newDBConn.Exec("set session disable_txn_trace=1"); err != nil {
-			return errors.Join(err, newDBConn.Close())
 		}
 
 		//45s suggest by xzxiong
