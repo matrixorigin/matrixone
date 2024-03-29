@@ -53,7 +53,7 @@ var (
 		output string
 	}{
 		input:  "select A from t1",
-		output: "select A from t1",
+		output: "select a from t1",
 	}
 )
 
