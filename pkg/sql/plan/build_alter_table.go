@@ -253,6 +253,20 @@ func restoreDDL(ctx CompilerContext, tableDef *TableDef, schemaName string, tblN
 			typeStr += fmt.Sprintf("(%d,%d)", col.Typ.Width, col.Typ.Scale)
 		}
 
+		if typ.Oid.IsEnum() {
+			enumStr := col.GetTyp().Enumvalues
+			enums := strings.Split(enumStr, ",")
+			enumVal := ""
+			for i, enum := range enums {
+				if i == 0 {
+					enumVal += fmt.Sprintf("'%s'", enum)
+				} else {
+					enumVal += fmt.Sprintf(",'%s'", enum)
+				}
+			}
+			typeStr = fmt.Sprintf("ENUM(%s)", enumVal)
+		}
+
 		updateOpt := ""
 		if col.OnUpdate != nil && col.OnUpdate.Expr != nil {
 			updateOpt = " ON UPDATE " + col.OnUpdate.OriginString

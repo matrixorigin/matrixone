@@ -1907,8 +1907,7 @@ col1    col2
 {"x": "red"}    a
 {"x": [3, 5, 7]}    b
 alter table abnormal04 change col1 col1NewCOl float;
-You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 4 column 2 near " 
-)";
+invalid argument operator cast, bad value [JSON FLOAT]
 alter table abnormal04 change col2 col2NewCOL int;
 invalid argument cast to int, bad value a
 select * from abnormal04;
