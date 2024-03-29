@@ -51,6 +51,30 @@ insert into  t1 values (0, 'a');
 insert into  t1 values (1, NULL);
 insert into  t1 values (NULL, NULL);
 insert into  t1 values (null, 'b');
+select * from t1;
+aa    bb
+0    a
+1    null
+null    null
+null    b
+select coalesCE(Aa, 1) from t1;
+coalesce(aa, 1)
+0
+1
+1
+1
+select coalEsCE(aA, 1) from t1;
+coalesce(aa, 1)
+0
+1
+1
+1
+select cOAlesce(bB, '1') from t1;
+coalesce(bb, 1)
+a
+1
+1
+b
 set global keep_user_target_list_in_result = 1;
 select * from t1;
 aa    bb
@@ -59,19 +83,19 @@ aa    bb
 null    null
 null    b
 select coalesCE(Aa, 1) from t1;
-coalesCE(Aa, 1)
+coalesce(aa, 1)
 0
 1
 1
 1
 select coalEsCE(aA, 1) from t1;
-coalEsCE(aA, 1)
+coalesce(aa, 1)
 0
 1
 1
 1
 select cOAlesce(bB, '1') from t1;
-cOAlesce(bB, 1)
+coalesce(bb, 1)
 a
 1
 1
