@@ -892,11 +892,6 @@ func (p *PartitionState) HandleMetadataInsert(
 
 				p.dataObjects.Set(objEntry)
 
-				//prefetch the object meta
-				if err := blockio.PrefetchMeta(fs, objEntry.Location()); err != nil {
-					logutil.Errorf("prefetch object meta failed. %v", err)
-				}
-
 				if !objEntry.CreateTime.IsEmpty() {
 					p.dataObjectsByCreateTS.Set(ObjectIndexByCreateTSEntry(objEntry))
 				}
