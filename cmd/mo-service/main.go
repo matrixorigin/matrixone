@@ -76,6 +76,8 @@ func main() {
 	maybePrintVersion()
 	maybeRunInDaemonMode()
 
+	uuid.EnableRandPool()
+
 	if *cpuProfilePathFlag != "" {
 		stop := startCPUProfile()
 		defer stop()
@@ -85,10 +87,6 @@ func main() {
 	}
 	if *heapProfilePathFlag != "" {
 		defer writeHeapProfile()
-	}
-	if *fileServiceProfilePathFlag != "" {
-		stop := startFileServiceProfile()
-		defer stop()
 	}
 	if *httpListenAddr != "" {
 		go func() {

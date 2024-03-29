@@ -676,11 +676,18 @@ func NewSession(proto Protocol, mp *mpool.MPool, pu *config.ParameterUnit,
 }
 
 func (ses *Session) Close() {
+	ses.protocol = nil
 	ses.mrs = nil
 	ses.data = nil
 	ses.ep = nil
-	ses.txnHandler = nil
-	ses.txnCompileCtx = nil
+	if ses.txnHandler != nil {
+		ses.txnHandler.ses = nil
+		ses.txnHandler = nil
+	}
+	if ses.txnCompileCtx != nil {
+		ses.txnCompileCtx.ses = nil
+		ses.txnCompileCtx = nil
+	}
 	ses.storage = nil
 	ses.sql = ""
 	ses.sysVars = nil
@@ -707,7 +714,10 @@ func (ses *Session) Close() {
 	ses.planCache = nil
 	ses.seqCurValues = nil
 	ses.seqLastValue = nil
-	ses.sqlHelper = nil
+	if ses.sqlHelper != nil {
+		ses.sqlHelper.ses = nil
+		ses.sqlHelper = nil
+	}
 	ses.ClearStmtProfile()
 	//  The mpool cleanup must be placed at the end,
 	// and you must wait for all resources to be cleaned up before you can delete the mpool
@@ -717,6 +727,7 @@ func (ses *Session) Close() {
 		for _, bat := range bats {
 			bat.Clean(ses.proc.Mp())
 		}
+		ses.proc = nil
 	}
 	if ses.isNotBackgroundSession {
 		mp := ses.GetMemPool()
@@ -729,6 +740,9 @@ func (ses *Session) Close() {
 	}
 
 	ses.timestampMap = nil
+	ses.upstream = nil
+	ses.rm = nil
+	ses.rt = nil
 }
 
 // BackgroundSession executing the sql in background
@@ -784,8 +798,8 @@ func (bgs *BackgroundSession) Close() {
 
 	if bgs.Session != nil {
 		bgs.Session.Close()
+		bgs.Session = nil
 	}
-	bgs = nil
 }
 
 func (ses *Session) GetIncBlockIdx() int {
@@ -2150,6 +2164,7 @@ var NewBackgroundHandler = func(
 
 func (bh *BackgroundHandler) Close() {
 	bh.mce.Close()
+	bh.mce = nil
 	bh.ses.Close()
 }
 
@@ -2515,8 +2530,9 @@ func (d *dbMigration) Migrate(ses *Session) error {
 }
 
 type prepareStmtMigration struct {
-	name string
-	sql  string
+	name       string
+	sql        string
+	paramTypes []byte
 }
 
 func (p *prepareStmtMigration) Migrate(ses *Session) error {
@@ -2531,7 +2547,7 @@ func (p *prepareStmtMigration) Migrate(ses *Session) error {
 	if err != nil {
 		return err
 	}
-	if _, err = doPrepareStmt(ses.requestCtx, ses, stmts[0].(*tree.PrepareStmt), p.sql); err != nil {
+	if _, err = doPrepareStmt(ses.requestCtx, ses, stmts[0].(*tree.PrepareStmt), p.sql, p.paramTypes); err != nil {
 		return err
 	}
 	return nil
@@ -2551,8 +2567,9 @@ func (ses *Session) Migrate(req *query.MigrateConnToRequest) error {
 			continue
 		}
 		pm := prepareStmtMigration{
-			name: p.Name,
-			sql:  p.SQL,
+			name:       p.Name,
+			sql:        p.SQL,
+			paramTypes: p.ParamTypes,
 		}
 		if err := pm.Migrate(ses); err != nil {
 			return err

@@ -150,13 +150,13 @@ func (e *MergeExecutor) ExecuteFor(entry *catalog.TableEntry, policy Policy) {
 	e.tableName = fmt.Sprintf("%v-%v", entry.ID, entry.GetLastestSchema().Name)
 
 	objectList := policy.Revise(int64(e.cpuPercent), int64(e.MemAvailBytes()))
-	blkCnt := len(objectList)
 
-	if blkCnt == 0 {
+	objLen := len(objectList)
+	if objLen < 2 {
 		return
 	}
 
-	scopes := make([]common.ID, blkCnt)
+	scopes := make([]common.ID, objLen)
 	for i, blk := range objectList {
 		scopes[i] = *blk.AsCommonID()
 	}
@@ -173,9 +173,9 @@ func (e *MergeExecutor) ExecuteFor(entry *catalog.TableEntry, policy Policy) {
 	}
 
 	osize, esize, _ := estimateMergeConsume(objectList)
-	e.AddActiveTask(task.ID(), blkCnt, esize)
+	e.AddActiveTask(task.ID(), objLen, esize)
 	task.AddObserver(e)
-	entry.Stats.AddMerge(osize, len(objectList), blkCnt)
+	entry.Stats.AddMerge(osize, len(objectList), objLen)
 	logMergeTask(e.tableName, task.ID(), objectList, osize, esize)
 }
 

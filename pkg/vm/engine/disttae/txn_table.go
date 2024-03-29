@@ -461,7 +461,7 @@ func (tbl *txnTable) LoadDeletesForBlock(bid types.Blockid, offsets *[]int64) (e
 			if err != nil {
 				return err
 			}
-			rowIdBat, err := blockio.LoadTombstoneColumns(
+			rowIdBat, release, err := blockio.LoadTombstoneColumns(
 				tbl.db.txn.proc.Ctx,
 				[]uint16{0},
 				nil,
@@ -471,6 +471,7 @@ func (tbl *txnTable) LoadDeletesForBlock(bid types.Blockid, offsets *[]int64) (e
 			if err != nil {
 				return err
 			}
+			defer release()
 			rowIds := vector.MustFixedCol[types.Rowid](rowIdBat.GetVector(0))
 			for _, rowId := range rowIds {
 				_, offset := rowId.Decode()
@@ -501,7 +502,7 @@ func (tbl *txnTable) LoadDeletesForMemBlocksIn(
 				if err != nil {
 					return err
 				}
-				rowIdBat, err := blockio.LoadTombstoneColumns(
+				rowIdBat, release, err := blockio.LoadTombstoneColumns(
 					tbl.db.txn.proc.Ctx,
 					[]uint16{0},
 					nil,
@@ -511,13 +512,13 @@ func (tbl *txnTable) LoadDeletesForMemBlocksIn(
 				if err != nil {
 					return err
 				}
+				defer release()
 				rowIds := vector.MustFixedCol[types.Rowid](rowIdBat.GetVector(0))
 				for _, rowId := range rowIds {
 					if deletesRowId != nil {
 						deletesRowId[rowId] = 0
 					}
 				}
-				rowIdBat.Clean(tbl.db.txn.proc.GetMPool())
 			}
 		}
 
@@ -581,6 +582,9 @@ func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr) (ranges eng
 		v2.TxnTableRangeDurationHistogram.Observe(cost.Seconds())
 	}()
 
+	var blocks objectio.BlockInfoSlice
+	ranges = &blocks
+
 	// make sure we have the block infos snapshot
 	if err = tbl.UpdateObjectInfos(ctx); err != nil {
 		return
@@ -592,7 +596,6 @@ func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr) (ranges eng
 		return
 	}
 
-	var blocks objectio.BlockInfoSlice
 	blocks.AppendBlockInfo(objectio.EmptyBlockInfo)
 
 	if err = tbl.rangesOnePart(
@@ -605,7 +608,7 @@ func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr) (ranges eng
 	); err != nil {
 		return
 	}
-	ranges = &blocks
+
 	return
 }
 
@@ -2317,7 +2320,7 @@ func (tbl *txnTable) PKPersistedBetween(
 	pkSeq := pkDef.Seqnum
 	pkType := types.T(pkDef.Typ.Id).ToType()
 	for _, blk := range candidateBlks {
-		bat, err := blockio.LoadColumns(
+		bat, release, err := blockio.LoadColumns(
 			ctx,
 			[]uint16{uint16(pkSeq)},
 			[]types.Type{pkType},
@@ -2329,6 +2332,7 @@ func (tbl *txnTable) PKPersistedBetween(
 		if err != nil {
 			return true, err
 		}
+		defer release()
 
 		colExpr := newColumnExpr(0, plan2.MakePlan2Type(keys.GetType()), "pk")
 
