@@ -443,15 +443,18 @@ func (h *Handle) HandleCommitMerge(
 		}
 		loc := objectio.Location(req.BookingLoc)
 		var bat *batch.Batch
-		bat, err = blockio.LoadTombstoneColumns(ctx, []uint16{0}, nil, h.db.Runtime.Fs.Service, loc, nil)
+		var release func()
+		bat, release, err = blockio.LoadTombstoneColumns(ctx, []uint16{0}, nil, h.db.Runtime.Fs.Service, loc, nil)
 		if err != nil {
 			return
 		}
 		req.Booking = &api.BlkTransferBooking{}
 		err = req.Booking.Unmarshal(bat.Vecs[0].GetBytesAt(0))
 		if err != nil {
+			release()
 			return
 		}
+		release()
 		h.db.Runtime.Fs.Service.Delete(ctx, loc.Name().String())
 		bat = nil
 	}

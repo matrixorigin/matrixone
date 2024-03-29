@@ -103,8 +103,8 @@ func (t *CNMergeTask) GetMPool() *mpool.MPool {
 func (t *CNMergeTask) HostHintName() string { return "CN" }
 
 func (t *CNMergeTask) PrepareData() ([]*batch.Batch, []*nulls.Nulls, func(), error) {
-	r, d, e := t.readAllData()
-	return r, d, func() {}, e
+	r, release, d, e := t.readAllData()
+	return r, d, release, e
 }
 
 func (t *CNMergeTask) PrepareCommitEntry() *api.MergeCommitEntry {
@@ -125,19 +125,27 @@ func (t *CNMergeTask) PrepareNewWriterFunc() func() *blockio.BlockWriter {
 	return mergesort.GetMustNewWriter(t.fs, t.version, t.colseqnums, t.sortkeyPos, t.sortkeyIsPK)
 }
 
-func (t *CNMergeTask) readAllData() ([]*batch.Batch, []*nulls.Nulls, error) {
+func (t *CNMergeTask) readAllData() ([]*batch.Batch, func(), []*nulls.Nulls, error) {
 	var cnt uint32
 	for _, t := range t.targets {
 		cnt += t.BlkCnt()
 	}
 	blkBatches := make([]*batch.Batch, 0, cnt)
 	blkDels := make([]*nulls.Nulls, 0, cnt)
+	releases := make([]func(), 0, cnt)
+
+	release := func() {
+		for _, r := range releases {
+			r()
+		}
+	}
 
 	for _, obj := range t.targets {
 		loc := obj.ObjectLocation()
 		meta, err := objectio.FastLoadObjectMeta(t.ctx, &loc, false, t.fs)
 		if err != nil {
-			return nil, nil, err
+			release()
+			return nil, nil, nil, err
 		}
 
 		// read all blocks data in an object
@@ -154,40 +162,44 @@ func (t *CNMergeTask) readAllData() ([]*batch.Batch, []*nulls.Nulls, error) {
 					blk.CommitTs = commitTs
 				}
 			}
-			bat, delmask, err := t.readblock(&blk)
+			bat, releasef, delmask, err := t.readblock(&blk)
 			if err != nil {
 				innerErr = err
 				return false
 			}
 
 			blkBatches = append(blkBatches, bat)
+			releases = append(releases, releasef)
 			blkDels = append(blkDels, delmask)
 			return true
 		}
 		ForeachBlkInObjStatsList(false, meta.MustDataMeta(), readBlock, obj.ObjectStats)
 		// if err is found, bail out
 		if innerErr != nil {
-			return nil, nil, innerErr
+			release()
+			return nil, nil, nil, innerErr
 		}
 	}
-	return blkBatches, blkDels, nil
+
+	return blkBatches, release, blkDels, nil
 }
 
 // readblock reads block data. there is no rowid column, no ablk
-func (t *CNMergeTask) readblock(info *objectio.BlockInfo) (bat *batch.Batch, dels *nulls.Nulls, err error) {
+func (t *CNMergeTask) readblock(info *objectio.BlockInfo) (bat *batch.Batch, release func(), dels *nulls.Nulls, err error) {
 	// read data
-	bat, err = blockio.LoadColumns(t.ctx, t.colseqnums, t.coltypes, t.fs, info.MetaLocation(), t.proc.GetMPool(), fileservice.Policy(0))
+	bat, release, err = blockio.LoadColumns(t.ctx, t.colseqnums, t.coltypes, t.fs, info.MetaLocation(), t.proc.GetMPool(), fileservice.Policy(0))
 	if err != nil {
 		return
 	}
 
 	// read tombstone on disk
 	if !info.DeltaLocation().IsEmpty() {
-		obat, byCN, err2 := blockio.ReadBlockDelete(t.ctx, info.DeltaLocation(), t.fs)
+		obat, byCN, delRelease, err2 := blockio.ReadBlockDelete(t.ctx, info.DeltaLocation(), t.fs)
 		if err2 != nil {
 			err = err2
 			return
 		}
+		defer delRelease()
 		if byCN {
 			dels = blockio.EvalDeleteRowsByTimestampForDeletesPersistedByCN(obat, t.snapshot, info.CommitTs)
 		} else {
