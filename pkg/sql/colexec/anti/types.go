@@ -74,7 +74,7 @@ type Argument struct {
 	HashOnPK   bool
 	IsShuffle  bool
 	bat        *batch.Batch
-	lastpos    int
+	lastrow    int
 
 	vm.OperatorBase
 }

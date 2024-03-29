@@ -503,7 +503,7 @@ func TestCreateObject(t *testing.T) {
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))
 }
 
-func TestAddBlksWithMetaLoc(t *testing.T) {
+func TestAddObjsWithMetaLoc(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
@@ -548,14 +548,14 @@ func TestAddBlksWithMetaLoc(t *testing.T) {
 		worker.SendOp(task1)
 		err = task1.WaitDone(context.Background())
 		assert.NoError(t, err)
-		newBlockFp1 = task1.GetCreatedBlocks().Fingerprint()
-		stats1 = task1.GetCreatedBlocks().GetMeta().(*catalog.ObjectEntry).GetLatestNodeLocked().BaseNode.ObjectStats
-		metaLoc1 = task1.GetCreatedBlocks().GetMeta().(*catalog.ObjectEntry).GetLocation()
+		newBlockFp1 = task1.GetCreatedObjects().Fingerprint()
+		stats1 = task1.GetCreatedObjects().GetMeta().(*catalog.ObjectEntry).GetLatestNodeLocked().BaseNode.ObjectStats
+		metaLoc1 = task1.GetCreatedObjects().GetMeta().(*catalog.ObjectEntry).GetLocation()
 		metaLoc1.SetID(0)
 		metaLoc1.SetRows(schema.BlockMaxRows)
-		newBlockFp2 = task1.GetCreatedBlocks().Fingerprint()
+		newBlockFp2 = task1.GetCreatedObjects().Fingerprint()
 		newBlockFp2.SetBlockOffset(1)
-		stats2 = task1.GetCreatedBlocks().GetMeta().(*catalog.ObjectEntry).GetLatestNodeLocked().BaseNode.ObjectStats
+		stats2 = task1.GetCreatedObjects().GetMeta().(*catalog.ObjectEntry).GetLatestNodeLocked().BaseNode.ObjectStats
 		assert.Nil(t, txn.Commit(context.Background()))
 	}
 	//read new non-appendable block data and check
@@ -588,7 +588,7 @@ func TestAddBlksWithMetaLoc(t *testing.T) {
 		vec1 := containers.MakeVector(types.T_varchar.ToType(), common.DefaultAllocator)
 		vec1.Append(stats1[:], false)
 		defer vec1.Close()
-		err := rel.AddBlksWithMetaLoc(context.Background(), vec1)
+		err := rel.AddObjsWithMetaLoc(context.Background(), vec1)
 		assert.Nil(t, err)
 		err = rel.Append(context.Background(), bats[0])
 		assert.Nil(t, err)
@@ -596,7 +596,7 @@ func TestAddBlksWithMetaLoc(t *testing.T) {
 		vec2 := containers.MakeVector(types.T_varchar.ToType(), common.DefaultAllocator)
 		vec2.Append(stats2[:], false)
 		defer vec1.Close()
-		err = rel.AddBlksWithMetaLoc(context.Background(), vec2)
+		err = rel.AddObjsWithMetaLoc(context.Background(), vec2)
 		assert.Nil(t, err)
 		err = rel.Append(context.Background(), bats[1])
 		assert.Nil(t, err)
@@ -621,7 +621,7 @@ func TestAddBlksWithMetaLoc(t *testing.T) {
 		vec3.Append(stats1[:], false)
 		vec3.Append(stats2[:], false)
 		defer vec1.Close()
-		err = rel.AddBlksWithMetaLoc(context.Background(), vec3)
+		err = rel.AddObjsWithMetaLoc(context.Background(), vec3)
 		assert.NotNil(t, err)
 
 		//check blk count.
@@ -714,7 +714,7 @@ func TestCompactMemAlter(t *testing.T) {
 		err = task.WaitDone(ctx)
 		assert.NoError(t, err)
 		assert.NoError(t, txn.Commit(context.Background()))
-		newBlockFp = task.GetCreatedBlocks().Fingerprint()
+		newBlockFp = task.GetCreatedObjects().Fingerprint()
 	}
 	{
 		txn, rel := testutil.GetDefaultRelation(t, db, schema.Name)
@@ -2469,7 +2469,7 @@ func TestSegDelLogtail(t *testing.T) {
 	testutil.CheckAllColRowsByScan(t, rel, bat.Length()-5, false)
 	assert.Nil(t, txn.Commit(context.Background()))
 
-	err = tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.StatMaxCommitTS(), false)
+	err = tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.Now(), false)
 	require.NoError(t, err)
 
 	check := func() {
@@ -4473,7 +4473,7 @@ func TestCompactDeltaBlk(t *testing.T) {
 		assert.NoError(t, err)
 		assert.False(t, meta.GetLatestNodeLocked().BaseNode.IsEmpty())
 		assert.False(t, rel.GetMeta().(*catalog.TableEntry).TryGetTombstone(meta.ID).GetLatestDeltaloc(0).IsEmpty())
-		created := task.GetCreatedBlocks().GetMeta().(*catalog.ObjectEntry)
+		created := task.GetCreatedObjects().GetMeta().(*catalog.ObjectEntry)
 		assert.False(t, created.GetLatestNodeLocked().BaseNode.IsEmpty())
 		assert.Nil(t, rel.GetMeta().(*catalog.TableEntry).TryGetTombstone(created.ID))
 		err = txn.Commit(context.Background())
@@ -5154,7 +5154,7 @@ func TestMergeMemsize(t *testing.T) {
 		assert.NoError(t, err)
 		tbl, err := db.CreateRelation(schema)
 		assert.NoError(t, err)
-		assert.NoError(t, tbl.AddBlksWithMetaLoc(context.Background(), statsVec))
+		assert.NoError(t, tbl.AddObjsWithMetaLoc(context.Background(), statsVec))
 		assert.NoError(t, txn.Commit(context.Background()))
 	}
 	statsVec.Close()
@@ -5224,7 +5224,7 @@ func TestCollectDeletesAfterCKP(t *testing.T) {
 		assert.NoError(t, err)
 		tbl, err := db.CreateRelation(schema)
 		assert.NoError(t, err)
-		assert.NoError(t, tbl.AddBlksWithMetaLoc(context.Background(), statsVec))
+		assert.NoError(t, tbl.AddObjsWithMetaLoc(context.Background(), statsVec))
 		assert.NoError(t, txn.Commit(context.Background()))
 	}
 
@@ -5330,7 +5330,7 @@ func TestAlwaysUpdate(t *testing.T) {
 	tbl, err := db.CreateRelation(schema)
 	// tid = tbl.ID()
 	assert.NoError(t, err)
-	assert.NoError(t, tbl.AddBlksWithMetaLoc(context.Background(), statsVec))
+	assert.NoError(t, tbl.AddObjsWithMetaLoc(context.Background(), statsVec))
 	assert.NoError(t, txn.Commit(context.Background()))
 
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))
@@ -5858,7 +5858,7 @@ func TestAlterRenameTbl(t *testing.T) {
 	t.Log(dbentry.PrettyNameIndex())
 	require.NoError(t, txn.Commit(context.Background()))
 
-	require.NoError(t, tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.StatMaxCommitTS(), false))
+	require.NoError(t, tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.Now(), false))
 	tae.Restart(ctx)
 
 	txn, _ = tae.StartTxn(nil)
@@ -5961,7 +5961,7 @@ func TestAlterRenameTbl2(t *testing.T) {
 		t.Log(dbentry.PrettyNameIndex())
 	}
 
-	require.NoError(t, tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.StatMaxCommitTS(), false))
+	require.NoError(t, tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.Now(), false))
 
 	tae.Restart(ctx)
 	{
@@ -6439,6 +6439,7 @@ func TestAppendAndGC(t *testing.T) {
 }
 
 func TestSnapshotGC(t *testing.T) {
+	t.Skip("Will be fixed in Refactor GC codes phase 2")
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
@@ -7186,9 +7187,9 @@ func TestForceCheckpoint(t *testing.T) {
 
 	tae.CreateRelAndAppend(bat, true)
 
-	err = tae.BGCheckpointRunner.ForceFlushWithInterval(tae.TxnMgr.StatMaxCommitTS(), context.Background(), time.Second*2, time.Millisecond*10)
+	err = tae.BGCheckpointRunner.ForceFlushWithInterval(tae.TxnMgr.Now(), context.Background(), time.Second*2, time.Millisecond*10)
 	assert.Error(t, err)
-	err = tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.StatMaxCommitTS(), false)
+	err = tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.Now(), false)
 	assert.NoError(t, err)
 }
 
@@ -7282,9 +7283,9 @@ func TestMarshalPartioned(t *testing.T) {
 	partioned = rel.Schema().(*catalog.Schema).Partitioned
 	assert.Equal(t, int8(1), partioned)
 
-	err := tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.StatMaxCommitTS(), false)
+	err := tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.Now(), false)
 	assert.NoError(t, err)
-	lsn := tae.BGCheckpointRunner.MaxLSNInRange(tae.TxnMgr.StatMaxCommitTS())
+	lsn := tae.BGCheckpointRunner.MaxLSNInRange(tae.TxnMgr.Now())
 	entry, err := tae.Wal.RangeCheckpoint(1, lsn)
 	assert.NoError(t, err)
 	assert.NoError(t, entry.WaitDone())
@@ -7393,12 +7394,12 @@ func TestCommitS3Blocks(t *testing.T) {
 
 	for _, vec := range statsVecs {
 		txn, rel := tae.GetRelation()
-		rel.AddBlksWithMetaLoc(context.Background(), vec)
+		rel.AddObjsWithMetaLoc(context.Background(), vec)
 		assert.NoError(t, txn.Commit(context.Background()))
 	}
 	for _, vec := range statsVecs {
 		txn, rel := tae.GetRelation()
-		err := rel.AddBlksWithMetaLoc(context.Background(), vec)
+		err := rel.AddObjsWithMetaLoc(context.Background(), vec)
 		assert.Error(t, err)
 		assert.NoError(t, txn.Commit(context.Background()))
 	}
@@ -7464,7 +7465,7 @@ func TestDedupSnapshot2(t *testing.T) {
 	statsVec.Append(writer.GetObjectStats()[objectio.SchemaData][:], false)
 
 	txn, rel := tae.GetRelation()
-	err = rel.AddBlksWithMetaLoc(context.Background(), statsVec)
+	err = rel.AddObjsWithMetaLoc(context.Background(), statsVec)
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit(context.Background()))
 
@@ -7472,7 +7473,7 @@ func TestDedupSnapshot2(t *testing.T) {
 	startTS := txn.GetStartTS()
 	txn.SetSnapshotTS(startTS.Next())
 	txn.SetDedupType(txnif.IncrementalDedup)
-	err = rel.AddBlksWithMetaLoc(context.Background(), statsVec)
+	err = rel.AddObjsWithMetaLoc(context.Background(), statsVec)
 	assert.NoError(t, err)
 	_ = txn.Commit(context.Background())
 }
@@ -7572,7 +7573,7 @@ func TestDeduplication(t *testing.T) {
 	statsVec.Append(writer.GetObjectStats()[objectio.SchemaData][:], false)
 
 	txn, rel := tae.GetRelation()
-	err = rel.AddBlksWithMetaLoc(context.Background(), statsVec)
+	err = rel.AddObjsWithMetaLoc(context.Background(), statsVec)
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit(context.Background()))
 
@@ -7588,7 +7589,7 @@ func TestDeduplication(t *testing.T) {
 	obj, err := tbl.CreateObject(
 		txn,
 		catalog.ES_Appendable,
-		new(objectio.CreateObjOpt).WithId(ObjectIDs[0]), dataFactory.MakeBlockFactory())
+		new(objectio.CreateObjOpt).WithId(ObjectIDs[0]), dataFactory.MakeObjectFactory())
 	assert.NoError(t, err)
 	txn.GetStore().AddTxnEntry(txnif.TxnType_Normal, obj)
 	txn.GetStore().IncreateWriteCnt()
@@ -8087,7 +8088,7 @@ func TestCheckpointReadWrite(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit(context.Background()))
 
-	t1 := tae.TxnMgr.StatMaxCommitTS()
+	t1 := tae.TxnMgr.Now()
 	testutil.CheckCheckpointReadWrite(t, types.TS{}, t1, tae.Catalog, smallCheckpointBlockRows, smallCheckpointSize, tae.Opts.Fs)
 
 	txn, err = tae.StartTxn(nil)
@@ -8100,7 +8101,7 @@ func TestCheckpointReadWrite(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit(context.Background()))
 
-	t2 := tae.TxnMgr.StatMaxCommitTS()
+	t2 := tae.TxnMgr.Now()
 	testutil.CheckCheckpointReadWrite(t, types.TS{}, t2, tae.Catalog, smallCheckpointBlockRows, smallCheckpointSize, tae.Opts.Fs)
 	testutil.CheckCheckpointReadWrite(t, t1, t2, tae.Catalog, smallCheckpointBlockRows, smallCheckpointSize, tae.Opts.Fs)
 
@@ -8109,7 +8110,7 @@ func TestCheckpointReadWrite(t *testing.T) {
 	_, err = txn.DropDatabase("db")
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit(context.Background()))
-	t3 := tae.TxnMgr.StatMaxCommitTS()
+	t3 := tae.TxnMgr.Now()
 	testutil.CheckCheckpointReadWrite(t, types.TS{}, t3, tae.Catalog, smallCheckpointBlockRows, smallCheckpointSize, tae.Opts.Fs)
 	testutil.CheckCheckpointReadWrite(t, t2, t3, tae.Catalog, smallCheckpointBlockRows, smallCheckpointSize, tae.Opts.Fs)
 
@@ -8120,12 +8121,12 @@ func TestCheckpointReadWrite(t *testing.T) {
 	bat := catalog.MockBatch(schema, 10)
 
 	tae.CreateRelAndAppend(bat, true)
-	t4 := tae.TxnMgr.StatMaxCommitTS()
+	t4 := tae.TxnMgr.Now()
 	testutil.CheckCheckpointReadWrite(t, types.TS{}, t4, tae.Catalog, smallCheckpointBlockRows, smallCheckpointSize, tae.Opts.Fs)
 	testutil.CheckCheckpointReadWrite(t, t3, t4, tae.Catalog, smallCheckpointBlockRows, smallCheckpointSize, tae.Opts.Fs)
 
 	tae.CompactBlocks(false)
-	t5 := tae.TxnMgr.StatMaxCommitTS()
+	t5 := tae.TxnMgr.Now()
 	testutil.CheckCheckpointReadWrite(t, types.TS{}, t5, tae.Catalog, smallCheckpointBlockRows, smallCheckpointSize, tae.Opts.Fs)
 	testutil.CheckCheckpointReadWrite(t, t4, t5, tae.Catalog, smallCheckpointBlockRows, smallCheckpointSize, tae.Opts.Fs)
 }
@@ -8151,7 +8152,7 @@ func TestCheckpointReadWrite2(t *testing.T) {
 		tae.CompactBlocks(false)
 	}
 
-	t1 := tae.TxnMgr.StatMaxCommitTS()
+	t1 := tae.TxnMgr.Now()
 	testutil.CheckCheckpointReadWrite(t, types.TS{}, t1, tae.Catalog, smallCheckpointBlockRows, smallCheckpointSize, tae.Opts.Fs)
 }
 

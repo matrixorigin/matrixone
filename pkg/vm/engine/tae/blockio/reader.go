@@ -163,7 +163,7 @@ func (r *BlockReader) LoadSubColumns(
 	typs []types.Type,
 	blk uint16,
 	m *mpool.MPool,
-) (bats []*batch.Batch, releases []func(), err error) {
+) (bats []*batch.Batch, releases func(), err error) {
 	metaExt := r.reader.GetMetaExtent()
 	if metaExt == nil || metaExt.End() == 0 {
 		return
@@ -173,9 +173,8 @@ func (r *BlockReader) LoadSubColumns(
 	if err != nil {
 		return
 	}
-	releases = make([]func(), len(ioVectors))
-	for i, vec := range ioVectors {
-		releases[i] = func() {
+	releases = func() {
+		for _, vec := range ioVectors {
 			objectio.ReleaseIOVector(vec)
 		}
 	}
