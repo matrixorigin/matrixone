@@ -147,9 +147,9 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 		}
 
 		tag := node.BindingTags[0]
-		newTableDef := DeepCopyTableDef(node.TableDef, false)
+		newTblColIdx := make([]int32, 0)
 
-		for i, col := range node.TableDef.Cols {
+		for i := range node.TableDef.GetColsByIndex(node.ColIndex) {
 			globalRef := [2]int32{tag, int32(i)}
 			if colRefCnt[globalRef] == 0 {
 				continue
@@ -157,15 +157,15 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 
 			internalRemapping.addColRef(globalRef)
 
-			newTableDef.Cols = append(newTableDef.Cols, DeepCopyColDef(col))
+			newTblColIdx = append(newTblColIdx, node.ColIndex[i])
 		}
 
-		if len(newTableDef.Cols) == 0 {
+		if len(newTblColIdx) == 0 {
 			internalRemapping.addColRef([2]int32{tag, 0})
-			newTableDef.Cols = append(newTableDef.Cols, DeepCopyColDef(node.TableDef.Cols[0]))
+			newTblColIdx = append(newTblColIdx, node.ColIndex[0])
 		}
 
-		node.TableDef = newTableDef
+		node.ColIndex = newTblColIdx
 
 		for _, expr := range node.FilterList {
 			increaseRefCnt(expr, -1, colRefCnt)
@@ -175,7 +175,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			}
 		}
 
-		for i, col := range node.TableDef.Cols {
+		for i, col := range node.TableDef.GetColsByIndex(node.ColIndex) {
 			if colRefCnt[internalRemapping.localToGlobal[i]] == 0 {
 				continue
 			}
@@ -195,29 +195,30 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 		}
 
 		if len(node.ProjectList) == 0 {
-			if len(node.TableDef.Cols) == 0 {
+			if node.TableDef.GetColLength(node.ColIndex) == 0 {
 				globalRef := [2]int32{tag, 0}
 				remapping.addColRef(globalRef)
-
+				col := node.TableDef.GetColsByIndex(node.ColIndex)[0]
 				node.ProjectList = append(node.ProjectList, &plan.Expr{
-					Typ: *node.TableDef.Cols[0].Typ,
+					Typ: *col.Typ,
 					Expr: &plan.Expr_Col{
 						Col: &plan.ColRef{
 							RelPos: 0,
 							ColPos: 0,
-							Name:   node.TableDef.Cols[0].Name,
+							Name:   col.Name,
 						},
 					},
 				})
 			} else {
+				col := node.TableDef.GetColsByIndex(node.ColIndex)[0]
 				remapping.addColRef(internalRemapping.localToGlobal[0])
 				node.ProjectList = append(node.ProjectList, &plan.Expr{
-					Typ: *node.TableDef.Cols[0].Typ,
+					Typ: *col.Typ,
 					Expr: &plan.Expr_Col{
 						Col: &plan.ColRef{
 							RelPos: 0,
 							ColPos: 0,
-							Name:   node.TableDef.Cols[0].Name,
+							Name:   col.Name,
 						},
 					},
 				})
@@ -266,9 +267,9 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 		}
 
 		tag := node.BindingTags[0]
-		newTableDef := DeepCopyTableDef(node.TableDef, false)
+		newTblColIndex := make([]int32, 0)
 
-		for i, col := range node.TableDef.Cols {
+		for i := range node.TableDef.GetColsByIndex(node.ColIndex) {
 			globalRef := [2]int32{tag, int32(i)}
 			if colRefCnt[globalRef] == 0 {
 				continue
@@ -276,15 +277,15 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 
 			internalRemapping.addColRef(globalRef)
 
-			newTableDef.Cols = append(newTableDef.Cols, DeepCopyColDef(col))
+			newTblColIndex = append(newTblColIndex, node.ColIndex[i])
 		}
 
-		if len(newTableDef.Cols) == 0 {
+		if len(newTblColIndex) == 0 {
 			internalRemapping.addColRef([2]int32{tag, 0})
-			newTableDef.Cols = append(newTableDef.Cols, DeepCopyColDef(node.TableDef.Cols[0]))
+			newTblColIndex = append(newTblColIndex, node.ColIndex[0])
 		}
 
-		node.TableDef = newTableDef
+		node.ColIndex = newTblColIndex
 
 		for _, expr := range node.FilterList {
 			increaseRefCnt(expr, -1, colRefCnt)
@@ -312,7 +313,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			}
 		}
 
-		for i, col := range node.TableDef.Cols {
+		for i, col := range node.TableDef.GetColsByIndex(node.ColIndex) {
 			if colRefCnt[internalRemapping.localToGlobal[i]] == 0 {
 				continue
 			}
@@ -332,12 +333,13 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 		}
 
 		if len(node.ProjectList) == 0 {
-			if len(node.TableDef.Cols) == 0 {
+			col := node.TableDef.GetColsByIndex(node.ColIndex)[0]
+			if node.TableDef.GetColLength(node.ColIndex) == 0 {
 				globalRef := [2]int32{tag, 0}
 				remapping.addColRef(globalRef)
 
 				node.ProjectList = append(node.ProjectList, &plan.Expr{
-					Typ: *node.TableDef.Cols[0].Typ,
+					Typ: *col.Typ,
 					Expr: &plan.Expr_Col{
 						Col: &plan.ColRef{
 							RelPos: 0,
@@ -349,7 +351,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			} else {
 				remapping.addColRef(internalRemapping.localToGlobal[0])
 				node.ProjectList = append(node.ProjectList, &plan.Expr{
-					Typ: *node.TableDef.Cols[0].Typ,
+					Typ: *col.Typ,
 					Expr: &plan.Expr_Col{
 						Col: &plan.ColRef{
 							RelPos: 0,
@@ -1219,7 +1221,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			}
 
 			tag := node.BindingTags[0]
-			for i := range node.TableDef.Cols {
+			for i := range node.TableDef.GetColsByIndex(node.ColIndex) {
 				globalRef := [2]int32{tag, int32(i)}
 				if colRefCnt[globalRef] == 0 {
 					continue
@@ -1227,7 +1229,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 				internalRemapping.addColRef(globalRef)
 			}
 
-			for i, col := range node.TableDef.Cols {
+			for i, col := range node.TableDef.GetColsByIndex(node.ColIndex) {
 				if colRefCnt[internalRemapping.localToGlobal[i]] == 0 {
 					continue
 				}

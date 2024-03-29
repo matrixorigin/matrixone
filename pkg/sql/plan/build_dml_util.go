@@ -1268,14 +1268,6 @@ func buildInsertPlansWithRelatedHiddenTable(
 				// with the primary key of the hidden table as the unique key.
 				// package contains some information needed by the fuzzy filter to run background SQL.
 				if indexdef.GetUnique() {
-					_, idxTableDef := ctx.Resolve(objRef.SchemaName, indexdef.IndexTableName)
-					idxTableColIdx := make([]int32, 0)
-					// remove row_id
-					for i, colVal := range idxTableDef.Cols {
-						if colVal.Name != catalog.Row_ID {
-							idxTableColIdx = append(idxTableColIdx, int32(i))
-						}
-					}
 					originTableMessageForFuzzy = &OriginTableMessageForFuzzy{
 						ParentTableName: tableDef.Name,
 					}
@@ -1349,7 +1341,7 @@ func buildInsertPlansWithRelatedHiddenTable(
 				genLastNodeIdFn := func() int32 {
 					return appendSinkScanNode(builder, bindCtx, sourceStep)
 				}
-				newSourceStep, err := appendPreInsertSkMasterPlan(builder, bindCtx, tableDef, idx, false, idxTableDef, genLastNodeIdFn, nil)
+				newSourceStep, err := appendPreInsertSkMasterPlan(builder, bindCtx, tableDef, idx, false, idxTableDef, genLastNodeIdFn, idxTblColIdx)
 				if err != nil {
 					return err
 				}
@@ -1370,7 +1362,7 @@ func buildInsertPlansWithRelatedHiddenTable(
 				var pkFilterExprs []*Expr
 				var partitionExpr *Expr
 				var fuzzymessage *OriginTableMessageForFuzzy
-				err = makeOneInsertPlan(ctx, builder, bindCtx, idxRef, idxTableDef, updateColLength, newSourceStep, addAffectedRows, isFkRecursionCall, updatePkCol, pkFilterExprs, partitionExpr, ifExistAutoPkCol, ifCheckPkDup, colTypes, fuzzymessage, nil)
+				err = makeOneInsertPlan(ctx, builder, bindCtx, idxRef, idxTableDef, updateColLength, newSourceStep, addAffectedRows, isFkRecursionCall, updatePkCol, pkFilterExprs, partitionExpr, ifExistAutoPkCol, ifCheckPkDup, colTypes, fuzzymessage, idxTblColIdx)
 
 				if err != nil {
 					return err
@@ -1391,6 +1383,7 @@ func buildInsertPlansWithRelatedHiddenTable(
 			idxRefs[1], idxTableDefs[1] = ctx.Resolve(objRef.SchemaName, multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Centroids].IndexTableName)
 			idxRefs[2], idxTableDefs[2] = ctx.Resolve(objRef.SchemaName, multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Entries].IndexTableName)
 			// remove row_id
+			// TODO: resolve this part
 			for i := range idxTableDefs {
 				for j, column := range idxTableDefs[i].Cols {
 					if column.Name == catalog.Row_ID {
