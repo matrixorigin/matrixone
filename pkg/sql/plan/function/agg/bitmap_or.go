@@ -34,7 +34,7 @@ type aggBitmapOr struct {
 	bmp *roaring.Bitmap
 }
 
-func newAggBitmapOr() *aggBitmapOr {
+func newAggBitmapOr() aggexec.SingleAggFromVarRetVar {
 	return &aggBitmapOr{}
 }
 

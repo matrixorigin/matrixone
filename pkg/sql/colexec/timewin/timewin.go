@@ -152,7 +152,9 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 			for i, ag := range ap.Aggs {
 				ctr.aggs[i] = aggexec.MakeAgg(proc, ag.GetAggID(), ag.IsDistinct(), ap.Types[i])
 				if config := ag.GetExtraConfig(); len(config) > 0 {
-					ctr.aggs[i].SetExtraInformation(config, 0)
+					if err = ctr.aggs[i].SetExtraInformation(config, 0); err != nil {
+						return result, err
+					}
 				}
 			}
 			ctr.status = evalTag
@@ -198,7 +200,9 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 			for i, ag := range ap.Aggs {
 				ctr.aggs[i] = aggexec.MakeAgg(proc, ag.GetAggID(), ag.IsDistinct(), ap.Types[i])
 				if config := ag.GetExtraConfig(); len(config) > 0 {
-					ctr.aggs[i].SetExtraInformation(config, 0)
+					if err = ctr.aggs[i].SetExtraInformation(config, 0); err != nil {
+						return result, err
+					}
 				}
 			}
 			ctr.wstart = append(ctr.wstart, ctr.start)
@@ -286,7 +290,9 @@ func eval[T constraints.Integer](ctr *container, ap *Argument, proc *process.Pro
 				for i, ag := range ap.Aggs {
 					ctr.aggs[i] = aggexec.MakeAgg(proc, ag.GetAggID(), ag.IsDistinct(), ap.Types[i])
 					if config := ag.GetExtraConfig(); len(config) > 0 {
-						ctr.aggs[i].SetExtraInformation(config, 0)
+						if err = ctr.aggs[i].SetExtraInformation(config, 0); err != nil {
+							return err
+						}
 					}
 				}
 				ctr.group = 0

@@ -15,7 +15,6 @@
 package elkans
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec/algos/kmeans"
 	"math/rand"
 	"strconv"
@@ -41,7 +40,7 @@ func Benchmark_kmeans(b *testing.B) {
 
 	rowCnt := 1000_000
 	k := 1000
-	sampleCnt := catalog.CalcSampleCount(int64(k), int64(rowCnt))
+	sampleCnt := calcSampleCount(int64(k), int64(rowCnt))
 	dims := 128
 
 	data := make([][]float64, sampleCnt)
@@ -83,4 +82,26 @@ func populateRandData(rowCnt int, dim int, vecs [][]float64) {
 			vecs[r][c] = float64(random.Float32() * 1000)
 		}
 	}
+}
+
+// todo: Copied from `catalog.CalcSampleCount` to avoid package importing cycle.
+func calcSampleCount(lists, totalCnt int64) (sampleCnt int64) {
+	KmeansSamplePerList := int64(50)
+	MaxSampleCount := int64(10_000)
+
+	if totalCnt > lists*KmeansSamplePerList {
+		sampleCnt = lists * KmeansSamplePerList
+	} else {
+		sampleCnt = totalCnt
+	}
+
+	if totalCnt > MaxSampleCount && sampleCnt < MaxSampleCount {
+		sampleCnt = MaxSampleCount
+	}
+
+	if sampleCnt > MaxSampleCount {
+		sampleCnt = MaxSampleCount
+	}
+
+	return sampleCnt
 }

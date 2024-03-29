@@ -103,6 +103,7 @@ func (exec *clusterCentersExec) Fill(groupIndex int, row int, vectors []*vector.
 		row = 0
 	}
 
+	exec.ret.setGroupNotEmpty(groupIndex)
 	value := vector.MustBytesCol(vectors[0])[row]
 	return vector.AppendBytes(exec.groupData[groupIndex], value, false, exec.ret.mp)
 }
@@ -114,7 +115,13 @@ func (exec *clusterCentersExec) BulkFill(groupIndex int, vectors []*vector.Vecto
 
 	if vectors[0].IsConst() {
 		value := vector.MustBytesCol(vectors[0])[0]
-		return vector.AppendBytes(exec.groupData[groupIndex], value, false, exec.ret.mp)
+		exec.ret.setGroupNotEmpty(groupIndex)
+		for i, j := uint64(0), uint64(vectors[0].Length()); i < j; i++ {
+			if err := vector.AppendBytes(exec.groupData[groupIndex], value, false, exec.ret.mp); err != nil {
+				return err
+			}
+		}
+		return nil
 	}
 
 	exec.arg.prepare(vectors[0])
@@ -123,6 +130,7 @@ func (exec *clusterCentersExec) BulkFill(groupIndex int, vectors []*vector.Vecto
 		if null {
 			continue
 		}
+		exec.ret.setGroupNotEmpty(groupIndex)
 		if err := vector.AppendBytes(exec.groupData[groupIndex], v, false, exec.ret.mp); err != nil {
 			return err
 		}
@@ -139,8 +147,11 @@ func (exec *clusterCentersExec) BatchFill(offset int, groups []uint64, vectors [
 		value := vector.MustBytesCol(vectors[0])[0]
 		for i := 0; i < len(groups); i++ {
 			if groups[i] != GroupNotMatched {
+				groupIndex := int(groups[i] - 1)
+
+				exec.ret.setGroupNotEmpty(groupIndex)
 				if err := vector.AppendBytes(
-					exec.groupData[groups[i]-1],
+					exec.groupData[groupIndex],
 					value, false, exec.ret.mp); err != nil {
 					return err
 				}
@@ -154,8 +165,11 @@ func (exec *clusterCentersExec) BatchFill(offset int, groups []uint64, vectors [
 		if groups[idx] != GroupNotMatched {
 			v, null := exec.arg.w.GetStrValue(i)
 			if !null {
+				groupIndex := int(groups[idx] - 1)
+
+				exec.ret.setGroupNotEmpty(groupIndex)
 				if err := vector.AppendBytes(
-					exec.groupData[groups[idx]-1],
+					exec.groupData[groupIndex],
 					v, false, exec.ret.mp); err != nil {
 					return err
 				}
@@ -183,6 +197,7 @@ func (exec *clusterCentersExec) Merge(next AggFuncExec, groupIdx1 int, groupIdx2
 		return err
 	}
 	other.groupData[groupIdx2] = nil
+	exec.ret.mergeEmpty(other.ret.basicResult, groupIdx1, groupIdx2)
 	return nil
 }
 
@@ -339,16 +354,18 @@ func (exec *clusterCentersExec) Free() {
 	}
 }
 
-func (exec *clusterCentersExec) SetExtraInformation(partialResult any, groupIndex int) {
+func (exec *clusterCentersExec) SetExtraInformation(partialResult any, groupIndex int) error {
 	if bts, ok := partialResult.([]byte); ok {
 		k, distType, initType, normalize, err := decodeConfig(bts)
-		if err != nil {
+		if err == nil {
 			exec.clusterCnt = k
 			exec.distType = distType
 			exec.initType = initType
 			exec.normalize = normalize
 		}
+		return err
 	}
+	return nil
 }
 
 // that's very bad codes here, because we cannot know how to encode this config.
@@ -392,7 +409,7 @@ func decodeConfig(extra []byte) (
 			normalize, err = strconv.ParseBool(configs[i])
 		}
 		if err != nil {
-			return
+			return defaultKmeansClusterCnt, defaultKmeansDistanceType, defaultKmeansInitType, defaultKmeansNormalize, err
 		}
 	}
 	return

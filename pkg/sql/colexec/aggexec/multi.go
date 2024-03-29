@@ -189,7 +189,7 @@ func (exec *multiAggFuncExec1[T]) BatchFill(offset int, groups []uint64, vectors
 	return nil
 }
 
-func (exec *multiAggFuncExec1[T]) SetExtraInformation(_ any, _ int) {
+func (exec *multiAggFuncExec1[T]) SetExtraInformation(partialResult any, groupIndex int) error {
 	panic("unimplemented SetPreparedResult for multiAggFuncExec1")
 }
 
@@ -360,7 +360,7 @@ func (exec *multiAggFuncExec2) BatchFill(offset int, groups []uint64, vectors []
 	return nil
 }
 
-func (exec *multiAggFuncExec2) SetExtraInformation(_ any, _ int) {
+func (exec *multiAggFuncExec2) SetExtraInformation(partialResult any, groupIndex int) error {
 	panic("unimplemented SetPreparedResult for multiAggFuncExec2")
 }
 

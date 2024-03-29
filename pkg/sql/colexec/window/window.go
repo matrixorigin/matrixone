@@ -121,7 +121,9 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 			for i, ag := range ap.Aggs {
 				ctr.bat.Aggs[i] = aggexec.MakeAgg(proc, ag.GetAggID(), ag.IsDistinct(), ap.Types[i])
 				if config := ag.GetExtraConfig(); len(config) > 0 {
-					ctr.bat.Aggs[i].SetExtraInformation(config, 0)
+					if err = ctr.bat.Aggs[i].SetExtraInformation(config, 0); err != nil {
+						return result, err
+					}
 				}
 				if err = ctr.bat.Aggs[i].GroupGrow(ctr.bat.RowCount()); err != nil {
 					return result, err

@@ -111,7 +111,7 @@ func (exec *singleWindowExec) BatchMerge(next AggFuncExec, offset int, groups []
 	return nil
 }
 
-func (exec *singleWindowExec) SetExtraInformation(partialResult any, groupIndex int) {
+func (exec *singleWindowExec) SetExtraInformation(partialResult any, groupIndex int) error {
 	panic("window function do not support the extra information")
 }
 

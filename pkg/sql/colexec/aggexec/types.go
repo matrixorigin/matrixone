@@ -96,7 +96,7 @@ type AggFuncExec interface {
 	// todo: the old implementation is not good, we should use the vector.Vector to replace the any.
 	//  and the hacks should be removed.
 	//  but for first version, I will keep it.
-	SetExtraInformation(partialResult any, groupIndex int)
+	SetExtraInformation(partialResult any, groupIndex int) (err error)
 
 	// Flush return the aggregation result.
 	Flush() (*vector.Vector, error)

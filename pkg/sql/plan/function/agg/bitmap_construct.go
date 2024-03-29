@@ -38,7 +38,7 @@ type aggBitmapConstruct struct {
 	bmp *roaring.Bitmap
 }
 
-func newAggBitmapConstruct() *aggBitmapConstruct {
+func newAggBitmapConstruct() aggexec.SingleAggFromFixedRetVar[uint64] {
 	return &aggBitmapConstruct{}
 }
 

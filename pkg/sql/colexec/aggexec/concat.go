@@ -131,9 +131,10 @@ func (exec *groupConcatExec) BatchFill(offset int, groups []uint64, vectors []*v
 	return nil
 }
 
-func (exec *groupConcatExec) SetExtraInformation(partialResult any, groupIndex int) {
+func (exec *groupConcatExec) SetExtraInformation(partialResult any, groupIndex int) error {
 	// todo: too bad here.
 	exec.separator = partialResult.([]byte)
+	return nil
 }
 
 func (exec *groupConcatExec) merge(other *groupConcatExec, idx1, idx2 int) error {

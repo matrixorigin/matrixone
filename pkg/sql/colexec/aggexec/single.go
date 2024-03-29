@@ -67,9 +67,10 @@ type singleAggExecExtraInformation struct {
 	partialResult any
 }
 
-func (optimized *singleAggExecExtraInformation) SetExtraInformation(partialResult any, groupIndex int) {
+func (optimized *singleAggExecExtraInformation) SetExtraInformation(partialResult any, groupIndex int) error {
 	optimized.partialGroup = groupIndex
 	optimized.partialResult = partialResult
+	return nil
 }
 
 // the executors of single column agg.
