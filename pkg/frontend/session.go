@@ -675,11 +675,18 @@ func NewSession(proto Protocol, mp *mpool.MPool, pu *config.ParameterUnit,
 }
 
 func (ses *Session) Close() {
+	ses.protocol = nil
 	ses.mrs = nil
 	ses.data = nil
 	ses.ep = nil
-	ses.txnHandler = nil
-	ses.txnCompileCtx = nil
+	if ses.txnHandler != nil {
+		ses.txnHandler.ses = nil
+		ses.txnHandler = nil
+	}
+	if ses.txnCompileCtx != nil {
+		ses.txnCompileCtx.ses = nil
+		ses.txnCompileCtx = nil
+	}
 	ses.storage = nil
 	ses.sql = ""
 	ses.sysVars = nil
@@ -706,7 +713,10 @@ func (ses *Session) Close() {
 	ses.planCache = nil
 	ses.seqCurValues = nil
 	ses.seqLastValue = nil
-	ses.sqlHelper = nil
+	if ses.sqlHelper != nil {
+		ses.sqlHelper.ses = nil
+		ses.sqlHelper = nil
+	}
 	ses.ClearStmtProfile()
 	//  The mpool cleanup must be placed at the end,
 	// and you must wait for all resources to be cleaned up before you can delete the mpool
@@ -716,6 +726,7 @@ func (ses *Session) Close() {
 		for _, bat := range bats {
 			bat.Clean(ses.proc.Mp())
 		}
+		ses.proc = nil
 	}
 	if ses.isNotBackgroundSession {
 		mp := ses.GetMemPool()
@@ -728,6 +739,9 @@ func (ses *Session) Close() {
 	}
 
 	ses.timestampMap = nil
+	ses.upstream = nil
+	ses.rm = nil
+	ses.rt = nil
 }
 
 // BackgroundSession executing the sql in background
@@ -783,8 +797,8 @@ func (bgs *BackgroundSession) Close() {
 
 	if bgs.Session != nil {
 		bgs.Session.Close()
+		bgs.Session = nil
 	}
-	bgs = nil
 }
 
 func (ses *Session) GetIncBlockIdx() int {
@@ -1833,6 +1847,19 @@ func (ses *Session) InitGlobalSystemVariables() error {
 		pu := ses.GetParameterUnit()
 		mp := ses.GetMemPool()
 
+		updateSqls := ses.getUpdateVariableSqlsByToml()
+		for _, sql := range updateSqls {
+			_, err = executeSQLInBackgroundSession(
+				sysTenantCtx,
+				ses,
+				mp,
+				pu,
+				sql)
+			if err != nil {
+				return err
+			}
+		}
+
 		rsset, err = executeSQLInBackgroundSession(
 			sysTenantCtx,
 			ses,
@@ -1879,6 +1906,19 @@ func (ses *Session) InitGlobalSystemVariables() error {
 		pu := ses.GetParameterUnit()
 		mp := ses.GetMemPool()
 
+		updateSqls := ses.getUpdateVariableSqlsByToml()
+		for _, sql := range updateSqls {
+			_, err = executeSQLInBackgroundSession(
+				tenantCtx,
+				ses,
+				mp,
+				pu,
+				sql)
+			if err != nil {
+				return err
+			}
+		}
+
 		rsset, err = executeSQLInBackgroundSession(
 			tenantCtx,
 			ses,
@@ -1918,6 +1958,16 @@ func (ses *Session) InitGlobalSystemVariables() error {
 		}
 	}
 	return err
+}
+
+func (ses *Session) getUpdateVariableSqlsByToml() []string {
+	updateSqls := make([]string, 0)
+	if ses.pu.SV.SqlMode != gSysVarsDefs["sql_mode"].Default {
+		tenantInfo := ses.GetTenantInfo()
+		sqlForUpdate := getSqlForUpdateSystemVariableValue(ses.pu.SV.SqlMode, uint64(tenantInfo.GetTenantID()), "sql_mode")
+		updateSqls = append(updateSqls, sqlForUpdate)
+	}
+	return updateSqls
 }
 
 func (ses *Session) GetPrivilege() *privilege {
@@ -2060,7 +2110,12 @@ func executeStmtInSameSession(ctx context.Context, mce *MysqlCmdExecutor, ses *S
 	// inherit database
 	ses.SetDatabaseName(prevDB)
 	//restore normal protocol and output callback
+	proc := ses.GetTxnCompileCtx().GetProcess()
 	defer func() {
+		//@todo we need to improve: make one session, one proc, one txnOperator
+		p := ses.GetTxnCompileCtx().GetProcess()
+		p.FreeVectors()
+		ses.GetTxnCompileCtx().SetProcess(proc)
 		ses.SetOptionBits(prevOptionBits)
 		ses.SetServerStatus(prevServerStatus)
 		ses.SetOutputCallback(getDataFromPipeline)
@@ -2093,6 +2148,7 @@ var NewBackgroundHandler = func(
 
 func (bh *BackgroundHandler) Close() {
 	bh.mce.Close()
+	bh.mce = nil
 	bh.ses.Close()
 }
 
@@ -2458,8 +2514,9 @@ func (d *dbMigration) Migrate(ses *Session) error {
 }
 
 type prepareStmtMigration struct {
-	name string
-	sql  string
+	name       string
+	sql        string
+	paramTypes []byte
 }
 
 func (p *prepareStmtMigration) Migrate(ses *Session) error {
@@ -2474,7 +2531,7 @@ func (p *prepareStmtMigration) Migrate(ses *Session) error {
 	if err != nil {
 		return err
 	}
-	if _, err = doPrepareStmt(ses.requestCtx, ses, stmts[0].(*tree.PrepareStmt), p.sql); err != nil {
+	if _, err = doPrepareStmt(ses.requestCtx, ses, stmts[0].(*tree.PrepareStmt), p.sql, p.paramTypes); err != nil {
 		return err
 	}
 	return nil
@@ -2494,8 +2551,9 @@ func (ses *Session) Migrate(req *query.MigrateConnToRequest) error {
 			continue
 		}
 		pm := prepareStmtMigration{
-			name: p.Name,
-			sql:  p.SQL,
+			name:       p.Name,
+			sql:        p.SQL,
+			paramTypes: p.ParamTypes,
 		}
 		if err := pm.Migrate(ses); err != nil {
 			return err

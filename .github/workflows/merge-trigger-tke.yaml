@@ -131,9 +131,10 @@ jobs:
         run: |
           export MYSQL_PWD=111;
           for i in {1..300}; do
-            if mysql -h ${{ steps.get_mo_addr.outputs.mo_svc_ip }} -P 6001 -u dump -e "select mo_ctl('cn', 'txn-trace', 'add-txn user admin');"; then
+            if mysql -h ${{ steps.get_mo_addr.outputs.mo_svc_ip }} -P 6001 -u dump -e "select mo_ctl('cn', 'txn-trace', 'add-txn user dump');select mo_ctl('cn', 'txn-trace', 'add-txn user admin');select mo_ctl('cn', 'txn-trace', 'add-txn connection sql-executor,0');select mo_ctl('cn', 'txn-trace', 'enable txn');select mo_ctl('cn', 'txn-trace', 'enable data');"; then
               break;
             fi
+          sleep 1;
           done
 
       - name: Prepare Data in cn-0
@@ -296,6 +297,20 @@ jobs:
           mysql -h ${{ needs.setup_mo_test_env.outputs.mo_svc_ip }} -P 6001 -udump -p111 -e "create account ssb_tpch_test admin_name = 'admin' identified by '111' comment 'for ssb and tpch test';"
           echo "ssb_tpch_account=ssb_tpch_test:admin" >> $GITHUB_OUTPUT
           echo "ssb_tpch_password=111" >> $GITHUB_OUTPUT
+
+      - name: Enable CN TXN Trace
+        timeout-minutes: 2
+        run: |
+          export MYSQL_PWD='111'
+          echo "select mo_ctl('cn', 'txn-trace', 'add-table mo_increment_columns');" >> enable_txn_trace.sql;
+          cat enable_txn_trace.sql;
+          echo "===================";
+          for i in {1..300}; do
+            if mysql -h ${{ needs.setup_mo_test_env.outputs.mo_svc_ip }} -u dump -P 6001 < enable_txn_trace.sql; then
+              break;
+            fi
+          sleep 1;
+          done
 
       - name: Modify Tool's Setting And Set PATH
         run: |
@@ -513,11 +528,14 @@ jobs:
           for i in {1..10}; do
             echo "select mo_ctl('cn', 'txn-trace', 'add-table sbtest$i');" >> enable_txn_trace.sql;
           done
-          echo "select mo_ctl('cn', 'txn-trace', 'enable txn');" >> enable_txn_trace.sql;
-          echo "select mo_ctl('cn', 'txn-trace', 'enable data');" >> enable_txn_trace.sql;
           cat enable_txn_trace.sql;
           echo "===================";
-          mysql -h ${{ needs.setup_mo_test_env.outputs.mo_svc_ip }} -u dump -P 6001 < enable_txn_trace.sql
+          for i in {1..300}; do
+            if mysql -h ${{ needs.setup_mo_test_env.outputs.mo_svc_ip }} -u dump -P 6001 < enable_txn_trace.sql; then
+              break;
+            fi
+          sleep 1;
+          done
  
       # start sysbench test
       - name: Start OLTP Mixed Test With 100 Threads
@@ -644,11 +662,14 @@ jobs:
           for table in ${tpcc_tables[@]}; do
             echo "select mo_ctl('cn', 'txn-trace', 'add-table $table');" >> enable_txn_trace.sql;
           done
-          echo "select mo_ctl('cn', 'txn-trace', 'enable txn');" >> enable_txn_trace.sql;
-          echo "select mo_ctl('cn', 'txn-trace', 'enable data');" >> enable_txn_trace.sql;
           cat enable_txn_trace.sql;
           echo "===================";
-          mysql -h ${{ needs.setup_mo_test_env.outputs.mo_svc_ip }} -u dump -P 6001 < enable_txn_trace.sql
+          for i in {1..300}; do
+            if mysql -h ${{ needs.setup_mo_test_env.outputs.mo_svc_ip }} -u dump -P 6001 < enable_txn_trace.sql; then
+              break;
+            fi
+          sleep 1;
+          done
 
       - name: Start TPCC 10 Warehouses 100 terminals Test
         if: ${{ always() && !cancelled() && steps.load_tpcc_data.conclusion == 'success' }}

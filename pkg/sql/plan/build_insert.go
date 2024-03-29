@@ -194,7 +194,7 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 		}
 		for i, col := range tableDef.Cols {
 			projectProjection = append(projectProjection, &plan.Expr{
-				Typ: *col.Typ,
+				Typ: col.Typ,
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
 						ColPos: int32(i + updateColLength),
@@ -206,7 +206,7 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 		for i := 0; i < updateColLength; i++ {
 			col := tableDef.Cols[i]
 			projectProjection = append(projectProjection, &plan.Expr{
-				Typ: *col.Typ,
+				Typ: col.Typ,
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
 						ColPos: int32(i),
@@ -514,8 +514,8 @@ func canUsePkFilter(builder *QueryBuilder, ctx CompilerContext, stmt *tree.Inser
 }
 
 type orderAndIdx struct {
-	pkOrder int // pkOrder is the order(ignore non-pk cols) in tableDef.Pkey.Names
-	pkIndex int // pkIndex is the index of the primary key columns in tableDef.Cols
+	order int // pkOrder is the order(ignore non-pk cols) in tableDef.Pkey.Names
+	index int // pkIndex is the index of the primary key columns in tableDef.Cols
 }
 
 type locationMap struct {
@@ -544,7 +544,7 @@ func (p *locationMap) getPkOrderInValues(insertColsNameFromStmt []string) map[in
 	i := 0
 	for _, name := range insertColsNameFromStmt {
 		if pkInfo, ok := p.m[name]; ok {
-			pkOrderInValues[i] = pkInfo.pkOrder
+			pkOrderInValues[i] = pkInfo.order
 			i++
 		}
 	}
@@ -665,7 +665,7 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 				}
 			}
 		}
-		colExprs[pkLocationInfo.pkOrder] = valExprs
+		colExprs[pkLocationInfo.order] = valExprs
 	}
 
 	if !isCompound {
@@ -744,11 +744,11 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 			var andExpr *Expr
 			for i := 0; i < rowsCount; i++ {
 				for _, pkLocationInfo = range lmap.m {
-					pkOrder := pkLocationInfo.pkOrder
-					pkColIdx := pkLocationInfo.pkIndex
+					pkOrder := pkLocationInfo.order
+					pkColIdx := pkLocationInfo.index
 					eqExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{
 						{
-							Typ: *tableDef.Cols[pkColIdx].Typ,
+							Typ: tableDef.Cols[pkColIdx].Typ,
 							Expr: &plan.Expr_Col{
 								Col: &ColRef{
 									ColPos: int32(pkOrder),
@@ -795,7 +795,7 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 
 			names := make([]string, len(lmap.m))
 			for n, p := range lmap.m {
-				names[p.pkOrder] = n
+				names[p.order] = n
 			}
 			toSerialBatch := bat.GetSubBatch(names)
 			// serialize
@@ -814,7 +814,7 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 			}
 			inExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "in", []*Expr{
 				{
-					Typ: *makeHiddenColTyp(),
+					Typ: makeHiddenColTyp(),
 					Expr: &plan.Expr_Col{
 						Col: &ColRef{
 							ColPos: colPos,

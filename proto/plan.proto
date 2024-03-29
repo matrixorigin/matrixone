@@ -88,6 +88,8 @@ message ColRef {
 	int32	rel_pos	= 1;
 	int32	col_pos	= 2;
 	string	name	= 3;
+	string	tbl_name = 4;
+	string	db_name	= 5;
 }
 
 // Reference a column by its internal table id and column id
@@ -245,7 +247,7 @@ message ColDef {
 	string name 		= 2;
 	bool hidden			= 3;
 	CompressType alg 	= 4;
-	Type typ			= 5;
+	Type typ			= 5 [(gogoproto.nullable) = false];
 	bool not_null		= 6;
 	Default default 	= 7;
 	string comment		= 8;
@@ -259,6 +261,9 @@ message ColDef {
 	int32 pkidx 		= 14;
 	bool headers = 15;
 	string header = 16;
+
+	string tbl_name = 17;
+	string db_name = 18;
 }
 
 message Default {
@@ -449,6 +454,7 @@ message TableDef {
 	uint64 auto_incr_offset = 30;
 	bool is_dynamic = 31;
 
+	string db_name = 32;
 }
 
 message TableFunction{

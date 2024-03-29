@@ -104,7 +104,7 @@ func (ctr *container) collectBuildBatches(ap *Argument, proc *process.Process, a
 			continue
 		}
 		anal.Input(currentBatch, isFirst)
-		anal.Alloc(int64(currentBatch.Size()))
+		// anal.Alloc(int64(currentBatch.Size())) @todo we need to redesin annalyze memory size
 		ctr.batch, err = ctr.batch.AppendWithCopy(proc.Ctx, proc.Mp(), currentBatch)
 		if err != nil {
 			return err

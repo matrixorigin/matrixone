@@ -5308,6 +5308,28 @@ var supportedOthersBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `mo_show_visible_bin_enum`
+	{
+		functionId: MO_SHOW_VISIBLE_BIN_ENUM,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				volatile:   true,
+				args:       []types.T{types.T_varchar, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return builtInMoShowVisibleBinEnum
+				},
+			},
+		},
+	},
+
 	// function `cast_index_to_value`
 	{
 		functionId: CAST_INDEX_TO_VALUE,
@@ -5959,6 +5981,69 @@ var supportedOthersBuiltIns = []FuncNew{
 				retType:    pythonUdfRetType,
 				newOp: func() executeLogicOfOverload {
 					return runPythonUdf
+				},
+			},
+		},
+	},
+
+	// function `BITMAP_BIT_POSITION`
+	{
+		functionId: BITMAP_BIT_POSITION,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_uint64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_uint64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return BitmapBitPosition
+				},
+			},
+		},
+	},
+
+	// function `BITMAP_BUCKET_NUMBER`
+	{
+		functionId: BITMAP_BUCKET_NUMBER,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_uint64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_uint64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return BitmapBucketNumber
+				},
+			},
+		},
+	},
+
+	// function `BITMAP_COUNT`
+	{
+		functionId: BITMAP_COUNT,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_varbinary},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_uint64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return BitmapCount
 				},
 			},
 		},

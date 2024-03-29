@@ -65,10 +65,6 @@ func newReplayer(dataFactory *tables.DataFactory, db *DB, ckpedTS types.TS, lsn 
 
 func (replayer *Replayer) PreReplayWal() {
 	processor := new(catalog.LoopProcessor)
-	processor.BlockFn = func(entry *catalog.BlockEntry) (err error) {
-		entry.InitData(replayer.DataFactory)
-		return
-	}
 	processor.ObjectFn = func(entry *catalog.ObjectEntry) (err error) {
 		if entry.GetTable().IsVirtual() {
 			return moerr.GetOkStopCurrRecur()
@@ -77,6 +73,7 @@ func (replayer *Replayer) PreReplayWal() {
 		if dropCommit != nil && dropCommit.DeleteBefore(replayer.ckpedTS) {
 			return moerr.GetOkStopCurrRecur()
 		}
+		entry.InitData(replayer.DataFactory)
 		return
 	}
 	if err := replayer.db.Catalog.RecurLoop(processor); err != nil {
@@ -139,7 +136,7 @@ func (replayer *Replayer) GetMaxTS() types.TS {
 }
 
 func (replayer *Replayer) OnTimeStamp(ts types.TS) {
-	if ts.Greater(replayer.maxTs) {
+	if ts.Greater(&replayer.maxTs) {
 		replayer.maxTs = ts
 	}
 }
@@ -161,7 +158,7 @@ func (replayer *Replayer) OnReplayTxn(cmd txnif.TxnCmd, lsn uint64) {
 	replayer.readCount++
 	txnCmd := cmd.(*txnbase.TxnCmd)
 	// If WAL entry splits, they share same prepareTS
-	if txnCmd.PrepareTS.Less(replayer.maxTs) {
+	if txnCmd.PrepareTS.Less(&replayer.maxTs) {
 		return
 	}
 	replayer.applyCount++

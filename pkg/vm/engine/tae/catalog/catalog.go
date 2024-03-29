@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
@@ -61,7 +62,8 @@ const (
 
 type DataFactory interface {
 	MakeTableFactory() TableDataFactory
-	MakeBlockFactory() BlockDataFactory
+	MakeObjectFactory() ObjectDataFactory
+	MakeTombstoneFactory() TombstoneFactory
 }
 
 type Catalog struct {
@@ -176,16 +178,6 @@ func (catalog *Catalog) GCByTS(ctx context.Context, ts types.TS) {
 		}
 		return nil
 	}
-	processor.BlockFn = func(be *BlockEntry) error {
-		be.RLock()
-		needGC := be.DeleteBefore(ts)
-		be.RUnlock()
-		if needGC {
-			obj := be.object
-			obj.RemoveEntry(be)
-		}
-		return nil
-	}
 	err := catalog.RecurLoop(&processor)
 	if err != nil {
 		panic(err)
@@ -281,7 +273,7 @@ func (catalog *Catalog) onReplayCreateDB(
 	db, _ := catalog.GetDatabaseByID(dbid)
 	if db != nil {
 		dbCreatedAt := db.GetCreatedAtLocked()
-		if !dbCreatedAt.Equal(txnNode.End) {
+		if !dbCreatedAt.Equal(&txnNode.End) {
 			panic(moerr.NewInternalErrorNoCtx("logic err expect %s, get %s",
 				txnNode.End.ToString(), dbCreatedAt.ToString()))
 		}
@@ -319,7 +311,7 @@ func (catalog *Catalog) onReplayDeleteDB(dbid uint64, txnNode *txnbase.TxnMVCCNo
 	}
 	dbDeleteAt := db.GetDeleteAt()
 	if !dbDeleteAt.IsEmpty() {
-		if !dbDeleteAt.Equal(txnNode.End) {
+		if !dbDeleteAt.Equal(&txnNode.End) {
 			panic(moerr.NewInternalErrorNoCtx("logic err expect %s, get %s", txnNode.End.ToString(), dbDeleteAt.ToString()))
 		}
 		return
@@ -440,7 +432,7 @@ func (catalog *Catalog) onReplayCreateTable(dbid, tid uint64, schema *Schema, tx
 	tbl, _ := db.GetTableEntryByID(tid)
 	if tbl != nil {
 		tblCreatedAt := tbl.GetCreatedAtLocked()
-		if tblCreatedAt.Greater(txnNode.End) {
+		if tblCreatedAt.Greater(&txnNode.End) {
 			panic(moerr.NewInternalErrorNoCtx("logic err expect %s, get %s", txnNode.End.ToString(), tblCreatedAt.ToString()))
 		}
 		// alter table
@@ -501,7 +493,7 @@ func (catalog *Catalog) onReplayDeleteTable(dbid, tid uint64, txnNode *txnbase.T
 	}
 	tableDeleteAt := tbl.GetDeleteAt()
 	if !tableDeleteAt.IsEmpty() {
-		if !tableDeleteAt.Equal(txnNode.End) {
+		if !tableDeleteAt.Equal(&txnNode.End) {
 			panic(moerr.NewInternalErrorNoCtx("logic err expect %s, get %s", txnNode.End.ToString(), tableDeleteAt.ToString()))
 		}
 		return
@@ -554,6 +546,15 @@ func (catalog *Catalog) onReplayUpdateObject(
 			obj.Insert(un)
 		} else {
 			node.BaseNode.Update(un.BaseNode)
+		}
+	}
+	if obj.objData == nil {
+		obj.objData = dataFactory.MakeObjectFactory()(obj)
+	} else {
+		deleteAt := obj.GetDeleteAt()
+		if !obj.IsAppendable() || (obj.IsAppendable() && !deleteAt.IsEmpty()) {
+			obj.objData.TryUpgrade()
+			obj.objData.UpgradeAllDeleteChain()
 		}
 	}
 }
@@ -618,43 +619,13 @@ func (catalog *Catalog) onReplayCheckpointObject(
 	} else {
 		node.BaseNode.Update(un.BaseNode)
 	}
-	if entryNode.DeletedAt.IsEmpty() {
-		stats := objNode.ObjectStats
-		blkCount := stats.BlkCnt()
-		// for aobj, stats is empty when create.
-		// aobj always has one blk.
-		if state == ES_Appendable {
-			blkCount = 1
-		}
-		leftRows := stats.Rows()
-		blkMaxRow := rel.GetLastestSchema().BlockMaxRows
-		for i := 0; i < int(blkCount); i++ {
-			blkID := objectio.NewBlockidWithObjectID(objid, uint16(i))
-			rows := blkMaxRow
-			if leftRows < blkMaxRow {
-				rows = leftRows
-			}
-			leftRows -= rows
-			var metaLoc objectio.Location
-			if state != ES_Appendable {
-				metaLoc = objectio.BuildLocation(stats.ObjectName(), stats.Extent(), rows, uint16(i))
-			}
-			catalog.onReplayCreateBlock(dbid, tbid, objid, blkID, state, metaLoc, nil, txnNode, dataFactory)
-		}
+	if obj.objData == nil {
+		obj.objData = dataFactory.MakeObjectFactory()(obj)
 	} else {
-		stats := objNode.ObjectStats
-		blkCount := stats.BlkCnt()
-		leftRows := stats.Rows()
-		blkMaxRow := rel.GetLastestSchema().BlockMaxRows
-		for i := 0; i < int(blkCount); i++ {
-			blkID := objectio.NewBlockidWithObjectID(objid, uint16(i))
-			rows := blkMaxRow
-			if leftRows < blkMaxRow {
-				rows = leftRows
-			}
-			leftRows -= rows
-			metaLoc := objectio.BuildLocation(stats.ObjectName(), stats.Extent(), rows, uint16(i))
-			catalog.onReplayDeleteBlock(dbid, tbid, objid, blkID, metaLoc, nil, txnNode)
+		deleteAt := obj.GetDeleteAt()
+		if !obj.IsAppendable() || (obj.IsAppendable() && !deleteAt.IsEmpty()) {
+			obj.objData.TryUpgrade()
+			obj.objData.UpgradeAllDeleteChain()
 		}
 	}
 }
@@ -680,7 +651,7 @@ func (catalog *Catalog) replayObjectByBlock(
 			obj = NewObjectEntryByMetaLocation(
 				tbl,
 				ObjectID,
-				start, end, state, metaLocation)
+				start, end, state, metaLocation, dataFactory.MakeObjectFactory())
 			tbl.AddEntryLocked(obj)
 		}
 	}
@@ -705,13 +676,23 @@ func (catalog *Catalog) replayObjectByBlock(
 			node.DeletedAt = end
 		}
 	}
+	_, blkOffset := blkID.Offsets()
+	obj.tryUpdateBlockCnt(int(blkOffset) + 1)
+	if obj.objData == nil {
+		obj.objData = dataFactory.MakeObjectFactory()(obj)
+	} else {
+		deleteAt := obj.GetDeleteAt()
+		if !obj.IsAppendable() || (obj.IsAppendable() && !deleteAt.IsEmpty()) {
+			obj.objData.TryUpgrade()
+			obj.objData.UpgradeAllDeleteChain()
+		}
+	}
 }
 func (catalog *Catalog) onReplayUpdateBlock(
 	cmd *EntryCommand[*MetadataMVCCNode, *BlockNode],
 	dataFactory DataFactory,
 	observer wal.ReplayObserver) {
 	// catalog.OnReplayBlockID(cmd.ID.BlockID)
-	prepareTS := cmd.GetTs()
 	db, err := catalog.GetDatabaseByID(cmd.ID.DbID)
 	if err != nil {
 		panic(err)
@@ -728,54 +709,19 @@ func (catalog *Catalog) onReplayUpdateBlock(
 		cmd.mvccNode.Prepare,
 		cmd.mvccNode.BaseNode.MetaLoc,
 		true,
-		cmd.mvccNode.CreatedAt.Equal(txnif.UncommitTS),
-		cmd.mvccNode.DeletedAt.Equal(txnif.UncommitTS),
+		cmd.mvccNode.CreatedAt.Equal(&txnif.UncommitTS),
+		cmd.mvccNode.DeletedAt.Equal(&txnif.UncommitTS),
 		cmd.mvccNode.Txn,
 		dataFactory)
-	obj, err := tbl.GetObjectByID(cmd.ID.ObjectID())
-	if err != nil {
-		panic(err)
-	}
-	blk, err := obj.GetBlockEntryByID(&cmd.ID.BlockID)
-	un := cmd.mvccNode
-	if un.Is1PC() {
-		if err := un.ApplyCommit(); err != nil {
+	if !cmd.mvccNode.BaseNode.DeltaLoc.IsEmpty() {
+		obj, err := tbl.GetObjectByID(cmd.ID.ObjectID())
+		if err != nil {
 			panic(err)
 		}
+		tombstone := tbl.GetOrCreateTombstone(obj, dataFactory.MakeTombstoneFactory())
+		_, blkOffset := cmd.ID.BlockID.Offsets()
+		tombstone.ReplayDeltaLoc(cmd.mvccNode, blkOffset)
 	}
-	if !un.BaseNode.DeltaLoc.IsEmpty() {
-		name := un.BaseNode.DeltaLoc.Name()
-		objn := name.Num()
-		obj.replayNextObjectIdx(objn)
-	}
-	if err == nil {
-		blkun := blk.SearchNode(un)
-		if blkun != nil {
-			blkun.Update(un)
-		} else {
-			blk.Insert(un)
-			blk.location = un.BaseNode.MetaLoc
-		}
-		blk.blkData.TryUpgrade()
-		blk.blkData.GCInMemeoryDeletesByTS(blk.GetDeltaPersistedTS())
-		return
-	}
-	blk = NewReplayBlockEntry()
-	blk.ID = cmd.ID.BlockID
-	blk.BlockNode = *cmd.node
-	blk.BaseEntryImpl.Insert(un)
-	blk.location = un.BaseNode.MetaLoc
-	blk.object = obj
-	if blk.blkData == nil {
-		blk.blkData = dataFactory.MakeBlockFactory()(blk)
-	} else {
-		blk.blkData.TryUpgrade()
-	}
-	blk.blkData.GCInMemeoryDeletesByTS(blk.GetDeltaPersistedTS())
-	if observer != nil {
-		observer.OnTimeStamp(prepareTS)
-	}
-	obj.ReplayAddEntryLocked(blk)
 }
 
 func (catalog *Catalog) OnReplayBlockBatch(ins, insTxn, del, delTxn *containers.Batch, dataFactory DataFactory) {
@@ -837,61 +783,22 @@ func (catalog *Catalog) onReplayCreateBlock(
 		false,
 		nil,
 		dataFactory)
-	obj, err := rel.GetObjectByID(objid)
-	if err != nil {
-		logutil.Info(catalog.SimplePPString(common.PPL3))
-		panic(err)
-	}
 	if !deltaloc.IsEmpty() {
-		name := deltaloc.Name()
-		objn := name.Num()
-		obj.replayNextObjectIdx(objn)
-	}
-	blk, _ := obj.GetBlockEntryByID(blkid)
-	var un *MVCCNode[*MetadataMVCCNode]
-	if blk == nil {
-		blk = NewReplayBlockEntry()
-		blk.object = obj
-		blk.ID = *blkid
-		blk.state = state
-		obj.ReplayAddEntryLocked(blk)
-		un = &MVCCNode[*MetadataMVCCNode]{
-			EntryMVCCNode: &EntryMVCCNode{
-				CreatedAt: txnNode.End,
-			},
-			TxnMVCCNode: txnNode,
+		obj, err := rel.GetObjectByID(objid)
+		if err != nil {
+			panic(err)
+		}
+		tombstone := rel.GetOrCreateTombstone(obj, dataFactory.MakeTombstoneFactory())
+		_, blkOffset := blkid.Offsets()
+		mvccNode := &MVCCNode[*MetadataMVCCNode]{
+			EntryMVCCNode: &EntryMVCCNode{},
+			TxnMVCCNode:   txnNode,
 			BaseNode: &MetadataMVCCNode{
-				MetaLoc:  metaloc,
 				DeltaLoc: deltaloc,
 			},
 		}
-		blk.Insert(un)
-	} else {
-		prevUn := blk.MVCCChain.GetLatestNodeLocked()
-		un = &MVCCNode[*MetadataMVCCNode]{
-			EntryMVCCNode: &EntryMVCCNode{
-				CreatedAt: prevUn.CreatedAt,
-			},
-			TxnMVCCNode: txnNode,
-			BaseNode: &MetadataMVCCNode{
-				MetaLoc:  metaloc,
-				DeltaLoc: deltaloc,
-			},
-		}
-		node := blk.MVCCChain.SearchNode(un)
-		if node != nil {
-			node.IdempotentUpdate(un)
-		} else {
-			blk.Insert(un)
-		}
+		tombstone.ReplayDeltaLoc(mvccNode, blkOffset)
 	}
-	blk.location = un.BaseNode.MetaLoc
-	if blk.blkData == nil {
-		blk.blkData = dataFactory.MakeBlockFactory()(blk)
-	} else {
-		blk.blkData.TryUpgrade()
-	}
-	blk.blkData.GCInMemeoryDeletesByTS(blk.GetDeltaPersistedTS())
 }
 
 func (catalog *Catalog) onReplayDeleteBlock(
@@ -925,52 +832,19 @@ func (catalog *Catalog) onReplayDeleteBlock(
 		true,
 		nil,
 		nil)
-	obj, err := rel.GetObjectByID(objid)
-	if err != nil {
-		logutil.Info(catalog.SimplePPString(common.PPL3))
-		panic(err)
-	}
-	if !deltaloc.IsEmpty() {
-		name := deltaloc.Name()
-		objn := name.Num()
-		obj.replayNextObjectIdx(objn)
-	}
-	blk, err := obj.GetBlockEntryByID(blkid)
-	if err != nil {
-		logutil.Info(catalog.SimplePPString(common.PPL3))
-		panic(err)
-	}
-
-	prevUn := blk.MVCCChain.GetLatestNodeLocked()
-	un := &MVCCNode[*MetadataMVCCNode]{
-		EntryMVCCNode: &EntryMVCCNode{
-			CreatedAt: prevUn.CreatedAt,
-			DeletedAt: txnNode.End,
-		},
-		TxnMVCCNode: txnNode,
-		BaseNode: &MetadataMVCCNode{
-			MetaLoc:  metaloc,
-			DeltaLoc: deltaloc,
-		},
-	}
-	node := blk.MVCCChain.SearchNode(un)
-	if node != nil {
-		node.IdempotentUpdate(un)
-	} else {
-		blk.MVCCChain.Insert(un)
-	}
-	blk.location = un.BaseNode.MetaLoc
-	blk.blkData.TryUpgrade()
-	blk.blkData.GCInMemeoryDeletesByTS(blk.GetDeltaPersistedTS())
 }
 func (catalog *Catalog) ReplayTableRows() {
 	rows := uint64(0)
 	tableProcessor := new(LoopProcessor)
-	tableProcessor.BlockFn = func(be *BlockEntry) error {
+	tableProcessor.ObjectFn = func(be *ObjectEntry) error {
 		if !be.IsActive() {
 			return nil
 		}
-		rows += be.GetBlockData().GetRowsOnReplay()
+		rows += be.GetObjectData().GetRowsOnReplay()
+		return nil
+	}
+	tableProcessor.TombstoneFn = func(t data.Tombstone) error {
+		rows -= uint64(t.GetDeleteCnt())
 		return nil
 	}
 	processor := new(LoopProcessor)

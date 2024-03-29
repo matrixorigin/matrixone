@@ -118,7 +118,7 @@ func buildAlterTableCopy(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, err
 			return nil, moerr.NewInvalidInput(ctx.GetContext(), "Do not support this stmt now. %v", spec)
 		case *tree.TableOptionComment:
 			return nil, moerr.NewInvalidInput(ctx.GetContext(), "Do not support this stmt now. %v", spec)
-		case *tree.AlterTableName:
+		case *tree.AlterOptionTableName:
 			return nil, moerr.NewInvalidInput(ctx.GetContext(), "Do not support this stmt now. %v", spec)
 		case *tree.AlterAddCol:
 			err = AddColumn(ctx, alterTablePlan, option, alterTableCtx)
@@ -704,7 +704,7 @@ func ResolveAlterTableAlgorithm(ctx context.Context, validAlterSpecs []tree.Alte
 			algorithm = plan.AlterTable_INPLACE
 		case *tree.TableOptionComment:
 			algorithm = plan.AlterTable_INPLACE
-		case *tree.AlterTableName:
+		case *tree.AlterOptionTableName:
 			algorithm = plan.AlterTable_INPLACE
 		case *tree.AlterAddCol:
 			algorithm = plan.AlterTable_COPY
@@ -768,6 +768,14 @@ func buildNotNullColumnVal(col *ColDef) string {
 	} else if col.Typ.Id == int32(types.T_enum) {
 		enumvalues := strings.Split(col.Typ.Enumvalues, ",")
 		defaultValue = enumvalues[0]
+	} else if col.Typ.Id == int32(types.T_array_float32) || col.Typ.Id == int32(types.T_array_float64) {
+		if col.Typ.Width > 0 {
+			zerosWithCommas := strings.Repeat("0,", int(col.Typ.Width)-1)
+			arrayAsString := zerosWithCommas + "0" // final zero
+			defaultValue = fmt.Sprintf("'[%s]'", arrayAsString)
+		} else {
+			defaultValue = "'[]'"
+		}
 	} else {
 		defaultValue = "null"
 	}

@@ -242,9 +242,10 @@ func (builder *QueryBuilder) generateRuntimeFilters(nodeID int32) {
 	}
 
 	leftChild.RuntimeFilterProbeList = append(leftChild.RuntimeFilterProbeList, &plan.RuntimeFilterSpec{
-		Tag: rfTag,
+		Tag:         rfTag,
+		MatchPrefix: cnt < len(tableDef.Pkey.Names),
 		Expr: &plan.Expr{
-			Typ: *tableDef.Cols[pkIdx].Typ,
+			Typ: tableDef.Cols[pkIdx].Typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: leftChild.BindingTags[0],
@@ -270,9 +271,10 @@ func (builder *QueryBuilder) generateRuntimeFilters(nodeID int32) {
 
 	buildExpr, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", buildArgs)
 	node.RuntimeFilterBuildList = append(node.RuntimeFilterBuildList, &plan.RuntimeFilterSpec{
-		Tag:        rfTag,
-		UpperLimit: GetInFilterCardLimitOnPK(leftChild.Stats.TableCnt), // multicol pk, must hit all pk cols for now
-		Expr:       buildExpr,
+		Tag:         rfTag,
+		MatchPrefix: cnt < len(tableDef.Pkey.Names),
+		UpperLimit:  GetInFilterCardLimitOnPK(leftChild.Stats.TableCnt), // multicol pk, must hit all pk cols for now
+		Expr:        buildExpr,
 	})
 	recalcStatsByRuntimeFilter(leftChild, rightChild.Stats.Selectivity)
 }

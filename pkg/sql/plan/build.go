@@ -229,7 +229,14 @@ func GetResultColumnsFromPlan(p *Plan) []*ColDef {
 		for idx, expr := range lastNode.ProjectList {
 			columns[idx] = &ColDef{
 				Name: query.Headings[idx],
-				Typ:  &expr.Typ,
+				Typ:  expr.Typ,
+			}
+
+			if exprCol, ok := expr.Expr.(*plan.Expr_Col); ok {
+				if col := exprCol.Col; col != nil {
+					columns[idx].TblName = col.TblName
+					columns[idx].DbName = col.DbName
+				}
 			}
 		}
 
@@ -251,7 +258,7 @@ func GetResultColumnsFromPlan(p *Plan) []*ColDef {
 	case *plan.Plan_Ddl:
 		switch logicPlan.Ddl.DdlType {
 		case plan.DataDefinition_SHOW_VARIABLES:
-			typ := &plan.Type{
+			typ := plan.Type{
 				Id:    int32(types.T_varchar),
 				Width: 1024,
 			}

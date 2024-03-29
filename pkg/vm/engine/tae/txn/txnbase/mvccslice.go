@@ -134,7 +134,8 @@ func (be *MVCCSlice[T]) GetLastNonAbortedNode() (node T) {
 
 func (be *MVCCSlice[T]) SearchNodeByTS(ts types.TS) (node T) {
 	for _, n := range be.MVCC {
-		if n.GetStart().Equal(ts) {
+		startTS := n.GetStart()
+		if startTS.Equal(&ts) {
 			node = n
 			break
 		}
@@ -177,25 +178,28 @@ func (be *MVCCSlice[T]) GetNodeToReadByPrepareTS(ts types.TS) (offset int, node 
 	lastAppend := be.MVCC[len(be.MVCC)-1]
 
 	// 1. Last append node is in the window and it was already committed
-	if ts.Greater(lastAppend.GetPrepare()) {
+	prepareTS := lastAppend.GetPrepare()
+	if ts.Greater(&prepareTS) {
 		return len(be.MVCC) - 1, lastAppend
 	}
 	start, end := 0, len(be.MVCC)-1
 	var mid int
 	for start <= end {
 		mid = (start + end) / 2
-		if be.MVCC[mid].GetPrepare().Less(ts) {
+		midPrepareTS := be.MVCC[mid].GetPrepare()
+		if midPrepareTS.Less(&ts) {
 			start = mid + 1
-		} else if be.MVCC[mid].GetPrepare().Greater(ts) {
+		} else if midPrepareTS.Greater(&ts) {
 			end = mid - 1
 		} else {
 			break
 		}
 	}
-	if mid == 0 && be.MVCC[mid].GetPrepare().Greater(ts) {
+	midPrepareTS := be.MVCC[mid].GetPrepare()
+	if mid == 0 && midPrepareTS.Greater(&ts) {
 		// 2. The first node is found and it was committed after ts
 		return 0, be.zero
-	} else if mid != 0 && be.MVCC[mid].GetPrepare().Greater(ts) {
+	} else if mid != 0 && midPrepareTS.Greater(&ts) {
 		// 3. A node (not first) is found and it was committed after ts. Use the prev node
 		mid = mid - 1
 	}
@@ -252,7 +256,8 @@ func (be *MVCCSlice[T]) IsCommitted() bool {
 
 func (be *MVCCSlice[T]) LoopInRange(start, end types.TS, fn func(T) bool) {
 	startOffset, node := be.GetNodeToReadByPrepareTS(start)
-	if node.IsNil() && node.GetPrepare().Less(start) {
+	prepareTS := node.GetPrepare()
+	if node.IsNil() && prepareTS.Less(&start) {
 		startOffset++
 	}
 	endOffset, node := be.GetNodeToReadByPrepareTS(end)

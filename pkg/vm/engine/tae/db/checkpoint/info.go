@@ -29,6 +29,7 @@ type RunnerReader interface {
 	GetGlobalCheckpointCount() int
 	CollectCheckpointsInRange(ctx context.Context, start, end types.TS) (ckpLoc string, lastEnd types.TS, err error)
 	ICKPSeekLT(ts types.TS, cnt int) []*CheckpointEntry
+	MaxGlobalCheckpoint() *CheckpointEntry
 	MaxLSN() uint64
 }
 
@@ -36,7 +37,7 @@ func (r *runner) collectCheckpointMetadata(start, end types.TS, ckpLSN, truncate
 	bat := makeRespBatchFromSchema(CheckpointSchema)
 	entries := r.GetAllIncrementalCheckpoints()
 	for _, entry := range entries {
-		if !entry.IsFinished() && !entry.end.Equal(end) {
+		if !entry.IsFinished() && !entry.end.Equal(&end) {
 			continue
 		}
 		bat.GetVectorByName(CheckpointAttr_StartTS).Append(entry.start, false)
@@ -51,7 +52,7 @@ func (r *runner) collectCheckpointMetadata(start, end types.TS, ckpLSN, truncate
 	}
 	entries = r.GetAllGlobalCheckpoints()
 	for _, entry := range entries {
-		if !entry.IsFinished() && !entry.end.Equal(end) {
+		if !entry.IsFinished() && !entry.end.Equal(&end) {
 			continue
 		}
 		bat.GetVectorByName(CheckpointAttr_StartTS).Append(entry.start, false)
@@ -113,7 +114,7 @@ func (r *runner) ICKPSeekLT(ts types.TS, cnt int) []*CheckpointEntry {
 			if !e.IsFinished() {
 				break
 			}
-			if e.start.Less(ts) {
+			if e.start.Less(&ts) {
 				if !it.Next() {
 					break
 				}
@@ -134,7 +135,7 @@ func (r *runner) GetPenddingIncrementalCount() int {
 
 	count := 0
 	for i := len(entries) - 1; i >= 0; i-- {
-		if global != nil && entries[i].end.LessEq(global.end) {
+		if global != nil && entries[i].end.LessEq(&global.end) {
 			break
 		}
 		if !entries[i].IsFinished() {
@@ -203,7 +204,7 @@ func (r *runner) GCByTS(ctx context.Context, ts types.TS) error {
 		r.gcTS.Store(ts)
 	} else {
 		prevTS := prev.(types.TS)
-		if prevTS.Less(ts) {
+		if prevTS.Less(&ts) {
 			r.gcTS.Store(ts)
 		}
 	}
@@ -231,7 +232,7 @@ func (r *runner) getGCedTS() types.TS {
 	if minIncremental == nil {
 		return minGlobal.end
 	}
-	if minIncremental.start.GreaterEq(minGlobal.end) {
+	if minIncremental.start.GreaterEq(&minGlobal.end) {
 		return minGlobal.end
 	}
 	return minIncremental.start

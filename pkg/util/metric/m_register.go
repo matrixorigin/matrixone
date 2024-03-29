@@ -30,6 +30,7 @@ var InitCollectors = []Collector{
 	StatementCUCounterFactory,
 	TransactionCounterFactory,
 	TransactionErrorsFactory,
+	StatementDurationFactory,
 	// server metric
 	ConnFactory,
 	StorageUsageFactory,
