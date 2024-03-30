@@ -182,16 +182,6 @@ func makeCrossJoinTblAndCentroids(builder *QueryBuilder, bindCtx *BindContext, t
 					},
 				},
 			},
-			{ // centroids.centroid
-				Typ: *typeOriginVecColumn,
-				Expr: &plan.Expr_Col{
-					Col: &plan.ColRef{
-						RelPos: 1,
-						ColPos: 2,
-						Name:   catalog.SystemSI_IVFFLAT_TblCol_Centroids_centroid,
-					},
-				},
-			},
 			{ // tbl.embedding
 				Typ: *typeOriginVecColumn,
 				Expr: &plan.Expr_Col{
@@ -199,6 +189,16 @@ func makeCrossJoinTblAndCentroids(builder *QueryBuilder, bindCtx *BindContext, t
 						RelPos: 0,
 						ColPos: int32(posOriginVecColumn),
 						Name:   tableDef.Cols[posOriginVecColumn].Name,
+					},
+				},
+			},
+			{ // centroids.centroid
+				Typ: *typeOriginVecColumn,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: 1,
+						ColPos: 2,
+						Name:   catalog.SystemSI_IVFFLAT_TblCol_Centroids_centroid,
 					},
 				},
 			},
@@ -282,13 +282,13 @@ func partitionByWindowAndFilterByRowNum(builder *QueryBuilder, bindCtx *BindCont
 		BindingTags: []int32{lastTag},
 		WindowIdx:   int32(0),
 		WinSpecList: []*Expr{winSpec},
-		ProjectList: []*Expr{projections[0], projections[1], projections[2], rowNumberCol},
+		ProjectList: []*Expr{projections[0], projections[1], projections[2], projections[3], rowNumberCol},
 	}, bindCtx)
 
 	// 7. Filter records where row_number() = 1
 	projections = getProjectionByLastNode(builder, windowId)
 	whereRowNumberEqOne, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{
-		projections[3],
+		projections[4],
 		MakePlan2Int64ConstExprWithType(1),
 	})
 	if err != nil {
@@ -299,7 +299,7 @@ func partitionByWindowAndFilterByRowNum(builder *QueryBuilder, bindCtx *BindCont
 		NodeType:    plan.Node_FILTER,
 		Children:    []int32{windowId},
 		FilterList:  []*Expr{whereRowNumberEqOne},
-		ProjectList: []*Expr{projections[0], projections[1], projections[2]},
+		ProjectList: []*Expr{projections[0], projections[1], projections[2], projections[3]},
 	}, bindCtx)
 	return filterId, nil
 }
@@ -310,7 +310,8 @@ func makeFinalProjectWithCPAndOptionalRowId(builder *QueryBuilder, bindCtx *Bind
 	// 0: centroids.version,
 	// 1: centroids.centroid_id,
 	// 2: tbl.pk,
-	// 3: entries.row_id (if update)
+	// 3: tbl.embedding,
+	// 4: entries.row_id (if update)
 	var joinProjections = getProjectionByLastNode(builder, crossJoinTblAndCentroidsID)
 	if isUpdate {
 		lastProjection := builder.qry.Nodes[lastNodeId].ProjectList
@@ -335,8 +336,8 @@ func makeFinalProjectWithCPAndOptionalRowId(builder *QueryBuilder, bindCtx *Bind
 	finalProjectId := builder.appendNode(&plan.Node{
 		NodeType: plan.Node_PROJECT,
 		Children: []int32{crossJoinTblAndCentroidsID},
-		// version, centroid_id, pk, serial(version,pk)
-		ProjectList: []*Expr{joinProjections[0], joinProjections[1], joinProjections[2], cpKeyCol},
+		// version, centroid_id, pk, embedding, serial(version,pk)
+		ProjectList: []*Expr{joinProjections[0], joinProjections[1], joinProjections[2], joinProjections[3], cpKeyCol},
 	}, bindCtx)
 
 	return finalProjectId, nil
