@@ -123,8 +123,9 @@ create account if not exists accout_Xingming_insert ADMIN_NAME 'root' IDENTIFIED
 select account_name from mo_catalog.mo_account where account_name='accout_xingming_insert';
 
 --9.CREATE ACCOUNT support prepared statement
-PREPARE s1 FROM "'create account ? ADMIN_NAME 'admin' IDENTIFIED BY '111'";
-EXECUTE s1 USING 'ccc';
+PREPARE s1 FROM "create account ? ADMIN_NAME 'admin' IDENTIFIED BY '111'";
+set @a_var = 'ccc';
+EXECUTE s1 USING @a_var;
 select account_name from mo_catalog.mo_account where account_name='ccc';
 DEALLOCATE PREPARE s1;
 
