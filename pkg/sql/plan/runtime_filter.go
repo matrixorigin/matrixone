@@ -99,9 +99,9 @@ func (builder *QueryBuilder) generateRuntimeFilters(nodeID int32) {
 	}
 
 	rightChild := builder.qry.Nodes[node.Children[1]]
-	if node.JoinType != plan.Node_INDEX && rightChild.Stats.Selectivity > 0.5 {
-		return
-	}
+	//if node.JoinType != plan.Node_INDEX && rightChild.Stats.Selectivity > 0.5 {
+	//	return
+	//}
 
 	leftTags := make(map[int32]bool)
 	for _, tag := range builder.enumerateTags(node.Children[0]) {
@@ -147,9 +147,9 @@ func (builder *QueryBuilder) generateRuntimeFilters(nodeID int32) {
 	if len(probeExprs) == 1 {
 		if node.JoinType != plan.Node_INDEX {
 			probeNdv := getExprNdv(probeExprs[0], builder)
-			if probeNdv == -1 || node.Stats.HashmapStats.HashmapSize/probeNdv >= 0.1 {
-				return
-			}
+			//if probeNdv == -1 || node.Stats.HashmapStats.HashmapSize/probeNdv >= 0.1 {
+			//	return
+			//}
 
 			if node.Stats.HashmapStats.HashmapSize/probeNdv >= 0.1*probeNdv/leftChild.Stats.TableCnt {
 				switch col := probeExprs[0].Expr.(type) {

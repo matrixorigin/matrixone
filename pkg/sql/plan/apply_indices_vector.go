@@ -321,7 +321,7 @@ func makeEntriesCrossJoinCentroidsOnCentroidId(builder *QueryBuilder, bindCtx *B
 	})
 
 	var onList []*Expr
-	var joinType int32 = 1
+	var joinType int32 = 3
 	//TODO: arjun. remove this part
 	if joinType == 1 {
 		andEq, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "and", []*Expr{
