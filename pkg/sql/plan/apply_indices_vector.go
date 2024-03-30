@@ -92,7 +92,7 @@ func (builder *QueryBuilder) applyIndicesForSortUsingVectorIndex(nodeID int32, s
 		distFnExpr, entriesJoinCentroids, sortDirection, idxTableDefs, idxTags)
 	var pkPos = scanNode.TableDef.Name2ColIndex[scanNode.TableDef.Pkey.PkeyColName] //TODO: watch out.
 
-	//onlyUseIndexTables := false
+	//onlyUseIndexTables := true
 	//if onlyUseIndexTables {
 	//
 	//	//TODO: this is a temporary change.
@@ -115,7 +115,7 @@ func (builder *QueryBuilder) applyIndicesForSortUsingVectorIndex(nodeID int32, s
 	//		},
 	//	}
 	//
-	//	return sortTblByL2Distance
+	//	return entriesJoinCentroids
 	//}
 
 	// 2.e Create entries JOIN tbl on entries.original_pk == tbl.pk
@@ -277,7 +277,7 @@ func makeEntriesTblScan(builder *QueryBuilder, bindCtx *BindContext, indexTableD
 	return entriesScanId, nil
 }
 
-func makeEntriesCrossJoinCentroidsOnCentroidId(builder *QueryBuilder, bindCtx *BindContext, idxTableDefs []*TableDef, idxTags map[string]int32, entriesForCurrVersion int32, centroidsForCurrVersion int32) int32 {
+func makeEntriesCrossJoinCentroidsOnCentroidId(builder *QueryBuilder, bindCtx *BindContext, idxTableDefs []*TableDef, idxTags map[string]int32, entries int32, centroidsForCurrVersion int32) int32 {
 	entriesCentroidIdEqCentroidId, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{
 		{
 			Typ: idxTableDefs[2].Cols[1].Typ,
@@ -321,7 +321,7 @@ func makeEntriesCrossJoinCentroidsOnCentroidId(builder *QueryBuilder, bindCtx *B
 	})
 
 	var onList []*Expr
-	var joinType int32 = 3
+	var joinType int32 = 1
 	//TODO: arjun. remove this part
 	if joinType == 1 {
 		andEq, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "and", []*Expr{
@@ -331,7 +331,7 @@ func makeEntriesCrossJoinCentroidsOnCentroidId(builder *QueryBuilder, bindCtx *B
 		onList = []*Expr{andEq}
 	} else if joinType == 2 {
 		onList = []*Expr{entriesCentroidIdEqCentroidId, centroidVersionEqEntriesVersion}
-	} else {
+	} else if joinType == 3 {
 		onList = []*Expr{entriesCentroidIdEqCentroidId}
 	}
 
@@ -342,7 +342,7 @@ func makeEntriesCrossJoinCentroidsOnCentroidId(builder *QueryBuilder, bindCtx *B
 	joinEntriesAndCentroids := builder.appendNode(&plan.Node{
 		NodeType: plan.Node_JOIN,
 		JoinType: plan.Node_SEMI,
-		Children: []int32{centroidsForCurrVersion, entriesForCurrVersion},
+		Children: []int32{entries, centroidsForCurrVersion},
 		OnList:   onList,
 	}, bindCtx)
 
