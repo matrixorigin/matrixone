@@ -109,15 +109,12 @@ func InnerProduct[T types.RealNumbers](v1, v2 []T) (float64, error) {
 }
 
 func L2Distance[T types.RealNumbers](v1, v2 []T) (float64, error) {
-	vec, err := ToGonumVectors[T](v1, v2)
-	if err != nil {
-		return 0, err
+	var sumOfSquares T
+	for i := range v1 {
+		difference := v1[i] - v2[i]
+		sumOfSquares += difference * difference
 	}
-
-	diff := mat.NewVecDense(vec[0].Len(), nil)
-	diff.SubVec(vec[0], vec[1])
-
-	return math.Sqrt(mat.Dot(diff, diff)), nil
+	return math.Sqrt(float64(sumOfSquares)), nil
 }
 
 func CosineDistance[T types.RealNumbers](v1, v2 []T) (float64, error) {
