@@ -92,31 +92,31 @@ func (builder *QueryBuilder) applyIndicesForSortUsingVectorIndex(nodeID int32, s
 		distFnExpr, entriesJoinCentroids, sortDirection, idxTableDefs, idxTags)
 	var pkPos = scanNode.TableDef.Name2ColIndex[scanNode.TableDef.Pkey.PkeyColName] //TODO: watch out.
 
-	//onlyUseIndexTables := true
-	//if onlyUseIndexTables {
-	//
-	//	//TODO: this is a temporary change.
-	//	idxColMap[[2]int32{scanNode.BindingTags[0], pkPos}] = &plan.Expr{
-	//		Typ: idxTableDefs[2].Cols[2].Typ,
-	//		Expr: &plan.Expr_Col{
-	//			Col: &plan.ColRef{
-	//				RelPos: idxTags["entries.scan"],
-	//				ColPos: 2, // entries.entry
-	//			},
-	//		},
-	//	}
-	//	idxColMap[[2]int32{scanNode.BindingTags[0], colPosOrderBy}] = &plan.Expr{
-	//		Typ: idxTableDefs[2].Cols[3].Typ,
-	//		Expr: &plan.Expr_Col{
-	//			Col: &plan.ColRef{
-	//				RelPos: idxTags["entries.scan"],
-	//				ColPos: 3, // entries.entry
-	//			},
-	//		},
-	//	}
-	//
-	//	return entriesJoinCentroids
-	//}
+	onlyUseIndexTables := true
+	if onlyUseIndexTables {
+
+		//TODO: this is a temporary change.
+		idxColMap[[2]int32{scanNode.BindingTags[0], pkPos}] = &plan.Expr{
+			Typ: idxTableDefs[2].Cols[2].Typ,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: idxTags["entries.scan"],
+					ColPos: 2, // entries.pk
+				},
+			},
+		}
+		idxColMap[[2]int32{scanNode.BindingTags[0], colPosOrderBy}] = &plan.Expr{
+			Typ: idxTableDefs[2].Cols[3].Typ,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: idxTags["entries.scan"],
+					ColPos: 3, // entries.entry
+				},
+			},
+		}
+
+		return sortTblByL2Distance
+	}
 
 	// 2.e Create entries JOIN tbl on entries.original_pk == tbl.pk
 	projectTbl := makeTblCrossJoinEntriesCentroidOnPK(builder, builder.ctxByNode[nodeID],
