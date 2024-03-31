@@ -60,9 +60,11 @@ func (c *clientConn) migrateConnFrom(sqlAddr string) (*query.MigrateConnFromResp
 func (c *clientConn) migrateConnTo(sc ServerConn, info *query.MigrateConnFromResponse) error {
 	// Before migrate session info with RPC, we need to execute some
 	// SQLs to initialize the session and account in handler.
+	// Currently, the session variable transferred is not used anywhere else,
+	// and just used here.
 	if _, err := sc.ExecStmt(internalStmt{
 		cmdType: cmdQuery,
-		s:       "select @@version_comment;",
+		s:       "set transferred=1;",
 	}, nil); err != nil {
 		return err
 	}

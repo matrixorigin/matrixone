@@ -3400,6 +3400,14 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableIntType("thread_pool_transaction_delay", 0, 300000, false),
 		Default:           int64(0),
 	},
+	"transferred": {
+		Name:              "transferred",
+		Scope:             ScopeSession,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableBoolType("autocommit"),
+		Default:           int64(0),
+	},
 	"tls_ciphersuites": {
 		Name:              "tls_ciphersuites",
 		Scope:             ScopeGlobal,

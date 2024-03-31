@@ -1720,7 +1720,6 @@ func (mp *MysqlProtocolImpl) makeOKPayloadWithEof(affectedRows, lastInsertId uin
 	pos = mp.io.WriteUint8(data, pos, defines.EOFHeader)
 	pos = mp.writeIntLenEnc(data, pos, affectedRows)
 	pos = mp.writeIntLenEnc(data, pos, lastInsertId)
-	statusFlags = extendStatus(statusFlags)
 	if (mp.capability & CLIENT_PROTOCOL_41) != 0 {
 		pos = mp.io.WriteUint16(data, pos, statusFlags)
 		pos = mp.io.WriteUint16(data, pos, warnings)
@@ -1807,7 +1806,7 @@ func (mp *MysqlProtocolImpl) makeEOFPayload(warnings, status uint16) []byte {
 	pos = mp.io.WriteUint8(data, pos, defines.EOFHeader)
 	if mp.capability&CLIENT_PROTOCOL_41 != 0 {
 		pos = mp.io.WriteUint16(data, pos, warnings)
-		pos = mp.io.WriteUint16(data, pos, extendStatus(status))
+		pos = mp.io.WriteUint16(data, pos, status)
 	}
 	return data[:pos]
 }
@@ -2647,12 +2646,12 @@ func (mp *MysqlProtocolImpl) sendResultSet(ctx context.Context, set ResultSet, c
 
 	//If the CLIENT_DEPRECATE_EOF client capabilities flag is set, OK_Packet; else EOF_Packet.
 	if mp.capability&CLIENT_DEPRECATE_EOF != 0 {
-		err := mp.sendOKPacketWithEof(0, 0, status, 0, "")
+		err := mp.sendOKPacketWithEof(0, 0, extendStatus(status), 0, "")
 		if err != nil {
 			return err
 		}
 	} else {
-		err := mp.sendEOFPacket(warnings, status)
+		err := mp.sendEOFPacket(warnings, extendStatus(status))
 		if err != nil {
 			return err
 		}

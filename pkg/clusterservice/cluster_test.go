@@ -192,3 +192,13 @@ func (c *testHAKeeperClient) UpdateCNLabel(ctx context.Context, label logpb.CNSt
 	}
 	return nil
 }
+func (c *testHAKeeperClient) UpdateCNWorkState(ctx context.Context, state logpb.CNWorkState) error {
+	c.Lock()
+	defer c.Unlock()
+	for i, cn := range c.value.CNStores {
+		if cn.UUID == state.UUID {
+			c.value.CNStores[i].WorkState = state.State
+		}
+	}
+	return nil
+}
