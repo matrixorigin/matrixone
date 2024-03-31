@@ -106,7 +106,7 @@ func resetInsertBatchForOnduplicateKey(proc *process.Process, originBatch *batch
 		return moerr.NewConstraintViolation(proc.Ctx, "can not find rowid when insert with on duplicate key")
 	}
 
-	insertColCount := 0 //columns without hidden columns
+	insertColCount := int(insertArg.InsertColCount) //columns without hidden columns
 	if insertArg.ctr.rbat == nil {
 		insertArg.ctr.rbat = batch.NewWithSize(len(insertArg.Attrs))
 		insertArg.ctr.rbat.Attrs = insertArg.Attrs
