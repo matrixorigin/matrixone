@@ -62,18 +62,12 @@ type MySQLConn struct {
 // newMySQLConn creates a new MySQLConn. reqC and respC are used for client
 // connection to handle events from client.
 func newMySQLConn(
-	name string, c net.Conn, sz int, reqC chan IEvent, respC chan []byte, prevBuf *msgBuf, cid uint32,
+	name string, c net.Conn, sz int, reqC chan IEvent, respC chan []byte, cid uint32,
 ) *MySQLConn {
-	mc := &MySQLConn{
+	return &MySQLConn{
 		Conn:   c,
-		msgBuf: prevBuf,
+		msgBuf: newMsgBuf(name, c, sz, reqC, respC, cid),
 	}
-	if mc.msgBuf == nil {
-		mc.msgBuf = newMsgBuf(name, c, sz, reqC, respC, cid)
-	} else {
-		mc.msgBuf.src = c
-	}
-	return mc
 }
 
 // msgBuf holds a buffer to save MySQL packets. It is mainly used to

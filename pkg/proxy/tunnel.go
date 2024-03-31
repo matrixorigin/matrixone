@@ -151,8 +151,8 @@ func (t *tunnel) run(cc ClientConn, sc ServerConn) error {
 		}
 		t.cc = cc
 		t.logger = t.logger.With(zap.Uint32("conn ID", cc.ConnID()))
-		t.mu.clientConn = newMySQLConn(connClientName, cc.RawConn(), 0, t.reqC, t.respC, nil, cc.ConnID())
-		t.mu.serverConn = newMySQLConn(connServerName, sc.RawConn(), 0, t.reqC, t.respC, nil, sc.ConnID())
+		t.mu.clientConn = newMySQLConn(connClientName, cc.RawConn(), 0, t.reqC, t.respC, cc.ConnID())
+		t.mu.serverConn = newMySQLConn(connServerName, sc.RawConn(), 0, t.reqC, t.respC, sc.ConnID())
 
 		setPeer(t.mu.clientConn.msgBuf, t.mu.serverConn.msgBuf)
 
@@ -356,12 +356,15 @@ func (t *tunnel) transfer(ctx context.Context) error {
 	csp, scp := t.getPipes()
 	// Pause pipes before the transfer.
 	if err := csp.pause(ctx); err != nil {
+		v2.ProxyTransferFailCounter.Inc()
 		return err
 	}
 	if err := scp.pause(ctx); err != nil {
+		v2.ProxyTransferFailCounter.Inc()
 		return err
 	}
 	if err := t.doReplaceConnection(ctx, false); err != nil {
+		v2.ProxyTransferFailCounter.Inc()
 		return err
 	}
 	// After replace connections, restart pipes.
@@ -369,6 +372,7 @@ func (t *tunnel) transfer(ctx context.Context) error {
 		t.logger.Error("failed to kickoff tunnel", zap.Error(err))
 		_ = t.Close()
 	}
+	v2.ProxyTransferSuccessCounter.Inc()
 	return nil
 }
 
@@ -383,8 +387,10 @@ func (t *tunnel) transferSync(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, defaultTransferTimeout)
 	defer cancel()
 	if err := t.doReplaceConnection(ctx, true); err != nil {
+		v2.ProxyTransferFailCounter.Inc()
 		return err
 	}
+	v2.ProxyTransferSuccessCounter.Inc()
 	return nil
 }
 
@@ -398,10 +404,7 @@ func (t *tunnel) getNewServerConn(ctx context.Context) (*MySQLConn, error) {
 	if err != nil {
 		return nil, err
 	}
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	p := t.mu.scp
-	return newMySQLConn(connServerName, newConn.RawConn(), 0, t.reqC, t.respC, p.src.msgBuf, newConn.ConnID()), nil
+	return newMySQLConn(connServerName, newConn.RawConn(), 0, t.reqC, t.respC, newConn.ConnID()), nil
 }
 
 func (t *tunnel) getTransferType() transferType {

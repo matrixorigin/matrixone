@@ -42,6 +42,7 @@ type ServerConn interface {
 	// After it finished, server connection should be closed immediately because
 	// it is a temp connection.
 	// The first return value indicates that if the execution result is OK.
+	// NB: the stmt can only be simple stmt, which returns OK or Err only.
 	ExecStmt(stmt internalStmt, resp chan<- []byte) (bool, error)
 	// Close closes the connection to CN server.
 	Close() error

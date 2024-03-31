@@ -85,8 +85,6 @@ func (s *scaling) doScaling() {
 		tuns := s.connManager.getTunnelsByCNID(cn)
 		tunNum := len(tuns)
 		if tunNum == 0 {
-			s.logger.Info("there are no tunnels on the draining CN",
-				zap.String("CN ID", cn))
 			continue
 		}
 		s.logger.Info("transferring tunnels on CN",
@@ -94,6 +92,7 @@ func (s *scaling) doScaling() {
 			zap.String("CN ID", cn),
 		)
 		for _, tun := range tuns {
+			s.logger.Info("scaling out tunnel", zap.Uint32("conn ID", tun.cc.ConnID()))
 			tun.setTransferType(transferByScaling)
 			select {
 			case s.queue <- tun:
