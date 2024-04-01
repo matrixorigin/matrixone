@@ -456,12 +456,19 @@ func (txn *Transaction) dumpBatchLocked(offset int) error {
 			mp[tbKey] = append(mp[tbKey], newBat)
 			txn.toFreeBatches[tbKey] = append(txn.toFreeBatches[tbKey], bat)
 
+			// txn.writes[i].bat = nil
+			// --- New Message
+			// Don't set bat = nil here. When we don't enter "if dumpAll { ...  }" block
+			// we end having performance degradation due to nil bat piling up. Not sure if
+			// older message is still valid. However, keeping this comment for now, in case
+			// we need to revert back.
+			// --- Older message:
 			// DON'T MODIFY THE IDX OF AN ENTRY IN LOG
 			// THIS IS VERY IMPORTANT FOR CN BLOCK COMPACTION
 			// maybe this will cause that the log increments unlimitedly
-			// txn.writes = append(txn.writes[:i], txn.writes[i+1:]...)
-			// i--
-			txn.writes[i].bat = nil
+			txn.writes = append(txn.writes[:i], txn.writes[i+1:]...)
+			i--
+
 		}
 	}
 
