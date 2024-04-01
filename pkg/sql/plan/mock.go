@@ -342,6 +342,7 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 			{"default_role", types.T_int32, false, 50, 0},
 			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
 		},
+		pks: []int{0},
 	}
 
 	moSchema["mo_role_privs"] = &Schema{
@@ -381,6 +382,7 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 			{"database_collation", types.T_varchar, false, 64, 0},
 			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
 		},
+		pks: []int{0},
 	}
 
 	moSchema["mo_indexes"] = &Schema{
@@ -402,6 +404,7 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 			{"index_table_name", types.T_varchar, true, 50, 0},
 			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
 		},
+		pks: []int{0},
 	}
 
 	moSchema["mo_role"] = &Schema{
@@ -413,6 +416,7 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 			{"created_time", types.T_timestamp, false, 0, 0},
 			{"comments", types.T_varchar, false, 2048, 0},
 		},
+		pks: []int{0},
 	}
 
 	moSchema["mo_stages"] = &Schema{
@@ -437,6 +441,7 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 			{"database_name", types.T_varchar, false, 50, 0},
 			{"table_name", types.T_varchar, false, 50, 0},
 		},
+		pks: []int{0},
 	}
 
 	//---------------------------------------------constraint test schema---------------------------------------------------------
