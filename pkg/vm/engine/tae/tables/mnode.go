@@ -475,10 +475,6 @@ func (node *memoryNode) checkConflictAandVisibility(
 			node.object.RLock()
 		}
 	} else {
-		if n == nil || txn == nil {
-			x := 0
-			x++
-		}
 		needWait, txn := n.NeedWaitCommitting(txn.GetStartTS())
 		if needWait {
 			node.object.RUnlock()
