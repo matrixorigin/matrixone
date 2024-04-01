@@ -19,7 +19,6 @@ import (
 	"encoding"
 	"fmt"
 	"math/bits"
-	"sync/atomic"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -59,22 +58,17 @@ var rightmost_one_pos_8 = [256]uint8{
 }
 
 func New() Bitmap {
-	n := Bitmap{
-		emptyFlag: new(atomic.Int32),
-	}
-	return n
+	return Bitmap{}
 }
 
 func (n *Bitmap) InitWith(other *Bitmap) {
 	n.len = other.len
-	n.emptyFlag = new(atomic.Int32)
 	n.emptyFlag.Store(other.emptyFlag.Load())
 	n.data = append([]uint64(nil), other.data...)
 }
 
 func (n *Bitmap) InitWithSize(len int64) {
 	n.len = len
-	n.emptyFlag = new(atomic.Int32)
 	n.emptyFlag.Store(kEmptyFlagEmpty)
 	n.data = make([]uint64, (len+63)/64)
 }
@@ -194,17 +188,10 @@ func (n *Bitmap) Ptr() *uint64 {
 	return &n.data[0]
 }
 
-func (n *Bitmap) EmptyFlagIsNil() bool {
-	return n.emptyFlag == nil
-}
-
 // EmptyByFlag is a quick and dirty way to check if the bitmap is empty.
 // If it retruns true, the bitmap is empty.  Otherwise, it may or may not be empty.
 func (n *Bitmap) EmptyByFlag() bool {
-	if n == nil || n.emptyFlag == nil {
-		return true
-	}
-	return n.emptyFlag.Load() == kEmptyFlagEmpty || len(n.data) == 0
+	return n == nil || n.emptyFlag.Load() == kEmptyFlagEmpty || len(n.data) == 0
 }
 
 // IsEmpty returns true if no bit in the Bitmap is set, otherwise it will return false.

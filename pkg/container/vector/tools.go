@@ -16,7 +16,6 @@ package vector
 
 import (
 	"fmt"
-	"strings"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -158,10 +157,12 @@ func MustVarlenaRawData(v *Vector) (data []types.Varlena, area []byte) {
 // XXX extend will extend the vector's Data to accommodate rows more entry.
 func extend(v *Vector, rows int, m *mpool.MPool) error {
 	if v.cantFreeArea || v.cantFreeData {
-		logutil.Errorf("AllocMsg=%s\n\n", strings.Join(v.AllocMsg, "\n"))
-		logutil.Errorf("FreeMsg=%s\n\n", strings.Join(v.FreeMsg, "\n"))
-		logutil.Errorf("GetMsg=%s\n\n", strings.Join(v.GetMsg, "\n"))
-		logutil.Errorf("PutMsg=%s\n\n", strings.Join(v.PutMsg, "\n"))
+		logutil.Errorf("AllocMsg=%s\n\nFreeMsg=%s\n\nGetMsg=%s\n\nPutMsg=%s\n\n",
+			v.AllocMsg,
+			v.FreeMsg,
+			v.GetMsg,
+			v.PutMsg,
+		)
 		panic("vector can not extend")
 	}
 	if tgtCap := v.length + rows; tgtCap > v.capacity {

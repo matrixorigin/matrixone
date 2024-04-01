@@ -20,6 +20,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 )
 
 func init() {
@@ -34,11 +35,11 @@ func init() {
 				FreeMsg:  v.FreeMsg,
 				PutMsg:   v.PutMsg,
 				GetMsg:   v.GetMsg,
+				OnUsed:   v.OnUsed,
 			}
 		},
 		reuse.DefaultOptions[Vector](),
 	)
-
 }
 
 func (v Vector) TypeName() string {
@@ -47,10 +48,17 @@ func (v Vector) TypeName() string {
 
 func NewVecFromReuse() *Vector {
 	v := reuse.Alloc[Vector](nil)
-	v.nsp = *nulls.New()
-	if len(v.AllocMsg) > 3 {
-		v.AllocMsg = v.AllocMsg[1:]
+	v.nsp = nulls.New()
+	if v.OnUsed {
+		logutil.Errorf("AllocMsg=%s\n\nFreeMsg=%s\n\nGetMsg=%s\n\nPutMsg=%s\n\n",
+			v.AllocMsg,
+			v.FreeMsg,
+			v.GetMsg,
+			v.PutMsg,
+		)
+		panic("+++++++++++  vec on used")
 	}
-	v.AllocMsg = append(v.AllocMsg, time.Now().String()+" : "+string(debug.Stack()))
+	v.AllocMsg = time.Now().String() + " : " + string(debug.Stack())
+	v.OnUsed = true
 	return v
 }
