@@ -20,6 +20,7 @@ import (
 	"runtime/debug"
 	"slices"
 	"sort"
+	"strings"
 	"time"
 	"unsafe"
 
@@ -283,9 +284,6 @@ func NewVec(typ types.Type) *Vector {
 	vec := NewVecFromReuse()
 	vec.typ = typ
 	vec.class = FLAT
-	if typ.Oid == types.T_char || typ.Oid == types.T_varchar {
-		fmt.Print("dd")
-	}
 
 	return vec
 }
@@ -418,27 +416,29 @@ func GetPtrAt[T any](v *Vector, idx int64) *T {
 }
 
 func (v *Vector) Free(mp *mpool.MPool) {
-	cannotReused := v.NeedDup()
 	if !v.cantFreeData {
 		mp.Free(v.data)
-		v.data = nil
-	} else {
-		v.data = v.data[:0]
 	}
 	if !v.cantFreeArea {
 		mp.Free(v.area)
-		v.area = nil
-	} else {
-		v.area = v.area[:0]
 	}
 
 	v.class = FLAT
 	v.col = typedSlice{}
+	v.data = nil
+	v.area = nil
 	v.capacity = 0
 	v.length = 0
 	v.cantFreeData = false
 	v.cantFreeArea = false
 
+	if v.nsp.CheckEmptyFlagNil() {
+		//double free happend
+		logutil.Errorf("AllocMsg=%s\n\n", strings.Join(v.AllocMsg, "\n"))
+		logutil.Errorf("FreeMsg=%s\n\n", strings.Join(v.FreeMsg, "\n"))
+		logutil.Errorf("GetMsg=%s\n\n", strings.Join(v.GetMsg, "\n"))
+		logutil.Errorf("PutMsg=%s\n\n", strings.Join(v.PutMsg, "\n"))
+	}
 	v.nsp.Reset()
 	v.sorted = false
 
@@ -447,9 +447,7 @@ func (v *Vector) Free(mp *mpool.MPool) {
 	}
 	v.FreeMsg = append(v.FreeMsg, time.Now().String()+" : typ="+v.typ.DescString()+" "+string(debug.Stack()))
 
-	if !cannotReused {
-		reuse.Free[Vector](v, nil)
-	}
+	reuse.Free[Vector](v, nil)
 }
 
 func (v *Vector) MarshalBinary() ([]byte, error) {
