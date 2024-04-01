@@ -284,3 +284,95 @@ jobs:
         run: |
           security list-keychains | grep sign | awk 'system("security delete-keychain "$1)'
           security find-identity -p codesigning | grep ID | awk 'NR=1{system("security delete-identity -Z "$2)}'
+
+  musl-x86-build-job:
+    runs-on: ubuntu-20.04
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v3
+      - name: Get release
+        id: get_release
+        uses: bruceadams/get-release@v1.3.2
+        env:
+          GITHUB_TOKEN: ${{ secrets.TOKEN_ACTION }}
+      - name: Echo some info
+        run: |
+          echo ${{ steps.get_release.outputs.upload_url }}
+          echo ${{ steps.get_release.outputs.tag_name }}
+
+      - name: Set up Go
+        uses: ./.github/actions/setup_env
+      - name: Build normal
+        run: |
+          cd $GITHUB_WORKSPACE;
+          make musl;
+          # copy toml configure file
+          mkdir -p mo-${{ steps.get_release.outputs.tag_name }}-musl-x86_64/etc
+          mv mo-service mo-${{ steps.get_release.outputs.tag_name }}-musl-x86_64/
+          
+          mv ./etc/launch mo-${{ steps.get_release.outputs.tag_name }}-musl-x86_64/etc/
+          if [ -d "./etc/launch-with-python-udf-server" ]; then
+            mv ./etc/launch-with-python-udf-server ./mo-${{ steps.get_release.outputs.tag_name }}-musl-x86_64/etc/
+          fi
+          if [ -d "./pkg/udf/pythonservice/pyserver" ]; then
+            mkdir -p mo-${{ steps.get_release.outputs.tag_name }}-musl-x86_64/pkg/udf/pythonservice
+            mv ./pkg/udf/pythonservice/pyserver ./mo-${{ steps.get_release.outputs.tag_name }}-musl-x86_64/pkg/udf/pythonservice
+          fi
+          zip -r mo-${{ steps.get_release.outputs.tag_name }}-musl-x86_64.zip mo-${{ steps.get_release.outputs.tag_name }}-musl-x86_64
+      - name: Upload Release normal musl x86_64
+        uses: actions/upload-release-asset@v1.0.1
+        env:
+          GITHUB_TOKEN: ${{ secrets.TOKEN_ACTION }}
+        with:
+          upload_url: ${{ steps.get_release.outputs.upload_url }}
+          asset_path: ./mo-${{ steps.get_release.outputs.tag_name }}-musl-x86_64.zip
+          asset_name: mo-${{ steps.get_release.outputs.tag_name }}-musl-x86_64.zip
+          asset_content_type: application/zip
+
+  musl-arm64-build-job:
+    runs-on: aws-arm64-runner
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v3
+        with:
+          repository: ${{ inputs.repo }}
+          ref: ${{ inputs.tag }}
+          fetch-depth: '1'
+      - name: Get release
+        id: get_release
+        uses: bruceadams/get-release@v1.3.2
+        env:
+          GITHUB_TOKEN: ${{ secrets.TOKEN_ACTION }}
+      - name: Echo some info
+        run: |
+          echo ${{ steps.get_release.outputs.upload_url }}
+          echo ${{ steps.get_release.outputs.tag_name }}
+
+      - name: Set up Go
+        uses: ./.github/actions/setup_env
+      - name: Build normal
+        run: |
+          cd $GITHUB_WORKSPACE;
+          make musl;
+          # copy toml configure file
+          mkdir -p mo-${{ steps.get_release.outputs.tag_name }}-musl-arm64/etc
+          mv mo-service mo-${{ steps.get_release.outputs.tag_name }}-musl-arm64/
+          
+          mv ./etc/launch mo-${{ steps.get_release.outputs.tag_name }}-musl-arm64/etc/
+          if [ -d "./etc/launch-with-python-udf-server" ]; then
+            mv ./etc/launch-with-python-udf-server ./mo-${{ steps.get_release.outputs.tag_name }}-musl-arm64/etc/
+          fi
+          if [ -d "./pkg/udf/pythonservice/pyserver" ]; then
+            mkdir -p mo-${{ steps.get_release.outputs.tag_name }}-musl-arm64/pkg/udf/pythonservice
+            mv ./pkg/udf/pythonservice/pyserver ./mo-${{ steps.get_release.outputs.tag_name }}-musl-arm64/pkg/udf/pythonservice
+          fi
+          zip -r mo-${{ steps.get_release.outputs.tag_name }}-musl-arm64.zip mo-${{ steps.get_release.outputs.tag_name }}-musl-arm64
+      - name: Upload Release normal musl arm64
+        uses: actions/upload-release-asset@v1.0.1
+        env:
+          GITHUB_TOKEN: ${{ secrets.TOKEN_ACTION }}
+        with:
+          upload_url: ${{ steps.get_release.outputs.upload_url }}
+          asset_path: ./mo-${{ steps.get_release.outputs.tag_name }}-musl-arm64.zip
+          asset_name: mo-${{ steps.get_release.outputs.tag_name }}-musl-arm64.zip
+          asset_content_type: application/zip
