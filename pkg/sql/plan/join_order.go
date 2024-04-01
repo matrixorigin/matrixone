@@ -15,7 +15,6 @@
 package plan
 
 import (
-	"fmt"
 	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -523,9 +522,6 @@ func (builder *QueryBuilder) buildSubJoinTree(vertices []*joinVertex, vid int32)
 }
 
 func containsAllPKs(cols []int32, tableDef *plan.TableDef) bool {
-	if tableDef.Pkey == nil {
-		fmt.Print("dd")
-	}
 	pkNames := tableDef.Pkey.Names
 	pks := make([]int32, len(pkNames))
 	for i := range pkNames {
