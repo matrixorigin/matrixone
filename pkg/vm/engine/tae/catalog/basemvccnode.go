@@ -284,14 +284,14 @@ func (e *MVCCNode[T]) WriteTo(w io.Writer) (n int64, err error) {
 	return
 }
 
-func (e *MVCCNode[T]) ReadFromWithVersion(r io.Reader, ver uint16) (n int64, err error) {
+func (e *MVCCNode[T]) ReadFromWithVersion(r io.Reader, ver uint16, txnMVCCNodeVersion int) (n int64, err error) {
 	var sn int64
 	sn, err = e.EntryMVCCNode.ReadFrom(r)
 	if err != nil {
 		return
 	}
 	n += sn
-	sn, err = e.TxnMVCCNode.ReadFrom(r)
+	sn, err = e.TxnMVCCNode.ReadFromWithVersion(r, txnMVCCNodeVersion)
 	if err != nil {
 		return
 	}

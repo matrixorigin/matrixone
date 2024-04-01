@@ -31,6 +31,7 @@ type AppendNode struct {
 	maxRow   uint32
 	mvcc     *AppendMVCCHandle
 	id       *common.ID
+	version  uint16
 }
 
 func CompareAppendNode(e, o *AppendNode) int {
@@ -43,31 +44,17 @@ func MockAppendNode(ts types.TS, startRow, maxRow uint32, mvcc *AppendMVCCHandle
 			Start: ts,
 			End:   ts,
 		},
-		maxRow: maxRow,
-		mvcc:   mvcc,
-	}
-}
-
-func NewCommittedAppendNode(
-	ts types.TS,
-	startRow, maxRow uint32,
-	mvcc *AppendMVCCHandle) *AppendNode {
-	return &AppendNode{
-		TxnMVCCNode: &txnbase.TxnMVCCNode{
-			Start:   ts,
-			Prepare: ts,
-			End:     ts,
-		},
-		startRow: startRow,
-		maxRow:   maxRow,
-		mvcc:     mvcc,
+		maxRow:  maxRow,
+		mvcc:    mvcc,
+		version: IOET_WALTxnCommand_AppendNode_CurrVer,
 	}
 }
 
 func NewAppendNode(
 	txn txnif.AsyncTxn,
 	startRow, maxRow uint32,
-	mvcc *AppendMVCCHandle) *AppendNode {
+	mvcc *AppendMVCCHandle,
+	ver uint16) *AppendNode {
 	var startTs, ts types.TS
 	if txn != nil {
 		startTs = txn.GetStartTS()
@@ -83,6 +70,7 @@ func NewAppendNode(
 		startRow: startRow,
 		maxRow:   maxRow,
 		mvcc:     mvcc,
+		version:  ver,
 	}
 	return n
 }
@@ -200,14 +188,24 @@ func (node *AppendNode) ReadFrom(r io.Reader) (n int64, err error) {
 	}
 	n += int64(sn)
 	var sn2 int64
-	sn2, err = node.TxnMVCCNode.ReadFrom(r)
+	ver := node.decideTxnMVCCNodeVersion()
+	sn2, err = node.TxnMVCCNode.ReadFromWithVersion(r, ver)
 	if err != nil {
 		return
 	}
 	n += sn2
 	return
 }
-
+func (node *AppendNode) decideTxnMVCCNodeVersion() int {
+	switch node.version {
+	case IOET_WALTxnCommand_AppendNode_V1:
+		return txnbase.TxnMVCCNodeV1
+	case IOET_WALTxnCommand_AppendNode_V2:
+		return txnbase.TxnMVCCNodeV2
+	default:
+		panic(fmt.Sprintf("invalid append node version %d", node.version))
+	}
+}
 func (node *AppendNode) PrepareRollback() (err error) {
 	node.mvcc.Lock()
 	defer node.mvcc.Unlock()

@@ -252,7 +252,7 @@ func (n *AppendMVCCHandle) AddAppendNodeLocked(
 	if n.appends.IsEmpty() || !n.appends.GetUpdateNodeLocked().IsSameTxn(txn) {
 		// if the appends is empty or the last appendnode is not of the same txn,
 		// create a new appendnode and append it to the list.
-		an = NewAppendNode(txn, startRow, maxRow, n)
+		an = NewAppendNode(txn, startRow, maxRow, n, IOET_WALTxnCommand_AppendNode_CurrVer)
 		n.appends.InsertNode(an)
 		created = true
 	} else {

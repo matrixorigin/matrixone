@@ -33,13 +33,16 @@ const (
 	IOET_WALTxnCommand_PersistedDeleteNode uint16 = 3013
 
 	IOET_WALTxnCommand_AppendNode_V1          uint16 = 1
+	IOET_WALTxnCommand_AppendNode_V2          uint16 = 2
 	IOET_WALTxnCommand_DeleteNode_V1          uint16 = 1
 	IOET_WALTxnCommand_DeleteNode_V2          uint16 = 2
+	IOET_WALTxnCommand_DeleteNode_V3          uint16 = 3
 	IOET_WALTxnCommand_PersistedDeleteNode_V1 uint16 = 1
+	IOET_WALTxnCommand_PersistedDeleteNode_V2 uint16 = 2
 
-	IOET_WALTxnCommand_AppendNode_CurrVer          = IOET_WALTxnCommand_AppendNode_V1
-	IOET_WALTxnCommand_DeleteNode_CurrVer          = IOET_WALTxnCommand_DeleteNode_V2
-	IOET_WALTxnCommand_PersistedDeleteNode_CurrVer = IOET_WALTxnCommand_PersistedDeleteNode_V1
+	IOET_WALTxnCommand_AppendNode_CurrVer          = IOET_WALTxnCommand_AppendNode_V2
+	IOET_WALTxnCommand_DeleteNode_CurrVer          = IOET_WALTxnCommand_DeleteNode_V3
+	IOET_WALTxnCommand_PersistedDeleteNode_CurrVer = IOET_WALTxnCommand_PersistedDeleteNode_V2
 )
 
 func init() {
@@ -95,6 +98,45 @@ func init() {
 			return txnCmd, err
 		},
 	)
+	objectio.RegisterIOEnrtyCodec(
+		objectio.IOEntryHeader{
+			Type:    IOET_WALTxnCommand_AppendNode,
+			Version: IOET_WALTxnCommand_AppendNode_V2,
+		},
+		nil,
+		func(b []byte) (any, error) {
+			txnCmd := NewEmptyCmd(IOET_WALTxnCommand_AppendNode,
+				IOET_WALTxnCommand_AppendNode_V2)
+			err := txnCmd.UnmarshalBinary(b)
+			return txnCmd, err
+		},
+	)
+	objectio.RegisterIOEnrtyCodec(
+		objectio.IOEntryHeader{
+			Type:    IOET_WALTxnCommand_DeleteNode,
+			Version: IOET_WALTxnCommand_DeleteNode_V3,
+		},
+		nil,
+		func(b []byte) (any, error) {
+			txnCmd := NewEmptyCmd(IOET_WALTxnCommand_DeleteNode,
+				IOET_WALTxnCommand_DeleteNode_V3)
+			err := txnCmd.UnmarshalBinary(b)
+			return txnCmd, err
+		},
+	)
+	objectio.RegisterIOEnrtyCodec(
+		objectio.IOEntryHeader{
+			Type:    IOET_WALTxnCommand_PersistedDeleteNode,
+			Version: IOET_WALTxnCommand_PersistedDeleteNode_V2,
+		},
+		nil,
+		func(b []byte) (any, error) {
+			txnCmd := NewEmptyCmd(IOET_WALTxnCommand_PersistedDeleteNode,
+				IOET_WALTxnCommand_PersistedDeleteNode_V2)
+			err := txnCmd.UnmarshalBinary(b)
+			return txnCmd, err
+		},
+	)
 }
 
 type UpdateCmd struct {
@@ -112,7 +154,7 @@ func NewEmptyCmd(cmdType uint16, version uint16) *UpdateCmd {
 	if cmdType == IOET_WALTxnCommand_DeleteNode {
 		cmd.delete = NewDeleteNode(nil, 0, version)
 	} else if cmdType == IOET_WALTxnCommand_AppendNode {
-		cmd.append = NewAppendNode(nil, 0, 0, nil)
+		cmd.append = NewAppendNode(nil, 0, 0, nil, version)
 	} else if cmdType == IOET_WALTxnCommand_PersistedDeleteNode {
 		cmd.delete = NewEmptyPersistedDeleteNode()
 	}
@@ -162,8 +204,10 @@ func (c *UpdateCmd) GetDest() *common.ID {
 func (c *UpdateCmd) SetReplayTxn(txn txnif.AsyncTxn) {
 	switch c.cmdType {
 	case IOET_WALTxnCommand_AppendNode:
+		c.append.Prepare = txn.GetPrepareTS()
 		c.append.Txn = txn
 	case IOET_WALTxnCommand_DeleteNode, IOET_WALTxnCommand_PersistedDeleteNode:
+		c.delete.Prepare = txn.GetPrepareTS()
 		c.delete.Txn = txn
 	default:
 		panic(fmt.Sprintf("invalid command type %d", c.cmdType))

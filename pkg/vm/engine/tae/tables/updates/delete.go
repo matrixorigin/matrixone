@@ -481,11 +481,34 @@ func (node *DeleteNode) ReadFrom(r io.Reader) (n int64, err error) {
 		n += sn2
 		node.deltaloc = buf
 	}
-	if sn2, err = node.TxnMVCCNode.ReadFrom(r); err != nil {
+	txnMVCCNodeVersion := node.decideTxnMVCCNodeVersion()
+	if sn2, err = node.TxnMVCCNode.ReadFromWithVersion(r, txnMVCCNodeVersion); err != nil {
 		return
 	}
 	n += sn2
 	return
+}
+
+func (node *DeleteNode) decideTxnMVCCNodeVersion() int {
+	if node.IsPersistedDeletedNode() {
+		switch node.version {
+		case IOET_WALTxnCommand_PersistedDeleteNode_V1:
+			return txnbase.TxnMVCCNodeV1
+		case IOET_WALTxnCommand_PersistedDeleteNode_V2:
+			return txnbase.TxnMVCCNodeV2
+		default:
+			panic(fmt.Sprintf("invalid delete node version %d", node.version))
+		}
+	} else {
+		switch node.version {
+		case IOET_WALTxnCommand_DeleteNode_V1, IOET_WALTxnCommand_DeleteNode_V2:
+			return txnbase.TxnMVCCNodeV1
+		case IOET_WALTxnCommand_DeleteNode_V3:
+			return txnbase.TxnMVCCNodeV2
+		default:
+			panic(fmt.Sprintf("invalid delete node version %d", node.version))
+		}
+	}
 }
 
 func (node *DeleteNode) MakeCommand(id uint32) (cmd txnif.TxnCmd, err error) {

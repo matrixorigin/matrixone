@@ -40,6 +40,11 @@ var (
 	SnapshotAttr_LogIndex_Size = "log_index_size"
 )
 
+const (
+	TxnMVCCNodeV1 = 1
+	TxnMVCCNodeV2 = 2
+)
+
 func NewTxnMVCCNodeWithTxn(txn txnif.TxnReader) *TxnMVCCNode {
 	var ts types.TS
 	if txn != nil {
@@ -342,14 +347,6 @@ func (un *TxnMVCCNode) WriteTo(w io.Writer) (n int64, err error) {
 		return
 	}
 	n += int64(sn1)
-	if sn1, err = w.Write(un.Prepare[:]); err != nil {
-		return
-	}
-	n += int64(sn1)
-	if sn1, err = w.Write(un.End[:]); err != nil {
-		return
-	}
-	n += int64(sn1)
 	if sn1, err = w.Write(types.EncodeBool(&un.is1PC)); err != nil {
 		return
 	}
@@ -357,7 +354,7 @@ func (un *TxnMVCCNode) WriteTo(w io.Writer) (n int64, err error) {
 	return
 }
 
-func (un *TxnMVCCNode) ReadFrom(r io.Reader) (n int64, err error) {
+func (un *TxnMVCCNode) ReadFromV1(r io.Reader) (n int64, err error) {
 	var sn int
 	if sn, err = r.Read(un.Start[:]); err != nil {
 		return
@@ -377,6 +374,31 @@ func (un *TxnMVCCNode) ReadFrom(r io.Reader) (n int64, err error) {
 	}
 	n += int64(sn)
 	return
+}
+
+func (un *TxnMVCCNode) ReadFromV2(r io.Reader) (n int64, err error) {
+	var sn int
+	if sn, err = r.Read(un.Start[:]); err != nil {
+		return
+	}
+	n += int64(sn)
+
+	if sn, err = r.Read(types.EncodeBool(&un.is1PC)); err != nil {
+		return
+	}
+	n += int64(sn)
+	return
+}
+
+func (un *TxnMVCCNode) ReadFromWithVersion(r io.Reader, ver int) (n int64, err error) {
+	switch ver {
+	case TxnMVCCNodeV1:
+		return un.ReadFromV1(r)
+	case TxnMVCCNodeV2:
+		return un.ReadFromV2(r)
+	default:
+		panic(fmt.Sprintf("invalid version %d", ver))
+	}
 }
 
 func CompareTxnMVCCNode(e, o *TxnMVCCNode) int {
