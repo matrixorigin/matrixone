@@ -70,8 +70,6 @@ type LogServiceDriver struct {
 	appendtimes int
 
 	readDuration time.Duration
-
-	preCallbacks []func() error
 }
 
 func NewLogServiceDriver(cfg *Config) *LogServiceDriver {
