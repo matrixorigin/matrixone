@@ -1175,14 +1175,14 @@ func (mce *MysqlCmdExecutor) handleAnalyzeStmt(requestCtx context.Context, ses *
 	return mce.GetDoQueryFunc()(requestCtx, &UserInput{sql: sql})
 }
 
-// Note: for pass the compile quickly. We will remove the comments in the future.
-func (mce *MysqlCmdExecutor) handleExplainStmt(requestCtx context.Context, stmt *tree.ExplainStmt) error {
+func doExplainStmt(ses *Session, stmt *tree.ExplainStmt) error {
+	requestCtx := ses.GetRequestContext()
+
+	//1. generate the plan
 	es, err := getExplainOption(requestCtx, stmt.Options)
 	if err != nil {
 		return err
 	}
-
-	ses := mce.GetSession()
 
 	//get query optimizer and execute Optimize
 	plan, err := buildPlan(requestCtx, ses, ses.GetTxnCompileCtx(), stmt.Statement)
@@ -1202,52 +1202,66 @@ func (mce *MysqlCmdExecutor) handleExplainStmt(requestCtx context.Context, stmt 
 		return err
 	}
 
-	protocol := ses.GetMysqlProtocol()
-
+	//2. fill the result set
 	explainColName := "QUERY PLAN"
-	columns, err := GetExplainColumns(requestCtx, explainColName)
-	if err != nil {
-		return err
-	}
+	//column
+	col1 := new(MysqlColumn)
+	col1.SetColumnType(defines.MYSQL_TYPE_VAR_STRING)
+	col1.SetName(explainColName)
 
-	//	Step 1 : send column count and column definition.
-	//send column count
-	colCnt := uint64(len(columns))
-	err = protocol.SendColumnCountPacket(colCnt)
-	if err != nil {
-		return err
-	}
-	//send columns
-	//column_count * Protocol::ColumnDefinition packets
-	cmd := ses.GetCmd()
 	mrs := ses.GetMysqlResultSet()
-	for _, c := range columns {
-		mysqlc := c.(Column)
-		mrs.AddColumn(mysqlc)
-		//	mysql COM_QUERY response: send the column definition per column
-		err := protocol.SendColumnDefinitionPacket(requestCtx, mysqlc, int(cmd))
-		if err != nil {
-			return err
-		}
-	}
+	mrs.AddColumn(col1)
 
-	//	mysql COM_QUERY response: End after the column has been sent.
-	//	send EOF packet
-	err = protocol.SendEOFPacketIf(0, ses.GetServerStatus())
+	for _, line := range buffer.Lines {
+		mrs.AddRow([]any{line})
+	}
+	ses.rs = mysqlColDef2PlanResultColDef(mrs)
+
+	//3. fill the batch for saving the query result
+	bat, err := fillQueryBatch(ses, explainColName, buffer.Lines)
+	defer bat.Clean(ses.GetMemPool())
 	if err != nil {
 		return err
 	}
 
-	err = buildMoExplainQuery(explainColName, buffer, ses, getDataFromPipeline)
-	if err != nil {
-		return err
-	}
-
-	err = protocol.sendEOFOrOkPacket(0, ses.GetServerStatus())
+	// save query result
+	err = maySaveQueryResult(ses, bat)
 	if err != nil {
 		return err
 	}
 	return nil
+}
+
+func fillQueryBatch(ses *Session, explainColName string, lines []string) (*batch.Batch, error) {
+	bat := batch.New(true, []string{explainColName})
+	typ := types.New(types.T_varchar, types.MaxVarcharLen, 0)
+
+	cnt := len(lines)
+	bat.SetRowCount(cnt)
+	bat.Vecs[0] = vector.NewVec(typ)
+	err := vector.AppendStringList(bat.Vecs[0], lines, nil, ses.GetMemPool())
+	if err != nil {
+		return nil, err
+	}
+	return bat, nil
+}
+
+// Note: for pass the compile quickly. We will remove the comments in the future.
+func (mce *MysqlCmdExecutor) handleExplainStmt(requestCtx context.Context, stmt *tree.ExplainStmt, cwIndex, cwsLen int) error {
+	var err error
+	ses := mce.GetSession()
+	proto := ses.GetMysqlProtocol()
+	err = doExplainStmt(ses, stmt)
+	if err != nil {
+		return err
+	}
+	mer := NewMysqlExecutionResult(0, 0, 0, 0, ses.GetMysqlResultSet())
+	resp := mce.ses.SetNewResponse(ResultResponse, 0, int(COM_QUERY), mer, cwIndex, cwsLen)
+
+	if err := proto.SendResponse(ses.requestCtx, resp); err != nil {
+		return moerr.NewInternalError(ses.requestCtx, "routine send response failed. error:%v ", err)
+	}
+	return err
 }
 
 func doPrepareStmt(ctx context.Context, ses *Session, st *tree.PrepareStmt, sql string) (*PrepareStmt, error) {
@@ -1689,22 +1703,13 @@ func doShowCollation(ses *Session, proc *process.Process, sc *tree.ShowCollation
 		mrs.AddRow(row)
 	}
 
-	// oq := newFakeOutputQueue(mrs)
-	// if err = fillResultSet(oq, bat, ses); err != nil {
-	// 	return err
-	// }
-
 	ses.SetMysqlResultSet(mrs)
 	ses.rs = mysqlColDef2PlanResultColDef(mrs)
 
 	// save query result
-	if openSaveQueryResult(ses) {
-		if err := saveQueryResult(ses, bat); err != nil {
-			return err
-		}
-		if err := saveQueryResultMeta(ses); err != nil {
-			return err
-		}
+	err = maySaveQueryResult(ses, bat)
+	if err != nil {
+		return err
 	}
 
 	return err
@@ -3382,7 +3387,7 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 		}
 	case *tree.ExplainStmt:
 		selfHandle = true
-		if err = mce.handleExplainStmt(requestCtx, st); err != nil {
+		if err = mce.handleExplainStmt(requestCtx, st, i, len(cws)); err != nil {
 			return
 		}
 	case *tree.ExplainAnalyze:
