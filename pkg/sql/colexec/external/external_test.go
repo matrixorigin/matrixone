@@ -313,7 +313,7 @@ func Test_makeBatch(t *testing.T) {
 	})
 }
 
-func Test_GetBatchData(t *testing.T) {
+func Test_getBatchData(t *testing.T) {
 	convey.Convey("getBatchData succ", t, func() {
 		line := []string{"1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "2020-09-07",
 			"2020-09-07 00:00:00", "16", "17", "2020-09-07 00:00:00"}
@@ -334,9 +334,9 @@ func Test_GetBatchData(t *testing.T) {
 
 		for idx, attr := range attrs {
 			if idx == 0 {
-				buf.WriteString(fmt.Sprintf("\"%s\":\"%s\"", line[idx], line[idx]))
+				buf.WriteString(fmt.Sprintf(`"%s":"%s"`, line[idx], line[idx]))
 			} else {
-				buf.WriteString(fmt.Sprintf("\"%s\":\"%s\"", attr, line[idx]))
+				buf.WriteString(fmt.Sprintf(`"%s":"%s"`, attr, line[idx]))
 			}
 			if idx != len(attrs)-1 {
 				buf.WriteString(",")
@@ -347,7 +347,7 @@ func Test_GetBatchData(t *testing.T) {
 
 		buf.WriteString("[")
 		for idx := range line {
-			buf.WriteString(fmt.Sprintf("\"%s\"", line[idx]))
+			buf.WriteString(fmt.Sprintf(`"%s"`, line[idx]))
 			if idx != len(attrs)-1 {
 				buf.WriteString(",")
 			}
@@ -358,7 +358,7 @@ func Test_GetBatchData(t *testing.T) {
 
 		buf.WriteString("{")
 		for i := 0; i < len(line)-1; i++ {
-			buf.WriteString(fmt.Sprintf("\"%s\":\"%s\",", attrs[i], line[i]))
+			buf.WriteString(fmt.Sprintf(`"%s":"%s",`, attrs[i], line[i]))
 			if i != len(line)-2 {
 				buf.WriteString(",")
 			}
@@ -369,7 +369,7 @@ func Test_GetBatchData(t *testing.T) {
 
 		buf.WriteString("[")
 		for i := 0; i < len(line)-1; i++ {
-			buf.WriteString(fmt.Sprintf("\"%s\"", line[i]))
+			buf.WriteString(fmt.Sprintf(`"%s"`, line[i]))
 			if i != len(line)-2 {
 				buf.WriteString(",")
 			}
@@ -517,12 +517,13 @@ func Test_GetBatchData(t *testing.T) {
 		_, err = getBatchData(param, plh, proc)
 		convey.So(err, convey.ShouldNotBeNil)
 
-		// for i := 0; i < len(attrs); i++ {
-		// 	line[i] = "\\N"
-		// }
-		// plh.moCsvLineArray = [][]csvparser.Field{buildFields(line)}
-		// _, err = getBatchData(param, plh, proc)
-		// convey.So(err, convey.ShouldBeNil)
+		fields := make([]csvparser.Field, len(attrs))
+		for i := range attrs {
+			fields[i].IsNull = true
+		}
+		plh.moCsvLineArray = [][]csvparser.Field{fields}
+		_, err = getBatchData(param, plh, proc)
+		convey.So(err, convey.ShouldBeNil)
 
 		line = []string{"0", "1.0", "2.0", "3.0", "4.0", "5.0", "6.0", "7.0", "8.0", "9.0", "10.0", "11.0", "13", "2020-09-07",
 			"2020-09-07 00:00:00", "16", "17", "2020-09-07 00:00:00"}
