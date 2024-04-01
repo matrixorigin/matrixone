@@ -3,7 +3,7 @@ insert into test values(1);
 create table new_test like test;
 show create table new_test;
 Table    Create Table
-new_test    CREATE TABLE `new_test` (\n`a` INT DEFAULT NULL\n)
+new_test    CREATE TABLE `new_test` (\n`a` INT DEFAULT null\n)
 drop table test;
 drop table new_test;
 create database test1;
@@ -15,6 +15,6 @@ use test2;
 create table new_test like test1.test;
 show create table new_test;
 Table    Create Table
-new_test    CREATE TABLE `new_test` (\n`a` INT DEFAULT NULL\n)
+new_test    CREATE TABLE `new_test` (\n`a` INT DEFAULT null\n)
 drop database test1;
 drop database test2;

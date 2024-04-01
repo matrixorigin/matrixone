@@ -3124,7 +3124,7 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 				*tree.LockTableStmt, *tree.UnLockTableStmt,
 				*tree.CreateStage, *tree.DropStage, *tree.AlterStage, *tree.CreateSource, *tree.AlterSequence, *tree.CreateSnapShot, *tree.DropSnapShot:
 				// skip create table as select
-				if createTblStmt, ok := stmt.(*tree.CreateTable); ok && (createTblStmt.IsAsSelect || createTblStmt.IsAsLike) {
+				if createTblStmt, ok := stmt.(*tree.CreateTable); ok && createTblStmt.IsAsSelect {
 					return nil
 				}
 
@@ -4391,12 +4391,6 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, input *UserI
 			ses.proc.UnixTime = proc.UnixTime
 		}
 
-		// rewrite create table as stmt
-		if st, ok := stmt.(*tree.CreateTable); ok && st.IsAsLike {
-			inputSql := mce.initCreateTableLikeSql(st)
-			return mce.doComQuery(requestCtx, &UserInput{sql: inputSql})
-		}
-
 		err = mce.executeStmt(requestCtx, ses, stmt, proc, cw, i, cws, proto, pu, tenant, userNameOnly, sqlRecord[i])
 		if err != nil {
 			return err
@@ -5063,12 +5057,4 @@ func (mce *MysqlCmdExecutor) handleSetOption(ctx context.Context, data []byte) (
 	}
 
 	return nil
-}
-
-func (mce *MysqlCmdExecutor) initCreateTableLikeSql(stmt *tree.CreateTable) (sql string) {
-	newTable := tree.String(stmt.Table, dialect.MYSQL)
-	oldTable := tree.String(stmt.LikeTableName, dialect.MYSQL)
-
-	sql = fmt.Sprintf("CREATE TABLE %s AS SELECT * FROM %s LIMIT 0;", newTable, oldTable)
-	return sql
 }
