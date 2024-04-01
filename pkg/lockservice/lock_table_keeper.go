@@ -189,7 +189,7 @@ func (k *lockTableKeeper) doKeepLockTableBind(ctx context.Context) {
 	defer cancel()
 	resp, err := k.client.Send(ctx, req)
 	if err != nil {
-		logKeepBindFailed(err)
+		logKeepBindFailed(k.serviceID, err)
 		return
 	}
 	defer releaseResponse(resp)

@@ -1248,19 +1248,19 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			Typ: node.LockTargets[0].GetPrimaryColTyp(),
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
-					RelPos: preNode.BindingTags[0],
+					RelPos: node.BindingTags[1],
 					ColPos: node.LockTargets[0].PrimaryColIdxInBat,
 				},
 			},
 		}
-		oldPos := [2]int32{preNode.BindingTags[0], node.LockTargets[0].PrimaryColIdxInBat}
+		oldPos := [2]int32{node.BindingTags[1], node.LockTargets[0].PrimaryColIdxInBat}
 		increaseRefCnt(pkexpr, 1, colRefCnt)
 		childRemapping, err := builder.remapAllColRefs(node.Children[0], step, colRefCnt, colRefBool, sinkColRef)
 		if err != nil {
 			return nil, err
 		}
 
-		tableDef := preNode.GetTableDef()
+		tableDef := node.GetTableDef()
 		if tableDef.Partition != nil {
 			partitionIdx := len(preNode.ProjectList)
 			partitionExpr := DeepCopyExpr(tableDef.Partition.PartitionExpression)
@@ -2232,7 +2232,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 				Children:    []int32{nodeID},
 				TableDef:    tableDef,
 				LockTargets: []*plan.LockTarget{lockTarget},
-				BindingTags: []int32{builder.genNewTag()},
+				BindingTags: []int32{builder.genNewTag(), builder.qry.Nodes[nodeID].BindingTags[0]},
 			}
 
 			if astLimit == nil {
@@ -2358,6 +2358,15 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 		exprStr := proj.String()
 		if _, ok := ctx.projectByExpr[exprStr]; !ok {
 			ctx.projectByExpr[exprStr] = int32(i)
+		}
+
+		if exprCol, ok := proj.Expr.(*plan.Expr_Col); ok {
+			if col := exprCol.Col; col != nil {
+				if binding, ok := ctx.bindingByTag[col.RelPos]; ok {
+					col.DbName = binding.db
+					col.TblName = binding.table
+				}
+			}
 		}
 
 		if !notCacheable {
@@ -3618,7 +3627,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 						return 0, err
 					}
 					builder.qry.Nodes[nodeID].FilterList = accountFilterExprs
-				} else if dbName == catalog.MO_SYSTEM_METRICS && tableName == catalog.MO_METRIC {
+				} else if dbName == catalog.MO_SYSTEM_METRICS && (tableName == catalog.MO_METRIC || tableName == catalog.MO_SQL_STMT_CU) {
 					motablesFilter := util.BuildSysMetricFilter(acctName)
 					ctx.binder = NewWhereBinder(builder, ctx)
 					accountFilterExprs, err := splitAndBindCondition(motablesFilter, NoAlias, ctx)
@@ -3741,7 +3750,8 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 			builder.nameByColRef[[2]int32{tag, int32(i)}] = name
 		}
 
-		binding = NewBinding(tag, nodeID, table, node.TableDef.TblId, cols, colIsHidden, types, util.TableIsClusterTable(node.TableDef.TableType))
+		binding = NewBinding(tag, nodeID, node.TableDef.DbName, table, node.TableDef.TblId, cols, colIsHidden, types,
+			util.TableIsClusterTable(node.TableDef.TableType))
 	} else {
 		// Subquery
 		subCtx := builder.ctxByNode[nodeID]
@@ -3781,7 +3791,7 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 			builder.nameByColRef[[2]int32{tag, int32(i)}] = name
 		}
 
-		binding = NewBinding(tag, nodeID, table, 0, cols, colIsHidden, types, false)
+		binding = NewBinding(tag, nodeID, "", table, 0, cols, colIsHidden, types, false)
 	}
 
 	ctx.bindings = append(ctx.bindings, binding)

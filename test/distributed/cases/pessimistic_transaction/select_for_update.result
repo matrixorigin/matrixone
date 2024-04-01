@@ -715,7 +715,6 @@ c1    c2    c3
 1    results    20
 insert into su_04 values(10,'tell',96);
 Duplicate entry '10' for key '__mo_index_idx_col'
-Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
 update su_04 set c2='wed';
 delete from su_04 where c1=2;
 commit;
@@ -1120,3 +1119,18 @@ drop table su_07;
 select * from su_07;
 SQL parser error: table "su_07" does not exist
 commit;
+drop database if exists test;
+create database test;
+use test;
+drop table if exists t1;
+create table t1(a int primary key, b int unique key);
+insert into t1 select result, result from generate_series(1,10000)g;
+select mo_ctl('dn','flush','test.t1');
+mo_ctl(dn, flush, test.t1)
+{\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
+select * from t1 where b in (1,2) for update;
+a    b
+1    1
+2    2
+drop table t1;
+drop database test;

@@ -532,8 +532,11 @@ func (entry *TableEntry) ApplyCommit() (err error) {
 	if entry.isColumnChangedInSchema() {
 		entry.FreezeAppend()
 	}
+	entry.RLock()
+	schema := entry.GetLatestNodeLocked().BaseNode.Schema
+	entry.RUnlock()
 	// update the shortcut to the lastest schema
-	entry.TableNode.schema.Store(entry.GetLatestNodeLocked().BaseNode.Schema)
+	entry.TableNode.schema.Store(schema)
 	return
 }
 

@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/pb/status"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -43,6 +44,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
+	db_holder "github.com/matrixorigin/matrixone/pkg/util/export/etl/db"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -210,6 +212,10 @@ type Session struct {
 	sentRows atomic.Int64
 	// writeCsvBytes is used to record bytes sent by `select ... into 'file.csv'` for motrace.StatementInfo
 	writeCsvBytes atomic.Int64
+	// packetCounter count the packet communicated with client.
+	packetCounter atomic.Int64
+	// payloadCounter count the payload send by `load data`
+	payloadCounter int64
 
 	createdTime time.Time
 
@@ -289,6 +295,9 @@ type Session struct {
 
 	// timestampMap record timestamp for statistical purposes
 	timestampMap map[TS]time.Time
+
+	// FromProxy denotes whether the session is dispatched from proxy
+	fromProxy bool
 }
 
 func (ses *Session) ClearStmtProfile() {
@@ -475,6 +484,32 @@ func (ses *Session) GetSqlHelper() *SqlHelper {
 	return ses.sqlHelper
 }
 
+func (ses *Session) CountPayload(length int) {
+	if ses == nil {
+		return
+	}
+	ses.payloadCounter += int64(length)
+}
+func (ses *Session) CountPacket(delta int64) {
+	if ses == nil {
+		return
+	}
+	ses.packetCounter.Add(delta)
+}
+func (ses *Session) GetPacketCnt() int64 {
+	if ses == nil {
+		return 0
+	}
+	return ses.packetCounter.Load()
+}
+func (ses *Session) ResetPacketCounter() {
+	if ses == nil {
+		return
+	}
+	ses.packetCounter.Store(0)
+	ses.payloadCounter = 0
+}
+
 // The update version. Four function.
 func (ses *Session) SetAutoIncrCacheManager(aicm *defines.AutoIncrCacheManager) {
 	ses.mu.Lock()
@@ -636,11 +671,18 @@ func NewSession(proto Protocol, mp *mpool.MPool, pu *config.ParameterUnit,
 }
 
 func (ses *Session) Close() {
+	ses.protocol = nil
 	ses.mrs = nil
 	ses.data = nil
 	ses.ep = nil
-	ses.txnHandler = nil
-	ses.txnCompileCtx = nil
+	if ses.txnHandler != nil {
+		ses.txnHandler.ses = nil
+		ses.txnHandler = nil
+	}
+	if ses.txnCompileCtx != nil {
+		ses.txnCompileCtx.ses = nil
+		ses.txnCompileCtx = nil
+	}
 	ses.storage = nil
 	ses.sql = ""
 	ses.sysVars = nil
@@ -668,7 +710,10 @@ func (ses *Session) Close() {
 	ses.statsCache = nil
 	ses.seqCurValues = nil
 	ses.seqLastValue = nil
-	ses.sqlHelper = nil
+	if ses.sqlHelper != nil {
+		ses.sqlHelper.ses = nil
+		ses.sqlHelper = nil
+	}
 	ses.ClearStmtProfile()
 	//  The mpool cleanup must be placed at the end,
 	// and you must wait for all resources to be cleaned up before you can delete the mpool
@@ -678,6 +723,7 @@ func (ses *Session) Close() {
 		for _, bat := range bats {
 			bat.Clean(ses.proc.Mp())
 		}
+		ses.proc = nil
 	}
 	if ses.isNotBackgroundSession {
 		mp := ses.GetMemPool()
@@ -690,6 +736,9 @@ func (ses *Session) Close() {
 	}
 
 	ses.timestampMap = nil
+	ses.upstream = nil
+	ses.rm = nil
+	ses.rt = nil
 }
 
 // BackgroundSession executing the sql in background
@@ -745,8 +794,8 @@ func (bgs *BackgroundSession) Close() {
 
 	if bgs.Session != nil {
 		bgs.Session.Close()
+		bgs.Session = nil
 	}
-	bgs = nil
 }
 
 func (ses *Session) GetIncBlockIdx() int {
@@ -1029,6 +1078,12 @@ func (ses *Session) GenNewStmtId() uint32 {
 	return ses.lastStmtId
 }
 
+func (ses *Session) SetLastStmtID(id uint32) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	ses.lastStmtId = id
+}
+
 func (ses *Session) GetLastStmtId() uint32 {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
@@ -1240,6 +1295,16 @@ func (ses *Session) GetPrepareStmt(name string) (*PrepareStmt, error) {
 	return nil, moerr.NewInvalidState(ses.requestCtx, "prepared statement '%s' does not exist", name)
 }
 
+func (ses *Session) GetPrepareStmts() []*PrepareStmt {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	ret := make([]*PrepareStmt, 0, len(ses.prepareStmts))
+	for _, st := range ses.prepareStmts {
+		ret = append(ret, st)
+	}
+	return ret
+}
+
 func (ses *Session) RemovePrepareStmt(name string) {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
@@ -1295,7 +1360,6 @@ func (ses *Session) GetGlobalVar(name string) (interface{}, error) {
 func (ses *Session) GetTxnCompileCtx() *TxnCompilerContext {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
-	ses.txnCompileCtx.proc = ses.proc
 	return ses.txnCompileCtx
 }
 
@@ -1361,6 +1425,18 @@ func (ses *Session) GetSessionVar(name string) (interface{}, error) {
 			return gVal, nil
 		}
 		return ses.GetSysVar(ciname), nil
+	} else {
+		return nil, moerr.NewInternalError(ses.GetRequestContext(), errorSystemVariableDoesNotExist())
+	}
+}
+
+func (ses *Session) GetSessionVarLocked(name string) (interface{}, error) {
+	if def, gVal, ok := ses.gSysVars.GetGlobalSysVar(name); ok {
+		ciname := strings.ToLower(name)
+		if def.GetScope() == ScopeGlobal {
+			return gVal, nil
+		}
+		return ses.sysVars[ciname], nil
 	} else {
 		return nil, moerr.NewInternalError(ses.GetRequestContext(), errorSystemVariableDoesNotExist())
 	}
@@ -1529,6 +1605,9 @@ func (ses *Session) AuthenticateUser(userInput string, dbName string, authRespon
 	isSpecial, pwdBytes, specialAccount = isSpecialUser(tenant.GetUser())
 	if isSpecial && specialAccount.IsMoAdminRole() {
 		ses.SetTenantInfo(specialAccount)
+		if len(ses.requestLabel) == 0 {
+			ses.requestLabel = db_holder.GetLabelSelector()
+		}
 		return GetPassWord(HashPassWordWithByte(pwdBytes))
 	}
 
@@ -2001,7 +2080,12 @@ func executeStmtInSameSession(ctx context.Context, mce *MysqlCmdExecutor, ses *S
 	// inherit database
 	ses.SetDatabaseName(prevDB)
 	//restore normal protocol and output callback
+	proc := ses.GetTxnCompileCtx().GetProcess()
 	defer func() {
+		//@todo we need to improve: make one session, one proc, one txnOperator
+		p := ses.GetTxnCompileCtx().GetProcess()
+		p.FreeVectors()
+		ses.GetTxnCompileCtx().SetProcess(proc)
 		ses.SetOptionBits(prevOptionBits)
 		ses.SetServerStatus(prevServerStatus)
 		ses.SetOutputCallback(getDataFromPipeline)
@@ -2034,6 +2118,7 @@ var NewBackgroundHandler = func(
 
 func (bh *BackgroundHandler) Close() {
 	bh.mce.Close()
+	bh.mce = nil
 	bh.ses.Close()
 }
 
@@ -2303,6 +2388,7 @@ func (ses *Session) StatusSession() *status.Session {
 				QueryStart:    time.Time{},
 				ClientHost:    ses.GetMysqlProtocol().Peer(),
 				Role:          roleName,
+				FromProxy:     ses.fromProxy,
 			}
 		}
 	}
@@ -2325,6 +2411,7 @@ func (ses *Session) StatusSession() *status.Session {
 		QueryStart:    ses.GetQueryStart(),
 		ClientHost:    ses.GetMysqlProtocol().Peer(),
 		Role:          roleName,
+		FromProxy:     ses.fromProxy,
 	}
 }
 
@@ -2374,4 +2461,113 @@ func checkPlanIsInsertValues(proc *process.Process,
 		}
 	}
 	return false, nil
+}
+
+func commitAfterMigrate(ses *Session, err error) {
+	if err != nil {
+		rErr := ses.GetTxnHandler().RollbackTxn()
+		if rErr != nil {
+			logutil.Errorf("failed to rollback txn: %v", rErr)
+		}
+	}
+
+	// Commit txn manually.
+	if cErr := ses.GetTxnHandler().CommitTxn(); cErr != nil {
+		logutil.Errorf("failed to commit txn: %v", cErr)
+		return
+	}
+	ses.ClearServerStatus(SERVER_STATUS_IN_TRANS)
+	ses.ClearOptionBits(OPTION_BEGIN)
+}
+
+type dbMigration struct {
+	db       string
+	commitFn func(*Session, error)
+}
+
+func newDBMigration(db string) *dbMigration {
+	return &dbMigration{
+		db:       db,
+		commitFn: commitAfterMigrate,
+	}
+}
+
+func (d *dbMigration) Migrate(ses *Session) error {
+	if d.db == "" {
+		return nil
+	}
+	var err error
+	defer func() {
+		if d.commitFn != nil {
+			d.commitFn(ses, err)
+		}
+	}()
+	err = doUse(ses.requestCtx, ses, d.db)
+	return err
+}
+
+type prepareStmtMigration struct {
+	name       string
+	sql        string
+	paramTypes []byte
+	commitFn   func(*Session, error)
+}
+
+func newPrepareStmtMigration(name string, sql string, paramTypes []byte) *prepareStmtMigration {
+	return &prepareStmtMigration{
+		name:       name,
+		sql:        sql,
+		paramTypes: paramTypes,
+		commitFn:   commitAfterMigrate,
+	}
+}
+
+func (p *prepareStmtMigration) Migrate(ses *Session) error {
+	var err error
+	v, err := ses.GetGlobalVar("lower_case_table_names")
+	if err != nil {
+		return err
+	}
+	if !strings.HasPrefix(strings.ToLower(p.sql), "prepare") {
+		p.sql = fmt.Sprintf("prepare %s from %s", p.name, p.sql)
+	}
+	stmts, err := mysql.Parse(ses.requestCtx, p.sql, v.(int64))
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if p.commitFn != nil {
+			p.commitFn(ses, err)
+		}
+	}()
+	if _, err = doPrepareStmt(ses.requestCtx, ses, stmts[0].(*tree.PrepareStmt), p.sql, p.paramTypes); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (ses *Session) Migrate(req *query.MigrateConnToRequest) error {
+	dbm := newDBMigration(req.DB)
+	if err := dbm.Migrate(ses); err != nil {
+		return err
+	}
+
+	var maxStmtID uint32
+	for _, p := range req.PrepareStmts {
+		if p == nil {
+			continue
+		}
+		pm := newPrepareStmtMigration(p.Name, p.SQL, p.ParamTypes)
+		if err := pm.Migrate(ses); err != nil {
+			return err
+		}
+		id := parsePrepareStmtID(p.Name)
+		if id > maxStmtID {
+			maxStmtID = id
+		}
+	}
+	if maxStmtID > 0 {
+		ses.SetLastStmtID(maxStmtID)
+	}
+	return nil
 }

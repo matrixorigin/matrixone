@@ -34,6 +34,7 @@ type TestRunner interface {
 
 	CleanPenddingCheckpoint()
 	ForceGlobalCheckpoint(end types.TS, versionInterval time.Duration) error
+	ForceGlobalCheckpointSynchronously(ctx context.Context, end types.TS, versionInterval time.Duration) error
 	ForceCheckpointForBackup(end types.TS) (string, error)
 	ForceIncrementalCheckpoint(end types.TS, truncate bool) error
 	IsAllChangesFlushed(start, end types.TS, printTree bool) bool
@@ -92,6 +93,9 @@ func (r *runner) ForceGlobalCheckpoint(end types.TS, versionInterval time.Durati
 	} else {
 		end = r.MaxCheckpoint().GetEnd()
 	}
+	if versionInterval == 0 {
+		versionInterval = r.options.globalVersionInterval
+	}
 	r.globalCheckpointQueue.Enqueue(&globalCheckpointContext{
 		force:    true,
 		end:      end,
@@ -99,6 +103,33 @@ func (r *runner) ForceGlobalCheckpoint(end types.TS, versionInterval time.Durati
 	})
 	return nil
 }
+
+func (r *runner) ForceGlobalCheckpointSynchronously(ctx context.Context, end types.TS, versionInterval time.Duration) error {
+	prevGlobalEnd := types.TS{}
+	global, _ := r.storage.globals.Max()
+	if global != nil {
+		prevGlobalEnd = global.end
+	}
+
+	r.ForceGlobalCheckpoint(end, versionInterval)
+
+	op := func() (ok bool, err error) {
+		global, _ := r.storage.globals.Max()
+		if global == nil {
+			return false, nil
+		}
+		return global.end.Greater(prevGlobalEnd), nil
+	}
+	err := common.RetryWithIntervalAndTimeout(
+		op,
+		time.Minute,
+		r.options.forceFlushCheckInterval, false)
+	if err != nil {
+		return moerr.NewInternalError(ctx, "force global checkpoint failed: %v", err)
+	}
+	return nil
+}
+
 func (r *runner) ForceFlushWithInterval(ts types.TS, ctx context.Context, forceDuration, flushInterval time.Duration) (err error) {
 	makeCtx := func() *DirtyCtx {
 		tree := r.source.ScanInRangePruned(types.TS{}, ts)

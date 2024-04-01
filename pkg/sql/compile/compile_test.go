@@ -17,11 +17,12 @@ package compile
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"os"
 	"testing"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
@@ -101,7 +102,10 @@ func (w *Ws) Rollback(ctx context.Context) error {
 	return nil
 }
 
-func (w *Ws) WriteOffset() uint64 {
+func (w *Ws) UpdateSnapshotWriteOffset() {
+}
+
+func (w *Ws) GetSnapshotWriteOffset() int {
 	return 0
 }
 
@@ -124,6 +128,8 @@ func TestCompile(t *testing.T) {
 	txnOperator.EXPECT().GetWorkspace().Return(&Ws{}).AnyTimes()
 	txnOperator.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
 	txnOperator.EXPECT().ResetRetry(gomock.Any()).AnyTimes()
+	txnOperator.EXPECT().EnterRunSql().Return().AnyTimes()
+	txnOperator.EXPECT().ExitRunSql().Return().AnyTimes()
 
 	txnClient := mock_frontend.NewMockTxnClient(ctrl)
 	txnClient.EXPECT().New(gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()

@@ -106,6 +106,27 @@ func (db *DB) ForceCheckpoint(
 	return err
 }
 
+func (db *DB) ForceGlobalCheckpoint(
+	ctx context.Context,
+	ts types.TS,
+	flushDuration time.Duration) (err error) {
+	// FIXME: cannot disable with a running job
+	db.BGCheckpointRunner.DisableCheckpoint()
+	defer db.BGCheckpointRunner.EnableCheckpoint()
+	db.BGCheckpointRunner.CleanPenddingCheckpoint()
+	t0 := time.Now()
+	err = db.BGCheckpointRunner.ForceFlush(ts, ctx, flushDuration)
+	logutil.Infof("[Force Global Checkpoint] flush takes %v: %v", time.Since(t0), err)
+	if err != nil {
+		return err
+	}
+	if err = db.BGCheckpointRunner.ForceGlobalCheckpointSynchronously(ctx, ts, 0); err != nil {
+		return err
+	}
+	logutil.Infof("[Force Global Checkpoint] takes %v", time.Since(t0))
+	return err
+}
+
 func (db *DB) ForceCheckpointForBackup(
 	ctx context.Context,
 	ts types.TS,
@@ -130,6 +151,10 @@ func (db *DB) ForceCheckpointForBackup(
 
 func (db *DB) StartTxn(info []byte) (txnif.AsyncTxn, error) {
 	return db.TxnMgr.StartTxn(info)
+}
+
+func (db *DB) StartTxnWithLatestTS(info []byte) (txnif.AsyncTxn, error) {
+	return db.TxnMgr.StartTxnWithLatestTS(info)
 }
 
 func (db *DB) CommitTxn(txn txnif.AsyncTxn) (err error) {

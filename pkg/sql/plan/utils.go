@@ -1104,12 +1104,14 @@ func ConstantFold(bat *batch.Batch, expr *plan.Expr, proc *process.Process, varA
 	if f.CannotFold() || f.IsRealTimeRelated() {
 		return expr, nil
 	}
+	isVec := false
 	for i := range fn.Args {
 		foldExpr, errFold := ConstantFold(bat, fn.Args[i], proc, varAndParamIsConst)
 		if errFold != nil {
 			return nil, errFold
 		}
 		fn.Args[i] = foldExpr
+		isVec = isVec || foldExpr.GetVec() != nil
 	}
 	if !rule.IsConstant(expr, varAndParamIsConst) {
 		return expr, nil
@@ -1121,7 +1123,7 @@ func ConstantFold(bat *batch.Batch, expr *plan.Expr, proc *process.Process, varA
 	}
 	defer vec.Free(proc.Mp())
 
-	if !vec.IsConst() && vec.Length() > 1 {
+	if isVec {
 		data, err := vec.MarshalBinary()
 		if err != nil {
 			return expr, nil
@@ -1863,4 +1865,21 @@ func HasMoCtrl(expr *plan.Expr) bool {
 	default:
 		return false
 	}
+}
+
+// IsFkSelfRefer checks the foreign key referencing itself
+func IsFkSelfRefer(fkDbName, fkTableName, curDbName, curTableName string) bool {
+	return fkDbName == curDbName && fkTableName == curTableName
+}
+
+// HasFkSelfReferOnly checks the foreign key referencing itself only.
+// If there is no children tables, it also returns true
+// the tbleId 0 is special. it always denotes the table itself.
+func HasFkSelfReferOnly(tableDef *TableDef) bool {
+	for _, tbl := range tableDef.RefChildTbls {
+		if tbl != 0 {
+			return false
+		}
+	}
+	return true
 }

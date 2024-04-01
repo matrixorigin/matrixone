@@ -283,6 +283,7 @@ func (cc *CatalogCache) GetDatabase(db *DatabaseItem) bool {
 			item.Name == db.Name {
 			find = true
 			db.Id = item.Id
+			db.Rowid = item.Rowid
 			db.CreateSql = item.CreateSql
 			db.Typ = item.Typ
 		}
@@ -773,68 +774,4 @@ func getTableDef(tblItem *TableItem, coldefs []engine.TableDef) *plan.TableDef {
 		Indexes:       indexes,
 		Version:       tblItem.Version,
 	}
-}
-
-// TODO(ghs)
-// is debug for #13151, will remove later
-func (cc *CatalogCache) TraverseDbAndTbl() (dbs []DebugDatabaseItem, tbls []DebugTableItem) {
-	dbs = cc.databases.TraverseDatabaseCache()
-	tbls = cc.tables.TraverseTableCache()
-	return
-}
-
-type DebugTableItem struct {
-	AccountId  uint32
-	DatabaseId uint64
-	Name       string
-	Ts         timestamp.Timestamp
-	Id         uint64
-	Deleted    bool
-}
-
-func (dt *DebugTableItem) String() string {
-	return fmt.Sprintf("%d-%d-%d-%s-%v-%s",
-		dt.AccountId, dt.DatabaseId, dt.Id, dt.Name, dt.Deleted, types.TimestampToTS(dt.Ts).ToString())
-}
-
-type DebugDatabaseItem struct {
-	AccountId uint32
-	Name      string
-	Ts        timestamp.Timestamp
-	Id        uint64
-	Deleted   bool
-}
-
-func (dd *DebugDatabaseItem) String() string {
-	return fmt.Sprintf("%d-%d-%s-%v-%s",
-		dd.AccountId, dd.Id, dd.Name, dd.Deleted, types.TimestampToTS(dd.Ts).ToString())
-}
-
-func (c *tableCache) TraverseTableCache() (ret []DebugTableItem) {
-	c.data.Scan(func(tblItem *TableItem) bool {
-		ret = append(ret, DebugTableItem{
-			Ts:         tblItem.Ts,
-			Id:         tblItem.Id,
-			Name:       tblItem.Name,
-			Deleted:    tblItem.deleted,
-			AccountId:  tblItem.AccountId,
-			DatabaseId: tblItem.DatabaseId,
-		})
-		return true
-	})
-	return
-}
-
-func (t *databaseCache) TraverseDatabaseCache() (ret []DebugDatabaseItem) {
-	t.data.Scan(func(dbItem *DatabaseItem) bool {
-		ret = append(ret, DebugDatabaseItem{
-			Ts:        dbItem.Ts,
-			Id:        dbItem.Id,
-			Name:      dbItem.Name,
-			Deleted:   dbItem.deleted,
-			AccountId: dbItem.AccountId,
-		})
-		return true
-	})
-	return
 }

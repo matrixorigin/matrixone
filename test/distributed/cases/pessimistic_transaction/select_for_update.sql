@@ -780,3 +780,15 @@ drop table su_07;
 select * from su_07;
 -- @session}
 commit;
+
+drop database if exists test;
+create database test;
+use test;
+drop table if exists t1;
+create table t1(a int primary key, b int unique key);
+insert into t1 select result, result from generate_series(1,10000)g;
+-- @separator:table
+select mo_ctl('dn','flush','test.t1');
+select * from t1 where b in (1,2) for update;
+drop table t1;
+drop database test;

@@ -231,12 +231,14 @@ func NewAwsSDKv2(
 		zap.Any("arguments", args),
 	)
 
-	// head bucket to validate
-	_, err = client.HeadBucket(ctx, &s3.HeadBucketInput{
-		Bucket: ptrTo(args.Bucket),
-	})
-	if err != nil {
-		return nil, moerr.NewInternalErrorNoCtx("bad s3 config: %v", err)
+	if !args.NoBucketValidation {
+		// head bucket to validate
+		_, err = client.HeadBucket(ctx, &s3.HeadBucketInput{
+			Bucket: ptrTo(args.Bucket),
+		})
+		if err != nil {
+			return nil, moerr.NewInternalErrorNoCtx("bad s3 config: %v", err)
+		}
 	}
 
 	return &AwsSDKv2{
@@ -757,7 +759,7 @@ func (o ObjectStorageArguments) credentialsProviderForAwsSDKv2(
 		return credentials.NewStaticCredentialsProvider(o.KeyID, o.KeySecret, o.SessionToken), nil
 	}
 
-	if o.NoDefaultCredentials {
+	if !o.shouldLoadDefaultCredentials() {
 		return nil, moerr.NewInvalidInputNoCtx(
 			"no valid credentials",
 		)

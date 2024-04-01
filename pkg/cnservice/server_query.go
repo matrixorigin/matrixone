@@ -19,6 +19,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pblock "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/pb/status"
@@ -52,6 +53,9 @@ func (s *service) initQueryCommandHandler() {
 	s.queryService.AddHandleFunc(query.CmdMethod_ShowProcessList, s.handleShowProcessList, false)
 	s.queryService.AddHandleFunc(query.CmdMethod_RunTask, s.handleRunTask, false)
 	s.queryService.AddHandleFunc(query.CmdMethod_RemoveRemoteLockTable, s.handleRemoveRemoteLockTable, false)
+	s.queryService.AddHandleFunc(query.CmdMethod_GetPipelineInfo, s.handleGetPipelineInfo, false)
+	s.queryService.AddHandleFunc(query.CmdMethod_MigrateConnFrom, s.handleMigrateConnFrom, false)
+	s.queryService.AddHandleFunc(query.CmdMethod_MigrateConnTo, s.handleMigrateConnTo, false)
 }
 
 func (s *service) handleKillConn(ctx context.Context, req *query.Request, resp *query.Response) error {
@@ -219,17 +223,10 @@ func (s *service) handleRunTask(ctx context.Context, req *query.Request, resp *q
 // tenant, just return the sessions belong to the tenant.
 // It is called "processList" is because it is used in "SHOW PROCESSLIST" statement.
 func (s *service) processList(tenant string, sysTenant bool) ([]*status.Session, error) {
-	var ss []queryservice.Session
 	if sysTenant {
-		ss = s.sessionMgr.GetAllSessions()
-	} else {
-		ss = s.sessionMgr.GetSessionsByTenant(tenant)
+		return s.sessionMgr.GetAllStatusSessions(), nil
 	}
-	sessions := make([]*status.Session, 0, len(ss))
-	for _, ses := range ss {
-		sessions = append(sessions, ses.StatusSession())
-	}
-	return sessions, nil
+	return s.sessionMgr.GetStatusSessionsByTenant(tenant), nil
 }
 
 func copyKeys(src [][]byte) [][]byte {
@@ -312,6 +309,53 @@ func (s *service) handleRemoveRemoteLockTable(
 	resp.RemoveRemoteLockTable = &query.RemoveRemoteLockTableResponse{}
 	if removed {
 		resp.RemoveRemoteLockTable.Count = 1
+	}
+	return nil
+}
+
+// handleGetPipelineInfo handles the GetPipelineInfoRequest and respond with
+// the pipeline info in the server.
+func (s *service) handleGetPipelineInfo(ctx context.Context, req *query.Request, resp *query.Response) error {
+	if req.GetPipelineInfoRequest == nil {
+		return moerr.NewInternalError(ctx, "bad request")
+	}
+	count := s.pipelines.counter.Load()
+	resp.GetPipelineInfoResponse = &query.GetPipelineInfoResponse{
+		Count: count,
+	}
+	return nil
+}
+
+func (s *service) handleMigrateConnFrom(
+	ctx context.Context, req *query.Request, resp *query.Response,
+) error {
+	if req.MigrateConnFromRequest == nil {
+		return moerr.NewInternalError(ctx, "bad request")
+	}
+	rm := s.mo.GetRoutineManager()
+	resp.MigrateConnFromResponse = &query.MigrateConnFromResponse{}
+	if err := rm.MigrateConnectionFrom(req.MigrateConnFromRequest, resp.MigrateConnFromResponse); err != nil {
+		logutil.Errorf("failed to migrate conn from: %v", err)
+		return err
+	}
+	return nil
+}
+
+func (s *service) handleMigrateConnTo(
+	ctx context.Context, req *query.Request, resp *query.Response,
+) error {
+	if req.MigrateConnToRequest == nil {
+		return moerr.NewInternalError(ctx, "bad request")
+	}
+	rm := s.mo.GetRoutineManager()
+	if err := rm.MigrateConnectionTo(req.MigrateConnToRequest); err != nil {
+		logutil.Errorf("failed to migrate conn to: %v", err)
+		return err
+	}
+	logutil.Infof("migrate ok, conn ID: %d, DB: %s",
+		req.MigrateConnToRequest.ConnID, req.MigrateConnToRequest.DB)
+	resp.MigrateConnToResponse = &query.MigrateConnToResponse{
+		Success: true,
 	}
 	return nil
 }

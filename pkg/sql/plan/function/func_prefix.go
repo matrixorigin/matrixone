@@ -51,9 +51,7 @@ func PrefixEq(parameters []*vector.Vector, result vector.FunctionResultWrapper, 
 		}
 	} else {
 		for i := 0; i < length; i++ {
-			if bytes.HasPrefix(lcol[i].GetByteSlice(larea), rval) {
-				res[i] = true
-			}
+			res[i] = bytes.HasPrefix(lcol[i].GetByteSlice(larea), rval)
 		}
 	}
 
@@ -126,10 +124,10 @@ func PrefixIn(parameters []*vector.Vector, result vector.FunctionResultWrapper, 
 			res[i] = bytes.HasPrefix(lval, rval)
 		}
 	} else {
-		for i := range lcol {
+		for i := 0; i < length; i++ {
 			lval := lcol[i].GetByteSlice(larea)
 			rpos, _ := sort.Find(len(rcol), func(j int) int {
-				return bytes.Compare(rcol[j].GetByteSlice(rarea), lval)
+				return index.PrefixCompare(lval, rcol[j].GetByteSlice(rarea))
 			})
 
 			res[i] = rpos < len(rcol) && bytes.HasPrefix(lval, rcol[rpos].GetByteSlice(rarea))

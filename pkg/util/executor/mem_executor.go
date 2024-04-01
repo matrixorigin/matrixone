@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 )
 
 type memExecutor struct {
@@ -53,6 +54,10 @@ type memTxnExecutor struct {
 
 func (te *memTxnExecutor) Exec(sql string) (Result, error) {
 	return te.mocker(sql)
+}
+
+func (te *memTxnExecutor) Txn() client.TxnOperator {
+	return nil
 }
 
 // MemResult used to test. Construct a Result from memory.

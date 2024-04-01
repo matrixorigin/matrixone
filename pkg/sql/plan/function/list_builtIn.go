@@ -3636,6 +3636,70 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `mo_cu`
+	{
+		functionId: MO_CU,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				volatile:   true,
+				args:       []types.T{types.T_varchar, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_float64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return buildInMOCU
+				},
+			},
+			{
+				overloadId: 0,
+				volatile:   true,
+				args:       []types.T{types.T_varchar, types.T_int64, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_float64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return buildInMOCU
+				},
+			},
+		},
+	},
+	{
+		functionId: MO_CU_V1,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				volatile:   true,
+				args:       []types.T{types.T_varchar, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_float64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return buildInMOCUv1
+				},
+			},
+			{
+				overloadId: 0,
+				volatile:   true,
+				args:       []types.T{types.T_varchar, types.T_int64, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_float64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return buildInMOCUv1
+				},
+			},
+		},
+	},
+
 	// function `month`
 	{
 		functionId: MONTH,
@@ -5142,6 +5206,28 @@ var supportedOthersBuiltIns = []FuncNew{
 				},
 				newOp: func() executeLogicOfOverload {
 					return builtInMoShowVisibleBin
+				},
+			},
+		},
+	},
+
+	// function `mo_show_visible_bin_enum`
+	{
+		functionId: MO_SHOW_VISIBLE_BIN_ENUM,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				volatile:   true,
+				args:       []types.T{types.T_varchar, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return builtInMoShowVisibleBinEnum
 				},
 			},
 		},

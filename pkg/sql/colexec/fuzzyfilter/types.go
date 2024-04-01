@@ -84,6 +84,9 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 		arg.rbat.Clean(proc.GetMPool())
 		arg.rbat = nil
 	}
+	if arg.pass2RuntimeFilter != nil {
+		proc.PutVector(arg.pass2RuntimeFilter)
+	}
 
 	arg.FreeAllReg()
 }

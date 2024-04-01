@@ -16,6 +16,7 @@ package rightsemi
 
 import (
 	"bytes"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
@@ -145,7 +146,10 @@ func (ctr *container) build(ap *Argument, proc *process.Process, analyze process
 		ctr.mp = bat.DupJmAuxData()
 		ctr.matched = &bitmap.Bitmap{}
 		ctr.matched.InitWithSize(int64(bat.RowCount()))
-		analyze.Alloc(ctr.mp.Size())
+		mpSize := ctr.mp.Size()
+		if mpSize > ctr.maxAllocSize {
+			ctr.maxAllocSize = mpSize
+		}
 	}
 	return nil
 }
@@ -159,11 +163,18 @@ func (ctr *container) sendLast(ap *Argument, proc *process.Process, analyze proc
 
 	if ap.NumCPU > 1 {
 		if !ap.IsMerger {
+
+			sendStart := time.Now()
 			ap.Channel <- ctr.matched
+			analyze.WaitStop(sendStart)
+
 			return true, nil
 		} else {
 			cnt := 1
 			// The original code didn't handle the context correctly and would cause the system to HUNG!
+
+			mergeStart := time.Now()
+
 			for completed := true; completed; {
 				select {
 				case <-proc.Ctx.Done():
@@ -177,6 +188,8 @@ func (ctr *container) sendLast(ap *Argument, proc *process.Process, analyze proc
 					}
 				}
 			}
+
+			analyze.WaitStop(mergeStart)
 		}
 	}
 

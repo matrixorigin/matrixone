@@ -100,7 +100,7 @@ func genCreateDatabaseTuple(sql string, accountId, userId, roleId uint32,
 	return bat, nil
 }
 
-func genDropDatabaseTuple(id uint64, name string, m *mpool.MPool) (*batch.Batch, error) {
+func genDropDatabaseTuple(rowid types.Rowid, id uint64, name string, m *mpool.MPool) (*batch.Batch, error) {
 	bat := batch.NewWithSize(2)
 	bat.Attrs = append(bat.Attrs, catalog.MoDatabaseSchema[:2]...)
 	bat.SetRowCount(1)
@@ -124,6 +124,13 @@ func genDropDatabaseTuple(id uint64, name string, m *mpool.MPool) (*batch.Batch,
 			return nil, err
 		}
 	}
+	//add the rowid vector as the first one in the batch
+	vec := vector.NewVec(types.T_Rowid.ToType())
+	if err = vector.AppendFixed(vec, rowid, false, m); err != nil {
+		return nil, err
+	}
+	bat.Vecs = append([]*vector.Vector{vec}, bat.Vecs...)
+	bat.Attrs = append([]string{catalog.Row_ID}, bat.Attrs...)
 	return bat, nil
 }
 

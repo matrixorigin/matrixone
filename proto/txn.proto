@@ -357,3 +357,11 @@ message TxnError {
     // replace these error codes.
     uint32 TxnErrCode = 3;
 }
+
+message TxnOptions {
+    string counter = 1;
+    string sessionInfo = 2;
+    bool inRunSql = 3;
+    bool inCommit = 4;
+    bool inRollback = 5;
+}
