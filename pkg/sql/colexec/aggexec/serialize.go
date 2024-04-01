@@ -397,7 +397,7 @@ func (exec *medianColumnExecSelf[T, R]) marshal() ([]byte, error) {
 }
 
 func (exec *medianColumnExecSelf[T, R]) unmarshal(result []byte, groups [][]byte) error {
-	if len(exec.groups) > 0 {
+	if len(groups) > 0 {
 		exec.groups = make([]*vector.Vector, len(groups))
 		for i := range exec.groups {
 			exec.groups[i] = vector.NewVec(exec.singleAggInfo.argType)

@@ -90,7 +90,9 @@ func (exec *clusterCentersExec) GroupGrow(more int) error {
 	if err := exec.ret.grows(more); err != nil {
 		return err
 	}
-	exec.groupData = append(exec.groupData, exec.ret.mg.GetVector(types.T_varchar.ToType()))
+	for i := 0; i < more; i++ {
+		exec.groupData = append(exec.groupData, exec.ret.mg.GetVector(types.T_varchar.ToType()))
+	}
 	return nil
 }
 

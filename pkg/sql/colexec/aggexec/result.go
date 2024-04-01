@@ -15,6 +15,7 @@
 package aggexec
 
 import (
+	"bytes"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -112,6 +113,23 @@ func (r *basicResult) free() {
 	}
 }
 
+func (r *basicResult) eq0(other basicResult) bool {
+	if !r.typ.Eq(other.typ) {
+		return false
+	}
+	bs1 := vector.MustFixedCol[bool](r.ess)
+	bs2 := vector.MustFixedCol[bool](other.ess)
+	if len(bs1) != len(bs2) {
+		return false
+	}
+	for i, j := 0, len(bs1); i < j; i++ {
+		if bs1[i] != bs2[i] {
+			return false
+		}
+	}
+	return true
+}
+
 func (r *basicResult) marshal() ([]byte, error) {
 	d1, err := r.res.MarshalBinary()
 	if err != nil {
@@ -130,8 +148,13 @@ func (r *basicResult) marshal() ([]byte, error) {
 }
 
 func (r *basicResult) unmarshal0(data []byte) error {
-	r.res = r.mg.GetVector(r.typ)
-	r.ess = r.mg.GetVector(types.T_bool.ToType())
+	if r.mg == nil {
+		r.res = vector.NewVec(r.typ)
+		r.ess = vector.NewVec(types.T_bool.ToType())
+	} else {
+		r.res = r.mg.GetVector(r.typ)
+		r.ess = r.mg.GetVector(types.T_bool.ToType())
+	}
 
 	length := types.DecodeUint32(data[:4])
 	data = data[4:]
@@ -196,6 +219,27 @@ func (r *aggFuncResult[T]) unmarshal(data []byte) error {
 	return nil
 }
 
+func (r *aggFuncResult[T]) eq(other aggFuncResult[T]) bool {
+	if !r.basicResult.eq0(other.basicResult) {
+		return false
+	}
+	vs1 := vector.MustFixedCol[T](r.res)
+	vs2 := vector.MustFixedCol[T](other.res)
+	if len(vs1) != len(vs2) {
+		return false
+	}
+	bs1 := vector.MustFixedCol[bool](r.ess)
+	for i, j := 0, len(vs1); i < j; i++ {
+		if bs1[i] {
+			continue
+		}
+		if vs1[i] != vs2[i] {
+			return false
+		}
+	}
+	return true
+}
+
 func initBytesAggFuncResult(
 	mg AggMemoryManager, typ types.Type,
 	emptyNull bool) aggFuncBytesResult {
@@ -231,4 +275,25 @@ func (r *aggFuncBytesResult) aggSet(v []byte) error {
 
 func (r *aggFuncBytesResult) unmarshal(data []byte) error {
 	return r.unmarshal0(data)
+}
+
+func (r *aggFuncBytesResult) eq(other aggFuncBytesResult) bool {
+	if !r.basicResult.eq0(other.basicResult) {
+		return false
+	}
+	vs1 := vector.MustBytesCol(r.res)
+	vs2 := vector.MustBytesCol(other.res)
+	if len(vs1) != len(vs2) {
+		return false
+	}
+	bs1 := vector.MustFixedCol[bool](r.ess)
+	for i, j := 0, len(vs1); i < j; i++ {
+		if bs1[i] {
+			continue
+		}
+		if !bytes.Equal(vs1[i], vs2[i]) {
+			return false
+		}
+	}
+	return true
 }

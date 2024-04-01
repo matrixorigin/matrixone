@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//nolint: maybe lint bug. it will report "unused" error for all fields and methods of mArg1Fixed and mArg2Fixed.
+// nolint: maybe lint bug. it will report "unused" error for all fields and methods of mArg1Fixed and mArg2Fixed.
 package aggexec
 
 import (
