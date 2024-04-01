@@ -700,8 +700,23 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 			if len(table.pks) == 1 {
 				tableDef.Pkey = &plan.PrimaryKeyDef{
 					PkeyColName: colDefs[table.pks[0]].Name,
+					Cols:        []uint64{uint64(table.pks[0])},
 					Names:       []string{colDefs[table.pks[0]].Name},
 					CompPkeyCol: colDefs[table.pks[0]],
+				}
+			} else if len(table.pks) > 1 {
+				names := make([]string, len(table.pks))
+				cols := make([]uint64, len(table.pks))
+				for pkidx := range table.pks {
+					names = append(names, colDefs[table.pks[pkidx]].Name)
+					cols = append(cols, uint64(pkidx))
+				}
+				pkName := catalog.PrefixCBColName + "_" + tableName
+				tableDef.Pkey = &plan.PrimaryKeyDef{
+					PkeyColName: pkName,
+					Names:       names,
+					Cols:        cols,
+					CompPkeyCol: MakeHiddenColDefByName(pkName),
 				}
 			}
 
