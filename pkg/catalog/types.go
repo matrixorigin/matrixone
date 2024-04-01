@@ -52,6 +52,9 @@ const (
 	TableTailAttrCommitTs = "__mo_%1_commit_time"
 	TableTailAttrAborted  = "__mo_%1_aborted"
 	TableTailAttrPKVal    = "__mo_%1_pk_val"
+
+	// MOForeignKeys saves the fk relationships
+	MOForeignKeys = "mo_foreign_keys"
 )
 
 var InternalColumns = map[string]int8{

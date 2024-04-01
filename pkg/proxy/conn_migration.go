@@ -27,7 +27,7 @@ import (
 
 func (c *clientConn) getQueryAddress(addr string) string {
 	var queryAddr string
-	c.moCluster.GetCNService(clusterservice.NewSelector(), func(service metadata.CNService) bool {
+	c.moCluster.GetCNService(clusterservice.NewSelectAll(), func(service metadata.CNService) bool {
 		if service.SQLAddress == addr {
 			queryAddr = service.QueryAddress
 			return false
@@ -37,14 +37,14 @@ func (c *clientConn) getQueryAddress(addr string) string {
 	return queryAddr
 }
 
-func (c *clientConn) migrateConnFrom(addr string) (*query.MigrateConnFromResponse, error) {
+func (c *clientConn) migrateConnFrom(sqlAddr string) (*query.MigrateConnFromResponse, error) {
 	req := c.queryService.NewRequest(query.CmdMethod_MigrateConnFrom)
 	req.MigrateConnFromRequest = &query.MigrateConnFromRequest{
 		ConnID: c.connID,
 	}
 	ctx, cancel := context.WithTimeout(c.ctx, time.Second*3)
 	defer cancel()
-	addr = c.getQueryAddress(addr)
+	addr := c.getQueryAddress(sqlAddr)
 	if addr == "" {
 		return nil, moerr.NewInternalError(c.ctx, "cannot get query service address")
 	}
@@ -60,9 +60,11 @@ func (c *clientConn) migrateConnFrom(addr string) (*query.MigrateConnFromRespons
 func (c *clientConn) migrateConnTo(sc ServerConn, info *query.MigrateConnFromResponse) error {
 	// Before migrate session info with RPC, we need to execute some
 	// SQLs to initialize the session and account in handler.
+	// Currently, the session variable transferred is not used anywhere else,
+	// and just used here.
 	if _, err := sc.ExecStmt(internalStmt{
 		cmdType: cmdQuery,
-		s:       "select @@version_comment;",
+		s:       "set transferred=1;",
 	}, nil); err != nil {
 		return err
 	}

@@ -449,6 +449,7 @@ func (mp *MysqlProtocolImpl) Quit() {
 	if mp.binaryNullBuffer != nil {
 		mp.binaryNullBuffer = nil
 	}
+	mp.ses = nil
 }
 
 func (mp *MysqlProtocolImpl) SetSession(ses *Session) {
@@ -1681,6 +1682,13 @@ func (mp *MysqlProtocolImpl) negotiateAuthenticationMethod(ctx context.Context) 
 	return data, nil
 }
 
+// extendStatus extends a flag to the status variable.
+// SERVER_QUERY_WAS_SLOW and SERVER_STATUS_NO_GOOD_INDEX_USED is not used in other modules,
+// so we use it to mark the packet MUST be OK/EOF.
+func extendStatus(old uint16) uint16 {
+	return old | SERVER_QUERY_WAS_SLOW | SERVER_STATUS_NO_GOOD_INDEX_USED
+}
+
 // make a OK packet
 func (mp *MysqlProtocolImpl) makeOKPayload(affectedRows, lastInsertId uint64, statusFlags, warnings uint16, message string) []byte {
 	data := make([]byte, HeaderOffset+128+len(message)+10)
@@ -1688,6 +1696,7 @@ func (mp *MysqlProtocolImpl) makeOKPayload(affectedRows, lastInsertId uint64, st
 	pos = mp.io.WriteUint8(data, pos, defines.OKHeader)
 	pos = mp.writeIntLenEnc(data, pos, affectedRows)
 	pos = mp.writeIntLenEnc(data, pos, lastInsertId)
+	statusFlags = extendStatus(statusFlags)
 	if (mp.capability & CLIENT_PROTOCOL_41) != 0 {
 		pos = mp.io.WriteUint16(data, pos, statusFlags)
 		pos = mp.io.WriteUint16(data, pos, warnings)
@@ -2637,12 +2646,12 @@ func (mp *MysqlProtocolImpl) sendResultSet(ctx context.Context, set ResultSet, c
 
 	//If the CLIENT_DEPRECATE_EOF client capabilities flag is set, OK_Packet; else EOF_Packet.
 	if mp.capability&CLIENT_DEPRECATE_EOF != 0 {
-		err := mp.sendOKPacketWithEof(0, 0, status, 0, "")
+		err := mp.sendOKPacketWithEof(0, 0, extendStatus(status), 0, "")
 		if err != nil {
 			return err
 		}
 	} else {
-		err := mp.sendEOFPacket(warnings, status)
+		err := mp.sendEOFPacket(warnings, extendStatus(status))
 		if err != nil {
 			return err
 		}

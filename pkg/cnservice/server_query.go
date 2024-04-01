@@ -223,17 +223,10 @@ func (s *service) handleRunTask(ctx context.Context, req *query.Request, resp *q
 // tenant, just return the sessions belong to the tenant.
 // It is called "processList" is because it is used in "SHOW PROCESSLIST" statement.
 func (s *service) processList(tenant string, sysTenant bool) ([]*status.Session, error) {
-	var ss []queryservice.Session
 	if sysTenant {
-		ss = s.sessionMgr.GetAllSessions()
-	} else {
-		ss = s.sessionMgr.GetSessionsByTenant(tenant)
+		return s.sessionMgr.GetAllStatusSessions(), nil
 	}
-	sessions := make([]*status.Session, 0, len(ss))
-	for _, ses := range ss {
-		sessions = append(sessions, ses.StatusSession())
-	}
-	return sessions, nil
+	return s.sessionMgr.GetStatusSessionsByTenant(tenant), nil
 }
 
 func copyKeys(src [][]byte) [][]byte {
@@ -359,6 +352,8 @@ func (s *service) handleMigrateConnTo(
 		logutil.Errorf("failed to migrate conn to: %v", err)
 		return err
 	}
+	logutil.Infof("migrate ok, conn ID: %d, DB: %s",
+		req.MigrateConnToRequest.ConnID, req.MigrateConnToRequest.DB)
 	resp.MigrateConnToResponse = &query.MigrateConnToResponse{
 		Success: true,
 	}

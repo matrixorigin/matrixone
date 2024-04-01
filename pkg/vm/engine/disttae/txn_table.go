@@ -678,10 +678,7 @@ func (tbl *txnTable) rangesOnePart(
 		dirtyBlks[bid] = struct{}{}
 	}
 
-	objectStatsList, err := tbl.db.txn.getInsertedObjectListForTable(tbl.db.databaseId, tbl.tableId)
-	if err != nil {
-		return err
-	}
+	objectStatsList := tbl.collectUnCommittedObjects()
 
 	if !tbl.db.txn.deletedBlocks.isEmpty() {
 		ForeachBlkInObjStatsList(true, func(blk *catalog.BlockInfo) bool {
@@ -2208,7 +2205,8 @@ func (tbl *txnTable) PrimaryKeysMayBeModified(ctx context.Context, from types.TS
 	return false, nil
 }
 
-func (tbl *txnTable) transferRowid(
+// TODO::refactor in next PR
+func (tbl *txnTable) transferDeletes(
 	ctx context.Context,
 	state *logtailreplay.PartitionState,
 	deleteObjs,

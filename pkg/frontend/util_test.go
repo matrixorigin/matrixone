@@ -449,7 +449,8 @@ func TestGetSimpleExprValue(t *testing.T) {
 			{"set @@x=-x", true, nil},
 		}
 		ctrl := gomock.NewController(t)
-		ses := NewSession(&FakeProtocol{}, testutil.NewProc().Mp(), config.NewParameterUnit(nil, mock_frontend.NewMockEngine(ctrl), mock_frontend.NewMockTxnClient(ctrl), nil), GSysVariables, false, nil, nil)
+		ses := newTestSession(t, ctrl)
+		//ses := NewSession(&FakeProtocol{}, testutil.NewProc().Mp(), config.NewParameterUnit(nil, mock_frontend.NewMockEngine(ctrl), mock_frontend.NewMockTxnClient(ctrl), nil), GSysVariables, false, nil, nil)
 		ses.txnCompileCtx.SetProcess(testutil.NewProc())
 		ses.requestCtx = ctx
 		for _, kase := range kases {
@@ -486,7 +487,8 @@ func TestGetSimpleExprValue(t *testing.T) {
 			{"set @@x=-1.2345670", false, fmt.Sprintf("%v", dec3.Format(7))},
 		}
 		ctrl := gomock.NewController(t)
-		ses := NewSession(&FakeProtocol{}, testutil.NewProc().Mp(), config.NewParameterUnit(nil, mock_frontend.NewMockEngine(ctrl), mock_frontend.NewMockTxnClient(ctrl), nil), GSysVariables, false, nil, nil)
+		ses := newTestSession(t, ctrl)
+		//ses := NewSession(&FakeProtocol{}, testutil.NewProc().Mp(), config.NewParameterUnit(nil, mock_frontend.NewMockEngine(ctrl), mock_frontend.NewMockTxnClient(ctrl), nil), GSysVariables, false, nil, nil)
 		ses.txnCompileCtx.SetProcess(testutil.NewProc())
 		ses.requestCtx = ctx
 		for _, kase := range kases {
@@ -632,7 +634,6 @@ func TestGetExprValue(t *testing.T) {
 		ws.EXPECT().GetSnapshotWriteOffset().Return(0).AnyTimes()
 		ws.EXPECT().UpdateSnapshotWriteOffset().AnyTimes()
 		ws.EXPECT().Adjust(gomock.Any()).AnyTimes()
-		ws.EXPECT().TransferRowID().AnyTimes()
 
 		txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
 		txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
@@ -738,7 +739,6 @@ func TestGetExprValue(t *testing.T) {
 		ws.EXPECT().Adjust(uint64(0)).AnyTimes()
 		ws.EXPECT().IncrSQLCount().AnyTimes()
 		ws.EXPECT().GetSQLCount().AnyTimes()
-		ws.EXPECT().TransferRowID().AnyTimes()
 
 		txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
 		txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()

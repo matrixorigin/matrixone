@@ -17,6 +17,8 @@ package plan
 import (
 	"context"
 	"encoding/json"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"testing"
 
 	"github.com/golang/mock/gomock"
@@ -235,7 +237,11 @@ func TestBuildLockTables(t *testing.T) {
 
 func TestBuildCreateTable(t *testing.T) {
 	mock := NewMockOptimizer(false)
-
+	rt := moruntime.DefaultRuntime()
+	moruntime.SetupProcessLevelRuntime(rt)
+	moruntime.ProcessLevelRuntime().SetGlobalVariables(moruntime.InternalSQLExecutor, executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+		return executor.Result{}, nil
+	}))
 	sqls := []string{
 		`CREATE TABLE t3(
 					col1 INT NOT NULL,

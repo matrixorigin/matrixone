@@ -71,6 +71,8 @@ func (m *MockCompilerContext) ResolveVariable(varName string, isSystemVar, isGlo
 		vars["sql_mode"] = "ONLY_FULL_GROUP_BY"
 	}
 
+	vars["foreign_key_checks"] = int64(1)
+
 	if result, ok := vars[varName]; ok {
 		return result, nil
 	}
@@ -311,6 +313,9 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 			{"att_is_hidden", types.T_bool, false, 0, 0},
 			{"attr_has_update", types.T_int8, false, 0, 0},
 			{"attr_update", types.T_varchar, false, 2048, 0},
+			{"att_attr_is_clusterby", types.T_int8, false, 0, 0},
+			{"attr_seqnum", types.T_int8, false, 0, 0},
+			{"attr_enum", types.T_varchar, false, 2048, 0},
 			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
 		},
 	}

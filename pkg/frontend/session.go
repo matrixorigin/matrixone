@@ -44,6 +44,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
+	db_holder "github.com/matrixorigin/matrixone/pkg/util/export/etl/db"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -670,11 +671,18 @@ func NewSession(proto Protocol, mp *mpool.MPool, pu *config.ParameterUnit,
 }
 
 func (ses *Session) Close() {
+	ses.protocol = nil
 	ses.mrs = nil
 	ses.data = nil
 	ses.ep = nil
-	ses.txnHandler = nil
-	ses.txnCompileCtx = nil
+	if ses.txnHandler != nil {
+		ses.txnHandler.ses = nil
+		ses.txnHandler = nil
+	}
+	if ses.txnCompileCtx != nil {
+		ses.txnCompileCtx.ses = nil
+		ses.txnCompileCtx = nil
+	}
 	ses.storage = nil
 	ses.sql = ""
 	ses.sysVars = nil
@@ -702,7 +710,10 @@ func (ses *Session) Close() {
 	ses.statsCache = nil
 	ses.seqCurValues = nil
 	ses.seqLastValue = nil
-	ses.sqlHelper = nil
+	if ses.sqlHelper != nil {
+		ses.sqlHelper.ses = nil
+		ses.sqlHelper = nil
+	}
 	ses.ClearStmtProfile()
 	//  The mpool cleanup must be placed at the end,
 	// and you must wait for all resources to be cleaned up before you can delete the mpool
@@ -712,6 +723,7 @@ func (ses *Session) Close() {
 		for _, bat := range bats {
 			bat.Clean(ses.proc.Mp())
 		}
+		ses.proc = nil
 	}
 	if ses.isNotBackgroundSession {
 		mp := ses.GetMemPool()
@@ -724,6 +736,9 @@ func (ses *Session) Close() {
 	}
 
 	ses.timestampMap = nil
+	ses.upstream = nil
+	ses.rm = nil
+	ses.rt = nil
 }
 
 // BackgroundSession executing the sql in background
@@ -779,8 +794,8 @@ func (bgs *BackgroundSession) Close() {
 
 	if bgs.Session != nil {
 		bgs.Session.Close()
+		bgs.Session = nil
 	}
-	bgs = nil
 }
 
 func (ses *Session) GetIncBlockIdx() int {
@@ -1345,7 +1360,6 @@ func (ses *Session) GetGlobalVar(name string) (interface{}, error) {
 func (ses *Session) GetTxnCompileCtx() *TxnCompilerContext {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
-	ses.txnCompileCtx.proc = ses.proc
 	return ses.txnCompileCtx
 }
 
@@ -1411,6 +1425,18 @@ func (ses *Session) GetSessionVar(name string) (interface{}, error) {
 			return gVal, nil
 		}
 		return ses.GetSysVar(ciname), nil
+	} else {
+		return nil, moerr.NewInternalError(ses.GetRequestContext(), errorSystemVariableDoesNotExist())
+	}
+}
+
+func (ses *Session) GetSessionVarLocked(name string) (interface{}, error) {
+	if def, gVal, ok := ses.gSysVars.GetGlobalSysVar(name); ok {
+		ciname := strings.ToLower(name)
+		if def.GetScope() == ScopeGlobal {
+			return gVal, nil
+		}
+		return ses.sysVars[ciname], nil
 	} else {
 		return nil, moerr.NewInternalError(ses.GetRequestContext(), errorSystemVariableDoesNotExist())
 	}
@@ -1579,6 +1605,9 @@ func (ses *Session) AuthenticateUser(userInput string, dbName string, authRespon
 	isSpecial, pwdBytes, specialAccount = isSpecialUser(tenant.GetUser())
 	if isSpecial && specialAccount.IsMoAdminRole() {
 		ses.SetTenantInfo(specialAccount)
+		if len(ses.requestLabel) == 0 {
+			ses.requestLabel = db_holder.GetLabelSelector()
+		}
 		return GetPassWord(HashPassWordWithByte(pwdBytes))
 	}
 
@@ -2051,7 +2080,12 @@ func executeStmtInSameSession(ctx context.Context, mce *MysqlCmdExecutor, ses *S
 	// inherit database
 	ses.SetDatabaseName(prevDB)
 	//restore normal protocol and output callback
+	proc := ses.GetTxnCompileCtx().GetProcess()
 	defer func() {
+		//@todo we need to improve: make one session, one proc, one txnOperator
+		p := ses.GetTxnCompileCtx().GetProcess()
+		p.FreeVectors()
+		ses.GetTxnCompileCtx().SetProcess(proc)
 		ses.SetOptionBits(prevOptionBits)
 		ses.SetServerStatus(prevServerStatus)
 		ses.SetOutputCallback(getDataFromPipeline)
@@ -2084,6 +2118,7 @@ var NewBackgroundHandler = func(
 
 func (bh *BackgroundHandler) Close() {
 	bh.mce.Close()
+	bh.mce = nil
 	bh.ses.Close()
 }
 
@@ -2428,23 +2463,67 @@ func checkPlanIsInsertValues(proc *process.Process,
 	return false, nil
 }
 
+func commitAfterMigrate(ses *Session, err error) {
+	if err != nil {
+		rErr := ses.GetTxnHandler().RollbackTxn()
+		if rErr != nil {
+			logutil.Errorf("failed to rollback txn: %v", rErr)
+		}
+	}
+
+	// Commit txn manually.
+	if cErr := ses.GetTxnHandler().CommitTxn(); cErr != nil {
+		logutil.Errorf("failed to commit txn: %v", cErr)
+		return
+	}
+	ses.ClearServerStatus(SERVER_STATUS_IN_TRANS)
+	ses.ClearOptionBits(OPTION_BEGIN)
+}
+
 type dbMigration struct {
-	db string
+	db       string
+	commitFn func(*Session, error)
+}
+
+func newDBMigration(db string) *dbMigration {
+	return &dbMigration{
+		db:       db,
+		commitFn: commitAfterMigrate,
+	}
 }
 
 func (d *dbMigration) Migrate(ses *Session) error {
 	if d.db == "" {
 		return nil
 	}
-	return doUse(ses.requestCtx, ses, d.db)
+	var err error
+	defer func() {
+		if d.commitFn != nil {
+			d.commitFn(ses, err)
+		}
+	}()
+	err = doUse(ses.requestCtx, ses, d.db)
+	return err
 }
 
 type prepareStmtMigration struct {
-	name string
-	sql  string
+	name       string
+	sql        string
+	paramTypes []byte
+	commitFn   func(*Session, error)
+}
+
+func newPrepareStmtMigration(name string, sql string, paramTypes []byte) *prepareStmtMigration {
+	return &prepareStmtMigration{
+		name:       name,
+		sql:        sql,
+		paramTypes: paramTypes,
+		commitFn:   commitAfterMigrate,
+	}
 }
 
 func (p *prepareStmtMigration) Migrate(ses *Session) error {
+	var err error
 	v, err := ses.GetGlobalVar("lower_case_table_names")
 	if err != nil {
 		return err
@@ -2456,16 +2535,19 @@ func (p *prepareStmtMigration) Migrate(ses *Session) error {
 	if err != nil {
 		return err
 	}
-	if _, err = doPrepareStmt(ses.requestCtx, ses, stmts[0].(*tree.PrepareStmt), p.sql); err != nil {
+	defer func() {
+		if p.commitFn != nil {
+			p.commitFn(ses, err)
+		}
+	}()
+	if _, err = doPrepareStmt(ses.requestCtx, ses, stmts[0].(*tree.PrepareStmt), p.sql, p.paramTypes); err != nil {
 		return err
 	}
 	return nil
 }
 
 func (ses *Session) Migrate(req *query.MigrateConnToRequest) error {
-	dbm := dbMigration{
-		db: req.DB,
-	}
+	dbm := newDBMigration(req.DB)
 	if err := dbm.Migrate(ses); err != nil {
 		return err
 	}
@@ -2475,10 +2557,7 @@ func (ses *Session) Migrate(req *query.MigrateConnToRequest) error {
 		if p == nil {
 			continue
 		}
-		pm := prepareStmtMigration{
-			name: p.Name,
-			sql:  p.SQL,
-		}
+		pm := newPrepareStmtMigration(p.Name, p.SQL, p.ParamTypes)
 		if err := pm.Migrate(ses); err != nil {
 			return err
 		}

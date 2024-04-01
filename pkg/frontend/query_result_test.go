@@ -54,6 +54,7 @@ func newTestSession(t *testing.T, ctrl *gomock.Controller) *Session {
 	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 	_, err = toml.DecodeFile("test/system_vars_config.toml", pu.SV)
 	assert.Nil(t, err)
+	pu.SV.SetDefaultValues()
 	pu.SV.SaveQueryResult = "on"
 	testPool, err = mpool.NewMPool("testPool", pu.SV.GuestMmuLimitation, mpool.NoFixed)
 	if err != nil {

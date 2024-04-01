@@ -161,6 +161,9 @@ var (
 	// defaultLoggerLabelKey and defaultLoggerLabelVal
 	defaultLoggerLabelKey = "role"
 	defaultLoggerLabelVal = "logging_cn"
+
+	// default lower_case_table_names
+	defaultLowerCaseTableNames = "1"
 )
 
 // FrontendParameters of the frontend
@@ -261,7 +264,7 @@ type FrontendParameters struct {
 
 	AutoIncrCacheSize uint64 `toml:"autoIncrCacheSize"`
 
-	LowerCaseTableNames int64 `toml:"lowerCaseTableNames" user_setting:"advanced"`
+	LowerCaseTableNames string `toml:"lowerCaseTableNames" user_setting:"advanced"`
 
 	PrintDebug bool `toml:"printDebug"`
 
@@ -384,8 +387,8 @@ func (fp *FrontendParameters) SetDefaultValues() {
 		fp.AutoIncrCacheSize = 3000000
 	}
 
-	if fp.LowerCaseTableNames == 0 {
-		fp.LowerCaseTableNames = 1
+	if fp.LowerCaseTableNames == "" {
+		fp.LowerCaseTableNames = defaultLowerCaseTableNames
 	}
 
 	if fp.PrintDebugInterval == 0 {
@@ -537,6 +540,9 @@ type ObservabilityParameters struct {
 	// LabelSelector
 	LabelSelector map[string]string `toml:"labelSelector"`
 
+	// estimate tcp network packet cost
+	TCPPacket bool `toml:"tcpPacket"`
+
 	// for cu calculation
 	CU   OBCUConfig `toml:"cu"`
 	CUv1 OBCUConfig `toml:"cu_v1"`
@@ -570,6 +576,7 @@ func NewObservabilityParameters() *ObservabilityParameters {
 		SelectAggrThreshold:                toml.Duration{},
 		EnableStmtMerge:                    false,
 		LabelSelector:                      map[string]string{defaultLoggerLabelKey: defaultLoggerLabelVal}, /*role=logging_cn*/
+		TCPPacket:                          false,
 		CU:                                 *NewOBCUConfig(),
 		CUv1:                               *NewOBCUConfig(),
 		OBCollectorConfig:                  *NewOBCollectorConfig(),

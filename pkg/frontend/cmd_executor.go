@@ -279,7 +279,6 @@ func (bse *baseStmtExecutor) CommitOrRollbackTxn(ctx context.Context, ses *Sessi
 	var txnErr error
 	stmt := bse.GetAst()
 	tenant := bse.tenantName
-	incStatementCounter(tenant, stmt)
 	if bse.GetStatus() == stmtExecSuccess {
 		txnErr = ses.TxnCommitSingleStatement(stmt)
 		if txnErr != nil {

@@ -3,13 +3,13 @@ Number of tables in mo_task
 3
 show table_number from information_schema;
 Number of tables in information_schema
-16
+22
 show table_number from mysql;
 Number of tables in mysql
-5
+6
 show table_number from mo_catalog;
 Number of tables in mo_catalog
-22
+23
 show table_number from system_metrics;
 Number of tables in system_metrics
 22
@@ -346,13 +346,13 @@ drop account if exists test_account;
 create account test_account admin_name = 'test_user' identified by '111';
 show table_number from information_schema;
 Number of tables in information_schema
-16
+22
 show table_number from mysql;
 Number of tables in mysql
-5
+6
 show table_number from mo_catalog;
 Number of tables in mo_catalog
-21
+22
 show table_number from system_metrics;
 Number of tables in system_metrics
 9

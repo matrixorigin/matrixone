@@ -731,7 +731,7 @@ show index from t1;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
 t1    0    a    1    a    A    0    NULL    NULL                        YES    NULL
 t1    0    a    2    b    A    0    NULL    NULL    YES                    YES    NULL
-t1    0    PRIMARY    1    a    A    0    NULL    NULL                    YES    NULL
+t1    0    PRIMARY    1    a    A    0    NULL    NULL                        YES    NULL
 desc t1;
 Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    NO    PRI    null        
@@ -1717,9 +1717,9 @@ null    93024232    -32    324242132321
 234    32718    100    32894323237289
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'cast02' and COLUMN_NAME not like '__mo%';
 table_name    column_name    data_type    is_nullable
-cast02    col22361738278472874382    BIGINT    YES
 cast02    col1new    INT UNSIGNED    YES
 cast02    col3vhejwh4i3uh4r    BIGINT UNSIGNED    YES
+cast02    col22361738278472874382    BIGINT    YES
 cast02    col4cdhewjruekhwjf    SMALLINT    YES
 drop table cast02;
 drop table if exists cast03;
@@ -1907,8 +1907,7 @@ col1    col2
 {"x": "red"}    a
 {"x": [3, 5, 7]}    b
 alter table abnormal04 change col1 col1NewCOl float;
-You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 4 column 2 near " 
-)";
+invalid argument operator cast, bad value [JSON FLOAT]
 alter table abnormal04 change col2 col2NewCOL int;
 invalid argument cast to int, bad value a
 select * from abnormal04;
@@ -1955,15 +1954,15 @@ create table view02 (a int);
 insert into view02 values (1);
 create view v0 as select view01.a, view02.a as b from view01 left join view02 using(a);
 show create view v0;
-View    Create View
-v0    create view v0 as select view01.a, view02.a as b from view01 left join view02 using(a);
+View    Create View    character_set_client    collation_connection
+v0    create view v0 as select view01.a, view02.a as b from view01 left join view02 using(a);    utf8mb4    utf8mb4_general_ci
 alter table view01 change a aCOL float;
 show create table view01;
 Table    Create Table
 view01    CREATE TABLE `view01` (\n`acol` FLOAT DEFAULT NULL\n)
 show create view v0;
-View    Create View
-v0    create view v0 as select view01.a, view02.a as b from view01 left join view02 using(a);
+View    Create View    character_set_client    collation_connection
+v0    create view v0 as select view01.a, view02.a as b from view01 left join view02 using(a);    utf8mb4    utf8mb4_general_ci
 drop table view01;
 drop table view02;
 drop view v0;
@@ -1982,8 +1981,8 @@ col2worejnfenrororiri    iwijwehfndatabasectm
 -2893428.0    2.0
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'cluster01' and COLUMN_NAME not like '__mo%';
 table_name    column_name    data_type    is_nullable
-cluster01    col2worejnfenrororiri    FLOAT    YES
 cluster01    iwijwehfndatabasectm    DOUBLE    YES
+cluster01    col2worejnfenrororiri    FLOAT    YES
 drop table cluster01;
 drop table if exists time01;
 create table time01 (col1 date, col2 datetime, col3 timestamp, col4 time);

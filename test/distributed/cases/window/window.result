@@ -2448,8 +2448,8 @@ id    sum(id) over (partition by sex order by id rows between 2 preceding and 1 
 5    6    m
 create view v as select id, sum(id) over (partition by sex order by id rows between 2 preceding and 1 following), sex from row_number01;
 show create view v;
-View    Create View
-v    create view v as select id, sum(id) over (partition by sex order by id rows between 2 preceding and 1 following), sex from row_number01;
+View    Create View    character_set_client    collation_connection
+v    create view v as select id, sum(id) over (partition by sex order by id rows between 2 preceding and 1 following), sex from row_number01;    utf8mb4    utf8mb4_general_ci
 select * from v;
 id    sum(id) over (partition by sex order by id rows between 2 preceding and 1 following)    sex
 2    5    f
@@ -4059,6 +4059,7 @@ null
 2023-05-16 00:12:12
 drop table time01;
 drop table if exists window01;
+
 create table window01(col1 int, col2 varchar(20));
 [unknown result because it is related to issue#12639]
 insert into window01 values(1,'老师');

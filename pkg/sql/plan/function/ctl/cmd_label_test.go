@@ -29,7 +29,7 @@ func TestIdentifyParser(t *testing.T) {
 		default:
 			t.Fatalf("wrong type")
 		}
-		label := p.parse()
+		label := p.parseLabel()
 		require.Equal(t, "cn_1", label.uuid)
 		require.Equal(t, "k1", label.key)
 		require.Equal(t, []string{"v1"}, label.values)
@@ -41,7 +41,7 @@ func TestIdentifyParser(t *testing.T) {
 		default:
 			t.Fatalf("wrong type")
 		}
-		label = p.parse()
+		label = p.parseLabel()
 		require.Equal(t, "cn_2", label.uuid)
 		require.Equal(t, "k2", label.key)
 		require.Equal(t, []string{"v1", "v_2", "v3"}, label.values)
