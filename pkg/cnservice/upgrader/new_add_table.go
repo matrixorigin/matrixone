@@ -369,6 +369,7 @@ var processlistView = &table.Table{
 	Columns: []table.Column{
 		table.StringColumn("account", "the account name"),
 		table.StringColumn("client_host", "the ip:port of the client"),
+		table.StringColumn("proxy_host", "the ip:port on the proxy connection"),
 		table.StringColumn("command", "the COMMAND send by client"),
 		table.UInt64Column("conn_id", "the connection id of the tcp between client"),
 		table.StringColumn("db", "the database be used"),
