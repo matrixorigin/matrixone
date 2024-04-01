@@ -169,9 +169,7 @@ col1    col2
 1    数据库
 2    数据库
 alter table pri02 add primary key (col2);
-You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 3 column 16 near " NOT NULL,
-PRIMARY KEY (`col2`)
-)";
+not supported: ENUM column 'col2' cannot be in primary key
 show create table pri02;
 Table    Create Table
 pri02    CREATE TABLE `pri02` (\n`col1` INT DEFAULT NULL,\n`col2` ENUM('数据库','数据库系统','数据库管理系统') DEFAULT NULL\n)
@@ -193,9 +191,7 @@ col1    col2
 1    数据库
 2    数据库系统
 alter table pri03 add primary key (col2);
-You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 3 column 16 near " NOT NULL,
-PRIMARY KEY (`col2`)
-)";
+not supported: ENUM column 'col2' cannot be in primary key
 show create table pri03;
 Table    Create Table
 pri03    CREATE TABLE `pri03` (\n`col1` INT DEFAULT NULL,\n`col2` ENUM('数据库','数据库系统','数据库管理系统') DEFAULT NULL\n)
