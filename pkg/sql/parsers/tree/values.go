@@ -51,6 +51,8 @@ type ValuesStatement struct {
 	Limit   *Limit
 }
 
+func (node *ValuesStatement) Free() {}
+
 func (node *ValuesStatement) Format(ctx *FmtCtx) {
 	ctx.WriteString("values ")
 
