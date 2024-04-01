@@ -14,16 +14,14 @@
 
 package tree
 
-import (
-	"github.com/matrixorigin/matrixone/pkg/common/reuse"
-)
+import "github.com/matrixorigin/matrixone/pkg/common/reuse"
 
 func init() {
 	reuse.CreatePool[Replace](
 		func() *Replace { return &Replace{} },
 		func(r *Replace) { r.reset() },
 		reuse.DefaultOptions[Replace](), //.
-	) // WithEnableChecker()
+	) //WithEnableChecker()
 }
 
 // the REPLACE statement.
@@ -59,9 +57,12 @@ func (node *Replace) Format(ctx *FmtCtx) {
 func (node *Replace) GetStatementType() string { return "Replace" }
 func (node *Replace) GetQueryType() string     { return QueryTypeDML }
 
-func NewReplace(r *Select) *Replace {
+func NewReplace(t TableExpr, c IdentifierList, r *Select, p IdentifierList) *Replace {
 	replace := reuse.Alloc[Replace](nil)
+	replace.Table = t
+	replace.Columns = c
 	replace.Rows = r
+	replace.PartitionNames = p
 	return replace
 }
 
@@ -70,28 +71,8 @@ func (node *Replace) Free() {
 }
 
 func (node *Replace) reset() {
-	// if node.Table != nil {
-	// 	switch t := node.Table.(type) {
-	// 	case *JoinTableExpr:
-	// 		t.Free()
-	// 	case *ParenTableExpr:
-	// 		t.Free()
-	// 	case *AliasedTableExpr:
-	// 		t.Free()
-	// 	case *StatementSource:
-	// 		// t.Free()
-	// 	case *Subquery:
-	// 		// t.Free()
-	// 	case *TableName:
-	// 		// t.Free()
-	// 	case *TableFunction:
-	// 		// t.Free()
-	// 	default:
-	// 		panic(fmt.Sprintf("unexpected type %v", node.Table))
-	// 	}
-	// }
 	// if node.Rows != nil {
-	// 	node.Rows.Free()
+	// node.Rows.Free()
 	// }
 	*node = Replace{}
 }

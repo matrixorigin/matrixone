@@ -14,61 +14,10 @@
 
 package tree
 
-import "github.com/matrixorigin/matrixone/pkg/common/reuse"
-
-func init() {
-	reuse.CreatePool[ElseIfStmt](
-		func() *ElseIfStmt { return &ElseIfStmt{} },
-		func(e *ElseIfStmt) { e.reset() },
-		reuse.DefaultOptions[ElseIfStmt](),
-	)
-
-	reuse.CreatePool[IfStmt](
-		func() *IfStmt { return &IfStmt{} },
-		func(i *IfStmt) { i.reset() },
-		reuse.DefaultOptions[IfStmt](),
-	)
-
-	reuse.CreatePool[WhenStmt](
-		func() *WhenStmt { return &WhenStmt{} },
-		func(w *WhenStmt) { w.reset() },
-		reuse.DefaultOptions[WhenStmt](),
-	)
-
-	reuse.CreatePool[CaseStmt](
-		func() *CaseStmt { return &CaseStmt{} },
-		func(c *CaseStmt) { c.reset() },
-		reuse.DefaultOptions[CaseStmt](),
-	)
-}
-
 type ElseIfStmt struct {
 	statementImpl
 	Cond Expr
 	Body []Statement
-}
-
-func NewElseIfStmt(cond Expr, body []Statement) *ElseIfStmt {
-	e := reuse.Alloc[ElseIfStmt](nil)
-	e.Cond = cond
-	e.Body = body
-	return e
-}
-
-func (node *ElseIfStmt) reset() {
-	if node.Body != nil {
-		for _, item := range node.Body {
-			item.Free()
-		}
-	}
-	// if node.Cond != nil {
-	// node.Cond.Free()
-	// }
-	*node = ElseIfStmt{}
-}
-
-func (node *ElseIfStmt) Free() {
-	reuse.Free[ElseIfStmt](node, nil)
 }
 
 func (node *ElseIfStmt) Format(ctx *FmtCtx) {
@@ -83,10 +32,7 @@ func (node *ElseIfStmt) Format(ctx *FmtCtx) {
 	}
 }
 func (node *ElseIfStmt) GetStatementType() string { return "ElseIf Statement" }
-
-func (node *ElseIfStmt) GetQueryType() string { return QueryTypeTCL }
-
-func (node ElseIfStmt) TypeName() string { return "tree.ElseIfStmt" }
+func (node *ElseIfStmt) GetQueryType() string     { return QueryTypeTCL }
 
 type IfStmt struct {
 	statementImpl
@@ -94,38 +40,6 @@ type IfStmt struct {
 	Body  []Statement
 	Elifs []*ElseIfStmt
 	Else  []Statement
-}
-
-func NewIfStmt(cond Expr, body []Statement, elifs []*ElseIfStmt, elseStmt []Statement) *IfStmt {
-	i := reuse.Alloc[IfStmt](nil)
-	i.Cond = cond
-	i.Body = body
-	i.Elifs = elifs
-	i.Else = elseStmt
-	return i
-}
-
-func (node *IfStmt) reset() {
-	if node.Body != nil {
-		for _, item := range node.Body {
-			item.Free()
-		}
-	}
-	if node.Elifs != nil {
-		for _, item := range node.Elifs {
-			item.Free()
-		}
-	}
-	if node.Else != nil {
-		for _, item := range node.Else {
-			item.Free()
-		}
-	}
-	*node = IfStmt{}
-}
-
-func (node *IfStmt) Free() {
-	reuse.Free[IfStmt](node, nil)
 }
 
 func (node *IfStmt) Format(ctx *FmtCtx) {
@@ -156,35 +70,12 @@ func (node *IfStmt) Format(ctx *FmtCtx) {
 }
 
 func (node *IfStmt) GetStatementType() string { return "If Statement" }
-
-func (node *IfStmt) GetQueryType() string { return QueryTypeTCL }
-
-func (node IfStmt) TypeName() string { return "tree.IfStmt" }
+func (node *IfStmt) GetQueryType() string     { return QueryTypeTCL }
 
 type WhenStmt struct {
 	statementImpl
 	Cond Expr
 	Body []Statement
-}
-
-func NewWhenStmt(cond Expr, body []Statement) *WhenStmt {
-	w := reuse.Alloc[WhenStmt](nil)
-	w.Cond = cond
-	w.Body = body
-	return w
-}
-
-func (node *WhenStmt) reset() {
-	if node.Body != nil {
-		for _, item := range node.Body {
-			item.Free()
-		}
-	}
-	*node = WhenStmt{}
-}
-
-func (node *WhenStmt) Free() {
-	reuse.Free[WhenStmt](node, nil)
 }
 
 func (node *WhenStmt) Format(ctx *FmtCtx) {
@@ -199,42 +90,13 @@ func (node *WhenStmt) Format(ctx *FmtCtx) {
 	}
 }
 func (node *WhenStmt) GetStatementType() string { return "When Statement" }
-
-func (node *WhenStmt) GetQueryType() string { return QueryTypeTCL }
-
-func (node WhenStmt) TypeName() string { return "tree.WhenStmt" }
+func (node *WhenStmt) GetQueryType() string     { return QueryTypeTCL }
 
 type CaseStmt struct {
 	statementImpl
 	Expr  Expr
 	Whens []*WhenStmt
 	Else  []Statement
-}
-
-func NewCaseStmt(expr Expr, whens []*WhenStmt, elseStmt []Statement) *CaseStmt {
-	c := reuse.Alloc[CaseStmt](nil)
-	c.Expr = expr
-	c.Whens = whens
-	c.Else = elseStmt
-	return c
-}
-
-func (node *CaseStmt) reset() {
-	if node.Whens != nil {
-		for _, item := range node.Whens {
-			item.Free()
-		}
-	}
-	if node.Else != nil {
-		for _, item := range node.Else {
-			item.Free()
-		}
-	}
-	*node = CaseStmt{}
-}
-
-func (node *CaseStmt) Free() {
-	reuse.Free[CaseStmt](node, nil)
 }
 
 func (node *CaseStmt) Format(ctx *FmtCtx) {
@@ -257,7 +119,4 @@ func (node *CaseStmt) Format(ctx *FmtCtx) {
 }
 
 func (node *CaseStmt) GetStatementType() string { return "Case Statement" }
-
-func (node *CaseStmt) GetQueryType() string { return QueryTypeTCL }
-
-func (node CaseStmt) TypeName() string { return "tree.CaseStmt" }
+func (node *CaseStmt) GetQueryType() string     { return QueryTypeTCL }
