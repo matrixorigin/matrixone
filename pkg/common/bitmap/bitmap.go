@@ -194,6 +194,10 @@ func (n *Bitmap) Ptr() *uint64 {
 	return &n.data[0]
 }
 
+func (n *Bitmap) EmptyFlagIsNil() bool {
+	return n.emptyFlag == nil
+}
+
 // EmptyByFlag is a quick and dirty way to check if the bitmap is empty.
 // If it retruns true, the bitmap is empty.  Otherwise, it may or may not be empty.
 func (n *Bitmap) EmptyByFlag() bool {

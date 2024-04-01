@@ -17,8 +17,11 @@ package vector
 import (
 	"bytes"
 	"fmt"
+	"runtime/debug"
 	"slices"
 	"sort"
+	"strings"
+	"time"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -65,6 +68,11 @@ type Vector struct {
 	isBin bool
 
 	Debug string
+
+	AllocMsg []string
+	FreeMsg  []string
+	PutMsg   []string
+	GetMsg   []string
 }
 
 type typedSlice struct {
@@ -414,6 +422,7 @@ func (v *Vector) Free(mp *mpool.MPool) {
 	if !v.cantFreeArea {
 		mp.Free(v.area)
 	}
+
 	v.class = FLAT
 	v.col = typedSlice{}
 	v.data = nil
@@ -423,8 +432,20 @@ func (v *Vector) Free(mp *mpool.MPool) {
 	v.cantFreeData = false
 	v.cantFreeArea = false
 
+	if v.nsp.CheckEmptyFlagNil() {
+		//double free happend
+		logutil.Errorf("AllocMsg=%s\n\n", strings.Join(v.AllocMsg, "\n"))
+		logutil.Errorf("FreeMsg=%s\n\n", strings.Join(v.FreeMsg, "\n"))
+		logutil.Errorf("GetMsg=%s\n\n", strings.Join(v.GetMsg, "\n"))
+		logutil.Errorf("PutMsg=%s\n\n", strings.Join(v.PutMsg, "\n"))
+	}
 	v.nsp.Reset()
 	v.sorted = false
+
+	if len(v.FreeMsg) > 3 {
+		v.FreeMsg = v.FreeMsg[1:]
+	}
+	v.FreeMsg = append(v.FreeMsg, time.Now().String()+" : typ="+v.typ.DescString()+" "+string(debug.Stack()))
 
 	reuse.Free[Vector](v, nil)
 }
