@@ -87,6 +87,9 @@ type CNServer struct {
 	addr string
 	// internalConn indicates the connection is from internal network. Default is false,
 	internalConn bool
+
+	// clientAddr is the real client address.
+	clientAddr string
 }
 
 // Connect connects to backend server and returns IOSession.
@@ -99,16 +102,13 @@ func (s *CNServer) Connect(timeout time.Duration) (goetty.IOSession, error) {
 	if len(s.salt) != 20 {
 		return nil, moerr.NewInternalErrorNoCtx("salt is empty")
 	}
-	info := pb.NewVersionedExtraInfo(pb.Version0,
-		&pb.ExtraInfoV0{
-			Salt: s.salt,
-			Label: pb.RequestLabel{
-				Labels: s.reqLabel.allLabels(),
-			},
-			ConnectionID: s.proxyConnID,
-			InternalConn: s.internalConn,
-		},
-	)
+	info := pb.ExtraInfo{
+		Salt:         s.salt,
+		InternalConn: s.internalConn,
+		ConnectionID: s.proxyConnID,
+		Label:        s.reqLabel.allLabels(),
+		ClientAddr:   s.clientAddr,
+	}
 	data, err := info.Encode()
 	if err != nil {
 		return nil, err
