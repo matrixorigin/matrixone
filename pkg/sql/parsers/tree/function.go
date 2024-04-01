@@ -26,32 +26,31 @@ func init() {
 		func() *DropFunction { return &DropFunction{} },
 		func(d *DropFunction) { d.reset() },
 		reuse.DefaultOptions[DropFunction](), //.
-	) //WithEnableChecker()
+	) // WithEnableChecker()
 
 	reuse.CreatePool[FunctionArgDecl](
 		func() *FunctionArgDecl { return &FunctionArgDecl{} },
 		func(f *FunctionArgDecl) { f.reset() },
 		reuse.DefaultOptions[FunctionArgDecl](), //.
-	) //WithEnableChecker()
+	) // WithEnableChecker()
 
 	reuse.CreatePool[ReturnType](
 		func() *ReturnType { return &ReturnType{} },
 		func(r *ReturnType) { r.reset() },
 		reuse.DefaultOptions[ReturnType](), //.
-	) //WithEnableChecker()
+	) // WithEnableChecker()
 
 	reuse.CreatePool[FunctionName](
 		func() *FunctionName { return &FunctionName{} },
 		func(f *FunctionName) { f.reset() },
 		reuse.DefaultOptions[FunctionName](), //.
-	) //WithEnableChecker()
+	) // WithEnableChecker()
 
 	reuse.CreatePool[CreateFunction](
 		func() *CreateFunction { return &CreateFunction{} },
 		func(c *CreateFunction) { c.reset() },
 		reuse.DefaultOptions[CreateFunction](), //.
-	) //WithEnableChecker()
-
+	) // WithEnableChecker()
 }
 
 type FunctionArg interface {
@@ -62,18 +61,26 @@ type FunctionArg interface {
 	GetType(ctx *FmtCtx) string
 }
 
+// container holding list of arguments in udf
+type FunctionArgs []FunctionArg
+
 type FunctionArgImpl struct {
 	FunctionArg
 }
-
-// container holding list of arguments in udf
-type FunctionArgs []FunctionArg
 
 type FunctionArgDecl struct {
 	FunctionArgImpl
 	Name       *UnresolvedName
 	Type       ResolvableTypeReference
 	DefaultVal Expr
+}
+
+func NewFunctionArgDecl(n *UnresolvedName, t ResolvableTypeReference, d Expr) *FunctionArgDecl {
+	fa := reuse.Alloc[FunctionArgDecl](nil)
+	fa.Name = n
+	fa.Type = t
+	fa.DefaultVal = d
+	return fa
 }
 
 func (node *FunctionArgDecl) Format(ctx *FmtCtx) {
@@ -107,6 +114,10 @@ func (node *FunctionArgDecl) reset() {
 	// if node.Name != nil {
 	// node.Name.Free()
 	// }
+	// if node.DefaultVal != nil {
+	// switch item.(type) {
+	// case *IntVal:
+	// }
 	*node = FunctionArgDecl{}
 }
 
@@ -116,6 +127,12 @@ func (node *FunctionArgDecl) Free() {
 
 type ReturnType struct {
 	Type ResolvableTypeReference
+}
+
+func NewReturnType(t ResolvableTypeReference) *ReturnType {
+	rt := reuse.Alloc[ReturnType](nil)
+	rt.Type = t
+	return rt
 }
 
 func (node *ReturnType) Format(ctx *FmtCtx) {
@@ -134,6 +151,13 @@ func (node *ReturnType) Free() {
 
 type FunctionName struct {
 	Name objName
+}
+
+func NewFuncName(name Identifier, prefix ObjectNamePrefix) *FunctionName {
+	fn := reuse.Alloc[FunctionName](nil)
+	fn.Name.ObjectName = name
+	fn.Name.ObjectNamePrefix = prefix
+	return fn
 }
 
 func (node *FunctionName) Format(ctx *FmtCtx) {
@@ -254,7 +278,8 @@ func (node *CreateFunction) Format(ctx *FmtCtx) {
 }
 
 func (node *CreateFunction) GetStatementType() string { return "CreateFunction" }
-func (node *CreateFunction) GetQueryType() string     { return QueryTypeDDL }
+
+func (node *CreateFunction) GetQueryType() string { return QueryTypeDDL }
 
 func (node CreateFunction) TypeName() string { return "tree.CreateFunction" }
 
@@ -264,6 +289,18 @@ func (node *CreateFunction) reset() {
 	}
 	if node.ReturnType != nil {
 		node.ReturnType.Free()
+	}
+	if node.Args != nil {
+		for _, arg := range node.Args {
+			if arg != nil {
+				switch a := arg.(type) {
+				case *FunctionArgDecl:
+					a.Free()
+				default:
+					panic("unreachable")
+				}
+			}
+		}
 	}
 	*node = CreateFunction{}
 }
@@ -288,6 +325,18 @@ func (node *DropFunction) reset() {
 	if node.Name != nil {
 		node.Name.Free()
 	}
+	if node.Args != nil {
+		for _, arg := range node.Args {
+			if arg != nil {
+				switch a := arg.(type) {
+				case *FunctionArgDecl:
+					a.Free()
+				default:
+					panic("unreachable")
+				}
+			}
+		}
+	}
 	*node = DropFunction{}
 }
 
@@ -308,33 +357,12 @@ func (node *DropFunction) Format(ctx *FmtCtx) {
 }
 
 func (node *DropFunction) GetStatementType() string { return "DropFunction" }
-func (node *DropFunction) GetQueryType() string     { return QueryTypeDDL }
+
+func (node *DropFunction) GetQueryType() string { return QueryTypeDDL }
+
 func NewDropFunction(name *FunctionName, args FunctionArgs) *DropFunction {
 	dropFunction := reuse.Alloc[DropFunction](nil)
 	dropFunction.Name = name
 	dropFunction.Args = args
 	return dropFunction
-}
-
-func NewFunctionArgDecl(n *UnresolvedName, t ResolvableTypeReference, d Expr) *FunctionArgDecl {
-	return &FunctionArgDecl{
-		Name:       n,
-		Type:       t,
-		DefaultVal: d,
-	}
-}
-
-func NewFuncName(name Identifier, prefix ObjectNamePrefix) *FunctionName {
-	return &FunctionName{
-		Name: objName{
-			ObjectName:       name,
-			ObjectNamePrefix: prefix,
-		},
-	}
-}
-
-func NewReturnType(t ResolvableTypeReference) *ReturnType {
-	return &ReturnType{
-		Type: t,
-	}
 }
