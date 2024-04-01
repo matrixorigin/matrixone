@@ -285,6 +285,7 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 			{"dat_createsql", types.T_varchar, false, 1024, 0},
 			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
 		},
+		pks: []int{0},
 	}
 	moSchema["mo_tables"] = &Schema{
 		cols: []col{
@@ -294,6 +295,7 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 			{"account_id", types.T_uint32, false, 0, 0},
 			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
 		},
+		pks: []int{0, 1},
 	}
 	moSchema["mo_columns"] = &Schema{
 		cols: []col{
@@ -323,6 +325,7 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 			{"attr_enum", types.T_varchar, false, 2048, 0},
 			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
 		},
+		pks: []int{0},
 	}
 	moSchema["mo_user"] = &Schema{
 		cols: []col{
