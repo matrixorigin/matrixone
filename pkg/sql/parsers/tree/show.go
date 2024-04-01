@@ -339,6 +339,8 @@ type ShowTables struct {
 	Where  *Where
 }
 
+func (node *ShowTables) Free() {}
+
 func (node *ShowTables) Format(ctx *FmtCtx) {
 	ctx.WriteString("show")
 	if node.Open {
@@ -485,6 +487,8 @@ type ShowStatus struct {
 	Like   *ComparisonExpr
 	Where  *Where
 }
+
+func (node *ShowStatus) Free() {}
 
 func (node *ShowStatus) Format(ctx *FmtCtx) {
 	ctx.WriteString("show")

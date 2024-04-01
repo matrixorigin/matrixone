@@ -27,16 +27,16 @@ var (
 		input  string
 		output string
 	}{
-		//input:  "upgrade account all with retry 10",
-		//output: "upgrade account all with retry 10",
+		input:  "upgrade account all with retry 10",
+		output: "upgrade account all with retry 10",
 		//input:  "upgrade account all",
 		//output: "upgrade account all",
 		//input:  "upgrade account 'acc1' with retry 5",
 		//output: "upgrade account acc1 with retry 5",
 		//input:  "upgrade account 'acc1'",
 		//output: "upgrade account acc1",
-		input:  "show upgrade",
-		output: "show upgrade",
+		//input:  "show upgrade",
+		//output: "show upgrade",
 	}
 )
 

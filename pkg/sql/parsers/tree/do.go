@@ -14,10 +14,26 @@
 
 package tree
 
+import "github.com/matrixorigin/matrixone/pkg/common/reuse"
+
+func init() {
+	reuse.CreatePool[Do](
+		func() *Do { return &Do{} },
+		func(d *Do) { d.reset() },
+		reuse.DefaultOptions[Do](),
+	)
+}
+
 // Do statement
 type Do struct {
 	statementImpl
 	Exprs []Expr
+}
+
+func NewDo(e []Expr) *Do {
+	do := reuse.Alloc[Do](nil)
+	do.Exprs = e
+	return do
 }
 
 func (node *Do) Format(ctx *FmtCtx) {
@@ -27,5 +43,22 @@ func (node *Do) Format(ctx *FmtCtx) {
 	}
 }
 
+func (node *Do) Free() {
+	reuse.Free[Do](node, nil)
+}
+
 func (node *Do) GetStatementType() string { return "Do" }
-func (node *Do) GetQueryType() string     { return QueryTypeOth }
+
+func (node *Do) GetQueryType() string { return QueryTypeOth }
+
+func (node Do) TypeName() string { return "tree.Do" }
+
+func (node *Do) reset() {
+	// if node.Exprs != nil {
+	// for _, item := range node.Exprs {
+	// switch item.(type) {
+	// case *IntVal:
+	// }
+	// }
+	*node = Do{}
+}
