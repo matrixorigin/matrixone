@@ -17,8 +17,10 @@ package vector
 import (
 	"bytes"
 	"fmt"
+	"runtime/debug"
 	"slices"
 	"sort"
+	"time"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -65,6 +67,11 @@ type Vector struct {
 	isBin bool
 
 	Debug string
+
+	AllocMsg []string
+	FreeMsg  []string
+	PutMsg   []string
+	GetMsg   []string
 }
 
 type typedSlice struct {
@@ -276,6 +283,9 @@ func NewVec(typ types.Type) *Vector {
 	vec := NewVecFromReuse()
 	vec.typ = typ
 	vec.class = FLAT
+	if typ.Oid == types.T_char || typ.Oid == types.T_varchar {
+		fmt.Print("dd")
+	}
 
 	return vec
 }
@@ -408,16 +418,22 @@ func GetPtrAt[T any](v *Vector, idx int64) *T {
 }
 
 func (v *Vector) Free(mp *mpool.MPool) {
+	cannotReused := v.NeedDup()
 	if !v.cantFreeData {
 		mp.Free(v.data)
+		v.data = nil
+	} else {
+		v.data = v.data[:0]
 	}
 	if !v.cantFreeArea {
 		mp.Free(v.area)
+		v.area = nil
+	} else {
+		v.area = v.area[:0]
 	}
+
 	v.class = FLAT
 	v.col = typedSlice{}
-	v.data = nil
-	v.area = nil
 	v.capacity = 0
 	v.length = 0
 	v.cantFreeData = false
@@ -426,7 +442,14 @@ func (v *Vector) Free(mp *mpool.MPool) {
 	v.nsp.Reset()
 	v.sorted = false
 
-	reuse.Free[Vector](v, nil)
+	if len(v.FreeMsg) > 3 {
+		v.FreeMsg = v.FreeMsg[1:]
+	}
+	v.FreeMsg = append(v.FreeMsg, time.Now().String()+" : typ="+v.typ.DescString()+" "+string(debug.Stack()))
+
+	if !cannotReused {
+		reuse.Free[Vector](v, nil)
+	}
 }
 
 func (v *Vector) MarshalBinary() ([]byte, error) {
