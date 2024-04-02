@@ -232,6 +232,12 @@ var (
 	}, {
 		input: "show profiles",
 	}, {
+		input:  "CREATE TABLE new_t1 LIKE t1",
+		output: "create table new_t1 like t1",
+	}, {
+		input:  "CREATE TABLE new_t1 LIKE test.t1",
+		output: "create table new_t1 like test.t1",
+	}, {
 		input: "show privileges",
 	}, {
 		input: "show events from db1",

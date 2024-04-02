@@ -264,6 +264,7 @@ func (rm *RoutineManager) Created(rs goetty.IOSession) {
 	exe.ChooseDoQueryFunc(pu.SV.EnableDoComQueryInProgress)
 
 	routine := NewRoutine(rm.getCtx(), pro, exe, pu.SV, rs)
+	v2.CreatedRoutineCounter.Inc()
 
 	// XXX MPOOL pass in a nil mpool.
 	// XXX MPOOL can choose to use a Mid sized mpool, if, we know
@@ -278,6 +279,7 @@ func (rm *RoutineManager) Created(rs goetty.IOSession) {
 	ses.SetFromRealUser(true)
 	ses.setRoutineManager(rm)
 	ses.setRoutine(routine)
+	ses.clientAddr = pro.Peer()
 
 	ses.timestampMap[TSCreatedStart] = createdStart
 	defer func() {
@@ -315,6 +317,7 @@ When the io is closed, the Closed will be called.
 func (rm *RoutineManager) Closed(rs goetty.IOSession) {
 	logutil.Debugf("clean resource of the connection %d:%s", rs.ID(), rs.RemoteAddress())
 	defer func() {
+		v2.CloseRoutineCounter.Inc()
 		logutil.Debugf("resource of the connection %d:%s has been cleaned", rs.ID(), rs.RemoteAddress())
 	}()
 	rt := rm.deleteRoutine(rs)
