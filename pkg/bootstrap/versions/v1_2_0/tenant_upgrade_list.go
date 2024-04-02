@@ -41,6 +41,7 @@ var tenantUpgEntries = []versions.UpgradeEntry{
 	upg_information_schema_events,
 	upg_information_schema_tables,
 	upg_information_schema_processlist,
+	upg_information_schema_referenctial_constraints,
 }
 
 var UpgPrepareEntres = []versions.UpgradeEntry{
@@ -465,4 +466,51 @@ var upg_information_schema_processlist = versions.UpgradeEntry{
 		return false, nil
 	},
 	PreSql: fmt.Sprintf("DROP VIEW IF EXISTS %s.%s;", sysview.InformationDBConst, "processlist"),
+}
+
+var upg_information_schema_referenctial_constraints = versions.UpgradeEntry{
+	Schema:    sysview.InformationDBConst,
+	TableName: "REFERENTIAL_CONSTRAINTS",
+	UpgType:   versions.CREATE_VIEW,
+	UpgSql: fmt.Sprintf("CREATE VIEW %s.REFERENTIAL_CONSTRAINTS AS "+
+		"SELECT DISTINCT "+
+		"'def' AS CONSTRAINT_CATALOG, "+
+		"fk.db_name AS CONSTRAINT_SCHEMA, "+
+		"fk.constraint_name AS CONSTRAINT_NAME, "+
+		"'def' AS UNIQUE_CONSTRAINT_CATALOG, "+
+		"fk.refer_db_name AS UNIQUE_CONSTRAINT_SCHEMA, "+
+		"idx.type AS UNIQUE_CONSTRAINT_NAME,"+
+		"'NONE' AS MATCH_OPTION, "+
+		"fk.on_update AS UPDATE_RULE, "+
+		"fk.on_delete AS DELETE_RULE, "+
+		"fk.table_name AS TABLE_NAME, "+
+		"fk.refer_table_name AS REFERENCED_TABLE_NAME "+
+		"FROM mo_catalog.mo_foreign_keys fk "+
+		"JOIN mo_catalog.mo_indexes idx ON (fk.refer_column_name = idx.column_name)", sysview.InformationDBConst),
+	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+		exists, viewDef, err := versions.CheckViewDefinition(txn, accountId, sysview.InformationDBConst, "REFERENTIAL_CONSTRAINTS")
+		if err != nil {
+			return false, err
+		}
+
+		if exists && viewDef == fmt.Sprintf("CREATE VIEW %s.REFERENTIAL_CONSTRAINTS AS "+
+			"SELECT DISTINCT "+
+			"'def' AS CONSTRAINT_CATALOG, "+
+			"fk.db_name AS CONSTRAINT_SCHEMA, "+
+			"fk.constraint_name AS CONSTRAINT_NAME, "+
+			"'def' AS UNIQUE_CONSTRAINT_CATALOG, "+
+			"fk.refer_db_name AS UNIQUE_CONSTRAINT_SCHEMA, "+
+			"idx.type AS UNIQUE_CONSTRAINT_NAME,"+
+			"'NONE' AS MATCH_OPTION, "+
+			"fk.on_update AS UPDATE_RULE, "+
+			"fk.on_delete AS DELETE_RULE, "+
+			"fk.table_name AS TABLE_NAME, "+
+			"fk.refer_table_name AS REFERENCED_TABLE_NAME "+
+			"FROM mo_catalog.mo_foreign_keys fk "+
+			"JOIN mo_catalog.mo_indexes idx ON (fk.refer_column_name = idx.column_name)", sysview.InformationDBConst) {
+			return true, nil
+		}
+		return false, nil
+	},
+	PreSql: fmt.Sprintf("DROP VIEW IF EXISTS %s.%s;", sysview.InformationDBConst, "REFERENTIAL_CONSTRAINTS"),
 }

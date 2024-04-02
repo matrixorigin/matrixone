@@ -377,6 +377,22 @@ var (
 			"join `mo_catalog`.`mo_tables` `tbl` on (`idx`.`table_id` = `tbl`.`rel_id`))" +
 			"join `mo_catalog`.`mo_columns` `tcl` on (`idx`.`table_id` = `tcl`.`att_relname_id` and `idx`.`column_name` = `tcl`.`attname`)",
 
+		fmt.Sprintf("CREATE VIEW %s.REFERENTIAL_CONSTRAINTS AS "+
+			"SELECT DISTINCT "+
+			"'def' AS CONSTRAINT_CATALOG, "+
+			"fk.db_name AS CONSTRAINT_SCHEMA, "+
+			"fk.constraint_name AS CONSTRAINT_NAME, "+
+			"'def' AS UNIQUE_CONSTRAINT_CATALOG, "+
+			"fk.refer_db_name AS UNIQUE_CONSTRAINT_SCHEMA, "+
+			"idx.type AS UNIQUE_CONSTRAINT_NAME,"+
+			"'NONE' AS MATCH_OPTION, "+
+			"fk.on_update AS UPDATE_RULE, "+
+			"fk.on_delete AS DELETE_RULE, "+
+			"fk.table_name AS TABLE_NAME, "+
+			"fk.refer_table_name AS REFERENCED_TABLE_NAME "+
+			"FROM mo_catalog.mo_foreign_keys fk "+
+			"JOIN mo_catalog.mo_indexes idx ON (fk.refer_column_name = idx.column_name)", InformationDBConst),
+
 		"CREATE TABLE IF NOT EXISTS ENGINES (" +
 			"ENGINE varchar(64)," +
 			"SUPPORT varchar(8)," +
