@@ -302,6 +302,9 @@ type Session struct {
 
 	// FromProxy denotes whether the session is dispatched from proxy
 	fromProxy bool
+	// If the connection is from proxy, client address is the real address of client.
+	clientAddr string
+	proxyAddr  string
 
 	disableTrace bool
 }
@@ -2194,7 +2197,7 @@ func (bh *BackgroundHandler) Exec(ctx context.Context, sql string) error {
 	if err != nil {
 		return err
 	}
-	statements, err := mysql.Parse(ctx, sql, v.(int64))
+	statements, err := mysql.Parse(ctx, sql, v.(int64), 0)
 	if err != nil {
 		return err
 	}
@@ -2445,9 +2448,10 @@ func (ses *Session) StatusSession() *status.Session {
 				QueryType:     "",
 				SQLSourceType: "",
 				QueryStart:    time.Time{},
-				ClientHost:    ses.GetMysqlProtocol().Peer(),
+				ClientHost:    ses.clientAddr,
 				Role:          roleName,
 				FromProxy:     ses.fromProxy,
+				ProxyHost:     ses.proxyAddr,
 			}
 		}
 	}
@@ -2468,9 +2472,10 @@ func (ses *Session) StatusSession() *status.Session {
 		QueryType:     ses.GetQueryType(),
 		SQLSourceType: ses.GetSqlSourceType(),
 		QueryStart:    ses.GetQueryStart(),
-		ClientHost:    ses.GetMysqlProtocol().Peer(),
+		ClientHost:    ses.clientAddr,
 		Role:          roleName,
 		FromProxy:     ses.fromProxy,
+		ProxyHost:     ses.proxyAddr,
 	}
 }
 
@@ -2547,7 +2552,7 @@ func (p *prepareStmtMigration) Migrate(ses *Session) error {
 	if !strings.HasPrefix(strings.ToLower(p.sql), "prepare") {
 		p.sql = fmt.Sprintf("prepare %s from %s", p.name, p.sql)
 	}
-	stmts, err := mysql.Parse(ses.requestCtx, p.sql, v.(int64))
+	stmts, err := mysql.Parse(ses.requestCtx, p.sql, v.(int64), 0)
 	if err != nil {
 		return err
 	}

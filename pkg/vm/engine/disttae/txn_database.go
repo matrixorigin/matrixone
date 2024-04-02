@@ -575,9 +575,17 @@ func (db *txnDatabase) openSysTable(p *process.Process, id uint64, name string,
 		tableId:       id,
 		tableName:     name,
 		defs:          defs,
-		primaryIdx:    -1,
-		primarySeqnum: -1,
+		primaryIdx:    0,
+		primarySeqnum: 0,
 		clusterByIdx:  -1,
+	}
+	switch name {
+	case catalog.MO_DATABASE:
+		tbl.constraint = catalog.MoDatabaseConstraint
+	case catalog.MO_TABLES:
+		tbl.constraint = catalog.MoTableConstraint
+	case catalog.MO_COLUMNS:
+		tbl.constraint = catalog.MoColumnConstraint
 	}
 	tbl.GetTableDef(context.TODO())
 	tbl.proc.Store(p)

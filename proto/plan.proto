@@ -581,10 +581,16 @@ message FrameBound {
 }
 
 message OnDuplicateKeyCtx {
-	TableDef table_def					= 1;
-	repeated int32 on_duplicate_idx		= 2;
-	map<string, Expr> on_duplicate_expr	= 3;
-	bool is_ignore 						= 4;
+	repeated string attrs = 1;
+	int32 insert_col_count = 2;
+	repeated Expr unique_col_check_expr = 3;
+	repeated string unique_cols = 4;
+	repeated int32 on_duplicate_idx		= 5;
+	map<string, Expr> on_duplicate_expr	= 6;
+	bool is_ignore 						= 7;
+	string table_name         = 8;
+	uint64 table_id           = 9;
+	uint32 table_version			= 10;
 }
 
 message InsertCtx {
@@ -859,7 +865,6 @@ message PreInsertUkCtx {
 	int32 pk_column 		= 2;
 	Type pk_type 			= 3;
 	Type uk_type			= 4;
-	TableDef table_def 		= 5;
 }
 
 message PreDeleteCtx {

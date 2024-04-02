@@ -40,6 +40,7 @@ var tenantUpgEntries = []versions.UpgradeEntry{
 	upg_information_schema_table_constraints,
 	upg_information_schema_events,
 	upg_information_schema_tables,
+	upg_information_schema_processlist,
 }
 
 var UpgPrepareEntres = []versions.UpgradeEntry{
@@ -437,4 +438,31 @@ var upg_information_schema_tables = versions.UpgradeEntry{
 		return false, nil
 	},
 	PreSql: fmt.Sprintf("DROP VIEW IF EXISTS %s.%s;", sysview.InformationDBConst, "TABLES"),
+}
+
+var upg_information_schema_processlist = versions.UpgradeEntry{
+	Schema:    sysview.InformationDBConst,
+	TableName: "processlist",
+	UpgType:   versions.MODIFY_VIEW,
+	UpgSql: fmt.Sprintf("CREATE VIEW IF NOT EXISTS %s.PROCESSLIST AS "+
+		"select node_id, conn_id, session_id, account, user, host, db, "+
+		"session_start, command, info, txn_id, statement_id, statement_type, "+
+		"query_type, sql_source_type, query_start, client_host, role, proxy_host "+
+		"from PROCESSLIST() A", sysview.InformationDBConst),
+	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
+		exists, viewDef, err := versions.CheckViewDefinition(txn, accountId, sysview.InformationDBConst, "processlist")
+		if err != nil {
+			return false, err
+		}
+
+		if exists && viewDef == fmt.Sprintf("CREATE VIEW IF NOT EXISTS %s.PROCESSLIST AS "+
+			"select node_id, conn_id, session_id, account, user, host, db, "+
+			"session_start, command, info, txn_id, statement_id, statement_type, "+
+			"query_type, sql_source_type, query_start, client_host, role, proxy_host "+
+			"from PROCESSLIST() A", sysview.InformationDBConst) {
+			return true, nil
+		}
+		return false, nil
+	},
+	PreSql: fmt.Sprintf("DROP VIEW IF EXISTS %s.%s;", sysview.InformationDBConst, "processlist"),
 }

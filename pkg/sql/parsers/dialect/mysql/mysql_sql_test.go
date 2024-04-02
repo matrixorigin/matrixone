@@ -44,7 +44,7 @@ func TestDebug(t *testing.T) {
 	if debugSQL.output == "" {
 		debugSQL.output = debugSQL.input
 	}
-	ast, err := ParseOne(context.TODO(), debugSQL.input, 1)
+	ast, err := ParseOne(context.TODO(), debugSQL.input, 1, 0)
 	if err != nil {
 		t.Errorf("Parse(%q) err: %v", debugSQL.input, err)
 		return
@@ -70,7 +70,7 @@ func TestOriginSQL(t *testing.T) {
 	if orginSQL.output == "" {
 		orginSQL.output = orginSQL.input
 	}
-	ast, err := ParseOne(context.TODO(), orginSQL.input, 0)
+	ast, err := ParseOne(context.TODO(), orginSQL.input, 0, 1)
 	if err != nil {
 		t.Errorf("Parse(%q) err: %v", orginSQL.input, err)
 		return
@@ -239,6 +239,12 @@ var (
 		output: "alter database configuration for test as {transaction_isolation: REPEATABLE-READ, lower_case_table_names: 0} ",
 	}, {
 		input: "show profiles",
+	}, {
+		input:  "CREATE TABLE new_t1 LIKE t1",
+		output: "create table new_t1 like t1",
+	}, {
+		input:  "CREATE TABLE new_t1 LIKE test.t1",
+		output: "create table new_t1 like test.t1",
 	}, {
 		input: "show privileges",
 	}, {
@@ -2810,7 +2816,7 @@ func TestValid(t *testing.T) {
 		if tcase.output == "" {
 			tcase.output = tcase.input
 		}
-		ast, err := ParseOne(ctx, tcase.input, 1)
+		ast, err := ParseOne(ctx, tcase.input, 1, 0)
 		if err != nil {
 			t.Errorf("Parse(%q) err: %v", tcase.input, err)
 			continue
@@ -2849,7 +2855,7 @@ func TestSQLStringFmt(t *testing.T) {
 		if tcase.output == "" {
 			tcase.output = tcase.input
 		}
-		ast, err := ParseOne(ctx, tcase.input, 1)
+		ast, err := ParseOne(ctx, tcase.input, 1, 0)
 		if err != nil {
 			t.Errorf("Parse(%q) err: %v", tcase.input, err)
 			continue
@@ -2954,7 +2960,7 @@ func TestMulti(t *testing.T) {
 		if tcase.output == "" {
 			tcase.output = tcase.input
 		}
-		asts, err := Parse(ctx, tcase.input, 1)
+		asts, err := Parse(ctx, tcase.input, 1, 0)
 		if err != nil {
 			t.Errorf("Parse(%q) err: %v", tcase.input, err)
 			continue
@@ -3014,7 +3020,7 @@ var (
 func TestFaultTolerance(t *testing.T) {
 	ctx := context.TODO()
 	for _, tcase := range invalidSQL {
-		_, err := ParseOne(ctx, tcase.input, 1)
+		_, err := ParseOne(ctx, tcase.input, 1, 0)
 		if err == nil {
 			t.Errorf("Fault tolerant ases (%q) should parse errors", tcase.input)
 			continue

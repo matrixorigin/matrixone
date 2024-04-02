@@ -251,7 +251,8 @@ func (exec *txnExecutor) Exec(
 	//-----------------------------------------------------------------------------------------
 
 	receiveAt := time.Now()
-	stmts, err := parsers.Parse(exec.ctx, dialect.MYSQL, sql, 1)
+
+	stmts, err := parsers.Parse(exec.ctx, dialect.MYSQL, sql, 1, 0)
 	defer func() {
 		for _, stmt := range stmts {
 			stmt.Free()
