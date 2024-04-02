@@ -16,7 +16,6 @@ package disttae
 
 import (
 	"context"
-	"runtime/trace"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -92,9 +91,6 @@ func consumeLogTailOfPull(
 	state *logtailreplay.PartitionState,
 	logTail *api.SyncLogTailResp,
 ) (err error) {
-	ctx, task := trace.NewTask(ctx, "consumeLogTailOfPull")
-	defer task.End()
-
 	logutil.Debugf("consumeLogTailOfPull table %d %s", tbl.tableId, tbl.tableName)
 	var entries []*api.Entry
 	var closeCBs []func()
