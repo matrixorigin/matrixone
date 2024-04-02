@@ -263,7 +263,7 @@ var (
 			"DATABASE_COLLATION varchar(64)" +
 			");",
 
-		fmt.Sprintf("CREATE VIEW IF NOT EXISTS TABLES AS "+
+		fmt.Sprintf("CREATE VIEW IF NOT EXISTS information_schema.TABLES AS "+
 			"SELECT 'def' AS TABLE_CATALOG,"+
 			"reldatabase AS TABLE_SCHEMA,"+
 			"relname AS TABLE_NAME,"+
@@ -290,7 +290,7 @@ var (
 			"if(relkind = 'v', NULL, if(partitioned = 0, '', cast('partitioned' as varchar(256)))) AS CREATE_OPTIONS,"+
 			"cast(rel_comment as text) AS TABLE_COMMENT "+
 			"FROM mo_catalog.mo_tables tbl "+
-			"WHERE tbl.relname not like '%s' and tbl.relkind != '%s';", catalog.IndexTableNamePrefix+"%", catalog.SystemPartitionRel),
+			"WHERE tbl.account_id = current_account_id() and tbl.relname not like '%s' and tbl.relkind != '%s';", catalog.IndexTableNamePrefix+"%", catalog.SystemPartitionRel),
 
 		"CREATE VIEW IF NOT EXISTS `PARTITIONS` AS " +
 			"SELECT " +

@@ -82,9 +82,25 @@ func (s *sAggBitmapConstruct) Eval(lastResult [][]byte) ([][]byte, error) {
 	return lastResult, nil
 }
 func (s *sAggBitmapConstruct) MarshalBinary() ([]byte, error) {
-	return nil, nil
+	bmpBinarySlice := make([][]byte, 0, len(s.bmps))
+	for _, bmp := range s.bmps {
+		if bmpBinary, err := bmp.MarshalBinary(); err != nil {
+			return nil, err
+		} else {
+			bmpBinarySlice = append(bmpBinarySlice, bmpBinary)
+		}
+	}
+	return types.EncodeSlice(bmpBinarySlice), nil
 }
-func (s *sAggBitmapConstruct) UnmarshalBinary(_ []byte) error {
+func (s *sAggBitmapConstruct) UnmarshalBinary(bytes []byte) error {
+	bmpBinarySlice := types.DecodeSlice[[]byte](bytes)
+	for _, bmpBinary := range bmpBinarySlice {
+		bmp := roaring.New()
+		if err := bmp.UnmarshalBinary(bmpBinary); err != nil {
+			return err
+		}
+		s.bmps = append(s.bmps, bmp)
+	}
 	return nil
 }
 
@@ -125,8 +141,24 @@ func (s *sAggBitmapOr) Eval(lastResult [][]byte) ([][]byte, error) {
 	return lastResult, nil
 }
 func (s *sAggBitmapOr) MarshalBinary() ([]byte, error) {
-	return nil, nil
+	bmpBinarySlice := make([][]byte, 0, len(s.bmps))
+	for _, bmp := range s.bmps {
+		if bmpBinary, err := bmp.MarshalBinary(); err != nil {
+			return nil, err
+		} else {
+			bmpBinarySlice = append(bmpBinarySlice, bmpBinary)
+		}
+	}
+	return types.EncodeSliceWithCap(bmpBinarySlice), nil
 }
-func (s *sAggBitmapOr) UnmarshalBinary(_ []byte) error {
+func (s *sAggBitmapOr) UnmarshalBinary(bytes []byte) error {
+	bmpBinarySlice := types.DecodeSlice[[]byte](bytes)
+	for _, bmpBinary := range bmpBinarySlice {
+		bmp := roaring.New()
+		if err := bmp.UnmarshalBinary(bmpBinary); err != nil {
+			return err
+		}
+		s.bmps = append(s.bmps, bmp)
+	}
 	return nil
 }
