@@ -112,12 +112,12 @@ func (node StatementOption) TypeName() string { return "tree.StatementOption" }
 
 type Kill struct {
 	statementImpl
-	Option       KillOption
+	Option       *KillOption
 	ConnectionId uint64
-	StmtOption   StatementOption
+	StmtOption   *StatementOption
 }
 
-func NewKill(o KillOption, id uint64, so StatementOption) *Kill {
+func NewKill(o *KillOption, id uint64, so *StatementOption) *Kill {
 	k := reuse.Alloc[Kill](nil)
 	k.Option = o
 	k.ConnectionId = id

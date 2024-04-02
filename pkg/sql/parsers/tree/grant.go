@@ -53,9 +53,9 @@ const (
 type Grant struct {
 	statementImpl
 	Typ            GrantType
-	GrantPrivilege GrantPrivilege
-	GrantRole      GrantRole
-	GrantProxy     GrantProxy
+	GrantPrivilege *GrantPrivilege
+	GrantRole      *GrantRole
+	GrantProxy     *GrantProxy
 }
 
 func (node *Grant) Format(ctx *FmtCtx) {

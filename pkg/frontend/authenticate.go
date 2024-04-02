@@ -7659,7 +7659,7 @@ func authenticateUserCanExecuteStatementWithObjectTypeNone(ctx context.Context, 
 		switch gp := stmt.(type) {
 		case *tree.Grant:
 			if gp.Typ == tree.GrantTypePrivilege {
-				yes, err := checkGrantPrivilege(&gp.GrantPrivilege)
+				yes, err := checkGrantPrivilege(gp.GrantPrivilege)
 				if err != nil {
 					return yes, err
 				}

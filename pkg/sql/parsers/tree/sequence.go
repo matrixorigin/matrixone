@@ -124,7 +124,7 @@ func (node CreateSequence) TypeName() string { return "tree.CreateSequence" }
 
 func (node *CreateSequence) GetStatementType() string { return "Create Sequence" }
 
-func (node *CreateSequence) GetQueryType() string     { return QueryTypeDDL }
+func (node *CreateSequence) GetQueryType() string { return QueryTypeDDL }
 
 type IncrementByOption struct {
 	Minus bool
@@ -234,7 +234,7 @@ func (node *DropSequence) Format(ctx *FmtCtx) {
 
 func (node *DropSequence) GetStatementType() string { return "Drop Sequence" }
 
-func (node *DropSequence) GetQueryType() string     { return QueryTypeDDL }
+func (node *DropSequence) GetQueryType() string { return QueryTypeDDL }
 
 type AlterSequence struct {
 	statementImpl
@@ -294,11 +294,11 @@ func (node *AlterSequence) Format(ctx *FmtCtx) {
 	}
 }
 
-func (node AlterSequence) TypeName() string          { return "tree.AlterSequence" }
+func (node AlterSequence) TypeName() string { return "tree.AlterSequence" }
 
 func (node *AlterSequence) GetStatementType() string { return "Alter Sequence" }
 
-func (node *AlterSequence) GetQueryType() string     { return QueryTypeDDL }
+func (node *AlterSequence) GetQueryType() string { return QueryTypeDDL }
 
 func (node *AlterSequence) reset() {
 	*node = AlterSequence{}

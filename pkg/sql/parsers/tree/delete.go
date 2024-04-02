@@ -82,14 +82,15 @@ func (node *Delete) GetQueryType() string { return QueryTypeDML }
 func (node Delete) TypeName() string { return "tree.Delete" }
 
 func NewDelete(ts TableExprs, w *Where) *Delete {
-	de := reuse.Alloc[Delete](nil)
+	// de := reuse.Alloc[Delete](nil)
+	de := new(Delete)
 	de.Tables = ts
 	de.Where = w
 	return de
 }
 
 func (node *Delete) Free() {
-	reuse.Free[Delete](node, nil)
+	// reuse.Free[Delete](node, nil)
 }
 
 func (node *Delete) reset() {

@@ -64,7 +64,7 @@ func (node *Update) Format(ctx *FmtCtx) {
 
 func (node *Update) GetStatementType() string { return "Update" }
 
-func (node *Update) GetQueryType() string     { return QueryTypeDML }
+func (node *Update) GetQueryType() string { return QueryTypeDML }
 
 type UpdateExprs []*UpdateExpr
 
@@ -334,7 +334,7 @@ func formatS3option(ctx *FmtCtx, option []string) {
 
 func (node *Load) GetStatementType() string { return "Load" }
 
-func (node *Load) GetQueryType() string     { return QueryTypeDML }
+func (node *Load) GetQueryType() string { return QueryTypeDML }
 
 type DuplicateKey interface{}
 

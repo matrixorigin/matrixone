@@ -119,7 +119,7 @@ func (node *CreateSource) Format(ctx *FmtCtx) {
 
 func (node *CreateSource) GetStatementType() string { return "Create Source" }
 
-func (node *CreateSource) GetQueryType() string     { return QueryTypeDDL }
+func (node *CreateSource) GetQueryType() string { return QueryTypeDDL }
 
 func (node CreateSource) TypeName() string { return "tree.CreateSource" }
 
@@ -221,6 +221,10 @@ func (node *CreateSource) reset() {
 				d.Free()
 			case *CheckIndex:
 				d.Free()
+			default:
+				if d != nil {
+					panic(fmt.Sprintf("miss Free for %v", d))
+				}
 			}
 		}
 	}

@@ -84,4 +84,4 @@ func (node CreateView) TypeName() string { return "tree.CreateView" }
 
 func (node *CreateView) GetStatementType() string { return "Create View" }
 
-func (node *CreateView) GetQueryType() string     { return QueryTypeDDL }
+func (node *CreateView) GetQueryType() string { return QueryTypeDDL }

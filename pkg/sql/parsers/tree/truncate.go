@@ -44,7 +44,7 @@ func (node *TruncateTable) Format(ctx *FmtCtx) {
 
 func (node *TruncateTable) GetStatementType() string { return "Truncate" }
 
-func (node *TruncateTable) GetQueryType() string     { return QueryTypeDDL }
+func (node *TruncateTable) GetQueryType() string { return QueryTypeDDL }
 
 func (node *TruncateTable) Free() {
 	reuse.Free[TruncateTable](node, nil)

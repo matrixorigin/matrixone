@@ -58,7 +58,7 @@ func (node *Replace) Format(ctx *FmtCtx) {
 
 func (node *Replace) GetStatementType() string { return "Replace" }
 
-func (node *Replace) GetQueryType() string     { return QueryTypeDML }
+func (node *Replace) GetQueryType() string { return QueryTypeDML }
 
 func NewReplace(r *Select) *Replace {
 	replace := reuse.Alloc[Replace](nil)

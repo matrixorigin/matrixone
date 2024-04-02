@@ -63,8 +63,8 @@ const (
 type Revoke struct {
 	statementImpl
 	Typ             RevokeType
-	RevokePrivilege RevokePrivilege
-	RevokeRole      RevokeRole
+	RevokePrivilege *RevokePrivilege
+	RevokeRole      *RevokeRole
 }
 
 func (node *Revoke) Format(ctx *FmtCtx) {
@@ -77,6 +77,12 @@ func (node *Revoke) Format(ctx *FmtCtx) {
 }
 
 func (node *Revoke) reset() {
+	if node.RevokePrivilege != nil {
+		node.RevokePrivilege.Free()
+	}
+	if node.RevokeRole != nil {
+		node.RevokeRole.Free()
+	}
 	*node = Revoke{}
 }
 

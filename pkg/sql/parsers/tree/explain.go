@@ -96,7 +96,7 @@ func (node *ExplainStmt) Format(ctx *FmtCtx) {
 
 func (node *ExplainStmt) GetStatementType() string { return "Explain" }
 
-func (node *ExplainStmt) GetQueryType() string     { return QueryTypeOth }
+func (node *ExplainStmt) GetQueryType() string { return QueryTypeOth }
 
 // EXPLAIN FOR CONNECTION statement
 
@@ -158,7 +158,7 @@ func (node *ExplainAnalyze) Format(ctx *FmtCtx) {
 
 func (node *ExplainAnalyze) GetStatementType() string { return "Explain Analyze" }
 
-func (node *ExplainAnalyze) GetQueryType() string     { return QueryTypeOth }
+func (node *ExplainAnalyze) GetQueryType() string { return QueryTypeOth }
 
 func (node *ExplainAnalyze) Free() {
 	reuse.Free[ExplainAnalyze](node, nil)
@@ -192,7 +192,7 @@ func (node *ExplainFor) Format(ctx *FmtCtx) {
 
 func (node *ExplainFor) GetStatementType() string { return "Explain Format" }
 
-func (node *ExplainFor) GetQueryType() string     { return QueryTypeOth }
+func (node *ExplainFor) GetQueryType() string { return QueryTypeOth }
 
 func (node *ExplainFor) Free() {
 	reuse.Free[ExplainFor](node, nil)

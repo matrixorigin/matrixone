@@ -96,10 +96,10 @@ func (node TableLock) TypeName() string { return "tree.TableLock" }
 
 type LockTableStmt struct {
 	statementImpl
-	TableLocks []TableLock
+	TableLocks []*TableLock
 }
 
-func NewLockTableStmt(tableLocks []TableLock) *LockTableStmt {
+func NewLockTableStmt(tableLocks []*TableLock) *LockTableStmt {
 	l := reuse.Alloc[LockTableStmt](nil)
 	l.TableLocks = tableLocks
 	return l

@@ -226,8 +226,8 @@ import (
     killOption tree.KillOption
     statementOption tree.StatementOption
 
-    tableLock tree.TableLock
-    tableLocks []tree.TableLock
+    tableLock *tree.TableLock
+    tableLocks []*tree.TableLock
     tableLockType tree.TableLockType
     cstr *tree.CStr
     incrementByOption *tree.IncrementByOption
@@ -1634,7 +1634,7 @@ grant_stmt:
         GrantPrivilege := tree.NewGrantPrivilege(Privileges, ObjType, Level, Roles, GrantOption)
 
         grant := tree.NewGrant(tree.GrantTypePrivilege)
-        grant.GrantPrivilege = *GrantPrivilege
+        grant.GrantPrivilege = GrantPrivilege
         $$ = grant
     }
 |   GRANT role_spec_list TO drop_user_spec_list grant_option_opt
@@ -1645,7 +1645,7 @@ grant_stmt:
         GrantRole := tree.NewGrantRole(Roles, Users, GrantOption)
 
         grant := tree.NewGrant(tree.GrantTypeRole)
-        grant.GrantRole = *GrantRole
+        grant.GrantRole = GrantRole
         $$ = grant
     }
 |   GRANT PROXY ON user_spec TO user_spec_list grant_option_opt
@@ -1656,7 +1656,7 @@ grant_stmt:
         GrantProxy := tree.NewGrantProxy(ProxyUser, Users, GrantOption)
 
         grant := tree.NewGrant(tree.GrantTypeProxy)
-        grant.GrantProxy = *GrantProxy
+        grant.GrantProxy = GrantProxy
         $$ = grant
     }
 
@@ -1683,7 +1683,7 @@ revoke_stmt:
         var Roles = $8
         rp := tree.NewRevokePrivilege(IfExists, Privileges, ObjType, Level, Roles)
         re := tree.NewRevoke(tree.RevokeTypePrivilege)
-        re.RevokePrivilege = *rp
+        re.RevokePrivilege = rp
         $$ = re
     }
 |   REVOKE exists_opt role_spec_list FROM user_spec_list
@@ -1693,7 +1693,7 @@ revoke_stmt:
         var Users = $5
         rr := tree.NewRevokeRole(IfExists, Roles, Users)
         re := tree.NewRevoke(tree.RevokeTypeRole)
-        re.RevokeRole = *rr
+        re.RevokeRole = rr
         $$ = re
     }
 
@@ -2574,7 +2574,7 @@ lock_table_stmt:
 table_lock_list:
     table_lock_elem
     {
-       $$ = []tree.TableLock{$1}
+       $$ = []*tree.TableLock{$1}
     }
 |   table_lock_list ',' table_lock_elem
     {
@@ -2584,9 +2584,9 @@ table_lock_list:
 table_lock_elem:
     table_name table_lock_type
     {
-        var Table = *$1
+        var Table = $1
         var LockType = $2
-        $$ = *tree.NewTableLock(
+        $$ = tree.NewTableLock(
             Table,
             LockType,
         )
@@ -6751,11 +6751,12 @@ index_option_list:
             } else if opt2.Visible != tree.VISIBLE_TYPE_INVALID {
                 opt1.Visible = opt2.Visible
             } else if opt2.AlgoParamList > 0 {
-	      opt1.AlgoParamList = opt2.AlgoParamList
-	    } else if len(opt2.AlgoParamVectorOpType) > 0 {
-	      opt1.AlgoParamVectorOpType = opt2.AlgoParamVectorOpType
-	    }
+	            opt1.AlgoParamList = opt2.AlgoParamList
+	        } else if len(opt2.AlgoParamVectorOpType) > 0 {
+	            opt1.AlgoParamVectorOpType = opt2.AlgoParamVectorOpType
+	        }
             $$ = opt1
+            opt2.Free()
         }
     }
 
@@ -6774,9 +6775,9 @@ index_option:
     		return 1
     	}
 
-	io := tree.NewIndexOption()
-	io.AlgoParamList = val
-	$$ = io
+    	io := tree.NewIndexOption()
+	    io.AlgoParamList = val
+	    $$ = io
     }
 |   OP_TYPE STRING
     {
