@@ -1230,15 +1230,15 @@ func doExplainStmt(ses *Session, stmt *tree.ExplainStmt) error {
 	}
 
 	//get query optimizer and execute Optimize
-	plan, err := buildPlan(requestCtx, ses, ses.GetTxnCompileCtx(), stmt.Statement)
+	exPlan, err := buildPlan(requestCtx, ses, ses.GetTxnCompileCtx(), stmt.Statement)
 	if err != nil {
 		return err
 	}
-	if plan.GetQuery() == nil {
+	if exPlan.GetQuery() == nil {
 		return moerr.NewNotSupported(requestCtx, "the sql query plan does not support explain.")
 	}
 	// generator query explain
-	explainQuery := explain.NewExplainQueryImpl(plan.GetQuery())
+	explainQuery := explain.NewExplainQueryImpl(exPlan.GetQuery())
 
 	// build explain data buffer
 	buffer := explain.NewExplainDataBuffer()
