@@ -6974,6 +6974,14 @@ create_table_stmt:
         t.AsSource = $10
         $$ = t
     }
+|   CREATE temporary_opt TABLE not_exists_opt table_name LIKE table_name
+    {
+        t := tree.NewCreateTable()
+        t.IsAsLike = true
+        t.Table = *$5
+        t.LikeTableName = *$7
+        $$ = t
+    }
 
 load_param_opt_2:
     load_param_opt tail_param_opt

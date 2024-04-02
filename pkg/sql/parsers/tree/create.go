@@ -934,6 +934,8 @@ type CreateTable struct {
 	IsDynamicTable  bool
 	DTOptions       []TableOption
 	IsAsSelect      bool
+	IsAsLike        bool
+	LikeTableName   TableName
 }
 
 func NewCreateTable() *CreateTable {
@@ -963,6 +965,12 @@ func (node *CreateTable) Format(ctx *FmtCtx) {
 
 	ctx.WriteByte(' ')
 	node.Table.Format(ctx)
+
+	if node.IsAsLike {
+		ctx.WriteString(" like ")
+		node.LikeTableName.Format(ctx)
+		return
+	}
 
 	if node.IsDynamicTable {
 		ctx.WriteString(" as ")
