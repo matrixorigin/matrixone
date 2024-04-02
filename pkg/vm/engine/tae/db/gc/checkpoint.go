@@ -25,7 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"sync"
 	"sync/atomic"
@@ -90,8 +89,6 @@ type checkpointCleaner struct {
 		sync.RWMutex
 		snapshotMeta *logtail.SnapshotMeta
 	}
-
-	vPool *containers.VectorPool
 }
 
 func NewCheckpointCleaner(
@@ -110,12 +107,10 @@ func NewCheckpointCleaner(
 	cleaner.minMergeCount.count = MinMergeCount
 	cleaner.snapshot.snapshotMeta = logtail.NewSnapshotMeta()
 	cleaner.option.enableGC = true
-	cleaner.vPool = dbutils.MakeDefaultSmallPool("gc-vector-pool")
 	return cleaner
 }
 
 func (c *checkpointCleaner) Stop() {
-	c.vPool.Destory()
 }
 
 func (c *checkpointCleaner) SetTid(tid uint64) {
@@ -627,5 +622,5 @@ func (c *checkpointCleaner) updateSnapshot(data *logtail.CheckpointData) error {
 func (c *checkpointCleaner) GetSnapshots() (map[uint64]containers.Vector, error) {
 	c.snapshot.RLock()
 	defer c.snapshot.RUnlock()
-	return c.snapshot.snapshotMeta.GetSnapshot(c.ctx, c.fs.Service, common.DebugAllocator, c.vPool)
+	return c.snapshot.snapshotMeta.GetSnapshot(c.ctx, c.fs.Service, common.DebugAllocator)
 }

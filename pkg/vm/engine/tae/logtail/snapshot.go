@@ -113,7 +113,7 @@ func (sm *SnapshotMeta) Update(data *CheckpointData) *SnapshotMeta {
 	return nil
 }
 
-func (sm *SnapshotMeta) GetSnapshot(ctx context.Context, fs fileservice.FileService, mp *mpool.MPool, vp *containers.VectorPool) (map[uint64]containers.Vector, error) {
+func (sm *SnapshotMeta) GetSnapshot(ctx context.Context, fs fileservice.FileService, mp *mpool.MPool) (map[uint64]containers.Vector, error) {
 	sm.RLock()
 	objects := sm.objects
 	sm.RUnlock()
@@ -133,6 +133,9 @@ func (sm *SnapshotMeta) GetSnapshot(ctx context.Context, fs fileservice.FileServ
 				SegmentID: name.SegmentId(),
 				MetaLoc:   objectio.ObjectLocation(loc),
 			}
+			if object.deltaLocation[i] != nil {
+				blk.DeltaLoc = objectio.ObjectLocation(*object.deltaLocation[i])
+			}
 			bat, err := blockio.BlockRead(ctx, &blk, nil, idxes, colTypes, object.checkpointTS.ToTimestamp(),
 				nil, nil, nil, fs, mp, nil, fileservice.Policy(0))
 			if err != nil {
@@ -142,7 +145,7 @@ func (sm *SnapshotMeta) GetSnapshot(ctx context.Context, fs fileservice.FileServ
 				tid := vector.GetFixedAt[uint64](bat.Vecs[0], r)
 				ts := vector.GetFixedAt[types.TS](bat.Vecs[1], r)
 				if snapshotList[tid] == nil {
-					snapshotList[tid] = vp.GetVector(&colTypes[1])
+					snapshotList[tid] = containers.MakeVector(colTypes[1], mp)
 				}
 				err = vector.AppendFixed[types.TS](snapshotList[tid].GetDownstreamVector(), ts, false, mp)
 				if err != nil {
