@@ -2103,12 +2103,12 @@ func checkModify(plan2 *plan.Plan, proc *process.Process, ses *Session) bool {
 	if plan2 == nil {
 		return true
 	}
-	checkFn := func(db string, def *plan.TableDef) bool {
-		_, tableDef := ses.GetTxnCompileCtx().Resolve(db, def.Name)
+	checkFn := func(db string, tableName string, tableId uint64, version uint32) bool {
+		_, tableDef := ses.GetTxnCompileCtx().Resolve(db, tableName)
 		if tableDef == nil {
 			return true
 		}
-		if tableDef.Version != def.Version || tableDef.TblId != def.TblId {
+		if tableDef.Version != version || tableDef.TblId != tableId {
 			return true
 		}
 		return false
@@ -2117,37 +2117,37 @@ func checkModify(plan2 *plan.Plan, proc *process.Process, ses *Session) bool {
 	case *plan.Plan_Query:
 		for i := range p.Query.Nodes {
 			if def := p.Query.Nodes[i].TableDef; def != nil {
-				if p.Query.Nodes[i].ObjRef == nil || checkFn(p.Query.Nodes[i].ObjRef.SchemaName, def) {
+				if p.Query.Nodes[i].ObjRef == nil || checkFn(p.Query.Nodes[i].ObjRef.SchemaName, def.Name, def.TblId, def.Version) {
 					return true
 				}
 			}
 			if ctx := p.Query.Nodes[i].InsertCtx; ctx != nil {
-				if ctx.Ref == nil || checkFn(ctx.Ref.SchemaName, ctx.TableDef) {
+				if ctx.Ref == nil || checkFn(ctx.Ref.SchemaName, ctx.TableDef.Name, ctx.TableDef.TblId, ctx.TableDef.Version) {
 					return true
 				}
 			}
 			if ctx := p.Query.Nodes[i].ReplaceCtx; ctx != nil {
-				if ctx.Ref == nil || checkFn(ctx.Ref.SchemaName, ctx.TableDef) {
+				if ctx.Ref == nil || checkFn(ctx.Ref.SchemaName, ctx.TableDef.Name, ctx.TableDef.TblId, ctx.TableDef.Version) {
 					return true
 				}
 			}
 			if ctx := p.Query.Nodes[i].DeleteCtx; ctx != nil {
-				if ctx.Ref == nil || checkFn(ctx.Ref.SchemaName, ctx.TableDef) {
+				if ctx.Ref == nil || checkFn(ctx.Ref.SchemaName, ctx.TableDef.Name, ctx.TableDef.TblId, ctx.TableDef.Version) {
 					return true
 				}
 			}
 			if ctx := p.Query.Nodes[i].PreInsertCtx; ctx != nil {
-				if ctx.Ref == nil || checkFn(ctx.Ref.SchemaName, ctx.TableDef) {
+				if ctx.Ref == nil || checkFn(ctx.Ref.SchemaName, ctx.TableDef.Name, ctx.TableDef.TblId, ctx.TableDef.Version) {
 					return true
 				}
 			}
 			if ctx := p.Query.Nodes[i].PreInsertCtx; ctx != nil {
-				if ctx.Ref == nil || checkFn(ctx.Ref.SchemaName, ctx.TableDef) {
+				if ctx.Ref == nil || checkFn(ctx.Ref.SchemaName, ctx.TableDef.Name, ctx.TableDef.TblId, ctx.TableDef.Version) {
 					return true
 				}
 			}
 			if ctx := p.Query.Nodes[i].OnDuplicateKey; ctx != nil {
-				if p.Query.Nodes[i].ObjRef == nil || checkFn(p.Query.Nodes[i].ObjRef.SchemaName, ctx.TableDef) {
+				if p.Query.Nodes[i].ObjRef == nil || checkFn(p.Query.Nodes[i].ObjRef.SchemaName, ctx.TableName, ctx.TableId, ctx.TableVersion) {
 					return true
 				}
 			}
