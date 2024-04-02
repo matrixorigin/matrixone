@@ -16,7 +16,6 @@ package pipeline
 
 import (
 	"bytes"
-	"runtime/trace"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
@@ -57,11 +56,6 @@ func (p *Pipeline) Run(r engine.Reader, topValueMsgTag int32, proc *process.Proc
 	defer func() {
 		_ = perfCounterSet //TODO
 	}()
-
-	// execution trace
-	var task *trace.Task
-	proc.Ctx, task = trace.NewTask(proc.Ctx, "Pipeline.Run")
-	defer task.End()
 
 	// var bat *batch.Batch
 	// used to handle some push-down request
@@ -104,11 +98,6 @@ func (p *Pipeline) Run(r engine.Reader, topValueMsgTag int32, proc *process.Proc
 }
 
 func (p *Pipeline) ConstRun(bat *batch.Batch, proc *process.Process) (end bool, err error) {
-	// execution trace
-	var task *trace.Task
-	proc.Ctx, task = trace.NewTask(proc.Ctx, "Pipeline.ConstRun")
-	defer task.End()
-
 	// used to handle some push-down request
 	if p.reg != nil {
 		select {
@@ -152,11 +141,6 @@ func (p *Pipeline) ConstRun(bat *batch.Batch, proc *process.Process) (end bool, 
 }
 
 func (p *Pipeline) MergeRun(proc *process.Process) (end bool, err error) {
-	// execution trace
-	var task *trace.Task
-	proc.Ctx, task = trace.NewTask(proc.Ctx, "Pipeline.MergeRun")
-	defer task.End()
-
 	// used to handle some push-down request
 	if p.reg != nil {
 		select {

@@ -14,62 +14,11 @@
 
 package tree
 
-import "github.com/matrixorigin/matrixone/pkg/common/reuse"
-
-func init() {
-	reuse.CreatePool[RepeatStmt](
-		func() *RepeatStmt { return &RepeatStmt{} },
-		func(r *RepeatStmt) { r.reset() },
-		reuse.DefaultOptions[RepeatStmt](),
-	)
-
-	reuse.CreatePool[WhileStmt](
-		func() *WhileStmt { return &WhileStmt{} },
-		func(w *WhileStmt) { w.reset() },
-		reuse.DefaultOptions[WhileStmt](),
-	)
-
-	reuse.CreatePool[LoopStmt](
-		func() *LoopStmt { return &LoopStmt{} },
-		func(l *LoopStmt) { l.reset() },
-		reuse.DefaultOptions[LoopStmt](),
-	)
-
-	reuse.CreatePool[IterateStmt](
-		func() *IterateStmt { return &IterateStmt{} },
-		func(i *IterateStmt) { i.reset() },
-		reuse.DefaultOptions[IterateStmt](),
-	)
-
-	reuse.CreatePool[LeaveStmt](
-		func() *LeaveStmt { return &LeaveStmt{} },
-		func(l *LeaveStmt) { l.reset() },
-		reuse.DefaultOptions[LeaveStmt](),
-	)
-}
-
 type RepeatStmt struct {
 	statementImpl
 	Name Identifier
 	Body []Statement
 	Cond Expr
-}
-
-func NewRepeatStmt(name Identifier, body []Statement, cond Expr) *RepeatStmt {
-	r := reuse.Alloc[RepeatStmt](nil)
-	r.Name = name
-	r.Body = body
-	r.Cond = cond
-	return r
-}
-
-func (node *RepeatStmt) reset() {
-	if node.Body != nil {
-		for _, item := range node.Body {
-			item.Free()
-		}
-	}
-	*node = RepeatStmt{}
 }
 
 func (node *RepeatStmt) Format(ctx *FmtCtx) {
@@ -92,29 +41,14 @@ func (node *RepeatStmt) Format(ctx *FmtCtx) {
 	}
 }
 
-func (node *RepeatStmt) Free() {
-	reuse.Free[RepeatStmt](node, nil)
-}
-
 func (node *RepeatStmt) GetStatementType() string { return "Repeat Statement" }
-
-func (node *RepeatStmt) GetQueryType() string { return QueryTypeTCL }
-
-func (node RepeatStmt) TypeName() string { return "tree.RepeatStmt" }
+func (node *RepeatStmt) GetQueryType() string     { return QueryTypeTCL }
 
 type WhileStmt struct {
 	statementImpl
 	Name Identifier
 	Cond Expr
 	Body []Statement
-}
-
-func NewWhileStmt(name Identifier, cond Expr, body []Statement) *WhileStmt {
-	w := reuse.Alloc[WhileStmt](nil)
-	w.Name = name
-	w.Cond = cond
-	w.Body = body
-	return w
 }
 
 func (node *WhileStmt) Format(ctx *FmtCtx) {
@@ -138,36 +72,13 @@ func (node *WhileStmt) Format(ctx *FmtCtx) {
 	}
 }
 
-func (node *WhileStmt) reset() {
-	if node.Body != nil {
-		for _, item := range node.Body {
-			item.Free()
-		}
-	}
-	*node = WhileStmt{}
-}
-
-func (node *WhileStmt) Free() {
-	reuse.Free[WhileStmt](node, nil)
-}
-
 func (node *WhileStmt) GetStatementType() string { return "While Statement" }
-
-func (node *WhileStmt) GetQueryType() string { return QueryTypeTCL }
-
-func (node WhileStmt) TypeName() string { return "tree.WhileStmt" }
+func (node *WhileStmt) GetQueryType() string     { return QueryTypeTCL }
 
 type LoopStmt struct {
 	statementImpl
 	Name Identifier
 	Body []Statement
-}
-
-func NewLoopStmt(name Identifier, body []Statement) *LoopStmt {
-	l := reuse.Alloc[LoopStmt](nil)
-	l.Name = name
-	l.Body = body
-	return l
 }
 
 func (node *LoopStmt) Format(ctx *FmtCtx) {
@@ -189,34 +100,12 @@ func (node *LoopStmt) Format(ctx *FmtCtx) {
 	}
 }
 
-func (node *LoopStmt) reset() {
-	if node.Body != nil {
-		for _, item := range node.Body {
-			item.Free()
-		}
-	}
-	*node = LoopStmt{}
-}
-
-func (node *LoopStmt) Free() {
-	reuse.Free[LoopStmt](node, nil)
-}
-
 func (node *LoopStmt) GetStatementType() string { return "Loop Statement" }
-
-func (node *LoopStmt) GetQueryType() string { return QueryTypeTCL }
-
-func (node LoopStmt) TypeName() string { return "tree.LoopStmt" }
+func (node *LoopStmt) GetQueryType() string     { return QueryTypeTCL }
 
 type IterateStmt struct {
 	statementImpl
 	Name Identifier
-}
-
-func NewIterateStmt(name Identifier) *IterateStmt {
-	i := reuse.Alloc[IterateStmt](nil)
-	i.Name = name
-	return i
 }
 
 func (node *IterateStmt) Format(ctx *FmtCtx) {
@@ -224,29 +113,12 @@ func (node *IterateStmt) Format(ctx *FmtCtx) {
 	ctx.WriteString(string(node.Name))
 }
 
-func (node *IterateStmt) reset() {
-	*node = IterateStmt{}
-}
-
-func (node *IterateStmt) Free() {
-	reuse.Free[IterateStmt](node, nil)
-}
-
 func (node *IterateStmt) GetStatementType() string { return "Iterate Statement" }
-
-func (node *IterateStmt) GetQueryType() string { return QueryTypeTCL }
-
-func (node IterateStmt) TypeName() string { return "tree.IterateStmt" }
+func (node *IterateStmt) GetQueryType() string     { return QueryTypeTCL }
 
 type LeaveStmt struct {
 	statementImpl
 	Name Identifier
-}
-
-func NewLeaveStmt(name Identifier) *LeaveStmt {
-	i := reuse.Alloc[LeaveStmt](nil)
-	i.Name = name
-	return i
 }
 
 func (node *LeaveStmt) Format(ctx *FmtCtx) {
@@ -254,16 +126,5 @@ func (node *LeaveStmt) Format(ctx *FmtCtx) {
 	ctx.WriteString(string(node.Name))
 }
 
-func (node *LeaveStmt) reset() {
-	*node = LeaveStmt{}
-}
-
-func (node *LeaveStmt) Free() {
-	reuse.Free[LeaveStmt](node, nil)
-}
-
 func (node *LeaveStmt) GetStatementType() string { return "Leave Statement" }
-
-func (node *LeaveStmt) GetQueryType() string { return QueryTypeTCL }
-
-func (node LeaveStmt) TypeName() string { return "tree.LeaveStmt" }
+func (node *LeaveStmt) GetQueryType() string     { return QueryTypeTCL }
