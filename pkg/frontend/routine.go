@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/status"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"go.uber.org/zap"
@@ -236,6 +237,11 @@ func (rt *Routine) handleRequest(req *Request) error {
 	var err error
 	var resp *Response
 	var quit bool
+
+	v2.StartHandleRequestCounter.Inc()
+	defer func() {
+		v2.EndHandleRequestCounter.Inc()
+	}()
 
 	reqBegin := time.Now()
 	var span trace.Span
