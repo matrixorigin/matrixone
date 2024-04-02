@@ -1262,17 +1262,20 @@ func doExplainStmt(ses *Session, stmt *tree.ExplainStmt) error {
 	}
 	ses.rs = mysqlColDef2PlanResultColDef(mrs)
 
-	//3. fill the batch for saving the query result
-	bat, err := fillQueryBatch(ses, explainColName, buffer.Lines)
-	defer bat.Clean(ses.GetMemPool())
-	if err != nil {
-		return err
-	}
+	if openSaveQueryResult(ses) {
+		//3. fill the batch for saving the query result
+		bat, err := fillQueryBatch(ses, explainColName, buffer.Lines)
+		defer bat.Clean(ses.GetMemPool())
+		if err != nil {
+			return err
+		}
 
-	// save query result
-	err = maySaveQueryResult(ses, bat)
-	if err != nil {
-		return err
+		// save query result
+		err = maySaveQueryResult(ses, bat)
+		if err != nil {
+
+			return err
+		}
 	}
 	return nil
 }
@@ -3088,7 +3091,7 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 			case *tree.ShowCreateTable, *tree.ShowCreateDatabase, *tree.ShowTables, *tree.ShowSequences, *tree.ShowDatabases, *tree.ShowColumns,
 				*tree.ShowProcessList, *tree.ShowStatus, *tree.ShowTableStatus, *tree.ShowGrants, *tree.ShowRolesStmt,
 				*tree.ShowIndex, *tree.ShowCreateView, *tree.ShowTarget, *tree.ValuesStatement,
-				*tree.ExplainFor, *tree.ExplainStmt, *tree.ShowTableNumber, *tree.ShowColumnNumber, *tree.ShowTableValues, *tree.ShowLocks, *tree.ShowNodeList, *tree.ShowFunctionOrProcedureStatus,
+				*tree.ExplainFor, *tree.ShowTableNumber, *tree.ShowColumnNumber, *tree.ShowTableValues, *tree.ShowLocks, *tree.ShowNodeList, *tree.ShowFunctionOrProcedureStatus,
 				*tree.ShowPublications, *tree.ShowCreatePublications, *tree.ShowStages, *tree.ExplainAnalyze, *tree.ShowSnapShots:
 				/*
 					mysql COM_QUERY response: End after the data row has been sent.
