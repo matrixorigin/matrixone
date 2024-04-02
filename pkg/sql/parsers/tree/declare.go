@@ -14,16 +14,6 @@
 
 package tree
 
-import "github.com/matrixorigin/matrixone/pkg/common/reuse"
-
-func init() {
-	reuse.CreatePool[Declare](
-		func() *Declare { return &Declare{} },
-		func(d *Declare) { d.reset() },
-		reuse.DefaultOptions[Declare](),
-	)
-}
-
 // Declare statement
 type Declare struct {
 	statementImpl
@@ -42,32 +32,5 @@ func (node *Declare) Format(ctx *FmtCtx) {
 	node.DefaultVal.Format(ctx)
 }
 
-func NewDeclare(v []string, t *T, d Expr) *Declare {
-	de := reuse.Alloc[Declare](nil)
-	de.Variables = v
-	de.ColumnType = t
-	de.DefaultVal = d
-	return de
-}
-
 func (node *Declare) GetStatementType() string { return "Declare" }
-
-func (node *Declare) GetQueryType() string { return QueryTypeOth }
-
-func (node Declare) TypeName() string { return "tree.Declare" }
-
-func (node *Declare) Free() {
-	reuse.Free[Declare](node, nil)
-}
-
-func (node *Declare) reset() {
-	// if node.ColumnType != nil {
-	// 	reuse.Free[T](node.ColumnType, nil)
-	// }
-	// if node.DefaultVal != nil {
-	// switch node.DefaultVal.(type) {
-	// case *IntVal:
-	// }
-	// }
-	*node = Declare{}
-}
+func (node *Declare) GetQueryType() string     { return QueryTypeOth }
