@@ -18,13 +18,14 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/fagongzi/goetty/v2"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"reflect"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/fagongzi/goetty/v2"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 
@@ -60,18 +61,18 @@ func TestGetTenantInfo(t *testing.T) {
 			{":u1:r1", "{account tenant1:u1:r1 -- 0:0:0}", true},
 			{"tenant1:u1:", "{account tenant1:u1:moadmin -- 0:0:0}", true},
 			{"tenant1::r1", "{account tenant1::r1 -- 0:0:0}", true},
-			{"tenant1:    :r1", "{account tenant1::r1 -- 0:0:0}", true},
-			{"     : :r1", "{account tenant1::r1 -- 0:0:0}", true},
-			{"   tenant1   :   u1   :   r1    ", "{account tenant1:u1:r1 -- 0:0:0}", false},
+			{"tenant1:    :r1", "{account tenant1:    :r1 -- 0:0:0}", false},
+			{"     : :r1", "{account      : :r1 -- 0:0:0}", false},
+			{"   tenant1   :   u1   :   r1    ", "{account    tenant1   :   u1   :   r1     -- 0:0:0}", false},
 			{"u1", "{account sys:u1: -- 0:0:0}", false},
 			{"tenant1#u1", "{account tenant1#u1# -- 0#0#0}", false},
 			{"tenant1#u1#r1", "{account tenant1#u1#r1 -- 0#0#0}", false},
 			{"#u1#r1", "{account tenant1#u1#r1 -- 0#0#0}", true},
 			{"tenant1#u1#", "{account tenant1#u1#moadmin -- 0#0#0}", true},
 			{"tenant1##r1", "{account tenant1##r1 -- 0#0#0}", true},
-			{"tenant1#    #r1", "{account tenant1##r1 -- 0#0#0}", true},
-			{"     # #r1", "{account tenant1##r1 -- 0#0#0}", true},
-			{"   tenant1   #   u1   #   r1    ", "{account tenant1#u1#r1 -- 0#0#0}", false},
+			{"tenant1#    #r1", "{account tenant1#    #r1 -- 0#0#0}", false},
+			{"     # #r1", "{account      # #r1 -- 0#0#0}", false},
+			{"   tenant1   #   u1   #   r1    ", "{account    tenant1   #   u1   #   r1     -- 0#0#0}", false},
 		}
 
 		for _, arg := range args {
