@@ -17,9 +17,6 @@ package frontend
 import (
 	"context"
 	"fmt"
-	"io"
-	"testing"
-
 	"github.com/BurntSushi/toml"
 	"github.com/golang/mock/gomock"
 	"github.com/google/uuid"
@@ -39,6 +36,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/assert"
+	"io"
+	"testing"
 )
 
 func newLocalETLFS(t *testing.T, fsName string) fileservice.FileService {
