@@ -15,21 +15,86 @@
 package external
 
 import (
+	"context"
 	"errors"
 	"io"
+	"os"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/parquet-go/parquet-go"
 )
 
-func scanParquetFile() (*batch.Batch, error) {
-	return nil, nil
+func scanParquetFile(ctx context.Context, param *ExternalParam, proc *process.Process) (*batch.Batch, error) {
+	_, span := trace.Start(ctx, "scanParquetFile")
+	defer span.End()
+
+	bat := batch.New(false, param.Attrs)
+	for i := range param.Attrs {
+		col := param.Cols[i]
+
+		if col.Hidden {
+			continue
+		}
+
+		bat.Vecs[i] = proc.GetVector(types.New(types.T(col.Typ.Id), col.Typ.Width, col.Typ.Scale))
+	}
+
+	f, err := os.Open(param.Fileparam.Filepath)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	pr, err := parquet.OpenFile(f, param.FileSize[param.Fileparam.FileIndex-1])
+	if err != nil {
+		return nil, err
+	}
+
+	for colIdx, attr := range param.Attrs {
+		vec := bat.Vecs[colIdx]
+		if param.Cols[colIdx].Hidden {
+			col := param.Cols[colIdx]
+			bat.Vecs[colIdx] = vector.NewConstNull(types.New(types.T(col.Typ.Id), col.Typ.Width, col.Typ.Scale), int(pr.NumRows()), proc.GetMPool())
+			continue
+		}
+
+		col := pr.Root().Column(attr)
+		if col == nil {
+			return nil, moerr.NewInternalErrorNoCtx("")
+		}
+
+		pages := col.Pages()
+	L:
+		for {
+			page, err := pages.ReadPage()
+			switch {
+			case errors.Is(err, io.EOF):
+				break L
+			case err != nil:
+				return nil, err
+			}
+			err = getDataFromPage(page, proc, vec)
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+
+	param.Fileparam.FileFin++
+	if param.Fileparam.FileFin >= param.Fileparam.FileCnt {
+		param.Fileparam.End = true
+	}
+
+	n := bat.Vecs[0].Length()
+	bat.SetRowCount(n)
+	return bat, nil
 }
 
-func makeVecFromPage(page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+func getDataFromPage(page parquet.Page, proc *process.Process, vec *vector.Vector) error {
 	if len(page.DefinitionLevels()) != 0 || len(page.RepetitionLevels()) != 0 {
 		return moerr.NewNYINoCtx("page has repetition or definition not support")
 	}

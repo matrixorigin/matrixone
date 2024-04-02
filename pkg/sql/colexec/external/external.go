@@ -152,7 +152,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		result.Status = vm.ExecStop
 		return result, nil
 	}
-	if param.plh == nil && param.Extern.ScanType != tree.INLINE {
+	if param.plh == nil && param.Extern.ScanType != tree.INLINE { // todo
 		if param.Fileparam.FileIndex >= len(param.FileList) {
 			result.Status = vm.ExecStop
 			return result, nil
@@ -777,9 +777,11 @@ func scanZonemapFile(ctx context.Context, param *ExternalParam, proc *process.Pr
 func scanFileData(ctx context.Context, param *ExternalParam, proc *process.Process) (*batch.Batch, error) {
 	if param.Extern.QueryResult {
 		return scanZonemapFile(ctx, param, proc)
-	} else {
-		return scanCsvFile(ctx, param, proc)
 	}
+	if param.Extern.Format == tree.PARQUET {
+		return scanParquetFile(ctx, param, proc)
+	}
+	return scanCsvFile(ctx, param, proc)
 }
 
 func transJson2Lines(ctx context.Context, str string, attrs []string, cols []*plan.ColDef, jsonData string, param *ExternalParam) ([]csvparser.Field, error) {
@@ -1358,7 +1360,7 @@ func readCountStringLimitSize(r *csvparser.CSVParser, ctx context.Context, size 
 
 func loadFormatIsValid(param *tree.ExternParam) bool {
 	switch param.Format {
-	case tree.JSONLINE, tree.CSV:
+	case tree.JSONLINE, tree.CSV, tree.PARQUET:
 		return true
 	}
 	return false

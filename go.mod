@@ -45,6 +45,7 @@ require (
 	github.com/mohae/deepcopy v0.0.0-20170929034955-c48cc78d4826
 	github.com/nnsgmsone/mmap v0.0.0-20240320065159-dbdd196c4459
 	github.com/panjf2000/ants/v2 v2.7.4
+	github.com/parquet-go/parquet-go v0.20.1
 	github.com/pierrec/lz4/v4 v4.1.18
 	github.com/pkg/errors v0.9.1
 	github.com/plar/go-adaptive-radix-tree v1.0.5
@@ -88,7 +89,6 @@ require (
 	github.com/modern-go/reflect2 v1.0.2 // indirect
 	github.com/olekukonko/tablewriter v0.0.5 // indirect
 	github.com/opentracing/opentracing-go v1.2.1-0.20220228012449-10b1cf09e00b // indirect
-	github.com/parquet-go/parquet-go v0.20.1 // indirect
 	github.com/rs/xid v1.5.0 // indirect
 	github.com/segmentio/encoding v0.3.6 // indirect
 	golang.org/x/crypto v0.14.0 // indirect

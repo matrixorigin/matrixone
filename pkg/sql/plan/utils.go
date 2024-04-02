@@ -1329,7 +1329,7 @@ func InitInfileParam(param *tree.ExternParam) error {
 			param.CompressType = param.Option[i+1]
 		case "format":
 			format := strings.ToLower(param.Option[i+1])
-			if format != tree.CSV && format != tree.JSONLINE {
+			if format != tree.CSV && format != tree.JSONLINE && format != tree.PARQUET {
 				return moerr.NewBadConfig(param.Ctx, "the format '%s' is not supported", format)
 			}
 			param.Format = format
