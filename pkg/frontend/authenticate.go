@@ -9667,9 +9667,9 @@ func doCreateSnapshot(ctx context.Context, ses *Session, stmt *tree.CreateSnapSh
 		}
 
 		// check account exists or not and get accountId
-		getAccountIdFunc := func() (accountId uint64, rtnErr error) {
+		getAccountIdFunc := func(accountName string) (accountId uint64, rtnErr error) {
 			var erArray []ExecResult
-			sql, rtnErr = getSqlForCheckTenant(ctx, currentAccount)
+			sql, rtnErr = getSqlForCheckTenant(ctx, accountName)
 			if rtnErr != nil {
 				return 0, rtnErr
 			}
@@ -9692,7 +9692,7 @@ func doCreateSnapshot(ctx context.Context, ses *Session, stmt *tree.CreateSnapSh
 					}
 				}
 			} else {
-				return 0, moerr.NewInvalidArgNoCtx("account %s not exits", currentAccount)
+				return 0, moerr.NewInternalError(ctx, "account %s does not exist", accountName)
 			}
 			return accountId, rtnErr
 		}
@@ -9700,7 +9700,7 @@ func doCreateSnapshot(ctx context.Context, ses *Session, stmt *tree.CreateSnapSh
 		// if sys tenant create snapshots for other tenant, get the account id
 		// otherwise, get the account id from tenantInfo
 		if currentAccount == sysAccountName && currentAccount != snapshotForAccount {
-			objId, err = getAccountIdFunc()
+			objId, err = getAccountIdFunc(snapshotForAccount)
 			if err != nil {
 				return err
 			}
