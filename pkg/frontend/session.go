@@ -1982,24 +1982,6 @@ func (ses *Session) getUpdateVariableSqlsByToml() []string {
 		updateSqls = append(updateSqls, sqlForUpdate)
 	}
 
-	// save_query_result
-	if getVariableValue(ses.pu.SV.SaveQueryResult) != gSysVarsDefs["save_query_result"].Default {
-		sqlForUpdate := getSqlForUpdateSystemVariableValue(getVariableValue(ses.pu.SV.SaveQueryResult), uint64(tenantInfo.GetTenantID()), "save_query_result")
-		updateSqls = append(updateSqls, sqlForUpdate)
-	}
-
-	// query_result_maxsize
-	if getVariableValue(ses.pu.SV.QueryResultMaxsize) != gSysVarsDefs["query_result_maxsize"].Default {
-		sqlForUpdate := getSqlForUpdateSystemVariableValue(getVariableValue(ses.pu.SV.QueryResultMaxsize), uint64(tenantInfo.GetTenantID()), "query_result_maxsize")
-		updateSqls = append(updateSqls, sqlForUpdate)
-	}
-
-	// query_result_timeout
-	if getVariableValue(ses.pu.SV.QueryResultTimeout) != gSysVarsDefs["query_result_timeout"].Default {
-		sqlForUpdate := getSqlForUpdateSystemVariableValue(getVariableValue(ses.pu.SV.QueryResultTimeout), uint64(tenantInfo.GetTenantID()), "query_result_timeout")
-		updateSqls = append(updateSqls, sqlForUpdate)
-	}
-
 	return updateSqls
 }
 
