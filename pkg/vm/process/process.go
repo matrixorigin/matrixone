@@ -411,7 +411,7 @@ func (vp *vectorPool) getVector(typ types.Type) *vector.Vector {
 	if vecs := vp.vecs[key]; len(vecs) > 0 {
 		vec := vecs[len(vecs)-1]
 		vp.vecs[key] = vecs[:len(vecs)-1]
-		if vec.OnUsed == false {
+		if !vec.OnUsed {
 			logutil.Errorf("AllocMsg=%s\n\nFreeMsg=%s\n\nGetMsg=%s\n\nPutMsg=%s\n\n",
 				vec.AllocMsg,
 				vec.FreeMsg,
