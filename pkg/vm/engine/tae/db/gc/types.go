@@ -15,6 +15,7 @@
 package gc
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 )
@@ -119,4 +120,5 @@ type Cleaner interface {
 	SetTid(tid uint64)
 	EnableGCForTest()
 	DisableGCForTest()
+	GetMPool() *mpool.MPool
 }

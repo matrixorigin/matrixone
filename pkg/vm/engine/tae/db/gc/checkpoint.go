@@ -17,6 +17,7 @@ package gc
 import (
 	"context"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -89,6 +90,8 @@ type checkpointCleaner struct {
 		sync.RWMutex
 		snapshotMeta *logtail.SnapshotMeta
 	}
+
+	mPool *mpool.MPool
 }
 
 func NewCheckpointCleaner(
@@ -107,10 +110,15 @@ func NewCheckpointCleaner(
 	cleaner.minMergeCount.count = MinMergeCount
 	cleaner.snapshot.snapshotMeta = logtail.NewSnapshotMeta()
 	cleaner.option.enableGC = true
+	cleaner.mPool = common.DebugAllocator
 	return cleaner
 }
 
 func (c *checkpointCleaner) Stop() {
+}
+
+func (c *checkpointCleaner) GetMPool() *mpool.MPool {
+	return c.mPool
 }
 
 func (c *checkpointCleaner) SetTid(tid uint64) {
@@ -351,7 +359,6 @@ func (c *checkpointCleaner) collectCkpData(
 func (c *checkpointCleaner) TryGC() error {
 	maxGlobalCKP := c.ckpClient.MaxGlobalCheckpoint()
 	if maxGlobalCKP != nil {
-		logutil.Infof("maxGlobalCKP is %v", maxGlobalCKP.String())
 		data, err := c.collectGlobalCkpData(maxGlobalCKP)
 		if err != nil {
 			return err
@@ -622,5 +629,5 @@ func (c *checkpointCleaner) updateSnapshot(data *logtail.CheckpointData) error {
 func (c *checkpointCleaner) GetSnapshots() (map[uint64]containers.Vector, error) {
 	c.snapshot.RLock()
 	defer c.snapshot.RUnlock()
-	return c.snapshot.snapshotMeta.GetSnapshot(c.ctx, c.fs.Service, common.DebugAllocator)
+	return c.snapshot.snapshotMeta.GetSnapshot(c.ctx, c.fs.Service, c.mPool)
 }

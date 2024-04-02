@@ -110,10 +110,21 @@ func (t *GCTable) getObjects() map[string]*ObjectEntry {
 // SoftGC is to remove objectentry that can be deleted from GCTable
 func (t *GCTable) SoftGC(table *GCTable, ts types.TS, snapShotList map[uint64]containers.Vector) []string {
 	gc := make([]string, 0)
+	snapList := make(map[uint64][]types.TS)
 	objects := t.getObjects()
+	for tid, snap := range snapShotList {
+		snapList[tid] = vector.MustFixedCol[types.TS](snap.GetDownstreamVector())
+	}
 	for name, entry := range objects {
 		objectEntry := table.objects[name]
-		if objectEntry == nil && entry.commitTS.Less(&ts) && !isSnapshotRefers(entry, snapShotList[entry.table]) {
+		if snapList[entry.table] == nil {
+			if objectEntry == nil && entry.commitTS.Less(&ts) {
+				gc = append(gc, name)
+				t.deleteObject(name)
+			}
+			continue
+		}
+		if objectEntry == nil && entry.commitTS.Less(&ts) && !isSnapshotRefers(entry, snapList[entry.table]) {
 			gc = append(gc, name)
 			t.deleteObject(name)
 		}
@@ -121,15 +132,14 @@ func (t *GCTable) SoftGC(table *GCTable, ts types.TS, snapShotList map[uint64]co
 	return gc
 }
 
-func isSnapshotRefers(obj *ObjectEntry, snapShotList containers.Vector) bool {
-	if snapShotList == nil || snapShotList.Length() == 0 {
+func isSnapshotRefers(obj *ObjectEntry, snapVec []types.TS) bool {
+	if len(snapVec) == 0 {
 		return false
 	}
-	snapVec := snapShotList.GetDownstreamVector()
-	left, right := 0, snapShotList.Length()-1
+	left, right := 0, len(snapVec)-1
 	for left <= right {
 		mid := left + (right-left)/2
-		snapTS := vector.GetFixedAt[types.TS](snapVec, mid)
+		snapTS := snapVec[mid]
 		if snapTS.GreaterEq(&obj.createTS) && snapTS.Less(&obj.dropTS) {
 			logutil.Infof("isSnapshotRefers: %s, create %v, drop %v",
 				snapTS.ToString(), obj.createTS.ToString(), obj.dropTS.ToString())

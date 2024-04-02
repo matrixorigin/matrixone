@@ -141,6 +141,7 @@ func (sm *SnapshotMeta) GetSnapshot(ctx context.Context, fs fileservice.FileServ
 			if err != nil {
 				return nil, err
 			}
+			defer bat.Clean(mp)
 			for r := 0; r < bat.Vecs[0].Length(); r++ {
 				tid := vector.GetFixedAt[uint64](bat.Vecs[0], r)
 				ts := vector.GetFixedAt[types.TS](bat.Vecs[1], r)
