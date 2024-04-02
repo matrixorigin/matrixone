@@ -51,7 +51,9 @@ alter table vector_index_04 alter reindex idx ivfflat lists=8;
 alter table vector_index_04 alter reindex idx01 ivfflat lists=8;
 show create table vector_index_04;
 desc vector_index_04;
+SET @probe_limit = 3;
 select * from vector_index_04 order by L2_DISTANCE(c,"[9.6,57.22,19.2,78.02]") limit 3;
+SET @probe_limit = 1;
 --explain select * from vector_index_04 order by L2_DISTANCE(c,"[9.6,57.22,19.2,78.02]") limit 3;
 alter table vector_index_04 alter reindex idx01 ivfflat lists=3;
 
