@@ -1051,7 +1051,8 @@ var (
 			level enum('cluster','account','database','table'),
 	        account_name varchar(300),
 			database_name varchar(5000),
-			table_name  varchar(5000)
+			table_name  varchar(5000),
+			obj_id BIGINT UNSIGNED
 			);`,
 		`create table mo_pubs(
     		pub_name varchar(64) primary key,
@@ -1155,7 +1156,8 @@ var (
 		level,
 		account_name,
 		database_name,
-		table_name) values ('%s','%s', '%s', '%s','%s',	'%s','%s');`
+		table_name,
+		object_id) values ('%s','%s', '%s', '%s','%s',	'%s','%s', '%d');`
 
 	initMoUserDefinedFunctionFormat = `insert into mo_catalog.mo_user_defined_function(
 			name,
@@ -1699,12 +1701,12 @@ func getSqlForInsertIntoMoStages(ctx context.Context, stageName, url, credential
 	return fmt.Sprintf(insertIntoMoStages, stageName, url, credentials, status, createdTime, comment), nil
 }
 
-func getSqlForCreateSnapshot(ctx context.Context, snapshotId, snapshotName, ts, level, accountName, databaseName, tableName string) (string, error) {
+func getSqlForCreateSnapshot(ctx context.Context, snapshotId, snapshotName, ts, level, accountName, databaseName, tableName string, objectId uint64) (string, error) {
 	err := inputNameIsInvalid(ctx, snapshotName)
 	if err != nil {
 		return "", err
 	}
-	return fmt.Sprintf(insertIntoMoSnapshots, snapshotId, snapshotName, ts, level, accountName, databaseName, tableName), nil
+	return fmt.Sprintf(insertIntoMoSnapshots, snapshotId, snapshotName, ts, level, accountName, databaseName, tableName, objectId), nil
 }
 
 func getSqlForDropStage(stageName string) string {
@@ -9624,6 +9626,7 @@ func doCreateSnapshot(ctx context.Context, ses *Session, stmt *tree.CreateSnapSh
 	var databaseName string
 	var tableName string
 	var sql string
+	var objId uint64
 
 	// check create stage priv
 	err = doCheckRole(ctx, ses)
@@ -9643,7 +9646,7 @@ func doCreateSnapshot(ctx context.Context, ses *Session, stmt *tree.CreateSnapSh
 
 	// check create snapshot priv
 
-	// 1.only admin can create tenant level snapshot for himself
+	// 1.only admin can create tenant level snapshot
 	err = doCheckRole(ctx, ses)
 	if err != nil {
 		return err
