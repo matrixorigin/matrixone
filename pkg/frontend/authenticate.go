@@ -1157,7 +1157,7 @@ var (
 		account_name,
 		database_name,
 		table_name,
-		object_id) values ('%s','%s', '%s', '%s','%s',	'%s','%s', '%d');`
+		obj_id) values ('%s','%s', '%s', '%s','%s',	'%s','%s', '%d');`
 
 	initMoUserDefinedFunctionFormat = `insert into mo_catalog.mo_user_defined_function(
 			name,
@@ -9658,6 +9658,7 @@ func doCreateSnapshot(ctx context.Context, ses *Session, stmt *tree.CreateSnapSh
 	if snapshotLevel == tree.SNAPSHOTLEVELCLUSTER && currentAccount != sysAccountName {
 		return moerr.NewInternalError(ctx, "only sys tenant can create cluster level snapshot")
 	}
+
 	// 3.only sys can create tenant level snapshot for other tenant
 	if snapshotLevel == tree.SNAPSHOTLEVELACCOUNT {
 		snapshotForAccount = string(stmt.Obeject.ObjName)
@@ -9665,15 +9666,46 @@ func doCreateSnapshot(ctx context.Context, ses *Session, stmt *tree.CreateSnapSh
 			return moerr.NewInternalError(ctx, "only sys tenant can create tenant level snapshot for other tenant")
 		}
 
-		// check account exists or not
-		if currentAccount == sysAccountName {
-			accuntExist, err := checkTenantExistsOrNot(ctx, bh, snapshotForAccount)
+		// check account exists or not and get accountId
+		getAccountIdFunc := func() (accountId uint64, rtnErr error) {
+			var erArray []ExecResult
+			sql, rtnErr = getSqlForCheckTenant(ctx, currentAccount)
+			if rtnErr != nil {
+				return 0, rtnErr
+			}
+			bh.ClearExecResultSet()
+			rtnErr = bh.Exec(ctx, sql)
+			if rtnErr != nil {
+				return 0, rtnErr
+			}
+
+			erArray, rtnErr = getResultSet(ctx, bh)
+			if rtnErr != nil {
+				return 0, rtnErr
+			}
+
+			if execResultArrayHasData(erArray) {
+				for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
+					accountId, rtnErr = erArray[0].GetUint64(ctx, i, 0)
+					if rtnErr != nil {
+						return 0, rtnErr
+					}
+				}
+			} else {
+				return 0, moerr.NewInvalidArgNoCtx("account %s not exits", currentAccount)
+			}
+			return accountId, rtnErr
+		}
+
+		// if sys tenant create snapshots for other tenant, get the account id
+		// otherwise, get the account id from tenantInfo
+		if currentAccount == sysAccountName && currentAccount != snapshotForAccount {
+			objId, err = getAccountIdFunc()
 			if err != nil {
 				return err
 			}
-			if !accuntExist {
-				return moerr.NewInternalError(ctx, "account %s does not exist", snapshotForAccount)
-			}
+		} else {
+			objId = uint64(tenantInfo.GetTenantID())
 		}
 	}
 
@@ -9704,7 +9736,7 @@ func doCreateSnapshot(ctx context.Context, ses *Session, stmt *tree.CreateSnapSh
 		// snapshotTs = ts.String()
 		snapshotTs = types.CurrentTimestamp().String2(time.Local, 0)
 
-		sql, err = getSqlForCreateSnapshot(ctx, snapshotId, snapshotName, snapshotTs, snapshotLevel.String(), string(stmt.Obeject.ObjName), databaseName, tableName)
+		sql, err = getSqlForCreateSnapshot(ctx, snapshotId, snapshotName, snapshotTs, snapshotLevel.String(), string(stmt.Obeject.ObjName), databaseName, tableName, objId)
 		if err != nil {
 			return err
 		}

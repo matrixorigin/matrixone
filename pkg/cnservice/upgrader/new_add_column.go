@@ -16,6 +16,7 @@ package upgrader
 
 import (
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 )
@@ -44,6 +45,16 @@ var (
 		Columns: []table.Column{
 			// only add new column
 			table.TimestampDefaultColumn("update_time", "NULL", ""),
+		},
+	}
+
+	MoSnapShotsTable = &table.Table{
+		Account:  table.AccountAll,
+		Database: catalog.MO_CATALOG,
+		Table:    catalog.MO_SNAPSHOTS,
+		Columns: []table.Column{
+			// only add new column
+			table.UInt64Column("obj_id", ""),
 		},
 	}
 )
