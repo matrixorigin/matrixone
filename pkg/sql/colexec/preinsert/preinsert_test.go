@@ -80,6 +80,7 @@ func TestPreInsertNormal(t *testing.T) {
 				{Name: "scalar_varchar", Typ: varchartyp},
 				{Name: "int64_column", Typ: i64typ},
 			},
+			Pkey: &plan.PrimaryKeyDef{},
 		},
 		Attrs:      []string{"int64_column", "scalar_int64", "varchar_column", "scalar_varchar", "int64_column"},
 		IsUpdate:   false,

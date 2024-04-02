@@ -177,7 +177,7 @@ func genInsertIndexTableSql(originTableDef *plan.TableDef, indexDef *plan.IndexD
 	// insert data into index table
 	var insertSQL string
 	temp := partsToColsStr(indexDef.Parts)
-	if originTableDef.Pkey == nil || len(originTableDef.Pkey.PkeyColName) == 0 {
+	if len(originTableDef.Pkey.PkeyColName) == 0 {
 		if len(indexDef.Parts) == 1 {
 			insertSQL = fmt.Sprintf(insertIntoSingleIndexTableWithoutPKeyFormat, DBName, indexDef.IndexTableName, temp, DBName, originTableDef.Name, temp)
 		} else {
