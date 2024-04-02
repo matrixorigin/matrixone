@@ -285,6 +285,7 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 			{"dat_createsql", types.T_varchar, false, 1024, 0},
 			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
 		},
+		pks: []int{0},
 	}
 	moSchema["mo_tables"] = &Schema{
 		cols: []col{
@@ -294,6 +295,7 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 			{"account_id", types.T_uint32, false, 0, 0},
 			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
 		},
+		pks: []int{0, 1},
 	}
 	moSchema["mo_columns"] = &Schema{
 		cols: []col{
@@ -323,6 +325,7 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 			{"attr_enum", types.T_varchar, false, 2048, 0},
 			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
 		},
+		pks: []int{0},
 	}
 	moSchema["mo_user"] = &Schema{
 		cols: []col{
@@ -339,6 +342,7 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 			{"default_role", types.T_int32, false, 50, 0},
 			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
 		},
+		pks: []int{0},
 	}
 
 	moSchema["mo_role_privs"] = &Schema{
@@ -378,6 +382,7 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 			{"database_collation", types.T_varchar, false, 64, 0},
 			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
 		},
+		pks: []int{0},
 	}
 
 	moSchema["mo_indexes"] = &Schema{
@@ -399,6 +404,7 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 			{"index_table_name", types.T_varchar, true, 50, 0},
 			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
 		},
+		pks: []int{0},
 	}
 
 	moSchema["mo_role"] = &Schema{
@@ -410,6 +416,7 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 			{"created_time", types.T_timestamp, false, 0, 0},
 			{"comments", types.T_varchar, false, 2048, 0},
 		},
+		pks: []int{0},
 	}
 
 	moSchema["mo_stages"] = &Schema{
@@ -435,6 +442,7 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 			{"table_name", types.T_varchar, false, 50, 0},
 			{"obj_id", types.T_uint64, false, 100, 0},
 		},
+		pks: []int{0},
 	}
 
 	//---------------------------------------------constraint test schema---------------------------------------------------------
@@ -701,8 +709,23 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 			if len(table.pks) == 1 {
 				tableDef.Pkey = &plan.PrimaryKeyDef{
 					PkeyColName: colDefs[table.pks[0]].Name,
+					Cols:        []uint64{uint64(table.pks[0])},
 					Names:       []string{colDefs[table.pks[0]].Name},
 					CompPkeyCol: colDefs[table.pks[0]],
+				}
+			} else if len(table.pks) > 1 {
+				names := make([]string, len(table.pks))
+				cols := make([]uint64, len(table.pks))
+				for pkidx := range table.pks {
+					names = append(names, colDefs[table.pks[pkidx]].Name)
+					cols = append(cols, uint64(pkidx))
+				}
+				pkName := catalog.PrefixCBColName + "_" + tableName
+				tableDef.Pkey = &plan.PrimaryKeyDef{
+					PkeyColName: pkName,
+					Names:       names,
+					Cols:        cols,
+					CompPkeyCol: MakeHiddenColDefByName(pkName),
 				}
 			}
 
