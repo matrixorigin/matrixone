@@ -369,6 +369,7 @@ var processlistView = &table.Table{
 	Columns: []table.Column{
 		table.StringColumn("account", "the account name"),
 		table.StringColumn("client_host", "the ip:port of the client"),
+		table.StringColumn("proxy_host", "the ip:port on the proxy connection"),
 		table.StringColumn("command", "the COMMAND send by client"),
 		table.UInt64Column("conn_id", "the connection id of the tcp between client"),
 		table.StringColumn("db", "the database be used"),
@@ -388,7 +389,7 @@ var processlistView = &table.Table{
 	},
 	CreateViewSql: "CREATE VIEW IF NOT EXISTS `information_schema`.`PROCESSLIST` AS SELECT * FROM PROCESSLIST() A;",
 	//actually drop table here
-	CreateTableSql: "drop table if exists `information_schema`.`PROCESSLIST`;",
+	CreateTableSql: "drop view if exists `information_schema`.`PROCESSLIST`;",
 }
 
 var MoSessionsView = &table.Table{

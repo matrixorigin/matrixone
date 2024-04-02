@@ -681,6 +681,17 @@ func buildCreateSequence(stmt *tree.CreateSequence, ctx CompilerContext) (*Plan,
 }
 
 func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error) {
+	if stmt.IsAsLike {
+		newStmt, err := rewriteForCreateTableLike(stmt, ctx)
+		if err != nil {
+			return nil, err
+		}
+		if stmtLike, ok := newStmt.(*tree.CreateTable); ok {
+			return buildCreateTable(stmtLike, ctx)
+		}
+		return nil, moerr.NewInternalError(ctx.GetContext(), "rewrite for create table like failed")
+	}
+
 	createTable := &plan.CreateTable{
 		IfNotExists: stmt.IfNotExists,
 		Temporary:   stmt.Temporary,
@@ -2810,7 +2821,7 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 				alterTableDrop.Typ = plan.AlterTableDrop_KEY
 			case tree.AlterTableDropPrimaryKey:
 				alterTableDrop.Typ = plan.AlterTableDrop_PRIMARY_KEY
-				if tableDef.Pkey == nil || tableDef.Pkey.PkeyColName == catalog.FakePrimaryKeyColName {
+				if tableDef.Pkey.PkeyColName == catalog.FakePrimaryKeyColName {
 					return nil, moerr.NewErrCantDropFieldOrKey(ctx.GetContext(), "PRIMARY")
 				}
 				return nil, moerr.NewInternalError(ctx.GetContext(), "Can't DROP exists Primary Key")

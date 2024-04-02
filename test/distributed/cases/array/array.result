@@ -115,7 +115,7 @@ not supported: VECTOR column 'b' cannot be in primary key
 create unique index t3 on vec_table(b);
 not supported: VECTOR column 'b' cannot be in index
 create table t3(a int, b vecf32(65537));
-Data truncation: data out of range: data type vecf32,  typeLen is over the MaxVectorLen : 65536
+Data truncation: data out of range: data type vecf32,  typeLen is over the MaxVectorLen : 65535
 select sqrt(cast("[1,2,-3]" as vecf32(3)));
 invalid argument Sqrt, bad value -3
 select b/(cast("[1,2,0]" as vecf32(3))) from vec_table;

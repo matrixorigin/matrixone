@@ -16,7 +16,6 @@ package disttae
 
 import (
 	"context"
-	"runtime/trace"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -32,8 +31,6 @@ func consumeEntry(
 	state *logtailreplay.PartitionState,
 	e *api.Entry,
 ) error {
-	ctx, task := trace.NewTask(ctx, "consumeEntry")
-	defer task.End()
 
 	var packer *types.Packer
 	put := engine.packerPool.Get(&packer)
