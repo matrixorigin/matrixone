@@ -862,9 +862,11 @@ func ReCalcNodeStats(nodeID int32, builder *QueryBuilder, recursive bool, leafNo
 
 	// if there is a limit, outcnt is limit number
 	if node.Limit != nil {
-		limitExpr := node.Limit
+		limitExpr := DeepCopyExpr(node.Limit)
 		if _, ok := limitExpr.Expr.(*plan.Expr_F); ok {
-			limitExpr, _ = ConstantFold(batch.EmptyForConstFoldBatch, DeepCopyExpr(node.Limit), builder.compCtx.GetProcess(), true)
+			if !hasParam(limitExpr) {
+				limitExpr, _ = ConstantFold(batch.EmptyForConstFoldBatch, limitExpr, builder.compCtx.GetProcess(), true)
+			}
 		}
 		if cExpr, ok := limitExpr.Expr.(*plan.Expr_Lit); ok {
 			if c, ok := cExpr.Lit.Value.(*plan.Literal_I64Val); ok {
