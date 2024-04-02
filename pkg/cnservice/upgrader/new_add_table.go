@@ -374,7 +374,7 @@ var processlistView = &table.Table{
 	},
 	CreateViewSql: "CREATE VIEW IF NOT EXISTS `information_schema`.`PROCESSLIST` AS SELECT * FROM PROCESSLIST() A;",
 	//actually drop table here
-	CreateTableSql: "drop table if exists `information_schema`.`PROCESSLIST`;",
+	CreateTableSql: "drop view if exists `information_schema`.`PROCESSLIST`;",
 }
 
 var MoSessionsView = &table.Table{
