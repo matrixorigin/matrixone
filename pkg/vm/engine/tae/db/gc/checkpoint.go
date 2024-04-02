@@ -617,5 +617,5 @@ func (c *checkpointCleaner) updateSnapshot(data *logtail.CheckpointData) error {
 func (c *checkpointCleaner) GetSnapshots() (map[uint64][]types.TS, error) {
 	c.snapshot.RLock()
 	defer c.snapshot.RUnlock()
-	return c.snapshot.snapshotMeta.GetSnapshot(c.fs.Service)
+	return c.snapshot.snapshotMeta.GetSnapshot(c.ctx, c.fs.Service, common.DefaultAllocator)
 }

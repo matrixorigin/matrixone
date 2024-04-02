@@ -17,6 +17,7 @@ package logtail
 import (
 	"context"
 	catalog2 "github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -53,13 +54,13 @@ type objectInfo struct {
 
 type SnapshotMeta struct {
 	sync.RWMutex
-	object map[string]*objectInfo
-	tid    uint64
+	objects map[string]*objectInfo
+	tid     uint64
 }
 
 func NewSnapshotMeta() *SnapshotMeta {
 	return &SnapshotMeta{
-		object: make(map[string]*objectInfo),
+		objects: make(map[string]*objectInfo),
 	}
 }
 
@@ -83,11 +84,11 @@ func (sm *SnapshotMeta) Update(data *CheckpointData) *SnapshotMeta {
 		objectStats.UnMarshal(buf)
 		deleteTS := vector.GetFixedAt[types.TS](insDeleteTSVec, i)
 		createTS := vector.GetFixedAt[types.TS](insCreateTSVec, i)
-		if sm.object[objectStats.ObjectName().SegmentId().ToString()] == nil {
+		if sm.objects[objectStats.ObjectName().SegmentId().ToString()] == nil {
 			if !deleteTS.IsEmpty() {
 				continue
 			}
-			sm.object[objectStats.ObjectName().SegmentId().ToString()] = &objectInfo{
+			sm.objects[objectStats.ObjectName().SegmentId().ToString()] = &objectInfo{
 				stats:    objectStats,
 				createAt: createTS,
 			}
@@ -96,7 +97,7 @@ func (sm *SnapshotMeta) Update(data *CheckpointData) *SnapshotMeta {
 		if deleteTS.IsEmpty() {
 			panic(any("deleteTS is empty"))
 		}
-		delete(sm.object, objectStats.ObjectName().SegmentId().ToString())
+		delete(sm.objects, objectStats.ObjectName().SegmentId().ToString())
 	}
 
 	del, _, _, _ := data.GetBlkBatchs()
@@ -105,55 +106,47 @@ func (sm *SnapshotMeta) Update(data *CheckpointData) *SnapshotMeta {
 	for i := 0; i < del.Length(); i++ {
 		blockID := vector.GetFixedAt[types.Blockid](delBlockIDVec, i)
 		deltaLoc := vector.GetFixedAt[objectio.Location](delDeltaVec, i)
-		if sm.object[blockID.Segment().ToString()] != nil {
-			sm.object[blockID.Segment().ToString()].deltaLocation[uint32(blockID.Sequence())] = &deltaLoc
+		if sm.objects[blockID.Segment().ToString()] != nil {
+			sm.objects[blockID.Segment().ToString()].deltaLocation[uint32(blockID.Sequence())] = &deltaLoc
 		}
 	}
 	return nil
 }
 
-func (sm *SnapshotMeta) GetSnapshot(fs fileservice.FileService) (map[uint64][]types.TS, error) {
+func (sm *SnapshotMeta) GetSnapshot(ctx context.Context, fs fileservice.FileService, mp *mpool.MPool) (map[uint64][]types.TS, error) {
 	sm.RLock()
-	defer sm.RUnlock()
+	objects := sm.objects
+	sm.RUnlock()
 	snapshotList := make(map[uint64][]types.TS)
-	for _, object := range sm.object {
+	idxes := []uint16{0, 1}
+	colTypes := []types.Type{
+		types.New(types.T_uint64, 0, 0),
+		types.New(types.T_TS, types.MaxVarcharLen, 0),
+	}
+	for _, object := range objects {
 		location := object.stats.ObjectLocation()
+		name := object.stats.ObjectName()
 		for i := uint32(0); i < object.stats.BlkCnt(); i++ {
-			bat, err := blockio.LoadOneBlock(context.Background(), fs, location, objectio.SchemaData)
+			loc := objectio.BuildLocation(name, location.Extent(), 0, uint16(i))
+			blk := objectio.BlockInfo{
+				BlockID:   *objectio.BuildObjectBlockid(name, uint16(i)),
+				SegmentID: name.SegmentId(),
+				MetaLoc:   objectio.ObjectLocation(loc),
+			}
+			bat, err := blockio.BlockRead(ctx, &blk, nil, idxes, colTypes, object.checkpointTS.ToTimestamp(),
+				nil, nil, nil, fs, mp, nil, fileservice.Policy(0))
 			if err != nil {
 				return nil, err
 			}
-			if object.deltaLocation[i] == nil {
-				for r := 0; r < bat.Vecs[0].Length(); r++ {
-					tid := vector.GetFixedAt[uint64](bat.Vecs[0], r)
-					ts := vector.GetFixedAt[types.TS](bat.Vecs[1], r)
-					if len(snapshotList[tid]) == 0 {
-						snapshotList[tid] = make([]types.TS, 0)
-					}
-					snapshotList[tid] = append(snapshotList[tid], ts)
+			for r := 0; r < bat.Vecs[0].Length(); r++ {
+				tid := vector.GetFixedAt[uint64](bat.Vecs[0], r)
+				ts := vector.GetFixedAt[types.TS](bat.Vecs[1], r)
+				if len(snapshotList[tid]) == 0 {
+					snapshotList[tid] = make([]types.TS, 0)
 				}
-				continue
+				snapshotList[tid] = append(snapshotList[tid], ts)
 			}
-			deletes, err := blockio.LoadOneBlock(context.Background(), fs, *object.deltaLocation[i], objectio.SchemaTombstone)
-			if err != nil {
-				return nil, err
-			}
-			blockID := objectio.BuildObjectBlockid(object.stats.ObjectName(), uint16(i))
-			deleteRows := blockio.EvalDeleteRowsByTimestamp(deletes, object.checkpointTS, blockID)
-			if deleteRows == nil {
-				continue
-			}
-			for n := range bat.Vecs {
-				bat.Vecs[n].Shrink(deleteRows.ToI64Arrary(), true)
-				for r := 0; r < bat.Vecs[n].Length(); r++ {
-					tid := vector.GetFixedAt[uint64](bat.Vecs[0], r)
-					ts := vector.GetFixedAt[types.TS](bat.Vecs[1], r)
-					if len(snapshotList[tid]) == 0 {
-						snapshotList[tid] = make([]types.TS, 0)
-					}
-					snapshotList[tid] = append(snapshotList[tid], ts)
-				}
-			}
+
 		}
 	}
 	return snapshotList, nil
@@ -164,14 +157,14 @@ func (sm *SnapshotMeta) SetTid(tid uint64) {
 }
 
 func (sm *SnapshotMeta) SaveMeta(name string, fs fileservice.FileService) error {
-	if len(sm.object) == 0 {
+	if len(sm.objects) == 0 {
 		return nil
 	}
 	bat := containers.NewBatch()
 	for i, attr := range objectInfoSchemaAttr {
 		bat.AddVector(attr, containers.MakeVector(objectInfoSchemaTypes[i], common.DefaultAllocator))
 	}
-	for _, entry := range sm.object {
+	for _, entry := range sm.objects {
 		bat.GetVectorByName(catalog.ObjectAttr_ObjectStats).Append(entry.stats[:], false)
 		bat.GetVectorByName(catalog.EntryNode_CreateAt).Append(entry.createAt, false)
 		bat.GetVectorByName(catalog.EntryNode_DeleteAt).Append(entry.deleteAt, false)
@@ -201,8 +194,8 @@ func (sm *SnapshotMeta) Rebuild(ins *containers.Batch) {
 		buf := ins.GetVectorByName(catalog.ObjectAttr_ObjectStats).Get(i).([]byte)
 		objectStats.UnMarshal(buf)
 		createTS := vector.GetFixedAt[types.TS](insCreateTSVec, i)
-		if sm.object[objectStats.ObjectName().SegmentId().ToString()] == nil {
-			sm.object[objectStats.ObjectName().SegmentId().ToString()] = &objectInfo{
+		if sm.objects[objectStats.ObjectName().SegmentId().ToString()] == nil {
+			sm.objects[objectStats.ObjectName().SegmentId().ToString()] = &objectInfo{
 				stats:    objectStats,
 				createAt: createTS,
 			}
