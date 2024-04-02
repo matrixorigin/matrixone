@@ -210,3 +210,6 @@ func newReaderWithParam(param *ExternalParam) (*csvparser.CSVParser, error) {
 
 	return csvparser.NewCSVParser(&config, bufio.NewReader(param.reader), csvparser.ReadBlockSize, false, false)
 }
+
+type ParquetHandler struct {
+}

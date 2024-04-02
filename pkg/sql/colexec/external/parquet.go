@@ -15,15 +15,19 @@
 package external
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
-	"os"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/parquet-go/parquet-go"
@@ -44,12 +48,12 @@ func scanParquetFile(ctx context.Context, param *ExternalParam, proc *process.Pr
 		bat.Vecs[i] = proc.GetVector(types.New(types.T(col.Typ.Id), col.Typ.Width, col.Typ.Scale))
 	}
 
-	f, err := os.Open(param.Fileparam.Filepath)
+	var h ParquetHandler
+	r, err := h.openFile(param)
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
-	pr, err := parquet.OpenFile(f, param.FileSize[param.Fileparam.FileIndex-1])
+	pr, err := parquet.OpenFile(r, param.FileSize[param.Fileparam.FileIndex-1])
 	if err != nil {
 		return nil, err
 	}
@@ -82,6 +86,7 @@ func scanParquetFile(ctx context.Context, param *ExternalParam, proc *process.Pr
 				return nil, err
 			}
 		}
+		_ = pages.Close()
 	}
 
 	param.Fileparam.FileFin++
@@ -151,4 +156,48 @@ func getDataFromPage(page parquet.Page, proc *process.Process, vec *vector.Vecto
 		return moerr.NewInternalErrorNoCtx("")
 	}
 	return nil
+}
+
+func (*ParquetHandler) openFile(param *ExternalParam) (io.ReaderAt, error) {
+	if param.Extern.ScanType == tree.INLINE {
+		return bytes.NewReader(util.UnsafeStringToBytes(param.Extern.Data)), nil
+	}
+	if param.Extern.Local {
+		return nil, moerr.NewNYINoCtx("")
+	}
+	fs, readPath, err := plan2.GetForETLWithType(param.Extern, param.Fileparam.Filepath)
+	if err != nil {
+		return nil, err
+	}
+
+	return &fsReaderAt{
+		fs:       fs,
+		readPath: readPath,
+		ctx:      param.Ctx,
+	}, nil
+}
+
+type fsReaderAt struct {
+	fs       fileservice.ETLFileService
+	readPath string
+	ctx      context.Context
+}
+
+func (r *fsReaderAt) ReadAt(p []byte, off int64) (n int, err error) {
+	vec := fileservice.IOVector{
+		FilePath: r.readPath,
+		Entries: []fileservice.IOEntry{
+			0: {
+				Offset: off,
+				Size:   int64(len(p)),
+				Data:   p,
+			},
+		},
+	}
+
+	err = r.fs.Read(r.ctx, &vec)
+	if err != nil {
+		return 0, err
+	}
+	return int(vec.Entries[0].Size), nil
 }
