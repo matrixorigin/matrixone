@@ -1968,31 +1968,31 @@ func (ses *Session) getUpdateVariableSqlsByToml() []string {
 	updateSqls := make([]string, 0)
 	tenantInfo := ses.GetTenantInfo()
 	// sql_mode
-	if ses.pu.SV.SqlMode != gSysVarsDefs["sql_mode"].Default {
+	if getVariableValue(ses.pu.SV.SqlMode) != gSysVarsDefs["sql_mode"].Default {
 		sqlForUpdate := getSqlForUpdateSystemVariableValue(ses.pu.SV.SqlMode, uint64(tenantInfo.GetTenantID()), "sql_mode")
 		updateSqls = append(updateSqls, sqlForUpdate)
 	}
 
 	// lower_case_table_names
-	if ses.pu.SV.LowerCaseTableNames != gSysVarsDefs["lower_case_table_names"].Default {
+	if getVariableValue(ses.pu.SV.LowerCaseTableNames) != gSysVarsDefs["lower_case_table_names"].Default {
 		sqlForUpdate := getSqlForUpdateSystemVariableValue(getVariableValue(ses.pu.SV.LowerCaseTableNames), uint64(tenantInfo.GetTenantID()), "lower_case_table_names")
 		updateSqls = append(updateSqls, sqlForUpdate)
 	}
 
 	// save_query_result
-	if ses.pu.SV.SaveQueryResult != gSysVarsDefs["save_query_result"].Default {
+	if getVariableValue(ses.pu.SV.SaveQueryResult) != gSysVarsDefs["save_query_result"].Default {
 		sqlForUpdate := getSqlForUpdateSystemVariableValue(getVariableValue(ses.pu.SV.SaveQueryResult), uint64(tenantInfo.GetTenantID()), "save_query_result")
 		updateSqls = append(updateSqls, sqlForUpdate)
 	}
 
 	// query_result_maxsize
-	if ses.pu.SV.QueryResultMaxsize != gSysVarsDefs["query_result_maxsize"].Default {
+	if getVariableValue(ses.pu.SV.QueryResultMaxsize) != gSysVarsDefs["query_result_maxsize"].Default {
 		sqlForUpdate := getSqlForUpdateSystemVariableValue(getVariableValue(ses.pu.SV.QueryResultMaxsize), uint64(tenantInfo.GetTenantID()), "query_result_maxsize")
 		updateSqls = append(updateSqls, sqlForUpdate)
 	}
 
 	// query_result_timeout
-	if ses.pu.SV.QueryResultTimeout != gSysVarsDefs["query_result_timeout"].Default {
+	if getVariableValue(ses.pu.SV.QueryResultTimeout) != gSysVarsDefs["query_result_timeout"].Default {
 		sqlForUpdate := getSqlForUpdateSystemVariableValue(getVariableValue(ses.pu.SV.QueryResultTimeout), uint64(tenantInfo.GetTenantID()), "query_result_timeout")
 		updateSqls = append(updateSqls, sqlForUpdate)
 	}
