@@ -16,7 +16,6 @@ package types
 
 import (
 	"bytes"
-	"fmt"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -102,9 +101,6 @@ func (v *Varlena) GetByteSlice(area []byte) []byte {
 	svlen := (*v)[0]
 	if svlen <= VarlenaInlineSize {
 		return v.ByteSlice()
-	}
-	if area == nil {
-		fmt.Print("ddd")
 	}
 	voff, vlen := v.OffsetLen()
 	return area[voff : voff+vlen]

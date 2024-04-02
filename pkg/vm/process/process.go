@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 
@@ -387,10 +388,18 @@ func (vp *vectorPool) putVector(vec *vector.Vector) bool {
 	if len(vp.vecs[key]) >= vp.Limit {
 		return false
 	}
-	if len(vec.PutMsg) > 3 {
-		vec.PutMsg = vec.PutMsg[1:]
+	for _, v := range vp.vecs[key] {
+		if v == vec {
+			logutil.Errorf("AllocMsg=%s\n\nFreeMsg=%s\n\nGetMsg=%s\n\nPutMsg=%s\n\n",
+				v.AllocMsg,
+				v.FreeMsg,
+				v.GetMsg,
+				v.PutMsg,
+			)
+			panic("+++++++++++  double put")
+		}
 	}
-	vec.PutMsg = append(vec.PutMsg, time.Now().String()+" : typ="+vec.GetType().DescString()+" "+string(debug.Stack()))
+	vec.PutMsg = time.Now().String() + " : typ=" + vec.GetType().DescString() + " " + string(debug.Stack())
 	vp.vecs[key] = append(vp.vecs[key], vec)
 	return true
 }
@@ -402,11 +411,16 @@ func (vp *vectorPool) getVector(typ types.Type) *vector.Vector {
 	if vecs := vp.vecs[key]; len(vecs) > 0 {
 		vec := vecs[len(vecs)-1]
 		vp.vecs[key] = vecs[:len(vecs)-1]
-
-		if len(vec.GetMsg) > 3 {
-			vec.GetMsg = vec.GetMsg[1:]
+		if vec.OnUsed == false {
+			logutil.Errorf("AllocMsg=%s\n\nFreeMsg=%s\n\nGetMsg=%s\n\nPutMsg=%s\n\n",
+				vec.AllocMsg,
+				vec.FreeMsg,
+				vec.GetMsg,
+				vec.PutMsg,
+			)
+			panic("+++++++++++  use free vec")
 		}
-		vec.GetMsg = append(vec.GetMsg, time.Now().String()+" : "+string(debug.Stack()))
+		vec.GetMsg = time.Now().String() + " : " + string(debug.Stack())
 		return vec
 	}
 	return nil

@@ -491,6 +491,7 @@ func (r *DeleteReq) UnmarshalBinary(data []byte) error {
 	index += LengthBytes
 
 	var vec vector.Vector
+	vec = *vector.NewEmptyVec()
 	if err := vec.UnmarshalBinary(data[index : index+l]); err != nil {
 		return err
 	}

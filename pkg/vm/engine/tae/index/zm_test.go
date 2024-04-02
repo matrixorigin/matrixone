@@ -225,6 +225,7 @@ func TestVectorZM(t *testing.T) {
 	vec.Free(m)
 
 	zm = NewZM(types.T_uint16, 0)
+	vec = vector.NewEmptyVec()
 	vec, err = ZMToVector(zm, vec, m)
 
 	require.NoError(t, err)

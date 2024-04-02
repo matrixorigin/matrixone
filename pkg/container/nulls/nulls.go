@@ -65,10 +65,6 @@ func (nsp *Nulls) Reset() {
 	nsp.np.Reset()
 }
 
-func (nsp *Nulls) CheckEmptyFlagNil() bool {
-	return nsp.np.EmptyFlagIsNil()
-}
-
 func (nsp *Nulls) GetBitmap() *bitmap.Bitmap {
 	return &nsp.np
 }
