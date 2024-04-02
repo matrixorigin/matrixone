@@ -18,6 +18,10 @@ syntax = "proto3";
 package proxy;
 option go_package = "github.com/matrixorigin/matrixone/pkg/pb/proxy";
 
-message RequestLabel {
-  map<string, string> labels = 1;
+message ExtraInfo {
+  bytes Salt = 1;
+  bool InternalConn = 2;
+  uint32 ConnectionID = 3;
+  map<string, string> Label = 4;
+  string ClientAddr = 5;
 }

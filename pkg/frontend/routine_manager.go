@@ -279,6 +279,7 @@ func (rm *RoutineManager) Created(rs goetty.IOSession) {
 	ses.SetFromRealUser(true)
 	ses.setRoutineManager(rm)
 	ses.setRoutine(routine)
+	ses.clientAddr = pro.Peer()
 
 	ses.timestampMap[TSCreatedStart] = createdStart
 	defer func() {
