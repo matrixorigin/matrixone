@@ -92,31 +92,31 @@ func (builder *QueryBuilder) applyIndicesForSortUsingVectorIndex(nodeID int32, s
 		distFnExpr, entriesJoinCentroids, sortDirection, idxTableDefs, idxTags)
 	var pkPos = scanNode.TableDef.Name2ColIndex[scanNode.TableDef.Pkey.PkeyColName] //TODO: watch out.
 
-	onlyUseIndexTables := true
-	if onlyUseIndexTables {
+	//onlyUseIndexTables := false
+	//if onlyUseIndexTables {
+	// TODO: need advice from Nitao and Aungr regarding how to use index only scan. Is it safe?
 
-		//TODO: this is a temporary change.
-		idxColMap[[2]int32{scanNode.BindingTags[0], pkPos}] = &plan.Expr{
-			Typ: idxTableDefs[2].Cols[2].Typ,
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{
-					RelPos: idxTags["entries.scan"],
-					ColPos: 2, // entries.pk
-				},
-			},
-		}
-		idxColMap[[2]int32{scanNode.BindingTags[0], colPosOrderBy}] = &plan.Expr{
-			Typ: idxTableDefs[2].Cols[3].Typ,
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{
-					RelPos: idxTags["entries.scan"],
-					ColPos: 3, // entries.entry
-				},
-			},
-		}
-
-		return sortTblByL2Distance
-	}
+	//	idxColMap[[2]int32{scanNode.BindingTags[0], pkPos}] = &plan.Expr{
+	//		Typ: idxTableDefs[2].Cols[2].Typ,
+	//		Expr: &plan.Expr_Col{
+	//			Col: &plan.ColRef{
+	//				RelPos: idxTags["entries.scan"],
+	//				ColPos: 2, // entries.pk
+	//			},
+	//		},
+	//	}
+	//	idxColMap[[2]int32{scanNode.BindingTags[0], colPosOrderBy}] = &plan.Expr{
+	//		Typ: idxTableDefs[2].Cols[3].Typ,
+	//		Expr: &plan.Expr_Col{
+	//			Col: &plan.ColRef{
+	//				RelPos: idxTags["entries.scan"],
+	//				ColPos: 3, // entries.entry
+	//			},
+	//		},
+	//	}
+	//
+	//	return sortTblByL2Distance
+	//}
 
 	// 2.e Create entries JOIN tbl on entries.original_pk == tbl.pk
 	projectTbl := makeTblCrossJoinEntriesCentroidOnPK(builder, builder.ctxByNode[nodeID],
@@ -321,17 +321,19 @@ func makeEntriesCrossJoinCentroidsOnCentroidId(builder *QueryBuilder, bindCtx *B
 	})
 
 	var onList []*Expr
-	var joinType int32 = 3
-	//TODO: arjun. remove this part
-	if joinType == 1 {
+	var joinOnType int32 = 1
+	//TODO: Currently OnList doesnt support 2 arguments.
+	// Being tracked under:https://github.com/matrixorigin/matrixone/issues/15196
+	switch joinOnType {
+	case 1:
 		andEq, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "and", []*Expr{
 			entriesCentroidIdEqCentroidId,
 			centroidVersionEqEntriesVersion,
 		})
 		onList = []*Expr{andEq}
-	} else if joinType == 2 {
+	case 2:
 		onList = []*Expr{entriesCentroidIdEqCentroidId, centroidVersionEqEntriesVersion}
-	} else if joinType == 3 {
+	case 3:
 		onList = []*Expr{entriesCentroidIdEqCentroidId}
 	}
 
