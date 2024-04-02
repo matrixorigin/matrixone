@@ -52,6 +52,48 @@ func init() {
 	for i, name := range MoTableMetaSchema {
 		MoTableMetaDefs[i] = newAttributeDef(name, MoTableMetaTypes[i], i == 0)
 	}
+
+	def := &engine.ConstraintDef{
+		Cts: []engine.Constraint{
+			&engine.PrimaryKeyDef{
+				Pkey: &plan.PrimaryKeyDef{
+					Cols:        []uint64{0},
+					PkeyColId:   0,
+					PkeyColName: SystemDBAttr_ID,
+					Names:       []string{SystemDBAttr_ID},
+				},
+			},
+		},
+	}
+	MoDatabaseConstraint, _ = def.MarshalBinary()
+
+	def = &engine.ConstraintDef{
+		Cts: []engine.Constraint{
+			&engine.PrimaryKeyDef{
+				Pkey: &plan.PrimaryKeyDef{
+					Cols:        []uint64{0},
+					PkeyColId:   0,
+					PkeyColName: SystemRelAttr_ID,
+					Names:       []string{SystemRelAttr_ID},
+				},
+			},
+		},
+	}
+	MoTableConstraint, _ = def.MarshalBinary()
+
+	def = &engine.ConstraintDef{
+		Cts: []engine.Constraint{
+			&engine.PrimaryKeyDef{
+				Pkey: &plan.PrimaryKeyDef{
+					Cols:        []uint64{0},
+					PkeyColId:   0,
+					PkeyColName: SystemColAttr_UniqName,
+					Names:       []string{SystemColAttr_UniqName},
+				},
+			},
+		},
+	}
+	MoColumnConstraint, _ = def.MarshalBinary()
 }
 
 func newAttributeDef(name string, typ types.Type, isPrimary bool) engine.TableDef {
