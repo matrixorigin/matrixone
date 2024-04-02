@@ -1344,7 +1344,13 @@ func doPrepareString(ctx context.Context, ses *Session, st *tree.PrepareString) 
 	if err != nil {
 		return nil, err
 	}
-	stmts, err := mysql.Parse(ctx, st.Sql, v.(int64))
+
+	origin, err := ses.GetGlobalVar("keep_user_target_list_in_result")
+	if err != nil {
+		return nil, err
+	}
+
+	stmts, err := mysql.Parse(ctx, st.Sql, v.(int64), origin.(int64))
 	if err != nil {
 		return nil, err
 	}
@@ -2185,11 +2191,16 @@ var GetComputationWrapper = func(db string, input *UserInput, user string, eng e
 		stmts = append(stmts, cmdFieldStmt)
 	} else {
 		var v interface{}
+		var origin interface{}
 		v, err = ses.GetGlobalVar("lower_case_table_names")
 		if err != nil {
 			v = int64(1)
 		}
-		stmts, err = parsers.Parse(proc.Ctx, dialect.MYSQL, input.getSql(), v.(int64))
+		origin, err = ses.GetGlobalVar("keep_user_target_list_in_result")
+		if err != nil {
+			origin = int64(0)
+		}
+		stmts, err = parsers.Parse(proc.Ctx, dialect.MYSQL, input.getSql(), v.(int64), origin.(int64))
 		if err != nil {
 			return nil, err
 		}
@@ -2732,7 +2743,11 @@ var GetStmtExecList = func(db, sql, user string, eng engine.Engine, proc *proces
 		if err != nil {
 			return nil, err
 		}
-		stmts, err = parsers.Parse(proc.Ctx, dialect.MYSQL, sql, v.(int64))
+		origin, err := ses.GetGlobalVar("keep_user_target_list_in_result")
+		if err != nil {
+			origin = int64(0)
+		}
+		stmts, err = parsers.Parse(proc.Ctx, dialect.MYSQL, sql, v.(int64), origin.(int64))
 		if err != nil {
 			return nil, err
 		}

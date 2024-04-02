@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -171,9 +172,11 @@ func newClientConn(
 	ipNetList []*net.IPNet,
 ) (ClientConn, error) {
 	var originIP net.IP
-	host, _, err := net.SplitHostPort(conn.RemoteAddress())
+	var port int
+	host, portStr, err := net.SplitHostPort(conn.RemoteAddress())
 	if err == nil {
 		originIP = net.ParseIP(host)
+		port, _ = strconv.Atoi(portStr)
 	}
 	qc, err := qclient.NewQueryClient(cfg.UUID, morpc.Config{})
 	if err != nil {
@@ -189,7 +192,8 @@ func newClientConn(
 		router:         router,
 		tun:            tun,
 		clientInfo: clientInfo{
-			originIP: originIP,
+			originIP:   originIP,
+			originPort: uint16(port),
 		},
 		ipNetList: ipNetList,
 		// set the connection timeout value.
@@ -407,6 +411,7 @@ func (c *clientConn) connectToBackend(prevAdd string) (ServerConn, error) {
 
 		// Update the internal connection.
 		cn.internalConn = containIP(c.ipNetList, c.clientInfo.originIP)
+		cn.clientAddr = fmt.Sprintf("%s:%d", c.clientInfo.originIP.String(), c.clientInfo.originPort)
 
 		// After select a CN server, we try to connect to it. If connect
 		// fails, and it is a retryable error, we reselect another CN server.
@@ -467,6 +472,7 @@ func (c *clientConn) readPacket() (*frontend.Packet, error) {
 	if proxyAddr, ok := msg.(*ProxyAddr); ok {
 		if proxyAddr.SourceAddress != nil {
 			c.clientInfo.originIP = proxyAddr.SourceAddress
+			c.clientInfo.originPort = proxyAddr.SourcePort
 		}
 		return c.readPacket()
 	}
