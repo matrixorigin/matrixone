@@ -17,12 +17,13 @@ package plan
 import (
 	"context"
 	"fmt"
+	"strings"
+	"sync"
+
 	"github.com/google/uuid"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
-	"strings"
-	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -2019,9 +2020,6 @@ func appendAggCountGroupByColExpr(builder *QueryBuilder, bindCtx *BindContext, l
 }
 
 func getPkPos(tableDef *TableDef, ignoreFakePK bool) (int, *Type) {
-	if tableDef.Pkey == nil {
-		return -1, nil
-	}
 	pkName := tableDef.Pkey.PkeyColName
 	// if pkName == catalog.CPrimaryKeyColName {
 	// 	return len(tableDef.Cols) - 1, makeHiddenColTyp()
@@ -2824,7 +2822,6 @@ func appendPreInsertUkPlan(
 				PkColumn: int32(pkColumn),
 				PkType:   originPkType,
 				UkType:   ukType,
-				TableDef: tableDef,
 			},
 		}
 	} else {
@@ -2839,7 +2836,6 @@ func appendPreInsertUkPlan(
 				PkColumn: int32(pkColumn),
 				PkType:   originPkType,
 				UkType:   ukType,
-				TableDef: tableDef,
 			},
 		}
 	}
