@@ -1154,7 +1154,7 @@ func bindFuncExprImplUdf(b *baseBinder, name string, udf *function.Udf, args []t
 
 		if !strings.Contains(sql, "select") {
 			sql = "select " + sql
-			substmts, err := parsers.Parse(b.GetContext(), dialect.MYSQL, sql, 1)
+			substmts, err := parsers.Parse(b.GetContext(), dialect.MYSQL, sql, 1, 0)
 			if err != nil {
 				return nil, err
 			}
@@ -1163,7 +1163,7 @@ func bindFuncExprImplUdf(b *baseBinder, name string, udf *function.Udf, args []t
 				return nil, err
 			}
 		} else {
-			substmts, err := parsers.Parse(b.GetContext(), dialect.MYSQL, sql, 1)
+			substmts, err := parsers.Parse(b.GetContext(), dialect.MYSQL, sql, 1, 0)
 			if err != nil {
 				return nil, err
 			}
