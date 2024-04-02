@@ -1519,7 +1519,7 @@ func distributeBlocksToBlockReaders(rds []*blockReader, numOfReaders int, numOfB
 		}
 	}
 	scanType := NORMAL
-	if numOfBlocks < SMALLSCAN_THRESHOLD {
+	if numOfBlocks < numOfReaders*SMALLSCAN_THRESHOLD {
 		scanType = SMALL
 	} else if (numOfReaders * LARGESCAN_THRESHOLD) <= numOfBlocks {
 		scanType = LARGE
