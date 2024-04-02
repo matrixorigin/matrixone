@@ -26,12 +26,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
-func Parse(ctx context.Context, dialectType dialect.DialectType, sql string, lower int64) ([]tree.Statement, error) {
+func Parse(ctx context.Context, dialectType dialect.DialectType, sql string, lower int64, useOrigin int64) ([]tree.Statement, error) {
 	_, task := gotrace.NewTask(context.TODO(), "parser.Parse")
 	defer task.End()
 	switch dialectType {
 	case dialect.MYSQL:
-		return mysql.Parse(ctx, sql, lower)
+		return mysql.Parse(ctx, sql, lower, useOrigin)
 	case dialect.POSTGRESQL:
 		return postgresql.Parse(ctx, sql)
 	default:
@@ -39,10 +39,10 @@ func Parse(ctx context.Context, dialectType dialect.DialectType, sql string, low
 	}
 }
 
-func ParseOne(ctx context.Context, dialectType dialect.DialectType, sql string, lower int64) (tree.Statement, error) {
+func ParseOne(ctx context.Context, dialectType dialect.DialectType, sql string, lower int64, useOrigin int64) (tree.Statement, error) {
 	switch dialectType {
 	case dialect.MYSQL:
-		return mysql.ParseOne(ctx, sql, lower)
+		return mysql.ParseOne(ctx, sql, lower, useOrigin)
 	case dialect.POSTGRESQL:
 		return postgresql.ParseOne(ctx, sql)
 	default:
