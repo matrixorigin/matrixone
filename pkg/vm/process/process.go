@@ -16,12 +16,10 @@ package process
 
 import (
 	"context"
-	"runtime/debug"
 	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 
@@ -375,6 +373,7 @@ func (vp *vectorPool) freeVectors(mp *mpool.MPool) {
 	defer vp.Unlock()
 	for k, vecs := range vp.vecs {
 		for _, vec := range vecs {
+			vec.OnPut = false
 			vec.Free(mp)
 		}
 		delete(vp.vecs, k)
@@ -388,18 +387,14 @@ func (vp *vectorPool) putVector(vec *vector.Vector) bool {
 	if len(vp.vecs[key]) >= vp.Limit {
 		return false
 	}
-	for _, v := range vp.vecs[key] {
-		if v == vec {
-			logutil.Errorf("AllocMsg=%s\n\nFreeMsg=%s\n\nGetMsg=%s\n\nPutMsg=%s\n\n",
-				v.AllocMsg,
-				v.FreeMsg,
-				v.GetMsg,
-				v.PutMsg,
-			)
-			panic("+++++++++++  double put")
-		}
+	if !vec.OnUsed || vec.OnPut {
+		panic("put vector which unalloc or on put list")
 	}
-	vec.PutMsg = time.Now().String() + " : typ=" + vec.GetType().DescString() + " " + string(debug.Stack())
+	// if len(vec.PutMsg) > 20 {
+	// 	vec.PutMsg = vec.PutMsg[1:]
+	// }
+	// vec.PutMsg = append(vec.PutMsg, time.Now().String()+" : typ="+vec.GetType().DescString()+" "+string(debug.Stack()))
+	vec.OnPut = true
 	vp.vecs[key] = append(vp.vecs[key], vec)
 	return true
 }
@@ -411,16 +406,14 @@ func (vp *vectorPool) getVector(typ types.Type) *vector.Vector {
 	if vecs := vp.vecs[key]; len(vecs) > 0 {
 		vec := vecs[len(vecs)-1]
 		vp.vecs[key] = vecs[:len(vecs)-1]
-		if vec.OnUsed == false {
-			logutil.Errorf("AllocMsg=%s\n\nFreeMsg=%s\n\nGetMsg=%s\n\nPutMsg=%s\n\n",
-				vec.AllocMsg,
-				vec.FreeMsg,
-				vec.GetMsg,
-				vec.PutMsg,
-			)
-			panic("+++++++++++  use free vec")
+		if !vec.OnUsed || !vec.OnPut {
+			panic("get vector which unalloc or not in put list")
 		}
-		vec.GetMsg = time.Now().String() + " : " + string(debug.Stack())
+		// if len(vec.GetMsg) > 20 {
+		// 	vec.GetMsg = vec.GetMsg[1:]
+		// }
+		// vec.GetMsg = append(vec.GetMsg, time.Now().String()+" : "+string(debug.Stack()))
+		vec.OnPut = false
 		return vec
 	}
 	return nil

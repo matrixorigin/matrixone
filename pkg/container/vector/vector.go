@@ -17,10 +17,8 @@ package vector
 import (
 	"bytes"
 	"fmt"
-	"runtime/debug"
 	"slices"
 	"sort"
-	"time"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -68,11 +66,12 @@ type Vector struct {
 
 	Debug string
 
-	AllocMsg string
-	FreeMsg  string
-	PutMsg   string
-	GetMsg   string
-	OnUsed   bool
+	// AllocMsg []string
+	// FreeMsg  []string
+	// PutMsg   []string
+	// GetMsg   []string
+	OnUsed bool
+	OnPut  bool
 }
 
 type typedSlice struct {
@@ -435,17 +434,15 @@ func (v *Vector) Free(mp *mpool.MPool) {
 	v.nsp.Reset()
 	v.sorted = false
 
-	if !v.OnUsed {
-		logutil.Errorf("AllocMsg=%s\n\nFreeMsg=%s\n\nGetMsg=%s\n\nPutMsg=%s\n\n",
-			v.AllocMsg,
-			v.FreeMsg,
-			v.GetMsg,
-			v.PutMsg,
-		)
-		panic("+++++++++++  vec had freeed")
+	if !v.OnUsed || v.OnPut {
+		panic("free vector which unalloc or in put list")
 	}
 	v.OnUsed = false
-	v.FreeMsg = time.Now().String() + " : typ=" + v.typ.DescString() + " " + string(debug.Stack())
+	v.OnPut = false
+	// if len(v.FreeMsg) > 20 {
+	// 	v.FreeMsg = v.FreeMsg[1:]
+	// }
+	// v.FreeMsg = append(v.FreeMsg, time.Now().String()+" : typ="+v.typ.DescString()+" "+string(debug.Stack()))
 
 	reuse.Free[Vector](v, nil)
 }
