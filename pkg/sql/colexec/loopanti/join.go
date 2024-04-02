@@ -186,7 +186,6 @@ func (ctr *container) probe(ap *Argument, proc *process.Process, anal process.An
 		if !matched && !nulls.Any(vec.GetNulls()) {
 			for k, pos := range ap.Result {
 				if err := ctr.rbat.Vecs[k].UnionOne(ap.bat.Vecs[pos], int64(i), proc.Mp()); err != nil {
-					vec.Free(proc.Mp())
 					return err
 				}
 			}
