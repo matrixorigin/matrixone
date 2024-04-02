@@ -28,6 +28,7 @@ import (
 type Contact struct {
 	ID   int64  `parquet:"id"`
 	Name string `parquet:"name"`
+	Sex  bool   `parquet:"sex"`
 }
 
 func buildFile() *bytes.Buffer {
@@ -68,8 +69,25 @@ func buildFile() *bytes.Buffer {
 	return &buf
 }
 
-func Test_makeVecFromPage(t *testing.T) {
-	convey.Convey("makeVecFromPage succ", t, func() {
+func Test_getDataFromPage(t *testing.T) {
+
+	buf := buildFile()
+	f, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	if err != nil {
+		panic(err)
+	}
+
+	t.Log(f.Root().Column("sex").Type().LogicalType())
+	return
+
+	// os.WriteFile("test.parq", buf.Bytes(), 0666)
+
+	// return
+
+}
+
+func Test_dataFn(t *testing.T) {
+	convey.Convey("dataFn", t, func() {
 		proc := testutil.NewProc()
 
 		tests := []struct {
@@ -128,35 +146,11 @@ func Test_makeVecFromPage(t *testing.T) {
 			page := tc.typ.NewPage(0, tc.numValues, tc.values)
 			vec := proc.GetVector(types.New(tc.vType, 0, 0))
 
-			err := makeVecFromPage(page, proc, vec)
+			var h ParquetHandler
+			err := h.getDataFn(tc.typ, tc.vType)(page, proc, vec)
 			convey.So(err, convey.ShouldBeNil)
 
 			t.Log(vec.String())
 		}
-
-		// 	data := buildFile()
-
-		// 	pr, err := parquet.OpenFile(bytes.NewReader(data.Bytes()), int64(data.Len()))
-		// 	convey.So(err, convey.ShouldBeNil)
-
-		// 	name := pr.Root().Column("id")
-
-		// 	proc := testutil.NewProc()
-		// 	vec := proc.GetVector(types.New(types.T_int64, 0, 0))
-
-		// 	pages := name.Pages()
-		// L:
-		// 	for {
-		// 		page, err := pages.ReadPage()
-		// 		switch {
-		// 		case errors.Is(err, io.EOF):
-		// 			break L
-		// 		case err != nil:
-		// 			convey.So(err, convey.ShouldBeNil)
-		// 		}
-
-		// 		err = makeVecFromPage(page, proc, vec)
-		// 		convey.So(err, convey.ShouldBeNil)
-		// 	}
 	})
 }

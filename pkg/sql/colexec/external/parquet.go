@@ -49,26 +49,23 @@ func scanParquetFile(ctx context.Context, param *ExternalParam, proc *process.Pr
 	}
 
 	var h ParquetHandler
-	r, err := h.openFile(param)
-	if err != nil {
-		return nil, err
-	}
-	pr, err := parquet.OpenFile(r, param.FileSize[param.Fileparam.FileIndex-1])
+	err := h.openFile(param)
 	if err != nil {
 		return nil, err
 	}
 
-	for colIdx, attr := range param.Attrs {
+	err = h.prepare(param)
+	if err != nil {
+		return nil, err
+	}
+
+	for colIdx, col := range h.cols {
 		vec := bat.Vecs[colIdx]
 		if param.Cols[colIdx].Hidden {
 			col := param.Cols[colIdx]
-			bat.Vecs[colIdx] = vector.NewConstNull(types.New(types.T(col.Typ.Id), col.Typ.Width, col.Typ.Scale), int(pr.NumRows()), proc.GetMPool())
+			typ := types.New(types.T(col.Typ.Id), col.Typ.Width, col.Typ.Scale)
+			bat.Vecs[colIdx] = vector.NewConstNull(typ, int(h.file.NumRows()), proc.GetMPool())
 			continue
-		}
-
-		col := pr.Root().Column(attr)
-		if col == nil {
-			return nil, moerr.NewInternalErrorNoCtx("")
 		}
 
 		pages := col.Pages()
@@ -81,7 +78,12 @@ func scanParquetFile(ctx context.Context, param *ExternalParam, proc *process.Pr
 			case err != nil:
 				return nil, err
 			}
-			err = getDataFromPage(page, proc, vec)
+
+			if len(page.DefinitionLevels()) != 0 || len(page.RepetitionLevels()) != 0 {
+				return nil, moerr.NewNYINoCtx("page has repetition or definition not support")
+			}
+
+			err = h.dataFn[colIdx](page, proc, vec)
 			if err != nil {
 				return nil, err
 			}
@@ -99,82 +101,146 @@ func scanParquetFile(ctx context.Context, param *ExternalParam, proc *process.Pr
 	return bat, nil
 }
 
-func getDataFromPage(page parquet.Page, proc *process.Process, vec *vector.Vector) error {
-	if len(page.DefinitionLevels()) != 0 || len(page.RepetitionLevels()) != 0 {
-		return moerr.NewNYINoCtx("page has repetition or definition not support")
+func (h *ParquetHandler) openFile(param *ExternalParam) error {
+	var r io.ReaderAt
+	switch {
+	case param.Extern.ScanType == tree.INLINE:
+		r = bytes.NewReader(util.UnsafeStringToBytes(param.Extern.Data))
+	case param.Extern.Local:
+		return moerr.NewNYINoCtx("")
+	default:
+		fs, readPath, err := plan2.GetForETLWithType(param.Extern, param.Fileparam.Filepath)
+		if err != nil {
+			return err
+		}
+		r = &fsReaderAt{
+			fs:       fs,
+			readPath: readPath,
+			ctx:      param.Ctx,
+		}
+	}
+	var err error
+	h.file, err = parquet.OpenFile(r, param.FileSize[param.Fileparam.FileIndex-1])
+	return err
+}
+
+func (h *ParquetHandler) prepare(param *ExternalParam) error {
+	h.cols = make([]*parquet.Column, len(param.Attrs))
+	h.dataFn = make([]dataFn, len(param.Attrs))
+	for colIdx, attr := range param.Attrs {
+		def := param.Cols[colIdx]
+		if def.Hidden {
+			continue
+		}
+		col := h.file.Root().Column(attr)
+		if col == nil {
+			return moerr.NewInvalidInputNoCtx("column %s not found", attr)
+		}
+
+		h.cols[colIdx] = col
+		h.dataFn[colIdx] = h.getDataFn(col.Type(), types.T(def.Typ.Id))
 	}
 
-	var err error
-	data := page.Data()
-	switch page.Type().Kind() {
-	case parquet.Boolean:
-		p := make([]bool, page.NumValues())
-		r := page.Values().(parquet.BooleanReader)
-		var n int
-		n, err = r.ReadBooleans(p)
-		if err != nil && !errors.Is(err, io.EOF) {
-			return moerr.NewInternalErrorNoCtx("")
-		}
-		if n != int(page.NumValues()) {
-			return moerr.NewInternalErrorNoCtx("")
-		}
-		err = vector.AppendFixedList(vec, p, nil, proc.GetMPool())
-	case parquet.Int32:
-		err = vector.AppendFixedList(vec, data.Int32(), nil, proc.GetMPool())
-	case parquet.Int64:
-		err = vector.AppendFixedList(vec, data.Int64(), nil, proc.GetMPool())
-	// case parquet.Int96:
-	case parquet.Float:
-		err = vector.AppendFixedList(vec, data.Float(), nil, proc.GetMPool())
-	case parquet.Double:
-		err = vector.AppendFixedList(vec, data.Double(), nil, proc.GetMPool())
-	case parquet.ByteArray:
-		buf, offsets := data.ByteArray()
-		if len(offsets) > 0 {
-			baseOffset := offsets[0]
-			for _, endOffset := range offsets[1:] {
-				err = vector.AppendBytes(vec, buf[baseOffset:endOffset:endOffset], false, proc.GetMPool())
-				baseOffset = endOffset
-				if err != nil {
-					return moerr.NewInternalErrorNoCtx("")
-				}
-			}
-		}
-	case parquet.FixedLenByteArray:
-		buf, size := data.FixedLenByteArray()
-		for len(buf) > 0 {
-			err = vector.AppendBytes(vec, buf[:size:size], false, proc.GetMPool())
-			buf = buf[size:]
-			if err != nil {
-				return moerr.NewInternalErrorNoCtx("")
-			}
-		}
-	default:
-		return moerr.NewInternalErrorNoCtx("")
-	}
-	if err != nil {
-		return moerr.NewInternalErrorNoCtx("")
-	}
 	return nil
 }
 
-func (*ParquetHandler) openFile(param *ExternalParam) (io.ReaderAt, error) {
-	if param.Extern.ScanType == tree.INLINE {
-		return bytes.NewReader(util.UnsafeStringToBytes(param.Extern.Data)), nil
+func (*ParquetHandler) getDataFn(st parquet.Type, dt types.T) dataFn {
+	switch dt {
+	case types.T_bool:
+		if st == parquet.BooleanType {
+			return func(page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+				var err error
+				p := make([]bool, page.NumValues())
+				r := page.Values().(parquet.BooleanReader)
+				var n int
+				n, err = r.ReadBooleans(p)
+				if err != nil && !errors.Is(err, io.EOF) {
+					return moerr.NewInternalErrorNoCtx("")
+				}
+				if n != int(page.NumValues()) {
+					return moerr.NewInternalErrorNoCtx("")
+				}
+				return vector.AppendFixedList(vec, p, nil, proc.GetMPool())
+			}
+		}
+	case types.T_int32:
+		if st == parquet.Int32Type {
+			return func(page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+				data := page.Data()
+				return vector.AppendFixedList(vec, data.Int32(), nil, proc.GetMPool())
+			}
+		}
+	case types.T_int64:
+		if st == parquet.Int64Type {
+			return func(page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+				data := page.Data()
+				return vector.AppendFixedList(vec, data.Int64(), nil, proc.GetMPool())
+			}
+		}
+	case types.T_uint32:
+		if st.Length() == 32 && st.Kind() == parquet.Int32 {
+			return func(page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+				data := page.Data()
+				return vector.AppendFixedList(vec, data.Uint32(), nil, proc.GetMPool())
+			}
+		}
+	case types.T_uint64:
+		if st.Length() == 64 && st.Kind() == parquet.Int64 {
+			return func(page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+				data := page.Data()
+				return vector.AppendFixedList(vec, data.Uint32(), nil, proc.GetMPool())
+			}
+		}
+	case types.T_float32:
+		if st == parquet.FloatType {
+			return func(page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+				data := page.Data()
+				return vector.AppendFixedList(vec, data.Float(), nil, proc.GetMPool())
+			}
+		}
+	case types.T_float64:
+		if st == parquet.DoubleType {
+			return func(page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+				data := page.Data()
+				return vector.AppendFixedList(vec, data.Double(), nil, proc.GetMPool())
+			}
+		}
+	case types.T_char, types.T_varchar:
+		if st.PhysicalType() != nil {
+			if st.Kind() == parquet.ByteArray {
+				return func(page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+					data := page.Data()
+					buf, offsets := data.ByteArray()
+					if len(offsets) > 0 {
+						baseOffset := offsets[0]
+						for _, endOffset := range offsets[1:] {
+							err := vector.AppendBytes(vec, buf[baseOffset:endOffset:endOffset], false, proc.GetMPool())
+							baseOffset = endOffset
+							if err != nil {
+								return moerr.NewInternalErrorNoCtx("")
+							}
+						}
+					}
+					return nil
+				}
+			}
+			if st.Kind() == parquet.FixedLenByteArray {
+				return func(page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+					data := page.Data()
+					buf, size := data.FixedLenByteArray()
+					for len(buf) > 0 {
+						err := vector.AppendBytes(vec, buf[:size:size], false, proc.GetMPool())
+						buf = buf[size:]
+						if err != nil {
+							return moerr.NewInternalErrorNoCtx("")
+						}
+					}
+					return nil
+				}
+			}
+		}
 	}
-	if param.Extern.Local {
-		return nil, moerr.NewNYINoCtx("")
-	}
-	fs, readPath, err := plan2.GetForETLWithType(param.Extern, param.Fileparam.Filepath)
-	if err != nil {
-		return nil, err
-	}
-
-	return &fsReaderAt{
-		fs:       fs,
-		readPath: readPath,
-		ctx:      param.Ctx,
-	}, nil
+	return nil
 }
 
 type fsReaderAt struct {
