@@ -74,7 +74,7 @@ func buildPrepare(stmt tree.Prepare, ctx CompilerContext) (*Plan, error) {
 		if err != nil {
 			v = int64(1)
 		}
-		stmts, err := mysql.Parse(ctx.GetContext(), pstmt.Sql, v.(int64))
+		stmts, err := mysql.Parse(ctx.GetContext(), pstmt.Sql, v.(int64), 0)
 		defer func() {
 			for _, s := range stmts {
 				s.Free()

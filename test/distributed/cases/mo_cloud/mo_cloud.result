@@ -589,7 +589,7 @@ count(*)
 0
 SELECT datname AS name, IF (table_cnt IS NULL, 0, table_cnt) AS tables, role_name AS owner FROM (SELECT dat_id, datname, mo_database.created_time, IF(role_name IS NULL, '-', role_name) AS role_name FROM mo_catalog.mo_database LEFT JOIN mo_catalog.mo_role ON mo_database.owner = role_id) AS x LEFT JOIN(SELECT count(*) AS table_cnt, reldatabase_id FROM mo_catalog.mo_tables WHERE relkind IN ('r','v','e','cluster') GROUP BY reldatabase_id) AS y ON x.dat_id = y.reldatabase_id order by name;
 name    tables    owner
-information_schema    22    accountadmin
+information_schema    23    accountadmin
 mo_catalog    23    -
 mo_mo    0    accountadmin
 mysql    6    accountadmin
@@ -610,6 +610,7 @@ information_schema    parameters    r    accountadmin
 information_schema    partitions    v    accountadmin
 information_schema    processlist    v    accountadmin
 information_schema    profiling    r    accountadmin
+information_schema    referential_constraints    v    accountadmin
 information_schema    routines    r    accountadmin
 information_schema    schema_privileges    r    accountadmin
 information_schema    schemata    v    accountadmin
@@ -669,6 +670,7 @@ tables    accountadmin
 partitions    accountadmin
 views    accountadmin
 statistics    accountadmin
+referential_constraints    accountadmin
 SELECT relname AS `name`, IF (role_name IS NULL, '-', role_name) AS `owner` FROM mo_catalog.mo_tables LEFT JOIN mo_catalog.mo_role ON mo_catalog.mo_tables.owner=role_id WHERE relkind IN ('v') AND reldatabase='mo_sample_data_tpch_sf1';
 name    owner
 SELECT relname AS `name`, IF (role_name IS NULL, '-', role_name) AS `owner` FROM mo_catalog.mo_tables LEFT JOIN mo_catalog.mo_role ON mo_catalog.mo_tables.owner=role_id WHERE relkind IN ('v') AND reldatabase='mysql';

@@ -207,6 +207,11 @@ func (l *LocalFS) write(ctx context.Context, vector IOVector) (bytesWritten int,
 		return 0, err
 	}
 
+	t0 := time.Now()
+	defer func() {
+		FSProfileHandler.AddSample(time.Since(t0))
+	}()
+
 	path, err := ParsePathAtService(vector.FilePath, l.name)
 	if err != nil {
 		return 0, err
@@ -430,6 +435,11 @@ func (l *LocalFS) read(ctx context.Context, vector *IOVector, bytesCounter *atom
 		return nil
 	}
 
+	t0 := time.Now()
+	defer func() {
+		FSProfileHandler.AddSample(time.Since(t0))
+	}()
+
 	path, err := ParsePathAtService(vector.FilePath, l.name)
 	if err != nil {
 		return err
@@ -612,10 +622,17 @@ func (l *LocalFS) List(ctx context.Context, dirPath string) (ret []DirEntry, err
 		return nil, err
 	}
 
-	_, span := trace.Start(ctx, "LocalFS.List", trace.WithKind(trace.SpanKindLocalFSVis))
+	ctx, span := trace.Start(ctx, "LocalFS.List", trace.WithKind(trace.SpanKindLocalFSVis))
 	defer func() {
 		span.AddExtraFields([]zap.Field{zap.String("list", dirPath)}...)
 		span.End()
+	}()
+
+	_ = ctx
+
+	t0 := time.Now()
+	defer func() {
+		FSProfileHandler.AddSample(time.Since(t0))
 	}()
 
 	path, err := ParsePathAtService(dirPath, l.name)
@@ -681,6 +698,11 @@ func (l *LocalFS) StatFile(ctx context.Context, filePath string) (*DirEntry, err
 		span.End()
 	}()
 
+	t0 := time.Now()
+	defer func() {
+		FSProfileHandler.AddSample(time.Since(t0))
+	}()
+
 	path, err := ParsePathAtService(filePath, l.name)
 	if err != nil {
 		return nil, err
@@ -720,6 +742,11 @@ func (l *LocalFS) Delete(ctx context.Context, filePaths ...string) error {
 	defer func() {
 		span.AddExtraFields([]zap.Field{zap.String("delete", strings.Join(filePaths, "|"))}...)
 		span.End()
+	}()
+
+	t0 := time.Now()
+	defer func() {
+		FSProfileHandler.AddSample(time.Since(t0))
 	}()
 
 	for _, filePath := range filePaths {
@@ -896,6 +923,11 @@ func (l *LocalFSMutator) mutate(ctx context.Context, baseOffset int64, entries .
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+
+	t0 := time.Now()
+	defer func() {
+		FSProfileHandler.AddSample(time.Since(t0))
+	}()
 
 	// write
 	for _, entry := range entries {
