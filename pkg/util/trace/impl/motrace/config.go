@@ -86,6 +86,8 @@ type tracerProviderConfig struct {
 	cuConfig   config.OBCUConfig // WithCUConfig
 	cuConfigV1 config.OBCUConfig // WithCUConfig
 
+	labels map[string]string
+
 	mux sync.RWMutex
 }
 
@@ -208,6 +210,12 @@ func WithCUConfig(cu config.OBCUConfig, cuv1 config.OBCUConfig) tracerProviderOp
 	return func(cfg *tracerProviderConfig) {
 		cfg.cuConfig = cu
 		cfg.cuConfigV1 = cuv1
+	}
+}
+
+func WithLabels(l map[string]string) tracerProviderOption {
+	return func(cfg *tracerProviderConfig) {
+		cfg.labels = l
 	}
 }
 

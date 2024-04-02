@@ -35,7 +35,7 @@ Number of columns in profiling
 18
 show column_number from processlist;
 Number of columns in processlist
-18
+19
 show column_number from schemata;
 Number of columns in schemata
 6
@@ -371,7 +371,7 @@ Number of columns in profiling
 18
 show column_number from processlist;
 Number of columns in processlist
-18
+19
 show column_number from schemata;
 Number of columns in schemata
 6
