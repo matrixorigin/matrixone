@@ -68,14 +68,11 @@ func (mgr *commandManager) ApplyTxnRecord(txn txnif.AsyncTxn) (logEntry entry.En
 
 	// delay and parallelize the marshal call
 	logEntry.RegisterPreCallback(func() error {
-		var buf []byte
-		if buf, err = mgr.cmd.MarshalBinary(); err != nil {
+		if buf, err := mgr.cmd.MarshalBinary(); err != nil {
+			return err
+		} else if err = logEntry.SetPayload(buf); err != nil {
 			return err
 		}
-		if err = logEntry.SetPayload(buf); err != nil {
-			return err
-		}
-
 		return nil
 	})
 
