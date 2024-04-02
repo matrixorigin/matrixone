@@ -475,6 +475,17 @@ func (n *ObjectMVCCHandle) HasDeleteIntentsPreparedIn(from, to types.TS) (found,
 	}
 	return
 }
+func (n *ObjectMVCCHandle) HasInMemoryDeleteIntentsPreparedInByBlock(blkID uint16, from, to types.TS) (found, isPersist bool) {
+	mvcc := n.deletes[blkID]
+	if mvcc == nil {
+		return false, false
+	}
+	if mvcc.deletes.mask.IsEmpty() {
+		return false, false
+	}
+	found, isPersist = mvcc.GetDeleteChain().HasDeleteIntentsPreparedInLocked(from, to)
+	return
+}
 
 func (n *ObjectMVCCHandle) ReplayDeltaLoc(vMVCCNode any, blkID uint16) {
 	mvccNode := vMVCCNode.(*catalog.MVCCNode[*catalog.MetadataMVCCNode])
