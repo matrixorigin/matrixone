@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
@@ -114,6 +115,10 @@ func (entry *flushTableTailEntry) addTransferPages() {
 
 // PrepareCommit check deletes between start ts and commit ts
 func (entry *flushTableTailEntry) PrepareCommit() error {
+	inst := time.Now()
+	defer func() {
+		v2.TaskCommitTableTailDurationHistogram.Observe(time.Since(inst).Seconds())
+	}()
 	if len(entry.ablksHandles) == 0 {
 		return nil
 	}
