@@ -429,8 +429,10 @@ func (p *PartitionState) HandleObjectInsert(ctx context.Context, bat *api.Batch,
 
 		objEntry.ObjectStats = objectio.ObjectStats(statsVec.GetBytesAt(idx))
 		if objEntry.ObjectStats.BlkCnt() == 0 || objEntry.ObjectStats.Rows() == 0 {
+			logutil.Errorf("skip empty object stats when HandleObjectInsert, %s\n", objEntry.String())
 			continue
 		}
+
 		objEntry.EntryState = stateCol[idx]
 		objEntry.CreateTime = createTSCol[idx]
 		objEntry.DeleteTime = deleteTSCol[idx]
@@ -438,6 +440,9 @@ func (p *PartitionState) HandleObjectInsert(ctx context.Context, bat *api.Batch,
 		objEntry.Sorted = sortedCol[idx]
 
 		old, exist := p.dataObjects.Get(objEntry)
+		if exist {
+			objEntry.HasDeltaLoc = old.HasDeltaLoc
+		}
 		if exist && !old.IsEmpty() {
 			// why check the deleteTime here? consider this situation:
 			// 		1. insert on an object, then these insert operations recorded into a CKP.
@@ -469,9 +474,6 @@ func (p *PartitionState) HandleObjectInsert(ctx context.Context, bat *api.Batch,
 				// only update object stats
 			}
 		} else {
-			if exist {
-				objEntry.HasDeltaLoc = old.HasDeltaLoc
-			}
 			e := ObjectIndexByTSEntry{
 				Time:         createTSCol[idx],
 				ShortObjName: *objEntry.ObjectShortName(),
@@ -502,16 +504,21 @@ func (p *PartitionState) HandleObjectInsert(ctx context.Context, bat *api.Batch,
 			}
 		}
 
+		if objEntry.EntryState && objEntry.DeleteTime.IsEmpty() {
+			panic("logic error")
+		}
 		// for appendable object, gc rows when delete object
-		if objEntry.EntryState && !objEntry.DeleteTime.IsEmpty() {
-			iter := p.rows.Copy().Iter()
-			objID := objEntry.ObjectStats.ObjectName().ObjectId()
-			blkID := objectio.NewBlockidWithObjectID(objID, 0)
+		iter := p.rows.Copy().Iter()
+		objID := objEntry.ObjectStats.ObjectName().ObjectId()
+		trunctPoint := startTSCol[idx]
+		blkCnt := objEntry.ObjectStats.BlkCnt()
+		for i := uint32(0); i < blkCnt; i++ {
+
+			blkID := objectio.NewBlockidWithObjectID(objID, uint16(i))
 			pivot := RowEntry{
 				// aobj has only one blk
 				BlockID: *blkID,
 			}
-			trunctPoint := startTSCol[idx]
 			for ok := iter.Seek(pivot); ok; ok = iter.Next() {
 				entry := iter.Item()
 				if entry.BlockID != *blkID {
@@ -538,11 +545,25 @@ func (p *PartitionState) HandleObjectInsert(ctx context.Context, bat *api.Batch,
 						blockDeleted++
 					}
 				}
+
+				//it's tricky here.
+				//Due to consuming lazily the checkpoint,
+				//we have to take the following scenario into account:
+				//1. CN receives deletes for a non-appendable block from the log tail,
+				//   then apply the deletes into PartitionState.rows.
+				//2. CN receives block meta of the above non-appendable block to be inserted
+				//   from the checkpoint, then apply the block meta into PartitionState.blocks.
+				// So , if the above scenario happens, we need to set the non-appendable block into
+				// PartitionState.dirtyBlocks.
+				if !objEntry.EntryState && !objEntry.HasDeltaLoc {
+					p.dirtyBlocks.Set(entry.BlockID)
+					break
+				}
 			}
 			iter.Release()
 
 			// if there are no rows for the block, delete the block from the dirty
-			if scanCnt == blockDeleted && p.dirtyBlocks.Len() > 0 {
+			if objEntry.EntryState && scanCnt == blockDeleted && p.dirtyBlocks.Len() > 0 {
 				p.dirtyBlocks.Delete(*blkID)
 			}
 		}
@@ -879,11 +900,6 @@ func (p *PartitionState) HandleMetadataInsert(
 				}
 
 				p.dataObjects.Set(objEntry)
-
-				//prefetch the object meta
-				if err := blockio.PrefetchMeta(fs, objEntry.Location()); err != nil {
-					logutil.Errorf("prefetch object meta failed. %v", err)
-				}
 
 				if !objEntry.CreateTime.IsEmpty() {
 					p.dataObjectsByCreateTS.Set(ObjectIndexByCreateTSEntry(objEntry))

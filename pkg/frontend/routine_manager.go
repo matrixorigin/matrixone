@@ -264,6 +264,7 @@ func (rm *RoutineManager) Created(rs goetty.IOSession) {
 	exe.ChooseDoQueryFunc(pu.SV.EnableDoComQueryInProgress)
 
 	routine := NewRoutine(rm.getCtx(), pro, exe, pu.SV, rs)
+	v2.CreatedRoutineCounter.Inc()
 
 	// XXX MPOOL pass in a nil mpool.
 	// XXX MPOOL can choose to use a Mid sized mpool, if, we know
@@ -278,6 +279,7 @@ func (rm *RoutineManager) Created(rs goetty.IOSession) {
 	ses.SetFromRealUser(true)
 	ses.setRoutineManager(rm)
 	ses.setRoutine(routine)
+	ses.clientAddr = pro.Peer()
 
 	ses.timestampMap[TSCreatedStart] = createdStart
 	defer func() {
@@ -315,6 +317,7 @@ When the io is closed, the Closed will be called.
 func (rm *RoutineManager) Closed(rs goetty.IOSession) {
 	logutil.Debugf("clean resource of the connection %d:%s", rs.ID(), rs.RemoteAddress())
 	defer func() {
+		v2.CloseRoutineCounter.Inc()
 		logutil.Debugf("resource of the connection %d:%s has been cleaned", rs.ID(), rs.RemoteAddress())
 	}()
 	rt := rm.deleteRoutine(rs)
@@ -338,26 +341,13 @@ func (rm *RoutineManager) Closed(rs goetty.IOSession) {
 	}
 }
 
-func (rm *RoutineManager) getRoutineById(id uint64) *Routine {
-	var rt *Routine = nil
-	rm.mu.RLock()
-	defer rm.mu.RUnlock()
-	for _, value := range rm.clients {
-		if uint64(value.getConnectionID()) == id {
-			rt = value
-			break
-		}
-	}
-	return rt
-}
-
 /*
 kill a connection or query.
 if killConnection is true, the query will be canceled first, then the network will be closed.
 if killConnection is false, only the query will be canceled. the connection keeps intact.
 */
 func (rm *RoutineManager) kill(ctx context.Context, killConnection bool, idThatKill, id uint64, statementId string) error {
-	rt := rm.getRoutineById(id)
+	rt := rm.getRoutineByConnID(uint32(id))
 
 	killMyself := idThatKill == id
 	if rt != nil {

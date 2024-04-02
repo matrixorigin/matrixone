@@ -16,6 +16,7 @@ package lockservice
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"sync"
 	"time"
 
@@ -130,6 +131,64 @@ func (l *lockTableAllocator) GetLatest(groupID uint32, tableID uint64) pb.LockTa
 	return pb.LockTable{}
 }
 
+func (l *lockTableAllocator) setRestartService(serviceID string) {
+	b := l.getServiceBindsWithoutPrefix(serviceID)
+	if b == nil {
+		getLogger().Error("not found restart lock service",
+			zap.String("serviceID", serviceID))
+		return
+	}
+	b.setStatus(pb.Status_ServiceLockWaiting)
+}
+
+func (l *lockTableAllocator) remainTxnInService(serviceID string) int32 {
+	b := l.getServiceBindsWithoutPrefix(serviceID)
+	if b == nil {
+		getLogger().Error("not found restart lock service",
+			zap.String("serviceID", serviceID))
+		return 0
+	}
+	txnIDs := b.getTxnIds()
+	getLogger().Error("remain txn in restart service",
+		bytesArrayField("txnIDs", txnIDs),
+		zap.String("serviceID", serviceID))
+
+	c := len(txnIDs)
+	if c == 0 {
+		b := l.getServiceBindsWithoutPrefix(serviceID)
+		if b == nil ||
+			!b.isStatus(pb.Status_ServiceCanRestart) ||
+			!b.isStatus(pb.Status_ServiceCanRestart) {
+			// -1 means can not get right remain txn in restart lock service
+			c = -1
+			getLogger().Error("can not get right remain txn in restart lock service",
+				zap.String("serviceID", serviceID))
+		}
+
+	}
+	return int32(c)
+}
+
+func (l *lockTableAllocator) validLockTable(group uint32, table uint64) bool {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	t, ok := l.mu.lockTables[group][table]
+	if !ok {
+		return false
+	}
+	return t.Valid
+}
+
+func (l *lockTableAllocator) canRestartService(serviceID string) bool {
+	b := l.getServiceBindsWithoutPrefix(serviceID)
+	if b == nil {
+		getLogger().Error("not found restart lock service",
+			zap.String("serviceID", serviceID))
+		return true
+	}
+	return b.isStatus(pb.Status_ServiceCanRestart)
+}
+
 func (l *lockTableAllocator) disableTableBinds(b *serviceBinds) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -151,10 +210,34 @@ func (l *lockTableAllocator) disableTableBinds(b *serviceBinds) {
 		zap.String("service", b.serviceID))
 }
 
+func (l *lockTableAllocator) disableGroupTables(groupTables []pb.LockTable, b *serviceBinds) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for _, t := range groupTables {
+		if old, ok := l.getLockTablesLocked(t.Group)[t.Table]; ok &&
+			old.ServiceID == b.serviceID {
+			old.Valid = false
+			l.getLockTablesLocked(t.Group)[t.Table] = old
+		}
+	}
+}
+
 func (l *lockTableAllocator) getServiceBinds(serviceID string) *serviceBinds {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 	return l.mu.services[serviceID]
+}
+
+func (l *lockTableAllocator) getServiceBindsWithoutPrefix(serviceID string) *serviceBinds {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	for k, v := range l.mu.services {
+		id := getUUIDFromServiceIdentifier(k)
+		if serviceID == id {
+			return v
+		}
+	}
+	return nil
 }
 
 func (l *lockTableAllocator) getTimeoutBinds(now time.Time) []*serviceBinds {
@@ -298,6 +381,8 @@ type serviceBinds struct {
 	groupTables       map[uint32]map[uint64]struct{}
 	lastKeepaliveTime time.Time
 	disabled          bool
+	status            pb.Status
+	txnIDs            [][]byte
 }
 
 func newServiceBinds(
@@ -309,6 +394,30 @@ func newServiceBinds(
 		groupTables:       make(map[uint32]map[uint64]struct{}),
 		lastKeepaliveTime: time.Now(),
 	}
+}
+
+func (b *serviceBinds) getTxnIds() [][]byte {
+	b.RLock()
+	defer b.RUnlock()
+	return b.txnIDs
+}
+
+func (b *serviceBinds) setTxnIds(txnIDs [][]byte) {
+	b.Lock()
+	defer b.Unlock()
+	b.txnIDs = txnIDs
+}
+
+func (b *serviceBinds) isStatus(status pb.Status) bool {
+	b.RLock()
+	defer b.RUnlock()
+	return b.status == status
+}
+
+func (b *serviceBinds) setStatus(status pb.Status) {
+	b.Lock()
+	defer b.Unlock()
+	b.status = status
 }
 
 func (b *serviceBinds) active() bool {
@@ -383,6 +492,21 @@ func (l *lockTableAllocator) initHandler() {
 		pb.Method_KeepLockTableBind,
 		l.handleKeepLockTableBind,
 	)
+
+	l.server.RegisterMethodHandler(
+		pb.Method_CanRestartService,
+		l.handleCanRestartService,
+	)
+
+	l.server.RegisterMethodHandler(
+		pb.Method_SetRestartService,
+		l.handleSetRestartService,
+	)
+
+	l.server.RegisterMethodHandler(
+		pb.Method_RemainTxnInService,
+		l.handleRemainTxnInService,
+	)
 }
 
 func (l *lockTableAllocator) handleGetBind(
@@ -391,6 +515,10 @@ func (l *lockTableAllocator) handleGetBind(
 	req *pb.Request,
 	resp *pb.Response,
 	cs morpc.ClientSession) {
+	if !l.canGetBind(req.GetBind.Group, req.GetBind.Table) {
+		writeResponse(ctx, cancel, resp, moerr.NewRetryForCNRollingRestart(), cs)
+		return
+	}
 	resp.GetBind.LockTable = l.Get(
 		req.GetBind.ServiceID,
 		req.GetBind.Group,
@@ -407,6 +535,62 @@ func (l *lockTableAllocator) handleKeepLockTableBind(
 	resp *pb.Response,
 	cs morpc.ClientSession) {
 	resp.KeepLockTableBind.OK = l.KeepLockTableBind(req.KeepLockTableBind.ServiceID)
+	if !resp.KeepLockTableBind.OK {
+		writeResponse(ctx, cancel, resp, nil, cs)
+		return
+	}
+	b := l.getServiceBinds(req.KeepLockTableBind.ServiceID)
+	if b.isStatus(pb.Status_ServiceLockEnable) {
+		writeResponse(ctx, cancel, resp, nil, cs)
+		return
+	}
+	b.setTxnIds(req.KeepLockTableBind.TxnIDs)
+	switch req.KeepLockTableBind.Status {
+	case pb.Status_ServiceLockEnable:
+		if b.isStatus(pb.Status_ServiceLockWaiting) {
+			resp.KeepLockTableBind.Status = pb.Status_ServiceLockWaiting
+		}
+	case pb.Status_ServiceUnLockSucc:
+		b.disable()
+		l.disableTableBinds(b)
+		b.setStatus(pb.Status_ServiceCanRestart)
+		resp.KeepLockTableBind.Status = pb.Status_ServiceCanRestart
+	default:
+		b.setStatus(req.KeepLockTableBind.Status)
+		resp.KeepLockTableBind.Status = req.KeepLockTableBind.Status
+	}
+	l.disableGroupTables(req.KeepLockTableBind.LockTables, b)
+	writeResponse(ctx, cancel, resp, nil, cs)
+}
+
+func (l *lockTableAllocator) handleSetRestartService(
+	ctx context.Context,
+	cancel context.CancelFunc,
+	req *pb.Request,
+	resp *pb.Response,
+	cs morpc.ClientSession) {
+	l.setRestartService(req.SetRestartService.ServiceID)
+	resp.SetRestartService.OK = true
+	writeResponse(ctx, cancel, resp, nil, cs)
+}
+
+func (l *lockTableAllocator) handleCanRestartService(
+	ctx context.Context,
+	cancel context.CancelFunc,
+	req *pb.Request,
+	resp *pb.Response,
+	cs morpc.ClientSession) {
+	resp.CanRestartService.OK = l.canRestartService(req.CanRestartService.ServiceID)
+	writeResponse(ctx, cancel, resp, nil, cs)
+}
+
+func (l *lockTableAllocator) handleRemainTxnInService(
+	ctx context.Context,
+	cancel context.CancelFunc,
+	req *pb.Request,
+	resp *pb.Response,
+	cs morpc.ClientSession) {
+	resp.RemainTxnInService.RemainTxn = l.remainTxnInService(req.RemainTxnInService.ServiceID)
 	writeResponse(ctx, cancel, resp, nil, cs)
 }
 
@@ -418,4 +602,21 @@ func (l *lockTableAllocator) getLockTablesLocked(group uint32) map[uint64]pb.Loc
 	m = make(map[uint64]pb.LockTable, 10240)
 	l.mu.lockTables[group] = m
 	return m
+}
+
+func (l *lockTableAllocator) canGetBind(group uint32, tableID uint64) bool {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+
+	t, ok := l.mu.lockTables[group][tableID]
+	if !ok || !t.Valid {
+		return true
+	}
+	b := l.mu.services[t.ServiceID]
+	if b != nil &&
+		!b.disabled &&
+		!b.isStatus(pb.Status_ServiceLockEnable) {
+		return false
+	}
+	return true
 }

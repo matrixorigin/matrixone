@@ -1253,19 +1253,19 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt
 			Typ: *node.LockTargets[0].GetPrimaryColTyp(),
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
-					RelPos: preNode.BindingTags[0],
+					RelPos: node.BindingTags[1],
 					ColPos: node.LockTargets[0].PrimaryColIdxInBat,
 				},
 			},
 		}
-		oldPos := [2]int32{preNode.BindingTags[0], node.LockTargets[0].PrimaryColIdxInBat}
+		oldPos := [2]int32{node.BindingTags[1], node.LockTargets[0].PrimaryColIdxInBat}
 		increaseRefCnt(pkexpr, 1, colRefCnt)
 		childRemapping, err := builder.remapAllColRefs(node.Children[0], step, colRefCnt, colRefBool, sinkColRef)
 		if err != nil {
 			return nil, err
 		}
 
-		tableDef := preNode.GetTableDef()
+		tableDef := node.GetTableDef()
 		if tableDef.Partition != nil {
 			partitionIdx := len(preNode.ProjectList)
 			partitionExpr := DeepCopyExpr(tableDef.Partition.PartitionExpression)
@@ -2221,7 +2221,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 				Children:    []int32{nodeID},
 				TableDef:    tableDef,
 				LockTargets: []*plan.LockTarget{lockTarget},
-				BindingTags: []int32{builder.genNewTag()},
+				BindingTags: []int32{builder.genNewTag(), builder.qry.Nodes[nodeID].BindingTags[0]},
 			}
 
 			if astLimit == nil {
@@ -2964,6 +2964,8 @@ func appendSelectList(
 			} else {
 				if selectExpr.As != nil && !selectExpr.As.Empty() {
 					ctx.headings = append(ctx.headings, selectExpr.As.Origin())
+				} else if expr.CStrParts[0] != nil {
+					ctx.headings = append(ctx.headings, expr.CStrParts[0].Compare())
 				} else {
 					ctx.headings = append(ctx.headings, expr.Parts[0])
 				}
@@ -3498,7 +3500,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 					return 0, err
 				}
 
-				originStmts, err := mysql.Parse(builder.GetContext(), viewData.Stmt, 1)
+				originStmts, err := mysql.Parse(builder.GetContext(), viewData.Stmt, 1, 0)
 				defer func() {
 					for _, s := range originStmts {
 						s.Free()

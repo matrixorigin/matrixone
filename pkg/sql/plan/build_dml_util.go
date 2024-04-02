@@ -17,12 +17,13 @@ package plan
 import (
 	"context"
 	"fmt"
+	"strings"
+	"sync"
+
 	"github.com/google/uuid"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
-	"strings"
-	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -192,13 +193,13 @@ func buildUpdatePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 	}
 	updatePlanCtx.tableDef.Cols = newCols
 	insertColLength := len(updatePlanCtx.insertColPos) + 1
-	projectProjection := make([]*Expr, insertColLength)
+	projectList := make([]*Expr, insertColLength)
 	for i, idx := range updatePlanCtx.insertColPos {
 		name := ""
 		if col, ok := lastNode.ProjectList[idx].Expr.(*plan.Expr_Col); ok {
 			name = col.Col.Name
 		}
-		projectProjection[i] = &plan.Expr{
+		projectList[i] = &plan.Expr{
 			Typ: lastNode.ProjectList[idx].Typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
@@ -208,7 +209,7 @@ func buildUpdatePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 			},
 		}
 	}
-	projectProjection[insertColLength-1] = &plan.Expr{
+	projectList[insertColLength-1] = &plan.Expr{
 		Typ: lastNode.ProjectList[oldRowIdPos].Typ,
 		Expr: &plan.Expr_Col{
 			Col: &plan.ColRef{
@@ -222,7 +223,7 @@ func buildUpdatePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 	projectNode := &Node{
 		NodeType:    plan.Node_PROJECT,
 		Children:    []int32{lastNodeId},
-		ProjectList: projectProjection,
+		ProjectList: projectList,
 	}
 	lastNodeId = builder.appendNode(projectNode, bindCtx)
 	//append preinsert node
@@ -409,12 +410,12 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 				var uniqueTblPkTyp *Type
 
 				if delCtx.isDeleteWithoutFilters {
-					lastNodeId, err = appendDeleteUniqueTablePlanWithoutFilters(builder, bindCtx, uniqueObjRef, uniqueTableDef)
+					lastNodeId, err = appendDeleteIndexTablePlanWithoutFilters(builder, bindCtx, uniqueObjRef, uniqueTableDef)
 					uniqueDeleteIdx = getRowIdPos(uniqueTableDef)
 					uniqueTblPkPos, uniqueTblPkTyp = getPkPos(uniqueTableDef, false)
 				} else {
 					lastNodeId = appendSinkScanNode(builder, bindCtx, delCtx.sourceStep)
-					lastNodeId, err = appendDeleteUniqueTablePlan(builder, bindCtx, uniqueObjRef, uniqueTableDef, indexdef, typMap, posMap, lastNodeId, isUk)
+					lastNodeId, err = appendDeleteIndexTablePlan(builder, bindCtx, uniqueObjRef, uniqueTableDef, indexdef, typMap, posMap, lastNodeId, isUk)
 					uniqueDeleteIdx = len(delCtx.tableDef.Cols) + delCtx.updateColLength
 					uniqueTblPkPos = uniqueDeleteIdx + 1
 					uniqueTblPkTyp = &uniqueTableDef.Cols[0].Typ
@@ -523,7 +524,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 				var masterTblPkTyp *Type
 
 				if delCtx.isDeleteWithoutFilters {
-					lastNodeId, err = appendDeleteUniqueTablePlanWithoutFilters(builder, bindCtx, masterObjRef, masterTableDef)
+					lastNodeId, err = appendDeleteIndexTablePlanWithoutFilters(builder, bindCtx, masterObjRef, masterTableDef)
 					masterDeleteIdx = getRowIdPos(masterTableDef)
 					masterTblPkPos, masterTblPkTyp = getPkPos(masterTableDef, false)
 				} else {
@@ -664,7 +665,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 				var entriesTblPkTyp *Type
 
 				if delCtx.isDeleteWithoutFilters {
-					lastNodeId, err = appendDeleteUniqueTablePlanWithoutFilters(builder, bindCtx, entriesObjRef, entriesTableDef)
+					lastNodeId, err = appendDeleteIndexTablePlanWithoutFilters(builder, bindCtx, entriesObjRef, entriesTableDef)
 					entriesDeleteIdx = getRowIdPos(entriesTableDef)
 					entriesTblPkPos, entriesTblPkTyp = getPkPos(entriesTableDef, false)
 				} else {
@@ -1578,27 +1579,30 @@ func makeOneDeletePlan(
 	canTruncate bool,
 ) (int32, error) {
 	if isUK || isSK {
-		// append filter
-		rowIdTyp := types.T_Rowid.ToType()
-		rowIdColExpr := &plan.Expr{
-			Typ: *makePlan2Type(&rowIdTyp),
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{
-					ColPos: int32(delNodeInfo.deleteIndex),
-				},
-			},
-		}
-		filterExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "is_not_null", []*Expr{rowIdColExpr})
-		if err != nil {
-			return -1, err
-		}
-		filterNode := &Node{
-			NodeType:   plan.Node_FILTER,
-			Children:   []int32{lastNodeId},
-			FilterList: []*plan.Expr{filterExpr},
-		}
-		lastNodeId = builder.appendNode(filterNode, bindCtx)
 
+		// For the hidden table of the secondary index, there will be no null situation, only unique key hidden table need this filter
+		if isUK {
+			// append filter
+			rowIdTyp := types.T_Rowid.ToType()
+			rowIdColExpr := &plan.Expr{
+				Typ: *makePlan2Type(&rowIdTyp),
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						ColPos: int32(delNodeInfo.deleteIndex),
+					},
+				},
+			}
+			filterExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "is_not_null", []*Expr{rowIdColExpr})
+			if err != nil {
+				return -1, err
+			}
+			filterNode := &Node{
+				NodeType:   plan.Node_FILTER,
+				Children:   []int32{lastNodeId},
+				FilterList: []*plan.Expr{filterExpr},
+			}
+			lastNodeId = builder.appendNode(filterNode, bindCtx)
+		}
 		// append lock
 		lockTarget := &plan.LockTarget{
 			TableId:            delNodeInfo.tableDef.TblId,
@@ -2016,9 +2020,6 @@ func appendAggCountGroupByColExpr(builder *QueryBuilder, bindCtx *BindContext, l
 }
 
 func getPkPos(tableDef *TableDef, ignoreFakePK bool) (int, *Type) {
-	if tableDef.Pkey == nil {
-		return -1, nil
-	}
 	pkName := tableDef.Pkey.PkeyColName
 	// if pkName == catalog.CPrimaryKeyColName {
 	// 	return len(tableDef.Cols) - 1, makeHiddenColTyp()
@@ -2821,7 +2822,6 @@ func appendPreInsertUkPlan(
 				PkColumn: int32(pkColumn),
 				PkType:   originPkType,
 				UkType:   ukType,
-				TableDef: tableDef,
 			},
 		}
 	} else {
@@ -2836,7 +2836,6 @@ func appendPreInsertUkPlan(
 				PkColumn: int32(pkColumn),
 				PkType:   originPkType,
 				UkType:   ukType,
-				TableDef: tableDef,
 			},
 		}
 	}
@@ -2862,7 +2861,7 @@ func appendPreInsertUkPlan(
 	return sourceStep, nil
 }
 
-func appendDeleteUniqueTablePlan(
+func appendDeleteIndexTablePlan(
 	builder *QueryBuilder,
 	bindCtx *BindContext,
 	uniqueObjRef *ObjectRef,
@@ -2902,6 +2901,7 @@ func appendDeleteUniqueTablePlan(
 		}
 	}
 	pkTyp := uniqueTableDef.Cols[rightPkPos].Typ
+
 	probeExpr := &plan.Expr{
 		Typ: pkTyp,
 		Expr: &plan.Expr_Col{
@@ -2910,7 +2910,8 @@ func appendDeleteUniqueTablePlan(
 			},
 		},
 	}
-	rightId := builder.appendNode(&plan.Node{
+
+	leftId := builder.appendNode(&plan.Node{
 		NodeType:               plan.Node_TABLE_SCAN,
 		Stats:                  &plan.Stats{},
 		ObjRef:                 uniqueObjRef,
@@ -3015,13 +3016,27 @@ func appendDeleteUniqueTablePlan(
 			},
 		},
 	}
+
+	/*
+		For the hidden table of the secondary index, there will be no null situation, so there is no need to use right join
+		For why right join is needed, you can consider the following SQL :
+
+		create table t1(a int, b int, c int, unique key(a));
+		insert into t1 values(null, 1, 1);
+		explain verbose update t1 set a = 1 where a is null;
+	*/
+	joinType := plan.Node_INNER
+	if isUK {
+		joinType = plan.Node_RIGHT
+	}
+
 	lastNodeId = builder.appendNode(&plan.Node{
 		NodeType:               plan.Node_JOIN,
-		Children:               []int32{rightId, lastNodeId},
-		JoinType:               plan.Node_RIGHT,
+		Children:               []int32{leftId, lastNodeId},
+		JoinType:               joinType,
 		OnList:                 joinConds,
 		ProjectList:            projectList,
-		RuntimeFilterBuildList: []*plan.RuntimeFilterSpec{MakeRuntimeFilter(rfTag, false, GetInFilterCardLimitOnPK(builder.qry.Nodes[rightId].Stats.TableCnt), buildExpr)},
+		RuntimeFilterBuildList: []*plan.RuntimeFilterSpec{MakeRuntimeFilter(rfTag, false, GetInFilterCardLimitOnPK(builder.qry.Nodes[leftId].Stats.TableCnt), buildExpr)},
 	}, bindCtx)
 	return lastNodeId, nil
 }
@@ -3267,7 +3282,7 @@ func appendDeleteIvfTablePlan(builder *QueryBuilder, bindCtx *BindContext,
 	return lastNodeId, nil
 }
 
-func appendDeleteUniqueTablePlanWithoutFilters(
+func appendDeleteIndexTablePlanWithoutFilters(
 	builder *QueryBuilder,
 	bindCtx *BindContext,
 	uniqueObjRef *ObjectRef,
