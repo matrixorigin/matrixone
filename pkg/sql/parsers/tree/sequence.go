@@ -24,20 +24,20 @@ func init() {
 	reuse.CreatePool[AlterSequence](
 		func() *AlterSequence { return &AlterSequence{} },
 		func(a *AlterSequence) { a.reset() },
-		reuse.DefaultOptions[AlterSequence](), //.
-	) //WithEnableChecker()
+		reuse.DefaultOptions[AlterSequence]().WithEnableChecker(),
+	)
 
 	reuse.CreatePool[CreateSequence](
 		func() *CreateSequence { return &CreateSequence{} },
 		func(c *CreateSequence) { c.reset() },
-		reuse.DefaultOptions[CreateSequence](), //.
-	) //WithEnableChecker()
+		reuse.DefaultOptions[CreateSequence]().WithEnableChecker(),
+	)
 
 	reuse.CreatePool[DropSequence](
 		func() *DropSequence { return &DropSequence{} },
 		func(a *DropSequence) { a.reset() },
-		reuse.DefaultOptions[DropSequence](), //.
-	) //WithEnableChecker()
+		reuse.DefaultOptions[DropSequence]().WithEnableChecker(),
+	)
 }
 
 type CreateSequence struct {
@@ -123,6 +123,7 @@ func (node *CreateSequence) reset() {
 func (node CreateSequence) TypeName() string { return "tree.CreateSequence" }
 
 func (node *CreateSequence) GetStatementType() string { return "Create Sequence" }
+
 func (node *CreateSequence) GetQueryType() string     { return QueryTypeDDL }
 
 type IncrementByOption struct {
@@ -232,6 +233,7 @@ func (node *DropSequence) Format(ctx *FmtCtx) {
 }
 
 func (node *DropSequence) GetStatementType() string { return "Drop Sequence" }
+
 func (node *DropSequence) GetQueryType() string     { return QueryTypeDDL }
 
 type AlterSequence struct {
@@ -293,8 +295,11 @@ func (node *AlterSequence) Format(ctx *FmtCtx) {
 }
 
 func (node AlterSequence) TypeName() string          { return "tree.AlterSequence" }
+
 func (node *AlterSequence) GetStatementType() string { return "Alter Sequence" }
+
 func (node *AlterSequence) GetQueryType() string     { return QueryTypeDDL }
+
 func (node *AlterSequence) reset() {
 	*node = AlterSequence{}
 }

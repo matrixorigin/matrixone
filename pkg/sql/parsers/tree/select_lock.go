@@ -23,7 +23,7 @@ func init() {
 	reuse.CreatePool[SelectLockInfo](
 		func() *SelectLockInfo { return &SelectLockInfo{} },
 		func(s *SelectLockInfo) { s.reset() },
-		reuse.DefaultOptions[SelectLockInfo](),
+		reuse.DefaultOptions[SelectLockInfo]().WithEnableChecker(),
 	)
 }
 

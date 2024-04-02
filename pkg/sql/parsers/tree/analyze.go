@@ -20,8 +20,8 @@ func init() {
 	reuse.CreatePool[AnalyzeStmt](
 		func() *AnalyzeStmt { return &AnalyzeStmt{} },
 		func(a *AnalyzeStmt) { a.reset() },
-		reuse.DefaultOptions[AnalyzeStmt](), //.
-	) //WithEnableChecker()
+		reuse.DefaultOptions[AnalyzeStmt]().WithEnableChecker(),
+	)
 }
 
 // Use statement
@@ -40,6 +40,7 @@ func (node *AnalyzeStmt) Format(ctx *FmtCtx) {
 }
 
 func (node *AnalyzeStmt) GetStatementType() string { return "Analyze Table" }
+
 func (node *AnalyzeStmt) GetQueryType() string     { return QueryTypeOth }
 
 func (node *AnalyzeStmt) Free() {

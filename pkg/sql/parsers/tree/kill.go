@@ -24,19 +24,19 @@ func init() {
 	reuse.CreatePool[KillOption](
 		func() *KillOption { return &KillOption{} },
 		func(k *KillOption) { k.reset() },
-		reuse.DefaultOptions[KillOption](),
+		reuse.DefaultOptions[KillOption]().WithEnableChecker(),
 	)
 
 	reuse.CreatePool[StatementOption](
 		func() *StatementOption { return &StatementOption{} },
 		func(s *StatementOption) { s.reset() },
-		reuse.DefaultOptions[StatementOption](),
+		reuse.DefaultOptions[StatementOption]().WithEnableChecker(),
 	)
 
 	reuse.CreatePool[Kill](
 		func() *Kill { return &Kill{} },
 		func(k *Kill) { k.reset() },
-		reuse.DefaultOptions[Kill](),
+		reuse.DefaultOptions[Kill]().WithEnableChecker(),
 	)
 }
 

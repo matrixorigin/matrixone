@@ -25,21 +25,20 @@ func init() {
 	reuse.CreatePool[ExplainStmt](
 		func() *ExplainStmt { return &ExplainStmt{} },
 		func(e *ExplainStmt) { e.reset() },
-		reuse.DefaultOptions[ExplainStmt](), //.
-	) //WithEnableChecker()
+		reuse.DefaultOptions[ExplainStmt]().WithEnableChecker(),
+	)
 
 	reuse.CreatePool[ExplainAnalyze](
 		func() *ExplainAnalyze { return &ExplainAnalyze{} },
 		func(e *ExplainAnalyze) { e.reset() },
-		reuse.DefaultOptions[ExplainAnalyze](), //.
-	) //WithEnableChecker()
+		reuse.DefaultOptions[ExplainAnalyze]().WithEnableChecker(),
+	)
 
 	reuse.CreatePool[ExplainFor](
 		func() *ExplainFor { return &ExplainFor{} },
 		func(e *ExplainFor) { e.reset() },
-		reuse.DefaultOptions[ExplainFor](), //.
-	) //WithEnableChecker()
-
+		reuse.DefaultOptions[ExplainFor]().WithEnableChecker(),
+	)
 }
 
 type Explain interface {
@@ -96,6 +95,7 @@ func (node *ExplainStmt) Format(ctx *FmtCtx) {
 }
 
 func (node *ExplainStmt) GetStatementType() string { return "Explain" }
+
 func (node *ExplainStmt) GetQueryType() string     { return QueryTypeOth }
 
 // EXPLAIN FOR CONNECTION statement
@@ -157,6 +157,7 @@ func (node *ExplainAnalyze) Format(ctx *FmtCtx) {
 }
 
 func (node *ExplainAnalyze) GetStatementType() string { return "Explain Analyze" }
+
 func (node *ExplainAnalyze) GetQueryType() string     { return QueryTypeOth }
 
 func (node *ExplainAnalyze) Free() {
@@ -190,6 +191,7 @@ func (node *ExplainFor) Format(ctx *FmtCtx) {
 }
 
 func (node *ExplainFor) GetStatementType() string { return "Explain Format" }
+
 func (node *ExplainFor) GetQueryType() string     { return QueryTypeOth }
 
 func (node *ExplainFor) Free() {
@@ -222,7 +224,7 @@ func MakeOptionElem(name string, value string) OptionElem {
 }
 
 func MakeOptions(elem OptionElem) []OptionElem {
-	var options = make([]OptionElem, 1)
+	options := make([]OptionElem, 1)
 	options[0] = elem
 	return options
 }

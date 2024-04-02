@@ -22,8 +22,8 @@ func init() {
 	reuse.CreatePool[Replace](
 		func() *Replace { return &Replace{} },
 		func(r *Replace) { r.reset() },
-		reuse.DefaultOptions[Replace](), //.
-	) // WithEnableChecker()
+		reuse.DefaultOptions[Replace]().WithEnableChecker(),
+	)
 }
 
 // the REPLACE statement.
@@ -57,6 +57,7 @@ func (node *Replace) Format(ctx *FmtCtx) {
 }
 
 func (node *Replace) GetStatementType() string { return "Replace" }
+
 func (node *Replace) GetQueryType() string     { return QueryTypeDML }
 
 func NewReplace(r *Select) *Replace {

@@ -22,25 +22,25 @@ func init() {
 	reuse.CreatePool[Grant](
 		func() *Grant { return &Grant{} },
 		func(g *Grant) { g.reset() },
-		reuse.DefaultOptions[Grant](),
+		reuse.DefaultOptions[Grant]().WithEnableChecker(),
 	)
 
 	reuse.CreatePool[GrantPrivilege](
 		func() *GrantPrivilege { return &GrantPrivilege{} },
 		func(g *GrantPrivilege) { g.reset() },
-		reuse.DefaultOptions[GrantPrivilege](),
+		reuse.DefaultOptions[GrantPrivilege]().WithEnableChecker(),
 	)
 
 	reuse.CreatePool[GrantRole](
 		func() *GrantRole { return &GrantRole{} },
 		func(g *GrantRole) { g.reset() },
-		reuse.DefaultOptions[GrantRole](),
+		reuse.DefaultOptions[GrantRole]().WithEnableChecker(),
 	)
 
 	reuse.CreatePool[GrantProxy](
 		func() *GrantProxy { return &GrantProxy{} },
 		func(g *GrantProxy) { g.reset() },
-		reuse.DefaultOptions[GrantProxy](),
+		reuse.DefaultOptions[GrantProxy]().WithEnableChecker(),
 	)
 }
 

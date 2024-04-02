@@ -20,50 +20,50 @@ func init() {
 	reuse.CreatePool[DropDatabase](
 		func() *DropDatabase { return &DropDatabase{} },
 		func(d *DropDatabase) { d.reset() },
-		reuse.DefaultOptions[DropDatabase](), //.
-	) //WithEnableChecker()
+		reuse.DefaultOptions[DropDatabase]().WithEnableChecker(),
+	)
 
 	reuse.CreatePool[DropTable](
 		func() *DropTable { return &DropTable{} },
 		func(d *DropTable) { d.reset() },
-		reuse.DefaultOptions[DropTable](), //.
-	) //WithEnableChecker()
+		reuse.DefaultOptions[DropTable]().WithEnableChecker(),
+	)
 
 	reuse.CreatePool[DropView](
 		func() *DropView { return &DropView{} },
 		func(d *DropView) { d.reset() },
-		reuse.DefaultOptions[DropView](), //.
-	) //WithEnableChecker()
+		reuse.DefaultOptions[DropView]().WithEnableChecker(),
+	)
 
 	reuse.CreatePool[DropIndex](
 		func() *DropIndex { return &DropIndex{} },
 		func(d *DropIndex) { d.reset() },
-		reuse.DefaultOptions[DropIndex](), //.
-	) //WithEnableChecker()
+		reuse.DefaultOptions[DropIndex]().WithEnableChecker(),
+	)
 
 	reuse.CreatePool[DropRole](
 		func() *DropRole { return &DropRole{} },
 		func(d *DropRole) { d.reset() },
-		reuse.DefaultOptions[DropRole](), //.
-	) //WithEnableChecker()
+		reuse.DefaultOptions[DropRole]().WithEnableChecker(),
+	)
 
 	reuse.CreatePool[DropUser](
 		func() *DropUser { return &DropUser{} },
 		func(d *DropUser) { d.reset() },
-		reuse.DefaultOptions[DropUser](), //.
-	) //WithEnableChecker()
+		reuse.DefaultOptions[DropUser]().WithEnableChecker(),
+	)
 
 	reuse.CreatePool[DropAccount](
 		func() *DropAccount { return &DropAccount{} },
 		func(d *DropAccount) { d.reset() },
-		reuse.DefaultOptions[DropAccount](), //.
-	) //WithEnableChecker()
+		reuse.DefaultOptions[DropAccount]().WithEnableChecker(),
+	)
 
 	reuse.CreatePool[DropPublication](
 		func() *DropPublication { return &DropPublication{} },
 		func(d *DropPublication) { d.reset() },
-		reuse.DefaultOptions[DropPublication](), //.
-	) //WithEnableChecker()
+		reuse.DefaultOptions[DropPublication]().WithEnableChecker(),
+	)
 }
 
 // DROP Database statement
@@ -86,6 +86,7 @@ func (node *DropDatabase) Format(ctx *FmtCtx) {
 }
 
 func (node *DropDatabase) GetStatementType() string { return "Drop Database" }
+
 func (node *DropDatabase) GetQueryType() string     { return QueryTypeDDL }
 
 func (node *DropDatabase) Free() {
@@ -122,6 +123,7 @@ func (node *DropTable) Format(ctx *FmtCtx) {
 }
 
 func (node *DropTable) GetStatementType() string { return "Drop Table" }
+
 func (node *DropTable) GetQueryType() string     { return QueryTypeDDL }
 
 func (node *DropTable) Free() {
@@ -158,6 +160,7 @@ func (node *DropView) Format(ctx *FmtCtx) {
 }
 
 func (node *DropView) GetStatementType() string { return "Drop View" }
+
 func (node *DropView) GetQueryType() string     { return QueryTypeDDL }
 
 func (node *DropView) Free() {
@@ -198,6 +201,7 @@ func (node *DropIndex) Format(ctx *FmtCtx) {
 }
 
 func (node *DropIndex) GetStatementType() string { return "Drop Index" }
+
 func (node *DropIndex) GetQueryType() string     { return QueryTypeDDL }
 
 func (node *DropIndex) Free() {
@@ -246,6 +250,7 @@ func (node *DropRole) Format(ctx *FmtCtx) {
 }
 
 func (node *DropRole) GetStatementType() string { return "Drop Role" }
+
 func (node *DropRole) GetQueryType() string     { return QueryTypeDCL }
 
 func (node *DropRole) Free() {
@@ -290,6 +295,7 @@ func (node *DropUser) Format(ctx *FmtCtx) {
 }
 
 func (node *DropUser) GetStatementType() string { return "Drop User" }
+
 func (node *DropUser) GetQueryType() string     { return QueryTypeDCL }
 
 func (node *DropUser) Free() {
@@ -330,6 +336,7 @@ func (node *DropAccount) Format(ctx *FmtCtx) {
 }
 
 func (node *DropAccount) GetStatementType() string { return "Drop Account" }
+
 func (node *DropAccount) GetQueryType() string     { return QueryTypeDCL }
 
 func (node *DropAccount) Free() {
@@ -372,6 +379,7 @@ func (node *DropPublication) Format(ctx *FmtCtx) {
 }
 
 func (node *DropPublication) GetStatementType() string { return "Drop Publication" }
+
 func (node *DropPublication) GetQueryType() string     { return QueryTypeDCL }
 
 func (node *DropPublication) Free() {

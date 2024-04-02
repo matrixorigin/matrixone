@@ -21,25 +21,23 @@ import (
 )
 
 func init() {
-
 	reuse.CreatePool[CreateStage](
 		func() *CreateStage { return &CreateStage{} },
 		func(c *CreateStage) { c.reset() },
-		reuse.DefaultOptions[CreateStage](), //.
-	) //WithEnableChecker()
+		reuse.DefaultOptions[CreateStage]().WithEnableChecker(),
+	)
 
 	reuse.CreatePool[DropStage](
 		func() *DropStage { return &DropStage{} },
 		func(d *DropStage) { d.reset() },
-		reuse.DefaultOptions[DropStage](), //.
-	) //WithEnableChecker()
+		reuse.DefaultOptions[DropStage]().WithEnableChecker(),
+	)
 
 	reuse.CreatePool[AlterStage](
 		func() *AlterStage { return &AlterStage{} },
 		func(a *AlterStage) { a.reset() },
-		reuse.DefaultOptions[AlterStage](), //.
-	) //WithEnableChecker()
-
+		reuse.DefaultOptions[AlterStage]().WithEnableChecker(),
+	)
 }
 
 type CreateStage struct {
@@ -89,6 +87,7 @@ func (node *CreateStage) reset() {
 func (node CreateStage) TypeName() string { return "tree.CreateStage" }
 
 func (node *CreateStage) GetStatementType() string { return "Create Stage" }
+
 func (node *CreateStage) GetQueryType() string     { return QueryTypeOth }
 
 type DropStage struct {
@@ -114,6 +113,7 @@ func (node *DropStage) reset() {
 }
 
 func (node *DropStage) GetStatementType() string { return "Drop Stage" }
+
 func (node *DropStage) GetQueryType() string     { return QueryTypeOth }
 
 func (node DropStage) TypeName() string { return "tree.DropStage" }
@@ -157,6 +157,7 @@ func (node *AlterStage) reset() {
 }
 
 func (node *AlterStage) GetStatementType() string { return "Alter Stage" }
+
 func (node *AlterStage) GetQueryType() string     { return QueryTypeOth }
 
 func (node AlterStage) TypeName() string { return "tree.AlterStage" }
@@ -263,5 +264,7 @@ func (node *ShowStages) Format(ctx *FmtCtx) {
 		node.Like.Format(ctx)
 	}
 }
+
 func (node *ShowStages) GetStatementType() string { return "Show Stages" }
+
 func (node *ShowStages) GetQueryType() string     { return QueryTypeOth }

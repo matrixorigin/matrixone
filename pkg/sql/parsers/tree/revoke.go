@@ -25,31 +25,31 @@ func init() {
 	reuse.CreatePool[Revoke](
 		func() *Revoke { return &Revoke{} },
 		func(r *Revoke) { r.reset() },
-		reuse.DefaultOptions[Revoke](),
+		reuse.DefaultOptions[Revoke]().WithEnableChecker(),
 	)
 
 	reuse.CreatePool[RevokePrivilege](
 		func() *RevokePrivilege { return &RevokePrivilege{} },
 		func(r *RevokePrivilege) { r.reset() },
-		reuse.DefaultOptions[RevokePrivilege](),
+		reuse.DefaultOptions[RevokePrivilege]().WithEnableChecker(),
 	)
 
 	reuse.CreatePool[RevokeRole](
 		func() *RevokeRole { return &RevokeRole{} },
 		func(r *RevokeRole) { r.reset() },
-		reuse.DefaultOptions[RevokeRole](),
+		reuse.DefaultOptions[RevokeRole]().WithEnableChecker(),
 	)
 
 	reuse.CreatePool[PrivilegeLevel](
 		func() *PrivilegeLevel { return &PrivilegeLevel{} },
 		func(p *PrivilegeLevel) { p.reset() },
-		reuse.DefaultOptions[PrivilegeLevel](),
+		reuse.DefaultOptions[PrivilegeLevel]().WithEnableChecker(),
 	)
 
 	reuse.CreatePool[Privilege](
 		func() *Privilege { return &Privilege{} },
 		func(p *Privilege) { p.reset() },
-		reuse.DefaultOptions[Privilege](),
+		reuse.DefaultOptions[Privilege]().WithEnableChecker(),
 	)
 }
 

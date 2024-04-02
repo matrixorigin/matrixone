@@ -37,6 +37,7 @@ func (node *ShowCreateTable) Format(ctx *FmtCtx) {
 }
 
 func (node *ShowCreateTable) GetStatementType() string { return "Show Create Table" }
+
 func (node *ShowCreateTable) GetQueryType() string     { return QueryTypeOth }
 
 func NewShowCreate(n *UnresolvedObjectName) *ShowCreateTable {
@@ -53,7 +54,9 @@ func (node *ShowCreateView) Format(ctx *FmtCtx) {
 	ctx.WriteString("show create view ")
 	node.Name.ToTableName().Format(ctx)
 }
+
 func (node *ShowCreateView) GetStatementType() string { return "Show Create View" }
+
 func (node *ShowCreateView) GetQueryType() string     { return QueryTypeOth }
 
 func NewShowCreateView(n *UnresolvedObjectName) *ShowCreateView {
@@ -75,7 +78,9 @@ func (node *ShowCreateDatabase) Format(ctx *FmtCtx) {
 	ctx.WriteByte(' ')
 	ctx.WriteString(string(node.Name))
 }
+
 func (node *ShowCreateDatabase) GetStatementType() string { return "Show Create View" }
+
 func (node *ShowCreateDatabase) GetQueryType() string     { return QueryTypeOth }
 
 func NewShowCreateDatabase(i bool, n string) *ShowCreateDatabase {
@@ -120,7 +125,9 @@ func (node *ShowColumns) Format(ctx *FmtCtx) {
 		node.Where.Format(ctx)
 	}
 }
+
 func (node *ShowColumns) GetStatementType() string { return "Show Columns" }
+
 func (node *ShowColumns) GetQueryType() string     { return QueryTypeOth }
 
 func NewShowColumns(e bool, f bool, t *UnresolvedObjectName, d string, l *ComparisonExpr, w *Where, cn *UnresolvedName) *ShowColumns {
@@ -153,7 +160,9 @@ func (node *ShowDatabases) Format(ctx *FmtCtx) {
 		node.Where.Format(ctx)
 	}
 }
+
 func (node *ShowDatabases) GetStatementType() string { return "Show Databases" }
+
 func (node *ShowDatabases) GetQueryType() string     { return QueryTypeOth }
 
 func NewShowDatabases(l *ComparisonExpr, w *Where) *ShowDatabases {
@@ -233,7 +242,9 @@ func (node *ShowTarget) Format(ctx *FmtCtx) {
 		node.Where.Format(ctx)
 	}
 }
+
 func (node *ShowTarget) GetStatementType() string { return "Show Target" }
+
 func (node *ShowTarget) GetQueryType() string     { return QueryTypeOth }
 
 type ShowTableStatus struct {
@@ -258,7 +269,9 @@ func (node *ShowTableStatus) Format(ctx *FmtCtx) {
 		node.Where.Format(ctx)
 	}
 }
+
 func (node *ShowTableStatus) GetStatementType() string { return "Show Table Status" }
+
 func (node *ShowTableStatus) GetQueryType() string     { return QueryTypeOth }
 
 type ShowGrants struct {
@@ -304,7 +317,9 @@ func (node *ShowGrants) Format(ctx *FmtCtx) {
 		}
 	}
 }
+
 func (node *ShowGrants) GetStatementType() string { return "Show Grants" }
+
 func (node *ShowGrants) GetQueryType() string     { return QueryTypeOth }
 
 // SHOW SEQUENCES statement.
@@ -325,7 +340,9 @@ func (node *ShowSequences) Format(ctx *FmtCtx) {
 		node.Where.Format(ctx)
 	}
 }
+
 func (node *ShowSequences) GetStatementType() string { return "Show Sequences" }
+
 func (node *ShowSequences) GetQueryType() string     { return QueryTypeOth }
 
 // SHOW TABLES statement.
@@ -363,7 +380,9 @@ func (node *ShowTables) Format(ctx *FmtCtx) {
 		node.Where.Format(ctx)
 	}
 }
+
 func (node *ShowTables) GetStatementType() string { return "Show Tables" }
+
 func (node *ShowTables) GetQueryType() string     { return QueryTypeOth }
 
 func NewShowTables(e bool, f bool, n string, l *ComparisonExpr, w *Where) *ShowTables {
@@ -389,7 +408,9 @@ func (node *ShowProcessList) Format(ctx *FmtCtx) {
 	}
 	ctx.WriteString(" processlist")
 }
+
 func (node *ShowProcessList) GetStatementType() string { return "Show Processlist" }
+
 func (node *ShowProcessList) GetQueryType() string     { return QueryTypeOth }
 
 func NewShowProcessList(f bool) *ShowProcessList {
@@ -403,7 +424,9 @@ type ShowErrors struct {
 func (node *ShowErrors) Format(ctx *FmtCtx) {
 	ctx.WriteString("show errors")
 }
+
 func (node *ShowErrors) GetStatementType() string { return "Show Errors" }
+
 func (node *ShowErrors) GetQueryType() string     { return QueryTypeOth }
 
 func NewShowErrors() *ShowErrors {
@@ -417,7 +440,9 @@ type ShowWarnings struct {
 func (node *ShowWarnings) Format(ctx *FmtCtx) {
 	ctx.WriteString("show warnings")
 }
+
 func (node *ShowWarnings) GetStatementType() string { return "Show Warnings" }
+
 func (node *ShowWarnings) GetQueryType() string     { return QueryTypeOth }
 
 func NewShowWarnings() *ShowWarnings {
@@ -442,7 +467,9 @@ func (node *ShowCollation) Format(ctx *FmtCtx) {
 		node.Where.Format(ctx)
 	}
 }
+
 func (node *ShowCollation) GetStatementType() string { return "Show Collation" }
+
 func (node *ShowCollation) GetQueryType() string     { return QueryTypeOth }
 
 // SHOW VARIABLES statement
@@ -469,7 +496,9 @@ func (node *ShowVariables) Format(ctx *FmtCtx) {
 		node.Where.Format(ctx)
 	}
 }
+
 func (node *ShowVariables) GetStatementType() string { return "Show Variables" }
+
 func (node *ShowVariables) GetQueryType() string     { return QueryTypeOth }
 
 func NewShowVariables(g bool, l *ComparisonExpr, w *Where) *ShowVariables {
@@ -505,7 +534,9 @@ func (node *ShowStatus) Format(ctx *FmtCtx) {
 		node.Where.Format(ctx)
 	}
 }
+
 func (node *ShowStatus) GetStatementType() string { return "Show Status" }
+
 func (node *ShowStatus) GetQueryType() string     { return QueryTypeOth }
 
 func NewShowStatus(g bool, l *ComparisonExpr, w *Where) *ShowStatus {
@@ -539,7 +570,9 @@ func (node *ShowIndex) Format(ctx *FmtCtx) {
 		node.Where.Format(ctx)
 	}
 }
+
 func (node *ShowIndex) GetStatementType() string { return "Show Index" }
+
 func (node *ShowIndex) GetQueryType() string     { return QueryTypeOth }
 
 func NewShowIndex(t *UnresolvedObjectName, w *Where) *ShowIndex {
@@ -577,6 +610,7 @@ func (node *ShowFunctionOrProcedureStatus) Format(ctx *FmtCtx) {
 func (node *ShowFunctionOrProcedureStatus) GetStatementType() string {
 	return "Show Function Or Procedure Status"
 }
+
 func (node *ShowFunctionOrProcedureStatus) GetQueryType() string { return QueryTypeOth }
 
 func NewShowFunctionOrProcedureStatus(l *ComparisonExpr, w *Where, i bool) *ShowFunctionOrProcedureStatus {
@@ -597,6 +631,7 @@ func (node *ShowNodeList) Format(ctx *FmtCtx) {
 }
 
 func (node *ShowNodeList) GetStatementType() string { return "Show Node List" }
+
 func (node *ShowNodeList) GetQueryType() string     { return QueryTypeOth }
 
 func NewShowNodeList() *ShowNodeList {
@@ -613,6 +648,7 @@ func (node *ShowLocks) Format(ctx *FmtCtx) {
 }
 
 func (node *ShowLocks) GetStatementType() string { return "Show Locks" }
+
 func (node *ShowLocks) GetQueryType() string     { return QueryTypeOth }
 
 func NewShowLocks() *ShowLocks {
@@ -632,7 +668,9 @@ func (node *ShowTableNumber) Format(ctx *FmtCtx) {
 		ctx.WriteString(node.DbName)
 	}
 }
+
 func (node *ShowTableNumber) GetStatementType() string { return "Show Table Number" }
+
 func (node *ShowTableNumber) GetQueryType() string     { return QueryTypeOth }
 
 func NewShowTableNumber(dbname string) *ShowTableNumber {
@@ -659,7 +697,9 @@ func (node *ShowColumnNumber) Format(ctx *FmtCtx) {
 		ctx.WriteString(node.DbName)
 	}
 }
+
 func (node *ShowColumnNumber) GetStatementType() string { return "Show Column Number" }
+
 func (node *ShowColumnNumber) GetQueryType() string     { return QueryTypeOth }
 
 func NewShowColumnNumber(table *UnresolvedObjectName, dbname string) *ShowColumnNumber {
@@ -687,7 +727,9 @@ func (node *ShowTableValues) Format(ctx *FmtCtx) {
 		ctx.WriteString(node.DbName)
 	}
 }
+
 func (node *ShowTableValues) GetStatementType() string { return "Show Table Values" }
+
 func (node *ShowTableValues) GetQueryType() string     { return QueryTypeOth }
 
 func NewShowTableValues(table *UnresolvedObjectName, dbname string) *ShowTableValues {
@@ -711,6 +753,7 @@ func (node *ShowAccounts) Format(ctx *FmtCtx) {
 }
 
 func (node *ShowAccounts) GetStatementType() string { return "Show Accounts" }
+
 func (node *ShowAccounts) GetQueryType() string     { return QueryTypeOth }
 
 type ShowAccountUpgrade struct {
@@ -738,6 +781,7 @@ func (node *ShowPublications) Format(ctx *FmtCtx) {
 }
 
 func (node *ShowPublications) GetStatementType() string { return "Show Publications" }
+
 func (node *ShowPublications) GetQueryType() string     { return QueryTypeOth }
 
 type ShowSubscriptions struct {
@@ -756,7 +800,9 @@ func (node *ShowSubscriptions) Format(ctx *FmtCtx) {
 		node.Like.Format(ctx)
 	}
 }
+
 func (node *ShowSubscriptions) GetStatementType() string { return "Show Subscriptions" }
+
 func (node *ShowSubscriptions) GetQueryType() string     { return QueryTypeOth }
 
 type ShowCreatePublications struct {
@@ -768,7 +814,9 @@ func (node *ShowCreatePublications) Format(ctx *FmtCtx) {
 	ctx.WriteString("show create publication ")
 	ctx.WriteString(node.Name)
 }
+
 func (node *ShowCreatePublications) GetStatementType() string { return "Show Create Publication" }
+
 func (node *ShowCreatePublications) GetQueryType() string     { return QueryTypeOth }
 
 type ShowTableSize struct {
@@ -788,7 +836,9 @@ func (node *ShowTableSize) Format(ctx *FmtCtx) {
 		ctx.WriteString(node.DbName)
 	}
 }
+
 func (node *ShowTableSize) GetStatementType() string { return "Show Table Size" }
+
 func (node *ShowTableSize) GetQueryType() string     { return QueryTypeDQL }
 
 func NewShowTableSize(table *UnresolvedObjectName, dbname string) *ShowTableSize {
@@ -814,6 +864,7 @@ func (node *ShowRolesStmt) Format(ctx *FmtCtx) {
 }
 
 func (node *ShowRolesStmt) GetStatementType() string { return "Show Roles" }
+
 func (node *ShowRolesStmt) GetQueryType() string     { return QueryTypeOth }
 
 // ShowBackendServers indicates SHOW BACKEND SERVERS statement.
@@ -826,6 +877,7 @@ func (node *ShowBackendServers) Format(ctx *FmtCtx) {
 }
 
 func (node *ShowBackendServers) GetStatementType() string { return "Show Backend Servers" }
+
 func (node *ShowBackendServers) GetQueryType() string     { return QueryTypeOth }
 
 type ShowConnectors struct {
@@ -835,7 +887,9 @@ type ShowConnectors struct {
 func (node *ShowConnectors) Format(ctx *FmtCtx) {
 	ctx.WriteString("show connectors")
 }
+
 func (node *ShowConnectors) GetStatementType() string { return "Show Connectors" }
+
 func (node *ShowConnectors) GetQueryType() string     { return QueryTypeOth }
 
 func NewShowConnectors(f bool) *ShowConnectors {

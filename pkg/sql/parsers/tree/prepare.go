@@ -20,14 +20,14 @@ func init() {
 	reuse.CreatePool[PrepareStmt](
 		func() *PrepareStmt { return &PrepareStmt{} },
 		func(p *PrepareStmt) { p.reset() },
-		reuse.DefaultOptions[PrepareStmt](), //.
-	) //WithEnableChecker()
+		reuse.DefaultOptions[PrepareStmt]().WithEnableChecker(),
+	)
 
 	reuse.CreatePool[PrepareString](
 		func() *PrepareString { return &PrepareString{} },
 		func(p *PrepareString) { p.reset() },
-		reuse.DefaultOptions[PrepareString](), //.
-	) //WithEnableChecker()
+		reuse.DefaultOptions[PrepareString]().WithEnableChecker(),
+	)
 }
 
 type Prepare interface {
@@ -56,6 +56,7 @@ func (node *PrepareStmt) Format(ctx *FmtCtx) {
 }
 
 func (node *PrepareStmt) GetStatementType() string { return "Prepare" }
+
 func (node *PrepareStmt) GetQueryType() string     { return QueryTypeOth }
 
 func (node *PrepareStmt) Free() {
@@ -82,6 +83,7 @@ func (node *PrepareString) Format(ctx *FmtCtx) {
 }
 
 func (node *PrepareString) GetStatementType() string { return "Prepare" }
+
 func (node *PrepareString) GetQueryType() string     { return QueryTypeOth }
 
 func (node *PrepareString) Free() {

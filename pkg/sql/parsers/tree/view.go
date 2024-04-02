@@ -20,8 +20,8 @@ func init() {
 	reuse.CreatePool[CreateView](
 		func() *CreateView { return &CreateView{} },
 		func(c *CreateView) { c.reset() },
-		reuse.DefaultOptions[CreateView](), //.
-	) //WithEnableChecker()
+		reuse.DefaultOptions[CreateView]().WithEnableChecker(),
+	)
 }
 
 type CreateView struct {
@@ -83,4 +83,5 @@ func (node *CreateView) reset() {
 func (node CreateView) TypeName() string { return "tree.CreateView" }
 
 func (node *CreateView) GetStatementType() string { return "Create View" }
+
 func (node *CreateView) GetQueryType() string     { return QueryTypeDDL }

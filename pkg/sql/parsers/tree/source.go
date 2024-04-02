@@ -24,26 +24,26 @@ func init() {
 	reuse.CreatePool[CreateSource](
 		func() *CreateSource { return &CreateSource{} },
 		func(c *CreateSource) { c.reset() },
-		reuse.DefaultOptions[CreateSource](), //.
-	) //WithEnableChecker()
+		reuse.DefaultOptions[CreateSource]().WithEnableChecker(),
+	)
 
 	reuse.CreatePool[CreateSourceWithOption](
 		func() *CreateSourceWithOption { return &CreateSourceWithOption{} },
 		func(c *CreateSourceWithOption) { c.reset() },
-		reuse.DefaultOptions[CreateSourceWithOption](), //.
-	) //WithEnableChecker()
+		reuse.DefaultOptions[CreateSourceWithOption]().WithEnableChecker(),
+	)
 
 	reuse.CreatePool[AttributeHeader](
 		func() *AttributeHeader { return &AttributeHeader{} },
 		func(a *AttributeHeader) { a.reset() },
-		reuse.DefaultOptions[AttributeHeader](), //.
-	) //WithEnableChecker()
+		reuse.DefaultOptions[AttributeHeader]().WithEnableChecker(),
+	)
 
 	reuse.CreatePool[AttributeHeaders](
 		func() *AttributeHeaders { return &AttributeHeaders{} },
 		func(a *AttributeHeaders) { a.reset() },
-		reuse.DefaultOptions[AttributeHeaders](), //.
-	) //WithEnableChecker()
+		reuse.DefaultOptions[AttributeHeaders]().WithEnableChecker(),
+	)
 }
 
 type CreateSource struct {
@@ -118,6 +118,7 @@ func (node *CreateSource) Format(ctx *FmtCtx) {
 }
 
 func (node *CreateSource) GetStatementType() string { return "Create Source" }
+
 func (node *CreateSource) GetQueryType() string     { return QueryTypeDDL }
 
 func (node CreateSource) TypeName() string { return "tree.CreateSource" }
@@ -280,6 +281,7 @@ func (node *AttributeHeader) reset() {
 func (node *AttributeHeader) Free() {
 	reuse.Free[AttributeHeader](node, nil)
 }
+
 func NewAttributeHeader(key string) *AttributeHeader {
 	return &AttributeHeader{
 		Key: key,
@@ -303,6 +305,7 @@ func (node *AttributeHeaders) reset() {
 func (node *AttributeHeaders) Free() {
 	reuse.Free[AttributeHeaders](node, nil)
 }
+
 func NewAttributeHeaders() *AttributeHeaders {
 	return &AttributeHeaders{}
 }

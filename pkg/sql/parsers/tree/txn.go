@@ -56,6 +56,7 @@ func (node *BeginTransaction) Format(ctx *FmtCtx) {
 }
 
 func (node *BeginTransaction) GetStatementType() string { return "Start Transaction" }
+
 func (node *BeginTransaction) GetQueryType() string     { return QueryTypeTCL }
 
 func NewBeginTransaction(m TransactionModes) *BeginTransaction {
@@ -81,6 +82,7 @@ func (node *CommitTransaction) Format(ctx *FmtCtx) {
 }
 
 func (node *CommitTransaction) GetStatementType() string { return "Commit" }
+
 func (node *CommitTransaction) GetQueryType() string     { return QueryTypeTCL }
 
 func NewCommitTransaction(t CompletionType) *CommitTransaction {
@@ -98,6 +100,7 @@ func (node *RollbackTransaction) Format(ctx *FmtCtx) {
 }
 
 func (node *RollbackTransaction) GetStatementType() string { return "Rollback" }
+
 func (node *RollbackTransaction) GetQueryType() string     { return QueryTypeTCL }
 
 func NewRollbackTransaction(t CompletionType) *RollbackTransaction {

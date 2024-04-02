@@ -20,8 +20,8 @@ func init() {
 	reuse.CreatePool[Deallocate](
 		func() *Deallocate { return &Deallocate{} },
 		func(d *Deallocate) { d.reset() },
-		reuse.DefaultOptions[Deallocate](), //.
-	) //WithEnableChecker()
+		reuse.DefaultOptions[Deallocate]().WithEnableChecker(),
+	)
 }
 
 type Deallocate struct {
@@ -45,6 +45,7 @@ func (node *Deallocate) Format(ctx *FmtCtx) {
 }
 
 func (node *Deallocate) GetStatementType() string { return "Deallocate" }
+
 func (node *Deallocate) GetQueryType() string     { return QueryTypeOth }
 
 func (node Deallocate) TypeName() string { return "tree.Deallocate" }

@@ -56,6 +56,7 @@ func (node *Insert) Format(ctx *FmtCtx) {
 }
 
 func (node *Insert) GetStatementType() string { return "Insert" }
+
 func (node *Insert) GetQueryType() string     { return QueryTypeDML }
 
 func NewInsert(t TableExpr, c IdentifierList, r *Select, p IdentifierList) *Insert {
