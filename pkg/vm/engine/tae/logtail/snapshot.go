@@ -54,13 +54,13 @@ type objectInfo struct {
 
 type SnapshotMeta struct {
 	sync.RWMutex
-	objects map[string]*objectInfo
+	objects map[objectio.Segmentid]*objectInfo
 	tid     uint64
 }
 
 func NewSnapshotMeta() *SnapshotMeta {
 	return &SnapshotMeta{
-		objects: make(map[string]*objectInfo),
+		objects: make(map[objectio.Segmentid]*objectInfo),
 	}
 }
 
@@ -84,11 +84,11 @@ func (sm *SnapshotMeta) Update(data *CheckpointData) *SnapshotMeta {
 		objectStats.UnMarshal(buf)
 		deleteTS := vector.GetFixedAt[types.TS](insDeleteTSVec, i)
 		createTS := vector.GetFixedAt[types.TS](insCreateTSVec, i)
-		if sm.objects[objectStats.ObjectName().SegmentId().ToString()] == nil {
+		if sm.objects[objectStats.ObjectName().SegmentId()] == nil {
 			if !deleteTS.IsEmpty() {
 				continue
 			}
-			sm.objects[objectStats.ObjectName().SegmentId().ToString()] = &objectInfo{
+			sm.objects[objectStats.ObjectName().SegmentId()] = &objectInfo{
 				stats:    objectStats,
 				createAt: createTS,
 			}
@@ -97,7 +97,7 @@ func (sm *SnapshotMeta) Update(data *CheckpointData) *SnapshotMeta {
 		if deleteTS.IsEmpty() {
 			panic(any("deleteTS is empty"))
 		}
-		delete(sm.objects, objectStats.ObjectName().SegmentId().ToString())
+		delete(sm.objects, objectStats.ObjectName().SegmentId())
 	}
 
 	del, _, _, _ := data.GetBlkBatchs()
@@ -106,18 +106,18 @@ func (sm *SnapshotMeta) Update(data *CheckpointData) *SnapshotMeta {
 	for i := 0; i < del.Length(); i++ {
 		blockID := vector.GetFixedAt[types.Blockid](delBlockIDVec, i)
 		deltaLoc := vector.GetFixedAt[objectio.Location](delDeltaVec, i)
-		if sm.objects[blockID.Segment().ToString()] != nil {
-			sm.objects[blockID.Segment().ToString()].deltaLocation[uint32(blockID.Sequence())] = &deltaLoc
+		if sm.objects[*blockID.Segment()] != nil {
+			sm.objects[*blockID.Segment()].deltaLocation[uint32(blockID.Sequence())] = &deltaLoc
 		}
 	}
 	return nil
 }
 
-func (sm *SnapshotMeta) GetSnapshot(ctx context.Context, fs fileservice.FileService, mp *mpool.MPool) (map[uint64][]types.TS, error) {
+func (sm *SnapshotMeta) GetSnapshot(ctx context.Context, fs fileservice.FileService, mp *mpool.MPool, vp *containers.VectorPool) (map[uint64]containers.Vector, error) {
 	sm.RLock()
 	objects := sm.objects
 	sm.RUnlock()
-	snapshotList := make(map[uint64][]types.TS)
+	snapshotList := make(map[uint64]containers.Vector)
 	idxes := []uint16{0, 1}
 	colTypes := []types.Type{
 		types.New(types.T_uint64, 0, 0),
@@ -141,13 +141,18 @@ func (sm *SnapshotMeta) GetSnapshot(ctx context.Context, fs fileservice.FileServ
 			for r := 0; r < bat.Vecs[0].Length(); r++ {
 				tid := vector.GetFixedAt[uint64](bat.Vecs[0], r)
 				ts := vector.GetFixedAt[types.TS](bat.Vecs[1], r)
-				if len(snapshotList[tid]) == 0 {
-					snapshotList[tid] = make([]types.TS, 0)
+				if snapshotList[tid] == nil {
+					snapshotList[tid] = vp.GetVector(&colTypes[1])
 				}
-				snapshotList[tid] = append(snapshotList[tid], ts)
+				err = vector.AppendFixed[types.TS](snapshotList[tid].GetDownstreamVector(), ts, false, mp)
+				if err != nil {
+					return nil, err
+				}
 			}
-
 		}
+	}
+	for i := range snapshotList {
+		snapshotList[i].GetDownstreamVector().InplaceSort()
 	}
 	return snapshotList, nil
 }
@@ -194,8 +199,8 @@ func (sm *SnapshotMeta) Rebuild(ins *containers.Batch) {
 		buf := ins.GetVectorByName(catalog.ObjectAttr_ObjectStats).Get(i).([]byte)
 		objectStats.UnMarshal(buf)
 		createTS := vector.GetFixedAt[types.TS](insCreateTSVec, i)
-		if sm.objects[objectStats.ObjectName().SegmentId().ToString()] == nil {
-			sm.objects[objectStats.ObjectName().SegmentId().ToString()] = &objectInfo{
+		if sm.objects[objectStats.ObjectName().SegmentId()] == nil {
+			sm.objects[objectStats.ObjectName().SegmentId()] = &objectInfo{
 				stats:    objectStats,
 				createAt: createTS,
 			}
@@ -235,4 +240,10 @@ func (sm *SnapshotMeta) ReadMeta(ctx context.Context, name string, fs fileservic
 	}
 	sm.Rebuild(bat)
 	return nil
+}
+
+func CloseSnapshotList(snapshots map[uint64]containers.Vector) {
+	for _, snapshot := range snapshots {
+		snapshot.Close()
+	}
 }

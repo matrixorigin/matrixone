@@ -25,7 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
-	"sort"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -109,7 +108,7 @@ func (t *GCTable) getObjects() map[string]*ObjectEntry {
 }
 
 // SoftGC is to remove objectentry that can be deleted from GCTable
-func (t *GCTable) SoftGC(table *GCTable, ts types.TS, snapShotList map[uint64][]types.TS) []string {
+func (t *GCTable) SoftGC(table *GCTable, ts types.TS, snapShotList map[uint64]containers.Vector) []string {
 	gc := make([]string, 0)
 	objects := t.getObjects()
 	for name, entry := range objects {
@@ -122,21 +121,20 @@ func (t *GCTable) SoftGC(table *GCTable, ts types.TS, snapShotList map[uint64][]
 	return gc
 }
 
-func isSnapshotRefers(obj *ObjectEntry, snapShotList []types.TS) bool {
-	if len(snapShotList) == 0 {
+func isSnapshotRefers(obj *ObjectEntry, snapShotList containers.Vector) bool {
+	if snapShotList == nil || snapShotList.Length() == 0 {
 		return false
 	}
-	sort.Slice(snapShotList, func(i, j int) bool {
-		return snapShotList[i].Less(&snapShotList[j])
-	})
-	left, right := 0, len(snapShotList)-1
+	snapVec := snapShotList.GetDownstreamVector()
+	left, right := 0, snapShotList.Length()-1
 	for left <= right {
 		mid := left + (right-left)/2
-		if snapShotList[mid].GreaterEq(&obj.createTS) && snapShotList[mid].Less(&obj.dropTS) {
+		snapTS := vector.GetFixedAt[types.TS](snapVec, mid)
+		if snapTS.GreaterEq(&obj.createTS) && snapTS.Less(&obj.dropTS) {
 			logutil.Infof("isSnapshotRefers: %s, create %v, drop %v",
-				snapShotList[mid].ToString(), obj.createTS.ToString(), obj.dropTS.ToString())
+				snapTS.ToString(), obj.createTS.ToString(), obj.dropTS.ToString())
 			return true
-		} else if snapShotList[mid].Less(&obj.createTS) {
+		} else if snapTS.Less(&obj.createTS) {
 			left = mid + 1
 		} else {
 			right = mid - 1

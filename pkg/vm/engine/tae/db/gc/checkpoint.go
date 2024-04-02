@@ -23,7 +23,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"sync"
 	"sync/atomic"
@@ -88,6 +90,8 @@ type checkpointCleaner struct {
 		sync.RWMutex
 		snapshotMeta *logtail.SnapshotMeta
 	}
+
+	vPool *containers.VectorPool
 }
 
 func NewCheckpointCleaner(
@@ -106,7 +110,12 @@ func NewCheckpointCleaner(
 	cleaner.minMergeCount.count = MinMergeCount
 	cleaner.snapshot.snapshotMeta = logtail.NewSnapshotMeta()
 	cleaner.option.enableGC = true
+	cleaner.vPool = dbutils.MakeDefaultSmallPool("gc-vector-pool")
 	return cleaner
+}
+
+func (c *checkpointCleaner) Stop() {
+	c.vPool.Destory()
 }
 
 func (c *checkpointCleaner) SetTid(tid uint64) {
@@ -196,7 +205,6 @@ func (c *checkpointCleaner) Replay() error {
 		if err != nil {
 			return err
 		}
-		c.GetSnapshots()
 	}
 	ckp := checkpoint.NewCheckpointEntry(maxConsumedStart, maxConsumedEnd, checkpoint.ET_Incremental)
 	c.updateMaxConsumed(ckp)
@@ -373,6 +381,7 @@ func (c *checkpointCleaner) tryGC(data *logtail.CheckpointData, gckp *checkpoint
 		logutil.Errorf("GetSnapshots failed: %v", err.Error())
 		return nil
 	}
+	defer logtail.CloseSnapshotList(snapshots)
 	gc := c.softGC(gcTable, gckp, snapshots)
 	// Delete files after softGC
 	// TODO:Requires Physical Removal Policy
@@ -383,7 +392,7 @@ func (c *checkpointCleaner) tryGC(data *logtail.CheckpointData, gckp *checkpoint
 	return nil
 }
 
-func (c *checkpointCleaner) softGC(t *GCTable, gckp *checkpoint.CheckpointEntry, snapshots map[uint64][]types.TS) []string {
+func (c *checkpointCleaner) softGC(t *GCTable, gckp *checkpoint.CheckpointEntry, snapshots map[uint64]containers.Vector) []string {
 	c.inputs.Lock()
 	defer c.inputs.Unlock()
 	if len(c.inputs.tables) == 0 {
@@ -465,6 +474,7 @@ func (c *checkpointCleaner) CheckGC() error {
 		logutil.Errorf("processing clean %s: %v", debugCandidates[0].String(), err)
 		return moerr.NewInternalErrorNoCtx("processing clean GetSnapshots %s: %v", debugCandidates[0].String(), err)
 	}
+	defer logtail.CloseSnapshotList(snapshots)
 	debugTable.SoftGC(gcTable, gCkp.GetEnd(), snapshots)
 	var mergeTable *GCTable
 	if len(c.inputs.tables) > 1 {
@@ -614,8 +624,8 @@ func (c *checkpointCleaner) updateSnapshot(data *logtail.CheckpointData) error {
 	return nil
 }
 
-func (c *checkpointCleaner) GetSnapshots() (map[uint64][]types.TS, error) {
+func (c *checkpointCleaner) GetSnapshots() (map[uint64]containers.Vector, error) {
 	c.snapshot.RLock()
 	defer c.snapshot.RUnlock()
-	return c.snapshot.snapshotMeta.GetSnapshot(c.ctx, c.fs.Service, common.DefaultAllocator)
+	return c.snapshot.snapshotMeta.GetSnapshot(c.ctx, c.fs.Service, common.DebugAllocator, c.vPool)
 }

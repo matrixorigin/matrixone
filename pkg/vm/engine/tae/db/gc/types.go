@@ -110,6 +110,7 @@ type Cleaner interface {
 	TryGC() error
 	AddChecker(checker func(item any) bool)
 	GetMaxConsumed() *checkpoint.CheckpointEntry
+	Stop()
 	// for test
 	SetMinMergeCountForTest(count int)
 	GetMinMerged() *checkpoint.CheckpointEntry

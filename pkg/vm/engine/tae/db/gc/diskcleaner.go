@@ -101,5 +101,6 @@ func (cleaner *DiskCleaner) Start() {
 func (cleaner *DiskCleaner) Stop() {
 	cleaner.onceStop.Do(func() {
 		cleaner.processQueue.Stop()
+		cleaner.cleaner.Stop()
 	})
 }
