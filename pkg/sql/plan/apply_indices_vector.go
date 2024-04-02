@@ -88,8 +88,13 @@ func (builder *QueryBuilder) applyIndicesForSortUsingVectorIndex(nodeID int32, s
 		entriesTblScan, centroidsForCurrVersionAndProbeLimit)
 
 	// 2.f Sort By entries by l2_distance(vector_col, normalize_l2(literal)) ASC limit original_limit
-	sortTblByL2Distance := makeEntriesOrderByL2DistNormalizeL2(builder, builder.ctxByNode[nodeID], sortNode,
-		distFnExpr, entriesJoinCentroids, sortDirection, idxTableDefs, idxTags)
+	sortNodeLimit := DeepCopyExpr(sortNode.Limit)
+	sortNodeOffset := DeepCopyExpr(sortNode.Offset)
+	sortNode.Limit = nil
+	sortNode.Offset = nil
+	scanNode.Limit = nil
+	scanNode.Offset = nil
+	sortTblByL2Distance := makeEntriesOrderByL2DistNormalizeL2(builder, builder.ctxByNode[nodeID], distFnExpr, entriesJoinCentroids, sortDirection, idxTableDefs, idxTags)
 	var pkPos = scanNode.TableDef.Name2ColIndex[scanNode.TableDef.Pkey.PkeyColName] //TODO: watch out.
 
 	//onlyUseIndexTables := false
@@ -121,7 +126,7 @@ func (builder *QueryBuilder) applyIndicesForSortUsingVectorIndex(nodeID int32, s
 	// 2.e Create entries JOIN tbl on entries.original_pk == tbl.pk
 	projectTbl := makeTblCrossJoinEntriesCentroidOnPK(builder, builder.ctxByNode[nodeID],
 		idxTableDefs, idxTags,
-		scanNode, sortTblByL2Distance, pkPos)
+		scanNode, sortTblByL2Distance, pkPos, sortNodeLimit, sortNodeOffset)
 
 	return projectTbl
 
@@ -353,7 +358,8 @@ func makeEntriesCrossJoinCentroidsOnCentroidId(builder *QueryBuilder, bindCtx *B
 
 func makeTblCrossJoinEntriesCentroidOnPK(builder *QueryBuilder, bindCtx *BindContext,
 	idxTableDefs []*TableDef, idxTags map[string]int32,
-	scanNode *plan.Node, entriesJoinCentroids int32, pkPos int32) int32 {
+	scanNode *plan.Node, entriesJoinCentroids int32, pkPos int32,
+	sortNodeLimit, sortNodeOffset *Expr) int32 {
 
 	entriesOriginPkEqTblPk, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{
 
@@ -381,13 +387,15 @@ func makeTblCrossJoinEntriesCentroidOnPK(builder *QueryBuilder, bindCtx *BindCon
 		JoinType: plan.Node_INDEX,
 		Children: []int32{scanNode.NodeId, entriesJoinCentroids},
 		OnList:   []*Expr{entriesOriginPkEqTblPk},
+		Limit:    sortNodeLimit,
+		Offset:   sortNodeOffset,
 	}, bindCtx)
 
 	return entriesJoinTbl
 }
 
 func makeEntriesOrderByL2DistNormalizeL2(builder *QueryBuilder, bindCtx *BindContext,
-	sortNode *plan.Node, fn *plan.Function, entriesJoinCentroids int32,
+	fn *plan.Function, entriesJoinCentroids int32,
 	sortDirection plan.OrderBySpec_OrderByFlag,
 	idxTableDefs []*TableDef, idxTags map[string]int32) int32 {
 
@@ -407,8 +415,13 @@ func makeEntriesOrderByL2DistNormalizeL2(builder *QueryBuilder, bindCtx *BindCon
 	sortTblByL2Distance := builder.appendNode(&plan.Node{
 		NodeType: plan.Node_SORT,
 		Children: []int32{entriesJoinCentroids},
-		Limit:    DeepCopyExpr(sortNode.Limit),
-		Offset:   DeepCopyExpr(sortNode.Offset),
+		// NOTE: Don't  add limit here. We need the Vector Records which matches the predicate conditions from Original Table.
+		// Let's say we have "WHERE a > 100" predicate in the original table.
+		// Now, vector index return 2 records based on "LIMIT 2" but both the records did not satisfy the Predicate condition "a > 100".
+		// In that case, we will output 0 records. So, we need to apply the limit after the sort, ie in the INDEX JOIN between the original table and the vector index.
+
+		//Limit:    DeepCopyExpr(sortNode.Limit),
+		//Offset:   DeepCopyExpr(sortNode.Offset),
 		OrderBy: []*OrderBySpec{
 			{
 				Expr: l2DistanceColLit,
