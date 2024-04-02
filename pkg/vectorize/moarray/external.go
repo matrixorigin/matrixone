@@ -109,6 +109,9 @@ func InnerProduct[T types.RealNumbers](v1, v2 []T) (float64, error) {
 }
 
 func L2Distance[T types.RealNumbers](v1, v2 []T) (float64, error) {
+	if len(v1) != len(v2) {
+		return 0, moerr.NewArrayInvalidOpNoCtx(len(v1), len(v2))
+	}
 	var sumOfSquares T
 	for i := range v1 {
 		difference := v1[i] - v2[i]
