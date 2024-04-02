@@ -940,9 +940,10 @@ func FuncName2ResolvableFunctionReference(funcName *UnresolvedName) ResolvableFu
 // function call expression
 type FuncExpr struct {
 	exprImpl
-	Func  ResolvableFunctionReference
-	Type  FuncType
-	Exprs Exprs
+	Func     ResolvableFunctionReference
+	FuncName *CStr
+	Type     FuncType
+	Exprs    Exprs
 
 	//specify the type of aggregation.
 	AggType AggType
@@ -953,7 +954,11 @@ type FuncExpr struct {
 }
 
 func (node *FuncExpr) Format(ctx *FmtCtx) {
-	node.Func.Format(ctx)
+	if node.FuncName != nil {
+		ctx.WriteString(node.FuncName.Compare())
+	} else {
+		node.Func.Format(ctx)
+	}
 
 	ctx.WriteString("(")
 	if node.Type != FUNC_TYPE_DEFAULT && node.Type != FUNC_TYPE_TABLE {

@@ -2178,7 +2178,7 @@ func (bh *BackgroundHandler) Exec(ctx context.Context, sql string) error {
 	if err != nil {
 		return err
 	}
-	statements, err := mysql.Parse(ctx, sql, v.(int64))
+	statements, err := mysql.Parse(ctx, sql, v.(int64), 0)
 	if err != nil {
 		return err
 	}
@@ -2531,7 +2531,7 @@ func (p *prepareStmtMigration) Migrate(ses *Session) error {
 	if !strings.HasPrefix(strings.ToLower(p.sql), "prepare") {
 		p.sql = fmt.Sprintf("prepare %s from %s", p.name, p.sql)
 	}
-	stmts, err := mysql.Parse(ses.requestCtx, p.sql, v.(int64))
+	stmts, err := mysql.Parse(ses.requestCtx, p.sql, v.(int64), 0)
 	if err != nil {
 		return err
 	}
