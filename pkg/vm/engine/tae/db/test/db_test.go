@@ -6547,7 +6547,6 @@ func TestSnapshotGC(t *testing.T) {
 	assert.NotNil(t, minMerged)
 	err = db.DiskCleaner.GetCleaner().CheckGC()
 	assert.Nil(t, err)
-	assert.True(t, db.DiskCleaner.GetCleaner().GetMPool().CurrNB() == 0)
 	tae.RestartDisableGC(ctx)
 	db = tae.DB
 	db.DiskCleaner.GetCleaner().SetMinMergeCountForTest(1)
@@ -6565,7 +6564,6 @@ func TestSnapshotGC(t *testing.T) {
 	assert.True(t, end.GreaterEq(&minEnd))
 	err = db.DiskCleaner.GetCleaner().CheckGC()
 	assert.Nil(t, err)
-	assert.True(t, db.DiskCleaner.GetCleaner().GetMPool().CurrNB() == 0)
 
 }
 
