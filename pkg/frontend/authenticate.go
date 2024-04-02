@@ -1052,7 +1052,7 @@ var (
 	        account_name varchar(300),
 			database_name varchar(5000),
 			table_name  varchar(5000),
-			obj_id BIGINT UNSIGNED
+			obj_id bigint unsigned
 			);`,
 		`create table mo_pubs(
     		pub_name varchar(64) primary key,
