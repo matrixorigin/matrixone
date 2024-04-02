@@ -135,7 +135,8 @@ var (
 			level enum('cluster','account','database','table'),
 	        account_name varchar(300),
 			database_name varchar(5000),
-			table_name  varchar(5000)
+			table_name  varchar(5000),
+			obj_id bigint unsigned
 			);`, catalog.MO_CATALOG, catalog.MO_SNAPSHOTS),
 	}
 
