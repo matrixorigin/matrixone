@@ -54,6 +54,8 @@ const (
 
 	// MOForeignKeys saves the fk relationships
 	MOForeignKeys = "mo_foreign_keys"
+
+	// MoDataBaseConstrant =
 )
 
 var InternalColumns = map[string]int8{
@@ -731,6 +733,10 @@ var (
 	MoColumnsTableDefs = []engine.TableDef{}
 	// used by memengine or tae or cn
 	MoTableMetaDefs = []engine.TableDef{}
+
+	MoDatabaseConstraint = []byte{}
+	MoTableConstraint    = []byte{}
+	MoColumnConstraint   = []byte{}
 )
 
 var (
