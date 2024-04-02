@@ -511,7 +511,7 @@ func TestPartitionKeysShouldShowError(t *testing.T) {
 }
 
 func buildSingleStmt(opt Optimizer, t *testing.T, sql string) (*Plan, error) {
-	statements, err := mysql.Parse(opt.CurrentContext().GetContext(), sql, 1)
+	statements, err := mysql.Parse(opt.CurrentContext().GetContext(), sql, 1, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -585,7 +585,7 @@ func mockPartitionBinder(tableDef *plan.TableDef) (*PartitionBinder, error) {
 
 func mockExpr(t *testing.T, s string) (tree.Expr, error) {
 	selStr := "select " + s
-	one, err := parsers.ParseOne(context.TODO(), dialect.MYSQL, selStr, 1)
+	one, err := parsers.ParseOne(context.TODO(), dialect.MYSQL, selStr, 1, 0)
 	require.Nil(t, err)
 	return one.(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr, err
 }

@@ -26,7 +26,7 @@ import (
 // array is used to avoid potential conflicts with the already existing vector class from vectorized execution engine.
 
 const (
-	MaxArrayDimension        = 65536
+	MaxArrayDimension        = MaxVarcharLen
 	DefaultArraysToStringSep = " "
 )
 
