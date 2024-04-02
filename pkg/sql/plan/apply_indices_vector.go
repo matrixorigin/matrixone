@@ -21,6 +21,18 @@ import (
 )
 
 var (
+	/*
+		   ### Common Mistakes and Troubleshooting Tips:
+			1. If you use 2 Project's : one col[i] and other l2_distance(col[i]), make sure that l2_distance gets the Deep copy
+					   of the col[i].
+			2. If a plan doesn't work, try using idxColMap and early return to see if the plan works on each stage.
+			3. Feel free to check out the builder.Query.Nodes to see if the plan is being built correctly.
+
+
+			### NOTES:
+			1. INDEX JOIN Limit Rules:
+			2. Nodes that require BindingTags: TableScan, Project
+	*/
 	distFuncOpTypes = map[string]string{
 		"l2_distance":     "vector_l2_ops",
 		"cosine_distance": "vector_ip_ops",
@@ -30,9 +42,11 @@ var (
 )
 
 // You replace Sort Node with a new Project Node
-func (builder *QueryBuilder) applyIndicesForSortUsingVectorIndex(nodeID int32, sortNode, scanNode *plan.Node,
+func (builder *QueryBuilder) applyIndicesForSortUsingVectorIndex(nodeID int32, projNode, sortNode, scanNode *plan.Node,
 	colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr, multiTableIndexWithSortDistFn *MultiTableIndex,
 	colPosOrderBy int32) int32 {
+
+	var pkPos = scanNode.TableDef.Name2ColIndex[scanNode.TableDef.Pkey.PkeyColName] //TODO: watch out.
 
 	distFnExpr := sortNode.OrderBy[0].Expr.GetF()
 	sortDirection := sortNode.OrderBy[0].Flag // For the most part, it is ASC
@@ -87,66 +101,88 @@ func (builder *QueryBuilder) applyIndicesForSortUsingVectorIndex(nodeID int32, s
 		idxTableDefs, idxTags,
 		entriesTblScan, centroidsForCurrVersionAndProbeLimit)
 
-	// 2.f Sort By entries by l2_distance(vector_col, normalize_l2(literal)) ASC limit original_limit
-	sortNodeLimit := DeepCopyExpr(sortNode.Limit)
-	sortNodeOffset := DeepCopyExpr(sortNode.Offset)
-	sortNode.Limit = nil
-	sortNode.Offset = nil
-	scanNode.Limit = nil
-	scanNode.Offset = nil
-	sortTblByL2Distance := makeEntriesOrderByL2DistNormalizeL2(builder, builder.ctxByNode[nodeID], distFnExpr, entriesJoinCentroids, sortDirection, idxTableDefs, idxTags)
-	var pkPos = scanNode.TableDef.Name2ColIndex[scanNode.TableDef.Pkey.PkeyColName] //TODO: watch out.
+	// If scan node has no filter condition, then 2 fast path's can be taken.
+	// Path 1: Only use Index Table if Projection Columns are present in Index Table or Constants.
+	// Path 2: May be use INDEX JOIN (not working yet)
+	if scanNode.FilterList == nil {
+		// 3.a Sort By entries by l2_distance(vector_col, normalize_l2(literal)) ASC limit original_limit
+		sortTblByL2Distance := makeEntriesOrderByL2Distance(builder, builder.ctxByNode[nodeID], distFnExpr, entriesJoinCentroids, sortDirection, idxTableDefs, idxTags,
+			sortNode)
 
-	//onlyUseIndexTables := false
-	//if onlyUseIndexTables {
-	// TODO: need advice from Nitao and Aungr regarding how to use index only scan. Is it safe?
+		// Plan 1: Index-Table only Plan
+		{
 
-	//	idxColMap[[2]int32{scanNode.BindingTags[0], pkPos}] = &plan.Expr{
-	//		Typ: idxTableDefs[2].Cols[2].Typ,
-	//		Expr: &plan.Expr_Col{
-	//			Col: &plan.ColRef{
-	//				RelPos: idxTags["entries.scan"],
-	//				ColPos: 2, // entries.pk
-	//			},
-	//		},
-	//	}
-	//	idxColMap[[2]int32{scanNode.BindingTags[0], colPosOrderBy}] = &plan.Expr{
-	//		Typ: idxTableDefs[2].Cols[3].Typ,
-	//		Expr: &plan.Expr_Col{
-	//			Col: &plan.ColRef{
-	//				RelPos: idxTags["entries.scan"],
-	//				ColPos: 3, // entries.entry
-	//			},
-	//		},
-	//	}
-	//
-	//	return sortTblByL2Distance
-	//}
+			// 3.a.1 Check if all the columns in the projection are present in Index Table or Constants.
+			useIndexTablesOnly := true
+			for _, projExp := range projNode.ProjectList {
+				if isRuntimeConstExpr(projExp) {
+					continue
+				}
 
-	// 2.e Create entries JOIN tbl on entries.original_pk == tbl.pk
-	projectTbl := makeTblCrossJoinEntriesCentroidOnPK(builder, builder.ctxByNode[nodeID],
-		idxTableDefs, idxTags,
-		scanNode, sortTblByL2Distance, pkPos, sortNodeLimit, sortNodeOffset)
+				if projExp.GetCol() != nil {
+					if projExp.GetCol().ColPos == pkPos {
+						continue
+					}
+					if projExp.GetCol().ColPos == colPosOrderBy {
+						continue
+					}
+				}
+				useIndexTablesOnly = false
+				break
+			}
 
-	return projectTbl
+			// 3.a.2 If all the columns in the projection are present in Index Table or Constants, then use Index Tables only.
+			if useIndexTablesOnly {
+				idxColMap[[2]int32{scanNode.BindingTags[0], pkPos}] = &plan.Expr{
+					Typ: idxTableDefs[2].Cols[2].Typ,
+					Expr: &plan.Expr_Col{
+						Col: &plan.ColRef{
+							RelPos: idxTags["entries.scan"],
+							ColPos: 2, // entries.pk
+						},
+					},
+				}
+				idxColMap[[2]int32{scanNode.BindingTags[0], colPosOrderBy}] = &plan.Expr{
+					Typ: idxTableDefs[2].Cols[3].Typ,
+					Expr: &plan.Expr_Col{
+						Col: &plan.ColRef{
+							RelPos: idxTags["entries.scan"],
+							ColPos: 3, // entries.entry
+						},
+					},
+				}
 
-}
-
-func (builder *QueryBuilder) resolveTableScanWithIndexFromChildren(node *plan.Node) *plan.Node {
-	if !(node.NodeType == plan.Node_SORT || node.NodeType == plan.Node_TABLE_SCAN) {
-		return nil
-	}
-	if node.NodeType == plan.Node_SORT && len(node.Children) == 1 {
-		if n := builder.resolveTableScanWithIndexFromChildren(builder.qry.Nodes[node.Children[0]]); n != nil {
-			return n
+				return sortTblByL2Distance
+			}
 		}
+
+		//// Plan 2: Create tbl "INDEX JOIN" entries on entries.original_pk == tbl.pk
+		//{
+		//	// 3.b.1 Create Table "INDEX JOIN" entries on entries.original_pk == tbl.pk. This should only work
+		//	// when we don't have any filter condition on the scan node.
+		//	projectTbl := makeTblIndexJoinEntriesCentroidOnPK(builder, builder.ctxByNode[nodeID],
+		//		idxTableDefs, idxTags,
+		//		scanNode, sortTblByL2Distance, pkPos, sortNode)
+		//
+		//	return projectTbl
+		//}
+
 	}
 
-	if node.NodeType == plan.Node_TABLE_SCAN && node.TableDef.Indexes != nil {
-		return node
-	}
+	// Path 3: Generic Plan which works for all cases.
+	{
 
-	return nil
+		// 1. Do Entries INNER JOIN Centroids
+		tlbJoinEntries := makeTblInnerJoinEntriesCentroidOnPK(builder, builder.ctxByNode[nodeID],
+			idxTableDefs, idxTags,
+			scanNode, entriesJoinCentroids, pkPos, sortNode)
+
+		// 2. Do Sort by L2 Distance
+		sortTblByL2Distance := makeInnerJoinOrderByL2Distance(builder, builder.ctxByNode[nodeID],
+			distFnExpr, tlbJoinEntries, sortDirection, idxTableDefs, idxTags, sortNode)
+
+		return sortTblByL2Distance
+	}
 }
 
 func makeMetaTblScanWhereKeyEqVersionAndCastVersion(builder *QueryBuilder, bindCtx *BindContext,
@@ -283,26 +319,6 @@ func makeEntriesTblScan(builder *QueryBuilder, bindCtx *BindContext, indexTableD
 }
 
 func makeEntriesCrossJoinCentroidsOnCentroidId(builder *QueryBuilder, bindCtx *BindContext, idxTableDefs []*TableDef, idxTags map[string]int32, entries int32, centroidsForCurrVersion int32) int32 {
-	entriesCentroidIdEqCentroidId, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{
-		{
-			Typ: idxTableDefs[2].Cols[1].Typ,
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{
-					RelPos: idxTags["entries.scan"],
-					ColPos: 1, // entries.__mo_index_centroid_fk_id
-				},
-			},
-		},
-		{
-			Typ: idxTableDefs[1].Cols[1].Typ,
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{
-					RelPos: idxTags["centroids.scan"],
-					ColPos: 1, // centroids.__mo_index_centroid_id
-				},
-			},
-		},
-	})
 
 	centroidVersionEqEntriesVersion, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{
 		{
@@ -320,6 +336,27 @@ func makeEntriesCrossJoinCentroidsOnCentroidId(builder *QueryBuilder, bindCtx *B
 				Col: &plan.ColRef{
 					RelPos: idxTags["centroids.scan"],
 					ColPos: 0, // centroids.__mo_version
+				},
+			},
+		},
+	})
+
+	entriesCentroidIdEqCentroidId, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{
+		{
+			Typ: idxTableDefs[2].Cols[1].Typ,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: idxTags["entries.scan"],
+					ColPos: 1, // entries.__mo_index_centroid_fk_id
+				},
+			},
+		},
+		{
+			Typ: idxTableDefs[1].Cols[1].Typ,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: idxTags["centroids.scan"],
+					ColPos: 1, // centroids.__mo_index_centroid_id
 				},
 			},
 		},
@@ -356,10 +393,10 @@ func makeEntriesCrossJoinCentroidsOnCentroidId(builder *QueryBuilder, bindCtx *B
 	return joinEntriesAndCentroids
 }
 
-func makeTblCrossJoinEntriesCentroidOnPK(builder *QueryBuilder, bindCtx *BindContext,
+func makeTblIndexJoinEntriesCentroidOnPK(builder *QueryBuilder, bindCtx *BindContext,
 	idxTableDefs []*TableDef, idxTags map[string]int32,
 	scanNode *plan.Node, entriesJoinCentroids int32, pkPos int32,
-	sortNodeLimit, sortNodeOffset *Expr) int32 {
+	sortNode *plan.Node) int32 {
 
 	entriesOriginPkEqTblPk, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{
 
@@ -387,17 +424,52 @@ func makeTblCrossJoinEntriesCentroidOnPK(builder *QueryBuilder, bindCtx *BindCon
 		JoinType: plan.Node_INDEX,
 		Children: []int32{scanNode.NodeId, entriesJoinCentroids},
 		OnList:   []*Expr{entriesOriginPkEqTblPk},
-		Limit:    sortNodeLimit,
-		Offset:   sortNodeOffset,
 	}, bindCtx)
 
 	return entriesJoinTbl
 }
 
-func makeEntriesOrderByL2DistNormalizeL2(builder *QueryBuilder, bindCtx *BindContext,
+func makeTblInnerJoinEntriesCentroidOnPK(builder *QueryBuilder, bindCtx *BindContext,
+	idxTableDefs []*TableDef, idxTags map[string]int32,
+	scanNode *plan.Node, entriesJoinCentroids int32, pkPos int32,
+	sortNode *plan.Node) int32 {
+
+	entriesOriginPkEqTblPk, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{
+
+		{
+			Typ: idxTableDefs[2].Cols[2].Typ,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: scanNode.BindingTags[0],
+					ColPos: pkPos, // tbl.pk
+				},
+			},
+		},
+		{
+			Typ: idxTableDefs[2].Cols[2].Typ,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: idxTags["entries.scan"],
+					ColPos: 2, // entries.origin_pk
+				},
+			},
+		},
+	})
+	entriesJoinTbl := builder.appendNode(&plan.Node{
+		NodeType: plan.Node_JOIN,
+		JoinType: plan.Node_INNER,
+		Children: []int32{scanNode.NodeId, entriesJoinCentroids},
+		OnList:   []*Expr{entriesOriginPkEqTblPk},
+	}, bindCtx)
+
+	return entriesJoinTbl
+}
+
+func makeEntriesOrderByL2Distance(builder *QueryBuilder, bindCtx *BindContext,
 	fn *plan.Function, entriesJoinCentroids int32,
 	sortDirection plan.OrderBySpec_OrderByFlag,
-	idxTableDefs []*TableDef, idxTags map[string]int32) int32 {
+	idxTableDefs []*TableDef, idxTags map[string]int32,
+	sortNode *plan.Node) int32 {
 
 	distFnName := fn.Func.ObjName
 	l2DistanceColLit, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), distFnName, []*plan.Expr{
@@ -415,13 +487,42 @@ func makeEntriesOrderByL2DistNormalizeL2(builder *QueryBuilder, bindCtx *BindCon
 	sortTblByL2Distance := builder.appendNode(&plan.Node{
 		NodeType: plan.Node_SORT,
 		Children: []int32{entriesJoinCentroids},
-		// NOTE: Don't  add limit here. We need the Vector Records which matches the predicate conditions from Original Table.
-		// Let's say we have "WHERE a > 100" predicate in the original table.
-		// Now, vector index return 2 records based on "LIMIT 2" but both the records did not satisfy the Predicate condition "a > 100".
-		// In that case, we will output 0 records. So, we need to apply the limit after the sort, ie in the INDEX JOIN between the original table and the vector index.
+		Limit:    DeepCopyExpr(sortNode.Limit),
+		Offset:   DeepCopyExpr(sortNode.Offset),
+		OrderBy: []*OrderBySpec{
+			{
+				Expr: l2DistanceColLit,
+				Flag: sortDirection,
+			},
+		},
+	}, bindCtx)
+	return sortTblByL2Distance
+}
 
-		//Limit:    DeepCopyExpr(sortNode.Limit),
-		//Offset:   DeepCopyExpr(sortNode.Offset),
+func makeInnerJoinOrderByL2Distance(builder *QueryBuilder, bindCtx *BindContext,
+	fn *plan.Function, tlbJoinEntries int32,
+	sortDirection plan.OrderBySpec_OrderByFlag,
+	idxTableDefs []*TableDef, idxTags map[string]int32,
+	sortNode *plan.Node) int32 {
+
+	distFnName := fn.Func.ObjName
+	l2DistanceColLit, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), distFnName, []*plan.Expr{
+		{
+			Typ: idxTableDefs[2].Cols[3].Typ,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: idxTags["entries.scan"],
+					ColPos: 3, // entries.entry
+				},
+			},
+		},
+		fn.Args[1], // lit
+	})
+	sortTblByL2Distance := builder.appendNode(&plan.Node{
+		NodeType: plan.Node_SORT,
+		Children: []int32{tlbJoinEntries},
+		Limit:    DeepCopyExpr(sortNode.Limit),
+		Offset:   DeepCopyExpr(sortNode.Offset),
 		OrderBy: []*OrderBySpec{
 			{
 				Expr: l2DistanceColLit,
@@ -458,4 +559,34 @@ func makeHiddenTblScanWithBindingTag(builder *QueryBuilder, bindCtx *BindContext
 		}
 	}
 	return scanId, scanCols, nil
+}
+
+func (builder *QueryBuilder) resolveScanNodeWithIndex(node *plan.Node, depth int32) *plan.Node {
+	if depth == 0 {
+		if node.NodeType == plan.Node_TABLE_SCAN && node.TableDef.Indexes != nil {
+			return node
+		}
+		return nil
+	}
+
+	if node.NodeType == plan.Node_SORT && len(node.Children) == 1 {
+		return builder.resolveScanNodeWithIndex(builder.qry.Nodes[node.Children[0]], depth-1)
+	}
+
+	return nil
+}
+
+func (builder *QueryBuilder) resolveSortNode(node *plan.Node, depth int32) *plan.Node {
+	if depth == 0 {
+		if node.NodeType == plan.Node_SORT {
+			return node
+		}
+		return nil
+	}
+
+	if node.NodeType == plan.Node_PROJECT && len(node.Children) == 1 {
+		return builder.resolveSortNode(builder.qry.Nodes[node.Children[0]], depth-1)
+	}
+
+	return nil
 }
