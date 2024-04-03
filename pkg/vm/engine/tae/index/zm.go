@@ -740,7 +740,7 @@ func (zm ZM) SubVecIn(vec *vector.Vector) (int, int) {
 		upperBound := sort.Search(len(col), func(i int) bool {
 			return maxVal >= col[i] && i >= lowerBound
 		})
-		logutil.Infof("keys length %v lower %v, %v, upper %v, %v", len(col), lowerBound, col[lowerBound], upperBound, col[upperBound])
+		logutil.Infof("keys length %v lower %v, %v, upper %v, %v, minval %v maxval %v", len(col), lowerBound, col[lowerBound], upperBound, col[upperBound-1], minVal, maxVal)
 		return lowerBound, upperBound
 
 	case types.T_uint8:
