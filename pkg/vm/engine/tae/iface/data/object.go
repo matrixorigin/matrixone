@@ -133,7 +133,7 @@ type Object interface {
 		sels []uint32,
 		mp *mpool.MPool,
 	) error
-	PPString(level common.PPLevel, depth int, prefix string) string
+	PPString(level common.PPLevel, depth int, prefix string, blkid int) string
 	EstimateMemSize() (int, int)
 	GetRuntime() *dbutils.Runtime
 

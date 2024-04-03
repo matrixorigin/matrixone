@@ -66,6 +66,7 @@ const (
 	TTimestamp
 	TBit
 	TBlob
+	TEnum
 )
 
 func (c *ColType) ToType() types.Type {
@@ -106,6 +107,8 @@ func (c *ColType) ToType() types.Type {
 		return types.T_bit.ToType()
 	case TBlob:
 		return types.T_blob.ToType()
+	case TEnum:
+		return types.T_enum.ToType()
 	default:
 		panic("not support ColType")
 	}
@@ -145,6 +148,8 @@ func (c *ColType) String(scale int) string {
 		return fmt.Sprintf("CHAR(%d)", scale)
 	case TBlob:
 		return "BLOB"
+	case TEnum:
+		return "ENUM"
 	case TSkip:
 		panic("not support SkipType")
 	default:
