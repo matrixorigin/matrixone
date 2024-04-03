@@ -1212,6 +1212,7 @@ func getOneRowData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *
 			if param.Extern.Format != tree.CSV {
 				jsonBytes = []byte(field.Val)
 			} else {
+				field.Val = fmt.Sprintf("%v", strings.Trim(field.Val, "\""))
 				byteJson, err := types.ParseStringToByteJson(field.Val)
 				if err != nil {
 					logutil.Errorf("parse field[%v] err:%v", field.Val, err)
