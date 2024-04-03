@@ -25,6 +25,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/cespare/xxhash/v2"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fifocache"
@@ -161,6 +162,7 @@ func (d *DiskCache) Read(
 			return nil
 		}
 
+		t0 := time.Now()
 		numRead++
 
 		var file *os.File
@@ -237,6 +239,7 @@ func (d *DiskCache) Read(
 		entry.done = true
 		entry.fromCache = d
 		numHit++
+		d.cacheHit(time.Since(t0))
 
 		return nil
 	}
@@ -248,6 +251,10 @@ func (d *DiskCache) Read(
 	}
 
 	return nil
+}
+
+func (d *DiskCache) cacheHit(duration time.Duration) {
+	FSProfileHandler.AddSample(duration)
 }
 
 func (d *DiskCache) Update(

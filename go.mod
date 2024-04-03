@@ -33,6 +33,7 @@ require (
 	github.com/google/btree v1.1.2
 	github.com/google/gofuzz v1.2.0
 	github.com/google/gops v0.3.25
+	github.com/google/pprof v0.0.0-20230510103437-eeec1cb781c3
 	github.com/google/shlex v0.0.0-20191202100458-e7afc7fbc510
 	github.com/google/uuid v1.5.0
 	github.com/hashicorp/memberlist v0.3.1
@@ -45,6 +46,7 @@ require (
 	github.com/mohae/deepcopy v0.0.0-20170929034955-c48cc78d4826
 	github.com/nnsgmsone/mmap v0.0.0-20240320065159-dbdd196c4459
 	github.com/panjf2000/ants/v2 v2.7.4
+	github.com/petermattis/goid v0.0.0-20230518223814-80aa455d8761
 	github.com/pierrec/lz4/v4 v4.1.17
 	github.com/pkg/errors v0.9.1
 	github.com/plar/go-adaptive-radix-tree v1.0.5
@@ -75,7 +77,6 @@ require (
 	github.com/K-Phoen/sdk v0.12.3 // indirect
 	github.com/cespare/xxhash v1.1.0 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
-	github.com/google/pprof v0.0.0-20230510103437-eeec1cb781c3 // indirect
 	github.com/gosimple/slug v1.13.1 // indirect
 	github.com/gosimple/unidecode v1.0.1 // indirect
 	github.com/jmespath/go-jmespath v0.4.0 // indirect
