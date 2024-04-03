@@ -1351,7 +1351,13 @@ func doPrepareString(ctx context.Context, ses *Session, st *tree.PrepareString) 
 	if err != nil {
 		return nil, err
 	}
-	stmts, err := mysql.Parse(ctx, st.Sql, v.(int64))
+
+	origin, err := ses.GetGlobalVar("keep_user_target_list_in_result")
+	if err != nil {
+		return nil, err
+	}
+
+	stmts, err := mysql.Parse(ctx, st.Sql, v.(int64), origin.(int64))
 	if err != nil {
 		return nil, err
 	}
@@ -2114,12 +2120,12 @@ func checkModify(plan2 *plan.Plan, proc *process.Process, ses *Session) bool {
 	if plan2 == nil {
 		return true
 	}
-	checkFn := func(db string, def *plan.TableDef) bool {
-		_, tableDef := ses.GetTxnCompileCtx().Resolve(db, def.Name)
+	checkFn := func(db string, tableName string, tableId uint64, version uint32) bool {
+		_, tableDef := ses.GetTxnCompileCtx().Resolve(db, tableName)
 		if tableDef == nil {
 			return true
 		}
-		if tableDef.Version != def.Version || tableDef.TblId != def.TblId {
+		if tableDef.Version != version || tableDef.TblId != tableId {
 			return true
 		}
 		return false
@@ -2128,37 +2134,37 @@ func checkModify(plan2 *plan.Plan, proc *process.Process, ses *Session) bool {
 	case *plan.Plan_Query:
 		for i := range p.Query.Nodes {
 			if def := p.Query.Nodes[i].TableDef; def != nil {
-				if p.Query.Nodes[i].ObjRef == nil || checkFn(p.Query.Nodes[i].ObjRef.SchemaName, def) {
+				if p.Query.Nodes[i].ObjRef == nil || checkFn(p.Query.Nodes[i].ObjRef.SchemaName, def.Name, def.TblId, def.Version) {
 					return true
 				}
 			}
 			if ctx := p.Query.Nodes[i].InsertCtx; ctx != nil {
-				if ctx.Ref == nil || checkFn(ctx.Ref.SchemaName, ctx.TableDef) {
+				if ctx.Ref == nil || checkFn(ctx.Ref.SchemaName, ctx.TableDef.Name, ctx.TableDef.TblId, ctx.TableDef.Version) {
 					return true
 				}
 			}
 			if ctx := p.Query.Nodes[i].ReplaceCtx; ctx != nil {
-				if ctx.Ref == nil || checkFn(ctx.Ref.SchemaName, ctx.TableDef) {
+				if ctx.Ref == nil || checkFn(ctx.Ref.SchemaName, ctx.TableDef.Name, ctx.TableDef.TblId, ctx.TableDef.Version) {
 					return true
 				}
 			}
 			if ctx := p.Query.Nodes[i].DeleteCtx; ctx != nil {
-				if ctx.Ref == nil || checkFn(ctx.Ref.SchemaName, ctx.TableDef) {
+				if ctx.Ref == nil || checkFn(ctx.Ref.SchemaName, ctx.TableDef.Name, ctx.TableDef.TblId, ctx.TableDef.Version) {
 					return true
 				}
 			}
 			if ctx := p.Query.Nodes[i].PreInsertCtx; ctx != nil {
-				if ctx.Ref == nil || checkFn(ctx.Ref.SchemaName, ctx.TableDef) {
+				if ctx.Ref == nil || checkFn(ctx.Ref.SchemaName, ctx.TableDef.Name, ctx.TableDef.TblId, ctx.TableDef.Version) {
 					return true
 				}
 			}
 			if ctx := p.Query.Nodes[i].PreInsertCtx; ctx != nil {
-				if ctx.Ref == nil || checkFn(ctx.Ref.SchemaName, ctx.TableDef) {
+				if ctx.Ref == nil || checkFn(ctx.Ref.SchemaName, ctx.TableDef.Name, ctx.TableDef.TblId, ctx.TableDef.Version) {
 					return true
 				}
 			}
 			if ctx := p.Query.Nodes[i].OnDuplicateKey; ctx != nil {
-				if p.Query.Nodes[i].ObjRef == nil || checkFn(p.Query.Nodes[i].ObjRef.SchemaName, ctx.TableDef) {
+				if p.Query.Nodes[i].ObjRef == nil || checkFn(p.Query.Nodes[i].ObjRef.SchemaName, ctx.TableName, ctx.TableId, ctx.TableVersion) {
 					return true
 				}
 			}
@@ -2209,11 +2215,16 @@ var GetComputationWrapper = func(db string, input *UserInput, user string, eng e
 		stmts = append(stmts, cmdFieldStmt)
 	} else {
 		var v interface{}
+		var origin interface{}
 		v, err = ses.GetGlobalVar("lower_case_table_names")
 		if err != nil {
 			v = int64(1)
 		}
-		stmts, err = parsers.Parse(proc.Ctx, dialect.MYSQL, input.getSql(), v.(int64))
+		origin, err = ses.GetGlobalVar("keep_user_target_list_in_result")
+		if err != nil {
+			origin = int64(0)
+		}
+		stmts, err = parsers.Parse(proc.Ctx, dialect.MYSQL, input.getSql(), v.(int64), origin.(int64))
 		if err != nil {
 			return nil, err
 		}
@@ -2756,7 +2767,11 @@ var GetStmtExecList = func(db, sql, user string, eng engine.Engine, proc *proces
 		if err != nil {
 			return nil, err
 		}
-		stmts, err = parsers.Parse(proc.Ctx, dialect.MYSQL, sql, v.(int64))
+		origin, err := ses.GetGlobalVar("keep_user_target_list_in_result")
+		if err != nil {
+			origin = int64(0)
+		}
+		stmts, err = parsers.Parse(proc.Ctx, dialect.MYSQL, sql, v.(int64), origin.(int64))
 		if err != nil {
 			return nil, err
 		}

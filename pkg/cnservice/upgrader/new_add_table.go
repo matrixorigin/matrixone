@@ -369,6 +369,7 @@ var processlistView = &table.Table{
 	Columns: []table.Column{
 		table.StringColumn("account", "the account name"),
 		table.StringColumn("client_host", "the ip:port of the client"),
+		table.StringColumn("proxy_host", "the ip:port on the proxy connection"),
 		table.StringColumn("command", "the COMMAND send by client"),
 		table.UInt64Column("conn_id", "the connection id of the tcp between client"),
 		table.StringColumn("db", "the database be used"),
@@ -388,7 +389,7 @@ var processlistView = &table.Table{
 	},
 	CreateViewSql: "CREATE VIEW IF NOT EXISTS `information_schema`.`PROCESSLIST` AS SELECT * FROM PROCESSLIST() A;",
 	//actually drop table here
-	CreateTableSql: "drop table if exists `information_schema`.`PROCESSLIST`;",
+	CreateTableSql: "drop view if exists `information_schema`.`PROCESSLIST`;",
 }
 
 var MoSessionsView = &table.Table{
@@ -527,6 +528,28 @@ var MoCacheView = &table.Table{
 	CreateTableSql: "drop view if exists `mo_catalog`.`mo_cache`;",
 }
 
+var ReferentialConstraintsView = &table.Table{
+	Account:  table.AccountAll,
+	Database: sysview.InformationDBConst,
+	Table:    "referential_constraints",
+	CreateViewSql: "CREATE VIEW information_schema.REFERENTIAL_CONSTRAINTS " +
+		"AS " +
+		"SELECT DISTINCT " +
+		"'def' AS CONSTRAINT_CATALOG, " +
+		"fk.db_name AS CONSTRAINT_SCHEMA, " +
+		"fk.constraint_name AS CONSTRAINT_NAME, " +
+		"'def' AS UNIQUE_CONSTRAINT_CATALOG, " +
+		"fk.refer_db_name AS UNIQUE_CONSTRAINT_SCHEMA, " +
+		"idx.type AS UNIQUE_CONSTRAINT_NAME," +
+		"'NONE' AS MATCH_OPTION, " +
+		"fk.on_update AS UPDATE_RULE, " +
+		"fk.on_delete AS DELETE_RULE, " +
+		"fk.table_name AS TABLE_NAME, " +
+		"fk.refer_table_name AS REFERENCED_TABLE_NAME " +
+		"FROM mo_catalog.mo_foreign_keys fk " +
+		"JOIN mo_catalog.mo_indexes idx ON (fk.refer_column_name = idx.column_name)",
+}
+
 var transactionMetricView = &table.Table{
 	Account:  table.AccountAll,
 	Database: catalog.MO_SYSTEM_METRICS,
@@ -538,7 +561,7 @@ var transactionMetricView = &table.Table{
 }
 
 var registeredViews = []*table.Table{processlistView, MoLocksView, MoVariablesView, MoTransactionsView, MoCacheView}
-var needUpgradeNewView = []*table.Table{transactionMetricView, PARTITIONSView, STATISTICSView, MoSessionsView, SqlStatementHotspotView, MoLocksView, MoConfigurationsView, MoVariablesView, MoTransactionsView, MoCacheView}
+var needUpgradeNewView = []*table.Table{transactionMetricView, PARTITIONSView, STATISTICSView, MoSessionsView, SqlStatementHotspotView, MoLocksView, MoConfigurationsView, MoVariablesView, MoTransactionsView, MoCacheView, ReferentialConstraintsView}
 
 var InformationSchemaSCHEMATA = &table.Table{
 	Account:  table.AccountAll,
@@ -630,8 +653,43 @@ var InformationSchemaPARTITIONS = &table.Table{
 		"WHERE `tbl`.`partitioned` = 1;"),
 }
 
+var InformationSchemaTABLES = &table.Table{
+	Account:  table.AccountAll,
+	Database: sysview.InformationDBConst,
+	Table:    "TABLES",
+	CreateViewSql: fmt.Sprintf("CREATE VIEW IF NOT EXISTS information_schema.TABLES AS "+
+		"SELECT 'def' AS TABLE_CATALOG,"+
+		"reldatabase AS TABLE_SCHEMA,"+
+		"relname AS TABLE_NAME,"+
+		"(case when relkind = 'v' and (reldatabase='mo_catalog' or reldatabase='information_schema') then 'SYSTEM VIEW' "+
+		"when relkind = 'v'  then 'VIEW' "+
+		"when relkind = 'e' then 'EXTERNAL TABLE' "+
+		"when relkind = 'r' then 'BASE TABLE' "+
+		"else 'INTERNAL TABLE' end) AS TABLE_TYPE,"+
+		"if(relkind = 'r','Tae',NULL) AS ENGINE,"+
+		"if(relkind = 'v',NULL,10) AS VERSION,"+
+		"'Compressed' AS ROW_FORMAT,"+
+		"if(relkind = 'v', NULL, 0) AS TABLE_ROWS,"+
+		"if(relkind = 'v', NULL, 0) AS AVG_ROW_LENGTH,"+
+		"if(relkind = 'v', NULL, 0) AS DATA_LENGTH,"+
+		"if(relkind = 'v', NULL, 0) AS MAX_DATA_LENGTH,"+
+		"if(relkind = 'v', NULL, 0) AS INDEX_LENGTH,"+
+		"if(relkind = 'v', NULL, 0) AS DATA_FREE,"+
+		"if(relkind = 'v', NULL, internal_auto_increment(reldatabase, relname)) AS `AUTO_INCREMENT`,"+
+		"created_time AS CREATE_TIME,"+
+		"if(relkind = 'v', NULL, created_time) AS UPDATE_TIME,"+
+		"if(relkind = 'v', NULL, created_time) AS CHECK_TIME,"+
+		"'utf8mb4_0900_ai_ci' AS TABLE_COLLATION,"+
+		"if(relkind = 'v', NULL, 0) AS CHECKSUM,"+
+		"if(relkind = 'v', NULL, if(partitioned = 0, '', cast('partitioned' as varchar(256)))) AS CREATE_OPTIONS,"+
+		"cast(rel_comment as text) AS TABLE_COMMENT "+
+		"FROM mo_catalog.mo_tables tbl "+
+		"WHERE tbl.account_id = current_account_id() and tbl.relname not like '%s' and tbl.relkind != '%s';", catalog.IndexTableNamePrefix+"%", catalog.SystemPartitionRel),
+}
+
 var needUpgradeExistingView = []*table.Table{
 	InformationSchemaSCHEMATA,
 	InformationSchemaCOLUMNS,
 	InformationSchemaPARTITIONS,
+	InformationSchemaTABLES,
 }

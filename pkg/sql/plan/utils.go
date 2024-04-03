@@ -67,6 +67,32 @@ func doGetBindings(expr *plan.Expr) map[int32]bool {
 	return res
 }
 
+func hasParam(expr *plan.Expr) bool {
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_P:
+		return true
+
+	case *plan.Expr_F:
+		for _, arg := range exprImpl.F.Args {
+			if hasParam(arg) {
+				return true
+			}
+		}
+		return false
+
+	case *plan.Expr_List:
+		for _, arg := range exprImpl.List.List {
+			if hasParam(arg) {
+				return true
+			}
+		}
+		return false
+
+	default:
+		return false
+	}
+}
+
 func hasCorrCol(expr *plan.Expr) bool {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_Corr:
