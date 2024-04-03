@@ -876,7 +876,8 @@ func CompileFilterExpr(
 				blkIdx int, blkMeta objectio.BlockObject, bf objectio.BloomFilter,
 			) (bool, bool, error) {
 				// TODO: define canQuickBreak
-				if !blkMeta.MustGetColumn(uint16(seqNum)).ZoneMap().AnyIn(vec) {
+				zm := blkMeta.MustGetColumn(uint16(seqNum)).ZoneMap()
+				if !zm.AnyIn(vec) {
 					return false, false, nil
 				}
 				if isPK {
@@ -885,7 +886,8 @@ func CompileFilterExpr(
 					if err := index.DecodeBloomFilter(blkBfIdx, blkBf); err != nil {
 						return false, false, err
 					}
-					if exist := blkBfIdx.MayContainsAny(vec); !exist {
+					lowerBound, upperBound := zm.SubVecIn(vec)
+					if exist := blkBfIdx.MayContainsAny(vec, lowerBound, upperBound); !exist {
 						return false, false, nil
 					}
 				}

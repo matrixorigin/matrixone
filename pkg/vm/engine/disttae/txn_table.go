@@ -1056,7 +1056,8 @@ func (tbl *txnTable) tryFastRanges(
 				}
 				var exist bool
 				if isVec {
-					if exist = blkBfIdx.MayContainsAny(vec); !exist {
+					lowerBound, upperBound := zm.SubVecIn(vec)
+					if exist = blkBfIdx.MayContainsAny(vec, lowerBound, upperBound); !exist {
 						continue
 					}
 				} else {
@@ -2274,7 +2275,8 @@ func (tbl *txnTable) PKPersistedBetween(
 							return false
 						}
 						var exist bool
-						if exist = blkBfIdx.MayContainsAny(keys); !exist {
+						lowerBound, upperBound := blkMeta.MustGetColumn(uint16(primaryIdx)).ZoneMap().SubVecIn(keys)
+						if exist = blkBfIdx.MayContainsAny(keys, lowerBound, upperBound); !exist {
 							return true
 						}
 					}
