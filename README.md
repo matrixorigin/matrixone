@@ -14,11 +14,11 @@
   <a href="https://www.codefactor.io/repository/github/matrixorigin/matrixone">
     <img src="https://www.codefactor.io/repository/github/matrixorigin/matrixone/badge?s=7280f4312fca2f2e6938fb8de5b726c5252541f0" alt="codefactor"/>
   </a>
-  <a href="https://docs.matrixorigin.cn/en/1.1.1/MatrixOne/Release-Notes/v1.1.1/">
-   <img src="https://img.shields.io/badge/Release-v1.1.1-green.svg" alt="release"/>
+  <a href="https://docs.matrixorigin.cn/en/1.1.2/MatrixOne/Release-Notes/v1.1.2/">
+   <img src="https://img.shields.io/badge/Release-v1.1.2-green.svg" alt="release"/>
   </a>
   <br>
-  <a href="https://docs.matrixorigin.cn/en/1.1.1/">
+  <a href="https://docs.matrixorigin.cn/en/1.1.2/">
     <b>Docs</b>
   </a>
   <b>||</b>
@@ -60,7 +60,7 @@ Contents
 MatrixOne is a hyper-converged cloud & edge native distributed database with a structure that separates storage, computation, and transactions to form a consolidated HSTAP data engine. This engine enables a single database system to accommodate diverse business loads such as OLTP, OLAP, and stream computing. It also supports deployment and utilization across public, private, and edge clouds, ensuring compatibility with diverse infrastructures.
 
 <p align="center">
-  <img alt="MatrixOne" height="500" src="https://community-shared-data-1308875761.cos.ap-beijing.myqcloud.com/artwork/docs/overview/mo-new-arch.png?raw=true">
+  <img alt="MatrixOne" height="450" src="https://github.com/matrixorigin/artwork/blob/main/docs/overview/architecture/archi-en-1.png?raw=true">
 </p>
 
 ## 🎯 <a id="key-features">Key Features</a>
@@ -68,7 +68,7 @@ MatrixOne is a hyper-converged cloud & edge native distributed database with a s
 ### 💥 **Hyper-converged Engine**
 
 <details>
-  <summary><b><font size=4>Monolithic Engine</b></font></summary>
+  <summary><b><font size=4>Monolithic Engine![Alt text](image.png)</b></font></summary>
           HTAP data engine that supports a mix of workloads such as TP, AP, time series, and machine learning within a single database.
 </details>
 
@@ -162,21 +162,21 @@ MatrixOne is a hyper-converged cloud & edge native distributed database with a s
 
 MatrixOne's architecture is as below:
 <p align="center">
-    <img alt="MatrixOne" height="500" src="https://community-shared-data-1308875761.cos.ap-beijing.myqcloud.com/artwork/docs/overview/architecture/architecture-1.png?raw=true">
+    <img alt="MatrixOne" height="420" src="https://github.com/matrixorigin/artwork/blob/main/docs/overview/architecture/archi-en-2.png?raw=true">
 </p>
 
-For more details, you can checkout [MatrixOne Architecture Design](https://docs.matrixorigin.cn/en/1.1.1/MatrixOne/Overview/architecture/matrixone-architecture-design/).
+For more details, you can checkout [MatrixOne Architecture Design](https://docs.matrixorigin.cn/en/1.1.2/MatrixOne/Overview/architecture/matrixone-architecture-design/).
 
 ## ⚡️ <a id="quick-start">Quick start</a>
 
 ### ⚙️ Install MatrixOne
 
 MatrixOne supports Linux and MacOS. You can install MatrixOne either by [building from source](#building-from-source) or [using docker](#using-docker).
-For other installation types, please refer to [MatrixOne installation](https://docs.matrixorigin.cn/en/1.1.1/MatrixOne/Get-Started/install-standalone-matrixone/) for more details.
+For other installation types, please refer to [MatrixOne installation](https://docs.matrixorigin.cn/en/1.1.2/MatrixOne/Get-Started/install-standalone-matrixone/) for more details.
 
-#### Building from source
+**Step 1.Install Dependency**
 
-**Step 1. Install Dependency**
+- **Building from source**
 
 1. Install Go (version 1.20 is required)
 
@@ -194,6 +194,18 @@ For other installation types, please refer to [MatrixOne installation](https://d
 
     Click <a href="https://dev.mysql.com/downloads/mysql" target="_blank">MySQL Community Downloads</a> to enter into the MySQL client download and installation page. According to your operating system and hardware environment.Configure the MySQL client environment variables.
 
+- **Using docker**
+
+1. Download and install Docker
+
+Click <a href="https://docs.docker.com/get-docker/" target="_blank">Get Docker</a>, enter into the Docker's official document page, depending on your operating system, download and install the corresponding Docker.  It is recommended to choose Docker version 20.10.18 or later and strive to maintain consistency between the Docker client and Docker server versions.
+
+2. Install and configure MySQL Client
+
+Click <a href="https://dev.mysql.com/downloads/mysql" target="_blank">MySQL Community Downloads</a> to enter into the MySQL client download and installation page. According to your operating system and hardware environment.Configure the MySQL client environment variables.
+
+__Note__: MySQL client version 8.0.30 or later is recommended.
+
 **Step 2. Install the mo_ctl tool**
 
 [mo_ctl](https://github.com/matrixorigin/mo_ctl_standalone) is a command-line tool for deploying, installing, and managing MatrixOne. It is very convenient to perform various operations on MatrixOne.
@@ -204,9 +216,25 @@ The mo_ctl tool can be installed through the following command:
 wget https://raw.githubusercontent.com/matrixorigin/mo_ctl_standalone/main/install.sh && sudo -u $(whoami) bash +x ./install.sh
 ```
 
-See [mo_ctl Tool](https://docs.matrixorigin.cn/en/1.1.1/MatrixOne/Maintain/mo_ctl/) for complete usage details.
+See [mo_ctl Tool](https://docs.matrixorigin.cn/en/1.1.2/MatrixOne/Maintain/mo_ctl/) for complete usage details.
 
-**Step 3. Get MatrixOne code**
+**Step 3. Set mo_ctl parameters**
+
+- **Building from source**
+
+```
+mo_ctl set_conf MO_PATH="yourpath" # Set custom MatrixOne download path
+mo_ctl set_conf MO_DEPLOY_MODE=git # Set MatrixOne deployment method
+```
+
+- **Using docker**
+
+```
+mo_ctl set_conf MO_CONTAINER_DATA_HOST_PATH="/yourpath/mo/" # Set the data directory for host
+mo_ctl set_conf MO_DEPLOY_MODE=docker # Set MatrixOne deployment method
+```
+
+**Step 4. One-click install Matrixone**
 
 Depending on your needs, choose whether you want to keep your code up to date, or if you want to get the latest stable version of the code.
 
@@ -220,89 +248,28 @@ mo_ctl deploy main
 
 - *Option 2*: Get the MatrixOne(Stable Version)
 
-If you want to get the latest stable version code released by MatrixOne, please switch to the branch of version **1.1.1** first.
+If you want to get the latest stable version code released by MatrixOne, please switch to the branch of version **1.1.2** first.
 
 ```
-mo_ctl deploy v1.1.1
+mo_ctl deploy v1.1.2
 ```
 
-**Step 4. Launch MatrixOne server**
+**Step 5. Launch MatrixOne server**
 
-Launch the MatrixOne service through the `mo_ctl start` command.The relevant operation logs of MatrixOne will be in `/data/mo/logs/`.
-
-**Step 5. Connect to MatrixOne**
-
-One-click connection to MatrixOne service through `mo_ctl connect` command.
+Launch the MatrixOne service through the `mo_ctl start` command.
 
 __Tips__: The initial startup of MatrixOne approximately takes 20 to 30 seconds. After a brief wait, you can connect to MatrixOne using the MySQL client.
 
-#### **Using docker**
+**Step 6. Connect to MatrixOne**
 
-**Step 1: Download and install Docker**
+One-click connection to MatrixOne service through `mo_ctl connect` command.
 
-Click <a href="https://docs.docker.com/get-docker/" target="_blank">Get Docker</a>, enter into the Docker's official document page, depending on your operating system, download and install the corresponding Docker.  It is recommended to choose Docker version 20.10.18 or later and strive to maintain consistency between the Docker client and Docker server versions.
-
-**Step 2: Create and run the container of MatrixOne**
-
-It will pull the image from Docker Hub if not exists. You can choose to pull the stable version image or the develop version image.
-
-- Stable Version Image(1.1.1 version)
-
-```bash
-docker pull matrixorigin/matrixone:1.1.1
-docker run -d -p 6001:6001 --name matrixone matrixorigin/matrixone:1.1.1
-```
-
-If you are using the network in mainland China, you can pull the MatrixOne stable version image on Alibaba Cloud:
-
-```bash
-docker pull registry.cn-shanghai.aliyuncs.com/matrixorigin/matrixone:1.1.1
-docker run -d -p 6001:6001 --name matrixone registry.cn-shanghai.aliyuncs.com/matrixorigin/matrixone:1.1.1
-```
-
-- Develop Version Image
-
-If you want to pull the develop version image, see [Docker Hub](https://hub.docker.com/r/matrixorigin/matrixone/tags), get the image tag. An example as below:
-
-```bash
-docker pull matrixorigin/matrixone:nightly-commitnumber
-docker run -d -p 6001:6001 --name matrixone matrixorigin/matrixone:nightly-commitnumber
-```
-
-If you are using the network in mainland China, you can pull the MatrixOne develop version image on Alibaba Cloud:
-
-```bash
-docker pull registry.cn-shanghai.aliyuncs.com/matrixorigin/matrixone:nightly-commitnumber
-docker run -d -p 6001:6001 --name matrixone registry.cn-shanghai.aliyuncs.com/matrixorigin/matrixone:nightly-commitnumber
-```
-
-__Note__: The *nightly* version is updated once a day.
-
-**Step 3: Connecting to MatrixOne server**
-
-1. Install and configure MySQL Client
-
-Click <a href="https://dev.mysql.com/downloads/mysql" target="_blank">MySQL Community Downloads</a> to enter into the MySQL client download and installation page. According to your operating system and hardware environment.Configure the MySQL client environment variables.
-
-__Note__: MySQL client version 8.0.30 or later is recommended.
-
-2. Connect to MatrixOne
-
-You can use the MySQL command-line client to connect to MatrixOne server. Open a new terminal window and enter the following command:
-
-```
-mysql -h 127.0.0.1 -P 6001 -uroot -p
-Enter password: # The default initial password is 111
-```
-
-Currently, MatrixOne only supports the TCP listener.
-
-__Note__: The login account in the above code snippet is the initial account; please change the initial password after logging in to MatrixOne; see [Password Management](https://docs.matrixorigin.cn/en/1.1.1/MatrixOne/Security/password-mgmt/).
+__Note__: The login account in the above code snippet is the initial account; please change the initial password after logging in to MatrixOne; see [Password Management](https://docs.matrixorigin.cn/en/1.1.2/MatrixOne/Security/password-mgmt/).
 
 ## 🙌 <a id="contributing">Contributing</a>
 
 Contributions to MatrixOne are welcome from everyone.  
- See [Contribution Guide](https://docs.matrixorigin.cn/en/1.1.1/MatrixOne/Contribution-Guide/make-your-first-contribution/) for details on submitting patches and the contribution workflow.
+ See [Contribution Guide](https://docs.matrixorigin.cn/en/1.1.2/MatrixOne/Contribution-Guide/make-your-first-contribution/) for details on submitting patches and the contribution workflow.
 
 ### 👏 All contributors
 

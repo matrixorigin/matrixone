@@ -13,11 +13,11 @@
   <a href="https://www.codefactor.io/repository/github/matrixorigin/matrixone">
     <img src="https://www.codefactor.io/repository/github/matrixorigin/matrixone/badge?s=7280f4312fca2f2e6938fb8de5b726c5252541f0" alt="codefactor"/>
   </a>
-  <a href="https://docs.matrixorigin.cn/1.1.1/MatrixOne/Release-Notes/v1.1.1/">
-   <img src="https://img.shields.io/badge/Release-1.1.1-green.svg" alt="release"/>
+  <a href="https://docs.matrixorigin.cn/1.1.2/MatrixOne/Release-Notes/v1.1.2/">
+   <img src="https://img.shields.io/badge/Release-1.1.2-green.svg" alt="release"/>
   </a>
   <br>
-  <a href="https://docs.matrixorigin.cn//1.1.1/">
+  <a href="https://docs.matrixorigin.cn//1.1.2/">
     <b>Docs</b>
   </a>
   <b>||</b>
@@ -41,7 +41,7 @@
 
 </p>
 
-<h5 align="center">如果你对 MatrixOne 项目感兴趣的话，请帮忙给 MatrixOne 点击 Star, Fork 和 Watch 三连吧，谢谢！</h5>
+<h5 align="center">如果你对 MatrixOne 项目感兴趣的话，请帮忙给 MatrixOne 点击 Star， Fork 和 Watch 三连吧，谢谢！</h5>
 
 目录
 ========
@@ -162,19 +162,21 @@ MatrixOne 的架构图如下图所示：
   <img alt="MatrixOne" height="500" src="https://community-shared-data-1308875761.cos.ap-beijing.myqcloud.com/artwork/docs/overview/architecture/architecture-1.png?raw=true">
 </p>
 
-关于更详细的 MatrixOne 技术架构，可以参考[MatrixOne 架构设计](https://docs.matrixorigin.cn/1.1.1/MatrixOne/Overview/architecture/matrixone-architecture-design/)。
+关于更详细的 MatrixOne 技术架构，可以参考[MatrixOne 架构设计](https://docs.matrixorigin.cn/1.1.2/MatrixOne/Overview/architecture/matrixone-architecture-design/)。
 
 ## ⚡️ <a id="quick-start">快速上手</a>
 
 ### ⚙️ 安装 MatrixOne
 
-MatrixOne 目前支持 Linux 及 MacOS 系统，您可以通过源码安装、二进制包安装或者 docker 安装。详情方式请参见[MatrixOne 安装指南](https://docs.matrixorigin.cn/1.1.1/MatrixOne/Get-Started/install-standalone-matrixone/)
+MatrixOne 目前支持 Linux 及 MacOS 系统，您可以通过源码安装，二进制包安装或者 docker 安装。对于更详情的安装方式请参见[MatrixOne 安装指南](https://docs.matrixorigin.cn/1.1.2/MatrixOne/Get-Started/install-standalone-matrixone/)。
 
-#### 使用源代码搭建
+以下为您介绍通过源码部署和docker部署两种方式:
 
-**步骤 1.前置依赖** 
+**步骤 1.前置依赖**
 
-1. 搭建 Go 语言环境（至少需要 1.20 版本）
+- 源码部署
+
+1. 搭建 Go 语言环境(至少需要 1.20 版本)
 
 点击 <a href="https://go.dev/doc/install" target="_blank">Go Download and install</a> 入到 **Go** 的官方文档，按照官方指导安装步骤完成 **Go** 语言的安装。
 
@@ -184,28 +186,57 @@ MatrixOne 目前支持 Linux 及 MacOS 系统，您可以通过源码安装、�
 
 3. 安装 Git
 
-通过[官方文档](https://git-scm.com/download)安装 Git。
+通过[官方文档](https://git-scm.com/download)安装 Git.
 
 4. 安装 MySQL Client
 
-点击 <a href="https://dev.mysql.com/downloads/mysql" target="_blank">MySQL Community Downloads</a>，进入到 MySQL 客户端下载安装页面，根据你的操作系统和硬件环境，按需选择下载安装包进行安装并配置环境变量
+点击 <a href="https://dev.mysql.com/downloads/mysql" target="_blank">MySQL Community Downloads</a>，进入到 MySQL 客户端下载安装页面，根据你的操作系统和硬件环境，按需选择下载安装包进行安装并配置环境变量。
 
-**步骤 2.安装 mo_ctl 工具** 
+- docker部署
+
+1. 安装docker
+
+点击 <a href="https://docs.docker.com/get-docker/" target="_blank">Get Docker</a>，进入 Docker 的官方文档页面，根据你的操作系统，下载安装对应的 Docker，Docker 版本推荐选择在 20.10.18 及以上，且尽量保持 Docker client 和 Docker server 的版本一致。
+
+2. 安装 MySQL 客户端
+
+点击 <a href="https://dev.mysql.com/downloads/mysql" target="_blank">MySQL Community Downloads</a>，进入到 MySQL 客户端下载安装页面，根据你的操作系统和硬件环境，按需选择下载安装包进行安装并配置环境变量。
+
+__Tips__: 建议 MySQL 客户端版本为 8.0.30 版本及以上。
+
+**步骤 2.安装 mo_ctl 工具**
 
 [mo_ctl](https://github.com/matrixorigin/mo_ctl_standalone) 是一个部署安装和管理 MatrixOne 的命令行工具，使用它可以非常方便的对 MatrixOne 进行各类操作。
 
-通过以下命令一键安装 mo_ctl 工具：
+通过以下命令一键安装 mo_ctl 工具:
+
 ```  
 wget https://raw.githubusercontent.com/matrixorigin/mo_ctl_standalone/main/install.sh && sudo -u $(whoami) bash +x ./install.sh
 ```
 
-如需获取完整的使用细节可以参考 [mo_ctl 工具指南](https://docs.matrixorigin.cn/1.1.1/MatrixOne/Maintain/mo_ctl/#_3)。
+如需获取完整的使用细节可以参考 [mo_ctl 工具指南](https://docs.matrixorigin.cn/1.1.2/MatrixOne/Maintain/mo_ctl/#_3)。
 
-**步骤 3.一键安装 MatrixOne** 
+**步骤 3.设置 mo_ctl 的配置参数**
+
+- 源码部署
+
+```
+mo_ctl set_conf MO_PATH="yourpath" # 设置自定义的MatrixOne下载路径
+mo_ctl set_conf MO_DEPLOY_MODE=git #设置MatrixOne部署方式，此为源码部署方式
+```
+
+- docker部署
+
+```
+mo_ctl set_conf MO_CONTAINER_DATA_HOST_PATH="/yourpath/mo/" # 宿主机mo的数据目录
+mo_ctl set_conf MO_DEPLOY_MODE=docker #设置MatrixOne部署方式，此为docker部署方式
+```
+
+**步骤 4.一键安装 MatrixOne**
 
 根据您的需要，选择您所获取的代码永远保持最新，还是获得稳定版本的代码。
 
-- *选项 1*：获取 MatrixOne(开发版本) 
+- *选项 1*:获取 MatrixOne(开发版本)
 
     **main** 分支是默认分支，主分支上的代码总是最新的，但不够稳定。
 
@@ -213,94 +244,26 @@ wget https://raw.githubusercontent.com/matrixorigin/mo_ctl_standalone/main/insta
     mo_ctl deploy main
     ```
 
-- *选项 2*：获取 MatrixOne (稳定版本) 
+- *选项 2*:获取 MatrixOne (稳定版本)
 
-    如果您想获得 MatrixOne 发布的最新稳定版本，请先从 **main** 切换选择至 **1.1.1** 版本分支。
+    如果您想获得 MatrixOne 发布的最新稳定版本，请先从 **main** 切换选择至 **1.1.2** 版本分支。
 
     ```
-    mo_ctl deploy 1.1.1
+    mo_ctl deploy 1.1.2
     ```
 
-**步骤 4.启动 MatrixOne 服务**
+**步骤 5.启动 MatrixOne 服务**
 
-通过 `mo_ctl start` 命令一键启动 MatrixOne 服务。MatrixOne 的相关运行日志会在 `/data/mo/logs/` 中。
+通过 `mo_ctl start` 命令一键启动 MatrixOne 服务。
 
 __Tips__: 首次启动 MatrixOne 大致需要花费 20 至 30 秒的时间，在稍作等待后，你便可以连接至 MatrixOne。
 
-**步骤 5.连接 MatrixOne 服务**
+**步骤 6.连接 MatrixOne 服务**
 
 通过 `mo_ctl connect` 命令一键连接 MatrixOne 服务。
 
-__Tips__: 连接和登录账号为初始账号 `root` 和密码 `111`，请在登录 MatrixOne 后及时修改初始密码，参见[密码管理](https://docs.matrixorigin.cn/1.1.1/MatrixOne/Security/password-mgmt/)。修改登录用户名或密码后重新登录同样需要通过 `mo_ctl set_conf` 的方式设置新的用户名和密码，详情可以参考 [mo_ctl 工具指南](https://docs.matrixorigin.cn/1.1.1/MatrixOne/Maintain/mo_ctl/#_3)。
+__Tips__: 连接和登录账号为初始账号 `root` 和密码 `111`，请在登录 MatrixOne 后及时修改初始密码，参见[密码管理](https://docs.matrixorigin.cn/1.1.2/MatrixOne/Security/password-mgmt/)。修改登录用户名或密码后重新登录同样需要通过 `mo_ctl set_conf` 的方式设置新的用户名和密码。详情可以参考 [mo_ctl 工具指南](https://docs.matrixorigin.cn/1.1.2/MatrixOne/Maintain/mo_ctl/#_3)。
 
-#### 使用 Docker
-
-**步骤 1.安装 Docker** 
-
-点击 <a href="https://docs.docker.com/get-docker/" target="_blank">Get Docker</a>，进入 Docker 的官方文档页面，根据你的操作系统，下载安装对应的 Docker，Docker 版本推荐选择在 20.10.18 及以上，且尽量保持 Docker client 和 Docker server 的版本一致。
-
-**步骤 2.获取 MatrixOne 镜像并启动** 
-
-使用以下命令将从 Docker Hub 中拉取 MatrixOne 镜像，你可以选择稳定版本镜像，或开发版本镜像，当 Tag 为 `latest` 时获取最新稳定版本。
-
-- 稳定版本的镜像（1.1.1）
-
-```bash
-docker pull matrixorigin/matrixone:1.1.1
-docker run -d -p 6001:6001 --name matrixone matrixorigin/matrixone:1.1.1
-```
-
-如果你使用的是中国大陆的网络，你可以拉取阿里云上的 MatrixOne 稳定版本镜像：
-
-```bash
-docker pull registry.cn-shanghai.aliyuncs.com/matrixorigin/matrixone:1.1.1
-docker run -d -p 6001:6001 --name matrixone registry.cn-shanghai.aliyuncs.com/matrixorigin/matrixone:1.1.1
-```
-
-- 开发版本的镜像
-
-获取最新开发版本的镜像，参见[Docker Hub](https://hub.docker.com/r/matrixorigin/matrixone/tags)，找到最新 Tag，拉取镜像。拉取镜像代码示例如下：
-
-```bash
-docker pull matrixorigin/matrixone:nightly-commitnumber
-docker run -d -p 6001:6001 --name matrixone matrixorigin/matrixone:nightly-commitnumber
-```
-
-如果你使用的是中国大陆的网络，你可以拉取阿里云上的 MatrixOne 开发版本镜像：
-
-```bash
-docker pull registry.cn-shanghai.aliyuncs.com/matrixorigin/matrixone:nightly-commitnumber
-docker run -d -p 6001:6001 --name matrixone registry.cn-shanghai.aliyuncs.com/matrixorigin/matrixone:nightly-commitnumber
-```
-
-__Note__: 若 Docker 版本低于 20.10.18 或者 Docker client 和 Docker server 的版本不一致，推荐同时升级到 Docker 最新稳定版本后再尝试。若坚持使用，需要在 ```docker run``` 命令中加上参数 ```--privileged=true```，如：
-
-  ```bash
-    docker run -d -p 6001:6001 --name matrixone --privileged=true matrixorigin/matrixone:1.1.1
-  ```
-
-__Tips__: 首次启动 MatrixOne 大致需要花费 20 至 30 秒的时间，在稍作等待后，你便可以使用 MySQL 客户端连接至 MatrixOne。
-
-**步骤 3.连接 MatrixOne 服务**
-
-1. 安装 MySQL 客户端
-
-MatrixOne 支持 MySQL 连接协议，因此您可以使用各种语言通过 MySQL 客户机程序进行连接。  
-目前，MatrixOne 只兼容 Oracle MySQL 客户端，因此一些特性可能无法在 MariaDB、Percona 客户端下正常工作。  
-
-点击 <a href="https://dev.mysql.com/downloads/mysql" target="_blank">MySQL Community Downloads</a>，进入到 MySQL 客户端下载安装页面，根据你的操作系统和硬件环境，按需选择下载安装包进行安装。
-
-__Tips__: 建议 MySQL 客户端版本为 8.0.30 版本及以上。
-
-2. 连接 MatrixOne 服务
-
-你可以使用 MySQL 命令行客户端来连接 MatrixOne。打开一个新的终端，直接输入以下指令：
-
-       ```
-       mysql -h 127.0.0.1 -P 6001 -uroot -p
-       Enter password:  # 初始密码默认为 111
-
-目前，MatrixOne 只支持 TCP 监听。
 
 ### 👏贡献者
 
@@ -1058,7 +1021,7 @@ __Tips__: 建议 MySQL 客户端版本为 8.0.30 版本及以上。
 ## 🙌 <a id="contributing">参与贡献</a>
 
 欢迎大家对 MatrixOne 的贡献。  
-请查看[贡献指南](https://docs.matrixorigin.cn/1.1.1/MatrixOne/Contribution-Guide/make-your-first-contribution/)来了解有关提交补丁和完成整个贡献流程的详细信息。
+请查看[贡献指南](https://docs.matrixorigin.cn/1.1.2/MatrixOne/Contribution-Guide/make-your-first-contribution/)来了解有关提交补丁和完成整个贡献流程的详细信息。
 
 ## <a id="license">License</a>
 
