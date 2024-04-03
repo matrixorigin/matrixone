@@ -693,7 +693,7 @@ func (zm ZM) SubVecIn(vec *vector.Vector) (int, int) {
 			return minVal <= col[i]
 		})
 		upperBound := sort.Search(len(col), func(i int) bool {
-			return maxVal >= col[i]
+			return maxVal >= col[i] && i >= lowerBound
 		})
 		return lowerBound, upperBound
 
@@ -704,7 +704,7 @@ func (zm ZM) SubVecIn(vec *vector.Vector) (int, int) {
 			return minVal <= col[i]
 		})
 		upperBound := sort.Search(len(col), func(i int) bool {
-			return maxVal >= col[i]
+			return maxVal >= col[i] && i >= lowerBound
 		})
 		return lowerBound, upperBound
 
@@ -715,7 +715,7 @@ func (zm ZM) SubVecIn(vec *vector.Vector) (int, int) {
 			return minVal <= col[i]
 		})
 		upperBound := sort.Search(len(col), func(i int) bool {
-			return maxVal >= col[i]
+			return maxVal >= col[i] && i >= lowerBound
 		})
 		return lowerBound, upperBound
 
@@ -726,7 +726,7 @@ func (zm ZM) SubVecIn(vec *vector.Vector) (int, int) {
 			return minVal <= col[i]
 		})
 		upperBound := sort.Search(len(col), func(i int) bool {
-			return maxVal >= col[i]
+			return maxVal >= col[i] && i >= lowerBound
 		})
 		return lowerBound, upperBound
 
@@ -737,7 +737,7 @@ func (zm ZM) SubVecIn(vec *vector.Vector) (int, int) {
 			return minVal <= col[i]
 		})
 		upperBound := sort.Search(len(col), func(i int) bool {
-			return maxVal >= col[i]
+			return maxVal >= col[i] && i >= lowerBound
 		})
 		return lowerBound, upperBound
 
@@ -748,7 +748,7 @@ func (zm ZM) SubVecIn(vec *vector.Vector) (int, int) {
 			return minVal <= col[i]
 		})
 		upperBound := sort.Search(len(col), func(i int) bool {
-			return maxVal >= col[i]
+			return maxVal >= col[i] && i >= lowerBound
 		})
 		return lowerBound, upperBound
 
@@ -759,7 +759,7 @@ func (zm ZM) SubVecIn(vec *vector.Vector) (int, int) {
 			return minVal <= col[i]
 		})
 		upperBound := sort.Search(len(col), func(i int) bool {
-			return maxVal >= col[i]
+			return maxVal >= col[i] && i >= lowerBound
 		})
 		return lowerBound, upperBound
 
@@ -770,7 +770,7 @@ func (zm ZM) SubVecIn(vec *vector.Vector) (int, int) {
 			return minVal <= col[i]
 		})
 		upperBound := sort.Search(len(col), func(i int) bool {
-			return maxVal >= col[i]
+			return maxVal >= col[i] && i >= lowerBound
 		})
 		return lowerBound, upperBound
 
@@ -781,7 +781,7 @@ func (zm ZM) SubVecIn(vec *vector.Vector) (int, int) {
 			return minVal <= col[i]
 		})
 		upperBound := sort.Search(len(col), func(i int) bool {
-			return maxVal >= col[i]
+			return maxVal >= col[i] && i >= lowerBound
 		})
 		return lowerBound, upperBound
 
@@ -792,7 +792,7 @@ func (zm ZM) SubVecIn(vec *vector.Vector) (int, int) {
 			return minVal <= col[i]
 		})
 		upperBound := sort.Search(len(col), func(i int) bool {
-			return maxVal >= col[i]
+			return maxVal >= col[i] && i >= lowerBound
 		})
 		return lowerBound, upperBound
 
@@ -803,7 +803,7 @@ func (zm ZM) SubVecIn(vec *vector.Vector) (int, int) {
 			return minVal <= col[i]
 		})
 		upperBound := sort.Search(len(col), func(i int) bool {
-			return maxVal >= col[i]
+			return maxVal >= col[i] && i >= lowerBound
 		})
 		return lowerBound, upperBound
 
@@ -814,7 +814,7 @@ func (zm ZM) SubVecIn(vec *vector.Vector) (int, int) {
 			return minVal <= col[i]
 		})
 		upperBound := sort.Search(len(col), func(i int) bool {
-			return maxVal >= col[i]
+			return maxVal >= col[i] && i >= lowerBound
 		})
 		return lowerBound, upperBound
 
@@ -825,7 +825,7 @@ func (zm ZM) SubVecIn(vec *vector.Vector) (int, int) {
 			return minVal <= col[i]
 		})
 		upperBound := sort.Search(len(col), func(i int) bool {
-			return maxVal >= col[i]
+			return maxVal >= col[i] && i >= lowerBound
 		})
 		return lowerBound, upperBound
 
@@ -836,7 +836,7 @@ func (zm ZM) SubVecIn(vec *vector.Vector) (int, int) {
 			return minVal <= col[i]
 		})
 		upperBound := sort.Search(len(col), func(i int) bool {
-			return maxVal >= col[i]
+			return maxVal >= col[i] && i >= lowerBound
 		})
 		return lowerBound, upperBound
 
@@ -847,7 +847,7 @@ func (zm ZM) SubVecIn(vec *vector.Vector) (int, int) {
 			return minVal <= col[i]
 		})
 		upperBound := sort.Search(len(col), func(i int) bool {
-			return maxVal >= col[i]
+			return maxVal >= col[i] && i >= lowerBound
 		})
 		return lowerBound, upperBound
 
@@ -858,7 +858,7 @@ func (zm ZM) SubVecIn(vec *vector.Vector) (int, int) {
 			return minVal <= col[i]
 		})
 		upperBound := sort.Search(len(col), func(i int) bool {
-			return maxVal >= col[i]
+			return maxVal >= col[i] && i >= lowerBound
 		})
 		return lowerBound, upperBound
 
@@ -869,7 +869,7 @@ func (zm ZM) SubVecIn(vec *vector.Vector) (int, int) {
 			return !col[i].Less(minVal)
 		})
 		upperBound := sort.Search(len(col), func(i int) bool {
-			return maxVal.Compare(col[i]) >= 0
+			return maxVal.Compare(col[i]) >= 0 && i >= lowerBound
 		})
 		return lowerBound, upperBound
 
@@ -880,7 +880,7 @@ func (zm ZM) SubVecIn(vec *vector.Vector) (int, int) {
 			return !col[i].Less(minVal)
 		})
 		upperBound := sort.Search(len(col), func(i int) bool {
-			return maxVal.Compare(col[i]) >= 0
+			return maxVal.Compare(col[i]) >= 0 && i >= lowerBound
 		})
 		return lowerBound, upperBound
 
@@ -891,7 +891,7 @@ func (zm ZM) SubVecIn(vec *vector.Vector) (int, int) {
 			return minVal.LessEq(&col[i])
 		})
 		upperBound := sort.Search(len(col), func(i int) bool {
-			return maxVal.GreaterEq(&col[i])
+			return maxVal.GreaterEq(&col[i]) && i >= lowerBound
 		})
 		return lowerBound, upperBound
 
@@ -902,7 +902,7 @@ func (zm ZM) SubVecIn(vec *vector.Vector) (int, int) {
 			return minVal.Le(col[i])
 		})
 		upperBound := sort.Search(len(col), func(i int) bool {
-			return maxVal.Ge(col[i])
+			return maxVal.Ge(col[i]) && i >= lowerBound
 		})
 		return lowerBound, upperBound
 
@@ -913,7 +913,7 @@ func (zm ZM) SubVecIn(vec *vector.Vector) (int, int) {
 			return minVal.Le(col[i])
 		})
 		upperBound := sort.Search(len(col), func(i int) bool {
-			return maxVal.Ge(col[i])
+			return maxVal.Ge(col[i]) && i >= lowerBound
 		})
 		return lowerBound, upperBound
 
@@ -924,7 +924,7 @@ func (zm ZM) SubVecIn(vec *vector.Vector) (int, int) {
 			return bytes.Compare(minVal, col[i].GetByteSlice(area)) <= 0
 		})
 		upperBound := sort.Search(len(col), func(i int) bool {
-			return types.PrefixCompare(maxVal, col[lowerBound].GetByteSlice(area)) >= 0
+			return types.PrefixCompare(maxVal, col[lowerBound].GetByteSlice(area)) >= 0 && i >= lowerBound
 		})
 		return lowerBound, upperBound
 
@@ -935,7 +935,7 @@ func (zm ZM) SubVecIn(vec *vector.Vector) (int, int) {
 			return moarray.Compare[float32](minVal, col[i]) <= 0
 		})
 		upperBound := sort.Search(len(col), func(i int) bool {
-			return moarray.Compare[float32](maxVal, col[lowerBound]) >= 0
+			return moarray.Compare[float32](maxVal, col[lowerBound]) >= 0 && i >= lowerBound
 		})
 		return lowerBound, upperBound
 
@@ -946,7 +946,7 @@ func (zm ZM) SubVecIn(vec *vector.Vector) (int, int) {
 			return moarray.Compare[float64](minVal, col[i]) <= 0
 		})
 		upperBound := sort.Search(len(col), func(i int) bool {
-			return moarray.Compare[float64](maxVal, col[lowerBound]) >= 0
+			return moarray.Compare[float64](maxVal, col[lowerBound]) >= 0 && i >= lowerBound
 		})
 		return lowerBound, upperBound
 
