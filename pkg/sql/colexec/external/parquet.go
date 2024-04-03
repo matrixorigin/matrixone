@@ -48,7 +48,9 @@ func scanParquetFile(ctx context.Context, param *ExternalParam, proc *process.Pr
 		bat.Vecs[i] = proc.GetVector(types.New(types.T(col.Typ.Id), col.Typ.Width, col.Typ.Scale))
 	}
 
-	var h ParquetHandler
+	h := ParquetHandler{
+		batchCnt: 1000,
+	}
 	err := h.openFile(param)
 	if err != nil {
 		return nil, err
@@ -59,44 +61,19 @@ func scanParquetFile(ctx context.Context, param *ExternalParam, proc *process.Pr
 		return nil, err
 	}
 
-	for colIdx, col := range h.cols {
-		vec := bat.Vecs[colIdx]
-		if param.Cols[colIdx].Hidden {
-			col := param.Cols[colIdx]
-			typ := types.New(types.T(col.Typ.Id), col.Typ.Width, col.Typ.Scale)
-			bat.Vecs[colIdx] = vector.NewConstNull(typ, int(h.file.NumRows()), proc.GetMPool())
-			continue
-		}
-
-		pages := col.Pages()
-	L:
-		for {
-			page, err := pages.ReadPage()
-			switch {
-			case errors.Is(err, io.EOF):
-				break L
-			case err != nil:
-				return nil, err
-			}
-
-			if len(page.DefinitionLevels()) != 0 || len(page.RepetitionLevels()) != 0 {
-				return nil, moerr.NewNYINoCtx("page has repetition or definition not support")
-			}
-
-			err = h.dataFn[colIdx](page, proc, vec)
-			if err != nil {
-				return nil, err
-			}
-		}
-		_ = pages.Close()
+	err = h.getData(bat, param, proc)
+	if err != nil {
+		return nil, err
 	}
+
+	n := bat.Vecs[0].Length()
+	h.offset += int64(n)
 
 	param.Fileparam.FileFin++
 	if param.Fileparam.FileFin >= param.Fileparam.FileCnt {
 		param.Fileparam.End = true
 	}
 
-	n := bat.Vecs[0].Length()
 	bat.SetRowCount(n)
 	return bat, nil
 }
@@ -138,16 +115,24 @@ func (h *ParquetHandler) prepare(param *ExternalParam) error {
 		}
 
 		h.cols[colIdx] = col
-		h.dataFn[colIdx] = h.getDataFn(col.Type(), types.T(def.Typ.Id))
+		fn := h.getDataFn(col.Type(), types.T(def.Typ.Id))
+		if fn == nil {
+			return moerr.NewNYINoCtx("load %s to %s", col.Type(), types.T(def.Typ.Id))
+		}
+		h.dataFn[colIdx] = fn
 	}
 
 	return nil
 }
 
 func (*ParquetHandler) getDataFn(st parquet.Type, dt types.T) dataFn {
+	if st.PhysicalType() == nil {
+		return nil
+	}
+
 	switch dt {
 	case types.T_bool:
-		if st == parquet.BooleanType {
+		if st.Kind() == parquet.Boolean {
 			return func(page parquet.Page, proc *process.Process, vec *vector.Vector) error {
 				var err error
 				p := make([]bool, page.NumValues())
@@ -164,82 +149,140 @@ func (*ParquetHandler) getDataFn(st parquet.Type, dt types.T) dataFn {
 			}
 		}
 	case types.T_int32:
-		if st == parquet.Int32Type {
+		if st.Kind() == parquet.Int32 {
 			return func(page parquet.Page, proc *process.Process, vec *vector.Vector) error {
 				data := page.Data()
 				return vector.AppendFixedList(vec, data.Int32(), nil, proc.GetMPool())
 			}
 		}
 	case types.T_int64:
-		if st == parquet.Int64Type {
+		if st.Kind() == parquet.Int64 {
 			return func(page parquet.Page, proc *process.Process, vec *vector.Vector) error {
 				data := page.Data()
 				return vector.AppendFixedList(vec, data.Int64(), nil, proc.GetMPool())
 			}
 		}
 	case types.T_uint32:
-		if st.Length() == 32 && st.Kind() == parquet.Int32 {
+		if st.Kind() == parquet.Int32 {
 			return func(page parquet.Page, proc *process.Process, vec *vector.Vector) error {
 				data := page.Data()
 				return vector.AppendFixedList(vec, data.Uint32(), nil, proc.GetMPool())
 			}
 		}
 	case types.T_uint64:
-		if st.Length() == 64 && st.Kind() == parquet.Int64 {
+		if st.Kind() == parquet.Int64 {
 			return func(page parquet.Page, proc *process.Process, vec *vector.Vector) error {
 				data := page.Data()
-				return vector.AppendFixedList(vec, data.Uint32(), nil, proc.GetMPool())
+				return vector.AppendFixedList(vec, data.Uint64(), nil, proc.GetMPool())
 			}
 		}
 	case types.T_float32:
-		if st == parquet.FloatType {
+		if st.Kind() == parquet.Float {
 			return func(page parquet.Page, proc *process.Process, vec *vector.Vector) error {
 				data := page.Data()
 				return vector.AppendFixedList(vec, data.Float(), nil, proc.GetMPool())
 			}
 		}
 	case types.T_float64:
-		if st == parquet.DoubleType {
+		if st.Kind() == parquet.Double {
 			return func(page parquet.Page, proc *process.Process, vec *vector.Vector) error {
 				data := page.Data()
 				return vector.AppendFixedList(vec, data.Double(), nil, proc.GetMPool())
 			}
 		}
 	case types.T_char, types.T_varchar:
-		if st.PhysicalType() != nil {
-			if st.Kind() == parquet.ByteArray {
-				return func(page parquet.Page, proc *process.Process, vec *vector.Vector) error {
-					data := page.Data()
-					buf, offsets := data.ByteArray()
-					if len(offsets) > 0 {
-						baseOffset := offsets[0]
-						for _, endOffset := range offsets[1:] {
-							err := vector.AppendBytes(vec, buf[baseOffset:endOffset:endOffset], false, proc.GetMPool())
-							baseOffset = endOffset
-							if err != nil {
-								return moerr.NewInternalErrorNoCtx("")
-							}
-						}
-					}
-					return nil
-				}
-			}
-			if st.Kind() == parquet.FixedLenByteArray {
-				return func(page parquet.Page, proc *process.Process, vec *vector.Vector) error {
-					data := page.Data()
-					buf, size := data.FixedLenByteArray()
-					for len(buf) > 0 {
-						err := vector.AppendBytes(vec, buf[:size:size], false, proc.GetMPool())
-						buf = buf[size:]
+		if st.Kind() == parquet.ByteArray {
+			return func(page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+				data := page.Data()
+				buf, offsets := data.ByteArray()
+				if len(offsets) > 0 {
+					baseOffset := offsets[0]
+					for _, endOffset := range offsets[1:] {
+						err := vector.AppendBytes(vec, buf[baseOffset:endOffset:endOffset], false, proc.GetMPool())
+						baseOffset = endOffset
 						if err != nil {
 							return moerr.NewInternalErrorNoCtx("")
 						}
 					}
-					return nil
 				}
+				return nil
+			}
+		}
+		if st.Kind() == parquet.FixedLenByteArray {
+			return func(page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+				data := page.Data()
+				buf, size := data.FixedLenByteArray()
+				for len(buf) > 0 {
+					err := vector.AppendBytes(vec, buf[:size:size], false, proc.GetMPool())
+					buf = buf[size:]
+					if err != nil {
+						return moerr.NewInternalErrorNoCtx("")
+					}
+				}
+				return nil
 			}
 		}
 	}
+	return nil
+}
+
+func (h *ParquetHandler) getData(bat *batch.Batch, param *ExternalParam, proc *process.Process) error {
+	for colIdx, col := range h.cols {
+		if param.Cols[colIdx].Hidden {
+			continue
+		}
+
+		vec := bat.Vecs[colIdx]
+		pages := col.Pages()
+		n := h.batchCnt
+		o := h.offset
+	L:
+		for n > 0 {
+			page, err := pages.ReadPage()
+			switch {
+			case errors.Is(err, io.EOF):
+				break L
+			case err != nil:
+				return err
+			}
+
+			nr := page.NumRows()
+			if nr < o {
+				o -= nr
+				continue
+			}
+
+			if len(page.DefinitionLevels()) != 0 || len(page.RepetitionLevels()) != 0 {
+				return moerr.NewNYINoCtx("page has repetition or definition not support")
+			}
+
+			if o > 0 || o+n < nr {
+				page = page.Slice(o, min(n+o, nr))
+			}
+			o = 0
+			n -= nr
+
+			err = h.dataFn[colIdx](page, proc, vec)
+			if err != nil {
+				return err
+			}
+		}
+		err := pages.Close()
+		if err != nil {
+			return err
+		}
+	}
+
+	n := bat.Vecs[0].Length()
+	for i := range h.cols {
+		if !param.Cols[i].Hidden {
+			continue
+		}
+		col := param.Cols[i]
+		typ := types.New(types.T(col.Typ.Id), col.Typ.Width, col.Typ.Scale)
+		bat.Vecs[i] = vector.NewConstNull(typ, n, proc.GetMPool())
+	}
+
 	return nil
 }
 
