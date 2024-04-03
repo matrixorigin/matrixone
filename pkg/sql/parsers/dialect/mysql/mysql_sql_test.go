@@ -1645,6 +1645,9 @@ var (
 			input:  "create account nihao admin_name 'admin' identified with '123'",
 			output: "create account nihao admin_name 'admin' identified with '******'",
 		}, {
+			input:  "create account ? admin_name 'admin' identified with '123'",
+			output: "create account ? admin_name 'admin' identified with '******'",
+		}, {
 			input: "drop account if exists abc",
 		}, {
 			input:  "alter account if exists nihao admin_name 'admin' identified by '123' open comment 'new account'",
