@@ -104,11 +104,13 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 				ap.lastpos = 0
 			}
 
+			startrow := ap.lastpos
 			if err := ctr.probe(ap, proc, analyze, arg.GetIsFirst(), arg.GetIsLast(), &result); err != nil {
-				ap.bat.Clean(proc.Mp())
+				proc.PutBatch(ap.bat)
+				ap.bat = nil
 				return result, err
 			}
-			if ap.lastpos == 0 {
+			if ap.lastpos == 0 || ap.lastpos == startrow {
 				proc.PutBatch(ap.bat)
 				ap.bat = nil
 			}

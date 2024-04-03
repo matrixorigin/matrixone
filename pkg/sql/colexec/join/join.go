@@ -102,11 +102,13 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 				ap.lastrow = 0
 			}
 
+			startrow := ap.lastrow
 			if err := ctr.probe(ap, proc, anal, arg.GetIsFirst(), arg.GetIsLast(), &result); err != nil {
 				proc.PutBatch(ap.bat)
+				ap.bat = nil
 				return result, err
 			}
-			if ap.lastrow == 0 {
+			if ap.lastrow == 0 || ap.lastrow == startrow {
 				proc.PutBatch(ap.bat)
 				ap.bat = nil
 			}
