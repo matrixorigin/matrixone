@@ -37,11 +37,10 @@ func TestLockRemote(t *testing.T) {
 				pb.Method_Lock,
 				func(
 					ctx context.Context,
-					cancel context.CancelFunc,
 					req *pb.Request,
 					resp *pb.Response,
 					cs morpc.ClientSession) {
-					writeResponse(ctx, cancel, resp, nil, cs)
+					writeResponse(ctx, resp, nil, cs)
 				},
 			)
 		},
@@ -70,11 +69,10 @@ func TestUnlockRemote(t *testing.T) {
 				pb.Method_Unlock,
 				func(
 					ctx context.Context,
-					cancel context.CancelFunc,
 					req *pb.Request,
 					resp *pb.Response,
 					cs morpc.ClientSession) {
-					writeResponse(ctx, cancel, resp, nil, cs)
+					writeResponse(ctx, resp, nil, cs)
 				},
 			)
 		},
@@ -99,24 +97,22 @@ func TestUnlockRemoteWithRetry(t *testing.T) {
 				pb.Method_Unlock,
 				func(
 					ctx context.Context,
-					cancel context.CancelFunc,
 					req *pb.Request,
 					resp *pb.Response,
 					cs morpc.ClientSession) {
 					n++
 					if n == 1 {
-						writeResponse(ctx, cancel, resp, moerr.NewRPCTimeout(ctx), cs)
+						writeResponse(ctx, resp, moerr.NewRPCTimeout(ctx), cs)
 						return
 					}
 					close(c)
-					writeResponse(ctx, cancel, resp, nil, cs)
+					writeResponse(ctx, resp, nil, cs)
 				},
 			)
 			s.RegisterMethodHandler(
 				pb.Method_GetBind,
 				func(
 					ctx context.Context,
-					cancel context.CancelFunc,
 					req *pb.Request,
 					resp *pb.Response,
 					cs morpc.ClientSession) {
@@ -124,7 +120,7 @@ func TestUnlockRemoteWithRetry(t *testing.T) {
 						ServiceID: "s1",
 						Valid:     true,
 					}
-					writeResponse(ctx, cancel, resp, nil, cs)
+					writeResponse(ctx, resp, nil, cs)
 				},
 			)
 		},
@@ -148,19 +144,17 @@ func TestUnlockRemoteWithCannotRetryAfterTimeout(t *testing.T) {
 				pb.Method_Unlock,
 				func(
 					ctx context.Context,
-					cancel context.CancelFunc,
 					req *pb.Request,
 					resp *pb.Response,
 					cs morpc.ClientSession) {
 					// always retry
-					writeResponse(ctx, cancel, resp, moerr.NewRPCTimeout(ctx), cs)
+					writeResponse(ctx, resp, moerr.NewRPCTimeout(ctx), cs)
 				},
 			)
 			s.RegisterMethodHandler(
 				pb.Method_GetBind,
 				func(
 					ctx context.Context,
-					cancel context.CancelFunc,
 					req *pb.Request,
 					resp *pb.Response,
 					cs morpc.ClientSession) {
@@ -168,7 +162,7 @@ func TestUnlockRemoteWithCannotRetryAfterTimeout(t *testing.T) {
 						ServiceID: "s1",
 						Valid:     true,
 					}
-					writeResponse(ctx, cancel, resp, nil, cs)
+					writeResponse(ctx, resp, nil, cs)
 				},
 			)
 		},
@@ -196,24 +190,22 @@ func TestUnlockRemoteWithCannotRetry(t *testing.T) {
 					pb.Method_Unlock,
 					func(
 						ctx context.Context,
-						cancel context.CancelFunc,
 						req *pb.Request,
 						resp *pb.Response,
 						cs morpc.ClientSession) {
 						n++
 						if n == 1 {
-							writeResponse(ctx, cancel, resp, e, cs)
+							writeResponse(ctx, resp, e, cs)
 							return
 						}
 						close(c)
-						writeResponse(ctx, cancel, resp, nil, cs)
+						writeResponse(ctx, resp, nil, cs)
 					},
 				)
 				s.RegisterMethodHandler(
 					pb.Method_GetBind,
 					func(
 						ctx context.Context,
-						cancel context.CancelFunc,
 						req *pb.Request,
 						resp *pb.Response,
 						cs morpc.ClientSession) {
@@ -221,7 +213,7 @@ func TestUnlockRemoteWithCannotRetry(t *testing.T) {
 							ServiceID: "s1",
 							Valid:     true,
 						}
-						writeResponse(ctx, cancel, resp, nil, cs)
+						writeResponse(ctx, resp, nil, cs)
 					},
 				)
 			},
@@ -260,12 +252,11 @@ func TestRemoteWithBindChanged(t *testing.T) {
 				pb.Method_Lock,
 				func(
 					ctx context.Context,
-					cancel context.CancelFunc,
 					req *pb.Request,
 					resp *pb.Response,
 					cs morpc.ClientSession) {
 					resp.NewBind = &newBind
-					writeResponse(ctx, cancel, resp, nil, cs)
+					writeResponse(ctx, resp, nil, cs)
 				},
 			)
 
@@ -273,12 +264,11 @@ func TestRemoteWithBindChanged(t *testing.T) {
 				pb.Method_Unlock,
 				func(
 					ctx context.Context,
-					cancel context.CancelFunc,
 					req *pb.Request,
 					resp *pb.Response,
 					cs morpc.ClientSession) {
 					resp.NewBind = &newBind
-					writeResponse(ctx, cancel, resp, nil, cs)
+					writeResponse(ctx, resp, nil, cs)
 				},
 			)
 
@@ -286,12 +276,11 @@ func TestRemoteWithBindChanged(t *testing.T) {
 				pb.Method_GetTxnLock,
 				func(
 					ctx context.Context,
-					cancel context.CancelFunc,
 					req *pb.Request,
 					resp *pb.Response,
 					cs morpc.ClientSession) {
 					resp.NewBind = &newBind
-					writeResponse(ctx, cancel, resp, nil, cs)
+					writeResponse(ctx, resp, nil, cs)
 				},
 			)
 		},

@@ -1,4 +1,4 @@
-// Copyright 2021 - 2022 Matrix Origin
+// Copyright 2021 - 2024 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,24 +15,32 @@
 package morpc
 
 import (
+	"context"
 	"time"
 )
 
-const (
-	internalTimeout = time.Second * 10
-	oneWayTimeout   = time.Second * 600
-)
-
-// Timeout return true if the message is timeout
-func (m RPCMessage) Timeout() bool {
-	select {
-	case <-m.Ctx.Done():
-		return true
-	default:
-		return time.Now().After(m.timeoutAt)
+func getTimeout(
+	ctx context.Context,
+	timeout time.Duration,
+) time.Duration {
+	if timeout == 0 {
+		v, ok := getTimeoutFromContext(ctx)
+		if !ok {
+			panic("invalid deadline")
+		}
+		timeout = v
 	}
+	return timeout
 }
 
-func (m RPCMessage) GetTimeout() time.Duration {
-	return time.Until(m.timeoutAt)
+func getTimeoutFromContext(ctx context.Context) (time.Duration, bool) {
+	d, ok := ctx.Deadline()
+	if !ok {
+		return 0, false
+	}
+	now := time.Now()
+	if now.After(d) {
+		return 0, true
+	}
+	return d.Sub(now), true
 }

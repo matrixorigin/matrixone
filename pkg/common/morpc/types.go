@@ -63,8 +63,7 @@ type PayloadMessage interface {
 // So messages sent and received at the network level are RPCMessage.
 type RPCMessage struct {
 	// Ctx context
-	Ctx    context.Context
-	Cancel context.CancelFunc
+	Ctx context.Context
 	// Message raw rpc message
 	Message Message
 
@@ -73,6 +72,7 @@ type RPCMessage struct {
 	stream         bool
 	streamSequence uint32
 	createAt       time.Time
+	timeoutAt      time.Time
 }
 
 // InternalMessage returns true means the rpc message is the internal message in morpc.
@@ -86,14 +86,14 @@ func (m RPCMessage) InternalMessage() bool {
 type RPCClient interface {
 	// Send send a request message to the corresponding server and return a Future to get the
 	// response message.
-	Send(ctx context.Context, backend string, request Message) (*Future, error)
+	Send(ctx context.Context, backend string, request Message, timeout time.Duration) (*Future, error)
 	// NewStream create a stream used to asynchronous stream of sending and receiving messages.
 	// If the underlying connection is reset during the duration of the stream, then the stream will
 	// be closed.
 	NewStream(backend string, lock bool) (Stream, error)
 	// Ping is used to check if the remote service is available. The remote service will reply with
 	// a pong when it receives the ping.
-	Ping(ctx context.Context, backend string) error
+	Ping(ctx context.Context, backend string, timeout time.Duration) error
 	// Close close the client
 	Close() error
 }
@@ -104,12 +104,12 @@ type ClientSession interface {
 	// Close close the client session
 	Close() error
 	// Write writing the response message to the client.
-	Write(ctx context.Context, response Message) error
+	Write(ctx context.Context, response Message, timeout time.Duration) error
 	// AsyncWrite only put message into write queue, and return immediately.
 	AsyncWrite(response Message) error
 	// CreateCache create a message cache using cache ID. Cache will removed if
 	// context is done.
-	CreateCache(ctx context.Context, cacheID uint64) (MessageCache, error)
+	CreateCache(ctx context.Context, cacheID uint64, timeout time.Duration) (MessageCache, error)
 	// DeleteCache delete cache using the spec cacheID
 	DeleteCache(cacheID uint64)
 	// GetCache returns the message cache
@@ -176,9 +176,9 @@ type BackendFactory interface {
 type Backend interface {
 	// Send send the request for future to the corresponding backend.
 	// moerr.ErrBackendClosed returned if backend is closed.
-	Send(ctx context.Context, request Message) (*Future, error)
+	Send(ctx context.Context, request Message, timeout time.Duration) (*Future, error)
 	// SendInternal is similar to Send, but perform on internal message
-	SendInternal(ctx context.Context, request Message) (*Future, error)
+	SendInternal(ctx context.Context, request Message, timeout time.Duration) (*Future, error)
 	// NewStream create a stream used to asynchronous stream of sending and receiving messages.
 	// If the underlying connection is reset during the duration of the stream, then the stream
 	// will be closed.
@@ -204,7 +204,7 @@ type Stream interface {
 	// stream ID as the message ID
 	ID() uint64
 	// Send send message to stream
-	Send(ctx context.Context, request Message) error
+	Send(ctx context.Context, request Message, timeout time.Duration) error
 	// Receive returns a channel to read stream message from server. If nil is received, the receive
 	// loop needs to exit. In any case, Stream.Close needs to be called.
 	Receive() (chan Message, error)

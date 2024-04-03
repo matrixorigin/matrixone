@@ -41,11 +41,10 @@ func TestRPCSend(t *testing.T) {
 				lock.Method_Lock,
 				func(
 					ctx context.Context,
-					cancel context.CancelFunc,
 					req *lock.Request,
 					resp *lock.Response,
 					cs morpc.ClientSession) {
-					writeResponse(ctx, cancel, resp, nil, cs)
+					writeResponse(ctx, resp, nil, cs)
 				})
 
 			ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*100)
@@ -53,7 +52,7 @@ func TestRPCSend(t *testing.T) {
 			resp, err := c.Send(ctx,
 				&lock.Request{
 					LockTable: lock.LockTable{ServiceID: "s1"},
-					Method:    lock.Method_Lock})
+					Method:    lock.Method_Lock}, 0)
 			require.NoError(t, err)
 			assert.NotNil(t, resp)
 			releaseResponse(resp)
@@ -69,12 +68,11 @@ func TestSetRestartServiceRPCSend(t *testing.T) {
 				lock.Method_SetRestartService,
 				func(
 					ctx context.Context,
-					cancel context.CancelFunc,
 					req *lock.Request,
 					resp *lock.Response,
 					cs morpc.ClientSession) {
 					resp.SetRestartService.OK = true
-					writeResponse(ctx, cancel, resp, nil, cs)
+					writeResponse(ctx, resp, nil, cs)
 				})
 
 			ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*100)
@@ -82,7 +80,7 @@ func TestSetRestartServiceRPCSend(t *testing.T) {
 			resp, err := c.Send(ctx,
 				&lock.Request{
 					SetRestartService: lock.SetRestartServiceRequest{ServiceID: "s1"},
-					Method:            lock.Method_SetRestartService})
+					Method:            lock.Method_SetRestartService}, 0)
 			require.NoError(t, err)
 			assert.NotNil(t, resp)
 			require.True(t, resp.SetRestartService.OK)
@@ -99,12 +97,11 @@ func TestCanRestartServiceRPCSend(t *testing.T) {
 				lock.Method_CanRestartService,
 				func(
 					ctx context.Context,
-					cancel context.CancelFunc,
 					req *lock.Request,
 					resp *lock.Response,
 					cs morpc.ClientSession) {
 					resp.CanRestartService.OK = true
-					writeResponse(ctx, cancel, resp, nil, cs)
+					writeResponse(ctx, resp, nil, cs)
 				})
 
 			ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*100)
@@ -112,7 +109,7 @@ func TestCanRestartServiceRPCSend(t *testing.T) {
 			resp, err := c.Send(ctx,
 				&lock.Request{
 					CanRestartService: lock.CanRestartServiceRequest{ServiceID: "s1"},
-					Method:            lock.Method_CanRestartService})
+					Method:            lock.Method_CanRestartService}, 0)
 			require.NoError(t, err)
 			assert.NotNil(t, resp)
 			require.True(t, resp.CanRestartService.OK)
@@ -129,12 +126,11 @@ func TestRemainTxnServiceRPCSend(t *testing.T) {
 				lock.Method_RemainTxnInService,
 				func(
 					ctx context.Context,
-					cancel context.CancelFunc,
 					req *lock.Request,
 					resp *lock.Response,
 					cs morpc.ClientSession) {
 					resp.RemainTxnInService.RemainTxn = -1
-					writeResponse(ctx, cancel, resp, nil, cs)
+					writeResponse(ctx, resp, nil, cs)
 				})
 
 			ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*100)
@@ -142,7 +138,7 @@ func TestRemainTxnServiceRPCSend(t *testing.T) {
 			resp, err := c.Send(ctx,
 				&lock.Request{
 					RemainTxnInService: lock.RemainTxnInServiceRequest{ServiceID: "s1"},
-					Method:             lock.Method_RemainTxnInService})
+					Method:             lock.Method_RemainTxnInService}, 0)
 			require.NoError(t, err)
 			assert.NotNil(t, resp)
 			require.Equal(t, int32(-1), resp.RemainTxnInService.RemainTxn)
@@ -160,7 +156,7 @@ func TestRPCSendWithNotSupport(t *testing.T) {
 			_, err := c.Send(ctx,
 				&lock.Request{
 					LockTable: lock.LockTable{ServiceID: "s1"},
-					Method:    lock.Method_Lock})
+					Method:    lock.Method_Lock}, 0)
 			require.Error(t, err)
 			require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
 		},
@@ -175,18 +171,17 @@ func TestMOErrorCanHandled(t *testing.T) {
 				lock.Method_Lock,
 				func(
 					ctx context.Context,
-					cancel context.CancelFunc,
 					req *lock.Request,
 					resp *lock.Response,
 					cs morpc.ClientSession) {
-					writeResponse(ctx, cancel, resp, moerr.NewDeadLockDetectedNoCtx(), cs)
+					writeResponse(ctx, resp, moerr.NewDeadLockDetectedNoCtx(), cs)
 				})
 
 			ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*100)
 			defer cancel()
 			resp, err := c.Send(ctx, &lock.Request{
 				LockTable: lock.LockTable{ServiceID: "s1"},
-				Method:    lock.Method_Lock})
+				Method:    lock.Method_Lock}, 0)
 			require.Error(t, err)
 			require.Nil(t, resp)
 			assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDeadLockDetected))
@@ -202,18 +197,17 @@ func TestRequestCanBeFilter(t *testing.T) {
 				lock.Method_Lock,
 				func(
 					ctx context.Context,
-					cancel context.CancelFunc,
 					req *lock.Request,
 					resp *lock.Response,
 					cs morpc.ClientSession) {
-					writeResponse(ctx, cancel, resp, nil, cs)
+					writeResponse(ctx, resp, nil, cs)
 				})
 
 			ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*100)
 			defer cancel()
 			resp, err := c.Send(ctx, &lock.Request{
 				LockTable: lock.LockTable{ServiceID: "s1"},
-				Method:    lock.Method_Lock})
+				Method:    lock.Method_Lock}, 0)
 			require.Error(t, err)
 			require.Nil(t, resp)
 			require.Equal(t, err, ctx.Err())
@@ -230,19 +224,18 @@ func TestLockTableBindChanged(t *testing.T) {
 				lock.Method_Lock,
 				func(
 					ctx context.Context,
-					cancel context.CancelFunc,
 					req *lock.Request,
 					resp *lock.Response,
 					cs morpc.ClientSession) {
 					resp.NewBind = &lock.LockTable{ServiceID: "s1"}
-					writeResponse(ctx, cancel, resp, nil, cs)
+					writeResponse(ctx, resp, nil, cs)
 				})
 
 			ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*100)
 			defer cancel()
 			resp, err := c.Send(ctx, &lock.Request{
 				LockTable: lock.LockTable{ServiceID: "s1"},
-				Method:    lock.Method_Lock})
+				Method:    lock.Method_Lock}, 0)
 			require.NoError(t, err)
 			require.NotNil(t, resp.NewBind)
 			assert.Equal(t, lock.LockTable{ServiceID: "s1"}, *resp.NewBind)

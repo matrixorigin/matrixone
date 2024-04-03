@@ -209,7 +209,7 @@ func (s *morpcStream) write(
 		s.logger.Debug("real segment proto size", zap.Int("ProtoSize", seg.ProtoSize()))
 
 		st := time.Now()
-		err := s.cs.Write(ctx, seg)
+		err := s.cs.Write(ctx, seg, 0)
 		v2.LogtailSendNetworkHistogram.Observe(time.Since(st).Seconds())
 		if err != nil {
 			return err

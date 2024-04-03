@@ -16,13 +16,13 @@ package proxy
 
 import (
 	"context"
-	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plugin"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
 
 // pluginRouter is a router implementation that uses external plugin to select CN server.
@@ -136,9 +136,7 @@ func (p *rpcPlugin) Close() error {
 }
 
 func (p *rpcPlugin) request(ctx context.Context, req *plugin.Request) (*plugin.Response, error) {
-	cc, cancel := context.WithTimeout(ctx, p.timeout)
-	defer cancel()
-	f, err := p.client.Send(cc, p.backend, req)
+	f, err := p.client.Send(ctx, p.backend, req, p.timeout)
 	if err != nil {
 		return nil, err
 	}

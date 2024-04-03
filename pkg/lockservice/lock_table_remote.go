@@ -25,7 +25,6 @@ import (
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
-	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"go.uber.org/zap"
 )
 
@@ -69,10 +68,6 @@ func (l *remoteLockTable) lock(
 	cb func(pb.Result, error)) {
 	v2.TxnRemoteLockTotalCounter.Inc()
 
-	// FIXME(fagongzi): too many mem alloc in trace
-	ctx, span := trace.Debug(ctx, "lockservice.lock.remote")
-	defer span.End()
-
 	logRemoteLock(txn, rows, opts, l.bind)
 
 	req := acquireRequest()
@@ -88,7 +83,7 @@ func (l *remoteLockTable) lock(
 	// rpc maybe wait too long, to avoid deadlock, we need unlock txn, and lock again
 	// after rpc completed
 	txn.Unlock()
-	resp, err := l.client.Send(ctx, req)
+	resp, err := l.client.Send(ctx, req, 0)
 	txn.Lock()
 
 	// txn closed
@@ -189,9 +184,6 @@ func (l *remoteLockTable) doUnlock(
 	txn *activeTxn,
 	commitTS timestamp.Timestamp,
 	mutations ...pb.ExtraMutation) error {
-	ctx, cancel := context.WithTimeout(context.Background(), defaultRPCTimeout)
-	defer cancel()
-
 	req := acquireRequest()
 	defer releaseRequest(req)
 
@@ -201,7 +193,7 @@ func (l *remoteLockTable) doUnlock(
 	req.Unlock.CommitTS = commitTS
 	req.Unlock.Mutations = mutations
 
-	resp, err := l.client.Send(ctx, req)
+	resp, err := l.client.Send(context.TODO(), req, defaultRPCTimeout)
 	if err == nil {
 		defer releaseResponse(resp)
 		return l.maybeHandleBindChanged(resp)
@@ -210,9 +202,6 @@ func (l *remoteLockTable) doUnlock(
 }
 
 func (l *remoteLockTable) doGetLock(key []byte, txn pb.WaitTxn) (Lock, bool, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), defaultRPCTimeout)
-	defer cancel()
-
 	req := acquireRequest()
 	defer releaseRequest(req)
 
@@ -221,7 +210,7 @@ func (l *remoteLockTable) doGetLock(key []byte, txn pb.WaitTxn) (Lock, bool, err
 	req.GetTxnLock.Row = key
 	req.GetTxnLock.TxnID = txn.TxnID
 
-	resp, err := l.client.Send(ctx, req)
+	resp, err := l.client.Send(context.TODO(), req, defaultRPCTimeout)
 	if err == nil {
 		defer releaseResponse(resp)
 		if err := l.maybeHandleBindChanged(resp); err != nil {
@@ -252,7 +241,7 @@ func (l *remoteLockTable) close() {
 	logLockTableClosed(l.bind, true)
 }
 
-func (l *remoteLockTable) handleError(txnID []byte, err error) error {
+func (l *remoteLockTable) handleError(_ []byte, err error) error {
 	oldError := err
 	// ErrLockTableBindChanged error must already handled. Skip
 	if moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged) {

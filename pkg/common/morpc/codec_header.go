@@ -33,11 +33,7 @@ func (hc *deadlineContextCodec) Encode(msg *RPCMessage, out *buf.ByteBuf) (int, 
 		return 0, nil
 	}
 
-	v, err := msg.GetTimeoutFromContext()
-	if err != nil {
-		return 0, err
-	}
-	out.WriteInt64(int64(v))
+	out.WriteInt64(int64(msg.GetTimeout()))
 	return 8, nil
 }
 
@@ -50,7 +46,7 @@ func (hc *deadlineContextCodec) Decode(msg *RPCMessage, data []byte) (int, error
 		msg.Ctx = context.Background()
 	}
 
-	msg.Ctx, msg.Cancel = context.WithTimeout(msg.Ctx, time.Duration(buf.Byte2Int64(data)))
+	msg.timeoutAt = time.Now().Add(time.Duration(buf.Byte2Int64(data)))
 	return 8, nil
 }
 

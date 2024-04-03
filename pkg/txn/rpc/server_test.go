@@ -212,7 +212,7 @@ func (cs *testClientSession) Close() error {
 	return nil
 }
 
-func (cs *testClientSession) Write(ctx context.Context, response morpc.Message) error {
+func (cs *testClientSession) Write(ctx context.Context, response morpc.Message, timeout time.Duration) error {
 	cs.c <- response
 	return nil
 }
@@ -223,7 +223,9 @@ func (cs *testClientSession) AsyncWrite(response morpc.Message) error {
 
 func (cs *testClientSession) CreateCache(
 	ctx context.Context,
-	cacheID uint64) (morpc.MessageCache, error) {
+	cacheID uint64,
+	timeout time.Duration,
+) (morpc.MessageCache, error) {
 	panic("not implement")
 }
 
@@ -244,10 +246,8 @@ func newTestRuntime(clock clock.Clock, logger *zap.Logger) runtime.Runtime {
 }
 
 func newMessage(req morpc.Message) morpc.RPCMessage {
-	ctx, cancel := context.WithCancel(context.Background())
 	return morpc.RPCMessage{
-		Ctx:     ctx,
-		Cancel:  cancel,
+		Ctx:     context.Background(),
 		Message: req,
 	}
 }

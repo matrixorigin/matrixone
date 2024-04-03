@@ -44,10 +44,7 @@ func main() {
 		panic(err)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-
-	f, err := cli.Send(ctx, addr, &message.ExampleMessage{MsgID: 1, Content: "hello"})
+	f, err := cli.Send(context.TODO(), addr, &message.ExampleMessage{MsgID: 1, Content: "hello"}, time.Second)
 	if err != nil {
 		panic(err)
 	}
@@ -68,7 +65,7 @@ func startServer() error {
 	}
 	s.RegisterRequestHandler(func(ctx context.Context, request morpc.RPCMessage, sequence uint64, cs morpc.ClientSession) error {
 		// write request back to client
-		return cs.Write(ctx, request.Message)
+		return cs.Write(ctx, request.Message, request.GetTimeout())
 	})
 
 	return s.Start()

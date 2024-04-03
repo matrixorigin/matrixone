@@ -131,8 +131,6 @@ func (k *lockTableKeeper) doKeepRemoteLock(
 		return futures[:0], binds[:0]
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, defaultRPCTimeout)
-	defer cancel()
 	for _, bind := range services {
 		req := acquireRequest()
 		defer releaseRequest(req)
@@ -141,7 +139,7 @@ func (k *lockTableKeeper) doKeepRemoteLock(
 		req.LockTable = bind
 		req.KeepRemoteLock.ServiceID = k.serviceID
 
-		f, err := k.client.AsyncSend(ctx, req)
+		f, err := k.client.AsyncSend(ctx, req, defaultRPCTimeout)
 		if err == nil {
 			futures = append(futures, f)
 			binds = append(binds, bind)
@@ -197,9 +195,7 @@ func (k *lockTableKeeper) doKeepLockTableBind(ctx context.Context) {
 		req.KeepLockTableBind.TxnIDs = k.service.activeTxnHolder.getAllTxnID()
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, k.keepLockTableBindInterval)
-	defer cancel()
-	resp, err := k.client.Send(ctx, req)
+	resp, err := k.client.Send(ctx, req, k.keepLockTableBindInterval)
 	if err != nil {
 		logKeepBindFailed(err)
 		return

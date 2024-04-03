@@ -128,8 +128,7 @@ func NewMessageHandler[REQ, RESP MethodBasedMessage](
 		address,
 		getLogger().RawLogger(),
 		func() Message { return pool.AcquireRequest() },
-		s.respReleaseFunc,
-		WithServerDisableAutoCancelContext())
+		s.respReleaseFunc)
 	if err != nil {
 		return nil, err
 	}
@@ -167,7 +166,7 @@ func (s *handler[REQ, RESP]) Handle(
 func (s *handler[REQ, RESP]) onMessage(
 	ctx context.Context,
 	request RPCMessage,
-	sequence uint64,
+	_ uint64,
 	cs ClientSession) error {
 	ctx, span := trace.Debug(ctx, "lockservice.server.handle")
 	defer span.End()
@@ -181,11 +180,10 @@ func (s *handler[REQ, RESP]) onMessage(
 	handlerCtx, ok := s.getHandler(ctx, req, resp)
 	if !ok {
 		s.pool.ReleaseRequest(req)
-		return cs.Write(ctx, resp)
+		return cs.Write(ctx, resp, request.GetTimeout())
 	}
 
 	fn := func(request RPCMessage) error {
-		defer request.Cancel()
 		req, ok := request.Message.(REQ)
 		if !ok {
 			getLogger().Fatal("received invalid message",
@@ -194,7 +192,7 @@ func (s *handler[REQ, RESP]) onMessage(
 
 		defer s.pool.ReleaseRequest(req)
 		handlerCtx.call(ctx, req, resp)
-		return cs.Write(ctx, resp)
+		return cs.Write(ctx, resp, request.GetTimeout())
 	}
 
 	if handlerCtx.async {

@@ -47,11 +47,11 @@ func TestHandleServer(t *testing.T) {
 		defer cancel()
 
 		rs.RegisterRequestHandler(func(_ context.Context, request RPCMessage, sequence uint64, cs ClientSession) error {
-			return cs.Write(ctx, request.Message)
+			return cs.Write(ctx, request.Message, request.GetTimeout())
 		})
 
 		req := newTestMessage(1)
-		f, err := c.Send(ctx, testAddr, req)
+		f, err := c.Send(ctx, testAddr, req, 0)
 		assert.NoError(t, err)
 
 		defer f.Close()
@@ -72,11 +72,11 @@ func TestHandleServerWithPayloadMessage(t *testing.T) {
 		defer cancel()
 
 		rs.RegisterRequestHandler(func(_ context.Context, request RPCMessage, sequence uint64, cs ClientSession) error {
-			return cs.Write(ctx, request.Message)
+			return cs.Write(ctx, request.Message, request.GetTimeout())
 		})
 
 		req := &testMessage{id: 1, payload: []byte("payload")}
-		f, err := c.Send(ctx, testAddr, req)
+		f, err := c.Send(ctx, testAddr, req, 0)
 		assert.NoError(t, err)
 
 		defer f.Close()
@@ -97,13 +97,13 @@ func TestHandleServerWriteWithClosedSession(t *testing.T) {
 		c := newTestClient(t)
 		rs.RegisterRequestHandler(func(_ context.Context, request RPCMessage, _ uint64, cs ClientSession) error {
 			assert.NoError(t, c.Close())
-			err := cs.Write(ctx, request.Message)
+			err := cs.Write(ctx, request.Message, request.GetTimeout())
 			assert.Error(t, err)
 			return err
 		})
 
 		req := newTestMessage(1)
-		f, err := c.Send(ctx, testAddr, req)
+		f, err := c.Send(ctx, testAddr, req, 0)
 		assert.NoError(t, err)
 
 		defer f.Close()
@@ -124,11 +124,11 @@ func TestHandleServerWriteWithClosedClientSession(t *testing.T) {
 		c := newTestClient(t)
 		rs.RegisterRequestHandler(func(_ context.Context, request RPCMessage, _ uint64, cs ClientSession) error {
 			assert.NoError(t, cs.Close())
-			return cs.Write(ctx, request.Message)
+			return cs.Write(ctx, request.Message, request.GetTimeout())
 		})
 
 		req := newTestMessage(1)
-		f, err := c.Send(ctx, testAddr, req)
+		f, err := c.Send(ctx, testAddr, req, 0)
 		assert.NoError(t, err)
 
 		defer f.Close()
@@ -155,7 +155,7 @@ func TestStreamServer(t *testing.T) {
 			go func() {
 				defer wg.Done()
 				for i := 0; i < n; i++ {
-					assert.NoError(t, cs.Write(ctx, request.Message))
+					assert.NoError(t, cs.Write(ctx, request.Message, request.GetTimeout()))
 				}
 			}()
 			return nil
@@ -168,7 +168,7 @@ func TestStreamServer(t *testing.T) {
 		}()
 
 		req := newTestMessage(st.ID())
-		assert.NoError(t, st.Send(ctx, req))
+		assert.NoError(t, st.Send(ctx, req, 0))
 
 		rc, err := st.Receive()
 		assert.NoError(t, err)
@@ -193,7 +193,7 @@ func TestStreamServerWithCache(t *testing.T) {
 		rs.RegisterRequestHandler(func(ctx context.Context, msg RPCMessage, seq uint64, cs ClientSession) error {
 			request := msg.Message
 			if seq == 1 {
-				cache, err := cs.CreateCache(ctx, request.GetID())
+				cache, err := cs.CreateCache(ctx, request.GetID(), msg.GetTimeout())
 				if err != nil {
 					return err
 				}
@@ -208,10 +208,10 @@ func TestStreamServerWithCache(t *testing.T) {
 				if err != nil {
 					return err
 				}
-				if err := cs.Write(ctx, m); err != nil {
+				if err := cs.Write(ctx, m, msg.GetTimeout()); err != nil {
 					return err
 				}
-				if err := cs.Write(ctx, request); err != nil {
+				if err := cs.Write(ctx, request, msg.GetTimeout()); err != nil {
 					return err
 				}
 			}
@@ -226,11 +226,11 @@ func TestStreamServerWithCache(t *testing.T) {
 
 		req1 := newTestMessage(st.ID())
 		req1.payload = []byte{1}
-		assert.NoError(t, st.Send(ctx, req1))
+		assert.NoError(t, st.Send(ctx, req1, 0))
 
 		req2 := newTestMessage(st.ID())
 		req2.payload = []byte{2}
-		assert.NoError(t, st.Send(ctx, req2))
+		assert.NoError(t, st.Send(ctx, req2, 0))
 
 		cc, err := st.Receive()
 		require.NoError(t, err)
@@ -246,7 +246,7 @@ func TestStreamServerWithCache(t *testing.T) {
 
 func TestServerTimeoutCacheWillRemoved(t *testing.T) {
 	testRPCServer(t, func(rs *server) {
-		ctx, cancel := context.WithTimeout(context.TODO(), time.Second*10)
+		ctx, cancel := context.WithTimeout(context.TODO(), time.Second)
 		defer cancel()
 
 		c := newTestClient(t)
@@ -257,7 +257,7 @@ func TestServerTimeoutCacheWillRemoved(t *testing.T) {
 		cc := make(chan struct{})
 		rs.RegisterRequestHandler(func(ctx context.Context, msg RPCMessage, seq uint64, cs ClientSession) error {
 			request := msg.Message
-			cache, err := cs.CreateCache(ctx, request.GetID())
+			cache, err := cs.CreateCache(ctx, request.GetID(), msg.GetTimeout())
 			if err != nil {
 				return err
 			}
@@ -271,7 +271,7 @@ func TestServerTimeoutCacheWillRemoved(t *testing.T) {
 			assert.NoError(t, st.Close(false))
 		}()
 
-		assert.NoError(t, st.Send(ctx, newTestMessage(1)))
+		assert.NoError(t, st.Send(ctx, newTestMessage(1), 0))
 		<-cc
 		v, ok := rs.sessions.Load(uint64(1))
 		if ok {
@@ -299,7 +299,7 @@ func TestStreamServerWithSequenceNotMatch(t *testing.T) {
 		}()
 
 		rs.RegisterRequestHandler(func(_ context.Context, request RPCMessage, _ uint64, cs ClientSession) error {
-			return cs.Write(ctx, request.Message)
+			return cs.Write(ctx, request.Message, request.GetTimeout())
 		})
 
 		v, err := c.NewStream(testAddr, false)
@@ -311,7 +311,7 @@ func TestStreamServerWithSequenceNotMatch(t *testing.T) {
 
 		st.sequence = 2
 		req := newTestMessage(st.ID())
-		assert.NoError(t, st.Send(ctx, req))
+		assert.NoError(t, st.Send(ctx, req, 0))
 
 		rc, err := st.Receive()
 		assert.NoError(t, err)
@@ -332,7 +332,7 @@ func TestStreamReadCannotBlockWrite(t *testing.T) {
 		}()
 
 		rs.RegisterRequestHandler(func(_ context.Context, request RPCMessage, _ uint64, cs ClientSession) error {
-			return cs.Write(ctx, request.Message)
+			return cs.Write(ctx, request.Message, request.GetTimeout())
 		})
 
 		st, err := c.NewStream(testAddr, false)
@@ -359,7 +359,7 @@ func TestStreamReadCannotBlockWrite(t *testing.T) {
 			}
 		}()
 		for i := 0; i < n; i++ {
-			require.NoError(t, st.Send(ctx, newTestMessage(st.ID())))
+			require.NoError(t, st.Send(ctx, newTestMessage(st.ID()), 0))
 		}
 		<-cc
 	})
@@ -376,14 +376,14 @@ func TestCannotGetClosedBackend(t *testing.T) {
 		}()
 
 		rs.RegisterRequestHandler(func(_ context.Context, request RPCMessage, _ uint64, cs ClientSession) error {
-			return cs.Write(ctx, request.Message)
+			return cs.Write(ctx, request.Message, request.GetTimeout())
 		})
 
 		st, err := c.NewStream(testAddr, true)
 		require.NoError(t, err)
 		require.NoError(t, st.Close(true))
 
-		require.NoError(t, c.Ping(ctx, testAddr))
+		require.NoError(t, c.Ping(ctx, testAddr, 0))
 	})
 }
 
@@ -394,11 +394,11 @@ func TestPingError(t *testing.T) {
 			assert.NoError(t, c.Close())
 		}()
 		rs.RegisterRequestHandler(func(_ context.Context, request RPCMessage, _ uint64, cs ClientSession) error {
-			return cs.Write(context.Background(), request.Message)
+			return cs.Write(context.Background(), request.Message, request.GetTimeout())
 		})
 		ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
 		cancel()
-		require.Error(t, c.Ping(ctx, testAddr))
+		require.Error(t, c.Ping(ctx, testAddr, 0))
 	})
 }
 
@@ -415,14 +415,14 @@ func BenchmarkSend(b *testing.B) {
 		}()
 
 		rs.RegisterRequestHandler(func(_ context.Context, request RPCMessage, sequence uint64, cs ClientSession) error {
-			return cs.Write(ctx, request.Message)
+			return cs.Write(ctx, request.Message, request.GetTimeout())
 		})
 
 		req := newTestMessage(1)
 
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
-			f, err := c.Send(ctx, testAddr, req)
+			f, err := c.Send(ctx, testAddr, req, 0)
 			if err == nil {
 				_, err := f.Get()
 				if err != nil {
@@ -474,6 +474,6 @@ func TestPing(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
 		defer cancel()
 
-		assert.NoError(t, c.Ping(ctx, testAddr))
+		assert.NoError(t, c.Ping(ctx, testAddr, 0))
 	})
 }

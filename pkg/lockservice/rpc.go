@@ -81,11 +81,15 @@ func NewClient(cfg morpc.Config) (Client, error) {
 	return c, nil
 }
 
-func (c *client) Send(ctx context.Context, request *pb.Request) (*pb.Response, error) {
+func (c *client) Send(
+	ctx context.Context,
+	request *pb.Request,
+	timeout time.Duration,
+) (*pb.Response, error) {
 	if err := checkMethodVersion(ctx, request); err != nil {
 		return nil, err
 	}
-	f, err := c.AsyncSend(ctx, request)
+	f, err := c.AsyncSend(ctx, request, timeout)
 	if err != nil {
 		return nil, err
 	}
@@ -111,11 +115,11 @@ func checkMethodVersion(ctx context.Context, req *pb.Request) error {
 	return runtime.CheckMethodVersion(ctx, methodVersions, req)
 }
 
-func (c *client) AsyncSend(ctx context.Context, request *pb.Request) (*morpc.Future, error) {
-	// FIXME(fagongzi): too many mem alloc in trace
-	ctx, span := trace.Debug(ctx, "lockservice.client.send")
-	defer span.End()
-
+func (c *client) AsyncSend(
+	ctx context.Context,
+	request *pb.Request,
+	timeout time.Duration,
+) (*morpc.Future, error) {
 	var sid = ""
 	var address string
 	for i := 0; i < 2; i++ {
@@ -174,7 +178,7 @@ func (c *client) AsyncSend(ctx context.Context, request *pb.Request) (*morpc.Fut
 			zap.String("request", request.DebugString()))
 
 	}
-	return c.client.Send(ctx, address, request)
+	return c.client.Send(ctx, address, request, timeout)
 }
 
 func (c *client) Close() error {
@@ -226,8 +230,7 @@ func NewServer(
 		address,
 		getLogger().RawLogger(),
 		func() morpc.Message { return acquireRequest() },
-		releaseResponse,
-		morpc.WithServerDisableAutoCancelContext())
+		releaseResponse)
 	if err != nil {
 		return nil, err
 	}
@@ -284,9 +287,6 @@ func (s *server) onMessage(
 			getLogger().Debug("skip request by filter",
 				zap.String("request", req.DebugString()))
 		}
-		if msg.Cancel != nil {
-			msg.Cancel()
-		}
 		releaseRequest(req)
 		return nil
 	}
@@ -299,7 +299,6 @@ func (s *server) onMessage(
 			s.address)
 		writeResponse(
 			ctx,
-			msg.Cancel,
 			getResponse(req),
 			err,
 			cs)
@@ -322,7 +321,6 @@ func (s *server) onMessage(
 		req:     req,
 		handler: handler,
 		cs:      cs,
-		cancel:  msg.Cancel,
 		ctx:     ctx,
 	}
 	v2.TxnLockRPCQueueSizeGauge.Set(float64(len(s.requests)))
@@ -339,7 +337,7 @@ func (s *server) handle(ctx context.Context) {
 		req := ctx.req
 		defer releaseRequest(req)
 		resp := getResponse(req)
-		ctx.handler(ctx.ctx, ctx.cancel, req, resp, ctx.cs)
+		ctx.handler(ctx.ctx, req, resp, ctx.cs)
 	}
 
 	for {
@@ -361,15 +359,10 @@ func getResponse(req *pb.Request) *pb.Response {
 }
 
 func writeResponse(
-	ctx context.Context,
-	cancel context.CancelFunc,
+	_ context.Context,
 	resp *pb.Response,
 	err error,
 	cs morpc.ClientSession) {
-	if cancel != nil {
-		defer cancel()
-	}
-
 	if err != nil {
 		resp.WrapError(err)
 	}
@@ -392,5 +385,4 @@ type requestCtx struct {
 	handler RequestHandleFunc
 	cs      morpc.ClientSession
 	ctx     context.Context
-	cancel  context.CancelFunc
 }

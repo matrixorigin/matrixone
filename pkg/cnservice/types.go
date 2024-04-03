@@ -553,7 +553,9 @@ type service struct {
 	responsePool   *sync.Pool
 	logger         *zap.Logger
 	server         morpc.RPCServer
-	requestHandler func(ctx context.Context,
+	requestHandler func(
+		ctx context.Context,
+		timeout time.Duration,
 		cnAddr string,
 		message morpc.Message,
 		cs morpc.ClientSession,

@@ -45,7 +45,6 @@ func TestEncodeAndDecode(t *testing.T) {
 	assert.Equal(t, msg.Message, v.(RPCMessage).Message)
 	assert.NoError(t, err)
 	assert.NotNil(t, v.(RPCMessage).Ctx)
-	assert.NotNil(t, v.(RPCMessage).Cancel)
 }
 
 func TestEncodeAndDecodeWithStream(t *testing.T) {
@@ -66,7 +65,6 @@ func TestEncodeAndDecodeWithStream(t *testing.T) {
 	assert.Equal(t, uint32(1), v.(RPCMessage).streamSequence)
 	assert.NoError(t, err)
 	assert.NotNil(t, v.(RPCMessage).Ctx)
-	assert.NotNil(t, v.(RPCMessage).Cancel)
 }
 
 func TestEncodeAndDecodeWithChecksum(t *testing.T) {
@@ -134,7 +132,6 @@ func TestEncodeAndDecodeWithCompressAndHasPayload(t *testing.T) {
 	assert.Equal(t, msg.Message, v.(RPCMessage).Message)
 	assert.NoError(t, err)
 	assert.NotNil(t, v.(RPCMessage).Ctx)
-	assert.NotNil(t, v.(RPCMessage).Cancel)
 }
 
 func TestEncodeAndDecodeAndChecksumMismatch(t *testing.T) {
@@ -174,7 +171,6 @@ func TestEncodeAndDecodeWithPayload(t *testing.T) {
 	assert.Equal(t, msg.Message, v.(RPCMessage).Message)
 	assert.NoError(t, err)
 	assert.NotNil(t, v.(RPCMessage).Ctx)
-	assert.NotNil(t, v.(RPCMessage).Cancel)
 }
 
 func TestEncodeAndDecodeWithPayloadAndChecksum(t *testing.T) {
@@ -195,7 +191,6 @@ func TestEncodeAndDecodeWithPayloadAndChecksum(t *testing.T) {
 	assert.Equal(t, msg.Message, v.(RPCMessage).Message)
 	assert.NoError(t, err)
 	assert.NotNil(t, v.(RPCMessage).Ctx)
-	assert.NotNil(t, v.(RPCMessage).Cancel)
 }
 
 func TestEncodeAndDecodeWithEmptyPayloadAndChecksum(t *testing.T) {
@@ -216,7 +211,6 @@ func TestEncodeAndDecodeWithEmptyPayloadAndChecksum(t *testing.T) {
 	assert.Equal(t, msg.Message, v.(RPCMessage).Message)
 	assert.NoError(t, err)
 	assert.NotNil(t, v.(RPCMessage).Ctx)
-	assert.NotNil(t, v.(RPCMessage).Cancel)
 }
 
 func TestEncodeAndDecodeWithEmptyPayloadAndChecksumMismatch(t *testing.T) {
@@ -257,7 +251,6 @@ func TestNewWithMaxBodySize(t *testing.T) {
 	assert.Equal(t, msg.Message, v.(RPCMessage).Message)
 	assert.NoError(t, err)
 	assert.NotNil(t, v.(RPCMessage).Ctx)
-	assert.NotNil(t, v.(RPCMessage).Cancel)
 }
 
 func TestBufferScale(t *testing.T) {
@@ -315,5 +308,4 @@ func TestEncodeAndDecodeInternal(t *testing.T) {
 	assert.Equal(t, msg.Message, v.(RPCMessage).Message)
 	assert.NoError(t, err)
 	assert.NotNil(t, v.(RPCMessage).Ctx)
-	assert.NotNil(t, v.(RPCMessage).Cancel)
 }

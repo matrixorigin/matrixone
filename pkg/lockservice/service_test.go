@@ -2313,11 +2313,10 @@ func TestIssue14008(t *testing.T) {
 			alloc.server.RegisterMethodHandler(pb.Method_GetBind,
 				func(
 					ctx context.Context,
-					cf context.CancelFunc,
 					r1 *pb.Request,
 					r2 *pb.Response,
 					cs morpc.ClientSession) {
-					writeResponse(ctx, cf, r2, ErrTxnNotFound, cs)
+					writeResponse(ctx, r2, ErrTxnNotFound, cs)
 				})
 			var wg sync.WaitGroup
 			for i := 0; i < 20; i++ {

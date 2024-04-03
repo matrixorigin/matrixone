@@ -16,11 +16,11 @@ package lockservice
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"sync"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/log"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
@@ -255,7 +255,7 @@ func (l *lockTableAllocator) getTimeoutBinds(now time.Time) []*serviceBinds {
 
 func (l *lockTableAllocator) registerService(
 	serviceID string,
-	tableID uint64) *serviceBinds {
+	_ uint64) *serviceBinds {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
@@ -511,12 +511,11 @@ func (l *lockTableAllocator) initHandler() {
 
 func (l *lockTableAllocator) handleGetBind(
 	ctx context.Context,
-	cancel context.CancelFunc,
 	req *pb.Request,
 	resp *pb.Response,
 	cs morpc.ClientSession) {
 	if !l.canGetBind(req.GetBind.Group, req.GetBind.Table) {
-		writeResponse(ctx, cancel, resp, moerr.NewRetryForCNRollingRestart(), cs)
+		writeResponse(ctx, resp, moerr.NewRetryForCNRollingRestart(), cs)
 		return
 	}
 	resp.GetBind.LockTable = l.Get(
@@ -525,23 +524,22 @@ func (l *lockTableAllocator) handleGetBind(
 		req.GetBind.Table,
 		req.GetBind.OriginTable,
 		req.GetBind.Sharding)
-	writeResponse(ctx, cancel, resp, nil, cs)
+	writeResponse(ctx, resp, nil, cs)
 }
 
 func (l *lockTableAllocator) handleKeepLockTableBind(
 	ctx context.Context,
-	cancel context.CancelFunc,
 	req *pb.Request,
 	resp *pb.Response,
 	cs morpc.ClientSession) {
 	resp.KeepLockTableBind.OK = l.KeepLockTableBind(req.KeepLockTableBind.ServiceID)
 	if !resp.KeepLockTableBind.OK {
-		writeResponse(ctx, cancel, resp, nil, cs)
+		writeResponse(ctx, resp, nil, cs)
 		return
 	}
 	b := l.getServiceBinds(req.KeepLockTableBind.ServiceID)
 	if b.isStatus(pb.Status_ServiceLockEnable) {
-		writeResponse(ctx, cancel, resp, nil, cs)
+		writeResponse(ctx, resp, nil, cs)
 		return
 	}
 	b.setTxnIds(req.KeepLockTableBind.TxnIDs)
@@ -560,38 +558,35 @@ func (l *lockTableAllocator) handleKeepLockTableBind(
 		resp.KeepLockTableBind.Status = req.KeepLockTableBind.Status
 	}
 	l.disableGroupTables(req.KeepLockTableBind.LockTables, b)
-	writeResponse(ctx, cancel, resp, nil, cs)
+	writeResponse(ctx, resp, nil, cs)
 }
 
 func (l *lockTableAllocator) handleSetRestartService(
 	ctx context.Context,
-	cancel context.CancelFunc,
 	req *pb.Request,
 	resp *pb.Response,
 	cs morpc.ClientSession) {
 	l.setRestartService(req.SetRestartService.ServiceID)
 	resp.SetRestartService.OK = true
-	writeResponse(ctx, cancel, resp, nil, cs)
+	writeResponse(ctx, resp, nil, cs)
 }
 
 func (l *lockTableAllocator) handleCanRestartService(
 	ctx context.Context,
-	cancel context.CancelFunc,
 	req *pb.Request,
 	resp *pb.Response,
 	cs morpc.ClientSession) {
 	resp.CanRestartService.OK = l.canRestartService(req.CanRestartService.ServiceID)
-	writeResponse(ctx, cancel, resp, nil, cs)
+	writeResponse(ctx, resp, nil, cs)
 }
 
 func (l *lockTableAllocator) handleRemainTxnInService(
 	ctx context.Context,
-	cancel context.CancelFunc,
 	req *pb.Request,
 	resp *pb.Response,
 	cs morpc.ClientSession) {
 	resp.RemainTxnInService.RemainTxn = l.remainTxnInService(req.RemainTxnInService.ServiceID)
-	writeResponse(ctx, cancel, resp, nil, cs)
+	writeResponse(ctx, resp, nil, cs)
 }
 
 func (l *lockTableAllocator) getLockTablesLocked(group uint32) map[uint64]pb.LockTable {

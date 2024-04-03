@@ -1025,7 +1025,7 @@ func (s *Scope) notifyAndReceiveFromRemote(errChan chan error) {
 				message.Sid = pbpipeline.Status_Last
 				message.Uuid = info.Uuid[:]
 			}
-			if errSend := streamSender.Send(s.Proc.Ctx, message); errSend != nil {
+			if errSend := streamSender.Send(s.Proc.Ctx, message, 0); errSend != nil {
 				closeWithError(errSend)
 				return
 			}

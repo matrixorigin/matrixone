@@ -45,7 +45,7 @@ func (s *service) forwardLock(
 	req.Lock.ServiceID = s.serviceID
 	req.Lock.Rows = rows
 
-	resp, err := s.remote.client.Send(ctx, req)
+	resp, err := s.remote.client.Send(ctx, req, 0)
 	if err != nil {
 		return pb.Result{}, err
 	}

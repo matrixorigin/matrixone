@@ -180,7 +180,12 @@ func (c *client) maybeInitBackends() error {
 	return nil
 }
 
-func (c *client) Send(ctx context.Context, backend string, request Message) (*Future, error) {
+func (c *client) Send(
+	ctx context.Context,
+	backend string,
+	request Message,
+	timeout time.Duration,
+) (*Future, error) {
 	if backend == "" {
 		return nil, moerr.NewBackendCannotConnectNoCtx()
 	}
@@ -194,7 +199,7 @@ func (c *client) Send(ctx context.Context, backend string, request Message) (*Fu
 			return nil, err
 		}
 
-		f, err := b.Send(ctx, request)
+		f, err := b.Send(ctx, request, timeout)
 		if err != nil && err == backendClosed {
 			continue
 		}
@@ -217,7 +222,11 @@ func (c *client) NewStream(backend string, lock bool) (Stream, error) {
 	}
 }
 
-func (c *client) Ping(ctx context.Context, backend string) error {
+func (c *client) Ping(
+	ctx context.Context,
+	backend string,
+	timeout time.Duration,
+) error {
 	if ctx == nil {
 		panic("client Ping nil context")
 	}
@@ -227,7 +236,7 @@ func (c *client) Ping(ctx context.Context, backend string) error {
 			return err
 		}
 
-		f, err := b.SendInternal(ctx, &flagOnlyMessage{flag: flagPing})
+		f, err := b.SendInternal(ctx, &flagOnlyMessage{flag: flagPing}, timeout)
 		if err != nil {
 			if err == backendClosed {
 				continue

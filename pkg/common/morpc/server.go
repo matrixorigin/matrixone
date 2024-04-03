@@ -66,18 +66,6 @@ func WithServerBatchSendSize(size int) ServerOption {
 	}
 }
 
-// WithServerDisableAutoCancelContext disable automatic cancel messaging for the context.
-// The server will receive RPC messages from the client, each message comes with a Context,
-// and morpc will call the handler to process it, and when the handler returns, the Context
-// will be auto cancel the context. But in some scenarios, the handler is asynchronous,
-// so morpc can't directly cancel the context after the handler returns, otherwise many strange
-// problems will occur.
-func WithServerDisableAutoCancelContext() ServerOption {
-	return func(s *server) {
-		s.options.disableAutoCancelContext = true
-	}
-}
-
 type server struct {
 	name        string
 	metrics     *serverMetrics
@@ -89,11 +77,10 @@ type server struct {
 	handler     func(ctx context.Context, request RPCMessage, sequence uint64, cs ClientSession) error
 	sessions    *sync.Map // session-id => *clientSession
 	options     struct {
-		goettyOptions            []goetty.Option
-		bufferSize               int
-		batchSendSize            int
-		filter                   func(Message) bool
-		disableAutoCancelContext bool
+		goettyOptions []goetty.Option
+		bufferSize    int
+		batchSendSize int
+		filter        func(Message) bool
 	}
 	pool struct {
 		futures *sync.Pool
@@ -207,13 +194,6 @@ func (s *server) onMessage(rs goetty.IOSession, value any, sequence uint64) erro
 			zap.String("request", request.Message.DebugString()))
 	}
 
-	// Can't be sure that the Context is properly consumed if disableAutoCancelContext is set to
-	// true. So we use the pessimistic wait for the context to time out automatically be canceled
-	// behavior here, which may cause some resources to be released more slowly.
-	// FIXME: Use the CancelFunc pass to let the handler decide to cancel itself
-	if !s.options.disableAutoCancelContext && request.Cancel != nil {
-		defer request.Cancel()
-	}
 	// get requestID here to avoid data race, because the request maybe released in handler
 	requestID := request.Message.GetID()
 
@@ -233,7 +213,7 @@ func (s *server) onMessage(rs goetty.IOSession, value any, sequence uint64) erro
 			switch m.flag {
 			case flagPing:
 				sendAt := time.Now()
-				left, _ := request.GetTimeoutFromContext()
+				left := request.GetTimeout()
 				n := len(cs.c)
 				err := cs.WriteRPCMessage(RPCMessage{
 					Ctx:      request.Ctx,
@@ -242,6 +222,7 @@ func (s *server) onMessage(rs goetty.IOSession, value any, sequence uint64) erro
 						flag: flagPong,
 						id:   m.id,
 					},
+					timeoutAt: time.Now().Add(left),
 				})
 				if err != nil {
 					failedAt := time.Now()
@@ -365,13 +346,7 @@ func (s *server) startWriteLoop(cs *clientSession) error {
 							continue
 						}
 
-						v, err := f.send.GetTimeoutFromContext()
-						if err != nil {
-							f.messageSent(err)
-							continue
-						}
-
-						timeout += v
+						timeout += f.send.GetTimeout()
 						// Record the information of some responses in advance, because after flush,
 						// these responses will be released, thus avoiding causing data race.
 						if ce != nil {
@@ -590,21 +565,22 @@ func (cs *clientSession) WriteRPCMessage(msg RPCMessage) error {
 
 func (cs *clientSession) Write(
 	ctx context.Context,
-	response Message) error {
-	if ctx == nil {
-		panic("Write nil context")
-	}
+	response Message,
+	timeout time.Duration,
+) error {
 	return cs.WriteRPCMessage(RPCMessage{
-		Ctx:     ctx,
-		Message: response,
+		Ctx:       ctx,
+		Message:   response,
+		timeoutAt: time.Now().Add(getTimeout(ctx, timeout)),
 	})
 }
 
 func (cs *clientSession) AsyncWrite(response Message) error {
 	_, err := cs.send(RPCMessage{
-		Ctx:     context.Background(),
-		Message: response,
-		oneWay:  true,
+		Ctx:       context.Background(),
+		Message:   response,
+		oneWay:    true,
+		timeoutAt: time.Now().Add(time.Hour),
 	})
 	return err
 }
@@ -688,7 +664,9 @@ func (cs *clientSession) validateStreamRequest(
 
 func (cs *clientSession) CreateCache(
 	ctx context.Context,
-	cacheID uint64) (MessageCache, error) {
+	cacheID uint64,
+	timeout time.Duration,
+) (MessageCache, error) {
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
 
@@ -698,7 +676,7 @@ func (cs *clientSession) CreateCache(
 
 	v, ok := cs.mu.caches[cacheID]
 	if !ok {
-		v = cacheWithContext{ctx: ctx, cache: newCache()}
+		v = cacheWithContext{cache: newCache(), timeoutAt: time.Now().Add(timeout)}
 		cs.mu.caches[cacheID] = v
 		cs.startCheckCacheTimeout()
 	}
@@ -733,15 +711,99 @@ func (cs *clientSession) GetCache(cacheID uint64) (MessageCache, error) {
 }
 
 type cacheWithContext struct {
-	ctx   context.Context
-	cache MessageCache
+	cache     MessageCache
+	timeoutAt time.Time
 }
 
 func (c cacheWithContext) closeIfTimeout() bool {
-	select {
-	case <-c.ctx.Done():
-		return true
-	default:
-		return false
+	return time.Now().After(c.timeoutAt)
+}
+
+type testClientSession struct {
+	sync.RWMutex
+	closed bool
+	c      chan Message
+	caches map[uint64]cacheWithContext
+}
+
+func NewTestClientSession() (ClientSession, chan Message) {
+	cs := &testClientSession{
+		c:      make(chan Message, 1024),
+		caches: make(map[uint64]cacheWithContext),
 	}
+	return cs, cs.c
+}
+
+func (cs *testClientSession) Close() error {
+	cs.Lock()
+	defer cs.Unlock()
+	cs.closed = true
+	return nil
+}
+
+func (cs *testClientSession) Write(ctx context.Context, response Message, timeout time.Duration) error {
+	cs.RLock()
+	defer cs.RUnlock()
+	if cs.closed {
+		return moerr.NewClientClosedNoCtx()
+	}
+	cs.c <- response
+	return nil
+}
+
+func (cs *testClientSession) AsyncWrite(response Message) error {
+	cs.RLock()
+	defer cs.RUnlock()
+	if cs.closed {
+		return moerr.NewClientClosedNoCtx()
+	}
+	cs.c <- response
+	return nil
+}
+
+func (cs *testClientSession) CreateCache(ctx context.Context, cacheID uint64, timeout time.Duration) (MessageCache, error) {
+	cs.Lock()
+	defer cs.Unlock()
+
+	if cs.closed {
+		return nil, moerr.NewClientClosedNoCtx()
+	}
+
+	v, ok := cs.caches[cacheID]
+	if !ok {
+		v = cacheWithContext{cache: newCache(), timeoutAt: time.Now().Add(timeout)}
+		cs.caches[cacheID] = v
+	}
+	return v.cache, nil
+}
+
+func (cs *testClientSession) DeleteCache(cacheID uint64) {
+	cs.Lock()
+	defer cs.Unlock()
+
+	if cs.closed {
+		return
+	}
+	if c, ok := cs.caches[cacheID]; ok {
+		c.cache.Close()
+		delete(cs.caches, cacheID)
+	}
+}
+
+func (cs *testClientSession) GetCache(cacheID uint64) (MessageCache, error) {
+	cs.RLock()
+	defer cs.RUnlock()
+
+	if cs.closed {
+		return nil, moerr.NewClientClosedNoCtx()
+	}
+
+	if c, ok := cs.caches[cacheID]; ok {
+		return c.cache, nil
+	}
+	return nil, nil
+}
+
+func (cs *testClientSession) RemoteAddress() string {
+	return ""
 }

@@ -680,7 +680,7 @@ func runBindChangedTests(
 	)
 }
 
-func waitBindDisabled(t *testing.T, alloc *lockTableAllocator, sid string) {
+func waitBindDisabled(_ *testing.T, alloc *lockTableAllocator, sid string) {
 	for {
 		b := alloc.getServiceBinds(sid)
 		if b == nil {

@@ -20,12 +20,11 @@ import (
 	"sync"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"go.uber.org/zap"
-
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
 
 type ShardInfo struct {
@@ -73,7 +72,7 @@ func GetShardInfo(address string, shardID uint64) (ShardInfo, bool, error) {
 	rpcReq := &RPCRequest{
 		Request: req,
 	}
-	future, err := cc.Send(ctx, address, rpcReq)
+	future, err := cc.Send(ctx, address, rpcReq, 0)
 	if err != nil {
 		return ShardInfo{}, false, err
 	}

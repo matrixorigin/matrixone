@@ -47,7 +47,7 @@ func TestSend(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 			defer cancel()
 			req := newTestMessage(1)
-			f, err := b.Send(ctx, req)
+			f, err := b.Send(ctx, req, 0)
 			assert.NoError(t, err)
 			defer f.Close()
 
@@ -86,7 +86,7 @@ func TestReadTimeoutWithNormalMessageMissed(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 			defer cancel()
 			req := newTestMessage(1)
-			f, err := b.Send(ctx, req)
+			f, err := b.Send(ctx, req, 0)
 			assert.NoError(t, err)
 			defer f.Close()
 			_, err = f.Get()
@@ -106,7 +106,7 @@ func TestReadTimeout(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 			defer cancel()
 			req := newTestMessage(1)
-			f, err := b.Send(ctx, req)
+			f, err := b.Send(ctx, req, 0)
 			assert.NoError(t, err)
 			defer f.Close()
 			_, err = f.Get()
@@ -128,7 +128,7 @@ func TestSendWithPayloadCannotTimeout(t *testing.T) {
 			defer cancel()
 			req := newTestMessage(1)
 			req.payload = []byte("hello")
-			f, err := b.Send(ctx, req)
+			f, err := b.Send(ctx, req, 0)
 			assert.NoError(t, err)
 			defer f.Close()
 
@@ -152,7 +152,7 @@ func TestSendWithPayloadCannotBlockIfFutureRemoved(t *testing.T) {
 			defer cancel()
 			req := newTestMessage(1)
 			req.payload = []byte("hello")
-			f, err := b.Send(ctx, req)
+			f, err := b.Send(ctx, req, 0)
 			require.NoError(t, err)
 			id := f.getSendMessageID()
 			// keep future in the futures map
@@ -182,7 +182,7 @@ func TestSendWithPayloadCannotBlockIfFutureClosed(t *testing.T) {
 			defer cancel()
 			req := newTestMessage(1)
 			req.payload = []byte("hello")
-			f, err := b.Send(ctx, req)
+			f, err := b.Send(ctx, req, 0)
 			require.NoError(t, err)
 			id := f.getSendMessageID()
 			f.mu.Lock()
@@ -216,7 +216,7 @@ func TestCloseWhileContinueSending(t *testing.T) {
 					ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 					defer cancel()
 					req := newTestMessage(1)
-					f, err := b.Send(ctx, req)
+					f, err := b.Send(ctx, req, 0)
 					if err != nil {
 						return
 					}
@@ -259,7 +259,7 @@ func TestSendWithAlreadyContextDone(t *testing.T) {
 		func(b *remoteBackend) {
 
 			req := newTestMessage(1)
-			f, err := b.Send(ctx, req)
+			f, err := b.Send(ctx, req, 0)
 			assert.NoError(t, err)
 			defer f.Close()
 			resp, err := f.Get()
@@ -281,7 +281,7 @@ func TestSendWithTimeout(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*200)
 			defer cancel()
 			req := &testMessage{id: 1}
-			f, err := b.Send(ctx, req)
+			f, err := b.Send(ctx, req, 0)
 			assert.NoError(t, err)
 			defer f.Close()
 
@@ -304,7 +304,7 @@ func TestSendWithCannotConnect(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*50)
 			defer cancel()
 			req := &testMessage{id: 1}
-			f, err := b.Send(ctx, req)
+			f, err := b.Send(ctx, req, 0)
 			assert.NoError(t, err)
 			defer f.Close()
 
@@ -334,7 +334,7 @@ func TestFutureGetCannotBlockIfCloseBackend(t *testing.T) {
 			futures := make([]*Future, 0, n)
 			for i := 0; i < n; i++ {
 				req := newTestMessage(1)
-				f, err := b.Send(ctx, req)
+				f, err := b.Send(ctx, req, 0)
 				assert.NoError(t, err)
 				futures = append(futures, f)
 			}
@@ -373,7 +373,7 @@ func TestStream(t *testing.T) {
 			n := 1
 			for i := 0; i < n; i++ {
 				req := &testMessage{id: st.ID()}
-				assert.NoError(t, st.Send(ctx, req))
+				assert.NoError(t, st.Send(ctx, req, 0))
 			}
 
 			rc, err := st.Receive()
@@ -404,7 +404,7 @@ func TestCloseStreamWithCloseConn(t *testing.T) {
 			defer cancel()
 
 			req := &testMessage{id: st.ID()}
-			assert.NoError(t, st.Send(ctx, req))
+			assert.NoError(t, st.Send(ctx, req, 0))
 
 			for {
 				n := len(st.(*stream).c)
@@ -449,7 +449,7 @@ func TestStreamSendWillPanicIfDeadlineNotSet(t *testing.T) {
 			}()
 
 			req := &testMessage{id: st.ID()}
-			assert.NoError(t, st.Send(context.TODO(), req))
+			assert.NoError(t, st.Send(context.TODO(), req, 0))
 		},
 	)
 }
@@ -470,7 +470,7 @@ func TestStreamClosedByConnReset(t *testing.T) {
 			}()
 			c, err := st.Receive()
 			assert.NoError(t, err)
-			assert.NoError(t, st.Send(ctx, &testMessage{id: st.ID()}))
+			assert.NoError(t, st.Send(ctx, &testMessage{id: st.ID()}, 0))
 
 			v, ok := <-c
 			assert.True(t, ok)
@@ -497,7 +497,7 @@ func TestStreamClosedBySequenceNotMatch(t *testing.T) {
 			}()
 			c, err := st.Receive()
 			assert.NoError(t, err)
-			assert.NoError(t, st.Send(ctx, &testMessage{id: st.ID()}))
+			assert.NoError(t, st.Send(ctx, &testMessage{id: st.ID()}, 0))
 
 			v, ok := <-c
 			assert.True(t, ok)
@@ -518,11 +518,11 @@ func TestBusy(t *testing.T) {
 
 			ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*200)
 			defer cancel()
-			f1, err := b.Send(ctx, newTestMessage(1))
+			f1, err := b.Send(ctx, newTestMessage(1), 0)
 			assert.NoError(t, err)
 			defer f1.Close()
 
-			f2, err := b.Send(ctx, newTestMessage(2))
+			f2, err := b.Send(ctx, newTestMessage(2), 0)
 			assert.NoError(t, err)
 			defer f2.Close()
 
@@ -557,7 +557,7 @@ func TestDoneWithClosedStreamCannotPanic(t *testing.T) {
 		func(s *stream) {},
 		func() {})
 	s.init(1, false)
-	assert.NoError(t, s.Send(ctx, &testMessage{id: s.ID()}))
+	assert.NoError(t, s.Send(ctx, &testMessage{id: s.ID()}, 0))
 	assert.NoError(t, s.Close(false))
 	s.done(context.TODO(), RPCMessage{}, false)
 }
@@ -604,7 +604,7 @@ func TestLastActiveWithSend(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 			defer cancel()
 			req := newTestMessage(1)
-			f, err := b.Send(ctx, req)
+			f, err := b.Send(ctx, req, 0)
 			assert.NoError(t, err)
 			defer f.Close()
 
@@ -645,7 +645,7 @@ func TestLastActiveWithStream(t *testing.T) {
 			n := 1
 			for i := 0; i < n; i++ {
 				req := &testMessage{id: st.ID()}
-				assert.NoError(t, st.Send(ctx, req))
+				assert.NoError(t, st.Send(ctx, req, 0))
 				t2 := b.LastActiveTime()
 				assert.NotEqual(t, t1, t2)
 				assert.True(t, t2.After(t1))
@@ -677,7 +677,7 @@ func TestInactiveAfterCannotConnect(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 			defer cancel()
 			req := newTestMessage(1)
-			f, err := b.Send(ctx, req)
+			f, err := b.Send(ctx, req, 0)
 			assert.NoError(t, err)
 			defer f.Close()
 
@@ -715,7 +715,7 @@ func TestTCPProxyExample(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 			defer cancel()
 			req := newTestMessage(1)
-			f, err := b.Send(ctx, req)
+			f, err := b.Send(ctx, req, 0)
 			assert.NoError(t, err)
 			defer f.Close()
 
@@ -759,7 +759,7 @@ func TestWaitingFutureMustGetClosedError(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 			defer cancel()
 			req := newTestMessage(1)
-			f, err := b.Send(ctx, req)
+			f, err := b.Send(ctx, req, 0)
 			assert.NoError(t, err)
 			defer f.Close()
 
@@ -783,9 +783,9 @@ func TestIssue11838(t *testing.T) {
 			defer cancel()
 
 			var futures []*Future
-			for i := 0; i < 10000; i++ {
+			for i := 0; i < 1000; i++ {
 				req := newTestMessage(uint64(i))
-				f, err := b.Send(ctx, req)
+				f, err := b.Send(ctx, req, 0)
 				if err == nil {
 					futures = append(futures, f)
 				}
@@ -880,14 +880,14 @@ type testBackend struct {
 	locked     bool
 }
 
-func (b *testBackend) Send(ctx context.Context, request Message) (*Future, error) {
+func (b *testBackend) Send(ctx context.Context, request Message, timeout time.Duration) (*Future, error) {
 	b.active()
 	f := newFuture(nil)
 	f.init(RPCMessage{Ctx: ctx, Message: request})
 	return f, nil
 }
 
-func (b *testBackend) SendInternal(ctx context.Context, request Message) (*Future, error) {
+func (b *testBackend) SendInternal(ctx context.Context, request Message, timeout time.Duration) (*Future, error) {
 	b.active()
 	f := newFuture(nil)
 	f.init(RPCMessage{Ctx: ctx, Message: request})

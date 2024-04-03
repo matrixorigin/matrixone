@@ -216,7 +216,7 @@ func TestRPCPlugin(t *testing.T) {
 				return cs.Write(ctx, &plugin.Response{
 					RequestID:      r.RequestID,
 					Recommendation: tt.response,
-				})
+				}, msg.GetTimeout())
 			})
 			require.NoError(t, s.Start())
 			defer func() {

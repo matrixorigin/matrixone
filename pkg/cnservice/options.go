@@ -16,6 +16,7 @@ package cnservice
 
 import (
 	"context"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/bootstrap"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
@@ -64,7 +65,9 @@ func WithTxnTraceData(traceDataPath string) Option {
 }
 
 // WithMessageHandle setup message handle
-func WithMessageHandle(f func(ctx context.Context,
+func WithMessageHandle(f func(
+	ctx context.Context,
+	timeout time.Duration,
 	cnAddr string,
 	message morpc.Message,
 	cs morpc.ClientSession,

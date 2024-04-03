@@ -109,7 +109,9 @@ func NewService(
 		gossipNode:  gossipNode,
 	}
 
-	srv.requestHandler = func(ctx context.Context,
+	srv.requestHandler = func(
+		ctx context.Context,
+		timeout time.Duration,
 		cnAddr string,
 		message morpc.Message,
 		cs morpc.ClientSession,
@@ -205,8 +207,7 @@ func NewService(
 					srv.releaseMessage(m.Message.(*pipeline.Message))
 				}
 			}),
-		),
-		morpc.WithServerDisableAutoCancelContext())
+		))
 	if err != nil {
 		return nil, err
 	}
@@ -214,7 +215,9 @@ func NewService(
 	srv.server = server
 	srv.storeEngine = pu.StorageEngine
 
-	srv.requestHandler = func(ctx context.Context,
+	srv.requestHandler = func(
+		ctx context.Context,
+		timeout time.Duration,
 		cnAddr string,
 		message morpc.Message,
 		cs morpc.ClientSession,
@@ -374,20 +377,21 @@ func (s *service) handleRequest(
 	}
 	switch msg.GetSid() {
 	case pipeline.Status_WaitingNext:
-		return handleWaitingNextMsg(ctx, req, cs)
+		return handleWaitingNextMsg(ctx, req, cs, value.GetTimeout())
 	case pipeline.Status_Last:
 		if msg.IsPipelineMessage() { // only pipeline type need assemble msg now.
-			if err := handleAssemblePipeline(ctx, req, cs); err != nil {
+			if err := handleAssemblePipeline(ctx, req, cs, value.GetTimeout()); err != nil {
 				return err
 			}
 		}
 	}
 
 	go func() {
-		defer value.Cancel()
 		s.pipelines.counter.Add(1)
 		defer s.pipelines.counter.Add(-1)
-		s.requestHandler(ctx,
+		s.requestHandler(
+			ctx,
+			value.GetTimeout(),
 			s.pipelineServiceServiceAddr(),
 			req,
 			cs,
@@ -703,13 +707,18 @@ func (s *service) GetBootstrapService() bootstrap.Service {
 }
 
 // put the waiting-next type msg into client session's cache and return directly
-func handleWaitingNextMsg(ctx context.Context, message morpc.Message, cs morpc.ClientSession) error {
+func handleWaitingNextMsg(
+	ctx context.Context,
+	message morpc.Message,
+	cs morpc.ClientSession,
+	timeout time.Duration,
+) error {
 	msg, _ := message.(*pipeline.Message)
 	switch msg.GetCmd() {
 	case pipeline.Method_PipelineMessage:
 		var cache morpc.MessageCache
 		var err error
-		if cache, err = cs.CreateCache(ctx, message.GetID()); err != nil {
+		if cache, err = cs.CreateCache(ctx, message.GetID(), timeout); err != nil {
 			return err
 		}
 		cache.Add(message)
@@ -717,11 +726,16 @@ func handleWaitingNextMsg(ctx context.Context, message morpc.Message, cs morpc.C
 	return nil
 }
 
-func handleAssemblePipeline(ctx context.Context, message morpc.Message, cs morpc.ClientSession) error {
+func handleAssemblePipeline(
+	ctx context.Context,
+	message morpc.Message,
+	cs morpc.ClientSession,
+	timeout time.Duration,
+) error {
 	var data []byte
 
 	cnt := uint64(0)
-	cache, err := cs.CreateCache(ctx, message.GetID())
+	cache, err := cs.CreateCache(ctx, message.GetID(), timeout)
 	if err != nil {
 		return err
 	}

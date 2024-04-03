@@ -355,7 +355,7 @@ func sendBatchToClientSession(ctx context.Context, encodeBatData []byte, wcs pro
 			msg.Sid = pipeline.Status_Last
 			msg.Checksum = checksum
 		}
-		if err := wcs.Cs.Write(ctx, msg); err != nil {
+		if err := wcs.Cs.Write(ctx, msg, 0); err != nil {
 			return err
 		}
 		return nil
@@ -378,7 +378,7 @@ func sendBatchToClientSession(ctx context.Context, encodeBatData []byte, wcs pro
 			msg.Checksum = checksum
 		}
 
-		if err := wcs.Cs.Write(ctx, msg); err != nil {
+		if err := wcs.Cs.Write(ctx, msg, 0); err != nil {
 			return err
 		}
 		start = end

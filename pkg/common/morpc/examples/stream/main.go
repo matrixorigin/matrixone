@@ -56,10 +56,7 @@ func main() {
 		}
 	}()
 
-	ctx, cancel := context.WithTimeout(context.TODO(), time.Second*10)
-	defer cancel()
-
-	if err := st.Send(ctx, &message.ExampleMessage{MsgID: st.ID(), Content: "first message"}); err != nil {
+	if err := st.Send(context.TODO(), &message.ExampleMessage{MsgID: st.ID(), Content: "first message"}, time.Second*10); err != nil {
 		panic(err)
 	}
 
@@ -86,7 +83,10 @@ func startServer() error {
 		go func() {
 			request := msg.Message
 			for i := 0; i < 10; i++ {
-				if err := cs.Write(ctx, &message.ExampleMessage{MsgID: request.GetID(), Content: fmt.Sprintf("stream-%d", i)}); err != nil {
+				if err := cs.Write(
+					ctx,
+					&message.ExampleMessage{MsgID: request.GetID(), Content: fmt.Sprintf("stream-%d", i)},
+					msg.GetTimeout()); err != nil {
 					panic(err)
 				}
 			}

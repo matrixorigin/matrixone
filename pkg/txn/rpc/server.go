@@ -148,7 +148,6 @@ func NewTxnServer(
 	rpc, err := morpc.NewRPCServer("txn-server", address,
 		morpc.NewMessageCodec(s.acquireRequest, codecOpts...),
 		morpc.WithServerLogger(s.rt.Logger().RawLogger()),
-		morpc.WithServerDisableAutoCancelContext(),
 		morpc.WithServerGoettyOptions(goetty.WithSessionReleaseMsgFunc(func(v interface{}) {
 			m := v.(morpc.RPCMessage)
 			if !m.InternalMessage() {
@@ -202,12 +201,10 @@ func (s *server) onMessage(
 	}
 	if s.options.filter != nil && !s.options.filter(m) {
 		s.releaseRequest(m)
-		msg.Cancel()
 		return nil
 	}
 	if err := checkMethodVersion(ctx, m); err != nil {
 		s.releaseRequest(m)
-		msg.Cancel()
 		return err
 	}
 	handler, ok := s.handlers[m.Method]
@@ -218,7 +215,6 @@ func (s *server) onMessage(
 	select {
 	case <-ctx.Done():
 		s.releaseRequest(m)
-		msg.Cancel()
 		return nil
 	default:
 	}
@@ -227,7 +223,7 @@ func (s *server) onMessage(
 	s.queue <- executor{
 		t:       t,
 		ctx:     ctx,
-		cancel:  msg.Cancel,
+		timeout: msg.GetTimeout(),
 		req:     m,
 		cs:      cs,
 		handler: handler,
@@ -281,7 +277,7 @@ func (s *server) handleTxnRequest(ctx context.Context) {
 type executor struct {
 	t       time.Time
 	ctx     context.Context
-	cancel  context.CancelFunc
+	timeout time.Duration
 	req     *txn.TxnRequest
 	cs      morpc.ClientSession
 	handler TxnRequestHandleFunc
@@ -289,7 +285,6 @@ type executor struct {
 }
 
 func (r executor) exec() ([]byte, error) {
-	defer r.cancel()
 	defer r.s.releaseRequest(r.req)
 	resp := r.s.acquireResponse()
 	if err := r.handler(r.ctx, r.req, resp); err != nil {
@@ -298,7 +293,7 @@ func (r executor) exec() ([]byte, error) {
 	}
 	resp.RequestID = r.req.RequestID
 	txnID := r.req.Txn.ID
-	err := r.cs.Write(r.ctx, resp)
+	err := r.cs.Write(r.ctx, resp, r.timeout)
 	return txnID, err
 }
 

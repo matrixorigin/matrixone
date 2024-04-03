@@ -105,7 +105,10 @@ func (s *sender) Close() error {
 	return s.client.Close()
 }
 
-func (s *sender) Send(ctx context.Context, requests []txn.TxnRequest) (*SendResult, error) {
+func (s *sender) Send(
+	ctx context.Context,
+	requests []txn.TxnRequest,
+) (*SendResult, error) {
 	sr := s.acquireSendResult()
 	if len(requests) == 1 {
 		sr.reset(requests)
@@ -133,7 +136,7 @@ func (s *sender) Send(ctx context.Context, requests []txn.TxnRequest) (*SendResu
 		}
 
 		requests[idx].RequestID = st.ID()
-		if err := st.Send(ctx, &requests[idx]); err != nil {
+		if err := st.Send(ctx, &requests[idx], 0); err != nil {
 			sr.Release()
 			return nil, err
 		}
@@ -170,7 +173,7 @@ func (s *sender) doSend(ctx context.Context, request txn.TxnRequest) (txn.TxnRes
 	}
 
 	start := time.Now()
-	f, err := s.client.Send(ctx, tn.Address, &request)
+	f, err := s.client.Send(ctx, tn.Address, &request, 0)
 	if err != nil {
 		return txn.TxnResponse{}, err
 	}
@@ -184,7 +187,7 @@ func (s *sender) doSend(ctx context.Context, request txn.TxnRequest) (txn.TxnRes
 	return *(v.(*txn.TxnResponse)), nil
 }
 
-func (s *sender) createStream(ctx context.Context, tn metadata.TNShard, size int) (morpc.Stream, error) {
+func (s *sender) createStream(ctx context.Context, tn metadata.TNShard, _ int) (morpc.Stream, error) {
 	if s.options.localDispatch != nil {
 		if h := s.options.localDispatch(tn); h != nil {
 			ls := s.acquireLocalStream()
@@ -217,11 +220,11 @@ func (s *sender) acquireSendResult() *SendResult {
 }
 
 type sendMessage struct {
-	request morpc.Message
-	// opts            morpc.SendOptions
+	request         morpc.Message
 	handleFunc      TxnRequestHandleFunc
 	responseFactory func() *txn.TxnResponse
 	ctx             context.Context
+	timeout         time.Duration
 }
 
 type localStream struct {
@@ -264,7 +267,11 @@ func (ls *localStream) ID() uint64 {
 	return 0
 }
 
-func (ls *localStream) Send(ctx context.Context, request morpc.Message) error {
+func (ls *localStream) Send(
+	ctx context.Context,
+	request morpc.Message,
+	timeout time.Duration,
+) error {
 	if ls.closed {
 		panic("send after closed")
 	}
@@ -274,6 +281,7 @@ func (ls *localStream) Send(ctx context.Context, request morpc.Message) error {
 		handleFunc:      ls.handleFunc,
 		responseFactory: ls.responseFactory,
 		ctx:             ls.ctx,
+		timeout:         timeout,
 	}
 	return nil
 }

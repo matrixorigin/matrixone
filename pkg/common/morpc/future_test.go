@@ -57,7 +57,7 @@ func TestNewFuture(t *testing.T) {
 	defer cancel()
 
 	f := newFuture(nil)
-	f.init(newTestRPCMessage(ctx, 1))
+	f.init(newTestRPCMessage(ctx, 1, time.Second))
 	defer f.Close()
 
 	assert.NotNil(t, f)
@@ -74,7 +74,7 @@ func TestReleaseFuture(t *testing.T) {
 
 	req := newTestMessage(1)
 	f := newFuture(func(f *Future) { f.reset() })
-	f.init(newTestRPCMessage(ctx, 1))
+	f.init(newTestRPCMessage(ctx, 1, time.Second))
 	f.c <- req
 	f.Close()
 	assert.True(t, f.mu.closed)
@@ -90,7 +90,7 @@ func TestGet(t *testing.T) {
 	req := newTestMessage(1)
 	f := newFuture(func(f *Future) { f.reset() })
 	f.ref()
-	f.init(newTestRPCMessage(ctx, 1))
+	f.init(newTestRPCMessage(ctx, 1, time.Second))
 	defer f.Close()
 
 	f.messageSent(nil)
@@ -106,7 +106,7 @@ func TestGetWithTimeout(t *testing.T) {
 
 	f := newFuture(func(f *Future) { f.reset() })
 	f.ref()
-	f.init(newTestRPCMessage(ctx, 1))
+	f.init(newTestRPCMessage(ctx, 1, 1))
 	defer f.Close()
 
 	f.messageSent(nil)
@@ -122,7 +122,7 @@ func TestGetWithError(t *testing.T) {
 
 	f := newFuture(func(f *Future) { f.reset() })
 	f.ref()
-	f.init(newTestRPCMessage(ctx, 1))
+	f.init(newTestRPCMessage(ctx, 1, time.Second))
 	defer f.Close()
 
 	errResp := moerr.NewBackendClosed(context.TODO())
@@ -140,7 +140,7 @@ func TestGetWithInvalidResponse(t *testing.T) {
 	defer cancel()
 
 	f := newFuture(func(f *Future) { f.reset() })
-	f.init(newTestRPCMessage(ctx, 1))
+	f.init(newTestRPCMessage(ctx, 1, time.Second))
 	defer f.Close()
 
 	f.done(newTestMessage(2), nil)
@@ -150,7 +150,7 @@ func TestGetWithInvalidResponse(t *testing.T) {
 func TestTimeout(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
 	f := newFuture(func(f *Future) { f.reset() })
-	f.init(newTestRPCMessage(ctx, 1))
+	f.init(newTestRPCMessage(ctx, 1, time.Hour))
 	defer f.Close()
 
 	assert.False(t, f.timeout())
@@ -158,6 +158,6 @@ func TestTimeout(t *testing.T) {
 	assert.True(t, f.timeout())
 }
 
-func newTestRPCMessage(ctx context.Context, id uint64) RPCMessage {
-	return RPCMessage{Ctx: ctx, Message: newTestMessage(id)}
+func newTestRPCMessage(ctx context.Context, id uint64, timeout time.Duration) RPCMessage {
+	return RPCMessage{Ctx: ctx, Message: newTestMessage(id), timeoutAt: time.Now().Add(timeout)}
 }

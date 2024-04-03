@@ -31,7 +31,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
-	"github.com/matrixorigin/matrixone/pkg/common/morpc/mock_morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -141,6 +140,7 @@ func Test_CnServerMessageHandler(t *testing.T) {
 			defer close(done)
 			_ = CnServerMessageHandler(
 				ctx,
+				time.Second*100,
 				"",
 				msg,
 				nil,
@@ -176,6 +176,7 @@ func Test_CnServerMessageHandler(t *testing.T) {
 			defer close(done)
 			_ = CnServerMessageHandler(
 				ctx,
+				time.Second*10,
 				"",
 				msg,
 				nil,
@@ -200,12 +201,10 @@ func Test_CnServerMessageHandler(t *testing.T) {
 }
 
 func Test_receiveMessageFromCnServer(t *testing.T) {
-	ctrl := gomock.NewController(t)
 	ctx := context.TODO()
 
-	streamSender := mock_morpc.NewMockStream(ctrl)
-	ch := make(chan morpc.Message)
-	streamSender.EXPECT().Receive().Return(ch, nil)
+	streamSender := morpc.NewTestStream(0)
+	ch, _ := streamSender.Receive()
 
 	agg0, err := functionAgg.NewAggAvg(
 		function.AVG<<32,

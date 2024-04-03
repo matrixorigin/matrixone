@@ -102,7 +102,7 @@ func (c *LogtailClient) Subscribe(
 	}
 	request.SetID(c.stream.ID())
 
-	err := c.stream.Send(ctx, request)
+	err := c.stream.Send(ctx, request, 0)
 	if err != nil {
 		logutil.Error("logtail client: fail to subscribe via morpc stream", zap.Error(err))
 	}
@@ -127,7 +127,7 @@ func (c *LogtailClient) Unsubscribe(
 		},
 	}
 	request.SetID(c.stream.ID())
-	err := c.stream.Send(ctx, request)
+	err := c.stream.Send(ctx, request, 0)
 	if err != nil {
 		logutil.Error("logtail client: fail to unsubscribe via morpc stream", zap.Error(err))
 	}

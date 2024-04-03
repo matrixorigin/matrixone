@@ -46,9 +46,7 @@ func TestDecodeContext(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, 8, n)
 	assert.NotNil(t, msg.Ctx)
-	ts, ok := msg.Ctx.Deadline()
-	assert.True(t, ok)
-	assert.True(t, !ts.IsZero())
+	assert.True(t, !msg.timeoutAt.IsZero())
 }
 
 func TestEncodeAndDecodeTrace(t *testing.T) {

@@ -195,15 +195,15 @@ type LockTableKeeper interface {
 // 2. lock service <-> lock table allocator
 type Client interface {
 	// Send send request to other lock service, and wait for a response synchronously.
-	Send(context.Context, *pb.Request) (*pb.Response, error)
+	Send(context.Context, *pb.Request, time.Duration) (*pb.Response, error)
 	// AsyncSend async send request to other lock service.
-	AsyncSend(context.Context, *pb.Request) (*morpc.Future, error)
+	AsyncSend(context.Context, *pb.Request, time.Duration) (*morpc.Future, error)
 	// Close close the client
 	Close() error
 }
 
 // RequestHandleFunc request handle func
-type RequestHandleFunc func(context.Context, context.CancelFunc, *pb.Request, *pb.Response, morpc.ClientSession)
+type RequestHandleFunc func(context.Context, *pb.Request, *pb.Response, morpc.ClientSession)
 
 // ServerOption server option
 type ServerOption func(*server)

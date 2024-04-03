@@ -282,22 +282,32 @@ func (rb *remoteBackend) adjust() {
 		goetty.WithSessionLogger(rb.logger))
 }
 
-func (rb *remoteBackend) Send(ctx context.Context, request Message) (*Future, error) {
-	if ctx == nil {
-		panic("remoteBackend Send nil context")
-	}
-	return rb.send(ctx, request, false)
+func (rb *remoteBackend) Send(
+	ctx context.Context,
+	request Message,
+	timeout time.Duration,
+) (*Future, error) {
+	return rb.send(ctx, request, false, timeout)
 }
 
-func (rb *remoteBackend) SendInternal(ctx context.Context, request Message) (*Future, error) {
+func (rb *remoteBackend) SendInternal(
+	ctx context.Context,
+	request Message,
+	timeout time.Duration,
+) (*Future, error) {
 	if ctx == nil {
 		panic("remoteBackend SendInternal nil context")
 	}
-	return rb.send(ctx, request, true)
+	return rb.send(ctx, request, true, timeout)
 }
 
-func (rb *remoteBackend) send(ctx context.Context, request Message, internal bool) (*Future, error) {
-	f := rb.getFuture(ctx, request, internal)
+func (rb *remoteBackend) send(
+	ctx context.Context,
+	request Message,
+	internal bool,
+	timeout time.Duration,
+) (*Future, error) {
+	f := rb.getFuture(ctx, request, internal, timeout)
 	if err := rb.doSend(f); err != nil {
 		f.Close()
 		return nil, err
@@ -306,10 +316,22 @@ func (rb *remoteBackend) send(ctx context.Context, request Message, internal boo
 	return f, nil
 }
 
-func (rb *remoteBackend) getFuture(ctx context.Context, request Message, internal bool) *Future {
+func (rb *remoteBackend) getFuture(
+	ctx context.Context,
+	request Message,
+	internal bool,
+	timeout time.Duration,
+) *Future {
+	timeout = getTimeout(ctx, timeout)
+
 	request.SetID(rb.nextID())
 	f := rb.newFuture()
-	f.init(RPCMessage{Ctx: ctx, Message: request, internal: internal})
+	f.init(RPCMessage{
+		Ctx:       ctx,
+		Message:   request,
+		internal:  internal,
+		timeoutAt: time.Now().Add(timeout),
+	})
 	rb.addFuture(f)
 	return f
 }
@@ -517,18 +539,12 @@ func (rb *remoteBackend) doWrite(id uint64, f *Future) time.Duration {
 		return 0
 	}
 
-	v, err := f.send.GetTimeoutFromContext()
-	if err != nil {
-		f.messageSent(err)
-		return 0
-	}
-
 	// For PayloadMessage, the internal Codec will write the Payload directly to the underlying socket
 	// instead of copying it to the buffer, so the write deadline of the underlying conn needs to be reset
 	// here, otherwise an old deadline will be out causing io/timeout.
 	conn := rb.conn.RawConn()
 	if _, ok := f.send.Message.(PayloadMessage); ok && conn != nil {
-		conn.SetWriteDeadline(time.Now().Add(v))
+		conn.SetWriteDeadline(f.send.timeoutAt)
 	}
 	if ce := rb.logger.Check(zap.DebugLevel, "write request"); ce != nil {
 		ce.Write(zap.Uint64("request-id", id),
@@ -540,7 +556,7 @@ func (rb *remoteBackend) doWrite(id uint64, f *Future) time.Duration {
 		f.messageSent(err)
 		return 0
 	}
-	return v
+	return f.send.GetTimeout()
 }
 
 func (rb *remoteBackend) readLoop(ctx context.Context) {
@@ -605,7 +621,7 @@ func (rb *remoteBackend) fetch(messages []*Future, maxFetchCount int) ([]*Future
 
 	doHeartbeat := func() {
 		rb.lastPingTime = time.Now()
-		f := rb.getFuture(context.TODO(), &flagOnlyMessage{flag: flagPing}, true)
+		f := rb.getFuture(context.TODO(), &flagOnlyMessage{flag: flagPing}, true, internalTimeout)
 		// no need wait response, close immediately
 		f.Close()
 		messages = append(messages, f)
@@ -754,9 +770,6 @@ func (rb *remoteBackend) requestDone(
 	}()
 
 	response := msg.Message
-	if msg.Cancel != nil {
-		defer msg.Cancel()
-	}
 	if ce := rb.logger.Check(zap.DebugLevel, "read response"); ce != nil {
 		debugStr := ""
 		if response != nil {
@@ -1052,13 +1065,17 @@ func (s *stream) destroy() {
 	s.cancel()
 }
 
-func (s *stream) Send(ctx context.Context, request Message) error {
+func (s *stream) Send(
+	ctx context.Context,
+	request Message,
+	timeout time.Duration,
+) error {
 	if s.id != request.GetID() {
 		panic("request.id != stream.id")
 	}
-	if _, ok := ctx.Deadline(); !ok {
-		panic("deadline not set in context")
-	}
+
+	timeout = getTimeout(ctx, timeout)
+
 	s.activeFunc()
 
 	f := s.newFutureFunc()
@@ -1072,7 +1089,7 @@ func (s *stream) Send(ctx context.Context, request Message) error {
 		return moerr.NewStreamClosedNoCtx()
 	}
 
-	err := s.doSendLocked(ctx, f, request)
+	err := s.doSendLocked(ctx, f, request, timeout)
 	// unlock before future.close to avoid deadlock with future.Close
 	// 1. current goroutine:        stream.RLock
 	// 2. backend read goroutine:   cancelActiveStream -> backend.Lock
@@ -1090,13 +1107,16 @@ func (s *stream) Send(ctx context.Context, request Message) error {
 func (s *stream) doSendLocked(
 	ctx context.Context,
 	f *Future,
-	request Message) error {
+	request Message,
+	timeout time.Duration,
+) error {
 	s.sequence++
 	f.init(RPCMessage{
 		Ctx:            ctx,
 		Message:        request,
 		stream:         true,
 		streamSequence: s.sequence,
+		timeoutAt:      time.Now().Add(timeout),
 	})
 
 	return s.sendFunc(f)
@@ -1149,9 +1169,6 @@ func (s *stream) done(
 		s.cleanCLocked()
 	}
 	response := message.Message
-	if message.Cancel != nil {
-		defer message.Cancel()
-	}
 	if response != nil && !message.stream {
 		panic("BUG")
 	}
@@ -1177,4 +1194,31 @@ func (s *stream) cleanCLocked() {
 			return
 		}
 	}
+}
+
+type testStream struct {
+	id uint64
+	c  chan Message
+}
+
+func NewTestStream(id uint64) Stream {
+	return &testStream{
+		id: id,
+		c:  make(chan Message),
+	}
+}
+
+func (ts *testStream) ID() uint64 { return ts.id }
+
+func (ts *testStream) Send(ctx context.Context, request Message, timeout time.Duration) error {
+	ts.c <- request
+	return nil
+}
+
+func (ts *testStream) Receive() (chan Message, error) {
+	return ts.c, nil
+}
+
+func (ts *testStream) Close(closeConn bool) error {
+	return nil
 }

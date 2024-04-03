@@ -236,6 +236,10 @@ func (s *Service) handleRPCRequest(
 		panic("unexpected message type")
 	}
 	defer rr.Release()
+
+	ctx, cancel := context.WithTimeout(ctx, msg.GetTimeout())
+	defer cancel()
+
 	resp, records := s.handle(ctx, rr.Request, rr.GetPayloadField())
 	var recs []byte
 	if len(records.Records) > 0 {
@@ -245,11 +249,10 @@ func (s *Service) handleRPCRequest(
 	response := s.respPool.Get().(*RPCResponse)
 	response.Response = resp
 	response.payload = recs
-	return cs.Write(ctx, response)
+	return cs.Write(ctx, response, msg.GetTimeout())
 }
 
-func (s *Service) handle(ctx context.Context, req pb.Request,
-	payload []byte) (pb.Response, pb.LogRecordResponse) {
+func (s *Service) handle(ctx context.Context, req pb.Request, payload []byte) (pb.Response, pb.LogRecordResponse) {
 	ctx, span := trace.Debug(ctx, "Service.handle."+req.Method.String())
 	defer span.End()
 	switch req.Method {

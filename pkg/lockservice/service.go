@@ -18,11 +18,11 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"hash/crc64"
 	"sync"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
@@ -135,10 +135,6 @@ func (s *service) Lock(
 	}()
 
 	s.wait()
-
-	// FIXME(fagongzi): too many mem alloc in trace
-	ctx, span := trace.Debug(ctx, "lockservice.lock")
-	defer span.End()
 
 	if options.ForwardTo != "" {
 		return s.forwardLock(ctx, tableID, rows, txnID, options)

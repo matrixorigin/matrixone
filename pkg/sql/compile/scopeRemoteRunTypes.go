@@ -17,30 +17,28 @@ package compile
 import (
 	"context"
 	"fmt"
-	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"hash/crc32"
 	"runtime"
 	"sync/atomic"
 	"time"
-
-	"github.com/matrixorigin/matrixone/pkg/common/reuse"
-
-	"github.com/matrixorigin/matrixone/pkg/logservice"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
+	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
+	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/udf"
@@ -131,7 +129,7 @@ func (sender *messageSenderOnClient) send(
 		message.SetProcData(procData)
 		message.SetSequence(0)
 		message.SetSid(pipeline.Status_Last)
-		return sender.streamSender.Send(sender.ctx, message)
+		return sender.streamSender.Send(sender.ctx, message, 0)
 	}
 
 	start := 0
@@ -152,7 +150,7 @@ func (sender *messageSenderOnClient) send(
 			message.SetSid(pipeline.Status_WaitingNext)
 		}
 
-		if err := sender.streamSender.Send(sender.ctx, message); err != nil {
+		if err := sender.streamSender.Send(sender.ctx, message, 0); err != nil {
 			return err
 		}
 		cnt++
@@ -264,6 +262,7 @@ func (sender *messageSenderOnClient) close() {
 // for processing received message and writing results back at cn-server.
 type messageReceiverOnServer struct {
 	ctx         context.Context
+	timeout     time.Duration
 	messageId   uint64
 	messageTyp  pipeline.Method
 	messageUuid uuid.UUID
@@ -286,6 +285,7 @@ type messageReceiverOnServer struct {
 
 func newMessageReceiverOnServer(
 	ctx context.Context,
+	timeout time.Duration,
 	cnAddr string,
 	m *pipeline.Message,
 	cs morpc.ClientSession,
@@ -301,6 +301,7 @@ func newMessageReceiverOnServer(
 
 	receiver := messageReceiverOnServer{
 		ctx:             ctx,
+		timeout:         timeout,
 		messageId:       m.GetId(),
 		messageTyp:      m.GetCmd(),
 		clientSession:   cs,
@@ -405,7 +406,8 @@ func (receiver *messageReceiverOnServer) newCompile() *Compile {
 }
 
 func (receiver *messageReceiverOnServer) sendError(
-	errInfo error) error {
+	errInfo error,
+) error {
 	message, err := receiver.acquireMessage()
 	if err != nil {
 		return err
@@ -415,11 +417,12 @@ func (receiver *messageReceiverOnServer) sendError(
 	if errInfo != nil {
 		message.SetMoError(receiver.ctx, errInfo)
 	}
-	return receiver.clientSession.Write(receiver.ctx, message)
+	return receiver.clientSession.Write(receiver.ctx, message, receiver.timeout)
 }
 
 func (receiver *messageReceiverOnServer) sendBatch(
-	b *batch.Batch) error {
+	b *batch.Batch,
+) error {
 	// there's no need to send the nil batch.
 	if b == nil {
 		return nil
@@ -447,7 +450,7 @@ func (receiver *messageReceiverOnServer) sendBatch(
 		m.SetSequence(receiver.sequence)
 		m.SetSid(pipeline.Status_Last)
 		receiver.sequence++
-		return receiver.clientSession.Write(receiver.ctx, m)
+		return receiver.clientSession.Write(receiver.ctx, m, receiver.timeout)
 	}
 	// if data is too large, cut and send
 	for start, end := 0, 0; start < dataLen; start = end {
@@ -468,7 +471,7 @@ func (receiver *messageReceiverOnServer) sendBatch(
 		m.SetSequence(receiver.sequence)
 		receiver.sequence++
 
-		if errW := receiver.clientSession.Write(receiver.ctx, m); errW != nil {
+		if errW := receiver.clientSession.Write(receiver.ctx, m, receiver.timeout); errW != nil {
 			return errW
 		}
 	}
@@ -498,7 +501,7 @@ func (receiver *messageReceiverOnServer) sendEndMessage() error {
 		}
 		message.SetAnalysis(data)
 	}
-	return receiver.clientSession.Write(receiver.ctx, message)
+	return receiver.clientSession.Write(receiver.ctx, message, receiver.timeout)
 }
 
 func generateProcessHelper(data []byte, cli client.TxnClient) (processHelper, error) {
