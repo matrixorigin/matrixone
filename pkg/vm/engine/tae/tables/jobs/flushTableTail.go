@@ -298,7 +298,7 @@ func (task *flushTableTailTask) Execute(ctx context.Context) (err error) {
 	}
 
 	phaseDesc = "1-wait LogTxnEntry"
-	txnEntry := txnentries.NewFlushTableTailEntry(
+	txnEntry, err := txnentries.NewFlushTableTailEntry(
 		task.txn,
 		task.ID(),
 		task.transMappings,
@@ -314,6 +314,9 @@ func (task *flushTableTailTask) Execute(ctx context.Context) (err error) {
 		task.rt,
 		task.dirtyEndTs,
 	)
+	if err != nil {
+		return err
+	}
 	readset := make([]*common.ID, 0, len(task.aObjMetas)+len(task.delSrcMetas))
 	for _, obj := range task.aObjMetas {
 		readset = append(readset, obj.AsCommonID())

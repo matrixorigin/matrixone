@@ -82,7 +82,7 @@ func NewFlushTableTailEntry(
 	dirtyLen int,
 	rt *dbutils.Runtime,
 	dirtyEndTs types.TS,
-) *flushTableTailEntry {
+) (*flushTableTailEntry, error) {
 
 	entry := &flushTableTailEntry{
 		txn:                txn,
@@ -106,11 +106,15 @@ func NewFlushTableTailEntry(
 
 	// collect deletes phase 1
 	entry.collectTs = rt.Now()
-	entry.collectDelsAndTransfer(entry.txn.GetStartTS(), rt.Now())
+	var err error
+	entry.transCntBeforeCommit, err = entry.collectDelsAndTransfer(entry.txn.GetStartTS(), rt.Now())
+	if err != nil {
+		return nil, err
+	}
 
 	// prepare transfer pages
 	entry.addTransferPages()
-	return entry
+	return entry, nil
 }
 
 // add transfer pages for dropped aobjects
