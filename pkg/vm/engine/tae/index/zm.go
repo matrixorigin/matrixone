@@ -924,7 +924,7 @@ func (zm ZM) SubVecIn(vec *vector.Vector) (int, int) {
 			return types.PrefixCompare(minVal, col[i].GetByteSlice(area)) <= 0
 		})
 		upperBound := sort.Search(len(col), func(i int) bool {
-			return types.PrefixCompare(maxVal, col[lowerBound].GetByteSlice(area)) < 0
+			return types.PrefixCompare(maxVal, col[i].GetByteSlice(area)) < 0
 		})
 		return lowerBound, upperBound
 
@@ -935,7 +935,7 @@ func (zm ZM) SubVecIn(vec *vector.Vector) (int, int) {
 			return moarray.Compare[float32](minVal, col[i]) <= 0
 		})
 		upperBound := sort.Search(len(col), func(i int) bool {
-			return moarray.Compare[float32](maxVal, col[lowerBound]) < 0
+			return moarray.Compare[float32](maxVal, col[i]) < 0
 		})
 		return lowerBound, upperBound
 
@@ -946,7 +946,7 @@ func (zm ZM) SubVecIn(vec *vector.Vector) (int, int) {
 			return moarray.Compare[float64](minVal, col[i]) <= 0
 		})
 		upperBound := sort.Search(len(col), func(i int) bool {
-			return moarray.Compare[float64](maxVal, col[lowerBound]) < 0
+			return moarray.Compare[float64](maxVal, col[i]) < 0
 		})
 		return lowerBound, upperBound
 
@@ -1159,7 +1159,7 @@ func (zm ZM) AnyIn(vec *vector.Vector) bool {
 		col, area := vector.MustVarlenaRawData(vec)
 		minVal, maxVal := zm.GetMinBuf(), zm.GetMaxBuf()
 		lowerBound := sort.Search(len(col), func(i int) bool {
-			return types.PrefixCompare(minVal, col[i].GetByteSlice(area)) <= 0
+			return bytes.Compare(minVal, col[i].GetByteSlice(area)) <= 0
 		})
 
 		return lowerBound < len(col) && types.PrefixCompare(col[lowerBound].GetByteSlice(area), maxVal) <= 0
