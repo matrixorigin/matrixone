@@ -17,6 +17,7 @@ package disttae
 import (
 	"context"
 	"fmt"
+	"runtime/trace"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -790,9 +791,13 @@ func (r *syncLogTailTimestamp) getTimestamp() timestamp.Timestamp {
 }
 
 func (r *syncLogTailTimestamp) updateTimestamp(
+	ctx context.Context,
 	index int,
 	newTimestamp timestamp.Timestamp,
 	receiveAt time.Time) {
+	ctx, task := trace.NewTask(ctx, "disttae.syncLogTailTimestamp.updateTimestamp")
+	defer task.End()
+
 	start := time.Now()
 	v2.LogTailApplyNotifyLatencyDurationHistogram.Observe(start.Sub(receiveAt).Seconds())
 	defer func() {
@@ -800,8 +805,10 @@ func (r *syncLogTailTimestamp) updateTimestamp(
 	}()
 	r.tList[index].Store(&newTimestamp)
 	if r.ready.Load() {
+		_, task := trace.NewTask(ctx, "disttae.syncLogTailTimestamp.updateTimestamp notify")
 		ts := r.getTimestamp()
 		r.timestampWaiter.NotifyLatestCommitTS(ts)
+		task.End()
 	}
 }
 
@@ -1059,9 +1066,9 @@ func dispatchSubscribeResponse(
 		recRoutines[routineIndex].sendSubscribeResponse(ctx, response, receiveAt)
 	}
 	// no matter how we consume the response, should update all timestamp.
-	e.pClient.receivedLogTailTime.updateTimestamp(consumerNumber, *lt.Ts, receiveAt)
+	e.pClient.receivedLogTailTime.updateTimestamp(ctx, consumerNumber, *lt.Ts, receiveAt)
 	for _, rc := range recRoutines {
-		rc.updateTimeFromT(*lt.Ts, receiveAt)
+		rc.updateTimeFromT(ctx, *lt.Ts, receiveAt)
 	}
 	return nil
 }
@@ -1072,6 +1079,10 @@ func dispatchUpdateResponse(
 	response *logtail.UpdateResponse,
 	recRoutines []routineController,
 	receiveAt time.Time) error {
+
+	ctx, task := trace.NewTask(ctx, "disttae.dispatchUpdateResponse")
+	defer task.End()
+
 	list := response.GetLogtailList()
 
 	// loops for mo_database, mo_tables, mo_columns.
@@ -1106,12 +1117,12 @@ func dispatchUpdateResponse(
 			continue
 		}
 		recIndex := table.TbId % consumerNumber
-		recRoutines[recIndex].sendTableLogTail(list[index], receiveAt)
+		recRoutines[recIndex].sendTableLogTail(ctx, list[index], receiveAt)
 	}
 	// should update all the timestamp.
-	e.pClient.receivedLogTailTime.updateTimestamp(consumerNumber, *response.To, receiveAt)
+	e.pClient.receivedLogTailTime.updateTimestamp(ctx, consumerNumber, *response.To, receiveAt)
 	for _, rc := range recRoutines {
-		rc.updateTimeFromT(*response.To, receiveAt)
+		rc.updateTimeFromT(ctx, *response.To, receiveAt)
 	}
 
 	n := 0
@@ -1162,7 +1173,9 @@ func (rc *routineController) sendSubscribeResponse(
 	rc.signalChan <- cmdToConsumeSub{log: r, receiveAt: receiveAt}
 }
 
-func (rc *routineController) sendTableLogTail(r logtail.TableLogtail, receiveAt time.Time) {
+func (rc *routineController) sendTableLogTail(ctx context.Context, r logtail.TableLogtail, receiveAt time.Time) {
+	ctx, task := trace.NewTask(ctx, "disttae.routineController.sendTableLogTail")
+	defer task.End()
 	if l := len(rc.signalChan); l > rc.warningBufferLen {
 		rc.warningBufferLen = l
 		logutil.Infof("%s consume-routine %d signalChan len is %d, maybe consume is too slow", logTag, rc.routineId, l)
@@ -1172,8 +1185,12 @@ func (rc *routineController) sendTableLogTail(r logtail.TableLogtail, receiveAt 
 }
 
 func (rc *routineController) updateTimeFromT(
+	ctx context.Context,
 	t timestamp.Timestamp,
 	receiveAt time.Time) {
+	ctx, task := trace.NewTask(ctx, "disttae.routineController.updateTimeFromT")
+	defer task.End()
+
 	if l := len(rc.signalChan); l > rc.warningBufferLen {
 		rc.warningBufferLen = l
 		logutil.Infof("%s consume-routine %d signalChan len is %d, maybe consume is too slow", logTag, rc.routineId, l)
@@ -1277,7 +1294,7 @@ func (cmd cmdToConsumeLog) action(ctx context.Context, e *Engine, ctrl *routineC
 }
 
 func (cmd cmdToUpdateTime) action(ctx context.Context, e *Engine, ctrl *routineController) error {
-	e.pClient.receivedLogTailTime.updateTimestamp(ctrl.routineId, cmd.time, cmd.receiveAt)
+	e.pClient.receivedLogTailTime.updateTimestamp(ctx, ctrl.routineId, cmd.time, cmd.receiveAt)
 	return nil
 }
 
@@ -1312,6 +1329,10 @@ func updatePartitionOfPush(
 	tl *logtail.TableLogtail,
 	lazyLoad bool,
 	receiveAt time.Time) (err error) {
+
+	ctx, task := trace.NewTask(ctx, "disttae.updatePartitionOfPush")
+	defer task.End()
+
 	start := time.Now()
 	v2.LogTailApplyLatencyDurationHistogram.Observe(start.Sub(receiveAt).Seconds())
 	defer func() {
@@ -1326,19 +1347,25 @@ func updatePartitionOfPush(
 
 	partition := e.getPartition(dbId, tblId)
 
+	_, task = trace.NewTask(ctx, "disttae.updatePartitionOfPush: wait lock")
 	lockErr := partition.Lock(ctx)
 	if lockErr != nil {
 		return lockErr
 	}
 	defer partition.Unlock()
+	task.End()
 
 	state, doneMutate := partition.MutateState()
 
+	_, task = trace.NewTask(ctx, "disttae.updatePartitionOfPush: get table by id")
 	key := e.catalog.GetTableById(dbId, tblId)
+	task.End()
 
 	if lazyLoad {
 		if len(tl.CkpLocation) > 0 {
+			_, task = trace.NewTask(ctx, "disttae.updatePartitionOfPush: append checkpoint")
 			state.AppendCheckpoint(tl.CkpLocation, partition)
+			task.End()
 		}
 
 		err = consumeLogTailOfPushWithLazyLoad(
@@ -1384,6 +1411,9 @@ func consumeLogTailOfPushWithoutLazyLoad(
 	tableId uint64,
 	tableName string,
 ) (err error) {
+	ctx, task := trace.NewTask(ctx, "disttae.consumeLogTailOfPushWithoutLazyLoad")
+	defer task.End()
+
 	var entries []*api.Entry
 	var closeCBs []func()
 	if entries, closeCBs, err = taeLogtail.LoadCheckpointEntries(
@@ -1413,6 +1443,10 @@ func hackConsumeLogtail(
 	engine *Engine,
 	state *logtailreplay.PartitionState,
 	lt *logtail.TableLogtail) error {
+
+	ctx, task := trace.NewTask(ctx, "disttae.hackConsumeLogtail")
+	defer task.End()
+
 	var packer *types.Packer
 	put := engine.packerPool.Get(&packer)
 	defer put.Put()
