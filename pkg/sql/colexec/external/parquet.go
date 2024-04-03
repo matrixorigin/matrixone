@@ -51,7 +51,7 @@ func scanParquetFile(ctx context.Context, param *ExternalParam, proc *process.Pr
 	if param.parqh == nil {
 		var err error
 		param.parqh, err = newParquetHandler(param)
-		if err != nil || param.plh == nil {
+		if err != nil {
 			return nil, err
 		}
 	}
@@ -64,9 +64,11 @@ func scanParquetFile(ctx context.Context, param *ExternalParam, proc *process.Pr
 	return bat, nil
 }
 
+var parquetBatchCnt int64 = 1000
+
 func newParquetHandler(param *ExternalParam) (*ParquetHandler, error) {
 	h := ParquetHandler{
-		batchCnt: 1000,
+		batchCnt: parquetBatchCnt,
 	}
 	err := h.openFile(param)
 	if err != nil {
@@ -266,7 +268,7 @@ func (h *ParquetHandler) getData(bat *batch.Batch, param *ExternalParam, proc *p
 				page = page.Slice(o, min(n+o, nr))
 			}
 			o = 0
-			n -= nr
+			n -= page.NumRows()
 
 			err = h.dataFn[colIdx](page, proc, vec)
 			if err != nil {
