@@ -778,7 +778,7 @@ func (blk *baseObject) TryDeleteByDeltaloc(
 	return blkMVCC.TryDeleteByDeltaloc(txn, deltaLoc, true)
 }
 
-func (blk *baseObject) PPString(level common.PPLevel, depth int, prefix string) string {
+func (blk *baseObject) PPString(level common.PPLevel, depth int, prefix string, blkid int) string {
 	rows, err := blk.Rows()
 	if err != nil {
 		logutil.Warnf("get object rows failed, obj: %v, err: %v", blk.meta.ID.String(), err)
@@ -786,14 +786,23 @@ func (blk *baseObject) PPString(level common.PPLevel, depth int, prefix string) 
 	s := fmt.Sprintf("%s | [Rows=%d]", blk.meta.PPString(level, depth, prefix), rows)
 	if level >= common.PPL1 {
 		blk.RLock()
-		mvcc := blk.tryGetMVCC()
-		var s2 string
-		if mvcc != nil {
-			s2 = mvcc.StringLocked(1, 0, "")
+		var appendstr, deletestr string
+		if blk.appendMVCC != nil {
+			appendstr = blk.appendMVCC.StringLocked()
+		}
+		if mvcc := blk.tryGetMVCC(); mvcc != nil {
+			if blkid >= 0 {
+				deletestr = mvcc.StringBlkLocked(level, 0, "", blkid)
+			} else {
+				deletestr = mvcc.StringLocked(level, 0, "")
+			}
 		}
 		blk.RUnlock()
-		if s2 != "" {
-			s = fmt.Sprintf("%s\n%s", s, s2)
+		if appendstr != "" {
+			s = fmt.Sprintf("%s\n Appends: %s", s, appendstr)
+		}
+		if deletestr != "" {
+			s = fmt.Sprintf("%s\n Deletes: %s", s, deletestr)
 		}
 	}
 	return s
