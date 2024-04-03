@@ -94,7 +94,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	if err != nil {
 		return result, err
 	}
-	anal.Alloc(int64(newAlloc))
+	arg.maxAllocSize = max(arg.maxAllocSize, newAlloc)
 	arg.buf.SetRowCount(bat.RowCount())
 
 	anal.Output(arg.buf, arg.GetIsLast())

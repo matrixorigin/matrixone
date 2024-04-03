@@ -184,7 +184,7 @@ func (s *sqlExecutor) adjustOptions(
 				"",
 				"sql-executor",
 				0),
-			client.WithDisableTrace(true))
+			client.WithDisableTrace(!opts.EnableTrace()))
 		txnOp, err := s.txnClient.New(
 			ctx,
 			opts.MinCommittedTS(),
@@ -229,7 +229,7 @@ func (exec *txnExecutor) Exec(
 	statementOption executor.StatementOption) (executor.Result, error) {
 	receiveAt := time.Now()
 
-	stmts, err := parsers.Parse(exec.ctx, dialect.MYSQL, sql, 1)
+	stmts, err := parsers.Parse(exec.ctx, dialect.MYSQL, sql, 1, 0)
 	defer func() {
 		for _, stmt := range stmts {
 			stmt.Free()
@@ -362,6 +362,10 @@ func (exec *txnExecutor) LockTable(table string) error {
 		proc.FreeVectors()
 	}()
 	return doLockTable(exec.s.eng, proc, rel, false)
+}
+
+func (exec *txnExecutor) Txn() client.TxnOperator {
+	return exec.opts.Txn()
 }
 
 func (exec *txnExecutor) commit() error {

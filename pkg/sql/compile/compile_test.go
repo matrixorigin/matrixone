@@ -107,9 +107,6 @@ func (w *Ws) Rollback(ctx context.Context) error {
 func (w *Ws) UpdateSnapshotWriteOffset() {
 }
 
-func (w *Ws) TransferRowID() {
-}
-
 func (w *Ws) GetSnapshotWriteOffset() int {
 	return 0
 }
@@ -176,7 +173,7 @@ func newTestCase(sql string, t *testing.T) compileTestCase {
 	proc := testutil.NewProcess()
 	proc.SessionInfo.Buf = buffer.New()
 	e, _, compilerCtx := testengine.New(defines.AttachAccountId(context.Background(), catalog.System_Account))
-	stmts, err := mysql.Parse(compilerCtx.GetContext(), sql, 1)
+	stmts, err := mysql.Parse(compilerCtx.GetContext(), sql, 1, 0)
 	require.NoError(t, err)
 	pn, err := plan2.BuildPlan(compilerCtx, stmts[0], false)
 	if err != nil {

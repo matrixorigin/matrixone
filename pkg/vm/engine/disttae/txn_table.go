@@ -461,7 +461,7 @@ func (tbl *txnTable) LoadDeletesForBlock(bid types.Blockid, offsets *[]int64) (e
 			if err != nil {
 				return err
 			}
-			rowIdBat, err := blockio.LoadTombstoneColumns(
+			rowIdBat, release, err := blockio.LoadTombstoneColumns(
 				tbl.db.txn.proc.Ctx,
 				[]uint16{0},
 				nil,
@@ -471,6 +471,7 @@ func (tbl *txnTable) LoadDeletesForBlock(bid types.Blockid, offsets *[]int64) (e
 			if err != nil {
 				return err
 			}
+			defer release()
 			rowIds := vector.MustFixedCol[types.Rowid](rowIdBat.GetVector(0))
 			for _, rowId := range rowIds {
 				_, offset := rowId.Decode()
@@ -501,7 +502,7 @@ func (tbl *txnTable) LoadDeletesForMemBlocksIn(
 				if err != nil {
 					return err
 				}
-				rowIdBat, err := blockio.LoadTombstoneColumns(
+				rowIdBat, release, err := blockio.LoadTombstoneColumns(
 					tbl.db.txn.proc.Ctx,
 					[]uint16{0},
 					nil,
@@ -511,13 +512,13 @@ func (tbl *txnTable) LoadDeletesForMemBlocksIn(
 				if err != nil {
 					return err
 				}
+				defer release()
 				rowIds := vector.MustFixedCol[types.Rowid](rowIdBat.GetVector(0))
 				for _, rowId := range rowIds {
 					if deletesRowId != nil {
 						deletesRowId[rowId] = 0
 					}
 				}
-				rowIdBat.Clean(tbl.db.txn.proc.GetMPool())
 			}
 		}
 
@@ -581,6 +582,9 @@ func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr) (ranges eng
 		v2.TxnTableRangeDurationHistogram.Observe(cost.Seconds())
 	}()
 
+	var blocks objectio.BlockInfoSlice
+	ranges = &blocks
+
 	// make sure we have the block infos snapshot
 	if err = tbl.UpdateObjectInfos(ctx); err != nil {
 		return
@@ -592,7 +596,6 @@ func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr) (ranges eng
 		return
 	}
 
-	var blocks objectio.BlockInfoSlice
 	blocks.AppendBlockInfo(objectio.EmptyBlockInfo)
 
 	if err = tbl.rangesOnePart(
@@ -605,7 +608,7 @@ func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr) (ranges eng
 	); err != nil {
 		return
 	}
-	ranges = &blocks
+
 	return
 }
 
@@ -888,7 +891,7 @@ func (tbl *txnTable) tryFastFilterBlocks(
 	outBlocks *objectio.BlockInfoSlice,
 	fs fileservice.FileService) (done bool, err error) {
 	// TODO: refactor this code if composite key can be pushdown
-	if tbl.tableDef.Pkey == nil || tbl.tableDef.Pkey.CompPkeyCol == nil {
+	if tbl.tableDef.Pkey.CompPkeyCol == nil {
 		return TryFastFilterBlocks(
 			tbl.db.txn.op.SnapshotTS(),
 			tbl.tableDef,
@@ -2211,16 +2214,19 @@ func (tbl *txnTable) PKPersistedBetween(
 
 	//only check data objects.
 	delObjs, cObjs := p.GetChangedObjsBetween(from.Next(), types.MaxTs())
+	isFakePK := tbl.GetTableDef(ctx).Pkey.PkeyColName == catalog.FakePrimaryKeyColName
 
 	if err := ForeachCommittedObjects(cObjs, delObjs, p,
 		func(obj logtailreplay.ObjectInfo) (err2 error) {
 			var zmCkecked bool
-			// if the object info contains a pk zonemap, fast-check with the zonemap
-			if !obj.ZMIsEmpty() {
-				if !obj.SortKeyZoneMap().AnyIn(keys) {
-					return
+			if !isFakePK {
+				// if the object info contains a pk zonemap, fast-check with the zonemap
+				if !obj.ZMIsEmpty() {
+					if !obj.SortKeyZoneMap().AnyIn(keys) {
+						return
+					}
+					zmCkecked = true
 				}
-				zmCkecked = true
 			}
 
 			var objMeta objectio.ObjectMeta
@@ -2245,10 +2251,13 @@ func (tbl *txnTable) PKPersistedBetween(
 			}
 
 			bf = nil
-			if bf, err2 = objectio.LoadBFWithMeta(
-				ctx, meta, location, fs,
-			); err2 != nil {
-				return
+			//fake pk has no bf
+			if !isFakePK {
+				if bf, err2 = objectio.LoadBFWithMeta(
+					ctx, meta, location, fs,
+				); err2 != nil {
+					return
+				}
 			}
 
 			ForeachBlkInObjStatsList(false, meta,
@@ -2257,15 +2266,17 @@ func (tbl *txnTable) PKPersistedBetween(
 						!blkMeta.MustGetColumn(uint16(primaryIdx)).ZoneMap().AnyIn(keys) {
 						return true
 					}
-
-					blkBf := bf.GetBloomFilter(uint32(blk.BlockID.Sequence()))
-					blkBfIdx := index.NewEmptyBinaryFuseFilter()
-					if err2 = index.DecodeBloomFilter(blkBfIdx, blkBf); err2 != nil {
-						return false
-					}
-					var exist bool
-					if exist = blkBfIdx.MayContainsAny(keys); !exist {
-						return true
+					//fake pk has no bf
+					if !isFakePK {
+						blkBf := bf.GetBloomFilter(uint32(blk.BlockID.Sequence()))
+						blkBfIdx := index.NewEmptyBinaryFuseFilter()
+						if err2 = index.DecodeBloomFilter(blkBfIdx, blkBf); err2 != nil {
+							return false
+						}
+						var exist bool
+						if exist = blkBfIdx.MayContainsAny(keys); !exist {
+							return true
+						}
 					}
 
 					blk.Sorted = obj.Sorted
@@ -2293,7 +2304,7 @@ func (tbl *txnTable) PKPersistedBetween(
 	pkSeq := pkDef.Seqnum
 	pkType := types.T(pkDef.Typ.Id).ToType()
 	for _, blk := range candidateBlks {
-		bat, err := blockio.LoadColumns(
+		bat, release, err := blockio.LoadColumns(
 			ctx,
 			[]uint16{uint16(pkSeq)},
 			[]types.Type{pkType},
@@ -2305,6 +2316,7 @@ func (tbl *txnTable) PKPersistedBetween(
 		if err != nil {
 			return true, err
 		}
+		defer release()
 
 		colExpr := newColumnExpr(0, plan2.MakePlan2Type(keys.GetType()), "pk")
 
@@ -2368,7 +2380,8 @@ func (tbl *txnTable) PrimaryKeysMayBeModified(
 		keysVector)
 }
 
-func (tbl *txnTable) transferRowid(
+// TODO::refactor in next PR
+func (tbl *txnTable) transferDeletes(
 	ctx context.Context,
 	state *logtailreplay.PartitionState,
 	deleteObjs,
@@ -2460,10 +2473,8 @@ func (tbl *txnTable) transferRowid(
 				}
 			}
 			if beTransfered != toTransfer {
-				logutil.Fatalf("xxxx transfer rowid failed,beTransfered:%d, toTransfer:%d, total %d",
-					beTransfered, toTransfer, len(rowids))
+				return moerr.NewInternalErrorNoCtx("transfer deletes failed")
 			}
-
 		}
 	}
 	return nil

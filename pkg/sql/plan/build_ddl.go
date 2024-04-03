@@ -681,6 +681,17 @@ func buildCreateSequence(stmt *tree.CreateSequence, ctx CompilerContext) (*Plan,
 }
 
 func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error) {
+	if stmt.IsAsLike {
+		newStmt, err := rewriteForCreateTableLike(stmt, ctx)
+		if err != nil {
+			return nil, err
+		}
+		if stmtLike, ok := newStmt.(*tree.CreateTable); ok {
+			return buildCreateTable(stmtLike, ctx)
+		}
+		return nil, moerr.NewInternalError(ctx.GetContext(), "rewrite for create table like failed")
+	}
+
 	createTable := &plan.CreateTable{
 		IfNotExists: stmt.IfNotExists,
 		Temporary:   stmt.Temporary,
@@ -1159,7 +1170,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 			if len(asSelectCols) != 0 {
 				return moerr.NewNYI(ctx.GetContext(), "add foreign key in create table ... as select statement")
 			}
-			if isFkBannedDatabase(createTable.Database) {
+			if IsFkBannedDatabase(createTable.Database) {
 				return moerr.NewInternalError(ctx.GetContext(), "can not create foreign keys in %s", createTable.Database)
 			}
 			err := adjustConstraintName(ctx.GetContext(), def)
@@ -1439,7 +1450,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 		}
 	}
 
-	skip := isFkBannedDatabase(createTable.Database)
+	skip := IsFkBannedDatabase(createTable.Database)
 	if !skip {
 		fks, err := GetFkReferredTo(ctx, createTable.Database, createTable.TableDef.Name)
 		if err != nil {
@@ -1569,7 +1580,12 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 			colDef := &ColDef{
 				Name: catalog.IndexTablePrimaryColName,
 				Alg:  plan.CompressType_Lz4,
-				Typ:  colMap[pkeyName].Typ,
+				Typ: plan.Type{
+					// don't copy auto increment
+					Id:    colMap[pkeyName].Typ.Id,
+					Width: colMap[pkeyName].Typ.Width,
+					Scale: colMap[pkeyName].Typ.Scale,
+				},
 				Default: &plan.Default{
 					NullAbility:  false,
 					Expr:         nil,
@@ -1678,17 +1694,22 @@ func buildMasterSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, co
 		PkeyColName: keyName,
 	}
 	if pkeyName != "" {
-		colDef := &ColDef{
+		pkColDef := &ColDef{
 			Name: catalog.MasterIndexTablePrimaryColName,
 			Alg:  plan.CompressType_Lz4,
-			Typ:  colMap[pkeyName].Typ,
+			Typ: plan.Type{
+				// don't copy auto increment
+				Id:    colMap[pkeyName].Typ.Id,
+				Width: colMap[pkeyName].Typ.Width,
+				Scale: colMap[pkeyName].Typ.Scale,
+			},
 			Default: &plan.Default{
 				NullAbility:  false,
 				Expr:         nil,
 				OriginString: "",
 			},
 		}
-		tableDef.Cols = append(tableDef.Cols, colDef)
+		tableDef.Cols = append(tableDef.Cols, pkColDef)
 	}
 	if indexInfo.Name == "" {
 		firstPart := indexInfo.KeyParts[0].ColName.Parts[0]
@@ -1778,7 +1799,12 @@ func buildRegularSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, c
 		colDef := &ColDef{
 			Name: keyName,
 			Alg:  plan.CompressType_Lz4,
-			Typ:  colMap[pkeyName].Typ, // Take Type of primary key column
+			Typ: plan.Type{
+				// don't copy auto increment
+				Id:    colMap[pkeyName].Typ.Id,
+				Width: colMap[pkeyName].Typ.Width,
+				Scale: colMap[pkeyName].Typ.Scale,
+			},
 			Default: &plan.Default{
 				NullAbility:  false,
 				Expr:         nil,
@@ -1815,7 +1841,12 @@ func buildRegularSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, c
 		colDef := &ColDef{
 			Name: catalog.IndexTablePrimaryColName,
 			Alg:  plan.CompressType_Lz4,
-			Typ:  colMap[pkeyName].Typ,
+			Typ: plan.Type{
+				// don't copy auto increment
+				Id:    colMap[pkeyName].Typ.Id,
+				Width: colMap[pkeyName].Typ.Width,
+				Scale: colMap[pkeyName].Typ.Scale,
+			},
 			Default: &plan.Default{
 				NullAbility:  false,
 				Expr:         nil,
@@ -2061,10 +2092,18 @@ func buildIvfFlatSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, c
 				OriginString: "",
 			},
 		}
+
 		tableDefs[2].Cols[2] = &ColDef{
 			Name: catalog.SystemSI_IVFFLAT_TblCol_Entries_pk,
 			Alg:  plan.CompressType_Lz4,
-			Typ:  colMap[pkeyName].Typ,
+			Typ: plan.Type{
+				//NOTE: don't directly copy the Type from Original Table's PK column.
+				// If you do that, we can get the AutoIncrement property from the original table's PK column.
+				// This results in a bug when you try to insert data into entries table.
+				Id:    colMap[pkeyName].Typ.Id,
+				Width: colMap[pkeyName].Typ.Width,
+				Scale: colMap[pkeyName].Typ.Scale,
+			},
 			Default: &plan.Default{
 				NullAbility:  false,
 				Expr:         nil,
@@ -2763,7 +2802,7 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 				alterTableDrop.Typ = plan.AlterTableDrop_KEY
 			case tree.AlterTableDropPrimaryKey:
 				alterTableDrop.Typ = plan.AlterTableDrop_PRIMARY_KEY
-				if tableDef.Pkey == nil || tableDef.Pkey.PkeyColName == catalog.FakePrimaryKeyColName {
+				if tableDef.Pkey.PkeyColName == catalog.FakePrimaryKeyColName {
 					return nil, moerr.NewErrCantDropFieldOrKey(ctx.GetContext(), "PRIMARY")
 				}
 				return nil, moerr.NewInternalError(ctx.GetContext(), "Can't DROP exists Primary Key")
@@ -3347,7 +3386,7 @@ func getForeignKeyData(ctx CompilerContext, dbName string, tableDef *TableDef, d
 		parentDbName = ctx.DefaultDatabase()
 	}
 
-	if isFkBannedDatabase(parentDbName) {
+	if IsFkBannedDatabase(parentDbName) {
 		return nil, moerr.NewInternalError(ctx.GetContext(), "can not refer foreign keys in %s", parentDbName)
 	}
 

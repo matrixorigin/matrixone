@@ -347,6 +347,14 @@ func (svit SystemVariableIntType) Convert(value interface{}) (interface{}, error
 		return nil, errorConvertToIntFailed
 	}
 
+	cv3 := func(x string) (interface{}, error) {
+		convertVal, err := strconv.ParseInt(x, 10, 64)
+		if err != nil {
+			return nil, errorConvertToIntFailed
+		}
+		return cv1(convertVal)
+	}
+
 	switch v := value.(type) {
 	case int:
 		return cv1(int64(v))
@@ -372,6 +380,8 @@ func (svit SystemVariableIntType) Convert(value interface{}) (interface{}, error
 		return cv2(float64(v))
 	case float64:
 		return cv2(v)
+	case string:
+		return cv3(v)
 	}
 	return nil, errorConvertToIntFailed
 }
@@ -3536,6 +3546,14 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           true,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableBoolType("disable_txn_trace"),
+		Default:           int64(0),
+	},
+	"keep_user_target_list_in_result": {
+		Name:              "keep_user_target_list_in_result",
+		Scope:             ScopeGlobal,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableIntType("keep_user_target_list_in_result", 0, 2, false),
 		Default:           int64(0),
 	},
 }
