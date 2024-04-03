@@ -77,9 +77,10 @@ insert into vector_index_04 values(4,"[156,213,61]","[10.25,0.14,0.88,10.0001]")
 insert into vector_index_04 values(7,"[5.6,2.13,6.1]","[1.25,8.14,4.88,18.0001]"),(8,"[17.7,4.25,3.0]","[1.215,5.25,8.9,47.25]"),(9,"[8,5.6,13]","[9.6,57.22,19.2,78.02]");
 alter table vector_index_04 alter reindex idx ivfflat lists=8;
 internal error: Can't REINDEX 'idx'; check that column/key exists
+alter table vector_index_04 alter reindex idx01 ivfflat lists=8;
 show create table vector_index_04;
 Table    Create Table
-vector_index_04    CREATE TABLE `vector_index_04` (\n`a` INT NOT NULL,\n`b` VECF32(3) DEFAULT NULL,\n`c` VECF32(4) DEFAULT NULL,\nPRIMARY KEY (`a`),\nKEY `idx01` USING ivfflat (`c`) lists = 5  op_type 'vector_l2_ops' ,\nKEY `idx02` USING ivfflat (`c`) lists = 4  op_type 'vector_l2_ops' \n)
+vector_index_04    CREATE TABLE `vector_index_04` (\n`a` INT NOT NULL,\n`b` VECF32(3) DEFAULT NULL,\n`c` VECF32(4) DEFAULT NULL,\nPRIMARY KEY (`a`),\nKEY `idx01` USING ivfflat (`c`) lists = 8  op_type 'vector_l2_ops' ,\nKEY `idx02` USING ivfflat (`c`) lists = 4  op_type 'vector_l2_ops' \n)
 desc vector_index_04;
 Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    NO    PRI    null        
@@ -90,7 +91,7 @@ a    b    c
 9    [8, 5.6, 13]    [9.6, 57.22, 19.2, 78.02]
 8    [17.7, 4.25, 3]    [1.215, 5.25, 8.9, 47.25]
 5    [177, 425, 30]    [11.25, 51.25, 80.699, 44.25]
-alter table vector_index_04 alter reindex idx02 ivfflat lists=3;
+alter table vector_index_04 alter reindex idx01 ivfflat lists=3;
 create table vector_index_05(a int primary key, b vecf32(3),c vecf32(4));
 create index idx01 using ivfflat on vector_index_05(c) lists=4 op_type "vector_l2_ops";
 show create table vector_index_05;

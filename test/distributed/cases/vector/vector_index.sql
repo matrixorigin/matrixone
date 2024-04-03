@@ -48,12 +48,12 @@ desc vector_index_04;
 insert into vector_index_04 values(4,"[156,213,61]","[10.25,0.14,0.88,10.0001]"),(5,"[177,425,30]","[11.25,51.25,80.699,44.25]"),(6,"[80,56,3]","[90.686,5.212,19.22,7.02]");
 insert into vector_index_04 values(7,"[5.6,2.13,6.1]","[1.25,8.14,4.88,18.0001]"),(8,"[17.7,4.25,3.0]","[1.215,5.25,8.9,47.25]"),(9,"[8,5.6,13]","[9.6,57.22,19.2,78.02]");
 alter table vector_index_04 alter reindex idx ivfflat lists=8;
---alter table vector_index_04 alter reindex idx02 ivfflat lists=8;
+alter table vector_index_04 alter reindex idx01 ivfflat lists=8;
 show create table vector_index_04;
 desc vector_index_04;
 select * from vector_index_04 order by L2_DISTANCE(c,"[9.6,57.22,19.2,78.02]") limit 3;
 --explain select * from vector_index_04 order by L2_DISTANCE(c,"[9.6,57.22,19.2,78.02]") limit 3;
-alter table vector_index_04 alter reindex idx02 ivfflat lists=3;
+alter table vector_index_04 alter reindex idx01 ivfflat lists=3;
 
 -- alter reindex: create table ->create vector index->alter reindex->insert
 create table vector_index_05(a int primary key, b vecf32(3),c vecf32(4));
