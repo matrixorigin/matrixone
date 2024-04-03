@@ -280,13 +280,11 @@ load data infile '$resources/load_data/test_starting_by01.csv' into table test03
 select * from test03;
 drop table test03;
 
--- @bvt:issue#15084
 drop table if exists test04;
 create table test04 (col1 varchar(20), col2 varchar(60));
 load data infile '$resources/load_data/test_escaped_by01.csv' into table test04 fields terminated by ',' enclosed by '"' escaped by '\\' lines terminated by '\n';
 select * from test04;
 drop table test04;
--- @bvt:issue
 
 drop table if exists test05;
 create table test05 (col1 varchar(20), col2 varchar(60));
