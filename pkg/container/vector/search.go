@@ -85,7 +85,7 @@ func VarlenBinarySearchOffsetByValFactory(vals [][]byte) func(*Vector) []int32 {
 		}
 		if len(vals) >= kMinLenForSubVector {
 			lowerBound := sort.Search(len(vals), func(i int) bool {
-				return bytes.Compare(vec.GetBytesAt(0), vals[i]) <= 0
+				return types.PrefixCompare(vec.GetBytesAt(0), vals[i]) <= 0
 			})
 			upperBound := sort.Search(len(vals), func(i int) bool {
 				return types.PrefixCompare(vec.GetBytesAt(n1-1), vals[i]) < 0
