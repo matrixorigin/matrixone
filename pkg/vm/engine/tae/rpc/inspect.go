@@ -418,6 +418,7 @@ type infoArg struct {
 	ctx     *inspectContext
 	tbl     *catalog.TableEntry
 	obj     *catalog.ObjectEntry
+	blkn    int
 	verbose common.PPLevel
 }
 
@@ -429,7 +430,7 @@ func (c *infoArg) PrepareCommand() *cobra.Command {
 	}
 	cmd.Flags().CountP("verbose", "v", "verbose level")
 	cmd.Flags().StringP("target", "t", "*", "format: table-id")
-	cmd.Flags().StringP("obj", "b", "", "format: <objectId>_<fineN>")
+	cmd.Flags().StringP("blk", "b", "", "format: <objectId>_<fineN>_<blkn>")
 	return cmd
 }
 
@@ -459,7 +460,7 @@ func (c *infoArg) FromCommand(cmd *cobra.Command) (err error) {
 	}
 
 	baddress, _ := cmd.Flags().GetString("blk")
-	c.obj, err = parseBlkTarget(baddress, c.tbl)
+	c.obj, c.blkn, err = parseBlkTarget(baddress, c.tbl)
 	if err != nil {
 		return err
 	}
@@ -474,7 +475,7 @@ func (c *infoArg) String() string {
 	}
 
 	if c.obj != nil {
-		t = fmt.Sprintf("%s %s", t, c.obj.ID.String())
+		t = fmt.Sprintf("%s o-%s b-%d", t, c.obj.ID.String(), c.blkn)
 	}
 
 	return fmt.Sprintf("info: %v", t)
@@ -497,7 +498,7 @@ func (c *infoArg) Run() error {
 		dels := c.obj.GetObjectData().GetTotalChanges()
 		b.WriteString(fmt.Sprintf("prepareCompact: %v, %q\n", r, reason))
 		b.WriteString(fmt.Sprintf("left rows: %v\n", rows-dels))
-		b.WriteString(fmt.Sprintf("ppstring: %v\n", c.obj.GetObjectData().PPString(c.verbose, 0, "")))
+		b.WriteString(fmt.Sprintf("ppstring: %v\n", c.obj.GetObjectData().PPString(c.verbose, 0, "", c.blkn)))
 
 		schema := c.obj.GetSchema()
 		if schema.HasSortKey() {
@@ -741,33 +742,33 @@ func (c *RenameColArg) Run() (err error) {
 	return txn.Commit(context.Background())
 }
 
-func parseBlkTarget(address string, tbl *catalog.TableEntry) (*catalog.ObjectEntry, error) {
+func parseBlkTarget(address string, tbl *catalog.TableEntry) (*catalog.ObjectEntry, int, error) {
 	if address == "" {
-		return nil, nil
+		return nil, 0, nil
 	}
 	parts := strings.Split(address, "_")
 	if len(parts) != 3 {
-		return nil, moerr.NewInvalidInputNoCtx(fmt.Sprintf("invalid block address: %q", address))
+		return nil, 0, moerr.NewInvalidInputNoCtx(fmt.Sprintf("invalid block address: %q", address))
 	}
 	uid, err := types.ParseUuid(parts[0])
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	fn, err := strconv.Atoi(parts[1])
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	bn, err := strconv.Atoi(parts[2])
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	bid := objectio.NewBlockid(&uid, uint16(fn), uint16(bn))
 	objid := bid.Object()
 	oentry, err := tbl.GetObjectByID(objid)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
-	return oentry, nil
+	return oentry, bn, nil
 }
 
 func parseTableTarget(address string, ac *db.AccessInfo, db *db.DB) (*catalog.TableEntry, error) {
