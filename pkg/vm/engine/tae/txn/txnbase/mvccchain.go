@@ -48,7 +48,7 @@ func (be *MVCCChain[T]) StringLocked() string {
 	it := common.NewGenericSortedDListIt(nil, be.MVCC, false)
 	for it.Valid() {
 		version := it.Get().GetPayload()
-		_, _ = w.WriteString(" -> ")
+		_, _ = w.WriteString(" -> \n")
 		_, _ = w.WriteString(version.String())
 		it.Next()
 	}
