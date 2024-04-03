@@ -18,6 +18,7 @@ import (
 	"bytes"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -91,20 +92,18 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 			startrow := ap.lastrow
 			if ctr.mp == nil {
 				if err := ctr.emptyProbe(ap, proc, anal, arg.GetIsFirst(), arg.GetIsLast(), &result); err != nil {
-					proc.PutBatch(ap.bat)
-					ap.bat = nil
 					return result, err
 				}
 			} else {
 				if err := ctr.probe(ap, proc, anal, arg.GetIsFirst(), arg.GetIsLast(), &result); err != nil {
-					proc.PutBatch(ap.bat)
-					ap.bat = nil
 					return result, err
 				}
 			}
-			if ap.lastrow == 0 || ap.lastrow == startrow {
+			if ap.lastrow == 0 {
 				proc.PutBatch(ap.bat)
 				ap.bat = nil
+			} else if ap.lastrow == startrow {
+				return result, moerr.NewInternalErrorNoCtx("left join hanging")
 			}
 			return result, nil
 
