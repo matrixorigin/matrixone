@@ -542,7 +542,7 @@ func Test_getBatchData(t *testing.T) {
 			convey.So(err, convey.ShouldNotBeNil)
 		}
 
-		param.Extern.Tail.Fields.EnclosedBy = &tree.EnclosedBy{'t'}
+		param.Extern.Tail.Fields.EnclosedBy = &tree.EnclosedBy{Value: 't'}
 		_, err = getBatchData(param, plh, proc)
 		convey.So(err, convey.ShouldNotBeNil)
 
@@ -589,12 +589,12 @@ func Test_getBatchData(t *testing.T) {
 		_, err = getBatchData(param, plh, proc)
 		convey.So(err, convey.ShouldBeNil)
 		prevStr, str := jsonline_array[0][:len(jsonline_array[0])-2], jsonline_array[0][len(jsonline_array[0])-2:]
-		plh.moCsvLineArray = [][]csvparser.Field{{{prevStr, false}}}
+		plh.moCsvLineArray = [][]csvparser.Field{{{Val: prevStr}}}
 		_, err = getBatchData(param, plh, proc)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(param.prevStr, convey.ShouldEqual, prevStr)
 
-		plh.moCsvLineArray = [][]csvparser.Field{{{str, false}}}
+		plh.moCsvLineArray = [][]csvparser.Field{{{Val: str}}}
 		_, err = getBatchData(param, plh, proc)
 		convey.So(err, convey.ShouldBeNil)
 
