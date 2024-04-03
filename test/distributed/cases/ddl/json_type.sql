@@ -221,3 +221,6 @@ select json_extract('[1,2,3]', '$[2]');
 select json_extract('[1,2,3]', '$[3]');
 SELECT JSON_EXTRACT('["apple", "banana", "cherry"]', '$[0]') AS FRUIT; 
 SELECT JSON_EXTRACT('["apple", "banana", "cherry"]', '$[1]') AS FRUIT;
+select json_extract('[1,2,3]', '$[4]');
+select json_extract('[1,2,3]', '$[5]');
+select json_extract('[1,2,3]', '$[6]');

@@ -42,3 +42,73 @@ GROUP BY d_1;
 
 drop table my_table;
 drop table precompute;
+
+drop table if exists bitmap01;
+create table bitmap01(col1 bigint);
+insert into bitmap01 values (1844674407370955161);
+insert into bitmap01 values (9223372036854775807);
+insert into bitmap01 values (0);
+select bitmap_bit_position(col1) from bitmap01;
+select bitmap_bucket_number(col1) from bitmap01;
+select bitmap_bucket_number(col1) bucket,
+       bitmap_construct_agg(bitmap_bit_position(col1)) bmp from bitmap01 group by col1;
+select bitmap_count(bitmap_construct_agg(bitmap_bit_position(col1))) from bitmap01 group by col1;
+drop table bitmap01;
+
+drop table if exists bitmap02;
+create table bitmap02 (val int);
+insert into bitmap02 values (1), (32769);
+select bitmap_bucket_number(val) as bitmap_id,
+    bitmap_construct_agg(bitmap_bit_position(val)) as bitmap
+    from bitmap02
+    group by bitmap_id;
+insert into bitmap02 values (32769), (32769), (1);
+select bitmap_bucket_number(val) as bitmap_id,
+    bitmap_construct_agg(bitmap_bit_position(val)) as bitmap
+    from bitmap02
+    group by bitmap_id;
+insert into bitmap02 values (2), (3), (4);
+select bitmap_bucket_number(val) as bitmap_id,
+    bitmap_construct_agg(bitmap_bit_position(val)) as bitmap
+    from bitmap02
+    group by bitmap_id;
+select bitmap_bucket_number(val) as bitmap_id,
+    bitmap_count(bitmap_construct_agg(bitmap_bit_position(val))) as distinct_values
+    from bitmap02
+    group by bitmap_id;
+select sum(distinct_values) from (
+select bitmap_bucket_number(val) as bitmap_id,
+    bitmap_count(bitmap_construct_agg(bitmap_bit_position(val))) as distinct_values
+    from bitmap02
+    group by bitmap_id
+);
+drop table bitmap02;
+
+drop table if exists bitmap03;
+create table bitmap03 (val tinyint unsigned);
+insert into bitmap03 values (1), (254), (127);
+select bitmap_bucket_number(val) as bitmap_id,
+    bitmap_construct_agg(bitmap_bit_position(val)) as bitmap
+    from bitmap03
+    group by bitmap_id;
+insert into bitmap03 values (10), (100), (1);
+select bitmap_bucket_number(val) as bitmap_id,
+    bitmap_construct_agg(bitmap_bit_position(val)) as bitmap
+    from bitmap03
+    group by bitmap_id;
+insert into bitmap03 values (2), (3), (4);
+select bitmap_bucket_number(val) as bitmap_id,
+    bitmap_construct_agg(bitmap_bit_position(val)) as bitmap
+    from bitmap03
+    group by bitmap_id;
+select bitmap_bucket_number(val) as bitmap_id,
+    bitmap_count(bitmap_construct_agg(bitmap_bit_position(val))) as distinct_values
+    from bitmap03
+    group by bitmap_id;
+select sum(distinct_values) from (
+select bitmap_bucket_number(val) as bitmap_id,
+    bitmap_count(bitmap_construct_agg(bitmap_bit_position(val))) as distinct_values
+    from bitmap03
+    group by bitmap_id
+);
+drop table bitmap03;

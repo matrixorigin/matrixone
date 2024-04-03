@@ -174,6 +174,8 @@ func initProxyMetrics() {
 
 func initFrontendMetrics() {
 	registry.MustRegister(acceptConnDurationHistogram)
+	registry.MustRegister(routineCounter)
+	registry.MustRegister(requestCounter)
 }
 
 func initPipelineMetrics() {

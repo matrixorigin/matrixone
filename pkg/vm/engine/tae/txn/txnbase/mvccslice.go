@@ -43,7 +43,7 @@ func (be *MVCCSlice[T]) StringLocked() string {
 	length := len(be.MVCC)
 	for i := length - 1; i >= 0; i-- {
 		version := be.MVCC[i]
-		_, _ = w.WriteString(" -> ")
+		_, _ = w.WriteString(" -> \n")
 		_, _ = w.WriteString(version.String())
 	}
 	return w.String()

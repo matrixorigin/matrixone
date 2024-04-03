@@ -581,10 +581,16 @@ message FrameBound {
 }
 
 message OnDuplicateKeyCtx {
-	TableDef table_def					= 1;
-	repeated int32 on_duplicate_idx		= 2;
-	map<string, Expr> on_duplicate_expr	= 3;
-	bool is_ignore 						= 4;
+	repeated string attrs = 1;
+	int32 insert_col_count = 2;
+	repeated Expr unique_col_check_expr = 3;
+	repeated string unique_cols = 4;
+	repeated int32 on_duplicate_idx		= 5;
+	map<string, Expr> on_duplicate_expr	= 6;
+	bool is_ignore 						= 7;
+	string table_name         = 8;
+	uint64 table_id           = 9;
+	uint32 table_version			= 10;
 }
 
 message InsertCtx {
@@ -859,7 +865,6 @@ message PreInsertUkCtx {
 	int32 pk_column 		= 2;
 	Type pk_type 			= 3;
 	Type uk_type			= 4;
-	TableDef table_def 		= 5;
 }
 
 message PreDeleteCtx {
@@ -1004,6 +1009,7 @@ message DataControl {
 		PREPARE			= 4;
 		EXECUTE			= 5;
 		DEALLOCATE		= 6;
+		CREATE_ACCOUNT  = 7;
 	}
 	//DataDefinition type
 	DclType dcl_type = 1;
@@ -1012,6 +1018,7 @@ message DataControl {
 		Prepare prepare 			= 3;
 		Execute execute				= 4;
 		Deallocate deallocate 		= 5;
+		CreateAccount create_account = 6;
 	}
 }
 
@@ -1388,6 +1395,32 @@ message Execute {
 
 message Deallocate {
 	string name			= 1;
+}
+
+enum AccountIdentifiedOption {
+	AccountIdentifiedUnknown = 0;
+	AccountIdentifiedByPassword = 1;
+	AccountIdentifiedByRandomPassword = 2;
+	AccountIdentifiedWithSSL = 3;
+}
+
+message AccountIdentified {
+	AccountIdentifiedOption Typ = 1;
+	string Str = 2;
+}
+
+enum AccountStatusOption {
+	AccountStatusOpen       = 0;
+	AccountStatusSuspend    = 1;
+	AccountStatusRestricted = 2;
+}
+
+message CreateAccount {
+	bool ifNotExists = 1;
+	Expr name = 2;
+	string adminName = 3;
+	AccountIdentified identified = 4;
+	AccountStatusOption status = 5;
 }
 
 enum TableLockType {
