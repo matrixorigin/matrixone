@@ -48,6 +48,23 @@ func scanParquetFile(ctx context.Context, param *ExternalParam, proc *process.Pr
 		bat.Vecs[i] = proc.GetVector(types.New(types.T(col.Typ.Id), col.Typ.Width, col.Typ.Scale))
 	}
 
+	if param.parqh == nil {
+		var err error
+		param.parqh, err = newParquetHandler(param)
+		if err != nil || param.plh == nil {
+			return nil, err
+		}
+	}
+
+	err := param.parqh.getData(bat, param, proc)
+	if err != nil {
+		return nil, err
+	}
+
+	return bat, nil
+}
+
+func newParquetHandler(param *ExternalParam) (*ParquetHandler, error) {
 	h := ParquetHandler{
 		batchCnt: 1000,
 	}
@@ -61,21 +78,7 @@ func scanParquetFile(ctx context.Context, param *ExternalParam, proc *process.Pr
 		return nil, err
 	}
 
-	err = h.getData(bat, param, proc)
-	if err != nil {
-		return nil, err
-	}
-
-	n := bat.Vecs[0].Length()
-	h.offset += int64(n)
-
-	param.Fileparam.FileFin++
-	if param.Fileparam.FileFin >= param.Fileparam.FileCnt {
-		param.Fileparam.End = true
-	}
-
-	bat.SetRowCount(n)
-	return bat, nil
+	return &h, nil
 }
 
 func (h *ParquetHandler) openFile(param *ExternalParam) error {
@@ -84,7 +87,7 @@ func (h *ParquetHandler) openFile(param *ExternalParam) error {
 	case param.Extern.ScanType == tree.INLINE:
 		r = bytes.NewReader(util.UnsafeStringToBytes(param.Extern.Data))
 	case param.Extern.Local:
-		return moerr.NewNYINoCtx("")
+		return moerr.NewNYI(param.Ctx, "unsupported load parquet local now")
 	default:
 		fs, readPath, err := plan2.GetForETLWithType(param.Extern, param.Fileparam.Filepath)
 		if err != nil {
@@ -98,7 +101,7 @@ func (h *ParquetHandler) openFile(param *ExternalParam) error {
 	}
 	var err error
 	h.file, err = parquet.OpenFile(r, param.FileSize[param.Fileparam.FileIndex-1])
-	return err
+	return moerr.ConvertGoError(param.Ctx, err)
 }
 
 func (h *ParquetHandler) prepare(param *ExternalParam) error {
@@ -111,13 +114,13 @@ func (h *ParquetHandler) prepare(param *ExternalParam) error {
 		}
 		col := h.file.Root().Column(attr)
 		if col == nil {
-			return moerr.NewInvalidInputNoCtx("column %s not found", attr)
+			return moerr.NewInvalidInput(param.Ctx, "column %s not found", attr)
 		}
 
 		h.cols[colIdx] = col
 		fn := h.getDataFn(col.Type(), types.T(def.Typ.Id))
 		if fn == nil {
-			return moerr.NewNYINoCtx("load %s to %s", col.Type(), types.T(def.Typ.Id))
+			return moerr.NewNYI(param.Ctx, "load %s to %s", col.Type(), types.T(def.Typ.Id))
 		}
 		h.dataFn[colIdx] = fn
 	}
@@ -140,10 +143,10 @@ func (*ParquetHandler) getDataFn(st parquet.Type, dt types.T) dataFn {
 				var n int
 				n, err = r.ReadBooleans(p)
 				if err != nil && !errors.Is(err, io.EOF) {
-					return moerr.NewInternalErrorNoCtx("")
+					return moerr.ConvertGoError(proc.Ctx, err)
 				}
 				if n != int(page.NumValues()) {
-					return moerr.NewInternalErrorNoCtx("")
+					return moerr.NewInternalError(proc.Ctx, "short read bool")
 				}
 				return vector.AppendFixedList(vec, p, nil, proc.GetMPool())
 			}
@@ -201,7 +204,7 @@ func (*ParquetHandler) getDataFn(st parquet.Type, dt types.T) dataFn {
 						err := vector.AppendBytes(vec, buf[baseOffset:endOffset:endOffset], false, proc.GetMPool())
 						baseOffset = endOffset
 						if err != nil {
-							return moerr.NewInternalErrorNoCtx("")
+							return err
 						}
 					}
 				}
@@ -216,7 +219,7 @@ func (*ParquetHandler) getDataFn(st parquet.Type, dt types.T) dataFn {
 					err := vector.AppendBytes(vec, buf[:size:size], false, proc.GetMPool())
 					buf = buf[size:]
 					if err != nil {
-						return moerr.NewInternalErrorNoCtx("")
+						return err
 					}
 				}
 				return nil
@@ -227,6 +230,8 @@ func (*ParquetHandler) getDataFn(st parquet.Type, dt types.T) dataFn {
 }
 
 func (h *ParquetHandler) getData(bat *batch.Batch, param *ExternalParam, proc *process.Process) error {
+	length := 0
+	finish := false
 	for colIdx, col := range h.cols {
 		if param.Cols[colIdx].Hidden {
 			continue
@@ -241,9 +246,10 @@ func (h *ParquetHandler) getData(bat *batch.Batch, param *ExternalParam, proc *p
 			page, err := pages.ReadPage()
 			switch {
 			case errors.Is(err, io.EOF):
+				finish = true
 				break L
 			case err != nil:
-				return err
+				return moerr.ConvertGoError(param.Ctx, err)
 			}
 
 			nr := page.NumRows()
@@ -253,7 +259,7 @@ func (h *ParquetHandler) getData(bat *batch.Batch, param *ExternalParam, proc *p
 			}
 
 			if len(page.DefinitionLevels()) != 0 || len(page.RepetitionLevels()) != 0 {
-				return moerr.NewNYINoCtx("page has repetition or definition not support")
+				return moerr.NewNYI(param.Ctx, "page has repetition or definition not support")
 			}
 
 			if o > 0 || o+n < nr {
@@ -269,18 +275,29 @@ func (h *ParquetHandler) getData(bat *batch.Batch, param *ExternalParam, proc *p
 		}
 		err := pages.Close()
 		if err != nil {
-			return err
+			return moerr.ConvertGoError(param.Ctx, err)
 		}
+		length = vec.Length()
 	}
 
-	n := bat.Vecs[0].Length()
 	for i := range h.cols {
 		if !param.Cols[i].Hidden {
 			continue
 		}
 		col := param.Cols[i]
 		typ := types.New(types.T(col.Typ.Id), col.Typ.Width, col.Typ.Scale)
-		bat.Vecs[i] = vector.NewConstNull(typ, n, proc.GetMPool())
+		bat.Vecs[i] = vector.NewConstNull(typ, length, proc.GetMPool())
+	}
+	bat.SetRowCount(length)
+
+	if finish {
+		param.parqh = nil
+		param.Fileparam.FileFin++
+		if param.Fileparam.FileFin >= param.Fileparam.FileCnt {
+			param.Fileparam.End = true
+		}
+	} else {
+		h.offset += int64(length)
 	}
 
 	return nil

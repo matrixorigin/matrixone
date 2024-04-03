@@ -76,6 +76,7 @@ type ExParam struct {
 	Zoneparam      *ZonemapFileparam
 	Filter         *FilterParam
 	MoCsvLineArray [][]csvparser.Field
+	parqh          *ParquetHandler
 }
 
 type ExFileparam struct {

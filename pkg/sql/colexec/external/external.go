@@ -99,14 +99,18 @@ func (arg *Argument) Prepare(proc *process.Process) error {
 		return moerr.NewNYI(proc.Ctx, "load format '%s'", param.Extern.Format)
 	}
 
-	if param.Extern.Format == tree.JSONLINE {
-		if param.Extern.JsonData != tree.OBJECT && param.Extern.JsonData != tree.ARRAY {
-			param.Fileparam.End = true
-			return moerr.NewNotSupported(proc.Ctx, "the jsonline format '%s' is not supported now", param.Extern.JsonData)
+	if param.Extern.Format != tree.PARQUET {
+		if param.Extern.Format == tree.JSONLINE {
+			if param.Extern.JsonData != tree.OBJECT && param.Extern.JsonData != tree.ARRAY {
+				param.Fileparam.End = true
+				return moerr.NewNotSupported(proc.Ctx, "the jsonline format '%s' is not supported now", param.Extern.JsonData)
+			}
 		}
+		param.IgnoreLineTag = int(param.Extern.Tail.IgnoredLines)
+		param.IgnoreLine = param.IgnoreLineTag
+		param.MoCsvLineArray = make([][]csvparser.Field, OneBatchMaxRow)
 	}
-	param.IgnoreLineTag = int(param.Extern.Tail.IgnoredLines)
-	param.IgnoreLine = param.IgnoreLineTag
+
 	if len(param.FileList) == 0 && param.Extern.ScanType != tree.INLINE {
 		logutil.Warnf("no such file '%s'", param.Extern.Filepath)
 		param.Fileparam.End = true
@@ -123,7 +127,6 @@ func (arg *Argument) Prepare(proc *process.Process) error {
 	}
 	param.Filter.columnMap, _, _, _ = plan2.GetColumnsByExpr(param.Filter.FilterExpr, param.tableDef)
 	param.Filter.zonemappable = plan2.ExprIsZonemappable(proc.Ctx, param.Filter.FilterExpr)
-	param.MoCsvLineArray = make([][]csvparser.Field, OneBatchMaxRow)
 	return nil
 }
 
@@ -152,7 +155,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		result.Status = vm.ExecStop
 		return result, nil
 	}
-	if param.plh == nil && param.Extern.ScanType != tree.INLINE { // todo
+	if (param.plh == nil && param.parqh == nil) && param.Extern.ScanType != tree.INLINE {
 		if param.Fileparam.FileIndex >= len(param.FileList) {
 			result.Status = vm.ExecStop
 			return result, nil

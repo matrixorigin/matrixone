@@ -15,7 +15,6 @@
 package external
 
 import (
-	"bytes"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -24,67 +23,6 @@ import (
 	"github.com/parquet-go/parquet-go/encoding"
 	"github.com/smartystreets/goconvey/convey"
 )
-
-type Contact struct {
-	ID   int64  `parquet:"id"`
-	Name string `parquet:"name"`
-	Sex  bool   `parquet:"sex"`
-}
-
-func buildFile() *bytes.Buffer {
-	buf := bytes.Buffer{}
-	writer := parquet.NewWriter(&buf)
-	data := [][]Contact{
-		{
-			{ID: 1, Name: "user1"},
-			{ID: 2, Name: "user2"},
-			{ID: 7, Name: "user7"},
-		},
-		{
-			{ID: 8, Name: "user8"},
-			{ID: 10, Name: "user10"},
-			{ID: 12, Name: "user12"},
-		},
-		{
-			{ID: 15, Name: "user15"},
-			{ID: 16, Name: "user16"},
-		},
-	}
-	for _, rows := range data {
-		for _, row := range rows {
-			err := writer.Write(&row)
-			if err != nil {
-				panic(err)
-			}
-		}
-		err := writer.Flush()
-		if err != nil {
-			panic(err)
-		}
-	}
-	err := writer.Close()
-	if err != nil {
-		panic(err)
-	}
-	return &buf
-}
-
-func Test_getDataFromPage(t *testing.T) {
-
-	buf := buildFile()
-	f, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
-	if err != nil {
-		panic(err)
-	}
-
-	t.Log(f.Root().Column("sex").Type().LogicalType())
-	return
-
-	// os.WriteFile("test.parq", buf.Bytes(), 0666)
-
-	// return
-
-}
 
 func Test_dataFn(t *testing.T) {
 	convey.Convey("dataFn", t, func() {
