@@ -64,8 +64,6 @@ type Vector struct {
 	// FIXME: Bad design! Will be deleted soon.
 	isBin bool
 
-	Debug string
-
 	// AllocMsg []string
 	// FreeMsg  []string
 	// PutMsg   []string
