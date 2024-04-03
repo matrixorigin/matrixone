@@ -159,6 +159,31 @@ func (c *client) Close() error {
 	return c.client.Close()
 }
 
+func (c *client) Ping(ctx context.Context, serviceID string) error {
+	var address string
+	for i := 0; i < 2; i++ {
+		sid := getUUIDFromServiceIdentifier(serviceID)
+		c.cluster.GetCNServiceWithoutWorkingState(
+			clusterservice.NewServiceIDSelector(sid),
+			func(s metadata.CNService) bool {
+				address = s.LockServiceAddress
+				return false
+			})
+		if address != "" {
+			break
+		}
+		if i == 0 {
+			c.cluster.ForceRefresh(true)
+		}
+	}
+	if address == "" {
+		getLogger().Error("cannot ping lockservice address",
+			zap.String("serviceID", serviceID))
+
+	}
+	return c.client.Ping(ctx, address)
+}
+
 // WithServerMessageFilter set filter func. Requests can be modified or filtered out by the filter
 // before they are processed by the handler.
 func WithServerMessageFilter(filter func(*pb.Request) bool) ServerOption {

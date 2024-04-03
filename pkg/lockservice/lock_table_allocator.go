@@ -33,6 +33,7 @@ type lockTableAllocator struct {
 	keepBindTimeout time.Duration
 	address         string
 	server          Server
+	client          Client
 
 	mu struct {
 		sync.RWMutex
@@ -50,6 +51,11 @@ func NewLockTableAllocator(
 		panic("invalid lock table bind timeout")
 	}
 
+	rpcClient, err := NewClient(cfg)
+	if err != nil {
+		panic(err)
+	}
+
 	logger := runtime.ProcessLevelRuntime().Logger()
 	tag := "lockservice.allocator"
 	la := &lockTableAllocator{
@@ -58,6 +64,7 @@ func NewLockTableAllocator(
 		stopper: stopper.NewStopper(tag,
 			stopper.WithLogger(logger.RawLogger().Named(tag))),
 		keepBindTimeout: keepBindTimeout,
+		client:          rpcClient,
 	}
 	la.mu.lockTables = make(map[uint64]pb.LockTable, 10240)
 	la.mu.services = make(map[string]*serviceBinds)
@@ -124,9 +131,19 @@ func (l *lockTableAllocator) Valid(binds []pb.LockTable) []uint64 {
 
 func (l *lockTableAllocator) Close() error {
 	l.stopper.Stop()
-	err := l.server.Close()
-	l.logger.Debug("lock service allocator closed",
+	var err error
+	err1 := l.server.Close()
+	l.logger.Debug("lock service allocator server closed",
 		zap.Error(err))
+	if err1 != nil {
+		err = err1
+	}
+	err2 := l.client.Close()
+	l.logger.Debug("lock service allocator client closed",
+		zap.Error(err))
+	if err2 != nil {
+		err = err2
+	}
 	return err
 }
 
@@ -270,8 +287,19 @@ func (l *lockTableAllocator) checkInvalidBinds(ctx context.Context) {
 					zap.Int("count", len(timeoutBinds)))
 			}
 			for _, b := range timeoutBinds {
-				b.disable()
-				l.disableTableBinds(b)
+				succ := false
+				for i := 0; i < 3; i++ {
+					err := l.client.Ping(ctx, b.serviceID)
+					if err == nil {
+						succ = true
+						break
+					}
+					logPingFailed(b.serviceID, err)
+				}
+				if !succ {
+					b.disable()
+					l.disableTableBinds(b)
+				}
 			}
 			timer.Reset(l.keepBindTimeout)
 		}
