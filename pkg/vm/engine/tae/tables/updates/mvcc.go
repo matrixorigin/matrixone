@@ -699,7 +699,12 @@ func (n *MVCCHandle) StringLocked(level common.PPLevel, depth int, prefix string
 		// s = fmt.Sprintf("%s%s", s, n.deletes.StringLocked())
 		inMemoryCount = n.deletes.mask.GetCardinality()
 	}
-	s := fmt.Sprintf("%sBLK[%d]InMem:%d\n%s", common.RepeatStr("\t", depth), n.blkID, inMemoryCount, n.deletes.StringLocked())
+	s := fmt.Sprintf("%sBLK[%d]InMem:%d\n", common.RepeatStr("\t", depth), n.blkID, inMemoryCount)
+	if level > common.PPL3 {
+		if imemChain := n.deletes.StringLocked(); imemChain != "" {
+			s = fmt.Sprintf("%s%s", s, imemChain)
+		}
+	}
 	if n.deltaloc.Depth() > 0 {
 		s = fmt.Sprintf("%s%s", s, n.deltaloc.StringLocked())
 	}
