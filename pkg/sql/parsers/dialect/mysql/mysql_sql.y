@@ -747,6 +747,7 @@ import (
 %type <str> priority_opt priority quick_opt ignore_opt wild_opt
 
 %type <str> account_name account_admin_name account_role_name
+%type <expr> account_name_or_param
 %type <accountAuthOption> account_auth_option
 %type <alterAccountAuthOption> alter_account_auth_option
 %type <accountIdentified> account_identified
@@ -5830,7 +5831,7 @@ create_view_stmt:
     }
 
 create_account_stmt:
-    CREATE ACCOUNT not_exists_opt account_name account_auth_option account_status_option account_comment_opt
+    CREATE ACCOUNT not_exists_opt account_name_or_param account_auth_option account_status_option account_comment_opt
     {
         var IfNotExists = $3
         var Name = $4
@@ -5899,6 +5900,17 @@ account_name:
     ident
     {
     	$$ = $1.Compare()
+    }
+
+account_name_or_param:
+    ident
+    {
+        var Str = $1.Compare()
+        $$ = tree.NewNumValWithType(constant.MakeString(Str), Str, false, tree.P_char)
+    }
+|   VALUE_ARG
+    {
+        $$ = tree.NewParamExpr(yylex.(*Lexer).GetParamIndex())
     }
 
 account_auth_option:
