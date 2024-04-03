@@ -393,41 +393,41 @@ func makeEntriesCrossJoinCentroidsOnCentroidId(builder *QueryBuilder, bindCtx *B
 	return joinEntriesAndCentroids
 }
 
-func makeTblIndexJoinEntriesCentroidOnPK(builder *QueryBuilder, bindCtx *BindContext,
-	idxTableDefs []*TableDef, idxTags map[string]int32,
-	scanNode *plan.Node, entriesJoinCentroids int32, pkPos int32,
-	sortNode *plan.Node) int32 {
-
-	entriesOriginPkEqTblPk, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{
-
-		{
-			Typ: idxTableDefs[2].Cols[2].Typ,
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{
-					RelPos: scanNode.BindingTags[0],
-					ColPos: pkPos, // tbl.pk
-				},
-			},
-		},
-		{
-			Typ: idxTableDefs[2].Cols[2].Typ,
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{
-					RelPos: idxTags["entries.scan"],
-					ColPos: 2, // entries.origin_pk
-				},
-			},
-		},
-	})
-	entriesJoinTbl := builder.appendNode(&plan.Node{
-		NodeType: plan.Node_JOIN,
-		JoinType: plan.Node_INDEX,
-		Children: []int32{scanNode.NodeId, entriesJoinCentroids},
-		OnList:   []*Expr{entriesOriginPkEqTblPk},
-	}, bindCtx)
-
-	return entriesJoinTbl
-}
+//func makeTblIndexJoinEntriesCentroidOnPK(builder *QueryBuilder, bindCtx *BindContext,
+//	idxTableDefs []*TableDef, idxTags map[string]int32,
+//	scanNode *plan.Node, entriesJoinCentroids int32, pkPos int32,
+//	sortNode *plan.Node) int32 {
+//
+//	entriesOriginPkEqTblPk, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{
+//
+//		{
+//			Typ: idxTableDefs[2].Cols[2].Typ,
+//			Expr: &plan.Expr_Col{
+//				Col: &plan.ColRef{
+//					RelPos: scanNode.BindingTags[0],
+//					ColPos: pkPos, // tbl.pk
+//				},
+//			},
+//		},
+//		{
+//			Typ: idxTableDefs[2].Cols[2].Typ,
+//			Expr: &plan.Expr_Col{
+//				Col: &plan.ColRef{
+//					RelPos: idxTags["entries.scan"],
+//					ColPos: 2, // entries.origin_pk
+//				},
+//			},
+//		},
+//	})
+//	entriesJoinTbl := builder.appendNode(&plan.Node{
+//		NodeType: plan.Node_JOIN,
+//		JoinType: plan.Node_INDEX,
+//		Children: []int32{scanNode.NodeId, entriesJoinCentroids},
+//		OnList:   []*Expr{entriesOriginPkEqTblPk},
+//	}, bindCtx)
+//
+//	return entriesJoinTbl
+//}
 
 func makeTblInnerJoinEntriesCentroidOnPK(builder *QueryBuilder, bindCtx *BindContext,
 	idxTableDefs []*TableDef, idxTags map[string]int32,
