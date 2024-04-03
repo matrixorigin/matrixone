@@ -38,7 +38,7 @@ jobs:
           cat ./etc/launch-tae-compose/config/tn.toml
 
           mkdir -p ${{ github.workspace }}/docker-compose-log
-          docker-compose -f etc/launch-tae-compose/compose.yaml --profile launch-multi-cn up -d --build
+          docker compose -f etc/launch-tae-compose/compose.yaml --profile launch-multi-cn up -d --build
           
           # wait for ready
           i=1
@@ -136,7 +136,7 @@ jobs:
           cat ./etc/launch-tae-compose/config/cn-1.toml
           cat ./etc/launch-tae-compose/config/tn.toml
           mkdir -p ${{ github.workspace }}/docker-compose-log
-          docker-compose -f etc/launch-tae-compose/compose.yaml --profile launch-multi-cn up -d --build
+          docker compose -f etc/launch-tae-compose/compose.yaml --profile launch-multi-cn up -d --build
           
           # wait for ready
           i=1
