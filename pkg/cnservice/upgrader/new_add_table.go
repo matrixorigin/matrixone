@@ -370,6 +370,7 @@ var processlistView = &table.Table{
 	Columns: []table.Column{
 		table.StringColumn("account", "the account name"),
 		table.StringColumn("client_host", "the ip:port of the client"),
+		table.StringColumn("proxy_host", "the ip:port on the proxy connection"),
 		table.StringColumn("command", "the COMMAND send by client"),
 		table.UInt64Column("conn_id", "the connection id of the tcp between client"),
 		table.StringColumn("db", "the database be used"),
@@ -389,7 +390,7 @@ var processlistView = &table.Table{
 	},
 	CreateViewSql: "CREATE VIEW IF NOT EXISTS `information_schema`.`PROCESSLIST` AS SELECT * FROM PROCESSLIST() A;",
 	//actually drop table here
-	CreateTableSql: "drop table if exists `information_schema`.`PROCESSLIST`;",
+	CreateTableSql: "drop view if exists `information_schema`.`PROCESSLIST`;",
 }
 
 var MoSessionsView = &table.Table{
@@ -528,6 +529,28 @@ var MoCacheView = &table.Table{
 	CreateTableSql: "drop view if exists `mo_catalog`.`mo_cache`;",
 }
 
+var ReferentialConstraintsView = &table.Table{
+	Account:  table.AccountAll,
+	Database: sysview.InformationDBConst,
+	Table:    "referential_constraints",
+	CreateViewSql: "CREATE VIEW information_schema.REFERENTIAL_CONSTRAINTS " +
+		"AS " +
+		"SELECT DISTINCT " +
+		"'def' AS CONSTRAINT_CATALOG, " +
+		"fk.db_name AS CONSTRAINT_SCHEMA, " +
+		"fk.constraint_name AS CONSTRAINT_NAME, " +
+		"'def' AS UNIQUE_CONSTRAINT_CATALOG, " +
+		"fk.refer_db_name AS UNIQUE_CONSTRAINT_SCHEMA, " +
+		"idx.type AS UNIQUE_CONSTRAINT_NAME," +
+		"'NONE' AS MATCH_OPTION, " +
+		"fk.on_update AS UPDATE_RULE, " +
+		"fk.on_delete AS DELETE_RULE, " +
+		"fk.table_name AS TABLE_NAME, " +
+		"fk.refer_table_name AS REFERENCED_TABLE_NAME " +
+		"FROM mo_catalog.mo_foreign_keys fk " +
+		"JOIN mo_catalog.mo_indexes idx ON (fk.refer_column_name = idx.column_name)",
+}
+
 var transactionMetricView = &table.Table{
 	Account:  table.AccountAll,
 	Database: catalog.MO_SYSTEM_METRICS,
@@ -539,7 +562,7 @@ var transactionMetricView = &table.Table{
 }
 
 var registeredViews = []*table.Table{processlistView, MoLocksView, MoVariablesView, MoTransactionsView, MoCacheView}
-var needUpgradeNewView = []*table.Table{transactionMetricView, PARTITIONSView, STATISTICSView, MoSessionsView, SqlStatementHotspotView, MoLocksView, MoConfigurationsView, MoVariablesView, MoTransactionsView, MoCacheView}
+var needUpgradeNewView = []*table.Table{transactionMetricView, PARTITIONSView, STATISTICSView, MoSessionsView, SqlStatementHotspotView, MoLocksView, MoConfigurationsView, MoVariablesView, MoTransactionsView, MoCacheView, ReferentialConstraintsView}
 
 var InformationSchemaSCHEMATA = &table.Table{
 	Account:  table.AccountAll,
