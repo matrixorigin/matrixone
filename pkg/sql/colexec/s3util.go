@@ -151,19 +151,10 @@ func AllocS3Writer(proc *process.Process, tableDef *plan.TableDef) (*S3Writer, e
 
 	// Get Single Col pk index
 	for idx, colDef := range tableDef.Cols {
-		// Maybe current table are `mo_cloumns`, `mo_tables` or `mo_databases`, these table's `TableDef.Pkey` is NULL
-		if tableDef.Pkey == nil {
-			if colDef.Primary {
-				writer.sortIndex = idx
-				writer.pk = idx
-				break
-			}
-		} else {
-			if colDef.Name == tableDef.Pkey.PkeyColName && colDef.Name != catalog.FakePrimaryKeyColName {
-				writer.sortIndex = idx
-				writer.pk = idx
-				break
-			}
+		if colDef.Name == tableDef.Pkey.PkeyColName && colDef.Name != catalog.FakePrimaryKeyColName {
+			writer.sortIndex = idx
+			writer.pk = idx
+			break
 		}
 	}
 

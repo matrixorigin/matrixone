@@ -304,3 +304,22 @@ func isStatementExisted(ctx context.Context, db *sql.DB, stmtId string, status s
 	}
 	return exists, nil
 }
+
+var gLabels map[string]string = nil
+
+func SetLabelSelector(labels map[string]string) {
+	if len(labels) == 0 {
+		return
+	}
+	labels["account"] = "sys"
+	gLabels = labels
+}
+
+// GetLabelSelector
+// Tips: more details in route.RouteForSuperTenant function. It mainly depends on S1.
+// Tips: gLabels better contain {"account":"sys"}.
+// - Because clusterservice.Selector using clusterservice.globbing do regex-match in route.RouteForSuperTenant
+// - If you use labels{"account":"sys", "role":"ob"}, the Selector can match those pods, which have labels{"account":"*", "role":"ob"}
+func GetLabelSelector() map[string]string {
+	return gLabels
+}
