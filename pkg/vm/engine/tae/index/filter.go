@@ -16,6 +16,7 @@ package index
 
 import (
 	"bytes"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"strconv"
 
 	"github.com/FastFilter/xorfilter"
@@ -111,6 +112,7 @@ func (filter *binaryFuseFilter) MayContainsAny(keys *vector.Vector, lowerBound i
 		}
 		return nil
 	}
+	logutil.Infof("keys length %v, lower %v upper %v", keys.Length(), lowerBound, upperBound)
 	_ = containers.ForeachWindowBytes(keys, lowerBound, upperBound-lowerBound, op, nil)
 	return found
 }
