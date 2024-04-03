@@ -27,17 +27,6 @@ func OrderedBinarySearchOffsetByValFactory[T types.OrderedT](vals []T) func(*Vec
 	return func(vec *Vector) []int32 {
 		var sels []int32
 		rows := MustFixedCol[T](vec)
-		if len(vals) >= 4 {
-			minVal := rows[0]
-			maxVal := rows[len(rows)-1]
-			lowerBound := sort.Search(len(vals), func(i int) bool {
-				return minVal <= vals[i]
-			})
-			upperBound := sort.Search(len(vals), func(i int) bool {
-				return maxVal < vals[i]
-			})
-			vals = vals[lowerBound:upperBound]
-		}
 
 		if len(vals) <= kMaxLenForBinarySearch {
 			offset := 0
