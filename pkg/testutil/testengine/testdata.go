@@ -23,7 +23,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
@@ -55,18 +54,6 @@ func CreateR(db engine.Database) {
 					Name: "price",
 					Type: types.T_float64.ToType(),
 				}})
-			attrs = append(attrs, &engine.ConstraintDef{
-				Cts: []engine.Constraint{
-					&engine.PrimaryKeyDef{
-						Pkey: &plan.PrimaryKeyDef{
-							Cols:        []uint64{0},
-							PkeyColId:   0,
-							PkeyColName: "orderid",
-							Names:       []string{"orderid"},
-						},
-					},
-				},
-			})
 		}
 		if err := db.Create(ctx, "r", attrs); err != nil {
 			logutil.Fatal(err.Error())
@@ -167,9 +154,10 @@ func CreateS(db engine.Database) {
 		{
 			attrs = append(attrs, &engine.AttributeDef{
 				Attr: engine.Attribute{
-					Alg:  compress.Lz4,
-					Name: "orderid",
-					Type: types.New(types.T_varchar, 10, 0),
+					Alg:     compress.Lz4,
+					Name:    "orderid",
+					Type:    types.New(types.T_varchar, 10, 0),
+					Primary: true,
 				}})
 			attrs = append(attrs, &engine.AttributeDef{
 				Attr: engine.Attribute{
@@ -183,18 +171,6 @@ func CreateS(db engine.Database) {
 					Name: "price",
 					Type: types.T_float64.ToType(),
 				}})
-			attrs = append(attrs, &engine.ConstraintDef{
-				Cts: []engine.Constraint{
-					&engine.PrimaryKeyDef{
-						Pkey: &plan.PrimaryKeyDef{
-							Cols:        []uint64{0},
-							PkeyColId:   0,
-							PkeyColName: "orderid",
-							Names:       []string{"orderid"},
-						},
-					},
-				},
-			})
 		}
 		if err := db.Create(ctx, "s", attrs); err != nil {
 			logutil.Fatal(err.Error())
@@ -294,9 +270,10 @@ func CreateT(db engine.Database) {
 		{
 			attrs = append(attrs, &engine.AttributeDef{
 				Attr: engine.Attribute{
-					Alg:  compress.Lz4,
-					Name: "id",
-					Type: types.T_varchar.ToType(),
+					Alg:     compress.Lz4,
+					Name:    "id",
+					Type:    types.T_varchar.ToType(),
+					Primary: true,
 				}})
 			attrs = append(attrs, &engine.AttributeDef{
 				Attr: engine.Attribute{
@@ -304,18 +281,6 @@ func CreateT(db engine.Database) {
 					Name: "price",
 					Type: types.T_float64.ToType(),
 				}})
-			attrs = append(attrs, &engine.ConstraintDef{
-				Cts: []engine.Constraint{
-					&engine.PrimaryKeyDef{
-						Pkey: &plan.PrimaryKeyDef{
-							Cols:        []uint64{0},
-							PkeyColId:   0,
-							PkeyColName: "id",
-							Names:       []string{"id"},
-						},
-					},
-				},
-			})
 		}
 		if err := db.Create(ctx, "t", attrs); err != nil {
 			logutil.Fatal(err.Error())
@@ -332,9 +297,10 @@ func CreateT1(db engine.Database) {
 		{
 			attrs = append(attrs, &engine.AttributeDef{
 				Attr: engine.Attribute{
-					Alg:  compress.Lz4,
-					Name: "spid",
-					Type: types.T_int32.ToType(),
+					Alg:     compress.Lz4,
+					Name:    "spid",
+					Type:    types.T_int32.ToType(),
+					Primary: true,
 				}})
 			attrs = append(attrs, &engine.AttributeDef{
 				Attr: engine.Attribute{
@@ -348,18 +314,6 @@ func CreateT1(db engine.Database) {
 					Name: "score",
 					Type: types.T_int8.ToType(),
 				}})
-			attrs = append(attrs, &engine.ConstraintDef{
-				Cts: []engine.Constraint{
-					&engine.PrimaryKeyDef{
-						Pkey: &plan.PrimaryKeyDef{
-							Cols:        []uint64{0},
-							PkeyColId:   0,
-							PkeyColName: "spid",
-							Names:       []string{"spid"},
-						},
-					},
-				},
-			})
 		}
 		if err := db.Create(ctx, "t1", attrs); err != nil {
 			logutil.Fatal(err.Error())
@@ -460,9 +414,10 @@ func CreateCustomer(db engine.Database) {
 		{
 			attrs = append(attrs, &engine.AttributeDef{
 				Attr: engine.Attribute{
-					Alg:  compress.Lz4,
-					Name: "c_custkey",
-					Type: types.T_int64.ToType(),
+					Alg:     compress.Lz4,
+					Name:    "c_custkey",
+					Type:    types.T_int64.ToType(),
+					Primary: true,
 				}})
 			attrs = append(attrs, &engine.AttributeDef{
 				Attr: engine.Attribute{
@@ -506,18 +461,6 @@ func CreateCustomer(db engine.Database) {
 					Name: "c_mktsegment",
 					Type: types.T_varchar.ToType(),
 				}})
-			attrs = append(attrs, &engine.ConstraintDef{
-				Cts: []engine.Constraint{
-					&engine.PrimaryKeyDef{
-						Pkey: &plan.PrimaryKeyDef{
-							Cols:        []uint64{0},
-							PkeyColId:   0,
-							PkeyColName: "c_custkey",
-							Names:       []string{"c_custkey"},
-						},
-					},
-				},
-			})
 		}
 		if err := db.Create(ctx, "customer", attrs); err != nil {
 			logutil.Fatal(err.Error())
@@ -648,9 +591,10 @@ func CreatePart(db engine.Database) {
 		{
 			attrs = append(attrs, &engine.AttributeDef{
 				Attr: engine.Attribute{
-					Alg:  compress.Lz4,
-					Name: "p_partkey",
-					Type: types.T_int64.ToType(),
+					Alg:     compress.Lz4,
+					Name:    "p_partkey",
+					Type:    types.T_int64.ToType(),
+					Primary: true,
 				}})
 			attrs = append(attrs, &engine.AttributeDef{
 				Attr: engine.Attribute{
@@ -700,18 +644,6 @@ func CreatePart(db engine.Database) {
 					Name: "p_container",
 					Type: types.T_varchar.ToType(),
 				}})
-			attrs = append(attrs, &engine.ConstraintDef{
-				Cts: []engine.Constraint{
-					&engine.PrimaryKeyDef{
-						Pkey: &plan.PrimaryKeyDef{
-							Cols:        []uint64{0},
-							PkeyColId:   0,
-							PkeyColName: "p_partkey",
-							Names:       []string{"p_partkey"},
-						},
-					},
-				},
-			})
 		}
 		if err := db.Create(ctx, "part", attrs); err != nil {
 			logutil.Fatal(err.Error())
@@ -727,9 +659,10 @@ func CreateSupplier(db engine.Database) {
 		{
 			attrs = append(attrs, &engine.AttributeDef{
 				Attr: engine.Attribute{
-					Alg:  compress.Lz4,
-					Name: "s_suppkey",
-					Type: types.T_int64.ToType(),
+					Alg:     compress.Lz4,
+					Name:    "s_suppkey",
+					Type:    types.T_int64.ToType(),
+					Primary: true,
 				}})
 			attrs = append(attrs, &engine.AttributeDef{
 				Attr: engine.Attribute{
@@ -767,18 +700,6 @@ func CreateSupplier(db engine.Database) {
 					Name: "s_phone",
 					Type: types.T_varchar.ToType(),
 				}})
-			attrs = append(attrs, &engine.ConstraintDef{
-				Cts: []engine.Constraint{
-					&engine.PrimaryKeyDef{
-						Pkey: &plan.PrimaryKeyDef{
-							Cols:        []uint64{0},
-							PkeyColId:   0,
-							PkeyColName: "s_suppkey",
-							Names:       []string{"s_suppkey"},
-						},
-					},
-				},
-			})
 		}
 		if err := db.Create(ctx, "supplier", attrs); err != nil {
 			logutil.Fatal(err.Error())
@@ -794,9 +715,10 @@ func CreateDate(db engine.Database) {
 		{
 			attrs = append(attrs, &engine.AttributeDef{
 				Attr: engine.Attribute{
-					Alg:  compress.Lz4,
-					Name: "d_datekey",
-					Type: types.T_varchar.ToType(),
+					Alg:     compress.Lz4,
+					Name:    "d_datekey",
+					Type:    types.T_varchar.ToType(),
+					Primary: true,
 				}})
 			attrs = append(attrs, &engine.AttributeDef{
 				Attr: engine.Attribute{
@@ -846,18 +768,6 @@ func CreateDate(db engine.Database) {
 					Name: "d_weeknuminyear",
 					Type: types.T_varchar.ToType(),
 				}})
-			attrs = append(attrs, &engine.ConstraintDef{
-				Cts: []engine.Constraint{
-					&engine.PrimaryKeyDef{
-						Pkey: &plan.PrimaryKeyDef{
-							Cols:        []uint64{0},
-							PkeyColId:   0,
-							PkeyColName: "d_datekey",
-							Names:       []string{"d_datekey"},
-						},
-					},
-				},
-			})
 		}
 		if err := db.Create(ctx, "dates", attrs); err != nil {
 			logutil.Fatal(err.Error())
@@ -896,18 +806,6 @@ func CreateCompressFileTable(db engine.Database) {
 					Name: "d",
 					Type: types.T_int32.ToType(),
 				}})
-			attrs = append(attrs, &engine.ConstraintDef{
-				Cts: []engine.Constraint{
-					&engine.PrimaryKeyDef{
-						Pkey: &plan.PrimaryKeyDef{
-							Cols:        []uint64{1},
-							PkeyColId:   1,
-							PkeyColName: "b",
-							Names:       []string{"b"},
-						},
-					},
-				},
-			})
 		}
 		if err := db.Create(ctx, "pressTbl", attrs); err != nil {
 			logutil.Fatal(err.Error())
