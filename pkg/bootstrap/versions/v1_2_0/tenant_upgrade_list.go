@@ -188,7 +188,8 @@ var upg_mo_snapshots = versions.UpgradeEntry{
 			level enum('cluster','account','database','table'),
 	        account_name varchar(300),
 			database_name varchar(5000),
-			table_name  varchar(5000)
+			table_name  varchar(5000),
+			obj_id bigint unsigned
 			);`, catalog.MO_CATALOG, catalog.MO_SNAPSHOTS),
 	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
 		isExist, err := versions.CheckTableDefinition(txn, accountId, catalog.MO_CATALOG, catalog.MO_SNAPSHOTS)

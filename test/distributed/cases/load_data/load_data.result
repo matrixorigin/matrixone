@@ -645,15 +645,13 @@ cha3    yicha
 4    chayige
 drop table test03;
 drop table if exists test04;
-
 create table test04 (col1 varchar(20), col2 varchar(60));
-
 load data infile '$resources/load_data/test_escaped_by01.csv' into table test04 fields terminated by ',' enclosed by '"' escaped by '\\' lines terminated by '\n';
-
 select * from test04;
-
+col1    col2
+John Doe    Programmer,aSoftware Engineer
+Jane Smith    Data Scientist,,Data Analyst
 drop table test04;
-
 drop table if exists test05;
 create table test05 (col1 varchar(20), col2 varchar(60));
 load data infile '$resources/load_data/test_escaped_by02.csv' into table test05 fields terminated by ',' enclosed by '"' escaped by '\\' lines terminated by '\n';

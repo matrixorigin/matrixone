@@ -11480,7 +11480,7 @@ func TestDoCreateSnapshot(t *testing.T) {
 		bh.sql2result[sql] = mrs
 
 		sql2, _ := getSqlForCheckTenant(ctx, "acc1")
-		mrs2 := newMrsForPasswordOfUser([][]interface{}{{}})
+		mrs2 := newMrsForPasswordOfUser([][]interface{}{{1}})
 		bh.sql2result[sql2] = mrs2
 
 		err := doCreateSnapshot(ctx, ses, cs)
