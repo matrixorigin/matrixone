@@ -1969,11 +1969,19 @@ func (ses *Session) InitGlobalSystemVariables() error {
 
 func (ses *Session) getUpdateVariableSqlsByToml() []string {
 	updateSqls := make([]string, 0)
-	if ses.pu.SV.SqlMode != gSysVarsDefs["sql_mode"].Default {
-		tenantInfo := ses.GetTenantInfo()
+	tenantInfo := ses.GetTenantInfo()
+	// sql_mode
+	if getVariableValue(ses.pu.SV.SqlMode) != gSysVarsDefs["sql_mode"].Default {
 		sqlForUpdate := getSqlForUpdateSystemVariableValue(ses.pu.SV.SqlMode, uint64(tenantInfo.GetTenantID()), "sql_mode")
 		updateSqls = append(updateSqls, sqlForUpdate)
 	}
+
+	// lower_case_table_names
+	if getVariableValue(ses.pu.SV.LowerCaseTableNames) != gSysVarsDefs["lower_case_table_names"].Default {
+		sqlForUpdate := getSqlForUpdateSystemVariableValue(getVariableValue(ses.pu.SV.LowerCaseTableNames), uint64(tenantInfo.GetTenantID()), "lower_case_table_names")
+		updateSqls = append(updateSqls, sqlForUpdate)
+	}
+
 	return updateSqls
 }
 
