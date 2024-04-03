@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"encoding/hex"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"math"
 	"sort"
 	"strings"
@@ -739,6 +740,7 @@ func (zm ZM) SubVecIn(vec *vector.Vector) (int, int) {
 		upperBound := sort.Search(len(col), func(i int) bool {
 			return maxVal >= col[i] && i >= lowerBound
 		})
+		logutil.Infof("lower %v, %v, upper %v, %v", lowerBound, col[lowerBound], upperBound, col[upperBound])
 		return lowerBound, upperBound
 
 	case types.T_uint8:
