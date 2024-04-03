@@ -251,7 +251,6 @@ func splitUserInput(ctx context.Context, userInput string, delimiter byte) (*Ten
 		}, nil
 	} else {
 		tenant := userInput[:p]
-		tenant = strings.TrimSpace(tenant)
 		if len(tenant) == 0 {
 			return &TenantInfo{}, moerr.NewInternalError(ctx, "invalid tenant name '%s'", tenant)
 		}
@@ -260,7 +259,6 @@ func splitUserInput(ctx context.Context, userInput string, delimiter byte) (*Ten
 		if p2 == -1 {
 			//tenant:user
 			user := userRole
-			user = strings.TrimSpace(user)
 			if len(user) == 0 {
 				return &TenantInfo{}, moerr.NewInternalError(ctx, "invalid user name '%s'", user)
 			}
@@ -271,12 +269,10 @@ func splitUserInput(ctx context.Context, userInput string, delimiter byte) (*Ten
 			}, nil
 		} else {
 			user := userRole[:p2]
-			user = strings.TrimSpace(user)
 			if len(user) == 0 {
 				return &TenantInfo{}, moerr.NewInternalError(ctx, "invalid user name '%s'", user)
 			}
 			role := userRole[p2+1:]
-			role = strings.TrimSpace(role)
 			if len(role) == 0 {
 				return &TenantInfo{}, moerr.NewInternalError(ctx, "invalid role name '%s'", role)
 			}
@@ -1051,7 +1047,8 @@ var (
 			level enum('cluster','account','database','table'),
 	        account_name varchar(300),
 			database_name varchar(5000),
-			table_name  varchar(5000)
+			table_name  varchar(5000),
+			obj_id bigint unsigned
 			);`,
 		`create table mo_pubs(
     		pub_name varchar(64) primary key,
@@ -1155,7 +1152,8 @@ var (
 		level,
 		account_name,
 		database_name,
-		table_name) values ('%s','%s', '%s', '%s','%s',	'%s','%s');`
+		table_name,
+		obj_id) values ('%s','%s', '%s', '%s','%s',	'%s','%s', '%d');`
 
 	initMoUserDefinedFunctionFormat = `insert into mo_catalog.mo_user_defined_function(
 			name,
@@ -1699,12 +1697,12 @@ func getSqlForInsertIntoMoStages(ctx context.Context, stageName, url, credential
 	return fmt.Sprintf(insertIntoMoStages, stageName, url, credentials, status, createdTime, comment), nil
 }
 
-func getSqlForCreateSnapshot(ctx context.Context, snapshotId, snapshotName, ts, level, accountName, databaseName, tableName string) (string, error) {
+func getSqlForCreateSnapshot(ctx context.Context, snapshotId, snapshotName, ts, level, accountName, databaseName, tableName string, objectId uint64) (string, error) {
 	err := inputNameIsInvalid(ctx, snapshotName)
 	if err != nil {
 		return "", err
 	}
-	return fmt.Sprintf(insertIntoMoSnapshots, snapshotId, snapshotName, ts, level, accountName, databaseName, tableName), nil
+	return fmt.Sprintf(insertIntoMoSnapshots, snapshotId, snapshotName, ts, level, accountName, databaseName, tableName, objectId), nil
 }
 
 func getSqlForDropStage(stageName string) string {
@@ -9274,7 +9272,7 @@ func doInterpretCall(ctx context.Context, ses *Session, call *tree.CallStmt) ([]
 		return nil, moerr.NewNoUDFNoCtx(string(call.Name.Name.ObjectName))
 	}
 
-	stmt, err := parsers.Parse(ctx, dialect.MYSQL, spBody, 1)
+	stmt, err := parsers.Parse(ctx, dialect.MYSQL, spBody, 1, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -9624,6 +9622,7 @@ func doCreateSnapshot(ctx context.Context, ses *Session, stmt *tree.CreateSnapSh
 	var databaseName string
 	var tableName string
 	var sql string
+	var objId uint64
 
 	// check create stage priv
 	err = doCheckRole(ctx, ses)
@@ -9643,7 +9642,7 @@ func doCreateSnapshot(ctx context.Context, ses *Session, stmt *tree.CreateSnapSh
 
 	// check create snapshot priv
 
-	// 1.only admin can create tenant level snapshot for himself
+	// 1.only admin can create tenant level snapshot
 	err = doCheckRole(ctx, ses)
 	if err != nil {
 		return err
@@ -9655,6 +9654,7 @@ func doCreateSnapshot(ctx context.Context, ses *Session, stmt *tree.CreateSnapSh
 	if snapshotLevel == tree.SNAPSHOTLEVELCLUSTER && currentAccount != sysAccountName {
 		return moerr.NewInternalError(ctx, "only sys tenant can create cluster level snapshot")
 	}
+
 	// 3.only sys can create tenant level snapshot for other tenant
 	if snapshotLevel == tree.SNAPSHOTLEVELACCOUNT {
 		snapshotForAccount = string(stmt.Obeject.ObjName)
@@ -9662,15 +9662,46 @@ func doCreateSnapshot(ctx context.Context, ses *Session, stmt *tree.CreateSnapSh
 			return moerr.NewInternalError(ctx, "only sys tenant can create tenant level snapshot for other tenant")
 		}
 
-		// check account exists or not
-		if currentAccount == sysAccountName {
-			accuntExist, err := checkTenantExistsOrNot(ctx, bh, snapshotForAccount)
+		// check account exists or not and get accountId
+		getAccountIdFunc := func(accountName string) (accountId uint64, rtnErr error) {
+			var erArray []ExecResult
+			sql, rtnErr = getSqlForCheckTenant(ctx, accountName)
+			if rtnErr != nil {
+				return 0, rtnErr
+			}
+			bh.ClearExecResultSet()
+			rtnErr = bh.Exec(ctx, sql)
+			if rtnErr != nil {
+				return 0, rtnErr
+			}
+
+			erArray, rtnErr = getResultSet(ctx, bh)
+			if rtnErr != nil {
+				return 0, rtnErr
+			}
+
+			if execResultArrayHasData(erArray) {
+				for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
+					accountId, rtnErr = erArray[0].GetUint64(ctx, i, 0)
+					if rtnErr != nil {
+						return 0, rtnErr
+					}
+				}
+			} else {
+				return 0, moerr.NewInternalError(ctx, "account %s does not exist", accountName)
+			}
+			return accountId, rtnErr
+		}
+
+		// if sys tenant create snapshots for other tenant, get the account id
+		// otherwise, get the account id from tenantInfo
+		if currentAccount == sysAccountName && currentAccount != snapshotForAccount {
+			objId, err = getAccountIdFunc(snapshotForAccount)
 			if err != nil {
 				return err
 			}
-			if !accuntExist {
-				return moerr.NewInternalError(ctx, "account %s does not exist", snapshotForAccount)
-			}
+		} else {
+			objId = uint64(tenantInfo.GetTenantID())
 		}
 	}
 
@@ -9701,7 +9732,7 @@ func doCreateSnapshot(ctx context.Context, ses *Session, stmt *tree.CreateSnapSh
 		// snapshotTs = ts.String()
 		snapshotTs = types.CurrentTimestamp().String2(time.Local, 0)
 
-		sql, err = getSqlForCreateSnapshot(ctx, snapshotId, snapshotName, snapshotTs, snapshotLevel.String(), string(stmt.Obeject.ObjName), databaseName, tableName)
+		sql, err = getSqlForCreateSnapshot(ctx, snapshotId, snapshotName, snapshotTs, snapshotLevel.String(), string(stmt.Obeject.ObjName), databaseName, tableName, objId)
 		if err != nil {
 			return err
 		}

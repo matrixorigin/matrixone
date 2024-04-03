@@ -161,6 +161,7 @@ parameters
 partitions
 processlist
 profiling
+referential_constraints
 routines
 schema_privileges
 schemata

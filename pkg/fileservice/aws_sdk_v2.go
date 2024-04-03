@@ -536,7 +536,10 @@ func (a *AwsSDKv2) deleteMultiObj(ctx context.Context, objs []types.ObjectIdenti
 func (a *AwsSDKv2) listObjects(ctx context.Context, params *s3.ListObjectsInput, optFns ...func(*s3.Options)) (*s3.ListObjectsOutput, error) {
 	ctx, task := gotrace.NewTask(ctx, "AwsSDKv2.listObjects")
 	defer task.End()
-
+	t0 := time.Now()
+	defer func() {
+		FSProfileHandler.AddSample(time.Since(t0))
+	}()
 	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
 		counter.FileService.S3.List.Add(1)
 	}, a.perfCounterSets...)
@@ -553,7 +556,10 @@ func (a *AwsSDKv2) listObjects(ctx context.Context, params *s3.ListObjectsInput,
 func (a *AwsSDKv2) headObject(ctx context.Context, params *s3.HeadObjectInput, optFns ...func(*s3.Options)) (*s3.HeadObjectOutput, error) {
 	ctx, task := gotrace.NewTask(ctx, "AwsSDKv2.headObject")
 	defer task.End()
-
+	t0 := time.Now()
+	defer func() {
+		FSProfileHandler.AddSample(time.Since(t0))
+	}()
 	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
 		counter.FileService.S3.Head.Add(1)
 	}, a.perfCounterSets...)
@@ -570,7 +576,10 @@ func (a *AwsSDKv2) headObject(ctx context.Context, params *s3.HeadObjectInput, o
 func (a *AwsSDKv2) putObject(ctx context.Context, params *s3.PutObjectInput, optFns ...func(*s3.Options)) (*s3.PutObjectOutput, error) {
 	ctx, task := gotrace.NewTask(ctx, "AwsSDKv2.putObject")
 	defer task.End()
-
+	t0 := time.Now()
+	defer func() {
+		FSProfileHandler.AddSample(time.Since(t0))
+	}()
 	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
 		counter.FileService.S3.Put.Add(1)
 	}, a.perfCounterSets...)
@@ -581,7 +590,10 @@ func (a *AwsSDKv2) putObject(ctx context.Context, params *s3.PutObjectInput, opt
 func (a *AwsSDKv2) getObject(ctx context.Context, min *int64, max *int64, params *s3.GetObjectInput, optFns ...func(*s3.Options)) (io.ReadCloser, error) {
 	ctx, task := gotrace.NewTask(ctx, "AwsSDKv2.getObject")
 	defer task.End()
-
+	t0 := time.Now()
+	defer func() {
+		FSProfileHandler.AddSample(time.Since(t0))
+	}()
 	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
 		counter.FileService.S3.Get.Add(1)
 	}, a.perfCounterSets...)
@@ -619,7 +631,10 @@ func (a *AwsSDKv2) getObject(ctx context.Context, min *int64, max *int64, params
 func (a *AwsSDKv2) deleteObject(ctx context.Context, params *s3.DeleteObjectInput, optFns ...func(*s3.Options)) (*s3.DeleteObjectOutput, error) {
 	ctx, task := gotrace.NewTask(ctx, "AwsSDKv2.deleteObject")
 	defer task.End()
-
+	t0 := time.Now()
+	defer func() {
+		FSProfileHandler.AddSample(time.Since(t0))
+	}()
 	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
 		counter.FileService.S3.Delete.Add(1)
 	}, a.perfCounterSets...)
@@ -636,7 +651,10 @@ func (a *AwsSDKv2) deleteObject(ctx context.Context, params *s3.DeleteObjectInpu
 func (a *AwsSDKv2) deleteObjects(ctx context.Context, params *s3.DeleteObjectsInput, optFns ...func(*s3.Options)) (*s3.DeleteObjectsOutput, error) {
 	ctx, task := gotrace.NewTask(ctx, "AwsSDKv2.deleteObjects")
 	defer task.End()
-
+	t0 := time.Now()
+	defer func() {
+		FSProfileHandler.AddSample(time.Since(t0))
+	}()
 	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
 		counter.FileService.S3.DeleteMulti.Add(1)
 	}, a.perfCounterSets...)
