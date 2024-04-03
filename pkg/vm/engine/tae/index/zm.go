@@ -675,7 +675,7 @@ func (zm ZM) PrefixIn(vec *vector.Vector) bool {
 // return lower bound and upper bound
 func (zm ZM) SubVecIn(vec *vector.Vector) (int, int) {
 	if vec.Length() <= 3 {
-		return 0, vec.Length() - 1
+		return 0, vec.Length()
 	}
 	switch vec.GetType().Oid {
 	case types.T_bool:
@@ -684,7 +684,7 @@ func (zm ZM) SubVecIn(vec *vector.Vector) (int, int) {
 		lowerBound := sort.Search(len(col), func(i int) bool {
 			return !minVal || col[i]
 		})
-		return lowerBound, len(col) - 1
+		return lowerBound, len(col)
 
 	case types.T_bit:
 		col := vector.MustFixedCol[uint64](vec)
@@ -951,7 +951,7 @@ func (zm ZM) SubVecIn(vec *vector.Vector) (int, int) {
 		return lowerBound, upperBound
 
 	default:
-		return 0, vec.Length() - 1
+		return 0, vec.Length()
 	}
 }
 
