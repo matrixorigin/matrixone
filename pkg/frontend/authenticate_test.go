@@ -274,7 +274,7 @@ func Test_checkTenantExistsOrNot(t *testing.T) {
 		ses := newSes(nil, ctrl)
 		ses.tenant = tenant
 
-		err = InitGeneralTenant(ctx, ses, &tree.CreateAccount{
+		err = InitGeneralTenant(ctx, ses, &CreateAccount{
 			Name:        "test",
 			IfNotExists: true,
 			AuthOption: tree.AccountAuthOption{
@@ -349,7 +349,7 @@ func Test_createTablesInMoCatalogOfGeneralTenant(t *testing.T) {
 		//	DefaultRoleID: moAdminRoleID,
 		//}
 
-		ca := &tree.CreateAccount{
+		ca := &CreateAccount{
 			Name:        "test",
 			IfNotExists: true,
 			AuthOption: tree.AccountAuthOption{
