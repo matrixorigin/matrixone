@@ -313,22 +313,12 @@ func makeFinalProjectWithCPAndOptionalRowId(builder *QueryBuilder, bindCtx *Bind
 	// 3: tbl.embedding,
 	// 4: entries.row_id (if update)
 	var joinProjections = getProjectionByLastNode(builder, crossJoinTblAndCentroidsID)
-	if isUpdate {
-		lastProjection := builder.qry.Nodes[lastNodeId].ProjectList
-		originRowIdIdx := len(lastProjection) - 1
-		joinProjections = append(joinProjections, &plan.Expr{
-			Typ: lastProjection[originRowIdIdx].Typ,
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{
-					RelPos: 0,
-					ColPos: int32(originRowIdIdx),
-					Name:   catalog.Row_ID,
-				},
-			},
-		})
-	}
 
-	cpKeyCol, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", []*plan.Expr{joinProjections[0], joinProjections[2]})
+	cpKeyCol, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", []*plan.Expr{
+		joinProjections[0],
+		joinProjections[1],
+		joinProjections[2],
+	})
 	if err != nil {
 		return -1, err
 	}
