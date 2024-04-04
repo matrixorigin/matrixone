@@ -7,7 +7,7 @@ jobs:
   bvt-docker-compose-push:
     if: ${{ !github.event.pull_request.draft }}
     runs-on: ubuntu-latest
-    name: multi cn e2e bvt test docker compose(PUSH)
+    name: multi cn e2e bvt test docker compose(Optimistic/PUSH)
     timeout-minutes: 60
 
     steps:
@@ -38,7 +38,7 @@ jobs:
           cat ./etc/launch-tae-compose/config/tn.toml
 
           mkdir -p ${{ github.workspace }}/docker-compose-log
-          docker-compose -f etc/launch-tae-compose/compose.yaml --profile launch-multi-cn up -d --build
+          docker compose -f etc/launch-tae-compose/compose.yaml --profile launch-multi-cn up -d --build
           
           # wait for ready
           i=1
@@ -107,7 +107,7 @@ jobs:
         if: ${{ failure() || cancelled()}}
         continue-on-error: true
         with:
-          name: multi-cn-e2e-push-docker-compose-log
+          name: Compose-multi-cn-e2e-bvt-test-docker-log(Optimistic,PUSH)
           path: |
              ${{ github.workspace }}/docker-compose-log
           retention-days: 7
@@ -136,7 +136,7 @@ jobs:
           cat ./etc/launch-tae-compose/config/cn-1.toml
           cat ./etc/launch-tae-compose/config/tn.toml
           mkdir -p ${{ github.workspace }}/docker-compose-log
-          docker-compose -f etc/launch-tae-compose/compose.yaml --profile launch-multi-cn up -d --build
+          docker compose -f etc/launch-tae-compose/compose.yaml --profile launch-multi-cn up -d --build
           
           # wait for ready
           i=1
@@ -200,7 +200,7 @@ jobs:
         if: ${{ failure() || cancelled()}}
         continue-on-error: true
         with:
-          name: multi-cn-e2e-push-docker-compose-log-pessimistic
+          name: Compose-multi-cn-e2e-bvt-test-docker-log(PESSIMISTIC)
           path: |
             ${{ github.workspace }}/docker-compose-log
           retention-days: 7

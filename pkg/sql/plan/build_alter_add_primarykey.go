@@ -42,7 +42,7 @@ func AddPrimaryKey(ctx CompilerContext, alterPlan *plan.AlterTable, spec *tree.P
 		if err := CheckColumnNameValid(ctx.GetContext(), colName); err != nil {
 			return err
 		}
-		if err := checkPrimaryKeyPartType(ctx.GetContext(), col.Typ, colName); err != nil {
+		if err := checkPrimaryKeyPartType(ctx.GetContext(), &col.Typ, colName); err != nil {
 			return err
 		}
 
@@ -99,7 +99,7 @@ func AddPrimaryKey(ctx CompilerContext, alterPlan *plan.AlterTable, spec *tree.P
 
 func DropPrimaryKey(ctx CompilerContext, alterPlan *plan.AlterTable, alterCtx *AlterTableContext) error {
 	tableDef := alterPlan.CopyTableDef
-	if tableDef.Pkey == nil || tableDef.Pkey.PkeyColName == catalog.FakePrimaryKeyColName {
+	if tableDef.Pkey.PkeyColName == catalog.FakePrimaryKeyColName {
 		return moerr.NewErrCantDropFieldOrKey(ctx.GetContext(), "PRIMARY")
 	}
 	pkey := tableDef.Pkey

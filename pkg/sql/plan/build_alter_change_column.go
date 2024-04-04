@@ -83,7 +83,7 @@ func ChangeColumn(ctx CompilerContext, alterPlan *plan.AlterTable, spec *tree.Al
 		return err
 	}
 
-	if err = checkChangeTypeCompatible(ctx.GetContext(), col.Typ, newCol.Typ); err != nil {
+	if err = checkChangeTypeCompatible(ctx.GetContext(), &col.Typ, &newCol.Typ); err != nil {
 		return err
 	}
 
@@ -120,7 +120,7 @@ func buildChangeColumnAndConstraint(ctx CompilerContext, alterPlan *plan.AlterTa
 		Primary:   originalCol.Primary,
 		ClusterBy: originalCol.ClusterBy,
 		Name:      newColName,
-		Typ:       colType,
+		Typ:       *colType,
 		Alg:       plan.CompressType_Lz4,
 	}
 

@@ -16,6 +16,7 @@ package fuzzyfilter
 
 import (
 	"bytes"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/bloomfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -68,8 +69,8 @@ func (arg *Argument) String(buf *bytes.Buffer) {
 func (arg *Argument) Prepare(proc *process.Process) (err error) {
 	arg.InitReceiver(proc, false)
 	rowCount := int64(arg.N)
-	if rowCount < 100000 {
-		rowCount = 100000
+	if rowCount < 1000 {
+		rowCount = 1000
 	}
 
 	if err := arg.generate(proc); err != nil {
@@ -330,13 +331,7 @@ func (arg *Argument) handleRuntimeFilter(proc *process.Process) error {
 	}
 
 	if runtimeFilter != nil {
-		select {
-		case <-proc.Ctx.Done():
-			ctr.state = End
-
-		case arg.RuntimeFilterSenders[0].Chan <- runtimeFilter:
-			ctr.state = Probe
-		}
+		sendFilter(ctr, proc, runtimeFilter)
 		return nil
 	}
 
@@ -357,14 +352,21 @@ func (arg *Argument) handleRuntimeFilter(proc *process.Process) error {
 		Data: data,
 	}
 
-	select {
-	case <-proc.Ctx.Done():
-		ctr.state = End
-
-	case arg.RuntimeFilterSenders[0].Chan <- runtimeFilter:
-		ctr.state = Probe
-	}
-
+	sendFilter(ctr, proc, runtimeFilter)
 	return nil
 
+}
+
+func sendFilter(ap *Argument, proc *process.Process, runtimeFilter *pipeline.RuntimeFilter) {
+	anal := proc.GetAnalyze(ap.GetIdx(), ap.GetParallelIdx(), ap.GetParallelMajor())
+	sendRuntimeFilterStart := time.Now()
+
+	select {
+	case <-proc.Ctx.Done():
+		ap.state = End
+
+	case ap.RuntimeFilterSenders[0].Chan <- runtimeFilter:
+		ap.state = Probe
+	}
+	anal.WaitStop(sendRuntimeFilterStart)
 }

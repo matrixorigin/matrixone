@@ -70,7 +70,8 @@ func (txn *Txn) commit1PC(ctx context.Context, _ bool) (err error) {
 	if err != nil {
 		txn.SetError(err)
 		txn.Lock()
-		_ = txn.ToRollbackingLocked(txn.GetStartTS().Next())
+		ts := txn.GetStartTS()
+		_ = txn.ToRollbackingLocked(ts.Next())
 		txn.Unlock()
 		_ = txn.PrepareRollback()
 		_ = txn.ApplyRollback()

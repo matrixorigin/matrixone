@@ -359,6 +359,10 @@ func (o *testOperator) SnapshotTS() timestamp.Timestamp {
 	panic("should not call")
 }
 
+func (o *testOperator) CreateTS() timestamp.Timestamp {
+	panic("should not call")
+}
+
 func (o *testOperator) Status() txn.TxnStatus {
 	panic("should not call")
 }
@@ -395,7 +399,7 @@ func (o *testOperator) IsOpenLog() bool {
 	panic("unimplemented")
 }
 
-func (o *testOperator) AppendEventCallback(event client.EventType, callbacks ...func(txn.TxnMeta, error)) {
+func (o *testOperator) AppendEventCallback(event client.EventType, callbacks ...func(event client.TxnEvent)) {
 	panic("unimplemented")
 }
 
@@ -418,3 +422,15 @@ func (o *testOperator) GetOverview() client.TxnOverview {
 func (o *testOperator) LockSkipped(tableID uint64, mode lock.LockMode) bool {
 	panic("should not call")
 }
+
+func (o *testOperator) TxnOptions() txn.TxnOptions {
+	panic("should not call")
+}
+
+func (o *testOperator) NextSequence() uint64 {
+	panic("should not call")
+}
+
+func (o *testOperator) EnterRunSql() {}
+
+func (o *testOperator) ExitRunSql() {}

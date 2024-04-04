@@ -38,7 +38,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 )
 
@@ -102,7 +101,6 @@ func execBackup(ctx context.Context, srcFs, dstFs fileservice.FileService, names
 	trimInfo := names[1]
 	names = names[1:]
 	files := make(map[string]*fileservice.DirEntry, 0)
-	table := gc.NewGCTable()
 	gcFileMap := make(map[string]string)
 	softDeletes := make(map[string]bool)
 	var loadDuration, copyDuration, reWriteDuration time.Duration
@@ -142,9 +140,6 @@ func execBackup(ctx context.Context, srcFs, dstFs fileservice.FileService, names
 			return err
 		}
 		defer data.Close()
-		table.UpdateTable(data)
-		gcFiles := table.SoftGC()
-		mergeGCFile(gcFiles, gcFileMap)
 		oNames = append(oNames, oneNames...)
 	}
 	loadDuration += time.Since(now)
@@ -279,7 +274,7 @@ func CopyDir(ctx context.Context, srcFs, dstFs fileservice.FileService, dir stri
 			panic("not support dir")
 		}
 		start, _ := blockio.DecodeCheckpointMetadataFileName(file.Name)
-		if !backup.IsEmpty() && start.GreaterEq(backup) {
+		if !backup.IsEmpty() && start.GreaterEq(&backup) {
 			logutil.Infof("[Backup] skip file %v", file.Name)
 			continue
 		}
@@ -345,14 +340,6 @@ func CopyFile(ctx context.Context, srcFs, dstFs fileservice.FileService, dentry 
 	}
 
 	return hasher.Sum(nil), nil
-}
-
-func mergeGCFile(gcFiles []string, gcFileMap map[string]string) {
-	for _, gcFile := range gcFiles {
-		if gcFileMap[gcFile] == "" {
-			gcFileMap[gcFile] = gcFile
-		}
-	}
 }
 
 func isGC(gcFileMap map[string]string, name string) bool {

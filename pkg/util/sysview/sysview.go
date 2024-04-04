@@ -149,6 +149,14 @@ var (
 			PRIMARY KEY (Host,Db,User,Table_name),
 			KEY Grantor (Grantor)
 		  );`,
+		`CREATE TABLE IF NOT EXISTS role_edges (
+			FROM_HOST char(255) NOT NULL DEFAULT '',
+			FROM_USER char(32) NOT NULL DEFAULT '',
+			TO_HOST char(255) NOT NULL DEFAULT '',
+			TO_USER char(32) NOT NULL DEFAULT '',
+			WITH_ADMIN_OPTION enum('N','Y') NOT NULL DEFAULT 'N',
+			PRIMARY KEY (FROM_HOST,FROM_USER,TO_HOST,TO_USER)
+		);`,
 	}
 	InitInformationSchemaSysTables = []string{
 		"CREATE TABLE IF NOT EXISTS KEY_COLUMN_USAGE(" +
@@ -256,7 +264,7 @@ var (
 			"DATABASE_COLLATION varchar(64)" +
 			");",
 
-		fmt.Sprintf("CREATE VIEW IF NOT EXISTS TABLES AS "+
+		fmt.Sprintf("CREATE VIEW IF NOT EXISTS information_schema.TABLES AS "+
 			"SELECT 'def' AS TABLE_CATALOG,"+
 			"reldatabase AS TABLE_SCHEMA,"+
 			"relname AS TABLE_NAME,"+
@@ -283,7 +291,7 @@ var (
 			"if(relkind = 'v', NULL, if(partitioned = 0, '', cast('partitioned' as varchar(256)))) AS CREATE_OPTIONS,"+
 			"cast(rel_comment as text) AS TABLE_COMMENT "+
 			"FROM mo_catalog.mo_tables tbl "+
-			"WHERE tbl.relname not like '%s' and tbl.relkind != '%s';", catalog.IndexTableNamePrefix+"%", catalog.SystemPartitionRel),
+			"WHERE tbl.account_id = current_account_id() and tbl.relname not like '%s' and tbl.relkind != '%s';", catalog.IndexTableNamePrefix+"%", catalog.SystemPartitionRel),
 
 		"CREATE VIEW IF NOT EXISTS `PARTITIONS` AS " +
 			"SELECT " +
@@ -363,6 +371,23 @@ var (
 			"join `mo_catalog`.`mo_tables` `tbl` on (`idx`.`table_id` = `tbl`.`rel_id`))" +
 			"join `mo_catalog`.`mo_columns` `tcl` on (`idx`.`table_id` = `tcl`.`att_relname_id` and `idx`.`column_name` = `tcl`.`attname`)",
 
+		"CREATE VIEW information_schema.REFERENTIAL_CONSTRAINTS " +
+			"AS " +
+			"SELECT DISTINCT " +
+			"'def' AS CONSTRAINT_CATALOG, " +
+			"fk.db_name AS CONSTRAINT_SCHEMA, " +
+			"fk.constraint_name AS CONSTRAINT_NAME, " +
+			"'def' AS UNIQUE_CONSTRAINT_CATALOG, " +
+			"fk.refer_db_name AS UNIQUE_CONSTRAINT_SCHEMA, " +
+			"idx.type AS UNIQUE_CONSTRAINT_NAME," +
+			"'NONE' AS MATCH_OPTION, " +
+			"fk.on_update AS UPDATE_RULE, " +
+			"fk.on_delete AS DELETE_RULE, " +
+			"fk.table_name AS TABLE_NAME, " +
+			"fk.refer_table_name AS REFERENCED_TABLE_NAME " +
+			"FROM mo_catalog.mo_foreign_keys fk " +
+			"JOIN mo_catalog.mo_indexes idx ON (fk.refer_column_name = idx.column_name)",
+
 		"CREATE TABLE IF NOT EXISTS ENGINES (" +
 			"ENGINE varchar(64)," +
 			"SUPPORT varchar(8)," +
@@ -425,6 +450,74 @@ var (
 		"CREATE TABLE IF NOT EXISTS KEYWORDS (" +
 			"WORD varchar(64)," +
 			"RESERVED int unsigned" +
+			");",
+		"CREATE TABLE IF NOT EXISTS `SCHEMA_PRIVILEGES` (" +
+			"`GRANTEE` varchar(292) NOT NULL DEFAULT ''," +
+			"`TABLE_CATALOG` varchar(512) NOT NULL DEFAULT ''," +
+			"`TABLE_SCHEMA` varchar(64) NOT NULL DEFAULT ''," +
+			"`PRIVILEGE_TYPE` varchar(64) NOT NULL DEFAULT ''," +
+			"`IS_GRANTABLE` varchar(3) NOT NULL DEFAULT ''" +
+			");",
+		"CREATE TABLE IF NOT EXISTS `TABLE_PRIVILEGES` (" +
+			"`GRANTEE` varchar(292) NOT NULL DEFAULT ''," +
+			"`TABLE_CATALOG` varchar(512) NOT NULL DEFAULT ''," +
+			"`TABLE_SCHEMA` varchar(64) NOT NULL DEFAULT ''," +
+			"`TABLE_NAME` varchar(64) NOT NULL DEFAULT ''," +
+			"`PRIVILEGE_TYPE` varchar(64) NOT NULL DEFAULT ''," +
+			"`IS_GRANTABLE` varchar(3) NOT NULL DEFAULT ''" +
+			");",
+		"CREATE TABLE IF NOT EXISTS `COLUMN_PRIVILEGES` (" +
+			"`GRANTEE` varchar(292) NOT NULL DEFAULT ''," +
+			"`TABLE_CATALOG` varchar(512) NOT NULL DEFAULT ''," +
+			"`TABLE_SCHEMA` varchar(64) NOT NULL DEFAULT ''," +
+			"`TABLE_NAME` varchar(64) NOT NULL DEFAULT ''," +
+			"`COLUMN_NAME` varchar(64) NOT NULL DEFAULT ''," +
+			"`PRIVILEGE_TYPE` varchar(64) NOT NULL DEFAULT ''," +
+			"`IS_GRANTABLE` varchar(3) NOT NULL DEFAULT ''" +
+			");",
+		"CREATE TABLE IF NOT EXISTS COLLATIONS (" +
+			"COLLATION_NAME varchar(64) NOT NULL," +
+			"CHARACTER_SET_NAME varchar(64) NOT NULL," +
+			"ID bigint unsigned NOT NULL DEFAULT 0," +
+			"IS_DEFAULT varchar(3) NOT NULL DEFAULT ''," +
+			"IS_COMPILED varchar(3) NOT NULL DEFAULT ''," +
+			"SORTLEN int unsigned NOT NULL," +
+			"PAD_ATTRIBUTE enum('PAD SPACE','NO PAD') NOT NULL" +
+			");",
+		"CREATE TABLE IF NOT EXISTS TABLE_CONSTRAINTS (" +
+			"CONSTRAINT_CATALOG varchar(64)," +
+			"CONSTRAINT_SCHEMA varchar(64)," +
+			"CONSTRAINT_NAME varchar(64)," +
+			"TABLE_SCHEMA varchar(64)," +
+			"TABLE_NAME varchar(64)," +
+			"CONSTRAINT_TYPE varchar(11) NOT NULL DEFAULT ''," +
+			"ENFORCED varchar(3) NOT NULL DEFAULT ''" +
+			");",
+		"CREATE TABLE IF NOT EXISTS EVENTS (" +
+			"EVENT_CATALOG varchar(64)," +
+			"EVENT_SCHEMA varchar(64)," +
+			"EVENT_NAME varchar(64) NOT NULL," +
+			"`DEFINER` varchar(288) NOT NULL," +
+			"TIME_ZONE varchar(64) NOT NULL," +
+			"EVENT_BODY varchar(3) NOT NULL DEFAULT ''," +
+			"EVENT_DEFINITION longtext NOT NULL," +
+			"EVENT_TYPE varchar(9) NOT NULL DEFAULT ''," +
+			"EXECUTE_AT datetime," +
+			"INTERVAL_VALUE varchar(256)," +
+			"INTERVAL_FIELD enum('YEAR','QUARTER','MONTH','DAY','HOUR','MINUTE','WEEK','SECOND','MICROSECOND','YEAR_MONTH','DAY_HOUR','DAY_MINUTE','DAY_SECOND','HOUR_MINUTE','HOUR_SECOND','MINUTE_SECOND','DAY_MICROSECOND','HOUR_MICROSECOND','MINUTE_MICROSECOND','SECOND_MICROSECOND')," +
+			"SQL_MODE varchar(64) NOT NULL," +
+			"STARTS datetime," +
+			"ENDS datetime," +
+			"STATUS varchar(21) NOT NULL DEFAULT ''," +
+			"ON_COMPLETION varchar(12) NOT NULL DEFAULT ''," +
+			"CREATED timestamp NOT NULL," +
+			"LAST_ALTERED timestamp NOT NULL," +
+			"LAST_EXECUTED datetime," +
+			"EVENT_COMMENT varchar(2048) NOT NULL," +
+			"ORIGINATOR int unsigned NOT NULL," +
+			"CHARACTER_SET_CLIENT varchar(64) NOT NULL," +
+			"COLLATION_CONNECTION varchar(64) NOT NULL," +
+			"DATABASE_COLLATION varchar(64) NOT NULL" +
 			");",
 		informationSchemaKeywordsData,
 	}

@@ -131,7 +131,7 @@ func Test_saveQueryResultMeta(t *testing.T) {
 	for i, ty := range typs {
 		colDefs[i] = &plan.ColDef{
 			Name: fmt.Sprintf("a_%d", i),
-			Typ: &plan.Type{
+			Typ: plan.Type{
 				Id:    int32(ty.Oid),
 				Scale: ty.Scale,
 				Width: ty.Width,
@@ -149,7 +149,7 @@ func Test_saveQueryResultMeta(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	asts, err := parsers.Parse(ctx, dialect.MYSQL, "select a,b,c from t", 1)
+	asts, err := parsers.Parse(ctx, dialect.MYSQL, "select a,b,c from t", 1, 0)
 	assert.Nil(t, err)
 
 	ses.ast = asts[0]

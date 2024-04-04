@@ -27,8 +27,8 @@ var (
 		input  string
 		output string
 	}{
-		input:  "explain analyze verbose force execute st",
-		output: "explain (analyze,verbose) execute st",
+		input:  "LOAD DATA LOCAL INFILE 'a.csv' INTO TABLE wawa CHARACTER\nSET\nutf8 FIELDS TERMINATED BY ',' ENCLOSED BY '\"' ESCAPED BY '\"' LINES TERMINATED BY '' (\ndx,\ndx,\ncy,\nvx,\nvy\n);",
+		output: "load data local infile a.csv into table wawa character set utf8 fields terminated by , enclosed by \" escaped by \" lines terminated by '' (dx, dx, cy, vx, vy)",
 	}
 )
 
@@ -36,7 +36,7 @@ func TestDebug(t *testing.T) {
 	if debugSQL.output == "" {
 		debugSQL.output = debugSQL.input
 	}
-	ast, err := ParseOne(context.TODO(), debugSQL.input, 1)
+	ast, err := ParseOne(context.TODO(), debugSQL.input, 1, 0)
 	if err != nil {
 		t.Errorf("Parse(%q) err: %v", debugSQL.input, err)
 		return
@@ -62,7 +62,7 @@ func TestOriginSQL(t *testing.T) {
 	if orginSQL.output == "" {
 		orginSQL.output = orginSQL.input
 	}
-	ast, err := ParseOne(context.TODO(), orginSQL.input, 0)
+	ast, err := ParseOne(context.TODO(), orginSQL.input, 0, 1)
 	if err != nil {
 		t.Errorf("Parse(%q) err: %v", orginSQL.input, err)
 		return
@@ -231,6 +231,12 @@ var (
 		output: "alter database configuration for test as {transaction_isolation: REPEATABLE-READ, lower_case_table_names: 0} ",
 	}, {
 		input: "show profiles",
+	}, {
+		input:  "CREATE TABLE new_t1 LIKE t1",
+		output: "create table new_t1 like t1",
+	}, {
+		input:  "CREATE TABLE new_t1 LIKE test.t1",
+		output: "create table new_t1 like test.t1",
 	}, {
 		input: "show privileges",
 	}, {
@@ -1519,6 +1525,14 @@ var (
 		}, {
 			input: "select * from t",
 		}, {
+			input:  "select * from t{timestamp = '2024-01-01 00:00:00'}",
+			output: "select * from t{timestamp = 2024-01-01 00:00:00}",
+		}, {
+			input:  "select * from t{snapshot = 'snapshot1'}",
+			output: "select * from t{snapshot = snapshot1}",
+		}, {
+			input: "select * from t{timestamp = now()}",
+		}, {
 			input:  "select c1, c2, c3 from t1, t as t2 where t1.c1 = 1 group by c2 having c2 > 10",
 			output: "select c1, c2, c3 from t1 cross join t as t2 where t1.c1 = 1 group by c2 having c2 > 10",
 		}, {
@@ -2383,6 +2397,22 @@ var (
 			output: "create stage my_ext_stage1 url='s3://load/files/' crentiasl={'AWS_KEY_ID'='1a2b3c','AWS_SECRET_KEY'='4x5y6z'} enabled",
 		},
 		{
+			input:  "CREATE SNAPSHOT snapshot1 FOR CLUSTER",
+			output: "create snapshot snapshot1 for cluster ",
+		},
+		{
+			input:  "CREATE SNAPSHOT snapshot1 FOR ACCOUNT acc1",
+			output: "create snapshot snapshot1 for account acc1",
+		},
+		{
+			input:  "DROP SNAPSHOT snapshot1",
+			output: "drop snapshot snapshot1",
+		},
+		{
+			input:  "SHOW SNAPSHOTS WHERE sname = 'snapshot1'",
+			output: "show snapshots where sname = snapshot1",
+		},
+		{
 			input:  "DROP STAGE my_ext_stage1",
 			output: "drop stage my_ext_stage1",
 		},
@@ -2789,7 +2819,7 @@ func TestValid(t *testing.T) {
 		if tcase.output == "" {
 			tcase.output = tcase.input
 		}
-		ast, err := ParseOne(ctx, tcase.input, 1)
+		ast, err := ParseOne(ctx, tcase.input, 1, 0)
 		if err != nil {
 			t.Errorf("Parse(%q) err: %v", tcase.input, err)
 			continue
@@ -2828,7 +2858,7 @@ func TestSQLStringFmt(t *testing.T) {
 		if tcase.output == "" {
 			tcase.output = tcase.input
 		}
-		ast, err := ParseOne(ctx, tcase.input, 1)
+		ast, err := ParseOne(ctx, tcase.input, 1, 0)
 		if err != nil {
 			t.Errorf("Parse(%q) err: %v", tcase.input, err)
 			continue
@@ -2933,7 +2963,7 @@ func TestMulti(t *testing.T) {
 		if tcase.output == "" {
 			tcase.output = tcase.input
 		}
-		asts, err := Parse(ctx, tcase.input, 1)
+		asts, err := Parse(ctx, tcase.input, 1, 0)
 		if err != nil {
 			t.Errorf("Parse(%q) err: %v", tcase.input, err)
 			continue
@@ -2993,7 +3023,7 @@ var (
 func TestFaultTolerance(t *testing.T) {
 	ctx := context.TODO()
 	for _, tcase := range invalidSQL {
-		_, err := ParseOne(ctx, tcase.input, 1)
+		_, err := ParseOne(ctx, tcase.input, 1, 0)
 		if err == nil {
 			t.Errorf("Fault tolerant ases (%q) should parse errors", tcase.input)
 			continue

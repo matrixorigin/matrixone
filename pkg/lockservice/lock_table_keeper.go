@@ -31,6 +31,7 @@ type lockTableKeeper struct {
 	keepRemoteLockInterval    time.Duration
 	groupTables               *lockTableHolders
 	canDoKeep                 bool
+	service                   *service
 }
 
 // NewLockTableKeeper create a locktable keeper, an internal timer is started
@@ -41,13 +42,15 @@ func NewLockTableKeeper(
 	client Client,
 	keepLockTableBindInterval time.Duration,
 	keepRemoteLockInterval time.Duration,
-	groupTables *lockTableHolders) LockTableKeeper {
+	groupTables *lockTableHolders,
+	service *service) LockTableKeeper {
 	s := &lockTableKeeper{
 		serviceID:                 serviceID,
 		client:                    client,
 		groupTables:               groupTables,
 		keepLockTableBindInterval: keepLockTableBindInterval,
 		keepRemoteLockInterval:    keepRemoteLockInterval,
+		service:                   service,
 		stopper: stopper.NewStopper("lock-table-keeper",
 			stopper.WithLogger(getLogger().RawLogger())),
 	}
@@ -166,6 +169,10 @@ func (k *lockTableKeeper) doKeepRemoteLock(
 }
 
 func (k *lockTableKeeper) doKeepLockTableBind(ctx context.Context) {
+	if k.service.isStatus(pb.Status_ServiceLockWaiting) &&
+		k.service.activeTxnHolder.empty() {
+		k.service.setStatus(pb.Status_ServiceUnLockSucc)
+	}
 	if !k.canDoKeep {
 		k.groupTables.iter(func(_ uint64, v lockTable) bool {
 			bind := v.getBind()
@@ -184,6 +191,11 @@ func (k *lockTableKeeper) doKeepLockTableBind(ctx context.Context) {
 
 	req.Method = pb.Method_KeepLockTableBind
 	req.KeepLockTableBind.ServiceID = k.serviceID
+	req.KeepLockTableBind.Status = k.service.getStatus()
+	if !k.service.isStatus(pb.Status_ServiceLockEnable) {
+		req.KeepLockTableBind.LockTables = k.service.popGroupTables()
+		req.KeepLockTableBind.TxnIDs = k.service.activeTxnHolder.getAllTxnID()
+	}
 
 	ctx, cancel := context.WithTimeout(ctx, k.keepLockTableBindInterval)
 	defer cancel()
@@ -195,6 +207,17 @@ func (k *lockTableKeeper) doKeepLockTableBind(ctx context.Context) {
 	defer releaseResponse(resp)
 
 	if resp.KeepLockTableBind.OK {
+		switch resp.KeepLockTableBind.Status {
+		case pb.Status_ServiceLockWaiting:
+			// maybe pb.Status_ServiceUnLockSucc
+			if k.service.isStatus(pb.Status_ServiceLockEnable) {
+				k.service.setRestartTime()
+				k.service.setStatus(pb.Status_ServiceLockWaiting)
+				go k.service.checkCanMoveGroupTables()
+			}
+		default:
+			k.service.setStatus(resp.KeepLockTableBind.Status)
+		}
 		return
 	}
 

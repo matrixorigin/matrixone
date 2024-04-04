@@ -331,9 +331,7 @@ func makePlan2CastExpr(ctx context.Context, expr *Expr, targetType *Type) (*Expr
 	t := &plan.Expr{
 		Typ: *targetType,
 		Expr: &plan.Expr_T{
-			T: &plan.TargetType{
-				Typ: targetType,
-			},
+			T: &plan.TargetType{},
 		},
 	}
 	return &plan.Expr{
@@ -430,8 +428,8 @@ func makeTypeByPlan2Expr(expr *plan.Expr) types.Type {
 	return types.New(oid, expr.Typ.Width, expr.Typ.Scale)
 }
 
-func makeHiddenColTyp() *Type {
-	return &Type{
+func makeHiddenColTyp() Type {
+	return Type{
 		Id:    int32(types.T_varchar),
 		Width: types.MaxVarcharLen,
 	}
@@ -455,7 +453,7 @@ func MakeRowIdColDef() *ColDef {
 	return &ColDef{
 		Name:   catalog.Row_ID,
 		Hidden: true,
-		Typ: &Type{
+		Typ: Type{
 			Id: int32(types.T_Rowid),
 		},
 		Default: &plan.Default{

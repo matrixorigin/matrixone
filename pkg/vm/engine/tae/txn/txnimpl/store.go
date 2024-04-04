@@ -16,11 +16,12 @@ package txnimpl
 
 import (
 	"context"
-	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"runtime/trace"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"go.uber.org/zap"
@@ -297,7 +298,7 @@ func (store *txnStore) Append(ctx context.Context, dbId, id uint64, data *contai
 	return db.Append(ctx, id, data)
 }
 
-func (store *txnStore) AddBlksWithMetaLoc(
+func (store *txnStore) AddObjsWithMetaLoc(
 	ctx context.Context,
 	dbId, tid uint64,
 	stats containers.Vector,
@@ -307,7 +308,7 @@ func (store *txnStore) AddBlksWithMetaLoc(
 	if err != nil {
 		return err
 	}
-	return db.AddBlksWithMetaLoc(ctx, tid, stats)
+	return db.AddObjsWithMetaLoc(ctx, tid, stats)
 }
 
 func (store *txnStore) RangeDelete(
@@ -329,18 +330,6 @@ func (store *txnStore) TryDeleteByDeltaloc(
 		return
 	}
 	return db.TryDeleteByDeltaloc(id, deltaloc)
-}
-
-func (store *txnStore) UpdateMetaLoc(id *common.ID, metaLoc objectio.Location) (err error) {
-	store.IncreateWriteCnt()
-	db, err := store.getOrSetDB(id.DbID)
-	if err != nil {
-		return err
-	}
-	// if table.IsDeleted() {
-	// 	return txnbase.ErrNotFound
-	// }
-	return db.UpdateMetaLoc(id, metaLoc)
 }
 
 func (store *txnStore) UpdateDeltaLoc(id *common.ID, deltaLoc objectio.Location) (err error) {
@@ -511,7 +500,7 @@ func (store *txnStore) ObserveTxn(
 				switch txnEntry := iTxnEntry.(type) {
 				case *catalog.ObjectEntry:
 					visitObject(txnEntry)
-				case *catalog.BlockEntry:
+				case *updates.DeltalocChain:
 					visitMetadata(txnEntry)
 				case *updates.DeleteNode:
 					visitDelete(store.ctx, txnEntry)
@@ -673,47 +662,6 @@ func (store *txnStore) UpdateObjectStats(id *common.ID, stats *objectio.ObjectSt
 	}
 	db.UpdateObjectStats(id, stats)
 	return nil
-}
-
-func (store *txnStore) CreateNonAppendableBlock(id *common.ID, opts *objectio.CreateBlockOpt) (blk handle.Block, err error) {
-	var db *txnDB
-	if db, err = store.getOrSetDB(id.DbID); err != nil {
-		return
-	}
-	perfcounter.Update(store.ctx, func(counter *perfcounter.CounterSet) {
-		counter.TAE.Block.CreateNonAppendable.Add(1)
-	})
-	return db.CreateNonAppendableBlock(id, opts)
-}
-
-func (store *txnStore) GetBlock(id *common.ID) (blk handle.Block, err error) {
-	var db *txnDB
-	if db, err = store.getOrSetDB(id.DbID); err != nil {
-		return
-	}
-	return db.GetBlock(id)
-}
-
-func (store *txnStore) CreateBlock(id *common.ID, is1PC bool) (blk handle.Block, err error) {
-	var db *txnDB
-	if db, err = store.getOrSetDB(id.DbID); err != nil {
-		return
-	}
-	perfcounter.Update(store.ctx, func(counter *perfcounter.CounterSet) {
-		counter.TAE.Block.Create.Add(1)
-	})
-	return db.CreateBlock(id, is1PC)
-}
-
-func (store *txnStore) SoftDeleteBlock(id *common.ID) (err error) {
-	var db *txnDB
-	if db, err = store.getOrSetDB(id.DbID); err != nil {
-		return
-	}
-	perfcounter.Update(store.ctx, func(counter *perfcounter.CounterSet) {
-		counter.TAE.Block.SoftDelete.Add(1)
-	})
-	return db.SoftDeleteBlock(id)
 }
 
 func (store *txnStore) SoftDeleteObject(id *common.ID) (err error) {

@@ -31,6 +31,7 @@ import (
 	_ "time/tzdata"
 
 	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -74,6 +75,8 @@ func main() {
 	flag.Parse()
 	maybePrintVersion()
 	maybeRunInDaemonMode()
+
+	uuid.EnableRandPool()
 
 	if *cpuProfilePathFlag != "" {
 		stop := startCPUProfile()
@@ -248,7 +251,7 @@ func startCNService(
 			cnservice.WithLogger(logutil.GetGlobalLogger().Named("cn-service").With(zap.String("uuid", cfg.CN.UUID))),
 			cnservice.WithMessageHandle(compile.CnServerMessageHandler),
 			cnservice.WithConfigData(commonConfigKVMap),
-			cnservice.WithTxnTraceData(filepath.Join(cfg.DataDir, "trace")),
+			cnservice.WithTxnTraceData(filepath.Join(cfg.DataDir, c.Txn.Trace.Dir)),
 		)
 		if err != nil {
 			panic(err)
@@ -431,6 +434,9 @@ func initTraceMetric(ctx context.Context, st metadata.ServiceType, cfg *Config, 
 	if *launchFile != "" {
 		nodeRole = mometric.LaunchMode
 	}
+
+	selector := clusterservice.NewSelector().SelectByLabel(SV.LabelSelector, clusterservice.Contain)
+	runtime.ProcessLevelRuntime().SetGlobalVariables(runtime.BackgroundCNSelector, selector)
 
 	if !SV.DisableTrace || !SV.DisableMetric {
 		writerFactory = export.GetWriterFactory(fs, UUID, nodeRole, !SV.DisableSqlWriter)

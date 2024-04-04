@@ -35,24 +35,65 @@ func handleTxnTrace(
 
 	switch strings.ToLower(params[0]) {
 	case "enable":
-		err := trace.GetService().Enable()
+		if len(params) < 2 {
+			return Result{}, moerr.NewInvalidInputNoCtx("invalid parameter %s", parameter)
+		}
+
+		err := trace.GetService().Enable(params[1])
 		if err != nil {
 			return Result{}, err
 		}
 		return Result{Data: "OK"}, nil
 	case "disable":
-		err := trace.GetService().Disable()
+		if len(params) < 2 {
+			return Result{}, moerr.NewInvalidInputNoCtx("invalid parameter %s", parameter)
+		}
+
+		err := trace.GetService().Disable(params[1])
 		if err != nil {
 			return Result{}, err
 		}
 		return Result{Data: "OK"}, nil
 	case "clear":
-		err := trace.GetService().ClearFilters()
+		if len(params) < 2 || (params[1] != trace.FeatureTraceTxn && params[1] != trace.FeatureTraceData) {
+			return Result{}, moerr.NewInvalidInputNoCtx("invalid parameter %s", parameter)
+		}
+
+		var err error
+		if params[1] == trace.FeatureTraceTxn {
+			err = trace.GetService().ClearTxnFilters()
+		} else if params[1] == trace.FeatureTraceData {
+			err = trace.GetService().ClearTableFilters()
+		} else if params[1] == trace.FeatureTraceStatement {
+			err = trace.GetService().ClearStatementFilters()
+		}
+
 		if err != nil {
 			return Result{}, err
 		}
 		return Result{Data: "OK"}, nil
-	case "add":
+	case "refresh":
+		if len(params) < 2 ||
+			(params[1] != trace.FeatureTraceTxn &&
+				params[1] != trace.FeatureTraceData &&
+				params[1] != trace.FeatureTraceStatement) {
+			return Result{}, moerr.NewInvalidInputNoCtx("invalid parameter %s", parameter)
+		}
+
+		var err error
+		if params[1] == trace.FeatureTraceTxn {
+			err = trace.GetService().RefreshTxnFilters()
+		} else if params[1] == trace.FeatureTraceData {
+			err = trace.GetService().RefreshTableFilters()
+		} else if params[1] == trace.FeatureTraceStatement {
+			err = trace.GetService().RefreshStatementFilters()
+		}
+
+		if err != nil {
+			return Result{}, err
+		}
+		return Result{Data: "OK"}, nil
+	case "add-table":
 		// add table [column1, column2, ...]
 		if len(params) < 2 {
 			return Result{}, moerr.NewInvalidInputNoCtx("invalid parameter %s", parameter)
@@ -63,7 +104,29 @@ func handleTxnTrace(
 			columns = params[2:]
 		}
 
-		err := trace.GetService().AddEntryFilter(table, columns)
+		err := trace.GetService().AddTableFilter(table, columns)
+		if err != nil {
+			return Result{}, err
+		}
+		return Result{Data: "OK"}, nil
+	case "add-txn":
+		// add-txn method value
+		if len(params) < 3 {
+			return Result{}, moerr.NewInvalidInputNoCtx("invalid parameter %s", parameter)
+		}
+
+		err := trace.GetService().AddTxnFilter(params[1], params[2])
+		if err != nil {
+			return Result{}, err
+		}
+		return Result{Data: "OK"}, nil
+	case "add-statement":
+		// add-statement method value
+		if len(params) < 3 {
+			return Result{}, moerr.NewInvalidInputNoCtx("invalid parameter %s", parameter)
+		}
+
+		err := trace.GetService().AddStatementFilter(params[1], params[2])
 		if err != nil {
 			return Result{}, err
 		}

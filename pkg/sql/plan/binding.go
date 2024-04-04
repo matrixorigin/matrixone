@@ -26,10 +26,11 @@ func (b *Binding) FindColumn(col string) int32 {
 	return NotFound
 }
 
-func NewBinding(tag, nodeID int32, table string, tableID uint64, cols []string, colIsHidden []bool, types []*plan.Type, isClusterTable bool, defaultVals []string) *Binding {
+func NewBinding(tag, nodeID int32, db, table string, tableID uint64, cols []string, colIsHidden []bool, types []*plan.Type, isClusterTable bool, defaultVals []string) *Binding {
 	binding := &Binding{
 		tag:            tag,
 		nodeId:         nodeID,
+		db:             db,
 		table:          table,
 		tableID:        tableID,
 		cols:           cols,
@@ -37,7 +38,7 @@ func NewBinding(tag, nodeID int32, table string, tableID uint64, cols []string, 
 		types:          types,
 		refCnts:        make([]uint, len(cols)),
 		isClusterTable: isClusterTable,
-		defaultVals:    defaultVals,
+		defaults:       defaultVals,
 	}
 
 	binding.colIdByName = make(map[string]int32)

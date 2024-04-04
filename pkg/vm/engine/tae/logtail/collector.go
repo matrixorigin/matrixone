@@ -20,11 +20,11 @@ import (
 	"fmt"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
@@ -64,7 +64,7 @@ func init() {
 
 type Collector interface {
 	String() string
-	Run()
+	Run(lag time.Duration)
 	ScanInRange(from, to types.TS) (*DirtyTreeEntry, int)
 	ScanInRangePruned(from, to types.TS) *DirtyTreeEntry
 	IsCommitted(from, to types.TS) bool
@@ -97,10 +97,10 @@ func NewDirtyTreeEntry(start, end types.TS, tree *model.Tree) *DirtyTreeEntry {
 }
 
 func (entry *DirtyTreeEntry) Merge(o *DirtyTreeEntry) {
-	if entry.start.Greater(o.start) {
+	if entry.start.Greater(&o.start) {
 		entry.start = o.start
 	}
-	if entry.end.Less(o.end) {
+	if entry.end.Less(&o.end) {
 		entry.end = o.end
 	}
 	entry.tree.Merge(o.tree)
@@ -159,7 +159,7 @@ func NewDirtyCollector(
 	}
 	collector.storage.entries = btree.NewBTreeGOptions(
 		func(a, b *DirtyTreeEntry) bool {
-			return a.start.Less(b.start) && a.end.Less(b.end)
+			return a.start.Less(&b.start) && a.end.Less(&b.end)
 		}, btree.Options{
 			NoLocks: true,
 		})
@@ -170,8 +170,8 @@ func NewDirtyCollector(
 func (d *dirtyCollector) Init(maxts types.TS) {
 	d.storage.maxTs = maxts
 }
-func (d *dirtyCollector) Run() {
-	from, to := d.findRange()
+func (d *dirtyCollector) Run(lag time.Duration) {
+	from, to := d.findRange(lag)
 
 	// stale range found, skip this run
 	if to.IsEmpty() {
@@ -217,14 +217,11 @@ func (d *dirtyCollector) IsCommitted(from, to types.TS) bool {
 }
 
 // DirtyCount returns unflushed table, Object, block count
-func (d *dirtyCollector) DirtyCount() (tblCnt, objCnt, blkCnt int) {
+func (d *dirtyCollector) DirtyCount() (tblCnt, objCnt int) {
 	merged := d.GetAndRefreshMerged()
 	tblCnt = merged.tree.TableCount()
 	for _, tblTree := range merged.tree.Tables {
 		objCnt += len(tblTree.Objs)
-		for _, objTree := range tblTree.Objs {
-			blkCnt += len(objTree.Blks)
-		}
 	}
 	return
 }
@@ -239,7 +236,7 @@ func (d *dirtyCollector) GetAndRefreshMerged() (merged *DirtyTreeEntry) {
 	d.storage.RLock()
 	maxTs := d.storage.maxTs
 	d.storage.RUnlock()
-	if maxTs.LessEq(merged.end) {
+	if maxTs.LessEq(&merged.end) {
 		return
 	}
 	merged = d.Merge()
@@ -270,7 +267,7 @@ func (d *dirtyCollector) tryUpdateMerged(merged *DirtyTreeEntry) (updated bool) 
 	var old *DirtyTreeEntry
 	for {
 		old = d.merged.Load()
-		if old.end.GreaterEq(merged.end) {
+		if old.end.GreaterEq(&merged.end) {
 			break
 		}
 		if d.merged.CompareAndSwap(old, merged) {
@@ -281,14 +278,18 @@ func (d *dirtyCollector) tryUpdateMerged(merged *DirtyTreeEntry) (updated bool) 
 	return
 }
 
-func (d *dirtyCollector) findRange() (from, to types.TS) {
+func (d *dirtyCollector) findRange(lagDuration time.Duration) (from, to types.TS) {
 	now := d.clock.Alloc()
+	// a deliberate lag is made here for flushing and checkpoint to
+	// avoid fierce competition on the very new ablock, whose PrepareCompact probably
+	// returns false
+	lag := types.BuildTS(now.Physical()-int64(lagDuration), now.Logical())
 	d.storage.RLock()
 	defer d.storage.RUnlock()
-	if now.LessEq(d.storage.maxTs) {
+	if lag.LessEq(&d.storage.maxTs) {
 		return
 	}
-	from, to = d.storage.maxTs.Next(), now
+	from, to = d.storage.maxTs.Next(), lag
 	return
 }
 
@@ -306,7 +307,8 @@ func (d *dirtyCollector) tryStoreEntry(entry *DirtyTreeEntry) (ok bool) {
 	defer d.storage.Unlock()
 
 	// storage was updated before
-	if !entry.start.Equal(d.storage.maxTs.Next()) {
+	maxTS := d.storage.maxTs.Next()
+	if !entry.start.Equal(&maxTS) {
 		ok = false
 		return
 	}
@@ -380,7 +382,6 @@ func (d *dirtyCollector) tryCompactTree(
 		db  *catalog.DBEntry
 		tbl *catalog.TableEntry
 		obj *catalog.ObjectEntry
-		blk *catalog.BlockEntry
 	)
 	for id, dirtyTable := range tree.Tables {
 		// remove empty tables
@@ -408,7 +409,7 @@ func (d *dirtyCollector) tryCompactTree(
 
 		tbl.Stats.RLock()
 		lastFlush := tbl.Stats.LastFlush
-		if lastFlush.GreaterEq(to) {
+		if lastFlush.GreaterEq(&to) {
 			tree.Shrink(id)
 			tbl.Stats.RUnlock()
 			continue
@@ -416,17 +417,12 @@ func (d *dirtyCollector) tryCompactTree(
 		tbl.Stats.RUnlock()
 
 		if x := ctx.Value(TempFKey{}); x != nil && TempF.Check(tbl.ID) {
-			logutil.Infof("temp filter skip table %v-%v", tbl.ID, tbl.GetLastestSchema().Name)
+			logutil.Infof("temp filter skip table %v-%v", tbl.ID, tbl.GetLastestSchemaLocked().Name)
 			tree.Shrink(id)
 			continue
 		}
 
 		for id, dirtyObj := range dirtyTable.Objs {
-			// remove empty objs
-			if dirtyObj.IsEmpty() {
-				dirtyTable.Shrink(id)
-				continue
-			}
 			if obj, err = tbl.GetObjectByID(dirtyObj.ID); err != nil {
 				if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
 					dirtyTable.Shrink(id)
@@ -435,41 +431,36 @@ func (d *dirtyCollector) tryCompactTree(
 				}
 				return
 			}
-			for id := range dirtyObj.Blks {
-				bid := objectio.NewBlockidWithObjectID(dirtyObj.ID, id)
-				if blk, err = obj.GetBlockEntryByID(bid); err != nil {
-					if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
-						dirtyObj.Shrink(bid)
-						err = nil
-						continue
-					}
-					return
+			var calibration int
+			calibration, err = obj.GetObjectData().RunCalibration()
+			if err != nil {
+				logutil.Warnf("get object rows failed, obj %v, err: %v", obj.ID.String(), err)
+				continue
+			}
+			if calibration == 0 {
+				// TODO: may be put it to post replay process
+				// FIXME
+				if obj.HasPersistedData() {
+					obj.GetObjectData().TryUpgrade()
 				}
-				if blk.GetBlockData().RunCalibration() == 0 {
-					// TODO: may be put it to post replay process
-					// FIXME
-					if blk.HasPersistedData() {
-						blk.GetBlockData().TryUpgrade()
-					}
-					dirtyObj.Shrink(bid)
+				dirtyTable.Shrink(id)
+				continue
+			}
+			if !obj.IsAppendable() {
+				newFrom := from
+				if lastFlush.Greater(&newFrom) {
+					newFrom = lastFlush
+				}
+				// sometimes, delchain is no cleared after flushing table tail.
+				// the reason is still unknown, but here bumping the check from ts to lastFlush is correct anyway.
+				found, _ := obj.GetObjectData().HasDeleteIntentsPreparedIn(newFrom, to)
+				if !found {
+					dirtyTable.Shrink(id)
 					continue
 				}
-				if !blk.IsAppendable() {
-					newFrom := from
-					if lastFlush.Greater(newFrom) {
-						newFrom = lastFlush
-					}
-					// sometimes, delchain is no cleared after flushing table tail.
-					// the reason is still unknown, but here bumping the check from ts to lastFlush is correct anyway.
-					found, _ := blk.GetBlockData().HasDeleteIntentsPreparedIn(newFrom, to)
-					if !found {
-						dirtyObj.Shrink(bid)
-						continue
-					}
-				}
-				if err = interceptor.OnBlock(blk); err != nil {
-					return
-				}
+			}
+			if err = interceptor.OnObject(obj); err != nil {
+				return
 			}
 		}
 	}

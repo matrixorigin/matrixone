@@ -17,6 +17,7 @@ package tree
 type TableName struct {
 	TableExpr
 	objName
+	AtTsExpr *AtTimeStamp
 }
 
 func (tn TableName) Format(ctx *FmtCtx) {
@@ -29,6 +30,11 @@ func (tn TableName) Format(ctx *FmtCtx) {
 		ctx.WriteByte('.')
 	}
 	ctx.WriteString(string(tn.ObjectName))
+	if tn.AtTsExpr != nil {
+		ctx.WriteString("{")
+		tn.AtTsExpr.Format(ctx)
+		ctx.WriteString("}")
+	}
 }
 
 func (tn *TableName) Name() Identifier {
@@ -57,11 +63,20 @@ func (node *TableNames) Format(ctx *FmtCtx) {
 	}
 }
 
-func NewTableName(name Identifier, prefix ObjectNamePrefix) *TableName {
+func NewTableName(name Identifier, prefix ObjectNamePrefix, AtTsExpr *AtTimeStamp) *TableName {
 	return &TableName{
 		objName: objName{
 			ObjectName:       name,
 			ObjectNamePrefix: prefix,
 		},
+		AtTsExpr: AtTsExpr,
 	}
+}
+
+type AtTimeStamp struct {
+	Expr Expr
+}
+
+func (node *AtTimeStamp) Format(ctx *FmtCtx) {
+	node.Expr.Format(ctx)
 }

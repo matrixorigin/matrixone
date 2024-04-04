@@ -124,7 +124,7 @@ func (pse *PrepareStmtExecutor) ResponseAfterExec(ctx context.Context, ses *Sess
 
 func (pse *PrepareStmtExecutor) ExecuteImpl(ctx context.Context, ses *Session) error {
 	var err error
-	pse.prepareStmt, err = doPrepareStmt(ctx, ses, pse.ps, "")
+	pse.prepareStmt, err = doPrepareStmt(ctx, ses, pse.ps, "", nil)
 	if err != nil {
 		return err
 	}

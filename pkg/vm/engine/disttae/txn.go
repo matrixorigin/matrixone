@@ -16,25 +16,27 @@ package disttae
 
 import (
 	"context"
+	"encoding/hex"
 	"math"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/txn/trace"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
 
 //func (txn *Transaction) getObjInfos(
@@ -81,6 +83,25 @@ func (txn *Transaction) WriteBatch(
 	primaryIdx int, // pass -1 to indicate no primary key or disable primary key checking
 	insertBatchHasRowId bool,
 	truncate bool) error {
+	start := time.Now()
+	seq := txn.op.NextSequence()
+	trace.GetService().AddTxnDurationAction(
+		txn.op,
+		client.WorkspaceWriteEvent,
+		seq,
+		tableId,
+		0,
+		nil)
+	defer func() {
+		trace.GetService().AddTxnDurationAction(
+			txn.op,
+			client.WorkspaceWriteEvent,
+			seq,
+			tableId,
+			time.Since(start),
+			nil)
+	}()
+
 	txn.readOnly.Store(false)
 	bat.Cnt = 1
 	txn.Lock()
@@ -117,6 +138,8 @@ func (txn *Transaction) WriteBatch(
 	}
 	txn.writes = append(txn.writes, e)
 	txn.pkCount += bat.RowCount()
+
+	trace.GetService().TxnWrite(txn.op, tableId, typesNames[typ], bat)
 	return nil
 }
 
@@ -131,22 +154,22 @@ func checkPKDupGeneric[T comparable](
 	t *types.Type,
 	attr string,
 	vals []T,
-	start, count int) error {
+	start, count int) (bool, string) {
 	for _, v := range vals[start : start+count] {
 		if _, ok := mp[v]; ok {
 			entry := common.TypeStringValue(*t, v, false)
-			return moerr.NewDuplicateEntryNoCtx(entry, attr)
+			return true, entry
 		}
 		mp[v] = true
 	}
-	return nil
+	return false, ""
 }
 
 func checkPKDup(
 	mp map[any]bool,
 	pk *vector.Vector,
 	attr string,
-	start, count int) error {
+	start, count int) (bool, string) {
 	colType := pk.GetType()
 	switch colType.Oid {
 	case types.T_bool:
@@ -224,7 +247,7 @@ func checkPKDup(
 			v := pk.GetStringAt(i)
 			if _, ok := mp[v]; ok {
 				entry := common.TypeStringValue(*colType, []byte(v), false)
-				return moerr.NewDuplicateEntryNoCtx(entry, attr)
+				return true, entry
 			}
 			mp[v] = true
 		}
@@ -233,7 +256,7 @@ func checkPKDup(
 			v := types.ArrayToString[float32](vector.GetArrayAt[float32](pk, i))
 			if _, ok := mp[v]; ok {
 				entry := common.TypeStringValue(*colType, pk.GetBytesAt(i), false)
-				return moerr.NewDuplicateEntryNoCtx(entry, attr)
+				return true, entry
 			}
 			mp[v] = true
 		}
@@ -242,14 +265,14 @@ func checkPKDup(
 			v := types.ArrayToString[float64](vector.GetArrayAt[float64](pk, i))
 			if _, ok := mp[v]; ok {
 				entry := common.TypeStringValue(*colType, pk.GetBytesAt(i), false)
-				return moerr.NewDuplicateEntryNoCtx(entry, attr)
+				return true, entry
 			}
 			mp[v] = true
 		}
 	default:
 		panic(moerr.NewInternalErrorNoCtx("%s not supported", pk.GetType().String()))
 	}
-	return nil
+	return false, ""
 }
 
 // checkDup check whether the txn.writes has duplicate pk entry
@@ -261,8 +284,8 @@ func (txn *Transaction) checkDup() error {
 	//table id is global unique
 	tablesDef := make(map[uint64]*plan.TableDef)
 	pkIndex := make(map[uint64]int)
-	insertPks := make(map[any]bool)
-	delPks := make(map[any]bool)
+	insertPks := make(map[uint64]map[any]bool)
+	delPks := make(map[uint64]map[any]bool)
 
 	for _, e := range txn.writes {
 		if e.bat == nil || e.bat.RowCount() == 0 {
@@ -291,14 +314,6 @@ func (txn *Transaction) checkDup() error {
 			tableDef := tablesDef[e.tableId]
 			if _, ok := pkIndex[e.tableId]; !ok {
 				for idx, colDef := range tableDef.Cols {
-					//FIXME::tableDef.PKey is nil if table is mo_tables, mo_columns, mo_database?
-					if tableDef.Pkey == nil {
-						if colDef.Primary {
-							pkIndex[e.tableId] = idx
-							break
-						}
-						continue
-					}
 					if colDef.Name == tableDef.Pkey.PkeyColName {
 						if colDef.Name == catalog.FakePrimaryKeyColName {
 							pkIndex[e.tableId] = -1
@@ -318,13 +333,23 @@ func (txn *Transaction) checkDup() error {
 					newBat.SetRowCount(bat.Vecs[0].Length())
 					bat = newBat
 				}
-				if err := checkPKDup(
-					insertPks,
+				if _, ok := insertPks[e.tableId]; !ok {
+					insertPks[e.tableId] = make(map[any]bool)
+				}
+				if dup, pk := checkPKDup(
+					insertPks[e.tableId],
 					bat.Vecs[index],
 					bat.Attrs[index],
 					0,
-					bat.RowCount()); err != nil {
-					return err
+					bat.RowCount()); dup {
+					logutil.Errorf("txn:%s wants to insert duplicate primary key:%s in table:[%v-%v:%s-%s]",
+						hex.EncodeToString(txn.op.Txn().ID),
+						pk,
+						e.databaseId,
+						e.tableId,
+						e.databaseName,
+						e.tableName)
+					return moerr.NewDuplicateEntryNoCtx(pk, bat.Attrs[index])
 				}
 			}
 			continue
@@ -332,17 +357,27 @@ func (txn *Transaction) checkDup() error {
 		//if entry.tyep is DELETE, then e.bat.Vecs[0] is rowid,e.bat.Vecs[1] is PK
 		if e.typ == DELETE || e.typ == DELETE_TXN {
 			if len(e.bat.Vecs) < 2 {
-				logutil.Warnf("delete entry has no pk, database:%s, table:%s",
+				logutil.Warnf("delete has no pk, database:%s, table:%s",
 					e.databaseName, e.tableName)
 				continue
 			}
-			if err := checkPKDup(
-				delPks,
+			if _, ok := delPks[e.tableId]; !ok {
+				delPks[e.tableId] = make(map[any]bool)
+			}
+			if dup, pk := checkPKDup(
+				delPks[e.tableId],
 				e.bat.Vecs[1],
 				e.bat.Attrs[1],
 				0,
-				e.bat.RowCount()); err != nil {
-				return err
+				e.bat.RowCount()); dup {
+				logutil.Errorf("txn:%s wants to delete duplicate primary key:%s in table:[%v-%v:%s-%s]",
+					hex.EncodeToString(txn.op.Txn().ID),
+					pk,
+					e.databaseId,
+					e.tableId,
+					e.databaseName,
+					e.tableName)
+				return moerr.NewDuplicateEntryNoCtx(pk, e.bat.Attrs[1])
 			}
 		}
 	}
@@ -350,13 +385,21 @@ func (txn *Transaction) checkDup() error {
 }
 
 // dumpBatch if txn.workspaceSize is larger than threshold, cn will write workspace to s3
+// start from write offset.   Pass in offset -1 to dump all.   Note that dump all will
+// modify txn.writes, so it can only be called right before txn.commit.
 func (txn *Transaction) dumpBatchLocked(offset int) error {
 	var size uint64
 	var pkCount int
 	if txn.workspaceSize < WorkspaceThreshold {
 		return nil
 	}
-	if offset > 0 {
+
+	dumpAll := offset < 0
+	if dumpAll {
+		offset = 0
+	}
+
+	if !dumpAll {
 		for i := offset; i < len(txn.writes); i++ {
 			if txn.writes[i].tableId == catalog.MO_DATABASE_ID ||
 				txn.writes[i].tableId == catalog.MO_TABLES_ID ||
@@ -465,9 +508,11 @@ func (txn *Transaction) dumpBatchLocked(offset int) error {
 			return err
 		}
 	}
-	if offset == 0 {
+
+	if dumpAll {
 		txn.workspaceSize = 0
 		txn.pkCount -= pkCount
+		// modifies txn.writes.
 		writes := txn.writes[:0]
 		for i, write := range txn.writes {
 			if write.bat != nil {
@@ -594,6 +639,27 @@ func (txn *Transaction) WriteFile(
 
 func (txn *Transaction) deleteBatch(bat *batch.Batch,
 	databaseId, tableId uint64) *batch.Batch {
+	start := time.Now()
+	seq := txn.op.NextSequence()
+	trace.GetService().AddTxnDurationAction(
+		txn.op,
+		client.WorkspaceWriteEvent,
+		seq,
+		tableId,
+		0,
+		nil)
+	defer func() {
+		trace.GetService().AddTxnDurationAction(
+			txn.op,
+			client.WorkspaceWriteEvent,
+			seq,
+			tableId,
+			time.Since(start),
+			nil)
+	}()
+
+	trace.GetService().TxnWrite(txn.op, tableId, typesNames[DELETE], bat)
+
 	mp := make(map[types.Rowid]uint8)
 	deleteBlkId := make(map[types.Blockid]bool)
 	rowids := vector.MustFixedCol[types.Rowid](bat.GetVector(0))
@@ -856,6 +922,35 @@ func (txn *Transaction) hasUncommittedDeletesOnBlock(id *types.Blockid) bool {
 	return txn.deletedBlocks.hasDeletes(id)
 }
 
+// TODO:: refactor in next PR, to make it more efficient and include persisted deletes in S3
+func (txn *Transaction) forEachTableHasDeletesLocked(f func(tbl *txnTable) error) error {
+	tables := make(map[uint64]*txnTable)
+	for i := 0; i < len(txn.writes); i++ {
+		e := txn.writes[i]
+		if e.typ != DELETE || e.fileName != "" {
+			continue
+		}
+		if _, ok := tables[e.tableId]; ok {
+			continue
+		}
+		db, err := txn.engine.Database(txn.proc.Ctx, e.databaseName, txn.op)
+		if err != nil {
+			return err
+		}
+		rel, err := db.Relation(txn.proc.Ctx, e.tableName, nil)
+		if err != nil {
+			return err
+		}
+		tables[e.tableId] = rel.(*txnTable)
+	}
+	for _, tbl := range tables {
+		if err := f(tbl); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (txn *Transaction) forEachTableWrites(databaseId uint64, tableId uint64, offset int, f func(Entry)) {
 	txn.Lock()
 	defer txn.Unlock()
@@ -909,12 +1004,14 @@ func (txn *Transaction) Commit(ctx context.Context) ([]txn.TxnRequest, error) {
 	if err := txn.mergeTxnWorkspaceLocked(); err != nil {
 		return nil, err
 	}
-	if err := txn.dumpBatchLocked(0); err != nil {
+	if err := txn.dumpBatchLocked(-1); err != nil {
 		return nil, err
 	}
-	pkDedupCount := txn.op.PKDedupCount()
+
+	txn.traceWorkspaceLocked(true)
+
 	if !txn.hasS3Op.Load() &&
-		pkDedupCount > 0 && txn.pkCount <= pkDedupCount {
+		txn.op.TxnOptions().CheckDupEnabled() {
 		if err := txn.checkDup(); err != nil {
 			return nil, err
 		}
@@ -997,6 +1094,43 @@ func (txn *Transaction) GetSnapshotWriteOffset() int {
 	txn.Lock()
 	defer txn.Unlock()
 	return txn.snapshotWriteOffset
+}
+
+func (txn *Transaction) transferDeletesLocked() error {
+	txn.timestamps = append(txn.timestamps, txn.op.SnapshotTS())
+	if txn.statementID > 0 && txn.op.Txn().IsRCIsolation() {
+		var ts timestamp.Timestamp
+		if txn.statementID == 1 {
+			ts = txn.timestamps[0]
+		} else {
+			//statementID > 1
+			ts = txn.timestamps[txn.statementID-2]
+		}
+		return txn.forEachTableHasDeletesLocked(func(tbl *txnTable) error {
+			ctx := tbl.proc.Load().Ctx
+			state, err := tbl.getPartitionState(ctx)
+			if err != nil {
+				return err
+			}
+			deleteObjs, createObjs := state.GetChangedObjsBetween(types.TimestampToTS(ts),
+				types.TimestampToTS(tbl.db.txn.op.SnapshotTS()))
+
+			trace.GetService().ApplyFlush(
+				tbl.db.txn.op.Txn().ID,
+				tbl.tableId,
+				ts,
+				tbl.db.txn.op.SnapshotTS(),
+				len(deleteObjs))
+
+			if len(deleteObjs) > 0 {
+				if err := tbl.transferDeletes(ctx, state, deleteObjs, createObjs); err != nil {
+					return err
+				}
+			}
+			return nil
+		})
+	}
+	return nil
 }
 
 func (txn *Transaction) UpdateSnapshotWriteOffset() {

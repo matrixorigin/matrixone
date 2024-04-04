@@ -179,8 +179,12 @@ func (s *sqlExecutor) adjustOptions(
 	if !opts.HasExistsTxn() {
 		txnOpts := opts.ExtraTxnOptions()
 		txnOpts = append(txnOpts,
-			client.WithTxnCreateBy("sql-executor"),
-			client.WithDisableTrace(true))
+			client.WithTxnCreateBy(
+				opts.AccountID(),
+				"",
+				"sql-executor",
+				0),
+			client.WithDisableTrace(!opts.EnableTrace()))
 		txnOp, err := s.txnClient.New(
 			ctx,
 			opts.MinCommittedTS(),
@@ -225,7 +229,7 @@ func (exec *txnExecutor) Exec(
 	statementOption executor.StatementOption) (executor.Result, error) {
 	receiveAt := time.Now()
 
-	stmts, err := parsers.Parse(exec.ctx, dialect.MYSQL, sql, 1)
+	stmts, err := parsers.Parse(exec.ctx, dialect.MYSQL, sql, 1, 0)
 	defer func() {
 		for _, stmt := range stmts {
 			stmt.Free()
@@ -279,6 +283,7 @@ func (exec *txnExecutor) Exec(
 	}
 
 	c := NewCompile(exec.s.addr, exec.getDatabase(), sql, "", "", exec.ctx, exec.s.eng, proc, stmts[0], false, nil, receiveAt)
+	defer c.Release()
 	c.disableRetry = exec.opts.DisableIncrStatement()
 	c.SetBuildPlanFunc(func() (*plan.Plan, error) {
 		return plan.BuildPlan(
@@ -306,7 +311,6 @@ func (exec *txnExecutor) Exec(
 			return nil
 		})
 	if err != nil {
-		c.Release()
 		return executor.Result{}, err
 	}
 	var runResult *util.RunResult
@@ -358,6 +362,10 @@ func (exec *txnExecutor) LockTable(table string) error {
 		proc.FreeVectors()
 	}()
 	return doLockTable(exec.s.eng, proc, rel, false)
+}
+
+func (exec *txnExecutor) Txn() client.TxnOperator {
+	return exec.opts.Txn()
 }
 
 func (exec *txnExecutor) commit() error {

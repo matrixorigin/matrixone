@@ -16,12 +16,13 @@ package disttae
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/panjf2000/ants/v2"
 	"math"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/panjf2000/ants/v2"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 
@@ -64,6 +65,18 @@ const (
 	ALTER
 	INSERT_TXN // Only for CN workspace consumption, not sent to DN
 	DELETE_TXN // Only for CN workspace consumption, not sent to DN
+)
+
+var (
+	typesNames = map[int]string{
+		INSERT:        "insert",
+		DELETE:        "delete",
+		COMPACTION_CN: "compaction_cn",
+		UPDATE:        "update",
+		ALTER:         "alter",
+		INSERT_TXN:    "insert_txn",
+		DELETE_TXN:    "delete_txn",
+	}
 )
 
 const (
@@ -207,6 +220,8 @@ type Transaction struct {
 	statementID int
 	//offsets of the txn.writes for statements in a txn.
 	offsets []int
+	//for RC isolation, the txn's snapshot TS for each statement.
+	timestamps []timestamp.Timestamp
 
 	hasS3Op              atomic.Bool
 	removed              bool
@@ -214,6 +229,8 @@ type Transaction struct {
 	incrStatementCalled  bool
 	syncCommittedTSCount uint64
 	pkCount              int
+
+	adjustCount int
 }
 
 type Pos struct {
@@ -322,7 +339,7 @@ func (txn *Transaction) IncrStatementID(ctx context.Context, commit bool) error 
 	if err := txn.mergeTxnWorkspaceLocked(); err != nil {
 		return err
 	}
-	//flushing writes into S3 for the last statement
+	// dump batch to s3, starting from 0 (begining of the workspace)
 	if err := txn.dumpBatchLocked(0); err != nil {
 		return err
 	}
@@ -341,6 +358,25 @@ func (txn *Transaction) WriteOffset() uint64 {
 
 // Adjust adjust writes order after the current statement finished.
 func (txn *Transaction) Adjust(writeOffset uint64) error {
+	start := time.Now()
+	seq := txn.op.NextSequence()
+	trace.GetService().AddTxnDurationAction(
+		txn.op,
+		client.WorkspaceAdjustEvent,
+		seq,
+		0,
+		0,
+		nil)
+	defer func() {
+		trace.GetService().AddTxnDurationAction(
+			txn.op,
+			client.WorkspaceAdjustEvent,
+			seq,
+			0,
+			time.Since(start),
+			nil)
+	}()
+
 	txn.Lock()
 	defer txn.Unlock()
 	if err := txn.adjustUpdateOrderLocked(writeOffset); err != nil {
@@ -351,7 +387,29 @@ func (txn *Transaction) Adjust(writeOffset uint64) error {
 	if err := txn.mergeTxnWorkspaceLocked(); err != nil {
 		return err
 	}
+
+	txn.traceWorkspaceLocked(false)
 	return nil
+}
+
+func (txn *Transaction) traceWorkspaceLocked(commit bool) {
+	index := txn.adjustCount
+	if commit {
+		index = -1
+	}
+	idx := 0
+	trace.GetService().TxnAdjustWorkspace(
+		txn.op,
+		index,
+		func() (tableID uint64, typ string, bat *batch.Batch, more bool) {
+			if idx == len(txn.writes) {
+				return 0, "", nil, false
+			}
+			e := txn.writes[idx]
+			idx++
+			return e.tableId, typesNames[e.typ], e.bat, true
+		})
+	txn.adjustCount++
 }
 
 // The current implementation, update's delete and insert are executed concurrently, inside workspace it
@@ -458,6 +516,7 @@ func (txn *Transaction) RollbackLastStatement(ctx context.Context) error {
 		}
 		txn.writes = txn.writes[:end]
 		txn.offsets = txn.offsets[:txn.statementID]
+		txn.timestamps = txn.timestamps[:txn.statementID]
 	}
 	// rollback current statement's writes info
 	for b := range txn.batchSelectList {
@@ -499,8 +558,8 @@ func (txn *Transaction) handleRCSnapshot(ctx context.Context, commit bool) error
 		needResetSnapshot = true
 	}
 	if !commit && txn.op.Txn().IsRCIsolation() &&
-		(txn.GetSQLCount() > 1 || needResetSnapshot) {
-		trace.GetService().TxnNeedUpdateSnapshot(
+		(txn.GetSQLCount() > 0 || needResetSnapshot) {
+		trace.GetService().TxnUpdateSnapshot(
 			txn.op,
 			0,
 			"before execute")
@@ -510,6 +569,10 @@ func (txn *Transaction) handleRCSnapshot(ctx context.Context, commit bool) error
 			return err
 		}
 		txn.resetSnapshot()
+	}
+	//Transfer row ids for deletes in RC isolation
+	if !commit {
+		return txn.transferDeletesLocked()
 	}
 	return nil
 }
@@ -558,6 +621,8 @@ type txnDatabase struct {
 	databaseType      string
 	databaseCreateSql string
 	txn               *Transaction
+
+	rowId types.Rowid
 }
 
 type tableKey struct {
@@ -588,7 +653,7 @@ type txnTable struct {
 	tableDef   *plan.TableDef
 	seqnums    []uint16
 	typs       []types.Type
-	_partState *logtailreplay.PartitionState
+	_partState atomic.Pointer[logtailreplay.PartitionState]
 
 	// objInofs stores all the data object infos for this table of this transaction
 	// it is only generated when the table is not created by this transaction
@@ -597,9 +662,9 @@ type txnTable struct {
 
 	// specify whether the objInfos is updated. once it is updated, it will not be updated again
 	//TODO::remove it in next PR.
-	objInfosUpdated bool
+	objInfosUpdated atomic.Bool
 	// specify whether the logtail is updated. once it is updated, it will not be updated again
-	logtailUpdated bool
+	logtailUpdated atomic.Bool
 
 	primaryIdx    int // -1 means no primary key
 	primarySeqnum int // -1 means no primary key

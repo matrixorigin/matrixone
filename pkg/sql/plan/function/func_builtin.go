@@ -17,6 +17,7 @@ package function
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"math"
 	"math/rand"
@@ -29,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
+	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -37,6 +39,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionUtil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/moarray"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/momath"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -151,6 +155,63 @@ func builtInMoShowVisibleBin(parameters []*vector.Vector, result vector.Function
 			}
 		} else {
 			b, err := f(v1)
+			if err != nil {
+				return err
+			}
+			if b == nil {
+				if err := rs.AppendBytes(nil, true); err != nil {
+					return err
+				}
+			} else {
+				if err = rs.AppendBytes(b, false); err != nil {
+					return err
+				}
+			}
+		}
+	}
+
+	return nil
+}
+
+func builtInMoShowVisibleBinEnum(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	p1 := vector.GenerateFunctionStrParameter(parameters[0])
+	enumVal := vector.GenerateFunctionStrParameter(parameters[1])
+
+	var f func([]byte, string) ([]byte, error)
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	f = func(s []byte, enumStr string) ([]byte, error) {
+		typ := new(types.Type)
+		err := types.Decode(s, typ)
+		if err != nil {
+			return nil, err
+		}
+		if typ.Oid != types.T_enum {
+			return nil, moerr.NewNotSupported(proc.Ctx, "show visible bin enum, the type must be enum, but got %s", typ.String())
+		}
+
+		// get enum values
+		enums := strings.Split(enumStr, ",")
+		enumVal := ""
+		for i, e := range enums {
+			enumVal += fmt.Sprintf("'%s'", e)
+			if i < len(enums)-1 {
+				enumVal += ","
+			}
+		}
+		ret := fmt.Sprintf("%s(%s)", typ.String(), enumVal)
+		return functionUtil.QuickStrToBytes(ret), nil
+	}
+
+	for i := uint64(0); i < uint64(length); i++ {
+		v1, null1 := p1.GetStrValue(i)
+		enumStr, null2 := enumVal.GetStrValue(i)
+		if null1 || null2 || len(v1) == 0 || len(enumStr) == 0 {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+		} else {
+			enumString := functionUtil.QuickBytesToStr(enumStr)
+			b, err := f(v1, enumString)
 			if err != nil {
 				return err
 			}
@@ -2116,4 +2177,86 @@ func builtInToLower(parameters []*vector.Vector, result vector.FunctionResultWra
 	return opUnaryBytesToBytes(parameters, result, proc, length, func(v []byte) []byte {
 		return bytes.ToLower(v)
 	})
+}
+
+// buildInMOCU extract cu or calculate cu from parameters
+// example:
+// - select mo_cu('[1,2,3,4,5,6,7,8]', 134123)
+// - select mo_cu('[1,2,3,4,5,6,7,8]', 134123, 'total')
+// - select mo_cu('[1,2,3,4,5,6,7,8]', 134123, 'cpu')
+// - select mo_cu('[1,2,3,4,5,6,7,8]', 134123, 'mem')
+// - select mo_cu('[1,2,3,4,5,6,7,8]', 134123, 'ioin')
+// - select mo_cu('[1,2,3,4,5,6,7,8]', 134123, 'ioout')
+// - select mo_cu('[1,2,3,4,5,6,7,8]', 134123, 'network')
+func buildInMOCU(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	return buildInMOCUWithCfg(parameters, result, proc, length, nil)
+}
+
+func buildInMOCUv1(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	cfg := motrace.GetCUConfigV1()
+	return buildInMOCUWithCfg(parameters, result, proc, length, cfg)
+}
+
+func buildInMOCUWithCfg(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, cfg *config.OBCUConfig) error {
+	var (
+		cu     float64
+		p3     vector.FunctionParameterWrapper[types.Varlena]
+		stats  statistic.StatsArray
+		target []byte
+		null3  bool
+	)
+	rs := vector.MustFunctionResult[float64](result)
+
+	p1 := vector.GenerateFunctionStrParameter(parameters[0])
+	p2 := vector.GenerateFunctionFixedTypeParameter[int64](parameters[1])
+
+	if len(parameters) == 3 {
+		p3 = vector.GenerateFunctionStrParameter(parameters[2])
+	}
+
+	for i := uint64(0); i < uint64(length); i++ {
+		statsJsonArrayStr, null1 := p1.GetStrValue(i) /* stats json array */
+		durationNS, null2 := p2.GetValue(i)           /* duration_ns */
+		if p3 == nil {
+			target, null3 = []byte("total"), false
+		} else {
+			target, null3 = p3.GetStrValue(i)
+		}
+
+		if null1 || null2 || null3 {
+			rs.Append(float64(0), true)
+			continue
+		}
+
+		if len(statsJsonArrayStr) == 0 {
+			rs.Append(float64(0), true)
+			continue
+		}
+
+		if err := json.Unmarshal(statsJsonArrayStr, &stats); err != nil {
+			rs.Append(float64(0), true)
+			//return moerr.NewInternalError(proc.Ctx, "failed to parse json arr: %v", err)
+		}
+
+		switch util.UnsafeBytesToString(target) {
+		case "cpu":
+			cu = motrace.CalculateCUCpu(int64(stats.GetTimeConsumed()), cfg)
+		case "mem":
+			cu = motrace.CalculateCUMem(int64(stats.GetMemorySize()), durationNS, cfg)
+		case "ioin":
+			cu = motrace.CalculateCUIOIn(int64(stats.GetS3IOInputCount()), cfg)
+		case "ioout":
+			cu = motrace.CalculateCUIOOut(int64(stats.GetS3IOOutputCount()), cfg)
+		case "network":
+			cu = motrace.CalculateCUTraffic(int64(stats.GetOutTrafficBytes()), stats.GetConnType(), cfg)
+		case "total":
+			cu = motrace.CalculateCUWithCfg(stats, durationNS, cfg)
+		default:
+			rs.Append(float64(0), true)
+			continue
+		}
+		rs.Append(cu, false)
+	}
+
+	return nil
 }

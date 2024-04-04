@@ -68,6 +68,10 @@ enum CmdMethod {
   GetStatsInfo = 18;
   // GetPipelineInfo is the method to get pipeline info from CN
   GetPipelineInfo = 19;
+  // MigrateConnFrom get session info from the previous cn node.
+  MigrateConnFrom = 20;
+  // MigrateConnTo migrate the session info to the new cn node.
+  MigrateConnTo = 21;
 }
 
 // QueryRequest is the common query request. It contains the query
@@ -189,8 +193,9 @@ message Request {
   GetCacheDataRequest GetCacheDataRequest = 20;
   // GetStatsInfoRequest is the request of getting stats info from remote cn node.
   GetStatsInfoRequest GetStatsInfoRequest = 21;
-
   GetPipelineInfoRequest GetPipelineInfoRequest = 22;
+  MigrateConnFromRequest MigrateConnFromRequest = 23;
+  MigrateConnToRequest MigrateConnToRequest = 24;
 }
 
 // ShowProcessListResponse is the response of command ShowProcessList.
@@ -237,8 +242,9 @@ message Response {
   GetCacheDataResponse GetCacheDataResponse = 20;
   // GetStatsInfoResponse is the response of GetStatsInfoRequest.
   GetStatsInfoResponse GetStatsInfoResponse = 21;
-
   GetPipelineInfoResponse GetPipelineInfoResponse = 22;
+  MigrateConnFromResponse MigrateConnFromResponse = 23;
+  MigrateConnToResponse MigrateConnToResponse = 24;
 }
 
 // AlterAccountRequest is the "alter account restricted" query request.
@@ -417,4 +423,30 @@ message GetStatsInfoRequest {
 
 message GetStatsInfoResponse {
   statsinfo.StatsInfo StatsInfo = 1;
+}
+
+message PrepareStmt {
+  string Name = 1;
+  string SQL = 2;
+  bytes ParamTypes = 3;
+}
+
+message MigrateConnFromRequest {
+  uint32 ConnID = 1;
+}
+
+message MigrateConnFromResponse {
+  string DB = 1;
+  repeated PrepareStmt PrepareStmts = 2;
+}
+
+message MigrateConnToRequest {
+  uint32 ConnID = 1;
+  string DB = 2;
+  repeated string SetVarStmts = 3;
+  repeated PrepareStmt PrepareStmts = 4;
+}
+
+message MigrateConnToResponse {
+  bool Success = 1;
 }

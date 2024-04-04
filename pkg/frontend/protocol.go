@@ -239,10 +239,6 @@ func (pi *ProtocolImpl) GetSequenceId() uint8 {
 	return uint8(pi.sequenceId.Load())
 }
 
-func (pi *ProtocolImpl) SetSequenceID(value uint8) {
-	pi.sequenceId.Store(uint32(value))
-}
-
 func (pi *ProtocolImpl) getDebugStringUnsafe() string {
 	if pi.tcpConn != nil {
 		return fmt.Sprintf("connectionId %d|%s", pi.connectionID, pi.tcpConn.RemoteAddress())
@@ -336,7 +332,6 @@ func (mp *MysqlProtocolImpl) getAbortTransactionErrorInfo() string {
 	//update error message in Case1,Case3,Case4.
 	if ses != nil && ses.OptionBitsIsSet(OPTION_ATTACH_ABORT_TRANSACTION_ERROR) {
 		ses.ClearOptionBits(OPTION_ATTACH_ABORT_TRANSACTION_ERROR)
-		return abortTransactionErrorInfo()
 	}
 	return ""
 }
@@ -401,6 +396,18 @@ func (mp *MysqlProtocolImpl) SendResponse(ctx context.Context, resp *Response) e
 	default:
 		return moerr.NewInternalError(ctx, "unsupported response:%d ", resp.category)
 	}
+}
+
+func (mp *MysqlProtocolImpl) DisableAutoFlush() {
+	mp.disableAutoFlush = true
+}
+
+func (mp *MysqlProtocolImpl) EnableAutoFlush() {
+	mp.disableAutoFlush = false
+}
+
+func (mp *MysqlProtocolImpl) Flush() error {
+	return mp.tcpConn.Flush(0)
 }
 
 var _ MysqlProtocol = &FakeProtocol{}
@@ -505,7 +512,7 @@ func (fp *FakeProtocol) GetStats() string {
 	return ""
 }
 
-func (fp *FakeProtocol) CalculateOutTrafficBytes() int64 { return 0 }
+func (fp *FakeProtocol) CalculateOutTrafficBytes(reset bool) (int64, int64) { return 0, 0 }
 
 func (fp *FakeProtocol) IsEstablished() bool {
 	return true
@@ -554,5 +561,15 @@ func (fp *FakeProtocol) sendLocalInfileRequest(filename string) error {
 func (fp *FakeProtocol) incDebugCount(int) {}
 
 func (fp *FakeProtocol) resetDebugCount() []uint64 {
+	return nil
+}
+
+func (fp *FakeProtocol) DisableAutoFlush() {
+}
+
+func (fp *FakeProtocol) EnableAutoFlush() {
+}
+
+func (fp *FakeProtocol) Flush() error {
 	return nil
 }

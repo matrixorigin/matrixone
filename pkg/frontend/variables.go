@@ -347,6 +347,14 @@ func (svit SystemVariableIntType) Convert(value interface{}) (interface{}, error
 		return nil, errorConvertToIntFailed
 	}
 
+	cv3 := func(x string) (interface{}, error) {
+		convertVal, err := strconv.ParseInt(x, 10, 64)
+		if err != nil {
+			return nil, errorConvertToIntFailed
+		}
+		return cv1(convertVal)
+	}
+
 	switch v := value.(type) {
 	case int:
 		return cv1(int64(v))
@@ -372,6 +380,8 @@ func (svit SystemVariableIntType) Convert(value interface{}) (interface{}, error
 		return cv2(float64(v))
 	case float64:
 		return cv2(v)
+	case string:
+		return cv3(v)
 	}
 	return nil, errorConvertToIntFailed
 }
@@ -480,10 +490,17 @@ func (svut SystemVariableUintType) ConvertFromString(value string) (interface{},
 }
 
 type SystemVariableDoubleType struct {
-	// Unused
-	// name    string
+	name    string
 	minimum float64
 	maximum float64
+}
+
+func InitSystemVariableDoubleType(name string, minimum, maximum float64) SystemVariableDoubleType {
+	return SystemVariableDoubleType{
+		name:    name,
+		minimum: minimum,
+		maximum: maximum,
+	}
 }
 
 func (svdt SystemVariableDoubleType) String() string {
@@ -523,6 +540,11 @@ func (svdt SystemVariableDoubleType) Convert(value interface{}) (interface{}, er
 		return cv1(float64(v))
 	case float64:
 		return cv1(v)
+	case string:
+		// some case '0.1' is recognized as string
+		if f, err := strconv.ParseFloat(v, 64); err == nil {
+			return cv1(f)
+		}
 	}
 	return nil, errorConvertToDoubleFailed
 }
@@ -2259,8 +2281,8 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Scope:             ScopeBoth,
 		Dynamic:           true,
 		SetVarHintApplies: false,
-		Type:              InitSystemVariableIntType("long_query_time", 0, 31536000, false),
-		Default:           int64(10),
+		Type:              InitSystemVariableDoubleType("long_query_time", 0, 31536000),
+		Default:           float64(10),
 	},
 	"low_priority_updates": {
 		Name:              "low_priority_updates",
@@ -3524,6 +3546,14 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           true,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableBoolType("disable_txn_trace"),
+		Default:           int64(0),
+	},
+	"keep_user_target_list_in_result": {
+		Name:              "keep_user_target_list_in_result",
+		Scope:             ScopeGlobal,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableIntType("keep_user_target_list_in_result", 0, 2, false),
 		Default:           int64(0),
 	},
 }

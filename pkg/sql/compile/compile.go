@@ -71,6 +71,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	mokafka "github.com/matrixorigin/matrixone/pkg/stream/adapter/kafka"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	txnTrace "github.com/matrixorigin/matrixone/pkg/txn/trace"
 	util2 "github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -241,6 +242,25 @@ func (c *Compile) Compile(ctx context.Context, pn *plan.Plan, u any, fill func(a
 	}()
 
 	if c.proc.TxnOperator != nil && c.proc.TxnOperator.Txn().IsPessimistic() {
+		txnOp := c.proc.TxnOperator
+		seq := txnOp.NextSequence()
+		txnTrace.GetService().AddTxnDurationAction(
+			txnOp,
+			client.CompileEvent,
+			seq,
+			0,
+			0,
+			err)
+		defer func() {
+			txnTrace.GetService().AddTxnDurationAction(
+				txnOp,
+				client.CompileEvent,
+				seq,
+				0,
+				time.Since(start),
+				err)
+		}()
+
 		if qry, ok := pn.Plan.(*plan.Plan_Query); ok {
 			if qry.Query.StmtType == plan.Query_SELECT {
 				for _, n := range qry.Query.Nodes {
@@ -397,12 +417,25 @@ func (c *Compile) allocOperatorID() int32 {
 }
 
 // Run is an important function of the compute-layer, it executes a single sql according to its scope
+// Need call Release() after call this function.
 func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
 	sql := c.originSQL
 	if sql == "" {
 		sql = c.sql
 	}
-	txnTrace.GetService().TxnExecute(c.proc.TxnOperator, sql)
+
+	txnOp := c.proc.TxnOperator
+	seq := uint64(0)
+	if txnOp != nil {
+		seq = txnOp.NextSequence()
+		txnOp.EnterRunSql()
+	}
+
+	defer func() {
+		if txnOp != nil {
+			txnOp.ExitRunSql()
+		}
+	}()
 
 	var writeOffset uint64
 
@@ -412,9 +445,13 @@ func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
 	stats := statistic.StatsInfoFromContext(c.proc.Ctx)
 	stats.ExecutionStart()
 
+	txnTrace.GetService().TxnStatementStart(txnOp, sql, seq)
 	defer func() {
 		stats.ExecutionEnd()
-		v2.TxnStatementExecuteDurationHistogram.Observe(time.Since(start).Seconds())
+
+		cost := time.Since(start)
+		txnTrace.GetService().TxnStatementCompleted(txnOp, sql, cost, seq, err)
+		v2.TxnStatementExecuteDurationHistogram.Observe(cost.Seconds())
 	}()
 
 	for _, s := range c.scope {
@@ -440,7 +477,6 @@ func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
 	c.ctx, span = trace.Start(c.ctx, "Compile.Run", trace.WithKind(trace.SpanKindStatement))
 	_, task := gotrace.NewTask(context.TODO(), "pipeline.Run")
 	defer func() {
-		c.Release()
 		releaseRunC()
 
 		task.End()
@@ -539,7 +575,6 @@ func (c *Compile) canRetry(err error) bool {
 // run once
 func (c *Compile) runOnce() error {
 	var wg sync.WaitGroup
-
 	err := c.lockMetaTables()
 	if err != nil {
 		return err
@@ -548,6 +583,7 @@ func (c *Compile) runOnce() error {
 	for _, s := range c.scope {
 		s.SetContextRecursively(c.proc.Ctx)
 	}
+
 	for i := range c.scope {
 		wg.Add(1)
 		scope := c.scope[i]
@@ -591,6 +627,9 @@ func (c *Compile) runOnce() error {
 
 	// fuzzy filter not sure whether this insert / load obey duplicate constraints, need double check
 	if c.fuzzy != nil && c.fuzzy.cnt > 0 && err == nil {
+		if c.fuzzy.cnt > 10 {
+			logutil.Warnf("fuzzy filter cnt is %d, may be too high", c.fuzzy.cnt)
+		}
 		err = c.fuzzy.backgroundSQLCheck(c)
 	}
 	if err != nil {
@@ -3539,7 +3578,7 @@ func (c *Compile) determinExpandRanges(n *plan.Node, rel engine.Relation) bool {
 	return false
 }
 
-func (c *Compile) expandRanges(n *plan.Node, rel engine.Relation) (engine.Ranges, error) {
+func (c *Compile) expandRanges(n *plan.Node, rel engine.Relation, blockFilterList []*plan.Expr) (engine.Ranges, error) {
 	var err error
 	var db engine.Database
 	var ranges engine.Ranges
@@ -3558,7 +3597,7 @@ func (c *Compile) expandRanges(n *plan.Node, rel engine.Relation) (engine.Ranges
 	if err != nil {
 		return nil, err
 	}
-	ranges, err = rel.Ranges(ctx, n.BlockFilterList)
+	ranges, err = rel.Ranges(ctx, blockFilterList)
 	if err != nil {
 		return nil, err
 	}
@@ -3662,7 +3701,7 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 	}
 
 	if c.determinExpandRanges(n, rel) {
-		ranges, err = c.expandRanges(n, rel)
+		ranges, err = c.expandRanges(n, rel, n.BlockFilterList)
 		if err != nil {
 			return nil, nil, nil, err
 		}
@@ -3872,7 +3911,8 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 										}
 									case types.T_TS:
 										min := types.DecodeFixed[types.TS](zm.GetMinBuf())
-										if min.Less(partialResults[i].(types.TS)) {
+										ts := partialResults[i].(types.TS)
+										if min.Less(&ts) {
 											partialResults[i] = min
 										}
 									case types.T_Rowid:
@@ -3998,7 +4038,8 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 										}
 									case types.T_TS:
 										max := types.DecodeFixed[types.TS](zm.GetMaxBuf())
-										if max.Greater(partialResults[i].(types.TS)) {
+										ts := partialResults[i].(types.TS)
+										if max.Greater(&ts) {
 											partialResults[i] = max
 										}
 									case types.T_Rowid:
@@ -4474,7 +4515,7 @@ func (c *Compile) fatalLog(retry int, err error) {
 		return
 	}
 
-	txnTrace.GetService().AddTxnError(c.proc.TxnOperator.Txn().ID, err)
+	txnTrace.GetService().TxnError(c.proc.TxnOperator, err)
 
 	v, ok := moruntime.ProcessLevelRuntime().
 		GetGlobalVariables(moruntime.EnableCheckInvalidRCErrors)

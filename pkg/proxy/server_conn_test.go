@@ -119,8 +119,6 @@ type testHandler struct {
 	connID      uint32
 	conn        goetty.IOSession
 	sessionVars map[string]string
-	prepareStmt map[string]struct{}
-	useStmt     map[string]struct{}
 	labels      map[string]string
 	server      *testCNServer
 	status      uint16
@@ -236,8 +234,6 @@ func (s *testCNServer) Start() error {
 					mysqlProto: frontend.NewMysqlClientProtocol(
 						cid, c, 0, &fp),
 					sessionVars: make(map[string]string),
-					prepareStmt: make(map[string]struct{}),
-					useStmt:     make(map[string]struct{}),
 					labels:      make(map[string]string),
 					server:      s,
 				}
@@ -254,7 +250,7 @@ func (s *testCNServer) Start() error {
 
 func testHandle(h *testHandler) {
 	// read extra info from proxy.
-	extraInfo := proxy.NewVersionedExtraInfo(proxy.Version0, nil)
+	extraInfo := proxy.ExtraInfo{}
 	reader := bufio.NewReader(h.conn.RawConn())
 	_ = extraInfo.Decode(reader)
 	// server writes init handshake.
@@ -275,12 +271,6 @@ func testHandle(h *testHandler) {
 		if packet.Length > 1 && packet.Payload[0] == 3 {
 			if strings.HasPrefix(string(packet.Payload[1:]), "set session") {
 				h.handleSetVar(packet)
-			} else if strings.HasPrefix(string(packet.Payload[1:]), "prepare") {
-				h.handlePrepare(packet)
-			} else if strings.HasPrefix(string(packet.Payload[1:]), "execute") {
-				h.handleExecute(packet)
-			} else if strings.HasPrefix(string(packet.Payload[1:]), "use") {
-				h.handleUse(packet)
 			} else if string(packet.Payload[1:]) == "show session variables" {
 				h.handleShowVar()
 			} else if string(packet.Payload[1:]) == "show global variables" {
@@ -314,41 +304,6 @@ func (h *testHandler) handleSetVar(packet *frontend.Packet) {
 	_ = h.mysqlProto.WritePacket(h.mysqlProto.MakeOKPayload(0, uint64(h.connID), h.status, 0, ""))
 }
 
-func (h *testHandler) handlePrepare(packet *frontend.Packet) {
-	words := strings.Split(string(packet.Payload[1:]), " ")
-	if len(words) < 2 {
-		_ = h.mysqlProto.WritePacket(h.mysqlProto.MakeErrPayload(0, "", "invalid stmt"))
-	}
-	h.prepareStmt[words[1]] = struct{}{}
-	h.mysqlProto.SetSequenceID(1)
-	_ = h.mysqlProto.WritePacket(h.mysqlProto.MakeOKPayload(0, uint64(h.connID), h.status, 0, ""))
-}
-
-func (h *testHandler) handleExecute(packet *frontend.Packet) {
-	words := strings.Split(string(packet.Payload[1:]), " ")
-	if len(words) < 2 {
-		_ = h.mysqlProto.WritePacket(h.mysqlProto.MakeErrPayload(0, "", "invalid stmt"))
-	}
-	h.mysqlProto.SetSequenceID(1)
-	_, ok := h.prepareStmt[words[1]]
-	if ok {
-		_ = h.mysqlProto.WritePacket(h.mysqlProto.MakeOKPayload(0, uint64(h.connID), h.status, 0, ""))
-	} else {
-		_ = h.mysqlProto.WritePacket(h.mysqlProto.MakeErrPayload(0, "",
-			fmt.Sprintf("no such prepared stmt %s", words[1])))
-	}
-}
-
-func (h *testHandler) handleUse(packet *frontend.Packet) {
-	words := strings.Split(string(packet.Payload[1:]), " ")
-	if len(words) < 2 {
-		_ = h.mysqlProto.WritePacket(h.mysqlProto.MakeErrPayload(0, "", "invalid stmt"))
-	}
-	h.useStmt[words[1]] = struct{}{}
-	h.mysqlProto.SetSequenceID(1)
-	_ = h.mysqlProto.WritePacket(h.mysqlProto.MakeOKPayload(0, uint64(h.connID), h.status, 0, ""))
-}
-
 func (h *testHandler) handleKillConn() {
 	h.server.globalVars["killed"] = "yes"
 	h.mysqlProto.SetSequenceID(1)
@@ -363,8 +318,8 @@ func (h *testHandler) handleShowVar() {
 		return
 	}
 	cols := []*plan.ColDef{
-		{Typ: &plan.Type{Id: int32(types.T_char)}, Name: "Variable_name"},
-		{Typ: &plan.Type{Id: int32(types.T_char)}, Name: "Value"},
+		{Typ: plan.Type{Id: int32(types.T_char)}, Name: "Variable_name"},
+		{Typ: plan.Type{Id: int32(types.T_char)}, Name: "Value"},
 	}
 	columns := make([]interface{}, len(cols))
 	res := &frontend.MysqlResultSet{}
@@ -411,8 +366,8 @@ func (h *testHandler) handleShowGlobalVar() {
 		return
 	}
 	cols := []*plan.ColDef{
-		{Typ: &plan.Type{Id: int32(types.T_char)}, Name: "Variable_name"},
-		{Typ: &plan.Type{Id: int32(types.T_char)}, Name: "Value"},
+		{Typ: plan.Type{Id: int32(types.T_char)}, Name: "Variable_name"},
+		{Typ: plan.Type{Id: int32(types.T_char)}, Name: "Value"},
 	}
 	columns := make([]interface{}, len(cols))
 	res := &frontend.MysqlResultSet{}

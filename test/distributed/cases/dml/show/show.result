@@ -77,10 +77,10 @@ GRANT manage grants ON account  `dump`@`localhost`
 GRANT account all ON account  `dump`@`localhost`
 GRANT show tables ON database * `dump`@`localhost`
 GRANT create table ON database * `dump`@`localhost`
-GRANT drop table ON database * `dump`@`localhost`
-GRANT alter table ON database * `dump`@`localhost`
 GRANT create view ON database * `dump`@`localhost`
+GRANT drop table ON database * `dump`@`localhost`
 GRANT drop view ON database * `dump`@`localhost`
+GRANT alter table ON database * `dump`@`localhost`
 GRANT alter view ON database * `dump`@`localhost`
 GRANT database all ON database * `dump`@`localhost`
 GRANT database ownership ON database * `dump`@`localhost`
@@ -113,10 +113,10 @@ GRANT manage grants ON account  `root`@`localhost`
 GRANT account all ON account  `root`@`localhost`
 GRANT show tables ON database * `root`@`localhost`
 GRANT create table ON database * `root`@`localhost`
-GRANT drop table ON database * `root`@`localhost`
-GRANT alter table ON database * `root`@`localhost`
 GRANT create view ON database * `root`@`localhost`
+GRANT drop table ON database * `root`@`localhost`
 GRANT drop view ON database * `root`@`localhost`
+GRANT alter table ON database * `root`@`localhost`
 GRANT alter view ON database * `root`@`localhost`
 GRANT database all ON database * `root`@`localhost`
 GRANT database ownership ON database * `root`@`localhost`
@@ -140,10 +140,10 @@ create user user1 identified by 'pass1';
 grant role1 to user1;
 show grants for 'user1'@'localhost';
 Grants for user1@localhost
-GRANT connect ON account  `user1`@`localhost`
 GRANT table all ON table *.* `user1`@`localhost`
 GRANT create table ON database *.* `user1`@`localhost`
 GRANT drop table ON database *.* `user1`@`localhost`
+GRANT connect ON account  `user1`@`localhost`
 drop user user1;
 drop role role1;
 create database if not exists test03;
@@ -222,35 +222,36 @@ Trigger    Event    Table    Statement    Timing    Created    sql_mode    Defin
 use mo_catalog;
 show tables;
 Tables_in_mo_catalog
-mo_indexes
-mo_database
-mo_tables
+mo_account
+mo_cache
 mo_columns
-mo_table_partitions
-mo_user
-mo_role
-mo_user_grant
-mo_role_grant
-mo_role_privs
-mo_user_defined_function
+mo_configurations
+mo_database
+mo_foreign_keys
+mo_indexes
+mo_locks
 mo_mysql_compatibility_mode
 mo_pubs
-mo_stored_procedure
-mo_stages
+mo_role
+mo_role_grant
+mo_role_privs
 mo_sessions
-mo_configurations
-mo_locks
-mo_variables
+mo_snapshots
+mo_stages
+mo_stored_procedure
+mo_table_partitions
+mo_tables
 mo_transactions
-mo_cache
-mo_version
 mo_upgrade
 mo_upgrade_tenant
-mo_account
-mo_foreign_keys
+mo_user
+mo_user_defined_function
+mo_user_grant
+mo_variables
+mo_version
 show table_number from mo_catalog;
 Number of tables in mo_catalog
-26
+27
 show column_number from mo_database;
 Number of columns in mo_database
 9
@@ -276,10 +277,10 @@ create user user1 identified by 'pass1';
 grant role1 to user1;
 show grants for 'user1'@'localhost';
 Grants for user1@localhost
-GRANT connect ON account  `user1`@`localhost`
 GRANT table all ON table *.* `user1`@`localhost`
 GRANT create table ON database *.* `user1`@`localhost`
 GRANT drop table ON database *.* `user1`@`localhost`
+GRANT connect ON account  `user1`@`localhost`
 show grants for ROLE role1;
 Grants for role1
 GRANT table all ON table *.* `role1`
@@ -318,11 +319,11 @@ show create table a;
 Table    Create Table
 a    CREATE TABLE `a` (\n`a` INT DEFAULT NULL,\n`b` INT DEFAULT NULL\n)
 show create table va;
-View    Create View
-va    create view va as select a from a;
+View    Create View    character_set_client    collation_connection
+va    create view va as select a from a;    utf8mb4    utf8mb4_general_ci
 show create view va;
-View    Create View
-va    create view va as select a from a;
+View    Create View    character_set_client    collation_connection
+va    create view va as select a from a;    utf8mb4    utf8mb4_general_ci
 show collation like 'utf8mb4_general_ci';
 Collation    Charset    Id    Default    Compiled    Sortlen    Pad_attribute
 utf8mb4_general_ci    utf8mb4    45        Yes    1    PAD SPACE
@@ -449,6 +450,6 @@ drop database if exists test;
 create database test;
 use test;
 SHOW CREATE TABLE information_schema.columns;
-View    Create View
-columns    CREATE VIEW information_schema.COLUMNS AS select 'def' as TABLE_CATALOG,att_database as TABLE_SCHEMA,att_relname AS TABLE_NAME,attname AS COLUMN_NAME,attnum AS ORDINAL_POSITION,mo_show_visible_bin(att_default,1) as COLUMN_DEFAULT,(case when attnotnull != 0 then 'NO' else 'YES' end) as IS_NULLABLE,mo_show_visible_bin(atttyp,2) as DATA_TYPE,internal_char_length(atttyp) AS CHARACTER_MAXIMUM_LENGTH,internal_char_size(atttyp) AS CHARACTER_OCTET_LENGTH,internal_numeric_precision(atttyp) AS NUMERIC_PRECISION,internal_numeric_scale(atttyp) AS NUMERIC_SCALE,internal_datetime_scale(atttyp) AS DATETIME_PRECISION,(case internal_column_character_set(atttyp) WHEN 0 then 'utf8' WHEN 1 then 'utf8' else NULL end) AS CHARACTER_SET_NAME,(case internal_column_character_set(atttyp) WHEN 0 then 'utf8_bin' WHEN 1 then 'utf8_bin' else NULL end) AS COLLATION_NAME,mo_show_visible_bin(atttyp,3) as COLUMN_TYPE,case when att_constraint_type = 'p' then 'PRI' else '' end as COLUMN_KEY,case when att_is_auto_increment = 1 then 'auto_increment' else '' end as EXTRA,'select,insert,update,references' as `PRIVILEGES`,att_comment as COLUMN_COMMENT,cast('' as varchar(500)) as GENERATION_EXPRESSION,if(true, NULL, 0) as SRS_ID from mo_catalog.mo_columns where att_relname!='mo_increment_columns' and att_relname not like '__mo_cpkey_%' and attname != '__mo_rowid'
+View    Create View    character_set_client    collation_connection
+columns    CREATE VIEW information_schema.COLUMNS AS select 'def' as TABLE_CATALOG,att_database as TABLE_SCHEMA,att_relname AS TABLE_NAME,attname AS COLUMN_NAME,attnum AS ORDINAL_POSITION,mo_show_visible_bin(att_default,1) as COLUMN_DEFAULT,(case when attnotnull != 0 then 'NO' else 'YES' end) as IS_NULLABLE,mo_show_visible_bin(atttyp,2) as DATA_TYPE,internal_char_length(atttyp) AS CHARACTER_MAXIMUM_LENGTH,internal_char_size(atttyp) AS CHARACTER_OCTET_LENGTH,internal_numeric_precision(atttyp) AS NUMERIC_PRECISION,internal_numeric_scale(atttyp) AS NUMERIC_SCALE,internal_datetime_scale(atttyp) AS DATETIME_PRECISION,(case internal_column_character_set(atttyp) WHEN 0 then 'utf8' WHEN 1 then 'utf8' else NULL end) AS CHARACTER_SET_NAME,(case internal_column_character_set(atttyp) WHEN 0 then 'utf8_bin' WHEN 1 then 'utf8_bin' else NULL end) AS COLLATION_NAME,mo_show_visible_bin(atttyp,3) as COLUMN_TYPE,case when att_constraint_type = 'p' then 'PRI' else '' end as COLUMN_KEY,case when att_is_auto_increment = 1 then 'auto_increment' else '' end as EXTRA,'select,insert,update,references' as `PRIVILEGES`,att_comment as COLUMN_COMMENT,cast('' as varchar(500)) as GENERATION_EXPRESSION,if(true, NULL, 0) as SRS_ID from mo_catalog.mo_columns where att_relname!='mo_increment_columns' and att_relname not like '__mo_cpkey_%' and attname != '__mo_rowid'    utf8mb4    utf8mb4_general_ci
 drop database test;

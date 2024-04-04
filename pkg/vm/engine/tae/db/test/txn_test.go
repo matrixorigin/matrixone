@@ -241,37 +241,39 @@ func (c *APP1Client) CheckBound() {
 // TODO: rewrite
 func (c *APP1Client) GetGoodRepetory(goodId uint64) (id *common.ID, offset uint32, count uint64, err error) {
 	rel, _ := c.DB.GetRelationByName(repertory.Name)
-	blockIt := rel.MakeBlockIt()
+	blockIt := rel.MakeObjectIt()
 	var view *containers.ColumnView
 	found := false
 	for blockIt.Valid() {
-		blk := blockIt.GetBlock()
-		view, err = blk.GetColumnDataByName(context.Background(), repertory.ColDefs[1].Name, common.DefaultAllocator)
-		if err != nil {
-			return
-		}
-		defer view.Close()
-		_ = view.GetData().Foreach(func(v any, _ bool, row int) (err error) {
-			pk := v.(uint64)
-			if pk != goodId {
-				return
-			}
-			if view.DeleteMask.Contains(uint64(row)) {
-				return
-			}
-			id = blk.Fingerprint()
-			key := *objectio.NewRowid(&id.BlockID, uint32(row))
-			cntv, _, err := rel.GetValueByPhyAddrKey(key, 2)
+		blk := blockIt.GetObject()
+		for j := 0; j < blk.BlkCnt(); j++ {
+			view, err = blk.GetColumnDataByName(context.Background(), uint16(j), repertory.ColDefs[1].Name, common.DefaultAllocator)
 			if err != nil {
 				return
 			}
-			found = true
-			offset = uint32(row)
-			count = cntv.(uint64)
-			return moerr.NewInternalErrorNoCtx("stop iteration")
-		}, nil)
-		if found {
-			return
+			defer view.Close()
+			_ = view.GetData().Foreach(func(v any, _ bool, row int) (err error) {
+				pk := v.(uint64)
+				if pk != goodId {
+					return
+				}
+				if view.DeleteMask.Contains(uint64(row)) {
+					return
+				}
+				id = blk.Fingerprint()
+				key := *objectio.NewRowid(&id.BlockID, uint32(row))
+				cntv, _, err := rel.GetValueByPhyAddrKey(key, 2)
+				if err != nil {
+					return
+				}
+				found = true
+				offset = uint32(row)
+				count = cntv.(uint64)
+				return moerr.NewInternalErrorNoCtx("stop iteration")
+			}, nil)
+			if found {
+				return
+			}
 		}
 		blockIt.Next()
 	}
@@ -548,9 +550,9 @@ func TestWarehouse(t *testing.T) {
 		txn, _ = db.StartTxn(nil)
 		rel, err := GetWarehouseRelation("test", txn)
 		assert.Nil(t, err)
-		it := rel.MakeBlockIt()
-		blk := it.GetBlock()
-		view, _ := blk.GetColumnDataById(context.Background(), 1, common.DefaultAllocator)
+		it := rel.MakeObjectIt()
+		blk := it.GetObject()
+		view, _ := blk.GetColumnDataById(context.Background(), 0, 1, common.DefaultAllocator)
 		t.Log(view.GetData().String())
 		defer view.Close()
 		testutil.CheckAllColRowsByScan(t, rel, 20, false)
@@ -679,7 +681,9 @@ func TestTxn9(t *testing.T) {
 			cnt++
 			it.Next()
 		}
-		if txn2.GetStartTS().Greater(txn.GetPrepareTS()) {
+		startTS := txn2.GetStartTS()
+		prepareTS := txn.GetPrepareTS()
+		if startTS.Greater(&prepareTS) {
 			assert.Equal(t, 2, cnt)
 		} else {
 			assert.Equal(t, 1, cnt)
@@ -693,7 +697,9 @@ func TestTxn9(t *testing.T) {
 		db, _ := txn.GetDatabase("db")
 		rel, _ := db.GetRelationByName(schema.Name)
 		if waitTxn != nil {
-			if txn.GetStartTS().Greater(waitTxn.GetPrepareTS()) {
+			startTS := txn.GetStartTS()
+			prepareTS := waitTxn.GetPrepareTS()
+			if startTS.Greater(&prepareTS) {
 				testutil.CheckAllColRowsByScan(t, rel, waitExpect, true)
 			} else {
 				testutil.CheckAllColRowsByScan(t, rel, nowaitExpect, true)

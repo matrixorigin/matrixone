@@ -57,8 +57,7 @@ func TestTables1(t *testing.T) {
 	_, err := handle.GetAppender()
 	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrAppendableObjectNotFound))
 	obj, _ := rel.CreateObject(false)
-	blk, _ := obj.CreateBlock(false)
-	id := blk.GetMeta().(*catalog.BlockEntry).AsCommonID()
+	id := obj.GetMeta().(*catalog.ObjectEntry).AsCommonID()
 	appender := handle.SetAppender(id)
 	assert.NotNil(t, appender)
 
@@ -77,8 +76,7 @@ func TestTables1(t *testing.T) {
 	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrAppendableObjectNotFound))
 
 	obj, _ = rel.CreateObject(false)
-	blk, _ = obj.CreateBlock(false)
-	id = blk.GetMeta().(*catalog.BlockEntry).AsCommonID()
+	id = obj.GetMeta().(*catalog.ObjectEntry).AsCommonID()
 	appender = handle.SetAppender(id)
 
 	_, _, toAppend, err = appender.PrepareAppend(rows-toAppend, nil)
@@ -89,9 +87,8 @@ func TestTables1(t *testing.T) {
 	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrAppendableObjectNotFound))
 
 	obj, _ = rel.CreateObject(false)
-	blk, _ = obj.CreateBlock(false)
 
-	id = blk.GetMeta().(*catalog.BlockEntry).AsCommonID()
+	id = obj.GetMeta().(*catalog.ObjectEntry).AsCommonID()
 	appender = handle.SetAppender(id)
 	_, _, toAppend, err = appender.PrepareAppend(rows-2*toAppend, nil)
 	assert.Nil(t, err)
@@ -162,9 +159,7 @@ func TestTxn1(t *testing.T) {
 		txn, _ := db.StartTxn(nil)
 		database, _ := txn.GetDatabase("db")
 		rel, _ := database.GetRelationByName(schema.Name)
-		obj, err := rel.CreateObject(false)
-		assert.Nil(t, err)
-		_, err = obj.CreateBlock(false)
+		_, err = rel.CreateObject(false)
 		assert.Nil(t, err)
 	}
 	{
@@ -176,11 +171,7 @@ func TestTxn1(t *testing.T) {
 		blkCnt := uint32(0)
 		for objIt.Valid() {
 			objCnt++
-			blkIt := objIt.GetObject().MakeBlockIt()
-			for blkIt.Valid() {
-				blkCnt++
-				blkIt.Next()
-			}
+			blkCnt += uint32(objIt.GetObject().BlkCnt())
 			objIt.Next()
 		}
 		assert.Equal(t, expectObjCnt, objCnt)
@@ -420,15 +411,17 @@ func TestTxn6(t *testing.T) {
 			_, _, err = rel.GetValueByFilter(context.Background(), filter, 3)
 			assert.Error(t, err)
 
-			it := rel.MakeBlockIt()
+			it := rel.MakeObjectIt()
 			for it.Valid() {
-				blk := it.GetBlock()
-				view, err := blk.GetColumnDataByName(context.Background(), schema.ColDefs[3].Name, common.DefaultAllocator)
-				assert.Nil(t, err)
-				defer view.Close()
-				assert.NotEqual(t, bats[0].Length(), view.Length())
-				t.Log(view.DeleteMask.String())
-				assert.Equal(t, bats[0].Length()-1, view.ApplyDeletes().Length())
+				obj := it.GetObject()
+				for j := 0; j < obj.BlkCnt(); j++ {
+					view, err := obj.GetColumnDataByName(context.Background(), uint16(j), schema.ColDefs[3].Name, common.DefaultAllocator)
+					assert.Nil(t, err)
+					defer view.Close()
+					assert.NotEqual(t, bats[0].Length(), view.Length())
+					t.Log(view.DeleteMask.String())
+					assert.Equal(t, bats[0].Length()-1, view.ApplyDeletes().Length())
+				}
 				it.Next()
 			}
 		}
@@ -478,11 +471,11 @@ func TestFlushAblkMerge(t *testing.T) {
 		txn, _ := db.StartTxn(nil)
 		database, _ := txn.GetDatabase("db")
 		rel, _ := database.GetRelationByName(schema.Name)
-		blks := make([]*catalog.BlockEntry, 0)
-		it := rel.MakeBlockIt()
+		blks := make([]*catalog.ObjectEntry, 0)
+		it := rel.MakeObjectIt()
 		for it.Valid() {
-			blk := it.GetBlock()
-			meta := blk.GetMeta().(*catalog.BlockEntry)
+			blk := it.GetObject()
+			meta := blk.GetMeta().(*catalog.ObjectEntry)
 			blks = append(blks, meta)
 			it.Next()
 		}
@@ -490,9 +483,9 @@ func TestFlushAblkMerge(t *testing.T) {
 			txn, _ := db.StartTxn(nil)
 			database, _ := txn.GetDatabase("db")
 			rel, _ := database.GetRelationByName(schema.Name)
-			it := rel.MakeBlockIt()
-			blk := it.GetBlock()
-			err := blk.RangeDelete(4, 4, handle.DT_Normal, common.DefaultAllocator)
+			it := rel.MakeObjectIt()
+			blk := it.GetObject()
+			err := blk.RangeDelete(0, 4, 4, handle.DT_Normal, common.DefaultAllocator)
 			assert.Nil(t, err)
 			assert.Nil(t, txn.Commit(context.Background()))
 		}
@@ -511,21 +504,24 @@ func TestFlushAblkMerge(t *testing.T) {
 		txn, _ := db.StartTxn(nil)
 		database, _ := txn.GetDatabase("db")
 		rel, _ := database.GetRelationByName(schema.Name)
-		it := rel.MakeBlockIt()
+		it := rel.MakeObjectIt()
 		for it.Valid() {
-			blk := it.GetBlock()
-			view, _ := blk.GetColumnDataById(context.Background(), 3, common.DefaultAllocator)
-			assert.NotNil(t, view)
-			defer view.Close()
-			if view.DeleteMask != nil {
-				t.Log(view.DeleteMask.String())
-			}
-			pkView, _ := blk.GetColumnDataById(context.Background(), schema.GetSingleSortKeyIdx(), common.DefaultAllocator)
-			defer pkView.Close()
-			for i := 0; i < pkView.Length(); i++ {
-				pkv, _ := pkView.GetValue(i)
-				colv, _ := view.GetValue(i)
-				assert.Equal(t, mapping[pkv.(int32)], colv)
+			blk := it.GetObject()
+			for j := 0; j < blk.BlkCnt(); j++ {
+				view, _ := blk.GetColumnDataById(context.Background(), uint16(j), 3, common.DefaultAllocator)
+				assert.NotNil(t, view)
+				defer view.Close()
+				if view.DeleteMask != nil {
+					t.Log(view.DeleteMask.String())
+				}
+				pkView, _ := blk.GetColumnDataById(context.Background(), uint16(j), schema.GetSingleSortKeyIdx(), common.DefaultAllocator)
+				defer pkView.Close()
+				for i := 0; i < pkView.Length(); i++ {
+					pkv, _ := pkView.GetValue(i)
+					colv, _ := view.GetValue(i)
+					assert.Equal(t, mapping[pkv.(int32)], colv)
+				}
+
 			}
 			it.Next()
 		}
@@ -615,13 +611,15 @@ func TestCompaction1(t *testing.T) {
 		txn, _ := db.StartTxn(nil)
 		database, _ := txn.GetDatabase("db")
 		rel, _ := database.GetRelationByName(schema.Name)
-		it := rel.MakeBlockIt()
+		it := rel.MakeObjectIt()
 		for it.Valid() {
-			blk := it.GetBlock()
-			view, _ := blk.GetColumnDataById(context.Background(), 3, common.DefaultAllocator)
-			assert.NotNil(t, view)
-			view.Close()
-			assert.True(t, blk.GetMeta().(*catalog.BlockEntry).GetBlockData().IsAppendable())
+			blk := it.GetObject()
+			for j := 0; j < blk.BlkCnt(); j++ {
+				view, _ := blk.GetColumnDataById(context.Background(), uint16(3), 3, common.DefaultAllocator)
+				assert.NotNil(t, view)
+				view.Close()
+				assert.True(t, blk.GetMeta().(*catalog.ObjectEntry).GetObjectData().IsAppendable())
+			}
 			it.Next()
 		}
 	}
@@ -637,13 +635,15 @@ func TestCompaction1(t *testing.T) {
 		txn, _ := db.StartTxn(nil)
 		database, _ := txn.GetDatabase("db")
 		rel, _ := database.GetRelationByName(schema.Name)
-		it := rel.MakeBlockIt()
+		it := rel.MakeObjectIt()
 		for it.Valid() {
-			blk := it.GetBlock()
-			view, _ := blk.GetColumnDataById(context.Background(), 3, common.DefaultAllocator)
-			assert.NotNil(t, view)
-			view.Close()
-			assert.False(t, blk.GetMeta().(*catalog.BlockEntry).GetBlockData().IsAppendable())
+			blk := it.GetObject()
+			for j := 0; j < blk.BlkCnt(); j++ {
+				view, _ := blk.GetColumnDataById(context.Background(), uint16(0), 3, common.DefaultAllocator)
+				assert.NotNil(t, view)
+				view.Close()
+				assert.False(t, blk.GetMeta().(*catalog.ObjectEntry).GetObjectData().IsAppendable())
+			}
 			it.Next()
 		}
 	}
@@ -680,32 +680,36 @@ func TestCompaction2(t *testing.T) {
 		return dirty.GetTree().Compact()
 	})
 	{
-		txn, _ := db.TxnMgr.StartTxnWithLatestTS(nil)
+		txn, _ := db.TxnMgr.StartTxn(nil)
 		database, _ := txn.GetDatabase("db")
 		rel, _ := database.GetRelationByName(schema.Name)
-		it := rel.MakeBlockIt()
+		it := rel.MakeObjectIt()
 		for it.Valid() {
-			blk := it.GetBlock()
-			view, _ := blk.GetColumnDataById(context.Background(), 3, common.DefaultAllocator)
-			assert.NotNil(t, view)
-			view.Close()
-			assert.False(t, blk.GetMeta().(*catalog.BlockEntry).IsAppendable())
-			assert.False(t, blk.GetMeta().(*catalog.BlockEntry).GetBlockData().IsAppendable())
+			blk := it.GetObject()
+			for j := 0; j < blk.BlkCnt(); j++ {
+				view, _ := blk.GetColumnDataById(context.Background(), uint16(j), 3, common.DefaultAllocator)
+				assert.NotNil(t, view)
+				view.Close()
+				assert.False(t, blk.GetMeta().(*catalog.ObjectEntry).IsAppendable())
+				assert.False(t, blk.GetMeta().(*catalog.ObjectEntry).GetObjectData().IsAppendable())
+			}
 			it.Next()
 		}
 	}
 	{
-		txn, _ := db.TxnMgr.StartTxnWithLatestTS(nil)
+		txn, _ := db.TxnMgr.StartTxn(nil)
 		database, _ := txn.GetDatabase("db")
 		rel, _ := database.GetRelationByName(schema.Name)
-		it := rel.MakeBlockIt()
+		it := rel.MakeObjectIt()
 		for it.Valid() {
-			blk := it.GetBlock()
-			view, _ := blk.GetColumnDataById(context.Background(), 3, common.DefaultAllocator)
-			assert.NotNil(t, view)
-			view.Close()
-			assert.False(t, blk.GetMeta().(*catalog.BlockEntry).IsAppendable())
-			assert.False(t, blk.GetMeta().(*catalog.BlockEntry).GetBlockData().IsAppendable())
+			blk := it.GetObject()
+			for j := 0; j < blk.BlkCnt(); j++ {
+				view, _ := blk.GetColumnDataById(context.Background(), uint16(j), 3, common.DefaultAllocator)
+				assert.NotNil(t, view)
+				view.Close()
+				assert.False(t, blk.GetMeta().(*catalog.ObjectEntry).IsAppendable())
+				assert.False(t, blk.GetMeta().(*catalog.ObjectEntry).GetObjectData().IsAppendable())
+			}
 			it.Next()
 		}
 	}
@@ -771,7 +775,7 @@ func TestCompaction2(t *testing.T) {
 			assert.NotNil(t, view)
 			view.Close()
 			assert.False(t, blk.GetMeta().(*catalog.BlockEntry).IsAppendable())
-			assert.False(t, blk.GetMeta().(*catalog.BlockEntry).GetBlockData().IsAppendable())
+			assert.False(t, blk.GetMeta().(*catalog.BlockEntry).GetObjectData().IsAppendable())
 			it.Next()
 		}
 	}

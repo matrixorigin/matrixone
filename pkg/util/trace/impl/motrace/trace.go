@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
+	db_holder "github.com/matrixorigin/matrixone/pkg/util/export/etl/db"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 )
@@ -67,6 +68,8 @@ func InitWithConfig(ctx context.Context, SV *config.ObservabilityParameters, opt
 		WithAggregatorWindow(SV.AggregationWindow.Duration),
 		WithSelectThreshold(SV.SelectAggrThreshold.Duration),
 		WithStmtMergeEnable(SV.EnableStmtMerge),
+		WithCUConfig(SV.CU, SV.CUv1),
+		WithLabels(SV.LabelSelector),
 
 		DebugMode(SV.EnableTraceDebug),
 		WithBufferSizeThreshold(SV.BufferSize),
@@ -103,6 +106,7 @@ func Init(ctx context.Context, opts ...TracerProviderOption) (err error, act boo
 	SetDefaultSpanContext(&sc)
 	serviceCtx := context.Background()
 	SetDefaultContext(trace.ContextWithSpanContext(serviceCtx, sc))
+	SetCuConfig(&config.cuConfig, &config.cuConfigV1)
 
 	// init Exporter
 	if err := initExporter(ctx, config); err != nil {
@@ -116,6 +120,9 @@ func Init(ctx context.Context, opts ...TracerProviderOption) (err error, act boo
 	logutil.SetLogReporter(&logutil.TraceReporter{ReportZap: ReportZap, ContextField: trace.ContextField})
 	logutil.SpanFieldKey.Store(trace.SpanFieldKey)
 	errutil.SetErrorReporter(ReportError)
+
+	// init db_hodler
+	db_holder.SetLabelSelector(config.labels)
 
 	logutil.Debugf("trace with LongQueryTime: %v", time.Duration(GetTracerProvider().longQueryTime))
 	logutil.Debugf("trace with LongSpanTime: %v", GetTracerProvider().longSpanTime)

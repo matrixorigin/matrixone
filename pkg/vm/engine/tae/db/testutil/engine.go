@@ -35,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
@@ -94,12 +95,13 @@ func (e *TestEngine) Restart(ctx context.Context) {
 	var err error
 	e.DB, err = db.Open(ctx, e.Dir, e.Opts)
 	// only ut executes this checker
-	e.DB.DiskCleaner.AddChecker(
+	e.DB.DiskCleaner.GetCleaner().AddChecker(
 		func(item any) bool {
 			min := e.DB.TxnMgr.MinTSForTest()
 			ckp := item.(*checkpoint.CheckpointEntry)
 			//logutil.Infof("min: %v, checkpoint: %v", min.ToString(), checkpoint.GetStart().ToString())
-			return !ckp.GetEnd().GreaterEq(min)
+			end := ckp.GetEnd()
+			return !end.GreaterEq(&min)
 		})
 	assert.NoError(e.t, err)
 }
@@ -121,16 +123,16 @@ func (e *TestEngine) CheckRowsByScan(exp int, applyDelete bool) {
 	assert.NoError(e.t, txn.Commit(context.Background()))
 }
 func (e *TestEngine) ForceCheckpoint() {
-	err := e.BGCheckpointRunner.ForceFlushWithInterval(e.TxnMgr.StatMaxCommitTS(), context.Background(), time.Second*2, time.Millisecond*10)
+	err := e.BGCheckpointRunner.ForceFlushWithInterval(e.TxnMgr.Now(), context.Background(), time.Second*2, time.Millisecond*10)
 	assert.NoError(e.t, err)
-	err = e.BGCheckpointRunner.ForceIncrementalCheckpoint(e.TxnMgr.StatMaxCommitTS(), false)
+	err = e.BGCheckpointRunner.ForceIncrementalCheckpoint(e.TxnMgr.Now(), false)
 	assert.NoError(e.t, err)
 }
 
 func (e *TestEngine) ForceLongCheckpoint() {
-	err := e.BGCheckpointRunner.ForceFlush(e.TxnMgr.StatMaxCommitTS(), context.Background(), 20*time.Second)
+	err := e.BGCheckpointRunner.ForceFlush(e.TxnMgr.Now(), context.Background(), 20*time.Second)
 	assert.NoError(e.t, err)
-	err = e.BGCheckpointRunner.ForceIncrementalCheckpoint(e.TxnMgr.StatMaxCommitTS(), false)
+	err = e.BGCheckpointRunner.ForceIncrementalCheckpoint(e.TxnMgr.Now(), false)
 	assert.NoError(e.t, err)
 }
 
@@ -208,22 +210,25 @@ func (e *TestEngine) TryAppend(bat *containers.Batch) {
 }
 func (e *TestEngine) DeleteAll(skipConflict bool) error {
 	txn, rel := e.GetRelation()
-	schema := rel.GetMeta().(*catalog.TableEntry).GetLastestSchema()
+	schema := rel.GetMeta().(*catalog.TableEntry).GetLastestSchemaLocked()
 	pkName := schema.GetPrimaryKey().Name
-	it := rel.MakeBlockIt()
+	it := rel.MakeObjectIt()
 	for it.Valid() {
-		blk := it.GetBlock()
+		blk := it.GetObject()
 		defer blk.Close()
-		view, err := blk.GetColumnDataByName(context.Background(), catalog.PhyAddrColumnName, common.DefaultAllocator)
-		assert.NoError(e.t, err)
-		defer view.Close()
-		view.ApplyDeletes()
-		pkView, err := blk.GetColumnDataByName(context.Background(), pkName, common.DefaultAllocator)
-		assert.NoError(e.t, err)
-		defer pkView.Close()
-		pkView.ApplyDeletes()
-		err = rel.DeleteByPhyAddrKeys(view.GetData(), pkView.GetData())
-		assert.NoError(e.t, err)
+		blkCnt := uint16(blk.BlkCnt())
+		for i := uint16(0); i < blkCnt; i++ {
+			view, err := blk.GetColumnDataByName(context.Background(), i, catalog.PhyAddrColumnName, common.DefaultAllocator)
+			assert.NoError(e.t, err)
+			defer view.Close()
+			view.ApplyDeletes()
+			pkView, err := blk.GetColumnDataByName(context.Background(), i, pkName, common.DefaultAllocator)
+			assert.NoError(e.t, err)
+			defer pkView.Close()
+			pkView.ApplyDeletes()
+			err = rel.DeleteByPhyAddrKeys(view.GetData(), pkView.GetData())
+			assert.NoError(e.t, err)
+		}
 		it.Next()
 	}
 	// CheckAllColRowsByScan(e.t, rel, 0, true)
@@ -328,9 +333,8 @@ func (e *TestEngine) TryDeleteByDeltalocWithTxn(vals []any, txn txnif.AsyncTxn) 
 	for id, offsets := range idOffsetsMap {
 		obj, err := rel.GetMeta().(*catalog.TableEntry).GetObjectByID(id.ObjectID())
 		assert.NoError(e.t, err)
-		blk, err := obj.GetBlockEntryByID(&id.BlockID)
-		assert.NoError(e.t, err)
-		deltaLoc, err := MockCNDeleteInS3(e.Runtime.Fs, blk.GetBlockData(), e.schema, txn, offsets)
+		_, blkOffset := id.BlockID.Offsets()
+		deltaLoc, err := MockCNDeleteInS3(e.Runtime.Fs, obj.GetObjectData(), blkOffset, e.schema, txn, offsets)
 		assert.NoError(e.t, err)
 		ok, err = rel.TryDeleteByDeltaloc(&id, deltaLoc)
 		assert.NoError(e.t, err)
@@ -350,12 +354,13 @@ func InitTestDBWithDir(
 ) *db.DB {
 	db, _ := db.Open(ctx, dir, opts)
 	// only ut executes this checker
-	db.DiskCleaner.AddChecker(
+	db.DiskCleaner.GetCleaner().AddChecker(
 		func(item any) bool {
 			min := db.TxnMgr.MinTSForTest()
 			ckp := item.(*checkpoint.CheckpointEntry)
 			//logutil.Infof("min: %v, checkpoint: %v", min.ToString(), checkpoint.GetStart().ToString())
-			return !ckp.GetEnd().GreaterEq(min)
+			end := ckp.GetEnd()
+			return !end.GreaterEq(&min)
 		})
 	return db
 }
@@ -369,12 +374,13 @@ func InitTestDB(
 	dir := testutils.InitTestEnv(moduleName, t)
 	db, _ := db.Open(ctx, dir, opts)
 	// only ut executes this checker
-	db.DiskCleaner.AddChecker(
+	db.DiskCleaner.GetCleaner().AddChecker(
 		func(item any) bool {
 			min := db.TxnMgr.MinTSForTest()
 			ckp := item.(*checkpoint.CheckpointEntry)
 			//logutil.Infof("min: %v, checkpoint: %v", min.ToString(), checkpoint.GetStart().ToString())
-			return !ckp.GetEnd().GreaterEq(min)
+			end := ckp.GetEnd()
+			return !end.GreaterEq(&min)
 		})
 	return db
 }
@@ -588,11 +594,11 @@ func checkMOColumns(ctx context.Context, t *testing.T, ins, del, cnIns, segDel *
 func checkUserTables(ctx context.Context, t *testing.T, tid uint64, ins, del, cnIns, seg *api.Batch, start, end types.TS, c *catalog.Catalog) {
 	collector := logtail.NewIncrementalCollector(start, end, false)
 	p := &catalog.LoopProcessor{}
-	p.BlockFn = func(be *catalog.BlockEntry) error {
-		if be.GetObject().GetTable().ID != tid {
+	p.TombstoneFn = func(be data.Tombstone) error {
+		if be.GetObject().(*catalog.ObjectEntry).GetTable().ID != tid {
 			return nil
 		}
-		return collector.VisitBlk(be)
+		return collector.VisitTombstone(be)
 	}
 	p.ObjectFn = func(se *catalog.ObjectEntry) error {
 		if se.GetTable().ID != tid {
@@ -606,13 +612,13 @@ func checkUserTables(ctx context.Context, t *testing.T, tid uint64, ins, del, cn
 	data2 := collector.OrphanData()
 	bats := data2.GetBatches()
 	ins2 := bats[logtail.BLKMetaInsertIDX]
-	del2 := bats[logtail.BLKMetaDeleteIDX]
-	cnIns2 := bats[logtail.BLKCNMetaInsertIDX]
+	// del2 := bats[logtail.BLKMetaDeleteIDX]
+	// cnIns2 := bats[logtail.BLKCNMetaInsertIDX]
 	seg2 := bats[logtail.ObjectInfoIDX]
 
 	isProtoTNBatchEqual(ctx, t, ins, ins2)
-	isProtoTNBatchEqual(ctx, t, del, del2)
-	isProtoTNBatchEqual(ctx, t, cnIns, cnIns2)
+	// isProtoTNBatchEqual(ctx, t, del, del2)// del is always empty after block is removed
+	// isProtoTNBatchEqual(ctx, t, cnIns, cnIns2)
 
 	// seg batch doesn't exist before ckp V9
 	if seg != nil {
@@ -695,25 +701,31 @@ func (e *TestEngine) CheckReadCNCheckpoint() {
 
 func (e *TestEngine) CheckCollectDeleteInRange() {
 	txn, rel := e.GetRelation()
-	ForEachBlock(rel, func(blk handle.Block) error {
-		meta := blk.GetMeta().(*catalog.BlockEntry)
-		deleteBat, err := meta.GetBlockData().CollectDeleteInRange(
+	ForEachObject(rel, func(obj handle.Object) error {
+		meta := obj.GetMeta().(*catalog.ObjectEntry)
+		deleteBat, _, err := meta.GetObjectData().CollectDeleteInRange(
 			context.Background(), types.TS{}, txn.GetStartTS(), false, common.DefaultAllocator,
 		)
 		assert.NoError(e.t, err)
 		pkDef := e.schema.GetPrimaryKey()
 		deleteRowIDs := deleteBat.GetVectorByName(catalog.AttrRowID)
 		deletePKs := deleteBat.GetVectorByName(catalog.AttrPKVal)
-		pks, err := meta.GetBlockData().GetColumnDataById(context.Background(), txn, e.schema, pkDef.Idx, common.DefaultAllocator)
-		assert.NoError(e.t, err)
-		rowIDs, err := meta.GetBlockData().GetColumnDataById(context.Background(), txn, e.schema, e.schema.PhyAddrKey.Idx, common.DefaultAllocator)
-		assert.NoError(e.t, err)
+		blkCnt := obj.BlkCnt()
+		pkVectors := make([]*containers.ColumnView, blkCnt)
+		rowIDVectors := make([]*containers.ColumnView, blkCnt)
+		for i := uint16(0); i < uint16(blkCnt); i++ {
+			pkVectors[i], err = meta.GetObjectData().GetColumnDataById(context.Background(), txn, e.schema, i, pkDef.Idx, common.DefaultAllocator)
+			assert.NoError(e.t, err)
+			rowIDVectors[i], err = meta.GetObjectData().GetColumnDataById(context.Background(), txn, e.schema, i, e.schema.PhyAddrKey.Idx, common.DefaultAllocator)
+			assert.NoError(e.t, err)
+		}
 		for i := 0; i < deleteBat.Length(); i++ {
 			rowID := deleteRowIDs.Get(i).(types.Rowid)
 			offset := rowID.GetRowOffset()
-			appendRowID := rowIDs.GetData().Get(int(offset)).(types.Rowid)
-			e.t.Logf("delete rowID %v pk %v, append rowID %v pk %v", rowID.String(), deletePKs.Get(i), appendRowID.String(), pks.GetData().Get(int(offset)))
-			assert.Equal(e.t, pks.GetData().Get(int(offset)), deletePKs.Get(i))
+			_, blkOffset := rowID.BorrowBlockID().Offsets()
+			appendRowID := rowIDVectors[blkOffset].GetData().Get(int(offset)).(types.Rowid)
+			e.t.Logf("delete rowID %v pk %v, append rowID %v pk %v", rowID.String(), deletePKs.Get(i), appendRowID.String(), pkVectors[blkOffset].GetData().Get(int(offset)))
+			assert.Equal(e.t, pkVectors[blkOffset].GetData().Get(int(offset)), deletePKs.Get(i))
 		}
 		return nil
 	})
@@ -728,20 +740,29 @@ func (e *TestEngine) CheckObjectInfo(onlyCheckName bool) {
 			if se.GetTable().GetDB().ID == pkgcatalog.MO_CATALOG_ID {
 				return true
 			}
-			stats, err := se.LoadObjectInfoWithTxnTS(node.Start)
-			assert.NoError(e.t, err)
-			if onlyCheckName {
-				assert.Equal(e.t, stats.ObjectLocation().Name(),
+			flushed := true
+			if se.IsAppendable() && !node.HasDropCommitted() {
+				flushed = false
+			}
+			if onlyCheckName || !flushed {
+				assert.Equal(e.t, objectio.BuildObjectNameWithObjectID(&se.ID),
 					node.BaseNode.ObjectStats.ObjectLocation().Name(),
 					"load %v, get %v",
-					stats.String(),
+					se.ID.String(),
 					node.BaseNode.ObjectStats.String())
-				assert.Equal(e.t, stats.ObjectLocation().Extent(),
-					node.BaseNode.ObjectStats.ObjectLocation().Extent(),
-					"load %v, get %v",
-					stats.String(),
-					node.BaseNode.ObjectStats.String())
+				if flushed {
+					stats, err := se.LoadObjectInfoWithTxnTS(node.Start)
+					assert.NoError(e.t, err)
+					assert.Equal(e.t, stats.ObjectLocation().Extent(),
+						node.BaseNode.ObjectStats.ObjectLocation().Extent(),
+						"load %v, get %v",
+						stats.String(),
+						node.BaseNode.ObjectStats.String())
+
+				}
 			} else {
+				stats, err := se.LoadObjectInfoWithTxnTS(node.Start)
+				assert.NoError(e.t, err)
 				assert.Equal(e.t, stats, node.BaseNode.ObjectStats, "load %v, get %v", stats.String(), node.BaseNode.ObjectStats.String())
 			}
 			return true

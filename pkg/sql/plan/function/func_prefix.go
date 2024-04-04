@@ -18,8 +18,8 @@ import (
 	"bytes"
 	"sort"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -68,11 +68,11 @@ func PrefixBetween(parameters []*vector.Vector, result vector.FunctionResultWrap
 
 	if ivec.GetSorted() {
 		lowerBound := sort.Search(len(icol), func(i int) bool {
-			return index.PrefixCompare(icol[i].GetByteSlice(iarea), lval) >= 0
+			return types.PrefixCompare(icol[i].GetByteSlice(iarea), lval) >= 0
 		})
 
 		upperBound := sort.Search(len(icol), func(i int) bool {
-			return index.PrefixCompare(icol[i].GetByteSlice(iarea), rval) > 0
+			return types.PrefixCompare(icol[i].GetByteSlice(iarea), rval) > 0
 		})
 
 		for i := 0; i < lowerBound; i++ {
@@ -87,7 +87,7 @@ func PrefixBetween(parameters []*vector.Vector, result vector.FunctionResultWrap
 	} else {
 		for i := 0; i < length; i++ {
 			val := icol[i].GetByteSlice(iarea)
-			res[i] = index.PrefixCompare(val, lval) >= 0 && index.PrefixCompare(val, rval) <= 0
+			res[i] = types.PrefixCompare(val, lval) >= 0 && types.PrefixCompare(val, rval) <= 0
 		}
 	}
 
@@ -109,7 +109,7 @@ func PrefixIn(parameters []*vector.Vector, result vector.FunctionResultWrapper, 
 
 		for i := 0; i < length; i++ {
 			lval := lcol[i].GetByteSlice(larea)
-			for index.PrefixCompare(lval, rval) > 0 {
+			for types.PrefixCompare(lval, rval) > 0 {
 				rpos++
 				if rpos == rlen {
 					for j := i; j < length; j++ {
@@ -127,7 +127,7 @@ func PrefixIn(parameters []*vector.Vector, result vector.FunctionResultWrapper, 
 		for i := 0; i < length; i++ {
 			lval := lcol[i].GetByteSlice(larea)
 			rpos, _ := sort.Find(len(rcol), func(j int) int {
-				return bytes.Compare(rcol[j].GetByteSlice(rarea), lval)
+				return types.PrefixCompare(lval, rcol[j].GetByteSlice(rarea))
 			})
 
 			res[i] = rpos < len(rcol) && bytes.HasPrefix(lval, rcol[rpos].GetByteSlice(rarea))
