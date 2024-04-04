@@ -1853,6 +1853,19 @@ func (ses *Session) InitGlobalSystemVariables() error {
 		pu := ses.GetParameterUnit()
 		mp := ses.GetMemPool()
 
+		updateSqls := ses.getUpdateVariableSqlsByToml()
+		for _, sql := range updateSqls {
+			_, err = executeSQLInBackgroundSession(
+				sysTenantCtx,
+				ses,
+				mp,
+				pu,
+				sql)
+			if err != nil {
+				return err
+			}
+		}
+
 		rsset, err = executeSQLInBackgroundSession(
 			sysTenantCtx,
 			ses,
@@ -1899,6 +1912,19 @@ func (ses *Session) InitGlobalSystemVariables() error {
 		pu := ses.GetParameterUnit()
 		mp := ses.GetMemPool()
 
+		updateSqls := ses.getUpdateVariableSqlsByToml()
+		for _, sql := range updateSqls {
+			_, err = executeSQLInBackgroundSession(
+				tenantCtx,
+				ses,
+				mp,
+				pu,
+				sql)
+			if err != nil {
+				return err
+			}
+		}
+
 		rsset, err = executeSQLInBackgroundSession(
 			tenantCtx,
 			ses,
@@ -1938,6 +1964,24 @@ func (ses *Session) InitGlobalSystemVariables() error {
 		}
 	}
 	return err
+}
+
+func (ses *Session) getUpdateVariableSqlsByToml() []string {
+	updateSqls := make([]string, 0)
+	tenantInfo := ses.GetTenantInfo()
+	// sql_mode
+	if getVariableValue(ses.pu.SV.SqlMode) != gSysVarsDefs["sql_mode"].Default {
+		sqlForUpdate := getSqlForUpdateSystemVariableValue(ses.pu.SV.SqlMode, uint64(tenantInfo.GetTenantID()), "sql_mode")
+		updateSqls = append(updateSqls, sqlForUpdate)
+	}
+
+	// lower_case_table_names
+	if getVariableValue(ses.pu.SV.LowerCaseTableNames) != gSysVarsDefs["lower_case_table_names"].Default {
+		sqlForUpdate := getSqlForUpdateSystemVariableValue(getVariableValue(ses.pu.SV.LowerCaseTableNames), uint64(tenantInfo.GetTenantID()), "lower_case_table_names")
+		updateSqls = append(updateSqls, sqlForUpdate)
+	}
+
+	return updateSqls
 }
 
 func (ses *Session) GetPrivilege() *privilege {
