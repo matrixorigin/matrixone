@@ -101,15 +101,16 @@ func NewFlushTableTailEntry(
 		dirtyEndTs:         dirtyEndTs,
 	}
 
-	entry.delTbls = make([]*model.TransDels, entry.createdBlkHandles.GetMeta().(*catalog.ObjectEntry).BlockCnt())
-	entry.nextRoundDirties = make(map[*catalog.ObjectEntry]struct{})
-
-	// collect deletes phase 1
-	entry.collectTs = rt.Now()
-	var err error
-	entry.transCntBeforeCommit, err = entry.collectDelsAndTransfer(entry.txn.GetStartTS(), rt.Now())
-	if err != nil {
-		return nil, err
+	if entry.createdBlkHandles != nil {
+		entry.delTbls = make([]*model.TransDels, entry.createdBlkHandles.GetMeta().(*catalog.ObjectEntry).BlockCnt())
+		entry.nextRoundDirties = make(map[*catalog.ObjectEntry]struct{})
+		// collect deletes phase 1
+		entry.collectTs = rt.Now()
+		var err error
+		entry.transCntBeforeCommit, err = entry.collectDelsAndTransfer(entry.txn.GetStartTS(), entry.collectTs)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	// prepare transfer pages
@@ -297,7 +298,7 @@ func (entry *flushTableTailEntry) ApplyCommit() (err error) {
 		// some merge tasks touch the dirties, we need to keep those new dirties
 		tbl.DeletedDirties = tbl.DeletedDirties[entry.dirtyLen:]
 	}
-	for k, _ := range entry.nextRoundDirties {
+	for k := range entry.nextRoundDirties {
 		tbl.DeletedDirties = append(tbl.DeletedDirties, k)
 	}
 	return
