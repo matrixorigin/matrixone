@@ -21,24 +21,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
-const kMinLenForSubVector = 4
 const kMaxLenForBinarySearch = 64
 
 func OrderedBinarySearchOffsetByValFactory[T types.OrderedT](vals []T) func(*Vector) []int32 {
 	return func(vec *Vector) []int32 {
 		var sels []int32
 		rows := MustFixedCol[T](vec)
-		if len(vals) >= kMinLenForSubVector {
-			minVal := rows[0]
-			maxVal := rows[len(rows)-1]
-			lowerBound := sort.Search(len(vals), func(i int) bool {
-				return minVal <= vals[i]
-			})
-			upperBound := sort.Search(len(vals), func(i int) bool {
-				return maxVal < vals[i]
-			})
-			vals = vals[lowerBound:upperBound]
-		}
 
 		if len(vals) <= kMaxLenForBinarySearch {
 			offset := 0
@@ -82,15 +70,6 @@ func VarlenBinarySearchOffsetByValFactory(vals [][]byte) func(*Vector) []int32 {
 		n1 := vec.Length()
 		if n1 == 0 {
 			return sels
-		}
-		if len(vals) >= kMinLenForSubVector {
-			lowerBound := sort.Search(len(vals), func(i int) bool {
-				return bytes.Compare(vec.GetBytesAt(0), vals[i]) <= 0
-			})
-			upperBound := sort.Search(len(vals), func(i int) bool {
-				return bytes.Compare(vec.GetBytesAt(n1-1), vals[i]) < 0
-			})
-			vals = vals[lowerBound:upperBound]
 		}
 
 		if len(vals) <= kMaxLenForBinarySearch {
@@ -144,18 +123,6 @@ func FixedSizedBinarySearchOffsetByValFactory[T any](vals []T, cmp func(T, T) in
 	return func(vec *Vector) []int32 {
 		var sels []int32
 		rows := MustFixedCol[T](vec)
-
-		if len(vals) >= kMinLenForSubVector {
-			minVal := rows[0]
-			maxVal := rows[len(rows)-1]
-			lowerBound := sort.Search(len(vals), func(i int) bool {
-				return cmp(minVal, vals[i]) <= 0
-			})
-			upperBound := sort.Search(len(vals), func(i int) bool {
-				return cmp(maxVal, vals[i]) < 0
-			})
-			vals = vals[lowerBound:upperBound]
-		}
 
 		if len(vals) <= kMaxLenForBinarySearch {
 			offset := 0
