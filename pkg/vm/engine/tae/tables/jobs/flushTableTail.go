@@ -714,22 +714,31 @@ func (task *flushTableTailTask) flushAllDeletesFromDelSrc(ctx context.Context) (
 	for i, obj := range task.delSrcMetas {
 		objData := obj.GetObjectData()
 		var deletes *containers.Batch
-		var emptyDelObjs *bitmap.Bitmap
-		if deletes, emptyDelObjs, err = objData.CollectDeleteInRange(
-			ctx, types.TS{}, task.txn.GetStartTS(), true, common.MergeAllocator,
-		); err != nil {
-			return
+		emptyDelObjs := &bitmap.Bitmap{}
+		emptyDelObjs.InitWithSize(int64(obj.BlockCnt()))
+		for j := 0; j < obj.BlockCnt(); j++ {
+			found, _ := objData.HasDeleteIntentsPreparedInByBlock(uint16(j), types.TS{}, task.txn.GetStartTS())
+			if !found {
+				emptyDelObjs.Add(uint64(j))
+				continue
+			}
+			if deletes, err = objData.CollectDeleteInRangeByBlock(
+				ctx, uint16(j), types.TS{}, task.txn.GetStartTS(), true, common.MergeAllocator,
+			); err != nil {
+				return
+			}
+			if deletes == nil || deletes.Length() == 0 {
+				emptyDelObjs.Add(uint64(j))
+				continue
+			}
+			if bufferBatch == nil {
+				bufferBatch = makeDeletesTempBatch(deletes, task.rt.VectorPool.Transient)
+			}
+			task.nObjDeletesCnt += deletes.Length()
+			// deletes is closed by Extend
+			bufferBatch.Extend(deletes)
 		}
 		emtpyDelObjIdx[i] = emptyDelObjs
-		if deletes == nil || deletes.Length() == 0 {
-			continue
-		}
-		if bufferBatch == nil {
-			bufferBatch = makeDeletesTempBatch(deletes, task.rt.VectorPool.Transient)
-		}
-		task.nObjDeletesCnt += deletes.Length()
-		// deletes is closed by Extend
-		bufferBatch.Extend(deletes)
 	}
 	if bufferBatch != nil {
 		// make sure every batch in deltaloc object is sorted by rowid

@@ -35,7 +35,7 @@ const (
 	UpgradeUser = "upgrader"
 )
 
-var registeredTable = []*table.Table{motrace.SingleRowLogTable, MoPubsTable}
+var registeredTable = []*table.Table{motrace.SingleRowLogTable, MoPubsTable, MoSnapShotsTable}
 
 type Upgrader struct {
 	IEFactory func() ie.InternalExecutor
