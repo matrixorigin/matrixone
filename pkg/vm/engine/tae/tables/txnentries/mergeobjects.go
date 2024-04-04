@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
@@ -202,6 +203,10 @@ func (entry *mergeObjectsEntry) transferBlockDeletes(
 }
 
 func (entry *mergeObjectsEntry) PrepareCommit() (err error) {
+	inst := time.Now()
+	defer func() {
+		v2.TaskCommitMergeObjectsDurationHistogram.Observe(time.Since(inst).Seconds())
+	}()
 	delTbls := make([]*model.TransDels, entry.totalCreatedBlkCnt)
 	if len(entry.createdBlkCnt) == 0 {
 		return

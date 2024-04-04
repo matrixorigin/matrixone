@@ -772,7 +772,7 @@ func (tbl *txnTable) RangeDelete(
 	_, blkIdx := id.BlockID.Offsets()
 	node2, err := objData.RangeDelete(tbl.store.txn, blkIdx, start, end, pk, dt)
 	if err != nil && moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict) {
-		logutil.Warn("w-w conflict", zap.String("obj", objData.PPString(common.PPL2, 0, "")))
+		logutil.Warn("w-w conflict", zap.String("obj", objData.PPString(common.PPL2, 0, "", int(blkIdx))))
 	}
 	if err == nil {
 		if err = tbl.AddDeleteNode(id, node2); err != nil {
