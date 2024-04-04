@@ -92,7 +92,6 @@ func (s *scaling) doScaling() {
 			zap.String("CN ID", cn),
 		)
 		for _, tun := range tuns {
-			s.logger.Info("scaling out tunnel", zap.Uint32("conn ID", tun.cc.ConnID()))
 			tun.setTransferType(transferByScaling)
 			select {
 			case s.queue <- tun:
