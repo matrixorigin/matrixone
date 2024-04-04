@@ -193,6 +193,8 @@ type Client interface {
 	Send(context.Context, *pb.Request) (*pb.Response, error)
 	// AsyncSend async send request to other lock service.
 	AsyncSend(context.Context, *pb.Request) (*morpc.Future, error)
+	// Ping ping lock service from lock allocator.
+	Ping(ctx context.Context, backend string) error
 	// Close close the client
 	Close() error
 }
