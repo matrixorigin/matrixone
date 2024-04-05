@@ -53,20 +53,22 @@ func (p *PartitionState) PKExistInMemBetween(
 			//don't take pk in log tail when delete row , so check all rows for changes.
 			pivot.BlockID = entry.BlockID
 			pivot.RowID = entry.RowID
-			rowIter := p.rows.Iter()
+			rowIter := p.rows.NewIter()
 			seek := false
 			for {
+				var row RowEntry
 				if !seek {
 					seek = true
-					if !rowIter.Seek(pivot) {
+					row, ok = rowIter.Seek(pivot)
+					if !ok {
 						break
 					}
 				} else {
-					if !rowIter.Next() {
+					row, ok = rowIter.Next()
+					if !ok {
 						break
 					}
 				}
-				row := rowIter.Item()
 				if row.BlockID.Compare(entry.BlockID) != 0 {
 					break
 				}
@@ -74,11 +76,11 @@ func (p *PartitionState) PKExistInMemBetween(
 					break
 				}
 				if row.Time.GreaterEq(&from) {
-					rowIter.Release()
+					rowIter.Close()
 					return true, false
 				}
 			}
-			rowIter.Release()
+			rowIter.Close()
 		}
 
 		iter.First()

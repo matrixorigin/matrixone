@@ -18,6 +18,7 @@ import (
 	"bytes"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/reusee/pt"
 	"github.com/tidwall/btree"
 )
 
@@ -29,16 +30,17 @@ type RowsIter interface {
 
 type rowsIter struct {
 	ts           types.TS
-	iter         btree.IterG[RowEntry]
+	iter         *pt.Iter[RowEntry]
 	firstCalled  bool
 	lastRowID    types.Rowid
 	checkBlockID bool
 	blockID      types.Blockid
 	iterDeleted  bool
+	current      RowEntry
 }
 
 func (p *PartitionState) NewRowsIter(ts types.TS, blockID *types.Blockid, iterDeleted bool) *rowsIter {
-	iter := p.rows.Copy().Iter()
+	iter := p.rows.NewIter()
 	ret := &rowsIter{
 		ts:          ts,
 		iter:        iter,
@@ -56,26 +58,30 @@ var _ RowsIter = new(rowsIter)
 func (p *rowsIter) Next() bool {
 	for {
 
+		var entry RowEntry
+		var ok bool
 		if !p.firstCalled {
 			if p.checkBlockID {
-				if !p.iter.Seek(RowEntry{
+				entry, ok = p.iter.Seek(RowEntry{
 					BlockID: p.blockID,
-				}) {
+				})
+				if !ok {
 					return false
 				}
 			} else {
-				if !p.iter.First() {
+				entry, ok = p.iter.Next()
+				if !ok {
 					return false
 				}
 			}
 			p.firstCalled = true
 		} else {
-			if !p.iter.Next() {
+			entry, ok = p.iter.Next()
+			if !ok {
 				return false
 			}
 		}
-
-		entry := p.iter.Item()
+		p.current = entry
 
 		if p.checkBlockID && entry.BlockID != p.blockID {
 			// no more
@@ -101,11 +107,11 @@ func (p *rowsIter) Next() bool {
 }
 
 func (p *rowsIter) Entry() RowEntry {
-	return p.iter.Item()
+	return p.current
 }
 
 func (p *rowsIter) Close() error {
-	p.iter.Release()
+	p.iter.Close()
 	return nil
 }
 
@@ -114,7 +120,7 @@ type primaryKeyIter struct {
 	spec        PrimaryKeyMatchSpec
 	iter        btree.IterG[*PrimaryIndexEntry]
 	firstCalled bool
-	rows        *btree.BTreeG[RowEntry]
+	rows        *pt.Treap[RowEntry]
 	curRow      RowEntry
 }
 
@@ -160,7 +166,7 @@ func (p *PartitionState) NewPrimaryKeyIter(
 		ts:   ts,
 		spec: spec,
 		iter: iter,
-		rows: p.rows.Copy(),
+		rows: p.rows,
 	}
 }
 
@@ -191,13 +197,12 @@ func (p *primaryKeyIter) Next() bool {
 
 		// validate
 		valid := false
-		rowsIter := p.rows.Iter()
-		for ok := rowsIter.Seek(RowEntry{
+		rowsIter := p.rows.NewIter()
+		for row, ok := rowsIter.Seek(RowEntry{
 			BlockID: entry.BlockID,
 			RowID:   entry.RowID,
 			Time:    p.ts,
-		}); ok; ok = rowsIter.Next() {
-			row := rowsIter.Item()
+		}); ok; row, ok = rowsIter.Next() {
 			if row.BlockID != entry.BlockID {
 				// no more
 				break
@@ -220,7 +225,7 @@ func (p *primaryKeyIter) Next() bool {
 			}
 			break
 		}
-		rowsIter.Release()
+		rowsIter.Close()
 
 		if !valid {
 			continue
@@ -255,7 +260,7 @@ func (p *PartitionState) NewPrimaryKeyDelIter(
 			ts:   ts,
 			spec: spec,
 			iter: iter,
-			rows: p.rows.Copy(),
+			rows: p.rows,
 		},
 		bid: bid,
 	}
@@ -292,13 +297,12 @@ func (p *primaryKeyDelIter) Next() bool {
 
 		// validate
 		valid := false
-		rowsIter := p.rows.Iter()
-		for ok := rowsIter.Seek(RowEntry{
+		rowsIter := p.rows.NewIter()
+		for row, ok := rowsIter.Seek(RowEntry{
 			BlockID: entry.BlockID,
 			RowID:   entry.RowID,
 			Time:    p.ts,
-		}); ok; ok = rowsIter.Next() {
-			row := rowsIter.Item()
+		}); ok; row, ok = rowsIter.Next() {
 			if row.BlockID != entry.BlockID {
 				// no more
 				break
@@ -321,7 +325,7 @@ func (p *primaryKeyDelIter) Next() bool {
 			}
 			break
 		}
-		rowsIter.Release()
+		rowsIter.Close()
 
 		if !valid {
 			continue

@@ -33,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	txnTrace "github.com/matrixorigin/matrixone/pkg/txn/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
+	"github.com/reusee/pt"
 	"github.com/tidwall/btree"
 )
 
@@ -40,7 +41,8 @@ type PartitionState struct {
 	// also modify the Copy method if adding fields
 
 	// data
-	rows *btree.BTreeG[RowEntry] // use value type to avoid locking on elements
+	prioritySource pt.PrioritySource
+	rows           *pt.Treap[RowEntry]
 	//table data objects
 	dataObjects           *btree.BTreeG[ObjectEntry]
 	dataObjectsByCreateTS *btree.BTreeG[ObjectIndexByCreateTSEntry]
@@ -115,6 +117,24 @@ func (r RowEntry) Less(than RowEntry) bool {
 		return false
 	}
 	return false
+}
+
+func (r RowEntry) Compare(r2 RowEntry) int {
+	if res := r.BlockID.Compare(r2.BlockID); res != 0 {
+		return res
+	}
+	if r.RowID.Less(r2.RowID) {
+		return -1
+	} else if r2.RowID.Less(r.RowID) {
+		return 1
+	}
+	if r2.Time.Less(&r.Time) {
+		return -1
+	}
+	if r.Time.Less(&r2.Time) {
+		return 1
+	}
+	return 0
 }
 
 type BlockEntry struct {
@@ -279,8 +299,8 @@ func NewPartitionState(noData bool) *PartitionState {
 		Degree: 64,
 	}
 	return &PartitionState{
+		prioritySource:        pt.NewPrioritySource(),
 		noData:                noData,
-		rows:                  btree.NewBTreeGOptions((RowEntry).Less, opts),
 		dataObjects:           btree.NewBTreeGOptions((ObjectEntry).Less, opts),
 		dataObjectsByCreateTS: btree.NewBTreeGOptions((ObjectIndexByCreateTSEntry).Less, opts),
 		blockDeltas:           btree.NewBTreeGOptions((BlockDeltaEntry).Less, opts),
@@ -293,7 +313,8 @@ func NewPartitionState(noData bool) *PartitionState {
 
 func (p *PartitionState) Copy() *PartitionState {
 	state := PartitionState{
-		rows:                  p.rows.Copy(),
+		prioritySource:        pt.NewPrioritySource(),
+		rows:                  p.rows,
 		dataObjects:           p.dataObjects.Copy(),
 		dataObjectsByCreateTS: p.dataObjectsByCreateTS.Copy(),
 		blockDeltas:           p.blockDeltas.Copy(),
@@ -311,16 +332,15 @@ func (p *PartitionState) Copy() *PartitionState {
 }
 
 func (p *PartitionState) RowExists(rowID types.Rowid, ts types.TS) bool {
-	iter := p.rows.Iter()
-	defer iter.Release()
+	iter := p.rows.NewIter()
+	defer iter.Close()
 
 	blockID := rowID.CloneBlockID()
-	for ok := iter.Seek(RowEntry{
+	for entry, ok := iter.Seek(RowEntry{
 		BlockID: blockID,
 		RowID:   rowID,
 		Time:    ts,
-	}); ok; ok = iter.Next() {
-		entry := iter.Item()
+	}); ok; entry, ok = iter.Next() {
 		if entry.BlockID != blockID {
 			break
 		}
@@ -499,7 +519,7 @@ func (p *PartitionState) HandleObjectInsert(ctx context.Context, bat *api.Batch,
 			panic("logic error")
 		}
 		// for appendable object, gc rows when delete object
-		iter := p.rows.Copy().Iter()
+		iter := p.rows.NewIter()
 		objID := objEntry.ObjectStats.ObjectName().ObjectId()
 		trunctPoint := startTSCol[idx]
 		blkCnt := objEntry.ObjectStats.BlkCnt()
@@ -510,8 +530,7 @@ func (p *PartitionState) HandleObjectInsert(ctx context.Context, bat *api.Batch,
 				// aobj has only one blk
 				BlockID: *blkID,
 			}
-			for ok := iter.Seek(pivot); ok; ok = iter.Next() {
-				entry := iter.Item()
+			for entry, ok := iter.Seek(pivot); ok; entry, ok = iter.Next() {
 				if entry.BlockID != *blkID {
 					break
 				}
@@ -523,7 +542,7 @@ func (p *PartitionState) HandleObjectInsert(ctx context.Context, bat *api.Batch,
 				if objEntry.EntryState {
 					if entry.Time.LessEq(&trunctPoint) {
 						// delete the row
-						p.rows.Delete(entry)
+						p.rows, _ = p.rows.Remove(entry, false)
 
 						// delete the row's primary index
 						if objEntry.EntryState && len(entry.PrimaryIndexBytes) > 0 {
@@ -551,7 +570,7 @@ func (p *PartitionState) HandleObjectInsert(ctx context.Context, bat *api.Batch,
 					break
 				}
 			}
-			iter.Release()
+			iter.Close()
 
 			// if there are no rows for the block, delete the block from the dirty
 			if objEntry.EntryState && scanCnt == blockDeleted && p.dirtyBlocks.Len() > 0 {
@@ -609,7 +628,7 @@ func (p *PartitionState) HandleRowsInsert(
 			entry.Offset = int64(i)
 		}
 		entry.PrimaryIndexBytes = primaryKeys[i]
-		p.rows.Set(entry)
+		p.rows, _ = p.rows.Upsert(entry, p.prioritySource(), false)
 
 		{
 			entry := &PrimaryIndexEntry{
@@ -681,7 +700,7 @@ func (p *PartitionState) HandleRowsDelete(
 			entry.Batch = batch
 			entry.Offset = int64(i)
 		}
-		p.rows.Set(entry)
+		p.rows, _ = p.rows.Upsert(entry, p.prioritySource(), false)
 
 		//handle memory deletes for non-appendable block.
 		p.dirtyBlocks.Set(blockID)
@@ -764,12 +783,11 @@ func (p *PartitionState) HandleMetadataInsert(
 			scanCnt := int64(0)
 			blockDeleted := int64(0)
 			trunctPoint := memTruncTSVector[i]
-			iter := p.rows.Copy().Iter()
+			iter := p.rows.NewIter()
 			pivot := RowEntry{
 				BlockID: blockID,
 			}
-			for ok := iter.Seek(pivot); ok; ok = iter.Next() {
-				entry := iter.Item()
+			for entry, ok := iter.Seek(pivot); ok; entry, ok = iter.Next() {
 				if entry.BlockID != blockID {
 					break
 				}
@@ -794,7 +812,7 @@ func (p *PartitionState) HandleMetadataInsert(
 				if isAppendable || (!isAppendable && !isEmptyDelta) {
 					if entry.Time.LessEq(&trunctPoint) {
 						// delete the row
-						p.rows.Delete(entry)
+						p.rows, _ = p.rows.Remove(entry, false)
 
 						// delete the row's primary index
 						if isAppendable && len(entry.PrimaryIndexBytes) > 0 {
@@ -808,7 +826,7 @@ func (p *PartitionState) HandleMetadataInsert(
 					}
 				}
 			}
-			iter.Release()
+			iter.Close()
 
 			// if there are no rows for the block, delete the block from the dirty
 			if scanCnt == blockDeleted && p.dirtyBlocks.Len() > 0 {
