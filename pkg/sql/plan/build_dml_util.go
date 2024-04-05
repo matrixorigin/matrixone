@@ -2544,32 +2544,28 @@ func appendPreInsertSkVectorPlan(
 		where `__mo_index_rn` =1;
 
 		### Corresponding Plan
-		+----------------------------------------------------------------------------------------------------------------------------------------------+
-		| Plan 1:                                                                                                                                      |
-		| Insert on ab.entries                                                                                                                         |
-		|   ->  Lock                                                                                                                                   |
-		|         ->  Project                                                                                                                          |
-		|               ->  Filter                                                                                                                     |
-		|                     Filter Cond: (#[0,4] = 1)                                                                                                |
-		|                     ->  Window                                                                                                               |
-		|                           Window Function: row_number(); Partition By: id; Order By: l2_distance(embedding, __mo_index_centroid)             |
-		|                           ->  Partition                                                                                                      |
-		|                                 Sort Key: id INTERNAL                                                                                        |
-		|                                 ->  Join                                                                                                     |
-		|                                       Join Type: INNER                                                                                       |
-		|                                       ->  Project                                                                                            |
-		|                                             ->  Sink Scan                                                                                    |
-		|                                                   DataSource: Plan 0                                                                         |
-		|                                       ->  Filter                                                                                             |
-		|                                             Filter Cond: (__mo_index_centroid_version = #[0,3])                                              |
-		|                                             ->  Join                                                                                         |
-		|                                                   Join Type: SINGLE                                                                          |
-		|                                                   ->  Table Scan on ab.centroids                                                             |
-		|                                                   ->  Project                                                                                |
-		|                                                         ->  Filter                                                                           |
-		|                                                               Filter Cond: (__mo_index_key = cast('version' AS VARCHAR))                     |
-		|                                                               ->  Table Scan on ab.meta                                                      |
-		+----------------------------------------------------------------------------------------------------------------------------------------------+
+		-------------------------------------------------------------------------------------------------------------------------------
+		| Plan 1:                                                                                                                     |
+		| Insert on a.__mo_index_secondary_018eb07e-0a7a-7d5e-a326-b7c79a079e2b                                                       |
+		|   ->  Lock                                                                                                                  |
+		|         ->  Project                                                                                                         |
+		|               ->  Aggregate                                                                                                 |
+		|                     Group Key: __mo_index_centroid_version, id, embedding                                                   |
+		|                     Aggregate Functions: min(serial_full(l2_distance(__mo_index_centroid, #[0,5]), __mo_index_centroid_id)) |
+		|                     ->  Join                                                                                                |
+		|                           Join Type: INNER                                                                                  |
+		|                           ->  Project                                                                                       |
+		|                                 ->  Project                                                                                 |
+		|                                       ->  Sink Scan                                                                         |
+		|                                             DataSource: Plan 0                                                              |
+		|                           ->  Join                                                                                          |
+		|                                 Join Type: INNER                                                                            |
+		|                                 Join Cond: (__mo_index_centroid_version = cast(__mo_index_val AS BIGINT))                   |
+		|                                 ->  Table Scan on a.__mo_index_secondary_018eb07e-0a7a-7961-ae0c-f9d4d4b2e360               |
+		|                                 ->  Table Scan on a.__mo_index_secondary_018eb07e-0a7a-7333-bc1d-52392b14bd6d               |
+		|                                       Filter Cond: (__mo_index_key = cast('version' AS VARCHAR))                            |
+		-------------------------------------------------------------------------------------------------------------------------------
+
 	*/
 
 	//1.a get vector & pk column details
