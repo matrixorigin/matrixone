@@ -2598,37 +2598,50 @@ func appendPreInsertSkVectorPlan(
 	lastNodeId = recomputeMoCPKeyViaProjection(builder, bindCtx, tableDef, lastNodeId, posOriginPk)
 
 	// 2. scan meta table to find the `current version` number
-	metaTblScanId, err := makeMetaTblScanWhereKeyEqVersion(builder, bindCtx, indexTableDefs, idxRefs)
+	metaCurrVersionRow, err := makeMetaTblScanWhereKeyEqVersion(builder, bindCtx, indexTableDefs, idxRefs)
 	if err != nil {
 		return -1, err
 	}
 
 	// 3. create a scan node for centroids table with version = `current version`
-	currVersionCentroidsTblScanId, err := makeCrossJoinCentroidsMetaForCurrVersion(builder, bindCtx,
-		indexTableDefs, idxRefs, metaTblScanId)
+	currVersionCentroids, err := makeCrossJoinCentroidsMetaForCurrVersion(builder, bindCtx,
+		indexTableDefs, idxRefs, metaCurrVersionRow)
+	if err != nil {
+		return -1, err
+	}
+	fmt.Print(currVersionCentroids)
+
+	// 3. Make  Table Projection with cpPk, normalize_l2(), embedding
+	tableId := lastNodeId
+	projectTblScan, err := makeTableProjection(builder, bindCtx, tableId, tableDef,
+		typeOriginPk, posOriginPk,
+		typeOriginVecColumn, posOriginVecColumn)
 	if err != nil {
 		return -1, err
 	}
 
 	// 4. create a cross join node for tbl and centroids
 	// Projections: centroids.version, centroids.centroid_id, tbl.pk, centroids.centroid, tbl.embedding
-	var leftChildTblId = lastNodeId
-	var rightChildCentroidsId = currVersionCentroidsTblScanId
+	var leftChildTblId = projectTblScan
+	var rightChildCentroidsId = currVersionCentroids
 	var crossJoinTblAndCentroidsID = makeCrossJoinTblAndCentroids(builder, bindCtx, tableDef,
 		leftChildTblId, rightChildCentroidsId,
 		typeOriginPk, posOriginPk,
 		typeOriginVecColumn, posOriginVecColumn)
 
-	// 5. partition by tbl.pk
-	// 6. Window operation
-	// 7. Filter records where row_number() = 1
-	filterId, err := partitionByWindowAndFilterByRowNum(builder, bindCtx, crossJoinTblAndCentroidsID)
+	// 5. select
+	// 	  	centroids.version,
+	//	  	serial_extract(min( pair< l2_distance, centroid_id >, 1 )
+	//    	pk,
+	//    from crossJoinTblAndCentroidsID
+	// 	  	group by pk,
+	filterId, err := minCentroidIdGroupByPK(builder, bindCtx, crossJoinTblAndCentroidsID)
 	if err != nil {
 		return -1, err
 	}
 
 	// 8. Final project: centroids.version, centroids.centroid_id, tbl.pk, cp_col
-	projectId, err := makeFinalProjectWithCPAndOptionalRowId(builder, bindCtx, filterId, lastNodeId, isUpdate)
+	projectId, err := makeFinalProjectWithCPAndOptionalRowId(builder, bindCtx, filterId)
 	if err != nil {
 		return -1, err
 	}
