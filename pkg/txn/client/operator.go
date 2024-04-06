@@ -255,8 +255,11 @@ func newTxnOperator(
 
 func (tc *txnOperator) CloneSnapshotOp(snapshot timestamp.Timestamp) TxnOperator {
 	op := &txnOperator{}
-	op.mu.txn = tc.mu.txn
-	op.mu.txn.SnapshotTS = snapshot
+	op.mu.txn = txn.TxnMeta{
+		SnapshotTS: snapshot,
+		ID:         tc.mu.txn.ID,
+		TNShards:   tc.mu.txn.TNShards,
+	}
 	op.txnID = op.mu.txn.ID
 
 	op.workspace = tc.workspace.CloneSnapshotWS()
