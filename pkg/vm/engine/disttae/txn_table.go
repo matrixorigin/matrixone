@@ -57,7 +57,7 @@ const (
 var _ engine.Relation = new(txnTable)
 
 func (tbl *txnTable) getEngine() engine.Engine {
-	return tbl.db.txn.engine
+	return tbl.db.op.GetWorkspace().(*Transaction).engine
 }
 
 func (tbl *txnTable) Stats(ctx context.Context, sync bool) *pb.StatsInfo {
@@ -82,32 +82,36 @@ func (tbl *txnTable) Rows(ctx context.Context) (uint64, error) {
 	e := tbl.getEngine()
 	var rows uint64
 	deletes := make(map[types.Rowid]struct{})
-	tbl.db.txn.forEachTableWrites(tbl.db.databaseId, tbl.tableId, tbl.db.txn.GetSnapshotWriteOffset(), func(entry Entry) {
-		if entry.typ == INSERT || entry.typ == INSERT_TXN {
-			rows = rows + uint64(entry.bat.RowCount())
-		} else {
-			if entry.bat.GetVector(0).GetType().Oid == types.T_Rowid {
-				/*
-					CASE:
-					create table t1(a int);
-					begin;
-					truncate t1; //txnDatabase.Truncate will DELETE mo_tables
-					show tables; // t1 must be shown
-				*/
-				if entry.databaseId == catalog.MO_CATALOG_ID &&
-					entry.tableId == catalog.MO_TABLES_ID &&
-					entry.truncate {
-					return
-				}
-				vs := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
-				for _, v := range vs {
-					deletes[v] = struct{}{}
+	tbl.db.op.GetWorkspace().(*Transaction).forEachTableWrites(
+		tbl.db.databaseId,
+		tbl.tableId,
+		tbl.db.op.GetWorkspace().(*Transaction).GetSnapshotWriteOffset(),
+		func(entry Entry) {
+			if entry.typ == INSERT || entry.typ == INSERT_TXN {
+				rows = rows + uint64(entry.bat.RowCount())
+			} else {
+				if entry.bat.GetVector(0).GetType().Oid == types.T_Rowid {
+					/*
+						CASE:
+						create table t1(a int);
+						begin;
+						truncate t1; //txnDatabase.Truncate will DELETE mo_tables
+						show tables; // t1 must be shown
+					*/
+					if entry.databaseId == catalog.MO_CATALOG_ID &&
+						entry.tableId == catalog.MO_TABLES_ID &&
+						entry.truncate {
+						return
+					}
+					vs := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
+					for _, v := range vs {
+						deletes[v] = struct{}{}
+					}
 				}
 			}
-		}
-	})
+		})
 
-	ts := types.TimestampToTS(tbl.db.txn.op.SnapshotTS())
+	ts := types.TimestampToTS(tbl.db.op.SnapshotTS())
 	partition, err := tbl.getPartitionState(ctx)
 	if err != nil {
 		return 0, err
@@ -139,7 +143,7 @@ func (tbl *txnTable) Size(ctx context.Context, columnName string) (uint64, error
 		return 0, err
 	}
 	e := tbl.getEngine()
-	ts := types.TimestampToTS(tbl.db.txn.op.SnapshotTS())
+	ts := types.TimestampToTS(tbl.db.op.SnapshotTS())
 	part, err := tbl.getPartitionState(ctx)
 	if err != nil {
 		return 0, err
@@ -162,32 +166,36 @@ func (tbl *txnTable) Size(ctx context.Context, columnName string) (uint64, error
 	}
 
 	deletes := make(map[types.Rowid]struct{})
-	tbl.db.txn.forEachTableWrites(tbl.db.databaseId, tbl.tableId, tbl.db.txn.GetSnapshotWriteOffset(), func(entry Entry) {
-		if entry.typ == INSERT || entry.typ == INSERT_TXN {
-			for i, s := range entry.bat.Attrs {
-				if _, ok := neededCols[s]; ok {
-					szInPart += uint64(entry.bat.Vecs[i].Size())
+	tbl.db.op.GetWorkspace().(*Transaction).forEachTableWrites(
+		tbl.db.databaseId,
+		tbl.tableId,
+		tbl.db.op.GetWorkspace().(*Transaction).GetSnapshotWriteOffset(),
+		func(entry Entry) {
+			if entry.typ == INSERT || entry.typ == INSERT_TXN {
+				for i, s := range entry.bat.Attrs {
+					if _, ok := neededCols[s]; ok {
+						szInPart += uint64(entry.bat.Vecs[i].Size())
+					}
+				}
+			} else {
+				if entry.bat.GetVector(0).GetType().Oid == types.T_Rowid {
+					// CASE:
+					// create table t1(a int);
+					// begin;
+					// truncate t1; //txnDatabase.Truncate will DELETE mo_tables
+					// show tables; // t1 must be shown
+					if entry.databaseId == catalog.MO_CATALOG_ID &&
+						entry.tableId == catalog.MO_TABLES_ID &&
+						entry.truncate {
+						return
+					}
+					vs := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
+					for _, v := range vs {
+						deletes[v] = struct{}{}
+					}
 				}
 			}
-		} else {
-			if entry.bat.GetVector(0).GetType().Oid == types.T_Rowid {
-				// CASE:
-				// create table t1(a int);
-				// begin;
-				// truncate t1; //txnDatabase.Truncate will DELETE mo_tables
-				// show tables; // t1 must be shown
-				if entry.databaseId == catalog.MO_CATALOG_ID &&
-					entry.tableId == catalog.MO_TABLES_ID &&
-					entry.truncate {
-					return
-				}
-				vs := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
-				for _, v := range vs {
-					deletes[v] = struct{}{}
-				}
-			}
-		}
-	})
+		})
 
 	// Different rows may belong to same batch. So we have
 	// to record the batch which we have already handled to avoid
@@ -281,7 +289,9 @@ func (tbl *txnTable) MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, er
 
 	var meta objectio.ObjectDataMeta
 	var objMeta objectio.ObjectMeta
-	fs, err := fileservice.Get[fileservice.FileService](tbl.db.txn.proc.FileService, defines.SharedFileServiceName)
+	fs, err := fileservice.Get[fileservice.FileService](
+		tbl.db.op.GetWorkspace().(*Transaction).proc.FileService,
+		defines.SharedFileServiceName)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -312,7 +322,10 @@ func (tbl *txnTable) MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, er
 		return nil
 	}
 
-	if err = ForeachVisibleDataObject(part, types.TimestampToTS(tbl.db.txn.op.SnapshotTS()), onObjFn); err != nil {
+	if err = ForeachVisibleDataObject(
+		part,
+		types.TimestampToTS(tbl.db.op.SnapshotTS()),
+		onObjFn); err != nil {
 		return nil, nil, err
 	}
 
@@ -355,7 +368,9 @@ func (tbl *txnTable) GetColumMetadataScanInfo(ctx context.Context, name string) 
 		}
 	}
 
-	fs, err := fileservice.Get[fileservice.FileService](tbl.db.txn.proc.FileService, defines.SharedFileServiceName)
+	fs, err := fileservice.Get[fileservice.FileService](
+		tbl.db.op.GetWorkspace().(*Transaction).proc.FileService,
+		defines.SharedFileServiceName)
 	if err != nil {
 		return nil, err
 	}
@@ -416,7 +431,7 @@ func (tbl *txnTable) GetColumMetadataScanInfo(ctx context.Context, name string) 
 		return nil
 	}
 
-	if err = ForeachVisibleDataObject(state, types.TimestampToTS(tbl.db.txn.op.SnapshotTS()), onObjFn); err != nil {
+	if err = ForeachVisibleDataObject(state, types.TimestampToTS(tbl.db.op.SnapshotTS()), onObjFn); err != nil {
 		return nil, err
 	}
 
@@ -433,11 +448,11 @@ func (tbl *txnTable) GetColumMetadataScanInfo(ctx context.Context, name string) 
 }
 
 func (tbl *txnTable) GetDirtyPersistedBlks(state *logtailreplay.PartitionState) []types.Blockid {
-	tbl.db.txn.blockId_tn_delete_metaLoc_batch.RLock()
-	defer tbl.db.txn.blockId_tn_delete_metaLoc_batch.RUnlock()
+	tbl.db.op.GetWorkspace().(*Transaction).blockId_tn_delete_metaLoc_batch.RLock()
+	defer tbl.db.op.GetWorkspace().(*Transaction).blockId_tn_delete_metaLoc_batch.RUnlock()
 
 	dirtyBlks := make([]types.Blockid, 0)
-	for blk := range tbl.db.txn.blockId_tn_delete_metaLoc_batch.data {
+	for blk := range tbl.db.op.GetWorkspace().(*Transaction).blockId_tn_delete_metaLoc_batch.data {
 		if !state.BlockPersisted(blk) {
 			continue
 		}
@@ -447,10 +462,10 @@ func (tbl *txnTable) GetDirtyPersistedBlks(state *logtailreplay.PartitionState) 
 }
 
 func (tbl *txnTable) LoadDeletesForBlock(bid types.Blockid, offsets *[]int64) (err error) {
-	tbl.db.txn.blockId_tn_delete_metaLoc_batch.RLock()
-	defer tbl.db.txn.blockId_tn_delete_metaLoc_batch.RUnlock()
+	tbl.db.op.GetWorkspace().(*Transaction).blockId_tn_delete_metaLoc_batch.RLock()
+	defer tbl.db.op.GetWorkspace().(*Transaction).blockId_tn_delete_metaLoc_batch.RUnlock()
 
-	bats, ok := tbl.db.txn.blockId_tn_delete_metaLoc_batch.data[bid]
+	bats, ok := tbl.db.op.GetWorkspace().(*Transaction).blockId_tn_delete_metaLoc_batch.data[bid]
 	if !ok {
 		return nil
 	}
@@ -462,12 +477,12 @@ func (tbl *txnTable) LoadDeletesForBlock(bid types.Blockid, offsets *[]int64) (e
 				return err
 			}
 			rowIdBat, release, err := blockio.LoadTombstoneColumns(
-				tbl.db.txn.proc.Ctx,
+				tbl.db.op.GetWorkspace().(*Transaction).proc.Ctx,
 				[]uint16{0},
 				nil,
-				tbl.db.txn.engine.fs,
+				tbl.db.op.GetWorkspace().(*Transaction).engine.fs,
 				location,
-				tbl.db.txn.proc.GetMPool())
+				tbl.db.op.GetWorkspace().(*Transaction).proc.GetMPool())
 			if err != nil {
 				return err
 			}
@@ -487,10 +502,10 @@ func (tbl *txnTable) LoadDeletesForMemBlocksIn(
 	state *logtailreplay.PartitionState,
 	deletesRowId map[types.Rowid]uint8) error {
 
-	tbl.db.txn.blockId_tn_delete_metaLoc_batch.RLock()
-	defer tbl.db.txn.blockId_tn_delete_metaLoc_batch.RUnlock()
+	tbl.db.op.GetWorkspace().(*Transaction).blockId_tn_delete_metaLoc_batch.RLock()
+	defer tbl.db.op.GetWorkspace().(*Transaction).blockId_tn_delete_metaLoc_batch.RUnlock()
 
-	for blk, bats := range tbl.db.txn.blockId_tn_delete_metaLoc_batch.data {
+	for blk, bats := range tbl.db.op.GetWorkspace().(*Transaction).blockId_tn_delete_metaLoc_batch.data {
 		//if blk is in partitionState.blks, it means that blk is persisted.
 		if state.BlockPersisted(blk) {
 			continue
@@ -503,12 +518,12 @@ func (tbl *txnTable) LoadDeletesForMemBlocksIn(
 					return err
 				}
 				rowIdBat, release, err := blockio.LoadTombstoneColumns(
-					tbl.db.txn.proc.Ctx,
+					tbl.db.op.GetWorkspace().(*Transaction).proc.Ctx,
 					[]uint16{0},
 					nil,
-					tbl.db.txn.engine.fs,
+					tbl.db.op.GetWorkspace().(*Transaction).engine.fs,
 					location,
-					tbl.db.txn.proc.GetMPool())
+					tbl.db.op.GetWorkspace().(*Transaction).proc.GetMPool())
 				if err != nil {
 					return err
 				}
@@ -550,9 +565,9 @@ func (tbl *txnTable) resetSnapshot() {
 func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr) (ranges engine.Ranges, err error) {
 	start := time.Now()
 
-	seq := tbl.db.txn.op.NextSequence()
+	seq := tbl.db.op.GetWorkspace().(*Transaction).op.NextSequence()
 	trace.GetService().AddTxnDurationAction(
-		tbl.db.txn.op,
+		tbl.db.op.GetWorkspace().(*Transaction).op,
 		client.RangesEvent,
 		seq,
 		tbl.tableId,
@@ -563,7 +578,7 @@ func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr) (ranges eng
 		cost := time.Since(start)
 
 		trace.GetService().AddTxnAction(
-			tbl.db.txn.op,
+			tbl.db.op.GetWorkspace().(*Transaction).op,
 			client.RangesEvent,
 			seq,
 			tbl.tableId,
@@ -572,7 +587,7 @@ func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr) (ranges eng
 			err)
 
 		trace.GetService().AddTxnDurationAction(
-			tbl.db.txn.op,
+			tbl.db.op.GetWorkspace().(*Transaction).op,
 			client.RangesEvent,
 			seq,
 			tbl.tableId,
@@ -643,7 +658,8 @@ func (tbl *txnTable) rangesOnePart(
 	dirtyBlks := tbl.collectDirtyBlocks(state, uncommittedObjects)
 
 	done, err := tbl.tryFastFilterBlocks(
-		exprs, state, uncommittedObjects, dirtyBlks, outBlocks, tbl.db.txn.engine.fs)
+		exprs, state, uncommittedObjects, dirtyBlks, outBlocks,
+		tbl.db.op.GetWorkspace().(*Transaction).engine.fs)
 	if err != nil {
 		return err
 	} else if done {
@@ -651,7 +667,8 @@ func (tbl *txnTable) rangesOnePart(
 	}
 
 	if done, err = tbl.tryFastRanges(
-		exprs, state, uncommittedObjects, dirtyBlks, outBlocks, tbl.db.txn.engine.fs,
+		exprs, state, uncommittedObjects, dirtyBlks, outBlocks,
+		tbl.db.op.GetWorkspace().(*Transaction).engine.fs,
 	); err != nil {
 		return err
 	} else if done {
@@ -698,7 +715,7 @@ func (tbl *txnTable) rangesOnePart(
 	hasDeletes := len(dirtyBlks) > 0
 
 	if err = ForeachSnapshotObjects(
-		tbl.db.txn.op.SnapshotTS(),
+		tbl.db.op.SnapshotTS(),
 		func(obj logtailreplay.ObjectInfo, isCommitted bool) (err2 error) {
 			var meta objectio.ObjectDataMeta
 			skipObj = false
@@ -708,7 +725,7 @@ func (tbl *txnTable) rangesOnePart(
 				v2.TxnRangesLoadedObjectMetaTotalCounter.Inc()
 				location := obj.ObjectLocation()
 				if objMeta, err2 = objectio.FastLoadObjectMeta(
-					errCtx, &location, false, tbl.db.txn.engine.fs,
+					errCtx, &location, false, tbl.db.op.GetWorkspace().(*Transaction).engine.fs,
 				); err2 != nil {
 					return
 				}
@@ -733,7 +750,7 @@ func (tbl *txnTable) rangesOnePart(
 			if obj.Rows() == 0 && meta.IsEmpty() {
 				location := obj.ObjectLocation()
 				if objMeta, err2 = objectio.FastLoadObjectMeta(
-					errCtx, &location, false, tbl.db.txn.engine.fs,
+					errCtx, &location, false, tbl.db.op.GetWorkspace().(*Transaction).engine.fs,
 				); err2 != nil {
 					return
 				}
@@ -808,24 +825,28 @@ func (tbl *txnTable) rangesOnePart(
 
 func (tbl *txnTable) collectUnCommittedObjects() []objectio.ObjectStats {
 	var unCommittedObjects []objectio.ObjectStats
-	tbl.db.txn.forEachTableWrites(tbl.db.databaseId, tbl.tableId, tbl.db.txn.GetSnapshotWriteOffset(), func(entry Entry) {
-		stats := objectio.ObjectStats{}
-		if entry.bat == nil || entry.bat.IsEmpty() {
-			return
-		}
-		if entry.typ == INSERT_TXN {
-			return
-		}
-		if entry.typ != INSERT ||
-			len(entry.bat.Attrs) < 2 ||
-			entry.bat.Attrs[1] != catalog.ObjectMeta_ObjectStats {
-			return
-		}
-		for i := 0; i < entry.bat.Vecs[1].Length(); i++ {
-			stats.UnMarshal(entry.bat.Vecs[1].GetBytesAt(i))
-			unCommittedObjects = append(unCommittedObjects, stats)
-		}
-	})
+	tbl.db.op.GetWorkspace().(*Transaction).forEachTableWrites(
+		tbl.db.databaseId,
+		tbl.tableId,
+		tbl.db.op.GetWorkspace().(*Transaction).GetSnapshotWriteOffset(),
+		func(entry Entry) {
+			stats := objectio.ObjectStats{}
+			if entry.bat == nil || entry.bat.IsEmpty() {
+				return
+			}
+			if entry.typ == INSERT_TXN {
+				return
+			}
+			if entry.typ != INSERT ||
+				len(entry.bat.Attrs) < 2 ||
+				entry.bat.Attrs[1] != catalog.ObjectMeta_ObjectStats {
+				return
+			}
+			for i := 0; i < entry.bat.Vecs[1].Length(); i++ {
+				stats.UnMarshal(entry.bat.Vecs[1].GetBytesAt(i))
+				unCommittedObjects = append(unCommittedObjects, stats)
+			}
+		})
 
 	return unCommittedObjects
 }
@@ -851,33 +872,37 @@ func (tbl *txnTable) collectDirtyBlocks(
 		dirtyBlks[bid] = struct{}{}
 	}
 
-	if tbl.db.txn.hasDeletesOnUncommitedObject() {
+	if tbl.db.op.GetWorkspace().(*Transaction).hasDeletesOnUncommitedObject() {
 		ForeachBlkInObjStatsList(true, nil, func(blk objectio.BlockInfo, _ objectio.BlockObject) bool {
-			if tbl.db.txn.hasUncommittedDeletesOnBlock(&blk.BlockID) {
+			if tbl.db.op.GetWorkspace().(*Transaction).hasUncommittedDeletesOnBlock(&blk.BlockID) {
 				dirtyBlks[blk.BlockID] = struct{}{}
 			}
 			return true
 		}, uncommittedObjects...)
 	}
 
-	tbl.db.txn.forEachTableWrites(tbl.db.databaseId, tbl.tableId, tbl.db.txn.GetSnapshotWriteOffset(), func(entry Entry) {
-		// the CN workspace can only handle `INSERT` and `DELETE` operations. Other operations will be skipped,
-		// TODO Adjustments will be made here in the future
-		if entry.typ == DELETE || entry.typ == DELETE_TXN {
-			if entry.isGeneratedByTruncate() {
-				return
-			}
-			//deletes in tbl.writes maybe comes from PartitionState.rows or PartitionState.blocks.
-			if entry.fileName == "" &&
-				entry.tableId != catalog.MO_DATABASE_ID && entry.tableId != catalog.MO_TABLES_ID && entry.tableId != catalog.MO_COLUMNS_ID {
-				vs := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
-				for _, v := range vs {
-					id, _ := v.Decode()
-					dirtyBlks[id] = struct{}{}
+	tbl.db.op.GetWorkspace().(*Transaction).forEachTableWrites(
+		tbl.db.databaseId,
+		tbl.tableId,
+		tbl.db.op.GetWorkspace().(*Transaction).GetSnapshotWriteOffset(),
+		func(entry Entry) {
+			// the CN workspace can only handle `INSERT` and `DELETE` operations. Other operations will be skipped,
+			// TODO Adjustments will be made here in the future
+			if entry.typ == DELETE || entry.typ == DELETE_TXN {
+				if entry.isGeneratedByTruncate() {
+					return
+				}
+				//deletes in tbl.writes maybe comes from PartitionState.rows or PartitionState.blocks.
+				if entry.fileName == "" &&
+					entry.tableId != catalog.MO_DATABASE_ID && entry.tableId != catalog.MO_TABLES_ID && entry.tableId != catalog.MO_COLUMNS_ID {
+					vs := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
+					for _, v := range vs {
+						id, _ := v.Decode()
+						dirtyBlks[id] = struct{}{}
+					}
 				}
 			}
-		}
-	})
+		})
 
 	return dirtyBlks
 }
@@ -893,7 +918,7 @@ func (tbl *txnTable) tryFastFilterBlocks(
 	// TODO: refactor this code if composite key can be pushdown
 	if tbl.tableDef.Pkey.CompPkeyCol == nil {
 		return TryFastFilterBlocks(
-			tbl.db.txn.op.SnapshotTS(),
+			tbl.db.op.SnapshotTS(),
 			tbl.tableDef,
 			exprs,
 			snapshot,
@@ -927,12 +952,12 @@ func (tbl *txnTable) tryFastRanges(
 		exprs,
 		tbl.primaryIdx,
 		tbl.proc.Load(),
-		tbl.db.txn.engine.packerPool,
+		tbl.db.op.GetWorkspace().(*Transaction).engine.packerPool,
 	)
 	if len(val) == 0 {
 		// TODO: refactor this code if composite key can be pushdown
 		return TryFastFilterBlocks(
-			tbl.db.txn.op.SnapshotTS(),
+			tbl.db.op.SnapshotTS(),
 			tbl.tableDef,
 			exprs,
 			snapshot,
@@ -967,7 +992,7 @@ func (tbl *txnTable) tryFastRanges(
 	hasDeletes := len(dirtyBlocks) > 0
 
 	if err = ForeachSnapshotObjects(
-		tbl.db.txn.op.SnapshotTS(),
+		tbl.db.op.SnapshotTS(),
 		func(obj logtailreplay.ObjectInfo, isCommitted bool) (err2 error) {
 			zmTotal++
 			blockCnt += obj.BlkCnt()
@@ -1340,13 +1365,14 @@ func (tbl *txnTable) UpdateConstraint(ctx context.Context, c *engine.ConstraintD
 	if err != nil {
 		return err
 	}
-	bat, err := genTableConstraintTuple(tbl.tableId, tbl.db.databaseId, tbl.tableName, tbl.db.databaseName, ct, tbl.db.txn.proc.Mp())
+	bat, err := genTableConstraintTuple(tbl.tableId, tbl.db.databaseId, tbl.tableName, tbl.db.databaseName,
+		ct, tbl.db.op.GetWorkspace().(*Transaction).proc.Mp())
 	if err != nil {
 		return err
 	}
-	if err = tbl.db.txn.WriteBatch(UPDATE, 0, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
-		catalog.MO_CATALOG, catalog.MO_TABLES, bat, tbl.db.txn.tnStores[0], -1, false, false); err != nil {
-		bat.Clean(tbl.db.txn.proc.Mp())
+	if err = tbl.db.op.GetWorkspace().(*Transaction).WriteBatch(UPDATE, 0, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
+		catalog.MO_CATALOG, catalog.MO_TABLES, bat, tbl.db.op.GetWorkspace().(*Transaction).tnStores[0], -1, false, false); err != nil {
+		bat.Clean(tbl.db.op.GetWorkspace().(*Transaction).proc.Mp())
 		return err
 	}
 	tbl.constraint = ct
@@ -1360,13 +1386,13 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, co
 	if err != nil {
 		return err
 	}
-	bat, err := genTableAlterTuple(constraint, tbl.db.txn.proc.Mp())
+	bat, err := genTableAlterTuple(constraint, tbl.db.op.GetWorkspace().(*Transaction).proc.Mp())
 	if err != nil {
 		return err
 	}
-	if err = tbl.db.txn.WriteBatch(ALTER, 0, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
-		catalog.MO_CATALOG, catalog.MO_TABLES, bat, tbl.db.txn.tnStores[0], -1, false, false); err != nil {
-		bat.Clean(tbl.db.txn.proc.Mp())
+	if err = tbl.db.op.GetWorkspace().(*Transaction).WriteBatch(ALTER, 0, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
+		catalog.MO_CATALOG, catalog.MO_TABLES, bat, tbl.db.op.GetWorkspace().(*Transaction).tnStores[0], -1, false, false); err != nil {
+		bat.Clean(tbl.db.op.GetWorkspace().(*Transaction).proc.Mp())
 		return err
 	}
 	tbl.constraint = ct
@@ -1392,8 +1418,8 @@ func (tbl *txnTable) TableRenameInTxn(ctx context.Context, constraint [][]byte) 
 	var rowid types.Rowid
 	var rowids []types.Rowid
 	key := genTableKey(accountId, tbl.tableName, databaseId)
-	if value, ok := db.txn.createMap.Load(key); ok {
-		db.txn.createMap.Delete(key)
+	if value, ok := db.op.GetWorkspace().(*Transaction).createMap.Load(key); ok {
+		db.op.GetWorkspace().(*Transaction).createMap.Delete(key)
 		table := value.(*txnTable)
 		id = table.tableId
 		rowid = table.rowid
@@ -1401,7 +1427,7 @@ func (tbl *txnTable) TableRenameInTxn(ctx context.Context, constraint [][]byte) 
 		if tbl != table {
 			panic("The table object in createMap should be the current table object")
 		}
-	} else if value, ok := db.txn.tableCache.tableMap.Load(key); ok {
+	} else if value, ok := db.op.GetWorkspace().(*Transaction).tableCache.tableMap.Load(key); ok {
 		table := value.(*txnTable)
 		id = table.tableId
 		rowid = table.rowid
@@ -1409,16 +1435,16 @@ func (tbl *txnTable) TableRenameInTxn(ctx context.Context, constraint [][]byte) 
 		if tbl != table {
 			panic("The table object in tableCache should be the current table object")
 		}
-		db.txn.tableCache.tableMap.Delete(key)
+		db.op.GetWorkspace().(*Transaction).tableCache.tableMap.Delete(key)
 	} else {
 		// I think it is unnecessary to make a judgment on this branch because the table is already in use, so it must be in the cache
 		item := &cache.TableItem{
 			Name:       tbl.tableName,
 			DatabaseId: databaseId,
 			AccountId:  accountId,
-			Ts:         db.txn.op.SnapshotTS(),
+			Ts:         db.op.SnapshotTS(),
 		}
-		if ok := db.txn.engine.catalog.GetTable(item); !ok {
+		if ok := db.op.GetWorkspace().(*Transaction).engine.catalog.GetTable(item); !ok {
 			return moerr.GetOkExpectedEOB()
 		}
 		id = item.Id
@@ -1426,14 +1452,15 @@ func (tbl *txnTable) TableRenameInTxn(ctx context.Context, constraint [][]byte) 
 		rowids = item.Rowids
 	}
 
-	bat, err := genDropTableTuple(rowid, id, db.databaseId, tbl.tableName, db.databaseName, db.txn.proc.Mp())
+	bat, err := genDropTableTuple(rowid, id, db.databaseId, tbl.tableName,
+		db.databaseName, db.op.GetWorkspace().(*Transaction).proc.Mp())
 	if err != nil {
 		return err
 	}
-	for _, store := range db.txn.tnStores {
-		if err := db.txn.WriteBatch(DELETE_TXN, 0, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
+	for _, store := range db.op.GetWorkspace().(*Transaction).tnStores {
+		if err := db.op.GetWorkspace().(*Transaction).WriteBatch(DELETE_TXN, 0, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
 			catalog.MO_CATALOG, catalog.MO_TABLES, bat, store, -1, false, false); err != nil {
-			bat.Clean(db.txn.proc.Mp())
+			bat.Clean(db.op.GetWorkspace().(*Transaction).proc.Mp())
 			return err
 		}
 	}
@@ -1441,29 +1468,29 @@ func (tbl *txnTable) TableRenameInTxn(ctx context.Context, constraint [][]byte) 
 	// Add writeBatch(delete,mo_columns) to filter table in mo_columns.
 	// Every row in writeBatch(delete,mo_columns) needs rowid
 	for _, rid := range rowids {
-		bat, err = genDropColumnTuple(rid, db.txn.proc.Mp())
+		bat, err = genDropColumnTuple(rid, db.op.GetWorkspace().(*Transaction).proc.Mp())
 		if err != nil {
 			return err
 		}
-		for _, store := range db.txn.tnStores {
-			if err = db.txn.WriteBatch(DELETE_TXN, 0, catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID,
+		for _, store := range db.op.GetWorkspace().(*Transaction).tnStores {
+			if err = db.op.GetWorkspace().(*Transaction).WriteBatch(DELETE_TXN, 0, catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID,
 				catalog.MO_CATALOG, catalog.MO_COLUMNS, bat, store, -1, false, false); err != nil {
-				bat.Clean(db.txn.proc.Mp())
+				bat.Clean(db.op.GetWorkspace().(*Transaction).proc.Mp())
 				return err
 			}
 		}
 	}
-	db.txn.deletedTableMap.Store(key, id)
+	db.op.GetWorkspace().(*Transaction).deletedTableMap.Store(key, id)
 
 	//------------------------------------------------------------------------------------------------------------------
 	// 2. send alter message to DN
-	bat, err = genTableAlterTuple(constraint, db.txn.proc.Mp())
+	bat, err = genTableAlterTuple(constraint, db.op.GetWorkspace().(*Transaction).proc.Mp())
 	if err != nil {
 		return err
 	}
-	if err = db.txn.WriteBatch(ALTER, 0, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
-		catalog.MO_CATALOG, catalog.MO_TABLES, bat, db.txn.tnStores[0], -1, false, false); err != nil {
-		bat.Clean(db.txn.proc.Mp())
+	if err = db.op.GetWorkspace().(*Transaction).WriteBatch(ALTER, 0, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
+		catalog.MO_CATALOG, catalog.MO_TABLES, bat, db.op.GetWorkspace().(*Transaction).tnStores[0], -1, false, false); err != nil {
+		bat.Clean(db.op.GetWorkspace().(*Transaction).proc.Mp())
 		return err
 	}
 
@@ -1483,7 +1510,7 @@ func (tbl *txnTable) TableRenameInTxn(ctx context.Context, constraint [][]byte) 
 	newtbl := new(txnTable)
 	newtbl.accountId = accountId
 
-	newRowId, err := db.txn.allocateID(ctx)
+	newRowId, err := db.op.GetWorkspace().(*Transaction).allocateID(ctx)
 	if err != nil {
 		return err
 	}
@@ -1507,14 +1534,14 @@ func (tbl *txnTable) TableRenameInTxn(ctx context.Context, constraint [][]byte) 
 	{
 		sql := getSql(ctx)
 		bat, err := genCreateTableTuple(newtbl, sql, accountId, userId, roleId, newtbl.tableName,
-			newtbl.tableId, db.databaseId, db.databaseName, newtbl.rowid, true, db.txn.proc.Mp())
+			newtbl.tableId, db.databaseId, db.databaseName, newtbl.rowid, true, db.op.GetWorkspace().(*Transaction).proc.Mp())
 		if err != nil {
 			return err
 		}
-		for _, store := range db.txn.tnStores {
-			if err := db.txn.WriteBatch(INSERT_TXN, 0, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
+		for _, store := range db.op.GetWorkspace().(*Transaction).tnStores {
+			if err := db.op.GetWorkspace().(*Transaction).WriteBatch(INSERT_TXN, 0, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
 				catalog.MO_CATALOG, catalog.MO_TABLES, bat, store, -1, true, false); err != nil {
-				bat.Clean(db.txn.proc.Mp())
+				bat.Clean(db.op.GetWorkspace().(*Transaction).proc.Mp())
 				return err
 			}
 		}
@@ -1527,15 +1554,15 @@ func (tbl *txnTable) TableRenameInTxn(ctx context.Context, constraint [][]byte) 
 
 	newtbl.rowids = make([]types.Rowid, len(cols))
 	for i, col := range cols {
-		newtbl.rowids[i] = db.txn.genRowId()
-		bat, err := genCreateColumnTuple(col, newtbl.rowids[i], true, db.txn.proc.Mp())
+		newtbl.rowids[i] = db.op.GetWorkspace().(*Transaction).genRowId()
+		bat, err := genCreateColumnTuple(col, newtbl.rowids[i], true, db.op.GetWorkspace().(*Transaction).proc.Mp())
 		if err != nil {
 			return err
 		}
-		for _, store := range db.txn.tnStores {
-			if err := db.txn.WriteBatch(INSERT_TXN, 0, catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID,
+		for _, store := range db.op.GetWorkspace().(*Transaction).tnStores {
+			if err := db.op.GetWorkspace().(*Transaction).WriteBatch(INSERT_TXN, 0, catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID,
 				catalog.MO_CATALOG, catalog.MO_COLUMNS, bat, store, -1, true, false); err != nil {
-				bat.Clean(db.txn.proc.Mp())
+				bat.Clean(db.op.GetWorkspace().(*Transaction).proc.Mp())
 				return err
 			}
 		}
@@ -1549,8 +1576,8 @@ func (tbl *txnTable) TableRenameInTxn(ctx context.Context, constraint [][]byte) 
 	}
 
 	newkey := genTableKey(accountId, newtbl.tableName, databaseId)
-	newtbl.db.txn.addCreateTable(newkey, newtbl)
-	newtbl.db.txn.deletedTableMap.Delete(newkey)
+	newtbl.db.op.GetWorkspace().(*Transaction).addCreateTable(newkey, newtbl)
+	newtbl.db.op.GetWorkspace().(*Transaction).deletedTableMap.Delete(newkey)
 	return nil
 }
 
@@ -1594,10 +1621,10 @@ func (tbl *txnTable) Write(ctx context.Context, bat *batch.Batch) error {
 	}
 	// for writing S3 Block
 	if bat.Attrs[0] == catalog.BlockMeta_BlockInfo {
-		tbl.db.txn.hasS3Op.Store(true)
+		tbl.db.op.GetWorkspace().(*Transaction).hasS3Op.Store(true)
 		//bocks maybe come from different S3 object, here we just need to make sure fileName is not Nil.
 		fileName := objectio.DecodeBlockInfo(bat.Vecs[0].GetBytesAt(0)).MetaLocation().Name().String()
-		return tbl.db.txn.WriteFile(
+		return tbl.db.op.GetWorkspace().(*Transaction).WriteFile(
 			INSERT,
 			tbl.accountId,
 			tbl.db.databaseId,
@@ -1606,13 +1633,13 @@ func (tbl *txnTable) Write(ctx context.Context, bat *batch.Batch) error {
 			tbl.tableName,
 			fileName,
 			bat,
-			tbl.db.txn.tnStores[0])
+			tbl.db.op.GetWorkspace().(*Transaction).tnStores[0])
 	}
-	ibat, err := util.CopyBatch(bat, tbl.db.txn.proc)
+	ibat, err := util.CopyBatch(bat, tbl.db.op.GetWorkspace().(*Transaction).proc)
 	if err != nil {
 		return err
 	}
-	if err := tbl.db.txn.WriteBatch(
+	if err := tbl.db.op.GetWorkspace().(*Transaction).WriteBatch(
 		INSERT,
 		tbl.accountId,
 		tbl.db.databaseId,
@@ -1620,14 +1647,14 @@ func (tbl *txnTable) Write(ctx context.Context, bat *batch.Batch) error {
 		tbl.db.databaseName,
 		tbl.tableName,
 		ibat,
-		tbl.db.txn.tnStores[0],
+		tbl.db.op.GetWorkspace().(*Transaction).tnStores[0],
 		tbl.primaryIdx,
 		false,
 		false); err != nil {
-		ibat.Clean(tbl.db.txn.proc.Mp())
+		ibat.Clean(tbl.db.op.GetWorkspace().(*Transaction).proc.Mp())
 		return err
 	}
-	return tbl.db.txn.dumpBatch(tbl.db.txn.GetSnapshotWriteOffset())
+	return tbl.db.op.GetWorkspace().(*Transaction).dumpBatch(tbl.db.op.GetWorkspace().(*Transaction).GetSnapshotWriteOffset())
 }
 
 func (tbl *txnTable) Update(ctx context.Context, bat *batch.Batch) error {
@@ -1649,37 +1676,37 @@ func (tbl *txnTable) EnhanceDelete(bat *batch.Batch, name string) error {
 	}
 	switch typ {
 	case deletion.FlushDeltaLoc:
-		tbl.db.txn.hasS3Op.Store(true)
+		tbl.db.op.GetWorkspace().(*Transaction).hasS3Op.Store(true)
 		location, err := blockio.EncodeLocationFromString(bat.Vecs[0].GetStringAt(0))
 		if err != nil {
 			return err
 		}
 		fileName := location.Name().String()
-		copBat, err := util.CopyBatch(bat, tbl.db.txn.proc)
+		copBat, err := util.CopyBatch(bat, tbl.db.op.GetWorkspace().(*Transaction).proc)
 		if err != nil {
 			return err
 		}
-		if err := tbl.db.txn.WriteFile(DELETE, tbl.accountId, tbl.db.databaseId, tbl.tableId,
-			tbl.db.databaseName, tbl.tableName, fileName, copBat, tbl.db.txn.tnStores[0]); err != nil {
+		if err := tbl.db.op.GetWorkspace().(*Transaction).WriteFile(DELETE, tbl.accountId, tbl.db.databaseId, tbl.tableId,
+			tbl.db.databaseName, tbl.tableName, fileName, copBat, tbl.db.op.GetWorkspace().(*Transaction).tnStores[0]); err != nil {
 			return err
 		}
 
-		tbl.db.txn.blockId_tn_delete_metaLoc_batch.RWMutex.Lock()
-		tbl.db.txn.blockId_tn_delete_metaLoc_batch.data[*blkId] =
-			append(tbl.db.txn.blockId_tn_delete_metaLoc_batch.data[*blkId], copBat)
-		tbl.db.txn.blockId_tn_delete_metaLoc_batch.RWMutex.Unlock()
+		tbl.db.op.GetWorkspace().(*Transaction).blockId_tn_delete_metaLoc_batch.RWMutex.Lock()
+		tbl.db.op.GetWorkspace().(*Transaction).blockId_tn_delete_metaLoc_batch.data[*blkId] =
+			append(tbl.db.op.GetWorkspace().(*Transaction).blockId_tn_delete_metaLoc_batch.data[*blkId], copBat)
+		tbl.db.op.GetWorkspace().(*Transaction).blockId_tn_delete_metaLoc_batch.RWMutex.Unlock()
 
 	case deletion.CNBlockOffset:
 	case deletion.RawBatchOffset:
 	case deletion.RawRowIdBatch:
 		logutil.Infof("data return by remote pipeline\n")
-		bat = tbl.db.txn.deleteBatch(bat, tbl.db.databaseId, tbl.tableId)
+		bat = tbl.db.op.GetWorkspace().(*Transaction).deleteBatch(bat, tbl.db.databaseId, tbl.tableId)
 		if bat.RowCount() == 0 {
 			return nil
 		}
-		tbl.writeTnPartition(tbl.db.txn.proc.Ctx, bat)
+		tbl.writeTnPartition(tbl.db.op.GetWorkspace().(*Transaction).proc.Ctx, bat)
 	default:
-		tbl.db.txn.hasS3Op.Store(true)
+		tbl.db.op.GetWorkspace().(*Transaction).hasS3Op.Store(true)
 		panic(moerr.NewInternalErrorNoCtx("Unsupport type for table delete %d", typ))
 	}
 	return nil
@@ -1691,7 +1718,7 @@ func (tbl *txnTable) compaction(
 	s3writer := &colexec.S3Writer{}
 	s3writer.SetTableName(tbl.tableName)
 	s3writer.SetSchemaVer(tbl.version)
-	_, err := s3writer.GenerateWriter(tbl.db.txn.proc)
+	_, err := s3writer.GenerateWriter(tbl.db.op.GetWorkspace().(*Transaction).proc)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -1712,13 +1739,13 @@ func (tbl *txnTable) compaction(
 	for blkmetaloc, deletes := range compactedBlks {
 		//blk.MetaLocation()
 		bat, e := blockio.BlockCompactionRead(
-			tbl.db.txn.proc.Ctx,
+			tbl.db.op.GetWorkspace().(*Transaction).proc.Ctx,
 			blkmetaloc[:],
 			deletes,
 			tbl.seqnums,
 			tbl.typs,
-			tbl.db.txn.engine.fs,
-			tbl.db.txn.proc.GetMPool())
+			tbl.db.op.GetWorkspace().(*Transaction).engine.fs,
+			tbl.db.op.GetWorkspace().(*Transaction).proc.GetMPool())
 		if e != nil {
 			return nil, nil, e
 		}
@@ -1726,10 +1753,10 @@ func (tbl *txnTable) compaction(
 			continue
 		}
 		s3writer.WriteBlock(bat)
-		bat.Clean(tbl.db.txn.proc.GetMPool())
+		bat.Clean(tbl.db.op.GetWorkspace().(*Transaction).proc.GetMPool())
 
 	}
-	createdBlks, stats, err := s3writer.WriteEndBlocks(tbl.db.txn.proc)
+	createdBlks, stats, err := s3writer.WriteEndBlocks(tbl.db.op.GetWorkspace().(*Transaction).proc)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -1741,7 +1768,7 @@ func (tbl *txnTable) Delete(ctx context.Context, bat *batch.Batch, name string) 
 	if name != catalog.Row_ID {
 		return tbl.EnhanceDelete(bat, name)
 	}
-	bat = tbl.db.txn.deleteBatch(bat, tbl.db.databaseId, tbl.tableId)
+	bat = tbl.db.op.GetWorkspace().(*Transaction).deleteBatch(bat, tbl.db.databaseId, tbl.tableId)
 	if bat.RowCount() == 0 {
 		return nil
 	}
@@ -1749,13 +1776,13 @@ func (tbl *txnTable) Delete(ctx context.Context, bat *batch.Batch, name string) 
 }
 
 func (tbl *txnTable) writeTnPartition(ctx context.Context, bat *batch.Batch) error {
-	ibat, err := util.CopyBatch(bat, tbl.db.txn.proc)
+	ibat, err := util.CopyBatch(bat, tbl.db.op.GetWorkspace().(*Transaction).proc)
 	if err != nil {
 		return err
 	}
-	if err := tbl.db.txn.WriteBatch(DELETE, tbl.accountId, tbl.db.databaseId, tbl.tableId,
-		tbl.db.databaseName, tbl.tableName, ibat, tbl.db.txn.tnStores[0], tbl.primaryIdx, false, false); err != nil {
-		ibat.Clean(tbl.db.txn.proc.Mp())
+	if err := tbl.db.op.GetWorkspace().(*Transaction).WriteBatch(DELETE, tbl.accountId, tbl.db.databaseId, tbl.tableId,
+		tbl.db.databaseName, tbl.tableName, ibat, tbl.db.op.GetWorkspace().(*Transaction).tnStores[0], tbl.primaryIdx, false, false); err != nil {
+		ibat.Clean(tbl.db.op.GetWorkspace().(*Transaction).proc.Mp())
 		return err
 	}
 	return nil
@@ -1855,7 +1882,7 @@ func (tbl *txnTable) makeEncodedPK(
 			cnt := getValidCompositePKCnt(pkVals)
 			if cnt != 0 {
 				var packer *types.Packer
-				put := tbl.db.txn.engine.packerPool.Get(&packer)
+				put := tbl.db.op.GetWorkspace().(*Transaction).engine.packerPool.Get(&packer)
 				for i := 0; i < cnt; i++ {
 					serialTupleByConstExpr(pkVals[i], packer)
 				}
@@ -1876,7 +1903,7 @@ func (tbl *txnTable) makeEncodedPK(
 			}
 			if ok {
 				var packer *types.Packer
-				put := tbl.db.txn.engine.packerPool.Get(&packer)
+				put := tbl.db.op.GetWorkspace().(*Transaction).engine.packerPool.Get(&packer)
 				encodedPK = logtailreplay.EncodePrimaryKey(v, packer)
 				put.Put()
 			}
@@ -1921,7 +1948,7 @@ func (tbl *txnTable) newBlockReader(
 	proc *process.Process,
 	orderedScan bool) ([]engine.Reader, error) {
 	rds := make([]engine.Reader, num)
-	ts := tbl.db.txn.op.SnapshotTS()
+	ts := tbl.db.op.SnapshotTS()
 	tableDef := tbl.GetTableDef(ctx)
 
 	if len(blkInfos) < num || len(blkInfos) == 1 {
@@ -1932,7 +1959,7 @@ func (tbl *txnTable) newBlockReader(
 				ts,
 				[]*objectio.BlockInfo{blk},
 				expr,
-				tbl.db.txn.engine.fs,
+				tbl.db.op.GetWorkspace().(*Transaction).engine.fs,
 				proc,
 			)
 		}
@@ -1943,7 +1970,7 @@ func (tbl *txnTable) newBlockReader(
 	}
 
 	fs, err := fileservice.Get[fileservice.FileService](
-		tbl.db.txn.engine.fs,
+		tbl.db.op.GetWorkspace().(*Transaction).engine.fs,
 		defines.SharedFileServiceName)
 	if err != nil {
 		return nil, err
@@ -1982,7 +2009,7 @@ func (tbl *txnTable) newReader(
 	expr *plan.Expr,
 	dirtyBlks []*objectio.BlockInfo,
 ) ([]engine.Reader, error) {
-	txn := tbl.db.txn
+	txn := tbl.db.op.GetWorkspace().(*Transaction)
 	ts := txn.op.SnapshotTS()
 	fs := txn.engine.fs
 	state, err := tbl.getPartitionState(ctx)
@@ -2102,16 +2129,18 @@ func (tbl *txnTable) newReader(
 
 // get the table's snapshot.
 // it is only initialized once for a transaction and will not change.
+// TODO::get partition state for snapshot txn table.
 func (tbl *txnTable) getPartitionState(ctx context.Context) (*logtailreplay.PartitionState, error) {
 	if tbl._partState.Load() == nil {
 		if err := tbl.updateLogtail(ctx); err != nil {
 			return nil, err
 		}
-		tbl._partState.Store(tbl.db.txn.engine.getPartition(tbl.db.databaseId, tbl.tableId).Snapshot())
+		tbl._partState.Store(tbl.db.op.GetWorkspace().(*Transaction).engine.getPartition(tbl.db.databaseId, tbl.tableId).Snapshot())
 	}
 	return tbl._partState.Load(), nil
 }
 
+// TODO::update snapshot logtails by pull.
 func (tbl *txnTable) UpdateObjectInfos(ctx context.Context) (err error) {
 	tbl.tnList = []int{0}
 
@@ -2119,7 +2148,7 @@ func (tbl *txnTable) UpdateObjectInfos(ctx context.Context) (err error) {
 	if err != nil {
 		return err
 	}
-	_, created := tbl.db.txn.createMap.Load(genTableKey(accountId, tbl.tableName, tbl.db.databaseId))
+	_, created := tbl.db.op.GetWorkspace().(*Transaction).createMap.Load(genTableKey(accountId, tbl.tableName, tbl.db.databaseId))
 	// check if the table is not created in this txn, and the block infos are not updated, then update:
 	// 1. update logtail
 	// 2. generate block infos
@@ -2136,7 +2165,7 @@ func (tbl *txnTable) UpdateObjectInfos(ctx context.Context) (err error) {
 func (tbl *txnTable) updateLogtail(ctx context.Context) (err error) {
 	defer func() {
 		if err == nil {
-			tbl.db.txn.engine.globalStats.notifyLogtailUpdate(tbl.tableId)
+			tbl.db.op.GetWorkspace().(*Transaction).engine.globalStats.notifyLogtailUpdate(tbl.tableId)
 			tbl.logtailUpdated.Store(true)
 		}
 	}()
@@ -2150,7 +2179,7 @@ func (tbl *txnTable) updateLogtail(ctx context.Context) (err error) {
 	if err != nil {
 		return err
 	}
-	if _, created := tbl.db.txn.createMap.Load(
+	if _, created := tbl.db.op.GetWorkspace().(*Transaction).createMap.Load(
 		genTableKey(accountId, tbl.tableName, tbl.db.databaseId)); created {
 		return
 	}
@@ -2184,10 +2213,11 @@ func (tbl *txnTable) updateLogtail(ctx context.Context) (err error) {
 		tableId = tbl.oldTableId
 	}
 
-	if err = tbl.db.txn.engine.UpdateOfPush(ctx, tbl.db.databaseId, tableId, tbl.db.txn.op.SnapshotTS()); err != nil {
+	if err = tbl.db.op.GetWorkspace().(*Transaction).engine.UpdateOfPush(ctx, tbl.db.databaseId, tableId,
+		tbl.db.op.SnapshotTS()); err != nil {
 		return
 	}
-	if _, err = tbl.db.txn.engine.lazyLoad(ctx, tbl); err != nil {
+	if _, err = tbl.db.op.GetWorkspace().(*Transaction).engine.lazyLoad(ctx, tbl); err != nil {
 		return
 	}
 
@@ -2202,7 +2232,7 @@ func (tbl *txnTable) PKPersistedBetween(
 ) (bool, error) {
 
 	ctx := tbl.proc.Load().Ctx
-	fs := tbl.db.txn.engine.fs
+	fs := tbl.db.op.GetWorkspace().(*Transaction).engine.fs
 	primaryIdx := tbl.primaryIdx
 
 	var (
@@ -2347,14 +2377,14 @@ func (tbl *txnTable) PrimaryKeysMayBeModified(
 	from types.TS,
 	to types.TS,
 	keysVector *vector.Vector) (bool, error) {
-	part, err := tbl.db.txn.engine.lazyLoad(ctx, tbl)
+	part, err := tbl.db.op.GetWorkspace().(*Transaction).engine.lazyLoad(ctx, tbl)
 	if err != nil {
 		return false, err
 	}
 
 	snap := part.Snapshot()
 	var packer *types.Packer
-	put := tbl.db.txn.engine.packerPool.Get(&packer)
+	put := tbl.db.op.GetWorkspace().(*Transaction).engine.packerPool.Get(&packer)
 	defer put.Put()
 	packer.Reset()
 
@@ -2439,7 +2469,7 @@ func (tbl *txnTable) transferDeletes(
 		}
 	}
 
-	for _, entry := range tbl.db.txn.writes {
+	for _, entry := range tbl.db.op.GetWorkspace().(*Transaction).writes {
 		if entry.isGeneratedByTruncate() || entry.tableId != tbl.tableId {
 			continue
 		}
@@ -2459,7 +2489,7 @@ func (tbl *txnTable) transferDeletes(
 					if ok {
 						newBlockID, _ := newId.Decode()
 						trace.GetService().ApplyTransferRowID(
-							tbl.db.txn.op.Txn().ID,
+							tbl.db.op.Txn().ID,
 							tbl.tableId,
 							rowids[i][:],
 							newId[:],
@@ -2513,7 +2543,7 @@ func (tbl *txnTable) readNewRowid(vec *vector.Vector, row int,
 		location := blk.MetaLocation()
 		if hit, ok := objFilterMap[*location.ShortName()]; !ok {
 			if objMeta, err = objectio.FastLoadObjectMeta(
-				tbl.proc.Load().Ctx, &location, false, tbl.db.txn.engine.fs,
+				tbl.proc.Load().Ctx, &location, false, tbl.db.op.GetWorkspace().(*Transaction).engine.fs,
 			); err != nil {
 				return rowid, false, err
 			}
@@ -2534,14 +2564,15 @@ func (tbl *txnTable) readNewRowid(vec *vector.Vector, row int,
 		}
 		// rowid + pk
 		bat, err := blockio.BlockRead(
-			tbl.proc.Load().Ctx, &blk, nil, columns, colTypes, tbl.db.txn.op.SnapshotTS(),
+			tbl.proc.Load().Ctx, &blk, nil, columns, colTypes,
+			tbl.db.op.SnapshotTS(),
 			nil, nil, nil,
-			tbl.db.txn.engine.fs, tbl.proc.Load().Mp(), tbl.proc.Load(), fileservice.Policy(0),
+			tbl.db.op.GetWorkspace().(*Transaction).engine.fs, tbl.proc.Load().Mp(), tbl.proc.Load(), fileservice.Policy(0),
 		)
 		if err != nil {
 			return rowid, false, err
 		}
-		vec, err := colexec.EvalExpressionOnce(tbl.db.txn.proc, filter, []*batch.Batch{bat})
+		vec, err := colexec.EvalExpressionOnce(tbl.db.op.GetWorkspace().(*Transaction).proc, filter, []*batch.Batch{bat})
 		if err != nil {
 			return rowid, false, err
 		}

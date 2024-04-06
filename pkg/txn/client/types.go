@@ -16,6 +16,7 @@ package client
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -100,6 +101,8 @@ type TxnState struct {
 type TxnOperator interface {
 	// GetOverview returns txn overview
 	GetOverview() TxnOverview
+
+	CloneSnapshotOp(snapshot types.TS) TxnOperator
 
 	// Txn returns the current txn metadata
 	Txn() txn.TxnMeta

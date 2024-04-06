@@ -16,6 +16,7 @@ package engine
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -349,6 +350,10 @@ func (o *testOperator) Snapshot() ([]byte, error) {
 
 func (o *testOperator) Txn() txn.TxnMeta {
 	return txn.TxnMeta{}
+}
+
+func (o *testOperator) CloneSnapshotOp(snapshot types.TS) client.TxnOperator {
+	panic("should not call")
 }
 
 func (o *testOperator) PKDedupCount() int {

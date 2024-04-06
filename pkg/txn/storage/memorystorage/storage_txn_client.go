@@ -17,6 +17,7 @@ package memorystorage
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -103,6 +104,10 @@ func (*StorageTxnClient) CNBasedConsistencyEnabled() bool        { panic("unimpl
 type StorageTxnOperator struct {
 	storages map[string]*Storage
 	meta     txn.TxnMeta
+}
+
+func (s *StorageTxnOperator) CloneSnapshotOp(snapshot types.TS) client.TxnOperator {
+	panic("unimplemented")
 }
 
 func (s *StorageTxnOperator) EnterRunSql() {

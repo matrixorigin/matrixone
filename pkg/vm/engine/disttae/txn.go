@@ -493,7 +493,7 @@ func (txn *Transaction) dumpBatchLocked(offset int) error {
 		fileName := objectio.DecodeBlockInfo(
 			blockInfo.Vecs[0].GetBytesAt(0)).
 			MetaLocation().Name().String()
-		err = table.db.txn.WriteFileLocked(
+		err = table.db.op.GetWorkspace().(*Transaction).WriteFileLocked(
 			INSERT,
 			table.accountId,
 			table.db.databaseId,
@@ -502,7 +502,7 @@ func (txn *Transaction) dumpBatchLocked(offset int) error {
 			table.tableName,
 			fileName,
 			blockInfo,
-			table.db.txn.tnStores[0],
+			table.db.op.GetWorkspace().(*Transaction).tnStores[0],
 		)
 		if err != nil {
 			return err
@@ -855,7 +855,7 @@ func (txn *Transaction) compactionBlksLocked() error {
 					bat.GetVector(0),
 					objectio.EncodeBlockInfo(blkInfo),
 					false,
-					tbl.db.txn.proc.GetMPool())
+					tbl.db.op.GetWorkspace().(*Transaction).proc.GetMPool())
 			}
 
 			// append the object stats to bat
@@ -864,14 +864,14 @@ func (txn *Transaction) compactionBlksLocked() error {
 					continue
 				}
 				if err = vector.AppendBytes(bat.Vecs[1], stats[idx].Marshal(),
-					false, tbl.db.txn.proc.GetMPool()); err != nil {
+					false, tbl.db.op.GetWorkspace().(*Transaction).proc.GetMPool()); err != nil {
 					return err
 				}
 			}
 
 			bat.SetRowCount(len(createdBlks))
 			defer func() {
-				bat.Clean(tbl.db.txn.proc.GetMPool())
+				bat.Clean(tbl.db.op.GetWorkspace().(*Transaction).proc.GetMPool())
 			}()
 
 			err := txn.WriteFileLocked(
@@ -883,7 +883,7 @@ func (txn *Transaction) compactionBlksLocked() error {
 				tbl.tableName,
 				createdBlks[0].MetaLocation().Name().String(),
 				bat,
-				tbl.db.txn.tnStores[0],
+				tbl.db.op.GetWorkspace().(*Transaction).tnStores[0],
 			)
 			if err != nil {
 				return err
@@ -969,6 +969,7 @@ func (txn *Transaction) forEachTableWrites(databaseId uint64, tableId uint64, of
 // getCachedTable returns the cached table in this transaction if it exists, nil otherwise.
 // Before it gets the cached table, it checks whether the table is deleted by another
 // transaction by go through the delete tables slice, and advance its cachedIndex.
+// TODO::get snapshot table from cache for snapshot read
 func (txn *Transaction) getCachedTable(
 	k tableKey,
 	snapshotTS timestamp.Timestamp,
@@ -1113,13 +1114,13 @@ func (txn *Transaction) transferDeletesLocked() error {
 				return err
 			}
 			deleteObjs, createObjs := state.GetChangedObjsBetween(types.TimestampToTS(ts),
-				types.TimestampToTS(tbl.db.txn.op.SnapshotTS()))
+				types.TimestampToTS(tbl.db.op.SnapshotTS()))
 
 			trace.GetService().ApplyFlush(
-				tbl.db.txn.op.Txn().ID,
+				tbl.db.op.Txn().ID,
 				tbl.tableId,
 				ts,
-				tbl.db.txn.op.SnapshotTS(),
+				tbl.db.op.SnapshotTS(),
 				len(deleteObjs))
 
 			if len(deleteObjs) > 0 {

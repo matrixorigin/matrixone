@@ -152,7 +152,7 @@ func (e *Engine) Create(ctx context.Context, name string, op client.TxnOperator)
 		return err
 	}
 	txn.databaseMap.Store(genDatabaseKey(accountId, name), &txnDatabase{
-		txn:          txn,
+		op:           op,
 		databaseId:   databaseId,
 		databaseName: name,
 		rowId:        rowId,
@@ -174,7 +174,7 @@ func (e *Engine) DatabaseByAccountID(
 	}
 	if name == catalog.MO_CATALOG {
 		db := &txnDatabase{
-			txn:          txn,
+			op:           op,
 			databaseId:   catalog.MO_CATALOG_ID,
 			databaseName: name,
 		}
@@ -189,7 +189,7 @@ func (e *Engine) DatabaseByAccountID(
 		return nil, moerr.GetOkExpectedEOB()
 	}
 	return &txnDatabase{
-		txn:               txn,
+		op:                op,
 		databaseName:      name,
 		databaseId:        key.Id,
 		rowId:             key.Rowid,
@@ -214,7 +214,7 @@ func (e *Engine) Database(ctx context.Context, name string,
 	}
 	if name == catalog.MO_CATALOG {
 		db := &txnDatabase{
-			txn:          txn,
+			op:           op,
 			databaseId:   catalog.MO_CATALOG_ID,
 			databaseName: name,
 		}
@@ -229,7 +229,7 @@ func (e *Engine) Database(ctx context.Context, name string,
 		return nil, moerr.GetOkExpectedEOB()
 	}
 	return &txnDatabase{
-		txn:               txn,
+		op:                op,
 		databaseName:      name,
 		databaseId:        key.Id,
 		rowId:             key.Rowid,
@@ -326,7 +326,7 @@ func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tab
 	switch tableId {
 	case catalog.MO_DATABASE_ID:
 		db := &txnDatabase{
-			txn:          txn,
+			op:           op,
 			databaseId:   catalog.MO_CATALOG_ID,
 			databaseName: catalog.MO_CATALOG,
 		}
@@ -335,7 +335,7 @@ func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tab
 			db.openSysTable(nil, tableId, catalog.MO_DATABASE, defs), nil
 	case catalog.MO_TABLES_ID:
 		db := &txnDatabase{
-			txn:          txn,
+			op:           op,
 			databaseId:   catalog.MO_CATALOG_ID,
 			databaseName: catalog.MO_CATALOG,
 		}
@@ -344,7 +344,7 @@ func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tab
 			db.openSysTable(nil, tableId, catalog.MO_TABLES, defs), nil
 	case catalog.MO_COLUMNS_ID:
 		db := &txnDatabase{
-			txn:          txn,
+			op:           op,
 			databaseId:   catalog.MO_CATALOG_ID,
 			databaseName: catalog.MO_CATALOG,
 		}
@@ -449,7 +449,7 @@ func (e *Engine) Delete(ctx context.Context, name string, op client.TxnOperator)
 			return moerr.GetOkExpectedEOB()
 		}
 		db = &txnDatabase{
-			txn:          txn,
+			op:           op,
 			databaseName: name,
 			databaseId:   key.Id,
 			rowId:        key.Rowid,

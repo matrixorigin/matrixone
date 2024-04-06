@@ -590,12 +590,12 @@ func (r *blockMergeReader) Close() error {
 
 func (r *blockMergeReader) prefetchDeletes() error {
 	//load delta locations for r.blocks.
-	r.table.db.txn.blockId_tn_delete_metaLoc_batch.RLock()
-	defer r.table.db.txn.blockId_tn_delete_metaLoc_batch.RUnlock()
+	r.table.db.op.GetWorkspace().(*Transaction).blockId_tn_delete_metaLoc_batch.RLock()
+	defer r.table.db.op.GetWorkspace().(*Transaction).blockId_tn_delete_metaLoc_batch.RUnlock()
 
 	if !r.loaded {
 		for _, info := range r.blks {
-			bats, ok := r.table.db.txn.blockId_tn_delete_metaLoc_batch.data[info.BlockID]
+			bats, ok := r.table.db.op.GetWorkspace().(*Transaction).blockId_tn_delete_metaLoc_batch.data[info.BlockID]
 
 			if !ok {
 				return nil
@@ -691,22 +691,25 @@ func (r *blockMergeReader) loadDeletes(ctx context.Context, cols []string) error
 
 	//TODO:: if r.table.writes is a map , the time complexity could be O(1)
 	//load deletes from txn.writes for the specified block
-	r.table.db.txn.forEachTableWrites(r.table.db.databaseId, r.table.tableId, r.table.db.txn.GetSnapshotWriteOffset(), func(entry Entry) {
-		if entry.isGeneratedByTruncate() {
-			return
-		}
-		if (entry.typ == DELETE || entry.typ == DELETE_TXN) && entry.fileName == "" {
-			vs := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
-			for _, v := range vs {
-				id, offset := v.Decode()
-				if id == info.BlockID {
-					r.buffer = append(r.buffer, int64(offset))
+	r.table.db.op.GetWorkspace().(*Transaction).forEachTableWrites(
+		r.table.db.databaseId,
+		r.table.tableId,
+		r.table.db.op.GetWorkspace().(*Transaction).GetSnapshotWriteOffset(), func(entry Entry) {
+			if entry.isGeneratedByTruncate() {
+				return
+			}
+			if (entry.typ == DELETE || entry.typ == DELETE_TXN) && entry.fileName == "" {
+				vs := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
+				for _, v := range vs {
+					id, offset := v.Decode()
+					if id == info.BlockID {
+						r.buffer = append(r.buffer, int64(offset))
+					}
 				}
 			}
-		}
-	})
+		})
 	//load deletes from txn.deletedBlocks.
-	txn := r.table.db.txn
+	txn := r.table.db.op.GetWorkspace().(*Transaction)
 	txn.deletedBlocks.getDeletedOffsetsByBlock(&info.BlockID, &r.buffer)
 	return nil
 }

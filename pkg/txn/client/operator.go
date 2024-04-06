@@ -20,6 +20,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -207,6 +208,8 @@ type txnOperator struct {
 	lockService          lockservice.LockService
 	sequence             atomic.Uint64
 	createTs             timestamp.Timestamp
+	//for read only snapshot txn operator.
+	snapshotOps []*txnOperator
 
 	mu struct {
 		sync.RWMutex
@@ -248,6 +251,10 @@ func newTxnOperator(
 	} else {
 		v2.TxnInternalCounter.Inc()
 	}
+	return tc
+}
+
+func (tc *txnOperator) CloneSnapshotOp(snapshot types.TS) TxnOperator {
 	return tc
 }
 
