@@ -2125,4 +2125,43 @@ mix01    col3    DATE    YES
 mix01    col4    VARCHAR    YES
 mix01    col5    INT    YES
 drop table mix01;
+drop table if exists table01;
+begin;
+create table table01(col1 int, col2 decimal);
+insert into table01 values(100,200);
+alter table table01 change column col1 NewCol1 float;
+commit;
+select * from table01;
+newcol1    col2
+100.0    200
+select newcol1 from table01;
+newcol1
+100.0
+drop table table01;
+drop table if exists t1;
+create table t1(name varchar(25));
+insert into t1 values ('A'),('B'),('C');
+select * from t1;
+name
+A
+B
+C
+alter table t1 modify column name enum('A','B');
+internal error: convert to MySQL enum failed: item C is not in enum [A B]
+alter table t1 modify column name enum('A','B','C');
+alter table t1 modify column name enum('A','B','C','D'), add column age int;
+select * from t1;
+name    age
+A    null
+B    null
+C    null
+insert into t1 values('D', 29);
+show create table t1;
+Table    Create Table
+t1    CREATE TABLE `t1` (\n`name` ENUM('A','B','C','D') DEFAULT NULL,\n`age` INT DEFAULT NULL\n)
+desc t1;
+Field    Type    Null    Key    Default    Extra    Comment
+name    ENUM('A','B','C','D')    YES        null
+age    INT(32)    YES        null
+drop table t1;
 drop database db2;
