@@ -298,6 +298,9 @@ type Session struct {
 
 	// FromProxy denotes whether the session is dispatched from proxy
 	fromProxy bool
+	// If the connection is from proxy, client address is the real address of client.
+	clientAddr string
+	proxyAddr  string
 }
 
 func (ses *Session) ClearStmtProfile() {
@@ -2430,9 +2433,10 @@ func (ses *Session) StatusSession() *status.Session {
 				QueryType:     "",
 				SQLSourceType: "",
 				QueryStart:    time.Time{},
-				ClientHost:    ses.GetMysqlProtocol().Peer(),
+				ClientHost:    ses.clientAddr,
 				Role:          roleName,
 				FromProxy:     ses.fromProxy,
+				ProxyHost:     ses.proxyAddr,
 			}
 		}
 	}
@@ -2453,9 +2457,10 @@ func (ses *Session) StatusSession() *status.Session {
 		QueryType:     ses.GetQueryType(),
 		SQLSourceType: ses.GetSqlSourceType(),
 		QueryStart:    ses.GetQueryStart(),
-		ClientHost:    ses.GetMysqlProtocol().Peer(),
+		ClientHost:    ses.clientAddr,
 		Role:          roleName,
 		FromProxy:     ses.fromProxy,
+		ProxyHost:     ses.proxyAddr,
 	}
 }
 
