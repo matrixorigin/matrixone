@@ -38,4 +38,24 @@ var (
 	CheckRoleDurationHistogram        = acceptConnDurationHistogram.WithLabelValues("check-role")
 	CheckDbNameDurationHistogram      = acceptConnDurationHistogram.WithLabelValues("check-dbname")
 	InitGlobalSysVarDurationHistogram = acceptConnDurationHistogram.WithLabelValues("init-global-sys-var")
+
+	routineCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "frontend",
+			Name:      "routine_count",
+			Help:      "routine counter.",
+		}, []string{"label"})
+	CreatedRoutineCounter = routineCounter.WithLabelValues("created")
+	CloseRoutineCounter   = routineCounter.WithLabelValues("close")
+
+	requestCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "frontend",
+			Name:      "request_count",
+			Help:      "request counter.",
+		}, []string{"label"})
+	StartHandleRequestCounter = requestCounter.WithLabelValues("start-handle")
+	EndHandleRequestCounter   = requestCounter.WithLabelValues("end-handle")
 )
