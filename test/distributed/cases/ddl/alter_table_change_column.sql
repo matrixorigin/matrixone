@@ -1150,4 +1150,29 @@ show create table mix01;
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'mix01' and COLUMN_NAME not like '__mo%';
 drop table mix01;
 
+-- begin, alter table change column, commit, then select
+drop table if exists table01;
+begin;
+create table table01(col1 int, col2 decimal);
+insert into table01 values(100,200);
+alter table table01 change column col1 NewCol1 float;
+commit;
+select * from table01;
+select newcol1 from table01;
+drop table table01;
+
+-- alter table modify column of varchar to enum
+drop table if exists t1;
+create table t1(name varchar(25));
+insert into t1 values ('A'),('B'),('C');
+select * from t1;
+alter table t1 modify column name enum('A','B');
+alter table t1 modify column name enum('A','B','C');
+alter table t1 modify column name enum('A','B','C','D'), add column age int;
+select * from t1;
+insert into t1 values('D', 29);
+show create table t1;
+desc t1;
+drop table t1;
+
 drop database db2;

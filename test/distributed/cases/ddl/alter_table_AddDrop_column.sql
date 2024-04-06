@@ -573,4 +573,41 @@ drop table newRename;
 drop role role_r1;
 drop user role_u1;
 
+-- begin, alter table add/drop column, commit, then select
+drop table if exists table01;
+begin;
+create table table01(col1 int, col2 char);
+insert into table01 values(1,'a');
+alter table table01 add column col3 int;
+commit;
+select * from table01;
+select col1 from table01;
+drop table table01;
+
+drop table if exists table02;
+begin;
+create table table02(col1 int, col2 char);
+insert into table02 values(1,'a');
+alter table table02 drop column col2;
+commit;
+select * from table02;
+select col1 from table02;
+drop table table02;
+
+-- alter table add enum column
+drop table if exists enum01;
+create table enum01 (id int);
+insert into enum01 values (1);
+alter table enum01 add column name enum ('A','B','C');
+show create table enum01;
+desc enum01;
+select * from enum01;
+insert into enum01 values (2,'B');
+insert into enum01 values (3,'D');
+select * from enum01;
+alter table enum01 drop column name;
+show create table enum01;
+select * from enum01;
+drop table enum01;
+
 drop database test;

@@ -666,19 +666,12 @@ func runBindChangedTests(
 }
 
 func waitBindDisabled(t *testing.T, alloc *lockTableAllocator, sid string) {
-	for {
-		b := alloc.getServiceBinds(sid)
-		if b == nil {
-			return
-		}
-		b.RLock()
-		disabled := b.disabled
-		b.RUnlock()
-		if disabled {
-			return
-		}
-		time.Sleep(time.Millisecond * 100)
+	b := alloc.getServiceBinds(sid)
+	if b == nil {
+		return
 	}
+	b.disable()
+	alloc.disableTableBinds(b)
 }
 
 func waitBindChanged(
