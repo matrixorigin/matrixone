@@ -20,7 +20,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -254,8 +253,16 @@ func newTxnOperator(
 	return tc
 }
 
-func (tc *txnOperator) CloneSnapshotOp(snapshot types.TS) TxnOperator {
-	return tc
+func (tc *txnOperator) CloneSnapshotOp(snapshot timestamp.Timestamp) TxnOperator {
+	op := &txnOperator{}
+	op.mu.txn = tc.mu.txn
+	op.mu.txn.SnapshotTS = snapshot
+	op.txnID = op.mu.txn.ID
+
+	op.workspace = tc.workspace.CloneSnapshotWS()
+
+	tc.snapshotOps = append(tc.snapshotOps, op)
+	return op
 }
 
 func newTxnOperatorWithSnapshot(

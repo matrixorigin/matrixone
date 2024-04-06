@@ -140,6 +140,11 @@ func (t *testWorkspace) GetSQLCount() uint64 {
 	panic("implement me")
 }
 
+func (t *testWorkspace) CloneSnapshotWS() client.Workspace {
+	//TODO implement me
+	panic("implement me")
+}
+
 func TestWorkspace(t *testing.T) {
 	convey.Convey("no panic", t, func() {
 		convey.So(

@@ -17,8 +17,6 @@ package memorystorage
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
@@ -106,7 +104,7 @@ type StorageTxnOperator struct {
 	meta     txn.TxnMeta
 }
 
-func (s *StorageTxnOperator) CloneSnapshotOp(snapshot types.TS) client.TxnOperator {
+func (s *StorageTxnOperator) CloneSnapshotOp(snapshot timestamp.Timestamp) client.TxnOperator {
 	panic("unimplemented")
 }
 

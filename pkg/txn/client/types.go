@@ -16,7 +16,6 @@ package client
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -102,7 +101,7 @@ type TxnOperator interface {
 	// GetOverview returns txn overview
 	GetOverview() TxnOverview
 
-	CloneSnapshotOp(snapshot types.TS) TxnOperator
+	CloneSnapshotOp(snapshot timestamp.Timestamp) TxnOperator
 
 	// Txn returns the current txn metadata
 	Txn() txn.TxnMeta
@@ -255,6 +254,8 @@ type Workspace interface {
 
 	IncrSQLCount()
 	GetSQLCount() uint64
+
+	CloneSnapshotWS() Workspace
 }
 
 // TxnOverview txn overview include meta and status

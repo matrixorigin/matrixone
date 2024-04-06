@@ -1139,3 +1139,7 @@ func (txn *Transaction) UpdateSnapshotWriteOffset() {
 	defer txn.Unlock()
 	txn.snapshotWriteOffset = len(txn.writes)
 }
+
+func (txn *Transaction) CloneSnapshotWS() client.Workspace {
+	panic("implement me")
+}

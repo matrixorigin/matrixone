@@ -9,7 +9,6 @@ import (
 	reflect "reflect"
 
 	gomock "github.com/golang/mock/gomock"
-	types "github.com/matrixorigin/matrixone/pkg/container/types"
 	lock "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	timestamp "github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	txn "github.com/matrixorigin/matrixone/pkg/pb/txn"
@@ -494,7 +493,7 @@ func (mr *MockTxnOperatorMockRecorder) ApplySnapshot(data interface{}) *gomock.C
 }
 
 // CloneSnapshotOp mocks base method.
-func (m *MockTxnOperator) CloneSnapshotOp(snapshot types.TS) client.TxnOperator {
+func (m *MockTxnOperator) CloneSnapshotOp(snapshot timestamp.Timestamp) client.TxnOperator {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "CloneSnapshotOp", snapshot)
 	ret0, _ := ret[0].(client.TxnOperator)
@@ -1012,6 +1011,20 @@ func (m *MockWorkspace) Adjust(writeOffset uint64) error {
 func (mr *MockWorkspaceMockRecorder) Adjust(writeOffset interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Adjust", reflect.TypeOf((*MockWorkspace)(nil).Adjust), writeOffset)
+}
+
+// CloneSnapshotWS mocks base method.
+func (m *MockWorkspace) CloneSnapshotWS() client.Workspace {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "CloneSnapshotWS")
+	ret0, _ := ret[0].(client.Workspace)
+	return ret0
+}
+
+// CloneSnapshotWS indicates an expected call of CloneSnapshotWS.
+func (mr *MockWorkspaceMockRecorder) CloneSnapshotWS() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CloneSnapshotWS", reflect.TypeOf((*MockWorkspace)(nil).CloneSnapshotWS))
 }
 
 // Commit mocks base method.
