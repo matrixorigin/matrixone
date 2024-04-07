@@ -26,20 +26,18 @@ func (p *PartitionState) PKExistInMemBetween(
 	to types.TS,
 	keys [][]byte,
 ) (bool, bool) {
-	iter := p.primaryIndex.Copy().Iter()
+	iter := p.primaryIndex.NewIter()
 	pivot := RowEntry{
 		Time: types.BuildTS(math.MaxInt64, math.MaxUint32),
 	}
 	idxEntry := &PrimaryIndexEntry{}
-	defer iter.Release()
+	defer iter.Close()
 
 	for _, key := range keys {
 
 		idxEntry.Bytes = key
 
-		for ok := iter.Seek(idxEntry); ok; ok = iter.Next() {
-
-			entry := iter.Item()
+		for entry, ok := iter.Seek(idxEntry); ok; entry, ok = iter.Next() {
 
 			if !bytes.Equal(entry.Bytes, key) {
 				break
@@ -83,7 +81,7 @@ func (p *PartitionState) PKExistInMemBetween(
 			rowIter.Close()
 		}
 
-		iter.First()
+		iter.Rewind()
 	}
 
 	p.shared.Lock()

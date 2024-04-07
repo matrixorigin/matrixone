@@ -51,7 +51,7 @@ type PartitionState struct {
 	checkpoints []string
 
 	// index
-	primaryIndex *btree.BTreeG[*PrimaryIndexEntry]
+	primaryIndex *pt.Treap[*PrimaryIndexEntry]
 	//for non-appendable block's memory deletes, used to getting dirty
 	// non-appendable blocks quickly.
 	//TODO::remove it
@@ -259,6 +259,18 @@ func (p *PrimaryIndexEntry) Less(than *PrimaryIndexEntry) bool {
 	return p.RowEntryID < than.RowEntryID
 }
 
+func (p *PrimaryIndexEntry) Compare(p2 *PrimaryIndexEntry) int {
+	if res := bytes.Compare(p.Bytes, p2.Bytes); res != 0 {
+		return res
+	}
+	if p.RowEntryID < p2.RowEntryID {
+		return -1
+	} else if p.RowEntryID > p2.RowEntryID {
+		return 1
+	}
+	return 0
+}
+
 type ObjectIndexByTSEntry struct {
 	Time         types.TS // insert or delete time
 	ShortObjName objectio.ObjectNameShort
@@ -304,7 +316,6 @@ func NewPartitionState(noData bool) *PartitionState {
 		dataObjects:           btree.NewBTreeGOptions((ObjectEntry).Less, opts),
 		dataObjectsByCreateTS: btree.NewBTreeGOptions((ObjectIndexByCreateTSEntry).Less, opts),
 		blockDeltas:           btree.NewBTreeGOptions((BlockDeltaEntry).Less, opts),
-		primaryIndex:          btree.NewBTreeGOptions((*PrimaryIndexEntry).Less, opts),
 		dirtyBlocks:           btree.NewBTreeGOptions((types.Blockid).Less, opts),
 		objectIndexByTS:       btree.NewBTreeGOptions((ObjectIndexByTSEntry).Less, opts),
 		shared:                new(sharedStates),
@@ -318,7 +329,7 @@ func (p *PartitionState) Copy() *PartitionState {
 		dataObjects:           p.dataObjects.Copy(),
 		dataObjectsByCreateTS: p.dataObjectsByCreateTS.Copy(),
 		blockDeltas:           p.blockDeltas.Copy(),
-		primaryIndex:          p.primaryIndex.Copy(),
+		primaryIndex:          p.primaryIndex,
 		noData:                p.noData,
 		dirtyBlocks:           p.dirtyBlocks.Copy(),
 		objectIndexByTS:       p.objectIndexByTS.Copy(),
@@ -546,10 +557,10 @@ func (p *PartitionState) HandleObjectInsert(ctx context.Context, bat *api.Batch,
 
 						// delete the row's primary index
 						if objEntry.EntryState && len(entry.PrimaryIndexBytes) > 0 {
-							p.primaryIndex.Delete(&PrimaryIndexEntry{
+							p.primaryIndex, _ = p.primaryIndex.Remove(&PrimaryIndexEntry{
 								Bytes:      entry.PrimaryIndexBytes,
 								RowEntryID: entry.ID,
-							})
+							}, false)
 						}
 						numDeleted++
 						blockDeleted++
@@ -638,7 +649,7 @@ func (p *PartitionState) HandleRowsInsert(
 				RowID:      rowID,
 				Time:       entry.Time,
 			}
-			p.primaryIndex.Set(entry)
+			p.primaryIndex, _ = p.primaryIndex.Upsert(entry, p.prioritySource(), false)
 		}
 	}
 
@@ -714,7 +725,7 @@ func (p *PartitionState) HandleRowsDelete(
 				RowID:      rowID,
 				Time:       entry.Time,
 			}
-			p.primaryIndex.Set(entry)
+			p.primaryIndex, _ = p.primaryIndex.Upsert(entry, p.prioritySource(), false)
 		}
 
 	}
@@ -816,10 +827,10 @@ func (p *PartitionState) HandleMetadataInsert(
 
 						// delete the row's primary index
 						if isAppendable && len(entry.PrimaryIndexBytes) > 0 {
-							p.primaryIndex.Delete(&PrimaryIndexEntry{
+							p.primaryIndex, _ = p.primaryIndex.Remove(&PrimaryIndexEntry{
 								Bytes:      entry.PrimaryIndexBytes,
 								RowEntryID: entry.ID,
-							})
+							}, false)
 						}
 						numDeleted++
 						blockDeleted++

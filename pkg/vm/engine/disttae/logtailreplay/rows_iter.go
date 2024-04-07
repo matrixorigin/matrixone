@@ -19,7 +19,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/reusee/pt"
-	"github.com/tidwall/btree"
 )
 
 type RowsIter interface {
@@ -118,10 +117,11 @@ func (p *rowsIter) Close() error {
 type primaryKeyIter struct {
 	ts          types.TS
 	spec        PrimaryKeyMatchSpec
-	iter        btree.IterG[*PrimaryIndexEntry]
+	iter        *pt.Iter[*PrimaryIndexEntry]
 	firstCalled bool
 	rows        *pt.Treap[RowEntry]
 	curRow      RowEntry
+	current     *PrimaryIndexEntry
 }
 
 type PrimaryKeyMatchSpec struct {
@@ -161,7 +161,7 @@ func (p *PartitionState) NewPrimaryKeyIter(
 	ts types.TS,
 	spec PrimaryKeyMatchSpec,
 ) *primaryKeyIter {
-	iter := p.primaryIndex.Copy().Iter()
+	iter := p.primaryIndex.NewIter()
 	return &primaryKeyIter{
 		ts:   ts,
 		spec: spec,
@@ -175,20 +175,23 @@ var _ RowsIter = new(primaryKeyIter)
 func (p *primaryKeyIter) Next() bool {
 	for {
 
+		var entry *PrimaryIndexEntry
+		var ok bool
 		if !p.firstCalled {
-			if !p.iter.Seek(&PrimaryIndexEntry{
+			entry, ok = p.iter.Seek(&PrimaryIndexEntry{
 				Bytes: p.spec.Seek,
-			}) {
+			})
+			if !ok {
 				return false
 			}
 			p.firstCalled = true
 		} else {
-			if !p.iter.Next() {
+			entry, ok = p.iter.Next()
+			if !ok {
 				return false
 			}
 		}
-
-		entry := p.iter.Item()
+		p.current = entry
 
 		if !p.spec.Match(entry.Bytes) {
 			// no more
@@ -240,7 +243,7 @@ func (p *primaryKeyIter) Entry() RowEntry {
 }
 
 func (p *primaryKeyIter) Close() error {
-	p.iter.Release()
+	p.iter.Close()
 	return nil
 }
 
@@ -254,7 +257,7 @@ func (p *PartitionState) NewPrimaryKeyDelIter(
 	spec PrimaryKeyMatchSpec,
 	bid types.Blockid,
 ) *primaryKeyDelIter {
-	iter := p.primaryIndex.Copy().Iter()
+	iter := p.primaryIndex.NewIter()
 	return &primaryKeyDelIter{
 		primaryKeyIter: primaryKeyIter{
 			ts:   ts,
@@ -271,20 +274,23 @@ var _ RowsIter = new(primaryKeyDelIter)
 func (p *primaryKeyDelIter) Next() bool {
 	for {
 
+		var entry *PrimaryIndexEntry
+		var ok bool
 		if !p.firstCalled {
-			if !p.iter.Seek(&PrimaryIndexEntry{
+			entry, ok = p.iter.Seek(&PrimaryIndexEntry{
 				Bytes: p.spec.Seek,
-			}) {
+			})
+			if !ok {
 				return false
 			}
 			p.firstCalled = true
 		} else {
-			if !p.iter.Next() {
+			entry, ok = p.iter.Next()
+			if !ok {
 				return false
 			}
 		}
-
-		entry := p.iter.Item()
+		p.current = entry
 
 		if !p.spec.Match(entry.Bytes) {
 			// no more
