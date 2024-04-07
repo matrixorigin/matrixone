@@ -3258,6 +3258,35 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `sysdate` (execute timestamp)
+	{
+		functionId: SYSDATE,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
+			if len(inputs) == 0 {
+				return newCheckResultWithSuccess(0)
+			}
+			return newCheckResultWithFailure(failedFunctionParametersWrong)
+		},
+
+		Overloads: []overload{
+			{
+				overloadId:      0,
+				realTimeRelated: true,
+				volatile:        true,
+				retType: func(parameters []types.Type) types.Type {
+					typ := types.T_timestamp.ToType()
+					typ.Scale = 6
+					return typ
+				},
+				newOp: func() executeLogicOfOverload {
+					return builtInSysdate
+				},
+			},
+		},
+	},
+
 	// function `date`
 	{
 		functionId: DATE,
