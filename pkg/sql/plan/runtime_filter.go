@@ -160,7 +160,7 @@ func (builder *QueryBuilder) generateRuntimeFilters(nodeID int32) {
 		leftChild.RuntimeFilterProbeList = append(leftChild.RuntimeFilterProbeList, MakeRuntimeFilter(rfTag, false, 0, DeepCopyExpr(probeExprs[0])))
 		col := probeExprs[0].GetCol()
 		inLimit := GetInFilterCardLimit()
-		if leftChild.TableDef.Pkey != nil && col.Name == leftChild.TableDef.Pkey.PkeyColName {
+		if leftChild.TableDef.Pkey != nil && leftChild.TableDef.Cols[col.ColPos].Name == leftChild.TableDef.Pkey.PkeyColName {
 			inLimit = GetInFilterCardLimitOnPK(leftChild.Stats.TableCnt)
 		}
 		buildExpr := &plan.Expr{
@@ -193,14 +193,12 @@ func (builder *QueryBuilder) generateRuntimeFilters(nodeID int32) {
 	}
 
 	for i, expr := range probeExprs {
-		switch col := expr.Expr.(type) {
-		case *plan.Expr_Col:
-			if pos, ok := name2Pos[col.Col.Name]; ok {
-				col2Probe[pos] = i
-			}
-
-		default:
+		col := expr.GetCol()
+		if col == nil {
 			return
+		}
+		if pos, ok := name2Pos[tableDef.Cols[col.ColPos].Name]; ok {
+			col2Probe[pos] = i
 		}
 	}
 

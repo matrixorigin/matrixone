@@ -52,8 +52,6 @@ type CNService interface {
 	GetSQLExecutor() executor.SQLExecutor
 	// GetBootstrapService returns bootstrap service
 	GetBootstrapService() bootstrap.Service
-	// WaitSystemInitCompleted wait system init task completed
-	WaitSystemInitCompleted(ctx context.Context) error
 	//SetCancel sets CancelFunc to stop GetClusterDetailsFromHAKeeper
 	SetCancel(context.CancelFunc)
 }
@@ -133,10 +131,6 @@ func (c *cnService) GetSQLExecutor() executor.SQLExecutor {
 
 func (c *cnService) GetBootstrapService() bootstrap.Service {
 	return c.svc.GetBootstrapService()
-}
-
-func (c *cnService) WaitSystemInitCompleted(ctx context.Context) error {
-	return c.svc.WaitSystemInitCompleted(ctx)
 }
 
 func (c *cnService) SetCancel(cancel context.CancelFunc) {

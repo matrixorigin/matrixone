@@ -24,19 +24,20 @@ import (
 	"time"
 
 	"github.com/fagongzi/goetty/v2"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
-
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
-
+	"github.com/fagongzi/goetty/v2/buf"
+	"github.com/golang/mock/gomock"
+	"github.com/prashantv/gostub"
+	"github.com/smartystreets/goconvey/convey"
 	"github.com/stretchr/testify/require"
 
-	"github.com/fagongzi/goetty/v2/buf"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 
-	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
@@ -45,8 +46,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"github.com/prashantv/gostub"
-	"github.com/smartystreets/goconvey/convey"
 )
 
 func TestGetTenantInfo(t *testing.T) {
@@ -63,18 +62,18 @@ func TestGetTenantInfo(t *testing.T) {
 			{":u1:r1", "{account tenant1:u1:r1 -- 0:0:0}", true},
 			{"tenant1:u1:", "{account tenant1:u1:moadmin -- 0:0:0}", true},
 			{"tenant1::r1", "{account tenant1::r1 -- 0:0:0}", true},
-			{"tenant1:    :r1", "{account tenant1::r1 -- 0:0:0}", true},
-			{"     : :r1", "{account tenant1::r1 -- 0:0:0}", true},
-			{"   tenant1   :   u1   :   r1    ", "{account tenant1:u1:r1 -- 0:0:0}", false},
+			{"tenant1:    :r1", "{account tenant1:    :r1 -- 0:0:0}", false},
+			{"     : :r1", "{account      : :r1 -- 0:0:0}", false},
+			{"   tenant1   :   u1   :   r1    ", "{account    tenant1   :   u1   :   r1     -- 0:0:0}", false},
 			{"u1", "{account sys:u1: -- 0:0:0}", false},
 			{"tenant1#u1", "{account tenant1#u1# -- 0#0#0}", false},
 			{"tenant1#u1#r1", "{account tenant1#u1#r1 -- 0#0#0}", false},
 			{"#u1#r1", "{account tenant1#u1#r1 -- 0#0#0}", true},
 			{"tenant1#u1#", "{account tenant1#u1#moadmin -- 0#0#0}", true},
 			{"tenant1##r1", "{account tenant1##r1 -- 0#0#0}", true},
-			{"tenant1#    #r1", "{account tenant1##r1 -- 0#0#0}", true},
-			{"     # #r1", "{account tenant1##r1 -- 0#0#0}", true},
-			{"   tenant1   #   u1   #   r1    ", "{account tenant1#u1#r1 -- 0#0#0}", false},
+			{"tenant1#    #r1", "{account tenant1#    #r1 -- 0#0#0}", false},
+			{"     # #r1", "{account      # #r1 -- 0#0#0}", false},
+			{"   tenant1   #   u1   #   r1    ", "{account    tenant1   #   u1   #   r1     -- 0#0#0}", false},
 		}
 
 		for _, arg := range args {
@@ -229,8 +228,8 @@ func Test_checkSysExistsOrNot(t *testing.T) {
 
 		// A mock autoIncrCaches.
 		aicm := &defines.AutoIncrCacheManager{}
-
-		err = InitSysTenant(ctx, aicm)
+		finalVersion := "1.2.0"
+		err = InitSysTenantOld(ctx, aicm, finalVersion)
 		convey.So(err, convey.ShouldBeNil)
 	})
 }
@@ -274,7 +273,7 @@ func Test_checkTenantExistsOrNot(t *testing.T) {
 		ses := newSes(nil, ctrl)
 		ses.tenant = tenant
 
-		err = InitGeneralTenant(ctx, ses, &tree.CreateAccount{
+		err = InitGeneralTenant(ctx, ses, &CreateAccount{
 			Name:        "test",
 			IfNotExists: true,
 			AuthOption: tree.AccountAuthOption{
@@ -349,7 +348,7 @@ func Test_createTablesInMoCatalogOfGeneralTenant(t *testing.T) {
 		//	DefaultRoleID: moAdminRoleID,
 		//}
 
-		ca := &tree.CreateAccount{
+		ca := &CreateAccount{
 			Name:        "test",
 			IfNotExists: true,
 			AuthOption: tree.AccountAuthOption{
@@ -357,8 +356,8 @@ func Test_createTablesInMoCatalogOfGeneralTenant(t *testing.T) {
 				IdentifiedType: tree.AccountIdentified{Typ: tree.AccountIdentifiedByPassword, Str: "123"}},
 			Comment: tree.AccountComment{Exist: true, Comment: "test acccount"},
 		}
-
-		newTi, _, err := createTablesInMoCatalogOfGeneralTenant(ctx, bh, ca)
+		finalVersion := "1.2.0"
+		newTi, _, err := createTablesInMoCatalogOfGeneralTenant(ctx, bh, finalVersion, ca)
 		convey.So(err, convey.ShouldBeNil)
 
 		err = createTablesInInformationSchemaOfGeneralTenant(ctx, bh, newTi)
@@ -7443,7 +7442,47 @@ func newSes(priv *privilege, ctrl *gomock.Controller) *Session {
 	ses.SetTenantInfo(tenant)
 	ses.priv = priv
 	ses.SetRequestContext(ctx)
+
+	aicm := &defines.AutoIncrCacheManager{}
+	rm, _ := NewRoutineManager(ctx, pu, aicm)
+	rm.baseService = new(MockBaseService)
+	ses.rm = rm
+
 	return ses
+}
+
+var _ BaseService = &MockBaseService{}
+
+type MockBaseService struct {
+}
+
+func (m *MockBaseService) ID() string {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (m *MockBaseService) SQLAddress() string {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (m *MockBaseService) SessionMgr() *queryservice.SessionManager {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (m *MockBaseService) CheckTenantUpgrade(ctx context.Context, tenantID int64) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (m *MockBaseService) GetFinalVersion() string {
+	return "1.2.0"
+}
+
+func (s *MockBaseService) UpgradeTenant(ctx context.Context, tenantName string, retryCount uint32, isALLAccount bool) error {
+	//TODO implement me
+	panic("implement me")
 }
 
 func newBh(ctrl *gomock.Controller, sql2result map[string]ExecResult) BackgroundExec {
@@ -11441,7 +11480,7 @@ func TestDoCreateSnapshot(t *testing.T) {
 		bh.sql2result[sql] = mrs
 
 		sql2, _ := getSqlForCheckTenant(ctx, "acc1")
-		mrs2 := newMrsForPasswordOfUser([][]interface{}{{}})
+		mrs2 := newMrsForPasswordOfUser([][]interface{}{{1}})
 		bh.sql2result[sql2] = mrs2
 
 		err := doCreateSnapshot(ctx, ses, cs)

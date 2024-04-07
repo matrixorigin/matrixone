@@ -103,7 +103,7 @@ func (s *service) ClearStatementFilters() error {
 			txn.Use(DebugDB)
 			res, err := txn.Exec(
 				fmt.Sprintf("truncate table %s",
-					traceStatementFilterTable),
+					TraceStatementFilterTable),
 				executor.StatementOption{})
 			if err != nil {
 				return err
@@ -136,7 +136,7 @@ func (s *service) RefreshStatementFilters() error {
 			txn.Use(DebugDB)
 			res, err := txn.Exec(
 				fmt.Sprintf("select method, value from %s",
-					traceStatementFilterTable),
+					TraceStatementFilterTable),
 				executor.StatementOption{})
 			if err != nil {
 				return err
@@ -186,7 +186,7 @@ func (s *service) handleStatements(ctx context.Context) {
 		ctx,
 		s.slowStatementCSVFile,
 		4,
-		traceStatementTable,
+		TraceStatementTable,
 		s.statementC,
 		s.statementBufC)
 }
@@ -196,7 +196,7 @@ func addStatementFilterSQL(
 	value string,
 ) string {
 	return fmt.Sprintf("insert into %s (method, value) values ('%s', '%s')",
-		traceStatementFilterTable,
+		TraceStatementFilterTable,
 		method,
 		value)
 }
