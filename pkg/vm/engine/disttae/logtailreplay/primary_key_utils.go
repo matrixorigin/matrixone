@@ -19,7 +19,6 @@ import (
 	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/reusee/pt"
 )
 
 func (p *PartitionState) PKExistInMemBetween(
@@ -27,7 +26,7 @@ func (p *PartitionState) PKExistInMemBetween(
 	to types.TS,
 	keys [][]byte,
 ) (bool, bool) {
-	iter := p.primaryIndex.NewIter(new(pt.Iter[*PrimaryIndexEntry]))
+	iter := p.primaryIndex.NewIter()
 	defer iter.Close()
 	pivot := RowEntry{
 		Time: types.BuildTS(math.MaxInt64, math.MaxUint32),
@@ -52,7 +51,7 @@ func (p *PartitionState) PKExistInMemBetween(
 			//don't take pk in log tail when delete row , so check all rows for changes.
 			pivot.BlockID = entry.BlockID
 			pivot.RowID = entry.RowID
-			rowIter := p.rows.NewIter(new(pt.Iter[RowEntry]))
+			rowIter := p.rows.NewIter()
 			seek := false
 			for {
 				var row RowEntry
