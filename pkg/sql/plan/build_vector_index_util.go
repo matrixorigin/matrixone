@@ -143,6 +143,9 @@ func makeCrossJoinCentroidsMetaForCurrVersion(builder *QueryBuilder, bindCtx *Bi
 		prevCentroidScanProjection[0],
 		prevMetaScanCastValAsBigInt,
 	})
+	if err != nil {
+		return -1, err
+	}
 
 	joinMetaAndCentroidsId := builder.appendNode(&plan.Node{
 		NodeType:    plan.Node_JOIN,
@@ -301,6 +304,9 @@ func makeMinCentroidIdAndCpKey(builder *QueryBuilder, bindCtx *BindContext,
 			},
 		},
 	})
+	if err != nil {
+		return -1, err
+	}
 
 	centroidsVersionProj := DeepCopyExpr(centroidsVersion)
 	centroidsVersionProj.Expr.(*plan.Expr_Col).Col.RelPos = -1
