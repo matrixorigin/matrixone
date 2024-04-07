@@ -172,6 +172,28 @@ func makePlan2Int64ConstExprWithType(v int64) *plan.Expr {
 	}
 }
 
+// makePlan2Vecf32ConstExprWithType makes a vecf32 const expr.
+// usage: makePlan2Vecf32ConstExprWithType("[1,2,3]", 3)
+func makePlan2Vecf32ConstExprWithType(v string, l int32) *plan.Expr {
+	return &plan.Expr{
+		Expr: makePlan2Vecf32ConstExpr(v),
+		Typ: plan.Type{
+			Id:          int32(types.T_array_float32),
+			Width:       l,
+			NotNullable: true,
+		},
+	}
+}
+
+func makePlan2Vecf32ConstExpr(v string) *plan.Expr_Lit {
+	return &plan.Expr_Lit{Lit: &plan.Literal{
+		Isnull: false,
+		Value: &plan.Literal_Sval{
+			Sval: v,
+		},
+	}}
+}
+
 var MakePlan2StringVecExprWithType = makePlan2StringVecExprWithType
 
 func makePlan2StringVecExprWithType(mp *mpool.MPool, vals ...string) *plan.Expr {
