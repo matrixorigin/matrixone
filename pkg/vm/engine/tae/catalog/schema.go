@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"io"
 	"sort"
+	"strings"
 	"time"
 
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
@@ -157,6 +158,11 @@ func (s *Schema) Clone() *Schema {
 		panic(err)
 	}
 	return ns
+}
+
+func (s *Schema) IsIndexTable() bool {
+	return strings.Contains(s.Name, "__mo_index_secondary_") ||
+		strings.Contains(s.Name, "__mo_index_unique_")
 }
 
 // ApplyAlterTable modify the schema in place. Unless you know what you are doing, it is
