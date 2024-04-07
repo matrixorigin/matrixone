@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -1587,6 +1588,7 @@ func (ses *Session) AuthenticateUser(userInput string, dbName string, authRespon
 	var userID int64
 	var pwd, accountStatus string
 	var accountVersion uint64
+	//var createVersion string
 	var pwdBytes []byte
 	var isSpecial bool
 	var specialAccount *TenantInfo
@@ -1833,6 +1835,20 @@ func (ses *Session) AuthenticateUser(userInput string, dbName string, authRespon
 	logInfo(ses, sessionInfo, tenant.String())
 
 	return GetPassWord(pwd)
+}
+
+func (ses *Session) MaybeUpgradeTenant(ctx context.Context, curVersion string, tenantID int64) error {
+	// Get mo final version, which is based on the current code version
+	finalVersion := ses.rm.baseService.GetFinalVersion()
+	if versions.Compare(curVersion, finalVersion) <= 0 {
+		return ses.rm.baseService.CheckTenantUpgrade(ctx, tenantID)
+	}
+	return nil
+}
+
+func (ses *Session) UpgradeTenant(ctx context.Context, tenantName string, retryCount uint32, isALLAccount bool) error {
+	// Get mo final version, which is based on the current code version
+	return ses.rm.baseService.UpgradeTenant(ctx, tenantName, retryCount, isALLAccount)
 }
 
 func (ses *Session) InitGlobalSystemVariables() error {

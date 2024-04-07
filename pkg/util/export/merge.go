@@ -700,6 +700,7 @@ func MergeTaskExecutorFactory(opts ...MergeOption) func(ctx context.Context, tas
 }
 
 // MergeTaskCronExpr support sec level
+// Deprecated
 var MergeTaskCronExpr = MergeTaskCronExprEvery4Hour
 
 const MergeTaskCronExprEvery15Sec = "*/15 * * * * *"

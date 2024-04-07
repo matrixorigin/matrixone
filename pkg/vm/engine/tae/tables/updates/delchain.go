@@ -86,6 +86,9 @@ func (chain *DeleteChain) StringLocked() string {
 		line++
 		return true
 	})
+	if line == 1 {
+		return ""
+	}
 	return msg
 }
 
