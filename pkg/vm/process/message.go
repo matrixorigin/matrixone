@@ -89,13 +89,19 @@ type MessageReceiver struct {
 
 func (proc *Process) SendMessage(m Message) {
 	mb := proc.MessageBoard
-	mb.RwMutex.Lock()
-	defer mb.RwMutex.Unlock()
 	if m.GetReceiverAddr().CnAddr == CURRENTCN { // message for current CN
-		mb.Messages = append(mb.Messages, &m)
 		if m.NeedBlock() {
 			// broadcast for block message
+			mb.Cond.L.Lock()
+			mb.RwMutex.Lock()
+			mb.Messages = append(mb.Messages, &m)
+			mb.RwMutex.Unlock()
 			mb.Cond.Broadcast()
+			mb.Cond.L.Unlock()
+		} else {
+			mb.RwMutex.Lock()
+			mb.Messages = append(mb.Messages, &m)
+			mb.RwMutex.Unlock()
 		}
 	} else {
 		//todo: send message to other CN, need to lookup cnlist
@@ -154,6 +160,11 @@ func (mr *MessageReceiver) ReceiveMessage(needBlock bool) []Message {
 	}
 	for len(result) == 0 {
 		mr.mb.Cond.L.Lock()
+		result = mr.receiveMessageNonBlock()
+		if len(result) > 0 {
+			mr.mb.Cond.L.Unlock()
+			return result
+		}
 		mr.mb.Cond.Wait()
 		mr.mb.Cond.L.Unlock()
 		result = mr.receiveMessageNonBlock()
