@@ -200,6 +200,7 @@ const (
 	STDDEV_SAMPLE
 	SUBSTR
 	SUM
+	SYSDATE
 	GROUP_CONCAT
 	TAN
 	TO_DATE
@@ -466,6 +467,7 @@ var functionIdRegister = map[string]int32{
 	"concat":            CONCAT,
 	"current_timestamp": CURRENT_TIMESTAMP,
 	"now":               CURRENT_TIMESTAMP,
+	"sysdate":           SYSDATE,
 	"floor":             FLOOR,
 	"lpad":              LPAD,
 	"pi":                PI,
