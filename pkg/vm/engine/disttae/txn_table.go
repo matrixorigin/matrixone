@@ -1764,7 +1764,7 @@ func (tbl *txnTable) Delete(ctx context.Context, bat *batch.Batch, name string) 
 	return tbl.writeTnPartition(ctx, bat)
 }
 
-func (tbl *txnTable) writeTnPartition(ctx context.Context, bat *batch.Batch) error {
+func (tbl *txnTable) writeTnPartition(_ context.Context, bat *batch.Batch) error {
 	ibat, err := util.CopyBatch(bat, tbl.db.txn.proc)
 	if err != nil {
 		return err
@@ -1979,7 +1979,6 @@ func (tbl *txnTable) newBlockReader(
 		ctx,
 		fs,
 		tableDef,
-		tbl.primarySeqnum,
 		ts,
 		num,
 		expr,
@@ -2092,7 +2091,6 @@ func (tbl *txnTable) newReader(
 		ctx,
 		fs,
 		tbl.tableDef,
-		-1,
 		ts,
 		readerNumber-1,
 		expr,
@@ -2348,7 +2346,6 @@ func (tbl *txnTable) PKPersistedBetween(
 		_, _, filter := getNonCompositePKSearchFuncByExpr(
 			inExpr,
 			"pk",
-			keys.GetType().Oid,
 			tbl.proc.Load())
 		sels := filter(bat.Vecs)
 		if len(sels) > 0 {
