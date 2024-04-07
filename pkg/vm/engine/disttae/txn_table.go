@@ -1387,6 +1387,7 @@ func (tbl *txnTable) TableRenameInTxn(ctx context.Context, constraint [][]byte) 
 	}
 	databaseId := tbl.GetDBID(ctx)
 	db := tbl.db
+	oldTableName := tbl.tableName
 
 	var id uint64
 	var rowid types.Rowid
@@ -1551,6 +1552,21 @@ func (tbl *txnTable) TableRenameInTxn(ctx context.Context, constraint [][]byte) 
 	newkey := genTableKey(accountId, newtbl.tableName, databaseId)
 	newtbl.db.txn.addCreateTable(newkey, newtbl)
 	newtbl.db.txn.deletedTableMap.Delete(newkey)
+
+	//---------------------------------------------------------------------------------
+	for i := 0; i < len(newtbl.db.txn.writes); i++ {
+		if newtbl.db.txn.writes[i].tableId == catalog.MO_DATABASE_ID ||
+			newtbl.db.txn.writes[i].tableId == catalog.MO_TABLES_ID ||
+			newtbl.db.txn.writes[i].tableId == catalog.MO_COLUMNS_ID {
+			continue
+		}
+
+		if newtbl.db.txn.writes[i].tableName == oldTableName {
+			newtbl.db.txn.writes[i].tableName = tbl.tableName
+			logutil.Infof("copy table '%s' has been rename to '%s' in txn", oldTableName, tbl.tableName)
+		}
+	}
+	//---------------------------------------------------------------------------------
 	return nil
 }
 
@@ -1748,7 +1764,7 @@ func (tbl *txnTable) Delete(ctx context.Context, bat *batch.Batch, name string) 
 	return tbl.writeTnPartition(ctx, bat)
 }
 
-func (tbl *txnTable) writeTnPartition(ctx context.Context, bat *batch.Batch) error {
+func (tbl *txnTable) writeTnPartition(_ context.Context, bat *batch.Batch) error {
 	ibat, err := util.CopyBatch(bat, tbl.db.txn.proc)
 	if err != nil {
 		return err
@@ -1963,7 +1979,6 @@ func (tbl *txnTable) newBlockReader(
 		ctx,
 		fs,
 		tableDef,
-		tbl.primarySeqnum,
 		ts,
 		num,
 		expr,
@@ -2076,7 +2091,6 @@ func (tbl *txnTable) newReader(
 		ctx,
 		fs,
 		tbl.tableDef,
-		-1,
 		ts,
 		readerNumber-1,
 		expr,
@@ -2332,7 +2346,6 @@ func (tbl *txnTable) PKPersistedBetween(
 		_, _, filter := getNonCompositePKSearchFuncByExpr(
 			inExpr,
 			"pk",
-			keys.GetType().Oid,
 			tbl.proc.Load())
 		sels := filter(bat.Vecs)
 		if len(sels) > 0 {

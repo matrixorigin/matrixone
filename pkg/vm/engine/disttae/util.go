@@ -464,7 +464,7 @@ func getPkExpr(
 }
 
 func getNonCompositePKSearchFuncByExpr(
-	expr *plan.Expr, pkName string, oid types.T, proc *process.Process,
+	expr *plan.Expr, pkName string, proc *process.Process,
 ) (bool, bool, blockio.ReadFilter) {
 	valExpr := getPkExpr(expr, pkName, proc)
 	if valExpr == nil {
