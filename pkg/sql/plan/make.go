@@ -172,6 +172,8 @@ func makePlan2Int64ConstExprWithType(v int64) *plan.Expr {
 	}
 }
 
+var MakePlan2Vecf32ConstExprWithType = makePlan2Vecf32ConstExprWithType
+
 // makePlan2Vecf32ConstExprWithType makes a vecf32 const expr.
 // usage: makePlan2Vecf32ConstExprWithType("[1,2,3]", 3)
 func makePlan2Vecf32ConstExprWithType(v string, l int32) *plan.Expr {
