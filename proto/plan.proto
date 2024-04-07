@@ -1058,7 +1058,7 @@ message DataDefinition {
 		DROP_SEQUENCE		= 31;
 		SHOW_SEQUENCES      = 32;
 		SHOW_CONNECTORS = 33;
-
+		SHOW_UPGRADE = 34;
 	}
 	//DataDefinition type
 	DdlType ddl_type = 1;
