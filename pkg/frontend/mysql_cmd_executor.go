@@ -361,7 +361,6 @@ var RecordParseErrorStatement = func(ctx context.Context, ses *Session, proc *pr
 	if tenant == nil {
 		tenant, _ = GetTenantInfo(ctx, "internal")
 	}
-	incStatementCounter(tenant.GetTenant(), nil)
 	incStatementErrorsCounter(tenant.GetTenant(), nil)
 	return ctx, nil
 }
@@ -2783,10 +2782,6 @@ var GetStmtExecList = func(db, sql, user string, eng engine.Engine, proc *proces
 	return stmtExecList, nil
 }
 
-func incStatementCounter(tenant string, stmt tree.Statement) {
-	metric.StatementCounter(tenant, getStatementType(stmt).GetQueryType()).Inc()
-}
-
 func incTransactionCounter(tenant string) {
 	metric.TransactionCounter(tenant).Inc()
 }
@@ -3251,7 +3246,6 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 
 	//get errors during the transaction. rollback the transaction
 	rollbackTxnFunc := func() error {
-		incStatementCounter(tenant, stmt)
 		incStatementErrorsCounter(tenant, stmt)
 		/*
 			Cases    | set Autocommit = 1/0 | BEGIN statement |
@@ -3287,7 +3281,6 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 		}()
 
 		//load data handle txn failure internally
-		incStatementCounter(tenant, stmt)
 		retErr = ses.TxnCommitSingleStatement(stmt)
 		if retErr != nil {
 			logStatementStatus(requestCtx, ses, stmt, fail, retErr)
