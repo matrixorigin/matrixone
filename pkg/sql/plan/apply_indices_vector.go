@@ -35,8 +35,8 @@ var (
 	*/
 	distFuncOpTypes = map[string]string{
 		"l2_distance":     "vector_l2_ops",
-		"cosine_distance": "vector_ip_ops",
-		"inner_product":   "vector_cosine_ops",
+		"inner_product":   "vector_ip_ops",
+		"cosine_distance": "vector_cosine_ops",
 	}
 	textType = types.T_text.ToType() // return type of @probe_limit
 )

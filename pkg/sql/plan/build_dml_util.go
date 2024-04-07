@@ -2667,7 +2667,7 @@ func appendPreInsertSkVectorPlan(
 
 	// 6. select centroids.version, serial_extract(min( pair< l2_distance, centroid_id >, 1 ), pk,
 	//    from crossJoinTblAndCentroidsID group by pk,
-	minCentroidIdNode, err := makeMinCentroidIdAndCpKey(builder, bindCtx, crossJoinTblAndCentroidsID)
+	minCentroidIdNode, err := makeMinCentroidIdAndCpKey(builder, bindCtx, crossJoinTblAndCentroidsID, multiTableIndex)
 	if err != nil {
 		return -1, err
 	}

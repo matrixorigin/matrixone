@@ -23,6 +23,12 @@ import (
 var (
 	bigIntType  = types.T_int64.ToType()
 	varCharType = types.T_varchar.ToType()
+
+	opTypeToDistanceFunc = map[string]string{
+		"vector_l2_ops":     "l2_distance",
+		"vector_ip_ops":     "inner_product",
+		"vector_cosine_ops": "cosine_distance",
+	}
 )
 
 func makeIvfFlatIndexTblScan(builder *QueryBuilder, bindCtx *BindContext,
@@ -225,7 +231,8 @@ func makeCrossJoinTblAndCentroids(builder *QueryBuilder, bindCtx *BindContext, t
 	return crossJoinTblAndCentroidsId
 }
 
-func makeMinCentroidIdAndCpKey(builder *QueryBuilder, bindCtx *BindContext, crossJoinTblAndCentroidsID int32) (int32, error) {
+func makeMinCentroidIdAndCpKey(builder *QueryBuilder, bindCtx *BindContext,
+	crossJoinTblAndCentroidsID int32, multiTableIndex *MultiTableIndex) (int32, error) {
 
 	lastNodeProjections := getProjectionByLastNode(builder, crossJoinTblAndCentroidsID)
 	centroidsVersion := lastNodeProjections[0]
@@ -241,8 +248,14 @@ func makeMinCentroidIdAndCpKey(builder *QueryBuilder, bindCtx *BindContext, cros
 	}
 
 	// 1.b Agg Functions
-	//TODO: modify this part to support multiple distance functions
-	l2Distance, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "l2_distance", []*plan.Expr{
+	entriesParams := multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Entries].IndexAlgoParams
+	paramMap, err := catalog.IndexParamsStringToMap(entriesParams)
+	if err != nil {
+		return -1, err
+	}
+	vectorOps := paramMap[catalog.IndexAlgoParamOpType]
+	distFn := opTypeToDistanceFunc[vectorOps]
+	l2Distance, err := BindFuncExprImplByPlanExpr(builder.GetContext(), distFn, []*plan.Expr{
 		DeepCopyExpr(centroidsCentroid),       // centroids.centroid
 		DeepCopyExpr(tblNormalizeL2Embedding), // tbl.normalize_l2(embedding)
 	})
