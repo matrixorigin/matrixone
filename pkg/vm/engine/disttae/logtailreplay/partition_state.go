@@ -343,7 +343,7 @@ func (p *PartitionState) Copy() *PartitionState {
 }
 
 func (p *PartitionState) RowExists(rowID types.Rowid, ts types.TS) bool {
-	iter := p.rows.NewIter()
+	iter := p.rows.NewIter(nil)
 	defer iter.Close()
 
 	blockID := rowID.CloneBlockID()
@@ -530,7 +530,7 @@ func (p *PartitionState) HandleObjectInsert(ctx context.Context, bat *api.Batch,
 			panic("logic error")
 		}
 		// for appendable object, gc rows when delete object
-		iter := p.rows.NewIter()
+		iter := p.rows.NewIter(nil)
 		objID := objEntry.ObjectStats.ObjectName().ObjectId()
 		trunctPoint := startTSCol[idx]
 		blkCnt := objEntry.ObjectStats.BlkCnt()
@@ -811,7 +811,7 @@ func (p *PartitionState) HandleMetadataInsert(
 			scanCnt := int64(0)
 			blockDeleted := int64(0)
 			trunctPoint := memTruncTSVector[i]
-			iter := p.rows.NewIter()
+			iter := p.rows.NewIter(nil)
 			pivot := RowEntry{
 				BlockID: blockID,
 			}

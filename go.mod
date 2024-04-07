@@ -52,7 +52,7 @@ require (
 	github.com/prashantv/gostub v1.1.0
 	github.com/prometheus/client_golang v1.17.0
 	github.com/prometheus/client_model v0.4.1-0.20230718164431-9a2bf3000d16
-	github.com/reusee/pt v0.0.0-20240407004321-4c61a978f499
+	github.com/reusee/pt v0.0.0-20240407032233-f901ccc4d24c
 	github.com/robfig/cron/v3 v3.0.1
 	github.com/samber/lo v1.38.1
 	github.com/shirou/gopsutil/v3 v3.22.4

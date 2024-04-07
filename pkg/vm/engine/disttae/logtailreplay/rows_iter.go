@@ -39,7 +39,7 @@ type rowsIter struct {
 }
 
 func (p *PartitionState) NewRowsIter(ts types.TS, blockID *types.Blockid, iterDeleted bool) *rowsIter {
-	iter := p.rows.NewIter()
+	iter := p.rows.NewIter(new(pt.Iter[RowEntry]))
 	ret := &rowsIter{
 		ts:          ts,
 		iter:        iter,
@@ -161,7 +161,7 @@ func (p *PartitionState) NewPrimaryKeyIter(
 	ts types.TS,
 	spec PrimaryKeyMatchSpec,
 ) *primaryKeyIter {
-	iter := p.primaryIndex.NewIter()
+	iter := p.primaryIndex.NewIter(new(pt.Iter[*PrimaryIndexEntry]))
 	return &primaryKeyIter{
 		ts:   ts,
 		spec: spec,
@@ -200,7 +200,7 @@ func (p *primaryKeyIter) Next() bool {
 
 		// validate
 		valid := false
-		rowsIter := p.rows.NewIter()
+		rowsIter := p.rows.NewIter(nil)
 		for row, ok := rowsIter.Seek(RowEntry{
 			BlockID: entry.BlockID,
 			RowID:   entry.RowID,
@@ -257,7 +257,7 @@ func (p *PartitionState) NewPrimaryKeyDelIter(
 	spec PrimaryKeyMatchSpec,
 	bid types.Blockid,
 ) *primaryKeyDelIter {
-	iter := p.primaryIndex.NewIter()
+	iter := p.primaryIndex.NewIter(new(pt.Iter[*PrimaryIndexEntry]))
 	return &primaryKeyDelIter{
 		primaryKeyIter: primaryKeyIter{
 			ts:   ts,
@@ -303,7 +303,7 @@ func (p *primaryKeyDelIter) Next() bool {
 
 		// validate
 		valid := false
-		rowsIter := p.rows.NewIter()
+		rowsIter := p.rows.NewIter(nil)
 		for row, ok := rowsIter.Seek(RowEntry{
 			BlockID: entry.BlockID,
 			RowID:   entry.RowID,
