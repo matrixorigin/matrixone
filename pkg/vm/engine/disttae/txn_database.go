@@ -16,10 +16,11 @@ package disttae
 
 import (
 	"context"
-	"go.uber.org/zap"
 	"runtime/debug"
 	"strconv"
 	"strings"
+
+	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	txn2 "github.com/matrixorigin/matrixone/pkg/pb/txn"
@@ -150,7 +151,7 @@ func (db *txnDatabase) RelationByAccountID(
 		p = proc.(*process.Process)
 	}
 
-	rel := db.txn.getCachedTable(key, db.txn.op.SnapshotTS())
+	rel := db.txn.getCachedTable(key)
 	if rel != nil {
 		rel.proc.Store(p)
 		return rel, nil
@@ -242,7 +243,7 @@ func (db *txnDatabase) Relation(ctx context.Context, name string, proc any) (eng
 		p = proc.(*process.Process)
 	}
 
-	rel := db.txn.getCachedTable(key, db.txn.op.SnapshotTS())
+	rel := db.txn.getCachedTable(key)
 	if rel != nil {
 		rel.proc.Store(p)
 		return rel, nil

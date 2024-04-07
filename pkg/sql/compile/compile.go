@@ -622,7 +622,7 @@ func (c *Compile) runOnce() error {
 	}
 
 	// fuzzy filter not sure whether this insert / load obey duplicate constraints, need double check
-	if c.fuzzy != nil && c.fuzzy.cnt > 0 && err == nil {
+	if c.fuzzy != nil && c.fuzzy.cnt > 0 {
 		if c.fuzzy.cnt > 10 {
 			logutil.Warnf("fuzzy filter cnt is %d, may be too high", c.fuzzy.cnt)
 		}
@@ -635,7 +635,7 @@ func (c *Compile) runOnce() error {
 	//detect fk self refer
 	//update, insert
 	query := c.pn.GetQuery()
-	if err == nil && query != nil && (query.StmtType == plan.Query_INSERT ||
+	if query != nil && (query.StmtType == plan.Query_INSERT ||
 		query.StmtType == plan.Query_UPDATE) && len(query.GetDetectSqls()) != 0 {
 		err = detectFkSelfRefer(c, query.DetectSqls)
 	}
@@ -1610,7 +1610,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		currentFirstFlag := c.anal.isFirst
 		for i := range ss {
 			var lockOpArg *lockop.Argument
-			lockOpArg, err = constructLockOp(n, ss[i].Proc, c.e)
+			lockOpArg, err = constructLockOp(n, c.e)
 			if err != nil {
 				return nil, err
 			}
@@ -2752,7 +2752,7 @@ func (c *Compile) compileTimeWin(n *plan.Node, ss []*Scope) []*Scope {
 	rs.Instructions[0] = vm.Instruction{
 		Op:  vm.TimeWin,
 		Idx: c.anal.curr,
-		Arg: constructTimeWindow(c.ctx, n, c.proc),
+		Arg: constructTimeWindow(c.ctx, n),
 	}
 	return []*Scope{rs}
 }
@@ -2821,7 +2821,7 @@ func (c *Compile) compileFuzzyFilter(n *plan.Node, ns []*plan.Node, left []*Scop
 
 	rs.Instructions[0].Idx = c.anal.curr
 
-	arg := constructFuzzyFilter(c, n, ns[n.Children[0]], ns[n.Children[1]])
+	arg := constructFuzzyFilter(c, n, ns[n.Children[1]])
 
 	rs.appendInstruction(vm.Instruction{
 		Op:  vm.FuzzyFilter,
@@ -3446,7 +3446,7 @@ func (c *Compile) newJoinBuildScope(s *Scope, ss []*Scope) *Scope {
 		regTransplant(s, rs, i+s.BuildIdx, i)
 	}
 
-	rs.appendInstruction(constructJoinBuildInstruction(c, s.Instructions[0], c.proc, s.ShuffleCnt, ss != nil))
+	rs.appendInstruction(constructJoinBuildInstruction(c, s.Instructions[0], s.ShuffleCnt, ss != nil))
 
 	if ss == nil { // unparallel, send the hashtable to join scope directly
 		s.Proc.Reg.MergeReceivers[s.BuildIdx] = &process.WaitRegister{

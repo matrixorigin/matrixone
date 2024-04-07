@@ -591,7 +591,7 @@ func constructOnduplicateKey(n *plan.Node, eg engine.Engine) *onduplicatekey.Arg
 	return arg
 }
 
-func constructFuzzyFilter(c *Compile, n, left, right *plan.Node) *fuzzyfilter.Argument {
+func constructFuzzyFilter(c *Compile, n, right *plan.Node) *fuzzyfilter.Argument {
 	pkName := n.TableDef.Pkey.PkeyColName
 	var pkTyp *plan.Type
 	if pkName == catalog.CPrimaryKeyColName {
@@ -664,7 +664,7 @@ func constructPreInsertSk(n *plan.Node, proc *process.Process) (*preinsertsecond
 	return arg, nil
 }
 
-func constructLockOp(n *plan.Node, proc *process.Process, eng engine.Engine) (*lockop.Argument, error) {
+func constructLockOp(n *plan.Node, eng engine.Engine) (*lockop.Argument, error) {
 	arg := lockop.NewArgumentByEngine(eng)
 	for _, target := range n.LockTargets {
 		typ := plan2.MakeTypeByPlan2Type(target.GetPrimaryColTyp())
@@ -1009,7 +1009,7 @@ func constructFill(n *plan.Node) *fill.Argument {
 	return arg
 }
 
-func constructTimeWindow(ctx context.Context, n *plan.Node, proc *process.Process) *timewin.Argument {
+func constructTimeWindow(_ context.Context, n *plan.Node) *timewin.Argument {
 	var aggs []agg.Aggregate
 	var typs []types.Type
 	var wStart, wEnd bool
@@ -1070,7 +1070,7 @@ func constructTimeWindow(ctx context.Context, n *plan.Node, proc *process.Proces
 	return arg
 }
 
-func constructWindow(ctx context.Context, n *plan.Node, proc *process.Process) *window.Argument {
+func constructWindow(_ context.Context, n *plan.Node, proc *process.Process) *window.Argument {
 	aggs := make([]agg.Aggregate, len(n.WinSpecList))
 	typs := make([]types.Type, len(n.WinSpecList))
 	for i, expr := range n.WinSpecList {
@@ -1157,7 +1157,7 @@ func constructSample(n *plan.Node, outputRowCount bool) *sample.Argument {
 	panic("only support sample by rows / percent now.")
 }
 
-func constructGroup(ctx context.Context, n, cn *plan.Node, ibucket, nbucket int, needEval bool, shuffleDop int, proc *process.Process) *group.Argument {
+func constructGroup(_ context.Context, n, cn *plan.Node, ibucket, nbucket int, needEval bool, shuffleDop int, proc *process.Process) *group.Argument {
 	aggs := make([]agg.Aggregate, len(n.AggList))
 	var cfg []byte
 	for i, expr := range n.AggList {
@@ -1605,7 +1605,7 @@ func constructLoopMark(n *plan.Node, typs []types.Type, proc *process.Process) *
 	return arg
 }
 
-func constructJoinBuildInstruction(c *Compile, in vm.Instruction, proc *process.Process, shuffleCnt int, isDup bool) vm.Instruction {
+func constructJoinBuildInstruction(c *Compile, in vm.Instruction, shuffleCnt int, isDup bool) vm.Instruction {
 	switch in.Op {
 	case vm.IndexJoin:
 		arg := in.Arg.(*indexjoin.Argument)
