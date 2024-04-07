@@ -28,6 +28,7 @@ func OrderedBinarySearchOffsetByValFactory[T types.OrderedT](vals []T) func(*Vec
 	return func(vec *Vector) []int32 {
 		var sels []int32
 		rows := MustFixedCol[T](vec)
+		subVals := vals
 		if len(vals) >= kMinLenForSubVector {
 			minVal := rows[0]
 			maxVal := rows[len(rows)-1]
@@ -37,17 +38,17 @@ func OrderedBinarySearchOffsetByValFactory[T types.OrderedT](vals []T) func(*Vec
 			upperBound := sort.Search(len(vals), func(i int) bool {
 				return maxVal < vals[i]
 			})
-			vals = vals[lowerBound:upperBound]
+			subVals = vals[lowerBound:upperBound]
 		}
 
-		if len(vals) <= kMaxLenForBinarySearch {
+		if len(subVals) <= kMaxLenForBinarySearch {
 			offset := 0
-			for i := range vals {
+			for i := range subVals {
 				idx := sort.Search(len(rows), func(idx int) bool {
-					return rows[idx] >= vals[i]
+					return rows[idx] >= subVals[i]
 				})
 				if idx < len(rows) {
-					if rows[idx] == vals[i] {
+					if rows[idx] == subVals[i] {
 						sels = append(sels, int32(offset+idx))
 					}
 					offset += idx
@@ -57,14 +58,14 @@ func OrderedBinarySearchOffsetByValFactory[T types.OrderedT](vals []T) func(*Vec
 				}
 			}
 		} else {
-			n1, n2 := len(rows), len(vals)
+			n1, n2 := len(rows), len(subVals)
 			i1, i2 := 0, 0
 			for i1 < n1 && i2 < n2 {
-				if rows[i1] == vals[i2] {
+				if rows[i1] == subVals[i2] {
 					sels = append(sels, int32(i1))
 					i1++
 					i2++
-				} else if rows[i1] < vals[i2] {
+				} else if rows[i1] < subVals[i2] {
 					i1++
 				} else {
 					i2++
@@ -83,21 +84,22 @@ func VarlenBinarySearchOffsetByValFactory(vals [][]byte) func(*Vector) []int32 {
 		if n1 == 0 {
 			return sels
 		}
+		subVals := vals
 		if len(vals) >= kMinLenForSubVector {
 			lowerBound := sort.Search(len(vals), func(i int) bool {
 				return bytes.Compare(vec.GetBytesAt(0), vals[i]) <= 0
 			})
 			upperBound := sort.Search(len(vals), func(i int) bool {
-				return types.PrefixCompare(vec.GetBytesAt(n1-1), vals[i]) < 0
+				return bytes.Compare(vec.GetBytesAt(n1-1), vals[i]) < 0
 			})
-			vals = vals[lowerBound:upperBound]
+			subVals = vals[lowerBound:upperBound]
 		}
 
-		if len(vals) <= kMaxLenForBinarySearch {
+		if len(subVals) <= kMaxLenForBinarySearch {
 			offset := 0
-			for i := range vals {
+			for i := range subVals {
 				idx, found := sort.Find(n1, func(idx int) int {
-					return bytes.Compare(vals[i], vec.GetBytesAt(offset+idx))
+					return bytes.Compare(subVals[i], vec.GetBytesAt(offset+idx))
 				})
 				if idx < n1 {
 					if found {
@@ -110,12 +112,12 @@ func VarlenBinarySearchOffsetByValFactory(vals [][]byte) func(*Vector) []int32 {
 				}
 			}
 		} else {
-			n2 := len(vals)
+			n2 := len(subVals)
 			i1, i2 := 0, 0
 			varlenas := MustFixedCol[types.Varlena](vec)
 			s1 := varlenas[0].GetByteSlice(vec.GetArea())
 			for i2 < n2 {
-				ord := bytes.Compare(s1, vals[i2])
+				ord := bytes.Compare(s1, subVals[i2])
 				if ord == 0 {
 					sels = append(sels, int32(i1))
 					i1++
@@ -145,6 +147,7 @@ func FixedSizedBinarySearchOffsetByValFactory[T any](vals []T, cmp func(T, T) in
 		var sels []int32
 		rows := MustFixedCol[T](vec)
 
+		subVals := vals
 		if len(vals) >= kMinLenForSubVector {
 			minVal := rows[0]
 			maxVal := rows[len(rows)-1]
@@ -154,14 +157,14 @@ func FixedSizedBinarySearchOffsetByValFactory[T any](vals []T, cmp func(T, T) in
 			upperBound := sort.Search(len(vals), func(i int) bool {
 				return cmp(maxVal, vals[i]) < 0
 			})
-			vals = vals[lowerBound:upperBound]
+			subVals = vals[lowerBound:upperBound]
 		}
 
-		if len(vals) <= kMaxLenForBinarySearch {
+		if len(subVals) <= kMaxLenForBinarySearch {
 			offset := 0
-			for i := range vals {
+			for i := range subVals {
 				idx, found := sort.Find(len(rows), func(idx int) int {
-					return cmp(vals[i], rows[i])
+					return cmp(subVals[i], rows[i])
 				})
 				if idx < len(rows) {
 					if found {
@@ -174,10 +177,10 @@ func FixedSizedBinarySearchOffsetByValFactory[T any](vals []T, cmp func(T, T) in
 				}
 			}
 		} else {
-			n1, n2 := len(rows), len(vals)
+			n1, n2 := len(rows), len(subVals)
 			i1, i2 := 0, 0
 			for i1 < n1 && i2 < n2 {
-				ord := cmp(rows[i1], vals[i2])
+				ord := cmp(rows[i1], subVals[i2])
 				if ord == 0 {
 					sels = append(sels, int32(i1))
 					i1++
