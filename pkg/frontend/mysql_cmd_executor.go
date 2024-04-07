@@ -3600,6 +3600,13 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 		return
 	}
 
+	defer func() {
+		// Serialize the execution plan as json
+		if cwft, ok := cw.(*TxnComputationWrapper); ok {
+			_ = cwft.RecordExecPlan(requestCtx)
+		}
+	}()
+
 	cmpBegin = time.Now()
 
 	if ret, err = cw.Compile(requestCtx, ses, ses.GetOutputCallback()); err != nil {
@@ -3691,13 +3698,6 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 				return
 			}
 
-			/*
-			   Serialize the execution plan by json
-			*/
-			if cwft, ok := cw.(*TxnComputationWrapper); ok {
-				_ = cwft.RecordExecPlan(requestCtx)
-			}
-
 		} else {
 			columns, err = cw.GetColumns()
 			if err != nil {
@@ -3766,13 +3766,6 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 			err = proto.sendEOFOrOkPacket(0, extendStatus(ses.GetServerStatus()))
 			if err != nil {
 				return
-			}
-
-			/*
-				Step 4: Serialize the execution plan by json
-			*/
-			if cwft, ok := cw.(*TxnComputationWrapper); ok {
-				_ = cwft.RecordExecPlan(requestCtx)
 			}
 		}
 
@@ -3857,12 +3850,6 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 			return
 		}
 
-		/*
-			Step 4: Serialize the execution plan by json
-		*/
-		if cwft, ok := cw.(*TxnComputationWrapper); ok {
-			_ = cwft.RecordExecPlan(requestCtx)
-		}
 	//just status, no result set
 	case *tree.CreateTable, *tree.DropTable, *tree.CreateDatabase, *tree.DropDatabase,
 		*tree.CreateIndex, *tree.DropIndex,
@@ -3933,12 +3920,6 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 
 		logDebug(ses, ses.GetDebugString(), fmt.Sprintf("time of SendResponse %s", time.Since(echoTime).String()))
 
-		/*
-			Step 4: Serialize the execution plan by json
-		*/
-		if cwft, ok := cw.(*TxnComputationWrapper); ok {
-			_ = cwft.RecordExecPlan(requestCtx)
-		}
 	case *tree.ExplainAnalyze:
 		explainColName := "QUERY PLAN"
 		columns, err = GetExplainColumns(requestCtx, explainColName)
@@ -4821,30 +4802,30 @@ func (h *marshalPlanHandler) Stats(ctx context.Context) (statsByte statistic.Sta
 				stats.BytesScan += bytes
 			}
 		}
-
-		statsInfo := statistic.StatsInfoFromContext(ctx)
-		if statsInfo != nil {
-			val := int64(statsByte.GetTimeConsumed()) +
-				int64(statsInfo.ParseDuration+
-					statsInfo.CompileDuration+
-					statsInfo.PlanDuration) - (statsInfo.IOAccessTimeConsumption + statsInfo.LockTimeConsumption)
-			if val < 0 {
-				logutil.Warnf(" negative cpu (%s) + statsInfo(%d + %d + %d - %d - %d) = %d",
-					uuid.UUID(h.stmt.StatementID).String(),
-					statsInfo.ParseDuration,
-					statsInfo.CompileDuration,
-					statsInfo.PlanDuration,
-					statsInfo.IOAccessTimeConsumption,
-					statsInfo.LockTimeConsumption,
-					val)
-				v2.GetTraceNegativeCUCounter("cpu").Inc()
-			} else {
-				statsByte.WithTimeConsumed(float64(val))
-			}
-		}
 	} else {
 		statsByte = statistic.DefaultStatsArray
 	}
+	statsInfo := statistic.StatsInfoFromContext(ctx)
+	if statsInfo != nil {
+		val := int64(statsByte.GetTimeConsumed()) +
+			int64(statsInfo.ParseDuration+
+				statsInfo.CompileDuration+
+				statsInfo.PlanDuration) - (statsInfo.IOAccessTimeConsumption + statsInfo.LockTimeConsumption)
+		if val < 0 {
+			logutil.Warnf(" negative cpu (%s) + statsInfo(%d + %d + %d - %d - %d) = %d",
+				uuid.UUID(h.stmt.StatementID).String(),
+				statsInfo.ParseDuration,
+				statsInfo.CompileDuration,
+				statsInfo.PlanDuration,
+				statsInfo.IOAccessTimeConsumption,
+				statsInfo.LockTimeConsumption,
+				val)
+			v2.GetTraceNegativeCUCounter("cpu").Inc()
+		} else {
+			statsByte.WithTimeConsumed(float64(val))
+		}
+	}
+
 	return
 }
 
