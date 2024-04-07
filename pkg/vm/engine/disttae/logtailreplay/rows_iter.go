@@ -200,7 +200,7 @@ func (p *primaryKeyIter) Next() bool {
 
 		// validate
 		valid := false
-		rowsIter := p.rows.NewIter(nil)
+		rowsIter := p.rows.NewIter(new(pt.Iter[RowEntry]))
 		for row, ok := rowsIter.Seek(RowEntry{
 			BlockID: entry.BlockID,
 			RowID:   entry.RowID,
@@ -303,7 +303,7 @@ func (p *primaryKeyDelIter) Next() bool {
 
 		// validate
 		valid := false
-		rowsIter := p.rows.NewIter(nil)
+		rowsIter := p.rows.NewIter(new(pt.Iter[RowEntry]))
 		for row, ok := rowsIter.Seek(RowEntry{
 			BlockID: entry.BlockID,
 			RowID:   entry.RowID,
