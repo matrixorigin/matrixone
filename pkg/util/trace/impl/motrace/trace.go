@@ -70,6 +70,7 @@ func InitWithConfig(ctx context.Context, SV *config.ObservabilityParameters, opt
 		WithSelectThreshold(SV.SelectAggrThreshold.Duration),
 		WithStmtMergeEnable(SV.EnableStmtMerge),
 		WithCUConfig(SV.CU, SV.CUv1),
+		WithTCPPacket(SV.TCPPacket),
 		WithLabels(SV.LabelSelector),
 
 		DebugMode(SV.EnableTraceDebug),
