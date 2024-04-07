@@ -2543,48 +2543,67 @@ func appendPreInsertSkVectorPlan(
 		insert into tbl values("8", "80", "[130,40,90]");
 
 		create table centroids (`__mo_index_centroid_version` BIGINT NOT NULL, `__mo_index_centroid_id` BIGINT NOT NULL, `__mo_index_centroid` VECF32(3) DEFAULT NULL, PRIMARY KEY (`__mo_index_centroid_version`,`__mo_index_centroid_id`));
-		insert into centroids values(0,1,"[1,2,3]");
-		insert into centroids values(0,2,"[130,40,90]");
+		insert into centroids values(0,1,"[0.26726124, 0.5345225, 0.80178374]");
+		insert into centroids values(0,2,"[0.7970811, 0.24525574, 0.5518254]");
 
-		select
-		`__mo_index_centroid_version`,
-		`__mo_index_centroid_id`,
-		`id`,
-		`embedding`
-		from
-		(select
-		`centroids`.`__mo_index_centroid_version`,
-		`centroids`.`__mo_index_centroid_id`,
-		`tbl`.`id`,
-		`tbl`.`embedding`,
-		ROW_NUMBER() OVER (PARTITION BY `tbl`.`id` ORDER BY l2_distance(`centroids`.`__mo_index_centroid`, tbl.embedding) ) as `__mo_index_rn`
-		from
-		tbl cross join (select * from `centroids` where `__mo_index_centroid_version` = 0) as `centroids`)
-		where `__mo_index_rn` =1;
+		SELECT     derived.`__mo_index_centroid_version`,
+				   derived.`__mo_centroid_id`,
+				   derived.`__mo_org_tbl_pk_may_serial_col`,
+				   tbl.embedding
+		FROM       tbl
+		INNER join (
+					  SELECT     `centroids`.`__mo_index_centroid_version` AS `__mo_index_centroid_version`,
+								 serial_extract(
+									min(
+										serial_full(
+											l2_distance(`centroids`.`__mo_index_centroid`, `tbl`.`__mo_org_tbl_norm_vec_col`),
+											`centroids`.`__mo_index_centroid_id`
+										)
+									), 1 AS bigint
+								 ) AS `__mo_centroid_id`,
+								 __mo_org_tbl_pk_may_serial_col,
+								 tbl.embedding
+					  FROM       (
+										SELECT `tbl`.`id`                      AS `__mo_org_tbl_pk_may_serial_col`,
+											   normalize_l2(`tbl`.`embedding`) AS `__mo_org_tbl_norm_vec_col`,
+											   `tbl`.`embedding`
+										FROM   `a`.`tbl`) AS `tbl`
+					  CROSS JOIN
+								 (SELECT * FROM   `a`.`centroids`) AS `centroids`
+					  GROUP BY   `centroids`.`__mo_index_centroid_version`,
+								 __mo_org_tbl_pk_may_serial_col,
+								 tbl.embedding
+					) AS derived
+		where tbl.id = derived.`__mo_org_tbl_pk_may_serial_col`;
 
 		### Corresponding Plan
-		-------------------------------------------------------------------------------------------------------------------------------
-		| Plan 1:                                                                                                                     |
-		| Insert on a.__mo_index_secondary_018eb07e-0a7a-7d5e-a326-b7c79a079e2b                                                       |
-		|   ->  Lock                                                                                                                  |
-		|         ->  Project                                                                                                         |
-		|               ->  Aggregate                                                                                                 |
-		|                     Group Key: __mo_index_centroid_version, id, embedding                                                   |
-		|                     Aggregate Functions: min(serial_full(l2_distance(__mo_index_centroid, #[0,5]), __mo_index_centroid_id)) |
-		|                     ->  Join                                                                                                |
-		|                           Join Type: INNER                                                                                  |
-		|                           ->  Project                                                                                       |
-		|                                 ->  Project                                                                                 |
-		|                                       ->  Sink Scan                                                                         |
-		|                                             DataSource: Plan 0                                                              |
-		|                           ->  Join                                                                                          |
-		|                                 Join Type: INNER                                                                            |
-		|                                 Join Cond: (__mo_index_centroid_version = cast(__mo_index_val AS BIGINT))                   |
-		|                                 ->  Table Scan on a.__mo_index_secondary_018eb07e-0a7a-7961-ae0c-f9d4d4b2e360               |
-		|                                 ->  Table Scan on a.__mo_index_secondary_018eb07e-0a7a-7333-bc1d-52392b14bd6d               |
-		|                                       Filter Cond: (__mo_index_key = cast('version' AS VARCHAR))                            |
-		-------------------------------------------------------------------------------------------------------------------------------
-
+		-------------------------------------------------------------------------------------------------------------------------------------
+		| Plan 1:                                                                                                                           |
+		| Insert on a.__mo_index_secondary_018eb783-f6d8-7eb7-9ac0-eae273add9d2                                                             |
+		|   ->  Lock                                                                                                                        |
+		|         ->  Join                                                                                                                  |
+		|               Join Type: INNER                                                                                                    |
+		|               Join Cond: (id = id)                                                                                                |
+		|               ->  Project                                                                                                         |
+		|                     ->  Sink Scan                                                                                                 |
+		|                           DataSource: Plan 0                                                                                      |
+		|               ->  Project                                                                                                         |
+		|                     ->  Aggregate                                                                                                 |
+		|                           Group Key: __mo_index_centroid_version, id                                                              |
+		|                           Aggregate Functions: min(serial_full(l2_distance(__mo_index_centroid, #[0,5]), __mo_index_centroid_id)) |
+		|                           ->  Join                                                                                                |
+		|                                 Join Type: INNER                                                                                  |
+		|                                 ->  Project                                                                                       |
+		|                                       ->  Project                                                                                 |
+		|                                             ->  Sink Scan                                                                         |
+		|                                                   DataSource: Plan 0                                                              |
+		|                                 ->  Join                                                                                          |
+		|                                       Join Type: INNER                                                                            |
+		|                                       Join Cond: (__mo_index_centroid_version = cast(__mo_index_val AS BIGINT))                   |
+		|                                       ->  Table Scan on a.__mo_index_secondary_018eb783-f6d8-7c89-9d8f-894c583da9ca               |
+		|                                       ->  Table Scan on a.__mo_index_secondary_018eb783-f6d8-7d9d-82fa-bc3bf3ac2747               |
+		|                                             Filter Cond: (__mo_index_key = cast('version' AS VARCHAR))                            |
+		-------------------------------------------------------------------------------------------------------------------------------------
 	*/
 
 	//1.a get vector & pk column details
