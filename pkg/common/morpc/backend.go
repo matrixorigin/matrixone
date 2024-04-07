@@ -676,6 +676,8 @@ func (rb *remoteBackend) makeAllWaitingFutureFailed() {
 			if f.waiting.Load() {
 				waitings = append(waitings, f)
 				ids = append(ids, id)
+			} else {
+				f.messageSent(backendClosed)
 			}
 		}
 	}()
