@@ -208,7 +208,7 @@ func (o ObjectEntry) Location() objectio.Location {
 }
 
 func (o ObjectInfo) StatsValid() bool {
-	return o.ObjectStats.Rows() != 0
+	return o.Rows() != 0
 }
 
 type ObjectIndexByCreateTSEntry struct {
@@ -530,10 +530,9 @@ func (p *PartitionState) HandleObjectInsert(ctx context.Context, bat *api.Batch,
 			panic("logic error")
 		}
 		// for appendable object, gc rows when delete object
-		iter := p.rows.NewIter(new(pt.Iter[RowEntry]))
 		objID := objEntry.ObjectStats.ObjectName().ObjectId()
 		trunctPoint := startTSCol[idx]
-		blkCnt := objEntry.ObjectStats.BlkCnt()
+		blkCnt := objEntry.BlkCnt()
 		for i := uint32(0); i < blkCnt; i++ {
 
 			blkID := objectio.NewBlockidWithObjectID(objID, uint16(i))
@@ -541,6 +540,7 @@ func (p *PartitionState) HandleObjectInsert(ctx context.Context, bat *api.Batch,
 				// aobj has only one blk
 				BlockID: *blkID,
 			}
+			iter := p.rows.NewIter(new(pt.Iter[RowEntry]))
 			for entry, ok := iter.Seek(pivot); ok; entry, ok = iter.Next() {
 				if entry.BlockID != *blkID {
 					break

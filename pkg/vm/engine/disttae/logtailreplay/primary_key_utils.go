@@ -28,11 +28,11 @@ func (p *PartitionState) PKExistInMemBetween(
 	keys [][]byte,
 ) (bool, bool) {
 	iter := p.primaryIndex.NewIter(new(pt.Iter[*PrimaryIndexEntry]))
+	defer iter.Close()
 	pivot := RowEntry{
 		Time: types.BuildTS(math.MaxInt64, math.MaxUint32),
 	}
 	idxEntry := &PrimaryIndexEntry{}
-	defer iter.Close()
 
 	for _, key := range keys {
 
