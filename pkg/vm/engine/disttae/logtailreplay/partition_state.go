@@ -44,7 +44,7 @@ type PartitionState struct {
 	prioritySource pt.PrioritySource
 	rows           *pt.Treap[RowEntry]
 	//table data objects
-	dataObjects           *btree.BTreeG[ObjectEntry]
+	dataObjects           *pt.Treap[ObjectEntry]
 	dataObjectsByCreateTS *btree.BTreeG[ObjectIndexByCreateTSEntry]
 	//TODO:: It's transient, should be removed in future PR.
 	blockDeltas *btree.BTreeG[BlockDeltaEntry]
@@ -194,6 +194,10 @@ func (o ObjectEntry) Less(than ObjectEntry) bool {
 	return bytes.Compare((*o.ObjectShortName())[:], (*than.ObjectShortName())[:]) < 0
 }
 
+func (o ObjectEntry) Compare(than ObjectEntry) int {
+	return bytes.Compare((*o.ObjectShortName())[:], (*than.ObjectShortName())[:])
+}
+
 func (o ObjectEntry) IsEmpty() bool {
 	return o.Size() == 0
 }
@@ -313,7 +317,6 @@ func NewPartitionState(noData bool) *PartitionState {
 	return &PartitionState{
 		prioritySource:        pt.NewPrioritySource(),
 		noData:                noData,
-		dataObjects:           btree.NewBTreeGOptions((ObjectEntry).Less, opts),
 		dataObjectsByCreateTS: btree.NewBTreeGOptions((ObjectIndexByCreateTSEntry).Less, opts),
 		blockDeltas:           btree.NewBTreeGOptions((BlockDeltaEntry).Less, opts),
 		dirtyBlocks:           btree.NewBTreeGOptions((types.Blockid).Less, opts),
@@ -326,7 +329,7 @@ func (p *PartitionState) Copy() *PartitionState {
 	state := PartitionState{
 		prioritySource:        pt.NewPrioritySource(),
 		rows:                  p.rows,
-		dataObjects:           p.dataObjects.Copy(),
+		dataObjects:           p.dataObjects,
 		dataObjectsByCreateTS: p.dataObjectsByCreateTS.Copy(),
 		blockDeltas:           p.blockDeltas.Copy(),
 		primaryIndex:          p.primaryIndex,
@@ -510,7 +513,7 @@ func (p *PartitionState) HandleObjectInsert(ctx context.Context, bat *api.Batch,
 			logutil.Errorf("prefetch object meta failed. %v", err)
 		}
 
-		p.dataObjects.Set(objEntry)
+		p.dataObjects, _ = p.dataObjects.Upsert(objEntry, p.prioritySource(), false)
 		p.dataObjectsByCreateTS.Set(ObjectIndexByCreateTSEntry(objEntry))
 		{
 			//Need to insert an entry in objectIndexByTS, when soft delete appendable object.
@@ -887,7 +890,7 @@ func (p *PartitionState) HandleMetadataInsert(
 				if uint32(blkCnt) > objEntry.BlkCnt() {
 					objectio.SetObjectStatsBlkCnt(&objEntry.ObjectStats, uint32(blkCnt))
 				}
-				p.dataObjects.Set(objEntry)
+				p.dataObjects, _ = p.dataObjects.Upsert(objEntry, p.prioritySource(), false)
 				// For deltaloc batch after block is removed,
 				// objEntry.CreateTime is empty.
 				// and it's temporary.
@@ -915,7 +918,7 @@ func (p *PartitionState) HandleMetadataInsert(
 				objectio.SetObjectStatsBlkCnt(&objEntry.ObjectStats, uint32(blkCnt))
 			}
 
-			p.dataObjects.Set(objEntry)
+			p.dataObjects, _ = p.dataObjects.Upsert(objEntry, p.prioritySource(), false)
 
 			if !objEntry.CreateTime.IsEmpty() {
 				p.dataObjectsByCreateTS.Set(ObjectIndexByCreateTSEntry(objEntry))
@@ -956,7 +959,7 @@ func (p *PartitionState) objectDeleteHelper(
 	if objEntry.DeleteTime.IsEmpty() {
 		// apply first delete
 		objEntry.DeleteTime = deleteTime
-		p.dataObjects.Set(objEntry)
+		p.dataObjects, _ = p.dataObjects.Upsert(objEntry, p.prioritySource(), false)
 		p.dataObjectsByCreateTS.Set(ObjectIndexByCreateTSEntry(objEntry))
 
 		{
@@ -986,7 +989,7 @@ func (p *PartitionState) objectDeleteHelper(
 			}
 			p.objectIndexByTS.Delete(old)
 			objEntry.DeleteTime = deleteTime
-			p.dataObjects.Set(objEntry)
+			p.dataObjects, _ = p.dataObjects.Upsert(objEntry, p.prioritySource(), false)
 			p.dataObjectsByCreateTS.Set(ObjectIndexByCreateTSEntry(objEntry))
 
 			new := ObjectIndexByTSEntry{
@@ -1106,25 +1109,17 @@ func (p *PartitionState) truncate(ids [2]uint64, ts types.TS) {
 	}
 
 	objsToDelete := ""
-	objIter := p.dataObjects.Copy().Iter()
+	objIter := p.dataObjects.NewIter()
 	objGced := false
-	firstCalled := false
+
 	for {
-		if !firstCalled {
-			if !objIter.First() {
-				break
-			}
-			firstCalled = true
-		} else {
-			if !objIter.Next() {
-				break
-			}
+		objEntry, ok := objIter.Next()
+		if !ok {
+			break
 		}
 
-		objEntry := objIter.Item()
-
 		if !objEntry.DeleteTime.IsEmpty() && objEntry.DeleteTime.LessEq(&ts) {
-			p.dataObjects.Delete(objEntry)
+			p.dataObjects, _ = p.dataObjects.Remove(objEntry, false)
 			//p.dataObjectsByCreateTS.Delete(ObjectIndexByCreateTSEntry{
 			//	//CreateTime:   objEntry.CreateTime,
 			//	//ShortObjName: objEntry.ShortObjName,

@@ -37,7 +37,7 @@ type objectsIter struct {
 
 // not accurate!  only used by stats
 func (p *PartitionState) ApproxObjectsNum() int {
-	return p.dataObjects.Len()
+	return p.dataObjects.Length()
 }
 
 func (p *PartitionState) NewObjectsIter(ts types.TS) (*objectsIter, error) {
@@ -194,13 +194,12 @@ func (p *PartitionState) GetBockDeltaLoc(bid types.Blockid) (objectio.ObjectLoca
 }
 
 func (p *PartitionState) BlockPersisted(blockID types.Blockid) bool {
-	iter := p.dataObjects.Copy().Iter()
-	defer iter.Release()
+	iter := p.dataObjects.NewIter()
+	defer iter.Close()
 
 	pivot := ObjectEntry{}
 	objectio.SetObjectStatsShortName(&pivot.ObjectStats, objectio.ShortName(&blockID))
-	if ok := iter.Seek(pivot); ok {
-		e := iter.Item()
+	if e, ok := iter.Seek(pivot); ok {
 		if bytes.Equal(e.ObjectShortName()[:], objectio.ShortName(&blockID)[:]) {
 			return true
 		}
@@ -209,15 +208,14 @@ func (p *PartitionState) BlockPersisted(blockID types.Blockid) bool {
 }
 
 func (p *PartitionState) GetObject(name objectio.ObjectNameShort) (ObjectInfo, bool) {
-	iter := p.dataObjects.Copy().Iter()
-	defer iter.Release()
+	iter := p.dataObjects.NewIter()
+	defer iter.Close()
 
 	pivot := ObjectEntry{}
 	objectio.SetObjectStatsShortName(&pivot.ObjectStats, &name)
-	if ok := iter.Seek(pivot); ok {
-		e := iter.Item()
+	if e, ok := iter.Seek(pivot); ok {
 		if bytes.Equal(e.ObjectShortName()[:], name[:]) {
-			return iter.Item().ObjectInfo, true
+			return e.ObjectInfo, true
 		}
 	}
 	return ObjectInfo{}, false
