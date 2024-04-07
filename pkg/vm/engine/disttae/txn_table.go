@@ -1580,15 +1580,15 @@ func (tbl *txnTable) TableRenameInTxn(ctx context.Context, constraint [][]byte) 
 	newtbl.db.op.GetWorkspace().(*Transaction).addCreateTable(newkey, newtbl)
 	newtbl.db.op.GetWorkspace().(*Transaction).deletedTableMap.Delete(newkey)
 	//---------------------------------------------------------------------------------
-	for i := 0; i < len(newtbl.db.txn.writes); i++ {
-		if newtbl.db.txn.writes[i].tableId == catalog.MO_DATABASE_ID ||
-			newtbl.db.txn.writes[i].tableId == catalog.MO_TABLES_ID ||
-			newtbl.db.txn.writes[i].tableId == catalog.MO_COLUMNS_ID {
+	for i := 0; i < len(newtbl.db.op.GetWorkspace().(*Transaction).writes); i++ {
+		if newtbl.db.op.GetWorkspace().(*Transaction).writes[i].tableId == catalog.MO_DATABASE_ID ||
+			newtbl.db.op.GetWorkspace().(*Transaction).writes[i].tableId == catalog.MO_TABLES_ID ||
+			newtbl.db.op.GetWorkspace().(*Transaction).writes[i].tableId == catalog.MO_COLUMNS_ID {
 			continue
 		}
 
-		if newtbl.db.txn.writes[i].tableName == oldTableName {
-			newtbl.db.txn.writes[i].tableName = tbl.tableName
+		if newtbl.db.op.GetWorkspace().(*Transaction).writes[i].tableName == oldTableName {
+			newtbl.db.op.GetWorkspace().(*Transaction).writes[i].tableName = tbl.tableName
 			logutil.Infof("copy table '%s' has been rename to '%s' in txn", oldTableName, tbl.tableName)
 		}
 	}
