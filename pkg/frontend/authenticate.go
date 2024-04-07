@@ -581,6 +581,7 @@ const (
 	PrivilegeTypeExecute
 	PrivilegeTypeCanGrantRoleToOthersInCreateUser // used in checking the privilege of CreateUser with the default role
 	PrivilegeTypeValues
+	PrivilegeTypeUpgradeAccount
 )
 
 type PrivilegeScope uint8
@@ -638,6 +639,8 @@ func (pt PrivilegeType) String() string {
 		return "drop account"
 	case PrivilegeTypeAlterAccount:
 		return "alter account"
+	case PrivilegeTypeUpgradeAccount:
+		return "upgrade account"
 	case PrivilegeTypeCreateUser:
 		return "create user"
 	case PrivilegeTypeDropUser:
@@ -725,6 +728,8 @@ func (pt PrivilegeType) Scope() PrivilegeScope {
 	case PrivilegeTypeDropAccount:
 		return PrivilegeScopeSys
 	case PrivilegeTypeAlterAccount:
+		return PrivilegeScopeSys
+	case PrivilegeTypeUpgradeAccount:
 		return PrivilegeScopeSys
 	case PrivilegeTypeCreateUser:
 		return PrivilegeScopeAccount
@@ -970,7 +975,8 @@ var (
 				created_time timestamp,
 				comments varchar(256),
 				version bigint unsigned auto_increment,
-				suspended_time timestamp default NULL
+				suspended_time timestamp default NULL,
+				create_version varchar(50) default '1.2.0'
 			);`,
 		`create table mo_role(
 				role_id int signed auto_increment primary key,
@@ -1209,12 +1215,14 @@ var (
 				account_name,
 				status,
 				created_time,
-				comments) values (%d,"%s","%s","%s","%s");`
+				comments,
+                create_version) values (%d,"%s","%s","%s","%s","%s");`
 	initMoAccountWithoutIDFormat = `insert into mo_catalog.mo_account(
 				account_name,
 				status,
 				created_time,
-				comments) values ("%s","%s","%s","%s");`
+				comments,
+				create_version) values ("%s","%s","%s","%s","%s");`
 	initMoRoleFormat = `insert into mo_catalog.mo_role(
 				role_id,
 				role_name,
@@ -1630,9 +1638,10 @@ var (
 
 	// the privileges that can not be granted or revoked
 	bannedPrivileges = map[PrivilegeType]int8{
-		PrivilegeTypeCreateAccount: 0,
-		PrivilegeTypeAlterAccount:  0,
-		PrivilegeTypeDropAccount:   0,
+		PrivilegeTypeCreateAccount:  0,
+		PrivilegeTypeAlterAccount:   0,
+		PrivilegeTypeDropAccount:    0,
+		PrivilegeTypeUpgradeAccount: 0,
 	}
 )
 
@@ -1674,7 +1683,7 @@ func getSqlForCheckSnapshot(ctx context.Context, snapshot string) (string, error
 	return fmt.Sprintf(checkSnapshotFormat, snapshot), nil
 }
 
-func getSqlForCheckStageStatus(ctx context.Context, status string) string {
+func getSqlForCheckStageStatus(_ context.Context, status string) string {
 	return fmt.Sprintf(checkStageStatusFormat, status)
 }
 
@@ -2114,7 +2123,7 @@ func getSqlForupdateConfigurationByAccount(ctx context.Context, varValue, accoun
 	return fmt.Sprintf(updateConfigurationByAccountNameFormat, varValue, accountName, varName), nil
 }
 
-func getSqlForSpBody(ctx context.Context, name string, db string) (string, error) {
+func getSqlForSpBody(_ context.Context, name string, db string) (string, error) {
 	return fmt.Sprintf(fetchSqlOfSpFormat, name, db), nil
 }
 
@@ -2289,6 +2298,7 @@ var (
 		PrivilegeTypeCreateAccount:     {PrivilegeTypeCreateAccount, privilegeLevelStar, objectTypeAccount, objectIDAll, false, "", "", privilegeEntryTypeGeneral, nil},
 		PrivilegeTypeDropAccount:       {PrivilegeTypeDropAccount, privilegeLevelStar, objectTypeAccount, objectIDAll, false, "", "", privilegeEntryTypeGeneral, nil},
 		PrivilegeTypeAlterAccount:      {PrivilegeTypeAlterAccount, privilegeLevelStar, objectTypeAccount, objectIDAll, false, "", "", privilegeEntryTypeGeneral, nil},
+		PrivilegeTypeUpgradeAccount:    {PrivilegeTypeUpgradeAccount, privilegeLevelStar, objectTypeAccount, objectIDAll, false, "", "", privilegeEntryTypeGeneral, nil},
 		PrivilegeTypeCreateUser:        {PrivilegeTypeCreateUser, privilegeLevelStar, objectTypeAccount, objectIDAll, true, "", "", privilegeEntryTypeGeneral, nil},
 		PrivilegeTypeDropUser:          {PrivilegeTypeDropUser, privilegeLevelStar, objectTypeAccount, objectIDAll, true, "", "", privilegeEntryTypeGeneral, nil},
 		PrivilegeTypeAlterUser:         {PrivilegeTypeAlterUser, privilegeLevelStar, objectTypeAccount, objectIDAll, true, "", "", privilegeEntryTypeGeneral, nil},
@@ -2334,6 +2344,7 @@ var (
 		PrivilegeTypeCreateAccount,
 		PrivilegeTypeDropAccount,
 		PrivilegeTypeAlterAccount,
+		PrivilegeTypeUpgradeAccount,
 		PrivilegeTypeCreateUser,
 		PrivilegeTypeDropUser,
 		PrivilegeTypeAlterUser,
@@ -5696,6 +5707,12 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		typs = append(typs, PrivilegeTypeDropAccount)
 	case *tree.AlterAccount:
 		typs = append(typs, PrivilegeTypeAlterAccount)
+	case *tree.UpgradeStatement:
+		typs = append(typs, PrivilegeTypeUpgradeAccount)
+		objType = objectTypeNone
+		kind = privilegeKindSpecial
+		special = specialTagAdmin
+		canExecInRestricted = true
 	case *tree.CreateUser:
 		if st.Role == nil {
 			typs = append(typs, PrivilegeTypeCreateUser, PrivilegeTypeAccountAll /*, PrivilegeTypeAccountOwnership*/)
@@ -5777,7 +5794,8 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 	case *tree.Use:
 		typs = append(typs, PrivilegeTypeConnect, PrivilegeTypeAccountAll /*, PrivilegeTypeAccountOwnership*/)
 		canExecInRestricted = true
-	case *tree.ShowTables, *tree.ShowCreateTable, *tree.ShowColumns, *tree.ShowCreateView, *tree.ShowCreateDatabase, *tree.ShowCreatePublications:
+	case *tree.ShowTables, *tree.ShowCreateTable, *tree.ShowColumns, *tree.ShowCreateView, *tree.ShowCreateDatabase,
+		*tree.ShowCreatePublications:
 		objType = objectTypeDatabase
 		typs = append(typs, PrivilegeTypeShowTables, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
 		canExecInRestricted = true
@@ -5952,6 +5970,11 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		kind = privilegeKindNone
 		canExecInRestricted = true
 	case *tree.ShowAccounts:
+		objType = objectTypeNone
+		kind = privilegeKindSpecial
+		special = specialTagAdmin
+		canExecInRestricted = true
+	case *tree.ShowAccountUpgrade:
 		objType = objectTypeNone
 		kind = privilegeKindSpecial
 		special = specialTagAdmin
@@ -6518,7 +6541,7 @@ func determineRoleSetHasPrivilegeSet(ctx context.Context, bh BackgroundExec, ses
 
 // determineUserHasPrivilegeSet decides the privileges of user can satisfy the requirement of the privilege set
 // The algorithm 1.
-func determineUserHasPrivilegeSet(ctx context.Context, ses *Session, priv *privilege, stmt tree.Statement) (ret bool, err error) {
+func determineUserHasPrivilegeSet(ctx context.Context, ses *Session, priv *privilege) (ret bool, err error) {
 	var erArray []ExecResult
 	var yes bool
 	var roleB int64
@@ -6928,7 +6951,7 @@ func authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ctx con
 	if priv.objectType() != objectTypeAccount && priv.objectType() != objectTypeDatabase { //do nothing
 		return true, nil
 	}
-	ok, err = determineUserHasPrivilegeSet(ctx, ses, priv, stmt)
+	ok, err = determineUserHasPrivilegeSet(ctx, ses, priv)
 	if err != nil {
 		return false, err
 	}
@@ -7159,7 +7182,7 @@ func authenticateUserCanExecuteStatementWithObjectTypeDatabaseAndTable(ctx conte
 			return true, nil
 		}
 		convertPrivilegeTipsToPrivilege(priv, arr)
-		ok, err := determineUserHasPrivilegeSet(ctx, ses, priv, stmt)
+		ok, err := determineUserHasPrivilegeSet(ctx, ses, priv)
 		if err != nil {
 			return false, err
 		}
@@ -7230,6 +7253,8 @@ func getSqlForCheckRoleHasPrivilegeWGODependsOnPrivType(privType PrivilegeType) 
 	case PrivilegeTypeDropAccount:
 		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShip(int64(privType), int64(PrivilegeTypeAccountAll), int64(PrivilegeTypeAccountOwnership))
 	case PrivilegeTypeAlterAccount:
+		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShip(int64(privType), int64(PrivilegeTypeAccountAll), int64(PrivilegeTypeAccountOwnership))
+	case PrivilegeTypeUpgradeAccount:
 		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShip(int64(privType), int64(PrivilegeTypeAccountAll), int64(PrivilegeTypeAccountOwnership))
 	case PrivilegeTypeCreateUser:
 		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShip(int64(privType), int64(PrivilegeTypeAccountAll), int64(PrivilegeTypeAccountOwnership))
@@ -7460,6 +7485,8 @@ func convertAstPrivilegeTypeToPrivilegeType(ctx context.Context, priv tree.Privi
 		privType = PrivilegeTypeDropAccount
 	case tree.PRIVILEGE_TYPE_STATIC_ALTER_ACCOUNT:
 		privType = PrivilegeTypeAlterAccount
+	case tree.PRIVILEGE_TYPE_STATIC_UPGRADE_ACCOUNT:
+		privType = PrivilegeTypeUpgradeAccount
 	case tree.PRIVILEGE_TYPE_STATIC_CREATE_USER:
 		privType = PrivilegeTypeCreateUser
 	case tree.PRIVILEGE_TYPE_STATIC_DROP_USER:
@@ -7597,6 +7624,10 @@ func authenticateUserCanExecuteStatementWithObjectTypeNone(ctx context.Context, 
 			return checkRevokePrivilege()
 		case *tree.ShowAccounts:
 			return checkShowAccountsPrivilege()
+		case *tree.ShowAccountUpgrade:
+			return tenant.IsMoAdminRole(), nil
+		case *tree.UpgradeStatement:
+			return tenant.IsMoAdminRole(), nil
 		}
 	}
 
@@ -7604,7 +7635,7 @@ func authenticateUserCanExecuteStatementWithObjectTypeNone(ctx context.Context, 
 }
 
 // checkSysExistsOrNot checks the SYS tenant exists or not.
-func checkSysExistsOrNot(ctx context.Context, bh BackgroundExec, pu *config.ParameterUnit) (bool, error) {
+func checkSysExistsOrNot(ctx context.Context, bh BackgroundExec) (bool, error) {
 	var erArray []ExecResult
 	var err error
 	var tableNames []string
@@ -7665,9 +7696,10 @@ func checkSysExistsOrNot(ctx context.Context, bh BackgroundExec, pu *config.Para
 	return false, nil
 }
 
-// InitSysTenant initializes the tenant SYS before any tenants and accepting any requests
+// InitSysTenantOld initializes the tenant SYS before any tenants and accepting any requests
 // during the system is booting.
-func InitSysTenant(ctx context.Context, aicm *defines.AutoIncrCacheManager) (err error) {
+// Deprecated: Use InitSysTenant instead
+func InitSysTenantOld(ctx context.Context, aicm *defines.AutoIncrCacheManager, finalVersion string) (err error) {
 	var exists bool
 	var mp *mpool.MPool
 	pu := config.GetParameterUnit(ctx)
@@ -7719,13 +7751,13 @@ func InitSysTenant(ctx context.Context, aicm *defines.AutoIncrCacheManager) (err
 		return err
 	}
 
-	exists, err = checkSysExistsOrNot(ctx, bh, pu)
+	exists, err = checkSysExistsOrNot(ctx, bh)
 	if err != nil {
 		return err
 	}
 
 	if !exists {
-		err = createTablesInMoCatalog(ctx, bh, tenant, pu)
+		err = createTablesInMoCatalogOld(ctx, bh, tenant, pu, finalVersion)
 		if err != nil {
 			return err
 		}
@@ -7734,8 +7766,9 @@ func InitSysTenant(ctx context.Context, aicm *defines.AutoIncrCacheManager) (err
 	return err
 }
 
-// createTablesInMoCatalog creates catalog tables in the database mo_catalog.
-func createTablesInMoCatalog(ctx context.Context, bh BackgroundExec, tenant *TenantInfo, pu *config.ParameterUnit) error {
+// createTablesInMoCatalogOld creates catalog tables in the database mo_catalog.
+// Deprecated: Use createTablesInMoCatalog instead
+func createTablesInMoCatalogOld(ctx context.Context, bh BackgroundExec, tenant *TenantInfo, pu *config.ParameterUnit, finalVersion string) error {
 	var err error
 	var initMoAccount string
 	var initDataSqls []string
@@ -7754,7 +7787,7 @@ func createTablesInMoCatalog(ctx context.Context, bh BackgroundExec, tenant *Ten
 
 	//initialize the default data of tables for the tenant
 	//step 1: add new tenant entry to the mo_account
-	initMoAccount = fmt.Sprintf(initMoAccountFormat, sysAccountID, sysAccountName, sysAccountStatus, types.CurrentTimestamp().String2(time.UTC, 0), sysAccountComments)
+	initMoAccount = fmt.Sprintf(initMoAccountFormat, sysAccountID, sysAccountName, sysAccountStatus, types.CurrentTimestamp().String2(time.UTC, 0), sysAccountComments, finalVersion)
 	addSqlIntoSet(initMoAccount)
 
 	//step 2:add new role entries to the mo_role
@@ -7909,6 +7942,7 @@ func InitGeneralTenant(ctx context.Context, ses *Session, ca *CreateAccount) (er
 	ctx, span := trace.Debug(ctx, "InitGeneralTenant")
 	defer span.End()
 	tenant := ses.GetTenantInfo()
+	finalVersion := ses.rm.baseService.GetFinalVersion()
 
 	if !(tenant.IsSysTenant() && tenant.IsMoAdminRole()) {
 		return moerr.NewInternalError(ctx, "tenant %s user %s role %s do not have the privilege to create the new account", tenant.GetTenant(), tenant.GetUser(), tenant.GetDefaultRole())
@@ -7973,7 +8007,7 @@ func InitGeneralTenant(ctx context.Context, ses *Session, ca *CreateAccount) (er
 			}
 			return rtnErr
 		} else {
-			newTenant, newTenantCtx, rtnErr = createTablesInMoCatalogOfGeneralTenant(ctx, bh, ca)
+			newTenant, newTenantCtx, rtnErr = createTablesInMoCatalogOfGeneralTenant(ctx, bh, finalVersion, ca)
 			if rtnErr != nil {
 				return rtnErr
 			}
@@ -8023,7 +8057,7 @@ func InitGeneralTenant(ctx context.Context, ses *Session, ca *CreateAccount) (er
 		if rtnErr != nil {
 			return rtnErr
 		}
-		rtnErr = createTablesInInformationSchemaOfGeneralTenant(newTenantCtx, bh, newTenant)
+		rtnErr = createTablesInInformationSchemaOfGeneralTenant(newTenantCtx, bh)
 		if rtnErr != nil {
 			return rtnErr
 		}
@@ -8044,7 +8078,7 @@ func InitGeneralTenant(ctx context.Context, ses *Session, ca *CreateAccount) (er
 }
 
 // createTablesInMoCatalogOfGeneralTenant creates catalog tables in the database mo_catalog.
-func createTablesInMoCatalogOfGeneralTenant(ctx context.Context, bh BackgroundExec, ca *CreateAccount) (*TenantInfo, context.Context, error) {
+func createTablesInMoCatalogOfGeneralTenant(ctx context.Context, bh BackgroundExec, finalVersion string, ca *CreateAccount) (*TenantInfo, context.Context, error) {
 	var err error
 	var initMoAccount string
 	var erArray []ExecResult
@@ -8082,7 +8116,7 @@ func createTablesInMoCatalogOfGeneralTenant(ctx context.Context, bh BackgroundEx
 		}
 	}
 
-	initMoAccount = fmt.Sprintf(initMoAccountWithoutIDFormat, ca.Name, status, types.CurrentTimestamp().String2(time.UTC, 0), comment)
+	initMoAccount = fmt.Sprintf(initMoAccountWithoutIDFormat, ca.Name, status, types.CurrentTimestamp().String2(time.UTC, 0), comment, finalVersion)
 	//execute the insert
 	err = bh.Exec(ctx, initMoAccount)
 	if err != nil {
@@ -8262,7 +8296,7 @@ func createTablesInSystemOfGeneralTenant(ctx context.Context, bh BackgroundExec,
 }
 
 // createTablesInInformationSchemaOfGeneralTenant creates the database information_schema and the views or tables.
-func createTablesInInformationSchemaOfGeneralTenant(ctx context.Context, bh BackgroundExec, newTenant *TenantInfo) error {
+func createTablesInInformationSchemaOfGeneralTenant(ctx context.Context, bh BackgroundExec) error {
 	ctx, span := trace.Debug(ctx, "createTablesInInformationSchemaOfGeneralTenant")
 	defer span.End()
 	//with new tenant
@@ -9316,7 +9350,7 @@ func doInterpretCall(ctx context.Context, ses *Session, call *tree.CallStmt) ([]
 	return interpreter.GetResult(), nil
 }
 
-func doGrantPrivilegeImplicitly(ctx context.Context, ses *Session, stmt tree.Statement) error {
+func doGrantPrivilegeImplicitly(_ context.Context, ses *Session, stmt tree.Statement) error {
 	var err error
 	var sql string
 	tenantInfo := ses.GetTenantInfo()
@@ -9363,7 +9397,7 @@ func doGrantPrivilegeImplicitly(ctx context.Context, ses *Session, stmt tree.Sta
 	return err
 }
 
-func doRevokePrivilegeImplicitly(ctx context.Context, ses *Session, stmt tree.Statement) error {
+func doRevokePrivilegeImplicitly(_ context.Context, ses *Session, stmt tree.Statement) error {
 	var err error
 	var sql string
 	tenantInfo := ses.GetTenantInfo()

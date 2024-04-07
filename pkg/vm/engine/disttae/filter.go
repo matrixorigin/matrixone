@@ -125,9 +125,7 @@ func getConstBytesFromExpr(exprs []*plan.Expr, colDef *plan.ColDef, proc *proces
 	return vals, true
 }
 
-func mustColVecValueFromBinaryFuncExpr(
-	expr *plan.Expr_F, tableDef *plan.TableDef, proc *process.Process,
-) (*plan.Expr_Col, []byte, bool) {
+func mustColVecValueFromBinaryFuncExpr(expr *plan.Expr_F) (*plan.Expr_Col, []byte, bool) {
 	var (
 		colExpr *plan.Expr_Col
 		valExpr *plan.Expr
@@ -243,6 +241,7 @@ func CompileFilterExprs(
 		inMeta objectio.ObjectMeta,
 		inBF objectio.BloomFilter,
 	) (meta objectio.ObjectMeta, bf objectio.BloomFilter, err error) {
+		_, _ = inMeta, inBF
 		for _, op := range ops2 {
 			if meta != nil && bf != nil {
 				continue
@@ -761,7 +760,7 @@ func CompileFilterExpr(
 			}
 			// TODO: define seekOp
 		case "prefix_in":
-			colExpr, val, ok := mustColVecValueFromBinaryFuncExpr(exprImpl, tableDef, proc)
+			colExpr, val, ok := mustColVecValueFromBinaryFuncExpr(exprImpl)
 			if !ok {
 				canCompile = false
 				return
@@ -841,7 +840,7 @@ func CompileFilterExpr(
 			}
 
 		case "in":
-			colExpr, val, ok := mustColVecValueFromBinaryFuncExpr(exprImpl, tableDef, proc)
+			colExpr, val, ok := mustColVecValueFromBinaryFuncExpr(exprImpl)
 			if !ok {
 				canCompile = false
 				return

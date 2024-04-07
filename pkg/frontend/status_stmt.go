@@ -515,7 +515,6 @@ type LoadExecutor struct {
 func (le *LoadExecutor) CommitOrRollbackTxn(ctx context.Context, ses *Session) error {
 	stmt := le.GetAst()
 	tenant := le.tenantName
-	incStatementCounter(tenant, stmt)
 	if le.GetStatus() == stmtExecSuccess {
 		logStatementStatus(ctx, ses, stmt, success, nil)
 	} else {

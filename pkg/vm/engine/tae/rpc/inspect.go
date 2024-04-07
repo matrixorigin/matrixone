@@ -144,21 +144,27 @@ func (c *catalogArg) PrepareCommand() *cobra.Command {
 	return catalogCmd
 }
 
+func switchPPL(count int) common.PPLevel {
+	switch count {
+	case 0:
+		return common.PPL0
+	case 1:
+		return common.PPL1
+	case 2:
+		return common.PPL2
+	case 3:
+		return common.PPL3
+	case 4:
+		return common.PPL4
+	default:
+		return common.PPL1
+	}
+}
+
 func (c *catalogArg) FromCommand(cmd *cobra.Command) (err error) {
 	c.ctx = cmd.Flag("ictx").Value.(*inspectContext)
 	count, _ := cmd.Flags().GetCount("verbose")
-	var lv common.PPLevel
-	switch count {
-	case 0:
-		lv = common.PPL0
-	case 1:
-		lv = common.PPL1
-	case 2:
-		lv = common.PPL2
-	case 3:
-		lv = common.PPL3
-	}
-	c.verbose = lv
+	c.verbose = switchPPL(count)
 
 	address, _ := cmd.Flags().GetString("target")
 	c.tbl, err = parseTableTarget(address, c.ctx.acinfo, c.ctx.db)
@@ -233,18 +239,7 @@ func (c *objStatArg) FromCommand(cmd *cobra.Command) (err error) {
 	c.start, _ = cmd.Flags().GetInt("start")
 	c.end, _ = cmd.Flags().GetInt("end")
 	count, _ := cmd.Flags().GetCount("verbose")
-	var lv common.PPLevel
-	switch count {
-	case 0:
-		lv = common.PPL0
-	case 1:
-		lv = common.PPL1
-	case 2:
-		lv = common.PPL2
-	case 3:
-		lv = common.PPL3
-	}
-	c.verbose = lv
+	c.verbose = switchPPL(count)
 	address, _ := cmd.Flags().GetString("target")
 	c.tbl, err = parseTableTarget(address, c.ctx.acinfo, c.ctx.db)
 	if err != nil {
@@ -437,18 +432,7 @@ func (c *infoArg) PrepareCommand() *cobra.Command {
 func (c *infoArg) FromCommand(cmd *cobra.Command) (err error) {
 	c.ctx = cmd.Flag("ictx").Value.(*inspectContext)
 	count, _ := cmd.Flags().GetCount("verbose")
-	var lv common.PPLevel
-	switch count {
-	case 0:
-		lv = common.PPL0
-	case 1:
-		lv = common.PPL1
-	case 2:
-		lv = common.PPL2
-	case 3:
-		lv = common.PPL3
-	}
-	c.verbose = lv
+	c.verbose = switchPPL(count)
 
 	address, _ := cmd.Flags().GetString("target")
 	c.tbl, err = parseTableTarget(address, c.ctx.acinfo, c.ctx.db)
