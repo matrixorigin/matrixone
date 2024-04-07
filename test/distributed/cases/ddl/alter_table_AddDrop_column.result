@@ -676,4 +676,60 @@ newrename    CREATE TABLE `newrename` (\n`col1` INT DEFAULT NULL\n)
 drop table newRename;
 drop role role_r1;
 drop user role_u1;
+drop table if exists table01;
+begin;
+create table table01(col1 int, col2 char);
+insert into table01 values(1,'a');
+alter table table01 add column col3 int;
+commit;
+select * from table01;
+col1    col2    col3
+1    a    null
+select col1 from table01;
+col1
+1
+drop table table01;
+drop table if exists table02;
+begin;
+create table table02(col1 int, col2 char);
+insert into table02 values(1,'a');
+alter table table02 drop column col2;
+commit;
+select * from table02;
+col1
+1
+select col1 from table02;
+col1
+1
+drop table table02;
+drop table if exists enum01;
+create table enum01 (id int);
+insert into enum01 values (1);
+alter table enum01 add column name enum ('A','B','C');
+show create table enum01;
+Table    Create Table
+enum01    CREATE TABLE `enum01` (\n`id` INT DEFAULT NULL,\n`name` ENUM('A','B','C') DEFAULT NULL\n)
+desc enum01;
+Field    Type    Null    Key    Default    Extra    Comment
+id    INT(32)    YES        null
+name    ENUM('A','B','C')    YES        null
+select * from enum01;
+id    name
+1    null
+insert into enum01 values (2,'B');
+insert into enum01 values (3,'D');
+internal error: convert to MySQL enum failed: item D is not in enum [A B C]
+select * from enum01;
+id    name
+1    null
+2    B
+alter table enum01 drop column name;
+show create table enum01;
+Table    Create Table
+enum01    CREATE TABLE `enum01` (\n`id` INT DEFAULT NULL\n)
+select * from enum01;
+id
+1
+2
+drop table enum01;
 drop database test;
