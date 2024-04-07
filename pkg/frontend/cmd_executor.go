@@ -228,9 +228,9 @@ func Execute(ctx context.Context, ses *Session, proc *process.Process, stmtExec 
 		logInfo(ses, ses.GetDebugString(), fmt.Sprintf("time of Exec.Run : %s", time.Since(runBegin).String()))
 	}
 
+handleRet:
 	_ = stmtExec.RecordExecPlan(ctx)
 
-handleRet:
 	stmtExec.SetStatus(err)
 	err2 = stmtExec.CommitOrRollbackTxn(ctx, ses)
 	if err2 != nil {
