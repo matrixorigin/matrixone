@@ -16,6 +16,8 @@ package disttae
 
 import (
 	"context"
+	"go.uber.org/zap"
+	"runtime/debug"
 	"strconv"
 	"strings"
 
@@ -136,6 +138,10 @@ func (db *txnDatabase) RelationByAccountID(
 	key := genTableKey(accountID, name, db.databaseId)
 	// check the table is deleted or not
 	if _, exist := db.txn.deletedTableMap.Load(key); exist {
+		if strings.Contains(name, "_copy_") {
+			stackInfo := debug.Stack()
+			logutil.Error(moerr.NewParseError(context.Background(), "table %q does not exists", name).Error(), zap.String("Stack Trace", string(stackInfo)))
+		}
 		return nil, moerr.NewParseError(context.Background(), "table %q does not exist", name)
 	}
 
@@ -271,11 +277,16 @@ func (db *txnDatabase) Relation(ctx context.Context, name string, proc any) (eng
 		AccountId:  accountId,
 		Ts:         db.txn.op.SnapshotTS(),
 	}
+
 	if ok := db.txn.engine.catalog.GetTable(item); !ok {
 		logutil.Debugf("txnDatabase.Relation table %q(acc %d db %d) does not exist",
 			name,
 			accountId,
 			db.databaseId)
+		if strings.Contains(name, "_copy_") {
+			stackInfo := debug.Stack()
+			logutil.Error(moerr.NewParseError(context.Background(), "table %q does not exists", name).Error(), zap.String("Stack Trace", string(stackInfo)))
+		}
 		return nil, moerr.NewParseError(ctx, "table %q does not exist", name)
 	}
 
@@ -564,9 +575,17 @@ func (db *txnDatabase) openSysTable(p *process.Process, id uint64, name string,
 		tableId:       id,
 		tableName:     name,
 		defs:          defs,
-		primaryIdx:    -1,
-		primarySeqnum: -1,
+		primaryIdx:    0,
+		primarySeqnum: 0,
 		clusterByIdx:  -1,
+	}
+	switch name {
+	case catalog.MO_DATABASE:
+		tbl.constraint = catalog.MoDatabaseConstraint
+	case catalog.MO_TABLES:
+		tbl.constraint = catalog.MoTableConstraint
+	case catalog.MO_COLUMNS:
+		tbl.constraint = catalog.MoColumnConstraint
 	}
 	tbl.GetTableDef(context.TODO())
 	tbl.proc.Store(p)

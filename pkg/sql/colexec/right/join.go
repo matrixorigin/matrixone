@@ -18,6 +18,7 @@ import (
 	"bytes"
 
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -104,13 +105,15 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 				ap.lastpos = 0
 			}
 
+			startrow := ap.lastpos
 			if err := ctr.probe(ap, proc, analyze, arg.GetIsFirst(), arg.GetIsLast(), &result); err != nil {
-				ap.bat.Clean(proc.Mp())
 				return result, err
 			}
 			if ap.lastpos == 0 {
 				proc.PutBatch(ap.bat)
 				ap.bat = nil
+			} else if ap.lastpos == startrow {
+				return result, moerr.NewInternalErrorNoCtx("right join hanging")
 			}
 			return result, nil
 

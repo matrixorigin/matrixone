@@ -1160,4 +1160,19 @@ commit;
 select * from table01;
 select newcol1 from table01;
 drop table table01;
+
+-- alter table modify column of varchar to enum
+drop table if exists t1;
+create table t1(name varchar(25));
+insert into t1 values ('A'),('B'),('C');
+select * from t1;
+alter table t1 modify column name enum('A','B');
+alter table t1 modify column name enum('A','B','C');
+alter table t1 modify column name enum('A','B','C','D'), add column age int;
+select * from t1;
+insert into t1 values('D', 29);
+show create table t1;
+desc t1;
+drop table t1;
+
 drop database db2;

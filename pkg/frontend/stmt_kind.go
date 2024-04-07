@@ -172,6 +172,7 @@ func statementCanBeExecutedInUncommittedTransaction(ses *Session, stmt tree.Stat
 		*tree.ShowSubscriptions,
 		*tree.ShowCreatePublications,
 		*tree.ShowBackendServers,
+		*tree.ShowAccountUpgrade,
 		*tree.ShowConnectors:
 		return true, nil
 		//others
@@ -184,7 +185,7 @@ func statementCanBeExecutedInUncommittedTransaction(ses *Session, stmt tree.Stat
 		if err != nil {
 			return false, err
 		}
-		preStmt, err := mysql.ParseOne(ses.requestCtx, st.Sql, v.(int64))
+		preStmt, err := mysql.ParseOne(ses.requestCtx, st.Sql, v.(int64), 0)
 		defer func() {
 			preStmt.Free()
 		}()

@@ -17,10 +17,11 @@ package compile
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"testing"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 
 	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
@@ -80,7 +81,7 @@ func generateScopeCases(t *testing.T, testCases []string) []*Scope {
 		e, _, compilerCtx := testengine.New(defines.AttachAccountId(context.Background(), catalog.System_Account))
 		opt := plan2.NewBaseOptimizer(compilerCtx)
 		ctx := compilerCtx.GetContext()
-		stmts, err := mysql.Parse(ctx, sql, 1)
+		stmts, err := mysql.Parse(ctx, sql, 1, 0)
 		require.NoError(t1, err)
 		qry, err := opt.Optimize(stmts[0], false)
 		require.NoError(t1, err)

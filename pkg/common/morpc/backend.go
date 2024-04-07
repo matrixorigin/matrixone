@@ -859,7 +859,7 @@ func (rb *remoteBackend) resetConn() error {
 			zap.Error(err))
 
 		if !canRetry {
-			return err
+			return moerr.NewBackendCannotConnectNoCtx(err)
 		}
 		duration := time.Duration(0)
 		for {

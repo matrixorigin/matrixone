@@ -891,7 +891,7 @@ func (tbl *txnTable) tryFastFilterBlocks(
 	outBlocks *objectio.BlockInfoSlice,
 	fs fileservice.FileService) (done bool, err error) {
 	// TODO: refactor this code if composite key can be pushdown
-	if tbl.tableDef.Pkey == nil || tbl.tableDef.Pkey.CompPkeyCol == nil {
+	if tbl.tableDef.Pkey.CompPkeyCol == nil {
 		return TryFastFilterBlocks(
 			tbl.db.txn.op.SnapshotTS(),
 			tbl.tableDef,
@@ -1387,6 +1387,7 @@ func (tbl *txnTable) TableRenameInTxn(ctx context.Context, constraint [][]byte) 
 	}
 	databaseId := tbl.GetDBID(ctx)
 	db := tbl.db
+	oldTableName := tbl.tableName
 
 	var id uint64
 	var rowid types.Rowid
@@ -1551,6 +1552,21 @@ func (tbl *txnTable) TableRenameInTxn(ctx context.Context, constraint [][]byte) 
 	newkey := genTableKey(accountId, newtbl.tableName, databaseId)
 	newtbl.db.txn.addCreateTable(newkey, newtbl)
 	newtbl.db.txn.deletedTableMap.Delete(newkey)
+
+	//---------------------------------------------------------------------------------
+	for i := 0; i < len(newtbl.db.txn.writes); i++ {
+		if newtbl.db.txn.writes[i].tableId == catalog.MO_DATABASE_ID ||
+			newtbl.db.txn.writes[i].tableId == catalog.MO_TABLES_ID ||
+			newtbl.db.txn.writes[i].tableId == catalog.MO_COLUMNS_ID {
+			continue
+		}
+
+		if newtbl.db.txn.writes[i].tableName == oldTableName {
+			newtbl.db.txn.writes[i].tableName = tbl.tableName
+			logutil.Infof("copy table '%s' has been rename to '%s' in txn", oldTableName, tbl.tableName)
+		}
+	}
+	//---------------------------------------------------------------------------------
 	return nil
 }
 
