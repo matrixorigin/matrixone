@@ -550,7 +550,7 @@ func (tbl *txnTable) AddDeleteNode(id *common.ID, node txnif.DeleteNode) error {
 }
 
 func (tbl *txnTable) Append(ctx context.Context, data *containers.Batch) (err error) {
-	if tbl.schema.HasPK() {
+	if tbl.schema.HasPK() && !tbl.schema.IsIndexTable() {
 		dedupType := tbl.store.txn.GetDedupType()
 		if dedupType == txnif.FullDedup {
 			//do PK deduplication check against txn's work space.
@@ -619,7 +619,7 @@ func (tbl *txnTable) addObjsWithMetaLoc(ctx context.Context, stats objectio.Obje
 
 		metaLocs = append(metaLocs, metaloc)
 	}
-	if tbl.schema.HasPK() {
+	if tbl.schema.HasPK() && !tbl.schema.IsIndexTable() {
 		dedupType := tbl.store.txn.GetDedupType()
 		if dedupType == txnif.FullDedup {
 			//TODO::parallel load pk.
@@ -946,7 +946,7 @@ func (tbl *txnTable) NeedRollback() bool {
 
 // PrePrepareDedup do deduplication check for 1PC Commit or 2PC Prepare
 func (tbl *txnTable) PrePrepareDedup(ctx context.Context) (err error) {
-	if tbl.tableSpace == nil || !tbl.schema.HasPK() {
+	if tbl.tableSpace == nil || !tbl.schema.HasPK() || tbl.schema.IsIndexTable() {
 		return
 	}
 	var zm index.ZM
