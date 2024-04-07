@@ -382,6 +382,9 @@ func (p *PartitionState) HandleLogtailEntry(
 	primarySeqnum int,
 	packer *types.Packer,
 ) {
+	ctx, task := trace.NewTask(ctx, "PartitionState.HandleLogtailEntry")
+	defer task.End()
+
 	txnTrace.GetService().ApplyLogtail(entry, 1)
 	switch entry.EntryType {
 	case api.Entry_Insert:
