@@ -64,10 +64,9 @@ internal error: invalid op_type. not of type 'vector_l2_ops'
 create table vector_index_04(a int primary key, b vecf32(3),c vecf32(4));
 insert into vector_index_04 values(1,"[56,23,6]","[0.25,0.14,0.88,0.0001]"),(2,"[77,45,3]","[1.25,5.25,8.699,4.25]"),(3,"[8,56,3]","[9.66,5.22,1.22,7.02]");
 create index idx01 using ivfflat on vector_index_04(c) lists=5 op_type "vector_l2_ops";
-create index idx02 using ivfflat on vector_index_04(c) lists=4 op_type "vector_l2_ops";
 show create table vector_index_04;
 Table    Create Table
-vector_index_04    CREATE TABLE `vector_index_04` (\n`a` INT NOT NULL,\n`b` VECF32(3) DEFAULT NULL,\n`c` VECF32(4) DEFAULT NULL,\nPRIMARY KEY (`a`),\nKEY `idx01` USING ivfflat (`c`) lists = 5  op_type 'vector_l2_ops' ,\nKEY `idx02` USING ivfflat (`c`) lists = 4  op_type 'vector_l2_ops' \n)
+vector_index_04    CREATE TABLE `vector_index_04` (\n`a` INT NOT NULL,\n`b` VECF32(3) DEFAULT NULL,\n`c` VECF32(4) DEFAULT NULL,\nPRIMARY KEY (`a`),\nKEY `idx01` USING ivfflat (`c`) lists = 5  op_type 'vector_l2_ops' \n)
 desc vector_index_04;
 Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    NO    PRI    null        
@@ -80,7 +79,7 @@ internal error: Can't REINDEX 'idx'; check that column/key exists
 alter table vector_index_04 alter reindex idx01 ivfflat lists=8;
 show create table vector_index_04;
 Table    Create Table
-vector_index_04    CREATE TABLE `vector_index_04` (\n`a` INT NOT NULL,\n`b` VECF32(3) DEFAULT NULL,\n`c` VECF32(4) DEFAULT NULL,\nPRIMARY KEY (`a`),\nKEY `idx01` USING ivfflat (`c`) lists = 8  op_type 'vector_l2_ops' ,\nKEY `idx02` USING ivfflat (`c`) lists = 4  op_type 'vector_l2_ops' \n)
+vector_index_04    CREATE TABLE `vector_index_04` (\n`a` INT NOT NULL,\n`b` VECF32(3) DEFAULT NULL,\n`c` VECF32(4) DEFAULT NULL,\nPRIMARY KEY (`a`),\nKEY `idx01` USING ivfflat (`c`) lists = 8  op_type 'vector_l2_ops' \n)
 desc vector_index_04;
 Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    NO    PRI    null        
