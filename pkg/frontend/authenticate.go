@@ -1683,7 +1683,7 @@ func getSqlForCheckSnapshot(ctx context.Context, snapshot string) (string, error
 	return fmt.Sprintf(checkSnapshotFormat, snapshot), nil
 }
 
-func getSqlForCheckStageStatus(ctx context.Context, status string) string {
+func getSqlForCheckStageStatus(_ context.Context, status string) string {
 	return fmt.Sprintf(checkStageStatusFormat, status)
 }
 
@@ -2123,7 +2123,7 @@ func getSqlForupdateConfigurationByAccount(ctx context.Context, varValue, accoun
 	return fmt.Sprintf(updateConfigurationByAccountNameFormat, varValue, accountName, varName), nil
 }
 
-func getSqlForSpBody(ctx context.Context, name string, db string) (string, error) {
+func getSqlForSpBody(_ context.Context, name string, db string) (string, error) {
 	return fmt.Sprintf(fetchSqlOfSpFormat, name, db), nil
 }
 
@@ -6541,7 +6541,7 @@ func determineRoleSetHasPrivilegeSet(ctx context.Context, bh BackgroundExec, ses
 
 // determineUserHasPrivilegeSet decides the privileges of user can satisfy the requirement of the privilege set
 // The algorithm 1.
-func determineUserHasPrivilegeSet(ctx context.Context, ses *Session, priv *privilege, stmt tree.Statement) (ret bool, err error) {
+func determineUserHasPrivilegeSet(ctx context.Context, ses *Session, priv *privilege) (ret bool, err error) {
 	var erArray []ExecResult
 	var yes bool
 	var roleB int64
@@ -6951,7 +6951,7 @@ func authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ctx con
 	if priv.objectType() != objectTypeAccount && priv.objectType() != objectTypeDatabase { //do nothing
 		return true, nil
 	}
-	ok, err = determineUserHasPrivilegeSet(ctx, ses, priv, stmt)
+	ok, err = determineUserHasPrivilegeSet(ctx, ses, priv)
 	if err != nil {
 		return false, err
 	}
@@ -7182,7 +7182,7 @@ func authenticateUserCanExecuteStatementWithObjectTypeDatabaseAndTable(ctx conte
 			return true, nil
 		}
 		convertPrivilegeTipsToPrivilege(priv, arr)
-		ok, err := determineUserHasPrivilegeSet(ctx, ses, priv, stmt)
+		ok, err := determineUserHasPrivilegeSet(ctx, ses, priv)
 		if err != nil {
 			return false, err
 		}
@@ -7635,7 +7635,7 @@ func authenticateUserCanExecuteStatementWithObjectTypeNone(ctx context.Context, 
 }
 
 // checkSysExistsOrNot checks the SYS tenant exists or not.
-func checkSysExistsOrNot(ctx context.Context, bh BackgroundExec, pu *config.ParameterUnit) (bool, error) {
+func checkSysExistsOrNot(ctx context.Context, bh BackgroundExec) (bool, error) {
 	var erArray []ExecResult
 	var err error
 	var tableNames []string
@@ -7751,7 +7751,7 @@ func InitSysTenantOld(ctx context.Context, aicm *defines.AutoIncrCacheManager, f
 		return err
 	}
 
-	exists, err = checkSysExistsOrNot(ctx, bh, pu)
+	exists, err = checkSysExistsOrNot(ctx, bh)
 	if err != nil {
 		return err
 	}
@@ -8057,7 +8057,7 @@ func InitGeneralTenant(ctx context.Context, ses *Session, ca *CreateAccount) (er
 		if rtnErr != nil {
 			return rtnErr
 		}
-		rtnErr = createTablesInInformationSchemaOfGeneralTenant(newTenantCtx, bh, newTenant)
+		rtnErr = createTablesInInformationSchemaOfGeneralTenant(newTenantCtx, bh)
 		if rtnErr != nil {
 			return rtnErr
 		}
@@ -8296,7 +8296,7 @@ func createTablesInSystemOfGeneralTenant(ctx context.Context, bh BackgroundExec,
 }
 
 // createTablesInInformationSchemaOfGeneralTenant creates the database information_schema and the views or tables.
-func createTablesInInformationSchemaOfGeneralTenant(ctx context.Context, bh BackgroundExec, newTenant *TenantInfo) error {
+func createTablesInInformationSchemaOfGeneralTenant(ctx context.Context, bh BackgroundExec) error {
 	ctx, span := trace.Debug(ctx, "createTablesInInformationSchemaOfGeneralTenant")
 	defer span.End()
 	//with new tenant
@@ -9350,7 +9350,7 @@ func doInterpretCall(ctx context.Context, ses *Session, call *tree.CallStmt) ([]
 	return interpreter.GetResult(), nil
 }
 
-func doGrantPrivilegeImplicitly(ctx context.Context, ses *Session, stmt tree.Statement) error {
+func doGrantPrivilegeImplicitly(_ context.Context, ses *Session, stmt tree.Statement) error {
 	var err error
 	var sql string
 	tenantInfo := ses.GetTenantInfo()
@@ -9397,7 +9397,7 @@ func doGrantPrivilegeImplicitly(ctx context.Context, ses *Session, stmt tree.Sta
 	return err
 }
 
-func doRevokePrivilegeImplicitly(ctx context.Context, ses *Session, stmt tree.Statement) error {
+func doRevokePrivilegeImplicitly(_ context.Context, ses *Session, stmt tree.Statement) error {
 	var err error
 	var sql string
 	tenantInfo := ses.GetTenantInfo()

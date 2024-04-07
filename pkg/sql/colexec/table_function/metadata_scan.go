@@ -92,7 +92,7 @@ func metadataScan(_ int, proc *process.Process, arg *Argument, result *vm.CallRe
 		return false, err
 	}
 
-	rbat, err = genRetBatch(*proc, arg, metaInfos, colname, rel)
+	rbat, err = genRetBatch(*proc, arg, metaInfos)
 	if err != nil {
 		return false, err
 	}
@@ -113,7 +113,7 @@ func handleDatasource(first []string, second []string) (string, string, string, 
 	return strs[0], strs[1], second[0], nil
 }
 
-func genRetBatch(proc process.Process, arg *Argument, metaInfos []*plan.MetadataScanInfo, colName string, rel engine.Relation) (*batch.Batch, error) {
+func genRetBatch(proc process.Process, arg *Argument, metaInfos []*plan.MetadataScanInfo) (*batch.Batch, error) {
 	retBat, err := initMetadataInfoBat(proc, arg)
 	if err != nil {
 		return nil, err

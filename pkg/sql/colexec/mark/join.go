@@ -137,7 +137,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 }
 
-func (ctr *container) receiveHashMap(proc *process.Process, anal process.Analyze) error {
+func (ctr *container) receiveHashMap(anal process.Analyze) error {
 	bat, _, err := ctr.ReceiveFromSingleReg(1, anal)
 	if err != nil {
 		return err
@@ -174,7 +174,7 @@ func (ctr *container) receiveBatch(ap *Argument, proc *process.Process, anal pro
 }
 
 func (ctr *container) build(ap *Argument, proc *process.Process, anal process.Analyze) error {
-	err := ctr.receiveHashMap(proc, anal)
+	err := ctr.receiveHashMap(anal)
 	if err != nil {
 		return err
 	}

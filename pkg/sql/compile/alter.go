@@ -16,6 +16,7 @@ package compile
 
 import (
 	"fmt"
+
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"go.uber.org/zap"
 
@@ -236,7 +237,7 @@ func (s *Scope) AlterTableCopy(c *Compile) error {
 
 	if len(qry.TableDef.Fkeys) > 0 {
 		for _, fkey := range qry.CopyTableDef.Fkeys {
-			if err = notifyParentTableFkTableIdChange(c, fkey, originRel.GetTableID(c.ctx), newRel.GetTableID(c.ctx)); err != nil {
+			if err = notifyParentTableFkTableIdChange(c, fkey, originRel.GetTableID(c.ctx)); err != nil {
 				getLogger().Info("notify parent table foreign key TableId Change for alter table",
 					zap.String("origin tableName", qry.GetTableDef().Name),
 					zap.String("copy table name", qry.CopyTableDef.Name),
@@ -338,7 +339,7 @@ func restoreNewTableRefChildTbls(c *Compile, copyRel engine.Relation, refChildTb
 }
 
 // notifyParentTableFkTableIdChange Notify the parent table of changes in the tableid of the foreign key table
-func notifyParentTableFkTableIdChange(c *Compile, fkey *plan.ForeignKeyDef, oldTableId uint64, newTableId uint64) error {
+func notifyParentTableFkTableIdChange(c *Compile, fkey *plan.ForeignKeyDef, oldTableId uint64) error {
 	foreignTblId := fkey.ForeignTbl
 	_, _, fatherRelation, err := c.e.GetRelationById(c.ctx, c.proc.TxnOperator, foreignTblId)
 	if err != nil {

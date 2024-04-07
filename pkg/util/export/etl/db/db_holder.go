@@ -311,8 +311,11 @@ func SetLabelSelector(labels map[string]string) {
 	if len(labels) == 0 {
 		return
 	}
-	labels["account"] = "sys"
-	gLabels = labels
+	gLabels = make(map[string]string, len(labels)+1)
+	gLabels["account"] = "sys"
+	for k, v := range labels {
+		gLabels[k] = v
+	}
 }
 
 // GetLabelSelector
