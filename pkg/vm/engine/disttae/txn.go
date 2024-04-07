@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/hex"
 	"math"
+	"sync"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -1141,5 +1142,36 @@ func (txn *Transaction) UpdateSnapshotWriteOffset() {
 }
 
 func (txn *Transaction) CloneSnapshotWS() client.Workspace {
-	panic("implement me")
+	ws := &Transaction{
+		proc:     txn.proc,
+		engine:   txn.engine,
+		tnStores: txn.tnStores,
+
+		tableCache: struct {
+			cachedIndex int
+			tableMap    *sync.Map
+		}{tableMap: new(sync.Map)},
+		databaseMap:     new(sync.Map),
+		createMap:       new(sync.Map),
+		deletedTableMap: new(sync.Map),
+		deletedBlocks: &deletedBlocks{
+			offsets: map[types.Blockid][]int64{},
+		},
+		cnBlkId_Pos:     map[types.Blockid]Pos{},
+		batchSelectList: make(map[*batch.Batch][]int64),
+		toFreeBatches:   make(map[tableKey][]*batch.Batch),
+	}
+
+	ws.blockId_tn_delete_metaLoc_batch = struct {
+		sync.RWMutex
+		data map[types.Blockid][]*batch.Batch
+	}{data: make(map[types.Blockid][]*batch.Batch)}
+
+	ws.readOnly.Store(true)
+
+	return ws
+}
+
+func (txn *Transaction) BindTxnOp(op client.TxnOperator) {
+	txn.op = op
 }

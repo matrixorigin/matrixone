@@ -101,6 +101,7 @@ type TxnOperator interface {
 	// GetOverview returns txn overview
 	GetOverview() TxnOverview
 
+	// CloneSnapshotOp clone a read-only snapshot op from parent txn operator
 	CloneSnapshotOp(snapshot timestamp.Timestamp) TxnOperator
 
 	// Txn returns the current txn metadata
@@ -256,6 +257,8 @@ type Workspace interface {
 	GetSQLCount() uint64
 
 	CloneSnapshotWS() Workspace
+
+	BindTxnOp(op TxnOperator)
 }
 
 // TxnOverview txn overview include meta and status

@@ -118,7 +118,7 @@ func New(
 }
 
 func (e *Engine) Create(ctx context.Context, name string, op client.TxnOperator) error {
-	txn := e.getTransaction(op)
+	txn := op.GetWorkspace().(*Transaction)
 	if txn == nil {
 		return moerr.NewTxnClosedNoCtx(op.Txn().ID)
 	}
@@ -165,7 +165,7 @@ func (e *Engine) DatabaseByAccountID(
 	name string,
 	op client.TxnOperator) (engine.Database, error) {
 	logDebugf(op.Txn(), "Engine.DatabaseByAccountID %s", name)
-	txn := e.getTransaction(op)
+	txn := op.GetWorkspace().(*Transaction)
 	if txn == nil || txn.op.Status() == txn2.TxnStatus_Aborted {
 		return nil, moerr.NewTxnClosedNoCtx(op.Txn().ID)
 	}
@@ -201,7 +201,7 @@ func (e *Engine) DatabaseByAccountID(
 func (e *Engine) Database(ctx context.Context, name string,
 	op client.TxnOperator) (engine.Database, error) {
 	logDebugf(op.Txn(), "Engine.Database %s", name)
-	txn := e.getTransaction(op)
+	txn := op.GetWorkspace().(*Transaction)
 	if txn == nil || txn.op.Status() == txn2.TxnStatus_Aborted {
 		return nil, moerr.NewTxnClosedNoCtx(op.Txn().ID)
 	}
@@ -241,7 +241,7 @@ func (e *Engine) Database(ctx context.Context, name string,
 func (e *Engine) Databases(ctx context.Context, op client.TxnOperator) ([]string, error) {
 	var dbs []string
 
-	txn := e.getTransaction(op)
+	txn := op.GetWorkspace().(*Transaction)
 	if txn == nil {
 		return nil, moerr.NewTxnClosed(ctx, op.Txn().ID)
 	}
@@ -261,7 +261,7 @@ func (e *Engine) Databases(ctx context.Context, op client.TxnOperator) ([]string
 }
 
 func (e *Engine) GetNameById(ctx context.Context, op client.TxnOperator, tableId uint64) (dbName string, tblName string, err error) {
-	txn := e.getTransaction(op)
+	txn := op.GetWorkspace().(*Transaction)
 	if txn == nil {
 		return "", "", moerr.NewTxnClosed(ctx, op.Txn().ID)
 	}
@@ -319,7 +319,7 @@ func (e *Engine) GetNameById(ctx context.Context, op client.TxnOperator, tableId
 }
 
 func (e *Engine) GetRelationById(ctx context.Context, op client.TxnOperator, tableId uint64) (dbName, tableName string, rel engine.Relation, err error) {
-	txn := e.getTransaction(op)
+	txn := op.GetWorkspace().(*Transaction)
 	if txn == nil {
 		return "", "", nil, moerr.NewTxnClosed(ctx, op.Txn().ID)
 	}
@@ -427,7 +427,7 @@ func (e *Engine) AllocateIDByKey(ctx context.Context, key string) (uint64, error
 func (e *Engine) Delete(ctx context.Context, name string, op client.TxnOperator) error {
 	var db *txnDatabase
 
-	txn := e.getTransaction(op)
+	txn := op.GetWorkspace().(*Transaction)
 	if txn == nil {
 		return moerr.NewTxnClosedNoCtx(op.Txn().ID)
 	}
@@ -536,7 +536,7 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 	txn.readOnly.Store(true)
 	// transaction's local segment for raw batch.
 	colexec.Get().PutCnSegment(id, colexec.TxnWorkSpaceIdType)
-	e.newTransaction(op, txn)
+	op.AddWorkspace(txn)
 
 	e.pClient.validLogTailMustApplied(txn.op.SnapshotTS())
 	return nil
@@ -627,14 +627,6 @@ func (e *Engine) NewBlockReader(ctx context.Context, num int, ts timestamp.Times
 		rds[i] = blockReaders[i]
 	}
 	return rds, nil
-}
-
-func (e *Engine) newTransaction(op client.TxnOperator, txn *Transaction) {
-	op.AddWorkspace(txn)
-}
-
-func (e *Engine) getTransaction(op client.TxnOperator) *Transaction {
-	return op.GetWorkspace().(*Transaction)
 }
 
 func (e *Engine) getTNServices() []DNStore {

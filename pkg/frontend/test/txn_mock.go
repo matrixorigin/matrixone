@@ -1013,6 +1013,18 @@ func (mr *MockWorkspaceMockRecorder) Adjust(writeOffset interface{}) *gomock.Cal
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Adjust", reflect.TypeOf((*MockWorkspace)(nil).Adjust), writeOffset)
 }
 
+// BindTxnOp mocks base method.
+func (m *MockWorkspace) BindTxnOp(op client.TxnOperator) {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "BindTxnOp", op)
+}
+
+// BindTxnOp indicates an expected call of BindTxnOp.
+func (mr *MockWorkspaceMockRecorder) BindTxnOp(op interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "BindTxnOp", reflect.TypeOf((*MockWorkspace)(nil).BindTxnOp), op)
+}
+
 // CloneSnapshotWS mocks base method.
 func (m *MockWorkspace) CloneSnapshotWS() client.Workspace {
 	m.ctrl.T.Helper()

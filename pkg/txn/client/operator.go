@@ -263,6 +263,7 @@ func (tc *txnOperator) CloneSnapshotOp(snapshot timestamp.Timestamp) TxnOperator
 	op.txnID = op.mu.txn.ID
 
 	op.workspace = tc.workspace.CloneSnapshotWS()
+	op.workspace.BindTxnOp(op)
 
 	tc.snapshotOps = append(tc.snapshotOps, op)
 	return op

@@ -125,6 +125,9 @@ func (w *Ws) CloneSnapshotWS() client.Workspace {
 	return nil
 }
 
+func (w *Ws) BindTxnOp(op client.TxnOperator) {
+}
+
 func TestCompile(t *testing.T) {
 	cnclient.NewCNClient("test", new(cnclient.ClientConfig))
 	ctrl := gomock.NewController(t)
