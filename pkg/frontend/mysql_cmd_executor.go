@@ -544,7 +544,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 			continue
 		}
 
-		row, err := extractRowFromEveryVector(ses, bat, j, oq, false)
+		row, err := extractRowFromEveryVector(ses, bat, j, oq, true)
 		if err != nil {
 			return err
 		}
