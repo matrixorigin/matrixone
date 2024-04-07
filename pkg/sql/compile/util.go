@@ -414,7 +414,7 @@ func makeInsertSingleIndexSQL(eg engine.Engine, proc *process.Process, databaseI
 	return insertMoIndexesSql, nil
 }
 
-func makeInsertTablePartitionsSQL(eg engine.Engine, ctx context.Context, proc *process.Process, dbSource engine.Database, relation engine.Relation) (string, error) {
+func makeInsertTablePartitionsSQL(ctx context.Context, dbSource engine.Database, relation engine.Relation) (string, error) {
 	if dbSource == nil || relation == nil {
 		return "", nil
 	}

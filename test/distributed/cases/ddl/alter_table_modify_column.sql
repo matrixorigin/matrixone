@@ -980,4 +980,16 @@ commit;
 select * from table01;
 select col1 from table01;
 drop table table01;
+
+-- alter table modify enum column
+drop table if exists t1;
+create table t1 (a int,b enum('abc','def','database'));
+insert into t1 values (1, 'abc');
+insert into t1 values (2, 'database');
+select * from t1;
+alter table t1 modify column b enum('abc','def','database') first;
+show create table t1;
+select * from t1;
+drop table t1;
+
 drop database test;

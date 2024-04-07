@@ -44,21 +44,24 @@ func (v Version) CanDirectUpgrade(version string) bool {
 	return Compare(v.MinUpgradeVersion, version) <= 0
 }
 
-func (v Version) GetInsertSQL(state int32) string {
-	return fmt.Sprintf(`insert into %s values ('%s', %d, current_timestamp(), current_timestamp())`,
+func (v Version) GetInitVersionSQL(state int32) string {
+	return fmt.Sprintf(`insert into %s values ('%s', %d, %d, current_timestamp(), current_timestamp())`,
 		catalog.MOVersionTable,
-		v.Version,
+		v.MinUpgradeVersion,
+		0,
 		state,
 	)
 }
 
 func AddVersion(
 	version string,
+	versionOffset uint32,
 	state int32,
 	txn executor.TxnExecutor) error {
-	sql := fmt.Sprintf(`insert into %s values ('%s', %d, current_timestamp(), current_timestamp())`,
+	sql := fmt.Sprintf(`insert into %s values ('%s', %d, %d, current_timestamp(), current_timestamp())`,
 		catalog.MOVersionTable,
 		version,
+		versionOffset,
 		state)
 	res, err := txn.Exec(sql, executor.StatementOption{})
 	if err != nil {
@@ -69,7 +72,7 @@ func AddVersion(
 }
 
 func GetLatestVersion(txn executor.TxnExecutor) (Version, error) {
-	sql := fmt.Sprintf(`select version, state from %s order by create_at desc limit 1`, catalog.MOVersionTable)
+	sql := fmt.Sprintf(`select version, version_offset, state from %s order by create_at desc limit 1`, catalog.MOVersionTable)
 	res, err := txn.Exec(sql, executor.StatementOption{})
 	if err != nil {
 		return Version{}, err
@@ -79,7 +82,8 @@ func GetLatestVersion(txn executor.TxnExecutor) (Version, error) {
 	var version Version
 	res.ReadRows(func(rows int, cols []*vector.Vector) bool {
 		version.Version = cols[0].GetStringAt(0)
-		version.State = vector.GetFixedAt[int32](cols[1], 0)
+		version.VersionOffset = vector.GetFixedAt[uint32](cols[1], 0)
+		version.State = vector.GetFixedAt[int32](cols[2], 0)
 		return true
 	})
 	return version, nil
@@ -130,15 +134,17 @@ func MustGetLatestReadyVersion(
 
 func GetVersionState(
 	version string,
+	versionOffset uint32,
 	txn executor.TxnExecutor,
 	forUpdate bool) (int32, bool, error) {
 	withForUpdate := ""
 	if forUpdate {
 		withForUpdate = "for update"
 	}
-	sql := fmt.Sprintf(`select state from %s where version = '%s' %s`,
+	sql := fmt.Sprintf(`select state from %s where version = '%s' and version_offset = %d %s`,
 		catalog.MOVersionTable,
 		version,
+		versionOffset,
 		withForUpdate)
 
 	res, err := txn.Exec(sql, executor.StatementOption{})
@@ -164,12 +170,14 @@ func GetVersionState(
 
 func UpdateVersionState(
 	version string,
+	versionOffset uint32,
 	state int32,
 	txn executor.TxnExecutor) error {
-	sql := fmt.Sprintf("update %s set state = %d, update_at = current_timestamp() where version = '%s'",
+	sql := fmt.Sprintf("update %s set state = %d, update_at = current_timestamp() where version = '%s' and version_offset = %d",
 		catalog.MOVersionTable,
 		state,
-		version)
+		version,
+		versionOffset)
 	res, err := txn.Exec(sql, executor.StatementOption{})
 	if err != nil {
 		return err
@@ -206,23 +214,104 @@ func parseVersion(version string) (int, int, int) {
 }
 
 func IsFrameworkTablesCreated(txn executor.TxnExecutor) (bool, error) {
-	res, err := txn.Exec("show tables", executor.StatementOption{})
+	//res, err := txn.Exec("show tables", executor.StatementOption{})
+	//if err != nil {
+	//	return false, err
+	//}
+	//defer res.Close()
+	//
+	//var tables []string
+	//res.ReadRows(func(rows int, cols []*vector.Vector) bool {
+	//	for i := 0; i < rows; i++ {
+	//		tables = append(tables, cols[0].GetStringAt(i))
+	//	}
+	//	return true
+	//})
+	//for _, t := range tables {
+	//	if strings.EqualFold(t, catalog.MOVersionTable) {
+	//		return true, nil
+	//	}
+	//}
+	//return false, nil
+	//------------------------------------------------------------------------------------------------------------
+
+	// Check if the `mo_version` table exists
+	tableExist, err := CheckTableDefinition(txn, catalog.System_Account, catalog.MO_CATALOG, catalog.MOVersionTable)
 	if err != nil {
 		return false, err
 	}
-	defer res.Close()
 
-	var tables []string
+	// If the `mo_version` table exists
+	if tableExist {
+		// Check if the `version_offset` column exists
+		colInfo, err := CheckTableColumn(txn, catalog.System_Account, catalog.MO_CATALOG, catalog.MOVersionTable, "version_offset")
+		if err != nil {
+			return false, err
+		}
+
+		// If the `version_offset column` exists, it indicates that the framework table has been created
+		if colInfo.IsExits {
+			return true, nil
+		}
+
+		// If the `version_offset` column does not exist, it means the framework table needs to be recreated
+		// and the existing framework table needs to be deleted first
+		res, err := txn.Exec("DROP TABLE IF EXISTS mo_catalog.mo_version", executor.StatementOption{})
+		if err != nil {
+			return false, err
+		}
+		res.Close()
+
+		res, err = txn.Exec("DROP TABLE IF EXISTS mo_catalog.mo_upgrade", executor.StatementOption{})
+		if err != nil {
+			return false, err
+		}
+		res.Close()
+
+		res, err = txn.Exec("DROP TABLE IF EXISTS mo_catalog.mo_upgrade_tenant", executor.StatementOption{})
+		if err != nil {
+			return false, err
+		}
+		res.Close()
+
+		// Check if it is necessary to delete the `create_version` column of the `mo_account` table
+		column, err := CheckTableColumn(txn, catalog.System_Account, catalog.MO_CATALOG, catalog.MOAccountTable, "create_version")
+		if err != nil {
+			return false, err
+		}
+
+		// If the `create_version` column exists, delete it
+		if column.IsExits {
+			res, err = txn.Exec("ALTER TABLE `mo_catalog`.`mo_account` DROP COLUMN `create_version`", executor.StatementOption{})
+			if err != nil {
+				return false, err
+			}
+			res.Close()
+		}
+		// Return the status of the framework table that has not been created
+		return false, nil
+	}
+	// Return the status of the framework table that has not been created
+	return false, nil
+
+}
+
+// FetchAllTenants get all tenantIDs in mo system, including system tenants
+func FetchAllTenants(txn executor.TxnExecutor) ([]int32, error) {
+	ids := make([]int32, 0, 10)
+	sql := "select account_id from mo_account where account_id >= 0 order by account_id"
+	res, err := txn.Exec(sql, executor.StatementOption{})
+	if err != nil {
+		return ids, err
+	}
+
 	res.ReadRows(func(rows int, cols []*vector.Vector) bool {
 		for i := 0; i < rows; i++ {
-			tables = append(tables, cols[0].GetStringAt(i))
+			last := vector.GetFixedAt[int32](cols[0], i)
+			ids = append(ids, last)
 		}
 		return true
 	})
-	for _, t := range tables {
-		if strings.EqualFold(t, catalog.MOVersionTable) {
-			return true, nil
-		}
-	}
-	return false, nil
+	res.Close()
+	return ids, nil
 }
