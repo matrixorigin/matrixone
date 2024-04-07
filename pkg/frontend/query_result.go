@@ -566,7 +566,7 @@ func doDumpQueryResult(ctx context.Context, ses *Session, eParam *tree.ExportPar
 					break
 				}
 
-				_, err = extractRowFromEveryVector(ses, tmpBatch, j, oq, false)
+				_, err = extractRowFromEveryVector(ses, tmpBatch, j, oq, true)
 				if err != nil {
 					return err
 				}
