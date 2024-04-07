@@ -160,9 +160,8 @@ func (s *Schema) Clone() *Schema {
 	return ns
 }
 
-func (s *Schema) IsIndexTable() bool {
-	return strings.Contains(s.Name, "__mo_index_secondary_") ||
-		strings.Contains(s.Name, "__mo_index_unique_")
+func (s *Schema) IsSecondaryIndexTable() bool {
+	return strings.Contains(s.Name, "__mo_index_secondary_")
 }
 
 // ApplyAlterTable modify the schema in place. Unless you know what you are doing, it is
