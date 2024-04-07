@@ -700,18 +700,26 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 					{
 						//TODO: verify with ouyuanning, if this is correct
 						lastNodeId = appendSinkScanNode(builder, bindCtx, newSourceStep)
+						lastNodeIdForTblJoinCentroids := appendSinkScanNode(builder, bindCtx, newSourceStep)
+
 						lastProject := builder.qry.Nodes[lastNodeId].ProjectList
+						lastProjectForTblJoinCentroids := builder.qry.Nodes[lastNodeIdForTblJoinCentroids].ProjectList
+
 						projectProjection := make([]*Expr, len(delCtx.tableDef.Cols))
+						projectProjectionForTblJoinCentroids := make([]*Expr, len(delCtx.tableDef.Cols))
 						for j, uCols := range delCtx.tableDef.Cols {
 							if nIdx, ok := delCtx.updateColPosMap[uCols.Name]; ok {
 								projectProjection[j] = lastProject[nIdx]
+								projectProjectionForTblJoinCentroids[j] = lastProjectForTblJoinCentroids[nIdx]
 							} else {
 								if uCols.Name == catalog.Row_ID {
 									// replace the origin table's row_id with entry table's row_id
 									// it is the 2nd last column in the entry table join
 									projectProjection[j] = lastProject[len(lastProject)-2]
+									projectProjectionForTblJoinCentroids[j] = lastProjectForTblJoinCentroids[len(lastProjectForTblJoinCentroids)-2]
 								} else {
 									projectProjection[j] = lastProject[j]
+									projectProjectionForTblJoinCentroids[j] = lastProjectForTblJoinCentroids[j]
 								}
 							}
 						}
@@ -720,9 +728,17 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 							Children:    []int32{lastNodeId},
 							ProjectList: projectProjection,
 						}
+						projectNodeForTblJoinCentroids := &Node{
+							NodeType:    plan.Node_PROJECT,
+							Children:    []int32{lastNodeIdForTblJoinCentroids},
+							ProjectList: projectProjectionForTblJoinCentroids,
+						}
 						lastNodeId = builder.appendNode(projectNode, bindCtx)
+						lastNodeIdForTblJoinCentroids = builder.appendNode(projectNodeForTblJoinCentroids, bindCtx)
 
-						preUKStep, err := appendPreInsertSkVectorPlan(builder, bindCtx, delCtx.tableDef, lastNodeId, multiTableIndex, true, idxRefs, idxTableDefs)
+						preUKStep, err := appendPreInsertSkVectorPlan(builder, bindCtx, delCtx.tableDef,
+							lastNodeId, lastNodeIdForTblJoinCentroids,
+							multiTableIndex, true, idxRefs, idxTableDefs)
 						if err != nil {
 							return err
 						}
@@ -1417,6 +1433,7 @@ func buildInsertPlansWithRelatedHiddenTable(
 		switch multiTableIndex.IndexAlgo {
 		case catalog.MoIndexIvfFlatAlgo.ToString():
 			lastNodeId = appendSinkScanNode(builder, bindCtx, sourceStep)
+			lastNodeIdForTblJoinCentroids := appendSinkScanNode(builder, bindCtx, sourceStep)
 
 			var idxRefs = make([]*ObjectRef, 3)
 			var idxTableDefs = make([]*TableDef, 3)
@@ -1433,7 +1450,9 @@ func buildInsertPlansWithRelatedHiddenTable(
 				}
 			}
 
-			newSourceStep, err := appendPreInsertSkVectorPlan(builder, bindCtx, tableDef, lastNodeId, multiTableIndex, false, idxRefs, idxTableDefs)
+			newSourceStep, err := appendPreInsertSkVectorPlan(builder, bindCtx, tableDef,
+				lastNodeId, lastNodeIdForTblJoinCentroids,
+				multiTableIndex, false, idxRefs, idxTableDefs)
 			if err != nil {
 				return err
 			}
@@ -2505,7 +2524,7 @@ func appendPreInsertSkVectorPlan(
 	builder *QueryBuilder,
 	bindCtx *BindContext,
 	tableDef *TableDef,
-	lastNodeId int32,
+	lastNodeId, lastNodeIdForTblJoinCentroids int32,
 	multiTableIndex *MultiTableIndex,
 	isUpdate bool,
 	idxRefs []*ObjectRef,
@@ -2592,6 +2611,7 @@ func appendPreInsertSkVectorPlan(
 
 	//1.b Handle mo_cp_key
 	lastNodeId = recomputeMoCPKeyViaProjection(builder, bindCtx, tableDef, lastNodeId, posOriginPk)
+	lastNodeIdForTblJoinCentroids = recomputeMoCPKeyViaProjection(builder, bindCtx, tableDef, lastNodeIdForTblJoinCentroids, posOriginPk)
 
 	// 2. scan meta table to find the `current version` number
 	metaCurrVersionRow, err := makeMetaTblScanWhereKeyEqVersion(builder, bindCtx, indexTableDefs, idxRefs)
@@ -2599,25 +2619,26 @@ func appendPreInsertSkVectorPlan(
 		return -1, err
 	}
 
-	// 3. create a scan node for centroids table with version = `current version`
+	// 3. create a scan node for centroids x meta on centroids.version = cast (meta.version as bigint)
 	currVersionCentroids, err := makeCrossJoinCentroidsMetaForCurrVersion(builder, bindCtx,
 		indexTableDefs, idxRefs, metaCurrVersionRow)
 	if err != nil {
 		return -1, err
 	}
-	fmt.Print(currVersionCentroids)
 
-	// 3. Make  Table Projection with cpPk, normalize_l2(), embedding
-	tableId := lastNodeId
-	projectTblScan, err := makeTableProjection(builder, bindCtx, tableId, tableDef,
+	// 4. Make  Table Projection with cpPk, normalize_l2(), embedding
+	tableId := lastNodeIdForTblJoinCentroids
+	projectTblScan, err := makeTableProjectionIncludingNormalizeL2(builder, bindCtx, tableId, tableDef,
 		typeOriginPk, posOriginPk,
 		typeOriginVecColumn, posOriginVecColumn)
 	if err != nil {
 		return -1, err
 	}
 
-	// 4. create a cross join node for tbl and centroids
-	// Projections: centroids.version, centroids.centroid_id, tbl.pk, centroids.centroid, tbl.embedding
+	// 5. create "tbl" cross join "centroids"
+	// Projections:
+	// centroids.version, centroids.centroid_id, tbl.pk, tbl.embedding,
+	// centroids.centroid, normalize_l2(tbl.embedding)
 	var leftChildTblId = projectTblScan
 	var rightChildCentroidsId = currVersionCentroids
 	var crossJoinTblAndCentroidsID = makeCrossJoinTblAndCentroids(builder, bindCtx, tableDef,
@@ -2625,19 +2646,19 @@ func appendPreInsertSkVectorPlan(
 		typeOriginPk, posOriginPk,
 		typeOriginVecColumn, posOriginVecColumn)
 
-	// 5. select
-	// 	  	centroids.version,
-	//	  	serial_extract(min( pair< l2_distance, centroid_id >, 1 )
-	//    	pk,
-	//    from crossJoinTblAndCentroidsID
-	// 	  	group by pk,
-	filterId, err := minCentroidIdGroupByPK(builder, bindCtx, crossJoinTblAndCentroidsID)
+	// 6. select centroids.version, serial_extract(min( pair< l2_distance, centroid_id >, 1 ), pk,
+	//    from crossJoinTblAndCentroidsID group by pk,
+	minCentroidIdNode, err := makeMinCentroidIdAndCpKey(builder, bindCtx, crossJoinTblAndCentroidsID)
 	if err != nil {
 		return -1, err
 	}
 
-	// 8. Final project: centroids.version, centroids.centroid_id, tbl.pk, cp_col
-	projectId, err := makeFinalProjectWithCPAndOptionalRowId(builder, bindCtx, filterId)
+	// 7. Final project: centroids.version, centroids.centroid_id, tbl.pk, tbl.embedding, cp_col
+	projectId, err := makeFinalProjectWithTblEmbedding(builder, bindCtx,
+		lastNodeId, minCentroidIdNode,
+		tableDef,
+		typeOriginPk, posOriginPk,
+		typeOriginVecColumn, posOriginVecColumn)
 	if err != nil {
 		return -1, err
 	}

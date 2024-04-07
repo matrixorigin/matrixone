@@ -62,8 +62,9 @@ func makeMetaTblScanWhereKeyEqVersion(builder *QueryBuilder, bindCtx *BindContex
 	return metaTableScanId, nil
 }
 
-func makeTableProjection(builder *QueryBuilder, bindCtx *BindContext, tableScanId int32,
-	tableDef *TableDef, typeOriginPk *Type, posOriginPk int,
+func makeTableProjectionIncludingNormalizeL2(builder *QueryBuilder, bindCtx *BindContext, tableScanId int32,
+	tableDef *TableDef,
+	typeOriginPk *Type, posOriginPk int,
 	typeOriginVecColumn *Type, posOriginVecColumn int) (int32, error) {
 
 	normalizeL2, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "normalize_l2", []*Expr{
@@ -224,21 +225,26 @@ func makeCrossJoinTblAndCentroids(builder *QueryBuilder, bindCtx *BindContext, t
 	return crossJoinTblAndCentroidsId
 }
 
-func minCentroidIdGroupByPK(builder *QueryBuilder, bindCtx *BindContext, crossJoinTblAndCentroidsID int32) (int32, error) {
+func makeMinCentroidIdAndCpKey(builder *QueryBuilder, bindCtx *BindContext, crossJoinTblAndCentroidsID int32) (int32, error) {
 
 	lastNodeProjections := getProjectionByLastNode(builder, crossJoinTblAndCentroidsID)
-	// 1. Group By
+	centroidsVersion := lastNodeProjections[0]
+	centroidsId := lastNodeProjections[1]
+	tblPk := lastNodeProjections[2]
+	centroidsCentroid := lastNodeProjections[4]
+	tblNormalizeL2Embedding := lastNodeProjections[5]
+
+	// 1.a Group By
 	groupByList := []*plan.Expr{
-		DeepCopyExpr(lastNodeProjections[0]), // centroids.version
-		DeepCopyExpr(lastNodeProjections[2]), // tbl.pk
-		DeepCopyExpr(lastNodeProjections[3]), // tbl.embedding
+		DeepCopyExpr(centroidsVersion), // centroids.version
+		DeepCopyExpr(tblPk),            // tbl.pk
 	}
 
-	// 2. Agg Functions
+	// 1.b Agg Functions
 	//TODO: modify this part to support multiple distance functions
 	l2Distance, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "l2_distance", []*plan.Expr{
-		DeepCopyExpr(lastNodeProjections[4]), // centroids.centroid
-		DeepCopyExpr(lastNodeProjections[5]), // tbl.normalize_l2(embedding)
+		DeepCopyExpr(centroidsCentroid),       // centroids.centroid
+		DeepCopyExpr(tblNormalizeL2Embedding), // tbl.normalize_l2(embedding)
 	})
 	if err != nil {
 		return -1, err
@@ -246,7 +252,7 @@ func minCentroidIdGroupByPK(builder *QueryBuilder, bindCtx *BindContext, crossJo
 
 	serialL2DistanceCentroidId, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "serial_full", []*plan.Expr{
 		l2Distance,
-		DeepCopyExpr(lastNodeProjections[1]), // centroids.centroid_id
+		DeepCopyExpr(centroidsId), // centroids.centroid_id
 	})
 	if err != nil {
 		return -1, err
@@ -263,14 +269,14 @@ func minCentroidIdGroupByPK(builder *QueryBuilder, bindCtx *BindContext, crossJo
 		minSerialFullL2DistanceAndCentroidId,
 	}
 
-	// 3. Project List
-	minL2DistanceCentroidId, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "serial_extract", []*plan.Expr{
+	// 1.c Project List
+	centroidsIdOfMinimumL2Distance, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "serial_extract", []*plan.Expr{
 		{
 			Typ: makePlan2TypeValue(&varCharType),
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: -2,                          // -1 is group by, -2 is agg function
-					ColPos: int32(0 + len(groupByList)), //TODO: verify
+					ColPos: int32(0 + len(groupByList)), // agg function is the one after `group by`
 				},
 			},
 		},
@@ -283,23 +289,22 @@ func minCentroidIdGroupByPK(builder *QueryBuilder, bindCtx *BindContext, crossJo
 		},
 	})
 
-	centroidsVersion := DeepCopyExpr(lastNodeProjections[0])
-	centroidsVersion.Expr.(*plan.Expr_Col).Col.RelPos = -1
-	centroidsVersion.Expr.(*plan.Expr_Col).Col.ColPos = 0
+	centroidsVersionProj := DeepCopyExpr(centroidsVersion)
+	centroidsVersionProj.Expr.(*plan.Expr_Col).Col.RelPos = -1
+	centroidsVersionProj.Expr.(*plan.Expr_Col).Col.ColPos = 0
 
-	tblPk := DeepCopyExpr(lastNodeProjections[2])
-	tblPk.Expr.(*plan.Expr_Col).Col.RelPos = -1
-	tblPk.Expr.(*plan.Expr_Col).Col.ColPos = 1
+	tblPkProj := DeepCopyExpr(tblPk)
+	tblPkProj.Expr.(*plan.Expr_Col).Col.RelPos = -1
+	tblPkProj.Expr.(*plan.Expr_Col).Col.ColPos = 1
 
-	tblEmbedding := DeepCopyExpr(lastNodeProjections[3])
-	tblEmbedding.Expr.(*plan.Expr_Col).Col.RelPos = -1
-	tblEmbedding.Expr.(*plan.Expr_Col).Col.ColPos = 2
-
+	// 1.d Create a new AGG node
+	// NOTE: Don't add
+	// serial(centroidsVersionProj, "centroidsIdOfMinimumL2Distance", tblPkProj) in here as you will be computing
+	// the same value multiple times. Instead, add serial(...) in the next PROJECT node.
 	projectionList := []*plan.Expr{
-		centroidsVersion, // centroids.version
-		minL2DistanceCentroidId,
-		tblPk,        // tbl.pk
-		tblEmbedding, // tbl.embedding
+		centroidsVersionProj,           // centroids.version
+		centroidsIdOfMinimumL2Distance, // centroids.centroid_id
+		tblPkProj,                      // tbl.pk
 	}
 
 	newNodeID := builder.appendNode(
@@ -312,32 +317,104 @@ func minCentroidIdGroupByPK(builder *QueryBuilder, bindCtx *BindContext, crossJo
 		},
 		bindCtx)
 
-	return newNodeID, nil
-}
+	// 2.a Project List
+	lastProjections := getProjectionByLastNode(builder, newNodeID)
 
-func makeFinalProjectWithCPAndOptionalRowId(builder *QueryBuilder, bindCtx *BindContext,
-	crossJoinTblAndCentroidsID int32) (int32, error) {
-
-	// 0: centroids.version,
-	// 1: centroids.centroid_id,
-	// 2: tbl.pk,
-	// 3: tbl.embedding,
-	var joinProjections = getProjectionByLastNode(builder, crossJoinTblAndCentroidsID)
-
-	cpKeyCol, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", []*plan.Expr{
-		DeepCopyExpr(joinProjections[0]),
-		DeepCopyExpr(joinProjections[1]),
-		DeepCopyExpr(joinProjections[2]),
+	// 2.b Create a serial(...) expression
+	cpKey, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", []*plan.Expr{
+		DeepCopyExpr(lastProjections[0]),
+		DeepCopyExpr(lastProjections[1]),
+		DeepCopyExpr(lastProjections[2]),
 	})
 	if err != nil {
 		return -1, err
 	}
 
-	finalProjectId := builder.appendNode(&plan.Node{
+	// 2.c Create a new PROJECT node
+	project := builder.appendNode(&plan.Node{
 		NodeType: plan.Node_PROJECT,
-		Children: []int32{crossJoinTblAndCentroidsID},
-		// version, centroid_id, pk, embedding, serial(version,pk)
-		ProjectList: []*Expr{joinProjections[0], joinProjections[1], joinProjections[2], joinProjections[3], cpKeyCol},
+		Children: []int32{newNodeID},
+		ProjectList: []*Expr{
+			lastProjections[0],
+			lastProjections[1],
+			lastProjections[2],
+			cpKey,
+		},
+	}, bindCtx)
+
+	return project, nil
+}
+
+func makeFinalProjectWithTblEmbedding(builder *QueryBuilder, bindCtx *BindContext,
+	lastNodeId, minCentroidIdNode int32,
+	tableDef *TableDef,
+	typeOriginPk *Type, posOriginPk int,
+	typeOriginVecColumn *Type, posOriginVecColumn int) (int32, error) {
+
+	condExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{
+		{ // tbl.pk
+			Typ: *DeepCopyType(typeOriginPk),
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: 0,
+					ColPos: int32(posOriginPk),
+					Name:   tableDef.Cols[posOriginPk].Name,
+				},
+			},
+		},
+		{ // join.pk
+			Typ: *DeepCopyType(typeOriginPk),
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{
+					RelPos: 1,
+					ColPos: 2,
+					Name:   tableDef.Cols[posOriginPk].Name,
+				},
+			},
+		},
+	})
+	if err != nil {
+		return -1, err
+	}
+
+	// 0: centroids.version,
+	// 1: centroids.centroid_id,
+	// 2: tbl.pk,
+	// 3: tbl.embedding,
+	var rProjections = getProjectionByLastNode(builder, minCentroidIdNode)
+
+	rCentroidsVersion := DeepCopyExpr(rProjections[0])
+	rCentroidsCentroidId := DeepCopyExpr(rProjections[1])
+	rTblPk := DeepCopyExpr(rProjections[2])
+	rCpKey := DeepCopyExpr(rProjections[3])
+
+	rCentroidsVersion.Expr.(*plan.Expr_Col).Col.RelPos = 1
+	rCentroidsCentroidId.Expr.(*plan.Expr_Col).Col.RelPos = 1
+	rTblPk.Expr.(*plan.Expr_Col).Col.RelPos = 1
+	rCpKey.Expr.(*plan.Expr_Col).Col.RelPos = 1
+
+	finalProjectId := builder.appendNode(&plan.Node{
+		NodeType: plan.Node_JOIN,
+		JoinType: plan.Node_INNER,
+		Children: []int32{lastNodeId, minCentroidIdNode},
+		// version, centroid_id, pk, serial(version,pk)
+		ProjectList: []*Expr{
+			DeepCopyExpr(rCentroidsVersion),
+			DeepCopyExpr(rCentroidsCentroidId),
+			DeepCopyExpr(rTblPk),
+			{ // tbl.pk
+				Typ: *typeOriginVecColumn,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: 0,
+						ColPos: int32(posOriginVecColumn),
+						Name:   tableDef.Cols[posOriginVecColumn].Name,
+					},
+				},
+			},
+			rCpKey,
+		},
+		OnList: []*Expr{condExpr},
 	}, bindCtx)
 
 	return finalProjectId, nil
