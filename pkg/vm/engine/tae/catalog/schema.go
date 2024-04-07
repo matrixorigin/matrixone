@@ -135,6 +135,8 @@ type Schema struct {
 	SeqnumMap  map[uint16]int // seqnum -> logical idx
 	SortKey    *SortKey
 	PhyAddrKey *ColDef
+
+	isSecondaryIndexTable bool
 }
 
 func NewEmptySchema(name string) *Schema {
@@ -161,7 +163,7 @@ func (s *Schema) Clone() *Schema {
 }
 
 func (s *Schema) IsSecondaryIndexTable() bool {
-	return strings.Contains(s.Name, "__mo_index_secondary_")
+	return s.isSecondaryIndexTable
 }
 
 // ApplyAlterTable modify the schema in place. Unless you know what you are doing, it is
@@ -925,6 +927,7 @@ func (s *Schema) Finalize(withoutPhyAddr bool) (err error) {
 		// schema has a primary key or a cluster by key, or nothing for now
 		panic("schema: multiple sort keys")
 	}
+	s.isSecondaryIndexTable = strings.Contains(s.Name, "__mo_index_secondary_")
 	return
 }
 
