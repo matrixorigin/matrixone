@@ -3124,7 +3124,7 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 				*tree.ShowProcessList, *tree.ShowStatus, *tree.ShowTableStatus, *tree.ShowGrants, *tree.ShowRolesStmt,
 				*tree.ShowIndex, *tree.ShowCreateView, *tree.ShowTarget, *tree.ValuesStatement,
 				*tree.ExplainFor, *tree.ShowTableNumber, *tree.ShowColumnNumber, *tree.ShowTableValues, *tree.ShowLocks, *tree.ShowNodeList, *tree.ShowFunctionOrProcedureStatus,
-				*tree.ShowPublications, *tree.ShowCreatePublications, *tree.ShowStages, *tree.ExplainAnalyze, *tree.ShowSnapShots:
+				*tree.ShowPublications, *tree.ShowCreatePublications, *tree.ShowStages, *tree.ExplainAnalyze, *tree.ShowSnapShots, *tree.ShowAccountUpgrade:
 				/*
 					mysql COM_QUERY response: End after the data row has been sent.
 					After all row data has been sent, it sends the EOF or OK packet.
@@ -3697,6 +3697,12 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 		if err = mce.handleCallProcedure(requestCtx, st, proc, i, len(cws)); err != nil {
 			return
 		}
+	case *tree.UpgradeStatement:
+		selfHandle = true
+		ses.InvalidatePrivilegeCache()
+		if err = mce.handleExecUpgrade(requestCtx, st, proc, i, len(cws)); err != nil {
+			return
+		}
 	case *tree.Grant:
 		selfHandle = true
 		ses.InvalidatePrivilegeCache()
@@ -3963,7 +3969,7 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 		*tree.ShowProcessList, *tree.ShowStatus, *tree.ShowTableStatus, *tree.ShowGrants, *tree.ShowRolesStmt,
 		*tree.ShowIndex, *tree.ShowCreateView, *tree.ShowTarget, *tree.ShowCollation, *tree.ValuesStatement,
 		*tree.ExplainFor, *tree.ShowTableNumber, *tree.ShowColumnNumber, *tree.ShowTableValues, *tree.ShowLocks, *tree.ShowNodeList, *tree.ShowFunctionOrProcedureStatus,
-		*tree.ShowPublications, *tree.ShowCreatePublications, *tree.ShowStages, *tree.ShowSnapShots:
+		*tree.ShowPublications, *tree.ShowCreatePublications, *tree.ShowStages, *tree.ShowSnapShots, *tree.ShowAccountUpgrade:
 		columns, err = cw.GetColumns()
 		if err != nil {
 			logError(ses, ses.GetDebugString(),
@@ -5089,5 +5095,25 @@ func (mce *MysqlCmdExecutor) handleSetOption(ctx context.Context, data []byte) (
 		return moerr.NewInternalError(ctx, "invalid cmd_set_option data")
 	}
 
+	return nil
+}
+
+func (mce *MysqlCmdExecutor) handleExecUpgrade(ctx context.Context, st *tree.UpgradeStatement, proc *process.Process, i int, i2 int) error {
+	ses := mce.GetSession()
+	proto := ses.GetMysqlProtocol()
+
+	retryCount := st.Retry
+	if st.Retry <= 0 {
+		retryCount = 1
+	}
+	err := ses.UpgradeTenant(ctx, st.Target.AccountName, uint32(retryCount), st.Target.IsALLAccount)
+	if err != nil {
+		return err
+	}
+
+	resp := NewGeneralOkResponse(COM_QUERY, mce.ses.GetServerStatus())
+	if err = proto.SendResponse(ses.requestCtx, resp); err != nil {
+		return moerr.NewInternalError(ses.requestCtx, "routine send response failed. error:%v ", err)
+	}
 	return nil
 }
