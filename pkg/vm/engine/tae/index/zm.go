@@ -671,6 +671,290 @@ func (zm ZM) PrefixIn(vec *vector.Vector) bool {
 	return lowerBound < len(col) && types.PrefixCompare(col[lowerBound].GetByteSlice(area), maxVal) <= 0
 }
 
+// anyIn has been called, so there must be a subvector in this zonemap
+// return lower bound and upper bound
+func (zm ZM) SubVecIn(vec *vector.Vector) (int, int) {
+	if vec.Length() <= 3 {
+		return 0, vec.Length()
+	}
+	switch vec.GetType().Oid {
+	case types.T_bool:
+		col := vector.MustFixedCol[bool](vec)
+		minVal, _ := types.DecodeBool(zm.GetMinBuf()), types.DecodeBool(zm.GetMaxBuf())
+		lowerBound := sort.Search(len(col), func(i int) bool {
+			return !minVal || col[i]
+		})
+		return lowerBound, len(col)
+
+	case types.T_bit:
+		col := vector.MustFixedCol[uint64](vec)
+		minVal, maxVal := types.DecodeUint64(zm.GetMinBuf()), types.DecodeUint64(zm.GetMaxBuf())
+		lowerBound := sort.Search(len(col), func(i int) bool {
+			return minVal <= col[i]
+		})
+		upperBound := sort.Search(len(col), func(i int) bool {
+			return maxVal < col[i]
+		})
+		return lowerBound, upperBound
+
+	case types.T_int8:
+		col := vector.MustFixedCol[int8](vec)
+		minVal, maxVal := types.DecodeInt8(zm.GetMinBuf()), types.DecodeInt8(zm.GetMaxBuf())
+		lowerBound := sort.Search(len(col), func(i int) bool {
+			return minVal <= col[i]
+		})
+		upperBound := sort.Search(len(col), func(i int) bool {
+			return maxVal < col[i]
+		})
+		return lowerBound, upperBound
+
+	case types.T_int16:
+		col := vector.MustFixedCol[int16](vec)
+		minVal, maxVal := types.DecodeInt16(zm.GetMinBuf()), types.DecodeInt16(zm.GetMaxBuf())
+		lowerBound := sort.Search(len(col), func(i int) bool {
+			return minVal <= col[i]
+		})
+		upperBound := sort.Search(len(col), func(i int) bool {
+			return maxVal < col[i]
+		})
+		return lowerBound, upperBound
+
+	case types.T_int32:
+		col := vector.MustFixedCol[int32](vec)
+		minVal, maxVal := types.DecodeInt32(zm.GetMinBuf()), types.DecodeInt32(zm.GetMaxBuf())
+		lowerBound := sort.Search(len(col), func(i int) bool {
+			return minVal <= col[i]
+		})
+		upperBound := sort.Search(len(col), func(i int) bool {
+			return maxVal < col[i]
+		})
+		return lowerBound, upperBound
+
+	case types.T_int64:
+		col := vector.MustFixedCol[int64](vec)
+		minVal, maxVal := types.DecodeInt64(zm.GetMinBuf()), types.DecodeInt64(zm.GetMaxBuf())
+		lowerBound := sort.Search(len(col), func(i int) bool {
+			return minVal <= col[i]
+		})
+		upperBound := sort.Search(len(col), func(i int) bool {
+			return maxVal < col[i]
+		})
+		return lowerBound, upperBound
+
+	case types.T_uint8:
+		col := vector.MustFixedCol[uint8](vec)
+		minVal, maxVal := types.DecodeUint8(zm.GetMinBuf()), types.DecodeUint8(zm.GetMaxBuf())
+		lowerBound := sort.Search(len(col), func(i int) bool {
+			return minVal <= col[i]
+		})
+		upperBound := sort.Search(len(col), func(i int) bool {
+			return maxVal < col[i]
+		})
+		return lowerBound, upperBound
+
+	case types.T_uint16:
+		col := vector.MustFixedCol[uint16](vec)
+		minVal, maxVal := types.DecodeUint16(zm.GetMinBuf()), types.DecodeUint16(zm.GetMaxBuf())
+		lowerBound := sort.Search(len(col), func(i int) bool {
+			return minVal <= col[i]
+		})
+		upperBound := sort.Search(len(col), func(i int) bool {
+			return maxVal < col[i]
+		})
+		return lowerBound, upperBound
+
+	case types.T_uint32:
+		col := vector.MustFixedCol[uint32](vec)
+		minVal, maxVal := types.DecodeUint32(zm.GetMinBuf()), types.DecodeUint32(zm.GetMaxBuf())
+		lowerBound := sort.Search(len(col), func(i int) bool {
+			return minVal <= col[i]
+		})
+		upperBound := sort.Search(len(col), func(i int) bool {
+			return maxVal < col[i]
+		})
+		return lowerBound, upperBound
+
+	case types.T_uint64:
+		col := vector.MustFixedCol[uint64](vec)
+		minVal, maxVal := types.DecodeUint64(zm.GetMinBuf()), types.DecodeUint64(zm.GetMaxBuf())
+		lowerBound := sort.Search(len(col), func(i int) bool {
+			return minVal <= col[i]
+		})
+		upperBound := sort.Search(len(col), func(i int) bool {
+			return maxVal < col[i]
+		})
+		return lowerBound, upperBound
+
+	case types.T_float32:
+		col := vector.MustFixedCol[float32](vec)
+		minVal, maxVal := types.DecodeFloat32(zm.GetMinBuf()), types.DecodeFloat32(zm.GetMaxBuf())
+		lowerBound := sort.Search(len(col), func(i int) bool {
+			return minVal <= col[i]
+		})
+		upperBound := sort.Search(len(col), func(i int) bool {
+			return maxVal < col[i]
+		})
+		return lowerBound, upperBound
+
+	case types.T_float64:
+		col := vector.MustFixedCol[float64](vec)
+		minVal, maxVal := types.DecodeFloat64(zm.GetMinBuf()), types.DecodeFloat64(zm.GetMaxBuf())
+		lowerBound := sort.Search(len(col), func(i int) bool {
+			return minVal <= col[i]
+		})
+		upperBound := sort.Search(len(col), func(i int) bool {
+			return maxVal < col[i]
+		})
+		return lowerBound, upperBound
+
+	case types.T_date:
+		col := vector.MustFixedCol[types.Date](vec)
+		minVal, maxVal := types.DecodeDate(zm.GetMinBuf()), types.DecodeDate(zm.GetMaxBuf())
+		lowerBound := sort.Search(len(col), func(i int) bool {
+			return minVal <= col[i]
+		})
+		upperBound := sort.Search(len(col), func(i int) bool {
+			return maxVal < col[i]
+		})
+		return lowerBound, upperBound
+
+	case types.T_datetime:
+		col := vector.MustFixedCol[types.Datetime](vec)
+		minVal, maxVal := types.DecodeDatetime(zm.GetMinBuf()), types.DecodeDatetime(zm.GetMaxBuf())
+		lowerBound := sort.Search(len(col), func(i int) bool {
+			return minVal <= col[i]
+		})
+		upperBound := sort.Search(len(col), func(i int) bool {
+			return maxVal < col[i]
+		})
+		return lowerBound, upperBound
+
+	case types.T_time:
+		col := vector.MustFixedCol[types.Time](vec)
+		minVal, maxVal := types.DecodeTime(zm.GetMinBuf()), types.DecodeTime(zm.GetMaxBuf())
+		lowerBound := sort.Search(len(col), func(i int) bool {
+			return minVal <= col[i]
+		})
+		upperBound := sort.Search(len(col), func(i int) bool {
+			return maxVal < col[i]
+		})
+		return lowerBound, upperBound
+
+	case types.T_timestamp:
+		col := vector.MustFixedCol[types.Timestamp](vec)
+		minVal, maxVal := types.DecodeTimestamp(zm.GetMinBuf()), types.DecodeTimestamp(zm.GetMaxBuf())
+		lowerBound := sort.Search(len(col), func(i int) bool {
+			return minVal <= col[i]
+		})
+		upperBound := sort.Search(len(col), func(i int) bool {
+			return maxVal < col[i]
+		})
+		return lowerBound, upperBound
+
+	case types.T_enum:
+		col := vector.MustFixedCol[types.Enum](vec)
+		minVal, maxVal := types.DecodeEnum(zm.GetMinBuf()), types.DecodeEnum(zm.GetMaxBuf())
+		lowerBound := sort.Search(len(col), func(i int) bool {
+			return minVal <= col[i]
+		})
+		upperBound := sort.Search(len(col), func(i int) bool {
+			return maxVal < col[i]
+		})
+		return lowerBound, upperBound
+
+	case types.T_decimal64:
+		col := vector.MustFixedCol[types.Decimal64](vec)
+		minVal, maxVal := types.DecodeDecimal64(zm.GetMinBuf()), types.DecodeDecimal64(zm.GetMaxBuf())
+		lowerBound := sort.Search(len(col), func(i int) bool {
+			return !col[i].Less(minVal)
+		})
+		upperBound := sort.Search(len(col), func(i int) bool {
+			return maxVal.Less(col[i])
+		})
+		return lowerBound, upperBound
+
+	case types.T_decimal128:
+		col := vector.MustFixedCol[types.Decimal128](vec)
+		minVal, maxVal := types.DecodeDecimal128(zm.GetMinBuf()), types.DecodeDecimal128(zm.GetMaxBuf())
+		lowerBound := sort.Search(len(col), func(i int) bool {
+			return !col[i].Less(minVal)
+		})
+		upperBound := sort.Search(len(col), func(i int) bool {
+			return maxVal.Less(col[i])
+		})
+		return lowerBound, upperBound
+
+	case types.T_TS:
+		col := vector.MustFixedCol[types.TS](vec)
+		minVal, maxVal := types.DecodeFixed[types.TS](zm.GetMinBuf()), types.DecodeFixed[types.TS](zm.GetMaxBuf())
+		lowerBound := sort.Search(len(col), func(i int) bool {
+			return minVal.LessEq(&col[i])
+		})
+		upperBound := sort.Search(len(col), func(i int) bool {
+			return maxVal.Less(&col[i])
+		})
+		return lowerBound, upperBound
+
+	case types.T_uuid:
+		col := vector.MustFixedCol[types.Uuid](vec)
+		minVal, maxVal := types.DecodeUuid(zm.GetMinBuf()), types.DecodeUuid(zm.GetMaxBuf())
+		lowerBound := sort.Search(len(col), func(i int) bool {
+			return minVal.Le(col[i])
+		})
+		upperBound := sort.Search(len(col), func(i int) bool {
+			return maxVal.Lt(col[i])
+		})
+		return lowerBound, upperBound
+
+	case types.T_Rowid:
+		col := vector.MustFixedCol[types.Rowid](vec)
+		minVal, maxVal := types.DecodeFixed[types.Rowid](zm.GetMinBuf()), types.DecodeFixed[types.Rowid](zm.GetMaxBuf())
+		lowerBound := sort.Search(len(col), func(i int) bool {
+			return minVal.Le(col[i])
+		})
+		upperBound := sort.Search(len(col), func(i int) bool {
+			return maxVal.Less(col[i])
+		})
+		return lowerBound, upperBound
+
+	case types.T_char, types.T_varchar, types.T_json, types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
+		col, area := vector.MustVarlenaRawData(vec)
+		minVal, maxVal := zm.GetMinBuf(), zm.GetMaxBuf()
+		lowerBound := sort.Search(len(col), func(i int) bool {
+			return types.PrefixCompare(minVal, col[i].GetByteSlice(area)) <= 0
+		})
+		upperBound := sort.Search(len(col), func(i int) bool {
+			return types.PrefixCompare(maxVal, col[i].GetByteSlice(area)) < 0
+		})
+		return lowerBound, upperBound
+
+	case types.T_array_float32:
+		col := vector.MustArrayCol[float32](vec)
+		minVal, maxVal := types.BytesToArray[float32](zm.GetMinBuf()), types.BytesToArray[float32](zm.GetMaxBuf())
+		lowerBound := sort.Search(len(col), func(i int) bool {
+			return moarray.Compare[float32](minVal, col[i]) <= 0
+		})
+		upperBound := sort.Search(len(col), func(i int) bool {
+			return moarray.Compare[float32](maxVal, col[i]) < 0
+		})
+		return lowerBound, upperBound
+
+	case types.T_array_float64:
+		col := vector.MustArrayCol[float64](vec)
+		minVal, maxVal := types.BytesToArray[float64](zm.GetMinBuf()), types.BytesToArray[float64](zm.GetMaxBuf())
+		lowerBound := sort.Search(len(col), func(i int) bool {
+			return moarray.Compare[float64](minVal, col[i]) <= 0
+		})
+		upperBound := sort.Search(len(col), func(i int) bool {
+			return moarray.Compare[float64](maxVal, col[i]) < 0
+		})
+		return lowerBound, upperBound
+
+	default:
+		return 0, vec.Length()
+	}
+}
+
 func (zm ZM) AnyIn(vec *vector.Vector) bool {
 	switch vec.GetType().Oid {
 	case types.T_bool:
