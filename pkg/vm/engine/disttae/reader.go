@@ -228,7 +228,6 @@ func (mixin *withFilterMixin) getNonCompositPKFilter(proc *process.Process, blkC
 	ok, hasNull, searchFunc := getNonCompositePKSearchFuncByExpr(
 		mixin.filterState.expr,
 		mixin.tableDef.Pkey.PkeyColName,
-		mixin.columns.colTypes[mixin.columns.pkPos].Oid,
 		proc,
 	)
 	if !ok || searchFunc == nil {

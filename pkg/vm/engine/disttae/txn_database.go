@@ -16,8 +16,11 @@ package disttae
 
 import (
 	"context"
+	"runtime/debug"
 	"strconv"
 	"strings"
+
+	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	txn2 "github.com/matrixorigin/matrixone/pkg/pb/txn"
@@ -138,6 +141,10 @@ func (db *txnDatabase) RelationByAccountID(
 	key := genTableKey(accountID, name, db.databaseId)
 	// check the table is deleted or not
 	if _, exist := db.op.GetWorkspace().(*Transaction).deletedTableMap.Load(key); exist {
+		if strings.Contains(name, "_copy_") {
+			stackInfo := debug.Stack()
+			logutil.Error(moerr.NewParseError(context.Background(), "table %q does not exists", name).Error(), zap.String("Stack Trace", string(stackInfo)))
+		}
 		return nil, moerr.NewParseError(context.Background(), "table %q does not exist", name)
 	}
 
@@ -146,7 +153,7 @@ func (db *txnDatabase) RelationByAccountID(
 		p = proc.(*process.Process)
 	}
 
-	rel := db.op.GetWorkspace().(*Transaction).getCachedTable(key, db.op.SnapshotTS())
+	rel := db.op.GetWorkspace().(*Transaction).getCachedTable(key)
 	if rel != nil {
 		rel.proc.Store(p)
 		return rel, nil
@@ -238,7 +245,7 @@ func (db *txnDatabase) Relation(ctx context.Context, name string, proc any) (eng
 		p = proc.(*process.Process)
 	}
 
-	rel := db.op.GetWorkspace().(*Transaction).getCachedTable(key, db.op.SnapshotTS())
+	rel := db.op.GetWorkspace().(*Transaction).getCachedTable(key)
 	if rel != nil {
 		rel.proc.Store(p)
 		return rel, nil
@@ -278,6 +285,10 @@ func (db *txnDatabase) Relation(ctx context.Context, name string, proc any) (eng
 			name,
 			accountId,
 			db.databaseId)
+		if strings.Contains(name, "_copy_") {
+			stackInfo := debug.Stack()
+			logutil.Error(moerr.NewParseError(context.Background(), "table %q does not exists", name).Error(), zap.String("Stack Trace", string(stackInfo)))
+		}
 		return nil, moerr.NewParseError(ctx, "table %q does not exist", name)
 	}
 
