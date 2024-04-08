@@ -44,7 +44,7 @@ func NewEmptyBinaryFuseFilter() StaticFilter {
 type StaticFilter interface {
 	MayContainsKey(key []byte) (bool, error)
 	MayContainsAnyKeys(keys containers.Vector) (bool, *nulls.Bitmap, error)
-	MayContainsAny(keys *vector.Vector) bool
+	MayContainsAny(keys *vector.Vector, lowerBound int, upperBound int) bool
 	Marshal() ([]byte, error)
 	Unmarshal(buf []byte) error
 	String() string
@@ -101,7 +101,7 @@ func (filter *binaryFuseFilter) MayContainsKey(key []byte) (bool, error) {
 	return filter.Contains(hash), nil
 }
 
-func (filter *binaryFuseFilter) MayContainsAny(keys *vector.Vector) bool {
+func (filter *binaryFuseFilter) MayContainsAny(keys *vector.Vector, lowerBound int, upperBound int) bool {
 	found := false
 	op := func(v []byte, _ bool, _ int) error {
 		hash := hashV1(v)
@@ -111,7 +111,7 @@ func (filter *binaryFuseFilter) MayContainsAny(keys *vector.Vector) bool {
 		}
 		return nil
 	}
-	_ = containers.ForeachWindowBytes(keys, 0, keys.Length(), op, nil)
+	_ = containers.ForeachWindowBytes(keys, lowerBound, upperBound-lowerBound, op, nil)
 	return found
 }
 
