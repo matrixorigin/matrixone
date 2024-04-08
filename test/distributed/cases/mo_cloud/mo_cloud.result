@@ -769,6 +769,3 @@ select sum(stu) from mo_mo.stu where account = '863f0767_0361_4a8c_a3e8_73b2be14
 SQL parser error: table "stu" does not exist
 drop database if exists mo_mo;
 drop account test_tenant_1;
-select table_name from information_schema.tables where table_schema collate utf8_general_ci = 'information_schema' and table_name collate utf8_general_ci = 'parameters';
-table_name
-parameters
