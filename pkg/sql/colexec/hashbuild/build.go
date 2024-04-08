@@ -247,13 +247,12 @@ func (ctr *container) buildHashmap(ap *Argument, proc *process.Process) error {
 	)
 
 	for i := 0; i < ctr.inputBatchRowCount; i += hashmap.UnitLimit {
+		if i%(hashmap.UnitLimit*32) == 0 {
+			runtime.Gosched()
+		}
 		n := ctr.inputBatchRowCount - i
 		if n > hashmap.UnitLimit {
 			n = hashmap.UnitLimit
-		}
-
-		if i%(hashmap.UnitLimit*32) == 0 {
-			runtime.Gosched()
 		}
 
 		// if not hash on primary key, estimate the hashmap size after 8192 rows
