@@ -8245,6 +8245,7 @@ func TestSnapshotCheckpoint(t *testing.T) {
 	}
 	assert.Equal(t, inslen, ins1.Length())
 	assert.Equal(t, seglen, seg1.Length())
+	assert.Equal(t, int64(0), common.DebugAllocator.CurrNB())
 }
 
 func TestEstimateMemSize(t *testing.T) {
