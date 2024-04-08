@@ -25,6 +25,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
 
+const (
+	ivfFlatIndexFlag = "experimental_ivf_index"
+	masterIndexFlag  = "experimental_master_index"
+)
+
 func (s *Scope) handleUniqueIndexTable(c *Compile,
 	indexDef *plan.IndexDef, qryDatabase string,
 	originalTableDef *plan.TableDef, indexInfo *plan.CreateTable) error {
@@ -67,6 +72,12 @@ func (s *Scope) createAndInsertForUniqueOrRegularIndexTable(c *Compile, indexDef
 }
 func (s *Scope) handleMasterIndexTable(c *Compile, indexDef *plan.IndexDef, qryDatabase string,
 	originalTableDef *plan.TableDef, indexInfo *plan.CreateTable) error {
+
+	if ok, err := s.isExperimentalEnabled(c, masterIndexFlag); err != nil {
+		return err
+	} else if !ok {
+		return moerr.NewInternalErrorNoCtx("Master index is not enabled")
+	}
 
 	if len(indexInfo.GetIndexTables()) != 1 {
 		return moerr.NewInternalErrorNoCtx("index table count not equal to 1")
@@ -482,4 +493,18 @@ func (s *Scope) logTimestamp(c *Compile, qryDatabase, metadataTableName, metrics
 
 		catalog.SystemSI_IVFFLAT_TblCol_Metadata_val,
 	))
+}
+
+func (s *Scope) isExperimentalEnabled(c *Compile, flag string) (bool, error) {
+
+	val, err := c.proc.GetResolveVariableFunc()(flag, true, false)
+	if err != nil {
+		return false, err
+	}
+
+	if val == nil {
+		return false, nil
+	}
+
+	return fmt.Sprintf("%v", val) == "1", nil
 }
