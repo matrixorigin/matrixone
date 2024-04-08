@@ -93,32 +93,6 @@ type RowEntry struct {
 	PrimaryIndexBytes []byte
 }
 
-func (r RowEntry) Less(than RowEntry) bool {
-	// asc
-	cmp := r.BlockID.Compare(than.BlockID)
-	if cmp < 0 {
-		return true
-	}
-	if cmp > 0 {
-		return false
-	}
-	// asc
-	if r.RowID.Less(than.RowID) {
-		return true
-	}
-	if than.RowID.Less(r.RowID) {
-		return false
-	}
-	// desc
-	if than.Time.Less(&r.Time) {
-		return true
-	}
-	if r.Time.Less(&than.Time) {
-		return false
-	}
-	return false
-}
-
 func (r RowEntry) Compare(r2 RowEntry) int {
 	if res := r.BlockID.Compare(r2.BlockID); res != 0 {
 		return res
@@ -144,19 +118,11 @@ type BlockEntry struct {
 	DeleteTime types.TS
 }
 
-func (b BlockEntry) Less(than BlockEntry) bool {
-	return b.BlockID.Compare(than.BlockID) < 0
-}
-
 type BlockDeltaEntry struct {
 	BlockID types.Blockid
 
 	CommitTs types.TS
 	DeltaLoc objectio.ObjectLocation
-}
-
-func (b BlockDeltaEntry) Less(than BlockDeltaEntry) bool {
-	return b.BlockID.Compare(than.BlockID) < 0
 }
 
 func (b BlockDeltaEntry) Compare(to BlockDeltaEntry) int {
@@ -194,10 +160,6 @@ type ObjectEntry struct {
 	ObjectInfo
 }
 
-func (o ObjectEntry) Less(than ObjectEntry) bool {
-	return bytes.Compare((*o.ObjectShortName())[:], (*than.ObjectShortName())[:]) < 0
-}
-
 func (o ObjectEntry) Compare(than ObjectEntry) int {
 	return bytes.Compare((*o.ObjectShortName())[:], (*than.ObjectShortName())[:])
 }
@@ -221,18 +183,6 @@ func (o ObjectInfo) StatsValid() bool {
 
 type ObjectIndexByCreateTSEntry struct {
 	ObjectInfo
-}
-
-func (o ObjectIndexByCreateTSEntry) Less(than ObjectIndexByCreateTSEntry) bool {
-	// desc
-	if o.CreateTime.GreaterEq(&than.CreateTime) {
-		return true
-	}
-	if than.CreateTime.GreaterEq(&o.CreateTime) {
-		return false
-	}
-	// unique
-	return bytes.Compare(o.ObjectShortName()[:], than.ObjectShortName()[:]) < 0
 }
 
 func (o ObjectIndexByCreateTSEntry) Compare(to ObjectIndexByCreateTSEntry) int {
@@ -260,15 +210,6 @@ type PrimaryIndexEntry struct {
 	BlockID types.Blockid
 	RowID   types.Rowid
 	Time    types.TS
-}
-
-func (p *PrimaryIndexEntry) Less(than *PrimaryIndexEntry) bool {
-	if res := bytes.Compare(p.Bytes, than.Bytes); res < 0 {
-		return true
-	} else if res > 0 {
-		return false
-	}
-	return p.RowEntryID < than.RowEntryID
 }
 
 func (p *PrimaryIndexEntry) Compare(p2 *PrimaryIndexEntry) int {
