@@ -544,7 +544,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 			continue
 		}
 
-		row, err := extractRowFromEveryVector(ses, bat, j, oq, false)
+		row, err := extractRowFromEveryVector(ses, bat, j, oq, true)
 		if err != nil {
 			return err
 		}
@@ -676,7 +676,7 @@ func (mce *MysqlCmdExecutor) handleSelectVariables(ve *tree.VarExpr, cwIndex, cw
 	return err
 }
 
-func doCmdFieldList(requestCtx context.Context, ses *Session, icfl *InternalCmdFieldList) error {
+func doCmdFieldList(requestCtx context.Context, ses *Session, _ *InternalCmdFieldList) error {
 	dbName := ses.GetDatabaseName()
 	if dbName == "" {
 		return moerr.NewNoDB(requestCtx)
@@ -1294,7 +1294,7 @@ func fillQueryBatch(ses *Session, explainColName string, lines []string) (*batch
 }
 
 // Note: for pass the compile quickly. We will remove the comments in the future.
-func (mce *MysqlCmdExecutor) handleExplainStmt(requestCtx context.Context, stmt *tree.ExplainStmt, cwIndex, cwsLen int) error {
+func (mce *MysqlCmdExecutor) handleExplainStmt(stmt *tree.ExplainStmt, cwIndex, cwsLen int) error {
 	var err error
 	ses := mce.GetSession()
 	proto := ses.GetMysqlProtocol()
@@ -1383,7 +1383,7 @@ func doDeallocate(ctx context.Context, ses *Session, st *tree.Deallocate) error 
 	return nil
 }
 
-func doReset(ctx context.Context, ses *Session, st *tree.Reset) error {
+func doReset(_ context.Context, _ *Session, _ *tree.Reset) error {
 	return nil
 }
 
@@ -3544,7 +3544,7 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 		}
 	case *tree.ExplainStmt:
 		selfHandle = true
-		if err = mce.handleExplainStmt(requestCtx, st, i, len(cws)); err != nil {
+		if err = mce.handleExplainStmt(st, i, len(cws)); err != nil {
 			return
 		}
 	case *tree.ExplainAnalyze:
