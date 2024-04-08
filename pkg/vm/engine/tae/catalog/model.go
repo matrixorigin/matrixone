@@ -25,8 +25,9 @@ const (
 	SortKeyNamePrefx     = "_SORT_"
 
 	AttrRowID    = PhyAddrColumnName
-	AttrCommitTs = "commit_time"
-	AttrAborted  = "aborted"
+	AttrCommitTs = catalog.TableTailAttrCommitTs
+	AttrAborted  = catalog.TableTailAttrAborted
+	AttrPKVal    = catalog.TableTailAttrPKVal
 
 	TenantSysID = uint32(0)
 )
@@ -37,9 +38,9 @@ var SystemTableSchema_V1 *Schema
 var SystemColumnSchema *Schema
 var SystemColumnSchema_V1 *Schema
 
-var SystemSegment_DB_ID types.Uuid
-var SystemSegment_Table_ID types.Uuid
-var SystemSegment_Columns_ID types.Uuid
+var SystemObject_DB_ID types.Uuid
+var SystemObject_Table_ID types.Uuid
+var SystemObject_Columns_ID types.Uuid
 var SystemBlock_DB_ID types.Blockid
 var SystemBlock_Table_ID types.Blockid
 var SystemBlock_Columns_ID types.Blockid
@@ -58,9 +59,9 @@ const (
 
 func init() {
 
-	SystemSegment_DB_ID = types.Uuid{101}
-	SystemSegment_Table_ID = types.Uuid{102}
-	SystemSegment_Columns_ID = types.Uuid{103}
+	SystemObject_DB_ID = types.Uuid{101}
+	SystemObject_Table_ID = types.Uuid{102}
+	SystemObject_Columns_ID = types.Uuid{103}
 	SystemBlock_DB_ID = types.Blockid{101}
 	SystemBlock_Table_ID = types.Blockid{102}
 	SystemBlock_Columns_ID = types.Blockid{103}

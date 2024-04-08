@@ -652,3 +652,16 @@ col1    col2    col3    col4
 8.900    c    20    2022-10-01
 6.000    a    21    2022-10-01
 6.000    a    21    2022-10-01
+set autocommit=0;
+create table t1(a int primary key);
+insert into t1 values (1);
+create table t2(id int primary key, a int, CONSTRAINT `t1_a` FOREIGN KEY (`a`) REFERENCES `t1` (`a`) ON DELETE CASCADE ON UPDATE RESTRICT);
+insert into t2 values (1,1);
+commit;
+drop table if exists t2;
+drop table if exists t1;
+drop table if exists c1;
+drop table if exists fk_02;
+drop table if exists f1;
+drop table if exists fk_01;
+set autocommit=1;

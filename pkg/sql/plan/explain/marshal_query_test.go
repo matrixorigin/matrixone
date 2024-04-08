@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
 
 	"github.com/google/uuid"
@@ -25,6 +26,42 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 )
+
+func TestGetLabelOrTitle(t *testing.T) {
+	m := MarshalNodeImpl{}
+	errCount := 0
+	for _, v := range plan2.Node_NodeType_value {
+		node := &plan2.Node{
+			NodeType: plan2.Node_NodeType(v),
+			NodeId:   0,
+			InsertCtx: &plan2.InsertCtx{
+				Ref: &plan2.ObjectRef{},
+			},
+			Children: []int32{0, 1},
+		}
+		m.node = node
+		opt := &ExplainOptions{
+			Verbose:  false,
+			Analyze:  false,
+			Format:   EXPLAIN_FORMAT_TEXT,
+			NodeType: plan2.Node_NodeType(v),
+		}
+		_, e := m.GetNodeTitle(context.TODO(), opt)
+		if e != nil && e.Error() == "internal error: "+errUnsupportedNodeType {
+			errCount = errCount + 1
+			fmt.Printf("you should add title for node=%s\n", plan2.Node_NodeType_name[v])
+		}
+
+		_, e = m.GetNodeLabels(context.TODO(), opt)
+		if e != nil && e.Error() == "internal error: "+errUnsupportedNodeType {
+			errCount = errCount + 1
+			fmt.Printf("you should add label for node=%s\n", plan2.Node_NodeType_name[v])
+		}
+	}
+	if errCount > 0 {
+		t.Fatalf("you should add title/label for some nodes")
+	}
+}
 
 func TestSimpleQueryToJson(t *testing.T) {
 	//input := "select * from part where p_container in ('SM CASE', 'SM BOX', 'SM PACK', 'SM PKG')"

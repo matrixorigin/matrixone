@@ -106,9 +106,9 @@ select * from enum05;
 drop table enum05;
 
 
--- create table enum column as primary key
+-- create table enum column
 drop table if exists pri01;
-create table pri01 (col1 enum('qy4iujd3wi4fu4h3f', '323242r34df432432', '32e3ewfdewrew') primary key);
+create table pri01 (col1 enum('qy4iujd3wi4fu4h3f', '323242r34df432432', '32e3ewfdewrew'));
 show create table pri01;
 insert into pri01 values ('qy4iujd3wi4fu4h3f');
 insert into pri01 values ('qy4iujd3wi4fu4h3f');
@@ -120,7 +120,6 @@ show columns from pri01;
 drop table pri01;
 
 
--- alter table add primary key for enum column and duplicate exists
 drop table if exists pri02;
 create table pri02 (col1 int, col2 enum('数据库', '数据库系统', '数据库管理系统'));
 insert into pri02 values (1, '数据库');
@@ -133,7 +132,6 @@ select table_name, COLUMN_NAME, data_type, is_nullable from information_schema.c
 drop table pri02;
 
 
--- alter table add primary key for enum column and duplicate does not exists
 drop table if exists pri03;
 create table pri03 (col1 int, col2 enum('数据库', '数据库系统', '数据库管理系统'));
 insert into pri03 values (1, '数据库');
@@ -146,13 +144,11 @@ select table_name, COLUMN_NAME, data_type, is_nullable from information_schema.c
 drop table pri03;
 
 
--- alter table drop primary key for enum column
 drop table if exists pri04;
-create table pri04 (col1 int, col2 enum('database', 'database management', 'database management system') primary key);
+create table pri04 (col1 int, col2 enum('database', 'database management', 'database management system'));
 insert into pri04 (col1, col2) values (1, 'database');
 insert into pri04 values (2, 'database management system');
 show create table pri04;
-alter table pri04 drop primary key;
 show create table pri04;
 show columns from pri04;
 select * from pri04 where col2 = 'database';
@@ -247,7 +243,7 @@ drop table enum04;
 
 -- builtin function
 drop table if exists builtin01;
-create table builtin01(col1 enum('  云原生数据库  ','存储引擎 TAE', 'database system') not null primary key,col2 enum(' database','engine ','index meta data'));
+create table builtin01(col1 enum('  云原生数据库  ','存储引擎 TAE', 'database system') not null,col2 enum(' database','engine ','index meta data'));
 insert into builtin01 values('  云原生数据库  ',' database');
 insert into builtin01 values('存储引擎 TAE','engine ');
 insert into builtin01 values('database system','engine ');
@@ -304,3 +300,6 @@ with cte_1 as(select * from cte01 where col2 = 'hfjsa') select col2 from cte_1 w
 with cte_2 as(select col1,col2 from cte01 where col1 = 3) select col2 from cte_2 where col2 = '&**())_';
 drop table cte01;
 
+drop table if exists agg01;
+create table agg01 (col1 int, col2 enum('egwjqebwq', 'qwewqewqeqewq', 'weueiwqeowqehwgqjhenw') primary key);
+drop table if exists agg01;

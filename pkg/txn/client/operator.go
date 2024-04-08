@@ -19,6 +19,7 @@ import (
 	"context"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	gotrace "runtime/trace"
 	"sync"
 	"time"
@@ -151,6 +152,12 @@ func WithTxnIsolation(value txn.TxnIsolation) TxnOption {
 	}
 }
 
+func WithSessionInfo(info string) TxnOption {
+	return func(tc *txnOperator) {
+		tc.options.SessionInfo = info
+	}
+}
+
 type txnOperator struct {
 	sender rpc.TxnSender
 	waiter *waiter
@@ -185,6 +192,11 @@ type txnOperator struct {
 	clock                clock.Clock
 	createAt             time.Time
 	commitAt             time.Time
+
+	options         txn.TxnOptions
+	commitCounter   counter
+	rollbackCounter counter
+	runSqlCounter   counter
 }
 
 func newTxnOperator(
@@ -443,6 +455,8 @@ func (tc *txnOperator) WriteAndCommit(ctx context.Context, requests []txn.TxnReq
 }
 
 func (tc *txnOperator) Commit(ctx context.Context) error {
+	tc.commitCounter.addEnter()
+	defer tc.commitCounter.addExit()
 	tc.commitAt = time.Now()
 	defer func() {
 		v2.TxnCNCommitDurationHistogram.Observe(time.Since(tc.commitAt).Seconds())
@@ -470,6 +484,8 @@ func (tc *txnOperator) Commit(ctx context.Context) error {
 }
 
 func (tc *txnOperator) Rollback(ctx context.Context) error {
+	tc.rollbackCounter.addEnter()
+	defer tc.rollbackCounter.addExit()
 	v2.TxnRollbackCounter.Inc()
 
 	_, task := gotrace.NewTask(context.TODO(), "transaction.Rollback")
@@ -536,6 +552,15 @@ func (tc *txnOperator) AddLockTable(value lock.LockTable) error {
 	return tc.doAddLockTableLocked(value)
 }
 
+func (tc *txnOperator) LockTableCount() int32 {
+	tc.mu.RLock()
+	defer tc.mu.RUnlock()
+	if tc.mu.txn.Mode != txn.TxnMode_Pessimistic {
+		panic("lock in optimistic mode")
+	}
+	return int32(len(tc.mu.lockTables))
+}
+
 func (tc *txnOperator) ResetRetry(retry bool) {
 	tc.mu.Lock()
 	defer tc.mu.Unlock()
@@ -552,7 +577,7 @@ func (tc *txnOperator) doAddLockTableLocked(value lock.LockTable) error {
 	for _, l := range tc.mu.lockTables {
 		if l.Table == value.Table {
 			if l.Changed(value) {
-				return moerr.NewDeadLockDetectedNoCtx()
+				return moerr.NewLockTableBindChangedNoCtx()
 			}
 			return nil
 		}
@@ -829,7 +854,16 @@ func (tc *txnOperator) handleErrorResponse(resp txn.TxnResponse) error {
 
 		// commit failed, refresh invalid lock tables
 		if err != nil && moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged) {
-			tc.option.lockService.ForceRefreshLockTableBinds(resp.CommitResponse.InvalidLockTables...)
+			tc.option.lockService.ForceRefreshLockTableBinds(
+				resp.CommitResponse.InvalidLockTables,
+				func(bind lock.LockTable) bool {
+					for _, hold := range tc.mu.lockTables {
+						if hold.Table == bind.Table && !hold.Changed(bind) {
+							return true
+						}
+					}
+					return false
+				})
 		}
 
 		v, ok := moruntime.ProcessLevelRuntime().GetGlobalVariables(moruntime.EnableCheckInvalidRCErrors)
@@ -1041,4 +1075,31 @@ func (tc *txnOperator) getWaitLocksLocked() []Lock {
 		values = append(values, l)
 	}
 	return values
+}
+
+func (tc *txnOperator) EnterRunSql() {
+	tc.runSqlCounter.addEnter()
+}
+
+func (tc *txnOperator) ExitRunSql() {
+	tc.runSqlCounter.addExit()
+}
+
+func (tc *txnOperator) inRunSql() bool {
+	return tc.runSqlCounter.more()
+}
+
+func (tc *txnOperator) inCommit() bool {
+	return tc.commitCounter.more()
+}
+
+func (tc *txnOperator) inRollback() bool {
+	return tc.rollbackCounter.more()
+}
+
+func (tc *txnOperator) counter() string {
+	return fmt.Sprintf("commit: %s rollback: %s runSql: %s",
+		tc.commitCounter.String(),
+		tc.rollbackCounter.String(),
+		tc.runSqlCounter.String())
 }

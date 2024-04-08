@@ -81,5 +81,6 @@ delete from vtab32 where vecf32_3 = '[5.33816308, 78.35970277, 982.7183621]';
 create table vtab64_1(id int primary key auto_increment,`vecf64_3` vecf64(3),`vecf64_5` vecf64(5));
 load data infile '$resources/vector/vector.csv' into table vtab64_1;
 select * from vtab64_1;
+(select * from vtab64) except (select * from vtab64_1);
 
 

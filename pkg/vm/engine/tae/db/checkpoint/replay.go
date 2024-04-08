@@ -93,16 +93,16 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (
 	colNames := CheckpointSchema.Attrs()
 	colTypes := CheckpointSchema.Types()
 	t0 := time.Now()
-	var CheckpointVersion int
+	var checkpointVersion int
 	// in version 1, checkpoint metadata doesn't contain 'version'.
 	vecLen := len(bats[0].Vecs)
 	logutil.Infof("checkpoint version: %d", vecLen)
 	if vecLen < CheckpointSchemaColumnCountV1 {
-		CheckpointVersion = 1
+		checkpointVersion = 1
 	} else if vecLen < CheckpointSchemaColumnCountV2 {
-		CheckpointVersion = 2
+		checkpointVersion = 2
 	} else {
-		CheckpointVersion = 3
+		checkpointVersion = 3
 	}
 	for i := range bats[0].Vecs {
 		if len(bats) == 0 {
@@ -118,58 +118,17 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (
 	}
 	readDuration += time.Since(t0)
 	datas := make([]*logtail.CheckpointData, bat.Length())
-	defer func() {
-		for _, data := range datas {
-			if data != nil {
-				data.Close()
-			}
-		}
-	}()
 
-	entries := make([]*CheckpointEntry, bat.Length())
+	entries, maxGlobalEnd := replayCheckpointEntries(bat, checkpointVersion)
 	emptyFile := make([]*CheckpointEntry, 0)
 	var emptyFileMu sync.RWMutex
 	closecbs := make([]func(), 0)
+	var readCount, applyCount, totalCount int
+	totalCount = len(entries)
 	readfn := func(i int, readType uint16) {
-		start := bat.GetVectorByName(CheckpointAttr_StartTS).Get(i).(types.TS)
-		end := bat.GetVectorByName(CheckpointAttr_EndTS).Get(i).(types.TS)
-		cnLoc := objectio.Location(bat.GetVectorByName(CheckpointAttr_MetaLocation).Get(i).([]byte))
-		typ := ET_Global
-		if CheckpointVersion > 2 {
-			typ = EntryType(bat.GetVectorByName(CheckpointAttr_Type).Get(i).(int8))
-		} else {
-			isIncremental := bat.GetVectorByName(CheckpointAttr_EntryType).Get(i).(bool)
-			if isIncremental {
-				typ = ET_Incremental
-			}
-		}
-		var version uint32
-		if CheckpointVersion == 1 {
-			version = logtail.CheckpointVersion1
-		} else {
-			version = bat.GetVectorByName(CheckpointAttr_Version).Get(i).(uint32)
-		}
-		var tnLoc objectio.Location
-		if version <= logtail.CheckpointVersion4 {
-			tnLoc = cnLoc
-		} else {
-			tnLoc = objectio.Location(bat.GetVectorByName(CheckpointAttr_AllLocations).Get(i).([]byte))
-		}
-		var ckpLSN, truncateLSN uint64
-		if version >= logtail.CheckpointVersion7 {
-			ckpLSN = bat.GetVectorByName(CheckpointAttr_CheckpointLSN).Get(i).(uint64)
-			truncateLSN = bat.GetVectorByName(CheckpointAttr_TruncateLSN).Get(i).(uint64)
-		}
-		checkpointEntry := &CheckpointEntry{
-			start:       start,
-			end:         end,
-			cnLocation:  cnLoc,
-			tnLocation:  tnLoc,
-			state:       ST_Finished,
-			entryType:   typ,
-			version:     version,
-			ckpLSN:      ckpLSN,
-			truncateLSN: truncateLSN,
+		checkpointEntry := entries[i]
+		if checkpointEntry.end.Less(maxGlobalEnd) {
+			return
 		}
 		var err2 error
 		if readType == PrefetchData {
@@ -177,6 +136,7 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (
 				logutil.Warnf("read %v failed: %v", checkpointEntry.String(), err2)
 			}
 		} else if readType == PrefetchMetaIdx {
+			readCount++
 			datas[i], err = checkpointEntry.PrefetchMetaIdx(ctx, r.rt.Fs)
 			if err != nil {
 				return
@@ -244,13 +204,22 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (
 			r.tryAddNewBackupCheckpointEntry(checkpointEntry)
 		}
 	}
+
+	var ckpVers []uint32
+	var ckpDatas []*logtail.CheckpointData
+
 	maxGlobal := r.MaxGlobalCheckpoint()
 	if maxGlobal != nil {
 		logutil.Infof("replay checkpoint %v", maxGlobal)
 		err = datas[globalIdx].ApplyReplayTo(r.catalog, dataFactory)
+		applyCount++
 		if err != nil {
 			return
 		}
+
+		ckpVers = append(ckpVers, maxGlobal.version)
+		ckpDatas = append(ckpDatas, datas[globalIdx])
+
 		if maxTs.Less(maxGlobal.end) {
 			maxTs = maxGlobal.end
 		}
@@ -281,9 +250,14 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (
 		}
 		logutil.Infof("replay checkpoint %v", checkpointEntry)
 		err = datas[i].ApplyReplayTo(r.catalog, dataFactory)
+		applyCount++
 		if err != nil {
 			return
 		}
+
+		ckpVers = append(ckpVers, checkpointEntry.version)
+		ckpDatas = append(ckpDatas, datas[i])
+
 		if maxTs.Less(checkpointEntry.end) {
 			maxTs = checkpointEntry.end
 		}
@@ -301,11 +275,17 @@ func (r *runner) Replay(dataFactory catalog.DataFactory) (
 			isLSNValid = false
 		}
 	}
+
+	r.catalog.GetUsageMemo().(*logtail.TNUsageMemo).PrepareReplay(ckpDatas, ckpVers)
+
 	applyDuration = time.Since(t0)
 	logutil.Info("open-tae", common.OperationField("replay"),
 		common.OperandField("checkpoint"),
 		common.AnyField("apply cost", applyDuration),
-		common.AnyField("read cost", readDuration))
+		common.AnyField("read cost", readDuration),
+		common.AnyField("total count", totalCount),
+		common.AnyField("read count", readCount),
+		common.AnyField("apply count", applyCount))
 	r.source.Init(maxTs)
 	return
 }
@@ -385,4 +365,57 @@ func MergeCkpMeta(ctx context.Context, fs fileservice.FileService, cnLocation, t
 	// TODO: checkpoint entry should maintain the location
 	_, err = writer.WriteEnd(ctx)
 	return name, err
+}
+
+func replayCheckpointEntries(bat *containers.Batch, checkpointVersion int) (entries []*CheckpointEntry, maxGlobalEnd types.TS) {
+	entries = make([]*CheckpointEntry, bat.Length())
+	for i := 0; i < bat.Length(); i++ {
+		start := bat.GetVectorByName(CheckpointAttr_StartTS).Get(i).(types.TS)
+		end := bat.GetVectorByName(CheckpointAttr_EndTS).Get(i).(types.TS)
+		cnLoc := objectio.Location(bat.GetVectorByName(CheckpointAttr_MetaLocation).Get(i).([]byte))
+		typ := ET_Global
+		if checkpointVersion > 2 {
+			typ = EntryType(bat.GetVectorByName(CheckpointAttr_Type).Get(i).(int8))
+		} else {
+			isIncremental := bat.GetVectorByName(CheckpointAttr_EntryType).Get(i).(bool)
+			if isIncremental {
+				typ = ET_Incremental
+			}
+		}
+		var version uint32
+		if checkpointVersion == 1 {
+			version = logtail.CheckpointVersion1
+		} else {
+			version = bat.GetVectorByName(CheckpointAttr_Version).Get(i).(uint32)
+		}
+		var tnLoc objectio.Location
+		if version <= logtail.CheckpointVersion4 {
+			tnLoc = cnLoc
+		} else {
+			tnLoc = objectio.Location(bat.GetVectorByName(CheckpointAttr_AllLocations).Get(i).([]byte))
+		}
+		var ckpLSN, truncateLSN uint64
+		if version >= logtail.CheckpointVersion7 {
+			ckpLSN = bat.GetVectorByName(CheckpointAttr_CheckpointLSN).Get(i).(uint64)
+			truncateLSN = bat.GetVectorByName(CheckpointAttr_TruncateLSN).Get(i).(uint64)
+		}
+		checkpointEntry := &CheckpointEntry{
+			start:       start,
+			end:         end,
+			cnLocation:  cnLoc,
+			tnLocation:  tnLoc,
+			state:       ST_Finished,
+			entryType:   typ,
+			version:     version,
+			ckpLSN:      ckpLSN,
+			truncateLSN: truncateLSN,
+		}
+		entries[i] = checkpointEntry
+		if typ == ET_Global {
+			if end.Greater(maxGlobalEnd) {
+				maxGlobalEnd = end
+			}
+		}
+	}
+	return
 }

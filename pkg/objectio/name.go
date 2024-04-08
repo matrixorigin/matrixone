@@ -41,6 +41,14 @@ func BuildObjectName(segid *Segmentid, num uint16) ObjectName {
 	return unsafe.Slice((*byte)(unsafe.Pointer(&name)), ObjectNameLen)
 }
 
+func BuildObjectNameWithObjectID(segid *ObjectId) ObjectName {
+	var name [ObjectNameLen]byte
+	copy(name[:ObjectIDSize], segid[:])
+	str := fmt.Sprintf("%v_%05d", segid.Segment().ToString(), segid.Offset())
+	copy(name[NameStringOff:NameStringOff+NameStringLen], str)
+	return unsafe.Slice((*byte)(unsafe.Pointer(&name)), ObjectNameLen)
+}
+
 func (s *ObjectNameShort) Segmentid() *Segmentid {
 	return (*Segmentid)(unsafe.Pointer(&s[0]))
 }
@@ -63,6 +71,10 @@ func (o ObjectName) Short() *ObjectNameShort {
 
 func (o ObjectName) SegmentId() Segmentid {
 	return types.DecodeUuid(o[:SegmentIdSize])
+}
+
+func (o ObjectName) ObjectId() *ObjectId {
+	return (*ObjectId)(unsafe.Pointer(&o[0]))
 }
 
 func (o ObjectName) Num() uint16 {

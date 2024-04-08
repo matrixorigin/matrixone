@@ -157,11 +157,11 @@ GRANT table ownership ON table *.* `admin`@`localhost`
 GRANT values ON table *.* `admin`@`localhost`
 GRANT connect ON account  `admin`@`localhost`
 SHOW CREATE TABLE information_schema.columns;
-View    Create View
-columns    CREATE VIEW information_schema.COLUMNS AS select 'def' as TABLE_CATALOG,att_database as TABLE_SCHEMA,att_relname AS TABLE_NAME,attname AS COLUMN_NAME,attnum AS ORDINAL_POSITION,mo_show_visible_bin(att_default,1) as COLUMN_DEFAULT,(case when attnotnull != 0 then 'NO' else 'YES' end) as IS_NULLABLE,mo_show_visible_bin(atttyp,2) as DATA_TYPE,internal_char_length(atttyp) AS CHARACTER_MAXIMUM_LENGTH,internal_char_size(atttyp) AS CHARACTER_OCTET_LENGTH,internal_numeric_precision(atttyp) AS NUMERIC_PRECISION,internal_numeric_scale(atttyp) AS NUMERIC_SCALE,internal_datetime_scale(atttyp) AS DATETIME_PRECISION,(case internal_column_character_set(atttyp) WHEN 0 then 'utf8' WHEN 1 then 'utf8' else NULL end) AS CHARACTER_SET_NAME,(case internal_column_character_set(atttyp) WHEN 0 then 'utf8_bin' WHEN 1 then 'utf8_bin' else NULL end) AS COLLATION_NAME,mo_show_visible_bin(atttyp,3) as COLUMN_TYPE,case when att_constraint_type = 'p' then 'PRI' else '' end as COLUMN_KEY,case when att_is_auto_increment = 1 then 'auto_increment' else '' end as EXTRA,'select,insert,update,references' as `PRIVILEGES`,att_comment as COLUMN_COMMENT,cast('' as varchar(500)) as GENERATION_EXPRESSION,if(true, NULL, 0) as SRS_ID from mo_catalog.mo_columns where att_relname!='mo_increment_columns' and att_relname not like '__mo_cpkey_%' and attname != '__mo_rowid'
+View    Create View    character_set_client    collation_connection
+columns    CREATE VIEW information_schema.COLUMNS AS select 'def' as TABLE_CATALOG,att_database as TABLE_SCHEMA,att_relname AS TABLE_NAME,attname AS COLUMN_NAME,attnum AS ORDINAL_POSITION,mo_show_visible_bin(att_default,1) as COLUMN_DEFAULT,(case when attnotnull != 0 then 'NO' else 'YES' end) as IS_NULLABLE,mo_show_visible_bin(atttyp,2) as DATA_TYPE,internal_char_length(atttyp) AS CHARACTER_MAXIMUM_LENGTH,internal_char_size(atttyp) AS CHARACTER_OCTET_LENGTH,internal_numeric_precision(atttyp) AS NUMERIC_PRECISION,internal_numeric_scale(atttyp) AS NUMERIC_SCALE,internal_datetime_scale(atttyp) AS DATETIME_PRECISION,(case internal_column_character_set(atttyp) WHEN 0 then 'utf8' WHEN 1 then 'utf8' else NULL end) AS CHARACTER_SET_NAME,(case internal_column_character_set(atttyp) WHEN 0 then 'utf8_bin' WHEN 1 then 'utf8_bin' else NULL end) AS COLLATION_NAME,mo_show_visible_bin(atttyp,3) as COLUMN_TYPE,case when att_constraint_type = 'p' then 'PRI' else '' end as COLUMN_KEY,case when att_is_auto_increment = 1 then 'auto_increment' else '' end as EXTRA,'select,insert,update,references' as `PRIVILEGES`,att_comment as COLUMN_COMMENT,cast('' as varchar(500)) as GENERATION_EXPRESSION,if(true, NULL, 0) as SRS_ID from mo_catalog.mo_columns where att_relname!='mo_increment_columns' and att_relname not like '__mo_cpkey_%' and attname != '__mo_rowid'    utf8mb4    utf8mb4_general_ci
 show index from r_test;
-Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
-r_test    0    ui    1    c1    A    0    NULL    NULL    YES                YES    NULL
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
+r_test    0    ui    1    c1    A    0    NULL    NULL    YES                    YES    NULL
 show node list;
 1
 show locks;
@@ -176,9 +176,9 @@ show TRIGGERS;
 Trigger    Event    Table    Statement    Timing    Created    sql_mode    Definer    character_set_client    collation_connection    Database Collation
 show TRIGGERS like '*%';
 Trigger    Event    Table    Statement    Timing    Created    sql_mode    Definer    character_set_client    collation_connection    Database Collation
-show collation like '%';
-Collation    Charset    Id    Compiled    Sortlen
-utf8mb4_bin    utf8mb4    46    Yes    1
+show collation like 'utf8mb4_general_ci%';
+Collation    Charset    Id    Default    Compiled    Sortlen    Pad_attribute
+utf8mb4_general_ci    utf8mb4    45        Yes    1    PAD SPACE
 show full tables;
 Tables_in_res_test    Table_type
 r_test    BASE TABLE
@@ -187,7 +187,7 @@ Tables_in_res_test    Table_type
 r_test    BASE TABLE
 select version();
 version()
-0.7
+8.0.30-MatrixOne-v1.0.0
 alter database test set mysql_compatibility_mode = '8.0.30-MatrixOne-v0.7.0';
 internal error: do not have privilege to execute the statement
 select privilege_name, obj_type, privilege_level from mo_catalog.mo_role_privs where privilege_name = 'values';
@@ -270,11 +270,11 @@ version_comment    MatrixOne
 show grants for 'hnadmin'@'localhost';
 Grants for hnadmin@localhost
 SHOW CREATE TABLE information_schema.columns;
-View    Create View
-columns    CREATE VIEW information_schema.COLUMNS AS select 'def' as TABLE_CATALOG,att_database as TABLE_SCHEMA,att_relname AS TABLE_NAME,attname AS COLUMN_NAME,attnum AS ORDINAL_POSITION,mo_show_visible_bin(att_default,1) as COLUMN_DEFAULT,(case when attnotnull != 0 then 'NO' else 'YES' end) as IS_NULLABLE,mo_show_visible_bin(atttyp,2) as DATA_TYPE,internal_char_length(atttyp) AS CHARACTER_MAXIMUM_LENGTH,internal_char_size(atttyp) AS CHARACTER_OCTET_LENGTH,internal_numeric_precision(atttyp) AS NUMERIC_PRECISION,internal_numeric_scale(atttyp) AS NUMERIC_SCALE,internal_datetime_scale(atttyp) AS DATETIME_PRECISION,(case internal_column_character_set(atttyp) WHEN 0 then 'utf8' WHEN 1 then 'utf8' else NULL end) AS CHARACTER_SET_NAME,(case internal_column_character_set(atttyp) WHEN 0 then 'utf8_bin' WHEN 1 then 'utf8_bin' else NULL end) AS COLLATION_NAME,mo_show_visible_bin(atttyp,3) as COLUMN_TYPE,case when att_constraint_type = 'p' then 'PRI' else '' end as COLUMN_KEY,case when att_is_auto_increment = 1 then 'auto_increment' else '' end as EXTRA,'select,insert,update,references' as `PRIVILEGES`,att_comment as COLUMN_COMMENT,cast('' as varchar(500)) as GENERATION_EXPRESSION,if(true, NULL, 0) as SRS_ID from mo_catalog.mo_columns where att_relname!='mo_increment_columns' and att_relname not like '__mo_cpkey_%' and attname != '__mo_rowid'
+View    Create View    character_set_client    collation_connection
+columns    CREATE VIEW information_schema.COLUMNS AS select 'def' as TABLE_CATALOG,att_database as TABLE_SCHEMA,att_relname AS TABLE_NAME,attname AS COLUMN_NAME,attnum AS ORDINAL_POSITION,mo_show_visible_bin(att_default,1) as COLUMN_DEFAULT,(case when attnotnull != 0 then 'NO' else 'YES' end) as IS_NULLABLE,mo_show_visible_bin(atttyp,2) as DATA_TYPE,internal_char_length(atttyp) AS CHARACTER_MAXIMUM_LENGTH,internal_char_size(atttyp) AS CHARACTER_OCTET_LENGTH,internal_numeric_precision(atttyp) AS NUMERIC_PRECISION,internal_numeric_scale(atttyp) AS NUMERIC_SCALE,internal_datetime_scale(atttyp) AS DATETIME_PRECISION,(case internal_column_character_set(atttyp) WHEN 0 then 'utf8' WHEN 1 then 'utf8' else NULL end) AS CHARACTER_SET_NAME,(case internal_column_character_set(atttyp) WHEN 0 then 'utf8_bin' WHEN 1 then 'utf8_bin' else NULL end) AS COLLATION_NAME,mo_show_visible_bin(atttyp,3) as COLUMN_TYPE,case when att_constraint_type = 'p' then 'PRI' else '' end as COLUMN_KEY,case when att_is_auto_increment = 1 then 'auto_increment' else '' end as EXTRA,'select,insert,update,references' as `PRIVILEGES`,att_comment as COLUMN_COMMENT,cast('' as varchar(500)) as GENERATION_EXPRESSION,if(true, NULL, 0) as SRS_ID from mo_catalog.mo_columns where att_relname!='mo_increment_columns' and att_relname not like '__mo_cpkey_%' and attname != '__mo_rowid'    utf8mb4    utf8mb4_general_ci
 show index from r_test;
-Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
-r_test    0    ui    1    c1    A    0    NULL    NULL    YES                YES    NULL
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
+r_test    0    ui    1    c1    A    0    NULL    NULL    YES                    YES    NULL
 show node list;
 1
 show locks;
@@ -289,9 +289,9 @@ show TRIGGERS;
 Trigger    Event    Table    Statement    Timing    Created    sql_mode    Definer    character_set_client    collation_connection    Database Collation
 show TRIGGERS like '*%';
 Trigger    Event    Table    Statement    Timing    Created    sql_mode    Definer    character_set_client    collation_connection    Database Collation
-show collation like '%';
-Collation    Charset    Id    Compiled    Sortlen
-utf8mb4_bin    utf8mb4    46    Yes    1
+show collation like 'utf8mb4_general_ci%';
+Collation    Charset    Id    Default    Compiled    Sortlen    Pad_attribute
+utf8mb4_general_ci    utf8mb4    45        Yes    1    PAD SPACE
 show full tables;
 Tables_in_res_test    Table_type
 r_test    BASE TABLE

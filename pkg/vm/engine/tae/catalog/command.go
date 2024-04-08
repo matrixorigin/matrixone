@@ -31,6 +31,7 @@ const (
 	IOET_WALTxnCommand_Table    uint16 = 3010
 	IOET_WALTxnCommand_Segment  uint16 = 3011
 	IOET_WALTxnCommand_Block    uint16 = 3012
+	IOET_WALTxnCommand_Object   uint16 = 3015
 
 	IOET_WALTxnCommand_Database_V1 uint16 = 1
 	IOET_WALTxnCommand_Table_V1    uint16 = 1
@@ -38,11 +39,13 @@ const (
 	IOET_WALTxnCommand_Table_V3    uint16 = 3
 	IOET_WALTxnCommand_Segment_V1  uint16 = 1
 	IOET_WALTxnCommand_Block_V1    uint16 = 1
+	IOET_WALTxnCommand_Object_V1   uint16 = 1
 
 	IOET_WALTxnCommand_Database_CurrVer = IOET_WALTxnCommand_Database_V1
 	IOET_WALTxnCommand_Table_CurrVer    = IOET_WALTxnCommand_Table_V3
 	IOET_WALTxnCommand_Segment_CurrVer  = IOET_WALTxnCommand_Segment_V1
 	IOET_WALTxnCommand_Block_CurrVer    = IOET_WALTxnCommand_Block_V1
+	IOET_WALTxnCommand_Object_CurrVer   = IOET_WALTxnCommand_Object_V1
 )
 
 var cmdNames = map[uint16]string{
@@ -50,6 +53,7 @@ var cmdNames = map[uint16]string{
 	IOET_WALTxnCommand_Table:    "UTBL",
 	IOET_WALTxnCommand_Segment:  "USEG",
 	IOET_WALTxnCommand_Block:    "UBLK",
+	IOET_WALTxnCommand_Object:   "UOBJ",
 }
 
 func CmdName(t uint16) string {
@@ -121,7 +125,7 @@ func init() {
 		func(b []byte) (any, error) {
 			cmd := newEmptyEntryCmd(IOET_WALTxnCommand_Segment,
 				NewEmptyMVCCNodeFactory(NewEmptyMetadataMVCCNode),
-				func() *SegmentNode { return &SegmentNode{} },
+				func() *ObjectNode { return &ObjectNode{} },
 				IOET_WALTxnCommand_Segment_V1)
 			err := cmd.UnmarshalBinary(b)
 			return cmd, err
@@ -137,6 +141,20 @@ func init() {
 				NewEmptyMVCCNodeFactory(NewEmptyMetadataMVCCNode),
 				func() *BlockNode { return &BlockNode{} },
 				IOET_WALTxnCommand_Block_V1)
+			err := cmd.UnmarshalBinary(b)
+			return cmd, err
+		},
+	)
+	objectio.RegisterIOEnrtyCodec(
+		objectio.IOEntryHeader{
+			Type:    IOET_WALTxnCommand_Object,
+			Version: IOET_WALTxnCommand_Object_V1,
+		}, nil,
+		func(b []byte) (any, error) {
+			cmd := newEmptyEntryCmd(IOET_WALTxnCommand_Object,
+				NewEmptyMVCCNodeFactory(NewEmptyObjectMVCCNode),
+				func() *ObjectNode { return &ObjectNode{} },
+				IOET_WALTxnCommand_Object_V1)
 			err := cmd.UnmarshalBinary(b)
 			return cmd, err
 		},
@@ -180,12 +198,12 @@ func newBlockCmd(id uint32, cmdType uint16, entry *BlockEntry) *EntryCommand[*Me
 	return impl
 }
 
-func newSegmentCmd(id uint32, cmdType uint16, entry *SegmentEntry) *EntryCommand[*MetadataMVCCNode, *SegmentNode] {
-	impl := &EntryCommand[*MetadataMVCCNode, *SegmentNode]{
+func newObjectCmd(id uint32, cmdType uint16, entry *ObjectEntry) *EntryCommand[*ObjectMVCCNode, *ObjectNode] {
+	impl := &EntryCommand[*ObjectMVCCNode, *ObjectNode]{
 		ID:       entry.AsCommonID(),
 		cmdType:  cmdType,
 		mvccNode: entry.BaseEntryImpl.GetLatestNodeLocked(),
-		node:     entry.SegmentNode,
+		node:     entry.ObjectNode,
 	}
 	impl.BaseCustomizedCmd = txnbase.NewBaseCustomizedCmd(id, impl)
 	return impl
@@ -255,7 +273,9 @@ func (cmd *EntryCommand[T, N]) IDString() string {
 	case IOET_WALTxnCommand_Table:
 		s = fmt.Sprintf("%sCommonID=%s", s, id.TableString())
 	case IOET_WALTxnCommand_Segment:
-		s = fmt.Sprintf("%sCommonID=%s", s, id.SegmentString())
+		s = fmt.Sprintf("%sCommonID=%s", s, id.ObjectString())
+	case IOET_WALTxnCommand_Object:
+		s = fmt.Sprintf("%sCommonID=%s", s, id.ObjectString())
 	case IOET_WALTxnCommand_Block:
 		s = fmt.Sprintf("%sCommonID=%s", s, id.BlockString())
 	}
@@ -281,6 +301,8 @@ func (cmd *EntryCommand[T, N]) GetCurrVersion() uint16 {
 		return IOET_WALTxnCommand_Database_CurrVer
 	case IOET_WALTxnCommand_Table:
 		return IOET_WALTxnCommand_Table_CurrVer
+	case IOET_WALTxnCommand_Object:
+		return IOET_WALTxnCommand_Object_CurrVer
 	case IOET_WALTxnCommand_Segment:
 		return IOET_WALTxnCommand_Segment_CurrVer
 	case IOET_WALTxnCommand_Block:

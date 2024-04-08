@@ -48,7 +48,7 @@ func TestFilterWithServiceID(t *testing.T) {
 		NewServiceIDSelector("s2").filter("s1", nil))
 }
 
-func TestFilterWithLabel(t *testing.T) {
+func TestFilterWithLabel_EQ(t *testing.T) {
 	assert.True(t,
 		NewSelector().
 			SelectByLabel(map[string]string{"l1": "v2"}, EQ).
@@ -64,12 +64,87 @@ func TestFilterWithLabel(t *testing.T) {
 			SelectByLabel(map[string]string{"l1": "v1"}, EQ).
 			filter("", map[string]metadata.LabelList{"l1": {Labels: []string{"v1"}}}))
 
+	assert.False(t,
+		NewSelector().
+			SelectByLabel(map[string]string{"l1": "v1"}, EQ).
+			filter("", map[string]metadata.LabelList{
+				"l1": {Labels: []string{"v1"}},
+				"l2": {Labels: []string{"v2"}}},
+			))
+
 	// Test the nil cases.
 	assert.True(t, NewSelector().SelectByLabel(nil, EQ).filter("", map[string]metadata.LabelList{}))
 	assert.True(t, NewSelector().SelectByLabel(map[string]string{}, EQ).filter("", nil))
 	assert.True(t, NewSelector().SelectByLabel(nil, EQ).filter("", nil))
 	assert.False(t, NewSelector().SelectByLabel(nil, EQ).filter("", map[string]metadata.LabelList{"l1": {Labels: []string{"v1"}}}))
 	assert.True(t, NewSelector().SelectByLabel(map[string]string{"li": "v1"}, EQ).filter("", map[string]metadata.LabelList{}))
+}
+
+func TestFilterWithLabel_Contain(t *testing.T) {
+	assert.True(t,
+		NewSelector().
+			SelectByLabel(map[string]string{"l1": "v2"}, Contain).
+			filter("", nil))
+
+	assert.False(t,
+		NewSelector().
+			SelectByLabel(map[string]string{"l1": "v2"}, Contain).
+			filter("", map[string]metadata.LabelList{"l1": {Labels: []string{"v1"}}}))
+
+	assert.True(t,
+		NewSelector().
+			SelectByLabel(map[string]string{"l1": "v1"}, Contain).
+			filter("", map[string]metadata.LabelList{"l1": {Labels: []string{"v1"}}}))
+
+	assert.True(t,
+		NewSelector().
+			SelectByLabel(map[string]string{"l1": "v1"}, Contain).
+			filter("", map[string]metadata.LabelList{
+				"l1": {Labels: []string{"v1"}},
+				"l2": {Labels: []string{"v2"}}},
+			))
+
+	// Test the nil cases.
+	assert.True(t, NewSelector().SelectByLabel(nil, Contain).filter("", map[string]metadata.LabelList{}))
+	assert.True(t, NewSelector().SelectByLabel(map[string]string{}, Contain).filter("", nil))
+	assert.True(t, NewSelector().SelectByLabel(nil, Contain).filter("", nil))
+	assert.False(t, NewSelector().SelectByLabel(nil, Contain).filter("", map[string]metadata.LabelList{"l1": {Labels: []string{"v1"}}}))
+	assert.True(t, NewSelector().SelectByLabel(map[string]string{"li": "v1"}, Contain).filter("", map[string]metadata.LabelList{}))
+}
+
+func TestFilterWithLabel_EQ_Globbing(t *testing.T) {
+	assert.True(t,
+		NewSelector().
+			SelectByLabel(map[string]string{"l1": "v2"}, EQ_Globbing).
+			filter("", nil))
+
+	assert.False(t,
+		NewSelector().
+			SelectByLabel(map[string]string{"l1": "v2"}, EQ_Globbing).
+			filter("", map[string]metadata.LabelList{"l1": {Labels: []string{"v1"}}}))
+
+	assert.True(t,
+		NewSelector().
+			SelectByLabel(map[string]string{"l1": "v1"}, EQ_Globbing).
+			filter("", map[string]metadata.LabelList{"l1": {Labels: []string{"v1"}}}))
+
+	src := "abcdefg"
+	yDst := []string{"*", "ab*", "*defg", "a*c*efg"}
+	for _, dst := range yDst {
+		assert.True(t,
+			NewSelector().
+				SelectByLabel(map[string]string{"l1": src}, EQ_Globbing).
+				filter("", map[string]metadata.LabelList{
+					"l1": {Labels: []string{dst}}},
+				))
+	}
+
+	// Test the nil cases.
+	assert.True(t, NewSelector().SelectByLabel(nil, EQ_Globbing).filter("", map[string]metadata.LabelList{}))
+	assert.True(t, NewSelector().SelectByLabel(map[string]string{}, EQ_Globbing).filter("", nil))
+	assert.True(t, NewSelector().SelectByLabel(nil, EQ_Globbing).filter("", nil))
+	assert.False(t, NewSelector().SelectByLabel(nil, EQ_Globbing).filter("", map[string]metadata.LabelList{"l1": {Labels: []string{"v1"}}}))
+	assert.True(t, NewSelector().SelectByLabel(map[string]string{"li": "v1"}, EQ_Globbing).filter("", map[string]metadata.LabelList{}))
 }
 
 func TestSelector_SelectWithoutLabel(t *testing.T) {
@@ -98,4 +173,16 @@ func TestLabelNum(t *testing.T) {
 		"a": "a",
 		"b": "b",
 	}, EQ).LabelNum())
+}
+
+func TestGlobbing(t *testing.T) {
+	src := "abcdefg"
+	yDst := []string{"*", "ab*", "*defg", "a*c*efg"}
+	nDst := []string{"*def", "aab*", "*f"}
+	for _, dst := range yDst {
+		assert.True(t, globbing(src, dst))
+	}
+	for _, dst := range nDst {
+		assert.False(t, globbing(src, dst))
+	}
 }

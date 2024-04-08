@@ -34,7 +34,7 @@ type BlockDataFactory = func(meta *BlockEntry) data.Block
 
 type BlockEntry struct {
 	*BaseEntryImpl[*MetadataMVCCNode]
-	segment *SegmentEntry
+	object *ObjectEntry
 	*BlockNode
 	ID       types.Blockid
 	blkData  data.Block
@@ -51,7 +51,7 @@ func NewReplayBlockEntry() *BlockEntry {
 }
 
 func NewBlockEntry(
-	segment *SegmentEntry,
+	object *ObjectEntry,
 	id *objectio.Blockid,
 	txn txnif.AsyncTxn,
 	state EntryState,
@@ -61,7 +61,7 @@ func NewBlockEntry(
 		ID: *id,
 		BaseEntryImpl: NewBaseEntry(
 			func() *MetadataMVCCNode { return &MetadataMVCCNode{} }),
-		segment: segment,
+		object: object,
 		BlockNode: &BlockNode{
 			state: state,
 		},
@@ -74,7 +74,7 @@ func NewBlockEntry(
 }
 
 func NewBlockEntryWithMeta(
-	segment *SegmentEntry,
+	object *ObjectEntry,
 	id *objectio.Blockid,
 	txn txnif.AsyncTxn,
 	state EntryState,
@@ -85,7 +85,7 @@ func NewBlockEntryWithMeta(
 		ID: *id,
 		BaseEntryImpl: NewBaseEntry(
 			func() *MetadataMVCCNode { return &MetadataMVCCNode{} }),
-		segment: segment,
+		object: object,
 		BlockNode: &BlockNode{
 			state: state,
 		},
@@ -97,12 +97,12 @@ func NewBlockEntryWithMeta(
 	return e
 }
 
-func NewStandaloneBlock(segment *SegmentEntry, id *objectio.Blockid, ts types.TS) *BlockEntry {
+func NewStandaloneBlock(object *ObjectEntry, id *objectio.Blockid, ts types.TS) *BlockEntry {
 	e := &BlockEntry{
 		ID: *id,
 		BaseEntryImpl: NewBaseEntry(
 			func() *MetadataMVCCNode { return &MetadataMVCCNode{} }),
-		segment: segment,
+		object: object,
 		BlockNode: &BlockNode{
 			state: ES_Appendable,
 		},
@@ -112,7 +112,7 @@ func NewStandaloneBlock(segment *SegmentEntry, id *objectio.Blockid, ts types.TS
 }
 
 func NewStandaloneBlockWithLoc(
-	segment *SegmentEntry,
+	object *ObjectEntry,
 	id *objectio.Blockid,
 	ts types.TS,
 	metaLoc objectio.Location,
@@ -121,7 +121,7 @@ func NewStandaloneBlockWithLoc(
 		ID: *id,
 		BaseEntryImpl: NewBaseEntry(
 			func() *MetadataMVCCNode { return &MetadataMVCCNode{} }),
-		segment: segment,
+		object: object,
 		BlockNode: &BlockNode{
 			state: ES_Appendable,
 		},
@@ -130,12 +130,12 @@ func NewStandaloneBlockWithLoc(
 	return e
 }
 
-func NewSysBlockEntry(segment *SegmentEntry, id types.Blockid) *BlockEntry {
+func NewSysBlockEntry(Object *ObjectEntry, id types.Blockid) *BlockEntry {
 	e := &BlockEntry{
 		ID: id,
 		BaseEntryImpl: NewBaseEntry(
 			func() *MetadataMVCCNode { return &MetadataMVCCNode{} }),
-		segment: segment,
+		object: Object,
 		BlockNode: &BlockNode{
 			state: ES_Appendable,
 		},
@@ -145,10 +145,10 @@ func NewSysBlockEntry(segment *SegmentEntry, id types.Blockid) *BlockEntry {
 }
 
 func (entry *BlockEntry) BuildDeleteObjectName() objectio.ObjectName {
-	entry.segment.Lock()
-	id := entry.segment.nextObjectIdx
-	entry.segment.nextObjectIdx++
-	entry.segment.Unlock()
+	entry.object.Lock()
+	id := entry.object.nextObjectIdx
+	entry.object.nextObjectIdx++
+	entry.object.Unlock()
 	return objectio.BuildObjectName(entry.ID.Segment(), id)
 }
 
@@ -184,14 +184,14 @@ func (entry *BlockEntry) Less(b *BlockEntry) int {
 	return entry.ID.Compare(b.ID)
 }
 
-func (entry *BlockEntry) GetCatalog() *Catalog { return entry.segment.table.db.catalog }
+func (entry *BlockEntry) GetCatalog() *Catalog { return entry.object.table.db.catalog }
 
 func (entry *BlockEntry) IsAppendable() bool {
 	return entry.state == ES_Appendable
 }
 
-func (entry *BlockEntry) GetSegment() *SegmentEntry {
-	return entry.segment
+func (entry *BlockEntry) GetObject() *ObjectEntry {
+	return entry.object
 }
 
 func (entry *BlockEntry) MakeCommand(id uint32) (cmd txnif.TxnCmd, err error) {
@@ -243,8 +243,8 @@ func (entry *BlockEntry) StringWithLevelLocked(level common.PPLevel) string {
 
 func (entry *BlockEntry) AsCommonID() *common.ID {
 	return &common.ID{
-		DbID:    entry.GetSegment().GetTable().GetDB().ID,
-		TableID: entry.GetSegment().GetTable().ID,
+		DbID:    entry.GetObject().GetTable().GetDB().ID,
+		TableID: entry.GetObject().GetTable().ID,
 		BlockID: entry.ID,
 	}
 }
@@ -257,7 +257,7 @@ func (entry *BlockEntry) InitData(factory DataFactory) {
 	entry.blkData = dataFactory(entry)
 }
 func (entry *BlockEntry) GetBlockData() data.Block { return entry.blkData }
-func (entry *BlockEntry) GetSchema() *Schema       { return entry.GetSegment().GetTable().GetLastestSchema() }
+func (entry *BlockEntry) GetSchema() *Schema       { return entry.GetObject().GetTable().GetLastestSchema() }
 func (entry *BlockEntry) PrepareRollback() (err error) {
 	var empty bool
 	empty, err = entry.BaseEntryImpl.PrepareRollback()
@@ -265,7 +265,7 @@ func (entry *BlockEntry) PrepareRollback() (err error) {
 		panic(err)
 	}
 	if empty {
-		if err = entry.GetSegment().RemoveEntry(entry); err != nil {
+		if err = entry.GetObject().RemoveEntry(entry); err != nil {
 			return
 		}
 	}
@@ -299,8 +299,8 @@ func (entry *BlockEntry) PrepareCompact() bool {
 
 // IsActive is coarse API: no consistency check
 func (entry *BlockEntry) IsActive() bool {
-	segment := entry.GetSegment()
-	if !segment.IsActive() {
+	Object := entry.GetObject()
+	if !Object.IsActive() {
 		return false
 	}
 	return !entry.HasDropCommitted()
@@ -308,8 +308,8 @@ func (entry *BlockEntry) IsActive() bool {
 
 // GetTerminationTS is coarse API: no consistency check
 func (entry *BlockEntry) GetTerminationTS() (ts types.TS, terminated bool) {
-	segmentEntry := entry.GetSegment()
-	tableEntry := segmentEntry.GetTable()
+	ObjectEntry := entry.GetObject()
+	tableEntry := ObjectEntry.GetTable()
 	dbEntry := tableEntry.GetDB()
 
 	dbEntry.RLock()

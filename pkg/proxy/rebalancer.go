@@ -16,7 +16,6 @@ package proxy
 
 import (
 	"context"
-	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"math"
 	"sync"
 	"time"
@@ -26,13 +25,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/route"
 	"go.uber.org/zap"
 )
 
 const (
-	// The default rebalancer queue size is 128.
-	defaultQueueSize = 128
+	// The default rebalancer queue size is 1024.
+	defaultQueueSize = 1024
 )
 
 type rebalancer struct {
@@ -181,7 +181,7 @@ func (r *rebalancer) collectTunnels(hash LabelHash) []*tunnel {
 
 	notEmptyCns := make(map[string]struct{})
 
-	selector := li.genSelector()
+	selector := li.genSelector(clusterservice.EQ_Globbing)
 	appendFn := func(s *metadata.CNService) {
 		cns[s.ServiceID] = struct{}{}
 		if len(s.Labels) > 0 {
@@ -189,9 +189,9 @@ func (r *rebalancer) collectTunnels(hash LabelHash) []*tunnel {
 		}
 	}
 	if li.isSuperTenant() {
-		disttae.SelectForSuperTenant(selector, "", nil, appendFn)
+		route.RouteForSuperTenant(selector, "", nil, appendFn)
 	} else {
-		disttae.SelectForCommonTenant(selector, nil, appendFn)
+		route.RouteForCommonTenant(selector, nil, appendFn)
 	}
 
 	r.mc.GetCNService(selector, func(s metadata.CNService) bool {
@@ -228,8 +228,9 @@ func (r *rebalancer) collectTunnels(hash LabelHash) []*tunnel {
 	// For each CN server, pick the tunnels that need to move to other
 	// CN servers.
 	for uuid, ts := range tuns {
-		if ts.count() > upperLimit {
-			ret = append(ret, pickTunnels(ts, ts.count()-upperLimit)...)
+		num := ts.countWithoutIntent()
+		if num > upperLimit {
+			ret = append(ret, pickTunnels(ts, num-upperLimit)...)
 		}
 		if _, ok := emptyCNs[uuid]; ok && len(notEmptyCns) > 0 {
 			// when there ARE selected CNs, migrate tunnels (if any) in empty CNs to the selected CNs
@@ -248,12 +249,7 @@ func (r *rebalancer) handleTransfer(ctx context.Context) {
 			if err := tun.transfer(ctx); err != nil {
 				if !moerr.IsMoErrCode(err, moerr.OkExpectedNotSafeToStartTransfer) {
 					r.logger.Error("failed to do transfer", zap.Error(err))
-					v2.ProxyTransferFailCounter.Inc()
-				} else {
-					v2.ProxyTransferAbortCounter.Inc()
 				}
-			} else {
-				v2.ProxyTransferSuccessCounter.Inc()
 			}
 
 			// After transfer the tunnel, remove it from the inflight map.

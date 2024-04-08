@@ -39,18 +39,6 @@ func makeSimplePacket(payload string) []byte {
 	return data
 }
 
-func makeInitDBPacket(db string) []byte {
-	l := 1 + len(db)
-	data := make([]byte, l+4)
-	data[4] = byte(cmdInitDB)
-	copy(data[5:], db)
-	data[0] = byte(l)
-	data[1] = byte(l >> 8)
-	data[2] = byte(l >> 16)
-	data[3] = 0
-	return data
-}
-
 func packetLen(data []byte) (int32, error) {
 	if len(data) < 3 {
 		return 0, moerr.NewInternalErrorNoCtx("invalid data")
@@ -125,6 +113,48 @@ func TestIsCmdQuery(t *testing.T) {
 
 	data = []byte{0, 0, 0, 0, 3, 0}
 	ret = isCmdQuery(data)
+	require.True(t, ret)
+}
+
+func TestIsCmdInitDB(t *testing.T) {
+	var data []byte
+	ret := isCmdInitDB(data)
+	require.False(t, ret)
+
+	data = []byte{0, 0, 0, 0, 20, 0}
+	ret = isCmdInitDB(data)
+	require.False(t, ret)
+
+	data = []byte{0, 0, 0, 0, 2, 0}
+	ret = isCmdInitDB(data)
+	require.True(t, ret)
+}
+
+func TestIsCmdStmtPrepare(t *testing.T) {
+	var data []byte
+	ret := isCmdStmtPrepare(data)
+	require.False(t, ret)
+
+	data = []byte{0, 0, 0, 0, 20, 0}
+	ret = isCmdStmtPrepare(data)
+	require.False(t, ret)
+
+	data = []byte{0, 0, 0, 0, byte(cmdStmtPrepare), 0}
+	ret = isCmdStmtPrepare(data)
+	require.True(t, ret)
+}
+
+func TestIsCmdStmtClose(t *testing.T) {
+	var data []byte
+	ret := isCmdStmtClose(data)
+	require.False(t, ret)
+
+	data = []byte{0, 0, 0, 0, 20, 0}
+	ret = isCmdStmtClose(data)
+	require.False(t, ret)
+
+	data = []byte{0, 0, 0, 0, byte(cmdStmtClose), 0}
+	ret = isCmdStmtClose(data)
 	require.True(t, ret)
 }
 

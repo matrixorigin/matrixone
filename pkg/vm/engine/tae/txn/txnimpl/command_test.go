@@ -46,12 +46,12 @@ func TestComposedCmd(t *testing.T) {
 	assert.Nil(t, err)
 	composed.AddCmd(tblCmd)
 
-	seg, _ := table.CreateSegment(nil, catalog.ES_Appendable, nil)
-	segCmd, err := seg.MakeCommand(1)
+	obj, _ := table.CreateObject(nil, catalog.ES_Appendable, nil)
+	objCmd, err := obj.MakeCommand(1)
 	assert.Nil(t, err)
-	composed.AddCmd(segCmd)
+	composed.AddCmd(objCmd)
 
-	blk, _ := seg.CreateBlock(nil, catalog.ES_Appendable, nil, nil)
+	blk, _ := obj.CreateBlock(nil, catalog.ES_Appendable, nil, nil)
 	blkCmd, err := blk.MakeCommand(1)
 	assert.Nil(t, err)
 	composed.AddCmd(blkCmd)

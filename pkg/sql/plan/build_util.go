@@ -322,8 +322,8 @@ func isNullExpr(expr *plan.Expr) bool {
 		return false
 	}
 	switch ef := expr.Expr.(type) {
-	case *plan.Expr_C:
-		return expr.Typ.Id == int32(types.T_any) && ef.C.Isnull
+	case *plan.Expr_Lit:
+		return expr.Typ.Id == int32(types.T_any) && ef.Lit.Isnull
 	default:
 		return false
 	}
@@ -346,13 +346,13 @@ func convertValueIntoBool(name string, args []*Expr, isLogic bool) error {
 			continue
 		}
 		switch ex := arg.Expr.(type) {
-		case *plan.Expr_C:
-			switch value := ex.C.Value.(type) {
-			case *plan.Const_I64Val:
+		case *plan.Expr_Lit:
+			switch value := ex.Lit.Value.(type) {
+			case *plan.Literal_I64Val:
 				if value.I64Val == 0 {
-					ex.C.Value = &plan.Const_Bval{Bval: false}
+					ex.Lit.Value = &plan.Literal_Bval{Bval: false}
 				} else {
-					ex.C.Value = &plan.Const_Bval{Bval: true}
+					ex.Lit.Value = &plan.Literal_Bval{Bval: true}
 				}
 				arg.Typ.Id = int32(types.T_bool)
 			}
@@ -433,8 +433,8 @@ func getDefaultExpr(ctx context.Context, d *plan.ColDef) (*Expr, error) {
 	}
 	if d.Default.Expr == nil {
 		return &Expr{
-			Expr: &plan.Expr_C{
-				C: &Const{
+			Expr: &plan.Expr_Lit{
+				Lit: &Const{
 					Isnull: true,
 				},
 			},
@@ -475,8 +475,145 @@ func getTablePriKeyName(priKeyDef *plan.PrimaryKeyDef) string {
 
 // Check whether the table column name is an internal key
 func checkTableColumnNameValid(name string) bool {
-	if name == catalog.Row_ID || name == catalog.CPrimaryKeyColName {
+	if name == catalog.Row_ID || name == catalog.CPrimaryKeyColName ||
+		name == catalog.TableTailAttrCommitTs || name == catalog.TableTailAttrAborted || name == catalog.TableTailAttrPKVal {
 		return false
 	}
 	return true
+}
+
+// makeSelectList forms SELECT Clause "Select t.a,t.b,... "
+func makeSelectList(table string, strs []string) string {
+	bb := strings.Builder{}
+	for i, str := range strs {
+		if i > 0 {
+			bb.WriteByte(',')
+		}
+		//table
+		bb.WriteByte('`')
+		bb.WriteString(table)
+		bb.WriteByte('`')
+		bb.WriteByte('.')
+		//column
+		bb.WriteByte('`')
+		bb.WriteString(str)
+		bb.WriteByte('`')
+	}
+	return bb.String()
+}
+
+// makeWhere forms WHERE Clause "Where t.a is not null and ..."
+func makeWhere(table string, strs []string) string {
+	bb := strings.Builder{}
+	for i, str := range strs {
+		if i > 0 {
+			bb.WriteString(" and ")
+		}
+		//table
+		bb.WriteByte('`')
+		bb.WriteString(table)
+		bb.WriteByte('`')
+		bb.WriteByte('.')
+		//column
+		bb.WriteByte('`')
+		bb.WriteString(str)
+		bb.WriteByte('`')
+		//is not null
+		bb.WriteString(" is not null")
+	}
+	bb.WriteByte(' ')
+	return bb.String()
+}
+
+// colIdsToNames convert the colId to the col name
+func colIdsToNames(ctx context.Context, colIds []uint64, colDefs []*plan.ColDef) ([]string, error) {
+	colId2Name := make(map[uint64]string)
+	for _, def := range colDefs {
+		colId2Name[def.ColId] = def.Name
+	}
+	names := make([]string, 0)
+	for _, colId := range colIds {
+		if name, has := colId2Name[colId]; !has {
+			return nil, moerr.NewInternalError(ctx, fmt.Sprintf("colId %d does exist", colId))
+		} else {
+			names = append(names, name)
+		}
+	}
+	return names, nil
+}
+
+/*
+genSqlForCheckFKConstraints generates the fk constraint checking sql.
+
+basic logic of fk constraint check.
+
+	parent table:
+		T(a)
+	child table:
+		S(b)
+		foreign key (b) references T(a)
+
+
+	generated sql :
+		select count(*) == 0 from (
+			select distinct S.b from S where S.b is not null
+			except
+			select distinct T.a from T
+		)
+	if the result is true, then the fk constraint confirmed.
+*/
+func genSqlForCheckFKConstraints(ctx context.Context,
+	fkey *plan.ForeignKeyDef,
+	childDbName, childTblName string, colsOfChild []*plan.ColDef,
+	parentDbName, parentTblName string, colsOfParent []*plan.ColDef) (string, error) {
+
+	//fk column names
+	fkCols, err := colIdsToNames(ctx, fkey.Cols, colsOfChild)
+	if err != nil {
+		return "", err
+	}
+	//referred column names
+	referCols, err := colIdsToNames(ctx, fkey.ForeignCols, colsOfParent)
+	if err != nil {
+		return "", err
+	}
+
+	childTableClause := fmt.Sprintf("`%s`.`%s`", childDbName, childTblName)
+	parentTableClause := fmt.Sprintf("`%s`.`%s`", parentDbName, parentTblName)
+	where := fmt.Sprintf("where %s", makeWhere(childTblName, fkCols))
+	except := fmt.Sprintf("select distinct %s from %s %s except select distinct %s from %s",
+		makeSelectList(childTblName, fkCols),
+		childTableClause,
+		where,
+		makeSelectList(parentTblName, referCols),
+		parentTableClause,
+	)
+
+	//make detect sql
+	sql := strings.Join([]string{
+		"select count(*) = 0 from (",
+		except,
+		")",
+	}, " ")
+	return sql, nil
+}
+
+// genSqlsForCheckFKSelfRefer generates the fk constraint checking sql.
+// the only difference between genSqlsForCheckFKSelfRefer and genSqlForCheckFKConstraints
+// is the parent table and child table are same in the fk self refer.
+func genSqlsForCheckFKSelfRefer(ctx context.Context,
+	dbName, tblName string,
+	cols []*plan.ColDef, fkeys []*plan.ForeignKeyDef) ([]string, error) {
+	ret := make([]string, 0)
+	for _, fkey := range fkeys {
+		if fkey.ForeignTbl != 0 {
+			continue
+		}
+		sql, err := genSqlForCheckFKConstraints(ctx, fkey, dbName, tblName, cols, dbName, tblName, cols)
+		if err != nil {
+			return nil, err
+		}
+		ret = append(ret, sql)
+	}
+	return ret, nil
 }

@@ -98,8 +98,8 @@ func TestForceRefreshLockTableBinds(t *testing.T) {
 			alloc *lockTableAllocator,
 			l1, l2 *service,
 			table uint64) {
-			l1.ForceRefreshLockTableBinds()
-			l2.ForceRefreshLockTableBinds()
+			l1.ForceRefreshLockTableBinds(nil, nil)
+			l2.ForceRefreshLockTableBinds(nil, nil)
 
 			mustAddTestLock(
 				t,

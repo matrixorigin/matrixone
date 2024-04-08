@@ -97,6 +97,18 @@ func (be *BaseEntryImpl[T]) CreateWithTxn(txn txnif.AsyncTxn, baseNode T) {
 	be.Insert(node)
 }
 
+// used when replay
+func (be *BaseEntryImpl[T]) CreateWithStartAndEnd(start, end types.TS, baseNode T) {
+	node := &MVCCNode[T]{
+		EntryMVCCNode: &EntryMVCCNode{
+			CreatedAt: end,
+		},
+		TxnMVCCNode: txnbase.NewTxnMVCCNodeWithStartEnd(start, end),
+		BaseNode:    baseNode,
+	}
+	be.Insert(node)
+}
+
 func (be *BaseEntryImpl[T]) TryGetTerminatedTS(waitIfcommitting bool) (terminated bool, TS types.TS) {
 	node := be.GetLatestCommittedNode()
 	if node == nil {

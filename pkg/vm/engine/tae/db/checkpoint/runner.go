@@ -26,6 +26,7 @@ import (
 	"time"
 
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 
@@ -306,17 +307,11 @@ func (r *runner) onGlobalCheckpointEntries(items ...any) {
 			}
 		}
 		if doCheckpoint {
-			now := time.Now()
-			entry, err := r.doGlobalCheckpoint(ctx.end, ctx.ckpLSN, ctx.truncateLSN, ctx.interval)
-			if err != nil {
-				logutil.Errorf("Global checkpoint %v failed: %v", entry, err)
+			if _, err := r.doGlobalCheckpoint(
+				ctx.end, ctx.ckpLSN, ctx.truncateLSN, ctx.interval,
+			); err != nil {
 				continue
 			}
-			if err := r.saveCheckpoint(entry.start, entry.end, 0, 0); err != nil {
-				logutil.Errorf("Global checkpoint %v failed: %v", entry, err)
-				continue
-			}
-			logutil.Infof("%s is done, takes %s", entry.String(), time.Since(now))
 		}
 	}
 }
@@ -390,33 +385,79 @@ func (r *runner) onIncrementalCheckpointEntries(items ...any) {
 	if entry == nil || entry.GetState() != ST_Running {
 		return
 	}
-	err := r.doIncrementalCheckpoint(entry)
-	if err != nil {
-		logutil.Errorf("Do checkpoint %s: %v", entry.String(), err)
+	var (
+		err           error
+		errPhase      string
+		lsnToTruncate uint64
+		lsn           uint64
+		fatal         bool
+		fields        []zap.Field
+	)
+	now = time.Now()
+
+	logutil.Info(
+		"Checkpoint-Start",
+		zap.String("entry", entry.String()),
+	)
+
+	defer func() {
+		if err != nil {
+			var logger func(msg string, fields ...zap.Field)
+			if fatal {
+				logger = logutil.Fatal
+			} else {
+				logger = logutil.Error
+			}
+			logger(
+				"Checkpoint-Error",
+				zap.String("entry", entry.String()),
+				zap.Error(err),
+				zap.String("phase", errPhase),
+				zap.Duration("cost", time.Since(now)),
+			)
+		} else {
+			fields = append(fields, zap.Duration("cost", time.Since(now)))
+			fields = append(fields, zap.Uint64("truncate", lsnToTruncate))
+			fields = append(fields, zap.Uint64("lsn", lsn))
+			fields = append(fields, zap.Uint64("reserve", r.options.reservedWALEntryCount))
+			fields = append(fields, zap.String("entry", entry.String()))
+			logutil.Info(
+				"Checkpoint-End",
+				fields...,
+			)
+		}
+	}()
+
+	if fields, err = r.doIncrementalCheckpoint(entry); err != nil {
+		errPhase = "do-ckp"
 		return
 	}
-	lsn := r.source.GetMaxLSN(entry.start, entry.end)
-	lsnToTruncate := uint64(0)
+
+	lsn = r.source.GetMaxLSN(entry.start, entry.end)
 	if lsn > r.options.reservedWALEntryCount {
 		lsnToTruncate = lsn - r.options.reservedWALEntryCount
 	}
 	entry.SetLSN(lsn, lsnToTruncate)
 	entry.SetState(ST_Finished)
-	if err = r.saveCheckpoint(entry.start, entry.end, lsn, lsnToTruncate); err != nil {
-		logutil.Errorf("Save checkpoint %s: %v", entry.String(), err)
+
+	if err = r.saveCheckpoint(
+		entry.start, entry.end, lsn, lsnToTruncate,
+	); err != nil {
+		errPhase = "save-ckp"
 		return
 	}
 
-	e, err := r.wal.RangeCheckpoint(1, lsnToTruncate)
-	if err != nil {
-		panic(err)
+	var logEntry wal.LogEntry
+	if logEntry, err = r.wal.RangeCheckpoint(1, lsnToTruncate); err != nil {
+		errPhase = "wal-ckp"
+		fatal = true
+		return
 	}
-	if err = e.WaitDone(); err != nil {
-		panic(err)
+	if err = logEntry.WaitDone(); err != nil {
+		errPhase = "wait-wal-ckp-done"
+		fatal = true
+		return
 	}
-
-	logutil.Infof("%s is done, takes %s, truncate %d, checkpoint %d, reserve %d",
-		entry.String(), time.Since(now), lsnToTruncate, lsn, r.options.reservedWALEntryCount)
 
 	r.postCheckpointQueue.Enqueue(entry)
 	r.globalCheckpointQueue.Enqueue(&globalCheckpointContext{
@@ -503,12 +544,13 @@ func (r *runner) saveCheckpoint(start, end types.TS, ckpLSN, truncateLSN uint64)
 	return
 }
 
-func (r *runner) doIncrementalCheckpoint(entry *CheckpointEntry) (err error) {
-	factory := logtail.IncrementalCheckpointDataFactory(entry.start, entry.end, r.rt.Fs.Service, true)
+func (r *runner) doIncrementalCheckpoint(entry *CheckpointEntry) (fields []zap.Field, err error) {
+	factory := logtail.IncrementalCheckpointDataFactory(entry.start, entry.end, true, false)
 	data, err := factory(r.catalog)
 	if err != nil {
 		return
 	}
+	fields = data.ExportStats("")
 	defer data.Close()
 	cnLocation, tnLocation, _, err := data.WriteTo(r.rt.Fs.Service, r.options.checkpointBlockRows, r.options.checkpointSize)
 	if err != nil {
@@ -520,17 +562,6 @@ func (r *runner) doIncrementalCheckpoint(entry *CheckpointEntry) (err error) {
 		counter.TAE.CheckPoint.DoIncrementalCheckpoint.Add(1)
 	})
 	return
-}
-
-func checkpointMetaInfoFactory(entries []*CheckpointEntry) []*logtail.CkpLocVers {
-	ret := make([]*logtail.CkpLocVers, 0)
-	for idx := range entries {
-		ret = append(ret, &logtail.CkpLocVers{
-			Location: entries[idx].GetLocation(),
-			Version:  entries[idx].GetVersion(),
-		})
-	}
-	return ret
 }
 
 func (r *runner) doCheckpointForBackup(entry *CheckpointEntry) (location string, err error) {
@@ -552,25 +583,68 @@ func (r *runner) doCheckpointForBackup(entry *CheckpointEntry) (location string,
 	return
 }
 
-func (r *runner) doGlobalCheckpoint(end types.TS, ckpLSN, truncateLSN uint64, interval time.Duration) (entry *CheckpointEntry, err error) {
+func (r *runner) doGlobalCheckpoint(
+	end types.TS, ckpLSN, truncateLSN uint64, interval time.Duration,
+) (entry *CheckpointEntry, err error) {
+	var (
+		errPhase string
+		fields   []zap.Field
+	)
+	now := time.Now()
+
 	entry = NewCheckpointEntry(types.TS{}, end.Next(), ET_Global)
 	entry.ckpLSN = ckpLSN
 	entry.truncateLSN = truncateLSN
-	factory := logtail.GlobalCheckpointDataFactory(entry.end, interval,
-		r.rt.Fs.Service, checkpointMetaInfoFactory(r.GetAllCheckpoints()))
+
+	logutil.Info(
+		"Checkpoint-Start",
+		zap.String("entry", entry.String()),
+	)
+
+	defer func() {
+		if err != nil {
+			logutil.Error(
+				"Checkpoint-Error",
+				zap.String("entry", entry.String()),
+				zap.String("phase", errPhase),
+				zap.Error(err),
+				zap.Duration("cost", time.Since(now)),
+			)
+		} else {
+			fields = append(fields, zap.Duration("cost", time.Since(now)))
+			fields = append(fields, zap.String("entry", entry.String()))
+			logutil.Info(
+				"Checkpoint-End",
+				fields...,
+			)
+		}
+	}()
+
+	factory := logtail.GlobalCheckpointDataFactory(entry.end, interval)
 	data, err := factory(r.catalog)
 	if err != nil {
+		errPhase = "collect"
 		return
 	}
+	fields = data.ExportStats("")
 	defer data.Close()
 
-	cnLocation, tnLocation, _, err := data.WriteTo(r.rt.Fs.Service, r.options.checkpointBlockRows, r.options.checkpointSize)
+	cnLocation, tnLocation, _, err := data.WriteTo(
+		r.rt.Fs.Service, r.options.checkpointBlockRows, r.options.checkpointSize,
+	)
 	if err != nil {
+		errPhase = "flush"
 		return
 	}
+
 	entry.SetLocation(cnLocation, tnLocation)
 	r.tryAddNewGlobalCheckpointEntry(entry)
 	entry.SetState(ST_Finished)
+
+	if err = r.saveCheckpoint(entry.start, entry.end, 0, 0); err != nil {
+		errPhase = "save"
+		return
+	}
 
 	perfcounter.Update(r.ctx, func(counter *perfcounter.CounterSet) {
 		counter.TAE.CheckPoint.DoGlobalCheckPoint.Add(1)
@@ -767,14 +841,14 @@ func (r *runner) onWaitWaitableItems(items ...any) {
 
 func (r *runner) fireFlushTabletail(table *catalog.TableEntry, tree *model.TableTree, endTs types.TS) error {
 	metas := make([]*catalog.BlockEntry, 0, 10)
-	for _, seg := range tree.Segs {
-		segment, err := table.GetSegmentByID(seg.ID)
+	for _, obj := range tree.Objs {
+		Object, err := table.GetObjectByID(obj.ID)
 		if err != nil {
 			panic(err)
 		}
-		for blk := range seg.Blks {
-			bid := objectio.NewBlockid(seg.ID, blk.Num, blk.Seq)
-			block, err := segment.GetBlockEntryByID(bid)
+		for blk := range obj.Blks {
+			bid := objectio.NewBlockidWithObjectID(obj.ID, blk)
+			block, err := Object.GetBlockEntryByID(bid)
 			if err != nil {
 				panic(err)
 			}
@@ -803,14 +877,14 @@ func (r *runner) fireFlushTabletail(table *catalog.TableEntry, tree *model.Table
 }
 
 func (r *runner) EstimateTableMemSize(table *catalog.TableEntry, tree *model.TableTree) (asize int, dsize int) {
-	for _, seg := range tree.Segs {
-		segment, err := table.GetSegmentByID(seg.ID)
+	for _, obj := range tree.Objs {
+		Object, err := table.GetObjectByID(obj.ID)
 		if err != nil {
 			panic(err)
 		}
-		for blk := range seg.Blks {
-			bid := objectio.NewBlockid(seg.ID, blk.Num, blk.Seq)
-			block, err := segment.GetBlockEntryByID(bid)
+		for blk := range obj.Blks {
+			bid := objectio.NewBlockidWithObjectID(obj.ID, blk)
+			block, err := Object.GetBlockEntryByID(bid)
 			if err != nil {
 				panic(err)
 			}
@@ -925,8 +999,12 @@ func (r *runner) onDirtyEntries(entries ...any) {
 }
 
 func (r *runner) crontask(ctx context.Context) {
+	lag := 2 * time.Second
+	if r.options.maxFlushInterval < time.Second {
+		lag = 0 * time.Second
+	}
 	hb := w.NewHeartBeaterWithFunc(r.options.collectInterval, func() {
-		r.source.Run()
+		r.source.Run(lag)
 		entry := r.source.GetAndRefreshMerged()
 		_, endts := entry.GetTimeRange()
 		if entry.IsEmpty() {

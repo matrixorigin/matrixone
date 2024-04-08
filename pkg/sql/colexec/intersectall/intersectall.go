@@ -54,8 +54,12 @@ func (arg *Argument) Prepare(proc *process.Process) error {
 // throw away values that do not exist in the hash table.
 // preserve values that exist in the hash table (the minimum of the number of times that exist in either).
 func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
+	if err, isCancel := vm.CancelCheck(proc); isCancel {
+		return vm.CancelResult, err
+	}
+
 	var err error
-	analyzer := proc.GetAnalyze(arg.info.Idx)
+	analyzer := proc.GetAnalyze(arg.info.Idx, arg.info.ParallelIdx, arg.info.ParallelMajor)
 	analyzer.Start()
 	defer analyzer.Stop()
 	result := vm.NewCallResult()

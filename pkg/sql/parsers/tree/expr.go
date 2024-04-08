@@ -16,9 +16,10 @@ package tree
 
 import (
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"math"
 	"strconv"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 // AST for the expression
@@ -817,6 +818,10 @@ func (node *Subquery) Accept(v Visitor) (Expr, bool) {
 	panic("unimplement Subquery Accept")
 }
 
+func (node *Subquery) String() string {
+	return "subquery"
+}
+
 func NewSubquery(s SelectStatement, e bool) *Subquery {
 	return &Subquery{
 		Select: s,
@@ -874,7 +879,7 @@ func (node *ParenExpr) Accept(v Visitor) (Expr, bool) {
 	return v.Exit(node)
 }
 
-func NewParenExpr(e Expr) *ParenExpr {
+func NewParentExpr(e Expr) *ParenExpr {
 	return &ParenExpr{
 		Expr: e,
 	}

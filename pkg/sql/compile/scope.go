@@ -22,8 +22,6 @@ import (
 	"runtime/debug"
 	"sync"
 
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/sample"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
@@ -48,6 +46,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/right"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightanti"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightsemi"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/sample"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
@@ -115,7 +114,7 @@ func (s *Scope) MergeRun(c *Compile) error {
 	for i := range s.PreScopes {
 		wg.Add(1)
 		scope := s.PreScopes[i]
-		ants.Submit(func() {
+		errSubmit := ants.Submit(func() {
 			defer func() {
 				if e := recover(); e != nil {
 					err := moerr.ConvertPanicError(c.ctx, e)
@@ -137,6 +136,10 @@ func (s *Scope) MergeRun(c *Compile) error {
 				errChan <- scope.ParallelRun(c, scope.IsRemote)
 			}
 		})
+		if errSubmit != nil {
+			errChan <- errSubmit
+			wg.Done()
+		}
 	}
 	defer wg.Wait()
 
@@ -291,8 +294,9 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 											Typ: &plan.Type{
 												Id: int32(types.T_tuple),
 											},
-											Expr: &plan.Expr_Bin{
-												Bin: &plan.BinaryData{
+											Expr: &plan.Expr_Vec{
+												Vec: &plan.LiteralVec{
+													Len:  filter.Card,
 													Data: filter.Data,
 												},
 											},
@@ -348,10 +352,11 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 	case remote:
 		ctx := c.ctx
 		if util.TableIsClusterTable(s.DataSource.TableDef.GetTableType()) {
-			ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
+			ctx = defines.AttachAccountId(ctx, catalog.System_Account)
+
 		}
 		if s.DataSource.AccountId != nil {
-			ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(s.DataSource.AccountId.GetTenantId()))
+			ctx = defines.AttachAccountId(ctx, uint32(s.DataSource.AccountId.GetTenantId()))
 		}
 		rds, err = c.e.NewBlockReader(ctx, mcpu, s.DataSource.Timestamp, s.DataSource.Expr,
 			s.NodeInfo.Data, s.DataSource.TableDef, c.proc)
@@ -373,7 +378,7 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 
 		ctx := c.ctx
 		if util.TableIsClusterTable(s.DataSource.TableDef.GetTableType()) {
-			ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
+			ctx = defines.AttachAccountId(ctx, catalog.System_Account)
 		}
 		db, err = c.e.Database(ctx, s.DataSource.SchemaName, s.Proc.TxnOperator)
 		if err != nil {
@@ -687,11 +692,10 @@ func newParallelScope(s *Scope, ss []*Scope) (*Scope, error) {
 					Idx:     in.Idx,
 					IsFirst: in.IsFirst,
 					Arg: &group.Argument{
-						Aggs:           arg.Aggs,
-						Exprs:          arg.Exprs,
-						Types:          arg.Types,
-						MultiAggs:      arg.MultiAggs,
-						PartialResults: arg.PartialResults,
+						Aggs:      arg.Aggs,
+						Exprs:     arg.Exprs,
+						Types:     arg.Types,
+						MultiAggs: arg.MultiAggs,
 					},
 				})
 			}
@@ -823,7 +827,10 @@ func (s *Scope) notifyAndReceiveFromRemote(errChan chan error) {
 			// if context has done, it means other pipeline stop the query normally.
 			closeWithError := func(err error) {
 				if reg != nil {
-					reg.Ch <- nil
+					select {
+					case <-s.Proc.Ctx.Done():
+					case reg.Ch <- nil:
+					}
 					close(reg.Ch)
 				}
 
@@ -837,6 +844,8 @@ func (s *Scope) notifyAndReceiveFromRemote(errChan chan error) {
 
 			streamSender, errStream := cnclient.GetStreamSender(info.FromAddr)
 			if errStream != nil {
+				logutil.Errorf("Failed to get stream sender txnID=%s, err=%v",
+					s.Proc.TxnOperator.Txn().DebugString(), errStream)
 				closeWithError(errStream)
 				return
 			}
@@ -923,8 +932,12 @@ func receiveMsgAndForward(proc *process.Process, receiveCh chan morpc.Message, f
 				// used for delete
 				proc.SetInputBatch(bat)
 			} else {
-				// used for BroadCastJoin
-				forwardCh <- bat
+				select {
+				case <-proc.Ctx.Done():
+					logutil.Warnf("proc ctx done during forward")
+					return nil
+				case forwardCh <- bat:
+				}
 			}
 			dataBuffer = nil
 		}

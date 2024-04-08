@@ -23,19 +23,19 @@ type Processor interface {
 	OnPostDatabase(database *DBEntry) error
 	OnTable(table *TableEntry) error
 	OnPostTable(table *TableEntry) error
-	OnPostSegment(segment *SegmentEntry) error
-	OnSegment(segment *SegmentEntry) error
+	OnPostObject(Object *ObjectEntry) error
+	OnObject(Object *ObjectEntry) error
 	OnBlock(block *BlockEntry) error
 }
 
 type LoopProcessor struct {
 	DatabaseFn     func(*DBEntry) error
 	TableFn        func(*TableEntry) error
-	SegmentFn      func(*SegmentEntry) error
+	ObjectFn       func(*ObjectEntry) error
 	BlockFn        func(*BlockEntry) error
 	PostDatabaseFn func(*DBEntry) error
 	PostTableFn    func(*TableEntry) error
-	PostSegmentFn  func(*SegmentEntry) error
+	PostObjectFn   func(*ObjectEntry) error
 }
 
 func (p *LoopProcessor) OnDatabase(database *DBEntry) error {
@@ -66,16 +66,16 @@ func (p *LoopProcessor) OnPostTable(table *TableEntry) error {
 	return nil
 }
 
-func (p *LoopProcessor) OnPostSegment(segment *SegmentEntry) error {
-	if p.PostSegmentFn != nil {
-		return p.PostSegmentFn(segment)
+func (p *LoopProcessor) OnPostObject(Object *ObjectEntry) error {
+	if p.PostObjectFn != nil {
+		return p.PostObjectFn(Object)
 	}
 	return nil
 }
 
-func (p *LoopProcessor) OnSegment(segment *SegmentEntry) error {
-	if p.SegmentFn != nil {
-		return p.SegmentFn(segment)
+func (p *LoopProcessor) OnObject(Object *ObjectEntry) error {
+	if p.ObjectFn != nil {
+		return p.ObjectFn(Object)
 	}
 	return nil
 }

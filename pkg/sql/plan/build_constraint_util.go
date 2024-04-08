@@ -18,23 +18,21 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/matrixorigin/matrixone/pkg/defines"
-
 	"github.com/google/uuid"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 )
 
 const derivedTableName = "_t"
-const maxRowThenUnusePkFilterExpr = 1024
+const defaultmaxRowThenUnusePkFilterExpr = 1024
 
 type dmlSelectInfo struct {
 	typ string
@@ -277,11 +275,15 @@ func setTableExprToDmlTableInfo(ctx CompilerContext, tbl tree.TableExpr, tblInfo
 	tableDef.Cols = newCols
 
 	isClusterTable := util.TableIsClusterTable(tableDef.GetTableType())
-	if isClusterTable && ctx.GetAccountId() != catalog.System_Account {
+	accountId, err := ctx.GetAccountId()
+	if err != nil {
+		return err
+	}
+	if isClusterTable && accountId != catalog.System_Account {
 		return moerr.NewInternalError(ctx.GetContext(), "only the sys account can insert/update/delete the cluster table")
 	}
 
-	if util.TableIsClusterTable(tableDef.GetTableType()) && ctx.GetAccountId() != catalog.System_Account {
+	if util.TableIsClusterTable(tableDef.GetTableType()) && accountId != catalog.System_Account {
 		return moerr.NewInternalError(ctx.GetContext(), "only the sys account can insert/update/delete the cluster table %s", tableDef.GetName())
 	}
 	if obj.PubInfo != nil {
@@ -349,7 +351,7 @@ func getDmlTableInfo(ctx CompilerContext, tableExprs tree.TableExprs, with *tree
 	return tblInfo, nil
 }
 
-func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Insert, info *dmlSelectInfo) (bool, map[int]int, bool, error) {
+func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Insert, info *dmlSelectInfo) (bool, map[int]int, bool, map[string]bool, []string, error) {
 	var err error
 	var insertColumns []string
 	tableDef := info.tblInfo.tableDefs[0]
@@ -369,6 +371,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 	checkInsertPkDup := true
 	isInsertWithoutAutoPkCol := false
 	pkPosInValues := make(map[int]int)
+	insertWithoutUniqueKeyMap := make(map[string]bool)
 
 	if stmt.Columns == nil {
 		for _, col := range tableDef.Cols {
@@ -383,7 +386,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 		for _, column := range stmt.Columns {
 			colName := string(column)
 			if _, ok := colToIdx[colName]; !ok {
-				return false, nil, false, moerr.NewBadFieldError(builder.GetContext(), colName, tableDef.Name)
+				return false, nil, false, nil, nil, moerr.NewBadFieldError(builder.GetContext(), colName, tableDef.Name)
 			}
 			insertColumns = append(insertColumns, colName)
 		}
@@ -400,14 +403,14 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 		if isAllDefault {
 			for j, row := range slt.Rows {
 				if row != nil {
-					return false, nil, false, moerr.NewWrongValueCountOnRow(builder.GetContext(), j+1)
+					return false, nil, false, nil, nil, moerr.NewWrongValueCountOnRow(builder.GetContext(), j+1)
 				}
 			}
 		} else {
 			colCount := len(insertColumns)
 			for j, row := range slt.Rows {
 				if len(row) != colCount {
-					return false, nil, false, moerr.NewWrongValueCountOnRow(builder.GetContext(), j+1)
+					return false, nil, false, nil, nil, moerr.NewWrongValueCountOnRow(builder.GetContext(), j+1)
 				}
 			}
 		}
@@ -416,38 +419,64 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 		//but it does not work at the case:
 		//insert into a(a) values (); insert into a values (0),();
 		if isAllDefault && syntaxHasColumnNames {
-			return false, nil, false, moerr.NewInvalidInput(builder.GetContext(), "insert values does not match the number of columns")
+			return false, nil, false, nil, nil, moerr.NewInvalidInput(builder.GetContext(), "insert values does not match the number of columns")
 		}
 		checkInsertPkDup = len(slt.Rows) > 1
-		if CNPrimaryCheck && len(slt.Rows) <= maxRowThenUnusePkFilterExpr {
+		if CNPrimaryCheck {
+			CanUsePkFilter := false
+
 			if len(tableDef.Pkey.Names) == 1 {
-				for idx, name := range insertColumns {
+				for i, name := range insertColumns {
 					if name == tableDef.Pkey.PkeyColName {
-						pkPosInValues[idx] = 0
-						break
-					}
-				}
-			} else {
-				pkNameMap := make(map[string]int)
-				for pkIdx, pkName := range tableDef.Pkey.Names {
-					pkNameMap[pkName] = pkIdx
-				}
-				for idx, name := range insertColumns {
-					if pkIdx, ok := pkNameMap[name]; ok {
-						pkPosInValues[idx] = pkIdx
+						typ := tableDef.Cols[i].Typ
+						switch typ.Id {
+						case int32(types.T_int8), int32(types.T_int16), int32(types.T_int32), int32(types.T_int64), int32(types.T_int128):
+							if len(slt.Rows) < 20000 {
+								CanUsePkFilter = true
+							}
+						case int32(types.T_uint8), int32(types.T_uint16), int32(types.T_uint32), int32(types.T_uint64), int32(types.T_uint128):
+							if len(slt.Rows) < 20000 {
+								CanUsePkFilter = true
+							}
+						}
 					}
 				}
 			}
-			// one of pk cols is incr col and this col was not in values.
-			// we can not use the values of other cols as filterExpr.
-			if len(tableDef.Pkey.Names) != len(pkPosInValues) {
-				pkPosInValues = make(map[int]int)
+
+			if len(slt.Rows) <= defaultmaxRowThenUnusePkFilterExpr {
+				CanUsePkFilter = true
+			}
+
+			if CanUsePkFilter {
+				if len(tableDef.Pkey.Names) == 1 {
+					for idx, name := range insertColumns {
+						if name == tableDef.Pkey.PkeyColName {
+							pkPosInValues[idx] = 0
+							break
+						}
+					}
+				} else {
+					pkNameMap := make(map[string]int)
+					for pkIdx, pkName := range tableDef.Pkey.Names {
+						pkNameMap[pkName] = pkIdx
+					}
+					for idx, name := range insertColumns {
+						if pkIdx, ok := pkNameMap[name]; ok {
+							pkPosInValues[idx] = pkIdx
+						}
+					}
+				}
+				// one of pk cols is incr col and this col was not in values.
+				// we can not use the values of other cols as filterExpr.
+				if len(tableDef.Pkey.Names) != len(pkPosInValues) {
+					pkPosInValues = make(map[int]int)
+				}
 			}
 		}
 
 		err = buildValueScan(isAllDefault, info, builder, bindCtx, tableDef, slt, insertColumns, colToIdx)
 		if err != nil {
-			return false, nil, false, err
+			return false, nil, false, nil, nil, err
 		}
 
 	case *tree.SelectClause:
@@ -456,7 +485,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 		subCtx := NewBindContext(builder, bindCtx)
 		info.rootId, err = builder.buildSelect(astSlt, subCtx, false)
 		if err != nil {
-			return false, nil, false, err
+			return false, nil, false, nil, nil, err
 		}
 
 	case *tree.ParenSelect:
@@ -465,23 +494,23 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 		subCtx := NewBindContext(builder, bindCtx)
 		info.rootId, err = builder.buildSelect(astSlt, subCtx, false)
 		if err != nil {
-			return false, nil, false, err
+			return false, nil, false, nil, nil, err
 		}
 
 	default:
-		return false, nil, false, moerr.NewInvalidInput(builder.GetContext(), "insert has unknown select statement")
+		return false, nil, false, nil, nil, moerr.NewInvalidInput(builder.GetContext(), "insert has unknown select statement")
 	}
 
 	err = builder.addBinding(info.rootId, tree.AliasClause{
 		Alias: derivedTableName,
 	}, bindCtx)
 	if err != nil {
-		return false, nil, false, err
+		return false, nil, false, nil, nil, err
 	}
 
 	lastNode := builder.qry.Nodes[info.rootId]
 	if len(insertColumns) != len(lastNode.ProjectList) {
-		return false, nil, false, moerr.NewInvalidInput(builder.GetContext(), "insert values does not match the number of columns")
+		return false, nil, false, nil, nil, moerr.NewInvalidInput(builder.GetContext(), "insert values does not match the number of columns")
 	}
 
 	tag := builder.qry.Nodes[info.rootId].BindingTags[0]
@@ -500,11 +529,44 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 				},
 			},
 		}
-		projExpr, err = forceCastExpr(builder.GetContext(), projExpr, tableDef.Cols[colIdx].Typ)
-		if err != nil {
-			return false, nil, false, err
+		if tableDef.Cols[colIdx].Typ.Id == int32(types.T_enum) {
+			projExpr, err = funcCastForEnumType(builder.GetContext(), projExpr, tableDef.Cols[colIdx].Typ)
+			if err != nil {
+				return false, nil, false, nil, nil, err
+			}
+		} else {
+			projExpr, err = forceCastExpr(builder.GetContext(), projExpr, tableDef.Cols[colIdx].Typ)
+			if err != nil {
+				return false, nil, false, nil, nil, err
+			}
 		}
 		insertColToExpr[column] = projExpr
+	}
+
+	// create table t(a int, b int unique key);
+	// insert into t(a) values (1);  -> isInsertWithoutUniqueKey = true,  then we do not need a plan to insert unique_key_hidden_table;
+	// create table t(a int, b int unique key auto_increment)	-> isInsertWithoutUniqueKey is allways false
+	// create table t(a int, b int unique key default 10) 		-> isInsertWithoutUniqueKey is allways false
+	for _, idx := range tableDef.Indexes {
+		if idx.Unique {
+			withoutUniqueCol := true
+			for _, name := range idx.Parts {
+				_, ok := insertColToExpr[name]
+				if ok {
+					withoutUniqueCol = false
+					break
+				} else {
+					// insert without unique
+					// then need check col is not auto_incr & default is not null
+					col := tableDef.Cols[tableDef.Name2ColIndex[name]]
+					if col.Typ.AutoIncr || (col.Default.Expr != nil && !isNullExpr(col.Default.Expr)) {
+						withoutUniqueCol = false
+						break
+					}
+				}
+			}
+			insertWithoutUniqueKeyMap[idx.IndexName] = withoutUniqueCol
+		}
 	}
 
 	// have tables : t1(a default 0, b int, pk(a,b)) ,  t2(j int,k int)
@@ -520,7 +582,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 		} else {
 			defExpr, err := getDefaultExpr(builder.GetContext(), col)
 			if err != nil {
-				return false, nil, false, err
+				return false, nil, false, nil, nil, err
 			}
 
 			if col.Typ.AutoIncr && col.Name == tableDef.Pkey.PkeyColName {
@@ -615,17 +677,17 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 					if _, ok := updateExpr.(*tree.DefaultVal); ok {
 						defExpr, err = getDefaultExpr(builder.GetContext(), col)
 						if err != nil {
-							return false, nil, false, err
+							return false, nil, false, nil, nil, err
 						}
 					} else {
 						defExpr, err = binder.BindExpr(updateExpr, 0, true)
 						if err != nil {
-							return false, nil, false, err
+							return false, nil, false, nil, nil, err
 						}
 					}
 					defExpr, err = forceCastExpr(builder.GetContext(), defExpr, col.Typ)
 					if err != nil {
-						return false, nil, false, err
+						return false, nil, false, nil, nil, err
 					}
 					updateExprs[col.Name] = defExpr
 				}
@@ -668,14 +730,14 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 					}
 					eqExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{leftExpr, rightExpr})
 					if err != nil {
-						return false, nil, false, err
+						return false, nil, false, nil, nil, err
 					}
 					if condIdx == 0 {
 						condExpr = eqExpr
 					} else {
 						condExpr, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "and", []*Expr{condExpr, eqExpr})
 						if err != nil {
-							return false, nil, false, err
+							return false, nil, false, nil, nil, err
 						}
 					}
 					condIdx++
@@ -686,7 +748,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 				} else {
 					joinConds, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "or", []*Expr{joinConds, condExpr})
 					if err != nil {
-						return false, nil, false, err
+						return false, nil, false, nil, nil, err
 					}
 				}
 				joinIdx++
@@ -696,7 +758,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 			leftCtx := builder.ctxByNode[info.rootId]
 			err = joinCtx.mergeContexts(builder.GetContext(), leftCtx, rightCtx)
 			if err != nil {
-				return false, nil, false, err
+				return false, nil, false, nil, nil, err
 			}
 			newRootId := builder.appendNode(&plan.Node{
 				NodeType: plan.Node_JOIN,
@@ -722,7 +784,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 		}
 	}
 
-	return checkInsertPkDup, pkPosInValues, isInsertWithoutAutoPkCol, nil
+	return checkInsertPkDup, pkPosInValues, isInsertWithoutAutoPkCol, insertWithoutUniqueKeyMap, insertColumns, nil
 }
 
 func deleteToSelect(builder *QueryBuilder, bindCtx *BindContext, node *tree.Delete, haveConstraint bool, tblInfo *dmlTableInfo) (int32, error) {
@@ -796,8 +858,8 @@ func deleteToSelect(builder *QueryBuilder, bindCtx *BindContext, node *tree.Dele
 
 func checkNotNull(ctx context.Context, expr *Expr, tableDef *TableDef, col *ColDef) error {
 	isConstantNull := false
-	if ef, ok := expr.Expr.(*plan.Expr_C); ok {
-		isConstantNull = ef.C.Isnull
+	if ef, ok := expr.Expr.(*plan.Expr_Lit); ok {
+		isConstantNull = ef.Lit.Isnull
 	}
 	if !isConstantNull {
 		return nil
@@ -975,6 +1037,10 @@ func buildValueScan(
 						return err
 					}
 				} else if nv, ok := r[i].(*tree.ParamExpr); ok {
+					if !builder.isPrepareStatement {
+						bat.Clean(proc.Mp())
+						return moerr.NewInvalidInput(builder.GetContext(), "only prepare statement can use ? expr")
+					}
 					rowsetData.Cols[i].Data = append(rowsetData.Cols[i].Data, &plan.RowsetExpr{
 						RowPos: int32(j),
 						Pos:    int32(nv.Offset),
@@ -1007,6 +1073,10 @@ func buildValueScan(
 					return err
 				}
 				if nv, ok := r[i].(*tree.ParamExpr); ok {
+					if !builder.isPrepareStatement {
+						bat.Clean(proc.Mp())
+						return moerr.NewInvalidInput(builder.GetContext(), "only prepare statement can use ? expr")
+					}
 					rowsetData.Cols[i].Data = append(rowsetData.Cols[i].Data, &plan.RowsetExpr{
 						RowPos: int32(j),
 						Pos:    int32(nv.Offset),
@@ -1040,7 +1110,7 @@ func buildValueScan(
 	}
 
 	bat.SetRowCount(len(slt.Rows))
-	nodeId, _ := uuid.NewUUID()
+	nodeId, _ := uuid.NewV7()
 	scanNode := &plan.Node{
 		NodeType:    plan.Node_VALUE_SCAN,
 		RowsetData:  rowsetData,

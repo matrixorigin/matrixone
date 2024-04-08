@@ -17,6 +17,7 @@ package blockio
 import (
 	"context"
 	"fmt"
+	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -33,6 +34,7 @@ type BlockWriter struct {
 	objMetaBuilder *ObjectColumnMetasBuilder
 	isSetPK        bool
 	pk             uint16
+	sortKeyIdx     uint16
 	nameStr        string
 	name           objectio.ObjectName
 	objectStats    []objectio.ObjectStats
@@ -44,9 +46,10 @@ func NewBlockWriter(fs fileservice.FileService, name string) (*BlockWriter, erro
 		return nil, err
 	}
 	return &BlockWriter{
-		writer:  writer,
-		isSetPK: false,
-		nameStr: name,
+		writer:     writer,
+		isSetPK:    false,
+		sortKeyIdx: math.MaxUint16,
+		nameStr:    name,
 	}, nil
 }
 
@@ -57,16 +60,22 @@ func NewBlockWriterNew(fs fileservice.FileService, name objectio.ObjectName, sch
 		return nil, err
 	}
 	return &BlockWriter{
-		writer:  writer,
-		isSetPK: false,
-		nameStr: name.String(),
-		name:    name,
+		writer:     writer,
+		isSetPK:    false,
+		sortKeyIdx: math.MaxUint16,
+		nameStr:    name.String(),
+		name:       name,
 	}, nil
 }
 
 func (w *BlockWriter) SetPrimaryKey(idx uint16) {
 	w.isSetPK = true
 	w.pk = idx
+	w.sortKeyIdx = idx
+}
+
+func (w *BlockWriter) SetSortKey(idx uint16) {
+	w.sortKeyIdx = idx
 }
 
 func (w *BlockWriter) SetAppendable() {
@@ -87,6 +96,9 @@ func (w *BlockWriter) WriteBatch(batch *batch.Batch) (objectio.BlockObject, erro
 		w.objMetaBuilder = NewObjectColumnMetasBuilder(len(batch.Vecs))
 	}
 	seqnums := w.writer.GetSeqnums()
+	if w.sortKeyIdx != math.MaxUint16 {
+		w.writer.SetSortKeySeqnum(seqnums[w.sortKeyIdx])
+	}
 	for i, vec := range batch.Vecs {
 		isPK := false
 		if i == 0 {
@@ -189,7 +201,9 @@ func (w *BlockWriter) Sync(ctx context.Context) ([]objectio.BlockObject, objecti
 		common.OperandField(w.writer.GetMaxSeqnum()))
 	return blocks, blocks[0].BlockHeader().MetaLocation(), err
 }
-
+func (w *BlockWriter) Stats() objectio.ObjectStats {
+	return w.writer.GetDataStats()
+}
 func (w *BlockWriter) GetName() objectio.ObjectName {
 	return w.name
 }

@@ -43,7 +43,7 @@ func WithTestAllPKType(t *testing.T, tae *db.DB, test func(*testing.T, *db.DB, *
 	for i := 0; i < 17; i++ {
 		schema := catalog.MockSchemaAll(18, i)
 		schema.BlockMaxRows = 10
-		schema.SegmentMaxBlocks = 2
+		schema.ObjectMaxBlocks = 2
 		wg.Add(1)
 		_ = pool.Submit(func() {
 			defer wg.Done()
@@ -226,13 +226,13 @@ func ForEachBlock(rel handle.Relation, fn func(blk handle.Block) error) {
 	}
 }
 
-func ForEachSegment(rel handle.Relation, fn func(seg handle.Segment) error) {
-	it := rel.MakeSegmentIt()
+func ForEachObject(rel handle.Relation, fn func(obj handle.Object) error) {
+	it := rel.MakeObjectIt()
 	var err error
 	for it.Valid() {
-		seg := it.GetSegment()
-		defer seg.Close()
-		if err = fn(seg); err != nil {
+		obj := it.GetObject()
+		defer obj.Close()
+		if err = fn(obj); err != nil {
 			if errors.Is(err, handle.ErrIteratorEnd) {
 				return
 			} else {
@@ -287,25 +287,26 @@ func CompactBlocks(t *testing.T, tenantID uint32, e *db.DB, dbName string, schem
 		it.Next()
 	}
 	_ = txn.Commit(context.Background())
-	for _, meta := range metas {
-		txn, _ := GetRelation(t, tenantID, e, dbName, schema.Name)
-		task, err := jobs.NewCompactBlockTask(nil, txn, meta, e.Runtime)
-		if skipConflict && err != nil {
+	if len(metas) == 0 {
+		return
+	}
+	txn, _ = GetRelation(t, tenantID, e, dbName, schema.Name)
+	task, err := jobs.NewFlushTableTailTask(nil, txn, metas, e.Runtime, txn.GetStartTS())
+	if skipConflict && err != nil {
+		_ = txn.Rollback(context.Background())
+		return
+	}
+	assert.NoError(t, err)
+	err = task.OnExec(context.Background())
+	if skipConflict {
+		if err != nil {
 			_ = txn.Rollback(context.Background())
-			continue
-		}
-		assert.NoError(t, err)
-		err = task.OnExec(context.Background())
-		if skipConflict {
-			if err != nil {
-				_ = txn.Rollback(context.Background())
-			} else {
-				_ = txn.Commit(context.Background())
-			}
 		} else {
-			assert.NoError(t, err)
-			assert.NoError(t, txn.Commit(context.Background()))
+			_ = txn.Commit(context.Background())
 		}
+	} else {
+		assert.NoError(t, err)
+		assert.NoError(t, txn.Commit(context.Background()))
 	}
 }
 
@@ -315,22 +316,22 @@ func MergeBlocks(t *testing.T, tenantID uint32, e *db.DB, dbName string, schema 
 	db, _ := txn.GetDatabase(dbName)
 	rel, _ := db.GetRelationByName(schema.Name)
 
-	var segs []*catalog.SegmentEntry
-	segIt := rel.MakeSegmentIt()
-	for segIt.Valid() {
-		seg := segIt.GetSegment().GetMeta().(*catalog.SegmentEntry)
-		if seg.GetAppendableBlockCnt() == int(seg.GetTable().GetLastestSchema().SegmentMaxBlocks) {
-			segs = append(segs, seg)
+	var objs []*catalog.ObjectEntry
+	objIt := rel.MakeObjectIt()
+	for objIt.Valid() {
+		obj := objIt.GetObject().GetMeta().(*catalog.ObjectEntry)
+		if !obj.IsAppendable() {
+			objs = append(objs, obj)
 		}
-		segIt.Next()
+		objIt.Next()
 	}
 	_ = txn.Commit(context.Background())
-	for _, seg := range segs {
+	for _, obj := range objs {
 		txn, _ = e.StartTxn(nil)
 		txn.BindAccessInfo(tenantID, 0, 0)
 		db, _ = txn.GetDatabase(dbName)
 		rel, _ = db.GetRelationByName(schema.Name)
-		segHandle, err := rel.GetSegment(&seg.ID)
+		objHandle, err := rel.GetObject(&obj.ID)
 		if err != nil {
 			if skipConflict {
 				_ = txn.Rollback(context.Background())
@@ -339,14 +340,14 @@ func MergeBlocks(t *testing.T, tenantID uint32, e *db.DB, dbName string, schema 
 			assert.NoErrorf(t, err, "Txn Ts=%d", txn.GetStartTS())
 		}
 		var metas []*catalog.BlockEntry
-		it := segHandle.MakeBlockIt()
+		it := objHandle.MakeBlockIt()
 		for it.Valid() {
 			meta := it.GetBlock().GetMeta().(*catalog.BlockEntry)
 			metas = append(metas, meta)
 			it.Next()
 		}
-		segsToMerge := []*catalog.SegmentEntry{segHandle.GetMeta().(*catalog.SegmentEntry)}
-		task, err := jobs.NewMergeBlocksTask(nil, txn, metas, segsToMerge, nil, e.Runtime)
+		objsToMerge := []*catalog.ObjectEntry{objHandle.GetMeta().(*catalog.ObjectEntry)}
+		task, err := jobs.NewMergeBlocksTask(nil, txn, metas, objsToMerge, nil, e.Runtime)
 		if skipConflict && err != nil {
 			_ = txn.Rollback(context.Background())
 			continue

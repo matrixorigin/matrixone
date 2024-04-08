@@ -41,8 +41,8 @@ func newHandle(table *dataTable, block *ablock) *tableHandle {
 
 func (h *tableHandle) SetAppender(id *common.ID) (appender data.BlockAppender) {
 	tableMeta := h.table.meta
-	segMeta, _ := tableMeta.GetSegmentByID(id.SegmentID())
-	blkMeta, _ := segMeta.GetBlockEntryByID(&id.BlockID)
+	objMeta, _ := tableMeta.GetObjectByID(id.ObjectID())
+	blkMeta, _ := objMeta.GetBlockEntryByID(&id.BlockID)
 	h.block = blkMeta.GetBlockData().(*ablock)
 	h.appender, _ = h.block.MakeAppender()
 	h.block.Ref()
@@ -50,31 +50,23 @@ func (h *tableHandle) SetAppender(id *common.ID) (appender data.BlockAppender) {
 }
 
 func (h *tableHandle) ThrowAppenderAndErr() (appender data.BlockAppender, err error) {
-	id := h.appender.GetID()
-	segEntry, _ := h.table.meta.GetSegmentByID(id.SegmentID())
-	if segEntry == nil ||
-		segEntry.GetAppendableBlockCnt() >= int(segEntry.GetTable().GetLastestSchema().SegmentMaxBlocks) {
-		err = data.ErrAppendableSegmentNotFound
-	} else {
-		err = data.ErrAppendableBlockNotFound
-		appender = h.appender
-	}
+	err = data.ErrAppendableObjectNotFound
 	h.block = nil
 	h.appender = nil
 	return
 }
 
 func (h *tableHandle) GetAppender() (appender data.BlockAppender, err error) {
-	var segEntry *catalog.SegmentEntry
+	var objEntry *catalog.ObjectEntry
 	if h.appender == nil {
-		segEntry = h.table.meta.LastAppendableSegmemt()
-		if segEntry == nil {
-			err = data.ErrAppendableSegmentNotFound
+		objEntry = h.table.meta.LastAppendableObject()
+		if objEntry == nil {
+			err = data.ErrAppendableObjectNotFound
 			return
 		}
-		blkEntry := segEntry.LastAppendableBlock()
+		blkEntry := objEntry.LastAppendableBlock()
 		if blkEntry == nil {
-			err = data.ErrAppendableSegmentNotFound
+			err = data.ErrAppendableObjectNotFound
 			return
 		}
 		h.block = blkEntry.GetBlockData().(*ablock)
@@ -86,10 +78,10 @@ func (h *tableHandle) GetAppender() (appender data.BlockAppender, err error) {
 
 	// Instead in ThrowAppenderAndErr, check object index here because
 	// it is better to create new appendable early in some busy update workload case
-	if seg := h.block.meta.GetSegment(); seg.GetNextObjectIndex() >= options.DefaultObejctPerSegment {
-		logutil.Infof("%s create new seg due to large object index %d",
-			seg.ID.ToString(), seg.GetNextObjectIndex())
-		return nil, data.ErrAppendableSegmentNotFound
+	if obj := h.block.meta.GetObject(); obj.GetNextObjectIndex() >= options.DefaultObjectPerSegment {
+		logutil.Infof("%s create new obj due to large object index %d",
+			obj.ID.String(), obj.GetNextObjectIndex())
+		return nil, data.ErrAppendableObjectNotFound
 	}
 
 	dropped := h.block.meta.HasDropCommitted()

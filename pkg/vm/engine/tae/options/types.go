@@ -28,10 +28,10 @@ import (
 const (
 	DefaultIndexCacheSize = 256 * mpool.MB
 
-	DefaultBlockMaxRows     = uint32(8192)
-	DefaultBlocksPerSegment = uint16(256)
+	DefaultBlockMaxRows    = uint32(8192)
+	DefaultBlocksPerObject = uint16(256)
 
-	DefaultObejctPerSegment = uint16(512)
+	DefaultObjectPerSegment = uint16(512)
 
 	DefaultScannerInterval              = time.Second * 5
 	DefaultCheckpointFlushInterval      = time.Minute
@@ -65,7 +65,7 @@ type Options struct {
 	StorageCfg    *StorageCfg    `toml:"storage-cfg"`
 	CheckpointCfg *CheckpointCfg `toml:"checkpoint-cfg"`
 	SchedulerCfg  *SchedulerCfg  `toml:"scheduler-cfg"`
-	GCCfg         *GCCfg
+	GCCfg         *GCCfg         `toml:"gc-cfg"`
 	LogtailCfg    *LogtailCfg
 	CatalogCfg    *CatalogCfg
 

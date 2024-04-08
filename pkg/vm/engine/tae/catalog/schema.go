@@ -124,9 +124,10 @@ type Schema struct {
 	Constraint     []byte
 
 	// do not send to cn
-	BlockMaxRows     uint32
-	SegmentMaxBlocks uint16
-	Extra            *apipb.SchemaExtra
+	BlockMaxRows uint32
+	// for aobj, there're at most one blk
+	ObjectMaxBlocks uint16
+	Extra           *apipb.SchemaExtra
 
 	// do not write down, reconstruct them when reading
 	NameMap    map[string]int // name -> logical idx
@@ -311,7 +312,7 @@ func (s *Schema) ReadFromWithVersion(r io.Reader, ver uint16) (n int64, err erro
 		return
 	}
 	n += int64(sn2)
-	if sn2, err = r.Read(types.EncodeUint16(&s.SegmentMaxBlocks)); err != nil {
+	if sn2, err = r.Read(types.EncodeUint16(&s.ObjectMaxBlocks)); err != nil {
 		return
 	}
 	n += int64(sn2)
@@ -459,7 +460,7 @@ func (s *Schema) Marshal() (buf []byte, err error) {
 	if _, err = w.Write(types.EncodeUint32(&s.BlockMaxRows)); err != nil {
 		return
 	}
-	if _, err = w.Write(types.EncodeUint16(&s.SegmentMaxBlocks)); err != nil {
+	if _, err = w.Write(types.EncodeUint16(&s.ObjectMaxBlocks)); err != nil {
 		return
 	}
 	if _, err = w.Write(types.EncodeUint32(&s.Version)); err != nil {
@@ -1048,7 +1049,7 @@ func MockSchemaAll(colCnt int, pkIdx int, from ...int) *Schema {
 	}
 
 	schema.BlockMaxRows = 1000
-	schema.SegmentMaxBlocks = 10
+	schema.ObjectMaxBlocks = 10
 	schema.Constraint, _ = constraintDef.MarshalBinary()
 	_ = schema.Finalize(false)
 	return schema

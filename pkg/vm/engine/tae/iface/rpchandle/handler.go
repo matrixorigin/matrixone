@@ -83,6 +83,12 @@ type Handler interface {
 		resp *apipb.SyncLogTailResp,
 	) (func(), error)
 
+	HandleForceGlobalCheckpoint(
+		ctx context.Context,
+		meta txn.TxnMeta,
+		req *db.Checkpoint,
+		resp *apipb.SyncLogTailResp,
+	) (func(), error)
 	HandleInspectTN(
 		ctx context.Context,
 		meta txn.TxnMeta,
@@ -114,7 +120,7 @@ type Handler interface {
 	HandleStorageUsage(
 		ctx context.Context,
 		meta txn.TxnMeta,
-		req *db.StorageUsage,
+		req *db.StorageUsageReq,
 		resp *db.StorageUsageResp,
 	) (func(), error)
 }

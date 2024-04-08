@@ -65,9 +65,21 @@ func (op *Op) Waitable() bool {
 	return op.DoneCB == nil
 }
 
-func (op *Op) WaitDone() error {
-	err := <-op.ErrorC
-	return err
+func (op *Op) WaitDone(ctx context.Context) error {
+	if op.WaitedOnce.Load() {
+		return moerr.NewTAEErrorNoCtx("wait done twice")
+	}
+	defer op.WaitedOnce.Store(true)
+
+	if op.ErrorC == nil {
+		return moerr.NewTAEErrorNoCtx("wait done without error channel")
+	}
+	select {
+	case err := <-op.ErrorC:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func (op *Op) PreExecute() error {

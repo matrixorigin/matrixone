@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -65,13 +66,13 @@ func TestReplayCatalog1(t *testing.T) {
 			assert.Nil(t, err)
 			rel, err := db.GetRelationByName(schema.Name)
 			assert.Nil(t, err)
-			segCnt := rand.Intn(5) + 1
-			for i := 0; i < segCnt; i++ {
-				seg, err := rel.CreateSegment(false)
+			objCnt := rand.Intn(5) + 1
+			for i := 0; i < objCnt; i++ {
+				obj, err := rel.CreateNonAppendableObject(false)
 				assert.Nil(t, err)
 				blkCnt := rand.Intn(5) + 1
 				for j := 0; j < blkCnt; j++ {
-					_, err = seg.CreateBlock(false)
+					_, err = obj.CreateNonAppendableBlock(new(objectio.CreateBlockOpt).WithBlkIdx(uint16(j)))
 					assert.Nil(t, err)
 				}
 			}
@@ -133,12 +134,12 @@ func TestReplayCatalog2(t *testing.T) {
 	assert.Nil(t, err)
 	rel, err := e.CreateRelation(schema)
 	assert.Nil(t, err)
-	seg, err := rel.CreateSegment(false)
+	obj, err := rel.CreateNonAppendableObject(false)
 	assert.Nil(t, err)
-	blk1, err := seg.CreateBlock(false)
+	blk1, err := obj.CreateNonAppendableBlock(new(objectio.CreateBlockOpt).WithBlkIdx(0))
 	assert.Nil(t, err)
 	blk1Meta := blk1.GetMeta().(*catalog.BlockEntry)
-	_, err = seg.CreateBlock(false)
+	_, err = obj.CreateNonAppendableBlock(new(objectio.CreateBlockOpt).WithBlkIdx(1))
 	assert.Nil(t, err)
 	_, err = e.CreateRelation(schema2)
 	assert.Nil(t, err)
@@ -161,9 +162,9 @@ func TestReplayCatalog2(t *testing.T) {
 	assert.Nil(t, err)
 	rel, err = e.GetRelationByName(schema.Name)
 	assert.Nil(t, err)
-	seg, err = rel.GetSegment(&blk1Meta.GetSegment().ID)
+	obj, err = rel.GetObject(&blk1Meta.GetObject().ID)
 	assert.Nil(t, err)
-	err = seg.SoftDeleteBlock(blk1Meta.ID)
+	err = obj.SoftDeleteBlock(blk1Meta.ID)
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit(context.Background()))
 
@@ -172,9 +173,9 @@ func TestReplayCatalog2(t *testing.T) {
 	assert.Nil(t, err)
 	rel, err = e.GetRelationByName(schema.Name)
 	assert.Nil(t, err)
-	seg, err = rel.CreateSegment(false)
+	obj, err = rel.CreateObject(false)
 	assert.Nil(t, err)
-	_, err = seg.CreateBlock(false)
+	_, err = obj.CreateNonAppendableBlock(new(objectio.CreateBlockOpt).WithBlkIdx(2))
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit(context.Background()))
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))
@@ -213,12 +214,12 @@ func TestReplayCatalog3(t *testing.T) {
 	assert.Nil(t, err)
 	rel, err := e.CreateRelation(schema)
 	assert.Nil(t, err)
-	seg, err := rel.CreateSegment(false)
+	obj, err := rel.CreateNonAppendableObject(false)
 	assert.Nil(t, err)
-	blk1, err := seg.CreateBlock(false)
+	blk1, err := obj.CreateNonAppendableBlock(new(objectio.CreateBlockOpt).WithBlkIdx(0))
 	assert.Nil(t, err)
 	blk1Meta := blk1.GetMeta().(*catalog.BlockEntry)
-	_, err = seg.CreateBlock(false)
+	_, err = obj.CreateNonAppendableBlock(new(objectio.CreateBlockOpt).WithBlkIdx(1))
 	assert.Nil(t, err)
 	_, err = e.CreateRelation(schema2)
 	assert.Nil(t, err)
@@ -241,18 +242,9 @@ func TestReplayCatalog3(t *testing.T) {
 	assert.Nil(t, err)
 	rel, err = e.GetRelationByName(schema.Name)
 	assert.Nil(t, err)
-	seg, err = rel.GetSegment(&blk1Meta.GetSegment().ID)
+	obj, err = rel.GetObject(&blk1Meta.GetObject().ID)
 	assert.Nil(t, err)
-	err = seg.SoftDeleteBlock(blk1Meta.ID)
-	assert.Nil(t, err)
-	assert.Nil(t, txn.Commit(context.Background()))
-
-	txn, _ = tae.StartTxn(nil)
-	e, err = txn.GetDatabase("db")
-	assert.Nil(t, err)
-	rel, err = e.GetRelationByName(schema.Name)
-	assert.Nil(t, err)
-	seg, err = rel.CreateSegment(false)
+	err = obj.SoftDeleteBlock(blk1Meta.ID)
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit(context.Background()))
 
@@ -261,7 +253,16 @@ func TestReplayCatalog3(t *testing.T) {
 	assert.Nil(t, err)
 	rel, err = e.GetRelationByName(schema.Name)
 	assert.Nil(t, err)
-	err = rel.SoftDeleteSegment(seg.GetID())
+	obj, err = rel.CreateObject(false)
+	assert.Nil(t, err)
+	assert.Nil(t, txn.Commit(context.Background()))
+
+	txn, _ = tae.StartTxn(nil)
+	e, err = txn.GetDatabase("db")
+	assert.Nil(t, err)
+	rel, err = e.GetRelationByName(schema.Name)
+	assert.Nil(t, err)
+	err = rel.SoftDeleteObject(obj.GetID())
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit(context.Background()))
 
@@ -291,7 +292,7 @@ func TestReplay1(t *testing.T) {
 	tae := testutil.InitTestDB(ctx, ModuleName, t, nil)
 	schema := catalog.MockSchema(2, 1)
 	schema.BlockMaxRows = 1000
-	schema.SegmentMaxBlocks = 2
+	schema.ObjectMaxBlocks = 2
 	txn, _ := tae.StartTxn(nil)
 	assert.Nil(t, txn.Commit(context.Background()))
 
@@ -300,9 +301,9 @@ func TestReplay1(t *testing.T) {
 	assert.Nil(t, err)
 	rel, err := e.CreateRelation(schema)
 	assert.Nil(t, err)
-	seg, err := rel.CreateSegment(false)
+	obj, err := rel.CreateObject(false)
 	assert.Nil(t, err)
-	_, err = seg.CreateBlock(false)
+	_, err = obj.CreateBlock(false)
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit(context.Background()))
 	logutil.Infof("%d,%d", txn.GetStartTS(), txn.GetCommitTS())
@@ -397,7 +398,7 @@ func TestReplay2(t *testing.T) {
 	tae := testutil.InitTestDB(ctx, ModuleName, t, nil)
 	schema := catalog.MockSchema(2, 1)
 	schema.BlockMaxRows = 1000
-	schema.SegmentMaxBlocks = 2
+	schema.ObjectMaxBlocks = 2
 	bat := catalog.MockBatch(schema, 10000)
 	defer bat.Close()
 	bats := bat.Split(2)
@@ -437,9 +438,11 @@ func TestReplay2(t *testing.T) {
 	assert.Nil(t, err)
 	blkIterator := rel.MakeBlockIt()
 	blk := blkIterator.GetBlock().GetMeta().(*catalog.BlockEntry)
-	seg, err := rel.GetSegment(&blk.GetSegment().ID)
+	obj, err := rel.GetObject(&blk.GetObject().ID)
 	assert.Nil(t, err)
-	err = seg.SoftDeleteBlock(blk.ID)
+	err = obj.SoftDeleteBlock(blk.ID)
+	assert.Nil(t, err)
+	err = rel.SoftDeleteObject(obj.GetID())
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit(context.Background()))
 
@@ -460,11 +463,11 @@ func TestReplay2(t *testing.T) {
 	assert.Nil(t, err)
 	rel, err = e.GetRelationByName(schema.Name)
 	assert.Nil(t, err)
-	seg, err = rel.GetSegment(seg.GetID())
+	objEntry, err := rel.GetMeta().(*catalog.TableEntry).GetObjectByID(obj.GetID())
 	assert.Nil(t, err)
-	blkh, err := seg.GetBlock(blk.ID)
+	blkh, err := objEntry.GetBlockEntryByID(&blk.ID)
 	assert.Nil(t, err)
-	assert.True(t, blkh.GetMeta().(*catalog.BlockEntry).HasDropCommittedLocked())
+	assert.True(t, blkh.HasDropCommittedLocked())
 
 	val, _, err := rel.GetValueByFilter(context.Background(), filter, 0)
 	assert.Nil(t, err)
@@ -501,9 +504,9 @@ func TestReplay2(t *testing.T) {
 	assert.Nil(t, err)
 	rel, err = e.GetRelationByName(schema.Name)
 	assert.Nil(t, err)
-	seg, err = rel.GetSegment(seg.GetID())
+	objEntry, err = rel.GetMeta().(*catalog.TableEntry).GetObjectByID(obj.GetID())
 	assert.Nil(t, err)
-	_, err = seg.GetBlock(blk.ID)
+	_, err = objEntry.GetBlockEntryByID(&blk.ID)
 	assert.Nil(t, err)
 	val, _, err = rel.GetValueByFilter(context.Background(), filter, 0)
 	assert.Nil(t, err)
@@ -535,7 +538,7 @@ func TestReplay3(t *testing.T) {
 	defer tae.Close()
 	schema := catalog.MockSchema(2, 1)
 	schema.BlockMaxRows = 1000
-	schema.SegmentMaxBlocks = 2
+	schema.ObjectMaxBlocks = 2
 	tae.BindSchema(schema)
 	bat := catalog.MockBatch(schema, 1)
 	defer bat.Close()
@@ -611,7 +614,7 @@ func TestReplayTableRows(t *testing.T) {
 	tae := testutil.InitTestDB(ctx, ModuleName, t, nil)
 	schema := catalog.MockSchema(2, 1)
 	schema.BlockMaxRows = 1000
-	schema.SegmentMaxBlocks = 2
+	schema.ObjectMaxBlocks = 2
 	bat := catalog.MockBatch(schema, 4800)
 	defer bat.Close()
 	bats := bat.Split(3)
@@ -736,8 +739,8 @@ func TestReplay4(t *testing.T) {
 
 	schema := catalog.MockSchemaAll(18, 16)
 	schema.BlockMaxRows = 10
-	schema.SegmentMaxBlocks = 2
-	bat := catalog.MockBatch(schema, int(schema.BlockMaxRows*uint32(schema.SegmentMaxBlocks+1)+1))
+	schema.ObjectMaxBlocks = 2
+	bat := catalog.MockBatch(schema, int(schema.BlockMaxRows*uint32(schema.ObjectMaxBlocks+1)+1))
 	defer bat.Close()
 	bats := bat.Split(4)
 
@@ -801,8 +804,8 @@ func TestReplay5(t *testing.T) {
 
 	schema := catalog.MockSchemaAll(18, 16)
 	schema.BlockMaxRows = 10
-	schema.SegmentMaxBlocks = 2
-	bat := catalog.MockBatch(schema, int(schema.BlockMaxRows*uint32(schema.SegmentMaxBlocks+1)+1))
+	schema.ObjectMaxBlocks = 2
+	bat := catalog.MockBatch(schema, int(schema.BlockMaxRows*uint32(schema.ObjectMaxBlocks+1)+1))
 	defer bat.Close()
 	bats := bat.Split(8)
 
@@ -846,6 +849,11 @@ func TestReplay5(t *testing.T) {
 	assert.NoError(t, err)
 	err = tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.StatMaxCommitTS(), false)
 	assert.NoError(t, err)
+	lsn := tae.BGCheckpointRunner.MaxLSNInRange(tae.TxnMgr.StatMaxCommitTS())
+	entry, err := tae.Wal.RangeCheckpoint(1, lsn)
+	assert.NoError(t, err)
+	err = entry.WaitDone()
+	assert.NoError(t, err)
 	txn, rel = testutil.GetDefaultRelation(t, tae, schema.Name)
 	testutil.CheckAllColRowsByScan(t, rel, testutil.LenOfBats(bats[:4]), false)
 	assert.NoError(t, txn.Commit(context.Background()))
@@ -868,6 +876,10 @@ func TestReplay5(t *testing.T) {
 	assert.NoError(t, err)
 	err = tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.StatMaxCommitTS(), false)
 	assert.NoError(t, err)
+	lsn = tae.BGCheckpointRunner.MaxLSNInRange(tae.TxnMgr.StatMaxCommitTS())
+	entry, err = tae.Wal.RangeCheckpoint(1, lsn)
+	assert.NoError(t, err)
+	assert.NoError(t, entry.WaitDone())
 
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))
 	testutil.PrintCheckpointStats(t, tae)
@@ -901,8 +913,8 @@ func TestReplay5(t *testing.T) {
 	assert.NoError(t, err)
 	err = tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.StatMaxCommitTS(), false)
 	assert.NoError(t, err)
-	lsn := tae.BGCheckpointRunner.MaxLSNInRange(tae.TxnMgr.StatMaxCommitTS())
-	entry, err := tae.Wal.RangeCheckpoint(1, lsn)
+	lsn = tae.BGCheckpointRunner.MaxLSNInRange(tae.TxnMgr.StatMaxCommitTS())
+	entry, err = tae.Wal.RangeCheckpoint(1, lsn)
 	assert.NoError(t, err)
 	assert.NoError(t, entry.WaitDone())
 	testutils.WaitExpect(1000, func() bool {
@@ -922,7 +934,7 @@ func TestReplay6(t *testing.T) {
 	tae := testutil.InitTestDB(ctx, ModuleName, t, opts)
 	schema := catalog.MockSchemaAll(18, 15)
 	schema.BlockMaxRows = 10
-	schema.SegmentMaxBlocks = 2
+	schema.ObjectMaxBlocks = 2
 	bat := catalog.MockBatch(schema, int(schema.BlockMaxRows*10-1))
 	defer bat.Close()
 	bats := bat.Split(4)
@@ -984,7 +996,7 @@ func TestReplay7(t *testing.T) {
 	tae := testutil.InitTestDB(ctx, ModuleName, t, opts)
 	schema := catalog.MockSchemaAll(18, 14)
 	schema.BlockMaxRows = 10
-	schema.SegmentMaxBlocks = 5
+	schema.ObjectMaxBlocks = 5
 
 	bat := catalog.MockBatch(schema, int(schema.BlockMaxRows*15+1))
 	defer bat.Close()
@@ -1013,7 +1025,7 @@ func TestReplay8(t *testing.T) {
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(18, 13)
 	schema.BlockMaxRows = 10
-	schema.SegmentMaxBlocks = 2
+	schema.ObjectMaxBlocks = 2
 	tae.BindSchema(schema)
 
 	bat := catalog.MockBatch(schema, int(schema.BlockMaxRows*3+1))
@@ -1117,6 +1129,8 @@ func TestReplay8(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit(context.Background()))
 	// t.Log(tae.Catalog.SimplePPString(common.PPL1))
+	err = tae.BGCheckpointRunner.ForceFlushWithInterval(tae.TxnMgr.StatMaxCommitTS(), context.Background(), time.Second*2, time.Millisecond*10)
+	assert.NoError(t, err)
 
 	tae.Restart(ctx)
 
@@ -1138,8 +1152,6 @@ func TestReplay8(t *testing.T) {
 	_ = txn.Rollback(context.Background())
 
 	tae.CompactBlocks(false)
-	err = tae.BGCheckpointRunner.ForceFlushWithInterval(tae.TxnMgr.StatMaxCommitTS(), context.Background(), time.Second*2, time.Millisecond*10)
-	assert.NoError(t, err)
 	err = tae.BGCheckpointRunner.ForceIncrementalCheckpoint(tae.TxnMgr.StatMaxCommitTS(), false)
 	assert.NoError(t, err)
 	tae.Restart(ctx)
@@ -1168,7 +1180,7 @@ func TestReplay9(t *testing.T) {
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(18, 3)
 	schema.BlockMaxRows = 10
-	schema.SegmentMaxBlocks = 2
+	schema.ObjectMaxBlocks = 2
 	tae.BindSchema(schema)
 	bat := catalog.MockBatch(schema, int(schema.BlockMaxRows*3+2))
 	defer bat.Close()
@@ -1265,7 +1277,7 @@ func TestReplay10(t *testing.T) {
 	tae := testutil.InitTestDB(ctx, ModuleName, t, opts)
 	schema := catalog.MockSchemaAll(3, 2)
 	schema.BlockMaxRows = 10
-	schema.SegmentMaxBlocks = 5
+	schema.ObjectMaxBlocks = 5
 	expr := &plan.Expr{}
 	exprbuf, err := expr.Marshal()
 	assert.NoError(t, err)
@@ -1318,9 +1330,9 @@ func TestReplay10(t *testing.T) {
 	assert.True(t, d2.NullAbility)
 }
 
-// create db,tbl,seg,blk
+// create db,tbl,obj,blk
 // checkpoint
-// softdelete seg
+// softdelete obj
 // checkpoint
 // Restart
 func TestReplaySnapshots(t *testing.T) {
@@ -1337,9 +1349,9 @@ func TestReplaySnapshots(t *testing.T) {
 	assert.NoError(t, err)
 	rel, err := db.CreateRelation(schema)
 	assert.NoError(t, err)
-	seg, err := rel.CreateSegment(false)
+	obj, err := rel.CreateObject(false)
 	assert.NoError(t, err)
-	_, err = seg.CreateBlock(false)
+	_, err = obj.CreateBlock(false)
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit(context.Background()))
 
@@ -1352,7 +1364,7 @@ func TestReplaySnapshots(t *testing.T) {
 	assert.NoError(t, err)
 	rel, err = db.GetRelationByName(schema.Name)
 	assert.NoError(t, err)
-	err = rel.SoftDeleteSegment(seg.GetID())
+	err = rel.SoftDeleteObject(obj.GetID())
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit(context.Background()))
 

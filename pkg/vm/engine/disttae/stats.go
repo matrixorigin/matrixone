@@ -16,6 +16,9 @@ package disttae
 
 import (
 	"context"
+	"time"
+
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 
 	"math"
@@ -111,6 +114,10 @@ func getMinMaxValueByFloat64(typ types.Type, buf []byte) (float64, bool) {
 
 // get ndv, minval , maxval, datatype from zonemap. Retrieve all columns except for rowid, return accurate number of objects
 func updateInfoFromZoneMap(info *plan2.InfoFromZoneMap, ctx context.Context, tbl *txnTable) error {
+	start := time.Now()
+	defer func() {
+		v2.TxnStatementUpdateInfoFromZonemapHistogram.Observe(time.Since(start).Seconds())
+	}()
 	lenCols := len(tbl.tableDef.Cols) - 1 /* row-id */
 	proc := tbl.db.txn.proc
 	tableDef := tbl.GetTableDef(ctx)
@@ -215,6 +222,10 @@ func adjustNDV(info *plan2.InfoFromZoneMap, tbl *txnTable) {
 
 // calculate and update the stats for scan node.
 func UpdateStats(ctx context.Context, tbl *txnTable, s *plan2.StatsInfoMap, approxNumObjects int) bool {
+	start := time.Now()
+	defer func() {
+		v2.TxnStatementUpdateStatsDurationHistogram.Observe(time.Since(start).Seconds())
+	}()
 	lenCols := len(tbl.tableDef.Cols) - 1 /* row-id */
 	info := plan2.NewInfoFromZoneMap(lenCols)
 	info.ApproxObjectNumber = approxNumObjects

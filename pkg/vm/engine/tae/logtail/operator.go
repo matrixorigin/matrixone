@@ -45,7 +45,7 @@ func NewBoundTableOperator(catalog *catalog.Catalog,
 	}
 }
 
-// Run takes a RespBuilder to visit every table/segment/block touched by all txn
+// Run takes a RespBuilder to visit every table/Object/block touched by all txn
 // in the Reader. During the visiting, RespBuiler will fetch information to return logtail entry
 func (c *BoundTableOperator) Run() error {
 	switch c.scope {
@@ -71,20 +71,20 @@ func (c *BoundTableOperator) processTableData() error {
 		return err
 	}
 	dirty := c.reader.GetDirtyByTable(c.dbID, c.tableID)
-	for _, dirtySeg := range dirty.Segs {
-		seg, err := tbl.GetSegmentByID(dirtySeg.ID)
+	for _, dirtyObj := range dirty.Objs {
+		obj, err := tbl.GetObjectByID(dirtyObj.ID)
 		if err != nil {
 			if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
 				continue
 			}
 			return err
 		}
-		if err = c.visitor.OnSegment(seg); err != nil {
+		if err = c.visitor.OnObject(obj); err != nil {
 			return err
 		}
-		for id := range dirtySeg.Blks {
-			bid := objectio.NewBlockid(dirtySeg.ID, id.Num, id.Seq)
-			blk, err := seg.GetBlockEntryByID(bid)
+		for id := range dirtyObj.Blks {
+			bid := objectio.NewBlockidWithObjectID(dirtyObj.ID, id)
+			blk, err := obj.GetBlockEntryByID(bid)
 			if err != nil {
 				if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
 					continue

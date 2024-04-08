@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -103,10 +104,13 @@ func (s *sqlStore) Allocate(
 			return false
 		}
 	}
+	var execTxn client.TxnOperator
 	for {
 		err := s.exec.ExecTxn(
 			ctx,
 			func(te executor.TxnExecutor) error {
+				execTxn = te.Txn()
+
 				start := time.Now()
 				res, err := te.Exec(fetchSQL)
 				if err != nil {
@@ -122,9 +126,13 @@ func (s *sqlStore) Allocate(
 				res.Close()
 
 				if rows != 1 {
+					accountId, err := defines.GetAccountId(ctx)
+					if err != nil {
+						return err
+					}
 					getLogger().Fatal("BUG: read incr record invalid",
 						zap.String("fetch-sql", fetchSQL),
-						zap.Any("account", ctx.Value(defines.TenantIDKey{})),
+						zap.Any("account", accountId),
 						zap.Uint64("table", tableID),
 						zap.String("col", colName),
 						zap.Int("rows", rows),
@@ -149,9 +157,13 @@ func (s *sqlStore) Allocate(
 				if res.AffectedRows == 1 {
 					ok = true
 				} else {
+					accountId, err := defines.GetAccountId(ctx)
+					if err != nil {
+						return err
+					}
 					getLogger().Fatal("BUG: update incr record returns invalid affected rows",
 						zap.String("update-sql", sql),
-						zap.Any("account", ctx.Value(defines.TenantIDKey{})),
+						zap.Any("account", accountId),
 						zap.Uint64("table", tableID),
 						zap.String("col", colName),
 						zap.Uint64("affected-rows", res.AffectedRows),
@@ -163,6 +175,12 @@ func (s *sqlStore) Allocate(
 			},
 			opts)
 		if err != nil {
+			// retry ww conflict if the txn is not pessimistic
+			if execTxn != nil && !execTxn.Txn().IsPessimistic() &&
+				moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict) {
+				continue
+			}
+
 			return 0, 0, err
 		}
 		if ok {

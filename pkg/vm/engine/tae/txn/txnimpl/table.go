@@ -97,17 +97,17 @@ func newDeleteNode(node txnif.DeleteNode, idx int) *deleteNode {
 }
 
 type txnTable struct {
-	store        *txnStore
-	createEntry  txnif.TxnEntry
-	dropEntry    txnif.TxnEntry
-	localSegment *localSegment
-	deleteNodes  map[common.ID]*deleteNode
-	entry        *catalog.TableEntry
-	schema       *catalog.Schema
-	logs         []wal.LogEntry
+	store       *txnStore
+	createEntry txnif.TxnEntry
+	dropEntry   txnif.TxnEntry
+	tableSpace  *tableSpace
+	deleteNodes map[common.ID]*deleteNode
+	entry       *catalog.TableEntry
+	schema      *catalog.Schema
+	logs        []wal.LogEntry
 
-	dedupedSegmentHint uint64
-	dedupedBlockID     *types.Blockid
+	dedupedObjectHint uint64
+	dedupedBlockID    *types.Blockid
 
 	txnEntries *txnEntries
 	csnStart   uint32
@@ -158,7 +158,7 @@ func (tbl *txnTable) TransferDeleteIntent(
 	entry, err := tbl.store.warChecker.CacheGet(
 		tbl.entry.GetDB().ID,
 		id.TableID,
-		id.SegmentID(),
+		id.ObjectID(),
 		&id.BlockID)
 	if err != nil {
 		panic(err)
@@ -388,17 +388,17 @@ func (tbl *txnTable) CollectCmd(cmdMgr *commandManager) (err error) {
 		}
 		cmdMgr.AddCmd(cmd)
 	}
-	if tbl.localSegment != nil {
-		if err = tbl.localSegment.CollectCmd(cmdMgr); err != nil {
+	if tbl.tableSpace != nil {
+		if err = tbl.tableSpace.CollectCmd(cmdMgr); err != nil {
 			return
 		}
 	}
 	return
 }
 
-func (tbl *txnTable) GetSegment(id *types.Segmentid) (seg handle.Segment, err error) {
-	var meta *catalog.SegmentEntry
-	if meta, err = tbl.entry.GetSegmentByID(id); err != nil {
+func (tbl *txnTable) GetObject(id *types.Objectid) (obj handle.Object, err error) {
+	var meta *catalog.ObjectEntry
+	if meta, err = tbl.entry.GetObjectByID(id); err != nil {
 		return
 	}
 	var ok bool
@@ -412,12 +412,12 @@ func (tbl *txnTable) GetSegment(id *types.Segmentid) (seg handle.Segment, err er
 		err = moerr.NewNotFoundNoCtx()
 		return
 	}
-	seg = newSegment(tbl, meta)
+	obj = newObject(tbl, meta)
 	return
 }
 
-func (tbl *txnTable) SoftDeleteSegment(id *types.Segmentid) (err error) {
-	txnEntry, err := tbl.entry.DropSegmentEntry(id, tbl.store.txn)
+func (tbl *txnTable) SoftDeleteObject(id *types.Objectid) (err error) {
+	txnEntry, err := tbl.entry.DropObjectEntry(id, tbl.store.txn)
 	if err != nil {
 		return
 	}
@@ -425,32 +425,32 @@ func (tbl *txnTable) SoftDeleteSegment(id *types.Segmentid) (err error) {
 	if txnEntry != nil {
 		tbl.txnEntries.Append(txnEntry)
 	}
-	tbl.store.txn.GetMemo().AddSegment(tbl.entry.GetDB().GetID(), tbl.entry.ID, id)
+	tbl.store.txn.GetMemo().AddObject(tbl.entry.GetDB().GetID(), tbl.entry.ID, id)
 	return
 }
 
-func (tbl *txnTable) CreateSegment(is1PC bool) (seg handle.Segment, err error) {
+func (tbl *txnTable) CreateObject(is1PC bool) (obj handle.Object, err error) {
 	perfcounter.Update(tbl.store.ctx, func(counter *perfcounter.CounterSet) {
-		counter.TAE.Segment.Create.Add(1)
+		counter.TAE.Object.Create.Add(1)
 	})
-	return tbl.createSegment(catalog.ES_Appendable, is1PC, nil)
+	return tbl.createObject(catalog.ES_Appendable, is1PC, nil)
 }
 
-func (tbl *txnTable) CreateNonAppendableSegment(is1PC bool, opts *objectio.CreateSegOpt) (seg handle.Segment, err error) {
+func (tbl *txnTable) CreateNonAppendableObject(is1PC bool, opts *objectio.CreateObjOpt) (obj handle.Object, err error) {
 	perfcounter.Update(tbl.store.ctx, func(counter *perfcounter.CounterSet) {
-		counter.TAE.Segment.CreateNonAppendable.Add(1)
+		counter.TAE.Object.CreateNonAppendable.Add(1)
 	})
-	return tbl.createSegment(catalog.ES_NotAppendable, is1PC, opts)
+	return tbl.createObject(catalog.ES_NotAppendable, is1PC, opts)
 }
 
-func (tbl *txnTable) createSegment(state catalog.EntryState, is1PC bool, opts *objectio.CreateSegOpt) (seg handle.Segment, err error) {
-	var meta *catalog.SegmentEntry
-	if meta, err = tbl.entry.CreateSegment(tbl.store.txn, state, opts); err != nil {
+func (tbl *txnTable) createObject(state catalog.EntryState, is1PC bool, opts *objectio.CreateObjOpt) (obj handle.Object, err error) {
+	var meta *catalog.ObjectEntry
+	if meta, err = tbl.entry.CreateObject(tbl.store.txn, state, opts); err != nil {
 		return
 	}
-	seg = newSegment(tbl, meta)
+	obj = newObject(tbl, meta)
 	tbl.store.IncreateWriteCnt()
-	tbl.store.txn.GetMemo().AddSegment(tbl.entry.GetDB().ID, tbl.entry.ID, &meta.ID)
+	tbl.store.txn.GetMemo().AddObject(tbl.entry.GetDB().ID, tbl.entry.ID, &meta.ID)
 	if is1PC {
 		meta.Set1PC()
 	}
@@ -459,11 +459,11 @@ func (tbl *txnTable) createSegment(state catalog.EntryState, is1PC bool, opts *o
 }
 
 func (tbl *txnTable) SoftDeleteBlock(id *common.ID) (err error) {
-	var seg *catalog.SegmentEntry
-	if seg, err = tbl.entry.GetSegmentByID(id.SegmentID()); err != nil {
+	var obj *catalog.ObjectEntry
+	if obj, err = tbl.entry.GetObjectByID(id.ObjectID()); err != nil {
 		return
 	}
-	meta, err := seg.DropBlockEntry(&id.BlockID, tbl.store.txn)
+	meta, err := obj.DropBlockEntry(&id.BlockID, tbl.store.txn)
 	if err != nil {
 		return
 	}
@@ -488,7 +488,7 @@ func (tbl *txnTable) LogTxnEntry(entry txnif.TxnEntry, readed []*common.ID) (err
 		tbl.store.warChecker.InsertByID(
 			tbl.entry.GetDB().ID,
 			id.TableID,
-			id.SegmentID(),
+			id.ObjectID(),
 			&id.BlockID)
 	}
 	return
@@ -498,7 +498,7 @@ func (tbl *txnTable) GetBlock(id *common.ID) (blk handle.Block, err error) {
 	meta, err := tbl.store.warChecker.CacheGet(
 		tbl.entry.GetDB().ID,
 		id.TableID,
-		id.SegmentID(),
+		id.ObjectID(),
 		&id.BlockID)
 	if err != nil {
 		return
@@ -507,24 +507,24 @@ func (tbl *txnTable) GetBlock(id *common.ID) (blk handle.Block, err error) {
 	return
 }
 
-func (tbl *txnTable) CreateNonAppendableBlock(sid *types.Segmentid, opts *objectio.CreateBlockOpt) (blk handle.Block, err error) {
+func (tbl *txnTable) CreateNonAppendableBlock(sid *types.Objectid, opts *objectio.CreateBlockOpt) (blk handle.Block, err error) {
 	return tbl.createBlock(sid, catalog.ES_NotAppendable, false, opts)
 }
 
-func (tbl *txnTable) CreateBlock(sid *types.Segmentid, is1PC bool) (blk handle.Block, err error) {
+func (tbl *txnTable) CreateBlock(sid *types.Objectid, is1PC bool) (blk handle.Block, err error) {
 	return tbl.createBlock(sid, catalog.ES_Appendable, is1PC, nil)
 }
 
 func (tbl *txnTable) createBlock(
-	sid *types.Segmentid,
+	sid *types.Objectid,
 	state catalog.EntryState,
 	is1PC bool,
 	opts *objectio.CreateBlockOpt) (blk handle.Block, err error) {
-	var seg *catalog.SegmentEntry
-	if seg, err = tbl.entry.GetSegmentByID(sid); err != nil {
+	var obj *catalog.ObjectEntry
+	if obj, err = tbl.entry.GetObjectByID(sid); err != nil {
 		return
 	}
-	if !seg.IsAppendable() && state == catalog.ES_Appendable {
+	if !obj.IsAppendable() && state == catalog.ES_Appendable {
 		err = moerr.NewInternalErrorNoCtx("not appendable")
 		return
 	}
@@ -532,7 +532,7 @@ func (tbl *txnTable) createBlock(
 	if tbl.store.dataFactory != nil {
 		factory = tbl.store.dataFactory.MakeBlockFactory()
 	}
-	meta, err := seg.CreateBlock(tbl.store.txn, state, factory, opts)
+	meta, err := obj.CreateBlock(tbl.store.txn, state, factory, opts)
 	if err != nil {
 		return
 	}
@@ -587,11 +587,11 @@ func (tbl *txnTable) GetID() uint64 {
 
 func (tbl *txnTable) Close() error {
 	var err error
-	if tbl.localSegment != nil {
-		if err = tbl.localSegment.Close(); err != nil {
+	if tbl.tableSpace != nil {
+		if err = tbl.tableSpace.Close(); err != nil {
 			return err
 		}
-		tbl.localSegment = nil
+		tbl.tableSpace = nil
 	}
 	tbl.deleteNodes = nil
 	tbl.logs = nil
@@ -650,19 +650,43 @@ func (tbl *txnTable) Append(ctx context.Context, data *containers.Batch) (err er
 			}
 		}
 	}
-	if tbl.localSegment == nil {
-		tbl.localSegment = newLocalSegment(tbl)
+	if tbl.tableSpace == nil {
+		tbl.tableSpace = newTableSpace(tbl)
 	}
-	return tbl.localSegment.Append(data)
+	return tbl.tableSpace.Append(data)
 }
-
-func (tbl *txnTable) AddBlksWithMetaLoc(ctx context.Context, metaLocs []objectio.Location) (err error) {
+func (tbl *txnTable) AddBlksWithMetaLoc(ctx context.Context, stats containers.Vector) (err error) {
+	return stats.Foreach(func(v any, isNull bool, row int) error {
+		s := objectio.ObjectStats(v.([]byte))
+		return tbl.addBlksWithMetaLoc(ctx, s)
+	}, nil)
+}
+func (tbl *txnTable) addBlksWithMetaLoc(ctx context.Context, stats objectio.ObjectStats) (err error) {
 	var pkVecs []containers.Vector
 	defer func() {
 		for _, v := range pkVecs {
 			v.Close()
 		}
 	}()
+	if tbl.tableSpace != nil && tbl.tableSpace.isStatsExisted(stats) {
+		return nil
+	}
+	metaLocs := make([]objectio.Location, 0)
+	blkCount := stats.BlkCnt()
+	totalRow := stats.Rows()
+	blkMaxRows := tbl.schema.BlockMaxRows
+	for i := uint16(0); i < uint16(blkCount); i++ {
+		var blkRow uint32
+		if totalRow > blkMaxRows {
+			blkRow = blkMaxRows
+		} else {
+			blkRow = totalRow
+		}
+		totalRow -= blkRow
+		metaloc := objectio.BuildLocation(stats.ObjectName(), stats.Extent(), blkRow, i)
+
+		metaLocs = append(metaLocs, metaloc)
+	}
 	if tbl.schema.HasPK() {
 		dedupType := tbl.store.txn.GetDedupType()
 		if dedupType == txnif.FullDedup {
@@ -704,32 +728,32 @@ func (tbl *txnTable) AddBlksWithMetaLoc(ctx context.Context, metaLocs []objectio
 			}
 		}
 	}
-	if tbl.localSegment == nil {
-		tbl.localSegment = newLocalSegment(tbl)
+	if tbl.tableSpace == nil {
+		tbl.tableSpace = newTableSpace(tbl)
 	}
-	return tbl.localSegment.AddBlksWithMetaLoc(pkVecs, metaLocs)
+	return tbl.tableSpace.AddBlksWithMetaLoc(pkVecs, stats)
 }
 
 func (tbl *txnTable) RangeDeleteLocalRows(start, end uint32) (err error) {
-	if tbl.localSegment != nil {
-		err = tbl.localSegment.RangeDelete(start, end)
+	if tbl.tableSpace != nil {
+		err = tbl.tableSpace.RangeDelete(start, end)
 	}
 	return
 }
 
 func (tbl *txnTable) LocalDeletesToString() string {
 	s := fmt.Sprintf("<txnTable-%d>[LocalDeletes]:\n", tbl.GetID())
-	if tbl.localSegment != nil {
-		s = fmt.Sprintf("%s%s", s, tbl.localSegment.DeletesToString())
+	if tbl.tableSpace != nil {
+		s = fmt.Sprintf("%s%s", s, tbl.tableSpace.DeletesToString())
 	}
 	return s
 }
 
 func (tbl *txnTable) IsLocalDeleted(row uint32) bool {
-	if tbl.localSegment == nil {
+	if tbl.tableSpace == nil {
 		return false
 	}
-	return tbl.localSegment.IsDeleted(row)
+	return tbl.tableSpace.IsDeleted(row)
 }
 
 // RangeDelete delete block rows in range [start, end]
@@ -759,9 +783,19 @@ func (tbl *txnTable) RangeDelete(
 				start,
 				end,
 				err)
+			if tbl.store.rt.Options.IncrementalDedup && moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict) {
+				logutil.Warnf("[txn%X,ts=%s]: table-%d blk-%s delete rows [%d,%d] pk %s",
+					tbl.store.txn.GetID(),
+					tbl.store.txn.GetStartTS().ToString(),
+					id.TableID,
+					id.BlockID.String(),
+					start, end,
+					pk.PPString(int(start-end+1)),
+				)
+			}
 		}
 	}()
-	if tbl.localSegment != nil && id.SegmentID().Eq(tbl.localSegment.entry.ID) {
+	if tbl.tableSpace != nil && id.ObjectID().Eq(tbl.tableSpace.entry.ID) {
 		err = tbl.RangeDeleteLocalRows(start, end)
 		return
 	}
@@ -784,7 +818,7 @@ func (tbl *txnTable) RangeDelete(
 
 	blk, err := tbl.store.warChecker.CacheGet(
 		tbl.entry.GetDB().ID,
-		id.TableID, id.SegmentID(),
+		id.TableID, id.ObjectID(),
 		&id.BlockID)
 	if err != nil {
 		return
@@ -808,7 +842,7 @@ func (tbl *txnTable) TryDeleteByDeltaloc(id *common.ID, deltaloc objectio.Locati
 
 	blk, err := tbl.store.warChecker.CacheGet(
 		tbl.entry.GetDB().ID,
-		id.TableID, id.SegmentID(),
+		id.TableID, id.ObjectID(),
 		&id.BlockID)
 	if err != nil {
 		return
@@ -829,8 +863,8 @@ func (tbl *txnTable) TryDeleteByDeltaloc(id *common.ID, deltaloc objectio.Locati
 }
 
 func (tbl *txnTable) GetByFilter(ctx context.Context, filter *handle.Filter) (id *common.ID, offset uint32, err error) {
-	if tbl.localSegment != nil {
-		id, offset, err = tbl.localSegment.GetByFilter(filter)
+	if tbl.tableSpace != nil {
+		id, offset, err = tbl.tableSpace.GetByFilter(filter)
 		if err == nil {
 			return
 		}
@@ -859,20 +893,20 @@ func (tbl *txnTable) GetByFilter(ctx context.Context, filter *handle.Filter) (id
 }
 
 func (tbl *txnTable) GetLocalValue(row uint32, col uint16) (v any, isNull bool, err error) {
-	if tbl.localSegment == nil {
+	if tbl.tableSpace == nil {
 		return
 	}
-	return tbl.localSegment.GetValue(row, col)
+	return tbl.tableSpace.GetValue(row, col)
 }
 
 func (tbl *txnTable) GetValue(ctx context.Context, id *common.ID, row uint32, col uint16) (v any, isNull bool, err error) {
-	if tbl.localSegment != nil && id.SegmentID().Eq(tbl.localSegment.entry.ID) {
-		return tbl.localSegment.GetValue(row, col)
+	if tbl.tableSpace != nil && id.ObjectID().Eq(tbl.tableSpace.entry.ID) {
+		return tbl.tableSpace.GetValue(row, col)
 	}
 	meta, err := tbl.store.warChecker.CacheGet(
 		tbl.entry.GetDB().ID,
 		id.TableID,
-		id.SegmentID(),
+		id.ObjectID(),
 		&id.BlockID)
 	if err != nil {
 		panic(err)
@@ -880,12 +914,27 @@ func (tbl *txnTable) GetValue(ctx context.Context, id *common.ID, row uint32, co
 	block := meta.GetBlockData()
 	return block.GetValue(ctx, tbl.store.txn, tbl.GetLocalSchema(), int(row), int(col), common.WorkspaceAllocator)
 }
+func (tbl *txnTable) UpdateObjectStats(id *common.ID, stats *objectio.ObjectStats) error {
+	meta, err := tbl.entry.GetObjectByID(id.ObjectID())
+	if err != nil {
+		return err
+	}
+	isNewNode, err := meta.UpdateObjectInfo(tbl.store.txn, stats)
+	if err != nil {
+		return err
+	}
+	tbl.store.txn.GetMemo().AddObject(tbl.entry.GetDB().ID, tbl.entry.ID, &meta.ID)
+	if isNewNode {
+		tbl.txnEntries.Append(meta)
+	}
+	return nil
+}
 
 func (tbl *txnTable) UpdateMetaLoc(id *common.ID, metaLoc objectio.Location) (err error) {
 	meta, err := tbl.store.warChecker.CacheGet(
 		tbl.entry.GetDB().ID,
 		id.TableID,
-		id.SegmentID(),
+		id.ObjectID(),
 		&id.BlockID)
 	if err != nil {
 		panic(err)
@@ -905,7 +954,7 @@ func (tbl *txnTable) UpdateDeltaLoc(id *common.ID, deltaloc objectio.Location) (
 	meta, err := tbl.store.warChecker.CacheGet(
 		tbl.entry.GetDB().ID,
 		id.TableID,
-		id.SegmentID(),
+		id.ObjectID(),
 		&id.BlockID)
 	if err != nil {
 		panic(err)
@@ -952,15 +1001,15 @@ func (tbl *txnTable) AlterTable(ctx context.Context, req *apipb.AlterTableReq) e
 	}
 
 	tbl.schema = newSchema // update new schema to txn local schema
-	//TODO(aptend): handle written data in localseg, keep the batch aligned with the new schema
+	//TODO(aptend): handle written data in localobj, keep the batch aligned with the new schema
 	return err
 }
 
 func (tbl *txnTable) UncommittedRows() uint32 {
-	if tbl.localSegment == nil {
+	if tbl.tableSpace == nil {
 		return 0
 	}
-	return tbl.localSegment.Rows()
+	return tbl.tableSpace.Rows()
 }
 func (tbl *txnTable) NeedRollback() bool {
 	return tbl.createEntry != nil && tbl.dropEntry != nil
@@ -968,12 +1017,12 @@ func (tbl *txnTable) NeedRollback() bool {
 
 // PrePrepareDedup do deduplication check for 1PC Commit or 2PC Prepare
 func (tbl *txnTable) PrePrepareDedup(ctx context.Context) (err error) {
-	if tbl.localSegment == nil || !tbl.schema.HasPK() {
+	if tbl.tableSpace == nil || !tbl.schema.HasPK() {
 		return
 	}
 	var zm index.ZM
 	pkColPos := tbl.schema.GetSingleSortKeyIdx()
-	for _, node := range tbl.localSegment.nodes {
+	for _, node := range tbl.tableSpace.nodes {
 		if node.IsPersisted() {
 			err = tbl.DoPrecommitDedupByNode(ctx, node)
 			if err != nil {
@@ -1004,18 +1053,18 @@ func (tbl *txnTable) PrePrepareDedup(ctx context.Context) (err error) {
 	return
 }
 
-func (tbl *txnTable) updateDedupedSegmentHintAndBlockID(hint uint64, id *types.Blockid) {
-	if tbl.dedupedSegmentHint == 0 {
-		tbl.dedupedSegmentHint = hint
+func (tbl *txnTable) updateDedupedObjectHintAndBlockID(hint uint64, id *types.Blockid) {
+	if tbl.dedupedObjectHint == 0 {
+		tbl.dedupedObjectHint = hint
 		tbl.dedupedBlockID = id
 		return
 	}
-	if tbl.dedupedSegmentHint > hint {
-		tbl.dedupedSegmentHint = hint
-		tbl.dedupedSegmentHint = hint
+	if tbl.dedupedObjectHint > hint {
+		tbl.dedupedObjectHint = hint
+		tbl.dedupedObjectHint = hint
 		return
 	}
-	if tbl.dedupedSegmentHint == hint && tbl.dedupedBlockID.Compare(*id) > 0 {
+	if tbl.dedupedObjectHint == hint && tbl.dedupedBlockID.Compare(*id) > 0 {
 		tbl.dedupedBlockID = id
 	}
 }
@@ -1063,7 +1112,7 @@ func (tbl *txnTable) DedupSnapByPK(ctx context.Context, keys containers.Vector, 
 	defer r.End()
 	h := newRelation(tbl)
 	it := newRelationBlockItOnSnap(h)
-	maxSegmentHint := uint64(0)
+	maxObjectHint := uint64(0)
 	pkType := keys.GetType()
 	keysZM := index.NewZM(pkType.Oid, pkType.Scale)
 	if err = index.BatchUpdateZM(keysZM, keys.GetDownstreamVector()); err != nil {
@@ -1078,9 +1127,9 @@ func (tbl *txnTable) DedupSnapByPK(ctx context.Context, keys containers.Vector, 
 		blkH := it.GetBlock()
 		blk := blkH.GetMeta().(*catalog.BlockEntry)
 		blkH.Close()
-		segmentHint := blk.GetSegment().SortHint
-		if segmentHint > maxSegmentHint {
-			maxSegmentHint = segmentHint
+		ObjectHint := blk.GetObject().SortHint
+		if ObjectHint > maxObjectHint {
+			maxObjectHint = ObjectHint
 			maxBlockID = &blk.ID
 		}
 		if blk.ID.Compare(*maxBlockID) > 0 {
@@ -1138,7 +1187,7 @@ func (tbl *txnTable) DedupSnapByPK(ctx context.Context, keys containers.Vector, 
 		}
 		it.Next()
 	}
-	tbl.updateDedupedSegmentHintAndBlockID(maxSegmentHint, maxBlockID)
+	tbl.updateDedupedObjectHintAndBlockID(maxObjectHint, maxBlockID)
 	return
 }
 
@@ -1147,16 +1196,16 @@ func (tbl *txnTable) DedupSnapByPK(ctx context.Context, keys containers.Vector, 
 // 2. It is called when appending blocks into this table.
 func (tbl *txnTable) DedupSnapByMetaLocs(ctx context.Context, metaLocs []objectio.Location, dedupAfterSnapshotTS bool) (err error) {
 	loaded := make(map[int]containers.Vector)
-	maxSegmentHint := uint64(0)
+	maxObjectHint := uint64(0)
 	maxBlockID := &types.Blockid{}
 	for i, loc := range metaLocs {
 		h := newRelation(tbl)
 		it := newRelationBlockItOnSnap(h)
 		for it.Valid() {
 			blk := it.GetBlock().GetMeta().(*catalog.BlockEntry)
-			segmentHint := blk.GetSegment().SortHint
-			if segmentHint > maxSegmentHint {
-				maxSegmentHint = segmentHint
+			ObjectHint := blk.GetObject().SortHint
+			if ObjectHint > maxObjectHint {
+				maxObjectHint = ObjectHint
 				maxBlockID = &blk.ID
 			}
 			if blk.ID.Compare(*maxBlockID) > 0 {
@@ -1221,46 +1270,46 @@ func (tbl *txnTable) DedupSnapByMetaLocs(ctx context.Context, metaLocs []objecti
 		if v, ok := loaded[i]; ok {
 			v.Close()
 		}
-		tbl.updateDedupedSegmentHintAndBlockID(maxSegmentHint, maxBlockID)
+		tbl.updateDedupedObjectHintAndBlockID(maxObjectHint, maxBlockID)
 	}
 	return
 }
 
-// DoPrecommitDedupByPK 1. it do deduplication by traversing all the segments/blocks, and
-// skipping over some blocks/segments which being active or drop-committed or aborted;
+// DoPrecommitDedupByPK 1. it do deduplication by traversing all the Objects/blocks, and
+// skipping over some blocks/Objects which being active or drop-committed or aborted;
 //  2. it is called when txn dequeues from preparing queue.
 //  3. we should make this function run quickly as soon as possible.
 //     TODO::it would be used to do deduplication with the logtail.
 func (tbl *txnTable) DoPrecommitDedupByPK(pks containers.Vector, pksZM index.ZM) (err error) {
 	moprobe.WithRegion(context.Background(), moprobe.TxnTableDoPrecommitDedupByPK, func() {
-		segIt := tbl.entry.MakeSegmentIt(false)
-		for segIt.Valid() {
-			seg := segIt.Get().GetPayload()
-			if seg.SortHint < tbl.dedupedSegmentHint {
+		objIt := tbl.entry.MakeObjectIt(false)
+		for objIt.Valid() {
+			obj := objIt.Get().GetPayload()
+			if obj.SortHint < tbl.dedupedObjectHint {
 				break
 			}
 			{
-				seg.RLock()
+				obj.RLock()
 				//FIXME:: Why need to wait committing here? waiting had happened at Dedup.
-				//needwait, txnToWait := seg.NeedWaitCommitting(tbl.store.txn.GetStartTS())
+				//needwait, txnToWait := obj.NeedWaitCommitting(tbl.store.txn.GetStartTS())
 				//if needwait {
-				//	seg.RUnlock()
+				//	obj.RUnlock()
 				//	txnToWait.GetTxnState(true)
-				//	seg.RLock()
+				//	obj.RLock()
 				//}
-				shouldSkip := seg.HasDropCommittedLocked() || seg.IsCreatingOrAborted()
-				seg.RUnlock()
+				shouldSkip := obj.HasDropCommittedLocked() || obj.IsCreatingOrAborted()
+				obj.RUnlock()
 				if shouldSkip {
-					segIt.Next()
+					objIt.Next()
 					continue
 				}
 			}
 			var shouldSkip bool
 			err = nil
-			blkIt := seg.MakeBlockIt(false)
+			blkIt := obj.MakeBlockIt(false)
 			for blkIt.Valid() {
 				blk := blkIt.Get().GetPayload()
-				if seg.SortHint == tbl.dedupedSegmentHint {
+				if obj.SortHint == tbl.dedupedObjectHint {
 					if blk.ID.Compare(*tbl.dedupedBlockID) < 0 {
 						break
 					}
@@ -1300,34 +1349,34 @@ func (tbl *txnTable) DoPrecommitDedupByPK(pks containers.Vector, pksZM index.ZM)
 				}
 				blkIt.Next()
 			}
-			segIt.Next()
+			objIt.Next()
 		}
 	})
 	return
 }
 
 func (tbl *txnTable) DoPrecommitDedupByNode(ctx context.Context, node InsertNode) (err error) {
-	segIt := tbl.entry.MakeSegmentIt(false)
+	objIt := tbl.entry.MakeObjectIt(false)
 	var pks containers.Vector
 	//loaded := false
-	for segIt.Valid() {
-		seg := segIt.Get().GetPayload()
-		if seg.SortHint < tbl.dedupedSegmentHint {
+	for objIt.Valid() {
+		obj := objIt.Get().GetPayload()
+		if obj.SortHint < tbl.dedupedObjectHint {
 			break
 		}
 		{
-			seg.RLock()
+			obj.RLock()
 			//FIXME:: Why need to wait committing here? waiting had happened at Dedup.
-			//needwait, txnToWait := seg.NeedWaitCommitting(tbl.store.txn.GetStartTS())
+			//needwait, txnToWait := obj.NeedWaitCommitting(tbl.store.txn.GetStartTS())
 			//if needwait {
-			//	seg.RUnlock()
+			//	obj.RUnlock()
 			//	txnToWait.GetTxnState(true)
-			//	seg.RLock()
+			//	obj.RLock()
 			//}
-			shouldSkip := seg.HasDropCommittedLocked() || seg.IsCreatingOrAborted()
-			seg.RUnlock()
+			shouldSkip := obj.HasDropCommittedLocked() || obj.IsCreatingOrAborted()
+			obj.RUnlock()
 			if shouldSkip {
-				segIt.Next()
+				objIt.Next()
 				continue
 			}
 		}
@@ -1344,10 +1393,10 @@ func (tbl *txnTable) DoPrecommitDedupByNode(ctx context.Context, node InsertNode
 		}
 		var shouldSkip bool
 		err = nil
-		blkIt := seg.MakeBlockIt(false)
+		blkIt := obj.MakeBlockIt(false)
 		for blkIt.Valid() {
 			blk := blkIt.Get().GetPayload()
-			if seg.SortHint == tbl.dedupedSegmentHint {
+			if obj.SortHint == tbl.dedupedObjectHint {
 				if blk.ID.Compare(*tbl.dedupedBlockID) < 0 {
 					break
 				}
@@ -1387,7 +1436,7 @@ func (tbl *txnTable) DoPrecommitDedupByNode(ctx context.Context, node InsertNode
 			}
 			blkIt.Next()
 		}
-		segIt.Next()
+		objIt.Next()
 	}
 	return
 }
@@ -1405,9 +1454,9 @@ func (tbl *txnTable) DedupWorkSpace(key containers.Vector) (err error) {
 		return
 	}
 
-	if tbl.localSegment != nil {
+	if tbl.tableSpace != nil {
 		//Check whether primary key is duplicated in txn's workspace.
-		if err = tbl.localSegment.BatchDedup(key); err != nil {
+		if err = tbl.tableSpace.BatchDedup(key); err != nil {
 			return
 		}
 	}
@@ -1427,9 +1476,9 @@ func (tbl *txnTable) DoBatchDedup(key containers.Vector) (err error) {
 		return
 	}
 
-	if tbl.localSegment != nil {
+	if tbl.tableSpace != nil {
 		//Check whether primary key is duplicated in txn's workspace.
-		if err = tbl.localSegment.BatchDedup(key); err != nil {
+		if err = tbl.tableSpace.BatchDedup(key); err != nil {
 			return
 		}
 	}
@@ -1439,10 +1488,10 @@ func (tbl *txnTable) DoBatchDedup(key containers.Vector) (err error) {
 }
 
 func (tbl *txnTable) BatchDedupLocal(bat *containers.Batch) (err error) {
-	if tbl.localSegment == nil || !tbl.schema.HasPK() {
+	if tbl.tableSpace == nil || !tbl.schema.HasPK() {
 		return
 	}
-	err = tbl.localSegment.BatchDedup(bat.Vecs[tbl.schema.GetSingleSortKeyIdx()])
+	err = tbl.tableSpace.BatchDedup(bat.Vecs[tbl.schema.GetSingleSortKeyIdx()])
 	return
 }
 
@@ -1459,15 +1508,15 @@ func (tbl *txnTable) PrepareRollback() (err error) {
 }
 
 func (tbl *txnTable) ApplyAppend() (err error) {
-	if tbl.localSegment != nil {
-		err = tbl.localSegment.ApplyAppend()
+	if tbl.tableSpace != nil {
+		err = tbl.tableSpace.ApplyAppend()
 	}
 	return
 }
 
 func (tbl *txnTable) PrePrepare() (err error) {
-	if tbl.localSegment != nil {
-		err = tbl.localSegment.PrepareApply()
+	if tbl.tableSpace != nil {
+		err = tbl.tableSpace.PrepareApply()
 	}
 	return
 }
@@ -1538,7 +1587,7 @@ func (tbl *txnTable) ApplyRollback() (err error) {
 }
 
 func (tbl *txnTable) CleanUp() {
-	if tbl.localSegment != nil {
-		tbl.localSegment.CloseAppends()
+	if tbl.tableSpace != nil {
+		tbl.tableSpace.CloseAppends()
 	}
 }

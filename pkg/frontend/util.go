@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"math/rand"
 	"os"
 	"runtime"
 	"strconv"
@@ -473,6 +474,7 @@ const (
 	fail
 	sessionId = "session_id"
 
+	txnId       = "txn_id"
 	statementId = "statement_id"
 )
 
@@ -502,7 +504,7 @@ func logStatementStatus(ctx context.Context, ses *Session, stmt tree.Statement, 
 
 func logStatementStringStatus(ctx context.Context, ses *Session, stmtStr string, status statementStatus, err error) {
 	str := SubStringFromBegin(stmtStr, int(ses.GetParameterUnit().SV.LengthOfQueryPrinted))
-	outBytes := ses.GetMysqlProtocol().CalculateOutTrafficBytes()
+	outBytes, outPacket := ses.GetMysqlProtocol().CalculateOutTrafficBytes(true)
 	if status == success {
 		logDebug(ses, ses.GetDebugString(), "query trace status", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.StatementField(str), logutil.StatusField(status.String()), trace.ContextField(ctx))
 		err = nil // make sure: it is nil for EndStatement
@@ -510,7 +512,7 @@ func logStatementStringStatus(ctx context.Context, ses *Session, stmtStr string,
 		logError(ses, ses.GetDebugString(), "query trace status", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.StatementField(str), logutil.StatusField(status.String()), logutil.ErrorField(err), trace.ContextField(ctx))
 	}
 	// pls make sure: NO ONE use the ses.tStmt after EndStatement
-	motrace.EndStatement(ctx, err, ses.sentRows.Load(), outBytes)
+	motrace.EndStatement(ctx, err, ses.sentRows.Load(), outBytes, outPacket)
 	// need just below EndStatement
 	ses.SetTStmt(nil)
 }
@@ -536,6 +538,10 @@ func appendSessionField(fields []zap.Field, ses *Session) []zap.Field {
 		if ses.tStmt != nil {
 			fields = append(fields, zap.String(sessionId, uuid.UUID(ses.tStmt.SessionID).String()))
 			fields = append(fields, zap.String(statementId, uuid.UUID(ses.tStmt.StatementID).String()))
+			txnInfo := ses.GetTxnInfo()
+			if txnInfo != "" {
+				fields = append(fields, zap.String(txnId, txnInfo))
+			}
 		} else {
 			fields = append(fields, zap.String(sessionId, uuid.UUID(ses.GetUUID()).String()))
 		}
@@ -596,6 +602,10 @@ func isCmdFieldListSql(sql string) bool {
 
 // makeCmdFieldListSql makes the internal CMD_FIELD_LIST sql
 func makeCmdFieldListSql(query string) string {
+	nullIdx := strings.IndexRune(query, rune(0))
+	if nullIdx != -1 {
+		query = query[:nullIdx]
+	}
 	return cmdFieldListSql + " " + query
 }
 
@@ -604,18 +614,8 @@ func parseCmdFieldList(ctx context.Context, sql string) (*InternalCmdFieldList, 
 	if !isCmdFieldListSql(sql) {
 		return nil, moerr.NewInternalError(ctx, "it is not the CMD_FIELD_LIST")
 	}
-	rest := strings.TrimSpace(sql[len(cmdFieldListSql):])
-	//find null
-	nullIdx := strings.IndexRune(rest, rune(0))
-	var tableName string
-	if nullIdx < len(rest) {
-		tableName = rest[:nullIdx]
-		//neglect wildcard
-		//wildcard := payload[nullIdx+1:]
-		return &InternalCmdFieldList{tableName: tableName}, nil
-	} else {
-		return nil, moerr.NewInternalError(ctx, "wrong format for COM_FIELD_LIST")
-	}
+	tableName := strings.TrimSpace(sql[len(cmdFieldListSql):])
+	return &InternalCmdFieldList{tableName: tableName}, nil
 }
 
 func getVariableValue(varDefault interface{}) string {
@@ -626,6 +626,14 @@ func getVariableValue(varDefault interface{}) string {
 		return fmt.Sprintf("%d", val)
 	case int8:
 		return fmt.Sprintf("%d", val)
+	case float64:
+		// 0.1 => 0.100000
+		// 0.0000001 -> 1.000000e-7
+		if val >= 1e-6 {
+			return fmt.Sprintf("%.6f", val)
+		} else {
+			return fmt.Sprintf("%.6e", val)
+		}
 	case string:
 		return val
 	default:
@@ -729,3 +737,162 @@ func needConvertedToAccessDeniedError(errMsg string) bool {
 const (
 	quitStr = "!!!COM_QUIT!!!"
 )
+
+// makeExecuteSql appends the PREPARE sql and its values of parameters for the EXECUTE statement.
+// Format 1: execute ... using ...
+// execute.... // prepare stmt1 from .... ; set var1 = val1 ; set var2 = val2 ;
+// Format 2: COM_STMT_EXECUTE
+// execute.... // prepare stmt1 from .... ; param0 ; param1 ...
+func makeExecuteSql(ses *Session, stmt tree.Statement) string {
+	if ses == nil || stmt == nil {
+		return ""
+	}
+	preSql := ""
+	bb := &strings.Builder{}
+	//fill prepare parameters
+	switch t := stmt.(type) {
+	case *tree.Execute:
+		name := string(t.Name)
+		prepareStmt, err := ses.GetPrepareStmt(name)
+		if err != nil || prepareStmt == nil {
+			break
+		}
+		preSql = strings.TrimSpace(prepareStmt.Sql)
+		bb.WriteString(preSql)
+		bb.WriteString(" ; ")
+		if len(t.Variables) != 0 {
+			//for EXECUTE ... USING statement. append variables if there is.
+			//get SET VAR sql
+			setVarSqls := make([]string, len(t.Variables))
+			for i, v := range t.Variables {
+				_, userVal, err := ses.GetUserDefinedVar(v.Name)
+				if err == nil && userVal != nil && len(userVal.Sql) != 0 {
+					setVarSqls[i] = userVal.Sql
+				}
+			}
+			bb.WriteString(strings.Join(setVarSqls, " ; "))
+		} else if prepareStmt.params != nil {
+			//for COM_STMT_EXECUTE
+			//get value of parameters
+			paramCnt := prepareStmt.params.Length()
+			paramValues := make([]string, paramCnt)
+			vs := vector.MustFixedCol[types.Varlena](prepareStmt.params)
+			for i := 0; i < paramCnt; i++ {
+				isNull := prepareStmt.params.GetNulls().Contains(uint64(i))
+				if isNull {
+					paramValues[i] = "NULL"
+				} else {
+					paramValues[i] = vs[i].GetString(prepareStmt.params.GetArea())
+				}
+			}
+			bb.WriteString(strings.Join(paramValues, " ; "))
+		}
+	default:
+		return ""
+	}
+	return bb.String()
+}
+
+func mysqlColDef2PlanResultColDef(mr *MysqlResultSet) *plan.ResultColDef {
+	if mr == nil {
+		return nil
+	}
+
+	resultCols := make([]*plan.ColDef, len(mr.Columns))
+	for i, col := range mr.Columns {
+		resultCols[i] = &plan.ColDef{
+			Name: col.Name(),
+		}
+		switch col.ColumnType() {
+		case defines.MYSQL_TYPE_VAR_STRING:
+			resultCols[i].Typ = &plan.Type{
+				Id: int32(types.T_varchar),
+			}
+		case defines.MYSQL_TYPE_LONG:
+			resultCols[i].Typ = &plan.Type{
+				Id: int32(types.T_int32),
+			}
+		case defines.MYSQL_TYPE_LONGLONG:
+			resultCols[i].Typ = &plan.Type{
+				Id: int32(types.T_int64),
+			}
+		case defines.MYSQL_TYPE_DOUBLE:
+			resultCols[i].Typ = &plan.Type{
+				Id: int32(types.T_float64),
+			}
+		case defines.MYSQL_TYPE_FLOAT:
+			resultCols[i].Typ = &plan.Type{
+				Id: int32(types.T_float32),
+			}
+		case defines.MYSQL_TYPE_DATE:
+			resultCols[i].Typ = &plan.Type{
+				Id: int32(types.T_date),
+			}
+		case defines.MYSQL_TYPE_TIME:
+			resultCols[i].Typ = &plan.Type{
+				Id: int32(types.T_time),
+			}
+		case defines.MYSQL_TYPE_DATETIME:
+			resultCols[i].Typ = &plan.Type{
+				Id: int32(types.T_datetime),
+			}
+		case defines.MYSQL_TYPE_TIMESTAMP:
+			resultCols[i].Typ = &plan.Type{
+				Id: int32(types.T_timestamp),
+			}
+		default:
+			panic(fmt.Sprintf("unsupported mysql type %d", col.ColumnType()))
+		}
+	}
+	return &plan.ResultColDef{
+		ResultCols: resultCols,
+	}
+}
+
+// errCodeRollbackWholeTxn denotes that the error code
+// that should rollback the whole txn
+var errCodeRollbackWholeTxn = map[uint16]bool{
+	moerr.ErrDeadLockDetected:     false,
+	moerr.ErrLockTableBindChanged: false,
+	moerr.ErrLockTableNotFound:    false,
+	moerr.ErrDeadlockCheckBusy:    false,
+	//moerr.ErrLockConflict:         false,
+}
+
+func isErrorRollbackWholeTxn(inputErr error) bool {
+	if inputErr == nil {
+		return false
+	}
+	me, ok := inputErr.(*moerr.Error)
+	if !ok {
+		// This is not a moerr
+		return false
+	}
+	if _, has := errCodeRollbackWholeTxn[me.ErrorCode()]; has {
+		return true
+	}
+	return false
+}
+
+func getRandomErrorRollbackWholeTxn() error {
+	rand.NewSource(time.Now().UnixNano())
+	x := rand.Intn(len(errCodeRollbackWholeTxn))
+	arr := make([]uint16, 0, len(errCodeRollbackWholeTxn))
+	for k := range errCodeRollbackWholeTxn {
+		arr = append(arr, k)
+	}
+	switch arr[x] {
+	case moerr.ErrDeadLockDetected:
+		return moerr.NewDeadLockDetectedNoCtx()
+	case moerr.ErrLockTableBindChanged:
+		return moerr.NewLockTableBindChangedNoCtx()
+	case moerr.ErrLockTableNotFound:
+		return moerr.NewLockTableNotFoundNoCtx()
+	case moerr.ErrDeadlockCheckBusy:
+		return moerr.NewDeadlockCheckBusyNoCtx()
+	//case moerr.ErrLockConflict:
+	//	return moerr.NewLockConflictNoCtx()
+	default:
+		panic(fmt.Sprintf("usp error code %d", arr[x]))
+	}
+}

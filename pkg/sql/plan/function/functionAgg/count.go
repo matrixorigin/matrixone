@@ -29,69 +29,69 @@ var (
 	}
 )
 
-func NewAggCount(overloadID int64, dist bool, inputTypes []types.Type, outputType types.Type, _ any, partialresult any) (agg.Agg[any], error) {
-	return newCount(overloadID, false, inputTypes[0], outputType, dist, partialresult)
+func NewAggCount(overloadID int64, dist bool, inputTypes []types.Type, outputType types.Type, _ any) (agg.Agg[any], error) {
+	return newCount(overloadID, false, inputTypes[0], outputType, dist)
 }
 
-func NewAggStarCount(overloadID int64, dist bool, inputTypes []types.Type, outputType types.Type, _ any, partialresult any) (agg.Agg[any], error) {
-	return newCount(overloadID, true, inputTypes[0], outputType, dist, partialresult)
+func NewAggStarCount(overloadID int64, dist bool, inputTypes []types.Type, outputType types.Type, _ any) (agg.Agg[any], error) {
+	return newCount(overloadID, true, inputTypes[0], outputType, dist)
 }
 
-func newCount(overloadID int64, isCountStart bool, inputType types.Type, outputType types.Type, dist bool, partialresult any) (agg.Agg[any], error) {
+func newCount(overloadID int64, isCountStart bool, inputType types.Type, outputType types.Type, dist bool) (agg.Agg[any], error) {
 	switch inputType.Oid {
 	case types.T_bool:
-		return newGenericCount[bool](overloadID, isCountStart, inputType, outputType, dist, partialresult)
+		return newGenericCount[bool](overloadID, isCountStart, inputType, outputType, dist)
 	case types.T_uint8:
-		return newGenericCount[uint8](overloadID, isCountStart, inputType, outputType, dist, partialresult)
+		return newGenericCount[uint8](overloadID, isCountStart, inputType, outputType, dist)
 	case types.T_uint16:
-		return newGenericCount[uint16](overloadID, isCountStart, inputType, outputType, dist, partialresult)
+		return newGenericCount[uint16](overloadID, isCountStart, inputType, outputType, dist)
 	case types.T_uint32:
-		return newGenericCount[uint32](overloadID, isCountStart, inputType, outputType, dist, partialresult)
+		return newGenericCount[uint32](overloadID, isCountStart, inputType, outputType, dist)
 	case types.T_uint64:
-		return newGenericCount[uint64](overloadID, isCountStart, inputType, outputType, dist, partialresult)
+		return newGenericCount[uint64](overloadID, isCountStart, inputType, outputType, dist)
 	case types.T_int8:
-		return newGenericCount[int8](overloadID, isCountStart, inputType, outputType, dist, partialresult)
+		return newGenericCount[int8](overloadID, isCountStart, inputType, outputType, dist)
 	case types.T_int16:
-		return newGenericCount[int16](overloadID, isCountStart, inputType, outputType, dist, partialresult)
+		return newGenericCount[int16](overloadID, isCountStart, inputType, outputType, dist)
 	case types.T_int32:
-		return newGenericCount[int32](overloadID, isCountStart, inputType, outputType, dist, partialresult)
+		return newGenericCount[int32](overloadID, isCountStart, inputType, outputType, dist)
 	case types.T_int64:
-		return newGenericCount[int64](overloadID, isCountStart, inputType, outputType, dist, partialresult)
+		return newGenericCount[int64](overloadID, isCountStart, inputType, outputType, dist)
 	case types.T_float32:
-		return newGenericCount[float32](overloadID, isCountStart, inputType, outputType, dist, partialresult)
+		return newGenericCount[float32](overloadID, isCountStart, inputType, outputType, dist)
 	case types.T_float64:
-		return newGenericCount[float64](overloadID, isCountStart, inputType, outputType, dist, partialresult)
+		return newGenericCount[float64](overloadID, isCountStart, inputType, outputType, dist)
 	case types.T_char, types.T_varchar, types.T_blob, types.T_json, types.T_text, types.T_binary, types.T_varbinary:
-		return newGenericCount[[]byte](overloadID, isCountStart, inputType, outputType, dist, partialresult)
+		return newGenericCount[[]byte](overloadID, isCountStart, inputType, outputType, dist)
 	case types.T_array_float32, types.T_array_float64:
-		return newGenericCount[[]byte](overloadID, isCountStart, inputType, outputType, dist, partialresult)
+		return newGenericCount[[]byte](overloadID, isCountStart, inputType, outputType, dist)
 	case types.T_date:
-		return newGenericCount[types.Date](overloadID, isCountStart, inputType, outputType, dist, partialresult)
+		return newGenericCount[types.Date](overloadID, isCountStart, inputType, outputType, dist)
 	case types.T_datetime:
-		return newGenericCount[types.Datetime](overloadID, isCountStart, inputType, outputType, dist, partialresult)
+		return newGenericCount[types.Datetime](overloadID, isCountStart, inputType, outputType, dist)
 	case types.T_timestamp:
-		return newGenericCount[types.Timestamp](overloadID, isCountStart, inputType, outputType, dist, partialresult)
+		return newGenericCount[types.Timestamp](overloadID, isCountStart, inputType, outputType, dist)
 	case types.T_time:
-		return newGenericCount[types.Time](overloadID, isCountStart, inputType, outputType, dist, partialresult)
+		return newGenericCount[types.Time](overloadID, isCountStart, inputType, outputType, dist)
 	case types.T_enum:
-		return newGenericCount[types.Enum](overloadID, isCountStart, inputType, outputType, dist, partialresult)
+		return newGenericCount[types.Enum](overloadID, isCountStart, inputType, outputType, dist)
 	case types.T_decimal64:
-		return newGenericCount[types.Decimal64](overloadID, isCountStart, inputType, outputType, dist, partialresult)
+		return newGenericCount[types.Decimal64](overloadID, isCountStart, inputType, outputType, dist)
 	case types.T_decimal128:
-		return newGenericCount[types.Decimal128](overloadID, isCountStart, inputType, outputType, dist, partialresult)
+		return newGenericCount[types.Decimal128](overloadID, isCountStart, inputType, outputType, dist)
 	case types.T_uuid:
-		return newGenericCount[types.Uuid](overloadID, isCountStart, inputType, outputType, dist, partialresult)
+		return newGenericCount[types.Uuid](overloadID, isCountStart, inputType, outputType, dist)
 	}
 	return nil, moerr.NewInternalErrorNoCtx("unsupported type '%s' for count", inputType)
 }
 
 func newGenericCount[T allTypes](
-	overloadID int64, isCountStart bool, inputType types.Type, outputType types.Type, dist bool, partialresult any) (agg.Agg[any], error) {
+	overloadID int64, isCountStart bool, inputType types.Type, outputType types.Type, dist bool) (agg.Agg[any], error) {
 	aggPriv := &sAggCount[T]{isCountStar: isCountStart}
 	if dist {
-		return agg.NewUnaryDistAgg[T, int64](overloadID, aggPriv, true, inputType, outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, partialresult), nil
+		return agg.NewUnaryDistAgg[T, int64](overloadID, aggPriv, true, inputType, outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill), nil
 	}
-	return agg.NewUnaryAgg[T, int64](overloadID, aggPriv, true, inputType, outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, partialresult), nil
+	return agg.NewUnaryAgg[T, int64](overloadID, aggPriv, true, inputType, outputType, aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill), nil
 }
 
 type sAggCount[T allTypes] struct {

@@ -22,10 +22,10 @@ import (
 )
 
 // ID is the general identifier type shared by different types like
-// table, segment, block, etc.
+// table, object, block, etc.
 //
 // We could wrap info from upper level via ID, for instance, get the table id,
-// segment id, and the block id for one block by ID.AsBlockID, which made
+// object id, and the block id for one block by ID.AsBlockID, which made
 // the resource management easier.
 type ID struct {
 	// Internal db id
@@ -52,6 +52,14 @@ func (id *ID) SetSegmentID(sid *types.Segmentid) {
 	copy(id.BlockID[:types.UuidSize], sid[:])
 }
 
+func (id *ID) ObjectID() *types.Objectid {
+	return id.BlockID.Object()
+}
+
+func (id *ID) SetObjectID(oid *types.Objectid) {
+	copy(id.BlockID[:types.ObjectBytesSize], oid[:])
+}
+
 func (id *ID) AsBlockID() *ID {
 	return &ID{
 		DbID:    id.DbID,
@@ -70,8 +78,8 @@ func (id *ID) DBString() string {
 func (id *ID) TableString() string {
 	return fmt.Sprintf("TBL<%d-%d>", id.DbID, id.TableID)
 }
-func (id *ID) SegmentString() string {
-	return fmt.Sprintf("SEG<%d-%d-%s>", id.DbID, id.TableID, id.BlockID.Segment().ToString())
+func (id *ID) ObjectString() string {
+	return fmt.Sprintf("OBJ<%d-%d-%s>", id.DbID, id.TableID, id.BlockID.Object().String())
 }
 
 func (id *ID) BlockString() string {

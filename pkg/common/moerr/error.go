@@ -154,7 +154,10 @@ const (
 	ErrDependentByPartitionFunction             uint16 = 20465
 	ErrAlterOperationNotSupportedReasonFkRename uint16 = 20466
 	ErrPrimaryCantHaveNull                      uint16 = 20467
-
+	ErrPartitionMgmtOnNonpartitioned            uint16 = 20468
+	ErrFKRowIsReferenced                        uint16 = 20469
+	ErrDuplicateKeyName                         uint16 = 20470
+	ErrFKNoReferencedRow2                       uint16 = 20471
 	// Group 5: rpc timeout
 	// ErrRPCTimeout rpc timeout
 	ErrRPCTimeout uint16 = 20500
@@ -201,7 +204,7 @@ const (
 	ErrTxnInternal                uint16 = 20621
 	ErrTxnReadConflict            uint16 = 20622
 	ErrPrimaryKeyDuplicated       uint16 = 20623
-	ErrAppendableSegmentNotFound  uint16 = 20624
+	ErrAppendableObjectNotFound   uint16 = 20624
 	ErrAppendableBlockNotFound    uint16 = 20625
 	ErrTAEDebug                   uint16 = 20626
 	ErrDuplicateKey               uint16 = 20627
@@ -246,6 +249,7 @@ const (
 	ErrMaxvalueInValuesIn                  uint16 = 20821
 	ErrRowSinglePartitionField             uint16 = 20822
 	ErrTooManyPartitionFuncFields          uint16 = 20823
+	ErrTooManyParameter                    uint16 = 20824
 
 	// Group 9: streaming
 	ErrUnsupportedOption   uint16 = 20901
@@ -375,7 +379,10 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrDependentByPartitionFunction:             {ER_DEPENDENT_BY_PARTITION_FUNC, []string{MySQLDefaultSqlState}, "Column '%s' has a partitioning function dependency and cannot be dropped or renamed"},
 	ErrAlterOperationNotSupportedReasonFkRename: {ER_ALTER_OPERATION_NOT_SUPPORTED_REASON_FK_RENAME, []string{MySQLDefaultSqlState}, "Columns participating in a foreign key are renamed"},
 	ErrPrimaryCantHaveNull:                      {ER_PRIMARY_CANT_HAVE_NULL, []string{MySQLDefaultSqlState}, "All parts of a PRIMARY KEY must be NOT NULL; if you need NULL in a key, use UNIQUE instead"},
-
+	ErrPartitionMgmtOnNonpartitioned:            {ER_PARTITION_MGMT_ON_NONPARTITIONED, []string{MySQLDefaultSqlState}, "Partition management on a not partitioned table is not possible"},
+	ErrFKRowIsReferenced:                        {ER_ROW_IS_REFERENCED, []string{MySQLDefaultSqlState}, "Cannot delete or update a parent row: a foreign key constraint fails"},
+	ErrDuplicateKeyName:                         {ER_DUP_KEYNAME, []string{MySQLDefaultSqlState}, "Duplicate foreign key constraint name '%-.192s'"},
+	ErrFKNoReferencedRow2:                       {ER_NO_REFERENCED_ROW_2, []string{"23000"}, "Cannot add or update a child row: a foreign key constraint fails"},
 	// Group 5: rpc timeout
 	ErrRPCTimeout:   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "rpc timeout"},
 	ErrClientClosed: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "client closed"},
@@ -383,7 +390,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 		"the connection between CN and TN has been disconnected"},
 	ErrStreamClosed:         {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "stream closed"},
 	ErrNoAvailableBackend:   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "no available backend"},
-	ErrBackendCannotConnect: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "can not connect to remote backend"},
+	ErrBackendCannotConnect: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "can not connect to remote backend, %v"},
 
 	// Group 6: txn
 	ErrTxnClosed:                  {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "the transaction %s has been committed or aborted"},
@@ -410,7 +417,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrTxnInternal:                {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "txn internal error"},
 	ErrTxnReadConflict:            {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "txn read conflict %s"},
 	ErrPrimaryKeyDuplicated:       {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "duplicated primary key %v"},
-	ErrAppendableSegmentNotFound:  {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "appendable segment not found"},
+	ErrAppendableObjectNotFound:   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "appendable Object not found"},
 	ErrAppendableBlockNotFound:    {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "appendable block not found"},
 	ErrDuplicateKey:               {ER_DUP_KEYNAME, []string{MySQLDefaultSqlState}, "duplicate key name '%s'"},
 	ErrTxnNeedRetry:               {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "txn need retry in rc mode"},
@@ -450,6 +457,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrMaxvalueInValuesIn:                  {ER_MAXVALUE_IN_VALUES_IN, []string{MySQLDefaultSqlState}, "Cannot use MAXVALUE as value in VALUES IN"},
 	ErrRowSinglePartitionField:             {ER_ROW_SINGLE_PARTITION_FIELD_ERROR, []string{MySQLDefaultSqlState}, "Row expressions in VALUES IN only allowed for multi-field column partitioning"},
 	ErrTooManyPartitionFuncFields:          {ER_TOO_MANY_PARTITION_FUNC_FIELDS_ERROR, []string{MySQLDefaultSqlState}, "Too many fields in '%-.192s'"},
+	ErrTooManyParameter:                    {ER_PS_MANY_PARAM, []string{MySQLDefaultSqlState}, "Prepared statement contains too many placeholders"},
 
 	// Group 9: streaming
 	ErrUnsupportedOption:   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "unsupported option %s"},
@@ -1061,8 +1069,8 @@ func NewDuplicateKey(ctx context.Context, k string) *Error {
 	return newError(ctx, ErrDuplicateKey, k)
 }
 
-func NewAppendableSegmentNotFound(ctx context.Context) *Error {
-	return newError(ctx, ErrAppendableSegmentNotFound)
+func NewAppendableObjectNotFound(ctx context.Context) *Error {
+	return newError(ctx, ErrAppendableObjectNotFound)
 }
 
 func NewAppendableBlockNotFound(ctx context.Context) *Error {
@@ -1297,6 +1305,22 @@ func NewErrUnsupportedDataType(ctx context.Context, typ any) *Error {
 
 func NewErrTaskNotFound(ctx context.Context, taskID uint64) *Error {
 	return newError(ctx, ErrTaskNotFound, taskID)
+}
+
+func NewErrTooManyParameter(ctx context.Context) *Error {
+	return newError(ctx, ErrTooManyParameter)
+}
+
+func NewErrFKRowIsReferenced(ctx context.Context) *Error {
+	return newError(ctx, ErrFKRowIsReferenced)
+}
+
+func NewErrDuplicateKeyName(ctx context.Context, fkName any) *Error {
+	return newError(ctx, ErrDuplicateKeyName, fkName)
+}
+
+func NewErrFKNoReferencedRow2(ctx context.Context) *Error {
+	return newError(ctx, ErrFKNoReferencedRow2)
 }
 
 var contextFunc atomic.Value

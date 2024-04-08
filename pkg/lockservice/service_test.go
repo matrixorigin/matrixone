@@ -24,6 +24,7 @@ import (
 	"github.com/fagongzi/goetty/v2/buf"
 	"github.com/lni/goutils/leaktest"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
@@ -1049,6 +1050,101 @@ func TestDeadLockWith2Txn(t *testing.T) {
 	}
 }
 
+func TestLockSuccWithKeepBindTimeout(t *testing.T) {
+	runLockServiceTestsWithLevel(
+		t,
+		zapcore.DebugLevel,
+		[]string{"s1"},
+		time.Second*1,
+		func(alloc *lockTableAllocator, s []*service) {
+			l := s[0]
+
+			ctx, cancel := context.WithTimeout(
+				context.Background(),
+				time.Second*10)
+			defer cancel()
+			option := pb.LockOptions{
+				Granularity: pb.Granularity_Row,
+				Mode:        pb.LockMode_Exclusive,
+				Policy:      pb.WaitPolicy_Wait,
+			}
+
+			_, err := l.Lock(
+				ctx,
+				0,
+				[][]byte{{1}},
+				[]byte("txn1"),
+				option)
+			require.NoError(t, err)
+
+			err = l.remote.keeper.Close()
+			require.NoError(t, err)
+
+			time.Sleep(time.Second * 3)
+
+			p := alloc.GetLatest(0)
+			require.True(t, p.Valid)
+		},
+		nil,
+	)
+
+}
+
+func TestReLockSuccWithKeepBindTimeout(t *testing.T) {
+	runLockServiceTestsWithLevel(
+		t,
+		zapcore.DebugLevel,
+		[]string{"s1", "s2"},
+		time.Second*1,
+		func(alloc *lockTableAllocator, s []*service) {
+			l1 := s[0]
+			l2 := s[1]
+
+			ctx, cancel := context.WithTimeout(
+				context.Background(),
+				time.Second*10)
+			defer cancel()
+			option := pb.LockOptions{
+				Granularity: pb.Granularity_Row,
+				Mode:        pb.LockMode_Exclusive,
+				Policy:      pb.WaitPolicy_Wait,
+			}
+
+			_, err := l1.Lock(
+				ctx,
+				0,
+				[][]byte{{1}},
+				[]byte("txn1"),
+				option)
+			require.NoError(t, err)
+			require.NoError(t, l1.Unlock(ctx, []byte("txn1"), timestamp.Timestamp{}))
+
+			err = l1.remote.keeper.Close()
+			require.NoError(t, err)
+
+			time.Sleep(time.Second * 3)
+
+			p := alloc.GetLatest(0)
+			require.True(t, p.Valid)
+
+			l1.tables.removeWithFilter(func(key uint64, value lockTable) bool {
+				return true
+			})
+
+			// should lock succ
+			_, err = l2.Lock(
+				ctx,
+				0,
+				[][]byte{{1}},
+				[]byte("txn2"),
+				option)
+			require.NoError(t, err)
+		},
+		nil,
+	)
+
+}
+
 func TestLockResultWithNoConflict(t *testing.T) {
 	runLockServiceTests(
 		t,
@@ -1322,6 +1418,124 @@ func TestHasAnyHolderCannotNotifyWaiters(t *testing.T) {
 				})
 		})
 	}
+}
+
+func TestTxnUnlockWithBindChanged(t *testing.T) {
+	for name, runner := range runners {
+		t.Run(name, func(t *testing.T) {
+			table := uint64(10)
+			runner(
+				t,
+				table,
+				func(
+					ctx context.Context,
+					s *service,
+					lt *localLockTable) {
+					option := newTestRowExclusiveOptions()
+					rows := newTestRows(1)
+					txn1 := newTestTxnID(1)
+					txn2 := newTestTxnID(2)
+
+					// txn1 get lock
+					_, err := s.Lock(ctx, table, rows, txn1, option)
+					require.NoError(t, err)
+					checkLock(t, lt, rows[0], [][]byte{txn1}, nil, nil)
+
+					// changed bind
+					bind := lt.getBind()
+					bind.Version = bind.Version + 1
+					new := newLocalLockTable(bind, s.fsp, s.events, s.clock)
+					s.tables.set(table, new)
+					lt.close()
+
+					// txn2 get lock, shared
+					_, err = s.Lock(ctx, table, rows, txn2, option)
+					require.NoError(t, err)
+					checkLock(t, new.(*localLockTable), rows[0], [][]byte{txn2}, nil, nil)
+
+					require.NoError(t, s.Unlock(ctx, txn1, timestamp.Timestamp{}))
+					require.NoError(t, s.Unlock(ctx, txn2, timestamp.Timestamp{}))
+				})
+		})
+	}
+}
+
+func TestIssue2128(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1", "s2"},
+		func(alloc *lockTableAllocator, ss []*service) {
+			l := ss[1]
+
+			ctx, cancel := context.WithTimeout(
+				context.Background(),
+				time.Second*10)
+			defer cancel()
+			option := pb.LockOptions{
+				Granularity: pb.Granularity_Row,
+				Mode:        pb.LockMode_Exclusive,
+				Policy:      pb.WaitPolicy_Wait,
+			}
+
+			_, err := l.Lock(
+				ctx,
+				0,
+				[][]byte{{1}},
+				[]byte("txn1"),
+				option)
+			require.NoError(t, err)
+
+			lb, err := l.getLockTable(0)
+			require.NoError(t, err)
+			b := lb.getBind()
+			b.ServiceID = "1705661824807004000s3"
+			l.handleBindChanged(b)
+
+			_, err = l.Lock(
+				ctx,
+				0,
+				[][]byte{{1}},
+				[]byte("txn1"),
+				option)
+			require.Error(t, err)
+
+			_, err = l.Lock(
+				ctx,
+				0,
+				[][]byte{{1}},
+				[]byte("txn1"),
+				option)
+			require.NoError(t, err)
+		},
+	)
+}
+
+func TestIssue14008(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1"},
+		func(alloc *lockTableAllocator, ss []*service) {
+			s1 := ss[0]
+			alloc.server.RegisterMethodHandler(pb.Method_GetBind,
+				func(
+					ctx context.Context,
+					cf context.CancelFunc,
+					r1 *pb.Request,
+					r2 *pb.Response,
+					cs morpc.ClientSession) {
+					writeResponse(ctx, cf, r2, ErrTxnNotFound, cs)
+				})
+			var wg sync.WaitGroup
+			for i := 0; i < 20; i++ {
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					_, err := s1.getLockTableWithCreate(10, true)
+					require.Error(t, err)
+				}()
+			}
+			wg.Wait()
+		})
 }
 
 func BenchmarkWithoutConflict(b *testing.B) {

@@ -48,6 +48,12 @@ func (r *pluginRouter) Route(
 	if err != nil {
 		return nil, err
 	}
+	if re.Updated {
+		// plugin signals that a state updated has happened, request a refresh if the delegated router is refreshable
+		if rr, ok := r.Router.(RefreshableRouter); ok {
+			rr.Refresh(false)
+		}
+	}
 	switch re.Action {
 	case plugin.Select:
 		if re.CN == nil {

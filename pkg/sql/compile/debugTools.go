@@ -75,6 +75,7 @@ var debugInstructionNames = map[vm.OpType]string{
 	vm.MergeDelete:             "merge delete",
 	vm.LockOp:                  "lockop",
 	vm.MergeBlock:              "merge block",
+	vm.FuzzyFilter:             "fuzzy filter",
 }
 
 var debugMagicNames = map[magicType]string{

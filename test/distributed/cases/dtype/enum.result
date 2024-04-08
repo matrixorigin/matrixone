@@ -40,7 +40,7 @@ create table enum01 (col1 enum('red','blue','green'));
 insert into enum01 values ('red'),('blue'),('green');
 desc enum01;
 Field    Type    Null    Key    Default    Extra    Comment
-col1    ENUM(0)    YES        null        
+col1    ENUM('red','blue','green')    YES        null        
 select * from enum01;
 col1
 red
@@ -50,7 +50,7 @@ update enum01 set col1 ='blue' where col1 = 'green';
 delete from enum01 where col1 = 'blue';
 show create table enum01;
 Table    Create Table
-enum01    CREATE TABLE `enum01` (\n`col1` ENUM DEFAULT NULL\n)
+enum01    CREATE TABLE `enum01` (\n`col1` ENUM('red','blue','green') DEFAULT NULL\n)
 select table_name, COLUMN_NAME, data_type, is_nullable from information_schema.columns where table_name like 'enum01' and COLUMN_NAME not like '__mo%';
 table_name    column_name    data_type    is_nullable
 enum01    col1    ENUM    YES
@@ -85,10 +85,10 @@ col1
 ejwuijfew
 show create table enum03;
 Table    Create Table
-enum03    CREATE TABLE `enum03` (\n`col1` ENUM NOT NULL\n)
+enum03    CREATE TABLE `enum03` (\n`col1` ENUM('ejwuijfew','ewrwrewretr','werwre') NOT NULL\n)
 show columns from enum03;
 Field    Type    Null    Key    Default    Extra    Comment
-col1    ENUM(0)    NO        null        
+col1    ENUM('ejwuijfew','ewrwrewretr','werwre')    NO        null        
 select table_name, COLUMN_NAME, data_type, is_nullable from information_schema.columns where table_name like 'enum02' and COLUMN_NAME not like '__mo%';
 table_name    column_name    data_type    is_nullable
 drop table enum03;
@@ -107,9 +107,12 @@ col1
 null
 create table enum03(col1 enum('数据库','数据库管理','数据库管理软件'));
 insert into enum03 select * from enum02;
-invalid argument operator cast, bad value [VARCHAR ENUM]
 select * from enum03;
 col1
+数据库
+数据库管理
+数据库管理软件
+null
 drop table enum02;
 drop table enum03;
 drop table if exists enum04;
@@ -128,34 +131,34 @@ create table enum05 (a int,b enum('4','3','2','1'));
 insert into enum05 values(1,1);
 select * from enum05;
 a    b
-1    4
+1    1
 insert into enum05 values(2,'1');
 select * from enum05;
 a    b
-1    4
-2    1
+1    1
+2    4
 drop table enum05;
 drop table if exists pri01;
-create table pri01 (col1 enum('qy4iujd3wi4fu4h3f', '323242r34df432432', '32e3ewfdewrew') primary key);
+create table pri01 (col1 enum('qy4iujd3wi4fu4h3f', '323242r34df432432', '32e3ewfdewrew'));
 show create table pri01;
 Table    Create Table
-pri01    CREATE TABLE `pri01` (\n`col1` ENUM NOT NULL,\nPRIMARY KEY (`col1`)\n)
+pri01    CREATE TABLE `pri01` (\n`col1` ENUM('qy4iujd3wi4fu4h3f','323242r34df432432','32e3ewfdewrew') DEFAULT NULL\n)
 insert into pri01 values ('qy4iujd3wi4fu4h3f');
 insert into pri01 values ('qy4iujd3wi4fu4h3f');
-Duplicate entry '1' for key 'col1'
 insert into pri01 (col1) values ('323242r34df432432');
 insert into pri01 (col1) values (null);
-constraint violation: Column 'col1' cannot be null
 select * from pri01;
 col1
 qy4iujd3wi4fu4h3f
+qy4iujd3wi4fu4h3f
 323242r34df432432
+null
 show create table pri01;
 Table    Create Table
-pri01    CREATE TABLE `pri01` (\n`col1` ENUM NOT NULL,\nPRIMARY KEY (`col1`)\n)
+pri01    CREATE TABLE `pri01` (\n`col1` ENUM('qy4iujd3wi4fu4h3f','323242r34df432432','32e3ewfdewrew') DEFAULT NULL\n)
 show columns from pri01;
 Field    Type    Null    Key    Default    Extra    Comment
-col1    ENUM(0)    NO    PRI    null        
+col1    ENUM('qy4iujd3wi4fu4h3f','323242r34df432432','32e3ewfdewrew')    YES        null        
 drop table pri01;
 drop table if exists pri02;
 create table pri02 (col1 int, col2 enum('数据库', '数据库系统', '数据库管理系统'));
@@ -166,16 +169,14 @@ col1    col2
 1    数据库
 2    数据库
 alter table pri02 add primary key (col2);
-You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 3 column 16 near " NOT NULL,
-PRIMARY KEY (`col2`)
-)";
+not supported: ENUM column 'col2' cannot be in primary key
 show create table pri02;
 Table    Create Table
-pri02    CREATE TABLE `pri02` (\n`col1` INT DEFAULT NULL,\n`col2` ENUM DEFAULT NULL\n)
+pri02    CREATE TABLE `pri02` (\n`col1` INT DEFAULT NULL,\n`col2` ENUM('数据库','数据库系统','数据库管理系统') DEFAULT NULL\n)
 show columns from pri02;
 Field    Type    Null    Key    Default    Extra    Comment
 col1    INT(32)    YES        null        
-col2    ENUM(0)    YES        null        
+col2    ENUM('数据库','数据库系统','数据库管理系统')    YES        null        
 select table_name, COLUMN_NAME, data_type, is_nullable from information_schema.columns where table_name like 'pri02' and COLUMN_NAME not like '__mo%';
 table_name    column_name    data_type    is_nullable
 pri02    col1    INT    YES
@@ -190,45 +191,40 @@ col1    col2
 1    数据库
 2    数据库系统
 alter table pri03 add primary key (col2);
-You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 3 column 16 near " NOT NULL,
-PRIMARY KEY (`col2`)
-)";
+not supported: ENUM column 'col2' cannot be in primary key
 show create table pri03;
 Table    Create Table
-pri03    CREATE TABLE `pri03` (\n`col1` INT DEFAULT NULL,\n`col2` ENUM DEFAULT NULL\n)
+pri03    CREATE TABLE `pri03` (\n`col1` INT DEFAULT NULL,\n`col2` ENUM('数据库','数据库系统','数据库管理系统') DEFAULT NULL\n)
 show columns from pri03;
 Field    Type    Null    Key    Default    Extra    Comment
 col1    INT(32)    YES        null        
-col2    ENUM(0)    YES        null        
+col2    ENUM('数据库','数据库系统','数据库管理系统')    YES        null        
 select table_name, COLUMN_NAME, data_type, is_nullable from information_schema.columns where table_name like 'pri03' and COLUMN_NAME not like '__mo%';
 table_name    column_name    data_type    is_nullable
 pri03    col1    INT    YES
 pri03    col2    ENUM    YES
 drop table pri03;
 drop table if exists pri04;
-create table pri04 (col1 int, col2 enum('database', 'database management', 'database management system') primary key);
+create table pri04 (col1 int, col2 enum('database', 'database management', 'database management system'));
 insert into pri04 (col1, col2) values (1, 'database');
 insert into pri04 values (2, 'database management system');
 show create table pri04;
 Table    Create Table
-pri04    CREATE TABLE `pri04` (\n`col1` INT DEFAULT NULL,\n`col2` ENUM NOT NULL,\nPRIMARY KEY (`col2`)\n)
-alter table pri04 drop primary key;
-You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 3 column 16 near " NOT NULL
-)";
+pri04    CREATE TABLE `pri04` (\n`col1` INT DEFAULT NULL,\n`col2` ENUM('database','database management','database management system') DEFAULT NULL\n)
 show create table pri04;
 Table    Create Table
-pri04    CREATE TABLE `pri04` (\n`col1` INT DEFAULT NULL,\n`col2` ENUM NOT NULL,\nPRIMARY KEY (`col2`)\n)
+pri04    CREATE TABLE `pri04` (\n`col1` INT DEFAULT NULL,\n`col2` ENUM('database','database management','database management system') DEFAULT NULL\n)
 show columns from pri04;
 Field    Type    Null    Key    Default    Extra    Comment
 col1    INT(32)    YES        null        
-col2    ENUM(0)    NO    PRI    null        
+col2    ENUM('database','database management','database management system')    YES        null        
 select * from pri04 where col2 = 'database';
 col1    col2
 1    database
 select table_name, COLUMN_NAME, data_type, is_nullable from information_schema.columns where table_name like 'pri04' and COLUMN_NAME not like '__mo%';
 table_name    column_name    data_type    is_nullable
 pri04    col1    INT    YES
-pri04    col2    ENUM    NO
+pri04    col2    ENUM    YES
 drop table pri04;
 drop table if exists inert01;
 create table insert01 (id int primary key,
@@ -244,12 +240,12 @@ id    order_number    status
 4    444    Cancelled
 show create table insert01;
 Table    Create Table
-insert01    CREATE TABLE `insert01` (\n`id` INT NOT NULL,\n`order_number` VARCHAR(20) DEFAULT NULL,\n`status` ENUM DEFAULT NULL,\nPRIMARY KEY (`id`)\n)
+insert01    CREATE TABLE `insert01` (\n`id` INT NOT NULL,\n`order_number` VARCHAR(20) DEFAULT NULL,\n`status` ENUM('Pending','Processing','Completed','Cancelled') DEFAULT NULL,\nPRIMARY KEY (`id`)\n)
 show columns from insert01;
 Field    Type    Null    Key    Default    Extra    Comment
 id    INT(32)    NO    PRI    null        
 order_number    VARCHAR(20)    YES        null        
-status    ENUM(0)    YES        null        
+status    ENUM('Pending','Processing','Completed','Cancelled')    YES        null        
 delete from insert01 where status=3;
 invalid argument cast to int, bad value Pending
 update insert01 set status='Pending' where status=2;
@@ -263,14 +259,13 @@ id    order_number    status
 select * from insert01 where status=4;
 invalid argument cast to int, bad value Pending
 select * from insert01 where status in ('Pending',4);
-id    order_number    status
-1    111    Pending
+invalid argument cast to int, bad value Pending
 drop table insert01;
 drop table if exists default01;
 create table default01 (`col1` enum('T', 'E') not null default 'T');
 desc default01;
 Field    Type    Null    Key    Default    Extra    Comment
-col1    ENUM(0)    NO        'T'        
+col1    ENUM('T','E')    NO        'T'        
 insert into default01 values(default);
 select * from default01;
 col1
@@ -280,7 +275,7 @@ drop table if exists default02;
 create table default02 (`col1` enum('T', 'E') not null default '1');
 desc default02;
 Field    Type    Null    Key    Default    Extra    Comment
-col1    ENUM(0)    NO        '1'        
+col1    ENUM('T','E')    NO        '1'        
 insert into default02 values(default);
 select * from default02;
 col1
@@ -290,7 +285,7 @@ drop table if exists default03;
 create table default03 (`col1` enum('T', 'E') not null default 1);
 desc default03;
 Field    Type    Null    Key    Default    Extra    Comment
-col1    ENUM(0)    NO        1        
+col1    ENUM('T','E')    NO        1        
 insert into default03 values(default);
 select * from default03;
 col1
@@ -300,7 +295,7 @@ drop table if exists default04;
 create table default04 (`col1` enum('T', 'E') not null default 2);
 desc default04;
 Field    Type    Null    Key    Default    Extra    Comment
-col1    ENUM(0)    NO        2        
+col1    ENUM('T','E')    NO        2        
 insert into default04 values(default);
 select * from default04;
 col1
@@ -310,7 +305,7 @@ drop table if exists default05;
 create table default05 (`col1` enum('T', 'E') not null default '2');
 desc default05;
 Field    Type    Null    Key    Default    Extra    Comment
-col1    ENUM(0)    NO        '2'        
+col1    ENUM('T','E')    NO        '2'        
 insert into default05 values(default);
 select * from default05;
 col1
@@ -373,7 +368,7 @@ coalesce(null, null, col2)
 矩阵起源
 drop table enum04;
 drop table if exists builtin01;
-create table builtin01(col1 enum('  云原生数据库  ','存储引擎 TAE', 'database system') not null primary key,col2 enum(' database','engine ','index meta data'));
+create table builtin01(col1 enum('  云原生数据库  ','存储引擎 TAE', 'database system') not null,col2 enum(' database','engine ','index meta data'));
 insert into builtin01 values('  云原生数据库  ',' database');
 insert into builtin01 values('存储引擎 TAE','engine ');
 insert into builtin01 values('database system','engine ');
@@ -503,3 +498,7 @@ with cte_2 as(select col1,col2 from cte01 where col1 = 3) select col2 from cte_2
 col2
 &**())_
 drop table cte01;
+drop table if exists agg01;
+create table agg01 (col1 int, col2 enum('egwjqebwq', 'qwewqewqeqewq', 'weueiwqeowqehwgqjhenw') primary key);
+not supported: ENUM column 'col2' cannot be in primary key
+drop table if exists agg01;

@@ -872,7 +872,7 @@ func TestCloneWindow(t *testing.T) {
 	require.True(t, v2.IsConstNull())
 	require.Equal(t, 2, v2.Length())
 
-	v3 := NewConstFixed[int32](types.T_int32.ToType(), 10, 20, mp)
+	v3, _ := NewConstFixed[int32](types.T_int32.ToType(), 10, 20, mp)
 	defer v3.Free(mp)
 	v4, err := v3.CloneWindow(3, 5, mp)
 	defer v4.Free(mp)

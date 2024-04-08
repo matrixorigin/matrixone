@@ -107,6 +107,7 @@ type CreateDatabase struct {
 	Name               Identifier
 	CreateOptions      []CreateOption
 	SubscriptionOption *SubscriptionOption
+	Sql                string
 }
 
 func (node *CreateDatabase) Format(ctx *FmtCtx) {

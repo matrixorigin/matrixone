@@ -303,14 +303,15 @@ func (t *TraceSpan) UnmarshalBinary(data []byte) error {
 	return t.Unmarshal(data)
 }
 
-type StorageUsage struct {
+type StorageUsageReq struct {
+	AccIds []int32
 }
 
-func (s *StorageUsage) MarshalBinary() ([]byte, error) {
+func (s *StorageUsageReq) MarshalBinary() ([]byte, error) {
 	return s.Marshal()
 }
 
-func (s *StorageUsage) UnmarshalBinary(data []byte) error {
+func (s *StorageUsageReq) UnmarshalBinary(data []byte) error {
 	return s.Unmarshal(data)
 }
 
@@ -339,10 +340,17 @@ func (c *CkpMetaInfo) UnmarshalBinary(data []byte) error {
 	return c.Unmarshal(data)
 }
 
-type StorageUsageResp struct {
+type StorageUsageResp_V0 struct {
 	Succeed      bool
 	CkpEntries   []*CkpMetaInfo
 	BlockEntries []*BlockMetaInfo
+}
+
+type StorageUsageResp struct {
+	Succeed bool
+	AccIds  []int32
+	Sizes   []uint64
+	Magic   uint64
 }
 
 func (s *StorageUsageResp) MarshalBinary() ([]byte, error) {

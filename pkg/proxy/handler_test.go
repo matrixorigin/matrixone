@@ -56,8 +56,7 @@ func newTestProxyHandler(t *testing.T) *testProxyHandler {
 	runtime.SetupProcessLevelRuntime(rt)
 	ctx, cancel := context.WithCancel(context.TODO())
 	hc := &mockHAKeeperClient{}
-	mc := clusterservice.NewMOCluster(hc, 3*time.Second,
-		clusterservice.WithDisableRefresh())
+	mc := clusterservice.NewMOCluster(hc, 3*time.Second)
 	rt.SetGlobalVariables(runtime.ClusterService, mc)
 	logger := rt.Logger()
 	st := stopper.NewStopper("test-proxy", stopper.WithLogger(rt.Logger().RawLogger()))
@@ -454,9 +453,6 @@ func TestHandler_HandleEventKillQuery(t *testing.T) {
 			_ = db2.Close()
 		}()
 
-		_, err = db2.Exec("kill query 9999")
-		require.Error(t, err)
-
 		_, err = db2.Exec(fmt.Sprintf("kill query %d", connID))
 		require.NoError(t, err)
 
@@ -504,28 +500,5 @@ func TestHandler_HandleTxn(t *testing.T) {
 		}()
 		_, err = db1.Exec("select 1")
 		require.NoError(t, err)
-
-	})
-}
-
-func TestHandler_HandleEventPrepare(t *testing.T) {
-	testWithServer(t, func(t *testing.T, addr string, s *Server) {
-		db1, err := sql.Open("mysql", fmt.Sprintf("dump:111@unix(%s)/db1", addr))
-		// connect to server.
-		require.NoError(t, err)
-		require.NotNil(t, db1)
-		defer func() {
-			_ = db1.Close()
-		}()
-		_, err = db1.Exec("prepare p1 from 'select ?'")
-		require.NoError(t, err)
-
-		res, err := db1.Query("execute p1 using @pp") // we're just searching the PREPARE stmt.
-		require.NoError(t, err)
-		defer res.Close()
-		err = res.Err()
-		require.NoError(t, err)
-
-		require.Equal(t, int64(1), s.counterSet.connAccepted.Load())
 	})
 }

@@ -19,10 +19,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -30,9 +26,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -101,7 +100,7 @@ func genCreateDatabaseTuple(sql string, accountId, userId, roleId uint32,
 	return bat, nil
 }
 
-func genDropDatabaseTuple(id uint64, name string, m *mpool.MPool) (*batch.Batch, error) {
+func genDropDatabaseTuple(rowid types.Rowid, id uint64, name string, m *mpool.MPool) (*batch.Batch, error) {
 	bat := batch.NewWithSize(2)
 	bat.Attrs = append(bat.Attrs, catalog.MoDatabaseSchema[:2]...)
 	bat.SetRowCount(1)
@@ -125,6 +124,13 @@ func genDropDatabaseTuple(id uint64, name string, m *mpool.MPool) (*batch.Batch,
 			return nil, err
 		}
 	}
+	//add the rowid vector as the first one in the batch
+	vec := vector.NewVec(types.T_Rowid.ToType())
+	if err = vector.AppendFixed(vec, rowid, false, m); err != nil {
+		return nil, err
+	}
+	bat.Vecs = append([]*vector.Vector{vec}, bat.Vecs...)
+	bat.Attrs = append([]string{catalog.Row_ID}, bat.Attrs...)
 	return bat, nil
 }
 
@@ -789,9 +795,9 @@ func newIntConstVal(v any) *plan.Expr {
 func newStringConstVal(v string) *plan.Expr {
 	return &plan.Expr{
 		Typ: types.NewProtoType(types.T_varchar),
-		Expr: &plan.Expr_C{
-			C: &plan.Const{
-				Value: &plan.Const_Sval{Sval: v},
+		Expr: &plan.Expr_Lit{
+			C: &plan.Literal{
+				Value: &plan.Literal_Sval{Sval: v},
 			},
 		},
 	}
@@ -815,6 +821,11 @@ func genWriteReqs(ctx context.Context, writes []Entry, tid string) ([]txn.TxnReq
 	mp := make(map[string][]*api.Entry)
 	v := ctx.Value(defines.PkCheckByTN{})
 	for _, e := range writes {
+		// `DELETE_TXN` and `INSERT_TXN` are only used for CN workspace consumption, not sent to DN
+		if e.typ == DELETE_TXN || e.typ == INSERT_TXN {
+			continue
+		}
+
 		//SKIP update/delete on mo_columns
 		//The TN does not counsume the update/delete on mo_columns.
 		//there are update/delete entries on mo_columns just after one on mo_tables.
@@ -829,7 +840,7 @@ func genWriteReqs(ctx context.Context, writes []Entry, tid string) ([]txn.TxnReq
 		if e.bat == nil || e.bat.IsEmpty() {
 			continue
 		}
-		if e.tableId == catalog.MO_TABLES_ID && e.typ == INSERT {
+		if e.tableId == catalog.MO_TABLES_ID && (e.typ == INSERT || e.typ == INSERT_TXN) {
 			logutil.Infof("precommit: create table: %s-%v", tid, vector.MustStrCol(e.bat.GetVector(1+catalog.MO_TABLES_REL_NAME_IDX)))
 		}
 		if v != nil {
@@ -1128,19 +1139,17 @@ func getTyp(ctx context.Context) string {
 	return ""
 }
 
-func getAccessInfo(ctx context.Context) (uint32, uint32, uint32) {
+func getAccessInfo(ctx context.Context) (uint32, uint32, uint32, error) {
 	var accountId, userId, roleId uint32
+	var err error
 
-	if v := ctx.Value(defines.TenantIDKey{}); v != nil {
-		accountId = v.(uint32)
+	accountId, err = defines.GetAccountId(ctx)
+	if err != nil {
+		return 0, 0, 0, err
 	}
-	if v := ctx.Value(defines.UserIDKey{}); v != nil {
-		userId = v.(uint32)
-	}
-	if v := ctx.Value(defines.RoleIDKey{}); v != nil {
-		roleId = v.(uint32)
-	}
-	return accountId, userId, roleId
+	userId = defines.GetUserId(ctx)
+	roleId = defines.GetRoleId(ctx)
+	return accountId, userId, roleId, nil
 }
 
 /*
@@ -1213,18 +1222,18 @@ func partitionBatch(bat *batch.Batch, expr *plan.Expr, proc *process.Process, dn
 // 	return bats, nil
 // }
 
-func genDatabaseKey(ctx context.Context, name string) databaseKey {
+func genDatabaseKey(id uint32, name string) databaseKey {
 	return databaseKey{
 		name:      name,
-		accountId: defines.GetAccountId(ctx),
+		accountId: id,
 	}
 }
 
-func genTableKey(ctx context.Context, name string, databaseId uint64) tableKey {
+func genTableKey(id uint32, name string, databaseId uint64) tableKey {
 	return tableKey{
 		name:       name,
 		databaseId: databaseId,
-		accountId:  defines.GetAccountId(ctx),
+		accountId:  id,
 	}
 }
 

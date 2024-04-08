@@ -18,6 +18,10 @@ func ActiveWithNoTxnFilter(be *BaseEntryImpl[*MetadataMVCCNode]) bool {
 	return !be.HasDropCommittedLocked() && !be.IsCreatingOrAborted()
 }
 
+func ActiveObjectWithNoTxnFilter(be *BaseEntryImpl[*ObjectMVCCNode]) bool {
+	return !be.HasDropCommittedLocked() && !be.IsCreatingOrAborted()
+}
+
 func AppendableBlkFilter(be *BlockEntry) bool {
 	return be.IsAppendable()
 }

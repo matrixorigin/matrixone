@@ -83,7 +83,9 @@ func newBatch(batchSize int, typs []types.Type, pool *mpool.MPool) *batch.Batch 
 			typ.Scale = 6
 		}
 		vec := vector.NewVec(typ)
-		vec.PreExtend(batchSize, pool)
+		if err := vec.PreExtend(batchSize, pool); err != nil {
+			panic(err)
+		}
 		vec.SetLength(batchSize)
 		//vec.SetOriginal(false)
 		batch.Vecs[i] = vec

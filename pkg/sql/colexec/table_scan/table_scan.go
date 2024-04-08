@@ -16,10 +16,14 @@ package table_scan
 
 import (
 	"bytes"
+	"time"
 
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+const maxBatchMemSize = 8192 * 1024
 
 func (arg *Argument) String(buf *bytes.Buffer) {
 	buf.WriteString(" table_scan ")
@@ -30,17 +34,28 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 }
 
 func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
-	anal := proc.GetAnalyze(arg.info.Idx)
+	t := time.Now()
+	anal := proc.GetAnalyze(arg.info.Idx, arg.info.ParallelIdx, arg.info.ParallelMajor)
 	anal.Start()
-	defer anal.Stop()
+	defer func() {
+		anal.Stop()
+		v2.TxnStatementScanDurationHistogram.Observe(time.Since(t).Seconds())
+	}()
 
 	result := vm.NewCallResult()
-	select {
-	case <-proc.Ctx.Done():
-		result.Batch = nil
-		result.Status = vm.ExecStop
-		return result, proc.Ctx.Err()
-	default:
+	//select {
+	//case <-proc.Ctx.Done():
+	//	result.Batch = nil
+	//	result.Status = vm.ExecStop
+	//	return result, proc.Ctx.Err()
+	//default:
+	//}
+	if err, isCancel := vm.CancelCheck(proc); isCancel {
+		return vm.CancelResult, err
+	}
+
+	if arg.buf != nil {
+		proc.PutBatch(arg.buf)
 	}
 
 	for {
@@ -51,21 +66,45 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 			return result, err
 		}
 
-		if bat != nil {
-			if bat.IsEmpty() {
-				continue
+		if bat == nil {
+			if arg.tmpBuf != nil {
+				arg.buf = arg.tmpBuf
+				arg.tmpBuf = nil
+				break
+			} else {
+				result.Status = vm.ExecStop
+				return result, err
 			}
-
-			bat.Cnt = 1
-			anal.S3IOByte(bat)
-			anal.Alloc(int64(bat.Size()))
 		}
 
-		if arg.buf != nil {
-			proc.PutBatch(arg.buf)
+		if bat.IsEmpty() {
+			continue
 		}
-		arg.buf = bat
-		bat = nil
+
+		bat.Cnt = 1
+		anal.S3IOByte(bat)
+		batSize := bat.Size()
+		if batSize > arg.maxAllocSize {
+			arg.maxAllocSize = batSize
+		}
+
+		if arg.tmpBuf == nil {
+			arg.tmpBuf = bat
+			continue
+		}
+
+		tmpSize := arg.tmpBuf.Size()
+		if arg.tmpBuf.RowCount()+bat.RowCount() < 8192 && tmpSize+batSize < maxBatchMemSize {
+			_, err := arg.tmpBuf.Append(proc.Ctx, proc.GetMPool(), bat)
+			proc.PutBatch(bat)
+			if err != nil {
+				return result, err
+			}
+			continue
+		}
+
+		arg.buf = arg.tmpBuf
+		arg.tmpBuf = bat
 		break
 	}
 

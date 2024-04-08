@@ -396,6 +396,7 @@ insert into trans_index_01 values (1,'13456789872',20.23,'5678'),(2,'13873458290
 -- @session:id=3{
 use unique_secondary_index;
 -- @wait:0:commit
+-- @pattern
 insert into trans_index_01 values (1,'13456789872',20.23,'5678'),(2,'13873458290',100.00,'23');
 -- @session}
 commit;

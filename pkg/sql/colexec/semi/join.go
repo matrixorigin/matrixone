@@ -51,7 +51,11 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 }
 
 func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
-	anal := proc.GetAnalyze(arg.info.Idx)
+	if err, isCancel := vm.CancelCheck(proc); isCancel {
+		return vm.CancelResult, err
+	}
+
+	anal := proc.GetAnalyze(arg.info.Idx, arg.info.ParallelIdx, arg.info.ParallelMajor)
 	anal.Start()
 	defer anal.Stop()
 	ap := arg
@@ -117,7 +121,10 @@ func (ctr *container) build(anal process.Analyze, proc *process.Process) error {
 		}
 		ctr.bat = bat
 		ctr.mp = bat.DupJmAuxData()
-		anal.Alloc(ctr.mp.Size())
+		mpSize := ctr.mp.Size()
+		if mpSize > ctr.maxAllocSize {
+			ctr.maxAllocSize = mpSize
+		}
 	}
 	return nil
 }

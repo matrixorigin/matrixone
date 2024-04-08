@@ -326,9 +326,9 @@ func (e *TestEngine) TryDeleteByDeltalocWithTxn(vals []any, txn txnif.AsyncTxn) 
 	}
 
 	for id, offsets := range idOffsetsMap {
-		seg, err := rel.GetMeta().(*catalog.TableEntry).GetSegmentByID(id.SegmentID())
+		obj, err := rel.GetMeta().(*catalog.TableEntry).GetObjectByID(id.ObjectID())
 		assert.NoError(e.t, err)
-		blk, err := seg.GetBlockEntryByID(&id.BlockID)
+		blk, err := obj.GetBlockEntryByID(&id.BlockID)
 		assert.NoError(e.t, err)
 		deltaLoc, err := MockCNDeleteInS3(e.Runtime.Fs, blk.GetBlockData(), e.schema, txn, offsets)
 		assert.NoError(e.t, err)
@@ -387,7 +387,7 @@ func writeIncrementalCheckpoint(
 	checkpointSize int,
 	fs fileservice.FileService,
 ) (objectio.Location, objectio.Location) {
-	factory := logtail.IncrementalCheckpointDataFactory(start, end, fs, false)
+	factory := logtail.IncrementalCheckpointDataFactory(start, end, false, false)
 	data, err := factory(c)
 	assert.NoError(t, err)
 	defer data.Close()
@@ -432,7 +432,7 @@ func cnReadCheckpointWithVersion(t *testing.T, tid uint64, location objectio.Loc
 	assert.NoError(t, err)
 	for i := len(entries) - 1; i >= 0; i-- {
 		e := entries[i]
-		if e.TableName == fmt.Sprintf("_%d_seg", tid) {
+		if e.TableName == fmt.Sprintf("_%d_obj", tid) {
 			segDel = e.Bat
 		} else if e.EntryType == api.Entry_Delete {
 			del = e.Bat
@@ -451,8 +451,8 @@ func cnReadCheckpointWithVersion(t *testing.T, tid uint64, location objectio.Loc
 }
 
 func checkTNCheckpointData(ctx context.Context, t *testing.T, data *logtail.CheckpointData,
-	start, end types.TS, c *catalog.Catalog, fs fileservice.FileService) {
-	factory := logtail.IncrementalCheckpointDataFactory(start, end, fs, false)
+	start, end types.TS, c *catalog.Catalog) {
+	factory := logtail.IncrementalCheckpointDataFactory(start, end, false, false)
 	data2, err := factory(c)
 	assert.NoError(t, err)
 	defer data2.Close()
@@ -537,7 +537,7 @@ func checkCNCheckpointData(ctx context.Context, t *testing.T, tid uint64, ins, d
 }
 
 func checkMODatabase(ctx context.Context, t *testing.T, ins, del, cnIns, segDel *api.Batch, start, end types.TS, c *catalog.Catalog) {
-	collector := logtail.NewIncrementalCollector(start, end)
+	collector := logtail.NewIncrementalCollector(start, end, false)
 	p := &catalog.LoopProcessor{}
 	p.DatabaseFn = collector.VisitDB
 	err := c.RecurLoop(p)
@@ -553,7 +553,7 @@ func checkMODatabase(ctx context.Context, t *testing.T, ins, del, cnIns, segDel 
 }
 
 func checkMOTables(ctx context.Context, t *testing.T, ins, del, cnIns, segDel *api.Batch, start, end types.TS, c *catalog.Catalog) {
-	collector := logtail.NewIncrementalCollector(start, end)
+	collector := logtail.NewIncrementalCollector(start, end, false)
 	p := &catalog.LoopProcessor{}
 	p.TableFn = collector.VisitTable
 	err := c.RecurLoop(p)
@@ -569,7 +569,7 @@ func checkMOTables(ctx context.Context, t *testing.T, ins, del, cnIns, segDel *a
 }
 
 func checkMOColumns(ctx context.Context, t *testing.T, ins, del, cnIns, segDel *api.Batch, start, end types.TS, c *catalog.Catalog) {
-	collector := logtail.NewIncrementalCollector(start, end)
+	collector := logtail.NewIncrementalCollector(start, end, false)
 	p := &catalog.LoopProcessor{}
 	p.TableFn = collector.VisitTable
 	err := c.RecurLoop(p)
@@ -585,34 +585,39 @@ func checkMOColumns(ctx context.Context, t *testing.T, ins, del, cnIns, segDel *
 	assert.Nil(t, segDel)
 }
 
-func checkUserTables(ctx context.Context, t *testing.T, tid uint64, ins, del, cnIns, segDel *api.Batch, start, end types.TS, c *catalog.Catalog) {
-	collector := logtail.NewIncrementalCollector(start, end)
+func checkUserTables(ctx context.Context, t *testing.T, tid uint64, ins, del, cnIns, seg *api.Batch, start, end types.TS, c *catalog.Catalog) {
+	collector := logtail.NewIncrementalCollector(start, end, false)
 	p := &catalog.LoopProcessor{}
 	p.BlockFn = func(be *catalog.BlockEntry) error {
-		if be.GetSegment().GetTable().ID != tid {
+		if be.GetObject().GetTable().ID != tid {
 			return nil
 		}
 		return collector.VisitBlk(be)
 	}
-	p.SegmentFn = func(se *catalog.SegmentEntry) error {
+	p.ObjectFn = func(se *catalog.ObjectEntry) error {
 		if se.GetTable().ID != tid {
 			return nil
 		}
-		return collector.VisitSeg(se)
+		return collector.VisitObj(se)
 	}
 	err := c.RecurLoop(p)
 	assert.NoError(t, err)
+	collector.LoadAndCollectObject(c, collector.VisitObj)
 	data2 := collector.OrphanData()
 	bats := data2.GetBatches()
 	ins2 := bats[logtail.BLKMetaInsertIDX]
 	del2 := bats[logtail.BLKMetaDeleteIDX]
 	cnIns2 := bats[logtail.BLKCNMetaInsertIDX]
-	segDel2 := bats[logtail.SEGDeleteIDX]
+	seg2 := bats[logtail.ObjectInfoIDX]
 
 	isProtoTNBatchEqual(ctx, t, ins, ins2)
 	isProtoTNBatchEqual(ctx, t, del, del2)
 	isProtoTNBatchEqual(ctx, t, cnIns, cnIns2)
-	isProtoTNBatchEqual(ctx, t, segDel, segDel2)
+
+	// seg batch doesn't exist before ckp V9
+	if seg != nil {
+		isProtoTNBatchEqual(ctx, t, seg, seg2)
+	}
 }
 
 func CheckCheckpointReadWrite(
@@ -626,7 +631,7 @@ func CheckCheckpointReadWrite(
 	location, _ := writeIncrementalCheckpoint(t, start, end, c, checkpointBlockRows, checkpointSize, fs)
 	tnData := tnReadCheckpoint(t, location, fs)
 
-	checkTNCheckpointData(context.Background(), t, tnData, start, end, c, fs)
+	checkTNCheckpointData(context.Background(), t, tnData, start, end, c)
 	p := &catalog.LoopProcessor{}
 
 	ins, del, cnIns, seg, cbs := cnReadCheckpoint(t, pkgcatalog.MO_DATABASE_ID, location, fs)
@@ -698,7 +703,7 @@ func (e *TestEngine) CheckCollectDeleteInRange() {
 		assert.NoError(e.t, err)
 		pkDef := e.schema.GetPrimaryKey()
 		deleteRowIDs := deleteBat.GetVectorByName(catalog.AttrRowID)
-		deletePKs := deleteBat.GetVectorByName(pkDef.Name)
+		deletePKs := deleteBat.GetVectorByName(catalog.AttrPKVal)
 		pks, err := meta.GetBlockData().GetColumnDataById(context.Background(), txn, e.schema, pkDef.Idx, common.DefaultAllocator)
 		assert.NoError(e.t, err)
 		rowIDs, err := meta.GetBlockData().GetColumnDataById(context.Background(), txn, e.schema, e.schema.PhyAddrKey.Idx, common.DefaultAllocator)
@@ -713,5 +718,36 @@ func (e *TestEngine) CheckCollectDeleteInRange() {
 		return nil
 	})
 	err := txn.Commit(context.Background())
+	assert.NoError(e.t, err)
+}
+
+func (e *TestEngine) CheckObjectInfo(onlyCheckName bool) {
+	p := &catalog.LoopProcessor{}
+	p.ObjectFn = func(se *catalog.ObjectEntry) error {
+		se.LoopChain(func(node *catalog.MVCCNode[*catalog.ObjectMVCCNode]) bool {
+			if se.GetTable().GetDB().ID == pkgcatalog.MO_CATALOG_ID {
+				return true
+			}
+			stats, err := se.LoadObjectInfoWithTxnTS(node.Start)
+			assert.NoError(e.t, err)
+			if onlyCheckName {
+				assert.Equal(e.t, stats.ObjectLocation().Name(),
+					node.BaseNode.ObjectStats.ObjectLocation().Name(),
+					"load %v, get %v",
+					stats.String(),
+					node.BaseNode.ObjectStats.String())
+				assert.Equal(e.t, stats.ObjectLocation().Extent(),
+					node.BaseNode.ObjectStats.ObjectLocation().Extent(),
+					"load %v, get %v",
+					stats.String(),
+					node.BaseNode.ObjectStats.String())
+			} else {
+				assert.Equal(e.t, stats, node.BaseNode.ObjectStats, "load %v, get %v", stats.String(), node.BaseNode.ObjectStats.String())
+			}
+			return true
+		})
+		return nil
+	}
+	err := e.Catalog.RecurLoop(p)
 	assert.NoError(e.t, err)
 }

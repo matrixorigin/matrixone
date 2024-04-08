@@ -17,6 +17,7 @@ package fileservice
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"io/fs"
 	"os"
@@ -33,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"go.uber.org/zap"
 )
 
@@ -289,14 +291,16 @@ func (l *LocalFS) Read(ctx context.Context, vector *IOVector) (err error) {
 	bytesCounter := new(atomic.Int64)
 	start := time.Now()
 	defer func() {
-		v2.LocalReadIODurationHistogram.Observe(time.Since(start).Seconds())
+		LocalReadIODuration := time.Since(start)
+
+		v2.LocalReadIODurationHistogram.Observe(LocalReadIODuration.Seconds())
 		v2.LocalReadIOBytesHistogram.Observe(float64(bytesCounter.Load()))
 	}()
 
 	if len(vector.Entries) == 0 {
 		return moerr.NewEmptyVectorNoCtx()
 	}
-
+	startLock := time.Now()
 	unlock, wait := l.ioLocks.Lock(IOLockKey{
 		File: vector.FilePath,
 	})
@@ -305,6 +309,9 @@ func (l *LocalFS) Read(ctx context.Context, vector *IOVector) (err error) {
 	} else {
 		wait()
 	}
+
+	stats := statistic.StatsInfoFromContext(ctx)
+	stats.AddLockTimeConsumption(time.Since(startLock))
 
 	for _, cache := range vector.Caches {
 		cache := cache
@@ -330,6 +337,11 @@ func (l *LocalFS) Read(ctx context.Context, vector *IOVector) (err error) {
 			err = l.memCache.Update(ctx, vector, l.asyncUpdate)
 		}()
 	}
+
+	ioStart := time.Now()
+	defer func() {
+		stats.AddIOAccessTimeConsumption(time.Since(ioStart))
+	}()
 
 	if l.diskCache != nil {
 		if err := l.diskCache.Read(ctx, vector); err != nil {
@@ -369,14 +381,17 @@ func (l *LocalFS) ReadCache(ctx context.Context, vector *IOVector) (err error) {
 		return moerr.NewEmptyVectorNoCtx()
 	}
 
+	startLock := time.Now()
 	unlock, wait := l.ioLocks.Lock(IOLockKey{
 		File: vector.FilePath,
 	})
+
 	if unlock != nil {
 		defer unlock()
 	} else {
 		wait()
 	}
+	statistic.StatsInfoFromContext(ctx).AddLockTimeConsumption(time.Since(startLock))
 
 	for _, cache := range vector.Caches {
 		cache := cache
@@ -725,7 +740,27 @@ func (l *LocalFS) Delete(ctx context.Context, filePaths ...string) error {
 			return err
 		}
 	}
-	return nil
+
+	return errors.Join(
+		func() error {
+			if l.memCache == nil {
+				return nil
+			}
+			return l.memCache.DeletePaths(ctx, filePaths)
+		}(),
+		func() error {
+			if l.diskCache == nil {
+				return nil
+			}
+			return l.diskCache.DeletePaths(ctx, filePaths)
+		}(),
+		func() error {
+			if l.remoteCache == nil {
+				return nil
+			}
+			return l.remoteCache.DeletePaths(ctx, filePaths)
+		}(),
+	)
 }
 
 func (l *LocalFS) deleteSingle(ctx context.Context, filePath string) error {
@@ -790,6 +825,10 @@ func (l *LocalFS) ensureDir(nativePath string) error {
 
 	// create
 	if err := os.Mkdir(nativePath, 0755); err != nil {
+		if os.IsExist(err) {
+			// existed
+			return nil
+		}
 		return err
 	}
 
@@ -959,6 +998,10 @@ func entryIsDir(path string, name string, entry fs.FileInfo) (bool, error) {
 	if entry.Mode().Type()&fs.ModeSymlink > 0 {
 		stat, err := os.Stat(filepath.Join(path, name))
 		if err != nil {
+			if os.IsNotExist(err) {
+				// invalid sym link
+				return false, nil
+			}
 			return false, err
 		}
 		return entryIsDir(path, name, stat)

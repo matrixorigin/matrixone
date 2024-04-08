@@ -51,8 +51,9 @@ func (s *StorageTxnClient) New(
 	ts timestamp.Timestamp,
 	options ...client.TxnOption) (client.TxnOperator, error) {
 	now, _ := s.clock.Now()
+	uid, _ := uuid.NewV7()
 	meta := txn.TxnMeta{
-		ID:         []byte(uuid.NewString()),
+		ID:         []byte(uid.String()),
 		SnapshotTS: now,
 	}
 	return &StorageTxnOperator{
@@ -102,6 +103,16 @@ func (*StorageTxnClient) CNBasedConsistencyEnabled() bool        { panic("unimpl
 type StorageTxnOperator struct {
 	storages map[string]*Storage
 	meta     txn.TxnMeta
+}
+
+func (s *StorageTxnOperator) EnterRunSql() {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (s *StorageTxnOperator) ExitRunSql() {
+	//TODO implement me
+	panic("implement me")
 }
 
 var _ client.TxnOperator = new(StorageTxnOperator)
@@ -277,6 +288,10 @@ func (s *StorageTxnOperator) GetOperationHandler(shard memoryengine.Shard) (memo
 }
 
 func (s *StorageTxnOperator) AddLockTable(lock.LockTable) error {
+	panic("should not call")
+}
+
+func (s *StorageTxnOperator) LockTableCount() int32 {
 	panic("should not call")
 }
 

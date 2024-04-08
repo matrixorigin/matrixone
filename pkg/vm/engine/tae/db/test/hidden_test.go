@@ -24,7 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/testutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
@@ -36,7 +35,7 @@ import (
 // 2. Append data (append rows less than a block) and commit. Scan hidden column and check.
 // 3. Append data and the total rows is more than a block. Commit and then compact the full block.
 // 4. Scan hidden column and check.
-// 5. Append data and the total rows is more than a segment. Commit and then merge sort the full segment.
+// 5. Append data and the total rows is more than a Object. Commit and then merge sort the full Object.
 // 6. Scan hidden column and check.
 func TestHiddenWithPK1(t *testing.T) {
 	defer testutils.AfterTest(t)()
@@ -47,7 +46,7 @@ func TestHiddenWithPK1(t *testing.T) {
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(13, 2)
 	schema.BlockMaxRows = 10
-	schema.SegmentMaxBlocks = 2
+	schema.ObjectMaxBlocks = 2
 	bat := catalog.MockBatch(schema, int(schema.BlockMaxRows*4))
 	defer bat.Close()
 	bats := bat.Split(10)
@@ -119,7 +118,6 @@ func TestHiddenWithPK1(t *testing.T) {
 	testutil.CompactBlocks(t, 0, tae, "db", schema, false)
 
 	txn, rel = testutil.GetDefaultRelation(t, tae, schema.Name)
-	var segMeta *catalog.SegmentEntry
 	{
 		it := rel.MakeBlockIt()
 		for it.Valid() {
@@ -142,7 +140,6 @@ func TestHiddenWithPK1(t *testing.T) {
 			if meta.IsAppendable() {
 				assert.Equal(t, []uint32{0, 1, 2, 3}, offsets)
 			} else {
-				segMeta = meta.GetSegment()
 				assert.Equal(t, []uint32{0, 1, 2, 3, 4, 5, 6, 7, 8, 9}, offsets)
 			}
 			it.Next()
@@ -151,14 +148,8 @@ func TestHiddenWithPK1(t *testing.T) {
 
 	assert.NoError(t, txn.Commit(context.Background()))
 	{
-		factory, taskType, scopes, err := tables.BuildSegmentCompactionTaskFactory(
-			segMeta, tae.Runtime,
-		)
-		assert.NoError(t, err)
-		task, err := tae.Runtime.Scheduler.ScheduleMultiScopedTxnTask(tasks.WaitableCtx, taskType, scopes, factory)
-		assert.NoError(t, err)
-		err = task.WaitDone()
-		assert.NoError(t, err)
+		testutil.CompactBlocks(t, 0, tae, "db", schema, false)
+		testutil.MergeBlocks(t, 0, tae, "db", schema, false)
 	}
 
 	txn, rel = testutil.GetDefaultRelation(t, tae, schema.Name)
@@ -172,7 +163,7 @@ func TestHiddenWithPK1(t *testing.T) {
 			offsets := make([]uint32, 0)
 			meta := blk.GetMeta().(*catalog.BlockEntry)
 			t.Log(meta.String())
-			t.Log(meta.GetSegment().String())
+			t.Log(meta.GetObject().String())
 			_ = view.GetData().Foreach(func(v any, _ bool, _ int) (err error) {
 				rid := v.(types.Rowid)
 				bid, offset := rid.Decode()
@@ -207,7 +198,7 @@ func TestHidden2(t *testing.T) {
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(3, -1)
 	schema.BlockMaxRows = 10
-	schema.SegmentMaxBlocks = 2
+	schema.ObjectMaxBlocks = 2
 	bat := catalog.MockBatch(schema, int(schema.BlockMaxRows*4))
 	defer bat.Close()
 	bats := bat.Split(10)
@@ -291,45 +282,27 @@ func TestHidden2(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit(context.Background()))
 
-	txn, rel = testutil.GetDefaultRelation(t, tae, schema.Name)
-	{
-		it := rel.MakeBlockIt()
-		blks := make([]data.Block, 0)
-		for it.Valid() {
-			blk := it.GetBlock().GetMeta().(*catalog.BlockEntry).GetBlockData()
-			blks = append(blks, blk)
-			it.Next()
-		}
-		for _, blk := range blks {
-			factory, taskType, scopes, err := blk.BuildCompactionTaskFactory()
-			assert.NoError(t, err)
-			task, err := tae.Runtime.Scheduler.ScheduleMultiScopedTxnTask(tasks.WaitableCtx, taskType, scopes, factory)
-			assert.NoError(t, err)
-			err = task.WaitDone()
-			assert.NoError(t, err)
-		}
-	}
-	assert.NoError(t, txn.Commit(context.Background()))
+	testutil.CompactBlocks(t, 0, tae, "db", schema, false)
 
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))
 	txn, rel = testutil.GetDefaultRelation(t, tae, schema.Name)
 	{
-		it := rel.MakeSegmentIt()
-		segs := make([]*catalog.SegmentEntry, 0)
+		it := rel.MakeObjectIt()
+		objs := make([]*catalog.ObjectEntry, 0)
 		for it.Valid() {
-			seg := it.GetSegment().GetMeta().(*catalog.SegmentEntry)
-			segs = append(segs, seg)
+			obj := it.GetObject().GetMeta().(*catalog.ObjectEntry)
+			objs = append(objs, obj)
 			it.Next()
 		}
-		for _, seg := range segs {
-			factory, taskType, scopes, err := tables.BuildSegmentCompactionTaskFactory(seg, tae.Runtime)
+		for _, obj := range objs {
+			factory, taskType, scopes, err := tables.BuildObjectCompactionTaskFactory(obj, tae.Runtime)
 			assert.NoError(t, err)
 			if factory == nil {
 				continue
 			}
 			task, err := tae.Runtime.Scheduler.ScheduleMultiScopedTxnTask(tasks.WaitableCtx, taskType, scopes, factory)
 			assert.NoError(t, err)
-			err = task.WaitDone()
+			err = task.WaitDone(ctx)
 			assert.NoError(t, err)
 		}
 

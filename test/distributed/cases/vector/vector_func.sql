@@ -27,10 +27,8 @@ select * from vtab32 where SUMMATION(vecf32_3) = 33.89660960435867;
 select * from vtab32 where SUMMATION(vecf32_3) > 33.89660960435867;
 select distinct(SUMMATION(vecf32_3)) from vtab32;
 select sum(SUMMATION(vecf32_3)) from vtab32;
--- @bvt:issue#13061
 select min(SUMMATION(vecf32_3)) from vtab32;
 select max(SUMMATION(vecf32_3)) from vtab32;
--- @bvt:issue
 select avg(SUMMATION(vecf32_3)) from vtab32;
 select count(SUMMATION(vecf32_3)) from vtab32;
 select abs(SUMMATION(vecf64_3)) from vtab64;
@@ -59,10 +57,8 @@ select * from vtab32 where inner_product(vecf32_3,vecf32_3) = 675766.8704508307;
 select * from vtab32 where inner_product(vecf32_3,vecf32_3) <= 1.3494319015309593;
 select distinct(inner_product(vecf32_3,vecf32_3)) from vtab32;
 select sum(inner_product(vecf32_3,vecf32_3)) from vtab32;
--- @bvt:issue#13061
 select min(inner_product(vecf32_5,vecf32_5)) from vtab32;
 select max(inner_product(vecf32_3,vecf32_3)) from vtab32;
--- @bvt:issue
 select avg(inner_product(vecf32_5,vecf32_5)) from vtab32;
 select count(inner_product(vecf32_5,vecf32_5)) from vtab32;
 select sin(inner_product(vecf64_3,vecf64_3)) from vtab64;
@@ -89,10 +85,8 @@ select * from vtab32 where l1_norm(vecf32_3) = 1.9714266657829285;
 select * from vtab32 where l1_norm(vecf32_3) > 1.9714266657829285;
 select distinct(l1_norm(vecf32_3)) from vtab32;
 select sum(l1_norm(vecf32_3)) from vtab32;
--- @bvt:issue#13061
 select min(l1_norm(vecf32_3)) from vtab32;
 select max(l1_norm(vecf32_3)) from vtab32;
--- @bvt:issue
 select avg(l1_norm(vecf32_3)) from vtab32;
 select count(l1_norm(vecf32_3)) from vtab32;
 select abs(l1_norm(vecf64_3)) from vtab64;
@@ -120,10 +114,8 @@ select * from vtab32 where l2_norm(vecf32_3) = 1.1616505074810406;
 select * from vtab32 where l2_norm(vecf32_3) > 1.1616505074810406;
 select distinct(l2_norm(vecf32_3)) from vtab32;
 select sum(l2_norm(vecf32_3)) from vtab32;
--- @bvt:issue#13061
 select min(l2_norm(vecf32_3)) from vtab32;
 select max(l2_norm(vecf32_3)) from vtab32;
--- @bvt:issue
 select avg(l2_norm(vecf32_3)) from vtab32;
 select count(l2_norm(vecf32_3)) from vtab32;
 select abs(l2_norm(vecf64_3)) from vtab64;
@@ -148,10 +140,8 @@ select * from vtab32 where vector_dims(vecf32_3) = 3;
 select * from vtab32 where vector_dims(vecf32_3) > 3;
 select distinct(vector_dims(vecf32_3)) from vtab32;
 select sum(vector_dims(vecf32_3)) from vtab32;
--- @bvt:issue#13061
 select min(vector_dims(vecf32_3)) from vtab32;
 select max(vector_dims(vecf32_3)) from vtab32;
--- @bvt:issue
 select avg(vector_dims(vecf32_3)) from vtab32;
 select count(vector_dims(vecf32_3)) from vtab32;
 select abs(vector_dims(vecf64_3)) from vtab64;
@@ -204,10 +194,8 @@ select * from vtab32_1 where cosine_similarity(vecf32_3,vecf32_3_1) = 0.97881392
 select * from vtab32_1 where cosine_similarity(vecf32_3,vecf32_3) <= 0.9788139235276682;
 select distinct(cosine_similarity(vecf32_3,vecf32_3_1)) from vtab32_1;
 select sum(cosine_similarity(vecf32_3,vecf32_3_1)) from vtab32_1;
--- @bvt:issue#13061
 select min(cosine_similarity(vecf32_5,vecf32_5_1)) from vtab32_1;
 select max(cosine_similarity(vecf32_3,vecf32_3_1)) from vtab32_1;
--- @bvt:issue
 select avg(cosine_similarity(vecf32_5,vecf32_5_1)) from vtab32_1;
 select count(cosine_similarity(vecf32_5,vecf32_5_1)) from vtab32_1;
 select sin(cosine_similarity(vecf64_3,vecf64_3_1)) from vtab64_1;
@@ -219,4 +207,5 @@ select cosine_similarity(vecf64_3,vecf64_3_1) / cosine_similarity(vecf64_5,vecf6
 select * from (select cosine_similarity(vecf32_3,vecf32_3_1),cosine_similarity(vecf32_5,vecf32_5_1) from vtab32_1);
 select cosine_similarity(vecf64_3,vecf64_3_1), cosine_similarity(vecf64_5,vecf64_5_1) from (select * from vtab64_1);
 WITH qn AS (select cosine_similarity(vecf32_3,vecf32_3_1),cosine_similarity(vecf32_5,vecf32_5_1) from vtab32_1) SELECT * FROM qn;
-
+select cosine_similarity(vecf32_3,vecf32_3), cosine_similarity(vecf32_5,vecf32_5) from vtab32;
+select cosine_similarity(vecf64_3,vecf64_3), cosine_similarity(vecf64_5,vecf64_5) from vtab64;

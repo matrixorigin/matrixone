@@ -167,6 +167,8 @@ type Protocol interface {
 
 	GetCapability() uint32
 
+	SetCapability(uint32)
+
 	GetConnectAttrs() map[string]string
 
 	IsTlsEstablished() bool
@@ -235,10 +237,6 @@ func (pi *ProtocolImpl) setQuit(b bool) bool {
 
 func (pi *ProtocolImpl) GetSequenceId() uint8 {
 	return uint8(pi.sequenceId.Load())
-}
-
-func (pi *ProtocolImpl) SetSequenceID(value uint8) {
-	pi.sequenceId.Store(uint32(value))
 }
 
 func (pi *ProtocolImpl) getDebugStringUnsafe() string {
@@ -334,7 +332,6 @@ func (mp *MysqlProtocolImpl) getAbortTransactionErrorInfo() string {
 	//update error message in Case1,Case3,Case4.
 	if ses != nil && ses.OptionBitsIsSet(OPTION_ATTACH_ABORT_TRANSACTION_ERROR) {
 		ses.ClearOptionBits(OPTION_ATTACH_ABORT_TRANSACTION_ERROR)
-		return abortTransactionErrorInfo()
 	}
 	return ""
 }
@@ -418,6 +415,10 @@ func (fp *FakeProtocol) GetCapability() uint32 {
 	return DefaultCapability
 }
 
+func (fp *FakeProtocol) SetCapability(uint32) {
+
+}
+
 func (fp *FakeProtocol) IsTlsEstablished() bool {
 	return true
 }
@@ -499,7 +500,7 @@ func (fp *FakeProtocol) GetStats() string {
 	return ""
 }
 
-func (fp *FakeProtocol) CalculateOutTrafficBytes() int64 { return 0 }
+func (fp *FakeProtocol) CalculateOutTrafficBytes(reset bool) (int64, int64) { return 0, 0 }
 
 func (fp *FakeProtocol) IsEstablished() bool {
 	return true

@@ -20,6 +20,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+
 	"github.com/golang/mock/gomock"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
@@ -87,7 +90,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionAgg"
 	"github.com/matrixorigin/matrixone/pkg/vm"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -109,7 +111,7 @@ func Test_CnServerMessageHandler(t *testing.T) {
 	procInfoData, err := procInfo.Marshal()
 	require.Nil(t, err)
 
-	id, _ := uuid.NewUUID()
+	id, _ := uuid.NewV7()
 	pipe := &pipeline.Pipeline{
 		UuidsToRegIdx: []*pipeline.UuidToRegIdx{
 			{Idx: 1, Uuid: id[:]},
@@ -208,7 +210,7 @@ func Test_receiveMessageFromCnServer(t *testing.T) {
 		false,
 		[]types.Type{types.T_int64.ToType()},
 		types.T_int64.ToType(),
-		0, 0,
+		0,
 	)
 	require.Nil(t, err)
 
@@ -278,13 +280,14 @@ func Test_EncodeProcessInfo(t *testing.T) {
 	txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
 	txnOperator.EXPECT().Snapshot().Return(([]byte)("test"), nil)
 
+	a := process.NewAnalyzeInfo()
 	proc := &process.Process{
 		Id:          "1",
 		Lim:         process.Limitation{},
 		UnixTime:    1000000,
-		Ctx:         context.TODO(),
+		Ctx:         defines.AttachAccountId(context.TODO(), catalog.System_Account),
 		TxnOperator: txnOperator,
-		AnalInfos:   []*process.AnalyzeInfo{{NodeId: 1}},
+		AnalInfos:   []*process.AnalyzeInfo{a},
 		SessionInfo: process.SessionInfo{
 			Account:        "",
 			User:           "",
@@ -329,7 +332,7 @@ func Test_refactorScope(t *testing.T) {
 }
 
 func Test_convertPipelineUuid(t *testing.T) {
-	id, _ := uuid.NewUUID()
+	id, _ := uuid.NewV7()
 	p := &pipeline.Pipeline{
 		UuidsToRegIdx: []*pipeline.UuidToRegIdx{
 			{Idx: 1, Uuid: id[:]},
@@ -343,7 +346,7 @@ func Test_convertPipelineUuid(t *testing.T) {
 }
 
 func Test_convertScopeRemoteReceivInfo(t *testing.T) {
-	id, _ := uuid.NewUUID()
+	id, _ := uuid.NewV7()
 	s := &Scope{
 		RemoteReceivRegInfos: []RemoteReceivRegInfo{
 			{Idx: 1, Uuid: id},
@@ -534,7 +537,7 @@ func Test_convertToPipelineInstruction(t *testing.T) {
 		regs:     nil,
 	}
 	for _, instruction := range instructions {
-		_, _, err := convertToPipelineInstruction(instruction, ctx, 1, engine.Node{})
+		_, _, err := convertToPipelineInstruction(instruction, ctx, 1)
 		require.Nil(t, err)
 	}
 }
@@ -605,10 +608,9 @@ func Test_convertToVmInstruction(t *testing.T) {
 }
 
 func Test_mergeAnalyseInfo(t *testing.T) {
+	a := process.NewAnalyzeInfo()
 	target := &anaylze{
-		analInfos: []*process.AnalyzeInfo{
-			{},
-		},
+		analInfos: []*process.AnalyzeInfo{a},
 	}
 	ana := &pipeline.AnalysisList{
 		List: []*plan2.AnalyzeInfo{
@@ -653,7 +655,8 @@ func Test_convertToProcessSessionInfo(t *testing.T) {
 }
 
 func Test_convertToPlanAnalyzeInfo(t *testing.T) {
-	info := &process.AnalyzeInfo{InputRows: 100}
+	info := process.NewAnalyzeInfo()
+	info.InputRows = 100
 	analyzeInfo := convertToPlanAnalyzeInfo(info)
 	require.Equal(t, analyzeInfo.InputRows, int64(100))
 }
@@ -677,7 +680,7 @@ func Test_decodeBatch(t *testing.T) {
 		false,
 		[]types.Type{types.T_int64.ToType()},
 		types.T_int64.ToType(),
-		0, 0,
+		0,
 	)
 	require.Nil(t, err)
 

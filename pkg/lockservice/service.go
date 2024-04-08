@@ -47,7 +47,7 @@ var (
 type service struct {
 	cfg                  Config
 	serviceID            string
-	tables               sync.Map // table id -> locktable
+	tables               *lockTableHolder
 	activeTxnHolder      activeTxnHolder
 	fsp                  *fixedSlicePool
 	deadlockDetector     *detector
@@ -84,6 +84,7 @@ func NewLockService(cfg Config) LockService {
 			stopper.WithLogger(getLogger().RawLogger())),
 		fetchWhoWaitingListC: make(chan who, 10240),
 	}
+	s.tables = &lockTableHolder{id: s.serviceID, tables: make(map[uint64]lockTable)}
 	s.mu.allocating = make(map[uint64]chan struct{})
 	s.activeTxnHolder = newMapBasedTxnHandler(s.serviceID, s.fsp)
 	s.deadlockDetector = newDeadlockDetector(
@@ -197,10 +198,7 @@ func (s *service) Close() error {
 	var err error
 	s.stopOnce.Do(func() {
 		s.stopper.Stop()
-		s.tables.Range(func(key, value any) bool {
-			value.(lockTable).close()
-			return true
-		})
+		s.tables.removeWithFilter(func(_ uint64, _ lockTable) bool { return true })
 		if err = s.remote.client.Close(); err != nil {
 			return
 		}
@@ -284,11 +282,11 @@ func (s *service) waitLockTableBind(
 	if c != nil {
 		<-c
 	}
-	return s.loadLockTable(tableID)
+	return s.tables.get(tableID)
 }
 
 func (s *service) getLockTableWithCreate(tableID uint64, create bool) (lockTable, error) {
-	if v := s.loadLockTable(tableID); v != nil {
+	if v := s.tables.get(tableID); v != nil {
 		return v, nil
 	}
 	if !create {
@@ -302,10 +300,10 @@ func (s *service) getLockTableWithCreate(tableID uint64, create bool) (lockTable
 		if waitC != nil {
 			s.mu.Unlock()
 			<-waitC
-			return s.loadLockTable(tableID)
+			s.mu.Lock()
 		}
 
-		v := s.loadLockTable(tableID)
+		v := s.tables.get(tableID)
 		if v == nil {
 			c = make(chan struct{})
 			s.mu.allocating[tableID] = c
@@ -331,20 +329,13 @@ func (s *service) getLockTableWithCreate(tableID uint64, create bool) (lockTable
 		return nil, err
 	}
 
-	l := s.createLockTableByBind(bind)
-	if _, loaded := s.tables.LoadOrStore(tableID, l); loaded {
-		getLogger().Fatal("BUG: cannot loaded lock table from tables")
-	}
-	return l, nil
+	v := s.tables.set(tableID, s.createLockTableByBind(bind))
+	return v, nil
 }
 
 func (s *service) handleBindChanged(newBind pb.LockTable) {
 	new := s.createLockTableByBind(newBind)
-	old, loaded := s.tables.Swap(newBind.Table, new)
-	if loaded {
-		old.(lockTable).close()
-	}
-	logRemoteBindChanged(s.serviceID, old.(lockTable).getBind(), newBind)
+	s.tables.set(newBind.Table, new)
 }
 
 func (s *service) createLockTableByBind(bind pb.LockTable) lockTable {
@@ -367,13 +358,6 @@ func (s *service) createLockTableByBind(bind pb.LockTable) lockTable {
 			s.remote.client,
 			s.handleBindChanged)
 	}
-}
-
-func (s *service) loadLockTable(tableID uint64) lockTable {
-	if v, ok := s.tables.Load(tableID); ok {
-		return v.(lockTable)
-	}
-	return nil
 }
 
 type activeTxnHolder interface {
@@ -567,4 +551,60 @@ func decodeSharedTableID(tableID uint64) (tenantID uint32, sharedTableID uint64,
 func isSharedTable(id uint64) bool {
 	_, ok := sharedTables[id]
 	return ok
+}
+
+type lockTableHolder struct {
+	sync.RWMutex
+	id     string
+	tables map[uint64]lockTable
+}
+
+func (m *lockTableHolder) get(id uint64) lockTable {
+	m.RLock()
+	defer m.RUnlock()
+	return m.tables[id]
+}
+
+func (m *lockTableHolder) set(id uint64, new lockTable) lockTable {
+	m.Lock()
+	defer m.Unlock()
+
+	old, ok := m.tables[id]
+
+	if !ok {
+		m.tables[id] = new
+		return new
+	}
+
+	oldBind := old.getBind()
+	newBind := new.getBind()
+	if oldBind.Changed(newBind) {
+		old.close()
+		m.tables[id] = new
+		logRemoteBindChanged(m.id, oldBind, newBind)
+		return new
+	}
+	new.close()
+	return old
+}
+
+func (m *lockTableHolder) iter(fn func(uint64, lockTable) bool) {
+	m.RLock()
+	defer m.RUnlock()
+	for id, v := range m.tables {
+		if !fn(id, v) {
+			return
+		}
+	}
+}
+
+func (m *lockTableHolder) removeWithFilter(filter func(uint64, lockTable) bool) {
+	m.Lock()
+	defer m.Unlock()
+	for id, v := range m.tables {
+		if filter(id, v) {
+			v.close()
+			delete(m.tables, id)
+		}
+	}
 }

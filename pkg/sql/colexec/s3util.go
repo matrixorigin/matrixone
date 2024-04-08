@@ -273,6 +273,7 @@ func (w *S3Writer) Output(proc *process.Process, result *vm.CallResult) error {
 	for i := range w.blockInfoBat.Attrs {
 		vec := proc.GetVector(*w.blockInfoBat.Vecs[i].GetType())
 		if err := vec.UnionBatch(w.blockInfoBat.Vecs[i], 0, w.blockInfoBat.Vecs[i].Length(), nil, proc.GetMPool()); err != nil {
+			vec.Free(proc.Mp())
 			return err
 		}
 		bat.SetVector(int32(i), vec)
@@ -371,11 +372,13 @@ func (w *S3Writer) Put(bat *batch.Batch, proc *process.Process) bool {
 		if left := int(options.DefaultBlockMaxRows) - rbat.RowCount(); rows > left {
 			rows = left
 		}
+
+		var err error
 		for i := 0; i < bat.VectorCount(); i++ {
 			vec := rbat.GetVector(int32(i))
 			srcVec := bat.GetVector(int32(i))
 			for j := 0; j < rows; j++ {
-				if err := w.ufs[i](vec, srcVec, int64(j+start)); err != nil {
+				if err = w.ufs[i](vec, srcVec, int64(j+start)); err != nil {
 					panic(err)
 				}
 			}
@@ -617,6 +620,9 @@ func (w *S3Writer) WriteBlock(bat *batch.Batch, dataType ...objectio.DataMetaTyp
 	if w.pk > -1 {
 		pkIdx := uint16(w.pk)
 		w.writer.SetPrimaryKey(pkIdx)
+	}
+	if w.sortIndex > -1 {
+		w.writer.SetSortKey(uint16(w.sortIndex))
 	}
 	if w.attrs == nil {
 		w.attrs = bat.Attrs

@@ -19,7 +19,6 @@ import (
 	"fmt"
 	"math/rand"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -100,7 +99,7 @@ func init() {
 	var err error
 	wareHouse = catalog.NewEmptySchema("WAREHOUSE")
 	wareHouse.BlockMaxRows = 40000
-	wareHouse.SegmentMaxBlocks = 40
+	wareHouse.ObjectMaxBlocks = 40
 	_ = wareHouse.AppendPKCol("W_ID", types.T_uint8.ToType(), 0)
 	_ = wareHouse.AppendCol("W_NAME", types.T_varchar.ToType())
 	_ = wareHouse.AppendCol("W_STREET_1", types.T_varchar.ToType())
@@ -116,7 +115,7 @@ func init() {
 
 	district = catalog.NewEmptySchema("DISTRICT")
 	district.BlockMaxRows = 40000
-	district.SegmentMaxBlocks = 40
+	district.ObjectMaxBlocks = 40
 	_ = district.AppendPKCol("D_ID", types.T_int16.ToType(), 0)
 	_ = district.AppendCol("D_W_ID", types.T_uint8.ToType())
 	_ = district.AppendCol("D_NAME", types.T_varchar.ToType())
@@ -134,7 +133,7 @@ func init() {
 
 	balance = catalog.NewEmptySchema("BALANCE")
 	balance.BlockMaxRows = 40000
-	balance.SegmentMaxBlocks = 40
+	balance.ObjectMaxBlocks = 40
 	_ = balance.AppendPKCol("ID", types.T_uint64.ToType(), 0)
 	_ = balance.AppendCol("BALANCE", types.T_float64.ToType())
 	// balance.AppendCol("USERID", types.T_uint64.ToType())
@@ -144,7 +143,7 @@ func init() {
 
 	user = catalog.NewEmptySchema("USER")
 	user.BlockMaxRows = 40000
-	user.SegmentMaxBlocks = 40
+	user.ObjectMaxBlocks = 40
 	_ = user.AppendPKCol("ID", types.T_uint64.ToType(), 0)
 	_ = user.AppendCol("NAME", types.T_varchar.ToType())
 	_ = user.AppendCol("BIRTH", types.T_date.ToType())
@@ -156,7 +155,7 @@ func init() {
 
 	goods = catalog.NewEmptySchema("GOODS")
 	goods.BlockMaxRows = 40000
-	goods.SegmentMaxBlocks = 40
+	goods.ObjectMaxBlocks = 40
 	_ = goods.AppendPKCol("ID", types.T_uint64.ToType(), 0)
 	_ = goods.AppendCol("NAME", types.T_varchar.ToType())
 	_ = goods.AppendCol("PRICE", types.T_float64.ToType())
@@ -167,7 +166,7 @@ func init() {
 
 	repertory = catalog.NewEmptySchema("REPERTORY")
 	repertory.BlockMaxRows = 40000
-	repertory.SegmentMaxBlocks = 40
+	repertory.ObjectMaxBlocks = 40
 	_ = repertory.AppendPKCol("ID", types.T_uint64.ToType(), 0)
 	_ = repertory.AppendCol("GOODID", types.T_uint64.ToType())
 	_ = repertory.AppendCol("COUNT", types.T_uint64.ToType())
@@ -177,7 +176,7 @@ func init() {
 
 	deal = catalog.NewEmptySchema("DEAL")
 	deal.BlockMaxRows = 40000
-	deal.SegmentMaxBlocks = 40
+	deal.ObjectMaxBlocks = 40
 	_ = deal.AppendPKCol("ID", types.T_uint64.ToType(), 0)
 	_ = deal.AppendCol("USERID", types.T_uint64.ToType())
 	_ = deal.AppendCol("GOODID", types.T_uint64.ToType())
@@ -568,7 +567,7 @@ func TestTxn7(t *testing.T) {
 	defer tae.Close()
 	schema := catalog.MockSchemaAll(13, 12)
 	schema.BlockMaxRows = 10
-	schema.SegmentMaxBlocks = 2
+	schema.ObjectMaxBlocks = 2
 
 	bat := catalog.MockBatch(schema, 20)
 	defer bat.Close()
@@ -607,7 +606,7 @@ func TestTxn8(t *testing.T) {
 	tae := testutil.InitTestDB(ctx, ModuleName, t, nil)
 	schema := catalog.MockSchemaAll(13, 2)
 	schema.BlockMaxRows = 10
-	schema.SegmentMaxBlocks = 2
+	schema.ObjectMaxBlocks = 2
 
 	bat := catalog.MockBatch(schema, int(schema.BlockMaxRows*10))
 	defer bat.Close()
@@ -657,7 +656,7 @@ func TestTxn9(t *testing.T) {
 
 	schema := catalog.MockSchemaAll(13, 12)
 	schema.BlockMaxRows = 20
-	schema.SegmentMaxBlocks = 4
+	schema.ObjectMaxBlocks = 4
 	expectRows := schema.BlockMaxRows * 5 / 2
 	bat := catalog.MockBatch(schema, int(expectRows))
 	defer bat.Close()
@@ -670,43 +669,38 @@ func TestTxn9(t *testing.T) {
 
 	var wg sync.WaitGroup
 
-	var val atomic.Uint32
-
-	scanNames := func() {
+	scanNames := func(txn txnif.AsyncTxn) {
 		defer wg.Done()
-		txn, _ := tae.StartTxn(nil)
-		db, _ := txn.GetDatabase("db")
+		txn2, _ := tae.StartTxn(nil)
+		db, _ := txn2.GetDatabase("db")
 		it := db.MakeRelationIt()
 		cnt := 0
 		for it.Valid() {
 			cnt++
 			it.Next()
 		}
-		val.Store(2)
-		// Use max commit ts as start ts
-		// 2nd relation is not visible
-		assert.Equal(t, 1, cnt)
-		assert.NoError(t, txn.Commit(context.Background()))
+		if txn2.GetStartTS().Greater(txn.GetPrepareTS()) {
+			assert.Equal(t, 2, cnt)
+		} else {
+			assert.Equal(t, 1, cnt)
+		}
+		assert.NoError(t, txn2.Commit(context.Background()))
 	}
 
-	scanCol := func() {
+	scanCol := func(waitExpect, nowaitExpect int, waitTxn txnif.AsyncTxn) {
 		defer wg.Done()
 		txn, _ := tae.StartTxn(nil)
 		db, _ := txn.GetDatabase("db")
 		rel, _ := db.GetRelationByName(schema.Name)
-		rows := 0
-		it := rel.MakeBlockIt()
-		for it.Valid() {
-			blk := it.GetBlock()
-			view, err := blk.GetColumnDataById(context.Background(), 2, common.DefaultAllocator)
-			assert.NoError(t, err)
-			defer view.Close()
-			t.Log(view.GetData().String())
-			rows += blk.Rows()
-			it.Next()
+		if waitTxn != nil {
+			if txn.GetStartTS().Greater(waitTxn.GetPrepareTS()) {
+				testutil.CheckAllColRowsByScan(t, rel, waitExpect, true)
+			} else {
+				testutil.CheckAllColRowsByScan(t, rel, nowaitExpect, true)
+			}
+		} else {
+			testutil.CheckAllColRowsByScan(t, rel, nowaitExpect, true)
 		}
-		val.Store(2)
-		// assert.Equal(t, int(expectRows/5*2), rows)
 		assert.NoError(t, txn.Commit(context.Background()))
 	}
 
@@ -714,9 +708,8 @@ func TestTxn9(t *testing.T) {
 	db, _ = txn.GetDatabase("db")
 	txn.SetApplyCommitFn(func(txn txnif.AsyncTxn) error {
 		wg.Add(1)
-		go scanNames()
+		go scanNames(txn)
 		time.Sleep(time.Millisecond * 10)
-		val.Store(1)
 		store := txn.GetStore()
 		return store.ApplyCommit()
 	})
@@ -727,22 +720,20 @@ func TestTxn9(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit(context.Background()))
 	wg.Wait()
-	// Use max commit ts as start ts
-	// When reading snapshot, it's not necessary to wait commit.
-	assert.Equal(t, uint32(1), val.Load())
 
-	apply := func(_ txnif.AsyncTxn) error {
-		wg.Add(1)
-		go scanCol()
-		time.Sleep(time.Millisecond * 10)
-		val.Store(1)
-		store := txn.GetStore()
-		return store.ApplyCommit()
+	apply := func(waitExpect, nowaitExpect int, waitTxn txnif.AsyncTxn) func(txnif.AsyncTxn) error {
+		return func(txn txnif.AsyncTxn) error {
+			wg.Add(1)
+			go scanCol(waitExpect, nowaitExpect, waitTxn)
+			time.Sleep(time.Millisecond * 10)
+			store := txn.GetStore()
+			return store.ApplyCommit()
+		}
 	}
 
 	txn, _ = tae.StartTxn(nil)
 	db, _ = txn.GetDatabase("db")
-	txn.SetApplyCommitFn(apply)
+	txn.SetApplyCommitFn(apply(int(expectRows)/5*2, int(expectRows/5), txn))
 	rel, _ = db.GetRelationByName(schema.Name)
 	err = rel.Append(context.Background(), bats[1])
 	assert.NoError(t, err)
@@ -751,7 +742,7 @@ func TestTxn9(t *testing.T) {
 
 	txn, _ = tae.StartTxn(nil)
 	db, _ = txn.GetDatabase("db")
-	txn.SetApplyCommitFn(apply)
+	txn.SetApplyCommitFn(apply(int(expectRows/5*2)-1, int(expectRows/5)*2, txn))
 	rel, _ = db.GetRelationByName(schema.Name)
 	v := bats[0].Vecs[schema.GetSingleSortKeyIdx()].Get(2)
 	filter := handle.NewEQFilter(v)
@@ -764,7 +755,7 @@ func TestTxn9(t *testing.T) {
 
 	txn, _ = tae.StartTxn(nil)
 	db, _ = txn.GetDatabase("db")
-	txn.SetApplyCommitFn(apply)
+	txn.SetApplyCommitFn(apply(0, int(expectRows/5*2)-1, nil))
 	rel, _ = db.GetRelationByName(schema.Name)
 	v = bats[0].Vecs[schema.GetSingleSortKeyIdx()].Get(3)
 	filter = handle.NewEQFilter(v)

@@ -347,6 +347,14 @@ func (svit SystemVariableIntType) Convert(value interface{}) (interface{}, error
 		return nil, errorConvertToIntFailed
 	}
 
+	cv3 := func(x string) (interface{}, error) {
+		convertVal, err := strconv.ParseInt(x, 10, 64)
+		if err != nil {
+			return nil, errorConvertToIntFailed
+		}
+		return cv1(convertVal)
+	}
+
 	switch v := value.(type) {
 	case int:
 		return cv1(int64(v))
@@ -372,6 +380,8 @@ func (svit SystemVariableIntType) Convert(value interface{}) (interface{}, error
 		return cv2(float64(v))
 	case float64:
 		return cv2(v)
+	case string:
+		return cv3(v)
 	}
 	return nil, errorConvertToIntFailed
 }
@@ -1074,7 +1084,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           true,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableIntType("max_allowed_packet", 1024, 1073741824, false),
-		Default:           int64(16777216),
+		Default:           int64(67108864),
 	},
 	"version_comment": {
 		Name:              "version_comment",
@@ -3390,6 +3400,14 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableIntType("thread_pool_transaction_delay", 0, 300000, false),
 		Default:           int64(0),
 	},
+	"transferred": {
+		Name:              "transferred",
+		Scope:             ScopeSession,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableBoolType("autocommit"),
+		Default:           int64(0),
+	},
 	"tls_ciphersuites": {
 		Name:              "tls_ciphersuites",
 		Scope:             ScopeGlobal,
@@ -3594,4 +3612,9 @@ func valueIsBoolTrue(value interface{}) (bool, error) {
 		return false, err2
 	}
 	return svbt.IsTrue(newValue), nil
+}
+
+type UserDefinedVar struct {
+	Value interface{}
+	Sql   string
 }

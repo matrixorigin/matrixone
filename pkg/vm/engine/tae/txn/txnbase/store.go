@@ -30,6 +30,10 @@ var NoopStoreFactory = func() txnif.TxnStore { return new(NoopTxnStore) }
 
 type NoopTxnStore struct{}
 
+func (store *NoopTxnStore) StartTrace()        {}
+func (store *NoopTxnStore) TriggerTrace(uint8) {}
+func (store *NoopTxnStore) EndTrace()          {}
+
 func (store *NoopTxnStore) Freeze() error                                { return nil }
 func (store *NoopTxnStore) WaitPrepared(ctx context.Context) (err error) { return }
 func (store *NoopTxnStore) GetLSN() uint64                               { return 0 }
@@ -41,7 +45,7 @@ func (store *NoopTxnStore) Append(ctx context.Context, dbId, id uint64, data *co
 func (store *NoopTxnStore) AddBlksWithMetaLoc(
 	ctx context.Context,
 	dbId, tid uint64,
-	metaLocs []objectio.Location,
+	stats containers.Vector,
 ) error {
 	return nil
 }
@@ -94,14 +98,14 @@ func (store *NoopTxnStore) UnsafeGetRelation(dbId, id uint64) (rel handle.Relati
 func (store *NoopTxnStore) GetDatabase(name string) (db handle.Database, err error)   { return }
 func (store *NoopTxnStore) GetDatabaseByID(id uint64) (db handle.Database, err error) { return }
 func (store *NoopTxnStore) DatabaseNames() (names []string)                           { return }
-func (store *NoopTxnStore) GetSegment(id *common.ID) (seg handle.Segment, err error) {
+func (store *NoopTxnStore) GetObject(id *common.ID) (obj handle.Object, err error) {
 	return
 }
 
-func (store *NoopTxnStore) CreateSegment(dbId, tid uint64, is1PC bool) (seg handle.Segment, err error) {
+func (store *NoopTxnStore) CreateObject(dbId, tid uint64, is1PC bool) (obj handle.Object, err error) {
 	return
 }
-func (store *NoopTxnStore) CreateNonAppendableSegment(dbId, tid uint64, _ bool) (seg handle.Segment, err error) {
+func (store *NoopTxnStore) CreateNonAppendableObject(dbId, tid uint64, _ bool) (obj handle.Object, err error) {
 	return
 }
 func (store *NoopTxnStore) GetBlock(id *common.ID) (blk handle.Block, err error) { return }
@@ -118,8 +122,8 @@ func (store *NoopTxnStore) UpdateMetaLoc(id *common.ID, un objectio.Location) (e
 func (store *NoopTxnStore) UpdateDeltaLoc(id *common.ID, un objectio.Location) (err error) {
 	return
 }
-func (store *NoopTxnStore) SoftDeleteBlock(id *common.ID) (err error)   { return }
-func (store *NoopTxnStore) SoftDeleteSegment(id *common.ID) (err error) { return }
+func (store *NoopTxnStore) SoftDeleteBlock(id *common.ID) (err error)  { return }
+func (store *NoopTxnStore) SoftDeleteObject(id *common.ID) (err error) { return }
 func (store *NoopTxnStore) BatchDedup(
 	uint64, uint64, containers.Vector,
 ) (err error) {
@@ -168,7 +172,7 @@ func (store *NoopTxnStore) ObserveTxn(
 	visitTable func(tbl any),
 	rotateTable func(dbName, tblName string, dbid, tid uint64),
 	visitMetadata func(block any),
-	visitSegment func(any),
+	visitObject func(any),
 	visitAppend func(bat any),
 	visitDelete func(ctx context.Context, deletes txnif.DeleteNode)) {
 }
@@ -176,3 +180,5 @@ func (store *NoopTxnStore) ObserveTxn(
 func (store *NoopTxnStore) GetTransactionType() txnif.TxnType {
 	return txnif.TxnType_Normal
 }
+
+func (store *NoopTxnStore) UpdateObjectStats(*common.ID, *objectio.ObjectStats) error { return nil }

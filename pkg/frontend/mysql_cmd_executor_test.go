@@ -21,6 +21,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+
 	"github.com/fagongzi/goetty/v2"
 	"github.com/fagongzi/goetty/v2/buf"
 	"github.com/golang/mock/gomock"
@@ -62,14 +64,14 @@ func init() {
 func mockRecordStatement(ctx context.Context) (context.Context, *gostub.Stubs) {
 	stm := &motrace.StatementInfo{}
 	ctx = motrace.ContextWithStatement(ctx, stm)
-	stubs := gostub.Stub(&RecordStatement, func(context.Context, *Session, *process.Process, ComputationWrapper, time.Time, string, string, bool) context.Context {
-		return ctx
+	stubs := gostub.Stub(&RecordStatement, func(context.Context, *Session, *process.Process, ComputationWrapper, time.Time, string, string, bool) (context.Context, error) {
+		return ctx, nil
 	})
 	return ctx, stubs
 }
 
 func Test_mce(t *testing.T) {
-	ctx := context.TODO()
+	ctx := defines.AttachAccountId(context.TODO(), sysAccountID)
 	convey.Convey("boot mce succ", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
@@ -121,7 +123,6 @@ func Test_mce(t *testing.T) {
 		}
 		create_1.EXPECT().GetAst().Return(stmts[0]).AnyTimes()
 		create_1.EXPECT().GetUUID().Return(make([]byte, 16)).AnyTimes()
-		create_1.EXPECT().SetDatabaseName(gomock.Any()).Return(nil).AnyTimes()
 		create_1.EXPECT().Compile(gomock.Any(), gomock.Any(), gomock.Any()).Return(runner, nil).AnyTimes()
 		create_1.EXPECT().Run(gomock.Any()).Return(nil, nil).AnyTimes()
 		create_1.EXPECT().GetLoadTag().Return(false).AnyTimes()
@@ -134,7 +135,6 @@ func Test_mce(t *testing.T) {
 		}
 		select_1.EXPECT().GetAst().Return(stmts[0]).AnyTimes()
 		select_1.EXPECT().GetUUID().Return(make([]byte, 16)).AnyTimes()
-		select_1.EXPECT().SetDatabaseName(gomock.Any()).Return(nil).AnyTimes()
 		select_1.EXPECT().Compile(gomock.Any(), gomock.Any(), gomock.Any()).Return(runner, nil).AnyTimes()
 		select_1.EXPECT().Run(gomock.Any()).Return(nil, nil).AnyTimes()
 		select_1.EXPECT().GetLoadTag().Return(false).AnyTimes()
@@ -212,7 +212,6 @@ func Test_mce(t *testing.T) {
 			convey.So(err, convey.ShouldBeNil)
 			select_2.EXPECT().GetAst().Return(stmts[0]).AnyTimes()
 			select_2.EXPECT().GetUUID().Return(make([]byte, 16)).AnyTimes()
-			select_2.EXPECT().SetDatabaseName(gomock.Any()).Return(nil).AnyTimes()
 			select_2.EXPECT().Compile(gomock.Any(), gomock.Any(), gomock.Any()).Return(runner, nil).AnyTimes()
 			select_2.EXPECT().Run(gomock.Any()).Return(nil, nil).AnyTimes()
 			select_2.EXPECT().GetLoadTag().Return(false).AnyTimes()
@@ -291,7 +290,7 @@ func Test_mce(t *testing.T) {
 }
 
 func Test_mce_selfhandle(t *testing.T) {
-	ctx := context.TODO()
+	ctx := defines.AttachAccountId(context.TODO(), catalog.System_Account)
 	convey.Convey("handleChangeDB", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
@@ -441,7 +440,7 @@ func Test_mce_selfhandle(t *testing.T) {
 		setVar, err := parsers.ParseOne(ctx, dialect.MYSQL, set, 1)
 		convey.So(err, convey.ShouldBeNil)
 
-		err = mce.handleSetVar(ctx, setVar.(*tree.SetVar))
+		err = mce.handleSetVar(ctx, setVar.(*tree.SetVar), "")
 		convey.So(err, convey.ShouldBeNil)
 
 		req := &Request{
@@ -653,7 +652,7 @@ func Test_typeconvert(t *testing.T) {
 			{tp: defines.MYSQL_TYPE_FLOAT, signed: true},
 			{tp: defines.MYSQL_TYPE_DOUBLE, signed: true},
 			{tp: defines.MYSQL_TYPE_STRING, signed: true},
-			{tp: defines.MYSQL_TYPE_VARCHAR, signed: true},
+			{tp: defines.MYSQL_TYPE_VAR_STRING, signed: true},
 			{tp: defines.MYSQL_TYPE_DATE, signed: true},
 			{tp: defines.MYSQL_TYPE_TIME, signed: true},
 			{tp: defines.MYSQL_TYPE_DATETIME, signed: true},
@@ -681,7 +680,9 @@ func allocTestBatch(attrName []string, tt []types.Type, batchSize int) *batch.Ba
 	//alloc space for vector
 	for i := 0; i < len(attrName); i++ {
 		vec := vector.NewVec(tt[i])
-		vec.PreExtend(batchSize, testutil.TestUtilMp)
+		if err := vec.PreExtend(batchSize, testutil.TestUtilMp); err != nil {
+			panic(err)
+		}
 		vec.SetLength(batchSize)
 		batchData.Vecs[i] = vec
 	}
@@ -861,6 +862,7 @@ func runTestHandle(funName string, t *testing.T, handleFun func(*MysqlCmdExecuto
 		ses.SetRequestContext(ctx)
 		ses.SetConnectContext(ctx)
 		ses.mrs = &MysqlResultSet{}
+		ses.txnCompileCtx.proc = testutil.NewProc()
 		mce := &MysqlCmdExecutor{}
 		mce.SetSession(ses)
 
@@ -869,32 +871,32 @@ func runTestHandle(funName string, t *testing.T, handleFun func(*MysqlCmdExecuto
 }
 
 func Test_HandlePrepareStmt(t *testing.T) {
-	ctx := context.TODO()
+	ctx := defines.AttachAccountId(context.TODO(), catalog.System_Account)
 	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, "Prepare stmt1 from select 1, 2", 1)
 	if err != nil {
 		t.Errorf("parser sql error %v", err)
 	}
 	runTestHandle("handlePrepareStmt", t, func(mce *MysqlCmdExecutor) error {
 		stmt := stmt.(*tree.PrepareStmt)
-		_, err := mce.handlePrepareStmt(context.TODO(), stmt)
+		_, err := mce.handlePrepareStmt(ctx, stmt, "")
 		return err
 	})
 }
 
 func Test_HandleDeallocate(t *testing.T) {
-	ctx := context.TODO()
+	ctx := defines.AttachAccountId(context.TODO(), catalog.System_Account)
 	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, "deallocate Prepare stmt1", 1)
 	if err != nil {
 		t.Errorf("parser sql error %v", err)
 	}
 	runTestHandle("handleDeallocate", t, func(mce *MysqlCmdExecutor) error {
 		stmt := stmt.(*tree.Deallocate)
-		return mce.handleDeallocate(context.TODO(), stmt)
+		return mce.handleDeallocate(ctx, stmt)
 	})
 }
 
 func Test_CMD_FIELD_LIST(t *testing.T) {
-	ctx := context.TODO()
+	ctx := defines.AttachAccountId(context.TODO(), catalog.System_Account)
 	convey.Convey("cmd field list", t, func() {
 		runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
 		queryData := []byte("A")
@@ -1041,7 +1043,8 @@ func TestSerializePlanToJson(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%+v", err)
 		}
-		stm := &motrace.StatementInfo{StatementID: uuid.New(), Statement: sql, RequestAt: time.Now()}
+		uid, _ := uuid.NewV7()
+		stm := &motrace.StatementInfo{StatementID: uid, Statement: sql, RequestAt: time.Now()}
 		h := NewMarshalPlanHandler(mock.CurrentContext().GetContext(), stm, plan)
 		json := h.Marshal(mock.CurrentContext().GetContext())
 		_, stats := h.Stats(mock.CurrentContext().GetContext())
@@ -1326,11 +1329,13 @@ func Test_RecordParseErrorStatement(t *testing.T) {
 	}
 
 	motrace.GetTracerProvider().SetEnable(true)
-	ctx := RecordParseErrorStatement(context.TODO(), ses, proc, time.Now(), nil, nil, moerr.NewInternalErrorNoCtx("test"))
+	ctx, err := RecordParseErrorStatement(context.TODO(), ses, proc, time.Now(), nil, nil, moerr.NewInternalErrorNoCtx("test"))
+	assert.Nil(t, err)
 	si := motrace.StatementFromContext(ctx)
 	require.NotNil(t, si)
 
-	ctx = RecordParseErrorStatement(context.TODO(), ses, proc, time.Now(), []string{"abc", "def"}, []string{constant.ExternSql, constant.ExternSql}, moerr.NewInternalErrorNoCtx("test"))
+	ctx, err = RecordParseErrorStatement(context.TODO(), ses, proc, time.Now(), []string{"abc", "def"}, []string{constant.ExternSql, constant.ExternSql}, moerr.NewInternalErrorNoCtx("test"))
+	assert.Nil(t, err)
 	si = motrace.StatementFromContext(ctx)
 	require.NotNil(t, si)
 
@@ -1468,4 +1473,94 @@ func Test_getStmtExecutor(t *testing.T) {
 		_, err = getStmtExecutor(nil, nil, &baseStmtExecutor{}, stmt)
 		require.Nil(t, err)
 	}
+}
+
+func Test_ExecRequest(t *testing.T) {
+	ctx := context.TODO()
+	convey.Convey("boot mce succ", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ctx, rsStubs := mockRecordStatement(ctx)
+		defer rsStubs.Reset()
+
+		srStub := gostub.Stub(&parsers.HandleSqlForRecord, func(sql string) []string {
+			return make([]string, 7)
+		})
+		defer srStub.Reset()
+
+		eng := mock_frontend.NewMockEngine(ctrl)
+		eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		eng.EXPECT().Hints().Return(engine.Hints{
+			CommitOrRollbackTimeout: time.Second,
+		}).AnyTimes()
+		txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+		txnOperator.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
+		eng.EXPECT().Database(ctx, gomock.Any(), txnOperator).Return(nil, nil).AnyTimes()
+
+		txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
+		txnOperator.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
+
+		txnClient := mock_frontend.NewMockTxnClient(ctrl)
+		txnClient.EXPECT().New(gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
+
+		ioses := mock_frontend.NewMockIOSession(ctrl)
+		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
+		ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		ioses.EXPECT().RemoteAddress().Return("").AnyTimes()
+		ioses.EXPECT().Ref().AnyTimes()
+		use_t := mock_frontend.NewMockComputationWrapper(ctrl)
+		use_t.EXPECT().GetUUID().Return(make([]byte, 16)).AnyTimes()
+		stmts, err := parsers.Parse(ctx, dialect.MYSQL, "use T", 1)
+		if err != nil {
+			t.Error(err)
+		}
+		use_t.EXPECT().GetAst().Return(stmts[0]).AnyTimes()
+		use_t.EXPECT().RecordExecPlan(ctx).Return(nil).AnyTimes()
+
+		runner := mock_frontend.NewMockComputationRunner(ctrl)
+		runner.EXPECT().Run(gomock.Any()).Return(nil, nil).AnyTimes()
+
+		pu, err := getParameterUnit("test/system_vars_config.toml", eng, txnClient)
+		convey.So(err, convey.ShouldBeNil)
+
+		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
+
+		var gSys GlobalSystemVariables
+		InitGlobalSystemVariables(&gSys)
+
+		ses := NewSession(proto, nil, pu, &gSys, true, nil, nil)
+		proto.SetSession(ses)
+		ses.txnHandler = &TxnHandler{
+			storage:   &engine.EntireEngine{Engine: pu.StorageEngine},
+			txnClient: pu.TxnClient,
+		}
+		ses.txnHandler.SetSession(ses)
+		ses.SetRequestContext(ctx)
+		ses.SetConnectContext(ctx)
+
+		ctx = context.WithValue(ctx, config.ParameterUnitKey, pu)
+
+		// A mock autoincrcache manager.
+		aicm := &defines.AutoIncrCacheManager{}
+		rm, _ := NewRoutineManager(ctx, pu, aicm)
+
+		mce := NewMysqlCmdExecutor()
+		mce.SetRoutineManager(rm)
+		mce.SetSession(ses)
+
+		req := &Request{
+			cmd:  COM_SET_OPTION,
+			data: []byte("123"),
+		}
+		_, err = mce.ExecRequest(ctx, ses, req)
+		convey.So(err, convey.ShouldBeNil)
+
+		req = &Request{
+			cmd:  COM_SET_OPTION,
+			data: []byte("1"),
+		}
+		_, err = mce.ExecRequest(ctx, ses, req)
+		convey.So(err, convey.ShouldBeNil)
+	})
 }

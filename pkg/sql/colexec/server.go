@@ -16,6 +16,7 @@ package colexec
 
 import (
 	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -40,26 +41,28 @@ func NewServer(client logservice.CNHAKeeperClient) *Server {
 	return Srv
 }
 
-// GetProcByUuid try to get process from map, and decrease referenceCount by 1 when get succeed.
-// if forcedDelete is true, it will do action to avoid other goroutine to put a new item into map when get failed.
+// GetProcByUuid used the uuid to get a process from the srv.
+// if the process is nil, it means the process has done.
+// if forcedDelete, do an action to avoid another routine to put a new item.
 func (srv *Server) GetProcByUuid(u uuid.UUID, forcedDelete bool) (*process.Process, bool) {
 	srv.uuidCsChanMap.Lock()
 	defer srv.uuidCsChanMap.Unlock()
 	p, ok := srv.uuidCsChanMap.mp[u]
 	if !ok {
 		if forcedDelete {
-			srv.uuidCsChanMap.mp[u] = uuidProcMapItem{proc: nil, referenceCount: 1}
+			srv.uuidCsChanMap.mp[u] = uuidProcMapItem{proc: nil}
 		}
 		return nil, false
 	}
-	p.referenceCount--
-	if p.referenceCount == 0 {
+
+	result := p.proc
+	if p.proc == nil {
 		delete(srv.uuidCsChanMap.mp, u)
-		return nil, true
 	} else {
+		p.proc = nil
 		srv.uuidCsChanMap.mp[u] = p
 	}
-	return p.proc, true
+	return result, true
 }
 
 func (srv *Server) PutProcIntoUuidMap(u uuid.UUID, p *process.Process) error {
@@ -67,10 +70,10 @@ func (srv *Server) PutProcIntoUuidMap(u uuid.UUID, p *process.Process) error {
 	defer srv.uuidCsChanMap.Unlock()
 	if _, ok := srv.uuidCsChanMap.mp[u]; ok {
 		delete(srv.uuidCsChanMap.mp, u)
-		return nil
+		return moerr.NewInternalErrorNoCtx("remote receiver already done")
 	}
 
-	srv.uuidCsChanMap.mp[u] = uuidProcMapItem{proc: p, referenceCount: 2}
+	srv.uuidCsChanMap.mp[u] = uuidProcMapItem{proc: p}
 	return nil
 }
 
@@ -78,16 +81,16 @@ func (srv *Server) DeleteUuids(uuids []uuid.UUID) {
 	srv.uuidCsChanMap.Lock()
 	defer srv.uuidCsChanMap.Unlock()
 	for i := range uuids {
-		uid, ok := srv.uuidCsChanMap.mp[uuids[i]]
+		p, ok := srv.uuidCsChanMap.mp[uuids[i]]
 		if !ok {
 			continue
 		}
 
-		uid.referenceCount--
-		if uid.referenceCount == 0 {
+		if p.proc == nil {
 			delete(srv.uuidCsChanMap.mp, uuids[i])
 		} else {
-			srv.uuidCsChanMap.mp[uuids[i]] = uid
+			p.proc = nil
+			srv.uuidCsChanMap.mp[uuids[i]] = p
 		}
 	}
 }

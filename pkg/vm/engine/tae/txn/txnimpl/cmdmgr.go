@@ -15,7 +15,11 @@
 package txnimpl
 
 import (
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"go.uber.org/zap"
+
 	// "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
@@ -50,10 +54,11 @@ func (mgr *commandManager) AddCmd(cmd txnif.TxnCmd) {
 	mgr.csn++
 }
 
-func (mgr *commandManager) ApplyTxnRecord(tid string, txn txnif.AsyncTxn) (logEntry entry.Entry, err error) {
+func (mgr *commandManager) ApplyTxnRecord(txn txnif.AsyncTxn) (logEntry entry.Entry, err error) {
 	if mgr.driver == nil {
 		return
 	}
+	t1 := time.Now()
 	mgr.cmd.SetTxn(txn)
 	var buf []byte
 	if buf, err = mgr.cmd.MarshalBinary(); err != nil {
@@ -70,7 +75,23 @@ func (mgr *commandManager) ApplyTxnRecord(tid string, txn txnif.AsyncTxn) (logEn
 		Group: wal.GroupPrepare,
 	}
 	logEntry.SetInfo(info)
+	t2 := time.Now()
 	mgr.lsn, err = mgr.driver.AppendEntry(wal.GroupPrepare, logEntry)
+	t3 := time.Now()
+	if t3.Sub(t1) > time.Millisecond*500 {
+		logutil.Warn(
+			"SLOW-LOG",
+			zap.String("txn", txn.String()),
+			zap.Duration("make-log-entry-duration", t3.Sub(t1)),
+		)
+	}
+	if t3.Sub(t2) > time.Millisecond*20 {
+		logutil.Warn(
+			"SLOW-LOG",
+			zap.Duration("append-log-entry-duration", t3.Sub(t1)),
+			zap.String("txn", txn.String()),
+		)
+	}
 	logutil.Debugf("ApplyTxnRecord LSN=%d, Size=%d", mgr.lsn, len(buf))
 	return
 }

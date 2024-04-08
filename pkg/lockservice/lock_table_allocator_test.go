@@ -17,7 +17,6 @@ package lockservice
 import (
 	"fmt"
 	"os"
-	"sync"
 	"testing"
 	"time"
 
@@ -100,22 +99,9 @@ func TestCheckTimeoutServiceTask(t *testing.T) {
 			// create s1 bind
 			a.Get("s1", 1)
 
-			// wait bind timeout
-			for {
-				time.Sleep(time.Millisecond * 10)
-				binds := a.getServiceBinds("s1")
-				if binds != nil {
-					continue
-				}
-				a.mu.Lock()
-				if len(a.mu.lockTables) > 0 {
-					assert.Equal(t,
-						pb.LockTable{ServiceID: "s1", Table: 1, Version: 1, Valid: false},
-						a.mu.lockTables[1])
-				}
-				a.mu.Unlock()
-				return
-			}
+			time.Sleep(time.Millisecond * 10)
+			bind := a.GetLatest(1)
+			require.True(t, bind.Valid)
 		})
 }
 
@@ -132,8 +118,8 @@ func TestKeepaliveBind(t *testing.T) {
 			}()
 
 			bind := a.Get("s1", 1)
-			m := &sync.Map{}
-			m.Store(1,
+			m := &lockTableHolder{id: "s1", tables: map[uint64]lockTable{}}
+			m.set(1,
 				newRemoteLockTable(
 					"s1",
 					time.Second,
@@ -155,13 +141,13 @@ func TestKeepaliveBind(t *testing.T) {
 				a.mu.Lock()
 				valid := a.mu.lockTables[1].Valid
 				a.mu.Unlock()
-				if !valid {
+				if valid {
 					break
 				}
 				time.Sleep(time.Millisecond * 20)
 			}
 
-			assert.False(t, a.KeepLockTableBind("s1"))
+			assert.True(t, a.KeepLockTableBind("s1"))
 		})
 }
 

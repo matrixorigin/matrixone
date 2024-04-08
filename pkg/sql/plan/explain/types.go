@@ -17,6 +17,7 @@ package explain
 import (
 	"bytes"
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -138,9 +139,10 @@ const (
 )
 
 type ExplainOptions struct {
-	Verbose bool
-	Analyze bool
-	Format  ExplainFormat
+	Verbose  bool
+	Analyze  bool
+	Format   ExplainFormat
+	NodeType plan.Node_NodeType
 }
 
 func NewExplainDefaultOptions() *ExplainOptions {

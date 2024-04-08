@@ -193,7 +193,7 @@ func mockBlockInfoBat(proc *process.Process, withStats bool) *batch.Batch {
 	blockInfoBat.Vecs[1] = proc.GetVector(types.T_text.ToType())
 
 	if withStats {
-		blockInfoBat.Vecs[2] = vector.NewConstBytes(types.T_binary.ToType(),
+		blockInfoBat.Vecs[2], _ = vector.NewConstBytes(types.T_binary.ToType(),
 			objectio.ZeroObjectStats.Marshal(), 1, proc.GetMPool())
 	}
 

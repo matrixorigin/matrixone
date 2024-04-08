@@ -19,6 +19,7 @@ select mo_ctl('dn', 'flush', 'd1.t1');
 select mo_ctl('dn', 'flush', 'd1.t2');
 -- @separator:table
 select mo_ctl('dn', 'flush', 'd1.t3');
+select Sleep(5);
 -- @separator:table
 explain select t2.c1 from t2 left join t1 on t1.c1 =t2.c1;
 -- @separator:table

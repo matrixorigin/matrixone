@@ -145,3 +145,9 @@ func ShortSegId(x types.Uuid) string {
 	hex.Encode(shortuuid[:], x[:4])
 	return string(shortuuid[:])
 }
+
+func ShortObjId(x types.Objectid) string {
+	var shortuuid [8]byte
+	hex.Encode(shortuuid[:], x[:4])
+	return string(shortuuid[:])
+}

@@ -43,7 +43,11 @@ func buildAlterTableCopy(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, err
 	}
 
 	isClusterTable := util.TableIsClusterTable(tableDef.GetTableType())
-	if isClusterTable && ctx.GetAccountId() != catalog.System_Account {
+	accountId, err := ctx.GetAccountId()
+	if err != nil {
+		return nil, err
+	}
+	if isClusterTable && accountId != catalog.System_Account {
 		return nil, moerr.NewInternalError(ctx.GetContext(), "only the sys account can alter the cluster table")
 	}
 
@@ -136,7 +140,7 @@ func buildAlterTableCopy(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, err
 		}
 	}
 
-	createTmpDdl, err := restoreDDL(ctx, alterTablePlan.CopyTableDef, schemaName, alterTableCtx.copyTableName, true)
+	createTmpDdl, err := restoreDDL(ctx, alterTablePlan.CopyTableDef, schemaName, alterTableCtx.copyTableName, false)
 	if err != nil {
 		return nil, err
 	}
@@ -161,7 +165,9 @@ func buildAlterTableCopy(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, err
 	alterTablePlan.InsertDataSql = insertDml
 
 	alterTablePlan.ChangeTblColIdMap = alterTableCtx.changColDefMap
-
+	alterTablePlan.UpdateFkSqls = append(alterTablePlan.UpdateFkSqls, alterTableCtx.UpdateSqls...)
+	//delete copy table records from mo_catalog.mo_foreign_keys
+	alterTablePlan.UpdateFkSqls = append(alterTablePlan.UpdateFkSqls, getSqlForDeleteTable(schemaName, alterTableCtx.copyTableName))
 	return &Plan{
 		Plan: &plan.Plan_Ddl{
 			Ddl: &plan.DataDefinition{
@@ -203,9 +209,13 @@ func restoreDDL(ctx CompilerContext, tableDef *TableDef, schemaName string, tblN
 			continue
 		}
 		//the non-sys account skips the column account_id of the cluster table
+		accountId, err := ctx.GetAccountId()
+		if err != nil {
+			return "", err
+		}
 		if util.IsClusterTableAttribute(colName) &&
 			isClusterTable &&
-			ctx.GetAccountId() != catalog.System_Account {
+			accountId != catalog.System_Account {
 			continue
 		}
 		nullOrNot := "NOT NULL"
@@ -241,6 +251,20 @@ func restoreDDL(ctx CompilerContext, tableDef *TableDef, schemaName string, tblN
 		}
 		if typ.Oid.IsFloat() && col.Typ.Scale != -1 {
 			typeStr += fmt.Sprintf("(%d,%d)", col.Typ.Width, col.Typ.Scale)
+		}
+
+		if typ.Oid.IsEnum() {
+			enumStr := col.GetTyp().Enumvalues
+			enums := strings.Split(enumStr, ",")
+			enumVal := ""
+			for i, enum := range enums {
+				if i == 0 {
+					enumVal += fmt.Sprintf("'%s'", enum)
+				} else {
+					enumVal += fmt.Sprintf(",'%s'", enum)
+				}
+			}
+			typeStr = fmt.Sprintf("ENUM(%s)", enumVal)
 		}
 
 		updateOpt := ""
@@ -507,6 +531,7 @@ type AlterTableContext struct {
 	copyTableName   string
 	// key oldColId -> new ColDef
 	changColDefMap map[uint64]*ColDef
+	UpdateSqls     []string
 }
 
 type exprType int
@@ -552,7 +577,7 @@ func initAlterTableContext(originTableDef *TableDef, copyTableDef *TableDef, sch
 func buildCopyTableDef(ctx context.Context, tableDef *TableDef) (*TableDef, error) {
 	replicaTableDef := DeepCopyTableDef(tableDef, true)
 
-	id, err := uuid.NewUUID()
+	id, err := uuid.NewV7()
 	if err != nil {
 		return nil, moerr.NewInternalError(ctx, "new uuid failed")
 	}
@@ -584,7 +609,11 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 		return nil, moerr.NewInternalError(ctx.GetContext(), "cannot alter table in subscription database")
 	}
 	isClusterTable := util.TableIsClusterTable(tableDef.GetTableType())
-	if isClusterTable && ctx.GetAccountId() != catalog.System_Account {
+	accountId, err := ctx.GetAccountId()
+	if err != nil {
+		return nil, err
+	}
+	if isClusterTable && accountId != catalog.System_Account {
 		return nil, moerr.NewInternalError(ctx.GetContext(), "only the sys account can alter the cluster table")
 	}
 	if tableDef.Partition != nil {

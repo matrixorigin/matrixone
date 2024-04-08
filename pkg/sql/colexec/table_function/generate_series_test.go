@@ -514,7 +514,7 @@ func TestGenerateSeriesCall(t *testing.T) {
 
 func makeGenerateSeriesBatch(proc *process.Process) *batch.Batch {
 	bat := batch.NewWithSize(1)
-	bat.Vecs[0] = vector.NewConstFixed(types.T_int64.ToType(), int64(0), 1, proc.Mp())
+	bat.Vecs[0], _ = vector.NewConstFixed(types.T_int64.ToType(), int64(0), 1, proc.Mp())
 	bat.SetRowCount(1)
 	return bat
 }
@@ -547,9 +547,9 @@ func makeInt64Expr(val int64) *plan.Expr {
 		Typ: &plan.Type{
 			Id: int32(types.T_int64),
 		},
-		Expr: &plan2.Expr_C{
-			C: &plan.Const{
-				Value: &plan2.Const_I64Val{
+		Expr: &plan2.Expr_Lit{
+			Lit: &plan.Const{
+				Value: &plan2.Literal_I64Val{
 					I64Val: val,
 				},
 			},
@@ -561,9 +561,9 @@ func makeVarcharExpr(val string) *plan.Expr {
 		Typ: &plan.Type{
 			Id: int32(types.T_varchar),
 		},
-		Expr: &plan2.Expr_C{
-			C: &plan.Const{
-				Value: &plan2.Const_Sval{
+		Expr: &plan2.Expr_Lit{
+			Lit: &plan.Const{
+				Value: &plan2.Literal_Sval{
 					Sval: val,
 				},
 			},
@@ -578,9 +578,9 @@ func makeDatetimeExpr(s string, p int32) *plan.Expr {
 			Id:    int32(types.T_datetime),
 			Scale: p,
 		},
-		Expr: &plan2.Expr_C{
-			C: &plan.Const{
-				Value: &plan2.Const_Datetimeval{
+		Expr: &plan2.Expr_Lit{
+			Lit: &plan.Const{
+				Value: &plan2.Literal_Datetimeval{
 					Datetimeval: int64(dt),
 				},
 			},

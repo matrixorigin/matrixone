@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"runtime"
 	"sync"
 	"testing"
 
@@ -43,7 +44,8 @@ func TestMemCacheLeak(t *testing.T) {
 	})
 	assert.Nil(t, err)
 
-	m := NewMemCache(NewLRUCache(4, true, nil), nil)
+	size := int64(4 * runtime.GOMAXPROCS(0))
+	m := NewMemCache(NewLRUCache(size, true, nil), nil)
 
 	vec := &IOVector{
 		FilePath: "foo",
@@ -65,7 +67,7 @@ func TestMemCacheLeak(t *testing.T) {
 	err = m.Update(ctx, vec, false)
 	assert.Nil(t, err)
 	assert.Equal(t, int64(1), m.cache.Capacity()-m.cache.Available())
-	assert.Equal(t, int64(4), counter.FileService.Cache.Memory.Available.Load())
+	assert.Equal(t, int64(size), counter.FileService.Cache.Memory.Available.Load())
 	assert.Equal(t, int64(0), counter.FileService.Cache.Memory.Used.Load())
 
 	// read from cache
@@ -89,7 +91,7 @@ func TestMemCacheLeak(t *testing.T) {
 	err = m.Update(ctx, vec, false)
 	assert.Nil(t, err)
 	assert.Equal(t, int64(1), m.cache.Capacity()-m.cache.Available())
-	assert.Equal(t, int64(3), counter.FileService.Cache.Memory.Available.Load())
+	assert.Equal(t, int64(size)-1, counter.FileService.Cache.Memory.Available.Load())
 	assert.Equal(t, int64(1), counter.FileService.Cache.Memory.Used.Load())
 
 }

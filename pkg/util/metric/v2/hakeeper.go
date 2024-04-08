@@ -23,7 +23,7 @@ var (
 			Subsystem: "heartbeat_send",
 			Name:      "duration_seconds",
 			Help:      "hakeeper heartbeat send durations",
-			Buckets:   prometheus.ExponentialBuckets(0.00001, 2.0, 20),
+			Buckets:   getDurationBuckets(),
 		}, []string{"type"})
 
 	HeartbeatFailureCounter = prometheus.NewCounterVec(
@@ -40,7 +40,7 @@ var (
 			Subsystem: "heartbeat_recv",
 			Name:      "duration_seconds",
 			Help:      "hakeeper heartbeat recv durations",
-			Buckets:   prometheus.ExponentialBuckets(0.00001, 2.0, 20),
+			Buckets:   getDurationBuckets(),
 		}, []string{"type"})
 
 	HeartbeatRecvFailureCounter = prometheus.NewCounterVec(

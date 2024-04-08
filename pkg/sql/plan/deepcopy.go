@@ -15,6 +15,8 @@
 package plan
 
 import (
+	"bytes"
+
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"golang.org/x/exp/constraints"
 )
@@ -107,6 +109,7 @@ func DeepCopyDeleteCtx(ctx *plan.DeleteCtx) *plan.DeleteCtx {
 		RowIdIdx:            ctx.RowIdIdx,
 		Ref:                 DeepCopyObjectRef(ctx.Ref),
 		IsClusterTable:      ctx.IsClusterTable,
+		TableDef:            DeepCopyTableDef(ctx.TableDef, true),
 		PartitionTableIds:   make([]uint64, len(ctx.PartitionTableIds)),
 		PartitionTableNames: make([]string, len(ctx.PartitionTableNames)),
 		PartitionIdx:        ctx.PartitionIdx,
@@ -194,7 +197,6 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		AggList:         make([]*plan.Expr, len(node.AggList)),
 		OrderBy:         make([]*plan.OrderBySpec, len(node.OrderBy)),
 		DeleteCtx:       DeepCopyDeleteCtx(node.DeleteCtx),
-		TableDefVec:     make([]*plan.TableDef, len(node.TableDefVec)),
 		TblFuncExprList: make([]*plan.Expr, len(node.TblFuncExprList)),
 		ClusterTable:    DeepCopyClusterTable(node.GetClusterTable()),
 		InsertCtx:       DeepCopyInsertCtx(node.InsertCtx),
@@ -252,13 +254,14 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		newNode.OrderBy[idx] = DeepCopyOrderBy(orderBy)
 	}
 
-	for i, tbl := range node.TableDefVec {
-		newNode.TableDefVec[i] = DeepCopyTableDef(tbl, true)
+	for idx, expr := range node.OnUpdateExprs {
+		newNode.OnUpdateExprs[idx] = DeepCopyExpr(expr)
 	}
 
 	newNode.Stats = DeepCopyStats(node.Stats)
 
 	newNode.ObjRef = DeepCopyObjectRef(node.ObjRef)
+	newNode.ParentObjRef = DeepCopyObjectRef(node.ParentObjRef)
 
 	if node.WinSpecList != nil {
 		newNode.WinSpecList = make([]*Expr, len(node.WinSpecList))
@@ -309,6 +312,7 @@ func DeepCopyType(typ *plan.Type) *plan.Type {
 		Scale:       typ.Scale,
 		AutoIncr:    typ.AutoIncr,
 		Enumvalues:  typ.Enumvalues,
+		Table:       typ.Table,
 	}
 }
 
@@ -863,61 +867,61 @@ func DeepCopyExpr(expr *Expr) *Expr {
 	}
 
 	switch item := expr.Expr.(type) {
-	case *plan.Expr_C:
-		pc := &plan.Const{
-			Isnull: item.C.GetIsnull(),
-			Src:    item.C.Src,
+	case *plan.Expr_Lit:
+		pc := &plan.Literal{
+			Isnull: item.Lit.GetIsnull(),
+			Src:    item.Lit.Src,
 		}
 
-		switch c := item.C.Value.(type) {
-		case *plan.Const_I8Val:
-			pc.Value = &plan.Const_I8Val{I8Val: c.I8Val}
-		case *plan.Const_I16Val:
-			pc.Value = &plan.Const_I16Val{I16Val: c.I16Val}
-		case *plan.Const_I32Val:
-			pc.Value = &plan.Const_I32Val{I32Val: c.I32Val}
-		case *plan.Const_I64Val:
-			pc.Value = &plan.Const_I64Val{I64Val: c.I64Val}
-		case *plan.Const_Dval:
-			pc.Value = &plan.Const_Dval{Dval: c.Dval}
-		case *plan.Const_Sval:
-			pc.Value = &plan.Const_Sval{Sval: c.Sval}
-		case *plan.Const_Bval:
-			pc.Value = &plan.Const_Bval{Bval: c.Bval}
-		case *plan.Const_U8Val:
-			pc.Value = &plan.Const_U8Val{U8Val: c.U8Val}
-		case *plan.Const_U16Val:
-			pc.Value = &plan.Const_U16Val{U16Val: c.U16Val}
-		case *plan.Const_U32Val:
-			pc.Value = &plan.Const_U32Val{U32Val: c.U32Val}
-		case *plan.Const_U64Val:
-			pc.Value = &plan.Const_U64Val{U64Val: c.U64Val}
-		case *plan.Const_Fval:
-			pc.Value = &plan.Const_Fval{Fval: c.Fval}
-		case *plan.Const_Dateval:
-			pc.Value = &plan.Const_Dateval{Dateval: c.Dateval}
-		case *plan.Const_Timeval:
-			pc.Value = &plan.Const_Timeval{Timeval: c.Timeval}
-		case *plan.Const_Datetimeval:
-			pc.Value = &plan.Const_Datetimeval{Datetimeval: c.Datetimeval}
-		case *plan.Const_Decimal64Val:
-			pc.Value = &plan.Const_Decimal64Val{Decimal64Val: &plan.Decimal64{A: c.Decimal64Val.A}}
-		case *plan.Const_Decimal128Val:
-			pc.Value = &plan.Const_Decimal128Val{Decimal128Val: &plan.Decimal128{A: c.Decimal128Val.A, B: c.Decimal128Val.B}}
-		case *plan.Const_Timestampval:
-			pc.Value = &plan.Const_Timestampval{Timestampval: c.Timestampval}
-		case *plan.Const_Jsonval:
-			pc.Value = &plan.Const_Jsonval{Jsonval: c.Jsonval}
-		case *plan.Const_Defaultval:
-			pc.Value = &plan.Const_Defaultval{Defaultval: c.Defaultval}
-		case *plan.Const_UpdateVal:
-			pc.Value = &plan.Const_UpdateVal{UpdateVal: c.UpdateVal}
-		case *plan.Const_EnumVal:
-			pc.Value = &plan.Const_EnumVal{EnumVal: c.EnumVal}
+		switch c := item.Lit.Value.(type) {
+		case *plan.Literal_I8Val:
+			pc.Value = &plan.Literal_I8Val{I8Val: c.I8Val}
+		case *plan.Literal_I16Val:
+			pc.Value = &plan.Literal_I16Val{I16Val: c.I16Val}
+		case *plan.Literal_I32Val:
+			pc.Value = &plan.Literal_I32Val{I32Val: c.I32Val}
+		case *plan.Literal_I64Val:
+			pc.Value = &plan.Literal_I64Val{I64Val: c.I64Val}
+		case *plan.Literal_Dval:
+			pc.Value = &plan.Literal_Dval{Dval: c.Dval}
+		case *plan.Literal_Sval:
+			pc.Value = &plan.Literal_Sval{Sval: c.Sval}
+		case *plan.Literal_Bval:
+			pc.Value = &plan.Literal_Bval{Bval: c.Bval}
+		case *plan.Literal_U8Val:
+			pc.Value = &plan.Literal_U8Val{U8Val: c.U8Val}
+		case *plan.Literal_U16Val:
+			pc.Value = &plan.Literal_U16Val{U16Val: c.U16Val}
+		case *plan.Literal_U32Val:
+			pc.Value = &plan.Literal_U32Val{U32Val: c.U32Val}
+		case *plan.Literal_U64Val:
+			pc.Value = &plan.Literal_U64Val{U64Val: c.U64Val}
+		case *plan.Literal_Fval:
+			pc.Value = &plan.Literal_Fval{Fval: c.Fval}
+		case *plan.Literal_Dateval:
+			pc.Value = &plan.Literal_Dateval{Dateval: c.Dateval}
+		case *plan.Literal_Timeval:
+			pc.Value = &plan.Literal_Timeval{Timeval: c.Timeval}
+		case *plan.Literal_Datetimeval:
+			pc.Value = &plan.Literal_Datetimeval{Datetimeval: c.Datetimeval}
+		case *plan.Literal_Decimal64Val:
+			pc.Value = &plan.Literal_Decimal64Val{Decimal64Val: &plan.Decimal64{A: c.Decimal64Val.A}}
+		case *plan.Literal_Decimal128Val:
+			pc.Value = &plan.Literal_Decimal128Val{Decimal128Val: &plan.Decimal128{A: c.Decimal128Val.A, B: c.Decimal128Val.B}}
+		case *plan.Literal_Timestampval:
+			pc.Value = &plan.Literal_Timestampval{Timestampval: c.Timestampval}
+		case *plan.Literal_Jsonval:
+			pc.Value = &plan.Literal_Jsonval{Jsonval: c.Jsonval}
+		case *plan.Literal_Defaultval:
+			pc.Value = &plan.Literal_Defaultval{Defaultval: c.Defaultval}
+		case *plan.Literal_UpdateVal:
+			pc.Value = &plan.Literal_UpdateVal{UpdateVal: c.UpdateVal}
+		case *plan.Literal_EnumVal:
+			pc.Value = &plan.Literal_EnumVal{EnumVal: c.EnumVal}
 		}
 
-		newExpr.Expr = &plan.Expr_C{
-			C: pc,
+		newExpr.Expr = &plan.Expr_Lit{
+			Lit: pc,
 		}
 
 	case *plan.Expr_P:
@@ -1034,10 +1038,11 @@ func DeepCopyExpr(expr *Expr) *Expr {
 			List: e,
 		}
 
-	case *plan.Expr_Bin:
-		newExpr.Expr = &plan.Expr_Bin{
-			Bin: &plan.BinaryData{
-				Data: item.Bin.Data,
+	case *plan.Expr_Vec:
+		newExpr.Expr = &plan.Expr_Vec{
+			Vec: &plan.LiteralVec{
+				Len:  item.Vec.Len,
+				Data: bytes.Clone(item.Vec.Data),
 			},
 		}
 	}
@@ -1060,26 +1065,37 @@ func DeepCopyClusterTable(cluster *plan.ClusterTable) *plan.ClusterTable {
 	return newClusterTable
 }
 
+func DeepCopySliceInt64(s []int64) []int64 {
+	if s == nil {
+		return nil
+	}
+	result := make([]int64, 0, len(s))
+	result = append(result, s...)
+	return result
+}
+
 func DeepCopyAnalyzeInfo(analyzeinfo *plan.AnalyzeInfo) *plan.AnalyzeInfo {
 	if analyzeinfo == nil {
 		return nil
 	}
 
 	return &plan.AnalyzeInfo{
-		InputRows:        analyzeinfo.GetInputRows(),
-		OutputRows:       analyzeinfo.GetOutputRows(),
-		InputSize:        analyzeinfo.GetInputSize(),
-		OutputSize:       analyzeinfo.GetOutputSize(),
-		TimeConsumed:     analyzeinfo.GetTimeConsumed(),
-		MemorySize:       analyzeinfo.GetMemorySize(),
-		WaitTimeConsumed: analyzeinfo.GetWaitTimeConsumed(),
-		DiskIO:           analyzeinfo.GetDiskIO(),
-		S3IOByte:         analyzeinfo.GetS3IOByte(),
-		S3IOInputCount:   analyzeinfo.GetS3IOInputCount(),
-		S3IOOutputCount:  analyzeinfo.GetS3IOOutputCount(),
-		NetworkIO:        analyzeinfo.GetNetworkIO(),
-		ScanTime:         analyzeinfo.GetScanTime(),
-		InsertTime:       analyzeinfo.GetInsertTime(),
+		InputRows:              analyzeinfo.GetInputRows(),
+		OutputRows:             analyzeinfo.GetOutputRows(),
+		InputSize:              analyzeinfo.GetInputSize(),
+		OutputSize:             analyzeinfo.GetOutputSize(),
+		TimeConsumed:           analyzeinfo.GetTimeConsumed(),
+		TimeConsumedArrayMajor: DeepCopySliceInt64(analyzeinfo.GetTimeConsumedArrayMajor()),
+		TimeConsumedArrayMinor: DeepCopySliceInt64(analyzeinfo.GetTimeConsumedArrayMinor()),
+		MemorySize:             analyzeinfo.GetMemorySize(),
+		WaitTimeConsumed:       analyzeinfo.GetWaitTimeConsumed(),
+		DiskIO:                 analyzeinfo.GetDiskIO(),
+		S3IOByte:               analyzeinfo.GetS3IOByte(),
+		S3IOInputCount:         analyzeinfo.GetS3IOInputCount(),
+		S3IOOutputCount:        analyzeinfo.GetS3IOOutputCount(),
+		NetworkIO:              analyzeinfo.GetNetworkIO(),
+		ScanTime:               analyzeinfo.GetScanTime(),
+		InsertTime:             analyzeinfo.GetInsertTime(),
 	}
 }
 

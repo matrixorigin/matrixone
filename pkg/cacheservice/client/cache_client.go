@@ -24,11 +24,11 @@ import (
 
 type CacheClient interface {
 	// SendMessage send message to a cache server.
-	SendMessage(ctx context.Context, address string, req *cache.Request) (*cache.Response, error)
+	SendMessage(ctx context.Context, address string, req *cache.Request) (*cache.CacheResponse, error)
 	// NewRequest creates a new request by cmd method.
 	NewRequest(cache.CmdMethod) *cache.Request
 	// Release releases the response.
-	Release(*cache.Response)
+	Release(*cache.CacheResponse)
 	// Close closes the cache client.
 	Close() error
 }
@@ -42,7 +42,7 @@ type ClientConfig struct {
 type cacheClient struct {
 	config ClientConfig
 	client morpc.RPCClient
-	pool   morpc.MessagePool[*cache.Request, *cache.Response]
+	pool   morpc.MessagePool[*cache.Request, *cache.CacheResponse]
 }
 
 func NewCacheClient(cfg ClientConfig) (CacheClient, error) {
@@ -52,7 +52,7 @@ func NewCacheClient(cfg ClientConfig) (CacheClient, error) {
 	}
 	pool := morpc.NewMessagePool(
 		func() *cache.Request { return &cache.Request{} },
-		func() *cache.Response { return &cache.Response{} },
+		func() *cache.CacheResponse { return &cache.CacheResponse{} },
 	)
 	c, err := cfg.RPC.NewClient("cache-client", rt.Logger().Named("cache-client").RawLogger(),
 		func() morpc.Message {
@@ -80,7 +80,7 @@ func (c *cacheClient) NewRequest(method cache.CmdMethod) *cache.Request {
 // SendMessage implements the CacheClient interface.
 func (c *cacheClient) SendMessage(
 	ctx context.Context, address string, req *cache.Request,
-) (*cache.Response, error) {
+) (*cache.CacheResponse, error) {
 	if address == "" {
 		return nil, moerr.NewInternalError(ctx, "invalid CN query address %s", address)
 	}
@@ -93,12 +93,12 @@ func (c *cacheClient) SendMessage(
 	if err != nil {
 		return nil, err
 	}
-	resp := v.(*cache.Response)
+	resp := v.(*cache.CacheResponse)
 	return c.unwrapResponseError(resp)
 }
 
 // Release implements the CacheService interface.
-func (c *cacheClient) Release(resp *cache.Response) {
+func (c *cacheClient) Release(resp *cache.CacheResponse) {
 	c.pool.ReleaseResponse(resp)
 }
 
@@ -107,7 +107,7 @@ func (c *cacheClient) Close() error {
 	return c.client.Close()
 }
 
-func (c *cacheClient) unwrapResponseError(resp *cache.Response) (*cache.Response, error) {
+func (c *cacheClient) unwrapResponseError(resp *cache.CacheResponse) (*cache.CacheResponse, error) {
 	if err := resp.UnwrapError(); err != nil {
 		c.pool.ReleaseResponse(resp)
 		return nil, err

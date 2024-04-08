@@ -231,10 +231,11 @@ func TestRunFunctionDirectly(t *testing.T) {
 	// fold case.
 	{
 		proc := testutil.NewProcess()
-		inputs := []*vector.Vector{
-			vector.NewConstFixed(types.T_bool.ToType(), true, 10, proc.Mp()),
-			vector.NewConstFixed(types.T_bool.ToType(), true, 10, proc.Mp()),
-		}
+		v0, err1 := vector.NewConstFixed(types.T_bool.ToType(), true, 10, proc.Mp())
+		require.NoError(t, err1)
+		v1, err2 := vector.NewConstFixed(types.T_bool.ToType(), true, 10, proc.Mp())
+		require.NoError(t, err2)
+		inputs := []*vector.Vector{v0, v1}
 		startMp := proc.Mp().CurrNB()
 
 		v, err := RunFunctionDirectly(proc, AndFunctionEncodedID, inputs, 10)

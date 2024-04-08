@@ -16,9 +16,9 @@ package hashbuild
 
 import (
 	"bytes"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
-	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -85,7 +85,11 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 }
 
 func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
-	anal := proc.GetAnalyze(arg.Info.Idx)
+	if err, isCancel := vm.CancelCheck(proc); isCancel {
+		return vm.CancelResult, err
+	}
+
+	anal := proc.GetAnalyze(arg.Info.Idx, arg.Info.ParallelIdx, arg.Info.ParallelMajor)
 	anal.Start()
 	defer anal.Stop()
 	result := vm.NewCallResult()
@@ -367,14 +371,7 @@ func (ctr *container) handleRuntimeFilter(ap *Argument, proc *process.Process) e
 	}
 
 	if runtimeFilter != nil {
-		select {
-		case <-proc.Ctx.Done():
-			ctr.state = End
-
-		case ap.RuntimeFilterSenders[0].Chan <- runtimeFilter:
-			ctr.state = Eval
-		}
-
+		sendFilter(ap, proc, runtimeFilter)
 		return nil
 	}
 
@@ -385,11 +382,7 @@ func (ctr *container) handleRuntimeFilter(ap *Argument, proc *process.Process) e
 		hashmapCount = ctr.strHashMap.GroupCount()
 	}
 
-	inFilterCardLimit := int64(plan.InFilterCardLimit)
-	v, ok := runtime.ProcessLevelRuntime().GetGlobalVariables("runtime_filter_limit_in")
-	if ok {
-		inFilterCardLimit = v.(int64)
-	}
+	inFilterCardLimit := plan.GetInFilterCardLimit()
 	//bloomFilterCardLimit := int64(plan.BloomFilterCardLimit)
 	//v, ok = runtime.ProcessLevelRuntime().GetGlobalVariables("runtime_filter_limit_bloom_filter")
 	//if ok {
@@ -434,17 +427,12 @@ func (ctr *container) handleRuntimeFilter(ap *Argument, proc *process.Process) e
 
 		runtimeFilter = &pipeline.RuntimeFilter{
 			Typ:  pipeline.RuntimeFilter_IN,
+			Card: int32(vec.Length()),
 			Data: data,
 		}
 	}
 
-	select {
-	case <-proc.Ctx.Done():
-		ctr.state = End
-
-	case ap.RuntimeFilterSenders[0].Chan <- runtimeFilter:
-		ctr.state = Eval
-	}
+	sendFilter(ap, proc, runtimeFilter)
 
 	return nil
 }
@@ -460,4 +448,18 @@ func (ctr *container) evalJoinCondition(bat *batch.Batch, proc *process.Process)
 		ctr.evecs[i].vec = vec
 	}
 	return nil
+}
+
+func sendFilter(ap *Argument, proc *process.Process, runtimeFilter *pipeline.RuntimeFilter) {
+	anal := proc.GetAnalyze(ap.Info.Idx, ap.Info.ParallelIdx, ap.Info.ParallelMajor)
+	sendRuntimeFilterStart := time.Now()
+
+	select {
+	case <-proc.Ctx.Done():
+		ap.ctr.state = End
+
+	case ap.RuntimeFilterSenders[0].Chan <- runtimeFilter:
+		ap.ctr.state = Eval
+	}
+	anal.WaitStop(sendRuntimeFilterStart)
 }

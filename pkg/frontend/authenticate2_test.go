@@ -15,9 +15,12 @@
 package frontend
 
 import (
-	"github.com/golang/mock/gomock"
-	"github.com/stretchr/testify/assert"
 	"testing"
+
+	"github.com/golang/mock/gomock"
+	plan3 "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/stretchr/testify/assert"
 )
 
 func Test_verifyAccountCanOperateClusterTable(t *testing.T) {
@@ -141,5 +144,81 @@ func Test_verifyLightPrivilege(t *testing.T) {
 
 	ret = verifyLightPrivilege(ses, "abc", false,
 		false, clusterTableCreate)
+	assert.True(t, ret)
+}
+
+func Test_moctrl(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+
+	sys := &TenantInfo{
+		Tenant: sysAccountName,
+	}
+
+	sys2 := &TenantInfo{
+		Tenant:      sysAccountName,
+		DefaultRole: moAdminRoleName,
+	}
+
+	nonSys := &TenantInfo{
+		Tenant: "abc",
+	}
+
+	nonSys2 := &TenantInfo{
+		Tenant:      "abc",
+		DefaultRole: moAdminRoleName,
+	}
+	ses.SetFromRealUser(true)
+	ses.SetTenantInfo(sys)
+
+	var ret bool
+
+	ret = verifyAccountCanExecMoCtrl(sys)
+	assert.False(t, ret)
+
+	ret = verifyAccountCanExecMoCtrl(sys2)
+	assert.True(t, ret)
+
+	ret = verifyAccountCanExecMoCtrl(nonSys)
+	assert.False(t, ret)
+
+	ret = verifyAccountCanExecMoCtrl(nonSys2)
+	assert.False(t, ret)
+}
+
+func Test_hasMoCtrl(t *testing.T) {
+	var ret bool
+	ret = hasMoCtrl(nil)
+	assert.False(t, ret)
+
+	ret = hasMoCtrl(&plan2.Plan{})
+	assert.False(t, ret)
+
+	ret = hasMoCtrl(&plan2.Plan{
+		Plan: &plan2.Plan_Query{
+			Query: &plan2.Query{
+				StmtType: plan3.Query_SELECT,
+				Nodes: []*plan3.Node{
+					{
+						NodeType: plan3.Node_PROJECT,
+						ProjectList: []*plan3.Expr{
+							{
+								Expr: &plan3.Expr_F{
+									F: &plan3.Function{
+										Func: &plan3.ObjectRef{
+											ObjName: "mo_ctl",
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	})
 	assert.True(t, ret)
 }

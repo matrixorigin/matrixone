@@ -76,6 +76,10 @@ func TestLiteralID(t *testing.T) {
 func tokenName(id int) string {
 	if id == STRING {
 		return "STRING"
+	} else if id == HEXNUM {
+		return "HEXNUM"
+	} else if id == BIT_LITERAL {
+		return "BIT_LITERAL"
 	} else if id == LEX_ERROR {
 		return "LEX_ERROR"
 	}
@@ -322,6 +326,68 @@ func TestComment(t *testing.T) {
 			if tcase.id != id || id != LEX_ERROR && string(got) != tcase.want2 {
 				t.Errorf("ScanComment(%q) = (%s, %q), want (%s, %q)", tcase.in, tokenName(id), got, tokenName(tcase.id), tcase.want2)
 			}
+		}
+	}
+}
+
+func TestBitValueLiteral(t *testing.T) {
+	testcases := []struct {
+		in   string
+		id   int
+		want string
+	}{{
+		in:   "b'00011011'",
+		id:   BIT_LITERAL,
+		want: "0b00011011",
+	}, {
+		in:   "0b00011011",
+		id:   BIT_LITERAL,
+		want: "0b00011011",
+	}, {
+		in:   "0b",
+		id:   ID,
+		want: "0b",
+	}, {
+		in:   "0b0a1fg",
+		id:   ID,
+		want: "0b0a1fg",
+	}}
+
+	for _, tcase := range testcases {
+		id, got := NewScanner(dialect.MYSQL, tcase.in).Scan()
+		if tcase.id != id || got != tcase.want {
+			t.Errorf("Scan(%q) = (%s, %q), want (%s, %q)", tcase.in, tokenName(id), got, tokenName(tcase.id), tcase.want)
+		}
+	}
+}
+
+func TestHexadecimalLiteral(t *testing.T) {
+	testcases := []struct {
+		in   string
+		id   int
+		want string
+	}{{
+		in:   "x'616263'",
+		id:   HEXNUM,
+		want: "0x616263",
+	}, {
+		in:   "0x616263",
+		id:   HEXNUM,
+		want: "0x616263",
+	}, {
+		in:   "0x",
+		id:   ID,
+		want: "0x",
+	}, {
+		in:   "0X0a1fg",
+		id:   ID,
+		want: "0x0a1fg",
+	}}
+
+	for _, tcase := range testcases {
+		id, got := NewScanner(dialect.MYSQL, tcase.in).Scan()
+		if tcase.id != id || got != tcase.want {
+			t.Errorf("Scan(%q) = (%s, %q), want (%s, %q)", tcase.in, tokenName(id), got, tokenName(tcase.id), tcase.want)
 		}
 	}
 }

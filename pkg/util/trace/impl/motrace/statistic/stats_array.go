@@ -17,6 +17,7 @@ package statistic
 import (
 	"context"
 	"strconv"
+	"sync/atomic"
 	"time"
 )
 
@@ -25,15 +26,20 @@ type StatsArray [StatsArrayLength]float64
 const (
 	Decimal128ToFloat64Scale = 5
 	Float64PrecForMemorySize = 3
+	Float64PrecForCU         = 4
 )
 
-const (
-	StatsArrayVersion = StatsArrayVersion3
+const StatsArrayVersion = StatsArrayVersionLatest
 
-	StatsArrayVersion0 = 0 // raw statistics
+const (
+	StatsArrayVersion0 = iota // raw statistics
+
 	StatsArrayVersion1 = 1 // float64 array
 	StatsArrayVersion2 = 2 // float64 array + plus one elem OutTrafficBytes
-	StatsArrayVersion3 = 3 // ... + one elem: ConnType
+	StatsArrayVersion3 = 3 // ... + 1 elem: ConnType
+	StatsArrayVersion4 = 4 // ... + 2 elem: OutPacketCount, CU
+
+	StatsArrayVersionLatest // same value as last variable StatsArrayVersion#
 )
 
 const (
@@ -44,6 +50,8 @@ const (
 	StatsArrayIndexS3IOOutputCount // index: 4
 	StatsArrayIndexOutTrafficBytes // index: 5
 	StatsArrayIndexConnType        // index: 6
+	StatsArrayIndexOutPacketCnt    // index: 7, version: 4
+	StatsArrayIndexCU              // index: 8, version: 4
 
 	StatsArrayLength
 )
@@ -52,6 +60,7 @@ const (
 	StatsArrayLengthV1 = 5
 	StatsArrayLengthV2 = 6
 	StatsArrayLengthV3 = 7
+	StatsArrayLengthV4 = 9
 )
 
 type ConnType float64
@@ -76,7 +85,11 @@ func NewStatsArrayV2() *StatsArray {
 }
 
 func NewStatsArrayV3() *StatsArray {
-	return NewStatsArray()
+	return NewStatsArray().WithVersion(StatsArrayVersion3)
+}
+
+func NewStatsArrayV4() *StatsArray {
+	return NewStatsArray().WithVersion(StatsArrayVersion4)
 }
 
 func (s *StatsArray) Init() *StatsArray {
@@ -93,12 +106,8 @@ func (s *StatsArray) InitIfEmpty() *StatsArray {
 }
 
 func (s *StatsArray) Reset() *StatsArray {
-	return s.WithVersion(StatsArrayVersion).
-		// StatsArrayVersion1
-		WithTimeConsumed(0).WithMemorySize(0).WithS3IOInputCount(0).WithS3IOOutputCount(0).
-		// StatsArrayVersion2
-		WithOutTrafficBytes(0)
-	// Next Version
+	*s = *initStatsArray
+	return s
 }
 
 func (s *StatsArray) GetVersion() float64         { return (*s)[StatsArrayIndexVersion] }
@@ -117,6 +126,18 @@ func (s *StatsArray) GetConnType() float64 {
 		return 0
 	}
 	return (*s)[StatsArrayIndexConnType]
+}
+func (s *StatsArray) GetOutPacketCount() float64 {
+	if s.GetVersion() < StatsArrayVersion4 {
+		return 0
+	}
+	return s[StatsArrayIndexOutPacketCnt]
+}
+func (s *StatsArray) GetCU() float64 {
+	if s.GetVersion() < StatsArrayVersion4 {
+		return 0
+	}
+	return s[StatsArrayIndexCU]
 }
 
 // WithVersion set the version array in StatsArray, please carefully to use.
@@ -151,6 +172,16 @@ func (s *StatsArray) WithConnType(v ConnType) *StatsArray {
 	return s
 }
 
+func (s *StatsArray) WithOutPacketCount(v float64) *StatsArray {
+	s[StatsArrayIndexOutPacketCnt] = v
+	return s
+}
+
+func (s *StatsArray) WithCU(v float64) *StatsArray {
+	s[StatsArrayIndexCU] = v
+	return s
+}
+
 func (s *StatsArray) ToJsonString() []byte {
 	switch s.GetVersion() {
 	case StatsArrayVersion1:
@@ -159,6 +190,8 @@ func (s *StatsArray) ToJsonString() []byte {
 		return StatsArrayToJsonString((*s)[:StatsArrayLengthV2])
 	case StatsArrayVersion3:
 		return StatsArrayToJsonString((*s)[:StatsArrayLengthV3])
+	case StatsArrayVersion4:
+		return StatsArrayToJsonString((*s)[:StatsArrayLengthV4])
 	default:
 		return StatsArrayToJsonString((*s)[:])
 	}
@@ -197,6 +230,8 @@ func StatsArrayToJsonString(arr []float64) []byte {
 			buf = append(buf, '0')
 		} else if idx == StatsArrayIndexMemorySize {
 			buf = strconv.AppendFloat(buf, v, 'f', Float64PrecForMemorySize, 64)
+		} else if idx == StatsArrayIndexCU {
+			buf = strconv.AppendFloat(buf, v, 'f', Float64PrecForCU, 64)
 		} else {
 			buf = strconv.AppendFloat(buf, v, 'f', 0, 64)
 		}
@@ -207,9 +242,9 @@ func StatsArrayToJsonString(arr []float64) []byte {
 
 var initStatsArray = NewStatsArray()
 
-var DefaultStatsArray = *initStatsArray.Init()
+var DefaultStatsArray = *initStatsArray
 
-var DefaultStatsArrayJsonString = initStatsArray.Init().ToJsonString()
+var DefaultStatsArrayJsonString = initStatsArray.ToJsonString()
 
 type statsInfoKey struct{}
 
@@ -223,9 +258,11 @@ type StatsInfo struct {
 	//PipelineTimeConsumption      time.Duration
 	//PipelineBlockTimeConsumption time.Duration
 
-	//S3AccessTimeConsumption time.Duration
+	IOAccessTimeConsumption int64
 	//S3ReadBytes             uint
 	//S3WriteBytes            uint
+
+	LockTimeConsumption int64
 
 	ParseStartTime     time.Time `json:"ParseStartTime"`
 	PlanStartTime      time.Time `json:"PlanStartTime"`
@@ -280,6 +317,20 @@ func (stats *StatsInfo) ExecutionEnd() {
 	stats.ExecutionDuration = stats.ExecutionEndTime.Sub(stats.ExecutionStartTime)
 }
 
+func (stats *StatsInfo) AddIOAccessTimeConsumption(d time.Duration) {
+	if stats == nil {
+		return
+	}
+	atomic.AddInt64(&stats.IOAccessTimeConsumption, int64(d))
+}
+
+func (stats *StatsInfo) AddLockTimeConsumption(d time.Duration) {
+	if stats == nil {
+		return
+	}
+	atomic.AddInt64(&stats.LockTimeConsumption, int64(d))
+}
+
 // reset StatsInfo into zero state
 func (stats *StatsInfo) Reset() {
 	if stats == nil {
@@ -288,6 +339,7 @@ func (stats *StatsInfo) Reset() {
 	stats.ParseDuration = 0
 	stats.CompileDuration = 0
 	stats.PlanDuration = 0
+	stats.ExecutionDuration = 0
 
 	//stats.PipelineTimeConsumption = 0
 	//stats.PipelineBlockTimeConsumption = 0
@@ -295,7 +347,8 @@ func (stats *StatsInfo) Reset() {
 	//stats.S3AccessTimeConsumption = 0
 	//stats.S3ReadBytes = 0
 	//stats.S3WriteBytes = 0
-
+	stats.IOAccessTimeConsumption = 0
+	stats.LockTimeConsumption = 0
 	stats.CompileStartTime = time.Time{}
 	stats.PlanStartTime = time.Time{}
 

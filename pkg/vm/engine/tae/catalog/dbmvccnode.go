@@ -40,7 +40,8 @@ func (e *EmptyMVCCNode) String() string {
 }
 
 // for create drop in one txn
-func (e *EmptyMVCCNode) Update(vun *EmptyMVCCNode) {}
+func (e *EmptyMVCCNode) Update(vun *EmptyMVCCNode)           {}
+func (e *EmptyMVCCNode) IdempotentUpdate(vun *EmptyMVCCNode) {}
 
 func (e *EmptyMVCCNode) WriteTo(w io.Writer) (n int64, err error) { return }
 
@@ -93,4 +94,9 @@ func (node *DBNode) WriteTo(w io.Writer) (n int64, err error) {
 	}
 	n += sn
 	return
+}
+
+// only used in ut test
+func (node *DBNode) TestSetAccId(id uint32) {
+	node.acInfo.TenantID = id
 }

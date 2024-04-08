@@ -23,7 +23,7 @@ import (
 type IDAlloctor struct {
 	dbAlloc  *common.IdAlloctor
 	tblAlloc *common.IdAlloctor
-	segAlloc *common.IdAlloctor
+	objAlloc *common.IdAlloctor
 	blkAlloc *common.IdAlloctor
 }
 
@@ -31,27 +31,27 @@ func NewIDAllocator() *IDAlloctor {
 	return &IDAlloctor{
 		dbAlloc:  common.NewIdAlloctor(1000),
 		tblAlloc: common.NewIdAlloctor(1000),
-		segAlloc: common.NewIdAlloctor(1000),
+		objAlloc: common.NewIdAlloctor(1000),
 		blkAlloc: common.NewIdAlloctor(1000),
 	}
 }
 
-func (alloc *IDAlloctor) Init(prevDb, prevTbl, prevSeg, prevBlk uint64) {
+func (alloc *IDAlloctor) Init(prevDb, prevTbl, prevObj, prevBlk uint64) {
 	alloc.dbAlloc.SetStart(prevDb)
 	alloc.tblAlloc.SetStart(prevTbl)
-	alloc.segAlloc.SetStart(prevSeg)
+	alloc.objAlloc.SetStart(prevObj)
 	alloc.blkAlloc.SetStart(prevBlk)
 }
 
-func (alloc *IDAlloctor) NextDB() uint64      { return alloc.dbAlloc.Alloc() }
-func (alloc *IDAlloctor) NextTable() uint64   { return alloc.tblAlloc.Alloc() }
-func (alloc *IDAlloctor) NextSegment() uint64 { return alloc.segAlloc.Alloc() }
-func (alloc *IDAlloctor) NextBlock() uint64   { return alloc.blkAlloc.Alloc() }
+func (alloc *IDAlloctor) NextDB() uint64     { return alloc.dbAlloc.Alloc() }
+func (alloc *IDAlloctor) NextTable() uint64  { return alloc.tblAlloc.Alloc() }
+func (alloc *IDAlloctor) NextObject() uint64 { return alloc.objAlloc.Alloc() }
+func (alloc *IDAlloctor) NextBlock() uint64  { return alloc.blkAlloc.Alloc() }
 
-func (alloc *IDAlloctor) CurrDB() uint64      { return alloc.dbAlloc.Get() }
-func (alloc *IDAlloctor) CurrTable() uint64   { return alloc.tblAlloc.Get() }
-func (alloc *IDAlloctor) CurrSegment() uint64 { return alloc.segAlloc.Get() }
-func (alloc *IDAlloctor) CurrBlock() uint64   { return alloc.blkAlloc.Get() }
+func (alloc *IDAlloctor) CurrDB() uint64     { return alloc.dbAlloc.Get() }
+func (alloc *IDAlloctor) CurrTable() uint64  { return alloc.tblAlloc.Get() }
+func (alloc *IDAlloctor) CurrObject() uint64 { return alloc.objAlloc.Get() }
+func (alloc *IDAlloctor) CurrBlock() uint64  { return alloc.blkAlloc.Get() }
 
 func (alloc *IDAlloctor) OnReplayBlockID(id uint64) {
 	if alloc.CurrBlock() < id {
@@ -59,9 +59,9 @@ func (alloc *IDAlloctor) OnReplayBlockID(id uint64) {
 	}
 }
 
-func (alloc *IDAlloctor) OnReplaySegmentID(id uint64) {
-	if alloc.CurrSegment() < id {
-		alloc.segAlloc.SetStart(id)
+func (alloc *IDAlloctor) OnReplayObjectID(id uint64) {
+	if alloc.CurrObject() < id {
+		alloc.objAlloc.SetStart(id)
 	}
 }
 func (alloc *IDAlloctor) OnReplayTableID(id uint64) {
@@ -77,5 +77,5 @@ func (alloc *IDAlloctor) OnReplayDBID(id uint64) {
 
 func (alloc *IDAlloctor) IDStates() string {
 	return fmt.Sprintf("Current DBID=%d,TID=%d,SID=%d,BID=%d",
-		alloc.CurrDB(), alloc.CurrTable(), alloc.CurrSegment(), alloc.CurrBlock())
+		alloc.CurrDB(), alloc.CurrTable(), alloc.CurrObject(), alloc.CurrBlock())
 }

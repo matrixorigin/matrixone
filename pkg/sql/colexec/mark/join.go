@@ -78,7 +78,11 @@ func (arg *Argument) Prepare(proc *process.Process) error {
 //				check eq and non-eq conds in nullSels to determine condState. (same as 2.2.1.3)
 
 func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
-	anal := proc.GetAnalyze(arg.info.Idx)
+	if err, isCancel := vm.CancelCheck(proc); isCancel {
+		return vm.CancelResult, err
+	}
+
+	anal := proc.GetAnalyze(arg.info.Idx, arg.info.ParallelIdx, arg.info.ParallelMajor)
 	anal.Start()
 	defer anal.Stop()
 	ap := arg
@@ -160,11 +164,15 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 		//ctr.bat = bat
 		//ctr.mp = bat.Ht.(*hashmap.JoinMap).Dup()
 		//anal.Alloc(ctr.mp.Map().Size())
+		mpSize := ctr.mp.Size()
+		if mpSize > ctr.maxAllocSize {
+			ctr.maxAllocSize = mpSize
+		}
 	}
 	return nil
 }
 
-func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool, result *vm.CallResult) error {
+func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool, result *vm.CallResult) (err error) {
 	anal.Input(bat, isFirst)
 	if ctr.rbat != nil {
 		proc.PutBatch(ctr.rbat)
@@ -174,15 +182,14 @@ func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.P
 	count := bat.RowCount()
 	for i, rp := range ap.Result {
 		if rp >= 0 {
-			// rbat.Vecs[i] = bat.Vecs[rp]
-			// bat.Vecs[rp] = nil
 			typ := *bat.Vecs[rp].GetType()
 			ctr.rbat.Vecs[i] = proc.GetVector(typ)
-			if err := vector.GetUnionAllFunction(typ, proc.Mp())(ctr.rbat.Vecs[i], bat.Vecs[rp]); err != nil {
-				return err
-			}
+			err = vector.GetUnionAllFunction(typ, proc.Mp())(ctr.rbat.Vecs[i], bat.Vecs[rp])
 		} else {
-			ctr.rbat.Vecs[i] = vector.NewConstFixed(types.T_bool.ToType(), false, count, proc.Mp())
+			ctr.rbat.Vecs[i], err = vector.NewConstFixed(types.T_bool.ToType(), false, count, proc.Mp())
+		}
+		if err != nil {
+			return err
 		}
 	}
 	ctr.rbat.AddRowCount(bat.RowCount())
@@ -459,6 +466,7 @@ func DumpBatch(originBatch *batch.Batch, proc *process.Process, sels []int64) (*
 	for i, vec := range originBatch.Vecs {
 		err := bat.Vecs[i].UnionBatch(vec, 0, length, flags, proc.Mp())
 		if err != nil {
+			proc.PutBatch(bat)
 			return nil, err
 		}
 	}

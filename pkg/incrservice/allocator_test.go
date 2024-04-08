@@ -20,7 +20,9 @@ import (
 	"testing"
 
 	"github.com/lni/goutils/leaktest"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/stretchr/testify/require"
 )
 
@@ -28,7 +30,7 @@ func TestAlloc(t *testing.T) {
 	runAllocatorTests(
 		t,
 		func(a valueAllocator) {
-			ctx, cancel := context.WithCancel(context.Background())
+			ctx, cancel := context.WithCancel(defines.AttachAccountId(context.Background(), catalog.System_Account))
 			defer cancel()
 
 			cases := []struct {
@@ -100,7 +102,7 @@ func TestAsyncAlloc(t *testing.T) {
 	runAllocatorTests(
 		t,
 		func(a valueAllocator) {
-			ctx, cancel := context.WithCancel(context.Background())
+			ctx, cancel := context.WithCancel(defines.AttachAccountId(context.Background(), catalog.System_Account))
 			defer cancel()
 
 			cases := []struct {

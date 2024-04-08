@@ -90,9 +90,10 @@ const (
 )
 
 const (
-	TxnTsSize   = 12
-	RowidSize   = 24
-	BlockidSize = 20
+	TxnTsSize    = 12
+	RowidSize    = 24
+	ObjectidSize = 18
+	BlockidSize  = 20
 )
 
 type Type struct {
@@ -247,6 +248,9 @@ type Rowid [RowidSize]byte
 
 // Segmentid
 type Segmentid = Uuid
+
+// Objectid
+type Objectid [ObjectidSize]byte
 
 // Blockid
 type Blockid [BlockidSize]byte
@@ -893,6 +897,11 @@ func (t T) IsFloat() bool {
 		return true
 	}
 	return false
+}
+
+// IsEnum return true if the types.T is Enum type
+func (t T) IsEnum() bool {
+	return t == T_enum
 }
 
 // IsMySQLString return true if the types.T is a MySQL string type (https://dev.mysql.com/doc/refman/8.0/en/string-types.html)

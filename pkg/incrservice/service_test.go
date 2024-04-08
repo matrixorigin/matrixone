@@ -21,6 +21,8 @@ import (
 	"time"
 
 	"github.com/lni/goutils/leaktest"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
@@ -201,7 +203,7 @@ func runServiceTests(
 		tc client.TxnClient,
 		ts rpc.TxnSender) {
 		defer leaktest.AfterTest(t)()
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		ctx, cancel := context.WithTimeout(defines.AttachAccountId(context.Background(), catalog.System_Account), 10*time.Second)
 		defer cancel()
 
 		ss := make([]*service, 0, n)
@@ -237,7 +239,7 @@ func newTestTableDef(autoCols int) []AutoColumn {
 }
 
 func waitStoreCachesCommitted(
-	t *testing.T,
+	_ *testing.T,
 	store *memStore,
 	n int) {
 	for {

@@ -28,8 +28,8 @@ const (
 )
 
 type StorageCfg struct {
-	BlockMaxRows     uint32 `toml:"block-max-rows"`
-	SegmentMaxBlocks uint16 `toml:"segment-max-blocks"`
+	BlockMaxRows    uint32 `toml:"block-max-rows"`
+	ObjectMaxBlocks uint16 `toml:"object-max-blocks"`
 }
 
 type CheckpointCfg struct {
@@ -51,8 +51,9 @@ type CheckpointCfg struct {
 }
 
 type GCCfg struct {
-	GCTTL          time.Duration
-	ScanGCInterval time.Duration
+	GCTTL          time.Duration `toml:"gc-ttl"`
+	ScanGCInterval time.Duration `toml:"scan-gc-interval"`
+	DisableGC      bool          `toml:"disable-gc"`
 }
 
 type CatalogCfg struct {

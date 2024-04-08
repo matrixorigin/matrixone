@@ -17,15 +17,21 @@ package plan
 import (
 	"context"
 	gotrace "runtime/trace"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
 
 func runBuildSelectByBinder(stmtType plan.Query_StatementType, ctx CompilerContext, stmt *tree.Select, isPrepareStmt bool) (*Plan, error) {
+	start := time.Now()
+	defer func() {
+		v2.TxnStatementBuildSelectHistogram.Observe(time.Since(start).Seconds())
+	}()
 	builder := NewQueryBuilder(stmtType, ctx, isPrepareStmt)
 	bindCtx := NewBindContext(builder, nil)
 	rootId, err := builder.buildSelect(stmt, bindCtx, true)
@@ -45,6 +51,10 @@ func runBuildSelectByBinder(stmtType plan.Query_StatementType, ctx CompilerConte
 }
 
 func buildExplainAnalyze(ctx CompilerContext, stmt *tree.ExplainAnalyze, isPrepareStmt bool) (*Plan, error) {
+	start := time.Now()
+	defer func() {
+		v2.TxnStatementBuildExplainHistogram.Observe(time.Since(start).Seconds())
+	}()
 	//get query optimizer and execute Optimize
 	plan, err := BuildPlan(ctx, stmt.Statement, isPrepareStmt)
 	if err != nil {
@@ -57,6 +67,10 @@ func buildExplainAnalyze(ctx CompilerContext, stmt *tree.ExplainAnalyze, isPrepa
 }
 
 func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool) (*Plan, error) {
+	start := time.Now()
+	defer func() {
+		v2.TxnStatementBuildPlanHistogram.Observe(time.Since(start).Seconds())
+	}()
 	_, task := gotrace.NewTask(context.TODO(), "plan.BuildPlan")
 	defer task.End()
 	switch stmt := stmt.(type) {
@@ -132,8 +146,6 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool) (*P
 		return buildShowIndex(stmt, ctx)
 	case *tree.ShowGrants:
 		return buildShowGrants(stmt, ctx)
-	case *tree.ShowCollation:
-		return buildShowCollation(stmt, ctx)
 	case *tree.ShowVariables:
 		return buildShowVariables(stmt, ctx)
 	case *tree.ShowStatus:
@@ -206,6 +218,13 @@ func GetResultColumnsFromPlan(p *Plan) []*ColDef {
 			columns[idx] = &ColDef{
 				Name: query.Headings[idx],
 				Typ:  expr.Typ,
+			}
+
+			if exprCol, ok := expr.Expr.(*plan.Expr_Col); ok {
+				if col := exprCol.Col; col != nil {
+					columns[idx].TblName = col.TblName
+					columns[idx].DbName = col.DbName
+				}
 			}
 		}
 

@@ -17,6 +17,8 @@ package plan
 import (
 	"context"
 	"encoding/json"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"testing"
 
 	"github.com/golang/mock/gomock"
@@ -105,7 +107,7 @@ func TestBuildAlterView(t *testing.T) {
 		}).AnyTimes()
 	ctx.EXPECT().SetBuildingAlterView(gomock.Any(), gomock.Any(), gomock.Any()).AnyTimes()
 	ctx.EXPECT().ResolveVariable(gomock.Any(), gomock.Any(), gomock.Any()).Return("", nil).AnyTimes()
-	ctx.EXPECT().GetAccountId().Return(catalog.System_Account).AnyTimes()
+	ctx.EXPECT().GetAccountId().Return(catalog.System_Account, nil).AnyTimes()
 	ctx.EXPECT().GetContext().Return(context.Background()).AnyTimes()
 	ctx.EXPECT().GetProcess().Return(nil).AnyTimes()
 	ctx.EXPECT().Stats(gomock.Any()).Return(false).AnyTimes()
@@ -190,7 +192,7 @@ func TestBuildLockTables(t *testing.T) {
 			return x.obj, x.table
 		}).AnyTimes()
 	ctx.EXPECT().ResolveVariable(gomock.Any(), gomock.Any(), gomock.Any()).Return("", nil).AnyTimes()
-	ctx.EXPECT().GetAccountId().Return(catalog.System_Account).AnyTimes()
+	ctx.EXPECT().GetAccountId().Return(catalog.System_Account, nil).AnyTimes()
 	ctx.EXPECT().GetContext().Return(context.Background()).AnyTimes()
 	ctx.EXPECT().GetProcess().Return(nil).AnyTimes()
 	ctx.EXPECT().Stats(gomock.Any()).Return(false).AnyTimes()
@@ -235,7 +237,11 @@ func TestBuildLockTables(t *testing.T) {
 
 func TestBuildCreateTable(t *testing.T) {
 	mock := NewMockOptimizer(false)
-
+	rt := moruntime.DefaultRuntime()
+	moruntime.SetupProcessLevelRuntime(rt)
+	moruntime.ProcessLevelRuntime().SetGlobalVariables(moruntime.InternalSQLExecutor, executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+		return executor.Result{}, nil
+	}))
 	sqls := []string{
 		`CREATE TABLE t3(
 					col1 INT NOT NULL,

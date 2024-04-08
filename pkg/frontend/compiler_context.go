@@ -23,6 +23,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -32,6 +33,7 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -116,8 +118,8 @@ func (tcc *TxnCompilerContext) GetRootSql() string {
 	return tcc.GetSession().GetSql()
 }
 
-func (tcc *TxnCompilerContext) GetAccountId() uint32 {
-	return tcc.ses.accountId
+func (tcc *TxnCompilerContext) GetAccountId() (uint32, error) {
+	return tcc.ses.accountId, nil
 }
 
 func (tcc *TxnCompilerContext) GetContext() context.Context {
@@ -182,15 +184,20 @@ func (tcc *TxnCompilerContext) getRelation(dbName string, tableName string, sub 
 	if isClusterTable(dbName, tableName) {
 		//if it is the cluster table in the general account, switch into the sys account
 		if account != nil && account.GetTenantID() != sysAccountID {
-			txnCtx = context.WithValue(txnCtx, defines.TenantIDKey{}, uint32(sysAccountID))
+			txnCtx = defines.AttachAccountId(txnCtx, sysAccountID)
 		}
 	}
 	if sub != nil {
-		txnCtx = context.WithValue(txnCtx, defines.TenantIDKey{}, uint32(sub.AccountId))
+		txnCtx = defines.AttachAccountId(txnCtx, uint32(sub.AccountId))
 		dbName = sub.DbName
 	}
+	//for system_metrics.metric and system.statement_info,
+	//it is special under the no sys account, should switch into the sys account first.
 	if dbName == catalog.MO_SYSTEM && tableName == catalog.MO_STATEMENT {
-		txnCtx = context.WithValue(txnCtx, defines.TenantIDKey{}, uint32(sysAccountID))
+		txnCtx = defines.AttachAccountId(txnCtx, uint32(sysAccountID))
+	}
+	if dbName == catalog.MO_SYSTEM_METRICS && (tableName == catalog.MO_METRIC || tableName == catalog.MO_SQL_STMT_CU) {
+		txnCtx = defines.AttachAccountId(txnCtx, uint32(sysAccountID))
 	}
 
 	//open database
@@ -277,11 +284,15 @@ func (tcc *TxnCompilerContext) ResolveById(tableId uint64) (*plan2.ObjectRef, *p
 		ObjName:    tableName,
 		Obj:        int64(tableId),
 	}
-	tableDef := table.GetTableDef(txnCtx)
+	tableDef := table.CopyTableDef(txnCtx)
 	return obj, tableDef
 }
 
 func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.ObjectRef, *plan2.TableDef) {
+	start := time.Now()
+	defer func() {
+		v2.TxnStatementResolveDurationHistogram.Observe(time.Since(start).Seconds())
+	}()
 	dbName, sub, err := tcc.ensureDatabaseIsNotEmpty(dbName, true)
 	if err != nil {
 		return nil, nil
@@ -291,10 +302,11 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 	if err != nil {
 		return nil, nil
 	}
-	tableDef := table.GetTableDef(ctx)
+	tableDef := table.CopyTableDef(ctx)
 	if tableDef.IsTemporary {
 		tableDef.Name = tableName
 	}
+	tableDef.DbName = dbName
 
 	// convert
 	var subscriptionName string
@@ -495,7 +507,10 @@ func (tcc *TxnCompilerContext) ResolveVariable(varName string, isSystemVar, isGl
 		}
 	} else {
 		_, val, err := tcc.GetSession().GetUserDefinedVar(varName)
-		return val, err
+		if val == nil {
+			return nil, err
+		}
+		return val.Value, err
 	}
 }
 
@@ -590,7 +605,10 @@ func (tcc *TxnCompilerContext) GetPrimaryKeyDef(dbName string, tableName string)
 }
 
 func (tcc *TxnCompilerContext) Stats(obj *plan2.ObjectRef) bool {
-
+	start := time.Now()
+	defer func() {
+		v2.TxnStatementStatsDurationHistogram.Observe(time.Since(start).Seconds())
+	}()
 	dbName := obj.GetSchemaName()
 	checkSub := true
 	if obj.PubInfo != nil {

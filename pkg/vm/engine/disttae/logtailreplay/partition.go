@@ -93,6 +93,10 @@ func (p *Partition) ConsumeCheckpoints(
 	if p.checkpointConsumed.Load() {
 		return nil
 	}
+	curState := p.state.Load()
+	if len(curState.checkpoints) == 0 {
+		return nil
+	}
 
 	lockErr := p.Lock(ctx)
 	if lockErr != nil {
@@ -100,7 +104,7 @@ func (p *Partition) ConsumeCheckpoints(
 	}
 	defer p.Unlock()
 
-	curState := p.state.Load()
+	curState = p.state.Load()
 	if len(curState.checkpoints) == 0 {
 		return nil
 	}

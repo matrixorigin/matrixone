@@ -28,7 +28,7 @@ jobs:
     needs: 
       - check-pr-valid
     if: ${{ needs.check-pr-valid.outputs.pr_valid == 'true' }}
-    uses: matrixorigin/matrixone/.github/workflows/ci.yaml@main
+    uses: matrixorigin/CI/.github/workflows/ci.yaml@release/1.1-dev
     secrets:
       S3ENDPOINT: ${{ secrets.S3ENDPOINT }}
       S3REGION: ${{ secrets.S3REGION }}
@@ -41,28 +41,28 @@ jobs:
     needs: 
       - check-pr-valid
     if: ${{ needs.check-pr-valid.outputs.pr_valid == 'true' }}
-    uses: matrixorigin/matrixone/.github/workflows/e2e-upgrade.yaml@main
+    uses: matrixorigin/CI/.github/workflows/e2e-upgrade.yaml@release/1.1-dev
 
   matrixone-compose-ci:
     name: Matrixone Compose CI
     needs: 
       - check-pr-valid
     if: ${{ needs.check-pr-valid.outputs.pr_valid == 'true' }}
-    uses: matrixorigin/matrixone/.github/workflows/e2e-compose.yaml@main
+    uses: matrixorigin/CI/.github/workflows/e2e-compose.yaml@release/1.1-dev
 
   matrixone-standalone-ci:
     name: Matrixone Standlone CI
     needs: 
       - check-pr-valid
     if: ${{ needs.check-pr-valid.outputs.pr_valid == 'true' }}
-    uses: matrixorigin/matrixone/.github/workflows/e2e-standalone.yaml@main
+    uses: matrixorigin/CI/.github/workflows/e2e-standalone.yaml@release/1.1-dev
 
   matrixone-utils-ci:
     name: Matrixone Utils CI
     needs: 
       - check-pr-valid
     if: ${{ needs.check-pr-valid.outputs.pr_valid == 'true' }}
-    uses: matrixorigin/matrixone/.github/workflows/utils.yaml@main
+    uses: matrixorigin/CI/.github/workflows/utils.yaml@release/1.1-dev
     secrets:
       TOKEN_ACTION: ${{ secrets.TOKEN_ACTION }}
       S3ENDPOINT: ${{ secrets.S3ENDPOINT }}

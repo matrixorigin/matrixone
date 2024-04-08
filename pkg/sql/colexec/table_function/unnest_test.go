@@ -44,10 +44,10 @@ var (
 	utc          []unnestTestCase
 	defaultAttrs = []string{"col", "seq", "key", "path", "index", "value", "this"}
 	//defaultExprs   = []*plan.Expr{
-	//	&plan.Expr_C{
-	//		C: &plan.Const{
+	//	&plan.Expr_Lit{
+	//		Lit: &plan.Const{
 	//			Isnull: false,
-	//			Value: &plan.Const_Sval{}
+	//			Value: &plan.Literal_Sval{}
 	//		}
 	//	}
 	//}
@@ -247,9 +247,9 @@ func makeConstInputExprs(jsons, paths []string, jsonType string, outers []bool) 
 			Id:    typeId,
 			Width: 256,
 		},
-		Expr: &plan.Expr_C{
-			C: &plan.Const{
-				Value: &plan.Const_Sval{
+		Expr: &plan.Expr_Lit{
+			Lit: &plan.Literal{
+				Value: &plan.Literal_Sval{
 					Sval: jsons[0],
 				},
 			},
@@ -285,9 +285,9 @@ func appendOtherExprs(ret []*plan.Expr, paths []string, outers []bool) []*plan.E
 			Id:    int32(types.T_varchar),
 			Width: 256,
 		},
-		Expr: &plan.Expr_C{
-			C: &plan.Const{
-				Value: &plan.Const_Sval{
+		Expr: &plan.Expr_Lit{
+			Lit: &plan.Literal{
+				Value: &plan.Literal_Sval{
 					Sval: paths[0],
 				},
 			},
@@ -297,9 +297,9 @@ func appendOtherExprs(ret []*plan.Expr, paths []string, outers []bool) []*plan.E
 		Typ: &plan.Type{
 			Id: int32(types.T_bool),
 		},
-		Expr: &plan.Expr_C{
-			C: &plan.Const{
-				Value: &plan.Const_Bval{
+		Expr: &plan.Expr_Lit{
+			Lit: &plan.Literal{
+				Value: &plan.Literal_Bval{
 					Bval: outers[0],
 				},
 			},

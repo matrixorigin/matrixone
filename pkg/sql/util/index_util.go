@@ -41,7 +41,7 @@ func BuildIndexTableName(ctx context.Context, unique bool) (string, error) {
 	} else {
 		name = catalog.SecondaryIndexTableNamePrefix
 	}
-	id, err := uuid.NewUUID()
+	id, err := uuid.NewV7()
 	if err != nil {
 		return "", moerr.NewInternalError(ctx, "newuuid failed")
 	}

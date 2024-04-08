@@ -139,7 +139,10 @@ func saveQueryResultMeta(ses *Session) error {
 	}()
 	fs := ses.GetParameterUnit().FileService
 	// write query result meta
-	colMap := buildColumnMap(ses.rs)
+	colMap, err := buildColumnMap(ses.GetRequestContext(), ses.rs)
+	if err != nil {
+		return err
+	}
 	b, err := ses.rs.Marshal()
 	if err != nil {
 		return err
@@ -205,7 +208,10 @@ func saveQueryResultMeta(ses *Session) error {
 	return err
 }
 
-func buildColumnMap(rs *plan.ResultColDef) string {
+func buildColumnMap(ctx context.Context, rs *plan.ResultColDef) (string, error) {
+	if rs == nil {
+		return "", moerr.NewInternalError(ctx, "resultColDef is nil")
+	}
 	m := make(map[string][]int)
 	org := make([]string, len(rs.ResultCols))
 	for i, col := range rs.ResultCols {
@@ -231,7 +237,7 @@ func buildColumnMap(rs *plan.ResultColDef) string {
 			buf.WriteString(fmt.Sprintf("%s -> %s", org[i], rs.ResultCols[i].Name))
 		}
 	}
-	return buf.String()
+	return buf.String(), nil
 }
 
 func isResultQuery(p *plan.Plan) []string {
@@ -284,6 +290,18 @@ func checkPrivilege(uuids []string, requestCtx context.Context, ses *Session) er
 	return nil
 }
 
+func maySaveQueryResult(ses *Session, bat *batch.Batch) error {
+	if openSaveQueryResult(ses) {
+		if err := saveQueryResult(ses, bat); err != nil {
+			return err
+		}
+		if err := saveQueryResultMeta(ses); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 type simpleAst struct {
 	Typ int `json:"age"`
 	// opt which fun of determinePrivilegeSetOfStatement need
@@ -309,7 +327,7 @@ func simpleAstMarshal(stmt tree.Statement) ([]byte, error) {
 		s.Typ = int(astShowAboutTable)
 	case *tree.ShowProcessList, *tree.ShowErrors, *tree.ShowWarnings, *tree.ShowVariables,
 		*tree.ShowStatus, *tree.ShowTarget, *tree.ShowTableStatus,
-		*tree.ShowGrants, *tree.ShowCollation, *tree.ShowIndex,
+		*tree.ShowGrants, *tree.ShowIndex,
 		*tree.ShowTableNumber, *tree.ShowColumnNumber,
 		*tree.ShowTableValues, *tree.ShowNodeList,
 		*tree.ShowLocks, *tree.ShowFunctionOrProcedureStatus, *tree.ShowConnectors:
@@ -548,7 +566,7 @@ func doDumpQueryResult(ctx context.Context, ses *Session, eParam *tree.ExportPar
 					break
 				}
 
-				_, err = extractRowFromEveryVector(ses, tmpBatch, j, oq, false)
+				_, err = extractRowFromEveryVector(ses, tmpBatch, j, oq, true)
 				if err != nil {
 					return err
 				}

@@ -57,11 +57,11 @@ func TestExpr_1(t *testing.T) {
 			convey.So(exprF.F.Func.ObjName, convey.ShouldEqual, "and")
 			for j, arg := range exprF.F.Args {
 				convey.So(arg.Typ.Id, convey.ShouldEqual, types.T_bool)
-				exprC, ok := arg.Expr.(*plan.Expr_C)
+				exprC, ok := arg.Expr.(*plan.Expr_Lit)
 				if !ok {
 					t.Fatalf("%+v", moerr.NewInternalError(mock.ctxt.GetContext(), "the parse expr type is not right"))
 				}
-				constB, ok := exprC.C.Value.(*plan.Const_Bval)
+				constB, ok := exprC.Lit.Value.(*plan.Literal_Bval)
 				if !ok {
 					t.Fatalf("%+v", moerr.NewInternalError(mock.ctxt.GetContext(), "the parse expr type is not right"))
 				}
@@ -98,11 +98,11 @@ func TestExpr_2(t *testing.T) {
 			convey.So(exprF.F.Func.ObjName, convey.ShouldEqual, "or")
 			for j, arg := range exprF.F.Args {
 				convey.So(arg.Typ.Id, convey.ShouldEqual, types.T_bool)
-				exprC, ok := arg.Expr.(*plan.Expr_C)
+				exprC, ok := arg.Expr.(*plan.Expr_Lit)
 				if !ok {
 					t.Fatalf("%+v", moerr.NewInternalError(mock.ctxt.GetContext(), "the parse expr type is not right"))
 				}
-				constB, ok := exprC.C.Value.(*plan.Const_Bval)
+				constB, ok := exprC.Lit.Value.(*plan.Literal_Bval)
 				if !ok {
 					t.Fatalf("%+v", moerr.NewInternalError(mock.ctxt.GetContext(), "the parse expr type is not right"))
 				}
@@ -139,11 +139,11 @@ func TestExpr_3(t *testing.T) {
 			convey.So(exprF.F.Func.ObjName, convey.ShouldEqual, "not")
 			for _, arg := range exprF.F.Args {
 				convey.So(arg.Typ.Id, convey.ShouldEqual, types.T_bool)
-				exprC, ok := arg.Expr.(*plan.Expr_C)
+				exprC, ok := arg.Expr.(*plan.Expr_Lit)
 				if !ok {
 					t.Fatalf("%+v", moerr.NewInternalError(mock.ctxt.GetContext(), "the parse expr type is not right"))
 				}
-				constB, ok := exprC.C.Value.(*plan.Const_Bval)
+				constB, ok := exprC.Lit.Value.(*plan.Literal_Bval)
 				if !ok {
 					t.Fatalf("%+v", moerr.NewInternalError(mock.ctxt.GetContext(), "the parse expr type is not right"))
 				}
@@ -409,9 +409,9 @@ func makeTimeExpr(s string, p int32) *plan.Expr {
 			Id:    int32(types.T_time),
 			Scale: p,
 		},
-		Expr: &plan.Expr_C{
-			C: &plan.Const{
-				Value: &plan.Const_Timeval{
+		Expr: &plan.Expr_Lit{
+			Lit: &plan.Literal{
+				Value: &plan.Literal_Timeval{
 					Timeval: int64(dt),
 				},
 			},
@@ -425,9 +425,9 @@ func makeDateExpr(s string) *plan.Expr {
 		Typ: &plan.Type{
 			Id: int32(types.T_date),
 		},
-		Expr: &plan.Expr_C{
-			C: &plan.Const{
-				Value: &plan.Const_Dateval{
+		Expr: &plan.Expr_Lit{
+			Lit: &plan.Literal{
+				Value: &plan.Literal_Dateval{
 					Dateval: int32(dt),
 				},
 			},
@@ -441,9 +441,9 @@ func makeTimestampExpr(s string, p int32, loc *time.Location) *plan.Expr {
 		Typ: &plan.Type{
 			Id: int32(types.T_timestamp),
 		},
-		Expr: &plan.Expr_C{
-			C: &plan.Const{
-				Value: &plan.Const_Timestampval{
+		Expr: &plan.Expr_Lit{
+			Lit: &plan.Literal{
+				Value: &plan.Literal_Timestampval{
 					Timestampval: int64(dt),
 				},
 			},
@@ -456,9 +456,9 @@ func makeDatetimeExpr(s string, p int32) *plan.Expr {
 		Typ: &plan.Type{
 			Id: int32(types.T_datetime),
 		},
-		Expr: &plan.Expr_C{
-			C: &plan.Const{
-				Value: &plan.Const_Datetimeval{
+		Expr: &plan.Expr_Lit{
+			Lit: &plan.Literal{
+				Value: &plan.Literal_Datetimeval{
 					Datetimeval: int64(dt),
 				},
 			},

@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -59,6 +60,8 @@ type compactBlockTask struct {
 	scopes    []common.ID
 	mapping   []int32
 	deletes   *nulls.Bitmap
+
+	Stats []objectio.ObjectStats
 }
 
 func NewCompactBlockTask(
@@ -68,27 +71,28 @@ func NewCompactBlockTask(
 	rt *dbutils.Runtime,
 ) (task *compactBlockTask, err error) {
 	task = &compactBlockTask{
-		txn:  txn,
-		meta: meta,
-		rt:   rt,
+		txn:   txn,
+		meta:  meta,
+		rt:    rt,
+		Stats: make([]objectio.ObjectStats, 0),
 	}
-	dbId := meta.GetSegment().GetTable().GetDB().ID
+	dbId := meta.GetObject().GetTable().GetDB().ID
 	database, err := txn.UnsafeGetDatabase(dbId)
 	if err != nil {
 		return
 	}
-	tableId := meta.GetSegment().GetTable().ID
+	tableId := meta.GetObject().GetTable().ID
 	rel, err := database.UnsafeGetRelation(tableId)
 	if err != nil {
 		return
 	}
 	task.schema = rel.Schema().(*catalog.Schema)
-	seg, err := rel.GetSegment(&meta.GetSegment().ID)
+	obj, err := rel.GetObject(&meta.GetObject().ID)
 	if err != nil {
 		return
 	}
-	defer seg.Close()
-	task.compacted, err = seg.GetBlock(meta.ID)
+	defer obj.Close()
+	task.compacted, err = obj.GetBlock(meta.ID)
 	if err != nil {
 		return
 	}
@@ -177,8 +181,8 @@ func (task *compactBlockTask) Execute(ctx context.Context) (err error) {
 		}
 	}()
 	now := time.Now()
-	seg := task.compacted.GetSegment()
-	defer seg.Close()
+	obj := task.compacted.GetObject()
+	defer obj.Close()
 	// Prepare a block placeholder
 	oldBMeta := task.compacted.GetMeta().(*catalog.BlockEntry)
 	phaseNumber = 1
@@ -191,41 +195,45 @@ func (task *compactBlockTask) Execute(ctx context.Context) (err error) {
 	}
 	defer preparer.Close()
 	phaseNumber = 2
-	if err = seg.SoftDeleteBlock(task.compacted.Fingerprint().BlockID); err != nil {
+	if err = obj.SoftDeleteBlock(task.compacted.Fingerprint().BlockID); err != nil {
 		return err
+	}
+	err = obj.GetRelation().SoftDeleteObject(obj.GetID())
+	if err != nil {
+		return
 	}
 	oldBlkData := oldBMeta.GetBlockData()
 	phaseNumber = 3
 
 	if !empty {
-		createOnSeg := seg
-		curSeg := seg.GetMeta().(*catalog.SegmentEntry)
-		// double the threshold to make more room for creating new appendable segment during appending, just a piece of defensive code
+		createOnObj := obj
+		curObj := obj.GetMeta().(*catalog.ObjectEntry)
+		// double the threshold to make more room for creating new appendable Object during appending, just a piece of defensive code
 		// check GetAppender function in tableHandle
-		if curSeg.GetNextObjectIndex() > options.DefaultObejctPerSegment*2 {
-			nextSeg := curSeg.GetTable().LastAppendableSegmemt()
-			if nextSeg.ID == curSeg.ID {
-				// we can't create appendable seg here because compaction can be rollbacked.
-				// so just wait until the new appendable seg is available.
+		if curObj.GetNextObjectIndex() > options.DefaultObjectPerSegment*2 {
+			nextObj := curObj.GetTable().LastAppendableObject()
+			if nextObj.ID == curObj.ID {
+				// we can't create appendable obj here because compaction can be rollbacked.
+				// so just wait until the new appendable obj is available.
 				// actually this log can barely be printed.
-				logutil.Infof("do not compact on seg %s %d, wait", curSeg.ID.ToString(), curSeg.GetNextObjectIndex())
+				logutil.Infof("do not compact on obj %s %d, wait", curObj.ID.String(), curObj.GetNextObjectIndex())
 				return moerr.GetOkExpectedEOB()
 			}
-			if createOnSeg, err = task.compacted.GetSegment().GetRelation().GetSegment(&nextSeg.ID); err != nil {
+			if createOnObj, err = task.compacted.GetObject().GetRelation().GetObject(&nextObj.ID); err != nil {
 				return err
 			} else {
-				defer createOnSeg.Close()
+				defer createOnObj.Close()
 			}
 		}
 
 		if _, err = task.createAndFlushNewBlock(
-			createOnSeg, preparer,
+			createOnObj, preparer,
 		); err != nil {
 			return
 		}
 	}
 
-	table := task.meta.GetSegment().GetTable()
+	table := task.meta.GetObject().GetTable()
 	// write old block
 	var deletes *containers.Batch
 	// write ablock
@@ -259,7 +267,7 @@ func (task *compactBlockTask) Execute(ctx context.Context) (err error) {
 		if err = task.rt.Scheduler.Schedule(ablockTask); err != nil {
 			return
 		}
-		if err = ablockTask.WaitDone(); err != nil {
+		if err = ablockTask.WaitDone(ctx); err != nil {
 			return
 		}
 		metaLocABlk := blockio.EncodeLocation(
@@ -269,6 +277,9 @@ func (task *compactBlockTask) Execute(ctx context.Context) (err error) {
 			ablockTask.blocks[0].GetID())
 
 		if err = task.compacted.UpdateMetaLoc(metaLocABlk); err != nil {
+			return err
+		}
+		if err = task.compacted.GetObject().UpdateStats(ablockTask.stat); err != nil {
 			return err
 		}
 		if deletes != nil {
@@ -294,7 +305,7 @@ func (task *compactBlockTask) Execute(ctx context.Context) (err error) {
 			if err = task.rt.Scheduler.Schedule(deleteTask); err != nil {
 				return
 			}
-			if err = deleteTask.WaitDone(); err != nil {
+			if err = deleteTask.WaitDone(ctx); err != nil {
 				return
 			}
 			deltaLoc := blockio.EncodeLocation(
@@ -350,16 +361,20 @@ func (task *compactBlockTask) Execute(ctx context.Context) (err error) {
 		common.AnyField("createdRows", rows),
 		common.DurationField(time.Since(now)))
 	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
-		counter.TAE.Segment.CompactBlock.Add(1)
+		counter.TAE.Object.CompactBlock.Add(1)
 	})
 	return
 }
 
 func (task *compactBlockTask) createAndFlushNewBlock(
-	seg handle.Segment,
+	obj handle.Object,
 	preparer *model.PreparedCompactedBlockData,
 ) (newBlk handle.Block, err error) {
-	newBlk, err = seg.CreateNonAppendableBlock(nil)
+	obj, err = obj.GetRelation().CreateNonAppendableObject(false)
+	if err != nil {
+		return
+	}
+	newBlk, err = obj.CreateNonAppendableBlock(nil)
 	if err != nil {
 		return
 	}
@@ -379,7 +394,7 @@ func (task *compactBlockTask) createAndFlushNewBlock(
 	if err = task.rt.Scheduler.Schedule(ioTask); err != nil {
 		return
 	}
-	if err = ioTask.WaitDone(); err != nil {
+	if err = ioTask.WaitDone(context.Background()); err != nil {
 		logutil.Warnf("flush error for %s %v", id.String(), err)
 		return
 	}
@@ -393,6 +408,10 @@ func (task *compactBlockTask) createAndFlushNewBlock(
 	if err = newBlk.UpdateMetaLoc(metaLoc); err != nil {
 		return
 	}
+	if err = newBlk.GetObject().UpdateStats(ioTask.stat); err != nil {
+		return
+	}
+	task.Stats = append(task.Stats, ioTask.Stats)
 
 	err = newBlkData.Init()
 	return

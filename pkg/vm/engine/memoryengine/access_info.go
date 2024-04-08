@@ -26,15 +26,12 @@ type AccessInfo struct {
 	RoleID    uint32
 }
 
-func getAccessInfo(ctx context.Context) (info AccessInfo) {
-	if v := ctx.Value(defines.TenantIDKey{}); v != nil {
-		info.AccountID = v.(uint32)
+func getAccessInfo(ctx context.Context) (info AccessInfo, err error) {
+	info.AccountID, err = defines.GetAccountId(ctx)
+	if err != nil {
+		return
 	}
-	if v := ctx.Value(defines.UserIDKey{}); v != nil {
-		info.UserID = v.(uint32)
-	}
-	if v := ctx.Value(defines.RoleIDKey{}); v != nil {
-		info.RoleID = v.(uint32)
-	}
+	info.UserID = defines.GetUserId(ctx)
+	info.RoleID = defines.GetRoleId(ctx)
 	return
 }

@@ -44,6 +44,8 @@ type clientInfo struct {
 	username string
 	// originIP that client used to communicate with server
 	originIP net.IP
+	// originPort is the origin port of client.
+	originPort uint16
 }
 
 // reservedLabels are the labels not allowed in user labels.
@@ -106,9 +108,9 @@ func (l *labelInfo) isSuperTenant() bool {
 }
 
 // genSelector generates the label selector according to labels in labelInfo.
-func (l *labelInfo) genSelector() clusterservice.Selector {
+func (l *labelInfo) genSelector(op clusterservice.Op) clusterservice.Selector {
 	return clusterservice.NewSelector().SelectByLabel(
-		l.allLabels(), clusterservice.EQ,
+		l.allLabels(), op,
 	)
 }
 

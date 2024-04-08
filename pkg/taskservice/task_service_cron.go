@@ -17,7 +17,6 @@ package taskservice
 import (
 	"context"
 	"fmt"
-	"sync"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
@@ -29,187 +28,142 @@ import (
 
 var (
 	fetchInterval = time.Second * 3
-	retryInterval = time.Second * 10
 )
 
-func (s *taskService) StartScheduleCronTask() {
-	s.crons.Lock()
-	defer s.crons.Unlock()
+type crons struct {
+	state cronServiceState
 
-	if s.crons.started || s.crons.stopping {
+	stopper *stopper.Stopper
+	cron    *cron.Cron
+	jobs    map[uint64]*cronJob
+	entries map[uint64]cron.EntryID
+}
+
+func (s *taskService) StartScheduleCronTask() {
+	if !s.crons.state.canStart() {
+		s.rt.Logger().Info("cron task scheduler started or is stopping")
 		return
 	}
 
-	s.crons.started = true
 	s.crons.stopper = stopper.NewStopper("cronTasks")
 	s.crons.jobs = make(map[uint64]*cronJob)
-	s.crons.entryIDs = make(map[uint64]cron.EntryID)
-	s.crons.retryC = make(chan task.CronTask, 256)
+	s.crons.entries = make(map[uint64]cron.EntryID)
 	s.crons.cron = cron.New(cron.WithParser(s.cronParser), cron.WithLogger(logutil.GetCronLogger(false)))
 	s.crons.cron.Start()
 	if err := s.crons.stopper.RunTask(s.fetchCronTasks); err != nil {
 		panic(err)
 	}
-	if err := s.crons.stopper.RunTask(s.retryTriggerCronTask); err != nil {
-		panic(err)
-	}
 }
 
 func (s *taskService) StopScheduleCronTask() {
-	s.crons.Lock()
-	if !s.crons.started {
-		s.crons.Unlock()
+	if !s.crons.state.canStop() {
+		s.rt.Logger().Info("cron task scheduler stopped or is stopping")
 		return
 	}
-	stopper := s.crons.stopper
-	s.crons.started = false
-	s.crons.stopping = true
-	s.crons.stopper = nil
-	s.crons.Unlock()
 
-	stopper.Stop()
-
-	s.crons.Lock()
-	defer s.crons.Unlock()
-	if s.crons.started {
-		panic("StartScheduleCronTask and StopScheduleCronTask can not concurrently invoked")
-	}
+	s.crons.stopper.Stop()
 	<-s.crons.cron.Stop().Done()
-	close(s.crons.retryC)
+	s.crons.cron = nil
 	s.crons.jobs = nil
-	s.crons.entryIDs = nil
-	s.crons.stopping = false
+	s.crons.entries = nil
+	s.crons.stopper = nil
+
+	s.crons.state.endStop()
 }
 
 func (s *taskService) fetchCronTasks(ctx context.Context) {
-	timer := time.NewTimer(fetchInterval)
-	defer timer.Stop()
+	s.rt.Logger().Info("start to fetch cron tasks")
+	defer func() {
+		s.rt.Logger().Info("stop to fetch cron tasks")
+	}()
+
+	ticker := time.NewTicker(fetchInterval)
+	defer ticker.Stop()
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-timer.C:
-			c, cancel := context.WithTimeout(ctx, time.Second*10)
-			tasks, err := s.QueryCronTask(c)
-			cancel()
-			if err != nil {
-				s.rt.Logger().Error("query cron tasks failed",
-					zap.Error(err))
-				break
-			}
-
-			currentTasks := make(map[uint64]task.CronTask)
-			for _, cronTask := range tasks {
-				currentTasks[cronTask.ID] = cronTask
-			}
-
-			s.crons.Lock()
-			s.rt.Logger().Debug("new cron tasks fetched",
-				zap.Int("current-count", len(s.crons.jobs)),
-				zap.Int("fetch-count", len(tasks)))
-
-			// add new cron tasks to cron scheduler
-			for id, v := range currentTasks {
-				if _, ok := s.crons.jobs[id]; !ok {
-					s.scheduleCronTaskLocked(v)
-				}
-			}
-
-			// remove deleted cron tasks
-			var removedTasks []uint64
-			for id, v := range s.crons.jobs {
-				if _, ok := currentTasks[id]; !ok {
-					removedTasks = append(removedTasks, id)
-					v.close()
-				}
-			}
-			for _, id := range removedTasks {
-				s.removeCronTaskLocked(id)
-			}
-			s.crons.Unlock()
+		case <-ticker.C:
 		}
-		timer.Reset(fetchInterval)
+		c, cancel := context.WithTimeout(ctx, time.Second*10)
+		tasks, err := s.QueryCronTask(c)
+		cancel()
+		if err != nil {
+			s.rt.Logger().Error("query cron tasks failed",
+				zap.Error(err))
+			continue
+		}
+
+		s.rt.Logger().Debug("new cron tasks fetched",
+			zap.Int("current-count", len(s.crons.entries)),
+			zap.Int("fetch-count", len(tasks)))
+
+		currentTasks := make(map[uint64]struct{}, len(tasks))
+		// add new cron tasks to cron scheduler
+		for _, v := range tasks {
+			currentTasks[v.ID] = struct{}{}
+			if job, ok := s.crons.jobs[v.ID]; !ok {
+				s.addCronTask(v)
+			} else {
+				if job.state.canUpdate() {
+					if job.task.TriggerTimes != v.TriggerTimes {
+						s.rt.Logger().Info("cron task updated",
+							zap.String("cause", "trigger-times changed"),
+							zap.Uint64("old-trigger-times", job.task.TriggerTimes),
+							zap.Uint64("new-trigger-times", v.TriggerTimes),
+							zap.String("task", v.DebugString()))
+						s.replaceCronTask(v)
+					}
+					job.state.endUpdate()
+				}
+			}
+		}
+
+		// remove deleted cron tasks
+		for id := range s.crons.entries {
+			if _, ok := currentTasks[id]; !ok {
+				s.removeCronTask(id)
+			}
+		}
 	}
 }
 
-// retryTriggerCronTask when a cron reaches its trigger time, the CronTask creates a task and hands
-// it to the scheduler for execution. When the creation of a task fails, it goes to the retry queue.
-func (s *taskService) retryTriggerCronTask(ctx context.Context) {
-	timer := time.NewTimer(retryInterval)
-	defer timer.Stop()
-
-	handle := func() {
-		for {
-			select {
-			case cronTask := <-s.crons.retryC:
-				s.retryScheduleCronTask(cronTask)
-			default:
-				return
-			}
-		}
-	}
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-timer.C:
-			handle()
-		}
-		timer.Reset(retryInterval)
-	}
-}
-
-func (s *taskService) scheduleCronTaskLocked(task task.CronTask) {
+func (s *taskService) addCronTask(task task.CronTask) {
 	job := newCronJob(task, s)
 	if time.Now().After(time.UnixMilli(task.NextTime)) {
 		s.rt.Logger().Info("cron task triggered",
 			zap.String("cause", "now > next"),
 			zap.String("task", task.DebugString()))
-		if err := s.crons.stopper.RunTask(func(ctx context.Context) { job.run() }); err != nil {
+		if err := s.crons.stopper.RunTask(func(ctx context.Context) { job.Run() }); err != nil {
 			panic(err)
 		}
 	}
 
-	id, err := s.crons.cron.AddFunc(task.CronExpr, job.run)
+	entryId, err := s.crons.cron.AddJob(task.CronExpr, job)
 	if err != nil {
 		panic(err)
 	}
-	s.crons.entryIDs[task.ID] = id
 	s.crons.jobs[task.ID] = job
+	s.crons.entries[task.ID] = entryId
 }
 
-func (s *taskService) retryScheduleCronTask(task task.CronTask) {
-	s.crons.Lock()
-	defer s.crons.Unlock()
-
-	if !s.crons.started {
-		return
-	}
-
-	if job, ok := s.crons.jobs[task.ID]; ok {
-		if err := s.crons.stopper.RunTask(func(ctx context.Context) { job.retryRun(task) }); err != nil {
-			panic(err)
-		}
-	}
-}
-
-func (s *taskService) removeCronTaskLocked(id uint64) {
-	s.crons.cron.Remove(s.crons.entryIDs[id])
-	delete(s.crons.entryIDs, id)
+func (s *taskService) removeCronTask(id uint64) {
+	s.crons.cron.Remove(s.crons.entries[id])
 	delete(s.crons.jobs, id)
+	delete(s.crons.entries, id)
 }
 
-func (s *taskService) addToRetrySchedule(task task.CronTask) {
-	s.crons.Lock()
-	defer s.crons.Unlock()
+func (s *taskService) replaceCronTask(v task.CronTask) {
+	s.crons.cron.Remove(s.crons.entries[v.ID])
 
-	if !s.crons.started {
-		return
+	job := newCronJob(v, s)
+	entryId, err := s.crons.cron.AddJob(v.CronExpr, job)
+	if err != nil {
+		panic(err)
 	}
-
-	s.crons.retryC <- task
+	s.crons.jobs[v.ID] = job
+	s.crons.entries[v.ID] = entryId
 }
 
 func newTaskFromMetadata(metadata task.TaskMetadata) task.AsyncTask {
@@ -221,12 +175,10 @@ func newTaskFromMetadata(metadata task.TaskMetadata) task.AsyncTask {
 }
 
 type cronJob struct {
-	sync.Mutex
-	closed   bool
+	state    cronJobState
 	s        *taskService
 	schedule cron.Schedule
 	task     task.CronTask
-	version  uint64
 }
 
 func newCronJob(task task.CronTask, s *taskService) *cronJob {
@@ -237,47 +189,20 @@ func newCronJob(task task.CronTask, s *taskService) *cronJob {
 	return &cronJob{
 		schedule: schedule,
 		task:     task,
-		version:  0,
 		s:        s,
 	}
 }
 
-func (j *cronJob) close() {
-	j.Lock()
-	defer j.Unlock()
-
-	j.closed = true
-}
-
-func (j *cronJob) retryRun(task task.CronTask) {
-	j.Lock()
-	defer j.Unlock()
-
-	if j.task.NextTime != task.NextTime {
+func (j *cronJob) Run() {
+	if !j.state.canRun() {
 		return
 	}
+	defer func() {
+		j.state.endRun()
+	}()
 
-	j.doRun()
-}
-
-func (j *cronJob) run() {
-	j.Lock()
-	defer j.Unlock()
-
-	if j.task.Metadata.Options.Concurrency != 0 {
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
-		defer cancel()
-
-		queryTask, err := j.s.QueryAsyncTask(ctx,
-			WithTaskStatusCond(task.TaskStatus_Running),
-			WithTaskExecutorCond(EQ, j.task.Metadata.Executor))
-		if err != nil ||
-			uint32(len(queryTask)) >= j.task.Metadata.Options.Concurrency {
-			j.s.rt.Logger().Debug("cron task not triggered",
-				zap.String("cause", "reach max concurrency"),
-				zap.String("task", j.task.DebugString()))
-			return
-		}
+	if j.task.Metadata.Options.Concurrency != 0 && !j.checkConcurrency() {
+		return
 	}
 
 	j.s.rt.Logger().Info("cron task triggered",
@@ -287,31 +212,52 @@ func (j *cronJob) run() {
 }
 
 func (j *cronJob) doRun() {
-	if j.closed {
+	now := time.Now()
+	cronTasks, err := j.s.QueryCronTask(context.Background(), WithCronTaskId(EQ, j.task.ID))
+	if err != nil {
+		j.s.rt.Logger().Error("failed to query cron task", zap.Error(err))
 		return
 	}
-
-	now := time.Now()
-	next := j.schedule.Next(now)
-	newTask := j.task
-	newTask.NextTime = next.UnixMilli()
-	newTask.UpdateAt = now.UnixMilli()
+	if len(cronTasks) != 1 {
+		j.s.rt.Logger().Panic(fmt.Sprintf("query cron_task_id = %d, return %d records", j.task.ID, len(cronTasks)))
+		return
+	}
+	cronTask := cronTasks[0]
+	cronTask.UpdateAt = now.UnixMilli()
+	cronTask.NextTime = j.schedule.Next(now).UnixMilli()
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 	defer cancel()
 
-	newTask.TriggerTimes++
-	value := newTaskFromMetadata(newTask.Metadata)
-	value.ParentTaskID = value.Metadata.ID
-	value.Metadata.ID = fmt.Sprintf("%s:%d", value.ParentTaskID, newTask.TriggerTimes)
+	cronTask.TriggerTimes++
+	asyncTask := newTaskFromMetadata(cronTask.Metadata)
+	asyncTask.ParentTaskID = asyncTask.Metadata.ID
+	asyncTask.Metadata.ID = fmt.Sprintf("%s:%d", asyncTask.ParentTaskID, cronTask.TriggerTimes)
 
-	_, err := j.s.store.UpdateCronTask(ctx, newTask, value)
+	_, err = j.s.store.UpdateCronTask(ctx, cronTask, asyncTask)
 	if err != nil {
 		j.s.rt.Logger().Error("trigger cron task failed",
 			zap.String("cron-task", j.task.DebugString()),
 			zap.Error(err))
-		j.s.addToRetrySchedule(j.task)
 		return
 	}
-	j.task = newTask
+	j.task = cronTask
+}
+
+func (j *cronJob) checkConcurrency() bool {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+	defer cancel()
+
+	queryTask, err := j.s.QueryAsyncTask(ctx,
+		WithTaskStatusCond(task.TaskStatus_Running),
+		WithTaskExecutorCond(EQ, j.task.Metadata.Executor))
+	if err != nil ||
+		uint32(len(queryTask)) >= j.task.Metadata.Options.Concurrency {
+		j.s.rt.Logger().Debug("cron task not triggered",
+			zap.String("cause", "reach max concurrency"),
+			zap.String("task", j.task.DebugString()),
+			zap.Error(err))
+		return false
+	}
+	return true
 }

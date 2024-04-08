@@ -272,6 +272,10 @@ func TestDoRebalance(t *testing.T) {
 	)
 	li := labelInfo{
 		Tenant: "t1",
+		Labels: map[string]string{
+			"k1": "v1",
+			"k2": "v2",
+		},
 	}
 	cn11.hash, err = li.getHash()
 	require.NoError(t, err)

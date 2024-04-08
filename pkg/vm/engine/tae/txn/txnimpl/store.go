@@ -16,12 +16,15 @@ package txnimpl
 
 import (
 	"context"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"runtime/trace"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
-	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	motrace "github.com/matrixorigin/matrixone/pkg/util/trace"
+	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/moprobe"
@@ -40,6 +43,93 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
+var (
+	_tracerPool = sync.Pool{
+		New: func() any {
+			return &txnTracer{}
+		},
+	}
+)
+
+func getTracer() *txnTracer {
+	return _tracerPool.Get().(*txnTracer)
+}
+
+func putTracer(tracer *txnTracer) {
+	tracer.task = nil
+	tracer.state = 0
+	_tracerPool.Put(tracer)
+}
+
+type txnTracer struct {
+	state uint8
+	task  *trace.Task
+	stamp time.Time
+}
+
+func (tracer *txnTracer) Trigger(state uint8) {
+	switch state {
+	case 0: // start preparing wait
+		_, tracer.task = trace.NewTask(context.Background(), "1-PreparingWait")
+		tracer.stamp = time.Now()
+		tracer.state = 0
+
+	case 1: // end preparing wait and start preparing
+		if tracer.task != nil && tracer.state == 0 {
+			tracer.task.End()
+			v2.TxnPreparingWaitDurationHistogram.Observe(time.Since(tracer.stamp).Seconds())
+		}
+		_, tracer.task = trace.NewTask(context.Background(), "2-Preparing")
+		tracer.stamp = time.Now()
+		tracer.state = 1
+
+	case 2: // end preparing and start prepare wal wait
+		if tracer.task != nil && tracer.state == 1 {
+			tracer.task.End()
+			v2.TxnPreparingDurationHistogram.Observe(time.Since(tracer.stamp).Seconds())
+		}
+		_, tracer.task = trace.NewTask(context.Background(), "3-PrepareWalWait")
+		tracer.stamp = time.Now()
+		tracer.state = 2
+
+	case 3: // end prepare wal wait and start prepare wal
+		if tracer.task != nil && tracer.state == 2 {
+			tracer.task.End()
+			v2.TxnPrepareWalWaitDurationHistogram.Observe(time.Since(tracer.stamp).Seconds())
+		}
+		_, tracer.task = trace.NewTask(context.Background(), "4-PrepareWal")
+		tracer.stamp = time.Now()
+		tracer.state = 3
+
+	case 4: // end prepare wal and start prepared wait
+		if tracer.task != nil && tracer.state == 3 {
+			tracer.task.End()
+			v2.TxnPrepareWalDurationHistogram.Observe(time.Since(tracer.stamp).Seconds())
+		}
+		_, tracer.task = trace.NewTask(context.Background(), "5-PreparedWait")
+		tracer.stamp = time.Now()
+		tracer.state = 4
+
+	case 5: // end prepared wait and start prepared
+		if tracer.task != nil && tracer.state == 4 {
+			tracer.task.End()
+			v2.TxnPreparedWaitDurationHistogram.Observe(time.Since(tracer.stamp).Seconds())
+		}
+		_, tracer.task = trace.NewTask(context.Background(), "6-Prepared")
+		tracer.stamp = time.Now()
+		tracer.state = 5
+	}
+}
+
+func (tracer *txnTracer) Stop() {
+	if tracer.task != nil && tracer.state == 5 {
+		tracer.task.End()
+		v2.TxnPreparedDurationHistogram.Observe(time.Since(tracer.stamp).Seconds())
+	}
+	tracer.task = nil
+	tracer.state = 0
+}
+
 type txnStore struct {
 	ctx context.Context
 	txnbase.NoopTxnStore
@@ -54,6 +144,7 @@ type txnStore struct {
 	warChecker  *warChecker
 	dataFactory *tables.DataFactory
 	writeOps    atomic.Uint32
+	tracer      *txnTracer
 
 	wg sync.WaitGroup
 }
@@ -88,6 +179,31 @@ func newStore(
 		dataFactory: dataFactory,
 		wg:          sync.WaitGroup{},
 	}
+}
+
+func (store *txnStore) StartTrace() {
+	if store.IsReadonly() || store.GetTransactionType() == txnif.TxnType_Heartbeat {
+		return
+	}
+	store.tracer = getTracer()
+	store.tracer.Trigger(txnif.TraceStart)
+}
+
+func (store *txnStore) EndTrace() {
+	if store.tracer == nil {
+		return
+	}
+	tracer := store.tracer
+	store.tracer = nil
+	tracer.Stop()
+	putTracer(tracer)
+}
+
+func (store *txnStore) TriggerTrace(state uint8) {
+	if store.tracer == nil {
+		return
+	}
+	store.tracer.Trigger(state)
 }
 
 func (store *txnStore) GetContext() context.Context    { return store.ctx }
@@ -185,14 +301,14 @@ func (store *txnStore) Append(ctx context.Context, dbId, id uint64, data *contai
 func (store *txnStore) AddBlksWithMetaLoc(
 	ctx context.Context,
 	dbId, tid uint64,
-	metaLoc []objectio.Location,
+	stats containers.Vector,
 ) error {
 	store.IncreateWriteCnt()
 	db, err := store.getOrSetDB(dbId)
 	if err != nil {
 		return err
 	}
-	return db.AddBlksWithMetaLoc(ctx, tid, metaLoc)
+	return db.AddBlksWithMetaLoc(ctx, tid, stats)
 }
 
 func (store *txnStore) RangeDelete(
@@ -376,7 +492,7 @@ func (store *txnStore) ObserveTxn(
 	visitTable func(tbl any),
 	rotateTable func(dbName, tblName string, dbid, tid uint64),
 	visitMetadata func(block any),
-	visitSegment func(seg any),
+	visitObject func(obj any),
 	visitAppend func(bat any),
 	visitDelete func(ctx context.Context, vnode txnif.DeleteNode)) {
 	for _, db := range store.dbs {
@@ -394,8 +510,8 @@ func (store *txnStore) ObserveTxn(
 			}
 			for _, iTxnEntry := range tbl.txnEntries.entries {
 				switch txnEntry := iTxnEntry.(type) {
-				case *catalog.SegmentEntry:
-					visitSegment(txnEntry)
+				case *catalog.ObjectEntry:
+					visitObject(txnEntry)
 				case *catalog.BlockEntry:
 					visitMetadata(txnEntry)
 				case *updates.DeleteNode:
@@ -407,8 +523,8 @@ func (store *txnStore) ObserveTxn(
 					visitTable(txnEntry)
 				}
 			}
-			if tbl.localSegment != nil {
-				for _, node := range tbl.localSegment.nodes {
+			if tbl.tableSpace != nil {
+				for _, node := range tbl.tableSpace.nodes {
 					anode, ok := node.(*anode)
 					if ok {
 						schema := anode.table.GetLocalSchema()
@@ -505,28 +621,28 @@ func (store *txnStore) GetRelationByID(dbId uint64, id uint64) (relation handle.
 	return db.GetRelationByID(id)
 }
 
-func (store *txnStore) GetSegment(id *common.ID) (seg handle.Segment, err error) {
+func (store *txnStore) GetObject(id *common.ID) (obj handle.Object, err error) {
 	var db *txnDB
 	if db, err = store.getOrSetDB(id.DbID); err != nil {
 		return
 	}
-	return db.GetSegment(id)
+	return db.GetObject(id)
 }
 
-func (store *txnStore) CreateSegment(dbId, tid uint64, is1PC bool) (seg handle.Segment, err error) {
+func (store *txnStore) CreateObject(dbId, tid uint64, is1PC bool) (obj handle.Object, err error) {
 	var db *txnDB
 	if db, err = store.getOrSetDB(dbId); err != nil {
 		return
 	}
-	return db.CreateSegment(tid, is1PC)
+	return db.CreateObject(tid, is1PC)
 }
 
-func (store *txnStore) CreateNonAppendableSegment(dbId, tid uint64, is1PC bool) (seg handle.Segment, err error) {
+func (store *txnStore) CreateNonAppendableObject(dbId, tid uint64, is1PC bool) (obj handle.Object, err error) {
 	var db *txnDB
 	if db, err = store.getOrSetDB(dbId); err != nil {
 		return
 	}
-	return db.CreateNonAppendableSegment(tid, is1PC)
+	return db.CreateNonAppendableObject(tid, is1PC)
 }
 
 func (store *txnStore) getOrSetDB(id uint64) (db *txnDB, err error) {
@@ -550,6 +666,14 @@ func (store *txnStore) getOrSetDB(id uint64) (db *txnDB, err error) {
 	db.idx = len(store.dbs)
 	store.dbs[id] = db
 	return
+}
+func (store *txnStore) UpdateObjectStats(id *common.ID, stats *objectio.ObjectStats) error {
+	db, err := store.getOrSetDB(id.DbID)
+	if err != nil {
+		return err
+	}
+	db.UpdateObjectStats(id, stats)
+	return nil
 }
 
 func (store *txnStore) CreateNonAppendableBlock(id *common.ID, opts *objectio.CreateBlockOpt) (blk handle.Block, err error) {
@@ -593,15 +717,15 @@ func (store *txnStore) SoftDeleteBlock(id *common.ID) (err error) {
 	return db.SoftDeleteBlock(id)
 }
 
-func (store *txnStore) SoftDeleteSegment(id *common.ID) (err error) {
+func (store *txnStore) SoftDeleteObject(id *common.ID) (err error) {
 	var db *txnDB
 	if db, err = store.getOrSetDB(id.DbID); err != nil {
 		return
 	}
 	perfcounter.Update(store.ctx, func(counter *perfcounter.CounterSet) {
-		counter.TAE.Segment.SoftDelete.Add(1)
+		counter.TAE.Object.SoftDelete.Add(1)
 	})
-	return db.SoftDeleteSegment(id)
+	return db.SoftDeleteObject(id)
 }
 
 func (store *txnStore) ApplyRollback() (err error) {
@@ -638,7 +762,7 @@ func (store *txnStore) ApplyCommit() (err error) {
 	now := time.Now()
 	defer func() {
 		applyCommitDuration := time.Since(now)
-		_, enable, threshold := trace.IsMOCtledSpan(trace.SpanKindTNRPCHandle)
+		_, enable, threshold := motrace.IsMOCtledSpan(motrace.SpanKindTNRPCHandle)
 		if enable && applyCommitDuration > threshold && store.GetContext() != nil {
 			store.SetContext(context.WithValue(store.GetContext(), common.StoreApplyCommit, &common.DurationRecords{Duration: applyCommitDuration}))
 		}
@@ -672,7 +796,7 @@ func (store *txnStore) PrePrepare(ctx context.Context) (err error) {
 	now := time.Now()
 	defer func() {
 		prePrepareDuration := time.Since(now)
-		_, enable, threshold := trace.IsMOCtledSpan(trace.SpanKindTNRPCHandle)
+		_, enable, threshold := motrace.IsMOCtledSpan(motrace.SpanKindTNRPCHandle)
 		if enable && prePrepareDuration > threshold && store.GetContext() != nil {
 			store.SetContext(context.WithValue(store.GetContext(), common.StorePrePrepare, &common.DurationRecords{Duration: prePrepareDuration}))
 		}
@@ -690,7 +814,7 @@ func (store *txnStore) PrepareCommit() (err error) {
 	now := time.Now()
 	defer func() {
 		prepareCommitDuration := time.Since(now)
-		_, enable, threshold := trace.IsMOCtledSpan(trace.SpanKindTNRPCHandle)
+		_, enable, threshold := motrace.IsMOCtledSpan(motrace.SpanKindTNRPCHandle)
 		if enable && prepareCommitDuration > threshold && store.GetContext() != nil {
 			store.SetContext(context.WithValue(store.GetContext(), common.StorePreApplyCommit, &common.DurationRecords{Duration: prepareCommitDuration}))
 		}
@@ -719,7 +843,7 @@ func (store *txnStore) PreApplyCommit() (err error) {
 		}
 	}
 	preApplyCommitDuration := time.Since(now)
-	_, enable, threshold := trace.IsMOCtledSpan(trace.SpanKindTNRPCHandle)
+	_, enable, threshold := motrace.IsMOCtledSpan(motrace.SpanKindTNRPCHandle)
 	if enable && preApplyCommitDuration > threshold && store.GetContext() != nil {
 		store.SetContext(context.WithValue(store.GetContext(), common.StorePreApplyCommit, &common.DurationRecords{Duration: preApplyCommitDuration}))
 	}
@@ -739,7 +863,7 @@ func (store *txnStore) PrepareWAL() (err error) {
 	// Apply the record from the command list.
 	// Split the commands by max message size.
 	for store.cmdMgr.cmd.MoreCmds() {
-		logEntry, err := store.cmdMgr.ApplyTxnRecord(store.txn.GetID(), store.txn)
+		logEntry, err := store.cmdMgr.ApplyTxnRecord(store.txn)
 		if err != nil {
 			return err
 		}
@@ -748,12 +872,20 @@ func (store *txnStore) PrepareWAL() (err error) {
 		}
 	}
 
+	t1 := time.Now()
 	for _, db := range store.dbs {
 		if err = db.Apply1PCCommit(); err != nil {
 			return
 		}
 	}
-	// logutil.Debugf("Txn-%X PrepareWAL Takes %s", store.txn.GetID(), time.Since(now))
+	t2 := time.Now()
+	if t2.Sub(t1) > time.Millisecond*500 {
+		logutil.Warn(
+			"SLOW-LOG",
+			zap.String("txn", store.txn.String()),
+			zap.Duration("apply-1pc-commit-duration", t2.Sub(t1)),
+		)
+	}
 	return
 }
 

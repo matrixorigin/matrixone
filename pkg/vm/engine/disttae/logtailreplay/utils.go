@@ -22,8 +22,8 @@ import (
 )
 
 var metaTableMatchRegexp = regexp.MustCompile(`\_\d+\_(meta|seg)`)
-var segTableMatchRegexp = regexp.MustCompile(`\_\d+\_seg`)
 var blkTableMatchRegexp = regexp.MustCompile(`\_\d+\_meta`)
+var objTableMatchRegexp = regexp.MustCompile(`\_\d+\_obj`)
 
 func IsMetaTable(name string) bool {
 	return metaTableMatchRegexp.MatchString(name)
@@ -32,8 +32,9 @@ func IsMetaTable(name string) bool {
 func IsBlkTable(name string) bool {
 	return blkTableMatchRegexp.MatchString(name)
 }
-func IsSegTable(name string) bool {
-	return segTableMatchRegexp.MatchString(name)
+
+func IsObjTable(name string) bool {
+	return objTableMatchRegexp.MatchString(name)
 }
 
 func mustVectorFromProto(v *api.Vector) *vector.Vector {

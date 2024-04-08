@@ -28,19 +28,17 @@ func NewUnaryAgg[T1, T2 any](
 	grows func(int),
 	eval func([]T2) ([]T2, error),
 	merge func(int64, int64, T2, T2, bool, bool, any) (T2, bool, error),
-	fill func(int64, T1, T2, int64, bool, bool) (T2, bool, error),
-	partialresult any) Agg[*UnaryAgg[T1, T2]] {
+	fill func(int64, T1, T2, int64, bool, bool) (T2, bool, error)) Agg[*UnaryAgg[T1, T2]] {
 	return &UnaryAgg[T1, T2]{
-		op:            overloadID,
-		priv:          aggPrivateStructure,
-		outputType:    outputType,
-		eval:          eval,
-		fill:          fill,
-		merge:         merge,
-		grows:         grows,
-		isCount:       isCount,
-		inputTypes:    []types.Type{inputTypes},
-		partialresult: partialresult,
+		op:         overloadID,
+		priv:       aggPrivateStructure,
+		outputType: outputType,
+		eval:       eval,
+		fill:       fill,
+		merge:      merge,
+		grows:      grows,
+		isCount:    isCount,
+		inputTypes: []types.Type{inputTypes},
 	}
 }
 
@@ -316,15 +314,15 @@ func (a *UnaryAgg[T1, T2]) BatchMerge(b Agg[any], offset int64, groupStatus []ui
 }
 
 func (a *UnaryAgg[T1, T2]) Eval(pool *mpool.MPool) (vec *vector.Vector, err error) {
-	if a.partialresult != nil {
+	if a.PartialResult != nil {
 		if a.isCount {
 			var x T1
-			a.vs[0], a.es[0], err = a.fill(0, x, a.vs[0], a.partialresult.(int64), a.es[0], false)
+			a.vs[0], a.es[0], err = a.fill(0, x, a.vs[0], a.PartialResult.(int64), a.es[0], false)
 			if err != nil {
 				return nil, err
 			}
 		} else {
-			a.vs[0], a.es[0], err = a.fill(0, a.partialresult.(T1), a.vs[0], 1, a.es[0], false)
+			a.vs[0], a.es[0], err = a.fill(0, a.PartialResult.(T1), a.vs[0], 1, a.es[0], false)
 			if err != nil {
 				return nil, err
 			}
@@ -384,7 +382,7 @@ func (a *UnaryAgg[T1, T2]) Dup(m *mpool.MPool) Agg[any] {
 	val := &UnaryAgg[T1, T2]{
 		op:            a.op,
 		isCount:       a.isCount,
-		partialresult: a.partialresult,
+		PartialResult: a.PartialResult,
 		vs:            make([]T2, len(a.vs)),
 		es:            make([]bool, len(a.es)),
 		outputType:    a.outputType,

@@ -270,6 +270,23 @@ func (c *lastHeartbeatCond) sql() string {
 	}
 }
 
+type cronTaskIDCond struct {
+	op         Op
+	cronTaskID uint64
+}
+
+func (c *cronTaskIDCond) eval(v any) bool {
+	taskID, ok := v.(uint64)
+	if !ok {
+		return false
+	}
+	return compare(c.op, taskID, c.cronTaskID)
+}
+
+func (c *cronTaskIDCond) sql() string {
+	return fmt.Sprintf("cron_task_id%s%d", OpName[c.op], c.cronTaskID)
+}
+
 func compare[T constraints.Ordered](op Op, a T, b T) bool {
 	switch op {
 	case EQ:
@@ -302,100 +319,128 @@ const (
 	CondAccountID
 	CondAccount
 	CondLastHeartbeat
+	CondCronTaskId
 )
 
-type conditions struct {
-	codeCond map[condCode]condition
-}
-
-func newConditions() *conditions {
-	return &conditions{
-		codeCond: make(map[condCode]condition),
+var (
+	whereConditionCodes = map[condCode]struct{}{
+		CondTaskID:           {},
+		CondTaskRunner:       {},
+		CondTaskStatus:       {},
+		CondTaskEpoch:        {},
+		CondTaskParentTaskID: {},
+		CondTaskExecutor:     {},
+		CondCronTaskId:       {},
 	}
+	daemonWhereConditionCodes = map[condCode]struct{}{
+		CondTaskID:        {},
+		CondTaskRunner:    {},
+		CondTaskStatus:    {},
+		CondTaskType:      {},
+		CondAccountID:     {},
+		CondAccount:       {},
+		CondLastHeartbeat: {},
+	}
+)
+
+type conditions map[condCode]condition
+
+func newConditions(conds ...Condition) *conditions {
+	c := &conditions{}
+	for _, cond := range conds {
+		cond(c)
+	}
+	return c
 }
 
 // WithTaskIDDesc set query with order by task id desc
 func WithTaskIDDesc() Condition {
-	return func(qo *conditions) {
-		qo.codeCond[CondOrderByDesc] = &orderByDescCond{}
+	return func(c *conditions) {
+		(*c)[CondOrderByDesc] = &orderByDescCond{}
 	}
 }
 
 // WithTaskExecutorCond set task executor condition
 func WithTaskExecutorCond(op Op, value task.TaskCode) Condition {
-	return func(qo *conditions) {
-		qo.codeCond[CondTaskExecutor] = &taskExecutorCond{op: op, taskExecutor: value}
+	return func(c *conditions) {
+		(*c)[CondTaskExecutor] = &taskExecutorCond{op: op, taskExecutor: value}
 	}
 }
 
 // WithLimitCond set query result limit
 func WithLimitCond(limit int) Condition {
-	return func(qo *conditions) {
-		qo.codeCond[CondLimit] = &limitCond{limit: limit}
+	return func(c *conditions) {
+		(*c)[CondLimit] = &limitCond{limit: limit}
 	}
 }
 
 // WithTaskIDCond set task id condition
 func WithTaskIDCond(op Op, value uint64) Condition {
-	return func(qo *conditions) {
-		qo.codeCond[CondTaskID] = &taskIDCond{op: op, taskID: value}
+	return func(c *conditions) {
+		(*c)[CondTaskID] = &taskIDCond{op: op, taskID: value}
 	}
 }
 
 // WithTaskRunnerCond set task runner condition
 func WithTaskRunnerCond(op Op, value string) Condition {
-	return func(qo *conditions) {
-		qo.codeCond[CondTaskRunner] = &taskRunnerCond{op: op, taskRunner: value}
+	return func(c *conditions) {
+		(*c)[CondTaskRunner] = &taskRunnerCond{op: op, taskRunner: value}
 	}
 }
 
 // WithTaskStatusCond set status condition
 func WithTaskStatusCond(value ...task.TaskStatus) Condition {
 	op := IN
-	return func(qo *conditions) {
-		qo.codeCond[CondTaskStatus] = &taskStatusCond{op: op, taskStatus: value}
+	return func(c *conditions) {
+		(*c)[CondTaskStatus] = &taskStatusCond{op: op, taskStatus: value}
 	}
 }
 
 // WithTaskEpochCond set task epoch condition
 func WithTaskEpochCond(op Op, value uint32) Condition {
-	return func(qo *conditions) {
-		qo.codeCond[CondTaskEpoch] = &taskEpochCond{op: op, taskEpoch: value}
+	return func(c *conditions) {
+		(*c)[CondTaskEpoch] = &taskEpochCond{op: op, taskEpoch: value}
 	}
 }
 
 // WithTaskParentTaskIDCond set task ParentTaskID condition
 func WithTaskParentTaskIDCond(op Op, value string) Condition {
-	return func(qo *conditions) {
-		qo.codeCond[CondTaskParentTaskID] = &taskParentTaskIDCond{op: op, taskParentTaskID: value}
+	return func(c *conditions) {
+		(*c)[CondTaskParentTaskID] = &taskParentTaskIDCond{op: op, taskParentTaskID: value}
 	}
 }
 
 // WithTaskType set task type condition.
 func WithTaskType(op Op, value string) Condition {
-	return func(qo *conditions) {
-		qo.codeCond[CondTaskType] = &taskTypeCond{op: op, taskType: value}
+	return func(c *conditions) {
+		(*c)[CondTaskType] = &taskTypeCond{op: op, taskType: value}
 	}
 }
 
 // WithAccountID set task account ID condition.
 func WithAccountID(op Op, value uint32) Condition {
-	return func(qo *conditions) {
-		qo.codeCond[CondAccountID] = &accountIDCond{op: op, accountID: value}
+	return func(c *conditions) {
+		(*c)[CondAccountID] = &accountIDCond{op: op, accountID: value}
 	}
 }
 
 // WithAccount set task account condition.
 func WithAccount(op Op, value string) Condition {
-	return func(qo *conditions) {
-		qo.codeCond[CondAccount] = &accountCond{op: op, account: value}
+	return func(c *conditions) {
+		(*c)[CondAccount] = &accountCond{op: op, account: value}
 	}
 }
 
 // WithLastHeartbeat set last heartbeat condition.
 func WithLastHeartbeat(op Op, value int64) Condition {
-	return func(qo *conditions) {
-		qo.codeCond[CondLastHeartbeat] = &lastHeartbeatCond{op: op, hb: value}
+	return func(c *conditions) {
+		(*c)[CondLastHeartbeat] = &lastHeartbeatCond{op: op, hb: value}
+	}
+}
+
+func WithCronTaskId(op Op, value uint64) Condition {
+	return func(c *conditions) {
+		(*c)[CondCronTaskId] = &cronTaskIDCond{op: op, cronTaskID: value}
 	}
 }
 
@@ -422,10 +467,10 @@ type TaskService interface {
 	// to execute the task. Returning `ErrInvalidTask` means that the Task has been reassigned or has
 	// ended, and the Task execution needs to be terminated immediately。
 	Heartbeat(ctx context.Context, task task.AsyncTask) error
-	// QueryTask query tasks by conditions
+	// QueryAsyncTask query tasks by conditions
 	QueryAsyncTask(context.Context, ...Condition) ([]task.AsyncTask, error)
-	// QueryCronTask returns all cron task metadata
-	QueryCronTask(context.Context) ([]task.CronTask, error)
+	// QueryCronTask query cron tasks by conditions
+	QueryCronTask(context.Context, ...Condition) ([]task.CronTask, error)
 
 	// CreateDaemonTask creates a daemon task that will run in background for long time.
 	CreateDaemonTask(ctx context.Context, value task.TaskMetadata, details *task.Details) error
@@ -467,6 +512,8 @@ type TaskRunner interface {
 	Parallelism() int
 	// RegisterExecutor register the task executor
 	RegisterExecutor(code task.TaskCode, executor TaskExecutor)
+	// GetExecutor returns the task executor
+	GetExecutor(code task.TaskCode) TaskExecutor
 	// Attach attaches the active go-routine to the daemon task.
 	Attach(ctx context.Context, taskID uint64, routine ActiveRoutine) error
 }
@@ -488,7 +535,7 @@ type TaskStorage interface {
 	// AddCronTask add cron task and returns number of successful added
 	AddCronTask(context.Context, ...task.CronTask) (int, error)
 	// QueryCronTask query all cron tasks
-	QueryCronTask(context.Context) ([]task.CronTask, error)
+	QueryCronTask(context.Context, ...Condition) ([]task.CronTask, error)
 	// UpdateCronTask crontask generates tasks periodically, and this update
 	// needs to be in a transaction. Update cron task and insert a new task.
 	// This update must be transactional and needs to be done conditionally

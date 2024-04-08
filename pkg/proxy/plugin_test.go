@@ -46,6 +46,8 @@ func (p *mockPlugin) RecommendCN(ctx context.Context, clientInfo clientInfo) (*p
 
 type mockRouter struct {
 	mockRouteFn func(ctx context.Context, ci clientInfo) (*CNServer, error)
+
+	refreshCount int
 }
 
 func (r *mockRouter) Route(ctx context.Context, ci clientInfo, f func(string) bool) (*CNServer, error) {
@@ -63,6 +65,10 @@ func (r *mockRouter) Connect(c *CNServer, handshakeResp *frontend.Packet, t *tun
 	return nil, nil, nil
 }
 
+func (r *mockRouter) Refresh(sync bool) {
+	r.refreshCount++
+}
+
 func TestPluginRouter_Route(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 
@@ -73,6 +79,7 @@ func TestPluginRouter_Route(t *testing.T) {
 		mockRecommendCNFn func(ctx context.Context, ci clientInfo) (*plugin.Recommendation, error)
 		expectErr         bool
 		expectUUID        string
+		expectRefresh     int
 	}{{
 		name: "recommend select CN",
 		mockRecommendCNFn: func(ctx context.Context, ci clientInfo) (*plugin.Recommendation, error) {
@@ -129,6 +136,19 @@ func TestPluginRouter_Route(t *testing.T) {
 			return nil, moerr.NewInternalErrorNoCtx("boom")
 		},
 		expectErr: true,
+	}, {
+		name: "refresh",
+		mockRecommendCNFn: func(ctx context.Context, ci clientInfo) (*plugin.Recommendation, error) {
+			return &plugin.Recommendation{
+				Action: plugin.Select,
+				CN: &metadata.CNService{
+					ServiceID: "cn0",
+				},
+				Updated: true,
+			}, nil
+		},
+		expectUUID:    "cn0",
+		expectRefresh: 1,
 	}}
 
 	for _, tt := range tests {
@@ -144,6 +164,7 @@ func TestPluginRouter_Route(t *testing.T) {
 				require.NotNil(t, cn)
 				require.Equal(t, cn.uuid, tt.expectUUID)
 			}
+			require.Equal(t, r.refreshCount, tt.expectRefresh)
 		})
 	}
 }

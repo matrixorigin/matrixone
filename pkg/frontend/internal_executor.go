@@ -154,7 +154,10 @@ func (ie *internalExecutor) Exec(ctx context.Context, sql string, opts ie.Sessio
 	ie.Lock()
 	defer ie.Unlock()
 	sess := ie.newCmdSession(ctx, opts)
-	defer sess.Close()
+	defer func() {
+		sess.Close()
+		ie.executor.SetSession(nil)
+	}()
 	ie.executor.SetSession(sess)
 	ie.proto.stashResult = false
 	return ie.executor.doComQuery(ctx, &UserInput{sql: sql})
@@ -164,7 +167,10 @@ func (ie *internalExecutor) Query(ctx context.Context, sql string, opts ie.Sessi
 	ie.Lock()
 	defer ie.Unlock()
 	sess := ie.newCmdSession(ctx, opts)
-	defer sess.Close()
+	defer func() {
+		sess.Close()
+		ie.executor.SetSession(nil)
+	}()
 	ie.executor.SetSession(sess)
 	ie.proto.stashResult = true
 	logutil.Info("internalExecutor new session", trace.ContextField(ctx), zap.String("session uuid", sess.uuid.String()))
@@ -226,6 +232,10 @@ type internalProtocol struct {
 
 func (ip *internalProtocol) GetCapability() uint32 {
 	return DefaultCapability
+}
+
+func (ip *internalProtocol) SetCapability(uint32) {
+
 }
 
 func (ip *internalProtocol) IsTlsEstablished() bool {
@@ -415,7 +425,7 @@ func (ip *internalProtocol) ResetStatistics() {
 
 func (ip *internalProtocol) GetStats() string { return "internal unknown stats" }
 
-func (ip *internalProtocol) CalculateOutTrafficBytes() int64 { return 0 }
+func (ip *internalProtocol) CalculateOutTrafficBytes(reset bool) (int64, int64) { return 0, 0 }
 
 func (ip *internalProtocol) sendLocalInfileRequest(filename string) error {
 	return nil

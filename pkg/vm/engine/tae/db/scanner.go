@@ -30,17 +30,17 @@ type DBScanner interface {
 
 type ErrHandler interface {
 	OnBlockErr(entry *catalog.BlockEntry, err error) error
-	OnSegmentErr(entry *catalog.SegmentEntry, err error) error
+	OnObjectErr(entry *catalog.ObjectEntry, err error) error
 	OnTableErr(entry *catalog.TableEntry, err error) error
 	OnDatabaseErr(entry *catalog.DBEntry, err error) error
 }
 
 type NoopErrHandler struct{}
 
-func (h *NoopErrHandler) OnBlockErr(entry *catalog.BlockEntry, err error) error     { return nil }
-func (h *NoopErrHandler) OnSegmentErr(entry *catalog.SegmentEntry, err error) error { return nil }
-func (h *NoopErrHandler) OnTableErr(entry *catalog.TableEntry, err error) error     { return nil }
-func (h *NoopErrHandler) OnDatabaseErr(entry *catalog.DBEntry, err error) error     { return nil }
+func (h *NoopErrHandler) OnBlockErr(entry *catalog.BlockEntry, err error) error   { return nil }
+func (h *NoopErrHandler) OnObjectErr(entry *catalog.ObjectEntry, err error) error { return nil }
+func (h *NoopErrHandler) OnTableErr(entry *catalog.TableEntry, err error) error   { return nil }
+func (h *NoopErrHandler) OnDatabaseErr(entry *catalog.DBEntry, err error) error   { return nil }
 
 type dbScanner struct {
 	*catalog.LoopProcessor
@@ -49,7 +49,7 @@ type dbScanner struct {
 	errHandler ErrHandler
 	dbmask     *roaring.Bitmap
 	tablemask  *roaring.Bitmap
-	segmask    *roaring.Bitmap
+	objmask    *roaring.Bitmap
 }
 
 func (scanner *dbScanner) OnStopped() {
@@ -59,7 +59,7 @@ func (scanner *dbScanner) OnStopped() {
 func (scanner *dbScanner) OnExec() {
 	scanner.dbmask.Clear()
 	scanner.tablemask.Clear()
-	scanner.segmask.Clear()
+	scanner.objmask.Clear()
 	dbutils.PrintMemStats()
 
 	// compact logtail table
@@ -93,11 +93,11 @@ func NewDBScanner(db *DB, errHandler ErrHandler) *dbScanner {
 		errHandler:    errHandler,
 		dbmask:        roaring.New(),
 		tablemask:     roaring.New(),
-		segmask:       roaring.New(),
+		objmask:       roaring.New(),
 	}
 	scanner.BlockFn = scanner.onBlock
-	scanner.SegmentFn = scanner.onSegment
-	scanner.PostSegmentFn = scanner.onPostSegment
+	scanner.ObjectFn = scanner.onObject
+	scanner.PostObjectFn = scanner.onPostObject
 	scanner.TableFn = scanner.onTable
 	scanner.PostTableFn = scanner.onPostTable
 	scanner.DatabaseFn = scanner.onDatabase
@@ -119,10 +119,10 @@ func (scanner *dbScanner) onBlock(entry *catalog.BlockEntry) (err error) {
 	return
 }
 
-func (scanner *dbScanner) onPostSegment(entry *catalog.SegmentEntry) (err error) {
+func (scanner *dbScanner) onPostObject(entry *catalog.ObjectEntry) (err error) {
 	for _, op := range scanner.ops {
-		err = op.OnPostSegment(entry)
-		if err = scanner.errHandler.OnSegmentErr(entry, err); err != nil {
+		err = op.OnPostObject(entry)
+		if err = scanner.errHandler.OnObjectErr(entry, err); err != nil {
 			break
 		}
 	}
@@ -149,22 +149,22 @@ func (scanner *dbScanner) onPostDatabase(entry *catalog.DBEntry) (err error) {
 	return
 }
 
-func (scanner *dbScanner) onSegment(entry *catalog.SegmentEntry) (err error) {
-	scanner.segmask.Clear()
+func (scanner *dbScanner) onObject(entry *catalog.ObjectEntry) (err error) {
+	scanner.objmask.Clear()
 	for i, op := range scanner.ops {
 		if scanner.tablemask.Contains(uint32(i)) {
-			scanner.segmask.Add(uint32(i))
+			scanner.objmask.Add(uint32(i))
 			continue
 		}
-		err = op.OnSegment(entry)
+		err = op.OnObject(entry)
 		if moerr.IsMoErrCode(err, moerr.OkStopCurrRecur) {
-			scanner.segmask.Add(uint32(i))
+			scanner.objmask.Add(uint32(i))
 		}
-		if err = scanner.errHandler.OnSegmentErr(entry, err); err != nil {
+		if err = scanner.errHandler.OnObjectErr(entry, err); err != nil {
 			break
 		}
 	}
-	if scanner.segmask.GetCardinality() == uint64(len(scanner.ops)) {
+	if scanner.objmask.GetCardinality() == uint64(len(scanner.ops)) {
 		err = moerr.GetOkStopCurrRecur()
 	}
 	return

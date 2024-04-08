@@ -30,7 +30,7 @@ import (
 func TestFixedExpressionExecutor(t *testing.T) {
 	proc := testutil.NewProcess()
 
-	// Expr_C
+	// Expr_Lit
 	con := makePlan2Int64ConstExprWithType(218311)
 	conExprExecutor, err := NewExpressionExecutor(proc, con)
 	require.NoError(t, err)
@@ -233,10 +233,10 @@ func makePlan2Int64ConstExprWithType(v int64) *plan.Expr {
 	}
 }
 
-func makePlan2Int64ConstExpr(v int64) *plan.Expr_C {
-	return &plan.Expr_C{C: &plan.Const{
+func makePlan2Int64ConstExpr(v int64) *plan.Expr_Lit {
+	return &plan.Expr_Lit{Lit: &plan.Literal{
 		Isnull: false,
-		Value: &plan.Const_I64Val{
+		Value: &plan.Literal_I64Val{
 			I64Val: v,
 		},
 	}}
@@ -252,10 +252,10 @@ func makePlan2BoolConstExprWithType(b bool) *plan.Expr {
 	}
 }
 
-func makePlan2BoolConstExpr(b bool) *plan.Expr_C {
-	return &plan.Expr_C{C: &plan.Const{
+func makePlan2BoolConstExpr(b bool) *plan.Expr_Lit {
+	return &plan.Expr_Lit{Lit: &plan.Literal{
 		Isnull: false,
-		Value: &plan.Const_Bval{
+		Value: &plan.Literal_Bval{
 			Bval: b,
 		},
 	}}

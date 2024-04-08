@@ -581,6 +581,9 @@ func (blk *baseBlock) TryDeleteByDeltaloc(
 	if err2 != nil {
 		return
 	}
+	if !blk.meta.GetDeltaLoc().IsEmpty() {
+		return
+	}
 	blk.Lock()
 	defer blk.Unlock()
 	if !blk.mvcc.GetDeleteChain().IsEmpty() {
@@ -636,7 +639,7 @@ func (blk *baseBlock) CollectDeleteInRange(
 	withAborted bool,
 	mp *mpool.MPool,
 ) (bat *containers.Batch, err error) {
-	bat, minTS, err := blk.inMemoryCollectDeleteInRange(
+	bat, minTS, _, err := blk.inMemoryCollectDeleteInRange(
 		ctx,
 		start,
 		end,
@@ -660,16 +663,57 @@ func (blk *baseBlock) CollectDeleteInRange(
 	return
 }
 
+// CollectDeleteInRangeAfterDeltalocation collects deletes after
+// a certain delta location and committed in [start,end]
+// When subscribe a table, it collects delta location, then it collects deletes.
+// To avoid collecting duplicate deletes,
+// it collects after start ts of the delta location.
+// If the delta location is from CN, deletes is committed after startTS.
+// CollectDeleteInRange still collect duplicate deletes.
+func (blk *baseBlock) CollectDeleteInRangeAfterDeltalocation(
+	ctx context.Context,
+	start, end types.TS, // start is startTS of deltalocation
+	withAborted bool,
+	mp *mpool.MPool,
+) (bat *containers.Batch, err error) {
+	// persisted is persistedTS of deletes of the blk
+	// it equals startTS of the last delta location
+	bat, _, persisted, err := blk.inMemoryCollectDeleteInRange(
+		ctx,
+		start,
+		end,
+		withAborted,
+		mp,
+	)
+	if err != nil {
+		return
+	}
+	// if persisted > start,
+	// there's another delta location committed.
+	// It includes more deletes than former delta location.
+	if persisted.Greater(start) {
+		bat, err = blk.persistedCollectDeleteInRange(
+			ctx,
+			bat,
+			start,
+			end,
+			withAborted,
+			mp,
+		)
+	}
+	return
+}
+
 func (blk *baseBlock) inMemoryCollectDeleteInRange(
 	ctx context.Context,
 	start, end types.TS,
 	withAborted bool,
 	mp *mpool.MPool,
-) (bat *containers.Batch, minTS types.TS, err error) {
+) (bat *containers.Batch, minTS types.TS, persistedTS types.TS, err error) {
 	blk.RLock()
 	schema := blk.meta.GetSchema()
 	pkDef := schema.GetPrimaryKey()
-	rowID, ts, pk, abort, abortedMap, deletes, minTS := blk.mvcc.CollectDeleteLocked(start.Next(), end, pkDef.Type, mp)
+	rowID, ts, pk, abort, abortedMap, deletes, minTS, persistedTS := blk.mvcc.CollectDeleteLocked(start, end, pkDef.Type, mp)
 	blk.RUnlock()
 	if rowID == nil {
 		return
@@ -687,7 +731,7 @@ func (blk *baseBlock) inMemoryCollectDeleteInRange(
 	bat = containers.NewBatch()
 	bat.AddVector(catalog.PhyAddrColumnName, rowID)
 	bat.AddVector(catalog.AttrCommitTs, ts)
-	bat.AddVector(pkDef.Name, pk)
+	bat.AddVector(catalog.AttrPKVal, pk)
 	if withAborted {
 		bat.AddVector(catalog.AttrAborted, abort)
 	} else {

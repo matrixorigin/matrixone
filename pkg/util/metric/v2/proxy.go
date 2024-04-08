@@ -60,7 +60,7 @@ var (
 			Subsystem: "proxy",
 			Name:      "connection_transfer_duration",
 			Help:      "Histogram of proxy transfer connections duration",
-			Buckets:   prometheus.ExponentialBuckets(0.00001, 2.0, 20),
+			Buckets:   getDurationBuckets(),
 		})
 
 	ProxyDrainCounter = prometheus.NewCounter(
@@ -93,5 +93,13 @@ var (
 			Subsystem: "proxy",
 			Name:      "connections_need_to_transfer",
 			Help:      "Proxy connections need to transfer",
+		})
+
+	ProxyConnectionsTransferIntentGauge = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "mo",
+			Subsystem: "proxy",
+			Name:      "connections_transfer_intent",
+			Help:      "Proxy connections in transfer intent state",
 		})
 )

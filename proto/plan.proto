@@ -34,9 +34,9 @@ message Type {
 	string enumvalues = 7;
 };
 
-// Const: if a const value can be reprensented by int64 or
+// Literal: if a literal value can be reprensented by int64 or
 // double, use that, otherwise store a string representation.
-message Const {
+message Literal {
 	bool isnull			= 1;
 	oneof value {
 		int32 i8val		= 2;  // pb have no int8
@@ -83,6 +83,8 @@ message ColRef {
 	int32	rel_pos	= 1;
 	int32	col_pos	= 2;
 	string	name	= 3;
+	string	tbl_name = 4;
+	string	db_name	= 5;
 }
 
 // Reference a column by its internal table id and column id
@@ -182,8 +184,8 @@ message Function {
 		WIN_VALUE				= 256;
 		WIN_ORDER				= 512;
 
-		// Monotonic function can filter by zonemap
-		MONOTONIC = 1024;
+		// Filter which can be applied on zonemaps
+		ZONEMAPPABLE = 1024;
 	}
 
 	ObjectRef func		= 1;
@@ -193,19 +195,19 @@ message Function {
 message Expr {
 	Type typ = 1;
 	oneof expr {
-		Const		c		= 2;
+		Literal		lit		= 2;
 		ParamRef	p		= 3;
 		VarRef		v		= 4;
 		ColRef		col 	= 5;
 		RawColRef	raw		= 6;
 		Function	f		= 7;
-		WindowSpec w = 8;
+		WindowSpec	w		= 8;
 		SubqueryRef	sub		= 9;
 		CorrColRef	corr	= 10;
-		TargetType  t		= 11;
+		TargetType	t		= 11;
 		ExprList	list	= 12;
 		MaxValue	max		= 13;
-		BinaryData	bin		= 14;
+		LiteralVec	vec	= 14;
 	}
 
 	int32 aux_id = 15;
@@ -213,8 +215,9 @@ message Expr {
 	double selectivity = 17;
 }
 
-message BinaryData {
-	bytes data = 1;
+message LiteralVec {
+	int32 len	= 1;
+	bytes data	= 2;
 }
 
 enum CompressType {
@@ -254,6 +257,9 @@ message ColDef {
 	int32 pkidx 		= 14;
 	bool headers = 15;
 	string header = 16;
+
+	string tbl_name = 17;
+	string db_name = 18;
 }
 
 message Default {
@@ -442,6 +448,8 @@ message TableDef {
 	bool is_temporary = 29;
 
 	uint64 auto_incr_offset = 30;
+
+	string db_name = 31;
 }
 
 message TableFunction{
@@ -609,11 +617,18 @@ message AnalyzeInfo {
 	int64 networkIO = 12;
 	int64 scanTime = 13;
 	int64 insertTime = 14;
+	repeated int64 time_consumed_array_major = 15;
+	repeated int64 time_consumed_array_minor = 16;
 }
 
 message PartitionPrune {
 	bool isPruned = 1;
 	repeated PartitionItem selected_partitions = 2;
+}
+
+message OriginTableMessageForFuzzy {
+	string ParentTableName = 1;
+	repeated ColDef ParentUniqueCols = 2;
 }
 
 message Node {
@@ -683,8 +698,9 @@ message Node {
 		PRE_INSERT_SK = 63;
 		//
 		TIME_WINDOW = 64;
-		Fill = 65;
+		FILL = 65;
 		PARTITION = 66;
+		FUZZY_FILTER = 67;
 	}
 
 	enum JoinType {
@@ -745,10 +761,10 @@ message Node {
 	Expr limit = 15;
 	Expr offset = 16;
 
-	TableDef table_def = 18;
-	repeated TableDef table_def_vec = 19;
-	ObjectRef obj_ref = 20;
-	RowsetData rowset_data = 21;
+	TableDef table_def = 17;
+	ObjectRef obj_ref = 18;
+	ObjectRef parent_obj_ref = 19;
+	RowsetData rowset_data = 20;
 
 	string extra_options = 22;
 	DeleteCtx delete_ctx = 23;
@@ -797,6 +813,8 @@ message Node {
 	SampleFuncSpec sample_func = 51;
 
 	int32 window_idx = 52;
+	repeated Expr onUpdateExprs = 53;
+	OriginTableMessageForFuzzy fuzzymessage = 54;
 }
 
 message ExternScan {
@@ -867,7 +885,8 @@ message DeleteCtx {
 	repeated string partition_table_names = 7;
 	int32 partition_idx = 8;
 	int32 primary_key_idx = 9;
-	TruncateTable truncate_table = 10;
+	TableDef table_def 	= 10;
+	TruncateTable truncate_table = 11;
 }
 
 message Query {
@@ -905,6 +924,9 @@ message Query {
 
 	// load Tag
 	bool loadTag = 6;
+
+	//detectSqls are sqls detect fk self refer constraint
+	repeated string detectSqls= 7;
 }
 
 message TransationControl {
@@ -1056,6 +1078,7 @@ message CreateDatabase {
 	bool if_not_exists 	= 1;
 	string database 	= 2;
 	SubscriptionOption subscription_option = 3;
+	string sql = 4;
 }
 
 message AlterDatabase {
@@ -1067,10 +1090,40 @@ message DropDatabase {
 	bool if_exists 		= 1;
 	string database 	= 2;
 	uint64 database_id	= 3;
+	// drop database should delete fk records related to this database
+	// from mo_foreign_keys
+	string updateFkSql = 4;
+	// drop database should check mo_foreign_keys to find fk records
+	// that refer to this database before dropping the database
+	string checkFKSql = 5;
 }
 
 message FkColName {
 	repeated string cols = 1;
+}
+
+/* ForeignKeyInfo holds the fk forward reference.
+
+	Example: t2(b) --fk--> t1(a) but t1 defined after t2
+
+		set foreign_key_checks=0;
+
+		create table t2(b int, constraint c1 foreign key (b) references t1(a));
+
+		create table t1(a int primary key);
+
+	The reason we need ForeignKeyInfo instead of using ForeignKeyDef is that:
+
+		ForeignKeyDef only has table id, column id that does not exist in handling fk forward reference.
+		ForeignKeyDef does not have database name, table name and column names,
+		ForeignKeyInfo also has the ForeignKeyDef internally that holds the child table fk definition.
+ */
+message ForeignKeyInfo{
+	string db = 1; // database name of child table
+	string table = 2; // child table name
+	FkColName cols = 3; // fk names in child table
+	FkColName colsReferred = 4; // referred names in parent table
+	ForeignKeyDef def = 5; //child table fk def
 }
 
 message CreateTable {
@@ -1086,6 +1139,12 @@ message CreateTable {
 	// we need column name when create table, but not in ForeignKeyDef
 	repeated FkColName fk_cols = 9;
 	repeated TableDef partition_tables = 10;// partition tables for partitions
+	string create_as_select_sql = 11;
+	// create table may insert fk records related to this table
+	// into mo_foreign_keys
+	repeated string updateFkSqls = 12;
+	// fks forward reference to me
+	repeated ForeignKeyInfo fksReferToMe = 13;
 }
 
 message AlterTableDrop {
@@ -1181,6 +1240,11 @@ message AlterTable {
 	string create_table_sql = 9;
 	string insert_data_sql = 10;
 	map<uint64, ColDef> change_tbl_colId_map = 11;
+	//detect fk self refer constraint
+	repeated string detectSqls= 12;
+	// alter table may insert fk records related to this table
+	// into mo_foreign_keys
+	repeated string updateFkSqls = 13;
 }
 
 message DropTable {
@@ -1194,6 +1258,11 @@ message DropTable {
 	repeated string partition_table_names = 8;
 	bool isView = 9;
 	TableDef table_def 	= 10;
+	// drop table may delete fk records related to this table
+	// into mo_foreign_keys
+	repeated string updateFkSqls = 11;
+	//fk child table id that refers to me
+	repeated uint64 fkChildTblsReferToMe = 12;
 }
 
 message AlterView {

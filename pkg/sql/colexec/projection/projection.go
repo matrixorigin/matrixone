@@ -51,12 +51,16 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 }
 
 func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
+	if err, isCancel := vm.CancelCheck(proc); isCancel {
+		return vm.CancelResult, err
+	}
+
 	result, err := arg.children[0].Call(proc)
 	if err != nil {
 		return result, err
 	}
 
-	anal := proc.GetAnalyze(arg.info.Idx)
+	anal := proc.GetAnalyze(arg.info.Idx, arg.info.ParallelIdx, arg.info.ParallelMajor)
 	anal.Start()
 	defer anal.Stop()
 
@@ -87,7 +91,9 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	if err != nil {
 		return result, err
 	}
-	anal.Alloc(int64(newAlloc))
+	if newAlloc > arg.maxAllocSize {
+		arg.maxAllocSize = newAlloc
+	}
 	arg.buf.SetRowCount(bat.RowCount())
 
 	anal.Output(arg.buf, arg.info.IsLast)

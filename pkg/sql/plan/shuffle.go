@@ -138,12 +138,8 @@ func GetRangeShuffleIndexUnsigned(minVal, maxVal, currentVal uint64, upplerLimit
 func GetHashColumn(expr *plan.Expr) (*plan.ColRef, int32) {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
-		for _, arg := range exprImpl.F.Args {
-			col, typ := GetHashColumn(arg)
-			if col != nil {
-				return col, typ
-			}
-		}
+		//do not support shuffle on expr for now. will improve this in the future
+		return nil, -1
 	case *plan.Expr_Col:
 		return exprImpl.Col, expr.Typ.Id
 	}
@@ -258,7 +254,14 @@ func determinShuffleForJoin(n *plan.Node, builder *QueryBuilder) {
 	}
 
 	// get the column of left child
-	hashCol, typ := GetHashColumn(n.OnList[idx])
+	var expr *plan.Expr
+	cond := n.OnList[idx]
+	switch condImpl := cond.Expr.(type) {
+	case *plan.Expr_F:
+		expr = condImpl.F.Args[0]
+	}
+
+	hashCol, typ := GetHashColumn(expr)
 	if hashCol == nil {
 		return
 	}

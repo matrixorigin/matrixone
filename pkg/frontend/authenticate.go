@@ -58,7 +58,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/sysview"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/route"
 	"github.com/tidwall/btree"
 	"go.uber.org/zap"
 )
@@ -251,7 +251,6 @@ func splitUserInput(ctx context.Context, userInput string, delimiter byte) (*Ten
 		}, nil
 	} else {
 		tenant := userInput[:p]
-		tenant = strings.TrimSpace(tenant)
 		if len(tenant) == 0 {
 			return &TenantInfo{}, moerr.NewInternalError(ctx, "invalid tenant name '%s'", tenant)
 		}
@@ -260,7 +259,6 @@ func splitUserInput(ctx context.Context, userInput string, delimiter byte) (*Ten
 		if p2 == -1 {
 			//tenant:user
 			user := userRole
-			user = strings.TrimSpace(user)
 			if len(user) == 0 {
 				return &TenantInfo{}, moerr.NewInternalError(ctx, "invalid user name '%s'", user)
 			}
@@ -271,12 +269,10 @@ func splitUserInput(ctx context.Context, userInput string, delimiter byte) (*Ten
 			}, nil
 		} else {
 			user := userRole[:p2]
-			user = strings.TrimSpace(user)
 			if len(user) == 0 {
 				return &TenantInfo{}, moerr.NewInternalError(ctx, "invalid user name '%s'", user)
 			}
 			role := userRole[p2+1:]
-			role = strings.TrimSpace(role)
 			if len(role) == 0 {
 				return &TenantInfo{}, moerr.NewInternalError(ctx, "invalid role name '%s'", role)
 			}
@@ -863,6 +859,7 @@ var (
 		"mo_variables":                0,
 		"mo_transactions":             0,
 		"mo_cache":                    0,
+		catalog.MOForeignKeys:         0,
 	}
 	createDbInformationSchemaSql = "create database information_schema;"
 	createAutoTableSql           = fmt.Sprintf(`create table if not exists %s (
@@ -893,6 +890,41 @@ var (
 				index_table_name varchar(5000),
 				primary key(id, column_name)
 			);`, catalog.MO_INDEXES)
+
+	createMoForeignKeysSql = fmt.Sprintf(`create table %s(
+				constraint_name varchar(5000) not null,
+				constraint_id BIGINT UNSIGNED not null,
+				db_name varchar(5000) not null,
+				db_id BIGINT UNSIGNED not null,
+				table_name varchar(5000) not null,
+				table_id BIGINT UNSIGNED not null,
+				column_name varchar(256) not null,
+				column_id BIGINT UNSIGNED not null,
+				refer_db_name varchar(5000) not null,
+				refer_db_id BIGINT UNSIGNED not null,
+				refer_table_name varchar(5000) not null,
+				refer_table_id BIGINT UNSIGNED not null,
+				refer_column_name varchar(256) not null,
+				refer_column_id BIGINT UNSIGNED not null,
+				on_delete varchar(128) not null,
+				on_update varchar(128) not null,
+		
+				primary key(
+					constraint_name,
+					constraint_id,
+					db_name,
+					db_id,
+					table_name,
+					table_id,
+					column_name,
+					column_id,
+					refer_db_name,
+					refer_db_id,
+					refer_table_name,
+					refer_table_id,
+					refer_column_name,
+					refer_column_id)
+			);`, catalog.MOForeignKeys)
 
 	createMoTablePartitionsSql = fmt.Sprintf(`CREATE TABLE %s (
 			  table_id bigint unsigned NOT NULL,
@@ -1070,6 +1102,7 @@ var (
 	dropAutoIcrColSql               = fmt.Sprintf("drop table if exists mo_catalog.`%s`;", catalog.MOAutoIncrTable)
 	dropMoIndexes                   = fmt.Sprintf(`drop table if exists %s.%s;`, catalog.MO_CATALOG, catalog.MO_INDEXES)
 	dropMoTablePartitions           = fmt.Sprintf(`drop table if exists %s.%s;`, catalog.MO_CATALOG, catalog.MO_TABLE_PARTITIONS)
+	dropMoForeignKeys               = `drop table if exists mo_catalog.mo_foreign_keys;`
 
 	initMoMysqlCompatbilityModeFormat = `insert into mo_catalog.mo_mysql_compatibility_mode(
 		account_id,
@@ -2968,7 +3001,7 @@ func doAlterAccount(ctx context.Context, ses *Session, aa *tree.AlterAccount) (e
 			//Option 1: alter the password of admin for the account
 			if aa.AuthOption.Exist {
 				//!!!NOTE!!!:switch into the target account's context, then update the table mo_user.
-				accountCtx := context.WithValue(ctx, defines.TenantIDKey{}, uint32(targetAccountId))
+				accountCtx := defines.AttachAccountId(ctx, uint32(targetAccountId))
 
 				//1, check the admin exists or not
 				sql, rtnErr = getSqlForPasswordOfUser(ctx, aa.AuthOption.AdminName)
@@ -3296,7 +3329,7 @@ func checkSubscriptionValidCommon(ctx context.Context, ses *Session, subName, ac
 		return nil, moerr.NewInternalError(ctx, "can not subscribe to self")
 	}
 
-	newCtx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
+	newCtx = defines.AttachAccountId(ctx, catalog.System_Account)
 
 	//get pubAccountId from publication info
 	sql, err = getSqlForAccountIdAndStatus(newCtx, accName, true)
@@ -3340,7 +3373,7 @@ func checkSubscriptionValidCommon(ctx context.Context, ses *Session, subName, ac
 
 	//check the publication is already exist or not
 
-	newCtx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(accId))
+	newCtx = defines.AttachAccountId(ctx, uint32(accId))
 	sql, err = getSqlForPubInfoForSub(newCtx, pubName, true)
 	if err != nil {
 		return nil, err
@@ -3369,33 +3402,32 @@ func checkSubscriptionValidCommon(ctx context.Context, ses *Session, subName, ac
 	}
 
 	if tenantInfo == nil {
-		if ctx.Value(defines.TenantIDKey{}) != nil {
-			value := ctx.Value(defines.TenantIDKey{})
-			if tenantId, ok := value.(uint32); ok {
-				sql = getSqlForGetAccountName(tenantId)
-				bh.ClearExecResultSet()
-				newCtx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
-				err = bh.Exec(newCtx, sql)
-				if err != nil {
-					return nil, err
-				}
-				if erArray, err = getResultSet(newCtx, bh); err != nil {
-					return nil, err
-				}
-				if !execResultArrayHasData(erArray) {
-					return nil, moerr.NewInternalError(newCtx, "there is no account, account id %d ", tenantId)
-				}
+		var tenantId uint32
+		tenantId, err = defines.GetAccountId(ctx)
+		if err != nil {
+			return nil, err
+		}
 
-				tenantName, err = erArray[0].GetString(newCtx, 0, 0)
-				if err != nil {
-					return nil, err
-				}
-				if !isSubscriptionValid(accountList, tenantName) {
-					return nil, moerr.NewInternalError(newCtx, "the account %s is not allowed to subscribe the publication %s", tenantName, pubName)
-				}
-			}
-		} else {
-			return nil, moerr.NewInternalError(newCtx, "the subscribe %s is not valid", pubName)
+		sql = getSqlForGetAccountName(tenantId)
+		bh.ClearExecResultSet()
+		newCtx = defines.AttachAccountId(ctx, catalog.System_Account)
+		err = bh.Exec(newCtx, sql)
+		if err != nil {
+			return nil, err
+		}
+		if erArray, err = getResultSet(newCtx, bh); err != nil {
+			return nil, err
+		}
+		if !execResultArrayHasData(erArray) {
+			return nil, moerr.NewInternalError(newCtx, "there is no account, account id %d ", tenantId)
+		}
+
+		tenantName, err = erArray[0].GetString(newCtx, 0, 0)
+		if err != nil {
+			return nil, err
+		}
+		if !isSubscriptionValid(accountList, tenantName) {
+			return nil, moerr.NewInternalError(newCtx, "the account %s is not allowed to subscribe the publication %s", tenantName, pubName)
 		}
 	} else if !isSubscriptionValid(accountList, tenantInfo.GetTenant()) {
 		logError(ses, ses.GetDebugString(),
@@ -4155,7 +4187,7 @@ func doDropAccount(ctx context.Context, ses *Session, da *tree.DropAccount) (err
 		//drop tables of the tenant
 		//NOTE!!!: single DDL drop statement per single transaction
 		//SWITCH TO THE CONTEXT of the deleted context
-		deleteCtx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(accountId))
+		deleteCtx = defines.AttachAccountId(ctx, uint32(accountId))
 
 		//step 2 : drop table mo_user
 		//step 3 : drop table mo_role
@@ -4251,6 +4283,11 @@ func doDropAccount(ctx context.Context, ses *Session, da *tree.DropAccount) (err
 			return rtnErr
 		}
 
+		rtnErr = bh.Exec(deleteCtx, dropMoForeignKeys)
+		if rtnErr != nil {
+			return rtnErr
+		}
+
 		// delete the account in the mo_account of the sys account
 		sql, rtnErr = getSqlForDeleteAccountFromMoAccount(ctx, da.Name)
 		if rtnErr != nil {
@@ -4322,15 +4359,15 @@ func postDropSuspendAccount(
 	currTenant := ses.GetTenantInfo().Tenant
 	currUser := ses.GetTenantInfo().User
 	labels := clusterservice.NewSelector().SelectByLabel(
-		map[string]string{"account": accountName}, clusterservice.EQ)
+		map[string]string{"account": accountName}, clusterservice.Contain)
 	sysTenant := isSysTenant(currTenant)
 	if sysTenant {
-		disttae.SelectForSuperTenant(clusterservice.NewSelector(), currUser, nil,
+		route.RouteForSuperTenant(clusterservice.NewSelector(), currUser, nil,
 			func(s *metadata.CNService) {
 				nodes = append(nodes, s.QueryAddress)
 			})
 	} else {
-		disttae.SelectForCommonTenant(labels, nil, func(s *metadata.CNService) {
+		route.RouteForCommonTenant(labels, nil, func(s *metadata.CNService) {
 			nodes = append(nodes, s.QueryAddress)
 		})
 	}
@@ -4970,10 +5007,7 @@ func doGrantPrivilege(ctx context.Context, ses *Session, gp *tree.GrantPrivilege
 
 	account := ses.GetTenantInfo()
 	if account == nil {
-		ctxUserId := ctx.Value(defines.UserIDKey{})
-		if id, ok := ctxUserId.(uint32); ok {
-			userId = id
-		}
+		userId = defines.GetUserId(ctx)
 	} else {
 		userId = account.GetUserID()
 	}
@@ -5956,6 +5990,14 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) privilegeTipsArray {
 							isClusterTable:        clusterTable,
 							clusterTableOperation: clusterTableOperation,
 						})
+					} else if node.ParentObjRef != nil {
+						appendPt(privilegeTips{
+							typ:                   scanTyp,
+							databaseName:          node.ParentObjRef.GetSchemaName(),
+							tableName:             node.ParentObjRef.GetObjName(),
+							isClusterTable:        clusterTable,
+							clusterTableOperation: clusterTableOperation,
+						})
 					}
 				}
 			} else if node.NodeType == plan.Node_INSERT {
@@ -6365,6 +6407,12 @@ func determineUserHasPrivilegeSet(ctx context.Context, ses *Session, priv *privi
 	tenant := ses.GetTenantInfo()
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
+
+	if ses.tStmt != nil {
+		// for reset frontend query's txn-id
+		// NEED to skip this background session txn, which used by authenticateUserCanExecuteStatement()
+		ses.tStmt.SetSkipTxn(true)
+	}
 
 	//the set of roles the (k+1) th iteration during the execution
 	roleSetOfKPlusOneThIteration := &btree.Set[int64]{}
@@ -6959,6 +7007,12 @@ func authenticateUserCanExecuteStatementWithObjectTypeDatabaseAndTable(ctx conte
 	p *plan2.Plan) (bool, error) {
 	priv := determinePrivilegeSetOfStatement(stmt)
 	if priv.objectType() == objectTypeTable {
+		//only sys account, moadmin role can exec mo_ctrl
+		if hasMoCtrl(p) {
+			if !verifyAccountCanExecMoCtrl(ses.GetTenantInfo()) {
+				return false, moerr.NewInternalError(ctx, "do not have privilege to execute the statement")
+			}
+		}
 		arr := extractPrivilegeTipsFromPlan(p)
 		if len(arr) == 0 {
 			return true, nil
@@ -7486,9 +7540,7 @@ func InitSysTenant(ctx context.Context, aicm *defines.AutoIncrCacheManager) (err
 		DefaultRoleID: moAdminRoleID,
 	}
 
-	ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(sysAccountID))
-	ctx = context.WithValue(ctx, defines.UserIDKey{}, uint32(rootID))
-	ctx = context.WithValue(ctx, defines.RoleIDKey{}, uint32(moAdminRoleID))
+	ctx = defines.AttachAccount(ctx, uint32(sysAccountID), uint32(rootID), uint32(moAdminRoleID))
 
 	mp, err = mpool.NewMPool("init_system_tenant", 0, mpool.NoFixed)
 	if err != nil {
@@ -7703,9 +7755,7 @@ func InitGeneralTenant(ctx context.Context, ses *Session, ca *tree.CreateAccount
 		}
 	}
 
-	ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(tenant.GetTenantID()))
-	ctx = context.WithValue(ctx, defines.UserIDKey{}, uint32(tenant.GetUserID()))
-	ctx = context.WithValue(ctx, defines.RoleIDKey{}, uint32(tenant.GetDefaultRoleID()))
+	ctx = defines.AttachAccount(ctx, uint32(tenant.GetTenantID()), uint32(tenant.GetUserID()), uint32(tenant.GetDefaultRoleID()))
 
 	_, st := trace.Debug(ctx, "InitGeneralTenant.init_general_tenant")
 	mp, err = mpool.NewMPool("init_general_tenant", 0, mpool.NoFixed)
@@ -7719,17 +7769,18 @@ func InitGeneralTenant(ctx context.Context, ses *Session, ca *tree.CreateAccount
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
-	//USE the mo_catalog
-	err = bh.Exec(ctx, "use mo_catalog;")
-	if err != nil {
-		return err
-	}
-
 	createNewAccount := func() (rtnErr error) {
 		rtnErr = bh.Exec(ctx, "begin;")
 		defer func() {
 			rtnErr = finishTxn(ctx, bh, rtnErr)
 		}()
+		if rtnErr != nil {
+			return rtnErr
+		}
+
+		//USE the mo_catalog
+		// MOVE into txn, make sure only create ONE txn.
+		rtnErr = bh.Exec(ctx, "use mo_catalog;")
 		if rtnErr != nil {
 			return rtnErr
 		}
@@ -7768,6 +7819,11 @@ func InitGeneralTenant(ctx context.Context, ses *Session, ca *tree.CreateAccount
 			return rtnErr
 		}
 
+		rtnErr = bh.Exec(newTenantCtx, createMoForeignKeysSql)
+		if rtnErr != nil {
+			return rtnErr
+		}
+
 		//create createDbSqls
 		createDbSqls := []string{
 			"create database " + motrace.SystemDBConst + ";",
@@ -7787,11 +7843,11 @@ func InitGeneralTenant(ctx context.Context, ses *Session, ca *tree.CreateAccount
 		if rtnErr != nil {
 			return rtnErr
 		}
-		rtnErr = createTablesInSystemOfGeneralTenant(ctx, bh, newTenant)
+		rtnErr = createTablesInSystemOfGeneralTenant(newTenantCtx, bh, newTenant)
 		if rtnErr != nil {
 			return rtnErr
 		}
-		rtnErr = createTablesInInformationSchemaOfGeneralTenant(ctx, bh, newTenant)
+		rtnErr = createTablesInInformationSchemaOfGeneralTenant(newTenantCtx, bh, newTenant)
 		if rtnErr != nil {
 			return rtnErr
 		}
@@ -7893,9 +7949,7 @@ func createTablesInMoCatalogOfGeneralTenant(ctx context.Context, bh BackgroundEx
 		DefaultRoleID: accountAdminRoleID,
 	}
 	//with new tenant
-	newTenantCtx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(newTenantID))
-	newTenantCtx = context.WithValue(newTenantCtx, defines.UserIDKey{}, uint32(newUserId))
-	newTenantCtx = context.WithValue(newTenantCtx, defines.RoleIDKey{}, uint32(accountAdminRoleID))
+	newTenantCtx = defines.AttachAccount(ctx, uint32(newTenantID), uint32(newUserId), uint32(accountAdminRoleID))
 	return newTenant, newTenantCtx, err
 }
 
@@ -8011,10 +8065,6 @@ func createTablesInMoCatalogOfGeneralTenant2(bh BackgroundExec, ca *tree.CreateA
 func createTablesInSystemOfGeneralTenant(ctx context.Context, bh BackgroundExec, newTenant *TenantInfo) error {
 	ctx, span := trace.Debug(ctx, "createTablesInSystemOfGeneralTenant")
 	defer span.End()
-	//with new tenant
-	ctx = context.WithValue(ctx, defines.TenantIDKey{}, newTenant.GetTenantID())
-	ctx = context.WithValue(ctx, defines.UserIDKey{}, newTenant.GetUserID())
-	ctx = context.WithValue(ctx, defines.RoleIDKey{}, newTenant.GetDefaultRoleID())
 
 	var err error
 	sqls := make([]string, 0)
@@ -8041,9 +8091,6 @@ func createTablesInInformationSchemaOfGeneralTenant(ctx context.Context, bh Back
 	defer span.End()
 	//with new tenant
 	//TODO: when we have the auto_increment column, we need new strategy.
-	ctx = context.WithValue(ctx, defines.TenantIDKey{}, newTenant.GetTenantID())
-	ctx = context.WithValue(ctx, defines.UserIDKey{}, newTenant.GetUserID())
-	ctx = context.WithValue(ctx, defines.RoleIDKey{}, newTenant.GetDefaultRoleID())
 
 	var err error
 	sqls := make([]string, 0, len(sysview.InitInformationSchemaSysTables)+len(sysview.InitMysqlSysTables)+4)
@@ -8084,9 +8131,7 @@ func createSubscriptionDatabase(ctx context.Context, bh BackgroundExec, newTenan
 	}
 
 	//with new tenant
-	ctx = context.WithValue(ctx, defines.TenantIDKey{}, newTenant.GetTenantID())
-	ctx = context.WithValue(ctx, defines.UserIDKey{}, newTenant.GetUserID())
-	ctx = context.WithValue(ctx, defines.RoleIDKey{}, newTenant.GetDefaultRoleID())
+	ctx = defines.AttachAccount(ctx, uint32(newTenant.GetTenantID()), uint32(newTenant.GetUserID()), uint32(newTenant.GetDefaultRoleID()))
 
 	createSubscriptionFormat := `create database %s from sys publication %s;`
 	sqls := make([]string, 0, len(subscriptions))
@@ -8438,7 +8483,7 @@ func (mce *MysqlCmdExecutor) Upload(ctx context.Context, localPath string, stora
 
 	// read from pipe and upload
 	ioVector := fileservice.IOVector{
-		FilePath: path.Join("udf", storageDir, localPath[strings.LastIndex(localPath, "/")+1:]),
+		FilePath: fileservice.JoinPath(defines.SharedFileServiceName, path.Join("udf", storageDir, localPath[strings.LastIndex(localPath, "/")+1:])),
 		Entries: []fileservice.IOEntry{
 			{
 				Size:           -1,
@@ -8804,7 +8849,7 @@ func doAlterAccountConfig(ctx context.Context, ses *Session, stmt *tree.AlterDat
 		}
 
 		// step 1: check account exists or not
-		newCtx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
+		newCtx = defines.AttachAccountId(ctx, catalog.System_Account)
 		isExist, rtnErr = checkTenantExistsOrNot(newCtx, bh, accountName)
 		if rtnErr != nil {
 			return rtnErr
@@ -8849,7 +8894,7 @@ func insertRecordToMoMysqlCompatibilityMode(ctx context.Context, ses *Session, s
 	var dbName string
 	var err error
 	variableName := "version_compatibility"
-	variableValue := "0.7"
+	variableValue := getVariableValue(ses.GetSysVar("version"))
 
 	if createDatabaseStmt, ok := stmt.(*tree.CreateDatabase); ok {
 		dbName = string(createDatabaseStmt.Name)
@@ -9099,13 +9144,9 @@ func doGrantPrivilegeImplicitly(ctx context.Context, ses *Session, stmt tree.Sta
 	tenantInfo = ses.GetTenantInfo()
 	// if is system account
 	if tenantInfo.IsSysTenant() {
-		tenantCtx = context.WithValue(ses.GetRequestContext(), defines.TenantIDKey{}, uint32(sysAccountID))
-		tenantCtx = context.WithValue(tenantCtx, defines.UserIDKey{}, uint32(rootID))
-		tenantCtx = context.WithValue(tenantCtx, defines.RoleIDKey{}, uint32(moAdminRoleID))
+		tenantCtx = defines.AttachAccount(ses.GetRequestContext(), uint32(sysAccountID), uint32(rootID), uint32(moAdminRoleID))
 	} else {
-		tenantCtx = context.WithValue(ses.GetRequestContext(), defines.TenantIDKey{}, tenantInfo.GetTenantID())
-		tenantCtx = context.WithValue(tenantCtx, defines.UserIDKey{}, tenantInfo.GetUserID())
-		tenantCtx = context.WithValue(tenantCtx, defines.RoleIDKey{}, uint32(accountAdminRoleID))
+		tenantCtx = defines.AttachAccount(ses.GetRequestContext(), tenantInfo.GetTenantID(), tenantInfo.GetUserID(), uint32(accountAdminRoleID))
 	}
 
 	// 2.grant database privilege
@@ -9150,13 +9191,9 @@ func doRevokePrivilegeImplicitly(ctx context.Context, ses *Session, stmt tree.St
 	tenantInfo = ses.GetTenantInfo()
 	// if is system account
 	if tenantInfo.IsSysTenant() {
-		tenantCtx = context.WithValue(ses.GetRequestContext(), defines.TenantIDKey{}, uint32(sysAccountID))
-		tenantCtx = context.WithValue(tenantCtx, defines.UserIDKey{}, uint32(rootID))
-		tenantCtx = context.WithValue(tenantCtx, defines.RoleIDKey{}, uint32(moAdminRoleID))
+		tenantCtx = defines.AttachAccount(ses.GetRequestContext(), uint32(sysAccountID), uint32(rootID), uint32(moAdminRoleID))
 	} else {
-		tenantCtx = context.WithValue(ses.GetRequestContext(), defines.TenantIDKey{}, tenantInfo.GetTenantID())
-		tenantCtx = context.WithValue(tenantCtx, defines.UserIDKey{}, tenantInfo.GetUserID())
-		tenantCtx = context.WithValue(tenantCtx, defines.RoleIDKey{}, uint32(accountAdminRoleID))
+		tenantCtx = defines.AttachAccount(ses.GetRequestContext(), tenantInfo.GetTenantID(), tenantInfo.GetUserID(), uint32(accountAdminRoleID))
 	}
 
 	// 2.grant database privilege
@@ -9356,15 +9393,15 @@ func postAlterSessionStatus(
 	currUser := ses.GetTenantInfo().User
 	var nodes []string
 	labels := clusterservice.NewSelector().SelectByLabel(
-		map[string]string{"account": accountName}, clusterservice.EQ)
+		map[string]string{"account": accountName}, clusterservice.Contain)
 	sysTenant := isSysTenant(currTenant)
 	if sysTenant {
-		disttae.SelectForSuperTenant(clusterservice.NewSelector(), currUser, nil,
+		route.RouteForSuperTenant(clusterservice.NewSelector(), currUser, nil,
 			func(s *metadata.CNService) {
 				nodes = append(nodes, s.QueryAddress)
 			})
 	} else {
-		disttae.SelectForCommonTenant(labels, nil, func(s *metadata.CNService) {
+		route.RouteForCommonTenant(labels, nil, func(s *metadata.CNService) {
 			nodes = append(nodes, s.QueryAddress)
 		})
 	}

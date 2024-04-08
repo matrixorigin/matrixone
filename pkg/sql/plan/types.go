@@ -18,11 +18,10 @@ import (
 	"context"
 	"math"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
-
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 const (
@@ -48,7 +47,7 @@ type ColDef = plan.ColDef
 type ObjectRef = plan.ObjectRef
 type ColRef = plan.ColRef
 type Stats = plan.Stats
-type Const = plan.Const
+type Const = plan.Literal
 type MaxValue = plan.MaxValue
 type Expr = plan.Expr
 type Node = plan.Node
@@ -94,7 +93,7 @@ type CompilerContext interface {
 	GetRootSql() string
 	// get username of current session
 	GetUserName() string
-	GetAccountId() uint32
+	GetAccountId() (uint32, error)
 	// GetContext get raw context.Context
 	GetContext() context.Context
 	// GetDatabaseId Get database id
@@ -251,6 +250,8 @@ type BindContext struct {
 
 	// sample function related.
 	sampleFunc SampleFuncCtx
+
+	tmpGroups []*plan.Expr
 }
 
 type NameTuple struct {
@@ -355,6 +356,7 @@ const (
 type Binding struct {
 	tag            int32
 	nodeId         int32
+	db             string
 	table          string
 	tableID        uint64
 	cols           []string
@@ -369,3 +371,10 @@ const (
 	maxLengthOfTableComment  int = 2048
 	maxLengthOfColumnComment int = 1024
 )
+
+// fuzzy filter need to get partial unique key attrs name and its origin table name
+// for Decimal type, we need colDef to get the scale
+type OriginTableMessageForFuzzy struct {
+	ParentTableName  string
+	ParentUniqueCols []*ColDef
+}

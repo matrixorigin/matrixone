@@ -26,9 +26,9 @@ var (
 	}
 )
 
-func NewWinRank(overloadID int64, dist bool, inputTypes []types.Type, outputType types.Type, _ any, _ any) (agg.Agg[any], error) {
+func NewWinRank(overloadID int64, dist bool, inputTypes []types.Type, outputType types.Type, _ any) (agg.Agg[any], error) {
 	winPriv := &sWindowBase{}
-	return agg.NewUnaryAgg(overloadID, winPriv, false, inputTypes[0], outputType, winPriv.Grows, winPriv.EvalRank, winPriv.Merge, winPriv.Fill, nil), nil
+	return agg.NewUnaryAgg(overloadID, winPriv, false, inputTypes[0], outputType, winPriv.Grows, winPriv.EvalRank, winPriv.Merge, winPriv.Fill), nil
 }
 
 func (s *sWindowBase) EvalRank(result []int64) ([]int64, error) {

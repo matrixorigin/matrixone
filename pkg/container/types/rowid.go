@@ -113,6 +113,9 @@ func (r Rowid) GetObject() ObjectBytes {
 	return *(*ObjectBytes)(r[:ObjectBytesSize])
 }
 
+func (r *Rowid) BorrowObjectID() *Objectid {
+	return (*Objectid)(unsafe.Pointer(&r[0]))
+}
 func (r *Rowid) SetRowOffset(offset uint32) {
 	copy(r[BlockidSize:], EncodeUint32(&offset))
 }
@@ -141,9 +144,13 @@ func (b Blockid) Less(than Blockid) bool {
 	return b.Compare(than) < 0
 }
 
+func (b Blockid) Great(than Blockid) bool {
+	return b.Compare(than) > 0
+}
+
 func RandomRowid() Rowid {
 	var r Rowid
-	u := uuid.New()
+	u, _ := uuid.NewV7()
 	copy(r[:], u[:])
 	return r
 }
@@ -189,6 +196,37 @@ func (b *Blockid) Segment() *Segmentid {
 	return (*Uuid)(unsafe.Pointer(&b[0]))
 }
 
+func (b *Blockid) Object() *Objectid {
+	return (*Objectid)(unsafe.Pointer(&b[0]))
+}
+
 func (b *Blockid) Sequence() uint16 {
 	return DecodeUint16(b[ObjectBytesSize:BlockidSize])
+}
+func (o *Objectid) Segment() *Segmentid {
+	return (*Uuid)(unsafe.Pointer(&o[0]))
+}
+func (o *Objectid) String() string {
+	return fmt.Sprintf("%v-%d", o.Segment().ToString(), o.Offset())
+}
+func (o *Objectid) Offset() uint16 {
+	filen := DecodeUint16(o[UuidSize:ObjectBytesSize])
+	return filen
+}
+
+func (o *Objectid) Eq(other Objectid) bool {
+	return bytes.Equal(o[:], other[:])
+}
+
+func (o *Objectid) Le(other Objectid) bool {
+	return bytes.Compare(o[:], other[:]) <= 0
+}
+func (o *Objectid) Ge(other Objectid) bool {
+	return bytes.Compare(o[:], other[:]) >= 0
+}
+func (o *Objectid) Lt(other Objectid) bool {
+	return bytes.Compare(o[:], other[:]) < 0
+}
+func (o *Objectid) Gt(other Objectid) bool {
+	return bytes.Compare(o[:], other[:]) > 0
 }

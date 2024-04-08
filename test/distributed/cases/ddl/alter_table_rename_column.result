@@ -76,7 +76,7 @@ col1new    col2    col3new
 3    10    null
 3    4    121131312
 update rename03 set col1New = 100 where col1New = 1;
-update rename03 set col3New = '2798u3d3frew' where col3New = 6;
+update rename03 set col3New = '2798u3d3frew' where col3New = '6';
 delete from rename03 where col3New is null;
 select * from rename03;
 col1new    col2    col3new
@@ -159,7 +159,7 @@ table_name    column_name    data_type    is_nullable
 rename06    数据库系统    INT    YES
 show columns from rename06;
 Field    Type    Null    Key    Default    Extra    Comment
-数据库系统    INT(32)    YES        null
+数据库系统    INT(32)    YES        null        
 drop table rename06;
 alter table system.statement_info rename column role_id to role_idNew;
 internal error: do not have privilege to execute the statement
@@ -204,13 +204,13 @@ drop table if exists foreign02;
 create table foreign02(col1 int,
 col2 int,
 col3 int primary key,
-foreign key(col1) references foreign01(col1));
+constraint `c1` foreign key(col1) references foreign01(col1));
 show create table foreign01;
 Table    Create Table
 foreign01    CREATE TABLE `foreign01` (\n`col1` INT NOT NULL,\n`col2` VARCHAR(20) DEFAULT NULL,\n`col3` INT DEFAULT NULL,\n`col4` BIGINT DEFAULT NULL,\nPRIMARY KEY (`col1`)\n)
 show create table foreign02;
 Table    Create Table
-foreign02    CREATE TABLE `foreign02` (\n`col1` INT DEFAULT NULL,\n`col2` INT DEFAULT NULL,\n`col3` INT NOT NULL,\nPRIMARY KEY (`col3`),\nCONSTRAINT `` FOREIGN KEY (`col1`) REFERENCES `foreign01` (`col1`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
+foreign02    CREATE TABLE `foreign02` (\n`col1` INT DEFAULT NULL,\n`col2` INT DEFAULT NULL,\n`col3` INT NOT NULL,\nPRIMARY KEY (`col3`),\nCONSTRAINT `c1` FOREIGN KEY (`col1`) REFERENCES `foreign01` (`col1`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
 insert into foreign01 values(1,'sfhuwe',1,1);
 insert into foreign01 values(2,'37829901k3d',2,2);
 insert into foreign02 values(1,1,1);
@@ -230,7 +230,7 @@ Table    Create Table
 foreign01    CREATE TABLE `foreign01` (\n`col1new` INT NOT NULL,\n`col2` VARCHAR(20) DEFAULT NULL,\n`col3` INT DEFAULT NULL,\n`col4` BIGINT DEFAULT NULL,\nPRIMARY KEY (`col1new`)\n)
 show create table foreign02;
 Table    Create Table
-foreign02    CREATE TABLE `foreign02` (\n`colnewcolumn` INT DEFAULT NULL,\n`col2` INT DEFAULT NULL,\n`col3` INT NOT NULL,\nPRIMARY KEY (`col3`),\nCONSTRAINT `` FOREIGN KEY (`colnewcolumn`) REFERENCES `foreign01` (`col1new`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
+foreign02    CREATE TABLE `foreign02` (\n`colnewcolumn` INT DEFAULT NULL,\n`col2` INT DEFAULT NULL,\n`col3` INT NOT NULL,\nPRIMARY KEY (`col3`),\nCONSTRAINT `c1` FOREIGN KEY (`colnewcolumn`) REFERENCES `foreign01` (`col1new`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
 alter table foreign01 change col2 col2New varchar(100);
 alter table foreign02 change col2 col2new double after col3;
 insert into foreign01 values(3,'bcguwgheinwqneku678',2,2);
@@ -256,7 +256,7 @@ Table    Create Table
 foreign01    CREATE TABLE `foreign01` (\n`col1new` INT NOT NULL,\n`col2new` VARCHAR(100) DEFAULT NULL,\n`col3` INT DEFAULT NULL,\n`col4` BIGINT DEFAULT NULL,\nPRIMARY KEY (`col1new`)\n)
 show create table foreign02;
 Table    Create Table
-foreign02    CREATE TABLE `foreign02` (\n`colnewcolumn` INT DEFAULT NULL,\n`col3` INT NOT NULL,\n`col2new` DOUBLE DEFAULT NULL,\nPRIMARY KEY (`col3`),\nCONSTRAINT `` FOREIGN KEY (`colnewcolumn`) REFERENCES `foreign01` (`col1new`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
+foreign02    CREATE TABLE `foreign02` (\n`colnewcolumn` INT DEFAULT NULL,\n`col3` INT NOT NULL,\n`col2new` DOUBLE DEFAULT NULL,\nPRIMARY KEY (`col3`),\nCONSTRAINT `c1` FOREIGN KEY (`colnewcolumn`) REFERENCES `foreign01` (`col1new`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
 show columns from foreign01;
 Field    Type    Null    Key    Default    Extra    Comment
 col1new    INT(32)    NO    PRI    null        
@@ -468,8 +468,8 @@ create view v0 as select view01.a, view02.a as b from view01 left join view02 us
 invalid input: column 'a' specified in USING clause does not exist in left table
 create view v0 as select view01.cwhuenwjfdwcweffcfwef, view02.cwhuenwjfdwcweffcfwef as b from view01 left join view02 using(cwhuenwjfdwcweffcfwef);
 show create view v0;
-View    Create View
-v0    create view v0 as select view01.cwhuenwjfdwcweffcfwef, view02.cwhuenwjfdwcweffcfwef as b from view01 left join view02 using(cwhuenwjfdwcweffcfwef);
+View    Create View    character_set_client    collation_connection
+v0    create view v0 as select view01.cwhuenwjfdwcweffcfwef, view02.cwhuenwjfdwcweffcfwef as b from view01 left join view02 using(cwhuenwjfdwcweffcfwef);    utf8mb4    utf8mb4_general_ci
 drop table view01;
 drop table view02;
 drop role if exists role_r1;

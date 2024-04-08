@@ -15,18 +15,11 @@
 package plan
 
 import (
-	"sort"
-
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
-// removeSimpleProjections On top of each subquery or view it has a PROJECT node, which interrupts optimizer rules such as join order.
-func (builder *QueryBuilder) removeSimpleProjections(nodeID int32, parentType plan.Node_NodeType, flag bool, colRefCnt map[[2]int32]int) (int32, map[[2]int32]*plan.Expr) {
+func (builder *QueryBuilder) countColRefs(nodeID int32, colRefCnt map[[2]int32]int) {
 	node := builder.qry.Nodes[nodeID]
-	if node.NodeType == plan.Node_SINK {
-		return builder.removeSimpleProjections(node.Children[0], plan.Node_UNKNOWN, flag, colRefCnt)
-	}
-	projMap := make(map[[2]int32]*plan.Expr)
 
 	increaseRefCntForExprList(node.ProjectList, 1, colRefCnt)
 	increaseRefCntForExprList(node.OnList, 1, colRefCnt)
@@ -38,6 +31,19 @@ func (builder *QueryBuilder) removeSimpleProjections(nodeID int32, parentType pl
 	for i := range node.OrderBy {
 		increaseRefCnt(node.OrderBy[i].Expr, 1, colRefCnt)
 	}
+
+	for _, childID := range node.Children {
+		builder.countColRefs(childID, colRefCnt)
+	}
+}
+
+// removeSimpleProjections On top of each subquery or view it has a PROJECT node, which interrupts optimizer rules such as join order.
+func (builder *QueryBuilder) removeSimpleProjections(nodeID int32, parentType plan.Node_NodeType, flag bool, colRefCnt map[[2]int32]int) (int32, map[[2]int32]*plan.Expr) {
+	node := builder.qry.Nodes[nodeID]
+	if node.NodeType == plan.Node_SINK {
+		return builder.removeSimpleProjections(node.Children[0], plan.Node_UNKNOWN, flag, colRefCnt)
+	}
+	projMap := make(map[[2]int32]*plan.Expr)
 
 	switch node.NodeType {
 	case plan.Node_JOIN:
@@ -56,7 +62,7 @@ func (builder *QueryBuilder) removeSimpleProjections(nodeID int32, parentType pl
 			projMap[ref] = expr
 		}
 
-	case plan.Node_AGG, plan.Node_PROJECT, plan.Node_WINDOW, plan.Node_TIME_WINDOW, plan.Node_Fill:
+	case plan.Node_AGG, plan.Node_PROJECT, plan.Node_WINDOW, plan.Node_TIME_WINDOW, plan.Node_FILL:
 		for i, childID := range node.Children {
 			newChildID, childProjMap := builder.removeSimpleProjections(childID, node.NodeType, false, colRefCnt)
 			node.Children[i] = newChildID
@@ -75,27 +81,16 @@ func (builder *QueryBuilder) removeSimpleProjections(nodeID int32, parentType pl
 		}
 	}
 
-	removeProjectionsForExprList(node.ProjectList, projMap)
-	removeProjectionsForExprList(node.OnList, projMap)
-	removeProjectionsForExprList(node.FilterList, projMap)
-	removeProjectionsForExprList(node.GroupBy, projMap)
-	removeProjectionsForExprList(node.GroupingSet, projMap)
-	removeProjectionsForExprList(node.AggList, projMap)
-	removeProjectionsForExprList(node.WinSpecList, projMap)
-	for i := range node.OrderBy {
-		node.OrderBy[i].Expr = removeProjectionsForExpr(node.OrderBy[i].Expr, projMap)
-	}
+	replaceColumnsForNode(node, projMap)
 
 	if builder.canRemoveProject(parentType, node) {
 		allColRef := true
 		tag := node.BindingTags[0]
 		for i, proj := range node.ProjectList {
 			if flag || colRefCnt[[2]int32{tag, int32(i)}] > 1 {
-				if _, ok := proj.Expr.(*plan.Expr_Col); !ok {
-					if _, ok := proj.Expr.(*plan.Expr_C); !ok {
-						allColRef = false
-						break
-					}
+				if proj.GetCol() == nil && (proj.GetLit() == nil || flag) {
+					allColRef = false
+					break
 				}
 			}
 		}
@@ -158,13 +153,26 @@ func (builder *QueryBuilder) canRemoveProject(parentType plan.Node_NodeType, nod
 	return true
 }
 
-func removeProjectionsForExprList(exprList []*plan.Expr, projMap map[[2]int32]*plan.Expr) {
-	for i, expr := range exprList {
-		exprList[i] = removeProjectionsForExpr(expr, projMap)
+func replaceColumnsForNode(node *plan.Node, projMap map[[2]int32]*plan.Expr) {
+	replaceColumnsForExprList(node.ProjectList, projMap)
+	replaceColumnsForExprList(node.OnList, projMap)
+	replaceColumnsForExprList(node.FilterList, projMap)
+	replaceColumnsForExprList(node.GroupBy, projMap)
+	replaceColumnsForExprList(node.GroupingSet, projMap)
+	replaceColumnsForExprList(node.AggList, projMap)
+	replaceColumnsForExprList(node.WinSpecList, projMap)
+	for i := range node.OrderBy {
+		node.OrderBy[i].Expr = replaceColumnsForExpr(node.OrderBy[i].Expr, projMap)
 	}
 }
 
-func removeProjectionsForExpr(expr *plan.Expr, projMap map[[2]int32]*plan.Expr) *plan.Expr {
+func replaceColumnsForExprList(exprList []*plan.Expr, projMap map[[2]int32]*plan.Expr) {
+	for i, expr := range exprList {
+		exprList[i] = replaceColumnsForExpr(expr, projMap)
+	}
+}
+
+func replaceColumnsForExpr(expr *plan.Expr, projMap map[[2]int32]*plan.Expr) *plan.Expr {
 	if expr == nil {
 		return nil
 	}
@@ -178,16 +186,16 @@ func removeProjectionsForExpr(expr *plan.Expr, projMap map[[2]int32]*plan.Expr) 
 
 	case *plan.Expr_F:
 		for i, arg := range ne.F.Args {
-			ne.F.Args[i] = removeProjectionsForExpr(arg, projMap)
+			ne.F.Args[i] = replaceColumnsForExpr(arg, projMap)
 		}
 
 	case *plan.Expr_W:
-		ne.W.WindowFunc = removeProjectionsForExpr(ne.W.WindowFunc, projMap)
+		ne.W.WindowFunc = replaceColumnsForExpr(ne.W.WindowFunc, projMap)
 		for i, arg := range ne.W.PartitionBy {
-			ne.W.PartitionBy[i] = removeProjectionsForExpr(arg, projMap)
+			ne.W.PartitionBy[i] = replaceColumnsForExpr(arg, projMap)
 		}
 		for i, order := range ne.W.OrderBy {
-			ne.W.OrderBy[i].Expr = removeProjectionsForExpr(order.Expr, projMap)
+			ne.W.OrderBy[i].Expr = replaceColumnsForExpr(order.Expr, projMap)
 		}
 	}
 	return expr
@@ -422,8 +430,8 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 		for i, filter := range filters {
 			switch joinSides[i] {
 			case JoinSideNone:
-				if c, ok := filter.Expr.(*plan.Expr_C); ok {
-					if c, ok := c.C.Value.(*plan.Const_Bval); ok {
+				if c, ok := filter.Expr.(*plan.Expr_Lit); ok {
+					if c, ok := c.Lit.Value.(*plan.Literal_Bval); ok {
 						if c.Bval {
 							break
 						}
@@ -517,9 +525,16 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 			}
 		}
 
-		if node.JoinType == plan.Node_INNER {
-			//only inner join can deduce new predicate
+		switch node.JoinType {
+		case plan.Node_INNER, plan.Node_SEMI:
+			//inner and semi join can deduce new predicate from both side
 			builder.pushdownFilters(node.Children[0], deduceNewFilterList(rightPushdown, node.OnList), separateNonEquiConds)
+			builder.pushdownFilters(node.Children[1], deduceNewFilterList(leftPushdown, node.OnList), separateNonEquiConds)
+		case plan.Node_RIGHT:
+			//right join can deduce new predicate only from right side to left
+			builder.pushdownFilters(node.Children[0], deduceNewFilterList(rightPushdown, node.OnList), separateNonEquiConds)
+		case plan.Node_LEFT:
+			//left join can deduce new predicate only from left side to right
 			builder.pushdownFilters(node.Children[1], deduceNewFilterList(leftPushdown, node.OnList), separateNonEquiConds)
 		}
 
@@ -943,240 +958,148 @@ func determineHashOnPK(nodeID int32, builder *QueryBuilder) {
 
 }
 
-func (builder *QueryBuilder) autoUseIndices(nodeID int32) int32 {
+func checkExprInTags(expr *plan.Expr, tags []int32) bool {
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_F:
+		for i := range exprImpl.F.Args {
+			if !checkExprInTags(exprImpl.F.Args[i], tags) {
+				return false
+			}
+		}
+		return true
+
+	case *plan.Expr_Col:
+		for i := range tags {
+			if tags[i] == exprImpl.Col.RelPos {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// order by limit can be pushed down to left join
+func (builder *QueryBuilder) pushTopDownToLeftJoin(nodeID int32) {
 	node := builder.qry.Nodes[nodeID]
+	var joinnode, nodePushDown *plan.Node
+	var tags []int32
+	var newNodeID int32
 
-	switch node.NodeType {
-	case plan.Node_TABLE_SCAN:
-		return builder.useIndicesForPointSelect(nodeID, node)
+	if node.NodeType != plan.Node_SORT || node.Limit == nil {
+		goto END
+	}
+	joinnode = builder.qry.Nodes[node.Children[0]]
+	if joinnode.NodeType != plan.Node_JOIN {
+		goto END
+	}
 
-	case plan.Node_JOIN:
-		return builder.useIndicesForJoin(nodeID, node)
+	//before join order, only left join
+	if joinnode.JoinType != plan.Node_LEFT {
+		goto END
+	}
 
-	default:
-		for i, childID := range node.Children {
-			node.Children[i] = builder.autoUseIndices(childID)
+	// check orderby column
+	tags = builder.enumerateTags(builder.qry.Nodes[joinnode.Children[0]].NodeId)
+	for i := range node.OrderBy {
+		if !checkExprInTags(node.OrderBy[i].Expr, tags) {
+			goto END
 		}
+	}
 
-		return nodeID
+	nodePushDown = DeepCopyNode(node)
+
+	if nodePushDown.Offset != nil {
+		newExpr, err := bindFuncExprAndConstFold(builder.GetContext(), builder.compCtx.GetProcess(), "+", []*Expr{nodePushDown.Limit, nodePushDown.Offset})
+		if err != nil {
+			goto END
+		}
+		nodePushDown.Offset = nil
+		nodePushDown.Limit = newExpr
+	}
+	newNodeID = builder.appendNode(nodePushDown, nil)
+	nodePushDown.Children[0] = joinnode.Children[0]
+	joinnode.Children[0] = newNodeID
+
+END:
+	if len(node.Children) > 0 {
+		for _, child := range node.Children {
+			builder.pushTopDownToLeftJoin(child)
+		}
 	}
 }
 
-func (builder *QueryBuilder) useIndicesForPointSelect(nodeID int32, node *plan.Node) int32 {
-	if len(node.FilterList) == 0 || len(node.TableDef.Indexes) == 0 {
-		return nodeID
-	}
-
-	if node.Stats.Selectivity > 0.1 || node.Stats.Outcnt > InFilterCardLimit {
-		return nodeID
-	}
-
-	col2filter := make(map[int32]int)
-	for i, expr := range node.FilterList {
-		fn, ok := expr.Expr.(*plan.Expr_F)
-		if !ok {
-			continue
-		}
-
-		if !IsEqualFunc(fn.F.Func.Obj) {
-			continue
-		}
-
-		if _, ok := fn.F.Args[0].Expr.(*plan.Expr_C); ok {
-			if _, ok := fn.F.Args[1].Expr.(*plan.Expr_Col); ok {
-				fn.F.Args[0], fn.F.Args[1] = fn.F.Args[1], fn.F.Args[0]
-			}
-		}
-
-		col, ok := fn.F.Args[0].Expr.(*plan.Expr_Col)
-		if !ok {
-			continue
-		}
-
-		if _, ok := fn.F.Args[1].Expr.(*plan.Expr_C); !ok {
-			continue
-		}
-
-		col2filter[col.Col.ColPos] = i
-	}
-
-	if node.TableDef.Pkey != nil {
-		filterOnPK := true
-		for _, part := range node.TableDef.Pkey.Names {
-			colIdx := node.TableDef.Name2ColIndex[part]
-			_, ok := col2filter[colIdx]
-			if !ok {
-				filterOnPK = false
-				break
-			}
-		}
-
-		if filterOnPK {
-			return nodeID
+func (builder *QueryBuilder) rewriteDistinctToAGG(nodeID int32) {
+	node := builder.qry.Nodes[nodeID]
+	if len(node.Children) > 0 {
+		for _, child := range node.Children {
+			builder.rewriteDistinctToAGG(child)
 		}
 	}
-
-	indexes := node.TableDef.Indexes
-	sort.Slice(indexes, func(i, j int) bool {
-		return indexes[i].Unique && !indexes[j].Unique
-	})
-
-	filterIdx := make([]int, 0, len(col2filter))
-	for _, idxDef := range node.TableDef.Indexes {
-		if !idxDef.TableExist {
-			continue
-		}
-
-		numParts := len(idxDef.Parts)
-		if !idxDef.Unique {
-			numParts--
-		}
-		if numParts == 0 {
-			continue
-		}
-
-		filterIdx = filterIdx[:0]
-		for i := 0; i < numParts; i++ {
-			colIdx := node.TableDef.Name2ColIndex[idxDef.Parts[i]]
-			idx, ok := col2filter[colIdx]
-			if !ok {
-				break
-			}
-
-			filterIdx = append(filterIdx, idx)
-		}
-
-		if len(filterIdx) < numParts {
-			continue
-		}
-
-		idxTag := builder.genNewTag()
-		idxObjRef, idxTableDef := builder.compCtx.Resolve(node.ObjRef.SchemaName, idxDef.IndexTableName)
-
-		builder.nameByColRef[[2]int32{idxTag, 0}] = idxTableDef.Name + "." + idxTableDef.Cols[0].Name
-		builder.nameByColRef[[2]int32{idxTag, 1}] = idxTableDef.Name + "." + idxTableDef.Cols[1].Name
-
-		var idxFilter *plan.Expr
-		if numParts == 1 {
-			idx := filterIdx[0]
-
-			args := node.FilterList[idx].Expr.(*plan.Expr_F).F.Args
-			col := args[0].Expr.(*plan.Expr_Col).Col
-			col.RelPos = idxTag
-			col.ColPos = 0
-			col.Name = idxTableDef.Cols[0].Name
-
-			if idxDef.Unique {
-				idxFilter = node.FilterList[idx]
-			} else {
-				args[0].Typ = DeepCopyType(idxTableDef.Cols[0].Typ)
-				args[1], _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", []*plan.Expr{args[1]})
-				idxFilter, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "startswith", args)
-			}
-
-			node.FilterList = append(node.FilterList[:idx], node.FilterList[idx+1:]...)
-		} else {
-			serialArgs := make([]*plan.Expr, numParts)
-			for i := range filterIdx {
-				serialArgs[i] = node.FilterList[filterIdx[i]].Expr.(*plan.Expr_F).F.Args[1]
-			}
-			rightArg, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", serialArgs)
-
-			funcName := "="
-			if !idxDef.Unique {
-				funcName = "startswith"
-			}
-			idxFilter, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), funcName, []*plan.Expr{
-				{
-					Typ: DeepCopyType(idxTableDef.Cols[0].Typ),
-					Expr: &plan.Expr_Col{
-						Col: &plan.ColRef{
-							RelPos: idxTag,
-							ColPos: 0,
-						},
-					},
-				},
-				rightArg,
-			})
-
-			hitFilterSet := make(map[int]emptyType)
-			for i := range filterIdx {
-				hitFilterSet[filterIdx[i]] = emptyStruct
-			}
-
-			newFilterList := make([]*plan.Expr, 0, len(node.FilterList)-numParts)
-			for i, filter := range node.FilterList {
-				if _, ok := hitFilterSet[i]; !ok {
-					newFilterList = append(newFilterList, filter)
-				}
-			}
-
-			node.FilterList = newFilterList
-		}
-
-		idxTableNodeID := builder.appendNode(&plan.Node{
-			NodeType:   plan.Node_TABLE_SCAN,
-			ObjRef:     idxObjRef,
-			TableDef:   idxTableDef,
-			FilterList: []*plan.Expr{idxFilter},
-			//BlockFilterList: []*plan.Expr{DeepCopyExpr(idxFilter)},
-			BindingTags: []int32{idxTag},
-		}, builder.ctxByNode[nodeID])
-
-		pkIdx := node.TableDef.Name2ColIndex[node.TableDef.Pkey.PkeyColName]
-		pkExpr := &plan.Expr{
-			Typ: DeepCopyType(node.TableDef.Cols[pkIdx].Typ),
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{
-					RelPos: node.BindingTags[0],
-					ColPos: pkIdx,
-				},
-			},
-		}
-
-		joinCond, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*plan.Expr{
-			pkExpr,
-			{
-				Typ: DeepCopyType(pkExpr.Typ),
-				Expr: &plan.Expr_Col{
-					Col: &plan.ColRef{
-						RelPos: idxTag,
-						ColPos: 1,
-					},
-				},
-			},
-		})
-		joinNodeID := builder.appendNode(&plan.Node{
-			NodeType: plan.Node_JOIN,
-			Children: []int32{nodeID, idxTableNodeID},
-			OnList:   []*plan.Expr{joinCond},
-		}, builder.ctxByNode[nodeID])
-
-		ReCalcNodeStats(nodeID, builder, false, true, true)
-		nodeID = joinNodeID
-
-		break
+	if node.NodeType != plan.Node_DISTINCT {
+		return
+	}
+	project := builder.qry.Nodes[node.Children[0]]
+	if project.NodeType != plan.Node_PROJECT {
+		return
+	}
+	if builder.qry.Nodes[project.Children[0]].NodeType == plan.Node_VALUE_SCAN {
+		return
 	}
 
-	return nodeID
+	node.NodeType = plan.Node_AGG
+	node.GroupBy = project.ProjectList
+	node.BindingTags = project.BindingTags
+	node.BindingTags = append(node.BindingTags, builder.genNewTag())
+	node.Children[0] = project.Children[0]
 }
 
-func (builder *QueryBuilder) useIndicesForJoin(nodeID int32, node *plan.Node) int32 {
-	node.Children[1] = builder.autoUseIndices(node.Children[1])
-
-	leftChild := builder.qry.Nodes[node.Children[0]]
-	if leftChild.NodeType != plan.Node_TABLE_SCAN {
-		node.Children[0] = builder.autoUseIndices(node.Children[0])
-		return nodeID
+// reuse removeSimpleProjections to delete this plan node
+func (builder *QueryBuilder) rewriteEffectlessAggToProject(nodeID int32) {
+	node := builder.qry.Nodes[nodeID]
+	if len(node.Children) > 0 {
+		for _, child := range node.Children {
+			builder.rewriteEffectlessAggToProject(child)
+		}
 	}
-
-	newLeftChildID := builder.useIndicesForPointSelect(node.Children[0], leftChild)
-	if newLeftChildID != node.Children[0] {
-		node.Children[0] = newLeftChildID
-		return nodeID
+	if node.NodeType != plan.Node_AGG {
+		return
 	}
+	if node.AggList != nil || node.ProjectList != nil || node.FilterList != nil {
+		return
+	}
+	scan := builder.qry.Nodes[node.Children[0]]
+	if scan.NodeType != plan.Node_TABLE_SCAN {
+		return
+	}
+	if scan.TableDef.Pkey == nil {
+		return
+	}
+	groupCol := make([]int32, 0)
+	for _, expr := range node.GroupBy {
+		col, ok := expr.Expr.(*plan.Expr_Col)
+		if ok {
+			groupCol = append(groupCol, col.Col.ColPos)
+		}
+	}
+	if !containsAllPKs(groupCol, scan.TableDef) {
+		return
+	}
+	node.NodeType = plan.Node_PROJECT
+	node.BindingTags = node.BindingTags[:1]
+	node.ProjectList = node.GroupBy
+	node.GroupBy = nil
+}
 
-	// TODO
-
-	return nodeID
+func (builder *QueryBuilder) pushdownLimit(nodeID int32) {
+	node := builder.qry.Nodes[nodeID]
+	for _, childID := range node.Children {
+		builder.pushdownLimit(childID)
+	}
+	if node.NodeType == plan.Node_PROJECT && len(node.Children) > 0 {
+		child := builder.qry.Nodes[node.Children[0]]
+		if child.NodeType == plan.Node_TABLE_SCAN {
+			child.Limit, child.Offset = node.Limit, node.Offset
+			node.Limit, node.Offset = nil, nil
+		}
+	}
 }

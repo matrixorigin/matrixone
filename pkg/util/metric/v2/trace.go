@@ -25,7 +25,7 @@ var (
 			Subsystem: "trace",
 			Name:      "collector_duration_seconds",
 			Help:      "Bucketed histogram of trace collector duration.",
-			Buckets:   prometheus.ExponentialBuckets(0.0001, 2.0, 20),
+			Buckets:   getDurationBuckets(),
 		}, []string{"type"})
 	TraceCollectorCollectDurationHistogram              = traceCollectorDurationHistogram.WithLabelValues("collect")
 	TraceCollectorGenerateAwareDurationHistogram        = traceCollectorDurationHistogram.WithLabelValues("generate_awake")
@@ -34,4 +34,16 @@ var (
 	TraceCollectorGenerateDurationHistogram             = traceCollectorDurationHistogram.WithLabelValues("generate")
 	TraceCollectorGenerateDiscardDurationHistogram      = traceCollectorDurationHistogram.WithLabelValues("generate_discard")
 	TraceCollectorExportDurationHistogram               = traceCollectorDurationHistogram.WithLabelValues("export")
+
+	traceNegativeCUCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "trace",
+			Name:      "negative_cu_total",
+			Help:      "Count of negative cu to backend",
+		}, []string{"type"})
 )
+
+func GetTraceNegativeCUCounter(typ string) prometheus.Counter {
+	return traceNegativeCUCounter.WithLabelValues(typ)
+}

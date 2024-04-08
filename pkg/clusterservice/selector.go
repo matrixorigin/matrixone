@@ -15,6 +15,9 @@
 package clusterservice
 
 import (
+	"regexp"
+	"strings"
+
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 )
 
@@ -80,8 +83,26 @@ func (s Selector) filter(serviceID string, labels map[string]metadata.LabelList)
 	if s.byServiceID {
 		return serviceID == s.serviceID
 	}
+	return s.Match(labels)
+}
+
+// Match check if @labels match the selector.
+// At most case, the selector's labels is subset of @labels
+//
+// return true, if @labels is empty.
+func (s Selector) Match(labels map[string]metadata.LabelList) bool {
 	if s.byLabel {
 		switch s.labelOp {
+		case Contain:
+			if s.emptyLabel() && len(labels) > 0 {
+				return false
+			}
+			// If it is an empty CN server, return true.
+			if len(labels) == 0 {
+				return true
+			}
+			return labelContains(s.labels, labels, nil)
+
 		case EQ:
 			if s.emptyLabel() && len(labels) > 0 {
 				return false
@@ -90,16 +111,18 @@ func (s Selector) filter(serviceID string, labels map[string]metadata.LabelList)
 			if len(labels) == 0 {
 				return true
 			}
-			for k, v := range s.labels {
-				values, ok := labels[k]
-				if !ok {
-					return false
-				}
-				if !containLabel(values.Labels, v) {
-					return false
-				}
+			return labelEQ(s.labels, labels)
+
+		case EQ_Globbing:
+			if s.emptyLabel() && len(labels) > 0 {
+				return false
 			}
-			return true
+			// If it is an empty CN server, return true.
+			if len(labels) == 0 {
+				return true
+			}
+			return labelEQGlobbing(s.labels, labels)
+
 		default:
 			return false
 		}
@@ -114,11 +137,78 @@ func (s Selector) emptyLabel() bool {
 	return false
 }
 
-func containLabel(labels []string, label string) bool {
-	for _, l := range labels {
-		if l == label {
+// labelContains checks if the source labels contained by destination labels.
+// The source labels are requested from client, and the destination labels are
+// defined on CN servers. So this method is used to check if the request
+// can be sent to this CN server.
+func labelContains(
+	src map[string]string, dst map[string]metadata.LabelList, comp func(string, string) bool,
+) bool {
+	for k, v := range src {
+		values, ok := dst[k]
+		if !ok {
+			return false
+		}
+		if !containLabel(v, values.Labels, comp) {
+			return false
+		}
+	}
+	return true
+}
+
+func labelEQ(src map[string]string, dst map[string]metadata.LabelList) bool {
+	l1 := len(src)
+	l2 := len(dst)
+	if l1 != l2 {
+		return false
+	}
+	return labelContains(src, dst, nil)
+}
+
+func labelEQGlobbing(src map[string]string, dst map[string]metadata.LabelList) bool {
+	l1 := len(src)
+	l2 := len(dst)
+	if l1 != l2 {
+		return false
+	}
+	return labelContains(src, dst, globbing)
+}
+
+func containLabel(src string, dst []string, comp func(string, string) bool) bool {
+	if comp == nil {
+		comp = strings.EqualFold
+	}
+	for _, l := range dst {
+		if comp(src, l) {
 			return true
 		}
 	}
 	return false
+}
+
+func globbing(src, dst string) bool {
+	if dst == "" {
+		return false
+	}
+	// dst is '*', or starts with '*'.
+	if strings.HasPrefix(dst, "*") {
+		dst = "." + dst
+	} else {
+		for i := 1; i < len(dst); i++ {
+			if dst[i] == '*' && dst[i-1] != '.' {
+				dst = dst[:i] + "." + dst[i:]
+			}
+		}
+	}
+	if dst[0] != '^' {
+		dst = "^" + dst
+	}
+	if dst[len(dst)-1] != '$' {
+		dst = dst + "$"
+	}
+	ok, err := regexp.MatchString(dst, src)
+	if err != nil {
+		return false
+	}
+	return ok
 }

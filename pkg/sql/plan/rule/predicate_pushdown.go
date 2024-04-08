@@ -68,7 +68,7 @@ func (r *PredicatePushdown) pushdown(e *plan.Expr, n *plan.Node, qry *plan.Query
 
 func (r *PredicatePushdown) newExpr(relPos int32, expr *plan.Expr, n *plan.Node, qry *plan.Query) (int32, *plan.Expr) {
 	switch e := expr.Expr.(type) {
-	case *plan.Expr_C:
+	case *plan.Expr_Lit:
 		return relPos, expr
 	case *plan.Expr_F:
 		overloadID := e.F.Func.GetObj()

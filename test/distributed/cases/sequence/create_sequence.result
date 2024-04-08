@@ -58,7 +58,6 @@ table seq_temp already exists
 create sequence Seq_temp start 10;
 table seq_temp already exists
 create sequence sequence;
-SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 24 near " sequence;";
 create sequence table as bigint;
 SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 21 near " table as bigint;";
 create sequence seq_01 as tinyint unsigned MINVALUE 26  NO CYCLE;
@@ -313,6 +312,7 @@ _acc    BIGINT
 ab.cd    BIGINT
 abcddddddfsfafaffsefsfsefljofiseosfjosisssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss24444444444444444444444444222222222@fffffffffffffffffffffffffffffffffffffffffffffffffffff    BIGINT
 seq_temp    BIGINT
+sequence    BIGINT
 seq_03    BIGINT
 seq_04    BIGINT
 seq_05    BIGINT
@@ -390,7 +390,6 @@ begin;
 create sequence seq_18 minvalue 1000;
 select nextval('seq_18');
 SQL parser error: table "seq_18" does not exist
-Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
 select nextval('seq_18');
 ExpectedEOB
 create sequence seq_18;
@@ -406,7 +405,6 @@ begin;
 create sequence seq_19 minvalue 1000;
 select nextval('seq_19');
 SQL parser error: table "seq_19" does not exist
-Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
 select nextval('seq_19');
 ExpectedEOB
 create sequence seq_19;
@@ -420,7 +418,6 @@ start transaction ;
 create sequence seq_20 increment by -10;
 select nextval('seq_20');
 SQL parser error: table "seq_20" does not exist
-Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
 rollback;
 select nextval('seq_20');
 SQL parser error: table "seq_20" does not exist

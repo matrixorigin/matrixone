@@ -45,7 +45,7 @@ func (s *service) initRemote() {
 		rpcClient,
 		s.cfg.KeepBindDuration.Duration,
 		s.cfg.KeepRemoteLockDuration.Duration,
-		&s.tables)
+		s.tables)
 	s.initRemoteHandler()
 	if err := s.remote.server.Start(); err != nil {
 		panic(err)
@@ -235,7 +235,10 @@ func (s *service) getLocalLockTable(
 		return nil, err
 	}
 	if l == nil {
-		return nil, ErrLockTableNotFound
+		l, err = s.getLockTableWithCreate(req.LockTable.Table, true)
+		if err != nil || l.getBind().Changed(req.LockTable) {
+			return nil, ErrLockTableNotFound
+		}
 	}
 	bind := l.getBind()
 	if bind.Changed(req.LockTable) {
@@ -257,8 +260,13 @@ func (s *service) getLocalLockTable(
 		uuid := getUUIDFromServiceIdentifier(s.serviceID)
 		uuidRequest := getUUIDFromServiceIdentifier(bind.ServiceID)
 		if strings.EqualFold(uuid, uuidRequest) {
-			l.close()
-			s.tables.Delete(bind.Table)
+			getLogger().Warn("stale bind found, handle remote lock on remote lock table instance",
+				zap.String("bind", bind.DebugString()))
+			// only remove old bind lock table
+			s.tables.removeWithFilter(
+				func(table uint64, lt lockTable) bool {
+					return lt.getBind().Equal(bind)
+				})
 			return nil, ErrLockTableBindChanged
 		}
 

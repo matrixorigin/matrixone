@@ -35,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/fill"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/fuzzyfilter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/insert"
@@ -326,7 +327,9 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 	case vm.MergeGroup:
 		t := sourceIns.Arg.(*mergegroup.Argument)
 		res.Arg = &mergegroup.Argument{
-			NeedEval: t.NeedEval,
+			NeedEval:           t.NeedEval,
+			PartialResults:     t.PartialResults,
+			PartialResultTypes: t.PartialResultTypes,
 		}
 	case vm.MergeLimit:
 		t := sourceIns.Arg.(*mergelimit.Argument)
@@ -491,6 +494,14 @@ func dupInstruction(sourceIns *vm.Instruction, regMap map[*process.WaitRegister]
 		arg := new(lockop.Argument)
 		*arg = *t
 		res.Arg = arg
+	case vm.FuzzyFilter:
+		t := sourceIns.Arg.(*fuzzyfilter.Argument)
+		res.Arg = &fuzzyfilter.Argument{
+			N:                  t.N,
+			PkName:             t.PkName,
+			PkTyp:              t.PkTyp,
+			RuntimeFilterSpecs: t.RuntimeFilterSpecs,
+		}
 	default:
 		panic(fmt.Sprintf("unexpected instruction type '%d' to dup", sourceIns.Op))
 	}
@@ -553,6 +564,32 @@ func constructOnduplicateKey(n *plan.Node, eg engine.Engine) *onduplicatekey.Arg
 		TableDef:        oldCtx.TableDef,
 		IsIgnore:        oldCtx.IsIgnore,
 	}
+}
+
+func constructFuzzyFilter(c *Compile, n, left, right *plan.Node) *fuzzyfilter.Argument {
+	pkName := n.TableDef.Pkey.PkeyColName
+	var pkTyp *plan.Type
+	if pkName == catalog.CPrimaryKeyColName {
+		pkTyp = n.TableDef.Pkey.CompPkeyCol.Typ
+	} else {
+		cols := n.TableDef.Cols
+		for _, c := range cols {
+			if c.Name == pkName {
+				pkTyp = c.Typ
+			}
+		}
+	}
+
+	arg := &fuzzyfilter.Argument{
+		PkName:             pkName,
+		PkTyp:              pkTyp,
+		N:                  right.Stats.Cost,
+		RuntimeFilterSpecs: n.RuntimeFilterBuildList,
+	}
+
+	registerRuntimeFilters(arg, c, n.RuntimeFilterBuildList, 0)
+
+	return arg
 }
 
 func constructPreInsert(n *plan.Node, eg engine.Engine, proc *process.Process) (*preinsert.Argument, error) {
@@ -973,23 +1010,23 @@ func constructTimeWindow(ctx context.Context, n *plan.Node, proc *process.Proces
 	}
 
 	var err error
-	str := n.Interval.Expr.(*plan.Expr_List).List.List[1].Expr.(*plan.Expr_C).C.Value.(*plan.Const_Sval).Sval
+	str := n.Interval.Expr.(*plan.Expr_List).List.List[1].Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_Sval).Sval
 	itr := &timewin.Interval{}
 	itr.Typ, err = types.IntervalTypeOf(str)
 	if err != nil {
 		panic(err)
 	}
-	itr.Val = n.Interval.Expr.(*plan.Expr_List).List.List[0].Expr.(*plan.Expr_C).C.Value.(*plan.Const_I64Val).I64Val
+	itr.Val = n.Interval.Expr.(*plan.Expr_List).List.List[0].Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_I64Val).I64Val
 
 	var sld *timewin.Interval
 	if n.Sliding != nil {
 		sld = &timewin.Interval{}
-		str = n.Sliding.Expr.(*plan.Expr_List).List.List[1].Expr.(*plan.Expr_C).C.Value.(*plan.Const_Sval).Sval
+		str = n.Sliding.Expr.(*plan.Expr_List).List.List[1].Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_Sval).Sval
 		sld.Typ, err = types.IntervalTypeOf(str)
 		if err != nil {
 			panic(err)
 		}
-		sld.Val = n.Sliding.Expr.(*plan.Expr_List).List.List[0].Expr.(*plan.Expr_C).C.Value.(*plan.Const_I64Val).I64Val
+		sld.Val = n.Sliding.Expr.(*plan.Expr_List).List.List[0].Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_I64Val).I64Val
 	}
 
 	return &timewin.Argument{
@@ -1189,6 +1226,7 @@ func constructDispatchLocal(all bool, isSink, RecSink bool, regs []*process.Wait
 // ss[currentIdx] means it's local scope the dispatch rule should be like below:
 // dispatch batch to all other cn and also put one into proc.MergeReciever[0] for
 // local deletion
+/*
 func constructDeleteDispatchAndLocal(
 	currentIdx int,
 	rs []*Scope,
@@ -1263,6 +1301,7 @@ func constructDeleteDispatchAndLocal(
 		Arg: &merge.Argument{},
 	})
 }
+*/
 
 // This function do not setting funcId.
 // PLEASE SETTING FuncId AFTER YOU CALL IT.
@@ -1288,7 +1327,7 @@ func constructDispatchLocalAndRemote(idx int, ss []*Scope, currentCNAddr string)
 			// Remote reg.
 			// Generate uuid for them and put into arg.RemoteRegs & scope. receive info
 			hasRemote = true
-			newUuid := uuid.New()
+			newUuid, _ := uuid.NewV7()
 
 			arg.RemoteRegs = append(arg.RemoteRegs, colexec.ReceiveInfo{
 				Uuid:     newUuid,
@@ -1506,12 +1545,12 @@ func constructLoopMark(n *plan.Node, typs []types.Type, proc *process.Process) *
 	}
 }
 
-func registerRuntimeFilters(arg *hashbuild.Argument, c *Compile, specs []*plan.RuntimeFilterSpec, shuffleCnt int) {
+func registerRuntimeFilters[T runtimeFilterSenderSetter](arg T, c *Compile, specs []*plan.RuntimeFilterSpec, shuffleCnt int) {
 	if specs == nil {
 		return
 	}
 
-	arg.RuntimeFilterSenders = make([]*colexec.RuntimeFilterChan, 0, len(specs))
+	RuntimeFilterSenders := make([]*colexec.RuntimeFilterChan, 0, len(specs))
 	for _, rfSpec := range specs {
 		c.lock.Lock()
 		receiver, ok := c.runtimeFilterReceiverMap[rfSpec.Tag]
@@ -1527,11 +1566,14 @@ func registerRuntimeFilters(arg *hashbuild.Argument, c *Compile, specs []*plan.R
 		}
 		c.lock.Unlock()
 
-		arg.RuntimeFilterSenders = append(arg.RuntimeFilterSenders, &colexec.RuntimeFilterChan{
+		RuntimeFilterSenders = append(RuntimeFilterSenders, &colexec.RuntimeFilterChan{
 			Spec: rfSpec,
 			Chan: receiver.ch,
 		})
 	}
+
+	// Set the runtime filters for the concrete type
+	arg.SetRuntimeFilterSenders(RuntimeFilterSenders)
 
 }
 
@@ -1772,8 +1814,8 @@ func constructJoinConditions(exprs []*plan.Expr, proc *process.Process) [][]*pla
 }
 
 func constructJoinCondition(expr *plan.Expr, proc *process.Process) (*plan.Expr, *plan.Expr) {
-	if e, ok := expr.Expr.(*plan.Expr_C); ok { // constant bool
-		b, ok := e.C.Value.(*plan.Const_Bval)
+	if e, ok := expr.Expr.(*plan.Expr_Lit); ok { // constant bool
+		b, ok := e.Lit.Value.(*plan.Literal_Bval)
 		if !ok {
 			panic(moerr.NewNYI(proc.Ctx, "join condition '%s'", expr))
 		}
@@ -1782,9 +1824,9 @@ func constructJoinCondition(expr *plan.Expr, proc *process.Process) (*plan.Expr,
 		}
 		return expr, &plan.Expr{
 			Typ: expr.Typ,
-			Expr: &plan.Expr_C{
-				C: &plan.Const{
-					Value: &plan.Const_Bval{Bval: true},
+			Expr: &plan.Expr_Lit{
+				Lit: &plan.Literal{
+					Value: &plan.Literal_Bval{Bval: true},
 				},
 			},
 		}

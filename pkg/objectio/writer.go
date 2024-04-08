@@ -47,7 +47,7 @@ type objectWriterV1 struct {
 	compressBuf       []byte
 	bloomFilter       []byte
 	objStats          []ObjectStats
-	pkColIdx          uint16
+	sortKeySeqnum     uint16
 	appendable        bool
 	originSize        uint32
 	size              uint32
@@ -86,14 +86,14 @@ func newObjectWriterSpecialV1(wt WriterType, fileName string, fs fileservice.Fil
 		name = BuildETLName()
 	}
 	writer := &objectWriterV1{
-		seqnums:  NewSeqnums(nil),
-		fileName: fileName,
-		name:     name,
-		object:   object,
-		buffer:   NewObjectBuffer(fileName),
-		blocks:   make([][]blockData, 2),
-		lastId:   0,
-		pkColIdx: math.MaxUint16,
+		seqnums:       NewSeqnums(nil),
+		fileName:      fileName,
+		name:          name,
+		object:        object,
+		buffer:        NewObjectBuffer(fileName),
+		blocks:        make([][]blockData, 2),
+		lastId:        0,
+		sortKeySeqnum: math.MaxUint16,
 	}
 	writer.blocks[SchemaData] = make([]blockData, 0)
 	writer.blocks[SchemaTombstone] = make([]blockData, 0)
@@ -104,15 +104,15 @@ func newObjectWriterV1(name ObjectName, fs fileservice.FileService, schemaVersio
 	fileName := name.String()
 	object := NewObject(fileName, fs)
 	writer := &objectWriterV1{
-		schemaVer: schemaVersion,
-		seqnums:   NewSeqnums(seqnums),
-		fileName:  fileName,
-		name:      name,
-		object:    object,
-		buffer:    NewObjectBuffer(fileName),
-		blocks:    make([][]blockData, 2),
-		lastId:    0,
-		pkColIdx:  math.MaxUint16,
+		schemaVer:     schemaVersion,
+		seqnums:       NewSeqnums(seqnums),
+		fileName:      fileName,
+		name:          name,
+		object:        object,
+		buffer:        NewObjectBuffer(fileName),
+		blocks:        make([][]blockData, 2),
+		lastId:        0,
+		sortKeySeqnum: math.MaxUint16,
 	}
 	writer.blocks[SchemaData] = make([]blockData, 0)
 	writer.blocks[SchemaTombstone] = make([]blockData, 0)
@@ -130,8 +130,8 @@ func describeObjectHelper(w *objectWriterV1, colmeta []ColumnMeta, idx DataMetaT
 	SetObjectStatsRowCnt(ss, w.totalRow)
 	SetObjectStatsBlkCnt(ss, uint32(len(w.blocks[idx])))
 
-	if len(colmeta) > int(w.pkColIdx) {
-		SetObjectStatsSortKeyZoneMap(ss, colmeta[w.pkColIdx].ZoneMap())
+	if len(colmeta) > int(w.sortKeySeqnum) {
+		SetObjectStatsSortKeyZoneMap(ss, colmeta[w.sortKeySeqnum].ZoneMap())
 	}
 	SetObjectStatsSize(ss, w.size)
 	SetObjectStatsOriginSize(ss, w.originSize)
@@ -212,12 +212,15 @@ func (w *objectWriterV1) UpdateBlockZM(tye DataMetaType, blkIdx int, seqnum uint
 
 func (w *objectWriterV1) WriteBF(blkIdx int, seqnum uint16, buf []byte) (err error) {
 	w.blocks[SchemaData][blkIdx].bloomFilter = buf
-	w.pkColIdx = seqnum
 	return
 }
 
 func (w *objectWriterV1) SetAppendable() {
 	w.appendable = true
+}
+
+func (w *objectWriterV1) SetSortKeySeqnum(seqnum uint16) {
+	w.sortKeySeqnum = seqnum
 }
 
 func (w *objectWriterV1) WriteObjectMetaBF(buf []byte) (err error) {
@@ -437,7 +440,7 @@ func (w *objectWriterV1) WriteEnd(ctx context.Context, items ...WriteOptions) ([
 		}
 		objectMetas[i].BlockHeader().SetBFExtent(bloomFilterExtents[i])
 		objectMetas[i].BlockHeader().SetAppendable(w.appendable)
-		objectMetas[i].BlockHeader().SetSortKey(w.pkColIdx)
+		objectMetas[i].BlockHeader().SetSortKey(w.sortKeySeqnum)
 		offset += bloomFilterExtents[i].Length()
 		w.originSize += bloomFilterExtents[i].OriginSize()
 
@@ -556,6 +559,10 @@ func (w *objectWriterV1) Sync(ctx context.Context, items ...WriteOptions) error 
 
 	w.objStats, err = w.DescribeObject()
 	return err
+}
+
+func (w *objectWriterV1) GetDataStats() ObjectStats {
+	return w.objStats[SchemaData]
 }
 
 func (w *objectWriterV1) WriteWithCompress(offset uint32, buf []byte) (data []byte, extent Extent, err error) {

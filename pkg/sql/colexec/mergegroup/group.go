@@ -37,9 +37,13 @@ func (arg *Argument) Prepare(proc *process.Process) error {
 }
 
 func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
+	if err, isCancel := vm.CancelCheck(proc); isCancel {
+		return vm.CancelResult, err
+	}
+
 	ap := arg
 	ctr := ap.ctr
-	anal := proc.GetAnalyze(arg.info.Idx)
+	anal := proc.GetAnalyze(arg.info.Idx, arg.info.ParallelIdx, arg.info.ParallelMajor)
 	anal.Start()
 	defer anal.Stop()
 	result := vm.NewCallResult()
@@ -68,6 +72,9 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 			if ctr.bat != nil {
 				if ap.NeedEval {
 					for i, agg := range ctr.bat.Aggs {
+						if ap.PartialResults != nil {
+							agg.SetPartialResult(ap.PartialResults[i])
+						}
 						vec, err := agg.Eval(proc.Mp())
 						if err != nil {
 							ctr.state = End

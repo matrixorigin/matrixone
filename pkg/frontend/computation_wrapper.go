@@ -60,16 +60,8 @@ func (ncw *NullComputationWrapper) GetAst() tree.Statement {
 	return ncw.stmt
 }
 
-func (ncw *NullComputationWrapper) SetDatabaseName(db string) error {
-	return nil
-}
-
 func (ncw *NullComputationWrapper) GetColumns() ([]interface{}, error) {
 	return []interface{}{}, nil
-}
-
-func (ncw *NullComputationWrapper) GetAffectedRows() uint64 {
-	return 0
 }
 
 func (ncw *NullComputationWrapper) Compile(requestCtx context.Context, u interface{}, fill func(interface{}, *batch.Batch) error) (interface{}, error) {
@@ -104,7 +96,7 @@ type TxnComputationWrapper struct {
 }
 
 func InitTxnComputationWrapper(ses *Session, stmt tree.Statement, proc *process.Process) *TxnComputationWrapper {
-	uuid, _ := uuid.NewUUID()
+	uuid, _ := uuid.NewV7()
 	return &TxnComputationWrapper{
 		stmt: stmt,
 		proc: proc,
@@ -117,12 +109,17 @@ func (cwft *TxnComputationWrapper) GetAst() tree.Statement {
 	return cwft.stmt
 }
 
-func (cwft *TxnComputationWrapper) GetProcess() *process.Process {
-	return cwft.proc
+func (cwft *TxnComputationWrapper) Free() {
+	cwft.plan = nil
+	cwft.proc = nil
+	cwft.ses = nil
+	cwft.compile = nil
+	cwft.runResult = nil
+	cwft.stmt = nil
 }
 
-func (cwft *TxnComputationWrapper) SetDatabaseName(db string) error {
-	return nil
+func (cwft *TxnComputationWrapper) GetProcess() *process.Process {
+	return cwft.proc
 }
 
 func (cwft *TxnComputationWrapper) GetColumns() ([]interface{}, error) {
@@ -159,10 +156,10 @@ func (cwft *TxnComputationWrapper) GetColumns() ([]interface{}, error) {
 		c := new(MysqlColumn)
 		c.SetName(col.Name)
 		c.SetOrgName(col.Name)
-		c.SetTable(col.Typ.Table)
-		c.SetOrgTable(col.Typ.Table)
+		c.SetTable(col.TblName)
+		c.SetOrgTable(col.TblName)
 		c.SetAutoIncr(col.Typ.AutoIncr)
-		c.SetSchema(cwft.ses.GetTxnCompileCtx().DefaultDatabase())
+		c.SetSchema(col.DbName)
 		err = convertEngineTypeToMysqlType(cwft.ses.requestCtx, types.T(col.Typ.Id), c)
 		if err != nil {
 			return nil, err
@@ -188,10 +185,6 @@ func (cwft *TxnComputationWrapper) GetClock() clock.Clock {
 	return rt.Clock()
 }
 
-func (cwft *TxnComputationWrapper) GetAffectedRows() uint64 {
-	return cwft.runResult.AffectRows
-}
-
 func (cwft *TxnComputationWrapper) GetServerStatus() uint16 {
 	return cwft.ses.GetServerStatus()
 }
@@ -201,10 +194,6 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 	requestCtx, span = trace.Start(requestCtx, "TxnComputationWrapper.Compile",
 		trace.WithKind(trace.SpanKindStatement))
 	defer span.End(trace.WithStatementExtra(cwft.ses.GetTxnId(), cwft.ses.GetStmtId(), cwft.ses.GetSqlOfStmt()))
-
-	stats := statistic.StatsInfoFromContext(requestCtx)
-	stats.CompileStart()
-	defer stats.CompileEnd()
 
 	var err error
 	defer RecordStatementTxnID(requestCtx, cwft.ses)
@@ -232,24 +221,31 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 	// See `func (exec *txnExecutor) Exec(sql string)` for details.
 	txnOp := cwft.proc.TxnOperator
 	cwft.ses.SetTxnId(txnOp.Txn().ID)
+	//non derived statement
 	if txnOp != nil && !cwft.ses.IsDerivedStmt() {
+		//startStatement has been called
 		ok, _ := cwft.ses.GetTxnHandler().calledStartStmt()
 		if !ok {
 			txnOp.GetWorkspace().StartStatement()
 			cwft.ses.GetTxnHandler().enableStartStmt(txnOp.Txn().ID)
 		}
 
+		//increase statement id
 		err = txnOp.GetWorkspace().IncrStatementID(requestCtx, false)
 		if err != nil {
 			return nil, err
 		}
+		cwft.ses.GetTxnHandler().enableIncrStmt(txnOp.Txn().ID)
 	}
 
 	cacheHit := cwft.plan != nil
 	if !cacheHit {
 		cwft.plan, err = buildPlan(requestCtx, cwft.ses, cwft.ses.GetTxnCompileCtx(), cwft.stmt)
 	} else if cwft.ses != nil && cwft.ses.GetTenantInfo() != nil {
-		cwft.ses.accountId = defines.GetAccountId(requestCtx)
+		cwft.ses.accountId, err = defines.GetAccountId(requestCtx)
+		if err != nil {
+			return nil, err
+		}
 		err = authenticateCanExecuteStatementAndPlan(requestCtx, cwft.ses, cwft.stmt, cwft.plan)
 	}
 	if err != nil {
@@ -354,6 +350,9 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 	if tInfo != nil {
 		tenant = tInfo.GetTenant()
 	}
+	stats := statistic.StatsInfoFromContext(requestCtx)
+	stats.CompileStart()
+	defer stats.CompileEnd()
 	cwft.compile = compile.New(
 		addr,
 		cwft.ses.GetDatabaseName(),

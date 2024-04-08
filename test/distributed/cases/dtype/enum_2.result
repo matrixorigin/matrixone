@@ -24,7 +24,7 @@ CREATE TABLE ces0010 (
 );
 desc ces0010;
 Field    Type    Null    Key    Default    Extra    Comment
-cpbpvtyp    ENUM(0)    NO        'T'        
+cpbpvtyp    ENUM('T','E')    NO        'T'        
 insert into ces0010 values(default);
 select * from ces0010;
 cpbpvtyp
@@ -35,7 +35,7 @@ CREATE TABLE ces0010 (
 );
 desc ces0010;
 Field    Type    Null    Key    Default    Extra    Comment
-cpbpvtyp    ENUM(0)    NO        'E'        
+cpbpvtyp    ENUM('T','E')    NO        'E'        
 insert into ces0010 values(default);
 select * from ces0010;
 cpbpvtyp
@@ -46,7 +46,7 @@ CREATE TABLE ces0010 (
 );
 desc ces0010;
 Field    Type    Null    Key    Default    Extra    Comment
-cpbpvtyp    ENUM(0)    NO        '1'        
+cpbpvtyp    ENUM('T','E')    NO        '1'        
 insert into ces0010 values(default);
 select * from ces0010;
 cpbpvtyp
@@ -57,8 +57,12 @@ CREATE TABLE ces0010 (
 );
 desc ces0010;
 Field    Type    Null    Key    Default    Extra    Comment
-cpbpvtyp    ENUM(0)    NO        2        
+cpbpvtyp    ENUM('T','E')    NO        2        
 insert into ces0010 values(default);
 select * from ces0010;
 cpbpvtyp
 E
+create table t_enum(a int,b enum('1','2','3','4','5'));
+show create table t_enum;
+Table    Create Table
+t_enum    CREATE TABLE `t_enum` (\n`a` INT DEFAULT NULL,\n`b` ENUM('1','2','3','4','5') DEFAULT NULL\n)

@@ -206,20 +206,6 @@ func (mr *MockComputationWrapperMockRecorder) Run(ts interface{}) *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Run", reflect.TypeOf((*MockComputationWrapper)(nil).Run), ts)
 }
 
-// SetDatabaseName mocks base method.
-func (m *MockComputationWrapper) SetDatabaseName(db string) error {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "SetDatabaseName", db)
-	ret0, _ := ret[0].(error)
-	return ret0
-}
-
-// SetDatabaseName indicates an expected call of SetDatabaseName.
-func (mr *MockComputationWrapperMockRecorder) SetDatabaseName(db interface{}) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetDatabaseName", reflect.TypeOf((*MockComputationWrapper)(nil).SetDatabaseName), db)
-}
-
 // MockColumnInfo is a mock of ColumnInfo interface.
 type MockColumnInfo struct {
 	ctrl     *gomock.Controller

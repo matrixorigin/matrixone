@@ -18,6 +18,8 @@ import (
 	"context"
 	"math"
 	"sync"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 // information from: https://dev.mysql.com/doc/internals/en/com-query-response.html
@@ -166,11 +168,44 @@ type UserIDKey struct{}
 type RoleIDKey struct{}
 type NodeIDKey struct{}
 
-func GetAccountId(ctx context.Context) uint32 {
+func GetAccountId(ctx context.Context) (uint32, error) {
 	if v := ctx.Value(TenantIDKey{}); v != nil {
+		return v.(uint32), nil
+	} else {
+		return 0, moerr.NewInternalError(ctx, "no account id in context")
+	}
+}
+
+func GetUserId(ctx context.Context) uint32 {
+	if v := ctx.Value(UserIDKey{}); v != nil {
 		return v.(uint32)
 	}
+	//zero means root user
 	return 0
+}
+
+func GetRoleId(ctx context.Context) uint32 {
+	if v := ctx.Value(RoleIDKey{}); v != nil {
+		return v.(uint32)
+	}
+	//zero means mo admin role
+	return 0
+}
+
+func AttachAccount(ctx context.Context, accId uint32, userId uint32, roleId uint32) context.Context {
+	return AttachRoleId(AttachUserId(AttachAccountId(ctx, accId), userId), roleId)
+}
+
+func AttachAccountId(ctx context.Context, accId uint32) context.Context {
+	return context.WithValue(ctx, TenantIDKey{}, accId)
+}
+
+func AttachUserId(ctx context.Context, userId uint32) context.Context {
+	return context.WithValue(ctx, UserIDKey{}, userId)
+}
+
+func AttachRoleId(ctx context.Context, roleId uint32) context.Context {
+	return context.WithValue(ctx, RoleIDKey{}, roleId)
 }
 
 // EngineKey use EngineKey{} to get engine from Context

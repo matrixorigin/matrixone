@@ -18,9 +18,6 @@ import (
 	"context"
 	"strings"
 
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -29,6 +26,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -230,7 +229,7 @@ func checkListColumnsTypeAndValuesMatch(binder *PartitionBinder, partitionDef *p
 					return err
 				}
 			}
-		case *plan.Expr_C, *plan.Expr_F:
+		case *plan.Expr_Lit, *plan.Expr_F:
 			if len(colTypes) != 1 {
 				return moerr.NewErrPartitionColumnList(binder.GetContext())
 			}
@@ -289,7 +288,7 @@ func checkPartitionColumnValue(binder *PartitionBinder, colType *Type, colExpr *
 		if castVal, err := EvalPlanExpr(binder.GetContext(), castExpr, binder.builder.compCtx.GetProcess()); err != nil {
 			return moerr.NewWrongTypeColumnValue(binder.GetContext())
 		} else {
-			if _, ok := castVal.Expr.(*plan.Expr_C); !ok {
+			if _, ok := castVal.Expr.(*plan.Expr_Lit); !ok {
 				return moerr.NewPartitionFunctionIsNotAllowed(binder.GetContext())
 			}
 		}
@@ -306,13 +305,13 @@ func checkListPartitionValuesIsInt(binder *PartitionBinder, partition *tree.Part
 			return err
 		}
 		switch expr.Expr.(type) {
-		case *plan.Expr_C, *plan.Expr_F:
+		case *plan.Expr_Lit, *plan.Expr_F:
 			evalExpr, err := EvalPlanExpr(binder.GetContext(), expr, binder.builder.compCtx.GetProcess())
 			if err != nil {
 				return err
 			}
 
-			cval, ok1 := evalExpr.Expr.(*plan.Expr_C)
+			cval, ok1 := evalExpr.Expr.(*plan.Expr_Lit)
 			if !ok1 {
 				return moerr.NewPartitionFunctionIsNotAllowed(binder.GetContext())
 			}
@@ -320,23 +319,23 @@ func checkListPartitionValuesIsInt(binder *PartitionBinder, partition *tree.Part
 			switch types.T(evalExpr.Typ.Id) {
 			case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64, types.T_any:
 			case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
-				switch value := cval.C.Value.(type) {
-				case *plan.Const_I8Val:
+				switch value := cval.Lit.Value.(type) {
+				case *plan.Literal_I8Val:
 					if value.I8Val < 0 && unsignedFlag {
 						//return moerr.NewInternalError(binder.GetContext(), "Partition constant is out of partition function domain")
 						return moerr.NewPartitionConstDomain(binder.GetContext())
 					}
-				case *plan.Const_I16Val:
+				case *plan.Literal_I16Val:
 					if value.I16Val < 0 && unsignedFlag {
 						//return moerr.NewInternalError(binder.GetContext(), "Partition constant is out of partition function domain")
 						return moerr.NewPartitionConstDomain(binder.GetContext())
 					}
-				case *plan.Const_I32Val:
+				case *plan.Literal_I32Val:
 					if value.I32Val < 0 && unsignedFlag {
 						//return moerr.NewInternalError(binder.GetContext(), "Partition constant is out of partition function domain")
 						return moerr.NewPartitionConstDomain(binder.GetContext())
 					}
-				case *plan.Const_I64Val:
+				case *plan.Literal_I64Val:
 					if value.I64Val < 0 && unsignedFlag {
 						//return moerr.NewInternalError(binder.GetContext(), "Partition constant is out of partition function domain")
 						return moerr.NewPartitionConstDomain(binder.GetContext())
@@ -393,7 +392,7 @@ func checkRangeColumnsTypeAndValuesMatch(binder *PartitionBinder, partitionDef *
 				return err
 			}
 			switch val.Expr.(type) {
-			case *plan.Expr_C, *plan.Expr_Max:
+			case *plan.Expr_Lit, *plan.Expr_Max:
 			case *plan.Expr_F:
 			default:
 				//return moerr.NewInternalError(binder.GetContext(), "This partition function is not allowed")
@@ -458,7 +457,7 @@ func checkPartitionValuesIsInt(binder *PartitionBinder, partition *tree.Partitio
 				return err
 			}
 
-			cval, ok1 := evalExpr.Expr.(*plan.Expr_C)
+			cval, ok1 := evalExpr.Expr.(*plan.Expr_Lit)
 			if !ok1 {
 				//return moerr.NewInternalError(binder.GetContext(), "This partition function is not allowed")
 				return moerr.NewPartitionFunctionIsNotAllowed(binder.GetContext())
@@ -467,23 +466,23 @@ func checkPartitionValuesIsInt(binder *PartitionBinder, partition *tree.Partitio
 			switch types.T(evalExpr.Typ.Id) {
 			case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64, types.T_any:
 			case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
-				switch value := cval.C.Value.(type) {
-				case *plan.Const_I8Val:
+				switch value := cval.Lit.Value.(type) {
+				case *plan.Literal_I8Val:
 					if value.I8Val < 0 && unsignedFlag {
 						//return moerr.NewInternalError(binder.GetContext(), "Partition constant is out of partition function domain")
 						return moerr.NewPartitionConstDomain(binder.GetContext())
 					}
-				case *plan.Const_I16Val:
+				case *plan.Literal_I16Val:
 					if value.I16Val < 0 && unsignedFlag {
 						//return moerr.NewInternalError(binder.GetContext(), "Partition constant is out of partition function domain")
 						return moerr.NewPartitionConstDomain(binder.GetContext())
 					}
-				case *plan.Const_I32Val:
+				case *plan.Literal_I32Val:
 					if value.I32Val < 0 && unsignedFlag {
 						//return moerr.NewInternalError(binder.GetContext(), "Partition constant is out of partition function domain")
 						return moerr.NewPartitionConstDomain(binder.GetContext())
 					}
-				case *plan.Const_I64Val:
+				case *plan.Literal_I64Val:
 					if value.I64Val < 0 && unsignedFlag {
 						//return moerr.NewInternalError(binder.GetContext(), "Partition constant is out of partition function domain")
 						return moerr.NewPartitionConstDomain(binder.GetContext())
@@ -606,8 +605,8 @@ func evalPartitionFieldExpr(ctx context.Context, process *process.Process, colTy
 		return "", moerr.NewWrongTypeColumnValue(ctx)
 	}
 
-	if cval, ok := castVal.Expr.(*plan.Expr_C); ok {
-		return cval.C.String(), nil
+	if cval, ok := castVal.Expr.(*plan.Expr_Lit); ok {
+		return cval.Lit.String(), nil
 	} else {
 		return "", moerr.NewPartitionFunctionIsNotAllowed(ctx)
 	}
@@ -639,7 +638,7 @@ func findColumnByName(colName string, tbdef *TableDef) *ColDef {
 
 func EvalPlanExpr(ctx context.Context, expr *plan.Expr, process *process.Process) (*plan.Expr, error) {
 	switch expr.Expr.(type) {
-	case *plan.Expr_C:
+	case *plan.Expr_Lit:
 		return expr, nil
 	default:
 		// try to calculate default value, return err if fails
@@ -647,7 +646,7 @@ func EvalPlanExpr(ctx context.Context, expr *plan.Expr, process *process.Process
 		if err != nil {
 			return nil, err
 		}
-		if _, ok := newExpr.Expr.(*plan.Expr_C); ok {
+		if _, ok := newExpr.Expr.(*plan.Expr_Lit); ok {
 			return newExpr, nil
 		} else {
 			//return nil, moerr.NewInternalError(ctx, "This partition function is not allowed")
@@ -675,7 +674,7 @@ func PartitionFuncConstantFold(bat *batch.Batch, e *plan.Expr, proc *process.Pro
 		}
 		defer vec.Free(proc.Mp())
 
-		colexec.SortInFilter(vec)
+		vec.InplaceSortAndCompact()
 		data, err := vec.MarshalBinary()
 		if err != nil {
 			return nil, err
@@ -683,8 +682,9 @@ func PartitionFuncConstantFold(bat *batch.Batch, e *plan.Expr, proc *process.Pro
 
 		return &plan.Expr{
 			Typ: e.Typ,
-			Expr: &plan.Expr_Bin{
-				Bin: &plan.BinaryData{
+			Expr: &plan.Expr_Vec{
+				Vec: &plan.LiteralVec{
+					Len:  int32(vec.Length()),
 					Data: data,
 				},
 			},
@@ -722,8 +722,8 @@ func PartitionFuncConstantFold(bat *batch.Batch, e *plan.Expr, proc *process.Pro
 	if c == nil {
 		return e, nil
 	}
-	e.Expr = &plan.Expr_C{
-		C: c,
+	e.Expr = &plan.Expr_Lit{
+		Lit: c,
 	}
 	return e, nil
 }
@@ -911,20 +911,20 @@ func checkRangeColumnsPartitionValue(partitionBinder *PartitionBinder, partition
 func getRangeValue(ctx context.Context, partitionDef *plan.PartitionByDef, expr *Expr, unsigned bool, process *process.Process) (interface{}, error) {
 	// Unsigned integer was converted to uint64
 	if unsigned {
-		if cExpr, ok := expr.Expr.(*plan.Expr_C); ok {
+		if cExpr, ok := expr.Expr.(*plan.Expr_Lit); ok {
 			return getIntConstVal[uint64](cExpr), nil
 		}
 		evalExpr, err := EvalPlanExpr(ctx, expr, process)
 		if err != nil {
 			return 0, err
 		}
-		cVal, ok := evalExpr.Expr.(*plan.Expr_C)
+		cVal, ok := evalExpr.Expr.(*plan.Expr_Lit)
 		if ok {
 			return getIntConstVal[uint64](cVal), nil
 		}
 	} else {
 		// signed integer was converted to int64
-		if cExpr, ok := expr.Expr.(*plan.Expr_C); ok {
+		if cExpr, ok := expr.Expr.(*plan.Expr_Lit); ok {
 			return getIntConstVal[int64](cExpr), nil
 		}
 
@@ -933,7 +933,7 @@ func getRangeValue(ctx context.Context, partitionDef *plan.PartitionByDef, expr 
 		if err != nil {
 			return 0, err
 		}
-		cVal, ok := evalExpr.Expr.(*plan.Expr_C)
+		cVal, ok := evalExpr.Expr.(*plan.Expr_Lit)
 		if ok {
 			return getIntConstVal[int64](cVal), nil
 		}
@@ -1001,23 +1001,23 @@ func evalPartitionBoolExpr(ctx context.Context, lOriExpr *Expr, rOriExpr *Expr, 
 }
 
 // getIntConstVal Get an integer constant value, the `cExpr` must be integral constant expression
-func getIntConstVal[T uint64 | int64](cExpr *plan.Expr_C) T {
-	switch value := cExpr.C.Value.(type) {
-	case *plan.Const_U8Val:
+func getIntConstVal[T uint64 | int64](cExpr *plan.Expr_Lit) T {
+	switch value := cExpr.Lit.Value.(type) {
+	case *plan.Literal_U8Val:
 		return T(value.U8Val)
-	case *plan.Const_U16Val:
+	case *plan.Literal_U16Val:
 		return T(value.U16Val)
-	case *plan.Const_U32Val:
+	case *plan.Literal_U32Val:
 		return T(value.U32Val)
-	case *plan.Const_U64Val:
+	case *plan.Literal_U64Val:
 		return T(value.U64Val)
-	case *plan.Const_I8Val:
+	case *plan.Literal_I8Val:
 		return T(value.I8Val)
-	case *plan.Const_I16Val:
+	case *plan.Literal_I16Val:
 		return T(value.I16Val)
-	case *plan.Const_I32Val:
+	case *plan.Literal_I32Val:
 		return T(value.I32Val)
-	case *plan.Const_I64Val:
+	case *plan.Literal_I64Val:
 		return T(value.I64Val)
 	default:
 		panic("the `expr` must be integral constant expression")

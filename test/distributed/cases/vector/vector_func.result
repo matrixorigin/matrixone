@@ -63,9 +63,11 @@ select sum(SUMMATION(vecf32_3)) from vtab32;
 sum(summation(vecf32_3))
 873.1968674659729
 select min(SUMMATION(vecf32_3)) from vtab32;
-[unknown result because it is related to issue#13061]
+min(summation(vecf32_3))
+1.9714266657829285
 select max(SUMMATION(vecf32_3)) from vtab32;
-[unknown result because it is related to issue#13061]
+max(summation(vecf32_3))
+837.3288311958313
 select avg(SUMMATION(vecf32_3)) from vtab32;
 avg(summation(vecf32_3))
 291.06562248865765
@@ -182,9 +184,11 @@ select sum(inner_product(vecf32_3,vecf32_3)) from vtab32;
 sum(inner_product(vecf32_3, vecf32_3))
 676705.2528243299
 select min(inner_product(vecf32_5,vecf32_5)) from vtab32;
-[unknown result because it is related to issue#13061]
+min(inner_product(vecf32_5, vecf32_5))
+2.1506857792768624E7
 select max(inner_product(vecf32_3,vecf32_3)) from vtab32;
-[unknown result because it is related to issue#13061]
+max(inner_product(vecf32_3, vecf32_3))
+675766.8704508307
 select avg(inner_product(vecf32_5,vecf32_5)) from vtab32;
 avg(inner_product(vecf32_5, vecf32_5))
 4.9046559725452706E7
@@ -295,9 +299,11 @@ select sum(l1_norm(vecf32_3)) from vtab32;
 sum(l1_norm(vecf32_3))
 873.1968674659729
 select min(l1_norm(vecf32_3)) from vtab32;
-[unknown result because it is related to issue#13061]
+min(l1_norm(vecf32_3))
+1.9714266657829285
 select max(l1_norm(vecf32_3)) from vtab32;
-[unknown result because it is related to issue#13061]
+max(l1_norm(vecf32_3))
+837.3288311958313
 select avg(l1_norm(vecf32_3)) from vtab32;
 avg(l1_norm(vecf32_3))
 291.06562248865765
@@ -408,9 +414,11 @@ select sum(l2_norm(vecf32_3)) from vtab32;
 sum(l2_norm(vecf32_3))
 853.8230505816364
 select min(l2_norm(vecf32_3)) from vtab32;
-[unknown result because it is related to issue#13061]
+min(l2_norm(vecf32_3))
+1.1616505074810406
 select max(l2_norm(vecf32_3)) from vtab32;
-[unknown result because it is related to issue#13061]
+max(l2_norm(vecf32_3))
+822.0504062713129
 select avg(l2_norm(vecf32_3)) from vtab32;
 avg(l2_norm(vecf32_3))
 284.60768352721215
@@ -518,9 +526,11 @@ select sum(vector_dims(vecf32_3)) from vtab32;
 sum(vector_dims(vecf32_3))
 9
 select min(vector_dims(vecf32_3)) from vtab32;
-[unknown result because it is related to issue#13061]
+min(vector_dims(vecf32_3))
+3
 select max(vector_dims(vecf32_3)) from vtab32;
-[unknown result because it is related to issue#13061]
+max(vector_dims(vecf32_3))
+3
 select avg(vector_dims(vecf32_3)) from vtab32;
 avg(vector_dims(vecf32_3))
 3.0
@@ -679,9 +689,11 @@ select sum(cosine_similarity(vecf32_3,vecf32_3_1)) from vtab32_1;
 sum(cosine_similarity(vecf32_3, vecf32_3_1))
 2.806079673471534
 select min(cosine_similarity(vecf32_5,vecf32_5_1)) from vtab32_1;
-[unknown result because it is related to issue#13061]
+min(cosine_similarity(vecf32_5, vecf32_5_1))
+0.9999862289684956
 select max(cosine_similarity(vecf32_3,vecf32_3_1)) from vtab32_1;
-[unknown result because it is related to issue#13061]
+max(cosine_similarity(vecf32_3, vecf32_3_1))
+0.999885445357345
 select avg(cosine_similarity(vecf32_5,vecf32_5_1)) from vtab32_1;
 avg(cosine_similarity(vecf32_5, vecf32_5_1))
 0.9999918345011818
@@ -742,3 +754,15 @@ null    null
 0.8273803045865209    null
 0.9788139235276682    0.9999862289684956
 0.999885445357345    0.9999974400338679
+select cosine_similarity(vecf32_3,vecf32_3), cosine_similarity(vecf32_5,vecf32_5) from vtab32;
+cosine_similarity(vecf32_3, vecf32_3)    cosine_similarity(vecf32_5, vecf32_5)
+null    null
+1.0    null
+1.0    1.0
+1.0    1.0
+select cosine_similarity(vecf64_3,vecf64_3), cosine_similarity(vecf64_5,vecf64_5) from vtab64;
+cosine_similarity(vecf64_3, vecf64_3)    cosine_similarity(vecf64_5, vecf64_5)
+null    null
+1.0    null
+1.0    1.0
+1.0    1.0

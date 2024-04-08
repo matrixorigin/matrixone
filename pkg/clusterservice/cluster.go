@@ -138,6 +138,20 @@ func (c *cluster) GetCNService(selector Selector, apply func(metadata.CNService)
 	}
 }
 
+func (c *cluster) GetCNServiceWithoutWorkingState(selector Selector, apply func(metadata.CNService) bool) {
+	c.waitReady()
+
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	for _, cn := range c.mu.cnServices {
+		if selector.filterCN(cn) {
+			if !apply(cn) {
+				return
+			}
+		}
+	}
+}
+
 func (c *cluster) GetTNService(selector Selector, apply func(metadata.TNService) bool) {
 	c.waitReady()
 
@@ -153,6 +167,9 @@ func (c *cluster) GetTNService(selector Selector, apply func(metadata.TNService)
 }
 
 func (c *cluster) ForceRefresh(sync bool) {
+	if c.options.disableRefresh {
+		return
+	}
 	if sync {
 		c.refresh()
 		return
@@ -187,6 +204,34 @@ func (c *cluster) DebugUpdateCNLabel(uuid string, kvs map[string][]string) error
 		return err
 	}
 	return nil
+}
+
+func (c *cluster) DebugUpdateCNWorkState(uuid string, state int) error {
+	ctx, cancel := context.WithTimeout(context.TODO(), time.Second*3)
+	defer cancel()
+	wstate := logpb.CNWorkState{
+		UUID:  uuid,
+		State: metadata.WorkState(state),
+	}
+	proxyClient := c.client.(labelSupportedClient)
+	if err := proxyClient.UpdateCNWorkState(ctx, wstate); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (c *cluster) RemoveCN(id string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	delete(c.mu.cnServices, id)
+}
+
+func (c *cluster) AddCN(s metadata.CNService) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.mu.cnServices[s.ServiceID] = s
 }
 
 func (c *cluster) waitReady() {

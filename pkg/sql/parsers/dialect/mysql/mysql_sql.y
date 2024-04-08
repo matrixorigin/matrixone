@@ -273,8 +273,8 @@ import (
 %left <str> ')'
 %nonassoc LOWER_THAN_STRING
 %nonassoc <str> ID AT_ID AT_AT_ID STRING VALUE_ARG LIST_ARG COMMENT COMMENT_KEYWORD QUOTE_ID STAGE CREDENTIALS STAGES
-%token <item> INTEGRAL HEX BIT_LITERAL FLOAT
-%token <str>  HEXNUM
+%token <item> INTEGRAL HEX FLOAT
+%token <str>  HEXNUM BIT_LITERAL
 %token <str> NULL TRUE FALSE
 %nonassoc LOWER_THAN_CHARSET
 %nonassoc <str> CHARSET
@@ -561,7 +561,7 @@ import (
 %type <columnAttribute> column_attribute_elem keys
 %type <columnAttributes> column_attribute_list column_attribute_list_opt
 %type <tableOptions> table_option_list_opt table_option_list stream_option_list_opt stream_option_list
-%type <str> charset_name storage_opt collate_name column_format storage_media algorithm_type able_type space_type lock_type with_type rename_type algorithm_type_2
+%type <str> charset_name storage_opt collate_name column_format storage_media algorithm_type able_type space_type lock_type with_type rename_type algorithm_type_2 load_charset
 %type <rowFormatType> row_format_options
 %type <int64Val> field_length_opt max_file_size_opt
 %type <matchType> match match_opt
@@ -614,8 +614,9 @@ import (
 %type <expr> predicate
 %type <expr> bit_expr interval_expr
 %type <expr> simple_expr else_opt
-%type <expr> expression like_escape_opt boolean_primary col_tuple expression_opt
+%type <expr> expression value_expression like_escape_opt boolean_primary col_tuple expression_opt
 %type <exprs> expression_list_opt
+%type <exprs> value_expression_list
 %type <exprs> expression_list row_value window_partition_by window_partition_by_opt
 %type <expr> datetime_scale_opt datetime_scale
 %type <tuple> tuple_expression
@@ -756,7 +757,7 @@ import (
 
 %token <str> KILL
 %type <killOption> kill_opt
-%token <str> BACKUP FILESYSTEM
+%token <str> BACKUP FILESYSTEM PARALLELISM
 %type <statementOption> statement_id_opt
 %token <str> QUERY_RESULT
 %type<tableLock> table_lock_elem
@@ -890,12 +891,13 @@ normal_stmt:
 |   backup_stmt
 
 backup_stmt:
-    BACKUP STRING FILESYSTEM STRING
+    BACKUP STRING FILESYSTEM STRING PARALLELISM STRING
 	{
 		$$ = &tree.BackupStart{
 		    Timestamp: $2,
 		    IsS3 : false,
 		    Dir: $4,
+            Parallelism: $6,
 		}
 	}
     | BACKUP STRING S3OPTION '{' infile_or_s3_params '}'
@@ -2958,6 +2960,13 @@ alter_table_drop:
             Name: tree.Identifier($3.Compare()),
         }
     }
+|   CONSTRAINT ident
+        {
+            $$ = &tree.AlterOptionDrop{
+                Typ:  tree.AlterTableDropForeignKey,
+                Name: tree.Identifier($2.Compare()),
+            }
+        }
 |   PRIMARY KEY
     {
         $$ = &tree.AlterOptionDrop{
@@ -3221,7 +3230,10 @@ show_stmt:
 show_collation_stmt:
     SHOW COLLATION like_opt where_expression_opt
     {
-        $$ = &tree.ShowCollation{}
+        $$ = &tree.ShowCollation{
+            Like: $3,
+            Where: $4,
+        }
     }
 
 show_stages_stmt:
@@ -3964,6 +3976,14 @@ insert_stmt:
         ins.Table = $2
         ins.PartitionNames = $3
         ins.OnDuplicateUpdate = $5
+        $$ = ins
+    }
+|   INSERT IGNORE into_table_name partition_clause_opt insert_data
+    {
+        ins := $5
+        ins.Table = $3
+        ins.PartitionNames = $4
+        ins.OnDuplicateUpdate = []*tree.UpdateExpr{nil}
         $$ = ins
     }
 
@@ -6544,16 +6564,27 @@ infile_or_s3_param:
     }
 
 tail_param_opt:
-    load_fields load_lines ignore_lines columns_or_variable_list_opt load_set_spec_opt
+    load_charset load_fields load_lines ignore_lines columns_or_variable_list_opt load_set_spec_opt
     {
         $$ = &tree.TailParameter{
-            Fields: $1,
-            Lines: $2,
-            IgnoredLines: uint64($3),
-            ColumnList: $4,
-            Assignments: $5,
+            Charset: $1,
+            Fields: $2,
+            Lines: $3,
+            IgnoredLines: uint64($4),
+            ColumnList: $5,
+            Assignments: $6,
         }
     }
+
+load_charset:
+    {
+        $$ = ""
+    }
+|   charset_keyword charset_name
+    {
+    	$$ = $2
+    }
+
 create_sequence_stmt:
     CREATE SEQUENCE not_exists_opt table_name as_datatype_opt increment_by_opt min_value_opt max_value_opt start_with_opt cycle_opt
     {
@@ -6884,11 +6915,11 @@ values_opt:
         expr := tree.NewMaxValue()
         $$ = &tree.ValuesLessThan{ValueList: tree.Exprs{expr}}
     }
-|   VALUES LESS THAN '(' expression_list ')'
+|   VALUES LESS THAN '(' value_expression_list ')'
     {
         $$ = &tree.ValuesLessThan{ValueList: $5}
     }
-|   VALUES IN '(' expression_list ')'
+|   VALUES IN '(' value_expression_list ')'
     {
     $$ = &tree.ValuesIn{ValueList: $4}
     }
@@ -7964,7 +7995,7 @@ simple_expr:
     }
 |   '(' expression ')'
     {
-        $$ = tree.NewParenExpr($2)
+        $$ = tree.NewParentExpr($2)
     }
 |   '(' expression_list ',' expression ')'
     {
@@ -7985,6 +8016,48 @@ simple_expr:
 |   '!' simple_expr %prec UNARY
     {
         $$ = tree.NewUnaryExpr(tree.UNARY_MARK, $2)
+    }
+|   '{'  ident expression '}'
+    {   
+        hint := strings.ToLower($2.Compare())
+        switch hint {
+		case "d":
+            locale := ""
+            t := &tree.T{
+                InternalType: tree.InternalType{
+                   Family: tree.TimestampFamily,
+                   FamilyString: "DATETIME",
+                   Locale: &locale,
+                   Oid: uint32(defines.MYSQL_TYPE_DATETIME),
+                },
+            }
+            $$ = tree.NewCastExpr($3, t)
+        case "t":
+            locale := ""
+            t := &tree.T{
+                InternalType: tree.InternalType{
+                   Family: tree.TimeFamily,
+                   FamilyString: "TIME",
+                   Locale: &locale,
+                   Oid: uint32(defines.MYSQL_TYPE_TIME),
+               },
+            }    
+            $$ = tree.NewCastExpr($3, t)
+        case "ts":
+            locale := ""
+            t := &tree.T{
+                InternalType: tree.InternalType{
+                    Family: tree.TimestampFamily,
+                    FamilyString: "TIMESTAMP",
+                    Locale:  &locale,
+                    Oid: uint32(defines.MYSQL_TYPE_TIMESTAMP),
+                },
+            }
+            $$ = tree.NewCastExpr($3, t) 
+        default:
+            yylex.Error("Invalid type")
+            return 1
+        }
     }
 |   interval_expr
     {
@@ -8050,7 +8123,11 @@ simple_expr:
     }
 |   sample_function_expr
     {
-	$$ = $1
+        $$ = $1
+    }
+|   simple_expr COLLATE collate_name
+    {
+        $$ = $1
     }
 
 function_call_window:
@@ -9171,6 +9248,16 @@ expression_list_opt:
         $$ = $1
     }
 
+value_expression_list:
+    value_expression
+    {
+        $$ = tree.Exprs{$1}
+    }
+|   value_expression_list ',' value_expression
+    {
+        $$ = append($1, $3)
+    }
+
 expression_list:
     expression
     {
@@ -9207,13 +9294,18 @@ expression:
     {
         $$ = tree.NewNotExpr($2)
     }
-|   MAXVALUE
-    {
-        $$ = tree.NewMaxValue()
-    }
 |   boolean_primary
     {
         $$ = $1
+    }
+
+value_expression:
+    expression {
+        $$ = $1
+    }
+|   MAXVALUE
+    {
+        $$ = tree.NewMaxValue()
     }
 
 boolean_primary:
@@ -9461,17 +9553,7 @@ literal:
     }
 |   BIT_LITERAL
     {
-        switch v := $1.(type) {
-        case uint64:
-            $$ = tree.NewNumValWithType(constant.MakeUint64(v), yylex.(*Lexer).scanner.LastToken, false, tree.P_uint64)
-        case int64:
-            $$ = tree.NewNumValWithType(constant.MakeInt64(v), yylex.(*Lexer).scanner.LastToken, false, tree.P_int64)
-        case string:
-            $$ = tree.NewNumValWithType(constant.MakeString(v), v, false, tree.P_bit)
-        default:
-            yylex.Error("parse integral fail")
-            return 1
-        }
+        $$ = tree.NewNumValWithType(constant.MakeString($1), $1, false, tree.P_bit)
     }
 |   VALUE_ARG
     {
@@ -10556,7 +10638,9 @@ non_reserved_keyword:
 |   COLUMN_FORMAT
 |   CONNECTOR
 |   CONNECTORS
+|	COLLATION
 |   SECONDARY_ENGINE_ATTRIBUTE
+|   STREAM
 |   ENGINE_ATTRIBUTE
 |   INSERT_METHOD
 |   CASCADE
@@ -10580,6 +10664,7 @@ non_reserved_keyword:
 |   EXPIRE
 |   ERRORS
 |   ENFORCED
+|	ENABLE
 |   FORMAT
 |   FLOAT_TYPE
 |   FULL
@@ -10741,8 +10826,128 @@ non_reserved_keyword:
 |   STAGE
 |   STAGES
 |   BACKUP
-|  FILESYSTEM
+|   FILESYSTEM
+|   PARALLELISM
 |	VALUE
+|	REFERENCE
+|	MODIFY
+|	ASCII
+|	AUTO_INCREMENT
+|	AUTOEXTEND_SIZE
+|	BSI
+|	BINDINGS
+|	BOOLEAN
+|	BTREE
+|	IVFFLAT
+|	COALESCE
+|	CONNECT
+|	CIPHER
+|	CLIENT
+|	SAN
+|	SUBJECT
+|	INSTANT
+|	INPLACE
+|	COPY
+|	UNDEFINED
+|	MERGE
+|	TEMPTABLE
+|	INVOKER
+|	SECURITY
+|	CASCADED
+|	DISABLE
+|	DRAINER
+|	EXECUTE
+|	EVENT
+|	EVENTS
+|	FIRST
+|	AFTER
+|	FILE
+|	GRANTS
+|	HOUR
+|	IDENTIFIED
+|	INLINE
+|	INVISIBLE
+|	ISSUER
+|	JSONTYPE
+|	IMPORT
+|	DISCARD
+|	LOCKS
+|	MANAGE
+|	MINUTE
+|	MICROSECOND
+|	NEXT
+|	NULLS
+|	NONE
+|	SHARED
+|	EXCLUSIVE
+|	OWNERSHIP
+|	EXTERNAL
+|	PARSER
+|	PRIVILEGES
+|	PREV
+|	PLUGINS
+|	REVERSE
+|	RELOAD
+|	ROUTINE
+|	ROW_COUNT
+|	RTREE
+|	SECOND
+|	SHUTDOWN
+|	SQL_CACHE
+|	SQL_NO_CACHE
+|	SLAVE
+|	SLIDING
+|	SUPER
+|	TABLESPACE
+|	TRUNCATE
+|	VISIBLE
+|	WITHOUT
+|	VALIDATION
+|	ZONEMAP
+|	MEDIAN
+|	PUMP
+|	VERBOSE
+|	SQL_TSI_MINUTE
+|	SQL_TSI_SECOND
+|	SQL_TSI_YEAR
+|	SQL_TSI_QUARTER
+|	SQL_TSI_MONTH
+|	SQL_TSI_WEEK
+|	SQL_TSI_DAY
+|	SQL_TSI_HOUR
+|	PREPARE
+|	DEALLOCATE
+|	RESET
+|	ADMIN_NAME
+|	RANDOM
+|	SUSPEND
+|	RESTRICTED
+|	REUSE
+|	CURRENT
+|	OPTIONAL
+|	FAILED_LOGIN_ATTEMPTS
+|	PASSWORD_LOCK_TIME
+|	UNBOUNDED
+|	SECONDARY
+|	MODUMP
+|	PRECEDING
+|	FOLLOWING
+|	FILL
+|	TABLE_NUMBER
+|	TABLE_VALUES
+|	TABLE_SIZE
+|	COLUMN_NUMBER
+|	RETURNS
+|	QUERY_RESULT
+|	MYSQL_COMPATIBILITY_MODE
+|	SEQUENCE
+|	BACKEND
+|	SERVERS
+|	CREDENTIALS
+|	HANDLER
+|	SAMPLE
+|	PERCENT
+|	LAST
 
 func_not_keyword:
     DATE_ADD
@@ -10755,6 +10960,7 @@ func_not_keyword:
 |   SUBDATE
 |   SYSTEM_USER
 |   TRANSLATE
+|	LAST
 
 not_keyword:
     ADDDATE

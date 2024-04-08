@@ -105,7 +105,7 @@ func WithEnableRefreshExpression() TxnClientCreateOption {
 // WithEnableLeakCheck enable txn leak check. Used to found any txn is not committed or rolled back.
 func WithEnableLeakCheck(
 	maxActiveAges time.Duration,
-	leakHandleFunc func(txnID []byte, createAt time.Time, createBy string)) TxnClientCreateOption {
+	leakHandleFunc func(txnID []byte, createAt time.Time, createBy string, options txn.TxnOptions)) TxnClientCreateOption {
 	return func(tc *txnClient) {
 		tc.leakChecker = newLeakCheck(maxActiveAges, leakHandleFunc)
 	}
@@ -123,6 +123,13 @@ func WithTxnLimit(n int) TxnClientCreateOption {
 func WithMaxActiveTxn(n int) TxnClientCreateOption {
 	return func(tc *txnClient) {
 		tc.maxActiveTxn = n
+	}
+}
+
+// WithNormalStateNoWait sets the normalStateNoWait value of txnClient.
+func WithNormalStateNoWait(t bool) TxnClientCreateOption {
+	return func(tc *txnClient) {
+		tc.normalStateNoWait = t
 	}
 }
 
@@ -148,6 +155,12 @@ type txnClient struct {
 	enableSacrificingFreshness bool
 	enableRefreshExpression    bool
 
+	// normalStateNoWait is used to control if wait for the txn client's
+	// state to be normal. If it is false, which is default value, wait
+	// until the txn client's state to be normal; otherwise, if it is true,
+	// do not wait, and just return an error.
+	normalStateNoWait bool
+
 	atomic struct {
 		// we maintain a CN-based last commit timestamp to ensure that
 		// a txn with that CN can see previous writes.
@@ -161,6 +174,9 @@ type txnClient struct {
 
 	mu struct {
 		sync.RWMutex
+		// cond is used to control if we can create new txn and notify
+		// if the state is changed.
+		cond *sync.Cond
 		// indicate whether the CN can provide service normally.
 		state status
 		// user active txns
@@ -201,6 +217,7 @@ func NewTxnClient(
 		sender: sender,
 	}
 	c.mu.state = paused
+	c.mu.cond = sync.NewCond(&c.mu)
 	c.mu.activeTxns = make(map[string]*txnOperator, 100000)
 	for _, opt := range options {
 		opt(c)
@@ -423,25 +440,36 @@ func (client *txnClient) openTxn(op *txnOperator) error {
 		client.mu.Unlock()
 	}()
 
-	if client.mu.state == normal {
-		if !op.isUserTxn() ||
-			client.mu.users < client.maxActiveTxn {
-			client.addActiveTxnLocked(op)
-			return nil
+	for client.mu.state == paused {
+		if client.normalStateNoWait {
+			return moerr.NewInternalErrorNoCtx("cn service is not ready, retry later")
 		}
-		var cancelC chan struct{}
-		if client.timestampWaiter != nil {
-			cancelC = client.timestampWaiter.CancelC()
-			if cancelC == nil {
-				return moerr.NewWaiterPausedNoCtx()
-			}
-		}
-		op.waiter = newWaiter(timestamp.Timestamp{}, cancelC)
-		op.waiter.ref()
-		client.mu.waitActiveTxns = append(client.mu.waitActiveTxns, op)
+
+		util.GetLogger().Warn("txn client is in pause state, wait for it to be ready",
+			zap.String("txn ID", hex.EncodeToString(op.txnID)))
+		// Wait until the txn client's state changed to normal, and it will probably take
+		// no more than 5 seconds in theory.
+		client.mu.cond.Wait()
+		util.GetLogger().Warn("txn client is in ready state",
+			zap.String("txn ID", hex.EncodeToString(op.txnID)))
+	}
+
+	if !op.isUserTxn() ||
+		client.mu.users < client.maxActiveTxn {
+		client.addActiveTxnLocked(op)
 		return nil
 	}
-	return moerr.NewInternalErrorNoCtx("cn service is not ready, retry later")
+	var cancelC chan struct{}
+	if client.timestampWaiter != nil {
+		cancelC = client.timestampWaiter.CancelC()
+		if cancelC == nil {
+			return moerr.NewWaiterPausedNoCtx()
+		}
+	}
+	op.waiter = newWaiter(timestamp.Timestamp{}, cancelC)
+	op.waiter.ref()
+	client.mu.waitActiveTxns = append(client.mu.waitActiveTxns, op)
+	return nil
 }
 
 func (client *txnClient) closeTxn(txn txn.TxnMeta) {
@@ -510,6 +538,11 @@ func (client *txnClient) Resume() {
 
 	util.GetLogger().Info("txn client status changed to normal")
 	client.mu.state = normal
+
+	// Notify all waiting transactions to goon with the opening operation.
+	if !client.normalStateNoWait {
+		client.mu.cond.Broadcast()
+	}
 }
 
 func (client *txnClient) AbortAllRunningTxn() {
@@ -554,7 +587,7 @@ func (client *txnClient) startLeakChecker() {
 
 func (client *txnClient) addToLeakCheck(op *txnOperator) {
 	if client.leakChecker != nil {
-		client.leakChecker.txnOpened(op.txnID, op.option.createBy)
+		client.leakChecker.txnOpened(op, op.txnID, op.option.createBy)
 	}
 }
 

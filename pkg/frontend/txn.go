@@ -15,7 +15,9 @@
 package frontend
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"github.com/google/uuid"
 	"sync"
@@ -58,6 +60,8 @@ type TxnHandler struct {
 	entryMu            sync.Mutex
 	hasCalledStartStmt bool
 	prevTxnId          []byte
+	hasCalledIncrStmt  bool
+	prevIncrTxnId      []byte
 }
 
 func InitTxnHandler(storage engine.Engine, txnClient TxnClient, txnCtx context.Context, txnOp TxnOperator) *TxnHandler {
@@ -71,7 +75,7 @@ func InitTxnHandler(storage engine.Engine, txnClient TxnClient, txnCtx context.C
 	return h
 }
 
-func (th *TxnHandler) createTxnCtx() context.Context {
+func (th *TxnHandler) createTxnCtx() (context.Context, error) {
 	if th.txnCtx == nil {
 		th.txnCtx, th.txnCtxCancel = context.WithTimeout(th.ses.GetConnectContext(),
 			th.ses.GetParameterUnit().SV.SessionTimeout.Duration)
@@ -80,15 +84,13 @@ func (th *TxnHandler) createTxnCtx() context.Context {
 	reqCtx := th.ses.GetRequestContext()
 	retTxnCtx := th.txnCtx
 
-	if v := reqCtx.Value(defines.TenantIDKey{}); v != nil {
-		retTxnCtx = context.WithValue(retTxnCtx, defines.TenantIDKey{}, v)
+	accountId, err := defines.GetAccountId(reqCtx)
+	if err != nil {
+		return nil, err
 	}
-	if v := reqCtx.Value(defines.UserIDKey{}); v != nil {
-		retTxnCtx = context.WithValue(retTxnCtx, defines.UserIDKey{}, v)
-	}
-	if v := reqCtx.Value(defines.RoleIDKey{}); v != nil {
-		retTxnCtx = context.WithValue(retTxnCtx, defines.RoleIDKey{}, v)
-	}
+	retTxnCtx = defines.AttachAccountId(retTxnCtx, accountId)
+	retTxnCtx = defines.AttachUserId(retTxnCtx, defines.GetUserId(reqCtx))
+	retTxnCtx = defines.AttachRoleId(retTxnCtx, defines.GetRoleId(reqCtx))
 	if v := reqCtx.Value(defines.NodeIDKey{}); v != nil {
 		retTxnCtx = context.WithValue(retTxnCtx, defines.NodeIDKey{}, v)
 	}
@@ -102,13 +104,18 @@ func (th *TxnHandler) createTxnCtx() context.Context {
 	} else if th.ses.IfInitedTempEngine() {
 		retTxnCtx = context.WithValue(retTxnCtx, defines.TemporaryTN{}, th.ses.GetTempTableStorage())
 	}
-	return retTxnCtx
+	return retTxnCtx, nil
 }
 
-func (th *TxnHandler) AttachTempStorageToTxnCtx() {
+func (th *TxnHandler) AttachTempStorageToTxnCtx() error {
 	th.mu.Lock()
 	defer th.mu.Unlock()
-	th.txnCtx = context.WithValue(th.createTxnCtx(), defines.TemporaryTN{}, th.ses.GetTempTableStorage())
+	ctx, err := th.createTxnCtx()
+	if err != nil {
+		return err
+	}
+	th.txnCtx = context.WithValue(ctx, defines.TemporaryTN{}, th.ses.GetTempTableStorage())
+	return nil
 }
 
 // we don't need to lock. TxnHandler is holded by one session.
@@ -146,12 +153,16 @@ func (th *TxnHandler) NewTxnOperator() (context.Context, TxnOperator, error) {
 		}
 	}
 
-	txnCtx := th.createTxnCtx()
+	txnCtx, err := th.createTxnCtx()
+	if err != nil {
+		return nil, nil, err
+	}
 	if txnCtx == nil {
 		panic("context should not be nil")
 	}
 	opts = append(opts,
-		client.WithTxnCreateBy(fmt.Sprintf("frontend-session-%p", th.ses)))
+		client.WithTxnCreateBy(fmt.Sprintf("frontend-session-%p", th.ses)),
+		client.WithSessionInfo(th.ses.GetDebugString()))
 
 	if th.ses != nil && th.ses.GetFromRealUser() {
 		opts = append(opts,
@@ -188,6 +199,26 @@ func (th *TxnHandler) calledStartStmt() (bool, []byte) {
 	th.mu.Lock()
 	defer th.mu.Unlock()
 	return th.hasCalledStartStmt, th.prevTxnId
+}
+
+func (th *TxnHandler) enableIncrStmt(txnId []byte) {
+	th.mu.Lock()
+	defer th.mu.Unlock()
+	th.hasCalledIncrStmt = true
+	th.prevIncrTxnId = txnId
+}
+
+func (th *TxnHandler) disableIncrStmt() {
+	th.mu.Lock()
+	defer th.mu.Unlock()
+	th.hasCalledIncrStmt = false
+	th.prevIncrTxnId = nil
+}
+
+func (th *TxnHandler) calledIncrStmt() (bool, []byte) {
+	th.mu.Lock()
+	defer th.mu.Unlock()
+	return th.hasCalledIncrStmt, th.prevIncrTxnId
 }
 
 // NewTxn commits the old transaction if it existed.
@@ -261,10 +292,14 @@ func (th *TxnHandler) SetTxnOperatorInvalid() {
 	th.txnCtx = nil
 }
 
-func (th *TxnHandler) GetTxnOperator() (context.Context, TxnOperator) {
+func (th *TxnHandler) GetTxnOperator() (context.Context, TxnOperator, error) {
 	th.mu.Lock()
 	defer th.mu.Unlock()
-	return th.createTxnCtx(), th.txnOperator
+	ctx, err := th.createTxnCtx()
+	if err != nil {
+		return nil, nil, err
+	}
+	return ctx, th.txnOperator, nil
 }
 
 func (th *TxnHandler) SetSession(ses *Session) {
@@ -291,7 +326,10 @@ func (th *TxnHandler) CommitTxn() error {
 	}
 	ses := th.GetSession()
 	sessionInfo := ses.GetDebugString()
-	txnCtx, txnOp := th.GetTxnOperator()
+	txnCtx, txnOp, err := th.GetTxnOperator()
+	if err != nil {
+		return err
+	}
 	if txnOp == nil {
 		th.SetTxnOperatorInvalid()
 		logError(ses, sessionInfo, "CommitTxn: txn operator is null")
@@ -315,7 +353,6 @@ func (th *TxnHandler) CommitTxn() error {
 	if val != nil {
 		ctx2 = context.WithValue(ctx2, defines.PkCheckByTN{}, val.(int8))
 	}
-	var err error
 	defer func() {
 		// metric count
 		tenant := ses.GetTenantName()
@@ -362,7 +399,10 @@ func (th *TxnHandler) RollbackTxn() error {
 	}
 	ses := th.GetSession()
 	sessionInfo := ses.GetDebugString()
-	txnCtx, txnOp := th.GetTxnOperator()
+	txnCtx, txnOp, err := th.GetTxnOperator()
+	if err != nil {
+		return err
+	}
 	if txnOp == nil {
 		th.SetTxnOperatorInvalid()
 		logError(ses, ses.GetDebugString(),
@@ -381,7 +421,6 @@ func (th *TxnHandler) RollbackTxn() error {
 		storage.Hints().CommitOrRollbackTimeout,
 	)
 	defer cancel()
-	var err error
 	defer func() {
 		// metric count
 		tenant := ses.GetTenantName()
@@ -495,6 +534,20 @@ func (ses *Session) GetServerStatus() uint16 {
 	return ses.serverStatus
 }
 
+func (ses *Session) maybeUnsetTxnStatus() {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	if ses.serverStatus&SERVER_STATUS_AUTOCOMMIT != 0 {
+		ses.serverStatus &= ^SERVER_STATUS_IN_TRANS
+	} else {
+		if v, err := ses.GetSessionVarLocked("autocommit"); err == nil {
+			if ac, vErr := valueIsBoolTrue(v); vErr == nil && ac {
+				ses.serverStatus &= ^SERVER_STATUS_IN_TRANS
+			}
+		}
+	}
+}
+
 /*
 InMultiStmtTransactionMode checks the session is in multi-statement transaction mode.
 OPTION_NOT_AUTOCOMMIT: After the autocommit is off, the multi-statement transaction is
@@ -560,15 +613,15 @@ When it is not in single statement transaction mode:
 	Starts a new transaction if there is none. Reuse the current transaction if there is one.
 */
 func (ses *Session) TxnCreate() (context.Context, TxnOperator, error) {
-	if ses.InMultiStmtTransactionMode() {
-		ses.SetServerStatus(SERVER_STATUS_IN_TRANS)
-	}
+	// SERVER_STATUS_IN_TRANS should be set to true regardless of whether autocommit is equal to 1.
+	ses.SetServerStatus(SERVER_STATUS_IN_TRANS)
+
 	if !ses.GetTxnHandler().IsValidTxnOperator() {
 		return ses.GetTxnHandler().NewTxn()
 	}
 	txnHandler := ses.GetTxnHandler()
-	txnCtx, txnOp := txnHandler.GetTxnOperator()
-	return txnCtx, txnOp, nil
+	txnCtx, txnOp, err := txnHandler.GetTxnOperator()
+	return txnCtx, txnOp, err
 }
 
 /*
@@ -677,8 +730,12 @@ If it is Case2, Then
 
 	InMultiStmtTransactionMode returns false
 */
-func (ses *Session) TxnRollbackSingleStatement(stmt tree.Statement) error {
+func (ses *Session) TxnRollbackSingleStatement(stmt tree.Statement, inputErr error) error {
 	var err error
+	var rollbackWholeTxn bool
+	if inputErr != nil {
+		rollbackWholeTxn = isErrorRollbackWholeTxn(inputErr)
+	}
 	/*
 			Rollback Rules:
 			1, if it is in single-statement mode (Case2):
@@ -687,11 +744,46 @@ func (ses *Session) TxnRollbackSingleStatement(stmt tree.Statement) error {
 		        the transaction need to be rollback at the end of the statement.
 				(every error will abort the transaction.)
 	*/
-	if !ses.InMultiStmtTransactionMode() || ses.InActiveTransaction() {
-		err = ses.GetTxnHandler().RollbackTxn()
-		ses.ClearServerStatus(SERVER_STATUS_IN_TRANS)
-		ses.ClearOptionBits(OPTION_BEGIN)
+	if !ses.InMultiStmtTransactionMode() ||
+		ses.InActiveTransaction() && NeedToBeCommittedInActiveTransaction(stmt) ||
+		rollbackWholeTxn {
+		//Case1.1: autocommit && not_begin
+		//Case1.2: (not_autocommit || begin) && activeTxn && needToBeCommitted
+		//Case1.3: the error that should rollback the whole txn
+		err = ses.rollbackWholeTxn()
+	} else {
+		//Case2: not ( autocommit && !begin ) && not ( activeTxn && needToBeCommitted )
+		//<==>  ( not_autocommit || begin ) && not ( activeTxn && needToBeCommitted )
+		//just rollback statement
+		var err3 error
+		txnCtx, txnOp, err3 := ses.GetTxnHandler().GetTxnOperator()
+		if err3 != nil {
+			logError(ses, ses.GetDebugString(), err3.Error())
+			return err3
+		}
+
+		//non derived statement
+		if txnOp != nil && !ses.IsDerivedStmt() {
+			//incrStatement has been called
+			ok, id := ses.GetTxnHandler().calledIncrStmt()
+			if ok && bytes.Equal(txnOp.Txn().ID, id) {
+				err = txnOp.GetWorkspace().RollbackLastStatement(txnCtx)
+				ses.GetTxnHandler().disableIncrStmt()
+				if err != nil {
+					err4 := ses.rollbackWholeTxn()
+					return errors.Join(err, err4)
+				}
+			}
+		}
 	}
+	return err
+}
+
+// rollbackWholeTxn
+func (ses *Session) rollbackWholeTxn() error {
+	err := ses.GetTxnHandler().RollbackTxn()
+	ses.ClearServerStatus(SERVER_STATUS_IN_TRANS)
+	ses.ClearOptionBits(OPTION_BEGIN)
 	return err
 }
 
@@ -712,14 +804,27 @@ SetAutocommit sets the value of the system variable 'autocommit'.
 The rule is that we can not execute the statement 'set parameter = value' in
 an active transaction whichever it is started by BEGIN or in 'set autocommit = 0;'.
 */
-func (ses *Session) SetAutocommit(on bool) error {
-	if ses.InActiveTransaction() {
-		return moerr.NewInternalError(ses.requestCtx, parameterModificationInTxnErrorInfo())
-	}
-	if on {
+func (ses *Session) SetAutocommit(old, on bool) error {
+	//on -> on : do nothing
+	//off -> on : commit active txn
+	//	if commit failed, clean OPTION_AUTOCOMMIT
+	//	if commit succeeds, clean OPTION_BEGIN | OPTION_NOT_AUTOCOMMIT
+	//		and set SERVER_STATUS_AUTOCOMMIT
+	//on -> off :
+	//	clean OPTION_AUTOCOMMIT
+	//	clean SERVER_STATUS_AUTOCOMMIT
+	//	set OPTION_NOT_AUTOCOMMIT
+	//off -> off : do nothing
+	if !old && on { //off -> on
+		//activating autocommit
+		err := ses.txnHandler.CommitTxn()
+		if err != nil {
+			ses.ClearOptionBits(OPTION_AUTOCOMMIT)
+			return err
+		}
 		ses.ClearOptionBits(OPTION_BEGIN | OPTION_NOT_AUTOCOMMIT)
 		ses.SetServerStatus(SERVER_STATUS_AUTOCOMMIT)
-	} else {
+	} else if old && !on { //on -> off
 		ses.ClearServerStatus(SERVER_STATUS_AUTOCOMMIT)
 		ses.SetOptionBits(OPTION_NOT_AUTOCOMMIT)
 	}

@@ -19,14 +19,13 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionUtil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -41,7 +40,7 @@ const (
 // Mo functions are better tested with bvt.
 
 // MoTableRows returns an estimated row number of a table.
-func MoTableRows(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func MoTableRows(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
 	rs := vector.MustFunctionResult[int64](result)
 	dbs := vector.GenerateFunctionStrParameter(ivecs[0])
 	tbls := vector.GenerateFunctionStrParameter(ivecs[1])
@@ -53,8 +52,15 @@ func MoTableRows(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 	}
 	txn := proc.TxnOperator
 
+	var accountId uint32
+	var accSwitched bool
 	// XXX old code starts a new transaction.   why?
 	for i := uint64(0); i < uint64(length); i++ {
+		if accSwitched {
+			accSwitched = false
+			proc.Ctx = defines.AttachAccountId(proc.Ctx, accountId)
+		}
+
 		db, dbnull := dbs.GetStrValue(i)
 		tbl, tblnull := tbls.GetStrValue(i)
 		if dbnull || tblnull {
@@ -68,13 +74,22 @@ func MoTableRows(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 
 			if isClusterTable(dbStr, tblStr) {
 				//if it is the cluster table in the general account, switch into the sys account
-				if v := proc.Ctx.Value(defines.TenantIDKey{}); v == nil || v != uint32(sysAccountID) {
-					proc.Ctx = context.WithValue(proc.Ctx, defines.TenantIDKey{}, uint32(sysAccountID))
+				accountId, err = defines.GetAccountId(proc.Ctx)
+				if err != nil {
+					return err
+				}
+				if accountId != uint32(sysAccountID) {
+					accSwitched = true
+					proc.Ctx = defines.AttachAccountId(proc.Ctx, uint32(sysAccountID))
 				}
 			}
 			ctx := proc.Ctx
-			dbo, err := e.Database(ctx, dbStr, txn)
+			var dbo engine.Database
+			dbo, err = e.Database(ctx, dbStr, txn)
 			if err != nil {
+				if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
+					return moerr.NewInvalidArgNoCtx("db not found when mo_table_rows", dbStr)
+				}
 				return err
 			}
 			rel, err = dbo.Relation(ctx, tblStr, nil)
@@ -83,7 +98,8 @@ func MoTableRows(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 			}
 
 			// get the table definition information and check whether the current table is a partition table
-			engineDefs, err := rel.TableDefs(ctx)
+			var engineDefs []engine.TableDef
+			engineDefs, err = rel.TableDefs(ctx)
 			if err != nil {
 				return err
 			}
@@ -141,7 +157,7 @@ func MoTableRows(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 }
 
 // MoTableSize returns an estimated size of a table.
-func MoTableSize(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func MoTableSize(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) (err error) {
 	rs := vector.MustFunctionResult[int64](result)
 	dbs := vector.GenerateFunctionStrParameter(ivecs[0])
 	tbls := vector.GenerateFunctionStrParameter(ivecs[1])
@@ -152,12 +168,27 @@ func MoTableSize(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 	}
 	txn := proc.TxnOperator
 
+	var accountId uint32
+	var accSwitched bool
 	// XXX old code starts a new transaction.   why?
 	for i := uint64(0); i < uint64(length); i++ {
+		if accSwitched {
+			// consider this situation:
+			// 	 if a sql trys to gather all table's size in one query,
+			// 	 this will traverse all tables, including the cluster table, belongs
+			// 	 this account.
+			//   but if these tables in `tbls` has orders: xxx, cluster table, xxx, xxx, xxx.
+			//   the account id stored in proc.Ctx will be changed to system account id when process that cluster
+			//   table, and causing the last three tables can not be found when call the `engine.Database()`.
+			//   so should be first to switch bach the right account id here.
+			accSwitched = false
+			proc.Ctx = defines.AttachAccountId(proc.Ctx, accountId)
+		}
+
 		db, dbnull := dbs.GetStrValue(i)
 		tbl, tblnull := tbls.GetStrValue(i)
 		if dbnull || tblnull {
-			if err := rs.Append(0, true); err != nil {
+			if err = rs.Append(0, true); err != nil {
 				return err
 			}
 		} else {
@@ -167,13 +198,23 @@ func MoTableSize(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 
 			if isClusterTable(dbStr, tblStr) {
 				//if it is the cluster table in the general account, switch into the sys account
-				if v := proc.Ctx.Value(defines.TenantIDKey{}); v == nil || v != uint32(sysAccountID) {
-					proc.Ctx = context.WithValue(proc.Ctx, defines.TenantIDKey{}, uint32(sysAccountID))
+				accountId, err = defines.GetAccountId(proc.Ctx)
+				if err != nil {
+					return err
+				}
+				if accountId != uint32(sysAccountID) {
+					accSwitched = true
+					proc.Ctx = defines.AttachAccountId(proc.Ctx, uint32(sysAccountID))
 				}
 			}
 			ctx := proc.Ctx
-			dbo, err := e.Database(ctx, dbStr, txn)
+
+			var dbo engine.Database
+			dbo, err = e.Database(ctx, dbStr, txn)
 			if err != nil {
+				if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
+					return moerr.NewInvalidArgNoCtx("db not found when mo_table_size", dbStr)
+				}
 				return err
 			}
 			rel, err = dbo.Relation(ctx, tblStr, nil)
@@ -181,61 +222,94 @@ func MoTableSize(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 				return err
 			}
 
-			// get the table definition information and check whether the current table is a partition table
-			engineDefs, err := rel.TableDefs(ctx)
-			if err != nil {
+			var oSize, iSize uint64
+			if oSize, err = originalTableSize(ctx, dbo, rel); err != nil {
 				return err
 			}
-			var partitionInfo *plan.PartitionByDef
-			for _, def := range engineDefs {
-				if partitionDef, ok := def.(*engine.PartitionDef); ok {
-					if partitionDef.Partitioned > 0 {
-						p := &plan.PartitionByDef{}
-						err = p.UnMarshalPartitionInfo(([]byte)(partitionDef.Partition))
-						if err != nil {
-							return err
-						}
-						partitionInfo = p
-					}
-				}
+			if iSize, err = indexesTableSize(ctx, dbo, rel); err != nil {
+				return err
 			}
 
-			var size int64
-
-			// check if the current table is partitioned
-			if partitionInfo != nil {
-				var prel engine.Relation
-				var psize int64
-				// for partition table, the table size is equal to the sum of the partition tables.
-				for _, partitionTable := range partitionInfo.PartitionTableNames {
-					prel, err = dbo.Relation(ctx, partitionTable, nil)
-					if err != nil {
-						return err
-					}
-					if prel.UpdateObjectInfos(ctx); err != nil {
-						return err
-					}
-					psize, err = prel.Size(ctx, AllColumns)
-					if err != nil {
-						return err
-					}
-					size += psize
-				}
-			} else {
-				if err = rel.UpdateObjectInfos(ctx); err != nil {
-					return err
-				}
-				size, err = rel.Size(ctx, AllColumns)
-				if err != nil {
-					return err
-				}
-			}
-			if err = rs.Append(size, false); err != nil {
+			if err = rs.Append(int64(oSize+iSize), false); err != nil {
 				return err
 			}
 		}
 	}
 	return nil
+}
+
+func originalTableSize(ctx context.Context, db engine.Database, rel engine.Relation) (size uint64, err error) {
+	return getTableSize(ctx, db, rel)
+}
+
+func getTableSize(ctx context.Context, db engine.Database, rel engine.Relation) (size uint64, err error) {
+	// get the table definition information and check whether the current table is a partition table
+	var engineDefs []engine.TableDef
+	engineDefs, err = rel.TableDefs(ctx)
+	if err != nil {
+		return 0, err
+	}
+	var partitionInfo *plan.PartitionByDef
+	for _, def := range engineDefs {
+		if partitionDef, ok := def.(*engine.PartitionDef); ok {
+			if partitionDef.Partitioned > 0 {
+				p := &plan.PartitionByDef{}
+				err = p.UnMarshalPartitionInfo(([]byte)(partitionDef.Partition))
+				if err != nil {
+					return 0, err
+				}
+				partitionInfo = p
+			}
+		}
+	}
+
+	var psize, osize int64
+	// check if the current table is partitioned
+	if partitionInfo != nil {
+		var prel engine.Relation
+		// for partition table, the table size is equal to the sum of the partition tables.
+		for _, partitionTable := range partitionInfo.PartitionTableNames {
+			prel, err = db.Relation(ctx, partitionTable, nil)
+			if err != nil {
+				return 0, err
+			}
+			if err = prel.UpdateObjectInfos(ctx); err != nil {
+				return 0, err
+			}
+			if psize, err = prel.Size(ctx, AllColumns); err != nil {
+				return 0, err
+			}
+			size += uint64(psize)
+		}
+	} else {
+		if err = rel.UpdateObjectInfos(ctx); err != nil {
+			return 0, err
+		}
+		if osize, err = rel.Size(ctx, AllColumns); err != nil {
+			return 0, err
+		}
+		size = uint64(osize)
+	}
+
+	return size, nil
+}
+
+func indexesTableSize(ctx context.Context, db engine.Database, rel engine.Relation) (totalSize uint64, err error) {
+	var irel engine.Relation
+	var size uint64
+	for _, idef := range rel.GetTableDef(ctx).Indexes {
+		if irel, err = db.Relation(ctx, idef.IndexTableName, nil); err != nil {
+			return 0, err
+		}
+
+		if size, err = getTableSize(ctx, db, irel); err != nil {
+			return 0, err
+		}
+
+		totalSize += size
+	}
+
+	return totalSize, nil
 }
 
 // MoTableColMax return the max value of the column
@@ -287,8 +361,12 @@ func moTableColMaxMinImpl(fnName string, parameters []*vector.Vector, result vec
 
 			if isClusterTable(dbStr, tableStr) {
 				//if it is the cluster table in the general account, switch into the sys account
-				if v := proc.Ctx.Value(defines.TenantIDKey{}); v == nil || v != uint32(sysAccountID) {
-					proc.Ctx = context.WithValue(proc.Ctx, defines.TenantIDKey{}, uint32(sysAccountID))
+				accountId, err := defines.GetAccountId(proc.Ctx)
+				if err != nil {
+					return err
+				}
+				if accountId != uint32(sysAccountID) {
+					proc.Ctx = defines.AttachAccountId(proc.Ctx, uint32(sysAccountID))
 				}
 			}
 			ctx := proc.Ctx

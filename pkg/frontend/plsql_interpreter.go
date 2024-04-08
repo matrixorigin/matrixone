@@ -101,7 +101,7 @@ func (interpreter *Interpreter) FlushParam() error {
 			// save INOUT at session
 			interpreter.bh.ClearExecResultSet()
 			// system setvar execution
-			err := interpreter.ses.SetUserDefinedVar(interpreter.argsMap[k].(*tree.VarExpr).Name, v)
+			err := interpreter.ses.SetUserDefinedVar(interpreter.argsMap[k].(*tree.VarExpr).Name, v, "")
 			if err != nil {
 				return err
 			}
@@ -112,7 +112,7 @@ func (interpreter *Interpreter) FlushParam() error {
 		// save at session
 		interpreter.bh.ClearExecResultSet()
 		// system setvar execution
-		err := interpreter.ses.SetUserDefinedVar(interpreter.argsMap[k].(*tree.VarExpr).Name, v)
+		err := interpreter.ses.SetUserDefinedVar(interpreter.argsMap[k].(*tree.VarExpr).Name, v, "")
 		if err != nil {
 			return err
 		}
@@ -262,7 +262,7 @@ func (interpreter *Interpreter) ExecuteSp(stmt tree.Statement, dbName string) (e
 					return moerr.NewNotSupported(interpreter.ctx, fmt.Sprintf("parameter %s with type INOUT or IN has to have a specified value.", k))
 				}
 				// save param to local var scope
-				(*interpreter.varScope)[len(*interpreter.varScope)-1][strings.ToLower(k)] = value
+				(*interpreter.varScope)[len(*interpreter.varScope)-1][strings.ToLower(k)] = value.Value
 			}
 		} else {
 			// if param type is INOUT or OUT and the param is not provided with variable expr, raise an error

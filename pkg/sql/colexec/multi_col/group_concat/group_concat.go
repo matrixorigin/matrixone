@@ -466,3 +466,6 @@ func hasNull(vecs []*vector.Vector, rowIdx int64) bool {
 	}
 	return false
 }
+
+func (gc *GroupConcat) SetPartialResult(_ any) {
+}

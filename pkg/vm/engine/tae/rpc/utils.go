@@ -175,3 +175,39 @@ func AttrFromColDef(col *catalog.ColDef) (attrs *engine.Attribute, err error) {
 	}
 	return attr, nil
 }
+
+type mItem struct {
+	objcnt   int
+	did, tid uint64
+}
+
+type itemSet []mItem
+
+func (is itemSet) Len() int { return len(is) }
+
+func (is itemSet) Less(i, j int) bool {
+	return is[i].objcnt < is[j].objcnt
+}
+
+func (is itemSet) Swap(i, j int) {
+	is[i], is[j] = is[j], is[i]
+}
+
+func (is *itemSet) Push(x any) {
+	item := x.(mItem)
+	*is = append(*is, item)
+}
+
+func (is *itemSet) Pop() any {
+	old := *is
+	n := len(old)
+	item := old[n-1]
+	// old[n-1] = nil // avoid memory leak
+	*is = old[0 : n-1]
+	return item
+}
+
+func (is *itemSet) Clear() {
+	old := *is
+	*is = old[:0]
+}

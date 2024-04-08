@@ -93,17 +93,17 @@ func (entry *compactBlockEntry) PrepareRollback() (err error) {
 
 	// do not delete nonappendable `from` block file because it can be compacted again if it has deletes
 	if entry.from.IsAppendableBlock() {
-		seg := fromBlockEntry.ID.Segment()
+		obj := fromBlockEntry.ID.Segment()
 		num, _ := fromBlockEntry.ID.Offsets()
-		fromName = objectio.BuildObjectName(seg, num).String()
+		fromName = objectio.BuildObjectName(obj, num).String()
 	}
 
 	// it is totally safe to delete the brand new `to` block file
 	if entry.to != nil {
 		toBlockEntry := entry.to.GetMeta().(*catalog.BlockEntry)
-		seg := toBlockEntry.ID.Segment()
+		obj := toBlockEntry.ID.Segment()
 		num, _ := toBlockEntry.ID.Offsets()
-		toName = objectio.BuildObjectName(seg, num).String()
+		toName = objectio.BuildObjectName(obj, num).String()
 	}
 
 	entry.rt.Scheduler.ScheduleScopedFn(&tasks.Context{}, tasks.IOTask, fromBlockEntry.AsCommonID(), func() error {

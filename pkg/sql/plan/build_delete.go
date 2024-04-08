@@ -15,11 +15,18 @@
 package plan
 
 import (
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
 
 func buildDelete(stmt *tree.Delete, ctx CompilerContext, isPrepareStmt bool) (*Plan, error) {
+	start := time.Now()
+	defer func() {
+		v2.TxnStatementBuildDeleteHistogram.Observe(time.Since(start).Seconds())
+	}()
 	aliasMap := make(map[string][2]string)
 	for _, tbl := range stmt.TableRefs {
 		getAliasToName(ctx, tbl, "", aliasMap)
@@ -51,6 +58,10 @@ func buildDelete(stmt *tree.Delete, ctx CompilerContext, isPrepareStmt bool) (*P
 		allDelTableIDs[tableDef.TblId] = struct{}{}
 	}
 
+	allDelTables := make(map[FkReferKey]struct{})
+	for i, tableDef := range tblInfo.tableDefs {
+		allDelTables[FkReferKey{Db: tblInfo.objRef[i].SchemaName, Tbl: tableDef.Name}] = struct{}{}
+	}
 	// append delete plans
 	beginIdx := 0
 	// needLockTable := !tblInfo.isMulti && stmt.Where == nil && stmt.Limit == nil
@@ -69,6 +80,7 @@ func buildDelete(stmt *tree.Delete, ctx CompilerContext, isPrepareStmt bool) (*P
 		delPlanCtx.updateColLength = 0
 		delPlanCtx.rowIdPos = getRowIdPos(tableDef)
 		delPlanCtx.allDelTableIDs = allDelTableIDs
+		delPlanCtx.allDelTables = allDelTables
 		delPlanCtx.lockTable = needLockTable
 		delPlanCtx.isDeleteWithoutFilters = isDeleteWithoutFilters
 

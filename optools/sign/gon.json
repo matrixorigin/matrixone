@@ -2,8 +2,7 @@
   "source" : ["./mo-service"],
   "bundle_id" : "com.matrixorigin.matrixone",
   "apple_id": {
-    "username" : "shuqi.qin@matrixorigin.cn",
-    "password":  "@env:AC_PASSWORD"
+    "username" : "shuqi.qin@matrixorigin.cn"
   },
   "sign" :{
     "application_identity" : "90818D98626B020D66D306D5FD8311E98A41C596"

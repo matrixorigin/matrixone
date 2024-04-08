@@ -15,7 +15,16 @@
 package ctl
 
 import (
+	"context"
+	"strings"
+	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	querypb "github.com/matrixorigin/matrixone/pkg/pb/query"
+	taskpb "github.com/matrixorigin/matrixone/pkg/pb/task"
+	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -23,26 +32,86 @@ import (
 var (
 	disableTask = "disable"
 	enableTask  = "enable"
+	getUser     = "getuser"
+
+	taskMap = map[string]int32{
+		"storageusage": int32(taskpb.TaskCode_MetricStorageUsage),
+	}
 )
 
+// handleTask handles task command
+// parameter format:
+// 1. enable
+// 2. disable
+// 3. [uuid:]taskId
 func handleTask(proc *process.Process,
 	service serviceType,
 	parameter string,
 	sender requestSender) (Result, error) {
+	parameter = strings.ToLower(parameter)
 	switch parameter {
 	case disableTask:
 		taskservice.DebugCtlTaskFramwork(true)
+		return Result{
+			Method: TaskMethod,
+			Data:   "OK",
+		}, nil
 	case enableTask:
 		taskservice.DebugCtlTaskFramwork(false)
+		return Result{
+			Method: TaskMethod,
+			Data:   "OK",
+		}, nil
+	case getUser:
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		state, err := proc.Hakeeper.GetClusterState(ctx)
+		cancel()
+		if err != nil {
+			return Result{Method: TaskMethod, Data: "failed to get cluster state"}, err
+		}
+		user := state.GetTaskTableUser()
+		return Result{Method: TaskMethod, Data: user}, nil
 	default:
-		return Result{},
-			moerr.NewInvalidInput(proc.Ctx, "task command only support %s and %s",
-				enableTask,
-				disableTask)
 	}
 
+	target, taskCode, err := checkRunTaskParameter(parameter)
+	if err != nil {
+		return Result{}, err
+	}
+	resp, err := transferTaskToCN(proc.QueryService, target, taskCode)
+	if err != nil {
+		return Result{}, err
+	}
 	return Result{
 		Method: TaskMethod,
-		Data:   "OK",
+		Data:   resp,
 	}, nil
+}
+
+func checkRunTaskParameter(param string) (string, int32, error) {
+	// uuid:taskId
+	args := strings.Split(param, ":")
+	if len(args) != 2 {
+		return "", 0, moerr.NewInternalErrorNoCtx("cmd invalid, expected uuid:task")
+	}
+	taskCode, ok := taskMap[args[1]]
+	if !ok {
+		return "", 0, moerr.NewInternalErrorNoCtx("cmd invalid, task %s not found", args[1])
+	}
+	return args[0], taskCode, nil
+}
+
+func transferTaskToCN(qs queryservice.QueryService, target string, taskCode int32) (resp *querypb.Response, err error) {
+	clusterservice.GetMOCluster().GetCNService(
+		clusterservice.NewServiceIDSelector(target),
+		func(cn metadata.CNService) bool {
+			req := qs.NewRequest(querypb.CmdMethod_RunTask)
+			req.RunTask = &querypb.RunTaskRequest{TaskCode: taskCode}
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+
+			resp, err = qs.SendMessage(ctx, cn.QueryAddress, req)
+			return true
+		})
+	return
 }

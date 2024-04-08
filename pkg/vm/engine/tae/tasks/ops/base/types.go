@@ -33,7 +33,7 @@ type IOp interface {
 	OnExec(ctx context.Context) error
 	SetError(err error)
 	GetError() error
-	WaitDone() error
+	WaitDone(ctx context.Context) error
 	Waitable() bool
 	GetCreateTime() time.Time
 	GetStartTime() time.Time

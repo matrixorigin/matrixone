@@ -27,6 +27,10 @@ type Op int
 var (
 	// EQ ==
 	EQ = Op(1)
+
+	EQ_Globbing = Op(2)
+
+	Contain = Op(3)
 )
 
 // Selector is used to choose a service from MOCluster
@@ -63,6 +67,12 @@ type MOCluster interface {
 	// Since the query result may be a Slice, to avoid memory allocation overhead,
 	// we use apply to notify the caller of a Service that satisfies the condition.
 	GetTNService(selector Selector, apply func(metadata.TNService) bool)
+	// GetCNServiceWithoutWorkingState get services by selector, and the applyFunc used to save the
+	// cn service that matches the selector's conditions.
+	//
+	// Since the query result may be a Slice, to avoid memory allocation overhead,
+	// we use apply to notify the caller of a Service that satisfies the condition.
+	GetCNServiceWithoutWorkingState(selector Selector, apply func(metadata.CNService) bool)
 	// ForceRefresh when other modules use the cluster information and find out that
 	// the current cache information is out of date, you can force the cache to be
 	// refreshed.
@@ -72,6 +82,12 @@ type MOCluster interface {
 	// DebugUpdateCNLabel updates the labels on specified CN. It is only used in mo_ctl
 	// internally for debug purpose.
 	DebugUpdateCNLabel(uuid string, kvs map[string][]string) error
+	DebugUpdateCNWorkState(uuid string, state int) error
+
+	// RemoveCN removes the specified CN from the cluster
+	RemoveCN(id string)
+	// AddCN adds the specified CN to the cluster
+	AddCN(metadata.CNService)
 }
 
 type ClusterClient interface {
@@ -81,4 +97,5 @@ type ClusterClient interface {
 type labelSupportedClient interface {
 	ClusterClient
 	UpdateCNLabel(ctx context.Context, label logpb.CNStoreLabel) error
+	UpdateCNWorkState(ctx context.Context, state logpb.CNWorkState) error
 }

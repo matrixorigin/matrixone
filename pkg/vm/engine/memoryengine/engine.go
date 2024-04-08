@@ -78,6 +78,10 @@ func (e *Engine) Create(ctx context.Context, dbName string, txnOperator client.T
 		return err
 	}
 
+	access, err := getAccessInfo(ctx)
+	if err != nil {
+		return err
+	}
 	_, err = DoTxnRequest[CreateDatabaseResp](
 		ctx,
 		txnOperator,
@@ -86,7 +90,7 @@ func (e *Engine) Create(ctx context.Context, dbName string, txnOperator client.T
 		OpCreateDatabase,
 		&CreateDatabaseReq{
 			ID:         id,
-			AccessInfo: getAccessInfo(ctx),
+			AccessInfo: access,
 			Name:       dbName,
 		},
 	)
@@ -98,7 +102,10 @@ func (e *Engine) Create(ctx context.Context, dbName string, txnOperator client.T
 }
 
 func (e *Engine) Database(ctx context.Context, dbName string, txnOperator client.TxnOperator) (engine.Database, error) {
-
+	access, err := getAccessInfo(ctx)
+	if err != nil {
+		return nil, err
+	}
 	resps, err := DoTxnRequest[OpenDatabaseResp](
 		ctx,
 		txnOperator,
@@ -106,7 +113,7 @@ func (e *Engine) Database(ctx context.Context, dbName string, txnOperator client
 		e.anyShard,
 		OpOpenDatabase,
 		&OpenDatabaseReq{
-			AccessInfo: getAccessInfo(ctx),
+			AccessInfo: access,
 			Name:       dbName,
 		},
 	)
@@ -129,7 +136,10 @@ func (e *Engine) Database(ctx context.Context, dbName string, txnOperator client
 }
 
 func (e *Engine) Databases(ctx context.Context, txnOperator client.TxnOperator) ([]string, error) {
-
+	access, err := getAccessInfo(ctx)
+	if err != nil {
+		return nil, err
+	}
 	resps, err := DoTxnRequest[GetDatabasesResp](
 		ctx,
 		txnOperator,
@@ -137,7 +147,7 @@ func (e *Engine) Databases(ctx context.Context, txnOperator client.TxnOperator) 
 		e.anyShard,
 		OpGetDatabases,
 		&GetDatabasesReq{
-			AccessInfo: getAccessInfo(ctx),
+			AccessInfo: access,
 		},
 	)
 	if err != nil {
@@ -148,15 +158,18 @@ func (e *Engine) Databases(ctx context.Context, txnOperator client.TxnOperator) 
 }
 
 func (e *Engine) Delete(ctx context.Context, dbName string, txnOperator client.TxnOperator) error {
-
-	_, err := DoTxnRequest[DeleteDatabaseResp](
+	access, err := getAccessInfo(ctx)
+	if err != nil {
+		return err
+	}
+	_, err = DoTxnRequest[DeleteDatabaseResp](
 		ctx,
 		txnOperator,
 		false,
 		e.allShards,
 		OpDeleteDatabase,
 		&DeleteDatabaseReq{
-			AccessInfo: getAccessInfo(ctx),
+			AccessInfo: access,
 			Name:       dbName,
 		},
 	)

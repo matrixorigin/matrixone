@@ -192,3 +192,18 @@ set @a_var = 23;
 execute stmt1 using @a_var;
 select * from indup_07;
 deallocate prepare stmt1;
+
+--escape
+drop table if exists indup_08;
+create table indup_08(a varchar, primary key (a));
+insert into indup_08 values ('matrixone\''), ('matrixone\'');
+
+
+drop table if exists indup_09;
+create table indup_09(a varchar, b varchar, primary key (a, b));
+insert into indup_09 values ('matrixone\'', 'mo-tester\''), ('matrixone\'', 'mo-tester\'');
+
+drop table if exists indup_10;
+create table indup_10(a varchar(256), b int);
+insert into indup_10 (a, b) select  "matrixone " || " some space " || result, 1 from generate_series (1, 500000)g;
+drop table indup_10;

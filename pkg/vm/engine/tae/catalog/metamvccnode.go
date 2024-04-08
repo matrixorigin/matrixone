@@ -21,6 +21,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
 
 type MetadataMVCCNode struct {
@@ -63,7 +64,14 @@ func (e *MetadataMVCCNode) Update(un *MetadataMVCCNode) {
 		e.DeltaLoc = un.DeltaLoc
 	}
 }
-
+func (e *MetadataMVCCNode) IdempotentUpdate(un *MetadataMVCCNode) {
+	if !un.MetaLoc.IsEmpty() {
+		e.MetaLoc = un.MetaLoc
+	}
+	if !un.DeltaLoc.IsEmpty() {
+		e.DeltaLoc = un.DeltaLoc
+	}
+}
 func (e *MetadataMVCCNode) WriteTo(w io.Writer) (n int64, err error) {
 	var sn int64
 	if sn, err = objectio.WriteBytes(e.MetaLoc, w); err != nil {
@@ -90,14 +98,112 @@ func (e *MetadataMVCCNode) ReadFromWithVersion(r io.Reader, ver uint16) (n int64
 	return
 }
 
-type SegmentNode struct {
+type ObjectMVCCNode struct {
+	objectio.ObjectStats
+}
+
+func NewEmptyObjectMVCCNode() *ObjectMVCCNode {
+	return &ObjectMVCCNode{
+		ObjectStats: *objectio.NewObjectStats(),
+	}
+}
+
+func NewObjectInfoWithMetaLocation(metaLoc objectio.Location, id *objectio.ObjectId) *ObjectMVCCNode {
+	node := NewEmptyObjectMVCCNode()
+	if metaLoc.IsEmpty() {
+		objectio.SetObjectStatsObjectName(&node.ObjectStats, objectio.BuildObjectNameWithObjectID(id))
+		return node
+	}
+	objectio.SetObjectStatsObjectName(&node.ObjectStats, metaLoc.Name())
+	objectio.SetObjectStatsExtent(&node.ObjectStats, metaLoc.Extent())
+	return node
+}
+
+func NewObjectInfoWithObjectID(id *objectio.ObjectId) *ObjectMVCCNode {
+	node := NewEmptyObjectMVCCNode()
+	objectio.SetObjectStatsObjectName(&node.ObjectStats, objectio.BuildObjectNameWithObjectID(id))
+	return node
+}
+
+func NewObjectInfoWithObjectStats(stats *objectio.ObjectStats) *ObjectMVCCNode {
+	return &ObjectMVCCNode{
+		ObjectStats: *stats.Clone(),
+	}
+}
+
+func (e *ObjectMVCCNode) CloneAll() *ObjectMVCCNode {
+	return &ObjectMVCCNode{
+		ObjectStats: *e.ObjectStats.Clone(),
+	}
+}
+func (e *ObjectMVCCNode) CloneData() *ObjectMVCCNode {
+	return &ObjectMVCCNode{
+		ObjectStats: *e.ObjectStats.Clone(),
+	}
+}
+func (e *ObjectMVCCNode) String() string {
+	if e == nil || e.IsEmpty() {
+		return "empty"
+	}
+	return e.ObjectStats.String()
+}
+func (e *ObjectMVCCNode) Update(vun *ObjectMVCCNode) {
+	e.ObjectStats = *vun.ObjectStats.Clone()
+}
+func (e *ObjectMVCCNode) IdempotentUpdate(vun *ObjectMVCCNode) {
+	if e.ObjectStats.IsZero() {
+		e.ObjectStats = *vun.ObjectStats.Clone()
+	} else {
+		if e.IsEmpty() && !vun.IsEmpty() {
+			e.ObjectStats = *vun.ObjectStats.Clone()
+
+		}
+	}
+}
+func (e *ObjectMVCCNode) WriteTo(w io.Writer) (n int64, err error) {
+	var sn int
+	if sn, err = w.Write(e.ObjectStats[:]); err != nil {
+		return
+	}
+	n += int64(sn)
+	return
+}
+func (e *ObjectMVCCNode) ReadFromWithVersion(r io.Reader, ver uint16) (n int64, err error) {
+	var sn int
+	if sn, err = r.Read(e.ObjectStats[:]); err != nil {
+		return
+	}
+	n += int64(sn)
+	return
+}
+
+func (e *ObjectMVCCNode) IsEmpty() bool {
+	return e.Size() == 0
+}
+
+func (e *ObjectMVCCNode) AppendTuple(sid *types.Objectid, batch *containers.Batch) {
+	if e == nil || e.IsEmpty() {
+		objectio.SetObjectStatsObjectName(&e.ObjectStats, objectio.BuildObjectNameWithObjectID(sid)) // when replay, sid is get from object name
+	}
+	batch.GetVectorByName(ObjectAttr_ObjectStats).Append(e.ObjectStats[:], false)
+}
+
+func ReadObjectInfoTuple(bat *containers.Batch, row int) (e *ObjectMVCCNode) {
+	buf := bat.GetVectorByName(ObjectAttr_ObjectStats).Get(row).([]byte)
+	e = &ObjectMVCCNode{
+		ObjectStats: (objectio.ObjectStats)(buf),
+	}
+	return
+}
+
+type ObjectNode struct {
 	state    EntryState
-	IsLocal  bool   // this segment is hold by a localsegment
-	SortHint uint64 // sort segment by create time, make iteration on segment determined
-	// used in appendable segment, bump this if creating a new block, and
+	IsLocal  bool   // this object is hold by a localobject
+	SortHint uint64 // sort object by create time, make iteration on object determined
+	// used in appendable object, bump this if creating a new block, and
 	// the block will be eventually flushed to a s3 file.
-	// for non-appendable segment, this field makes no sense, because if we
-	// decide to create a new non-appendable segment, its content is all set.
+	// for non-appendable object, this field makes no sense, because if we
+	// decide to create a new non-appendable object, its content is all set.
 	nextObjectIdx uint16
 	sorted        bool // deprecated
 }
@@ -107,7 +213,7 @@ const (
 )
 
 // not marshal nextObjectIdx
-func (node *SegmentNode) ReadFrom(r io.Reader) (n int64, err error) {
+func (node *ObjectNode) ReadFrom(r io.Reader) (n int64, err error) {
 	_, err = r.Read(types.EncodeInt8((*int8)(&node.state)))
 	if err != nil {
 		return
@@ -131,7 +237,7 @@ func (node *SegmentNode) ReadFrom(r io.Reader) (n int64, err error) {
 	return
 }
 
-func (node *SegmentNode) WriteTo(w io.Writer) (n int64, err error) {
+func (node *ObjectNode) WriteTo(w io.Writer) (n int64, err error) {
 	_, err = w.Write(types.EncodeInt8((*int8)(&node.state)))
 	if err != nil {
 		return
@@ -154,12 +260,12 @@ func (node *SegmentNode) WriteTo(w io.Writer) (n int64, err error) {
 	n += 1
 	return
 }
-func (node *SegmentNode) String() string {
+func (node *ObjectNode) String() string {
 	sorted := "US"
 	if node.sorted {
 		sorted = "S"
 	}
-	return fmt.Sprintf("%s/%d/%d", sorted, node.SortHint, node.nextObjectIdx)
+	return fmt.Sprintf("%s/%d", sorted, node.SortHint)
 }
 
 type BlockNode struct {

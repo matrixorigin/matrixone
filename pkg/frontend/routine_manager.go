@@ -31,22 +31,26 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"go.uber.org/zap"
 )
 
 type RoutineManager struct {
-	mu             sync.RWMutex
-	ctx            context.Context
-	clients        map[goetty.IOSession]*Routine
-	pu             *config.ParameterUnit
-	tlsConfig      *tls.Config
-	aicm           *defines.AutoIncrCacheManager
-	accountRoutine *AccountRoutineManager
-	baseService    BaseService
-	sessionManager *queryservice.SessionManager
+	mu      sync.RWMutex
+	ctx     context.Context
+	clients map[goetty.IOSession]*Routine
+	// routinesByID keeps the routines by connection ID.
+	routinesByConnID map[uint32]*Routine
+	pu               *config.ParameterUnit
+	tlsConfig        *tls.Config
+	aicm             *defines.AutoIncrCacheManager
+	accountRoutine   *AccountRoutineManager
+	baseService      BaseService
+	sessionManager   *queryservice.SessionManager
 }
 
 type AccountRoutineManager struct {
@@ -166,10 +170,11 @@ func (rm *RoutineManager) getCtx() context.Context {
 	return rm.ctx
 }
 
-func (rm *RoutineManager) setRoutine(rs goetty.IOSession, r *Routine) {
+func (rm *RoutineManager) setRoutine(rs goetty.IOSession, id uint32, r *Routine) {
 	rm.mu.Lock()
 	defer rm.mu.Unlock()
 	rm.clients[rs] = r
+	rm.routinesByConnID[id] = r
 }
 
 func (rm *RoutineManager) getRoutine(rs goetty.IOSession) *Routine {
@@ -178,14 +183,30 @@ func (rm *RoutineManager) getRoutine(rs goetty.IOSession) *Routine {
 	return rm.clients[rs]
 }
 
+func (rm *RoutineManager) getRoutineByConnID(id uint32) *Routine {
+	rm.mu.RLock()
+	defer rm.mu.RUnlock()
+	r, ok := rm.routinesByConnID[id]
+	if ok {
+		return r
+	}
+	return nil
+}
+
 func (rm *RoutineManager) deleteRoutine(rs goetty.IOSession) *Routine {
 	var rt *Routine
 	var ok bool
 	rm.mu.Lock()
 	defer rm.mu.Unlock()
-	rt, ok = rm.clients[rs]
-	if ok {
+	if rt, ok = rm.clients[rs]; ok {
 		delete(rm.clients, rs)
+	}
+
+	if rt != nil {
+		connID := rt.getConnectionID()
+		if _, ok = rm.routinesByConnID[connID]; ok {
+			delete(rm.routinesByConnID, connID)
+		}
 	}
 	return rt
 }
@@ -227,6 +248,7 @@ func (rm *RoutineManager) GetAccountRoutineManager() *AccountRoutineManager {
 
 func (rm *RoutineManager) Created(rs goetty.IOSession) {
 	logutil.Debugf("get the connection from %s", rs.RemoteAddress())
+	createdStart := time.Now()
 	pu := rm.getParameterUnit()
 	connID, err := rm.getConnID()
 	if err != nil {
@@ -239,6 +261,7 @@ func (rm *RoutineManager) Created(rs goetty.IOSession) {
 	exe.ChooseDoQueryFunc(pu.SV.EnableDoComQueryInProgress)
 
 	routine := NewRoutine(rm.getCtx(), pro, exe, pu.SV, rs)
+	v2.CreatedRoutineCounter.Inc()
 
 	// XXX MPOOL pass in a nil mpool.
 	// XXX MPOOL can choose to use a Mid sized mpool, if, we know
@@ -253,6 +276,13 @@ func (rm *RoutineManager) Created(rs goetty.IOSession) {
 	ses.SetFromRealUser(true)
 	ses.setRoutineManager(rm)
 	ses.setRoutine(routine)
+	ses.clientAddr = pro.Peer()
+
+	ses.timestampMap[TSCreatedStart] = createdStart
+	defer func() {
+		ses.timestampMap[TSCreatedEnd] = time.Now()
+		v2.CreatedDurationHistogram.Observe(ses.timestampMap[TSCreatedEnd].Sub(ses.timestampMap[TSCreatedStart]).Seconds())
+	}()
 
 	routine.setSession(ses)
 	pro.SetSession(ses)
@@ -275,7 +305,7 @@ func (rm *RoutineManager) Created(rs goetty.IOSession) {
 	}
 
 	logDebugf(pro.GetDebugString(), "have sent handshake packet to connection %s", rs.RemoteAddress())
-	rm.setRoutine(rs, routine)
+	rm.setRoutine(rs, pro.connectionID, routine)
 }
 
 /*
@@ -284,6 +314,7 @@ When the io is closed, the Closed will be called.
 func (rm *RoutineManager) Closed(rs goetty.IOSession) {
 	logutil.Debugf("clean resource of the connection %d:%s", rs.ID(), rs.RemoteAddress())
 	defer func() {
+		v2.CloseRoutineCounter.Inc()
 		logutil.Debugf("resource of the connection %d:%s has been cleaned", rs.ID(), rs.RemoteAddress())
 	}()
 	rt := rm.deleteRoutine(rs)
@@ -307,26 +338,13 @@ func (rm *RoutineManager) Closed(rs goetty.IOSession) {
 	}
 }
 
-func (rm *RoutineManager) getRoutineById(id uint64) *Routine {
-	var rt *Routine = nil
-	rm.mu.RLock()
-	defer rm.mu.RUnlock()
-	for _, value := range rm.clients {
-		if uint64(value.getConnectionID()) == id {
-			rt = value
-			break
-		}
-	}
-	return rt
-}
-
 /*
 kill a connection or query.
 if killConnection is true, the query will be canceled first, then the network will be closed.
 if killConnection is false, only the query will be canceled. the connection keeps intact.
 */
 func (rm *RoutineManager) kill(ctx context.Context, killConnection bool, idThatKill, id uint64, statementId string) error {
-	rt := rm.getRoutineById(id)
+	rt := rm.getRoutineByConnID(uint32(id))
 
 	killMyself := idThatKill == id
 	if rt != nil {
@@ -386,6 +404,9 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 		return err
 	}
 
+	ses := routine.getSession()
+	ts := ses.timestampMap
+
 	length := packet.Length
 	payload := packet.Payload
 	for uint32(length) == MaxPayloadSize {
@@ -414,13 +435,13 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 
 	// finish handshake process
 	if !protocol.IsEstablished() {
+		ts[TSEstablishStart] = time.Now()
 		logDebugf(protoInfo, "HANDLE HANDSHAKE")
 
 		/*
 			di := MakeDebugInfo(payload,80,8)
 			logutil.Infof("RP[%v] Payload80[%v]",rs.RemoteAddr(),di)
 		*/
-		ses := routine.getSession()
 		if protocol.GetCapability()&CLIENT_SSL != 0 && !protocol.IsTlsEstablished() {
 			logDebugf(protoInfo, "setup ssl")
 			isTlsHeader, err = protocol.HandleHandshake(ctx, payload)
@@ -431,6 +452,7 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 				return err
 			}
 			if isTlsHeader {
+				ts[TSUpgradeTLSStart] = time.Now()
 				logDebugf(protoInfo, "upgrade to TLS")
 				// do upgradeTls
 				tlsConn := tls.Server(rs.RawConn(), rm.getTlsConfig())
@@ -453,6 +475,8 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 
 				// tls upgradeOk
 				protocol.SetTlsEstablished()
+				ts[TSUpgradeTLSEnd] = time.Now()
+				v2.UpgradeTLSDurationHistogram.Observe(ts[TSUpgradeTLSEnd].Sub(ts[TSUpgradeTLSStart]).Seconds())
 			} else {
 				// client don't ask server to upgrade TLS
 				if err := protocol.Authenticate(ctx); err != nil {
@@ -475,9 +499,23 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 			}
 			protocol.SetEstablished()
 		}
+		ts[TSEstablishEnd] = time.Now()
+		v2.EstablishDurationHistogram.Observe(ts[TSEstablishEnd].Sub(ts[TSEstablishStart]).Seconds())
+		logInfof(ses.GetDebugString(), fmt.Sprintf("mo accept connection, time cost of Created: %s, Establish: %s, UpgradeTLS: %s, Authenticate: %s, SendErrPacket: %s, SendOKPacket: %s, CheckTenant: %s, CheckUser: %s, CheckRole: %s, CheckDbName: %s, InitGlobalSysVar: %s",
+			ts[TSCreatedEnd].Sub(ts[TSCreatedStart]).String(),
+			ts[TSEstablishEnd].Sub(ts[TSEstablishStart]).String(),
+			ts[TSUpgradeTLSEnd].Sub(ts[TSUpgradeTLSStart]).String(),
+			ts[TSAuthenticateEnd].Sub(ts[TSAuthenticateStart]).String(),
+			ts[TSSendErrPacketEnd].Sub(ts[TSSendErrPacketStart]).String(),
+			ts[TSSendOKPacketEnd].Sub(ts[TSSendOKPacketStart]).String(),
+			ts[TSCheckTenantEnd].Sub(ts[TSCheckTenantStart]).String(),
+			ts[TSCheckUserEnd].Sub(ts[TSCheckUserStart]).String(),
+			ts[TSCheckRoleEnd].Sub(ts[TSCheckRoleStart]).String(),
+			ts[TSCheckDbNameEnd].Sub(ts[TSCheckDbNameStart]).String(),
+			ts[TSInitGlobalSysVarEnd].Sub(ts[TSInitGlobalSysVarStart]).String()))
 
 		dbName := protocol.GetDatabaseName()
-		if ses != nil && dbName != "" {
+		if dbName != "" {
 			ses.SetDatabaseName(dbName)
 		}
 		rm.sessionManager.AddSession(ses)
@@ -579,6 +617,22 @@ func (rm *RoutineManager) KillRoutineConnections() {
 	rm.cleanKillQueue()
 }
 
+func (rm *RoutineManager) MigrateConnectionTo(req *query.MigrateConnToRequest) error {
+	routine := rm.getRoutineByConnID(req.ConnID)
+	if routine == nil {
+		return moerr.NewInternalError(rm.ctx, "cannot get routine to migrate connection %d", req.ConnID)
+	}
+	return routine.migrateConnectionTo(req)
+}
+
+func (rm *RoutineManager) MigrateConnectionFrom(req *query.MigrateConnFromRequest, resp *query.MigrateConnFromResponse) error {
+	routine, ok := rm.routinesByConnID[req.ConnID]
+	if !ok {
+		return moerr.NewInternalError(rm.ctx, "cannot get routine to migrate connection %d", req.ConnID)
+	}
+	return routine.migrateConnectionFrom(resp)
+}
+
 func NewRoutineManager(ctx context.Context, pu *config.ParameterUnit, aicm *defines.AutoIncrCacheManager) (*RoutineManager, error) {
 	accountRoutine := &AccountRoutineManager{
 		killQueueMu:       sync.RWMutex{},
@@ -588,10 +642,11 @@ func NewRoutineManager(ctx context.Context, pu *config.ParameterUnit, aicm *defi
 		ctx:               ctx,
 	}
 	rm := &RoutineManager{
-		ctx:            ctx,
-		clients:        make(map[goetty.IOSession]*Routine),
-		pu:             pu,
-		accountRoutine: accountRoutine,
+		ctx:              ctx,
+		clients:          make(map[goetty.IOSession]*Routine),
+		routinesByConnID: make(map[uint32]*Routine),
+		pu:               pu,
+		accountRoutine:   accountRoutine,
 	}
 
 	rm.aicm = aicm

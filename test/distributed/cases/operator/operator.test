@@ -150,3 +150,4 @@ drop table if exists t1;
 create table t1 (a tinyint);
 insert into t1 values (2);
 select a << 20 from t1;
+select !true;

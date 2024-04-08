@@ -292,7 +292,7 @@ var supportedStringBuiltIns = []FuncNew{
 	// function `endswith`
 	{
 		functionId: ENDSWITH,
-		class:      plan.Function_STRICT | plan.Function_MONOTONIC,
+		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
 		checkFn:    fixedTypeMatch,
 
@@ -1246,7 +1246,7 @@ var supportedStringBuiltIns = []FuncNew{
 	// function `serial`
 	{
 		functionId: SERIAL,
-		class:      plan.Function_STRICT,
+		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) > 0 {
@@ -1271,7 +1271,7 @@ var supportedStringBuiltIns = []FuncNew{
 	// function `serial_full`
 	{
 		functionId: SERIAL_FULL,
-		class:      plan.Function_STRICT,
+		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) > 0 {
@@ -1348,7 +1348,7 @@ var supportedStringBuiltIns = []FuncNew{
 	// function `startswith`
 	{
 		functionId: STARTSWITH,
-		class:      plan.Function_STRICT | plan.Function_MONOTONIC,
+		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
 		checkFn:    fixedTypeMatch,
 
@@ -1361,6 +1361,69 @@ var supportedStringBuiltIns = []FuncNew{
 				},
 				newOp: func() executeLogicOfOverload {
 					return StartsWith
+				},
+			},
+		},
+	},
+
+	// function `prefix_eq`
+	{
+		functionId: PREFIX_EQ,
+		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedDirectlyTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_varchar, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return PrefixEq
+				},
+			},
+		},
+	},
+
+	// function `prefix_in`
+	{
+		functionId: PREFIX_IN,
+		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedDirectlyTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_varchar, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return PrefixIn
+				},
+			},
+		},
+	},
+
+	// function `prefix_between`
+	{
+		functionId: PREFIX_BETWEEN,
+		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedDirectlyTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_varchar, types.T_varchar, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_bool.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return PrefixBetween
 				},
 			},
 		},
@@ -1570,6 +1633,58 @@ var supportedStringBuiltIns = []FuncNew{
 			},
 		},
 	},
+
+	// function `locate`
+	{
+		functionId: LOCATE,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_varchar, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return buildInLocate2Args
+				},
+			},
+			{
+				overloadId: 1,
+				args:       []types.T{types.T_char, types.T_char},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return buildInLocate2Args
+				},
+			},
+			{
+				overloadId: 2,
+				args:       []types.T{types.T_varchar, types.T_varchar, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return buildInLocate3Args
+				},
+			},
+			{
+				overloadId: 3,
+				args:       []types.T{types.T_char, types.T_char, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return buildInLocate3Args
+				},
+			},
+		},
+	},
+
 	// function `sha2`
 	{
 		functionId: SHA2,
@@ -2171,7 +2286,7 @@ var supportedMathBuiltIns = []FuncNew{
 	// function `ceil`, `ceiling`
 	{
 		functionId: CEIL,
-		class:      plan.Function_STRICT | plan.Function_MONOTONIC,
+		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
 		layout:     STANDARD_FUNCTION,
 		checkFn:    fixedTypeMatch,
 
@@ -2355,7 +2470,7 @@ var supportedMathBuiltIns = []FuncNew{
 	// function `floor`
 	{
 		functionId: FLOOR,
-		class:      plan.Function_STRICT | plan.Function_MONOTONIC,
+		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
 		layout:     STANDARD_FUNCTION,
 		checkFn:    fixedTypeMatch,
 
@@ -2722,7 +2837,7 @@ var supportedMathBuiltIns = []FuncNew{
 	// function `PI`
 	{
 		functionId: PI,
-		class:      plan.Function_STRICT | plan.Function_MONOTONIC,
+		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
 		layout:     STANDARD_FUNCTION,
 		checkFn:    fixedTypeMatch,
 
@@ -2799,7 +2914,7 @@ var supportedMathBuiltIns = []FuncNew{
 	// function `round`
 	{
 		functionId: ROUND,
-		class:      plan.Function_STRICT | plan.Function_MONOTONIC,
+		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
 		layout:     STANDARD_FUNCTION,
 		checkFn:    fixedTypeMatch,
 
@@ -3049,7 +3164,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 	// function `date`
 	{
 		functionId: DATE,
-		class:      plan.Function_STRICT | plan.Function_MONOTONIC,
+		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
 		layout:     STANDARD_FUNCTION,
 		checkFn:    fixedTypeMatch,
 
@@ -3516,6 +3631,70 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				},
 				newOp: func() executeLogicOfOverload {
 					return buildInPurgeLog
+				},
+			},
+		},
+	},
+
+	// function `mo_cu`
+	{
+		functionId: MO_CU,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				volatile:   true,
+				args:       []types.T{types.T_varchar, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_float64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return buildInMOCU
+				},
+			},
+			{
+				overloadId: 0,
+				volatile:   true,
+				args:       []types.T{types.T_varchar, types.T_int64, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_float64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return buildInMOCU
+				},
+			},
+		},
+	},
+	{
+		functionId: MO_CU_V1,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				volatile:   true,
+				args:       []types.T{types.T_varchar, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_float64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return buildInMOCUv1
+				},
+			},
+			{
+				overloadId: 0,
+				volatile:   true,
+				args:       []types.T{types.T_varchar, types.T_int64, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_float64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return buildInMOCUv1
 				},
 			},
 		},
@@ -4038,7 +4217,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 	// function `year`
 	{
 		functionId: YEAR,
-		class:      plan.Function_STRICT | plan.Function_MONOTONIC,
+		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
 		layout:     STANDARD_FUNCTION,
 		checkFn:    fixedTypeMatch,
 
@@ -5032,6 +5211,28 @@ var supportedOthersBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `mo_show_visible_bin_enum`
+	{
+		functionId: MO_SHOW_VISIBLE_BIN_ENUM,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				volatile:   true,
+				args:       []types.T{types.T_varchar, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return builtInMoShowVisibleBinEnum
+				},
+			},
+		},
+	},
+
 	// function `cast_index_to_value`
 	{
 		functionId: CAST_INDEX_TO_VALUE,
@@ -5544,7 +5745,7 @@ var supportedOthersBuiltIns = []FuncNew{
 									if !null2 {
 										tuples, _, err := types.DecodeTuple(value)
 										if err == nil { // complex key
-											return moerr.NewDuplicateEntry(proc.Ctx, tuples.ErrString(), string(col))
+											return moerr.NewDuplicateEntry(proc.Ctx, tuples.ErrString(nil), string(col))
 										}
 										return moerr.NewDuplicateEntry(proc.Ctx, string(value), string(col))
 									}

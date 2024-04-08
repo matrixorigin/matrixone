@@ -18,26 +18,35 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"math"
+	"sort"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/defines"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/assert"
-	"math"
-	"sort"
-	"testing"
-	"time"
 
 	"github.com/golang/mock/gomock"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	cvey "github.com/smartystreets/goconvey/convey"
+
 	"github.com/stretchr/testify/require"
 )
 
@@ -440,7 +449,8 @@ func TestGetSimpleExprValue(t *testing.T) {
 			{"set @@x=-x", true, nil},
 		}
 		ctrl := gomock.NewController(t)
-		ses := NewSession(&FakeProtocol{}, testutil.NewProc().Mp(), config.NewParameterUnit(nil, mock_frontend.NewMockEngine(ctrl), mock_frontend.NewMockTxnClient(ctrl), nil), GSysVariables, false, nil, nil)
+		ses := newTestSession(t, ctrl)
+		//ses := NewSession(&FakeProtocol{}, testutil.NewProc().Mp(), config.NewParameterUnit(nil, mock_frontend.NewMockEngine(ctrl), mock_frontend.NewMockTxnClient(ctrl), nil), GSysVariables, false, nil, nil)
 		ses.txnCompileCtx.SetProcess(testutil.NewProc())
 		ses.requestCtx = ctx
 		for _, kase := range kases {
@@ -477,7 +487,8 @@ func TestGetSimpleExprValue(t *testing.T) {
 			{"set @@x=-1.2345670", false, fmt.Sprintf("%v", dec3.Format(7))},
 		}
 		ctrl := gomock.NewController(t)
-		ses := NewSession(&FakeProtocol{}, testutil.NewProc().Mp(), config.NewParameterUnit(nil, mock_frontend.NewMockEngine(ctrl), mock_frontend.NewMockTxnClient(ctrl), nil), GSysVariables, false, nil, nil)
+		ses := newTestSession(t, ctrl)
+		//ses := NewSession(&FakeProtocol{}, testutil.NewProc().Mp(), config.NewParameterUnit(nil, mock_frontend.NewMockEngine(ctrl), mock_frontend.NewMockTxnClient(ctrl), nil), GSysVariables, false, nil, nil)
 		ses.txnCompileCtx.SetProcess(testutil.NewProc())
 		ses.requestCtx = ctx
 		for _, kase := range kases {
@@ -499,7 +510,7 @@ func TestGetSimpleExprValue(t *testing.T) {
 }
 
 func TestGetExprValue(t *testing.T) {
-	ctx := context.TODO()
+	ctx := defines.AttachAccountId(context.TODO(), sysAccountID)
 	cvey.Convey("", t, func() {
 		type args struct {
 			sql     string
@@ -620,7 +631,9 @@ func TestGetExprValue(t *testing.T) {
 		ws.EXPECT().GetSQLCount().AnyTimes()
 		ws.EXPECT().StartStatement().AnyTimes()
 		ws.EXPECT().EndStatement().AnyTimes()
-		ws.EXPECT().Adjust().AnyTimes()
+		ws.EXPECT().GetSnapshotWriteOffset().Return(0).AnyTimes()
+		ws.EXPECT().UpdateSnapshotWriteOffset().AnyTimes()
+		ws.EXPECT().Adjust(gomock.Any()).AnyTimes()
 
 		txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
 		txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
@@ -628,6 +641,8 @@ func TestGetExprValue(t *testing.T) {
 		txnOperator.EXPECT().GetWorkspace().Return(ws).AnyTimes()
 		txnOperator.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
 		txnOperator.EXPECT().ResetRetry(gomock.Any()).AnyTimes()
+		txnOperator.EXPECT().EnterRunSql().Return().AnyTimes()
+		txnOperator.EXPECT().ExitRunSql().Return().AnyTimes()
 
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
 		txnClient.EXPECT().New(gomock.Any(), gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
@@ -661,11 +676,11 @@ func TestGetExprValue(t *testing.T) {
 				switch ret := value.(type) {
 				case *plan.Expr:
 					if types.T(ret.GetTyp().GetId()) == types.T_decimal64 {
-						cvey.So(ret.GetC().GetDecimal64Val().GetA(), cvey.ShouldEqual, kase.want)
+						cvey.So(ret.GetLit().GetDecimal64Val().GetA(), cvey.ShouldEqual, kase.want)
 					} else if types.T(ret.GetTyp().GetId()) == types.T_decimal128 {
 						temp := kase.want.(types.Decimal128)
-						cvey.So(uint64(ret.GetC().GetDecimal128Val().GetA()), cvey.ShouldEqual, temp.B0_63)
-						cvey.So(uint64(ret.GetC().GetDecimal128Val().GetB()), cvey.ShouldEqual, temp.B64_127)
+						cvey.So(uint64(ret.GetLit().GetDecimal128Val().GetA()), cvey.ShouldEqual, temp.B0_63)
+						cvey.So(uint64(ret.GetLit().GetDecimal128Val().GetB()), cvey.ShouldEqual, temp.B64_127)
 					} else {
 						panic(fmt.Sprintf("unknown expr type %v", ret.GetTyp()))
 					}
@@ -719,7 +734,9 @@ func TestGetExprValue(t *testing.T) {
 		ws.EXPECT().IncrStatementID(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 		ws.EXPECT().StartStatement().AnyTimes()
 		ws.EXPECT().EndStatement().AnyTimes()
-		ws.EXPECT().Adjust().AnyTimes()
+		ws.EXPECT().GetSnapshotWriteOffset().Return(0).AnyTimes()
+		ws.EXPECT().UpdateSnapshotWriteOffset().AnyTimes()
+		ws.EXPECT().Adjust(uint64(0)).AnyTimes()
 		ws.EXPECT().IncrSQLCount().AnyTimes()
 		ws.EXPECT().GetSQLCount().AnyTimes()
 
@@ -729,6 +746,8 @@ func TestGetExprValue(t *testing.T) {
 		txnOperator.EXPECT().GetWorkspace().Return(ws).AnyTimes()
 		txnOperator.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
 		txnOperator.EXPECT().ResetRetry(gomock.Any()).AnyTimes()
+		txnOperator.EXPECT().EnterRunSql().Return().AnyTimes()
+		txnOperator.EXPECT().ExitRunSql().Return().AnyTimes()
 
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
 		txnClient.EXPECT().New(gomock.Any(), gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
@@ -872,4 +891,192 @@ func TestRewriteError(t *testing.T) {
 			assert.Equalf(t, tt.want2, got2, "RewriteError(%v, %v)", tt.args.err, tt.args.username)
 		})
 	}
+}
+
+func Test_makeExecuteSql(t *testing.T) {
+	type args struct {
+		ses  *Session
+		stmt tree.Statement
+	}
+
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	eng := mock_frontend.NewMockEngine(ctrl)
+	eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+
+	txnClient := mock_frontend.NewMockTxnClient(ctrl)
+
+	sv := &config.FrontendParameters{
+		SessionTimeout: toml.Duration{Duration: 5 * time.Minute},
+	}
+
+	pu := config.NewParameterUnit(sv, eng, txnClient, nil)
+	ses1 := NewSession(&FakeProtocol{}, testutil.NewProc().Mp(), pu, GSysVariables, true, nil, nil)
+
+	ses1.SetUserDefinedVar("var2", "val2", "set var2 = val2")
+	ses1.SetUserDefinedVar("var3", "val3", "set var3 = val3")
+	ses1.SetPrepareStmt("st2", &PrepareStmt{
+		Name: "st2",
+		Sql:  "prepare st2 select * from t where a = ?",
+	})
+	ses1.SetPrepareStmt("st3", &PrepareStmt{
+		Name: "st3",
+		Sql:  "prepare st3 select * from t where a = ? and b = ?",
+	})
+
+	mp, err := mpool.NewMPool("ut_pool", 0, mpool.NoFixed)
+	if err != nil {
+		assert.NoError(t, err)
+	}
+	defer mpool.DeleteMPool(mp)
+
+	testProc := process.New(context.Background(), mp, nil, nil, nil, nil, nil, nil, nil, nil)
+
+	params1 := testProc.GetVector(types.T_text.ToType())
+	for i := 0; i < 3; i++ {
+		err = vector.AppendBytes(params1, []byte{}, false, testProc.GetMPool())
+		assert.NoError(t, err)
+	}
+
+	util.SetAnyToStringVector(testProc, "aVal", params1, 0)
+	util.SetAnyToStringVector(testProc, "NULL", params1, 1)
+	util.SetAnyToStringVector(testProc, "bVal", params1, 2)
+
+	ses1.SetPrepareStmt("st4", &PrepareStmt{
+		Name:   "st4",
+		Sql:    "prepare st4 select * from t where a = ? and b = ?",
+		params: params1,
+	})
+
+	ses1.SetPrepareStmt("st5", nil)
+
+	tests := []struct {
+		name string
+		args args
+		want string
+	}{
+		{
+			name: "t1",
+			args: args{},
+			want: "",
+		},
+		{
+			name: "t2",
+			args: args{
+				ses:  &Session{},
+				stmt: &tree.SetVar{},
+			},
+			want: "",
+		},
+		{
+			name: "t3",
+			args: args{
+				ses: ses1,
+				stmt: &tree.Execute{
+					Name: "st1",
+				},
+			},
+			want: "",
+		},
+		{
+			name: "t4-no variables - no params",
+			args: args{
+				ses: ses1,
+				stmt: &tree.Execute{
+					Name: "st2",
+				},
+			},
+			want: "prepare st2 select * from t where a = ? ;",
+		},
+		{
+			name: "t5 - variables",
+			args: args{
+				ses: ses1,
+				stmt: &tree.Execute{
+					Name: "st3",
+					Variables: []*tree.VarExpr{
+						{
+							Name: "var2",
+						},
+						{
+							Name: "var-none",
+						},
+						{
+							Name: "var3",
+						},
+					},
+				},
+			},
+			want: "prepare st3 select * from t where a = ? and b = ? ; set var2 = val2 ;  ; set var3 = val3",
+		},
+		{
+			name: "t6 - params",
+			args: args{
+				ses: ses1,
+				stmt: &tree.Execute{
+					Name: "st4",
+				},
+			},
+			want: "prepare st4 select * from t where a = ? and b = ? ; aVal ; NULL ; bVal",
+		},
+		{
+			name: "t7 - params is nil",
+			args: args{
+				ses: ses1,
+				stmt: &tree.Execute{
+					Name: "st5",
+				},
+			},
+			want: "",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := makeExecuteSql(tt.args.ses, tt.args.stmt); strings.TrimSpace(got) != strings.TrimSpace(tt.want) {
+				t.Errorf("makeExecuteSql() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func Test_getVariableValue(t *testing.T) {
+	type args struct {
+		varDefault interface{}
+	}
+	tests := []struct {
+		name string
+		args args
+		want string
+	}{
+		{name: "0.1", args: args{varDefault: 0.1}, want: "0.100000"},
+		{name: "0.000001", args: args{varDefault: 0.000001}, want: "0.000001"},
+		{name: "0.0000009", args: args{varDefault: 0.0000009}, want: "9.000000e-07"},
+		{name: "7.43e-14", args: args{varDefault: 7.43e-14}, want: "7.430000e-14"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := getVariableValue(tt.args.varDefault)
+			assert.Equalf(t, tt.want, got, "getVariableValue(%v)", tt.args.varDefault)
+		})
+	}
+}
+
+var _ error = &testErr{}
+
+type testErr struct {
+}
+
+func (t testErr) Error() string {
+	return "test"
+}
+
+func Test_isErrorRollbackWholeTxn(t *testing.T) {
+	assert.Equal(t, false, isErrorRollbackWholeTxn(nil))
+	assert.Equal(t, false, isErrorRollbackWholeTxn(&testError{}))
+	assert.Equal(t, true, isErrorRollbackWholeTxn(moerr.NewDeadLockDetectedNoCtx()))
+	assert.Equal(t, true, isErrorRollbackWholeTxn(moerr.NewLockTableBindChangedNoCtx()))
+	assert.Equal(t, true, isErrorRollbackWholeTxn(moerr.NewLockTableNotFoundNoCtx()))
+	assert.Equal(t, true, isErrorRollbackWholeTxn(moerr.NewDeadlockCheckBusyNoCtx()))
+	//assert.Equal(t, true, isErrorRollbackWholeTxn(moerr.NewLockConflictNoCtx()))
 }

@@ -16,10 +16,11 @@ package cache
 
 import (
 	"fmt"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"math"
 	"sort"
+
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/compress"
@@ -208,6 +209,7 @@ func (cc *CatalogCache) GetTable(tbl *TableItem) bool {
 	var tableId uint64
 	deleted := make(map[uint64]bool)
 	inserted := make(map[uint64]*TableItem)
+	tbl.Id = math.MaxUint64
 	cc.tables.data.Ascend(tbl, func(item *TableItem) bool {
 		if item.deleted && item.AccountId == tbl.AccountId &&
 			item.DatabaseId == tbl.DatabaseId && item.Name == tbl.Name {
@@ -281,6 +283,7 @@ func (cc *CatalogCache) GetDatabase(db *DatabaseItem) bool {
 			item.Name == db.Name {
 			find = true
 			db.Id = item.Id
+			db.Rowid = item.Rowid
 			db.CreateSql = item.CreateSql
 			db.Typ = item.Typ
 		}

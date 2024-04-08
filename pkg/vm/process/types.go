@@ -16,6 +16,7 @@ package process
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"io"
 	"sync"
 	"sync/atomic"
@@ -47,6 +48,7 @@ const (
 // Analyze analyzes information for operator
 type Analyze interface {
 	Stop()
+	ChildrenCallStop(time.Time)
 	Start()
 	Alloc(int64)
 	Input(*batch.Batch, bool)
@@ -152,6 +154,11 @@ type AnalyzeInfo struct {
 	ScanTime int64
 	// InsertTime, insert cost time in load flow
 	InsertTime int64
+
+	// time consumed by every single parallel
+	mu                     *sync.Mutex
+	TimeConsumedArrayMajor []int64
+	TimeConsumedArrayMinor []int64
 }
 
 type ExecStatus int
@@ -343,10 +350,10 @@ type sqlHelper interface {
 }
 
 type WrapCs struct {
-	MsgId  uint64
-	Uid    uuid.UUID
-	Cs     morpc.ClientSession
-	DoneCh chan struct{}
+	MsgId uint64
+	Uid   uuid.UUID
+	Cs    morpc.ClientSession
+	Err   chan error
 }
 
 func (proc *Process) SetStmtProfile(sp *StmtProfile) {
@@ -448,9 +455,12 @@ func (proc *Process) SetCacheForAutoCol(name string) {
 }
 
 type analyze struct {
-	start    time.Time
-	wait     time.Duration
-	analInfo *AnalyzeInfo
+	parallelMajor        bool
+	parallelIdx          int
+	start                time.Time
+	wait                 time.Duration
+	analInfo             *AnalyzeInfo
+	childrenCallDuration time.Duration
 }
 
 func (si *SessionInfo) GetUser() string {
@@ -490,20 +500,44 @@ func (si *SessionInfo) GetVersion() string {
 	return si.Version
 }
 
-func (a *AnalyzeInfo) Reset() {
-	a.NodeId = 0
-	a.InputRows = 0
-	a.OutputRows = 0
-	a.TimeConsumed = 0
-	a.WaitTimeConsumed = 0
-	a.InputSize = 0
-	a.OutputSize = 0
-	a.MemorySize = 0
-	a.DiskIO = 0
-	a.S3IOByte = 0
-	a.S3IOInputCount = 0
-	a.S3IOOutputCount = 0
-	a.NetworkIO = 0
-	a.ScanTime = 0
-	a.InsertTime = 0
+func (a *AnalyzeInfo) AddNewParallel(major bool) int {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if major {
+		a.TimeConsumedArrayMajor = append(a.TimeConsumedArrayMajor, 0)
+		return len(a.TimeConsumedArrayMajor) - 1
+	} else {
+		a.TimeConsumedArrayMinor = append(a.TimeConsumedArrayMinor, 0)
+		return len(a.TimeConsumedArrayMinor) - 1
+	}
+}
+
+func (a *AnalyzeInfo) DeepCopyArray(pa *plan.AnalyzeInfo) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	pa.TimeConsumedArrayMajor = pa.TimeConsumedArrayMajor[:0]
+	pa.TimeConsumedArrayMajor = append(pa.TimeConsumedArrayMajor, a.TimeConsumedArrayMajor...)
+	pa.TimeConsumedArrayMinor = pa.TimeConsumedArrayMinor[:0]
+	pa.TimeConsumedArrayMinor = append(pa.TimeConsumedArrayMinor, a.TimeConsumedArrayMinor...)
+}
+
+func (a *AnalyzeInfo) MergeArray(pa *plan.AnalyzeInfo) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.TimeConsumedArrayMajor = append(a.TimeConsumedArrayMajor, pa.TimeConsumedArrayMajor...)
+	a.TimeConsumedArrayMinor = append(a.TimeConsumedArrayMinor, pa.TimeConsumedArrayMinor...)
+}
+
+func (a *AnalyzeInfo) AddSingleParallelTimeConsumed(major bool, parallelIdx int, t int64) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if major {
+		if parallelIdx >= 0 && parallelIdx < len(a.TimeConsumedArrayMajor) {
+			a.TimeConsumedArrayMajor[parallelIdx] += t
+		}
+	} else {
+		if parallelIdx >= 0 && parallelIdx < len(a.TimeConsumedArrayMinor) {
+			a.TimeConsumedArrayMinor[parallelIdx] += t
+		}
+	}
 }

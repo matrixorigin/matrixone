@@ -48,6 +48,13 @@ const (
 	IndexTableNamePrefix          = PrefixIndexTableName
 	// MOAutoIncrTable mo auto increment table name
 	MOAutoIncrTable = "mo_increment_columns"
+	// TableTailAttr are attrs in table tail
+	TableTailAttrCommitTs = "__mo_%1_commit_time"
+	TableTailAttrAborted  = "__mo_%1_aborted"
+	TableTailAttrPKVal    = "__mo_%1_pk_val"
+
+	// MOForeignKeys saves the fk relationships
+	MOForeignKeys = "mo_foreign_keys"
 )
 
 var InternalColumns = map[string]int8{
@@ -112,6 +119,7 @@ const (
 
 	MO_SYSTEM_METRICS = "system_metrics"
 	MO_METRIC         = "metric"
+	MO_SQL_STMT_CU    = "sql_statement_cu"
 
 	// default database name for catalog
 	MO_CATALOG  = "mo_catalog"
@@ -759,12 +767,15 @@ var (
 	QueryResultPath     string
 	QueryResultMetaPath string
 	QueryResultMetaDir  string
+	//ProfileDir holds all profiles dumped by the runtime/pprof
+	ProfileDir string
 )
 
 func init() {
 	QueryResultPath = fileservice.JoinPath(defines.SharedFileServiceName, "/query_result/%s_%s_%d.blk")
 	QueryResultMetaPath = fileservice.JoinPath(defines.SharedFileServiceName, "/query_result_meta/%s_%s.blk")
 	QueryResultMetaDir = fileservice.JoinPath(defines.SharedFileServiceName, "/query_result_meta")
+	ProfileDir = fileservice.JoinPath(defines.ETLFileServiceName, "/profile")
 }
 
 const QueryResultName = "%s_%s_%d.blk"

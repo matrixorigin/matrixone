@@ -20,6 +20,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/defines"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -77,6 +79,41 @@ var (
 			step       bigint unsigned,  
 			primary key(table_id, col_name)
 		);`, catalog.MO_CATALOG, catalog.MOAutoIncrTable),
+
+		fmt.Sprintf(`create table %s.%s(
+			constraint_name varchar(5000) not null,
+			constraint_id BIGINT UNSIGNED not null default 0,
+			db_name varchar(5000) not null,
+			db_id BIGINT UNSIGNED not null default 0,
+			table_name varchar(5000) not null,
+			table_id BIGINT UNSIGNED not null default 0,
+			column_name varchar(256) not null,
+			column_id BIGINT UNSIGNED not null default 0,
+			refer_db_name varchar(5000) not null,
+			refer_db_id BIGINT UNSIGNED not null default 0,
+			refer_table_name varchar(5000) not null,
+			refer_table_id BIGINT UNSIGNED not null default 0,
+			refer_column_name varchar(256) not null,
+			refer_column_id BIGINT UNSIGNED not null default 0,
+			on_delete varchar(128) not null,
+			on_update varchar(128) not null,
+	
+			primary key(
+				constraint_name,
+				constraint_id,
+				db_name,
+				db_id,
+				table_name,
+				table_id,
+				column_name,
+				column_id,
+				refer_db_name,
+				refer_db_id,
+				refer_table_name,
+				refer_table_id,
+				refer_column_name,
+				refer_column_id)
+		);`, catalog.MO_CATALOG, catalog.MOForeignKeys),
 	}
 
 	step2InitSQLs = []string{
@@ -84,7 +121,7 @@ var (
 			catalog.MOTaskDB),
 
 		fmt.Sprintf(`create table %s.sys_async_task (
-			task_id                     int primary key auto_increment,
+			task_id                     bigint primary key auto_increment,
 			task_metadata_id            varchar(50) unique not null,
 			task_metadata_executor      int,
 			task_metadata_context       blob,
@@ -101,7 +138,7 @@ var (
 			catalog.MOTaskDB),
 
 		fmt.Sprintf(`create table %s.sys_cron_task (
-			cron_task_id				int primary key auto_increment,
+			cron_task_id				bigint primary key auto_increment,
     		task_metadata_id            varchar(50) unique not null,
 			task_metadata_executor      int,
 			task_metadata_context       blob,
@@ -114,7 +151,7 @@ var (
 			catalog.MOTaskDB),
 
 		fmt.Sprintf(`create table %s.sys_daemon_task (
-			task_id                     int primary key auto_increment,
+			task_id                     bigint primary key auto_increment,
 			task_metadata_id            varchar(50),
 			task_metadata_executor      int,
 			task_metadata_context       blob,
@@ -166,7 +203,7 @@ func NewBootstrapper(
 
 func (b *bootstrapper) Bootstrap(ctx context.Context) error {
 	getLogger().Info("start to check bootstrap state")
-
+	ctx = defines.AttachAccount(ctx, catalog.System_Account, catalog.System_User, catalog.System_Role)
 	if ok, err := b.checkAlreadyBootstrapped(ctx); ok {
 		getLogger().Info("mo already boostrapped")
 		return nil

@@ -30,7 +30,7 @@ func readWriteConfilictCheck[T catalog.BaseNode[T]](entry *catalog.BaseEntryImpl
 	defer entry.RUnlock()
 	needWait, txnToWait := entry.GetLatestNodeLocked().NeedWaitCommitting(ts)
 	// TODO:
-	// I don't think we need to wait here any more. `block` and `segment` are
+	// I don't think we need to wait here any more. `block` and `Object` are
 	// local metadata and never be involved in a 2PC txn. So a prepared `block`
 	// will never be rollbacked
 	if needWait {
@@ -66,7 +66,7 @@ func newWarChecker(txn txnif.AsyncTxn, c *catalog.Catalog) *warChecker {
 func (checker *warChecker) CacheGet(
 	dbID uint64,
 	tableID uint64,
-	segmentID *types.Segmentid,
+	ObjectID *types.Objectid,
 	blockID *objectio.Blockid) (block *catalog.BlockEntry, err error) {
 	block = checker.cacheGet(blockID)
 	if block != nil {
@@ -80,11 +80,11 @@ func (checker *warChecker) CacheGet(
 	if err != nil {
 		return
 	}
-	segment, err := table.GetSegmentByID(segmentID)
+	Object, err := table.GetObjectByID(ObjectID)
 	if err != nil {
 		return
 	}
-	block, err = segment.GetBlockEntryByID(blockID)
+	block, err = Object.GetBlockEntryByID(blockID)
 	if err != nil {
 		return
 	}
@@ -95,9 +95,9 @@ func (checker *warChecker) CacheGet(
 func (checker *warChecker) InsertByID(
 	dbID uint64,
 	tableID uint64,
-	segmentID *types.Segmentid,
+	ObjectID *types.Objectid,
 	blockID *objectio.Blockid) {
-	block, err := checker.CacheGet(dbID, tableID, segmentID, blockID)
+	block, err := checker.CacheGet(dbID, tableID, ObjectID, blockID)
 	if err != nil {
 		panic(err)
 	}

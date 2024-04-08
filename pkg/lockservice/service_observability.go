@@ -49,27 +49,23 @@ func (s *service) GetWaitingList(
 	return true, waitingList, nil
 }
 
-func (s *service) ForceRefreshLockTableBinds(targets ...uint64) {
-	contains := func(id uint64) bool {
+func (s *service) ForceRefreshLockTableBinds(
+	targets []uint64,
+	matcher func(bind pb.LockTable) bool) {
+	contains := func(id uint64, l lockTable) bool {
 		if len(targets) == 0 {
 			return true
 		}
+
 		for _, v := range targets {
-			if v == id {
+			if v == id && (matcher == nil || matcher(l.getBind())) {
 				return true
 			}
 		}
 		return false
 	}
 
-	s.tables.Range(func(key, value any) bool {
-		id := key.(uint64)
-		if contains(id) {
-			value.(lockTable).close()
-			s.tables.Delete(key)
-		}
-		return true
-	})
+	s.tables.removeWithFilter(contains)
 }
 
 func (s *service) GetLockTableBind(tableID uint64) (pb.LockTable, error) {
@@ -84,9 +80,8 @@ func (s *service) GetLockTableBind(tableID uint64) (pb.LockTable, error) {
 }
 
 func (s *service) IterLocks(fn func(tableID uint64, keys [][]byte, lock Lock) bool) {
-	s.tables.Range(func(key, value any) bool {
-		tableID := key.(uint64)
-		l, ok := value.(lockTable).(*localLockTable)
+	s.tables.iter(func(tableID uint64, value lockTable) bool {
+		l, ok := value.(*localLockTable)
 		if !ok {
 			return true
 		}
@@ -107,4 +102,18 @@ func (s *service) IterLocks(fn func(tableID uint64, keys [][]byte, lock Lock) bo
 			return !stop
 		}()
 	})
+}
+
+func (s *service) CloseRemoteLockTable(
+	tableID uint64,
+	version uint64) (bool, error) {
+	removed := false
+	s.tables.removeWithFilter(func(id uint64, lt lockTable) bool {
+		ok := id == tableID && lt.getBind().Version == version
+		if ok {
+			removed = ok
+		}
+		return ok
+	})
+	return removed, nil
 }

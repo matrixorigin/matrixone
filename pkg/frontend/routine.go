@@ -25,7 +25,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"go.uber.org/zap"
 )
@@ -64,6 +66,8 @@ type Routine struct {
 	restricted atomic.Bool
 
 	printInfoOnce bool
+
+	migrateOnce sync.Once
 }
 
 func (rt *Routine) needPrintSessionInfo() bool {
@@ -204,6 +208,11 @@ func (rt *Routine) handleRequest(req *Request) error {
 	var resp *Response
 	var quit bool
 
+	v2.StartHandleRequestCounter.Inc()
+	defer func() {
+		v2.EndHandleRequestCounter.Inc()
+	}()
+
 	reqBegin := time.Now()
 	var span trace.Span
 	routineCtx, span = trace.Start(rt.getCancelRoutineCtx(), "Routine.handleRequest",
@@ -211,8 +220,6 @@ func (rt *Routine) handleRequest(req *Request) error {
 	defer span.End()
 
 	parameters := rt.getParameters()
-	mpi := rt.getProtocol()
-	mpi.SetSequenceID(req.seq)
 	cancelRequestCtx, cancelRequestFunc := context.WithTimeout(routineCtx, parameters.SessionTimeout.Duration)
 	executor := rt.getCmdExecutor()
 	executor.SetCancelFunc(cancelRequestFunc)
@@ -221,7 +228,7 @@ func (rt *Routine) handleRequest(req *Request) error {
 	ses.UpdateDebugString()
 
 	if rt.needPrintSessionInfo() {
-		logInfof(ses.GetDebugString(), "mo accept connection")
+		logInfof(ses.GetDebugString(), "mo received first request")
 	}
 
 	tenant := ses.GetTenantInfo()
@@ -229,9 +236,7 @@ func (rt *Routine) handleRequest(req *Request) error {
 	if ses.getRoutineManager().baseService != nil {
 		nodeCtx = context.WithValue(cancelRequestCtx, defines.NodeIDKey{}, ses.getRoutineManager().baseService.ID())
 	}
-	tenantCtx := context.WithValue(nodeCtx, defines.TenantIDKey{}, tenant.GetTenantID())
-	tenantCtx = context.WithValue(tenantCtx, defines.UserIDKey{}, tenant.GetUserID())
-	tenantCtx = context.WithValue(tenantCtx, defines.RoleIDKey{}, tenant.GetDefaultRoleID())
+	tenantCtx := defines.AttachAccount(nodeCtx, tenant.GetTenantID(), tenant.GetUserID(), tenant.GetDefaultRoleID())
 	ses.SetRequestContext(tenantCtx)
 	executor.SetSession(ses)
 
@@ -373,12 +378,36 @@ func (rt *Routine) cleanup() {
 
 		//step D: clean protocol
 		rt.protocol.Quit()
+		rt.protocol = nil
 
 		//step E: release the resources related to the session
 		if ses != nil {
 			ses.Close()
+			rt.ses = nil
 		}
 	})
+}
+
+func (rt *Routine) migrateConnectionTo(req *query.MigrateConnToRequest) error {
+	var err error
+	rt.migrateOnce.Do(func() {
+		ses := rt.getSession()
+		err = ses.Migrate(req)
+	})
+	return err
+}
+
+func (rt *Routine) migrateConnectionFrom(resp *query.MigrateConnFromResponse) error {
+	ses := rt.getSession()
+	resp.DB = ses.GetDatabaseName()
+	for _, st := range ses.GetPrepareStmts() {
+		resp.PrepareStmts = append(resp.PrepareStmts, &query.PrepareStmt{
+			Name:       st.Name,
+			SQL:        st.Sql,
+			ParamTypes: st.ParamTypes,
+		})
+	}
+	return nil
 }
 
 func NewRoutine(ctx context.Context, protocol MysqlProtocol, executor CmdExecutor, parameters *config.FrontendParameters, rs goetty.IOSession) *Routine {

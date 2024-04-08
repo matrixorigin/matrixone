@@ -16,6 +16,7 @@ package rightsemi
 
 import (
 	"bytes"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
@@ -58,7 +59,11 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 }
 
 func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
-	analyze := proc.GetAnalyze(arg.info.Idx)
+	if err, isCancel := vm.CancelCheck(proc); isCancel {
+		return vm.CancelResult, err
+	}
+
+	analyze := proc.GetAnalyze(arg.info.Idx, arg.info.ParallelIdx, arg.info.ParallelMajor)
 	analyze.Start()
 	defer analyze.Stop()
 	ap := arg
@@ -140,8 +145,11 @@ func (ctr *container) build(ap *Argument, proc *process.Process, analyze process
 		ctr.bat = bat
 		ctr.mp = bat.DupJmAuxData()
 		ctr.matched = &bitmap.Bitmap{}
-		ctr.matched.InitWithSize(bat.RowCount())
-		analyze.Alloc(ctr.mp.Size())
+		ctr.matched.InitWithSize(int64(bat.RowCount()))
+		mpSize := ctr.mp.Size()
+		if mpSize > ctr.maxAllocSize {
+			ctr.maxAllocSize = mpSize
+		}
 	}
 	return nil
 }
@@ -149,13 +157,24 @@ func (ctr *container) build(ap *Argument, proc *process.Process, analyze process
 func (ctr *container) sendLast(ap *Argument, proc *process.Process, analyze process.Analyze, isFirst bool, isLast bool, result *vm.CallResult) (bool, error) {
 	ctr.handledLast = true
 
+	if ctr.matched == nil {
+		return true, nil
+	}
+
 	if ap.NumCPU > 1 {
 		if !ap.IsMerger {
+
+			sendStart := time.Now()
 			ap.Channel <- ctr.matched
+			analyze.WaitStop(sendStart)
+
 			return true, nil
 		} else {
 			cnt := 1
 			// The original code didn't handle the context correctly and would cause the system to HUNG!
+
+			mergeStart := time.Now()
+
 			for completed := true; completed; {
 				select {
 				case <-proc.Ctx.Done():
@@ -169,11 +188,9 @@ func (ctr *container) sendLast(ap *Argument, proc *process.Process, analyze proc
 					}
 				}
 			}
-		}
-	}
 
-	if ctr.matched == nil {
-		return false, nil
+			analyze.WaitStop(mergeStart)
+		}
 	}
 
 	if ctr.rbat != nil {

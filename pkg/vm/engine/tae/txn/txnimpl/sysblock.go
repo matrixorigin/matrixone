@@ -38,7 +38,7 @@ func newSysBlock(table *txnTable, meta *catalog.BlockEntry) *txnSysBlock {
 	blk := &txnSysBlock{
 		txnBlock: newBlock(table, meta),
 		table:    table,
-		catalog:  meta.GetSegment().GetTable().GetCatalog(),
+		catalog:  meta.GetObject().GetTable().GetCatalog(),
 	}
 	return blk
 }

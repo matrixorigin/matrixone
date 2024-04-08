@@ -667,8 +667,9 @@ func convertToKafkaConfig(configs map[string]interface{}) *kafka.ConfigMap {
 			kafkaConfigs.SetKey(key, value)
 		}
 	}
-	groupId := uuid.New().String()
-	kafkaConfigs.SetKey("group.id", groupId)
+	// each time we create a new consumer group for gather all messages
+	groupId, _ := uuid.NewV7()
+	kafkaConfigs.SetKey("group.id", groupId.String())
 
 	return kafkaConfigs
 }

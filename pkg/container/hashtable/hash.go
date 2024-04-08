@@ -23,12 +23,13 @@ import (
 )
 
 var (
-	Int64BatchHash           = wyhashInt64Batch
-	Int64HashWithFixedSeed   = wyhash64WithFixedSeed
-	BytesBatchGenHashStates  = wyhashBytesBatch
-	Int192BatchGenHashStates = wyhashInt192Batch
-	Int256BatchGenHashStates = wyhashInt256Batch
-	Int320BatchGenHashStates = wyhashInt320Batch
+	Int64BatchHash                  = wyhashInt64Batch
+	Int64HashWithFixedSeed          = wyhash64WithFixedSeed
+	BytesBatchGenHashStates         = wyhashBytesBatch
+	BytesBatchGenHashStatesWithSeed = wyhashBytesBatchWithSeed
+	Int192BatchGenHashStates        = wyhashInt192Batch
+	Int256BatchGenHashStates        = wyhashInt256Batch
+	Int320BatchGenHashStates        = wyhashInt320Batch
 )
 
 // Hashing algorithm inspired by
@@ -136,6 +137,16 @@ func wyhashBytesBatch(data *[]byte, states *[3]uint64, length int) {
 		hashSlice[i][0] = wyhash(unsafe.Pointer(&dataSlice[i][0]), randseed, uint64(len(dataSlice[i])))
 		hashSlice[i][1] = wyhash(unsafe.Pointer(&dataSlice[i][0]), randseed<<32, uint64(len(dataSlice[i])))
 		hashSlice[i][2] = wyhash(unsafe.Pointer(&dataSlice[i][0]), randseed>>32, uint64(len(dataSlice[i])))
+	}
+}
+
+func wyhashBytesBatchWithSeed(data *[]byte, states *[3]uint64, length int, seed uint64) {
+	dataSlice := unsafe.Slice((*[]byte)(data), length)
+	hashSlice := unsafe.Slice((*[3]uint64)(states), length)
+	for i := 0; i < length; i++ {
+		hashSlice[i][0] = wyhash(unsafe.Pointer(&dataSlice[i][0]), seed, uint64(len(dataSlice[i])))
+		hashSlice[i][1] = wyhash(unsafe.Pointer(&dataSlice[i][0]), seed<<32, uint64(len(dataSlice[i])))
+		hashSlice[i][2] = wyhash(unsafe.Pointer(&dataSlice[i][0]), seed>>32, uint64(len(dataSlice[i])))
 	}
 }
 

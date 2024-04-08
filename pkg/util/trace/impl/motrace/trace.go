@@ -26,11 +26,15 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
+	db_holder "github.com/matrixorigin/matrixone/pkg/util/export/etl/db"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 )
@@ -64,6 +68,9 @@ func InitWithConfig(ctx context.Context, SV *config.ObservabilityParameters, opt
 		WithAggregatorWindow(SV.AggregationWindow.Duration),
 		WithSelectThreshold(SV.SelectAggrThreshold.Duration),
 		WithStmtMergeEnable(SV.EnableStmtMerge),
+		WithCUConfig(SV.CU, SV.CUv1),
+		WithTCPPacket(SV.TCPPacket),
+		WithLabels(SV.LabelSelector),
 
 		DebugMode(SV.EnableTraceDebug),
 		WithBufferSizeThreshold(SV.BufferSize),
@@ -100,6 +107,7 @@ func Init(ctx context.Context, opts ...TracerProviderOption) (err error, act boo
 	SetDefaultSpanContext(&sc)
 	serviceCtx := context.Background()
 	SetDefaultContext(trace.ContextWithSpanContext(serviceCtx, sc))
+	SetCuConfig(&config.cuConfig, &config.cuConfigV1)
 
 	// init Exporter
 	if err := initExporter(ctx, config); err != nil {
@@ -113,6 +121,9 @@ func Init(ctx context.Context, opts ...TracerProviderOption) (err error, act boo
 	logutil.SetLogReporter(&logutil.TraceReporter{ReportZap: ReportZap, ContextField: trace.ContextField})
 	logutil.SpanFieldKey.Store(trace.SpanFieldKey)
 	errutil.SetErrorReporter(ReportError)
+
+	// init db_hodler
+	db_holder.SetLabelSelector(config.labels)
 
 	logutil.Debugf("trace with LongQueryTime: %v", time.Duration(GetTracerProvider().longQueryTime))
 	logutil.Debugf("trace with LongSpanTime: %v", GetTracerProvider().longSpanTime)
@@ -150,6 +161,7 @@ func initExporter(ctx context.Context, config *tracerProviderConfig) error {
 // InitSchema
 // PS: only in standalone or CN node can init schema
 func InitSchema(ctx context.Context, sqlExecutor func() ie.InternalExecutor) error {
+	ctx = defines.AttachAccount(ctx, catalog.System_Account, catalog.System_User, catalog.System_Role)
 	c := &GetTracerProvider().tracerProviderConfig
 	WithSQLExecutor(sqlExecutor).apply(c)
 	if err := InitSchemaByInnerExecutor(ctx, sqlExecutor); err != nil {

@@ -49,7 +49,8 @@ type DB struct {
 	Dir  string
 	Opts *options.Options
 
-	Catalog *catalog.Catalog
+	usageMemo *logtail.TNUsageMemo
+	Catalog   *catalog.Catalog
 
 	TxnMgr *txnbase.TxnManager
 
@@ -69,6 +70,10 @@ type DB struct {
 	DBLocker io.Closer
 
 	Closed *atomic.Value
+}
+
+func (db *DB) GetUsageMemo() *logtail.TNUsageMemo {
+	return db.usageMemo
 }
 
 func (db *DB) FlushTable(
@@ -98,6 +103,27 @@ func (db *DB) ForceCheckpoint(
 		return err
 	}
 	logutil.Debugf("[Force Checkpoint] takes %v", time.Since(t0))
+	return err
+}
+
+func (db *DB) ForceGlobalCheckpoint(
+	ctx context.Context,
+	ts types.TS,
+	flushDuration time.Duration) (err error) {
+	// FIXME: cannot disable with a running job
+	db.BGCheckpointRunner.DisableCheckpoint()
+	defer db.BGCheckpointRunner.EnableCheckpoint()
+	db.BGCheckpointRunner.CleanPenddingCheckpoint()
+	t0 := time.Now()
+	err = db.BGCheckpointRunner.ForceFlush(ts, ctx, flushDuration)
+	logutil.Infof("[Force Global Checkpoint] flush takes %v: %v", time.Since(t0), err)
+	if err != nil {
+		return err
+	}
+	if err = db.BGCheckpointRunner.ForceGlobalCheckpointSynchronously(ctx, ts, 0); err != nil {
+		return err
+	}
+	logutil.Infof("[Force Global Checkpoint] takes %v", time.Since(t0))
 	return err
 }
 
@@ -169,6 +195,8 @@ func (db *DB) Replay(dataFactory *tables.DataFactory, maxTs types.TS, lsn uint64
 	replayer.Replay()
 
 	err := db.TxnMgr.Init(replayer.GetMaxTS())
+
+	db.usageMemo.EstablishFromCKPs(db.Catalog)
 	if err != nil {
 		panic(err)
 	}
@@ -193,5 +221,6 @@ func (db *DB) Close() error {
 	db.Catalog.Close()
 	db.DiskCleaner.Stop()
 	db.Runtime.TransferTable.Close()
+	db.usageMemo.Clear()
 	return db.DBLocker.Close()
 }

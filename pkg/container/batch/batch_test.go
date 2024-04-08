@@ -104,7 +104,10 @@ func newBatch(ts []types.Type, rows int) *Batch {
 		switch typ.Oid {
 		case types.T_int8:
 			vec := vector.NewVec(typ)
-			vec.PreExtend(rows, mp)
+			err := vec.PreExtend(rows, mp)
+			if err != nil {
+				panic(err)
+			}
 			vec.SetLength(rows)
 			vs := vector.MustFixedCol[int8](vec)
 			for j := range vs {

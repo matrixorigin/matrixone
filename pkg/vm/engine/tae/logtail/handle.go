@@ -445,6 +445,7 @@ type TableLogtailRespBuilder struct {
 	blkMetaInsBatch *containers.Batch
 	blkMetaDelBatch *containers.Batch
 	segMetaDelBatch *containers.Batch
+	objectMetaBatch *containers.Batch
 	dataInsBatches  map[uint32]*containers.Batch // schema version -> data batch
 	dataDelBatch    *containers.Batch
 }
@@ -458,7 +459,7 @@ func NewTableLogtailRespBuilder(ctx context.Context, ckp string, start, end type
 		checkpoint:    ckp,
 	}
 	b.BlockFn = b.VisitBlk
-	b.SegmentFn = b.VisitSeg
+	b.ObjectFn = b.VisitObj
 
 	b.did = tbl.GetDB().GetID()
 	b.tid = tbl.ID
@@ -470,6 +471,7 @@ func NewTableLogtailRespBuilder(ctx context.Context, ckp string, start, end type
 	b.blkMetaInsBatch = makeRespBatchFromSchema(BlkMetaSchema, common.LogtailAllocator)
 	b.blkMetaDelBatch = makeRespBatchFromSchema(DelSchema, common.LogtailAllocator)
 	b.segMetaDelBatch = makeRespBatchFromSchema(DelSchema, common.LogtailAllocator)
+	b.objectMetaBatch = makeRespBatchFromSchema(ObjectInfoSchema, common.LogtailAllocator)
 	return b
 }
 
@@ -494,24 +496,56 @@ func (b *TableLogtailRespBuilder) Close() {
 	}
 }
 
-func (b *TableLogtailRespBuilder) VisitSeg(e *catalog.SegmentEntry) error {
+func (b *TableLogtailRespBuilder) VisitObj(e *catalog.ObjectEntry) error {
 	e.RLock()
 	mvccNodes := e.ClonePreparedInRange(b.start, b.end)
 	e.RUnlock()
 
 	for _, node := range mvccNodes {
 		if node.HasDropCommitted() {
-			// send segment deletation event
+			// send Object deletation event
 			b.segMetaDelBatch.GetVectorByName(catalog.AttrCommitTs).Append(node.DeletedAt, false)
-			b.segMetaDelBatch.GetVectorByName(catalog.AttrRowID).Append(objectio.HackSegid2Rowid(&e.ID), false)
+			b.segMetaDelBatch.GetVectorByName(catalog.AttrRowID).Append(objectio.HackObjid2Rowid(&e.ID), false)
 		}
+		if e.IsAppendable() && node.BaseNode.IsEmpty() {
+			continue
+		}
+		visitObject(b.objectMetaBatch, e, node, false, types.TS{})
 	}
 	return nil
 }
 
+func visitObject(batch *containers.Batch, entry *catalog.ObjectEntry, node *catalog.MVCCNode[*catalog.ObjectMVCCNode], push bool, committs types.TS) {
+	batch.GetVectorByName(catalog.AttrRowID).Append(objectio.HackObjid2Rowid(&entry.ID), false)
+	if push {
+		batch.GetVectorByName(catalog.AttrCommitTs).Append(committs, false)
+	} else {
+		batch.GetVectorByName(catalog.AttrCommitTs).Append(node.TxnMVCCNode.End, false)
+	}
+	node.BaseNode.AppendTuple(&entry.ID, batch)
+	if push {
+		node.TxnMVCCNode.AppendTupleWithCommitTS(batch, committs)
+	} else {
+		node.TxnMVCCNode.AppendTuple(batch)
+	}
+	if push {
+		node.EntryMVCCNode.AppendTupleWithCommitTS(batch, committs)
+	} else {
+		node.EntryMVCCNode.AppendTuple(batch)
+	}
+	batch.GetVectorByName(SnapshotAttr_DBID).Append(entry.GetTable().GetDB().ID, false)
+	batch.GetVectorByName(SnapshotAttr_TID).Append(entry.GetTable().ID, false)
+	batch.GetVectorByName(ObjectAttr_State).Append(entry.IsAppendable(), false)
+	sorted := false
+	if entry.GetTable().GetLastestSchema().HasSortKey() && !entry.IsAppendable() {
+		sorted = true
+	}
+	batch.GetVectorByName(ObjectAttr_Sorted).Append(sorted, false)
+}
+
 // visitBlkMeta try to collect block metadata. It might prefetch and generate duplicated entry.
 // see also https://github.com/matrixorigin/docs/blob/main/tech-notes/dnservice/ref_logtail_protocol.md#table-metadata-prefetch
-func (b *TableLogtailRespBuilder) visitBlkMeta(e *catalog.BlockEntry) (skipData bool) {
+func (b *TableLogtailRespBuilder) visitBlkMeta(e *catalog.BlockEntry) (types.TS, bool) {
 	newEnd := b.end
 	e.RLock()
 	// try to find new end
@@ -536,16 +570,20 @@ func (b *TableLogtailRespBuilder) visitBlkMeta(e *catalog.BlockEntry) (skipData 
 		if e.IsAppendable() {
 			if !newest.BaseNode.MetaLoc.IsEmpty() {
 				// appendable block has been flushed, no need to collect data
-				return true
+				return types.MaxTs(), true
 			}
 		} else {
-			if !newest.BaseNode.DeltaLoc.IsEmpty() && newest.GetEnd().GreaterEq(b.end) {
-				// non-appendable block has newer delta data on s3, no need to collect data
-				return true
+			if !newest.BaseNode.DeltaLoc.IsEmpty() {
+				if newest.GetStart().GreaterEq(b.end) {
+					// non-appendable block has newer delta data on s3, no need to collect data
+					return types.MaxTs(), true
+				} else {
+					return newest.GetStart(), false
+				}
 			}
 		}
 	}
-	return false
+	return types.MaxTs(), false
 }
 
 // appendBlkMeta add block metadata into api entry according to logtail protocol
@@ -570,7 +608,7 @@ func visitBlkMeta(e *catalog.BlockEntry, node *catalog.MVCCNode[*catalog.Metadat
 	insBatch.GetVectorByName(pkgcatalog.BlockMeta_MetaLoc).Append([]byte(node.BaseNode.MetaLoc), false)
 	insBatch.GetVectorByName(pkgcatalog.BlockMeta_DeltaLoc).Append([]byte(node.BaseNode.DeltaLoc), false)
 	insBatch.GetVectorByName(pkgcatalog.BlockMeta_CommitTs).Append(committs, false)
-	insBatch.GetVectorByName(pkgcatalog.BlockMeta_SegmentID).Append(e.GetSegment().ID, false)
+	insBatch.GetVectorByName(pkgcatalog.BlockMeta_SegmentID).Append(*e.GetObject().ID.Segment(), false)
 	// for appendable block(deleted, because we skip empty metaloc), non-dropped non-appendabled blocks, those new nodes are
 	// produced by flush table tail, it's safe to truncate mem data in CN
 	memTruncTs := node.Start
@@ -597,7 +635,7 @@ func visitBlkMeta(e *catalog.BlockEntry, node *catalog.MVCCNode[*catalog.Metadat
 }
 
 // visitBlkData collects logtail in memory
-func (b *TableLogtailRespBuilder) visitBlkData(ctx context.Context, e *catalog.BlockEntry) (err error) {
+func (b *TableLogtailRespBuilder) visitBlkData(ctx context.Context, ts types.TS, e *catalog.BlockEntry) (err error) {
 	block := e.GetBlockData()
 	insBatch, err := block.CollectAppendInRange(b.start, b.end, false, common.LogtailAllocator)
 	if err != nil {
@@ -614,16 +652,19 @@ func (b *TableLogtailRespBuilder) visitBlkData(ctx context.Context, e *catalog.B
 			// insBatch is freed, don't use anymore
 		}
 	}
-	delBatch, err := block.CollectDeleteInRange(ctx, b.start, b.end, false, common.LogtailAllocator)
+	var delBatch *containers.Batch
+	if !ts.Equal(types.MaxTs()) {
+		delBatch, err = block.CollectDeleteInRangeAfterDeltalocation(ctx, ts, b.end, false, common.LogtailAllocator)
+	} else {
+		delBatch, err = block.CollectDeleteInRange(ctx, b.start, b.end, false, common.LogtailAllocator)
+	}
 	if err != nil {
 		return
 	}
 	if delBatch != nil && delBatch.Length() > 0 {
 		if len(b.dataDelBatch.Vecs) == 2 {
-			b.dataDelBatch.AddVector(
-				delBatch.Attrs[2],
-				containers.MakeVector(*delBatch.Vecs[2].GetType(), common.LogtailAllocator),
-			)
+			b.dataDelBatch.AddVector(catalog.AttrPKVal,
+				containers.MakeVector(*delBatch.GetVectorByName(catalog.AttrPKVal).GetType(), common.LogtailAllocator))
 		}
 		b.dataDelBatch.Extend(delBatch)
 		// delBatch is freed, don't use anymore
@@ -633,11 +674,12 @@ func (b *TableLogtailRespBuilder) visitBlkData(ctx context.Context, e *catalog.B
 
 // VisitBlk = catalog.Processor.OnBlock
 func (b *TableLogtailRespBuilder) VisitBlk(entry *catalog.BlockEntry) error {
-	if b.visitBlkMeta(entry) {
+	ts, skip := b.visitBlkMeta(entry)
+	if skip {
 		// data has been flushed, no need to collect data
 		return nil
 	}
-	return b.visitBlkData(b.ctx, entry)
+	return b.visitBlkData(b.ctx, ts, entry)
 }
 
 type TableRespKind int
@@ -645,7 +687,7 @@ type TableRespKind int
 const (
 	TableRespKind_Data TableRespKind = iota
 	TableRespKind_Blk
-	TableRespKind_Seg
+	TableRespKind_Obj
 )
 
 func (b *TableLogtailRespBuilder) BuildResp() (api.SyncLogTailResp, error) {
@@ -669,10 +711,10 @@ func (b *TableLogtailRespBuilder) BuildResp() (api.SyncLogTailResp, error) {
 			tableName = fmt.Sprintf("_%d_meta", b.tid)
 			logutil.Debugf("[logtail] table meta [%v] %d-%s: %s", typ, b.tid, b.tname,
 				DebugBatchToString("blkmeta", batch, false, zap.InfoLevel))
-		case TableRespKind_Seg:
-			tableName = fmt.Sprintf("_%d_seg", b.tid)
+		case TableRespKind_Obj:
+			tableName = fmt.Sprintf("_%d_obj", b.tid)
 			logutil.Debugf("[logtail] table meta [%v] %d-%s: %s", typ, b.tid, b.tname,
-				DebugBatchToString("segmeta", batch, false, zap.InfoLevel))
+				DebugBatchToString("object", batch, false, zap.InfoLevel))
 		}
 
 		entry := &api.Entry{
@@ -694,7 +736,7 @@ func (b *TableLogtailRespBuilder) BuildResp() (api.SyncLogTailResp, error) {
 	if err := tryAppendEntry(api.Entry_Delete, TableRespKind_Blk, b.blkMetaDelBatch, 0); err != nil {
 		return empty, err
 	}
-	if err := tryAppendEntry(api.Entry_Delete, TableRespKind_Seg, b.segMetaDelBatch, 0); err != nil {
+	if err := tryAppendEntry(api.Entry_Insert, TableRespKind_Obj, b.objectMetaBatch, 0); err != nil {
 		return empty, err
 	}
 	keys := make([]uint32, 0, len(b.dataInsBatches))
@@ -828,7 +870,7 @@ func LoadCheckpointEntries(
 	entries := make([]*api.Entry, 0)
 	for i := range objectLocations {
 		data := datas[i]
-		ins, del, cnIns, segDel, err := data.GetTableDataFromBats(tableID, bats[i])
+		ins, del, cnIns, objInfo, err := data.GetTableDataFromBats(tableID, bats[i])
 		if err != nil {
 			for j := range closeCBs {
 				if closeCBs[j] != nil {
@@ -875,14 +917,14 @@ func LoadCheckpointEntries(
 			}
 			entries = append(entries, entry)
 		}
-		if segDel != nil {
+		if objInfo != nil {
 			entry := &api.Entry{
-				EntryType:    api.Entry_Delete,
+				EntryType:    api.Entry_Insert,
 				TableId:      tableID,
-				TableName:    fmt.Sprintf("_%d_seg", tableID),
+				TableName:    fmt.Sprintf("_%d_obj", tableID),
 				DatabaseId:   dbID,
 				DatabaseName: dbName,
-				Bat:          segDel,
+				Bat:          objInfo,
 			}
 			entries = append(entries, entry)
 		}

@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -79,6 +80,10 @@ func (arg *Argument) Prepare(proc *process.Process) error {
 // vectors for querying the latest data, and subsequent op needs to check this column to check
 // whether the latest data needs to be read.
 func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
+	if err, isCancel := vm.CancelCheck(proc); isCancel {
+		return vm.CancelResult, err
+	}
+
 	txnOp := proc.TxnOperator
 	if !txnOp.Txn().IsPessimistic() {
 		return arg.children[0].Call(proc)
@@ -101,7 +106,7 @@ func callNonBlocking(
 		return result, err
 	}
 
-	anal := proc.GetAnalyze(arg.info.Idx)
+	anal := proc.GetAnalyze(arg.info.Idx, arg.info.ParallelIdx, arg.info.ParallelMajor)
 	anal.Start()
 	defer anal.Stop()
 
@@ -127,7 +132,7 @@ func callBlocking(
 	isFirst bool,
 	isLast bool) (vm.CallResult, error) {
 
-	anal := proc.GetAnalyze(arg.info.Idx)
+	anal := proc.GetAnalyze(arg.info.Idx, arg.info.ParallelIdx, arg.info.ParallelMajor)
 	anal.Start()
 	defer anal.Stop()
 
@@ -423,12 +428,19 @@ func doLock(
 	key := txnOp.AddWaitLock(tableID, rows, options)
 	defer txnOp.RemoveWaitLock(key)
 
-	result, err := lockService.Lock(
-		ctx,
-		tableID,
-		rows,
-		txn.ID,
-		options)
+	var err error
+	var result lock.Result
+	for i := 0; i < 10; i++ {
+		result, err = lockService.Lock(
+			ctx,
+			tableID,
+			rows,
+			txn.ID,
+			options)
+		if !canRetryLock(txnOp, err) {
+			break
+		}
+	}
 	if err != nil {
 		return false, false, timestamp.Timestamp{}, err
 	}
@@ -502,6 +514,17 @@ func doLock(
 		return false, false, timestamp.Timestamp{}, err
 	}
 	return true, result.TableDefChanged, snapshotTS, nil
+}
+
+func canRetryLock(txn client.TxnOperator, err error) bool {
+	if !moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged) ||
+		!moerr.IsMoErrCode(err, moerr.ErrLockTableNotFound) {
+		return false
+	}
+	if txn.LockTableCount() == 0 {
+		return true
+	}
+	return false
 }
 
 // DefaultLockOptions create a default lock operation. The parker is used to

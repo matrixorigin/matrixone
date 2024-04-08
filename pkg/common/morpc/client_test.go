@@ -126,7 +126,10 @@ func TestCanGetBackendIfALLLockedAndNotReachMaxPerHost(t *testing.T) {
 }
 
 func TestMaybeCreateLockedWithEmptyBackends(t *testing.T) {
-	rc, err := NewClient("", newTestBackendFactory(), WithClientMaxBackendPerHost(1))
+	rc, err := NewClient("",
+		newTestBackendFactory(),
+		WithClientMaxBackendPerHost(1),
+		WithClientEnableAutoCreateBackend())
 	assert.NoError(t, err)
 	c := rc.(*client)
 	defer func() {
@@ -137,7 +140,10 @@ func TestMaybeCreateLockedWithEmptyBackends(t *testing.T) {
 }
 
 func TestMaybeCreateLockedWithNotFullBackendsAndHasAnyBusy(t *testing.T) {
-	rc, err := NewClient("", newTestBackendFactory(), WithClientMaxBackendPerHost(3))
+	rc, err := NewClient("",
+		newTestBackendFactory(),
+		WithClientMaxBackendPerHost(3),
+		WithClientEnableAutoCreateBackend())
 	assert.NoError(t, err)
 	c := rc.(*client)
 	defer func() {
@@ -164,7 +170,10 @@ func TestMaybeCreateLockedWithNotFullBackendsAndNoBusy(t *testing.T) {
 }
 
 func TestMaybeCreateLockedWithFullBackends(t *testing.T) {
-	rc, err := NewClient("", newTestBackendFactory(), WithClientMaxBackendPerHost(1))
+	rc, err := NewClient("",
+		newTestBackendFactory(),
+		WithClientMaxBackendPerHost(1),
+		WithClientEnableAutoCreateBackend())
 	assert.NoError(t, err)
 	c := rc.(*client)
 	defer func() {
@@ -214,7 +223,8 @@ func TestCloseIdleBackends(t *testing.T) {
 		newTestBackendFactory(),
 		WithClientMaxBackendPerHost(2),
 		WithClientMaxBackendMaxIdleDuration(time.Millisecond*100),
-		WithClientCreateTaskChanSize(1))
+		WithClientCreateTaskChanSize(1),
+		WithClientEnableAutoCreateBackend())
 	assert.NoError(t, err)
 	c := rc.(*client)
 	defer func() {
@@ -283,7 +293,7 @@ func TestCloseIdleBackends(t *testing.T) {
 	}
 }
 
-func TestLockedbackendCannotClosedWithGCIdleTask(t *testing.T) {
+func TestLockedBackendCannotClosedWithGCIdleTask(t *testing.T) {
 	rc, err := NewClient(
 		"",
 		newTestBackendFactory(),

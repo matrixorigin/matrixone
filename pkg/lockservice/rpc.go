@@ -107,7 +107,7 @@ func (c *client) AsyncSend(ctx context.Context, request *pb.Request) (*morpc.Fut
 		switch request.Method {
 		case pb.Method_ForwardLock:
 			sid := getUUIDFromServiceIdentifier(request.Lock.Options.ForwardTo)
-			c.cluster.GetCNService(
+			c.cluster.GetCNServiceWithoutWorkingState(
 				clusterservice.NewServiceIDSelector(sid),
 				func(s metadata.CNService) bool {
 					address = s.LockServiceAddress
@@ -118,7 +118,7 @@ func (c *client) AsyncSend(ctx context.Context, request *pb.Request) (*morpc.Fut
 			pb.Method_GetTxnLock,
 			pb.Method_KeepRemoteLock:
 			sid := getUUIDFromServiceIdentifier(request.LockTable.ServiceID)
-			c.cluster.GetCNService(
+			c.cluster.GetCNServiceWithoutWorkingState(
 				clusterservice.NewServiceIDSelector(sid),
 				func(s metadata.CNService) bool {
 					address = s.LockServiceAddress
@@ -126,7 +126,7 @@ func (c *client) AsyncSend(ctx context.Context, request *pb.Request) (*morpc.Fut
 				})
 		case pb.Method_GetWaitingList:
 			sid := getUUIDFromServiceIdentifier(request.GetWaitingList.Txn.CreatedOn)
-			c.cluster.GetCNService(
+			c.cluster.GetCNServiceWithoutWorkingState(
 				clusterservice.NewServiceIDSelector(sid),
 				func(s metadata.CNService) bool {
 					address = s.LockServiceAddress
@@ -150,12 +150,38 @@ func (c *client) AsyncSend(ctx context.Context, request *pb.Request) (*morpc.Fut
 	if address == "" {
 		getLogger().Error("cannot find lockservice address",
 			zap.String("request", request.DebugString()))
+
 	}
 	return c.client.Send(ctx, address, request)
 }
 
 func (c *client) Close() error {
 	return c.client.Close()
+}
+
+func (c *client) Ping(ctx context.Context, serviceID string) error {
+	var address string
+	for i := 0; i < 2; i++ {
+		sid := getUUIDFromServiceIdentifier(serviceID)
+		c.cluster.GetCNServiceWithoutWorkingState(
+			clusterservice.NewServiceIDSelector(sid),
+			func(s metadata.CNService) bool {
+				address = s.LockServiceAddress
+				return false
+			})
+		if address != "" {
+			break
+		}
+		if i == 0 {
+			c.cluster.ForceRefresh(true)
+		}
+	}
+	if address == "" {
+		getLogger().Error("cannot ping lockservice address",
+			zap.String("serviceID", serviceID))
+
+	}
+	return c.client.Ping(ctx, address)
 }
 
 // WithServerMessageFilter set filter func. Requests can be modified or filtered out by the filter

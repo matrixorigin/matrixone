@@ -41,48 +41,48 @@ func describeExpr(ctx context.Context, expr *plan.Expr, options *ExplainOptions,
 			buf.WriteString("]")
 		}
 
-	case *plan.Expr_C:
-		if exprImpl.C.Isnull {
+	case *plan.Expr_Lit:
+		if exprImpl.Lit.Isnull {
 			buf.WriteString("(null)")
 			break
 		}
 
-		switch val := exprImpl.C.Value.(type) {
-		case *plan.Const_I8Val:
+		switch val := exprImpl.Lit.Value.(type) {
+		case *plan.Literal_I8Val:
 			fmt.Fprintf(buf, "%d", val.I8Val)
-		case *plan.Const_I16Val:
+		case *plan.Literal_I16Val:
 			fmt.Fprintf(buf, "%d", val.I16Val)
-		case *plan.Const_I32Val:
+		case *plan.Literal_I32Val:
 			fmt.Fprintf(buf, "%d", val.I32Val)
-		case *plan.Const_I64Val:
+		case *plan.Literal_I64Val:
 			fmt.Fprintf(buf, "%d", val.I64Val)
-		case *plan.Const_U8Val:
+		case *plan.Literal_U8Val:
 			fmt.Fprintf(buf, "%d", val.U8Val)
-		case *plan.Const_U16Val:
+		case *plan.Literal_U16Val:
 			fmt.Fprintf(buf, "%d", val.U16Val)
-		case *plan.Const_U32Val:
+		case *plan.Literal_U32Val:
 			fmt.Fprintf(buf, "%d", val.U32Val)
-		case *plan.Const_U64Val:
+		case *plan.Literal_U64Val:
 			fmt.Fprintf(buf, "%d", val.U64Val)
-		case *plan.Const_Fval:
+		case *plan.Literal_Fval:
 			fmt.Fprintf(buf, "%v", strconv.FormatFloat(float64(val.Fval), 'f', -1, 32))
-		case *plan.Const_Dval:
+		case *plan.Literal_Dval:
 			fmt.Fprintf(buf, "%v", strconv.FormatFloat(val.Dval, 'f', -1, 64))
-		case *plan.Const_Dateval:
+		case *plan.Literal_Dateval:
 			fmt.Fprintf(buf, "%s", types.Date(val.Dateval))
-		case *plan.Const_Datetimeval:
-			fmt.Fprintf(buf, "%s", types.Date(val.Datetimeval))
-		case *plan.Const_Timeval:
-			fmt.Fprintf(buf, "%s", types.Date(val.Timeval))
-		case *plan.Const_Sval:
+		case *plan.Literal_Datetimeval:
+			fmt.Fprintf(buf, "%s", types.Datetime(val.Datetimeval).String2(expr.Typ.Scale))
+		case *plan.Literal_Timeval:
+			fmt.Fprintf(buf, "%s", types.Time(val.Timeval).String2(expr.Typ.Scale))
+		case *plan.Literal_Sval:
 			buf.WriteString("'" + val.Sval + "'")
-		case *plan.Const_Bval:
+		case *plan.Literal_Bval:
 			fmt.Fprintf(buf, "%v", val.Bval)
-		case *plan.Const_EnumVal:
-			fmt.Fprintf(buf, "%v", types.Date(val.EnumVal))
-		case *plan.Const_Decimal64Val:
+		case *plan.Literal_EnumVal:
+			fmt.Fprintf(buf, "%v", val.EnumVal)
+		case *plan.Literal_Decimal64Val:
 			fmt.Fprintf(buf, "%s", types.Decimal64(val.Decimal64Val.A).Format(expr.Typ.GetScale()))
-		case *plan.Const_Decimal128Val:
+		case *plan.Literal_Decimal128Val:
 			fmt.Fprintf(buf, "%s",
 				types.Decimal128{B0_63: uint64(val.Decimal128Val.A), B64_127: uint64(val.Decimal128Val.B)}.Format(expr.Typ.GetScale()))
 		}
@@ -158,9 +158,9 @@ func describeExpr(ctx context.Context, expr *plan.Expr, options *ExplainOptions,
 				return err
 			}
 		}
-	case *plan.Expr_Bin:
+	case *plan.Expr_Vec:
 		vec := vector.NewVec(types.T_any.ToType())
-		vec.UnmarshalBinary(exprImpl.Bin.Data)
+		vec.UnmarshalBinary(exprImpl.Vec.Data)
 		buf.WriteString(vec.String())
 	default:
 		panic("unsupported expr")
@@ -277,6 +277,21 @@ func funcExprExplain(ctx context.Context, funcExpr *plan.Expr_F, Typ *plan.Type,
 			}
 		}
 		buf.WriteString(" END")
+	case function.BETWEEN_AND_EXPRESSION:
+		err = describeExpr(ctx, funcExpr.F.Args[0], options, buf)
+		if err != nil {
+			return err
+		}
+		buf.WriteString(" BETWEEN ")
+		err = describeExpr(ctx, funcExpr.F.Args[1], options, buf)
+		if err != nil {
+			return err
+		}
+		buf.WriteString(" AND ")
+		err = describeExpr(ctx, funcExpr.F.Args[2], options, buf)
+		if err != nil {
+			return err
+		}
 	case function.IN_PREDICATE:
 		if len(funcExpr.F.Args) != 2 {
 			panic("Nested query predicate,such as in,exist,all,any parameter number error!")

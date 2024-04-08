@@ -31,16 +31,16 @@ func (arg *Argument) Prepare(_ *process.Process) error {
 }
 
 func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
+	if err, isCancel := vm.CancelCheck(proc); isCancel {
+		return vm.CancelResult, err
+	}
+
 	reg := arg.Reg
 
 	result, err := arg.Children[0].Call(proc)
 	if err != nil {
 		return result, err
 	}
-
-	anal := proc.GetAnalyze(arg.info.Idx)
-	anal.Start()
-	defer anal.Stop()
 
 	if result.Batch == nil {
 		result.Status = vm.ExecStop

@@ -15,13 +15,14 @@
 package plan
 
 import (
+	"strings"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"strings"
 )
 
 func (builder *QueryBuilder) partitionPrune(nodeID int32) {
@@ -502,7 +503,7 @@ func isSimpleExpr(expr *Expr) bool {
 
 func isFactorExpr(expr *Expr) bool {
 	switch exprImpl := expr.Expr.(type) {
-	case *plan.Expr_Col, *plan.Expr_C, *plan.Expr_Max, *plan.Expr_T:
+	case *plan.Expr_Col, *plan.Expr_Lit, *plan.Expr_Max, *plan.Expr_T:
 		return true
 	case *plan.Expr_F:
 		if exprImpl.F.Func.ObjName == "cast" {
@@ -548,7 +549,7 @@ func isColExpr(expr *plan.Expr) bool {
 
 func isConstExpr(expr *plan.Expr) bool {
 	switch expr.Expr.(type) {
-	case *plan.Expr_C:
+	case *plan.Expr_Lit:
 		return true
 	}
 	return false

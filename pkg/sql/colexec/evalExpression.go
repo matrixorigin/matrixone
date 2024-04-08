@@ -102,9 +102,9 @@ func NewExpressionExecutorsFromPlanExpressions(proc *process.Process, planExprs 
 
 func NewExpressionExecutor(proc *process.Process, planExpr *plan.Expr) (ExpressionExecutor, error) {
 	switch t := planExpr.Expr.(type) {
-	case *plan.Expr_C:
+	case *plan.Expr_Lit:
 		typ := types.New(types.T(planExpr.Typ.Id), planExpr.Typ.Width, planExpr.Typ.Scale)
-		vec, err := generateConstExpressionExecutor(proc, typ, t.C)
+		vec, err := generateConstExpressionExecutor(proc, typ, t.Lit)
 		if err != nil {
 			return nil, err
 		}
@@ -148,6 +148,18 @@ func NewExpressionExecutor(proc *process.Process, planExpr *plan.Expr) (Expressi
 			typ:    typ,
 		}, nil
 
+	case *plan.Expr_Vec:
+		vec := vector.NewVec(types.T_any.ToType())
+		err := vec.UnmarshalBinary(t.Vec.Data)
+		if err != nil {
+			return nil, err
+		}
+		return &FixedVectorExpressionExecutor{
+			m:            proc.Mp(),
+			fixed:        true,
+			resultVector: vec,
+		}, nil
+
 	case *plan.Expr_F:
 		overload, err := function.GetFunctionById(proc.Ctx, t.F.GetFunc().GetObj())
 		if err != nil {
@@ -160,44 +172,15 @@ func NewExpressionExecutor(proc *process.Process, planExpr *plan.Expr) (Expressi
 			return nil, err
 		}
 
-		fid, _ := function.DecodeOverloadID(t.F.GetFunc().GetObj())
-		switch fid {
-		case function.IN, function.NOT_IN:
-			leftArg, rightArg := t.F.Args[0], t.F.Args[1]
-			subExecutor, paramErr := NewExpressionExecutor(proc, leftArg)
+		for i := range executor.parameterExecutor {
+			subExecutor, paramErr := NewExpressionExecutor(proc, t.F.Args[i])
 			if paramErr != nil {
+				for j := 0; j < i; j++ {
+					executor.parameterExecutor[j].Free()
+				}
 				return nil, paramErr
 			}
-			executor.SetParameter(0, subExecutor)
-
-			if vecData, ok := rightArg.Expr.(*plan.Expr_Bin); ok {
-				vec := proc.GetVector(types.T_any.ToType())
-				err := vec.UnmarshalBinary(vecData.Bin.Data)
-				if err != nil {
-					executor.parameterExecutor[0].Free()
-					return nil, err
-				}
-				executor.SetParameter(1, &FixedVectorExpressionExecutor{
-					m:            proc.Mp(),
-					fixed:        true,
-					resultVector: vec,
-				})
-			} else {
-				executor.parameterExecutor[0].Free()
-				return nil, moerr.NewInternalError(proc.Ctx, fmt.Sprintf("expect BinaryData but get %v", rightArg))
-			}
-
-		default:
-			for i := range executor.parameterExecutor {
-				subExecutor, paramErr := NewExpressionExecutor(proc, t.F.Args[i])
-				if paramErr != nil {
-					for j := 0; j < i; j++ {
-						executor.parameterExecutor[j].Free()
-					}
-					return nil, paramErr
-				}
-				executor.SetParameter(i, subExecutor)
-			}
+			executor.SetParameter(i, subExecutor)
 		}
 
 		// IF all parameters here were constant. and this function can be folded.
@@ -211,12 +194,20 @@ func NewExpressionExecutor(proc *process.Process, planExpr *plan.Expr) (Expressi
 				}
 			}
 
-			if err = executor.resultVector.PreExtendAndReset(1); err != nil {
+			execLen := 1
+			if len(executor.parameterResults) > 0 {
+				firstParam := executor.parameterResults[0]
+				if !firstParam.IsConst() {
+					execLen = firstParam.Length()
+				}
+			}
+
+			if err = executor.resultVector.PreExtendAndReset(execLen); err != nil {
 				executor.Free()
 				return nil, err
 			}
 
-			err = executor.evalFn(executor.parameterResults, executor.resultVector, proc, 1)
+			err = executor.evalFn(executor.parameterResults, executor.resultVector, proc, execLen)
 			if err == nil {
 				mp := proc.Mp()
 
@@ -225,9 +216,14 @@ func NewExpressionExecutor(proc *process.Process, planExpr *plan.Expr) (Expressi
 					m: mp,
 				}
 
-				// ToConst just returns a new pointer to the same memory.
-				// so we need to duplicate it.
-				fixed.resultVector, err = result.ToConst(0, 1, mp).Dup(mp)
+				if execLen == 1 {
+					// ToConst just returns a new pointer to the same memory.
+					// so we need to duplicate it.
+					fixed.resultVector, err = result.ToConst(0, 1, mp).Dup(mp)
+				} else {
+					fixed.fixed = true
+					fixed.resultVector = result
+				}
 				executor.Free()
 				if err != nil {
 					return nil, err
@@ -343,7 +339,7 @@ type ParamExpressionExecutor struct {
 }
 
 func (expr *ParamExpressionExecutor) Eval(proc *process.Process, batches []*batch.Batch) (*vector.Vector, error) {
-	val, err := proc.GetPrepareParamsAt(int(expr.pos))
+	val, err := proc.GetPrepareParamsAt(expr.pos)
 	if err != nil {
 		return nil, err
 	}
@@ -356,14 +352,11 @@ func (expr *ParamExpressionExecutor) Eval(proc *process.Process, batches []*batc
 	}
 
 	if expr.vec == nil {
-		expr.vec = vector.NewConstBytes(expr.typ, val, 1, proc.Mp())
+		expr.vec, err = vector.NewConstBytes(expr.typ, val, 1, proc.Mp())
 	} else {
-		err := vector.SetConstBytes(expr.vec, val, 1, proc.GetMPool())
-		if err != nil {
-			return nil, err
-		}
+		err = vector.SetConstBytes(expr.vec, val, 1, proc.GetMPool())
 	}
-	return expr.vec, nil
+	return expr.vec, err
 }
 
 func (expr *ParamExpressionExecutor) EvalWithoutResultReusing(proc *process.Process, batches []*batch.Batch) (*vector.Vector, error) {
@@ -604,86 +597,84 @@ func (expr *FixedVectorExpressionExecutor) IsColumnExpr() bool {
 	return false
 }
 
-func generateConstExpressionExecutor(proc *process.Process, typ types.Type, con *plan.Const) (*vector.Vector, error) {
-	var vec *vector.Vector
-
+func generateConstExpressionExecutor(proc *process.Process, typ types.Type, con *plan.Literal) (vec *vector.Vector, err error) {
 	if con.GetIsnull() {
 		vec = vector.NewConstNull(typ, 1, proc.Mp())
 	} else {
 		switch con.GetValue().(type) {
-		case *plan.Const_Bval:
-			vec = vector.NewConstFixed(constBType, con.GetBval(), 1, proc.Mp())
-		case *plan.Const_I8Val:
-			vec = vector.NewConstFixed(constI8Type, int8(con.GetI8Val()), 1, proc.Mp())
-		case *plan.Const_I16Val:
-			vec = vector.NewConstFixed(constI16Type, int16(con.GetI16Val()), 1, proc.Mp())
-		case *plan.Const_I32Val:
-			vec = vector.NewConstFixed(constI32Type, con.GetI32Val(), 1, proc.Mp())
-		case *plan.Const_I64Val:
-			vec = vector.NewConstFixed(constI64Type, con.GetI64Val(), 1, proc.Mp())
-		case *plan.Const_U8Val:
-			vec = vector.NewConstFixed(constU8Type, uint8(con.GetU8Val()), 1, proc.Mp())
-		case *plan.Const_U16Val:
-			vec = vector.NewConstFixed(constU16Type, uint16(con.GetU16Val()), 1, proc.Mp())
-		case *plan.Const_U32Val:
-			vec = vector.NewConstFixed(constU32Type, con.GetU32Val(), 1, proc.Mp())
-		case *plan.Const_U64Val:
-			vec = vector.NewConstFixed(constU64Type, con.GetU64Val(), 1, proc.Mp())
-		case *plan.Const_Fval:
-			vec = vector.NewConstFixed(constFType, con.GetFval(), 1, proc.Mp())
-		case *plan.Const_Dval:
-			vec = vector.NewConstFixed(constDType, con.GetDval(), 1, proc.Mp())
-		case *plan.Const_Dateval:
-			vec = vector.NewConstFixed(constDateType, types.Date(con.GetDateval()), 1, proc.Mp())
-		case *plan.Const_Timeval:
-			vec = vector.NewConstFixed(constTimeType, types.Time(con.GetTimeval()), 1, proc.Mp())
-		case *plan.Const_Datetimeval:
-			vec = vector.NewConstFixed(constDatetimeType, types.Datetime(con.GetDatetimeval()), 1, proc.Mp())
-		case *plan.Const_Decimal64Val:
+		case *plan.Literal_Bval:
+			vec, err = vector.NewConstFixed(constBType, con.GetBval(), 1, proc.Mp())
+		case *plan.Literal_I8Val:
+			vec, err = vector.NewConstFixed(constI8Type, int8(con.GetI8Val()), 1, proc.Mp())
+		case *plan.Literal_I16Val:
+			vec, err = vector.NewConstFixed(constI16Type, int16(con.GetI16Val()), 1, proc.Mp())
+		case *plan.Literal_I32Val:
+			vec, err = vector.NewConstFixed(constI32Type, con.GetI32Val(), 1, proc.Mp())
+		case *plan.Literal_I64Val:
+			vec, err = vector.NewConstFixed(constI64Type, con.GetI64Val(), 1, proc.Mp())
+		case *plan.Literal_U8Val:
+			vec, err = vector.NewConstFixed(constU8Type, uint8(con.GetU8Val()), 1, proc.Mp())
+		case *plan.Literal_U16Val:
+			vec, err = vector.NewConstFixed(constU16Type, uint16(con.GetU16Val()), 1, proc.Mp())
+		case *plan.Literal_U32Val:
+			vec, err = vector.NewConstFixed(constU32Type, con.GetU32Val(), 1, proc.Mp())
+		case *plan.Literal_U64Val:
+			vec, err = vector.NewConstFixed(constU64Type, con.GetU64Val(), 1, proc.Mp())
+		case *plan.Literal_Fval:
+			vec, err = vector.NewConstFixed(constFType, con.GetFval(), 1, proc.Mp())
+		case *plan.Literal_Dval:
+			vec, err = vector.NewConstFixed(constDType, con.GetDval(), 1, proc.Mp())
+		case *plan.Literal_Dateval:
+			vec, err = vector.NewConstFixed(constDateType, types.Date(con.GetDateval()), 1, proc.Mp())
+		case *plan.Literal_Timeval:
+			vec, err = vector.NewConstFixed(typ, types.Time(con.GetTimeval()), 1, proc.Mp())
+		case *plan.Literal_Datetimeval:
+			vec, err = vector.NewConstFixed(typ, types.Datetime(con.GetDatetimeval()), 1, proc.Mp())
+		case *plan.Literal_Decimal64Val:
 			cd64 := con.GetDecimal64Val()
 			d64 := types.Decimal64(cd64.A)
-			vec = vector.NewConstFixed(typ, d64, 1, proc.Mp())
-		case *plan.Const_Decimal128Val:
+			vec, err = vector.NewConstFixed(typ, d64, 1, proc.Mp())
+		case *plan.Literal_Decimal128Val:
 			cd128 := con.GetDecimal128Val()
 			d128 := types.Decimal128{B0_63: uint64(cd128.A), B64_127: uint64(cd128.B)}
-			vec = vector.NewConstFixed(typ, d128, 1, proc.Mp())
-		case *plan.Const_Timestampval:
+			vec, err = vector.NewConstFixed(typ, d128, 1, proc.Mp())
+		case *plan.Literal_Timestampval:
 			scale := typ.Scale
 			if scale < 0 || scale > 6 {
 				return nil, moerr.NewInternalError(proc.Ctx, "invalid timestamp scale")
 			}
-			vec = vector.NewConstFixed(constTimestampTypes[scale], types.Timestamp(con.GetTimestampval()), 1, proc.Mp())
-		case *plan.Const_Sval:
+			vec, err = vector.NewConstFixed(constTimestampTypes[scale], types.Timestamp(con.GetTimestampval()), 1, proc.Mp())
+		case *plan.Literal_Sval:
 			sval := con.GetSval()
 			// Distinguish binary with non-binary string.
 			if typ.Oid == types.T_binary || typ.Oid == types.T_varbinary || typ.Oid == types.T_blob {
-				vec = vector.NewConstBytes(constBinType, []byte(sval), 1, proc.Mp())
+				vec, err = vector.NewConstBytes(constBinType, []byte(sval), 1, proc.Mp())
 			} else if typ.Oid == types.T_array_float32 {
-				array, err := types.StringToArray[float32](sval)
-				if err != nil {
-					return nil, err
+				array, err1 := types.StringToArray[float32](sval)
+				if err1 != nil {
+					return nil, err1
 				}
-				vec = vector.NewConstArray(typ, array, 1, proc.Mp())
+				vec, err = vector.NewConstArray(typ, array, 1, proc.Mp())
 			} else if typ.Oid == types.T_array_float64 {
-				array, err := types.StringToArray[float64](sval)
-				if err != nil {
-					return nil, err
+				array, err1 := types.StringToArray[float64](sval)
+				if err1 != nil {
+					return nil, err1
 				}
-				vec = vector.NewConstArray(typ, array, 1, proc.Mp())
+				vec, err = vector.NewConstArray(typ, array, 1, proc.Mp())
 			} else {
-				vec = vector.NewConstBytes(constSType, []byte(sval), 1, proc.Mp())
+				vec, err = vector.NewConstBytes(constSType, []byte(sval), 1, proc.Mp())
 			}
-		case *plan.Const_Defaultval:
+		case *plan.Literal_Defaultval:
 			defaultVal := con.GetDefaultval()
-			vec = vector.NewConstFixed(constBType, defaultVal, 1, proc.Mp())
-		case *plan.Const_EnumVal:
-			vec = vector.NewConstFixed(constEnumType, uint16(con.GetU16Val()), 1, proc.Mp())
+			vec, err = vector.NewConstFixed(constBType, defaultVal, 1, proc.Mp())
+		case *plan.Literal_EnumVal:
+			vec, err = vector.NewConstFixed(constEnumType, uint16(con.GetU16Val()), 1, proc.Mp())
 		default:
 			return nil, moerr.NewNYI(proc.Ctx, fmt.Sprintf("const expression %v", con.GetValue()))
 		}
 		vec.SetIsBin(con.IsBin)
 	}
-	return vec, nil
+	return vec, err
 }
 
 func GenerateConstListExpressionExecutor(proc *process.Process, exprs []*plan.Expr) (*vector.Vector, error) {
@@ -694,87 +685,87 @@ func GenerateConstListExpressionExecutor(proc *process.Process, exprs []*plan.Ex
 	}
 	for i := 0; i < lenList; i++ {
 		expr := exprs[i]
-		t, ok := expr.Expr.(*plan.Expr_C)
+		t, ok := expr.Expr.(*plan.Expr_Lit)
 		if !ok {
 			return nil, moerr.NewInternalError(proc.Ctx, "args in list must be constant")
 		}
-		if t.C.GetIsnull() {
+		if t.Lit.GetIsnull() {
 			vec.GetNulls().Set(uint64(i))
 		} else {
-			switch t.C.GetValue().(type) {
-			case *plan.Const_Bval:
+			switch t.Lit.GetValue().(type) {
+			case *plan.Literal_Bval:
 				veccol := vector.MustFixedCol[bool](vec)
-				veccol[i] = t.C.GetBval()
-			case *plan.Const_I8Val:
+				veccol[i] = t.Lit.GetBval()
+			case *plan.Literal_I8Val:
 				veccol := vector.MustFixedCol[int8](vec)
-				veccol[i] = int8(t.C.GetI8Val())
-			case *plan.Const_I16Val:
+				veccol[i] = int8(t.Lit.GetI8Val())
+			case *plan.Literal_I16Val:
 				veccol := vector.MustFixedCol[int16](vec)
-				veccol[i] = int16(t.C.GetI16Val())
-			case *plan.Const_I32Val:
+				veccol[i] = int16(t.Lit.GetI16Val())
+			case *plan.Literal_I32Val:
 				veccol := vector.MustFixedCol[int32](vec)
-				veccol[i] = t.C.GetI32Val()
-			case *plan.Const_I64Val:
+				veccol[i] = t.Lit.GetI32Val()
+			case *plan.Literal_I64Val:
 				veccol := vector.MustFixedCol[int64](vec)
-				veccol[i] = t.C.GetI64Val()
-			case *plan.Const_U8Val:
+				veccol[i] = t.Lit.GetI64Val()
+			case *plan.Literal_U8Val:
 				veccol := vector.MustFixedCol[uint8](vec)
-				veccol[i] = uint8(t.C.GetU8Val())
-			case *plan.Const_U16Val:
+				veccol[i] = uint8(t.Lit.GetU8Val())
+			case *plan.Literal_U16Val:
 				veccol := vector.MustFixedCol[uint16](vec)
-				veccol[i] = uint16(t.C.GetU16Val())
-			case *plan.Const_U32Val:
+				veccol[i] = uint16(t.Lit.GetU16Val())
+			case *plan.Literal_U32Val:
 				veccol := vector.MustFixedCol[uint32](vec)
-				veccol[i] = t.C.GetU32Val()
-			case *plan.Const_U64Val:
+				veccol[i] = t.Lit.GetU32Val()
+			case *plan.Literal_U64Val:
 				veccol := vector.MustFixedCol[uint64](vec)
-				veccol[i] = t.C.GetU64Val()
-			case *plan.Const_Fval:
+				veccol[i] = t.Lit.GetU64Val()
+			case *plan.Literal_Fval:
 				veccol := vector.MustFixedCol[float32](vec)
-				veccol[i] = t.C.GetFval()
-			case *plan.Const_Dval:
+				veccol[i] = t.Lit.GetFval()
+			case *plan.Literal_Dval:
 				veccol := vector.MustFixedCol[float64](vec)
-				veccol[i] = t.C.GetDval()
-			case *plan.Const_Dateval:
+				veccol[i] = t.Lit.GetDval()
+			case *plan.Literal_Dateval:
 				veccol := vector.MustFixedCol[types.Date](vec)
-				veccol[i] = types.Date(t.C.GetDateval())
-			case *plan.Const_Timeval:
+				veccol[i] = types.Date(t.Lit.GetDateval())
+			case *plan.Literal_Timeval:
 				veccol := vector.MustFixedCol[types.Time](vec)
-				veccol[i] = types.Time(t.C.GetTimeval())
-			case *plan.Const_Datetimeval:
+				veccol[i] = types.Time(t.Lit.GetTimeval())
+			case *plan.Literal_Datetimeval:
 				veccol := vector.MustFixedCol[types.Datetime](vec)
-				veccol[i] = types.Datetime(t.C.GetDatetimeval())
-			case *plan.Const_Decimal64Val:
-				cd64 := t.C.GetDecimal64Val()
+				veccol[i] = types.Datetime(t.Lit.GetDatetimeval())
+			case *plan.Literal_Decimal64Val:
+				cd64 := t.Lit.GetDecimal64Val()
 				d64 := types.Decimal64(cd64.A)
 				veccol := vector.MustFixedCol[types.Decimal64](vec)
 				veccol[i] = d64
-			case *plan.Const_Decimal128Val:
-				cd128 := t.C.GetDecimal128Val()
+			case *plan.Literal_Decimal128Val:
+				cd128 := t.Lit.GetDecimal128Val()
 				d128 := types.Decimal128{B0_63: uint64(cd128.A), B64_127: uint64(cd128.B)}
 				veccol := vector.MustFixedCol[types.Decimal128](vec)
 				veccol[i] = d128
-			case *plan.Const_Timestampval:
+			case *plan.Literal_Timestampval:
 				scale := expr.Typ.Scale
 				if scale < 0 || scale > 6 {
 					return nil, moerr.NewInternalError(proc.Ctx, "invalid timestamp scale")
 				}
 				veccol := vector.MustFixedCol[types.Timestamp](vec)
-				veccol[i] = types.Timestamp(t.C.GetTimestampval())
-			case *plan.Const_Sval:
-				sval := t.C.GetSval()
+				veccol[i] = types.Timestamp(t.Lit.GetTimestampval())
+			case *plan.Literal_Sval:
+				sval := t.Lit.GetSval()
 				err = vector.SetStringAt(vec, i, sval, proc.Mp())
 				if err != nil {
 					return nil, err
 				}
-			case *plan.Const_Defaultval:
-				defaultVal := t.C.GetDefaultval()
+			case *plan.Literal_Defaultval:
+				defaultVal := t.Lit.GetDefaultval()
 				veccol := vector.MustFixedCol[bool](vec)
 				veccol[i] = defaultVal
 			default:
-				return nil, moerr.NewNYI(proc.Ctx, fmt.Sprintf("const expression %v", t.C.GetValue()))
+				return nil, moerr.NewNYI(proc.Ctx, fmt.Sprintf("const expression %v", t.Lit.GetValue()))
 			}
-			vec.SetIsBin(t.C.IsBin)
+			vec.SetIsBin(t.Lit.IsBin)
 		}
 	}
 	return vec, nil
@@ -812,6 +803,7 @@ func FixProjectionResult(proc *process.Process,
 						for j := range finalVectors {
 							finalVectors[j].Free(proc.Mp())
 						}
+						newVec.Free(proc.Mp())
 						return 0, err
 					}
 				}
@@ -830,6 +822,9 @@ func FixProjectionResult(proc *process.Process,
 				if err != nil {
 					for j := range finalVectors {
 						finalVectors[j].Free(proc.Mp())
+					}
+					if newVec != nil {
+						newVec.Free(proc.Mp())
 					}
 					return 0, err
 				}
@@ -883,80 +878,80 @@ func getConstZM(
 	expr *plan.Expr,
 	proc *process.Process,
 ) (zm index.ZM, err error) {
-	c := expr.Expr.(*plan.Expr_C)
-	if c.C.GetIsnull() {
+	c := expr.Expr.(*plan.Expr_Lit)
+	if c.Lit.GetIsnull() {
 		zm = index.NewZM(types.T(expr.Typ.Id), expr.Typ.Scale)
 		return
 	}
-	switch c.C.GetValue().(type) {
-	case *plan.Const_Bval:
+	switch c.Lit.GetValue().(type) {
+	case *plan.Literal_Bval:
 		zm = index.NewZM(constBType.Oid, 0)
-		v := c.C.GetBval()
+		v := c.Lit.GetBval()
 		index.UpdateZM(zm, types.EncodeBool(&v))
-	case *plan.Const_I8Val:
+	case *plan.Literal_I8Val:
 		zm = index.NewZM(constI8Type.Oid, 0)
-		v := int8(c.C.GetI8Val())
+		v := int8(c.Lit.GetI8Val())
 		index.UpdateZM(zm, types.EncodeInt8(&v))
-	case *plan.Const_I16Val:
+	case *plan.Literal_I16Val:
 		zm = index.NewZM(constI16Type.Oid, 0)
-		v := int16(c.C.GetI16Val())
+		v := int16(c.Lit.GetI16Val())
 		index.UpdateZM(zm, types.EncodeInt16(&v))
-	case *plan.Const_I32Val:
+	case *plan.Literal_I32Val:
 		zm = index.NewZM(constI32Type.Oid, 0)
-		v := c.C.GetI32Val()
+		v := c.Lit.GetI32Val()
 		index.UpdateZM(zm, types.EncodeInt32(&v))
-	case *plan.Const_I64Val:
+	case *plan.Literal_I64Val:
 		zm = index.NewZM(constI64Type.Oid, 0)
-		v := c.C.GetI64Val()
+		v := c.Lit.GetI64Val()
 		index.UpdateZM(zm, types.EncodeInt64(&v))
-	case *plan.Const_U8Val:
+	case *plan.Literal_U8Val:
 		zm = index.NewZM(constU8Type.Oid, 0)
-		v := uint8(c.C.GetU8Val())
+		v := uint8(c.Lit.GetU8Val())
 		index.UpdateZM(zm, types.EncodeUint8(&v))
-	case *plan.Const_U16Val:
+	case *plan.Literal_U16Val:
 		zm = index.NewZM(constU16Type.Oid, 0)
-		v := uint16(c.C.GetU16Val())
+		v := uint16(c.Lit.GetU16Val())
 		index.UpdateZM(zm, types.EncodeUint16(&v))
-	case *plan.Const_U32Val:
+	case *plan.Literal_U32Val:
 		zm = index.NewZM(constU32Type.Oid, 0)
-		v := c.C.GetU32Val()
+		v := c.Lit.GetU32Val()
 		index.UpdateZM(zm, types.EncodeUint32(&v))
-	case *plan.Const_U64Val:
+	case *plan.Literal_U64Val:
 		zm = index.NewZM(constU64Type.Oid, 0)
-		v := c.C.GetU64Val()
+		v := c.Lit.GetU64Val()
 		index.UpdateZM(zm, types.EncodeUint64(&v))
-	case *plan.Const_Fval:
+	case *plan.Literal_Fval:
 		zm = index.NewZM(constFType.Oid, 0)
-		v := c.C.GetFval()
+		v := c.Lit.GetFval()
 		index.UpdateZM(zm, types.EncodeFloat32(&v))
-	case *plan.Const_Dval:
+	case *plan.Literal_Dval:
 		zm = index.NewZM(constDType.Oid, 0)
-		v := c.C.GetDval()
+		v := c.Lit.GetDval()
 		index.UpdateZM(zm, types.EncodeFloat64(&v))
-	case *plan.Const_Dateval:
+	case *plan.Literal_Dateval:
 		zm = index.NewZM(constDateType.Oid, 0)
-		v := c.C.GetDateval()
+		v := c.Lit.GetDateval()
 		index.UpdateZM(zm, types.EncodeInt32(&v))
-	case *plan.Const_Timeval:
+	case *plan.Literal_Timeval:
 		zm = index.NewZM(constTimeType.Oid, 0)
-		v := c.C.GetTimeval()
+		v := c.Lit.GetTimeval()
 		index.UpdateZM(zm, types.EncodeInt64(&v))
-	case *plan.Const_Datetimeval:
+	case *plan.Literal_Datetimeval:
 		zm = index.NewZM(constDatetimeType.Oid, 0)
-		v := c.C.GetDatetimeval()
+		v := c.Lit.GetDatetimeval()
 		index.UpdateZM(zm, types.EncodeInt64(&v))
-	case *plan.Const_Decimal64Val:
-		v := c.C.GetDecimal64Val()
+	case *plan.Literal_Decimal64Val:
+		v := c.Lit.GetDecimal64Val()
 		zm = index.NewZM(types.T_decimal64, expr.Typ.Scale)
 		d64 := types.Decimal64(v.A)
 		index.UpdateZM(zm, types.EncodeDecimal64(&d64))
-	case *plan.Const_Decimal128Val:
-		v := c.C.GetDecimal128Val()
+	case *plan.Literal_Decimal128Val:
+		v := c.Lit.GetDecimal128Val()
 		zm = index.NewZM(types.T_decimal128, expr.Typ.Scale)
 		d128 := types.Decimal128{B0_63: uint64(v.A), B64_127: uint64(v.B)}
 		index.UpdateZM(zm, types.EncodeDecimal128(&d128))
-	case *plan.Const_Timestampval:
-		v := c.C.GetTimestampval()
+	case *plan.Literal_Timestampval:
+		v := c.Lit.GetTimestampval()
 		scale := expr.Typ.Scale
 		if scale < 0 || scale > 6 {
 			err = moerr.NewInternalError(proc.Ctx, "invalid timestamp scale")
@@ -964,20 +959,20 @@ func getConstZM(
 		}
 		zm = index.NewZM(constTimestampTypes[0].Oid, scale)
 		index.UpdateZM(zm, types.EncodeInt64(&v))
-	case *plan.Const_Sval:
+	case *plan.Literal_Sval:
 		zm = index.NewZM(constSType.Oid, 0)
-		v := c.C.GetSval()
+		v := c.Lit.GetSval()
 		index.UpdateZM(zm, []byte(v))
-	case *plan.Const_Defaultval:
+	case *plan.Literal_Defaultval:
 		zm = index.NewZM(constBType.Oid, 0)
-		v := c.C.GetDefaultval()
+		v := c.Lit.GetDefaultval()
 		index.UpdateZM(zm, types.EncodeBool(&v))
-	case *plan.Const_EnumVal:
+	case *plan.Literal_EnumVal:
 		zm = index.NewZM(constEnumType.Oid, 0)
-		v := types.Enum(c.C.GetU16Val())
+		v := types.Enum(c.Lit.GetU16Val())
 		index.UpdateZM(zm, types.EncodeEnum(&v))
 	default:
-		err = moerr.NewNYI(ctx, fmt.Sprintf("const expression %v", c.C.GetValue()))
+		err = moerr.NewNYI(ctx, fmt.Sprintf("const expression %v", c.Lit.GetValue()))
 	}
 	return
 }
@@ -1041,7 +1036,7 @@ func GetExprZoneMap(
 	var err error
 
 	switch t := expr.Expr.(type) {
-	case *plan.Expr_C:
+	case *plan.Expr_Lit:
 		if zms[expr.AuxId] == nil {
 			if zms[expr.AuxId], err = getConstZM(ctx, expr, proc); err != nil {
 				zms[expr.AuxId] = objectio.NewZM(types.T_bool, 0)
@@ -1061,12 +1056,32 @@ func GetExprZoneMap(
 
 			// Some expressions need to be handled specifically
 			switch t.F.Func.ObjName {
+			case "isnull", "is_null":
+				switch exprImpl := args[0].Expr.(type) {
+				case *plan.Expr_Col:
+					nullCnt := meta.MustGetColumn(uint16(columnMap[int(exprImpl.Col.ColPos)])).NullCnt()
+					zms[expr.AuxId] = index.SetBool(zms[expr.AuxId], nullCnt > 0)
+					return zms[expr.AuxId]
+				default:
+					zms[expr.AuxId].Reset()
+					return zms[expr.AuxId]
+				}
+			case "isnotnull", "is_not_null":
+				switch exprImpl := args[0].Expr.(type) {
+				case *plan.Expr_Col:
+					zm := meta.MustGetColumn(uint16(columnMap[int(exprImpl.Col.ColPos)])).ZoneMap()
+					zms[expr.AuxId] = index.SetBool(zms[expr.AuxId], zm.IsInited())
+					return zms[expr.AuxId]
+				default:
+					zms[expr.AuxId].Reset()
+					return zms[expr.AuxId]
+				}
 			case "in":
 				rid := args[1].AuxId
 				if vecs[rid] == nil {
-					if data, ok := args[1].Expr.(*plan.Expr_Bin); ok {
+					if data, ok := args[1].Expr.(*plan.Expr_Vec); ok {
 						vec := proc.GetVector(types.T_any.ToType())
-						vec.UnmarshalBinary(data.Bin.Data)
+						vec.UnmarshalBinary(data.Vec.Data)
 						vecs[rid] = vec
 					} else {
 						zms[expr.AuxId].Reset()
@@ -1089,16 +1104,57 @@ func GetExprZoneMap(
 				zms[expr.AuxId] = index.SetBool(zms[expr.AuxId], lhs.AnyIn(vecs[rid]))
 				return zms[expr.AuxId]
 
-			case "startswith":
+			case "prefix_eq":
 				lhs := GetExprZoneMap(ctx, proc, args[0], meta, columnMap, zms, vecs)
 				if !lhs.IsInited() {
 					zms[expr.AuxId].Reset()
 					return zms[expr.AuxId]
 				}
 
-				s := []byte(args[1].Expr.(*plan.Expr_C).C.Value.(*plan.Const_Sval).Sval)
+				s := []byte(args[1].GetLit().GetSval())
 
-				zms[expr.AuxId] = index.SetBool(zms[expr.AuxId], lhs.HasPrefix(s))
+				zms[expr.AuxId] = index.SetBool(zms[expr.AuxId], lhs.PrefixEq(s))
+				return zms[expr.AuxId]
+
+			case "prefix_between":
+				lhs := GetExprZoneMap(ctx, proc, args[0], meta, columnMap, zms, vecs)
+				if !lhs.IsInited() {
+					zms[expr.AuxId].Reset()
+					return zms[expr.AuxId]
+				}
+
+				lb := []byte(args[1].GetLit().GetSval())
+				ub := []byte(args[2].GetLit().GetSval())
+
+				zms[expr.AuxId] = index.SetBool(zms[expr.AuxId], lhs.PrefixBetween(lb, ub))
+				return zms[expr.AuxId]
+
+			case "prefix_in":
+				rid := args[1].AuxId
+				if vecs[rid] == nil {
+					if data, ok := args[1].Expr.(*plan.Expr_Vec); ok {
+						vec := proc.GetVector(types.T_any.ToType())
+						vec.UnmarshalBinary(data.Vec.Data)
+						vecs[rid] = vec
+					} else {
+						zms[expr.AuxId].Reset()
+						vecs[rid] = vector.NewConstNull(types.T_any.ToType(), math.MaxInt, proc.Mp())
+						return zms[expr.AuxId]
+					}
+				}
+
+				if vecs[rid].IsConstNull() && vecs[rid].Length() == math.MaxInt {
+					zms[expr.AuxId].Reset()
+					return zms[expr.AuxId]
+				}
+
+				lhs := GetExprZoneMap(ctx, proc, args[0], meta, columnMap, zms, vecs)
+				if !lhs.IsInited() {
+					zms[expr.AuxId].Reset()
+					return zms[expr.AuxId]
+				}
+
+				zms[expr.AuxId] = index.SetBool(zms[expr.AuxId], lhs.PrefixIn(vecs[rid]))
 				return zms[expr.AuxId]
 			}
 
@@ -1160,6 +1216,16 @@ func GetExprZoneMap(
 					return zms[expr.AuxId]
 				}
 				if res, ok = zms[args[0].AuxId].Intersect(zms[args[1].AuxId]); !ok {
+					zms[expr.AuxId].Reset()
+				} else {
+					zms[expr.AuxId] = index.SetBool(zms[expr.AuxId], res)
+				}
+
+			case "between":
+				if f() {
+					return zms[expr.AuxId]
+				}
+				if res, ok = zms[args[0].AuxId].AnyBetween(zms[args[1].AuxId], zms[args[2].AuxId]); !ok {
 					zms[expr.AuxId].Reset()
 				} else {
 					zms[expr.AuxId] = index.SetBool(zms[expr.AuxId], res)

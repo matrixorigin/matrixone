@@ -91,3 +91,23 @@ INSERT INTO t VALUES ('W * P', 'W + Z - O'), ('have has having', 'do does doing'
 INSERT INTO t VALUES ('XV*XZ', 'PP-ZZ-DXA'), ('aa bbb cc ddd', 'k ii lll oooo');
 SELECT REGEXP_INSTR(str1, '*'), REGEXP_INSTR(str2,'hav') FROM t;
 drop table t;
+
+create database big_data_test;
+use big_data_test;
+create table table_basic_for_load_100M(col1 varchar(100));
+insert into table_basic_for_load_100M values(',GHI,G;KL/MN?OPQR.STU-_+=VWXYZabcdefghigklmnopqrstuvwxy');
+insert into table_basic_for_load_100M values('a');
+select col1 from table_basic_for_load_100M;
+select REGEXP_INSTR(',GHI,G;KL/MN?OPQR.STU-_+=VWXYZabcdefghigklmnopqrstuvwxy', ',',1);
+select REGEXP_INSTR(',GHI,G;KL/MN?OPQR.STU-_+=VWXYZabcdefghigklmnopqrstuvwxy', 'a',1);
+select REGEXP_INSTR(col1,',',1) from big_data_test.table_basic_for_load_100M;
+select REGEXP_INSTR(col1,'a',1) from big_data_test.table_basic_for_load_100M;
+select REGEXP_REPLACE(',GHI,G;KL/MN?OPQR.STU-_+=VWXYZabcdefghigklmnopqrstuvwxy', ',','b',1);
+select REGEXP_REPLACE(',GHI,G;KL/MN?OPQR.STU-_+=VWXYZabcdefghigklmnopqrstuvwxy', 'a','b',1);
+select REGEXP_REPLACE(col1,',','b',1) from big_data_test.table_basic_for_load_100M;
+select REGEXP_REPLACE(col1,'a','b',1) from big_data_test.table_basic_for_load_100M;
+select REGEXP_SUBSTR(',GHI,G;KL/MN?OPQR.STU-_+=VWXYZabcdefghigklmnopqrstuvwxy', ',',1);
+select REGEXP_SUBSTR(',GHI,G;KL/MN?OPQR.STU-_+=VWXYZabcdefghigklmnopqrstuvwxy', 'a',1);
+select REGEXP_SUBSTR(col1,',',1) from big_data_test.table_basic_for_load_100M;
+select REGEXP_SUBSTR(col1,'a',1) from big_data_test.table_basic_for_load_100M;
+drop database big_data_test;

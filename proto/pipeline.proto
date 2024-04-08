@@ -107,6 +107,8 @@ message Group {
   repeated MultiArguemnt MultiAggs = 7;
   bool isShuffle = 8;
   uint64 preAllocSize = 9;
+  bytes PartialResults = 10;
+  repeated uint32 PartialResultTypes = 11;
 }
 
 message Insert{
@@ -189,6 +191,13 @@ message OnDuplicateKey{
   repeated int32 on_duplicate_idx           = 2;
   map<string, plan.Expr> on_duplicate_expr  = 3;
   bool is_ignore                            = 4;
+}
+
+message FuzzyFilter {
+  float N = 1;
+  string PkName = 2;
+  plan.Type PkTyp = 3;
+  repeated plan.RuntimeFilterSpec runtime_filter_build_list = 4;
 }
 
 message Join {
@@ -420,6 +429,7 @@ message Instruction{
   StreamScan stream_scan = 35;
   PreInsertSecondaryIndex pre_insert_secondary_index  = 36;
   SampleFunc sample_func = 37;
+  FuzzyFilter fuzzy_filter = 38;
 }
 
 message AnalysisList {
@@ -527,5 +537,6 @@ message RuntimeFilter {
   }
 
   RuntimeFilterType typ = 1;
-  bytes data = 2;
+  int32 card = 2;
+  bytes data = 3;
 }

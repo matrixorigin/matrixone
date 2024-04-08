@@ -570,7 +570,7 @@ drop table varbinary09;
 drop table if exists varbinary10;
 drop table if exists varbinary11;
 create table varbinary10(a binary primary key,b varchar(5));
-create table varbinary11(a int,b varchar(5),c binary, foreign key(c) references varbinary10(a));
+create table varbinary11(a int,b varchar(5),c binary, constraint `c1` foreign key(c) references varbinary10(a));
 insert into varbinary10 values('1','哈哈哈');
 insert into varbinary10 values('1','abcde');
 show create table varbinary11;
@@ -672,4 +672,30 @@ select binary('&**');
 select binary('数据库');
 select binary('hello你好呀');
 -- @bvt:issue
+drop database test;
+
+create database test;
+use test;
+create table if not exists camera_area
+(
+id int unsigned auto_increment primary key,
+cid varchar(64) null comment '摄像头id',
+street_name varchar(32) null comment '街道名称',
+street_code bigint null comment '街道编号',
+community_name varchar(64) null comment '社区名称',
+community_code bigint null comment '社区编号',
+location_lng double(10,6) null comment '位置经度',
+location_lat double(10,6) null comment '位置维度',
+address varchar(128) null comment '详细地址',
+created_at timestamp null,
+updated_at timestamp null,
+deleted_at timestamp null
+);
+
+INSERT INTO camera_area (id, cid, street_name, street_code, community_name, community_code, location_lng, location_lat, address, created_at, updated_at, deleted_at) VALUES (1, '1', null, null, null, null, 1, 1, '1', null, null, null);
+prepare __mo_stmt_id_1 from SELECT  id,cid,street_name,street_code,community_name,community_code,location_lng,location_lat,address,created_at,updated_at,deleted_at  FROM camera_area  WHERE  deleted_at IS NULL AND (cid IN (?));
+set @__mo_stmt_var_0=1;
+execute __mo_stmt_id_1 using @__mo_stmt_var_0;
+deallocate prepare __mo_stmt_id_1;
+drop table camera_area;
 drop database test;

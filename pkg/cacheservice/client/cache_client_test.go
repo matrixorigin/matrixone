@@ -41,7 +41,7 @@ func TestUnwrapResponseError(t *testing.T) {
 	assert.NotNil(t, ct)
 	client, ok := ct.(*cacheClient)
 	assert.True(t, ok)
-	resp1 := &cache.Response{Error: nil}
+	resp1 := &cache.CacheResponse{Response: cache.Response{Error: nil}}
 	resp2, err := client.unwrapResponseError(resp1)
 	assert.Nil(t, err)
 	assert.Equal(t, resp2, resp1)
@@ -49,7 +49,7 @@ func TestUnwrapResponseError(t *testing.T) {
 	e := moerr.NewInternalErrorNoCtx("test")
 	moe, err := e.MarshalBinary()
 	assert.NoError(t, err)
-	resp1 = &cache.Response{Error: moe}
+	resp1 = &cache.CacheResponse{Response: cache.Response{Error: moe}}
 	resp2, err = client.unwrapResponseError(resp1)
 	assert.Equal(t, "internal error: test", err.Error())
 	assert.Nil(t, resp2)

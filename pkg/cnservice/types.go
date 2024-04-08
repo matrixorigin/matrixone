@@ -19,6 +19,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/cacheservice"
@@ -221,6 +222,11 @@ type Config struct {
 		// MaxActive is the count of max active txn in current cn.  If reached max value, the txn
 		// is added to a FIFO queue. Default is unlimited.
 		MaxActive int `toml:"max-active"`
+		// NormalStateNoWait is the config to control if it waits for the transaction client
+		// to be normal state. If the value is false, it waits until the transaction client to be
+		// normal state; if the value is true, it does not wait and just return an error to the
+		// client. Default value is false.
+		NormalStateNoWait bool `toml:"normal-state-no-wait"`
 	} `toml:"txn"`
 
 	// AutoIncrement auto increment config
@@ -493,6 +499,7 @@ func (c *Config) SetDefaultValue() {
 	if c.Txn.MaxActive == 0 {
 		c.Txn.MaxActive = runtime.NumCPU() * 4
 	}
+	c.Txn.NormalStateNoWait = false
 	c.LockService.ServiceID = "temp"
 	c.LockService.Validate()
 	c.LockService.ServiceID = c.UUID
@@ -575,6 +582,13 @@ type service struct {
 	gossipNode  *gossip.Node
 	cacheServer cacheservice.CacheService
 	config      *util.ConfigData
+
+	// pipelines record running pipelines in the service, used for monitoring.
+	pipelines struct {
+		// counter recording the total number of running pipelines,
+		// details are not recorded for simplicity as suggested by @nnsgmsone
+		counter atomic.Int64
+	}
 }
 
 func dumpCnConfig(cfg Config) (map[string]*logservicepb.ConfigItem, error) {

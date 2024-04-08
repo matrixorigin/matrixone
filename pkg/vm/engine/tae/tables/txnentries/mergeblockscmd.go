@@ -28,8 +28,8 @@ import (
 type mergeBlocksCmd struct {
 	txnbase.BaseCmd
 	tid         uint64
-	droppedSegs []*common.ID
-	createdSegs []*common.ID
+	droppedObjs []*common.ID
+	createdObjs []*common.ID
 	droppedBlks []*common.ID
 	createdBlks []*common.ID
 	mapping     []uint32
@@ -41,14 +41,14 @@ type mergeBlocksCmd struct {
 
 func newMergeBlocksCmd(
 	tid uint64,
-	droppedSegs, createdSegs, droppedBlks, createdBlks []*common.ID,
+	droppedObjs, createdObjs, droppedBlks, createdBlks []*common.ID,
 	mapping, fromAddr, toAddr []uint32,
 	txn txnif.AsyncTxn,
 	id uint32) *mergeBlocksCmd {
 	return &mergeBlocksCmd{
 		tid:         tid,
-		droppedSegs: droppedSegs,
-		createdSegs: createdSegs,
+		droppedObjs: droppedObjs,
+		createdObjs: createdObjs,
 		droppedBlks: droppedBlks,
 		createdBlks: createdBlks,
 		mapping:     mapping,

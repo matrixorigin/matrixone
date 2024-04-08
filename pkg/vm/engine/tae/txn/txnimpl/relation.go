@@ -160,41 +160,41 @@ func (h *txnRelation) Append(ctx context.Context, data *containers.Batch) error 
 	return h.Txn.GetStore().Append(ctx, h.table.entry.GetDB().ID, h.table.entry.GetID(), data)
 }
 
-func (h *txnRelation) AddBlksWithMetaLoc(ctx context.Context, metaLocs []objectio.Location) error {
+func (h *txnRelation) AddBlksWithMetaLoc(ctx context.Context, stats containers.Vector) error {
 	return h.Txn.GetStore().AddBlksWithMetaLoc(
 		ctx,
 		h.table.entry.GetDB().ID,
 		h.table.entry.GetID(),
-		metaLocs,
+		stats,
 	)
 }
 
-func (h *txnRelation) GetSegment(id *types.Segmentid) (seg handle.Segment, err error) {
+func (h *txnRelation) GetObject(id *types.Objectid) (obj handle.Object, err error) {
 	fp := h.table.entry.AsCommonID()
-	fp.SetSegmentID(id)
-	return h.Txn.GetStore().GetSegment(fp)
+	fp.SetObjectID(id)
+	return h.Txn.GetStore().GetObject(fp)
 }
 
-func (h *txnRelation) CreateSegment(is1PC bool) (seg handle.Segment, err error) {
-	return h.Txn.GetStore().CreateSegment(h.table.entry.GetDB().ID, h.table.entry.GetID(), is1PC)
+func (h *txnRelation) CreateObject(is1PC bool) (obj handle.Object, err error) {
+	return h.Txn.GetStore().CreateObject(h.table.entry.GetDB().ID, h.table.entry.GetID(), is1PC)
 }
 
-func (h *txnRelation) CreateNonAppendableSegment(is1PC bool) (seg handle.Segment, err error) {
-	return h.Txn.GetStore().CreateNonAppendableSegment(h.table.entry.GetDB().ID, h.table.entry.GetID(), is1PC)
+func (h *txnRelation) CreateNonAppendableObject(is1PC bool) (obj handle.Object, err error) {
+	return h.Txn.GetStore().CreateNonAppendableObject(h.table.entry.GetDB().ID, h.table.entry.GetID(), is1PC)
 }
 
-func (h *txnRelation) SoftDeleteSegment(id *types.Segmentid) (err error) {
+func (h *txnRelation) SoftDeleteObject(id *types.Objectid) (err error) {
 	fp := h.table.entry.AsCommonID()
-	fp.SetSegmentID(id)
-	return h.Txn.GetStore().SoftDeleteSegment(fp)
+	fp.SetObjectID(id)
+	return h.Txn.GetStore().SoftDeleteObject(fp)
 }
 
-func (h *txnRelation) MakeSegmentItOnSnap() handle.SegmentIt {
-	return newSegmentItOnSnap(h.table)
+func (h *txnRelation) MakeObjectItOnSnap() handle.ObjectIt {
+	return newObjectItOnSnap(h.table)
 }
 
-func (h *txnRelation) MakeSegmentIt() handle.SegmentIt {
-	return newSegmentIt(h.table)
+func (h *txnRelation) MakeObjectIt() handle.ObjectIt {
+	return newObjectIt(h.table)
 }
 
 func (h *txnRelation) MakeBlockIt() handle.BlockIt {

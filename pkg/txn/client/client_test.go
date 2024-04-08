@@ -16,9 +16,11 @@ package client
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/lni/goutils/leaktest"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
@@ -55,6 +57,63 @@ func TestNewTxn(t *testing.T) {
 	assert.Equal(t, timestamp.Timestamp{PhysicalTime: 1}, txnMeta.SnapshotTS)
 	assert.NotEmpty(t, txnMeta.ID)
 	assert.Equal(t, txn.TxnStatus_Active, txnMeta.Status)
+}
+
+func TestNewTxnWithNormalStateWait(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+	rt := runtime.NewRuntime(metadata.ServiceType_CN, "",
+		logutil.GetPanicLogger(),
+		runtime.WithClock(clock.NewHLCClock(func() int64 {
+			return 1
+		}, 0)))
+	runtime.SetupProcessLevelRuntime(rt)
+	c := NewTxnClient(newTestTxnSender())
+	// Do not resume the txn client for now.
+	// c.Resume()
+	var wg sync.WaitGroup
+	for i := 0; i < 20; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
+			defer cancel()
+			tx, err := c.New(ctx, newTestTimestamp(0))
+			assert.Nil(t, err)
+			txnMeta := tx.(*txnOperator).mu.txn
+			assert.Equal(t, int64(1), txnMeta.SnapshotTS.PhysicalTime)
+			assert.NotEmpty(t, txnMeta.ID)
+			assert.Equal(t, txn.TxnStatus_Active, txnMeta.Status)
+		}()
+	}
+	// Resume it now.
+	c.Resume()
+	wg.Wait()
+}
+
+func TestNewTxnWithNormalStateNoWait(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+	rt := runtime.NewRuntime(metadata.ServiceType_CN, "",
+		logutil.GetPanicLogger(),
+		runtime.WithClock(clock.NewHLCClock(func() int64 {
+			return 1
+		}, 0)))
+	runtime.SetupProcessLevelRuntime(rt)
+	c := NewTxnClient(newTestTxnSender(), WithNormalStateNoWait(true))
+	// Do not resume the txn client.
+	// c.Resume()
+	var wg sync.WaitGroup
+	for i := 0; i < 20; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
+			defer cancel()
+			tx, err := c.New(ctx, newTestTimestamp(0))
+			assert.Error(t, err)
+			assert.Nil(t, tx)
+		}()
+	}
+	wg.Wait()
 }
 
 func TestNewTxnWithSnapshotTS(t *testing.T) {

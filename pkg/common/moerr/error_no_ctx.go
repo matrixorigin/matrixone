@@ -188,8 +188,11 @@ func NewNoAvailableBackendNoCtx() *Error {
 	return newError(Context(), ErrNoAvailableBackend)
 }
 
-func NewBackendCannotConnectNoCtx() *Error {
-	return newError(Context(), ErrBackendCannotConnect)
+func NewBackendCannotConnectNoCtx(args ...any) *Error {
+	if len(args) == 0 {
+		return newError(Context(), ErrBackendCannotConnect, "none")
+	}
+	return newError(Context(), ErrBackendCannotConnect, args...)
 }
 
 func NewTxnClosedNoCtx(txnID []byte) *Error {
@@ -290,8 +293,8 @@ func NewTxnReadConflictNoCtx(msg string, args ...any) *Error {
 	return newError(Context(), ErrTxnReadConflict, xmsg)
 }
 
-func NewAppendableSegmentNotFoundNoCtx() *Error {
-	return newError(Context(), ErrAppendableSegmentNotFound)
+func NewAppendableObjectNotFoundNoCtx() *Error {
+	return newError(Context(), ErrAppendableObjectNotFound)
 }
 
 func NewAppendableBlockNotFoundNoCtx() *Error {

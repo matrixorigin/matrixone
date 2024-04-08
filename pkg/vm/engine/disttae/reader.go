@@ -18,28 +18,26 @@ import (
 	"context"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/perfcounter"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
-	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"go.uber.org/zap"
-
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/testutil"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"go.uber.org/zap"
 )
 
 // -----------------------------------------------------------------
@@ -159,7 +157,7 @@ func (mixin *withFilterMixin) getCompositPKFilter(proc *process.Process, blkCnt 
 
 	// evaluate
 	pkNames := mixin.tableDef.Pkey.Names
-	pkVals := make([]*plan.Const, len(pkNames))
+	pkVals := make([]*plan.Literal, len(pkNames))
 	ok, hasNull := getCompositPKVals(mixin.filterState.expr, pkNames, pkVals, proc)
 
 	if !ok || pkVals[0] == nil {
@@ -243,7 +241,7 @@ func (mixin *withFilterMixin) getNonCompositPKFilter(proc *process.Process, blkC
 	// if the primary key is not found, it returns empty slice
 	mixin.filterState.evaluated = true
 	mixin.filterState.filter = searchFunc
-	mixin.filterState.seqnums = []uint16{uint16(mixin.columns.seqnums[mixin.columns.pkPos])}
+	mixin.filterState.seqnums = []uint16{mixin.columns.seqnums[mixin.columns.pkPos]}
 	mixin.filterState.colTypes = mixin.columns.colTypes[mixin.columns.pkPos : mixin.columns.pkPos+1]
 
 	// records how many blks one reader needs to read when having filter
@@ -304,7 +302,7 @@ func (r *blockReader) Read(
 	_ *plan.Expr,
 	mp *mpool.MPool,
 	vp engine.VectorPool,
-) (*batch.Batch, error) {
+) (bat *batch.Batch, err error) {
 	start := time.Now()
 	defer func() {
 		v2.TxnBlockReaderDurationHistogram.Observe(time.Since(start).Seconds())
@@ -340,9 +338,12 @@ func (r *blockReader) Read(
 	//prefetch some objects
 	for len(r.steps) > 0 && r.steps[0] == r.currentStep {
 		if filter != nil && blockInfo.Sorted {
-			blockio.BlockPrefetch(r.filterState.seqnums, r.fs, [][]*catalog.BlockInfo{r.infos[0]})
+			err = blockio.BlockPrefetch(r.filterState.seqnums, r.fs, [][]*catalog.BlockInfo{r.infos[0]})
 		} else {
-			blockio.BlockPrefetch(r.columns.seqnums, r.fs, [][]*catalog.BlockInfo{r.infos[0]})
+			err = blockio.BlockPrefetch(r.columns.seqnums, r.fs, [][]*catalog.BlockInfo{r.infos[0]})
+		}
+		if err != nil {
+			return nil, err
 		}
 		r.infos = r.infos[1:]
 		r.steps = r.steps[1:]
@@ -356,7 +357,7 @@ func (r *blockReader) Read(
 	}
 
 	// read the block
-	bat, err := blockio.BlockRead(
+	bat, err = blockio.BlockRead(
 		statsCtx, blockInfo, r.buffer, r.columns.seqnums, r.columns.colTypes, r.ts,
 		r.filterState.seqnums,
 		r.filterState.colTypes,
@@ -432,21 +433,25 @@ func newBlockMergeReader(
 			proc,
 		),
 		encodedPrimaryKey: encodedPrimaryKey,
+		deletaLocs:        make(map[string][]objectio.Location),
 	}
 	return r
 }
 
 func (r *blockMergeReader) Close() error {
-	r.blockReader.Close()
 	r.table = nil
-	return nil
+	return r.blockReader.Close()
 }
 
 func (r *blockMergeReader) prefetchDeletes() error {
 	//load delta locations for r.blocks.
+	r.table.db.txn.blockId_tn_delete_metaLoc_batch.RLock()
+	defer r.table.db.txn.blockId_tn_delete_metaLoc_batch.RUnlock()
+
 	if !r.loaded {
 		for _, info := range r.blks {
-			bats, ok := r.table.db.txn.blockId_tn_delete_metaLoc_batch[info.BlockID]
+			bats, ok := r.table.db.txn.blockId_tn_delete_metaLoc_batch.data[info.BlockID]
+
 			if !ok {
 				return nil
 			}
@@ -461,8 +466,8 @@ func (r *blockMergeReader) prefetchDeletes() error {
 						append(r.deletaLocs[location.Name().String()], location)
 				}
 			}
-
 		}
+
 		// Get Single Col pk index
 		for idx, colDef := range r.tableDef.Cols {
 			if colDef.Name == r.tableDef.Pkey.PkeyColName {
@@ -541,20 +546,21 @@ func (r *blockMergeReader) loadDeletes(ctx context.Context, cols []string) error
 
 	//TODO:: if r.table.writes is a map , the time complexity could be O(1)
 	//load deletes from txn.writes for the specified block
-	for _, entry := range r.table.writes {
-		if entry.isGeneratedByTruncate() {
-			continue
-		}
-		if entry.typ == DELETE && entry.fileName == "" {
-			vs := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
-			for _, v := range vs {
-				id, offset := v.Decode()
-				if id == info.BlockID {
-					r.buffer = append(r.buffer, int64(offset))
+	r.table.db.txn.forEachTableWrites(r.table.db.databaseId, r.table.tableId,
+		r.table.db.txn.GetSnapshotWriteOffset(), func(entry Entry) {
+			if entry.isGeneratedByTruncate() {
+				return
+			}
+			if (entry.typ == DELETE || entry.typ == DELETE_TXN) && entry.fileName == "" {
+				vs := vector.MustFixedCol[types.Rowid](entry.bat.GetVector(0))
+				for _, v := range vs {
+					id, offset := v.Decode()
+					if id == info.BlockID {
+						r.buffer = append(r.buffer, int64(offset))
+					}
 				}
 			}
-		}
-	}
+		})
 	//load deletes from txn.deletedBlocks.
 	txn := r.table.db.txn
 	txn.deletedBlocks.getDeletedOffsetsByBlock(&info.BlockID, &r.buffer)

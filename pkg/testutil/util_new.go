@@ -149,11 +149,7 @@ func NewBatchWithNulls(ts []types.Type, random bool, n int, m *mpool.MPool) *bat
 func NewBatchWithVectors(vs []*vector.Vector, zs []int64) *batch.Batch {
 	bat := batch.NewWithSize(len(vs))
 	if len(vs) > 0 {
-		l := vs[0].Length()
-		if zs == nil {
-			zs = MakeBatchZs(l, false)
-		}
-		bat.SetRowCount(len(zs))
+		bat.SetRowCount(vs[0].Length())
 		bat.Vecs = vs
 	}
 	return bat

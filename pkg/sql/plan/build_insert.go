@@ -15,6 +15,8 @@
 package plan
 
 import (
+	"time"
+
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -25,9 +27,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
 
 func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepareStmt bool) (p *Plan, err error) {
+	start := time.Now()
+	defer func() {
+		v2.TxnStatementBuildInsertHistogram.Observe(time.Since(start).Seconds())
+	}()
 	if isReplace {
 		return nil, moerr.NewNotSupported(ctx.GetContext(), "Not support replace statement")
 	}
@@ -68,7 +75,7 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 	builder.haveOnDuplicateKey = len(stmt.OnDuplicateUpdate) > 0
 
 	bindCtx := NewBindContext(builder, nil)
-	checkInsertPkDup, pkPosInValues, isInsertWithoutAutoPkCol, err := initInsertStmt(builder, bindCtx, stmt, rewriteInfo)
+	checkInsertPkDup, pkPosInValues, isInsertWithoutAutoPkCol, insertWithoutUniqueKeyMap, insertColumns, err := initInsertStmt(builder, bindCtx, stmt, rewriteInfo)
 	if err != nil {
 		return nil, err
 	}
@@ -248,12 +255,18 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 
 		query.StmtType = plan.Query_UPDATE
 	} else {
-		err = buildInsertPlans(ctx, builder, bindCtx, objRef, tableDef, rewriteInfo.rootId, checkInsertPkDup, pkFilterExprs, newPartitionExpr, isInsertWithoutAutoPkCol)
+		err = buildInsertPlans(ctx, builder, bindCtx, objRef, tableDef, rewriteInfo.rootId, checkInsertPkDup, pkFilterExprs, newPartitionExpr, isInsertWithoutAutoPkCol, insertWithoutUniqueKeyMap, insertColumns)
 		if err != nil {
 			return nil, err
 		}
 		query.StmtType = plan.Query_INSERT
 	}
+	sqls, err := genSqlsForCheckFKSelfRefer(ctx.GetContext(),
+		dbName, tableDef.Name, tableDef.Cols, tableDef.Fkeys)
+	if err != nil {
+		return nil, err
+	}
+	query.DetectSqls = sqls
 	reduceSinkSinkScanNodes(query)
 	ReCalcQueryStats(builder, query)
 	return &Plan{
@@ -292,9 +305,9 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 	pkColLength := len(pkPosInValues)
 	var colTyp *Type
 	var insertRowIdx int
-	var pkColIdx int
+	var pkOrder int
 
-	for insertRowIdx, pkColIdx = range pkPosInValues {
+	for insertRowIdx, pkOrder = range pkPosInValues {
 		valExprs := make([]*Expr, rowsCount)
 		rowTyp := bat.Vecs[insertRowIdx].GetType()
 		colTyp = makePlan2Type(rowTyp)
@@ -321,9 +334,9 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 					val := vector.MustFixedCol[types.Uuid](bat.Vecs[insertRowIdx])[i]
 					constExpr := &plan.Expr{
 						Typ: varcharTyp,
-						Expr: &plan.Expr_C{
-							C: &plan.Const{
-								Value: &plan.Const_Sval{
+						Expr: &plan.Expr_Lit{
+							Lit: &plan.Literal{
+								Value: &plan.Literal_Sval{
 									Sval: val.ToString(),
 								},
 							},
@@ -340,24 +353,24 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 					}
 					valExprs[i] = &plan.Expr{
 						Typ: colTyp,
-						Expr: &plan.Expr_C{
-							C: constExpr,
+						Expr: &plan.Expr_Lit{
+							Lit: constExpr,
 						},
 					}
 				}
 			}
 		}
-		colExprs[pkColIdx] = valExprs
+		colExprs[pkOrder] = valExprs
 	}
 
 	if pkColLength == 1 {
-		if rowsCount > useInExprCount {
+		if rowsCount > 1 {
 			// args in list must be constant
 			expr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "in", []*Expr{{
 				Typ: colTyp,
 				Expr: &plan.Expr_Col{
 					Col: &ColRef{
-						ColPos: int32(pkColIdx),
+						ColPos: int32(pkOrder),
 						Name:   tableDef.Pkey.PkeyColName,
 					},
 				},
@@ -386,7 +399,7 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 					Typ: colTyp,
 					Expr: &plan.Expr_Col{
 						Col: &ColRef{
-							ColPos: int32(pkColIdx),
+							ColPos: int32(pkOrder),
 							Name:   tableDef.Pkey.PkeyColName,
 						},
 					},
@@ -407,23 +420,37 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 			return []*Expr{orExpr}
 		}
 	} else {
+
+		// insertRowIdx is the order in insert value SQL, pkColIdx is the order in tableDef.Pkey.Names
+		pkOrder2Idx := make(map[int]int)
+		for _, o := range pkPosInValues {
+			pkName := tableDef.Pkey.Names[o]
+			for i, c := range tableDef.Cols {
+				if c.Name == pkName {
+					pkOrder2Idx[o] = i
+					break
+				}
+			}
+		}
+
 		// multi cols pk & one row for insert
 		if rowsCount == 1 {
 			filterExprs := make([]*Expr, pkColLength)
-			for insertRowIdx, pkColIdx = range pkPosInValues {
+			for insertRowIdx, pkOrder = range pkPosInValues {
+				pkColIdx := pkOrder2Idx[pkOrder]
 				expr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{{
 					Typ: tableDef.Cols[insertRowIdx].Typ,
 					Expr: &plan.Expr_Col{
 						Col: &ColRef{
-							ColPos: int32(pkColIdx),
-							Name:   tableDef.Cols[insertRowIdx].Name,
+							ColPos: int32(pkOrder),
+							Name:   tableDef.Cols[pkColIdx].Name,
 						},
 					},
-				}, colExprs[pkColIdx][0]})
+				}, colExprs[pkOrder][0]})
 				if err != nil {
 					return nil
 				}
-				filterExprs[pkColIdx] = expr
+				filterExprs[pkOrder] = expr
 			}
 			return filterExprs
 		} else {
@@ -431,16 +458,17 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 			var orExpr *Expr
 			for i := 0; i < rowsCount; i++ {
 				var andExpr *Expr
-				for insertRowIdx, pkColIdx = range pkPosInValues {
+				for insertRowIdx, pkOrder = range pkPosInValues {
+					pkColIdx := pkOrder2Idx[pkOrder]
 					eqExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{{
 						Typ: tableDef.Cols[insertRowIdx].Typ,
 						Expr: &plan.Expr_Col{
 							Col: &ColRef{
-								ColPos: int32(pkColIdx),
-								Name:   tableDef.Cols[insertRowIdx].Name,
+								ColPos: int32(pkOrder),
+								Name:   tableDef.Cols[pkColIdx].Name,
 							},
 						},
-					}, colExprs[pkColIdx][i]})
+					}, colExprs[pkOrder][i]})
 					if err != nil {
 						return nil
 					}

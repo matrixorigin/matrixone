@@ -65,7 +65,7 @@ func NewBaseTask(impl Task, taskType TaskType, ctx *Context) *BaseTask {
 		DoneCB: doneCB,
 	}
 	if doneCB == nil {
-		task.Op.ErrorC = make(chan error)
+		task.Op.ErrorC = make(chan error, 1)
 	}
 	return task
 }

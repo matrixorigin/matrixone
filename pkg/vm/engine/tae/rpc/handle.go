@@ -18,7 +18,9 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"golang.org/x/exp/slices"
 	"os"
+	"regexp"
 	"strings"
 	"sync"
 	"syscall"
@@ -502,6 +504,20 @@ func (h *Handle) HandleFlushTable(
 	return nil, err
 }
 
+func (h *Handle) HandleForceGlobalCheckpoint(
+	ctx context.Context,
+	meta txn.TxnMeta,
+	req *db.Checkpoint,
+	resp *api.SyncLogTailResp) (cb func(), err error) {
+
+	timeout := req.FlushDuration
+
+	currTs := types.BuildTS(time.Now().UTC().UnixNano(), 0)
+
+	err = h.db.ForceGlobalCheckpoint(ctx, currTs, timeout)
+	return nil, err
+}
+
 func (h *Handle) HandleForceCheckpoint(
 	ctx context.Context,
 	meta txn.TxnMeta,
@@ -549,6 +565,15 @@ func (h *Handle) HandleInspectTN(
 	meta txn.TxnMeta,
 	req *db.InspectTN,
 	resp *db.InspectResp) (cb func(), err error) {
+	defer func() {
+		if e := recover(); e != nil {
+			err = moerr.ConvertPanicError(ctx, e)
+			logutil.Error(
+				"panic in inspect dn",
+				zap.String("cmd", req.Operation),
+				zap.String("error", err.Error()))
+		}
+	}()
 	args, _ := shlex.Split(req.Operation)
 	common.DoIfDebugEnabled(func() {
 		logutil.Debug("Inspect", zap.Strings("args", args))
@@ -852,9 +877,7 @@ func (h *Handle) HandleCreateDatabase(
 		})
 	}()
 
-	ctx = context.WithValue(ctx, defines.TenantIDKey{}, req.AccessInfo.AccountID)
-	ctx = context.WithValue(ctx, defines.UserIDKey{}, req.AccessInfo.UserID)
-	ctx = context.WithValue(ctx, defines.RoleIDKey{}, req.AccessInfo.RoleID)
+	ctx = defines.AttachAccount(ctx, req.AccessInfo.AccountID, req.AccessInfo.UserID, req.AccessInfo.RoleID)
 	ctx = context.WithValue(ctx, defines.DatTypKey{}, req.DatTyp)
 	if _, err = txn.CreateDatabaseWithCtx(
 		ctx,
@@ -906,9 +929,7 @@ func (h *Handle) HandleCreateRelation(
 		})
 	}()
 
-	ctx = context.WithValue(ctx, defines.TenantIDKey{}, req.AccessInfo.AccountID)
-	ctx = context.WithValue(ctx, defines.UserIDKey{}, req.AccessInfo.UserID)
-	ctx = context.WithValue(ctx, defines.RoleIDKey{}, req.AccessInfo.RoleID)
+	ctx = defines.AttachAccount(ctx, req.AccessInfo.AccountID, req.AccessInfo.UserID, req.AccessInfo.RoleID)
 	dbH, err := txn.GetDatabaseWithCtx(ctx, req.DatabaseName)
 	if err != nil {
 		return
@@ -948,6 +969,28 @@ func (h *Handle) HandleDropOrTruncateRelation(
 	}
 	_, err = db.TruncateByID(req.ID, req.NewId)
 	return err
+}
+
+// TODO: debug for #13342, remove me later
+var districtMatchRegexp = regexp.MustCompile(`.*bmsql_district.*`)
+
+func IsDistrictTable(name string) bool {
+	return districtMatchRegexp.MatchString(name)
+}
+
+func PrintTuple(tuple types.Tuple) string {
+	res := "("
+	for i, t := range tuple {
+		switch t := t.(type) {
+		case int32:
+			res += fmt.Sprintf("%v", t)
+		}
+		if i != len(tuple)-1 {
+			res += ","
+		}
+	}
+	res += ")"
+	return res
 }
 
 // HandleWrite Handle DML commands
@@ -1001,15 +1044,26 @@ func (h *Handle) HandleWrite(
 	if req.Type == db.EntryInsert {
 		//Add blocks which had been bulk-loaded into S3 into table.
 		if req.FileName != "" {
-			locations := make([]objectio.Location, 0)
+			metalocations := make(map[string]struct{})
 			for _, metLoc := range req.MetaLocs {
 				location, err := blockio.EncodeLocationFromString(metLoc)
 				if err != nil {
 					return err
 				}
-				locations = append(locations, location)
+				metalocations[location.Name().String()] = struct{}{}
 			}
-			err = tb.AddBlksWithMetaLoc(ctx, locations)
+			statsCNVec := req.Batch.Vecs[1]
+			statsVec := containers.ToTNVector(statsCNVec, common.WorkspaceAllocator)
+			for i := 0; i < statsVec.Length(); i++ {
+				s := objectio.ObjectStats(statsVec.Get(i).([]byte))
+				delete(metalocations, s.ObjectName().String())
+			}
+			if len(metalocations) != 0 {
+				logutil.Warnf("tbl %v, not receive stats of following locations %v", req.TableName, metalocations)
+				err = moerr.NewInternalError(ctx, "object stats doesn't match meta locations")
+				return
+			}
+			err = tb.AddBlksWithMetaLoc(ctx, statsVec)
 			return
 		}
 		//check the input batch passed by cn is valid.
@@ -1021,7 +1075,7 @@ func (h *Handle) HandleWrite(
 			}
 			if vec.Length() == 0 {
 				logutil.Errorf("the vec:%d in req.Batch is empty", i)
-				panic("invalid vector: vector is empty")
+				return moerr.NewInternalErrorNoCtx("vector's length is 0")
 			}
 			if i == 0 {
 				len = vec.Length()
@@ -1029,6 +1083,13 @@ func (h *Handle) HandleWrite(
 			if vec.Length() != len {
 				logutil.Errorf("the length of vec:%d in req.Batch is not equal to the first vec", i)
 				panic("invalid batch : the length of vectors in batch is not the same")
+			}
+		}
+		// TODO: debug for #13342, remove me later
+		if IsDistrictTable(tb.Schema().(*catalog2.Schema).Name) {
+			for i := 0; i < req.Batch.Vecs[0].Length(); i++ {
+				pk, _, _ := types.DecodeTuple(req.Batch.Vecs[11].GetRawBytesAt(i))
+				logutil.Infof("op1 %v %v", txn.GetStartTS().ToString(), PrintTuple(pk))
 			}
 		}
 		//Appends a batch of data into table.
@@ -1098,6 +1159,15 @@ func (h *Handle) HandleWrite(
 	defer rowIDVec.Close()
 	pkVec := containers.ToTNVector(req.Batch.GetVector(1), common.WorkspaceAllocator)
 	//defer pkVec.Close()
+	// TODO: debug for #13342, remove me later
+	if IsDistrictTable(tb.Schema().(*catalog2.Schema).Name) {
+		for i := 0; i < rowIDVec.Length(); i++ {
+
+			rowID := objectio.HackBytes2Rowid(req.Batch.Vecs[0].GetRawBytesAt(i))
+			pk, _, _ := types.DecodeTuple(req.Batch.Vecs[1].GetRawBytesAt(i))
+			logutil.Infof("op2 %v %v %v", txn.GetStartTS().ToString(), PrintTuple(pk), rowID.String())
+		}
+	}
 	err = tb.DeleteByPhyAddrKeys(rowIDVec, pkVec)
 	return
 }
@@ -1157,38 +1227,110 @@ func (h *Handle) HandleTraceSpan(ctx context.Context,
 	return nil, nil
 }
 
-//var visitBlkEntryForStorageUsage = func(h *Handle, resp *db.StorageUsageResp, lastCkpEndTS types.TS) {
-//	processor := new(catalog2.LoopProcessor)
-//	processor.SegmentFn = func(blkEntry *catalog2.SegmentEntry) error {
-//
-//		return nil
-//	}
-//
-//	h.db.Catalog.RecurLoop(processor)
-//}
+func traverseCatalogForNewAccounts(c *catalog2.Catalog, memo *logtail.TNUsageMemo, ids []uint32) {
+	if len(ids) == 0 {
+		return
+	}
+	processor := new(catalog2.LoopProcessor)
+	processor.DatabaseFn = func(entry *catalog2.DBEntry) error {
+		if entry.HasDropCommitted() {
+			return nil
+		}
 
-func (h *Handle) HandleStorageUsage(ctx context.Context, meta txn.TxnMeta,
-	req *db.StorageUsage, resp *db.StorageUsageResp) (func(), error) {
+		accId := entry.GetTenantID()
+		if !slices.Contains(ids, accId) {
+			return nil
+		}
 
-	// get all checkpoints.
-	//var ckp *checkpoint.CheckpointEntry
-	// [g_ckp, i_ckp, i_ckp, ...] (if g exist)
-	allCkp := h.db.BGCheckpointRunner.GetAllCheckpoints()
-	for idx := range allCkp {
-		resp.CkpEntries = append(resp.CkpEntries, &db.CkpMetaInfo{
-			Version:  allCkp[idx].GetVersion(),
-			Location: allCkp[idx].GetLocation(),
-		})
+		tblIt := entry.MakeTableIt(true)
+		for tblIt.Valid() {
+			insUsage := logtail.UsageData{
+				AccId: uint64(accId), DbId: entry.ID, TblId: tblIt.Get().GetPayload().ID}
+
+			tblEntry := tblIt.Get().GetPayload()
+			if tblEntry.HasDropCommitted() {
+				tblIt.Next()
+				continue
+			}
+
+			objIt := tblEntry.MakeObjectIt(true)
+			for objIt.Valid() {
+				objEntry := objIt.Get().GetPayload()
+				if !objEntry.IsAppendable() && !objEntry.HasDropCommitted() && objEntry.IsCommitted() {
+					insUsage.Size += uint64(objEntry.Stat.GetCompSize())
+				}
+				objIt.Next()
+			}
+
+			if insUsage.Size > 0 {
+				memo.UpdateNewAccCache(insUsage, false)
+			}
+
+			tblIt.Next()
+		}
+		return nil
 	}
 
-	resp.Succeed = true
+	c.RecurLoop(processor)
+}
 
-	// TODO
-	// exist a gap!
-	// collecting block entries that have been not been checkpoint yet
-	//if lastCkpTS.Less(types.BuildTS(time.Now().UTC().UnixNano(), 0)) {
-	//	visitBlkEntryForStorageUsage(h, resp, lastCkpTS)
-	//}
+func (h *Handle) HandleStorageUsage(ctx context.Context, meta txn.TxnMeta,
+	req *db.StorageUsageReq, resp *db.StorageUsageResp) (func(), error) {
+	memo := h.db.GetUsageMemo()
+
+	start := time.Now()
+	defer func() {
+		v2.TaskStorageUsageReqDurationHistogram.Observe(time.Since(start).Seconds())
+	}()
+
+	memo.EnterProcessing()
+	defer func() {
+		resp.Magic = logtail.StorageUsageMagic
+		memo.LeaveProcessing()
+	}()
+
+	if !memo.HasUpdate() {
+		resp.Succeed = true
+		return nil, nil
+	}
+
+	usages := memo.GatherAllAccSize()
+
+	newIds := make([]uint32, 0)
+	for _, id := range req.AccIds {
+		if usages != nil {
+			if size, exist := usages[uint64(id)]; exist {
+				memo.AddReqTrace(uint64(id), size, start, "req")
+				resp.AccIds = append(resp.AccIds, int32(id))
+				resp.Sizes = append(resp.Sizes, size)
+				delete(usages, uint64(id))
+				continue
+			}
+		}
+		// new account which haven't been collect
+		newIds = append(newIds, uint32(id))
+	}
+
+	for accId, size := range usages {
+		memo.AddReqTrace(uint64(accId), size, start, "oth")
+		resp.AccIds = append(resp.AccIds, int32(accId))
+		resp.Sizes = append(resp.Sizes, size)
+	}
+
+	// new accounts
+	traverseCatalogForNewAccounts(h.db.Catalog, memo, newIds)
+
+	for idx := range newIds {
+		if size, exist := memo.GatherNewAccountSize(uint64(newIds[idx])); exist {
+			resp.AccIds = append(resp.AccIds, int32(newIds[idx]))
+			resp.Sizes = append(resp.Sizes, size)
+			memo.AddReqTrace(uint64(newIds[idx]), size, start, "new")
+		}
+	}
+
+	memo.ClearNewAccCache()
+
+	resp.Succeed = true
 
 	return nil, nil
 }

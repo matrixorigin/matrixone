@@ -15,6 +15,8 @@
 package v2
 
 import (
+	"math"
+
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/collectors"
 )
@@ -45,6 +47,8 @@ func init() {
 	initMemMetrics()
 	initTraceMetrics()
 	initProxyMetrics()
+	initFrontendMetrics()
+	initPipelineMetrics()
 
 	registry.MustRegister(HeartbeatHistogram)
 	registry.MustRegister(HeartbeatFailureCounter)
@@ -69,6 +73,8 @@ func initTaskMetrics() {
 	registry.MustRegister(taskSelectivityCounter)
 
 	registry.MustRegister(TaskMergeTransferPageLengthGauge)
+
+	registry.MustRegister(TaskStorageUsageCacheMemUsedGauge)
 }
 
 func initFileServiceMetrics() {
@@ -98,8 +104,6 @@ func initLogtailMetrics() {
 	registry.MustRegister(LogTailCollectDurationHistogram)
 	registry.MustRegister(LogTailSubscriptionCounter)
 	registry.MustRegister(txnTNSideDurationHistogram)
-
-	registry.MustRegister(TxnShowAccountsDurationHistogram)
 }
 
 func initTxnMetrics() {
@@ -150,6 +154,7 @@ func initRPCMetrics() {
 
 func initTraceMetrics() {
 	registry.MustRegister(traceCollectorDurationHistogram)
+	registry.MustRegister(traceNegativeCUCounter)
 }
 
 func initProxyMetrics() {
@@ -161,4 +166,18 @@ func initProxyMetrics() {
 	registry.MustRegister(ProxyAvailableBackendServerNumGauge)
 	registry.MustRegister(ProxyTransferQueueSizeGauge)
 	registry.MustRegister(ProxyConnectionsNeedToTransferGauge)
+}
+
+func initFrontendMetrics() {
+	registry.MustRegister(acceptConnDurationHistogram)
+	registry.MustRegister(routineCounter)
+	registry.MustRegister(requestCounter)
+}
+
+func initPipelineMetrics() {
+	registry.MustRegister(PipelineServerDurationHistogram)
+}
+
+func getDurationBuckets() []float64 {
+	return append(prometheus.ExponentialBuckets(0.00001, 2, 30), math.MaxFloat64)
 }

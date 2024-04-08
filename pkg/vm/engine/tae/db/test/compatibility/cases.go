@@ -74,6 +74,14 @@ func init() {
 	TestCaseRegister(
 		MakeTestCase(testLSNCheck, "prepare-6", "test-6", "prepare-6=>test-6"),
 	)
+
+	PrepareCaseRegister(MakePrepareCase(
+		prepareObjectInfo, "prepare-7", "prepare object info",
+		schemaCfg{10, 2, 18, 13}, 51, longOpt,
+	))
+	TestCaseRegister(
+		MakeTestCase(testObjectInfo, "prepare-7", "test-7", "prepare-7=>test-7"),
+	)
 }
 
 func prepare1(tc PrepareCase, t *testing.T) {
@@ -520,4 +528,28 @@ func testDelete(tc TestCase, t *testing.T) {
 func testLSNCheck(tc TestCase, t *testing.T) {
 	tae := initTestEngine(tc, t)
 	tae.Close()
+}
+
+func prepareObjectInfo(tc PrepareCase, t *testing.T) {
+	tae := tc.GetEngine(t)
+	defer tae.Close()
+	bat := tc.GetBatch(t)
+	defer bat.Close()
+
+	// checkpoint
+	tae.CreateRelAndAppend(bat, true)
+	tae.CompactBlocks(false)
+	tae.MergeBlocks(false)
+}
+
+func testObjectInfo(tc TestCase, t *testing.T) {
+	tae := initTestEngine(tc, t)
+	defer tae.Close()
+	t.Log(tae.Catalog.SimplePPString(3))
+	tae.CheckObjectInfo(true)
+
+	tae.ForceCheckpoint()
+	tae.Restart(context.TODO())
+	t.Log(tae.Catalog.SimplePPString(3))
+	tae.CheckObjectInfo(false)
 }

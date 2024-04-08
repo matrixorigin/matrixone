@@ -59,7 +59,7 @@ func main() {
 
 	schema := catalog.MockSchemaAll(10, 3)
 	schema.BlockMaxRows = 20
-	schema.SegmentMaxBlocks = 2
+	schema.ObjectMaxBlocks = 2
 	batchCnt := uint32(1)
 	batchRows := int(schema.BlockMaxRows * 1 / 20 * batchCnt)
 	{

@@ -130,6 +130,10 @@ func TestDiskCache(t *testing.T) {
 	testUpdate(cache)
 
 	assert.Equal(t, 1, numWritten)
+
+	// delete file
+	err = cache.DeletePaths(ctx, []string{"foo"})
+	assert.Nil(t, err)
 }
 
 func TestDiskCacheWriteAgain(t *testing.T) {

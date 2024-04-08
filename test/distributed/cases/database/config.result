@@ -2,7 +2,7 @@ drop database if exists test;
 create database test;
 select `variable_value` from mo_catalog.mo_mysql_compatibility_mode where dat_name ="test";
 variable_value
-0.7
+8.0.30-MatrixOne-v1.0.0
 alter database test set mysql_compatibility_mode = '8.0.30-MatrixOne-v0.7.0';
 select `variable_value` from mo_catalog.mo_mysql_compatibility_mode where dat_name ="test";
 variable_value
@@ -13,7 +13,7 @@ create database test;
 use test;
 select version();
 version()
-0.7
+8.0.30-MatrixOne-v1.0.0
 alter database test set mysql_compatibility_mode = '8.0.30-MatrixOne-v0.7.0';
 select version();
 version()
@@ -28,7 +28,7 @@ create database test1;
 use test;
 select version();
 version()
-0.7
+8.0.30-MatrixOne-v1.0.0
 alter database test set mysql_compatibility_mode = '8.0.30-MatrixOne-v0.7.0';
 select version();
 version()
@@ -36,12 +36,12 @@ version()
 use test1;
 select version();
 version()
-0.7
+8.0.30-MatrixOne-v1.0.0
 alter account config abc set mysql_compatibility_mode = '8.0.30-MatrixOne-v0.8.0';
 internal error: do not have privileges to alter account config
 select version();
 version()
-0.7
+8.0.30-MatrixOne-v1.0.0
 drop database test;
 drop database test1;
 drop account abc;

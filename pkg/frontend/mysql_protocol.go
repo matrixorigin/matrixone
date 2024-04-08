@@ -22,6 +22,15 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
+	"math"
+	"math/rand"
+	"net"
+	"strconv"
+	"strings"
+	"sync/atomic"
+	"time"
+	"unicode"
+
 	"github.com/fagongzi/goetty/v2"
 	goetty_buf "github.com/fagongzi/goetty/v2/buf"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -34,16 +43,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/proxy"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"go.uber.org/zap"
-	"math"
-	"math/rand"
-	"net"
-	"strconv"
-	"strings"
-	"sync/atomic"
-	"time"
-	"unicode"
 )
 
 // DefaultCapability means default capabilities of the server
@@ -193,7 +195,9 @@ type MysqlProtocol interface {
 
 	GetStats() string
 
-	CalculateOutTrafficBytes() int64
+	// CalculateOutTrafficBytes return bytes, mysql packet num send back to client
+	// reset marks Do reset counter after calculation or not.
+	CalculateOutTrafficBytes(reset bool) (int64, int64)
 
 	ParseExecuteData(ctx context.Context, proc *process.Process, stmt *PrepareStmt, data []byte, pos int) error
 
@@ -359,8 +363,20 @@ func (mp *MysqlProtocolImpl) GetCapability() uint32 {
 	return mp.capability
 }
 
+func (mp *MysqlProtocolImpl) SetCapability(cap uint32) {
+	mp.m.Lock()
+	defer mp.m.Unlock()
+	mp.capability = cap
+}
+
 func (mp *MysqlProtocolImpl) AddSequenceId(a uint8) {
+	mp.ses.CountPacket(int64(a))
 	mp.sequenceId.Add(uint32(a))
+}
+
+func (mp *MysqlProtocolImpl) SetSequenceID(value uint8) {
+	mp.ses.CountPacket(1)
+	mp.sequenceId.Store(uint32(value))
 }
 
 func (mp *MysqlProtocolImpl) GetDatabaseName() string {
@@ -393,12 +409,19 @@ func (mp *MysqlProtocolImpl) GetStats() string {
 		mp.String())
 }
 
-// CalculateOutTrafficBytes calculate the bytes of the last out traffic
-func (mp *MysqlProtocolImpl) CalculateOutTrafficBytes() int64 {
+// CalculateOutTrafficBytes calculate the bytes of the last out traffic, the number of mysql packets
+func (mp *MysqlProtocolImpl) CalculateOutTrafficBytes(reset bool) (bytes int64, packets int64) {
+	ses := mp.GetSession()
 	// Case 1: send data as ResultSet
-	return int64(mp.writeBytes) + int64(mp.bytesInOutBuffer-mp.startOffsetInBuffer) +
+	bytes = int64(mp.writeBytes) + int64(mp.bytesInOutBuffer-mp.startOffsetInBuffer) +
 		// Case 2: send data as CSV
-		mp.GetSession().writeCsvBytes.Load()
+		ses.writeCsvBytes.Load()
+	// mysql packet num + length(sql) / 16KiB + payload / 16 KiB
+	packets = ses.GetPacketCnt() + int64(len(ses.sql)>>14) + int64(ses.payloadCounter>>14)
+	if reset {
+		ses.ResetPacketCounter()
+	}
+	return
 }
 
 func (mp *MysqlProtocolImpl) ResetStatistics() {
@@ -426,6 +449,7 @@ func (mp *MysqlProtocolImpl) Quit() {
 	if mp.binaryNullBuffer != nil {
 		mp.binaryNullBuffer = nil
 	}
+	mp.ses = nil
 }
 
 func (mp *MysqlProtocolImpl) SetSession(ses *Session) {
@@ -1255,12 +1279,22 @@ func (mp *MysqlProtocolImpl) HandleHandshake(ctx context.Context, payload []byte
 }
 
 func (mp *MysqlProtocolImpl) Authenticate(ctx context.Context) error {
+	ses := mp.GetSession()
+	ses.timestampMap[TSAuthenticateStart] = time.Now()
+	defer func() {
+		ses.timestampMap[TSAuthenticateEnd] = time.Now()
+		v2.AuthenticateDurationHistogram.Observe(ses.timestampMap[TSAuthenticateEnd].Sub(ses.timestampMap[TSAuthenticateStart]).Seconds())
+	}()
+
 	logDebugf(mp.getDebugStringUnsafe(), "authenticate user")
 	mp.incDebugCount(0)
 	if err := mp.authenticateUser(ctx, mp.authResponse); err != nil {
 		logutil.Errorf("authenticate user failed.error:%v", err)
 		errorCode, sqlState, msg := RewriteError(err, mp.username)
+		ses.timestampMap[TSSendErrPacketStart] = time.Now()
 		err2 := mp.sendErrPacket(errorCode, sqlState, msg)
+		ses.timestampMap[TSSendErrPacketEnd] = time.Now()
+		v2.SendErrPacketDurationHistogram.Observe(ses.timestampMap[TSSendErrPacketEnd].Sub(ses.timestampMap[TSSendErrPacketStart]).Seconds())
 		if err2 != nil {
 			logutil.Errorf("send err packet failed.error:%v", err2)
 			return err2
@@ -1270,7 +1304,10 @@ func (mp *MysqlProtocolImpl) Authenticate(ctx context.Context) error {
 
 	mp.incDebugCount(2)
 	logDebugf(mp.getDebugStringUnsafe(), "handle handshake end")
+	ses.timestampMap[TSSendOKPacketStart] = time.Now()
 	err := mp.sendOKPacket(0, 0, 0, 0, "")
+	ses.timestampMap[TSSendOKPacketEnd] = time.Now()
+	v2.SendOKPacketDurationHistogram.Observe(ses.timestampMap[TSSendOKPacketEnd].Sub(ses.timestampMap[TSSendOKPacketStart]).Seconds())
 	mp.incDebugCount(3)
 	logDebugf(mp.getDebugStringUnsafe(), "handle handshake response ok")
 	if err != nil {
@@ -1645,6 +1682,13 @@ func (mp *MysqlProtocolImpl) negotiateAuthenticationMethod(ctx context.Context) 
 	return data, nil
 }
 
+// extendStatus extends a flag to the status variable.
+// SERVER_QUERY_WAS_SLOW and SERVER_STATUS_NO_GOOD_INDEX_USED is not used in other modules,
+// so we use it to mark the packet MUST be OK/EOF.
+func extendStatus(old uint16) uint16 {
+	return old | SERVER_QUERY_WAS_SLOW | SERVER_STATUS_NO_GOOD_INDEX_USED
+}
+
 // make a OK packet
 func (mp *MysqlProtocolImpl) makeOKPayload(affectedRows, lastInsertId uint64, statusFlags, warnings uint16, message string) []byte {
 	data := make([]byte, HeaderOffset+128+len(message)+10)
@@ -1652,6 +1696,7 @@ func (mp *MysqlProtocolImpl) makeOKPayload(affectedRows, lastInsertId uint64, st
 	pos = mp.io.WriteUint8(data, pos, defines.OKHeader)
 	pos = mp.writeIntLenEnc(data, pos, affectedRows)
 	pos = mp.writeIntLenEnc(data, pos, lastInsertId)
+	statusFlags = extendStatus(statusFlags)
 	if (mp.capability & CLIENT_PROTOCOL_41) != 0 {
 		pos = mp.io.WriteUint16(data, pos, statusFlags)
 		pos = mp.io.WriteUint16(data, pos, warnings)
@@ -1804,6 +1849,8 @@ func setCharacter(column *MysqlColumn) {
 	switch column.columnType {
 	// blob type should use 0x3f to show the binary data
 	case defines.MYSQL_TYPE_VARCHAR, defines.MYSQL_TYPE_STRING, defines.MYSQL_TYPE_TEXT:
+		column.SetCharset(charsetVarchar)
+	case defines.MYSQL_TYPE_VAR_STRING:
 		column.SetCharset(charsetVarchar)
 	default:
 		column.SetCharset(charsetBinary)
@@ -2011,8 +2058,6 @@ func (mp *MysqlProtocolImpl) makeResultSetBinaryRow(data []byte, mrs *MysqlResul
 					data = mp.appendUint32(data, math.Float32bits(v))
 				case float64:
 					data = mp.appendUint32(data, math.Float32bits(float32(v)))
-				case string:
-					data = mp.appendStringLenEnc(data, v)
 				default:
 				}
 			}
@@ -2025,8 +2070,6 @@ func (mp *MysqlProtocolImpl) makeResultSetBinaryRow(data []byte, mrs *MysqlResul
 					data = mp.appendUint64(data, math.Float64bits(float64(v)))
 				case float64:
 					data = mp.appendUint64(data, math.Float64bits(v))
-				case string:
-					data = mp.appendStringLenEnc(data, v)
 				default:
 				}
 			}
@@ -2177,8 +2220,6 @@ func (mp *MysqlProtocolImpl) makeResultSetTextRow(data []byte, mrs *MysqlResultS
 					data = mp.appendStringLenEncOfFloat64(data, float64(v), 32)
 				case float64:
 					data = mp.appendStringLenEncOfFloat64(data, v, 32)
-				case string:
-					data = mp.appendStringLenEnc(data, v)
 				default:
 				}
 			}
@@ -2191,8 +2232,6 @@ func (mp *MysqlProtocolImpl) makeResultSetTextRow(data []byte, mrs *MysqlResultS
 					data = mp.appendStringLenEncOfFloat64(data, float64(v), 64)
 				case float64:
 					data = mp.appendStringLenEncOfFloat64(data, v, 64)
-				case string:
-					data = mp.appendStringLenEnc(data, v)
 				default:
 				}
 			}
@@ -2607,12 +2646,12 @@ func (mp *MysqlProtocolImpl) sendResultSet(ctx context.Context, set ResultSet, c
 
 	//If the CLIENT_DEPRECATE_EOF client capabilities flag is set, OK_Packet; else EOF_Packet.
 	if mp.capability&CLIENT_DEPRECATE_EOF != 0 {
-		err := mp.sendOKPacketWithEof(0, 0, status, 0, "")
+		err := mp.sendOKPacketWithEof(0, 0, extendStatus(status), 0, "")
 		if err != nil {
 			return err
 		}
 	} else {
-		err := mp.sendEOFPacket(warnings, status)
+		err := mp.sendEOFPacket(warnings, extendStatus(status))
 		if err != nil {
 			return err
 		}
@@ -2708,29 +2747,33 @@ func (mp *MysqlProtocolImpl) receiveExtraInfo(rs goetty.IOSession) {
 		logDebugf(mp.GetDebugString(), "failed to set deadline for salt updating: %v", err)
 		return
 	}
-	extraInfo := &proxy.ExtraInfo{}
+	var i proxy.ExtraInfo
 	reader := bufio.NewReader(rs.RawConn())
-	if err := extraInfo.Decode(reader); err != nil {
-		if err != nil {
-			// Something wrong when try to read the salt value.
-			// If the error is timeout, we treat it as normal case and do not update salt.
-			if err, ok := err.(net.Error); ok && err.Timeout() {
-				logInfo(mp.ses, mp.GetDebugString(), "cannot get salt, maybe not use proxy",
-					zap.Error(err))
-			} else {
-				logError(mp.ses, mp.GetDebugString(), "failed to get extra info",
-					zap.Error(err))
-			}
-		}
-	} else {
-		mp.SetSalt(extraInfo.Salt)
-		mp.GetSession().requestLabel = extraInfo.Label.Labels
-		if extraInfo.InternalConn {
-			mp.GetSession().connType = ConnTypeInternal
+	if err := i.Decode(reader); err != nil {
+		// If the error is timeout, we treat it as normal case and do not update extra info.
+		if err, ok := err.(net.Error); ok && err.Timeout() {
+			logInfo(mp.ses, mp.GetDebugString(), "cannot get salt, maybe not use proxy",
+				zap.Error(err))
 		} else {
-			mp.GetSession().connType = ConnTypeExternal
+			logError(mp.ses, mp.GetDebugString(), "failed to get extra info",
+				zap.Error(err))
 		}
+		return
 	}
+
+	// must from proxy if extraInfo is received
+	mp.GetSession().fromProxy = true
+	mp.SetSalt(i.Salt)
+	mp.connectionID = i.ConnectionID
+	ses := mp.GetSession()
+	ses.requestLabel = i.Label
+	if i.InternalConn {
+		ses.connType = ConnTypeInternal
+	} else {
+		ses.connType = ConnTypeExternal
+	}
+	ses.clientAddr = i.ClientAddr
+	ses.proxyAddr = mp.Peer()
 }
 
 /*

@@ -159,8 +159,13 @@ func (r *RemoteCache) Update(ctx context.Context, vector *IOVector, async bool) 
 
 func (r *RemoteCache) Flush() {}
 
+func (r *RemoteCache) DeletePaths(ctx context.Context, paths []string) error {
+	//TODO
+	return nil
+}
+
 func HandleRemoteRead(
-	ctx context.Context, fs FileService, req *pb.Request, resp *pb.Response,
+	ctx context.Context, fs FileService, req *pb.Request, resp *pb.CacheResponse,
 ) error {
 	if req.RemoteReadRequest == nil {
 		return moerr.NewInternalError(ctx, "bad request")
@@ -199,5 +204,6 @@ func HandleRemoteRead(
 	resp.RemoteReadResponse = &pb.RemoteReadResponse{
 		ResponseCacheData: respData,
 	}
+	resp.ReleaseFunc = func() { ioVec.Release() }
 	return nil
 }

@@ -20,6 +20,8 @@ import (
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 )
@@ -112,11 +114,60 @@ func (un *EntryMVCCNode) ApplyCommit(ts types.TS) (err error) {
 	return nil
 }
 
+func (un *EntryMVCCNode) AppendTuple(bat *containers.Batch) {
+	startTSVec := bat.GetVectorByName(EntryNode_CreateAt)
+	vector.AppendFixed(
+		startTSVec.GetDownstreamVector(),
+		un.CreatedAt,
+		false,
+		startTSVec.GetAllocator(),
+	)
+	vector.AppendFixed(
+		bat.GetVectorByName(EntryNode_DeleteAt).GetDownstreamVector(),
+		un.DeletedAt,
+		false,
+		startTSVec.GetAllocator(),
+	)
+}
+
+func (un *EntryMVCCNode) AppendTupleWithCommitTS(bat *containers.Batch, ts types.TS) {
+	startTSVec := bat.GetVectorByName(EntryNode_CreateAt)
+	createTS := un.CreatedAt
+	if createTS.Equal(txnif.UncommitTS) {
+		createTS = ts
+	}
+	vector.AppendFixed(
+		startTSVec.GetDownstreamVector(),
+		createTS,
+		false,
+		startTSVec.GetAllocator(),
+	)
+	deleteTS := un.DeletedAt
+	if deleteTS.Equal(txnif.UncommitTS) {
+		deleteTS = ts
+	}
+	vector.AppendFixed(
+		bat.GetVectorByName(EntryNode_DeleteAt).GetDownstreamVector(),
+		deleteTS,
+		false,
+		startTSVec.GetAllocator(),
+	)
+}
+
+func ReadEntryNodeTuple(bat *containers.Batch, row int) (un *EntryMVCCNode) {
+	un = &EntryMVCCNode{
+		CreatedAt: bat.GetVectorByName(EntryNode_CreateAt).Get(row).(types.TS),
+		DeletedAt: bat.GetVectorByName(EntryNode_DeleteAt).Get(row).(types.TS),
+	}
+	return
+}
+
 type BaseNode[T any] interface {
 	CloneAll() T
 	CloneData() T
 	String() string
 	Update(vun T)
+	IdempotentUpdate(vun T)
 	WriteTo(w io.Writer) (n int64, err error)
 	ReadFromWithVersion(r io.Reader, ver uint16) (n int64, err error)
 }
@@ -170,6 +221,12 @@ func (e *MVCCNode[T]) String() string {
 
 // for create drop in one txn
 func (e *MVCCNode[T]) Update(un *MVCCNode[T]) {
+	e.CreatedAt = un.CreatedAt
+	e.DeletedAt = un.DeletedAt
+	e.BaseNode.Update(un.BaseNode)
+}
+
+func (e *MVCCNode[T]) IdempotentUpdate(un *MVCCNode[T]) {
 	e.CreatedAt = un.CreatedAt
 	e.DeletedAt = un.DeletedAt
 	e.BaseNode.Update(un.BaseNode)

@@ -17,29 +17,21 @@ package disttae
 import (
 	"bytes"
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"math/rand"
-	"sync"
 	"testing"
-	"time"
 
-	"github.com/lni/goutils/leaktest"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	logpb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
-	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
-	"github.com/stretchr/testify/assert"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/stretchr/testify/require"
 )
 
@@ -96,7 +88,7 @@ func TestBlockMetaMarshal(t *testing.T) {
 	require.Equal(t, info, *info2)
 }
 
-func TestCheckExprIsMonotonic(t *testing.T) {
+func TestCheckExprIsZonemappable(t *testing.T) {
 	type asserts = struct {
 		result bool
 		expr   *plan.Expr
@@ -118,11 +110,11 @@ func TestCheckExprIsMonotonic(t *testing.T) {
 		})},
 	}
 
-	t.Run("test checkExprIsMonotonic", func(t *testing.T) {
+	t.Run("test checkExprIsZonemappable", func(t *testing.T) {
 		for i, testCase := range testCases {
-			isMonotonic := plan2.CheckExprIsMonotonic(context.TODO(), testCase.expr)
-			if isMonotonic != testCase.result {
-				t.Fatalf("checkExprIsMonotonic testExprs[%d] is different with expected", i)
+			zonemappable := plan2.ExprIsZonemappable(context.TODO(), testCase.expr)
+			if zonemappable != testCase.result {
+				t.Fatalf("checkExprIsZonemappable testExprs[%d] is different with expected", i)
 			}
 		}
 	})
@@ -455,7 +447,7 @@ func TestGetCompositePkValueByExpr(t *testing.T) {
 	}
 	pks := []string{"d", "c", "b"}
 	for i, expr := range tc.exprs {
-		vals := make([]*plan.Const, len(pks))
+		vals := make([]*plan.Literal, len(pks))
 		ok, hasNull := getCompositPKVals(expr, pks, vals, nil)
 		cnt := 0
 		require.Equal(t, tc.hasNull[i], hasNull)
@@ -793,375 +785,6 @@ func TestComputeRangeByIntPk(t *testing.T) {
 				}
 			}
 		}
-	})
-}
-
-type mockHAKeeperClient struct {
-	sync.RWMutex
-	value logpb.ClusterDetails
-	err   error
-}
-
-func (c *mockHAKeeperClient) updateCN(uuid string, labels map[string]metadata.LabelList) {
-	c.Lock()
-	defer c.Unlock()
-	var cs *logpb.CNStore
-	for i := range c.value.CNStores {
-		if c.value.CNStores[i].UUID == uuid {
-			cs = &c.value.CNStores[i]
-			break
-		}
-	}
-	if cs != nil {
-		cs.Labels = labels
-		return
-	}
-	cs = &logpb.CNStore{
-		UUID:      uuid,
-		Labels:    labels,
-		WorkState: metadata.WorkState_Working,
-	}
-	c.value.CNStores = append(c.value.CNStores, *cs)
-}
-
-func (c *mockHAKeeperClient) GetClusterDetails(ctx context.Context) (logpb.ClusterDetails, error) {
-	c.RLock()
-	defer c.RUnlock()
-	return c.value, c.err
-}
-
-func runTestWithMOCluster(t *testing.T, fn func(t *testing.T, hc *mockHAKeeperClient, c clusterservice.MOCluster)) {
-	defer leaktest.AfterTest(t)()
-	rt := runtime.DefaultRuntime()
-	runtime.SetupProcessLevelRuntime(rt)
-	hc := &mockHAKeeperClient{}
-	mc := clusterservice.NewMOCluster(hc, 3*time.Second)
-	defer mc.Close()
-	rt.SetGlobalVariables(runtime.ClusterService, mc)
-
-	fn(t, hc, mc)
-}
-
-func TestSelectForSuperTenant_C0(t *testing.T) {
-	runTestWithMOCluster(t, func(t *testing.T, hc *mockHAKeeperClient, c clusterservice.MOCluster) {
-		cnLabels1 := map[string]metadata.LabelList{}
-		hc.updateCN("cn1", cnLabels1)
-
-		cnLabels2 := map[string]metadata.LabelList{}
-		hc.updateCN("cn2", cnLabels2)
-		c.ForceRefresh(true)
-
-		var cns []*metadata.CNService
-
-		s := clusterservice.NewSelector().SelectByLabel(map[string]string{
-			"account": "sys",
-		}, clusterservice.EQ)
-		SelectForSuperTenant(s, "dump", nil, func(s *metadata.CNService) {
-			cns = append(cns, s)
-		})
-		assert.Equal(t, 2, len(cns))
-	})
-}
-
-func TestSelectForSuperTenant_C1(t *testing.T) {
-	runTestWithMOCluster(t, func(t *testing.T, hc *mockHAKeeperClient, c clusterservice.MOCluster) {
-		cnLabels1 := map[string]metadata.LabelList{
-			"account": {
-				Labels: []string{"sys"},
-			},
-			"k1": {
-				Labels: []string{"v1"},
-			},
-		}
-		hc.updateCN("cn1", cnLabels1)
-
-		cnLabels2 := map[string]metadata.LabelList{
-			"k2": {
-				Labels: []string{"v2"},
-			},
-		}
-		hc.updateCN("cn2", cnLabels2)
-		c.ForceRefresh(true)
-
-		var cns []*metadata.CNService
-
-		s := clusterservice.NewSelector().SelectByLabel(map[string]string{
-			"account": "sys",
-			"k1":      "v1",
-		}, clusterservice.EQ)
-		SelectForSuperTenant(s, "dump", nil, func(s *metadata.CNService) {
-			cns = append(cns, s)
-		})
-		assert.Equal(t, 1, len(cns))
-		assert.Equal(t, "cn1", cns[0].ServiceID)
-	})
-}
-
-func TestSelectForSuperTenant_C2(t *testing.T) {
-	runTestWithMOCluster(t, func(t *testing.T, hc *mockHAKeeperClient, c clusterservice.MOCluster) {
-		cnLabels1 := map[string]metadata.LabelList{
-			"k1": {
-				Labels: []string{"v1"},
-			},
-		}
-		hc.updateCN("cn1", cnLabels1)
-
-		cnLabels2 := map[string]metadata.LabelList{
-			"k2": {
-				Labels: []string{"v2"},
-			},
-		}
-		hc.updateCN("cn2", cnLabels2)
-		c.ForceRefresh(true)
-
-		var cns []*metadata.CNService
-
-		s := clusterservice.NewSelector().SelectByLabel(map[string]string{
-			"account": "sys",
-			"k2":      "v2",
-		}, clusterservice.EQ)
-		SelectForSuperTenant(s, "dump", nil, func(s *metadata.CNService) {
-			cns = append(cns, s)
-		})
-		assert.Equal(t, 1, len(cns))
-		assert.Equal(t, "cn2", cns[0].ServiceID)
-	})
-}
-
-func TestSelectForSuperTenant_C3(t *testing.T) {
-	runTestWithMOCluster(t, func(t *testing.T, hc *mockHAKeeperClient, c clusterservice.MOCluster) {
-		cnLabels1 := map[string]metadata.LabelList{
-			"account": {
-				Labels: []string{"sys"},
-			},
-		}
-		hc.updateCN("cn1", cnLabels1)
-
-		cnLabels2 := map[string]metadata.LabelList{
-			"k2": {
-				Labels: []string{"v2"},
-			},
-		}
-		hc.updateCN("cn2", cnLabels2)
-		c.ForceRefresh(true)
-
-		var cns []*metadata.CNService
-
-		s := clusterservice.NewSelector().SelectByLabel(map[string]string{
-			"account": "sys",
-		}, clusterservice.EQ)
-		SelectForSuperTenant(s, "dump", nil, func(s *metadata.CNService) {
-			cns = append(cns, s)
-		})
-		assert.Equal(t, 1, len(cns))
-		assert.Equal(t, "cn1", cns[0].ServiceID)
-	})
-}
-
-func TestSelectForSuperTenant_C4(t *testing.T) {
-	runTestWithMOCluster(t, func(t *testing.T, hc *mockHAKeeperClient, c clusterservice.MOCluster) {
-		cnLabels1 := map[string]metadata.LabelList{
-			"k1": {
-				Labels: []string{"v1"},
-			},
-		}
-		hc.updateCN("cn1", cnLabels1)
-
-		cnLabels2 := map[string]metadata.LabelList{
-			"k2": {
-				Labels: []string{"v2"},
-			},
-		}
-		hc.updateCN("cn2", cnLabels2)
-		c.ForceRefresh(true)
-
-		var cns []*metadata.CNService
-
-		s := clusterservice.NewSelector().SelectByLabel(map[string]string{
-			"account": "sys",
-		}, clusterservice.EQ)
-		SelectForSuperTenant(s, "dump", nil, func(s *metadata.CNService) {
-			cns = append(cns, s)
-		})
-		assert.Equal(t, 2, len(cns))
-	})
-}
-
-func TestSelectForSuperTenant_C5(t *testing.T) {
-	runTestWithMOCluster(t, func(t *testing.T, hc *mockHAKeeperClient, c clusterservice.MOCluster) {
-		cnLabels1 := map[string]metadata.LabelList{
-			"k1": {
-				Labels: []string{"v1"},
-			},
-		}
-		hc.updateCN("cn1", cnLabels1)
-
-		cnLabels2 := map[string]metadata.LabelList{}
-		hc.updateCN("cn2", cnLabels2)
-		c.ForceRefresh(true)
-
-		var cns []*metadata.CNService
-
-		s := clusterservice.NewSelector().SelectByLabel(map[string]string{
-			"account": "sys",
-		}, clusterservice.EQ)
-		SelectForSuperTenant(s, "dump", nil, func(s *metadata.CNService) {
-			cns = append(cns, s)
-		})
-		assert.Equal(t, 1, len(cns))
-		assert.Equal(t, "cn1", cns[0].ServiceID)
-	})
-}
-
-func TestSelectForSuperTenant_C6(t *testing.T) {
-	runTestWithMOCluster(t, func(t *testing.T, hc *mockHAKeeperClient, c clusterservice.MOCluster) {
-		cnLabels1 := map[string]metadata.LabelList{
-			"account": {
-				Labels: []string{"sys"},
-			},
-		}
-		hc.updateCN("cn1", cnLabels1)
-
-		cnLabels2 := map[string]metadata.LabelList{}
-		hc.updateCN("cn2", cnLabels2)
-		c.ForceRefresh(true)
-
-		var cns []*metadata.CNService
-
-		s := clusterservice.NewSelector().SelectByLabel(map[string]string{
-			"account": "sys",
-		}, clusterservice.EQ)
-		SelectForSuperTenant(s, "dump", nil, func(s *metadata.CNService) {
-			cns = append(cns, s)
-		})
-		assert.Equal(t, 1, len(cns))
-		assert.Equal(t, "cn1", cns[0].ServiceID)
-	})
-}
-
-func TestSelectForSuperTenant_C7(t *testing.T) {
-	runTestWithMOCluster(t, func(t *testing.T, hc *mockHAKeeperClient, c clusterservice.MOCluster) {
-		cnLabels1 := map[string]metadata.LabelList{
-			"account": {
-				Labels: []string{"sys"},
-			},
-		}
-		hc.updateCN("cn1", cnLabels1)
-
-		cnLabels2 := map[string]metadata.LabelList{
-			"k2": {
-				Labels: []string{"v2"},
-			},
-			"k3": {
-				Labels: []string{"v3"},
-			},
-		}
-		hc.updateCN("cn2", cnLabels2)
-		c.ForceRefresh(true)
-
-		var cns []*metadata.CNService
-
-		s := clusterservice.NewSelector().SelectByLabel(map[string]string{
-			"account": "sys",
-			"k3":      "v3",
-		}, clusterservice.EQ)
-		SelectForSuperTenant(s, "dump", nil, func(s *metadata.CNService) {
-			cns = append(cns, s)
-		})
-		assert.Equal(t, 1, len(cns))
-		assert.Equal(t, "cn2", cns[0].ServiceID)
-	})
-}
-
-func TestSelectForSuperTenant_C8(t *testing.T) {
-	runTestWithMOCluster(t, func(t *testing.T, hc *mockHAKeeperClient, c clusterservice.MOCluster) {
-		cnLabels1 := map[string]metadata.LabelList{
-			"account": {
-				Labels: []string{"sys"},
-			},
-		}
-		hc.updateCN("cn1", cnLabels1)
-
-		cnLabels2 := map[string]metadata.LabelList{
-			"k2": {
-				Labels: []string{"v2"},
-			},
-		}
-		hc.updateCN("cn2", cnLabels2)
-		c.ForceRefresh(true)
-
-		var cns []*metadata.CNService
-
-		s := clusterservice.NewSelector().SelectByLabel(map[string]string{
-			"account": "sys",
-			"k1":      "v1",
-		}, clusterservice.EQ)
-		SelectForSuperTenant(s, "dump", nil, func(s *metadata.CNService) {
-			cns = append(cns, s)
-		})
-		assert.Equal(t, 2, len(cns))
-	})
-}
-
-func TestSelectForCommonTenant_C1(t *testing.T) {
-	runTestWithMOCluster(t, func(t *testing.T, hc *mockHAKeeperClient, c clusterservice.MOCluster) {
-		cnLabels1 := map[string]metadata.LabelList{
-			"k1": {
-				Labels: []string{"v1"},
-			},
-		}
-		hc.updateCN("cn1", cnLabels1)
-
-		cnLabels2 := map[string]metadata.LabelList{}
-		hc.updateCN("cn2", cnLabels2)
-		c.ForceRefresh(true)
-
-		var cns []*metadata.CNService
-
-		s := clusterservice.NewSelector().SelectByLabel(map[string]string{
-			"account": "t1",
-		}, clusterservice.EQ)
-		SelectForCommonTenant(s, nil, func(s *metadata.CNService) {
-			cns = append(cns, s)
-		})
-		assert.Equal(t, 1, len(cns))
-		assert.Equal(t, "cn2", cns[0].ServiceID)
-	})
-}
-
-func TestSelectForCommonTenant_C2(t *testing.T) {
-	runTestWithMOCluster(t, func(t *testing.T, hc *mockHAKeeperClient, c clusterservice.MOCluster) {
-		cnLabels1 := map[string]metadata.LabelList{
-			"account": {
-				Labels: []string{"t1"},
-			},
-			"k1": {
-				Labels: []string{"v1"},
-			},
-		}
-		hc.updateCN("cn1", cnLabels1)
-
-		cnLabels2 := map[string]metadata.LabelList{
-			"account": {
-				Labels: []string{"t2"},
-			},
-			"k1": {
-				Labels: []string{"v1"},
-			},
-		}
-		hc.updateCN("cn2", cnLabels2)
-		c.ForceRefresh(true)
-
-		var cns []*metadata.CNService
-
-		s := clusterservice.NewSelector().SelectByLabel(map[string]string{
-			"account": "t1",
-		}, clusterservice.EQ)
-		SelectForCommonTenant(s, nil, func(s *metadata.CNService) {
-			cns = append(cns, s)
-		})
-		assert.Equal(t, 1, len(cns))
-		assert.Equal(t, "cn1", cns[0].ServiceID)
 	})
 }
 

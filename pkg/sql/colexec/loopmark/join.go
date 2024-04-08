@@ -47,7 +47,11 @@ func (arg *Argument) Prepare(proc *process.Process) error {
 }
 
 func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
-	anal := proc.GetAnalyze(arg.info.Idx)
+	if err, isCancel := vm.CancelCheck(proc); isCancel {
+		return vm.CancelResult, err
+	}
+
+	anal := proc.GetAnalyze(arg.info.Idx, arg.info.ParallelIdx, arg.info.ParallelMajor)
 	anal.Start()
 	defer anal.Stop()
 	ctr := arg.ctr
@@ -107,7 +111,7 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 	return nil
 }
 
-func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool, result *vm.CallResult) error {
+func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool, result *vm.CallResult) (err error) {
 	anal.Input(bat, isFirst)
 	if ctr.rbat != nil {
 		proc.PutBatch(ctr.rbat)
@@ -117,15 +121,15 @@ func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.P
 	count := bat.RowCount()
 	for i, rp := range ap.Result {
 		if rp >= 0 {
-			// rbat.Vecs[i] = bat.Vecs[rp]
-			// bat.Vecs[rp] = nil
 			typ := *bat.Vecs[rp].GetType()
 			ctr.rbat.Vecs[i] = proc.GetVector(typ)
-			if err := vector.GetUnionAllFunction(typ, proc.Mp())(ctr.rbat.Vecs[i], bat.Vecs[rp]); err != nil {
+			if err = vector.GetUnionAllFunction(typ, proc.Mp())(ctr.rbat.Vecs[i], bat.Vecs[rp]); err != nil {
 				return err
 			}
 		} else {
-			ctr.rbat.Vecs[i] = vector.NewConstFixed(types.T_bool.ToType(), false, count, proc.Mp())
+			if ctr.rbat.Vecs[i], err = vector.NewConstFixed(types.T_bool.ToType(), false, count, proc.Mp()); err != nil {
+				return err
+			}
 		}
 	}
 	ctr.rbat.AddRowCount(bat.RowCount())
@@ -146,7 +150,9 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 	for i, pos := range ap.Result {
 		if pos == -1 {
 			ctr.rbat.Vecs[i] = proc.GetVector(types.T_bool.ToType())
-			ctr.rbat.Vecs[i].PreExtend(bat.RowCount(), proc.Mp())
+			if err := ctr.rbat.Vecs[i].PreExtend(bat.RowCount(), proc.Mp()); err != nil {
+				return err
+			}
 			markPos = i
 			break
 		}
@@ -189,11 +195,14 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 			}
 		}
 		if hasTrue {
-			vector.AppendFixed(ctr.rbat.Vecs[markPos], true, false, proc.Mp())
+			err = vector.AppendFixed(ctr.rbat.Vecs[markPos], true, false, proc.Mp())
 		} else if hasNull {
-			vector.AppendFixed(ctr.rbat.Vecs[markPos], false, true, proc.Mp())
+			err = vector.AppendFixed(ctr.rbat.Vecs[markPos], false, true, proc.Mp())
 		} else {
-			vector.AppendFixed(ctr.rbat.Vecs[markPos], false, false, proc.Mp())
+			err = vector.AppendFixed(ctr.rbat.Vecs[markPos], false, false, proc.Mp())
+		}
+		if err != nil {
+			return err
 		}
 	}
 	for i, rp := range ap.Result {

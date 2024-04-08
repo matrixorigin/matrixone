@@ -34,8 +34,8 @@ type Relation interface {
 	GetCardinality(attr string) int64
 	Schema() any
 	AlterTable(ctx context.Context, req *apipb.AlterTableReq) error
-	MakeSegmentIt() SegmentIt
-	MakeSegmentItOnSnap() SegmentIt
+	MakeObjectIt() ObjectIt
+	MakeObjectItOnSnap() ObjectIt
 	MakeBlockIt() BlockIt
 
 	DeleteByPhyAddrKey(key any) error
@@ -52,13 +52,13 @@ type Relation interface {
 
 	BatchDedup(col containers.Vector) error
 	Append(ctx context.Context, data *containers.Batch) error
-	AddBlksWithMetaLoc(ctx context.Context, metaLcos []objectio.Location) error
+	AddBlksWithMetaLoc(ctx context.Context, stats containers.Vector) error
 
 	GetMeta() any
-	CreateSegment(bool) (Segment, error)
-	CreateNonAppendableSegment(is1PC bool) (Segment, error)
-	GetSegment(id *types.Segmentid) (Segment, error)
-	SoftDeleteSegment(id *types.Segmentid) (err error)
+	CreateObject(bool) (Object, error)
+	CreateNonAppendableObject(is1PC bool) (Object, error)
+	GetObject(id *types.Objectid) (Object, error)
+	SoftDeleteObject(id *types.Objectid) (err error)
 
 	GetDB() (Database, error)
 }

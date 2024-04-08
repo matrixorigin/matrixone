@@ -240,11 +240,10 @@ func logRemoteBindChanged(
 	serviceID string,
 	old, new pb.LockTable) {
 	logger := getWithSkipLogger()
-	if logger.Enabled(zap.DebugLevel) {
-		logger.Debug("remote bind changed",
-			zap.String("old", old.DebugString()),
-			zap.String("new", new.DebugString()))
-	}
+	logger.Info("bind changed",
+		zap.String("service", serviceID),
+		zap.String("old", old.DebugString()),
+		zap.String("new", new.DebugString()))
 }
 
 func logLockTableCreated(
@@ -252,22 +251,19 @@ func logLockTableCreated(
 	bind pb.LockTable,
 	remote bool) {
 	logger := getWithSkipLogger()
-	if logger.Enabled(zap.DebugLevel) {
-		logger.Debug("lock table created",
-			zap.Bool("remote", remote),
-			zap.String("bind", bind.DebugString()))
-	}
+	logger.Info("bind created",
+		zap.String("service", serviceID),
+		zap.Bool("remote", remote),
+		zap.String("bind", bind.DebugString()))
 }
 
 func logLockTableClosed(
 	bind pb.LockTable,
 	remote bool) {
 	logger := getWithSkipLogger()
-	if logger.Enabled(zap.DebugLevel) {
-		logger.Debug("lock table closed",
-			zap.Bool("remote", remote),
-			zap.String("bind", bind.DebugString()))
-	}
+	logger.Info("bind closed",
+		zap.Bool("remote", remote),
+		zap.String("bind", bind.DebugString()))
 }
 
 func logDeadLockFound(
@@ -305,10 +301,13 @@ func logCheckDeadLockFailed(
 	}
 }
 
-func logKeepBindFailed(err error) {
+func logKeepBindFailed(
+	serviceID string,
+	err error) {
 	logger := getWithSkipLogger()
 	if logger.Enabled(zap.ErrorLevel) {
 		logger.Error("failed to keep lock table bind",
+			zap.String("serviceID", serviceID),
 			zap.Error(err))
 	}
 }
@@ -320,6 +319,17 @@ func logKeepRemoteLocksFailed(
 	if logger.Enabled(zap.ErrorLevel) {
 		logger.Error("failed to keep remote locks",
 			zap.String("bind", bind.DebugString()),
+			zap.Error(err))
+	}
+}
+
+func logPingFailed(
+	serviceID string,
+	err error) {
+	logger := getWithSkipLogger()
+	if logger.Enabled(zap.ErrorLevel) {
+		logger.Error("failed to ping lock service",
+			zap.String("serviceID", serviceID),
 			zap.Error(err))
 	}
 }

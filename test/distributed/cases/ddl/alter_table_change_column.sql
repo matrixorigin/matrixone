@@ -261,7 +261,7 @@ create table emp(
                     comm decimal(7,2),
                     deptno varchar(20),
                     primary key(empno),
-                    FOREIGN KEY (deptno) REFERENCES dept(deptno)
+                    constraint `c1` FOREIGN KEY (deptno) REFERENCES dept(deptno)
 );
 
 INSERT INTO emp VALUES (7369,'SMITH','CLERK',7902,'1980-12-17',800,NULL,20);
@@ -766,7 +766,7 @@ drop table if exists foreign02;
 create table foreign02(col1 int,
                        col2 int,
                        col3 int primary key,
-                       foreign key(col1) references foreign01(col1));
+                       constraint `c1` foreign key(col1) references foreign01(col1));
 show create table foreign01;
 show create table foreign02;
 insert into foreign01 values(1,'sfhuwe',1,1);
@@ -1149,5 +1149,30 @@ alter table mix01 add column col5 int;
 show create table mix01;
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'mix01' and COLUMN_NAME not like '__mo%';
 drop table mix01;
+
+-- begin, alter table change column, commit, then select
+drop table if exists table01;
+begin;
+create table table01(col1 int, col2 decimal);
+insert into table01 values(100,200);
+alter table table01 change column col1 NewCol1 float;
+commit;
+select * from table01;
+select newcol1 from table01;
+drop table table01;
+
+-- alter table modify column of varchar to enum
+drop table if exists t1;
+create table t1(name varchar(25));
+insert into t1 values ('A'),('B'),('C');
+select * from t1;
+alter table t1 modify column name enum('A','B');
+alter table t1 modify column name enum('A','B','C');
+alter table t1 modify column name enum('A','B','C','D'), add column age int;
+select * from t1;
+insert into t1 values('D', 29);
+show create table t1;
+desc t1;
+drop table t1;
 
 drop database db2;

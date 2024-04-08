@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/pb/status"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -43,6 +44,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
+	db_holder "github.com/matrixorigin/matrixone/pkg/util/export/etl/db"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
@@ -67,6 +70,40 @@ const (
 	ConnTypeUnset    ConnType = 0
 	ConnTypeInternal ConnType = 1
 	ConnTypeExternal ConnType = 2
+)
+
+type TS string
+
+const (
+	// Created
+	TSCreatedStart TS = "TSCreatedStart"
+	TSCreatedEnd   TS = "TSCreatedEnd"
+
+	// Handler
+	TSEstablishStart  TS = "TSEstablishStart"
+	TSEstablishEnd    TS = "TSEstablishEnd"
+	TSUpgradeTLSStart TS = "TSUpgradeTLSStart"
+	TSUpgradeTLSEnd   TS = "TSUpgradeTLSEnd"
+
+	// mysql protocol
+	TSAuthenticateStart  TS = "TSAuthenticateStart"
+	TSAuthenticateEnd    TS = "TSAuthenticateEnd"
+	TSSendErrPacketStart TS = "TSSendErrPacketStart"
+	TSSendErrPacketEnd   TS = "TSSendErrPacketEnd"
+	TSSendOKPacketStart  TS = "TSSendOKPacketStart"
+	TSSendOKPacketEnd    TS = "TSSendOKPacketEnd"
+
+	// session
+	TSCheckTenantStart      TS = "TSCheckTenantStart"
+	TSCheckTenantEnd        TS = "TSCheckTenantEnd"
+	TSCheckUserStart        TS = "TSCheckUserStart"
+	TSCheckUserEnd          TS = "TSCheckUserEnd"
+	TSCheckRoleStart        TS = "TSCheckRoleStart"
+	TSCheckRoleEnd          TS = "TSCheckRoleEnd"
+	TSCheckDbNameStart      TS = "TSCheckDbNameStart"
+	TSCheckDbNameEnd        TS = "TSCheckDbNameEnd"
+	TSInitGlobalSysVarStart TS = "TSInitGlobalSysVarStart"
+	TSInitGlobalSysVarEnd   TS = "TSInitGlobalSysVarEnd"
 )
 
 type Session struct {
@@ -102,7 +139,7 @@ type Session struct {
 	sql           string
 
 	sysVars         map[string]interface{}
-	userDefinedVars map[string]interface{}
+	userDefinedVars map[string]*UserDefinedVar
 	gSysVars        *GlobalSystemVariables
 
 	//the server status
@@ -175,6 +212,10 @@ type Session struct {
 	sentRows atomic.Int64
 	// writeCsvBytes is used to record bytes sent by `select ... into 'file.csv'` for motrace.StatementInfo
 	writeCsvBytes atomic.Int64
+	// packetCounter count the packet communicated with client.
+	packetCounter atomic.Int64
+	// payloadCounter count the payload send by `load data`
+	payloadCounter int64
 
 	createdTime time.Time
 
@@ -251,6 +292,15 @@ type Session struct {
 	queryInProgress atomic.Bool
 	// queryInExecute indicates whether the query is in execute
 	queryInExecute atomic.Bool
+
+	// timestampMap record timestamp for statistical purposes
+	timestampMap map[TS]time.Time
+
+	// FromProxy denotes whether the session is dispatched from proxy
+	fromProxy bool
+	// If the connection is from proxy, client address is the real address of client.
+	clientAddr string
+	proxyAddr  string
 }
 
 func (ses *Session) ClearStmtProfile() {
@@ -437,6 +487,32 @@ func (ses *Session) GetSqlHelper() *SqlHelper {
 	return ses.sqlHelper
 }
 
+func (ses *Session) CountPayload(length int) {
+	if ses == nil {
+		return
+	}
+	ses.payloadCounter += int64(length)
+}
+func (ses *Session) CountPacket(delta int64) {
+	if ses == nil {
+		return
+	}
+	ses.packetCounter.Add(delta)
+}
+func (ses *Session) GetPacketCnt() int64 {
+	if ses == nil {
+		return 0
+	}
+	return ses.packetCounter.Load()
+}
+func (ses *Session) ResetPacketCounter() {
+	if ses == nil {
+		return
+	}
+	ses.packetCounter.Store(0)
+	ses.payloadCounter = 0
+}
+
 // The update version. Four function.
 func (ses *Session) SetAutoIncrCacheManager(aicm *defines.AutoIncrCacheManager) {
 	ses.mu.Lock()
@@ -507,11 +583,15 @@ func NewSession(proto Protocol, mp *mpool.MPool, pu *config.ParameterUnit,
 	//Currently, we only use the sharedTxnHandler in the background session.
 	var txnCtx context.Context
 	var txnOp TxnOperator
+	var err error
 	if sharedTxnHandler != nil {
 		if !sharedTxnHandler.IsValidTxnOperator() {
 			panic("shared txn is invalid")
 		}
-		txnCtx, txnOp = sharedTxnHandler.GetTxnOperator()
+		txnCtx, txnOp, err = sharedTxnHandler.GetTxnOperator()
+		if err != nil {
+			panic(err)
+		}
 	}
 	txnHandler := InitTxnHandler(pu.StorageEngine, pu.TxnClient, txnCtx, txnOp)
 
@@ -540,10 +620,12 @@ func NewSession(proto Protocol, mp *mpool.MPool, pu *config.ParameterUnit,
 		planCache: newPlanCache(100),
 		startedAt: time.Now(),
 		connType:  ConnTypeUnset,
+
+		timestampMap: map[TS]time.Time{},
 	}
 	if isNotBackgroundSession {
 		ses.sysVars = gSysVars.CopySysVarsToSession()
-		ses.userDefinedVars = make(map[string]interface{})
+		ses.userDefinedVars = make(map[string]*UserDefinedVar)
 		ses.prepareStmts = make(map[string]*PrepareStmt)
 		ses.statsCache = plan2.NewStatsCache()
 		// For seq init values.
@@ -554,13 +636,11 @@ func NewSession(proto Protocol, mp *mpool.MPool, pu *config.ParameterUnit,
 	ses.buf = buffer.New()
 	ses.isNotBackgroundSession = isNotBackgroundSession
 	ses.sqlHelper = &SqlHelper{ses: ses}
-	ses.uuid, _ = uuid.NewUUID()
+	ses.uuid, _ = uuid.NewV7()
 	ses.SetOptionBits(OPTION_AUTOCOMMIT)
 	ses.GetTxnCompileCtx().SetSession(ses)
 	ses.GetTxnHandler().SetSession(ses)
 	ses.SetAutoIncrCacheManager(aicm)
-
-	var err error
 	if ses.mp == nil {
 		// If no mp, we create one for session.  Use GuestMmuLimitation as cap.
 		// fixed pool size can be another param, or should be computed from cap,
@@ -594,11 +674,18 @@ func NewSession(proto Protocol, mp *mpool.MPool, pu *config.ParameterUnit,
 }
 
 func (ses *Session) Close() {
+	ses.protocol = nil
 	ses.mrs = nil
 	ses.data = nil
 	ses.ep = nil
-	ses.txnHandler = nil
-	ses.txnCompileCtx = nil
+	if ses.txnHandler != nil {
+		ses.txnHandler.ses = nil
+		ses.txnHandler = nil
+	}
+	if ses.txnCompileCtx != nil {
+		ses.txnCompileCtx.ses = nil
+		ses.txnCompileCtx = nil
+	}
 	ses.storage = nil
 	ses.sql = ""
 	ses.sysVars = nil
@@ -626,7 +713,10 @@ func (ses *Session) Close() {
 	ses.statsCache = nil
 	ses.seqCurValues = nil
 	ses.seqLastValue = nil
-	ses.sqlHelper = nil
+	if ses.sqlHelper != nil {
+		ses.sqlHelper.ses = nil
+		ses.sqlHelper = nil
+	}
 	ses.ClearStmtProfile()
 	//  The mpool cleanup must be placed at the end,
 	// and you must wait for all resources to be cleaned up before you can delete the mpool
@@ -636,6 +726,7 @@ func (ses *Session) Close() {
 		for _, bat := range bats {
 			bat.Clean(ses.proc.Mp())
 		}
+		ses.proc = nil
 	}
 	if ses.isNotBackgroundSession {
 		mp := ses.GetMemPool()
@@ -646,6 +737,11 @@ func (ses *Session) Close() {
 		ses.buf.Free()
 		ses.buf = nil
 	}
+
+	ses.timestampMap = nil
+	ses.upstream = nil
+	ses.rm = nil
+	ses.rt = nil
 }
 
 // BackgroundSession executing the sql in background
@@ -671,6 +767,8 @@ func NewBackgroundSession(reqCtx context.Context, upstream *Session, mp *mpool.M
 	ses.upstream = upstream
 	ses.SetOutputCallback(fakeDataSetFetcher)
 	if stmt := motrace.StatementFromContext(reqCtx); stmt != nil {
+		// Reset background session id as frontend stmt id
+		ses.uuid = stmt.StatementID
 		logutil.Debugf("session uuid: %s -> background session uuid: %s", uuid.UUID(stmt.SessionID).String(), ses.uuid.String())
 	}
 	cancelBackgroundCtx, cancelBackgroundFunc := context.WithCancel(reqCtx)
@@ -699,8 +797,8 @@ func (bgs *BackgroundSession) Close() {
 
 	if bgs.Session != nil {
 		bgs.Session.Close()
+		bgs.Session = nil
 	}
-	bgs = nil
 }
 
 func (ses *Session) GetIncBlockIdx() int {
@@ -825,8 +923,12 @@ func (ses *Session) SetTempTableStorage(ck clock.Clock) (*metadata.TNService, er
 	}
 	// Arbitrary value is OK, for more information about TEMPORARY_TABLE_DN_ADDR, please refer to the comment in defines/const.go
 	tnAddr := defines.TEMPORARY_TABLE_TN_ADDR
+	uid, err := uuid.NewV7()
+	if err != nil {
+		return nil, err
+	}
 	tnStore := metadata.TNService{
-		ServiceID:         uuid.NewString(),
+		ServiceID:         uid.String(),
 		TxnServiceAddress: tnAddr,
 		Shards:            shards,
 	}
@@ -977,6 +1079,12 @@ func (ses *Session) GenNewStmtId() uint32 {
 	defer ses.mu.Unlock()
 	ses.lastStmtId = ses.lastStmtId + 1
 	return ses.lastStmtId
+}
+
+func (ses *Session) SetLastStmtID(id uint32) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	ses.lastStmtId = id
 }
 
 func (ses *Session) GetLastStmtId() uint32 {
@@ -1168,11 +1276,13 @@ func (ses *Session) SetPrepareStmt(name string, prepareStmt *PrepareStmt) error 
 	} else {
 		stmt.Close()
 	}
-	isInsertValues, exprList := checkPlanIsInsertValues(ses.proc,
-		prepareStmt.PreparePlan.GetDcl().GetPrepare().GetPlan())
-	if isInsertValues {
-		prepareStmt.proc = ses.proc
-		prepareStmt.exprList = exprList
+	if prepareStmt != nil && prepareStmt.PreparePlan != nil {
+		isInsertValues, exprList := checkPlanIsInsertValues(ses.proc,
+			prepareStmt.PreparePlan.GetDcl().GetPrepare().GetPlan())
+		if isInsertValues {
+			prepareStmt.proc = ses.proc
+			prepareStmt.exprList = exprList
+		}
 	}
 	ses.prepareStmts[name] = prepareStmt
 
@@ -1186,6 +1296,16 @@ func (ses *Session) GetPrepareStmt(name string) (*PrepareStmt, error) {
 		return prepareStmt, nil
 	}
 	return nil, moerr.NewInvalidState(ses.requestCtx, "prepared statement '%s' does not exist", name)
+}
+
+func (ses *Session) GetPrepareStmts() []*PrepareStmt {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	ret := make([]*PrepareStmt, 0, len(ses.prepareStmts))
+	for _, st := range ses.prepareStmts {
+		ret = append(ret, st)
+	}
+	return ret
 }
 
 func (ses *Session) RemovePrepareStmt(name string) {
@@ -1243,7 +1363,6 @@ func (ses *Session) GetGlobalVar(name string) (interface{}, error) {
 func (ses *Session) GetTxnCompileCtx() *TxnCompilerContext {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
-	ses.txnCompileCtx.proc = ses.proc
 	return ses.txnCompileCtx
 }
 
@@ -1314,6 +1433,18 @@ func (ses *Session) GetSessionVar(name string) (interface{}, error) {
 	}
 }
 
+func (ses *Session) GetSessionVarLocked(name string) (interface{}, error) {
+	if def, gVal, ok := ses.gSysVars.GetGlobalSysVar(name); ok {
+		ciname := strings.ToLower(name)
+		if def.GetScope() == ScopeGlobal {
+			return gVal, nil
+		}
+		return ses.sysVars[ciname], nil
+	} else {
+		return nil, moerr.NewInternalError(ses.GetRequestContext(), errorSystemVariableDoesNotExist())
+	}
+}
+
 func (ses *Session) CopyAllSessionVars() map[string]interface{} {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
@@ -1325,15 +1456,15 @@ func (ses *Session) CopyAllSessionVars() map[string]interface{} {
 }
 
 // SetUserDefinedVar sets the user defined variable to the value in session
-func (ses *Session) SetUserDefinedVar(name string, value interface{}) error {
+func (ses *Session) SetUserDefinedVar(name string, value interface{}, sql string) error {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
-	ses.userDefinedVars[strings.ToLower(name)] = value
+	ses.userDefinedVars[strings.ToLower(name)] = &UserDefinedVar{Value: value, Sql: sql}
 	return nil
 }
 
 // GetUserDefinedVar gets value of the user defined variable
-func (ses *Session) GetUserDefinedVar(name string) (SystemVariableType, interface{}, error) {
+func (ses *Session) GetUserDefinedVar(name string) (SystemVariableType, *UserDefinedVar, error) {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	val, ok := ses.userDefinedVars[strings.ToLower(name)]
@@ -1341,6 +1472,22 @@ func (ses *Session) GetUserDefinedVar(name string) (SystemVariableType, interfac
 		return SystemVariableNullType{}, nil, nil
 	}
 	return InitSystemVariableStringType(name), val, nil
+}
+
+func (ses *Session) GetTxnInfo() string {
+	txnH := ses.GetTxnHandler()
+	if txnH == nil {
+		return ""
+	}
+	_, txnOp, err := txnH.GetTxnOperator()
+	if err != nil {
+		return ""
+	}
+	if txnOp == nil {
+		return ""
+	}
+	meta := txnOp.Txn()
+	return meta.DebugString()
 }
 
 func (ses *Session) GetTxnHandler() *TxnHandler {
@@ -1461,15 +1608,17 @@ func (ses *Session) AuthenticateUser(userInput string, dbName string, authRespon
 	isSpecial, pwdBytes, specialAccount = isSpecialUser(tenant.GetUser())
 	if isSpecial && specialAccount.IsMoAdminRole() {
 		ses.SetTenantInfo(specialAccount)
+		if len(ses.requestLabel) == 0 {
+			ses.requestLabel = db_holder.GetLabelSelector()
+		}
 		return GetPassWord(HashPassWordWithByte(pwdBytes))
 	}
 
 	ses.SetTenantInfo(tenant)
 
 	//step1 : check tenant exists or not in SYS tenant context
-	sysTenantCtx := context.WithValue(ses.GetRequestContext(), defines.TenantIDKey{}, uint32(sysAccountID))
-	sysTenantCtx = context.WithValue(sysTenantCtx, defines.UserIDKey{}, uint32(rootID))
-	sysTenantCtx = context.WithValue(sysTenantCtx, defines.RoleIDKey{}, uint32(moAdminRoleID))
+	ses.timestampMap[TSCheckTenantStart] = time.Now()
+	sysTenantCtx := defines.AttachAccount(ses.GetRequestContext(), uint32(sysAccountID), uint32(rootID), uint32(moAdminRoleID))
 	sqlForCheckTenant, err := getSqlForCheckTenant(sysTenantCtx, tenant.GetTenant())
 	if err != nil {
 		return nil, err
@@ -1519,10 +1668,14 @@ func (ses *Session) AuthenticateUser(userInput string, dbName string, authRespon
 	}
 
 	tenant.SetTenantID(uint32(tenantID))
+	ses.timestampMap[TSCheckTenantEnd] = time.Now()
+	v2.CheckTenantDurationHistogram.Observe(ses.timestampMap[TSCheckTenantEnd].Sub(ses.timestampMap[TSCheckTenantStart]).Seconds())
+
 	//step2 : check user exists or not in general tenant.
 	//step3 : get the password of the user
 
-	tenantCtx := context.WithValue(ses.GetRequestContext(), defines.TenantIDKey{}, uint32(tenantID))
+	ses.timestampMap[TSCheckUserStart] = time.Now()
+	tenantCtx := defines.AttachAccountId(ses.GetRequestContext(), uint32(tenantID))
 
 	logDebugf(sessionInfo, "check user of %s exists", tenant)
 	//Get the password of the user in an independent session
@@ -1562,6 +1715,8 @@ func (ses *Session) AuthenticateUser(userInput string, dbName string, authRespon
 
 	tenant.SetUserID(uint32(userID))
 	tenant.SetDefaultRoleID(uint32(defaultRoleID))
+	ses.timestampMap[TSCheckUserEnd] = time.Now()
+	v2.CheckUserDurationHistogram.Observe(ses.timestampMap[TSCheckUserEnd].Sub(ses.timestampMap[TSCheckUserStart]).Seconds())
 
 	/*
 		login case 1: tenant:user
@@ -1577,6 +1732,7 @@ func (ses *Session) AuthenticateUser(userInput string, dbName string, authRespon
 	if tenant.HasDefaultRole() {
 		logDebugf(sessionInfo, "check default role of user %s.", tenant)
 		//step4 : check role exists or not
+		ses.timestampMap[TSCheckRoleStart] = time.Now()
 		sqlForCheckRoleExists, err := getSqlForRoleIdOfRole(tenantCtx, tenant.GetDefaultRole())
 		if err != nil {
 			return nil, err
@@ -1620,7 +1776,10 @@ func (ses *Session) AuthenticateUser(userInput string, dbName string, authRespon
 			return nil, err
 		}
 		tenant.SetDefaultRoleID(uint32(defaultRoleID))
+		ses.timestampMap[TSCheckRoleEnd] = time.Now()
+		v2.CheckRoleDurationHistogram.Observe(ses.timestampMap[TSCheckRoleEnd].Sub(ses.timestampMap[TSCheckRoleStart]).Seconds())
 	} else {
+		ses.timestampMap[TSCheckRoleStart] = time.Now()
 		logDebugf(sessionInfo, "check designated role of user %s.", tenant)
 		//the get name of default_role from mo_role
 		sql := getSqlForRoleNameOfRoleId(defaultRoleID)
@@ -1642,6 +1801,8 @@ func (ses *Session) AuthenticateUser(userInput string, dbName string, authRespon
 			return nil, err
 		}
 		tenant.SetDefaultRole(defaultRole)
+		ses.timestampMap[TSCheckRoleEnd] = time.Now()
+		v2.CheckRoleDurationHistogram.Observe(ses.timestampMap[TSCheckRoleEnd].Sub(ses.timestampMap[TSCheckRoleStart]).Seconds())
 	}
 	//------------------------------------------------------------------------------------------------------------------
 	psw, err := GetPassWord(pwd)
@@ -1659,11 +1820,14 @@ func (ses *Session) AuthenticateUser(userInput string, dbName string, authRespon
 
 	// If the login information contains the database name, verify if the database exists
 	if dbName != "" {
+		ses.timestampMap[TSCheckDbNameStart] = time.Now()
 		_, err = executeSQLInBackgroundSession(tenantCtx, ses, mp, pu, "use "+dbName)
 		if err != nil {
 			return nil, err
 		}
 		logDebugf(sessionInfo, "check database name succeeded")
+		ses.timestampMap[TSCheckDbNameEnd] = time.Now()
+		v2.CheckDbNameDurationHistogram.Observe(ses.timestampMap[TSCheckDbNameEnd].Sub(ses.timestampMap[TSCheckDbNameStart]).Seconds())
 	}
 	//------------------------------------------------------------------------------------------------------------------
 	// record the id :routine pair in RoutineManager
@@ -1676,17 +1840,34 @@ func (ses *Session) AuthenticateUser(userInput string, dbName string, authRespon
 func (ses *Session) InitGlobalSystemVariables() error {
 	var err error
 	var rsset []ExecResult
+	ses.timestampMap[TSInitGlobalSysVarStart] = time.Now()
+	defer func() {
+		ses.timestampMap[TSInitGlobalSysVarEnd] = time.Now()
+		v2.InitGlobalSysVarDurationHistogram.Observe(ses.timestampMap[TSInitGlobalSysVarEnd].Sub(ses.timestampMap[TSInitGlobalSysVarStart]).Seconds())
+	}()
+
 	tenantInfo := ses.GetTenantInfo()
 	// if is system account
 	if tenantInfo.IsSysTenant() {
-		sysTenantCtx := context.WithValue(ses.GetRequestContext(), defines.TenantIDKey{}, uint32(sysAccountID))
-		sysTenantCtx = context.WithValue(sysTenantCtx, defines.UserIDKey{}, uint32(rootID))
-		sysTenantCtx = context.WithValue(sysTenantCtx, defines.RoleIDKey{}, uint32(moAdminRoleID))
+		sysTenantCtx := defines.AttachAccount(ses.GetRequestContext(), uint32(sysAccountID), uint32(rootID), uint32(moAdminRoleID))
 
 		// get system variable from mo_mysql_compatibility mode
 		sqlForGetVariables := getSystemVariablesWithAccount(sysAccountID)
 		pu := ses.GetParameterUnit()
 		mp := ses.GetMemPool()
+
+		updateSqls := ses.getUpdateVariableSqlsByToml()
+		for _, sql := range updateSqls {
+			_, err = executeSQLInBackgroundSession(
+				sysTenantCtx,
+				ses,
+				mp,
+				pu,
+				sql)
+			if err != nil {
+				return err
+			}
+		}
 
 		rsset, err = executeSQLInBackgroundSession(
 			sysTenantCtx,
@@ -1727,14 +1908,25 @@ func (ses *Session) InitGlobalSystemVariables() error {
 			return moerr.NewInternalError(sysTenantCtx, "there is no data in mo_mysql_compatibility_mode table for account %s", sysAccountName)
 		}
 	} else {
-		tenantCtx := context.WithValue(ses.GetRequestContext(), defines.TenantIDKey{}, tenantInfo.GetTenantID())
-		tenantCtx = context.WithValue(tenantCtx, defines.UserIDKey{}, tenantInfo.GetUserID())
-		tenantCtx = context.WithValue(tenantCtx, defines.RoleIDKey{}, uint32(accountAdminRoleID))
+		tenantCtx := defines.AttachAccount(ses.GetRequestContext(), tenantInfo.GetTenantID(), tenantInfo.GetUserID(), uint32(accountAdminRoleID))
 
 		// get system variable from mo_mysql_compatibility mode
 		sqlForGetVariables := getSystemVariablesWithAccount(uint64(tenantInfo.GetTenantID()))
 		pu := ses.GetParameterUnit()
 		mp := ses.GetMemPool()
+
+		updateSqls := ses.getUpdateVariableSqlsByToml()
+		for _, sql := range updateSqls {
+			_, err = executeSQLInBackgroundSession(
+				tenantCtx,
+				ses,
+				mp,
+				pu,
+				sql)
+			if err != nil {
+				return err
+			}
+		}
 
 		rsset, err = executeSQLInBackgroundSession(
 			tenantCtx,
@@ -1775,6 +1967,24 @@ func (ses *Session) InitGlobalSystemVariables() error {
 		}
 	}
 	return err
+}
+
+func (ses *Session) getUpdateVariableSqlsByToml() []string {
+	updateSqls := make([]string, 0)
+	tenantInfo := ses.GetTenantInfo()
+	// sql_mode
+	if getVariableValue(ses.pu.SV.SqlMode) != gSysVarsDefs["sql_mode"].Default {
+		sqlForUpdate := getSqlForUpdateSystemVariableValue(ses.pu.SV.SqlMode, uint64(tenantInfo.GetTenantID()), "sql_mode")
+		updateSqls = append(updateSqls, sqlForUpdate)
+	}
+
+	// lower_case_table_names
+	if getVariableValue(ses.pu.SV.LowerCaseTableNames) != gSysVarsDefs["lower_case_table_names"].Default {
+		sqlForUpdate := getSqlForUpdateSystemVariableValue(getVariableValue(ses.pu.SV.LowerCaseTableNames), uint64(tenantInfo.GetTenantID()), "lower_case_table_names")
+		updateSqls = append(updateSqls, sqlForUpdate)
+	}
+
+	return updateSqls
 }
 
 func (ses *Session) GetPrivilege() *privilege {
@@ -1917,7 +2127,12 @@ func executeStmtInSameSession(ctx context.Context, mce *MysqlCmdExecutor, ses *S
 	// inherit database
 	ses.SetDatabaseName(prevDB)
 	//restore normal protocol and output callback
+	proc := ses.GetTxnCompileCtx().GetProcess()
 	defer func() {
+		//@todo we need to improve: make one session, one proc, one txnOperator
+		p := ses.GetTxnCompileCtx().GetProcess()
+		p.FreeVectors()
+		ses.GetTxnCompileCtx().SetProcess(proc)
 		ses.SetOptionBits(prevOptionBits)
 		ses.SetServerStatus(prevServerStatus)
 		ses.SetOutputCallback(getDataFromPipeline)
@@ -1950,6 +2165,7 @@ var NewBackgroundHandler = func(
 
 func (bh *BackgroundHandler) Close() {
 	bh.mce.Close()
+	bh.mce = nil
 	bh.ses.Close()
 }
 
@@ -1959,6 +2175,10 @@ func (bh *BackgroundHandler) Exec(ctx context.Context, sql string) error {
 		ctx = bh.ses.GetRequestContext()
 	} else {
 		bh.ses.SetRequestContext(ctx)
+	}
+	_, err := defines.GetAccountId(ctx)
+	if err != nil {
+		return err
 	}
 	bh.mce.ChooseDoQueryFunc(bh.ses.GetParameterUnit().SV.EnableDoComQueryInProgress)
 
@@ -1999,6 +2219,10 @@ func (bh *BackgroundHandler) ExecStmt(ctx context.Context, stmt tree.Statement) 
 		ctx = bh.ses.GetRequestContext()
 	} else {
 		bh.ses.SetRequestContext(ctx)
+	}
+	_, err := defines.GetAccountId(ctx)
+	if err != nil {
+		return err
 	}
 	bh.mce.ChooseDoQueryFunc(bh.ses.GetParameterUnit().SV.EnableDoComQueryInProgress)
 
@@ -2209,8 +2433,10 @@ func (ses *Session) StatusSession() *status.Session {
 				QueryType:     "",
 				SQLSourceType: "",
 				QueryStart:    time.Time{},
-				ClientHost:    ses.GetMysqlProtocol().Peer(),
+				ClientHost:    ses.clientAddr,
 				Role:          roleName,
+				FromProxy:     ses.fromProxy,
+				ProxyHost:     ses.proxyAddr,
 			}
 		}
 	}
@@ -2231,8 +2457,10 @@ func (ses *Session) StatusSession() *status.Session {
 		QueryType:     ses.GetQueryType(),
 		SQLSourceType: ses.GetSqlSourceType(),
 		QueryStart:    ses.GetQueryStart(),
-		ClientHost:    ses.GetMysqlProtocol().Peer(),
+		ClientHost:    ses.clientAddr,
 		Role:          roleName,
+		FromProxy:     ses.fromProxy,
+		ProxyHost:     ses.proxyAddr,
 	}
 }
 
@@ -2282,4 +2510,113 @@ func checkPlanIsInsertValues(proc *process.Process,
 		}
 	}
 	return false, nil
+}
+
+func commitAfterMigrate(ses *Session, err error) {
+	if err != nil {
+		rErr := ses.GetTxnHandler().RollbackTxn()
+		if rErr != nil {
+			logutil.Errorf("failed to rollback txn: %v", rErr)
+		}
+	}
+
+	// Commit txn manually.
+	if cErr := ses.GetTxnHandler().CommitTxn(); cErr != nil {
+		logutil.Errorf("failed to commit txn: %v", cErr)
+		return
+	}
+	ses.ClearServerStatus(SERVER_STATUS_IN_TRANS)
+	ses.ClearOptionBits(OPTION_BEGIN)
+}
+
+type dbMigration struct {
+	db       string
+	commitFn func(*Session, error)
+}
+
+func newDBMigration(db string) *dbMigration {
+	return &dbMigration{
+		db:       db,
+		commitFn: commitAfterMigrate,
+	}
+}
+
+func (d *dbMigration) Migrate(ses *Session) error {
+	if d.db == "" {
+		return nil
+	}
+	var err error
+	defer func() {
+		if d.commitFn != nil {
+			d.commitFn(ses, err)
+		}
+	}()
+	err = doUse(ses.requestCtx, ses, d.db)
+	return err
+}
+
+type prepareStmtMigration struct {
+	name       string
+	sql        string
+	paramTypes []byte
+	commitFn   func(*Session, error)
+}
+
+func newPrepareStmtMigration(name string, sql string, paramTypes []byte) *prepareStmtMigration {
+	return &prepareStmtMigration{
+		name:       name,
+		sql:        sql,
+		paramTypes: paramTypes,
+		commitFn:   commitAfterMigrate,
+	}
+}
+
+func (p *prepareStmtMigration) Migrate(ses *Session) error {
+	var err error
+	v, err := ses.GetGlobalVar("lower_case_table_names")
+	if err != nil {
+		return err
+	}
+	if !strings.HasPrefix(strings.ToLower(p.sql), "prepare") {
+		p.sql = fmt.Sprintf("prepare %s from %s", p.name, p.sql)
+	}
+	stmts, err := mysql.Parse(ses.requestCtx, p.sql, v.(int64))
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if p.commitFn != nil {
+			p.commitFn(ses, err)
+		}
+	}()
+	if _, err = doPrepareStmt(ses.requestCtx, ses, stmts[0].(*tree.PrepareStmt), p.sql, p.paramTypes); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (ses *Session) Migrate(req *query.MigrateConnToRequest) error {
+	dbm := newDBMigration(req.DB)
+	if err := dbm.Migrate(ses); err != nil {
+		return err
+	}
+
+	var maxStmtID uint32
+	for _, p := range req.PrepareStmts {
+		if p == nil {
+			continue
+		}
+		pm := newPrepareStmtMigration(p.Name, p.SQL, p.ParamTypes)
+		if err := pm.Migrate(ses); err != nil {
+			return err
+		}
+		id := parsePrepareStmtID(p.Name)
+		if id > maxStmtID {
+			maxStmtID = id
+		}
+	}
+	if maxStmtID > 0 {
+		ses.SetLastStmtID(maxStmtID)
+	}
+	return nil
 }

@@ -22,10 +22,12 @@ import (
 	"testing"
 
 	"github.com/lni/goutils/leaktest"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/exp/constraints"
@@ -341,7 +343,7 @@ func TestOverflow(t *testing.T) {
 		func(
 			ctx context.Context,
 			cc *columnCache) {
-			require.NoError(t, cc.updateTo(ctx, 0, 1, math.MaxUint64, nil))
+			require.NoError(t, cc.updateTo(ctx, 0, math.MaxUint64, nil))
 			require.True(t, cc.overflow)
 
 			require.NoError(t,
@@ -450,7 +452,7 @@ func TestIssue9840(t *testing.T) {
 func testColumnCacheInsert[T constraints.Integer](
 	t *testing.T,
 	rows int,
-	expecLastInsertValue uint64,
+	expectLastInsertValue uint64,
 	input *vector.Vector,
 	expect *vector.Vector) {
 	runColumnCacheTests(
@@ -462,7 +464,7 @@ func testColumnCacheInsert[T constraints.Integer](
 			c *columnCache) {
 			lastInsertValue, err := c.insertAutoValues(ctx, 0, input, rows, nil)
 			require.NoError(t, err)
-			assert.Equal(t, expecLastInsertValue, lastInsertValue)
+			assert.Equal(t, expectLastInsertValue, lastInsertValue)
 			assert.Equal(t,
 				vector.MustFixedCol[T](expect),
 				vector.MustFixedCol[T](input))
@@ -517,7 +519,7 @@ func runColumnCacheTestsWithInitOffset(
 	runAllocatorTests(
 		t,
 		func(a valueAllocator) {
-			ctx, cancel := context.WithCancel(context.Background())
+			ctx, cancel := context.WithCancel(defines.AttachAccountId(context.Background(), catalog.System_Account))
 			defer cancel()
 			col := AutoColumn{
 				ColName: "k1",
@@ -529,7 +531,7 @@ func runColumnCacheTestsWithInitOffset(
 				0,
 				[]AutoColumn{col},
 				nil)
-			cc, err := newColumnCache(ctx, 0, col, Config{CountPerAllocate: capacity}, a, nil)
+			cc, err := newColumnCache(ctx, 0, col, Config{CountPerAllocate: capacity}, true, a, nil)
 			require.NoError(t, err)
 			fn(ctx, cc)
 		},

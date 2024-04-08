@@ -16,7 +16,6 @@ package lockservice
 
 import (
 	"context"
-	"sync"
 	"testing"
 	"time"
 
@@ -62,15 +61,15 @@ func TestKeeper(t *testing.T) {
 					}
 					writeResponse(ctx, cancel, resp, nil, cs)
 				})
-			m := &sync.Map{}
-			m.Store(0,
+			m := &lockTableHolder{id: "s1", tables: map[uint64]lockTable{}}
+			m.set(0,
 				newRemoteLockTable(
 					"s1",
 					time.Second,
 					pb.LockTable{ServiceID: "s2"},
 					c,
 					func(lt pb.LockTable) {}))
-			m.Store(1,
+			m.set(1,
 				newRemoteLockTable(
 					"s1",
 					time.Second,
@@ -122,20 +121,20 @@ func TestKeepBindFailedWillRemoveAllLocalLockTable(t *testing.T) {
 					writeResponse(ctx, cancel, resp, nil, cs)
 				})
 
-			m := &sync.Map{}
-			m.Store(1,
+			m := &lockTableHolder{id: "s1", tables: map[uint64]lockTable{}}
+			m.set(1,
 				newLocalLockTable(
 					pb.LockTable{ServiceID: "s1"},
 					nil,
 					events,
 					runtime.DefaultRuntime().Clock()))
-			m.Store(2,
+			m.set(2,
 				newLocalLockTable(
 					pb.LockTable{ServiceID: "s1"},
 					nil,
 					events,
 					runtime.DefaultRuntime().Clock()))
-			m.Store(3,
+			m.set(3,
 				newRemoteLockTable(
 					"s1",
 					time.Second,
@@ -154,13 +153,13 @@ func TestKeepBindFailedWillRemoveAllLocalLockTable(t *testing.T) {
 
 			for {
 				v := 0
-				m.Range(func(key, value any) bool {
+				m.iter(func(key uint64, value lockTable) bool {
 					v++
 					return true
 				})
 				if v == 1 {
-					_, ok := m.Load(3)
-					assert.True(t, ok)
+					v := m.get(3)
+					assert.NotNil(t, v)
 					return
 				}
 				time.Sleep(time.Millisecond * 100)

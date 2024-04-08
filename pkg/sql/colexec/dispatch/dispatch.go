@@ -52,12 +52,14 @@ func (arg *Argument) Prepare(proc *process.Process) error {
 		} else {
 			ctr.sendFunc = sendToAllFunc
 		}
-		ap.prepareRemote(proc)
+		return ap.prepareRemote(proc)
 
 	case ShuffleToAllFunc:
 		ap.ctr.sendFunc = shuffleToAllFunc
 		if ap.ctr.remoteRegsCnt > 0 {
-			ap.prepareRemote(proc)
+			if err := ap.prepareRemote(proc); err != nil {
+				return err
+			}
 		} else {
 			ap.prepareLocal()
 		}
@@ -73,7 +75,7 @@ func (arg *Argument) Prepare(proc *process.Process) error {
 		} else {
 			ctr.sendFunc = sendToAnyFunc
 		}
-		ap.prepareRemote(proc)
+		return ap.prepareRemote(proc)
 
 	case SendToAllLocalFunc:
 		if ctr.remoteRegsCnt != 0 {
@@ -103,6 +105,10 @@ func printShuffleResult(arg *Argument) {
 }
 
 func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
+	if err, isCancel := vm.CancelCheck(proc); isCancel {
+		return vm.CancelResult, err
+	}
+
 	ap := arg
 
 	result, err := arg.Children[0].Call(proc)
@@ -110,15 +116,14 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		return result, err
 	}
 
-	analy := proc.GetAnalyze(arg.info.Idx)
-	analy.Start()
-	defer analy.Stop()
-
 	bat := result.Batch
 
 	if result.Batch == nil {
 		if ap.RecSink {
-			bat = makeEndBatch(proc)
+			bat, err = makeEndBatch(proc)
+			if err != nil {
+				return result, err
+			}
 			defer func() {
 				if bat != nil {
 					proc.PutBatch(bat)
@@ -154,16 +159,18 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 }
 
-func makeEndBatch(proc *process.Process) *batch.Batch {
+func makeEndBatch(proc *process.Process) (*batch.Batch, error) {
 	b := batch.NewWithSize(1)
 	b.Attrs = []string{
 		"recursive_col",
 	}
 	b.SetVector(0, proc.GetVector(types.T_varchar.ToType()))
-	vector.AppendBytes(b.GetVector(0), []byte("check recursive status"), false, proc.GetMPool())
-	batch.SetLength(b, 1)
-	b.SetEnd()
-	return b
+	err := vector.AppendBytes(b.GetVector(0), []byte("check recursive status"), false, proc.GetMPool())
+	if err == nil {
+		batch.SetLength(b, 1)
+		b.SetEnd()
+	}
+	return b, err
 }
 
 func (arg *Argument) waitRemoteRegsReady(proc *process.Process) (bool, error) {
@@ -182,12 +189,7 @@ func (arg *Argument) waitRemoteRegsReady(proc *process.Process) (bool, error) {
 
 		case csinfo := <-proc.DispatchNotifyCh:
 			timeoutCancel()
-			arg.ctr.remoteReceivers = append(arg.ctr.remoteReceivers, &WrapperClientSession{
-				msgId:  csinfo.MsgId,
-				cs:     csinfo.Cs,
-				uuid:   csinfo.Uid,
-				doneCh: csinfo.DoneCh,
-			})
+			arg.ctr.remoteReceivers = append(arg.ctr.remoteReceivers, csinfo)
 			cnt--
 		}
 	}
@@ -195,17 +197,20 @@ func (arg *Argument) waitRemoteRegsReady(proc *process.Process) (bool, error) {
 	return false, nil
 }
 
-func (arg *Argument) prepareRemote(proc *process.Process) {
+func (arg *Argument) prepareRemote(proc *process.Process) error {
 	arg.ctr.prepared = false
 	arg.ctr.isRemote = true
-	arg.ctr.remoteReceivers = make([]*WrapperClientSession, 0, arg.ctr.remoteRegsCnt)
+	arg.ctr.remoteReceivers = make([]process.WrapCs, 0, arg.ctr.remoteRegsCnt)
 	arg.ctr.remoteToIdx = make(map[uuid.UUID]int)
 	for i, rr := range arg.RemoteRegs {
 		if arg.FuncId == ShuffleToAllFunc {
 			arg.ctr.remoteToIdx[rr.Uuid] = arg.ShuffleRegIdxRemote[i]
 		}
-		colexec.Srv.PutProcIntoUuidMap(rr.Uuid, proc)
+		if err := colexec.Srv.PutProcIntoUuidMap(rr.Uuid, proc); err != nil {
+			return err
+		}
 	}
+	return nil
 }
 
 func (arg *Argument) prepareLocal() {

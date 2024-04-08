@@ -238,6 +238,9 @@ func (t *Table) TableDefs(ctx context.Context) ([]engine.TableDef, error) {
 	return defs, nil
 }
 
+func (t *Table) CopyTableDef(ctx context.Context) *plan.TableDef {
+	return t.GetTableDef(ctx)
+}
 func (t *Table) GetTableDef(ctx context.Context) *plan.TableDef {
 	engineDefs, err := t.TableDefs(ctx)
 	if err != nil {
@@ -407,6 +410,11 @@ func (t *Table) UpdateConstraint(context.Context, *engine.ConstraintDef) error {
 }
 
 func (t *Table) AlterTable(ctx context.Context, c *engine.ConstraintDef, constraint [][]byte) error {
+	// implement me
+	return nil
+}
+
+func (t *Table) TableRenameInTxn(ctx context.Context, constraint [][]byte) error {
 	// implement me
 	return nil
 }

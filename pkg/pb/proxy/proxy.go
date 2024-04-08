@@ -17,104 +17,52 @@ package proxy
 import (
 	"bufio"
 	"bytes"
-	"encoding/binary"
-
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
-// ExtraInfo is the information that proxy send to CN when build
-// connection in handshake phase.
-type ExtraInfo struct {
-	// Salt is the bytes in MySQL protocol which is 20 length.
-	Salt []byte
-	// InternalConn indicates whether the connection is from internal
-	// network or external network. false means that it is external, otherwise,
-	// it is internal.
-	InternalConn bool
-	// Label is the requested label from client.
-	Label RequestLabel
+func (i *ExtraInfo) Encode() ([]byte, error) {
+	data, err := i.Marshal()
+	if err != nil {
+		return nil, err
+	}
+	size := len(data)
+	ret := make([]byte, 2, len(data)+2)
+	ret[0] = uint8(size)
+	ret[1] = uint8(size >> 8)
+	ret = append(ret, data...)
+	return ret, nil
 }
 
-// Encode encodes the ExtraInfo and return bytes.
-func (e *ExtraInfo) Encode() ([]byte, error) {
-	if len(e.Salt) != 20 {
-		return nil, moerr.NewInternalErrorNoCtx("invalid slat data, length is %d", len(e.Salt))
-	}
-	var err error
-	var labelData []byte
-	labelData, err = e.Label.Marshal()
+func (i *ExtraInfo) Decode(reader *bufio.Reader) error {
+	data, err := readData(reader)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	size := uint16(len(labelData)) + 20 + 1
-	buf := new(bytes.Buffer)
-	if err = binary.Write(buf, binary.LittleEndian, size); err != nil {
-		return nil, err
-	}
-	err = binary.Write(buf, binary.LittleEndian, e.Salt)
-	if err != nil {
-		return nil, err
-	}
-	err = binary.Write(buf, binary.LittleEndian, e.InternalConn)
-	if err != nil {
-		return nil, err
-	}
-	if len(labelData) > 0 {
-		err = binary.Write(buf, binary.LittleEndian, labelData)
-		if err != nil {
-			return nil, err
-		}
-	}
-	return buf.Bytes(), nil
+	return i.Unmarshal(data[2:])
 }
 
-// Decode decodes the ExtraInfo from bufio.Reader.
-func (e *ExtraInfo) Decode(reader *bufio.Reader) error {
+// readData reads all data in the reader.
+func readData(reader *bufio.Reader) ([]byte, error) {
 	s, err := reader.Peek(2)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	buf := bytes.NewBuffer(s)
-	var size uint16
-	err = binary.Read(buf, binary.LittleEndian, &size)
-	if err != nil {
-		return err
-	}
-	if size < 21 {
-		return moerr.NewInternalErrorNoCtx("invalid data length %d", size)
-	}
-	data := make([]byte, int(size)+2)
-	if reader.Buffered() < int(size)+2 {
+	size := uint16(buf.Bytes()[0]) + uint16(buf.Bytes()[1])<<8 + 2
+	data := make([]byte, size)
+	if reader.Buffered() < int(size) {
 		hr := 0
-		for hr < int(size)+2 {
+		for hr < int(size) {
 			l, err := reader.Read(data[hr:])
 			if err != nil {
-				return err
+				return nil, err
 			}
 			hr += l
 		}
 	} else {
 		_, err = reader.Read(data)
 		if err != nil {
-			return err
+			return nil, err
 		}
 	}
-	buf = bytes.NewBuffer(data[2:])
-	e.Salt = make([]byte, 20)
-	if err = binary.Read(buf, binary.LittleEndian, e.Salt); err != nil {
-		return err
-	}
-	if err = binary.Read(buf, binary.LittleEndian, &e.InternalConn); err != nil {
-		return err
-	}
-	if size > 21 {
-		labelData := make([]byte, size-21)
-		if err = binary.Read(buf, binary.LittleEndian, labelData); err != nil {
-			return err
-		}
-		if err = e.Label.Unmarshal(labelData); err != nil {
-			return err
-		}
-	}
-	return nil
+	return data, nil
 }
