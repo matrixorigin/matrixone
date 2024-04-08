@@ -2434,7 +2434,7 @@ func TestBackUpStatementPrivilege(t *testing.T) {
 		convey.So(ok, convey.ShouldBeTrue)
 	})
 
-	convey.Convey("backup false", t, func() {
+	convey.Convey("backup fail", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 		stmt := &tree.BackupStart{}
