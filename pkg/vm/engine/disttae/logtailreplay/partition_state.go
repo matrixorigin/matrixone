@@ -629,9 +629,13 @@ func (p *PartitionState) HandleRowsInsert(
 		packer,
 	)
 
-	var newRows *pt.Treap[RowEntry]
-	var newPrimaryIndex *pt.Treap[*PrimaryIndexEntry]
+	var newRows []RowEntry
+	var newPrimaryIndex []*PrimaryIndexEntry
 	useUnion := len(rowIDVector) > 8
+	if useUnion {
+		newRows = make([]RowEntry, 0, len(rowIDVector))
+		newPrimaryIndex = make([]*PrimaryIndexEntry, 0, len(rowIDVector))
+	}
 
 	var numInserted int64
 	for i, rowID := range rowIDVector {
@@ -655,7 +659,7 @@ func (p *PartitionState) HandleRowsInsert(
 		}
 		entry.PrimaryIndexBytes = primaryKeys[i]
 		if useUnion {
-			newRows, _ = newRows.Upsert(entry, p.prioritySource(), true)
+			newRows = append(newRows, entry)
 		} else {
 			p.rows, _ = p.rows.Upsert(entry, p.prioritySource(), false)
 		}
@@ -669,7 +673,7 @@ func (p *PartitionState) HandleRowsInsert(
 				Time:       entry.Time,
 			}
 			if useUnion {
-				newPrimaryIndex, _ = newPrimaryIndex.Upsert(entry, p.prioritySource(), true)
+				newPrimaryIndex = append(newPrimaryIndex, entry)
 			} else {
 				p.primaryIndex, _ = p.primaryIndex.Upsert(entry, p.prioritySource(), false)
 			}
@@ -677,8 +681,8 @@ func (p *PartitionState) HandleRowsInsert(
 	}
 
 	if useUnion {
-		p.rows = p.rows.Union(newRows, false)
-		p.primaryIndex = p.primaryIndex.Union(newPrimaryIndex, false)
+		p.rows = p.rows.Union(pt.Build(p.prioritySource, newRows), false)
+		p.primaryIndex = p.primaryIndex.Union(pt.Build(p.prioritySource, newPrimaryIndex), false)
 	}
 
 	perfcounter.Update(ctx, func(c *perfcounter.CounterSet) {
