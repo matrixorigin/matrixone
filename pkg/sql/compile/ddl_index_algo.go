@@ -320,8 +320,7 @@ func (s *Scope) handleIvfIndexEntriesTable(c *Compile, indexDef *plan.IndexDef, 
 	normalizedVecColName := "__mo_org_tbl_norm_vec_col"
 	originalTableWithNormalizedSkSql := fmt.Sprintf("(select "+
 		"%s as `%s`, "+
-		"normalize_l2(`%s`.`%s`) as `%s`, "+
-		"`%s`.`%s`"+
+		"normalize_l2(`%s`.`%s`) as `%s` "+
 		" from `%s`.`%s`) as `%s`",
 		originalTblPkColMaySerial,
 		originalTblPkColMaySerialColNameAlias,
@@ -329,9 +328,6 @@ func (s *Scope) handleIvfIndexEntriesTable(c *Compile, indexDef *plan.IndexDef, 
 		originalTableDef.Name,
 		indexColumnName,
 		normalizedVecColName,
-
-		originalTableDef.Name,
-		indexColumnName,
 
 		qryDatabase,
 		originalTableDef.Name,
@@ -409,7 +405,6 @@ func (s *Scope) handleIvfIndexEntriesTable(c *Compile, indexDef *plan.IndexDef, 
 		                      FROM       (
 		                                        SELECT `t1`.`a`               AS `__mo_org_tbl_pk_may_serial_col`,
 		                                               normalize_l2(`t1`.`b`) AS `__mo_org_tbl_norm_vec_col`,
-		                                               `t1`.`b`
 		                                        FROM   `a`.`t1`
 		                                 ) AS `t1`
 		                      CROSS JOIN
