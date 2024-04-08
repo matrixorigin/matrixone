@@ -2532,65 +2532,58 @@ func appendPreInsertSkVectorPlan(
 
 	/*
 		### Sample SQL:
-		create table tbl(id varchar(20), age varchar(20), embedding vecf32(3), primary key(id));
-		insert into tbl values("1", "10", "[1,2,3]");
-		insert into tbl values("2", "20", "[1,2,4]");
-		insert into tbl values("3", "30", "[1,2.4,4]");
-		insert into tbl values("4", "40", "[1,2,5]");
-		insert into tbl values("5", "50", "[1,3,5]");
-		insert into tbl values("6", "60", "[100,44,50]");
-		insert into tbl values("7", "70", "[120,50,70]");
-		insert into tbl values("8", "80", "[130,40,90]");
+		INSERT INTO `a`.`__mo_index_secondary_018ebbd4-ebb7-7898-b0bb-3b133af1905e`
+					(
+								`__mo_index_centroid_fk_version`,
+								`__mo_index_centroid_fk_id`,
+								`__mo_index_pri_col`,
+								`__mo_index_centroid_fk_entry`
+					)
+		SELECT     `__mo_index_tbl_join_centroids`.`__mo_index_centroid_version` ,
+				   `__mo_index_tbl_join_centroids`.`__mo_index_joined_centroid_id` ,
+				   `__mo_index_tbl_join_centroids`.`__mo_org_tbl_pk_may_serial_col` ,
+				   `t1`.`b`
+		FROM       (
+						  SELECT `t1`.`a` AS `__mo_org_tbl_pk_may_serial_col`,
+								 `t1`.`b`
+						  FROM   `a`.`t1`) AS `t1`
+		INNER JOIN
+				   (
+							  SELECT     `centroids`.`__mo_index_centroid_version` AS `__mo_index_centroid_version`,
+										 serial_extract( min( serial_full( l2_distance(`centroids`.`__mo_index_centroid`, `t1`.`__mo_org_tbl_norm_vec_col`), `centroids`.`__mo_index_centroid_id`)), 1 AS bigint) AS `__mo_index_joined_centroid_id`,
+										 `__mo_org_tbl_pk_may_serial_col`
+							  FROM       (
+												SELECT `t1`.`a`               AS `__mo_org_tbl_pk_may_serial_col`,
+													   normalize_l2(`t1`.`b`) AS `__mo_org_tbl_norm_vec_col`,
+												FROM   `a`.`t1`
+										 ) AS `t1`
+							  CROSS JOIN
+										 (
+												SELECT *
+												FROM   `a`.`centroids`
+												WHERE  `__mo_index_centroid_version` = ( SELECT cast(__mo_index_val AS bigint) FROM   `a`.`meta` WHERE  `__mo_index_key` = 'version')
+										 ) AS `centroids`
+							  GROUP BY   `__mo_index_centroid_version`,
+										 __mo_org_tbl_pk_may_serial_col
+					) AS `__mo_index_tbl_join_centroids`
 
-		create table centroids (`__mo_index_centroid_version` BIGINT NOT NULL, `__mo_index_centroid_id` BIGINT NOT NULL, `__mo_index_centroid` VECF32(3) DEFAULT NULL, PRIMARY KEY (`__mo_index_centroid_version`,`__mo_index_centroid_id`));
-		insert into centroids values(0,1,"[0.26726124, 0.5345225, 0.80178374]");
-		insert into centroids values(0,2,"[0.7970811, 0.24525574, 0.5518254]");
-
-		SELECT     derived.`__mo_index_centroid_version`,
-				   derived.`__mo_centroid_id`,
-				   derived.`__mo_org_tbl_pk_may_serial_col`,
-				   tbl.embedding
-		FROM       tbl
-		INNER join (
-					  SELECT     `centroids`.`__mo_index_centroid_version` AS `__mo_index_centroid_version`,
-								 serial_extract(
-									min(
-										serial_full(
-											l2_distance(`centroids`.`__mo_index_centroid`, `tbl`.`__mo_org_tbl_norm_vec_col`),
-											`centroids`.`__mo_index_centroid_id`
-										)
-									), 1 AS bigint
-								 ) AS `__mo_centroid_id`,
-								 __mo_org_tbl_pk_may_serial_col,
-								 tbl.embedding
-					  FROM       (
-										SELECT `tbl`.`id`                      AS `__mo_org_tbl_pk_may_serial_col`,
-											   normalize_l2(`tbl`.`embedding`) AS `__mo_org_tbl_norm_vec_col`,
-											   `tbl`.`embedding`
-										FROM   `a`.`tbl`) AS `tbl`
-					  CROSS JOIN
-								 (SELECT * FROM   `a`.`centroids`) AS `centroids`
-					  GROUP BY   `centroids`.`__mo_index_centroid_version`,
-								 __mo_org_tbl_pk_may_serial_col,
-								 tbl.embedding
-					) AS derived
-		where tbl.id = derived.`__mo_org_tbl_pk_may_serial_col`;
+		ON         `__mo_index_tbl_join_centroids`.`__mo_org_tbl_pk_may_serial_col` = `t1`.`__mo_org_tbl_pk_may_serial_col`;
 
 		### Corresponding Plan
 		-------------------------------------------------------------------------------------------------------------------------------------
 		| Plan 1:                                                                                                                           |
-		| Insert on a.__mo_index_secondary_018eb783-f6d8-7eb7-9ac0-eae273add9d2                                                             |
+		| Insert on vecdb3.__mo_index_secondary_018ebf04-f31c-79fe-973b-cc18e91117c0                                                        |
 		|   ->  Lock                                                                                                                        |
 		|         ->  Join                                                                                                                  |
 		|               Join Type: INNER                                                                                                    |
-		|               Join Cond: (id = id)                                                                                                |
+		|               Join Cond: (a = a)                                                                                                  |
 		|               ->  Project                                                                                                         |
 		|                     ->  Sink Scan                                                                                                 |
 		|                           DataSource: Plan 0                                                                                      |
 		|               ->  Project                                                                                                         |
 		|                     ->  Aggregate                                                                                                 |
-		|                           Group Key: __mo_index_centroid_version, id                                                              |
-		|                           Aggregate Functions: min(serial_full(l2_distance(__mo_index_centroid, #[0,5]), __mo_index_centroid_id)) |
+		|                           Group Key: __mo_index_centroid_version, a                                                               |
+		|                           Aggregate Functions: min(serial_full(l2_distance(__mo_index_centroid, #[0,4]), __mo_index_centroid_id)) |
 		|                           ->  Join                                                                                                |
 		|                                 Join Type: INNER                                                                                  |
 		|                                 ->  Project                                                                                       |
@@ -2600,10 +2593,11 @@ func appendPreInsertSkVectorPlan(
 		|                                 ->  Join                                                                                          |
 		|                                       Join Type: INNER                                                                            |
 		|                                       Join Cond: (__mo_index_centroid_version = cast(__mo_index_val AS BIGINT))                   |
-		|                                       ->  Table Scan on a.__mo_index_secondary_018eb783-f6d8-7c89-9d8f-894c583da9ca               |
-		|                                       ->  Table Scan on a.__mo_index_secondary_018eb783-f6d8-7d9d-82fa-bc3bf3ac2747               |
+		|                                       ->  Table Scan on vecdb3.__mo_index_secondary_018ebf04-f31c-7cc9-a9ba-f25f08228699          |
+		|                                       ->  Table Scan on vecdb3.__mo_index_secondary_018ebf04-f31c-7e8a-a18a-fca905316151          |
 		|                                             Filter Cond: (__mo_index_key = cast('version' AS VARCHAR))                            |
 		-------------------------------------------------------------------------------------------------------------------------------------
+
 	*/
 
 	//1.a get vector & pk column details
@@ -2645,7 +2639,7 @@ func appendPreInsertSkVectorPlan(
 		return -1, err
 	}
 
-	// 4. Make  Table Projection with cpPk, normalize_l2(), embedding
+	// 4. Make  Table Projection with cpPk, normalize_l2()
 	tableId := lastNodeIdForTblJoinCentroids
 	projectTblScan, err := makeTableProjectionIncludingNormalizeL2(builder, bindCtx, tableId, tableDef,
 		typeOriginPk, posOriginPk,
@@ -2663,7 +2657,7 @@ func appendPreInsertSkVectorPlan(
 	var crossJoinTblAndCentroidsID = makeCrossJoinTblAndCentroids(builder, bindCtx, tableDef,
 		leftChildTblId, rightChildCentroidsId,
 		typeOriginPk, posOriginPk,
-		typeOriginVecColumn, posOriginVecColumn)
+		typeOriginVecColumn)
 
 	// 6. select centroids.version, serial_extract(min( pair< l2_distance, centroid_id >, 1 ), pk,
 	//    from crossJoinTblAndCentroidsID group by pk,

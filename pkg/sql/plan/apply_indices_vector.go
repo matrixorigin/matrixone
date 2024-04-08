@@ -175,7 +175,7 @@ func (builder *QueryBuilder) applyIndicesForSortUsingVectorIndex(nodeID int32, p
 		// 1. Do Entries INNER JOIN Centroids
 		tlbJoinEntries := makeTblInnerJoinEntriesCentroidOnPK(builder, builder.ctxByNode[nodeID],
 			idxTableDefs, idxTags,
-			scanNode, entriesJoinCentroids, pkPos, sortNode)
+			scanNode, entriesJoinCentroids, pkPos)
 
 		// 2. Do Sort by L2 Distance
 		sortTblByL2Distance := makeInnerJoinOrderByL2Distance(builder, builder.ctxByNode[nodeID],
@@ -318,7 +318,8 @@ func makeEntriesTblScan(builder *QueryBuilder, bindCtx *BindContext, indexTableD
 	return entriesScanId, nil
 }
 
-func makeEntriesCrossJoinCentroidsOnCentroidId(builder *QueryBuilder, bindCtx *BindContext, idxTableDefs []*TableDef, idxTags map[string]int32, entries int32, centroidsForCurrVersion int32) int32 {
+func makeEntriesCrossJoinCentroidsOnCentroidId(builder *QueryBuilder, bindCtx *BindContext, idxTableDefs []*TableDef,
+	idxTags map[string]int32, entries int32, centroidsForCurrVersion int32) int32 {
 
 	centroidVersionEqEntriesVersion, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{
 		{
@@ -393,6 +394,7 @@ func makeEntriesCrossJoinCentroidsOnCentroidId(builder *QueryBuilder, bindCtx *B
 	return joinEntriesAndCentroids
 }
 
+//TODO: fix it later
 //func makeTblIndexJoinEntriesCentroidOnPK(builder *QueryBuilder, bindCtx *BindContext,
 //	idxTableDefs []*TableDef, idxTags map[string]int32,
 //	scanNode *plan.Node, entriesJoinCentroids int32, pkPos int32,
@@ -431,8 +433,7 @@ func makeEntriesCrossJoinCentroidsOnCentroidId(builder *QueryBuilder, bindCtx *B
 
 func makeTblInnerJoinEntriesCentroidOnPK(builder *QueryBuilder, bindCtx *BindContext,
 	idxTableDefs []*TableDef, idxTags map[string]int32,
-	scanNode *plan.Node, entriesJoinCentroids int32, pkPos int32,
-	sortNode *plan.Node) int32 {
+	scanNode *plan.Node, entriesJoinCentroids int32, pkPos int32) int32 {
 
 	entriesOriginPkEqTblPk, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{
 

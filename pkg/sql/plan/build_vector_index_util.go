@@ -89,7 +89,7 @@ func makeTableProjectionIncludingNormalizeL2(builder *QueryBuilder, bindCtx *Bin
 		return -1, err
 	}
 
-	// id, embedding, normalize_l2(embedding)
+	// id, normalize_l2(embedding)
 	tableProjectId := builder.appendNode(&plan.Node{
 		NodeType: plan.Node_PROJECT,
 		Children: []int32{tableScanId},
@@ -103,17 +103,6 @@ func makeTableProjectionIncludingNormalizeL2(builder *QueryBuilder, bindCtx *Bin
 						RelPos: 0,
 						ColPos: int32(posOriginPk),
 						Name:   tableDef.Cols[posOriginPk].Name,
-					},
-				},
-			},
-
-			{ // tbl.embedding
-				Typ: *typeOriginVecColumn,
-				Expr: &plan.Expr_Col{
-					Col: &plan.ColRef{
-						RelPos: 0,
-						ColPos: int32(posOriginVecColumn),
-						Name:   tableDef.Cols[posOriginVecColumn].Name,
 					},
 				},
 			},
@@ -161,15 +150,14 @@ func makeCrossJoinCentroidsMetaForCurrVersion(builder *QueryBuilder, bindCtx *Bi
 func makeCrossJoinTblAndCentroids(builder *QueryBuilder, bindCtx *BindContext, tableDef *TableDef,
 	leftChildTblId int32, rightChildCentroidsId int32,
 	typeOriginPk *Type, posOriginPk int,
-	typeOriginVecColumn *Type, posOriginVecColumn int) int32 {
+	typeOriginVecColumn *Type) int32 {
 
 	crossJoinTblAndCentroidsId := builder.appendNode(&plan.Node{
 		NodeType: plan.Node_JOIN,
 		JoinType: plan.Node_INNER, // since there is no OnList, it is a cross join
 		Children: []int32{leftChildTblId, rightChildCentroidsId},
 		ProjectList: []*Expr{
-			{
-				// centroids.version
+			{ // centroids.version
 				Typ: *makePlan2Type(&bigIntType),
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
@@ -199,16 +187,6 @@ func makeCrossJoinTblAndCentroids(builder *QueryBuilder, bindCtx *BindContext, t
 					},
 				},
 			},
-			{ // tbl.embedding
-				Typ: *typeOriginVecColumn,
-				Expr: &plan.Expr_Col{
-					Col: &plan.ColRef{
-						RelPos: 0,
-						ColPos: 1,
-						Name:   tableDef.Cols[posOriginVecColumn].Name,
-					},
-				},
-			},
 			{ // centroids.centroid
 				Typ: *typeOriginVecColumn,
 				Expr: &plan.Expr_Col{
@@ -224,7 +202,7 @@ func makeCrossJoinTblAndCentroids(builder *QueryBuilder, bindCtx *BindContext, t
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
 						RelPos: 0,
-						ColPos: 2,
+						ColPos: 1,
 					},
 				},
 			},
@@ -241,8 +219,8 @@ func makeMinCentroidIdAndCpKey(builder *QueryBuilder, bindCtx *BindContext,
 	centroidsVersion := lastNodeProjections[0]
 	centroidsId := lastNodeProjections[1]
 	tblPk := lastNodeProjections[2]
-	centroidsCentroid := lastNodeProjections[4]
-	tblNormalizeL2Embedding := lastNodeProjections[5]
+	centroidsCentroid := lastNodeProjections[3]
+	tblNormalizeL2Embedding := lastNodeProjections[4]
 
 	// 1.a Group By
 	groupByList := []*plan.Expr{

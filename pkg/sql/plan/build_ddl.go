@@ -2134,7 +2134,7 @@ func buildIvfFlatSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, c
 		tableDefs[2].Pkey = &PrimaryKeyDef{
 			Names: []string{
 				catalog.SystemSI_IVFFLAT_TblCol_Entries_version,
-				catalog.SystemSI_IVFFLAT_TblCol_Entries_id, // join mostly occurs between centroids x entries on centroids.id = entries.id
+				catalog.SystemSI_IVFFLAT_TblCol_Entries_id,
 				catalog.SystemSI_IVFFLAT_TblCol_Entries_pk, // added to make this unique
 			},
 			PkeyColName: catalog.CPrimaryKeyColName,
