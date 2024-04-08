@@ -778,7 +778,7 @@ func (blk *baseObject) TryDeleteByDeltaloc(
 	return blkMVCC.TryDeleteByDeltaloc(txn, deltaLoc, true)
 }
 
-func (blk *baseObject) PPString(level common.PPLevel, depth int, prefix string) string {
+func (blk *baseObject) PPString(level common.PPLevel, depth int, prefix string, blkid int) string {
 	rows, err := blk.Rows()
 	if err != nil {
 		logutil.Warnf("get object rows failed, obj: %v, err: %v", blk.meta.ID.String(), err)
@@ -786,14 +786,23 @@ func (blk *baseObject) PPString(level common.PPLevel, depth int, prefix string) 
 	s := fmt.Sprintf("%s | [Rows=%d]", blk.meta.PPString(level, depth, prefix), rows)
 	if level >= common.PPL1 {
 		blk.RLock()
-		mvcc := blk.tryGetMVCC()
-		var s2 string
-		if mvcc != nil {
-			s2 = mvcc.StringLocked(1, 0, "")
+		var appendstr, deletestr string
+		if blk.appendMVCC != nil {
+			appendstr = blk.appendMVCC.StringLocked()
+		}
+		if mvcc := blk.tryGetMVCC(); mvcc != nil {
+			if blkid >= 0 {
+				deletestr = mvcc.StringBlkLocked(level, 0, "", blkid)
+			} else {
+				deletestr = mvcc.StringLocked(level, 0, "")
+			}
 		}
 		blk.RUnlock()
-		if s2 != "" {
-			s = fmt.Sprintf("%s\n%s", s, s2)
+		if appendstr != "" {
+			s = fmt.Sprintf("%s\n Appends: %s", s, appendstr)
+		}
+		if deletestr != "" {
+			s = fmt.Sprintf("%s\n Deletes: %s", s, deletestr)
 		}
 	}
 	return s
@@ -808,7 +817,15 @@ func (blk *baseObject) HasDeleteIntentsPreparedIn(from, to types.TS) (found, isP
 	}
 	return mvcc.HasDeleteIntentsPreparedIn(from, to)
 }
-
+func (blk *baseObject) HasDeleteIntentsPreparedInByBlock(blkID uint16, from, to types.TS) (found, isPersist bool) {
+	blk.RLock()
+	defer blk.RUnlock()
+	mvcc := blk.tryGetMVCC()
+	if mvcc == nil {
+		return
+	}
+	return mvcc.HasInMemoryDeleteIntentsPreparedInByBlock(blkID, from, to)
+}
 func (blk *baseObject) CollectChangesInRange(
 	ctx context.Context,
 	blkID uint16,
@@ -847,30 +864,7 @@ func (blk *baseObject) CollectDeleteInRange(
 	emtpyDelBlkIdx = &bitmap.Bitmap{}
 	emtpyDelBlkIdx.InitWithSize(int64(blk.meta.BlockCnt()))
 	for blkID := uint16(0); blkID < uint16(blk.meta.BlockCnt()); blkID++ {
-		deletes, minTS, _, err := blk.inMemoryCollectDeleteInRange(
-			ctx,
-			blkID,
-			start,
-			end,
-			withAborted,
-			mp,
-		)
-		if err != nil {
-			return nil, nil, err
-		}
-		currentEnd := end
-		if !minTS.IsEmpty() && currentEnd.Greater(&minTS) {
-			currentEnd = minTS.Prev()
-		}
-		deletes, err = blk.PersistedCollectDeleteInRange(
-			ctx,
-			deletes,
-			blkID,
-			start,
-			currentEnd,
-			withAborted,
-			mp,
-		)
+		deletes, err := blk.CollectDeleteInRangeByBlock(ctx, blkID, start, end, withAborted, mp)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -891,6 +885,48 @@ func (blk *baseObject) CollectDeleteInRange(
 		}
 	}
 	return
+}
+
+func (blk *baseObject) CollectDeleteInRangeByBlock(
+	ctx context.Context,
+	blkID uint16,
+	start, end types.TS,
+	withAborted bool,
+	mp *mpool.MPool) (*containers.Batch, error) {
+	deletes, minTS, _, err := blk.inMemoryCollectDeleteInRange(
+		ctx,
+		blkID,
+		start,
+		end,
+		withAborted,
+		mp,
+	)
+	if err != nil {
+		if deletes != nil {
+			deletes.Close()
+		}
+		return nil, err
+	}
+	currentEnd := end
+	if !minTS.IsEmpty() && currentEnd.Greater(&minTS) {
+		currentEnd = minTS.Prev()
+	}
+	deletes, err = blk.PersistedCollectDeleteInRange(
+		ctx,
+		deletes,
+		blkID,
+		start,
+		currentEnd,
+		withAborted,
+		mp,
+	)
+	if err != nil {
+		if deletes != nil {
+			deletes.Close()
+		}
+		return nil, err
+	}
+	return deletes, nil
 }
 
 func (blk *baseObject) inMemoryCollectDeleteInRange(
