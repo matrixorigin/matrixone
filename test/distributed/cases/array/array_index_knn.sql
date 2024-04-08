@@ -37,6 +37,6 @@ select a, b from t1 order by l2_distance(b, "[1,1,0,0]") limit 3;
 select a, b from t1 order by l2_distance(b, "[1,0,0,0]") limit 3; -- problem
 select a, b from t1 order by l2_distance(b, "[1,1,1,1]") limit 3; -- problem
 
-
-
+-- post
+drop database vecdb3;
 
