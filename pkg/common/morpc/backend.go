@@ -673,15 +673,17 @@ func (rb *remoteBackend) makeAllWaitingFutureFailed() {
 		ids = make([]uint64, 0, len(rb.mu.futures))
 		waitings = make([]*Future, 0, len(rb.mu.futures))
 		for id, f := range rb.mu.futures {
-			if f.waiting.Load() {
-				waitings = append(waitings, f)
-				ids = append(ids, id)
-			}
+			waitings = append(waitings, f)
+			ids = append(ids, id)
 		}
 	}()
 
 	for i, f := range waitings {
-		f.error(ids[i], backendClosed, nil)
+		if f.waiting.Load() {
+			f.error(ids[i], backendClosed, nil)
+		} else {
+			f.messageSent(backendClosed)
+		}
 	}
 }
 
@@ -859,7 +861,7 @@ func (rb *remoteBackend) resetConn() error {
 			zap.Error(err))
 
 		if !canRetry {
-			return err
+			return moerr.NewBackendCannotConnectNoCtx(err)
 		}
 		duration := time.Duration(0)
 		for {
@@ -1068,6 +1070,7 @@ func (s *stream) Send(ctx context.Context, request Message) error {
 	s.mu.RLock()
 	if s.mu.closed {
 		s.mu.RUnlock()
+		s.rb.logger.Warn("stream is closed on send", zap.Uint64("stream-id", s.id))
 		return moerr.NewStreamClosedNoCtx()
 	}
 
@@ -1105,6 +1108,7 @@ func (s *stream) Receive() (chan Message, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	if s.mu.closed {
+		s.rb.logger.Warn("stream is closed on receive", zap.Uint64("stream-id", s.id))
 		return nil, moerr.NewStreamClosedNoCtx()
 	}
 	return s.c, nil
@@ -1112,6 +1116,7 @@ func (s *stream) Receive() (chan Message, error) {
 
 func (s *stream) Close(closeConn bool) error {
 	if closeConn {
+		s.rb.logger.Info("stream call closed on client", zap.Uint64("stream-id", s.id))
 		s.rb.Close()
 	}
 	s.mu.Lock()

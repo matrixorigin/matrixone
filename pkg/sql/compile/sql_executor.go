@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"errors"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/buffer"
@@ -184,7 +185,7 @@ func (s *sqlExecutor) adjustOptions(
 				"",
 				"sql-executor",
 				0),
-			client.WithDisableTrace(true))
+			client.WithDisableTrace(!opts.EnableTrace()))
 		txnOp, err := s.txnClient.New(
 			ctx,
 			opts.MinCommittedTS(),
@@ -227,9 +228,31 @@ func (exec *txnExecutor) Use(db string) {
 func (exec *txnExecutor) Exec(
 	sql string,
 	statementOption executor.StatementOption) (executor.Result, error) {
+
+	//-----------------------------------------------------------------------------------------
+	// NOTE: This code is to restore tenantID information in the Context when temporarily switching tenants
+	// so that it can be restored to its original state after completing the task.
+	recoverAccount := func(exec *txnExecutor, accId uint32) {
+		exec.ctx = context.WithValue(exec.ctx, defines.TenantIDKey{}, accId)
+	}
+
+	if statementOption.HasAccountID() {
+		originAccountID := catalog.System_Account
+		if v := exec.ctx.Value(defines.TenantIDKey{}); v != nil {
+			originAccountID = v.(uint32)
+		}
+
+		exec.ctx = context.WithValue(exec.ctx,
+			defines.TenantIDKey{},
+			statementOption.AccountID())
+		// NOTE: Restore AccountID information in context.Context
+		defer recoverAccount(exec, originAccountID)
+	}
+	//-----------------------------------------------------------------------------------------
+
 	receiveAt := time.Now()
 
-	stmts, err := parsers.Parse(exec.ctx, dialect.MYSQL, sql, 1)
+	stmts, err := parsers.Parse(exec.ctx, dialect.MYSQL, sql, 1, 0)
 	defer func() {
 		for _, stmt := range stmts {
 			stmt.Free()
@@ -275,9 +298,10 @@ func (exec *txnExecutor) Exec(
 		proc.FreeVectors()
 	}()
 
-	pn, err := plan.BuildPlan(
-		exec.s.getCompileContext(exec.ctx, proc, exec.getDatabase()),
-		stmts[0], false)
+	compileContext := exec.s.getCompileContext(exec.ctx, proc, exec.getDatabase())
+	compileContext.SetRootSql(sql)
+
+	pn, err := plan.BuildPlan(compileContext, stmts[0], false)
 	if err != nil {
 		return executor.Result{}, err
 	}
@@ -362,6 +386,10 @@ func (exec *txnExecutor) LockTable(table string) error {
 		proc.FreeVectors()
 	}()
 	return doLockTable(exec.s.eng, proc, rel, false)
+}
+
+func (exec *txnExecutor) Txn() client.TxnOperator {
+	return exec.opts.Txn()
 }
 
 func (exec *txnExecutor) commit() error {

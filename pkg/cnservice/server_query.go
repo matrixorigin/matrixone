@@ -244,17 +244,10 @@ func (s *service) handleRunTask(ctx context.Context, req *query.Request, resp *q
 // tenant, just return the sessions belong to the tenant.
 // It is called "processList" is because it is used in "SHOW PROCESSLIST" statement.
 func (s *service) processList(tenant string, sysTenant bool) ([]*status.Session, error) {
-	var ss []queryservice.Session
 	if sysTenant {
-		ss = s.sessionMgr.GetAllSessions()
-	} else {
-		ss = s.sessionMgr.GetSessionsByTenant(tenant)
+		return s.sessionMgr.GetAllStatusSessions(), nil
 	}
-	sessions := make([]*status.Session, 0, len(ss))
-	for _, ses := range ss {
-		sessions = append(sessions, ses.StatusSession())
-	}
-	return sessions, nil
+	return s.sessionMgr.GetStatusSessionsByTenant(tenant), nil
 }
 
 func copyKeys(src [][]byte) [][]byte {
@@ -365,9 +358,15 @@ func (s *service) handleGetCacheData(ctx context.Context, req *query.Request, re
 	if err != nil {
 		return err
 	}
-	return fileservice.HandleRemoteRead(ctx, sharedFS, req, &query.WrappedResponse{
+	wr := &query.WrappedResponse{
 		Response: resp,
-	})
+	}
+	err = fileservice.HandleRemoteRead(ctx, sharedFS, req, wr)
+	if err != nil {
+		return err
+	}
+	s.queryService.SetReleaseFunc(resp, wr.ReleaseFunc)
+	return nil
 }
 
 func (s *service) handleGetStatsInfo(ctx context.Context, req *query.Request, resp *query.Response) error {

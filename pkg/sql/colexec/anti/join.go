@@ -64,7 +64,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	for {
 		switch ctr.state {
 		case Build:
-			if err := ctr.build(proc, anal); err != nil {
+			if err := ctr.build(anal); err != nil {
 				return result, err
 			}
 			ctr.state = Probe
@@ -89,7 +89,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 				}
 
 				ap.bat = bat
-				ap.lastpos = 0
+				ap.lastrow = 0
 			}
 
 			if ctr.mp == nil {
@@ -97,7 +97,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 				return result, err
 			} else {
 				err := ctr.probe(ap, proc, anal, arg.GetIsFirst(), arg.GetIsLast(), &result)
-				if ap.lastpos == 0 {
+				if ap.lastrow == 0 {
 					proc.PutBatch(ap.bat)
 					ap.bat = nil
 				}
@@ -112,7 +112,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 }
 
-func (ctr *container) receiveHashMap(proc *process.Process, anal process.Analyze) error {
+func (ctr *container) receiveHashMap(anal process.Analyze) error {
 	bat, _, err := ctr.ReceiveFromSingleReg(1, anal)
 	if err != nil {
 		return err
@@ -120,12 +120,12 @@ func (ctr *container) receiveHashMap(proc *process.Process, anal process.Analyze
 	if bat != nil && bat.AuxData != nil {
 		ctr.mp = bat.DupJmAuxData()
 		ctr.hasNull = ctr.mp.HasNull()
-		anal.Alloc(ctr.mp.Size())
+		ctr.maxAllocSize = max(ctr.maxAllocSize, ctr.mp.Size())
 	}
 	return nil
 }
 
-func (ctr *container) receiveBatch(proc *process.Process, anal process.Analyze) error {
+func (ctr *container) receiveBatch(anal process.Analyze) error {
 	for {
 		bat, _, err := ctr.ReceiveFromSingleReg(1, anal)
 		if err != nil {
@@ -146,12 +146,12 @@ func (ctr *container) receiveBatch(proc *process.Process, anal process.Analyze) 
 	return nil
 }
 
-func (ctr *container) build(proc *process.Process, anal process.Analyze) error {
-	err := ctr.receiveHashMap(proc, anal)
+func (ctr *container) build(anal process.Analyze) error {
+	err := ctr.receiveHashMap(anal)
 	if err != nil {
 		return err
 	}
-	return ctr.receiveBatch(proc, anal)
+	return ctr.receiveBatch(anal)
 }
 
 func (ctr *container) emptyProbe(ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool, result *vm.CallResult) error {
@@ -167,11 +167,11 @@ func (ctr *container) emptyProbe(ap *Argument, proc *process.Process, anal proce
 		ctr.rbat.Vecs[i].SetSorted(ap.bat.Vecs[pos].GetSorted())
 	}
 	count := ap.bat.RowCount()
-	for i := ap.lastpos; i < count; i += hashmap.UnitLimit {
+	for i := ap.lastrow; i < count; i += hashmap.UnitLimit {
 		if ctr.rbat.RowCount() >= colexec.DefaultBatchSize {
 			anal.Output(ctr.rbat, isLast)
 			result.Batch = ctr.rbat
-			ap.lastpos = i
+			ap.lastrow = i
 			return nil
 		}
 		n := count - i
@@ -190,7 +190,7 @@ func (ctr *container) emptyProbe(ap *Argument, proc *process.Process, anal proce
 	anal.Output(ctr.rbat, isLast)
 	result.Batch = ctr.rbat
 	proc.PutBatch(ap.bat)
-	ap.lastpos = 0
+	ap.lastrow = 0
 	ap.bat = nil
 	return nil
 }
@@ -229,11 +229,11 @@ func (ctr *container) probe(ap *Argument, proc *process.Process, anal process.An
 	mSels := ctr.mp.Sels()
 	itr := ctr.mp.NewIterator()
 	eligible := make([]int32, 0, hashmap.UnitLimit)
-	for i := ap.lastpos; i < count; i += hashmap.UnitLimit {
+	for i := ap.lastrow; i < count; i += hashmap.UnitLimit {
 		if ctr.rbat.RowCount() >= colexec.DefaultBatchSize {
 			anal.Output(ctr.rbat, isLast)
 			result.Batch = ctr.rbat
-			ap.lastpos = i
+			ap.lastrow = i
 			return nil
 		}
 		n := count - i
@@ -320,7 +320,7 @@ func (ctr *container) probe(ap *Argument, proc *process.Process, anal process.An
 	}
 	anal.Output(ctr.rbat, isLast)
 	result.Batch = ctr.rbat
-	ap.lastpos = 0
+	ap.lastrow = 0
 	return nil
 }
 

@@ -315,6 +315,7 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 	if tableDef.IsTemporary {
 		tableDef.Name = tableName
 	}
+	tableDef.DbName = dbName
 
 	// convert
 	var subscriptionName string

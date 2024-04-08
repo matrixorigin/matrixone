@@ -130,9 +130,16 @@ func rewriteUpdateQueryLastNode(builder *QueryBuilder, planCtxs []*dmlPlanCtx, l
 				if err != nil {
 					return err
 				}
-				lastNode.ProjectList[pos], err = forceCastExpr(builder.GetContext(), posExpr, &col.Typ)
-				if err != nil {
-					return err
+				if col != nil && col.Typ.Id == int32(types.T_enum) {
+					lastNode.ProjectList[pos], err = funcCastForEnumType(builder.GetContext(), posExpr, &col.Typ)
+					if err != nil {
+						return err
+					}
+				} else {
+					lastNode.ProjectList[pos], err = forceCastExpr(builder.GetContext(), posExpr, &col.Typ)
+					if err != nil {
+						return err
+					}
 				}
 
 			} else {
@@ -141,9 +148,16 @@ func rewriteUpdateQueryLastNode(builder *QueryBuilder, planCtxs []*dmlPlanCtx, l
 					lastNode.ProjectList[pos] = col.OnUpdate.Expr
 				}
 
-				lastNode.ProjectList[pos], err = forceCastExpr(builder.GetContext(), lastNode.ProjectList[pos], &col.Typ)
-				if err != nil {
-					return err
+				if col != nil && col.Typ.Id == int32(types.T_enum) {
+					lastNode.ProjectList[pos], err = funcCastForEnumType(builder.GetContext(), lastNode.ProjectList[pos], &col.Typ)
+					if err != nil {
+						return err
+					}
+				} else {
+					lastNode.ProjectList[pos], err = forceCastExpr(builder.GetContext(), lastNode.ProjectList[pos], &col.Typ)
+					if err != nil {
+						return err
+					}
 				}
 			}
 		}
@@ -230,7 +244,7 @@ func selectUpdateTables(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.
 		}
 
 		// we don't known if update pk if tableDef.Pkey is nil. just set true and let check pk dup work
-		updatePkCol = tableDef.Pkey == nil || updatePkColCount > 0
+		updatePkCol = updatePkColCount > 0
 
 		// append  table.* to project list
 		upPlanCtx := getDmlPlanCtx()

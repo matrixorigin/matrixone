@@ -18,14 +18,15 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
+	"io"
+	"sync"
+	"time"
+
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/profile"
 	"go.uber.org/zap"
-	"io"
-	"sync"
-	"time"
 
 	"github.com/fagongzi/goetty/v2"
 	"github.com/matrixorigin/matrixone/pkg/bootstrap"
@@ -81,6 +82,7 @@ func NewService(
 
 	configKVMap, _ := dumpCnConfig(*cfg)
 	options = append(options, WithConfigData(configKVMap))
+	options = append(options, WithBootstrapOptions(bootstrap.WithUpgradeTenantBatch(cfg.UpgradeTenantBatchSize)))
 
 	// get metadata fs
 	metadataFS, err := fileservice.Get[fileservice.ReplaceableFileService](fileService, defines.LocalFileServiceName)
@@ -301,6 +303,33 @@ func (s *service) SQLAddress() string {
 // SessionMgr implements the frontend.BaseService interface.
 func (s *service) SessionMgr() *queryservice.SessionManager {
 	return s.sessionMgr
+}
+
+func (s *service) CheckTenantUpgrade(_ context.Context, tenantID int64) error {
+	finalVersion := s.GetFinalVersion()
+	tenantFetchFunc := func() (int32, string, error) {
+		return int32(tenantID), finalVersion, nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*30)
+	defer cancel()
+	if _, err := s.bootstrapService.MaybeUpgradeTenant(ctx, tenantFetchFunc, nil); err != nil {
+		return err
+	}
+	return nil
+}
+
+// UpgradeTenant Manual command tenant upgrade entrance
+func (s *service) UpgradeTenant(ctx context.Context, tenantName string, retryCount uint32, isALLAccount bool) error {
+	ctx, cancel := context.WithTimeout(ctx, time.Minute*120)
+	defer cancel()
+	if _, err := s.bootstrapService.UpgradeTenant(ctx, tenantName, retryCount, isALLAccount); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (s *service) GetFinalVersion() string {
+	return s.bootstrapService.GetFinalVersion()
 }
 
 func (s *service) stopFrontend() error {
@@ -786,21 +815,28 @@ func (s *service) bootstrap() error {
 		s.options.bootstrapOptions...)
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute*5)
+	ctx = context.WithValue(ctx, config.ParameterUnitKey, s.pu)
 	defer cancel()
+
 	// bootstrap cannot fail. We panic here to make sure the service can not start.
 	// If bootstrap failed, need clean all data to retry.
 	if err := s.bootstrapService.Bootstrap(ctx); err != nil {
 		panic(err)
 	}
-	return s.stopper.RunTask(func(ctx context.Context) {
-		ctx, cancel := context.WithTimeout(ctx, time.Minute*5)
-		defer cancel()
-		if err := s.bootstrapService.BootstrapUpgrade(ctx); err != nil {
-			if err != context.Canceled {
-				panic(err)
+
+	if s.cfg.AutomaticUpgrade {
+		return s.stopper.RunTask(func(ctx context.Context) {
+			ctx, cancel := context.WithTimeout(ctx, time.Minute*120)
+			defer cancel()
+			if err := s.bootstrapService.BootstrapUpgrade(ctx); err != nil {
+				if err != context.Canceled {
+					runtime.DefaultRuntime().Logger().Error("bootstrap system automatic upgrade failed by: ", zap.Error(err))
+					//panic(err)
+				}
 			}
-		}
-	})
+		})
+	}
+	return nil
 }
 
 func (s *service) initTxnTraceService() {
@@ -811,6 +847,7 @@ func (s *service) initTxnTraceService() {
 		s._txnClient,
 		rt.Clock(),
 		s.sqlExecutor,
+		trace.WithEnable(s.cfg.Txn.Trace.Enable, s.cfg.Txn.Trace.Tables),
 		trace.WithBufferSize(s.cfg.Txn.Trace.BufferSize),
 		trace.WithFlushBytes(int(s.cfg.Txn.Trace.FlushBytes)),
 		trace.WithFlushDuration(s.cfg.Txn.Trace.FlushDuration.Duration))

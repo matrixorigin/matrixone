@@ -130,7 +130,7 @@ func newExpression(pos int32) *plan.Expr {
 }
 
 // create a new block based on the type information, flgs[i] == ture: has null
-// func newBatch(t *testing.T, flgs []bool, ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
+// func newBatch(ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
 // 	return testutil.NewBatch(ts, false, int(rows), proc.Mp())
 // }
 

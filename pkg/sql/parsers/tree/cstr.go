@@ -18,6 +18,7 @@ import (
 	"strings"
 )
 
+type CStrParts [4]*CStr
 type CStr struct {
 	o string
 	c string
@@ -56,4 +57,14 @@ func (cs *CStr) Compare() string {
 
 func (cs *CStr) Empty() bool {
 	return len(cs.o) == 0
+}
+
+func NewCStrUseOrigin(str string, useOrigin int64) *CStr {
+	cs := &CStr{o: str}
+	if useOrigin == 1 {
+		cs.c = cs.o
+		return cs
+	}
+	cs.c = strings.ToLower(cs.o)
+	return cs
 }

@@ -20,22 +20,23 @@ import (
 	"math"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/txn/trace"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
 
 //func (txn *Transaction) getObjInfos(
@@ -82,6 +83,25 @@ func (txn *Transaction) WriteBatch(
 	primaryIdx int, // pass -1 to indicate no primary key or disable primary key checking
 	insertBatchHasRowId bool,
 	truncate bool) error {
+	start := time.Now()
+	seq := txn.op.NextSequence()
+	trace.GetService().AddTxnDurationAction(
+		txn.op,
+		client.WorkspaceWriteEvent,
+		seq,
+		tableId,
+		0,
+		nil)
+	defer func() {
+		trace.GetService().AddTxnDurationAction(
+			txn.op,
+			client.WorkspaceWriteEvent,
+			seq,
+			tableId,
+			time.Since(start),
+			nil)
+	}()
+
 	txn.readOnly.Store(false)
 	bat.Cnt = 1
 	txn.Lock()
@@ -118,6 +138,8 @@ func (txn *Transaction) WriteBatch(
 	}
 	txn.writes = append(txn.writes, e)
 	txn.pkCount += bat.RowCount()
+
+	trace.GetService().TxnWrite(txn.op, tableId, typesNames[typ], bat)
 	return nil
 }
 
@@ -130,7 +152,6 @@ func (txn *Transaction) dumpBatch(offset int) error {
 func checkPKDupGeneric[T comparable](
 	mp map[any]bool,
 	t *types.Type,
-	attr string,
 	vals []T,
 	start, count int) (bool, string) {
 	for _, v := range vals[start : start+count] {
@@ -146,79 +167,78 @@ func checkPKDupGeneric[T comparable](
 func checkPKDup(
 	mp map[any]bool,
 	pk *vector.Vector,
-	attr string,
 	start, count int) (bool, string) {
 	colType := pk.GetType()
 	switch colType.Oid {
 	case types.T_bool:
 		vs := vector.MustFixedCol[bool](pk)
-		return checkPKDupGeneric[bool](mp, colType, attr, vs, start, count)
+		return checkPKDupGeneric[bool](mp, colType, vs, start, count)
 	case types.T_bit:
 		vs := vector.MustFixedCol[uint64](pk)
-		return checkPKDupGeneric[uint64](mp, colType, attr, vs, start, count)
+		return checkPKDupGeneric[uint64](mp, colType, vs, start, count)
 	case types.T_int8:
 		vs := vector.MustFixedCol[int8](pk)
-		return checkPKDupGeneric[int8](mp, colType, attr, vs, start, count)
+		return checkPKDupGeneric[int8](mp, colType, vs, start, count)
 	case types.T_int16:
 		vs := vector.MustFixedCol[int16](pk)
-		return checkPKDupGeneric[int16](mp, colType, attr, vs, start, count)
+		return checkPKDupGeneric[int16](mp, colType, vs, start, count)
 	case types.T_int32:
 		vs := vector.MustFixedCol[int32](pk)
-		return checkPKDupGeneric[int32](mp, colType, attr, vs, start, count)
+		return checkPKDupGeneric[int32](mp, colType, vs, start, count)
 	case types.T_int64:
 		vs := vector.MustFixedCol[int64](pk)
-		return checkPKDupGeneric[int64](mp, colType, attr, vs, start, count)
+		return checkPKDupGeneric[int64](mp, colType, vs, start, count)
 	case types.T_uint8:
 		vs := vector.MustFixedCol[uint8](pk)
-		return checkPKDupGeneric[uint8](mp, colType, attr, vs, start, count)
+		return checkPKDupGeneric[uint8](mp, colType, vs, start, count)
 	case types.T_uint16:
 		vs := vector.MustFixedCol[uint16](pk)
-		return checkPKDupGeneric[uint16](mp, colType, attr, vs, start, count)
+		return checkPKDupGeneric[uint16](mp, colType, vs, start, count)
 	case types.T_uint32:
 		vs := vector.MustFixedCol[uint32](pk)
-		return checkPKDupGeneric[uint32](mp, colType, attr, vs, start, count)
+		return checkPKDupGeneric[uint32](mp, colType, vs, start, count)
 	case types.T_uint64:
 		vs := vector.MustFixedCol[uint64](pk)
-		return checkPKDupGeneric[uint64](mp, colType, attr, vs, start, count)
+		return checkPKDupGeneric[uint64](mp, colType, vs, start, count)
 	case types.T_decimal64:
 		vs := vector.MustFixedCol[types.Decimal64](pk)
-		return checkPKDupGeneric[types.Decimal64](mp, colType, attr, vs, start, count)
+		return checkPKDupGeneric[types.Decimal64](mp, colType, vs, start, count)
 	case types.T_decimal128:
 		vs := vector.MustFixedCol[types.Decimal128](pk)
-		return checkPKDupGeneric[types.Decimal128](mp, colType, attr, vs, start, count)
+		return checkPKDupGeneric[types.Decimal128](mp, colType, vs, start, count)
 	case types.T_uuid:
 		vs := vector.MustFixedCol[types.Uuid](pk)
-		return checkPKDupGeneric[types.Uuid](mp, colType, attr, vs, start, count)
+		return checkPKDupGeneric[types.Uuid](mp, colType, vs, start, count)
 	case types.T_float32:
 		vs := vector.MustFixedCol[float32](pk)
-		return checkPKDupGeneric[float32](mp, colType, attr, vs, start, count)
+		return checkPKDupGeneric[float32](mp, colType, vs, start, count)
 	case types.T_float64:
 		vs := vector.MustFixedCol[float64](pk)
-		return checkPKDupGeneric[float64](mp, colType, attr, vs, start, count)
+		return checkPKDupGeneric[float64](mp, colType, vs, start, count)
 	case types.T_date:
 		vs := vector.MustFixedCol[types.Date](pk)
-		return checkPKDupGeneric[types.Date](mp, colType, attr, vs, start, count)
+		return checkPKDupGeneric[types.Date](mp, colType, vs, start, count)
 	case types.T_timestamp:
 		vs := vector.MustFixedCol[types.Timestamp](pk)
-		return checkPKDupGeneric[types.Timestamp](mp, colType, attr, vs, start, count)
+		return checkPKDupGeneric[types.Timestamp](mp, colType, vs, start, count)
 	case types.T_time:
 		vs := vector.MustFixedCol[types.Time](pk)
-		return checkPKDupGeneric[types.Time](mp, colType, attr, vs, start, count)
+		return checkPKDupGeneric[types.Time](mp, colType, vs, start, count)
 	case types.T_datetime:
 		vs := vector.MustFixedCol[types.Datetime](pk)
-		return checkPKDupGeneric[types.Datetime](mp, colType, attr, vs, start, count)
+		return checkPKDupGeneric[types.Datetime](mp, colType, vs, start, count)
 	case types.T_enum:
 		vs := vector.MustFixedCol[types.Enum](pk)
-		return checkPKDupGeneric[types.Enum](mp, colType, attr, vs, start, count)
+		return checkPKDupGeneric[types.Enum](mp, colType, vs, start, count)
 	case types.T_TS:
 		vs := vector.MustFixedCol[types.TS](pk)
-		return checkPKDupGeneric[types.TS](mp, colType, attr, vs, start, count)
+		return checkPKDupGeneric[types.TS](mp, colType, vs, start, count)
 	case types.T_Rowid:
 		vs := vector.MustFixedCol[types.Rowid](pk)
-		return checkPKDupGeneric[types.Rowid](mp, colType, attr, vs, start, count)
+		return checkPKDupGeneric[types.Rowid](mp, colType, vs, start, count)
 	case types.T_Blockid:
 		vs := vector.MustFixedCol[types.Blockid](pk)
-		return checkPKDupGeneric[types.Blockid](mp, colType, attr, vs, start, count)
+		return checkPKDupGeneric[types.Blockid](mp, colType, vs, start, count)
 	case types.T_char, types.T_varchar, types.T_json,
 		types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
 		for i := start; i < start+count; i++ {
@@ -292,14 +312,6 @@ func (txn *Transaction) checkDup() error {
 			tableDef := tablesDef[e.tableId]
 			if _, ok := pkIndex[e.tableId]; !ok {
 				for idx, colDef := range tableDef.Cols {
-					//FIXME::tableDef.PKey is nil if table is mo_tables, mo_columns, mo_database?
-					if tableDef.Pkey == nil {
-						if colDef.Primary {
-							pkIndex[e.tableId] = idx
-							break
-						}
-						continue
-					}
 					if colDef.Name == tableDef.Pkey.PkeyColName {
 						if colDef.Name == catalog.FakePrimaryKeyColName {
 							pkIndex[e.tableId] = -1
@@ -325,7 +337,6 @@ func (txn *Transaction) checkDup() error {
 				if dup, pk := checkPKDup(
 					insertPks[e.tableId],
 					bat.Vecs[index],
-					bat.Attrs[index],
 					0,
 					bat.RowCount()); dup {
 					logutil.Errorf("txn:%s wants to insert duplicate primary key:%s in table:[%v-%v:%s-%s]",
@@ -353,7 +364,6 @@ func (txn *Transaction) checkDup() error {
 			if dup, pk := checkPKDup(
 				delPks[e.tableId],
 				e.bat.Vecs[1],
-				e.bat.Attrs[1],
 				0,
 				e.bat.RowCount()); dup {
 				logutil.Errorf("txn:%s wants to delete duplicate primary key:%s in table:[%v-%v:%s-%s]",
@@ -625,6 +635,27 @@ func (txn *Transaction) WriteFile(
 
 func (txn *Transaction) deleteBatch(bat *batch.Batch,
 	databaseId, tableId uint64) *batch.Batch {
+	start := time.Now()
+	seq := txn.op.NextSequence()
+	trace.GetService().AddTxnDurationAction(
+		txn.op,
+		client.WorkspaceWriteEvent,
+		seq,
+		tableId,
+		0,
+		nil)
+	defer func() {
+		trace.GetService().AddTxnDurationAction(
+			txn.op,
+			client.WorkspaceWriteEvent,
+			seq,
+			tableId,
+			time.Since(start),
+			nil)
+	}()
+
+	trace.GetService().TxnWrite(txn.op, tableId, typesNames[DELETE], bat)
+
 	mp := make(map[types.Rowid]uint8)
 	deleteBlkId := make(map[types.Blockid]bool)
 	rowids := vector.MustFixedCol[types.Rowid](bat.GetVector(0))
@@ -887,6 +918,35 @@ func (txn *Transaction) hasUncommittedDeletesOnBlock(id *types.Blockid) bool {
 	return txn.deletedBlocks.hasDeletes(id)
 }
 
+// TODO:: refactor in next PR, to make it more efficient and include persisted deletes in S3
+func (txn *Transaction) forEachTableHasDeletesLocked(f func(tbl *txnTable) error) error {
+	tables := make(map[uint64]*txnTable)
+	for i := 0; i < len(txn.writes); i++ {
+		e := txn.writes[i]
+		if e.typ != DELETE || e.fileName != "" {
+			continue
+		}
+		if _, ok := tables[e.tableId]; ok {
+			continue
+		}
+		db, err := txn.engine.Database(txn.proc.Ctx, e.databaseName, txn.op)
+		if err != nil {
+			return err
+		}
+		rel, err := db.Relation(txn.proc.Ctx, e.tableName, nil)
+		if err != nil {
+			return err
+		}
+		tables[e.tableId] = rel.(*txnTable)
+	}
+	for _, tbl := range tables {
+		if err := f(tbl); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (txn *Transaction) forEachTableWrites(databaseId uint64, tableId uint64, offset int, f func(Entry)) {
 	txn.Lock()
 	defer txn.Unlock()
@@ -907,7 +967,6 @@ func (txn *Transaction) forEachTableWrites(databaseId uint64, tableId uint64, of
 // transaction by go through the delete tables slice, and advance its cachedIndex.
 func (txn *Transaction) getCachedTable(
 	k tableKey,
-	snapshotTS timestamp.Timestamp,
 ) *txnTable {
 	var tbl *txnTable
 	if v, ok := txn.tableCache.tableMap.Load(k); ok {
@@ -944,6 +1003,8 @@ func (txn *Transaction) Commit(ctx context.Context) ([]txn.TxnRequest, error) {
 		return nil, err
 	}
 
+	txn.traceWorkspaceLocked(true)
+
 	if !txn.hasS3Op.Load() &&
 		txn.op.TxnOptions().CheckDupEnabled() {
 		if err := txn.checkDup(); err != nil {
@@ -960,7 +1021,7 @@ func (txn *Transaction) Commit(ctx context.Context) ([]txn.TxnRequest, error) {
 func (txn *Transaction) Rollback(ctx context.Context) error {
 	logDebugf(txn.op.Txn(), "Transaction.Rollback")
 	//to gc the s3 objs
-	if err := txn.gcObjs(0, ctx); err != nil {
+	if err := txn.gcObjs(0); err != nil {
 		panic("Rollback txn failed: to gc objects generated by CN failed")
 	}
 	txn.delTransaction()
@@ -1028,6 +1089,43 @@ func (txn *Transaction) GetSnapshotWriteOffset() int {
 	txn.Lock()
 	defer txn.Unlock()
 	return txn.snapshotWriteOffset
+}
+
+func (txn *Transaction) transferDeletesLocked() error {
+	txn.timestamps = append(txn.timestamps, txn.op.SnapshotTS())
+	if txn.statementID > 0 && txn.op.Txn().IsRCIsolation() {
+		var ts timestamp.Timestamp
+		if txn.statementID == 1 {
+			ts = txn.timestamps[0]
+		} else {
+			//statementID > 1
+			ts = txn.timestamps[txn.statementID-2]
+		}
+		return txn.forEachTableHasDeletesLocked(func(tbl *txnTable) error {
+			ctx := tbl.proc.Load().Ctx
+			state, err := tbl.getPartitionState(ctx)
+			if err != nil {
+				return err
+			}
+			deleteObjs, createObjs := state.GetChangedObjsBetween(types.TimestampToTS(ts),
+				types.TimestampToTS(tbl.db.txn.op.SnapshotTS()))
+
+			trace.GetService().ApplyFlush(
+				tbl.db.txn.op.Txn().ID,
+				tbl.tableId,
+				ts,
+				tbl.db.txn.op.SnapshotTS(),
+				len(deleteObjs))
+
+			if len(deleteObjs) > 0 {
+				if err := tbl.transferDeletes(ctx, state, deleteObjs, createObjs); err != nil {
+					return err
+				}
+			}
+			return nil
+		})
+	}
+	return nil
 }
 
 func (txn *Transaction) UpdateSnapshotWriteOffset() {

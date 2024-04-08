@@ -59,6 +59,8 @@ type container struct {
 	vecs            []*vector.Vector
 
 	mp *hashmap.JoinMap
+
+	maxAllocSize int64
 }
 
 type Argument struct {
@@ -72,7 +74,7 @@ type Argument struct {
 	HashOnPK   bool
 	IsShuffle  bool
 	bat        *batch.Batch
-	lastpos    int
+	lastrow    int
 
 	vm.OperatorBase
 }
@@ -116,12 +118,16 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 		ctr.cleanHashMap()
 		ctr.cleanExprExecutor()
 		ctr.FreeAllReg()
+
+		anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
+		anal.Alloc(ctr.maxAllocSize)
 	}
 }
 
 func (ctr *container) cleanExprExecutor() {
 	if ctr.expr != nil {
 		ctr.expr.Free()
+		ctr.expr = nil
 	}
 }
 
@@ -155,4 +161,5 @@ func (ctr *container) cleanEvalVectors() {
 	for i := range ctr.executorForVecs {
 		ctr.executorForVecs[i].Free()
 	}
+	ctr.executorForVecs = nil
 }

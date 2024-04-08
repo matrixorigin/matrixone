@@ -154,7 +154,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 				}
 
 				// clean
-				ctr.cleanOrderVectors(proc.Mp())
+				ctr.cleanOrderVectors()
 			}
 
 			anal.Output(ctr.bat, arg.GetIsLast())
@@ -227,7 +227,7 @@ func (ctr *container) processFunc(idx int, ap *Argument, proc *process.Process, 
 				start, end = buildPartitionInterval(ctr.ps, j, n)
 			}
 
-			left, right, err := ctr.buildInterval(j, start, end, ap.WinSpecList[idx].Expr.(*plan.Expr_W).W.Frame, proc)
+			left, right, err := ctr.buildInterval(j, start, end, ap.WinSpecList[idx].Expr.(*plan.Expr_W).W.Frame)
 			if err != nil {
 				return err
 			}
@@ -271,7 +271,7 @@ func (ctr *container) processFunc(idx int, ap *Argument, proc *process.Process, 
 	return nil
 }
 
-func (ctr *container) buildInterval(rowIdx, start, end int, frame *plan.FrameClause, proc *process.Process) (int, int, error) {
+func (ctr *container) buildInterval(rowIdx, start, end int, frame *plan.FrameClause) (int, int, error) {
 	// FrameClause_ROWS
 	if frame.Type == plan.FrameClause_ROWS {
 		start, end = ctr.buildRowsInterval(rowIdx, start, end, frame)

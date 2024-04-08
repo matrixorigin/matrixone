@@ -25,7 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
@@ -218,14 +217,11 @@ func (d *dirtyCollector) IsCommitted(from, to types.TS) bool {
 }
 
 // DirtyCount returns unflushed table, Object, block count
-func (d *dirtyCollector) DirtyCount() (tblCnt, objCnt, blkCnt int) {
+func (d *dirtyCollector) DirtyCount() (tblCnt, objCnt int) {
 	merged := d.GetAndRefreshMerged()
 	tblCnt = merged.tree.TableCount()
 	for _, tblTree := range merged.tree.Tables {
 		objCnt += len(tblTree.Objs)
-		for _, objTree := range tblTree.Objs {
-			blkCnt += len(objTree.Blks)
-		}
 	}
 	return
 }
@@ -386,7 +382,6 @@ func (d *dirtyCollector) tryCompactTree(
 		db  *catalog.DBEntry
 		tbl *catalog.TableEntry
 		obj *catalog.ObjectEntry
-		blk *catalog.BlockEntry
 	)
 	for id, dirtyTable := range tree.Tables {
 		// remove empty tables
@@ -422,17 +417,12 @@ func (d *dirtyCollector) tryCompactTree(
 		tbl.Stats.RUnlock()
 
 		if x := ctx.Value(TempFKey{}); x != nil && TempF.Check(tbl.ID) {
-			logutil.Infof("temp filter skip table %v-%v", tbl.ID, tbl.GetLastestSchema().Name)
+			logutil.Infof("temp filter skip table %v-%v", tbl.ID, tbl.GetLastestSchemaLocked().Name)
 			tree.Shrink(id)
 			continue
 		}
 
 		for id, dirtyObj := range dirtyTable.Objs {
-			// remove empty objs
-			if dirtyObj.IsEmpty() {
-				dirtyTable.Shrink(id)
-				continue
-			}
 			if obj, err = tbl.GetObjectByID(dirtyObj.ID); err != nil {
 				if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
 					dirtyTable.Shrink(id)
@@ -441,41 +431,36 @@ func (d *dirtyCollector) tryCompactTree(
 				}
 				return
 			}
-			for id := range dirtyObj.Blks {
-				bid := objectio.NewBlockidWithObjectID(dirtyObj.ID, id)
-				if blk, err = obj.GetBlockEntryByID(bid); err != nil {
-					if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
-						dirtyObj.Shrink(bid)
-						err = nil
-						continue
-					}
-					return
+			var calibration int
+			calibration, err = obj.GetObjectData().RunCalibration()
+			if err != nil {
+				logutil.Warnf("get object rows failed, obj %v, err: %v", obj.ID.String(), err)
+				continue
+			}
+			if calibration == 0 {
+				// TODO: may be put it to post replay process
+				// FIXME
+				if obj.HasPersistedData() {
+					obj.GetObjectData().TryUpgrade()
 				}
-				if blk.GetBlockData().RunCalibration() == 0 {
-					// TODO: may be put it to post replay process
-					// FIXME
-					if blk.HasPersistedData() {
-						blk.GetBlockData().TryUpgrade()
-					}
-					dirtyObj.Shrink(bid)
+				dirtyTable.Shrink(id)
+				continue
+			}
+			if !obj.IsAppendable() {
+				newFrom := from
+				if lastFlush.Greater(&newFrom) {
+					newFrom = lastFlush
+				}
+				// sometimes, delchain is no cleared after flushing table tail.
+				// the reason is still unknown, but here bumping the check from ts to lastFlush is correct anyway.
+				found, _ := obj.GetObjectData().HasDeleteIntentsPreparedIn(newFrom, to)
+				if !found {
+					dirtyTable.Shrink(id)
 					continue
 				}
-				if !blk.IsAppendable() {
-					newFrom := from
-					if lastFlush.Greater(&newFrom) {
-						newFrom = lastFlush
-					}
-					// sometimes, delchain is no cleared after flushing table tail.
-					// the reason is still unknown, but here bumping the check from ts to lastFlush is correct anyway.
-					found, _ := blk.GetBlockData().HasDeleteIntentsPreparedIn(newFrom, to)
-					if !found {
-						dirtyObj.Shrink(bid)
-						continue
-					}
-				}
-				if err = interceptor.OnBlock(blk); err != nil {
-					return
-				}
+			}
+			if err = interceptor.OnObject(obj); err != nil {
+				return
 			}
 		}
 	}

@@ -419,6 +419,11 @@ func (c *Compile) allocOperatorID() int32 {
 // Run is an important function of the compute-layer, it executes a single sql according to its scope
 // Need call Release() after call this function.
 func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
+	sql := c.originSQL
+	if sql == "" {
+		sql = c.sql
+	}
+
 	txnOp := c.proc.TxnOperator
 	seq := uint64(0)
 	if txnOp != nil {
@@ -432,20 +437,6 @@ func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
 		}
 	}()
 
-	txnTrace.GetService().AddTxnDurationAction(
-		txnOp,
-		client.ExecuteSQLEvent,
-		seq,
-		0,
-		0,
-		err)
-
-	sql := c.originSQL
-	if sql == "" {
-		sql = c.sql
-	}
-	txnTrace.GetService().TxnExecSQL(txnOp, sql)
-
 	var writeOffset uint64
 
 	start := time.Now()
@@ -454,18 +445,12 @@ func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
 	stats := statistic.StatsInfoFromContext(c.proc.Ctx)
 	stats.ExecutionStart()
 
+	txnTrace.GetService().TxnStatementStart(txnOp, sql, seq)
 	defer func() {
 		stats.ExecutionEnd()
 
 		cost := time.Since(start)
-		txnTrace.GetService().AddTxnDurationAction(
-			txnOp,
-			client.ExecuteSQLEvent,
-			seq,
-			0,
-			cost,
-			err)
-
+		txnTrace.GetService().TxnStatementCompleted(txnOp, sql, cost, seq, err)
 		v2.TxnStatementExecuteDurationHistogram.Observe(cost.Seconds())
 	}()
 
@@ -590,7 +575,6 @@ func (c *Compile) canRetry(err error) bool {
 // run once
 func (c *Compile) runOnce() error {
 	var wg sync.WaitGroup
-
 	err := c.lockMetaTables()
 	if err != nil {
 		return err
@@ -599,6 +583,7 @@ func (c *Compile) runOnce() error {
 	for _, s := range c.scope {
 		s.SetContextRecursively(c.proc.Ctx)
 	}
+
 	for i := range c.scope {
 		wg.Add(1)
 		scope := c.scope[i]
@@ -641,7 +626,7 @@ func (c *Compile) runOnce() error {
 	}
 
 	// fuzzy filter not sure whether this insert / load obey duplicate constraints, need double check
-	if c.fuzzy != nil && c.fuzzy.cnt > 0 && err == nil {
+	if c.fuzzy != nil && c.fuzzy.cnt > 0 {
 		if c.fuzzy.cnt > 10 {
 			logutil.Warnf("fuzzy filter cnt is %d, may be too high", c.fuzzy.cnt)
 		}
@@ -654,7 +639,7 @@ func (c *Compile) runOnce() error {
 	//detect fk self refer
 	//update, insert
 	query := c.pn.GetQuery()
-	if err == nil && query != nil && (query.StmtType == plan.Query_INSERT ||
+	if query != nil && (query.StmtType == plan.Query_INSERT ||
 		query.StmtType == plan.Query_UPDATE) && len(query.GetDetectSqls()) != 0 {
 		err = detectFkSelfRefer(c, query.DetectSqls)
 	}
@@ -1629,7 +1614,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		currentFirstFlag := c.anal.isFirst
 		for i := range ss {
 			var lockOpArg *lockop.Argument
-			lockOpArg, err = constructLockOp(n, ss[i].Proc, c.e)
+			lockOpArg, err = constructLockOp(n, c.e)
 			if err != nil {
 				return nil, err
 			}
@@ -2771,7 +2756,7 @@ func (c *Compile) compileTimeWin(n *plan.Node, ss []*Scope) []*Scope {
 	rs.Instructions[0] = vm.Instruction{
 		Op:  vm.TimeWin,
 		Idx: c.anal.curr,
-		Arg: constructTimeWindow(c.ctx, n, c.proc),
+		Arg: constructTimeWindow(c.ctx, n),
 	}
 	return []*Scope{rs}
 }
@@ -2840,7 +2825,7 @@ func (c *Compile) compileFuzzyFilter(n *plan.Node, ns []*plan.Node, left []*Scop
 
 	rs.Instructions[0].Idx = c.anal.curr
 
-	arg := constructFuzzyFilter(c, n, ns[n.Children[0]], ns[n.Children[1]])
+	arg := constructFuzzyFilter(c, n, ns[n.Children[1]])
 
 	rs.appendInstruction(vm.Instruction{
 		Op:  vm.FuzzyFilter,
@@ -3465,7 +3450,7 @@ func (c *Compile) newJoinBuildScope(s *Scope, ss []*Scope) *Scope {
 		regTransplant(s, rs, i+s.BuildIdx, i)
 	}
 
-	rs.appendInstruction(constructJoinBuildInstruction(c, s.Instructions[0], c.proc, s.ShuffleCnt, ss != nil))
+	rs.appendInstruction(constructJoinBuildInstruction(c, s.Instructions[0], s.ShuffleCnt, ss != nil))
 
 	if ss == nil { // unparallel, send the hashtable to join scope directly
 		s.Proc.Reg.MergeReceivers[s.BuildIdx] = &process.WaitRegister{
@@ -3572,30 +3557,25 @@ func (c *Compile) fillAnalyzeInfo() {
 }
 
 func (c *Compile) determinExpandRanges(n *plan.Node, rel engine.Relation) bool {
-	// for some reason, revert this function to avoid bug, maybe fix this in the future
-	return true
-	/*
-		if plan2.InternalTable(n.TableDef) {
-			return true
-		}
-		if n.TableDef.Partition != nil {
-			return true
-		}
-		if len(n.RuntimeFilterProbeList) == 0 {
-			return true
-		}
-		if n.Stats.BlockNum > plan2.BlockNumForceOneCN && len(c.cnList) > 1 {
-			return true
-		}
-		if rel.GetEngineType() != engine.Disttae {
-			return true
-		}
-		if n.AggList != nil { //need to handle partial results
-			return true
-		}
-		return false
-
-	*/
+	if plan2.InternalTable(n.TableDef) {
+		return true
+	}
+	if n.TableDef.Partition != nil {
+		return true
+	}
+	if len(n.RuntimeFilterProbeList) == 0 {
+		return true
+	}
+	if n.Stats.BlockNum > plan2.BlockNumForceOneCN && len(c.cnList) > 1 {
+		return true
+	}
+	if rel.GetEngineType() != engine.Disttae {
+		return true
+	}
+	if n.AggList != nil { //need to handle partial results
+		return true
+	}
+	return false
 }
 
 func (c *Compile) expandRanges(n *plan.Node, rel engine.Relation, blockFilterList []*plan.Expr) (engine.Ranges, error) {

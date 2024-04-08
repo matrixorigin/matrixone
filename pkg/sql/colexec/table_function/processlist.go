@@ -147,6 +147,10 @@ func processlist(_ int, proc *process.Process, arg *Argument, result *vm.CallRes
 					if err := vector.AppendBytes(bat.Vecs[i], []byte(session.GetRole()), false, mp); err != nil {
 						return false, err
 					}
+				case status.SessionField_PROXY_HOST:
+					if err := vector.AppendBytes(bat.Vecs[i], []byte(session.GetProxyHost()), false, mp); err != nil {
+						return false, err
+					}
 				}
 			}
 		}

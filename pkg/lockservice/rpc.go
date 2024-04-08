@@ -148,12 +148,10 @@ func (c *client) AsyncSend(ctx context.Context, request *pb.Request) (*morpc.Fut
 					return false
 				})
 		default:
-			c.cluster.GetTNService(
-				clusterservice.NewSelector(),
-				func(d metadata.TNService) bool {
-					address = d.LockServiceAddress
-					return false
-				})
+			values := c.cluster.GetAllTNServices()
+			if len(values) > 0 {
+				address = values[0].LockServiceAddress
+			}
 		}
 		if address != "" {
 			break
@@ -181,6 +179,31 @@ func (c *client) AsyncSend(ctx context.Context, request *pb.Request) (*morpc.Fut
 
 func (c *client) Close() error {
 	return c.client.Close()
+}
+
+func (c *client) Ping(ctx context.Context, serviceID string) error {
+	var address string
+	for i := 0; i < 2; i++ {
+		sid := getUUIDFromServiceIdentifier(serviceID)
+		c.cluster.GetCNServiceWithoutWorkingState(
+			clusterservice.NewServiceIDSelector(sid),
+			func(s metadata.CNService) bool {
+				address = s.LockServiceAddress
+				return false
+			})
+		if address != "" {
+			break
+		}
+		if i == 0 {
+			c.cluster.ForceRefresh(true)
+		}
+	}
+	if address == "" {
+		getLogger().Error("cannot ping lockservice address",
+			zap.String("serviceID", serviceID))
+
+	}
+	return c.client.Ping(ctx, address)
 }
 
 // WithServerMessageFilter set filter func. Requests can be modified or filtered out by the filter

@@ -14,31 +14,21 @@
 
 package malloc
 
-// #include <stdlib.h>
-import "C"
-import "unsafe"
+import (
+	"github.com/nnsgmsone/mmap"
+)
 
-//go:linkname throw runtime.throw
-func throw(s string)
-
-// alloc allocates a byte slice of size use cgo
+// New allocates a slice of size n. The returned slice is from manually managed
+// memory and MUST be released by calling Free. Failure to do so will result in
+// a memory leak.
 func Alloc(n int) []byte {
-	if n == 0 {
-		return make([]byte, 0)
-	}
-	ptr := C.calloc(C.size_t(n), 1)
-	if ptr == nil {
-		// NB: throw is like panic, except it guarantees the process will be
-		// terminated. The call below is exactly what the Go runtime invokes when
-		// it cannot allocate memory.
-		throw("out of memory")
-	}
-	return unsafe.Slice((*byte)(ptr), n)
+	return mmap.Alloc(n)
 }
 
 func Free(b []byte) {
-	if cap(b) != 0 {
-		b = b[:cap(b)]
-		C.free(unsafe.Pointer(&b[0]))
+	if cap(b) == 0 {
+		return
 	}
+	b = b[:cap(b)]
+	mmap.Free(b)
 }

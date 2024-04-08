@@ -82,7 +82,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -94,6 +93,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnimpl"
 	"go.uber.org/zap"
 )
@@ -185,7 +185,7 @@ func HandleSyncLogTailReq(
 
 	if canRetry && scope == ScopeUserTables { // check simple conditions first
 		_, name, forceFlush := fault.TriggerFault("logtail_max_size")
-		if (forceFlush && name == tableEntry.GetLastestSchema().Name) || resp.ProtoSize() > Size90M {
+		if (forceFlush && name == tableEntry.GetLastestSchemaLocked().Name) || resp.ProtoSize() > Size90M {
 			_ = ckpClient.FlushTable(ctx, did, tid, end)
 			// try again after flushing
 			newResp, closeCB, err := HandleSyncLogTailReq(ctx, ckpClient, mgr, c, req, false)
@@ -444,7 +444,6 @@ type TableLogtailRespBuilder struct {
 	checkpoint      string
 	blkMetaInsBatch *containers.Batch
 	blkMetaDelBatch *containers.Batch
-	segMetaDelBatch *containers.Batch
 	objectMetaBatch *containers.Batch
 	dataInsBatches  map[uint32]*containers.Batch // schema version -> data batch
 	dataDelBatch    *containers.Batch
@@ -458,19 +457,17 @@ func NewTableLogtailRespBuilder(ctx context.Context, ckp string, start, end type
 		end:           end,
 		checkpoint:    ckp,
 	}
-	b.BlockFn = b.VisitBlk
 	b.ObjectFn = b.VisitObj
+	b.TombstoneFn = b.visitDelete
 
 	b.did = tbl.GetDB().GetID()
 	b.tid = tbl.ID
 	b.dname = tbl.GetDB().GetName()
-	b.tname = tbl.GetLastestSchema().Name
+	b.tname = tbl.GetLastestSchemaLocked().Name
 
 	b.dataInsBatches = make(map[uint32]*containers.Batch)
-	b.dataDelBatch = makeRespBatchFromSchema(DelSchema, common.LogtailAllocator)
 	b.blkMetaInsBatch = makeRespBatchFromSchema(BlkMetaSchema, common.LogtailAllocator)
 	b.blkMetaDelBatch = makeRespBatchFromSchema(DelSchema, common.LogtailAllocator)
-	b.segMetaDelBatch = makeRespBatchFromSchema(DelSchema, common.LogtailAllocator)
 	b.objectMetaBatch = makeRespBatchFromSchema(ObjectInfoSchema, common.LogtailAllocator)
 	return b
 }
@@ -497,24 +494,59 @@ func (b *TableLogtailRespBuilder) Close() {
 }
 
 func (b *TableLogtailRespBuilder) VisitObj(e *catalog.ObjectEntry) error {
+	skip, err := b.visitObjMeta(e)
+	if err != nil {
+		return err
+	}
+	if skip {
+		return nil
+	} else {
+		return b.visitObjData(e)
+	}
+}
+func (b *TableLogtailRespBuilder) visitObjMeta(e *catalog.ObjectEntry) (bool, error) {
 	e.RLock()
 	mvccNodes := e.ClonePreparedInRange(b.start, b.end)
 	e.RUnlock()
+	if len(mvccNodes) == 0 {
+		return false, nil
+	}
 
 	for _, node := range mvccNodes {
-		if node.HasDropCommitted() {
-			// send Object deletation event
-			b.segMetaDelBatch.GetVectorByName(catalog.AttrCommitTs).Append(node.DeletedAt, false)
-			b.segMetaDelBatch.GetVectorByName(catalog.AttrRowID).Append(objectio.HackObjid2Rowid(&e.ID), false)
-		}
 		if e.IsAppendable() && node.BaseNode.IsEmpty() {
 			continue
 		}
 		visitObject(b.objectMetaBatch, e, node, false, types.TS{})
 	}
+	return b.skipObjectData(e, mvccNodes[len(mvccNodes)-1]), nil
+}
+func (b *TableLogtailRespBuilder) skipObjectData(e *catalog.ObjectEntry, lastMVCCNode *catalog.MVCCNode[*catalog.ObjectMVCCNode]) bool {
+	if e.IsAppendable() {
+		// appendable block has been flushed, no need to collect data
+		return !lastMVCCNode.BaseNode.IsEmpty()
+	} else {
+		return true
+	}
+}
+func (b *TableLogtailRespBuilder) visitObjData(e *catalog.ObjectEntry) error {
+	data := e.GetObjectData()
+	insBatch, err := data.CollectAppendInRange(b.start, b.end, false, common.LogtailAllocator)
+	if err != nil {
+		return err
+	}
+	if insBatch != nil && insBatch.Length() > 0 {
+		dest, ok := b.dataInsBatches[insBatch.Version]
+		if !ok {
+			// create new dest batch
+			dest = DataChangeToLogtailBatch(insBatch)
+			b.dataInsBatches[insBatch.Version] = dest
+		} else {
+			dest.Extend(insBatch.Batch)
+			// insBatch is freed, don't use anymore
+		}
+	}
 	return nil
 }
-
 func visitObject(batch *containers.Batch, entry *catalog.ObjectEntry, node *catalog.MVCCNode[*catalog.ObjectMVCCNode], push bool, committs types.TS) {
 	batch.GetVectorByName(catalog.AttrRowID).Append(objectio.HackObjid2Rowid(&entry.ID), false)
 	if push {
@@ -537,151 +569,26 @@ func visitObject(batch *containers.Batch, entry *catalog.ObjectEntry, node *cata
 	batch.GetVectorByName(SnapshotAttr_TID).Append(entry.GetTable().ID, false)
 	batch.GetVectorByName(ObjectAttr_State).Append(entry.IsAppendable(), false)
 	sorted := false
-	if entry.GetTable().GetLastestSchema().HasSortKey() && !entry.IsAppendable() {
+	if entry.GetTable().GetLastestSchemaLocked().HasSortKey() && !entry.IsAppendable() {
 		sorted = true
 	}
 	batch.GetVectorByName(ObjectAttr_Sorted).Append(sorted, false)
 }
 
-// visitBlkMeta try to collect block metadata. It might prefetch and generate duplicated entry.
-// see also https://github.com/matrixorigin/docs/blob/main/tech-notes/dnservice/ref_logtail_protocol.md#table-metadata-prefetch
-func (b *TableLogtailRespBuilder) visitBlkMeta(e *catalog.BlockEntry) (types.TS, bool) {
-	newEnd := b.end
-	e.RLock()
-	// try to find new end
-	if newest := e.GetLatestCommittedNode(); newest != nil {
-		latestPrepareTs := newest.GetPrepare()
-		if latestPrepareTs.Greater(&b.end) {
-			newEnd = latestPrepareTs
-		}
-	}
-	mvccNodes := e.ClonePreparedInRange(b.start, newEnd)
-	e.RUnlock()
-
-	for _, node := range mvccNodes {
-		metaNode := node
-		if !metaNode.BaseNode.MetaLoc.IsEmpty() && !metaNode.BaseNode.DeltaLoc.IsEmpty() && !metaNode.IsAborted() {
-			b.appendBlkMeta(e, metaNode)
-		}
-	}
-
-	if n := len(mvccNodes); n > 0 {
-		newest := mvccNodes[n-1]
-		if e.IsAppendable() {
-			if !newest.BaseNode.MetaLoc.IsEmpty() {
-				// appendable block has been flushed, no need to collect data
-				return types.MaxTs(), true
-			}
-		} else {
-			if !newest.BaseNode.DeltaLoc.IsEmpty() {
-				startTS := newest.GetStart()
-				if startTS.GreaterEq(&b.end) {
-					// non-appendable block has newer delta data on s3, no need to collect data
-					return types.MaxTs(), true
-				} else {
-					return newest.GetStart(), false
-				}
-			}
-		}
-	}
-	return types.MaxTs(), false
-}
-
-// appendBlkMeta add block metadata into api entry according to logtail protocol
-// see also https://github.com/matrixorigin/docs/blob/main/tech-notes/dnservice/ref_logtail_protocol.md#table-metadata
-func (b *TableLogtailRespBuilder) appendBlkMeta(e *catalog.BlockEntry, metaNode *catalog.MVCCNode[*catalog.MetadataMVCCNode]) {
-	visitBlkMeta(e, metaNode, b.blkMetaInsBatch, b.blkMetaDelBatch, metaNode.HasDropCommitted(), metaNode.End, metaNode.CreatedAt, metaNode.DeletedAt)
-}
-
-func visitBlkMeta(e *catalog.BlockEntry, node *catalog.MVCCNode[*catalog.MetadataMVCCNode], insBatch, delBatch *containers.Batch, delete bool, committs, createts, deletets types.TS) {
-	common.DoIfDebugEnabled(func() {
-		logutil.Debugf("[Logtail] record block meta row %s, %v, %s, %s, %s, %s",
-			e.AsCommonID().String(), e.IsAppendable(),
-			createts.ToString(), node.DeletedAt.ToString(), node.BaseNode.MetaLoc, node.BaseNode.DeltaLoc)
-	})
-	is_sorted := false
-	if !e.IsAppendable() && e.GetSchema().HasSortKey() {
-		is_sorted = true
-	}
-	insBatch.GetVectorByName(pkgcatalog.BlockMeta_ID).Append(e.ID, false)
-	insBatch.GetVectorByName(pkgcatalog.BlockMeta_EntryState).Append(e.IsAppendable(), false)
-	insBatch.GetVectorByName(pkgcatalog.BlockMeta_Sorted).Append(is_sorted, false)
-	insBatch.GetVectorByName(pkgcatalog.BlockMeta_MetaLoc).Append([]byte(node.BaseNode.MetaLoc), false)
-	insBatch.GetVectorByName(pkgcatalog.BlockMeta_DeltaLoc).Append([]byte(node.BaseNode.DeltaLoc), false)
-	insBatch.GetVectorByName(pkgcatalog.BlockMeta_CommitTs).Append(committs, false)
-	insBatch.GetVectorByName(pkgcatalog.BlockMeta_SegmentID).Append(*e.GetObject().ID.Segment(), false)
-	// for appendable block(deleted, because we skip empty metaloc), non-dropped non-appendabled blocks, those new nodes are
-	// produced by flush table tail, it's safe to truncate mem data in CN
-	memTruncTs := node.Start
-	if !e.IsAppendable() && committs.Equal(&deletets) {
-		// for deleted non-appendable block, it must be produced by merging blocks. In this case,
-		// do not truncate any data in CN, because merging blocks didn't flush deletes to disk.
-		memTruncTs = types.TS{}
-	}
-
-	insBatch.GetVectorByName(pkgcatalog.BlockMeta_MemTruncPoint).Append(memTruncTs, false)
-	insBatch.GetVectorByName(catalog.AttrCommitTs).Append(createts, false)
-	insBatch.GetVectorByName(catalog.AttrRowID).Append(objectio.HackBlockid2Rowid(&e.ID), false)
-
-	// if block is deleted, send both Insert and Delete api entry
-	// see also https://github.com/matrixorigin/docs/blob/main/tech-notes/dnservice/ref_logtail_protocol.md#table-metadata-deletion-invalidate-table-data
-	if delete {
-		if node.DeletedAt.IsEmpty() {
-			panic(moerr.NewInternalErrorNoCtx("no delete at time in a dropped entry"))
-		}
-		delBatch.GetVectorByName(catalog.AttrCommitTs).Append(deletets, false)
-		delBatch.GetVectorByName(catalog.AttrRowID).Append(objectio.HackBlockid2Rowid(&e.ID), false)
-	}
-
-}
-
-// visitBlkData collects logtail in memory
-func (b *TableLogtailRespBuilder) visitBlkData(ctx context.Context, ts types.TS, e *catalog.BlockEntry) (err error) {
-	block := e.GetBlockData()
-	insBatch, err := block.CollectAppendInRange(b.start, b.end, false, common.LogtailAllocator)
+func (b *TableLogtailRespBuilder) visitDelete(e data.Tombstone) error {
+	deletes, _, _, err := e.VisitDeletes(b.ctx, b.start, b.end, b.blkMetaInsBatch, nil, false)
 	if err != nil {
-		return
+		return err
 	}
-	if insBatch != nil && insBatch.Length() > 0 {
-		dest, ok := b.dataInsBatches[insBatch.Version]
-		if !ok {
-			// create new dest batch
-			dest = DataChangeToLogtailBatch(insBatch)
-			b.dataInsBatches[insBatch.Version] = dest
+	if deletes != nil && deletes.Length() != 0 {
+		if b.dataDelBatch == nil {
+			b.dataDelBatch = deletes
 		} else {
-			dest.Extend(insBatch.Batch)
-			// insBatch is freed, don't use anymore
+			b.dataDelBatch.Extend(deletes)
+			deletes.Close()
 		}
-	}
-	var delBatch *containers.Batch
-	maxTS := types.MaxTs()
-	if !ts.Equal(&maxTS) {
-		delBatch, err = block.CollectDeleteInRangeAfterDeltalocation(ctx, ts, b.end, false, common.LogtailAllocator)
-	} else {
-		delBatch, err = block.CollectDeleteInRange(ctx, b.start, b.end, false, common.LogtailAllocator)
-	}
-	if err != nil {
-		return
-	}
-	if delBatch != nil && delBatch.Length() > 0 {
-		if len(b.dataDelBatch.Vecs) == 2 {
-			b.dataDelBatch.AddVector(catalog.AttrPKVal,
-				containers.MakeVector(*delBatch.GetVectorByName(catalog.AttrPKVal).GetType(), common.LogtailAllocator))
-		}
-		b.dataDelBatch.Extend(delBatch)
-		// delBatch is freed, don't use anymore
 	}
 	return nil
-}
-
-// VisitBlk = catalog.Processor.OnBlock
-func (b *TableLogtailRespBuilder) VisitBlk(entry *catalog.BlockEntry) error {
-	ts, skip := b.visitBlkMeta(entry)
-	if skip {
-		// data has been flushed, no need to collect data
-		return nil
-	}
-	return b.visitBlkData(b.ctx, ts, entry)
 }
 
 type TableRespKind int
@@ -695,7 +602,7 @@ const (
 func (b *TableLogtailRespBuilder) BuildResp() (api.SyncLogTailResp, error) {
 	entries := make([]*api.Entry, 0)
 	tryAppendEntry := func(typ api.Entry_EntryType, kind TableRespKind, batch *containers.Batch, version uint32) error {
-		if batch.Length() == 0 {
+		if batch == nil || batch.Length() == 0 {
 			return nil
 		}
 		bat, err := containersBatchToProtoBatch(batch)

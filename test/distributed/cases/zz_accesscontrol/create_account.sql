@@ -24,6 +24,7 @@ drop account if exists user_strip_01;
 drop account if exists account_1;
 drop account if exists aaa;
 drop account if exists account;
+drop account if exists ccc;
 --2.account name字符，数字，特殊字符混合 ,admin_name/auth_string数字英文中文特殊符号组合，特殊字符打头，大小写不敏感，auth_string大小写敏感,覆盖"",'',``
 create account `test@123456` ADMIN_NAME 'admin' IDENTIFIED BY '123456';
 select account_name from mo_catalog.mo_account where account_name='test@123456';
@@ -121,6 +122,13 @@ select account_name from mo_catalog.mo_account where account_name='accout_xingmi
 create account if not exists accout_Xingming_insert ADMIN_NAME 'root' IDENTIFIED BY '123456789';
 select account_name from mo_catalog.mo_account where account_name='accout_xingming_insert';
 
+--9.CREATE ACCOUNT support prepared statement
+PREPARE s1 FROM "create account ? ADMIN_NAME 'admin' IDENTIFIED BY '111'";
+set @a_var = 'ccc';
+EXECUTE s1 USING @a_var;
+select account_name from mo_catalog.mo_account where account_name='ccc';
+DEALLOCATE PREPARE s1;
+
 drop account if exists `test@123456`;
 drop account if exists testaccount;
 drop account if exists 123_acc;
@@ -145,4 +153,5 @@ drop account if exists user_strip_01;
 drop account if exists account_1;
 drop account if exists aaa;
 drop account if exists account;
+drop account if exists ccc;
 set global enable_privilege_cache = on;
