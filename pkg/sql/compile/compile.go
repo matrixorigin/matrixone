@@ -628,7 +628,9 @@ func (c *Compile) compileScope(ctx context.Context, pn *plan.Plan) ([]*Scope, er
 			return nil, err
 		}
 		for _, s := range scopes {
-			s.Plan = pn
+			if s.Plan == nil {
+				s.Plan = pn
+			}
 		}
 		return scopes, nil
 	case *plan.Plan_Ddl:
@@ -1234,6 +1236,21 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		c.setAnalyzeCurrent(right, curr)
 		return c.compileSort(n, c.compileUnionAll(left, right)), nil
 	case plan.Node_DELETE:
+		if n.DeleteCtx.CanTruncate {
+			return []*Scope{{
+				Magic: TruncateTable,
+				Plan: &plan.Plan{
+					Plan: &plan.Plan_Ddl{
+						Ddl: &plan.DataDefinition{
+							DdlType: plan.DataDefinition_TRUNCATE_TABLE,
+							Definition: &plan.DataDefinition_TruncateTable{
+								TruncateTable: n.DeleteCtx.TruncateTable,
+							},
+						},
+					},
+				},
+			}}, nil
+		}
 		c.appendMetaTables(n.DeleteCtx.Ref)
 		curr := c.anal.curr
 		c.setAnalyzeCurrent(nil, int(n.Children[0]))

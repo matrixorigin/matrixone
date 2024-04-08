@@ -323,6 +323,17 @@ func logKeepRemoteLocksFailed(
 	}
 }
 
+func logPingFailed(
+	serviceID string,
+	err error) {
+	logger := getWithSkipLogger()
+	if logger.Enabled(zap.ErrorLevel) {
+		logger.Error("failed to ping lock service",
+			zap.String("serviceID", serviceID),
+			zap.Error(err))
+	}
+}
+
 func logLocalBindsInvalid() {
 	logger := getWithSkipLogger()
 	logger.Error("all local lock table invalid")

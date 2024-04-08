@@ -663,15 +663,17 @@ func (rb *remoteBackend) makeAllWaitingFutureFailed() {
 		ids = make([]uint64, 0, len(rb.mu.futures))
 		waitings = make([]*Future, 0, len(rb.mu.futures))
 		for id, f := range rb.mu.futures {
-			if f.waiting.Load() {
-				waitings = append(waitings, f)
-				ids = append(ids, id)
-			}
+			waitings = append(waitings, f)
+			ids = append(ids, id)
 		}
 	}()
 
 	for i, f := range waitings {
-		f.error(ids[i], backendClosed, nil)
+		if f.waiting.Load() {
+			f.error(ids[i], backendClosed, nil)
+		} else {
+			f.messageSent(backendClosed)
+		}
 	}
 }
 
@@ -838,7 +840,7 @@ func (rb *remoteBackend) resetConn() error {
 			zap.Error(err))
 
 		if !canRetry {
-			return err
+			return moerr.NewBackendCannotConnectNoCtx(err)
 		}
 		duration := time.Duration(0)
 		for {
