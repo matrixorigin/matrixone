@@ -2,6 +2,23 @@
 drop database if exists vecdb3;
 create database vecdb3;
 use vecdb3;
+SET GLOBAL experimental_ivf_index = 1;
+
+
+-- 0.a  Verify Experimental Flag
+drop table if exists t6;
+create table t6(a int primary key,b vecf32(4), c varchar(3) );
+insert into t6 values(1, "[1,0,0,0]" , "1");
+insert into t6 values(2, "[2,0,0,0]", "2");
+insert into t6 values(3, "[3,0,0,0]", "3");
+insert into t6 values(4, "[1,1,0,0]", "4");
+insert into t6 values(5, "[2,2,0,0]", "5");
+insert into t6 values(6, "[3,3,0,0]", "6");
+SET GLOBAL experimental_ivf_index = 0;
+create index idx6 using ivfflat on t6(b) lists=2 op_type "vector_l2_ops";
+SET GLOBAL experimental_ivf_index = 1;
+create index idx6 using ivfflat on t6(b) lists=2 op_type "vector_l2_ops";
+select a, b from t6 order by l2_distance(b, "[1,0,0,0]") limit 4;
 
 -- 1.a KNN with pk and embedding alone
 drop table if exists t1;
@@ -107,6 +124,8 @@ select a, b from t3 order by l2_distance(b, "[1,1,0,0]") limit 4;
 select a, b from t3 order by l2_distance(b, "[1,1,1,0]") limit 4;
 select a, b from t3 order by l2_distance(b, "[1,1,1,1]") limit 4;
 
+
 -- post
+SET GLOBAL experimental_ivf_index = 0;
 drop database vecdb3;
 
