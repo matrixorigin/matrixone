@@ -338,41 +338,17 @@ func (s *Scope) handleIvfIndexEntriesTable(c *Compile, indexDef *plan.IndexDef, 
 		originalTableDef.Name,
 	)
 
-	/*
-		Sample SQL:
-
-		INSERT INTO `a`.`entries`
-		            (
-		                        `__mo_index_centroid_fk_version`,
-		                        `__mo_index_centroid_fk_id`,
-		                        `__mo_index_pri_col`,
-		                        `__mo_index_centroid_fk_entry`
-		            )
-		SELECT     `centroids`.`__mo_index_centroid_version`,
-		           serial_extract( min( serial_full( l2_distance(`centroids`.`__mo_index_centroid`, `tbl`.`__mo_org_tbl_norm_vec_col`), `centroids`.`__mo_index_centroid_id`)), 1 AS bigint),
-		           __mo_org_tbl_pk_may_serial_col ,
-		           `tbl`.`embedding`
-		FROM       (
-		                  SELECT `tbl`.`id` AS `__mo_org_tbl_pk_may_serial_col`, normalize_l2(`tbl`.`embedding`) AS `__mo_org_tbl_norm_vec_col`, `tbl`.`embedding` FROM   `a`.`tbl`) AS `tbl`
-		CROSS JOIN
-		           (
-		                  SELECT * FROM   `a`.`centroids`
-		                  WHERE  `__mo_index_centroid_version` =(SELECT cast(__mo_index_val AS bigint) FROM   `a`.`meta` WHERE  `__mo_index_key` = 'version')) AS `centroids`
-		GROUP BY   __mo_org_tbl_pk_may_serial_col,
-		           `centroids`.`__mo_index_centroid_version`,
-		           `tbl`.`embedding`;
-	*/
-	// 6. final SQL
-	mappingSQL := fmt.Sprintf("%s "+
-		"select `%s`.`__mo_index_centroid_version`, "+
-		"serial_extract( min( serial_full( %s(`%s`.`%s`, `%s`.`%s`), `%s`.`%s`)), 1 as bigint), "+
-		"%s ,"+
-		"`%s`.`%s` "+
-		"from %s CROSS JOIN %s group by "+
-		" %s, `%s`.`__mo_index_centroid_version`, `%s`.`%s`;",
-		insertSQL,
-
+	// 6. find centroid_version, centroid_id and tbl_pk
+	joinedCentroidsId := "__mo_index_joined_centroid_id"
+	joinedNode := "__mo_index_tbl_join_centroids"
+	tblCrossJoinCentroids := fmt.Sprintf("(select "+
+		"`%s`.`%s` as `%s`, "+
+		"serial_extract( min( serial_full( %s(`%s`.`%s`, `%s`.`%s`), `%s`.`%s`)), 1 as bigint)  as `%s`, "+
+		"`%s`"+
+		"from %s CROSS JOIN %s group by `%s`, %s ) as `%s`",
 		centroidsTableName,
+		catalog.SystemSI_IVFFLAT_TblCol_Centroids_version,
+		catalog.SystemSI_IVFFLAT_TblCol_Centroids_version,
 
 		algoParamsDistFn,
 		centroidsTableName,
@@ -381,19 +357,103 @@ func (s *Scope) handleIvfIndexEntriesTable(c *Compile, indexDef *plan.IndexDef, 
 		normalizedVecColName,
 		centroidsTableName,
 		catalog.SystemSI_IVFFLAT_TblCol_Centroids_id,
+		joinedCentroidsId,
 
 		originalTblPkColMaySerialColNameAlias, // NOTE: no need to add tableName here, because it could be serial()
 
-		originalTableDef.Name,
-		indexColumnName,
-
 		originalTableWithNormalizedSkSql,
 		centroidsTableForCurrentVersionSql,
-
+		catalog.SystemSI_IVFFLAT_TblCol_Centroids_version,
 		originalTblPkColMaySerialColNameAlias,
-		centroidsTableName,
+		joinedNode,
+	)
+
+	// 7. from table, get tbl_pk and embedding
+	originalTableWithPkAndEmbeddingSql := fmt.Sprintf("(select "+
+		"%s as `%s`, "+
+		"`%s`.`%s`"+
+		" from `%s`.`%s`) as `%s`",
+		originalTblPkColMaySerial,
+		originalTblPkColMaySerialColNameAlias,
+
 		originalTableDef.Name,
 		indexColumnName,
+
+		qryDatabase,
+		originalTableDef.Name,
+		originalTableDef.Name,
+	)
+
+	/*
+		Sample SQL:
+		INSERT INTO `a`.`__mo_index_secondary_018ebbd4-ebb7-7898-b0bb-3b133af1905e`
+		            (
+		                        `__mo_index_centroid_fk_version`,
+		                        `__mo_index_centroid_fk_id`,
+		                        `__mo_index_pri_col`,
+		                        `__mo_index_centroid_fk_entry`
+		            )
+		SELECT     `__mo_index_tbl_join_centroids`.`__mo_index_centroid_version` ,
+		           `__mo_index_tbl_join_centroids`.`__mo_index_joined_centroid_id` ,
+		           `__mo_index_tbl_join_centroids`.`__mo_org_tbl_pk_may_serial_col` ,
+		           `t1`.`b`
+		FROM       (
+		                  SELECT `t1`.`a` AS `__mo_org_tbl_pk_may_serial_col`,
+		                         `t1`.`b`
+		                  FROM   `a`.`t1`) AS `t1`
+		INNER JOIN
+		           (
+		                      SELECT     `centroids`.`__mo_index_centroid_version` AS `__mo_index_centroid_version`,
+		                                 serial_extract( min( serial_full( l2_distance(`centroids`.`__mo_index_centroid`, `t1`.`__mo_org_tbl_norm_vec_col`), `centroids`.`__mo_index_centroid_id`)), 1 AS bigint) AS `__mo_index_joined_centroid_id`,
+		                                 `__mo_org_tbl_pk_may_serial_col`
+		                      FROM       (
+		                                        SELECT `t1`.`a`               AS `__mo_org_tbl_pk_may_serial_col`,
+		                                               normalize_l2(`t1`.`b`) AS `__mo_org_tbl_norm_vec_col`,
+		                                               `t1`.`b`
+		                                        FROM   `a`.`t1`
+		                                 ) AS `t1`
+		                      CROSS JOIN
+		                                 (
+		                                        SELECT *
+		                                        FROM   `a`.`centroids`
+		                                        WHERE  `__mo_index_centroid_version` = ( SELECT cast(__mo_index_val AS bigint) FROM   `a`.`meta` WHERE  `__mo_index_key` = 'version')
+		                                 ) AS `centroids`
+		                      GROUP BY   `__mo_index_centroid_version`,
+		                                 __mo_org_tbl_pk_may_serial_col
+		            ) AS `__mo_index_tbl_join_centroids`
+
+		ON         `__mo_index_tbl_join_centroids`.`__mo_org_tbl_pk_may_serial_col` = `t1`.`__mo_org_tbl_pk_may_serial_col`;
+	*/
+	// 8. final SQL
+	tblInnerJoinPrevJoin := fmt.Sprintf("%s "+
+		"select "+
+		"`%s`.`%s` , "+
+		"`%s`.`%s` , "+
+		"`%s`.`%s` , "+
+		"`%s`.`%s`  "+
+		"from %s inner join %s "+
+		"on `%s`.`%s` = `%s`.`%s`;",
+		insertSQL,
+
+		joinedNode,
+		catalog.SystemSI_IVFFLAT_TblCol_Centroids_version,
+
+		joinedNode,
+		joinedCentroidsId,
+
+		joinedNode,
+		originalTblPkColMaySerialColNameAlias,
+
+		originalTableDef.Name,
+		indexColumnName,
+
+		originalTableWithPkAndEmbeddingSql,
+		tblCrossJoinCentroids,
+
+		joinedNode,
+		originalTblPkColMaySerialColNameAlias,
+		originalTableDef.Name,
+		originalTblPkColMaySerialColNameAlias,
 	)
 
 	err = s.logTimestamp(c, qryDatabase, metadataTableName, "mapping_start")
@@ -401,7 +461,7 @@ func (s *Scope) handleIvfIndexEntriesTable(c *Compile, indexDef *plan.IndexDef, 
 		return err
 	}
 
-	err = c.runSql(mappingSQL)
+	err = c.runSql(tblInnerJoinPrevJoin)
 	if err != nil {
 		return err
 	}
