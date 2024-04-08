@@ -20,6 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/reusee/pt"
 	"github.com/tidwall/btree"
 )
 
@@ -31,8 +32,9 @@ type ObjectsIter interface {
 
 type objectsIter struct {
 	ts          types.TS
-	iter        btree.IterG[ObjectIndexByCreateTSEntry]
+	iter        *pt.Iter[ObjectIndexByCreateTSEntry]
 	firstCalled bool
+	current     ObjectIndexByCreateTSEntry
 }
 
 // not accurate!  only used by stats
@@ -44,7 +46,7 @@ func (p *PartitionState) NewObjectsIter(ts types.TS) (*objectsIter, error) {
 	if ts.Less(&p.minTS) {
 		return nil, moerr.NewTxnStaleNoCtx()
 	}
-	iter := p.dataObjectsByCreateTS.Copy().Iter()
+	iter := p.dataObjectsByCreateTS.NewIter()
 	ret := &objectsIter{
 		ts:   ts,
 		iter: iter,
@@ -56,31 +58,32 @@ var _ ObjectsIter = new(objectsIter)
 
 func (b *objectsIter) Next() bool {
 	for {
-
-		pivot := ObjectIndexByCreateTSEntry{
-			ObjectInfo{
-				CreateTime: b.ts.Next(),
-			},
-		}
+		var entry ObjectIndexByCreateTSEntry
+		var ok bool
 		if !b.firstCalled {
-			if !b.iter.Seek(pivot) {
-				if !b.iter.Last() {
-					return false
-				}
+			pivot := ObjectIndexByCreateTSEntry{
+				ObjectInfo{
+					CreateTime: b.ts,
+				},
+			}
+			entry, ok = b.iter.Seek(pivot)
+			if !ok {
+				return false
 			}
 			b.firstCalled = true
 		} else {
-			if !b.iter.Prev() {
+			entry, ok = b.iter.Next()
+			if !ok {
 				return false
 			}
 		}
-
-		entry := b.iter.Item()
 
 		if !entry.Visible(b.ts) {
 			// not visible
 			continue
 		}
+
+		b.current = entry
 
 		return true
 	}
@@ -88,12 +91,12 @@ func (b *objectsIter) Next() bool {
 
 func (b *objectsIter) Entry() ObjectEntry {
 	return ObjectEntry{
-		ObjectInfo: b.iter.Item().ObjectInfo,
+		ObjectInfo: b.current.ObjectInfo,
 	}
 }
 
 func (b *objectsIter) Close() error {
-	b.iter.Release()
+	b.iter.Close()
 	return nil
 }
 
