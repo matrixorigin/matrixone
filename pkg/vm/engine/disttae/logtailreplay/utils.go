@@ -55,6 +55,9 @@ func mustVectorToProto(v *vector.Vector) api.Vector {
 }
 
 func sortUnique[T any](slice []T, cmp func(T, T) int) []T {
+	if len(slice) == 0 {
+		return nil
+	}
 	sort.Slice(slice, func(i, j int) bool {
 		return cmp(slice[i], slice[j]) < 0
 	})
