@@ -740,9 +740,12 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 		}
 	case *onduplicatekey.Argument:
 		in.OnDuplicateKey = &pipeline.OnDuplicateKey{
-			TableDef:        t.TableDef,
-			OnDuplicateIdx:  t.OnDuplicateIdx,
-			OnDuplicateExpr: t.OnDuplicateExpr,
+			Attrs:              t.Attrs,
+			InsertColCount:     t.InsertColCount,
+			UniqueColCheckExpr: t.UniqueColCheckExpr,
+			UniqueCols:         t.UniqueCols,
+			OnDuplicateIdx:     t.OnDuplicateIdx,
+			OnDuplicateExpr:    t.OnDuplicateExpr,
 		}
 	case *fuzzyfilter.Argument:
 		in.FuzzyFilter = &pipeline.FuzzyFilter{
@@ -1189,7 +1192,10 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext, eng en
 	case vm.OnDuplicateKey:
 		t := opr.GetOnDuplicateKey()
 		arg := onduplicatekey.NewArgument()
-		arg.TableDef = t.TableDef
+		arg.Attrs = t.Attrs
+		arg.InsertColCount = t.InsertColCount
+		arg.UniqueColCheckExpr = t.UniqueColCheckExpr
+		arg.UniqueCols = t.UniqueCols
 		arg.OnDuplicateIdx = t.OnDuplicateIdx
 		arg.OnDuplicateExpr = t.OnDuplicateExpr
 		arg.IsIgnore = t.IsIgnore

@@ -189,10 +189,13 @@ message PreInsertSecondaryIndex{
 }
 
 message OnDuplicateKey{
-  plan.TableDef table_def                   = 1;
-  repeated int32 on_duplicate_idx           = 2;
-  map<string, plan.Expr> on_duplicate_expr  = 3;
-  bool is_ignore                            = 4;
+  repeated string attrs = 1;
+  int32 insert_col_count = 2;
+  repeated plan.Expr unique_col_check_expr = 3;
+  repeated string unique_cols = 4;
+  repeated int32 on_duplicate_idx		= 5;
+  map<string, plan.Expr> on_duplicate_expr	= 6;
+  bool is_ignore 						= 7;
 }
 
 message FuzzyFilter {

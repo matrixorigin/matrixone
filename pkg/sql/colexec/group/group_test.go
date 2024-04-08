@@ -103,8 +103,8 @@ func TestGroup(t *testing.T) {
 		require.NoError(t, err)
 
 		bats := []*batch.Batch{
-			newBatch(t, tc.flgs, tc.arg.Types, tc.proc, Rows),
-			newBatch(t, tc.flgs, tc.arg.Types, tc.proc, Rows),
+			newBatch(tc.arg.Types, tc.proc, Rows),
+			newBatch(tc.arg.Types, tc.proc, Rows),
 			batch.EmptyBatch,
 		}
 		resetChildren(tc.arg, bats)
@@ -129,8 +129,8 @@ func BenchmarkGroup(b *testing.B) {
 			err := tc.arg.Prepare(tc.proc)
 			require.NoError(t, err)
 			bats := []*batch.Batch{
-				newBatch(t, tc.flgs, tc.arg.Types, tc.proc, BenchmarkRows),
-				newBatch(t, tc.flgs, tc.arg.Types, tc.proc, BenchmarkRows),
+				newBatch(tc.arg.Types, tc.proc, BenchmarkRows),
+				newBatch(tc.arg.Types, tc.proc, BenchmarkRows),
 				batch.EmptyBatch,
 			}
 			resetChildren(tc.arg, bats)
@@ -192,7 +192,7 @@ func newExpression(pos int32, typs []types.Type) *plan.Expr {
 }
 
 // create a new block based on the type information, flgs[i] == ture: has null
-func newBatch(t *testing.T, flgs []bool, ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
+func newBatch(ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
 	return testutil.NewBatch(ts, false, int(rows), proc.Mp())
 }
 

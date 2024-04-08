@@ -18,6 +18,7 @@ import (
 	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -74,7 +75,7 @@ func buildPrepare(stmt tree.Prepare, ctx CompilerContext) (*Plan, error) {
 		if err != nil {
 			v = int64(1)
 		}
-		stmts, err := mysql.Parse(ctx.GetContext(), pstmt.Sql, v.(int64))
+		stmts, err := mysql.Parse(ctx.GetContext(), pstmt.Sql, v.(int64), 0)
 		defer func() {
 			for _, s := range stmts {
 				s.Free()
@@ -207,6 +208,61 @@ func buildSetVariables(stmt *tree.SetVar, ctx CompilerContext) (*Plan, error) {
 				DclType: plan.DataControl_SET_VARIABLES,
 				Control: &plan.DataControl_SetVariables{
 					SetVariables: setVariables,
+				},
+			},
+		},
+	}, nil
+}
+
+func buildCreateAccount(stmt *tree.CreateAccount, ctx CompilerContext, isPrepareStmt bool) (*Plan, error) {
+	bindStr := func(astExpr tree.Expr) (*Expr, error) {
+		switch ast := astExpr.(type) {
+		case *tree.NumVal:
+			if ast.ValType != tree.P_char {
+				return nil, moerr.NewInvalidInput(ctx.GetContext(), "unsupport value '%s'", ast.String())
+			}
+			expr := makePlan2StringConstExprWithType(ast.String())
+			return expr, nil
+		case *tree.ParamExpr:
+			if !isPrepareStmt {
+				return nil, moerr.NewInvalidInput(ctx.GetContext(), "only prepare statement can use ? expr")
+			}
+			typ := types.T_text.ToType()
+			return &Expr{
+				Typ: *makePlan2Type(&typ),
+				Expr: &plan.Expr_P{
+					P: &plan.ParamRef{
+						Pos: int32(ast.Offset),
+					},
+				},
+			}, nil
+		default:
+			return nil, moerr.NewInvalidInput(ctx.GetContext(), "unsupport value '%s'", ast.String())
+		}
+	}
+
+	createAccount := &plan.CreateAccount{
+		IfNotExists: stmt.IfNotExists,
+		AdminName:   stmt.AuthOption.AdminName,
+		Identified: &plan.AccountIdentified{
+			Typ: plan.AccountIdentifiedOption(stmt.AuthOption.IdentifiedType.Typ),
+			Str: stmt.AuthOption.IdentifiedType.Str,
+		},
+		Status: plan.AccountStatusOption(stmt.StatusOption.Option),
+	}
+
+	var err error
+	createAccount.Name, err = bindStr(stmt.Name)
+	if err != nil {
+		return nil, err
+	}
+
+	return &Plan{
+		Plan: &plan.Plan_Dcl{
+			Dcl: &plan.DataControl{
+				DclType: plan.DataControl_CREATE_ACCOUNT,
+				Control: &plan.DataControl_CreateAccount{
+					CreateAccount: createAccount,
 				},
 			},
 		},

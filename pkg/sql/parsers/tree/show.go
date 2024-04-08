@@ -339,8 +339,6 @@ type ShowTables struct {
 	Where  *Where
 }
 
-func (node *ShowTables) Free() {}
-
 func (node *ShowTables) Format(ctx *FmtCtx) {
 	ctx.WriteString("show")
 	if node.Open {
@@ -487,8 +485,6 @@ type ShowStatus struct {
 	Like   *ComparisonExpr
 	Where  *Where
 }
-
-func (node *ShowStatus) Free() {}
 
 func (node *ShowStatus) Format(ctx *FmtCtx) {
 	ctx.WriteString("show")
@@ -712,6 +708,17 @@ func (node *ShowAccounts) Format(ctx *FmtCtx) {
 
 func (node *ShowAccounts) GetStatementType() string { return "Show Accounts" }
 func (node *ShowAccounts) GetQueryType() string     { return QueryTypeOth }
+
+type ShowAccountUpgrade struct {
+	statementImpl
+}
+
+func (node *ShowAccountUpgrade) Format(ctx *FmtCtx) {
+	ctx.WriteString("show upgrade")
+}
+
+func (node *ShowAccountUpgrade) GetStatementType() string { return "show upgrade" }
+func (node *ShowAccountUpgrade) GetQueryType() string     { return QueryTypeOth }
 
 type ShowPublications struct {
 	showImpl

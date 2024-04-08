@@ -16,6 +16,7 @@ package service
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"math"
 	"os"
 	"sync/atomic"
@@ -631,6 +632,7 @@ func TestCommitWithLockTables(t *testing.T) {
 	defer func() {
 		assert.NoError(t, allocator.Close())
 	}()
+
 	s := NewTestTxnServiceWithAllocator(
 		t,
 		1,
@@ -936,14 +938,14 @@ func newTestLockTablesAllocator(
 	address string,
 	keepTimeout time.Duration) lockservice.LockTableAllocator {
 	require.NoError(t, os.RemoveAll(address))
-
-	runtime.SetupProcessLevelRuntime(
-		runtime.NewRuntime(
-			metadata.ServiceType_TN,
-			"dn-uuid",
-			logutil.GetPanicLoggerWithLevel(zapcore.DebugLevel).
-				With(zap.String("case", t.Name()))))
-
+	r := runtime.NewRuntime(
+		metadata.ServiceType_TN,
+		"dn-uuid",
+		logutil.GetPanicLoggerWithLevel(zapcore.DebugLevel).
+			With(zap.String("case", t.Name())))
+	runtime.SetupProcessLevelRuntime(r)
+	c := clusterservice.NewMOCluster(nil, time.Hour, clusterservice.WithDisableRefresh())
+	r.SetGlobalVariables(runtime.ClusterService, c)
 	return lockservice.NewLockTableAllocator(
 		"unix://"+address,
 		keepTimeout,

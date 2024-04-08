@@ -248,7 +248,7 @@ func (ctr *container) pickSameRow(row int64, cols []*vector.Vector) (batIndex in
 	return j, hasSame
 }
 
-func (ctr *container) removeBatch(proc *process.Process, index int) {
+func (ctr *container) removeBatch(_ *process.Process, index int) {
 	//bat := ctr.batchList[index]
 	//cols := ctr.orderCols[index]
 
