@@ -47,7 +47,7 @@ type PartitionState struct {
 	dataObjects           *pt.Treap[ObjectEntry]
 	dataObjectsByCreateTS *pt.Treap[ObjectIndexByCreateTSEntry]
 	//TODO:: It's transient, should be removed in future PR.
-	blockDeltas *btree.BTreeG[BlockDeltaEntry]
+	blockDeltas *pt.Treap[BlockDeltaEntry]
 	checkpoints []string
 
 	// index
@@ -157,6 +157,10 @@ type BlockDeltaEntry struct {
 
 func (b BlockDeltaEntry) Less(than BlockDeltaEntry) bool {
 	return b.BlockID.Compare(than.BlockID) < 0
+}
+
+func (b BlockDeltaEntry) Compare(to BlockDeltaEntry) int {
+	return b.BlockID.Compare(to.BlockID)
 }
 
 func (b BlockDeltaEntry) DeltaLocation() objectio.Location {
@@ -321,7 +325,6 @@ func NewPartitionState(noData bool) *PartitionState {
 	return &PartitionState{
 		prioritySource:  pt.NewPrioritySource(),
 		noData:          noData,
-		blockDeltas:     btree.NewBTreeGOptions((BlockDeltaEntry).Less, opts),
 		dirtyBlocks:     btree.NewBTreeGOptions((types.Blockid).Less, opts),
 		objectIndexByTS: btree.NewBTreeGOptions((ObjectIndexByTSEntry).Less, opts),
 		shared:          new(sharedStates),
@@ -334,7 +337,7 @@ func (p *PartitionState) Copy() *PartitionState {
 		rows:                  p.rows,
 		dataObjects:           p.dataObjects,
 		dataObjectsByCreateTS: p.dataObjectsByCreateTS,
-		blockDeltas:           p.blockDeltas.Copy(),
+		blockDeltas:           p.blockDeltas,
 		primaryIndex:          p.primaryIndex,
 		noData:                p.noData,
 		dirtyBlocks:           p.dirtyBlocks.Copy(),
@@ -813,7 +816,7 @@ func (p *PartitionState) HandleMetadataInsert(
 		isEmptyDelta := blockEntry.DeltaLocation().IsEmpty()
 
 		if !isEmptyDelta {
-			p.blockDeltas.Set(blockEntry)
+			p.blockDeltas, _ = p.blockDeltas.Upsert(blockEntry, p.prioritySource(), false)
 		}
 
 		{
