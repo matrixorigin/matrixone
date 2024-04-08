@@ -105,7 +105,7 @@ func (builder *QueryBuilder) applyIndicesForSortUsingVectorIndex(nodeID int32, p
 	// Path 1: Only use Index Table if Projection Columns are present in Index Table or Constants.
 	// Path 2: May be use INDEX JOIN (not working yet)
 	if scanNode.FilterList == nil {
-		// 3.a Sort By entries by l2_distance(vector_col, normalize_l2(literal)) ASC limit original_limit
+		// 3.a Sort By entries by l2_distance(vector_col, literal) ASC limit original_limit
 		sortTblByL2Distance := makeEntriesOrderByL2Distance(builder, builder.ctxByNode[nodeID], distFnExpr, entriesJoinCentroids, sortDirection, idxTableDefs, idxTags,
 			sortNode)
 
