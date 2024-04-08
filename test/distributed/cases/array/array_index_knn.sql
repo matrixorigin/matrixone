@@ -144,6 +144,41 @@ select a, b from t4 order by l2_distance(b, "[1,1,1,0]") limit 4;
 insert into t4 values(10, "[4,4,4,0]", "10");
 select a, b from t4 order by l2_distance(b, "[1,1,1,0]") limit 4;
 
+-- 5.a Zero Vector
+drop table if exists t5;
+create table t5(a int primary key,b vecf32(4), c varchar(3) );
+insert into t5 values(1, "[1,0,0,0]" , "1");
+insert into t5 values(2, "[2,0,0,0]", "2");
+insert into t5 values(3, "[3,0,0,0]", "3");
+insert into t5 values(4, "[1,1,0,0]", "4");
+insert into t5 values(5, "[2,2,0,0]", "5");
+insert into t5 values(6, "[3,3,0,0]", "6");
+insert into t5 values(7, "[1,1,1,0]", "7");
+insert into t5 values(8, "[2,2,2,0]", "8");
+insert into t5 values(9, "[3,3,3,3]", "9");
+insert into t5 values(10, "[0,0,0,0]", "10");
+select a, b from t5 order by l2_distance(normalize_l2(b), normalize_l2("[1,1,1,0]")) limit 3;
+
+create index idx5 using ivfflat on t5(b) lists=3 op_type "vector_l2_ops";
+--mysql> select * from `__mo_index_secondary_018ebf8c-c9d6-7c4e-b4c3-b6df681e9017`;
+--+--------------------------------+---------------------------+--------------------+------------------------------+
+--| __mo_index_centroid_fk_version | __mo_index_centroid_fk_id | __mo_index_pri_col | __mo_index_centroid_fk_entry |
+--+--------------------------------+---------------------------+--------------------+------------------------------+
+--|                              0 |                         1 |                  1 | [1, 0, 0, 0]                 |
+--|                              0 |                         1 |                  2 | [2, 0, 0, 0]                 |
+--|                              0 |                         1 |                  3 | [3, 0, 0, 0]                 |
+--|                              0 |                         3 |                  4 | [1, 1, 0, 0]                 |
+--|                              0 |                         3 |                  5 | [2, 2, 0, 0]                 |
+--|                              0 |                         3 |                  6 | [3, 3, 0, 0]                 |
+--|                              0 |                         3 |                  7 | [1, 1, 1, 0]                 |
+--|                              0 |                         3 |                  8 | [2, 2, 2, 0]                 |
+--|                              0 |                         3 |                  9 | [3, 3, 3, 3]                 |
+--|                              0 |                         2 |                 10 | [0, 0, 0, 0]                 |
+--+--------------------------------+---------------------------+--------------------+------------------------------+
+select a, b from t5 order by l2_distance(b, "[1,1,1,0]") limit 7;
+
+insert into t5 values(11, "[4,4,4,0]", "11");
+select a, b from t5 order by l2_distance(b, "[1,1,1,0]") limit 7;
 
 
 -- post
