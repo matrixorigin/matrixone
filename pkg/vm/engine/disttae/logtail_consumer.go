@@ -1174,7 +1174,7 @@ func (rc *routineController) sendSubscribeResponse(
 }
 
 func (rc *routineController) sendTableLogTail(ctx context.Context, r logtail.TableLogtail, receiveAt time.Time) {
-	ctx, task := trace.NewTask(ctx, "disttae.routineController.sendTableLogTail")
+	_, task := trace.NewTask(ctx, "disttae.routineController.sendTableLogTail")
 	defer task.End()
 	if l := len(rc.signalChan); l > rc.warningBufferLen {
 		rc.warningBufferLen = l
@@ -1188,7 +1188,7 @@ func (rc *routineController) updateTimeFromT(
 	ctx context.Context,
 	t timestamp.Timestamp,
 	receiveAt time.Time) {
-	ctx, task := trace.NewTask(ctx, "disttae.routineController.updateTimeFromT")
+	_, task := trace.NewTask(ctx, "disttae.routineController.updateTimeFromT")
 	defer task.End()
 
 	if l := len(rc.signalChan); l > rc.warningBufferLen {
