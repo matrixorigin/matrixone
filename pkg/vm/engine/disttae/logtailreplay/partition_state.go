@@ -55,7 +55,7 @@ type PartitionState struct {
 	//for non-appendable block's memory deletes, used to getting dirty
 	// non-appendable blocks quickly.
 	//TODO::remove it
-	dirtyBlocks *btree.BTreeG[types.Blockid]
+	dirtyBlocks *pt.Treap[types.Blockid]
 	//index for objects by timestamp.
 	objectIndexByTS *btree.BTreeG[ObjectIndexByTSEntry]
 
@@ -325,7 +325,6 @@ func NewPartitionState(noData bool) *PartitionState {
 	return &PartitionState{
 		prioritySource:  pt.NewPrioritySource(),
 		noData:          noData,
-		dirtyBlocks:     btree.NewBTreeGOptions((types.Blockid).Less, opts),
 		objectIndexByTS: btree.NewBTreeGOptions((ObjectIndexByTSEntry).Less, opts),
 		shared:          new(sharedStates),
 	}
@@ -340,7 +339,7 @@ func (p *PartitionState) Copy() *PartitionState {
 		blockDeltas:           p.blockDeltas,
 		primaryIndex:          p.primaryIndex,
 		noData:                p.noData,
-		dirtyBlocks:           p.dirtyBlocks.Copy(),
+		dirtyBlocks:           p.dirtyBlocks,
 		objectIndexByTS:       p.objectIndexByTS.Copy(),
 		shared:                p.shared,
 	}
@@ -589,15 +588,15 @@ func (p *PartitionState) HandleObjectInsert(ctx context.Context, bat *api.Batch,
 				// So , if the above scenario happens, we need to set the non-appendable block into
 				// PartitionState.dirtyBlocks.
 				if !objEntry.EntryState && !objEntry.HasDeltaLoc {
-					p.dirtyBlocks.Set(entry.BlockID)
+					p.dirtyBlocks, _ = p.dirtyBlocks.Upsert(entry.BlockID, p.prioritySource(), false)
 					break
 				}
 			}
 			iter.Close()
 
 			// if there are no rows for the block, delete the block from the dirty
-			if objEntry.EntryState && scanCnt == blockDeleted && p.dirtyBlocks.Len() > 0 {
-				p.dirtyBlocks.Delete(*blkID)
+			if objEntry.EntryState && scanCnt == blockDeleted && p.dirtyBlocks.Length() > 0 {
+				p.dirtyBlocks, _ = p.dirtyBlocks.Remove(*blkID, false)
 			}
 		}
 	}
@@ -743,7 +742,7 @@ func (p *PartitionState) HandleRowsDelete(
 		p.rows, _ = p.rows.Upsert(entry, p.prioritySource(), false)
 
 		//handle memory deletes for non-appendable block.
-		p.dirtyBlocks.Set(blockID)
+		p.dirtyBlocks, _ = p.dirtyBlocks.Upsert(blockID, p.prioritySource(), false)
 
 		// primary key
 		if i < len(primaryKeys) && len(primaryKeys[i]) > 0 {
@@ -842,7 +841,7 @@ func (p *PartitionState) HandleMetadataInsert(
 				// So , if the above scenario happens, we need to set the non-appendable block into
 				// PartitionState.dirtyBlocks.
 				if !isAppendable && isEmptyDelta {
-					p.dirtyBlocks.Set(blockID)
+					p.dirtyBlocks, _ = p.dirtyBlocks.Upsert(blockID, p.prioritySource(), false)
 					break
 				}
 
@@ -869,8 +868,8 @@ func (p *PartitionState) HandleMetadataInsert(
 			iter.Close()
 
 			// if there are no rows for the block, delete the block from the dirty
-			if scanCnt == blockDeleted && p.dirtyBlocks.Len() > 0 {
-				p.dirtyBlocks.Delete(blockID)
+			if scanCnt == blockDeleted && p.dirtyBlocks.Length() > 0 {
+				p.dirtyBlocks, _ = p.dirtyBlocks.Remove(blockID, false)
 			}
 		}
 

@@ -21,7 +21,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/reusee/pt"
-	"github.com/tidwall/btree"
 )
 
 type ObjectsIter interface {
@@ -107,12 +106,12 @@ type BlocksIter interface {
 }
 
 type dirtyBlocksIter struct {
-	iter        btree.IterG[types.Blockid]
-	firstCalled bool
+	iter    *pt.Iter[types.Blockid]
+	current types.Blockid
 }
 
 func (p *PartitionState) NewDirtyBlocksIter() *dirtyBlocksIter {
-	iter := p.dirtyBlocks.Copy().Iter()
+	iter := p.dirtyBlocks.NewIter()
 	ret := &dirtyBlocksIter{
 		iter: iter,
 	}
@@ -122,22 +121,20 @@ func (p *PartitionState) NewDirtyBlocksIter() *dirtyBlocksIter {
 var _ BlocksIter = new(dirtyBlocksIter)
 
 func (b *dirtyBlocksIter) Next() bool {
-	if !b.firstCalled {
-		if !b.iter.First() {
-			return false
-		}
-		b.firstCalled = true
-		return true
+	entry, ok := b.iter.Next()
+	if !ok {
+		return false
 	}
-	return b.iter.Next()
+	b.current = entry
+	return true
 }
 
 func (b *dirtyBlocksIter) Entry() types.Blockid {
-	return b.iter.Item()
+	return b.current
 }
 
 func (b *dirtyBlocksIter) Close() error {
-	b.iter.Release()
+	b.iter.Close()
 	return nil
 }
 
