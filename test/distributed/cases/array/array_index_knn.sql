@@ -124,6 +124,27 @@ select a, b from t3 order by l2_distance(b, "[1,1,0,0]") limit 4;
 select a, b from t3 order by l2_distance(b, "[1,1,1,0]") limit 4;
 select a, b from t3 order by l2_distance(b, "[1,1,1,1]") limit 4;
 
+-- 4.a NULL embedding
+drop table if exists t4;
+create table t4(a int primary key,b vecf32(4), c varchar(3) );
+insert into t4 values(1, "[1,0,0,0]" , "1");
+insert into t4 values(2, "[2,0,0,0]", "2");
+insert into t4 values(3, "[3,0,0,0]", "3");
+insert into t4 values(4, "[1,1,0,0]", "4");
+insert into t4 values(5, "[2,2,0,0]", "5");
+insert into t4 values(6, "[3,3,0,0]", "6");
+insert into t4 values(7, "[1,1,1,0]", "7");
+insert into t4 values(8, "[2,2,2,0]", "8");
+insert into t4 values(9, NULL, "9");
+select a, b from t4 order by l2_distance(normalize_l2(b), normalize_l2("[1,1,1,0]")) limit 3;
+
+create index idx4 using ivfflat on t4(b) lists=3 op_type "vector_l2_ops";
+select a, b from t4 order by l2_distance(b, "[1,1,1,0]") limit 4;
+
+insert into t4 values(10, "[4,4,4,0]", "10");
+select a, b from t4 order by l2_distance(b, "[1,1,1,0]") limit 4;
+
+
 
 -- post
 SET GLOBAL experimental_ivf_index = 0;
