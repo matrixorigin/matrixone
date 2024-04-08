@@ -772,7 +772,8 @@ func (p *PartitionState) HandleRowsDelete(
 func (p *PartitionState) HandleMetadataInsert(
 	ctx context.Context,
 	fs fileservice.FileService,
-	input *api.Batch) {
+	input *api.Batch,
+) {
 	ctx, task := trace.NewTask(ctx, "PartitionState.HandleMetadataInsert")
 	defer task.End()
 
@@ -786,6 +787,8 @@ func (p *PartitionState) HandleMetadataInsert(
 	//segmentIDVector := vector.MustFixedCol[types.Uuid](mustVectorFromProto(input.Vecs[8]))
 	memTruncTSVector := vector.MustFixedCol[types.TS](mustVectorFromProto(input.Vecs[9]))
 
+	var rowsToDelete []RowEntry
+	var primaryKeysToDelete []*PrimaryIndexEntry
 	var numInserted, numDeleted int64
 	for i, blockID := range blockIDVector {
 		p.shared.Lock()
@@ -855,14 +858,14 @@ func (p *PartitionState) HandleMetadataInsert(
 				if isAppendable || (!isAppendable && !isEmptyDelta) {
 					if entry.Time.LessEq(&trunctPoint) {
 						// delete the row
-						p.rows, _ = p.rows.Remove(entry, false)
+						rowsToDelete = append(rowsToDelete, entry)
 
 						// delete the row's primary index
 						if isAppendable && len(entry.PrimaryIndexBytes) > 0 {
-							p.primaryIndex, _ = p.primaryIndex.Remove(&PrimaryIndexEntry{
+							primaryKeysToDelete = append(primaryKeysToDelete, &PrimaryIndexEntry{
 								Bytes:      entry.PrimaryIndexBytes,
 								RowEntryID: entry.ID,
-							}, false)
+							})
 						}
 						numDeleted++
 						blockDeleted++
@@ -949,6 +952,9 @@ func (p *PartitionState) HandleMetadataInsert(
 		}
 
 	}
+
+	p.rows = p.rows.BulkRemove(pt.Build(p.prioritySource, rowsToDelete), false)
+	p.primaryIndex = p.primaryIndex.BulkRemove(pt.Build(p.prioritySource, primaryKeysToDelete), false)
 
 	perfcounter.Update(ctx, func(c *perfcounter.CounterSet) {
 		c.DistTAE.Logtail.Entries.Add(1)
