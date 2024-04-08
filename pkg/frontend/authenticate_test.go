@@ -222,7 +222,7 @@ func Test_checkSysExistsOrNot(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 		defer bhStub.Reset()
 
-		exists, err := checkSysExistsOrNot(ctx, bh, pu)
+		exists, err := checkSysExistsOrNot(ctx, bh)
 		convey.So(exists, convey.ShouldBeTrue)
 		convey.So(err, convey.ShouldBeNil)
 
@@ -357,10 +357,10 @@ func Test_createTablesInMoCatalogOfGeneralTenant(t *testing.T) {
 			Comment: tree.AccountComment{Exist: true, Comment: "test acccount"},
 		}
 		finalVersion := "1.2.0"
-		newTi, _, err := createTablesInMoCatalogOfGeneralTenant(ctx, bh, finalVersion, ca)
+		_, _, err := createTablesInMoCatalogOfGeneralTenant(ctx, bh, finalVersion, ca)
 		convey.So(err, convey.ShouldBeNil)
 
-		err = createTablesInInformationSchemaOfGeneralTenant(ctx, bh, newTi)
+		err = createTablesInInformationSchemaOfGeneralTenant(ctx, bh)
 		convey.So(err, convey.ShouldBeNil)
 	})
 }

@@ -91,11 +91,11 @@ func TestJoin(t *testing.T) {
 		}
 		err := tc.arg.Prepare(tc.proc)
 		require.NoError(t, err)
-		tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
+		tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(tc.types, tc.proc, Rows)
 		tc.proc.Reg.MergeReceivers[0].Ch <- batch.EmptyBatch
-		tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
-		tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
-		tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
+		tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(tc.types, tc.proc, Rows)
+		tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(tc.types, tc.proc, Rows)
+		tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(tc.types, tc.proc, Rows)
 		tc.proc.Reg.MergeReceivers[0].Ch <- nil
 		tc.proc.Reg.MergeReceivers[1].Ch <- bats[0]
 		tc.proc.Reg.MergeReceivers[1].Ch <- bats[1]
@@ -216,11 +216,11 @@ func BenchmarkJoin(b *testing.B) {
 			bats := hashBuild(t, tc)
 			err := tc.arg.Prepare(tc.proc)
 			require.NoError(t, err)
-			tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
+			tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(tc.types, tc.proc, Rows)
 			tc.proc.Reg.MergeReceivers[0].Ch <- batch.EmptyBatch
-			tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
-			tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
-			tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
+			tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(tc.types, tc.proc, Rows)
+			tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(tc.types, tc.proc, Rows)
+			tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(tc.types, tc.proc, Rows)
 			tc.proc.Reg.MergeReceivers[0].Ch <- nil
 			tc.proc.Reg.MergeReceivers[1].Ch <- bats[0]
 			tc.proc.Reg.MergeReceivers[1].Ch <- bats[1]
@@ -335,7 +335,7 @@ func newTestCase(flgs []bool, ts []types.Type, rp []colexec.ResultPos, cs [][]*p
 }
 
 func hashBuild(t *testing.T, tc joinTestCase) []*batch.Batch {
-	return hashBuildWithBatch(t, tc, newBatch(t, tc.flgs, tc.types, tc.proc, Rows))
+	return hashBuildWithBatch(t, tc, newBatch(tc.types, tc.proc, Rows))
 }
 
 func hashBuildWithBatch(t *testing.T, tc joinTestCase, bat *batch.Batch) []*batch.Batch {
@@ -355,7 +355,7 @@ func hashBuildWithBatch(t *testing.T, tc joinTestCase, bat *batch.Batch) []*batc
 }
 
 // create a new block based on the type information, flgs[i] == ture: has null
-func newBatch(t *testing.T, flgs []bool, ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
+func newBatch(ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
 	return testutil.NewBatch(ts, false, int(rows), proc.Mp())
 }
 
