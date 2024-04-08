@@ -19,8 +19,21 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/stretchr/testify/require"
+	"sync"
 	"testing"
 )
+
+var uniqueAggIdForTest int64 = 100
+var uniqueAggIdForTestLock sync.RWMutex
+
+func gUniqueAggIdForTest() int64 {
+	uniqueAggIdForTestLock.Lock()
+	uniqueAggIdForTest++
+	ret := uniqueAggIdForTest
+	uniqueAggIdForTestLock.Unlock()
+
+	return ret
+}
 
 type testAggMemoryManager struct {
 	mp *mpool.MPool
@@ -78,7 +91,7 @@ func TestSingleAggFuncExec1(t *testing.T) {
 	mg := newTestAggMemoryManager()
 
 	info := singleAggInfo{
-		aggID:     1,
+		aggID:     gUniqueAggIdForTest(),
 		distinct:  false,
 		argType:   types.T_int32.ToType(),
 		retType:   types.T_int64.ToType(),
@@ -195,7 +208,7 @@ func TestMultiAggFuncExec1(t *testing.T) {
 	mg := newTestAggMemoryManager()
 
 	info := multiAggInfo{
-		aggID:     2,
+		aggID:     gUniqueAggIdForTest(),
 		distinct:  false,
 		argTypes:  []types.Type{types.T_int64.ToType(), types.T_bool.ToType()},
 		retType:   types.T_int64.ToType(),
@@ -278,9 +291,8 @@ func TestMultiAggFuncExec1(t *testing.T) {
 
 func TestGroupConcatExec(t *testing.T) {
 	mg := newTestAggMemoryManager()
-	RegisterGroupConcatAgg(3, ",")
 	info := multiAggInfo{
-		aggID:    3,
+		aggID:    gUniqueAggIdForTest(),
 		distinct: false,
 		argTypes: []types.Type{
 			types.T_varchar.ToType(),
@@ -289,6 +301,8 @@ func TestGroupConcatExec(t *testing.T) {
 		retType:   types.T_text.ToType(),
 		emptyNull: false,
 	}
+	RegisterGroupConcatAgg(info.aggID, ",")
+
 	executor := MakeAgg(mg, info.aggID, info.distinct, info.argTypes...)
 
 	// group concat the vector1 and vector2.
@@ -337,13 +351,14 @@ func TestGroupConcatExec(t *testing.T) {
 func TestEmptyNullFlag(t *testing.T) {
 	mg := newTestAggMemoryManager()
 	{
+		id := gUniqueAggIdForTest()
 		RegisterDeterminedSingleAgg(
 			MakeDeterminedSingleAggInfo(
-				1, types.T_int32.ToType(), types.T_int64.ToType(), false, true),
+				id, types.T_int32.ToType(), types.T_int64.ToType(), false, true),
 			gTesSingleAggPrivate1)
 		executor := MakeAgg(
 			mg,
-			1, false, types.T_int32.ToType())
+			id, false, types.T_int32.ToType())
 		require.NoError(t, executor.GroupGrow(1))
 		v, err := executor.Flush()
 		require.NoError(t, err)
@@ -352,13 +367,14 @@ func TestEmptyNullFlag(t *testing.T) {
 		executor.Free()
 	}
 	{
+		id := gUniqueAggIdForTest()
 		RegisterDeterminedSingleAgg(
 			MakeDeterminedSingleAggInfo(
-				1, types.T_int32.ToType(), types.T_int64.ToType(), false, false),
+				id, types.T_int32.ToType(), types.T_int64.ToType(), false, false),
 			gTesSingleAggPrivate1)
 		executor := MakeAgg(
 			mg,
-			1, false, types.T_int32.ToType())
+			id, false, types.T_int32.ToType())
 		require.NoError(t, executor.GroupGrow(1))
 		v, err := executor.Flush()
 		require.NoError(t, err)
@@ -368,11 +384,12 @@ func TestEmptyNullFlag(t *testing.T) {
 		executor.Free()
 	}
 	{
+		id := gUniqueAggIdForTest()
 		RegisterDeterminedMultiAgg(
-			MakeDeterminedMultiAggInfo(2, []types.Type{types.T_int64.ToType(), types.T_bool.ToType()}, types.T_int64.ToType(), true), gTesMultiAggPrivate1)
+			MakeDeterminedMultiAggInfo(id, []types.Type{types.T_int64.ToType(), types.T_bool.ToType()}, types.T_int64.ToType(), true), gTesMultiAggPrivate1)
 		executor := MakeAgg(
 			mg,
-			2, false, []types.Type{types.T_int64.ToType(), types.T_bool.ToType()}...)
+			id, false, []types.Type{types.T_int64.ToType(), types.T_bool.ToType()}...)
 		require.NoError(t, executor.GroupGrow(1))
 		v, err := executor.Flush()
 		require.NoError(t, err)
@@ -381,11 +398,12 @@ func TestEmptyNullFlag(t *testing.T) {
 		executor.Free()
 	}
 	{
+		id := gUniqueAggIdForTest()
 		RegisterDeterminedMultiAgg(
-			MakeDeterminedMultiAggInfo(2, []types.Type{types.T_int64.ToType(), types.T_bool.ToType()}, types.T_int64.ToType(), false), gTesMultiAggPrivate1)
+			MakeDeterminedMultiAggInfo(id, []types.Type{types.T_int64.ToType(), types.T_bool.ToType()}, types.T_int64.ToType(), false), gTesMultiAggPrivate1)
 		executor := MakeAgg(
 			mg,
-			2, false, []types.Type{types.T_int64.ToType(), types.T_bool.ToType()}...)
+			id, false, []types.Type{types.T_int64.ToType(), types.T_bool.ToType()}...)
 		require.NoError(t, executor.GroupGrow(1))
 		v, err := executor.Flush()
 		require.NoError(t, err)

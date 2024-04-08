@@ -33,6 +33,9 @@ func testAggExecSerialize(exec AggFuncExec, checkFn func(src, dst AggFuncExec) e
 		return unmarshalErr
 	}
 
+	if checkFn == nil {
+		return nil
+	}
 	return checkFn(exec, newExec)
 }
 
@@ -89,7 +92,7 @@ func TestSerial_SingleAggFuncExecSerial(t *testing.T) {
 	mg := newTestAggMemoryManager()
 
 	info := singleAggInfo{
-		aggID:     100,
+		aggID:     gUniqueAggIdForTest(),
 		distinct:  false,
 		argType:   types.T_int32.ToType(),
 		retType:   types.T_int64.ToType(),
@@ -134,13 +137,13 @@ func TestSerial_CountColumnAggFuncExec(t *testing.T) {
 	mg := newTestAggMemoryManager()
 
 	info := singleAggInfo{
-		aggID:     101,
+		aggID:     gUniqueAggIdForTest(),
 		distinct:  false,
 		argType:   types.T_int32.ToType(),
 		retType:   CountReturnType(nil),
 		emptyNull: false,
 	}
-	RegisterCountColumnAgg(101)
+	RegisterCountColumnAgg(info.aggID)
 
 	// methods to check the correctness of the serialized AggFuncExec.
 	checkFn := func(src, dst AggFuncExec) error {
@@ -176,13 +179,13 @@ func TestSerial_CountStarAggFuncExec(t *testing.T) {
 	mg := newTestAggMemoryManager()
 
 	info := singleAggInfo{
-		aggID:     102,
+		aggID:     gUniqueAggIdForTest(),
 		distinct:  false,
 		argType:   types.T_int32.ToType(),
 		retType:   CountReturnType(nil),
 		emptyNull: false,
 	}
-	RegisterCountStarAgg(102)
+	RegisterCountStarAgg(info.aggID)
 
 	// methods to check the correctness of the serialized AggFuncExec.
 	checkFn := func(src, dst AggFuncExec) error {
@@ -218,13 +221,13 @@ func TestSerial_ApproxCountFixedAggFuncExec(t *testing.T) {
 	mg := newTestAggMemoryManager()
 
 	info := singleAggInfo{
-		aggID:     103,
+		aggID:     gUniqueAggIdForTest(),
 		distinct:  false,
 		argType:   types.T_int32.ToType(),
 		retType:   types.T_uint64.ToType(),
 		emptyNull: false,
 	}
-	RegisterApproxCountAgg(103)
+	RegisterApproxCountAgg(info.aggID)
 
 	// methods to check the correctness of the serialized AggFuncExec.
 	checkFn := func(src, dst AggFuncExec) error {
@@ -274,13 +277,13 @@ func TestSerial_ApproxCountVarAggFuncExec(t *testing.T) {
 	mg := newTestAggMemoryManager()
 
 	info := singleAggInfo{
-		aggID:     104,
+		aggID:     gUniqueAggIdForTest(),
 		distinct:  false,
 		argType:   types.T_varchar.ToType(),
 		retType:   types.T_uint64.ToType(),
 		emptyNull: false,
 	}
-	RegisterApproxCountAgg(104)
+	RegisterApproxCountAgg(info.aggID)
 
 	// methods to check the correctness of the serialized AggFuncExec.
 	checkFn := func(src, dst AggFuncExec) error {
@@ -330,13 +333,13 @@ func TestSerial_ClusterCentersExec(t *testing.T) {
 	mg := newTestAggMemoryManager()
 
 	info := singleAggInfo{
-		aggID:     105,
+		aggID:     gUniqueAggIdForTest(),
 		distinct:  false,
 		argType:   types.T_array_float32.ToType(),
 		retType:   ClusterCentersReturnType(nil),
 		emptyNull: false,
 	}
-	RegisterClusterCenters(105)
+	RegisterClusterCenters(info.aggID)
 
 	// methods to check the correctness of the serialized AggFuncExec.
 	checkFn := func(src, dst AggFuncExec) error {
@@ -407,13 +410,13 @@ func TestSerial_MedianColumnExec(t *testing.T) {
 	mg := newTestAggMemoryManager()
 
 	info := singleAggInfo{
-		aggID:    106,
+		aggID:    gUniqueAggIdForTest(),
 		distinct: false,
 		argType:  types.T_int32.ToType(),
 	}
 	info.retType = MedianReturnType([]types.Type{info.argType})
 
-	RegisterMedian(106)
+	RegisterMedian(info.aggID)
 
 	// methods to check the correctness of the serialized AggFuncExec.
 	checkFn := func(src, dst AggFuncExec) error {
@@ -462,6 +465,52 @@ func TestSerial_MedianColumnExec(t *testing.T) {
 			info.aggID, info.distinct, info.argType)
 		require.NoError(t, fillTestData(mg, 10, executor, info.argType))
 		require.NoError(t, testAggExecSerialize(executor, checkFn))
+		executor.Free()
+	}
+
+	require.Equal(t, int64(0), mg.Mp().CurrNB())
+}
+
+type testSingleAggPrivateSer1 struct {
+	testSingleAggPrivate1
+}
+
+func gTestSingleAggPrivateSer1() SingleAggFromFixedRetFixed[int32, int64] {
+	return &testSingleAggPrivateSer1{}
+}
+
+func (s *testSingleAggPrivateSer1) Marshal() []byte {
+	return []byte("testSingleAggPrivateSer1")
+}
+
+func (s *testSingleAggPrivateSer1) Unmarshal(bs []byte) {
+	if string(bs) != "testSingleAggPrivateSer1" {
+		panic("unmarshal failed")
+	}
+}
+
+// this test is to check if the agg framework can serialize and deserialize the private struct of the agg function.
+func TestSerial_Agg1(t *testing.T) {
+	mg := newTestAggMemoryManager()
+
+	info := singleAggInfo{
+		aggID:     gUniqueAggIdForTest(),
+		distinct:  false,
+		argType:   types.T_int32.ToType(),
+		retType:   types.T_int64.ToType(),
+		emptyNull: true,
+	}
+	RegisterDeterminedSingleAgg(
+		MakeDeterminedSingleAggInfo(
+			info.aggID, info.argType, info.retType, true, info.emptyNull),
+		gTestSingleAggPrivateSer1)
+
+	{
+		executor := MakeAgg(
+			mg,
+			info.aggID, info.distinct, info.argType)
+		require.NoError(t, fillTestData(mg, 10, executor, info.argType))
+		require.NoError(t, testAggExecSerialize(executor, nil))
 		executor.Free()
 	}
 
