@@ -208,10 +208,14 @@ func checkFileExist(param *tree.ExternParam, ctx CompilerContext) (string, error
 		return "", nil
 	}
 	if err := StatFile(param); err != nil {
-		if err.(*moerr.Error).ErrorCode() == moerr.ErrFileNotFound {
-			return "", moerr.NewInvalidInput(ctx.GetContext(), "the file does not exist in load flow")
+		if moerror, ok := err.(*moerr.Error); ok {
+			if moerror.ErrorCode() == moerr.ErrFileNotFound {
+				return "", moerr.NewInvalidInput(ctx.GetContext(), "the file does not exist in load flow")
+			} else {
+				return "", moerror
+			}
 		}
-		return "", err
+		return "", moerr.NewInternalError(ctx.GetContext(), err.Error())
 	}
 	param.Init = true
 	return param.Filepath, nil

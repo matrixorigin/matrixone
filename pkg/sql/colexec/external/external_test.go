@@ -58,7 +58,7 @@ var (
 	defaultOption = []string{"filepath", "abc", "format", "jsonline", "jsondata", "array"}
 )
 
-func newTestCase(all bool, format, jsondata string) externalTestCase {
+func newTestCase(format, jsondata string) externalTestCase {
 	proc := testutil.NewProcess()
 	proc.FileService = testutil.NewFS()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -91,9 +91,9 @@ func newTestCase(all bool, format, jsondata string) externalTestCase {
 
 func init() {
 	cases = []externalTestCase{
-		newTestCase(true, tree.CSV, ""),
-		newTestCase(true, tree.JSONLINE, tree.OBJECT),
-		newTestCase(true, tree.JSONLINE, tree.ARRAY),
+		newTestCase(tree.CSV, ""),
+		newTestCase(tree.JSONLINE, tree.OBJECT),
+		newTestCase(tree.JSONLINE, tree.ARRAY),
 	}
 }
 

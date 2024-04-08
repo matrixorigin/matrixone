@@ -483,6 +483,17 @@ func (n *ObjectMVCCHandle) HasDeleteIntentsPreparedIn(from, to types.TS) (found,
 	}
 	return
 }
+func (n *ObjectMVCCHandle) HasInMemoryDeleteIntentsPreparedInByBlock(blkID uint16, from, to types.TS) (found, isPersist bool) {
+	mvcc := n.deletes[blkID]
+	if mvcc == nil {
+		return false, false
+	}
+	if mvcc.deletes.mask.IsEmpty() {
+		return false, false
+	}
+	found, isPersist = mvcc.GetDeleteChain().HasDeleteIntentsPreparedInLocked(from, to)
+	return
+}
 
 func (n *ObjectMVCCHandle) ReplayDeltaLoc(vMVCCNode any, blkID uint16) {
 	mvccNode := vMVCCNode.(*catalog.MVCCNode[*catalog.MetadataMVCCNode])
@@ -688,7 +699,12 @@ func (n *MVCCHandle) StringLocked(level common.PPLevel, depth int, prefix string
 		// s = fmt.Sprintf("%s%s", s, n.deletes.StringLocked())
 		inMemoryCount = n.deletes.mask.GetCardinality()
 	}
-	s := fmt.Sprintf("%sBLK[%d]InMem:%d\n%s", common.RepeatStr("\t", depth), n.blkID, inMemoryCount, n.deletes.StringLocked())
+	s := fmt.Sprintf("%sBLK[%d]InMem:%d\n", common.RepeatStr("\t", depth), n.blkID, inMemoryCount)
+	if level > common.PPL3 {
+		if imemChain := n.deletes.StringLocked(); imemChain != "" {
+			s = fmt.Sprintf("%s%s", s, imemChain)
+		}
+	}
 	if n.deltaloc.Depth() > 0 {
 		s = fmt.Sprintf("%s%s", s, n.deltaloc.StringLocked())
 	}
