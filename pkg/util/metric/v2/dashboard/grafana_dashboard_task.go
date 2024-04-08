@@ -17,6 +17,7 @@ package dashboard
 import (
 	"context"
 	"fmt"
+
 	"github.com/K-Phoen/grabana/axis"
 	"github.com/K-Phoen/grabana/dashboard"
 	"github.com/K-Phoen/grabana/row"
@@ -35,6 +36,7 @@ func (c *DashboardCreator) initTaskDashboard() error {
 		c.withRowOptions(
 			c.initTaskFlushTableTailRow(),
 			c.initTaskMergeRow(),
+			c.initCommitTimeRow(),
 			c.initTaskCheckpointRow(),
 			c.initTaskSelectivityRow(),
 			c.initTaskMergeTransferPageRow(),
@@ -56,6 +58,26 @@ func (c *DashboardCreator) initTaskMergeTransferPageRow() dashboard.Option {
 			12,
 			`sum(`+c.getMetricWithFilter("mo_task_merge_transfer_page_size", ``)+`)`,
 			"{{ "+c.by+" }}"),
+	)
+}
+
+func (c *DashboardCreator) initCommitTimeRow() dashboard.Option {
+	return dashboard.Row(
+		"Commit Time",
+		c.getPercentHist(
+			"Flush Commit Time",
+			c.getMetricWithFilter(`mo_task_short_duration_seconds_bucket`, `type="commit_table_tail"`),
+			[]float64{0.50, 0.8, 0.90, 0.99},
+			SpanNulls(true),
+			timeseries.Span(6),
+		),
+		c.getPercentHist(
+			"Merge Commit Time",
+			c.getMetricWithFilter(`mo_task_short_duration_seconds_bucket`, `type="commit_merge_objects"`),
+			[]float64{0.50, 0.8, 0.90, 0.99},
+			SpanNulls(true),
+			timeseries.Span(6),
+		),
 	)
 }
 

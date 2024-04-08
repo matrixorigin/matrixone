@@ -86,6 +86,25 @@ func builtInCurrentTimestamp(ivecs []*vector.Vector, result vector.FunctionResul
 	return nil
 }
 
+func builtInSysdate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int) error {
+	rs := vector.MustFunctionResult[types.Timestamp](result)
+
+	scale := int32(6)
+	if len(ivecs) == 1 && !ivecs[0].IsConstNull() {
+		scale = int32(vector.MustFixedCol[int64](ivecs[0])[0])
+	}
+	rs.TempSetType(types.New(types.T_timestamp, 0, scale))
+
+	resultValue := types.UnixNanoToTimestamp(time.Now().UnixNano())
+	for i := uint64(0); i < uint64(length); i++ {
+		if err := rs.Append(resultValue, false); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
 const (
 	onUpdateExpr = iota
 	defaultExpr

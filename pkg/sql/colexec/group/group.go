@@ -224,7 +224,7 @@ func (ctr *container) processWithoutGroup(ap *Argument, proc *process.Process, a
 				}
 			}
 
-			if err := ctr.processH0(bat); err != nil {
+			if err := ctr.processH0(); err != nil {
 				return result, err
 			}
 		}
@@ -393,7 +393,7 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 }
 
 // processH8 use whole batch to fill the aggregation.
-func (ctr *container) processH0(bat *batch.Batch) error {
+func (ctr *container) processH0() error {
 	ctr.bat.SetRowCount(1)
 
 	for i, ag := range ctr.bat.Aggs {
@@ -423,7 +423,7 @@ func (ctr *container) processH8(bat *batch.Batch, proc *process.Process) error {
 		if err != nil {
 			return err
 		}
-		if err := ctr.batchFill(i, n, bat, vals, rows, proc); err != nil {
+		if err := ctr.batchFill(i, n, vals, rows, proc); err != nil {
 			return err
 		}
 	}
@@ -447,7 +447,7 @@ func (ctr *container) processHStr(bat *batch.Batch, proc *process.Process) error
 		if err != nil {
 			return err
 		}
-		if err := ctr.batchFill(i, n, bat, vals, rows, proc); err != nil {
+		if err := ctr.batchFill(i, n, vals, rows, proc); err != nil {
 			return err
 		}
 	}
@@ -508,7 +508,7 @@ func (ctr *container) processHIndex(bat *batch.Batch, proc *process.Process) err
 }
 */
 
-func (ctr *container) batchFill(i int, n int, bat *batch.Batch, vals []uint64, hashRows uint64, proc *process.Process) error {
+func (ctr *container) batchFill(i int, n int, vals []uint64, hashRows uint64, proc *process.Process) error {
 	cnt := 0
 	valCnt := 0
 	copy(ctr.inserted[:n], ctr.zInserted[:n])
