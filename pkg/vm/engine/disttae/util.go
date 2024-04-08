@@ -799,8 +799,7 @@ func getNonSortedPKSearchFuncByPKVec(
 	vec *vector.Vector,
 ) blockio.ReadFilter {
 
-	var searchPKFunc func(*vector.Vector) []int32
-	searchPKFunc = LinearSearchOffsetByValFactory(vec)
+	searchPKFunc := LinearSearchOffsetByValFactory(vec)
 
 	if searchPKFunc != nil {
 		return func(vecs []*vector.Vector) []int32 {
