@@ -300,7 +300,24 @@ type CreateAccountExecutor struct {
 }
 
 func (cae *CreateAccountExecutor) ExecuteImpl(ctx context.Context, ses *Session) error {
-	return InitGeneralTenant(ctx, ses, cae.ca)
+	create := &CreateAccount{
+		IfNotExists:  cae.ca.IfNotExists,
+		AuthOption:   cae.ca.AuthOption,
+		StatusOption: cae.ca.StatusOption,
+		Comment:      cae.ca.Comment,
+	}
+
+	params := cae.GetProcess().GetPrepareParams()
+	switch val := cae.ca.Name.(type) {
+	case *tree.NumVal:
+		create.Name = val.OrigString()
+	case *tree.ParamExpr:
+		create.Name = params.GetStringAt(val.Offset - 1)
+	default:
+		return moerr.NewInternalError(ctx, "invalid params type")
+	}
+
+	return InitGeneralTenant(ctx, ses, create)
 }
 
 type DropAccountExecutor struct {
@@ -498,7 +515,6 @@ type LoadExecutor struct {
 func (le *LoadExecutor) CommitOrRollbackTxn(ctx context.Context, ses *Session) error {
 	stmt := le.GetAst()
 	tenant := le.tenantName
-	incStatementCounter(tenant, stmt)
 	if le.GetStatus() == stmtExecSuccess {
 		logStatementStatus(ctx, ses, stmt, success, nil)
 	} else {
