@@ -16,6 +16,7 @@ package hashbuild
 
 import (
 	"bytes"
+	"runtime"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
@@ -249,6 +250,10 @@ func (ctr *container) buildHashmap(ap *Argument, proc *process.Process) error {
 		n := ctr.inputBatchRowCount - i
 		if n > hashmap.UnitLimit {
 			n = hashmap.UnitLimit
+		}
+
+		if i%(hashmap.UnitLimit*32) == 0 {
+			runtime.Gosched()
 		}
 
 		// if not hash on primary key, estimate the hashmap size after 8192 rows
