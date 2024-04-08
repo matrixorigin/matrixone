@@ -621,10 +621,8 @@ func (p *PartitionState) HandleRowsInsert(
 		}
 	}
 
-	if useUnion {
-		p.rows = p.rows.Union(pt.Build(p.prioritySource, newRows), false)
-		p.primaryIndex = p.primaryIndex.Union(pt.Build(p.prioritySource, newPrimaryIndex), false)
-	}
+	p.rows = p.rows.Union(pt.Build(p.prioritySource, sortUnique(newRows, RowEntry.Compare)), false)
+	p.primaryIndex = p.primaryIndex.Union(pt.Build(p.prioritySource, sortUnique(newPrimaryIndex, (*PrimaryIndexEntry).Compare)), false)
 
 	perfcounter.Update(ctx, func(c *perfcounter.CounterSet) {
 		c.DistTAE.Logtail.Entries.Add(1)
@@ -894,8 +892,8 @@ func (p *PartitionState) HandleMetadataInsert(
 
 	}
 
-	p.rows = p.rows.BulkRemove(pt.Build(p.prioritySource, rowsToDelete), false)
-	p.primaryIndex = p.primaryIndex.BulkRemove(pt.Build(p.prioritySource, primaryKeysToDelete), false)
+	p.rows = p.rows.BulkRemove(pt.Build(p.prioritySource, sortUnique(rowsToDelete, RowEntry.Compare)), false)
+	p.primaryIndex = p.primaryIndex.BulkRemove(pt.Build(p.prioritySource, sortUnique(primaryKeysToDelete, (*PrimaryIndexEntry).Compare)), false)
 
 	perfcounter.Update(ctx, func(c *perfcounter.CounterSet) {
 		c.DistTAE.Logtail.Entries.Add(1)
