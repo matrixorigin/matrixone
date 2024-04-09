@@ -155,7 +155,6 @@ func (c *Compile) reset() {
 	c.MessageBoard.Messages = c.MessageBoard.Messages[:0]
 	c.createdFuzzy = c.createdFuzzy[:0]
 	c.scope = c.scope[:0]
-	c.proc.CleanValueScanBatchs()
 	c.pn = nil
 	c.u = nil
 	c.fill = nil
@@ -435,6 +434,9 @@ func (c *Compile) Run(_ uint64) (result *util2.RunResult, err error) {
 		if txnOp != nil {
 			txnOp.ExitRunSql()
 		}
+		c.proc.CleanValueScanBatchs()
+		c.proc.SetPrepareBatch(nil)
+		c.proc.SetPrepareExprList(nil)
 	}()
 
 	var writeOffset uint64

@@ -671,7 +671,14 @@ func NewSession(proto Protocol, mp *mpool.MPool, pu *config.ParameterUnit,
 		pu.HAKeeperClient,
 		pu.UdfService,
 		ses.GetAutoIncrCacheManager())
+
+	ses.proc.Lim.Size = pu.SV.ProcessLimitationSize
+	ses.proc.Lim.BatchRows = pu.SV.ProcessLimitationBatchRows
+	ses.proc.Lim.MaxMsgSize = pu.SV.MaxMessageSize
+	ses.proc.Lim.PartitionRows = pu.SV.ProcessLimitationPartitionRows
 	ses.proc.SetStmtProfile(&ses.stmtProfile)
+	ses.txnCompileCtx.SetProcess(ses.proc)
+	// ses.proc.SetResolveVariableFunc(ses.txnCompileCtx.ResolveVariable)
 
 	runtime.SetFinalizer(ses, func(ss *Session) {
 		ss.Close()

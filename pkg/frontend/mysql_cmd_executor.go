@@ -4242,24 +4242,26 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, input *UserI
 	//here,we only need the user_name.
 	userNameOnly := rootName
 
-	proc := process.New(
-		requestCtx,
-		ses.GetMemPool(),
-		ses.GetTxnHandler().GetTxnClient(),
-		nil,
-		pu.FileService,
-		pu.LockService,
-		pu.QueryClient,
-		pu.HAKeeperClient,
-		pu.UdfService,
-		ses.GetAutoIncrCacheManager())
-	proc.CopyVectorPool(ses.proc)
-	proc.CopyValueScanBatch(ses.proc)
+	// proc := process.New(
+	// 	requestCtx,
+	// 	ses.GetMemPool(),
+	// 	ses.GetTxnHandler().GetTxnClient(),
+	// 	nil,
+	// 	pu.FileService,
+	// 	pu.LockService,
+	// 	pu.QueryClient,
+	// 	pu.HAKeeperClient,
+	// 	pu.UdfService,
+	// 	ses.GetAutoIncrCacheManager())
+	proc := ses.proc
+	proc.Ctx = requestCtx
+	// proc.CopyVectorPool(ses.proc)
+	// proc.CopyValueScanBatch(ses.proc)
 	proc.Id = mce.getNextProcessId()
-	proc.Lim.Size = pu.SV.ProcessLimitationSize
-	proc.Lim.BatchRows = pu.SV.ProcessLimitationBatchRows
-	proc.Lim.MaxMsgSize = pu.SV.MaxMessageSize
-	proc.Lim.PartitionRows = pu.SV.ProcessLimitationPartitionRows
+	// proc.Lim.Size = pu.SV.ProcessLimitationSize
+	// proc.Lim.BatchRows = pu.SV.ProcessLimitationBatchRows
+	// proc.Lim.MaxMsgSize = pu.SV.MaxMessageSize
+	// proc.Lim.PartitionRows = pu.SV.ProcessLimitationPartitionRows
 	proc.SessionInfo = process.SessionInfo{
 		User:                 ses.GetUserName(),
 		Host:                 pu.SV.Host,
@@ -4273,7 +4275,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, input *UserI
 		Buf:                  ses.GetBuffer(),
 		SourceInMemScanBatch: inMemStreamScan,
 	}
-	proc.SetStmtProfile(&ses.stmtProfile)
+	// proc.SetStmtProfile(&ses.stmtProfile)
 	proc.SetResolveVariableFunc(mce.ses.txnCompileCtx.ResolveVariable)
 	proc.InitSeq()
 	// Copy curvalues stored in session to this proc.
@@ -4307,8 +4309,8 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, input *UserI
 
 	proc.SessionInfo.User = userNameOnly
 	proc.SessionInfo.QueryId = ses.getQueryId(input.isInternal())
-	ses.txnCompileCtx.SetProcess(proc)
-	ses.proc.SessionInfo = proc.SessionInfo
+	// ses.txnCompileCtx.SetProcess(proc)
+	// ses.proc.SessionInfo = proc.SessionInfo
 
 	statsInfo := statistic.StatsInfo{ParseStartTime: beginInstant}
 	requestCtx = statistic.ContextWithStatsInfo(requestCtx, &statsInfo)
