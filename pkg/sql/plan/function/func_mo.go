@@ -239,8 +239,10 @@ func MoTableSize(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 
 						buf.WriteString(fmt.Sprintf("%s-%s; ", dbStr2, tblStr2))
 					}
-
-					logutil.Errorf(fmt.Sprintf("db not found when mo_table_size: %s-%s, extra: %s", dbStr, tblStr, buf.String()))
+					attachedId, _ := defines.GetAccountId(proc.Ctx)
+					logutil.Errorf(
+						fmt.Sprintf("db not found when mo_table_size: %s-%s, acc: %v-%d-%d, extra: %s",
+							dbStr, tblStr, accSwitched, accountId, attachedId, buf.String()))
 					return moerr.NewInvalidArgNoCtx("db not found when mo_table_size", fmt.Sprintf("%s-%s", dbStr, tblStr))
 				}
 				return err
