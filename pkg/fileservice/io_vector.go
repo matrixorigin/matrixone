@@ -34,10 +34,10 @@ func (i *IOVector) Release() {
 }
 
 func (i *IOVector) readRange() (min *int64, max *int64, readFull bool) {
-	readFullObject := i.Policy.CacheFullFile() &&
+	readFull = i.Policy.CacheFullFile() &&
 		!i.Policy.Any(SkipDiskCache)
 
-	if readFullObject {
+	if readFull {
 		// full range
 		min = ptrTo[int64](0)
 		max = (*int64)(nil)
@@ -73,7 +73,10 @@ func (i *IOVector) ioLockKey() IOLockKey {
 	key := IOLockKey{
 		Path: i.FilePath,
 	}
-	min, max, _ := i.readRange()
+	min, max, readFull := i.readRange()
+	if readFull {
+		return key
+	}
 	if min != nil {
 		key.Offset = *min
 	}

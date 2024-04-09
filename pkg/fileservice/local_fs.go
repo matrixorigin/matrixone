@@ -23,6 +23,7 @@ import (
 	"os"
 	pathpkg "path"
 	"path/filepath"
+	gotrace "runtime/trace"
 	"sort"
 	"strings"
 	"sync"
@@ -306,12 +307,14 @@ func (l *LocalFS) Read(ctx context.Context, vector *IOVector) (err error) {
 	stats := statistic.StatsInfoFromContext(ctx)
 
 	startLock := time.Now()
+	_, task := gotrace.NewTask(ctx, "LocalFS.Read: wait io lock")
 	unlock, wait := l.ioLocks.Lock(vector.ioLockKey())
 	if unlock != nil {
 		defer unlock()
 	} else {
 		wait()
 	}
+	task.End()
 	stats.AddLockTimeConsumption(time.Since(startLock))
 
 	allocator := l.allocator
