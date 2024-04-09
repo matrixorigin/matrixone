@@ -429,15 +429,22 @@ func (txn *Transaction) dumpBatchLocked(offset int) error {
 	txn.hasS3Op.Store(true)
 	mp := make(map[tableKey][]*batch.Batch)
 
+	lastTxnWritesIndex := offset
 	for i := offset; i < len(txn.writes); i++ {
 		if txn.writes[i].tableId == catalog.MO_DATABASE_ID ||
 			txn.writes[i].tableId == catalog.MO_TABLES_ID ||
 			txn.writes[i].tableId == catalog.MO_COLUMNS_ID {
+			txn.writes[lastTxnWritesIndex] = txn.writes[i]
+			lastTxnWritesIndex++
 			continue
 		}
 		if txn.writes[i].bat == nil || txn.writes[i].bat.RowCount() == 0 {
+			txn.writes[lastTxnWritesIndex] = txn.writes[i]
+			lastTxnWritesIndex++
 			continue
 		}
+
+		keepElement := true
 		if txn.writes[i].typ == INSERT && txn.writes[i].fileName == "" {
 			tbKey := tableKey{
 				accountId:  txn.writes[i].accountId,
@@ -456,21 +463,15 @@ func (txn *Transaction) dumpBatchLocked(offset int) error {
 			mp[tbKey] = append(mp[tbKey], newBat)
 			txn.toFreeBatches[tbKey] = append(txn.toFreeBatches[tbKey], bat)
 
-			// txn.writes[i].bat = nil
-			// --- New Message
-			// Don't set bat = nil here. When we don't enter "if dumpAll { ...  }" block
-			// we end having performance degradation due to nil bat piling up. Not sure if
-			// older message is still valid. However, keeping this comment for now, in case
-			// we need to revert back.
-			// --- Older message:
-			// DON'T MODIFY THE IDX OF AN ENTRY IN LOG
-			// THIS IS VERY IMPORTANT FOR CN BLOCK COMPACTION
-			// maybe this will cause that the log increments unlimitedly
-			txn.writes = append(txn.writes[:i], txn.writes[i+1:]...)
-			i--
+			keepElement = false
+		}
 
+		if keepElement {
+			txn.writes[lastTxnWritesIndex] = txn.writes[i]
+			lastTxnWritesIndex++
 		}
 	}
+	txn.writes = txn.writes[:lastTxnWritesIndex]
 
 	for tbKey := range mp {
 		// scenario 2 for cn write s3, more info in the comment of S3Writer
