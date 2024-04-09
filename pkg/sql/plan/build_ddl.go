@@ -89,9 +89,6 @@ func genViewTableDef(ctx CompilerContext, stmt *tree.Select) (*plan.TableDef, er
 		View: string(viewData),
 	}
 
-	output := tree.String(stmt, dialect.MYSQL)
-	fmt.Sprintf("output:%s\n", output)
-
 	properties := []*plan.Property{
 		{
 			Key:   catalog.SystemRelAttr_Kind,
