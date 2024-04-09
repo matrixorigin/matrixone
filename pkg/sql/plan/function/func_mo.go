@@ -15,7 +15,9 @@
 package function
 
 import (
+	"bytes"
 	"context"
+	"fmt"
 	"strconv"
 	"strings"
 
@@ -25,10 +27,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionUtil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"go.uber.org/zap"
 )
 
 const (
@@ -88,7 +92,19 @@ func MoTableRows(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 			dbo, err = e.Database(ctx, dbStr, txn)
 			if err != nil {
 				if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
-					return moerr.NewInvalidArgNoCtx("db not found when mo_table_rows", dbStr)
+					var buf bytes.Buffer
+					for j := uint64(0); j < uint64(length); j++ {
+						db2, _ := dbs.GetStrValue(j)
+						tbl2, _ := tbls.GetStrValue(j)
+
+						dbStr2 := functionUtil.QuickBytesToStr(db2)
+						tblStr2 := functionUtil.QuickBytesToStr(tbl2)
+
+						buf.WriteString(fmt.Sprintf("%s-%s; ", dbStr2, tblStr2))
+					}
+
+					logutil.Errorf(fmt.Sprintf("db not found when mo_table_size: %s-%s, extra: %s", dbStr, tblStr, buf.String()))
+					return moerr.NewInvalidArgNoCtx("db not found when mo_table_size", fmt.Sprintf("%s-%s", dbStr, tblStr))
 				}
 				return err
 			}
@@ -213,7 +229,21 @@ func MoTableSize(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 			dbo, err = e.Database(ctx, dbStr, txn)
 			if err != nil {
 				if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
-					return moerr.NewInvalidArgNoCtx("db not found when mo_table_size", dbStr)
+					var buf bytes.Buffer
+					for j := uint64(0); j < uint64(length); j++ {
+						db2, _ := dbs.GetStrValue(j)
+						tbl2, _ := tbls.GetStrValue(j)
+
+						dbStr2 := functionUtil.QuickBytesToStr(db2)
+						tblStr2 := functionUtil.QuickBytesToStr(tbl2)
+
+						buf.WriteString(fmt.Sprintf("%s-%s; ", dbStr2, tblStr2))
+					}
+					attachedId, _ := defines.GetAccountId(proc.Ctx)
+					logutil.Errorf(
+						fmt.Sprintf("db not found when mo_table_size: %s-%s, acc: %v-%d-%d, extra: %s",
+							dbStr, tblStr, accSwitched, accountId, attachedId, buf.String()))
+					return moerr.NewInvalidArgNoCtx("db not found when mo_table_size", fmt.Sprintf("%s-%s", dbStr, tblStr))
 				}
 				return err
 			}
@@ -299,17 +329,30 @@ func indexesTableSize(ctx context.Context, db engine.Database, rel engine.Relati
 	var size uint64
 	for _, idef := range rel.GetTableDef(ctx).Indexes {
 		if irel, err = db.Relation(ctx, idef.IndexTableName, nil); err != nil {
-			return 0, err
+			logutil.Info("indexesTableSize->Relation",
+				zap.String("originTable", rel.GetTableName()),
+				zap.String("indexTableName", idef.IndexTableName),
+				zap.Error(err))
+			continue
 		}
 
 		if size, err = getTableSize(ctx, db, irel); err != nil {
-			return 0, err
+			logutil.Info("indexesTableSize->getTableSize",
+				zap.String("originTable", rel.GetTableName()),
+				zap.String("indexTableName", idef.IndexTableName),
+				zap.Error(err))
+			continue
 		}
 
 		totalSize += size
 	}
 
-	return totalSize, nil
+	// this is a quick fix for the issue of the indexTableName is empty.
+	// the empty indexTableName causes the `SQL parser err: table "" does not exist` err and
+	// then the mo_table_size call will fail.
+	// this fix does not fix the issue but only avoids the failure caused by it.
+	err = nil
+	return totalSize, err
 }
 
 // MoTableColMax return the max value of the column

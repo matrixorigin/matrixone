@@ -317,3 +317,18 @@ func TestEncodeAndDecodeInternal(t *testing.T) {
 	assert.NotNil(t, v.(RPCMessage).Ctx)
 	assert.NotNil(t, v.(RPCMessage).Cancel)
 }
+
+func TestKnownInternalFlag(t *testing.T) {
+	codec := newTestCodec()
+	buf := buf.NewByteBuf(1)
+
+	ctx, cancel := context.WithTimeout(context.TODO(), time.Hour*10)
+	defer cancel()
+
+	msg := RPCMessage{Ctx: ctx, Message: &flagOnlyMessage{flag: unknownFlag}, internal: true}
+	err := codec.Encode(msg, buf, nil)
+	assert.NoError(t, err)
+
+	_, _, err = codec.Decode(buf)
+	assert.Error(t, err)
+}
