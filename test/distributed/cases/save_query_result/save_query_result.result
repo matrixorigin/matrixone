@@ -764,10 +764,10 @@ test_table
 test_view
 show create view test_view;
 View    Create View    character_set_client    collation_connection
-test_view    create view test_view as select * from test_table;    utf8mb4    utf8mb4_general_ci
+test_view    create view test_view as select * from test_table    utf8mb4    utf8mb4_general_ci
 select * from result_scan(last_query_id()) as u;
 View    Create View    character_set_client    collation_connection
-test_view    create view test_view as select * from test_table;    utf8mb4    utf8mb4_general_ci
+test_view    create view test_view as select * from test_table    utf8mb4    utf8mb4_general_ci
 /* save_result */select * from test_view;
 col1    col2    col3    col4    col5    col6
 0    0.1    true    1982-03-24    varchar_0    text_0

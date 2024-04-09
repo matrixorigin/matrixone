@@ -38,14 +38,14 @@ invalid input: show view 'vvvv' is not a valid view
 create view v1 as select "a";
 show create view v1;
 View    Create View    character_set_client    collation_connection
-v1    create view v1 as select "a";    utf8mb4    utf8mb4_general_ci
+v1    create view v1 as select "a"    utf8mb4    utf8mb4_general_ci
 create view v2 as select 'a';
 show create view v2;
 View    Create View    character_set_client    collation_connection
-v2    create view v2 as select 'a';    utf8mb4    utf8mb4_general_ci
+v2    create view v2 as select 'a'    utf8mb4    utf8mb4_general_ci
 show create table v2;
 View    Create View    character_set_client    collation_connection
-v2    create view v2 as select 'a';    utf8mb4    utf8mb4_general_ci
+v2    create view v2 as select 'a'    utf8mb4    utf8mb4_general_ci
 drop view v1;
 drop view v2;
 create table tt(a int);
@@ -103,7 +103,7 @@ create view v1 as select * from t1;
 SELECT relname, rel_createsql,relkind FROM mo_catalog.mo_tables WHERE reldatabase='test' order by relname;
 relname    rel_createsql    relkind
 t1    create table t1 (a int)    r
-v1    create view v1 as select * from t1;    v
+v1    create view v1 as select * from t1    v
 create table t2(a int not null, b varchar(20), c char(20));
 create view v2 as select * from t2;
 desc v2;

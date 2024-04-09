@@ -348,7 +348,7 @@ CREATE TABLE TaB(Field int);
 CREATE VIEW ViE AS SELECT * FROM TAb;
 show CREATE TABLE VIe;
 View    Create View    character_set_client    collation_connection
-vie    CREATE VIEW ViE AS SELECT * FROM TAb;    utf8mb4    utf8mb4_general_ci
+vie    CREATE VIEW ViE AS SELECT * FROM TAb    utf8mb4    utf8mb4_general_ci
 DROP VIEW vie;
 DROP table TAB;
 DROP TABLE IF EXISTS t13;
@@ -359,7 +359,7 @@ CREATE VIEW view01 AS SELECT * FROM t13;
 ALTER VIEW VIEW01 AS SELECT * FROM t13 WHERE a=1 or a = 2;
 show CREATE TABLE vieW01;
 View    Create View    character_set_client    collation_connection
-view01    CREATE VIEW VIEW01 AS SELECT * FROM t13 WHERE a=1 or a = 2;    utf8mb4    utf8mb4_general_ci
+view01    CREATE VIEW VIEW01 AS SELECT * FROM t13 WHERE a=1 or a = 2    utf8mb4    utf8mb4_general_ci
 SELECT * FROM view01;
 a
 1
@@ -585,7 +585,7 @@ INSERT INTO TAB VALUES(10);
 CREATE VIEW `ViE` AS SELECT * FROM `TAb`;
 show CREATE TABLE `VIe`;
 View    Create View    character_set_client    collation_connection
-vie    CREATE VIEW `ViE` AS SELECT * FROM `TAb`;    utf8mb4    utf8mb4_general_ci
+vie    CREATE VIEW `ViE` AS SELECT * FROM `TAb`    utf8mb4    utf8mb4_general_ci
 DROP view `VIE`;
 DROP table `TAB`;
 DROP TABLE IF EXISTS `t22`;

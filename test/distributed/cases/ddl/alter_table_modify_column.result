@@ -1512,14 +1512,14 @@ insert into view02 values (1);
 create view v0 as select view01.a, view02.a as b from view01 left join view02 using(a);
 show create view v0;
 View    Create View    character_set_client    collation_connection
-v0    create view v0 as select view01.a, view02.a as b from view01 left join view02 using(a);    utf8mb4    utf8mb4_general_ci
+v0    create view v0 as select view01.a, view02.a as b from view01 left join view02 using(a)    utf8mb4    utf8mb4_general_ci
 alter table view01 modify a float;
 show create table view01;
 Table    Create Table
 view01    CREATE TABLE `view01` (\n`a` FLOAT DEFAULT NULL\n)
 show create view v0;
 View    Create View    character_set_client    collation_connection
-v0    create view v0 as select view01.a, view02.a as b from view01 left join view02 using(a);    utf8mb4    utf8mb4_general_ci
+v0    create view v0 as select view01.a, view02.a as b from view01 left join view02 using(a)    utf8mb4    utf8mb4_general_ci
 drop table view01;
 drop table view02;
 drop view v0;
