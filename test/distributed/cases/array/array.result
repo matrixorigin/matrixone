@@ -506,6 +506,16 @@ select distinct a,a from t11;
 a    a
 [1, 0]    [1, 0]
 [1, 2]    [1, 2]
+drop table if exists t1;
+create table t1(c1 int,c2 vecf32(5),c3 tinyint unsigned,c4 bigint,c5 decimal(4,2),c6 float,c7 double);
+insert into t1 values(10 ,"[1, 0, 1, 6, 6]",3,10,7.1,0.36,2.10);
+insert into t1 values(60,"[6, 0, 8, 10,129]",2,5,3.26,4.89,1.26);
+insert into t1 values(20,"[ 9, 18, 1, 4, 132]",6,1,9.36,6.9,5.6);
+select c2+c3 from t1;
+c2 + c3
+[4, 3, 4, 9, 9]
+[8, 2, 10, 12, 131]
+[15, 24, 7, 10, 138]
 select * from t8 except select * from t9;
 a    b    c
 3    [0.1726299, 3.2908857, 30.433094]    [0.45052445, 2.1984527, 9.579752, 123.48039, 4635.894]
