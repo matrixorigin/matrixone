@@ -29,23 +29,32 @@ type IOLockKey struct {
 }
 
 type IOLocks struct {
-	locks sync.Map
+	mu    sync.Mutex
+	locks map[IOLockKey]chan struct{}
+}
+
+func NewIOLocks() *IOLocks {
+	return &IOLocks{
+		locks: make(map[IOLockKey]chan struct{}),
+	}
 }
 
 var slowIOWaitDuration = time.Second * 10
 
 func (i *IOLocks) Lock(key IOLockKey) (unlock func(), wait func()) {
-	ch := make(chan struct{})
-	v, loaded := i.locks.LoadOrStore(key, ch)
+	i.mu.Lock()
+	defer i.mu.Unlock()
 
-	if loaded {
+	ch, ok := i.locks[key]
+
+	if ok {
 		// not locked
 		wait = func() {
 			t0 := time.Now()
 			for {
 				timer := time.NewTimer(slowIOWaitDuration)
 				select {
-				case <-v.(chan struct{}):
+				case <-ch:
 					timer.Stop()
 					return
 				case <-timer.C:
@@ -60,8 +69,12 @@ func (i *IOLocks) Lock(key IOLockKey) (unlock func(), wait func()) {
 	}
 
 	// locked
+	ch = make(chan struct{})
+	i.locks[key] = ch
 	unlock = func() {
-		i.locks.Delete(key)
+		i.mu.Lock()
+		defer i.mu.Unlock()
+		delete(i.locks, key)
 		close(ch)
 	}
 

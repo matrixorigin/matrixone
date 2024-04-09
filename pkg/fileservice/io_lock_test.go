@@ -20,7 +20,7 @@ import (
 )
 
 func TestIOLock(t *testing.T) {
-	locks := new(IOLocks)
+	locks := NewIOLocks()
 	n := 1024
 	key := IOLockKey{
 		Path: "foo",
@@ -61,7 +61,7 @@ func TestIOLock(t *testing.T) {
 }
 
 func BenchmarkIOLockNoContention(b *testing.B) {
-	locks := new(IOLocks)
+	locks := NewIOLocks()
 	key := IOLockKey{
 		Path: "foo",
 	}
@@ -77,7 +77,7 @@ func BenchmarkIOLockNoContention(b *testing.B) {
 }
 
 func BenchmarkIOLockParallel(b *testing.B) {
-	locks := new(IOLocks)
+	locks := NewIOLocks()
 	key := IOLockKey{
 		Path: "foo",
 	}

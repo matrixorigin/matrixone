@@ -51,7 +51,7 @@ type S3FS struct {
 
 	perfCounterSets []*perfcounter.CounterSet
 
-	ioLocks IOLocks
+	ioLocks *IOLocks
 }
 
 // key mapping scheme:
@@ -75,6 +75,7 @@ func NewS3FS(
 		keyPrefix:       args.KeyPrefix,
 		asyncUpdate:     true,
 		perfCounterSets: perfCounterSets,
+		ioLocks:         NewIOLocks(),
 	}
 
 	var err error
