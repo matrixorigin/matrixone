@@ -133,7 +133,7 @@ var supportedAggInNewFramework = []FuncNew{
 				retType:    agg.SumReturnType,
 				aggFramework: aggregationLogicOfOverload{
 					str:         "sum",
-					aggRegister: agg.RegisterSum,
+					aggRegister: agg.RegisterSum1,
 				},
 			},
 		},

@@ -26,71 +26,19 @@ import (
 */
 
 func RegisterDeterminedSingleAgg(info DeterminedSingleAggInfo, impl any) {
-	// impl legal check.
-
-	key := generateKeyOfDeterminedSingleAgg(info.id, info.arg)
-	registeredDeterminedAggFunctions[key] = determinedAggInfo{
-		registeredAggInfo: registeredAggInfo{
-			isSingleAgg:          true,
-			acceptNull:           info.acceptNull,
-			setNullForEmptyGroup: info.setNullForEmptyGroup,
-		},
-		retType:        info.ret,
-		implementation: impl,
-	}
-
-	singleAgg[info.id] = true
+	return
 }
 
 func RegisterDeterminedMultiAgg(info DeterminedMultiAggInfo, impl any) {
-	// impl legal check.
-
-	key := generateKeyOfDeterminedArgAgg(info.id, info.args)
-	registeredDeterminedAggFunctions[key] = determinedAggInfo{
-		registeredAggInfo: registeredAggInfo{
-			isSingleAgg:          false,
-			acceptNull:           true,
-			setNullForEmptyGroup: info.setNullForEmptyGroup,
-		},
-		retType:        info.ret,
-		implementation: impl,
-	}
-
-	multiAgg[info.id] = true
+	return
 }
 
 func RegisterFlexibleSingleAgg(info FlexibleAggInfo, getReturnType func([]types.Type) types.Type, getImplementation func(args []types.Type, ret types.Type) any) {
-	// impl legal check.
-
-	key := generateKeyOfFlexibleSingleAgg(info.id)
-	registeredFlexibleAggFunctions[key] = flexibleAggInfo{
-		registeredAggInfo: registeredAggInfo{
-			isSingleAgg:          true,
-			acceptNull:           info.acceptNull,
-			setNullForEmptyGroup: info.setNullForEmptyGroup,
-		},
-		getReturnType:     getReturnType,
-		getImplementation: getImplementation,
-	}
-
-	singleAgg[info.id] = true
+	return
 }
 
 func RegisterFlexibleMultiAgg(info FlexibleAggInfo, getReturnType func([]types.Type) types.Type, getImplementation func(args []types.Type, ret types.Type) any) {
-	// impl legal check.
-
-	key := generateKeyOfFlexibleMultiAgg(info.id)
-	registeredFlexibleAggFunctions[key] = flexibleAggInfo{
-		registeredAggInfo: registeredAggInfo{
-			isSingleAgg:          false,
-			acceptNull:           info.acceptNull,
-			setNullForEmptyGroup: info.setNullForEmptyGroup,
-		},
-		getReturnType:     getReturnType,
-		getImplementation: getImplementation,
-	}
-
-	multiAgg[info.id] = true
+	return
 }
 
 func RegisterCountColumnAgg(id int64) {
@@ -163,30 +111,17 @@ type flexibleAggInfo struct {
 
 type aggKey string
 
-func generateKeyOfDeterminedSingleAgg(aggID int64, argType types.Type) aggKey {
-	return aggKey(fmt.Sprintf("s_d_%d_%d", aggID, argType.Oid))
+func generateKeyOfSingleColumnAgg(aggID int64, argType types.Type) aggKey {
+	return aggKey(fmt.Sprintf("s_%d_%d", aggID, argType.Oid))
 }
 
-func generateKeyOfDeterminedArgAgg(overloadID int64, argTypes []types.Type) aggKey {
-	key := fmt.Sprintf("m_d_%d", overloadID)
+func generateKeyOfMultiColumnsAgg(overloadID int64, argTypes []types.Type) aggKey {
+	key := fmt.Sprintf("m_%d", overloadID)
 	for _, argType := range argTypes {
 		key += fmt.Sprintf("_%d", argType.Oid)
 	}
 	return aggKey(key)
 }
-
-func generateKeyOfFlexibleSingleAgg(aggID int64) aggKey {
-	return aggKey(fmt.Sprintf("s_f_%d", aggID))
-}
-
-func generateKeyOfFlexibleMultiAgg(aggID int64) aggKey {
-	return aggKey(fmt.Sprintf("m_f_%d", aggID))
-}
-
-var (
-	registeredDeterminedAggFunctions = make(map[aggKey]determinedAggInfo)
-	registeredFlexibleAggFunctions   = make(map[aggKey]flexibleAggInfo)
-)
 
 var (
 	singleAgg  = make(map[int64]bool)
@@ -214,36 +149,19 @@ var (
 )
 
 func getSingleAggImplByInfo(
-	id int64, arg types.Type) (implementationAllocator any, ret types.Type, raInfo registeredAggInfo, err error) {
-	if info, ok := registeredDeterminedAggFunctions[generateKeyOfDeterminedSingleAgg(id, arg)]; ok {
-		return info.implementation, info.retType, info.registeredAggInfo, nil
+	id int64, arg types.Type) (aggInfo aggImplementation, err error) {
+	key := generateKeyOfSingleColumnAgg(id, arg)
+
+	if impl, ok := registeredAggFunctions[key]; ok {
+		return impl, nil
 	}
-	if info, ok := registeredFlexibleAggFunctions[generateKeyOfFlexibleSingleAgg(id)]; ok {
-		ret = info.getReturnType([]types.Type{arg})
-		return info.getImplementation([]types.Type{arg}, ret), ret, info.registeredAggInfo, nil
-	}
-	return nil, ret, raInfo, moerr.NewInternalErrorNoCtx("no implementation for aggID %d with argType %s", id, arg)
+	return aggImplementation{}, moerr.NewInternalErrorNoCtx("no implementation for aggID %d with argType %s", id, arg)
 }
 
 func getMultiArgAggImplByInfo(
 	id int64, args []types.Type) (implementationAllocator any, ret types.Type, raInfo registeredAggInfo, err error) {
-	if info, ok := registeredDeterminedAggFunctions[generateKeyOfDeterminedArgAgg(id, args)]; ok {
-		return info.implementation, info.retType, info.registeredAggInfo, nil
-	}
-	if info, ok := registeredFlexibleAggFunctions[generateKeyOfFlexibleMultiAgg(id)]; ok {
-		ret = info.getReturnType(args)
-		return info.getImplementation(args, ret), ret, info.registeredAggInfo, nil
-	}
 	return nil, ret, raInfo, moerr.NewInternalErrorNoCtx("no implementation for aggID %d with argTypes %v", id, args)
 }
-
-var (
-	_ = RegisterDeterminedSingleAgg
-	_ = RegisterDeterminedMultiAgg
-	_ = RegisterFlexibleSingleAgg
-	_ = RegisterFlexibleMultiAgg
-	_ = MakeFlexibleAggInfo
-)
 
 type DeterminedSingleAggInfo struct {
 	id                   int64
@@ -292,6 +210,22 @@ func MakeFlexibleAggInfo(id int64, acceptNull bool, setNullForEmptyGroup bool) F
 		setNullForEmptyGroup: setNullForEmptyGroup,
 	}
 }
+
+type aggImplementation struct {
+	registeredAggInfo
+
+	generator any
+	ret       func([]types.Type) types.Type
+	fill      any
+	fillNull  any
+	fills     any
+	merge     any
+	flush     any
+}
+
+var (
+	registeredAggFunctions = make(map[aggKey]aggImplementation)
+)
 
 type SingleColumnAggInformation struct {
 	id                   int64
@@ -342,16 +276,30 @@ func MakeSingleAgg1RegisteredInfo[from, to types.FixedSizeTExceptStrType](
 		merge:                      merge,
 		flush:                      flush,
 	}
-	if registeredInfo1.fillNull == nil {
-		registeredInfo1.fillNull = SingleAggDoNothingFill1[from, to]
-	}
-	if registeredInfo1.flush == nil {
-		registeredInfo1.flush = SingleAggDoNothingFlush1[from, to]
-	}
 	return registeredInfo1
 }
 
 func RegisterSingleAggFromFixedToFixed[from, to types.FixedSizeTExceptStrType](
 	info SingleAggImplementation1d[from, to]) {
-	return
+
+	key := generateKeyOfSingleColumnAgg(info.id, info.arg)
+	if _, ok := registeredAggFunctions[key]; ok {
+		panic(fmt.Sprintf("aggID %d with argType %s has been registered", info.id, info.arg))
+	}
+
+	registeredAggFunctions[key] = aggImplementation{
+		registeredAggInfo: registeredAggInfo{
+			isSingleAgg:          true,
+			acceptNull:           info.acceptNull,
+			setNullForEmptyGroup: info.setNullForEmptyGroup,
+		},
+		generator: info.generator,
+		ret:       info.ret,
+		fill:      info.fill,
+		fillNull:  info.fillNull,
+		fills:     info.fills,
+		merge:     info.merge,
+		flush:     info.flush,
+	}
+	singleAgg[info.id] = true
 }

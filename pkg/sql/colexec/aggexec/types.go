@@ -160,35 +160,36 @@ func makeSingleAgg(
 	mg AggMemoryManager,
 	aggID int64, isDistinct bool,
 	param types.Type) AggFuncExec {
-	implementationAllocator, result, rInfo, err := getSingleAggImplByInfo(aggID, param)
+	agg, err := getSingleAggImplByInfo(aggID, param)
 	if err != nil {
 		panic(err)
 	}
 
+	result := agg.ret([]types.Type{param})
 	info := singleAggInfo{
 		aggID:     aggID,
 		distinct:  isDistinct,
 		argType:   param,
 		retType:   result,
-		emptyNull: rInfo.setNullForEmptyGroup,
+		emptyNull: agg.setNullForEmptyGroup,
 	}
 	opt := singleAggOptimizedInfo{
-		receiveNull: rInfo.acceptNull,
+		receiveNull: agg.acceptNull,
 	}
 
 	pIsVarLen, rIsVarLen := param.IsVarlen(), result.IsVarlen()
 	if pIsVarLen && rIsVarLen {
-		return newSingleAggFuncExec4(mg, info, opt, implementationAllocator)
+		return newSingleAggFuncExec4(mg, info, opt, nil)
 	}
 
 	if !pIsVarLen && rIsVarLen {
-		return newSingleAggFuncExec2(mg, info, opt, implementationAllocator)
+		return newSingleAggFuncExec2(mg, info, opt, nil)
 	}
 
-	if pIsVarLen && !rIsVarLen {
-		return newSingleAggFuncExec3(mg, info, opt, implementationAllocator)
+	if pIsVarLen {
+		return newSingleAggFuncExec3(mg, info, opt, nil)
 	}
-	return newSingleAggFuncExec1(mg, info, opt, implementationAllocator)
+	return newSingleAggFuncExec1(mg, info, opt, agg)
 }
 
 // makeMultiAgg supports creating an aggregation function executor for multiple columns.

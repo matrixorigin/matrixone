@@ -138,11 +138,6 @@ type SingleAggFromFixedRetFixed[
 	from types.FixedSizeTExceptStrType, to types.FixedSizeTExceptStrType] interface {
 	AggCanMarshal
 	Init(setter AggSetter[to], arg, ret types.Type) error
-	Fill(from, AggGetter[to], AggSetter[to]) error
-	FillNull(AggGetter[to], AggSetter[to]) error
-	Fills(value from, isNull bool, count int, getter AggGetter[to], setter AggSetter[to]) error
-	Merge(other SingleAggFromFixedRetFixed[from, to], getter1, getter2 AggGetter[to], setter AggSetter[to]) error
-	Flush(getter AggGetter[to], setter AggSetter[to]) error
 }
 
 type SingleAggFromFixedRetVar[
