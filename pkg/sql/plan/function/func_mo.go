@@ -16,6 +16,8 @@ package function
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"go.uber.org/zap"
 	"strconv"
 	"strings"
 
@@ -299,17 +301,30 @@ func indexesTableSize(ctx context.Context, db engine.Database, rel engine.Relati
 	var size uint64
 	for _, idef := range rel.GetTableDef(ctx).Indexes {
 		if irel, err = db.Relation(ctx, idef.IndexTableName, nil); err != nil {
-			return 0, err
+			logutil.Info("indexesTableSize->Relation",
+				zap.String("originTable", rel.GetTableName()),
+				zap.String("indexTableName", idef.IndexTableName),
+				zap.Error(err))
+			continue
 		}
 
 		if size, err = getTableSize(ctx, db, irel); err != nil {
-			return 0, err
+			logutil.Info("indexesTableSize->getTableSize",
+				zap.String("originTable", rel.GetTableName()),
+				zap.String("indexTableName", idef.IndexTableName),
+				zap.Error(err))
+			continue
 		}
 
 		totalSize += size
 	}
 
-	return totalSize, nil
+	// this is a quick fix for the issue of the indexTableName is empty.
+	// the empty indexTableName causes the `SQL parser err: table "" does not exist` err and
+	// then the mo_table_size call will fail.
+	// this fix does not fix the issue but only to avoid the failure caused by it.
+	err = nil
+	return totalSize, err
 }
 
 // MoTableColMax return the max value of the column
