@@ -25,6 +25,93 @@ type AggBytesSetter func(value []byte) error
 type AggGetter[T types.FixedSizeTExceptStrType] func() T
 type AggBytesGetter func() []byte
 
+type SingleAggFill1[from, to types.FixedSizeTExceptStrType] func(
+	exec SingleAggFromFixedRetFixed[from, to], value from, getter AggGetter[to], setter AggSetter[to]) error
+type SingleAggFill2[from types.FixedSizeTExceptStrType] func(
+	exec SingleAggFromFixedRetVar[from], value from, getter AggBytesGetter, setter AggBytesSetter) error
+type SingleAggFill3[to types.FixedSizeTExceptStrType] func(
+	exec SingleAggFromVarRetFixed[to], value []byte, getter AggGetter[to], setter AggSetter[to]) error
+type SingleAggFill4 func(
+	exec SingleAggFromVarRetVar, value []byte, getter AggBytesGetter, setter AggBytesSetter) error
+
+type SingleAggFillNull1[from, to types.FixedSizeTExceptStrType] func(
+	exec SingleAggFromFixedRetFixed[from, to], getter AggGetter[to], setter AggSetter[to]) error
+type SingleAggFillNull2[from types.FixedSizeTExceptStrType] func(
+	exec SingleAggFromFixedRetVar[from], getter AggBytesGetter, setter AggBytesSetter) error
+type SingleAggFillNull3[to types.FixedSizeTExceptStrType] func(
+	exec SingleAggFromVarRetFixed[to], getter AggGetter[to], setter AggSetter[to]) error
+type SingleAggFillNull4 func(
+	exec SingleAggFromVarRetVar, getter AggBytesGetter, setter AggBytesSetter) error
+
+type SingleAggFills1[from, to types.FixedSizeTExceptStrType] func(
+	exec SingleAggFromFixedRetFixed[from, to], value from, isNull bool, count int, getter AggGetter[to], setter AggSetter[to]) error
+type SingleAggFills2[from types.FixedSizeTExceptStrType] func(
+	exec SingleAggFromFixedRetVar[from], value from, isNull bool, count int, getter AggBytesGetter, setter AggBytesSetter) error
+type SingleAggFills3[to types.FixedSizeTExceptStrType] func(
+	exec SingleAggFromVarRetFixed[to], value []byte, isNull bool, count int, getter AggGetter[to], setter AggSetter[to]) error
+type SingleAggFills4 func(
+	exec SingleAggFromVarRetVar, value []byte, isNull bool, count int, getter AggBytesGetter, setter AggBytesSetter) error
+
+type SingleAggMerge1[from, to types.FixedSizeTExceptStrType] func(
+	exec1, exec2 SingleAggFromFixedRetFixed[from, to], getter1, getter2 AggGetter[to], setter AggSetter[to]) error
+type SingleAggMerge2[from types.FixedSizeTExceptStrType] func(
+	exec1, exec2 SingleAggFromFixedRetVar[from], getter1, getter2 AggBytesGetter, setter AggBytesSetter) error
+type SingleAggMerge3[to types.FixedSizeTExceptStrType] func(
+	exec1, exec2 SingleAggFromVarRetFixed[to], getter1, getter2 AggGetter[to], setter AggSetter[to]) error
+type SingleAggMerge4 func(
+	exec1, exec2 SingleAggFromVarRetVar, getter1, getter2 AggBytesGetter, setter AggBytesSetter) error
+
+type SingleAggFlush1[from, to types.FixedSizeTExceptStrType] func(
+	exec SingleAggFromFixedRetFixed[from, to], getter AggGetter[to], setter AggSetter[to]) error
+type SingleAggFlush2[from types.FixedSizeTExceptStrType] func(
+	exec SingleAggFromFixedRetVar[from], getter AggBytesGetter, setter AggBytesSetter) error
+type SingleAggFlush3[to types.FixedSizeTExceptStrType] func(
+	exec SingleAggFromVarRetFixed[to], getter AggGetter[to], setter AggSetter[to]) error
+type SingleAggFlush4 func(
+	exec SingleAggFromVarRetVar, getter AggBytesGetter, setter AggBytesSetter) error
+
+/*
+	Functions for aggregation which do nothing while filling a null value.
+*/
+
+func SingleAggDoNothingFill1[from, to types.FixedSizeTExceptStrType](
+	_ SingleAggFromFixedRetFixed[from, to], _ AggGetter[to], _ AggSetter[to]) error {
+	return nil
+}
+func SingleAggDoNothingFill2[from types.FixedSizeTExceptStrType](
+	_ SingleAggFromFixedRetVar[from], _ AggBytesGetter, _ AggBytesSetter) error {
+	return nil
+}
+func SingleAggDoNothingFill3[to types.FixedSizeTExceptStrType](
+	_ SingleAggFromVarRetFixed[to], _ AggGetter[to], _ AggSetter[to]) error {
+	return nil
+}
+func SingleAggDoNothingFill4(
+	_ SingleAggFromVarRetVar, _ AggBytesGetter, _ AggBytesSetter) error {
+	return nil
+}
+
+/*
+	Functions for aggregation which do nothing while flushing the result.
+*/
+
+func SingleAggDoNothingFlush1[from, to types.FixedSizeTExceptStrType](
+	_ SingleAggFromFixedRetFixed[from, to], _ AggGetter[to], _ AggSetter[to]) error {
+	return nil
+}
+func SingleAggDoNothingFlush2[from types.FixedSizeTExceptStrType](
+	_ SingleAggFromFixedRetVar[from], _ AggBytesGetter, _ AggBytesSetter) error {
+	return nil
+}
+func SingleAggDoNothingFlush3[to types.FixedSizeTExceptStrType](
+	_ SingleAggFromVarRetFixed[to], _ AggGetter[to], _ AggSetter[to]) error {
+	return nil
+}
+func SingleAggDoNothingFlush4(
+	_ SingleAggFromVarRetVar, _ AggBytesGetter, _ AggBytesSetter) error {
+	return nil
+}
+
 // AggCanMarshal interface is used for multi-node communication.
 // each private structure of aggregation should implement the AggCanMarshal interface.
 // todo: change to deliver []byte directly, and agg developer choose how to use the []byte.

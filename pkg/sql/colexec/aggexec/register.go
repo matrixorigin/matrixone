@@ -292,3 +292,66 @@ func MakeFlexibleAggInfo(id int64, acceptNull bool, setNullForEmptyGroup bool) F
 		setNullForEmptyGroup: setNullForEmptyGroup,
 	}
 }
+
+type SingleColumnAggInformation struct {
+	id                   int64
+	arg                  types.Type
+	ret                  func(p []types.Type) types.Type
+	acceptNull           bool
+	setNullForEmptyGroup bool
+}
+
+type SingleAggImplementation1d[from, to types.FixedSizeTExceptStrType] struct {
+	SingleColumnAggInformation
+	generator func() SingleAggFromFixedRetFixed[from, to]
+	fill      SingleAggFill1[from, to]
+	fillNull  SingleAggFillNull1[from, to]
+	fills     SingleAggFills1[from, to]
+	merge     SingleAggMerge1[from, to]
+	flush     SingleAggFlush1[from, to]
+}
+
+func MakeSingleColumnAggInformation(
+	id int64, paramType types.Type, getRetType func(p []types.Type) types.Type,
+	acceptNull bool, setNullForEmptyGroup bool) SingleColumnAggInformation {
+	return SingleColumnAggInformation{
+		id:                   id,
+		arg:                  paramType,
+		ret:                  getRetType,
+		acceptNull:           acceptNull,
+		setNullForEmptyGroup: setNullForEmptyGroup,
+	}
+}
+
+func MakeSingleAgg1RegisteredInfo[from, to types.FixedSizeTExceptStrType](
+	info SingleColumnAggInformation,
+	impl func() SingleAggFromFixedRetFixed[from, to],
+	fill SingleAggFill1[from, to],
+	fillNull SingleAggFillNull1[from, to],
+	fills SingleAggFills1[from, to],
+	merge SingleAggMerge1[from, to],
+	flush SingleAggFlush1[from, to],
+) SingleAggImplementation1d[from, to] {
+
+	registeredInfo1 := SingleAggImplementation1d[from, to]{
+		SingleColumnAggInformation: info,
+		generator:                  impl,
+		fill:                       fill,
+		fillNull:                   fillNull,
+		fills:                      fills,
+		merge:                      merge,
+		flush:                      flush,
+	}
+	if registeredInfo1.fillNull == nil {
+		registeredInfo1.fillNull = SingleAggDoNothingFill1[from, to]
+	}
+	if registeredInfo1.flush == nil {
+		registeredInfo1.flush = SingleAggDoNothingFlush1[from, to]
+	}
+	return registeredInfo1
+}
+
+func RegisterSingleAggFromFixedToFixed[from, to types.FixedSizeTExceptStrType](
+	info SingleAggImplementation1d[from, to]) {
+	return
+}
