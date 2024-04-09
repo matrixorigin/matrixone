@@ -15,7 +15,9 @@
 package function
 
 import (
+	"bytes"
 	"context"
+	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"go.uber.org/zap"
 	"strconv"
@@ -215,7 +217,19 @@ func MoTableSize(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 			dbo, err = e.Database(ctx, dbStr, txn)
 			if err != nil {
 				if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
-					return moerr.NewInvalidArgNoCtx("db not found when mo_table_size", dbStr)
+					var buf bytes.Buffer
+					for j := uint64(0); j < uint64(length); j++ {
+						db2, _ := dbs.GetStrValue(i)
+						tbl2, _ := tbls.GetStrValue(i)
+
+						dbStr2 := functionUtil.QuickBytesToStr(db2)
+						tblStr2 := functionUtil.QuickBytesToStr(tbl2)
+
+						buf.WriteString(fmt.Sprintf("%s-%s; ", dbStr2, tblStr2))
+					}
+
+					return moerr.NewInvalidArgNoCtx("db not found when mo_table_size",
+						fmt.Sprintf("%s-%s, extra: %s", dbStr, tblStr, buf.String()))
 				}
 				return err
 			}
