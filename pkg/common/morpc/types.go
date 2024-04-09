@@ -66,18 +66,14 @@ type RPCMessage struct {
 	Ctx    context.Context
 	Cancel context.CancelFunc
 	// Message raw rpc message
-	Message Message
-
-	oneWay         bool
-	internal       bool
-	stream         bool
-	streamSequence uint32
-	createAt       time.Time
+	Message  Message
+	opts     WriteOptions
+	createAt time.Time
 }
 
 // InternalMessage returns true means the rpc message is the internal message in morpc.
 func (m RPCMessage) InternalMessage() bool {
-	return m.internal
+	return m.opts.internal
 }
 
 // RPCClient morpc is not a normal remote method call, rather it is a message-based asynchronous
@@ -86,7 +82,7 @@ func (m RPCMessage) InternalMessage() bool {
 type RPCClient interface {
 	// Send send a request message to the corresponding server and return a Future to get the
 	// response message.
-	Send(ctx context.Context, backend string, request Message) (*Future, error)
+	Send(ctx context.Context, backend string, request Message, opts WriteOptions) (*Future, error)
 	// NewStream create a stream used to asynchronous stream of sending and receiving messages.
 	// If the underlying connection is reset during the duration of the stream, then the stream will
 	// be closed.
@@ -104,9 +100,7 @@ type ClientSession interface {
 	// Close close the client session
 	Close() error
 	// Write writing the response message to the client.
-	Write(ctx context.Context, response Message) error
-	// AsyncWrite only put message into write queue, and return immediately.
-	AsyncWrite(response Message) error
+	Write(ctx context.Context, response Message, opts WriteOptions) error
 	// CreateCache create a message cache using cache ID. Cache will removed if
 	// context is done.
 	CreateCache(ctx context.Context, cacheID uint64) (MessageCache, error)
@@ -176,9 +170,7 @@ type BackendFactory interface {
 type Backend interface {
 	// Send send the request for future to the corresponding backend.
 	// moerr.ErrBackendClosed returned if backend is closed.
-	Send(ctx context.Context, request Message) (*Future, error)
-	// SendInternal is similar to Send, but perform on internal message
-	SendInternal(ctx context.Context, request Message) (*Future, error)
+	Send(ctx context.Context, request Message, opts WriteOptions) (*Future, error)
 	// NewStream create a stream used to asynchronous stream of sending and receiving messages.
 	// If the underlying connection is reset during the duration of the stream, then the stream
 	// will be closed.
@@ -204,13 +196,13 @@ type Stream interface {
 	// stream ID as the message ID
 	ID() uint64
 	// Send send message to stream
-	Send(ctx context.Context, request Message) error
+	Send(ctx context.Context, request Message, opts WriteOptions) error
 	// Receive returns a channel to read stream message from server. If nil is received, the receive
 	// loop needs to exit. In any case, Stream.Close needs to be called.
 	Receive() (chan Message, error)
 	Resume(ctx context.Context) error
-	// Close close the stream. If closeConn is true, the underlying connection will be closed.
-	Close(closeConn bool) error
+	// Close close the stream.
+	Close() error
 }
 
 // ClientOption client options for create client
@@ -266,4 +258,35 @@ type MessagePool[REQ, RESP MethodBasedMessage] interface {
 
 	AcquireResponse() RESP
 	ReleaseResponse(RESP)
+}
+
+type WriteOptions struct {
+	async          bool
+	chunk          bool
+	lastChunk      bool
+	internal       bool
+	stream         bool
+	streamSequence uint32
+}
+
+func (opts WriteOptions) Async() WriteOptions {
+	opts.async = true
+	return opts
+}
+
+func (opts WriteOptions) Chunk(last bool) WriteOptions {
+	opts.chunk = true
+	opts.lastChunk = last
+	return opts
+}
+
+func (opts WriteOptions) Internal() WriteOptions {
+	opts.internal = true
+	return opts
+}
+
+func (opts WriteOptions) Stream(sequence uint32) WriteOptions {
+	opts.stream = true
+	opts.streamSequence = sequence
+	return opts
 }

@@ -167,7 +167,7 @@ func (s *handler[REQ, RESP]) Handle(
 func (s *handler[REQ, RESP]) onMessage(
 	ctx context.Context,
 	request RPCMessage,
-	sequence uint64,
+	_ uint64,
 	cs ClientSession) error {
 	ctx, span := trace.Debug(ctx, "lockservice.server.handle")
 	defer span.End()
@@ -181,7 +181,7 @@ func (s *handler[REQ, RESP]) onMessage(
 	handlerCtx, ok := s.getHandler(ctx, req, resp)
 	if !ok {
 		s.pool.ReleaseRequest(req)
-		return cs.Write(ctx, resp)
+		return cs.Write(ctx, resp, WriteOptions{})
 	}
 
 	fn := func(request RPCMessage) error {
@@ -194,7 +194,7 @@ func (s *handler[REQ, RESP]) onMessage(
 
 		defer s.pool.ReleaseRequest(req)
 		handlerCtx.call(ctx, req, resp)
-		return cs.Write(ctx, resp)
+		return cs.Write(ctx, resp, WriteOptions{})
 	}
 
 	if handlerCtx.async {

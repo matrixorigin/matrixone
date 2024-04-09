@@ -64,15 +64,17 @@ func (opts StreamOptions) controlEnabled() bool {
 	return opts.feature&featureEnableControl != 0
 }
 
-func newStreamRegister(opts StreamOptions) *streamControl {
+func newStreamRegister(id uint64, opts StreamOptions) *streamControl {
 	return &streamControl{
+		id:      id,
 		ctlType: registerType,
 		opts:    opts,
 	}
 }
 
-func newResumeStream() *streamControl {
+func newResumeStream(id uint64) *streamControl {
 	return &streamControl{
+		id:      id,
 		ctlType: resumeType,
 	}
 }

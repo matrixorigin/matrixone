@@ -260,10 +260,10 @@ func TestCloseIdleBackends(t *testing.T) {
 	go func() {
 		ctx, cancel := context.WithTimeout(context.TODO(), time.Second*10)
 		defer cancel()
-		st, err := b2.NewStream(false)
+		st, err := b2.NewStream(DefaultStreamOptions())
 		assert.NoError(t, err)
 		for {
-			assert.NoError(t, st.Send(ctx, newTestMessage(1)))
+			assert.NoError(t, st.Send(ctx, newTestMessage(1), WriteOptions{}))
 			time.Sleep(time.Millisecond * 10)
 		}
 	}()

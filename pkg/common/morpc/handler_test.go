@@ -54,7 +54,7 @@ func TestRPCSend(t *testing.T) {
 			defer cancel()
 
 			for i := uint32(0); i <= 2; i++ {
-				f, err := c.Send(ctx, addr, &testMethodBasedMessage{method: i})
+				f, err := c.Send(ctx, addr, &testMethodBasedMessage{method: i}, WriteOptions{})
 				require.NoError(t, err)
 				defer f.Close()
 				v, err := f.Get()
@@ -91,7 +91,7 @@ func TestRequestCanBeFilter(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*100)
 			defer cancel()
 
-			f, err := c.Send(ctx, addr, &testMethodBasedMessage{method: 1})
+			f, err := c.Send(ctx, addr, &testMethodBasedMessage{method: 1}, WriteOptions{})
 			require.NoError(t, err)
 			defer f.Close()
 			_, err = f.Get()

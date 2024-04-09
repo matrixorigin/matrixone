@@ -266,8 +266,8 @@ func (c *baseCodec) Encode(data interface{}, out *buf.ByteBuf, conn io.Writer) e
 	totalSize += n
 
 	// 2.5 streaming message
-	if msg.stream {
-		out.WriteUint32(msg.streamSequence)
+	if msg.opts.stream {
+		out.WriteUint32(msg.opts.streamSequence)
 		totalSize += 4
 	}
 
@@ -370,10 +370,10 @@ func (c *baseCodec) getFlag(msg RPCMessage) byte {
 	if _, ok := msg.Message.(PayloadMessage); ok {
 		flag |= flagHashPayload
 	}
-	if msg.stream {
+	if msg.opts.stream {
 		flag |= flagStreamingMessage
 	}
-	if msg.internal {
+	if msg.opts.internal {
 		if m, ok := msg.Message.(*flagOnlyMessage); ok {
 			flag |= m.flag
 		} else if _, ok := msg.Message.(*streamControl); ok {
@@ -598,13 +598,13 @@ func (c *baseCodec) readFlag(msg *RPCMessage, data []byte, offset int) (byte, in
 	flag := data[offset]
 	if flag&flagPing != 0 {
 		msg.Message = &flagOnlyMessage{flag: flagPing}
-		msg.internal = true
+		msg.opts.internal = true
 	} else if flag&flagPong != 0 {
 		msg.Message = &flagOnlyMessage{flag: flagPong}
-		msg.internal = true
+		msg.opts.internal = true
 	} else if flag&flagStreamingControlMessage != 0 {
 		msg.Message = &streamControl{}
-		msg.internal = true
+		msg.opts.internal = true
 	} else {
 		msg.Message = c.messageFactory()
 	}
@@ -631,8 +631,8 @@ func readStreaming(flag byte, msg *RPCMessage, data []byte, offset int) int {
 	if flag&flagStreamingMessage == 0 {
 		return 0
 	}
-	msg.stream = true
-	msg.streamSequence = buf.Byte2Uint32(data[offset:])
+	msg.opts.stream = true
+	msg.opts.streamSequence = buf.Byte2Uint32(data[offset:])
 	return 4
 }
 

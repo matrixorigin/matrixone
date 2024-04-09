@@ -37,10 +37,10 @@ func (m RPCMessage) Timeout() bool {
 
 // GetTimeoutFromContext returns the timeout duration from context.
 func (m RPCMessage) GetTimeoutFromContext() (time.Duration, error) {
-	if m.internal {
+	if m.opts.internal {
 		return internalTimeout, nil
 	}
-	if m.oneWay {
+	if m.opts.async {
 		return oneWayTimeout, nil
 	}
 

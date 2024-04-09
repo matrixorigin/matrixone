@@ -180,7 +180,12 @@ func (c *client) maybeInitBackends() error {
 	return nil
 }
 
-func (c *client) Send(ctx context.Context, backend string, request Message) (*Future, error) {
+func (c *client) Send(
+	ctx context.Context,
+	backend string,
+	request Message,
+	opts WriteOptions,
+) (*Future, error) {
 	if backend == "" {
 		return nil, moerr.NewBackendCannotConnectNoCtx()
 	}
@@ -194,7 +199,7 @@ func (c *client) Send(ctx context.Context, backend string, request Message) (*Fu
 			return nil, err
 		}
 
-		f, err := b.Send(ctx, request)
+		f, err := b.Send(ctx, request, opts)
 		if err != nil && err == backendClosed {
 			continue
 		}
@@ -230,7 +235,10 @@ func (c *client) Ping(ctx context.Context, backend string) error {
 			return err
 		}
 
-		f, err := b.SendInternal(ctx, &flagOnlyMessage{flag: flagPing})
+		f, err := b.Send(
+			ctx,
+			&flagOnlyMessage{flag: flagPing},
+			WriteOptions{}.Internal())
 		if err != nil {
 			if err == backendClosed {
 				continue

@@ -280,22 +280,12 @@ func (rb *remoteBackend) adjust() {
 		goetty.WithSessionLogger(rb.logger))
 }
 
-func (rb *remoteBackend) Send(ctx context.Context, request Message) (*Future, error) {
-	if ctx == nil {
-		panic("remoteBackend Send nil context")
-	}
-	return rb.send(ctx, request, false)
-}
-
-func (rb *remoteBackend) SendInternal(ctx context.Context, request Message) (*Future, error) {
-	if ctx == nil {
-		panic("remoteBackend SendInternal nil context")
-	}
-	return rb.send(ctx, request, true)
-}
-
-func (rb *remoteBackend) send(ctx context.Context, request Message, internal bool) (*Future, error) {
-	f := rb.getFuture(ctx, request, internal)
+func (rb *remoteBackend) Send(
+	ctx context.Context,
+	request Message,
+	opts WriteOptions,
+) (*Future, error) {
+	f := rb.getFuture(ctx, request, opts)
 	if err := rb.doSend(f); err != nil {
 		f.Close()
 		return nil, err
@@ -304,10 +294,14 @@ func (rb *remoteBackend) send(ctx context.Context, request Message, internal boo
 	return f, nil
 }
 
-func (rb *remoteBackend) getFuture(ctx context.Context, request Message, internal bool) *Future {
+func (rb *remoteBackend) getFuture(
+	ctx context.Context,
+	request Message,
+	opts WriteOptions,
+) *Future {
 	request.SetID(rb.nextID())
 	f := rb.newFuture()
-	f.init(RPCMessage{Ctx: ctx, Message: request, internal: internal})
+	f.init(RPCMessage{Ctx: ctx, Message: request, opts: opts})
 	rb.addFuture(f)
 	return f
 }
@@ -341,9 +335,9 @@ func (rb *remoteBackend) NewStream(opts StreamOptions) (Stream, error) {
 	ctx, cancel := context.WithTimeout(context.TODO(), internalTimeout)
 	defer cancel()
 
-	err = st.send(ctx, newStreamRegister(opts), true)
+	err = st.Send(ctx, newStreamRegister(st.id, opts), WriteOptions{}.Internal())
 	if err != nil {
-		st.Close(opts.isExclusive())
+		st.Close()
 		return nil, err
 	}
 
@@ -623,7 +617,10 @@ func (rb *remoteBackend) fetch(messages []*Future, maxFetchCount int) ([]*Future
 
 	doHeartbeat := func() {
 		rb.lastPingTime = time.Now()
-		f := rb.getFuture(context.TODO(), &flagOnlyMessage{flag: flagPing}, true)
+		f := rb.getFuture(
+			context.TODO(),
+			&flagOnlyMessage{flag: flagPing},
+			WriteOptions{}.Internal())
 		// no need wait response, close immediately
 		f.Close()
 		messages = append(messages, f)
@@ -808,7 +805,7 @@ func (rb *remoteBackend) requestDone(
 			cb()
 		}
 
-		if !msg.internal &&
+		if !msg.opts.internal &&
 			response != nil &&
 			rb.options.freeResponse != nil {
 			rb.options.freeResponse(response)

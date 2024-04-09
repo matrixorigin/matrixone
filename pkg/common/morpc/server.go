@@ -199,6 +199,7 @@ func (s *server) onMessage(rs goetty.IOSession, value any, sequence uint64) erro
 		return err
 	}
 	request := value.(RPCMessage)
+	fmt.Printf("recv %+v\n", request.Message.DebugString())
 	s.metrics.inputBytesCounter.Add(float64(request.Message.Size()))
 	if ce := s.logger.Check(zap.DebugLevel, "received request"); ce != nil {
 		ce.Write(zap.Uint64("sequence", sequence),
@@ -217,12 +218,21 @@ func (s *server) onMessage(rs goetty.IOSession, value any, sequence uint64) erro
 	// get requestID here to avoid data race, because the request maybe released in handler
 	requestID := request.Message.GetID()
 
-	if request.stream {
+	if request.opts.stream {
 		cs.maybeCreateStream(requestID)
+
+		if !cs.validateStreamRequest(requestID, request.opts.streamSequence) {
+			s.logger.Error("failed to handle stream request",
+				zap.Uint32("last-sequence", cs.getStream(requestID).sequence.recv),
+				zap.Uint32("current-sequence", request.opts.streamSequence),
+				zap.String("client", rs.RemoteAddress()))
+			cs.cancelWrite()
+			return moerr.NewStreamClosedNoCtx()
+		}
 	}
 
 	// handle internal message
-	if request.internal {
+	if request.opts.internal {
 		if m, ok := request.Message.(*flagOnlyMessage); ok {
 			switch m.flag {
 			case flagPing:
@@ -230,12 +240,12 @@ func (s *server) onMessage(rs goetty.IOSession, value any, sequence uint64) erro
 				left, _ := request.GetTimeoutFromContext()
 				n := len(cs.c)
 				err := cs.WriteRPCMessage(RPCMessage{
-					Ctx:      request.Ctx,
-					internal: true,
+					Ctx: request.Ctx,
 					Message: &flagOnlyMessage{
 						flag: flagPong,
 						id:   m.id,
 					},
+					opts: WriteOptions{}.Internal(),
 				})
 				if err != nil {
 					failedAt := time.Now()
@@ -253,20 +263,14 @@ func (s *server) onMessage(rs goetty.IOSession, value any, sequence uint64) erro
 		} else if m, ok := request.Message.(*streamControl); ok {
 			switch m.ctlType {
 			case registerType:
-				cs.getStream(requestID).opts = m.opts
+				fmt.Printf("recv register\n")
+				cs.getStream(requestID).init(m.opts)
+				return nil
 			case resumeType:
+				cs.getStream(requestID).resume()
+				return nil
 			}
 		}
-	}
-
-	if request.stream &&
-		!cs.validateStreamRequest(requestID, request.streamSequence) {
-		s.logger.Error("failed to handle stream request",
-			zap.Uint32("last-sequence", cs.getStream(requestID).sequence.recv),
-			zap.Uint32("current-sequence", request.streamSequence),
-			zap.String("client", rs.RemoteAddress()))
-		cs.cancelWrite()
-		return moerr.NewStreamClosedNoCtx()
 	}
 
 	if err := s.handler(request.Ctx, request, sequence, cs); err != nil {
@@ -361,7 +365,7 @@ func (s *server) startWriteLoop(cs *clientSession) error {
 					timeout := time.Duration(0)
 					for _, f := range responses {
 						s.metrics.writeLatencyDurationHistogram.Observe(start.Sub(f.send.createAt).Seconds())
-						if f.oneWay {
+						if f.send.opts.async {
 							needClose = append(needClose, f)
 						}
 
@@ -509,20 +513,12 @@ func (s *server) getSessionCount() int {
 }
 
 type clientSession struct {
-	metrics       *serverMetrics
-	codec         Codec
-	conn          goetty.IOSession
-	c             chan *Future
-	newFutureFunc func() *Future
-
-	streams sync.Map // stream id -> *streamPeer
-
-	// // streaming id -> last received sequence, no concurrent, access in io goroutine
-	// receivedStreamSequences map[uint64]uint32
-	// // streaming id -> last sent sequence, multi-stream access in multi-goroutines if
-	// // the tcp connection is shared. But no concurrent in one stream.
-	// sentStreamSequences sync.Map
-
+	metrics               *serverMetrics
+	codec                 Codec
+	conn                  goetty.IOSession
+	c                     chan *Future
+	newFutureFunc         func() *Future
+	streams               sync.Map // stream id -> *streamPeer
 	cancel                context.CancelFunc
 	ctx                   context.Context
 	checkTimeoutCacheOnce sync.Once
@@ -566,6 +562,7 @@ func (cs *clientSession) Close() error {
 	}
 	close(cs.closedC)
 	cs.cleanSend()
+	cs.cleanStreams()
 	close(cs.c)
 	cs.mu.closed = true
 	for _, c := range cs.mu.caches {
@@ -590,36 +587,38 @@ func (cs *clientSession) cleanSend() {
 	}
 }
 
+func (cs *clientSession) cleanStreams() {
+	cs.streams.Range(func(key, value any) bool {
+		st := value.(*streamPeer)
+		st.close()
+		return true
+	})
+}
+
 func (cs *clientSession) WriteRPCMessage(msg RPCMessage) error {
 	f, err := cs.send(msg)
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	if msg.opts.async {
+		return nil
+	}
 
+	defer f.Close()
 	// stream only wait send completed
 	return f.waitSendCompleted()
 }
 
 func (cs *clientSession) Write(
 	ctx context.Context,
-	response Message) error {
-	if ctx == nil {
-		panic("Write nil context")
-	}
+	response Message,
+	opts WriteOptions,
+) error {
 	return cs.WriteRPCMessage(RPCMessage{
 		Ctx:     ctx,
 		Message: response,
+		opts:    opts,
 	})
-}
-
-func (cs *clientSession) AsyncWrite(response Message) error {
-	_, err := cs.send(RPCMessage{
-		Ctx:     context.Background(),
-		Message: response,
-		oneWay:  true,
-	})
-	return err
 }
 
 func (cs *clientSession) send(msg RPCMessage) (*Future, error) {
@@ -641,13 +640,18 @@ func (cs *clientSession) send(msg RPCMessage) (*Future, error) {
 	st := cs.getStream(id)
 	if st != nil {
 		st.sequence.sent++
-		msg.stream = true
-		msg.streamSequence = st.sequence.sent
+		msg.opts.stream = true
+		msg.opts.streamSequence = st.sequence.sent
+
+		err := cs.getStream(id).wait(msg)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	f := cs.newFutureFunc()
 	f.init(msg)
-	if !f.oneWay {
+	if !f.send.opts.async {
 		f.ref()
 	}
 	cs.c <- f
@@ -688,7 +692,7 @@ func (cs *clientSession) cancelWrite() {
 func (cs *clientSession) maybeCreateStream(id uint64) {
 	st := cs.getStream(id)
 	if st == nil {
-		st = &streamPeer{}
+		st = newStreamPeer()
 		cs.streams.Store(id, st)
 	}
 }
