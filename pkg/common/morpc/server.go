@@ -217,14 +217,8 @@ func (s *server) onMessage(rs goetty.IOSession, value any, sequence uint64) erro
 	// get requestID here to avoid data race, because the request maybe released in handler
 	requestID := request.Message.GetID()
 
-	if request.stream &&
-		!cs.validateStreamRequest(requestID, request.streamSequence) {
-		s.logger.Error("failed to handle stream request",
-			zap.Uint32("last-sequence", cs.receivedStreamSequences[requestID]),
-			zap.Uint32("current-sequence", request.streamSequence),
-			zap.String("client", rs.RemoteAddress()))
-		cs.cancelWrite()
-		return moerr.NewStreamClosedNoCtx()
+	if request.stream {
+		cs.maybeCreateStream(requestID)
 	}
 
 	// handle internal message
@@ -257,7 +251,22 @@ func (s *server) onMessage(rs goetty.IOSession, value any, sequence uint64) erro
 				panic(fmt.Sprintf("invalid internal message, flag %d", m.flag))
 			}
 		} else if m, ok := request.Message.(*streamControl); ok {
+			switch m.ctlType {
+			case registerType:
+				cs.getStream(requestID).opts = m.opts
+			case resumeType:
+			}
 		}
+	}
+
+	if request.stream &&
+		!cs.validateStreamRequest(requestID, request.streamSequence) {
+		s.logger.Error("failed to handle stream request",
+			zap.Uint32("last-sequence", cs.getStream(requestID).sequence.recv),
+			zap.Uint32("current-sequence", request.streamSequence),
+			zap.String("client", rs.RemoteAddress()))
+		cs.cancelWrite()
+		return moerr.NewStreamClosedNoCtx()
 	}
 
 	if err := s.handler(request.Ctx, request, sequence, cs); err != nil {
@@ -505,11 +514,15 @@ type clientSession struct {
 	conn          goetty.IOSession
 	c             chan *Future
 	newFutureFunc func() *Future
-	// streaming id -> last received sequence, no concurrent, access in io goroutine
-	receivedStreamSequences map[uint64]uint32
-	// streaming id -> last sent sequence, multi-stream access in multi-goroutines if
-	// the tcp connection is shared. But no concurrent in one stream.
-	sentStreamSequences   sync.Map
+
+	streams sync.Map // stream id -> *streamPeer
+
+	// // streaming id -> last received sequence, no concurrent, access in io goroutine
+	// receivedStreamSequences map[uint64]uint32
+	// // streaming id -> last sent sequence, multi-stream access in multi-goroutines if
+	// // the tcp connection is shared. But no concurrent in one stream.
+	// sentStreamSequences sync.Map
+
 	cancel                context.CancelFunc
 	ctx                   context.Context
 	checkTimeoutCacheOnce sync.Once
@@ -528,15 +541,14 @@ func newClientSession(
 	newFutureFunc func() *Future) *clientSession {
 	ctx, cancel := context.WithCancel(context.Background())
 	cs := &clientSession{
-		metrics:                 metrics,
-		closedC:                 make(chan struct{}),
-		codec:                   codec,
-		c:                       make(chan *Future, 1024),
-		receivedStreamSequences: make(map[uint64]uint32),
-		conn:                    conn,
-		ctx:                     ctx,
-		cancel:                  cancel,
-		newFutureFunc:           newFutureFunc,
+		metrics:       metrics,
+		closedC:       make(chan struct{}),
+		codec:         codec,
+		c:             make(chan *Future, 1024),
+		conn:          conn,
+		ctx:           ctx,
+		cancel:        cancel,
+		newFutureFunc: newFutureFunc,
 	}
 	cs.mu.caches = make(map[uint64]cacheWithContext)
 	return cs
@@ -626,11 +638,11 @@ func (cs *clientSession) send(msg RPCMessage) (*Future, error) {
 	}
 
 	id := response.GetID()
-	if v, ok := cs.sentStreamSequences.Load(id); ok {
-		seq := v.(uint32) + 1
-		cs.sentStreamSequences.Store(id, seq)
+	st := cs.getStream(id)
+	if st != nil {
+		st.sequence.sent++
 		msg.stream = true
-		msg.streamSequence = seq
+		msg.streamSequence = st.sequence.sent
 	}
 
 	f := cs.newFutureFunc()
@@ -673,17 +685,24 @@ func (cs *clientSession) cancelWrite() {
 	cs.cancel()
 }
 
+func (cs *clientSession) maybeCreateStream(id uint64) {
+	st := cs.getStream(id)
+	if st == nil {
+		st = &streamPeer{}
+		cs.streams.Store(id, st)
+	}
+}
+
 func (cs *clientSession) validateStreamRequest(
 	id uint64,
-	sequence uint32) bool {
-	expectSequence := cs.receivedStreamSequences[id] + 1
+	sequence uint32,
+) bool {
+	st := cs.getStream(id)
+	expectSequence := st.sequence.recv + 1
 	if sequence != expectSequence {
 		return false
 	}
-	cs.receivedStreamSequences[id] = sequence
-	if sequence == 1 {
-		cs.sentStreamSequences.Store(id, uint32(0))
-	}
+	st.sequence.recv = sequence
 	return true
 }
 
@@ -731,6 +750,14 @@ func (cs *clientSession) GetCache(cacheID uint64) (MessageCache, error) {
 		return c.cache, nil
 	}
 	return nil, nil
+}
+
+func (cs *clientSession) getStream(id uint64) *streamPeer {
+	v, ok := cs.streams.Load(id)
+	if !ok {
+		return nil
+	}
+	return v.(*streamPeer)
 }
 
 type cacheWithContext struct {
