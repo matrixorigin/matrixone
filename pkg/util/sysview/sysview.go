@@ -196,7 +196,9 @@ var (
 			"att_comment as COLUMN_COMMENT,"+
 			"cast('' as varchar(500)) as GENERATION_EXPRESSION,"+
 			"if(true, NULL, 0) as SRS_ID "+
-			"from mo_catalog.mo_columns where att_relname!='%s' and att_relname not like '%s' and attname != '%s'", catalog.MOAutoIncrTable, catalog.PrefixPriColName+"%", catalog.Row_ID),
+			"from mo_catalog.mo_columns "+
+			"where account_id = current_account_id() and att_relname!='%s' and att_relname not like '%s' and attname != '%s'", catalog.MOAutoIncrTable, catalog.PrefixPriColName+"%", catalog.Row_ID),
+
 		"CREATE TABLE IF NOT EXISTS PROFILING (" +
 			"QUERY_ID int NOT NULL DEFAULT '0'," +
 			"SEQ int NOT NULL DEFAULT '0'," +
@@ -217,7 +219,13 @@ var (
 			"SOURCE_FILE varchar(20) DEFAULT NULL," +
 			"SOURCE_LINE int DEFAULT NULL" +
 			");",
-		"CREATE VIEW IF NOT EXISTS `PROCESSLIST` AS SELECT * FROM PROCESSLIST() A;",
+
+		fmt.Sprintf("CREATE VIEW IF NOT EXISTS %s.PROCESSLIST AS "+
+			"select node_id, conn_id, session_id, account, user, host, db, "+
+			"session_start, command, info, txn_id, statement_id, statement_type, "+
+			"query_type, sql_source_type, query_start, client_host, role, proxy_host "+
+			"from PROCESSLIST() A", InformationDBConst),
+
 		"CREATE TABLE IF NOT EXISTS USER_PRIVILEGES (" +
 			"GRANTEE varchar(292) NOT NULL DEFAULT ''," +
 			"TABLE_CATALOG varchar(512) NOT NULL DEFAULT ''," +
@@ -293,7 +301,7 @@ var (
 			"FROM mo_catalog.mo_tables tbl "+
 			"WHERE tbl.account_id = current_account_id() and tbl.relname not like '%s' and tbl.relkind != '%s';", catalog.IndexTableNamePrefix+"%", catalog.SystemPartitionRel),
 
-		"CREATE VIEW IF NOT EXISTS `PARTITIONS` AS " +
+		"CREATE VIEW IF NOT EXISTS information_schema.`PARTITIONS` AS " +
 			"SELECT " +
 			"'def' AS `TABLE_CATALOG`," +
 			"`tbl`.`reldatabase` AS `TABLE_SCHEMA`," +
@@ -332,7 +340,7 @@ var (
 			"NULL AS `TABLESPACE_NAME` " +
 			"FROM `mo_catalog`.`mo_tables` `tbl` LEFT JOIN `mo_catalog`.`mo_table_partitions` `part` " +
 			"ON `part`.`table_id` = `tbl`.`rel_id` " +
-			"WHERE `tbl`.`partitioned` = 1;",
+			"WHERE `tbl`.`account_id` = current_account_id() and `tbl`.`partitioned` = 1;",
 
 		"CREATE VIEW IF NOT EXISTS VIEWS AS " +
 			"SELECT 'def' AS `TABLE_CATALOG`," +

@@ -2920,6 +2920,7 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 	ses.SetQueryInProgress(true)
 	ses.SetQueryStart(time.Now())
 	ses.SetQueryInExecute(true)
+	ses.SetSql(sql)
 	defer ses.SetQueryEnd(time.Now())
 	defer ses.SetQueryInProgress(false)
 

@@ -38,6 +38,8 @@ func ParseDataTypeToColType(dataType string) (table.ColType, error) {
 		return table.TUint32, nil
 	case strings.EqualFold(dataTypeStr, "int"):
 		return table.TUint32, nil
+	case strings.EqualFold(dataTypeStr, "float"):
+		return table.TFloat32, nil
 	case strings.EqualFold(dataTypeStr, "double"):
 		return table.TFloat64, nil
 	case strings.EqualFold(dataTypeStr, "json"):

@@ -182,6 +182,11 @@ func (u *Upgrader) Upgrade(ctx context.Context) error {
 		errors = append(errors, errs...)
 	}
 
+	if errs := u.UpgradeMoIndexesSchema(ctx, allTenants); len(errs) > 0 {
+		logutil.Errorf("upgrade mo_indexes failed")
+		errors = append(errors, errs...)
+	}
+
 	if errs := u.UpgradeNewTableColumn(ctx); len(errs) > 0 {
 		logutil.Errorf("upgrade new table column failed")
 		errors = append(errors, errs...)
@@ -194,11 +199,6 @@ func (u *Upgrader) Upgrade(ctx context.Context) error {
 
 	if errs := u.UpgradeNewView(ctx, allTenants); len(errs) > 0 {
 		logutil.Errorf("upgrade new system view failed")
-		errors = append(errors, errs...)
-	}
-
-	if errs := u.UpgradeMoIndexesSchema(ctx, allTenants); len(errs) > 0 {
-		logutil.Errorf("upgrade mo_indexes failed")
 		errors = append(errors, errs...)
 	}
 
@@ -240,7 +240,6 @@ func (u *Upgrader) UpgradeNewViewColumn(ctx context.Context) []error {
 			continue
 		}
 
-		//
 		stmt := []string{
 			"begin;",
 			appendSemicolon(tbl.CreateTableSql), //drop view
@@ -639,31 +638,20 @@ func (u *Upgrader) upgradeWithPreDropFunc(ctx context.Context, tbl *table.Table,
 	}
 
 	if !isValid {
-		/*
-			stmt := []string{
-				"begin;",
-				appendSemicolon(fmt.Sprintf("drop view if exists `%s`.`%s`", tbl.Database, tbl.Table)), //drop existing view definitions
-				appendSemicolon(tbl.CreateViewSql), //recreate view
-				"commit;",
-			}
-			// alter view
-			upgradeSQL := strings.Join(stmt, "\n")
-
-			// Execute upgrade SQL
-			if err = exec.Exec(ctx, upgradeSQL, ie.NewOptsBuilder().Finish()); err != nil {
-				return err
-			}
-		*/
-		// Delete existing view definitions
-		if err = exec.Exec(ctx, fmt.Sprintf("drop view if exists `%s`.`%s`", tbl.Database, tbl.Table), opts.Finish()); err != nil {
-			return err
+		stmt := []string{
+			"begin;",
+			appendSemicolon(tbl.CreateTableSql), //drop view
+			appendSemicolon(tbl.CreateViewSql),  //create view
+			"commit;",
 		}
+
+		//alter view
+		upgradeSQL := strings.Join(stmt, "\n")
 
 		// Execute upgrade SQL
-		if err := exec.Exec(ctx, tbl.CreateViewSql, opts.Finish()); err != nil {
+		if err = exec.Exec(ctx, upgradeSQL, opts.Finish()); err != nil {
 			return err
 		}
-
 	}
 	return nil
 }
