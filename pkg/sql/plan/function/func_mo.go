@@ -18,8 +18,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"go.uber.org/zap"
 	"strconv"
 	"strings"
 
@@ -29,10 +27,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionUtil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"go.uber.org/zap"
 )
 
 const (
@@ -346,7 +346,7 @@ func indexesTableSize(ctx context.Context, db engine.Database, rel engine.Relati
 	// this is a quick fix for the issue of the indexTableName is empty.
 	// the empty indexTableName causes the `SQL parser err: table "" does not exist` err and
 	// then the mo_table_size call will fail.
-	// this fix does not fix the issue but only to avoid the failure caused by it.
+	// this fix does not fix the issue but only avoids the failure caused by it.
 	err = nil
 	return totalSize, err
 }
