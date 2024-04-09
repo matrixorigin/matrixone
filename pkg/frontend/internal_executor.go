@@ -63,7 +63,7 @@ func applyOverride(sess *Session, opts ie.SessionOverrideOptions) {
 
 }
 
-type internalMiniExec interface {
+type InternalMiniExec interface {
 	doComQuery(requestCtx context.Context, input *UserInput) error
 	SetSession(*Session)
 }
@@ -71,7 +71,7 @@ type internalMiniExec interface {
 type internalExecutor struct {
 	sync.Mutex
 	proto        *internalProtocol
-	executor     internalMiniExec // MySqlCmdExecutor struct impls miniExec
+	executor     InternalMiniExec // MySqlCmdExecutor struct impls miniExec
 	pu           *config.ParameterUnit
 	baseSessOpts ie.SessionOverrideOptions
 	aicm         *defines.AutoIncrCacheManager
@@ -81,7 +81,7 @@ func NewInternalExecutor(pu *config.ParameterUnit, aicm *defines.AutoIncrCacheMa
 	return newIe(pu, NewMysqlCmdExecutor(), aicm)
 }
 
-func newIe(pu *config.ParameterUnit, inner internalMiniExec, aicm *defines.AutoIncrCacheManager) *internalExecutor {
+func newIe(pu *config.ParameterUnit, inner InternalMiniExec, aicm *defines.AutoIncrCacheManager) *internalExecutor {
 	proto := &internalProtocol{result: &internalExecResult{}}
 	ret := &internalExecutor{
 		proto:        proto,
@@ -161,6 +161,33 @@ func (ie *internalExecutor) Exec(ctx context.Context, sql string, opts ie.Sessio
 	ie.executor.SetSession(sess)
 	ie.proto.stashResult = false
 	return ie.executor.doComQuery(ctx, &UserInput{sql: sql})
+}
+
+func (ie *internalExecutor) ExecTxn(ctx context.Context, sqls []string, opts ie.SessionOverrideOptions) error {
+	ie.Lock()
+	defer ie.Unlock()
+	sess := ie.newCmdSession(ctx, opts)
+
+	defer func() {
+		sess.Close()
+		ie.executor.SetSession(nil)
+	}()
+	ie.executor.SetSession(sess)
+	ie.proto.stashResult = false
+
+	var err error
+	for _, sql := range sqls {
+		err = ie.executor.doComQuery(ctx, &UserInput{sql: sql})
+		if err != nil {
+			logutil.Errorf("internal sql executor error: %v", err)
+			break
+		}
+	}
+
+	if err != nil {
+		return ie.executor.doComQuery(ctx, &UserInput{sql: "rollback"})
+	}
+	return ie.executor.doComQuery(ctx, &UserInput{sql: "commit"})
 }
 
 func (ie *internalExecutor) Query(ctx context.Context, sql string, opts ie.SessionOverrideOptions) ie.InternalExecResult {
