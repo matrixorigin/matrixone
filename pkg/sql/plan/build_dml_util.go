@@ -17,6 +17,8 @@ package plan
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/txn/trace"
+	"github.com/matrixorigin/matrixone/pkg/util/sysview"
 	"strings"
 	"sync"
 
@@ -4102,12 +4104,13 @@ func getSqlForCheckHasDBRefersTo(db string) string {
 // define fk refers to these databases.
 // for simplicity of the design
 var fkBannedDatabase = map[string]bool{
-	catalog.MO_CATALOG:        true,
-	catalog.MO_SYSTEM:         true,
-	catalog.MO_SYSTEM_METRICS: true,
-	catalog.MOTaskDB:          true,
-	"information_schema":      true,
-	"mysql":                   true,
+	catalog.MO_CATALOG:         true,
+	catalog.MO_SYSTEM:          true,
+	catalog.MO_SYSTEM_METRICS:  true,
+	catalog.MOTaskDB:           true,
+	sysview.InformationDBConst: true,
+	sysview.MysqlDBConst:       true,
+	trace.DebugDB:              true,
 }
 
 // IsFkBannedDatabase denotes the database should not have any
