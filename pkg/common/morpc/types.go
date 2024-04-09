@@ -90,7 +90,7 @@ type RPCClient interface {
 	// NewStream create a stream used to asynchronous stream of sending and receiving messages.
 	// If the underlying connection is reset during the duration of the stream, then the stream will
 	// be closed.
-	NewStream(backend string, lock bool) (Stream, error)
+	NewStream(backend string, opts StreamOptions) (Stream, error)
 	// Ping is used to check if the remote service is available. The remote service will reply with
 	// a pong when it receives the ping.
 	Ping(ctx context.Context, backend string) error
@@ -182,7 +182,7 @@ type Backend interface {
 	// NewStream create a stream used to asynchronous stream of sending and receiving messages.
 	// If the underlying connection is reset during the duration of the stream, then the stream
 	// will be closed.
-	NewStream(unlockAfterClose bool) (Stream, error)
+	NewStream(opts StreamOptions) (Stream, error)
 	// Close close the backend.
 	Close()
 	// Busy the backend receives a lot of requests concurrently during operation, but when the number
@@ -208,6 +208,7 @@ type Stream interface {
 	// Receive returns a channel to read stream message from server. If nil is received, the receive
 	// loop needs to exit. In any case, Stream.Close needs to be called.
 	Receive() (chan Message, error)
+	Resume(ctx context.Context) error
 	// Close close the stream. If closeConn is true, the underlying connection will be closed.
 	Close(closeConn bool) error
 }

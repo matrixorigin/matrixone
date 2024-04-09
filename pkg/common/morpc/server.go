@@ -256,6 +256,7 @@ func (s *server) onMessage(rs goetty.IOSession, value any, sequence uint64) erro
 			default:
 				panic(fmt.Sprintf("invalid internal message, flag %d", m.flag))
 			}
+		} else if m, ok := request.Message.(*streamControl); ok {
 		}
 	}
 

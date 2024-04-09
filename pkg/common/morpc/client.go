@@ -202,14 +202,17 @@ func (c *client) Send(ctx context.Context, backend string, request Message) (*Fu
 	}
 }
 
-func (c *client) NewStream(backend string, lock bool) (Stream, error) {
+func (c *client) NewStream(
+	backend string,
+	opts StreamOptions,
+) (Stream, error) {
 	for {
-		b, err := c.getBackend(backend, lock)
+		b, err := c.getBackend(backend, opts.isExclusive())
 		if err != nil {
 			return nil, err
 		}
 
-		st, err := b.NewStream(lock)
+		st, err := b.NewStream(opts)
 		if err != nil && err == backendClosed {
 			continue
 		}

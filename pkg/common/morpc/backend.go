@@ -314,21 +314,41 @@ func (rb *remoteBackend) getFuture(ctx context.Context, request Message, interna
 	return f
 }
 
-func (rb *remoteBackend) NewStream(unlockAfterClose bool) (Stream, error) {
-	rb.stateMu.RLock()
-	defer rb.stateMu.RUnlock()
+func (rb *remoteBackend) NewStream(opts StreamOptions) (Stream, error) {
+	st, err := func() (*stream, error) {
+		rb.stateMu.RLock()
+		defer rb.stateMu.RUnlock()
 
-	if rb.stateMu.state == stateStopped {
-		return nil, backendClosed
+		if rb.stateMu.state == stateStopped {
+			return nil, backendClosed
+		}
+
+		rb.mu.Lock()
+		defer rb.mu.Unlock()
+
+		st := rb.acquireStream()
+		st.init(rb.nextID(), opts)
+		rb.mu.activeStreams[st.ID()] = st
+		rb.active()
+		return st, nil
+	}()
+	if err != nil {
+		return nil, err
 	}
 
-	rb.mu.Lock()
-	defer rb.mu.Unlock()
+	if !opts.controlEnabled() {
+		return st, nil
+	}
 
-	st := rb.acquireStream()
-	st.init(rb.nextID(), unlockAfterClose)
-	rb.mu.activeStreams[st.ID()] = st
-	rb.active()
+	ctx, cancel := context.WithTimeout(context.TODO(), internalTimeout)
+	defer cancel()
+
+	err = st.send(ctx, newStreamRegister(opts), true)
+	if err != nil {
+		st.Close(opts.isExclusive())
+		return nil, err
+	}
+
 	return st, nil
 }
 
@@ -731,7 +751,7 @@ func (rb *remoteBackend) removeActiveStream(s *stream) {
 
 	delete(rb.mu.activeStreams, s.id)
 	delete(rb.mu.futures, s.id)
-	if s.unlockAfterClose {
+	if s.opts.isExclusive() {
 		rb.Unlock()
 	}
 	if len(s.c) > 0 {
@@ -986,15 +1006,15 @@ func (bf *goettyBasedBackendFactory) Create(
 }
 
 type stream struct {
-	rb               *remoteBackend
-	c                chan Message
-	sendFunc         func(*Future) error
-	activeFunc       func()
-	unregisterFunc   func(*stream)
-	newFutureFunc    func() *Future
-	unlockAfterClose bool
-	ctx              context.Context
-	cancel           context.CancelFunc
+	rb             *remoteBackend
+	c              chan Message
+	sendFunc       func(*Future) error
+	activeFunc     func()
+	unregisterFunc func(*stream)
+	newFutureFunc  func() *Future
+	opts           StreamOptions
+	ctx            context.Context
+	cancel         context.CancelFunc
 
 	// reset fields
 	id                   uint64
@@ -1028,9 +1048,12 @@ func newStream(
 	return s
 }
 
-func (s *stream) init(id uint64, unlockAfterClose bool) {
+func (s *stream) init(
+	id uint64,
+	opts StreamOptions,
+) {
 	s.id = id
-	s.unlockAfterClose = unlockAfterClose
+	s.opts = opts
 	s.sequence = 0
 	s.lastReceivedSequence = 0
 	s.mu.closed = false
@@ -1054,7 +1077,25 @@ func (s *stream) destroy() {
 	s.cancel()
 }
 
-func (s *stream) Send(ctx context.Context, request Message) error {
+func (s *stream) Send(
+	ctx context.Context,
+	request Message,
+) error {
+	return s.send(ctx, request, false)
+}
+
+func (s *stream) Resume(ctx context.Context) error {
+	if !s.opts.controlEnabled() {
+		return nil
+	}
+	return s.send(ctx, newResumeStream(), true)
+}
+
+func (s *stream) send(
+	ctx context.Context,
+	request Message,
+	internal bool,
+) error {
 	if s.id != request.GetID() {
 		panic("request.id != stream.id")
 	}
@@ -1074,7 +1115,7 @@ func (s *stream) Send(ctx context.Context, request Message) error {
 		return moerr.NewStreamClosedNoCtx()
 	}
 
-	err := s.doSendLocked(ctx, f, request)
+	err := s.doSendLocked(ctx, f, request, internal)
 	// unlock before future.close to avoid deadlock with future.Close
 	// 1. current goroutine:        stream.RLock
 	// 2. backend read goroutine:   cancelActiveStream -> backend.Lock
@@ -1092,13 +1133,16 @@ func (s *stream) Send(ctx context.Context, request Message) error {
 func (s *stream) doSendLocked(
 	ctx context.Context,
 	f *Future,
-	request Message) error {
+	request Message,
+	internal bool,
+) error {
 	s.sequence++
 	f.init(RPCMessage{
 		Ctx:            ctx,
 		Message:        request,
 		stream:         true,
 		streamSequence: s.sequence,
+		internal:       internal,
 	})
 
 	return s.sendFunc(f)

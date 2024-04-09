@@ -38,6 +38,7 @@ const (
 	flagStreamingMessage
 	flagPing
 	flagPong
+	flagStreamingControlMessage
 )
 
 var (
@@ -100,16 +101,16 @@ type messageCodec struct {
 
 // NewMessageCodec create message codec. The message encoding format consists of a message header and a message body.
 // Format:
-//  1. Size, 4 bytes, required. Inlucde header and body.
+//  1. Size, 4 bytes, required. Include header and body.
 //  2. Message header
 //     2.1. Flag, 1 byte, required.
-//     2.2. Checksum, 8 byte, optional. Set if has a checksun flag
+//     2.2. Checksum, 8 byte, optional. Set if has a checksum flag
 //     2.3. PayloadSize, 4 byte, optional. Set if the message is a morpc.PayloadMessage.
 //     2.4. Streaming sequence, 4 byte, optional. Set if the message is in a streaming.
 //     2.5. Custom headers, optional. Set if has custom header codecs
 //  3. Message body
 //     3.1. message body, required.
-//     3.2. payload, optional. Set if has paylad flag.
+//     3.2. payload, optional. Set if has payload flag.
 func NewMessageCodec(messageFactory func() Message, options ...CodecOption) Codec {
 	bc := &baseCodec{
 		messageFactory: messageFactory,
@@ -375,6 +376,8 @@ func (c *baseCodec) getFlag(msg RPCMessage) byte {
 	if msg.internal {
 		if m, ok := msg.Message.(*flagOnlyMessage); ok {
 			flag |= m.flag
+		} else if _, ok := msg.Message.(*streamControl); ok {
+			flag |= flagStreamingControlMessage
 		}
 	}
 	return flag
@@ -598,6 +601,9 @@ func (c *baseCodec) readFlag(msg *RPCMessage, data []byte, offset int) (byte, in
 		msg.internal = true
 	} else if flag&flagPong != 0 {
 		msg.Message = &flagOnlyMessage{flag: flagPong}
+		msg.internal = true
+	} else if flag&flagStreamingControlMessage != 0 {
+		msg.Message = &streamControl{}
 		msg.internal = true
 	} else {
 		msg.Message = c.messageFactory()
