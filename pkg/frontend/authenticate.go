@@ -38,7 +38,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
@@ -3221,7 +3220,7 @@ func doAlterAccount(ctx context.Context, ses *Session, aa *alterAccount) (err er
 			ses.getRoutineManager().accountRoutine.EnKillQueue(int64(targetAccountId), version)
 
 			if err := postDropSuspendAccount(ctx, ses, aa.Name, int64(targetAccountId), version); err != nil {
-				logutil.Errorf("post alter account suspend error: %s", err.Error())
+				ses.Errorf(ctx, "post alter account suspend error: %s", err.Error())
 			}
 		}
 
@@ -3234,7 +3233,7 @@ func doAlterAccount(ctx context.Context, ses *Session, aa *alterAccount) (err er
 			}
 			err = postAlterSessionStatus(ctx, ses, aa.Name, int64(targetAccountId), tree.AccountStatusRestricted.String())
 			if err != nil {
-				logutil.Errorf("post alter account restricted error: %s", err.Error())
+				ses.Errorf(ctx, "post alter account restricted error: %s", err.Error())
 			}
 		}
 
@@ -3247,7 +3246,7 @@ func doAlterAccount(ctx context.Context, ses *Session, aa *alterAccount) (err er
 			}
 			err = postAlterSessionStatus(ctx, ses, aa.Name, int64(targetAccountId), tree.AccountStatusOpen.String())
 			if err != nil {
-				logutil.Errorf("post alter account not restricted error: %s", err.Error())
+				ses.Errorf(ctx, "post alter account not restricted error: %s", err.Error())
 			}
 		}
 	}
@@ -3412,7 +3411,7 @@ func doSwitchRole(ctx context.Context, ses *Session, sr *tree.SetRole) (err erro
 func getSubscriptionMeta(ctx context.Context, dbName string, ses FeSession, txn TxnOperator) (*plan.SubscriptionMeta, error) {
 	dbMeta, err := getGlobalPu().StorageEngine.Database(ctx, dbName, txn)
 	if err != nil {
-		logutil.Errorf("Get Subscription database %s meta error: %s", dbName, err.Error())
+		ses.Errorf(ctx, "Get Subscription database %s meta error: %s", dbName, err.Error())
 		return nil, moerr.NewNoDB(ctx)
 	}
 
@@ -4454,7 +4453,7 @@ func doDropAccount(ctx context.Context, ses *Session, da *dropAccount) (err erro
 	ses.getRoutineManager().accountRoutine.EnKillQueue(accountId, version)
 
 	if err := postDropSuspendAccount(ctx, ses, da.Name, accountId, version); err != nil {
-		logutil.Errorf("post drop account error: %s", err.Error())
+		ses.Errorf(ctx, "post drop account error: %s", err.Error())
 	}
 
 	return err
@@ -9401,7 +9400,7 @@ func doInterpretCall(ctx context.Context, ses *Session, call *tree.CallStmt) ([]
 	argsMap = make(map[string]tree.Expr) // map arg to param
 
 	// build argsAttr and argsMap
-	logutil.Info("Interpret procedure call length:" + strconv.Itoa(len(argList)))
+	ses.Infof(ctx, "Interpret procedure call length:"+strconv.Itoa(len(argList)))
 	i := 0
 	for curName, v := range argList {
 		argsAttr[curName] = v.InOutType

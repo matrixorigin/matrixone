@@ -1957,6 +1957,26 @@ func (ses *Session) Error(ctx context.Context, msg string, fields ...zap.Field) 
 	}
 }
 
+func (ses *Session) Infof(ctx context.Context, msg string, args ...any) {
+	if ses.logger.Enabled(zap.InfoLevel) {
+		fields := make([]zap.Field, 0, 5)
+		fields = append(fields, zap.String("session_info", ses.GetDebugString()))
+		fields = appendSessionField(fields, ses)
+		fields = appendTraceField(fields, ctx)
+		ses.logger.Log(fmt.Sprintf(msg, args...), log.DefaultLogOptions().WithLevel(zap.InfoLevel).AddCallerSkip(1), fields...)
+	}
+}
+
+func (ses *Session) Errorf(ctx context.Context, msg string, args ...any) {
+	if ses.logger.Enabled(zap.ErrorLevel) {
+		fields := make([]zap.Field, 0, 5)
+		fields = append(fields, zap.String("session_info", ses.GetDebugString()))
+		fields = appendSessionField(fields, ses)
+		fields = appendTraceField(fields, ctx)
+		ses.logger.Log(fmt.Sprintf(msg, args...), log.DefaultLogOptions().WithLevel(zap.ErrorLevel).AddCallerSkip(1), fields...)
+	}
+}
+
 func appendTraceField(fields []zap.Field, ctx context.Context) []zap.Field {
 	// TODO: implement me
 	return fields
