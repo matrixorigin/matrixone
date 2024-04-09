@@ -974,7 +974,7 @@ func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
 	for i := range node.FilterList {
 		node.FilterList[i].Selectivity = estimateExprSelectivity(node.FilterList[i], builder)
 		currentBlockSel := estimateFilterBlockSelectivity(builder.GetContext(), node.FilterList[i], node.TableDef, builder)
-		if currentBlockSel < blockSelectivityThreshHold {
+		if currentBlockSel < blockSelectivityThreshHold && stats.TableCnt > 10000 {
 			copyOfExpr := DeepCopyExpr(node.FilterList[i])
 			copyOfExpr.Selectivity = currentBlockSel
 			blockExprList = append(blockExprList, copyOfExpr)
