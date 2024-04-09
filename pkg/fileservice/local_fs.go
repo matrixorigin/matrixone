@@ -30,6 +30,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/fileservice/memorycache"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -46,6 +47,7 @@ type LocalFS struct {
 	sync.RWMutex
 	dirFiles map[string]*os.File
 
+	allocator   CacheDataAllocator
 	memCache    *MemCache
 	diskCache   *DiskCache
 	remoteCache *RemoteCache
@@ -105,6 +107,12 @@ func NewLocalFS(
 		return nil, err
 	}
 
+	if fs.memCache != nil {
+		fs.allocator = fs.memCache
+	} else {
+		fs.allocator = DefaultCacheDataAllocator
+	}
+
 	return fs, nil
 }
 
@@ -123,7 +131,7 @@ func (l *LocalFS) initCaches(ctx context.Context, config CacheConfig) error {
 
 	if *config.MemoryCapacity > DisableCacheCapacity { // 1 means disable
 		l.memCache = NewMemCache(
-			NewLRUCache(int64(*config.MemoryCapacity), true, &config.CacheCallbacks),
+			NewMemoryCache(int64(*config.MemoryCapacity), true, &config.CacheCallbacks),
 			l.perfCounterSets,
 		)
 		logutil.Info("fileservice: memory cache initialized",
@@ -198,11 +206,6 @@ func (l *LocalFS) write(ctx context.Context, vector IOVector) (bytesWritten int,
 	if err := ctx.Err(); err != nil {
 		return 0, err
 	}
-
-	t0 := time.Now()
-	defer func() {
-		FSProfileHandler.AddSample(time.Since(t0))
-	}()
 
 	path, err := ParsePathAtService(vector.FilePath, l.name)
 	if err != nil {
@@ -310,6 +313,14 @@ func (l *LocalFS) Read(ctx context.Context, vector *IOVector) (err error) {
 
 	stats := statistic.StatsInfoFromContext(ctx)
 	stats.AddLockTimeConsumption(time.Since(startLock))
+
+	allocator := l.allocator
+	if vector.Policy.Any(SkipMemoryCache) {
+		allocator = DefaultCacheDataAllocator
+	}
+	for i := range vector.Entries {
+		vector.Entries[i].allocator = allocator
+	}
 
 	for _, cache := range vector.Caches {
 		cache := cache
@@ -419,11 +430,6 @@ func (l *LocalFS) read(ctx context.Context, vector *IOVector, bytesCounter *atom
 		return nil
 	}
 
-	t0 := time.Now()
-	defer func() {
-		FSProfileHandler.AddSample(time.Since(t0))
-	}()
-
 	path, err := ParsePathAtService(vector.FilePath, l.name)
 	if err != nil {
 		return err
@@ -474,7 +480,7 @@ func (l *LocalFS) read(ctx context.Context, vector *IOVector, bytesCounter *atom
 					R: r,
 					C: counter,
 				}
-				var bs CacheData
+				var bs memorycache.CacheData
 				bs, err = entry.ToCacheData(cr, nil, DefaultCacheDataAllocator)
 				if err != nil {
 					return err
@@ -534,7 +540,7 @@ func (l *LocalFS) read(ctx context.Context, vector *IOVector, bytesCounter *atom
 					r: io.TeeReader(r, buf),
 					closeFunc: func() error {
 						defer file.Close()
-						var bs CacheData
+						var bs memorycache.CacheData
 						bs, err = entry.ToCacheData(buf, buf.Bytes(), DefaultCacheDataAllocator)
 						if err != nil {
 							return err
@@ -606,17 +612,10 @@ func (l *LocalFS) List(ctx context.Context, dirPath string) (ret []DirEntry, err
 		return nil, err
 	}
 
-	ctx, span := trace.Start(ctx, "LocalFS.List", trace.WithKind(trace.SpanKindLocalFSVis))
+	_, span := trace.Start(ctx, "LocalFS.List", trace.WithKind(trace.SpanKindLocalFSVis))
 	defer func() {
 		span.AddExtraFields([]zap.Field{zap.String("list", dirPath)}...)
 		span.End()
-	}()
-
-	_ = ctx
-
-	t0 := time.Now()
-	defer func() {
-		FSProfileHandler.AddSample(time.Since(t0))
 	}()
 
 	path, err := ParsePathAtService(dirPath, l.name)
@@ -682,11 +681,6 @@ func (l *LocalFS) StatFile(ctx context.Context, filePath string) (*DirEntry, err
 		span.End()
 	}()
 
-	t0 := time.Now()
-	defer func() {
-		FSProfileHandler.AddSample(time.Since(t0))
-	}()
-
 	path, err := ParsePathAtService(filePath, l.name)
 	if err != nil {
 		return nil, err
@@ -726,11 +720,6 @@ func (l *LocalFS) Delete(ctx context.Context, filePaths ...string) error {
 	defer func() {
 		span.AddExtraFields([]zap.Field{zap.String("delete", strings.Join(filePaths, "|"))}...)
 		span.End()
-	}()
-
-	t0 := time.Now()
-	defer func() {
-		FSProfileHandler.AddSample(time.Since(t0))
 	}()
 
 	for _, filePath := range filePaths {
@@ -908,11 +897,6 @@ func (l *LocalFSMutator) mutate(ctx context.Context, baseOffset int64, entries .
 		return err
 	}
 
-	t0 := time.Now()
-	defer func() {
-		FSProfileHandler.AddSample(time.Since(t0))
-	}()
-
 	// write
 	for _, entry := range entries {
 
@@ -975,6 +959,10 @@ func (l *LocalFS) Replace(ctx context.Context, vector IOVector) error {
 }
 
 var _ CachingFileService = new(LocalFS)
+
+func (l *LocalFS) Close() {
+	l.FlushCache()
+}
 
 func (l *LocalFS) FlushCache() {
 	if l.memCache != nil {

@@ -12,39 +12,27 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package fileservice
+package memorycache
 
 import (
-	"io"
+	"context"
 	"testing"
-	"time"
 
-	"github.com/stretchr/testify/assert"
+	cache "github.com/matrixorigin/matrixone/pkg/pb/query"
+	"github.com/stretchr/testify/require"
 )
 
-func TestSpanProfiler(t *testing.T) {
-	profiler := NewSpanProfiler()
-
-	newProfiler, end := profiler.Begin(0)
-	assert.True(t, newProfiler == profiler)
-
-	done := make(chan struct{})
-	go func() {
-		_, end := newProfiler.Begin(0)
-		time.Sleep(time.Millisecond * 500)
-		end()
-		close(done)
-	}()
-
-	time.Sleep(time.Millisecond * 800)
-	<-done
-	end()
-	err := profiler.Write(io.Discard)
-	assert.Nil(t, err)
-
-	//f, err := os.Create("prof")
-	//assert.Nil(t, err)
-	//defer f.Close()
-	//err = profiler.Write(f)
-	//assert.Nil(t, err)
+func TestCache(t *testing.T) {
+	// test New with postSet, postGet, postEvict
+	c := NewCache(100, func(key cache.CacheKey, value CacheData) {},
+		func(key cache.CacheKey, value CacheData) {}, func(key cache.CacheKey, value CacheData) {})
+	// test Alloc and Set
+	key := cache.CacheKey{Path: "x", Sz: 1}
+	data := c.Alloc(1)
+	err := c.Set(context.TODO(), key, data)
+	require.NoError(t, err)
+	// test Get
+	data2, ok := c.Get(context.TODO(), key)
+	require.True(t, ok)
+	require.Equal(t, data, data2)
 }

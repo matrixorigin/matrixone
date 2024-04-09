@@ -18,7 +18,6 @@ import (
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -109,10 +108,6 @@ func (s *taskScheduler) ScheduleMultiScopedFn(
 	task = tasks.NewMultiScopedFnTask(ctx, taskType, scopes, fn)
 	err = s.Schedule(task)
 	return
-}
-
-func (s *taskScheduler) GetCheckpointTS() types.TS {
-	return s.db.TxnMgr.StatMaxCommitTS()
 }
 
 func (s *taskScheduler) GetPenddingLSNCnt() uint64 {

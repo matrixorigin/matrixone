@@ -169,7 +169,7 @@ jobs:
         if: ${{ failure() || cancelled()}}
         continue-on-error: true
         with:
-          name: multi-cn-e2e-linux-x86-reports
+          name: Compatibility-Test-on-Linux-x64(LAUNCH)-reports
           path: |
             ${{ github.workspace }}/upload
           retention-days: 7

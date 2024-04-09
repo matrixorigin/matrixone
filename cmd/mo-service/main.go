@@ -76,6 +76,8 @@ func main() {
 	maybePrintVersion()
 	maybeRunInDaemonMode()
 
+	uuid.EnableRandPool()
+
 	if *cpuProfilePathFlag != "" {
 		stop := startCPUProfile()
 		defer stop()
@@ -85,10 +87,6 @@ func main() {
 	}
 	if *heapProfilePathFlag != "" {
 		defer writeHeapProfile()
-	}
-	if *fileServiceProfilePathFlag != "" {
-		stop := startFileServiceProfile()
-		defer stop()
 	}
 	if *httpListenAddr != "" {
 		go func() {
@@ -249,7 +247,7 @@ func startCNService(
 			cnservice.WithLogger(logutil.GetGlobalLogger().Named("cn-service").With(zap.String("uuid", cfg.CN.UUID))),
 			cnservice.WithMessageHandle(compile.CnServerMessageHandler),
 			cnservice.WithConfigData(commonConfigKVMap),
-			cnservice.WithTxnTraceData(filepath.Join(cfg.DataDir, "trace")),
+			cnservice.WithTxnTraceData(filepath.Join(cfg.DataDir, c.Txn.Trace.Dir)),
 		)
 		if err != nil {
 			panic(err)

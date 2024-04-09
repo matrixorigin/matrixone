@@ -154,7 +154,10 @@ func (ie *internalExecutor) Exec(ctx context.Context, sql string, opts ie.Sessio
 	ie.Lock()
 	defer ie.Unlock()
 	sess := ie.newCmdSession(ctx, opts)
-	defer sess.Close()
+	defer func() {
+		sess.Close()
+		ie.executor.SetSession(nil)
+	}()
 	ie.executor.SetSession(sess)
 	ie.proto.stashResult = false
 	if sql == "" {
@@ -167,7 +170,10 @@ func (ie *internalExecutor) Query(ctx context.Context, sql string, opts ie.Sessi
 	ie.Lock()
 	defer ie.Unlock()
 	sess := ie.newCmdSession(ctx, opts)
-	defer sess.Close()
+	defer func() {
+		sess.Close()
+		ie.executor.SetSession(nil)
+	}()
 	ie.executor.SetSession(sess)
 	ie.proto.stashResult = true
 	logutil.Info("internalExecutor new session", trace.ContextField(ctx), zap.String("session uuid", sess.uuid.String()))

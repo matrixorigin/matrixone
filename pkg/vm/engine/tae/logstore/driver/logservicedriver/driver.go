@@ -75,7 +75,7 @@ type LogServiceDriver struct {
 func NewLogServiceDriver(cfg *Config) *LogServiceDriver {
 	clientpoolConfig := &clientConfig{
 		cancelDuration:        cfg.NewClientDuration,
-		recordSize:            cfg.NewRecordSize,
+		recordSize:            cfg.RecordSize,
 		clientFactory:         cfg.ClientFactory,
 		GetClientRetryTimeOut: cfg.GetClientRetryTimeOut,
 		retryDuration:         cfg.RetryTimeout,
@@ -85,12 +85,12 @@ func NewLogServiceDriver(cfg *Config) *LogServiceDriver {
 	// and we hope the task will crash all the tn service if append failed.
 	// so, set panic to pool.options.PanicHandler here, or it will only crash
 	// the goroutine the append task belongs to.
-	pool, _ := ants.NewPool(10, ants.WithPanicHandler(func(v interface{}) {
+	pool, _ := ants.NewPool(cfg.ClientMaxCount, ants.WithPanicHandler(func(v interface{}) {
 		panic(v)
 	}))
 
 	d := &LogServiceDriver{
-		clientPool:      newClientPool(cfg.ClientPoolMaxSize, cfg.ClientPoolMaxSize, clientpoolConfig),
+		clientPool:      newClientPool(cfg.ClientMaxCount, clientpoolConfig),
 		config:          cfg,
 		appendable:      newDriverAppender(),
 		driverInfo:      newDriverInfo(),

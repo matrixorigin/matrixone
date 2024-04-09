@@ -27,6 +27,7 @@ var (
 		OpCode_OpBackup:           "Backup",
 		OpCode_OpTraceSpan:        "TraceSpan",
 		OpCode_OpGlobalCheckpoint: "GlobalCheckpoint",
+		OpCode_OpInterceptCommit:  "InterceptCommit",
 	}
 )
 

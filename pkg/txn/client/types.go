@@ -121,6 +121,8 @@ type TxnOperator interface {
 	UpdateSnapshot(ctx context.Context, ts timestamp.Timestamp) error
 	// SnapshotTS returns the snapshot timestamp of the transaction.
 	SnapshotTS() timestamp.Timestamp
+	// CreateTS returns the creation timestamp of the txnOperator.
+	CreateTS() timestamp.Timestamp
 	// Status returns the current transaction status.
 	Status() txn.TxnStatus
 	// ApplySnapshot CN coordinator applies a snapshot of the non-coordinator's transaction
@@ -241,8 +243,6 @@ type Workspace interface {
 
 	UpdateSnapshotWriteOffset()
 	GetSnapshotWriteOffset() int
-
-	TransferRowID()
 
 	// Adjust adjust workspace, adjust update's delete+insert to correct order and merge workspace.
 	Adjust(writeOffset uint64) error
