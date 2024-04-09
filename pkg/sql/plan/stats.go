@@ -532,9 +532,6 @@ func estimateFilterBlockSelectivity(ctx context.Context, expr *plan.Expr, tableD
 	if !ExprIsZonemappable(ctx, expr) {
 		return 1
 	}
-	if expr.Selectivity < 0.01 {
-		return expr.Selectivity * 100
-	}
 	col := extractColRefInFilter(expr)
 	if col != nil {
 		switch GetSortOrder(tableDef, col.Name) {
@@ -545,9 +542,6 @@ func estimateFilterBlockSelectivity(ctx context.Context, expr *plan.Expr, tableD
 		case 2:
 			return math.Min(expr.Selectivity*10, 0.5)
 		}
-	}
-	if getExprNdv(expr, builder) < blockNDVThreshHold {
-		return 1
 	}
 	return 0.5
 }
