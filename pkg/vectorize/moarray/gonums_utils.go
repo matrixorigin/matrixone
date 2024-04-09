@@ -64,7 +64,8 @@ func ToMoArray[T types.RealNumbers](vec *mat.VecDense) (arr []T, err error) {
 	for i := 0; i < n; i++ {
 		//TODO: @arjun optimize this cast
 		arr[i] = T(vec.AtVec(i))
-
+	}
+	for i := 0; i < n; i++ {
 		if math.IsInf(float64(arr[i]), 0) {
 			return nil, moerr.NewInternalErrorNoCtx("vector contains infinity values")
 		}
