@@ -18,6 +18,7 @@ import (
 	"context"
 	"runtime"
 	"sync"
+	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/moprobe"
@@ -247,8 +248,16 @@ func (s *stream) cleanCLocked() {
 type streamPeer struct {
 	opts     StreamOptions
 	ctl      sync.WaitGroup
+	allow    atomic.Bool
 	sequence struct {
 		recv uint32
 		sent uint32
+	}
+}
+
+func (s *streamPeer) init(opts StreamOptions) {
+	s.opts = opts
+	if !opts.controlEnabled() {
+		s.allow.Store(true)
 	}
 }
