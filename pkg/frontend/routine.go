@@ -27,7 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -278,7 +277,7 @@ func (rt *Routine) handleRequest(req *Request) error {
 
 	if resp, err = ExecRequest(tenantCtx, ses, req); err != nil {
 		if !skipClientQuit(err.Error()) {
-			logError(ses, ses.GetDebugString(),
+			ses.Error(tenantCtx,
 				"Failed to execute request",
 				zap.Error(err))
 		}
@@ -286,14 +285,14 @@ func (rt *Routine) handleRequest(req *Request) error {
 
 	if resp != nil {
 		if err = rt.getProtocol().SendResponse(tenantCtx, resp); err != nil {
-			logError(ses, ses.GetDebugString(),
+			ses.Error(tenantCtx,
 				"Failed to send response",
 				zap.String("response", fmt.Sprintf("%v", resp)),
 				zap.Error(err))
 		}
 	}
 
-	logDebugf(ses.GetDebugString(), "the time of handling the request %s", time.Since(reqBegin).String())
+	ses.Errorf(tenantCtx, "the time of handling the request %s", time.Since(reqBegin).String())
 
 	cancelRequestFunc()
 
@@ -312,10 +311,10 @@ func (rt *Routine) handleRequest(req *Request) error {
 		})
 
 		//ensure cleaning the transaction
-		logError(ses, ses.GetDebugString(), "rollback the txn.")
+		ses.Error(tenantCtx, "rollback the txn.")
 		err = ses.GetTxnHandler().TxnRollback()
 		if err != nil {
-			logError(ses, ses.GetDebugString(),
+			ses.Error(tenantCtx,
 				"Failed to rollback txn",
 				zap.Error(err))
 		}
@@ -339,7 +338,7 @@ func (rt *Routine) killQuery(killMyself bool, statementId string) {
 		ses := rt.getSession()
 		if ses != nil {
 			ses.SetQueryInExecute(false)
-			logutil.Infof("set query status on the connection %d", rt.getConnectionID())
+			ses.Infof(ses.GetRequestContext(), "set query status on the connection %d", rt.getConnectionID())
 			txnHandler := ses.GetTxnHandler()
 			if txnHandler != nil {
 				txnHandler.cancelTxnCtx()

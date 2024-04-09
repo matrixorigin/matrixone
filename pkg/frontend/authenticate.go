@@ -9615,7 +9615,7 @@ func doSetGlobalSystemVariable(ctx context.Context, ses *Session, varName string
 			accountId = tenantInfo.GetTenantID()
 			sql = getSqlForUpdateSystemVariableValue(getVariableValue(varValue), uint64(accountId), varName)
 			if _, ok := sv.GetType().(SystemVariableBoolType); ok {
-				logInfo(ses, ses.GetDebugString(), "set global bool type value", zap.String("variable name", varName), zap.String("variable value", getVariableValue(varValue)), zap.String("update sql", sql))
+				ses.Info(ctx, "set global bool type value", zap.String("variable name", varName), zap.String("variable value", getVariableValue(varValue)), zap.String("update sql", sql))
 			}
 			rtnErr = bh.Exec(ctx, sql)
 			if rtnErr != nil {

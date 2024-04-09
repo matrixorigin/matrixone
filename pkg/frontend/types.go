@@ -21,6 +21,7 @@ import (
 
 	"github.com/fagongzi/goetty/v2/buf"
 	"github.com/google/uuid"
+	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -346,6 +347,15 @@ type FeSession interface {
 	DisableTrace() bool
 	Close()
 	Clear()
+
+	SessionLogger
+}
+
+type SessionLogger interface {
+	Info(ctx context.Context, msg string, fields ...zap.Field)
+	Error(ctx context.Context, msg string, fields ...zap.Field)
+	Infof(ctx context.Context, msg string, args ...any)
+	Errorf(ctx context.Context, msg string, args ...any)
 }
 
 type ExecCtx struct {

@@ -2333,7 +2333,7 @@ func processLoadLocal(ctx context.Context, ses FeSession, param *tree.ExternPara
 	_, err = writer.Write(packet.Payload)
 	if err != nil {
 		skipWrite = true // next, we just need read the rest of the data,no need to write it to pipe.
-		logError(ses, ses.GetDebugString(),
+		ses.Errorf(ctx,
 			"Failed to load local file",
 			zap.String("path", param.Filepath),
 			zap.Error(err))
@@ -2372,7 +2372,7 @@ func processLoadLocal(ctx context.Context, ses FeSession, param *tree.ExternPara
 		if !skipWrite {
 			_, err = writer.Write(packet.Payload)
 			if err != nil {
-				logError(ses, ses.GetDebugString(),
+				ses.Errorf(ctx,
 					"Failed to load local file",
 					zap.String("path", param.Filepath),
 					zap.Uint64("epoch", epoch),
@@ -2468,7 +2468,7 @@ func executeStmtWithTxn(requestCtx context.Context,
 		var err3 error
 		_, txnOp, err3 = ses.GetTxnHandler().GetTxnOperator()
 		if err3 != nil {
-			logError(ses, ses.GetDebugString(), err3.Error())
+			ses.Errorf(requestCtx, err3.Error())
 			return
 		}
 		//non derived statement
@@ -2601,7 +2601,7 @@ func executeStmt(requestCtx context.Context,
 
 	// only log if build time is longer than 1s
 	if time.Since(cmpBegin) > time.Second {
-		logInfo(ses, ses.GetDebugString(), fmt.Sprintf("time of Exec.Build : %s", time.Since(cmpBegin).String()))
+		ses.Infof(requestCtx, "time of Exec.Build : %s", time.Since(cmpBegin).String())
 	}
 
 	//output result & status

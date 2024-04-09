@@ -362,7 +362,6 @@ func (th *TxnHandler) CommitTxn() error {
 		return nil
 	}
 	ses := th.GetSession()
-	sessionInfo := ses.GetDebugString()
 	txnCtx, txnOp, err := th.GetTxnOperator()
 	if err != nil {
 		return err
@@ -400,9 +399,9 @@ func (th *TxnHandler) CommitTxn() error {
 
 	if logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
 		txnId := txnOp.Txn().DebugString()
-		ses.Errorf(ses.requestCtx, "CommitTxn txnId:%s", txnId)
+		ses.Errorf(ctx2, "CommitTxn txnId:%s", txnId)
 		defer func() {
-			ses.Errorf(ses.requestCtx, "CommitTxn exit txnId:%s", txnId)
+			ses.Errorf(ctx2, "CommitTxn exit txnId:%s", txnId)
 		}()
 	}
 	if txnOp != nil {

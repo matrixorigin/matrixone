@@ -377,6 +377,7 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 	routine.setInProcessRequest(true)
 	defer routine.setInProcessRequest(false)
 	protocol := routine.getProtocol()
+	// TODO: remove, just use ses.GetDebugInfo()
 	protoInfo := protocol.GetDebugString()
 	packet, ok := msg.(*Packet)
 
@@ -398,7 +399,7 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 	for uint32(length) == MaxPayloadSize {
 		msg, err = protocol.GetTcpConnection().Read(goetty.ReadOptions{})
 		if err != nil {
-			logError(routine.ses, routine.ses.GetDebugString(),
+			ses.Error(ctx,
 				"Failed to read message",
 				zap.Error(err))
 			return err
@@ -407,7 +408,7 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 		packet, ok = msg.(*Packet)
 		if !ok {
 			err = moerr.NewInternalError(ctx, "message is not Packet")
-			logError(routine.ses, routine.ses.GetDebugString(),
+			ses.Error(ctx,
 				"An error occurred",
 				zap.Error(err))
 			return err
@@ -487,7 +488,7 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 		}
 		ts[TSEstablishEnd] = time.Now()
 		v2.EstablishDurationHistogram.Observe(ts[TSEstablishEnd].Sub(ts[TSEstablishStart]).Seconds())
-		logInfof(ses.GetDebugString(), fmt.Sprintf("mo accept connection, time cost of Created: %s, Establish: %s, UpgradeTLS: %s, Authenticate: %s, SendErrPacket: %s, SendOKPacket: %s, CheckTenant: %s, CheckUser: %s, CheckRole: %s, CheckDbName: %s, InitGlobalSysVar: %s",
+		ses.Info(ctx, fmt.Sprintf("mo accept connection, time cost of Created: %s, Establish: %s, UpgradeTLS: %s, Authenticate: %s, SendErrPacket: %s, SendOKPacket: %s, CheckTenant: %s, CheckUser: %s, CheckRole: %s, CheckDbName: %s, InitGlobalSysVar: %s",
 			ts[TSCreatedEnd].Sub(ts[TSCreatedStart]).String(),
 			ts[TSEstablishEnd].Sub(ts[TSEstablishStart]).String(),
 			ts[TSUpgradeTLSEnd].Sub(ts[TSUpgradeTLSStart]).String(),
@@ -515,7 +516,7 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 	err = routine.handleRequest(req)
 	if err != nil {
 		if !skipClientQuit(err.Error()) {
-			logError(routine.ses, routine.ses.GetDebugString(),
+			ses.Error(ctx,
 				"Error occurred",
 				zap.Error(err))
 		}
