@@ -162,3 +162,23 @@ func UpgradeTenantVersion(
 func isConflictError(err error) bool {
 	return moerr.IsMoErrCode(err, moerr.ErrLockConflict)
 }
+
+func GetTenantVersion(
+	tenantID int32,
+	txn executor.TxnExecutor) (string, error) {
+	sql := fmt.Sprintf("select create_version from mo_account where account_id = %d", tenantID)
+	res, err := txn.Exec(sql, executor.StatementOption{})
+	if err != nil {
+		return "", err
+	}
+	defer res.Close()
+	version := ""
+	res.ReadRows(func(rows int, cols []*vector.Vector) bool {
+		version = cols[0].GetStringAt(0)
+		return true
+	})
+	if version == "" {
+		panic(fmt.Sprintf("BUG: missing tenant: %d", tenantID))
+	}
+	return version, nil
+}

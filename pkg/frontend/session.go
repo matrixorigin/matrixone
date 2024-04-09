@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -301,6 +302,9 @@ type Session struct {
 
 	// FromProxy denotes whether the session is dispatched from proxy
 	fromProxy bool
+	// If the connection is from proxy, client address is the real address of client.
+	clientAddr string
+	proxyAddr  string
 
 	disableTrace bool
 }
@@ -1584,6 +1588,7 @@ func (ses *Session) AuthenticateUser(userInput string, dbName string, authRespon
 	var userID int64
 	var pwd, accountStatus string
 	var accountVersion uint64
+	//var createVersion string
 	var pwdBytes []byte
 	var isSpecial bool
 	var specialAccount *TenantInfo
@@ -1832,6 +1837,20 @@ func (ses *Session) AuthenticateUser(userInput string, dbName string, authRespon
 	return GetPassWord(pwd)
 }
 
+func (ses *Session) MaybeUpgradeTenant(ctx context.Context, curVersion string, tenantID int64) error {
+	// Get mo final version, which is based on the current code version
+	finalVersion := ses.rm.baseService.GetFinalVersion()
+	if versions.Compare(curVersion, finalVersion) <= 0 {
+		return ses.rm.baseService.CheckTenantUpgrade(ctx, tenantID)
+	}
+	return nil
+}
+
+func (ses *Session) UpgradeTenant(ctx context.Context, tenantName string, retryCount uint32, isALLAccount bool) error {
+	// Get mo final version, which is based on the current code version
+	return ses.rm.baseService.UpgradeTenant(ctx, tenantName, retryCount, isALLAccount)
+}
+
 func (ses *Session) InitGlobalSystemVariables() error {
 	var err error
 	var rsset []ExecResult
@@ -1966,11 +1985,19 @@ func (ses *Session) InitGlobalSystemVariables() error {
 
 func (ses *Session) getUpdateVariableSqlsByToml() []string {
 	updateSqls := make([]string, 0)
-	if ses.pu.SV.SqlMode != gSysVarsDefs["sql_mode"].Default {
-		tenantInfo := ses.GetTenantInfo()
+	tenantInfo := ses.GetTenantInfo()
+	// sql_mode
+	if getVariableValue(ses.pu.SV.SqlMode) != gSysVarsDefs["sql_mode"].Default {
 		sqlForUpdate := getSqlForUpdateSystemVariableValue(ses.pu.SV.SqlMode, uint64(tenantInfo.GetTenantID()), "sql_mode")
 		updateSqls = append(updateSqls, sqlForUpdate)
 	}
+
+	// lower_case_table_names
+	if getVariableValue(ses.pu.SV.LowerCaseTableNames) != gSysVarsDefs["lower_case_table_names"].Default {
+		sqlForUpdate := getSqlForUpdateSystemVariableValue(getVariableValue(ses.pu.SV.LowerCaseTableNames), uint64(tenantInfo.GetTenantID()), "lower_case_table_names")
+		updateSqls = append(updateSqls, sqlForUpdate)
+	}
+
 	return updateSqls
 }
 
@@ -2178,7 +2205,7 @@ func (bh *BackgroundHandler) Exec(ctx context.Context, sql string) error {
 	if err != nil {
 		return err
 	}
-	statements, err := mysql.Parse(ctx, sql, v.(int64))
+	statements, err := mysql.Parse(ctx, sql, v.(int64), 0)
 	if err != nil {
 		return err
 	}
@@ -2429,9 +2456,10 @@ func (ses *Session) StatusSession() *status.Session {
 				QueryType:     "",
 				SQLSourceType: "",
 				QueryStart:    time.Time{},
-				ClientHost:    ses.GetMysqlProtocol().Peer(),
+				ClientHost:    ses.clientAddr,
 				Role:          roleName,
 				FromProxy:     ses.fromProxy,
+				ProxyHost:     ses.proxyAddr,
 			}
 		}
 	}
@@ -2452,9 +2480,10 @@ func (ses *Session) StatusSession() *status.Session {
 		QueryType:     ses.GetQueryType(),
 		SQLSourceType: ses.GetSqlSourceType(),
 		QueryStart:    ses.GetQueryStart(),
-		ClientHost:    ses.GetMysqlProtocol().Peer(),
+		ClientHost:    ses.clientAddr,
 		Role:          roleName,
 		FromProxy:     ses.fromProxy,
+		ProxyHost:     ses.proxyAddr,
 	}
 }
 
@@ -2531,7 +2560,7 @@ func (p *prepareStmtMigration) Migrate(ses *Session) error {
 	if !strings.HasPrefix(strings.ToLower(p.sql), "prepare") {
 		p.sql = fmt.Sprintf("prepare %s from %s", p.name, p.sql)
 	}
-	stmts, err := mysql.Parse(ses.requestCtx, p.sql, v.(int64))
+	stmts, err := mysql.Parse(ses.requestCtx, p.sql, v.(int64), 0)
 	if err != nil {
 		return err
 	}

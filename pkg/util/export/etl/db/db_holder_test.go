@@ -17,12 +17,14 @@ package db_holder
 import (
 	"context"
 	"database/sql"
+	"reflect"
 	"regexp"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/stretchr/testify/require"
 )
 
 func TestBulkInsert(t *testing.T) {
@@ -101,5 +103,42 @@ func TestIsRecordExisted(t *testing.T) {
 	// Ensure all expectations are met
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Errorf("there were unfulfilled expectations: %s", err)
+	}
+}
+
+func TestSetLabelSelector(t *testing.T) {
+	type args struct {
+		labels map[string]string
+	}
+	tests := []struct {
+		name       string
+		args       args
+		want       map[string]string
+		wantGetter map[string]string
+	}{
+		{
+			name: "normal",
+			args: args{labels: map[string]string{
+				"role": "admin",
+			}},
+			want: map[string]string{
+				"role": "admin",
+			},
+			wantGetter: map[string]string{
+				"role":    "admin",
+				"account": "sys",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			SetLabelSelector(tt.args.labels)
+			require.Equal(t, tt.want, tt.args.labels)
+			got := GetLabelSelector()
+			if !reflect.DeepEqual(tt.wantGetter, got) {
+				t.Errorf("gLabelSelector = %v, want %v", got, tt.wantGetter)
+			}
+		})
 	}
 }

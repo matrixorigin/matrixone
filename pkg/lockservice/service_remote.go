@@ -267,7 +267,14 @@ func (s *service) getLocalLockTable(
 		return nil, err
 	}
 	if l == nil {
-		return nil, ErrLockTableNotFound
+		l, err = s.getLockTableWithCreate(
+			req.LockTable.Group,
+			req.LockTable.Table,
+			req.Lock.Rows,
+			req.Lock.Options.Sharding)
+		if err != nil || l.getBind().Changed(req.LockTable) {
+			return nil, ErrLockTableNotFound
+		}
 	}
 	bind := l.getBind()
 	if bind.Changed(req.LockTable) {

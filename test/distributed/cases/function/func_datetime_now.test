@@ -108,3 +108,5 @@ select sleep(1);
 insert into t1(a) select current_timestamp () from mo_catalog.mo_sessions limit 1;
 select t1.a=t2.a from t1,(select a from t1  where b=2)as t2 where b=1;
 drop table t1;
+
+select timestampdiff(second, t1, t2), a from (select sysdate() as t1, sleep(2) as a, sysdate() as t2);
