@@ -28,8 +28,10 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/common/buffer"
+	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
@@ -49,6 +51,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+
+	"go.uber.org/zap"
 )
 
 var MaxPrepareNumberInOneSession int = 100000
@@ -107,6 +111,8 @@ const (
 
 type Session struct {
 	feSessionImpl
+
+	logger *log.MOLogger
 
 	//cmd from the client
 	cmd CommandType
@@ -503,6 +509,8 @@ func NewSession(proto MysqlProtocol, mp *mpool.MPool, gSysVars *GlobalSystemVari
 		ses.seqCurValues = make(map[uint64]string)
 		ses.seqLastValue = new(string)
 	}
+
+	ses.logger = getRuntime().Logger().Named("frontend")
 
 	ses.buf = buffer.New()
 	ses.isNotBackgroundSession = isNotBackgroundSession
@@ -1929,4 +1937,42 @@ func (ses *Session) Migrate(req *query.MigrateConnToRequest) error {
 		ses.SetLastStmtID(maxStmtID)
 	}
 	return nil
+}
+
+func (ses *Session) Info(ctx context.Context, msg string, fields ...zap.Field) {
+	if ses.logger.Enabled(zap.InfoLevel) {
+		fields = append(fields, zap.String("session_info", ses.GetDebugString()))
+		fields = appendSessionField(fields, ses)
+		fields = appendTraceField(fields, ctx)
+		ses.logger.Log(msg, log.DefaultLogOptions().WithLevel(zap.InfoLevel).AddCallerSkip(1), fields...)
+	}
+}
+
+func (ses *Session) Error(ctx context.Context, msg string, fields ...zap.Field) {
+	if ses.logger.Enabled(zap.ErrorLevel) {
+		fields = append(fields, zap.String("session_info", ses.GetDebugString()))
+		fields = appendSessionField(fields, ses)
+		fields = appendTraceField(fields, ctx)
+		ses.logger.Log(msg, log.DefaultLogOptions().WithLevel(zap.ErrorLevel).AddCallerSkip(1), fields...)
+	}
+}
+
+func appendTraceField(fields []zap.Field, ctx context.Context) []zap.Field {
+	// TODO: implement me
+	return fields
+}
+
+var rt moruntime.Runtime
+var rtOnce sync.Once
+
+func getRuntime() moruntime.Runtime {
+	rtOnce.Do(initRuntime)
+	return rt
+}
+
+func initRuntime() {
+	rt = moruntime.ProcessLevelRuntime()
+	if rt == nil {
+		rt = moruntime.DefaultRuntime()
+	}
 }
