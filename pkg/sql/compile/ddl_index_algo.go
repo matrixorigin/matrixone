@@ -438,7 +438,8 @@ func (s *Scope) handleIvfIndexEntriesTable(c *Compile, indexDef *plan.IndexDef, 
 		"`%s`.`%s` , "+
 		"`%s`.`%s`  "+
 		"from %s inner join %s "+
-		"on `%s`.`%s` = `%s`.`%s`;",
+		"on `%s`.`%s` = `%s`.`%s` "+
+		"order by `%s`.`%s`, `%s`.`%s` ;",
 		insertSQL,
 
 		joinedNode,
@@ -460,6 +461,15 @@ func (s *Scope) handleIvfIndexEntriesTable(c *Compile, indexDef *plan.IndexDef, 
 		originalTblPkColMaySerialColNameAlias,
 		originalTableDef.Name,
 		originalTblPkColMaySerialColNameAlias,
+
+		// Without ORDER BY, we get 20QPS
+		// With    ORDER BY, we get 60QPS
+		// I think it's because there are lesser number of segments to scan during JOIN.
+		//TODO: need to revisit this once we have BlockFilter applied on the TableScan.
+		joinedNode,
+		catalog.SystemSI_IVFFLAT_TblCol_Centroids_version,
+		joinedNode,
+		joinedCentroidsId,
 	)
 
 	err = s.logTimestamp(c, qryDatabase, metadataTableName, "mapping_start")
