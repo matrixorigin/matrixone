@@ -301,17 +301,16 @@ func (l *LocalFS) Read(ctx context.Context, vector *IOVector) (err error) {
 	if len(vector.Entries) == 0 {
 		return moerr.NewEmptyVectorNoCtx()
 	}
+
+	stats := statistic.StatsInfoFromContext(ctx)
+
 	startLock := time.Now()
-	unlock, wait := l.ioLocks.Lock(IOLockKey{
-		File: vector.FilePath,
-	})
+	unlock, wait := l.ioLocks.Lock(vector.ioLockKey())
 	if unlock != nil {
 		defer unlock()
 	} else {
 		wait()
 	}
-
-	stats := statistic.StatsInfoFromContext(ctx)
 	stats.AddLockTimeConsumption(time.Since(startLock))
 
 	allocator := l.allocator
@@ -391,10 +390,7 @@ func (l *LocalFS) ReadCache(ctx context.Context, vector *IOVector) (err error) {
 	}
 
 	startLock := time.Now()
-	unlock, wait := l.ioLocks.Lock(IOLockKey{
-		File: vector.FilePath,
-	})
-
+	unlock, wait := l.ioLocks.Lock(vector.ioLockKey())
 	if unlock != nil {
 		defer unlock()
 	} else {
@@ -752,7 +748,7 @@ func (l *LocalFS) Delete(ctx context.Context, filePaths ...string) error {
 	)
 }
 
-func (l *LocalFS) deleteSingle(ctx context.Context, filePath string) error {
+func (l *LocalFS) deleteSingle(_ context.Context, filePath string) error {
 	path, err := ParsePathAtService(filePath, l.name)
 	if err != nil {
 		return err

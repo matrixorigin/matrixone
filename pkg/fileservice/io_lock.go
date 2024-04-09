@@ -23,7 +23,9 @@ import (
 )
 
 type IOLockKey struct {
-	File string
+	Path   string
+	Offset int64
+	End    int64
 }
 
 type IOLocks struct {

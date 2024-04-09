@@ -14,6 +14,8 @@
 
 package fileservice
 
+import "math"
+
 func (i *IOVector) allDone() bool {
 	for _, entry := range i.Entries {
 		if !entry.done {
@@ -29,4 +31,54 @@ func (i *IOVector) Release() {
 			entry.CachedData.Release()
 		}
 	}
+}
+
+func (i *IOVector) readRange() (min *int64, max *int64, readFull bool) {
+	readFullObject := i.Policy.CacheFullFile() &&
+		!i.Policy.Any(SkipDiskCache)
+
+	if readFullObject {
+		// full range
+		min = ptrTo[int64](0)
+		max = (*int64)(nil)
+
+	} else {
+		// minimal range
+		min = ptrTo(int64(math.MaxInt))
+		max = ptrTo(int64(0))
+		for _, entry := range i.Entries {
+			entry := entry
+			if entry.done {
+				continue
+			}
+			if entry.Offset < *min {
+				min = &entry.Offset
+			}
+			if entry.Size < 0 {
+				entry.Size = 0
+				max = nil
+			}
+			if max != nil {
+				if end := entry.Offset + entry.Size; end > *max {
+					max = &end
+				}
+			}
+		}
+	}
+
+	return
+}
+
+func (i *IOVector) ioLockKey() IOLockKey {
+	key := IOLockKey{
+		Path: i.FilePath,
+	}
+	min, max, _ := i.readRange()
+	if min != nil {
+		key.Offset = *min
+	}
+	if max != nil {
+		key.End = *max
+	}
+	return key
 }

@@ -23,7 +23,7 @@ func TestIOLock(t *testing.T) {
 	locks := new(IOLocks)
 	n := 1024
 	key := IOLockKey{
-		File: "foo",
+		Path: "foo",
 	}
 
 	wg := new(sync.WaitGroup)
