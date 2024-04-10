@@ -2442,6 +2442,50 @@ func Test_determineRevokePrivilege(t *testing.T) {
 	})
 }
 
+func TestBackUpStatementPrivilege(t *testing.T) {
+	convey.Convey("backup success", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+		stmt := &tree.BackupStart{}
+		priv := determinePrivilegeSetOfStatement(stmt)
+		ses := newSes(priv, ctrl)
+		tenant := &TenantInfo{
+			Tenant:        sysAccountName,
+			User:          rootName,
+			DefaultRole:   moAdminRoleName,
+			TenantID:      sysAccountID,
+			UserID:        rootID,
+			DefaultRoleID: moAdminRoleID,
+		}
+		ses.SetTenantInfo(tenant)
+
+		ok, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ses.GetRequestContext(), ses, stmt)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(ok, convey.ShouldBeTrue)
+	})
+
+	convey.Convey("backup fail", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+		stmt := &tree.BackupStart{}
+		priv := determinePrivilegeSetOfStatement(stmt)
+		ses := newSes(priv, ctrl)
+		tenant := &TenantInfo{
+			Tenant:        "test_account",
+			User:          "test_user",
+			DefaultRole:   "role1",
+			TenantID:      3001,
+			UserID:        3,
+			DefaultRoleID: 5,
+		}
+		ses.SetTenantInfo(tenant)
+
+		ok, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ses.GetRequestContext(), ses, stmt)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(ok, convey.ShouldBeFalse)
+	})
+}
+
 func Test_determineCreateDatabase(t *testing.T) {
 	convey.Convey("create database succ", t, func() {
 		ctrl := gomock.NewController(t)
