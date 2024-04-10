@@ -1432,21 +1432,35 @@ func (mce *MysqlCmdExecutor) handleDropSnapshot(ctx context.Context, ct *tree.Dr
 // which has been initialized.
 func (mce *MysqlCmdExecutor) handleCreateAccount(ctx context.Context, ca *tree.CreateAccount, proc *process.Process) error {
 	//step1 : create new account.
-	create := &CreateAccount{
+	create := &createAccount{
 		IfNotExists:  ca.IfNotExists,
-		AuthOption:   ca.AuthOption,
+		IdentTyp:     ca.AuthOption.IdentifiedType.Typ,
 		StatusOption: ca.StatusOption,
 		Comment:      ca.Comment,
 	}
 
 	params := proc.GetPrepareParams()
-	switch val := ca.Name.(type) {
-	case *tree.NumVal:
-		create.Name = val.OrigString()
-	case *tree.ParamExpr:
-		create.Name = params.GetStringAt(val.Offset - 1)
-	default:
-		return moerr.NewInternalError(ctx, "invalid params type")
+	var err error
+	bindParam := func(e tree.Expr) string {
+		if err != nil {
+			return ""
+		}
+
+		switch val := e.(type) {
+		case *tree.NumVal:
+			return val.OrigString()
+		case *tree.ParamExpr:
+			return params.GetStringAt(val.Offset - 1)
+		default:
+			err = moerr.NewInternalError(ctx, "invalid params type")
+			return ""
+		}
+	}
+	create.Name = bindParam(ca.Name)
+	create.AdminName = bindParam(ca.AuthOption.AdminName)
+	create.IdentStr = bindParam(ca.AuthOption.IdentifiedType.Str)
+	if err != nil {
+		return err
 	}
 
 	return InitGeneralTenant(ctx, mce.GetSession(), create)
@@ -1457,8 +1471,36 @@ func (mce *MysqlCmdExecutor) handleDropAccount(ctx context.Context, da *tree.Dro
 	return doDropAccount(ctx, mce.GetSession(), da)
 }
 
+func unboxExprStr(ctx context.Context, expr tree.Expr) (string, error) {
+	if e, ok := expr.(*tree.NumVal); ok {
+		return e.OrigString(), nil
+	} else {
+		return "", moerr.NewInternalError(ctx, "invalid expr type")
+	}
+}
+
 // handleDropAccount drops a new user-level tenant
-func (mce *MysqlCmdExecutor) handleAlterAccount(ctx context.Context, aa *tree.AlterAccount) error {
+func (mce *MysqlCmdExecutor) handleAlterAccount(ctx context.Context, st *tree.AlterAccount) error {
+	aa := &alterAccount{
+		IfExists:     st.IfExists,
+		Name:         st.Name,
+		StatusOption: st.StatusOption,
+		Comment:      st.Comment,
+	}
+	if st.AuthOption.Exist {
+		aa.AuthExist = true
+		var err error
+		aa.AdminName, err = unboxExprStr(ctx, st.AuthOption.AdminName)
+		if err != nil {
+			return err
+		}
+		aa.IdentTyp = st.AuthOption.IdentifiedType.Typ
+		aa.IdentStr, err = unboxExprStr(ctx, st.AuthOption.IdentifiedType.Str)
+		if err != nil {
+			return err
+		}
+	}
+
 	return doAlterAccount(ctx, mce.GetSession(), aa)
 }
 
@@ -1473,9 +1515,34 @@ func (mce *MysqlCmdExecutor) handleAlterAccountConfig(ctx context.Context, ses *
 }
 
 // handleCreateUser creates the user for the tenant
-func (mce *MysqlCmdExecutor) handleCreateUser(ctx context.Context, cu *tree.CreateUser) error {
+func (mce *MysqlCmdExecutor) handleCreateUser(ctx context.Context, st *tree.CreateUser) error {
 	ses := mce.GetSession()
 	tenant := ses.GetTenantInfo()
+
+	cu := &createUser{
+		IfNotExists:        st.IfNotExists,
+		Role:               st.Role,
+		Users:              make([]*user, 0, len(st.Users)),
+		MiscOpt:            st.MiscOpt,
+		CommentOrAttribute: st.CommentOrAttribute,
+	}
+
+	for _, u := range st.Users {
+		v := user{
+			Username: u.Username,
+			Hostname: u.Hostname,
+		}
+		if u.AuthOption != nil {
+			v.AuthExist = true
+			v.IdentTyp = u.AuthOption.Typ
+			var err error
+			v.IdentStr, err = unboxExprStr(ctx, u.AuthOption.Str)
+			if err != nil {
+				return err
+			}
+		}
+		cu.Users = append(cu.Users, &v)
+	}
 
 	//step1 : create the user
 	return InitUser(ctx, ses, tenant, cu)
@@ -1486,7 +1553,35 @@ func (mce *MysqlCmdExecutor) handleDropUser(ctx context.Context, du *tree.DropUs
 	return doDropUser(ctx, mce.GetSession(), du)
 }
 
-func (mce *MysqlCmdExecutor) handleAlterUser(ctx context.Context, au *tree.AlterUser) error {
+func (mce *MysqlCmdExecutor) handleAlterUser(ctx context.Context, st *tree.AlterUser) error {
+	if len(st.Users) != 1 {
+		return moerr.NewInternalError(ctx, "can only alter one user at a time")
+	}
+	su := st.Users[0]
+
+	u := &user{
+		Username: su.Username,
+		Hostname: su.Hostname,
+	}
+	if su.AuthOption != nil {
+		u.AuthExist = true
+		u.IdentTyp = su.AuthOption.Typ
+		var err error
+		u.IdentStr, err = unboxExprStr(ctx, su.AuthOption.Str)
+		if err != nil {
+			return err
+		}
+	}
+
+	au := &alterUser{
+		IfExists: st.IfExists,
+		User:     u,
+		Role:     st.Role,
+		MiscOpt:  st.MiscOpt,
+
+		CommentOrAttribute: st.CommentOrAttribute,
+	}
+
 	return doAlterUser(ctx, mce.GetSession(), au)
 }
 

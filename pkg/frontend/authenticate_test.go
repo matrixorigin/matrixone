@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"go/constant"
 	"reflect"
 	"strings"
 	"testing"
@@ -273,16 +274,12 @@ func Test_checkTenantExistsOrNot(t *testing.T) {
 		ses := newSes(nil, ctrl)
 		ses.tenant = tenant
 
-		err = InitGeneralTenant(ctx, ses, &CreateAccount{
+		err = InitGeneralTenant(ctx, ses, &createAccount{
 			Name:        "test",
 			IfNotExists: true,
-			AuthOption: tree.AccountAuthOption{
-				AdminName: "root",
-				IdentifiedType: tree.AccountIdentified{
-					Typ: tree.AccountIdentifiedByPassword,
-					Str: "123456",
-				},
-			},
+			AdminName:   "root",
+			IdentTyp:    tree.AccountIdentifiedByPassword,
+			IdentStr:    "123456",
 		})
 		convey.So(err, convey.ShouldBeNil)
 	})
@@ -348,13 +345,13 @@ func Test_createTablesInMoCatalogOfGeneralTenant(t *testing.T) {
 		//	DefaultRoleID: moAdminRoleID,
 		//}
 
-		ca := &CreateAccount{
+		ca := &createAccount{
 			Name:        "test",
 			IfNotExists: true,
-			AuthOption: tree.AccountAuthOption{
-				AdminName:      "test_root",
-				IdentifiedType: tree.AccountIdentified{Typ: tree.AccountIdentifiedByPassword, Str: "123"}},
-			Comment: tree.AccountComment{Exist: true, Comment: "test acccount"},
+			AdminName:   "test_root",
+			IdentTyp:    tree.AccountIdentifiedByPassword,
+			IdentStr:    "123",
+			Comment:     tree.AccountComment{Exist: true, Comment: "test acccount"},
 		}
 		finalVersion := "1.2.0"
 		_, _, err := createTablesInMoCatalogOfGeneralTenant(ctx, bh, finalVersion, ca)
@@ -438,16 +435,20 @@ func Test_initUser(t *testing.T) {
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 		sql2result := make(map[string]ExecResult)
 
-		cu := &tree.CreateUser{
+		cu := &createUser{
 			IfNotExists: true,
-			Users: []*tree.User{
+			Users: []*user{
 				{
-					Username:   "u1",
-					AuthOption: &tree.AccountIdentified{Typ: tree.AccountIdentifiedByPassword, Str: "123"},
+					Username:  "u1",
+					AuthExist: true,
+					IdentTyp:  tree.AccountIdentifiedByPassword,
+					IdentStr:  "123",
 				},
 				{
-					Username:   "u2",
-					AuthOption: &tree.AccountIdentified{Typ: tree.AccountIdentifiedByPassword, Str: "123"},
+					Username:  "u2",
+					AuthExist: true,
+					IdentTyp:  tree.AccountIdentifiedByPassword,
+					IdentStr:  "123",
 				},
 			},
 			Role:    &tree.Role{UserName: "test_role"},
@@ -6436,6 +6437,14 @@ func TestDoSetGlobalSystemVariable(t *testing.T) {
 	})
 }
 
+func boxExprStr(s string) tree.Expr {
+	return tree.NewNumValWithType(constant.MakeString(s), s, false, tree.P_char)
+}
+
+func mustUnboxExprStr(e tree.Expr) string {
+	return e.(*tree.NumVal).OrigString()
+}
+
 func Test_doAlterUser(t *testing.T) {
 	convey.Convey("alter user success", t, func() {
 		ctrl := gomock.NewController(t)
@@ -6449,7 +6458,7 @@ func Test_doAlterUser(t *testing.T) {
 
 		stmt := &tree.AlterUser{
 			Users: []*tree.User{
-				{Username: "u1", Hostname: "%", AuthOption: &tree.AccountIdentified{Typ: tree.AccountIdentifiedByPassword, Str: "123456"}},
+				{Username: "u1", Hostname: "%", AuthOption: &tree.AccountIdentified{Typ: tree.AccountIdentifiedByPassword, Str: boxExprStr("123456")}},
 			},
 		}
 		priv := determinePrivilegeSetOfStatement(stmt)
@@ -6482,65 +6491,20 @@ func Test_doAlterUser(t *testing.T) {
 		}
 
 		for _, user := range stmt.Users {
-			sql, _ := getSqlForUpdatePasswordOfUser(context.TODO(), user.AuthOption.Str, user.Username)
+			sql, _ := getSqlForUpdatePasswordOfUser(context.TODO(), mustUnboxExprStr(user.AuthOption.Str), user.Username)
 			bh.sql2result[sql] = nil
 		}
 
-		err := doAlterUser(ses.GetRequestContext(), ses, stmt)
-		convey.So(err, convey.ShouldBeNil)
-	})
-
-	convey.Convey("alter user fail for alter multi user", t, func() {
-		ctrl := gomock.NewController(t)
-		defer ctrl.Finish()
-
-		bh := &backgroundExecTest{}
-		bh.init()
-
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
-		defer bhStub.Reset()
-
-		stmt := &tree.AlterUser{
-			Users: []*tree.User{
-				{Username: "u1", Hostname: "%", AuthOption: &tree.AccountIdentified{Typ: tree.AccountIdentifiedByPassword, Str: "123456"}},
-				{Username: "u2", Hostname: "%", AuthOption: &tree.AccountIdentified{Typ: tree.AccountIdentifiedByPassword, Str: "123456"}},
-				{Username: "u3", Hostname: "%", AuthOption: &tree.AccountIdentified{Typ: tree.AccountIdentifiedByPassword, Str: "123456"}},
+		err := doAlterUser(ses.GetRequestContext(), ses, &alterUser{
+			User: &user{
+				Username:  "u1",
+				Hostname:  "%",
+				AuthExist: true,
+				IdentTyp:  tree.AccountIdentifiedByPassword,
+				IdentStr:  "123456",
 			},
-		}
-		priv := determinePrivilegeSetOfStatement(stmt)
-		ses := newSes(priv, ctrl)
-
-		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
-		pu.SV.SetDefaultValues()
-		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		aicm := &defines.AutoIncrCacheManager{}
-		rm, _ := NewRoutineManager(ctx, pu, aicm)
-		ses.rm = rm
-
-		//no result set
-		bh.sql2result["begin;"] = nil
-		bh.sql2result["commit;"] = nil
-		bh.sql2result["rollback;"] = nil
-
-		for i, user := range stmt.Users {
-			sql, _ := getSqlForPasswordOfUser(context.TODO(), user.Username)
-			mrs := newMrsForPasswordOfUser([][]interface{}{
-				{i, "111", "public"},
-			})
-			bh.sql2result[sql] = mrs
-
-			sql, _ = getSqlForCheckUserHasRole(context.TODO(), user.Username, moAdminRoleID)
-			mrs = newMrsForSqlForCheckUserHasRole([][]interface{}{})
-			bh.sql2result[sql] = mrs
-		}
-
-		for _, user := range stmt.Users {
-			sql, _ := getSqlForUpdatePasswordOfUser(context.TODO(), user.AuthOption.Str, user.Username)
-			bh.sql2result[sql] = nil
-		}
-
-		err := doAlterUser(ses.GetRequestContext(), ses, stmt)
-		convey.So(err, convey.ShouldBeError)
+		})
+		convey.So(err, convey.ShouldBeNil)
 	})
 
 	convey.Convey("alter user fail for privilege", t, func() {
@@ -6555,7 +6519,7 @@ func Test_doAlterUser(t *testing.T) {
 
 		stmt := &tree.AlterUser{
 			Users: []*tree.User{
-				{Username: "u1", Hostname: "%", AuthOption: &tree.AccountIdentified{Typ: tree.AccountIdentifiedByPassword, Str: "123456"}},
+				{Username: "u1", Hostname: "%", AuthOption: &tree.AccountIdentified{Typ: tree.AccountIdentifiedByPassword, Str: boxExprStr("123456")}},
 			},
 		}
 		priv := determinePrivilegeSetOfStatement(stmt)
@@ -6586,16 +6550,40 @@ func Test_doAlterUser(t *testing.T) {
 		}
 
 		for _, user := range stmt.Users {
-			sql, _ := getSqlForUpdatePasswordOfUser(context.TODO(), user.AuthOption.Str, user.Username)
+			sql, _ := getSqlForUpdatePasswordOfUser(context.TODO(), mustUnboxExprStr(user.AuthOption.Str), user.Username)
 			bh.sql2result[sql] = nil
 		}
 
-		err := doAlterUser(ses.GetRequestContext(), ses, stmt)
+		err := doAlterUser(ses.GetRequestContext(), ses, &alterUser{
+			User: &user{
+				Username:  "u1",
+				Hostname:  "%",
+				AuthExist: true,
+				IdentTyp:  tree.AccountIdentifiedByPassword,
+				IdentStr:  "123456",
+			},
+		})
 		convey.So(err, convey.ShouldBeError)
 	})
 }
 
 func Test_doAlterAccount(t *testing.T) {
+	alterAcountFromStmt := func(stmt *tree.AlterAccount) *alterAccount {
+		aa := &alterAccount{
+			IfExists:     stmt.IfExists,
+			Name:         stmt.Name,
+			AuthExist:    stmt.AuthOption.Exist,
+			StatusOption: stmt.StatusOption,
+			Comment:      stmt.Comment,
+		}
+		if stmt.AuthOption.Exist {
+			aa.AdminName = mustUnboxExprStr(stmt.AuthOption.AdminName)
+			aa.IdentTyp = stmt.AuthOption.IdentifiedType.Typ
+			aa.IdentStr = mustUnboxExprStr(stmt.AuthOption.IdentifiedType.Str)
+		}
+		return aa
+	}
+
 	convey.Convey("alter account (auth_option) succ", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
@@ -6610,10 +6598,10 @@ func Test_doAlterAccount(t *testing.T) {
 			Name: "acc",
 			AuthOption: tree.AlterAccountAuthOption{
 				Exist:     true,
-				AdminName: "rootx",
+				AdminName: boxExprStr("rootx"),
 				IdentifiedType: tree.AccountIdentified{
 					Typ: tree.AccountIdentifiedByPassword,
-					Str: "111",
+					Str: boxExprStr("111"),
 				},
 			},
 		}
@@ -6638,15 +6626,15 @@ func Test_doAlterAccount(t *testing.T) {
 		})
 		bh.sql2result[sql] = mrs
 
-		sql, _ = getSqlForPasswordOfUser(context.TODO(), stmt.AuthOption.AdminName)
+		sql, _ = getSqlForPasswordOfUser(context.TODO(), mustUnboxExprStr(stmt.AuthOption.AdminName))
 		bh.sql2result[sql] = newMrsForPasswordOfUser([][]interface{}{
 			{10, "111", 0},
 		})
 
-		sql, _ = getSqlForUpdatePasswordOfUser(context.TODO(), stmt.AuthOption.IdentifiedType.Str, stmt.AuthOption.AdminName)
+		sql, _ = getSqlForUpdatePasswordOfUser(context.TODO(), mustUnboxExprStr(stmt.AuthOption.IdentifiedType.Str), mustUnboxExprStr(stmt.AuthOption.AdminName))
 		bh.sql2result[sql] = nil
 
-		err := doAlterAccount(ses.GetRequestContext(), ses, stmt)
+		err := doAlterAccount(ses.GetRequestContext(), ses, alterAcountFromStmt(stmt))
 		convey.So(err, convey.ShouldBeNil)
 	})
 
@@ -6664,10 +6652,10 @@ func Test_doAlterAccount(t *testing.T) {
 			Name: "acc",
 			AuthOption: tree.AlterAccountAuthOption{
 				Exist:     true,
-				AdminName: "rootx",
+				AdminName: boxExprStr("rootx"),
 				IdentifiedType: tree.AccountIdentified{
 					Typ: tree.AccountIdentifiedByRandomPassword,
-					Str: "111",
+					Str: boxExprStr("111"),
 				},
 			},
 		}
@@ -6692,15 +6680,15 @@ func Test_doAlterAccount(t *testing.T) {
 		})
 		bh.sql2result[sql] = mrs
 
-		sql, _ = getSqlForPasswordOfUser(context.TODO(), stmt.AuthOption.AdminName)
+		sql, _ = getSqlForPasswordOfUser(context.TODO(), mustUnboxExprStr(stmt.AuthOption.AdminName))
 		bh.sql2result[sql] = newMrsForPasswordOfUser([][]interface{}{
 			{10, "111", 0},
 		})
 
-		sql, _ = getSqlForUpdatePasswordOfUser(context.TODO(), stmt.AuthOption.IdentifiedType.Str, stmt.AuthOption.AdminName)
+		sql, _ = getSqlForUpdatePasswordOfUser(context.TODO(), mustUnboxExprStr(stmt.AuthOption.IdentifiedType.Str), mustUnboxExprStr(stmt.AuthOption.AdminName))
 		bh.sql2result[sql] = nil
 
-		err := doAlterAccount(ses.GetRequestContext(), ses, stmt)
+		err := doAlterAccount(ses.GetRequestContext(), ses, alterAcountFromStmt(stmt))
 		convey.So(err, convey.ShouldNotBeNil)
 	})
 
@@ -6718,10 +6706,10 @@ func Test_doAlterAccount(t *testing.T) {
 			Name: "acc",
 			AuthOption: tree.AlterAccountAuthOption{
 				Exist:     true,
-				AdminName: "rootx",
+				AdminName: boxExprStr("rootx"),
 				IdentifiedType: tree.AccountIdentified{
 					Typ: tree.AccountIdentifiedByRandomPassword,
-					Str: "111",
+					Str: boxExprStr("111"),
 				},
 			},
 		}
@@ -6743,13 +6731,13 @@ func Test_doAlterAccount(t *testing.T) {
 		sql, _ := getSqlForCheckTenant(context.TODO(), stmt.Name)
 		bh.sql2result[sql] = nil
 
-		sql, _ = getSqlForPasswordOfUser(context.TODO(), stmt.AuthOption.AdminName)
+		sql, _ = getSqlForPasswordOfUser(context.TODO(), mustUnboxExprStr(stmt.AuthOption.AdminName))
 		bh.sql2result[sql] = nil
 
-		sql, _ = getSqlForUpdatePasswordOfUser(context.TODO(), stmt.AuthOption.IdentifiedType.Str, stmt.AuthOption.AdminName)
+		sql, _ = getSqlForUpdatePasswordOfUser(context.TODO(), mustUnboxExprStr(stmt.AuthOption.IdentifiedType.Str), mustUnboxExprStr(stmt.AuthOption.AdminName))
 		bh.sql2result[sql] = nil
 
-		err := doAlterAccount(ses.GetRequestContext(), ses, stmt)
+		err := doAlterAccount(ses.GetRequestContext(), ses, alterAcountFromStmt(stmt))
 		convey.So(err, convey.ShouldNotBeNil)
 	})
 
@@ -6768,10 +6756,10 @@ func Test_doAlterAccount(t *testing.T) {
 			Name:     "acc",
 			AuthOption: tree.AlterAccountAuthOption{
 				Exist:     true,
-				AdminName: "rootx",
+				AdminName: boxExprStr("rootx"),
 				IdentifiedType: tree.AccountIdentified{
 					Typ: tree.AccountIdentifiedByPassword,
-					Str: "111",
+					Str: boxExprStr("111"),
 				},
 			},
 		}
@@ -6794,13 +6782,13 @@ func Test_doAlterAccount(t *testing.T) {
 		mrs := newMrsForCheckTenant([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
-		sql, _ = getSqlForPasswordOfUser(context.TODO(), stmt.AuthOption.AdminName)
+		sql, _ = getSqlForPasswordOfUser(context.TODO(), mustUnboxExprStr(stmt.AuthOption.AdminName))
 		bh.sql2result[sql] = nil
 
-		sql, _ = getSqlForUpdatePasswordOfUser(context.TODO(), stmt.AuthOption.IdentifiedType.Str, stmt.AuthOption.AdminName)
+		sql, _ = getSqlForUpdatePasswordOfUser(context.TODO(), mustUnboxExprStr(stmt.AuthOption.IdentifiedType.Str), mustUnboxExprStr(stmt.AuthOption.AdminName))
 		bh.sql2result[sql] = nil
 
-		err := doAlterAccount(ses.GetRequestContext(), ses, stmt)
+		err := doAlterAccount(ses.GetRequestContext(), ses, alterAcountFromStmt(stmt))
 		convey.So(err, convey.ShouldBeNil)
 	})
 
@@ -6819,10 +6807,10 @@ func Test_doAlterAccount(t *testing.T) {
 			Name:     "acc",
 			AuthOption: tree.AlterAccountAuthOption{
 				Exist:     true,
-				AdminName: "rootx",
+				AdminName: boxExprStr("rootx"),
 				IdentifiedType: tree.AccountIdentified{
 					Typ: tree.AccountIdentifiedByPassword,
-					Str: "111",
+					Str: boxExprStr("111"),
 				},
 			},
 		}
@@ -6847,15 +6835,15 @@ func Test_doAlterAccount(t *testing.T) {
 		})
 		bh.sql2result[sql] = mrs
 
-		sql, _ = getSqlForPasswordOfUser(context.TODO(), stmt.AuthOption.AdminName)
+		sql, _ = getSqlForPasswordOfUser(context.TODO(), mustUnboxExprStr(stmt.AuthOption.AdminName))
 		bh.sql2result[sql] = newMrsForPasswordOfUser([][]interface{}{})
 
-		sql, _ = getSqlForUpdatePasswordOfUser(context.TODO(), stmt.AuthOption.IdentifiedType.Str, stmt.AuthOption.AdminName)
+		sql, _ = getSqlForUpdatePasswordOfUser(context.TODO(), mustUnboxExprStr(stmt.AuthOption.IdentifiedType.Str), mustUnboxExprStr(stmt.AuthOption.AdminName))
 		bh.sql2result[sql] = newMrsForCheckTenant([][]interface{}{
 			{0, 0, 0, 0},
 		})
 
-		err := doAlterAccount(ses.GetRequestContext(), ses, stmt)
+		err := doAlterAccount(ses.GetRequestContext(), ses, alterAcountFromStmt(stmt))
 		convey.So(err, convey.ShouldNotBeNil)
 	})
 
@@ -6891,13 +6879,13 @@ func Test_doAlterAccount(t *testing.T) {
 		sql, _ := getSqlForCheckTenant(context.TODO(), stmt.Name)
 		bh.sql2result[sql] = nil
 
-		sql, _ = getSqlForPasswordOfUser(context.TODO(), stmt.AuthOption.AdminName)
+		sql, _ = getSqlForPasswordOfUser(context.TODO(), mustUnboxExprStr(stmt.AuthOption.AdminName))
 		bh.sql2result[sql] = nil
 
-		sql, _ = getSqlForUpdatePasswordOfUser(context.TODO(), stmt.AuthOption.IdentifiedType.Str, stmt.AuthOption.AdminName)
+		sql, _ = getSqlForUpdatePasswordOfUser(context.TODO(), mustUnboxExprStr(stmt.AuthOption.IdentifiedType.Str), mustUnboxExprStr(stmt.AuthOption.AdminName))
 		bh.sql2result[sql] = nil
 
-		err := doAlterAccount(ses.GetRequestContext(), ses, stmt)
+		err := doAlterAccount(ses.GetRequestContext(), ses, alterAcountFromStmt(stmt))
 		convey.So(err, convey.ShouldNotBeNil)
 	})
 
@@ -6916,10 +6904,10 @@ func Test_doAlterAccount(t *testing.T) {
 			Name:     "acc",
 			AuthOption: tree.AlterAccountAuthOption{
 				Exist:     true,
-				AdminName: "rootx",
+				AdminName: boxExprStr("rootx"),
 				IdentifiedType: tree.AccountIdentified{
 					Typ: tree.AccountIdentifiedByPassword,
-					Str: "111",
+					Str: boxExprStr("111"),
 				},
 			},
 			StatusOption: tree.AccountStatus{
@@ -6944,13 +6932,13 @@ func Test_doAlterAccount(t *testing.T) {
 
 		sql, _ := getSqlForCheckTenant(context.TODO(), stmt.Name)
 		bh.sql2result[sql] = nil
-		sql, _ = getSqlForPasswordOfUser(context.TODO(), stmt.AuthOption.AdminName)
+		sql, _ = getSqlForPasswordOfUser(context.TODO(), mustUnboxExprStr(stmt.AuthOption.AdminName))
 		bh.sql2result[sql] = nil
 
-		sql, _ = getSqlForUpdatePasswordOfUser(context.TODO(), stmt.AuthOption.IdentifiedType.Str, stmt.AuthOption.AdminName)
+		sql, _ = getSqlForUpdatePasswordOfUser(context.TODO(), mustUnboxExprStr(stmt.AuthOption.IdentifiedType.Str), mustUnboxExprStr(stmt.AuthOption.AdminName))
 		bh.sql2result[sql] = nil
 
-		err := doAlterAccount(ses.GetRequestContext(), ses, stmt)
+		err := doAlterAccount(ses.GetRequestContext(), ses, alterAcountFromStmt(stmt))
 		convey.So(err, convey.ShouldNotBeNil)
 	})
 
@@ -6992,13 +6980,13 @@ func Test_doAlterAccount(t *testing.T) {
 		})
 		bh.sql2result[sql] = mrs
 
-		sql, _ = getSqlForPasswordOfUser(context.TODO(), stmt.AuthOption.AdminName)
+		sql, _ = getSqlForPasswordOfUser(context.TODO(), mustUnboxExprStr(stmt.AuthOption.AdminName))
 		bh.sql2result[sql] = nil
 
 		sql, _ = getSqlForUpdateCommentsOfAccount(context.TODO(), stmt.Comment.Comment, stmt.Name)
 		bh.sql2result[sql] = nil
 
-		err := doAlterAccount(ses.GetRequestContext(), ses, stmt)
+		err := doAlterAccount(ses.GetRequestContext(), ses, alterAcountFromStmt(stmt))
 		convey.So(err, convey.ShouldBeNil)
 	})
 
@@ -7040,13 +7028,13 @@ func Test_doAlterAccount(t *testing.T) {
 		})
 		bh.sql2result[sql] = mrs
 
-		sql, _ = getSqlForPasswordOfUser(context.TODO(), stmt.AuthOption.AdminName)
+		sql, _ = getSqlForPasswordOfUser(context.TODO(), mustUnboxExprStr(stmt.AuthOption.AdminName))
 		bh.sql2result[sql] = nil
 
 		sql, _ = getSqlForUpdateStatusOfAccount(context.TODO(), stmt.StatusOption.Option.String(), types.CurrentTimestamp().String2(time.UTC, 0), stmt.Name)
 		bh.sql2result[sql] = nil
 
-		err := doAlterAccount(ses.GetRequestContext(), ses, stmt)
+		err := doAlterAccount(ses.GetRequestContext(), ses, alterAcountFromStmt(stmt))
 		convey.So(err, convey.ShouldBeNil)
 	})
 
@@ -7085,13 +7073,13 @@ func Test_doAlterAccount(t *testing.T) {
 		sql, _ := getSqlForCheckTenant(context.TODO(), stmt.Name)
 		bh.sql2result[sql] = nil
 
-		sql, _ = getSqlForPasswordOfUser(context.TODO(), stmt.AuthOption.AdminName)
+		sql, _ = getSqlForPasswordOfUser(context.TODO(), mustUnboxExprStr(stmt.AuthOption.AdminName))
 		bh.sql2result[sql] = nil
 
 		sql, _ = getSqlForUpdateStatusOfAccount(context.TODO(), stmt.StatusOption.Option.String(), types.CurrentTimestamp().String2(time.UTC, 0), stmt.Name)
 		bh.sql2result[sql] = nil
 
-		err := doAlterAccount(ses.GetRequestContext(), ses, stmt)
+		err := doAlterAccount(ses.GetRequestContext(), ses, alterAcountFromStmt(stmt))
 		convey.So(err, convey.ShouldNotBeNil)
 	})
 }

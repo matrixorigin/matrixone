@@ -215,54 +215,39 @@ func buildSetVariables(stmt *tree.SetVar, ctx CompilerContext) (*Plan, error) {
 }
 
 func buildCreateAccount(stmt *tree.CreateAccount, ctx CompilerContext, isPrepareStmt bool) (*Plan, error) {
-	bindStr := func(astExpr tree.Expr) (*Expr, error) {
-		switch ast := astExpr.(type) {
+	params := []tree.Expr{
+		stmt.Name,
+		stmt.AuthOption.AdminName,
+		stmt.AuthOption.IdentifiedType.Str,
+	}
+	paramTypes := make([]int32, 0, len(params))
+	for _, p := range params {
+		switch ast := p.(type) {
 		case *tree.NumVal:
 			if ast.ValType != tree.P_char {
 				return nil, moerr.NewInvalidInput(ctx.GetContext(), "unsupport value '%s'", ast.String())
 			}
-			expr := makePlan2StringConstExprWithType(ast.String())
-			return expr, nil
 		case *tree.ParamExpr:
 			if !isPrepareStmt {
 				return nil, moerr.NewInvalidInput(ctx.GetContext(), "only prepare statement can use ? expr")
 			}
-			typ := types.T_text.ToType()
-			return &Expr{
-				Typ: *makePlan2Type(&typ),
-				Expr: &plan.Expr_P{
-					P: &plan.ParamRef{
-						Pos: int32(ast.Offset),
-					},
-				},
-			}, nil
+			paramTypes = append(paramTypes, int32(types.T_varchar))
+			if ast.Offset != len(paramTypes) {
+				return nil, moerr.NewInternalError(ctx.GetContext(), "offset not match")
+			}
 		default:
 			return nil, moerr.NewInvalidInput(ctx.GetContext(), "unsupport value '%s'", ast.String())
 		}
-	}
-
-	createAccount := &plan.CreateAccount{
-		IfNotExists: stmt.IfNotExists,
-		AdminName:   stmt.AuthOption.AdminName,
-		Identified: &plan.AccountIdentified{
-			Typ: plan.AccountIdentifiedOption(stmt.AuthOption.IdentifiedType.Typ),
-			Str: stmt.AuthOption.IdentifiedType.Str,
-		},
-		Status: plan.AccountStatusOption(stmt.StatusOption.Option),
-	}
-
-	var err error
-	createAccount.Name, err = bindStr(stmt.Name)
-	if err != nil {
-		return nil, err
 	}
 
 	return &Plan{
 		Plan: &plan.Plan_Dcl{
 			Dcl: &plan.DataControl{
 				DclType: plan.DataControl_CREATE_ACCOUNT,
-				Control: &plan.DataControl_CreateAccount{
-					CreateAccount: createAccount,
+				Control: &plan.DataControl_Other{
+					Other: &plan.OtherDCL{
+						ParamTypes: paramTypes,
+					},
 				},
 			},
 		},

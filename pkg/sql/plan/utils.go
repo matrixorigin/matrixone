@@ -1851,9 +1851,8 @@ func ResetPreparePlan(ctx CompilerContext, preparePlan *Plan) ([]*plan.ObjectRef
 	case *plan.Plan_Tcl:
 		return nil, nil, moerr.NewInvalidInput(ctx.GetContext(), "cannot prepare TCL and DCL statement")
 	case *plan.Plan_Dcl:
-		if pp.Dcl.GetDclType() == plan.DataControl_CREATE_ACCOUNT &&
-			pp.Dcl.GetCreateAccount().GetName().GetP() != nil {
-			return nil, []int32{int32(types.T_varchar)}, nil
+		if pp.Dcl.GetDclType() == plan.DataControl_CREATE_ACCOUNT {
+			return nil, pp.Dcl.GetOther().GetParamTypes(), nil
 		}
 		return nil, nil, moerr.NewInvalidInput(ctx.GetContext(), "cannot prepare TCL and DCL statement")
 	case *plan.Plan_Ddl:

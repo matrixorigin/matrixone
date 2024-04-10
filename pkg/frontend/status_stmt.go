@@ -300,21 +300,36 @@ type CreateAccountExecutor struct {
 }
 
 func (cae *CreateAccountExecutor) ExecuteImpl(ctx context.Context, ses *Session) error {
-	create := &CreateAccount{
-		IfNotExists:  cae.ca.IfNotExists,
-		AuthOption:   cae.ca.AuthOption,
-		StatusOption: cae.ca.StatusOption,
-		Comment:      cae.ca.Comment,
+	ca := cae.ca
+	create := &createAccount{
+		IfNotExists:  ca.IfNotExists,
+		IdentTyp:     ca.AuthOption.IdentifiedType.Typ,
+		StatusOption: ca.StatusOption,
+		Comment:      ca.Comment,
 	}
 
 	params := cae.GetProcess().GetPrepareParams()
-	switch val := cae.ca.Name.(type) {
-	case *tree.NumVal:
-		create.Name = val.OrigString()
-	case *tree.ParamExpr:
-		create.Name = params.GetStringAt(val.Offset - 1)
-	default:
-		return moerr.NewInternalError(ctx, "invalid params type")
+	var err error
+	bindParam := func(e tree.Expr) string {
+		if err != nil {
+			return ""
+		}
+
+		switch val := e.(type) {
+		case *tree.NumVal:
+			return val.OrigString()
+		case *tree.ParamExpr:
+			return params.GetStringAt(val.Offset - 1)
+		default:
+			err = moerr.NewInternalError(ctx, "invalid params type")
+			return ""
+		}
+	}
+	create.Name = bindParam(ca.Name)
+	create.AdminName = bindParam(ca.AuthOption.AdminName)
+	create.IdentStr = bindParam(ca.AuthOption.IdentifiedType.Str)
+	if err != nil {
+		return err
 	}
 
 	return InitGeneralTenant(ctx, ses, create)
@@ -341,7 +356,34 @@ type CreateUserExecutor struct {
 
 func (cue *CreateUserExecutor) ExecuteImpl(ctx context.Context, ses *Session) error {
 	tenant := ses.GetTenantInfo()
-	return InitUser(ctx, ses, tenant, cue.cu)
+
+	st := cue.cu
+	cu := &createUser{
+		IfNotExists:        st.IfNotExists,
+		Role:               st.Role,
+		Users:              make([]*user, 0, len(st.Users)),
+		MiscOpt:            st.MiscOpt,
+		CommentOrAttribute: st.CommentOrAttribute,
+	}
+
+	for _, u := range st.Users {
+		v := user{
+			Username: u.Username,
+			Hostname: u.Hostname,
+		}
+		if u.AuthOption != nil {
+			v.AuthExist = true
+			v.IdentTyp = u.AuthOption.Typ
+			var err error
+			v.IdentStr, err = unboxExprStr(ctx, u.AuthOption.Str)
+			if err != nil {
+				return err
+			}
+		}
+		cu.Users = append(cu.Users, &v)
+	}
+
+	return InitUser(ctx, ses, tenant, cu)
 }
 
 type DropUserExecutor struct {
