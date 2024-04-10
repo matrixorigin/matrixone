@@ -52,14 +52,6 @@ func (s *scheduler) Schedule(cnState logservice.CNState, currentTick uint64) {
 	runningTasks := s.queryTasks(task.TaskStatus_Running)
 	createdTasks := s.queryTasks(task.TaskStatus_Created)
 	tasks := append(runningTasks, createdTasks...)
-	for _, t := range tasks {
-		if t.IsInitTask() {
-			runtime.ProcessLevelRuntime().
-				SubLogger(runtime.SystemInit).Debug(
-				"task schedule query init task",
-				zap.String("task", t.Metadata.String()))
-		}
-	}
 
 	runtime.ProcessLevelRuntime().Logger().Debug("task schedule query tasks",
 		zap.Int("created", len(createdTasks)),

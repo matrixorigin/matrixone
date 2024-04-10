@@ -8184,6 +8184,98 @@ func TestCheckpointReadWrite2(t *testing.T) {
 	testutil.CheckCheckpointReadWrite(t, types.TS{}, t1, tae.Catalog, smallCheckpointBlockRows, smallCheckpointSize, tae.Opts.Fs)
 }
 
+func TestSnapshotCheckpoint(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	testutils.EnsureNoLeak(t)
+	ctx := context.Background()
+
+	opts := new(options.Options)
+	opts = config.WithLongScanAndCKPOpts(opts)
+	options.WithDisableGCCheckpoint()(opts)
+	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer tae.Close()
+	db := tae.DB
+	db.DiskCleaner.GetCleaner().SetMinMergeCountForTest(2)
+
+	schema1 := catalog.MockSchemaAll(13, 2)
+	schema1.BlockMaxRows = 10
+	schema1.ObjectMaxBlocks = 2
+
+	schema2 := catalog.MockSchemaAll(13, 2)
+	schema2.BlockMaxRows = 10
+	schema2.ObjectMaxBlocks = 2
+	var rel1 handle.Relation
+	{
+		txn, _ := db.StartTxn(nil)
+		database, err := txn.CreateDatabase("db", "", "")
+		assert.Nil(t, err)
+		rel1, err = database.CreateRelation(schema1)
+		assert.Nil(t, err)
+		_, err = database.CreateRelation(schema2)
+		assert.Nil(t, err)
+		assert.Nil(t, txn.Commit(context.Background()))
+	}
+	bat := catalog.MockBatch(schema1, int(schema1.BlockMaxRows*10-1))
+	defer bat.Close()
+	bats := bat.Split(bat.Length())
+
+	pool, err := ants.NewPool(20)
+	assert.Nil(t, err)
+	defer pool.Release()
+	var wg sync.WaitGroup
+
+	for i := 0; i < len(bats)/2; i++ {
+		wg.Add(2)
+		err = pool.Submit(testutil.AppendClosure(t, bats[i], schema1.Name, db, &wg))
+		assert.Nil(t, err)
+		err = pool.Submit(testutil.AppendClosure(t, bats[i], schema2.Name, db, &wg))
+		assert.Nil(t, err)
+	}
+	wg.Wait()
+	ts := types.BuildTS(time.Now().UTC().UnixNano(), 0)
+	db.ForceCheckpoint(ctx, ts, time.Minute)
+	snapshot := types.BuildTS(time.Now().UTC().UnixNano(), 0)
+	db.ForceCheckpoint(ctx, snapshot, time.Minute)
+	tae.ForceCheckpoint()
+	assert.Equal(t, uint64(0), db.Runtime.Scheduler.GetPenddingLSNCnt())
+	var wg2 sync.WaitGroup
+	for i := len(bats) / 2; i < len(bats); i++ {
+		wg2.Add(2)
+		err = pool.Submit(testutil.AppendClosure(t, bats[i], schema1.Name, db, &wg2))
+		assert.Nil(t, err)
+		err = pool.Submit(testutil.AppendClosure(t, bats[i], schema2.Name, db, &wg2))
+		assert.Nil(t, err)
+	}
+	wg2.Wait()
+	tae.ForceCheckpoint()
+	tae.ForceCheckpoint()
+	ins1, seg1 := testutil.GetUserTablesInsBatch(t, rel1.ID(), types.TS{}, snapshot, db.Catalog)
+	ckps, err := checkpoint.ListSnapshotCheckpoint(ctx, db.Opts.Fs, snapshot, rel1.ID())
+	assert.Nil(t, err)
+	var inslen, seglen int
+	for _, ckp := range ckps {
+		ins, _, _, seg, cbs := testutil.ReadSnapshotCheckpoint(t, rel1.ID(), ckp.GetLocation(), db.Opts.Fs)
+		for _, cb := range cbs {
+			if cb != nil {
+				cb()
+			}
+		}
+		if ins != nil {
+			moIns, err := batch.ProtoBatchToBatch(ins)
+			assert.NoError(t, err)
+			inslen += moIns.Vecs[0].Length()
+		}
+		if seg != nil {
+			moIns, err := batch.ProtoBatchToBatch(seg)
+			assert.NoError(t, err)
+			seglen += moIns.Vecs[0].Length()
+		}
+	}
+	assert.Equal(t, inslen, ins1.Length())
+	assert.Equal(t, seglen, seg1.Length())
+	assert.Equal(t, int64(0), common.DebugAllocator.CurrNB())
+}
+
 func TestEstimateMemSize(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	ctx := context.Background()

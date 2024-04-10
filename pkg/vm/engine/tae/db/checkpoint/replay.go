@@ -45,6 +45,7 @@ type metaFile struct {
 	index int
 	start types.TS
 	end   types.TS
+	name  string
 }
 
 func (r *runner) Replay(dataFactory catalog.DataFactory) (

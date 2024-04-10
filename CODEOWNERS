@@ -126,6 +126,9 @@
 # pkg/sort
 /pkg/sort @nnsgmsone
 
+# pkg/bootstrap
+/pkg/bootstrap @daviszhen @zhangxu19830126 @qingxinhome
+
 # pkg/sql
 /pkg/sql @nnsgmsone @aunjgr
 /pkg/sql/colexec @m-schen
