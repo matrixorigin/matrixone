@@ -23,6 +23,7 @@ import (
 	"os"
 	pathpkg "path"
 	"path/filepath"
+	gotrace "runtime/trace"
 	"sort"
 	"strings"
 	"sync"
@@ -53,7 +54,7 @@ type LocalFS struct {
 
 	perfCounterSets []*perfcounter.CounterSet
 
-	ioLocks IOLocks
+	ioLocks *IOLocks
 }
 
 var _ FileService = new(LocalFS)
@@ -99,6 +100,7 @@ func NewLocalFS(
 		dirFiles:        make(map[string]*os.File),
 		asyncUpdate:     true,
 		perfCounterSets: perfCounterSets,
+		ioLocks:         NewIOLocks(),
 	}
 
 	if err := fs.initCaches(ctx, cacheConfig); err != nil {
@@ -300,18 +302,19 @@ func (l *LocalFS) Read(ctx context.Context, vector *IOVector) (err error) {
 	if len(vector.Entries) == 0 {
 		return moerr.NewEmptyVectorNoCtx()
 	}
+
+	stats := statistic.StatsInfoFromContext(ctx)
+
 	startLock := time.Now()
-	unlock, wait := l.ioLocks.Lock(IOLockKey{
-		File: vector.FilePath,
-	})
+	_, task := gotrace.NewTask(ctx, "LocalFS.Read: wait io lock")
+	unlock, wait := l.ioLocks.Lock(vector.ioLockKey())
 	if unlock != nil {
 		defer unlock()
 	} else {
 		wait()
 	}
-
-	stats := statistic.StatsInfoFromContext(ctx)
 	stats.AddLocalFSReadIOLockTimeConsumption(time.Since(startLock))
+	task.End()
 
 	for _, cache := range vector.Caches {
 		cache := cache
@@ -382,10 +385,7 @@ func (l *LocalFS) ReadCache(ctx context.Context, vector *IOVector) (err error) {
 	}
 
 	startLock := time.Now()
-	unlock, wait := l.ioLocks.Lock(IOLockKey{
-		File: vector.FilePath,
-	})
-
+	unlock, wait := l.ioLocks.Lock(vector.ioLockKey())
 	if unlock != nil {
 		defer unlock()
 	} else {
@@ -763,7 +763,7 @@ func (l *LocalFS) Delete(ctx context.Context, filePaths ...string) error {
 	)
 }
 
-func (l *LocalFS) deleteSingle(ctx context.Context, filePath string) error {
+func (l *LocalFS) deleteSingle(_ context.Context, filePath string) error {
 	path, err := ParsePathAtService(filePath, l.name)
 	if err != nil {
 		return err
