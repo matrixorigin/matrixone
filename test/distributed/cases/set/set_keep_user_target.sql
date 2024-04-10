@@ -19,3 +19,4 @@ select aA, bB, CC, abc, a_Bc_D from t1;
 drop table t1;
 drop database test;
 -- @session
+drop account default_1;

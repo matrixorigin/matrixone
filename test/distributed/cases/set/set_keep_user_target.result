@@ -30,3 +30,4 @@ aA    bB    CC    abc    a_Bc_D
 1    2    3    A    10.9
 drop table t1;
 drop database test;
+drop account default_1;
