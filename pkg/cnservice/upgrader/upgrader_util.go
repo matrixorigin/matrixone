@@ -65,13 +65,6 @@ func makeOptions(tenant *frontend.TenantInfo) *ie.OptsBuilder {
 	return ie.NewOptsBuilder().AccountId(tenant.GetTenantID()).UserId(tenant.GetUserID()).DefaultRoleId(tenant.GetDefaultRoleID())
 }
 
-func appendSemicolon(s string) string {
-	if !strings.HasSuffix(s, ";") {
-		return s + ";"
-	}
-	return s
-}
-
 func convErrsToFormatMsg(errors []error) string {
 	format := "The upgrade error message is listed below: \n"
 	for i, err := range errors {
