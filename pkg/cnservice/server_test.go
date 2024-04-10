@@ -117,28 +117,3 @@ func Test_InitServer(t *testing.T) {
 	)
 	require.Nil(t, err)
 }
-
-type testMessageCache struct {
-	cache []morpc.Message
-}
-
-func (c *testMessageCache) Add(val morpc.Message) error {
-	c.cache = append(c.cache, val)
-	return nil
-}
-
-func (c *testMessageCache) Len() (int, error) {
-	return len(c.cache), nil
-}
-
-func (c *testMessageCache) Pop() (morpc.Message, bool, error) {
-	if len(c.cache) == 0 {
-		return nil, false, nil
-	}
-	ret := c.cache[0]
-	c.cache = c.cache[1:]
-	return ret, true, nil
-}
-
-func (c *testMessageCache) Close() {
-}
