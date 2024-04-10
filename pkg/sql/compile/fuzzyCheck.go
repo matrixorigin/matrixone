@@ -49,8 +49,8 @@ func newFuzzyCheck(n *plan.Node) (*fuzzyCheck, error) {
 	}
 
 	f := reuse.Alloc[fuzzyCheck](nil)
-	f.tbl = f.wrapup(tblName)
-	f.db = f.wrapup(dbName)
+	f.tbl = tblName
+	f.db = dbName
 	f.attr = n.TableDef.Pkey.PkeyColName
 
 	for _, c := range n.TableDef.Cols {
@@ -70,7 +70,6 @@ func newFuzzyCheck(n *plan.Node) (*fuzzyCheck, error) {
 	// We can only get the table definition of the hidden table.
 	// How the original table defines this unique index (for example, which columns are used and whether it is composite) can NOT be confirmed,
 	// that introduces some strange logic, and obscures the meaning of some fields, such as fuzzyCheck.isCompound
-	//
 	if catalog.IsHiddenTable(tblName) && n.Fuzzymessage == nil {
 		f.onlyInsertHidden = true
 	}
@@ -163,6 +162,9 @@ func (f *fuzzyCheck) fill(ctx context.Context, bat *batch.Batch) error {
 
 			cAttrs := make([]string, len(f.compoundCols))
 			for k, c := range f.compoundCols {
+				if c == nil {
+					panic("compoundCols should not have nil element")
+				}
 				cAttrs[k] = c.Name
 			}
 
@@ -224,6 +226,9 @@ func (f *fuzzyCheck) firstlyCheck(ctx context.Context, toCheck *vector.Vector) e
 			}
 			scales := make([]int32, len(f.compoundCols))
 			for i, c := range f.compoundCols {
+				if c == nil {
+					panic("compoundCols should not have nil element")
+				}
 				scales[i] = c.Typ.Scale
 			}
 			es := t.ErrString(scales)
@@ -368,10 +373,6 @@ func (f *fuzzyCheck) sortColDef(toSelect []string, cols []*plan.ColDef) []*plan.
 	return ccols
 }
 
-func (f *fuzzyCheck) wrapup(name string) string {
-	return "`" + name + "`"
-}
-
 // format format strings from vector
 func (f *fuzzyCheck) format(toCheck *vector.Vector) ([]string, error) {
 	var ss []string
@@ -500,6 +501,13 @@ func (f *fuzzyCheck) adjustDecimalScale(toCheck *vector.Vector) {
 }
 
 func (f *fuzzyCheck) recheckIfCompound(toCheck *vector.Vector) (bool, error) {
+	if f.isCompound {
+		return true, nil
+	}
+
+	// for the case that create compound unique index for existed table
+	// can only detact if it is compound by the schema of the vector
+
 	foo, err := vectorToString(toCheck, 0)
 	if err != nil {
 		return false, err
