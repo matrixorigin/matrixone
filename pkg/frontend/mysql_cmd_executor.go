@@ -3452,6 +3452,10 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 		}
 	case *tree.PrepareStmt:
 		selfHandle = true
+		_, ses.proc.TxnOperator, err = ses.GetTxnHandler().GetTxn()
+		if err != nil {
+			return
+		}
 		prepareStmt, err = mce.handlePrepareStmt(requestCtx, st, sql)
 		if err != nil {
 			return
@@ -3463,6 +3467,10 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 		}
 	case *tree.PrepareString:
 		selfHandle = true
+		_, ses.proc.TxnOperator, err = ses.GetTxnHandler().GetTxn()
+		if err != nil {
+			return
+		}
 		prepareStmt, err = mce.handlePrepareString(requestCtx, st)
 		if err != nil {
 			return
