@@ -381,16 +381,7 @@ func (l *lockTableAllocator) checkInvalidBinds(ctx context.Context) {
 					zap.Int("count", len(timeoutBinds)))
 			}
 			for _, b := range timeoutBinds {
-				succ := false
-				for i := 0; i < 3; i++ {
-					err := l.client.Ping(ctx, b.serviceID)
-					if err == nil {
-						succ = true
-						break
-					}
-					logPingFailed(b.serviceID, err)
-				}
-				if !succ {
+				if !l.validateService(b.getServiceID(), ctx) {
 					b.disable()
 					l.disableTableBinds(b)
 				}
@@ -398,6 +389,25 @@ func (l *lockTableAllocator) checkInvalidBinds(ctx context.Context) {
 			timer.Reset(l.keepBindTimeout)
 		}
 	}
+}
+
+func (l *lockTableAllocator) validateService(serviceID string, ctx context.Context) bool {
+	req := acquireRequest()
+	defer releaseRequest(req)
+
+	req.Method = pb.Method_ValidateService
+	req.ValidateService.ServiceID = serviceID
+
+	ctx, cancel := context.WithTimeout(ctx, l.keepBindTimeout)
+	defer cancel()
+	resp, err := l.client.Send(ctx, req)
+	if err != nil {
+		logPingFailed(serviceID, err)
+		return false
+	}
+	defer releaseResponse(resp)
+
+	return resp.ValidateService.OK
 }
 
 // serviceBinds an instance of serviceBinds, recording the bindings of a lockservice
@@ -469,6 +479,12 @@ func (b *serviceBinds) bind(
 	}
 	b.getTablesLocked(group)[tableID] = struct{}{}
 	return true
+}
+
+func (b *serviceBinds) getServiceID() string {
+	b.RLock()
+	defer b.RUnlock()
+	return b.serviceID
 }
 
 func (b *serviceBinds) timeout(
