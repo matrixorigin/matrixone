@@ -26,15 +26,15 @@ import (
 )
 
 var (
-	defaultUpgradeTenantBatch         = 256
+	defaultUpgradeTenantBatch         = 16
 	defaultCheckUpgradeDuration       = time.Second * 5
 	defaultCheckUpgradeTenantDuration = time.Second * 10
 	defaultUpgradeTenantTasks         = 4
 )
 
 func (s *service) BootstrapUpgrade(ctx context.Context) error {
+	getUpgradeLogger().Info("start bootstrap upgrade")
 	s.adjustUpgrade()
-
 	// MO's upgrade framework is automated, requiring no manual execution of any
 	// upgrade commands, and supports cross-version upgrades. All upgrade processes
 	// are executed at the CN node. Currently, rollback upgrade is not supported.
@@ -57,7 +57,6 @@ func (s *service) BootstrapUpgrade(ctx context.Context) error {
 	// number of tenants is huge. So the whole tenant upgrade is asynchronous and will
 	// be grouped for all tenants and concurrently executed on multiple CNs at the same
 	// time.
-
 	if err := retryRun(ctx, "doCheckUpgrade", s.doCheckUpgrade); err != nil {
 		getUpgradeLogger().Error("check upgrade failed", zap.Error(err))
 		return err
@@ -83,19 +82,12 @@ func (s *service) doCheckUpgrade(ctx context.Context) error {
 	opts := executor.Options{}.
 		WithDatabase(catalog.MO_CATALOG).
 		WithMinCommittedTS(s.now()).
-		WithWaitCommittedLogApplied()
+		WithWaitCommittedLogApplied().
+		WithTimeZone(time.Local)
 	return s.exec.ExecTxn(
 		ctx,
 		func(txn executor.TxnExecutor) error {
 			final := s.getFinalVersionHandle().Metadata()
-
-			// First version as a genesis version, always need to be PREPARE.
-			// Because the first version need to init upgrade framework tables.
-			if len(s.handles) == 1 {
-				getUpgradeLogger().Info("init upgrade framework",
-					zap.String("final-version", final.Version))
-				return s.handles[0].Prepare(ctx, txn, true)
-			}
 
 			// Deploy mo first time without 1.2.0, init framework first.
 			// And upgrade to current version.
@@ -105,21 +97,29 @@ func (s *service) doCheckUpgrade(ctx context.Context) error {
 					zap.Error(err))
 				return err
 			}
+
+			// First version as a genesis version, always need to be PREPARE.
+			// Because the first version need to init upgrade framework tables.
 			if !created {
 				getUpgradeLogger().Info("init upgrade framework",
 					zap.String("final-version", final.Version))
 
-				if err := s.handles[0].Prepare(ctx, txn, false); err != nil {
-					getUpgradeLogger().Error("failed to init upgrade framework",
-						zap.Error(err))
+				// create new upgrade framework tables for the first time,
+				// which means using v1.2.0 for the first time
+				err = s.getFinalVersionHandle().HandleCreateFrameworkDeps(txn)
+				if err != nil {
+					getLogger().Error("execute pre dependencies error when creating a new upgrade framework", zap.Error(err))
 					return err
 				}
 
-				res, err := txn.Exec(final.GetInsertSQL(versions.StateReady), executor.StatementOption{})
-				if err == nil {
-					res.Close()
+				// Many cn maybe create framework tables parallel, only one can create success.
+				// Just return error, and upgrade framework will retry.
+				err = createFrameworkTables(txn, final)
+				if err != nil {
+					getLogger().Error("create upgrade framework tables error", zap.Error(err))
+					return err
 				}
-				return err
+				getLogger().Info("create upgrade framework tables success")
 			}
 
 			// lock version table
@@ -158,11 +158,11 @@ func (s *service) doCheckUpgrade(ctx context.Context) error {
 			// 1: already checked, version exists
 			// 2: add upgrades from latest version to final version
 			checker := func() (bool, error) {
-				if v.Version == final.Version {
+				if v.Version == final.Version && v.VersionOffset >= final.VersionOffset {
 					return true, nil
 				}
 
-				state, ok, err := versions.GetVersionState(final.Version, txn, false)
+				state, ok, err := versions.GetVersionState(final.Version, final.VersionOffset, txn, false)
 				if err == nil && ok && state == versions.StateReady {
 					s.upgrade.finalVersionCompleted.Store(true)
 				}
@@ -175,7 +175,7 @@ func (s *service) doCheckUpgrade(ctx context.Context) error {
 			}
 
 			addUpgradesToFinalVersion := func() error {
-				if err := versions.AddVersion(final.Version, versions.StateCreated, txn); err != nil {
+				if err := versions.AddVersion(final.Version, final.VersionOffset, versions.StateCreated, txn); err != nil {
 					getUpgradeLogger().Error("failed to add final version",
 						zap.String("final", final.Version),
 						zap.Error(err))
@@ -195,20 +195,22 @@ func (s *service) doCheckUpgrade(ctx context.Context) error {
 
 				getUpgradeLogger().Info("current latest ready version loaded",
 					zap.String("latest", latest),
-					zap.String("final", final.Version))
+					zap.String("final", final.Version),
+					zap.Int32("versionOffset", int32(final.VersionOffset)))
 
 				var upgrades []versions.VersionUpgrade
 				from := latest
 				append := func(v versions.Version) {
 					order := int32(len(upgrades))
 					u := versions.VersionUpgrade{
-						FromVersion:    from,
-						ToVersion:      v.Version,
-						FinalVersion:   final.Version,
-						State:          versions.StateCreated,
-						UpgradeOrder:   order,
-						UpgradeCluster: v.UpgradeCluster,
-						UpgradeTenant:  v.UpgradeTenant,
+						FromVersion:        from,
+						ToVersion:          v.Version,
+						FinalVersion:       final.Version,
+						FinalVersionOffset: final.VersionOffset,
+						State:              versions.StateCreated,
+						UpgradeOrder:       order,
+						UpgradeCluster:     v.UpgradeCluster,
+						UpgradeTenant:      v.UpgradeTenant,
 					}
 					upgrades = append(upgrades, u)
 
@@ -255,7 +257,8 @@ func (s *service) asyncUpgradeTask(ctx context.Context) {
 		opts := executor.Options{}.
 			WithDatabase(catalog.MO_CATALOG).
 			WithMinCommittedTS(s.now()).
-			WithWaitCommittedLogApplied()
+			WithWaitCommittedLogApplied().
+			WithTimeZone(time.Local)
 		err = s.exec.ExecTxn(
 			ctx,
 			func(txn executor.TxnExecutor) error {
@@ -299,21 +302,24 @@ func (s *service) performUpgrade(
 	final := s.getFinalVersionHandle().Metadata()
 
 	// make sure only one cn can execute upgrade logic
-	state, ok, err := versions.GetVersionState(final.Version, txn, true)
+	state, ok, err := versions.GetVersionState(final.Version, final.VersionOffset, txn, true)
 	if err != nil {
 		getUpgradeLogger().Error("failed to load final version state",
 			zap.String("final", final.Version),
+			zap.Int32("versionOffset", int32(final.VersionOffset)),
 			zap.Error(err))
 		return false, err
 	}
 	if !ok {
 		getUpgradeLogger().Info("final version not found, retry later",
-			zap.String("final", final.Version))
+			zap.String("final", final.Version),
+			zap.Int32("versionOffset", int32(final.VersionOffset)))
 		return false, nil
 	}
 
 	getUpgradeLogger().Info("final version state loaded",
 		zap.String("final", final.Version),
+		zap.Int32("versionOffset", int32(final.VersionOffset)),
 		zap.Int32("state", state))
 
 	if state == versions.StateReady {
@@ -321,7 +327,7 @@ func (s *service) performUpgrade(
 	}
 
 	// get upgrade steps, and perform upgrade one by one
-	upgrades, err := versions.GetUpgradeVersions(final.Version, txn, true, true)
+	upgrades, err := versions.GetUpgradeVersions(final.Version, final.VersionOffset, txn, true, true)
 	if err != nil {
 		getUpgradeLogger().Error("failed to load upgrades",
 			zap.String("final", final.Version),
@@ -361,7 +367,7 @@ func (s *service) performUpgrade(
 	}
 
 	// all upgrades completed, update final version to ready state.
-	if err := versions.UpdateVersionState(final.Version, versions.StateReady, txn); err != nil {
+	if err := versions.UpdateVersionState(final.Version, final.VersionOffset, versions.StateReady, txn); err != nil {
 		getUpgradeLogger().Error("failed to update state",
 			zap.String("final", final.Version),
 			zap.Error(err))
@@ -374,6 +380,7 @@ func (s *service) performUpgrade(
 	return true, nil
 }
 
+// doUpgrade Corresponding to one upgrade step in a version upgrade
 func (s *service) doUpgrade(
 	ctx context.Context,
 	upgrade versions.VersionUpgrade,
@@ -493,4 +500,22 @@ func (s *service) adjustUpgrade() {
 		zap.Duration("check-upgrade-tenant-duration", s.upgrade.checkUpgradeTenantDuration),
 		zap.Int("upgrade-tenant-tasks", s.upgrade.upgradeTenantTasks),
 		zap.Int("tenant-batch", s.upgrade.upgradeTenantBatch))
+}
+
+// createFrameworkTables When init upgrade framework for the first time,
+// create the tables that the upgrade framework depends on
+func createFrameworkTables(
+	txn executor.TxnExecutor,
+	final versions.Version) error {
+	values := versions.FrameworkInitSQLs
+	values = append(values, final.GetInitVersionSQL(versions.StateReady))
+
+	for _, sql := range values {
+		r, err := txn.Exec(sql, executor.StatementOption{})
+		if err != nil {
+			return err
+		}
+		r.Close()
+	}
+	return nil
 }

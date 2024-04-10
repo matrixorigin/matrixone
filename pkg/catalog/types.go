@@ -38,6 +38,7 @@ const (
 	TableTailAttrAborted  = "__mo_%1_aborted"
 	TableTailAttrPKVal    = "__mo_%1_pk_val"
 
+	MOAccountTable = "mo_account"
 	// MOVersionTable mo version table. This table records information about the
 	// versions of the MO cluster that have been upgraded. In other words, you can
 	// query this table to find out all the versions of the MO cluster that have
@@ -54,6 +55,8 @@ const (
 
 	// MOForeignKeys saves the fk relationships
 	MOForeignKeys = "mo_foreign_keys"
+
+	// MoDataBaseConstrant =
 )
 
 var InternalColumns = map[string]int8{
@@ -112,6 +115,9 @@ const (
 
 	// MOSysDaemonTask is the table name of daemon task table in mo_task.
 	MOSysDaemonTask = "sys_daemon_task"
+
+	// MOSysAsyncTask is the table name of async task table in mo_task.
+	MOSysAsyncTask = "sys_async_task"
 
 	// MOStages if the table name of mo_stages table in mo_cataglog.
 	MO_STAGES = "mo_stages"
@@ -729,6 +735,10 @@ var (
 	MoColumnsTableDefs = []engine.TableDef{}
 	// used by memengine or tae or cn
 	MoTableMetaDefs = []engine.TableDef{}
+
+	MoDatabaseConstraint = []byte{}
+	MoTableConstraint    = []byte{}
+	MoColumnConstraint   = []byte{}
 )
 
 var (

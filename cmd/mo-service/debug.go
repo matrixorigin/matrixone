@@ -26,7 +26,6 @@ import (
 	"runtime/pprof"
 	"sort"
 	"strings"
-	"time"
 	"unsafe"
 
 	"github.com/felixge/fgprof"
@@ -42,13 +41,6 @@ var (
 	httpListenAddr        = flag.String("debug-http", "", "http server listen address")
 	statusServer          = status.NewServer()
 )
-
-func init() {
-	// set mutex profile fraction
-	runtime.SetMutexProfileFraction(4096)
-	// set block profile rate
-	runtime.SetBlockProfileRate(int(time.Microsecond * 10))
-}
 
 func startCPUProfile() func() {
 	cpuProfilePath := *cpuProfilePathFlag

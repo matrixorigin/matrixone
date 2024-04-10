@@ -28,8 +28,10 @@ var (
 			Buckets:   getDurationBuckets(),
 		}, []string{"type"})
 
-	TaskFlushTableTailDurationHistogram = taskShortDurationHistogram.WithLabelValues("flush_table_tail")
-	GetObjectStatsDurationHistogram     = taskShortDurationHistogram.WithLabelValues("get_object_stats")
+	TaskFlushTableTailDurationHistogram     = taskShortDurationHistogram.WithLabelValues("flush_table_tail")
+	TaskCommitTableTailDurationHistogram    = taskShortDurationHistogram.WithLabelValues("commit_table_tail")
+	TaskCommitMergeObjectsDurationHistogram = taskShortDurationHistogram.WithLabelValues("commit_merge_objects")
+	GetObjectStatsDurationHistogram         = taskShortDurationHistogram.WithLabelValues("get_object_stats")
 
 	// storage usage / show accounts metrics
 	TaskGCkpCollectUsageDurationHistogram          = taskShortDurationHistogram.WithLabelValues("gckp_collect_usage")

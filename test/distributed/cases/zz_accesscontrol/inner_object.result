@@ -154,7 +154,7 @@ revoke moadmin,public from root;
 internal error: the role moadmin can not be revoked
 select count(*) from mo_catalog.mo_role_privs where role_name in ('moadmin','public');
 count(*)
-34
+35
 drop role if exists moadmin,public;
 internal error: can not delete the role moadmin
 select role_name from mo_role where role_name in('moadmin','public');

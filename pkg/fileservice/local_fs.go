@@ -612,11 +612,13 @@ func (l *LocalFS) List(ctx context.Context, dirPath string) (ret []DirEntry, err
 		return nil, err
 	}
 
-	_, span := trace.Start(ctx, "LocalFS.List", trace.WithKind(trace.SpanKindLocalFSVis))
+	ctx, span := trace.Start(ctx, "LocalFS.List", trace.WithKind(trace.SpanKindLocalFSVis))
 	defer func() {
 		span.AddExtraFields([]zap.Field{zap.String("list", dirPath)}...)
 		span.End()
 	}()
+
+	_ = ctx
 
 	path, err := ParsePathAtService(dirPath, l.name)
 	if err != nil {

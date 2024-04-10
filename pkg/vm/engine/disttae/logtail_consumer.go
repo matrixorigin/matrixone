@@ -17,7 +17,6 @@ package disttae
 import (
 	"context"
 	"fmt"
-	"runtime/trace"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -1152,7 +1151,7 @@ type routineController struct {
 }
 
 func (rc *routineController) sendSubscribeResponse(
-	ctx context.Context,
+	_ context.Context,
 	r *logtail.SubscribeResponse,
 	receiveAt time.Time) {
 	if l := len(rc.signalChan); l > rc.warningBufferLen {
@@ -1295,7 +1294,7 @@ func (e *Engine) consumeSubscribeResponse(
 	lazyLoad bool,
 	receiveAt time.Time) error {
 	lt := rp.GetLogtail()
-	return updatePartitionOfPush(ctx, e.pClient.subscriber.tnNodeID, e, &lt, lazyLoad, receiveAt)
+	return updatePartitionOfPush(ctx, e, &lt, lazyLoad, receiveAt)
 }
 
 func (e *Engine) consumeUpdateLogTail(
@@ -1303,13 +1302,12 @@ func (e *Engine) consumeUpdateLogTail(
 	rp logtail.TableLogtail,
 	lazyLoad bool,
 	receiveAt time.Time) error {
-	return updatePartitionOfPush(ctx, e.pClient.subscriber.tnNodeID, e, &rp, lazyLoad, receiveAt)
+	return updatePartitionOfPush(ctx, e, &rp, lazyLoad, receiveAt)
 }
 
 // updatePartitionOfPush is the partition update method of log tail push model.
 func updatePartitionOfPush(
 	ctx context.Context,
-	tnId int,
 	e *Engine,
 	tl *logtail.TableLogtail,
 	lazyLoad bool,
@@ -1386,9 +1384,6 @@ func consumeLogTailOfPushWithoutLazyLoad(
 	tableId uint64,
 	tableName string,
 ) (err error) {
-	ctx, task := trace.NewTask(ctx, "consumeLogTailOfPushWithoutLazyLoad")
-	defer task.End()
-
 	var entries []*api.Entry
 	var closeCBs []func()
 	if entries, closeCBs, err = taeLogtail.LoadCheckpointEntries(
@@ -1417,11 +1412,7 @@ func hackConsumeLogtail(
 	primarySeqnum int,
 	engine *Engine,
 	state *logtailreplay.PartitionState,
-	lt *logtail.TableLogtail,
-) error {
-	ctx, task := trace.NewTask(ctx, "hackConsumeLogtail")
-	defer task.End()
-
+	lt *logtail.TableLogtail) error {
 	var packer *types.Packer
 	put := engine.packerPool.Get(&packer)
 	defer put.Put()

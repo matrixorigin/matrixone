@@ -455,7 +455,7 @@ func TestGetSimpleExprValue(t *testing.T) {
 		ses.txnCompileCtx.SetProcess(testutil.NewProc())
 		ses.requestCtx = ctx
 		for _, kase := range kases {
-			stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, kase.sql, 1)
+			stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, kase.sql, 1, 0)
 			cvey.So(err, cvey.ShouldBeNil)
 
 			sv, ok := stmt.(*tree.SetVar)
@@ -493,7 +493,7 @@ func TestGetSimpleExprValue(t *testing.T) {
 		ses.txnCompileCtx.SetProcess(testutil.NewProc())
 		ses.requestCtx = ctx
 		for _, kase := range kases {
-			stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, kase.sql, 1)
+			stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, kase.sql, 1, 0)
 			cvey.So(err, cvey.ShouldBeNil)
 
 			sv, ok := stmt.(*tree.SetVar)
@@ -664,7 +664,7 @@ func TestGetExprValue(t *testing.T) {
 		exe.SetSession(ses)
 		for _, kase := range kases {
 			fmt.Println("++++>", kase.sql)
-			stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, kase.sql, 1)
+			stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, kase.sql, 1, 0)
 			cvey.So(err, cvey.ShouldBeNil)
 
 			sv, ok := stmt.(*tree.SetVar)
@@ -768,7 +768,7 @@ func TestGetExprValue(t *testing.T) {
 		exe.ChooseDoQueryFunc(pu.SV.EnableDoComQueryInProgress)
 		exe.SetSession(ses)
 		for _, kase := range kases {
-			stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, kase.sql, 1)
+			stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, kase.sql, 1, 0)
 			cvey.So(err, cvey.ShouldBeNil)
 
 			sv, ok := stmt.(*tree.SetVar)

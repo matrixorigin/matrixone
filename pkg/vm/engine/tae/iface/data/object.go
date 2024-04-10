@@ -98,6 +98,7 @@ type Object interface {
 
 	// check wether any delete intents with prepared ts within [from, to]
 	HasDeleteIntentsPreparedIn(from, to types.TS) (bool, bool)
+	HasDeleteIntentsPreparedInByBlock(blockID uint16, from, to types.TS) (bool, bool)
 
 	// check if all rows are committed before ts
 	// NOTE: here we assume that the object is visible to the ts
@@ -133,7 +134,7 @@ type Object interface {
 		sels []uint32,
 		mp *mpool.MPool,
 	) error
-	PPString(level common.PPLevel, depth int, prefix string) string
+	PPString(level common.PPLevel, depth int, prefix string, blkid int) string
 	EstimateMemSize() (int, int)
 	GetRuntime() *dbutils.Runtime
 
@@ -143,6 +144,7 @@ type Object interface {
 	UpgradeAllDeleteChain()
 	CollectAppendInRange(start, end types.TS, withAborted bool, mp *mpool.MPool) (*containers.BatchWithVersion, error)
 	CollectDeleteInRange(ctx context.Context, start, end types.TS, withAborted bool, mp *mpool.MPool) (*containers.Batch, *bitmap.Bitmap, error)
+	CollectDeleteInRangeByBlock(ctx context.Context, blkID uint16, start, end types.TS, withAborted bool, mp *mpool.MPool) (*containers.Batch, error)
 	PersistedCollectDeleteInRange(
 		ctx context.Context,
 		b *containers.Batch,
@@ -170,6 +172,7 @@ type Tombstone interface {
 	GetDeltaPersistedTS() types.TS
 	// GetOrCreateDeleteChain(blkID uint16) *updates.MVCCHandle
 	HasDeleteIntentsPreparedIn(from types.TS, to types.TS) (found bool, isPersist bool)
+	HasInMemoryDeleteIntentsPreparedInByBlock(blockID uint16, from, to types.TS) (bool, bool)
 	IsDeletedLocked(row uint32, txn txnif.TxnReader, blkID uint16) (bool, error)
 	SetDeletesListener(l func(uint64, types.TS) error)
 	StringLocked(level common.PPLevel, depth int, prefix string) string
