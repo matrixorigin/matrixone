@@ -185,21 +185,9 @@ func MoTableSize(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 	txn := proc.TxnOperator
 
 	var accountId uint32
-	var accSwitched bool
 	// XXX old code starts a new transaction.   why?
 	for i := uint64(0); i < uint64(length); i++ {
-		if accSwitched {
-			// consider this situation:
-			// 	 if a sql trys to gather all table's size in one query,
-			// 	 this will traverse all tables, including the cluster table, belongs
-			// 	 this account.
-			//   but if these tables in `tbls` has orders: xxx, cluster table, xxx, xxx, xxx.
-			//   the account id stored in proc.Ctx will be changed to system account id when process that cluster
-			//   table, and causing the last three tables can not be found when call the `engine.Database()`.
-			//   so should be first to switch bach the right account id here.
-			accSwitched = false
-			proc.Ctx = defines.AttachAccountId(proc.Ctx, accountId)
-		}
+		foolCtx := proc.Ctx
 
 		db, dbnull := dbs.GetStrValue(i)
 		tbl, tblnull := tbls.GetStrValue(i)
@@ -214,19 +202,17 @@ func MoTableSize(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 
 			if isClusterTable(dbStr, tblStr) {
 				//if it is the cluster table in the general account, switch into the sys account
-				accountId, err = defines.GetAccountId(proc.Ctx)
+				accountId, err = defines.GetAccountId(foolCtx)
 				if err != nil {
 					return err
 				}
 				if accountId != uint32(sysAccountID) {
-					accSwitched = true
-					proc.Ctx = defines.AttachAccountId(proc.Ctx, uint32(sysAccountID))
+					foolCtx = defines.AttachAccountId(foolCtx, uint32(sysAccountID))
 				}
 			}
-			ctx := proc.Ctx
 
 			var dbo engine.Database
-			dbo, err = e.Database(ctx, dbStr, txn)
+			dbo, err = e.Database(foolCtx, dbStr, txn)
 			if err != nil {
 				if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
 					var buf bytes.Buffer
@@ -237,26 +223,29 @@ func MoTableSize(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 						dbStr2 := functionUtil.QuickBytesToStr(db2)
 						tblStr2 := functionUtil.QuickBytesToStr(tbl2)
 
-						buf.WriteString(fmt.Sprintf("%s-%s; ", dbStr2, tblStr2))
+						buf.WriteString(fmt.Sprintf("%s#%s; ", dbStr2, tblStr2))
 					}
-					attachedId, _ := defines.GetAccountId(proc.Ctx)
+
+					originalAccId, _ := defines.GetAccountId(proc.Ctx)
+					attachedAccId, _ := defines.GetAccountId(foolCtx)
+
 					logutil.Errorf(
-						fmt.Sprintf("db not found when mo_table_size: %s-%s, acc: %v-%d-%d, extra: %s",
-							dbStr, tblStr, accSwitched, accountId, attachedId, buf.String()))
+						fmt.Sprintf("db not found when mo_table_size: %s#%s, acc: %d-%d, extra: %s",
+							dbStr, tblStr, attachedAccId, originalAccId, buf.String()))
 					return moerr.NewInvalidArgNoCtx("db not found when mo_table_size", fmt.Sprintf("%s-%s", dbStr, tblStr))
 				}
 				return err
 			}
-			rel, err = dbo.Relation(ctx, tblStr, nil)
+			rel, err = dbo.Relation(foolCtx, tblStr, nil)
 			if err != nil {
 				return err
 			}
 
 			var oSize, iSize uint64
-			if oSize, err = originalTableSize(ctx, dbo, rel); err != nil {
+			if oSize, err = originalTableSize(foolCtx, dbo, rel); err != nil {
 				return err
 			}
-			if iSize, err = indexesTableSize(ctx, dbo, rel); err != nil {
+			if iSize, err = indexesTableSize(foolCtx, dbo, rel); err != nil {
 				return err
 			}
 
