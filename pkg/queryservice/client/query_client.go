@@ -103,7 +103,7 @@ func (c *queryClient) SendMessage(ctx context.Context, address string, req *pb.R
 	if err := checkMethodVersion(ctx, req); err != nil {
 		return nil, err
 	}
-	f, err := c.client.Send(ctx, address, req)
+	f, err := c.client.Send(ctx, address, req, morpc.SyncWrite)
 	if err != nil {
 		return nil, err
 	}

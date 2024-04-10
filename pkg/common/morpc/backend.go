@@ -335,7 +335,7 @@ func (rb *remoteBackend) NewStream(opts StreamOptions) (Stream, error) {
 	ctx, cancel := context.WithTimeout(context.TODO(), internalTimeout)
 	defer cancel()
 
-	err = st.Send(ctx, newStreamRegister(st.id, opts), WriteOptions{}.Internal())
+	err = st.Send(ctx, newStreamRegister(st.id, opts), InternalWrite)
 	if err != nil {
 		st.Close()
 		return nil, err
@@ -620,7 +620,7 @@ func (rb *remoteBackend) fetch(messages []*Future, maxFetchCount int) ([]*Future
 		f := rb.getFuture(
 			context.TODO(),
 			&flagOnlyMessage{flag: flagPing},
-			WriteOptions{}.Internal())
+			InternalWrite)
 		// no need wait response, close immediately
 		f.Close()
 		messages = append(messages, f)

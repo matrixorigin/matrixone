@@ -854,11 +854,11 @@ func (s *logTailSubscriber) newRpcStreamToTnLogTailService(serviceAddr string) e
 	}
 
 	if s.rpcStream != nil {
-		s.rpcStream.Close(true)
+		s.rpcStream.Close()
 		s.rpcStream = nil
 	}
 
-	stream, err := s.rpcClient.NewStream(serviceAddr, true)
+	stream, err := s.rpcClient.NewStream(serviceAddr, morpc.DefaultStreamOptions())
 	if err != nil {
 		return err
 	}

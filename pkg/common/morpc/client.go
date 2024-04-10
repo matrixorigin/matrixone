@@ -238,7 +238,7 @@ func (c *client) Ping(ctx context.Context, backend string) error {
 		f, err := b.Send(
 			ctx,
 			&flagOnlyMessage{flag: flagPing},
-			WriteOptions{}.Internal())
+			InternalWrite)
 		if err != nil {
 			if err == backendClosed {
 				continue

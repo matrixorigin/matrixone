@@ -817,7 +817,7 @@ func (c *hakeeperClient) request(ctx context.Context, req pb.Request) (pb.Respon
 	defer span.End()
 	r := c.pool.Get().(*RPCRequest)
 	r.Request = req
-	future, err := c.client.Send(ctx, c.addr, r)
+	future, err := c.client.Send(ctx, c.addr, r, morpc.SyncWrite)
 	if err != nil {
 		return pb.Response{}, err
 	}

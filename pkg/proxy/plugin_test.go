@@ -213,10 +213,13 @@ func TestRPCPlugin(t *testing.T) {
 				request := msg.Message
 				r, ok := request.(*plugin.Request)
 				require.True(t, ok)
-				return cs.Write(ctx, &plugin.Response{
-					RequestID:      r.RequestID,
-					Recommendation: tt.response,
-				})
+				return cs.Write(
+					ctx,
+					&plugin.Response{
+						RequestID:      r.RequestID,
+						Recommendation: tt.response,
+					},
+					morpc.SyncWrite)
 			})
 			require.NoError(t, s.Start())
 			defer func() {

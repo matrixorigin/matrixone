@@ -1016,7 +1016,7 @@ func (s *Scope) notifyAndReceiveFromRemote(errChan chan error) {
 				closeWithError(errStream)
 				return
 			}
-			defer streamSender.Close(true)
+			defer streamSender.Close()
 
 			message := cnclient.AcquireMessage()
 			{
@@ -1025,7 +1025,7 @@ func (s *Scope) notifyAndReceiveFromRemote(errChan chan error) {
 				message.Sid = pbpipeline.Status_Last
 				message.Uuid = info.Uuid[:]
 			}
-			if errSend := streamSender.Send(s.Proc.Ctx, message); errSend != nil {
+			if errSend := streamSender.Send(s.Proc.Ctx, message, morpc.SyncWrite); errSend != nil {
 				closeWithError(errSend)
 				return
 			}
@@ -1039,19 +1039,28 @@ func (s *Scope) notifyAndReceiveFromRemote(errChan chan error) {
 			if reg != nil {
 				ch = reg.Ch
 			}
-			err := receiveMsgAndForward(s.Proc, messagesReceive, ch)
+			err := receiveMsgAndForward(streamSender, s.Proc, messagesReceive, ch)
 			closeWithError(err)
 		}(op, s.Proc.Reg.MergeReceivers[op.Idx])
 	}
 }
 
-func receiveMsgAndForward(proc *process.Process, receiveCh chan morpc.Message, forwardCh chan *batch.Batch) error {
+func receiveMsgAndForward(
+	steam morpc.Stream,
+	proc *process.Process,
+	receiveCh chan morpc.Message,
+	forwardCh chan *batch.Batch,
+) error {
 	var val morpc.Message
 	var dataBuffer []byte
 	var ok bool
 	var m *pbpipeline.Message
 
 	for {
+		if err := steam.Resume(proc.Ctx); err != nil {
+			return err
+		}
+
 		select {
 		case <-proc.Ctx.Done():
 			logutil.Warnf("proc ctx done during forward")

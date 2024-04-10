@@ -199,7 +199,6 @@ func (s *server) onMessage(rs goetty.IOSession, value any, sequence uint64) erro
 		return err
 	}
 	request := value.(RPCMessage)
-	fmt.Printf("recv %+v\n", request.Message.DebugString())
 	s.metrics.inputBytesCounter.Add(float64(request.Message.Size()))
 	if ce := s.logger.Check(zap.DebugLevel, "received request"); ce != nil {
 		ce.Write(zap.Uint64("sequence", sequence),
@@ -245,7 +244,7 @@ func (s *server) onMessage(rs goetty.IOSession, value any, sequence uint64) erro
 						flag: flagPong,
 						id:   m.id,
 					},
-					opts: WriteOptions{}.Internal(),
+					opts: InternalWrite,
 				})
 				if err != nil {
 					failedAt := time.Now()
@@ -263,7 +262,6 @@ func (s *server) onMessage(rs goetty.IOSession, value any, sequence uint64) erro
 		} else if m, ok := request.Message.(*streamControl); ok {
 			switch m.ctlType {
 			case registerType:
-				fmt.Printf("recv register\n")
 				cs.getStream(requestID).init(m.opts)
 				return nil
 			case resumeType:
@@ -562,7 +560,6 @@ func (cs *clientSession) Close() error {
 	}
 	close(cs.closedC)
 	cs.cleanSend()
-	cs.cleanStreams()
 	close(cs.c)
 	cs.mu.closed = true
 	for _, c := range cs.mu.caches {
@@ -587,14 +584,6 @@ func (cs *clientSession) cleanSend() {
 	}
 }
 
-func (cs *clientSession) cleanStreams() {
-	cs.streams.Range(func(key, value any) bool {
-		st := value.(*streamPeer)
-		st.close()
-		return true
-	})
-}
-
 func (cs *clientSession) WriteRPCMessage(msg RPCMessage) error {
 	f, err := cs.send(msg)
 	if err != nil {
@@ -614,6 +603,9 @@ func (cs *clientSession) Write(
 	response Message,
 	opts WriteOptions,
 ) error {
+	if opts.async {
+		ctx = context.Background()
+	}
 	return cs.WriteRPCMessage(RPCMessage{
 		Ctx:     ctx,
 		Message: response,

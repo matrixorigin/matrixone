@@ -42,7 +42,7 @@ func TestControlStream(t *testing.T) {
 					defer cancel()
 
 					for i := 0; i < n; i++ {
-						assert.NoError(t, cs.Write(ctx, request.Message, WriteOptions{}))
+						assert.NoError(t, cs.Write(ctx, request.Message, SyncWrite))
 					}
 				}()
 				return nil
@@ -55,7 +55,7 @@ func TestControlStream(t *testing.T) {
 		}()
 
 		req := newTestMessage(st.ID())
-		assert.NoError(t, st.Send(ctx, req, WriteOptions{}))
+		assert.NoError(t, st.Send(ctx, req, SyncWrite))
 
 		ch, err := st.Receive()
 		require.NoError(t, err)
@@ -86,9 +86,9 @@ func TestControlStreamWithWriteTwice(t *testing.T) {
 
 					ctx, cancel := context.WithTimeout(context.TODO(), time.Millisecond*100)
 					defer cancel()
-					require.NoError(t, cs.Write(ctx, request.Message, WriteOptions{}))
+					require.NoError(t, cs.Write(ctx, request.Message, SyncWrite))
 
-					require.Error(t, cs.Write(ctx, request.Message, WriteOptions{}))
+					require.Error(t, cs.Write(ctx, request.Message, SyncWrite))
 				}()
 				return nil
 			})
@@ -100,7 +100,7 @@ func TestControlStreamWithWriteTwice(t *testing.T) {
 		}()
 
 		req := newTestMessage(st.ID())
-		assert.NoError(t, st.Send(ctx, req, WriteOptions{}))
+		assert.NoError(t, st.Send(ctx, req, SyncWrite))
 		require.NoError(t, st.Resume(ctx))
 
 		ch, err := st.Receive()
@@ -133,10 +133,10 @@ func TestControlStreamWithChunkWrites(t *testing.T) {
 					defer cancel()
 
 					for i := 0; i < n; i++ {
-						assert.NoError(t, cs.Write(ctx, request.Message, WriteOptions{}.Chunk(i == n-1)))
+						assert.NoError(t, cs.Write(ctx, request.Message, SyncWrite.Chunk(i == n-1)))
 					}
 
-					assert.Error(t, cs.Write(ctx, request.Message, WriteOptions{}))
+					assert.Error(t, cs.Write(ctx, request.Message, SyncWrite))
 				}()
 				return nil
 			})
@@ -148,7 +148,7 @@ func TestControlStreamWithChunkWrites(t *testing.T) {
 		}()
 
 		req := newTestMessage(st.ID())
-		assert.NoError(t, st.Send(ctx, req, WriteOptions{}))
+		assert.NoError(t, st.Send(ctx, req, SyncWrite))
 
 		ch, err := st.Receive()
 		require.NoError(t, err)
@@ -181,7 +181,7 @@ func TestControlStreamWithCannotWriteInPause(t *testing.T) {
 
 					ctx, cancel := context.WithTimeout(context.TODO(), time.Millisecond*100)
 					defer cancel()
-					require.Error(t, cs.Write(ctx, request.Message, WriteOptions{}))
+					require.Error(t, cs.Write(ctx, request.Message, SyncWrite))
 				}()
 				return nil
 			})
@@ -193,7 +193,7 @@ func TestControlStreamWithCannotWriteInPause(t *testing.T) {
 		}()
 
 		req := newTestMessage(st.ID())
-		assert.NoError(t, st.Send(ctx, req, WriteOptions{}))
+		assert.NoError(t, st.Send(ctx, req, SyncWrite))
 
 		wg.Wait()
 	})

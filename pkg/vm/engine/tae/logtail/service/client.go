@@ -18,15 +18,14 @@ import (
 	"context"
 	"sync"
 
-	"go.uber.org/ratelimit"
-	"go.uber.org/zap"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/logtail"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"go.uber.org/ratelimit"
+	"go.uber.org/zap"
 )
 
 type ClientOption func(*LogtailClient)
@@ -76,7 +75,7 @@ func NewLogtailClient(stream morpc.Stream, opts ...ClientOption) (*LogtailClient
 
 // Close closes stream.
 func (c *LogtailClient) Close() error {
-	err := c.stream.Close(true)
+	err := c.stream.Close()
 	if err != nil {
 		logutil.Error("logtail client: fail to close morpc stream", zap.Error(err))
 	}
@@ -102,7 +101,7 @@ func (c *LogtailClient) Subscribe(
 	}
 	request.SetID(c.stream.ID())
 
-	err := c.stream.Send(ctx, request)
+	err := c.stream.Send(ctx, request, morpc.SyncWrite)
 	if err != nil {
 		logutil.Error("logtail client: fail to subscribe via morpc stream", zap.Error(err))
 	}
@@ -127,7 +126,7 @@ func (c *LogtailClient) Unsubscribe(
 		},
 	}
 	request.SetID(c.stream.ID())
-	err := c.stream.Send(ctx, request)
+	err := c.stream.Send(ctx, request, morpc.SyncWrite)
 	if err != nil {
 		logutil.Error("logtail client: fail to unsubscribe via morpc stream", zap.Error(err))
 	}

@@ -245,7 +245,7 @@ func (s *Service) handleRPCRequest(
 	response := s.respPool.Get().(*RPCResponse)
 	response.Response = resp
 	response.payload = recs
-	return cs.Write(ctx, response)
+	return cs.Write(ctx, response, morpc.SyncWrite)
 }
 
 func (s *Service) handle(ctx context.Context, req pb.Request,

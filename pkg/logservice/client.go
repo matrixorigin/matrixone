@@ -20,8 +20,6 @@ import (
 	"sync"
 	"time"
 
-	"go.uber.org/zap"
-
 	"github.com/cockroachdb/errors"
 	"github.com/lni/dragonboat/v4"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -30,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	"go.uber.org/zap"
 )
 
 const (
@@ -418,7 +417,7 @@ func (c *client) request(ctx context.Context,
 	defer r.Release()
 	r.Request = req
 	r.payload = payload
-	future, err := c.client.Send(ctx, c.addr, r)
+	future, err := c.client.Send(ctx, c.addr, r, morpc.SyncWrite)
 	if err != nil {
 		return pb.Response{}, nil, err
 	}
@@ -455,7 +454,7 @@ func (c *client) tsoRequest(ctx context.Context, count uint64) (uint64, error) {
 	}
 	r := c.pool.Get().(*RPCRequest)
 	r.Request = req
-	future, err := c.client.Send(ctx, c.addr, r)
+	future, err := c.client.Send(ctx, c.addr, r, morpc.SyncWrite)
 	if err != nil {
 		return 0, err
 	}

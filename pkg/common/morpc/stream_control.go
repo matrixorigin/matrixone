@@ -28,42 +28,6 @@ var (
 	resumeType   = 1
 )
 
-// StreamOptions stream options
-type StreamOptions struct {
-	buffer  int
-	feature int
-}
-
-func DefaultStreamOptions() StreamOptions {
-	return StreamOptions{
-		buffer:  1024,
-		feature: 0,
-	}
-}
-
-func (opts StreamOptions) WithBuffer(buffer int) StreamOptions {
-	opts.buffer = buffer
-	return opts
-}
-
-func (opts StreamOptions) WithEnableControl() StreamOptions {
-	opts.feature |= featureEnableControl
-	return opts
-}
-
-func (opts StreamOptions) WithExclusive() StreamOptions {
-	opts.feature |= featureExclusive
-	return opts
-}
-
-func (opts StreamOptions) isExclusive() bool {
-	return opts.feature&featureExclusive != 0
-}
-
-func (opts StreamOptions) controlEnabled() bool {
-	return opts.feature&featureEnableControl != 0
-}
-
 func newStreamRegister(id uint64, opts StreamOptions) *streamControl {
 	return &streamControl{
 		id:      id,

@@ -55,7 +55,7 @@ func TestEncodeAndDecodeWithStream(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.TODO(), time.Hour*10)
 	defer cancel()
 
-	msg := RPCMessage{Ctx: ctx, Message: newTestMessage(1), opts: WriteOptions{}.Stream(1)}
+	msg := RPCMessage{Ctx: ctx, Message: newTestMessage(1), opts: SyncWrite.Stream(1)}
 	err := codec.Encode(msg, buf, nil)
 	assert.NoError(t, err)
 
@@ -306,7 +306,7 @@ func TestEncodeAndDecodeInternal(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.TODO(), time.Hour*10)
 	defer cancel()
 
-	msg := RPCMessage{Ctx: ctx, Message: &flagOnlyMessage{flag: flagPing}, opts: WriteOptions{}.Internal()}
+	msg := RPCMessage{Ctx: ctx, Message: &flagOnlyMessage{flag: flagPing}, opts: InternalWrite}
 	err := codec.Encode(msg, buf, nil)
 	assert.NoError(t, err)
 

@@ -263,7 +263,7 @@ func TestCloseIdleBackends(t *testing.T) {
 		st, err := b2.NewStream(DefaultStreamOptions())
 		assert.NoError(t, err)
 		for {
-			assert.NoError(t, st.Send(ctx, newTestMessage(1), WriteOptions{}))
+			assert.NoError(t, st.Send(ctx, newTestMessage(1), SyncWrite))
 			time.Sleep(time.Millisecond * 10)
 		}
 	}()

@@ -298,7 +298,7 @@ func (r executor) exec() ([]byte, error) {
 	}
 	resp.RequestID = r.req.RequestID
 	txnID := r.req.Txn.ID
-	err := r.cs.Write(r.ctx, resp)
+	err := r.cs.Write(r.ctx, resp, morpc.SyncWrite)
 	return txnID, err
 }
 

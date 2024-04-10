@@ -181,7 +181,7 @@ func (s *handler[REQ, RESP]) onMessage(
 	handlerCtx, ok := s.getHandler(ctx, req, resp)
 	if !ok {
 		s.pool.ReleaseRequest(req)
-		return cs.Write(ctx, resp, WriteOptions{})
+		return cs.Write(ctx, resp, SyncWrite)
 	}
 
 	fn := func(request RPCMessage) error {
@@ -194,7 +194,7 @@ func (s *handler[REQ, RESP]) onMessage(
 
 		defer s.pool.ReleaseRequest(req)
 		handlerCtx.call(ctx, req, resp)
-		return cs.Write(ctx, resp, WriteOptions{})
+		return cs.Write(ctx, resp, SyncWrite)
 	}
 
 	if handlerCtx.async {

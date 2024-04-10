@@ -45,13 +45,13 @@ func main() {
 		panic(err)
 	}
 
-	st, err := cli.NewStream(addr, false)
+	st, err := cli.NewStream(addr, morpc.DefaultStreamOptions())
 	if err != nil {
 		panic(err)
 	}
 
 	defer func() {
-		if err := st.Close(false); err != nil {
+		if err := st.Close(); err != nil {
 			panic(err)
 		}
 	}()
@@ -59,7 +59,7 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.TODO(), time.Second*10)
 	defer cancel()
 
-	if err := st.Send(ctx, &message.ExampleMessage{MsgID: st.ID(), Content: "first message"}); err != nil {
+	if err := st.Send(ctx, &message.ExampleMessage{MsgID: st.ID(), Content: "first message"}, morpc.SyncWrite); err != nil {
 		panic(err)
 	}
 
@@ -86,7 +86,7 @@ func startServer() error {
 		go func() {
 			request := msg.Message
 			for i := 0; i < 10; i++ {
-				if err := cs.Write(ctx, &message.ExampleMessage{MsgID: request.GetID(), Content: fmt.Sprintf("stream-%d", i)}); err != nil {
+				if err := cs.Write(ctx, &message.ExampleMessage{MsgID: request.GetID(), Content: fmt.Sprintf("stream-%d", i)}, morpc.SyncWrite); err != nil {
 					panic(err)
 				}
 			}

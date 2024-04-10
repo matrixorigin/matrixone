@@ -25,6 +25,43 @@ const (
 	oneWayTimeout   = time.Second * 600
 )
 
+var (
+	InternalWrite = WriteOptions{}.Internal()
+	SyncWrite     = WriteOptions{}
+	AsyncWrite    = WriteOptions{}.Async()
+)
+
+type WriteOptions struct {
+	async          bool
+	chunk          bool
+	lastChunk      bool
+	internal       bool
+	stream         bool
+	streamSequence uint32
+}
+
+func (opts WriteOptions) Async() WriteOptions {
+	opts.async = true
+	return opts
+}
+
+func (opts WriteOptions) Chunk(last bool) WriteOptions {
+	opts.chunk = true
+	opts.lastChunk = last
+	return opts
+}
+
+func (opts WriteOptions) Internal() WriteOptions {
+	opts.internal = true
+	return opts
+}
+
+func (opts WriteOptions) Stream(sequence uint32) WriteOptions {
+	opts.stream = true
+	opts.streamSequence = sequence
+	return opts
+}
+
 // Timeout return true if the message is timeout
 func (m RPCMessage) Timeout() bool {
 	select {

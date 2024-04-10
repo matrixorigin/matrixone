@@ -21,8 +21,6 @@ import (
 	"time"
 	"unsafe"
 
-	"go.uber.org/zap"
-
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
@@ -30,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/logtail"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"go.uber.org/zap"
 )
 
 type TableState int
@@ -209,7 +208,7 @@ func (s *morpcStream) write(
 		s.logger.Debug("real segment proto size", zap.Int("ProtoSize", seg.ProtoSize()))
 
 		st := time.Now()
-		err := s.cs.Write(ctx, seg)
+		err := s.cs.Write(ctx, seg, morpc.SyncWrite)
 		v2.LogtailSendNetworkHistogram.Observe(time.Since(st).Seconds())
 		if err != nil {
 			return err

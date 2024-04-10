@@ -49,10 +49,13 @@ func TestSendWithSingleRequest(t *testing.T) {
 		request morpc.RPCMessage,
 		sequence uint64,
 		cs morpc.ClientSession) error {
-		return cs.Write(ctx, &txn.TxnResponse{
-			RequestID: request.Message.GetID(),
-			Method:    txn.TxnMethod_Write,
-		})
+		return cs.Write(
+			ctx,
+			&txn.TxnResponse{
+				RequestID: request.Message.GetID(),
+				Method:    txn.TxnMethod_Write,
+			},
+			morpc.SyncWrite)
 	})
 
 	sd, err := NewSender(Config{}, newTestRuntime(newTestClock(), nil))
@@ -92,10 +95,13 @@ func TestSendEnableCompressWithSingleRequest(t *testing.T) {
 		request morpc.RPCMessage,
 		sequence uint64,
 		cs morpc.ClientSession) error {
-		return cs.Write(ctx, &txn.TxnResponse{
-			RequestID: request.Message.GetID(),
-			Method:    txn.TxnMethod_Write,
-		})
+		return cs.Write(
+			ctx,
+			&txn.TxnResponse{
+				RequestID: request.Message.GetID(),
+				Method:    txn.TxnMethod_Write,
+			},
+			morpc.SyncWrite)
 	})
 
 	sd, err := NewSender(Config{EnableCompress: true}, newTestRuntime(newTestClock(), nil))
@@ -136,10 +142,13 @@ func TestSendWithMultiTN(t *testing.T) {
 			sequence uint64,
 			cs morpc.ClientSession) error {
 			request := m.Message.(*txn.TxnRequest)
-			return cs.Write(ctx, &txn.TxnResponse{
-				RequestID:    request.GetID(),
-				CNOpResponse: &txn.CNOpResponse{Payload: []byte(fmt.Sprintf("%s-%d", request.GetTargetTN().Address, sequence))},
-			})
+			return cs.Write(
+				ctx,
+				&txn.TxnResponse{
+					RequestID:    request.GetID(),
+					CNOpResponse: &txn.CNOpResponse{Payload: []byte(fmt.Sprintf("%s-%d", request.GetTargetTN().Address, sequence))},
+				},
+				morpc.SyncWrite)
 		})
 	}
 
@@ -199,10 +208,13 @@ func TestSendWithMultiTNAndLocal(t *testing.T) {
 			sequence uint64,
 			cs morpc.ClientSession) error {
 			request := m.Message.(*txn.TxnRequest)
-			return cs.Write(ctx, &txn.TxnResponse{
-				RequestID:    request.GetID(),
-				CNOpResponse: &txn.CNOpResponse{Payload: []byte(fmt.Sprintf("%s-%d", request.GetTargetTN().Address, sequence))},
-			})
+			return cs.Write(
+				ctx,
+				&txn.TxnResponse{
+					RequestID:    request.GetID(),
+					CNOpResponse: &txn.CNOpResponse{Payload: []byte(fmt.Sprintf("%s-%d", request.GetTargetTN().Address, sequence))},
+				},
+				morpc.SyncWrite)
 		})
 	}
 
@@ -321,13 +333,16 @@ func TestCanSendWithLargeRequest(t *testing.T) {
 		request morpc.RPCMessage,
 		sequence uint64,
 		cs morpc.ClientSession) error {
-		return cs.Write(ctx, &txn.TxnResponse{
-			RequestID: request.Message.GetID(),
-			Method:    txn.TxnMethod_Write,
-			CNOpResponse: &txn.CNOpResponse{
-				Payload: make([]byte, size),
+		return cs.Write(
+			ctx,
+			&txn.TxnResponse{
+				RequestID: request.Message.GetID(),
+				Method:    txn.TxnMethod_Write,
+				CNOpResponse: &txn.CNOpResponse{
+					Payload: make([]byte, size),
+				},
 			},
-		})
+			morpc.SyncWrite)
 	})
 
 	sd, err := NewSender(

@@ -25,6 +25,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
 
@@ -73,7 +74,7 @@ func GetShardInfo(address string, shardID uint64) (ShardInfo, bool, error) {
 	rpcReq := &RPCRequest{
 		Request: req,
 	}
-	future, err := cc.Send(ctx, address, rpcReq)
+	future, err := cc.Send(ctx, address, rpcReq, morpc.SyncWrite)
 	if err != nil {
 		return ShardInfo{}, false, err
 	}

@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
@@ -355,19 +356,21 @@ func sendBatchToClientSession(ctx context.Context, encodeBatData []byte, wcs pro
 			msg.Sid = pipeline.Status_Last
 			msg.Checksum = checksum
 		}
-		if err := wcs.Cs.Write(ctx, msg); err != nil {
+		if err := wcs.Cs.Write(ctx, msg, morpc.SyncWrite); err != nil {
 			return err
 		}
 		return nil
 	}
 
 	start := 0
+	lastChunk := false
 	for start < len(encodeBatData) {
 		end := start + maxMessageSizeToMoRpc
 		sid := pipeline.Status_WaitingNext
 		if end > len(encodeBatData) {
 			end = len(encodeBatData)
 			sid = pipeline.Status_Last
+			lastChunk = true
 		}
 		msg := cnclient.AcquireMessage()
 		{
@@ -378,7 +381,7 @@ func sendBatchToClientSession(ctx context.Context, encodeBatData []byte, wcs pro
 			msg.Checksum = checksum
 		}
 
-		if err := wcs.Cs.Write(ctx, msg); err != nil {
+		if err := wcs.Cs.Write(ctx, msg, morpc.SyncWrite.Chunk(lastChunk)); err != nil {
 			return err
 		}
 		start = end

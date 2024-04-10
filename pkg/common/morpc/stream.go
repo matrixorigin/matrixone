@@ -24,6 +24,35 @@ import (
 	"go.uber.org/zap"
 )
 
+// StreamOptions stream options
+type StreamOptions struct {
+	feature int
+}
+
+func DefaultStreamOptions() StreamOptions {
+	return StreamOptions{
+		feature: 0,
+	}
+}
+
+func (opts StreamOptions) WithEnableControl() StreamOptions {
+	opts.feature |= featureEnableControl
+	return opts
+}
+
+func (opts StreamOptions) WithExclusive() StreamOptions {
+	opts.feature |= featureExclusive
+	return opts
+}
+
+func (opts StreamOptions) isExclusive() bool {
+	return opts.feature&featureExclusive != 0
+}
+
+func (opts StreamOptions) controlEnabled() bool {
+	return opts.feature&featureEnableControl != 0
+}
+
 type stream struct {
 	rb             *remoteBackend
 	c              chan Message
@@ -140,7 +169,7 @@ func (s *stream) Resume(ctx context.Context) error {
 	if !s.opts.controlEnabled() {
 		return nil
 	}
-	return s.Send(ctx, newResumeStream(s.id), WriteOptions{}.Internal())
+	return s.Send(ctx, newResumeStream(s.id), InternalWrite)
 }
 
 func (s *stream) doSendLocked(
@@ -235,8 +264,6 @@ func (s *stream) cleanCLocked() {
 }
 
 type streamPeer struct {
-	ctx      context.Context
-	cancel   context.CancelFunc
 	opts     StreamOptions
 	c        chan struct{}
 	deny     atomic.Bool
@@ -247,11 +274,7 @@ type streamPeer struct {
 }
 
 func newStreamPeer() *streamPeer {
-	ctx, cancel := context.WithCancel(context.Background())
-	return &streamPeer{
-		ctx:    ctx,
-		cancel: cancel,
-	}
+	return &streamPeer{}
 }
 
 func (s *streamPeer) init(opts StreamOptions) {
@@ -262,13 +285,10 @@ func (s *streamPeer) init(opts StreamOptions) {
 	}
 }
 
-func (s *streamPeer) close() {
-	s.cancel()
-}
-
 func (s *streamPeer) pause() {
 	select {
 	case <-s.c:
+		getLogger().Fatal("BUG: pause failed")
 	default:
 	}
 	s.deny.Store(true)
@@ -278,6 +298,7 @@ func (s *streamPeer) resume() {
 	select {
 	case s.c <- struct{}{}:
 	default:
+		getLogger().Fatal("BUG: resume failed")
 	}
 }
 
@@ -297,8 +318,6 @@ func (s *streamPeer) wait(msg RPCMessage) error {
 	}
 	select {
 	case <-s.c:
-	case <-s.ctx.Done():
-		return s.ctx.Err()
 	case <-msg.Ctx.Done():
 		return msg.Ctx.Err()
 	}

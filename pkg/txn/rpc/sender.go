@@ -133,7 +133,7 @@ func (s *sender) Send(ctx context.Context, requests []txn.TxnRequest) (*SendResu
 		}
 
 		requests[idx].RequestID = st.ID()
-		if err := st.Send(ctx, &requests[idx]); err != nil {
+		if err := st.Send(ctx, &requests[idx], morpc.SyncWrite); err != nil {
 			sr.Release()
 			return nil, err
 		}
@@ -170,7 +170,7 @@ func (s *sender) doSend(ctx context.Context, request txn.TxnRequest) (txn.TxnRes
 	}
 
 	start := time.Now()
-	f, err := s.client.Send(ctx, tn.Address, &request)
+	f, err := s.client.Send(ctx, tn.Address, &request, morpc.SyncWrite)
 	if err != nil {
 		return txn.TxnResponse{}, err
 	}
@@ -192,7 +192,7 @@ func (s *sender) createStream(ctx context.Context, tn metadata.TNShard, size int
 			return ls, nil
 		}
 	}
-	return s.client.NewStream(tn.Address, false)
+	return s.client.NewStream(tn.Address, morpc.DefaultStreamOptions())
 }
 
 func (s *sender) acquireLocalStream() *localStream {
@@ -264,7 +264,15 @@ func (ls *localStream) ID() uint64 {
 	return 0
 }
 
-func (ls *localStream) Send(ctx context.Context, request morpc.Message) error {
+func (ls *localStream) Resume(ctx context.Context) error {
+	return nil
+}
+
+func (ls *localStream) Send(
+	ctx context.Context,
+	request morpc.Message,
+	ops morpc.WriteOptions,
+) error {
 	if ls.closed {
 		panic("send after closed")
 	}
@@ -286,7 +294,7 @@ func (ls *localStream) Receive() (chan morpc.Message, error) {
 	return ls.out, nil
 }
 
-func (ls *localStream) Close(closeConn bool) error {
+func (ls *localStream) Close() error {
 	if ls.closed {
 		return nil
 	}
@@ -350,7 +358,7 @@ func (sr *SendResult) Release() {
 	if sr.pool != nil {
 		for k, st := range sr.streams {
 			if st != nil {
-				_ = st.Close(false)
+				_ = st.Close()
 			}
 			delete(sr.streams, k)
 		}

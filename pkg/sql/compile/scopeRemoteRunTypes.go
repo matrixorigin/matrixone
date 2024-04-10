@@ -132,11 +132,12 @@ func (sender *messageSenderOnClient) send(
 		message.SetProcData(procData)
 		message.SetSequence(0)
 		message.SetSid(pipeline.Status_Last)
-		return sender.streamSender.Send(sender.ctx, message)
+		return sender.streamSender.Send(sender.ctx, message, morpc.SyncWrite)
 	}
 
 	start := 0
 	cnt := uint64(0)
+	lastChunk := false
 	for start < sdLen {
 		end := start + maxMessageSizeToMoRpc
 
@@ -148,12 +149,13 @@ func (sender *messageSenderOnClient) send(
 			message.SetData(scopeData[start:sdLen])
 			message.SetProcData(procData)
 			message.SetSid(pipeline.Status_Last)
+			lastChunk = true
 		} else {
 			message.SetData(scopeData[start:end])
 			message.SetSid(pipeline.Status_WaitingNext)
 		}
 
-		if err := sender.streamSender.Send(sender.ctx, message); err != nil {
+		if err := sender.streamSender.Send(sender.ctx, message, morpc.SyncWrite.Chunk(lastChunk)); err != nil {
 			return err
 		}
 		cnt++
@@ -163,6 +165,10 @@ func (sender *messageSenderOnClient) send(
 }
 
 func (sender *messageSenderOnClient) receiveMessage() (morpc.Message, error) {
+	if err := sender.streamSender.Resume(sender.ctx); err != nil {
+		return nil, err
+	}
+
 	select {
 	case <-sender.ctx.Done():
 		return nil, nil
@@ -258,7 +264,7 @@ func (sender *messageSenderOnClient) close() {
 		sender.ctxCancel()
 	}
 	// XXX not a good way to deal it if close failed.
-	_ = sender.streamSender.Close(true)
+	_ = sender.streamSender.Close()
 }
 
 // messageReceiverOnServer is a structure
@@ -416,7 +422,7 @@ func (receiver *messageReceiverOnServer) sendError(
 	if errInfo != nil {
 		message.SetMoError(receiver.ctx, errInfo)
 	}
-	return receiver.clientSession.Write(receiver.ctx, message)
+	return receiver.clientSession.Write(receiver.ctx, message, morpc.SyncWrite)
 }
 
 func (receiver *messageReceiverOnServer) sendBatch(
@@ -448,8 +454,10 @@ func (receiver *messageReceiverOnServer) sendBatch(
 		m.SetSequence(receiver.sequence)
 		m.SetSid(pipeline.Status_Last)
 		receiver.sequence++
-		return receiver.clientSession.Write(receiver.ctx, m)
+		return receiver.clientSession.Write(receiver.ctx, m, morpc.SyncWrite)
 	}
+
+	lastChunk := false
 	// if data is too large, cut and send
 	for start, end := 0, 0; start < dataLen; start = end {
 		m, errA := receiver.acquireMessage()
@@ -461,6 +469,7 @@ func (receiver *messageReceiverOnServer) sendBatch(
 			end = dataLen
 			m.SetSid(pipeline.Status_Last)
 			m.SetCheckSum(checksum)
+			lastChunk = true
 		} else {
 			m.SetSid(pipeline.Status_WaitingNext)
 		}
@@ -469,7 +478,7 @@ func (receiver *messageReceiverOnServer) sendBatch(
 		m.SetSequence(receiver.sequence)
 		receiver.sequence++
 
-		if errW := receiver.clientSession.Write(receiver.ctx, m); errW != nil {
+		if errW := receiver.clientSession.Write(receiver.ctx, m, morpc.SyncWrite.Chunk(lastChunk)); errW != nil {
 			return errW
 		}
 	}
@@ -499,7 +508,7 @@ func (receiver *messageReceiverOnServer) sendEndMessage() error {
 		}
 		message.SetAnalysis(data)
 	}
-	return receiver.clientSession.Write(receiver.ctx, message)
+	return receiver.clientSession.Write(receiver.ctx, message, morpc.SyncWrite)
 }
 
 func generateProcessHelper(data []byte, cli client.TxnClient) (processHelper, error) {

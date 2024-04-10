@@ -21,9 +21,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/require"
-	"go.uber.org/zap"
-
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
@@ -32,6 +29,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/logtail"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 )
 
 func TestMain(m *testing.M) {
@@ -302,12 +301,7 @@ func (m *blockStream) RemoteAddress() string {
 	return "block"
 }
 
-func (m *blockStream) Write(ctx context.Context, message morpc.Message) error {
-	<-m.ch
-	return moerr.NewStreamClosedNoCtx()
-}
-
-func (m *blockStream) AsyncWrite(message morpc.Message) error {
+func (m *blockStream) Write(ctx context.Context, message morpc.Message, opts morpc.WriteOptions) error {
 	<-m.ch
 	return moerr.NewStreamClosedNoCtx()
 }
@@ -343,12 +337,8 @@ func (m *brokenStream) RemoteAddress() string {
 	return "broken"
 }
 
-func (m *brokenStream) Write(ctx context.Context, message morpc.Message) error {
+func (m *brokenStream) Write(ctx context.Context, message morpc.Message, opts morpc.WriteOptions) error {
 	return moerr.NewStreamClosedNoCtx()
-}
-
-func (cs *brokenStream) AsyncWrite(response morpc.Message) error {
-	return nil
 }
 
 func (m *brokenStream) Close() error {
@@ -383,13 +373,7 @@ func (m *normalStream) RemoteAddress() string {
 	return "normal"
 }
 
-func (m *normalStream) Write(ctx context.Context, message morpc.Message) error {
-	response := message.(*LogtailResponseSegment)
-	m.logger.Info("write response segment:", zap.String("segment", response.String()))
-	return nil
-}
-
-func (m *normalStream) AsyncWrite(message morpc.Message) error {
+func (m *normalStream) Write(ctx context.Context, message morpc.Message, opts morpc.WriteOptions) error {
 	response := message.(*LogtailResponseSegment)
 	m.logger.Info("write response segment:", zap.String("segment", response.String()))
 	return nil

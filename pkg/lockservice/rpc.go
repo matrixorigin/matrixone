@@ -174,7 +174,7 @@ func (c *client) AsyncSend(ctx context.Context, request *pb.Request) (*morpc.Fut
 			zap.String("request", request.DebugString()))
 
 	}
-	return c.client.Send(ctx, address, request)
+	return c.client.Send(ctx, address, request, morpc.SyncWrite)
 }
 
 func (c *client) Close() error {
@@ -405,7 +405,7 @@ func writeResponse(
 			zap.String("response", detail))
 	}
 	// after write, response will be released by rpc
-	if err := cs.AsyncWrite(resp); err != nil {
+	if err := cs.Write(ctx, resp, morpc.AsyncWrite); err != nil {
 		getLogger().Error("write response failed",
 			zap.Error(err),
 			zap.String("response", detail))

@@ -200,6 +200,7 @@ type Stream interface {
 	// Receive returns a channel to read stream message from server. If nil is received, the receive
 	// loop needs to exit. In any case, Stream.Close needs to be called.
 	Receive() (chan Message, error)
+	// Resume resume server stream writing.
 	Resume(ctx context.Context) error
 	// Close close the stream.
 	Close() error
@@ -258,35 +259,4 @@ type MessagePool[REQ, RESP MethodBasedMessage] interface {
 
 	AcquireResponse() RESP
 	ReleaseResponse(RESP)
-}
-
-type WriteOptions struct {
-	async          bool
-	chunk          bool
-	lastChunk      bool
-	internal       bool
-	stream         bool
-	streamSequence uint32
-}
-
-func (opts WriteOptions) Async() WriteOptions {
-	opts.async = true
-	return opts
-}
-
-func (opts WriteOptions) Chunk(last bool) WriteOptions {
-	opts.chunk = true
-	opts.lastChunk = last
-	return opts
-}
-
-func (opts WriteOptions) Internal() WriteOptions {
-	opts.internal = true
-	return opts
-}
-
-func (opts WriteOptions) Stream(sequence uint32) WriteOptions {
-	opts.stream = true
-	opts.streamSequence = sequence
-	return opts
 }
