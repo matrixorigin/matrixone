@@ -501,21 +501,20 @@ func (f *fuzzyCheck) adjustDecimalScale(toCheck *vector.Vector) {
 }
 
 func (f *fuzzyCheck) recheckIfCompound(toCheck *vector.Vector) (bool, error) {
-	if f.isCompound {
-		return true, nil
-	}
 
-	// for the case that create compound unique index for existed table
-	// can only detact if it is compound by the schema of the vector
+	if f.onlyInsertHidden {
+		// for the case that create compound unique index for existed table
+		// can only detact if it is compound by the schema of the vector
 
-	foo, err := vectorToString(toCheck, 0)
-	if err != nil {
-		return false, err
-	}
+		foo, err := vectorToString(toCheck, 0)
+		if err != nil {
+			return false, err
+		}
 
-	if _, _, schema, err := types.DecodeTuple([]byte(foo)); err == nil {
-		f.compoundCols = make([]*plan.ColDef, len(schema))
-		return true, nil
+		if _, _, schema, err := types.DecodeTuple([]byte(foo)); err == nil {
+			f.compoundCols = make([]*plan.ColDef, len(schema))
+			return len(schema) > 1, nil
+		}
 	}
 
 	return f.isCompound, nil

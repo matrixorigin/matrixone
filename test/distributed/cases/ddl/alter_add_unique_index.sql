@@ -40,3 +40,10 @@ SHOW INDEX FROM t1;
 SELECT COUNT(*) FROM t1;
 
 DROP TABLE t1;
+
+DROP TABLE IF EXISTS t3;
+create table t3 (col1 bigint primary key,col2 char(25), col3 float, col4 char(50), key num_id(col4));
+insert into t3 values (1,'',20.23,'5678'),(2,'13873458290',100.00,'23');
+insert into t3 values (67834,'13456789872',20.23,'5678'),(56473,'',100.00,'5678');
+ALTER TABLE t3 ADD UNIQUE KEY `unique_empty_char`(col2) COMMENT 'Unique constraint for empty char';
+DROP TABLE t3;
