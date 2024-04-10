@@ -681,11 +681,7 @@ func (rb *remoteBackend) makeAllWaitingFutureFailed() {
 	}()
 
 	for i, f := range waitings {
-		if f.waiting.Load() {
-			f.error(ids[i], backendClosed, nil)
-		} else {
-			f.messageSent(backendClosed)
-		}
+		f.error(ids[i], backendClosed, nil)
 	}
 }
 
