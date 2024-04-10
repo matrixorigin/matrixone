@@ -119,6 +119,7 @@ func TestMergeBlock(t *testing.T) {
 			IsFirst: false,
 			IsLast:  false,
 		},
+		AddAffectedRows: true,
 	}
 	resetChildren(&argument1, batch1)
 
@@ -210,6 +211,7 @@ func TestArgument_GetMetaLocBat(t *testing.T) {
 			IsFirst: false,
 			IsLast:  false,
 		},
+		AddAffectedRows: true,
 	}
 
 	proc := testutil.NewProc()
