@@ -151,6 +151,10 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 		anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
 		anal.Alloc(ctr.maxAllocSize)
 	}
+	if arg.bat != nil {
+		proc.PutBatch(arg.bat)
+		arg.bat = nil
+	}
 }
 
 func (ctr *container) cleanExprExecutor() {

@@ -361,7 +361,6 @@ var RecordParseErrorStatement = func(ctx context.Context, ses *Session, proc *pr
 	if tenant == nil {
 		tenant, _ = GetTenantInfo(ctx, "internal")
 	}
-	incStatementCounter(tenant.GetTenant(), nil)
 	incStatementErrorsCounter(tenant.GetTenant(), nil)
 	return ctx, nil
 }
@@ -545,7 +544,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 			continue
 		}
 
-		row, err := extractRowFromEveryVector(ses, bat, j, oq, false)
+		row, err := extractRowFromEveryVector(ses, bat, j, oq, true)
 		if err != nil {
 			return err
 		}
@@ -677,7 +676,7 @@ func (mce *MysqlCmdExecutor) handleSelectVariables(ve *tree.VarExpr, cwIndex, cw
 	return err
 }
 
-func doCmdFieldList(requestCtx context.Context, ses *Session, icfl *InternalCmdFieldList) error {
+func doCmdFieldList(requestCtx context.Context, ses *Session, _ *InternalCmdFieldList) error {
 	dbName := ses.GetDatabaseName()
 	if dbName == "" {
 		return moerr.NewNoDB(requestCtx)
@@ -1295,7 +1294,7 @@ func fillQueryBatch(ses *Session, explainColName string, lines []string) (*batch
 }
 
 // Note: for pass the compile quickly. We will remove the comments in the future.
-func (mce *MysqlCmdExecutor) handleExplainStmt(requestCtx context.Context, stmt *tree.ExplainStmt, cwIndex, cwsLen int) error {
+func (mce *MysqlCmdExecutor) handleExplainStmt(stmt *tree.ExplainStmt, cwIndex, cwsLen int) error {
 	var err error
 	ses := mce.GetSession()
 	proto := ses.GetMysqlProtocol()
@@ -1384,7 +1383,7 @@ func doDeallocate(ctx context.Context, ses *Session, st *tree.Deallocate) error 
 	return nil
 }
 
-func doReset(ctx context.Context, ses *Session, st *tree.Reset) error {
+func doReset(_ context.Context, _ *Session, _ *tree.Reset) error {
 	return nil
 }
 
@@ -1431,9 +1430,26 @@ func (mce *MysqlCmdExecutor) handleDropSnapshot(ctx context.Context, ct *tree.Dr
 
 // handleCreateAccount creates a new user-level tenant in the context of the tenant SYS
 // which has been initialized.
-func (mce *MysqlCmdExecutor) handleCreateAccount(ctx context.Context, ca *tree.CreateAccount) error {
+func (mce *MysqlCmdExecutor) handleCreateAccount(ctx context.Context, ca *tree.CreateAccount, proc *process.Process) error {
 	//step1 : create new account.
-	return InitGeneralTenant(ctx, mce.GetSession(), ca)
+	create := &CreateAccount{
+		IfNotExists:  ca.IfNotExists,
+		AuthOption:   ca.AuthOption,
+		StatusOption: ca.StatusOption,
+		Comment:      ca.Comment,
+	}
+
+	params := proc.GetPrepareParams()
+	switch val := ca.Name.(type) {
+	case *tree.NumVal:
+		create.Name = val.OrigString()
+	case *tree.ParamExpr:
+		create.Name = params.GetStringAt(val.Offset - 1)
+	default:
+		return moerr.NewInternalError(ctx, "invalid params type")
+	}
+
+	return InitGeneralTenant(ctx, mce.GetSession(), create)
 }
 
 // handleDropAccount drops a new user-level tenant
@@ -2766,10 +2782,6 @@ var GetStmtExecList = func(db, sql, user string, eng engine.Engine, proc *proces
 	return stmtExecList, nil
 }
 
-func incStatementCounter(tenant string, stmt tree.Statement) {
-	metric.StatementCounter(tenant, getStatementType(stmt).GetQueryType()).Inc()
-}
-
 func incTransactionCounter(tenant string) {
 	metric.TransactionCounter(tenant).Inc()
 }
@@ -3107,7 +3119,7 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 				*tree.ShowProcessList, *tree.ShowStatus, *tree.ShowTableStatus, *tree.ShowGrants, *tree.ShowRolesStmt,
 				*tree.ShowIndex, *tree.ShowCreateView, *tree.ShowTarget, *tree.ValuesStatement,
 				*tree.ExplainFor, *tree.ShowTableNumber, *tree.ShowColumnNumber, *tree.ShowTableValues, *tree.ShowLocks, *tree.ShowNodeList, *tree.ShowFunctionOrProcedureStatus,
-				*tree.ShowPublications, *tree.ShowCreatePublications, *tree.ShowStages, *tree.ExplainAnalyze, *tree.ShowSnapShots:
+				*tree.ShowPublications, *tree.ShowCreatePublications, *tree.ShowStages, *tree.ExplainAnalyze, *tree.ShowSnapShots, *tree.ShowAccountUpgrade:
 				/*
 					mysql COM_QUERY response: End after the data row has been sent.
 					After all row data has been sent, it sends the EOF or OK packet.
@@ -3234,7 +3246,6 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 
 	//get errors during the transaction. rollback the transaction
 	rollbackTxnFunc := func() error {
-		incStatementCounter(tenant, stmt)
 		incStatementErrorsCounter(tenant, stmt)
 		/*
 			Cases    | set Autocommit = 1/0 | BEGIN statement |
@@ -3270,7 +3281,6 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 		}()
 
 		//load data handle txn failure internally
-		incStatementCounter(tenant, stmt)
 		retErr = ses.TxnCommitSingleStatement(stmt)
 		if retErr != nil {
 			logStatementStatus(requestCtx, ses, stmt, fail, retErr)
@@ -3534,7 +3544,7 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 		}
 	case *tree.ExplainStmt:
 		selfHandle = true
-		if err = mce.handleExplainStmt(requestCtx, st, i, len(cws)); err != nil {
+		if err = mce.handleExplainStmt(st, i, len(cws)); err != nil {
 			return
 		}
 	case *tree.ExplainAnalyze:
@@ -3595,7 +3605,7 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 	case *tree.CreateAccount:
 		selfHandle = true
 		ses.InvalidatePrivilegeCache()
-		if err = mce.handleCreateAccount(requestCtx, st); err != nil {
+		if err = mce.handleCreateAccount(requestCtx, st, proc); err != nil {
 			return
 		}
 	case *tree.DropAccount:
@@ -3678,6 +3688,12 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 	case *tree.CallStmt:
 		selfHandle = true
 		if err = mce.handleCallProcedure(requestCtx, st, proc, i, len(cws)); err != nil {
+			return
+		}
+	case *tree.UpgradeStatement:
+		selfHandle = true
+		ses.InvalidatePrivilegeCache()
+		if err = mce.handleExecUpgrade(requestCtx, st, proc, i, len(cws)); err != nil {
 			return
 		}
 	case *tree.Grant:
@@ -3797,6 +3813,14 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 		}
 	case *tree.ShowErrors, *tree.ShowWarnings:
 		err = mce.handleShowErrors(i, len(cws))
+		if err != nil {
+			return
+		} else {
+			return
+		}
+	case *tree.CreateAccount:
+		ses.InvalidatePrivilegeCache()
+		err = mce.handleCreateAccount(requestCtx, st, proc)
 		if err != nil {
 			return
 		} else {
@@ -3938,7 +3962,7 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 		*tree.ShowProcessList, *tree.ShowStatus, *tree.ShowTableStatus, *tree.ShowGrants, *tree.ShowRolesStmt,
 		*tree.ShowIndex, *tree.ShowCreateView, *tree.ShowTarget, *tree.ShowCollation, *tree.ValuesStatement,
 		*tree.ExplainFor, *tree.ShowTableNumber, *tree.ShowColumnNumber, *tree.ShowTableValues, *tree.ShowLocks, *tree.ShowNodeList, *tree.ShowFunctionOrProcedureStatus,
-		*tree.ShowPublications, *tree.ShowCreatePublications, *tree.ShowStages, *tree.ShowSnapShots:
+		*tree.ShowPublications, *tree.ShowCreatePublications, *tree.ShowStages, *tree.ShowSnapShots, *tree.ShowAccountUpgrade:
 		columns, err = cw.GetColumns()
 		if err != nil {
 			logError(ses, ses.GetDebugString(),
@@ -5064,5 +5088,25 @@ func (mce *MysqlCmdExecutor) handleSetOption(ctx context.Context, data []byte) (
 		return moerr.NewInternalError(ctx, "invalid cmd_set_option data")
 	}
 
+	return nil
+}
+
+func (mce *MysqlCmdExecutor) handleExecUpgrade(ctx context.Context, st *tree.UpgradeStatement, proc *process.Process, i int, i2 int) error {
+	ses := mce.GetSession()
+	proto := ses.GetMysqlProtocol()
+
+	retryCount := st.Retry
+	if st.Retry <= 0 {
+		retryCount = 1
+	}
+	err := ses.UpgradeTenant(ctx, st.Target.AccountName, uint32(retryCount), st.Target.IsALLAccount)
+	if err != nil {
+		return err
+	}
+
+	resp := NewGeneralOkResponse(COM_QUERY, mce.ses.GetServerStatus())
+	if err = proto.SendResponse(ses.requestCtx, resp); err != nil {
+		return moerr.NewInternalError(ses.requestCtx, "routine send response failed. error:%v ", err)
+	}
 	return nil
 }
