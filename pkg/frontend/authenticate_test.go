@@ -6442,6 +6442,9 @@ func boxExprStr(s string) tree.Expr {
 }
 
 func mustUnboxExprStr(e tree.Expr) string {
+	if e == nil {
+		return ""
+	}
 	return e.(*tree.NumVal).OrigString()
 }
 
