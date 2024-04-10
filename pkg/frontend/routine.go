@@ -260,7 +260,7 @@ func (rt *Routine) handleRequest(req *Request) error {
 	ses.UpdateDebugString()
 
 	if rt.needPrintSessionInfo() {
-		logInfof(ses.GetDebugString(), "mo received first request")
+		ses.Info(ses.requestCtx, "mo received first request")
 	}
 
 	tenant := ses.GetTenantInfo()
@@ -395,7 +395,7 @@ func (rt *Routine) cleanup() {
 		if ses != nil {
 			err := ses.GetTxnHandler().TxnRollback()
 			if err != nil {
-				logError(ses, ses.GetDebugString(),
+				ses.Error(ses.requestCtx,
 					"Failed to rollback txn",
 					zap.Error(err))
 			}

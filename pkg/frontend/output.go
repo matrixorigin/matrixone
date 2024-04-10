@@ -112,7 +112,7 @@ func (oq *outputQueue) flush() error {
 	}
 	if oq.ep.needExportToFile() {
 		if err := exportDataToCSVFile(oq); err != nil {
-			logError(oq.ses, oq.ses.GetDebugString(),
+			oq.ses.Error(oq.ses.GetRequestContext(),
 				"Error occurred while exporting to CSV file",
 				zap.Error(err))
 			return err
@@ -125,7 +125,7 @@ func (oq *outputQueue) flush() error {
 		}
 
 		if err := oq.proto.SendResultSetTextBatchRowSpeedup(oq.mrs, oq.rowIdx); err != nil {
-			logError(oq.ses, oq.ses.GetDebugString(),
+			oq.ses.Error(oq.ses.GetRequestContext(),
 				"Flush error",
 				zap.Error(err))
 			return err
@@ -244,7 +244,7 @@ func extractRowFromVector(ses FeSession, vec *vector.Vector, i int, row []interf
 	case types.T_enum:
 		row[i] = copyBytes(vec.GetBytesAt(rowIndex), needCopyBytes)
 	default:
-		logError(ses, ses.GetDebugString(),
+		ses.Error(ses.requestCtx,
 			"Failed to extract row from vector, unsupported type",
 			zap.Int("typeID", int(vec.GetType().Oid)))
 		return moerr.NewInternalError(ses.GetRequestContext(), "extractRowFromVector : unsupported type %d", vec.GetType().Oid)

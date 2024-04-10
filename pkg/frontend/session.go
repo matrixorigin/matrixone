@@ -1526,7 +1526,7 @@ func (ses *Session) AuthenticateUser(userInput string, dbName string, authRespon
 	//------------------------------------------------------------------------------------------------------------------
 	// record the id :routine pair in RoutineManager
 	ses.getRoutineManager().accountRoutine.recordRountine(tenantID, ses.getRoutine(), accountVersion)
-	logInfo(ses, sessionInfo, tenant.String())
+	ses.Info(ses.requestCtx, tenant.String())
 
 	return GetPassWord(pwd)
 }
@@ -1974,6 +1974,16 @@ func (ses *Session) Errorf(ctx context.Context, msg string, args ...any) {
 		fields = appendSessionField(fields, ses)
 		fields = appendTraceField(fields, ctx)
 		ses.logger.Log(fmt.Sprintf(msg, args...), log.DefaultLogOptions().WithLevel(zap.ErrorLevel).AddCallerSkip(1), fields...)
+	}
+}
+
+func (ses *Session) Debugf(ctx context.Context, msg string, args ...any) {
+	if ses.logger.Enabled(zap.DebugLevel) {
+		fields := make([]zap.Field, 0, 5)
+		fields = append(fields, zap.String("session_info", ses.GetDebugString()))
+		fields = appendSessionField(fields, ses)
+		fields = appendTraceField(fields, ctx)
+		ses.logger.Log(fmt.Sprintf(msg, args...), log.DefaultLogOptions().WithLevel(zap.DebugLevel).AddCallerSkip(1), fields...)
 	}
 }
 

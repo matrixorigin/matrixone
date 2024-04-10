@@ -283,7 +283,7 @@ func (rm *RoutineManager) Created(rs goetty.IOSession) {
 	hsV10pkt := pro.makeHandshakeV10Payload()
 	err = pro.writePackets(hsV10pkt, true)
 	if err != nil {
-		logError(pro.ses, pro.GetDebugString(),
+		pro.ses.Error(, pro.GetDebugString(),
 			"Failed to handshake with server, quitting routine...",
 			zap.Error(err))
 		routine.killConnection(true)
@@ -385,7 +385,7 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 	var seq = protocol.GetSequenceId()
 	if !ok {
 		err = moerr.NewInternalError(ctx, "message is not Packet")
-		logError(routine.ses, routine.ses.GetDebugString(),
+		routine.ses.Error(routine.ses.requestCtx,
 			"Error occurred",
 			zap.Error(err))
 		return err
@@ -433,7 +433,7 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 			logDebugf(protoInfo, "setup ssl")
 			isTlsHeader, err = protocol.HandleHandshake(ctx, payload)
 			if err != nil {
-				logError(routine.ses, routine.ses.GetDebugString(),
+				routine.ses.Error(routine.ses.requestCtx,
 					"An error occurred",
 					zap.Error(err))
 				return err
@@ -446,11 +446,11 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 				logDebugf(protoInfo, "get TLS conn ok")
 				newCtx, cancelFun := context.WithTimeout(ctx, 20*time.Second)
 				if err = tlsConn.HandshakeContext(newCtx); err != nil {
-					logError(routine.ses, routine.ses.GetDebugString(),
+					routine.ses.Error(routine.ses.requestCtx,
 						"Error occurred before cancel()",
 						zap.Error(err))
 					cancelFun()
-					logError(routine.ses, routine.ses.GetDebugString(),
+					routine.ses.Error(routine.ses.requestCtx,
 						"Error occurred after cancel()",
 						zap.Error(err))
 					return err
@@ -476,7 +476,7 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 			logDebugf(protoInfo, "handleHandshake")
 			_, err = protocol.HandleHandshake(ctx, payload)
 			if err != nil {
-				logError(routine.ses, routine.ses.GetDebugString(),
+				routine.ses.Error(routine.ses.requestCtx,
 					"Error occurred",
 					zap.Error(err))
 				return err

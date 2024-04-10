@@ -1215,7 +1215,7 @@ func (mp *MysqlProtocolImpl) authenticateUser(ctx context.Context, authResponse 
 
 			//TO Check password
 			if len(psw) == 0 || mp.checkPassword(psw, mp.GetSalt(), authResponse) {
-				logInfo(mp.ses, mp.ses.GetDebugString(), "check password succeeded")
+				mp.ses.Info(ctx, "check password succeeded")
 			} else {
 				return moerr.NewInternalError(ctx, "check password failed")
 			}
@@ -2762,7 +2762,7 @@ func (mp *MysqlProtocolImpl) MakeEOFPayload(warnings, status uint16) []byte {
 func (mp *MysqlProtocolImpl) receiveExtraInfo(rs goetty.IOSession) {
 	// TODO(volgariver6): when proxy is stable, remove this deadline setting.
 	if err := rs.RawConn().SetReadDeadline(time.Now().Add(defaultSaltReadTimeout)); err != nil {
-		logDebugf(mp.GetDebugString(), "failed to set deadline for salt updating: %v", err)
+		mp.ses.Debugf(mp.ses.GetRequestContext(), "failed to set deadline for salt updating: %v", err)
 		return
 	}
 	var i proxy.ExtraInfo
@@ -2770,10 +2770,10 @@ func (mp *MysqlProtocolImpl) receiveExtraInfo(rs goetty.IOSession) {
 	if err := i.Decode(reader); err != nil {
 		// If the error is timeout, we treat it as normal case and do not update extra info.
 		if err, ok := err.(net.Error); ok && err.Timeout() {
-			logInfo(mp.ses, mp.GetDebugString(), "cannot get salt, maybe not use proxy",
+			mp.ses.Info(mp.ses.GetRequestContext(), "cannot get salt, maybe not use proxy",
 				zap.Error(err))
 		} else {
-			logError(mp.ses, mp.GetDebugString(), "failed to get extra info",
+			mp.ses.Error(mp.ses.GetRequestContext(), "failed to get extra info",
 				zap.Error(err))
 		}
 		return
