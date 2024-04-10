@@ -20,6 +20,9 @@ import (
 	"math"
 	"strings"
 
+	"go.uber.org/zap"
+	"golang.org/x/exp/constraints"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/compress"
@@ -39,8 +42,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"go.uber.org/zap"
-	"golang.org/x/exp/constraints"
 )
 
 func (s *Scope) CreateDatabase(c *Compile) error {
@@ -1295,6 +1296,137 @@ func (s *Scope) CreateTable(c *Compile) error {
 		qry.GetTableDef(),
 		c.proc.TxnOperator,
 		nil)
+}
+
+func (s *Scope) CreateView(c *Compile) error {
+	qry := s.Plan.GetDdl().GetCreateView()
+
+	// convert the plan's cols to the execution's cols
+	planCols := qry.GetTableDef().GetCols()
+	exeCols := planColsToExeCols(planCols)
+	// TODO: debug for #11917
+	if strings.Contains(qry.GetTableDef().GetName(), "sbtest") {
+		getLogger().Info("createView",
+			zap.String("databaseName", c.db),
+			zap.String("ViewName", qry.GetTableDef().GetName()),
+			zap.String("txnID", c.proc.TxnOperator.Txn().DebugString()),
+		)
+	}
+
+	// convert the plan's defs to the execution's defs
+	exeDefs, err := planDefsToExeDefs(qry.GetTableDef())
+	if err != nil {
+		getLogger().Info("createView",
+			zap.String("databaseName", c.db),
+			zap.String("ViewName", qry.GetTableDef().GetName()),
+			zap.Error(err),
+		)
+		return err
+	}
+
+	dbName := c.db
+	if qry.GetDatabase() != "" {
+		dbName = qry.GetDatabase()
+	}
+	dbSource, err := c.e.Database(c.ctx, dbName, c.proc.TxnOperator)
+	if err != nil {
+		if dbName == "" {
+			// TODO: debug for #11917
+			if strings.Contains(qry.GetTableDef().GetName(), "sbtest") {
+				getLogger().Info("createView",
+					zap.String("databaseName", c.db),
+					zap.String("ViewName", qry.GetTableDef().GetName()),
+					zap.String("txnID", c.proc.TxnOperator.Txn().DebugString()),
+				)
+			}
+			return moerr.NewNoDB(c.ctx)
+		}
+		// TODO: debug for #11917
+		if strings.Contains(qry.GetTableDef().GetName(), "sbtest") {
+			getLogger().Info("createTable no exist",
+				zap.String("databaseName", c.db),
+				zap.String("tableName", qry.GetTableDef().GetName()),
+				zap.String("txnID", c.proc.TxnOperator.Txn().DebugString()),
+			)
+		}
+		return err
+	}
+
+	tblName := qry.GetTableDef().GetName()
+	if _, err = dbSource.Relation(c.ctx, tblName, nil); err == nil {
+		if qry.GetIfNotExists() {
+			// TODO: debug for #11917
+			if strings.Contains(qry.GetTableDef().GetName(), "sbtest") {
+				getLogger().Info("createView no exist",
+					zap.String("databaseName", c.db),
+					zap.String("tableName", qry.GetTableDef().GetName()),
+					zap.String("txnID", c.proc.TxnOperator.Txn().DebugString()),
+				)
+			}
+			return nil
+		}
+		if qry.GetReplace() {
+			err = c.runSql(fmt.Sprintf("drop view if exists %s", tblName))
+			if err != nil {
+				getLogger().Info("createView",
+					zap.String("databaseName", c.db),
+					zap.String("ViewName", qry.GetTableDef().GetName()),
+					zap.Error(err),
+				)
+				return err
+			}
+		} else {
+			getLogger().Info("createView",
+				zap.String("databaseName", c.db),
+				zap.String("ViewName", qry.GetTableDef().GetName()),
+				zap.Error(err),
+			)
+			return moerr.NewTableAlreadyExists(c.ctx, tblName)
+		}
+	}
+
+	// check in EntireEngine.TempEngine, notice that TempEngine may not init
+	tmpDBSource, err := c.e.Database(c.ctx, defines.TEMPORARY_DBNAME, c.proc.TxnOperator)
+	if err == nil {
+		if _, err := tmpDBSource.Relation(c.ctx, engine.GetTempTableName(dbName, tblName), nil); err == nil {
+			if qry.GetIfNotExists() {
+				return nil
+			}
+			getLogger().Info("createView",
+				zap.String("databaseName", c.db),
+				zap.String("ViewName", qry.GetTableDef().GetName()),
+				zap.Error(err),
+			)
+			return moerr.NewTableAlreadyExists(c.ctx, fmt.Sprintf("temporary '%s'", tblName))
+		}
+	}
+
+	if err := lockMoTable(c, dbName, tblName, lock.LockMode_Exclusive); err != nil {
+		getLogger().Info("createView",
+			zap.String("databaseName", c.db),
+			zap.String("ViewName", qry.GetTableDef().GetName()),
+			zap.Error(err),
+		)
+		return err
+	}
+
+	if err := dbSource.Create(context.WithValue(c.ctx, defines.SqlKey{}, c.sql), tblName, append(exeCols, exeDefs...)); err != nil {
+		getLogger().Info("createView",
+			zap.String("databaseName", c.db),
+			zap.String("ViewName", qry.GetTableDef().GetName()),
+			zap.Error(err),
+		)
+		return err
+	}
+	// TODO: debug for #11917
+	if strings.Contains(qry.GetTableDef().GetName(), "sbtest") {
+		getLogger().Info("createView ok",
+			zap.String("databaseName", c.db),
+			zap.String("ViewName", qry.GetTableDef().GetName()),
+			zap.String("txnID", c.proc.TxnOperator.Txn().DebugString()),
+		)
+	}
+	return nil
 }
 
 func checkIndexInitializable(dbName string, tblName string) bool {
