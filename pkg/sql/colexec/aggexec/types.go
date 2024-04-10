@@ -179,15 +179,15 @@ func makeSingleAgg(
 
 	pIsVarLen, rIsVarLen := param.IsVarlen(), result.IsVarlen()
 	if pIsVarLen && rIsVarLen {
-		return newSingleAggFuncExec4(mg, info, opt, nil)
+		return newSingleAggFuncExec4(mg, info, opt, agg)
 	}
 
 	if !pIsVarLen && rIsVarLen {
-		return newSingleAggFuncExec2(mg, info, opt, nil)
+		return newSingleAggFuncExec2(mg, info, opt, agg)
 	}
 
 	if pIsVarLen {
-		return newSingleAggFuncExec3(mg, info, opt, nil)
+		return newSingleAggFuncExec3(mg, info, opt, agg)
 	}
 	return newSingleAggFuncExec1(mg, info, opt, agg)
 }

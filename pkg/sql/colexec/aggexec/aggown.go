@@ -144,32 +144,17 @@ type SingleAggFromFixedRetVar[
 	from types.FixedSizeTExceptStrType] interface {
 	AggCanMarshal
 	Init(setter AggBytesSetter, arg types.Type, ret types.Type) error
-	Fill(from, AggBytesGetter, AggBytesSetter) error
-	FillNull(AggBytesGetter, AggBytesSetter) error
-	Fills(value from, isNull bool, count int, getter AggBytesGetter, setter AggBytesSetter) error
-	Merge(other SingleAggFromFixedRetVar[from], getter1, getter2 AggBytesGetter, setter AggBytesSetter) error
-	Flush(AggBytesGetter, AggBytesSetter) error
 }
 
 type SingleAggFromVarRetFixed[
 	to types.FixedSizeTExceptStrType] interface {
 	AggCanMarshal
 	Init(setter AggSetter[to], arg types.Type, ret types.Type) error
-	FillBytes([]byte, AggGetter[to], AggSetter[to]) error
-	FillNull(AggGetter[to], AggSetter[to]) error
-	Fills(value []byte, isNull bool, count int, getter AggGetter[to], setter AggSetter[to]) error
-	Merge(other SingleAggFromVarRetFixed[to], getter1, getter2 AggGetter[to], setter AggSetter[to]) error
-	Flush(getter AggGetter[to], setter AggSetter[to]) error
 }
 
 type SingleAggFromVarRetVar interface {
 	AggCanMarshal
 	Init(setter AggBytesSetter, arg types.Type, ret types.Type) error
-	FillBytes([]byte, AggBytesGetter, AggBytesSetter) error
-	FillNull(AggBytesGetter, AggBytesSetter) error
-	Fills(value []byte, isNull bool, count int, getter AggBytesGetter, setter AggBytesSetter) error
-	Merge(other SingleAggFromVarRetVar, getter1, getter2 AggBytesGetter, setter AggBytesSetter) error
-	Flush(AggBytesGetter, AggBytesSetter) error
 }
 
 type MultiAggRetFixed[

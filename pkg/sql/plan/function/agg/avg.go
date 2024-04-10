@@ -19,33 +19,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 )
 
-func RegisterAvg(id int64) {
-	aggexec.RegisterDeterminedSingleAgg(aggexec.MakeDeterminedSingleAggInfo(id, types.T_bit.ToType(), types.T_float64.ToType(), false, true), newAggAvg[uint64])
-	aggexec.RegisterDeterminedSingleAgg(aggexec.MakeDeterminedSingleAggInfo(id, types.T_int8.ToType(), types.T_float64.ToType(), false, true), newAggAvg[int8])
-	aggexec.RegisterDeterminedSingleAgg(aggexec.MakeDeterminedSingleAggInfo(id, types.T_int16.ToType(), types.T_float64.ToType(), false, true), newAggAvg[int16])
-	aggexec.RegisterDeterminedSingleAgg(aggexec.MakeDeterminedSingleAggInfo(id, types.T_int32.ToType(), types.T_float64.ToType(), false, true), newAggAvg[int32])
-	aggexec.RegisterDeterminedSingleAgg(aggexec.MakeDeterminedSingleAggInfo(id, types.T_int64.ToType(), types.T_float64.ToType(), false, true), newAggAvg[int64])
-	aggexec.RegisterDeterminedSingleAgg(aggexec.MakeDeterminedSingleAggInfo(id, types.T_uint8.ToType(), types.T_float64.ToType(), false, true), newAggAvg[uint8])
-	aggexec.RegisterDeterminedSingleAgg(aggexec.MakeDeterminedSingleAggInfo(id, types.T_uint16.ToType(), types.T_float64.ToType(), false, true), newAggAvg[uint16])
-	aggexec.RegisterDeterminedSingleAgg(aggexec.MakeDeterminedSingleAggInfo(id, types.T_uint32.ToType(), types.T_float64.ToType(), false, true), newAggAvg[uint32])
-	aggexec.RegisterDeterminedSingleAgg(aggexec.MakeDeterminedSingleAggInfo(id, types.T_uint64.ToType(), types.T_float64.ToType(), false, true), newAggAvg[uint64])
-	aggexec.RegisterDeterminedSingleAgg(aggexec.MakeDeterminedSingleAggInfo(id, types.T_float32.ToType(), types.T_float64.ToType(), false, true), newAggAvg[float32])
-	aggexec.RegisterDeterminedSingleAgg(aggexec.MakeDeterminedSingleAggInfo(id, types.T_float64.ToType(), types.T_float64.ToType(), false, true), newAggAvg[float64])
-	aggexec.RegisterFlexibleSingleAgg(
-		aggexec.MakeFlexibleAggInfo(id, false, true),
-		AvgReturnType,
-		func(args []types.Type, ret types.Type) any {
-			switch args[0].Oid {
-			case types.T_decimal64:
-				return newAggAvgDecimal64
-			case types.T_decimal128:
-				return newAggAvgDecimal128
-			default:
-				panic("unexpected type for avg()")
-			}
-		})
-}
-
 var AvgSupportedTypes = []types.T{
 	types.T_bit,
 	types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
@@ -112,33 +85,6 @@ func (a *aggAvg[from]) Init(set aggexec.AggSetter[float64], arg, ret types.Type)
 	a.count = 0
 	return nil
 }
-func (a *aggAvg[from]) Fill(value from, get aggexec.AggGetter[float64], set aggexec.AggSetter[float64]) error {
-	set(get() + float64(value))
-	a.count++
-	return nil
-}
-func (a *aggAvg[from]) FillNull(get aggexec.AggGetter[float64], set aggexec.AggSetter[float64]) error {
-	return nil
-}
-func (a *aggAvg[from]) Fills(value from, isNull bool, count int, get aggexec.AggGetter[float64], set aggexec.AggSetter[float64]) error {
-	if !isNull {
-		set(get() + float64(value)*float64(count))
-		a.count += int64(count)
-	}
-	return nil
-}
-func (a *aggAvg[from]) Merge(other aggexec.SingleAggFromFixedRetFixed[from, float64], get1, get2 aggexec.AggGetter[float64], set aggexec.AggSetter[float64]) error {
-	next := other.(*aggAvg[from])
-	set(get1() + get2())
-	a.count += next.count
-	return nil
-}
-func (a *aggAvg[from]) Flush(get aggexec.AggGetter[float64], set aggexec.AggSetter[float64]) error {
-	if a.count != 0 {
-		set(get() / float64(a.count))
-	}
-	return nil
-}
 
 func (a *aggAvgDecimal64) Marshal() []byte {
 	bs := types.EncodeInt64(&a.count)
@@ -155,57 +101,6 @@ func (a *aggAvgDecimal64) Init(set aggexec.AggSetter[types.Decimal128], arg, ret
 	a.argScale = arg.Scale
 	return nil
 }
-func (a *aggAvgDecimal64) Fill(value types.Decimal64, get aggexec.AggGetter[types.Decimal128], set aggexec.AggSetter[types.Decimal128]) error {
-	r, err := get().Add64(value)
-	if err != nil {
-		return err
-	}
-	set(r)
-	a.count++
-	return nil
-}
-func (a *aggAvgDecimal64) FillNull(get aggexec.AggGetter[types.Decimal128], set aggexec.AggSetter[types.Decimal128]) error {
-	return nil
-}
-func (a *aggAvgDecimal64) Fills(value types.Decimal64, isNull bool, count int, get aggexec.AggGetter[types.Decimal128], set aggexec.AggSetter[types.Decimal128]) error {
-	if isNull {
-		return nil
-	}
-	v := types.Decimal128{B0_63: uint64(value), B64_127: 0}
-	if value.Sign() {
-		v.B64_127 = ^v.B64_127
-	}
-	r, _, err := v.Mul(types.Decimal128{B0_63: uint64(count), B64_127: 0}, a.argScale, 0)
-	if err != nil {
-		return err
-	}
-	if r, err = get().Add128(r); err != nil {
-		return err
-	}
-	set(r)
-	a.count += int64(count)
-	return nil
-}
-func (a *aggAvgDecimal64) Merge(other aggexec.SingleAggFromFixedRetFixed[types.Decimal64, types.Decimal128], get1, get2 aggexec.AggGetter[types.Decimal128], set aggexec.AggSetter[types.Decimal128]) error {
-	next := other.(*aggAvgDecimal64)
-	r, err := get1().Add128(get2())
-	if err != nil {
-		return err
-	}
-	set(r)
-	a.count += next.count
-	return nil
-}
-func (a *aggAvgDecimal64) Flush(get aggexec.AggGetter[types.Decimal128], set aggexec.AggSetter[types.Decimal128]) error {
-	if a.count != 0 {
-		v, _, err := get().Div(types.Decimal128{B0_63: uint64(a.count), B64_127: 0}, a.argScale, 0)
-		if err != nil {
-			return err
-		}
-		set(v)
-	}
-	return nil
-}
 
 func (a *aggAvgDecimal128) Marshal() []byte {
 	bs := types.EncodeInt64(&a.count)
@@ -220,52 +115,5 @@ func (a *aggAvgDecimal128) Init(set aggexec.AggSetter[types.Decimal128], arg, re
 	set(types.Decimal128{B0_63: 0, B64_127: 0})
 	a.count = 0
 	a.argScale = arg.Scale
-	return nil
-}
-func (a *aggAvgDecimal128) Fill(value types.Decimal128, get aggexec.AggGetter[types.Decimal128], set aggexec.AggSetter[types.Decimal128]) error {
-	r, err := get().Add128(value)
-	if err != nil {
-		return err
-	}
-	set(r)
-	a.count++
-	return nil
-}
-func (a *aggAvgDecimal128) FillNull(get aggexec.AggGetter[types.Decimal128], set aggexec.AggSetter[types.Decimal128]) error {
-	return nil
-}
-func (a *aggAvgDecimal128) Fills(value types.Decimal128, isNull bool, count int, get aggexec.AggGetter[types.Decimal128], set aggexec.AggSetter[types.Decimal128]) error {
-	if isNull {
-		return nil
-	}
-	r, _, err := value.Mul(types.Decimal128{B0_63: uint64(count), B64_127: 0}, a.argScale, 0)
-	if err != nil {
-		return err
-	}
-	if r, err = get().Add128(r); err != nil {
-		return err
-	}
-	set(r)
-	a.count += int64(count)
-	return nil
-}
-func (a *aggAvgDecimal128) Merge(other aggexec.SingleAggFromFixedRetFixed[types.Decimal128, types.Decimal128], get1, get2 aggexec.AggGetter[types.Decimal128], set aggexec.AggSetter[types.Decimal128]) error {
-	next := other.(*aggAvgDecimal128)
-	r, err := get1().Add128(get2())
-	if err != nil {
-		return err
-	}
-	set(r)
-	a.count += next.count
-	return nil
-}
-func (a *aggAvgDecimal128) Flush(get aggexec.AggGetter[types.Decimal128], set aggexec.AggSetter[types.Decimal128]) error {
-	if a.count != 0 {
-		v, _, err := get().Div(types.Decimal128{B0_63: uint64(a.count), B64_127: 0}, a.argScale, 0)
-		if err != nil {
-			return err
-		}
-		set(v)
-	}
 	return nil
 }

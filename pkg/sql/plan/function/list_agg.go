@@ -154,7 +154,7 @@ var supportedAggInNewFramework = []FuncNew{
 				retType:    agg.AvgReturnType,
 				aggFramework: aggregationLogicOfOverload{
 					str:         "avg",
-					aggRegister: agg.RegisterAvg,
+					aggRegister: agg.RegisterAvg1,
 				},
 			},
 		},
@@ -271,7 +271,7 @@ var supportedAggInNewFramework = []FuncNew{
 				retType:    agg.AnyValueReturnType,
 				aggFramework: aggregationLogicOfOverload{
 					str:         "any_value",
-					aggRegister: agg.RegisterAnyValue,
+					aggRegister: agg.RegisterAnyValue1,
 				},
 			},
 		},
@@ -292,7 +292,7 @@ var supportedAggInNewFramework = []FuncNew{
 				retType:    agg.BitAndReturnType,
 				aggFramework: aggregationLogicOfOverload{
 					str:         "bit_and",
-					aggRegister: agg.RegisterBitAnd,
+					aggRegister: agg.RegisterBitAnd1,
 				},
 			},
 		},
@@ -313,7 +313,7 @@ var supportedAggInNewFramework = []FuncNew{
 				retType:    agg.BitAndReturnType,
 				aggFramework: aggregationLogicOfOverload{
 					str:         "bit_or",
-					aggRegister: agg.RegisterBitOr,
+					aggRegister: agg.RegisterBitOr1,
 				},
 			},
 		},
@@ -334,7 +334,7 @@ var supportedAggInNewFramework = []FuncNew{
 				retType:    agg.BitAndReturnType,
 				aggFramework: aggregationLogicOfOverload{
 					str:         "bit_xor",
-					aggRegister: agg.RegisterBitXor,
+					aggRegister: agg.RegisterBitXor1,
 				},
 			},
 		},
