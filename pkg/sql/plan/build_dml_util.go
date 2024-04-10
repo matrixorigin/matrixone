@@ -1500,6 +1500,12 @@ func makeOneInsertPlan(
 	// there will be some cases that no need to check if primary key is duplicate
 	//  case 1: For SQL that contains on duplicate update
 	//  case 2: the only primary key is auto increment type
+	//  case 3: create hidden table for secondary index
+
+	isSecondaryHidden := strings.Contains(tableDef.Name, catalog.SecondaryIndexTableNamePrefix)
+	if isSecondaryHidden {
+		return nil
+	}
 
 	if ifCheckPkDup && !ifExistAutoPkCol {
 		if err = appendPrimaryConstrantPlan(builder, bindCtx, tableDef, objRef, partitionExpr, pkFilterExprs,
