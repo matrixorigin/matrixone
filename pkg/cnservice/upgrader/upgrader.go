@@ -241,22 +241,9 @@ func (u *Upgrader) UpgradeNewViewColumn(ctx context.Context) []error {
 			continue
 		}
 
-		//
-		stmt := []string{
-			"begin;",
-			appendSemicolon(tbl.CreateTableSql), //drop view
-			appendSemicolon(tbl.CreateViewSql),  //create view
-			"commit;",
-		}
-
-		//alter view
-		upgradeSQL := strings.Join(stmt, "\n")
-
-		// Execute upgrade SQL
-		if err = exec.Exec(ctx, upgradeSQL, ie.NewOptsBuilder().Finish()); err != nil {
+		if err = exec.ExecTxn(ctx, []string{tbl.CreateTableSql, tbl.CreateViewSql}, ie.NewOptsBuilder().Finish()); err != nil {
 			errors = append(errors, moerr.NewUpgrateError(ctx, tbl.Database, tbl.Table, frontend.GetDefaultTenant(), catalog.System_Account, err.Error()))
 			continue
-			//return err
 		}
 	}
 

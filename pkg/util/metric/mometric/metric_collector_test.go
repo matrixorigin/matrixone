@@ -50,6 +50,10 @@ func (e *dummySqlExecutor) Exec(ctx context.Context, sql string, opts ie.Session
 	return nil
 }
 
+func (e *dummySqlExecutor) ExecTxn(ctx context.Context, sqls []string, opts ie.SessionOverrideOptions) error {
+	return nil
+}
+
 func (e *dummySqlExecutor) Query(ctx context.Context, sql string, opts ie.SessionOverrideOptions) ie.InternalExecResult {
 	return nil
 }
