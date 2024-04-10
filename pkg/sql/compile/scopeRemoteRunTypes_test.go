@@ -19,15 +19,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/common/reuse"
-
 	"github.com/golang/mock/gomock"
 	"github.com/google/uuid"
-	"github.com/stretchr/testify/require"
-
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc/examples/message"
-	"github.com/matrixorigin/matrixone/pkg/common/morpc/mock_morpc"
+	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
@@ -35,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"github.com/stretchr/testify/require"
 )
 
 func Test_MessageSenderOnClient(t *testing.T) {
@@ -97,8 +94,7 @@ func Test_MessageReceiverOnServer(t *testing.T) {
 	cli := mock_frontend.NewMockTxnClient(ctrl)
 	cli.EXPECT().NewWithSnapshot([]byte("")).Return(txnOperator, nil)
 
-	cs := mock_morpc.NewMockClientSession(ctrl)
-	cs.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).Times(5)
+	cs, _ := morpc.NewTestClientSession()
 
 	receiver := newMessageReceiverOnServer(
 		ctx,

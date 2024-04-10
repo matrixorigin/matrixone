@@ -20,22 +20,16 @@ import (
 	"testing"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/defines"
-
-	"github.com/matrixorigin/matrixone/pkg/common/reuse"
-
 	"github.com/golang/mock/gomock"
 	"github.com/google/uuid"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/source"
-	"github.com/stretchr/testify/require"
-
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
-	"github.com/matrixorigin/matrixone/pkg/common/morpc/mock_morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	plan2 "github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -86,6 +80,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/semi"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/single"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/source"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -93,6 +88,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionAgg"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"github.com/stretchr/testify/require"
 )
 
 func Test_CnServerMessageHandler(t *testing.T) {
@@ -200,12 +196,10 @@ func Test_CnServerMessageHandler(t *testing.T) {
 }
 
 func Test_receiveMessageFromCnServer(t *testing.T) {
-	ctrl := gomock.NewController(t)
 	ctx := context.TODO()
 
-	streamSender := mock_morpc.NewMockStream(ctrl)
-	ch := make(chan morpc.Message)
-	streamSender.EXPECT().Receive().Return(ch, nil)
+	streamSender := morpc.NewTestStream(1)
+	ch, _ := streamSender.Receive()
 
 	agg0, err := functionAgg.NewAggAvg(
 		function.AVG<<32,

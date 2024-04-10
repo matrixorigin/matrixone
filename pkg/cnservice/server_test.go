@@ -21,7 +21,6 @@ import (
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
-	"github.com/matrixorigin/matrixone/pkg/common/morpc/mock_morpc"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
@@ -89,9 +88,8 @@ func Test_InitServer(t *testing.T) {
 
 	var err error
 	ctx := context.TODO()
-	session := mock_morpc.NewMockClientSession(ctrl)
+	session, _ := morpc.NewTestClientSession()
 	msg.Cmd = pipeline.Method_PipelineMessage
-	session.EXPECT().CreateCache(ctx, uint64(0)).Return(&testMessageCache{}, nil).Times(2)
 
 	msg.Sid = pipeline.Status_WaitingNext
 	err = srv.handleRequest(
