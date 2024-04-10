@@ -75,6 +75,7 @@ var InternalColumns = map[string]int8{
 	SystemSI_IVFFLAT_TblCol_Centroids_centroid: 0,
 	SystemSI_IVFFLAT_TblCol_Entries_version:    0,
 	SystemSI_IVFFLAT_TblCol_Entries_id:         0,
+	SystemSI_IVFFLAT_TblCol_Entries_entry:      0,
 }
 
 var InternalTableNames = map[string]int8{
@@ -298,6 +299,7 @@ const (
 	SystemSI_IVFFLAT_TblCol_Entries_version = "__mo_index_centroid_fk_version"
 	SystemSI_IVFFLAT_TblCol_Entries_id      = "__mo_index_centroid_fk_id"
 	SystemSI_IVFFLAT_TblCol_Entries_pk      = IndexTablePrimaryColName
+	SystemSI_IVFFLAT_TblCol_Entries_entry   = "__mo_index_centroid_fk_entry"
 )
 
 const (
