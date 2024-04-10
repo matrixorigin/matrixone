@@ -251,9 +251,11 @@ func (s *server) onMessage(rs goetty.IOSession, value any, sequence uint64) erro
 				}
 				return nil
 			default:
-				panic(fmt.Sprintf("invalid internal message, flag %d", m.flag))
+				return moerr.NewNotSupportedNoCtx(fmt.Sprintf("invalid internal message, flag %d", m.flag))
 			}
 		}
+
+		return moerr.NewNotSupportedNoCtx("not support internal message")
 	}
 
 	if err := s.handler(request.Ctx, request, sequence, cs); err != nil {

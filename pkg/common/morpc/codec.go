@@ -16,6 +16,7 @@ package morpc
 
 import (
 	"encoding/hex"
+	"fmt"
 	"io"
 	"sync"
 
@@ -38,6 +39,7 @@ const (
 	flagStreamingMessage
 	flagPing
 	flagPong
+	unknownFlag
 )
 
 var (
@@ -166,7 +168,10 @@ func (c *baseCodec) Decode(in *buf.ByteBuf) (any, bool, error) {
 	data := getDecodeData(in)
 
 	// 2.1
-	flag, n := c.readFlag(&msg, data, offset)
+	flag, n, err := c.readFlag(&msg, data, offset)
+	if err != nil {
+		return nil, false, err
+	}
 	offset += n
 
 	// 2.2
@@ -178,7 +183,7 @@ func (c *baseCodec) Decode(in *buf.ByteBuf) (any, bool, error) {
 	offset += n
 
 	// 2.4
-	n, err := c.readCustomHeaders(flag, &msg, data, offset)
+	n, err = c.readCustomHeaders(flag, &msg, data, offset)
 	if err != nil {
 		return nil, false, err
 	}
@@ -590,7 +595,11 @@ func getDecodeData(in *buf.ByteBuf) []byte {
 	return in.RawSlice(in.GetReadIndex(), in.GetMarkIndex())
 }
 
-func (c *baseCodec) readFlag(msg *RPCMessage, data []byte, offset int) (byte, int) {
+func (c *baseCodec) readFlag(
+	msg *RPCMessage,
+	data []byte,
+	offset int,
+) (byte, int, error) {
 	flag := data[offset]
 	if flag&flagPing != 0 {
 		msg.Message = &flagOnlyMessage{flag: flagPing}
@@ -598,10 +607,12 @@ func (c *baseCodec) readFlag(msg *RPCMessage, data []byte, offset int) (byte, in
 	} else if flag&flagPong != 0 {
 		msg.Message = &flagOnlyMessage{flag: flagPong}
 		msg.internal = true
+	} else if flag >= unknownFlag {
+		return 0, 0, moerr.NewNotSupportedNoCtx(fmt.Sprintf("not support internal flag %d", flag))
 	} else {
 		msg.Message = c.messageFactory()
 	}
-	return flag, 1
+	return flag, 1, nil
 }
 
 func readChecksum(flag byte, data []byte, offset int) (uint64, int) {

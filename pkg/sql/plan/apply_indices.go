@@ -21,6 +21,20 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
+func isRuntimeConstExpr(expr *plan.Expr) bool {
+	switch expr.Expr.(type) {
+	case *plan.Expr_Lit, *plan.Expr_P, *plan.Expr_V:
+		return true
+
+	case *plan.Expr_F:
+		fn := expr.GetF()
+		return fn.Func.ObjName == "cast" && isRuntimeConstExpr(fn.Args[0])
+
+	default:
+		return false
+	}
+}
+
 func (builder *QueryBuilder) applyIndices(nodeID int32, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) int32 {
 	node := builder.qry.Nodes[nodeID]
 
@@ -69,11 +83,11 @@ func (builder *QueryBuilder) applyIndicesForFilters(nodeID int32, node *plan.Nod
 
 			switch fn.Func.ObjName {
 			case "=":
-				if fn.Args[0].GetLit() != nil && fn.Args[1].GetCol() != nil {
+				if isRuntimeConstExpr(fn.Args[0]) && fn.Args[1].GetCol() != nil {
 					fn.Args[0], fn.Args[1] = fn.Args[1], fn.Args[0]
 				}
 
-				if fn.Args[1].GetLit() == nil {
+				if !isRuntimeConstExpr(fn.Args[1]) {
 					goto END0
 				}
 
@@ -225,12 +239,12 @@ END0:
 			continue
 		}
 
-		if fn.Args[0].GetLit() != nil && fn.Args[1].GetCol() != nil {
+		if isRuntimeConstExpr(fn.Args[0]) && fn.Args[1].GetCol() != nil {
 			fn.Args[0], fn.Args[1] = fn.Args[1], fn.Args[0]
 		}
 
 		col := fn.Args[0].GetCol()
-		if col == nil || fn.Args[1].GetLit() == nil {
+		if col == nil || !isRuntimeConstExpr(fn.Args[1]) {
 			continue
 		}
 
@@ -344,6 +358,8 @@ END0:
 
 			node.FilterList = newFilterList
 		}
+
+		calcScanStats(node, builder)
 
 		idxTableNodeID := builder.appendNode(&plan.Node{
 			NodeType:     plan.Node_TABLE_SCAN,
@@ -467,6 +483,7 @@ END0:
 		}
 
 		node.FilterList = append(node.FilterList[:i], node.FilterList[i+1:]...)
+		calcScanStats(node, builder)
 
 		idxTableNodeID := builder.appendNode(&plan.Node{
 			NodeType:     plan.Node_TABLE_SCAN,
