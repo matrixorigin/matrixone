@@ -16,6 +16,7 @@ package hashbuild
 
 import (
 	"bytes"
+	"runtime"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
@@ -246,6 +247,9 @@ func (ctr *container) buildHashmap(ap *Argument, proc *process.Process) error {
 	)
 
 	for i := 0; i < ctr.inputBatchRowCount; i += hashmap.UnitLimit {
+		if i%(hashmap.UnitLimit*32) == 0 {
+			runtime.Gosched()
+		}
 		n := ctr.inputBatchRowCount - i
 		if n > hashmap.UnitLimit {
 			n = hashmap.UnitLimit
