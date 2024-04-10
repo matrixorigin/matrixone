@@ -3629,7 +3629,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 	// function `from_unixtime`
 	{
 		functionId: FROM_UNIXTIME,
-		class:      plan.Function_STRICT,
+		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
 		layout:     STANDARD_FUNCTION,
 		checkFn:    fixedTypeMatch,
 

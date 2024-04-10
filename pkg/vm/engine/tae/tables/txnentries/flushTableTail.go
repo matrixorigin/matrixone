@@ -148,6 +148,8 @@ func (entry *flushTableTailEntry) collectDelsAndTransfer(from, to types.TS) (tra
 		return
 	}
 	for i, blk := range entry.ablksMetas {
+		// For ablock, there is only one block in it.
+		// Checking the block mapping once is enough
 		mapping := entry.transMappings.Mappings[i].M
 		if len(mapping) == 0 {
 			// empty frozen aobjects, it can not has any more deletes
