@@ -15,6 +15,7 @@
 package types
 
 import (
+	"bytes"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -124,4 +125,12 @@ func (v *Varlena) GetString(area []byte) string {
 func (v *Varlena) Reset() {
 	var vzero Varlena
 	*v = vzero
+}
+
+func PrefixCompare(lhs, rhs []byte) int {
+	if len(lhs) > len(rhs) {
+		lhs = lhs[:len(rhs)]
+	}
+
+	return bytes.Compare(lhs, rhs)
 }
