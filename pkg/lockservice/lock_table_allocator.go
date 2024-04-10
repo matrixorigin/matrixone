@@ -74,6 +74,7 @@ func NewLockTableAllocator(
 	}
 
 	la.initServer(cfg)
+	logLockAllocatorStartSucc()
 	return la
 }
 
