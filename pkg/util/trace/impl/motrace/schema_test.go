@@ -40,6 +40,10 @@ func (e *dummySqlExecutor) Exec(ctx context.Context, sql string, opts ie.Session
 	return nil
 }
 
+func (e *dummySqlExecutor) ExecTxn(ctx context.Context, sqls []string, opts ie.SessionOverrideOptions) error {
+	return nil
+}
+
 // copy from /Users/jacksonxie/go/src/github.com/matrixorigin/matrixone/pkg/util/metric/metric_collector_test.go
 func newDummyExecutorFactory(sqlch chan string) func() ie.InternalExecutor {
 	return func() ie.InternalExecutor {
