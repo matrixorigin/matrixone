@@ -132,7 +132,7 @@ func (s *service) upgrade() {
 
 	ug := &upgrader.Upgrader{
 		IEFactory: func(isLimit bool) ie.InternalExecutor {
-			return frontend.NewInternalExecutor(pu, s.mo.GetRoutineManager().GetAutoIncrCacheManager(), false)
+			return frontend.NewInternalExecutor(pu, s.mo.GetRoutineManager().GetAutoIncrCacheManager(), isLimit)
 		},
 	}
 	ug.Upgrade(moServerCtx)
