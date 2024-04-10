@@ -227,7 +227,7 @@ func createConnector(
 	return nil
 }
 
-func (mce *MysqlCmdExecutor) handleDropConnector(ctx context.Context, st *tree.DropConnector) error {
+func (mce *MysqlCmdExecutor) handleDropConnector(_ context.Context, _ *tree.DropConnector) error {
 	//todo: handle Drop connector
 	return nil
 }
@@ -266,7 +266,7 @@ func (mce *MysqlCmdExecutor) handleDropDynamicTable(ctx context.Context, st *tre
 	}
 	return nil
 }
-func (mce *MysqlCmdExecutor) handleShowConnectors(ctx context.Context, cwIndex, cwsLen int) error {
+func (mce *MysqlCmdExecutor) handleShowConnectors(_ context.Context, cwIndex, cwsLen int) error {
 	var err error
 	ses := mce.GetSession()
 	proto := ses.GetMysqlProtocol()

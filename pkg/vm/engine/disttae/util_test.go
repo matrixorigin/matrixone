@@ -886,7 +886,6 @@ func TestGetNonCompositePKSerachFuncByExpr(t *testing.T) {
 	_, _, filter := getNonCompositePKSearchFuncByExpr(
 		inExpr,
 		"pk",
-		types.T_int64,
 		proc)
 	sels := filter(bat.Vecs)
 	require.Equal(t, 3, len(sels))

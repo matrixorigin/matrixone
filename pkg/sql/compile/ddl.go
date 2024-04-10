@@ -1268,7 +1268,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 			return err
 		}
 
-		insertSQL2, err := makeInsertTablePartitionsSQL(c.e, c.ctx, c.proc, dbSource, newRelation)
+		insertSQL2, err := makeInsertTablePartitionsSQL(c.ctx, dbSource, newRelation)
 		if err != nil {
 			getLogger().Info("createTable",
 				zap.String("databaseName", c.db),
@@ -1740,9 +1740,6 @@ func (s *Scope) removeChildTblIdFromParentTable(c *Compile, fkRelation engine.Re
 			break
 		}
 	}
-	if err != nil {
-		return err
-	}
 	return fkRelation.UpdateConstraint(c.ctx, oldCt)
 }
 
@@ -1917,9 +1914,6 @@ func (s *Scope) TruncateTable(c *Compile) error {
 				}
 				break
 			}
-		}
-		if err != nil {
-			return err
 		}
 		err = fkRelation.UpdateConstraint(c.ctx, oldCt)
 		if err != nil {
