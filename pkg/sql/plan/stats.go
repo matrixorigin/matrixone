@@ -37,7 +37,6 @@ const DefaultBlockMaxRows = 8192
 const BlockNumForceOneCN = 200
 const blockSelectivityThreshHold = 0.95
 const highNDVcolumnThreshHold = 0.95
-const blockNDVThreshHold = 100
 
 // stats cache is small, no need to use LRU for now
 type StatsCache struct {
