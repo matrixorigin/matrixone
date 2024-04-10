@@ -217,7 +217,13 @@ var (
 			"SOURCE_FILE varchar(20) DEFAULT NULL," +
 			"SOURCE_LINE int DEFAULT NULL" +
 			");",
-		"CREATE VIEW IF NOT EXISTS `PROCESSLIST` AS SELECT * FROM PROCESSLIST() A;",
+
+		fmt.Sprintf("CREATE VIEW IF NOT EXISTS %s.PROCESSLIST AS "+
+			"select node_id, conn_id, session_id, account, user, host, db, "+
+			"session_start, command, info, txn_id, statement_id, statement_type, "+
+			"query_type, sql_source_type, query_start, client_host, role, proxy_host "+
+			"from PROCESSLIST() A", InformationDBConst),
+
 		"CREATE TABLE IF NOT EXISTS USER_PRIVILEGES (" +
 			"GRANTEE varchar(292) NOT NULL DEFAULT ''," +
 			"TABLE_CATALOG varchar(512) NOT NULL DEFAULT ''," +
