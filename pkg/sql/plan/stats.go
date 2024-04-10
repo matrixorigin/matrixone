@@ -528,7 +528,7 @@ func estimateFilterWeight(expr *plan.Expr, w float64) float64 {
 }
 
 // harsh estimate of block selectivity, will improve it in the future
-func estimateFilterBlockSelectivity(ctx context.Context, expr *plan.Expr, tableDef *plan.TableDef, builder *QueryBuilder) float64 {
+func estimateFilterBlockSelectivity(ctx context.Context, expr *plan.Expr, tableDef *plan.TableDef, tableCnt float64) float64 {
 	if !ExprIsZonemappable(ctx, expr) {
 		return 1
 	}
@@ -543,7 +543,11 @@ func estimateFilterBlockSelectivity(ctx context.Context, expr *plan.Expr, tableD
 			return math.Min(expr.Selectivity*10, 0.5)
 		}
 	}
-	return 0.5
+	if tableCnt > 10000 {
+		return 0.5
+	} else {
+		return 1
+	}
 }
 
 func rewriteFilterListByStats(ctx context.Context, nodeID int32, builder *QueryBuilder) {
@@ -973,8 +977,8 @@ func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
 	var blockExprList []*plan.Expr
 	for i := range node.FilterList {
 		node.FilterList[i].Selectivity = estimateExprSelectivity(node.FilterList[i], builder)
-		currentBlockSel := estimateFilterBlockSelectivity(builder.GetContext(), node.FilterList[i], node.TableDef, builder)
-		if currentBlockSel < blockSelectivityThreshHold && stats.TableCnt > 10000 {
+		currentBlockSel := estimateFilterBlockSelectivity(builder.GetContext(), node.FilterList[i], node.TableDef, stats.TableCnt)
+		if currentBlockSel < blockSelectivityThreshHold {
 			copyOfExpr := DeepCopyExpr(node.FilterList[i])
 			copyOfExpr.Selectivity = currentBlockSel
 			blockExprList = append(blockExprList, copyOfExpr)
