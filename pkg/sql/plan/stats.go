@@ -535,15 +535,15 @@ func estimateFilterBlockSelectivity(ctx context.Context, expr *plan.Expr, tableD
 	if col != nil {
 		switch GetSortOrder(tableDef, col.Name) {
 		case 0:
-			return math.Min(expr.Selectivity, 0.5)
-		case 1:
-			return math.Min(expr.Selectivity*3, 0.5)
-		case 2:
 			return math.Min(expr.Selectivity*10, 0.5)
+		case 1:
+			return math.Min(expr.Selectivity*10, 0.7)
+		case 2:
+			return math.Min(expr.Selectivity*10, 0.9)
 		}
 	}
 	if tableCnt > 10000 {
-		return 0.5
+		return 0.9
 	} else {
 		return 1
 	}
