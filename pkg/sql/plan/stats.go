@@ -37,7 +37,6 @@ const DefaultBlockMaxRows = 8192
 const BlockNumForceOneCN = 200
 const blockSelectivityThreshHold = 0.95
 const highNDVcolumnThreshHold = 0.95
-const blockNDVThreshHold = 100
 
 // stats cache is small, no need to use LRU for now
 type StatsCache struct {
@@ -528,12 +527,9 @@ func estimateFilterWeight(expr *plan.Expr, w float64) float64 {
 }
 
 // harsh estimate of block selectivity, will improve it in the future
-func estimateFilterBlockSelectivity(ctx context.Context, expr *plan.Expr, tableDef *plan.TableDef, builder *QueryBuilder) float64 {
+func estimateFilterBlockSelectivity(ctx context.Context, expr *plan.Expr, tableDef *plan.TableDef, tableCnt float64) float64 {
 	if !ExprIsZonemappable(ctx, expr) {
 		return 1
-	}
-	if expr.Selectivity < 0.01 {
-		return expr.Selectivity * 100
 	}
 	col := extractColRefInFilter(expr)
 	if col != nil {
@@ -546,10 +542,11 @@ func estimateFilterBlockSelectivity(ctx context.Context, expr *plan.Expr, tableD
 			return math.Min(expr.Selectivity*10, 0.5)
 		}
 	}
-	if getExprNdv(expr, builder) < blockNDVThreshHold {
+	if tableCnt > 10000 {
+		return 0.5
+	} else {
 		return 1
 	}
-	return 0.5
 }
 
 func rewriteFilterListByStats(ctx context.Context, nodeID int32, builder *QueryBuilder) {
@@ -979,7 +976,7 @@ func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
 	var blockExprList []*plan.Expr
 	for i := range node.FilterList {
 		node.FilterList[i].Selectivity = estimateExprSelectivity(node.FilterList[i], builder)
-		currentBlockSel := estimateFilterBlockSelectivity(builder.GetContext(), node.FilterList[i], node.TableDef, builder)
+		currentBlockSel := estimateFilterBlockSelectivity(builder.GetContext(), node.FilterList[i], node.TableDef, stats.TableCnt)
 		if currentBlockSel < blockSelectivityThreshHold {
 			copyOfExpr := DeepCopyExpr(node.FilterList[i])
 			copyOfExpr.Selectivity = currentBlockSel
