@@ -1163,6 +1163,12 @@ func makeInsertPlan(
 	// there will be some cases that no need to check
 	//  case 1: For SQL that contains on duplicate update
 	//  case 2: the only primary key is auto increment type
+	//  case 3: create hidden table for secondary index
+
+	isSecondaryHidden := strings.Contains(tableDef.Name, catalog.SecondaryIndexTableNamePrefix)
+	if isSecondaryHidden {
+		return nil
+	}
 
 	// make plan: sink_scan -> group_by -> filter  //check if pk is unique in rows
 	if pkPos, pkTyp := getPkPos(tableDef, true); pkPos != -1 && checkInsertPkDupForHiddenIndexTable {
