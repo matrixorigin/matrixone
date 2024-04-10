@@ -18,6 +18,9 @@ import (
 	"context"
 	liberrors "errors"
 	"fmt"
+	"strconv"
+	"strings"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
@@ -25,8 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
-	"strconv"
-	"strings"
 )
 
 var registeredTable = []*table.Table{motrace.SingleRowLogTable}
@@ -182,6 +183,11 @@ func (u *Upgrader) Upgrade(ctx context.Context) error {
 		errors = append(errors, errs...)
 	}
 
+	if errs := u.UpgradeMoIndexesSchema(ctx, allTenants); len(errs) > 0 {
+		logutil.Errorf("upgrade mo_indexes failed")
+		errors = append(errors, errs...)
+	}
+
 	if errs := u.UpgradeNewTableColumn(ctx); len(errs) > 0 {
 		logutil.Errorf("upgrade new table column failed")
 		errors = append(errors, errs...)
@@ -194,11 +200,6 @@ func (u *Upgrader) Upgrade(ctx context.Context) error {
 
 	if errs := u.UpgradeNewView(ctx, allTenants); len(errs) > 0 {
 		logutil.Errorf("upgrade new system view failed")
-		errors = append(errors, errs...)
-	}
-
-	if errs := u.UpgradeMoIndexesSchema(ctx, allTenants); len(errs) > 0 {
-		logutil.Errorf("upgrade mo_indexes failed")
 		errors = append(errors, errs...)
 	}
 
