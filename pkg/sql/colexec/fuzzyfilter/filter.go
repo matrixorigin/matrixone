@@ -335,6 +335,7 @@ func (arg *Argument) handleRuntimeFilter(proc *process.Process) error {
 		}
 	}
 
+
 	if runtimeFilter != nil {
 		sendFilter(arg, proc, runtimeFilter)
 		return nil
