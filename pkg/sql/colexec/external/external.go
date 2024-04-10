@@ -1229,7 +1229,16 @@ func getOneRowData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *
 		case types.T_enum:
 			d, err := strconv.ParseUint(field.Val, 10, 16)
 			if err == nil {
-				if err := vector.SetFixedAt(vec, rowIdx, uint16(d)); err != nil {
+				if err := vector.SetFixedAt(vec, rowIdx, types.Enum(d)); err != nil {
+					return err
+				}
+			} else if errors.Is(err, strconv.ErrSyntax) {
+				v, err := types.ParseEnum(param.Cols[colIdx].Typ.Enumvalues, field.Val)
+				if err != nil {
+					logutil.Errorf("parse field[%v] err:%v", field.Val, err)
+					return err
+				}
+				if err := vector.SetFixedAt(vec, rowIdx, types.Enum(v)); err != nil {
 					return err
 				}
 			} else {
@@ -1242,7 +1251,7 @@ func getOneRowData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *
 					logutil.Errorf("parse field[%v] err:%v", field.Val, err)
 					return moerr.NewInternalError(param.Ctx, "the input value '%v' is not uint16 type for column %d", field.Val, colIdx)
 				}
-				if err := vector.SetFixedAt(vec, rowIdx, uint16(f)); err != nil {
+				if err := vector.SetFixedAt(vec, rowIdx, types.Enum(f)); err != nil {
 					return err
 				}
 			}
