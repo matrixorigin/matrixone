@@ -77,12 +77,15 @@ type internalExecutor struct {
 	aicm         *defines.AutoIncrCacheManager
 }
 
-func NewInternalExecutor(pu *config.ParameterUnit, aicm *defines.AutoIncrCacheManager) *internalExecutor {
-	return newIe(pu, NewMysqlCmdExecutor(), aicm)
+func NewInternalExecutor(pu *config.ParameterUnit, aicm *defines.AutoIncrCacheManager, isLimit bool) *internalExecutor {
+	return newIe(pu, NewMysqlCmdExecutor(), aicm, isLimit)
 }
 
-func newIe(pu *config.ParameterUnit, inner internalMiniExec, aicm *defines.AutoIncrCacheManager) *internalExecutor {
-	proto := &internalProtocol{result: &internalExecResult{}}
+func newIe(pu *config.ParameterUnit, inner internalMiniExec, aicm *defines.AutoIncrCacheManager, isLimit bool) *internalExecutor {
+	proto := &internalProtocol{
+		result:  &internalExecResult{},
+		isLimit: isLimit,
+	}
 	ret := &internalExecutor{
 		proto:        proto,
 		executor:     inner,
@@ -255,6 +258,7 @@ type internalProtocol struct {
 	result      *internalExecResult
 	database    string
 	username    string
+	isLimit     bool
 }
 
 func (ip *internalProtocol) GetCapability() uint32 {
@@ -357,9 +361,11 @@ func (ip *internalProtocol) sendRows(mrs *MysqlResultSet, cnt uint64) error {
 			ip.result.resultSet = res
 		}
 
-		if res.GetRowCount() > 100 {
-			ip.result.dropped += cnt
-			return nil
+		if ip.isLimit {
+			if res.GetRowCount() > 100 {
+				ip.result.dropped += cnt
+				return nil
+			}
 		}
 
 		if res.GetColumnCount() == 0 {

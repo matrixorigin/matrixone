@@ -97,7 +97,7 @@ func TestCalculateStorageUsage(t *testing.T) {
 	aicm := &defines.AutoIncrCacheManager{}
 
 	ieFactory := func() ie.InternalExecutor {
-		return frontend.NewInternalExecutor(pu, aicm)
+		return frontend.NewInternalExecutor(pu, aicm, true)
 	}
 
 	err = mometric.CalculateStorageUsage(ctx, ieFactory)
