@@ -292,7 +292,7 @@ func (node *AlterUser) GetQueryType() string     { return QueryTypeDCL }
 type AlterAccountAuthOption struct {
 	Exist          bool
 	Equal          string
-	AdminName      string
+	AdminName      Expr
 	IdentifiedType AccountIdentified
 }
 
@@ -304,7 +304,10 @@ func (node *AlterAccountAuthOption) Format(ctx *FmtCtx) {
 			ctx.WriteString(node.Equal)
 		}
 
-		ctx.WriteString(fmt.Sprintf(" '%s'", node.AdminName))
+		ctx.WriteString(" ")
+		quoteCtx := *ctx
+		quoteCtx.singleQuoteString = true
+		node.AdminName.Format(&quoteCtx)
 		node.IdentifiedType.Format(ctx)
 	}
 }
