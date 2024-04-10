@@ -342,9 +342,11 @@ func (f *fuzzyCheck) backgroundSQLCheck(c *Compile) error {
 					err = e
 				} else {
 					scales := make([]int32, len(f.compoundCols))
-					for i, c := range f.compoundCols {
-						if c != nil {
-							scales[i] = c.Typ.Scale
+					for i, col := range f.compoundCols {
+						if col != nil {
+							scales[i] = col.Typ.Scale
+						} else {
+							scales[i] = 0
 						}
 					}
 					err = moerr.NewDuplicateEntry(c.ctx, t.ErrString(scales), f.attr)
