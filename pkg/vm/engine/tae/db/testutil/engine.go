@@ -420,6 +420,12 @@ func cnReadCheckpoint(t *testing.T, tid uint64, location objectio.Location, fs f
 	ins, del, cnIns, segDel, cb = cnReadCheckpointWithVersion(t, tid, location, fs, logtail.CheckpointCurrentVersion)
 	return
 }
+
+func ReadSnapshotCheckpoint(t *testing.T, tid uint64, location objectio.Location, fs fileservice.FileService) (ins, del, cnIns, segDel *api.Batch, cb []func()) {
+	ins, del, cnIns, segDel, cb = cnReadCheckpointWithVersion(t, tid, location, fs, logtail.CheckpointCurrentVersion)
+	return
+}
+
 func cnReadCheckpointWithVersion(t *testing.T, tid uint64, location objectio.Location, fs fileservice.FileService, ver uint32) (ins, del, cnIns, segDel *api.Batch, cb []func()) {
 	locs := make([]string, 0)
 	locs = append(locs, location.String())
@@ -624,6 +630,29 @@ func checkUserTables(ctx context.Context, t *testing.T, tid uint64, ins, del, cn
 	if seg != nil {
 		isProtoTNBatchEqual(ctx, t, seg, seg2)
 	}
+}
+
+func GetUserTablesInsBatch(t *testing.T, tid uint64, start, end types.TS, c *catalog.Catalog) (*containers.Batch, *containers.Batch) {
+	collector := logtail.NewIncrementalCollector(start, end, false)
+	p := &catalog.LoopProcessor{}
+	p.TombstoneFn = func(be data.Tombstone) error {
+		if be.GetObject().(*catalog.ObjectEntry).GetTable().ID != tid {
+			return nil
+		}
+		return collector.VisitTombstone(be)
+	}
+	p.ObjectFn = func(se *catalog.ObjectEntry) error {
+		if se.GetTable().ID != tid {
+			return nil
+		}
+		return collector.VisitObj(se)
+	}
+	err := c.RecurLoop(p)
+	assert.NoError(t, err)
+	collector.LoadAndCollectObject(c, collector.VisitObj)
+	data := collector.OrphanData()
+	bats := data.GetBatches()
+	return bats[logtail.BLKMetaInsertIDX], bats[logtail.ObjectInfoIDX]
 }
 
 func CheckCheckpointReadWrite(

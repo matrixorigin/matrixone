@@ -21,12 +21,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 type tcTemp struct {
@@ -1623,6 +1624,33 @@ func TestHexInt64(t *testing.T) {
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
 		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, HexInt64)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+func initUnhexTestCase() []tcTemp {
+	return []tcTemp{
+		{
+			info: "test unhex",
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"616263", "610a62", "615c6e62", "612262", "e4bda0e5a5bd", "invalid", "", ""},
+					[]bool{false, false, false, false, false, false, false, true}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_blob.ToType(), false,
+				[]string{"abc", "a\nb", `a\nb`, "a\"b", "你好", "", "", ""},
+				[]bool{false, false, false, false, false, true, false, true}),
+		},
+	}
+}
+
+func TestUnhex(t *testing.T) {
+	testCases := initUnhexTestCase()
+
+	proc := testutil.NewProcess()
+	for _, tc := range testCases {
+		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, Unhex)
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
