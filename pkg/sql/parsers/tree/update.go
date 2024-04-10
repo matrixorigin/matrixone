@@ -122,6 +122,7 @@ const (
 const (
 	CSV      = "csv"
 	JSONLINE = "jsonline"
+	PARQUET  = "parquet"
 )
 
 // if $format is jsonline
