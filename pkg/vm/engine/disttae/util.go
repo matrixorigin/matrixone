@@ -176,8 +176,8 @@ func getPkExpr(expr *plan.Expr, pkName string, proc *process.Process) *plan.Expr
 			return getPkExpr(exprImpl.F.Args[1], pkName, proc)
 
 		case "=":
-			if leftExpr, ok := exprImpl.F.Args[0].Expr.(*plan.Expr_Col); ok {
-				if !compPkCol(leftExpr.Col.Name, pkName) {
+			if col := exprImpl.F.Args[0].GetCol(); col != nil {
+				if !compPkCol(col.Name, pkName) {
 					return nil
 				}
 				constVal := getConstValueByExpr(exprImpl.F.Args[1], proc)
@@ -191,8 +191,8 @@ func getPkExpr(expr *plan.Expr, pkName string, proc *process.Process) *plan.Expr
 					},
 				}
 			}
-			if rightExpr, ok := exprImpl.F.Args[1].Expr.(*plan.Expr_Col); ok {
-				if !compPkCol(rightExpr.Col.Name, pkName) {
+			if col := exprImpl.F.Args[1].GetCol(); col != nil {
+				if !compPkCol(col.Name, pkName) {
 					return nil
 				}
 				constVal := getConstValueByExpr(exprImpl.F.Args[0], proc)
@@ -209,11 +209,19 @@ func getPkExpr(expr *plan.Expr, pkName string, proc *process.Process) *plan.Expr
 			return nil
 
 		case "in":
-			if leftExpr, ok := exprImpl.F.Args[0].Expr.(*plan.Expr_Col); ok {
-				if !compPkCol(leftExpr.Col.Name, pkName) {
+			if col := exprImpl.F.Args[0].GetCol(); col != nil {
+				if !compPkCol(col.Name, pkName) {
 					return nil
 				}
 				return exprImpl.F.Args[1]
+			}
+
+		case "prefix_eq", "prefix_between", "prefix_in":
+			if col := exprImpl.F.Args[0].GetCol(); col != nil {
+				if !compPkCol(col.Name, pkName) {
+					return nil
+				}
+				return expr
 			}
 		}
 	}
@@ -277,6 +285,23 @@ func getNonCompositePKSearchFuncByExpr(
 			searchPKFunc = vector.VarlenBinarySearchOffsetByValFactory([][]byte{util.UnsafeStringToBytes(val.Jsonval)})
 		case *plan.Literal_EnumVal:
 			searchPKFunc = vector.OrderedBinarySearchOffsetByValFactory([]types.Enum{types.Enum(val.EnumVal)})
+		}
+
+	case *plan.Expr_F:
+		switch exprImpl.F.Func.ObjName {
+		case "prefix_eq":
+			val := util.UnsafeStringToBytes(exprImpl.F.Args[1].GetLit().GetSval())
+			searchPKFunc = vector.CollectOffsetsByPrefixEqFactory(val)
+
+		case "prefix_between":
+			lval := util.UnsafeStringToBytes(exprImpl.F.Args[1].GetLit().GetSval())
+			rval := util.UnsafeStringToBytes(exprImpl.F.Args[2].GetLit().GetSval())
+			searchPKFunc = vector.CollectOffsetsByPrefixBetweenFactory(lval, rval)
+
+		case "prefix_in":
+			vec := vector.NewVec(types.T_any.ToType())
+			vec.UnmarshalBinary(exprImpl.F.Args[1].GetVec().Data)
+			searchPKFunc = vector.CollectOffsetsByPrefixInFactory(vec)
 		}
 
 	case *plan.Expr_Vec:
