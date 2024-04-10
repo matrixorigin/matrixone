@@ -20,12 +20,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 )
 
-func RegisterBitmapConstruct(id int64) {
-	aggexec.RegisterDeterminedSingleAgg(
-		aggexec.MakeDeterminedSingleAggInfo(id, types.T_uint64.ToType(), types.T_varbinary.ToType(), false, true),
-		newAggBitmapConstruct)
-}
-
 var BitmapConstructSupportedTypes = []types.T{
 	types.T_uint64,
 }
@@ -53,28 +47,4 @@ func (a *aggBitmapConstruct) Unmarshal(bs []byte) {
 func (a *aggBitmapConstruct) Init(set aggexec.AggBytesSetter, arg, ret types.Type) error {
 	a.bmp = roaring.New()
 	return nil
-}
-func (a *aggBitmapConstruct) Fill(value uint64, get aggexec.AggBytesGetter, set aggexec.AggBytesSetter) error {
-	a.bmp.Add(uint32(value))
-	return nil
-}
-func (a *aggBitmapConstruct) FillNull(get aggexec.AggBytesGetter, set aggexec.AggBytesSetter) error {
-	return nil
-}
-func (a *aggBitmapConstruct) Fills(value uint64, isNull bool, count int, get aggexec.AggBytesGetter, set aggexec.AggBytesSetter) error {
-	if !isNull {
-		a.bmp.Add(uint32(value))
-	}
-	return nil
-}
-func (a *aggBitmapConstruct) Merge(other aggexec.SingleAggFromFixedRetVar[uint64], get1, get2 aggexec.AggBytesGetter, set aggexec.AggBytesSetter) error {
-	a.bmp.Or(other.(*aggBitmapConstruct).bmp)
-	return nil
-}
-func (a *aggBitmapConstruct) Flush(get aggexec.AggBytesGetter, set aggexec.AggBytesSetter) error {
-	res, err := a.bmp.MarshalBinary()
-	if err != nil {
-		return err
-	}
-	return set(res)
 }

@@ -21,33 +21,6 @@ import (
 	"math"
 )
 
-func RegisterVarPop(id int64) {
-	aggexec.RegisterDeterminedSingleAgg(aggexec.MakeDeterminedSingleAggInfo(id, types.T_bit.ToType(), types.T_float64.ToType(), false, true), newAggVarPop[uint64])
-	aggexec.RegisterDeterminedSingleAgg(aggexec.MakeDeterminedSingleAggInfo(id, types.T_int8.ToType(), types.T_float64.ToType(), false, true), newAggVarPop[int8])
-	aggexec.RegisterDeterminedSingleAgg(aggexec.MakeDeterminedSingleAggInfo(id, types.T_int16.ToType(), types.T_float64.ToType(), false, true), newAggVarPop[int16])
-	aggexec.RegisterDeterminedSingleAgg(aggexec.MakeDeterminedSingleAggInfo(id, types.T_int32.ToType(), types.T_float64.ToType(), false, true), newAggVarPop[int32])
-	aggexec.RegisterDeterminedSingleAgg(aggexec.MakeDeterminedSingleAggInfo(id, types.T_int64.ToType(), types.T_float64.ToType(), false, true), newAggVarPop[int64])
-	aggexec.RegisterDeterminedSingleAgg(aggexec.MakeDeterminedSingleAggInfo(id, types.T_uint8.ToType(), types.T_float64.ToType(), false, true), newAggVarPop[uint8])
-	aggexec.RegisterDeterminedSingleAgg(aggexec.MakeDeterminedSingleAggInfo(id, types.T_uint16.ToType(), types.T_float64.ToType(), false, true), newAggVarPop[uint16])
-	aggexec.RegisterDeterminedSingleAgg(aggexec.MakeDeterminedSingleAggInfo(id, types.T_uint32.ToType(), types.T_float64.ToType(), false, true), newAggVarPop[uint32])
-	aggexec.RegisterDeterminedSingleAgg(aggexec.MakeDeterminedSingleAggInfo(id, types.T_uint64.ToType(), types.T_float64.ToType(), false, true), newAggVarPop[uint64])
-	aggexec.RegisterDeterminedSingleAgg(aggexec.MakeDeterminedSingleAggInfo(id, types.T_float32.ToType(), types.T_float64.ToType(), false, true), newAggVarPop[float32])
-	aggexec.RegisterDeterminedSingleAgg(aggexec.MakeDeterminedSingleAggInfo(id, types.T_float64.ToType(), types.T_float64.ToType(), false, true), newAggVarPop[float64])
-	aggexec.RegisterFlexibleSingleAgg(
-		aggexec.MakeFlexibleAggInfo(id, false, true),
-		VarPopReturnType,
-		func(args []types.Type, ret types.Type) any {
-			switch args[0].Oid {
-			case types.T_decimal64:
-				return newAggVarPopDecimal64
-			case types.T_decimal128:
-				return newAggVarPopDecimal128
-			default:
-				panic("unexpected type for var_pop()")
-			}
-		})
-}
-
 var VarPopSupportedParameters = []types.T{
 	types.T_bit,
 	types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,

@@ -286,6 +286,63 @@ func RegisterSingleAggFromFixedToFixed[from, to types.FixedSizeTExceptStrType](
 	singleAgg[info.id] = true
 }
 
+type SingleAggImplementationFixedVar[from types.FixedSizeTExceptStrType] struct {
+	SingleColumnAggInformation
+	generator func() SingleAggFromFixedRetVar[from]
+	fill      SingleAggFill2[from]
+	fillNull  SingleAggFillNull2[from]
+	fills     SingleAggFills2[from]
+	merge     SingleAggMerge2[from]
+	flush     SingleAggFlush2[from]
+}
+
+func MakeSingleAgg2RegisteredInfo[from types.FixedSizeTExceptStrType](
+	info SingleColumnAggInformation,
+	impl func() SingleAggFromFixedRetVar[from],
+	fill SingleAggFill2[from],
+	fillNull SingleAggFillNull2[from],
+	fills SingleAggFills2[from],
+	merge SingleAggMerge2[from],
+	flush SingleAggFlush2[from],
+) SingleAggImplementationFixedVar[from] {
+
+	registeredInfo2 := SingleAggImplementationFixedVar[from]{
+		SingleColumnAggInformation: info,
+		generator:                  impl,
+		fill:                       fill,
+		fillNull:                   fillNull,
+		fills:                      fills,
+		merge:                      merge,
+		flush:                      flush,
+	}
+	return registeredInfo2
+}
+
+func RegisterSingleAggFromFixedToVar[from types.FixedSizeTExceptStrType](
+	info SingleAggImplementationFixedVar[from]) {
+
+	key := generateKeyOfSingleColumnAgg(info.id, info.arg)
+	if _, ok := registeredAggFunctions[key]; ok {
+		panic(fmt.Sprintf("aggID %d with argType %s has been registered", info.id, info.arg))
+	}
+
+	registeredAggFunctions[key] = aggImplementation{
+		registeredAggInfo: registeredAggInfo{
+			isSingleAgg:          true,
+			acceptNull:           info.acceptNull,
+			setNullForEmptyGroup: info.setNullForEmptyGroup,
+		},
+		generator: info.generator,
+		ret:       info.ret,
+		fill:      info.fill,
+		fillNull:  info.fillNull,
+		fills:     info.fills,
+		merge:     info.merge,
+		flush:     info.flush,
+	}
+	singleAgg[info.id] = true
+}
+
 type SingleAggImplementationVarVar struct {
 	SingleColumnAggInformation
 	generator func() SingleAggFromVarRetVar

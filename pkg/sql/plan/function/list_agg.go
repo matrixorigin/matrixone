@@ -91,7 +91,7 @@ var supportedAggInNewFramework = []FuncNew{
 				retType:    agg.MinReturnType,
 				aggFramework: aggregationLogicOfOverload{
 					str:         "min",
-					aggRegister: agg.RegisterMin,
+					aggRegister: agg.RegisterMin1,
 				},
 			},
 		},
@@ -112,7 +112,7 @@ var supportedAggInNewFramework = []FuncNew{
 				retType:    agg.MaxReturnType,
 				aggFramework: aggregationLogicOfOverload{
 					str:         "max",
-					aggRegister: agg.RegisterMax,
+					aggRegister: agg.RegisterMax1,
 				},
 			},
 		},
@@ -355,7 +355,7 @@ var supportedAggInNewFramework = []FuncNew{
 				retType:    agg.VarPopReturnType,
 				aggFramework: aggregationLogicOfOverload{
 					str:         "var_pop",
-					aggRegister: agg.RegisterVarPop,
+					aggRegister: agg.RegisterVarPop1,
 				},
 			},
 		},
@@ -376,7 +376,7 @@ var supportedAggInNewFramework = []FuncNew{
 				retType:    agg.VarPopReturnType,
 				aggFramework: aggregationLogicOfOverload{
 					str:         "stddev_pop",
-					aggRegister: agg.RegisterStdVarPop,
+					aggRegister: agg.RegisterStdDevPop1,
 				},
 			},
 		},
@@ -455,7 +455,7 @@ var supportedAggInNewFramework = []FuncNew{
 				isAgg: true,
 				aggFramework: aggregationLogicOfOverload{
 					str:         "bitmap_construct_agg",
-					aggRegister: agg.RegisterBitmapConstruct,
+					aggRegister: agg.RegisterBitmapConstruct1,
 				},
 			},
 		},
@@ -479,7 +479,7 @@ var supportedAggInNewFramework = []FuncNew{
 				isAgg: true,
 				aggFramework: aggregationLogicOfOverload{
 					str:         "bitmap_or_agg",
-					aggRegister: agg.RegisterBitmapOr,
+					aggRegister: agg.RegisterBitmapOr1,
 				},
 			},
 		},

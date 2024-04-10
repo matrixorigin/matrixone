@@ -20,12 +20,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 )
 
-func RegisterBitmapOr(id int64) {
-	aggexec.RegisterDeterminedSingleAgg(
-		aggexec.MakeDeterminedSingleAggInfo(id, types.T_varbinary.ToType(), types.T_varbinary.ToType(), false, true),
-		newAggBitmapOr)
-}
-
 var BitmapOrSupportedTypes = []types.T{
 	types.T_varbinary,
 }
@@ -49,32 +43,4 @@ func (a *aggBitmapOr) Unmarshal(bs []byte) {
 func (a *aggBitmapOr) Init(set aggexec.AggBytesSetter, arg, ret types.Type) error {
 	a.bmp = roaring.New()
 	return nil
-}
-func (a *aggBitmapOr) FillBytes(value []byte, get aggexec.AggBytesGetter, set aggexec.AggBytesSetter) error {
-	bmp := roaring.New()
-	if err := bmp.UnmarshalBinary(value); err != nil {
-		return err
-	}
-	a.bmp.Or(bmp)
-	return nil
-}
-func (a *aggBitmapOr) FillNull(get aggexec.AggBytesGetter, set aggexec.AggBytesSetter) error {
-	return nil
-}
-func (a *aggBitmapOr) Fills(value []byte, isNull bool, count int, get aggexec.AggBytesGetter, set aggexec.AggBytesSetter) error {
-	if isNull {
-		return nil
-	}
-	return a.FillBytes(value, get, set)
-}
-func (a *aggBitmapOr) Merge(other aggexec.SingleAggFromVarRetVar, get1, get2 aggexec.AggBytesGetter, set aggexec.AggBytesSetter) error {
-	a.bmp.Or(other.(*aggBitmapOr).bmp)
-	return nil
-}
-func (a *aggBitmapOr) Flush(get aggexec.AggBytesGetter, set aggexec.AggBytesSetter) error {
-	b, err := a.bmp.MarshalBinary()
-	if err != nil {
-		return err
-	}
-	return set(b)
 }
