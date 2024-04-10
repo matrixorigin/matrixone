@@ -55,6 +55,7 @@ const (
 	TUint64
 	TInt64
 	TFloat64
+	TFloat32
 	TJson
 	TText
 	TVarchar
@@ -78,6 +79,8 @@ func (c *ColType) ToType() types.Type {
 		return types.T_uint64.ToType()
 	case TInt64:
 		return types.T_int64.ToType()
+	case TFloat32:
+		return types.T_float32.ToType()
 	case TFloat64:
 		return types.T_float64.ToType()
 	case TJson:
@@ -111,6 +114,8 @@ func (c *ColType) String(scale int) string {
 		return "BIGINT UNSIGNED"
 	case TInt64:
 		return "BIGINT"
+	case TFloat32:
+		return "FLOAT"
 	case TFloat64:
 		return "DOUBLE"
 	case TJson:
