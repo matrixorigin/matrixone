@@ -2726,6 +2726,27 @@ var supportedMathBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `unhex`
+	{
+		functionId: UNHEX,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_blob.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return Unhex
+				},
+			},
+		},
+	},
+
 	// function `ln`
 	{
 		functionId: LN,
