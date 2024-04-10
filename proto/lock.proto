@@ -82,6 +82,8 @@ enum Method {
   ForwardLock       = 7;
   // ForwardUnlock forward unlock request to another service
   ForwardUnlock     = 8;
+  // ValidateService validate if lock service alive
+  ValidateService   = 9;
 }
 
 // Request is used to send a request for a LockTable related operation to another 
@@ -99,6 +101,7 @@ message Request {
   GetBindRequest           GetBind             = 8  [(gogoproto.nullable) = false];
   KeepLockTableBindRequest KeepLockTableBind   = 9  [(gogoproto.nullable) = false];
   KeepRemoteLockRequest    KeepRemoteLock      = 10 [(gogoproto.nullable) = false];
+  ValidateServiceRequest   ValidateService     = 11 [(gogoproto.nullable) = false];
 }
 
 // Response response
@@ -117,6 +120,7 @@ message Response {
     GetBindResponse           GetBind           = 9  [(gogoproto.nullable) = false];
     KeepLockTableBindResponse KeepLockTableBind = 10 [(gogoproto.nullable) = false];
     KeepRemoteLockResponse    KeepRemoteLock    = 11 [(gogoproto.nullable) = false];
+    ValidateServiceResponse   ValidateService   = 12 [(gogoproto.nullable) = false];
 }
 
 // LockRequest lock request
@@ -203,6 +207,16 @@ message KeepRemoteLockRequest {
 
 // KeepRemoteLockResponse keep lock on remote lockservice response. TN -> CN
 message KeepRemoteLockResponse {
+  bool OK = 1;
+}
+
+// ValidateServiceRequest validate if lock service alive request. TN -> CN
+message ValidateServiceRequest {
+  string ServiceID       = 1;
+}
+
+// KeepLockTableBindResponse keep lock table bind response. CN -> DN
+message ValidateServiceResponse {
   bool OK = 1;
 }
 
