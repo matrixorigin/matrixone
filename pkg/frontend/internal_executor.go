@@ -163,6 +163,33 @@ func (ie *internalExecutor) Exec(ctx context.Context, sql string, opts ie.Sessio
 	return ie.executor.doComQuery(ctx, &UserInput{sql: sql})
 }
 
+func (ie *internalExecutor) ExecTxn(ctx context.Context, sqls []string, opts ie.SessionOverrideOptions) error {
+	ie.Lock()
+	defer ie.Unlock()
+	sess := ie.newCmdSession(ctx, opts)
+
+	defer func() {
+		sess.Close()
+		ie.executor.SetSession(nil)
+	}()
+	ie.executor.SetSession(sess)
+	ie.proto.stashResult = false
+
+	var err error
+	for _, sql := range sqls {
+		err = ie.executor.doComQuery(ctx, &UserInput{sql: sql})
+		if err != nil {
+			logutil.Errorf("internal sql executor error: %v", err)
+			break
+		}
+	}
+
+	if err != nil {
+		return ie.executor.doComQuery(ctx, &UserInput{sql: "rollback"})
+	}
+	return ie.executor.doComQuery(ctx, &UserInput{sql: "commit"})
+}
+
 func (ie *internalExecutor) Query(ctx context.Context, sql string, opts ie.SessionOverrideOptions) ie.InternalExecResult {
 	ie.Lock()
 	defer ie.Unlock()

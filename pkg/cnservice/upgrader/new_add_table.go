@@ -372,7 +372,11 @@ var processlistView = &table.Table{
 		table.StringColumn("txn_id", "the id of the transaction"),
 		table.StringColumn("user", "the user name"),
 	},
-	CreateViewSql: "CREATE VIEW IF NOT EXISTS `information_schema`.`PROCESSLIST` AS SELECT * FROM PROCESSLIST() A;",
+	CreateViewSql: fmt.Sprintf("CREATE VIEW IF NOT EXISTS %s.PROCESSLIST AS "+
+		"select node_id, conn_id, session_id, account, user, host, db, "+
+		"session_start, command, info, txn_id, statement_id, statement_type, "+
+		"query_type, sql_source_type, query_start, client_host, role, proxy_host "+
+		"from PROCESSLIST() A", sysview.InformationDBConst),
 	//actually drop table here
 	CreateTableSql: "drop view if exists `information_schema`.`PROCESSLIST`;",
 }

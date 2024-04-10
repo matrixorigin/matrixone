@@ -90,6 +90,8 @@ type InternalExecResult interface {
 type InternalExecutor interface {
 	// exec sql without returning results set
 	Exec(context.Context, string, SessionOverrideOptions) error
+	// exec multi sqls in transaction without returning results set
+	ExecTxn(context.Context, []string, SessionOverrideOptions) error
 	// exec sql and return results set
 	Query(context.Context, string, SessionOverrideOptions) InternalExecResult
 	// override session for the executor scope
