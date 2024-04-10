@@ -31,3 +31,4 @@ aA    bB    CC    abc    a_Bc_D
 drop table t1;
 drop database test;
 drop account default_1;
+set global keep_user_target_list_in_result = 0;

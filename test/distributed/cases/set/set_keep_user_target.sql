@@ -20,3 +20,4 @@ drop table t1;
 drop database test;
 -- @session
 drop account default_1;
+set global keep_user_target_list_in_result = 0;
