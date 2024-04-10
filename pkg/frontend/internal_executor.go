@@ -63,7 +63,7 @@ func applyOverride(sess *Session, opts ie.SessionOverrideOptions) {
 
 }
 
-type InternalMiniExec interface {
+type internalMiniExec interface {
 	doComQuery(requestCtx context.Context, input *UserInput) error
 	SetSession(*Session)
 }
@@ -71,7 +71,7 @@ type InternalMiniExec interface {
 type internalExecutor struct {
 	sync.Mutex
 	proto        *internalProtocol
-	executor     InternalMiniExec // MySqlCmdExecutor struct impls miniExec
+	executor     internalMiniExec // MySqlCmdExecutor struct impls miniExec
 	pu           *config.ParameterUnit
 	baseSessOpts ie.SessionOverrideOptions
 	aicm         *defines.AutoIncrCacheManager
@@ -81,7 +81,7 @@ func NewInternalExecutor(pu *config.ParameterUnit, aicm *defines.AutoIncrCacheMa
 	return newIe(pu, NewMysqlCmdExecutor(), aicm)
 }
 
-func newIe(pu *config.ParameterUnit, inner InternalMiniExec, aicm *defines.AutoIncrCacheManager) *internalExecutor {
+func newIe(pu *config.ParameterUnit, inner internalMiniExec, aicm *defines.AutoIncrCacheManager) *internalExecutor {
 	proto := &internalProtocol{result: &internalExecResult{}}
 	ret := &internalExecutor{
 		proto:        proto,
