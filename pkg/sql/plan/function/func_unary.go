@@ -27,6 +27,8 @@ import (
 	"unsafe"
 
 	"github.com/RoaringBitmap/roaring"
+	"golang.org/x/exp/constraints"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/system"
@@ -41,7 +43,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorize/momath"
 	"github.com/matrixorigin/matrixone/pkg/version"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"golang.org/x/exp/constraints"
 )
 
 func AbsUInt64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
@@ -800,6 +801,34 @@ func hexEncodeInt64(xs int64) string {
 
 func hexEncodeUint64(xs uint64) string {
 	return fmt.Sprintf("%X", xs)
+}
+
+func unhexToBytes(data []byte, null bool, rs *vector.FunctionResult[types.Varlena]) error {
+	if null {
+		return rs.AppendMustNullForBytesResult()
+	}
+
+	buf := make([]byte, hex.DecodedLen(len(data)))
+	_, err := hex.Decode(buf, data)
+	if err != nil {
+		return rs.AppendMustNullForBytesResult()
+	}
+	return rs.AppendMustBytesValue(buf)
+}
+
+func Unhex(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	source := vector.GenerateFunctionStrParameter(parameters[0])
+	rs := vector.MustFunctionResult[types.Varlena](result)
+
+	rowCount := uint64(length)
+	for i := uint64(0); i < rowCount; i++ {
+		data, null := source.GetStrValue(i)
+		if err := unhexToBytes(data, null, rs); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 func Length(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
