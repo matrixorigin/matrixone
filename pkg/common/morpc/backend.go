@@ -673,8 +673,10 @@ func (rb *remoteBackend) makeAllWaitingFutureFailed() {
 		ids = make([]uint64, 0, len(rb.mu.futures))
 		waitings = make([]*Future, 0, len(rb.mu.futures))
 		for id, f := range rb.mu.futures {
-			waitings = append(waitings, f)
-			ids = append(ids, id)
+			if f.waiting.Load() {
+				waitings = append(waitings, f)
+				ids = append(ids, id)
+			}
 		}
 	}()
 
