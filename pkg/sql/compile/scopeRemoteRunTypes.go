@@ -165,8 +165,10 @@ func (sender *messageSenderOnClient) send(
 }
 
 func (sender *messageSenderOnClient) receiveMessage() (morpc.Message, error) {
-	if err := sender.streamSender.Resume(sender.ctx); err != nil {
-		return nil, err
+	if sender.streamSender != nil {
+		if err := sender.streamSender.Resume(sender.ctx); err != nil {
+			return nil, err
+		}
 	}
 
 	select {

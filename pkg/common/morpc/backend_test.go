@@ -397,7 +397,8 @@ func TestCloseStreamWithCloseConn(t *testing.T) {
 			}
 		},
 		func(b *remoteBackend) {
-			st, err := b.NewStream(DefaultStreamOptions())
+			b.Lock()
+			st, err := b.NewStream(DefaultStreamOptions().WithExclusive())
 			assert.NoError(t, err)
 
 			ctx, cancel := context.WithTimeout(context.TODO(), time.Second*10)
