@@ -437,6 +437,9 @@ func executeStmtWithResponse(requestCtx context.Context,
 	defer ses.SetQueryEnd(time.Now())
 	defer ses.SetQueryInProgress(false)
 
+	execCtx.proto.DisableAutoFlush()
+	defer execCtx.proto.EnableAutoFlush()
+
 	err = executeStmtWithTxn(requestCtx, ses, execCtx)
 	if err != nil {
 		return err
@@ -456,6 +459,8 @@ func executeStmtWithResponse(requestCtx context.Context,
 	if err != nil {
 		return err
 	}
+
+	err = execCtx.proto.Flush()
 	return
 }
 
@@ -591,6 +596,13 @@ func executeStmt(requestCtx context.Context,
 			st.Hostname = rootHost
 		}
 	}
+
+	defer func() {
+		// Serialize the execution plan as json
+		if cwft, ok := execCtx.cw.(*TxnComputationWrapper); ok {
+			_ = cwft.RecordExecPlan(requestCtx)
+		}
+	}()
 
 	cmpBegin = time.Now()
 

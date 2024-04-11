@@ -97,6 +97,41 @@ func handleCreateDynamicTable(ctx context.Context, ses *Session, st *tree.Create
 	return nil
 }
 
+func handleDropDynamicTable(ctx context.Context, ses *Session, st *tree.DropTable) error {
+	if gPu == nil || gPu.TaskService == nil {
+		return moerr.NewInternalError(ctx, "task service not ready yet")
+	}
+	ts := gPu.TaskService
+
+	// Query all relevant tasks belonging to the current tenant
+	tasks, err := ts.QueryDaemonTask(ses.GetRequestContext(),
+		taskservice.WithTaskType(taskservice.EQ, pb.TaskType_TypeKafkaSinkConnector.String()),
+		taskservice.WithAccountID(taskservice.EQ, ses.GetAccountId()),
+		taskservice.WithTaskStatusCond(pb.TaskStatus_Running, pb.TaskStatus_Created, pb.TaskStatus_Paused, pb.TaskStatus_PauseRequested),
+	)
+	if err != nil || len(tasks) == 0 {
+		return err
+	}
+
+	// Filter the tasks within the loop
+	for _, tn := range st.Names {
+		dbName := string(tn.Schema())
+		if dbName == "" {
+			dbName = ses.GetDatabaseName()
+		}
+		fullTableName := dbName + "." + string(tn.Name())
+
+		for _, task := range tasks {
+			if task.Details.Details.(*pb.Details_Connector).Connector.TableName == fullTableName {
+				if err := handleCancelDaemonTask(ctx, ses, task.ID); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
+}
+
 func handleCreateConnector(ctx context.Context, ses *Session, st *tree.CreateConnector) error {
 	ts := gPu.TaskService
 	if ts == nil {

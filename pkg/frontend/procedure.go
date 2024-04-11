@@ -487,6 +487,7 @@ func doDropFunction(ctx context.Context, ses *Session, df *tree.DropFunction, rm
 	var bodyStr string
 	var checkDatabase string
 	var dbName string
+	var dbExists bool
 	var funcId int64
 	var erArray []ExecResult
 
@@ -501,6 +502,15 @@ func doDropFunction(ctx context.Context, ses *Session, df *tree.DropFunction, rm
 		dbName = ses.GetDatabaseName()
 	} else {
 		dbName = string(df.Name.Name.SchemaName)
+	}
+
+	// authticate db exists
+	dbExists, err = checkDatabaseExistsOrNot(ctx, ses.GetBackgroundExec(ctx), dbName)
+	if err != nil {
+		return err
+	}
+	if !dbExists {
+		return moerr.NewBadDB(ctx, dbName)
 	}
 
 	// validate database name and signature (name + args)

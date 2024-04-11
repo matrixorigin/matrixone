@@ -110,10 +110,6 @@ func executeStatusStmt(requestCtx context.Context, ses *Session, execCtx *ExecCt
 				return
 			}
 		}
-
-		if cwft, ok := execCtx.cw.(*TxnComputationWrapper); ok {
-			_ = cwft.RecordExecPlan(requestCtx)
-		}
 	default:
 		//change privilege
 		switch execCtx.stmt.(type) {
@@ -170,13 +166,6 @@ func executeStatusStmt(requestCtx context.Context, ses *Session, execCtx *ExecCt
 		echoTime := time.Now()
 
 		logDebug(ses, ses.GetDebugString(), fmt.Sprintf("time of SendResponse %s", time.Since(echoTime).String()))
-
-		/*
-			Step 4: Serialize the execution plan by json
-		*/
-		if cwft, ok := execCtx.cw.(*TxnComputationWrapper); ok {
-			_ = cwft.RecordExecPlan(requestCtx)
-		}
 	}
 
 	return
@@ -204,14 +193,6 @@ func respStatus(requestCtx context.Context,
 			logStatementStatus(requestCtx, ses, execCtx.stmt, fail, err)
 			return err
 		}
-
-		/*
-		   Serialize the execution plan by json
-		*/
-		if cwft, ok := execCtx.cw.(*TxnComputationWrapper); ok {
-			_ = cwft.RecordExecPlan(requestCtx)
-		}
-
 	case *tree.PrepareStmt, *tree.PrepareString:
 		if ses.GetCmd() == COM_STMT_PREPARE {
 			if err2 := ses.GetMysqlProtocol().SendPrepareResponse(requestCtx, execCtx.prepareStmt); err2 != nil {
@@ -269,6 +250,8 @@ func respStatus(requestCtx context.Context,
 		case *tree.CreateTable:
 			_ = doGrantPrivilegeImplicitly(requestCtx, ses, st)
 		case *tree.DropTable:
+			// handle dynamic table drop, cancel all the running daemon task
+			_ = handleDropDynamicTable(requestCtx, ses, st)
 			_ = doRevokePrivilegeImplicitly(requestCtx, ses, st)
 		case *tree.CreateDatabase:
 			_ = insertRecordToMoMysqlCompatibilityMode(requestCtx, ses, execCtx.stmt)
@@ -276,6 +259,9 @@ func respStatus(requestCtx context.Context,
 		case *tree.DropDatabase:
 			_ = deleteRecordToMoMysqlCompatbilityMode(requestCtx, ses, execCtx.stmt)
 			_ = doRevokePrivilegeImplicitly(requestCtx, ses, st)
+			err = doDropFunctionWithDB(requestCtx, ses, execCtx.stmt, func(path string) error {
+				return execCtx.proc.FileService.Delete(requestCtx, path)
+			})
 		}
 
 		if err2 := ses.GetMysqlProtocol().SendResponse(requestCtx, resp); err2 != nil {
