@@ -21,6 +21,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -29,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"github.com/parquet-go/parquet-go"
 )
 
 var _ vm.Operator = new(Argument)
@@ -74,6 +76,7 @@ type ExParam struct {
 	Zoneparam      *ZonemapFileparam
 	Filter         *FilterParam
 	MoCsvLineArray [][]csvparser.Field
+	parqh          *ParquetHandler
 }
 
 type ExFileparam struct {
@@ -210,3 +213,13 @@ func newReaderWithParam(param *ExternalParam) (*csvparser.CSVParser, error) {
 
 	return csvparser.NewCSVParser(&config, bufio.NewReader(param.reader), csvparser.ReadBlockSize, false, false)
 }
+
+type ParquetHandler struct {
+	file     *parquet.File
+	offset   int64
+	batchCnt int64
+	cols     []*parquet.Column
+	dataFn   []dataFn
+}
+
+type dataFn = func(page parquet.Page, proc *process.Process, vec *vector.Vector) error
