@@ -49,9 +49,12 @@ type Argument struct {
 	// Source       engine.Relation
 	// UniqueSource []engine.Relation
 	// Ref          *plan.ObjectRef
-	TableDef        *plan.TableDef
-	OnDuplicateIdx  []int32
-	OnDuplicateExpr map[string]*plan.Expr
+	Attrs              []string
+	InsertColCount     int32
+	UniqueColCheckExpr []*plan.Expr
+	UniqueCols         []string
+	OnDuplicateIdx     []int32
+	OnDuplicateExpr    map[string]*plan.Expr
 
 	IdxIdx []int32
 

@@ -2726,6 +2726,27 @@ var supportedMathBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `unhex`
+	{
+		functionId: UNHEX,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_blob.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return Unhex
+				},
+			},
+		},
+	},
+
 	// function `ln`
 	{
 		functionId: LN,
@@ -3258,6 +3279,35 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `sysdate` (execute timestamp)
+	{
+		functionId: SYSDATE,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
+			if len(inputs) == 0 {
+				return newCheckResultWithSuccess(0)
+			}
+			return newCheckResultWithFailure(failedFunctionParametersWrong)
+		},
+
+		Overloads: []overload{
+			{
+				overloadId:      0,
+				realTimeRelated: true,
+				volatile:        true,
+				retType: func(parameters []types.Type) types.Type {
+					typ := types.T_timestamp.ToType()
+					typ.Scale = 6
+					return typ
+				},
+				newOp: func() executeLogicOfOverload {
+					return builtInSysdate
+				},
+			},
+		},
+	},
+
 	// function `date`
 	{
 		functionId: DATE,
@@ -3387,6 +3437,16 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 					return TimeAdd
 				},
 			},
+			{
+				overloadId: 6,
+				args:       []types.T{types.T_text, types.T_int64, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_datetime.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return DateStringAdd
+				},
+			},
 		},
 	},
 
@@ -3479,6 +3539,16 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 					return TimestampSub
 				},
 			},
+			{
+				overloadId: 5,
+				args:       []types.T{types.T_text, types.T_int64, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_datetime.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return DateStringSub
+				},
+			},
 		},
 	},
 
@@ -3559,7 +3629,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 	// function `from_unixtime`
 	{
 		functionId: FROM_UNIXTIME,
-		class:      plan.Function_STRICT,
+		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
 		layout:     STANDARD_FUNCTION,
 		checkFn:    fixedTypeMatch,
 

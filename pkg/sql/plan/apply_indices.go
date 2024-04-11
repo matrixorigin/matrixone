@@ -50,8 +50,9 @@ func (builder *QueryBuilder) applyIndices(nodeID int32, colRefCnt map[[2]int32]i
 	case plan.Node_JOIN:
 		return builder.applyIndicesForJoins(nodeID, node, colRefCnt, idxColMap)
 
-	case plan.Node_SORT:
-		return builder.applyIndicesForSort(nodeID, node, colRefCnt, idxColMap)
+	case plan.Node_PROJECT:
+		//NOTE: This is the entry point for vector index rule on SORT NODE.
+		return builder.applyIndicesForProject(nodeID, node, colRefCnt, idxColMap)
 
 	}
 	return nodeID
@@ -60,7 +61,7 @@ func (builder *QueryBuilder) applyIndices(nodeID int32, colRefCnt map[[2]int32]i
 func (builder *QueryBuilder) applyIndicesForFilters(nodeID int32, node *plan.Node,
 	colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) int32 {
 
-	if len(node.FilterList) == 0 || node.TableDef.Pkey == nil || len(node.TableDef.Indexes) == 0 {
+	if len(node.FilterList) == 0 || len(node.TableDef.Indexes) == 0 {
 		return nodeID
 	}
 	// 1. Master Index Check
@@ -128,18 +129,23 @@ END0:
 	}
 }
 
-func (builder *QueryBuilder) applyIndicesForSort(nodeID int32, sortNode *plan.Node, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) int32 {
+func (builder *QueryBuilder) applyIndicesForProject(nodeID int32, projNode *plan.Node, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) int32 {
 
 	// 1. Vector Index Check
 	// Handle Queries like
 	// SELECT id,embedding FROM tbl ORDER BY l2_distance(embedding, "[1,2,3]") LIMIT 10;
 	{
-		scanNode := builder.resolveTableScanWithIndexFromChildren(sortNode)
-
-		// 1.a if there are no table scans with multi-table indexes, skip
-		if scanNode == nil || sortNode == nil || len(sortNode.OrderBy) != 1 {
+		sortNode := builder.resolveSortNode(projNode, 1)
+		if sortNode == nil || len(sortNode.OrderBy) != 1 {
 			goto END0
 		}
+
+		scanNode := builder.resolveScanNodeWithIndex(sortNode, 1)
+		if scanNode == nil {
+			goto END0
+		}
+
+		// 1.a if there are no table scans with multi-table indexes, skip
 		multiTableIndexes := make(map[string]*MultiTableIndex)
 		for _, indexDef := range scanNode.TableDef.Indexes {
 			if catalog.IsIvfIndexAlgo(indexDef.IndexAlgo) {
@@ -219,8 +225,14 @@ func (builder *QueryBuilder) applyIndicesForSort(nodeID int32, sortNode *plan.No
 			goto END0
 		}
 
-		return builder.applyIndicesForSortUsingVectorIndex(nodeID, sortNode, scanNode,
+		newSortNode := builder.applyIndicesForSortUsingVectorIndex(nodeID, projNode, sortNode, scanNode,
 			colRefCnt, idxColMap, multiTableIndexWithSortDistFn, colPosOrderBy)
+
+		// TODO: consult with nitao and aungr
+		projNode.Children[0] = newSortNode
+		replaceColumnsForNode(projNode, idxColMap)
+
+		return newSortNode
 	}
 END0:
 	// 2. Regular Index Check
@@ -232,7 +244,7 @@ END0:
 }
 
 func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, node *plan.Node, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) int32 {
-	if len(node.FilterList) == 0 || node.TableDef.Pkey == nil || len(node.TableDef.Indexes) == 0 {
+	if len(node.FilterList) == 0 || len(node.TableDef.Indexes) == 0 {
 		return nodeID
 	}
 
@@ -688,7 +700,7 @@ func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node,
 	}
 
 	leftChild := builder.qry.Nodes[node.Children[0]]
-	if leftChild.NodeType != plan.Node_TABLE_SCAN || leftChild.TableDef.Pkey == nil {
+	if leftChild.NodeType != plan.Node_TABLE_SCAN {
 		return nodeID
 	}
 

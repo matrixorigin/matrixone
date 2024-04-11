@@ -204,12 +204,12 @@ func (task *mergeObjectsTask) PrepareNewWriterFunc() func() *blockio.BlockWriter
 }
 
 func (task *mergeObjectsTask) Execute(ctx context.Context) (err error) {
-	phaseNumber := 0
+	phaseDesc := ""
 	defer func() {
 		if err != nil {
 			logutil.Error("[DoneWithErr] Mergeblocks", common.OperationField(task.Name()),
 				common.AnyField("error", err),
-				common.AnyField("phase", phaseNumber),
+				common.AnyField("phase", phaseDesc),
 			)
 		}
 	}()
@@ -219,10 +219,12 @@ func (task *mergeObjectsTask) Execute(ctx context.Context) (err error) {
 	if schema.HasSortKey() {
 		sortkeyPos = schema.GetSingleSortKeyIdx()
 	}
+	phaseDesc = "1-DoMergeAndWrite"
 	if err = mergesort.DoMergeAndWrite(ctx, sortkeyPos, int(schema.BlockMaxRows), task); err != nil {
 		return err
 	}
 
+	phaseDesc = "2-HandleMergeEntryInTxn"
 	if task.createdBObjs, err = HandleMergeEntryInTxn(task.txn, task.commitEntry, task.rt); err != nil {
 		return err
 	}
@@ -278,7 +280,7 @@ func HandleMergeEntryInTxn(txn txnif.AsyncTxn, entry *api.MergeCommitEntry, rt *
 		objEntry.SetSorted()
 	}
 
-	txnEntry := txnentries.NewMergeObjectsEntry(
+	txnEntry, err := txnentries.NewMergeObjectsEntry(
 		txn,
 		rel,
 		mergedObjs,
@@ -286,6 +288,9 @@ func HandleMergeEntryInTxn(txn txnif.AsyncTxn, entry *api.MergeCommitEntry, rt *
 		entry.Booking,
 		rt,
 	)
+	if err != nil {
+		return nil, err
+	}
 
 	if err = txn.LogTxnEntry(entry.DbId, entry.TblId, txnEntry, ids); err != nil {
 		return nil, err
