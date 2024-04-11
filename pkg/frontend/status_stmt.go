@@ -197,10 +197,10 @@ type ExecuteExecutor struct {
 	e              *tree.Execute
 }
 
-func (ee *ExecuteExecutor) Compile(requestCtx context.Context, u interface{}, fill func(interface{}, *batch.Batch) error) (interface{}, error) {
+func (ee *ExecuteExecutor) Compile(requestCtx context.Context, fill func(*batch.Batch) error) (interface{}, error) {
 	var err error
 	var ret interface{}
-	ret, err = ee.baseStmtExecutor.Compile(requestCtx, u, fill)
+	ret, err = ee.baseStmtExecutor.Compile(requestCtx, fill)
 	if err != nil {
 		return nil, err
 	}
