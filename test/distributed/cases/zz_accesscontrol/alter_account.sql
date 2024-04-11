@@ -141,20 +141,22 @@ set @a_var = 'test';
 set @b_var = 'admin';
 set @c_var = '222';
 EXECUTE s1 USING @a_var, @b_var, @c_var;
+DEALLOCATE PREPARE s1;
 -- @session:id=2&user=test:admin&password=222
 select 1;
 -- @session
-PREPARE s1 FROM "alter account ? admin_name 'admin' IDENTIFIED BY ?";
+PREPARE s2 FROM "alter account ? admin_name 'admin' IDENTIFIED BY ?";
 set @a_var = 'test';
 set @c_var = '333';
-EXECUTE s1 USING @a_var, @c_var;
+EXECUTE s2 USING @a_var, @c_var;
+DEALLOCATE PREPARE s2;
 -- @session:id=2&user=test:admin&password=333
 select 1;
 -- @session
-PREPARE s1 FROM "alter account test admin_name 'admin' IDENTIFIED BY ?";
+PREPARE s3 FROM "alter account test admin_name 'admin' IDENTIFIED BY ?";
 set @c_var = '444';
-EXECUTE s1 USING @c_var;
-DEALLOCATE PREPARE s1;
+EXECUTE s3 USING @c_var;
+DEALLOCATE PREPARE s3;
 -- @session:id=2&user=test:admin&password=444
 select 1;
 -- @session
