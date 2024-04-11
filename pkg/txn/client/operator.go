@@ -209,7 +209,7 @@ type txnOperator struct {
 	createTs             timestamp.Timestamp
 	//read-only txn operators for supporting snapshot read feature.
 	children []*txnOperator
-	parent   *txnOperator
+	parent   atomic.Pointer[txnOperator]
 
 	mu struct {
 		sync.RWMutex
@@ -254,6 +254,10 @@ func newTxnOperator(
 	return tc
 }
 
+func (tc *txnOperator) IsSnapOp() bool {
+	return tc.parent.Load() != nil
+}
+
 func (tc *txnOperator) CloneSnapshotOp(snapshot timestamp.Timestamp) TxnOperator {
 	op := &txnOperator{}
 	op.mu.txn = txn.TxnMeta{
@@ -267,7 +271,7 @@ func (tc *txnOperator) CloneSnapshotOp(snapshot timestamp.Timestamp) TxnOperator
 	op.workspace.BindTxnOp(op)
 
 	tc.children = append(tc.children, op)
-	op.parent = tc
+	op.parent.Store(tc)
 	return op
 }
 

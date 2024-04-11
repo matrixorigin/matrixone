@@ -104,6 +104,10 @@ type StorageTxnOperator struct {
 	meta     txn.TxnMeta
 }
 
+func (s *StorageTxnOperator) IsSnapOp() bool {
+	panic("unimplemented")
+}
+
 func (s *StorageTxnOperator) CloneSnapshotOp(snapshot timestamp.Timestamp) client.TxnOperator {
 	panic("unimplemented")
 }

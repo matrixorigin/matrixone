@@ -615,6 +615,20 @@ func (mr *MockTxnOperatorMockRecorder) IsRetry() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "IsRetry", reflect.TypeOf((*MockTxnOperator)(nil).IsRetry))
 }
 
+// IsSnapOp mocks base method.
+func (m *MockTxnOperator) IsSnapOp() bool {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "IsSnapOp")
+	ret0, _ := ret[0].(bool)
+	return ret0
+}
+
+// IsSnapOp indicates an expected call of IsSnapOp.
+func (mr *MockTxnOperatorMockRecorder) IsSnapOp() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "IsSnapOp", reflect.TypeOf((*MockTxnOperator)(nil).IsSnapOp))
+}
+
 // LockSkipped mocks base method.
 func (m *MockTxnOperator) LockSkipped(tableID uint64, mode lock.LockMode) bool {
 	m.ctrl.T.Helper()
