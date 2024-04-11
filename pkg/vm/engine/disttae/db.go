@@ -255,6 +255,18 @@ func (e *Engine) init(ctx context.Context) error {
 	return nil
 }
 
+// TODO:: check e.partitions first, then check e.snapParts
+func (e *Engine) getSnapPart(databaseId, tableId uint64, snapshot types.TS) *logtailreplay.Partition {
+	e.Lock()
+	defer e.Unlock()
+	partition, ok := e.partitions[[2]uint64{databaseId, tableId}]
+	if !ok { // create a new table
+		partition = logtailreplay.NewPartition()
+		e.partitions[[2]uint64{databaseId, tableId}] = partition
+	}
+	return partition
+}
+
 func (e *Engine) getPartition(databaseId, tableId uint64) *logtailreplay.Partition {
 	e.Lock()
 	defer e.Unlock()

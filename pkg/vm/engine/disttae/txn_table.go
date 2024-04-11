@@ -76,15 +76,6 @@ func (tbl *txnTable) Stats(ctx context.Context, sync bool) *pb.StatsInfo {
 
 // TODO:: snapshot read
 func (tbl *txnTable) Rows(ctx context.Context) (uint64, error) {
-<<<<<<< Updated upstream
-=======
-	//FIXME:: ??
-	_, err := tbl.getPartitionState(ctx)
-	if err != nil {
-		logutil.Errorf("failed to get stats info of table %d", tbl.tableId)
-		return 0, err
-	}
->>>>>>> Stashed changes
 	e := tbl.getEngine()
 	var rows uint64
 	deletes := make(map[types.Rowid]struct{})
@@ -144,15 +135,6 @@ func (tbl *txnTable) Rows(ctx context.Context) (uint64, error) {
 
 // TODO:: snapshot read
 func (tbl *txnTable) Size(ctx context.Context, columnName string) (uint64, error) {
-<<<<<<< Updated upstream
-=======
-	//FIXME::??
-	_, err := tbl.getPartitionState(ctx)
-	if err != nil {
-		logutil.Errorf("failed to get stats info of table %d", tbl.tableId)
-		return 0, err
-	}
->>>>>>> Stashed changes
 	e := tbl.getEngine()
 	ts := types.TimestampToTS(tbl.db.op.SnapshotTS())
 	part, err := tbl.getPartitionState(ctx)
@@ -2144,10 +2126,8 @@ func (tbl *txnTable) newReader(
 	return readers, nil
 }
 
-// get the table's snapshot.
-// it is only initialized once for a transaction and will not change.
-// TODO::get partition state for snapshot txn table.
 func (tbl *txnTable) getPartitionState(ctx context.Context) (*logtailreplay.PartitionState, error) {
+
 	if tbl._partState.Load() == nil {
 		if err := tbl.updateLogtail(ctx); err != nil {
 			return nil, err

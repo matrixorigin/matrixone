@@ -120,22 +120,20 @@ type IDGenerator interface {
 
 type Engine struct {
 	sync.RWMutex
-	mp       *mpool.MPool
-	fs       fileservice.FileService
-	ls       lockservice.LockService
-	qc       qclient.QueryClient
-	hakeeper logservice.CNHAKeeperClient
-	us       udf.Service
-	cli      client.TxnClient
-	idGen    IDGenerator
-	//TODO::cache multiple snapshot databases and tables.
+	mp          *mpool.MPool
+	fs          fileservice.FileService
+	ls          lockservice.LockService
+	qc          qclient.QueryClient
+	hakeeper    logservice.CNHAKeeperClient
+	us          udf.Service
+	cli         client.TxnClient
+	idGen       IDGenerator
 	catalog     *cache.CatalogCache
 	snapCatalog []*cache.CatalogCache
 	tnID        string
-	//TODO::table maybe contains multiple snapshot partition state.
-	partitions map[[2]uint64]*logtailreplay.Partition
-	snapParts  map[[2]uint64]*logtailreplay.Partition
-	packerPool *fileservice.Pool[*types.Packer]
+	partitions  map[[2]uint64]*logtailreplay.Partition
+	snapParts   map[[2]uint64][]*logtailreplay.Partition
+	packerPool  *fileservice.Pool[*types.Packer]
 
 	gcPool *ants.Pool
 
