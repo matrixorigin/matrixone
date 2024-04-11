@@ -426,60 +426,37 @@ count(*)
 drop table t5;
 drop database test;
 drop database if exists `collate`;
-
 create database `collate`;
-
 use `collate`;
-
 drop table if exists t6;
-
 create table t6(col1 int, col2 int, col3 int);
-
 insert into t6 values (1,2,1);
-
 alter table t6 add unique key tempKey(col1,col2) comment 'abcTest';
-
+You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 37 near " collate.t6 group by serial(col1,col2) having count(*) > 1 and serial(col1,col2) is not null;";
 drop table t6;
-
 drop database `collate`;
-
 drop database if exists `current_time`;
-
 create database `current_time`;
-
 use `current_time`;
-
 drop table if exists t7;
-
 create table t7(col1 int, col2 int, col3 int);
-
 insert into t7 values (1,2,1);
-
 alter table t7 add unique index tempKey(col1,col2) comment 'unique index';
-
+You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 42 near " current_time.t7 group by serial(col1,col2) having count(*) > 1 and serial(col1,col2) is not null;";
 drop table t7;
-
 drop database `current_time`;
-
 drop database if exists `drop`;
-
 create database `drop`;
-
 use `drop`;
-
 drop table if exists t8;
-
 create table t8(col1 char, col2 int, col3 binary);
-
 insert into t8 values('a', 33, 1);
-
 insert into t8 values('c', 231, 0);
-
 alter table t8 add key pk(col1) comment 'primary key';
-
+You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 17 near " drop.`__mo_index_secondary_018ecc9a-11f0-74ac-96e6-c2a982bed21a` (__mo_index_idx_col VARCHAR(65535) primary key,__mo_index_pri_col BIGINT UNSIGNED);";
 select * from t8;
-
+col1    col2    col3
+a    33    1
+c    231    0
 drop table t8;
-
 drop database `drop`;
-
