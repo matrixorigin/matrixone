@@ -425,3 +425,61 @@ count(*)
 500000
 drop table t5;
 drop database test;
+drop database if exists `collate`;
+
+create database `collate`;
+
+use `collate`;
+
+drop table if exists t6;
+
+create table t6(col1 int, col2 int, col3 int);
+
+insert into t6 values (1,2,1);
+
+alter table t6 add unique key tempKey(col1,col2) comment 'abcTest';
+
+drop table t6;
+
+drop database `collate`;
+
+drop database if exists `current_time`;
+
+create database `current_time`;
+
+use `current_time`;
+
+drop table if exists t7;
+
+create table t7(col1 int, col2 int, col3 int);
+
+insert into t7 values (1,2,1);
+
+alter table t7 add unique index tempKey(col1,col2) comment 'unique index';
+
+drop table t7;
+
+drop database `current_time`;
+
+drop database if exists `drop`;
+
+create database `drop`;
+
+use `drop`;
+
+drop table if exists t8;
+
+create table t8(col1 char, col2 int, col3 binary);
+
+insert into t8 values('a', 33, 1);
+
+insert into t8 values('c', 231, 0);
+
+alter table t8 add key pk(col1) comment 'primary key';
+
+select * from t8;
+
+drop table t8;
+
+drop database `drop`;
+
