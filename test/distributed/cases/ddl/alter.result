@@ -389,7 +389,7 @@ select count(*) from index03;
 count(*)
 3
 alter table index03 add unique key `tempKey`(col1,col2) comment 'abcTest';
-Duplicate entry '(1,2)' for key 'col1,col2'
+Duplicate entry '(1,2)' for key '__mo_index_idx_col'
 show index from index03;
 Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
 select count(*) from index03;
