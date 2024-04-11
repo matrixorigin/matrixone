@@ -60,6 +60,7 @@ func (tbl *txnTable) getEngine() engine.Engine {
 	return tbl.db.op.GetWorkspace().(*Transaction).engine
 }
 
+// TODO:: Call statsAtSnapshot if snapshot ts is too old.
 func (tbl *txnTable) Stats(ctx context.Context, sync bool) *pb.StatsInfo {
 	_, err := tbl.getPartitionState(ctx)
 	if err != nil {
@@ -73,7 +74,17 @@ func (tbl *txnTable) Stats(ctx context.Context, sync bool) *pb.StatsInfo {
 	}, sync)
 }
 
+// TODO:: snapshot read
 func (tbl *txnTable) Rows(ctx context.Context) (uint64, error) {
+<<<<<<< Updated upstream
+=======
+	//FIXME:: ??
+	_, err := tbl.getPartitionState(ctx)
+	if err != nil {
+		logutil.Errorf("failed to get stats info of table %d", tbl.tableId)
+		return 0, err
+	}
+>>>>>>> Stashed changes
 	e := tbl.getEngine()
 	var rows uint64
 	deletes := make(map[types.Rowid]struct{})
@@ -131,7 +142,17 @@ func (tbl *txnTable) Rows(ctx context.Context) (uint64, error) {
 	return uint64(s.TableCnt) + rows, nil
 }
 
+// TODO:: snapshot read
 func (tbl *txnTable) Size(ctx context.Context, columnName string) (uint64, error) {
+<<<<<<< Updated upstream
+=======
+	//FIXME::??
+	_, err := tbl.getPartitionState(ctx)
+	if err != nil {
+		logutil.Errorf("failed to get stats info of table %d", tbl.tableId)
+		return 0, err
+	}
+>>>>>>> Stashed changes
 	e := tbl.getEngine()
 	ts := types.TimestampToTS(tbl.db.op.SnapshotTS())
 	part, err := tbl.getPartitionState(ctx)
@@ -2131,7 +2152,8 @@ func (tbl *txnTable) getPartitionState(ctx context.Context) (*logtailreplay.Part
 		if err := tbl.updateLogtail(ctx); err != nil {
 			return nil, err
 		}
-		tbl._partState.Store(tbl.db.op.GetWorkspace().(*Transaction).engine.getPartition(tbl.db.databaseId, tbl.tableId).Snapshot())
+		tbl._partState.Store(tbl.db.op.GetWorkspace().(*Transaction).
+			engine.getPartition(tbl.db.databaseId, tbl.tableId).Snapshot())
 	}
 	return tbl._partState.Load(), nil
 }

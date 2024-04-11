@@ -31,6 +31,10 @@ type Partition struct {
 
 	// assuming checkpoints will be consumed once
 	checkpointConsumed atomic.Bool
+
+	//current partitionState can serve snapshot read only if start <= ts < end
+	start types.TS
+	end   types.TS
 }
 
 func NewPartition() *Partition {
