@@ -3,4 +3,3 @@ service-type = "PYTHON_UDF"
 [python-udf-server]
 address = "127.0.0.1:50051"
 path = "pkg/udf/pythonservice/pyserver"
-python = "/usr/bin/python3"
