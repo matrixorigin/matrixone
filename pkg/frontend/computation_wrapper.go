@@ -284,7 +284,8 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 		case *tree.ShowTableStatus:
 			cwft.ses.showStmtType = ShowTableStatus
 			cwft.ses.SetData(nil)
-		case *tree.SetVar, *tree.ShowVariables, *tree.ShowErrors, *tree.ShowWarnings, *tree.CreateAccount:
+		case *tree.SetVar, *tree.ShowVariables, *tree.ShowErrors, *tree.ShowWarnings,
+			*tree.CreateAccount, *tree.AlterAccount, *tree.DropAccount:
 			return nil, nil
 		}
 

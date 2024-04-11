@@ -133,6 +133,33 @@ select account_name,status from mo_catalog.mo_account where account_name='testsu
 drop account testsuspend;
 select account_name,status from mo_catalog.mo_account where account_name='testsuspend';
 
+--prepared
+drop account if exists test;
+create account test ADMIN_NAME 'admin' IDENTIFIED BY '111';
+PREPARE s1 FROM "alter account ? admin_name= ? IDENTIFIED BY ?";
+set @a_var = 'test';
+set @b_var = 'admin';
+set @c_var = '222';
+EXECUTE s1 USING @a_var, @b_var, @c_var;
+-- @session:id=2&user=test:admin&password=222
+select 1;
+-- @session
+PREPARE s1 FROM "alter account ? admin_name 'admin' IDENTIFIED BY ?";
+set @a_var = 'test';
+set @c_var = '333';
+EXECUTE s1 USING @a_var, @c_var;
+-- @session:id=2&user=test:admin&password=333
+select 1;
+-- @session
+PREPARE s1 FROM "alter account test admin_name 'admin' IDENTIFIED BY ?";
+set @c_var = '444';
+EXECUTE s1 USING @c_var;
+DEALLOCATE PREPARE s1;
+-- @session:id=2&user=test:admin&password=444
+select 1;
+-- @session
+drop account if exists test;
+
 --Illegal syntax
 create account if not exists test ADMIN_NAME 'adminuser' IDENTIFIED BY '123456' comment 'account comment';
 alter account test admin_name='adminuser'  IDENTIFIED BY '123456' comment 'new comment ' ;
