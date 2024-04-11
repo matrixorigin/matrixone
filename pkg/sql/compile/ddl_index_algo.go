@@ -34,10 +34,8 @@ func (s *Scope) handleUniqueIndexTable(c *Compile,
 	indexDef *plan.IndexDef, qryDatabase string,
 	originalTableDef *plan.TableDef, indexInfo *plan.CreateTable) error {
 
-	err := genNewUniqueIndexDuplicateCheck(c, qryDatabase, originalTableDef.Name, partsToColsStr(indexDef.Parts))
-	if err != nil {
-		return err
-	}
+	// the logic of detecting whether the unique constraint is violated does not need to be done separately,
+	// it will be processed when inserting into the hidden table.
 
 	return s.createAndInsertForUniqueOrRegularIndexTable(c, indexDef, qryDatabase, originalTableDef, indexInfo)
 }
