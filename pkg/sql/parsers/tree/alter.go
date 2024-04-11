@@ -324,7 +324,7 @@ func (node *AlterAccountAuthOption) Free() { reuse.Free[AlterAccountAuthOption](
 type AlterAccount struct {
 	statementImpl
 	IfExists   bool
-	Name       string
+	Name       Expr
 	AuthOption AlterAccountAuthOption
 	// status_option or not
 	StatusOption AccountStatus
@@ -332,7 +332,7 @@ type AlterAccount struct {
 	Comment AccountComment
 }
 
-func NewAlterAccount(exist bool, name string, aopt AlterAccountAuthOption, sopt AccountStatus, c AccountComment) *AlterAccount {
+func NewAlterAccount(exist bool, name Expr, aopt AlterAccountAuthOption, sopt AccountStatus, c AccountComment) *AlterAccount {
 	a := reuse.Alloc[AlterAccount](nil)
 	a.IfExists = exist
 	a.Name = name
@@ -354,7 +354,7 @@ func (node *AlterAccount) Format(ctx *FmtCtx) {
 	if node.IfExists {
 		ctx.WriteString("if exists ")
 	}
-	ctx.WriteString(node.Name)
+	node.Name.Format(ctx)
 	node.AuthOption.Format(ctx)
 	node.StatusOption.Format(ctx)
 	node.Comment.Format(ctx)

@@ -3294,7 +3294,7 @@ visibility:
 
 
 alter_account_stmt:
-    ALTER ACCOUNT exists_opt account_name alter_account_auth_option account_status_option account_comment_opt
+    ALTER ACCOUNT exists_opt account_name_or_param alter_account_auth_option account_status_option account_comment_opt
     {
         var ifExists = $3
         var name = $4
@@ -4033,7 +4033,7 @@ drop_sequence_stmt:
     }
 
 drop_account_stmt:
-    DROP ACCOUNT exists_opt account_name
+    DROP ACCOUNT exists_opt account_name_or_param
     {
         var ifExists = $3
         var name = $4

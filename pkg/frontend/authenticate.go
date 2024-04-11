@@ -4187,8 +4187,13 @@ func doDropPublication(ctx context.Context, ses *Session, dp *tree.DropPublicati
 	return err
 }
 
+type dropAccount struct {
+	IfExists bool
+	Name     string
+}
+
 // doDropAccount accomplishes the DropAccount statement
-func doDropAccount(ctx context.Context, ses *Session, da *tree.DropAccount) (err error) {
+func doDropAccount(ctx context.Context, ses *Session, da *dropAccount) (err error) {
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 

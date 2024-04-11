@@ -1439,65 +1439,62 @@ func (mce *MysqlCmdExecutor) handleCreateAccount(ctx context.Context, ca *tree.C
 		Comment:      ca.Comment,
 	}
 
-	params := proc.GetPrepareParams()
-	var err error
-	bindParam := func(e tree.Expr) string {
-		if err != nil {
-			return ""
-		}
-
-		switch val := e.(type) {
-		case *tree.NumVal:
-			return val.OrigString()
-		case *tree.ParamExpr:
-			return params.GetStringAt(val.Offset - 1)
-		default:
-			err = moerr.NewInternalError(ctx, "invalid params type")
-			return ""
-		}
+	b := strParamBinder{
+		ctx:    ctx,
+		params: proc.GetPrepareParams(),
 	}
-	create.Name = bindParam(ca.Name)
-	create.AdminName = bindParam(ca.AuthOption.AdminName)
-	create.IdentStr = bindParam(ca.AuthOption.IdentifiedType.Str)
-	if err != nil {
-		return err
+	create.Name = b.bind(ca.Name)
+	create.AdminName = b.bind(ca.AuthOption.AdminName)
+	create.IdentStr = b.bind(ca.AuthOption.IdentifiedType.Str)
+	if b.err != nil {
+		return b.err
 	}
 
 	return InitGeneralTenant(ctx, mce.GetSession(), create)
 }
 
 // handleDropAccount drops a new user-level tenant
-func (mce *MysqlCmdExecutor) handleDropAccount(ctx context.Context, da *tree.DropAccount) error {
-	return doDropAccount(ctx, mce.GetSession(), da)
-}
-
-func unboxExprStr(ctx context.Context, expr tree.Expr) (string, error) {
-	if e, ok := expr.(*tree.NumVal); ok {
-		return e.OrigString(), nil
-	} else {
-		return "", moerr.NewInternalError(ctx, "invalid expr type")
+func (mce *MysqlCmdExecutor) handleDropAccount(ctx context.Context, da *tree.DropAccount, proc *process.Process) error {
+	drop := &dropAccount{
+		IfExists: da.IfExists,
 	}
+
+	b := strParamBinder{
+		ctx:    ctx,
+		params: proc.GetPrepareParams(),
+	}
+	drop.Name = b.bind(da.Name)
+	if b.err != nil {
+		return b.err
+	}
+
+	return doDropAccount(ctx, mce.GetSession(), drop)
 }
 
 // handleDropAccount drops a new user-level tenant
-func (mce *MysqlCmdExecutor) handleAlterAccount(ctx context.Context, st *tree.AlterAccount) error {
+func (mce *MysqlCmdExecutor) handleAlterAccount(ctx context.Context, st *tree.AlterAccount, proc *process.Process) error {
 	aa := &alterAccount{
 		IfExists:     st.IfExists,
-		Name:         st.Name,
 		StatusOption: st.StatusOption,
 		Comment:      st.Comment,
 	}
+
+	b := strParamBinder{
+		ctx:    ctx,
+		params: proc.GetPrepareParams(),
+	}
+
+	aa.Name = b.bind(st.Name)
+	if b.err != nil {
+		return b.err
+	}
 	if st.AuthOption.Exist {
 		aa.AuthExist = true
-		var err error
-		aa.AdminName, err = unboxExprStr(ctx, st.AuthOption.AdminName)
-		if err != nil {
-			return err
-		}
+		aa.AdminName = b.bind(st.AuthOption.AdminName)
 		aa.IdentTyp = st.AuthOption.IdentifiedType.Typ
-		aa.IdentStr, err = unboxExprStr(ctx, st.AuthOption.IdentifiedType.Str)
-		if err != nil {
-			return err
+		aa.IdentStr = b.bind(st.AuthOption.IdentifiedType.Str)
+		if b.err != nil {
+			return b.err
 		}
 	}
 
@@ -3706,13 +3703,13 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 	case *tree.DropAccount:
 		selfHandle = true
 		ses.InvalidatePrivilegeCache()
-		if err = mce.handleDropAccount(requestCtx, st); err != nil {
+		if err = mce.handleDropAccount(requestCtx, st, proc); err != nil {
 			return
 		}
 	case *tree.AlterAccount:
 		ses.InvalidatePrivilegeCache()
 		selfHandle = true
-		if err = mce.handleAlterAccount(requestCtx, st); err != nil {
+		if err = mce.handleAlterAccount(requestCtx, st, proc); err != nil {
 			return
 		}
 	case *tree.AlterDataBaseConfig:
@@ -3916,6 +3913,22 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 	case *tree.CreateAccount:
 		ses.InvalidatePrivilegeCache()
 		err = mce.handleCreateAccount(requestCtx, st, proc)
+		if err != nil {
+			return
+		} else {
+			return
+		}
+	case *tree.AlterAccount:
+		ses.InvalidatePrivilegeCache()
+		err = mce.handleAlterAccount(requestCtx, st, proc)
+		if err != nil {
+			return
+		} else {
+			return
+		}
+	case *tree.DropAccount:
+		ses.InvalidatePrivilegeCache()
+		err = mce.handleDropAccount(requestCtx, st, proc)
 		if err != nil {
 			return
 		} else {

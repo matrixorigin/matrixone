@@ -18,7 +18,6 @@ import (
 	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -220,30 +219,63 @@ func buildCreateAccount(stmt *tree.CreateAccount, ctx CompilerContext, isPrepare
 		stmt.AuthOption.AdminName,
 		stmt.AuthOption.IdentifiedType.Str,
 	}
-	paramTypes := make([]int32, 0, len(params))
-	for _, p := range params {
-		switch ast := p.(type) {
-		case *tree.NumVal:
-			if ast.ValType != tree.P_char {
-				return nil, moerr.NewInvalidInput(ctx.GetContext(), "unsupport value '%s'", ast.String())
-			}
-		case *tree.ParamExpr:
-			if !isPrepareStmt {
-				return nil, moerr.NewInvalidInput(ctx.GetContext(), "only prepare statement can use ? expr")
-			}
-			paramTypes = append(paramTypes, int32(types.T_varchar))
-			if ast.Offset != len(paramTypes) {
-				return nil, moerr.NewInternalError(ctx.GetContext(), "offset not match")
-			}
-		default:
-			return nil, moerr.NewInvalidInput(ctx.GetContext(), "unsupport value '%s'", ast.String())
-		}
+	paramTypes, err := getParamTypes(params, ctx, isPrepareStmt)
+	if err != nil {
+		return nil, err
 	}
 
 	return &Plan{
 		Plan: &plan.Plan_Dcl{
 			Dcl: &plan.DataControl{
 				DclType: plan.DataControl_CREATE_ACCOUNT,
+				Control: &plan.DataControl_Other{
+					Other: &plan.OtherDCL{
+						ParamTypes: paramTypes,
+					},
+				},
+			},
+		},
+	}, nil
+}
+
+func buildAlterAccount(stmt *tree.AlterAccount, ctx CompilerContext, isPrepareStmt bool) (*Plan, error) {
+	params := []tree.Expr{
+		stmt.Name,
+		stmt.AuthOption.AdminName,
+		stmt.AuthOption.IdentifiedType.Str,
+	}
+	paramTypes, err := getParamTypes(params, ctx, isPrepareStmt)
+	if err != nil {
+		return nil, err
+	}
+
+	return &Plan{
+		Plan: &plan.Plan_Dcl{
+			Dcl: &plan.DataControl{
+				DclType: plan.DataControl_ALTER_ACCOUNT,
+				Control: &plan.DataControl_Other{
+					Other: &plan.OtherDCL{
+						ParamTypes: paramTypes,
+					},
+				},
+			},
+		},
+	}, nil
+}
+
+func buildDropAccount(stmt *tree.DropAccount, ctx CompilerContext, isPrepareStmt bool) (*Plan, error) {
+	params := []tree.Expr{
+		stmt.Name,
+	}
+	paramTypes, err := getParamTypes(params, ctx, isPrepareStmt)
+	if err != nil {
+		return nil, err
+	}
+
+	return &Plan{
+		Plan: &plan.Plan_Dcl{
+			Dcl: &plan.DataControl{
+				DclType: plan.DataControl_DROP_ACCOUNT,
 				Control: &plan.DataControl_Other{
 					Other: &plan.OtherDCL{
 						ParamTypes: paramTypes,

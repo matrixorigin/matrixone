@@ -6574,11 +6574,11 @@ func Test_doAlterAccount(t *testing.T) {
 	alterAcountFromStmt := func(stmt *tree.AlterAccount) *alterAccount {
 		aa := &alterAccount{
 			IfExists:     stmt.IfExists,
-			Name:         stmt.Name,
 			AuthExist:    stmt.AuthOption.Exist,
 			StatusOption: stmt.StatusOption,
 			Comment:      stmt.Comment,
 		}
+		aa.Name = mustUnboxExprStr(stmt.Name)
 		if stmt.AuthOption.Exist {
 			aa.AdminName = mustUnboxExprStr(stmt.AuthOption.AdminName)
 			aa.IdentTyp = stmt.AuthOption.IdentifiedType.Typ
@@ -6598,7 +6598,7 @@ func Test_doAlterAccount(t *testing.T) {
 		defer bhStub.Reset()
 
 		stmt := &tree.AlterAccount{
-			Name: "acc",
+			Name: boxExprStr("acc"),
 			AuthOption: tree.AlterAccountAuthOption{
 				Exist:     true,
 				AdminName: boxExprStr("rootx"),
@@ -6623,7 +6623,7 @@ func Test_doAlterAccount(t *testing.T) {
 		bh.sql2result["commit;"] = nil
 		bh.sql2result["rollback;"] = nil
 
-		sql, _ := getSqlForCheckTenant(context.TODO(), stmt.Name)
+		sql, _ := getSqlForCheckTenant(context.TODO(), mustUnboxExprStr(stmt.Name))
 		mrs := newMrsForCheckTenant([][]interface{}{
 			{0, 0, 0, 0},
 		})
@@ -6652,7 +6652,7 @@ func Test_doAlterAccount(t *testing.T) {
 		defer bhStub.Reset()
 
 		stmt := &tree.AlterAccount{
-			Name: "acc",
+			Name: boxExprStr("acc"),
 			AuthOption: tree.AlterAccountAuthOption{
 				Exist:     true,
 				AdminName: boxExprStr("rootx"),
@@ -6677,7 +6677,7 @@ func Test_doAlterAccount(t *testing.T) {
 		bh.sql2result["commit;"] = nil
 		bh.sql2result["rollback;"] = nil
 
-		sql, _ := getSqlForCheckTenant(context.TODO(), stmt.Name)
+		sql, _ := getSqlForCheckTenant(context.TODO(), mustUnboxExprStr(stmt.Name))
 		mrs := newMrsForCheckTenant([][]interface{}{
 			{0, 0, 0, 0},
 		})
@@ -6706,7 +6706,7 @@ func Test_doAlterAccount(t *testing.T) {
 		defer bhStub.Reset()
 
 		stmt := &tree.AlterAccount{
-			Name: "acc",
+			Name: boxExprStr("acc"),
 			AuthOption: tree.AlterAccountAuthOption{
 				Exist:     true,
 				AdminName: boxExprStr("rootx"),
@@ -6731,7 +6731,7 @@ func Test_doAlterAccount(t *testing.T) {
 		bh.sql2result["commit;"] = nil
 		bh.sql2result["rollback;"] = nil
 
-		sql, _ := getSqlForCheckTenant(context.TODO(), stmt.Name)
+		sql, _ := getSqlForCheckTenant(context.TODO(), mustUnboxExprStr(stmt.Name))
 		bh.sql2result[sql] = nil
 
 		sql, _ = getSqlForPasswordOfUser(context.TODO(), mustUnboxExprStr(stmt.AuthOption.AdminName))
@@ -6756,7 +6756,7 @@ func Test_doAlterAccount(t *testing.T) {
 
 		stmt := &tree.AlterAccount{
 			IfExists: true,
-			Name:     "acc",
+			Name:     boxExprStr("acc"),
 			AuthOption: tree.AlterAccountAuthOption{
 				Exist:     true,
 				AdminName: boxExprStr("rootx"),
@@ -6781,7 +6781,7 @@ func Test_doAlterAccount(t *testing.T) {
 		bh.sql2result["commit;"] = nil
 		bh.sql2result["rollback;"] = nil
 
-		sql, _ := getSqlForCheckTenant(context.TODO(), stmt.Name)
+		sql, _ := getSqlForCheckTenant(context.TODO(), mustUnboxExprStr(stmt.Name))
 		mrs := newMrsForCheckTenant([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
@@ -6807,7 +6807,7 @@ func Test_doAlterAccount(t *testing.T) {
 
 		stmt := &tree.AlterAccount{
 			IfExists: true,
-			Name:     "acc",
+			Name:     boxExprStr("acc"),
 			AuthOption: tree.AlterAccountAuthOption{
 				Exist:     true,
 				AdminName: boxExprStr("rootx"),
@@ -6832,7 +6832,7 @@ func Test_doAlterAccount(t *testing.T) {
 		bh.sql2result["commit;"] = nil
 		bh.sql2result["rollback;"] = nil
 
-		sql, _ := getSqlForCheckTenant(context.TODO(), stmt.Name)
+		sql, _ := getSqlForCheckTenant(context.TODO(), mustUnboxExprStr(stmt.Name))
 		mrs := newMrsForCheckTenant([][]interface{}{
 			{0, "0", "open", 0},
 		})
@@ -6862,7 +6862,7 @@ func Test_doAlterAccount(t *testing.T) {
 
 		stmt := &tree.AlterAccount{
 			IfExists: true,
-			Name:     "acc",
+			Name:     boxExprStr("acc"),
 		}
 		priv := determinePrivilegeSetOfStatement(stmt)
 		ses := newSes(priv, ctrl)
@@ -6879,7 +6879,7 @@ func Test_doAlterAccount(t *testing.T) {
 		bh.sql2result["commit;"] = nil
 		bh.sql2result["rollback;"] = nil
 
-		sql, _ := getSqlForCheckTenant(context.TODO(), stmt.Name)
+		sql, _ := getSqlForCheckTenant(context.TODO(), mustUnboxExprStr(stmt.Name))
 		bh.sql2result[sql] = nil
 
 		sql, _ = getSqlForPasswordOfUser(context.TODO(), mustUnboxExprStr(stmt.AuthOption.AdminName))
@@ -6904,7 +6904,7 @@ func Test_doAlterAccount(t *testing.T) {
 
 		stmt := &tree.AlterAccount{
 			IfExists: true,
-			Name:     "acc",
+			Name:     boxExprStr("acc"),
 			AuthOption: tree.AlterAccountAuthOption{
 				Exist:     true,
 				AdminName: boxExprStr("rootx"),
@@ -6933,7 +6933,7 @@ func Test_doAlterAccount(t *testing.T) {
 		bh.sql2result["commit;"] = nil
 		bh.sql2result["rollback;"] = nil
 
-		sql, _ := getSqlForCheckTenant(context.TODO(), stmt.Name)
+		sql, _ := getSqlForCheckTenant(context.TODO(), mustUnboxExprStr(stmt.Name))
 		bh.sql2result[sql] = nil
 		sql, _ = getSqlForPasswordOfUser(context.TODO(), mustUnboxExprStr(stmt.AuthOption.AdminName))
 		bh.sql2result[sql] = nil
@@ -6956,7 +6956,7 @@ func Test_doAlterAccount(t *testing.T) {
 		defer bhStub.Reset()
 
 		stmt := &tree.AlterAccount{
-			Name: "acc",
+			Name: boxExprStr("acc"),
 			Comment: tree.AccountComment{
 				Exist:   true,
 				Comment: "new account",
@@ -6977,7 +6977,7 @@ func Test_doAlterAccount(t *testing.T) {
 		bh.sql2result["commit;"] = nil
 		bh.sql2result["rollback;"] = nil
 
-		sql, _ := getSqlForCheckTenant(context.TODO(), stmt.Name)
+		sql, _ := getSqlForCheckTenant(context.TODO(), mustUnboxExprStr(stmt.Name))
 		mrs := newMrsForCheckTenant([][]interface{}{
 			{0, 0, 0, 0},
 		})
@@ -6986,7 +6986,7 @@ func Test_doAlterAccount(t *testing.T) {
 		sql, _ = getSqlForPasswordOfUser(context.TODO(), mustUnboxExprStr(stmt.AuthOption.AdminName))
 		bh.sql2result[sql] = nil
 
-		sql, _ = getSqlForUpdateCommentsOfAccount(context.TODO(), stmt.Comment.Comment, stmt.Name)
+		sql, _ = getSqlForUpdateCommentsOfAccount(context.TODO(), stmt.Comment.Comment, mustUnboxExprStr(stmt.Name))
 		bh.sql2result[sql] = nil
 
 		err := doAlterAccount(ses.GetRequestContext(), ses, alterAcountFromStmt(stmt))
@@ -7004,7 +7004,7 @@ func Test_doAlterAccount(t *testing.T) {
 		defer bhStub.Reset()
 
 		stmt := &tree.AlterAccount{
-			Name: "acc",
+			Name: boxExprStr("acc"),
 			StatusOption: tree.AccountStatus{
 				Exist:  true,
 				Option: tree.AccountStatusSuspend,
@@ -7025,7 +7025,7 @@ func Test_doAlterAccount(t *testing.T) {
 		bh.sql2result["commit;"] = nil
 		bh.sql2result["rollback;"] = nil
 
-		sql, _ := getSqlForCheckTenant(context.TODO(), stmt.Name)
+		sql, _ := getSqlForCheckTenant(context.TODO(), mustUnboxExprStr(stmt.Name))
 		mrs := newMrsForCheckTenant([][]interface{}{
 			{0, 0, 0, 0},
 		})
@@ -7034,7 +7034,7 @@ func Test_doAlterAccount(t *testing.T) {
 		sql, _ = getSqlForPasswordOfUser(context.TODO(), mustUnboxExprStr(stmt.AuthOption.AdminName))
 		bh.sql2result[sql] = nil
 
-		sql, _ = getSqlForUpdateStatusOfAccount(context.TODO(), stmt.StatusOption.Option.String(), types.CurrentTimestamp().String2(time.UTC, 0), stmt.Name)
+		sql, _ = getSqlForUpdateStatusOfAccount(context.TODO(), stmt.StatusOption.Option.String(), types.CurrentTimestamp().String2(time.UTC, 0), mustUnboxExprStr(stmt.Name))
 		bh.sql2result[sql] = nil
 
 		err := doAlterAccount(ses.GetRequestContext(), ses, alterAcountFromStmt(stmt))
@@ -7052,7 +7052,7 @@ func Test_doAlterAccount(t *testing.T) {
 		defer bhStub.Reset()
 
 		stmt := &tree.AlterAccount{
-			Name: "sys",
+			Name: boxExprStr("sys"),
 			StatusOption: tree.AccountStatus{
 				Exist:  true,
 				Option: tree.AccountStatusSuspend,
@@ -7073,13 +7073,13 @@ func Test_doAlterAccount(t *testing.T) {
 		bh.sql2result["commit;"] = nil
 		bh.sql2result["rollback;"] = nil
 
-		sql, _ := getSqlForCheckTenant(context.TODO(), stmt.Name)
+		sql, _ := getSqlForCheckTenant(context.TODO(), mustUnboxExprStr(stmt.Name))
 		bh.sql2result[sql] = nil
 
 		sql, _ = getSqlForPasswordOfUser(context.TODO(), mustUnboxExprStr(stmt.AuthOption.AdminName))
 		bh.sql2result[sql] = nil
 
-		sql, _ = getSqlForUpdateStatusOfAccount(context.TODO(), stmt.StatusOption.Option.String(), types.CurrentTimestamp().String2(time.UTC, 0), stmt.Name)
+		sql, _ = getSqlForUpdateStatusOfAccount(context.TODO(), stmt.StatusOption.Option.String(), types.CurrentTimestamp().String2(time.UTC, 0), mustUnboxExprStr(stmt.Name))
 		bh.sql2result[sql] = nil
 
 		err := doAlterAccount(ses.GetRequestContext(), ses, alterAcountFromStmt(stmt))
@@ -7114,7 +7114,7 @@ func Test_doDropAccount(t *testing.T) {
 		defer bhStub.Reset()
 
 		stmt := &tree.DropAccount{
-			Name: "acc",
+			Name: boxExprStr("acc"),
 		}
 		priv := determinePrivilegeSetOfStatement(stmt)
 		ses := newSes(priv, ctrl)
@@ -7131,13 +7131,13 @@ func Test_doDropAccount(t *testing.T) {
 		bh.sql2result["commit;"] = nil
 		bh.sql2result["rollback;"] = nil
 
-		sql, _ := getSqlForCheckTenant(context.TODO(), stmt.Name)
+		sql, _ := getSqlForCheckTenant(context.TODO(), mustUnboxExprStr(stmt.Name))
 		mrs := newMrsForCheckTenant([][]interface{}{
 			{0, "0", "open", 0},
 		})
 		bh.sql2result[sql] = mrs
 
-		sql, _ = getSqlForDeleteAccountFromMoAccount(context.TODO(), stmt.Name)
+		sql, _ = getSqlForDeleteAccountFromMoAccount(context.TODO(), mustUnboxExprStr(stmt.Name))
 		bh.sql2result[sql] = nil
 
 		for _, sql = range getSqlForDropAccount() {
@@ -7149,7 +7149,10 @@ func Test_doDropAccount(t *testing.T) {
 
 		bh.sql2result["show tables from mo_catalog;"] = newMrsForShowTables([][]interface{}{})
 
-		err := doDropAccount(ses.GetRequestContext(), ses, stmt)
+		err := doDropAccount(ses.GetRequestContext(), ses, &dropAccount{
+			IfExists: stmt.IfExists,
+			Name:     mustUnboxExprStr(stmt.Name),
+		})
 		convey.So(err, convey.ShouldBeNil)
 	})
 	convey.Convey("drop account (if exists)", t, func() {
@@ -7164,7 +7167,7 @@ func Test_doDropAccount(t *testing.T) {
 
 		stmt := &tree.DropAccount{
 			IfExists: true,
-			Name:     "acc",
+			Name:     boxExprStr("acc"),
 		}
 		priv := determinePrivilegeSetOfStatement(stmt)
 		ses := newSes(priv, ctrl)
@@ -7181,11 +7184,11 @@ func Test_doDropAccount(t *testing.T) {
 		bh.sql2result["commit;"] = nil
 		bh.sql2result["rollback;"] = nil
 
-		sql, _ := getSqlForCheckTenant(context.TODO(), stmt.Name)
+		sql, _ := getSqlForCheckTenant(context.TODO(), mustUnboxExprStr(stmt.Name))
 		mrs := newMrsForCheckTenant([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
-		sql, _ = getSqlForDeleteAccountFromMoAccount(context.TODO(), stmt.Name)
+		sql, _ = getSqlForDeleteAccountFromMoAccount(context.TODO(), mustUnboxExprStr(stmt.Name))
 		bh.sql2result[sql] = nil
 
 		for _, sql = range getSqlForDropAccount() {
@@ -7194,7 +7197,10 @@ func Test_doDropAccount(t *testing.T) {
 
 		bh.sql2result["show tables from mo_catalog;"] = newMrsForShowTables([][]interface{}{})
 
-		err := doDropAccount(ses.GetRequestContext(), ses, stmt)
+		err := doDropAccount(ses.GetRequestContext(), ses, &dropAccount{
+			IfExists: stmt.IfExists,
+			Name:     mustUnboxExprStr(stmt.Name),
+		})
 		convey.So(err, convey.ShouldBeNil)
 	})
 	convey.Convey("drop account fail", t, func() {
@@ -7208,7 +7214,7 @@ func Test_doDropAccount(t *testing.T) {
 		defer bhStub.Reset()
 
 		stmt := &tree.DropAccount{
-			Name: "acc",
+			Name: boxExprStr("acc"),
 		}
 		priv := determinePrivilegeSetOfStatement(stmt)
 		ses := newSes(priv, ctrl)
@@ -7225,18 +7231,21 @@ func Test_doDropAccount(t *testing.T) {
 		bh.sql2result["commit;"] = nil
 		bh.sql2result["rollback;"] = nil
 
-		sql, _ := getSqlForCheckTenant(context.TODO(), stmt.Name)
+		sql, _ := getSqlForCheckTenant(context.TODO(), mustUnboxExprStr(stmt.Name))
 		mrs := newMrsForCheckTenant([][]interface{}{})
 		bh.sql2result[sql] = mrs
 
-		sql, _ = getSqlForDeleteAccountFromMoAccount(context.TODO(), stmt.Name)
+		sql, _ = getSqlForDeleteAccountFromMoAccount(context.TODO(), mustUnboxExprStr(stmt.Name))
 		bh.sql2result[sql] = nil
 
 		for _, sql = range getSqlForDropAccount() {
 			bh.sql2result[sql] = nil
 		}
 
-		err := doDropAccount(ses.GetRequestContext(), ses, stmt)
+		err := doDropAccount(ses.GetRequestContext(), ses, &dropAccount{
+			IfExists: stmt.IfExists,
+			Name:     mustUnboxExprStr(stmt.Name),
+		})
 		convey.So(err, convey.ShouldBeError)
 	})
 }

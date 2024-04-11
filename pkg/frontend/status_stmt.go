@@ -308,28 +308,15 @@ func (cae *CreateAccountExecutor) ExecuteImpl(ctx context.Context, ses *Session)
 		Comment:      ca.Comment,
 	}
 
-	params := cae.GetProcess().GetPrepareParams()
-	var err error
-	bindParam := func(e tree.Expr) string {
-		if err != nil {
-			return ""
-		}
-
-		switch val := e.(type) {
-		case *tree.NumVal:
-			return val.OrigString()
-		case *tree.ParamExpr:
-			return params.GetStringAt(val.Offset - 1)
-		default:
-			err = moerr.NewInternalError(ctx, "invalid params type")
-			return ""
-		}
+	b := strParamBinder{
+		ctx:    ctx,
+		params: cae.GetProcess().GetPrepareParams(),
 	}
-	create.Name = bindParam(ca.Name)
-	create.AdminName = bindParam(ca.AuthOption.AdminName)
-	create.IdentStr = bindParam(ca.AuthOption.IdentifiedType.Str)
-	if err != nil {
-		return err
+	create.Name = b.bind(ca.Name)
+	create.AdminName = b.bind(ca.AuthOption.AdminName)
+	create.IdentStr = b.bind(ca.AuthOption.IdentifiedType.Str)
+	if b.err != nil {
+		return b.err
 	}
 
 	return InitGeneralTenant(ctx, ses, create)
@@ -341,7 +328,21 @@ type DropAccountExecutor struct {
 }
 
 func (dae *DropAccountExecutor) ExecuteImpl(ctx context.Context, ses *Session) error {
-	return doDropAccount(ctx, ses, dae.da)
+	da := dae.da
+	drop := &dropAccount{
+		IfExists: da.IfExists,
+	}
+
+	b := strParamBinder{
+		ctx:    ctx,
+		params: dae.GetProcess().GetPrepareParams(),
+	}
+	drop.Name = b.bind(da.Name)
+	if b.err != nil {
+		return b.err
+	}
+
+	return doDropAccount(ctx, ses, drop)
 }
 
 type AlterAccountExecutor struct {
