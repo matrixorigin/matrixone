@@ -279,6 +279,17 @@ func (m MarshalNodeImpl) GetNodeLabels(ctx context.Context, options *ExplainOpti
 			Name:  Label_Scan_Columns, //"Scan columns",
 			Value: len(tableDef.Cols),
 		})
+
+		if len(m.node.BlockFilterList) > 0 {
+			value, err := GetExprsLabelValue(ctx, m.node.BlockFilterList, options)
+			if err != nil {
+				return nil, err
+			}
+			labels = append(labels, Label{
+				Name:  Label_Block_Filter_Conditions, // "Block Filter conditions",
+				Value: value,
+			})
+		}
 	case plan.Node_FUNCTION_SCAN:
 		tableDef := m.node.TableDef
 		fullTableName := ""
@@ -310,6 +321,17 @@ func (m MarshalNodeImpl) GetNodeLabels(ctx context.Context, options *ExplainOpti
 			Name:  Label_Scan_Columns, //"Scan columns",
 			Value: len(tableDef.Cols),
 		})
+
+		if len(m.node.BlockFilterList) > 0 {
+			value, err := GetExprsLabelValue(ctx, m.node.BlockFilterList, options)
+			if err != nil {
+				return nil, err
+			}
+			labels = append(labels, Label{
+				Name:  Label_Block_Filter_Conditions, // "Block Filter conditions",
+				Value: value,
+			})
+		}
 	case plan.Node_INSERT:
 		objRef := m.node.InsertCtx.Ref
 		fullTableName := ""
@@ -420,6 +442,17 @@ func (m MarshalNodeImpl) GetNodeLabels(ctx context.Context, options *ExplainOpti
 			Name:  Label_List_Values, //"List of values",
 			Value: value,
 		})
+
+		if len(m.node.BlockFilterList) > 0 {
+			value, err = GetExprsLabelValue(ctx, m.node.BlockFilterList, options)
+			if err != nil {
+				return nil, err
+			}
+			labels = append(labels, Label{
+				Name:  Label_Block_Filter_Conditions, // "Block Filter conditions",
+				Value: value,
+			})
+		}
 	case plan.Node_UNION:
 		value, err := GetExprsLabelValue(ctx, m.node.ProjectList, options)
 		if err != nil {
@@ -612,17 +645,6 @@ func (m MarshalNodeImpl) GetNodeLabels(ctx context.Context, options *ExplainOpti
 		}
 		labels = append(labels, Label{
 			Name:  Label_Filter_Conditions, // "Filter conditions",
-			Value: value,
-		})
-	}
-
-	if len(m.node.BlockFilterList) > 0 {
-		value, err := GetExprsLabelValue(ctx, m.node.BlockFilterList, options)
-		if err != nil {
-			return nil, err
-		}
-		labels = append(labels, Label{
-			Name:  Label_Block_Filter_Conditions, // "Block Filter conditions",
 			Value: value,
 		})
 	}
