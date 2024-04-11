@@ -21,121 +21,78 @@ import (
 
 // all the codes in this file were to new the multiple column aggregation executors.
 
-func newMultiAggFuncExec(
-	mg AggMemoryManager, info multiAggInfo, implementationAllocator any) AggFuncExec {
-	if info.retType.IsVarlen() {
-		if g, ok := implementationAllocator.(func() MultiAggRetVar); ok {
-			e := &multiAggFuncExec2{}
-			e.init(mg, info, g)
-			return e
-		}
-	} else {
-		switch info.retType.Oid {
-		case types.T_bool:
-			if g, ok := implementationAllocator.(func() MultiAggRetFixed[bool]); ok {
-				e := &multiAggFuncExec1[bool]{}
-				e.init(mg, info, g)
-				return e
-			}
-		case types.T_int8:
-			if g, ok := implementationAllocator.(func() MultiAggRetFixed[int8]); ok {
-				e := &multiAggFuncExec1[int8]{}
-				e.init(mg, info, g)
-				return e
-			}
-		case types.T_int16:
-			if g, ok := implementationAllocator.(func() MultiAggRetFixed[int16]); ok {
-				e := &multiAggFuncExec1[int16]{}
-				e.init(mg, info, g)
-				return e
-			}
-		case types.T_int32:
-			if g, ok := implementationAllocator.(func() MultiAggRetFixed[int32]); ok {
-				e := &multiAggFuncExec1[int32]{}
-				e.init(mg, info, g)
-				return e
-			}
-		case types.T_int64:
-			if g, ok := implementationAllocator.(func() MultiAggRetFixed[int64]); ok {
-				e := &multiAggFuncExec1[int64]{}
-				e.init(mg, info, g)
-				return e
-			}
-		case types.T_uint8:
-			if g, ok := implementationAllocator.(func() MultiAggRetFixed[uint8]); ok {
-				e := &multiAggFuncExec1[uint8]{}
-				e.init(mg, info, g)
-				return e
-			}
-		case types.T_uint16:
-			if g, ok := implementationAllocator.(func() MultiAggRetFixed[uint16]); ok {
-				e := &multiAggFuncExec1[uint16]{}
-				e.init(mg, info, g)
-				return e
-			}
-		case types.T_uint32:
-			if g, ok := implementationAllocator.(func() MultiAggRetFixed[uint32]); ok {
-				e := &multiAggFuncExec1[uint32]{}
-				e.init(mg, info, g)
-				return e
-			}
-		case types.T_uint64:
-			if g, ok := implementationAllocator.(func() MultiAggRetFixed[uint64]); ok {
-				e := &multiAggFuncExec1[uint64]{}
-				e.init(mg, info, g)
-				return e
-			}
-		case types.T_float32:
-			if g, ok := implementationAllocator.(func() MultiAggRetFixed[float32]); ok {
-				e := &multiAggFuncExec1[float32]{}
-				e.init(mg, info, g)
-				return e
-			}
-		case types.T_float64:
-			if g, ok := implementationAllocator.(func() MultiAggRetFixed[float64]); ok {
-				e := &multiAggFuncExec1[float64]{}
-				e.init(mg, info, g)
-				return e
-			}
-		case types.T_decimal64:
-			if g, ok := implementationAllocator.(func() MultiAggRetFixed[types.Decimal64]); ok {
-				e := &multiAggFuncExec1[types.Decimal64]{}
-				e.init(mg, info, g)
-				return e
-			}
-		case types.T_decimal128:
-			if g, ok := implementationAllocator.(func() MultiAggRetFixed[types.Decimal128]); ok {
-				e := &multiAggFuncExec1[types.Decimal128]{}
-				e.init(mg, info, g)
-				return e
-			}
-		case types.T_date:
-			if g, ok := implementationAllocator.(func() MultiAggRetFixed[types.Date]); ok {
-				e := &multiAggFuncExec1[types.Date]{}
-				e.init(mg, info, g)
-				return e
-			}
-		case types.T_datetime:
-			if g, ok := implementationAllocator.(func() MultiAggRetFixed[types.Datetime]); ok {
-				e := &multiAggFuncExec1[types.Datetime]{}
-				e.init(mg, info, g)
-				return e
-			}
-		case types.T_time:
-			if g, ok := implementationAllocator.(func() MultiAggRetFixed[types.Time]); ok {
-				e := &multiAggFuncExec1[types.Time]{}
-				e.init(mg, info, g)
-				return e
-			}
-		case types.T_timestamp:
-			if g, ok := implementationAllocator.(func() MultiAggRetFixed[types.Timestamp]); ok {
-				e := &multiAggFuncExec1[types.Timestamp]{}
-				e.init(mg, info, g)
-				return e
-			}
-		default:
-			panic(fmt.Sprintf("unsupported parameter type for multiAggFuncExec, aggInfo: %s", info))
-		}
+func newMultiAggFuncExecRetFixed(
+	mg AggMemoryManager, info multiAggInfo, impl multiColumnAggImplementation) AggFuncExec {
+
+	switch info.retType.Oid {
+	case types.T_bool:
+		e := &multiAggFuncExec1[bool]{}
+		e.init(mg, info, impl)
+		return e
+	case types.T_int8:
+		e := &multiAggFuncExec1[int8]{}
+		e.init(mg, info, impl)
+		return e
+	case types.T_int16:
+		e := &multiAggFuncExec1[int16]{}
+		e.init(mg, info, impl)
+		return e
+	case types.T_int32:
+		e := &multiAggFuncExec1[int32]{}
+		e.init(mg, info, impl)
+		return e
+	case types.T_int64:
+		e := &multiAggFuncExec1[int64]{}
+		e.init(mg, info, impl)
+		return e
+	case types.T_uint8:
+		e := &multiAggFuncExec1[uint8]{}
+		e.init(mg, info, impl)
+		return e
+	case types.T_uint16:
+		e := &multiAggFuncExec1[uint16]{}
+		e.init(mg, info, impl)
+		return e
+	case types.T_uint32:
+		e := &multiAggFuncExec1[uint32]{}
+		e.init(mg, info, impl)
+		return e
+	case types.T_uint64:
+		e := &multiAggFuncExec1[uint64]{}
+		e.init(mg, info, impl)
+		return e
+	case types.T_float32:
+		e := &multiAggFuncExec1[float32]{}
+		e.init(mg, info, impl)
+		return e
+	case types.T_float64:
+		e := &multiAggFuncExec1[float64]{}
+		e.init(mg, info, impl)
+		return e
+	case types.T_decimal64:
+		e := &multiAggFuncExec1[types.Decimal64]{}
+		e.init(mg, info, impl)
+		return e
+	case types.T_decimal128:
+		e := &multiAggFuncExec1[types.Decimal128]{}
+		e.init(mg, info, impl)
+		return e
+	case types.T_date:
+		e := &multiAggFuncExec1[types.Date]{}
+		e.init(mg, info, impl)
+		return e
+	case types.T_datetime:
+		e := &multiAggFuncExec1[types.Datetime]{}
+		e.init(mg, info, impl)
+		return e
+	case types.T_time:
+		e := &multiAggFuncExec1[types.Time]{}
+		e.init(mg, info, impl)
+		return e
+	case types.T_timestamp:
+		e := &multiAggFuncExec1[types.Timestamp]{}
+		e.init(mg, info, impl)
+		return e
 	}
 
 	panic(fmt.Sprintf("unexpected parameter to Init a multiAggFuncExec, aggInfo: %s", info))

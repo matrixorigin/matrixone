@@ -197,23 +197,30 @@ func makeMultiAgg(
 	mg AggMemoryManager,
 	aggID int64, isDistinct bool,
 	param []types.Type) AggFuncExec {
-	implementationAllocator, result, rInfo, err := getMultiArgAggImplByInfo(aggID, param)
-	if err != nil {
-		panic(err)
-	}
-
 	if isDistinct {
 		panic("multi-column agg do not support `distinct`")
 	}
+
+	agg, err := getMultiArgAggImplByInfo(aggID, param)
+	if err != nil {
+		panic(err)
+	}
+	result := agg.ret(param)
 
 	info := multiAggInfo{
 		aggID:     aggID,
 		distinct:  false,
 		argTypes:  param,
 		retType:   result,
-		emptyNull: rInfo.setNullForEmptyGroup,
+		emptyNull: agg.setNullForEmptyGroup,
 	}
-	return newMultiAggFuncExec(mg, info, implementationAllocator)
+
+	if info.retType.IsVarlen() {
+		e := &multiAggFuncExec2{}
+		e.init(mg, info, nil)
+		return e
+	}
+	return newMultiAggFuncExecRetFixed(mg, info, agg)
 }
 
 func makeSpecialAggExec(

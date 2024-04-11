@@ -70,6 +70,11 @@ type multiAggFuncExec1[T types.FixedSizeTExceptStrType] struct {
 	ret    aggFuncResult[T]
 	groups []MultiAggRetFixed[T]
 
+	rowValid rowValidForMultiAgg1[T]
+	merge    MultiAggMerge1[T]
+	eval     MultiAggEval1[T]
+	flush    MultiAggFlush1[T]
+
 	// method to new the private structure for group growing.
 	gGroup func() MultiAggRetFixed[T]
 }
@@ -87,19 +92,26 @@ type multiAggFuncExec2 struct {
 func (exec *multiAggFuncExec1[T]) init(
 	mg AggMemoryManager,
 	info multiAggInfo,
-	nm func() MultiAggRetFixed[T]) {
+	impl multiColumnAggImplementation) {
 
 	exec.multiAggInfo = info
 	exec.args = make([]mArg1[T], len(info.argTypes))
 	exec.ret = initFixedAggFuncResult[T](mg, info.retType, info.emptyNull)
 	exec.groups = make([]MultiAggRetFixed[T], 0, 1)
-	exec.gGroup = nm
+	exec.gGroup = impl.generator.(func() MultiAggRetFixed[T])
 	exec.args = make([]mArg1[T], len(info.argTypes))
+
+	fillNullWhich := impl.fillNullWhich.([]func(MultiAggRetFixed[T]))
 	for i := range exec.args {
 		exec.args[i] = newArgumentOfMultiAgg1[T](info.argTypes[i])
 
-		t := nm()
-		exec.args[i].cacheFill(t.GetWhichFill(i), t.GetWhichFillNull(i).(func(MultiAggRetFixed[T])))
+		exec.args[i].cacheFill(impl.fillWhich[i], fillNullWhich[i])
+	}
+	exec.rowValid = impl.rowValid.(rowValidForMultiAgg1[T])
+	exec.merge = impl.merge.(MultiAggMerge1[T])
+	exec.eval = impl.eval.(MultiAggEval1[T])
+	if impl.flush != nil {
+		exec.flush = impl.flush.(MultiAggFlush1[T])
 	}
 }
 
@@ -128,9 +140,11 @@ func (exec *multiAggFuncExec1[T]) Fill(groupIndex int, row int, vectors []*vecto
 		}
 	}
 	exec.ret.groupToSet = groupIndex
-	if exec.groups[groupIndex].Valid() {
+	if exec.rowValid(exec.groups[groupIndex]) {
 		exec.ret.setGroupNotEmpty(groupIndex)
-		exec.groups[groupIndex].Eval(exec.ret.aggGet, exec.ret.aggSet)
+		if err = exec.eval(exec.groups[groupIndex], exec.ret.aggGet, exec.ret.aggSet); err != nil {
+			return err
+		}
 	}
 
 	return nil
@@ -151,9 +165,11 @@ func (exec *multiAggFuncExec1[T]) BulkFill(groupIndex int, vectors []*vector.Vec
 				return err
 			}
 		}
-		if exec.groups[groupIndex].Valid() {
+		if exec.rowValid(exec.groups[groupIndex]) {
 			exec.ret.setGroupNotEmpty(groupIndex)
-			exec.groups[groupIndex].Eval(getter, setter)
+			if err = exec.eval(exec.groups[groupIndex], getter, setter); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -177,9 +193,11 @@ func (exec *multiAggFuncExec1[T]) BatchFill(offset int, groups []uint64, vectors
 				}
 			}
 			exec.ret.groupToSet = groupIdx
-			if exec.groups[groupIdx].Valid() {
+			if exec.rowValid(exec.groups[groupIdx]) {
 				exec.ret.setGroupNotEmpty(groupIdx)
-				exec.groups[groupIdx].Eval(getter, setter)
+				if err = exec.eval(exec.groups[groupIdx], getter, setter); err != nil {
+					return err
+				}
 			}
 
 		}
@@ -199,11 +217,11 @@ func (exec *multiAggFuncExec1[T]) Merge(next AggFuncExec, groupIdx1, groupIdx2 i
 	other.ret.groupToSet = groupIdx2
 
 	exec.ret.mergeEmpty(other.ret.basicResult, groupIdx1, groupIdx2)
-	exec.groups[groupIdx1].Merge(
+	return exec.merge(
+		exec.groups[groupIdx1],
 		other.groups[groupIdx2],
 		exec.ret.aggGet, other.ret.aggGet,
 		exec.ret.aggSet)
-	return nil
 }
 
 func (exec *multiAggFuncExec1[T]) BatchMerge(next AggFuncExec, offset int, groups []uint64) error {
@@ -220,10 +238,13 @@ func (exec *multiAggFuncExec1[T]) BatchMerge(next AggFuncExec, offset int, group
 		other.ret.groupToSet = groupIdx2
 
 		exec.ret.mergeEmpty(other.ret.basicResult, groupIdx1, groupIdx2)
-		exec.groups[groupIdx1].Merge(
+		if err := exec.merge(
+			exec.groups[groupIdx1],
 			other.groups[groupIdx2],
 			getter1, getter2,
-			setter)
+			setter); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -231,18 +252,27 @@ func (exec *multiAggFuncExec1[T]) BatchMerge(next AggFuncExec, offset int, group
 func (exec *multiAggFuncExec1[T]) Flush() (*vector.Vector, error) {
 	setter := exec.ret.aggSet
 	getter := exec.ret.aggGet
+
+	if exec.flush == nil {
+		return exec.ret.flush(), nil
+	}
+
 	if exec.ret.emptyBeNull {
 		for i, group := range exec.groups {
 			if exec.ret.groupIsEmpty(i) {
 				continue
 			}
 			exec.ret.groupToSet = i
-			group.Flush(getter, setter)
+			if err := exec.flush(group, getter, setter); err != nil {
+				return nil, err
+			}
 		}
 	} else {
 		for i, group := range exec.groups {
 			exec.ret.groupToSet = i
-			group.Flush(getter, setter)
+			if err := exec.flush(group, getter, setter); err != nil {
+				return nil, err
+			}
 		}
 	}
 	return exec.ret.flush(), nil

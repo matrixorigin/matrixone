@@ -83,8 +83,6 @@ func generateKeyOfSingleColumnAgg(aggID int64, argType types.Type) aggKey {
 	return aggKey(fmt.Sprintf("s_%d_%d", aggID, argType.Oid))
 }
 
-var _ = generateKeyOfMultiColumnsAgg
-
 func generateKeyOfMultiColumnsAgg(overloadID int64, argTypes []types.Type) aggKey {
 	key := fmt.Sprintf("m_%d", overloadID)
 	for _, argType := range argTypes {
@@ -94,10 +92,16 @@ func generateKeyOfMultiColumnsAgg(overloadID int64, argTypes []types.Type) aggKe
 }
 
 var (
+	// agg type record map.
 	singleAgg  = make(map[int64]bool)
 	multiAgg   = make(map[int64]bool)
 	specialAgg = make(map[int64]bool)
 
+	// agg implementation map.
+	registeredAggFunctions            = make(map[aggKey]aggImplementation)
+	registeredMultiColumnAggFunctions = make(map[aggKey]multiColumnAggImplementation)
+
+	// list of special aggregation function IDs.
 	aggIdOfCountColumn    = int64(-1)
 	aggIdOfCountStar      = int64(-2)
 	aggIdOfGroupConcat    = int64(-3)
@@ -129,24 +133,13 @@ func getSingleAggImplByInfo(
 }
 
 func getMultiArgAggImplByInfo(
-	id int64, args []types.Type) (implementationAllocator any, ret types.Type, raInfo registeredAggInfo, err error) {
-	return nil, ret, raInfo, moerr.NewInternalErrorNoCtx("no implementation for aggID %d with argTypes %v", id, args)
-}
+	id int64, args []types.Type) (aggInfo multiColumnAggImplementation, err error) {
+	key := generateKeyOfMultiColumnsAgg(id, args)
 
-type DeterminedMultiAggInfo struct {
-	id                   int64
-	args                 []types.Type
-	ret                  types.Type
-	setNullForEmptyGroup bool
-}
-
-func MakeDeterminedMultiAggInfo(id int64, args []types.Type, ret types.Type, setNullForEmptyGroup bool) DeterminedMultiAggInfo {
-	return DeterminedMultiAggInfo{
-		id:                   id,
-		args:                 args,
-		ret:                  ret,
-		setNullForEmptyGroup: setNullForEmptyGroup,
+	if impl, ok := registeredMultiColumnAggFunctions[key]; ok {
+		return impl, nil
 	}
+	return multiColumnAggImplementation{}, moerr.NewInternalErrorNoCtx("no implementation for aggID %d with argTypes %v", id, args)
 }
 
 type aggImplementation struct {
@@ -161,15 +154,31 @@ type aggImplementation struct {
 	flush     any
 }
 
-var (
-	registeredAggFunctions = make(map[aggKey]aggImplementation)
-)
+type multiColumnAggImplementation struct {
+	setNullForEmptyGroup bool
+
+	generator     any
+	ret           func([]types.Type) types.Type
+	fillWhich     []any
+	fillNullWhich any
+	rowValid      any
+	merge         any
+	eval          any
+	flush         any
+}
 
 type SingleColumnAggInformation struct {
 	id                   int64
 	arg                  types.Type
 	ret                  func(p []types.Type) types.Type
 	acceptNull           bool
+	setNullForEmptyGroup bool
+}
+
+type MultiColumnAggInformation struct {
+	id                   int64
+	arg                  []types.Type
+	ret                  func(p []types.Type) types.Type
 	setNullForEmptyGroup bool
 }
 
@@ -181,6 +190,17 @@ func MakeSingleColumnAggInformation(
 		arg:                  paramType,
 		ret:                  getRetType,
 		acceptNull:           acceptNull,
+		setNullForEmptyGroup: setNullForEmptyGroup,
+	}
+}
+
+func MakeMultiColumnAggInformation(
+	id int64, params []types.Type, getRetType func(p []types.Type) types.Type,
+	setNullForEmptyGroup bool) MultiColumnAggInformation {
+	return MultiColumnAggInformation{
+		id:                   id,
+		arg:                  params,
+		ret:                  getRetType,
 		setNullForEmptyGroup: setNullForEmptyGroup,
 	}
 }
@@ -354,4 +374,66 @@ func RegisterSingleAggFromVarToVar(
 		flush:     info.flush,
 	}
 	singleAgg[info.id] = true
+}
+
+type MultiColumnAggRetFixedRegisteredInfo[to types.FixedSizeTExceptStrType] struct {
+	MultiColumnAggInformation
+	generator     func() MultiAggRetFixed[to]
+	fillWhich     []any
+	fillNullWhich []MultiAggFillNull1[to]
+	rowValid      rowValidForMultiAgg1[to]
+	merge         MultiAggMerge1[to]
+	evaluateRow   MultiAggEval1[to]
+	flush         MultiAggFlush1[to]
+}
+
+func MakeMultiAggRetFixedRegisteredInfo[to types.FixedSizeTExceptStrType](
+	info MultiColumnAggInformation,
+	impl func() MultiAggRetFixed[to],
+	fillWhich []any,
+	fillNullWhich []MultiAggFillNull1[to],
+	rowValid rowValidForMultiAgg1[to],
+	merge MultiAggMerge1[to],
+	eval MultiAggEval1[to],
+	flush MultiAggFlush1[to],
+) MultiColumnAggRetFixedRegisteredInfo[to] {
+	// legal check.
+	if len(fillWhich) != len(info.arg) || len(fillNullWhich) != len(fillWhich) || len(info.arg) < 2 {
+		panic("illegal info.arg or fillWhich or fillNullWhich")
+	}
+	// todo: need more check here. fillWhich[i] should be the same type as info.arg[i].
+
+	registeredInfo := MultiColumnAggRetFixedRegisteredInfo[to]{
+		MultiColumnAggInformation: info,
+		generator:                 impl,
+		fillWhich:                 fillWhich,
+		fillNullWhich:             fillNullWhich,
+		rowValid:                  rowValid,
+		merge:                     merge,
+		evaluateRow:               eval,
+		flush:                     flush,
+	}
+	return registeredInfo
+}
+
+func RegisterMultiAggRetFixed[to types.FixedSizeTExceptStrType](
+	info MultiColumnAggRetFixedRegisteredInfo[to]) {
+
+	key := generateKeyOfMultiColumnsAgg(info.id, info.arg)
+	if _, ok := registeredMultiColumnAggFunctions[key]; ok {
+		panic(fmt.Sprintf("aggID %d with argTypes %v has been registered", info.id, info.arg))
+	}
+
+	registeredMultiColumnAggFunctions[key] = multiColumnAggImplementation{
+		setNullForEmptyGroup: info.setNullForEmptyGroup,
+		generator:            info.generator,
+		ret:                  info.ret,
+		fillWhich:            info.fillWhich,
+		fillNullWhich:        any(info.fillNullWhich),
+		rowValid:             info.rowValid,
+		merge:                info.merge,
+		eval:                 info.evaluateRow,
+		flush:                info.flush,
+	}
+	multiAgg[info.id] = true
 }

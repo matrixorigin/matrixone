@@ -70,6 +70,28 @@ type SingleAggFlush3[to types.FixedSizeTExceptStrType] func(
 type SingleAggFlush4 func(
 	exec SingleAggFromVarRetVar, getter AggBytesGetter, setter AggBytesSetter) error
 
+type MultiAggFillNull1[to types.FixedSizeTExceptStrType] func(
+	exec MultiAggRetFixed[to]) error
+type rowValidForMultiAgg1[to types.FixedSizeTExceptStrType] func(
+	exec MultiAggRetFixed[to]) bool
+type MultiAggEval1[to types.FixedSizeTExceptStrType] func(
+	exec MultiAggRetFixed[to], getter AggGetter[to], setter AggSetter[to]) error
+type MultiAggMerge1[to types.FixedSizeTExceptStrType] func(
+	exec1, exec2 MultiAggRetFixed[to], getter1, getter2 AggGetter[to], setter AggSetter[to]) error
+type MultiAggFlush1[to types.FixedSizeTExceptStrType] func(
+	exec MultiAggRetFixed[to], getter AggGetter[to], setter AggSetter[to]) error
+
+type MultiAggFillNull2 func(
+	exec MultiAggRetVar) error
+type rowValidForMultiAgg2 func(
+	exec MultiAggRetVar) bool
+type MultiAggEval2 func(
+	exec MultiAggRetVar, getter AggBytesGetter, setter AggBytesSetter) error
+type MultiAggMerge2 func(
+	exec1, exec2 MultiAggRetVar, getter1, getter2 AggBytesGetter, setter AggBytesSetter) error
+type MultiAggFlush2 func(
+	exec MultiAggRetVar, getter AggBytesGetter, setter AggBytesSetter) error
+
 /*
 	Functions for aggregation which do nothing while filling a null value.
 */
@@ -161,12 +183,6 @@ type MultiAggRetFixed[
 	to types.FixedSizeTExceptStrType] interface {
 	AggCanMarshal
 	Init(setter AggSetter[to], args []types.Type, ret types.Type)
-	GetWhichFill(idx int) any                        // return func Fill(MultiAggRetFixed[to], value)
-	GetWhichFillNull(idx int) any                    // return func FillNull(MultiAggRetFixed[to])
-	Valid() bool                                     // return true if the row is valid.
-	Eval(getter AggGetter[to], setter AggSetter[to]) // after Fill one row, do eval.
-	Merge(other MultiAggRetFixed[to], getter1, getter2 AggGetter[to], setter AggSetter[to])
-	Flush(getter AggGetter[to], setter AggSetter[to]) // return the result.
 }
 
 type MultiAggRetVar interface {
