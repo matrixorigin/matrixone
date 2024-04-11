@@ -474,7 +474,7 @@ var supportedAggInNewFramework = []FuncNew{
 			{
 				overloadId: 0,
 				args:       agg.BitmapOrSupportedTypes,
-				retType:    agg.BitmapConstructReturnType,
+				retType:    agg.BitmapOrReturnType,
 
 				isAgg: true,
 				aggFramework: aggregationLogicOfOverload{

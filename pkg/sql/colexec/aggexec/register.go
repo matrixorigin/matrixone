@@ -22,20 +22,8 @@ import (
 
 /*
 	methods to register the aggregation function.
-	after registered, the function `makeSingleAgg` can make the aggregation function executor.
+	after registered, the function `MakeAgg` can make the aggregation function executor.
 */
-
-func RegisterDeterminedSingleAgg(info DeterminedSingleAggInfo, impl any) {
-	return
-}
-
-func RegisterDeterminedMultiAgg(info DeterminedMultiAggInfo, impl any) {
-	return
-}
-
-func RegisterFlexibleSingleAgg(info FlexibleAggInfo, getReturnType func([]types.Type) types.Type, getImplementation func(args []types.Type, ret types.Type) any) {
-	return
-}
 
 func RegisterCountColumnAgg(id int64) {
 	specialAgg[id] = true
@@ -145,24 +133,6 @@ func getMultiArgAggImplByInfo(
 	return nil, ret, raInfo, moerr.NewInternalErrorNoCtx("no implementation for aggID %d with argTypes %v", id, args)
 }
 
-type DeterminedSingleAggInfo struct {
-	id                   int64
-	arg                  types.Type
-	ret                  types.Type
-	acceptNull           bool
-	setNullForEmptyGroup bool
-}
-
-func MakeDeterminedSingleAggInfo(id int64, arg types.Type, ret types.Type, acceptNull bool, setNullForEmptyGroup bool) DeterminedSingleAggInfo {
-	return DeterminedSingleAggInfo{
-		id:                   id,
-		arg:                  arg,
-		ret:                  ret,
-		acceptNull:           acceptNull,
-		setNullForEmptyGroup: setNullForEmptyGroup,
-	}
-}
-
 type DeterminedMultiAggInfo struct {
 	id                   int64
 	args                 []types.Type
@@ -175,20 +145,6 @@ func MakeDeterminedMultiAggInfo(id int64, args []types.Type, ret types.Type, set
 		id:                   id,
 		args:                 args,
 		ret:                  ret,
-		setNullForEmptyGroup: setNullForEmptyGroup,
-	}
-}
-
-type FlexibleAggInfo struct {
-	id                   int64
-	acceptNull           bool
-	setNullForEmptyGroup bool
-}
-
-func MakeFlexibleAggInfo(id int64, acceptNull bool, setNullForEmptyGroup bool) FlexibleAggInfo {
-	return FlexibleAggInfo{
-		id:                   id,
-		acceptNull:           acceptNull,
 		setNullForEmptyGroup: setNullForEmptyGroup,
 	}
 }

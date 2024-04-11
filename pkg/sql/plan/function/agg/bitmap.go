@@ -34,12 +34,41 @@ func RegisterBitmapConstruct1(id int64) {
 func RegisterBitmapOr1(id int64) {
 	aggexec.RegisterSingleAggFromVarToVar(
 		aggexec.MakeSingleAgg4RegisteredInfo(
-			aggexec.MakeSingleColumnAggInformation(id, types.T_varbinary.ToType(), BitmapConstructReturnType, false, true),
+			aggexec.MakeSingleColumnAggInformation(id, types.T_varbinary.ToType(), BitmapOrReturnType, false, true),
 			newAggBitmapOr,
 			FillAggBitmapOr, nil, FillsAggBitmapOr,
 			MergeAggBitmapOr,
 			FlushAggBitmapOr,
 		))
+}
+
+var BitmapConstructSupportedTypes = []types.T{
+	types.T_uint64,
+}
+
+func BitmapConstructReturnType(_ []types.Type) types.Type {
+	return types.T_varbinary.ToType()
+}
+
+type aggBitmapConstruct struct {
+	bmp *roaring.Bitmap
+}
+
+func newAggBitmapConstruct() aggexec.SingleAggFromFixedRetVar[uint64] {
+	return &aggBitmapConstruct{}
+}
+
+func (a *aggBitmapConstruct) Marshal() []byte {
+	b, _ := a.bmp.MarshalBinary()
+	return b
+}
+func (a *aggBitmapConstruct) Unmarshal(bs []byte) {
+	a.bmp = roaring.New()
+	_ = a.bmp.UnmarshalBinary(bs)
+}
+func (a *aggBitmapConstruct) Init(set aggexec.AggBytesSetter, arg, ret types.Type) error {
+	a.bmp = roaring.New()
+	return nil
 }
 
 func FillAggBitmapConstruct(
@@ -74,6 +103,33 @@ func FlushAggBitmapConstruct(
 		return err
 	}
 	return setter(res)
+}
+
+var BitmapOrSupportedTypes = []types.T{
+	types.T_varbinary,
+}
+
+var BitmapOrReturnType = BitmapConstructReturnType
+
+type aggBitmapOr struct {
+	bmp *roaring.Bitmap
+}
+
+func newAggBitmapOr() aggexec.SingleAggFromVarRetVar {
+	return &aggBitmapOr{}
+}
+
+func (a *aggBitmapOr) Marshal() []byte {
+	b, _ := a.bmp.MarshalBinary()
+	return b
+}
+func (a *aggBitmapOr) Unmarshal(bs []byte) {
+	a.bmp = roaring.New()
+	_ = a.bmp.UnmarshalBinary(bs)
+}
+func (a *aggBitmapOr) Init(set aggexec.AggBytesSetter, arg, ret types.Type) error {
+	a.bmp = roaring.New()
+	return nil
 }
 
 func FillAggBitmapOr(

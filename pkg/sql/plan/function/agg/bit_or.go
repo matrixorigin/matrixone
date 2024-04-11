@@ -17,7 +17,129 @@ package agg
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
+	"math"
 )
+
+func RegisterBitOr1(id int64) {
+	aggexec.RegisterSingleAggFromFixedToFixed(
+		aggexec.MakeSingleAgg1RegisteredInfo(
+			aggexec.MakeSingleColumnAggInformation(id, types.T_bit.ToType(), BitOrReturnType, false, true),
+			newAggBitOr[uint64],
+			FillAggBitOr1[uint64], nil, FillsAggBitOr1[uint64],
+			MergeAggBitOr1[uint64],
+			nil,
+		))
+
+	aggexec.RegisterSingleAggFromFixedToFixed(
+		aggexec.MakeSingleAgg1RegisteredInfo(
+			aggexec.MakeSingleColumnAggInformation(id, types.T_uint8.ToType(), BitOrReturnType, false, true),
+			newAggBitOr[uint8],
+			FillAggBitOr1[uint8], nil, FillsAggBitOr1[uint8],
+			MergeAggBitOr1[uint8],
+			nil,
+		))
+
+	aggexec.RegisterSingleAggFromFixedToFixed(
+		aggexec.MakeSingleAgg1RegisteredInfo(
+			aggexec.MakeSingleColumnAggInformation(id, types.T_uint16.ToType(), BitOrReturnType, false, true),
+			newAggBitOr[uint16],
+			FillAggBitOr1[uint16], nil, FillsAggBitOr1[uint16],
+			MergeAggBitOr1[uint16],
+			nil,
+		))
+
+	aggexec.RegisterSingleAggFromFixedToFixed(
+		aggexec.MakeSingleAgg1RegisteredInfo(
+			aggexec.MakeSingleColumnAggInformation(id, types.T_uint32.ToType(), BitOrReturnType, false, true),
+			newAggBitOr[uint32],
+			FillAggBitOr1[uint32], nil, FillsAggBitOr1[uint32],
+			MergeAggBitOr1[uint32],
+			nil,
+		))
+
+	aggexec.RegisterSingleAggFromFixedToFixed(
+		aggexec.MakeSingleAgg1RegisteredInfo(
+			aggexec.MakeSingleColumnAggInformation(id, types.T_uint64.ToType(), BitOrReturnType, false, true),
+			newAggBitOr[uint64],
+			FillAggBitOr1[uint64], nil, FillsAggBitOr1[uint64],
+			MergeAggBitOr1[uint64],
+			nil,
+		))
+
+	aggexec.RegisterSingleAggFromFixedToFixed(
+		aggexec.MakeSingleAgg1RegisteredInfo(
+			aggexec.MakeSingleColumnAggInformation(id, types.T_int8.ToType(), BitOrReturnType, false, true),
+			newAggBitOr[int8],
+			FillAggBitOr1[int8], nil, FillsAggBitOr1[int8],
+			MergeAggBitOr1[int8],
+			nil,
+		))
+
+	aggexec.RegisterSingleAggFromFixedToFixed(
+		aggexec.MakeSingleAgg1RegisteredInfo(
+			aggexec.MakeSingleColumnAggInformation(id, types.T_int16.ToType(), BitOrReturnType, false, true),
+			newAggBitOr[int16],
+			FillAggBitOr1[int16], nil, FillsAggBitOr1[int16],
+			MergeAggBitOr1[int16],
+			nil,
+		))
+
+	aggexec.RegisterSingleAggFromFixedToFixed(
+		aggexec.MakeSingleAgg1RegisteredInfo(
+			aggexec.MakeSingleColumnAggInformation(id, types.T_int32.ToType(), BitOrReturnType, false, true),
+			newAggBitOr[int32],
+			FillAggBitOr1[int32], nil, FillsAggBitOr1[int32],
+			MergeAggBitOr1[int32],
+			nil,
+		))
+
+	aggexec.RegisterSingleAggFromFixedToFixed(
+		aggexec.MakeSingleAgg1RegisteredInfo(
+			aggexec.MakeSingleColumnAggInformation(id, types.T_int64.ToType(), BitOrReturnType, false, true),
+			newAggBitOr[int64],
+			FillAggBitOr1[int64], nil, FillsAggBitOr1[int64],
+			MergeAggBitOr1[int64],
+			nil,
+		))
+
+	aggexec.RegisterSingleAggFromFixedToFixed(
+		aggexec.MakeSingleAgg1RegisteredInfo(
+			aggexec.MakeSingleColumnAggInformation(id, types.T_float32.ToType(), BitOrReturnType, false, true),
+			newAggBitOr[float32],
+			FillAggBitOr1[float32], nil, FillsAggBitOr1[float32],
+			MergeAggBitOr1[float32],
+			nil,
+		))
+
+	aggexec.RegisterSingleAggFromFixedToFixed(
+		aggexec.MakeSingleAgg1RegisteredInfo(
+			aggexec.MakeSingleColumnAggInformation(id, types.T_float64.ToType(), BitOrReturnType, false, true),
+			newAggBitOr[float64],
+			FillAggBitOr1[float64], nil, FillsAggBitOr1[float64],
+			MergeAggBitOr1[float64],
+			nil,
+		))
+
+	aggexec.RegisterSingleAggFromVarToVar(
+		aggexec.MakeSingleAgg4RegisteredInfo(
+			aggexec.MakeSingleColumnAggInformation(id, types.T_binary.ToType(), BitOrReturnType, false, true),
+			newAggBitBinary,
+			FillAggBitOrBinary, nil, FillsAggBitOrBinary,
+			MergeAggBitOrBinary,
+			nil,
+		))
+
+	aggexec.RegisterSingleAggFromVarToVar(
+		aggexec.MakeSingleAgg4RegisteredInfo(
+			aggexec.MakeSingleColumnAggInformation(id, types.T_varbinary.ToType(), BitOrReturnType, false, true),
+			newAggBitBinary,
+			FillAggBitOrBinary, nil, FillsAggBitOrBinary,
+			MergeAggBitOrBinary,
+			nil,
+		))
+}
+
+var BitOrReturnType = BitAndReturnType
 
 type aggBitOr[T numeric] struct{}
 
@@ -32,10 +154,67 @@ func (a aggBitOr[T]) Init(set aggexec.AggSetter[uint64], arg, ret types.Type) er
 	return nil
 }
 
-type aggBitOrBinary struct {
-	aggBitBinary
+func FillAggBitOr1[from numeric](
+	exec aggexec.SingleAggFromFixedRetFixed[from, uint64], value from, getter aggexec.AggGetter[uint64], setter aggexec.AggSetter[uint64]) error {
+	vv := float64(value)
+	if vv > math.MaxUint64 {
+		setter(math.MaxInt64)
+		return nil
+	}
+	if vv < 0 {
+		setter(uint64(int64(value)) | getter())
+		return nil
+	}
+	setter(uint64(value) | getter())
+	return nil
+}
+func FillsAggBitOr1[from numeric](
+	exec aggexec.SingleAggFromFixedRetFixed[from, uint64],
+	value from, isNull bool, count int, getter aggexec.AggGetter[uint64], setter aggexec.AggSetter[uint64]) error {
+	if !isNull {
+		return FillAggBitOr1(exec, value, getter, setter)
+	}
+	return nil
+}
+func MergeAggBitOr1[from numeric](
+	exec1, exec2 aggexec.SingleAggFromFixedRetFixed[from, uint64],
+	getter1, getter2 aggexec.AggGetter[uint64], setter aggexec.AggSetter[uint64]) error {
+	setter(getter1() | getter2())
+	return nil
 }
 
-func newAggBitOrBinary() aggexec.SingleAggFromVarRetVar {
-	return &aggBitOrBinary{}
+func FillAggBitOrBinary(
+	exec aggexec.SingleAggFromVarRetVar, value []byte, getter aggexec.AggBytesGetter, setter aggexec.AggBytesSetter) error {
+	a := exec.(*aggBitBinary)
+	if a.isEmpty {
+		a.isEmpty = false
+		return setter(value)
+	}
+	v := getter()
+	types.BitOr(v, v, value)
+	return nil
+}
+func FillsAggBitOrBinary(
+	exec aggexec.SingleAggFromVarRetVar,
+	value []byte, isNull bool, count int, getter aggexec.AggBytesGetter, setter aggexec.AggBytesSetter) error {
+	if !isNull {
+		return FillAggBitOrBinary(exec, value, getter, setter)
+	}
+	return nil
+}
+func MergeAggBitOrBinary(
+	exec1, exec2 aggexec.SingleAggFromVarRetVar,
+	getter1, getter2 aggexec.AggBytesGetter, setter aggexec.AggBytesSetter) error {
+	a1 := exec1.(*aggBitBinary)
+	a2 := exec2.(*aggBitBinary)
+	if a2.isEmpty {
+		return nil
+	}
+	if a1.isEmpty {
+		a1.isEmpty = false
+		return setter(getter2())
+	}
+	v1, v2 := getter1(), getter2()
+	types.BitOr(v1, v1, v2)
+	return nil
 }
