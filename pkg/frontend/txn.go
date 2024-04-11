@@ -857,7 +857,7 @@ func rollbackTxnFunc(reqCtx context.Context, ses FeSession, execErr error, execC
 	if ses.GetTxnHandler().InMultiStmtTransactionMode() && ses.GetTxnHandler().InActiveTransaction() {
 		ses.cleanCache()
 	}
-	//logError(ses, ses.GetDebugString(), execErr.Error())
+	logError(ses, ses.GetDebugString(), execErr.Error())
 	txnErr := ses.GetTxnHandler().TxnRollbackSingleStatement(execCtx.stmt, execErr)
 	if txnErr != nil {
 		logStatementStatus(reqCtx, ses, execCtx.stmt, fail, txnErr)
@@ -873,11 +873,11 @@ func commitTxnFunc(requestCtx context.Context,
 	execCtx *ExecCtx) (retErr error) {
 	// Call a defer function -- if TxnCommitSingleStatement paniced, we
 	// want to catch it and convert it to an error.
-	//defer func() {
-	//	if r := recover(); r != nil {
-	//		retErr = moerr.ConvertPanicError(requestCtx, r)
-	//	}
-	//}()
+	defer func() {
+		if r := recover(); r != nil {
+			retErr = moerr.ConvertPanicError(requestCtx, r)
+		}
+	}()
 
 	//load data handle txn failure internally
 	retErr = ses.GetTxnHandler().TxnCommitSingleStatement(execCtx.stmt)
@@ -890,9 +890,9 @@ func commitTxnFunc(requestCtx context.Context,
 // finish the transaction
 func finishTxnFunc(reqCtx context.Context, ses FeSession, execErr error, execCtx *ExecCtx) (err error) {
 	// First recover all panics.   If paniced, we will abort.
-	//if r := recover(); r != nil {
-	//	err = moerr.ConvertPanicError(requestCtx, r)
-	//}
+	if r := recover(); r != nil {
+		err = moerr.ConvertPanicError(reqCtx, r)
+	}
 
 	if execErr == nil {
 		err = commitTxnFunc(reqCtx, ses, execCtx)

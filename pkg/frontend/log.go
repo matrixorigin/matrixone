@@ -76,7 +76,9 @@ func logStatementStringStatus(ctx context.Context, ses FeSession, stmtStr string
 	}
 
 	// pls make sure: NO ONE use the ses.tStmt after EndStatement
-	motrace.EndStatement(ctx, err, ses.SendRows(), outBytes, outPacket)
+	if !ses.IsBackgroundSession() {
+		motrace.EndStatement(ctx, err, ses.SendRows(), outBytes, outPacket)
+	}
 
 	// need just below EndStatement
 	ses.SetTStmt(nil)

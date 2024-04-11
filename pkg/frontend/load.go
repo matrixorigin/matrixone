@@ -17,6 +17,7 @@ package frontend
 import (
 	"context"
 	"errors"
+	"go.uber.org/zap"
 	"io"
 	"time"
 
@@ -80,10 +81,10 @@ func processLoadLocal(ctx context.Context, ses FeSession, param *tree.ExternPara
 	_, err = writer.Write(packet.Payload)
 	if err != nil {
 		skipWrite = true // next, we just need read the rest of the data,no need to write it to pipe.
-		//logError(ses, ses.GetDebugString(),
-		//	"Failed to load local file",
-		//	zap.String("path", param.Filepath),
-		//	zap.Error(err))
+		logError(ses, ses.GetDebugString(),
+			"Failed to load local file",
+			zap.String("path", param.Filepath),
+			zap.Error(err))
 	}
 	epoch, printEvery, minReadTime, maxReadTime, minWriteTime, maxWriteTime := uint64(0), uint64(1024), 24*time.Hour, time.Nanosecond, 24*time.Hour, time.Nanosecond
 	for {
@@ -119,11 +120,11 @@ func processLoadLocal(ctx context.Context, ses FeSession, param *tree.ExternPara
 		if !skipWrite {
 			_, err = writer.Write(packet.Payload)
 			if err != nil {
-				//logError(ses, ses.GetDebugString(),
-				//	"Failed to load local file",
-				//	zap.String("path", param.Filepath),
-				//	zap.Uint64("epoch", epoch),
-				//	zap.Error(err))
+				logError(ses, ses.GetDebugString(),
+					"Failed to load local file",
+					zap.String("path", param.Filepath),
+					zap.Uint64("epoch", epoch),
+					zap.Error(err))
 				skipWrite = true
 			}
 			writeTime := time.Since(writeStart)

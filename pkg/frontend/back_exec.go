@@ -283,7 +283,7 @@ func executeStmtInBackWithTxn(requestCtx context.Context,
 		var err3 error
 		_, txnOp, err3 = backSes.GetTxnHandler().GetTxnOperator()
 		if err3 != nil {
-			//logError(ses, ses.GetDebugString(), err3.Error())
+			logError(backSes, backSes.GetDebugString(), err3.Error())
 			return
 		}
 		//non derived statement

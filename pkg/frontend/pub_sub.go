@@ -17,6 +17,7 @@ package frontend
 import (
 	"context"
 	"fmt"
+	"go.uber.org/zap"
 	"sort"
 	"strings"
 
@@ -479,14 +480,14 @@ func checkSubscriptionValidCommon(ctx context.Context, ses FeSession, subName, a
 			return nil, moerr.NewInternalError(newCtx, "the account %s is not allowed to subscribe the publication %s", tenantName, pubName)
 		}
 	} else if !isSubscriptionValid(accountList, tenantInfo.GetTenant()) {
-		//logError(ses, ses.GetDebugString(),
-		//	"checkSubscriptionValidCommon",
-		//	zap.String("subName", subName),
-		//	zap.String("accName", accName),
-		//	zap.String("pubName", pubName),
-		//	zap.String("databaseName", databaseName),
-		//	zap.String("accountList", accountList),
-		//	zap.String("tenant", tenantInfo.GetTenant()))
+		logError(ses, ses.GetDebugString(),
+			"checkSubscriptionValidCommon",
+			zap.String("subName", subName),
+			zap.String("accName", accName),
+			zap.String("pubName", pubName),
+			zap.String("databaseName", databaseName),
+			zap.String("accountList", accountList),
+			zap.String("tenant", tenantInfo.GetTenant()))
 		return nil, moerr.NewInternalError(newCtx, "the account %s is not allowed to subscribe the publication %s", tenantInfo.GetTenant(), pubName)
 	}
 
