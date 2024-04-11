@@ -8,6 +8,7 @@ SELECT to_base64('abc'), from_base64('YWJj');
 SELECT unhex('invalid');
 SELECT from_base64('invalid');
 
+SELECT TO_BASE64('abc'), FROM_BASE64(TO_BASE64('abc'));
 
 -- test serial() and serial_full()
 CREATE TABLE t1 (name varchar(255), age int);
