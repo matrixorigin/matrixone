@@ -2127,15 +2127,6 @@ func (tbl *txnTable) newReader(
 // it is only initialized once for a transaction and will not change.
 // TODO::get partition state for snapshot txn table.
 func (tbl *txnTable) getPartitionState(ctx context.Context) (*logtailreplay.PartitionState, error) {
-	accountId, err := defines.GetAccountId(ctx)
-	if err != nil {
-		return nil, err
-	}
-	_, created := tbl.db.op.GetWorkspace().(*Transaction).createMap.Load(genTableKey(accountId, tbl.tableName, tbl.db.databaseId))
-	if created {
-		return nil, nil
-	}
-
 	if tbl._partState.Load() == nil {
 		if err := tbl.updateLogtail(ctx); err != nil {
 			return nil, err
