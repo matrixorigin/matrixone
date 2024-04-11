@@ -198,7 +198,7 @@ func NewTaskRunner(runnerID string, service TaskService, claimFn func(string) bo
 
 func (r *taskRunner) adjust() {
 	if r.options.parallelism == 0 {
-		r.options.parallelism = runtime.NumCPU() / 16
+		r.options.parallelism = runtime.NumCPU() / 4
 		if r.options.parallelism == 0 {
 			r.options.parallelism = 1
 		}
