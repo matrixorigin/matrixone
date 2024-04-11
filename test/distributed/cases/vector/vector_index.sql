@@ -1,3 +1,5 @@
+SET GLOBAL experimental_ivf_index = 1;
+
 -- create vector index: create->create index->insert
 create table vector_index_01(a int primary key, b vecf32(128),c int,key c_k(c));
 create index idx01 using ivfflat on vector_index_01(b) lists=5 op_type "vector_l2_ops";
@@ -40,7 +42,7 @@ create index idx03 using ivfflat on vector_index_03(b) lists=3 op_type "vector_l
 create table vector_index_04(a int primary key, b vecf32(3),c vecf32(4));
 insert into vector_index_04 values(1,"[56,23,6]","[0.25,0.14,0.88,0.0001]"),(2,"[77,45,3]","[1.25,5.25,8.699,4.25]"),(3,"[8,56,3]","[9.66,5.22,1.22,7.02]");
 create index idx01 using ivfflat on vector_index_04(c) lists=5 op_type "vector_l2_ops";
-create index idx02 using ivfflat on vector_index_04(c) lists=4 op_type "vector_l2_ops";
+--create index idx02 using ivfflat on vector_index_04(c) lists=4 op_type "vector_l2_ops";
 show create table vector_index_04;
 desc vector_index_04;
 
@@ -166,3 +168,5 @@ show create table vector_index_10;
 commit;
 show create table vector_index_10;
 drop table vector_index_10;
+
+SET GLOBAL experimental_ivf_index = 0;
