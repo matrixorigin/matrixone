@@ -207,8 +207,9 @@ type txnOperator struct {
 	lockService          lockservice.LockService
 	sequence             atomic.Uint64
 	createTs             timestamp.Timestamp
-	//for read only snapshot txn operator.
-	snapshotOps []*txnOperator
+	//read-only txn operators for supporting snapshot read feature.
+	children []*txnOperator
+	parent   *txnOperator
 
 	mu struct {
 		sync.RWMutex
@@ -265,7 +266,8 @@ func (tc *txnOperator) CloneSnapshotOp(snapshot timestamp.Timestamp) TxnOperator
 	op.workspace = tc.workspace.CloneSnapshotWS()
 	op.workspace.BindTxnOp(op)
 
-	tc.snapshotOps = append(tc.snapshotOps, op)
+	tc.children = append(tc.children, op)
+	op.parent = tc
 	return op
 }
 
