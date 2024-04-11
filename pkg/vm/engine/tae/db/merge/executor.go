@@ -167,7 +167,6 @@ func (e *MergeExecutor) ExecuteFor(entry *catalog.TableEntry, policy Policy) {
 	}
 
 	if ActiveCNObj.CheckOverlapOnCNActive(mobjs) {
-		logutil.Infof("mergeblocks skip %v due to overlap on active cn merge", e.tableName)
 		return
 	}
 
