@@ -17,6 +17,7 @@ package frontend
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -32,7 +33,7 @@ func executeStatusStmt(requestCtx context.Context, ses *Session, execCtx *ExecCt
 
 	mrs := ses.GetMysqlResultSet()
 	ep := ses.GetExportConfig()
-	switch execCtx.stmt.(type) {
+	switch st := execCtx.stmt.(type) {
 	case *tree.Select:
 		if ep.needExportToFile() {
 
@@ -84,6 +85,35 @@ func executeStatusStmt(requestCtx context.Context, ses *Session, execCtx *ExecCt
 		} else {
 			return moerr.NewInternalError(requestCtx, "select without it generates the result rows")
 		}
+	case *tree.CreateTable:
+		runBegin := time.Now()
+		if execCtx.runResult, err = execCtx.runner.Run(0); err != nil {
+			return
+		}
+		// only log if run time is longer than 1s
+		if time.Since(runBegin) > time.Second {
+			logInfo(ses, ses.GetDebugString(), fmt.Sprintf("time of Exec.Run : %s", time.Since(runBegin).String()))
+		}
+
+		// execute insert sql if this is a `create table as select` stmt
+		if st.IsAsSelect {
+			if txw, ok := execCtx.cw.(*TxnComputationWrapper); ok {
+				insertSql := txw.plan.GetDdl().GetDefinition().(*plan.DataDefinition_CreateTable).CreateTable.CreateAsSelectSql
+				ses.createAsSelectSql = insertSql
+			}
+			return
+		}
+
+		// Start the dynamic table daemon task
+		if st.IsDynamicTable {
+			if err = handleCreateDynamicTable(requestCtx, ses, st); err != nil {
+				return
+			}
+		}
+
+		if cwft, ok := execCtx.cw.(*TxnComputationWrapper); ok {
+			_ = cwft.RecordExecPlan(requestCtx)
+		}
 	default:
 		//change privilege
 		switch execCtx.stmt.(type) {
@@ -126,15 +156,6 @@ func executeStatusStmt(requestCtx context.Context, ses *Session, execCtx *ExecCt
 			return
 		}
 
-		// execute insert sql if this is a `create table as select` stmt
-		//if createTblStmt, ok := execCtx.stmt.(*tree.CreateTable); ok && createTblStmt.IsAsSelect {
-		//	if txw, ok := execCtx.cw.(*TxnComputationWrapper); ok {
-		//		insertSql := txw.plan.GetDdl().GetDefinition().(*plan.DataDefinition_CreateTable).CreateTable.CreateAsSelectSql
-		//		ses.createAsSelectSql = insertSql
-		//	}
-		//	return
-		//}
-
 		if loadLocalErrGroup != nil {
 			if err = loadLocalErrGroup.Wait(); err != nil { //executor success, but processLoadLocal goroutine failed
 				return
@@ -169,7 +190,7 @@ func respStatus(requestCtx context.Context,
 		rspLen = execCtx.runResult.AffectRows
 	}
 
-	switch execCtx.stmt.(type) {
+	switch st := execCtx.stmt.(type) {
 	case *tree.Select:
 		//select ... into ...
 		if len(execCtx.proc.SessionInfo.SeqAddValues) != 0 {
@@ -217,7 +238,18 @@ func respStatus(requestCtx context.Context,
 				return err
 			}
 		}
-
+	case *tree.CreateTable:
+		resp := setResponse(ses, execCtx.isLastStmt, rspLen)
+		// skip create table as select
+		if st.IsAsSelect {
+			return nil
+		}
+		_ = doGrantPrivilegeImplicitly(requestCtx, ses, st)
+		if err2 := ses.GetMysqlProtocol().SendResponse(requestCtx, resp); err2 != nil {
+			err = moerr.NewInternalError(requestCtx, "routine send response failed. error:%v ", err2)
+			logStatementStatus(requestCtx, ses, execCtx.stmt, fail, err)
+			return err
+		}
 	default:
 		resp := setResponse(ses, execCtx.isLastStmt, rspLen)
 

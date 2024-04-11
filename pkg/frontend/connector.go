@@ -17,6 +17,8 @@ package frontend
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"sort"
 	"strings"
 	"time"
@@ -33,6 +35,67 @@ const (
 	defaultConnectorTaskMaxRetryTimes = 10
 	defaultConnectorTaskRetryInterval = int64(time.Second * 10)
 )
+
+func handleCreateDynamicTable(ctx context.Context, ses *Session, st *tree.CreateTable) error {
+	ts := gPu.TaskService
+	if ts == nil {
+		return moerr.NewInternalError(ctx, "no task service is found")
+	}
+	dbName := string(st.Table.Schema())
+	if dbName == "" {
+		dbName = ses.GetDatabaseName()
+	}
+	tableName := string(st.Table.Name())
+	_, tableDef := ses.GetTxnCompileCtx().Resolve(dbName, tableName)
+	if tableDef == nil {
+		return moerr.NewNoSuchTable(ctx, dbName, tableName)
+	}
+	options := make(map[string]string)
+	for _, option := range st.DTOptions {
+		switch opt := option.(type) {
+		case *tree.CreateSourceWithOption:
+			key := string(opt.Key)
+			val := opt.Val.(*tree.NumVal).OrigString()
+			options[key] = val
+		}
+	}
+
+	generatedPlan, err := buildPlan(ctx, ses, ses.GetTxnCompileCtx(), st.AsSource)
+	if err != nil {
+		return err
+	}
+	query := generatedPlan.GetQuery()
+	if query != nil { // Checking if query is not nil
+		for _, node := range query.Nodes {
+			if node.NodeType == plan.Node_SOURCE_SCAN {
+				//collect the stream tableDefs
+				streamTableDef := node.TableDef.Defs
+				for _, def := range streamTableDef {
+					if propertiesDef, ok := def.Def.(*plan.TableDef_DefType_Properties); ok {
+						for _, property := range propertiesDef.Properties.Properties {
+							options[property.Key] = property.Value
+						}
+					}
+				}
+			}
+		}
+	}
+
+	options[moconnector.OptConnectorSql] = tree.String(st.AsSource, dialect.MYSQL)
+	if err := createConnector(
+		ctx,
+		ses.GetTenantInfo().TenantID,
+		ses.GetTenantName(),
+		ses.GetUserName(),
+		ts,
+		dbName+"."+tableName,
+		options,
+		st.IfNotExists,
+	); err != nil {
+		return err
+	}
+	return nil
+}
 
 func handleCreateConnector(ctx context.Context, ses *Session, st *tree.CreateConnector) error {
 	ts := gPu.TaskService
