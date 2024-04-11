@@ -225,10 +225,9 @@ type Compile struct {
 	pn   *plan.Plan
 	info plan2.ExecInfo
 
-	u any
 	// fill is a result writer runs a callback function.
 	// fill will be called when result data is ready.
-	fill func(any, *batch.Batch) error
+	fill func(*batch.Batch) error
 	// affectRows stores the number of rows affected while insert / update / delete
 	affectRows *atomic.Uint64
 	// cn address
