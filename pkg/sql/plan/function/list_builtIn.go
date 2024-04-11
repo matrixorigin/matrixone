@@ -2723,6 +2723,26 @@ var supportedMathBuiltIns = []FuncNew{
 					return HexUint64
 				},
 			},
+			{
+				overloadId: 4,
+				args:       []types.T{types.T_array_float32},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return HexArray
+				},
+			},
+			{
+				overloadId: 5,
+				args:       []types.T{types.T_array_float64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return HexArray
+				},
+			},
 		},
 	},
 
