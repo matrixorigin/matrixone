@@ -37,7 +37,6 @@ const DefaultBlockMaxRows = 8192
 const BlockNumForceOneCN = 200
 const blockSelectivityThreshHold = 0.95
 const highNDVcolumnThreshHold = 0.95
-const blockNDVThreshHold = 100
 
 // stats cache is small, no need to use LRU for now
 type StatsCache struct {
@@ -180,6 +179,15 @@ func UpdateStatsInfoMap(info *InfoFromZoneMap, tableDef *plan.TableDef, s *Stats
 		case types.T_date:
 			s.MinValMap[colName] = float64(types.DecodeDate(info.ColumnZMs[i].GetMinBuf()))
 			s.MaxValMap[colName] = float64(types.DecodeDate(info.ColumnZMs[i].GetMaxBuf()))
+		case types.T_time:
+			s.MinValMap[colName] = float64(types.DecodeTime(info.ColumnZMs[i].GetMinBuf()))
+			s.MaxValMap[colName] = float64(types.DecodeTime(info.ColumnZMs[i].GetMaxBuf()))
+		case types.T_timestamp:
+			s.MinValMap[colName] = float64(types.DecodeTimestamp(info.ColumnZMs[i].GetMinBuf()))
+			s.MaxValMap[colName] = float64(types.DecodeTimestamp(info.ColumnZMs[i].GetMaxBuf()))
+		case types.T_datetime:
+			s.MinValMap[colName] = float64(types.DecodeDatetime(info.ColumnZMs[i].GetMinBuf()))
+			s.MaxValMap[colName] = float64(types.DecodeDatetime(info.ColumnZMs[i].GetMaxBuf()))
 		case types.T_char, types.T_varchar, types.T_text:
 			s.MinValMap[colName] = float64(ByteSliceToUint64(info.ColumnZMs[i].GetMinBuf()))
 			s.MaxValMap[colName] = float64(ByteSliceToUint64(info.ColumnZMs[i].GetMaxBuf()))
@@ -314,24 +322,32 @@ func estimateEqualitySelectivity(expr *plan.Expr, builder *QueryBuilder) float64
 	return 0.01
 }
 
-func calcSelectivityByMinMax(funcName string, min, max float64, typ types.T, vals []*plan.Literal) float64 {
+func calcSelectivityByMinMax(funcName string, min, max float64, typ types.T, vals []*plan.Literal) (ret float64) {
 	switch funcName {
 	case ">", ">=":
 		if val, ok := getFloat64Value(typ, vals[0]); ok {
-			return (max - val + 1) / (max - min)
+			ret = (max - val + 1) / (max - min)
 		}
 	case "<", "<=":
 		if val, ok := getFloat64Value(typ, vals[0]); ok {
-			return (val - min + 1) / (max - min)
+			ret = (val - min + 1) / (max - min)
 		}
 	case "between":
 		if lb, ok := getFloat64Value(typ, vals[0]); ok {
 			if ub, ok := getFloat64Value(typ, vals[1]); ok {
-				return (ub - lb + 1) / (max - min)
+				ret = (ub - lb + 1) / (max - min)
 			}
 		}
+	default:
+		ret = 0.3
 	}
-	return -1 // never reach here
+	if ret < 0 {
+		ret = 0
+	}
+	if ret > 1 {
+		ret = 1
+	}
+	return ret
 }
 
 func getFloat64Value(typ types.T, lit *plan.Literal) (float64, bool) {
@@ -528,28 +544,26 @@ func estimateFilterWeight(expr *plan.Expr, w float64) float64 {
 }
 
 // harsh estimate of block selectivity, will improve it in the future
-func estimateFilterBlockSelectivity(ctx context.Context, expr *plan.Expr, tableDef *plan.TableDef, builder *QueryBuilder) float64 {
+func estimateFilterBlockSelectivity(ctx context.Context, expr *plan.Expr, tableDef *plan.TableDef, tableCnt float64) float64 {
 	if !ExprIsZonemappable(ctx, expr) {
 		return 1
-	}
-	if expr.Selectivity < 0.01 {
-		return expr.Selectivity * 100
 	}
 	col := extractColRefInFilter(expr)
 	if col != nil {
 		switch GetSortOrder(tableDef, col.Name) {
 		case 0:
-			return math.Min(expr.Selectivity, 0.5)
-		case 1:
-			return math.Min(expr.Selectivity*3, 0.5)
-		case 2:
 			return math.Min(expr.Selectivity*10, 0.5)
+		case 1:
+			return math.Min(expr.Selectivity*10, 0.7)
+		case 2:
+			return math.Min(expr.Selectivity*10, 0.9)
 		}
 	}
-	if getExprNdv(expr, builder) < blockNDVThreshHold {
+	if tableCnt > 10000 {
+		return 0.9
+	} else {
 		return 1
 	}
-	return 0.5
 }
 
 func rewriteFilterListByStats(ctx context.Context, nodeID int32, builder *QueryBuilder) {
@@ -979,7 +993,7 @@ func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
 	var blockExprList []*plan.Expr
 	for i := range node.FilterList {
 		node.FilterList[i].Selectivity = estimateExprSelectivity(node.FilterList[i], builder)
-		currentBlockSel := estimateFilterBlockSelectivity(builder.GetContext(), node.FilterList[i], node.TableDef, builder)
+		currentBlockSel := estimateFilterBlockSelectivity(builder.GetContext(), node.FilterList[i], node.TableDef, stats.TableCnt)
 		if currentBlockSel < blockSelectivityThreshHold {
 			copyOfExpr := DeepCopyExpr(node.FilterList[i])
 			copyOfExpr.Selectivity = currentBlockSel

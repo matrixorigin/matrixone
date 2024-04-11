@@ -64,7 +64,7 @@ func (c *clientConn) migrateConnTo(sc ServerConn, info *query.MigrateConnFromRes
 	// and just used here.
 	if _, err := sc.ExecStmt(internalStmt{
 		cmdType: cmdQuery,
-		s:       "set transferred=1;",
+		s:       "/* cloud_nonuser */ set transferred=1;",
 	}, nil); err != nil {
 		return err
 	}
