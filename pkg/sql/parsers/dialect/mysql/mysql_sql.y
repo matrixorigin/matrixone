@@ -2587,6 +2587,7 @@ prepareable_stmt:
 |   drop_stmt
 |   show_stmt
 |   update_stmt
+|   alter_account_stmt
 |   select_stmt
     {
         $$ = $1

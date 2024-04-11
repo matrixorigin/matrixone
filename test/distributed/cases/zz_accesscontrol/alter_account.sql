@@ -136,27 +136,27 @@ select account_name,status from mo_catalog.mo_account where account_name='testsu
 --prepared
 drop account if exists test;
 create account test ADMIN_NAME 'admin' IDENTIFIED BY '111';
-PREPARE s1 FROM "alter account ? admin_name= ? IDENTIFIED BY ?";
+PREPARE alter_ac_1 FROM alter account ? admin_name= ? IDENTIFIED BY ?;
 set @a_var = 'test';
 set @b_var = 'admin';
 set @c_var = '222';
-EXECUTE s1 USING @a_var, @b_var, @c_var;
-DEALLOCATE PREPARE s1;
+EXECUTE alter_ac_1 USING @a_var, @b_var, @c_var;
+DEALLOCATE PREPARE alter_ac_1;
 -- @session:id=2&user=test:admin&password=222
 select 1;
 -- @session
-PREPARE s2 FROM "alter account ? admin_name 'admin' IDENTIFIED BY ?";
+PREPARE alter_ac_2 FROM "alter account ? admin_name 'admin' IDENTIFIED BY ?";
 set @a_var = 'test';
 set @c_var = '333';
-EXECUTE s2 USING @a_var, @c_var;
-DEALLOCATE PREPARE s2;
+EXECUTE alter_ac_2 USING @a_var, @c_var;
+DEALLOCATE PREPARE alter_ac_2;
 -- @session:id=2&user=test:admin&password=333
 select 1;
 -- @session
-PREPARE s3 FROM "alter account test admin_name 'admin' IDENTIFIED BY ?";
+PREPARE alter_ac_3 FROM "alter account test admin_name 'admin' IDENTIFIED BY ?";
 set @c_var = '444';
-EXECUTE s3 USING @c_var;
-DEALLOCATE PREPARE s3;
+EXECUTE alter_ac_3 USING @c_var;
+DEALLOCATE PREPARE alter_ac_3;
 -- @session:id=2&user=test:admin&password=444
 select 1;
 -- @session
