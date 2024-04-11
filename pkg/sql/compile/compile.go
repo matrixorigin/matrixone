@@ -1410,6 +1410,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 					Arg: &mergeblock.Argument{
 						Tbl:              insertArg.InsertCtx.Rel,
 						PartitionSources: insertArg.InsertCtx.PartitionSources,
+						AddAffectedRows:  insertArg.InsertCtx.AddAffectedRows,
 					},
 				})
 				ss = []*Scope{rs}
@@ -1477,6 +1478,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 					Arg: &mergeblock.Argument{
 						Tbl:              insertArg.InsertCtx.Rel,
 						PartitionSources: insertArg.InsertCtx.PartitionSources,
+						AddAffectedRows:  insertArg.InsertCtx.AddAffectedRows,
 					},
 				})
 				ss = []*Scope{rs}
