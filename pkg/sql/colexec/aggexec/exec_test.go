@@ -63,23 +63,28 @@ func gTesSingleAggPrivate1() SingleAggFromFixedRetFixed[int32, int64] {
 func (t *testSingleAggPrivate1) Init(AggSetter[int64], types.Type, types.Type) error {
 	return nil
 }
-func (t *testSingleAggPrivate1) Fill(from int32, getter AggGetter[int64], setter AggSetter[int64]) error {
+
+func tSinglePrivate1Ret(_ []types.Type) types.Type {
+	return types.T_int64.ToType()
+}
+func fillSinglePrivate1(
+	exec SingleAggFromFixedRetFixed[int32, int64], value int32, getter AggGetter[int64], setter AggSetter[int64]) error {
 	setter(getter() + 1)
 	return nil
 }
-func (t *testSingleAggPrivate1) FillNull(getter AggGetter[int64], setter AggSetter[int64]) error {
+func fillNullSinglePrivate1(
+	exec SingleAggFromFixedRetFixed[int32, int64], getter AggGetter[int64], setter AggSetter[int64]) error {
 	setter(getter() + 1)
 	return nil
 }
-func (t *testSingleAggPrivate1) Fills(value int32, isNull bool, count int, getter AggGetter[int64], setter AggSetter[int64]) error {
+func fillsSinglePrivate1(
+	exec SingleAggFromFixedRetFixed[int32, int64], value int32, isNull bool, count int, getter AggGetter[int64], setter AggSetter[int64]) error {
 	setter(getter() + int64(count))
 	return nil
 }
-func (t *testSingleAggPrivate1) Merge(other SingleAggFromFixedRetFixed[int32, int64], getter1 AggGetter[int64], getter2 AggGetter[int64], setter AggSetter[int64]) error {
+func mergeSinglePrivate1(
+	exec SingleAggFromFixedRetFixed[int32, int64], other SingleAggFromFixedRetFixed[int32, int64], getter1 AggGetter[int64], getter2 AggGetter[int64], setter AggSetter[int64]) error {
 	setter(getter1() + getter2())
-	return nil
-}
-func (t *testSingleAggPrivate1) Flush(getter AggGetter[int64], setter AggSetter[int64]) error {
 	return nil
 }
 func (t *testSingleAggPrivate1) Marshal() []byte {
@@ -97,10 +102,11 @@ func TestSingleAggFuncExec1(t *testing.T) {
 		retType:   types.T_int64.ToType(),
 		emptyNull: false,
 	}
-	RegisterDeterminedSingleAgg(
-		MakeDeterminedSingleAggInfo(
-			info.aggID, info.argType, info.retType, true, info.emptyNull),
-		gTesSingleAggPrivate1)
+	RegisterSingleAggFromFixedToFixed(
+		MakeSingleAgg1RegisteredInfo(
+			MakeSingleColumnAggInformation(info.aggID, info.argType, tSinglePrivate1Ret, true, info.emptyNull),
+			gTestSingleAggPrivateSer1,
+			fillSinglePrivate1, fillNullSinglePrivate1, fillsSinglePrivate1, mergeSinglePrivate1, nil))
 	executor := MakeAgg(
 		mg,
 		info.aggID, info.distinct, info.argType)
@@ -166,39 +172,42 @@ type testMultiAggPrivate1 struct {
 func gTesMultiAggPrivate1() MultiAggRetFixed[int64] {
 	return &testMultiAggPrivate1{}
 }
+
+var mPrivate1Args = []types.Type{types.T_int64.ToType(), types.T_bool.ToType()}
+
+func mPrivate1Ret(_ []types.Type) types.Type {
+	return types.T_int64.ToType()
+}
 func (t *testMultiAggPrivate1) Init(AggSetter[int64], []types.Type, types.Type) {}
-func (t *testMultiAggPrivate1) GetWhichFill(idx int) any {
-	switch idx {
-	case 0:
-		return func(k MultiAggRetFixed[int64], value int64) {
-			k.(*testMultiAggPrivate1).firstIsNull = false
-		}
-	case 1:
-		return func(k MultiAggRetFixed[int64], value bool) {}
-	}
-	panic("invalid idx")
+func fillWhich0(exec MultiAggRetFixed[int64], value int64) error {
+	exec.(*testMultiAggPrivate1).firstIsNull = false
+	return nil
 }
-func (t *testMultiAggPrivate1) GetWhichFillNull(idx int) any {
-	switch idx {
-	case 0:
-		return func(k MultiAggRetFixed[int64]) {
-			k.(*testMultiAggPrivate1).firstIsNull = true
-		}
-	case 1:
-		return func(k MultiAggRetFixed[int64]) {}
-	}
-	panic("invalid idx")
+func fillWhich1(exec MultiAggRetFixed[int64], value bool) error {
+	return nil
 }
-func (t *testMultiAggPrivate1) Valid() bool {
-	return !t.firstIsNull
+func fillNullWhich0(exec MultiAggRetFixed[int64]) error {
+	exec.(*testMultiAggPrivate1).firstIsNull = true
+	return nil
 }
-func (t *testMultiAggPrivate1) Eval(getter AggGetter[int64], setter AggSetter[int64]) {
+func fillNullWhich1(exec MultiAggRetFixed[int64]) error {
+	return nil
+}
+func validMPrivate1(exec MultiAggRetFixed[int64]) bool {
+	return !exec.(*testMultiAggPrivate1).firstIsNull
+}
+func evalMPrivate1(exec MultiAggRetFixed[int64], getter AggGetter[int64], setter AggSetter[int64]) error {
 	setter(getter() + 1)
+	return nil
 }
-func (t *testMultiAggPrivate1) Merge(other MultiAggRetFixed[int64], getter1 AggGetter[int64], getter2 AggGetter[int64], setter AggSetter[int64]) {
+func mergeMPrivate1(exec1, exec2 MultiAggRetFixed[int64], getter1 AggGetter[int64], getter2 AggGetter[int64], setter AggSetter[int64]) error {
 	setter(getter1() + getter2())
+	return nil
 }
-func (t *testMultiAggPrivate1) Flush(getter AggGetter[int64], setter AggSetter[int64]) {}
+
+var mPrivate1FillWhich = []any{fillWhich0, fillWhich1}
+var mPrivate1FillNullWhich = []MultiAggFillNull1[int64]{fillNullWhich0, fillNullWhich1}
+
 func (t *testMultiAggPrivate1) Marshal() []byte {
 	return nil
 }
@@ -210,14 +219,23 @@ func TestMultiAggFuncExec1(t *testing.T) {
 	info := multiAggInfo{
 		aggID:     gUniqueAggIdForTest(),
 		distinct:  false,
-		argTypes:  []types.Type{types.T_int64.ToType(), types.T_bool.ToType()},
+		argTypes:  mPrivate1Args,
 		retType:   types.T_int64.ToType(),
 		emptyNull: false,
 	}
-	RegisterDeterminedMultiAgg(
-		MakeDeterminedMultiAggInfo(
-			info.aggID, info.argTypes, info.retType, false),
-		gTesMultiAggPrivate1)
+
+	RegisterMultiAggRetFixed(
+		MakeMultiAggRetFixedRegisteredInfo(
+			MakeMultiColumnAggInformation(info.aggID, mPrivate1Args, mPrivate1Ret, info.emptyNull),
+			gTesMultiAggPrivate1,
+			mPrivate1FillWhich,
+			mPrivate1FillNullWhich,
+			validMPrivate1,
+			evalMPrivate1,
+			mergeMPrivate1,
+			nil,
+		))
+
 	executor := MakeAgg(
 		mg,
 		info.aggID, info.distinct, info.argTypes...)
@@ -352,10 +370,11 @@ func TestEmptyNullFlag(t *testing.T) {
 	mg := newTestAggMemoryManager()
 	{
 		id := gUniqueAggIdForTest()
-		RegisterDeterminedSingleAgg(
-			MakeDeterminedSingleAggInfo(
-				id, types.T_int32.ToType(), types.T_int64.ToType(), false, true),
-			gTesSingleAggPrivate1)
+		RegisterSingleAggFromFixedToFixed(
+			MakeSingleAgg1RegisteredInfo(
+				MakeSingleColumnAggInformation(id, types.T_int32.ToType(), tSinglePrivate1Ret, false, true),
+				gTestSingleAggPrivateSer1,
+				fillSinglePrivate1, fillNullSinglePrivate1, fillsSinglePrivate1, mergeSinglePrivate1, nil))
 		executor := MakeAgg(
 			mg,
 			id, false, types.T_int32.ToType())
@@ -368,10 +387,11 @@ func TestEmptyNullFlag(t *testing.T) {
 	}
 	{
 		id := gUniqueAggIdForTest()
-		RegisterDeterminedSingleAgg(
-			MakeDeterminedSingleAggInfo(
-				id, types.T_int32.ToType(), types.T_int64.ToType(), false, false),
-			gTesSingleAggPrivate1)
+		RegisterSingleAggFromFixedToFixed(
+			MakeSingleAgg1RegisteredInfo(
+				MakeSingleColumnAggInformation(id, types.T_int32.ToType(), tSinglePrivate1Ret, false, false),
+				gTestSingleAggPrivateSer1,
+				fillSinglePrivate1, fillNullSinglePrivate1, fillsSinglePrivate1, mergeSinglePrivate1, nil))
 		executor := MakeAgg(
 			mg,
 			id, false, types.T_int32.ToType())
@@ -385,8 +405,17 @@ func TestEmptyNullFlag(t *testing.T) {
 	}
 	{
 		id := gUniqueAggIdForTest()
-		RegisterDeterminedMultiAgg(
-			MakeDeterminedMultiAggInfo(id, []types.Type{types.T_int64.ToType(), types.T_bool.ToType()}, types.T_int64.ToType(), true), gTesMultiAggPrivate1)
+		RegisterMultiAggRetFixed(
+			MakeMultiAggRetFixedRegisteredInfo(
+				MakeMultiColumnAggInformation(id, mPrivate1Args, mPrivate1Ret, true),
+				gTesMultiAggPrivate1,
+				mPrivate1FillWhich,
+				mPrivate1FillNullWhich,
+				validMPrivate1,
+				evalMPrivate1,
+				mergeMPrivate1,
+				nil,
+			))
 		executor := MakeAgg(
 			mg,
 			id, false, []types.Type{types.T_int64.ToType(), types.T_bool.ToType()}...)
@@ -399,8 +428,17 @@ func TestEmptyNullFlag(t *testing.T) {
 	}
 	{
 		id := gUniqueAggIdForTest()
-		RegisterDeterminedMultiAgg(
-			MakeDeterminedMultiAggInfo(id, []types.Type{types.T_int64.ToType(), types.T_bool.ToType()}, types.T_int64.ToType(), false), gTesMultiAggPrivate1)
+		RegisterMultiAggRetFixed(
+			MakeMultiAggRetFixedRegisteredInfo(
+				MakeMultiColumnAggInformation(id, mPrivate1Args, mPrivate1Ret, false),
+				gTesMultiAggPrivate1,
+				mPrivate1FillWhich,
+				mPrivate1FillNullWhich,
+				validMPrivate1,
+				evalMPrivate1,
+				mergeMPrivate1,
+				nil,
+			))
 		executor := MakeAgg(
 			mg,
 			id, false, []types.Type{types.T_int64.ToType(), types.T_bool.ToType()}...)

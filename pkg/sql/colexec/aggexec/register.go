@@ -393,8 +393,8 @@ func MakeMultiAggRetFixedRegisteredInfo[to types.FixedSizeTExceptStrType](
 	fillWhich []any,
 	fillNullWhich []MultiAggFillNull1[to],
 	rowValid rowValidForMultiAgg1[to],
-	merge MultiAggMerge1[to],
 	eval MultiAggEval1[to],
+	merge MultiAggMerge1[to],
 	flush MultiAggFlush1[to],
 ) MultiColumnAggRetFixedRegisteredInfo[to] {
 	// legal check.

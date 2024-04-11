@@ -62,7 +62,7 @@ type mArg1[ret types.FixedSizeTExceptStrType] interface {
 	doRowFill(aggImp MultiAggRetFixed[ret], row uint64) error
 
 	// Fill is func(MultiAggRetFixed[T], value), value is the arg type.
-	cacheFill(fill any, fillNull func(MultiAggRetFixed[ret]))
+	cacheFill(fill any, fillNull func(MultiAggRetFixed[ret]) error)
 }
 type mArg2 interface {
 	prepare(v *vector.Vector)
@@ -163,8 +163,8 @@ func newArgumentOfMultiAgg2(paramType types.Type) mArg2 {
 type mArg1Fixed[ret types.FixedSizeTExceptStrType, arg types.FixedSizeTExceptStrType] struct {
 	w vector.FunctionParameterWrapper[arg]
 
-	fill     func(MultiAggRetFixed[ret], arg)
-	fillNull func(MultiAggRetFixed[ret])
+	fill     func(MultiAggRetFixed[ret], arg) error
+	fillNull func(MultiAggRetFixed[ret]) error
 }
 
 func (a *mArg1Fixed[ret, arg]) prepare(v *vector.Vector) {
@@ -174,23 +174,21 @@ func (a *mArg1Fixed[ret, arg]) prepare(v *vector.Vector) {
 func (a *mArg1Fixed[ret, arg]) doRowFill(aggImp MultiAggRetFixed[ret], row uint64) error {
 	v, null := a.w.GetValue(row)
 	if null {
-		a.fillNull(aggImp)
-	} else {
-		a.fill(aggImp, v)
+		return a.fillNull(aggImp)
 	}
-	return nil
+	return a.fill(aggImp, v)
 }
 
-func (a *mArg1Fixed[ret, arg]) cacheFill(fill any, fillNull func(MultiAggRetFixed[ret])) {
-	a.fill = fill.(func(MultiAggRetFixed[ret], arg))
+func (a *mArg1Fixed[ret, arg]) cacheFill(fill any, fillNull func(MultiAggRetFixed[ret]) error) {
+	a.fill = fill.(func(MultiAggRetFixed[ret], arg) error)
 	a.fillNull = fillNull
 }
 
 type mArg1Bytes[ret types.FixedSizeTExceptStrType] struct {
 	w vector.FunctionParameterWrapper[types.Varlena]
 
-	fill     func(MultiAggRetFixed[ret], []byte)
-	fillNull func(MultiAggRetFixed[ret])
+	fill     func(MultiAggRetFixed[ret], []byte) error
+	fillNull func(MultiAggRetFixed[ret]) error
 }
 
 func (a *mArg1Bytes[ret]) prepare(v *vector.Vector) {
@@ -200,15 +198,13 @@ func (a *mArg1Bytes[ret]) prepare(v *vector.Vector) {
 func (a *mArg1Bytes[ret]) doRowFill(aggImp MultiAggRetFixed[ret], row uint64) error {
 	v, null := a.w.GetStrValue(row)
 	if null {
-		a.fillNull(aggImp)
-	} else {
-		a.fill(aggImp, v)
+		return a.fillNull(aggImp)
 	}
-	return nil
+	return a.fill(aggImp, v)
 }
 
-func (a *mArg1Bytes[ret]) cacheFill(fill any, fillNull func(MultiAggRetFixed[ret])) {
-	a.fill = fill.(func(MultiAggRetFixed[ret], []byte))
+func (a *mArg1Bytes[ret]) cacheFill(fill any, fillNull func(MultiAggRetFixed[ret]) error) {
+	a.fill = fill.(func(MultiAggRetFixed[ret], []byte) error)
 	a.fillNull = fillNull
 }
 

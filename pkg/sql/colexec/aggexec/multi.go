@@ -101,7 +101,7 @@ func (exec *multiAggFuncExec1[T]) init(
 	exec.gGroup = impl.generator.(func() MultiAggRetFixed[T])
 	exec.args = make([]mArg1[T], len(info.argTypes))
 
-	fillNullWhich := impl.fillNullWhich.([]func(MultiAggRetFixed[T]))
+	fillNullWhich := impl.fillNullWhich.([]MultiAggFillNull1[T])
 	for i := range exec.args {
 		exec.args[i] = newArgumentOfMultiAgg1[T](info.argTypes[i])
 
