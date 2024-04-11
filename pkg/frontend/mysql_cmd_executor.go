@@ -1466,7 +1466,11 @@ func (mce *MysqlCmdExecutor) handleCreateAccount(ctx context.Context, ca *tree.C
 	}
 	create.Name = b.bind(ca.Name)
 	create.AdminName = b.bind(ca.AuthOption.AdminName)
-	create.IdentStr = b.bind(ca.AuthOption.IdentifiedType.Str)
+	switch create.IdentTyp {
+	case tree.AccountIdentifiedByPassword,
+		tree.AccountIdentifiedWithSSL:
+		create.IdentStr = b.bind(ca.AuthOption.IdentifiedType.Str)
+	}
 	if b.err != nil {
 		return b.err
 	}
@@ -1506,17 +1510,18 @@ func (mce *MysqlCmdExecutor) handleAlterAccount(ctx context.Context, st *tree.Al
 	}
 
 	aa.Name = b.bind(st.Name)
-	if b.err != nil {
-		return b.err
-	}
 	if st.AuthOption.Exist {
 		aa.AuthExist = true
 		aa.AdminName = b.bind(st.AuthOption.AdminName)
 		aa.IdentTyp = st.AuthOption.IdentifiedType.Typ
-		aa.IdentStr = b.bind(st.AuthOption.IdentifiedType.Str)
-		if b.err != nil {
-			return b.err
+		switch aa.IdentTyp {
+		case tree.AccountIdentifiedByPassword,
+			tree.AccountIdentifiedWithSSL:
+			aa.IdentStr = b.bind(st.AuthOption.IdentifiedType.Str)
 		}
+	}
+	if b.err != nil {
+		return b.err
 	}
 
 	return doAlterAccount(ctx, mce.GetSession(), aa)
@@ -1553,10 +1558,14 @@ func (mce *MysqlCmdExecutor) handleCreateUser(ctx context.Context, st *tree.Crea
 		if u.AuthOption != nil {
 			v.AuthExist = true
 			v.IdentTyp = u.AuthOption.Typ
-			var err error
-			v.IdentStr, err = unboxExprStr(ctx, u.AuthOption.Str)
-			if err != nil {
-				return err
+			switch v.IdentTyp {
+			case tree.AccountIdentifiedByPassword,
+				tree.AccountIdentifiedWithSSL:
+				var err error
+				v.IdentStr, err = unboxExprStr(ctx, u.AuthOption.Str)
+				if err != nil {
+					return err
+				}
 			}
 		}
 		cu.Users = append(cu.Users, &v)
@@ -1584,10 +1593,14 @@ func (mce *MysqlCmdExecutor) handleAlterUser(ctx context.Context, st *tree.Alter
 	if su.AuthOption != nil {
 		u.AuthExist = true
 		u.IdentTyp = su.AuthOption.Typ
-		var err error
-		u.IdentStr, err = unboxExprStr(ctx, su.AuthOption.Str)
-		if err != nil {
-			return err
+		switch u.IdentTyp {
+		case tree.AccountIdentifiedByPassword,
+			tree.AccountIdentifiedWithSSL:
+			var err error
+			u.IdentStr, err = unboxExprStr(ctx, su.AuthOption.Str)
+			if err != nil {
+				return err
+			}
 		}
 	}
 

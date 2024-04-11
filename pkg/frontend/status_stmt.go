@@ -314,7 +314,11 @@ func (cae *CreateAccountExecutor) ExecuteImpl(ctx context.Context, ses *Session)
 	}
 	create.Name = b.bind(ca.Name)
 	create.AdminName = b.bind(ca.AuthOption.AdminName)
-	create.IdentStr = b.bind(ca.AuthOption.IdentifiedType.Str)
+	switch create.IdentTyp {
+	case tree.AccountIdentifiedByPassword,
+		tree.AccountIdentifiedWithSSL:
+		create.IdentStr = b.bind(ca.AuthOption.IdentifiedType.Str)
+	}
 	if b.err != nil {
 		return b.err
 	}
@@ -375,10 +379,14 @@ func (cue *CreateUserExecutor) ExecuteImpl(ctx context.Context, ses *Session) er
 		if u.AuthOption != nil {
 			v.AuthExist = true
 			v.IdentTyp = u.AuthOption.Typ
-			var err error
-			v.IdentStr, err = unboxExprStr(ctx, u.AuthOption.Str)
-			if err != nil {
-				return err
+			switch v.IdentTyp {
+			case tree.AccountIdentifiedByPassword,
+				tree.AccountIdentifiedWithSSL:
+				var err error
+				v.IdentStr, err = unboxExprStr(ctx, u.AuthOption.Str)
+				if err != nil {
+					return err
+				}
 			}
 		}
 		cu.Users = append(cu.Users, &v)

@@ -923,7 +923,7 @@ func (b *strParamBinder) bind(e tree.Expr) string {
 	case *tree.ParamExpr:
 		return b.params.GetStringAt(val.Offset - 1)
 	default:
-		b.err = moerr.NewInternalError(b.ctx, "invalid params type")
+		b.err = moerr.NewInternalError(b.ctx, "invalid params type %T", e)
 		return ""
 	}
 }
