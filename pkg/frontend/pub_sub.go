@@ -25,7 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 )
@@ -505,25 +504,11 @@ func checkSubscriptionValidCommon(ctx context.Context, ses FeSession, subName, a
 func checkSubscriptionValid(ctx context.Context, ses FeSession, createSql string) (*plan.SubscriptionMeta, error) {
 	var (
 		err                       error
-		lowerAny                  any
-		lowerInt64                int64
 		accName, pubName, subName string
-		ast                       []tree.Statement
 	)
-	lowerAny, err = ses.GetGlobalVar("lower_case_table_names")
-	if err != nil {
+	if subName, accName, pubName, err = getSubInfoFromSql(ctx, ses, createSql); err != nil {
 		return nil, err
 	}
-	lowerInt64 = lowerAny.(int64)
-	ast, err = mysql.Parse(ctx, createSql, lowerInt64)
-	if err != nil {
-		return nil, err
-	}
-
-	accName = string(ast[0].(*tree.CreateDatabase).SubscriptionOption.From)
-	pubName = string(ast[0].(*tree.CreateDatabase).SubscriptionOption.Publication)
-	subName = string(ast[0].(*tree.CreateDatabase).Name)
-
 	return checkSubscriptionValidCommon(ctx, ses, subName, accName, pubName)
 }
 

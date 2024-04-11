@@ -155,7 +155,7 @@ func InitRole(ctx context.Context, ses *Session, tenant *TenantInfo, cr *tree.Cr
 	return err
 }
 
-func doGrantPrivilegeImplicitly(ctx context.Context, ses *Session, stmt tree.Statement) error {
+func doGrantPrivilegeImplicitly(_ context.Context, ses *Session, stmt tree.Statement) error {
 	var err error
 	var sql string
 	tenantInfo := ses.GetTenantInfo()
@@ -202,7 +202,7 @@ func doGrantPrivilegeImplicitly(ctx context.Context, ses *Session, stmt tree.Sta
 	return err
 }
 
-func doRevokePrivilegeImplicitly(ctx context.Context, ses *Session, stmt tree.Statement) error {
+func doRevokePrivilegeImplicitly(_ context.Context, ses *Session, stmt tree.Statement) error {
 	var err error
 	var sql string
 	tenantInfo := ses.GetTenantInfo()

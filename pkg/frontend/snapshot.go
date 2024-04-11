@@ -24,6 +24,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
+func handleCreateSnapshot(ctx context.Context, ses *Session, ct *tree.CreateSnapShot) error {
+	return doCreateSnapshot(ctx, ses, ct)
+}
+
+func handleDropSnapshot(ctx context.Context, ses *Session, ct *tree.DropSnapShot) error {
+	return doDropSnapshot(ctx, ses, ct)
+}
+
 func doCreateSnapshot(ctx context.Context, ses *Session, stmt *tree.CreateSnapShot) error {
 	var err error
 	var snapshotLevel tree.SnapshotLevel

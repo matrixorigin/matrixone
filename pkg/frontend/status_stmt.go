@@ -126,6 +126,15 @@ func executeStatusStmt(requestCtx context.Context, ses *Session, execCtx *ExecCt
 			return
 		}
 
+		// execute insert sql if this is a `create table as select` stmt
+		//if createTblStmt, ok := execCtx.stmt.(*tree.CreateTable); ok && createTblStmt.IsAsSelect {
+		//	if txw, ok := execCtx.cw.(*TxnComputationWrapper); ok {
+		//		insertSql := txw.plan.GetDdl().GetDefinition().(*plan.DataDefinition_CreateTable).CreateTable.CreateAsSelectSql
+		//		ses.createAsSelectSql = insertSql
+		//	}
+		//	return
+		//}
+
 		if loadLocalErrGroup != nil {
 			if err = loadLocalErrGroup.Wait(); err != nil { //executor success, but processLoadLocal goroutine failed
 				return

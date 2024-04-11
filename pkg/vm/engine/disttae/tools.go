@@ -1494,7 +1494,7 @@ func groupBlocksToObjects(blkInfos []*objectio.BlockInfo, dop int) ([][]*objecti
 }
 
 func newBlockReaders(ctx context.Context, fs fileservice.FileService, tblDef *plan.TableDef,
-	primarySeqnum int, ts timestamp.Timestamp, num int, expr *plan.Expr,
+	ts timestamp.Timestamp, num int, expr *plan.Expr,
 	proc *process.Process) []*blockReader {
 	rds := make([]*blockReader, num)
 	for i := 0; i < num; i++ {
@@ -1519,7 +1519,7 @@ func distributeBlocksToBlockReaders(rds []*blockReader, numOfReaders int, numOfB
 		}
 	}
 	scanType := NORMAL
-	if numOfBlocks < SMALLSCAN_THRESHOLD {
+	if numOfBlocks < numOfReaders*SMALLSCAN_THRESHOLD {
 		scanType = SMALL
 	} else if (numOfReaders * LARGESCAN_THRESHOLD) <= numOfBlocks {
 		scanType = LARGE

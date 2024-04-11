@@ -2964,6 +2964,8 @@ func appendSelectList(
 			} else {
 				if selectExpr.As != nil && !selectExpr.As.Empty() {
 					ctx.headings = append(ctx.headings, selectExpr.As.Origin())
+				} else if expr.CStrParts[0] != nil {
+					ctx.headings = append(ctx.headings, expr.CStrParts[0].Compare())
 				} else {
 					ctx.headings = append(ctx.headings, expr.Parts[0])
 				}
@@ -3498,7 +3500,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 					return 0, err
 				}
 
-				originStmts, err := mysql.Parse(builder.GetContext(), viewData.Stmt, 1)
+				originStmts, err := mysql.Parse(builder.GetContext(), viewData.Stmt, 1, 0)
 				defer func() {
 					for _, s := range originStmts {
 						s.Free()
@@ -3580,7 +3582,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 	case *tree.ParenTableExpr:
 		return builder.buildTable(tbl.Expr, ctx, preNodeId, leftCtx)
 
-	case *tree.AliasedTableExpr: // always AliasedTableExpr first
+	case *tree.AliasedTableExpr: //allways AliasedTableExpr first
 		if _, ok := tbl.Expr.(*tree.Select); ok {
 			if tbl.As.Alias == "" {
 				return 0, moerr.NewSyntaxError(builder.GetContext(), "subquery in FROM must have an alias: %T", stmt)

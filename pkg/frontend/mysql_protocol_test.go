@@ -229,7 +229,7 @@ func TestKIll(t *testing.T) {
 			}
 			stmts = append(stmts, cmdFieldStmt)
 		} else {
-			stmts, err = parsers.Parse(proc.Ctx, dialect.MYSQL, input.getSql(), 1)
+			stmts, err = parsers.Parse(proc.Ctx, dialect.MYSQL, input.getSql(), 1, 0)
 			if err != nil {
 				return nil, err
 			}
@@ -2081,7 +2081,7 @@ func TestSendPrepareResponse(t *testing.T) {
 		})
 
 		st := tree.NewPrepareString(tree.Identifier(getPrepareStmtName(1)), "select ?, 1")
-		stmts, err := mysql.Parse(ctx, st.Sql, 1)
+		stmts, err := mysql.Parse(ctx, st.Sql, 1, 0)
 		if err != nil {
 			t.Error(err)
 		}
@@ -2118,7 +2118,7 @@ func TestSendPrepareResponse(t *testing.T) {
 		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
 
 		st := tree.NewPrepareString("stmt1", "select ?, 1")
-		stmts, err := mysql.Parse(ctx, st.Sql, 1)
+		stmts, err := mysql.Parse(ctx, st.Sql, 1, 0)
 		if err != nil {
 			t.Error(err)
 		}
@@ -2159,7 +2159,7 @@ func FuzzParseExecuteData(f *testing.F) {
 	proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
 
 	st := tree.NewPrepareString(tree.Identifier(getPrepareStmtName(1)), "select ?, 1")
-	stmts, err := mysql.Parse(ctx, st.Sql, 1)
+	stmts, err := mysql.Parse(ctx, st.Sql, 1, 0)
 	if err != nil {
 		f.Error(err)
 	}

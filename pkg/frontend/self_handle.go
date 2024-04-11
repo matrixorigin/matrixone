@@ -220,7 +220,7 @@ func handleInFrontend(requestCtx context.Context,
 	case *tree.CreateAccount:
 
 		ses.InvalidatePrivilegeCache()
-		if err = handleCreateAccount(requestCtx, ses, st); err != nil {
+		if err = handleCreateAccount(requestCtx, ses, st, execCtx.proc); err != nil {
 			return
 		}
 	case *tree.DropAccount:
@@ -367,6 +367,21 @@ func handleInFrontend(requestCtx context.Context,
 	case *tree.EmptyStmt:
 
 		if err = handleEmptyStmt(requestCtx, ses, st); err != nil {
+			return
+		}
+	case *tree.CreateSnapShot:
+		//TODO: invalidate privilege cache
+		if err = handleCreateSnapshot(requestCtx, ses, st); err != nil {
+			return
+		}
+	case *tree.DropSnapShot:
+		//TODO: invalidate privilege cache
+		if err = handleDropSnapshot(requestCtx, ses, st); err != nil {
+			return
+		}
+	case *tree.UpgradeStatement:
+		//TODO: invalidate privilege cache
+		if err = handleExecUpgrade(requestCtx, ses, st); err != nil {
 			return
 		}
 	}

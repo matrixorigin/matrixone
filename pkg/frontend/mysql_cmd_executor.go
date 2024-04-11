@@ -400,11 +400,6 @@ func doComQuery(requestCtx context.Context, ses *Session, input *UserInput) (ret
 			return err
 		}
 
-		err = respClientWhenSuccess(requestCtx, ses, &execCtx)
-		if err != nil {
-			return err
-		}
-
 		// TODO put in one txn
 		// insert data after create table in create table ... as select ... stmt
 		if ses.createAsSelectSql != "" {
@@ -414,6 +409,12 @@ func doComQuery(requestCtx context.Context, ses *Session, input *UserInput) (ret
 				return err
 			}
 		}
+
+		err = respClientWhenSuccess(requestCtx, ses, &execCtx)
+		if err != nil {
+			return err
+		}
+
 	} // end of for
 
 	if canCache && !ses.isCached(input.getSql()) {

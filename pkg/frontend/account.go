@@ -19,9 +19,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"math"
 	"math/bits"
-	"os"
 	"strings"
 	"time"
 
@@ -45,7 +45,7 @@ import (
 )
 
 // checkSysExistsOrNot checks the SYS tenant exists or not.
-func checkSysExistsOrNot(ctx context.Context, bh BackgroundExec, pu *config.ParameterUnit) (bool, error) {
+func checkSysExistsOrNot(ctx context.Context, bh BackgroundExec) (bool, error) {
 	var erArray []ExecResult
 	var err error
 	var tableNames []string
@@ -106,180 +106,6 @@ func checkSysExistsOrNot(ctx context.Context, bh BackgroundExec, pu *config.Para
 	return false, nil
 }
 
-// InitSysTenant initializes the tenant SYS before any tenants and accepting any requests
-// during the system is booting.
-func InitSysTenant(ctx context.Context) (err error) {
-	var exists bool
-	var mp *mpool.MPool
-	pu := config.GetParameterUnit(ctx)
-
-	tenant := &TenantInfo{
-		Tenant:        sysAccountName,
-		User:          rootName,
-		DefaultRole:   moAdminRoleName,
-		TenantID:      sysAccountID,
-		UserID:        rootID,
-		DefaultRoleID: moAdminRoleID,
-	}
-
-	ctx = defines.AttachAccount(ctx, uint32(sysAccountID), uint32(rootID), uint32(moAdminRoleID))
-
-	mp, err = mpool.NewMPool("init_system_tenant", 0, mpool.NoFixed)
-	if err != nil {
-		return err
-	}
-	defer mpool.DeleteMPool(mp)
-	//Note: it is special here. The connection ctx here is ctx also.
-	//Actually, it is ok here. the ctx is moServerCtx instead of requestCtx
-	upstream := &Session{
-		feSessionImpl: feSessionImpl{
-			proto: &FakeProtocol{},
-		},
-		connectCtx:   ctx,
-		seqCurValues: make(map[uint64]string),
-		seqLastValue: new(string),
-	}
-	bh := NewBackgroundExec(ctx, upstream, mp)
-	defer bh.Close()
-
-	//USE the mo_catalog
-	err = bh.Exec(ctx, "use mo_catalog;")
-	if err != nil {
-		return err
-	}
-
-	err = bh.Exec(ctx, createDbInformationSchemaSql)
-	if err != nil {
-		return err
-	}
-
-	err = bh.Exec(ctx, "begin;")
-	defer func() {
-		err = finishTxn(ctx, bh, err)
-	}()
-	if err != nil {
-		return err
-	}
-
-	exists, err = checkSysExistsOrNot(ctx, bh, pu)
-	if err != nil {
-		return err
-	}
-
-	if !exists {
-		err = createTablesInMoCatalog(ctx, bh, tenant, pu)
-		if err != nil {
-			return err
-		}
-	}
-
-	return err
-}
-
-// createTablesInMoCatalog creates catalog tables in the database mo_catalog.
-func createTablesInMoCatalog(ctx context.Context, bh BackgroundExec, tenant *TenantInfo, pu *config.ParameterUnit) error {
-	var err error
-	var initMoAccount string
-	var initDataSqls []string
-	if !tenant.IsSysTenant() {
-		return moerr.NewInternalError(ctx, "only sys tenant can execute the function")
-	}
-
-	addSqlIntoSet := func(sql string) {
-		initDataSqls = append(initDataSqls, sql)
-	}
-
-	//create tables for the tenant
-	for _, sql := range createSqls {
-		addSqlIntoSet(sql)
-	}
-
-	//initialize the default data of tables for the tenant
-	//step 1: add new tenant entry to the mo_account
-	initMoAccount = fmt.Sprintf(initMoAccountFormat, sysAccountID, sysAccountName, sysAccountStatus, types.CurrentTimestamp().String2(time.UTC, 0), sysAccountComments)
-	addSqlIntoSet(initMoAccount)
-
-	//step 2:add new role entries to the mo_role
-
-	initMoRole1 := fmt.Sprintf(initMoRoleFormat, moAdminRoleID, moAdminRoleName, rootID, moAdminRoleID, types.CurrentTimestamp().String2(time.UTC, 0), "")
-	initMoRole2 := fmt.Sprintf(initMoRoleFormat, publicRoleID, publicRoleName, rootID, moAdminRoleID, types.CurrentTimestamp().String2(time.UTC, 0), "")
-	addSqlIntoSet(initMoRole1)
-	addSqlIntoSet(initMoRole2)
-
-	//step 3:add new user entry to the mo_user
-
-	defaultPassword := rootPassword
-	if d := os.Getenv(defaultPasswordEnv); d != "" {
-		defaultPassword = d
-	}
-
-	//encryption the password
-	encryption := HashPassWord(defaultPassword)
-
-	initMoUser1 := fmt.Sprintf(initMoUserFormat, rootID, rootHost, rootName, encryption, rootStatus, types.CurrentTimestamp().String2(time.UTC, 0), rootExpiredTime, rootLoginType, rootCreatorID, rootOwnerRoleID, rootDefaultRoleID)
-	initMoUser2 := fmt.Sprintf(initMoUserFormat, dumpID, dumpHost, dumpName, encryption, dumpStatus, types.CurrentTimestamp().String2(time.UTC, 0), dumpExpiredTime, dumpLoginType, dumpCreatorID, dumpOwnerRoleID, dumpDefaultRoleID)
-	addSqlIntoSet(initMoUser1)
-	addSqlIntoSet(initMoUser2)
-
-	//step4: add new entries to the mo_role_privs
-	//moadmin role
-	for _, t := range entriesOfMoAdminForMoRolePrivsFor {
-		entry := privilegeEntriesMap[t]
-		initMoRolePriv := fmt.Sprintf(initMoRolePrivFormat,
-			moAdminRoleID, moAdminRoleName,
-			entry.objType, entry.objId,
-			entry.privilegeId, entry.privilegeId.String(), entry.privilegeLevel,
-			rootID, types.CurrentTimestamp().String2(time.UTC, 0),
-			entry.withGrantOption)
-		addSqlIntoSet(initMoRolePriv)
-	}
-
-	//public role
-	for _, t := range entriesOfPublicForMoRolePrivsFor {
-		entry := privilegeEntriesMap[t]
-		initMoRolePriv := fmt.Sprintf(initMoRolePrivFormat,
-			publicRoleID, publicRoleName,
-			entry.objType, entry.objId,
-			entry.privilegeId, entry.privilegeId.String(), entry.privilegeLevel,
-			rootID, types.CurrentTimestamp().String2(time.UTC, 0),
-			entry.withGrantOption)
-		addSqlIntoSet(initMoRolePriv)
-	}
-
-	//step5: add new entries to the mo_user_grant
-
-	initMoUserGrant1 := fmt.Sprintf(initMoUserGrantFormat, moAdminRoleID, rootID, types.CurrentTimestamp().String2(time.UTC, 0), false)
-	initMoUserGrant2 := fmt.Sprintf(initMoUserGrantFormat, publicRoleID, rootID, types.CurrentTimestamp().String2(time.UTC, 0), false)
-	addSqlIntoSet(initMoUserGrant1)
-	addSqlIntoSet(initMoUserGrant2)
-	initMoUserGrant4 := fmt.Sprintf(initMoUserGrantFormat, moAdminRoleID, dumpID, types.CurrentTimestamp().String2(time.UTC, 0), false)
-	initMoUserGrant5 := fmt.Sprintf(initMoUserGrantFormat, publicRoleID, dumpID, types.CurrentTimestamp().String2(time.UTC, 0), false)
-	addSqlIntoSet(initMoUserGrant4)
-	addSqlIntoSet(initMoUserGrant5)
-
-	//setp6: add new entries to the mo_mysql_compatibility_mode
-	for _, variable := range gSysVarsDefs {
-		if _, ok := configInitVariables[variable.Name]; ok {
-			addsql := addInitSystemVariablesSql(sysAccountID, sysAccountName, variable.Name)
-			if len(addsql) != 0 {
-				addSqlIntoSet(addsql)
-			}
-		} else {
-			initMoMysqlCompatibilityMode := fmt.Sprintf(initMoMysqlCompatbilityModeWithoutDataBaseFormat, sysAccountID, sysAccountName, variable.Name, getVariableValue(variable.Default), true)
-			addSqlIntoSet(initMoMysqlCompatibilityMode)
-		}
-	}
-
-	//fill the mo_account, mo_role, mo_user, mo_role_privs, mo_user_grant, mo_mysql_compatibility_mode
-	for _, sql := range initDataSqls {
-		err = bh.Exec(ctx, sql)
-		if err != nil {
-			return err
-		}
-	}
-	return err
-}
-
 func checkTenantExistsOrNot(ctx context.Context, bh BackgroundExec, userName string) (bool, error) {
 	var sqlForCheckTenant string
 	var erArray []ExecResult
@@ -336,13 +162,30 @@ func checkDatabaseExistsOrNot(ctx context.Context, bh BackgroundExec, dbName str
 
 // handleCreateAccount creates a new user-level tenant in the context of the tenant SYS
 // which has been initialized.
-func handleCreateAccount(ctx context.Context, ses FeSession, ca *tree.CreateAccount) error {
+func handleCreateAccount(ctx context.Context, ses FeSession, ca *tree.CreateAccount, proc *process.Process) error {
 	//step1 : create new account.
-	return InitGeneralTenant(ctx, ses.(*Session), ca)
+	create := &CreateAccount{
+		IfNotExists:  ca.IfNotExists,
+		AuthOption:   ca.AuthOption,
+		StatusOption: ca.StatusOption,
+		Comment:      ca.Comment,
+	}
+
+	params := proc.GetPrepareParams()
+	switch val := ca.Name.(type) {
+	case *tree.NumVal:
+		create.Name = val.OrigString()
+	case *tree.ParamExpr:
+		create.Name = params.GetStringAt(val.Offset - 1)
+	default:
+		return moerr.NewInternalError(ctx, "invalid params type")
+	}
+
+	return InitGeneralTenant(ctx, ses.(*Session), create)
 }
 
 // InitGeneralTenant initializes the application level tenant
-func InitGeneralTenant(ctx context.Context, ses *Session, ca *tree.CreateAccount) (err error) {
+func InitGeneralTenant(ctx context.Context, ses *Session, ca *CreateAccount) (err error) {
 	var exists bool
 	var newTenant *TenantInfo
 	var newTenantCtx context.Context
@@ -350,6 +193,7 @@ func InitGeneralTenant(ctx context.Context, ses *Session, ca *tree.CreateAccount
 	ctx, span := trace.Debug(ctx, "InitGeneralTenant")
 	defer span.End()
 	tenant := ses.GetTenantInfo()
+	finalVersion := ses.rm.baseService.GetFinalVersion()
 
 	if !(tenant.IsSysTenant() && tenant.IsMoAdminRole()) {
 		return moerr.NewInternalError(ctx, "tenant %s user %s role %s do not have the privilege to create the new account", tenant.GetTenant(), tenant.GetUser(), tenant.GetDefaultRole())
@@ -414,7 +258,7 @@ func InitGeneralTenant(ctx context.Context, ses *Session, ca *tree.CreateAccount
 			}
 			return rtnErr
 		} else {
-			newTenant, newTenantCtx, rtnErr = createTablesInMoCatalogOfGeneralTenant(ctx, bh, ca)
+			newTenant, newTenantCtx, rtnErr = createTablesInMoCatalogOfGeneralTenant(ctx, bh, finalVersion, ca)
 			if rtnErr != nil {
 				return rtnErr
 			}
@@ -456,7 +300,7 @@ func InitGeneralTenant(ctx context.Context, ses *Session, ca *tree.CreateAccount
 		}
 
 		// create tables for new account
-		rtnErr = createTablesInMoCatalogOfGeneralTenant2(bh, ca, newTenantCtx, newTenant)
+		rtnErr = createTablesInMoCatalogOfGeneralTenant2(bh, ca, newTenantCtx, newTenant, gPu)
 		if rtnErr != nil {
 			return rtnErr
 		}
@@ -464,7 +308,7 @@ func InitGeneralTenant(ctx context.Context, ses *Session, ca *tree.CreateAccount
 		if rtnErr != nil {
 			return rtnErr
 		}
-		rtnErr = createTablesInInformationSchemaOfGeneralTenant(newTenantCtx, bh, newTenant)
+		rtnErr = createTablesInInformationSchemaOfGeneralTenant(newTenantCtx, bh)
 		if rtnErr != nil {
 			return rtnErr
 		}
@@ -485,7 +329,7 @@ func InitGeneralTenant(ctx context.Context, ses *Session, ca *tree.CreateAccount
 }
 
 // createTablesInMoCatalogOfGeneralTenant creates catalog tables in the database mo_catalog.
-func createTablesInMoCatalogOfGeneralTenant(ctx context.Context, bh BackgroundExec, ca *tree.CreateAccount) (*TenantInfo, context.Context, error) {
+func createTablesInMoCatalogOfGeneralTenant(ctx context.Context, bh BackgroundExec, finalVersion string, ca *CreateAccount) (*TenantInfo, context.Context, error) {
 	var err error
 	var initMoAccount string
 	var erArray []ExecResult
@@ -523,7 +367,7 @@ func createTablesInMoCatalogOfGeneralTenant(ctx context.Context, bh BackgroundEx
 		}
 	}
 
-	initMoAccount = fmt.Sprintf(initMoAccountWithoutIDFormat, ca.Name, status, types.CurrentTimestamp().String2(time.UTC, 0), comment)
+	initMoAccount = fmt.Sprintf(initMoAccountWithoutIDFormat, ca.Name, status, types.CurrentTimestamp().String2(time.UTC, 0), comment, finalVersion)
 	//execute the insert
 	err = bh.Exec(ctx, initMoAccount)
 	if err != nil {
@@ -570,7 +414,7 @@ func createTablesInMoCatalogOfGeneralTenant(ctx context.Context, bh BackgroundEx
 	return newTenant, newTenantCtx, err
 }
 
-func createTablesInMoCatalogOfGeneralTenant2(bh BackgroundExec, ca *tree.CreateAccount, newTenantCtx context.Context, newTenant *TenantInfo) error {
+func createTablesInMoCatalogOfGeneralTenant2(bh BackgroundExec, ca *CreateAccount, newTenantCtx context.Context, newTenant *TenantInfo, pu *config.ParameterUnit) error {
 	var err error
 	var initDataSqls []string
 	newTenantCtx, span := trace.Debug(newTenantCtx, "createTablesInMoCatalogOfGeneralTenant2")
@@ -657,7 +501,7 @@ func createTablesInMoCatalogOfGeneralTenant2(bh BackgroundExec, ca *tree.CreateA
 	//setp6: add new entries to the mo_mysql_compatibility_mode
 	for _, variable := range gSysVarsDefs {
 		if _, ok := configInitVariables[variable.Name]; ok {
-			addsql := addInitSystemVariablesSql(int(newTenant.GetTenantID()), newTenant.GetTenant(), variable.Name)
+			addsql := addInitSystemVariablesSql(int(newTenant.GetTenantID()), newTenant.GetTenant(), variable.Name, pu)
 			if len(addsql) != 0 {
 				addSqlIntoSet(addsql)
 			}
@@ -703,7 +547,7 @@ func createTablesInSystemOfGeneralTenant(ctx context.Context, bh BackgroundExec,
 }
 
 // createTablesInInformationSchemaOfGeneralTenant creates the database information_schema and the views or tables.
-func createTablesInInformationSchemaOfGeneralTenant(ctx context.Context, bh BackgroundExec, newTenant *TenantInfo) error {
+func createTablesInInformationSchemaOfGeneralTenant(ctx context.Context, bh BackgroundExec) error {
 	ctx, span := trace.Debug(ctx, "createTablesInInformationSchemaOfGeneralTenant")
 	defer span.End()
 	//with new tenant
@@ -1289,9 +1133,9 @@ func postAlterSessionStatus(
 	accountName string,
 	tenantId int64,
 	status string) error {
-	qs := gPu.QueryClient
-	if qs == nil {
-		return moerr.NewInternalError(ctx, "query service is not initialized")
+	qc := gPu.QueryClient
+	if qc == nil {
+		return moerr.NewInternalError(ctx, "query client is not initialized")
 	}
 	currTenant := ses.GetTenantInfo().Tenant
 	currUser := ses.GetTenantInfo().User
@@ -1313,7 +1157,7 @@ func postAlterSessionStatus(
 	var retErr, err error
 
 	genRequest := func() *query.Request {
-		req := qs.NewRequest(query.CmdMethod_AlterAccount)
+		req := qc.NewRequest(query.CmdMethod_AlterAccount)
 		req.AlterAccountRequest = &query.AlterAccountRequest{
 			TenantId: tenantId,
 			Status:   status,
@@ -1333,30 +1177,30 @@ func postAlterSessionStatus(
 			fmt.Sprintf("alter account status for account %s failed on node %s", accountName, nodeAddr))
 	}
 
-	err = queryservice.RequestMultipleCn(ctx, nodes, qs, genRequest, handleValidResponse, handleInvalidResponse)
+	err = queryservice.RequestMultipleCn(ctx, nodes, qc, genRequest, handleValidResponse, handleInvalidResponse)
 	return errors.Join(err, retErr)
 }
 
-func addInitSystemVariablesSql(accountId int, accountName, variable_name string) string {
+func addInitSystemVariablesSql(accountId int, accountName, variable_name string, pu *config.ParameterUnit) string {
 	var initMoMysqlCompatibilityMode string
 
 	switch variable_name {
 	case SaveQueryResult:
-		if strings.ToLower(gPu.SV.SaveQueryResult) == "on" {
-			initMoMysqlCompatibilityMode = fmt.Sprintf(initMoMysqlCompatbilityModeWithoutDataBaseFormat, accountId, accountName, "save_query_result", getVariableValue(gPu.SV.SaveQueryResult), true)
+		if strings.ToLower(pu.SV.SaveQueryResult) == "on" {
+			initMoMysqlCompatibilityMode = fmt.Sprintf(initMoMysqlCompatbilityModeWithoutDataBaseFormat, accountId, accountName, "save_query_result", getVariableValue(pu.SV.SaveQueryResult), true)
 
 		} else {
 			initMoMysqlCompatibilityMode = fmt.Sprintf(initMoMysqlCompatbilityModeWithoutDataBaseFormat, accountId, accountName, "save_query_result", getVariableValue("off"), true)
 		}
 
 	case QueryResultMaxsize:
-		initMoMysqlCompatibilityMode = fmt.Sprintf(initMoMysqlCompatbilityModeWithoutDataBaseFormat, accountId, accountName, "query_result_maxsize", getVariableValue(gPu.SV.QueryResultMaxsize), true)
+		initMoMysqlCompatibilityMode = fmt.Sprintf(initMoMysqlCompatbilityModeWithoutDataBaseFormat, accountId, accountName, "query_result_maxsize", getVariableValue(pu.SV.QueryResultMaxsize), true)
 
 	case QueryResultTimeout:
-		initMoMysqlCompatibilityMode = fmt.Sprintf(initMoMysqlCompatbilityModeWithoutDataBaseFormat, accountId, accountName, "query_result_timeout", getVariableValue(gPu.SV.QueryResultTimeout), true)
+		initMoMysqlCompatibilityMode = fmt.Sprintf(initMoMysqlCompatbilityModeWithoutDataBaseFormat, accountId, accountName, "query_result_timeout", getVariableValue(pu.SV.QueryResultTimeout), true)
 
 	case LowerCaseTableNames:
-		initMoMysqlCompatibilityMode = fmt.Sprintf(initMoMysqlCompatbilityModeWithoutDataBaseFormat, accountId, accountName, "lower_case_table_names", getVariableValue(gPu.SV.LowerCaseTableNames), true)
+		initMoMysqlCompatibilityMode = fmt.Sprintf(initMoMysqlCompatbilityModeWithoutDataBaseFormat, accountId, accountName, "lower_case_table_names", getVariableValue(pu.SV.LowerCaseTableNames), true)
 	}
 
 	return initMoMysqlCompatibilityMode

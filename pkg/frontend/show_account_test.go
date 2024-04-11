@@ -48,7 +48,7 @@ func Test_getSqlForAccountInfo(t *testing.T) {
 	}
 
 	for _, a := range args {
-		one, err := parsers.ParseOne(context.Background(), dialect.MYSQL, a.s, 1)
+		one, err := parsers.ParseOne(context.Background(), dialect.MYSQL, a.s, 1, 0)
 		assert.NoError(t, err)
 		sa1 := one.(*tree.ShowAccounts)
 		r1 := getSqlForAllAccountInfo(sa1.Like)

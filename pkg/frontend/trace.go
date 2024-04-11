@@ -174,7 +174,12 @@ var RecordParseErrorStatement = func(ctx context.Context, ses *Session, proc *pr
 }
 
 // RecordStatementTxnID record txnID after TxnBegin or Compile(autocommit=1)
-var RecordStatementTxnID = func(ctx context.Context, ses *Session) error {
+var RecordStatementTxnID = func(ctx context.Context, fses FeSession) error {
+	var ses *Session
+	var ok bool
+	if ses, ok = fses.(*Session); !ok {
+		return nil
+	}
 	var txn TxnOperator
 	var err error
 	if stm := motrace.StatementFromContext(ctx); ses != nil && stm != nil && stm.IsZeroTxnID() {

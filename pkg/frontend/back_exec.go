@@ -70,7 +70,7 @@ func (back *backExec) Exec(ctx context.Context, sql string) error {
 	if err != nil {
 		return err
 	}
-	statements, err := mysql.Parse(ctx, sql, v.(int64))
+	statements, err := mysql.Parse(ctx, sql, v.(int64), 0)
 	if err != nil {
 		return err
 	}
@@ -395,11 +395,16 @@ var GetComputationWrapperInBack = func(db string, input *UserInput, user string,
 		stmts = append(stmts, cmdFieldStmt)
 	} else {
 		var v interface{}
+		var origin interface{}
 		v, err = ses.GetGlobalVar("lower_case_table_names")
 		if err != nil {
 			v = int64(1)
 		}
-		stmts, err = parsers.Parse(proc.Ctx, dialect.MYSQL, input.getSql(), v.(int64))
+		origin, err = ses.GetGlobalVar("keep_user_target_list_in_result")
+		if err != nil {
+			origin = int64(0)
+		}
+		stmts, err = parsers.Parse(proc.Ctx, dialect.MYSQL, input.getSql(), v.(int64), origin.(int64))
 		if err != nil {
 			return nil, err
 		}

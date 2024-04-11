@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -27,6 +28,8 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -223,7 +226,6 @@ func splitUserInput(ctx context.Context, userInput string, delimiter byte) (*Ten
 		}, nil
 	} else {
 		tenant := userInput[:p]
-		tenant = strings.TrimSpace(tenant)
 		if len(tenant) == 0 {
 			return &TenantInfo{}, moerr.NewInternalError(ctx, "invalid tenant name '%s'", tenant)
 		}
@@ -232,7 +234,6 @@ func splitUserInput(ctx context.Context, userInput string, delimiter byte) (*Ten
 		if p2 == -1 {
 			//tenant:user
 			user := userRole
-			user = strings.TrimSpace(user)
 			if len(user) == 0 {
 				return &TenantInfo{}, moerr.NewInternalError(ctx, "invalid user name '%s'", user)
 			}
@@ -243,12 +244,10 @@ func splitUserInput(ctx context.Context, userInput string, delimiter byte) (*Ten
 			}, nil
 		} else {
 			user := userRole[:p2]
-			user = strings.TrimSpace(user)
 			if len(user) == 0 {
 				return &TenantInfo{}, moerr.NewInternalError(ctx, "invalid user name '%s'", user)
 			}
 			role := userRole[p2+1:]
-			role = strings.TrimSpace(role)
 			if len(role) == 0 {
 				return &TenantInfo{}, moerr.NewInternalError(ctx, "invalid role name '%s'", role)
 			}
@@ -557,6 +556,7 @@ const (
 	PrivilegeTypeExecute
 	PrivilegeTypeCanGrantRoleToOthersInCreateUser // used in checking the privilege of CreateUser with the default role
 	PrivilegeTypeValues
+	PrivilegeTypeUpgradeAccount
 )
 
 type PrivilegeScope uint8
@@ -614,6 +614,8 @@ func (pt PrivilegeType) String() string {
 		return "drop account"
 	case PrivilegeTypeAlterAccount:
 		return "alter account"
+	case PrivilegeTypeUpgradeAccount:
+		return "upgrade account"
 	case PrivilegeTypeCreateUser:
 		return "create user"
 	case PrivilegeTypeDropUser:
@@ -701,6 +703,8 @@ func (pt PrivilegeType) Scope() PrivilegeScope {
 	case PrivilegeTypeDropAccount:
 		return PrivilegeScopeSys
 	case PrivilegeTypeAlterAccount:
+		return PrivilegeScopeSys
+	case PrivilegeTypeUpgradeAccount:
 		return PrivilegeScopeSys
 	case PrivilegeTypeCreateUser:
 		return PrivilegeScopeAccount
@@ -946,7 +950,8 @@ var (
 				created_time timestamp,
 				comments varchar(256),
 				version bigint unsigned auto_increment,
-				suspended_time timestamp default NULL
+				suspended_time timestamp default NULL,
+				create_version varchar(50) default '1.2.0'
 			);`,
 		`create table mo_role(
 				role_id int signed auto_increment primary key,
@@ -1023,7 +1028,8 @@ var (
 			level enum('cluster','account','database','table'),
 	        account_name varchar(300),
 			database_name varchar(5000),
-			table_name  varchar(5000)
+			table_name  varchar(5000),
+			obj_id bigint unsigned
 			);`,
 		`create table mo_pubs(
     		pub_name varchar(64) primary key,
@@ -1121,14 +1127,14 @@ var (
 		comment) values ('%s','%s', '%s', '%s','%s', '%s');`
 
 	insertIntoMoSnapshots = `insert into mo_catalog.mo_snapshots(
-			snapshot_id,
-			sname,
-			ts,
-			level,
-			account_name,
-			database_name,
-			table_name,
-			obj_id) values ('%s','%s', '%s', '%s','%s',	'%s','%s', '%d');`
+		snapshot_id,
+		sname,
+		ts,
+		level,
+		account_name,
+		database_name,
+		table_name,
+		obj_id) values ('%s','%s', '%s', '%s','%s',	'%s','%s', '%d');`
 
 	initMoUserDefinedFunctionFormat = `insert into mo_catalog.mo_user_defined_function(
 			name,
@@ -1184,12 +1190,14 @@ var (
 				account_name,
 				status,
 				created_time,
-				comments) values (%d,"%s","%s","%s","%s");`
+				comments,
+                create_version) values (%d,"%s","%s","%s","%s","%s");`
 	initMoAccountWithoutIDFormat = `insert into mo_catalog.mo_account(
 				account_name,
 				status,
 				created_time,
-				comments) values ("%s","%s","%s","%s");`
+				comments,
+				create_version) values ("%s","%s","%s","%s","%s");`
 	initMoRoleFormat = `insert into mo_catalog.mo_role(
 				role_id,
 				role_name,
@@ -1605,9 +1613,10 @@ var (
 
 	// the privileges that can not be granted or revoked
 	bannedPrivileges = map[PrivilegeType]int8{
-		PrivilegeTypeCreateAccount: 0,
-		PrivilegeTypeAlterAccount:  0,
-		PrivilegeTypeDropAccount:   0,
+		PrivilegeTypeCreateAccount:  0,
+		PrivilegeTypeAlterAccount:   0,
+		PrivilegeTypeDropAccount:    0,
+		PrivilegeTypeUpgradeAccount: 0,
 	}
 )
 
@@ -1649,7 +1658,7 @@ func getSqlForCheckSnapshot(ctx context.Context, snapshot string) (string, error
 	return fmt.Sprintf(checkSnapshotFormat, snapshot), nil
 }
 
-func getSqlForCheckStageStatus(ctx context.Context, status string) string {
+func getSqlForCheckStageStatus(_ context.Context, status string) string {
 	return fmt.Sprintf(checkStageStatusFormat, status)
 }
 
@@ -2089,7 +2098,7 @@ func getSqlForupdateConfigurationByAccount(ctx context.Context, varValue, accoun
 	return fmt.Sprintf(updateConfigurationByAccountNameFormat, varValue, accountName, varName), nil
 }
 
-func getSqlForSpBody(ctx context.Context, name string, db string) (string, error) {
+func getSqlForSpBody(_ context.Context, name string, db string) (string, error) {
 	return fmt.Sprintf(fetchSqlOfSpFormat, name, db), nil
 }
 
@@ -2264,6 +2273,7 @@ var (
 		PrivilegeTypeCreateAccount:     {PrivilegeTypeCreateAccount, privilegeLevelStar, objectTypeAccount, objectIDAll, false, "", "", privilegeEntryTypeGeneral, nil},
 		PrivilegeTypeDropAccount:       {PrivilegeTypeDropAccount, privilegeLevelStar, objectTypeAccount, objectIDAll, false, "", "", privilegeEntryTypeGeneral, nil},
 		PrivilegeTypeAlterAccount:      {PrivilegeTypeAlterAccount, privilegeLevelStar, objectTypeAccount, objectIDAll, false, "", "", privilegeEntryTypeGeneral, nil},
+		PrivilegeTypeUpgradeAccount:    {PrivilegeTypeUpgradeAccount, privilegeLevelStar, objectTypeAccount, objectIDAll, false, "", "", privilegeEntryTypeGeneral, nil},
 		PrivilegeTypeCreateUser:        {PrivilegeTypeCreateUser, privilegeLevelStar, objectTypeAccount, objectIDAll, true, "", "", privilegeEntryTypeGeneral, nil},
 		PrivilegeTypeDropUser:          {PrivilegeTypeDropUser, privilegeLevelStar, objectTypeAccount, objectIDAll, true, "", "", privilegeEntryTypeGeneral, nil},
 		PrivilegeTypeAlterUser:         {PrivilegeTypeAlterUser, privilegeLevelStar, objectTypeAccount, objectIDAll, true, "", "", privilegeEntryTypeGeneral, nil},
@@ -2309,6 +2319,7 @@ var (
 		PrivilegeTypeCreateAccount,
 		PrivilegeTypeDropAccount,
 		PrivilegeTypeAlterAccount,
+		PrivilegeTypeUpgradeAccount,
 		PrivilegeTypeCreateUser,
 		PrivilegeTypeDropUser,
 		PrivilegeTypeAlterUser,
@@ -2715,7 +2726,7 @@ func normalizeName(ctx context.Context, name string) (string, error) {
 	return s, nil
 }
 
-func normalizeNameOfAccount(ctx context.Context, ca *tree.CreateAccount) error {
+func normalizeNameOfAccount(ctx context.Context, ca *CreateAccount) error {
 	s := strings.TrimSpace(ca.Name)
 	if len(s) == 0 {
 		return moerr.NewInternalError(ctx, `the name "%s" is invalid`, ca.Name)
@@ -3535,6 +3546,12 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		typs = append(typs, PrivilegeTypeDropAccount)
 	case *tree.AlterAccount:
 		typs = append(typs, PrivilegeTypeAlterAccount)
+	case *tree.UpgradeStatement:
+		typs = append(typs, PrivilegeTypeUpgradeAccount)
+		objType = objectTypeNone
+		kind = privilegeKindSpecial
+		special = specialTagAdmin
+		canExecInRestricted = true
 	case *tree.CreateUser:
 		if st.Role == nil {
 			typs = append(typs, PrivilegeTypeCreateUser, PrivilegeTypeAccountAll /*, PrivilegeTypeAccountOwnership*/)
@@ -3616,7 +3633,8 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 	case *tree.Use:
 		typs = append(typs, PrivilegeTypeConnect, PrivilegeTypeAccountAll /*, PrivilegeTypeAccountOwnership*/)
 		canExecInRestricted = true
-	case *tree.ShowTables, *tree.ShowCreateTable, *tree.ShowColumns, *tree.ShowCreateView, *tree.ShowCreateDatabase, *tree.ShowCreatePublications:
+	case *tree.ShowTables, *tree.ShowCreateTable, *tree.ShowColumns, *tree.ShowCreateView, *tree.ShowCreateDatabase,
+		*tree.ShowCreatePublications:
 		objType = objectTypeDatabase
 		typs = append(typs, PrivilegeTypeShowTables, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
 		canExecInRestricted = true
@@ -3795,6 +3813,11 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		kind = privilegeKindSpecial
 		special = specialTagAdmin
 		canExecInRestricted = true
+	case *tree.ShowAccountUpgrade:
+		objType = objectTypeNone
+		kind = privilegeKindSpecial
+		special = specialTagAdmin
+		canExecInRestricted = true
 	case *tree.ExplainFor, *tree.ExplainAnalyze, *tree.ExplainStmt:
 		objType = objectTypeNone
 		kind = privilegeKindNone
@@ -3859,7 +3882,8 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		kind = privilegeKindNone
 	case *tree.BackupStart:
 		objType = objectTypeNone
-		kind = privilegeKindNone
+		kind = privilegeKindSpecial
+		special = specialTagAdmin
 	case *tree.EmptyStmt:
 		objType = objectTypeNone
 		kind = privilegeKindNone
@@ -4357,7 +4381,7 @@ func determineRoleSetHasPrivilegeSet(ctx context.Context, bh BackgroundExec, ses
 
 // determineUserHasPrivilegeSet decides the privileges of user can satisfy the requirement of the privilege set
 // The algorithm 1.
-func determineUserHasPrivilegeSet(ctx context.Context, ses *Session, priv *privilege, stmt tree.Statement) (ret bool, err error) {
+func determineUserHasPrivilegeSet(ctx context.Context, ses *Session, priv *privilege) (ret bool, err error) {
 	var erArray []ExecResult
 	var yes bool
 	var roleB int64
@@ -4767,7 +4791,7 @@ func authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ctx con
 	if priv.objectType() != objectTypeAccount && priv.objectType() != objectTypeDatabase { //do nothing
 		return true, nil
 	}
-	ok, err = determineUserHasPrivilegeSet(ctx, ses, priv, stmt)
+	ok, err = determineUserHasPrivilegeSet(ctx, ses, priv)
 	if err != nil {
 		return false, err
 	}
@@ -4998,7 +5022,7 @@ func authenticateUserCanExecuteStatementWithObjectTypeDatabaseAndTable(ctx conte
 			return true, nil
 		}
 		convertPrivilegeTipsToPrivilege(priv, arr)
-		ok, err := determineUserHasPrivilegeSet(ctx, ses, priv, stmt)
+		ok, err := determineUserHasPrivilegeSet(ctx, ses, priv)
 		if err != nil {
 			return false, err
 		}
@@ -5069,6 +5093,8 @@ func getSqlForCheckRoleHasPrivilegeWGODependsOnPrivType(privType PrivilegeType) 
 	case PrivilegeTypeDropAccount:
 		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShip(int64(privType), int64(PrivilegeTypeAccountAll), int64(PrivilegeTypeAccountOwnership))
 	case PrivilegeTypeAlterAccount:
+		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShip(int64(privType), int64(PrivilegeTypeAccountAll), int64(PrivilegeTypeAccountOwnership))
+	case PrivilegeTypeUpgradeAccount:
 		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShip(int64(privType), int64(PrivilegeTypeAccountAll), int64(PrivilegeTypeAccountOwnership))
 	case PrivilegeTypeCreateUser:
 		return getSqlForCheckRoleHasPrivilegeWGOOrWithOwnerShip(int64(privType), int64(PrivilegeTypeAccountAll), int64(PrivilegeTypeAccountOwnership))
@@ -5299,6 +5325,8 @@ func convertAstPrivilegeTypeToPrivilegeType(ctx context.Context, priv tree.Privi
 		privType = PrivilegeTypeDropAccount
 	case tree.PRIVILEGE_TYPE_STATIC_ALTER_ACCOUNT:
 		privType = PrivilegeTypeAlterAccount
+	case tree.PRIVILEGE_TYPE_STATIC_UPGRADE_ACCOUNT:
+		privType = PrivilegeTypeUpgradeAccount
 	case tree.PRIVILEGE_TYPE_STATIC_CREATE_USER:
 		privType = PrivilegeTypeCreateUser
 	case tree.PRIVILEGE_TYPE_STATIC_DROP_USER:
@@ -5409,6 +5437,11 @@ func authenticateUserCanExecuteStatementWithObjectTypeNone(ctx context.Context, 
 			return tenant.IsAdminRole(), nil
 		}
 
+		checkBackUpStartPrivilege := func() (bool, error) {
+			//only the moAdmin can execute the backup statement
+			return tenant.IsSysTenant(), nil
+		}
+
 		switch gp := stmt.(type) {
 		case *tree.Grant:
 			if gp.Typ == tree.GrantTypePrivilege {
@@ -5436,10 +5469,201 @@ func authenticateUserCanExecuteStatementWithObjectTypeNone(ctx context.Context, 
 			return checkRevokePrivilege()
 		case *tree.ShowAccounts:
 			return checkShowAccountsPrivilege()
+		case *tree.ShowAccountUpgrade:
+			return tenant.IsMoAdminRole(), nil
+		case *tree.UpgradeStatement:
+			return tenant.IsMoAdminRole(), nil
+		case *tree.BackupStart:
+			return checkBackUpStartPrivilege()
 		}
 	}
 
 	return false, nil
+}
+
+// InitSysTenantOld initializes the tenant SYS before any tenants and accepting any requests
+// during the system is booting.
+// Deprecated: Use InitSysTenant instead
+func InitSysTenantOld(ctx context.Context, aicm *defines.AutoIncrCacheManager, finalVersion string) (err error) {
+	var exists bool
+	var mp *mpool.MPool
+	pu := config.GetParameterUnit(ctx)
+
+	tenant := &TenantInfo{
+		Tenant:        sysAccountName,
+		User:          rootName,
+		DefaultRole:   moAdminRoleName,
+		TenantID:      sysAccountID,
+		UserID:        rootID,
+		DefaultRoleID: moAdminRoleID,
+	}
+
+	ctx = defines.AttachAccount(ctx, uint32(sysAccountID), uint32(rootID), uint32(moAdminRoleID))
+
+	mp, err = mpool.NewMPool("init_system_tenant", 0, mpool.NoFixed)
+	if err != nil {
+		return err
+	}
+	defer mpool.DeleteMPool(mp)
+	//Note: it is special here. The connection ctx here is ctx also.
+	//Actually, it is ok here. the ctx is moServerCtx instead of requestCtx
+	upstream := &Session{
+		feSessionImpl: feSessionImpl{
+			proto: &FakeProtocol{},
+		},
+		connectCtx: ctx,
+
+		seqCurValues: make(map[uint64]string),
+		seqLastValue: new(string),
+	}
+	bh := NewBackgroundExec(ctx, upstream, mp)
+	defer bh.Close()
+
+	//USE the mo_catalog
+	err = bh.Exec(ctx, "use mo_catalog;")
+	if err != nil {
+		return err
+	}
+
+	err = bh.Exec(ctx, createDbInformationSchemaSql)
+	if err != nil {
+		return err
+	}
+
+	err = bh.Exec(ctx, "begin;")
+	defer func() {
+		err = finishTxn(ctx, bh, err)
+	}()
+	if err != nil {
+		return err
+	}
+
+	exists, err = checkSysExistsOrNot(ctx, bh)
+	if err != nil {
+		return err
+	}
+
+	if !exists {
+		err = createTablesInMoCatalogOld(ctx, bh, tenant, pu, finalVersion)
+		if err != nil {
+			return err
+		}
+	}
+
+	return err
+}
+
+// createTablesInMoCatalogOld creates catalog tables in the database mo_catalog.
+// Deprecated: Use createTablesInMoCatalog instead
+func createTablesInMoCatalogOld(ctx context.Context, bh BackgroundExec, tenant *TenantInfo, pu *config.ParameterUnit, finalVersion string) error {
+	var err error
+	var initMoAccount string
+	var initDataSqls []string
+	if !tenant.IsSysTenant() {
+		return moerr.NewInternalError(ctx, "only sys tenant can execute the function")
+	}
+
+	addSqlIntoSet := func(sql string) {
+		initDataSqls = append(initDataSqls, sql)
+	}
+
+	//create tables for the tenant
+	for _, sql := range createSqls {
+		addSqlIntoSet(sql)
+	}
+
+	//initialize the default data of tables for the tenant
+	//step 1: add new tenant entry to the mo_account
+	initMoAccount = fmt.Sprintf(initMoAccountFormat, sysAccountID, sysAccountName, sysAccountStatus, types.CurrentTimestamp().String2(time.UTC, 0), sysAccountComments, finalVersion)
+	addSqlIntoSet(initMoAccount)
+
+	//step 2:add new role entries to the mo_role
+
+	initMoRole1 := fmt.Sprintf(initMoRoleFormat, moAdminRoleID, moAdminRoleName, rootID, moAdminRoleID, types.CurrentTimestamp().String2(time.UTC, 0), "")
+	initMoRole2 := fmt.Sprintf(initMoRoleFormat, publicRoleID, publicRoleName, rootID, moAdminRoleID, types.CurrentTimestamp().String2(time.UTC, 0), "")
+	addSqlIntoSet(initMoRole1)
+	addSqlIntoSet(initMoRole2)
+
+	//step 3:add new user entry to the mo_user
+
+	defaultPassword := rootPassword
+	if d := os.Getenv(defaultPasswordEnv); d != "" {
+		defaultPassword = d
+	}
+
+	//encryption the password
+	encryption := HashPassWord(defaultPassword)
+
+	initMoUser1 := fmt.Sprintf(initMoUserFormat, rootID, rootHost, rootName, encryption, rootStatus, types.CurrentTimestamp().String2(time.UTC, 0), rootExpiredTime, rootLoginType, rootCreatorID, rootOwnerRoleID, rootDefaultRoleID)
+	initMoUser2 := fmt.Sprintf(initMoUserFormat, dumpID, dumpHost, dumpName, encryption, dumpStatus, types.CurrentTimestamp().String2(time.UTC, 0), dumpExpiredTime, dumpLoginType, dumpCreatorID, dumpOwnerRoleID, dumpDefaultRoleID)
+	addSqlIntoSet(initMoUser1)
+	addSqlIntoSet(initMoUser2)
+
+	//step4: add new entries to the mo_role_privs
+	//moadmin role
+	for _, t := range entriesOfMoAdminForMoRolePrivsFor {
+		entry := privilegeEntriesMap[t]
+		initMoRolePriv := fmt.Sprintf(initMoRolePrivFormat,
+			moAdminRoleID, moAdminRoleName,
+			entry.objType, entry.objId,
+			entry.privilegeId, entry.privilegeId.String(), entry.privilegeLevel,
+			rootID, types.CurrentTimestamp().String2(time.UTC, 0),
+			entry.withGrantOption)
+		addSqlIntoSet(initMoRolePriv)
+	}
+
+	//public role
+	for _, t := range entriesOfPublicForMoRolePrivsFor {
+		entry := privilegeEntriesMap[t]
+		initMoRolePriv := fmt.Sprintf(initMoRolePrivFormat,
+			publicRoleID, publicRoleName,
+			entry.objType, entry.objId,
+			entry.privilegeId, entry.privilegeId.String(), entry.privilegeLevel,
+			rootID, types.CurrentTimestamp().String2(time.UTC, 0),
+			entry.withGrantOption)
+		addSqlIntoSet(initMoRolePriv)
+	}
+
+	//step5: add new entries to the mo_user_grant
+
+	initMoUserGrant1 := fmt.Sprintf(initMoUserGrantFormat, moAdminRoleID, rootID, types.CurrentTimestamp().String2(time.UTC, 0), false)
+	initMoUserGrant2 := fmt.Sprintf(initMoUserGrantFormat, publicRoleID, rootID, types.CurrentTimestamp().String2(time.UTC, 0), false)
+	addSqlIntoSet(initMoUserGrant1)
+	addSqlIntoSet(initMoUserGrant2)
+	initMoUserGrant4 := fmt.Sprintf(initMoUserGrantFormat, moAdminRoleID, dumpID, types.CurrentTimestamp().String2(time.UTC, 0), false)
+	initMoUserGrant5 := fmt.Sprintf(initMoUserGrantFormat, publicRoleID, dumpID, types.CurrentTimestamp().String2(time.UTC, 0), false)
+	addSqlIntoSet(initMoUserGrant4)
+	addSqlIntoSet(initMoUserGrant5)
+
+	//setp6: add new entries to the mo_mysql_compatibility_mode
+	for _, variable := range gSysVarsDefs {
+		if _, ok := configInitVariables[variable.Name]; ok {
+			addsql := addInitSystemVariablesSql(sysAccountID, sysAccountName, variable.Name, pu)
+			if len(addsql) != 0 {
+				addSqlIntoSet(addsql)
+			}
+		} else {
+			initMoMysqlCompatibilityMode := fmt.Sprintf(initMoMysqlCompatbilityModeWithoutDataBaseFormat, sysAccountID, sysAccountName, variable.Name, getVariableValue(variable.Default), true)
+			addSqlIntoSet(initMoMysqlCompatibilityMode)
+		}
+	}
+
+	//fill the mo_account, mo_role, mo_user, mo_role_privs, mo_user_grant, mo_mysql_compatibility_mode
+	for _, sql := range initDataSqls {
+		err = bh.Exec(ctx, sql)
+		if err != nil {
+			return err
+		}
+	}
+	return err
+}
+
+type CreateAccount struct {
+	IfNotExists  bool
+	Name         string
+	AuthOption   tree.AccountAuthOption
+	StatusOption tree.AccountStatus
+	Comment      tree.AccountComment
 }
 
 // isSuperUser returns true if the username is dump or root.

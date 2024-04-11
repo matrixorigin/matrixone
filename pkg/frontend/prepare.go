@@ -181,7 +181,13 @@ func doPrepareString(ctx context.Context, ses *Session, st *tree.PrepareString) 
 	if err != nil {
 		return nil, err
 	}
-	stmts, err := mysql.Parse(ctx, st.Sql, v.(int64))
+
+	origin, err := ses.GetGlobalVar("keep_user_target_list_in_result")
+	if err != nil {
+		return nil, err
+	}
+
+	stmts, err := mysql.Parse(ctx, st.Sql, v.(int64), origin.(int64))
 	if err != nil {
 		return nil, err
 	}

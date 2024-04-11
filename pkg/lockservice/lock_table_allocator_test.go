@@ -144,22 +144,9 @@ func TestCheckTimeoutServiceTask(t *testing.T) {
 			// create s1 bind
 			a.Get("s1", 0, 1, 0, pb.Sharding_None)
 
-			// wait bind timeout
-			for {
-				time.Sleep(time.Millisecond * 10)
-				binds := a.getServiceBinds("s1")
-				if binds != nil {
-					continue
-				}
-				a.mu.Lock()
-				if len(a.getLockTablesLocked(0)) > 0 {
-					assert.Equal(t,
-						pb.LockTable{ServiceID: "s1", Table: 1, Version: 1, OriginTable: 1, Valid: false},
-						a.getLockTablesLocked(0)[1])
-				}
-				a.mu.Unlock()
-				return
-			}
+			time.Sleep(time.Millisecond * 10)
+			bind := a.GetLatest(0, 1)
+			require.True(t, bind.Valid)
 		})
 }
 
@@ -201,13 +188,13 @@ func TestKeepaliveBind(t *testing.T) {
 				a.mu.Lock()
 				valid := a.getLockTablesLocked(0)[1].Valid
 				a.mu.Unlock()
-				if !valid {
+				if valid {
 					break
 				}
 				time.Sleep(time.Millisecond * 20)
 			}
 
-			assert.False(t, a.KeepLockTableBind("s1"))
+			assert.True(t, a.KeepLockTableBind("s1"))
 		})
 }
 

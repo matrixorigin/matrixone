@@ -314,6 +314,10 @@ func (node *CreateTable) StmtKind() StmtKind {
 	return defaultStatusTyp
 }
 
+func (node *CreateSource) StmtKind() StmtKind {
+	return defaultStatusTyp
+}
+
 func (node *CreateView) StmtKind() StmtKind {
 	return defaultStatusTyp
 }
@@ -581,4 +585,20 @@ func (node *ShowLocks) StmtKind() StmtKind {
 
 func (node *ShowSequences) StmtKind() StmtKind {
 	return defaultResRowTyp
+}
+
+func (node *CreateSnapShot) StmtKind() StmtKind {
+	return frontendStatusTyp
+}
+
+func (node *DropSnapShot) StmtKind() StmtKind {
+	return frontendStatusTyp
+}
+
+func (node *ShowSnapShots) StmtKind() StmtKind {
+	return defaultResRowTyp
+}
+
+func (node *UpgradeStatement) StmtKind() StmtKind {
+	return frontendStatusTyp
 }

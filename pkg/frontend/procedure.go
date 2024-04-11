@@ -87,7 +87,7 @@ func handleCallProcedure(ctx context.Context, ses FeSession, call *tree.CallStmt
 	return nil
 }
 
-func Upload(ctx context.Context, ses *Session, localPath string, storageDir string) (string, error) {
+func Upload(ctx context.Context, ses FeSession, localPath string, storageDir string) (string, error) {
 	loadLocalReader, loadLocalWriter := io.Pipe()
 
 	// watch and cancel
@@ -137,6 +137,7 @@ func InitFunction(ctx context.Context, ses *Session, tenant *TenantInfo, cf *tre
 	var initMoUdf string
 	var retTypeStr string
 	var dbName string
+	var dbExists bool
 	var checkExistence string
 	var argsJson []byte
 	var argsCondition string
@@ -153,6 +154,15 @@ func InitFunction(ctx context.Context, ses *Session, tenant *TenantInfo, cf *tre
 		dbName = ses.GetDatabaseName()
 	} else {
 		dbName = string(cf.Name.Name.SchemaName)
+	}
+
+	// authticate db exists
+	dbExists, err = checkDatabaseExistsOrNot(ctx, ses.GetBackgroundExec(ctx), dbName)
+	if err != nil {
+		return err
+	}
+	if !dbExists {
+		return moerr.NewBadDB(ctx, dbName)
 	}
 
 	bh := ses.GetBackgroundExec(ctx)
@@ -433,7 +443,7 @@ func doInterpretCall(ctx context.Context, ses *Session, call *tree.CallStmt) ([]
 		return nil, moerr.NewNoUDFNoCtx(string(call.Name.Name.ObjectName))
 	}
 
-	stmt, err := parsers.Parse(ctx, dialect.MYSQL, spBody, 1)
+	stmt, err := parsers.Parse(ctx, dialect.MYSQL, spBody, 1, 0)
 	if err != nil {
 		return nil, err
 	}

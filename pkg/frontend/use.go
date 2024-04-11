@@ -16,16 +16,16 @@ package frontend
 
 import (
 	"context"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
-func doUse(ctx context.Context, ses FeSession, db string) error {
-	if v, ok := ses.(*Session); ok {
-		defer RecordStatementTxnID(ctx, v)
-	}
+func handleChangeDB(requestCtx context.Context, ses FeSession, db string) error {
+	return doUse(requestCtx, ses, db)
+}
 
+func doUse(ctx context.Context, ses FeSession, db string) error {
+	defer RecordStatementTxnID(ctx, ses)
 	txnHandler := ses.GetTxnHandler()
 	var txnCtx context.Context
 	var txn TxnOperator
@@ -52,8 +52,4 @@ func doUse(ctx context.Context, ses FeSession, db string) error {
 	logDebugf(ses.GetDebugString(), "User %s change database from [%s] to [%s]", ses.GetUserName(), oldDB, ses.GetDatabaseName())
 
 	return nil
-}
-
-func handleChangeDB(requestCtx context.Context, ses FeSession, db string) error {
-	return doUse(requestCtx, ses, db)
 }
