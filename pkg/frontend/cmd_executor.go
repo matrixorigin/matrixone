@@ -206,7 +206,7 @@ func Execute(ctx context.Context, ses *Session, proc *process.Process, stmtExec 
 	cmpBegin = time.Now()
 
 	//TODO: selfhandle statements do not need to compile
-	if _, err = stmtExec.Compile(ctx, ses, ses.GetOutputCallback()); err != nil {
+	if _, err = stmtExec.Compile(ctx, ses.GetOutputCallback()); err != nil {
 		goto handleRet
 	}
 
