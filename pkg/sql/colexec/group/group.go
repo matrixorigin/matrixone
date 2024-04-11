@@ -17,6 +17,7 @@ package group
 import (
 	"bytes"
 	"fmt"
+	"runtime"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -410,6 +411,9 @@ func (ctr *container) processH8(bat *batch.Batch, proc *process.Process) error {
 	count := bat.RowCount()
 	itr := ctr.intHashMap.NewIterator()
 	for i := 0; i < count; i += hashmap.UnitLimit {
+		if i%(hashmap.UnitLimit*32) == 0 {
+			runtime.Gosched()
+		}
 		n := count - i
 		if n > hashmap.UnitLimit {
 			n = hashmap.UnitLimit
@@ -431,6 +435,9 @@ func (ctr *container) processHStr(bat *batch.Batch, proc *process.Process) error
 	count := bat.RowCount()
 	itr := ctr.strHashMap.NewIterator()
 	for i := 0; i < count; i += hashmap.UnitLimit { // batch
+		if i%(hashmap.UnitLimit*32) == 0 {
+			runtime.Gosched()
+		}
 		n := count - i
 		if n > hashmap.UnitLimit {
 			n = hashmap.UnitLimit

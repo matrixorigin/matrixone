@@ -99,14 +99,18 @@ func (arg *Argument) Prepare(proc *process.Process) error {
 		return moerr.NewNYI(proc.Ctx, "load format '%s'", param.Extern.Format)
 	}
 
-	if param.Extern.Format == tree.JSONLINE {
-		if param.Extern.JsonData != tree.OBJECT && param.Extern.JsonData != tree.ARRAY {
-			param.Fileparam.End = true
-			return moerr.NewNotSupported(proc.Ctx, "the jsonline format '%s' is not supported now", param.Extern.JsonData)
+	if param.Extern.Format != tree.PARQUET {
+		if param.Extern.Format == tree.JSONLINE {
+			if param.Extern.JsonData != tree.OBJECT && param.Extern.JsonData != tree.ARRAY {
+				param.Fileparam.End = true
+				return moerr.NewNotSupported(proc.Ctx, "the jsonline format '%s' is not supported now", param.Extern.JsonData)
+			}
 		}
+		param.IgnoreLineTag = int(param.Extern.Tail.IgnoredLines)
+		param.IgnoreLine = param.IgnoreLineTag
+		param.MoCsvLineArray = make([][]csvparser.Field, OneBatchMaxRow)
 	}
-	param.IgnoreLineTag = int(param.Extern.Tail.IgnoredLines)
-	param.IgnoreLine = param.IgnoreLineTag
+
 	if len(param.FileList) == 0 && param.Extern.ScanType != tree.INLINE {
 		logutil.Warnf("no such file '%s'", param.Extern.Filepath)
 		param.Fileparam.End = true
@@ -123,7 +127,6 @@ func (arg *Argument) Prepare(proc *process.Process) error {
 	}
 	param.Filter.columnMap, _, _, _ = plan2.GetColumnsByExpr(param.Filter.FilterExpr, param.tableDef)
 	param.Filter.zonemappable = plan2.ExprIsZonemappable(proc.Ctx, param.Filter.FilterExpr)
-	param.MoCsvLineArray = make([][]csvparser.Field, OneBatchMaxRow)
 	return nil
 }
 
@@ -152,7 +155,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		result.Status = vm.ExecStop
 		return result, nil
 	}
-	if param.plh == nil && param.Extern.ScanType != tree.INLINE {
+	if (param.plh == nil && param.parqh == nil) && param.Extern.ScanType != tree.INLINE {
 		if param.Fileparam.FileIndex >= len(param.FileList) {
 			result.Status = vm.ExecStop
 			return result, nil
@@ -777,9 +780,11 @@ func scanZonemapFile(ctx context.Context, param *ExternalParam, proc *process.Pr
 func scanFileData(ctx context.Context, param *ExternalParam, proc *process.Process) (*batch.Batch, error) {
 	if param.Extern.QueryResult {
 		return scanZonemapFile(ctx, param, proc)
-	} else {
-		return scanCsvFile(ctx, param, proc)
 	}
+	if param.Extern.Format == tree.PARQUET {
+		return scanParquetFile(ctx, param, proc)
+	}
+	return scanCsvFile(ctx, param, proc)
 }
 
 func transJson2Lines(ctx context.Context, str string, attrs []string, cols []*plan.ColDef, jsonData string, param *ExternalParam) ([]csvparser.Field, error) {
@@ -1212,6 +1217,7 @@ func getOneRowData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *
 			if param.Extern.Format != tree.CSV {
 				jsonBytes = []byte(field.Val)
 			} else {
+				field.Val = fmt.Sprintf("%v", strings.Trim(field.Val, "\""))
 				byteJson, err := types.ParseStringToByteJson(field.Val)
 				if err != nil {
 					logutil.Errorf("parse field[%v] err:%v", field.Val, err)
@@ -1258,7 +1264,16 @@ func getOneRowData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *
 		case types.T_enum:
 			d, err := strconv.ParseUint(field.Val, 10, 16)
 			if err == nil {
-				if err := vector.SetFixedAt(vec, rowIdx, uint16(d)); err != nil {
+				if err := vector.SetFixedAt(vec, rowIdx, types.Enum(d)); err != nil {
+					return err
+				}
+			} else if errors.Is(err, strconv.ErrSyntax) {
+				v, err := types.ParseEnum(param.Cols[colIdx].Typ.Enumvalues, field.Val)
+				if err != nil {
+					logutil.Errorf("parse field[%v] err:%v", field.Val, err)
+					return err
+				}
+				if err := vector.SetFixedAt(vec, rowIdx, types.Enum(v)); err != nil {
 					return err
 				}
 			} else {
@@ -1271,7 +1286,7 @@ func getOneRowData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *
 					logutil.Errorf("parse field[%v] err:%v", field.Val, err)
 					return moerr.NewInternalError(param.Ctx, "the input value '%v' is not uint16 type for column %d", field.Val, colIdx)
 				}
-				if err := vector.SetFixedAt(vec, rowIdx, uint16(f)); err != nil {
+				if err := vector.SetFixedAt(vec, rowIdx, types.Enum(f)); err != nil {
 					return err
 				}
 			}
@@ -1358,7 +1373,7 @@ func readCountStringLimitSize(r *csvparser.CSVParser, ctx context.Context, size 
 
 func loadFormatIsValid(param *tree.ExternParam) bool {
 	switch param.Format {
-	case tree.JSONLINE, tree.CSV:
+	case tree.JSONLINE, tree.CSV, tree.PARQUET:
 		return true
 	}
 	return false
