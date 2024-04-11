@@ -927,3 +927,17 @@ func (b *strParamBinder) bind(e tree.Expr) string {
 		return ""
 	}
 }
+
+func (b *strParamBinder) bindIdentStr(ident *tree.AccountIdentified) string {
+	if b.err != nil {
+		return ""
+	}
+
+	switch ident.Typ {
+	case tree.AccountIdentifiedByPassword,
+		tree.AccountIdentifiedWithSSL:
+		return b.bind(ident.Str)
+	default:
+		return ""
+	}
+}

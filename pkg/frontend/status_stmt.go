@@ -314,11 +314,7 @@ func (cae *CreateAccountExecutor) ExecuteImpl(ctx context.Context, ses *Session)
 	}
 	create.Name = b.bind(ca.Name)
 	create.AdminName = b.bind(ca.AuthOption.AdminName)
-	switch create.IdentTyp {
-	case tree.AccountIdentifiedByPassword,
-		tree.AccountIdentifiedWithSSL:
-		create.IdentStr = b.bind(ca.AuthOption.IdentifiedType.Str)
-	}
+	create.IdentStr = b.bindIdentStr(&ca.AuthOption.IdentifiedType)
 	if b.err != nil {
 		return b.err
 	}

@@ -1466,11 +1466,7 @@ func (mce *MysqlCmdExecutor) handleCreateAccount(ctx context.Context, ca *tree.C
 	}
 	create.Name = b.bind(ca.Name)
 	create.AdminName = b.bind(ca.AuthOption.AdminName)
-	switch create.IdentTyp {
-	case tree.AccountIdentifiedByPassword,
-		tree.AccountIdentifiedWithSSL:
-		create.IdentStr = b.bind(ca.AuthOption.IdentifiedType.Str)
-	}
+	create.IdentStr = b.bindIdentStr(&ca.AuthOption.IdentifiedType)
 	if b.err != nil {
 		return b.err
 	}
@@ -1514,11 +1510,7 @@ func (mce *MysqlCmdExecutor) handleAlterAccount(ctx context.Context, st *tree.Al
 		aa.AuthExist = true
 		aa.AdminName = b.bind(st.AuthOption.AdminName)
 		aa.IdentTyp = st.AuthOption.IdentifiedType.Typ
-		switch aa.IdentTyp {
-		case tree.AccountIdentifiedByPassword,
-			tree.AccountIdentifiedWithSSL:
-			aa.IdentStr = b.bind(st.AuthOption.IdentifiedType.Str)
-		}
+		aa.IdentStr = b.bindIdentStr(&st.AuthOption.IdentifiedType)
 	}
 	if b.err != nil {
 		return b.err
