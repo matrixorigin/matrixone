@@ -176,7 +176,7 @@ func doComQueryInBack(requestCtx context.Context,
 		proc.SessionInfo.RoleId = defines.GetRoleId(requestCtx)
 	}
 	var span trace.Span
-	requestCtx, span = trace.Start(requestCtx, "MysqlCmdExecutor.doComQuery",
+	requestCtx, span = trace.Start(requestCtx, "backExec.doComQueryInBack",
 		trace.WithKind(trace.SpanKindStatement))
 	defer span.End()
 

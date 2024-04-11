@@ -32,15 +32,15 @@ func respClientWhenSuccess(requestCtx context.Context,
 
 	switch execCtx.stmt.StmtKind().RespType() {
 	case tree.RESP_STREAM_RESULT_ROW:
-		return respStreamResultRow(requestCtx, ses, execCtx)
+		err = respStreamResultRow(requestCtx, ses, execCtx)
 	case tree.RESP_PREBUILD_RESULT_ROW:
-		return respPrebuildResultRow(requestCtx, ses, execCtx)
+		err = respPrebuildResultRow(requestCtx, ses, execCtx)
 	case tree.RESP_MIXED_RESULT_ROW:
-		return respMixedResultRow(requestCtx, ses, execCtx)
+		err = respMixedResultRow(requestCtx, ses, execCtx)
 	case tree.RESP_NOTHING:
 	case tree.RESP_BY_SITUATION:
 	case tree.RESP_STATUS:
-		return respStatus(requestCtx, ses, execCtx)
+		err = respStatus(requestCtx, ses, execCtx)
 	}
 
 	if ses.GetQueryInExecute() {

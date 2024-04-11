@@ -51,7 +51,7 @@ func ExecRequest(requestCtx context.Context, ses *Session, req *Request) (resp *
 	//}()
 
 	var span trace.Span
-	requestCtx, span = trace.Start(requestCtx, "MysqlCmdExecutor.ExecRequest",
+	requestCtx, span = trace.Start(requestCtx, "ExecRequest",
 		trace.WithKind(trace.SpanKindStatement))
 	defer span.End()
 
@@ -264,7 +264,7 @@ func doComQuery(requestCtx context.Context, ses *Session, input *UserInput) (ret
 		proc.SessionInfo.RoleId = defines.GetRoleId(requestCtx)
 	}
 	var span trace.Span
-	requestCtx, span = trace.Start(requestCtx, "MysqlCmdExecutor.doComQuery",
+	requestCtx, span = trace.Start(requestCtx, "doComQuery",
 		trace.WithKind(trace.SpanKindStatement))
 	defer span.End()
 
@@ -395,22 +395,7 @@ func doComQuery(requestCtx context.Context, ses *Session, input *UserInput) (ret
 			proc:       proc,
 			proto:      proto,
 		}
-		err = executeStmtWithTxn(requestCtx, ses, &execCtx)
-		if err != nil {
-			return err
-		}
-
-		// TODO put in one txn
-		// insert data after create table in create table ... as select ... stmt
-		if ses.createAsSelectSql != "" {
-			sql := ses.createAsSelectSql
-			ses.createAsSelectSql = ""
-			if err = doComQuery(requestCtx, ses, &UserInput{sql: sql}); err != nil {
-				return err
-			}
-		}
-
-		err = respClientWhenSuccess(requestCtx, ses, &execCtx)
+		err = executeStmtWithResponse(requestCtx, ses, &execCtx)
 		if err != nil {
 			return err
 		}
@@ -435,6 +420,43 @@ func doComQuery(requestCtx context.Context, ses *Session, input *UserInput) (ret
 	}
 
 	return nil
+}
+
+func executeStmtWithResponse(requestCtx context.Context,
+	ses *Session,
+	execCtx *ExecCtx,
+) (err error) {
+	var span trace.Span
+	requestCtx, span = trace.Start(requestCtx, "executeStmtWithResponse",
+		trace.WithKind(trace.SpanKindStatement))
+	defer span.End(trace.WithStatementExtra(ses.GetTxnId(), ses.GetStmtId(), ses.GetSqlOfStmt()))
+
+	ses.SetQueryInProgress(true)
+	ses.SetQueryStart(time.Now())
+	ses.SetQueryInExecute(true)
+	defer ses.SetQueryEnd(time.Now())
+	defer ses.SetQueryInProgress(false)
+
+	err = executeStmtWithTxn(requestCtx, ses, execCtx)
+	if err != nil {
+		return err
+	}
+
+	// TODO put in one txn
+	// insert data after create table in create table ... as select ... stmt
+	if ses.createAsSelectSql != "" {
+		sql := ses.createAsSelectSql
+		ses.createAsSelectSql = ""
+		if err = doComQuery(requestCtx, ses, &UserInput{sql: sql}); err != nil {
+			return err
+		}
+	}
+
+	err = respClientWhenSuccess(requestCtx, ses, execCtx)
+	if err != nil {
+		return err
+	}
+	return
 }
 
 func executeStmtWithTxn(requestCtx context.Context,
@@ -489,20 +511,9 @@ func executeStmt(requestCtx context.Context,
 	ses *Session,
 	execCtx *ExecCtx,
 ) (err error) {
-	var span trace.Span
-	requestCtx, span = trace.Start(requestCtx, "MysqlCmdExecutor.executeStmt",
-		trace.WithKind(trace.SpanKindStatement))
-	defer span.End(trace.WithStatementExtra(ses.GetTxnId(), ses.GetStmtId(), ses.GetSqlOfStmt()))
-
-	ses.SetQueryInProgress(true)
-	ses.SetQueryStart(time.Now())
-	ses.SetQueryInExecute(true)
 	if txw, ok := execCtx.cw.(*TxnComputationWrapper); ok {
 		ses.GetTxnCompileCtx().tcw = txw
 	}
-
-	defer ses.SetQueryEnd(time.Now())
-	defer ses.SetQueryInProgress(false)
 
 	// record goroutine info when ddl stmt run timeout
 	switch execCtx.stmt.(type) {
@@ -542,9 +553,6 @@ func executeStmt(requestCtx context.Context,
 				return
 			}
 		}
-	}
-
-	switch st := execCtx.stmt.(type) {
 	case *tree.CreateDatabase:
 		err = inputNameIsInvalid(execCtx.proc.Ctx, string(st.Name))
 		if err != nil {

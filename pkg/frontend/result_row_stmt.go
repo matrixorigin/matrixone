@@ -227,8 +227,10 @@ func respStreamResultRow(requestCtx context.Context,
 		}
 		ses.SetSeqLastValue(execCtx.proc)
 
-		err = execCtx.proto.sendEOFOrOkPacket(0, ses.GetTxnHandler().GetServerStatus())
-		if err != nil {
+		err2 := execCtx.proto.sendEOFOrOkPacket(0, ses.GetTxnHandler().GetServerStatus())
+		if err2 != nil {
+			err = moerr.NewInternalError(requestCtx, "routine send response failed. error:%v ", err2)
+			logStatementStatus(requestCtx, ses, execCtx.stmt, fail, err)
 			return
 		}
 

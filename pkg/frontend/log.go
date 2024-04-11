@@ -74,10 +74,9 @@ func logStatementStringStatus(ctx context.Context, ses FeSession, stmtStr string
 	} else {
 		logError(ses, ses.GetDebugString(), "query trace status", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.StatementField(str), logutil.StatusField(status.String()), logutil.ErrorField(err), trace.ContextField(ctx))
 	}
-	if !ses.IsBackgroundSession() {
-		// pls make sure: NO ONE use the ses.tStmt after EndStatement
-		motrace.EndStatement(ctx, err, ses.SendRows(), outBytes, outPacket)
-	}
+
+	// pls make sure: NO ONE use the ses.tStmt after EndStatement
+	motrace.EndStatement(ctx, err, ses.SendRows(), outBytes, outPacket)
 
 	// need just below EndStatement
 	ses.SetTStmt(nil)
