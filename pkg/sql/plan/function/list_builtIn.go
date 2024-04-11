@@ -2726,6 +2726,27 @@ var supportedMathBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `unhex`
+	{
+		functionId: UNHEX,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_blob.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return Unhex
+				},
+			},
+		},
+	},
+
 	// function `ln`
 	{
 		functionId: LN,
@@ -3416,6 +3437,16 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 					return TimeAdd
 				},
 			},
+			{
+				overloadId: 6,
+				args:       []types.T{types.T_text, types.T_int64, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_datetime.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return DateStringAdd
+				},
+			},
 		},
 	},
 
@@ -3508,6 +3539,16 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 					return TimestampSub
 				},
 			},
+			{
+				overloadId: 5,
+				args:       []types.T{types.T_text, types.T_int64, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_datetime.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return DateStringSub
+				},
+			},
 		},
 	},
 
@@ -3588,7 +3629,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 	// function `from_unixtime`
 	{
 		functionId: FROM_UNIXTIME,
-		class:      plan.Function_STRICT,
+		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
 		layout:     STANDARD_FUNCTION,
 		checkFn:    fixedTypeMatch,
 
@@ -5871,8 +5912,8 @@ var supportedOthersBuiltIns = []FuncNew{
 									col, _ := columnNames.GetStrValue(i)
 									coltypes, _ := columnTypes.GetStrValue(i)
 									if !null2 {
-										tuples, _, _, err := types.DecodeTuple(value)
-										scales := make([]int32, len(coltypes))
+										tuples, _, schema, err := types.DecodeTuple(value)
+										scales := make([]int32, max(len(coltypes), len(schema)))
 										for j := range coltypes {
 											scales[j] = int32(coltypes[j])
 										}
