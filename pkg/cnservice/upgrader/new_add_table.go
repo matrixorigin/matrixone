@@ -549,8 +549,26 @@ var transactionMetricView = &table.Table{
 		"where `metric_name` = 'sql_statement_duration_total'",
 }
 
-var registeredViews = []*table.Table{processlistView, MoLocksView, MoVariablesView, MoTransactionsView, MoCacheView}
-var needUpgradeNewView = []*table.Table{transactionMetricView, PARTITIONSView, STATISTICSView, MoSessionsView, SqlStatementHotspotView, MoLocksView, MoConfigurationsView, MoVariablesView, MoTransactionsView, MoCacheView, ReferentialConstraintsView}
+var registeredViews = []*table.Table{
+	MoLocksView,
+	MoVariablesView,
+	MoTransactionsView,
+	MoCacheView,
+}
+
+var needUpgradeNewView = []*table.Table{
+	transactionMetricView,
+	PARTITIONSView,
+	STATISTICSView,
+	MoSessionsView,
+	SqlStatementHotspotView,
+	MoLocksView,
+	MoConfigurationsView,
+	MoVariablesView,
+	MoTransactionsView,
+	MoCacheView,
+	ReferentialConstraintsView,
+}
 
 var InformationSchemaSCHEMATA = &table.Table{
 	Account:  table.AccountAll,
@@ -643,7 +661,7 @@ var InformationSchemaPARTITIONS = &table.Table{
 		"FROM `mo_catalog`.`mo_tables` `tbl` LEFT JOIN `mo_catalog`.`mo_table_partitions` `part` " +
 		"ON `part`.`table_id` = `tbl`.`rel_id` " +
 		"WHERE `tbl`.`account_id` = current_account_id() and `tbl`.`partitioned` = 1;",
-	CreateTableSql: "drop view if exists information_schema.`PARTITIONS`",
+	CreateTableSql: "drop view if exists information_schema.PARTITIONS",
 }
 
 var InformationSchemaTABLES = &table.Table{
@@ -707,4 +725,5 @@ var needUpgradeExistingView = []*table.Table{
 	InformationSchemaPARTITIONS,
 	InformationSchemaTABLES,
 	InformationSchemaViews,
+	processlistView,
 }

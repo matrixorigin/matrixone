@@ -18,6 +18,7 @@ import (
 	"context"
 	liberrors "errors"
 	"fmt"
+	"go.uber.org/zap"
 	"strconv"
 	"strings"
 
@@ -33,7 +34,7 @@ import (
 var registeredTable = []*table.Table{motrace.SingleRowLogTable}
 
 type Upgrader struct {
-	IEFactory func() ie.InternalExecutor
+	IEFactory func(isLimit bool) ie.InternalExecutor
 }
 
 func (u *Upgrader) GetCurrentSchema(ctx context.Context, exec ie.InternalExecutor, database, tbl string) (*table.Table, error) {
@@ -170,9 +171,9 @@ func (u *Upgrader) Upgrade(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	logutil.Info("get all tenant for upgrade", zap.Int32("tenants number", int32(len(allTenants))))
 
 	errors := []error{}
-
 	if errs := u.UpgradeExistingView(ctx, allTenants); len(errs) > 0 {
 		logutil.Errorf("upgrade existing system view failed")
 		errors = append(errors, errs...)
@@ -204,16 +205,15 @@ func (u *Upgrader) Upgrade(ctx context.Context) error {
 	}
 
 	if len(errors) > 0 {
-		//panic("Upgrade failed during system startup! " + convErrsToFormatMsg(errors))
 		return moerr.NewInternalError(ctx, "Upgrade failed during system startup! "+convErrsToFormatMsg(errors))
 	}
 
 	return nil
 }
 
-// UpgradeNewViewColumn the newly added columns in the system table
+// UpgradeNewViewColumn the newly added columns in the system table, only for system account
 func (u *Upgrader) UpgradeNewViewColumn(ctx context.Context) []error {
-	exec := u.IEFactory()
+	exec := u.IEFactory(false)
 	if exec == nil {
 		return nil
 	}
@@ -224,7 +224,6 @@ func (u *Upgrader) UpgradeNewViewColumn(ctx context.Context) []error {
 		if err != nil {
 			errors = append(errors, moerr.NewUpgrateError(ctx, tbl.Database, tbl.Table, frontend.GetDefaultTenant(), catalog.System_Account, err.Error()))
 			continue
-			//return err
 		}
 
 		//if there is no view, skip
@@ -236,7 +235,6 @@ func (u *Upgrader) UpgradeNewViewColumn(ctx context.Context) []error {
 		if err != nil {
 			errors = append(errors, moerr.NewUpgrateError(ctx, tbl.Database, tbl.Table, frontend.GetDefaultTenant(), catalog.System_Account, err.Error()))
 			continue
-			//return err
 		} else if len(diff.AddedColumns) == 0 {
 			continue
 		}
@@ -255,7 +253,7 @@ func (u *Upgrader) UpgradeNewViewColumn(ctx context.Context) []error {
 
 // UpgradeNewTableColumn the newly added columns in the system table
 func (u *Upgrader) UpgradeNewTableColumn(ctx context.Context) []error {
-	exec := u.IEFactory()
+	exec := u.IEFactory(false)
 	if exec == nil {
 		return nil
 	}
@@ -266,7 +264,6 @@ func (u *Upgrader) UpgradeNewTableColumn(ctx context.Context) []error {
 		if err != nil {
 			errors = append(errors, moerr.NewUpgrateError(ctx, tbl.Database, tbl.Table, frontend.GetDefaultTenant(), catalog.System_Account, err.Error()))
 			continue
-			//return err
 		}
 
 		if currentSchema == nil {
@@ -277,7 +274,6 @@ func (u *Upgrader) UpgradeNewTableColumn(ctx context.Context) []error {
 		if err != nil {
 			errors = append(errors, moerr.NewUpgrateError(ctx, tbl.Database, tbl.Table, frontend.GetDefaultTenant(), catalog.System_Account, err.Error()))
 			continue
-			//return err
 		} else if len(diff.AddedColumns) == 0 {
 			continue
 		}
@@ -286,14 +282,12 @@ func (u *Upgrader) UpgradeNewTableColumn(ctx context.Context) []error {
 		if err != nil {
 			errors = append(errors, moerr.NewUpgrateError(ctx, tbl.Database, tbl.Table, frontend.GetDefaultTenant(), catalog.System_Account, err.Error()))
 			continue
-			//return err
 		}
 
 		// Execute upgrade SQL
 		if err = exec.Exec(ctx, upgradeSQL, ie.NewOptsBuilder().Finish()); err != nil {
 			errors = append(errors, moerr.NewUpgrateError(ctx, tbl.Database, tbl.Table, frontend.GetDefaultTenant(), catalog.System_Account, err.Error()))
 			continue
-			//return err
 		}
 	}
 	if len(errors) > 0 {
@@ -304,7 +298,7 @@ func (u *Upgrader) UpgradeNewTableColumn(ctx context.Context) []error {
 
 // UpgradeNewTable system tables, add system tables
 func (u *Upgrader) UpgradeNewTable(ctx context.Context, tenants []*frontend.TenantInfo) []error {
-	exec := u.IEFactory()
+	exec := u.IEFactory(false)
 	if exec == nil {
 		return nil
 	}
@@ -316,8 +310,12 @@ func (u *Upgrader) UpgradeNewTable(ctx context.Context, tenants []*frontend.Tena
 				if err := u.upgradeFunc(ctx, tbl, false, tenant, exec); err != nil {
 					errors = append(errors, moerr.NewUpgrateError(ctx, tbl.Database, tbl.Table, tenant.Tenant, tenant.TenantID, err.Error()))
 					continue
-					//return err
 				}
+				logutil.Info("Upgrade new table suscessful",
+					zap.String("tableName", tbl.Table),
+					zap.String("tenantName", tenant.Tenant),
+					zap.Int32("tenantID", int32(tenant.TenantID)),
+				)
 			}
 		} else {
 			if err := u.upgradeFunc(ctx, tbl, false, &frontend.TenantInfo{
@@ -330,6 +328,10 @@ func (u *Upgrader) UpgradeNewTable(ctx context.Context, tenants []*frontend.Tena
 			}, exec); err != nil {
 				errors = append(errors, moerr.NewUpgrateError(ctx, tbl.Database, tbl.Table, frontend.GetDefaultTenant(), catalog.System_Account, err.Error()))
 			}
+
+			logutil.Info("Upgrade new table only for system tenant suscessful",
+				zap.String("tableName", tbl.Table),
+			)
 		}
 	}
 	if len(errors) > 0 {
@@ -340,7 +342,7 @@ func (u *Upgrader) UpgradeNewTable(ctx context.Context, tenants []*frontend.Tena
 
 // UpgradeNewView system tables, add system views
 func (u *Upgrader) UpgradeNewView(ctx context.Context, tenants []*frontend.TenantInfo) []error {
-	exec := u.IEFactory()
+	exec := u.IEFactory(false)
 	if exec == nil {
 		return nil
 	}
@@ -352,7 +354,6 @@ func (u *Upgrader) UpgradeNewView(ctx context.Context, tenants []*frontend.Tenan
 				if err := u.upgradeFunc(ctx, tbl, true, tenant, exec); err != nil {
 					errors = append(errors, moerr.NewUpgrateError(ctx, tbl.Database, tbl.Table, tenant.Tenant, tenant.TenantID, err.Error()))
 					continue
-					//return err
 				}
 			}
 		} else {
@@ -381,7 +382,7 @@ func (u *Upgrader) UpgradeNewView(ctx context.Context, tenants []*frontend.Tenan
 // 3. UpgradeMoIndexesSchema adds 3 new columns to mo_indexes table
 // NOTE: mo_indexes is a multi-tenant table, so we need to upgrade (add column) for all tenants.
 func (u *Upgrader) UpgradeMoIndexesSchema(ctx context.Context, tenants []*frontend.TenantInfo) []error {
-	exec := u.IEFactory()
+	exec := u.IEFactory(false)
 	if exec == nil {
 		return nil
 	}
@@ -439,7 +440,7 @@ func (u *Upgrader) UpgradeMoIndexesSchema(ctx context.Context, tenants []*fronte
 
 // UpgradeExistingView: Modify the definition of existing system views
 func (u *Upgrader) UpgradeExistingView(ctx context.Context, tenants []*frontend.TenantInfo) []error {
-	exec := u.IEFactory()
+	exec := u.IEFactory(false)
 	if exec == nil {
 		return nil
 	}
@@ -523,7 +524,7 @@ func (u *Upgrader) CheckViewDefineIsValid(ctx context.Context, exec ie.InternalE
 
 // GetAllTenantInfo Obtain all tenant information in the system
 func (u *Upgrader) GetAllTenantInfo(ctx context.Context) ([]*frontend.TenantInfo, error) {
-	exec := u.IEFactory()
+	exec := u.IEFactory(false)
 	if exec == nil {
 		return nil, moerr.NewInternalError(ctx, "can not get the Internal Executor")
 	}
@@ -547,18 +548,21 @@ func (u *Upgrader) GetAllTenantInfo(ctx context.Context) ([]*frontend.TenantInfo
 	for i := uint64(0); i < result.RowCount(); i++ {
 		tenantName, err := result.StringValueByName(ctx, i, "account_name")
 		if err != nil {
+			logutil.Errorf("Error occured when getting account_name during upgrade, error: %s", err.Error())
 			errors = append(errors, err)
 			continue
 		}
 
 		accountIdStr, err := result.StringValueByName(ctx, i, "account_id")
 		if err != nil {
+			logutil.Errorf("Error occured when getting account_name during upgrade, error: %s", err.Error())
 			errors = append(errors, err)
 			continue
 		}
 
 		accountId, err := strconv.Atoi(accountIdStr)
 		if err != nil {
+			logutil.Errorf("Error occured when getting string conver accountId during upgrade, error: %s", err.Error())
 			errors = append(errors, err)
 			continue
 		}
@@ -587,9 +591,11 @@ func (u *Upgrader) GetAllTenantInfo(ctx context.Context) ([]*frontend.TenantInfo
 
 	// If errors occurred, return them
 	if len(errors) > 0 {
+		logutil.Errorf("Error occured when getting all tenant information during upgrade")
 		errors = append(errors, moerr.NewInternalError(ctx, "can not get the schema"))
 		return nil, liberrors.Join(errors...)
 	}
+
 	return tenantInfos, nil
 }
 

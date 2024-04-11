@@ -173,6 +173,7 @@ var (
 			"REFERENCED_TABLE_NAME varchar(64)," +
 			"REFERENCED_COLUMN_NAME varchar(64)" +
 			");",
+
 		fmt.Sprintf("CREATE VIEW information_schema.COLUMNS AS select "+
 			"'def' as TABLE_CATALOG,"+
 			"att_database as TABLE_SCHEMA,"+
@@ -241,6 +242,7 @@ var (
 			"if(true, NULL, '') AS SQL_PATH," +
 			"cast('NO' as varchar(3)) AS DEFAULT_ENCRYPTION " +
 			"FROM mo_catalog.mo_database where account_id = current_account_id() or (account_id = 0 and datname in ('mo_catalog'))",
+
 		"CREATE TABLE IF NOT EXISTS CHARACTER_SETS(" +
 			"CHARACTER_SET_NAME varchar(64)," +
 			"DEFAULT_COLLATE_NAME varchar(64)," +
@@ -342,7 +344,7 @@ var (
 			"ON `part`.`table_id` = `tbl`.`rel_id` " +
 			"WHERE `tbl`.`account_id` = current_account_id() and `tbl`.`partitioned` = 1;",
 
-		"CREATE VIEW IF NOT EXISTS VIEWS AS " +
+		"CREATE VIEW IF NOT EXISTS information_schema.VIEWS AS " +
 			"SELECT 'def' AS `TABLE_CATALOG`," +
 			"tbl.reldatabase AS `TABLE_SCHEMA`," +
 			"tbl.relname AS `TABLE_NAME`," +
@@ -354,7 +356,7 @@ var (
 			"'utf8mb4' AS `CHARACTER_SET_CLIENT`," +
 			"'utf8mb4_0900_ai_ci' AS `COLLATION_CONNECTION` " +
 			"FROM mo_catalog.mo_tables tbl LEFT JOIN mo_catalog.mo_user usr ON tbl.creator = usr.user_id " +
-			"WHERE tbl.relkind = 'v' and tbl.reldatabase != 'information_schema'",
+			"WHERE tbl.account_id = current_account_id() and tbl.relkind = 'v' and tbl.reldatabase != 'information_schema'",
 
 		"CREATE VIEW IF NOT EXISTS `STATISTICS` AS " +
 			"select 'def' AS `TABLE_CATALOG`," +
