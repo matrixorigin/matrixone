@@ -2105,13 +2105,12 @@ func (tbl *txnTable) getPartitionState(ctx context.Context) (*logtailreplay.Part
 		return nil, err
 	}
 	_, created := tbl.db.txn.createMap.Load(genTableKey(accountId, tbl.tableName, tbl.db.databaseId))
-	if created {
-		return nil, nil
-	}
 
 	if tbl._partState.Load() == nil {
-		if err := tbl.updateLogtail(ctx); err != nil {
-			return nil, err
+		if !created {
+			if err := tbl.updateLogtail(ctx); err != nil {
+				return nil, err
+			}
 		}
 		tbl._partState.Store(tbl.db.txn.engine.getPartition(tbl.db.databaseId, tbl.tableId).Snapshot())
 	}
