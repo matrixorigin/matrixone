@@ -1,0 +1,24 @@
+Traceback (most recent call last):
+  File "/Users/aylei/repo/matrixorigin/matrixone/pkg/udf/pythonservice/pyserver/server.py", line 30, in <module>
+    import grpc
+ModuleNotFoundError: No module named 'grpc'
+[2024-04-11 17:52:40,127] - [Server] - [INFO] - [MainThread] : python server start
+[2024-04-11 17:53:50,784] - [Server] - [INFO] - [ThreadPoolExecutor-0_0] : receive data
+[2024-04-11 17:53:50,785] - [Server] - [INFO] - [ThreadPoolExecutor-0_0] : calculating
+[2024-04-11 17:53:50,785] - [Server] - [INFO] - [ThreadPoolExecutor-0_0] : finish calculating
+Traceback (most recent call last):
+  File "/Users/aylei/repo/matrixorigin/matrixone/pkg/udf/pythonservice/pyserver/server.py", line 417, in <module>
+    run()
+  File "/Users/aylei/repo/matrixorigin/matrixone/pkg/udf/pythonservice/pyserver/server.py", line 402, in run
+    server.wait_for_termination()
+  File "/Users/aylei/Library/Python/3.9/lib/python/site-packages/grpc/_server.py", line 1350, in wait_for_termination
+    return _common.wait(
+  File "/Users/aylei/Library/Python/3.9/lib/python/site-packages/grpc/_common.py", line 156, in wait
+    _wait_once(wait_fn, MAXIMUM_WAIT_TIMEOUT, spin_cb)
+  File "/Users/aylei/Library/Python/3.9/lib/python/site-packages/grpc/_common.py", line 116, in _wait_once
+    wait_fn(timeout=timeout)
+  File "/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/threading.py", line 574, in wait
+    signaled = self._cond.wait(timeout)
+  File "/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/threading.py", line 316, in wait
+    gotit = waiter.acquire(True, timeout)
+KeyboardInterrupt
