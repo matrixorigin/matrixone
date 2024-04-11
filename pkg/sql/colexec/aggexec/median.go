@@ -89,7 +89,7 @@ func (exec *medianColumnExecSelf[T, R]) Fill(groupIndex int, row int, vectors []
 	exec.ret.setGroupNotEmpty(groupIndex)
 	value := vector.MustFixedCol[T](vectors[0])[row]
 
-	return vector.AppendFixed[T](exec.groups[groupIndex], value, false, exec.ret.mp)
+	return vectorAppendWildly(exec.groups[groupIndex], exec.ret.mp, value)
 }
 
 func (exec *medianColumnExecSelf[T, R]) BulkFill(groupIndex int, vectors []*vector.Vector) error {
@@ -115,7 +115,7 @@ func (exec *medianColumnExecSelf[T, R]) BulkFill(groupIndex int, vectors []*vect
 			continue
 		}
 		mustNotEmpty = true
-		if err := vector.AppendFixed[T](exec.groups[groupIndex], v, false, exec.ret.mp); err != nil {
+		if err := vectorAppendWildly(exec.groups[groupIndex], exec.ret.mp, v); err != nil {
 			return err
 		}
 	}
@@ -152,7 +152,7 @@ func (exec *medianColumnExecSelf[T, R]) distinctBulkFill(groupIndex int, vectors
 			continue
 		}
 		mustNotEmpty = true
-		if err = vector.AppendFixed[T](exec.groups[groupIndex], v, false, exec.ret.mp); err != nil {
+		if err = vectorAppendWildly(exec.groups[groupIndex], exec.ret.mp, v); err != nil {
 			return err
 		}
 	}
@@ -177,9 +177,9 @@ func (exec *medianColumnExecSelf[T, R]) BatchFill(offset int, groups []uint64, v
 			if groups[i] != GroupNotMatched {
 				groupIndex := groups[i] - 1
 				exec.ret.setGroupNotEmpty(int(groupIndex))
-				if err := vector.AppendFixed[T](
+				if err := vectorAppendWildly(
 					exec.groups[groupIndex],
-					value, false, exec.ret.mp); err != nil {
+					exec.ret.mp, value); err != nil {
 					return err
 				}
 			}
@@ -194,7 +194,8 @@ func (exec *medianColumnExecSelf[T, R]) BatchFill(offset int, groups []uint64, v
 			if !null {
 				groupIndex := groups[idx] - 1
 				exec.ret.setGroupNotEmpty(int(groupIndex))
-				if err := vector.AppendFixed[T](exec.groups[groupIndex], v, false, exec.ret.mp); err != nil {
+
+				if err := vectorAppendWildly(exec.groups[groupIndex], exec.ret.mp, v); err != nil {
 					return err
 				}
 			}
@@ -216,9 +217,9 @@ func (exec *medianColumnExecSelf[T, R]) distinctBatchFill(offset int, groups []u
 			if needs[i] && groups[i] != GroupNotMatched {
 				groupIndex := groups[i] - 1
 				exec.ret.setGroupNotEmpty(int(groupIndex))
-				if err = vector.AppendFixed[T](
+				if err = vectorAppendWildly(
 					exec.groups[groupIndex],
-					value, false, exec.ret.mp); err != nil {
+					exec.ret.mp, value); err != nil {
 					return err
 				}
 			}
@@ -233,7 +234,7 @@ func (exec *medianColumnExecSelf[T, R]) distinctBatchFill(offset int, groups []u
 			if !null {
 				groupIndex := groups[idx] - 1
 				exec.ret.setGroupNotEmpty(int(groupIndex))
-				if err := vector.AppendFixed[T](exec.groups[groupIndex], v, false, exec.ret.mp); err != nil {
+				if err = vectorAppendWildly(exec.groups[groupIndex], exec.ret.mp, v); err != nil {
 					return err
 				}
 			}
@@ -486,15 +487,4 @@ func generateSortableSlice2[T types.Decimal64 | types.Decimal128](vs []T) sort.I
 		return decimal128Slice(d128)
 	}
 	panic("unsupported type")
-}
-
-func FromD64ToD128(v types.Decimal64) types.Decimal128 {
-	k := types.Decimal128{
-		B0_63:   uint64(v),
-		B64_127: 0,
-	}
-	if v.Sign() {
-		k.B64_127 = ^k.B64_127
-	}
-	return k
 }
