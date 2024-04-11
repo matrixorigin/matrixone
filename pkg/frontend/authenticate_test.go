@@ -8371,9 +8371,38 @@ func TestDoAlterPublication(t *testing.T) {
 				columnType: defines.MYSQL_TYPE_VARCHAR,
 			},
 		},
+		&MysqlColumn{
+			ColumnImpl: ColumnImpl{
+				name:       "database_name",
+				columnType: defines.MYSQL_TYPE_VARCHAR,
+			},
+		},
+		&MysqlColumn{
+			ColumnImpl: ColumnImpl{
+				name:       "database_id",
+				columnType: defines.MYSQL_TYPE_LONGLONG,
+			},
+		},
+	}
+	dbColumns := []Column{
+		&MysqlColumn{
+			ColumnImpl: ColumnImpl{
+				name:       "dat_id",
+				columnType: defines.MYSQL_TYPE_LONGLONG,
+			},
+		},
+		&MysqlColumn{
+			ColumnImpl: ColumnImpl{
+				name:       "dat_type",
+				columnType: defines.MYSQL_TYPE_VARCHAR,
+			},
+		},
 	}
 	kases := []struct {
 		pubName     string
+		dbName      string
+		dbId        uint64
+		dbType      string
 		comment     string
 		accountsSet *tree.AccountsSetOption
 		accountList string
@@ -8387,7 +8416,7 @@ func TestDoAlterPublication(t *testing.T) {
 				All: true,
 			},
 			accountList: "121",
-			data:        [][]any{{"all", "121"}},
+			data:        [][]any{{"all", "121", "db1", 1}},
 			err:         false,
 		},
 		{
@@ -8399,7 +8428,7 @@ func TestDoAlterPublication(t *testing.T) {
 				},
 			},
 			accountList: "a0",
-			data:        [][]any{{"a0", "121"}},
+			data:        [][]any{{"a0", "121", "db1", 1}},
 			err:         false,
 		},
 		{
@@ -8411,7 +8440,7 @@ func TestDoAlterPublication(t *testing.T) {
 				},
 			},
 			accountList: "a0",
-			data:        [][]any{{"a0", "121"}},
+			data:        [][]any{{"a0", "121", "db1", 1}},
 			err:         false,
 		},
 		{
@@ -8423,8 +8452,32 @@ func TestDoAlterPublication(t *testing.T) {
 				},
 			},
 			accountList: "all",
-			data:        [][]any{{"all", "121"}},
+			data:        [][]any{{"all", "121", "db1", 1}},
 			err:         true,
+		},
+		{
+			pubName: "pub1",
+			comment: "124",
+			dbName:  "db2",
+			dbId:    2,
+			dbType:  "",
+			data:    [][]any{{"all", "121", "db1", 1}},
+			err:     false,
+		},
+		{
+			pubName: "pub1",
+			comment: "124",
+			dbName:  "db2",
+			dbId:    2,
+			dbType:  "",
+			accountsSet: &tree.AccountsSetOption{
+				AddAccounts: tree.IdentifierList{
+					tree.Identifier("a1"),
+				},
+			},
+			accountList: "a0,a1",
+			data:        [][]any{{"a0", "121", "db1", 1}},
+			err:         false,
 		},
 	}
 
@@ -8433,10 +8486,15 @@ func TestDoAlterPublication(t *testing.T) {
 			Name:        tree.Identifier(kase.pubName),
 			Comment:     kase.comment,
 			AccountsSet: kase.accountsSet,
+			DbName:      kase.dbName,
 		}
 		sql1, err := getSqlForGetPubInfo(ctx, string(sa.Name), true)
 		require.NoError(t, err)
-		sql2, err := getSqlForUpdatePubInfo(ctx, string(sa.Name), kase.accountList, sa.Comment, true)
+
+		sql3, err := getSqlForGetDbIdAndType(ctx, kase.dbName, true, 0)
+		require.NoError(t, err)
+
+		sql2, err := getSqlForUpdatePubInfo(ctx, string(sa.Name), kase.accountList, sa.Comment, kase.dbName, kase.dbId, true)
 		require.NoError(t, err)
 
 		bh := &backgroundExecTest{}
@@ -8450,6 +8508,10 @@ func TestDoAlterPublication(t *testing.T) {
 			Columns: columns,
 		}
 		bh.sql2result[sql2] = nil
+		bh.sql2result[sql3] = &MysqlResultSet{
+			Data:    [][]any{{kase.dbId, kase.dbType}},
+			Columns: dbColumns,
+		}
 		bh.sql2result["commit;"] = nil
 		bh.sql2result["rollback;"] = nil
 

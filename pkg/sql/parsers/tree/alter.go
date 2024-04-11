@@ -943,14 +943,16 @@ type AlterPublication struct {
 	IfExists    bool
 	Name        Identifier
 	AccountsSet *AccountsSetOption
+	DbName      string
 	Comment     string
 }
 
-func NewAlterPublication(exist bool, name Identifier, accountsSet *AccountsSetOption, comment string) *AlterPublication {
+func NewAlterPublication(exist bool, name Identifier, accountsSet *AccountsSetOption, dbName, comment string) *AlterPublication {
 	a := reuse.Alloc[AlterPublication](nil)
 	a.IfExists = exist
 	a.Name = name
 	a.AccountsSet = accountsSet
+	a.DbName = dbName
 	a.Comment = comment
 	return a
 }

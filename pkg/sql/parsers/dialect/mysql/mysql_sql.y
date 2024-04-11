@@ -531,6 +531,7 @@ import (
 %type <str> comment_opt view_list_opt view_opt security_opt view_tail check_type
 %type <subscriptionOption> subcription_opt
 %type <accountsSetOption> alter_publication_accounts_opt
+%type <str> alter_publication_db_name_opt
 
 %type <select> select_stmt select_no_parens
 %type <selectStatement> simple_select select_with_parens simple_select_clause
@@ -6246,13 +6247,14 @@ alter_stage_stmt:
 
 
 alter_publication_stmt:
-    ALTER PUBLICATION exists_opt ident alter_publication_accounts_opt comment_opt
+    ALTER PUBLICATION exists_opt ident alter_publication_accounts_opt alter_publication_db_name_opt comment_opt
     {
         var ifExists = $3
         var name = tree.Identifier($4.Compare())
         var accountsSet = $5
-        var comment = $6
-        $$ = tree.NewAlterPublication(ifExists, name, accountsSet, comment)
+        var dbName = $6
+        var comment = $7
+        $$ = tree.NewAlterPublication(ifExists, name, accountsSet, dbName, comment)
     }
 
 alter_publication_accounts_opt:
@@ -6284,6 +6286,14 @@ alter_publication_accounts_opt:
 	    }
     }
 
+alter_publication_db_name_opt:
+    {
+	    $$ = ""
+    }
+    | DATABASE db_name
+    {
+	    $$ = $2
+    }
 
 drop_publication_stmt:
     DROP PUBLICATION exists_opt ident
