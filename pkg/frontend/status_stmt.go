@@ -244,6 +244,9 @@ func respStatus(requestCtx context.Context,
 		if st.IsAsSelect {
 			return nil
 		}
+		if len(execCtx.proc.SessionInfo.SeqDeleteKeys) != 0 {
+			ses.DeleteSeqValues(execCtx.proc)
+		}
 		_ = doGrantPrivilegeImplicitly(requestCtx, ses, st)
 		if err2 := ses.GetMysqlProtocol().SendResponse(requestCtx, resp); err2 != nil {
 			err = moerr.NewInternalError(requestCtx, "routine send response failed. error:%v ", err2)
