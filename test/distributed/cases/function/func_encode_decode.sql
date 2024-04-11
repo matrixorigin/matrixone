@@ -1,15 +1,12 @@
--- test encode/decode function
+-- test hex/unhex and to_base64/from_base64 function
 SELECT hex('\xa7');
 SELECT unhex('616263');
 
 SELECT hex('abc'), unhex('616263');
-SELECT encode('abc', 'base64'), decode('YWJj', 'base64');
+SELECT to_base64('abc'), from_base64('YWJj');
 
 SELECT unhex('invalid');
-SELECT decode('invalid', 'base64');
-
-SELECT encode('abc', 'fake');
-SELECT decode('abc', 'fake');
+SELECT from_base64('invalid');
 
 
 -- test serial() and serial_full()
