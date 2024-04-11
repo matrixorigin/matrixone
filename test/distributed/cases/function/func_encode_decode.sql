@@ -1,11 +1,11 @@
 -- test encode/decode function
-SELECT encode('\xa7', 'hex');
-SELECT decode('616263', 'hex');
+SELECT hex('\xa7');
+SELECT unhex('616263');
 
-SELECT encode('abc', 'hex'), decode('616263', 'hex');
+SELECT hex('abc'), unhex('616263');
 SELECT encode('abc', 'base64'), decode('YWJj', 'base64');
 
-SELECT decode('invalid', 'hex');
+SELECT unhex('invalid');
 SELECT decode('invalid', 'base64');
 
 SELECT encode('abc', 'fake');
