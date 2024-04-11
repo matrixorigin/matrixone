@@ -118,6 +118,11 @@ func (s *taeStorage) Debug(ctx context.Context,
 			})
 		}
 		return resp.Read()
+
+	case uint32(api.OpCode_OpTNDeduplicate):
+		resp, _ := handleRead(ctx, txnMeta, data, s.taeHandler.HandleDeduplicateCtl)
+		return resp.Read()
+
 	default:
 		return nil, moerr.NewNotSupportedNoCtx("TAEStorage not support ctl method %d", opCode)
 	}

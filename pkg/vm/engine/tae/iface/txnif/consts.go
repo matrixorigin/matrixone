@@ -54,6 +54,8 @@ const (
 	FullDedup DedupType = iota
 	FullSkipWorkSpaceDedup
 	IncrementalDedup
+	SkipAllDedup      = 3
+	InvalidDedupValue = 4
 )
 
 func TxnStrState(state TxnState) string {

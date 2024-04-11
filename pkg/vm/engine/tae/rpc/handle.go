@@ -916,19 +916,27 @@ func (h *Handle) HandleWrite(
 			req.Cancel()
 		}
 	}()
+
+	optDedupType := txnif.DedupType(h.db.Opts.DeduplicateType.Load())
 	ctx = perfcounter.WithCounterSetFrom(ctx, h.db.Opts.Ctx)
-	switch req.PkCheck {
-	case db.FullDedup:
-		txn.SetDedupType(txnif.FullDedup)
-	case db.IncrementalDedup:
-		if h.db.Opts.IncrementalDedup {
-			txn.SetDedupType(txnif.IncrementalDedup)
-		} else {
+
+	if optDedupType == txnif.SkipAllDedup {
+		txn.SetDedupType(txnif.SkipAllDedup)
+	} else {
+		switch req.PkCheck {
+		case db.FullDedup:
+			txn.SetDedupType(txnif.FullDedup)
+		case db.IncrementalDedup:
+			if optDedupType == txnif.IncrementalDedup {
+				txn.SetDedupType(txnif.IncrementalDedup)
+			} else {
+				txn.SetDedupType(txnif.FullSkipWorkSpaceDedup)
+			}
+		case db.FullSkipWorkspaceDedup:
 			txn.SetDedupType(txnif.FullSkipWorkSpaceDedup)
 		}
-	case db.FullSkipWorkspaceDedup:
-		txn.SetDedupType(txnif.FullSkipWorkSpaceDedup)
 	}
+
 	common.DoIfDebugEnabled(func() {
 		logutil.Debugf("[precommit] handle write typ: %v, %d-%s, %d-%s txn: %s",
 			req.Type, req.TableID,
@@ -1144,6 +1152,17 @@ func (h *Handle) HandleTraceSpan(ctx context.Context,
 	req *db.TraceSpan,
 	resp *api.SyncLogTailResp) (func(), error) {
 
+	return nil, nil
+}
+
+func (h *Handle) HandleDeduplicateCtl(
+	ctx context.Context,
+	meta txn.TxnMeta,
+	req *db.Deduplicate,
+	resp *api.SyncLogTailResp,
+) (func(), error) {
+	dedupType, _ := db.DedupName2Type[req.Cmd]
+	h.db.Opts.DeduplicateType.Store(int32(dedupType))
 	return nil, nil
 }
 

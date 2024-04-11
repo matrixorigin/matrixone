@@ -216,7 +216,25 @@ const (
 	//FullSkipWorkspaceDedup do not check uniqueness of PK against txn's workspace.
 	FullSkipWorkspaceDedup PKCheckType = 1
 	FullDedup              PKCheckType = 2
+	SkipAllDedup           PKCheckType = 3
+	InvalidDedupValue      PKCheckType = 4
 )
+
+var DedupType2Name = map[PKCheckType]string{
+	IncrementalDedup:       "incremental_dedup",
+	FullSkipWorkspaceDedup: "full_skip_workspace_dedup",
+	FullDedup:              "full_dedup",
+	SkipAllDedup:           "skip_all_dedup",
+	InvalidDedupValue:      "invalid_dedup_value",
+}
+
+var DedupName2Type = map[string]PKCheckType{
+	"incremental_dedup":         IncrementalDedup,
+	"full_skip_workspace_dedup": FullSkipWorkspaceDedup,
+	"full_dedup":                FullDedup,
+	"skip_all_dedup":            SkipAllDedup,
+	"invalid_dedup_value":       InvalidDedupValue,
+}
 
 type LocationKey struct{}
 
@@ -314,6 +332,13 @@ func (t *TraceSpan) MarshalBinary() ([]byte, error) {
 func (t *TraceSpan) UnmarshalBinary(data []byte) error {
 	return t.Unmarshal(data)
 }
+
+type Deduplicate struct {
+	Cmd string
+}
+
+func (d *Deduplicate) MarshalBinary() ([]byte, error)    { return d.Marshal() }
+func (d *Deduplicate) UnmarshalBinary(data []byte) error { return d.Unmarshal(data) }
 
 type StorageUsageReq struct {
 	AccIds []int32

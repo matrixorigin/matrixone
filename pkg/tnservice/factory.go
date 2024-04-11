@@ -16,6 +16,7 @@ package tnservice
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -173,7 +174,7 @@ func (s *store) newTAEStorage(ctx context.Context, shard metadata.TNShard, facto
 		gcCfg,
 		logtailServerAddr,
 		logtailServerCfg,
-		s.cfg.Txn.IncrementalDedup == "true",
+		int32(db.DedupName2Type[s.cfg.Txn.DeduplicationType]),
 		max2LogServiceMsgSizeLimit,
 	)
 }

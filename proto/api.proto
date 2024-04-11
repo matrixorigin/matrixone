@@ -40,6 +40,8 @@ enum OpCode {
     OpStorageUsage     = 2008;
     OpGlobalCheckpoint = 2009;
     OpInterceptCommit      = 2010;
+
+    OpTNDeduplicate = 2011;
 }
 
 // TNPingRequest ping request

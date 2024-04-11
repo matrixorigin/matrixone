@@ -576,6 +576,8 @@ func (tbl *txnTable) Append(ctx context.Context, data *containers.Batch) (err er
 				data.Vecs[tbl.schema.GetSingleSortKeyIdx()], true); err != nil {
 				return
 			}
+		} else {
+			// skip all dedup
 		}
 	}
 	if tbl.tableSpace == nil {
@@ -726,7 +728,8 @@ func (tbl *txnTable) RangeDelete(
 				start,
 				end,
 				err)
-			if tbl.store.rt.Options.IncrementalDedup && moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict) {
+			optDedup := txnif.DedupType(tbl.store.rt.Options.DeduplicateType.Load())
+			if optDedup == txnif.IncrementalDedup && moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict) {
 				logutil.Warnf("[txn%X,ts=%s]: table-%d blk-%s delete rows [%d,%d] pk %s",
 					tbl.store.txn.GetID(),
 					tbl.store.txn.GetStartTS().ToString(),
@@ -946,9 +949,13 @@ func (tbl *txnTable) NeedRollback() bool {
 
 // PrePrepareDedup do deduplication check for 1PC Commit or 2PC Prepare
 func (tbl *txnTable) PrePrepareDedup(ctx context.Context) (err error) {
-	if tbl.tableSpace == nil || !tbl.schema.HasPK() || tbl.schema.IsSecondaryIndexTable() {
+	if tbl.tableSpace == nil ||
+		!tbl.schema.HasPK() ||
+		tbl.schema.IsSecondaryIndexTable() ||
+		tbl.store.txn.GetDedupType() == txnif.SkipAllDedup {
 		return
 	}
+
 	var zm index.ZM
 	pkColPos := tbl.schema.GetSingleSortKeyIdx()
 	for _, node := range tbl.tableSpace.nodes {

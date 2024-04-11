@@ -130,4 +130,11 @@ type Handler interface {
 		req *db.InterceptCommit,
 		resp *apipb.SyncLogTailResp,
 	) (func(), error)
+
+	HandleDeduplicateCtl(
+		ctx context.Context,
+		meta txn.TxnMeta,
+		req *db.Deduplicate,
+		resp *apipb.SyncLogTailResp,
+	) (func(), error)
 }

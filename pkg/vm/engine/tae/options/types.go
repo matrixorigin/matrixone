@@ -16,6 +16,7 @@ package options
 
 import (
 	"context"
+	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -71,7 +72,7 @@ type Options struct {
 
 	TransferTableTTL time.Duration
 
-	IncrementalDedup bool
+	DeduplicateType atomic.Int32
 
 	Clock     clock.Clock
 	Fs        fileservice.FileService

@@ -18,6 +18,7 @@ import (
 	"context"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/util"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"path/filepath"
 	"strings"
 	"time"
@@ -143,11 +144,10 @@ type Config struct {
 		// Mode. [Optimistic|Pessimistic], default Pessimistic.
 		Mode string `toml:"mode"`
 
-		// If IncrementalDedup is 'true', it will enable the incremental dedup feature.
-		// If incremental dedup feature is disable,
-		// If empty, it will set 'false' when CN.Txn.Mode is optimistic,  set 'true' when CN.Txn.Mode is pessimistic
-		// IncrementalDedup will be treated as FullSkipWorkspaceDedup.
-		IncrementalDedup string `toml:"incremental-dedup"`
+		// see db.operations.go for all candidate values
+		// If empty, it will set `incremental_dedup` when CN.Txn.Mode is pessimistic
+		// `incremental_dedup` will be treated as FullSkipWorkspaceDedup.
+		DeduplicationType string `toml:"deduplication-type"`
 
 		// Storage txn storage config
 		Storage struct {
@@ -265,16 +265,16 @@ func (c *Config) Validate() error {
 		}
 	}
 
-	if c.Txn.IncrementalDedup == "" {
+	if c.Txn.DeduplicationType == "" {
 		if txn.GetTxnMode(c.Txn.Mode) == txn.TxnMode_Pessimistic {
-			c.Txn.IncrementalDedup = "true"
+			c.Txn.DeduplicationType = "incremental_dedup"
 		} else {
-			c.Txn.IncrementalDedup = "false"
+			c.Txn.DeduplicationType = "invalid_dedup_value"
 		}
 	} else {
-		c.Txn.IncrementalDedup = strings.ToLower(c.Txn.IncrementalDedup)
-		if c.Txn.IncrementalDedup != "true" && c.Txn.IncrementalDedup != "false" {
-			return moerr.NewBadDBNoCtx("not support txn incremental-dedup: " + c.Txn.IncrementalDedup)
+		c.Txn.DeduplicationType = strings.ToLower(c.Txn.DeduplicationType)
+		if _, ok := db.DedupName2Type[c.Txn.DeduplicationType]; !ok {
+			return moerr.NewBadDBNoCtx("not support txn deduplication type: " + c.Txn.DeduplicationType)
 		}
 	}
 
@@ -367,14 +367,14 @@ func (c *Config) SetDefaultValue() {
 		c.Txn.Mode = defaultTxnMode.String()
 	}
 
-	if c.Txn.IncrementalDedup == "" {
+	if c.Txn.DeduplicationType == "" {
 		if txn.GetTxnMode(c.Txn.Mode) == txn.TxnMode_Pessimistic {
-			c.Txn.IncrementalDedup = "true"
+			c.Txn.DeduplicationType = "incremental_dedup"
 		} else {
-			c.Txn.IncrementalDedup = "false"
+			c.Txn.DeduplicationType = "invalid_dedup_value"
 		}
 	} else {
-		c.Txn.IncrementalDedup = strings.ToLower(c.Txn.IncrementalDedup)
+		c.Txn.DeduplicationType = strings.ToLower(c.Txn.DeduplicationType)
 	}
 
 	c.RPC.Adjust()

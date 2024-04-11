@@ -53,6 +53,8 @@ var (
 	UnsubscribeTable      = "UNSUBSCRIBE_TABLE"
 
 	HandleTxnTrace = strings.ToUpper("txn-trace")
+
+	TNDeDupMethod = strings.ToUpper("deduplicate")
 )
 
 var (
@@ -88,6 +90,7 @@ var (
 		GetLatestBind:            handleGetLatestBind,
 		UnsubscribeTable:         handleUnsubscribeTable,
 		HandleTxnTrace:           handleTxnTrace,
+		TNDeDupMethod:            handleDeduplicate,
 	}
 )
 

@@ -123,3 +123,8 @@ message StorageUsageResp {
     repeated uint64 Sizes            = 3;
     uint64 Magic                    = 4;
 }
+
+message Deduplicate {
+    option (gogoproto.typedecl) = false;
+    string cmd                  = 1;
+}

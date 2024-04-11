@@ -17,7 +17,6 @@ package taestorage
 import (
 	"context"
 	"errors"
-
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
@@ -53,21 +52,21 @@ func NewTAEStorage(
 	gcCfg *options.GCCfg,
 	logtailServerAddr string,
 	logtailServerCfg *options.LogtailServerCfg,
-	incrementalDedup bool,
+	dedupType int32,
 	maxMessageSize uint64,
 ) (storage.TxnStorage, error) {
 	opt := &options.Options{
-		Clock:            rt.Clock(),
-		Fs:               fs,
-		Lc:               logservicedriver.LogServiceClientFactory(factory),
-		Shard:            shard,
-		CheckpointCfg:    ckpCfg,
-		GCCfg:            gcCfg,
-		LogStoreT:        options.LogstoreLogservice,
-		IncrementalDedup: incrementalDedup,
-		Ctx:              ctx,
-		MaxMessageSize:   maxMessageSize,
+		Clock:          rt.Clock(),
+		Fs:             fs,
+		Lc:             logservicedriver.LogServiceClientFactory(factory),
+		Shard:          shard,
+		CheckpointCfg:  ckpCfg,
+		GCCfg:          gcCfg,
+		LogStoreT:      options.LogstoreLogservice,
+		Ctx:            ctx,
+		MaxMessageSize: maxMessageSize,
 	}
+	opt.DeduplicateType.Store(dedupType)
 
 	taeHandler := rpc.NewTAEHandle(ctx, dataDir, opt)
 	tae := taeHandler.GetDB()
