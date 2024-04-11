@@ -19,8 +19,8 @@ test_db    CREATE DATABASE `test_db`
 Table    Create Table
 test_table    CREATE TABLE `test_table` (\n`col1` INT DEFAULT NULL,\n`col2` VARCHAR(65535) DEFAULT NULL\n)
 /* cloud_user */ show create view test_view;
-View    Create View
-test_view    /* cloud_user */ create view test_view as select * from test_table;
+View    Create View    character_set_client    collation_connection
+test_view    /* cloud_user */ create view test_view as select * from test_table;    utf8mb4    utf8mb4_general_ci
 /* cloud_user */ show triggers;
 Trigger    Event    Table    Statement    Timing    Created    sql_mode    Definer    character_set_client    collation_connection    Database Collation
 /* cloud_user */ show procedure status;
