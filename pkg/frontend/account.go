@@ -1079,9 +1079,9 @@ func doDropAccount(ctx context.Context, ses *Session, da *tree.DropAccount) (err
 func postDropSuspendAccount(
 	ctx context.Context, ses *Session, accountName string, accountID int64, version uint64,
 ) (err error) {
-	qs := gPu.QueryClient
-	if qs == nil {
-		return moerr.NewInternalError(ctx, "query service is not initialized")
+	qc := gPu.QueryClient
+	if qc == nil {
+		return moerr.NewInternalError(ctx, "query client is not initialized")
 	}
 	var nodes []string
 	currTenant := ses.GetTenantInfo().Tenant
@@ -1102,7 +1102,7 @@ func postDropSuspendAccount(
 
 	var retErr error
 	genRequest := func() *query.Request {
-		req := qs.NewRequest(query.CmdMethod_KillConn)
+		req := qc.NewRequest(query.CmdMethod_KillConn)
 		req.KillConnRequest = &query.KillConnRequest{
 			AccountID: accountID,
 			Version:   version,
@@ -1122,7 +1122,7 @@ func postDropSuspendAccount(
 			fmt.Sprintf("kill connection for account %s failed on node %s", accountName, nodeAddr))
 	}
 
-	err = queryservice.RequestMultipleCn(ctx, nodes, qs, genRequest, handleValidResponse, handleInvalidResponse)
+	err = queryservice.RequestMultipleCn(ctx, nodes, qc, genRequest, handleValidResponse, handleInvalidResponse)
 	return errors.Join(err, retErr)
 }
 

@@ -457,7 +457,7 @@ func handleCmdFieldList(requestCtx context.Context, ses FeSession, icfl *Interna
 	return err
 }
 
-func doCmdFieldList(requestCtx context.Context, ses *Session, icfl *InternalCmdFieldList) error {
+func doCmdFieldList(requestCtx context.Context, ses *Session, _ *InternalCmdFieldList) error {
 	dbName := ses.GetDatabaseName()
 	if dbName == "" {
 		return moerr.NewNoDB(requestCtx)
@@ -554,7 +554,7 @@ func handleReset(ctx context.Context, ses FeSession, st *tree.Reset) error {
 	return doReset(ctx, ses.(*Session), st)
 }
 
-func doReset(ctx context.Context, ses *Session, st *tree.Reset) error {
+func doReset(_ context.Context, _ *Session, _ *tree.Reset) error {
 	return nil
 }
 

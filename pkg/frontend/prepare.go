@@ -18,6 +18,10 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"strconv"
 	"strings"
 
@@ -106,23 +110,25 @@ func parseStmtSendLongData(requestCtx context.Context, ses *Session, data []byte
 	return nil
 }
 
-// Note: for pass the compile quickly. We will remove the comments in the future.
-func handleExplainStmt(requestCtx context.Context, ses FeSession, stmt *tree.ExplainStmt) error {
+func doExplainStmt(ses *Session, stmt *tree.ExplainStmt) error {
+	requestCtx := ses.GetRequestContext()
+
+	//1. generate the plan
 	es, err := getExplainOption(requestCtx, stmt.Options)
 	if err != nil {
 		return err
 	}
 
 	//get query optimizer and execute Optimize
-	plan0, err := buildPlan(requestCtx, ses.(*Session), ses.GetTxnCompileCtx(), stmt.Statement)
+	exPlan, err := buildPlan(requestCtx, ses, ses.GetTxnCompileCtx(), stmt.Statement)
 	if err != nil {
 		return err
 	}
-	if plan0.GetQuery() == nil {
+	if exPlan.GetQuery() == nil {
 		return moerr.NewNotSupported(requestCtx, "the sql query plan does not support explain.")
 	}
 	// generator query explain
-	explainQuery := explain.NewExplainQueryImpl(plan0.GetQuery())
+	explainQuery := explain.NewExplainQueryImpl(exPlan.GetQuery())
 
 	// build explain data buffer
 	buffer := explain.NewExplainDataBuffer()
@@ -131,22 +137,56 @@ func handleExplainStmt(requestCtx context.Context, ses FeSession, stmt *tree.Exp
 		return err
 	}
 
+	//2. fill the result set
 	explainColName := "QUERY PLAN"
-	columns, err := GetExplainColumns(requestCtx, explainColName)
-	if err != nil {
-		return err
-	}
+	//column
+	col1 := new(MysqlColumn)
+	col1.SetColumnType(defines.MYSQL_TYPE_VAR_STRING)
+	col1.SetName(explainColName)
 
 	mrs := ses.GetMysqlResultSet()
-	for _, c := range columns {
-		mysqlc := c.(Column)
-		mrs.AddColumn(mysqlc)
-	}
+	mrs.AddColumn(col1)
 
 	for _, line := range buffer.Lines {
 		mrs.AddRow([]any{line})
 	}
+	ses.rs = mysqlColDef2PlanResultColDef(mrs)
+
+	if openSaveQueryResult(ses) {
+		//3. fill the batch for saving the query result
+		bat, err := fillQueryBatch(ses, explainColName, buffer.Lines)
+		defer bat.Clean(ses.GetMemPool())
+		if err != nil {
+			return err
+		}
+
+		// save query result
+		err = maySaveQueryResult(ses, bat)
+		if err != nil {
+
+			return err
+		}
+	}
 	return nil
+}
+
+func fillQueryBatch(ses *Session, explainColName string, lines []string) (*batch.Batch, error) {
+	bat := batch.New(true, []string{explainColName})
+	typ := types.New(types.T_varchar, types.MaxVarcharLen, 0)
+
+	cnt := len(lines)
+	bat.SetRowCount(cnt)
+	bat.Vecs[0] = vector.NewVec(typ)
+	err := vector.AppendStringList(bat.Vecs[0], lines, nil, ses.GetMemPool())
+	if err != nil {
+		return nil, err
+	}
+	return bat, nil
+}
+
+// Note: for pass the compile quickly. We will remove the comments in the future.
+func handleExplainStmt(_ context.Context, ses FeSession, stmt *tree.ExplainStmt) error {
+	return doExplainStmt(ses.(*Session), stmt)
 }
 
 func doPrepareStmt(ctx context.Context, ses *Session, st *tree.PrepareStmt, sql string, paramTypes []byte) (*PrepareStmt, error) {

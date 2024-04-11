@@ -19,6 +19,7 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"io"
 	gotrace "runtime/trace"
 	"time"
@@ -610,6 +611,12 @@ func executeStmt(requestCtx context.Context,
 		return
 	}
 
+	defer func() {
+		if c, ok := ret.(*compile.Compile); ok {
+			c.Release()
+		}
+	}()
+
 	// cw.Compile may rewrite the stmt in the EXECUTE statement, we fetch the latest version
 	//need to check again.
 	execCtx.stmt = execCtx.cw.GetAst()
@@ -721,7 +728,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 			continue
 		}
 
-		row, err := extractRowFromEveryVector(ses, bat, j, oq, false)
+		row, err := extractRowFromEveryVector(ses, bat, j, oq, true)
 		if err != nil {
 			return err
 		}

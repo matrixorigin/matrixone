@@ -208,10 +208,7 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 	defer span.End(trace.WithStatementExtra(cwft.ses.GetTxnId(), cwft.ses.GetStmtId(), cwft.ses.GetSqlOfStmt()))
 
 	var err error
-	if ses, ok := cwft.ses.(*Session); ok {
-		defer RecordStatementTxnID(requestCtx, ses)
-	}
-
+	defer RecordStatementTxnID(requestCtx, cwft.ses)
 	if cwft.ses.IfInitedTempEngine() {
 		requestCtx = context.WithValue(requestCtx, defines.TemporaryTN{}, cwft.ses.GetTempTableStorage())
 		cwft.ses.SetRequestContext(requestCtx)

@@ -260,12 +260,12 @@ func createConnector(
 	return nil
 }
 
-func handleDropConnector(ctx context.Context, ses *Session, st *tree.DropConnector) error {
+func handleDropConnector(_ context.Context, ses *Session, st *tree.DropConnector) error {
 	//todo: handle Create connector
 	return nil
 }
 
-func handleShowConnectors(ctx context.Context, ses *Session, isLastStmt bool) error {
+func handleShowConnectors(_ context.Context, ses *Session, isLastStmt bool) error {
 	var err error
 	if err := showConnectors(ses); err != nil {
 		return err

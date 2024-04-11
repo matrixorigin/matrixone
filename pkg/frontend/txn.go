@@ -843,7 +843,6 @@ func (th *TxnHandler) setAutocommitOn() {
 
 // get errors during the transaction. rollback the transaction
 func rollbackTxnFunc(reqCtx context.Context, ses FeSession, execErr error, execCtx *ExecCtx) error {
-	incStatementCounter(execCtx.tenant, execCtx.stmt)
 	incStatementErrorsCounter(execCtx.tenant, execCtx.stmt)
 	/*
 		Cases    | set Autocommit = 1/0 | BEGIN statement |
@@ -881,7 +880,6 @@ func commitTxnFunc(requestCtx context.Context,
 	//}()
 
 	//load data handle txn failure internally
-	incStatementCounter(execCtx.tenant, execCtx.stmt)
 	retErr = ses.GetTxnHandler().TxnCommitSingleStatement(execCtx.stmt)
 	if retErr != nil {
 		logStatementStatus(requestCtx, ses, execCtx.stmt, fail, retErr)

@@ -168,7 +168,6 @@ var RecordParseErrorStatement = func(ctx context.Context, ses *Session, proc *pr
 	if tenant == nil {
 		tenant, _ = GetTenantInfo(ctx, "internal")
 	}
-	incStatementCounter(tenant.GetTenant(), nil)
 	incStatementErrorsCounter(tenant.GetTenant(), nil)
 	return ctx, nil
 }
@@ -228,10 +227,6 @@ func transferSessionConnType2StatisticConnType(c ConnType) statistic.ConnType {
 	default:
 		panic("unknown connection type")
 	}
-}
-
-func incStatementCounter(tenant string, stmt tree.Statement) {
-	metric.StatementCounter(tenant, getStatementType(stmt).GetQueryType()).Inc()
 }
 
 func incTransactionCounter(tenant string) {
@@ -372,9 +367,9 @@ func (h *marshalPlanHandler) allocBufferIfNeeded() {
 
 func (h *marshalPlanHandler) Marshal(ctx context.Context) (jsonBytes []byte) {
 	var err error
-	h.allocBufferIfNeeded()
-	h.buffer.Reset()
 	if h.marshalPlan != nil {
+		h.allocBufferIfNeeded()
+		h.buffer.Reset()
 		var jsonBytesLen = 0
 		// XXX, `buffer` can be used repeatedly as a global variable in the future
 		// Provide a relatively balanced initial capacity [8192] for byte slice to prevent multiple memory requests
@@ -395,12 +390,17 @@ func (h *marshalPlanHandler) Marshal(ctx context.Context) (jsonBytes []byte) {
 			jsonBytes = h.buffer.Next(jsonBytesLen)
 		}
 	} else if h.query != nil {
-		jsonBytes = buildErrorJsonPlan(h.buffer, h.uuid, moerr.ErrWarn, "sql query ignore execution plan")
+		// DO NOT use h.buffer
+		return sqlQueryIgnoreExecPlan
 	} else {
-		jsonBytes = buildErrorJsonPlan(h.buffer, h.uuid, moerr.ErrWarn, "sql query no record execution plan")
+		// DO NOT use h.buffer
+		return sqlQueryNoRecordExecPlan
 	}
 	return
 }
+
+var sqlQueryIgnoreExecPlan = []byte(`{"code":200,"message":"sql query ignore execution plan","steps":null}`)
+var sqlQueryNoRecordExecPlan = []byte(`{"code":200,"message":"sql query no record execution plan","steps":null}`)
 
 func (h *marshalPlanHandler) Stats(ctx context.Context) (statsByte statistic.StatsArray, stats motrace.Statistic) {
 	if h.query != nil {
@@ -417,29 +417,29 @@ func (h *marshalPlanHandler) Stats(ctx context.Context) (statsByte statistic.Sta
 				stats.BytesScan += bytes
 			}
 		}
-
-		statsInfo := statistic.StatsInfoFromContext(ctx)
-		if statsInfo != nil {
-			val := int64(statsByte.GetTimeConsumed()) +
-				int64(statsInfo.ParseDuration+
-					statsInfo.CompileDuration+
-					statsInfo.PlanDuration) - (statsInfo.IOAccessTimeConsumption + statsInfo.LockTimeConsumption)
-			if val < 0 {
-				logutil.Warnf(" negative cpu (%s) + statsInfo(%d + %d + %d - %d - %d) = %d",
-					uuid.UUID(h.stmt.StatementID).String(),
-					statsInfo.ParseDuration,
-					statsInfo.CompileDuration,
-					statsInfo.PlanDuration,
-					statsInfo.IOAccessTimeConsumption,
-					statsInfo.LockTimeConsumption,
-					val)
-				v2.GetTraceNegativeCUCounter("cpu").Inc()
-			} else {
-				statsByte.WithTimeConsumed(float64(val))
-			}
-		}
 	} else {
 		statsByte = statistic.DefaultStatsArray
 	}
+	statsInfo := statistic.StatsInfoFromContext(ctx)
+	if statsInfo != nil {
+		val := int64(statsByte.GetTimeConsumed()) +
+			int64(statsInfo.ParseDuration+
+				statsInfo.CompileDuration+
+				statsInfo.PlanDuration) - (statsInfo.IOAccessTimeConsumption + statsInfo.LockTimeConsumption)
+		if val < 0 {
+			logutil.Warnf(" negative cpu (%s) + statsInfo(%d + %d + %d - %d - %d) = %d",
+				uuid.UUID(h.stmt.StatementID).String(),
+				statsInfo.ParseDuration,
+				statsInfo.CompileDuration,
+				statsInfo.PlanDuration,
+				statsInfo.IOAccessTimeConsumption,
+				statsInfo.LockTimeConsumption,
+				val)
+			v2.GetTraceNegativeCUCounter("cpu").Inc()
+		} else {
+			statsByte.WithTimeConsumed(float64(val))
+		}
+	}
+
 	return
 }

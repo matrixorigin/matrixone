@@ -220,11 +220,11 @@ func respStatus(requestCtx context.Context,
 			}
 		}
 	case *tree.CreateTable:
-		resp := setResponse(ses, execCtx.isLastStmt, rspLen)
 		// skip create table as select
 		if st.IsAsSelect {
 			return nil
 		}
+		resp := setResponse(ses, execCtx.isLastStmt, rspLen)
 		if len(execCtx.proc.SessionInfo.SeqDeleteKeys) != 0 {
 			ses.DeleteSeqValues(execCtx.proc)
 		}

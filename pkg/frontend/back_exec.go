@@ -74,6 +74,11 @@ func (back *backExec) Exec(ctx context.Context, sql string) error {
 	if err != nil {
 		return err
 	}
+	defer func() {
+		for _, stmt := range statements {
+			stmt.Free()
+		}
+	}()
 	if len(statements) > 1 {
 		return moerr.NewInternalError(ctx, "Exec() can run one statement at one time. but get '%d' statements now, sql = %s", len(statements), sql)
 	}

@@ -818,6 +818,10 @@ func (ui *UserInput) genSqlSourceType(ses FeSession) {
 		ui.sqlSourceType = append(ui.sqlSourceType, constant.InternalSql)
 		return
 	}
+	if tenant.Tenant == sysAccountName && tenant.User == "internal" {
+		ui.sqlSourceType = append(ui.sqlSourceType, constant.InternalSql)
+		return
+	}
 	for len(sql) > 0 {
 		p1 := strings.Index(sql, "/*")
 		p2 := strings.Index(sql, "*/")

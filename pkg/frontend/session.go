@@ -545,6 +545,7 @@ func NewSession(proto MysqlProtocol, mp *mpool.MPool, gSysVars *GlobalSystemVari
 
 func (ses *Session) Close() {
 	gPu.Counter4.Add(-1)
+	ses.proto = nil
 	ses.mrs = nil
 	ses.data = nil
 	ses.ep = nil
