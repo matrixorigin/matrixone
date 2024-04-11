@@ -845,7 +845,7 @@ func (rb *remoteBackend) resetConn() error {
 			time.Sleep(sleep)
 			duration += sleep
 			if time.Since(start) > rb.options.connectTimeout {
-				return moerr.NewBackendCannotConnectNoCtx()
+				return moerr.NewRPCTimeoutNoCtx()
 			}
 			select {
 			case <-rb.ctx.Done():
