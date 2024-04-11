@@ -23,11 +23,11 @@ import (
 func RegisterBitmapConstruct1(id int64) {
 	aggexec.RegisterSingleAggFromFixedToVar(
 		aggexec.MakeSingleAgg2RegisteredInfo(
-			aggexec.MakeSingleColumnAggInformation(id, types.T_uint32.ToType(), BitmapConstructReturnType, false, true),
+			aggexec.MakeSingleColumnAggInformation(id, types.T_uint64.ToType(), BitmapConstructReturnType, false, true),
 			newAggBitmapConstruct,
 			FillAggBitmapConstruct, nil, FillsAggBitmapConstruct,
 			MergeAggBitmapConstruct,
-			nil,
+			FlushAggBitmapConstruct,
 		))
 }
 
@@ -38,7 +38,7 @@ func RegisterBitmapOr1(id int64) {
 			newAggBitmapOr,
 			FillAggBitmapOr, nil, FillsAggBitmapOr,
 			MergeAggBitmapOr,
-			nil,
+			FlushAggBitmapOr,
 		))
 }
 
@@ -64,6 +64,16 @@ func MergeAggBitmapConstruct(
 	a2 := exec2.(*aggBitmapConstruct)
 	a1.bmp.Or(a2.bmp)
 	return nil
+}
+func FlushAggBitmapConstruct(
+	exec aggexec.SingleAggFromFixedRetVar[uint64],
+	getter aggexec.AggBytesGetter, setter aggexec.AggBytesSetter) error {
+	a := exec.(*aggBitmapConstruct)
+	res, err := a.bmp.MarshalBinary()
+	if err != nil {
+		return err
+	}
+	return setter(res)
 }
 
 func FillAggBitmapOr(
@@ -93,4 +103,14 @@ func MergeAggBitmapOr(
 	a2 := exec2.(*aggBitmapOr)
 	a1.bmp.Or(a2.bmp)
 	return nil
+}
+func FlushAggBitmapOr(
+	exec aggexec.SingleAggFromVarRetVar,
+	getter aggexec.AggBytesGetter, setter aggexec.AggBytesSetter) error {
+	a := exec.(*aggBitmapOr)
+	res, err := a.bmp.MarshalBinary()
+	if err != nil {
+		return err
+	}
+	return setter(res)
 }
