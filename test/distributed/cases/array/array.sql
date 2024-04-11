@@ -226,6 +226,14 @@ insert into t11 values('[1,2]');
 select distinct a from t11;
 select distinct a,a from t11;
 
+-- TinyInt + Vector
+drop table if exists t1;
+create table t1(c1 int,c2 vecf32(5),c3 tinyint unsigned,c4 bigint,c5 decimal(4,2),c6 float,c7 double);
+insert into t1 values(10 ,"[1, 0, 1, 6, 6]",3,10,7.1,0.36,2.10);
+insert into t1 values(60,"[6, 0, 8, 10,129]",2,5,3.26,4.89,1.26);
+insert into t1 values(20,"[ 9, 18, 1, 4, 132]",6,1,9.36,6.9,5.6);
+select c2+c3 from t1;
+
 -- Except
 select * from t8 except select * from t9;
 
