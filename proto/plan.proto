@@ -1014,6 +1014,8 @@ message DataControl {
 		EXECUTE			= 5;
 		DEALLOCATE		= 6;
 		CREATE_ACCOUNT  = 7;
+		ALTER_ACCOUNT   = 8;
+		DROP_ACCOUNT    = 9;
 	}
 	//DataDefinition type
 	DclType dcl_type = 1;
@@ -1022,7 +1024,7 @@ message DataControl {
 		Prepare prepare 			= 3;
 		Execute execute				= 4;
 		Deallocate deallocate 		= 5;
-		CreateAccount create_account = 6;
+		OtherDCL other = 6;
 	}
 }
 
@@ -1401,30 +1403,8 @@ message Deallocate {
 	string name			= 1;
 }
 
-enum AccountIdentifiedOption {
-	AccountIdentifiedUnknown = 0;
-	AccountIdentifiedByPassword = 1;
-	AccountIdentifiedByRandomPassword = 2;
-	AccountIdentifiedWithSSL = 3;
-}
-
-message AccountIdentified {
-	AccountIdentifiedOption Typ = 1;
-	string Str = 2;
-}
-
-enum AccountStatusOption {
-	AccountStatusOpen       = 0;
-	AccountStatusSuspend    = 1;
-	AccountStatusRestricted = 2;
-}
-
-message CreateAccount {
-	bool ifNotExists = 1;
-	Expr name = 2;
-	string adminName = 3;
-	AccountIdentified identified = 4;
-	AccountStatusOption status = 5;
+message OtherDCL {
+	repeated int32 paramTypes = 1;
 }
 
 enum TableLockType {

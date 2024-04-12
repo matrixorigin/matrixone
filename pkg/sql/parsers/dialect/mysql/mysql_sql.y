@@ -753,8 +753,8 @@ import (
 %type <str> explain_foramt_value trim_direction
 %type <str> priority_opt priority quick_opt ignore_opt wild_opt
 
-%type <str> account_name account_admin_name account_role_name
-%type <expr> account_name_or_param
+%type <str> account_name account_role_name
+%type <expr> account_name_or_param account_admin_name
 %type <accountAuthOption> account_auth_option
 %type <alterAccountAuthOption> alter_account_auth_option
 %type <accountIdentified> account_identified
@@ -2588,6 +2588,7 @@ prepareable_stmt:
 |   drop_stmt
 |   show_stmt
 |   update_stmt
+|   alter_account_stmt
 |   select_stmt
     {
         $$ = $1
@@ -3295,7 +3296,7 @@ visibility:
 
 
 alter_account_stmt:
-    ALTER ACCOUNT exists_opt account_name alter_account_auth_option account_status_option account_comment_opt
+    ALTER ACCOUNT exists_opt account_name_or_param alter_account_auth_option account_status_option account_comment_opt
     {
         var ifExists = $3
         var name = $4
@@ -4034,7 +4035,7 @@ drop_sequence_stmt:
     }
 
 drop_account_stmt:
-    DROP ACCOUNT exists_opt account_name
+    DROP ACCOUNT exists_opt account_name_or_param
     {
         var ifExists = $3
         var name = $4
@@ -5989,39 +5990,53 @@ account_auth_option:
 account_admin_name:
     STRING
     {
-    	$$ = $1
+        var Str = $1
+        $$ = tree.NewNumValWithType(constant.MakeString(Str), Str, false, tree.P_char)
     }
 |	ident
 	{
-		$$ = $1.Compare()
+		var Str = $1.Compare()
+        $$ = tree.NewNumValWithType(constant.MakeString(Str), Str, false, tree.P_char)
 	}
+|   VALUE_ARG
+    {
+        $$ = tree.NewParamExpr(yylex.(*Lexer).GetParamIndex())
+    }
 
 account_identified:
     IDENTIFIED BY STRING
     {
-        var Typ = tree.AccountIdentifiedByPassword
-        var Str = $3
         $$ = *tree.NewAccountIdentified(
-            Typ,
-            Str,
+            tree.AccountIdentifiedByPassword,
+            tree.NewNumValWithType(constant.MakeString($3), $3, false, tree.P_char),
+        )
+    }
+|   IDENTIFIED BY VALUE_ARG
+    {
+        $$ = *tree.NewAccountIdentified(
+            tree.AccountIdentifiedByPassword,
+            tree.NewParamExpr(yylex.(*Lexer).GetParamIndex()),
         )
     }
 |   IDENTIFIED BY RANDOM PASSWORD
     {
-        var Typ = tree.AccountIdentifiedByRandomPassword
-        var Str string
         $$ = *tree.NewAccountIdentified(
-            Typ,
-            Str,
+            tree.AccountIdentifiedByRandomPassword,
+            nil,
         )
     }
 |   IDENTIFIED WITH STRING
     {
-        var Typ = tree.AccountIdentifiedWithSSL
-        var Str = $3
         $$ = *tree.NewAccountIdentified(
-            Typ,
-            Str,
+            tree.AccountIdentifiedWithSSL,
+            tree.NewNumValWithType(constant.MakeString($3), $3, false, tree.P_char),
+        )
+    }
+|   IDENTIFIED WITH VALUE_ARG
+    {
+        $$ = *tree.NewAccountIdentified(
+            tree.AccountIdentifiedWithSSL,
+            tree.NewParamExpr(yylex.(*Lexer).GetParamIndex()),
         )
     }
 
@@ -6515,7 +6530,7 @@ user_identified:
     {
     $$ = &tree.AccountIdentified{
         Typ: tree.AccountIdentifiedByPassword,
-        Str: $3,
+        Str: tree.NewNumValWithType(constant.MakeString($3), $3, false, tree.P_char),
     }
     }
 |   IDENTIFIED BY RANDOM PASSWORD
@@ -6528,7 +6543,7 @@ user_identified:
     {
     $$ = &tree.AccountIdentified{
         Typ: tree.AccountIdentifiedWithSSL,
-        Str: $3,
+        Str: tree.NewNumValWithType(constant.MakeString($3), $3, false, tree.P_char),
     }
     }
 
