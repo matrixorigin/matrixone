@@ -1157,6 +1157,8 @@ func (s *stream) done(
 	}
 	if response != nil &&
 		message.streamSequence != s.lastReceivedSequence+1 {
+		s.rb.logger.Warn("sequence out of order", zap.Uint32("new", message.streamSequence),
+			zap.Uint32("last", s.lastReceivedSequence))
 		response = nil
 	}
 
