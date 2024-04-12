@@ -22,11 +22,11 @@ import (
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 
 	"github.com/fagongzi/goetty/v2"
-
-	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"go.uber.org/zap"
 )
 
 // Response Categories
@@ -41,6 +41,10 @@ const (
 	ResultResponse
 	// LocalInfileRequest local infile message
 	LocalInfileRequest
+)
+
+const (
+	ConnectionInfoKey = "connection_info"
 )
 
 type Request struct {
@@ -271,7 +275,7 @@ func (pi *ProtocolImpl) IsEstablished() bool {
 }
 
 func (pi *ProtocolImpl) SetEstablished() {
-	logDebugf(pi.GetDebugString(), "SWITCH ESTABLISHED to true")
+	logutil.Debugf("SWITCH ESTABLISHED to true", zap.String(ConnectionInfoKey, pi.GetDebugString()))
 	pi.established.Store(true)
 }
 
@@ -280,7 +284,7 @@ func (pi *ProtocolImpl) IsTlsEstablished() bool {
 }
 
 func (pi *ProtocolImpl) SetTlsEstablished() {
-	logutil.Debugf("SWITCH TLS_ESTABLISHED to true")
+	logutil.Debugf("SWITCH TLS_ESTABLISHED to true", zap.String(ConnectionInfoKey, pi.GetDebugString()))
 	pi.tlsEstablished.Store(true)
 }
 

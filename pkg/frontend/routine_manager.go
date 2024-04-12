@@ -273,7 +273,7 @@ func (rm *RoutineManager) Created(rs goetty.IOSession) {
 	routine.setSession(ses)
 	pro.SetSession(ses)
 
-	logDebugf(pro.GetDebugString(), "have done some preparation for the connection %s", rs.RemoteAddress())
+	ses.Debugf(ses.GetRequestContext(), "have done some preparation for the connection %s", rs.RemoteAddress())
 
 	// With proxy module enabled, we try to update salt value and label info from proxy.
 	if getGlobalPu().SV.ProxyEnabled {
@@ -290,7 +290,7 @@ func (rm *RoutineManager) Created(rs goetty.IOSession) {
 		return
 	}
 
-	logDebugf(pro.GetDebugString(), "have sent handshake packet to connection %s", rs.RemoteAddress())
+	ses.Debugf(ses.GetRequestContext(), "have sent handshake packet to connection %s", rs.RemoteAddress())
 	rm.setRoutine(rs, pro.connectionID, routine)
 }
 
@@ -318,7 +318,7 @@ func (rm *RoutineManager) Closed(rs goetty.IOSession) {
 				rm.accountRoutine.deleteRoutine(int64(account.GetTenantID()), rt)
 			})
 			rm.sessionManager.RemoveSession(ses)
-			logDebugf(ses.GetDebugString(), "the io session was closed.")
+			ses.Debugf(ses.GetRequestContext(), "the io session was closed.")
 		}
 		rt.cleanup()
 	}
@@ -377,8 +377,6 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 	routine.setInProcessRequest(true)
 	defer routine.setInProcessRequest(false)
 	protocol := routine.getProtocol()
-	// TODO: remove, just use ses.GetDebugInfo()
-	protoInfo := protocol.GetDebugString()
 	packet, ok := msg.(*Packet)
 
 	protocol.SetSequenceID(uint8(packet.SequenceID + 1))
@@ -423,42 +421,42 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 	// finish handshake process
 	if !protocol.IsEstablished() {
 		ts[TSEstablishStart] = time.Now()
-		logDebugf(protoInfo, "HANDLE HANDSHAKE")
+		ses.Debugf(ses.GetRequestContext(), "HANDLE HANDSHAKE")
 
 		/*
 			di := MakeDebugInfo(payload,80,8)
 			logutil.Infof("RP[%v] Payload80[%v]",rs.RemoteAddr(),di)
 		*/
 		if protocol.GetCapability()&CLIENT_SSL != 0 && !protocol.IsTlsEstablished() {
-			logDebugf(protoInfo, "setup ssl")
+			ses.Debugf(ses.GetRequestContext(), "setup ssl")
 			isTlsHeader, err = protocol.HandleHandshake(ctx, payload)
 			if err != nil {
-				routine.ses.Error(routine.ses.requestCtx,
+				ses.Error(ses.requestCtx,
 					"An error occurred",
 					zap.Error(err))
 				return err
 			}
 			if isTlsHeader {
 				ts[TSUpgradeTLSStart] = time.Now()
-				logDebugf(protoInfo, "upgrade to TLS")
+				ses.Debugf(ses.GetRequestContext(), "upgrade to TLS")
 				// do upgradeTls
 				tlsConn := tls.Server(rs.RawConn(), rm.getTlsConfig())
-				logDebugf(protoInfo, "get TLS conn ok")
+				ses.Debugf(ses.GetRequestContext(), "get TLS conn ok")
 				newCtx, cancelFun := context.WithTimeout(ctx, 20*time.Second)
 				if err = tlsConn.HandshakeContext(newCtx); err != nil {
-					routine.ses.Error(routine.ses.requestCtx,
+					ses.Error(ses.requestCtx,
 						"Error occurred before cancel()",
 						zap.Error(err))
 					cancelFun()
-					routine.ses.Error(routine.ses.requestCtx,
+					ses.Error(ses.requestCtx,
 						"Error occurred after cancel()",
 						zap.Error(err))
 					return err
 				}
 				cancelFun()
-				logDebug(routine.ses, protoInfo, "TLS handshake ok")
+				ses.Debugf(ses.GetRequestContext(), "TLS handshake ok")
 				rs.UseConn(tlsConn)
-				logDebug(routine.ses, protoInfo, "TLS handshake finished")
+				ses.Debugf(ses.GetRequestContext(), "TLS handshake finished")
 
 				// tls upgradeOk
 				protocol.SetTlsEstablished()
@@ -473,10 +471,10 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 				protocol.SetEstablished()
 			}
 		} else {
-			logDebugf(protoInfo, "handleHandshake")
+			ses.Debugf(ses.GetRequestContext(), "handleHandshake")
 			_, err = protocol.HandleHandshake(ctx, payload)
 			if err != nil {
-				routine.ses.Error(routine.ses.requestCtx,
+				ses.Error(ses.requestCtx,
 					"Error occurred",
 					zap.Error(err))
 				return err

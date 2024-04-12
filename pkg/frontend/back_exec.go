@@ -533,7 +533,7 @@ func executeStmtInSameSession(ctx context.Context, ses *Session, stmt tree.State
 		ses.SetOutputCallback(getDataFromPipeline)
 		ses.ReplaceProtocol(prevProto)
 	}()
-	logDebug(ses, ses.GetDebugString(), "query trace(ExecStmtInSameSession)",
+	ses.Debug(ctx, "query trace(ExecStmtInSameSession)",
 		logutil.ConnectionIdField(ses.GetConnectionID()))
 	//3. execute the statement
 	return doComQuery(ctx, ses, &UserInput{stmt: stmt})

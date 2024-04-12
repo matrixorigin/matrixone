@@ -16,7 +16,6 @@ package frontend
 
 import (
 	"context"
-	"fmt"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -167,7 +166,7 @@ func executeStatusStmt(requestCtx context.Context, ses *Session, execCtx *ExecCt
 
 		echoTime := time.Now()
 
-		logDebug(ses, ses.GetDebugString(), fmt.Sprintf("time of SendResponse %s", time.Since(echoTime).String()))
+		ses.Debugf(requestCtx, "time of SendResponse %s", time.Since(echoTime).String())
 	}
 
 	return

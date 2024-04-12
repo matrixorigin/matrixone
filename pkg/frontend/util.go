@@ -539,16 +539,6 @@ func appendSessionField(fields []zap.Field, ses FeSession) []zap.Field {
 }
 
 // @Deprecated
-func logDebug(ses FeSession, info string, msg string, fields ...zap.Field) {
-	if ses != nil && ses.GetTenantInfo() != nil && ses.GetTenantInfo().User == db_holder.MOLoggerUser {
-		return
-	}
-	fields = append(fields, zap.String("session_info", info))
-	fields = appendSessionField(fields, ses)
-	getLogger().Log(msg, log.DefaultLogOptions().WithLevel(zap.DebugLevel).AddCallerSkip(1), fields...)
-}
-
-// @Deprecated
 func logError(ses FeSession, info string, msg string, fields ...zap.Field) {
 	if ses != nil && ses.GetTenantInfo() != nil && ses.GetTenantInfo().User == db_holder.MOLoggerUser {
 		return
@@ -556,15 +546,6 @@ func logError(ses FeSession, info string, msg string, fields ...zap.Field) {
 	fields = append(fields, zap.String("session_info", info))
 	fields = appendSessionField(fields, ses)
 	getLogger().Log(msg, log.DefaultLogOptions().WithLevel(zap.ErrorLevel).AddCallerSkip(1), fields...)
-}
-
-// todo: remove this function after all the logDebugf are replaced by logDebug
-// @Deprecated
-func logDebugf(info string, msg string, fields ...interface{}) {
-	if logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
-		fields = append(fields, info)
-		logutil.Debugf(msg+" %s", fields...)
-	}
 }
 
 // isCmdFieldListSql checks the sql is the cmdFieldListSql or not.

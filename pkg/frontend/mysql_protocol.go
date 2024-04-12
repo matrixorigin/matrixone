@@ -1188,22 +1188,22 @@ func (mp *MysqlProtocolImpl) authenticateUser(ctx context.Context, authResponse 
 
 	ses := mp.GetSession()
 	if !mp.SV.SkipCheckUser {
-		logDebugf(mp.getDebugStringUnsafe(), "authenticate user 1")
+		ses.Debugf(ctx, "authenticate user 1")
 		psw, err = ses.AuthenticateUser(mp.GetUserName(), mp.GetDatabaseName(), mp.authResponse, mp.GetSalt(), mp.checkPassword)
 		if err != nil {
 			return err
 		}
-		logDebugf(mp.getDebugStringUnsafe(), "authenticate user 2")
+		ses.Debugf(ctx, "authenticate user 2")
 
 		//TO Check password
 		if mp.checkPassword(psw, mp.GetSalt(), authResponse) {
-			logDebugf(mp.getDebugStringUnsafe(), "check password succeeded")
+			ses.Debugf(ctx, "check password succeeded")
 			ses.InitGlobalSystemVariables()
 		} else {
 			return moerr.NewInternalError(ctx, "check password failed")
 		}
 	} else {
-		logDebugf(mp.getDebugStringUnsafe(), "skip authenticate user")
+		ses.Debugf(ctx, "skip authenticate user")
 		//Get tenant info
 		tenant, err = GetTenantInfo(ctx, mp.GetUserName())
 		if err != nil {
@@ -1236,7 +1236,7 @@ func (mp *MysqlProtocolImpl) HandleHandshake(ctx context.Context, payload []byte
 	} else if uint32(capabilities)&CLIENT_PROTOCOL_41 != 0 {
 		var resp41 response41
 		var ok2 bool
-		logDebugf(mp.getDebugStringUnsafe(), "analyse handshake response")
+		mp.GetSession().Debug(ctx, "analyse handshake response")
 		if ok2, resp41, err = mp.analyseHandshakeResponse41(ctx, payload); !ok2 {
 			return false, err
 		}
@@ -1294,7 +1294,7 @@ func (mp *MysqlProtocolImpl) Authenticate(ctx context.Context) error {
 		v2.AuthenticateDurationHistogram.Observe(ses.timestampMap[TSAuthenticateEnd].Sub(ses.timestampMap[TSAuthenticateStart]).Seconds())
 	}()
 
-	logDebugf(mp.getDebugStringUnsafe(), "authenticate user")
+	ses.Debugf(ctx, "authenticate user")
 	mp.incDebugCount(0)
 	if err := mp.authenticateUser(ctx, mp.authResponse); err != nil {
 		logutil.Errorf("authenticate user failed.error:%v", err)
@@ -1311,13 +1311,13 @@ func (mp *MysqlProtocolImpl) Authenticate(ctx context.Context) error {
 	}
 
 	mp.incDebugCount(2)
-	logDebugf(mp.getDebugStringUnsafe(), "handle handshake end")
+	ses.Debugf(ctx, "handle handshake end")
 	ses.timestampMap[TSSendOKPacketStart] = time.Now()
 	err := mp.sendOKPacket(0, 0, 0, 0, "")
 	ses.timestampMap[TSSendOKPacketEnd] = time.Now()
 	v2.SendOKPacketDurationHistogram.Observe(ses.timestampMap[TSSendOKPacketEnd].Sub(ses.timestampMap[TSSendOKPacketStart]).Seconds())
 	mp.incDebugCount(3)
-	logDebugf(mp.getDebugStringUnsafe(), "handle handshake response ok")
+	ses.Debugf(ctx, "handle handshake response ok")
 	if err != nil {
 		return err
 	}
