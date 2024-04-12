@@ -507,7 +507,8 @@ func Test_RemoveStaleAccounts(t *testing.T) {
 }
 
 func mockCkpDataWithVersion(version uint32, cnt int) (ckpDats []*logtail.CheckpointData, usages [][]logtail.UsageData) {
-	allocator := atomic.Uint64{}
+	var allocator atomic.Uint64
+	allocator.Store(pkgcatalog.MO_RESERVED_MAX)
 	for i := 0; i < cnt; i++ {
 		data := logtail.NewCheckpointDataWithVersion(version, common.DebugAllocator)
 
