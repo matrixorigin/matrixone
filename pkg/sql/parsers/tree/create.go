@@ -5097,7 +5097,7 @@ func (node *CreateAccount) reset() {
 }
 
 func (node *CreateAccount) Free() {
-	reuse.Free[CreateAccount](node, nil) // FIXME: maybe UAF
+	reuse.Free[CreateAccount](node, nil)
 }
 
 type AccountAuthOption struct {

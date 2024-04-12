@@ -341,7 +341,7 @@ func NewAlterAccount(exist bool, name Expr, aopt AlterAccountAuthOption, sopt Ac
 }
 
 func (node *AlterAccount) Free() {
-	reuse.Free[AlterAccount](node, nil) // FIXME: maybe UAF
+	reuse.Free[AlterAccount](node, nil)
 }
 
 func (node *AlterAccount) Format(ctx *FmtCtx) {
