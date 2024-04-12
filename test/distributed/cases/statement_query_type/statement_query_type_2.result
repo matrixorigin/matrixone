@@ -1,0 +1,111 @@
+drop account if exists bvt_query_type;
+create account if not exists `bvt_query_type` ADMIN_NAME 'admin' IDENTIFIED BY '123456';
+create database statement_query_type;
+/* cloud_user */ use statement_query_type;
+/* cloud_user */ begin;
+/* cloud_user */ commit;
+/* cloud_user */ start transaction;
+/* cloud_user */ rollback;
+/* cloud_user */ drop database if exists test_db;
+/* cloud_user */ create database test_db;
+/* cloud_user */ use test_db;
+/* cloud_user */ drop table if exists test_table;
+/* cloud_user */ create table test_table(col1 int,col2 varchar);
+/* cloud_user */ create view test_view as select * from test_table;
+/* cloud_user */ show create database test_db;
+Database    Create Database
+test_db    CREATE DATABASE `test_db`
+/* cloud_user */ show create table test_table;
+Table    Create Table
+test_table    CREATE TABLE `test_table` (\n`col1` INT DEFAULT NULL,\n`col2` VARCHAR(65535) DEFAULT NULL\n)
+/* cloud_user */ show create view test_view;
+View    Create View    character_set_client    collation_connection
+test_view    /* cloud_user */ create view test_view as select * from test_table;    utf8mb4    utf8mb4_general_ci
+/* cloud_user */ show triggers;
+Trigger    Event    Table    Statement    Timing    Created    sql_mode    Definer    character_set_client    collation_connection    Database Collation
+/* cloud_user */ show procedure status;
+Db    Name    Type    Definer    Modified    Created    Security_type    Comment    character_set_client    collation_connection    Database Collation
+/* cloud_user */ show config;
+1
+/* cloud_user */ show events;
+1
+/* cloud_user */ show plugins;
+1
+/* cloud_user */ show profiles;
+1
+/* cloud_user */ show privileges;
+1
+/* cloud_user */ show tables;
+Tables_in_test_db
+test_table
+test_view
+/* cloud_user */ show collation like 'utf8mb4_general_ci';
+Collation    Charset    Id    Default    Compiled    Sortlen    Pad_attribute
+utf8mb4_general_ci    utf8mb4    45        Yes    1    PAD SPACE
+/* cloud_user */ show collation like 'utf8mb4_general_ci%';
+Collation    Charset    Id    Default    Compiled    Sortlen    Pad_attribute
+utf8mb4_general_ci    utf8mb4    45        Yes    1    PAD SPACE
+/* cloud_user */ show index from test_table;
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Visible    Expression
+/* cloud_user */ values row(1,1), row(2,2), row(3,3) order by column_0 desc;
+column_0    column_1
+3    3
+2    2
+1    1
+/* cloud_user */ WITH cte1 AS (SELECT 1),cte2 AS (SELECT 2) SELECT * FROM cte1 join cte2;
+1    2
+1    2
+/* cloud_user */ insert into test_table values (1,'a'),(2,'b'),(3,'c');
+/* cloud_user */ update test_table set col2='xxx' where col1=1;
+/* cloud_user */ delete from test_table where col1=3;
+/* cloud_user */ create account test_account admin_name = 'test_name' identified by '111' open comment 'tenant_test';
+internal error: do not have privilege to execute the statement
+/* cloud_user */ create role test_role;
+/* cloud_user */ create user user_name identified by 'password';
+/* cloud_user */ create database if not exists db1;
+/* cloud_user */ grant create table,drop table on database *.* to test_role;
+/* cloud_user */ revoke test_role from user_name;
+/* cloud_user */ drop user user_name;
+/* cloud_user */ drop role test_role;
+/* cloud_user */ drop account test_account;
+internal error: do not have privilege to execute the statement
+/* cloud_user */ drop database db1;
+/* cloud_user */ create database db2;
+/* cloud_user */ create table table_2(col1 int,col2 varchar);
+/* cloud_user */ create view view_2 as select * from table_2;
+/* cloud_user */ create index index_table_2 on table_2(col1);
+/* cloud_user */ drop index index_table_2 on table_2;
+/* cloud_user */ drop view view_2;
+/* cloud_user */ drop table table_2;
+/* cloud_user */ drop database db2;
+/* cloud_user */ select * from unnest('{"a":1}') as f;
+col    seq    key    path    index    value    this
+UNNEST_DEFAULT    0    a    $.a    null    1    {"a": 1}
+/* cloud_user */ prepare s1 from select * from test_table where col1=?;
+/* cloud_user */ set @a=2;
+/* cloud_user */ execute s1 using @a;
+col1    col2
+2    b
+/* cloud_user */ deallocate prepare s1;
+/* cloud_user */ drop table if exists test_01;
+/* cloud_user */ create table test_01(a int, b varchar);
+/* cloud_user */ show create table test_01;
+Table    Create Table
+test_01    CREATE TABLE `test_01` (\n`a` INT DEFAULT NULL,\n`b` VARCHAR(65535) DEFAULT NULL\n)
+/* cloud_user */ insert into test_01 values (1,'a');
+/* cloud_user */ insert into test_01 values (2,'b');
+/* cloud_user */ update test_01 set a=100 where b='b';
+/* cloud_user */ select * from test_01;
+a    b
+1    a
+100    b
+/* cloud_user */ explain select * from test_01;
+QUERY PLAN
+Project
+  ->  Table Scan on test_db.test_01
+/* cloud_user */ delete from test_01 where a=1;
+/* cloud_user */ truncate table test_01;
+/* cloud_user */ drop table test_01;
+/* cloud_user */ use system;
+/* cloud_user */ drop database test_db;
+drop account if exists bvt_query_type;
