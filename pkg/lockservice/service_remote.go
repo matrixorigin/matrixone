@@ -41,6 +41,7 @@ var methodVersions = map[pb.Method]int64{
 	pb.Method_SetRestartService:  defines.MORPCVersion2,
 	pb.Method_CanRestartService:  defines.MORPCVersion2,
 	pb.Method_RemainTxnInService: defines.MORPCVersion2,
+	pb.Method_ValidateService:    defines.MORPCVersion2,
 }
 
 func (s *service) initRemote() {
@@ -86,6 +87,8 @@ func (s *service) initRemoteHandler() {
 		s.handleRemoteGetWaitingList)
 	s.remote.server.RegisterMethodHandler(pb.Method_KeepRemoteLock,
 		s.handleKeepRemoteLock)
+	s.remote.server.RegisterMethodHandler(pb.Method_ValidateService,
+		s.handleValidateService)
 }
 
 func (s *service) handleRemoteLock(
@@ -194,6 +197,18 @@ func (s *service) handleRemoteUnlock(
 	}
 	err = s.Unlock(ctx, req.Unlock.TxnID, req.Unlock.CommitTS, req.Unlock.Mutations...)
 	writeResponse(ctx, cancel, resp, err, cs)
+}
+
+func (s *service) handleValidateService(
+	ctx context.Context,
+	cancel context.CancelFunc,
+	req *pb.Request,
+	resp *pb.Response,
+	cs morpc.ClientSession) {
+	resp.ValidateService = pb.ValidateServiceResponse{
+		OK: s.serviceID == req.ValidateService.ServiceID,
+	}
+	writeResponse(ctx, cancel, resp, nil, cs)
 }
 
 func (s *service) handleRemoteGetLock(
