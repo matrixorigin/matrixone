@@ -5181,7 +5181,7 @@ func (h *marshalPlanHandler) Stats(ctx context.Context) (statsByte statistic.Sta
 		val := int64(statsByte.GetTimeConsumed()) +
 			int64(statsInfo.ParseDuration+
 				statsInfo.CompileDuration+
-				statsInfo.PlanDuration) - (statsInfo.IOAccessTimeConsumption + statsInfo.LockTimeConsumption)
+				statsInfo.PlanDuration) - (statsInfo.IOAccessTimeConsumption + statsInfo.IOLockTimeConsumption())
 		if val < 0 {
 			logutil.Warnf(" negative cpu (%s) + statsInfo(%d + %d + %d - %d - %d) = %d",
 				uuid.UUID(h.stmt.StatementID).String(),
@@ -5189,7 +5189,7 @@ func (h *marshalPlanHandler) Stats(ctx context.Context) (statsByte statistic.Sta
 				statsInfo.CompileDuration,
 				statsInfo.PlanDuration,
 				statsInfo.IOAccessTimeConsumption,
-				statsInfo.LockTimeConsumption,
+				statsInfo.IOLockTimeConsumption(),
 				val)
 			v2.GetTraceNegativeCUCounter("cpu").Inc()
 		} else {
