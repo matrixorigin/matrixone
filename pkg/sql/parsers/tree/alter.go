@@ -282,7 +282,6 @@ func (node *AlterUser) reset() {
 			}
 		}
 	}
-	node.CommentOrAttribute.Free()
 	*node = AlterUser{}
 }
 
@@ -292,7 +291,7 @@ func (node *AlterUser) GetQueryType() string     { return QueryTypeDCL }
 type AlterAccountAuthOption struct {
 	Exist          bool
 	Equal          string
-	AdminName      string
+	AdminName      Expr
 	IdentifiedType AccountIdentified
 }
 
@@ -304,7 +303,10 @@ func (node *AlterAccountAuthOption) Format(ctx *FmtCtx) {
 			ctx.WriteString(node.Equal)
 		}
 
-		ctx.WriteString(fmt.Sprintf(" '%s'", node.AdminName))
+		ctx.WriteString(" ")
+		quoteCtx := *ctx
+		quoteCtx.singleQuoteString = true
+		node.AdminName.Format(&quoteCtx)
 		node.IdentifiedType.Format(ctx)
 	}
 }
@@ -312,7 +314,6 @@ func (node *AlterAccountAuthOption) Format(ctx *FmtCtx) {
 func (node AlterAccountAuthOption) TypeName() string { return "tree.AlterAccountAuthOption" }
 
 func (node *AlterAccountAuthOption) reset() {
-	node.IdentifiedType.Free()
 	*node = AlterAccountAuthOption{}
 }
 
@@ -321,7 +322,7 @@ func (node *AlterAccountAuthOption) Free() { reuse.Free[AlterAccountAuthOption](
 type AlterAccount struct {
 	statementImpl
 	IfExists   bool
-	Name       string
+	Name       Expr
 	AuthOption AlterAccountAuthOption
 	// status_option or not
 	StatusOption AccountStatus
@@ -329,7 +330,7 @@ type AlterAccount struct {
 	Comment AccountComment
 }
 
-func NewAlterAccount(exist bool, name string, aopt AlterAccountAuthOption, sopt AccountStatus, c AccountComment) *AlterAccount {
+func NewAlterAccount(exist bool, name Expr, aopt AlterAccountAuthOption, sopt AccountStatus, c AccountComment) *AlterAccount {
 	a := reuse.Alloc[AlterAccount](nil)
 	a.IfExists = exist
 	a.Name = name
@@ -340,9 +341,6 @@ func NewAlterAccount(exist bool, name string, aopt AlterAccountAuthOption, sopt 
 }
 
 func (node *AlterAccount) Free() {
-	node.AuthOption.Free()
-	node.StatusOption.Free()
-	node.Comment.Free()
 	reuse.Free[AlterAccount](node, nil)
 }
 
@@ -351,7 +349,7 @@ func (node *AlterAccount) Format(ctx *FmtCtx) {
 	if node.IfExists {
 		ctx.WriteString("if exists ")
 	}
-	ctx.WriteString(node.Name)
+	node.Name.Format(ctx)
 	node.AuthOption.Format(ctx)
 	node.StatusOption.Format(ctx)
 	node.Comment.Format(ctx)
@@ -363,7 +361,6 @@ func (node *AlterAccount) GetQueryType() string     { return QueryTypeDCL }
 func (node AlterAccount) TypeName() string { return "tree.AlterAccount" }
 
 func (node *AlterAccount) reset() {
-	node.AuthOption.Free()
 	*node = AlterAccount{}
 }
 
