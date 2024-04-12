@@ -18,13 +18,12 @@ import (
 	"context"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
-
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
 // executeStatusStmt run the statement that responses status t

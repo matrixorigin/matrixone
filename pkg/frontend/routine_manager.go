@@ -298,10 +298,11 @@ func (rm *RoutineManager) Created(rs goetty.IOSession) {
 When the io is closed, the Closed will be called.
 */
 func (rm *RoutineManager) Closed(rs goetty.IOSession) {
-	logutil.Debugf("clean resource of the connection %d:%s", rs.ID(), rs.RemoteAddress())
+	ses := rm.getRoutine(rs).getSession()
+	ses.Debugf(ses.requestCtx, "clean resource of the connection %d:%s", rs.ID(), rs.RemoteAddress())
 	defer func() {
 		v2.CloseRoutineCounter.Inc()
-		logutil.Debugf("resource of the connection %d:%s has been cleaned", rs.ID(), rs.RemoteAddress())
+		ses.Debugf(ses.requestCtx, "resource of the connection %d:%s has been cleaned", rs.ID(), rs.RemoteAddress())
 	}()
 	rt := rm.deleteRoutine(rs)
 
@@ -334,12 +335,13 @@ func (rm *RoutineManager) kill(ctx context.Context, killConnection bool, idThatK
 
 	killMyself := idThatKill == id
 	if rt != nil {
+		ses := rt.getSession()
 		if killConnection {
-			logutil.Infof("kill connection %d", id)
+			ses.Infof(ctx, "kill connection %d", id)
 			rt.killConnection(killMyself)
 			rm.accountRoutine.deleteRoutine(int64(rt.ses.GetTenantInfo().GetTenantID()), rt)
 		} else {
-			logutil.Infof("kill query %s on the connection %d", statementId, id)
+			ses.Infof(ctx, "kill query %s on the connection %d", statementId, id)
 			rt.killQuery(killMyself, statementId)
 		}
 	} else {

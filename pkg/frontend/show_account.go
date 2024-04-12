@@ -28,7 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -204,7 +203,7 @@ func requestStorageUsage(ses *Session, accIds [][]int32) (resp any, tried bool, 
 }
 
 func handleStorageUsageResponse_V0(ctx context.Context, fs fileservice.FileService,
-	usage *db.StorageUsageResp_V0) (map[int32]uint64, error) {
+	usage *db.StorageUsageResp_V0, logger SessionLogger) (map[int32]uint64, error) {
 	result := make(map[int32]uint64, 0)
 	for idx := range usage.CkpEntries {
 		version := usage.CkpEntries[idx].Version
@@ -214,7 +213,7 @@ func handleStorageUsageResponse_V0(ctx context.Context, fs fileservice.FileServi
 		if version < logtail.CheckpointVersion9 {
 			// exist old version checkpoint which hasn't storage usage data in it,
 			// to avoid inaccurate info leading misunderstand, we chose to return empty result
-			logutil.Info("[storage usage]: found older ckp when handle storage usage response")
+			logger.Info(ctx, "[storage usage]: found older ckp when handle storage usage response")
 			return map[int32]uint64{}, nil
 		}
 
@@ -339,7 +338,7 @@ func getAccountsStorageUsage(ctx context.Context, ses *Session, accIds [][]int32
 		}
 
 		// step 3: handling these pulled data
-		return handleStorageUsageResponse_V0(ctx, fs, usage)
+		return handleStorageUsageResponse_V0(ctx, fs, usage, ses.GetLogger())
 
 	} else {
 		usage, ok := response.(*db.StorageUsageResp)

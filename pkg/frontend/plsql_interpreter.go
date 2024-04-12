@@ -22,7 +22,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -313,7 +312,7 @@ func (interpreter *Interpreter) interpret(stmt tree.Statement) (SpStatus, error)
 		// create new variable scope and push it
 		curScope := make(map[string]interface{})
 		*interpreter.varScope = append(*interpreter.varScope, curScope)
-		logutil.Info("current scope level: " + strconv.Itoa(len(*interpreter.varScope)))
+		interpreter.ses.Infof(interpreter.ctx, "current scope level: "+strconv.Itoa(len(*interpreter.varScope)))
 		// recursively execute
 		for _, innerSt := range st.Stmts {
 			_, err := interpreter.interpret(innerSt)

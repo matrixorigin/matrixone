@@ -1940,6 +1940,10 @@ func (ses *Session) Migrate(req *query.MigrateConnToRequest) error {
 	return nil
 }
 
+func (ses *Session) GetLogger() SessionLogger {
+	return ses
+}
+
 func (ses *Session) Info(ctx context.Context, msg string, fields ...zap.Field) {
 	if ses.logger.Enabled(zap.InfoLevel) {
 		fields = append(fields, zap.String("session_info", ses.GetDebugString()))
