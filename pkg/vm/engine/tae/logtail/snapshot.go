@@ -157,7 +157,7 @@ func (sm *SnapshotMeta) Update(data *CheckpointData) *SnapshotMeta {
 	delDropAtVec := delTableTxn.GetVectorByName(txnbase.SnapshotAttr_CommitTS).GetDownstreamVector()
 	for i := 0; i < delTableTxn.Length(); i++ {
 		tid := vector.GetFixedAt[uint64](delTableIDVec, i)
-		dropAt := vector.GetFixedAt[uint64](delDropAtVec, i)
+		dropAt := vector.GetFixedAt[types.TS](delDropAtVec, i)
 		table := sm.acctIndexes[tid]
 		table.deleteAt = dropAt
 		sm.acctIndexes[tid] = table
@@ -196,12 +196,12 @@ func (sm *SnapshotMeta) GetSnapshot(ctx context.Context, fs fileservice.FileServ
 			}
 			defer bat.Clean(mp)
 			for r := 0; r < bat.Vecs[0].Length(); r++ {
-				tid := vector.GetFixedAt[uint64](bat.Vecs[0], r)
+				id := vector.GetFixedAt[uint64](bat.Vecs[0], r)
 				ts := vector.GetFixedAt[types.TS](bat.Vecs[1], r)
-				if snapshotList[tid] == nil {
-					snapshotList[tid] = containers.MakeVector(colTypes[1], mp)
+				if snapshotList[id] == nil {
+					snapshotList[id] = containers.MakeVector(colTypes[1], mp)
 				}
-				err = vector.AppendFixed[types.TS](snapshotList[tid].GetDownstreamVector(), ts, false, mp)
+				err = vector.AppendFixed[types.TS](snapshotList[id].GetDownstreamVector(), ts, false, mp)
 				if err != nil {
 					return nil, err
 				}
@@ -297,6 +297,16 @@ func (sm *SnapshotMeta) ReadMeta(ctx context.Context, name string, fs fileservic
 	}
 	sm.Rebuild(bat)
 	return nil
+}
+
+func (sm *SnapshotMeta) GetSnapshotList(SnapshotList map[uint64][]types.TS, tid uint64) []types.TS {
+	sm.RLock()
+	sm.RUnlock()
+	if sm.acctIndexes[tid] == nil {
+		return nil
+	}
+	accID := sm.acctIndexes[tid].accID
+	return SnapshotList[accID]
 }
 
 func CloseSnapshotList(snapshots map[uint64]containers.Vector) {

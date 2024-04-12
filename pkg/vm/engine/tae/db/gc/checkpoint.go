@@ -86,10 +86,7 @@ type checkpointCleaner struct {
 		enableGC bool
 	}
 
-	snapshot struct {
-		sync.RWMutex
-		snapshotMeta *logtail.SnapshotMeta
-	}
+	snapshotMeta *logtail.SnapshotMeta
 
 	mPool *mpool.MPool
 }
@@ -108,7 +105,7 @@ func NewCheckpointCleaner(
 	}
 	cleaner.delWorker = NewGCWorker(fs, cleaner)
 	cleaner.minMergeCount.count = MinMergeCount
-	cleaner.snapshot.snapshotMeta = logtail.NewSnapshotMeta()
+	cleaner.snapshotMeta = logtail.NewSnapshotMeta()
 	cleaner.option.enableGC = true
 	cleaner.mPool = common.DebugAllocator
 	return cleaner
@@ -122,9 +119,7 @@ func (c *checkpointCleaner) GetMPool() *mpool.MPool {
 }
 
 func (c *checkpointCleaner) SetTid(tid uint64) {
-	c.snapshot.Lock()
-	defer c.snapshot.Unlock()
-	c.snapshot.snapshotMeta.SetTid(tid)
+	c.snapshotMeta.SetTid(tid)
 }
 
 func (c *checkpointCleaner) EnableGCForTest() {
@@ -204,7 +199,7 @@ func (c *checkpointCleaner) Replay() error {
 		c.updateInputs(table)
 	}
 	if snapFile != "" {
-		err = c.snapshot.snapshotMeta.ReadMeta(c.ctx, GCMetaDir+snapFile, c.fs.Service)
+		err = c.snapshotMeta.ReadMeta(c.ctx, GCMetaDir+snapFile, c.fs.Service)
 		if err != nil {
 			return err
 		}
@@ -404,7 +399,7 @@ func (c *checkpointCleaner) softGC(t *GCTable, gckp *checkpoint.CheckpointEntry,
 	for _, table := range c.inputs.tables {
 		mergeTable.Merge(table)
 	}
-	gc := mergeTable.SoftGC(t, gckp.GetEnd(), snapshots)
+	gc := mergeTable.SoftGC(t, gckp.GetEnd(), snapshots, c.snapshotMeta)
 	c.inputs.tables = make([]*GCTable, 0)
 	c.inputs.tables = append(c.inputs.tables, mergeTable)
 	c.updateMaxCompared(gckp)
@@ -477,7 +472,7 @@ func (c *checkpointCleaner) CheckGC() error {
 		return moerr.NewInternalErrorNoCtx("processing clean GetSnapshots %s: %v", debugCandidates[0].String(), err)
 	}
 	defer logtail.CloseSnapshotList(snapshots)
-	debugTable.SoftGC(gcTable, gCkp.GetEnd(), snapshots)
+	debugTable.SoftGC(gcTable, gCkp.GetEnd(), snapshots, c.snapshotMeta)
 	var mergeTable *GCTable
 	if len(c.inputs.tables) > 1 {
 		mergeTable = NewGCTable()
@@ -487,7 +482,7 @@ func (c *checkpointCleaner) CheckGC() error {
 	} else {
 		mergeTable = c.inputs.tables[0]
 	}
-	mergeTable.SoftGC(gcTable, gCkp.GetEnd(), snapshots)
+	mergeTable.SoftGC(gcTable, gCkp.GetEnd(), snapshots, c.snapshotMeta)
 	if !mergeTable.Compare(debugTable) {
 		logutil.Errorf("inputs :%v", c.inputs.tables[0].String())
 		logutil.Errorf("debugTable :%v", debugTable.String())
@@ -600,7 +595,7 @@ func (c *checkpointCleaner) createNewInput(
 	}
 	name := blockio.EncodeSnapshotMetadataFileName(GCMetaDir,
 		PrefixSnapMeta, ckps[0].GetStart(), ckps[len(ckps)-1].GetEnd())
-	err = c.snapshot.snapshotMeta.SaveMeta(name, c.fs.Service)
+	err = c.snapshotMeta.SaveMeta(name, c.fs.Service)
 	if err != nil {
 		logutil.Infof("SaveMeta is failed")
 		return
@@ -620,14 +615,10 @@ func (c *checkpointCleaner) createNewInput(
 }
 
 func (c *checkpointCleaner) updateSnapshot(data *logtail.CheckpointData) error {
-	c.snapshot.Lock()
-	defer c.snapshot.Unlock()
-	c.snapshot.snapshotMeta.Update(data)
+	c.snapshotMeta.Update(data)
 	return nil
 }
 
 func (c *checkpointCleaner) GetSnapshots() (map[uint64]containers.Vector, error) {
-	c.snapshot.RLock()
-	defer c.snapshot.RUnlock()
-	return c.snapshot.snapshotMeta.GetSnapshot(c.ctx, c.fs.Service, c.mPool)
+	return c.snapshotMeta.GetSnapshot(c.ctx, c.fs.Service, c.mPool)
 }
