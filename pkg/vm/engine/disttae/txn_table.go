@@ -2136,28 +2136,6 @@ func (tbl *txnTable) getPartitionState(ctx context.Context) (*logtailreplay.Part
 	return tbl._partState.Load(), nil
 }
 
-// TODO::update snapshot logtails by pull.
-func (tbl *txnTable) UpdateObjectInfos(ctx context.Context) (err error) {
-	tbl.tnList = []int{0}
-
-	accountId, err := defines.GetAccountId(ctx)
-	if err != nil {
-		return err
-	}
-	_, created := tbl.db.op.GetWorkspace().(*Transaction).createMap.Load(genTableKey(accountId, tbl.tableName, tbl.db.databaseId))
-	// check if the table is not created in this txn, and the block infos are not updated, then update:
-	// 1. update logtail
-	// 2. generate block infos
-	// 3. update the blockInfosUpdated and blockInfos fields of the table
-	if !created && !tbl.objInfosUpdated.Load() {
-		if err = tbl.updateLogtail(ctx); err != nil {
-			return
-		}
-		tbl.objInfosUpdated.Store(true)
-	}
-	return
-}
-
 func (tbl *txnTable) updateLogtail(ctx context.Context) (err error) {
 	defer func() {
 		if err == nil {
