@@ -126,9 +126,9 @@ func (d *distinctHash) batchFill(vs []*vector.Vector, offset int, groups []uint6
 // merge was the method to merge two groups of distinct agg.
 // but distinct agg should be run in only one node and without any parallel.
 // because the distinct agg should store all the source data to make sure the result is correct if we use parallel.
-// e.g.
+// there is one simple example that:
 // select count(distinct a) from t;
-// and a is a column with 1, 2, 3, 3, 5
+// and `a` is a column with 1, 2, 3, 3, 5
 // if we use parallel, and the data is split into two parts: [1, 2, 3] and [3, 5].
 // once we do the merge, we will get the result 3 + 2, but the correct result should be 3 + 1.
 // we need to loop the [3, 5] to do a new data fill to make sure the result is correct, but not do 3 + 2.

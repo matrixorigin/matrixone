@@ -37,8 +37,6 @@ func vectorAppendWildly[T numeric | types.Decimal64 | types.Decimal128](v *vecto
 	return nil
 }
 
-var _ = vectorAppendBytesWildly
-
 func vectorAppendBytesWildly(v *vector.Vector, mp *mpool.MPool, value []byte) error {
 	var va types.Varlena
 	if err := vector.BuildVarlenaFromByteSlice(v, &va, &value, mp); err != nil {

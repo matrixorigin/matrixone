@@ -106,7 +106,7 @@ func (exec *clusterCentersExec) Fill(groupIndex int, row int, vectors []*vector.
 
 	exec.ret.setGroupNotEmpty(groupIndex)
 	value := vector.MustBytesCol(vectors[0])[row]
-	return vector.AppendBytes(exec.groupData[groupIndex], value, false, exec.ret.mp)
+	return vectorAppendBytesWildly(exec.groupData[groupIndex], exec.ret.mp, value)
 }
 
 func (exec *clusterCentersExec) BulkFill(groupIndex int, vectors []*vector.Vector) error {
@@ -118,7 +118,7 @@ func (exec *clusterCentersExec) BulkFill(groupIndex int, vectors []*vector.Vecto
 		value := vector.MustBytesCol(vectors[0])[0]
 		exec.ret.setGroupNotEmpty(groupIndex)
 		for i, j := uint64(0), uint64(vectors[0].Length()); i < j; i++ {
-			if err := vector.AppendBytes(exec.groupData[groupIndex], value, false, exec.ret.mp); err != nil {
+			if err := vectorAppendBytesWildly(exec.groupData[groupIndex], exec.ret.mp, value); err != nil {
 				return err
 			}
 		}
@@ -132,7 +132,7 @@ func (exec *clusterCentersExec) BulkFill(groupIndex int, vectors []*vector.Vecto
 			continue
 		}
 		exec.ret.setGroupNotEmpty(groupIndex)
-		if err := vector.AppendBytes(exec.groupData[groupIndex], v, false, exec.ret.mp); err != nil {
+		if err := vectorAppendBytesWildly(exec.groupData[groupIndex], exec.ret.mp, v); err != nil {
 			return err
 		}
 	}
@@ -151,9 +151,9 @@ func (exec *clusterCentersExec) BatchFill(offset int, groups []uint64, vectors [
 				groupIndex := int(groups[i] - 1)
 
 				exec.ret.setGroupNotEmpty(groupIndex)
-				if err := vector.AppendBytes(
+				if err := vectorAppendBytesWildly(
 					exec.groupData[groupIndex],
-					value, false, exec.ret.mp); err != nil {
+					exec.ret.mp, value); err != nil {
 					return err
 				}
 			}
@@ -169,9 +169,9 @@ func (exec *clusterCentersExec) BatchFill(offset int, groups []uint64, vectors [
 				groupIndex := int(groups[idx] - 1)
 
 				exec.ret.setGroupNotEmpty(groupIndex)
-				if err := vector.AppendBytes(
+				if err := vectorAppendBytesWildly(
 					exec.groupData[groupIndex],
-					v, false, exec.ret.mp); err != nil {
+					exec.ret.mp, v); err != nil {
 					return err
 				}
 			}

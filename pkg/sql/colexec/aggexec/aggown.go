@@ -25,6 +25,10 @@ type AggBytesSetter func(value []byte) error
 type AggGetter[T types.FixedSizeTExceptStrType] func() T
 type AggBytesGetter func() []byte
 
+/*
+	the definition of aggregation's basic method.
+*/
+
 type SingleAggFill1[from, to types.FixedSizeTExceptStrType] func(
 	exec SingleAggFromFixedRetFixed[from, to], value from, getter AggGetter[to], setter AggSetter[to]) error
 type SingleAggFill2[from types.FixedSizeTExceptStrType] func(
@@ -112,6 +116,9 @@ type AggCanMarshal interface {
 	4. SingleAggFromVarRetVar: aggregation receives a variable length type and returns a variable length type.
 	5. MultiAggRetFixed: aggregation receives multi columns and returns a fixed length type.
 	6. MultiAggRetVar: aggregation receives multi columns and returns a variable length type.
+
+	todo: we should remove the Init() method later to get a better performance.
+		and can reuse the private structure easily.
 */
 
 type SingleAggFromFixedRetFixed[
