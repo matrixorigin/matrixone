@@ -6288,6 +6288,81 @@ func TestDoGrantPrivilegeImplicitly(t *testing.T) {
 		err := doGrantPrivilegeImplicitly(ses.GetRequestContext(), ses, stmt)
 		convey.So(err, convey.ShouldBeNil)
 	})
+	convey.Convey("do grant privilege implicitly for create database succ", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+
+		stmt := &tree.CreateDatabase{
+			Name: tree.Identifier("abc"),
+		}
+
+		priv := determinePrivilegeSetOfStatement(stmt)
+		ses := newSes(priv, ctrl)
+		tenant := &TenantInfo{
+			Tenant:        "test_account",
+			User:          "test_user",
+			DefaultRole:   "",
+			TenantID:      3001,
+			UserID:        3,
+			DefaultRoleID: 5,
+		}
+		ses.SetTenantInfo(tenant)
+
+		//no result set
+		bh.sql2result["begin;"] = nil
+		bh.sql2result["commit;"] = nil
+		bh.sql2result["rollback;"] = nil
+
+		sql := getSqlForGrantOwnershipOnDatabase(string(stmt.Name), ses.GetTenantInfo().GetDefaultRole())
+		mrs := newMrsForSqlForCheckUserHasRole([][]interface{}{})
+		bh.sql2result[sql] = mrs
+
+		err := doGrantPrivilegeImplicitly(ses.GetRequestContext(), ses, stmt)
+		convey.So(err, convey.ShouldBeNil)
+	})
+
+	convey.Convey("do grant privilege implicitly for create table succ", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+
+		stmt := &tree.CreateTable{}
+
+		priv := determinePrivilegeSetOfStatement(stmt)
+		ses := newSes(priv, ctrl)
+		tenant := &TenantInfo{
+			Tenant:        "test_account",
+			User:          "test_user",
+			DefaultRole:   "",
+			TenantID:      3001,
+			UserID:        3,
+			DefaultRoleID: 5,
+		}
+		ses.SetTenantInfo(tenant)
+
+		//no result set
+		bh.sql2result["begin;"] = nil
+		bh.sql2result["commit;"] = nil
+		bh.sql2result["rollback;"] = nil
+
+		sql := getSqlForGrantOwnershipOnTable("abd", "t1", ses.GetTenantInfo().GetDefaultRole())
+		mrs := newMrsForSqlForCheckUserHasRole([][]interface{}{})
+		bh.sql2result[sql] = mrs
+
+		err := doGrantPrivilegeImplicitly(ses.GetRequestContext(), ses, stmt)
+		convey.So(err, convey.ShouldBeNil)
+	})
 }
 
 func TestDoRevokePrivilegeImplicitly(t *testing.T) {
