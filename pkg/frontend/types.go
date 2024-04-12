@@ -21,6 +21,7 @@ import (
 
 	"github.com/fagongzi/goetty/v2/buf"
 	"github.com/google/uuid"
+
 	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/config"

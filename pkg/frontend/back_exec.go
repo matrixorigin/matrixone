@@ -18,10 +18,12 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/sql/compile"
+
 	"github.com/google/uuid"
+
 	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"

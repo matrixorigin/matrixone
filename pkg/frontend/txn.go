@@ -21,7 +21,10 @@ import (
 	"sync"
 
 	"github.com/google/uuid"
+
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+
+	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -33,7 +36,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"go.uber.org/zap"
 )
 
 var (

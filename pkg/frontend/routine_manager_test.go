@@ -22,9 +22,10 @@ import (
 	"time"
 
 	"github.com/BurntSushi/toml"
+	"github.com/stretchr/testify/require"
+
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/stretchr/testify/require"
 )
 
 func create_test_server() *MOServer {

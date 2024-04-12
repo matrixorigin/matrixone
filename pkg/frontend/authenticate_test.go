@@ -26,9 +26,10 @@ import (
 
 	"github.com/BurntSushi/toml"
 	"github.com/fagongzi/goetty/v2"
+	"github.com/stretchr/testify/assert"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/stretchr/testify/assert"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 

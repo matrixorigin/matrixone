@@ -26,6 +26,9 @@ import (
 	"strings"
 	"sync"
 
+	"go.uber.org/zap"
+	"golang.org/x/sync/errgroup"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	util2 "github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -35,8 +38,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"go.uber.org/zap"
-	"golang.org/x/sync/errgroup"
 )
 
 type ExportConfig struct {

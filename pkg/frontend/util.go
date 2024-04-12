@@ -18,14 +18,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/google/uuid"
-	"github.com/matrixorigin/matrixone/pkg/common/log"
-	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
-	db_holder "github.com/matrixorigin/matrixone/pkg/util/export/etl/db"
-	"github.com/matrixorigin/matrixone/pkg/util/trace"
-	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
-	"go.uber.org/zap"
 	"math/rand"
 	"os"
 	"runtime"
@@ -34,6 +26,16 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/google/uuid"
+	"go.uber.org/zap"
+
+	"github.com/matrixorigin/matrixone/pkg/common/log"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	db_holder "github.com/matrixorigin/matrixone/pkg/util/export/etl/db"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 
 	"github.com/matrixorigin/matrixone/pkg/frontend/constant"
 
@@ -44,6 +46,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 
 	"github.com/BurntSushi/toml"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	mo_config "github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"

@@ -19,9 +19,10 @@ import (
 	"fmt"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"go.uber.org/zap"
 )
 
 func executeResultRowStmtInBack(requestCtx context.Context,

@@ -22,14 +22,15 @@ import (
 	"time"
 
 	"github.com/golang/mock/gomock"
+	"github.com/prashantv/gostub"
+	"github.com/stretchr/testify/require"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/prashantv/gostub"
-	"github.com/stretchr/testify/require"
 )
 
 type mockedBackgroundHandler struct {

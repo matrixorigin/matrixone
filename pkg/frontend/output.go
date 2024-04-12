@@ -17,11 +17,12 @@ package frontend
 import (
 	"context"
 
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"go.uber.org/zap"
 )
 
 var _ outputPool = &outputQueue{}
