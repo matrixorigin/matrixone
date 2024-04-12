@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"sync"
 )
 
@@ -54,13 +55,25 @@ type objectInfo struct {
 
 type SnapshotMeta struct {
 	sync.RWMutex
-	objects map[objectio.Segmentid]*objectInfo
-	tid     uint64
+	objects     map[objectio.Segmentid]*objectInfo
+	tid         uint64
+	tables      map[uint64]map[uint64]*tableInfo
+	acctIndexes map[uint64]*tableInfo
+}
+
+type tableInfo struct {
+	accID    uint64
+	dbID     uint64
+	tid      uint64
+	createAt types.TS
+	deleteAt types.TS
 }
 
 func NewSnapshotMeta() *SnapshotMeta {
 	return &SnapshotMeta{
-		objects: make(map[objectio.Segmentid]*objectInfo),
+		objects:     make(map[objectio.Segmentid]*objectInfo),
+		tables:      make(map[uint64]map[uint64]*tableInfo),
+		acctIndexes: make(map[uint64]*tableInfo),
 	}
 }
 
@@ -109,6 +122,46 @@ func (sm *SnapshotMeta) Update(data *CheckpointData) *SnapshotMeta {
 		if sm.objects[*blockID.Segment()] != nil {
 			sm.objects[*blockID.Segment()].deltaLocation[uint32(blockID.Sequence())] = &deltaLoc
 		}
+	}
+
+	insTable, _, _, _, delTableTxn := data.GetTblBatchs()
+	insAccIDVec := insTable.GetVectorByName(catalog2.SystemColAttr_AccID).GetDownstreamVector()
+	insTIDVec := insTable.GetVectorByName(catalog2.SystemRelAttr_ID).GetDownstreamVector()
+	insDBIDVec := insTable.GetVectorByName(catalog2.SystemRelAttr_DBID).GetDownstreamVector()
+	insCreateAtVec := insTable.GetVectorByName(catalog2.SystemRelAttr_CreateAt).GetDownstreamVector()
+	for i := 0; i < insTable.Length(); i++ {
+		accID := vector.GetFixedAt[uint64](insAccIDVec, i)
+		if sm.tables[accID] == nil {
+			sm.tables[accID] = make(map[uint64]*tableInfo)
+		}
+		tid := vector.GetFixedAt[uint64](insTIDVec, i)
+		dbid := vector.GetFixedAt[uint64](insDBIDVec, i)
+		createAt := vector.GetFixedAt[types.TS](insCreateAtVec, i)
+		if sm.tables[accID][tid] != nil {
+			continue
+		}
+		table := &tableInfo{
+			accID:    accID,
+			dbID:     dbid,
+			tid:      tid,
+			createAt: createAt,
+		}
+		sm.tables[accID][tid] = table
+
+		if sm.acctIndexes[tid] == nil {
+			sm.acctIndexes[tid] = table
+		}
+	}
+
+	delTableIDVec := delTableTxn.GetVectorByName(SnapshotAttr_TID).GetDownstreamVector()
+	delDropAtVec := delTableTxn.GetVectorByName(txnbase.SnapshotAttr_CommitTS).GetDownstreamVector()
+	for i := 0; i < delTableTxn.Length(); i++ {
+		tid := vector.GetFixedAt[uint64](delTableIDVec, i)
+		dropAt := vector.GetFixedAt[uint64](delDropAtVec, i)
+		table := sm.acctIndexes[tid]
+		table.deleteAt = dropAt
+		sm.acctIndexes[tid] = table
+		sm.tables[table.accID][tid] = table
 	}
 	return nil
 }
