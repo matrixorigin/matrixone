@@ -647,7 +647,6 @@ type txnTable struct {
 	tableId   uint64
 	version   uint32
 	tableName string
-	tnList    []int
 	db        *txnDatabase
 	//	insertExpr *plan.Expr
 	defs       []engine.TableDef

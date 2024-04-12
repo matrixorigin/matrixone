@@ -589,12 +589,12 @@ func (r *blockMergeReader) Close() error {
 
 func (r *blockMergeReader) prefetchDeletes() error {
 	//load delta locations for r.blocks.
-	r.table.db.op.GetWorkspace().(*Transaction).blockId_tn_delete_metaLoc_batch.RLock()
-	defer r.table.db.op.GetWorkspace().(*Transaction).blockId_tn_delete_metaLoc_batch.RUnlock()
+	r.table.getTxn().blockId_tn_delete_metaLoc_batch.RLock()
+	defer r.table.getTxn().blockId_tn_delete_metaLoc_batch.RUnlock()
 
 	if !r.loaded {
 		for _, info := range r.blks {
-			bats, ok := r.table.db.op.GetWorkspace().(*Transaction).blockId_tn_delete_metaLoc_batch.data[info.BlockID]
+			bats, ok := r.table.getTxn().blockId_tn_delete_metaLoc_batch.data[info.BlockID]
 
 			if !ok {
 				return nil
@@ -690,10 +690,10 @@ func (r *blockMergeReader) loadDeletes(ctx context.Context, cols []string) error
 
 	//TODO:: if r.table.writes is a map , the time complexity could be O(1)
 	//load deletes from txn.writes for the specified block
-	r.table.db.op.GetWorkspace().(*Transaction).forEachTableWrites(
+	r.table.getTxn().forEachTableWrites(
 		r.table.db.databaseId,
 		r.table.tableId,
-		r.table.db.op.GetWorkspace().(*Transaction).GetSnapshotWriteOffset(), func(entry Entry) {
+		r.table.getTxn().GetSnapshotWriteOffset(), func(entry Entry) {
 			if entry.isGeneratedByTruncate() {
 				return
 			}
@@ -708,7 +708,7 @@ func (r *blockMergeReader) loadDeletes(ctx context.Context, cols []string) error
 			}
 		})
 	//load deletes from txn.deletedBlocks.
-	txn := r.table.db.op.GetWorkspace().(*Transaction)
+	txn := r.table.getTxn()
 	txn.deletedBlocks.getDeletedOffsetsByBlock(&info.BlockID, &r.buffer)
 	return nil
 }

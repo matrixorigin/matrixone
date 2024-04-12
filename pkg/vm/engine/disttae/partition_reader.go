@@ -65,7 +65,7 @@ func (p *PartitionReader) Close() error {
 }
 
 func (p *PartitionReader) prepare() error {
-	txn := p.table.db.op.GetWorkspace().(*Transaction)
+	txn := p.table.getTxn()
 	var inserts []*batch.Batch
 	var deletes map[types.Rowid]uint8
 	//prepare inserts and deletes for partition reader.
@@ -73,8 +73,8 @@ func (p *PartitionReader) prepare() error {
 		inserts = make([]*batch.Batch, 0)
 		deletes = make(map[types.Rowid]uint8)
 		//load inserts and deletes from txn.writes.
-		p.table.db.op.GetWorkspace().(*Transaction).forEachTableWrites(p.table.db.databaseId, p.table.tableId,
-			p.table.db.op.GetWorkspace().(*Transaction).GetSnapshotWriteOffset(), func(entry Entry) {
+		p.table.getTxn().forEachTableWrites(p.table.db.databaseId, p.table.tableId,
+			p.table.getTxn().GetSnapshotWriteOffset(), func(entry Entry) {
 				if entry.typ == INSERT || entry.typ == INSERT_TXN {
 					if entry.bat == nil || entry.bat.IsEmpty() {
 						return
