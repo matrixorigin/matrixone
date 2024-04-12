@@ -1314,6 +1314,7 @@ func (ses *Session) AuthenticateUser(userInput string, dbName string, authRespon
 	var specialAccount *TenantInfo
 
 	//Get tenant info
+	requestCtx := ses.GetRequestContext()
 	tenant, err = GetTenantInfo(ses.GetRequestContext(), userInput)
 	if err != nil {
 		return nil, err
@@ -1321,9 +1322,8 @@ func (ses *Session) AuthenticateUser(userInput string, dbName string, authRespon
 
 	ses.SetTenantInfo(tenant)
 	ses.UpdateDebugString()
-	sessionInfo := ses.GetDebugString()
 
-	logDebugf(sessionInfo, "check special user")
+	ses.Debugf(requestCtx, "check special user")
 	// check the special user for initilization
 	isSpecial, pwdBytes, specialAccount = isSpecialUser(tenant.GetUser())
 	if isSpecial && specialAccount.IsMoAdminRole() {
@@ -1344,7 +1344,7 @@ func (ses *Session) AuthenticateUser(userInput string, dbName string, authRespon
 		return nil, err
 	}
 	mp := ses.GetMemPool()
-	logDebugf(sessionInfo, "check tenant %s exists", tenant)
+	ses.Debugf(requestCtx, "check tenant %s exists", tenant)
 	rsset, err = executeSQLInBackgroundSession(sysTenantCtx, ses, mp, sqlForCheckTenant)
 	if err != nil {
 		return nil, err
@@ -1391,7 +1391,7 @@ func (ses *Session) AuthenticateUser(userInput string, dbName string, authRespon
 	ses.timestampMap[TSCheckUserStart] = time.Now()
 	tenantCtx := defines.AttachAccountId(ses.GetRequestContext(), uint32(tenantID))
 
-	logDebugf(sessionInfo, "check user of %s exists", tenant)
+	ses.Debugf(tenantCtx, "check user of %s exists", tenant)
 	//Get the password of the user in an independent session
 	sqlForPasswordOfUser, err := getSqlForPasswordOfUser(tenantCtx, tenant.GetUser())
 	if err != nil {
@@ -1439,7 +1439,7 @@ func (ses *Session) AuthenticateUser(userInput string, dbName string, authRespon
 	*/
 	//it denotes that there is no default role in the input
 	if tenant.HasDefaultRole() {
-		logDebugf(sessionInfo, "check default role of user %s.", tenant)
+		ses.Debugf(tenantCtx, "check default role of user %s.", tenant)
 		//step4 : check role exists or not
 		ses.timestampMap[TSCheckRoleStart] = time.Now()
 		sqlForCheckRoleExists, err := getSqlForRoleIdOfRole(tenantCtx, tenant.GetDefaultRole())
@@ -1455,7 +1455,7 @@ func (ses *Session) AuthenticateUser(userInput string, dbName string, authRespon
 			return nil, moerr.NewInternalError(tenantCtx, "there is no role %s", tenant.GetDefaultRole())
 		}
 
-		logDebugf(sessionInfo, "check granted role of user %s.", tenant)
+		ses.Debugf(tenantCtx, "check granted role of user %s.", tenant)
 		//step4.2 : check the role has been granted to the user or not
 		sqlForRoleOfUser, err := getSqlForRoleOfUser(tenantCtx, userID, tenant.GetDefaultRole())
 		if err != nil {
@@ -1479,7 +1479,7 @@ func (ses *Session) AuthenticateUser(userInput string, dbName string, authRespon
 		v2.CheckRoleDurationHistogram.Observe(ses.timestampMap[TSCheckRoleEnd].Sub(ses.timestampMap[TSCheckRoleStart]).Seconds())
 	} else {
 		ses.timestampMap[TSCheckRoleStart] = time.Now()
-		logDebugf(sessionInfo, "check designated role of user %s.", tenant)
+		ses.Debugf(tenantCtx, "check designated role of user %s.", tenant)
 		//the get name of default_role from mo_role
 		sql := getSqlForRoleNameOfRoleId(defaultRoleID)
 		rsset, err = executeSQLInBackgroundSession(tenantCtx, ses, mp, sql)
@@ -1506,7 +1506,7 @@ func (ses *Session) AuthenticateUser(userInput string, dbName string, authRespon
 
 	// TO Check password
 	if checkPassword(psw, salt, authResponse) {
-		logDebugf(sessionInfo, "check password succeeded")
+		ses.Debug(tenantCtx, "check password succeeded")
 		ses.InitGlobalSystemVariables()
 	} else {
 		return nil, moerr.NewInternalError(tenantCtx, "check password failed")
@@ -1519,7 +1519,7 @@ func (ses *Session) AuthenticateUser(userInput string, dbName string, authRespon
 		if err != nil {
 			return nil, err
 		}
-		logDebugf(sessionInfo, "check database name succeeded")
+		ses.Debug(tenantCtx, "check database name succeeded")
 		ses.timestampMap[TSCheckDbNameEnd] = time.Now()
 		v2.CheckDbNameDurationHistogram.Observe(ses.timestampMap[TSCheckDbNameEnd].Sub(ses.timestampMap[TSCheckDbNameStart]).Seconds())
 	}
@@ -1954,6 +1954,15 @@ func (ses *Session) Error(ctx context.Context, msg string, fields ...zap.Field) 
 		fields = appendSessionField(fields, ses)
 		fields = appendTraceField(fields, ctx)
 		ses.logger.Log(msg, log.DefaultLogOptions().WithLevel(zap.ErrorLevel).AddCallerSkip(1), fields...)
+	}
+}
+
+func (ses *Session) Debug(ctx context.Context, msg string, fields ...zap.Field) {
+	if ses.logger.Enabled(zap.DebugLevel) {
+		fields = append(fields, zap.String("session_info", ses.GetDebugString()))
+		fields = appendSessionField(fields, ses)
+		fields = appendTraceField(fields, ctx)
+		ses.logger.Log(msg, log.DefaultLogOptions().WithLevel(zap.DebugLevel).AddCallerSkip(1), fields...)
 	}
 }
 

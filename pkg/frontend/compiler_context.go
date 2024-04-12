@@ -148,7 +148,7 @@ func (tcc *TxnCompilerContext) DatabaseExists(name string) bool {
 	ses := tcc.GetSession()
 	_, err = tcc.GetTxnHandler().GetStorage().Database(txnCtx, name, txn)
 	if err != nil {
-		ses.Error(ses.requestCtx,
+		ses.Error(txnCtx,
 			"Failed to get database",
 			zap.String("databaseName", name),
 			zap.Error(err))
@@ -213,7 +213,7 @@ func (tcc *TxnCompilerContext) getRelation(dbName string, tableName string, sub 
 	//open database
 	db, err := tcc.GetTxnHandler().GetStorage().Database(txnCtx, dbName, txn)
 	if err != nil {
-		ses.Error(ses.requestCtx,
+		ses.Error(txnCtx,
 			"Failed to get database",
 			zap.String("databaseName", dbName),
 			zap.Error(err))
@@ -231,7 +231,7 @@ func (tcc *TxnCompilerContext) getRelation(dbName string, tableName string, sub 
 	if err != nil {
 		tmpTable, e := tcc.getTmpRelation(txnCtx, engine.GetTempTableName(dbName, tableName))
 		if e != nil {
-			ses.Error(ses.requestCtx,
+			ses.Error(txnCtx,
 				"Failed to get table",
 				zap.String("tableName", tableName),
 				zap.Error(err))

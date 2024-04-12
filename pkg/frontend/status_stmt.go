@@ -70,7 +70,7 @@ func executeStatusStmt(requestCtx context.Context, ses *Session, execCtx *ExecCt
 
 			// only log if run time is longer than 1s
 			if time.Since(runBegin) > time.Second {
-				logInfo(ses, ses.GetDebugString(), fmt.Sprintf("time of Exec.Run : %s", time.Since(runBegin).String()))
+				ses.Infof(requestCtx, "time of Exec.Run : %s", time.Since(runBegin).String())
 			}
 
 			oq := NewOutputQueue(ses.GetRequestContext(), ses, 0, nil, nil)
@@ -94,7 +94,7 @@ func executeStatusStmt(requestCtx context.Context, ses *Session, execCtx *ExecCt
 		}
 		// only log if run time is longer than 1s
 		if time.Since(runBegin) > time.Second {
-			logInfo(ses, ses.GetDebugString(), fmt.Sprintf("time of Exec.Run : %s", time.Since(runBegin).String()))
+			ses.Infof(requestCtx, "time of Exec.Run : %s", time.Since(runBegin).String())
 		}
 
 		// execute insert sql if this is a `create table as select` stmt
@@ -162,7 +162,7 @@ func executeStatusStmt(requestCtx context.Context, ses *Session, execCtx *ExecCt
 
 		// only log if run time is longer than 1s
 		if time.Since(runBegin) > time.Second {
-			logInfo(ses, ses.GetDebugString(), fmt.Sprintf("time of Exec.Run : %s", time.Since(runBegin).String()))
+			ses.Infof(requestCtx, "time of Exec.Run : %s", time.Since(runBegin).String())
 		}
 
 		echoTime := time.Now()

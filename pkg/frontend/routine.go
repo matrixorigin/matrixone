@@ -292,7 +292,7 @@ func (rt *Routine) handleRequest(req *Request) error {
 		}
 	}
 
-	ses.Errorf(tenantCtx, "the time of handling the request %s", time.Since(reqBegin).String())
+	ses.Debugf(tenantCtx, "the time of handling the request %s", time.Since(reqBegin).String())
 
 	cancelRequestFunc()
 

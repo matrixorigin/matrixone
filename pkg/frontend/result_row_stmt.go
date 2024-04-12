@@ -16,7 +16,6 @@ package frontend
 
 import (
 	"context"
-	"fmt"
 	"time"
 
 	"go.uber.org/zap"
@@ -63,7 +62,7 @@ func executeResultRowStmt(requestCtx context.Context, ses *Session, execCtx *Exe
 
 		// only log if run time is longer than 1s
 		if time.Since(runBegin) > time.Second {
-			logInfo(ses, ses.GetDebugString(), fmt.Sprintf("time of Exec.Run : %s", time.Since(runBegin).String()))
+			ses.Infof(requestCtx, "time of Exec.Run : %s", time.Since(runBegin).String())
 		}
 
 	case *tree.ExplainAnalyze:
@@ -91,7 +90,7 @@ func executeResultRowStmt(requestCtx context.Context, ses *Session, execCtx *Exe
 
 		// only log if run time is longer than 1s
 		if time.Since(runBegin) > time.Second {
-			logInfo(ses, ses.GetDebugString(), fmt.Sprintf("time of Exec.Run : %s", time.Since(runBegin).String()))
+			ses.Infof(requestCtx, "time of Exec.Run : %s", time.Since(runBegin).String())
 		}
 
 	default:
@@ -130,7 +129,7 @@ func executeResultRowStmt(requestCtx context.Context, ses *Session, execCtx *Exe
 
 		// only log if run time is longer than 1s
 		if time.Since(runBegin) > time.Second {
-			logInfo(ses, ses.GetDebugString(), fmt.Sprintf("time of Exec.Run : %s", time.Since(runBegin).String()))
+			ses.Infof(requestCtx, "time of Exec.Run : %s", time.Since(runBegin).String())
 		}
 	}
 	return

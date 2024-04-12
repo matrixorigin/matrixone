@@ -428,7 +428,6 @@ func (th *TxnHandler) RollbackTxn() error {
 		return nil
 	}
 	ses := th.GetSession()
-	sessionInfo := ses.GetDebugString()
 	txnCtx, txnOp, err := th.GetTxnOperator()
 	if err != nil {
 		return err
@@ -459,9 +458,9 @@ func (th *TxnHandler) RollbackTxn() error {
 	}()
 	if logutil.GetSkip1Logger().Core().Enabled(zap.DebugLevel) {
 		txnId := txnOp.Txn().DebugString()
-		logDebugf(sessionInfo, "RollbackTxn txnId:%s", txnId)
+		ses.Debugf(ctx2, "RollbackTxn txnId:%s", txnId)
 		defer func() {
-			logDebugf(sessionInfo, "RollbackTxn exit txnId:%s", txnId)
+			ses.Debugf(ctx2, "RollbackTxn exit txnId:%s", txnId)
 		}()
 	}
 	if txnOp != nil {
@@ -761,7 +760,7 @@ func (th *TxnHandler) TxnRollbackSingleStatement(stmt tree.Statement, inputErr e
 		var err3 error
 		txnCtx, txnOp, err3 := th.GetTxnOperator()
 		if err3 != nil {
-			logError(th.ses, th.ses.GetDebugString(), err3.Error())
+			th.ses.Error(th.ses.GetRequestContext(), err3.Error())
 			return err3
 		}
 

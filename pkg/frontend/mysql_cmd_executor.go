@@ -478,7 +478,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 	procBatchTime := time.Since(procBatchBegin)
 	tTime := time.Since(begin)
 	ses.sentRows.Add(int64(n))
-	logDebugf(ses.GetDebugString(), "rowCount %v \n"+
+	ses.Debugf(ses.requestCtx, "rowCount %v \n"+
 		"time of getDataFromPipeline : %s \n"+
 		"processBatchTime %v \n"+
 		"row2colTime %v \n"+
@@ -519,7 +519,7 @@ func doUse(ctx context.Context, ses FeSession, db string) error {
 	oldDB := ses.GetDatabaseName()
 	ses.SetDatabaseName(db)
 
-	logDebugf(ses.GetDebugString(), "User %s change database from [%s] to [%s]", ses.GetUserName(), oldDB, ses.GetDatabaseName())
+	ses.Debugf(ctx, "User %s change database from [%s] to [%s]", ses.GetUserName(), oldDB, ses.GetDatabaseName())
 
 	return nil
 }
@@ -2388,12 +2388,12 @@ func processLoadLocal(ctx context.Context, ses FeSession, param *tree.ExternPara
 			}
 		}
 		if epoch%printEvery == 0 {
-			logDebugf(ses.GetDebugString(), "load local '%s', epoch: %d, skipWrite: %v, minReadTime: %s, maxReadTime: %s, minWriteTime: %s, maxWriteTime: %s,", param.Filepath, epoch, skipWrite, minReadTime.String(), maxReadTime.String(), minWriteTime.String(), maxWriteTime.String())
+			ses.Debugf(ctx, "load local '%s', epoch: %d, skipWrite: %v, minReadTime: %s, maxReadTime: %s, minWriteTime: %s, maxWriteTime: %s,", param.Filepath, epoch, skipWrite, minReadTime.String(), maxReadTime.String(), minWriteTime.String(), maxWriteTime.String())
 			minReadTime, maxReadTime, minWriteTime, maxWriteTime = 24*time.Hour, time.Nanosecond, 24*time.Hour, time.Nanosecond
 		}
 		epoch += 1
 	}
-	logDebugf(ses.GetDebugString(), "load local '%s', read&write all data from client cost: %s", param.Filepath, time.Since(start))
+	ses.Debugf(ctx, "load local '%s', read&write all data from client cost: %s", param.Filepath, time.Since(start))
 	return
 }
 
@@ -2918,7 +2918,7 @@ func ExecRequest(requestCtx context.Context, ses *Session, req *Request) (resp *
 	defer span.End()
 
 	var sql string
-	logDebugf(ses.GetDebugString(), "cmd %v", req.GetCmd())
+	ses.Debugf(requestCtx, "cmd %v", req.GetCmd())
 	ses.SetCmd(req.GetCmd())
 	switch req.GetCmd() {
 	case COM_QUIT:

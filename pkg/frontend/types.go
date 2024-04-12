@@ -354,8 +354,10 @@ type FeSession interface {
 type SessionLogger interface {
 	Info(ctx context.Context, msg string, fields ...zap.Field)
 	Error(ctx context.Context, msg string, fields ...zap.Field)
+	Debug(ctx context.Context, msg string, fields ...zap.Field)
 	Infof(ctx context.Context, msg string, args ...any)
 	Errorf(ctx context.Context, msg string, args ...any)
+	Debugf(ctx context.Context, msg string, args ...any)
 }
 
 type ExecCtx struct {

@@ -16,7 +16,6 @@ package frontend
 
 import (
 	"context"
-	"fmt"
 	"time"
 
 	"go.uber.org/zap"
@@ -52,7 +51,7 @@ func executeResultRowStmtInBack(requestCtx context.Context,
 
 	// only log if run time is longer than 1s
 	if time.Since(runBegin) > time.Second {
-		logInfo(backSes, backSes.GetDebugString(), fmt.Sprintf("time of Exec.Run : %s", time.Since(runBegin).String()))
+		backSes.Infof(requestCtx, "time of Exec.Run : %s", time.Since(runBegin).String())
 	}
 	return
 }

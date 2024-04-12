@@ -20,6 +20,8 @@ import (
 	"fmt"
 	"time"
 
+	"go.uber.org/zap/zapcore"
+
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 
@@ -377,7 +379,7 @@ func executeStmtInBack(requestCtx context.Context,
 
 	// only log if build time is longer than 1s
 	if time.Since(cmpBegin) > time.Second {
-		logInfo(backSes, backSes.GetDebugString(), fmt.Sprintf("time of Exec.Build : %s", time.Since(cmpBegin).String()))
+		backSes.Infof(requestCtx, "time of Exec.Build : %s", time.Since(cmpBegin).String())
 	}
 
 	StmtKind := execCtx.stmt.StmtKind().OutputType()
@@ -983,46 +985,49 @@ func (backSes *backSession) ReplaceDerivedStmt(b bool) bool {
 	return prev
 }
 
-func (backSes *backSession) Info(ctx context.Context, msg string, fields ...zap.Field) {
+func (backSes *backSession) log(ctx context.Context, level zapcore.Level, msg string, fields ...zap.Field) {
 	ses := backSes.upstream
-	if ses.logger.Enabled(zap.InfoLevel) {
+	if ses.logger.Enabled(level) {
 		fields = append(fields, zap.String("session_info", ses.GetDebugString()))
 		fields = appendSessionField(fields, ses)
 		fields = appendTraceField(fields, ctx)
-		ses.logger.Log(msg, log.DefaultLogOptions().WithLevel(zap.InfoLevel).AddCallerSkip(1), fields...)
+		ses.logger.Log(msg, log.DefaultLogOptions().WithLevel(level).AddCallerSkip(2), fields...)
 	}
+}
+
+func (backSes *backSession) logf(ctx context.Context, level zapcore.Level, msg string, args ...any) {
+	ses := backSes.upstream
+	if ses.logger.Enabled(level) {
+		fields := make([]zap.Field, 0, 5)
+		fields = append(fields, zap.String("session_info", ses.GetDebugString()))
+		fields = appendSessionField(fields, ses)
+		fields = appendTraceField(fields, ctx)
+		ses.logger.Log(fmt.Sprintf(msg, args...), log.DefaultLogOptions().WithLevel(level).AddCallerSkip(2), fields...)
+	}
+}
+
+func (backSes *backSession) Info(ctx context.Context, msg string, fields ...zap.Field) {
+	backSes.log(ctx, zap.InfoLevel, msg, fields...)
 }
 
 func (backSes *backSession) Error(ctx context.Context, msg string, fields ...zap.Field) {
-	ses := backSes.upstream
-	if ses.logger.Enabled(zap.ErrorLevel) {
-		fields = append(fields, zap.String("session_info", ses.GetDebugString()))
-		fields = appendSessionField(fields, ses)
-		fields = appendTraceField(fields, ctx)
-		ses.logger.Log(msg, log.DefaultLogOptions().WithLevel(zap.ErrorLevel).AddCallerSkip(1), fields...)
-	}
+	backSes.log(ctx, zap.ErrorLevel, msg, fields...)
+}
+
+func (backSes *backSession) Debug(ctx context.Context, msg string, fields ...zap.Field) {
+	backSes.log(ctx, zap.DebugLevel, msg, fields...)
 }
 
 func (backSes *backSession) Infof(ctx context.Context, msg string, args ...any) {
-	ses := backSes.upstream
-	if ses.logger.Enabled(zap.InfoLevel) {
-		fields := make([]zap.Field, 0, 5)
-		fields = append(fields, zap.String("session_info", ses.GetDebugString()))
-		fields = appendSessionField(fields, ses)
-		fields = appendTraceField(fields, ctx)
-		ses.logger.Log(fmt.Sprintf(msg, args...), log.DefaultLogOptions().WithLevel(zap.InfoLevel).AddCallerSkip(1), fields...)
-	}
+	backSes.logf(ctx, zap.InfoLevel, msg, args...)
 }
 
 func (backSes *backSession) Errorf(ctx context.Context, msg string, args ...any) {
-	ses := backSes.upstream
-	if ses.logger.Enabled(zap.ErrorLevel) {
-		fields := make([]zap.Field, 0, 5)
-		fields = append(fields, zap.String("session_info", ses.GetDebugString()))
-		fields = appendSessionField(fields, ses)
-		fields = appendTraceField(fields, ctx)
-		ses.logger.Log(fmt.Sprintf(msg, args...), log.DefaultLogOptions().WithLevel(zap.ErrorLevel).AddCallerSkip(1), fields...)
-	}
+	backSes.logf(ctx, zap.ErrorLevel, msg, args...)
+}
+
+func (backSes *backSession) Debugf(ctx context.Context, msg string, args ...any) {
+	backSes.logf(ctx, zap.DebugLevel, msg, args...)
 }
 
 type SqlHelper struct {
