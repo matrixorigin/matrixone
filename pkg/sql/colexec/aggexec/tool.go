@@ -37,6 +37,28 @@ func vectorAppendWildly[T numeric | types.Decimal64 | types.Decimal128](v *vecto
 	return nil
 }
 
+var _ = vectorAppendBytesWildly
+
+func vectorAppendBytesWildly(v *vector.Vector, mp *mpool.MPool, value []byte) error {
+	var va types.Varlena
+	if err := vector.BuildVarlenaFromByteSlice(v, &va, &value, mp); err != nil {
+		return err
+	}
+
+	oldLen := v.Length()
+	if oldLen == v.Capacity() {
+		if err := v.PreExtend(10, mp); err != nil {
+			return err
+		}
+	}
+	v.SetLength(oldLen + 1)
+
+	var vs []types.Varlena
+	vector.ToSlice(v, &vs)
+	vs[oldLen] = va
+	return nil
+}
+
 func FromD64ToD128(v types.Decimal64) types.Decimal128 {
 	k := types.Decimal128{
 		B0_63:   uint64(v),

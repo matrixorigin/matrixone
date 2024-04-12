@@ -188,10 +188,74 @@ type MultiAggRetFixed[
 type MultiAggRetVar interface {
 	AggCanMarshal
 	Init(setter AggBytesSetter, args []types.Type, ret types.Type)
-	GetWhichFill(idx int) any                          // return func Fill(MultiAggRetVar, value)
-	GetWhichFillNull(idx int) any                      // return func FillNull(MultiAggRetVar)
-	Valid() bool                                       // return true if the row is valid.
-	Eval(getter AggBytesGetter, setter AggBytesSetter) // after Fill one row, do eval.
-	Merge(other MultiAggRetVar, getter1, getter2 AggBytesGetter, setter AggBytesSetter)
-	Flush(getter AggBytesGetter, setter AggBytesSetter) error // return the result.
+}
+
+/*
+	basic structures for agg.
+*/
+
+type EmptyContextOfSingleAggRetFixed[T types.FixedSizeTExceptStrType] struct{}
+
+func (a EmptyContextOfSingleAggRetFixed[T]) Marshal() []byte                            { return nil }
+func (a EmptyContextOfSingleAggRetFixed[T]) Unmarshal([]byte)                           {}
+func (a EmptyContextOfSingleAggRetFixed[T]) Init(_ AggSetter[T], _, _ types.Type) error { return nil }
+func GenerateEmptyContextFromFixedToFixed[from, to types.FixedSizeTExceptStrType]() SingleAggFromFixedRetFixed[from, to] {
+	return EmptyContextOfSingleAggRetFixed[to]{}
+}
+func GenerateEmptyContextFromVarToFixed[to types.FixedSizeTExceptStrType]() SingleAggFromVarRetFixed[to] {
+	return EmptyContextOfSingleAggRetFixed[to]{}
+}
+
+type EmptyContextOfSingleAggRetBytes struct{}
+
+func (a EmptyContextOfSingleAggRetBytes) Marshal() []byte                              { return nil }
+func (a EmptyContextOfSingleAggRetBytes) Unmarshal([]byte)                             {}
+func (a EmptyContextOfSingleAggRetBytes) Init(_ AggBytesSetter, _, _ types.Type) error { return nil }
+func GenerateEmptyContextFromFixedToVar[from types.FixedSizeTExceptStrType]() SingleAggFromFixedRetVar[from] {
+	return EmptyContextOfSingleAggRetBytes{}
+}
+func GenerateEmptyContextFromVarToVar() SingleAggFromVarRetVar {
+	return EmptyContextOfSingleAggRetBytes{}
+}
+
+type ContextWithEmptyFlagOfSingleAggRetFixed[T types.FixedSizeTExceptStrType] struct {
+	IsEmpty bool
+}
+
+func (a *ContextWithEmptyFlagOfSingleAggRetFixed[T]) Marshal() []byte {
+	return types.EncodeBool(&a.IsEmpty)
+}
+func (a *ContextWithEmptyFlagOfSingleAggRetFixed[T]) Unmarshal(data []byte) {
+	a.IsEmpty = types.DecodeBool(data)
+}
+func (a *ContextWithEmptyFlagOfSingleAggRetFixed[T]) Init(_ AggSetter[T], _, _ types.Type) error {
+	a.IsEmpty = true
+	return nil
+}
+func GenerateFlagContextFromFixedToFixed[from, to types.FixedSizeTExceptStrType]() SingleAggFromFixedRetFixed[from, to] {
+	return &ContextWithEmptyFlagOfSingleAggRetFixed[to]{}
+}
+func GenerateFlagContextFromVarToFixed[to types.FixedSizeTExceptStrType]() SingleAggFromVarRetFixed[to] {
+	return &ContextWithEmptyFlagOfSingleAggRetFixed[to]{}
+}
+
+type ContextWithEmptyFlagOfSingleAggRetBytes struct {
+	IsEmpty bool
+}
+
+func (a *ContextWithEmptyFlagOfSingleAggRetBytes) Marshal() []byte {
+	return types.EncodeBool(&a.IsEmpty)
+}
+func (a *ContextWithEmptyFlagOfSingleAggRetBytes) Unmarshal(data []byte) {
+	a.IsEmpty = types.DecodeBool(data)
+}
+func (a *ContextWithEmptyFlagOfSingleAggRetBytes) Init(_ AggBytesSetter, _, _ types.Type) error {
+	a.IsEmpty = true
+	return nil
+}
+func GenerateFlagContextFromFixedToVar[from types.FixedSizeTExceptStrType]() SingleAggFromFixedRetVar[from] {
+	return &ContextWithEmptyFlagOfSingleAggRetBytes{}
+}
+func GenerateFlagContextFromVarToVar() SingleAggFromVarRetVar {
+	return &ContextWithEmptyFlagOfSingleAggRetBytes{}
 }

@@ -105,7 +105,7 @@ func TestSingleAggFuncExec1(t *testing.T) {
 	RegisterSingleAggFromFixedToFixed(
 		MakeSingleAgg1RegisteredInfo(
 			MakeSingleColumnAggInformation(info.aggID, info.argType, tSinglePrivate1Ret, true, info.emptyNull),
-			gTestSingleAggPrivateSer1,
+			gTesSingleAggPrivate1,
 			fillSinglePrivate1, fillNullSinglePrivate1, fillsSinglePrivate1, mergeSinglePrivate1, nil))
 	executor := MakeAgg(
 		mg,
@@ -373,7 +373,7 @@ func TestEmptyNullFlag(t *testing.T) {
 		RegisterSingleAggFromFixedToFixed(
 			MakeSingleAgg1RegisteredInfo(
 				MakeSingleColumnAggInformation(id, types.T_int32.ToType(), tSinglePrivate1Ret, false, true),
-				gTestSingleAggPrivateSer1,
+				gTesSingleAggPrivate1,
 				fillSinglePrivate1, fillNullSinglePrivate1, fillsSinglePrivate1, mergeSinglePrivate1, nil))
 		executor := MakeAgg(
 			mg,
@@ -390,7 +390,7 @@ func TestEmptyNullFlag(t *testing.T) {
 		RegisterSingleAggFromFixedToFixed(
 			MakeSingleAgg1RegisteredInfo(
 				MakeSingleColumnAggInformation(id, types.T_int32.ToType(), tSinglePrivate1Ret, false, false),
-				gTestSingleAggPrivateSer1,
+				gTesSingleAggPrivate1,
 				fillSinglePrivate1, fillNullSinglePrivate1, fillsSinglePrivate1, mergeSinglePrivate1, nil))
 		executor := MakeAgg(
 			mg,

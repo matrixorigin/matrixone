@@ -217,7 +217,7 @@ func makeMultiAgg(
 
 	if info.retType.IsVarlen() {
 		e := &multiAggFuncExec2{}
-		e.init(mg, info, nil)
+		e.init(mg, info, agg)
 		return e
 	}
 	return newMultiAggFuncExecRetFixed(mg, info, agg)

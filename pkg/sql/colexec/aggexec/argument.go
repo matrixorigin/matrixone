@@ -20,20 +20,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
-// sArg is the interface of single column aggregation's argument.
-// it is used to get value from input vector.
-type sArg interface {
-	prepare(*vector.Vector)
-
-	// reset and collect the resources for reuse.
-	collect()
-}
-
-var (
-	_ = sArg(&sFixedArg[int8]{})
-	_ = sArg(&sBytesArg{})
-)
-
 // sFixedArg and sBytesArg were used to get value from input vector.
 type sFixedArg[T types.FixedSizeTExceptStrType] struct {
 	w vector.FunctionParameterWrapper[T]
@@ -69,7 +55,7 @@ type mArg2 interface {
 
 	doRowFill(aggImp MultiAggRetVar, row uint64) error
 
-	cacheFill(fill any, fillNull func(MultiAggRetVar))
+	cacheFill(fill any, fillNull MultiAggFillNull2)
 }
 
 func newArgumentOfMultiAgg1[ret types.FixedSizeTExceptStrType](paramType types.Type) mArg1[ret] {
@@ -211,8 +197,8 @@ func (a *mArg1Bytes[ret]) cacheFill(fill any, fillNull func(MultiAggRetFixed[ret
 type mArg2Fixed[arg types.FixedSizeTExceptStrType] struct {
 	w vector.FunctionParameterWrapper[arg]
 
-	fill     func(MultiAggRetVar, arg)
-	fillNull func(MultiAggRetVar)
+	fill     func(MultiAggRetVar, arg) error
+	fillNull MultiAggFillNull2
 }
 
 func (a *mArg2Fixed[arg]) prepare(v *vector.Vector) {
@@ -222,23 +208,21 @@ func (a *mArg2Fixed[arg]) prepare(v *vector.Vector) {
 func (a *mArg2Fixed[arg]) doRowFill(aggImp MultiAggRetVar, row uint64) error {
 	v, null := a.w.GetValue(row)
 	if null {
-		a.fillNull(aggImp)
-	} else {
-		a.fill(aggImp, v)
+		return a.fillNull(aggImp)
 	}
-	return nil
+	return a.fill(aggImp, v)
 }
 
-func (a *mArg2Fixed[arg]) cacheFill(fill any, fillNull func(MultiAggRetVar)) {
-	a.fill = fill.(func(MultiAggRetVar, arg))
+func (a *mArg2Fixed[arg]) cacheFill(fill any, fillNull MultiAggFillNull2) {
+	a.fill = fill.(func(MultiAggRetVar, arg) error)
 	a.fillNull = fillNull
 }
 
 type mArg2Bytes struct {
 	w vector.FunctionParameterWrapper[types.Varlena]
 
-	fill     func(MultiAggRetVar, []byte)
-	fillNull func(MultiAggRetVar)
+	fill     func(MultiAggRetVar, []byte) error
+	fillNull MultiAggFillNull2
 }
 
 func (a *mArg2Bytes) prepare(v *vector.Vector) {
@@ -248,14 +232,12 @@ func (a *mArg2Bytes) prepare(v *vector.Vector) {
 func (a *mArg2Bytes) doRowFill(aggImp MultiAggRetVar, row uint64) error {
 	v, null := a.w.GetStrValue(row)
 	if null {
-		a.fillNull(aggImp)
-	} else {
-		a.fill(aggImp, v)
+		return a.fillNull(aggImp)
 	}
-	return nil
+	return a.fill(aggImp, v)
 }
 
-func (a *mArg2Bytes) cacheFill(fill any, fillNull func(MultiAggRetVar)) {
-	a.fill = fill.(func(MultiAggRetVar, []byte))
+func (a *mArg2Bytes) cacheFill(fill any, fillNull MultiAggFillNull2) {
+	a.fill = fill.(func(MultiAggRetVar, []byte) error)
 	a.fillNull = fillNull
 }
