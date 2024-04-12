@@ -33,7 +33,7 @@ func TestValidate(t *testing.T) {
 	assert.Equal(t, defaultHeatbeatInterval, c.HAKeeper.HeatbeatInterval.Duration)
 	assert.Equal(t, defaultHeatbeatTimeout, c.HAKeeper.HeatbeatTimeout.Duration)
 	assert.Equal(t, defaultConnectTimeout, c.LogService.ConnectTimeout.Duration)
-	assert.Equal(t, "true", c.Txn.IncrementalDedup)
+	assert.Equal(t, "incremental_dedup", c.Txn.DeduplicationType)
 }
 
 func TestDefaulValue(t *testing.T) {

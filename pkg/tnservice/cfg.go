@@ -16,9 +16,6 @@ package tnservice
 
 import (
 	"context"
-	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
-	"github.com/matrixorigin/matrixone/pkg/util"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"path/filepath"
 	"strings"
 	"time"
@@ -27,9 +24,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
+	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
+	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 )
 
 var (

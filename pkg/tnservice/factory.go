@@ -16,7 +16,6 @@ package tnservice
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -30,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage"
 	taestorage "github.com/matrixorigin/matrixone/pkg/txn/storage/tae"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"go.uber.org/zap"
 )
