@@ -32,10 +32,10 @@ func doBackup(ctx context.Context, ses FeSession, bs *tree.BackupStart) error {
 		err error
 	)
 	conf := &backup.Config{
-		HAkeeper: globalPu.HAKeeperClient,
+		HAkeeper: getGlobalPu().HAKeeperClient,
 		Metas:    backup.NewMetas(),
 	}
-	conf.SharedFs, err = fileservice.Get[fileservice.FileService](globalPu.FileService, defines.SharedFileServiceName)
+	conf.SharedFs, err = fileservice.Get[fileservice.FileService](getGlobalPu().FileService, defines.SharedFileServiceName)
 	if err != nil {
 		return err
 	}

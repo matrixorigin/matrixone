@@ -333,7 +333,7 @@ func getAccountsStorageUsage(ctx context.Context, ses *Session, accIds [][]int32
 			return nil, moerr.NewInternalErrorNoCtx("storage usage response decode failed, retry later")
 		}
 
-		fs, err := fileservice.Get[fileservice.FileService](globalPu.FileService, defines.SharedFileServiceName)
+		fs, err := fileservice.Get[fileservice.FileService](getGlobalPu().FileService, defines.SharedFileServiceName)
 		if err != nil {
 			return nil, err
 		}

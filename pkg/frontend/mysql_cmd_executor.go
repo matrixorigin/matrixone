@@ -145,13 +145,13 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 			bb.WriteString(envStmt)
 			bb.WriteString(" // ")
 			bb.WriteString(execSql)
-			text = SubStringFromBegin(bb.String(), int(globalPu.SV.LengthOfQueryPrinted))
+			text = SubStringFromBegin(bb.String(), int(getGlobalPu().SV.LengthOfQueryPrinted))
 		} else {
-			text = SubStringFromBegin(envStmt, int(globalPu.SV.LengthOfQueryPrinted))
+			text = SubStringFromBegin(envStmt, int(getGlobalPu().SV.LengthOfQueryPrinted))
 		}
 	} else {
 		stmID, _ = uuid.NewV7()
-		text = SubStringFromBegin(envStmt, int(globalPu.SV.LengthOfQueryPrinted))
+		text = SubStringFromBegin(envStmt, int(getGlobalPu().SV.LengthOfQueryPrinted))
 	}
 	ses.SetStmtId(stmID)
 	ses.SetStmtType(getStatementType(statement).GetStatementType())
@@ -484,7 +484,7 @@ func doUse(ctx context.Context, ses FeSession, db string) error {
 		return err
 	}
 	//TODO: check meta data
-	if dbMeta, err = globalPu.StorageEngine.Database(txnCtx, db, txn); err != nil {
+	if dbMeta, err = getGlobalPu().StorageEngine.Database(txnCtx, db, txn); err != nil {
 		//echo client. no such database
 		return moerr.NewBadDB(ctx, db)
 	}
@@ -2068,7 +2068,7 @@ func incStatementErrorsCounter(tenant string, stmt tree.Statement) {
 func authenticateUserCanExecuteStatement(requestCtx context.Context, ses *Session, stmt tree.Statement) error {
 	requestCtx, span := trace.Debug(requestCtx, "authenticateUserCanExecuteStatement")
 	defer span.End()
-	if globalPu.SV.SkipCheckPrivilege {
+	if getGlobalPu().SV.SkipCheckPrivilege {
 		return nil
 	}
 
@@ -2112,7 +2112,7 @@ func authenticateUserCanExecuteStatement(requestCtx context.Context, ses *Sessio
 func authenticateCanExecuteStatementAndPlan(requestCtx context.Context, ses *Session, stmt tree.Statement, p *plan.Plan) error {
 	_, task := gotrace.NewTask(context.TODO(), "frontend.authenticateCanExecuteStatementAndPlan")
 	defer task.End()
-	if globalPu.SV.SkipCheckPrivilege {
+	if getGlobalPu().SV.SkipCheckPrivilege {
 		return nil
 	}
 
@@ -2133,7 +2133,7 @@ func authenticateCanExecuteStatementAndPlan(requestCtx context.Context, ses *Ses
 func authenticateUserCanExecutePrepareOrExecute(requestCtx context.Context, ses *Session, stmt tree.Statement, p *plan.Plan) error {
 	_, task := gotrace.NewTask(context.TODO(), "frontend.authenticateUserCanExecutePrepareOrExecute")
 	defer task.End()
-	if globalPu.SV.SkipCheckPrivilege {
+	if getGlobalPu().SV.SkipCheckPrivilege {
 		return nil
 	}
 	err := authenticateUserCanExecuteStatement(requestCtx, ses, stmt)
@@ -2401,7 +2401,7 @@ func executeStmt(requestCtx context.Context,
 
 	switch execCtx.stmt.StmtKind().HandleType() {
 	case tree.EXEC_IN_FRONTEND:
-		return handleInFrontend(requestCtx, ses, execCtx)
+		return execInFrontend(requestCtx, ses, execCtx)
 	case tree.EXEC_IN_ENGINE:
 		//in the computation engine
 	}
@@ -2409,7 +2409,7 @@ func executeStmt(requestCtx context.Context,
 	switch st := execCtx.stmt.(type) {
 	case *tree.Select:
 		if st.Ep != nil {
-			if globalPu.SV.DisableSelectInto {
+			if getGlobalPu().SV.DisableSelectInto {
 				err = moerr.NewSyntaxError(requestCtx, "Unsupport select statement")
 				return
 			}
@@ -2485,7 +2485,7 @@ func executeStmt(requestCtx context.Context,
 	execCtx.stmt = execCtx.cw.GetAst()
 	switch execCtx.stmt.StmtKind().HandleType() {
 	case tree.EXEC_IN_FRONTEND:
-		return handleInFrontend(requestCtx, ses, execCtx)
+		return execInFrontend(requestCtx, ses, execCtx)
 	case tree.EXEC_IN_ENGINE:
 
 	}
@@ -2547,29 +2547,29 @@ func doComQuery(requestCtx context.Context, ses *Session, input *UserInput) (ret
 	proc := process.New(
 		requestCtx,
 		ses.GetMemPool(),
-		globalPu.TxnClient,
+		getGlobalPu().TxnClient,
 		nil,
-		globalPu.FileService,
-		globalPu.LockService,
-		globalPu.QueryClient,
-		globalPu.HAKeeperClient,
-		globalPu.UdfService,
+		getGlobalPu().FileService,
+		getGlobalPu().LockService,
+		getGlobalPu().QueryClient,
+		getGlobalPu().HAKeeperClient,
+		getGlobalPu().UdfService,
 		globalAicm)
 	proc.CopyVectorPool(ses.proc)
 	proc.CopyValueScanBatch(ses.proc)
 	proc.Id = ses.getNextProcessId()
-	proc.Lim.Size = globalPu.SV.ProcessLimitationSize
-	proc.Lim.BatchRows = globalPu.SV.ProcessLimitationBatchRows
-	proc.Lim.MaxMsgSize = globalPu.SV.MaxMessageSize
-	proc.Lim.PartitionRows = globalPu.SV.ProcessLimitationPartitionRows
+	proc.Lim.Size = getGlobalPu().SV.ProcessLimitationSize
+	proc.Lim.BatchRows = getGlobalPu().SV.ProcessLimitationBatchRows
+	proc.Lim.MaxMsgSize = getGlobalPu().SV.MaxMessageSize
+	proc.Lim.PartitionRows = getGlobalPu().SV.ProcessLimitationPartitionRows
 	proc.SessionInfo = process.SessionInfo{
 		User:                 ses.GetUserName(),
-		Host:                 globalPu.SV.Host,
+		Host:                 getGlobalPu().SV.Host,
 		ConnectionID:         uint64(proto.ConnectionID()),
 		Database:             ses.GetDatabaseName(),
-		Version:              makeServerVersion(globalPu, serverVersion.Load().(string)),
+		Version:              makeServerVersion(getGlobalPu(), serverVersion.Load().(string)),
 		TimeZone:             ses.GetTimeZone(),
-		StorageEngine:        globalPu.StorageEngine,
+		StorageEngine:        getGlobalPu().StorageEngine,
 		LastInsertID:         ses.GetLastInsertID(),
 		SqlHelper:            ses.GetSqlHelper(),
 		Buf:                  ses.GetBuffer(),
@@ -2618,7 +2618,7 @@ func doComQuery(requestCtx context.Context, ses *Session, input *UserInput) (ret
 	cws, err := GetComputationWrapper(ses.GetDatabaseName(),
 		input,
 		ses.GetUserName(),
-		globalPu.StorageEngine,
+		getGlobalPu().StorageEngine,
 		proc, ses)
 
 	ParseDuration := time.Since(beginInstant)
@@ -2808,7 +2808,7 @@ func ExecRequest(requestCtx context.Context, ses *Session, req *Request) (resp *
 	case COM_QUERY:
 		var query = string(req.GetData().([]byte))
 		ses.addSqlCount(1)
-		logDebug(ses, ses.GetDebugString(), "query trace", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.QueryField(SubStringFromBegin(query, int(globalPu.SV.LengthOfQueryPrinted))))
+		logDebug(ses, ses.GetDebugString(), "query trace", logutil.ConnectionIdField(ses.GetConnectionID()), logutil.QueryField(SubStringFromBegin(query, int(getGlobalPu().SV.LengthOfQueryPrinted))))
 		err = doComQuery(requestCtx, ses, &UserInput{sql: query})
 		if err != nil {
 			resp = NewGeneralErrorResponse(COM_QUERY, ses.GetTxnHandler().GetServerStatus(), err)

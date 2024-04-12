@@ -466,7 +466,7 @@ func NewSession(proto MysqlProtocol, mp *mpool.MPool, gSysVars *GlobalSystemVari
 			panic(err)
 		}
 	}
-	txnHandler := InitTxnHandler(globalPu.StorageEngine, txnCtx, txnOp)
+	txnHandler := InitTxnHandler(getGlobalPu().StorageEngine, txnCtx, txnOp)
 
 	ses := &Session{
 		feSessionImpl: feSessionImpl{
@@ -479,7 +479,7 @@ func NewSession(proto MysqlProtocol, mp *mpool.MPool, gSysVars *GlobalSystemVari
 			outputCallback: getDataFromPipeline,
 			timeZone:       time.Local,
 		},
-		storage: &engine.EntireEngine{Engine: globalPu.StorageEngine},
+		storage: &engine.EntireEngine{Engine: getGlobalPu().StorageEngine},
 		errInfo: &errInfo{
 			codes:  make([]uint16, 0, MoDefaultErrorCount),
 			msgs:   make([]string, 0, MoDefaultErrorCount),
@@ -518,7 +518,7 @@ func NewSession(proto MysqlProtocol, mp *mpool.MPool, gSysVars *GlobalSystemVari
 		// XXX MPOOL
 		// We don't have a way to close a session, so the only sane way of creating
 		// a mpool is to use NoFixed
-		ses.pool, err = mpool.NewMPool("pipeline-"+ses.GetUUIDString(), globalPu.SV.GuestMmuLimitation, mpool.NoFixed)
+		ses.pool, err = mpool.NewMPool("pipeline-"+ses.GetUUIDString(), getGlobalPu().SV.GuestMmuLimitation, mpool.NoFixed)
 		if err != nil {
 			panic(err)
 		}
@@ -526,13 +526,13 @@ func NewSession(proto MysqlProtocol, mp *mpool.MPool, gSysVars *GlobalSystemVari
 	ses.proc = process.New(
 		context.TODO(),
 		ses.pool,
-		globalPu.TxnClient,
+		getGlobalPu().TxnClient,
 		nil,
-		globalPu.FileService,
-		globalPu.LockService,
-		globalPu.QueryClient,
-		globalPu.HAKeeperClient,
-		globalPu.UdfService,
+		getGlobalPu().FileService,
+		getGlobalPu().LockService,
+		getGlobalPu().QueryClient,
+		getGlobalPu().HAKeeperClient,
+		getGlobalPu().UdfService,
 		globalAicm)
 	ses.proc.SetStmtProfile(&ses.stmtProfile)
 
@@ -793,7 +793,7 @@ func (ses *Session) GetShareTxnBackgroundExec(ctx context.Context, newRawBatch b
 			}
 		}
 
-		txnHandler := InitTxnHandler(globalPu.StorageEngine, txnCtx, txnOp)
+		txnHandler := InitTxnHandler(getGlobalPu().StorageEngine, txnCtx, txnOp)
 		var callback func(interface{}, *batch.Batch) error
 		if newRawBatch {
 			callback = batchFetcher2
@@ -841,7 +841,7 @@ var GetRawBatchBackgroundExec = func(ctx context.Context, ses *Session) Backgrou
 }
 
 func (ses *Session) GetRawBatchBackgroundExec(ctx context.Context) BackgroundExec {
-	txnHandler := InitTxnHandler(globalPu.StorageEngine, nil, nil)
+	txnHandler := InitTxnHandler(getGlobalPu().StorageEngine, nil, nil)
 	backSes := &backSession{
 		requestCtx: ses.GetRequestContext(),
 		connectCtx: ses.GetConnectContext(),
@@ -1661,14 +1661,14 @@ func (ses *Session) getUpdateVariableSqlsByToml() []string {
 	updateSqls := make([]string, 0)
 	tenantInfo := ses.GetTenantInfo()
 	// sql_mode
-	if getVariableValue(globalPu.SV.SqlMode) != gSysVarsDefs["sql_mode"].Default {
-		sqlForUpdate := getSqlForUpdateSystemVariableValue(globalPu.SV.SqlMode, uint64(tenantInfo.GetTenantID()), "sql_mode")
+	if getVariableValue(getGlobalPu().SV.SqlMode) != gSysVarsDefs["sql_mode"].Default {
+		sqlForUpdate := getSqlForUpdateSystemVariableValue(getGlobalPu().SV.SqlMode, uint64(tenantInfo.GetTenantID()), "sql_mode")
 		updateSqls = append(updateSqls, sqlForUpdate)
 	}
 
 	// lower_case_table_names
-	if getVariableValue(globalPu.SV.LowerCaseTableNames) != gSysVarsDefs["lower_case_table_names"].Default {
-		sqlForUpdate := getSqlForUpdateSystemVariableValue(getVariableValue(globalPu.SV.LowerCaseTableNames), uint64(tenantInfo.GetTenantID()), "lower_case_table_names")
+	if getVariableValue(getGlobalPu().SV.LowerCaseTableNames) != gSysVarsDefs["lower_case_table_names"].Default {
+		sqlForUpdate := getSqlForUpdateSystemVariableValue(getVariableValue(getGlobalPu().SV.LowerCaseTableNames), uint64(tenantInfo.GetTenantID()), "lower_case_table_names")
 		updateSqls = append(updateSqls, sqlForUpdate)
 	}
 

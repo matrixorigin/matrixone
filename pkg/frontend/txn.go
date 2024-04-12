@@ -84,7 +84,7 @@ func InitTxnHandler(storage engine.Engine, txnCtx context.Context, txnOp TxnOper
 func (th *TxnHandler) createTxnCtx() (context.Context, error) {
 	if th.txnCtx == nil {
 		th.txnCtx, th.txnCtxCancel = context.WithTimeout(th.ses.GetConnectContext(),
-			globalPu.SV.SessionTimeout.Duration)
+			getGlobalPu().SV.SessionTimeout.Duration)
 	}
 
 	reqCtx := th.ses.GetRequestContext()
@@ -139,7 +139,7 @@ func (th *TxnHandler) NewTxnOperator() (context.Context, TxnOperator, error) {
 	var err error
 	th.mu.Lock()
 	defer th.mu.Unlock()
-	if globalPu.TxnClient == nil {
+	if getGlobalPu().TxnClient == nil {
 		panic("must set txn client")
 	}
 
@@ -206,7 +206,7 @@ func (th *TxnHandler) NewTxnOperator() (context.Context, TxnOperator, error) {
 		}
 	}
 
-	th.txnOperator, err = globalPu.TxnClient.New(
+	th.txnOperator, err = getGlobalPu().TxnClient.New(
 		txnCtx,
 		th.ses.getLastCommitTS(),
 		opts...)

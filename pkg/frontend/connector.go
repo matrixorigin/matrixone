@@ -37,7 +37,7 @@ const (
 )
 
 func handleCreateDynamicTable(ctx context.Context, ses *Session, st *tree.CreateTable) error {
-	ts := globalPu.TaskService
+	ts := getGlobalPu().TaskService
 	if ts == nil {
 		return moerr.NewInternalError(ctx, "no task service is found")
 	}
@@ -98,7 +98,7 @@ func handleCreateDynamicTable(ctx context.Context, ses *Session, st *tree.Create
 }
 
 func handleCreateConnector(ctx context.Context, ses *Session, st *tree.CreateConnector) error {
-	ts := globalPu.TaskService
+	ts := getGlobalPu().TaskService
 	if ts == nil {
 		return moerr.NewInternalError(ctx, "no task service is found")
 	}
@@ -231,10 +231,10 @@ func handleDropConnector(_ context.Context, ses *Session, st *tree.DropConnector
 }
 
 func handleDropDynamicTable(ctx context.Context, ses *Session, st *tree.DropTable) error {
-	if globalPu == nil || globalPu.TaskService == nil {
+	if getGlobalPu() == nil || getGlobalPu().TaskService == nil {
 		return moerr.NewInternalError(ctx, "task service not ready yet")
 	}
-	ts := globalPu.TaskService
+	ts := getGlobalPu().TaskService
 
 	// Query all relevant tasks belonging to the current tenant
 	tasks, err := ts.QueryDaemonTask(ses.GetRequestContext(),
@@ -349,7 +349,7 @@ var connectorCols = []Column{
 }
 
 func showConnectors(ses FeSession) error {
-	ts := globalPu.TaskService
+	ts := getGlobalPu().TaskService
 	if ts == nil {
 		return moerr.NewInternalError(ses.GetRequestContext(),
 			"task service not ready yet, please try again later.")

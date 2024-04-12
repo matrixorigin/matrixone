@@ -50,7 +50,7 @@ func executeStatusStmt(requestCtx context.Context, ses *Session, execCtx *ExecCt
 			}
 
 			// open new file
-			ep.DefaultBufSize = globalPu.SV.ExportDataDefaultFlushSize
+			ep.DefaultBufSize = getGlobalPu().SV.ExportDataDefaultFlushSize
 			initExportFileParam(ep, mrs)
 			if err = openNewFile(requestCtx, ep, mrs); err != nil {
 				return

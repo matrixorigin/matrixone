@@ -65,7 +65,7 @@ func newTestSession(t *testing.T, ctrl *gomock.Controller) *Session {
 	}
 	//file service
 	pu.FileService = newLocalETLFS(t, defines.SharedFileServiceName)
-	globalPu = pu
+	setGlobalPu(pu)
 	//io session
 	ioses := mock_frontend.NewMockIOSession(ctrl)
 	ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
@@ -120,7 +120,7 @@ func Test_saveQueryResultMeta(t *testing.T) {
 	}
 	ses.SetTenantInfo(tenant)
 	proc := testutil.NewProcess()
-	proc.FileService = globalPu.FileService
+	proc.FileService = getGlobalPu().FileService
 	ses.GetTxnCompileCtx().SetProcess(proc)
 	ses.GetTxnCompileCtx().GetProcess().SessionInfo = process.SessionInfo{Account: sysAccountName}
 
@@ -216,7 +216,7 @@ func Test_saveQueryResultMeta(t *testing.T) {
 	err = doDumpQueryResult(ctx, ses, ep)
 	assert.Nil(t, err)
 
-	fs := globalPu.FileService
+	fs := getGlobalPu().FileService
 
 	//csvBuf := &bytes.Buffer{}
 	var r io.ReadCloser

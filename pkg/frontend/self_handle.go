@@ -19,7 +19,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
-func handleInFrontend(requestCtx context.Context,
+func execInFrontend(requestCtx context.Context,
 	ses *Session,
 	execCtx *ExecCtx,
 ) (err error) {

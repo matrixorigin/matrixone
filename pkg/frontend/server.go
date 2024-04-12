@@ -80,8 +80,16 @@ func nextConnectionID() uint32 {
 }
 
 var globalRtMgr *RoutineManager
-var globalPu *config.ParameterUnit
+var globalPu atomic.Value
 var globalAicm *defines.AutoIncrCacheManager
+
+func setGlobalPu(pu *config.ParameterUnit) {
+	globalPu.Store(pu)
+}
+
+func getGlobalPu() *config.ParameterUnit {
+	return globalPu.Load().(*config.ParameterUnit)
+}
 
 func NewMOServer(
 	ctx context.Context,
@@ -90,7 +98,7 @@ func NewMOServer(
 	aicm *defines.AutoIncrCacheManager,
 	baseService BaseService,
 ) *MOServer {
-	globalPu = pu
+	setGlobalPu(pu)
 	globalAicm = aicm
 	codec := NewSqlCodec()
 	rm, err := NewRoutineManager(ctx)

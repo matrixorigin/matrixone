@@ -102,7 +102,7 @@ func TestMysqlClientProtocol_Handshake(t *testing.T) {
 	_, err = toml.DecodeFile("test/system_vars_config.toml", pu.SV)
 	require.NoError(t, err)
 	pu.SV.SkipCheckUser = true
-	globalPu = pu
+	setGlobalPu(pu)
 
 	ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
@@ -179,7 +179,7 @@ func TestKIll(t *testing.T) {
 	pu, err := getParameterUnit("test/system_vars_config.toml", eng, txnClient)
 	require.NoError(t, err)
 	pu.SV.SkipCheckUser = true
-	globalPu = pu
+	setGlobalPu(pu)
 	sql1 := "select connection_id();"
 	var sql2, sql3, sql4 string
 
@@ -1275,7 +1275,7 @@ func (tRM *TestRoutineManager) resultsetHandler(rs goetty.IOSession, msg interfa
 	if !ok {
 		return moerr.NewInternalError(ctx, "message is not Packet")
 	}
-	globalPu = pu
+	setGlobalPu(pu)
 	ses := NewSession(pro, nil, nil, false, nil)
 	ses.SetRequestContext(ctx)
 	pro.SetSession(ses)
@@ -1902,7 +1902,7 @@ func Test_openpacket(t *testing.T) {
 		if err != nil {
 			t.Error(err)
 		}
-		globalPu = pu
+		setGlobalPu(pu)
 
 		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
 		// fill proto.ses
@@ -1932,7 +1932,7 @@ func Test_openpacket(t *testing.T) {
 		if err != nil {
 			t.Error(err)
 		}
-		globalPu = pu
+		setGlobalPu(pu)
 
 		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
 		// fill proto.ses
@@ -2292,7 +2292,7 @@ func Test_resultset(t *testing.T) {
 		if err != nil {
 			t.Error(err)
 		}
-		globalPu = pu
+		setGlobalPu(pu)
 		var gSys GlobalSystemVariables
 		InitGlobalSystemVariables(&gSys)
 		ses := NewSession(proto, nil, &gSys, true, nil)
@@ -2327,7 +2327,7 @@ func Test_resultset(t *testing.T) {
 		if err != nil {
 			t.Error(err)
 		}
-		globalPu = pu
+		setGlobalPu(pu)
 		var gSys GlobalSystemVariables
 		InitGlobalSystemVariables(&gSys)
 		ses := NewSession(proto, nil, &gSys, true, nil)
@@ -2362,7 +2362,7 @@ func Test_resultset(t *testing.T) {
 		if err != nil {
 			t.Error(err)
 		}
-		globalPu = pu
+		setGlobalPu(pu)
 		var gSys GlobalSystemVariables
 		InitGlobalSystemVariables(&gSys)
 		ses := NewSession(proto, nil, &gSys, true, nil)
@@ -2400,7 +2400,7 @@ func Test_resultset(t *testing.T) {
 		if err != nil {
 			t.Error(err)
 		}
-		globalPu = pu
+		setGlobalPu(pu)
 		var gSys GlobalSystemVariables
 		InitGlobalSystemVariables(&gSys)
 		ses := NewSession(proto, nil, &gSys, true, nil)

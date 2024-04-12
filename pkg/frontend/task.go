@@ -24,7 +24,7 @@ import (
 )
 
 func handlePauseDaemonTask(ctx context.Context, ses *Session, st *tree.PauseDaemonTask) error {
-	ts := globalPu.TaskService
+	ts := getGlobalPu().TaskService
 	if ts == nil {
 		return moerr.NewInternalError(ses.requestCtx,
 			"task service not ready yet, please try again later.")
@@ -60,7 +60,7 @@ func handlePauseDaemonTask(ctx context.Context, ses *Session, st *tree.PauseDaem
 }
 
 func handleCancelDaemonTask(ctx context.Context, ses *Session, taskID uint64) error {
-	ts := globalPu.TaskService
+	ts := getGlobalPu().TaskService
 	if ts == nil {
 		return moerr.NewInternalError(ses.requestCtx,
 			"task service not ready yet, please try again later.")
@@ -94,7 +94,7 @@ func handleCancelDaemonTask(ctx context.Context, ses *Session, taskID uint64) er
 }
 
 func handleResumeDaemonTask(ctx context.Context, ses *Session, st *tree.ResumeDaemonTask) error {
-	ts := globalPu.TaskService
+	ts := getGlobalPu().TaskService
 	if ts == nil {
 		return moerr.NewInternalError(ses.requestCtx,
 			"task service not ready yet, please try again later.")

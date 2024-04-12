@@ -245,7 +245,7 @@ func Test_checkTenantExistsOrNot(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
-		globalPu = pu
+		setGlobalPu(pu)
 
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
@@ -377,7 +377,7 @@ func Test_initFunction(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
-		globalPu = pu
+		setGlobalPu(pu)
 
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
@@ -5937,7 +5937,7 @@ func Test_doInterpretCall(t *testing.T) {
 		priv := determinePrivilegeSetOfStatement(call)
 		ses := newSes(priv, ctrl)
 		proc := testutil.NewProcess()
-		proc.FileService = globalPu.FileService
+		proc.FileService = getGlobalPu().FileService
 		ses.GetTxnCompileCtx().SetProcess(proc)
 		ses.GetTxnCompileCtx().GetProcess().SessionInfo = process.SessionInfo{Account: sysAccountName}
 		ses.SetDatabaseName("procedure_test")
@@ -5977,7 +5977,7 @@ func Test_doInterpretCall(t *testing.T) {
 		priv := determinePrivilegeSetOfStatement(call)
 		ses := newSes(priv, ctrl)
 		proc := testutil.NewProcess()
-		proc.FileService = globalPu.FileService
+		proc.FileService = getGlobalPu().FileService
 		ses.GetTxnCompileCtx().SetProcess(proc)
 		ses.GetTxnCompileCtx().GetProcess().SessionInfo = process.SessionInfo{Account: sysAccountName}
 		ses.SetDatabaseName("procedure_test")
@@ -6030,7 +6030,7 @@ func Test_doInterpretCall(t *testing.T) {
 		priv := determinePrivilegeSetOfStatement(call)
 		ses := newSes(priv, ctrl)
 		proc := testutil.NewProcess()
-		proc.FileService = globalPu.FileService
+		proc.FileService = getGlobalPu().FileService
 		ses.GetTxnCompileCtx().SetProcess(proc)
 		ses.GetTxnCompileCtx().GetProcess().SessionInfo = process.SessionInfo{Account: sysAccountName}
 		ses.SetDatabaseName("procedure_test")
@@ -7473,7 +7473,7 @@ func Test_genRevokeCases(t *testing.T) {
 func newSes(priv *privilege, ctrl *gomock.Controller) *Session {
 	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 	pu.SV.SetDefaultValues()
-	globalPu = pu
+	setGlobalPu(pu)
 
 	ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 	ctx = defines.AttachAccountId(ctx, 0)
@@ -10836,7 +10836,7 @@ func TestUpload(t *testing.T) {
 		}
 		//file service
 		pu.FileService = fs
-		globalPu = pu
+		setGlobalPu(pu)
 		ses := &Session{
 			feSessionImpl: feSessionImpl{
 				proto: proto,
@@ -10877,7 +10877,7 @@ func TestCheckSnapshotExistOrNot(t *testing.T) {
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		globalPu = pu
+		setGlobalPu(pu)
 
 		rm, _ := NewRoutineManager(ctx)
 		ses.rm = rm
@@ -10923,7 +10923,7 @@ func TestCheckSnapshotExistOrNot(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
-		globalPu = pu
+		setGlobalPu(pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 		rm, _ := NewRoutineManager(ctx)
 		ses.rm = rm
@@ -10969,7 +10969,7 @@ func TestDoDropSnapshot(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
-		globalPu = pu
+		setGlobalPu(pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 		rm, _ := NewRoutineManager(ctx)
 		ses.rm = rm
@@ -11023,7 +11023,7 @@ func TestDoDropSnapshot(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
-		globalPu = pu
+		setGlobalPu(pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 		rm, _ := NewRoutineManager(ctx)
 		ses.rm = rm
@@ -11077,7 +11077,7 @@ func TestDoDropSnapshot(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
-		globalPu = pu
+		setGlobalPu(pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 		rm, _ := NewRoutineManager(ctx)
 		ses.rm = rm
@@ -11129,7 +11129,7 @@ func TestDoDropSnapshot(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
-		globalPu = pu
+		setGlobalPu(pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 		rm, _ := NewRoutineManager(ctx)
 		ses.rm = rm
@@ -11185,7 +11185,7 @@ func TestDoCreateSnapshot(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
-		globalPu = pu
+		setGlobalPu(pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 		rm, _ := NewRoutineManager(ctx)
 		ses.rm = rm
@@ -11246,7 +11246,7 @@ func TestDoCreateSnapshot(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
-		globalPu = pu
+		setGlobalPu(pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 		rm, _ := NewRoutineManager(ctx)
 		ses.rm = rm
@@ -11307,7 +11307,7 @@ func TestDoCreateSnapshot(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
-		globalPu = pu
+		setGlobalPu(pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 		rm, _ := NewRoutineManager(ctx)
 		ses.rm = rm
@@ -11372,7 +11372,7 @@ func TestDoCreateSnapshot(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
-		globalPu = pu
+		setGlobalPu(pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 		rm, _ := NewRoutineManager(ctx)
 		ses.rm = rm
@@ -11437,7 +11437,7 @@ func TestDoCreateSnapshot(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
-		globalPu = pu
+		setGlobalPu(pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 		rm, _ := NewRoutineManager(ctx)
 		ses.rm = rm
@@ -11503,7 +11503,7 @@ func TestDoCreateSnapshot(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
-		globalPu = pu
+		setGlobalPu(pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 		rm, _ := NewRoutineManager(ctx)
 		ses.rm = rm
@@ -11569,7 +11569,7 @@ func TestDoCreateSnapshot(t *testing.T) {
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
-		globalPu = pu
+		setGlobalPu(pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 		rm, _ := NewRoutineManager(ctx)
 		ses.rm = rm

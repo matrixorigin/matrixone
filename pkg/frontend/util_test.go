@@ -636,7 +636,7 @@ func TestGetExprValue(t *testing.T) {
 		}
 
 		pu := config.NewParameterUnit(sv, eng, txnClient, nil)
-		globalPu = pu
+		setGlobalPu(pu)
 		ses := NewSession(&FakeProtocol{}, testutil.NewProc().Mp(), GSysVariables, true, nil)
 		ses.txnCompileCtx.SetProcess(testutil.NewProc())
 		ses.requestCtx = ctx
@@ -744,7 +744,7 @@ func TestGetExprValue(t *testing.T) {
 		}
 
 		pu := config.NewParameterUnit(sv, eng, txnClient, nil)
-		globalPu = pu
+		setGlobalPu(pu)
 		ses := NewSession(&FakeProtocol{}, testutil.NewProc().Mp(), GSysVariables, true, nil)
 		ses.txnCompileCtx.SetProcess(testutil.NewProc())
 		ses.requestCtx = ctx
@@ -899,7 +899,7 @@ func Test_makeExecuteSql(t *testing.T) {
 	}
 
 	pu := config.NewParameterUnit(sv, eng, txnClient, nil)
-	globalPu = pu
+	setGlobalPu(pu)
 	ses1 := NewSession(&FakeProtocol{}, testutil.NewProc().Mp(), GSysVariables, true,
 		nil)
 

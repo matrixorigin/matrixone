@@ -137,26 +137,26 @@ func doComQueryInBack(requestCtx context.Context,
 	proc := process.New(
 		requestCtx,
 		backSes.pool,
-		globalPu.TxnClient,
+		getGlobalPu().TxnClient,
 		nil,
-		globalPu.FileService,
-		globalPu.LockService,
-		globalPu.QueryClient,
-		globalPu.HAKeeperClient,
-		globalPu.UdfService,
+		getGlobalPu().FileService,
+		getGlobalPu().LockService,
+		getGlobalPu().QueryClient,
+		getGlobalPu().HAKeeperClient,
+		getGlobalPu().UdfService,
 		globalAicm)
 	proc.Id = backSes.getNextProcessId()
-	proc.Lim.Size = globalPu.SV.ProcessLimitationSize
-	proc.Lim.BatchRows = globalPu.SV.ProcessLimitationBatchRows
-	proc.Lim.MaxMsgSize = globalPu.SV.MaxMessageSize
-	proc.Lim.PartitionRows = globalPu.SV.ProcessLimitationPartitionRows
+	proc.Lim.Size = getGlobalPu().SV.ProcessLimitationSize
+	proc.Lim.BatchRows = getGlobalPu().SV.ProcessLimitationBatchRows
+	proc.Lim.MaxMsgSize = getGlobalPu().SV.MaxMessageSize
+	proc.Lim.PartitionRows = getGlobalPu().SV.ProcessLimitationPartitionRows
 	proc.SessionInfo = process.SessionInfo{
 		User:          backSes.proto.GetUserName(),
-		Host:          globalPu.SV.Host,
+		Host:          getGlobalPu().SV.Host,
 		Database:      backSes.proto.GetDatabaseName(),
-		Version:       makeServerVersion(globalPu, serverVersion.Load().(string)),
+		Version:       makeServerVersion(getGlobalPu(), serverVersion.Load().(string)),
 		TimeZone:      backSes.GetTimeZone(),
-		StorageEngine: globalPu.StorageEngine,
+		StorageEngine: getGlobalPu().StorageEngine,
 		Buf:           backSes.buf,
 	}
 	proc.SetStmtProfile(&backSes.stmtProfile)
@@ -194,7 +194,7 @@ func doComQueryInBack(requestCtx context.Context,
 	cws, err := GetComputationWrapperInBack(backSes.proto.GetDatabaseName(),
 		input,
 		backSes.proto.GetUserName(),
-		globalPu.StorageEngine,
+		getGlobalPu().StorageEngine,
 		proc, backSes)
 
 	if err != nil {
@@ -320,7 +320,7 @@ func executeStmtInBack(requestCtx context.Context,
 
 	switch execCtx.stmt.StmtKind().HandleType() {
 	case tree.EXEC_IN_FRONTEND:
-		return handleInFrontendInBack(requestCtx, backSes, execCtx)
+		return execInFrontendInBack(requestCtx, backSes, execCtx)
 	case tree.EXEC_IN_ENGINE:
 	}
 
@@ -357,7 +357,7 @@ func executeStmtInBack(requestCtx context.Context,
 	execCtx.stmt = execCtx.cw.GetAst()
 	switch execCtx.stmt.StmtKind().HandleType() {
 	case tree.EXEC_IN_FRONTEND:
-		return handleInFrontendInBack(requestCtx, backSes, execCtx)
+		return execInFrontendInBack(requestCtx, backSes, execCtx)
 	case tree.EXEC_IN_ENGINE:
 
 	}
@@ -437,7 +437,7 @@ var NewBackgroundExec = func(
 	reqCtx context.Context,
 	upstream FeSession,
 	mp *mpool.MPool) BackgroundExec {
-	txnHandler := InitTxnHandler(globalPu.StorageEngine, nil, nil)
+	txnHandler := InitTxnHandler(getGlobalPu().StorageEngine, nil, nil)
 	backSes := &backSession{
 		requestCtx: reqCtx,
 		connectCtx: upstream.GetConnectContext(),
@@ -890,7 +890,7 @@ func (backSes *backSession) GetBackgroundExec(ctx context.Context) BackgroundExe
 }
 
 func (backSes *backSession) GetStorage() engine.Engine {
-	return globalPu.StorageEngine
+	return getGlobalPu().StorageEngine
 }
 
 func (backSes *backSession) GetTenantInfo() *TenantInfo {

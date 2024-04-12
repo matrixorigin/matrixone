@@ -207,12 +207,12 @@ func (rm *RoutineManager) getTlsConfig() *tls.Config {
 
 func (rm *RoutineManager) getConnID() (uint32, error) {
 	// Only works in unit test.
-	if globalPu.HAKeeperClient == nil {
+	if getGlobalPu().HAKeeperClient == nil {
 		return nextConnectionID(), nil
 	}
 	ctx, cancel := context.WithTimeout(rm.ctx, time.Second*2)
 	defer cancel()
-	connID, err := globalPu.HAKeeperClient.AllocateIDByKey(ctx, ConnIDAllocKey)
+	connID, err := getGlobalPu().HAKeeperClient.AllocateIDByKey(ctx, ConnIDAllocKey)
 	if err != nil {
 		return 0, err
 	}
@@ -244,8 +244,8 @@ func (rm *RoutineManager) Created(rs goetty.IOSession) {
 		logutil.Errorf("failed to get connection ID from HAKeeper: %v", err)
 		return
 	}
-	pro := NewMysqlClientProtocol(connID, rs, int(globalPu.SV.MaxBytesInOutbufToFlush), globalPu.SV)
-	routine := NewRoutine(rm.getCtx(), pro, globalPu.SV, rs)
+	pro := NewMysqlClientProtocol(connID, rs, int(getGlobalPu().SV.MaxBytesInOutbufToFlush), getGlobalPu().SV)
+	routine := NewRoutine(rm.getCtx(), pro, getGlobalPu().SV, rs)
 	v2.CreatedRoutineCounter.Inc()
 
 	// XXX MPOOL pass in a nil mpool.
@@ -275,7 +275,7 @@ func (rm *RoutineManager) Created(rs goetty.IOSession) {
 	logDebugf(pro.GetDebugString(), "have done some preparation for the connection %s", rs.RemoteAddress())
 
 	// With proxy module enabled, we try to update salt value and label info from proxy.
-	if globalPu.SV.ProxyEnabled {
+	if getGlobalPu().SV.ProxyEnabled {
 		pro.receiveExtraInfo(rs)
 	}
 
@@ -538,7 +538,7 @@ func (rm *RoutineManager) cleanKillQueue() {
 	ar.killQueueMu.Lock()
 	defer ar.killQueueMu.Unlock()
 	for toKillAccount, killRecord := range ar.killIdQueue {
-		if time.Since(killRecord.killTime) > time.Duration(globalPu.SV.CleanKillQueueInterval)*time.Minute {
+		if time.Since(killRecord.killTime) > time.Duration(getGlobalPu().SV.CleanKillQueueInterval)*time.Minute {
 			delete(ar.killIdQueue, toKillAccount)
 		}
 	}
@@ -594,8 +594,8 @@ func NewRoutineManager(ctx context.Context) (*RoutineManager, error) {
 		routinesByConnID: make(map[uint32]*Routine),
 		accountRoutine:   accountRoutine,
 	}
-	if globalPu.SV.EnableTls {
-		err := initTlsConfig(rm, globalPu.SV)
+	if getGlobalPu().SV.EnableTls {
+		err := initTlsConfig(rm, getGlobalPu().SV)
 		if err != nil {
 			return nil, err
 		}
@@ -610,7 +610,7 @@ func NewRoutineManager(ctx context.Context) (*RoutineManager, error) {
 			default:
 			}
 			rm.KillRoutineConnections()
-			time.Sleep(time.Duration(time.Duration(globalPu.SV.KillRountinesInterval) * time.Second))
+			time.Sleep(time.Duration(time.Duration(getGlobalPu().SV.KillRountinesInterval) * time.Second))
 		}
 	}()
 

@@ -21,7 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
-func handleInFrontendInBack(requestCtx context.Context,
+func execInFrontendInBack(requestCtx context.Context,
 	backSes *backSession,
 	execCtx *ExecCtx) (err error) {
 	//check transaction states

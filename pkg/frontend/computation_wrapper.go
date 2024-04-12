@@ -314,11 +314,11 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, fill func
 	}
 
 	addr := ""
-	if len(globalPu.ClusterNodes) > 0 {
-		addr = globalPu.ClusterNodes[0].Addr
+	if len(getGlobalPu().ClusterNodes) > 0 {
+		addr = getGlobalPu().ClusterNodes[0].Addr
 	}
 	cwft.proc.Ctx = txnCtx
-	cwft.proc.FileService = globalPu.FileService
+	cwft.proc.FileService = getGlobalPu().FileService
 
 	var tenant string
 	tInfo := cwft.ses.GetTenantInfo()

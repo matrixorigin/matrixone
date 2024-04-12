@@ -257,8 +257,8 @@ func newMockErrSession(t *testing.T, ctx context.Context, ctrl *gomock.Controlle
 	InitGlobalSystemVariables(&gSys)
 
 	ses := newTestSession(t, ctrl)
-	globalPu.TxnClient = txnClient
-	globalPu.StorageEngine = eng
+	getGlobalPu().TxnClient = txnClient
+	getGlobalPu().StorageEngine = eng
 	ses.txnHandler.storage = eng
 	ses.connectCtx = ctx
 	ses.requestCtx = ctx
@@ -289,8 +289,8 @@ func newMockErrSession2(t *testing.T, ctx context.Context, ctrl *gomock.Controll
 	var gSys GlobalSystemVariables
 	InitGlobalSystemVariables(&gSys)
 	ses := newTestSession(t, ctrl)
-	globalPu.TxnClient = txnClient
-	globalPu.StorageEngine = eng
+	getGlobalPu().TxnClient = txnClient
+	getGlobalPu().StorageEngine = eng
 	ses.txnHandler.storage = eng
 	ses.connectCtx = ctx
 	ses.requestCtx = ctx
@@ -332,7 +332,7 @@ func Test_rollbackStatement(t *testing.T) {
 		InitGlobalSystemVariables(&gSys)
 
 		ses := newTestSession(t, ctrl)
-		globalPu.TxnClient = txnClient
+		getGlobalPu().TxnClient = txnClient
 		ses.txnHandler.storage = eng
 		ses.connectCtx = ctx
 		ses.requestCtx = ctx
