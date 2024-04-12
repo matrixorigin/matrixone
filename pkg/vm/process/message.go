@@ -36,6 +36,8 @@ func (m MsgType) MessageName() string {
 	switch m {
 	case MsgTopValue:
 		return "MsgTopValue"
+	case MsgRuntimeFilter:
+		return "MsgRuntimeFilter"
 	}
 	return "unknown message type"
 }
@@ -71,6 +73,12 @@ type MessageBoard struct {
 	Cond     *sync.Cond    //for block message
 }
 
+func (m *MessageBoard) Reset() {
+	m.RwMutex.Lock()
+	defer m.RwMutex.Unlock()
+	m.Messages = m.Messages[:0]
+}
+
 type MessageReceiver struct {
 	offset   int32
 	tags     []int32
@@ -81,13 +89,19 @@ type MessageReceiver struct {
 
 func (proc *Process) SendMessage(m Message) {
 	mb := proc.MessageBoard
-	mb.RwMutex.Lock()
-	defer mb.RwMutex.Unlock()
 	if m.GetReceiverAddr().CnAddr == CURRENTCN { // message for current CN
-		mb.Messages = append(mb.Messages, &m)
 		if m.NeedBlock() {
 			// broadcast for block message
+			mb.Cond.L.Lock()
+			mb.RwMutex.Lock()
+			mb.Messages = append(mb.Messages, &m)
+			mb.RwMutex.Unlock()
 			mb.Cond.Broadcast()
+			mb.Cond.L.Unlock()
+		} else {
+			mb.RwMutex.Lock()
+			mb.Messages = append(mb.Messages, &m)
+			mb.RwMutex.Unlock()
 		}
 	} else {
 		//todo: send message to other CN, need to lookup cnlist
@@ -109,6 +123,9 @@ func (mr *MessageReceiver) receiveMessageNonBlock() []Message {
 	var result []Message
 	lenMessages := int32(len(mr.mb.Messages))
 	for ; mr.offset < lenMessages; mr.offset++ {
+		if mr.mb.Messages[mr.offset] == nil {
+			continue
+		}
 		message := *mr.mb.Messages[mr.offset]
 		if !MatchAddress(message, mr.addr) {
 			continue
@@ -131,18 +148,23 @@ func (mr *MessageReceiver) Free() {
 	mr.mb.RwMutex.Lock()
 	defer mr.mb.RwMutex.Unlock()
 	for i := range mr.received {
-		mr.mb.Messages[i] = nil
+		mr.mb.Messages[mr.received[i]] = nil
 	}
 	mr.received = nil
 }
 
 func (mr *MessageReceiver) ReceiveMessage(needBlock bool) []Message {
-	if !needBlock {
-		return mr.receiveMessageNonBlock()
+	var result = mr.receiveMessageNonBlock()
+	if !needBlock || len(result) > 0 {
+		return result
 	}
-	var result []Message
 	for len(result) == 0 {
 		mr.mb.Cond.L.Lock()
+		result = mr.receiveMessageNonBlock()
+		if len(result) > 0 {
+			mr.mb.Cond.L.Unlock()
+			return result
+		}
 		mr.mb.Cond.Wait()
 		mr.mb.Cond.L.Unlock()
 		result = mr.receiveMessageNonBlock()

@@ -219,13 +219,13 @@ func execInFrontend(requestCtx context.Context,
 	case *tree.DropAccount:
 
 		ses.InvalidatePrivilegeCache()
-		if err = handleDropAccount(requestCtx, ses, st); err != nil {
+		if err = handleDropAccount(requestCtx, ses, st, execCtx.proc); err != nil {
 			return
 		}
 	case *tree.AlterAccount:
 		ses.InvalidatePrivilegeCache()
 
-		if err = handleAlterAccount(requestCtx, ses, st); err != nil {
+		if err = handleAlterAccount(requestCtx, ses, st, execCtx.proc); err != nil {
 			return
 		}
 	case *tree.AlterDataBaseConfig:

@@ -16,7 +16,6 @@ package frontend
 
 import (
 	"context"
-	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -99,7 +98,8 @@ type TxnComputationWrapper struct {
 	compile   *compile.Compile
 	runResult *util2.RunResult
 
-	uuid uuid.UUID
+	ifIsExeccute bool
+	uuid         uuid.UUID
 	//holds values of params in the PREPARE
 	paramVals []any
 }
@@ -120,7 +120,7 @@ func (cwft *TxnComputationWrapper) GetAst() tree.Statement {
 
 func (cwft *TxnComputationWrapper) Free() {
 	if cwft.stmt != nil {
-		if !strings.HasPrefix(cwft.ses.GetSql(), "execute ") {
+		if !cwft.ifIsExeccute {
 			cwft.stmt.Free()
 			cwft.stmt = nil
 		}
@@ -293,14 +293,17 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, fill func
 		originSQL = sql
 		cwft.plan = plan
 
+		cwft.stmt.Free()
 		// reset plan & stmt
 		cwft.stmt = stmt
+		cwft.ifIsExeccute = true
 		// reset some special stmt for execute statement
 		switch cwft.stmt.(type) {
 		case *tree.ShowTableStatus:
 			cwft.ses.SetShowStmtType(ShowTableStatus)
 			cwft.ses.SetData(nil)
-		case *tree.SetVar, *tree.ShowVariables, *tree.ShowErrors, *tree.ShowWarnings, *tree.CreateAccount:
+		case *tree.SetVar, *tree.ShowVariables, *tree.ShowErrors, *tree.ShowWarnings,
+			*tree.CreateAccount, *tree.AlterAccount, *tree.DropAccount:
 			return nil, nil
 		}
 

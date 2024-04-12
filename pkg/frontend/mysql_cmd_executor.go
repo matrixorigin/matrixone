@@ -1301,33 +1301,68 @@ func handleDropSnapshot(ctx context.Context, ses *Session, ct *tree.DropSnapShot
 // which has been initialized.
 func handleCreateAccount(ctx context.Context, ses FeSession, ca *tree.CreateAccount, proc *process.Process) error {
 	//step1 : create new account.
-	create := &CreateAccount{
+	create := &createAccount{
 		IfNotExists:  ca.IfNotExists,
-		AuthOption:   ca.AuthOption,
+		IdentTyp:     ca.AuthOption.IdentifiedType.Typ,
 		StatusOption: ca.StatusOption,
 		Comment:      ca.Comment,
 	}
 
-	params := proc.GetPrepareParams()
-	switch val := ca.Name.(type) {
-	case *tree.NumVal:
-		create.Name = val.OrigString()
-	case *tree.ParamExpr:
-		create.Name = params.GetStringAt(val.Offset - 1)
-	default:
-		return moerr.NewInternalError(ctx, "invalid params type")
+	b := strParamBinder{
+		ctx:    ctx,
+		params: proc.GetPrepareParams(),
+	}
+	create.Name = b.bind(ca.Name)
+	create.AdminName = b.bind(ca.AuthOption.AdminName)
+	create.IdentStr = b.bindIdentStr(&ca.AuthOption.IdentifiedType)
+	if b.err != nil {
+		return b.err
 	}
 
 	return InitGeneralTenant(ctx, ses.(*Session), create)
 }
 
-// handleDropAccount drops a new user-level tenant
-func handleDropAccount(ctx context.Context, ses FeSession, da *tree.DropAccount) error {
-	return doDropAccount(ctx, ses.(*Session), da)
+func handleDropAccount(ctx context.Context, ses FeSession, da *tree.DropAccount, proc *process.Process) error {
+	drop := &dropAccount{
+		IfExists: da.IfExists,
+	}
+
+	b := strParamBinder{
+		ctx:    ctx,
+		params: proc.GetPrepareParams(),
+	}
+	drop.Name = b.bind(da.Name)
+	if b.err != nil {
+		return b.err
+	}
+
+	return doDropAccount(ctx, ses.(*Session), drop)
 }
 
 // handleDropAccount drops a new user-level tenant
-func handleAlterAccount(ctx context.Context, ses FeSession, aa *tree.AlterAccount) error {
+func handleAlterAccount(ctx context.Context, ses FeSession, st *tree.AlterAccount, proc *process.Process) error {
+	aa := &alterAccount{
+		IfExists:     st.IfExists,
+		StatusOption: st.StatusOption,
+		Comment:      st.Comment,
+	}
+
+	b := strParamBinder{
+		ctx:    ctx,
+		params: proc.GetPrepareParams(),
+	}
+
+	aa.Name = b.bind(st.Name)
+	if st.AuthOption.Exist {
+		aa.AuthExist = true
+		aa.AdminName = b.bind(st.AuthOption.AdminName)
+		aa.IdentTyp = st.AuthOption.IdentifiedType.Typ
+		aa.IdentStr = b.bindIdentStr(&st.AuthOption.IdentifiedType)
+	}
+	if b.err != nil {
+		return b.err
+	}
+
 	return doAlterAccount(ctx, ses.(*Session), aa)
 }
 
@@ -1342,8 +1377,37 @@ func handleAlterAccountConfig(ctx context.Context, ses FeSession, st *tree.Alter
 }
 
 // handleCreateUser creates the user for the tenant
-func handleCreateUser(ctx context.Context, ses FeSession, cu *tree.CreateUser) error {
+func handleCreateUser(ctx context.Context, ses FeSession, st *tree.CreateUser) error {
 	tenant := ses.GetTenantInfo()
+
+	cu := &createUser{
+		IfNotExists:        st.IfNotExists,
+		Role:               st.Role,
+		Users:              make([]*user, 0, len(st.Users)),
+		MiscOpt:            st.MiscOpt,
+		CommentOrAttribute: st.CommentOrAttribute,
+	}
+
+	for _, u := range st.Users {
+		v := user{
+			Username: u.Username,
+			Hostname: u.Hostname,
+		}
+		if u.AuthOption != nil {
+			v.AuthExist = true
+			v.IdentTyp = u.AuthOption.Typ
+			switch v.IdentTyp {
+			case tree.AccountIdentifiedByPassword,
+				tree.AccountIdentifiedWithSSL:
+				var err error
+				v.IdentStr, err = unboxExprStr(ctx, u.AuthOption.Str)
+				if err != nil {
+					return err
+				}
+			}
+		}
+		cu.Users = append(cu.Users, &v)
+	}
 
 	//step1 : create the user
 	return InitUser(ctx, ses.(*Session), tenant, cu)
@@ -1354,7 +1418,39 @@ func handleDropUser(ctx context.Context, ses FeSession, du *tree.DropUser) error
 	return doDropUser(ctx, ses.(*Session), du)
 }
 
-func handleAlterUser(ctx context.Context, ses FeSession, au *tree.AlterUser) error {
+func handleAlterUser(ctx context.Context, ses FeSession, st *tree.AlterUser) error {
+	if len(st.Users) != 1 {
+		return moerr.NewInternalError(ctx, "can only alter one user at a time")
+	}
+	su := st.Users[0]
+
+	u := &user{
+		Username: su.Username,
+		Hostname: su.Hostname,
+	}
+	if su.AuthOption != nil {
+		u.AuthExist = true
+		u.IdentTyp = su.AuthOption.Typ
+		switch u.IdentTyp {
+		case tree.AccountIdentifiedByPassword,
+			tree.AccountIdentifiedWithSSL:
+			var err error
+			u.IdentStr, err = unboxExprStr(ctx, su.AuthOption.Str)
+			if err != nil {
+				return err
+			}
+		}
+	}
+
+	au := &alterUser{
+		IfExists: st.IfExists,
+		User:     u,
+		Role:     st.Role,
+		MiscOpt:  st.MiscOpt,
+
+		CommentOrAttribute: st.CommentOrAttribute,
+	}
+
 	return doAlterUser(ctx, ses.(*Session), au)
 }
 
@@ -3243,7 +3339,7 @@ func (h *marshalPlanHandler) Stats(ctx context.Context) (statsByte statistic.Sta
 		val := int64(statsByte.GetTimeConsumed()) +
 			int64(statsInfo.ParseDuration+
 				statsInfo.CompileDuration+
-				statsInfo.PlanDuration) - (statsInfo.IOAccessTimeConsumption + statsInfo.LockTimeConsumption)
+				statsInfo.PlanDuration) - (statsInfo.IOAccessTimeConsumption + statsInfo.IOLockTimeConsumption())
 		if val < 0 {
 			logutil.Warnf(" negative cpu (%s) + statsInfo(%d + %d + %d - %d - %d) = %d",
 				uuid.UUID(h.stmt.StatementID).String(),
@@ -3251,7 +3347,7 @@ func (h *marshalPlanHandler) Stats(ctx context.Context) (statsByte statistic.Sta
 				statsInfo.CompileDuration,
 				statsInfo.PlanDuration,
 				statsInfo.IOAccessTimeConsumption,
-				statsInfo.LockTimeConsumption,
+				statsInfo.IOLockTimeConsumption(),
 				val)
 			v2.GetTraceNegativeCUCounter("cpu").Inc()
 		} else {
