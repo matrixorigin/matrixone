@@ -35,6 +35,8 @@ type Config struct {
 	ServiceID string `toml:"-"`
 	// RPC rpc config
 	RPC morpc.Config `toml:"-"`
+	// TxnIterFunc used to iterate all active transactions in current cn
+	TxnIterFunc func(func([]byte) bool) `toml:"-"`
 
 	// ListenAddress lock service listen address for receiving lock requests
 	ListenAddress string `toml:"listen-address"`
