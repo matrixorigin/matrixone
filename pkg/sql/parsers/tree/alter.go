@@ -282,7 +282,6 @@ func (node *AlterUser) reset() {
 			}
 		}
 	}
-	node.CommentOrAttribute.Free()
 	*node = AlterUser{}
 }
 
@@ -315,7 +314,6 @@ func (node *AlterAccountAuthOption) Format(ctx *FmtCtx) {
 func (node AlterAccountAuthOption) TypeName() string { return "tree.AlterAccountAuthOption" }
 
 func (node *AlterAccountAuthOption) reset() {
-	node.IdentifiedType.Free()
 	*node = AlterAccountAuthOption{}
 }
 
@@ -343,7 +341,7 @@ func NewAlterAccount(exist bool, name Expr, aopt AlterAccountAuthOption, sopt Ac
 }
 
 func (node *AlterAccount) Free() {
-	//reuse.Free[AlterAccount](node, nil) // FIXME: maybe UAF
+	reuse.Free[AlterAccount](node, nil) // FIXME: maybe UAF
 }
 
 func (node *AlterAccount) Format(ctx *FmtCtx) {
@@ -363,7 +361,6 @@ func (node *AlterAccount) GetQueryType() string     { return QueryTypeDCL }
 func (node AlterAccount) TypeName() string { return "tree.AlterAccount" }
 
 func (node *AlterAccount) reset() {
-	node.AuthOption.Free()
 	*node = AlterAccount{}
 }
 

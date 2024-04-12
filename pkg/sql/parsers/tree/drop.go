@@ -333,7 +333,7 @@ func (node *DropAccount) GetStatementType() string { return "Drop Account" }
 func (node *DropAccount) GetQueryType() string     { return QueryTypeDCL }
 
 func (node *DropAccount) Free() {
-	//reuse.Free[DropAccount](node, nil) // FIXME: maybe UAF
+	reuse.Free[DropAccount](node, nil) // FIXME: maybe UAF
 }
 
 func (node *DropAccount) reset() {
