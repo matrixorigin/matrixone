@@ -61,7 +61,7 @@ func (tbl *txnTable) getEngine() engine.Engine {
 }
 
 func (tbl *txnTable) getTxn() *Transaction {
-	return tbl.db.op.GetWorkspace().(*Transaction)
+	return tbl.db.getTxn()
 }
 
 func (tbl *txnTable) Stats(ctx context.Context, sync bool) *pb.StatsInfo {
@@ -1406,8 +1406,8 @@ func (tbl *txnTable) TableRenameInTxn(ctx context.Context, constraint [][]byte) 
 	var rowid types.Rowid
 	var rowids []types.Rowid
 	key := genTableKey(accountId, tbl.tableName, databaseId)
-	if value, ok := db.op.GetWorkspace().(*Transaction).createMap.Load(key); ok {
-		db.op.GetWorkspace().(*Transaction).createMap.Delete(key)
+	if value, ok := tbl.db.getTxn().createMap.Load(key); ok {
+		tbl.db.getTxn().createMap.Delete(key)
 		table := value.(*txnTable)
 		id = table.tableId
 		rowid = table.rowid
@@ -1415,7 +1415,7 @@ func (tbl *txnTable) TableRenameInTxn(ctx context.Context, constraint [][]byte) 
 		if tbl != table {
 			panic("The table object in createMap should be the current table object")
 		}
-	} else if value, ok := db.op.GetWorkspace().(*Transaction).tableCache.tableMap.Load(key); ok {
+	} else if value, ok := tbl.db.getTxn().tableCache.tableMap.Load(key); ok {
 		table := value.(*txnTable)
 		id = table.tableId
 		rowid = table.rowid
@@ -1423,7 +1423,7 @@ func (tbl *txnTable) TableRenameInTxn(ctx context.Context, constraint [][]byte) 
 		if tbl != table {
 			panic("The table object in tableCache should be the current table object")
 		}
-		db.op.GetWorkspace().(*Transaction).tableCache.tableMap.Delete(key)
+		tbl.db.getTxn().tableCache.tableMap.Delete(key)
 	} else {
 		// I think it is unnecessary to make a judgment on this branch because the table is already in use, so it must be in the cache
 		item := &cache.TableItem{
@@ -1432,7 +1432,7 @@ func (tbl *txnTable) TableRenameInTxn(ctx context.Context, constraint [][]byte) 
 			AccountId:  accountId,
 			Ts:         db.op.SnapshotTS(),
 		}
-		if ok := db.op.GetWorkspace().(*Transaction).engine.catalog.GetTable(item); !ok {
+		if ok := tbl.db.getTxn().engine.catalog.GetTable(item); !ok {
 			return moerr.GetOkExpectedEOB()
 		}
 		id = item.Id
@@ -1441,14 +1441,14 @@ func (tbl *txnTable) TableRenameInTxn(ctx context.Context, constraint [][]byte) 
 	}
 
 	bat, err := genDropTableTuple(rowid, id, db.databaseId, tbl.tableName,
-		db.databaseName, db.op.GetWorkspace().(*Transaction).proc.Mp())
+		db.databaseName, tbl.db.getTxn().proc.Mp())
 	if err != nil {
 		return err
 	}
-	for _, store := range db.op.GetWorkspace().(*Transaction).tnStores {
-		if err := db.op.GetWorkspace().(*Transaction).WriteBatch(DELETE_TXN, 0, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
+	for _, store := range tbl.db.getTxn().tnStores {
+		if err := tbl.db.getTxn().WriteBatch(DELETE_TXN, 0, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
 			catalog.MO_CATALOG, catalog.MO_TABLES, bat, store, -1, false, false); err != nil {
-			bat.Clean(db.op.GetWorkspace().(*Transaction).proc.Mp())
+			bat.Clean(tbl.db.getTxn().proc.Mp())
 			return err
 		}
 	}
@@ -1456,29 +1456,29 @@ func (tbl *txnTable) TableRenameInTxn(ctx context.Context, constraint [][]byte) 
 	// Add writeBatch(delete,mo_columns) to filter table in mo_columns.
 	// Every row in writeBatch(delete,mo_columns) needs rowid
 	for _, rid := range rowids {
-		bat, err = genDropColumnTuple(rid, db.op.GetWorkspace().(*Transaction).proc.Mp())
+		bat, err = genDropColumnTuple(rid, tbl.db.getTxn().proc.Mp())
 		if err != nil {
 			return err
 		}
-		for _, store := range db.op.GetWorkspace().(*Transaction).tnStores {
-			if err = db.op.GetWorkspace().(*Transaction).WriteBatch(DELETE_TXN, 0, catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID,
+		for _, store := range tbl.db.getTxn().tnStores {
+			if err = tbl.db.getTxn().WriteBatch(DELETE_TXN, 0, catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID,
 				catalog.MO_CATALOG, catalog.MO_COLUMNS, bat, store, -1, false, false); err != nil {
-				bat.Clean(db.op.GetWorkspace().(*Transaction).proc.Mp())
+				bat.Clean(tbl.db.getTxn().proc.Mp())
 				return err
 			}
 		}
 	}
-	db.op.GetWorkspace().(*Transaction).deletedTableMap.Store(key, id)
+	tbl.db.getTxn().deletedTableMap.Store(key, id)
 
 	//------------------------------------------------------------------------------------------------------------------
 	// 2. send alter message to DN
-	bat, err = genTableAlterTuple(constraint, db.op.GetWorkspace().(*Transaction).proc.Mp())
+	bat, err = genTableAlterTuple(constraint, tbl.db.getTxn().proc.Mp())
 	if err != nil {
 		return err
 	}
-	if err = db.op.GetWorkspace().(*Transaction).WriteBatch(ALTER, 0, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
-		catalog.MO_CATALOG, catalog.MO_TABLES, bat, db.op.GetWorkspace().(*Transaction).tnStores[0], -1, false, false); err != nil {
-		bat.Clean(db.op.GetWorkspace().(*Transaction).proc.Mp())
+	if err = tbl.db.getTxn().WriteBatch(ALTER, 0, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
+		catalog.MO_CATALOG, catalog.MO_TABLES, bat, tbl.db.getTxn().tnStores[0], -1, false, false); err != nil {
+		bat.Clean(tbl.db.getTxn().proc.Mp())
 		return err
 	}
 
@@ -1498,7 +1498,7 @@ func (tbl *txnTable) TableRenameInTxn(ctx context.Context, constraint [][]byte) 
 	newtbl := new(txnTable)
 	newtbl.accountId = accountId
 
-	newRowId, err := db.op.GetWorkspace().(*Transaction).allocateID(ctx)
+	newRowId, err := tbl.db.getTxn().allocateID(ctx)
 	if err != nil {
 		return err
 	}
@@ -1522,14 +1522,14 @@ func (tbl *txnTable) TableRenameInTxn(ctx context.Context, constraint [][]byte) 
 	{
 		sql := getSql(ctx)
 		bat, err := genCreateTableTuple(newtbl, sql, accountId, userId, roleId, newtbl.tableName,
-			newtbl.tableId, db.databaseId, db.databaseName, newtbl.rowid, true, db.op.GetWorkspace().(*Transaction).proc.Mp())
+			newtbl.tableId, db.databaseId, db.databaseName, newtbl.rowid, true, tbl.db.getTxn().proc.Mp())
 		if err != nil {
 			return err
 		}
-		for _, store := range db.op.GetWorkspace().(*Transaction).tnStores {
-			if err := db.op.GetWorkspace().(*Transaction).WriteBatch(INSERT_TXN, 0, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
+		for _, store := range tbl.db.getTxn().tnStores {
+			if err := tbl.db.getTxn().WriteBatch(INSERT_TXN, 0, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
 				catalog.MO_CATALOG, catalog.MO_TABLES, bat, store, -1, true, false); err != nil {
-				bat.Clean(db.op.GetWorkspace().(*Transaction).proc.Mp())
+				bat.Clean(tbl.db.getTxn().proc.Mp())
 				return err
 			}
 		}
@@ -1542,15 +1542,15 @@ func (tbl *txnTable) TableRenameInTxn(ctx context.Context, constraint [][]byte) 
 
 	newtbl.rowids = make([]types.Rowid, len(cols))
 	for i, col := range cols {
-		newtbl.rowids[i] = db.op.GetWorkspace().(*Transaction).genRowId()
-		bat, err := genCreateColumnTuple(col, newtbl.rowids[i], true, db.op.GetWorkspace().(*Transaction).proc.Mp())
+		newtbl.rowids[i] = tbl.db.getTxn().genRowId()
+		bat, err := genCreateColumnTuple(col, newtbl.rowids[i], true, tbl.db.getTxn().proc.Mp())
 		if err != nil {
 			return err
 		}
-		for _, store := range db.op.GetWorkspace().(*Transaction).tnStores {
-			if err := db.op.GetWorkspace().(*Transaction).WriteBatch(INSERT_TXN, 0, catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID,
+		for _, store := range tbl.db.getTxn().tnStores {
+			if err := tbl.db.getTxn().WriteBatch(INSERT_TXN, 0, catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID,
 				catalog.MO_CATALOG, catalog.MO_COLUMNS, bat, store, -1, true, false); err != nil {
-				bat.Clean(db.op.GetWorkspace().(*Transaction).proc.Mp())
+				bat.Clean(tbl.db.getTxn().proc.Mp())
 				return err
 			}
 		}

@@ -498,7 +498,7 @@ func (txn *Transaction) dumpBatchLocked(offset int) error {
 		fileName := objectio.DecodeBlockInfo(
 			blockInfo.Vecs[0].GetBytesAt(0)).
 			MetaLocation().Name().String()
-		err = table.db.op.GetWorkspace().(*Transaction).WriteFileLocked(
+		err = table.getTxn().WriteFileLocked(
 			INSERT,
 			table.accountId,
 			table.db.databaseId,
@@ -507,7 +507,7 @@ func (txn *Transaction) dumpBatchLocked(offset int) error {
 			table.tableName,
 			fileName,
 			blockInfo,
-			table.db.op.GetWorkspace().(*Transaction).tnStores[0],
+			table.getTxn().tnStores[0],
 		)
 		if err != nil {
 			return err
@@ -860,7 +860,7 @@ func (txn *Transaction) compactionBlksLocked() error {
 					bat.GetVector(0),
 					objectio.EncodeBlockInfo(blkInfo),
 					false,
-					tbl.db.op.GetWorkspace().(*Transaction).proc.GetMPool())
+					tbl.getTxn().proc.GetMPool())
 			}
 
 			// append the object stats to bat
@@ -869,14 +869,14 @@ func (txn *Transaction) compactionBlksLocked() error {
 					continue
 				}
 				if err = vector.AppendBytes(bat.Vecs[1], stats[idx].Marshal(),
-					false, tbl.db.op.GetWorkspace().(*Transaction).proc.GetMPool()); err != nil {
+					false, tbl.getTxn().proc.GetMPool()); err != nil {
 					return err
 				}
 			}
 
 			bat.SetRowCount(len(createdBlks))
 			defer func() {
-				bat.Clean(tbl.db.op.GetWorkspace().(*Transaction).proc.GetMPool())
+				bat.Clean(tbl.getTxn().proc.GetMPool())
 			}()
 
 			err := txn.WriteFileLocked(
@@ -888,7 +888,7 @@ func (txn *Transaction) compactionBlksLocked() error {
 				tbl.tableName,
 				createdBlks[0].MetaLocation().Name().String(),
 				bat,
-				tbl.db.op.GetWorkspace().(*Transaction).tnStores[0],
+				tbl.getTxn().tnStores[0],
 			)
 			if err != nil {
 				return err
