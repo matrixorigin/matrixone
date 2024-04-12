@@ -9416,6 +9416,9 @@ func doRevokePrivilegeImplicitly(_ context.Context, ses *Session, stmt tree.Stat
 		return err
 	}
 	currentRole := tenantInfo.GetDefaultRole()
+	if len(currentRole) == 0 {
+		return err
+	}
 
 	// 1.first change to moadmin/accountAdmin
 	var tenantCtx context.Context
