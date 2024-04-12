@@ -189,11 +189,6 @@ func (c *Compile) reset() {
 	for k := range c.cnLabel {
 		delete(c.cnLabel, k)
 	}
-	c.lock.Lock()
-	defer c.lock.Unlock()
-	for k := range c.runtimeFilterReceiverMap {
-		delete(c.runtimeFilterReceiverMap, k)
-	}
 }
 
 // helper function to judge if init temporary engine is needed
@@ -573,6 +568,7 @@ func (c *Compile) canRetry(err error) bool {
 // run once
 func (c *Compile) runOnce() error {
 	var wg sync.WaitGroup
+	c.MessageBoard.Reset()
 	err := c.lockMetaTables()
 	if err != nil {
 		return err

@@ -400,9 +400,6 @@ func (receiver *messageReceiverOnServer) newCompile() *Compile {
 	c.fill = func(b *batch.Batch) error {
 		return receiver.sendBatch(b)
 	}
-
-	c.runtimeFilterReceiverMap = make(map[int32]*runtimeFilterReceiver)
-
 	return c
 }
 
