@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"time"
 
 	"github.com/google/uuid"
@@ -351,6 +352,12 @@ func executeStmtInBack(requestCtx context.Context,
 	if ret, err = execCtx.cw.Compile(requestCtx, backSes.GetOutputCallback()); err != nil {
 		return
 	}
+
+	defer func() {
+		if c, ok := ret.(*compile.Compile); ok {
+			c.Release()
+		}
+	}()
 
 	// cw.Compile may rewrite the stmt in the EXECUTE statement, we fetch the latest version
 	//need to check again.
