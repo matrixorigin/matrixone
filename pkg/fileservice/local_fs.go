@@ -309,9 +309,9 @@ func (l *LocalFS) Read(ctx context.Context, vector *IOVector) (err error) {
 	} else {
 		wait()
 	}
-
+	
 	stats := statistic.StatsInfoFromContext(ctx)
-	stats.AddLockTimeConsumption(time.Since(startLock))
+	stats.AddLocalFSReadIOLockTimeConsumption(time.Since(startLock))
 
 	for _, cache := range vector.Caches {
 		cache := cache
@@ -391,7 +391,7 @@ func (l *LocalFS) ReadCache(ctx context.Context, vector *IOVector) (err error) {
 	} else {
 		wait()
 	}
-	statistic.StatsInfoFromContext(ctx).AddLockTimeConsumption(time.Since(startLock))
+	statistic.StatsInfoFromContext(ctx).AddLocalFSReadCacheIOLockTimeConsumption(time.Since(startLock))
 
 	for _, cache := range vector.Caches {
 		cache := cache
