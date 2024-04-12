@@ -3815,7 +3815,7 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 
 	cmpBegin = time.Now()
 
-	if ret, err = cw.Compile(requestCtx, ses, ses.GetOutputCallback()); err != nil {
+	if ret, err = cw.Compile(requestCtx, ses.GetOutputCallback()); err != nil {
 		return
 	}
 	defer func() {

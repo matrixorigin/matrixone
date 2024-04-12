@@ -2723,6 +2723,26 @@ var supportedMathBuiltIns = []FuncNew{
 					return HexUint64
 				},
 			},
+			{
+				overloadId: 4,
+				args:       []types.T{types.T_array_float32},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return HexArray
+				},
+			},
+			{
+				overloadId: 5,
+				args:       []types.T{types.T_array_float64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return HexArray
+				},
+			},
 		},
 	},
 
@@ -5912,8 +5932,8 @@ var supportedOthersBuiltIns = []FuncNew{
 									col, _ := columnNames.GetStrValue(i)
 									coltypes, _ := columnTypes.GetStrValue(i)
 									if !null2 {
-										tuples, _, _, err := types.DecodeTuple(value)
-										scales := make([]int32, len(coltypes))
+										tuples, _, schema, err := types.DecodeTuple(value)
+										scales := make([]int32, max(len(coltypes), len(schema)))
 										for j := range coltypes {
 											scales[j] = int32(coltypes[j])
 										}

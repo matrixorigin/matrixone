@@ -791,6 +791,14 @@ func HexUint64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 	return opUnaryFixedToStr[uint64](ivecs, result, proc, length, hexEncodeUint64)
 }
 
+func HexArray(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	return opUnaryBytesToBytesWithErrorCheck(ivecs, result, proc, length, func(data []byte) ([]byte, error) {
+		buf := make([]byte, hex.EncodedLen(len(functionUtil.QuickBytesToStr(data))))
+		hex.Encode(buf, data)
+		return buf, nil
+	})
+}
+
 func hexEncodeString(xs []byte) string {
 	return hex.EncodeToString(xs)
 }

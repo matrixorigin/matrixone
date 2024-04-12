@@ -31,44 +31,6 @@ type ScannerOp interface {
 	PostExecute() error
 }
 
-// objHelper holds some temp statistics and founds deletable objects of a table.
-// If a Object has no any non-dropped blocks, it can be deleted. Except the
-// Object has the max Object id, appender may creates block in it.
-type objHelper struct {
-	// Statistics
-	objHasNonDropBlk     bool
-	objRowCnt, objRowDel int
-	objNonAppend         bool
-	isCreating           bool
-
-	// Found deletable Objects
-	maxObjId    uint64
-	objCandids  []*catalog.ObjectEntry // appendable
-	nobjCandids []*catalog.ObjectEntry // non-appendable
-}
-
-func newObjHelper() *objHelper {
-	return &objHelper{
-		objCandids:  make([]*catalog.ObjectEntry, 0),
-		nobjCandids: make([]*catalog.ObjectEntry, 0),
-	}
-}
-
-func (d *objHelper) reset() {
-	d.resetForNewObj()
-	d.maxObjId = 0
-	d.objCandids = d.objCandids[:0]
-	d.nobjCandids = d.nobjCandids[:0]
-}
-
-func (d *objHelper) resetForNewObj() {
-	d.objHasNonDropBlk = false
-	d.objNonAppend = false
-	d.isCreating = false
-	d.objRowCnt = 0
-	d.objRowDel = 0
-}
-
 type MergeTaskBuilder struct {
 	db *DB
 	*catalog.LoopProcessor
@@ -76,11 +38,10 @@ type MergeTaskBuilder struct {
 	name string
 	tbl  *catalog.TableEntry
 
-	ObjectHelper *objHelper
-	objPolicy    merge.Policy
-	executor     *merge.MergeExecutor
-	tableRowCnt  int
-	tableRowDel  int
+	objPolicy   merge.Policy
+	executor    *merge.MergeExecutor
+	tableRowCnt int
+	tableRowDel int
 
 	// concurrecy control
 	suspend    atomic.Bool
@@ -91,7 +52,6 @@ func newMergeTaskBuiler(db *DB) *MergeTaskBuilder {
 	op := &MergeTaskBuilder{
 		db:            db,
 		LoopProcessor: new(catalog.LoopProcessor),
-		ObjectHelper:  newObjHelper(),
 		objPolicy:     merge.NewBasicPolicy(),
 		executor:      merge.NewMergeExecutor(db.Runtime),
 	}
@@ -153,7 +113,6 @@ func (s *MergeTaskBuilder) resetForTable(entry *catalog.TableEntry) {
 		s.tableRowCnt = 0
 		s.tableRowDel = 0
 	}
-	s.ObjectHelper.reset()
 	s.objPolicy.ResetForTable(entry)
 }
 
@@ -188,6 +147,13 @@ func (s *MergeTaskBuilder) onTable(tableEntry *catalog.TableEntry) (err error) {
 	if !tableEntry.IsActive() {
 		return moerr.GetOkStopCurrRecur()
 	}
+	tableEntry.RLock()
+	// this table is creating or altering
+	if !tableEntry.IsCommitted() {
+		tableEntry.RUnlock()
+		return moerr.GetOkStopCurrRecur()
+	}
+	tableEntry.RUnlock()
 	s.resetForTable(tableEntry)
 	return
 }
@@ -216,8 +182,6 @@ func (s *MergeTaskBuilder) onObject(objectEntry *catalog.ObjectEntry) (err error
 	if objectEntry.IsAppendable() {
 		return moerr.GetOkStopCurrRecur()
 	}
-
-	s.ObjectHelper.resetForNewObj()
 
 	objectEntry.RUnlock()
 	// Rows will check objectStat, and if not loaded, it will load it.
