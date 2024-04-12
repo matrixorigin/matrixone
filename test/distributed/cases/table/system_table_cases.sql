@@ -36,14 +36,15 @@ SELECT COUNT(NULL) FROM (SELECT * FROM error_info LIMIT 10) AS temp;
 -- @bvt:issue
 
 -- span_info
--- issue 11,947
--- for now, span_info is mostly close by default, so here is NO enough reocrds in table.
--- keep query to check table is exist.
-SELECT COUNT(*) FROM (SELECT * FROM span_info LIMIT 0) AS temp;
-SELECT COUNT(0) FROM (SELECT * FROM span_info LIMIT 0) AS temp;
-SELECT COUNT('') FROM (SELECT * FROM span_info LIMIT 0) AS temp;
-SELECT COUNT(NULL) FROM (SELECT * FROM span_info LIMIT 0) AS temp;
--- issue 11,947 end.
+-- for now, currently no graceful way to
+-- ensure that records already flushed into span_info
+
+-- @bvt:issue#11947
+SELECT COUNT(*) FROM (SELECT * FROM span_info LIMIT 10) AS temp;
+SELECT COUNT(0) FROM (SELECT * FROM span_info LIMIT 10) AS temp;
+SELECT COUNT('') FROM (SELECT * FROM span_info LIMIT 10) AS temp;
+SELECT COUNT(NULL) FROM (SELECT * FROM span_info LIMIT 10) AS temp;
+-- @bvt:issue
 
 -- tables in system_metrics
 USE system_metrics;
