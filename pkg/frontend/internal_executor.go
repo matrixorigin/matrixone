@@ -19,7 +19,6 @@ import (
 	"sync"
 
 	"github.com/fagongzi/goetty/v2"
-	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -158,7 +157,7 @@ func (ie *internalExecutor) Query(ctx context.Context, sql string, opts ie.Sessi
 	sess := ie.newCmdSession(ctx, opts)
 	defer sess.Close()
 	ie.proto.stashResult = true
-	logutil.Info("internalExecutor new session", trace.ContextField(ctx), zap.String("session uuid", sess.uuid.String()))
+	sess.Info(ctx, "internalExecutor new session", trace.ContextField(ctx))
 	err := doComQuery(ctx, sess, &UserInput{sql: sql})
 	res := ie.proto.swapOutResult()
 	res.err = err
