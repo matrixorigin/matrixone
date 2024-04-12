@@ -1093,6 +1093,106 @@ func TestLockSuccWithKeepBindTimeout(t *testing.T) {
 
 }
 
+func TestReLockSuccWithLockTableBindChanged(t *testing.T) {
+	runLockServiceTestsWithLevel(
+		t,
+		zapcore.DebugLevel,
+		[]string{"s1", "s2"},
+		time.Second*1,
+		func(alloc *lockTableAllocator, s []*service) {
+			l1 := s[0]
+			l2 := s[1]
+
+			ctx, cancel := context.WithTimeout(
+				context.Background(),
+				time.Second*10)
+			defer cancel()
+			option := pb.LockOptions{
+				Granularity: pb.Granularity_Row,
+				Mode:        pb.LockMode_Exclusive,
+				Policy:      pb.WaitPolicy_Wait,
+			}
+
+			_, err := l1.Lock(
+				ctx,
+				0,
+				[][]byte{{1}},
+				[]byte("txn1"),
+				option)
+			require.NoError(t, err)
+			require.NoError(t, l1.Unlock(ctx, []byte("txn1"), timestamp.Timestamp{}))
+
+			b := l1.tableGroups.get(0, 0).getBind()
+			r := &remoteLockTable{bind: b}
+			l1.tableGroups.Lock()
+			l1.tableGroups.holders[0].tables[0] = r
+			l1.tableGroups.Unlock()
+
+			// should lock failed
+			_, err = l2.Lock(
+				ctx,
+				0,
+				[][]byte{{1}},
+				[]byte("txn2"),
+				option)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged))
+
+		},
+		nil,
+	)
+}
+
+func TestReLockSuccWithReStartCN(t *testing.T) {
+	runLockServiceTestsWithLevel(
+		t,
+		zapcore.DebugLevel,
+		[]string{"s1", "s2"},
+		time.Second*1,
+		func(alloc *lockTableAllocator, s []*service) {
+			l1 := s[0]
+			l2 := s[1]
+
+			ctx, cancel := context.WithTimeout(
+				context.Background(),
+				time.Second*10)
+			defer cancel()
+			option := pb.LockOptions{
+				Granularity: pb.Granularity_Row,
+				Mode:        pb.LockMode_Exclusive,
+				Policy:      pb.WaitPolicy_Wait,
+			}
+
+			_, err := l1.Lock(
+				ctx,
+				0,
+				[][]byte{{1}},
+				[]byte("txn1"),
+				option)
+			require.NoError(t, err)
+			require.NoError(t, l1.Unlock(ctx, []byte("txn1"), timestamp.Timestamp{}))
+
+			l1.mu.Lock()
+			l1.serviceID = getServiceIdentifier("s1", time.Now().UnixNano())
+			l1.mu.Unlock()
+			l1.tableGroups.removeWithFilter(
+				func(table uint64, lt lockTable) bool {
+					return true
+				})
+			time.Sleep(time.Second * 5)
+
+			// should lock succ
+			_, err = l2.Lock(
+				ctx,
+				0,
+				[][]byte{{1}},
+				[]byte("txn2"),
+				option)
+			require.NoError(t, err)
+		},
+		nil,
+	)
+}
+
 func TestReLockSuccWithKeepBindTimeout(t *testing.T) {
 	runLockServiceTestsWithLevel(
 		t,

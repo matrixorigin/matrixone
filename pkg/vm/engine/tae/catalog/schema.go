@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"io"
 	"sort"
+	"strings"
 	"time"
 
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
@@ -134,6 +135,8 @@ type Schema struct {
 	SeqnumMap  map[uint16]int // seqnum -> logical idx
 	SortKey    *SortKey
 	PhyAddrKey *ColDef
+
+	isSecondaryIndexTable bool
 }
 
 func NewEmptySchema(name string) *Schema {
@@ -157,6 +160,10 @@ func (s *Schema) Clone() *Schema {
 		panic(err)
 	}
 	return ns
+}
+
+func (s *Schema) IsSecondaryIndexTable() bool {
+	return s.isSecondaryIndexTable
 }
 
 // ApplyAlterTable modify the schema in place. Unless you know what you are doing, it is
@@ -920,6 +927,7 @@ func (s *Schema) Finalize(withoutPhyAddr bool) (err error) {
 		// schema has a primary key or a cluster by key, or nothing for now
 		panic("schema: multiple sort keys")
 	}
+	s.isSecondaryIndexTable = strings.Contains(s.Name, "__mo_index_secondary_")
 	return
 }
 
@@ -969,6 +977,21 @@ func MockSchema(colCnt int, pkIdx int) *Schema {
 			_ = schema.AppendCol(fmt.Sprintf("%s%d", prefix, i), types.T_int32.ToType())
 		}
 	}
+	schema.Constraint, _ = constraintDef.MarshalBinary()
+
+	_ = schema.Finalize(false)
+	return schema
+}
+
+func MockSnapShotSchema() *Schema {
+	schema := NewEmptySchema("mo_snapshot")
+
+	constraintDef := &engine.ConstraintDef{
+		Cts: make([]engine.Constraint, 0),
+	}
+
+	schema.AppendCol("tid", types.T_uint64.ToType())
+	schema.AppendCol("ts", types.T_TS.ToType())
 	schema.Constraint, _ = constraintDef.MarshalBinary()
 
 	_ = schema.Finalize(false)

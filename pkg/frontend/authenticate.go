@@ -1608,8 +1608,8 @@ const (
 
 	getDbIdAndTypFormat         = `select dat_id,dat_type from mo_catalog.mo_database where datname = '%s' and account_id = %d;`
 	insertIntoMoPubsFormat      = `insert into mo_catalog.mo_pubs(pub_name,database_name,database_id,all_table,table_list,account_list,created_time,owner,creator,comment) values ('%s','%s',%d,%t,'%s','%s',now(),%d,%d,'%s');`
-	getPubInfoFormat            = `select account_list,comment from mo_catalog.mo_pubs where pub_name = '%s';`
-	updatePubInfoFormat         = `update mo_catalog.mo_pubs set account_list = '%s',comment = '%s', update_time = now() where pub_name = '%s';`
+	getPubInfoFormat            = `select account_list,comment,database_name,database_id from mo_catalog.mo_pubs where pub_name = '%s';`
+	updatePubInfoFormat         = `update mo_catalog.mo_pubs set account_list = '%s',comment = '%s', database_name = '%s', database_id = %d, update_time = now() where pub_name = '%s';`
 	dropPubFormat               = `delete from mo_catalog.mo_pubs where pub_name = '%s';`
 	getAccountIdAndStatusFormat = `select account_id,status from mo_catalog.mo_account where account_name = '%s';`
 	getPubInfoForSubFormat      = `select database_name,account_list from mo_catalog.mo_pubs where pub_name = "%s";`
@@ -2022,14 +2022,14 @@ func getSqlForGetPubInfo(ctx context.Context, pubName string, checkNameValid boo
 	return fmt.Sprintf(getPubInfoFormat, pubName), nil
 }
 
-func getSqlForUpdatePubInfo(ctx context.Context, pubName string, accountList string, comment string, checkNameValid bool) (string, error) {
+func getSqlForUpdatePubInfo(ctx context.Context, pubName string, accountList string, comment string, dbName string, dbId uint64, checkNameValid bool) (string, error) {
 	if checkNameValid {
 		err := inputNameIsInvalid(ctx, pubName)
 		if err != nil {
 			return "", err
 		}
 	}
-	return fmt.Sprintf(updatePubInfoFormat, accountList, comment, pubName), nil
+	return fmt.Sprintf(updatePubInfoFormat, accountList, comment, dbName, dbId, pubName), nil
 }
 
 func getSqlForDropPubInfo(ctx context.Context, pubName string, checkNameValid bool) (string, error) {
@@ -3923,9 +3923,8 @@ func doCreatePublication(ctx context.Context, ses *Session, cp *tree.CreatePubli
 	const allTable = true
 	var (
 		sql         string
-		erArray     []ExecResult
-		datId       uint64
-		datType     string
+		dbId        uint64
+		dbType      string
 		tableList   string
 		accountList string
 		tenantInfo  *TenantInfo
@@ -3967,34 +3966,14 @@ func doCreatePublication(ctx context.Context, ses *Session, cp *tree.CreatePubli
 	}
 	bh.ClearExecResultSet()
 
-	sql, err = getSqlForGetDbIdAndType(ctx, pubDb, true, uint64(tenantInfo.TenantID))
-	if err != nil {
+	if dbId, dbType, err = getDbIdAndType(ctx, bh, tenantInfo, pubDb); err != nil {
 		return err
 	}
-	err = bh.Exec(ctx, sql)
-	if err != nil {
-		return err
-	}
-	erArray, err = getResultSet(ctx, bh)
-	if err != nil {
-		return err
-	}
-	if !execResultArrayHasData(erArray) {
-		return moerr.NewInternalError(ctx, "database '%s' does not exist", cp.Database)
-	}
-	datId, err = erArray[0].GetUint64(ctx, 0, 0)
-	if err != nil {
-		return err
-	}
-	datType, err = erArray[0].GetString(ctx, 0, 1)
-	if err != nil {
-		return err
-	}
-	if datType != "" { //TODO: check the dat_type
+	if dbType != "" { //TODO: check the dat_type
 		return moerr.NewInternalError(ctx, "database '%s' is not a user database", cp.Database)
 	}
-	bh.ClearExecResultSet()
-	sql, err = getSqlForInsertIntoMoPubs(ctx, string(cp.Name), pubDb, datId, allTable, tableList, accountList, tenantInfo.GetDefaultRoleID(), tenantInfo.GetUserID(), cp.Comment, true)
+
+	sql, err = getSqlForInsertIntoMoPubs(ctx, string(cp.Name), pubDb, dbId, allTable, tableList, accountList, tenantInfo.GetDefaultRoleID(), tenantInfo.GetUserID(), cp.Comment, true)
 	if err != nil {
 		return err
 	}
@@ -4013,6 +3992,9 @@ func doAlterPublication(ctx context.Context, ses *Session, ap *tree.AlterPublica
 		accountList    string
 		accountListSep []string
 		comment        string
+		dbName         string
+		dbId           uint64
+		dbType         string
 		sql            string
 		erArray        []ExecResult
 		tenantInfo     *TenantInfo
@@ -4032,6 +4014,7 @@ func doAlterPublication(ctx context.Context, ses *Session, ap *tree.AlterPublica
 		return err
 	}
 	bh.ClearExecResultSet()
+
 	sql, err = getSqlForGetPubInfo(ctx, string(ap.Name), true)
 	if err != nil {
 		return err
@@ -4047,17 +4030,13 @@ func doAlterPublication(ctx context.Context, ses *Session, ap *tree.AlterPublica
 	if !execResultArrayHasData(erArray) {
 		return moerr.NewInternalError(ctx, "publication '%s' does not exist", ap.Name)
 	}
+	bh.ClearExecResultSet()
 
-	accountList, err = erArray[0].GetString(ctx, 0, 0)
-	if err != nil {
+	// alter account
+	if accountList, err = erArray[0].GetString(ctx, 0, 0); err != nil {
 		return err
 	}
 	allAccount = accountList == "all"
-
-	comment, err = erArray[0].GetString(ctx, 0, 1)
-	if err != nil {
-		return err
-	}
 
 	if ap.AccountsSet != nil {
 		switch {
@@ -4107,19 +4086,43 @@ func doAlterPublication(ctx context.Context, ses *Session, ap *tree.AlterPublica
 			accountList = strings.Join(accountListSep, ",")
 		}
 	}
+
+	// alter comment
+	if comment, err = erArray[0].GetString(ctx, 0, 1); err != nil {
+		return err
+	}
+
 	if ap.Comment != "" {
 		comment = ap.Comment
 	}
-	sql, err = getSqlForUpdatePubInfo(ctx, string(ap.Name), accountList, comment, false)
+
+	// alter db
+	if dbName, err = erArray[0].GetString(ctx, 0, 2); err != nil {
+		return err
+	}
+	if dbId, err = erArray[0].GetUint64(ctx, 0, 3); err != nil {
+		return err
+	}
+
+	if ap.DbName != "" {
+		dbName = ap.DbName
+		if _, ok := sysDatabases[dbName]; ok {
+			return moerr.NewInternalError(ctx, "invalid database name '%s', not support publishing system database", dbName)
+		}
+
+		if dbId, dbType, err = getDbIdAndType(ctx, bh, tenantInfo, dbName); err != nil {
+			return err
+		}
+		if dbType != "" { //TODO: check the dat_type
+			return moerr.NewInternalError(ctx, "database '%s' is not a user database", dbName)
+		}
+	}
+
+	sql, err = getSqlForUpdatePubInfo(ctx, string(ap.Name), accountList, comment, dbName, dbId, false)
 	if err != nil {
 		return err
 	}
-	bh.ClearExecResultSet()
-	err = bh.Exec(ctx, sql)
-	if err != nil {
-		return err
-	}
-	return err
+	return bh.Exec(ctx, sql)
 }
 
 func doDropPublication(ctx context.Context, ses *Session, dp *tree.DropPublication) (err error) {
@@ -6053,7 +6056,8 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		kind = privilegeKindNone
 	case *tree.BackupStart:
 		objType = objectTypeNone
-		kind = privilegeKindNone
+		kind = privilegeKindSpecial
+		special = specialTagAdmin
 	case *tree.EmptyStmt:
 		objType = objectTypeNone
 		kind = privilegeKindNone
@@ -7607,6 +7611,11 @@ func authenticateUserCanExecuteStatementWithObjectTypeNone(ctx context.Context, 
 			return tenant.IsAdminRole(), nil
 		}
 
+		checkBackUpStartPrivilege := func() (bool, error) {
+			//only the moAdmin can execute the backup statement
+			return tenant.IsSysTenant(), nil
+		}
+
 		switch gp := stmt.(type) {
 		case *tree.Grant:
 			if gp.Typ == tree.GrantTypePrivilege {
@@ -7638,6 +7647,8 @@ func authenticateUserCanExecuteStatementWithObjectTypeNone(ctx context.Context, 
 			return tenant.IsMoAdminRole(), nil
 		case *tree.UpgradeStatement:
 			return tenant.IsMoAdminRole(), nil
+		case *tree.BackupStart:
+			return checkBackUpStartPrivilege()
 		}
 	}
 
@@ -9904,4 +9915,35 @@ func doResolveSnapshotTsWithSnapShotName(ctx context.Context, ses *Session, spNa
 	} else {
 		return "", moerr.NewInternalError(ctx, "snapshot %s does not exist", spName)
 	}
+}
+
+func getDbIdAndType(ctx context.Context, bh BackgroundExec, tenantInfo *TenantInfo, dbName string) (dbId uint64, dbType string, err error) {
+	sql, err := getSqlForGetDbIdAndType(ctx, dbName, true, uint64(tenantInfo.TenantID))
+	if err != nil {
+		return
+	}
+	if bh.Exec(ctx, sql) != nil {
+		return
+	}
+	defer bh.ClearExecResultSet()
+
+	erArray, err := getResultSet(ctx, bh)
+	if err != nil {
+		return
+	}
+
+	if !execResultArrayHasData(erArray) {
+		err = moerr.NewInternalError(ctx, "database '%s' does not exist", dbName)
+		return
+	}
+
+	if dbId, err = erArray[0].GetUint64(ctx, 0, 0); err != nil {
+		return
+	}
+
+	if dbType, err = erArray[0].GetString(ctx, 0, 1); err != nil {
+		return
+	}
+
+	return
 }
