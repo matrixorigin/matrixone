@@ -72,9 +72,9 @@ func (m *MOZapLog) GetName() string {
 const (
 	deltaContentLength = int64(26 + 5 + 8 + 40 + 36 + 16)
 
-	session_id = "session_id"
+	sessionId = "session_id"
 
-	statement_id = "statement_id"
+	statementId = "statement_id"
 )
 
 // Size 计算近似值
@@ -119,7 +119,7 @@ func (m *MOZapLog) FillRow(ctx context.Context, row *table.Row) {
 		row.SetColumnVal(sessionIDCol, table.StringField(m.SessionID))
 	}
 	if m.StatementID != "" {
-		row.SetColumnVal(sessionIDCol, table.StringField(m.SessionID))
+		row.SetColumnVal(statementIDCol, table.StringField(m.StatementID))
 	}
 }
 
@@ -158,13 +158,13 @@ func ReportZap(jsonEncoder zapcore.Encoder, entry zapcore.Entry, fields []zapcor
 		}
 
 		if v.Type == zapcore.StringType {
-			if v.Key == session_id {
+			if v.Key == sessionId {
 				log.SessionID = v.String
 				if idx <= endIdx {
 					fields[idx], fields[endIdx] = fields[endIdx], fields[idx]
 					endIdx--
 				}
-			} else if v.Key == statement_id {
+			} else if v.Key == statementId {
 				log.StatementID = v.String
 				if idx <= endIdx {
 					fields[idx], fields[endIdx] = fields[endIdx], fields[idx]
