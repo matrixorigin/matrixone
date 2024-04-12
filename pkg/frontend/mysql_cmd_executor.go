@@ -1574,8 +1574,7 @@ func handleShowAccounts(ctx context.Context, ses FeSession, sa *tree.ShowAccount
 
 // handleShowCollation lists the info of collation
 func handleShowCollation(ses FeSession, sc *tree.ShowCollation, proc *process.Process, isLastStmt bool) error {
-	var err error
-	err = doShowCollation(ses.(*Session), proc, sc)
+	err := doShowCollation(ses.(*Session), proc, sc)
 	if err != nil {
 		return err
 	}
@@ -1743,8 +1742,7 @@ func doShowCollation(ses *Session, proc *process.Process, sc *tree.ShowCollation
 }
 
 func handleShowSubscriptions(ctx context.Context, ses FeSession, ss *tree.ShowSubscriptions, isLastStmt bool) error {
-	var err error
-	err = doShowSubscriptions(ctx, ses.(*Session), ss)
+	err := doShowSubscriptions(ctx, ses.(*Session), ss)
 	if err != nil {
 		return err
 	}

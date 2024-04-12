@@ -890,7 +890,8 @@ func commitTxnFunc(requestCtx context.Context,
 func finishTxnFunc(reqCtx context.Context, ses FeSession, execErr error, execCtx *ExecCtx) (err error) {
 	// First recover all panics.   If paniced, we will abort.
 	if r := recover(); r != nil {
-		err = moerr.ConvertPanicError(reqCtx, r)
+		recoverErr := moerr.ConvertPanicError(reqCtx, r)
+		logError(ses, ses.GetDebugString(), "recover from panic", zap.Error(recoverErr), zap.Error(execErr))
 	}
 
 	if execErr == nil {
