@@ -16,6 +16,7 @@ package hashbuild
 
 import (
 	"bytes"
+	"runtime"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
@@ -248,6 +249,9 @@ func (ctr *container) buildHashmapByMergedBatch(ap *Argument, proc *process.Proc
 	)
 
 	for i := 0; i < count; i += hashmap.UnitLimit {
+		if i%(hashmap.UnitLimit*32) == 0 {
+			runtime.Gosched()
+		}
 		n := count - i
 		if n > hashmap.UnitLimit {
 			n = hashmap.UnitLimit
