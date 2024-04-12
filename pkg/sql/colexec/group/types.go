@@ -110,6 +110,15 @@ func (arg *Argument) GetOperatorBase() *vm.OperatorBase {
 	return &arg.OperatorBase
 }
 
+func (arg *Argument) AnyDistinctAgg() bool {
+	for _, agg := range arg.Aggs {
+		if agg.IsDistinct() {
+			return true
+		}
+	}
+	return false
+}
+
 func init() {
 	reuse.CreatePool[Argument](
 		func() *Argument {

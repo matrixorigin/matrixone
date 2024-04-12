@@ -93,6 +93,8 @@ func (d *distinctHash) bulkFill(group int, vs []*vector.Vector) ([]bool, error) 
 			if v > oldLen && !d.bs1[v-oldLen] {
 				d.bs1[v-oldLen] = true
 				dd[k] = true
+			} else {
+				dd[k] = false
 			}
 		}
 	}

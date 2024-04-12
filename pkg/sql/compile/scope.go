@@ -788,6 +788,9 @@ func newParallelScope(c *Compile, s *Scope, ss []*Scope) (*Scope, error) {
 			flg = true
 			idx = i
 			arg := in.Arg.(*group.Argument)
+			if arg.AnyDistinctAgg() {
+				continue
+			}
 			s.Instructions = s.Instructions[i:]
 			s.Instructions[0] = vm.Instruction{
 				Op:  vm.MergeGroup,
