@@ -43,6 +43,22 @@ var (
 		types.New(types.T_TS, types.MaxVarcharLen, 0),
 		types.New(types.T_varchar, 5000, 0),
 	}
+
+	tableInfoSchemaAttr = []string{
+		catalog2.SystemColAttr_AccID,
+		catalog2.SystemRelAttr_DBID,
+		SnapshotAttr_TID,
+		catalog2.SystemRelAttr_CreateAt,
+		catalog.EntryNode_DeleteAt,
+	}
+
+	tableInfoSchemaTypes = []types.Type{
+		types.New(types.T_uint64, 0, 0),
+		types.New(types.T_uint64, 0, 0),
+		types.New(types.T_uint64, 0, 0),
+		types.New(types.T_TS, types.MaxVarcharLen, 0),
+		types.New(types.T_TS, types.MaxVarcharLen, 0),
+	}
 )
 
 type objectInfo struct {
@@ -249,6 +265,63 @@ func (sm *SnapshotMeta) SaveMeta(name string, fs fileservice.FileService) error 
 	return err
 }
 
+func (sm *SnapshotMeta) SaveTableInfo(name string, fs fileservice.FileService) error {
+	if len(sm.tables) == 0 {
+		return nil
+	}
+	bat := containers.NewBatch()
+	for i, attr := range tableInfoSchemaAttr {
+		bat.AddVector(attr, containers.MakeVector(tableInfoSchemaTypes[i], common.DefaultAllocator))
+	}
+	for _, entry := range sm.tables {
+		for _, table := range entry {
+			bat.GetVectorByName(catalog2.SystemColAttr_AccID).Append(table.accID, false)
+			bat.GetVectorByName(catalog2.SystemRelAttr_DBID).Append(table.dbID, false)
+			bat.GetVectorByName(SnapshotAttr_TID).Append(table.tid, false)
+			bat.GetVectorByName(catalog2.SystemRelAttr_CreateAt).Append(table.createAt, false)
+			bat.GetVectorByName(catalog.EntryNode_DeleteAt).Append(table.deleteAt, false)
+		}
+	}
+	defer bat.Close()
+	writer, err := objectio.NewObjectWriterSpecial(objectio.WriterGC, name, fs)
+	if err != nil {
+		return err
+	}
+	if _, err = writer.WriteWithoutSeqnum(containers.ToCNBatch(bat)); err != nil {
+		return err
+	}
+
+	_, err = writer.WriteEnd(context.Background())
+	return err
+}
+
+func (sm *SnapshotMeta) RebuildTableInfo(ins *containers.Batch) {
+	insTIDVec := ins.GetVectorByName(catalog.SnapshotAttr_TID).GetDownstreamVector()
+	insAccIDVec := ins.GetVectorByName(catalog2.SystemColAttr_AccID).GetDownstreamVector()
+	insDBIDVec := ins.GetVectorByName(catalog2.SystemRelAttr_DBID).GetDownstreamVector()
+	insCreateTSVec := ins.GetVectorByName(catalog2.SystemRelAttr_CreateAt).GetDownstreamVector()
+	insDeleteTSVec := ins.GetVectorByName(catalog.EntryNode_DeleteAt).GetDownstreamVector()
+	for i := 0; i < ins.Length(); i++ {
+		tid := vector.GetFixedAt[uint64](insTIDVec, i)
+		dbid := vector.GetFixedAt[uint64](insDBIDVec, i)
+		accid := vector.GetFixedAt[uint64](insAccIDVec, i)
+		createTS := vector.GetFixedAt[types.TS](insCreateTSVec, i)
+		deleteTS := vector.GetFixedAt[types.TS](insDeleteTSVec, i)
+		if sm.tables[accid] == nil {
+			sm.tables[accid] = make(map[uint64]*tableInfo)
+		}
+		table := &tableInfo{
+			tid:      tid,
+			dbID:     dbid,
+			accID:    accid,
+			createAt: createTS,
+			deleteAt: deleteTS,
+		}
+		sm.tables[accid][tid] = table
+		sm.acctIndexes[tid] = table
+	}
+}
+
 func (sm *SnapshotMeta) Rebuild(ins *containers.Batch) {
 	insCreateTSVec := ins.GetVectorByName(catalog.EntryNode_CreateAt).GetDownstreamVector()
 	for i := 0; i < ins.Length(); i++ {
@@ -296,6 +369,39 @@ func (sm *SnapshotMeta) ReadMeta(ctx context.Context, name string, fs fileservic
 		bat.AddVector(objectInfoSchemaAttr[i], vec)
 	}
 	sm.Rebuild(bat)
+	return nil
+}
+
+func (sm *SnapshotMeta) ReadTableInfo(ctx context.Context, name string, fs fileservice.FileService) error {
+	reader, err := blockio.NewFileReaderNoCache(fs, name)
+	if err != nil {
+		return err
+	}
+	bs, err := reader.LoadAllBlocks(ctx, common.DefaultAllocator)
+	if err != nil {
+		return err
+	}
+	idxes := make([]uint16, len(objectInfoSchemaAttr))
+	for i := range objectInfoSchemaAttr {
+		idxes[i] = uint16(i)
+	}
+	mobat, release, err := reader.LoadColumns(ctx, idxes, nil, bs[0].GetID(), common.DefaultAllocator)
+	if err != nil {
+		return err
+	}
+	defer release()
+	bat := containers.NewBatch()
+	for i := range objectInfoSchemaAttr {
+		pkgVec := mobat.Vecs[i]
+		var vec containers.Vector
+		if pkgVec.Length() == 0 {
+			vec = containers.MakeVector(objectInfoSchemaTypes[i], common.DefaultAllocator)
+		} else {
+			vec = containers.ToTNVector(pkgVec, common.DefaultAllocator)
+		}
+		bat.AddVector(objectInfoSchemaAttr[i], vec)
+	}
+	sm.RebuildTableInfo(bat)
 	return nil
 }
 
