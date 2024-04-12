@@ -74,11 +74,6 @@ func (tbl *txnTable) Stats(ctx context.Context, sync bool) *pb.StatsInfo {
 }
 
 func (tbl *txnTable) Rows(ctx context.Context) (uint64, error) {
-	_, err := tbl.getPartitionState(ctx)
-	if err != nil {
-		logutil.Errorf("failed to get stats info of table %d", tbl.tableId)
-		return 0, err
-	}
 	e := tbl.getEngine()
 	var rows uint64
 	deletes := make(map[types.Rowid]struct{})
@@ -133,11 +128,6 @@ func (tbl *txnTable) Rows(ctx context.Context) (uint64, error) {
 }
 
 func (tbl *txnTable) Size(ctx context.Context, columnName string) (uint64, error) {
-	_, err := tbl.getPartitionState(ctx)
-	if err != nil {
-		logutil.Errorf("failed to get stats info of table %d", tbl.tableId)
-		return 0, err
-	}
 	e := tbl.getEngine()
 	ts := types.TimestampToTS(tbl.db.txn.op.SnapshotTS())
 	part, err := tbl.getPartitionState(ctx)
@@ -537,13 +527,10 @@ func (tbl *txnTable) reset(newId uint64) {
 	}
 	tbl.tableId = newId
 	tbl._partState.Store(nil)
-	//tbl.objInfos = nil
-	tbl.objInfosUpdated.Store(false)
 }
 
 func (tbl *txnTable) resetSnapshot() {
 	tbl._partState.Store(nil)
-	tbl.objInfosUpdated.Store(false)
 }
 
 // return all unmodified blocks
@@ -584,11 +571,6 @@ func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr) (ranges eng
 
 	var blocks objectio.BlockInfoSlice
 	ranges = &blocks
-
-	// make sure we have the block infos snapshot
-	if err = tbl.UpdateObjectInfos(ctx); err != nil {
-		return
-	}
 
 	// get the table's snapshot
 	var part *logtailreplay.PartitionState
@@ -2125,27 +2107,6 @@ func (tbl *txnTable) getPartitionState(ctx context.Context) (*logtailreplay.Part
 		tbl._partState.Store(tbl.db.txn.engine.getPartition(tbl.db.databaseId, tbl.tableId).Snapshot())
 	}
 	return tbl._partState.Load(), nil
-}
-
-func (tbl *txnTable) UpdateObjectInfos(ctx context.Context) (err error) {
-	tbl.tnList = []int{0}
-
-	accountId, err := defines.GetAccountId(ctx)
-	if err != nil {
-		return err
-	}
-	_, created := tbl.db.txn.createMap.Load(genTableKey(accountId, tbl.tableName, tbl.db.databaseId))
-	// check if the table is not created in this txn, and the block infos are not updated, then update:
-	// 1. update logtail
-	// 2. generate block infos
-	// 3. update the blockInfosUpdated and blockInfos fields of the table
-	if !created && !tbl.objInfosUpdated.Load() {
-		if err = tbl.updateLogtail(ctx); err != nil {
-			return
-		}
-		tbl.objInfosUpdated.Store(true)
-	}
-	return
 }
 
 func (tbl *txnTable) updateLogtail(ctx context.Context) (err error) {
