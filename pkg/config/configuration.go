@@ -18,7 +18,6 @@ import (
 	"context"
 	"os"
 	"path/filepath"
-	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -799,8 +798,6 @@ type ParameterUnit struct {
 	HAKeeperClient logservice.CNHAKeeperClient
 
 	TaskService taskservice.TaskService
-
-	Counter4 atomic.Int64
 }
 
 func NewParameterUnit(

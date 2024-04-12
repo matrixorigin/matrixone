@@ -15,10 +15,8 @@
 package queryservice
 
 import (
-	"sync"
-	"sync/atomic"
-
 	"github.com/matrixorigin/matrixone/pkg/pb/status"
+	"sync"
 )
 
 // Session is an interface which should have the following methods.
@@ -41,7 +39,6 @@ type SessionManager struct {
 		// Tenant name => []*Session
 		sessionsByTenant map[string]map[Session]struct{}
 	}
-	Counter3 atomic.Int64
 }
 
 // NewSessionManager creates a new SessionManager instance.
@@ -65,7 +62,6 @@ func (sm *SessionManager) AddSession(s Session) {
 		sm.mu.sessionsByTenant[s.GetTenantName()] = make(map[Session]struct{})
 	}
 	sm.mu.sessionsByTenant[s.GetTenantName()][s] = struct{}{}
-	sm.Counter3.Add(1)
 }
 
 // RemoveSession removes a session from manager.
@@ -77,7 +73,6 @@ func (sm *SessionManager) RemoveSession(s Session) {
 	defer sm.mu.Unlock()
 	delete(sm.mu.sessionsByID, s.GetUUIDString())
 	delete(sm.mu.sessionsByTenant[s.GetTenantName()], s)
-	sm.Counter3.Add(-1)
 }
 
 // GetAllSessions returns all sessions in the manager.

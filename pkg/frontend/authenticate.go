@@ -3365,7 +3365,7 @@ func doSwitchRole(ctx context.Context, ses *Session, sr *tree.SetRole) (err erro
 }
 
 func getSubscriptionMeta(ctx context.Context, dbName string, ses FeSession, txn TxnOperator) (*plan.SubscriptionMeta, error) {
-	dbMeta, err := gPu.StorageEngine.Database(ctx, dbName, txn)
+	dbMeta, err := globalPu.StorageEngine.Database(ctx, dbName, txn)
 	if err != nil {
 		logutil.Errorf("Get Subscription database %s meta error: %s", dbName, err.Error())
 		return nil, moerr.NewNoDB(ctx)
@@ -3379,13 +3379,6 @@ func getSubscriptionMeta(ctx context.Context, dbName string, ses FeSession, txn 
 		}
 	}
 	return nil, nil
-}
-
-func isSubscriptionValid(accountList string, accName string) bool {
-	if accountList == "all" {
-		return true
-	}
-	return strings.Contains(accountList, accName)
 }
 
 func checkSubscriptionValidCommon(ctx context.Context, ses FeSession, subName, accName, pubName string) (subs *plan.SubscriptionMeta, err error) {
@@ -3502,10 +3495,10 @@ func checkSubscriptionValidCommon(ctx context.Context, ses FeSession, subName, a
 		if err != nil {
 			return nil, err
 		}
-		if !isSubscriptionValid(accountList, tenantName) {
+		if !canSub(tenantName, accountList) {
 			return nil, moerr.NewInternalError(newCtx, "the account %s is not allowed to subscribe the publication %s", tenantName, pubName)
 		}
-	} else if !isSubscriptionValid(accountList, tenantInfo.GetTenant()) {
+	} else if !canSub(tenantInfo.GetTenant(), accountList) {
 		logError(ses, ses.GetDebugString(),
 			"checkSubscriptionValidCommon",
 			zap.String("subName", subName),
@@ -4420,7 +4413,7 @@ func doDropAccount(ctx context.Context, ses *Session, da *tree.DropAccount) (err
 func postDropSuspendAccount(
 	ctx context.Context, ses *Session, accountName string, accountID int64, version uint64,
 ) (err error) {
-	qc := gPu.QueryClient
+	qc := globalPu.QueryClient
 	if qc == nil {
 		return moerr.NewInternalError(ctx, "query client is not initialized")
 	}
@@ -8069,7 +8062,7 @@ func InitGeneralTenant(ctx context.Context, ses *Session, ca *CreateAccount) (er
 		}
 
 		// create tables for new account
-		rtnErr = createTablesInMoCatalogOfGeneralTenant2(bh, ca, newTenantCtx, newTenant, gPu)
+		rtnErr = createTablesInMoCatalogOfGeneralTenant2(bh, ca, newTenantCtx, newTenant, globalPu)
 		if rtnErr != nil {
 			return rtnErr
 		}
@@ -8722,7 +8715,7 @@ func Upload(ctx context.Context, ses FeSession, localPath string, storageDir str
 		},
 	}
 
-	fileService := gPu.FileService
+	fileService := globalPu.FileService
 	_ = fileService.Delete(ctx, ioVector.FilePath)
 	err := fileService.Write(ctx, ioVector)
 	err = errors.Join(err, loadLocalErrGroup.Wait())
@@ -9625,7 +9618,7 @@ func postAlterSessionStatus(
 	accountName string,
 	tenantId int64,
 	status string) error {
-	qc := gPu.QueryClient
+	qc := globalPu.QueryClient
 	if qc == nil {
 		return moerr.NewInternalError(ctx, "query client is not initialized")
 	}

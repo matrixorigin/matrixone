@@ -452,22 +452,21 @@ func (e *errInfo) length() int {
 }
 
 func NewSession(proto MysqlProtocol, mp *mpool.MPool, gSysVars *GlobalSystemVariables, isNotBackgroundSession bool, sharedTxnHandler *TxnHandler) *Session {
-	gPu.Counter4.Add(1)
 	//if the sharedTxnHandler exists,we use its txnCtx and txnOperator in this session.
 	//Currently, we only use the sharedTxnHandler in the background session.
 	var txnCtx context.Context
 	var txnOp TxnOperator
 	var err error
 	if sharedTxnHandler != nil {
-		//if !sharedTxnHandler.IsValidTxnOperator() {
-		//	panic("shared txn is invalid")
-		//}
+		if !sharedTxnHandler.IsValidTxnOperator() {
+			panic("shared txn is invalid")
+		}
 		txnCtx, txnOp, err = sharedTxnHandler.GetTxnOperator()
 		if err != nil {
-			//panic(err)
+			panic(err)
 		}
 	}
-	txnHandler := InitTxnHandler(gPu.StorageEngine, txnCtx, txnOp)
+	txnHandler := InitTxnHandler(globalPu.StorageEngine, txnCtx, txnOp)
 
 	ses := &Session{
 		feSessionImpl: feSessionImpl{
@@ -480,7 +479,7 @@ func NewSession(proto MysqlProtocol, mp *mpool.MPool, gSysVars *GlobalSystemVari
 			outputCallback: getDataFromPipeline,
 			timeZone:       time.Local,
 		},
-		storage: &engine.EntireEngine{Engine: gPu.StorageEngine},
+		storage: &engine.EntireEngine{Engine: globalPu.StorageEngine},
 		errInfo: &errInfo{
 			codes:  make([]uint16, 0, MoDefaultErrorCount),
 			msgs:   make([]string, 0, MoDefaultErrorCount),
@@ -519,7 +518,7 @@ func NewSession(proto MysqlProtocol, mp *mpool.MPool, gSysVars *GlobalSystemVari
 		// XXX MPOOL
 		// We don't have a way to close a session, so the only sane way of creating
 		// a mpool is to use NoFixed
-		ses.pool, err = mpool.NewMPool("pipeline-"+ses.GetUUIDString(), gPu.SV.GuestMmuLimitation, mpool.NoFixed)
+		ses.pool, err = mpool.NewMPool("pipeline-"+ses.GetUUIDString(), globalPu.SV.GuestMmuLimitation, mpool.NoFixed)
 		if err != nil {
 			panic(err)
 		}
@@ -527,14 +526,14 @@ func NewSession(proto MysqlProtocol, mp *mpool.MPool, gSysVars *GlobalSystemVari
 	ses.proc = process.New(
 		context.TODO(),
 		ses.pool,
-		gPu.TxnClient,
+		globalPu.TxnClient,
 		nil,
-		gPu.FileService,
-		gPu.LockService,
-		gPu.QueryClient,
-		gPu.HAKeeperClient,
-		gPu.UdfService,
-		gAicm)
+		globalPu.FileService,
+		globalPu.LockService,
+		globalPu.QueryClient,
+		globalPu.HAKeeperClient,
+		globalPu.UdfService,
+		globalAicm)
 	ses.proc.SetStmtProfile(&ses.stmtProfile)
 
 	runtime.SetFinalizer(ses, func(ss *Session) {
@@ -544,7 +543,6 @@ func NewSession(proto MysqlProtocol, mp *mpool.MPool, gSysVars *GlobalSystemVari
 }
 
 func (ses *Session) Close() {
-	gPu.Counter4.Add(-1)
 	ses.proto = nil
 	ses.mrs = nil
 	ses.data = nil
@@ -797,7 +795,7 @@ func (ses *Session) GetShareTxnBackgroundExec(ctx context.Context, newRawBatch b
 			}
 		}
 
-		txnHandler := InitTxnHandler(gPu.StorageEngine, txnCtx, txnOp)
+		txnHandler := InitTxnHandler(globalPu.StorageEngine, txnCtx, txnOp)
 		var callback func(interface{}, *batch.Batch) error
 		if newRawBatch {
 			callback = batchFetcher2
@@ -845,7 +843,7 @@ var GetRawBatchBackgroundExec = func(ctx context.Context, ses *Session) Backgrou
 }
 
 func (ses *Session) GetRawBatchBackgroundExec(ctx context.Context) BackgroundExec {
-	txnHandler := InitTxnHandler(gPu.StorageEngine, nil, nil)
+	txnHandler := InitTxnHandler(globalPu.StorageEngine, nil, nil)
 	backSes := &backSession{
 		requestCtx: ses.GetRequestContext(),
 		connectCtx: ses.GetConnectContext(),
@@ -1665,14 +1663,14 @@ func (ses *Session) getUpdateVariableSqlsByToml() []string {
 	updateSqls := make([]string, 0)
 	tenantInfo := ses.GetTenantInfo()
 	// sql_mode
-	if getVariableValue(gPu.SV.SqlMode) != gSysVarsDefs["sql_mode"].Default {
-		sqlForUpdate := getSqlForUpdateSystemVariableValue(gPu.SV.SqlMode, uint64(tenantInfo.GetTenantID()), "sql_mode")
+	if getVariableValue(globalPu.SV.SqlMode) != gSysVarsDefs["sql_mode"].Default {
+		sqlForUpdate := getSqlForUpdateSystemVariableValue(globalPu.SV.SqlMode, uint64(tenantInfo.GetTenantID()), "sql_mode")
 		updateSqls = append(updateSqls, sqlForUpdate)
 	}
 
 	// lower_case_table_names
-	if getVariableValue(gPu.SV.LowerCaseTableNames) != gSysVarsDefs["lower_case_table_names"].Default {
-		sqlForUpdate := getSqlForUpdateSystemVariableValue(getVariableValue(gPu.SV.LowerCaseTableNames), uint64(tenantInfo.GetTenantID()), "lower_case_table_names")
+	if getVariableValue(globalPu.SV.LowerCaseTableNames) != gSysVarsDefs["lower_case_table_names"].Default {
+		sqlForUpdate := getSqlForUpdateSystemVariableValue(getVariableValue(globalPu.SV.LowerCaseTableNames), uint64(tenantInfo.GetTenantID()), "lower_case_table_names")
 		updateSqls = append(updateSqls, sqlForUpdate)
 	}
 

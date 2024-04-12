@@ -104,7 +104,7 @@ func saveQueryResult(ses *Session, bat *batch.Batch) error {
 		logInfo(ses, ses.GetDebugString(), "open save query result", zap.Float64("current result size:", s))
 		return nil
 	}
-	fs := gPu.FileService
+	fs := globalPu.FileService
 	// write query result
 	path := catalog.BuildQueryResultPath(ses.GetTenantInfo().GetTenant(), uuid.UUID(ses.tStmt.StatementID).String(), ses.GetIncBlockIdx())
 	logInfo(ses, ses.GetDebugString(), "open save query result", zap.String("statemant id is:", uuid.UUID(ses.tStmt.StatementID).String()), zap.String("fileservice name is:", fs.Name()), zap.String("write path is:", path), zap.Float64("current result size:", s))
@@ -137,7 +137,7 @@ func saveQueryResultMeta(ses *Session) error {
 		ses.tStmt = nil
 		ses.curResultSize = 0
 	}()
-	fs := gPu.FileService
+	fs := globalPu.FileService
 	// write query result meta
 	colMap, err := buildColumnMap(ses.GetRequestContext(), ses.rs)
 	if err != nil {
@@ -259,7 +259,7 @@ func isResultQuery(p *plan.Plan) []string {
 }
 
 func checkPrivilege(uuids []string, requestCtx context.Context, ses *Session) error {
-	f := gPu.FileService
+	f := globalPu.FileService
 	for _, id := range uuids {
 		// var size int64 = -1
 		path := catalog.BuildQueryResultMetaPath(ses.GetTenantInfo().GetTenant(), id)
@@ -510,9 +510,9 @@ func doDumpQueryResult(ctx context.Context, ses *Session, eParam *tree.ExportPar
 	oq.reset()
 	oq.ep.OutTofile = true
 	//prepare export param
-	exportParam.DefaultBufSize = gPu.SV.ExportDataDefaultFlushSize
+	exportParam.DefaultBufSize = globalPu.SV.ExportDataDefaultFlushSize
 	exportParam.UseFileService = true
-	exportParam.FileService = gPu.FileService
+	exportParam.FileService = globalPu.FileService
 	exportParam.Ctx = ctx
 	defer func() {
 		exportParam.LineBuffer = nil
@@ -601,7 +601,7 @@ func openResultMeta(ctx context.Context, ses *Session, queryId string) (*plan.Re
 	}
 	metaFile := catalog.BuildQueryResultMetaPath(account.GetTenant(), queryId)
 	// read meta's meta
-	reader, err := blockio.NewFileReader(gPu.FileService, metaFile)
+	reader, err := blockio.NewFileReader(globalPu.FileService, metaFile)
 	if err != nil {
 		return nil, err
 	}
@@ -641,7 +641,7 @@ func getResultFiles(ctx context.Context, ses *Session, queryId string) ([]result
 	}
 	rti := make([]resultFileInfo, 0, len(fileList))
 	for i, file := range fileList {
-		e, err := gPu.FileService.StatFile(ctx, file)
+		e, err := globalPu.FileService.StatFile(ctx, file)
 		if err != nil {
 			if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
 				return nil, moerr.NewResultFileNotFound(ctx, file)
@@ -662,7 +662,7 @@ func getResultFiles(ctx context.Context, ses *Session, queryId string) ([]result
 func openResultFile(ctx context.Context, ses *Session, fileName string, fileSize int64) (*blockio.BlockReader, []objectio.BlockObject, error) {
 	// read result's blocks
 	filePath := getPathOfQueryResultFile(fileName)
-	reader, err := blockio.NewFileReader(gPu.FileService, filePath)
+	reader, err := blockio.NewFileReader(globalPu.FileService, filePath)
 	if err != nil {
 		return nil, nil, err
 	}

@@ -37,7 +37,7 @@ const (
 )
 
 func handleCreateDynamicTable(ctx context.Context, ses *Session, st *tree.CreateTable) error {
-	ts := gPu.TaskService
+	ts := globalPu.TaskService
 	if ts == nil {
 		return moerr.NewInternalError(ctx, "no task service is found")
 	}
@@ -97,43 +97,8 @@ func handleCreateDynamicTable(ctx context.Context, ses *Session, st *tree.Create
 	return nil
 }
 
-func handleDropDynamicTable(ctx context.Context, ses *Session, st *tree.DropTable) error {
-	if gPu == nil || gPu.TaskService == nil {
-		return moerr.NewInternalError(ctx, "task service not ready yet")
-	}
-	ts := gPu.TaskService
-
-	// Query all relevant tasks belonging to the current tenant
-	tasks, err := ts.QueryDaemonTask(ses.GetRequestContext(),
-		taskservice.WithTaskType(taskservice.EQ, pb.TaskType_TypeKafkaSinkConnector.String()),
-		taskservice.WithAccountID(taskservice.EQ, ses.GetAccountId()),
-		taskservice.WithTaskStatusCond(pb.TaskStatus_Running, pb.TaskStatus_Created, pb.TaskStatus_Paused, pb.TaskStatus_PauseRequested),
-	)
-	if err != nil || len(tasks) == 0 {
-		return err
-	}
-
-	// Filter the tasks within the loop
-	for _, tn := range st.Names {
-		dbName := string(tn.Schema())
-		if dbName == "" {
-			dbName = ses.GetDatabaseName()
-		}
-		fullTableName := dbName + "." + string(tn.Name())
-
-		for _, task := range tasks {
-			if task.Details.Details.(*pb.Details_Connector).Connector.TableName == fullTableName {
-				if err := handleCancelDaemonTask(ctx, ses, task.ID); err != nil {
-					return err
-				}
-			}
-		}
-	}
-	return nil
-}
-
 func handleCreateConnector(ctx context.Context, ses *Session, st *tree.CreateConnector) error {
-	ts := gPu.TaskService
+	ts := globalPu.TaskService
 	if ts == nil {
 		return moerr.NewInternalError(ctx, "no task service is found")
 	}
@@ -265,6 +230,41 @@ func handleDropConnector(_ context.Context, ses *Session, st *tree.DropConnector
 	return nil
 }
 
+func handleDropDynamicTable(ctx context.Context, ses *Session, st *tree.DropTable) error {
+	if globalPu == nil || globalPu.TaskService == nil {
+		return moerr.NewInternalError(ctx, "task service not ready yet")
+	}
+	ts := globalPu.TaskService
+
+	// Query all relevant tasks belonging to the current tenant
+	tasks, err := ts.QueryDaemonTask(ses.GetRequestContext(),
+		taskservice.WithTaskType(taskservice.EQ, pb.TaskType_TypeKafkaSinkConnector.String()),
+		taskservice.WithAccountID(taskservice.EQ, ses.GetAccountId()),
+		taskservice.WithTaskStatusCond(pb.TaskStatus_Running, pb.TaskStatus_Created, pb.TaskStatus_Paused, pb.TaskStatus_PauseRequested),
+	)
+	if err != nil || len(tasks) == 0 {
+		return err
+	}
+
+	// Filter the tasks within the loop
+	for _, tn := range st.Names {
+		dbName := string(tn.Schema())
+		if dbName == "" {
+			dbName = ses.GetDatabaseName()
+		}
+		fullTableName := dbName + "." + string(tn.Name())
+
+		for _, task := range tasks {
+			if task.Details.Details.(*pb.Details_Connector).Connector.TableName == fullTableName {
+				if err := handleCancelDaemonTask(ctx, ses, task.ID); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
+}
+
 func handleShowConnectors(_ context.Context, ses *Session, isLastStmt bool) error {
 	var err error
 	if err := showConnectors(ses); err != nil {
@@ -349,7 +349,7 @@ var connectorCols = []Column{
 }
 
 func showConnectors(ses FeSession) error {
-	ts := gPu.TaskService
+	ts := globalPu.TaskService
 	if ts == nil {
 		return moerr.NewInternalError(ses.GetRequestContext(),
 			"task service not ready yet, please try again later.")

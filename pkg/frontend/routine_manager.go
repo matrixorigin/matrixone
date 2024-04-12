@@ -50,7 +50,6 @@ type RoutineManager struct {
 	sessionManager   *queryservice.SessionManager
 	// reportSystemStatusTime is the time when report system status last time.
 	reportSystemStatusTime atomic.Pointer[time.Time]
-	counter                atomic.Int64
 }
 
 type AccountRoutineManager struct {
@@ -59,7 +58,6 @@ type AccountRoutineManager struct {
 	killIdQueue       map[int64]KillRecord
 	accountRoutineMu  sync.RWMutex
 	accountId2Routine map[int64]map[*Routine]uint64
-	counter2          atomic.Int64
 }
 
 type KillRecord struct {
@@ -85,7 +83,6 @@ func (ar *AccountRoutineManager) recordRountine(tenantID int64, rt *Routine, ver
 		ar.accountId2Routine[tenantID] = make(map[*Routine]uint64)
 	}
 	ar.accountId2Routine[tenantID][rt] = version
-	ar.counter2.Add(1)
 }
 
 func (ar *AccountRoutineManager) deleteRoutine(tenantID int64, rt *Routine) {
@@ -98,7 +95,6 @@ func (ar *AccountRoutineManager) deleteRoutine(tenantID int64, rt *Routine) {
 	_, ok := ar.accountId2Routine[tenantID]
 	if ok {
 		delete(ar.accountId2Routine[tenantID], rt)
-		ar.counter2.Add(-1)
 	}
 	if len(ar.accountId2Routine[tenantID]) == 0 {
 		delete(ar.accountId2Routine, tenantID)
@@ -195,7 +191,6 @@ func (rm *RoutineManager) deleteRoutine(rs goetty.IOSession) *Routine {
 	defer rm.mu.Unlock()
 	if rt, ok = rm.clients[rs]; ok {
 		delete(rm.clients, rs)
-		rm.counter.Add(-1)
 	}
 	if rt != nil {
 		connID := rt.getConnectionID()
@@ -212,12 +207,12 @@ func (rm *RoutineManager) getTlsConfig() *tls.Config {
 
 func (rm *RoutineManager) getConnID() (uint32, error) {
 	// Only works in unit test.
-	if gPu.HAKeeperClient == nil {
+	if globalPu.HAKeeperClient == nil {
 		return nextConnectionID(), nil
 	}
 	ctx, cancel := context.WithTimeout(rm.ctx, time.Second*2)
 	defer cancel()
-	connID, err := gPu.HAKeeperClient.AllocateIDByKey(ctx, ConnIDAllocKey)
+	connID, err := globalPu.HAKeeperClient.AllocateIDByKey(ctx, ConnIDAllocKey)
 	if err != nil {
 		return 0, err
 	}
@@ -242,7 +237,6 @@ func (rm *RoutineManager) GetAccountRoutineManager() *AccountRoutineManager {
 }
 
 func (rm *RoutineManager) Created(rs goetty.IOSession) {
-	rm.counter.Add(1)
 	logutil.Debugf("get the connection from %s", rs.RemoteAddress())
 	createdStart := time.Now()
 	connID, err := rm.getConnID()
@@ -250,8 +244,8 @@ func (rm *RoutineManager) Created(rs goetty.IOSession) {
 		logutil.Errorf("failed to get connection ID from HAKeeper: %v", err)
 		return
 	}
-	pro := NewMysqlClientProtocol(connID, rs, int(gPu.SV.MaxBytesInOutbufToFlush), gPu.SV)
-	routine := NewRoutine(rm.getCtx(), pro, gPu.SV, rs)
+	pro := NewMysqlClientProtocol(connID, rs, int(globalPu.SV.MaxBytesInOutbufToFlush), globalPu.SV)
+	routine := NewRoutine(rm.getCtx(), pro, globalPu.SV, rs)
 	v2.CreatedRoutineCounter.Inc()
 
 	// XXX MPOOL pass in a nil mpool.
@@ -281,7 +275,7 @@ func (rm *RoutineManager) Created(rs goetty.IOSession) {
 	logDebugf(pro.GetDebugString(), "have done some preparation for the connection %s", rs.RemoteAddress())
 
 	// With proxy module enabled, we try to update salt value and label info from proxy.
-	if gPu.SV.ProxyEnabled {
+	if globalPu.SV.ProxyEnabled {
 		pro.receiveExtraInfo(rs)
 	}
 
@@ -544,7 +538,7 @@ func (rm *RoutineManager) cleanKillQueue() {
 	ar.killQueueMu.Lock()
 	defer ar.killQueueMu.Unlock()
 	for toKillAccount, killRecord := range ar.killIdQueue {
-		if time.Since(killRecord.killTime) > time.Duration(gPu.SV.CleanKillQueueInterval)*time.Minute {
+		if time.Since(killRecord.killTime) > time.Duration(globalPu.SV.CleanKillQueueInterval)*time.Minute {
 			delete(ar.killIdQueue, toKillAccount)
 		}
 	}
@@ -600,8 +594,8 @@ func NewRoutineManager(ctx context.Context) (*RoutineManager, error) {
 		routinesByConnID: make(map[uint32]*Routine),
 		accountRoutine:   accountRoutine,
 	}
-	if gPu.SV.EnableTls {
-		err := initTlsConfig(rm, gPu.SV)
+	if globalPu.SV.EnableTls {
+		err := initTlsConfig(rm, globalPu.SV)
 		if err != nil {
 			return nil, err
 		}
@@ -616,7 +610,7 @@ func NewRoutineManager(ctx context.Context) (*RoutineManager, error) {
 			default:
 			}
 			rm.KillRoutineConnections()
-			time.Sleep(time.Duration(time.Duration(gPu.SV.KillRountinesInterval) * time.Second))
+			time.Sleep(time.Duration(time.Duration(globalPu.SV.KillRountinesInterval) * time.Second))
 		}
 	}()
 

@@ -134,26 +134,26 @@ func doComQueryInBack(requestCtx context.Context,
 	proc := process.New(
 		requestCtx,
 		backSes.pool,
-		gPu.TxnClient,
+		globalPu.TxnClient,
 		nil,
-		gPu.FileService,
-		gPu.LockService,
-		gPu.QueryClient,
-		gPu.HAKeeperClient,
-		gPu.UdfService,
-		gAicm)
+		globalPu.FileService,
+		globalPu.LockService,
+		globalPu.QueryClient,
+		globalPu.HAKeeperClient,
+		globalPu.UdfService,
+		globalAicm)
 	proc.Id = backSes.getNextProcessId()
-	proc.Lim.Size = gPu.SV.ProcessLimitationSize
-	proc.Lim.BatchRows = gPu.SV.ProcessLimitationBatchRows
-	proc.Lim.MaxMsgSize = gPu.SV.MaxMessageSize
-	proc.Lim.PartitionRows = gPu.SV.ProcessLimitationPartitionRows
+	proc.Lim.Size = globalPu.SV.ProcessLimitationSize
+	proc.Lim.BatchRows = globalPu.SV.ProcessLimitationBatchRows
+	proc.Lim.MaxMsgSize = globalPu.SV.MaxMessageSize
+	proc.Lim.PartitionRows = globalPu.SV.ProcessLimitationPartitionRows
 	proc.SessionInfo = process.SessionInfo{
 		User:          backSes.proto.GetUserName(),
-		Host:          gPu.SV.Host,
+		Host:          globalPu.SV.Host,
 		Database:      backSes.proto.GetDatabaseName(),
-		Version:       makeServerVersion(gPu, serverVersion.Load().(string)),
+		Version:       makeServerVersion(globalPu, serverVersion.Load().(string)),
 		TimeZone:      backSes.GetTimeZone(),
-		StorageEngine: gPu.StorageEngine,
+		StorageEngine: globalPu.StorageEngine,
 		Buf:           backSes.buf,
 	}
 	proc.SetStmtProfile(&backSes.stmtProfile)
@@ -191,7 +191,7 @@ func doComQueryInBack(requestCtx context.Context,
 	cws, err := GetComputationWrapperInBack(backSes.proto.GetDatabaseName(),
 		input,
 		backSes.proto.GetUserName(),
-		gPu.StorageEngine,
+		globalPu.StorageEngine,
 		proc, backSes)
 
 	if err != nil {
@@ -425,7 +425,7 @@ var NewBackgroundExec = func(
 	reqCtx context.Context,
 	upstream FeSession,
 	mp *mpool.MPool) BackgroundExec {
-	txnHandler := InitTxnHandler(gPu.StorageEngine, nil, nil)
+	txnHandler := InitTxnHandler(globalPu.StorageEngine, nil, nil)
 	backSes := &backSession{
 		requestCtx: reqCtx,
 		connectCtx: upstream.GetConnectContext(),
@@ -868,7 +868,7 @@ func (backSes *backSession) GetBackgroundExec(ctx context.Context) BackgroundExe
 }
 
 func (backSes *backSession) GetStorage() engine.Engine {
-	return gPu.StorageEngine
+	return globalPu.StorageEngine
 }
 
 func (backSes *backSession) GetTenantInfo() *TenantInfo {

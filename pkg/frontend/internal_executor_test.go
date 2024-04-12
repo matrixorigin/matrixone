@@ -56,7 +56,7 @@ func TestIe(t *testing.T) {
 
 	ctx := context.TODO()
 	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
-	gPu = pu
+	globalPu = pu
 	executor := newIe()
 	executor.ApplySessionOverride(ie.NewOptsBuilder().Username("dump").Finish())
 	sess := executor.newCmdSession(ctx, ie.NewOptsBuilder().Database("mo_catalog").Internal(true).Finish())
@@ -70,10 +70,10 @@ func TestIe(t *testing.T) {
 }
 
 func TestIeProto(t *testing.T) {
-	gPu = config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+	globalPu = config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 
 	// Mock autoIncrCaches
-	gAicm = &defines.AutoIncrCacheManager{}
+	globalAicm = &defines.AutoIncrCacheManager{}
 
 	executor := NewInternalExecutor()
 	p := executor.proto

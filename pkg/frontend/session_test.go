@@ -79,7 +79,7 @@ func TestTxnHandler_NewTxn(t *testing.T) {
 
 		pu, err := getParameterUnit("test/system_vars_config.toml", eng, txnClient)
 		convey.So(err, convey.ShouldBeNil)
-		gPu = pu
+		globalPu = pu
 		var gSys GlobalSystemVariables
 		InitGlobalSystemVariables(&gSys)
 
@@ -145,7 +145,7 @@ func TestTxnHandler_CommitTxn(t *testing.T) {
 
 		pu, err := getParameterUnit("test/system_vars_config.toml", eng, txnClient)
 		convey.So(err, convey.ShouldBeNil)
-		gPu = pu
+		globalPu = pu
 		var gSys GlobalSystemVariables
 		InitGlobalSystemVariables(&gSys)
 
@@ -209,7 +209,7 @@ func TestTxnHandler_RollbackTxn(t *testing.T) {
 		InitGlobalSystemVariables(&gSys)
 
 		txn := InitTxnHandler(eng, nil, nil)
-		gPu = pu
+		globalPu = pu
 		txn.ses = &Session{
 			feSessionImpl: feSessionImpl{
 				gSysVars: &gSys,
@@ -241,7 +241,7 @@ func TestSession_TxnBegin(t *testing.T) {
 		if err != nil {
 			t.Error(err)
 		}
-		gPu = &config.ParameterUnit{
+		globalPu = &config.ParameterUnit{
 			SV: sv,
 		}
 		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
@@ -254,8 +254,8 @@ func TestSession_TxnBegin(t *testing.T) {
 		hints := engine.Hints{CommitOrRollbackTimeout: time.Second * 10}
 		eng.EXPECT().Hints().Return(hints).AnyTimes()
 		eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-		gPu.TxnClient = txnClient
-		gPu.StorageEngine = eng
+		globalPu.TxnClient = txnClient
+		globalPu.StorageEngine = eng
 		session := NewSession(proto, nil, gSysVars, true, nil)
 		ctx := defines.AttachAccountId(context.Background(), sysAccountID)
 		session.SetRequestContext(ctx)
@@ -610,7 +610,7 @@ func TestSession_TxnCompilerContext(t *testing.T) {
 		eng.EXPECT().Database(gomock.Any(), gomock.Any(), gomock.Any()).Return(db, nil).AnyTimes()
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, eng, txnClient, nil)
-		gPu = pu
+		globalPu = pu
 		gSysVars := &GlobalSystemVariables{}
 		InitGlobalSystemVariables(gSysVars)
 
@@ -856,7 +856,7 @@ func TestSession_Migrate(t *testing.T) {
 		rel.EXPECT().GetTableID(gomock.Any()).Return(tid).AnyTimes()
 		db.EXPECT().IsSubscription(gomock.Any()).Return(false).AnyTimes()
 		db.EXPECT().Relation(gomock.Any(), gomock.Any(), gomock.Any()).Return(rel, nil).AnyTimes()
-		gPu = &config.ParameterUnit{
+		globalPu = &config.ParameterUnit{
 			SV:            sv,
 			TxnClient:     txnClient,
 			StorageEngine: eng,

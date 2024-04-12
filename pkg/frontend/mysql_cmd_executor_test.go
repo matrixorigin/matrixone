@@ -226,7 +226,7 @@ func Test_mce(t *testing.T) {
 
 		pu, err := getParameterUnit("test/system_vars_config.toml", eng, txnClient)
 		convey.So(err, convey.ShouldBeNil)
-		gPu = pu
+		globalPu = pu
 
 		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
 
@@ -324,7 +324,7 @@ func Test_mce_selfhandle(t *testing.T) {
 		if err != nil {
 			t.Error(err)
 		}
-		gPu = pu
+		globalPu = pu
 
 		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
 
@@ -364,7 +364,7 @@ func Test_mce_selfhandle(t *testing.T) {
 		if err != nil {
 			t.Error(err)
 		}
-		gPu = pu
+		globalPu = pu
 
 		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
 
@@ -467,7 +467,7 @@ func Test_getDataFromPipeline(t *testing.T) {
 		if err != nil {
 			t.Error(err)
 		}
-		gPu = pu
+		globalPu = pu
 
 		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
 
@@ -544,7 +544,7 @@ func Test_getDataFromPipeline(t *testing.T) {
 		if err != nil {
 			t.Error(err)
 		}
-		gPu = pu
+		globalPu = pu
 		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
 		var gSys GlobalSystemVariables
 		InitGlobalSystemVariables(&gSys)
@@ -714,7 +714,7 @@ func Test_handleSelectVariables(t *testing.T) {
 		if err != nil {
 			t.Error(err)
 		}
-		gPu = pu
+		globalPu = pu
 
 		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
 		var gSys GlobalSystemVariables
@@ -765,7 +765,7 @@ func Test_handleShowVariables(t *testing.T) {
 		if err != nil {
 			t.Error(err)
 		}
-		gPu = pu
+		globalPu = pu
 
 		pu.StorageEngine = eng
 		pu.TxnClient = txnClient
@@ -854,7 +854,7 @@ func runTestHandle(funName string, t *testing.T, handleFun func(ses *Session) er
 		if err != nil {
 			t.Error(err)
 		}
-		gPu = pu
+		globalPu = pu
 
 		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
 		var gSys GlobalSystemVariables
@@ -950,7 +950,7 @@ func Test_CMD_FIELD_LIST(t *testing.T) {
 		if err != nil {
 			t.Error(err)
 		}
-		gPu = pu
+		globalPu = pu
 
 		pu.StorageEngine = eng
 		pu.TxnClient = txnClient
@@ -1220,7 +1220,7 @@ func TestMysqlCmdExecutor_HandleShowBackendServers(t *testing.T) {
 	if err != nil {
 		t.Error(err)
 	}
-	gPu = pu
+	globalPu = pu
 
 	proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
 	var gSys GlobalSystemVariables
@@ -1443,7 +1443,7 @@ func Test_ExecRequest(t *testing.T) {
 
 		pu, err := getParameterUnit("test/system_vars_config.toml", eng, txnClient)
 		convey.So(err, convey.ShouldBeNil)
-		gPu = pu
+		globalPu = pu
 
 		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
 

@@ -102,12 +102,12 @@ func TestMysqlClientProtocol_Handshake(t *testing.T) {
 	_, err = toml.DecodeFile("test/system_vars_config.toml", pu.SV)
 	require.NoError(t, err)
 	pu.SV.SkipCheckUser = true
-	gPu = pu
+	globalPu = pu
 
 	ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
 	// A mock autoincrcache manager.
-	gAicm = &defines.AutoIncrCacheManager{}
+	globalAicm = &defines.AutoIncrCacheManager{}
 	rm, _ := NewRoutineManager(ctx)
 
 	wg := sync.WaitGroup{}
@@ -179,7 +179,7 @@ func TestKIll(t *testing.T) {
 	pu, err := getParameterUnit("test/system_vars_config.toml", eng, txnClient)
 	require.NoError(t, err)
 	pu.SV.SkipCheckUser = true
-	gPu = pu
+	globalPu = pu
 	sql1 := "select connection_id();"
 	var sql2, sql3, sql4 string
 
@@ -246,8 +246,8 @@ func TestKIll(t *testing.T) {
 
 	ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 	// A mock autoincrcache manager.
-	gAicm = &defines.AutoIncrCacheManager{}
-	gRtMgr, _ = NewRoutineManager(ctx)
+	globalAicm = &defines.AutoIncrCacheManager{}
+	globalRtMgr, _ = NewRoutineManager(ctx)
 
 	wg := sync.WaitGroup{}
 	wg.Add(1)
@@ -255,7 +255,7 @@ func TestKIll(t *testing.T) {
 	//running server
 	go func() {
 		defer wg.Done()
-		echoServer(gRtMgr.Handler, gRtMgr, NewSqlCodec())
+		echoServer(globalRtMgr.Handler, globalRtMgr, NewSqlCodec())
 	}()
 
 	time.Sleep(time.Second * 2)
@@ -1275,7 +1275,7 @@ func (tRM *TestRoutineManager) resultsetHandler(rs goetty.IOSession, msg interfa
 	if !ok {
 		return moerr.NewInternalError(ctx, "message is not Packet")
 	}
-	gPu = pu
+	globalPu = pu
 	ses := NewSession(pro, nil, nil, false, nil)
 	ses.SetRequestContext(ctx)
 	pro.SetSession(ses)
@@ -1902,7 +1902,7 @@ func Test_openpacket(t *testing.T) {
 		if err != nil {
 			t.Error(err)
 		}
-		gPu = pu
+		globalPu = pu
 
 		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
 		// fill proto.ses
@@ -1932,7 +1932,7 @@ func Test_openpacket(t *testing.T) {
 		if err != nil {
 			t.Error(err)
 		}
-		gPu = pu
+		globalPu = pu
 
 		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
 		// fill proto.ses
@@ -2292,7 +2292,7 @@ func Test_resultset(t *testing.T) {
 		if err != nil {
 			t.Error(err)
 		}
-		gPu = pu
+		globalPu = pu
 		var gSys GlobalSystemVariables
 		InitGlobalSystemVariables(&gSys)
 		ses := NewSession(proto, nil, &gSys, true, nil)
@@ -2327,7 +2327,7 @@ func Test_resultset(t *testing.T) {
 		if err != nil {
 			t.Error(err)
 		}
-		gPu = pu
+		globalPu = pu
 		var gSys GlobalSystemVariables
 		InitGlobalSystemVariables(&gSys)
 		ses := NewSession(proto, nil, &gSys, true, nil)
@@ -2362,7 +2362,7 @@ func Test_resultset(t *testing.T) {
 		if err != nil {
 			t.Error(err)
 		}
-		gPu = pu
+		globalPu = pu
 		var gSys GlobalSystemVariables
 		InitGlobalSystemVariables(&gSys)
 		ses := NewSession(proto, nil, &gSys, true, nil)
@@ -2400,7 +2400,7 @@ func Test_resultset(t *testing.T) {
 		if err != nil {
 			t.Error(err)
 		}
-		gPu = pu
+		globalPu = pu
 		var gSys GlobalSystemVariables
 		InitGlobalSystemVariables(&gSys)
 		ses := NewSession(proto, nil, &gSys, true, nil)

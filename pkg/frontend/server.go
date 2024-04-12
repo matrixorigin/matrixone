@@ -79,9 +79,9 @@ func nextConnectionID() uint32 {
 	return atomic.AddUint32(&initConnectionID, 1)
 }
 
-var gRtMgr *RoutineManager
-var gPu *config.ParameterUnit
-var gAicm *defines.AutoIncrCacheManager
+var globalRtMgr *RoutineManager
+var globalPu *config.ParameterUnit
+var globalAicm *defines.AutoIncrCacheManager
 
 func NewMOServer(
 	ctx context.Context,
@@ -90,14 +90,14 @@ func NewMOServer(
 	aicm *defines.AutoIncrCacheManager,
 	baseService BaseService,
 ) *MOServer {
-	gPu = pu
-	gAicm = aicm
+	globalPu = pu
+	globalAicm = aicm
 	codec := NewSqlCodec()
 	rm, err := NewRoutineManager(ctx)
 	if err != nil {
 		logutil.Panicf("start server failed with %+v", err)
 	}
-	gRtMgr = rm
+	globalRtMgr = rm
 	rm.setBaseService(baseService)
 	if baseService != nil {
 		rm.setSessionMgr(baseService.SessionMgr())
