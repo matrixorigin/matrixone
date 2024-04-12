@@ -1144,14 +1144,17 @@ grant connect on account * to role_r1;
 grant create table, drop table on database *.* to role_r1;
 grant show tables on database * to role_r1;
 -- @session:id=4&user=sys:role_u1:role_r1&password=111
+use db1;
 drop table if exists t2;
 create table t2 as select * from t1;
 -- @session
 grant select on table * to role_r1;
 grant insert on table * to role_r1;
 -- @session:id=5&user=sys:role_u1:role_r1&password=111
+use db1;
 drop table if exists t2;
 create table t2 as select * from t1;
+select * from t2;
 -- @session
 drop table t1;
 drop table t2;
