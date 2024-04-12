@@ -288,7 +288,8 @@ func TestKIll(t *testing.T) {
 		defer wgSleep.Done()
 		var resultId int
 		connIdRow = conn1.QueryRow(sql5)
-		err = connIdRow.Scan(&resultId)
+		//find race on err here
+		err := connIdRow.Scan(&resultId)
 		require.NoError(t, err)
 	}()
 
