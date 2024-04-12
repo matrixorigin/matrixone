@@ -310,9 +310,9 @@ func executeStmtInBack(requestCtx context.Context,
 	var ret interface{}
 
 	switch execCtx.stmt.StmtKind().HandleType() {
-	case tree.IN_FRONTEND:
+	case tree.EXEC_IN_FRONTEND:
 		return handleInFrontendInBack(requestCtx, backSes, execCtx)
-	case tree.IN_BACKEND:
+	case tree.EXEC_IN_ENGINE:
 	}
 
 	switch st := execCtx.stmt.(type) {
@@ -347,9 +347,9 @@ func executeStmtInBack(requestCtx context.Context,
 	//need to check again.
 	execCtx.stmt = execCtx.cw.GetAst()
 	switch execCtx.stmt.StmtKind().HandleType() {
-	case tree.IN_FRONTEND:
+	case tree.EXEC_IN_FRONTEND:
 		return handleInFrontendInBack(requestCtx, backSes, execCtx)
-	case tree.IN_BACKEND:
+	case tree.EXEC_IN_ENGINE:
 
 	}
 

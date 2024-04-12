@@ -98,8 +98,8 @@ const (
 	RESP_MIXED_RESULT_ROW    RespType = 0x5
 
 	//
-	IN_BACKEND  HandleType = 0x0
-	IN_FRONTEND HandleType = 0x1
+	EXEC_IN_ENGINE   HandleType = 0x0
+	EXEC_IN_FRONTEND HandleType = 0x1
 )
 
 func MakeStmtKind(resTyp OutputType, respTyp RespType, handleTyp HandleType) StmtKind {
@@ -121,13 +121,13 @@ func (t StmtKind) HandleType() HandleType {
 var (
 	//response result rows to the client.
 	//like SELECT...,SHOW...,
-	defaultResRowTyp = MakeStmtKind(OUTPUT_RESULT_ROW, RESP_STREAM_RESULT_ROW, IN_BACKEND)
+	defaultResRowTyp = MakeStmtKind(OUTPUT_RESULT_ROW, RESP_STREAM_RESULT_ROW, EXEC_IN_ENGINE)
 
 	//response status(success or fail) to the client.
 	//like CREATE...,DROP...,
-	defaultStatusTyp = MakeStmtKind(OUTPUT_STATUS, RESP_STATUS, IN_BACKEND)
+	defaultStatusTyp = MakeStmtKind(OUTPUT_STATUS, RESP_STATUS, EXEC_IN_ENGINE)
 
-	frontendStatusTyp = MakeStmtKind(OUTPUT_STATUS, RESP_STATUS, IN_FRONTEND)
+	frontendStatusTyp = MakeStmtKind(OUTPUT_STATUS, RESP_STATUS, EXEC_IN_FRONTEND)
 
 	//like statements: they composite the result set themselves
 	//    ShowConnectors
@@ -139,7 +139,7 @@ var (
 	//    ShowCollation
 	//    ShowSubscriptions
 	//    ShowBackendServers
-	compositeResRowType = MakeStmtKind(OUTPUT_RESULT_ROW, RESP_PREBUILD_RESULT_ROW, IN_FRONTEND)
+	compositeResRowType = MakeStmtKind(OUTPUT_RESULT_ROW, RESP_PREBUILD_RESULT_ROW, EXEC_IN_FRONTEND)
 )
 
 func (node *Select) StmtKind() StmtKind {
@@ -246,7 +246,7 @@ func (node *DropProcedure) StmtKind() StmtKind {
 }
 
 func (node *CallStmt) StmtKind() StmtKind {
-	return MakeStmtKind(OUTPUT_UNDEFINED, RESP_BY_SITUATION, IN_FRONTEND)
+	return MakeStmtKind(OUTPUT_UNDEFINED, RESP_BY_SITUATION, EXEC_IN_FRONTEND)
 }
 
 func (node *Grant) StmtKind() StmtKind {
@@ -294,7 +294,7 @@ func (node *prepareImpl) StmtKind() StmtKind {
 }
 
 func (node *Execute) StmtKind() StmtKind {
-	return MakeStmtKind(OUTPUT_UNDEFINED, RESP_BY_SITUATION, IN_BACKEND)
+	return MakeStmtKind(OUTPUT_UNDEFINED, RESP_BY_SITUATION, EXEC_IN_ENGINE)
 }
 
 func (node *Deallocate) StmtKind() StmtKind {
@@ -364,7 +364,7 @@ func (node *ShowGrants) StmtKind() StmtKind {
 
 func (node *ShowTableStatus) StmtKind() StmtKind {
 	//FIXME: result row,prebuild result row, in backend
-	return MakeStmtKind(OUTPUT_RESULT_ROW, RESP_MIXED_RESULT_ROW, IN_BACKEND)
+	return MakeStmtKind(OUTPUT_RESULT_ROW, RESP_MIXED_RESULT_ROW, EXEC_IN_ENGINE)
 }
 
 func (node *ExplainStmt) StmtKind() StmtKind {
@@ -476,7 +476,7 @@ func (node *SetDefaultRole) StmtKind() StmtKind {
 }
 
 func (node *SetPassword) StmtKind() StmtKind {
-	return MakeStmtKind(OUTPUT_STATUS, RESP_STATUS, IN_FRONTEND)
+	return MakeStmtKind(OUTPUT_STATUS, RESP_STATUS, EXEC_IN_FRONTEND)
 }
 
 func (node *DropIndex) StmtKind() StmtKind {
@@ -500,11 +500,11 @@ func (node *Declare) StmtKind() StmtKind {
 }
 
 func (node *CreateExtension) StmtKind() StmtKind {
-	return MakeStmtKind(OUTPUT_UNDEFINED, RESP_STATUS, IN_FRONTEND)
+	return MakeStmtKind(OUTPUT_UNDEFINED, RESP_STATUS, EXEC_IN_FRONTEND)
 }
 
 func (node *LoadExtension) StmtKind() StmtKind {
-	return MakeStmtKind(OUTPUT_UNDEFINED, RESP_STATUS, IN_FRONTEND)
+	return MakeStmtKind(OUTPUT_UNDEFINED, RESP_STATUS, EXEC_IN_FRONTEND)
 }
 
 func (node *ValuesStatement) StmtKind() StmtKind {

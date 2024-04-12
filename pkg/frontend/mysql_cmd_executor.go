@@ -2400,9 +2400,9 @@ func executeStmt(requestCtx context.Context,
 	var ret interface{}
 
 	switch execCtx.stmt.StmtKind().HandleType() {
-	case tree.IN_FRONTEND:
+	case tree.EXEC_IN_FRONTEND:
 		return handleInFrontend(requestCtx, ses, execCtx)
-	case tree.IN_BACKEND:
+	case tree.EXEC_IN_ENGINE:
 		//in the computation engine
 	}
 
@@ -2484,9 +2484,9 @@ func executeStmt(requestCtx context.Context,
 	//need to check again.
 	execCtx.stmt = execCtx.cw.GetAst()
 	switch execCtx.stmt.StmtKind().HandleType() {
-	case tree.IN_FRONTEND:
+	case tree.EXEC_IN_FRONTEND:
 		return handleInFrontend(requestCtx, ses, execCtx)
-	case tree.IN_BACKEND:
+	case tree.EXEC_IN_ENGINE:
 
 	}
 
@@ -2647,7 +2647,7 @@ func doComQuery(requestCtx context.Context, ses *Session, input *UserInput) (ret
 		ses.SetMysqlResultSet(nil)
 	}()
 
-	canCache := true
+	//canCache := true
 	Cached := false
 	defer func() {
 		if !Cached {
@@ -2668,7 +2668,7 @@ func doComQuery(requestCtx context.Context, ses *Session, input *UserInput) (ret
 				if _, ok := cwft.stmt.(*tree.SetVar); !ok {
 					ses.cleanCache()
 				}
-				canCache = false
+				//canCache = false
 			}
 		}
 
@@ -2741,23 +2741,23 @@ func doComQuery(requestCtx context.Context, ses *Session, input *UserInput) (ret
 
 	} // end of for
 
-	if canCache && !ses.isCached(input.getSql()) {
-		plans := make([]*plan.Plan, len(cws))
-		stmts := make([]tree.Statement, len(cws))
-		for i, cw := range cws {
-			if cwft, ok := cw.(*TxnComputationWrapper); ok {
-				if checkNodeCanCache(cwft.plan) {
-					plans[i] = cwft.plan
-					stmts[i] = cwft.stmt
-				} else {
-					return nil
-				}
-			}
-			cw.Clear()
-		}
-		Cached = true
-		ses.cachePlan(input.getSql(), stmts, plans)
-	}
+	//if canCache && !ses.isCached(input.getSql()) {
+	//	plans := make([]*plan.Plan, len(cws))
+	//	stmts := make([]tree.Statement, len(cws))
+	//	for i, cw := range cws {
+	//		if cwft, ok := cw.(*TxnComputationWrapper); ok {
+	//			if checkNodeCanCache(cwft.plan) {
+	//				plans[i] = cwft.plan
+	//				stmts[i] = cwft.stmt
+	//			} else {
+	//				return nil
+	//			}
+	//		}
+	//		cw.Clear()
+	//	}
+	//	Cached = true
+	//	ses.cachePlan(input.getSql(), stmts, plans)
+	//}
 
 	return nil
 }

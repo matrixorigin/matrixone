@@ -151,7 +151,7 @@ func (icfl *InternalCmdFieldList) Format(ctx *tree.FmtCtx) {
 }
 
 func (icfl *InternalCmdFieldList) StmtKind() tree.StmtKind {
-	return tree.MakeStmtKind(tree.OUTPUT_STATUS, tree.RESP_BY_SITUATION, tree.IN_FRONTEND)
+	return tree.MakeStmtKind(tree.OUTPUT_STATUS, tree.RESP_BY_SITUATION, tree.EXEC_IN_FRONTEND)
 }
 
 func (icfl *InternalCmdFieldList) GetStatementType() string { return "InternalCmd" }
