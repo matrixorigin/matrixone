@@ -60,7 +60,7 @@ func (tbl *txnTable) getEngine() engine.Engine {
 	return tbl.db.op.GetWorkspace().(*Transaction).engine
 }
 
-// TODO:: Call statsAtSnapshot if snapshot ts is too old.
+// TODO:: Call snapStats if txnOp is a snapshot op.
 func (tbl *txnTable) Stats(ctx context.Context, sync bool) *pb.StatsInfo {
 	_, err := tbl.getPartitionState(ctx)
 	if err != nil {
@@ -2127,13 +2127,28 @@ func (tbl *txnTable) newReader(
 }
 
 func (tbl *txnTable) getPartitionState(ctx context.Context) (*logtailreplay.PartitionState, error) {
-
-	if tbl._partState.Load() == nil {
-		if err := tbl.updateLogtail(ctx); err != nil {
-			return nil, err
+	if !tbl.db.op.IsSnapOp() {
+		if tbl._partState.Load() == nil {
+			if err := tbl.updateLogtail(ctx); err != nil {
+				return nil, err
+			}
+			tbl._partState.Store(tbl.db.op.GetWorkspace().(*Transaction).
+				engine.getPartition(tbl.db.databaseId, tbl.tableId).Snapshot())
 		}
-		tbl._partState.Store(tbl.db.op.GetWorkspace().(*Transaction).
-			engine.getPartition(tbl.db.databaseId, tbl.tableId).Snapshot())
+		return tbl._partState.Load(), nil
+	}
+
+	// for snapshot txnOp
+	if tbl._partState.Load() == nil {
+		//TODO::find a available partState for snapshot read.
+		tbl._partState.Store(tbl.db.op.GetWorkspace().(*Transaction).engine.getSnapPart(
+			tbl.db.databaseId,
+			tbl.tableId,
+			types.TimestampToTS(tbl.db.op.Txn().SnapshotTS)).Snapshot())
+		//TODO::load old checkpoints and apply it into engine.snapParts.
+		//if err := tbl.updateLogtail(ctx); err != nil {
+		//	return nil, err
+		//}
 	}
 	return tbl._partState.Load(), nil
 }

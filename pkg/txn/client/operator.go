@@ -254,6 +254,10 @@ func newTxnOperator(
 	return tc
 }
 
+func (tc *txnOperator) IsSnapOp() bool {
+	return tc.parent.Load() != nil
+}
+
 func (tc *txnOperator) CloneSnapshotOp(snapshot timestamp.Timestamp) TxnOperator {
 	op := &txnOperator{}
 	op.mu.txn = txn.TxnMeta{

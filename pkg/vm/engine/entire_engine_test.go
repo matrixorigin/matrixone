@@ -351,6 +351,10 @@ func (o *testOperator) Txn() txn.TxnMeta {
 	return txn.TxnMeta{}
 }
 
+func (o *testOperator) IsSnapOp() bool {
+	panic("should not call")
+}
+
 func (o *testOperator) CloneSnapshotOp(snapshot timestamp.Timestamp) client.TxnOperator {
 	panic("should not call")
 }
