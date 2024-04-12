@@ -1,0 +1,36 @@
+logservices = [
+    "./etc/launch-dynamic-with-proxy/log.toml",
+]
+
+tnservices = [
+    "./etc/launch-dynamic-with-proxy/tn.toml"
+]
+
+proxy-services = [
+    "./etc/launch-dynamic-with-proxy/proxy.toml"
+]
+
+# dynamic is used to launch dynamic cn service. Each cn service will run 
+# in a separate process.
+[dynamic]
+enable = true
+# http ctl server address. We can use cn index to start and stop dynamic cn.
+# start cn0: curl "http://localhost:16000/dynamic/cn?cn=0&action=start"
+# stop cn0: curl "http://localhost:16000/dynamic/cn?cn=0&action=stop"
+ctl-address = ":16000"
+# cn template config toml file
+cn-template = "./etc/launch-dynamic-with-proxy/cn.toml.base"
+# how many cn service can be launched
+service-count = 2
+# how many cpu can used pr cn instance
+cpu-count = 2
+
+[dynamic.chaos]
+enable = false
+
+# random restart nodes tester
+[dynamic.chaos.restart]
+kill-interval = "10s"
+restart-interval = "5s"
+targets = [0, 1]
+
