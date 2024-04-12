@@ -46,10 +46,16 @@ type MergeTaskHost interface {
 	HostHintName() string
 	PrepareData() ([]*batch.Batch, []*nulls.Nulls, func(), error)
 	PrepareCommitEntry() *api.MergeCommitEntry
-	PrepareNewWriterFunc() func() *blockio.BlockWriter
+	GetCommitEntry() *api.MergeCommitEntry
+	PrepareNewWriter() *blockio.BlockWriter
+	GetObjectCnt() int
+	GetBlkCnts() []int
+	GetAccBlkCnts() []int
+	GetSortKeyType() types.Type
+	LoadNextBatch(objIdx uint32) (*batch.Batch, *nulls.Nulls, func(), error)
 }
 
-func InitTransfermapping(e *api.MergeCommitEntry, blkcnt int) {
+func initTransferMapping(e *api.MergeCommitEntry, blkcnt int) {
 	e.Booking = NewBlkTransferBooking(blkcnt)
 }
 
@@ -59,27 +65,25 @@ type MergeTicket struct {
 	Targets []objectio.ObjectStats
 }
 
-func GetMustNewWriter(
+func GetNewWriter(
 	fs fileservice.FileService,
 	ver uint32, seqnums []uint16,
 	sortkeyPos int, sortkeyIsPK bool,
-) func() *blockio.BlockWriter {
-	return func() *blockio.BlockWriter {
-		name := objectio.BuildObjectNameWithObjectID(objectio.NewObjectid())
-		writer, err := blockio.NewBlockWriterNew(fs, name, ver, seqnums)
-		if err != nil {
-			panic(err) // it is impossible
-		}
-		// has sortkey
-		if sortkeyPos >= 0 {
-			if sortkeyIsPK {
-				writer.SetPrimaryKey(uint16(sortkeyPos))
-			} else { // cluster by
-				writer.SetSortKey(uint16(sortkeyPos))
-			}
-		}
-		return writer
+) *blockio.BlockWriter {
+	name := objectio.BuildObjectNameWithObjectID(objectio.NewObjectid())
+	writer, err := blockio.NewBlockWriterNew(fs, name, ver, seqnums)
+	if err != nil {
+		panic(err) // it is impossible
 	}
+	// has sortkey
+	if sortkeyPos >= 0 {
+		if sortkeyIsPK {
+			writer.SetPrimaryKey(uint16(sortkeyPos))
+		} else { // cluster by
+			writer.SetSortKey(uint16(sortkeyPos))
+		}
+	}
+	return writer
 }
 
 func DoMergeAndWrite(
@@ -114,6 +118,88 @@ func DoMergeAndWrite(
 		}
 	}()
 
+	hasSortKey := sortkeyPos >= 0
+	if !hasSortKey {
+		sortkeyPos = 0 // no sort key, use the first column to do reshape
+	}
+
+	if hasSortKey {
+		var merger Merger
+		typ := mergehost.GetSortKeyType()
+		if typ.IsVarlen() {
+			merger = newMerger[[]byte](mergehost, bytesLess, sortkeyPos)
+		} else {
+			switch typ.Oid {
+			case types.T_bool:
+				merger = newMerger(mergehost, boolLess, sortkeyPos)
+			case types.T_bit:
+				merger = newMerger(mergehost, numericLess[uint64], sortkeyPos)
+			case types.T_int8:
+				merger = newMerger(mergehost, numericLess[int8], sortkeyPos)
+			case types.T_int16:
+				merger = newMerger(mergehost, numericLess[int16], sortkeyPos)
+			case types.T_int32:
+				merger = newMerger(mergehost, numericLess[int32], sortkeyPos)
+			case types.T_int64:
+				merger = newMerger(mergehost, numericLess[int64], sortkeyPos)
+			case types.T_float32:
+				merger = newMerger(mergehost, numericLess[float32], sortkeyPos)
+			case types.T_float64:
+				merger = newMerger(mergehost, numericLess[float64], sortkeyPos)
+			case types.T_uint8:
+				merger = newMerger(mergehost, numericLess[uint8], sortkeyPos)
+			case types.T_uint16:
+				merger = newMerger(mergehost, numericLess[uint16], sortkeyPos)
+			case types.T_uint32:
+				merger = newMerger(mergehost, numericLess[uint32], sortkeyPos)
+			case types.T_uint64:
+				merger = newMerger(mergehost, numericLess[uint64], sortkeyPos)
+			case types.T_date:
+				merger = newMerger(mergehost, numericLess[types.Date], sortkeyPos)
+			case types.T_timestamp:
+				merger = newMerger(mergehost, numericLess[types.Timestamp], sortkeyPos)
+			case types.T_datetime:
+				merger = newMerger(mergehost, numericLess[types.Datetime], sortkeyPos)
+			case types.T_time:
+				merger = newMerger(mergehost, numericLess[types.Time], sortkeyPos)
+			case types.T_enum:
+				merger = newMerger(mergehost, numericLess[types.Enum], sortkeyPos)
+			case types.T_decimal64:
+				merger = newMerger(mergehost, ltTypeLess[types.Decimal64], sortkeyPos)
+			case types.T_decimal128:
+				merger = newMerger(mergehost, ltTypeLess[types.Decimal128], sortkeyPos)
+			case types.T_uuid:
+				merger = newMerger(mergehost, ltTypeLess[types.Uuid], sortkeyPos)
+			case types.T_TS:
+				merger = newMerger(mergehost, tsLess, sortkeyPos)
+			case types.T_Rowid:
+				merger = newMerger(mergehost, rowidLess, sortkeyPos)
+			case types.T_Blockid:
+				merger = newMerger(mergehost, blockidLess, sortkeyPos)
+			default:
+				panic(fmt.Sprintf("unsupported type %s", typ.String()))
+			}
+		}
+		merger.Merge()
+
+		toObjsDesc := ""
+		for _, o := range commitEntry.CreatedObjs {
+			obj := objectio.ObjectStats(o)
+			toObjsDesc += fmt.Sprintf("%s(%v)Rows(%v),",
+				common.ShortObjId(*obj.ObjectName().ObjectId()),
+				obj.BlkCnt(),
+				obj.Rows())
+		}
+
+		logutil.Info("[Done] Mergeblocks",
+			zap.String("table", tableDesc),
+			zap.String("on", mergehost.HostHintName()),
+			zap.String("txn-start-ts", commitEntry.StartTs.DebugString()),
+			zap.String("to-objs", toObjsDesc),
+			common.DurationField(time.Since(now)))
+		return
+	}
+
 	// batches is read from disk, dels is read from disk and memory
 	//
 	// batches[i] means the i-th non-appendable block to be merged and
@@ -124,15 +210,10 @@ func DoMergeAndWrite(
 	}
 	defer release()
 
-	InitTransfermapping(commitEntry, len(batches))
+	initTransferMapping(commitEntry, len(batches))
 
 	fromLayout := make([]uint32, 0, len(batches))
 	totalRowCount := 0
-
-	hasSortKey := sortkeyPos >= 0
-	if !hasSortKey {
-		sortkeyPos = 0 // no sort key, use the first column to do reshape
-	}
 
 	toSortVecs := make([]*vector.Vector, 0, len(batches))
 
@@ -260,8 +341,7 @@ func DoMergeAndWrite(
 
 	// -------------------------- phase 3
 	phaseDesc = "new writer to write down"
-	newWriterFunc := mergehost.PrepareNewWriterFunc()
-	writer := newWriterFunc()
+	writer := mergehost.PrepareNewWriter()
 	for _, bat := range writtenBatches {
 		_, err = writer.WriteBatch(bat)
 		if err != nil {
@@ -377,9 +457,9 @@ func AddSortPhaseMapping(b *api.BlkTransferBooking, idx int, originRowCnt int, d
 		}
 		if mapping == nil {
 			// no sort phase, the mapping is 1:1, just use posInVecApplyDeletes
-			targetMapping[int32(origRow)] = api.TransDestPos{Idx: -1, Row: int32(posInVecApplyDeletes)}
+			targetMapping[int32(origRow)] = api.TransDestPos{BlkIdx: -1, RowIdx: int32(posInVecApplyDeletes)}
 		} else {
-			targetMapping[int32(origRow)] = api.TransDestPos{Idx: -1, Row: mapping[posInVecApplyDeletes]}
+			targetMapping[int32(origRow)] = api.TransDestPos{BlkIdx: -1, RowIdx: mapping[posInVecApplyDeletes]}
 		}
 		posInVecApplyDeletes++
 	}
@@ -417,14 +497,14 @@ func UpdateMappingAfterMerge(b *api.BlkTransferBooking, mapping, fromLayout, toL
 		var curTotal int32   // index in the flatten src array
 		var destTotal uint32 // index in the flatten merged array
 		for srcRow := range m {
-			curTotal = totalHandledRows + m[srcRow].Row
+			curTotal = totalHandledRows + m[srcRow].RowIdx
 			if mapping == nil {
 				destTotal = uint32(curTotal)
 			} else {
 				destTotal = mapping[curTotal]
 			}
 			destBlkIdx, destRowIdx := bisectPinpoint(destTotal)
-			m[srcRow] = api.TransDestPos{Idx: int32(destBlkIdx), Row: int32(destRowIdx)}
+			m[srcRow] = api.TransDestPos{BlkIdx: int32(destBlkIdx), RowIdx: int32(destRowIdx)}
 		}
 		totalHandledRows += int32(len(m))
 	}

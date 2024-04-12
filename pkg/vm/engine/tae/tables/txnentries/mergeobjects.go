@@ -91,9 +91,9 @@ func (entry *mergeObjectsEntry) prepareTransferPage() {
 			id.SetBlockOffset(uint16(j))
 			page := model.NewTransferHashPage(id, time.Now(), isTransient)
 			for srcRow, dst := range mapping {
-				objID := entry.createdObjs[0].ID
-				blkID := objectio.NewBlockidWithObjectID(&objID, uint16(dst.Idx))
-				page.Train(uint32(srcRow), *objectio.NewRowid(blkID, uint32(dst.Row)))
+				objID := entry.createdObjs[dst.ObjIdx].ID
+				blkID := objectio.NewBlockidWithObjectID(&objID, uint16(dst.BlkIdx))
+				page.Train(uint32(srcRow), *objectio.NewRowid(blkID, uint32(dst.RowIdx)))
 			}
 			entry.pageIds = append(entry.pageIds, id)
 			_ = entry.rt.TransferTable.AddPage(page)
@@ -147,7 +147,6 @@ func (entry *mergeObjectsEntry) Is1PC() bool { return false }
 
 func (entry *mergeObjectsEntry) transferBlockDeletes(
 	dropped *catalog.ObjectEntry,
-	created handle.Object,
 	delTbls []*model.TransDels,
 	blkidxStart int) (count int, err error) {
 
@@ -187,12 +186,16 @@ func (entry *mergeObjectsEntry) transferBlockDeletes(
 		if !ok {
 			panic(fmt.Sprintf("%s find no transfer mapping for row %d", dropped.ID.String(), row))
 		}
-		if delTbls[destpos.Idx] == nil {
-			delTbls[destpos.Idx] = model.NewTransDels(entry.txn.GetPrepareTS())
+		if delTbls[destpos.BlkIdx] == nil {
+			delTbls[destpos.BlkIdx] = model.NewTransDels(entry.txn.GetPrepareTS())
 		}
-		delTbls[destpos.Idx].Mapping[int(destpos.Row)] = ts[i]
-		if err = created.RangeDelete(
-			uint16(destpos.Idx), uint32(destpos.Row), uint32(destpos.Row), handle.DT_MergeCompact, common.MergeAllocator,
+		delTbls[destpos.BlkIdx].Mapping[int(destpos.RowIdx)] = ts[i]
+		targetObj, err := entry.relation.GetObject(&entry.createdObjs[destpos.ObjIdx].ID)
+		if err != nil {
+			return 0, err
+		}
+		if err = targetObj.RangeDelete(
+			uint16(destpos.BlkIdx), uint32(destpos.RowIdx), uint32(destpos.RowIdx), handle.DT_MergeCompact, common.MergeAllocator,
 		); err != nil {
 			return 0, err
 		}
@@ -201,14 +204,10 @@ func (entry *mergeObjectsEntry) transferBlockDeletes(
 }
 
 func (entry *mergeObjectsEntry) PrepareCommit() (err error) {
-	delTbls := make([]*model.TransDels, entry.totalCreatedBlkCnt)
 	if len(entry.createdBlkCnt) == 0 {
 		return
 	}
-	created, err := entry.relation.GetObject(&entry.createdObjs[0].ID)
-	if err != nil {
-		return
-	}
+	delTbls := make([]*model.TransDels, entry.totalCreatedBlkCnt)
 
 	ids := make([]*common.ID, 0)
 
@@ -228,12 +227,7 @@ func (entry *mergeObjectsEntry) PrepareCommit() (err error) {
 			blkIdxStart += dropped.BlockCnt()
 			continue
 		}
-		trans, err = entry.transferBlockDeletes(
-			dropped,
-			created,
-			delTbls,
-			blkIdxStart,
-		)
+		trans, err = entry.transferBlockDeletes(dropped, delTbls, blkIdxStart)
 		if err != nil {
 			break
 		}

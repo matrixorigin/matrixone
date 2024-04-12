@@ -369,10 +369,10 @@ message Int64Map {
     map<int64, int64> m = 1;
 }
 
-
 message TransDestPos {
-    int32 idx = 1;
-    int32 row = 2;
+    int32 objIdx = 1;
+    int32 blkIdx = 2;
+    int32 rowIdx = 3;
 }
 
 message BlkTransMap {
@@ -382,7 +382,6 @@ message BlkTransMap {
 message BlkTransferBooking {
     repeated BlkTransMap mappings = 1[(gogoproto.nullable) = false];
 }
-
 
 message MergeCommitEntry {
     uint64 db_id = 1;

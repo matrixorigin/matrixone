@@ -2347,7 +2347,7 @@ func TestMergeBlocks(t *testing.T) {
 
 	tae := testutil.InitTestDB(ctx, ModuleName, t, nil)
 	defer tae.Close()
-	schema := catalog.MockSchemaAll(1, -1)
+	schema := catalog.MockSchemaAll(1, 0)
 	schema.BlockMaxRows = 10
 	schema.ObjectMaxBlocks = 3
 	bat := catalog.MockBatch(schema, 30)

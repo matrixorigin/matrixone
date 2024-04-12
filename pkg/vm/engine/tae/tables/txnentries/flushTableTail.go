@@ -105,8 +105,8 @@ func (entry *flushTableTailEntry) addTransferPages() {
 		entry.pageIds = append(entry.pageIds, id)
 		page := model.NewTransferHashPage(id, time.Now(), isTransient)
 		for srcRow, dst := range m {
-			blkid := objectio.NewBlockidWithObjectID(entry.createdBlkHandles.GetID(), uint16(dst.Idx))
-			page.Train(uint32(srcRow), *objectio.NewRowid(blkid, uint32(dst.Row)))
+			blkid := objectio.NewBlockidWithObjectID(entry.createdBlkHandles.GetID(), uint16(dst.BlkIdx))
+			page.Train(uint32(srcRow), *objectio.NewRowid(blkid, uint32(dst.RowIdx)))
 		}
 		entry.rt.TransferTable.AddPage(page)
 	}
@@ -157,12 +157,12 @@ func (entry *flushTableTailEntry) PrepareCommit() error {
 			if !ok {
 				panic(fmt.Sprintf("%s find no transfer mapping for row %d", blk.ID.String(), row))
 			}
-			if delTbls[destpos.Idx] == nil {
-				delTbls[destpos.Idx] = model.NewTransDels(entry.txn.GetPrepareTS())
+			if delTbls[destpos.BlkIdx] == nil {
+				delTbls[destpos.BlkIdx] = model.NewTransDels(entry.txn.GetPrepareTS())
 			}
-			delTbls[destpos.Idx].Mapping[int(destpos.Row)] = ts[i]
+			delTbls[destpos.BlkIdx].Mapping[int(destpos.RowIdx)] = ts[i]
 			if err = entry.createdBlkHandles.RangeDelete(
-				uint16(destpos.Idx), uint32(destpos.Row), uint32(destpos.Row), handle.DT_MergeCompact, common.MergeAllocator,
+				uint16(destpos.BlkIdx), uint32(destpos.RowIdx), uint32(destpos.RowIdx), handle.DT_MergeCompact, common.MergeAllocator,
 			); err != nil {
 				return err
 			}

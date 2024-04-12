@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -90,6 +91,44 @@ func NewCNMergeTask(
 	}
 }
 
+func (t *CNMergeTask) GetObjectCnt() int {
+	return len(t.targets)
+}
+
+func (t *CNMergeTask) GetFs() fileservice.FileService {
+	return t.fs
+}
+
+func (t *CNMergeTask) GetSchema() *catalog.Schema {
+	panic("not implemented")
+}
+
+func (t *CNMergeTask) GetBlkCnts() []int {
+	panic("not implemented")
+}
+
+func (t *CNMergeTask) GetAccBlkCnts() []int {
+	panic("not implemented")
+}
+
+func (t *CNMergeTask) GetSortKeyType() types.Type {
+	if t.sortkeyPos >= 0 {
+		return t.coltypes[t.sortkeyPos]
+	}
+	return types.Type{}
+}
+
+func (t *CNMergeTask) LoadNextBatch(objIdx uint32) (*batch.Batch, *nulls.Nulls, func(), error) {
+	panic("not implemented")
+}
+
+func (t *CNMergeTask) GetCommitEntry() *api.MergeCommitEntry {
+	if t.commitEntry == nil {
+		return t.PrepareCommitEntry()
+	}
+	return t.commitEntry
+}
+
 // impl DisposableVecPool
 func (t *CNMergeTask) GetVector(typ *types.Type) (*vector.Vector, func()) {
 	v := t.proc.GetVector(*typ)
@@ -121,8 +160,8 @@ func (t *CNMergeTask) PrepareCommitEntry() *api.MergeCommitEntry {
 	return commitEntry
 }
 
-func (t *CNMergeTask) PrepareNewWriterFunc() func() *blockio.BlockWriter {
-	return mergesort.GetMustNewWriter(t.fs, t.version, t.colseqnums, t.sortkeyPos, t.sortkeyIsPK)
+func (t *CNMergeTask) PrepareNewWriter() *blockio.BlockWriter {
+	return mergesort.GetNewWriter(t.fs, t.version, t.colseqnums, t.sortkeyPos, t.sortkeyIsPK)
 }
 
 func (t *CNMergeTask) readAllData() ([]*batch.Batch, []*nulls.Nulls, error) {
