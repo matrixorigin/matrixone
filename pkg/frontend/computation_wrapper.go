@@ -68,7 +68,7 @@ func (ncw *NullComputationWrapper) GetColumns() ([]interface{}, error) {
 	return []interface{}{}, nil
 }
 
-func (ncw *NullComputationWrapper) Compile(requestCtx context.Context, u interface{}, fill func(interface{}, *batch.Batch) error) (interface{}, error) {
+func (ncw *NullComputationWrapper) Compile(requestCtx context.Context, fill func(*batch.Batch) error) (interface{}, error) {
 	return nil, nil
 }
 
@@ -200,7 +200,7 @@ func (cwft *TxnComputationWrapper) GetServerStatus() uint16 {
 	return cwft.ses.GetTxnHandler().GetServerStatus()
 }
 
-func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interface{}, fill func(interface{}, *batch.Batch) error) (interface{}, error) {
+func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, fill func(*batch.Batch) error) (interface{}, error) {
 	var originSQL string
 	var span trace.Span
 	requestCtx, span = trace.Start(requestCtx, "TxnComputationWrapper.Compile",
@@ -349,9 +349,9 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 	})
 
 	if _, ok := cwft.stmt.(*tree.ExplainAnalyze); ok {
-		fill = func(obj interface{}, bat *batch.Batch) error { return nil }
+		fill = func(bat *batch.Batch) error { return nil }
 	}
-	err = cwft.compile.Compile(txnCtx, cwft.plan, cwft.ses, fill)
+	err = cwft.compile.Compile(txnCtx, cwft.plan, fill)
 	if err != nil {
 		return nil, err
 	}

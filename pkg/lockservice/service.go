@@ -112,6 +112,7 @@ func NewLockService(
 	for i := 0; i < fetchWhoWaitingListTaskCount; i++ {
 		_ = s.stopper.RunTask(s.handleFetchWhoWaitingMe)
 	}
+	logLockServiceStartSucc(s.serviceID)
 	return s
 }
 

@@ -129,6 +129,7 @@ const (
 	HEX_DECODE
 	HEX_ENCODE
 	HEX
+	UNHEX
 	IFF
 	IFNULL
 	ILIKE
@@ -568,6 +569,7 @@ var functionIdRegister = map[string]int32{
 	"uuid":                           UUID,
 	"load_file":                      LOAD_FILE,
 	"hex":                            HEX,
+	"unhex":                          UNHEX,
 	"serial":                         SERIAL,
 	"serial_full":                    SERIAL_FULL,
 	"serial_extract":                 SERIAL_EXTRACT,

@@ -336,7 +336,7 @@ func executeStmtInBack(requestCtx context.Context,
 
 	cmpBegin = time.Now()
 
-	if ret, err = execCtx.cw.Compile(requestCtx, backSes, backSes.outputCallback); err != nil {
+	if ret, err = execCtx.cw.Compile(requestCtx, backSes.GetOutputCallback()); err != nil {
 		return
 	}
 
@@ -591,6 +591,12 @@ type backSession struct {
 	feSessionImpl
 	requestCtx context.Context
 	connectCtx context.Context
+}
+
+func (ses *backSession) GetOutputCallback() func(*batch.Batch) error {
+	return func(bat *batch.Batch) error {
+		return ses.outputCallback(ses, bat)
+	}
 }
 
 func (backSes *backSession) SetTStmt(stmt *motrace.StatementInfo) {

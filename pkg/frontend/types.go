@@ -67,7 +67,7 @@ type ComputationWrapper interface {
 
 	GetColumns() ([]interface{}, error)
 
-	Compile(requestCtx context.Context, u interface{}, fill func(interface{}, *batch.Batch) error) (interface{}, error)
+	Compile(requestCtx context.Context, fill func(*batch.Batch) error) (interface{}, error)
 
 	GetUUID() []byte
 
@@ -529,10 +529,6 @@ func (ses *feSessionImpl) GetMysqlResultSet() *MysqlResultSet {
 
 func (ses *feSessionImpl) SetOutputCallback(callback func(interface{}, *batch.Batch) error) {
 	ses.outputCallback = callback
-}
-
-func (ses *feSessionImpl) GetOutputCallback() func(interface{}, *batch.Batch) error {
-	return ses.outputCallback
 }
 
 func (ses *feSessionImpl) SetMysqlResultSetOfBackgroundTask(mrs *MysqlResultSet) {

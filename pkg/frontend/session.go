@@ -930,6 +930,14 @@ func (ses *Session) GetShowStmtType() ShowStatementType {
 	return ses.showStmtType
 }
 
+func (ses *Session) GetOutputCallback() func(*batch.Batch) error {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	return func(bat *batch.Batch) error {
+		return ses.outputCallback(ses, bat)
+	}
+}
+
 func (ses *Session) GetErrInfo() *errInfo {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()

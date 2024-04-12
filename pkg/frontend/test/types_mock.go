@@ -78,18 +78,18 @@ func (m *MockComputationWrapper) EXPECT() *MockComputationWrapperMockRecorder {
 }
 
 // Compile mocks base method.
-func (m *MockComputationWrapper) Compile(requestCtx context.Context, u interface{}, fill func(interface{}, *batch.Batch) error) (interface{}, error) {
+func (m *MockComputationWrapper) Compile(requestCtx context.Context, fill func(*batch.Batch) error) (interface{}, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Compile", requestCtx, u, fill)
+	ret := m.ctrl.Call(m, "Compile", requestCtx, fill)
 	ret0, _ := ret[0].(interface{})
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // Compile indicates an expected call of Compile.
-func (mr *MockComputationWrapperMockRecorder) Compile(requestCtx, u, fill interface{}) *gomock.Call {
+func (mr *MockComputationWrapperMockRecorder) Compile(requestCtx, fill interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Compile", reflect.TypeOf((*MockComputationWrapper)(nil).Compile), requestCtx, u, fill)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Compile", reflect.TypeOf((*MockComputationWrapper)(nil).Compile), requestCtx, fill)
 }
 
 // GetAst mocks base method.
