@@ -23,19 +23,14 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 
-	"github.com/matrixorigin/matrixone/pkg/common/log"
-	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
-	db_holder "github.com/matrixorigin/matrixone/pkg/util/export/etl/db"
-
 	"github.com/matrixorigin/matrixone/pkg/frontend/constant"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -505,22 +500,6 @@ func logStatementStringStatus(ctx context.Context, ses FeSession, stmtStr string
 	ses.SetTStmt(nil)
 }
 
-var logger *log.MOLogger
-var loggerOnce sync.Once
-
-func getLogger() *log.MOLogger {
-	loggerOnce.Do(initLogger)
-	return logger
-}
-
-func initLogger() {
-	rt := moruntime.ProcessLevelRuntime()
-	if rt == nil {
-		rt = moruntime.DefaultRuntime()
-	}
-	logger = rt.Logger().Named("frontend")
-}
-
 // appendSessionField append session id, transaction id and statement id to the fields
 func appendSessionField(fields []zap.Field, ses FeSession) []zap.Field {
 	if ses != nil {
@@ -536,16 +515,6 @@ func appendSessionField(fields []zap.Field, ses FeSession) []zap.Field {
 		}
 	}
 	return fields
-}
-
-// @Deprecated
-func logError(ses FeSession, info string, msg string, fields ...zap.Field) {
-	if ses != nil && ses.GetTenantInfo() != nil && ses.GetTenantInfo().User == db_holder.MOLoggerUser {
-		return
-	}
-	fields = append(fields, zap.String("session_info", info))
-	fields = appendSessionField(fields, ses)
-	getLogger().Log(msg, log.DefaultLogOptions().WithLevel(zap.ErrorLevel).AddCallerSkip(1), fields...)
 }
 
 // isCmdFieldListSql checks the sql is the cmdFieldListSql or not.

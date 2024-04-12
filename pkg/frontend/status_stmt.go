@@ -40,7 +40,7 @@ func executeStatusStmt(requestCtx context.Context, ses *Session, execCtx *ExecCt
 
 			columns, err = execCtx.cw.GetColumns()
 			if err != nil {
-				logError(ses, ses.GetDebugString(),
+				ses.Error(requestCtx,
 					"Failed to get columns from computation handler",
 					zap.Error(err))
 				return
@@ -139,13 +139,13 @@ func executeStatusStmt(requestCtx context.Context, ses *Session, execCtx *ExecCt
 			if loadLocalErrGroup != nil { // release resources
 				err2 := execCtx.proc.LoadLocalReader.Close()
 				if err2 != nil {
-					logError(ses, ses.GetDebugString(),
+					ses.Error(requestCtx,
 						"processLoadLocal goroutine failed",
 						zap.Error(err2))
 				}
 				err2 = loadLocalErrGroup.Wait() // executor failed, but processLoadLocal is still running, wait for it
 				if err2 != nil {
-					logError(ses, ses.GetDebugString(),
+					ses.Error(requestCtx,
 						"processLoadLocal goroutine failed",
 						zap.Error(err2))
 				}

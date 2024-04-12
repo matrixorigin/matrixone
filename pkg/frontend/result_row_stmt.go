@@ -36,7 +36,7 @@ func executeResultRowStmt(requestCtx context.Context, ses *Session, execCtx *Exe
 
 		columns, err = execCtx.cw.GetColumns()
 		if err != nil {
-			logError(ses, ses.GetDebugString(),
+			ses.Error(requestCtx,
 				"Failed to get columns from computation handler",
 				zap.Error(err))
 			return
@@ -69,7 +69,7 @@ func executeResultRowStmt(requestCtx context.Context, ses *Session, execCtx *Exe
 		explainColName := "QUERY PLAN"
 		columns, err = GetExplainColumns(requestCtx, explainColName)
 		if err != nil {
-			logError(ses, ses.GetDebugString(),
+			ses.Error(requestCtx,
 				"Failed to get columns from ExplainColumns handler",
 				zap.Error(err))
 			return
@@ -96,7 +96,7 @@ func executeResultRowStmt(requestCtx context.Context, ses *Session, execCtx *Exe
 	default:
 		columns, err = execCtx.cw.GetColumns()
 		if err != nil {
-			logError(ses, ses.GetDebugString(),
+			ses.Error(requestCtx,
 				"Failed to get columns from computation handler",
 				zap.Error(err))
 			return
@@ -257,7 +257,7 @@ func respMixedResultRow(requestCtx context.Context,
 	execCtx *ExecCtx) (err error) {
 	mrs := ses.GetMysqlResultSet()
 	if err := ses.GetMysqlProtocol().SendResultSetTextBatchRowSpeedup(mrs, mrs.GetRowCount()); err != nil {
-		logError(ses, ses.GetDebugString(),
+		ses.Error(requestCtx,
 			"Failed to handle 'SHOW TABLE STATUS'",
 			zap.Error(err))
 		return err

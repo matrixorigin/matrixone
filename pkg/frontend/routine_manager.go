@@ -273,7 +273,7 @@ func (rm *RoutineManager) Created(rs goetty.IOSession) {
 	routine.setSession(ses)
 	pro.SetSession(ses)
 
-	ses.Debugf(ses.GetRequestContext(), "have done some preparation for the connection %s", rs.RemoteAddress())
+	ses.Debugf(cancelCtx, "have done some preparation for the connection %s", rs.RemoteAddress())
 
 	// With proxy module enabled, we try to update salt value and label info from proxy.
 	if getGlobalPu().SV.ProxyEnabled {
@@ -283,7 +283,7 @@ func (rm *RoutineManager) Created(rs goetty.IOSession) {
 	hsV10pkt := pro.makeHandshakeV10Payload()
 	err = pro.writePackets(hsV10pkt, true)
 	if err != nil {
-		logError(pro.ses, pro.GetDebugString(),
+		pro.ses.Error(cancelCtx,
 			"Failed to handshake with server, quitting routine...",
 			zap.Error(err))
 		routine.killConnection(true)

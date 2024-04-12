@@ -32,7 +32,7 @@ func executeResultRowStmtInBack(requestCtx context.Context,
 	// cw.Compile might rewrite sql, here we fetch the latest version
 	columns, err = execCtx.cw.GetColumns()
 	if err != nil {
-		logError(backSes, backSes.GetDebugString(),
+		backSes.Error(requestCtx,
 			"Failed to get columns from computation handler",
 			zap.Error(err))
 		return

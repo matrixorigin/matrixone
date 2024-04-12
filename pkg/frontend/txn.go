@@ -854,7 +854,7 @@ func rollbackTxnFunc(reqCtx context.Context, ses FeSession, execErr error, execC
 	if ses.GetTxnHandler().InMultiStmtTransactionMode() && ses.GetTxnHandler().InActiveTransaction() {
 		ses.cleanCache()
 	}
-	logError(ses, ses.GetDebugString(), execErr.Error())
+	ses.Error(reqCtx, execErr.Error())
 	txnErr := ses.GetTxnHandler().TxnRollbackSingleStatement(execCtx.stmt, execErr)
 	if txnErr != nil {
 		logStatementStatus(reqCtx, ses, execCtx.stmt, fail, txnErr)
@@ -889,7 +889,7 @@ func finishTxnFunc(reqCtx context.Context, ses FeSession, execErr error, execCtx
 	// First recover all panics.   If paniced, we will abort.
 	if r := recover(); r != nil {
 		recoverErr := moerr.ConvertPanicError(reqCtx, r)
-		logError(ses, ses.GetDebugString(), "recover from panic", zap.Error(recoverErr), zap.Error(execErr))
+		ses.Error(reqCtx, "recover from panic", zap.Error(recoverErr), zap.Error(execErr))
 	}
 
 	if execErr == nil {
