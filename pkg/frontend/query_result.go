@@ -454,10 +454,6 @@ type resultFileInfo struct {
 	blockIndex int64
 }
 
-func handleDump(requestCtx context.Context, ses FeSession, dump *tree.MoDump) error {
-	return doDumpQueryResult(requestCtx, ses.(*Session), dump.ExportParams)
-}
-
 // doDumpQueryResult reads data from the query result, converts it into csv and saves it into
 // the file designated by the path.
 func doDumpQueryResult(ctx context.Context, ses *Session, eParam *tree.ExportParam) error {

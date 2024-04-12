@@ -45,26 +45,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
-func createDropDatabaseErrorInfo() string {
-	return "CREATE/DROP of database is not supported in transactions"
-}
-
-func onlyCreateStatementErrorInfo() string {
-	return "Only CREATE of DDL is supported in transactions"
-}
-
-func administrativeCommandIsUnsupportedInTxnErrorInfo() string {
-	return "administrative command is unsupported in transactions"
-}
-
-func unclassifiedStatementInUncommittedTxnErrorInfo() string {
-	return "unclassified statement appears in uncommitted transaction"
-}
-
-func writeWriteConflictsErrorInfo() string {
-	return "Write conflicts detected. Previous transaction need to be aborted."
-}
-
 type CloseFlag struct {
 	//closed flag
 	closed uint32

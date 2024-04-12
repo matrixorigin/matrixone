@@ -35,8 +35,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -78,68 +76,6 @@ type ComputationWrapper interface {
 	GetLoadTag() bool
 
 	GetServerStatus() uint16
-}
-
-/*
-GetComputationWrapper gets the execs from the computation engine
-*/
-var GetComputationWrapper = func(db string, input *UserInput, user string, eng engine.Engine, proc *process.Process, ses *Session) ([]ComputationWrapper, error) {
-	var cw []ComputationWrapper = nil
-	if cached := ses.getCachedPlan(input.getSql()); cached != nil {
-		modify := false
-		for i, stmt := range cached.stmts {
-			tcw := InitTxnComputationWrapper(ses, stmt, proc)
-			tcw.plan = cached.plans[i]
-			if tcw.plan == nil {
-				modify = true
-				break
-			}
-			if checkModify(tcw.plan, proc, ses) {
-				modify = true
-				break
-			}
-			cw = append(cw, tcw)
-		}
-		if modify {
-			cw = nil
-		} else {
-			return cw, nil
-		}
-	}
-
-	var stmts []tree.Statement = nil
-	var cmdFieldStmt *InternalCmdFieldList
-	var err error
-	// if the input is an option ast, we should use it directly
-	if input.getStmt() != nil {
-		stmts = append(stmts, input.getStmt())
-	} else if isCmdFieldListSql(input.getSql()) {
-		cmdFieldStmt, err = parseCmdFieldList(proc.Ctx, input.getSql())
-		if err != nil {
-			return nil, err
-		}
-		stmts = append(stmts, cmdFieldStmt)
-	} else {
-		var v interface{}
-		var origin interface{}
-		v, err = ses.GetGlobalVar("lower_case_table_names")
-		if err != nil {
-			v = int64(1)
-		}
-		origin, err = ses.GetGlobalVar("keep_user_target_list_in_result")
-		if err != nil {
-			origin = int64(0)
-		}
-		stmts, err = parsers.Parse(proc.Ctx, dialect.MYSQL, input.getSql(), v.(int64), origin.(int64))
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	for _, stmt := range stmts {
-		cw = append(cw, InitTxnComputationWrapper(ses, stmt, proc))
-	}
-	return cw, nil
 }
 
 type ColumnInfo interface {
