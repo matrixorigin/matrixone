@@ -371,9 +371,6 @@ func handleShowTableStatus(ses *Session, stmt *tree.ShowTableStatus, proc *proce
 		if err != nil {
 			return err
 		}
-		if err = r.UpdateObjectInfos(ctx); err != nil {
-			return err
-		}
 		if row[3], err = r.Rows(ctx); err != nil {
 			return err
 		}
