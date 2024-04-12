@@ -193,7 +193,17 @@ func (builder *QueryBuilder) applyIndicesForProject(nodeID int32, projNode *plan
 		// 1.d if the distance function in sortNode is not indexed for that column in any of the IVFFLAT index, skip
 		distanceFunctionIndexed := false
 		var multiTableIndexWithSortDistFn *MultiTableIndex
-		for _, multiTableIndex := range multiTableIndexes {
+
+		// This is important to get consistent result.
+		// HashMap can give you random order during iteration.
+		var multiTableIndexKeys []string
+		for key := range multiTableIndexes {
+			multiTableIndexKeys = append(multiTableIndexKeys, key)
+		}
+		sort.Strings(multiTableIndexKeys)
+
+		for _, multiTableIndexKey := range multiTableIndexKeys {
+			multiTableIndex := multiTableIndexes[multiTableIndexKey]
 			switch multiTableIndex.IndexAlgo {
 			case catalog.MoIndexIvfFlatAlgo.ToString():
 				storedParams, err := catalog.IndexParamsStringToMap(multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].IndexAlgoParams)
