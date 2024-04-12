@@ -23,7 +23,7 @@ import (
 
 var (
 	defaultLockListenAddress      = "127.0.0.1:6003"
-	defaultMaxLockRowCount        = 1024
+	defaultMaxLockRowCount        = 1000000
 	defaultMaxFixedSliceSize      = 1 << 20 // 1mb
 	defaultKeepRemoteLockDuration = time.Second
 	defaultKeepBindTimeout        = time.Second * 10

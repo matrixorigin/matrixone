@@ -99,6 +99,8 @@ enum Method {
   RemainTxnInService = 10;
   // canRestartService judge if can restart lock service
   CanRestartService  = 11;
+  // ValidateService validate if lock service alive
+  ValidateService    = 12;
 }
 
 enum Status {
@@ -126,6 +128,7 @@ message Request {
   SetRestartServiceRequest   SetRestartService   = 11 [(gogoproto.nullable) = false];
   CanRestartServiceRequest   CanRestartService   = 12 [(gogoproto.nullable) = false];
   RemainTxnInServiceRequest  RemainTxnInService  = 13 [(gogoproto.nullable) = false];
+  ValidateServiceRequest     ValidateService     = 14 [(gogoproto.nullable) = false];
 }
 
 // Response response
@@ -146,7 +149,8 @@ message Response {
     KeepRemoteLockResponse     KeepRemoteLock       = 11 [(gogoproto.nullable) = false];
     SetRestartServiceResponse  SetRestartService    = 12 [(gogoproto.nullable) = false];
     CanRestartServiceResponse  CanRestartService    = 13 [(gogoproto.nullable) = false];
-    RemainTxnInServiceResponse RemainTxnInService  = 14 [(gogoproto.nullable) = false];
+    RemainTxnInServiceResponse RemainTxnInService   = 14 [(gogoproto.nullable) = false];
+    ValidateServiceResponse    ValidateService      = 15 [(gogoproto.nullable) = false];
 }
 
 // LockRequest lock request
@@ -271,6 +275,16 @@ message KeepRemoteLockRequest {
 
 // KeepRemoteLockResponse keep lock on remote lockservice response. TN -> CN
 message KeepRemoteLockResponse {
+  bool OK = 1;
+}
+
+// ValidateServiceRequest validate if lock service alive request. TN -> CN
+message ValidateServiceRequest {
+  string ServiceID       = 1;
+}
+
+// KeepLockTableBindResponse keep lock table bind response. CN -> DN
+message ValidateServiceResponse {
   bool OK = 1;
 }
 
