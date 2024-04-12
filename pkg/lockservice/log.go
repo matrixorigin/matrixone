@@ -289,6 +289,22 @@ func logAbortDeadLock(
 	}
 }
 
+func logLockServiceStartSucc(
+	serviceID string) {
+	logger := getWithSkipLogger()
+	if logger.Enabled(zap.ErrorLevel) {
+		logger.Info("lock service start successfully",
+			zap.String("serviceID", serviceID))
+	}
+}
+
+func logLockAllocatorStartSucc() {
+	logger := getWithSkipLogger()
+	if logger.Enabled(zap.ErrorLevel) {
+		logger.Info("lock allocator start successfully")
+	}
+}
+
 func logCheckDeadLockFailed(
 	waitingTxn, txn pb.WaitTxn,
 	err error) {

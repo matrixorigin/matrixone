@@ -74,11 +74,6 @@ func (tbl *txnTable) Stats(ctx context.Context, sync bool) *pb.StatsInfo {
 }
 
 func (tbl *txnTable) Rows(ctx context.Context) (uint64, error) {
-	_, err := tbl.getPartitionState(ctx)
-	if err != nil {
-		logutil.Errorf("failed to get stats info of table %d", tbl.tableId)
-		return 0, err
-	}
 	e := tbl.getEngine()
 	var rows uint64
 	deletes := make(map[types.Rowid]struct{})
@@ -137,11 +132,6 @@ func (tbl *txnTable) Rows(ctx context.Context) (uint64, error) {
 }
 
 func (tbl *txnTable) Size(ctx context.Context, columnName string) (uint64, error) {
-	_, err := tbl.getPartitionState(ctx)
-	if err != nil {
-		logutil.Errorf("failed to get stats info of table %d", tbl.tableId)
-		return 0, err
-	}
 	e := tbl.getEngine()
 	ts := types.TimestampToTS(tbl.db.op.SnapshotTS())
 	part, err := tbl.getPartitionState(ctx)
@@ -552,13 +542,10 @@ func (tbl *txnTable) reset(newId uint64) {
 	}
 	tbl.tableId = newId
 	tbl._partState.Store(nil)
-	//tbl.objInfos = nil
-	tbl.objInfosUpdated.Store(false)
 }
 
 func (tbl *txnTable) resetSnapshot() {
 	tbl._partState.Store(nil)
-	tbl.objInfosUpdated.Store(false)
 }
 
 // return all unmodified blocks
@@ -599,11 +586,6 @@ func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr) (ranges eng
 
 	var blocks objectio.BlockInfoSlice
 	ranges = &blocks
-
-	// make sure we have the block infos snapshot
-	if err = tbl.UpdateObjectInfos(ctx); err != nil {
-		return
-	}
 
 	// get the table's snapshot
 	var part *logtailreplay.PartitionState

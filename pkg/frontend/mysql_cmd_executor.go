@@ -470,9 +470,6 @@ func handleShowTableStatus(ses *Session, stmt *tree.ShowTableStatus, proc *proce
 		if err != nil {
 			return err
 		}
-		if err = r.UpdateObjectInfos(ctx); err != nil {
-			return err
-		}
 		if row[3], err = r.Rows(ctx); err != nil {
 			return err
 		}
@@ -3807,7 +3804,7 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 
 	cmpBegin = time.Now()
 
-	if ret, err = cw.Compile(requestCtx, ses, ses.GetOutputCallback()); err != nil {
+	if ret, err = cw.Compile(requestCtx, ses.GetOutputCallback()); err != nil {
 		return
 	}
 	defer func() {
