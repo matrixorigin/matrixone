@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"os"
 	"testing"
 	"time"
@@ -119,6 +120,13 @@ func (w *Ws) StartStatement()     {}
 func (w *Ws) EndStatement()       {}
 func (w *Ws) IncrSQLCount()       {}
 func (w *Ws) GetSQLCount() uint64 { return 0 }
+
+func (w *Ws) CloneSnapshotWS() client.Workspace {
+	return nil
+}
+
+func (w *Ws) BindTxnOp(op client.TxnOperator) {
+}
 
 func TestCompile(t *testing.T) {
 	cnclient.NewCNClient("test", new(cnclient.ClientConfig))
