@@ -614,19 +614,19 @@ type backSession struct {
 	connectCtx context.Context
 }
 
-func (ses *backSession) Close() {
-	ses.feSessionImpl.Close()
-	ses.requestCtx = nil
-	ses.connectCtx = nil
+func (backSes *backSession) Close() {
+	backSes.feSessionImpl.Close()
+	backSes.requestCtx = nil
+	backSes.connectCtx = nil
 }
 
-func (ses *backSession) Clear() {
-	ses.feSessionImpl.Clear()
+func (backSes *backSession) Clear() {
+	backSes.feSessionImpl.Clear()
 }
 
-func (ses *backSession) GetOutputCallback() func(*batch.Batch) error {
+func (backSes *backSession) GetOutputCallback() func(*batch.Batch) error {
 	return func(bat *batch.Batch) error {
-		return ses.outputCallback(ses, bat)
+		return backSes.outputCallback(backSes, bat)
 	}
 }
 

@@ -257,7 +257,7 @@ func (node *Revoke) StmtKind() StmtKind {
 	return frontendStatusTyp
 }
 
-func (node *Kill) StmtKind() StmtKind {
+func (k *Kill) StmtKind() StmtKind {
 	return frontendStatusTyp
 }
 
@@ -285,7 +285,7 @@ func (node *BackupStart) StmtKind() StmtKind {
 	return frontendStatusTyp
 }
 
-func (node *EmptyStmt) StmtKind() StmtKind {
+func (e *EmptyStmt) StmtKind() StmtKind {
 	return frontendStatusTyp
 }
 

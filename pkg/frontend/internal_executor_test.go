@@ -40,18 +40,6 @@ func mockResultSet() *MysqlResultSet {
 	return set
 }
 
-type miniExec struct {
-	sess FeSession
-}
-
-func (e *miniExec) doComQuery(context.Context, *UserInput) error {
-	_ = e.sess.GetMysqlProtocol()
-	return nil
-}
-func (e *miniExec) SetSession(sess FeSession) {
-	e.sess = sess
-}
-
 func TestIe(t *testing.T) {
 	runtime.SetupProcessLevelRuntime(runtime.DefaultRuntime())
 

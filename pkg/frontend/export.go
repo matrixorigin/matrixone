@@ -67,7 +67,6 @@ type ExportConfig struct {
 	AsyncReader *io.PipeReader
 	AsyncWriter *io.PipeWriter
 	AsyncGroup  *errgroup.Group
-	RowCount    uint64
 }
 
 type writeParam struct {
@@ -111,12 +110,6 @@ func (cld *CloseExportData) Close() {
 // needExportToFile checks needing to export into file or not
 func (ec *ExportConfig) needExportToFile() bool {
 	return ec != nil && ec.userConfig != nil && ec.userConfig.Outfile
-}
-
-func (ec *ExportConfig) addRowCount(n uint64) {
-	if ec != nil {
-		ec.RowCount += n
-	}
 }
 
 func initExportFileParam(ep *ExportConfig, mrs *MysqlResultSet) {

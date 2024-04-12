@@ -856,8 +856,7 @@ func doShowErrors(ses *Session) error {
 }
 
 func handleShowErrors(ses FeSession, isLastStmt bool) error {
-	var err error
-	err = doShowErrors(ses.(*Session))
+	err := doShowErrors(ses.(*Session))
 	if err != nil {
 		return err
 	}
@@ -1557,8 +1556,7 @@ func doKill(ctx context.Context, ses *Session, k *tree.Kill) error {
 
 // handleKill kill a connection or query
 func handleKill(ctx context.Context, ses *Session, k *tree.Kill) error {
-	var err error
-	err = doKill(ctx, ses, k)
+	err := doKill(ctx, ses, k)
 	if err != nil {
 		return err
 	}
@@ -1567,8 +1565,7 @@ func handleKill(ctx context.Context, ses *Session, k *tree.Kill) error {
 
 // handleShowAccounts lists the info of accounts
 func handleShowAccounts(ctx context.Context, ses FeSession, sa *tree.ShowAccounts, isLastStmt bool) error {
-	var err error
-	err = doShowAccounts(ctx, ses.(*Session), sa)
+	err := doShowAccounts(ctx, ses.(*Session), sa)
 	if err != nil {
 		return err
 	}

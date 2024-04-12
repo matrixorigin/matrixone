@@ -42,7 +42,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage"
 	"github.com/matrixorigin/matrixone/pkg/util"
-	util2 "github.com/matrixorigin/matrixone/pkg/util"
 )
 
 const (
@@ -205,10 +204,10 @@ func getStatementType(stmt tree.Statement) tree.StatementType {
 }
 
 // TableInfoCache tableInfos of a database
-type TableInfoCache struct {
-	db         string
-	tableInfos map[string][]ColumnInfo
-}
+//type TableInfoCache struct {
+//	db         string
+//	tableInfos map[string][]ColumnInfo
+//}
 
 // outputPool outputs the data
 type outputPool interface {
@@ -351,7 +350,7 @@ type FeSession interface {
 
 type ExecCtx struct {
 	prepareStmt *PrepareStmt
-	runResult   *util2.RunResult
+	runResult   *util.RunResult
 	//stmt will be replaced by the Execute
 	stmt tree.Statement
 	//isLastStmt : true denotes the last statement in the query

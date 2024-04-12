@@ -783,58 +783,55 @@ func (ses *Session) GetBackgroundExec(ctx context.Context) BackgroundExec {
 // GetShareTxnBackgroundExec returns a background executor running the sql in a shared transaction.
 // newRawBatch denotes we need the raw batch instead of mysql result set.
 func (ses *Session) GetShareTxnBackgroundExec(ctx context.Context, newRawBatch bool) BackgroundExec {
-	{
-		var txnCtx context.Context
-		var txnOp TxnOperator
-		var err error
-		if ses.GetTxnHandler() != nil {
-			txnCtx, txnOp, err = ses.GetTxnHandler().GetTxnOperator()
-			if err != nil {
-				panic(err)
-			}
-		}
 
-		txnHandler := InitTxnHandler(getGlobalPu().StorageEngine, txnCtx, txnOp)
-		var callback func(interface{}, *batch.Batch) error
-		if newRawBatch {
-			callback = batchFetcher2
-		} else {
-			callback = fakeDataSetFetcher2
+	var txnCtx context.Context
+	var txnOp TxnOperator
+	var err error
+	if ses.GetTxnHandler() != nil {
+		txnCtx, txnOp, err = ses.GetTxnHandler().GetTxnOperator()
+		if err != nil {
+			panic(err)
 		}
-		backSes := &backSession{
-			requestCtx: ctx,
-			connectCtx: ses.connectCtx,
-			feSessionImpl: feSessionImpl{
-				pool:           ses.pool,
-				proto:          &FakeProtocol{},
-				buf:            buffer.New(),
-				stmtProfile:    process.StmtProfile{},
-				tenant:         nil,
-				txnHandler:     txnHandler,
-				txnCompileCtx:  InitTxnCompilerContext(txnHandler, ses.proto.GetDatabaseName()),
-				mrs:            nil,
-				outputCallback: callback,
-				allResultSet:   nil,
-				resultBatches:  nil,
-				derivedStmt:    false,
-				gSysVars:       GSysVariables,
-				label:          make(map[string]string),
-				timeZone:       time.Local,
-			},
-		}
-		backSes.uuid, _ = uuid.NewV7()
-		backSes.GetTxnHandler().SetOptionBits(OPTION_AUTOCOMMIT)
-		backSes.GetTxnCompileCtx().SetSession(backSes)
-		backSes.GetTxnHandler().SetSession(backSes)
-		bh := &backExec{
-			backSes: backSes,
-		}
-		//the derived statement execute in a shared transaction in background session
-		bh.backSes.ReplaceDerivedStmt(true)
-		return bh
 	}
 
-	return nil
+	txnHandler := InitTxnHandler(getGlobalPu().StorageEngine, txnCtx, txnOp)
+	var callback func(interface{}, *batch.Batch) error
+	if newRawBatch {
+		callback = batchFetcher2
+	} else {
+		callback = fakeDataSetFetcher2
+	}
+	backSes := &backSession{
+		requestCtx: ctx,
+		connectCtx: ses.connectCtx,
+		feSessionImpl: feSessionImpl{
+			pool:           ses.pool,
+			proto:          &FakeProtocol{},
+			buf:            buffer.New(),
+			stmtProfile:    process.StmtProfile{},
+			tenant:         nil,
+			txnHandler:     txnHandler,
+			txnCompileCtx:  InitTxnCompilerContext(txnHandler, ses.proto.GetDatabaseName()),
+			mrs:            nil,
+			outputCallback: callback,
+			allResultSet:   nil,
+			resultBatches:  nil,
+			derivedStmt:    false,
+			gSysVars:       GSysVariables,
+			label:          make(map[string]string),
+			timeZone:       time.Local,
+		},
+	}
+	backSes.uuid, _ = uuid.NewV7()
+	backSes.GetTxnHandler().SetOptionBits(OPTION_AUTOCOMMIT)
+	backSes.GetTxnCompileCtx().SetSession(backSes)
+	backSes.GetTxnHandler().SetSession(backSes)
+	bh := &backExec{
+		backSes: backSes,
+	}
+	//the derived statement execute in a shared transaction in background session
+	bh.backSes.ReplaceDerivedStmt(true)
+	return bh
 }
 
 var GetRawBatchBackgroundExec = func(ctx context.Context, ses *Session) BackgroundExec {

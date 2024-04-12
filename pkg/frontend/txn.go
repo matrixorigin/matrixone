@@ -68,9 +68,6 @@ type TxnHandler struct {
 
 	//the option bits
 	optionBits uint32
-
-	//start a new statement
-	inStmt bool
 }
 
 func InitTxnHandler(storage engine.Engine, txnCtx context.Context, txnOp TxnOperator) *TxnHandler {
