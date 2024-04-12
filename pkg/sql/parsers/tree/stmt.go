@@ -82,7 +82,7 @@ type StmtKind int
 
 type OutputType int
 type RespType int
-type HandleType int
+type ExecLocation int
 
 const (
 	OUTPUT_UNDEFINED  OutputType = 0x0
@@ -98,11 +98,11 @@ const (
 	RESP_MIXED_RESULT_ROW    RespType = 0x5
 
 	//
-	EXEC_IN_ENGINE   HandleType = 0x0
-	EXEC_IN_FRONTEND HandleType = 0x1
+	EXEC_IN_ENGINE   ExecLocation = 0x0
+	EXEC_IN_FRONTEND ExecLocation = 0x1
 )
 
-func MakeStmtKind(resTyp OutputType, respTyp RespType, handleTyp HandleType) StmtKind {
+func MakeStmtKind(resTyp OutputType, respTyp RespType, handleTyp ExecLocation) StmtKind {
 	return StmtKind(int(resTyp) | (int(respTyp) << 2) | (int(handleTyp) << 5))
 }
 
@@ -114,8 +114,8 @@ func (t StmtKind) RespType() RespType {
 	return RespType((int(t) >> 2) & 0x7)
 }
 
-func (t StmtKind) HandleType() HandleType {
-	return HandleType((int(t) >> 5) & 0x1)
+func (t StmtKind) HandleType() ExecLocation {
+	return ExecLocation((int(t) >> 5) & 0x1)
 }
 
 var (
