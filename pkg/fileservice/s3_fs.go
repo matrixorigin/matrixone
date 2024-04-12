@@ -20,7 +20,6 @@ import (
 	"crypto/tls"
 	"errors"
 	"io"
-	"math"
 	"net/http/httptrace"
 	pathpkg "path"
 	"sort"
@@ -44,6 +43,7 @@ type S3FS struct {
 	storage   ObjectStorage
 	keyPrefix string
 
+	allocator   CacheDataAllocator
 	memCache    *MemCache
 	diskCache   *DiskCache
 	remoteCache *RemoteCache
@@ -51,7 +51,7 @@ type S3FS struct {
 
 	perfCounterSets []*perfcounter.CounterSet
 
-	ioLocks IOLocks
+	ioLocks *IOLocks
 }
 
 // key mapping scheme:
@@ -75,6 +75,7 @@ func NewS3FS(
 		keyPrefix:       args.KeyPrefix,
 		asyncUpdate:     true,
 		perfCounterSets: perfCounterSets,
+		ioLocks:         NewIOLocks(),
 	}
 
 	var err error
@@ -105,6 +106,11 @@ func NewS3FS(
 			return nil, err
 		}
 	}
+	if fs.memCache != nil {
+		fs.allocator = fs.memCache
+	} else {
+		fs.allocator = DefaultCacheDataAllocator
+	}
 
 	return fs, nil
 }
@@ -126,7 +132,7 @@ func (s *S3FS) initCaches(ctx context.Context, config CacheConfig) error {
 	// memory cache
 	if *config.MemoryCapacity > DisableCacheCapacity {
 		s.memCache = NewMemCache(
-			NewLRUCache(int64(*config.MemoryCapacity), true, &config.CacheCallbacks),
+			NewMemoryCache(int64(*config.MemoryCapacity), true, &config.CacheCallbacks),
 			s.perfCounterSets,
 		)
 		logutil.Info("fileservice: memory cache initialized",
@@ -248,11 +254,11 @@ func (s *S3FS) PrefetchFile(ctx context.Context, filePath string) error {
 	if err != nil {
 		return err
 	}
+
 	startLock := time.Now()
 	unlock, wait := s.ioLocks.Lock(IOLockKey{
-		File: filePath,
+		Path: filePath,
 	})
-
 	if unlock != nil {
 		defer unlock()
 	} else {
@@ -397,10 +403,7 @@ func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
 	}
 
 	startLock := time.Now()
-	unlock, wait := s.ioLocks.Lock(IOLockKey{
-		File: vector.FilePath,
-	})
-
+	unlock, wait := s.ioLocks.Lock(vector.ioLockKey())
 	if unlock != nil {
 		defer unlock()
 	} else {
@@ -408,6 +411,14 @@ func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
 	}
 	stats := statistic.StatsInfoFromContext(ctx)
 	stats.AddLockTimeConsumption(time.Since(startLock))
+
+	allocator := s.allocator
+	if vector.Policy.Any(SkipMemoryCache) {
+		allocator = DefaultCacheDataAllocator
+	}
+	for i := range vector.Entries {
+		vector.Entries[i].allocator = allocator
+	}
 
 	for _, cache := range vector.Caches {
 		cache := cache
@@ -471,11 +482,9 @@ func (s *S3FS) ReadCache(ctx context.Context, vector *IOVector) (err error) {
 	if len(vector.Entries) == 0 {
 		return moerr.NewEmptyVectorNoCtx()
 	}
-	startLock := time.Now()
-	unlock, wait := s.ioLocks.Lock(IOLockKey{
-		File: vector.FilePath,
-	})
 
+	startLock := time.Now()
+	unlock, wait := s.ioLocks.Lock(vector.ioLockKey())
 	if unlock != nil {
 		defer unlock()
 	} else {
@@ -516,38 +525,7 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) (err error) {
 		return err
 	}
 
-	readFullObject := vector.Policy.CacheFullFile() &&
-		!vector.Policy.Any(SkipDiskCache)
-
-	var min, max *int64
-	if readFullObject {
-		// full range
-		min = ptrTo[int64](0)
-		max = (*int64)(nil)
-
-	} else {
-		// minimal range
-		min = ptrTo(int64(math.MaxInt))
-		max = ptrTo(int64(0))
-		for _, entry := range vector.Entries {
-			entry := entry
-			if entry.done {
-				continue
-			}
-			if entry.Offset < *min {
-				min = &entry.Offset
-			}
-			if entry.Size < 0 {
-				entry.Size = 0
-				max = nil
-			}
-			if max != nil {
-				if end := entry.Offset + entry.Size; end > *max {
-					max = &end
-				}
-			}
-		}
-	}
+	min, max, readFullObject := vector.readRange()
 
 	// a function to get an io.ReadCloser
 	getReader := func(ctx context.Context, min *int64, max *int64) (io.ReadCloser, error) {
@@ -796,6 +774,10 @@ var _ ETLFileService = new(S3FS)
 func (*S3FS) ETLCompatible() {}
 
 var _ CachingFileService = new(S3FS)
+
+func (s *S3FS) Close() {
+	s.FlushCache()
+}
 
 func (s *S3FS) FlushCache() {
 	if s.memCache != nil {

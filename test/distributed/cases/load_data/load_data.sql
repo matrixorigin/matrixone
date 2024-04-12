@@ -260,3 +260,62 @@ select * from t1;
 load data infile '$resources/load_data/test_character01.csv' into table t1 CHARACTER SET "utf_xx" FIELDS TERMINATED BY ',' ENCLOSED BY '"' LINES TERMINATED BY '\n';
 select * from t1;
 drop table t1;
+
+drop table if exists test01;
+create table test01(col1 int, col2 varchar(20));
+load data infile '$resources/load_data/test_starting_by02.csv' into table test01 CHARACTER SET "utf_8" fields terminated by ',' lines starting by 'cha';
+select * from test01;
+drop table test01;
+
+drop table if exists test02;
+create table test02(col1 int, col2 bigint, col3 varchar(30));
+load data infile '$resources/load_data/test_starting_by03.csv' into table test02 fields terminated by '|' lines starting by '1' terminated by '\n';
+select * from test02;
+drop table test02;
+
+-- default starting by string ''
+drop table if exists test03;
+create table test03(col1 varchar(20), col2 varchar(20));
+load data infile '$resources/load_data/test_starting_by01.csv' into table test03 CHARACTER SET "utf_8" fields terminated by ',' lines terminated by '\n';
+select * from test03;
+drop table test03;
+
+drop table if exists test04;
+create table test04 (col1 varchar(20), col2 varchar(60));
+load data infile '$resources/load_data/test_escaped_by01.csv' into table test04 fields terminated by ',' enclosed by '"' escaped by '\\' lines terminated by '\n';
+select * from test04;
+drop table test04;
+
+drop table if exists test05;
+create table test05 (col1 varchar(20), col2 varchar(60));
+load data infile '$resources/load_data/test_escaped_by02.csv' into table test05 fields terminated by ',' enclosed by '"' escaped by '\\' lines terminated by '\n';
+select * from test05;
+drop table test05;
+
+-- @bvt:issue#15110
+drop table if exists test06;
+create table test06(col1 varchar(20), col2 varchar(20));
+load data infile '$resources/load_data/test_enclosed_by01.csv' into table test06 fields terminated by ',' enclosed by '"' escaped by '\\' lines terminated by '\n';
+select * from test06;
+drop table test06;
+-- @bvt:issue
+
+drop table if exists test07;
+create table test07(col1 varchar(20), col2 varchar(20));
+load data infile '$resources/load_data/test_enclosed_by02.csv' into table test07 fields terminated by ',' enclosed by '`' lines terminated by '\n';
+select * from test07;
+drop table test07;
+
+-- @bvt:issue#15110
+drop table if exists test08;
+create table test08 (col1 varchar(20), col2 varchar(20));
+load data infile '$resources/load_data/test_enclosed_by01.csv' into table test08 fields terminated by ',' enclosed by '`' lines terminated by '\n';
+select * from test08;
+drop table test08;
+-- @bvt:issue
+
+drop table if exists test09;
+create table test09(col1 varchar(20), col2 varchar(20));
+load data infile '$resources/load_data/test_starting_by04.csv' into table test09 CHARACTER SET "utf_8" fields terminated by ',' lines starting by ' ';
+select * from test09;
+drop table test09;

@@ -67,6 +67,32 @@ func doGetBindings(expr *plan.Expr) map[int32]bool {
 	return res
 }
 
+func hasParam(expr *plan.Expr) bool {
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_P:
+		return true
+
+	case *plan.Expr_F:
+		for _, arg := range exprImpl.F.Args {
+			if hasParam(arg) {
+				return true
+			}
+		}
+		return false
+
+	case *plan.Expr_List:
+		for _, arg := range exprImpl.List.List {
+			if hasParam(arg) {
+				return true
+			}
+		}
+		return false
+
+	default:
+		return false
+	}
+}
+
 func hasCorrCol(expr *plan.Expr) bool {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_Corr:
@@ -1329,7 +1355,7 @@ func InitInfileParam(param *tree.ExternParam) error {
 			param.CompressType = param.Option[i+1]
 		case "format":
 			format := strings.ToLower(param.Option[i+1])
-			if format != tree.CSV && format != tree.JSONLINE {
+			if format != tree.CSV && format != tree.JSONLINE && format != tree.PARQUET {
 				return moerr.NewBadConfig(param.Ctx, "the format '%s' is not supported", format)
 			}
 			param.Format = format
@@ -1822,9 +1848,14 @@ func ResetPreparePlan(ctx CompilerContext, preparePlan *Plan) ([]*plan.ObjectRef
 	var paramTypes []int32
 
 	switch pp := preparePlan.Plan.(type) {
-	case *plan.Plan_Tcl, *plan.Plan_Dcl:
+	case *plan.Plan_Tcl:
 		return nil, nil, moerr.NewInvalidInput(ctx.GetContext(), "cannot prepare TCL and DCL statement")
-
+	case *plan.Plan_Dcl:
+		if pp.Dcl.GetDclType() == plan.DataControl_CREATE_ACCOUNT &&
+			pp.Dcl.GetCreateAccount().GetName().GetP() != nil {
+			return nil, []int32{int32(types.T_varchar)}, nil
+		}
+		return nil, nil, moerr.NewInvalidInput(ctx.GetContext(), "cannot prepare TCL and DCL statement")
 	case *plan.Plan_Ddl:
 		if pp.Ddl.Query != nil {
 			getParamRule := NewGetParamRule()

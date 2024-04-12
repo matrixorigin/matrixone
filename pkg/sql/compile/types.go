@@ -76,7 +76,7 @@ type Source struct {
 	Attributes             []string
 	R                      engine.Reader
 	Bat                    *batch.Batch
-	FilterExpr             *plan.Expr //todo: change this to []*plan.Expr
+	FilterExpr             *plan.Expr // todo: change this to []*plan.Expr
 	node                   *plan.Node
 	TableDef               *plan.TableDef
 	Timestamp              timestamp.Timestamp
@@ -225,10 +225,9 @@ type Compile struct {
 	pn   *plan.Plan
 	info plan2.ExecInfo
 
-	u any
 	// fill is a result writer runs a callback function.
 	// fill will be called when result data is ready.
-	fill func(any, *batch.Batch) error
+	fill func(*batch.Batch) error
 	// affectRows stores the number of rows affected while insert / update / delete
 	affectRows *atomic.Uint64
 	// cn address
@@ -306,7 +305,12 @@ type fuzzyCheck struct {
 	condition string
 
 	// handle with primary key(a, b, ...) or unique key (a, b, ...)
-	isCompound   bool
+	isCompound bool
+
+	// handle with cases like create a unique index for existed table, or alter add unique key
+	// and the type of unique key is compound
+	onlyInsertHidden bool
+
 	col          *plan.ColDef
 	compoundCols []*plan.ColDef
 

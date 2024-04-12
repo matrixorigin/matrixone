@@ -949,34 +949,27 @@ id    col1    col2    col3    col4    col5    col6    col7    col8    col9    co
 2    Value3    789    12.34    2023-10-25    true    orange    Yet another text    1979-01-01 01:01:01    Even more binary data    E
 12    Value1    123    45.67    2023-10-23    true    apple    This is a text    2019-01-01 01:01:01    Some binary data    C
 alter table table02 add column newcolumn int after col3, drop column col4;
-You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 8 column 14 near " ,
-`col7` TEXT ,
-`col8` TIMESTAMP ,
-`col9` BLOB ,
-`col10` CHAR(1) 
-)";
 show create table table02;
 Table    Create Table
-table02    CREATE TABLE `table02` (\n`id` INT NOT NULL AUTO_INCREMENT,\n`col1` VARCHAR(255) NOT NULL,\n`col2` INT DEFAULT NULL,\n`col3` DECIMAL(10,2) DEFAULT NULL,\n`col4` DATE DEFAULT NULL,\n`col5` BOOL DEFAULT NULL,\n`col6` ENUM('apple','banana','orange') DEFAULT NULL,\n`col7` TEXT DEFAULT NULL,\n`col8` TIMESTAMP DEFAULT NULL,\n`col9` BLOB DEFAULT NULL,\n`col10` CHAR(1) DEFAULT NULL\n)
+table02    CREATE TABLE `table02` (\n`id` INT NOT NULL AUTO_INCREMENT,\n`col1` VARCHAR(255) NOT NULL,\n`col2` INT DEFAULT NULL,\n`col3` DECIMAL(10,2) DEFAULT NULL,\n`newcolumn` INT DEFAULT NULL,\n`col5` BOOL DEFAULT NULL,\n`col6` ENUM('apple','banana','orange') DEFAULT NULL,\n`col7` TEXT DEFAULT NULL,\n`col8` TIMESTAMP DEFAULT NULL,\n`col9` BLOB DEFAULT NULL,\n`col10` CHAR(1) DEFAULT NULL\n)
 alter table table02 modify column newcolumn bigint;
-Unknown column 'newcolumn' in 'table02'
 desc table02;
 Field    Type    Null    Key    Default    Extra    Comment
 id    INT(32)    NO        null        
 col1    VARCHAR(255)    NO        null        
 col2    INT(32)    YES        null        
 col3    DECIMAL64(10)    YES        null        
-col4    DATE(0)    YES        null        
+newcolumn    BIGINT(64)    YES        null        
 col5    BOOL(0)    YES        null        
-col6    ENUM(0)    YES        null        
+col6    ENUM('apple','banana','orange')    YES        null        
 col7    TEXT(0)    YES        null        
 col8    TIMESTAMP(0)    YES        null        
 col9    BLOB(0)    YES        null        
 col10    CHAR(1)    YES        null        
 select * from table02;
-id    col1    col2    col3    col4    col5    col6    col7    col8    col9    col10
-2    Value3    789    12.34    2023-10-25    true    orange    Yet another text    1979-01-01 01:01:01    Even more binary data    E
-12    Value1    123    45.67    2023-10-23    true    apple    This is a text    2019-01-01 01:01:01    Some binary data    C
+id    col1    col2    col3    newcolumn    col5    col6    col7    col8    col9    col10
+2    Value3    789    12.34    null    true    orange    Yet another text    1979-01-01 01:01:01    Even more binary data    E
+12    Value1    123    45.67    null    true    apple    This is a text    2019-01-01 01:01:01    Some binary data    C
 truncate table02;
 select * from table02;
 id    col1    col2    col3    col4    col5    col6    col7    col8    col9    col10

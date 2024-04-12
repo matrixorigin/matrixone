@@ -93,27 +93,28 @@ func (checker *warChecker) CacheGet(
 func (checker *warChecker) InsertByID(
 	dbID uint64,
 	tableID uint64,
-	ObjectID *types.Objectid) {
-	block, err := checker.CacheGet(dbID, tableID, ObjectID)
+	ObjectID *types.Objectid,
+) {
+	obj, err := checker.CacheGet(dbID, tableID, ObjectID)
 	if err != nil {
 		panic(err)
 	}
-	checker.Insert(block)
+	checker.Insert(obj)
 }
 
 func (checker *warChecker) cacheGet(id *objectio.ObjectId) *catalog.ObjectEntry {
 	return checker.cache[*id]
 }
-func (checker *warChecker) Cache(block *catalog.ObjectEntry) {
-	checker.cache[block.ID] = block
+func (checker *warChecker) Cache(obj *catalog.ObjectEntry) {
+	checker.cache[obj.ID] = obj
 }
 
-func (checker *warChecker) Insert(block *catalog.ObjectEntry) {
-	checker.Cache(block)
-	if checker.HasConflict(block.ID) {
-		panic(fmt.Sprintf("cannot add conflicted %s into readset", block.String()))
+func (checker *warChecker) Insert(obj *catalog.ObjectEntry) {
+	checker.Cache(obj)
+	if checker.HasConflict(obj.ID) {
+		panic(fmt.Sprintf("cannot add conflicted %s into readset", obj.String()))
 	}
-	checker.readSet[block.ID] = block
+	checker.readSet[obj.ID] = obj
 }
 
 func (checker *warChecker) checkOne(id *common.ID, ts types.TS) (err error) {
@@ -132,8 +133,8 @@ func (checker *warChecker) checkOne(id *common.ID, ts types.TS) (err error) {
 }
 
 func (checker *warChecker) checkAll(ts types.TS) (err error) {
-	for _, block := range checker.readSet {
-		if err = readWriteConfilictCheck(block.BaseEntryImpl, ts); err != nil {
+	for _, obj := range checker.readSet {
+		if err = readWriteConfilictCheck(obj.BaseEntryImpl, ts); err != nil {
 			return
 		}
 	}

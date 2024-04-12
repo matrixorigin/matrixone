@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/status"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"go.uber.org/zap"
@@ -237,6 +238,11 @@ func (rt *Routine) handleRequest(req *Request) error {
 	var resp *Response
 	var quit bool
 
+	v2.StartHandleRequestCounter.Inc()
+	defer func() {
+		v2.EndHandleRequestCounter.Inc()
+	}()
+
 	reqBegin := time.Now()
 	var span trace.Span
 	routineCtx, span = trace.Start(rt.getCancelRoutineCtx(), "Routine.handleRequest",
@@ -415,10 +421,12 @@ func (rt *Routine) cleanup() {
 
 		//step D: clean protocol
 		rt.protocol.Quit()
+		rt.protocol = nil
 
 		//step E: release the resources related to the session
 		if ses != nil {
 			ses.Close()
+			rt.ses = nil
 		}
 	})
 }
@@ -437,8 +445,9 @@ func (rt *Routine) migrateConnectionFrom(resp *query.MigrateConnFromResponse) er
 	resp.DB = ses.GetDatabaseName()
 	for _, st := range ses.GetPrepareStmts() {
 		resp.PrepareStmts = append(resp.PrepareStmts, &query.PrepareStmt{
-			Name: st.Name,
-			SQL:  st.Sql,
+			Name:       st.Name,
+			SQL:        st.Sql,
+			ParamTypes: st.ParamTypes,
 		})
 	}
 	return nil

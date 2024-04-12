@@ -866,15 +866,15 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error
 			clusterTable = fmt.Sprintf(" or att_relname = '%s'", tblName)
 		}
 		accountClause := fmt.Sprintf("account_id = %v or (account_id = 0 and (%s))", accountId, mustShowTable+clusterTable)
-		sql = "SELECT attname `Field`, mo_show_visible_bin(atttyp,3) `Type`, iff(attnotnull = 0, 'YES', 'NO') `Null`, %s, mo_show_visible_bin(att_default, 1) `Default`, '' `Extra`,  att_comment `Comment` FROM %s.mo_columns WHERE att_database = '%s' AND att_relname = '%s' AND (%s) AND att_is_hidden = 0 ORDER BY attnum"
+		sql = "SELECT attname `Field`, CASE WHEN LENGTH(attr_enum) > 0 THEN mo_show_visible_bin_enum(atttyp, attr_enum) ELSE mo_show_visible_bin(atttyp, 3) END AS `Type`, iff(attnotnull = 0, 'YES', 'NO') `Null`, %s, mo_show_visible_bin(att_default, 1) `Default`, '' `Extra`,  att_comment `Comment` FROM %s.mo_columns WHERE att_database = '%s' AND att_relname = '%s' AND (%s) AND att_is_hidden = 0 ORDER BY attnum"
 		if stmt.Full {
-			sql = "SELECT attname `Field`, mo_show_visible_bin(atttyp,3) `Type`, null `Collation`, iff(attnotnull = 0, 'YES', 'NO') `Null`, %s, mo_show_visible_bin(att_default, 1) `Default`,  '' `Extra`,'select,insert,update,references' `Privileges`, att_comment `Comment` FROM %s.mo_columns WHERE att_database = '%s' AND att_relname = '%s' AND (%s) AND att_is_hidden = 0 ORDER BY attnum"
+			sql = "SELECT attname `Field`, CASE WHEN LENGTH(attr_enum) > 0 THEN mo_show_visible_bin_enum(atttyp, attr_enum) ELSE mo_show_visible_bin(atttyp, 3) END AS `Type`, null `Collation`, iff(attnotnull = 0, 'YES', 'NO') `Null`, %s, mo_show_visible_bin(att_default, 1) `Default`,  '' `Extra`,'select,insert,update,references' `Privileges`, att_comment `Comment` FROM %s.mo_columns WHERE att_database = '%s' AND att_relname = '%s' AND (%s) AND att_is_hidden = 0 ORDER BY attnum"
 		}
 		sql = fmt.Sprintf(sql, keyStr, MO_CATALOG_DB_NAME, dbName, tblName, accountClause)
 	} else {
-		sql = "SELECT attname `Field`, mo_show_visible_bin(atttyp,3) `Type`, iff(attnotnull = 0, 'YES', 'NO') `Null`, %s, mo_show_visible_bin(att_default, 1) `Default`, '' `Extra`,  att_comment `Comment` FROM %s.mo_columns WHERE att_database = '%s' AND att_relname = '%s' AND att_is_hidden = 0 ORDER BY attnum"
+		sql = "SELECT attname `Field`, CASE WHEN LENGTH(attr_enum) > 0 THEN mo_show_visible_bin_enum(atttyp, attr_enum) ELSE mo_show_visible_bin(atttyp, 3) END AS `Type`, iff(attnotnull = 0, 'YES', 'NO') `Null`, %s, mo_show_visible_bin(att_default, 1) `Default`, '' `Extra`,  att_comment `Comment` FROM %s.mo_columns WHERE att_database = '%s' AND att_relname = '%s' AND att_is_hidden = 0 ORDER BY attnum"
 		if stmt.Full {
-			sql = "SELECT attname `Field`, mo_show_visible_bin(atttyp,3) `Type`, null `Collation`, iff(attnotnull = 0, 'YES', 'NO') `Null`, %s, mo_show_visible_bin(att_default, 1) `Default`,  '' `Extra`,'select,insert,update,references' `Privileges`, att_comment `Comment` FROM %s.mo_columns WHERE att_database = '%s' AND att_relname = '%s' AND att_is_hidden = 0 ORDER BY attnum"
+			sql = "SELECT attname `Field`, CASE WHEN LENGTH(attr_enum) > 0 THEN mo_show_visible_bin_enum(atttyp, attr_enum) ELSE mo_show_visible_bin(atttyp, 3) END AS `Type`, null `Collation`, iff(attnotnull = 0, 'YES', 'NO') `Null`, %s, mo_show_visible_bin(att_default, 1) `Default`,  '' `Extra`,'select,insert,update,references' `Privileges`, att_comment `Comment` FROM %s.mo_columns WHERE att_database = '%s' AND att_relname = '%s' AND att_is_hidden = 0 ORDER BY attnum"
 		}
 		sql = fmt.Sprintf(sql, keyStr, MO_CATALOG_DB_NAME, dbName, tblName)
 	}
@@ -1194,6 +1194,12 @@ func buildShowSnapShots(stmt *tree.ShowSnapShots, ctx CompilerContext) (*Plan, e
 	return returnByRewriteSQL(ctx, sql, ddlType)
 }
 
+func buildShowAccountUpgrade(stmt *tree.ShowAccountUpgrade, ctx CompilerContext) (*Plan, error) {
+	ddlType := plan.DataDefinition_SHOW_UPGRADE
+	sql := fmt.Sprintf("select account_name as `account_name`, create_version as `current_version` from %s.mo_account order by account_id;", MO_CATALOG_DB_NAME)
+	return returnByRewriteSQL(ctx, sql, ddlType)
+}
+
 func buildShowVariables(stmt *tree.ShowVariables, ctx CompilerContext) (*Plan, error) {
 	showVariables := &plan.ShowVariables{
 		Global: stmt.Global,
@@ -1337,7 +1343,7 @@ func returnByLikeAndSQL(ctx CompilerContext, sql string, like *tree.ComparisonEx
 }
 
 func getRewriteSQLStmt(ctx CompilerContext, sql string) (tree.Statement, error) {
-	newStmts, err := parsers.Parse(ctx.GetContext(), dialect.MYSQL, sql, 1)
+	newStmts, err := parsers.Parse(ctx.GetContext(), dialect.MYSQL, sql, 1, 0)
 	if err != nil {
 		return nil, err
 	}

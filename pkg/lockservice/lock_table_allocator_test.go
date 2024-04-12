@@ -35,6 +35,50 @@ import (
 	"golang.org/x/exp/rand"
 )
 
+func TestGetBindInRestartService(t *testing.T) {
+	runLockTableAllocatorTest(
+		t,
+		time.Hour,
+		func(a *lockTableAllocator) {
+			a.Get("s1", 0, 1, 0, pb.Sharding_None)
+			a.setRestartService("s1")
+			l := a.getLockTablesLocked(0)[1]
+			assert.False(t, a.getServiceBinds(l.ServiceID).isStatus(pb.Status_ServiceLockEnable))
+		})
+}
+
+func TestSetRestartService(t *testing.T) {
+	runLockTableAllocatorTest(
+		t,
+		time.Hour,
+		func(a *lockTableAllocator) {
+			a.setRestartService("s1")
+			assert.True(t, a.canRestartService("s1"))
+		})
+}
+
+func TestCanRestartService(t *testing.T) {
+	runLockTableAllocatorTest(
+		t,
+		time.Hour,
+		func(a *lockTableAllocator) {
+			a.Get("s1", 0, 1, 0, pb.Sharding_None)
+			a.setRestartService("s1")
+			assert.False(t, a.canRestartService("s1"))
+		})
+}
+
+func TestRemainTxnInService(t *testing.T) {
+	runLockTableAllocatorTest(
+		t,
+		time.Hour,
+		func(a *lockTableAllocator) {
+			a.Get("s1", 0, 1, 0, pb.Sharding_None)
+			a.setRestartService("s1")
+			assert.Equal(t, int32(-1), a.remainTxnInService("s1"))
+		})
+}
+
 func TestGetWithNoBind(t *testing.T) {
 	runLockTableAllocatorTest(
 		t,
@@ -100,22 +144,9 @@ func TestCheckTimeoutServiceTask(t *testing.T) {
 			// create s1 bind
 			a.Get("s1", 0, 1, 0, pb.Sharding_None)
 
-			// wait bind timeout
-			for {
-				time.Sleep(time.Millisecond * 10)
-				binds := a.getServiceBinds("s1")
-				if binds != nil {
-					continue
-				}
-				a.mu.Lock()
-				if len(a.getLockTablesLocked(0)) > 0 {
-					assert.Equal(t,
-						pb.LockTable{ServiceID: "s1", Table: 1, Version: 1, OriginTable: 1, Valid: false},
-						a.getLockTablesLocked(0)[1])
-				}
-				a.mu.Unlock()
-				return
-			}
+			time.Sleep(time.Millisecond * 10)
+			bind := a.GetLatest(0, 1)
+			require.False(t, bind.Valid)
 		})
 }
 
@@ -142,7 +173,7 @@ func TestKeepaliveBind(t *testing.T) {
 					bind,
 					c,
 					func(lt pb.LockTable) {}))
-			k := NewLockTableKeeper("s1", c, interval/5, interval/5, m)
+			k := NewLockTableKeeper("s1", c, interval/5, interval/5, m, &service{})
 
 			binds := a.getServiceBinds("s1")
 			assert.NotNil(t, binds)
@@ -157,13 +188,13 @@ func TestKeepaliveBind(t *testing.T) {
 				a.mu.Lock()
 				valid := a.getLockTablesLocked(0)[1].Valid
 				a.mu.Unlock()
-				if !valid {
+				if valid {
 					break
 				}
 				time.Sleep(time.Millisecond * 20)
 			}
 
-			assert.False(t, a.KeepLockTableBind("s1"))
+			assert.True(t, a.KeepLockTableBind("s1"))
 		})
 }
 

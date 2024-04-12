@@ -129,6 +129,7 @@ const (
 	HEX_DECODE
 	HEX_ENCODE
 	HEX
+	UNHEX
 	IFF
 	IFNULL
 	ILIKE
@@ -200,6 +201,7 @@ const (
 	STDDEV_SAMPLE
 	SUBSTR
 	SUM
+	SYSDATE
 	GROUP_CONCAT
 	TAN
 	TO_DATE
@@ -296,7 +298,8 @@ const (
 	// see builtin.ctl.ctl.go to get detail.
 	MO_CTL
 
-	MO_SHOW_VISIBLE_BIN // parse type/onUpdate/default []byte to visible string
+	MO_SHOW_VISIBLE_BIN      // parse type/onUpdate/default []byte to visible string
+	MO_SHOW_VISIBLE_BIN_ENUM //  parse type/onUpdate/default []byte to visible string for enum
 
 	MO_TABLE_ROWS    // table rows
 	MO_TABLE_SIZE    // table size
@@ -465,6 +468,7 @@ var functionIdRegister = map[string]int32{
 	"concat":            CONCAT,
 	"current_timestamp": CURRENT_TIMESTAMP,
 	"now":               CURRENT_TIMESTAMP,
+	"sysdate":           SYSDATE,
 	"floor":             FLOOR,
 	"lpad":              LPAD,
 	"pi":                PI,
@@ -565,6 +569,7 @@ var functionIdRegister = map[string]int32{
 	"uuid":                           UUID,
 	"load_file":                      LOAD_FILE,
 	"hex":                            HEX,
+	"unhex":                          UNHEX,
 	"serial":                         SERIAL,
 	"serial_full":                    SERIAL_FULL,
 	"serial_extract":                 SERIAL_EXTRACT,
@@ -585,6 +590,7 @@ var functionIdRegister = map[string]int32{
 	"mo_disable_memory_usage_detail": MO_DISABLE_MEMORY_USAGE_DETAIL,
 	"mo_ctl":                         MO_CTL,
 	"mo_show_visible_bin":            MO_SHOW_VISIBLE_BIN,
+	"mo_show_visible_bin_enum":       MO_SHOW_VISIBLE_BIN_ENUM,
 	"substring_index":                SUBSTRING_INDEX,
 	"field":                          FIELD,
 	"format":                         FORMAT,

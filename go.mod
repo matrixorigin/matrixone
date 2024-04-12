@@ -1,6 +1,6 @@
 module github.com/matrixorigin/matrixone
 
-go 1.21
+go 1.21.5
 
 require (
 	github.com/BurntSushi/toml v1.2.1
@@ -33,7 +33,6 @@ require (
 	github.com/google/btree v1.1.2
 	github.com/google/gofuzz v1.2.0
 	github.com/google/gops v0.3.25
-	github.com/google/pprof v0.0.0-20230510103437-eeec1cb781c3
 	github.com/google/shlex v0.0.0-20191202100458-e7afc7fbc510
 	github.com/google/uuid v1.5.0
 	github.com/hashicorp/memberlist v0.3.1
@@ -44,9 +43,10 @@ require (
 	github.com/matrixorigin/simdcsv v0.0.0-20230210060146-09b8e45209dd
 	github.com/minio/minio-go/v7 v7.0.63
 	github.com/mohae/deepcopy v0.0.0-20170929034955-c48cc78d4826
+	github.com/nnsgmsone/mmap v0.0.0-20240320065159-dbdd196c4459
 	github.com/panjf2000/ants/v2 v2.7.4
-	github.com/petermattis/goid v0.0.0-20230518223814-80aa455d8761
-	github.com/pierrec/lz4/v4 v4.1.17
+	github.com/parquet-go/parquet-go v0.20.1
+	github.com/pierrec/lz4/v4 v4.1.18
 	github.com/pkg/errors v0.9.1
 	github.com/plar/go-adaptive-radix-tree v1.0.5
 	github.com/prashantv/gostub v1.1.0
@@ -74,18 +74,23 @@ require (
 
 require (
 	github.com/K-Phoen/sdk v0.12.3 // indirect
+	github.com/andybalholm/brotli v1.0.5 // indirect
 	github.com/cespare/xxhash v1.1.0 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
+	github.com/google/pprof v0.0.0-20230510103437-eeec1cb781c3 // indirect
 	github.com/gosimple/slug v1.13.1 // indirect
 	github.com/gosimple/unidecode v1.0.1 // indirect
 	github.com/jmespath/go-jmespath v0.4.0 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
+	github.com/mattn/go-runewidth v0.0.9 // indirect
 	github.com/minio/md5-simd v1.1.2 // indirect
 	github.com/minio/sha256-simd v1.0.1 // indirect
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
 	github.com/modern-go/reflect2 v1.0.2 // indirect
+	github.com/olekukonko/tablewriter v0.0.5 // indirect
 	github.com/opentracing/opentracing-go v1.2.1-0.20220228012449-10b1cf09e00b // indirect
 	github.com/rs/xid v1.5.0 // indirect
+	github.com/segmentio/encoding v0.3.6 // indirect
 	golang.org/x/crypto v0.14.0 // indirect
 	golang.org/x/text v0.13.0 // indirect
 	golang.org/x/time v0.3.0 // indirect
@@ -173,7 +178,7 @@ replace github.com/hashicorp/memberlist => github.com/matrixorigin/memberlist v0
 replace (
 	github.com/elastic/gosigar v0.14.2 => github.com/matrixorigin/gosigar v0.14.3-0.20231205085924-69ea5558fb97
 	github.com/fagongzi/goetty/v2 v2.0.3-0.20230628075727-26c9a2fd5fb8 => github.com/matrixorigin/goetty/v2 v2.0.0-20231122095211-6a25dc9130ca
-	github.com/lni/dragonboat/v4 v4.0.0-20220815145555-6f622e8bcbef => github.com/matrixorigin/dragonboat/v4 v4.0.0-20230426084722-d189534f8004
+	github.com/lni/dragonboat/v4 v4.0.0-20220815145555-6f622e8bcbef => github.com/matrixorigin/dragonboat/v4 v4.0.0-20240312080931-1b40809d7cea
 	github.com/lni/goutils v1.3.1-0.20220604063047-388d67b4dbc4 => github.com/matrixorigin/goutils v1.3.1-0.20220604063047-388d67b4dbc4
 	github.com/lni/vfs v0.2.1-0.20220616104132-8852fd867376 => github.com/matrixorigin/vfs v0.2.1-0.20220616104132-8852fd867376
 )

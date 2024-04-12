@@ -124,7 +124,7 @@ func (pse *PrepareStmtExecutor) ResponseAfterExec(ctx context.Context, ses *Sess
 
 func (pse *PrepareStmtExecutor) ExecuteImpl(ctx context.Context, ses *Session) error {
 	var err error
-	pse.prepareStmt, err = doPrepareStmt(ctx, ses, pse.ps, "")
+	pse.prepareStmt, err = doPrepareStmt(ctx, ses, pse.ps, "", nil)
 	if err != nil {
 		return err
 	}
@@ -197,10 +197,10 @@ type ExecuteExecutor struct {
 	e              *tree.Execute
 }
 
-func (ee *ExecuteExecutor) Compile(requestCtx context.Context, u interface{}, fill func(interface{}, *batch.Batch) error) (interface{}, error) {
+func (ee *ExecuteExecutor) Compile(requestCtx context.Context, fill func(*batch.Batch) error) (interface{}, error) {
 	var err error
 	var ret interface{}
-	ret, err = ee.baseStmtExecutor.Compile(requestCtx, u, fill)
+	ret, err = ee.baseStmtExecutor.Compile(requestCtx, fill)
 	if err != nil {
 		return nil, err
 	}
@@ -300,7 +300,24 @@ type CreateAccountExecutor struct {
 }
 
 func (cae *CreateAccountExecutor) ExecuteImpl(ctx context.Context, ses *Session) error {
-	return InitGeneralTenant(ctx, ses, cae.ca)
+	create := &CreateAccount{
+		IfNotExists:  cae.ca.IfNotExists,
+		AuthOption:   cae.ca.AuthOption,
+		StatusOption: cae.ca.StatusOption,
+		Comment:      cae.ca.Comment,
+	}
+
+	params := cae.GetProcess().GetPrepareParams()
+	switch val := cae.ca.Name.(type) {
+	case *tree.NumVal:
+		create.Name = val.OrigString()
+	case *tree.ParamExpr:
+		create.Name = params.GetStringAt(val.Offset - 1)
+	default:
+		return moerr.NewInternalError(ctx, "invalid params type")
+	}
+
+	return InitGeneralTenant(ctx, ses, create)
 }
 
 type DropAccountExecutor struct {
@@ -498,7 +515,6 @@ type LoadExecutor struct {
 func (le *LoadExecutor) CommitOrRollbackTxn(ctx context.Context, ses *Session) error {
 	stmt := le.GetAst()
 	tenant := le.tenantName
-	incStatementCounter(tenant, stmt)
 	if le.GetStatus() == stmtExecSuccess {
 		logStatementStatus(ctx, ses, stmt, success, nil)
 	} else {

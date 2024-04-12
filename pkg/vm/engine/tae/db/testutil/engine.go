@@ -105,6 +105,22 @@ func (e *TestEngine) Restart(ctx context.Context) {
 		})
 	assert.NoError(e.t, err)
 }
+func (e *TestEngine) RestartDisableGC(ctx context.Context) {
+	_ = e.DB.Close()
+	var err error
+	e.Opts.GCCfg.GCTTL = 100 * time.Second
+	e.DB, err = db.Open(ctx, e.Dir, e.Opts)
+	// only ut executes this checker
+	e.DB.DiskCleaner.GetCleaner().AddChecker(
+		func(item any) bool {
+			min := e.DB.TxnMgr.MinTSForTest()
+			ckp := item.(*checkpoint.CheckpointEntry)
+			//logutil.Infof("min: %v, checkpoint: %v", min.ToString(), checkpoint.GetStart().ToString())
+			end := ckp.GetEnd()
+			return !end.GreaterEq(&min)
+		})
+	assert.NoError(e.t, err)
+}
 
 func (e *TestEngine) Close() error {
 	err := e.DB.Close()
@@ -123,16 +139,16 @@ func (e *TestEngine) CheckRowsByScan(exp int, applyDelete bool) {
 	assert.NoError(e.t, txn.Commit(context.Background()))
 }
 func (e *TestEngine) ForceCheckpoint() {
-	err := e.BGCheckpointRunner.ForceFlushWithInterval(e.TxnMgr.StatMaxCommitTS(), context.Background(), time.Second*2, time.Millisecond*10)
+	err := e.BGCheckpointRunner.ForceFlushWithInterval(e.TxnMgr.Now(), context.Background(), time.Second*2, time.Millisecond*10)
 	assert.NoError(e.t, err)
-	err = e.BGCheckpointRunner.ForceIncrementalCheckpoint(e.TxnMgr.StatMaxCommitTS(), false)
+	err = e.BGCheckpointRunner.ForceIncrementalCheckpoint(e.TxnMgr.Now(), false)
 	assert.NoError(e.t, err)
 }
 
 func (e *TestEngine) ForceLongCheckpoint() {
-	err := e.BGCheckpointRunner.ForceFlush(e.TxnMgr.StatMaxCommitTS(), context.Background(), 20*time.Second)
+	err := e.BGCheckpointRunner.ForceFlush(e.TxnMgr.Now(), context.Background(), 20*time.Second)
 	assert.NoError(e.t, err)
-	err = e.BGCheckpointRunner.ForceIncrementalCheckpoint(e.TxnMgr.StatMaxCommitTS(), false)
+	err = e.BGCheckpointRunner.ForceIncrementalCheckpoint(e.TxnMgr.Now(), false)
 	assert.NoError(e.t, err)
 }
 
@@ -420,6 +436,12 @@ func cnReadCheckpoint(t *testing.T, tid uint64, location objectio.Location, fs f
 	ins, del, cnIns, segDel, cb = cnReadCheckpointWithVersion(t, tid, location, fs, logtail.CheckpointCurrentVersion)
 	return
 }
+
+func ReadSnapshotCheckpoint(t *testing.T, tid uint64, location objectio.Location, fs fileservice.FileService) (ins, del, cnIns, segDel *api.Batch, cb []func()) {
+	ins, del, cnIns, segDel, cb = cnReadCheckpointWithVersion(t, tid, location, fs, logtail.CheckpointCurrentVersion)
+	return
+}
+
 func cnReadCheckpointWithVersion(t *testing.T, tid uint64, location objectio.Location, fs fileservice.FileService, ver uint32) (ins, del, cnIns, segDel *api.Batch, cb []func()) {
 	locs := make([]string, 0)
 	locs = append(locs, location.String())
@@ -624,6 +646,29 @@ func checkUserTables(ctx context.Context, t *testing.T, tid uint64, ins, del, cn
 	if seg != nil {
 		isProtoTNBatchEqual(ctx, t, seg, seg2)
 	}
+}
+
+func GetUserTablesInsBatch(t *testing.T, tid uint64, start, end types.TS, c *catalog.Catalog) (*containers.Batch, *containers.Batch) {
+	collector := logtail.NewIncrementalCollector(start, end, false)
+	p := &catalog.LoopProcessor{}
+	p.TombstoneFn = func(be data.Tombstone) error {
+		if be.GetObject().(*catalog.ObjectEntry).GetTable().ID != tid {
+			return nil
+		}
+		return collector.VisitTombstone(be)
+	}
+	p.ObjectFn = func(se *catalog.ObjectEntry) error {
+		if se.GetTable().ID != tid {
+			return nil
+		}
+		return collector.VisitObj(se)
+	}
+	err := c.RecurLoop(p)
+	assert.NoError(t, err)
+	collector.LoadAndCollectObject(c, collector.VisitObj)
+	data := collector.OrphanData()
+	bats := data.GetBatches()
+	return bats[logtail.BLKMetaInsertIDX], bats[logtail.ObjectInfoIDX]
 }
 
 func CheckCheckpointReadWrite(

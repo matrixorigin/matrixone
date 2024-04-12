@@ -16,6 +16,7 @@ package tables
 
 import (
 	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -120,8 +121,8 @@ func LoadPersistedDeletes(
 	fs *objectio.ObjectFS,
 	location objectio.Location,
 	mp *mpool.MPool,
-) (bat *containers.Batch, isPersistedByCN bool, err error) {
-	movbat, isPersistedByCN, err := blockio.ReadBlockDelete(ctx, location, fs.Service)
+) (bat *containers.Batch, isPersistedByCN bool, release func(), err error) {
+	movbat, isPersistedByCN, release, err := blockio.ReadBlockDelete(ctx, location, fs.Service)
 	if err != nil {
 		return
 	}
