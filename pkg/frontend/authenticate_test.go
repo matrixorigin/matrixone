@@ -6439,7 +6439,7 @@ func TestDoRevokePrivilegeImplicitly(t *testing.T) {
 
 		stmt := &tree.DropTable{
 			Names: tree.TableNames{
-				tree.NewTableName(tree.Identifier("test1"), tree.ObjectNamePrefix{}, nil),
+				tree.NewTableName(tree.Identifier("test1"), tree.ObjectNamePrefix{}),
 			},
 		}
 
