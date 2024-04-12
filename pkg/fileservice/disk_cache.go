@@ -118,11 +118,12 @@ var _ IOVectorCache = new(DiskCache)
 func (d *DiskCache) Read(
 	ctx context.Context,
 	vector *IOVector,
+	needCacheData bool,
 ) (
 	err error,
 ) {
 
-	if vector.Policy.Any(SkipDiskCacheReads) {
+	if vector.Policy.Any(d.SkipReadPolicy()) {
 		return nil
 	}
 
@@ -227,7 +228,7 @@ func (d *DiskCache) Read(
 			d.cache.Set(diskPath, struct{}{}, int(fileSize(stat)))
 		}
 
-		if err := entry.ReadFromOSFile(file); err != nil {
+		if err := entry.readFromOSFile(file, needCacheData); err != nil {
 			// ignore error
 			numError++
 			logutil.Warn("read disk cache error", zap.Any("error", err))
@@ -258,7 +259,7 @@ func (d *DiskCache) Update(
 	err error,
 ) {
 
-	if vector.Policy.Any(SkipDiskCacheWrites) {
+	if vector.Policy.Any(d.SkipWritePolicy()) {
 		return nil
 	}
 
@@ -404,6 +405,18 @@ func (d *DiskCache) writeFile(
 }
 
 func (d *DiskCache) Flush() {
+}
+
+func (d *DiskCache) SkipReadPolicy() Policy {
+	return SkipDiskCacheReads
+}
+
+func (d *DiskCache) SkipWritePolicy() Policy {
+	return SkipDiskCacheWrites
+}
+
+func (d *DiskCache) SkipPolicy() Policy {
+	return SkipDiskCache
 }
 
 const cacheFileSuffix = ".mofscache"

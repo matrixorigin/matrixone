@@ -318,16 +318,15 @@ func (l *LocalFS) Read(ctx context.Context, vector *IOVector) (err error) {
 	stats.AddLockTimeConsumption(time.Since(startLock))
 
 	allocator := l.allocator
-	if vector.Policy.Any(SkipMemoryCache) {
-		allocator = DefaultCacheDataAllocator
-	}
 	for i := range vector.Entries {
 		vector.Entries[i].allocator = allocator
 	}
 
+	needCacheData := vector.needCacheData(l.memCache, l.diskCache)
+
 	for _, cache := range vector.Caches {
 		cache := cache
-		if err := readCache(ctx, cache, vector); err != nil {
+		if err := readCache(ctx, cache, vector, needCacheData); err != nil {
 			return err
 		}
 		defer func() {
@@ -339,7 +338,7 @@ func (l *LocalFS) Read(ctx context.Context, vector *IOVector) (err error) {
 	}
 
 	if l.memCache != nil {
-		if err := readCache(ctx, l.memCache, vector); err != nil {
+		if err := readCache(ctx, l.memCache, vector, needCacheData); err != nil {
 			return err
 		}
 		defer func() {
@@ -356,7 +355,7 @@ func (l *LocalFS) Read(ctx context.Context, vector *IOVector) (err error) {
 	}()
 
 	if l.diskCache != nil {
-		if err := readCache(ctx, l.diskCache, vector); err != nil {
+		if err := readCache(ctx, l.diskCache, vector, needCacheData); err != nil {
 			return err
 		}
 		defer func() {
@@ -368,7 +367,7 @@ func (l *LocalFS) Read(ctx context.Context, vector *IOVector) (err error) {
 	}
 
 	if l.remoteCache != nil {
-		if err := readCache(ctx, l.remoteCache, vector); err != nil {
+		if err := readCache(ctx, l.remoteCache, vector, needCacheData); err != nil {
 			return err
 		}
 	}
@@ -402,9 +401,11 @@ func (l *LocalFS) ReadCache(ctx context.Context, vector *IOVector) (err error) {
 	}
 	statistic.StatsInfoFromContext(ctx).AddLockTimeConsumption(time.Since(startLock))
 
+	needCacheData := vector.needCacheData(l.memCache, l.diskCache)
+
 	for _, cache := range vector.Caches {
 		cache := cache
-		if err := readCache(ctx, cache, vector); err != nil {
+		if err := readCache(ctx, cache, vector, needCacheData); err != nil {
 			return err
 		}
 		defer func() {
@@ -416,7 +417,7 @@ func (l *LocalFS) ReadCache(ctx context.Context, vector *IOVector) (err error) {
 	}
 
 	if l.memCache != nil {
-		if err := readCache(ctx, l.memCache, vector); err != nil {
+		if err := readCache(ctx, l.memCache, vector, needCacheData); err != nil {
 			return err
 		}
 	}
@@ -444,6 +445,8 @@ func (l *LocalFS) read(ctx context.Context, vector *IOVector, bytesCounter *atom
 		return err
 	}
 	defer file.Close()
+
+	needCacheData := vector.needCacheData(l.memCache, l.diskCache)
 
 	for i, entry := range vector.Entries {
 		if entry.Size == 0 {
@@ -473,7 +476,8 @@ func (l *LocalFS) read(ctx context.Context, vector *IOVector, bytesCounter *atom
 				C: bytesCounter,
 			}
 
-			if entry.ToCacheData != nil {
+			if vector.needCacheData(l.memCache, l.diskCache) &&
+				entry.ToCacheData != nil {
 				r = io.TeeReader(r, entry.WriterForRead)
 				counter := new(atomic.Int64)
 				cr := &countingReader{
@@ -534,7 +538,7 @@ func (l *LocalFS) read(ctx context.Context, vector *IOVector, bytesCounter *atom
 					closeFunc: file.Close,
 				}
 
-			} else {
+			} else if vector.needCacheData(l.memCache, l.diskCache) {
 				buf := new(bytes.Buffer)
 				*entry.ReadCloserForRead = &readCloser{
 					r: io.TeeReader(r, buf),
@@ -593,7 +597,7 @@ func (l *LocalFS) read(ctx context.Context, vector *IOVector, bytesCounter *atom
 				}
 			}
 
-			if err = entry.setCachedData(); err != nil {
+			if err = entry.setCachedData(needCacheData); err != nil {
 				return err
 			}
 

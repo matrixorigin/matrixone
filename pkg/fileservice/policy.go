@@ -21,15 +21,18 @@ const (
 	SkipMemoryCacheWrites
 	SkipDiskCacheReads
 	SkipDiskCacheWrites
+	SkipRemoteCacheReads
+	SkipRemoteCacheWrites
 	SkipFullFilePreloads
 )
 
 const (
-	SkipCacheReads  = SkipMemoryCacheReads | SkipDiskCacheReads
-	SkipCacheWrites = SkipMemoryCacheWrites | SkipDiskCacheWrites
 	SkipDiskCache   = SkipDiskCacheReads | SkipDiskCacheWrites
 	SkipMemoryCache = SkipMemoryCacheReads | SkipMemoryCacheWrites
-	SkipAllCache    = SkipDiskCache | SkipMemoryCache
+	SkipRemoteCache = SkipRemoteCacheReads | SkipRemoteCacheWrites
+	SkipCacheReads  = SkipMemoryCacheReads | SkipDiskCacheReads | SkipRemoteCacheReads
+	SkipCacheWrites = SkipMemoryCacheWrites | SkipDiskCacheWrites | SkipRemoteCacheWrites
+	SkipAllCache    = SkipDiskCache | SkipMemoryCache | SkipRemoteCache
 )
 
 func (c Policy) Any(policies ...Policy) bool {

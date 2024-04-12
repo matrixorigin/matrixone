@@ -84,7 +84,7 @@ func TestRemoteCache(t *testing.T) {
 				},
 			},
 		}
-		err = sf2.rc.Read(ctx, ioVec2)
+		err = sf2.rc.Read(ctx, ioVec2, true)
 		assert.NoError(t, err)
 		assert.Equal(t, 1, len(ioVec2.Entries))
 		assert.Equal(t, Bytes{1, 2}, ioVec2.Entries[0].CachedData)

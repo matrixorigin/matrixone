@@ -97,11 +97,12 @@ func (m *MemCache) Alloc(n int) memorycache.CacheData {
 func (m *MemCache) Read(
 	ctx context.Context,
 	vector *IOVector,
+	needCacheData bool,
 ) (
 	err error,
 ) {
 
-	if vector.Policy.Any(SkipMemoryCacheReads) {
+	if vector.Policy.Any(m.SkipReadPolicy()) {
 		return nil
 	}
 
@@ -152,7 +153,7 @@ func (m *MemCache) Update(
 	async bool,
 ) error {
 
-	if vector.Policy.Any(SkipMemoryCacheWrites) {
+	if vector.Policy.Any(m.SkipWritePolicy()) {
 		return nil
 	}
 
@@ -190,4 +191,16 @@ func (m *MemCache) DeletePaths(
 ) error {
 	m.cache.DeletePaths(ctx, paths)
 	return nil
+}
+
+func (m *MemCache) SkipReadPolicy() Policy {
+	return SkipMemoryCacheReads
+}
+
+func (m *MemCache) SkipWritePolicy() Policy {
+	return SkipMemoryCacheWrites
+}
+
+func (m *MemCache) SkipPolicy() Policy {
+	return SkipMemoryCache
 }

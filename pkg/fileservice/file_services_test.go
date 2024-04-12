@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/util/toml"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -27,7 +28,9 @@ func TestFileServices(t *testing.T) {
 		testFileService(t, 0, func(name string) FileService {
 			ctx := context.Background()
 			dir := t.TempDir()
-			fs, err := NewLocalFS(ctx, name, dir, DisabledCacheConfig, nil)
+			fs, err := NewLocalFS(ctx, name, dir, CacheConfig{
+				MemoryCapacity: ptrTo(toml.ByteSize(1 << 30)),
+			}, nil)
 			assert.Nil(t, err)
 			fs2, err := NewFileServices(name, fs)
 			assert.Nil(t, err)

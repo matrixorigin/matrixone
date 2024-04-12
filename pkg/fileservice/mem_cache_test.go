@@ -61,7 +61,7 @@ func TestMemCacheLeak(t *testing.T) {
 			},
 		},
 	}
-	err = m.Read(ctx, vec)
+	err = m.Read(ctx, vec, true)
 	assert.Nil(t, err)
 	vec.Release()
 	err = fs.Read(ctx, vec)
@@ -87,7 +87,7 @@ func TestMemCacheLeak(t *testing.T) {
 			},
 		},
 	}
-	err = m.Read(ctx, vec)
+	err = m.Read(ctx, vec, true)
 	assert.Nil(t, err)
 	vec.Release()
 	err = fs.Read(ctx, vec)

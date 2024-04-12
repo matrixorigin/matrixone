@@ -52,7 +52,7 @@ func NewRemoteCache(client client.QueryClient, factory KeyRouterFactory[query.Ca
 	}
 }
 
-func (r *RemoteCache) Read(ctx context.Context, vector *IOVector) error {
+func (r *RemoteCache) Read(ctx context.Context, vector *IOVector, needCacheData bool) error {
 	if r.keyRouterFactory == nil {
 		return nil
 	}
@@ -148,6 +148,18 @@ func (r *RemoteCache) Flush() {}
 func (r *RemoteCache) DeletePaths(ctx context.Context, paths []string) error {
 	//TODO
 	return nil
+}
+
+func (r *RemoteCache) SkipReadPolicy() Policy {
+	return SkipRemoteCacheReads
+}
+
+func (r *RemoteCache) SkipWritePolicy() Policy {
+	return SkipRemoteCacheWrites
+}
+
+func (r *RemoteCache) SkipPolicy() Policy {
+	return SkipRemoteCache
 }
 
 func HandleRemoteRead(

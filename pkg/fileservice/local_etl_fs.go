@@ -202,6 +202,8 @@ func (l *LocalETLFS) Read(ctx context.Context, vector *IOVector) error {
 		return err
 	}
 
+	needCacheData := vector.needCacheData(nil, nil)
+
 	for i, entry := range vector.Entries {
 		if entry.Size == 0 {
 			return moerr.NewEmptyRangeNoCtx(path.File)
@@ -230,7 +232,8 @@ func (l *LocalETLFS) Read(ctx context.Context, vector *IOVector) error {
 				r = io.LimitReader(r, int64(entry.Size))
 			}
 
-			if entry.ToCacheData != nil {
+			if vector.needCacheData(nil, nil) &&
+				entry.ToCacheData != nil {
 				r = io.TeeReader(r, entry.WriterForRead)
 				counter := new(atomic.Int64)
 				cr := &countingReader{
@@ -281,7 +284,7 @@ func (l *LocalETLFS) Read(ctx context.Context, vector *IOVector) error {
 					r:         r,
 					closeFunc: f.Close,
 				}
-			} else {
+			} else if vector.needCacheData(nil, nil) {
 				buf := new(bytes.Buffer)
 				*entry.ReadCloserForRead = &readCloser{
 					r: io.TeeReader(r, buf),
@@ -339,7 +342,7 @@ func (l *LocalETLFS) Read(ctx context.Context, vector *IOVector) error {
 				}
 			}
 
-			if err := entry.setCachedData(); err != nil {
+			if err := entry.setCachedData(needCacheData); err != nil {
 				return err
 			}
 

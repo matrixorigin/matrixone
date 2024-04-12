@@ -81,10 +81,6 @@ func testCachingFileService(
 	err = fs.Read(ctx, vec)
 	assert.Nil(t, err)
 
-	err = m.Unmarshal(vec.Entries[0].CachedData.Bytes())
-	assert.NoError(t, err)
-	assert.Equal(t, 1, len(m.M))
-	assert.Equal(t, int64(42), m.M[42])
 	assert.Equal(t, int64(0), counterSet.FileService.Cache.Read.Load())
 	assert.Equal(t, int64(0), counterSet.FileService.Cache.Hit.Load())
 

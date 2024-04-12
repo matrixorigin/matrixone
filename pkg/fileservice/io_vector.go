@@ -85,3 +85,25 @@ func (i *IOVector) ioLockKey() IOLockKey {
 	}
 	return key
 }
+
+func (i *IOVector) needCacheData(
+	memoryCache *MemCache,
+	diskCache *DiskCache,
+) bool {
+
+	if memoryCache != nil && !i.Policy.Any(memoryCache.SkipWritePolicy()) {
+		return true
+	}
+
+	if diskCache != nil && !i.Policy.Any(diskCache.SkipWritePolicy()) {
+		return true
+	}
+
+	for _, cache := range i.Caches {
+		if cache != nil && !i.Policy.Any(cache.SkipWritePolicy()) {
+			return true
+		}
+	}
+
+	return false
+}

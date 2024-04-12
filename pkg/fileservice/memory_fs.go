@@ -191,7 +191,7 @@ func (m *MemoryFS) Read(ctx context.Context, vector *IOVector) (err error) {
 	}
 	for _, cache := range m.caches {
 		cache := cache
-		if err := cache.Read(ctx, vector); err != nil {
+		if err := cache.Read(ctx, vector, vector.needCacheData(m.memCache, nil)); err != nil {
 			return err
 		}
 		defer func() {
@@ -222,6 +222,8 @@ func (m *MemoryFS) Read(ctx context.Context, vector *IOVector) (err error) {
 	if !ok {
 		return moerr.NewFileNotFoundNoCtx(path.File)
 	}
+
+	needCacheData := vector.needCacheData(m.memCache, nil)
 
 	for i, entry := range vector.Entries {
 		if entry.done {
@@ -265,7 +267,7 @@ func (m *MemoryFS) Read(ctx context.Context, vector *IOVector) (err error) {
 			}
 		}
 
-		if err := entry.setCachedData(); err != nil {
+		if err := entry.setCachedData(needCacheData); err != nil {
 			return err
 		}
 

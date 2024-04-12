@@ -105,7 +105,7 @@ func TestDiskCache(t *testing.T) {
 				},
 			},
 		}
-		err = cache.Read(ctx, vec)
+		err = cache.Read(ctx, vec, true)
 		assert.Nil(t, err)
 		assert.NotNil(t, r)
 		defer r.Close()
@@ -202,7 +202,7 @@ func TestDiskCacheWriteAgain(t *testing.T) {
 				Size: 3,
 			},
 		},
-	})
+	}, true)
 	assert.Nil(t, err)
 	assert.Equal(t, int64(1), counterSet.FileService.Cache.Disk.Hit.Load())
 
@@ -254,7 +254,7 @@ func TestDiskCacheFileCache(t *testing.T) {
 			},
 		},
 	}
-	err = cache.Read(ctx, readVector)
+	err = cache.Read(ctx, readVector, true)
 	assert.Nil(t, err)
 	assert.Equal(t, []byte("fo"), readVector.Entries[0].Data)
 	assert.Equal(t, []byte("ob"), readVector.Entries[1].Data)
@@ -372,6 +372,7 @@ func benchmarkDiskCacheWriteThenRead(
 			err = cache.Read(
 				ctx,
 				vec,
+				true,
 			)
 			if err != nil {
 				b.Fatal(err)
@@ -452,6 +453,7 @@ func benchmarkDiskCacheReadRandomOffsetAtLargeFile(
 			err = cache.Read(
 				ctx,
 				vec,
+				true,
 			)
 			if err != nil {
 				b.Fatal(err)
@@ -516,6 +518,7 @@ func BenchmarkDiskCacheMultipleIOEntries(b *testing.B) {
 				FilePath: "foo",
 				Entries:  entries,
 			},
+			true,
 		)
 		if err != nil {
 			b.Fatal(err)

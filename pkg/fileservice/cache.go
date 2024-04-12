@@ -132,6 +132,7 @@ type IOVectorCache interface {
 	Read(
 		ctx context.Context,
 		vector *IOVector,
+		needCacheData bool,
 	) error
 	Update(
 		ctx context.Context,
@@ -144,17 +145,20 @@ type IOVectorCache interface {
 		ctx context.Context,
 		paths []string,
 	) error
+	SkipReadPolicy() Policy
+	SkipWritePolicy() Policy
+	SkipPolicy() Policy
 }
 
 var slowCacheReadThreshold = time.Second * 0
 
-func readCache(ctx context.Context, cache IOVectorCache, vector *IOVector) error {
+func readCache(ctx context.Context, cache IOVectorCache, vector *IOVector, needCacheData bool) error {
 	if slowCacheReadThreshold > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, slowCacheReadThreshold)
 		defer cancel()
 	}
-	err := cache.Read(ctx, vector)
+	err := cache.Read(ctx, vector, needCacheData)
 	if err != nil {
 		if errors.Is(err, context.DeadlineExceeded) {
 			logutil.Warn("cache read exceed deadline",

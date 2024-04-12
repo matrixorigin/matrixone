@@ -701,6 +701,10 @@ func testFileService(
 				},
 			},
 			Policy: policy,
+			Caches: []IOVectorCache{
+				// to ensure ToCacheData will be called
+				NewMemCache(NewMemoryCache(1<<30, true, nil), nil),
+			},
 		}
 		err = fs.Read(ctx, vec)
 		assert.Nil(t, err)

@@ -378,7 +378,7 @@ func (s *S3FS) write(ctx context.Context, vector IOVector) (bytesWritten int, er
 	}
 
 	// write to disk cache
-	if s.diskCache != nil && !vector.Policy.Any(SkipDiskCacheWrites) {
+	if s.diskCache != nil && !vector.Policy.Any(s.diskCache.SkipWritePolicy()) {
 		if err := s.diskCache.SetFile(ctx, vector.FilePath, func(context.Context) (io.ReadCloser, error) {
 			return io.NopCloser(bytes.NewReader(content)), nil
 		}); err != nil {
@@ -413,16 +413,15 @@ func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
 	stats.AddLockTimeConsumption(time.Since(startLock))
 
 	allocator := s.allocator
-	if vector.Policy.Any(SkipMemoryCache) {
-		allocator = DefaultCacheDataAllocator
-	}
 	for i := range vector.Entries {
 		vector.Entries[i].allocator = allocator
 	}
 
+	needCacheData := vector.needCacheData(s.memCache, s.diskCache)
+
 	for _, cache := range vector.Caches {
 		cache := cache
-		if err := readCache(ctx, cache, vector); err != nil {
+		if err := readCache(ctx, cache, vector, needCacheData); err != nil {
 			return err
 		}
 		defer func() {
@@ -434,7 +433,7 @@ func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
 	}
 
 	if s.memCache != nil {
-		if err := readCache(ctx, s.memCache, vector); err != nil {
+		if err := readCache(ctx, s.memCache, vector, needCacheData); err != nil {
 			return err
 		}
 		defer func() {
@@ -451,7 +450,7 @@ func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
 	}()
 
 	if s.diskCache != nil {
-		if err := readCache(ctx, s.diskCache, vector); err != nil {
+		if err := readCache(ctx, s.diskCache, vector, needCacheData); err != nil {
 			return err
 		}
 		// try to cache IOEntry if not caching the full file
@@ -466,7 +465,7 @@ func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
 	}
 
 	if s.remoteCache != nil {
-		if err := readCache(ctx, s.remoteCache, vector); err != nil {
+		if err := readCache(ctx, s.remoteCache, vector, needCacheData); err != nil {
 			return err
 		}
 	}
@@ -492,9 +491,11 @@ func (s *S3FS) ReadCache(ctx context.Context, vector *IOVector) (err error) {
 	}
 	statistic.StatsInfoFromContext(ctx).AddLockTimeConsumption(time.Since(startLock))
 
+	needCacheData := vector.needCacheData(s.memCache, s.diskCache)
+
 	for _, cache := range vector.Caches {
 		cache := cache
-		if err := readCache(ctx, cache, vector); err != nil {
+		if err := readCache(ctx, cache, vector, needCacheData); err != nil {
 			return err
 		}
 		defer func() {
@@ -506,7 +507,7 @@ func (s *S3FS) ReadCache(ctx context.Context, vector *IOVector) (err error) {
 	}
 
 	if s.memCache != nil {
-		if err := readCache(ctx, s.memCache, vector); err != nil {
+		if err := readCache(ctx, s.memCache, vector, needCacheData); err != nil {
 			return err
 		}
 	}
@@ -586,6 +587,9 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) (err error) {
 	defer func() {
 		metric.FSReadS3Counter.Add(float64(numNotDoneEntries))
 	}()
+
+	needCacheData := vector.needCacheData(s.memCache, s.diskCache)
+
 	for i, entry := range vector.Entries {
 		if entry.done {
 			continue
@@ -710,7 +714,7 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) (err error) {
 			}
 		}
 
-		if err = entry.setCachedData(); err != nil {
+		if err = entry.setCachedData(needCacheData); err != nil {
 			return err
 		}
 
@@ -722,7 +726,7 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) (err error) {
 		contentErr == nil &&
 		len(contentBytes) > 0 &&
 		s.diskCache != nil &&
-		!vector.Policy.Any(SkipDiskCacheWrites) {
+		!vector.Policy.Any(s.diskCache.SkipWritePolicy()) {
 		if err := s.diskCache.SetFile(ctx, vector.FilePath, func(context.Context) (io.ReadCloser, error) {
 			return io.NopCloser(bytes.NewReader(contentBytes)), nil
 		}); err != nil {
