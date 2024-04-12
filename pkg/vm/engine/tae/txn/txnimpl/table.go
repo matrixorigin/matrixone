@@ -576,9 +576,9 @@ func (tbl *txnTable) Append(ctx context.Context, data *containers.Batch) (err er
 				data.Vecs[tbl.schema.GetSingleSortKeyIdx()], true); err != nil {
 				return
 			}
-		} else {
-			// skip all dedup
-		}
+		} //else {
+		// skip all dedup
+		//}
 	}
 	if tbl.tableSpace == nil {
 		tbl.tableSpace = newTableSpace(tbl)

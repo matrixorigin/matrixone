@@ -1161,7 +1161,7 @@ func (h *Handle) HandleDeduplicateCtl(
 	req *db.Deduplicate,
 	resp *api.SyncLogTailResp,
 ) (func(), error) {
-	dedupType, _ := db.DedupName2Type[req.Cmd]
+	dedupType := db.DedupName2Type[req.Cmd]
 	h.db.Opts.DeduplicateType.Store(int32(dedupType))
 	return nil, nil
 }
