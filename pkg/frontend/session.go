@@ -543,6 +543,8 @@ func NewSession(proto MysqlProtocol, mp *mpool.MPool, gSysVars *GlobalSystemVari
 }
 
 func (ses *Session) Close() {
+	ses.feSessionImpl.Close()
+	ses.feSessionImpl.Clear()
 	ses.proto = nil
 	ses.mrs = nil
 	ses.data = nil
@@ -616,11 +618,7 @@ func (ses *Session) Close() {
 }
 
 func (ses *Session) Clear() {
-	if ses == nil {
-		return
-	}
-	ses.ClearAllMysqlResultSet()
-	ses.ClearResultBatches()
+	ses.feSessionImpl.Clear()
 }
 
 func (ses *Session) GetIncBlockIdx() int {

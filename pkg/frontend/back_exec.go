@@ -49,6 +49,9 @@ type backExec struct {
 
 func (back *backExec) Close() {
 	back.Clear()
+	back.backSes.Close()
+	back.backSes.Clear()
+	back.backSes = nil
 }
 
 func (back *backExec) Exec(ctx context.Context, sql string) error {
@@ -120,7 +123,7 @@ func (back *backExec) ClearExecResultBatches() {
 }
 
 func (back *backExec) Clear() {
-	back.backSes.clear()
+	back.backSes.Clear()
 }
 
 // execute query
@@ -593,6 +596,16 @@ type backSession struct {
 	connectCtx context.Context
 }
 
+func (ses *backSession) Close() {
+	ses.feSessionImpl.Close()
+	ses.requestCtx = nil
+	ses.connectCtx = nil
+}
+
+func (ses *backSession) Clear() {
+	ses.feSessionImpl.Clear()
+}
+
 func (ses *backSession) GetOutputCallback() func(*batch.Batch) error {
 	return func(bat *batch.Batch) error {
 		return ses.outputCallback(ses, bat)
@@ -897,24 +910,6 @@ func (backSes *backSession) GetRequestContext() context.Context {
 
 func (backSes *backSession) GetTimeZone() *time.Location {
 	return backSes.timeZone
-}
-
-func (backSes *backSession) clear() {
-	backSes.requestCtx = nil
-	backSes.connectCtx = nil
-	backSes.pool = nil
-	backSes.proto = nil
-	if backSes.buf != nil {
-		backSes.buf.Free()
-		backSes.buf = nil
-	}
-	backSes.tenant = nil
-	backSes.txnHandler = nil
-	backSes.txnCompileCtx = nil
-	backSes.mrs = nil
-	backSes.allResultSet = nil
-	backSes.resultBatches = nil
-	backSes.gSysVars = nil
 }
 
 func (backSes *backSession) IsDerivedStmt() bool {

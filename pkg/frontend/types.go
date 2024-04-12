@@ -76,6 +76,7 @@ type ComputationWrapper interface {
 	GetLoadTag() bool
 
 	GetServerStatus() uint16
+	Clear()
 }
 
 type ColumnInfo interface {
@@ -343,6 +344,8 @@ type FeSession interface {
 	SetTStmt(stmt *motrace.StatementInfo)
 	GetUUIDString() string
 	DisableTrace() bool
+	Close()
+	Clear()
 }
 
 type ExecCtx struct {
@@ -411,6 +414,42 @@ type feSessionImpl struct {
 	uuid         uuid.UUID
 	debugStr     string
 	disableTrace bool
+}
+
+func (ses *feSessionImpl) Close() {
+	ses.proto = nil
+	ses.mrs = nil
+	if ses.txnHandler != nil {
+		ses.txnHandler.ses = nil
+		ses.txnHandler = nil
+	}
+	if ses.txnCompileCtx != nil {
+		ses.txnCompileCtx.ses = nil
+		ses.txnCompileCtx = nil
+	}
+	ses.sql = ""
+	ses.gSysVars = nil
+	ses.allResultSet = nil
+	ses.tenant = nil
+	ses.debugStr = ""
+	ses.rs = nil
+	ses.ClearStmtProfile()
+	for _, bat := range ses.resultBatches {
+		bat.Clean(ses.pool)
+	}
+	if ses.buf != nil {
+		ses.buf.Free()
+		ses.buf = nil
+	}
+	ses.upstream = nil
+}
+
+func (ses *feSessionImpl) Clear() {
+	if ses == nil {
+		return
+	}
+	ses.ClearAllMysqlResultSet()
+	ses.ClearResultBatches()
 }
 
 func (ses *feSessionImpl) DisableTrace() bool {

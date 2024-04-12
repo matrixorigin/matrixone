@@ -107,6 +107,7 @@ func Test_mce(t *testing.T) {
 		ioses.EXPECT().Flush(gomock.Any()).AnyTimes()
 		use_t := mock_frontend.NewMockComputationWrapper(ctrl)
 		use_t.EXPECT().GetUUID().Return(make([]byte, 16)).AnyTimes()
+		use_t.EXPECT().Clear().AnyTimes()
 		stmts, err := parsers.Parse(ctx, dialect.MYSQL, "use T", 1, 0)
 		if err != nil {
 			t.Error(err)
@@ -128,6 +129,7 @@ func Test_mce(t *testing.T) {
 		create_1.EXPECT().Run(gomock.Any()).Return(nil, nil).AnyTimes()
 		create_1.EXPECT().GetLoadTag().Return(false).AnyTimes()
 		create_1.EXPECT().RecordExecPlan(ctx).Return(nil).AnyTimes()
+		create_1.EXPECT().Clear().AnyTimes()
 
 		select_1 := mock_frontend.NewMockComputationWrapper(ctrl)
 		stmts, err = parsers.Parse(ctx, dialect.MYSQL, "select a,b,c from A", 1, 0)
@@ -140,6 +142,7 @@ func Test_mce(t *testing.T) {
 		select_1.EXPECT().Run(gomock.Any()).Return(nil, nil).AnyTimes()
 		select_1.EXPECT().GetLoadTag().Return(false).AnyTimes()
 		select_1.EXPECT().RecordExecPlan(ctx).Return(nil).AnyTimes()
+		select_1.EXPECT().Clear().AnyTimes()
 
 		cola := &MysqlColumn{}
 		cola.SetName("a")
@@ -218,6 +221,7 @@ func Test_mce(t *testing.T) {
 			select_2.EXPECT().GetLoadTag().Return(false).AnyTimes()
 			select_2.EXPECT().GetColumns().Return(self_handle_sql_columns[i], nil).AnyTimes()
 			select_2.EXPECT().RecordExecPlan(ctx).Return(nil).AnyTimes()
+			select_2.EXPECT().Clear().AnyTimes()
 			cws = append(cws, select_2)
 		}
 
@@ -1437,6 +1441,7 @@ func Test_ExecRequest(t *testing.T) {
 		}
 		use_t.EXPECT().GetAst().Return(stmts[0]).AnyTimes()
 		use_t.EXPECT().RecordExecPlan(ctx).Return(nil).AnyTimes()
+		use_t.EXPECT().Clear().AnyTimes()
 
 		runner := mock_frontend.NewMockComputationRunner(ctrl)
 		runner.EXPECT().Run(gomock.Any()).Return(nil, nil).AnyTimes()

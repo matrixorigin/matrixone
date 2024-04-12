@@ -2753,6 +2753,7 @@ func doComQuery(requestCtx context.Context, ses *Session, input *UserInput) (ret
 					return nil
 				}
 			}
+			cw.Clear()
 		}
 		Cached = true
 		ses.cachePlan(input.getSql(), stmts, plans)

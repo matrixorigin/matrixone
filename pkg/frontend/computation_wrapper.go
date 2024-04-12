@@ -87,6 +87,9 @@ func (ncw *NullComputationWrapper) Run(ts uint64) (*util2.RunResult, error) {
 func (ncw *NullComputationWrapper) GetLoadTag() bool {
 	return false
 }
+func (ncw *NullComputationWrapper) Clear() {
+
+}
 
 type TxnComputationWrapper struct {
 	stmt      tree.Statement
@@ -122,6 +125,14 @@ func (cwft *TxnComputationWrapper) Free() {
 			cwft.stmt = nil
 		}
 	}
+	cwft.plan = nil
+	cwft.proc = nil
+	cwft.ses = nil
+	cwft.compile = nil
+	cwft.runResult = nil
+}
+
+func (cwft *TxnComputationWrapper) Clear() {
 	cwft.plan = nil
 	cwft.proc = nil
 	cwft.ses = nil
