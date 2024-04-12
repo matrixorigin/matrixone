@@ -120,16 +120,18 @@ type IDGenerator interface {
 
 type Engine struct {
 	sync.RWMutex
-	mp         *mpool.MPool
-	fs         fileservice.FileService
-	ls         lockservice.LockService
-	qc         qclient.QueryClient
-	hakeeper   logservice.CNHAKeeperClient
-	us         udf.Service
-	cli        client.TxnClient
-	idGen      IDGenerator
-	catalog    *cache.CatalogCache
-	tnID       string
+	mp       *mpool.MPool
+	fs       fileservice.FileService
+	ls       lockservice.LockService
+	qc       qclient.QueryClient
+	hakeeper logservice.CNHAKeeperClient
+	us       udf.Service
+	cli      client.TxnClient
+	idGen    IDGenerator
+	//TODO::cache multiple snapshot databases and tables.
+	catalog *cache.CatalogCache
+	tnID    string
+	//TODO::table maybe contains multiple snapshot partition state.
 	partitions map[[2]uint64]*logtailreplay.Partition
 	packerPool *fileservice.Pool[*types.Packer]
 
@@ -154,9 +156,6 @@ type Transaction struct {
 	// this is used to name the file on s3 and then give it to tae to use
 	// not-used now
 	// blockId uint64
-
-	// local timestamp for workspace operations
-	//meta     *txn.TxnMeta
 	op       client.TxnOperator
 	sqlCount atomic.Uint64
 
@@ -176,7 +175,8 @@ type Transaction struct {
 	// interim incremental rowid
 	rowId [6]uint32
 	segId types.Uuid
-	// use to cache opened tables on snapshot by current txn.
+	// use to cache opened snapshot tables by current txn.
+	//TODO::cache snapshot tables for snapshot read.
 	tableCache struct {
 		cachedIndex int
 		tableMap    *sync.Map
@@ -620,7 +620,8 @@ type txnDatabase struct {
 	databaseName      string
 	databaseType      string
 	databaseCreateSql string
-	txn               *Transaction
+	//txn               *Transaction
+	op client.TxnOperator
 
 	rowId types.Rowid
 }
