@@ -4062,17 +4062,13 @@ func (builder *QueryBuilder) resolveTsHint(tsExpr *tree.AtTimeStamp) (timestamp.
 				if err != nil {
 					return timestamp.Timestamp{}, err
 				}
-				return timestamp.Timestamp{LogicalTime: uint32(ts)}, nil
+				return timestamp.Timestamp{PhysicalTime: int64(ts)}, nil
 			} else if tsExpr.Type == tree.ATTIMESTAMPSNAPSHOT {
 				tsValue, err := builder.compCtx.ResolveSnapshotTsWithSnapShotName(lit.Sval)
 				if err != nil {
 					return timestamp.Timestamp{}, err
 				}
-				ts, err := types.ParseTimestamp(time.Local, tsValue, 0)
-				if err != nil {
-					return timestamp.Timestamp{}, err
-				}
-				return timestamp.Timestamp{LogicalTime: uint32(ts)}, nil
+				return timestamp.Timestamp{PhysicalTime: tsValue}, nil
 			}
 		}
 	}

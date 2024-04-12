@@ -9880,12 +9880,12 @@ func checkSnapShotExistOrNot(ctx context.Context, bh BackgroundExec, snapshotNam
 	return false, nil
 }
 
-func doResolveSnapshotTsWithSnapShotName(ctx context.Context, ses *Session, spName string) (snapshotTs string, err error) {
+func doResolveSnapshotTsWithSnapShotName(ctx context.Context, ses *Session, spName string) (snapshotTs int64, err error) {
 	var sql string
 	var erArray []ExecResult
 	err = inputNameIsInvalid(ctx, spName)
 	if err != nil {
-		return "", err
+		return 0, err
 	}
 
 	bh := ses.GetBackgroundExec(ctx)
@@ -9893,27 +9893,27 @@ func doResolveSnapshotTsWithSnapShotName(ctx context.Context, ses *Session, spNa
 
 	sql, err = getSqlForGetSnapshotTsWithSnapshotName(ctx, spName)
 	if err != nil {
-		return "", err
+		return 0, err
 	}
 	bh.ClearExecResultSet()
 	err = bh.Exec(ctx, sql)
 	if err != nil {
-		return "", err
+		return 0, err
 	}
 
 	erArray, err = getResultSet(ctx, bh)
 	if err != nil {
-		return "", err
+		return 0, err
 	}
 
 	if execResultArrayHasData(erArray) {
-		snapshotTs, err = erArray[0].GetString(ctx, 0, 0)
+		snapshotTs, err = erArray[0].GetInt64(ctx, 0, 0)
 		if err != nil {
-			return "", err
+			return 0, err
 		}
 		return snapshotTs, nil
 	} else {
-		return "", moerr.NewInternalError(ctx, "snapshot %s does not exist", spName)
+		return 0, moerr.NewInternalError(ctx, "snapshot %s does not exist", spName)
 	}
 }
 
