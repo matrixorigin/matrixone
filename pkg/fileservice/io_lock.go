@@ -29,54 +29,51 @@ type IOLockKey struct {
 }
 
 type IOLocks struct {
-	mu    sync.Mutex
-	locks map[IOLockKey]chan struct{}
+	locks sync.Map // IOLockKey -> chan struct{}
 }
 
 func NewIOLocks() *IOLocks {
-	return &IOLocks{
-		locks: make(map[IOLockKey]chan struct{}),
-	}
+	return &IOLocks{}
 }
 
 var slowIOWaitDuration = time.Second * 10
 
-func (i *IOLocks) Lock(key IOLockKey) (unlock func(), wait func()) {
-	i.mu.Lock()
-	defer i.mu.Unlock()
-
-	ch, ok := i.locks[key]
-
-	if ok {
-		// not locked
-		wait = func() {
-			t0 := time.Now()
-			for {
-				timer := time.NewTimer(slowIOWaitDuration)
-				select {
-				case <-ch:
-					timer.Stop()
-					return
-				case <-timer.C:
-					logutil.Warn("wait io lock for too long",
-						zap.Any("wait", time.Since(t0)),
-						zap.Any("key", key),
-					)
-				}
+func (i *IOLocks) waitFunc(key IOLockKey, ch chan struct{}) func() {
+	return func() {
+		t0 := time.Now()
+		for {
+			timer := time.NewTimer(slowIOWaitDuration)
+			select {
+			case <-ch:
+				timer.Stop()
+				return
+			case <-timer.C:
+				logutil.Warn("wait io lock for too long",
+					zap.Any("wait", time.Since(t0)),
+					zap.Any("key", key),
+				)
 			}
 		}
-		return
+	}
+}
+
+func (i *IOLocks) Lock(key IOLockKey) (unlock func(), wait func()) {
+	if v, ok := i.locks.Load(key); ok {
+		// wait
+		return nil, i.waitFunc(key, v.(chan struct{}))
+	}
+
+	// try lock
+	ch := make(chan struct{})
+	v, loaded := i.locks.LoadOrStore(key, ch)
+	if loaded {
+		// lock failed, wait
+		return nil, i.waitFunc(key, v.(chan struct{}))
 	}
 
 	// locked
-	ch = make(chan struct{})
-	i.locks[key] = ch
-	unlock = func() {
-		i.mu.Lock()
-		defer i.mu.Unlock()
-		delete(i.locks, key)
+	return func() {
+		i.locks.Delete(key)
 		close(ch)
-	}
-
-	return
+	}, nil
 }

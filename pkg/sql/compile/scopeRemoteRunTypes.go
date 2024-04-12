@@ -396,7 +396,7 @@ func (receiver *messageReceiverOnServer) newCompile() *Compile {
 	c.proc.Ctx = perfcounter.WithCounterSet(c.proc.Ctx, c.counterSet)
 	c.ctx = defines.AttachAccountId(c.proc.Ctx, pHelper.accountId)
 
-	c.fill = func(_ any, b *batch.Batch) error {
+	c.fill = func(b *batch.Batch) error {
 		return receiver.sendBatch(b)
 	}
 	return c

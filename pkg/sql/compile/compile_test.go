@@ -81,7 +81,7 @@ func init() {
 	}
 }
 
-func testPrint(_ interface{}, _ *batch.Batch) error {
+func testPrint(_ *batch.Batch) error {
 	return nil
 }
 
@@ -141,7 +141,7 @@ func TestCompile(t *testing.T) {
 		tc.proc.TxnOperator = txnOperator
 		tc.proc.Ctx = ctx
 		c := NewCompile("test", "test", tc.sql, "", "", ctx, tc.e, tc.proc, tc.stmt, false, nil, time.Now())
-		err := c.Compile(ctx, tc.pn, nil, testPrint)
+		err := c.Compile(ctx, tc.pn, testPrint)
 		require.NoError(t, err)
 		c.getAffectedRows()
 		_, err = c.Run(0)
@@ -162,7 +162,7 @@ func TestCompileWithFaults(t *testing.T) {
 	tc := newTestCase("select * from R join S on R.uid = S.uid", t)
 	tc.proc.Ctx = ctx
 	c := NewCompile("test", "test", tc.sql, "", "", ctx, tc.e, tc.proc, nil, false, nil, time.Now())
-	err := c.Compile(ctx, tc.pn, nil, testPrint)
+	err := c.Compile(ctx, tc.pn, testPrint)
 	require.NoError(t, err)
 	c.getAffectedRows()
 	_, err = c.Run(0)
