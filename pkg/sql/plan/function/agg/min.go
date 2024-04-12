@@ -169,7 +169,7 @@ func RegisterMin1(id int64) {
 	aggexec.RegisterSingleAggFromFixedToFixed(
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_uuid.ToType(), MinReturnType, false, true),
-			newAggUuidMin,
+			aggexec.GenerateFlagContextFromFixedToFixed[types.Uuid, types.Uuid],
 			FillAggMinUuid, nil, FillsAggMinUuid,
 			MergeAggMinUuid,
 			nil,
@@ -198,7 +198,7 @@ func RegisterMin1(id int64) {
 		aggexec.RegisterSingleAggFromVarToVar(
 			aggexec.MakeSingleAgg4RegisteredInfo(
 				aggexec.MakeSingleColumnAggInformation(id, t.ToType(), MinReturnType, false, true),
-				newAggBytesMin,
+				aggexec.GenerateFlagContextFromVarToVar,
 				FillAggMinBytes, nil, FillsAggMinBytes,
 				MergeAggMinBytes,
 				nil,
@@ -336,27 +336,12 @@ func MergeAggMinBool(
 	return nil
 }
 
-type aggUuidMin struct {
-	isEmpty bool
-}
-
-func newAggUuidMin() aggexec.SingleAggFromFixedRetFixed[types.Uuid, types.Uuid] {
-	return &aggUuidMin{}
-}
-
-func (a *aggUuidMin) Marshal() []byte     { return types.EncodeBool(&a.isEmpty) }
-func (a *aggUuidMin) Unmarshal(bs []byte) { a.isEmpty = types.DecodeBool(bs) }
-func (a *aggUuidMin) Init(setter aggexec.AggSetter[types.Uuid], arg types.Type, ret types.Type) error {
-	a.isEmpty = true
-	return nil
-}
-
 func FillAggMinUuid(
 	exec aggexec.SingleAggFromFixedRetFixed[types.Uuid, types.Uuid],
 	value types.Uuid, getter aggexec.AggGetter[types.Uuid], setter aggexec.AggSetter[types.Uuid]) error {
-	a := exec.(*aggUuidMin)
-	if a.isEmpty {
-		a.isEmpty = false
+	a := exec.(*aggexec.ContextWithEmptyFlagOfSingleAggRetFixed[types.Uuid])
+	if a.IsEmpty {
+		a.IsEmpty = false
 		setter(value)
 	} else {
 		if value.Compare(getter()) < 0 {
@@ -376,12 +361,12 @@ func FillsAggMinUuid(
 func MergeAggMinUuid(
 	exec1, exec2 aggexec.SingleAggFromFixedRetFixed[types.Uuid, types.Uuid],
 	getter1, getter2 aggexec.AggGetter[types.Uuid], setter1 aggexec.AggSetter[types.Uuid]) error {
-	a := exec1.(*aggUuidMin)
-	b := exec2.(*aggUuidMin)
-	if a.isEmpty && !b.isEmpty {
-		a.isEmpty = false
+	a := exec1.(*aggexec.ContextWithEmptyFlagOfSingleAggRetFixed[types.Uuid])
+	b := exec2.(*aggexec.ContextWithEmptyFlagOfSingleAggRetFixed[types.Uuid])
+	if a.IsEmpty && !b.IsEmpty {
+		a.IsEmpty = false
 		setter1(getter2())
-	} else if !a.isEmpty && !b.isEmpty {
+	} else if !a.IsEmpty && !b.IsEmpty {
 		if getter1().Compare(getter2()) > 0 {
 			setter1(getter2())
 		}
@@ -389,27 +374,12 @@ func MergeAggMinUuid(
 	return nil
 }
 
-type aggBytesMin struct {
-	isEmpty bool
-}
-
-func newAggBytesMin() aggexec.SingleAggFromVarRetVar {
-	return &aggBytesMin{}
-}
-
-func (a *aggBytesMin) Marshal() []byte     { return types.EncodeBool(&a.isEmpty) }
-func (a *aggBytesMin) Unmarshal(bs []byte) { a.isEmpty = types.DecodeBool(bs) }
-func (a *aggBytesMin) Init(setter aggexec.AggBytesSetter, arg types.Type, ret types.Type) error {
-	a.isEmpty = true
-	return nil
-}
-
 func FillAggMinBytes(
 	exec aggexec.SingleAggFromVarRetVar,
 	value []byte, getter aggexec.AggBytesGetter, setter aggexec.AggBytesSetter) error {
-	a := exec.(*aggBytesMin)
-	if a.isEmpty {
-		a.isEmpty = false
+	a := exec.(*aggexec.ContextWithEmptyFlagOfSingleAggRetBytes)
+	if a.IsEmpty {
+		a.IsEmpty = false
 		return setter(value)
 	}
 	if bytes.Compare(value, getter()) < 0 {
@@ -428,12 +398,12 @@ func FillsAggMinBytes(
 func MergeAggMinBytes(
 	exec1, exec2 aggexec.SingleAggFromVarRetVar,
 	getter1, getter2 aggexec.AggBytesGetter, setter1 aggexec.AggBytesSetter) error {
-	a := exec1.(*aggBytesMin)
-	b := exec2.(*aggBytesMin)
-	if a.isEmpty && !b.isEmpty {
-		a.isEmpty = false
+	a := exec1.(*aggexec.ContextWithEmptyFlagOfSingleAggRetBytes)
+	b := exec2.(*aggexec.ContextWithEmptyFlagOfSingleAggRetBytes)
+	if a.IsEmpty && !b.IsEmpty {
+		a.IsEmpty = false
 		return setter1(getter2())
-	} else if !a.isEmpty && !b.isEmpty {
+	} else if !a.IsEmpty && !b.IsEmpty {
 		if bytes.Compare(getter1(), getter2()) > 0 {
 			return setter1(getter2())
 		}

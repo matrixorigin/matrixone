@@ -123,7 +123,7 @@ func RegisterBitOr1(id int64) {
 	aggexec.RegisterSingleAggFromVarToVar(
 		aggexec.MakeSingleAgg4RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_binary.ToType(), BitOrReturnType, false, true),
-			newAggBitBinary,
+			aggexec.GenerateFlagContextFromVarToVar,
 			FillAggBitOrBinary, nil, FillsAggBitOrBinary,
 			MergeAggBitOrBinary,
 			nil,
@@ -132,7 +132,7 @@ func RegisterBitOr1(id int64) {
 	aggexec.RegisterSingleAggFromVarToVar(
 		aggexec.MakeSingleAgg4RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_varbinary.ToType(), BitOrReturnType, false, true),
-			newAggBitBinary,
+			aggexec.GenerateFlagContextFromVarToVar,
 			FillAggBitOrBinary, nil, FillsAggBitOrBinary,
 			MergeAggBitOrBinary,
 			nil,
@@ -185,9 +185,9 @@ func MergeAggBitOr1[from numeric](
 
 func FillAggBitOrBinary(
 	exec aggexec.SingleAggFromVarRetVar, value []byte, getter aggexec.AggBytesGetter, setter aggexec.AggBytesSetter) error {
-	a := exec.(*aggBitBinary)
-	if a.isEmpty {
-		a.isEmpty = false
+	a := exec.(*aggexec.ContextWithEmptyFlagOfSingleAggRetBytes)
+	if a.IsEmpty {
+		a.IsEmpty = false
 		return setter(value)
 	}
 	v := getter()
@@ -205,13 +205,13 @@ func FillsAggBitOrBinary(
 func MergeAggBitOrBinary(
 	exec1, exec2 aggexec.SingleAggFromVarRetVar,
 	getter1, getter2 aggexec.AggBytesGetter, setter aggexec.AggBytesSetter) error {
-	a1 := exec1.(*aggBitBinary)
-	a2 := exec2.(*aggBitBinary)
-	if a2.isEmpty {
+	a1 := exec1.(*aggexec.ContextWithEmptyFlagOfSingleAggRetBytes)
+	a2 := exec2.(*aggexec.ContextWithEmptyFlagOfSingleAggRetBytes)
+	if a2.IsEmpty {
 		return nil
 	}
-	if a1.isEmpty {
-		a1.isEmpty = false
+	if a1.IsEmpty {
+		a1.IsEmpty = false
 		return setter(getter2())
 	}
 	v1, v2 := getter1(), getter2()

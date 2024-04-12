@@ -169,7 +169,7 @@ func RegisterMax1(id int64) {
 	aggexec.RegisterSingleAggFromFixedToFixed(
 		aggexec.MakeSingleAgg1RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_uuid.ToType(), MaxReturnType, false, true),
-			newAggUuidMax,
+			aggexec.GenerateFlagContextFromFixedToFixed[types.Uuid, types.Uuid],
 			FillAggMaxUuid, nil, FillsAggMaxUuid,
 			MergeAggMaxUuid,
 			nil,
@@ -198,7 +198,7 @@ func RegisterMax1(id int64) {
 		aggexec.RegisterSingleAggFromVarToVar(
 			aggexec.MakeSingleAgg4RegisteredInfo(
 				aggexec.MakeSingleColumnAggInformation(id, t.ToType(), MaxReturnType, false, true),
-				newAggBytesMax,
+				aggexec.GenerateFlagContextFromVarToVar,
 				FillAggMaxBytes, nil, FillsAggMaxBytes,
 				MergeAggMaxBytes,
 				nil,
@@ -323,27 +323,12 @@ func MergeAggMaxBool(
 	return nil
 }
 
-type aggUuidMax struct {
-	isEmpty bool
-}
-
-func newAggUuidMax() aggexec.SingleAggFromFixedRetFixed[types.Uuid, types.Uuid] {
-	return &aggUuidMax{}
-}
-
-func (a *aggUuidMax) Marshal() []byte     { return types.EncodeBool(&a.isEmpty) }
-func (a *aggUuidMax) Unmarshal(bs []byte) { a.isEmpty = types.DecodeBool(bs) }
-func (a *aggUuidMax) Init(setter aggexec.AggSetter[types.Uuid], arg types.Type, ret types.Type) error {
-	a.isEmpty = true
-	return nil
-}
-
 func FillAggMaxUuid(
 	exec aggexec.SingleAggFromFixedRetFixed[types.Uuid, types.Uuid],
 	value types.Uuid, getter aggexec.AggGetter[types.Uuid], setter aggexec.AggSetter[types.Uuid]) error {
-	a := exec.(*aggUuidMax)
-	if a.isEmpty {
-		a.isEmpty = false
+	a := exec.(*aggexec.ContextWithEmptyFlagOfSingleAggRetFixed[types.Uuid])
+	if a.IsEmpty {
+		a.IsEmpty = false
 		setter(value)
 	} else {
 		if value.Compare(getter()) > 0 {
@@ -363,12 +348,12 @@ func FillsAggMaxUuid(
 func MergeAggMaxUuid(
 	exec1, exec2 aggexec.SingleAggFromFixedRetFixed[types.Uuid, types.Uuid],
 	getter1, getter2 aggexec.AggGetter[types.Uuid], setter1 aggexec.AggSetter[types.Uuid]) error {
-	a := exec1.(*aggUuidMax)
-	b := exec2.(*aggUuidMax)
-	if a.isEmpty && !b.isEmpty {
-		a.isEmpty = false
+	a := exec1.(*aggexec.ContextWithEmptyFlagOfSingleAggRetFixed[types.Uuid])
+	b := exec2.(*aggexec.ContextWithEmptyFlagOfSingleAggRetFixed[types.Uuid])
+	if a.IsEmpty && !b.IsEmpty {
+		a.IsEmpty = false
 		setter1(getter2())
-	} else if !a.isEmpty && !b.isEmpty {
+	} else if !a.IsEmpty && !b.IsEmpty {
 		if getter1().Compare(getter2()) < 0 {
 			setter1(getter2())
 		}
@@ -376,27 +361,12 @@ func MergeAggMaxUuid(
 	return nil
 }
 
-type aggBytesMax struct {
-	isEmpty bool
-}
-
-func newAggBytesMax() aggexec.SingleAggFromVarRetVar {
-	return &aggBytesMax{}
-}
-
-func (a *aggBytesMax) Marshal() []byte     { return types.EncodeBool(&a.isEmpty) }
-func (a *aggBytesMax) Unmarshal(bs []byte) { a.isEmpty = types.DecodeBool(bs) }
-func (a *aggBytesMax) Init(setter aggexec.AggBytesSetter, arg types.Type, ret types.Type) error {
-	a.isEmpty = true
-	return nil
-}
-
 func FillAggMaxBytes(
 	exec aggexec.SingleAggFromVarRetVar,
 	value []byte, getter aggexec.AggBytesGetter, setter aggexec.AggBytesSetter) error {
-	a := exec.(*aggBytesMax)
-	if a.isEmpty {
-		a.isEmpty = false
+	a := exec.(*aggexec.ContextWithEmptyFlagOfSingleAggRetBytes)
+	if a.IsEmpty {
+		a.IsEmpty = false
 		return setter(value)
 	}
 	if bytes.Compare(value, getter()) > 0 {
@@ -415,12 +385,12 @@ func FillsAggMaxBytes(
 func MergeAggMaxBytes(
 	exec1, exec2 aggexec.SingleAggFromVarRetVar,
 	getter1, getter2 aggexec.AggBytesGetter, setter1 aggexec.AggBytesSetter) error {
-	a := exec1.(*aggBytesMax)
-	b := exec2.(*aggBytesMax)
-	if a.isEmpty && !b.isEmpty {
-		a.isEmpty = false
+	a := exec1.(*aggexec.ContextWithEmptyFlagOfSingleAggRetBytes)
+	b := exec2.(*aggexec.ContextWithEmptyFlagOfSingleAggRetBytes)
+	if a.IsEmpty && !b.IsEmpty {
+		a.IsEmpty = false
 		return setter1(getter2())
-	} else if !a.isEmpty && !b.isEmpty {
+	} else if !a.IsEmpty && !b.IsEmpty {
 		if bytes.Compare(getter1(), getter2()) < 0 {
 			return setter1(getter2())
 		}

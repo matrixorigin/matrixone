@@ -123,7 +123,7 @@ func RegisterBitXor1(id int64) {
 	aggexec.RegisterSingleAggFromVarToVar(
 		aggexec.MakeSingleAgg4RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_binary.ToType(), BitXorReturnType, false, true),
-			newAggBitBinary,
+			aggexec.GenerateFlagContextFromVarToVar,
 			FillAggBitXorBinary, nil, FillsAggBitXorBinary,
 			MergeAggBitXorBinary,
 			nil,
@@ -132,7 +132,7 @@ func RegisterBitXor1(id int64) {
 	aggexec.RegisterSingleAggFromVarToVar(
 		aggexec.MakeSingleAgg4RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_varbinary.ToType(), BitXorReturnType, false, true),
-			newAggBitBinary,
+			aggexec.GenerateEmptyContextFromVarToVar,
 			FillAggBitXorBinary, nil, FillsAggBitXorBinary,
 			MergeAggBitXorBinary,
 			nil,
@@ -188,9 +188,9 @@ func MergeAggBitXor1[from numeric](
 
 func FillAggBitXorBinary(
 	exec aggexec.SingleAggFromVarRetVar, value []byte, getter aggexec.AggBytesGetter, setter aggexec.AggBytesSetter) error {
-	a := exec.(*aggBitBinary)
-	if a.isEmpty {
-		a.isEmpty = false
+	a := exec.(*aggexec.ContextWithEmptyFlagOfSingleAggRetBytes)
+	if a.IsEmpty {
+		a.IsEmpty = false
 		return setter(value)
 	}
 	v := getter()
@@ -204,9 +204,9 @@ func FillsAggBitXorBinary(
 		if count%2 == 1 {
 			return FillAggBitXorBinary(exec, value, getter, setter)
 		}
-		a := exec.(*aggBitBinary)
-		if a.isEmpty {
-			a.isEmpty = false
+		a := exec.(*aggexec.ContextWithEmptyFlagOfSingleAggRetBytes)
+		if a.IsEmpty {
+			a.IsEmpty = false
 			return setter(make([]byte, len(value)))
 		}
 	}
@@ -215,13 +215,13 @@ func FillsAggBitXorBinary(
 func MergeAggBitXorBinary(
 	exec1, exec2 aggexec.SingleAggFromVarRetVar,
 	getter1, getter2 aggexec.AggBytesGetter, setter aggexec.AggBytesSetter) error {
-	a1 := exec1.(*aggBitBinary)
-	a2 := exec2.(*aggBitBinary)
-	if a2.isEmpty {
+	a1 := exec1.(*aggexec.ContextWithEmptyFlagOfSingleAggRetBytes)
+	a2 := exec2.(*aggexec.ContextWithEmptyFlagOfSingleAggRetBytes)
+	if a2.IsEmpty {
 		return nil
 	}
-	if a1.isEmpty {
-		a1.isEmpty = false
+	if a1.IsEmpty {
+		a1.IsEmpty = false
 		return setter(getter2())
 	}
 	v1, v2 := getter1(), getter2()

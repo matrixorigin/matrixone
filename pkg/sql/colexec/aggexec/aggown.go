@@ -92,48 +92,6 @@ type MultiAggMerge2 func(
 type MultiAggFlush2 func(
 	exec MultiAggRetVar, getter AggBytesGetter, setter AggBytesSetter) error
 
-/*
-	Functions for aggregation which do nothing while filling a null value.
-*/
-
-func SingleAggDoNothingFill1[from, to types.FixedSizeTExceptStrType](
-	_ SingleAggFromFixedRetFixed[from, to], _ AggGetter[to], _ AggSetter[to]) error {
-	return nil
-}
-func SingleAggDoNothingFill2[from types.FixedSizeTExceptStrType](
-	_ SingleAggFromFixedRetVar[from], _ AggBytesGetter, _ AggBytesSetter) error {
-	return nil
-}
-func SingleAggDoNothingFill3[to types.FixedSizeTExceptStrType](
-	_ SingleAggFromVarRetFixed[to], _ AggGetter[to], _ AggSetter[to]) error {
-	return nil
-}
-func SingleAggDoNothingFill4(
-	_ SingleAggFromVarRetVar, _ AggBytesGetter, _ AggBytesSetter) error {
-	return nil
-}
-
-/*
-	Functions for aggregation which do nothing while flushing the result.
-*/
-
-func SingleAggDoNothingFlush1[from, to types.FixedSizeTExceptStrType](
-	_ SingleAggFromFixedRetFixed[from, to], _ AggGetter[to], _ AggSetter[to]) error {
-	return nil
-}
-func SingleAggDoNothingFlush2[from types.FixedSizeTExceptStrType](
-	_ SingleAggFromFixedRetVar[from], _ AggBytesGetter, _ AggBytesSetter) error {
-	return nil
-}
-func SingleAggDoNothingFlush3[to types.FixedSizeTExceptStrType](
-	_ SingleAggFromVarRetFixed[to], _ AggGetter[to], _ AggSetter[to]) error {
-	return nil
-}
-func SingleAggDoNothingFlush4(
-	_ SingleAggFromVarRetVar, _ AggBytesGetter, _ AggBytesSetter) error {
-	return nil
-}
-
 // AggCanMarshal interface is used for multi-node communication.
 // each private structure of aggregation should implement the AggCanMarshal interface.
 // todo: change to deliver []byte directly, and agg developer choose how to use the []byte.
@@ -235,9 +193,10 @@ func (a *ContextWithEmptyFlagOfSingleAggRetFixed[T]) Init(_ AggSetter[T], _, _ t
 func GenerateFlagContextFromFixedToFixed[from, to types.FixedSizeTExceptStrType]() SingleAggFromFixedRetFixed[from, to] {
 	return &ContextWithEmptyFlagOfSingleAggRetFixed[to]{}
 }
-func GenerateFlagContextFromVarToFixed[to types.FixedSizeTExceptStrType]() SingleAggFromVarRetFixed[to] {
-	return &ContextWithEmptyFlagOfSingleAggRetFixed[to]{}
-}
+
+//func GenerateFlagContextFromVarToFixed[to types.FixedSizeTExceptStrType]() SingleAggFromVarRetFixed[to] {
+//	return &ContextWithEmptyFlagOfSingleAggRetFixed[to]{}
+//}
 
 type ContextWithEmptyFlagOfSingleAggRetBytes struct {
 	IsEmpty bool
@@ -253,9 +212,10 @@ func (a *ContextWithEmptyFlagOfSingleAggRetBytes) Init(_ AggBytesSetter, _, _ ty
 	a.IsEmpty = true
 	return nil
 }
-func GenerateFlagContextFromFixedToVar[from types.FixedSizeTExceptStrType]() SingleAggFromFixedRetVar[from] {
-	return &ContextWithEmptyFlagOfSingleAggRetBytes{}
-}
+
+//	func GenerateFlagContextFromFixedToVar[from types.FixedSizeTExceptStrType]() SingleAggFromFixedRetVar[from] {
+//		return &ContextWithEmptyFlagOfSingleAggRetBytes{}
+//	}
 func GenerateFlagContextFromVarToVar() SingleAggFromVarRetVar {
 	return &ContextWithEmptyFlagOfSingleAggRetBytes{}
 }
