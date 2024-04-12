@@ -2647,7 +2647,7 @@ func doComQuery(requestCtx context.Context, ses *Session, input *UserInput) (ret
 		ses.SetMysqlResultSet(nil)
 	}()
 
-	//canCache := true
+	canCache := true
 	Cached := false
 	defer func() {
 		if !Cached {
@@ -2655,6 +2655,7 @@ func doComQuery(requestCtx context.Context, ses *Session, input *UserInput) (ret
 				if cwft, ok := cws[i].(*TxnComputationWrapper); ok {
 					cwft.Free()
 				}
+				cws[i].Clear()
 			}
 		}
 	}()
@@ -2668,7 +2669,7 @@ func doComQuery(requestCtx context.Context, ses *Session, input *UserInput) (ret
 				if _, ok := cwft.stmt.(*tree.SetVar); !ok {
 					ses.cleanCache()
 				}
-				//canCache = false
+				canCache = false
 			}
 		}
 
@@ -2741,23 +2742,23 @@ func doComQuery(requestCtx context.Context, ses *Session, input *UserInput) (ret
 
 	} // end of for
 
-	//if canCache && !ses.isCached(input.getSql()) {
-	//	plans := make([]*plan.Plan, len(cws))
-	//	stmts := make([]tree.Statement, len(cws))
-	//	for i, cw := range cws {
-	//		if cwft, ok := cw.(*TxnComputationWrapper); ok {
-	//			if checkNodeCanCache(cwft.plan) {
-	//				plans[i] = cwft.plan
-	//				stmts[i] = cwft.stmt
-	//			} else {
-	//				return nil
-	//			}
-	//		}
-	//		cw.Clear()
-	//	}
-	//	Cached = true
-	//	ses.cachePlan(input.getSql(), stmts, plans)
-	//}
+	if canCache && !ses.isCached(input.getSql()) {
+		plans := make([]*plan.Plan, len(cws))
+		stmts := make([]tree.Statement, len(cws))
+		for i, cw := range cws {
+			if cwft, ok := cw.(*TxnComputationWrapper); ok {
+				if checkNodeCanCache(cwft.plan) {
+					plans[i] = cwft.plan
+					stmts[i] = cwft.stmt
+				} else {
+					return nil
+				}
+			}
+			cw.Clear()
+		}
+		Cached = true
+		ses.cachePlan(input.getSql(), stmts, plans)
+	}
 
 	return nil
 }

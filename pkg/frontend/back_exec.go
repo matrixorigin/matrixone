@@ -206,7 +206,16 @@ func doComQueryInBack(requestCtx context.Context,
 	}
 
 	defer func() {
-		backSes.mrs = nil
+		backSes.SetMysqlResultSet(nil)
+	}()
+
+	defer func() {
+		for i := 0; i < len(cws); i++ {
+			if cwft, ok := cws[i].(*TxnComputationWrapper); ok {
+				cwft.Free()
+			}
+			cws[i].Clear()
+		}
 	}()
 
 	sqlRecord := parsers.HandleSqlForRecord(input.getSql())
