@@ -154,7 +154,7 @@ func (c *checkpointCleaner) Replay() error {
 	maxConsumedEnd := types.TS{}
 	var fullGCFile fileservice.DirEntry
 	// Get effective minMerged
-	var snapFile string
+	var snapFile, acctFile string
 	for _, dir := range dirs {
 		start, end, ext := blockio.DecodeGCMetadataFileName(dir.Name)
 		if ext == blockio.GCFullExt {
@@ -168,6 +168,9 @@ func (c *checkpointCleaner) Replay() error {
 		}
 		if ext == blockio.SnapshotExt && maxConsumedEnd.Equal(&end) {
 			snapFile = dir.Name
+		}
+		if ext == blockio.AcctExt && maxConsumedEnd.Equal(&end) {
+			acctFile = dir.Name
 		}
 	}
 	readDirs := make([]fileservice.DirEntry, 0)
@@ -200,6 +203,12 @@ func (c *checkpointCleaner) Replay() error {
 	}
 	if snapFile != "" {
 		err = c.snapshotMeta.ReadMeta(c.ctx, GCMetaDir+snapFile, c.fs.Service)
+		if err != nil {
+			return err
+		}
+	}
+	if acctFile != "" {
+		err = c.snapshotMeta.ReadTableInfo(c.ctx, GCMetaDir+acctFile, c.fs.Service)
 		if err != nil {
 			return err
 		}
@@ -598,6 +607,13 @@ func (c *checkpointCleaner) createNewInput(
 	err = c.snapshotMeta.SaveMeta(name, c.fs.Service)
 	if err != nil {
 		logutil.Infof("SaveMeta is failed")
+		return
+	}
+	name = blockio.EncodeTableMetadataFileName(GCMetaDir,
+		PrefixAcctMeta, ckps[0].GetStart(), ckps[len(ckps)-1].GetEnd())
+	err = c.snapshotMeta.SaveTableInfo(name, c.fs.Service)
+	if err != nil {
+		logutil.Infof("SaveTableInfo is failed")
 		return
 	}
 	files := c.GetAndClearOutputs()
