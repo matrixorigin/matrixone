@@ -145,9 +145,6 @@ func MoTableRows(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 					if err != nil {
 						return err
 					}
-					if err = prel.UpdateObjectInfos(ctx); err != nil {
-						return err
-					}
 					prows, err = prel.Rows(ctx)
 					if err != nil {
 						return err
@@ -155,9 +152,6 @@ func MoTableRows(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 					rows += prows
 				}
 			} else {
-				if err = rel.UpdateObjectInfos(ctx); err != nil {
-					return err
-				}
 				if rows, err = rel.Rows(ctx); err != nil {
 					return err
 				}
@@ -291,18 +285,12 @@ func getTableSize(ctx context.Context, db engine.Database, rel engine.Relation) 
 			if err != nil {
 				return 0, err
 			}
-			if err = prel.UpdateObjectInfos(ctx); err != nil {
-				return 0, err
-			}
 			if psize, err = prel.Size(ctx, AllColumns); err != nil {
 				return 0, err
 			}
 			size += psize
 		}
 	} else {
-		if err = rel.UpdateObjectInfos(ctx); err != nil {
-			return 0, err
-		}
 		if size, err = rel.Size(ctx, AllColumns); err != nil {
 			return 0, err
 		}

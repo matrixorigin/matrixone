@@ -168,5 +168,5 @@ type Batch struct {
 	// row count of batch, to instead of old len(Zs).
 	rowCount int
 
-	AuxData any // hash table, runtime filter, etc.
+	AuxData any // hash table etc.
 }
