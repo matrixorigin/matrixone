@@ -132,7 +132,7 @@ func RegisterBitXor1(id int64) {
 	aggexec.RegisterSingleAggFromVarToVar(
 		aggexec.MakeSingleAgg4RegisteredInfo(
 			aggexec.MakeSingleColumnAggInformation(id, types.T_varbinary.ToType(), BitXorReturnType, false, true),
-			aggexec.GenerateEmptyContextFromVarToVar,
+			aggexec.GenerateFlagContextFromVarToVar,
 			FillAggBitXorBinary, nil, FillsAggBitXorBinary,
 			MergeAggBitXorBinary,
 			nil,
