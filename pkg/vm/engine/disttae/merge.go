@@ -17,6 +17,7 @@ package disttae
 import (
 	"context"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -109,6 +110,10 @@ func (t *CNMergeTask) GetBlkCnts() []int {
 
 func (t *CNMergeTask) GetAccBlkCnts() []int {
 	panic("not implemented")
+}
+
+func (t *CNMergeTask) GetObjLayout() (uint32, uint16) {
+	return options.DefaultBlockMaxRows, options.DefaultBlocksPerObject
 }
 
 func (t *CNMergeTask) GetSortKeyType() types.Type {

@@ -2,13 +2,13 @@ package mergesort
 
 import (
 	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 )
 
 type Merger interface {
@@ -42,9 +42,14 @@ type merger[T any] struct {
 	writer *blockio.BlockWriter
 
 	sortKeyIdx int
+
+	mustColFunc func(*vector.Vector) []T
+
+	rowPerBlk uint32
+	blkPerObj uint16
 }
 
-func newMerger[T any](host MergeTaskHost, lessFunc lessFunc[T], sortKeyPos int) Merger {
+func newMerger[T any](host MergeTaskHost, lessFunc lessFunc[T], sortKeyPos int, mustColFunc func(*vector.Vector) []T) Merger {
 	size := host.GetObjectCnt()
 	m := &merger[T]{
 		host:       host,
@@ -59,8 +64,9 @@ func newMerger[T any](host MergeTaskHost, lessFunc lessFunc[T], sortKeyPos int) 
 		accObjBlkCnts:    host.GetAccBlkCnts(),
 		objBlkCnts:       host.GetBlkCnts(),
 		loadedObjBlkCnts: make([]int, size),
+		mustColFunc:      mustColFunc,
 	}
-
+	m.rowPerBlk, m.blkPerObj = host.GetObjLayout()
 	for _, cnt := range m.objBlkCnts {
 		m.totalBlkCnt += cnt
 	}
@@ -123,7 +129,7 @@ func (m *merger[T]) Merge() {
 
 		bufferRowCnt++
 		// write new block
-		if bufferRowCnt == int(options.DefaultBlockMaxRows) {
+		if bufferRowCnt == int(m.rowPerBlk) {
 			bufferRowCnt = 0
 			blkCnt++
 
@@ -138,7 +144,7 @@ func (m *merger[T]) Merge() {
 			m.buffer.CleanOnlyData()
 
 			// write new object
-			if blkCnt == int(options.DefaultBlocksPerObject) {
+			if blkCnt == int(m.blkPerObj) {
 				m.syncObject(context.TODO())
 				// reset writer after sync
 				blkCnt = 0
@@ -189,7 +195,7 @@ func (m *merger[T]) loadBlk(objIdx uint32) bool {
 	m.loadedObjBlkCnts[objIdx]++
 
 	vec := nextBatch.GetVector(int32(m.sortKeyIdx))
-	m.cols[objIdx] = vector.MustFixedCol[T](vec)
+	m.cols[objIdx] = m.mustColFunc(vec)
 	m.nulls[objIdx] = vec.GetNulls()
 	m.deletes[objIdx] = del
 	m.rowIdx[objIdx] = 0

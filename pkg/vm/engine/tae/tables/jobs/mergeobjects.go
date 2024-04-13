@@ -126,6 +126,10 @@ func (task *mergeObjectsTask) GetAccBlkCnts() []int {
 	return task.mergedBlkCnt
 }
 
+func (task *mergeObjectsTask) GetObjLayout() (uint32, uint16) {
+	return task.schema.BlockMaxRows, task.schema.ObjectMaxBlocks
+}
+
 func (task *mergeObjectsTask) GetSortKeyPos() int {
 	sortKeyPos := -1
 	if task.schema.HasSortKey() {
