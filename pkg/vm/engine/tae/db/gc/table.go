@@ -141,7 +141,7 @@ func isSnapshotRefers(obj *ObjectEntry, snapVec []types.TS) bool {
 	for left <= right {
 		mid := left + (right-left)/2
 		snapTS := snapVec[mid]
-		if snapTS.GreaterEq(&obj.createTS) && snapTS.Less(&obj.dropTS) {
+		if snapTS.GreaterEq(&obj.createTS) && (snapTS.Less(&obj.dropTS) || obj.dropTS.IsEmpty()) {
 			logutil.Infof("isSnapshotRefers: %s, create %v, drop %v",
 				snapTS.ToString(), obj.createTS.ToString(), obj.dropTS.ToString())
 			return true
