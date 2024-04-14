@@ -40,6 +40,10 @@ func (db *txnDatabase) getTxn() *Transaction {
 	return db.op.GetWorkspace().(*Transaction)
 }
 
+func (db *txnDatabase) getEng() *Engine {
+	return db.op.GetWorkspace().(*Transaction).engine
+}
+
 func (db *txnDatabase) Relations(ctx context.Context) ([]string, error) {
 	var rels []string
 	//first get all delete tables
@@ -589,7 +593,7 @@ func (db *txnDatabase) openSysTable(p *process.Process, id uint64, name string,
 		tableName:     name,
 		defs:          defs,
 		primaryIdx:    0,
-		primarySeqnum: 0,
+		primarySeqnum: db.getEng().catalog.GetTableById(db.databaseId, id).PrimarySeqnum,
 		clusterByIdx:  -1,
 	}
 	switch name {

@@ -118,22 +118,41 @@ type IDGenerator interface {
 	AllocateIDByKey(ctx context.Context, key string) (uint64, error)
 }
 
+type snapParts struct {
+	sync.Mutex
+	snaps []*logtailreplay.Partition
+}
 type Engine struct {
 	sync.RWMutex
-	mp          *mpool.MPool
-	fs          fileservice.FileService
-	ls          lockservice.LockService
-	qc          qclient.QueryClient
-	hakeeper    logservice.CNHAKeeperClient
-	us          udf.Service
-	cli         client.TxnClient
-	idGen       IDGenerator
-	catalog     *cache.CatalogCache
-	snapCatalog []*cache.CatalogCache
-	tnID        string
-	partitions  map[[2]uint64]*logtailreplay.Partition
-	snapParts   map[[2]uint64][]*logtailreplay.Partition
-	packerPool  *fileservice.Pool[*types.Packer]
+	mp       *mpool.MPool
+	fs       fileservice.FileService
+	ls       lockservice.LockService
+	qc       qclient.QueryClient
+	hakeeper logservice.CNHAKeeperClient
+	us       udf.Service
+	cli      client.TxnClient
+	idGen    IDGenerator
+	tnID     string
+
+	//latest catalog will be loaded from TN when engine is initialized.
+	catalog *cache.CatalogCache
+	//snapshot catalog will be loaded from TN When snapshot read is needed.
+	snapCatalog *struct {
+		sync.Mutex
+		snaps []*cache.CatalogCache
+	}
+	//latest partitions which be protected by e.Lock().
+	partitions map[[2]uint64]*logtailreplay.Partition
+	//snapshot partitions
+	mu struct {
+		sync.Mutex
+		snapParts map[[2]uint64]*struct {
+			sync.Mutex
+			snaps []*logtailreplay.Partition
+		}
+	}
+
+	packerPool *fileservice.Pool[*types.Packer]
 
 	gcPool *ants.Pool
 

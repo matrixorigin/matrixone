@@ -17,6 +17,8 @@ package logtailreplay
 import (
 	"bytes"
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
+	"sync"
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -25,16 +27,25 @@ import (
 
 // a partition corresponds to a dn
 type Partition struct {
+	//lock is used to protect pointer of PartitionState from concurrent mutation
 	lock  chan struct{}
 	state atomic.Pointer[PartitionState]
-	TS    timestamp.Timestamp // last updated timestamp
 
 	// assuming checkpoints will be consumed once
 	checkpointConsumed atomic.Bool
 
 	//current partitionState can serve snapshot read only if start <= ts < end
-	start types.TS
-	end   types.TS
+	mu struct {
+		sync.Mutex
+		start types.TS
+		end   types.TS
+	}
+}
+
+func (p *Partition) CanServe(ts types.TS) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return ts.GreaterEq(&p.mu.start) && ts.Less(&p.mu.end)
 }
 
 func NewPartition() *Partition {
@@ -43,6 +54,7 @@ func NewPartition() *Partition {
 	ret := &Partition{
 		lock: lock,
 	}
+	ret.mu.start = types.MaxTs()
 	ret.state.Store(NewPartitionState(false))
 	return ret
 }
@@ -84,6 +96,47 @@ func (p *Partition) Unlock() {
 	p.lock <- struct{}{}
 }
 
+func (p *Partition) checkValid() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.mu.start.LessEq(&p.mu.end)
+}
+
+func (p *Partition) ConsumeSnapCkps(
+	_ context.Context,
+	ckps []*checkpoint.CheckpointEntry,
+	fn func(
+		ckp *checkpoint.CheckpointEntry,
+		state *PartitionState,
+	) error,
+) (
+	err error,
+) {
+	//checkpoints must contain only one global checkpoint
+	//followed by zero or multi continuous incremental checkpoints.
+	state := p.state.Load()
+	for _, ckp := range ckps {
+		if err = fn(ckp, state); err != nil {
+			return
+		}
+		if ckp.GetType() == checkpoint.ET_Global {
+			p.mu.start = ckp.GetEnd()
+			//FIXME::need to minus 5 minutes?
+		}
+		if ckp.GetType() == checkpoint.ET_Incremental {
+			end := ckp.GetEnd()
+			if end.Greater(&p.mu.end) {
+				p.mu.end = end
+			}
+		}
+	}
+	if !p.checkValid() {
+		panic("invalid checkpoint")
+	}
+
+	return nil
+}
+
 func (p *Partition) ConsumeCheckpoints(
 	ctx context.Context,
 	fn func(
@@ -119,6 +172,9 @@ func (p *Partition) ConsumeCheckpoints(
 		return err
 	}
 
+	//TODO:: lock and update partition's start and end.
+	//       notice that end maybe had been updated by consume log tails since lazily load checkpoints.
+
 	if !p.state.CompareAndSwap(curState, state) {
 		panic("concurrent mutation")
 	}
@@ -139,6 +195,8 @@ func (p *Partition) Truncate(ctx context.Context, ids [2]uint64, ts types.TS) er
 	state := curState.Copy()
 
 	state.truncate(ids, ts)
+
+	//TODO::update partition's start and end
 
 	if !p.state.CompareAndSwap(curState, state) {
 		panic("concurrent mutation")

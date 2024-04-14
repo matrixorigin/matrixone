@@ -1324,7 +1324,7 @@ func updatePartitionOfPush(
 	// get table info by table id
 	dbId, tblId := tl.Table.GetDbId(), tl.Table.GetTbId()
 
-	partition := e.getPartition(dbId, tblId)
+	partition := e.getOrCreateLatestPart(dbId, tblId)
 
 	lockErr := partition.Lock(ctx)
 	if lockErr != nil {
@@ -1335,21 +1335,27 @@ func updatePartitionOfPush(
 	state, doneMutate := partition.MutateState()
 
 	key := e.catalog.GetTableById(dbId, tblId)
+	if dbId == catalog.MO_CATALOG_ID {
+		logutil.Infof("xxx logtail: name:%s, pkseq:%d", key.Name, key.PrimarySeqnum)
+	}
 
 	if lazyLoad {
 		if len(tl.CkpLocation) > 0 {
 			state.AppendCheckpoint(tl.CkpLocation, partition)
 		}
 
-		err = consumeLogTailOfPushWithLazyLoad(
+		err = consumeLogTail(
 			ctx,
 			key.PrimarySeqnum,
 			e,
 			state,
 			tl,
 		)
+		//TODO::lock and update start,end of latest partition.
+		//mu.lock
 	} else {
-		err = consumeLogTailOfPushWithoutLazyLoad(ctx, key.PrimarySeqnum, e, state, tl, dbId, key.Id, key.Name)
+		err = consumeCkpsAndLogTail(ctx, key.PrimarySeqnum, e, state, tl, dbId, key.Id, key.Name)
+		//TODO::lock and update start,end of latest partition.
 	}
 
 	if err != nil {
@@ -1357,14 +1363,12 @@ func updatePartitionOfPush(
 		return err
 	}
 
-	partition.TS = *tl.Ts
-
 	doneMutate()
 
 	return nil
 }
 
-func consumeLogTailOfPushWithLazyLoad(
+func consumeLogTail(
 	ctx context.Context,
 	primarySeqnum int,
 	engine *Engine,
@@ -1374,7 +1378,7 @@ func consumeLogTailOfPushWithLazyLoad(
 	return hackConsumeLogtail(ctx, primarySeqnum, engine, state, lt)
 }
 
-func consumeLogTailOfPushWithoutLazyLoad(
+func consumeCkpsAndLogTail(
 	ctx context.Context,
 	primarySeqnum int,
 	engine *Engine,
@@ -1400,7 +1404,7 @@ func consumeLogTailOfPushWithoutLazyLoad(
 	}()
 	for _, entry := range entries {
 		if err = consumeEntry(ctx, primarySeqnum,
-			engine, state, entry); err != nil {
+			engine, engine.catalog, state, entry); err != nil {
 			return
 		}
 	}
@@ -1447,7 +1451,7 @@ func hackConsumeLogtail(
 				lt.Commands[i].EntryType = api.Entry_Delete
 			}
 			if err := consumeEntry(ctx, primarySeqnum,
-				engine, state, &lt.Commands[i]); err != nil {
+				engine, engine.catalog, state, &lt.Commands[i]); err != nil {
 				return err
 			}
 		}
@@ -1479,7 +1483,7 @@ func hackConsumeLogtail(
 				lt.Commands[i].EntryType = api.Entry_Delete
 			}
 			if err := consumeEntry(ctx, primarySeqnum,
-				engine, state, &lt.Commands[i]); err != nil {
+				engine, engine.catalog, state, &lt.Commands[i]); err != nil {
 				return err
 			}
 		}
@@ -1487,7 +1491,7 @@ func hackConsumeLogtail(
 	}
 	for i := 0; i < len(lt.Commands); i++ {
 		if err := consumeEntry(ctx, primarySeqnum,
-			engine, state, &lt.Commands[i]); err != nil {
+			engine, engine.catalog, state, &lt.Commands[i]); err != nil {
 			return err
 		}
 	}

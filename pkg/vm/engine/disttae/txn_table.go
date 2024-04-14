@@ -126,7 +126,7 @@ func (tbl *txnTable) Rows(ctx context.Context) (uint64, error) {
 		}
 		rows++
 	}
-
+	//TODO::handle snapshot read
 	s := e.Stats(ctx, pb.StatsInfoKey{
 		DatabaseID: tbl.db.databaseId,
 		TableID:    tbl.tableId,
@@ -558,6 +558,15 @@ func (tbl *txnTable) resetSnapshot() {
 // return all unmodified blocks
 func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr) (ranges engine.Ranges, err error) {
 	start := time.Now()
+
+	if tbl.tableId == catalog.MO_DATABASE_ID ||
+		tbl.tableId == catalog.MO_TABLES_ID ||
+		tbl.tableId == catalog.MO_COLUMNS_ID {
+		logutil.Infof("xxxx name:%s, primarySeq:%d, primaryindex:%d",
+			tbl.tableName,
+			tbl.primarySeqnum,
+			tbl.primaryIdx)
+	}
 
 	seq := tbl.db.op.NextSequence()
 	trace.GetService().AddTxnDurationAction(
@@ -1820,6 +1829,9 @@ func (tbl *txnTable) NewReader(ctx context.Context, num int, expr *plan.Expr, ra
 	if hasNull || plan2.IsFalseExpr(expr) {
 		return []engine.Reader{new(emptyReader)}, nil
 	}
+	if tbl.tableId == catalog.MO_TABLES_ID {
+		logutil.Infof("xxxx newreader table %s is MO_TABLES_ID, encodedPKlen:%d", tbl.tableName, len(encodedPK))
+	}
 	if blkArray.Len() == 0 {
 		return tbl.newMergeReader(ctx, num, expr, encodedPK, nil)
 	}
@@ -2130,28 +2142,33 @@ func (tbl *txnTable) newReader(
 	return readers, nil
 }
 
-func (tbl *txnTable) getPartitionState(ctx context.Context) (*logtailreplay.PartitionState, error) {
+func (tbl *txnTable) getPartitionState(
+	ctx context.Context,
+) (*logtailreplay.PartitionState, error) {
 	if !tbl.db.op.IsSnapOp() {
 		if tbl._partState.Load() == nil {
 			if err := tbl.updateLogtail(ctx); err != nil {
 				return nil, err
 			}
-			tbl._partState.Store(tbl.getTxn().engine.getPartition(tbl.db.databaseId, tbl.tableId).Snapshot())
+			tbl._partState.Store(tbl.getTxn().engine.
+				getOrCreateLatestPart(tbl.db.databaseId, tbl.tableId).Snapshot())
 		}
 		return tbl._partState.Load(), nil
 	}
 
 	// for snapshot txnOp
 	if tbl._partState.Load() == nil {
-		//TODO::find a available partState for snapshot read.
-		tbl._partState.Store(tbl.getTxn().engine.getSnapPart(
+		p, err := tbl.getTxn().engine.getOrCreateSnapPart(ctx,
 			tbl.db.databaseId,
+			tbl.db.databaseName,
 			tbl.tableId,
-			types.TimestampToTS(tbl.db.op.Txn().SnapshotTS)).Snapshot())
-		//TODO::load old checkpoints and apply it into engine.snapParts.
-		//if err := tbl.updateLogtail(ctx); err != nil {
-		//	return nil, err
-		//}
+			tbl.tableName,
+			tbl.primarySeqnum,
+			types.TimestampToTS(tbl.db.op.Txn().SnapshotTS))
+		if err != nil {
+			return nil, err
+		}
+		tbl._partState.Store(p.Snapshot())
 	}
 	return tbl._partState.Load(), nil
 }

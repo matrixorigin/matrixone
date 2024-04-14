@@ -17,10 +17,12 @@ package disttae
 import (
 	"context"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
+	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -32,6 +34,15 @@ import (
 func (e *Engine) init(ctx context.Context) error {
 	e.Lock()
 	defer e.Unlock()
+	defer func() {
+		dbseq := e.catalog.GetTableById(catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID)
+		tbseq := e.catalog.GetTableById(catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID)
+		colsql := e.catalog.GetTableById(catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID)
+		logutil.Infof("xxxx init dbseq: %d, tbseq: %d, colseq: %d",
+			dbseq.PrimarySeqnum, tbseq.PrimarySeqnum, colsql.PrimarySeqnum)
+		logutil.Infof("xxxx init dbcons: %s, tbcons: %s, colcons: %s",
+			string(dbseq.Constraint), string(tbseq.Constraint), string(colsql.Constraint))
+	}()
 	m := e.mp
 
 	e.catalog = cache.NewCatalog()
@@ -255,19 +266,85 @@ func (e *Engine) init(ctx context.Context) error {
 	return nil
 }
 
-// TODO:: check e.partitions first, then check e.snapParts
-func (e *Engine) getSnapPart(databaseId, tableId uint64, snapshot types.TS) *logtailreplay.Partition {
+// TODO:: primarySeqnum is 0 for mo_tables, mo_columns, mo_columns, need to handle this case.
+func (e *Engine) getOrCreateSnapPart(
+	ctx context.Context,
+	databaseId uint64,
+	dbName string,
+	tableId uint64,
+	tblName string,
+	primaySeqnum int,
+	ts types.TS) (*logtailreplay.Partition, error) {
+
+	//First, check whether the latest partition is available.
 	e.Lock()
-	defer e.Unlock()
 	partition, ok := e.partitions[[2]uint64{databaseId, tableId}]
-	if !ok { // create a new table
-		partition = logtailreplay.NewPartition()
-		e.partitions[[2]uint64{databaseId, tableId}] = partition
+	e.Unlock()
+	if ok && partition.CanServe(ts) {
+		return partition, nil
 	}
-	return partition
+
+	//Then, check whether the snapshot partitions is available.
+	e.mu.Lock()
+	snaps, ok := e.mu.snapParts[[2]uint64{databaseId, tableId}]
+	if !ok {
+		e.mu.snapParts[[2]uint64{databaseId, tableId}] = &struct {
+			sync.Mutex
+			snaps []*logtailreplay.Partition
+		}{}
+		snaps = e.mu.snapParts[[2]uint64{databaseId, tableId}]
+	}
+	e.mu.Unlock()
+
+	snaps.Lock()
+	defer snaps.Unlock()
+	for _, snap := range snaps.snaps {
+		if snap.CanServe(ts) {
+			return snap, nil
+		}
+	}
+	//new snapshot partition and apply checkpoints into it.
+	snap := logtailreplay.NewPartition()
+	ckps, err := checkpoint.ListSnapshotCheckpoint(ctx, e.fs, ts, tableId)
+	if err != nil {
+		return nil, err
+	}
+	//TODO:: handle mo_catalog, mo_database, mo_tables, mo_columns,
+	//       put them into snapshot partition.
+	snap.ConsumeSnapCkps(ctx, ckps, func(
+		checkpoint *checkpoint.CheckpointEntry,
+		state *logtailreplay.PartitionState) error {
+		loc := checkpoint.GetLocation().String()
+		entries, closeCBs, err := logtail.LoadCheckpointEntries(
+			ctx,
+			loc,
+			tableId,
+			tblName,
+			databaseId,
+			dbName,
+			e.mp,
+			e.fs)
+		if err != nil {
+			return err
+		}
+		defer func() {
+			for _, cb := range closeCBs {
+				cb()
+			}
+		}()
+		for _, entry := range entries {
+			if err = consumeEntry(ctx, primaySeqnum, e, nil, state, entry); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	snaps.snaps = append(snaps.snaps, snap)
+
+	return snap, nil
 }
 
-func (e *Engine) getPartition(databaseId, tableId uint64) *logtailreplay.Partition {
+func (e *Engine) getOrCreateLatestPart(databaseId, tableId uint64) *logtailreplay.Partition {
 	e.Lock()
 	defer e.Unlock()
 	partition, ok := e.partitions[[2]uint64{databaseId, tableId}]
@@ -279,7 +356,7 @@ func (e *Engine) getPartition(databaseId, tableId uint64) *logtailreplay.Partiti
 }
 
 func (e *Engine) lazyLoad(ctx context.Context, tbl *txnTable) (*logtailreplay.Partition, error) {
-	part := e.getPartition(tbl.db.databaseId, tbl.tableId)
+	part := e.getOrCreateLatestPart(tbl.db.databaseId, tbl.tableId)
 
 	if err := part.ConsumeCheckpoints(
 		ctx,
@@ -302,7 +379,7 @@ func (e *Engine) lazyLoad(ctx context.Context, tbl *txnTable) (*logtailreplay.Pa
 				}
 			}()
 			for _, entry := range entries {
-				if err = consumeEntry(ctx, tbl.primarySeqnum, e, state, entry); err != nil {
+				if err = consumeEntry(ctx, tbl.primarySeqnum, e, e.catalog, state, entry); err != nil {
 					return err
 				}
 			}
@@ -317,52 +394,4 @@ func (e *Engine) lazyLoad(ctx context.Context, tbl *txnTable) (*logtailreplay.Pa
 
 func (e *Engine) UpdateOfPush(ctx context.Context, databaseId, tableId uint64, ts timestamp.Timestamp) error {
 	return e.pClient.TryToSubscribeTable(ctx, databaseId, tableId)
-}
-
-// skip SCA check for unused function.
-var _ = (&Engine{}).UpdateOfPull
-
-func (e *Engine) UpdateOfPull(ctx context.Context, tnList []DNStore, tbl *txnTable, op client.TxnOperator,
-	primarySeqnum int, databaseId, tableId uint64, ts timestamp.Timestamp) error {
-	logDebugf(op.Txn(), "UpdateOfPull")
-
-	part := e.ensureTablePart(databaseId, tableId)
-
-	if err := func() error {
-		lockErr := part.Lock(ctx)
-		if lockErr != nil {
-			return lockErr
-		}
-		defer part.Unlock()
-
-		if part.TS.Greater(ts) || part.TS.Equal(ts) {
-			return nil
-		}
-
-		if err := updatePartitionOfPull(
-			primarySeqnum, tbl, ctx, op, e, part, tnList[0],
-			genSyncLogTailReq(part.TS, ts, databaseId, tableId),
-		); err != nil {
-			return err
-		}
-
-		part.TS = ts
-
-		return nil
-	}(); err != nil {
-		return err
-	}
-
-	return nil
-}
-
-func (e *Engine) ensureTablePart(databaseId uint64, tableId uint64) *logtailreplay.Partition {
-	e.Lock()
-	defer e.Unlock()
-	part, ok := e.partitions[[2]uint64{databaseId, tableId}]
-	if !ok {
-		part = logtailreplay.NewPartition()
-		e.partitions[[2]uint64{databaseId, tableId}] = part
-	}
-	return part
 }

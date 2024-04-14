@@ -48,6 +48,10 @@ type TableVersion struct {
 
 // catalog cache
 type CatalogCache struct {
+	mu struct {
+		start types.TS
+		end   types.TS
+	}
 	tables    *tableCache
 	databases *databaseCache
 }

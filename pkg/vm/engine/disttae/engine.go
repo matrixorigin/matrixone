@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"runtime"
 	"strings"
 	"sync"
@@ -100,6 +101,10 @@ func New(
 			},
 		),
 	}
+	e.mu.snapParts = make(map[[2]uint64]*struct {
+		sync.Mutex
+		snaps []*logtailreplay.Partition
+	})
 	pool, err := ants.NewPool(GCPoolSize)
 	if err != nil {
 		panic(err)
