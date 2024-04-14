@@ -146,7 +146,7 @@ func (l Lock) closeFirstWaiter(w *waiter) bool {
 	}
 
 	if l.waiters.first() != w {
-		panic("BUG: missing current waiter")
+		return false
 	}
 
 	if l.waiters.size() == 1 {
