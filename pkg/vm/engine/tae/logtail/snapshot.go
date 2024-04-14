@@ -244,7 +244,7 @@ func (sm *SnapshotMeta) SaveMeta(name string, fs fileservice.FileService) error 
 	}
 	bat := containers.NewBatch()
 	for i, attr := range objectInfoSchemaAttr {
-		bat.AddVector(attr, containers.MakeVector(objectInfoSchemaTypes[i], common.DefaultAllocator))
+		bat.AddVector(attr, containers.MakeVector(objectInfoSchemaTypes[i], common.DebugAllocator))
 	}
 	for _, entry := range sm.objects {
 		bat.GetVectorByName(catalog.ObjectAttr_ObjectStats).Append(entry.stats[:], false)
@@ -275,7 +275,7 @@ func (sm *SnapshotMeta) SaveTableInfo(name string, fs fileservice.FileService) e
 	}
 	bat := containers.NewBatch()
 	for i, attr := range tableInfoSchemaAttr {
-		bat.AddVector(attr, containers.MakeVector(tableInfoSchemaTypes[i], common.DefaultAllocator))
+		bat.AddVector(attr, containers.MakeVector(tableInfoSchemaTypes[i], common.DebugAllocator))
 	}
 	for _, entry := range sm.tables {
 		for _, table := range entry {
@@ -348,7 +348,7 @@ func (sm *SnapshotMeta) ReadMeta(ctx context.Context, name string, fs fileservic
 	if err != nil {
 		return err
 	}
-	bs, err := reader.LoadAllBlocks(ctx, common.DefaultAllocator)
+	bs, err := reader.LoadAllBlocks(ctx, common.DebugAllocator)
 	if err != nil {
 		return err
 	}
@@ -356,19 +356,20 @@ func (sm *SnapshotMeta) ReadMeta(ctx context.Context, name string, fs fileservic
 	for i := range objectInfoSchemaAttr {
 		idxes[i] = uint16(i)
 	}
-	mobat, release, err := reader.LoadColumns(ctx, idxes, nil, bs[0].GetID(), common.DefaultAllocator)
+	mobat, release, err := reader.LoadColumns(ctx, idxes, nil, bs[0].GetID(), common.DebugAllocator)
 	if err != nil {
 		return err
 	}
 	defer release()
 	bat := containers.NewBatch()
+	defer bat.Close()
 	for i := range objectInfoSchemaAttr {
 		pkgVec := mobat.Vecs[i]
 		var vec containers.Vector
 		if pkgVec.Length() == 0 {
-			vec = containers.MakeVector(objectInfoSchemaTypes[i], common.DefaultAllocator)
+			vec = containers.MakeVector(objectInfoSchemaTypes[i], common.DebugAllocator)
 		} else {
-			vec = containers.ToTNVector(pkgVec, common.DefaultAllocator)
+			vec = containers.ToTNVector(pkgVec, common.DebugAllocator)
 		}
 		bat.AddVector(objectInfoSchemaAttr[i], vec)
 	}
@@ -381,7 +382,7 @@ func (sm *SnapshotMeta) ReadTableInfo(ctx context.Context, name string, fs files
 	if err != nil {
 		return err
 	}
-	bs, err := reader.LoadAllBlocks(ctx, common.DefaultAllocator)
+	bs, err := reader.LoadAllBlocks(ctx, common.DebugAllocator)
 	if err != nil {
 		return err
 	}
@@ -389,19 +390,20 @@ func (sm *SnapshotMeta) ReadTableInfo(ctx context.Context, name string, fs files
 	for i := range objectInfoSchemaAttr {
 		idxes[i] = uint16(i)
 	}
-	mobat, release, err := reader.LoadColumns(ctx, idxes, nil, bs[0].GetID(), common.DefaultAllocator)
+	mobat, release, err := reader.LoadColumns(ctx, idxes, nil, bs[0].GetID(), common.DebugAllocator)
 	if err != nil {
 		return err
 	}
 	defer release()
 	bat := containers.NewBatch()
+	defer bat.Close()
 	for i := range objectInfoSchemaAttr {
 		pkgVec := mobat.Vecs[i]
 		var vec containers.Vector
 		if pkgVec.Length() == 0 {
-			vec = containers.MakeVector(objectInfoSchemaTypes[i], common.DefaultAllocator)
+			vec = containers.MakeVector(objectInfoSchemaTypes[i], common.DebugAllocator)
 		} else {
-			vec = containers.ToTNVector(pkgVec, common.DefaultAllocator)
+			vec = containers.ToTNVector(pkgVec, common.DebugAllocator)
 		}
 		bat.AddVector(objectInfoSchemaAttr[i], vec)
 	}
