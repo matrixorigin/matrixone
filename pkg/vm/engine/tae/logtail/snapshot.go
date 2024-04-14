@@ -419,6 +419,51 @@ func (sm *SnapshotMeta) GetSnapshotList(SnapshotList map[uint32][]types.TS, tid 
 	return SnapshotList[accID]
 }
 
+func (sm *SnapshotMeta) MergeTableInfo(SnapshotList map[uint32][]types.TS) error {
+	sm.Lock()
+	sm.Unlock()
+	if len(sm.tables) == 0 {
+		return nil
+	}
+	for accID, tables := range sm.tables {
+		if SnapshotList[accID] == nil {
+			for _, table := range tables {
+				if !table.deleteAt.IsEmpty() {
+					delete(sm.tables[accID], table.tid)
+				}
+			}
+			continue
+		}
+		for _, table := range tables {
+			if !table.deleteAt.IsEmpty() && !isSnapshotRefers(table, SnapshotList[accID]) {
+				delete(sm.tables[accID], table.tid)
+			}
+		}
+	}
+	return nil
+}
+
+func isSnapshotRefers(table *tableInfo, snapVec []types.TS) bool {
+	if len(snapVec) == 0 {
+		return false
+	}
+	left, right := 0, len(snapVec)-1
+	for left <= right {
+		mid := left + (right-left)/2
+		snapTS := snapVec[mid]
+		if snapTS.GreaterEq(&table.createAt) && snapTS.Less(&table.deleteAt) {
+			logutil.Infof("isSnapshotRefers: %s, create %v, drop %v",
+				snapTS.ToString(), table.createAt.ToString(), table.deleteAt.ToString())
+			return true
+		} else if snapTS.Less(&table.createAt) {
+			left = mid + 1
+		} else {
+			right = mid - 1
+		}
+	}
+	return false
+}
+
 func CloseSnapshotList(snapshots map[uint32]containers.Vector) {
 	for _, snapshot := range snapshots {
 		snapshot.Close()

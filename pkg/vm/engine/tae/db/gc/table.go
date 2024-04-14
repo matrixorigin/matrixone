@@ -108,7 +108,7 @@ func (t *GCTable) getObjects() map[string]*ObjectEntry {
 }
 
 // SoftGC is to remove objectentry that can be deleted from GCTable
-func (t *GCTable) SoftGC(table *GCTable, ts types.TS, snapShotList map[uint32]containers.Vector, meta *logtail.SnapshotMeta) []string {
+func (t *GCTable) SoftGC(table *GCTable, ts types.TS, snapShotList map[uint32]containers.Vector, meta *logtail.SnapshotMeta) ([]string, map[uint32][]types.TS) {
 	gc := make([]string, 0)
 	snapList := make(map[uint32][]types.TS)
 	objects := t.getObjects()
@@ -130,7 +130,7 @@ func (t *GCTable) SoftGC(table *GCTable, ts types.TS, snapShotList map[uint32]co
 			t.deleteObject(name)
 		}
 	}
-	return gc
+	return gc, snapList
 }
 
 func isSnapshotRefers(obj *ObjectEntry, snapVec []types.TS) bool {
