@@ -27,6 +27,11 @@ import (
 )
 
 func (s *service) initRemote() {
+	if s.cfg.disconnectPeriod > 0 {
+		s.cfg.RPC.BackendOptions = append(s.cfg.RPC.BackendOptions,
+			morpc.WithDisconnectPeriod(s.cfg.disconnectPeriod))
+	}
+
 	rpcClient, err := NewClient(s.cfg.RPC)
 	if err != nil {
 		panic(err)
