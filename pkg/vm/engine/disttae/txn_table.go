@@ -64,23 +64,83 @@ func (tbl *txnTable) getTxn() *Transaction {
 	return tbl.db.getTxn()
 }
 
-// TODO:: Call snapStats if txnOp is a snapshot op.
+// TODO:: error handling
 func (tbl *txnTable) Stats(ctx context.Context, sync bool) *pb.StatsInfo {
 	_, err := tbl.getPartitionState(ctx)
 	if err != nil {
 		logutil.Errorf("failed to get partition state of table %d: %v", tbl.tableId, err)
 		return nil
 	}
-	e := tbl.getEngine()
-	return e.Stats(ctx, pb.StatsInfoKey{
-		DatabaseID: tbl.db.databaseId,
-		TableID:    tbl.tableId,
-	}, sync)
+	if !tbl.db.op.IsSnapOp() {
+		e := tbl.getEngine()
+		return e.Stats(ctx, pb.StatsInfoKey{
+			DatabaseID: tbl.db.databaseId,
+			TableID:    tbl.tableId,
+		}, sync)
+	}
+	info, err := tbl.stats(ctx)
+	if err != nil {
+		return nil
+	}
+	return info
 }
 
-// TODO:: snapshot read
+func (tbl *txnTable) stats(ctx context.Context) (*pb.StatsInfo, error) {
+	partitionState, err := tbl.getPartitionState(ctx)
+	if err != nil {
+		return nil, err
+	}
+	e := tbl.db.getEng()
+	var partitionsTableDef []*plan2.TableDef
+	var approxObjectNum int64
+	if tbl.partitioned > 0 {
+		partitionInfo := &plan2.PartitionByDef{}
+		if err := partitionInfo.UnMarshalPartitionInfo([]byte(tbl.partition)); err != nil {
+			logutil.Errorf("failed to unmarshal partition table: %v", err)
+			return nil, err
+		}
+		for _, partitionTableName := range partitionInfo.PartitionTableNames {
+			partitionTable := e.catalog.GetTableByName(tbl.db.databaseId, partitionTableName)
+			partitionsTableDef = append(partitionsTableDef, partitionTable.TableDef)
+			var ps *logtailreplay.PartitionState
+			if !tbl.db.op.IsSnapOp() {
+				ps = e.getOrCreateLatestPart(tbl.db.databaseId, partitionTable.Id).Snapshot()
+			} else {
+				//TODO::
+				//ps, err = e.getOrCreateSnapPart(ctx, tbl.db.databaseId, partitionTable.Id).Snapshot()
+				//if err != nil {
+				//	return nil, err
+				//}
+			}
+			approxObjectNum += int64(ps.ApproxObjectsNum())
+		}
+	} else {
+		approxObjectNum = int64(partitionState.ApproxObjectsNum())
+	}
+
+	if approxObjectNum == 0 {
+		// There are no objects flushed yet.
+		return nil, nil
+	}
+
+	stats := plan2.NewStatsInfo()
+	req := newUpdateStatsRequest(
+		tbl.tableDef,
+		partitionsTableDef,
+		partitionState,
+		e.fs,
+		types.TimestampToTS(tbl.db.op.SnapshotTS()),
+		approxObjectNum,
+		stats,
+	)
+	if err := UpdateStats(ctx, req); err != nil {
+		logutil.Errorf("failed to init stats info for table %d", tbl.tableId)
+		return nil, err
+	}
+	return stats, nil
+}
+
 func (tbl *txnTable) Rows(ctx context.Context) (uint64, error) {
-	e := tbl.getEngine()
 	var rows uint64
 	deletes := make(map[types.Rowid]struct{})
 	tbl.getTxn().forEachTableWrites(
@@ -126,20 +186,18 @@ func (tbl *txnTable) Rows(ctx context.Context) (uint64, error) {
 		}
 		rows++
 	}
-	//TODO::handle snapshot read
-	s := e.Stats(ctx, pb.StatsInfoKey{
-		DatabaseID: tbl.db.databaseId,
-		TableID:    tbl.tableId,
-	}, true)
+	//s := e.Stats(ctx, pb.StatsInfoKey{
+	//	DatabaseID: tbl.db.databaseId,
+	//	TableID:    tbl.tableId,
+	//}, true)
+	s := tbl.Stats(ctx, true)
 	if s == nil {
 		return rows, nil
 	}
 	return uint64(s.TableCnt) + rows, nil
 }
 
-// TODO:: snapshot read
 func (tbl *txnTable) Size(ctx context.Context, columnName string) (uint64, error) {
-	e := tbl.getEngine()
 	ts := types.TimestampToTS(tbl.db.op.SnapshotTS())
 	part, err := tbl.getPartitionState(ctx)
 	if err != nil {
@@ -218,10 +276,11 @@ func (tbl *txnTable) Size(ctx context.Context, columnName string) (uint64, error
 		handled[entry.Batch] = struct{}{}
 	}
 
-	s := e.Stats(ctx, pb.StatsInfoKey{
-		DatabaseID: tbl.db.databaseId,
-		TableID:    tbl.tableId,
-	}, true)
+	//s := e.Stats(ctx, pb.StatsInfoKey{
+	//	DatabaseID: tbl.db.databaseId,
+	//	TableID:    tbl.tableId,
+	//}, true)
+	s := tbl.Stats(ctx, true)
 	if s == nil {
 		return szInPart, nil
 	}
@@ -558,16 +617,6 @@ func (tbl *txnTable) resetSnapshot() {
 // return all unmodified blocks
 func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr) (ranges engine.Ranges, err error) {
 	start := time.Now()
-
-	if tbl.tableId == catalog.MO_DATABASE_ID ||
-		tbl.tableId == catalog.MO_TABLES_ID ||
-		tbl.tableId == catalog.MO_COLUMNS_ID {
-		logutil.Infof("xxxx name:%s, primarySeq:%d, primaryindex:%d",
-			tbl.tableName,
-			tbl.primarySeqnum,
-			tbl.primaryIdx)
-	}
-
 	seq := tbl.db.op.NextSequence()
 	trace.GetService().AddTxnDurationAction(
 		tbl.db.op,

@@ -1335,9 +1335,6 @@ func updatePartitionOfPush(
 	state, doneMutate := partition.MutateState()
 
 	key := e.catalog.GetTableById(dbId, tblId)
-	if dbId == catalog.MO_CATALOG_ID {
-		logutil.Infof("xxx logtail: name:%s, pkseq:%d", key.Name, key.PrimarySeqnum)
-	}
 
 	if lazyLoad {
 		if len(tl.CkpLocation) > 0 {

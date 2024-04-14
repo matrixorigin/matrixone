@@ -101,6 +101,10 @@ func New(
 			},
 		),
 	}
+	e.snapCatalog = &struct {
+		sync.Mutex
+		snaps []*cache.CatalogCache
+	}{}
 	e.mu.snapParts = make(map[[2]uint64]*struct {
 		sync.Mutex
 		snaps []*logtailreplay.Partition

@@ -17,7 +17,6 @@ package disttae
 import (
 	"context"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
@@ -34,15 +33,6 @@ import (
 func (e *Engine) init(ctx context.Context) error {
 	e.Lock()
 	defer e.Unlock()
-	defer func() {
-		dbseq := e.catalog.GetTableById(catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID)
-		tbseq := e.catalog.GetTableById(catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID)
-		colsql := e.catalog.GetTableById(catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID)
-		logutil.Infof("xxxx init dbseq: %d, tbseq: %d, colseq: %d",
-			dbseq.PrimarySeqnum, tbseq.PrimarySeqnum, colsql.PrimarySeqnum)
-		logutil.Infof("xxxx init dbcons: %s, tbcons: %s, colcons: %s",
-			string(dbseq.Constraint), string(tbseq.Constraint), string(colsql.Constraint))
-	}()
 	m := e.mp
 
 	e.catalog = cache.NewCatalog()
@@ -266,7 +256,14 @@ func (e *Engine) init(ctx context.Context) error {
 	return nil
 }
 
-// TODO:: primarySeqnum is 0 for mo_tables, mo_columns, mo_columns, need to handle this case.
+func (e *Engine) getLatestCatalogCache() *cache.CatalogCache {
+	return e.catalog
+}
+
+func (e *Engine) getOrCreateSnapCatalogCache() *cache.CatalogCache {
+	return e.catalog
+}
+
 func (e *Engine) getOrCreateSnapPart(
 	ctx context.Context,
 	databaseId uint64,
@@ -305,12 +302,12 @@ func (e *Engine) getOrCreateSnapPart(
 	}
 	//new snapshot partition and apply checkpoints into it.
 	snap := logtailreplay.NewPartition()
+	//TODO::if tableId is mo_tables, or mo_colunms, or mo_database,
+	//      we should init the partition,ref to engine.init
 	ckps, err := checkpoint.ListSnapshotCheckpoint(ctx, e.fs, ts, tableId)
 	if err != nil {
 		return nil, err
 	}
-	//TODO:: handle mo_catalog, mo_database, mo_tables, mo_columns,
-	//       put them into snapshot partition.
 	snap.ConsumeSnapCkps(ctx, ckps, func(
 		checkpoint *checkpoint.CheckpointEntry,
 		state *logtailreplay.PartitionState) error {
