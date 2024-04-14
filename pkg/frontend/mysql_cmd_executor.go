@@ -1450,33 +1450,69 @@ func (mce *MysqlCmdExecutor) handleDropSnapshot(ctx context.Context, ct *tree.Dr
 // which has been initialized.
 func (mce *MysqlCmdExecutor) handleCreateAccount(ctx context.Context, ca *tree.CreateAccount, proc *process.Process) error {
 	//step1 : create new account.
-	create := &CreateAccount{
+	create := &createAccount{
 		IfNotExists:  ca.IfNotExists,
-		AuthOption:   ca.AuthOption,
+		IdentTyp:     ca.AuthOption.IdentifiedType.Typ,
 		StatusOption: ca.StatusOption,
 		Comment:      ca.Comment,
 	}
 
-	params := proc.GetPrepareParams()
-	switch val := ca.Name.(type) {
-	case *tree.NumVal:
-		create.Name = val.OrigString()
-	case *tree.ParamExpr:
-		create.Name = params.GetStringAt(val.Offset - 1)
-	default:
-		return moerr.NewInternalError(ctx, "invalid params type")
+	b := strParamBinder{
+		ctx:    ctx,
+		params: proc.GetPrepareParams(),
+	}
+	create.Name = b.bind(ca.Name)
+	create.AdminName = b.bind(ca.AuthOption.AdminName)
+	create.IdentStr = b.bindIdentStr(&ca.AuthOption.IdentifiedType)
+	if b.err != nil {
+		return b.err
 	}
 
 	return InitGeneralTenant(ctx, mce.GetSession(), create)
 }
 
 // handleDropAccount drops a new user-level tenant
-func (mce *MysqlCmdExecutor) handleDropAccount(ctx context.Context, da *tree.DropAccount) error {
-	return doDropAccount(ctx, mce.GetSession(), da)
+func (mce *MysqlCmdExecutor) handleDropAccount(ctx context.Context, da *tree.DropAccount, proc *process.Process) error {
+	drop := &dropAccount{
+		IfExists: da.IfExists,
+	}
+
+	b := strParamBinder{
+		ctx:    ctx,
+		params: proc.GetPrepareParams(),
+	}
+	drop.Name = b.bind(da.Name)
+	if b.err != nil {
+		return b.err
+	}
+
+	return doDropAccount(ctx, mce.GetSession(), drop)
 }
 
 // handleDropAccount drops a new user-level tenant
-func (mce *MysqlCmdExecutor) handleAlterAccount(ctx context.Context, aa *tree.AlterAccount) error {
+func (mce *MysqlCmdExecutor) handleAlterAccount(ctx context.Context, st *tree.AlterAccount, proc *process.Process) error {
+	aa := &alterAccount{
+		IfExists:     st.IfExists,
+		StatusOption: st.StatusOption,
+		Comment:      st.Comment,
+	}
+
+	b := strParamBinder{
+		ctx:    ctx,
+		params: proc.GetPrepareParams(),
+	}
+
+	aa.Name = b.bind(st.Name)
+	if st.AuthOption.Exist {
+		aa.AuthExist = true
+		aa.AdminName = b.bind(st.AuthOption.AdminName)
+		aa.IdentTyp = st.AuthOption.IdentifiedType.Typ
+		aa.IdentStr = b.bindIdentStr(&st.AuthOption.IdentifiedType)
+	}
+	if b.err != nil {
+		return b.err
+	}
+
 	return doAlterAccount(ctx, mce.GetSession(), aa)
 }
 
@@ -1491,9 +1527,38 @@ func (mce *MysqlCmdExecutor) handleAlterAccountConfig(ctx context.Context, ses *
 }
 
 // handleCreateUser creates the user for the tenant
-func (mce *MysqlCmdExecutor) handleCreateUser(ctx context.Context, cu *tree.CreateUser) error {
+func (mce *MysqlCmdExecutor) handleCreateUser(ctx context.Context, st *tree.CreateUser) error {
 	ses := mce.GetSession()
 	tenant := ses.GetTenantInfo()
+
+	cu := &createUser{
+		IfNotExists:        st.IfNotExists,
+		Role:               st.Role,
+		Users:              make([]*user, 0, len(st.Users)),
+		MiscOpt:            st.MiscOpt,
+		CommentOrAttribute: st.CommentOrAttribute,
+	}
+
+	for _, u := range st.Users {
+		v := user{
+			Username: u.Username,
+			Hostname: u.Hostname,
+		}
+		if u.AuthOption != nil {
+			v.AuthExist = true
+			v.IdentTyp = u.AuthOption.Typ
+			switch v.IdentTyp {
+			case tree.AccountIdentifiedByPassword,
+				tree.AccountIdentifiedWithSSL:
+				var err error
+				v.IdentStr, err = unboxExprStr(ctx, u.AuthOption.Str)
+				if err != nil {
+					return err
+				}
+			}
+		}
+		cu.Users = append(cu.Users, &v)
+	}
 
 	//step1 : create the user
 	return InitUser(ctx, ses, tenant, cu)
@@ -1504,7 +1569,39 @@ func (mce *MysqlCmdExecutor) handleDropUser(ctx context.Context, du *tree.DropUs
 	return doDropUser(ctx, mce.GetSession(), du)
 }
 
-func (mce *MysqlCmdExecutor) handleAlterUser(ctx context.Context, au *tree.AlterUser) error {
+func (mce *MysqlCmdExecutor) handleAlterUser(ctx context.Context, st *tree.AlterUser) error {
+	if len(st.Users) != 1 {
+		return moerr.NewInternalError(ctx, "can only alter one user at a time")
+	}
+	su := st.Users[0]
+
+	u := &user{
+		Username: su.Username,
+		Hostname: su.Hostname,
+	}
+	if su.AuthOption != nil {
+		u.AuthExist = true
+		u.IdentTyp = su.AuthOption.Typ
+		switch u.IdentTyp {
+		case tree.AccountIdentifiedByPassword,
+			tree.AccountIdentifiedWithSSL:
+			var err error
+			u.IdentStr, err = unboxExprStr(ctx, su.AuthOption.Str)
+			if err != nil {
+				return err
+			}
+		}
+	}
+
+	au := &alterUser{
+		IfExists: st.IfExists,
+		User:     u,
+		Role:     st.Role,
+		MiscOpt:  st.MiscOpt,
+
+		CommentOrAttribute: st.CommentOrAttribute,
+	}
+
 	return doAlterUser(ctx, mce.GetSession(), au)
 }
 
@@ -3629,13 +3726,13 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 	case *tree.DropAccount:
 		selfHandle = true
 		ses.InvalidatePrivilegeCache()
-		if err = mce.handleDropAccount(requestCtx, st); err != nil {
+		if err = mce.handleDropAccount(requestCtx, st, proc); err != nil {
 			return
 		}
 	case *tree.AlterAccount:
 		ses.InvalidatePrivilegeCache()
 		selfHandle = true
-		if err = mce.handleAlterAccount(requestCtx, st); err != nil {
+		if err = mce.handleAlterAccount(requestCtx, st, proc); err != nil {
 			return
 		}
 	case *tree.AlterDataBaseConfig:
@@ -3839,6 +3936,22 @@ func (mce *MysqlCmdExecutor) executeStmt(requestCtx context.Context,
 	case *tree.CreateAccount:
 		ses.InvalidatePrivilegeCache()
 		err = mce.handleCreateAccount(requestCtx, st, proc)
+		if err != nil {
+			return
+		} else {
+			return
+		}
+	case *tree.AlterAccount:
+		ses.InvalidatePrivilegeCache()
+		err = mce.handleAlterAccount(requestCtx, st, proc)
+		if err != nil {
+			return
+		} else {
+			return
+		}
+	case *tree.DropAccount:
+		ses.InvalidatePrivilegeCache()
+		err = mce.handleDropAccount(requestCtx, st, proc)
 		if err != nil {
 			return
 		} else {
@@ -5068,7 +5181,7 @@ func (h *marshalPlanHandler) Stats(ctx context.Context) (statsByte statistic.Sta
 		val := int64(statsByte.GetTimeConsumed()) +
 			int64(statsInfo.ParseDuration+
 				statsInfo.CompileDuration+
-				statsInfo.PlanDuration) - (statsInfo.IOAccessTimeConsumption + statsInfo.LockTimeConsumption)
+				statsInfo.PlanDuration) - (statsInfo.IOAccessTimeConsumption + statsInfo.IOLockTimeConsumption())
 		if val < 0 {
 			logutil.Warnf(" negative cpu (%s) + statsInfo(%d + %d + %d - %d - %d) = %d",
 				uuid.UUID(h.stmt.StatementID).String(),
@@ -5076,7 +5189,7 @@ func (h *marshalPlanHandler) Stats(ctx context.Context) (statsByte statistic.Sta
 				statsInfo.CompileDuration,
 				statsInfo.PlanDuration,
 				statsInfo.IOAccessTimeConsumption,
-				statsInfo.LockTimeConsumption,
+				statsInfo.IOLockTimeConsumption(),
 				val)
 			v2.GetTraceNegativeCUCounter("cpu").Inc()
 		} else {

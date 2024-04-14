@@ -1144,14 +1144,17 @@ grant connect on account * to role_r1;
 grant create table, drop table on database *.* to role_r1;
 grant show tables on database * to role_r1;
 -- @session:id=4&user=sys:role_u1:role_r1&password=111
+use db1;
 drop table if exists t2;
 create table t2 as select * from t1;
 -- @session
 grant select on table * to role_r1;
 grant insert on table * to role_r1;
 -- @session:id=5&user=sys:role_u1:role_r1&password=111
+use db1;
 drop table if exists t2;
 create table t2 as select * from t1;
+select * from t2;
 -- @session
 drop table t1;
 drop table t2;
@@ -1300,4 +1303,38 @@ drop user role_u2;
 drop database db;
 drop database db5;
 drop database db6;
+
+-- @bvt:issue#15491
+-- privilege
+drop database if exists db7;
+create database db7;
+use db7;
+drop role if exists role_r1;
+drop user if exists role_u1;
+create role role_r1;
+create user role_u1 identified by '111' default role role_r1;
+drop table if exists t1;
+create table t1(col1 int);
+insert into t1 values(1);
+insert into t1 values(2);
+grant create database, drop database on account * to role_r1;
+grant show databases on account * to role_r1;
+grant connect on account * to role_r1;
+grant create table, drop table on database *.* to role_r1;
+grant show tables on database * to role_r1;
+-- @session:id=23&user=sys:role_u1:role_r1&password=111
+drop table if exists t2;
+create table t2 as select * from t1;
+-- @session
+grant select on table * to role_r1;
+grant insert on table * to role_r1;
+-- @session:id=24&user=sys:role_u1:role_r1&password=111
+drop table if exists t2;
+create table t2 as select * from t1;
+select * from t2;
+-- @session
+drop table t1;
+drop table t2;
+drop database db7;
+-- @bvt:issue
 set @@global.lower_case_table_names = 1;
