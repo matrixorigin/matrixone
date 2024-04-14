@@ -1629,7 +1629,7 @@ func openDbConn(t *testing.T, port int) (*sql.DB, error) {
 	if err != nil {
 		return nil, err
 	} else {
-		db.SetConnMaxLifetime(time.Minute * 30)
+		db.SetConnMaxLifetime(time.Minute * 3)
 		db.SetMaxOpenConns(1)
 		db.SetMaxIdleConns(1)
 		time.Sleep(time.Millisecond * 100)
