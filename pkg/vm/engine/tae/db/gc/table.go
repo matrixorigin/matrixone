@@ -108,12 +108,12 @@ func (t *GCTable) getObjects() map[string]*ObjectEntry {
 }
 
 // SoftGC is to remove objectentry that can be deleted from GCTable
-func (t *GCTable) SoftGC(table *GCTable, ts types.TS, snapShotList map[uint64]containers.Vector, meta *logtail.SnapshotMeta) []string {
+func (t *GCTable) SoftGC(table *GCTable, ts types.TS, snapShotList map[uint32]containers.Vector, meta *logtail.SnapshotMeta) []string {
 	gc := make([]string, 0)
-	snapList := make(map[uint64][]types.TS)
+	snapList := make(map[uint32][]types.TS)
 	objects := t.getObjects()
-	for tid, snap := range snapShotList {
-		snapList[tid] = vector.MustFixedCol[types.TS](snap.GetDownstreamVector())
+	for acct, snap := range snapShotList {
+		snapList[acct] = vector.MustFixedCol[types.TS](snap.GetDownstreamVector())
 	}
 	for name, entry := range objects {
 		objectEntry := table.objects[name]

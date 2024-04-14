@@ -6461,14 +6461,14 @@ func TestSnapshotGC(t *testing.T) {
 	schema2 := catalog.MockSchemaAll(13, 2)
 	schema2.BlockMaxRows = 10
 	schema2.ObjectMaxBlocks = 2
-	var rel1, rel2, rel3 handle.Relation
+	var rel3 handle.Relation
 	{
 		txn, _ := db.StartTxn(nil)
 		database, err := txn.CreateDatabase("db", "", "")
 		assert.Nil(t, err)
-		rel1, err = database.CreateRelation(schema1)
+		_, err = database.CreateRelation(schema1)
 		assert.Nil(t, err)
-		rel2, err = database.CreateRelation(schema2)
+		_, err = database.CreateRelation(schema2)
 		assert.Nil(t, err)
 		rel3, err = database.CreateRelation(snapshotSchema)
 		assert.Nil(t, err)
@@ -6516,9 +6516,9 @@ func TestSnapshotGC(t *testing.T) {
 		opt.Capacity = 0
 		data1 := containers.BuildBatch(attrs, vecTypes, opt)
 		if i == 2 {
-			data1.Vecs[0].Append(rel2.ID(), false)
+			data1.Vecs[0].Append(uint64(0), false)
 		} else {
-			data1.Vecs[0].Append(rel1.ID(), false)
+			data1.Vecs[0].Append(uint64(0), false)
 		}
 		logutil.Infof("add snapshot %v", snapshot.ToString())
 		data1.Vecs[1].Append(snapshot, false)

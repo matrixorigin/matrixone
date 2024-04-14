@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -53,7 +54,7 @@ var (
 	}
 
 	tableInfoSchemaTypes = []types.Type{
-		types.New(types.T_uint64, 0, 0),
+		types.New(types.T_uint32, 0, 0),
 		types.New(types.T_uint64, 0, 0),
 		types.New(types.T_uint64, 0, 0),
 		types.New(types.T_TS, types.MaxVarcharLen, 0),
@@ -73,12 +74,12 @@ type SnapshotMeta struct {
 	sync.RWMutex
 	objects     map[objectio.Segmentid]*objectInfo
 	tid         uint64
-	tables      map[uint64]map[uint64]*tableInfo
+	tables      map[uint32]map[uint64]*tableInfo
 	acctIndexes map[uint64]*tableInfo
 }
 
 type tableInfo struct {
-	accID    uint64
+	accID    uint32
 	dbID     uint64
 	tid      uint64
 	createAt types.TS
@@ -88,7 +89,7 @@ type tableInfo struct {
 func NewSnapshotMeta() *SnapshotMeta {
 	return &SnapshotMeta{
 		objects:     make(map[objectio.Segmentid]*objectInfo),
-		tables:      make(map[uint64]map[uint64]*tableInfo),
+		tables:      make(map[uint32]map[uint64]*tableInfo),
 		acctIndexes: make(map[uint64]*tableInfo),
 	}
 }
@@ -145,22 +146,24 @@ func (sm *SnapshotMeta) Update(data *CheckpointData) *SnapshotMeta {
 	insTIDVec := insTable.GetVectorByName(catalog2.SystemRelAttr_ID).GetDownstreamVector()
 	insDBIDVec := insTable.GetVectorByName(catalog2.SystemRelAttr_DBID).GetDownstreamVector()
 	insCreateAtVec := insTable.GetVectorByName(catalog2.SystemRelAttr_CreateAt).GetDownstreamVector()
+	logutil.Infof("insTable length: %d", insTable.Length())
 	for i := 0; i < insTable.Length(); i++ {
-		accID := vector.GetFixedAt[uint64](insAccIDVec, i)
+		accID := vector.GetFixedAt[uint32](insAccIDVec, i)
 		if sm.tables[accID] == nil {
 			sm.tables[accID] = make(map[uint64]*tableInfo)
 		}
 		tid := vector.GetFixedAt[uint64](insTIDVec, i)
 		dbid := vector.GetFixedAt[uint64](insDBIDVec, i)
-		createAt := vector.GetFixedAt[types.TS](insCreateAtVec, i)
+		create := vector.GetFixedAt[types.Timestamp](insCreateAtVec, i)
+		createAt := types.BuildTS(create.Unix(), 0)
+		logutil.Infof("accID: %d, tid: %d, dbid: %d, createAt: %s", accID, tid, dbid, createAt.ToString())
 		if sm.tables[accID][tid] != nil {
 			continue
 		}
 		table := &tableInfo{
-			accID:    accID,
-			dbID:     dbid,
-			tid:      tid,
-			createAt: createAt,
+			accID: accID,
+			dbID:  dbid,
+			tid:   tid,
 		}
 		sm.tables[accID][tid] = table
 
@@ -182,11 +185,11 @@ func (sm *SnapshotMeta) Update(data *CheckpointData) *SnapshotMeta {
 	return nil
 }
 
-func (sm *SnapshotMeta) GetSnapshot(ctx context.Context, fs fileservice.FileService, mp *mpool.MPool) (map[uint64]containers.Vector, error) {
+func (sm *SnapshotMeta) GetSnapshot(ctx context.Context, fs fileservice.FileService, mp *mpool.MPool) (map[uint32]containers.Vector, error) {
 	sm.RLock()
 	objects := sm.objects
 	sm.RUnlock()
-	snapshotList := make(map[uint64]containers.Vector)
+	snapshotList := make(map[uint32]containers.Vector)
 	idxes := []uint16{0, 1}
 	colTypes := []types.Type{
 		types.New(types.T_uint64, 0, 0),
@@ -212,8 +215,9 @@ func (sm *SnapshotMeta) GetSnapshot(ctx context.Context, fs fileservice.FileServ
 			}
 			defer bat.Clean(mp)
 			for r := 0; r < bat.Vecs[0].Length(); r++ {
-				id := vector.GetFixedAt[uint64](bat.Vecs[0], r)
+				acct := vector.GetFixedAt[uint64](bat.Vecs[0], r)
 				ts := vector.GetFixedAt[types.TS](bat.Vecs[1], r)
+				id := uint32(acct)
 				if snapshotList[id] == nil {
 					snapshotList[id] = containers.MakeVector(colTypes[1], mp)
 				}
@@ -304,7 +308,7 @@ func (sm *SnapshotMeta) RebuildTableInfo(ins *containers.Batch) {
 	for i := 0; i < ins.Length(); i++ {
 		tid := vector.GetFixedAt[uint64](insTIDVec, i)
 		dbid := vector.GetFixedAt[uint64](insDBIDVec, i)
-		accid := vector.GetFixedAt[uint64](insAccIDVec, i)
+		accid := vector.GetFixedAt[uint32](insAccIDVec, i)
 		createTS := vector.GetFixedAt[types.TS](insCreateTSVec, i)
 		deleteTS := vector.GetFixedAt[types.TS](insDeleteTSVec, i)
 		if sm.tables[accid] == nil {
@@ -405,7 +409,7 @@ func (sm *SnapshotMeta) ReadTableInfo(ctx context.Context, name string, fs files
 	return nil
 }
 
-func (sm *SnapshotMeta) GetSnapshotList(SnapshotList map[uint64][]types.TS, tid uint64) []types.TS {
+func (sm *SnapshotMeta) GetSnapshotList(SnapshotList map[uint32][]types.TS, tid uint64) []types.TS {
 	sm.RLock()
 	sm.RUnlock()
 	if sm.acctIndexes[tid] == nil {
@@ -415,7 +419,7 @@ func (sm *SnapshotMeta) GetSnapshotList(SnapshotList map[uint64][]types.TS, tid 
 	return SnapshotList[accID]
 }
 
-func CloseSnapshotList(snapshots map[uint64]containers.Vector) {
+func CloseSnapshotList(snapshots map[uint32]containers.Vector) {
 	for _, snapshot := range snapshots {
 		snapshot.Close()
 	}

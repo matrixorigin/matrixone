@@ -398,7 +398,7 @@ func (c *checkpointCleaner) tryGC(data *logtail.CheckpointData, gckp *checkpoint
 	return nil
 }
 
-func (c *checkpointCleaner) softGC(t *GCTable, gckp *checkpoint.CheckpointEntry, snapshots map[uint64]containers.Vector) []string {
+func (c *checkpointCleaner) softGC(t *GCTable, gckp *checkpoint.CheckpointEntry, snapshots map[uint32]containers.Vector) []string {
 	c.inputs.Lock()
 	defer c.inputs.Unlock()
 	if len(c.inputs.tables) == 0 {
@@ -635,6 +635,6 @@ func (c *checkpointCleaner) updateSnapshot(data *logtail.CheckpointData) error {
 	return nil
 }
 
-func (c *checkpointCleaner) GetSnapshots() (map[uint64]containers.Vector, error) {
+func (c *checkpointCleaner) GetSnapshots() (map[uint32]containers.Vector, error) {
 	return c.snapshotMeta.GetSnapshot(c.ctx, c.fs.Service, c.mPool)
 }
