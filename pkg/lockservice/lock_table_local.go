@@ -159,7 +159,7 @@ func (l *localLockTable) doLock(
 			}
 
 			c.w.close()
-			c.done(v.err)
+			c.done(e)
 			return
 		}
 
