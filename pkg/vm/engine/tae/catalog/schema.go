@@ -983,6 +983,21 @@ func MockSchema(colCnt int, pkIdx int) *Schema {
 	return schema
 }
 
+func MockSnapShotSchema() *Schema {
+	schema := NewEmptySchema("mo_snapshot")
+
+	constraintDef := &engine.ConstraintDef{
+		Cts: make([]engine.Constraint, 0),
+	}
+
+	schema.AppendCol("tid", types.T_uint64.ToType())
+	schema.AppendCol("ts", types.T_TS.ToType())
+	schema.Constraint, _ = constraintDef.MarshalBinary()
+
+	_ = schema.Finalize(false)
+	return schema
+}
+
 // MockSchemaAll if char/varchar is needed, colCnt = 14, otherwise colCnt = 12
 // pkIdx == -1 means no pk defined
 func MockSchemaAll(colCnt int, pkIdx int, from ...int) *Schema {
