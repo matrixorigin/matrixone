@@ -2609,7 +2609,7 @@ func (tbl *txnTable) newPkFilter(pkExpr, constExpr *plan.Expr) (*plan.Expr, erro
 }
 
 func (tbl *txnTable) MergeObjects(ctx context.Context, objstats []objectio.ObjectStats) (*api.MergeCommitEntry, error) {
-	snapshot := types.TimestampToTS(tbl.db.txn.op.SnapshotTS())
+	snapshot := types.TimestampToTS(tbl.getTxn().op.SnapshotTS())
 	state, err := tbl.getPartitionState(ctx)
 	if err != nil {
 		return nil, err
