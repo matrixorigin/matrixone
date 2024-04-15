@@ -598,7 +598,7 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 			col := &plan.ColDef{
 				Name: act.AddColumn.Name,
 				Alg:  plan.CompressType_Lz4,
-				Typ:  *act.AddColumn.Type,
+				Typ:  act.AddColumn.Type,
 			}
 			var pos int32
 			cols, pos, err = getAddColPos(cols, col, act.AddColumn.PreName, act.AddColumn.Pos)
@@ -708,7 +708,7 @@ func (s *Scope) AlterTableInplace(c *Compile) error {
 			req = api.NewRenameTableReq(rel.GetDBID(c.ctx), rel.GetTableID(c.ctx), oldName, newName)
 		case api.AlterKind_AddColumn:
 			name := addCol[addColIdx].Name
-			typ := addCol[addColIdx].Type
+			typ := &addCol[addColIdx].Type
 			pos := addCol[addColIdx].Pos
 			addColIdx++
 			req = api.NewAddColumnReq(rel.GetDBID(c.ctx), rel.GetTableID(c.ctx), name, typ, pos)

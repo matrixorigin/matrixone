@@ -1238,7 +1238,7 @@ message AlterTableName {
 message AlterAddColumn {
 	string name = 1;
 	string pre_name = 2;
-	Type type = 3;
+	Type type = 3 [(gogoproto.nullable) = false];
 	int32 pos = 4;
 }
 

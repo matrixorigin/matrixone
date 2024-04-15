@@ -3180,7 +3180,7 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 					AddColumn: &plan.AlterAddColumn{
 						Name:    opt.Column.Name.Parts[0],
 						PreName: preName,
-						Type:    colType,
+						Type:    *colType,
 						Pos:     int32(opt.Position.Typ),
 					},
 				},
