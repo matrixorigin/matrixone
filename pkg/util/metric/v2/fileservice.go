@@ -118,3 +118,28 @@ var (
 	LocalWriteIODurationHistogram = localIODurationHistogram.WithLabelValues("write")
 	LocalReadIODurationHistogram  = localIODurationHistogram.WithLabelValues("read")
 )
+
+var (
+	ioLockCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "fs",
+			Name:      "io_lock_counter",
+			Help:      "io lock counter",
+		},
+		[]string{"type"},
+	)
+	IOLockCounterLocked = ioLockCounter.WithLabelValues("locked")
+	IOLockCounterWait   = ioLockCounter.WithLabelValues("wait")
+
+	ioLockDuration = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "mo",
+			Subsystem: "fs",
+			Name:      "io_lock_duration_seconds",
+			Help:      "io lock duration seconds",
+			Buckets:   getDurationBuckets(),
+		}, []string{"type"})
+	IOLockDurationLocked = ioLockDuration.WithLabelValues("locked")
+	IOLockDurationWait   = ioLockDuration.WithLabelValues("wait")
+)
