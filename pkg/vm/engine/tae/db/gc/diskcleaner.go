@@ -81,11 +81,7 @@ func (cleaner *DiskCleaner) process(items ...any) {
 		if err != nil {
 			panic(err)
 		}
-		// TODO:
-		err = cleaner.cleaner.TryGC()
-		if err != nil {
-			return
-		}
+		cleaner.cleaner.TryGC()
 		if len(items) == 1 {
 			return
 		}
@@ -105,5 +101,6 @@ func (cleaner *DiskCleaner) Start() {
 func (cleaner *DiskCleaner) Stop() {
 	cleaner.onceStop.Do(func() {
 		cleaner.processQueue.Stop()
+		cleaner.cleaner.Stop()
 	})
 }
