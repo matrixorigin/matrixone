@@ -32,35 +32,36 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/google/uuid"
+	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 
-	"github.com/google/uuid"
-	"github.com/matrixorigin/matrixone/pkg/queryservice"
-
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/config"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
+	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/util/metric/mometric"
 	"github.com/matrixorigin/matrixone/pkg/util/sysview"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/route"
+
 	"github.com/tidwall/btree"
-	"go.uber.org/zap"
+
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 )
 
 type TenantInfo struct {
@@ -3398,8 +3399,8 @@ func doSwitchRole(ctx context.Context, ses *Session, sr *tree.SetRole) (err erro
 	return err
 }
 
-func getSubscriptionMeta(ctx context.Context, dbName string, ses *Session, txn TxnOperator) (*plan.SubscriptionMeta, error) {
-	dbMeta, err := ses.GetParameterUnit().StorageEngine.Database(ctx, dbName, txn)
+func getSubscriptionMeta(ctx context.Context, dbName string, ses FeSession, txn TxnOperator) (*plan.SubscriptionMeta, error) {
+	dbMeta, err := getGlobalPu().StorageEngine.Database(ctx, dbName, txn)
 	if err != nil {
 		logutil.Errorf("Get Subscription database %s meta error: %s", dbName, err.Error())
 		return nil, moerr.NewNoDB(ctx)
@@ -3415,7 +3416,7 @@ func getSubscriptionMeta(ctx context.Context, dbName string, ses *Session, txn T
 	return nil, nil
 }
 
-func checkSubscriptionValidCommon(ctx context.Context, ses *Session, subName, accName, pubName string) (subs *plan.SubscriptionMeta, err error) {
+func checkSubscriptionValidCommon(ctx context.Context, ses FeSession, subName, accName, pubName string) (subs *plan.SubscriptionMeta, err error) {
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 	var (
@@ -3555,7 +3556,7 @@ func checkSubscriptionValidCommon(ctx context.Context, ses *Session, subName, ac
 	return subs, err
 }
 
-func checkSubscriptionValid(ctx context.Context, ses *Session, createSql string) (*plan.SubscriptionMeta, error) {
+func checkSubscriptionValid(ctx context.Context, ses FeSession, createSql string) (*plan.SubscriptionMeta, error) {
 	var (
 		err                       error
 		accName, pubName, subName string
@@ -3566,7 +3567,7 @@ func checkSubscriptionValid(ctx context.Context, ses *Session, createSql string)
 	return checkSubscriptionValidCommon(ctx, ses, subName, accName, pubName)
 }
 
-func isDbPublishing(ctx context.Context, dbName string, ses *Session) (ok bool, err error) {
+func isDbPublishing(ctx context.Context, dbName string, ses FeSession) (ok bool, err error) {
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 	var (
@@ -3898,6 +3899,7 @@ func doAlterStage(ctx context.Context, ses *Session, as *tree.AlterStage) (err e
 
 func doDropStage(ctx context.Context, ses *Session, ds *tree.DropStage) (err error) {
 	var sql string
+	//var err error
 	var stageExist bool
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
@@ -4211,8 +4213,9 @@ func doDropAccount(ctx context.Context, ses *Session, da *dropAccount) (err erro
 	defer bh.Close()
 
 	//set backgroundHandler's default schema
-	if handler, ok := bh.(*BackgroundHandler); ok {
-		handler.ses.Session.txnCompileCtx.dbName = catalog.MO_CATALOG
+	if handler, ok := bh.(*backExec); ok {
+		handler.backSes.
+			txnCompileCtx.dbName = catalog.MO_CATALOG
 	}
 
 	var sql, db, table string
@@ -4450,7 +4453,7 @@ func doDropAccount(ctx context.Context, ses *Session, da *dropAccount) (err erro
 func postDropSuspendAccount(
 	ctx context.Context, ses *Session, accountName string, accountID int64, version uint64,
 ) (err error) {
-	qc := ses.GetParameterUnit().QueryClient
+	qc := getGlobalPu().QueryClient
 	if qc == nil {
 		return moerr.NewInternalError(ctx, "query client is not initialized")
 	}
@@ -4909,7 +4912,7 @@ func doDropProcedure(ctx context.Context, ses *Session, dp *tree.DropProcedure) 
 }
 
 // doRevokePrivilege accomplishes the RevokePrivilege statement
-func doRevokePrivilege(ctx context.Context, ses *Session, rp *tree.RevokePrivilege) (err error) {
+func doRevokePrivilege(ctx context.Context, ses FeSession, rp *tree.RevokePrivilege) (err error) {
 	var vr *verifiedRole
 	var objType objectType
 	var privLevel privilegeLevelType
@@ -5064,7 +5067,7 @@ func convertAstObjectTypeToObjectType(ctx context.Context, ot tree.ObjectType) (
 
 // checkPrivilegeObjectTypeAndPrivilegeLevel checks the relationship among the privilege type, the object type and the privilege level.
 // it returns the converted object type, the privilege level and the object id.
-func checkPrivilegeObjectTypeAndPrivilegeLevel(ctx context.Context, ses *Session, bh BackgroundExec,
+func checkPrivilegeObjectTypeAndPrivilegeLevel(ctx context.Context, ses FeSession, bh BackgroundExec,
 	ot tree.ObjectType, pl tree.PrivilegeLevel) (privilegeLevelType, int64, error) {
 	var privLevel privilegeLevelType
 	var objId int64
@@ -5174,7 +5177,7 @@ func matchPrivilegeTypeWithObjectType(ctx context.Context, privType PrivilegeTyp
 }
 
 // doGrantPrivilege accomplishes the GrantPrivilege statement
-func doGrantPrivilege(ctx context.Context, ses *Session, gp *tree.GrantPrivilege) (err error) {
+func doGrantPrivilege(ctx context.Context, ses FeSession, gp *tree.GrantPrivilege) (err error) {
 	var erArray []ExecResult
 	var roleId int64
 	var privType PrivilegeType
@@ -7771,13 +7774,15 @@ func InitSysTenantOld(ctx context.Context, aicm *defines.AutoIncrCacheManager, f
 	//Note: it is special here. The connection ctx here is ctx also.
 	//Actually, it is ok here. the ctx is moServerCtx instead of requestCtx
 	upstream := &Session{
-		connectCtx:           ctx,
-		autoIncrCacheManager: aicm,
-		protocol:             &FakeProtocol{},
-		seqCurValues:         make(map[uint64]string),
-		seqLastValue:         new(string),
+		feSessionImpl: feSessionImpl{
+			proto: &FakeProtocol{},
+		},
+		connectCtx: ctx,
+
+		seqCurValues: make(map[uint64]string),
+		seqLastValue: new(string),
 	}
-	bh := NewBackgroundHandler(ctx, upstream, mp, pu)
+	bh := NewBackgroundExec(ctx, upstream, mp)
 	defer bh.Close()
 
 	//USE the mo_catalog
@@ -8099,7 +8104,7 @@ func InitGeneralTenant(ctx context.Context, ses *Session, ca *createAccount) (er
 		}
 
 		// create tables for new account
-		rtnErr = createTablesInMoCatalogOfGeneralTenant2(bh, ca, newTenantCtx, newTenant, ses.pu)
+		rtnErr = createTablesInMoCatalogOfGeneralTenant2(bh, ca, newTenantCtx, newTenant, getGlobalPu())
 		if rtnErr != nil {
 			return rtnErr
 		}
@@ -8728,7 +8733,7 @@ func InitRole(ctx context.Context, ses *Session, tenant *TenantInfo, cr *tree.Cr
 	return err
 }
 
-func (mce *MysqlCmdExecutor) Upload(ctx context.Context, localPath string, storageDir string) (string, error) {
+func Upload(ctx context.Context, ses FeSession, localPath string, storageDir string) (string, error) {
 	loadLocalReader, loadLocalWriter := io.Pipe()
 
 	// watch and cancel
@@ -8749,7 +8754,7 @@ func (mce *MysqlCmdExecutor) Upload(ctx context.Context, localPath string, stora
 				Filepath: localPath,
 			},
 		}
-		return mce.processLoadLocal(ctx, param, loadLocalWriter)
+		return processLoadLocal(ctx, ses, param, loadLocalWriter)
 	})
 
 	// read from pipe and upload
@@ -8763,7 +8768,7 @@ func (mce *MysqlCmdExecutor) Upload(ctx context.Context, localPath string, stora
 		},
 	}
 
-	fileService := mce.ses.proc.FileService
+	fileService := getGlobalPu().FileService
 	_ = fileService.Delete(ctx, ioVector.FilePath)
 	err := fileService.Write(ctx, ioVector)
 	err = errors.Join(err, loadLocalErrGroup.Wait())
@@ -8774,7 +8779,7 @@ func (mce *MysqlCmdExecutor) Upload(ctx context.Context, localPath string, stora
 	return ioVector.FilePath, nil
 }
 
-func (mce *MysqlCmdExecutor) InitFunction(ctx context.Context, ses *Session, tenant *TenantInfo, cf *tree.CreateFunction) (err error) {
+func InitFunction(ctx context.Context, ses *Session, tenant *TenantInfo, cf *tree.CreateFunction) (err error) {
 	var initMoUdf string
 	var retTypeStr string
 	var dbName string
@@ -8889,7 +8894,7 @@ func (mce *MysqlCmdExecutor) InitFunction(ctx context.Context, ses *Session, ten
 			}
 			// upload
 			storageDir := string(cf.Name.Name.ObjectName) + "_" + strings.Join(typeList, "-") + "_"
-			cf.Body, err = mce.Upload(ctx, cf.Body, storageDir)
+			cf.Body, err = Upload(ctx, ses, cf.Body, storageDir)
 			if err != nil {
 				return err
 			}
@@ -9672,7 +9677,7 @@ func postAlterSessionStatus(
 	accountName string,
 	tenantId int64,
 	status string) error {
-	qc := ses.GetParameterUnit().QueryClient
+	qc := getGlobalPu().QueryClient
 	if qc == nil {
 		return moerr.NewInternalError(ctx, "query client is not initialized")
 	}
