@@ -2116,8 +2116,13 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node) (*Sco
 	for j, col := range n.TableDef.Cols {
 		attrs[j] = col.Name
 	}
-	if n.ScanTS != nil && !n.ScanTS.Equal(timestamp.Timestamp{LogicalTime: 0, PhysicalTime: 0}) && n.ScanTS.Less(c.proc.TxnOperator.Txn().SnapshotTS) {
-		txnOp = c.proc.TxnOperator.CloneSnapshotOp(*n.ScanTS)
+
+	if n.ScanTS != nil && !n.ScanTS.Equal(timestamp.Timestamp{LogicalTime: 0, PhysicalTime: 0}) {
+		if n.ScanTS.LessEq(c.proc.TxnOperator.Txn().SnapshotTS) {
+			txnOp = c.proc.TxnOperator.CloneSnapshotOp(*n.ScanTS)
+		} else {
+			return nil, moerr.NewInvalidInput(c.ctx, "scan timestamp is greater than current txn timestamp")
+		}
 	} else {
 		txnOp = c.proc.TxnOperator
 	}
@@ -3664,8 +3669,12 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 	var nodes engine.Nodes
 	var txnOp client.TxnOperator
 
-	if n.ScanTS != nil && !n.ScanTS.Equal(timestamp.Timestamp{LogicalTime: 0, PhysicalTime: 0}) && n.ScanTS.Less(c.proc.TxnOperator.Txn().SnapshotTS) {
-		txnOp = c.proc.TxnOperator.CloneSnapshotOp(*n.ScanTS)
+	if n.ScanTS != nil && !n.ScanTS.Equal(timestamp.Timestamp{LogicalTime: 0, PhysicalTime: 0}) {
+		if n.ScanTS.LessEq(c.proc.TxnOperator.Txn().SnapshotTS) {
+			txnOp = c.proc.TxnOperator.CloneSnapshotOp(*n.ScanTS)
+		} else {
+			return nil, nil, nil, moerr.NewInvalidInput(c.ctx, "scan timestamp is greater than current txn timestamp")
+		}
 	} else {
 		txnOp = c.proc.TxnOperator
 	}
