@@ -2139,6 +2139,9 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node) (*Sco
 		}
 		rel, err = db.Relation(ctx, n.TableDef.Name, c.proc)
 		if err != nil {
+			if txnOp.IsSnapOp() {
+				return nil, err
+			}
 			var e error // avoid contamination of error messages
 			db, e = c.e.Database(c.ctx, defines.TEMPORARY_DBNAME, txnOp)
 			if e != nil {
