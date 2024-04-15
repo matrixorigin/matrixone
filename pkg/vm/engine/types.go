@@ -593,8 +593,6 @@ var _ Ranges = (*objectio.BlockInfoSlice)(nil)
 type Relation interface {
 	Statistics
 
-	UpdateObjectInfos(context.Context) error
-
 	Ranges(context.Context, []*plan.Expr) (Ranges, error)
 
 	TableDefs(context.Context) ([]TableDef, error)

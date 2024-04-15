@@ -279,8 +279,8 @@ func (e *Engine) lazyLoad(ctx context.Context, tbl *txnTable) (*logtailreplay.Pa
 				tbl.tableName,
 				tbl.db.databaseId,
 				tbl.db.databaseName,
-				tbl.db.txn.engine.mp,
-				tbl.db.txn.engine.fs)
+				tbl.getTxn().engine.mp,
+				tbl.getTxn().engine.fs)
 			if err != nil {
 				return err
 			}

@@ -390,7 +390,7 @@ func (f *fuzzyCheck) format(toCheck *vector.Vector) ([]string, error) {
 
 	if f.isCompound {
 		for i, s := range ss {
-			ss[i] = "decode('" + hex.EncodeToString([]byte(s)) + "', 'hex')"
+			ss[i] = "unhex('" + hex.EncodeToString([]byte(s)) + "')"
 		}
 		return ss, nil
 	}
