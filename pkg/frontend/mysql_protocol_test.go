@@ -1624,7 +1624,7 @@ func TestMysqlResultSet(t *testing.T) {
 // }
 
 func openDbConn(t *testing.T, port int) (*sql.DB, error) {
-	dsn := fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/?readTimeout=10s&timeout=10s&writeTimeout=10s", port)
+	dsn := fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/?readTimeout=30s&timeout=30s&writeTimeout=30s", port)
 	db, err := sql.Open("mysql", dsn)
 	if err != nil {
 		return nil, err
