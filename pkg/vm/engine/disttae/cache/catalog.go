@@ -54,15 +54,22 @@ func NewCatalog() *CatalogCache {
 	}
 }
 
+func (cc *CatalogCache) UpdateDuration(start types.TS, end types.TS) {
+	cc.mu.Lock()
+	defer cc.mu.Unlock()
+	if start.Less(&cc.mu.start) {
+		cc.mu.start = start
+	}
+	if end.Greater(&cc.mu.end) {
+		cc.mu.end = end
+	}
+}
+
 func (cc *CatalogCache) UpdateStart(ts types.TS) {
 	cc.mu.Lock()
 	defer cc.mu.Unlock()
-	if cc.mu.start == types.MaxTs() {
+	if ts.Less(&cc.mu.start) {
 		cc.mu.start = ts
-	} else {
-		if ts.Greater(&cc.mu.start) {
-			cc.mu.start = ts
-		}
 	}
 }
 

@@ -315,6 +315,8 @@ func (e *Engine) getOrCreateSnapCatalogCache(
 	if err != nil {
 		return nil, err
 	}
+	//Notice that checkpoints must contain only one or zero global checkpoint
+	//followed by zero or multi continuous incremental checkpoints.
 	for _, ckp := range ckps {
 		loc := ckp.GetLocation().String()
 		//FIXME::pkSeqNum == 0?
@@ -356,8 +358,8 @@ func (e *Engine) getOrCreateSnapCatalogCache(
 			//FIXME::need to minus 5 minutes?
 		}
 		if ckp.GetType() == checkpoint.ET_Incremental {
-			end := ckp.GetEnd()
-			snapCata.UpdateEnd(end)
+			snapCata.UpdateStart(ckp.GetStart())
+			snapCata.UpdateEnd(ckp.GetEnd())
 		}
 	}
 	e.snapCatalog.snaps = append(e.snapCatalog.snaps, snapCata)

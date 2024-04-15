@@ -42,6 +42,11 @@ type Partition struct {
 	}
 }
 
+func (p *Partition) UpdateDuration(start types.TS, end types.TS) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+}
+
 func (p *Partition) CanServe(ts types.TS) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -112,7 +117,7 @@ func (p *Partition) ConsumeSnapCkps(
 ) (
 	err error,
 ) {
-	//checkpoints must contain only one global checkpoint
+	//Notice that checkpoints must contain only one or zero global checkpoint
 	//followed by zero or multi continuous incremental checkpoints.
 	state := p.state.Load()
 	for _, ckp := range ckps {
@@ -124,6 +129,10 @@ func (p *Partition) ConsumeSnapCkps(
 			//FIXME::need to minus 5 minutes?
 		}
 		if ckp.GetType() == checkpoint.ET_Incremental {
+			start := ckp.GetStart()
+			if start.Less(&p.mu.start) {
+				p.mu.start = start
+			}
 			end := ckp.GetEnd()
 			if end.Greater(&p.mu.end) {
 				p.mu.end = end
