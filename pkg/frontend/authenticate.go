@@ -9957,7 +9957,7 @@ func doResolveSnapshotTsWithSnapShotName(ctx context.Context, ses *Session, spNa
 		if err != nil {
 			return 0, err
 		}
-		parseSnapshotTs, err := types.ParseTimestamp(*&time.Local, snapshotTsValue, 0)
+		parseSnapshotTs, err := types.ParseTimestamp(time.Local, snapshotTsValue, 0)
 		if err != nil {
 			return 0, err
 		}

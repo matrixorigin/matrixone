@@ -117,8 +117,7 @@ func (builder *QueryBuilder) applyIndicesForFilters(nodeID int32, node *plan.Nod
 				}
 			}
 			if isAllFilterColumnsIncluded {
-				return builder.applyIndicesForFiltersUsingMasterIndex(nodeID, node,
-					colRefCnt, idxColMap, indexDef)
+				return builder.applyIndicesForFiltersUsingMasterIndex(nodeID, node, indexDef)
 			}
 		}
 
