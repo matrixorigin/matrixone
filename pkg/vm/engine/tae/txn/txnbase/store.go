@@ -16,7 +16,6 @@ package txnbase
 
 import (
 	"context"
-
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -30,9 +29,11 @@ var NoopStoreFactory = func() txnif.TxnStore { return new(NoopTxnStore) }
 
 type NoopTxnStore struct{}
 
-func (store *NoopTxnStore) StartTrace()        {}
-func (store *NoopTxnStore) TriggerTrace(uint8) {}
-func (store *NoopTxnStore) EndTrace()          {}
+func (store *NoopTxnStore) MarshalBinary() ([]byte, error)           { return nil, nil }
+func (store *NoopTxnStore) FlushWal(uint32, entry.Entry) (err error) { return nil }
+func (store *NoopTxnStore) StartTrace()                              {}
+func (store *NoopTxnStore) TriggerTrace(uint8)                       {}
+func (store *NoopTxnStore) EndTrace()                                {}
 
 func (store *NoopTxnStore) Freeze() error                                { return nil }
 func (store *NoopTxnStore) WaitPrepared(ctx context.Context) (err error) { return }
@@ -49,16 +50,16 @@ func (store *NoopTxnStore) AddObjsWithMetaLoc(
 ) error {
 	return nil
 }
-func (store *NoopTxnStore) GetContext() context.Context          { return nil }
-func (store *NoopTxnStore) SetContext(context.Context)           {}
-func (store *NoopTxnStore) PrepareRollback() error               { return nil }
-func (store *NoopTxnStore) PrePrepare(ctx context.Context) error { return nil }
-func (store *NoopTxnStore) PrepareCommit() error                 { return nil }
-func (store *NoopTxnStore) ApplyRollback() error                 { return nil }
-func (store *NoopTxnStore) PreApplyCommit() error                { return nil }
-func (store *NoopTxnStore) ApplyCommit() error                   { return nil }
-func (store *NoopTxnStore) Apply2PCPrepare() error               { return nil }
-func (store *NoopTxnStore) PrepareWAL() error                    { return nil }
+func (store *NoopTxnStore) GetContext() context.Context                { return nil }
+func (store *NoopTxnStore) SetContext(context.Context)                 {}
+func (store *NoopTxnStore) PrepareRollback() error                     { return nil }
+func (store *NoopTxnStore) PrePrepare(ctx context.Context) error       { return nil }
+func (store *NoopTxnStore) PrepareCommit() error                       { return nil }
+func (store *NoopTxnStore) ApplyRollback() error                       { return nil }
+func (store *NoopTxnStore) PreApplyCommit() error                      { return nil }
+func (store *NoopTxnStore) ApplyCommit() error                         { return nil }
+func (store *NoopTxnStore) Apply2PCPrepare() error                     { return nil }
+func (store *NoopTxnStore) PrepareWAL() (entry entry.Entry, err error) { return nil, nil }
 
 func (store *NoopTxnStore) DoneWaitEvent(cnt int)                                  {}
 func (store *NoopTxnStore) AddWaitEvent(cnt int)                                   {}

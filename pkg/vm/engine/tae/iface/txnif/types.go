@@ -45,7 +45,7 @@ type Txn2PC interface {
 	PrePrepare(ctx context.Context) error
 	PrepareCommit() error
 	PreApplyCommit() error
-	PrepareWAL() error
+	PrepareWAL() (entry.Entry, error)
 	ApplyCommit() error
 }
 
@@ -259,7 +259,8 @@ type TxnStore interface {
 	GetLSN() uint64
 	GetContext() context.Context
 	SetContext(context.Context)
-
+	FlushWal(uint32, entry.Entry) (err error)
+	MarshalBinary() ([]byte, error)
 	BatchDedup(dbId, id uint64, pk containers.Vector) error
 
 	Append(ctx context.Context, dbId, id uint64, data *containers.Batch) error

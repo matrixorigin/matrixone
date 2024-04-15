@@ -140,7 +140,7 @@ type txnStore struct {
 	txn         txnif.AsyncTxn
 	catalog     *catalog.Catalog
 	cmdMgr      *commandManager
-	logs        []entry.Entry
+	logEntry    entry.Entry
 	warChecker  *warChecker
 	dataFactory *tables.DataFactory
 	writeOps    atomic.Uint32
@@ -175,10 +175,23 @@ func newStore(
 		catalog:     catalog,
 		cmdMgr:      newCommandManager(driver, maxMessageSize),
 		driver:      driver,
-		logs:        make([]entry.Entry, 0),
 		dataFactory: dataFactory,
 		wg:          sync.WaitGroup{},
 	}
+}
+
+func (store *txnStore) MarshalBinary() ([]byte, error) {
+	return store.cmdMgr.cmd.MarshalBinary()
+}
+
+func (store *txnStore) FlushWal(gid uint32, entry entry.Entry) (err error) {
+	store.cmdMgr.lsn, err = store.cmdMgr.driver.AppendEntry(gid, entry)
+	for _, db := range store.dbs {
+		if err = db.Apply1PCCommit(); err != nil {
+			return
+		}
+	}
+	return err
 }
 
 func (store *txnStore) StartTrace() {
@@ -265,7 +278,6 @@ func (store *txnStore) Close() error {
 	}
 	store.dbs = nil
 	store.cmdMgr = nil
-	store.logs = nil
 	store.warChecker = nil
 	return err
 }
@@ -694,11 +706,8 @@ func (store *txnStore) WaitPrepared(ctx context.Context) (err error) {
 		}
 	}
 	moprobe.WithRegion(ctx, moprobe.TxnStoreWaitWALFlush, func() {
-		for _, e := range store.logs {
-			if err = e.WaitDone(); err != nil {
-				break
-			}
-			e.Free()
+		if err = store.logEntry.WaitDone(); err != nil {
+			store.logEntry.Free()
 		}
 	})
 	store.wg.Wait()
@@ -765,33 +774,37 @@ func (store *txnStore) PreApplyCommit() (err error) {
 	return
 }
 
-func (store *txnStore) PrepareWAL() (err error) {
+func (store *txnStore) PrepareWAL() (e entry.Entry, err error) {
 	if err = store.CollectCmd(); err != nil {
 		return
 	}
-
 	if store.cmdMgr.GetCSN() == 0 {
 		return
 	}
+	if store.cmdMgr.driver == nil {
+		return nil, nil
+	}
 
-	// Apply the record from the command list.
-	// Split the commands by max message size.
-	for store.cmdMgr.cmd.MoreCmds() {
-		logEntry, err := store.cmdMgr.ApplyTxnRecord(store.txn)
-		if err != nil {
-			return err
-		}
-		if logEntry != nil {
-			store.logs = append(store.logs, logEntry)
-		}
+	store.cmdMgr.cmd.SetTxn(store.txn)
+	e = entry.GetBase()
+
+	info := &entry.Info{
+		Group: wal.GroupPrepare,
+	}
+	e.SetInfo(info)
+	e.SetType(IOET_WALEntry_TxnRecord)
+
+	if e != nil {
+		store.logEntry = e
 	}
 
 	t1 := time.Now()
-	for _, db := range store.dbs {
-		if err = db.Apply1PCCommit(); err != nil {
-			return
-		}
-	}
+	//for _, db := range store.dbs {
+	//	if err = db.Apply1PCCommit(); err != nil {
+	//		return
+	//	}
+	//}
+
 	t2 := time.Now()
 	if t2.Sub(t1) > time.Millisecond*500 {
 		logutil.Warn(

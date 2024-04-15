@@ -333,8 +333,8 @@ func (txn *Txn) PreApplyCommit() (err error) {
 	return
 }
 
-func (txn *Txn) PrepareWAL() (err error) {
-	err = txn.Store.PrepareWAL()
+func (txn *Txn) PrepareWAL() (entry entry.Entry, err error) {
+	entry, err = txn.Store.PrepareWAL()
 	return
 }
 

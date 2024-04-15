@@ -230,6 +230,9 @@ type Base struct {
 	t0        time.Time
 	printTime bool
 	err       error
+
+	beforeFlushCallbacks []func() error
+	afterFlushCallbacks  []func() error
 }
 
 func GetBase() *Base {
@@ -241,6 +244,31 @@ func GetBase() *Base {
 	b.wg.Add(1)
 	return b
 }
+
+func (b *Base) RegisterBeforeFlushCBs(cb func() error) {
+	b.beforeFlushCallbacks = append(b.beforeFlushCallbacks, cb)
+}
+
+func (b *Base) RegisterAfterFlushCBs(cb func() error) {
+	b.afterFlushCallbacks = append(b.afterFlushCallbacks, cb)
+}
+
+func (b *Base) ExecuteBeforeFlushCBs() {
+	for _, cb := range b.beforeFlushCallbacks {
+		if err := cb(); err != nil {
+			panic(err)
+		}
+	}
+}
+
+func (b *Base) ExecuteAfterFlushCBs() {
+	for _, cb := range b.afterFlushCallbacks {
+		if err := cb(); err != nil {
+			panic(err)
+		}
+	}
+}
+
 func (b *Base) StartTime() {
 	b.t0 = time.Now()
 }

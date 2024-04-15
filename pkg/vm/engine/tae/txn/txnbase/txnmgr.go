@@ -17,19 +17,19 @@ package txnbase
 import (
 	"context"
 	"fmt"
+	entry2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
-	"github.com/panjf2000/ants/v2"
-	"go.uber.org/zap"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/panjf2000/ants/v2"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -125,7 +125,7 @@ func NewTxnManager(txnStoreFactory TxnStoreFactory, txnFactory TxnFactory, clock
 	mgr.ts.allocator = types.NewTsAlloctor(clock)
 	mgr.initMaxCommittedTS()
 	pqueue := sm.NewSafeQueue(20000, 1000, mgr.dequeuePreparing)
-	prepareWALQueue := sm.NewSafeQueue(20000, 1000, mgr.onPrepareWAL)
+	prepareWALQueue := sm.NewSafeQueue(20000, 1000, mgr.onFlushWal)
 	mgr.FlushQueue = sm.NewSafeQueue(20000, 1000, mgr.dequeuePrepared)
 	mgr.PreparingSM = sm.NewStateMachine(new(sync.WaitGroup), mgr, pqueue, prepareWALQueue)
 
@@ -174,6 +174,7 @@ func (mgr *TxnManager) StartTxn(info []byte) (txn txnif.AsyncTxn, err error) {
 	store := mgr.TxnStoreFactory()
 	txn = mgr.TxnFactory(mgr, store, txnId, startTs, types.TS{})
 	store.BindTxn(txn)
+
 	mgr.IDMap.Store(util.UnsafeBytesToString(txnId), txn)
 	return
 }
@@ -191,6 +192,7 @@ func (mgr *TxnManager) StartTxnWithStartTSAndSnapshotTS(
 	txnId := mgr.IdAlloc.Alloc()
 	txn = mgr.TxnFactory(mgr, store, txnId, startTS, snapshotTS)
 	store.BindTxn(txn)
+
 	mgr.IDMap.Store(util.UnsafeBytesToString(txnId), txn)
 	return
 }
@@ -209,6 +211,7 @@ func (mgr *TxnManager) GetOrCreateTxnWithMeta(
 		store := mgr.TxnStoreFactory()
 		txn = mgr.TxnFactory(mgr, store, id, ts, ts)
 		store.BindTxn(txn)
+
 		mgr.IDMap.Store(util.UnsafeBytesToString(id), txn)
 	}
 	return
@@ -241,7 +244,7 @@ func (mgr *TxnManager) EnqueueFlushing(op any) (err error) {
 
 func (mgr *TxnManager) heartbeat(ctx context.Context) {
 	defer mgr.wg.Done()
-	heartbeatTicker := time.NewTicker(time.Millisecond * 2)
+	heartbeatTicker := time.NewTicker(time.Second * 1000)
 	for {
 		select {
 		case <-mgr.ctx.Done():
@@ -495,21 +498,62 @@ func (mgr *TxnManager) dequeuePreparing(items ...any) {
 	})
 }
 
-func (mgr *TxnManager) onPrepareWAL(items ...any) {
-	now := time.Now()
+func (mgr *TxnManager) registerLogEntryCBs(e entry2.Entry, op *OpTxn, doFlush bool) {
+	if doFlush {
+		// delay marshal to parallelize it
+		e.RegisterBeforeFlushCBs(func() error {
+			var buf []byte
+			var ierr error
+			if buf, ierr = op.Txn.GetStore().MarshalBinary(); ierr != nil {
+				return ierr
+			}
 
+			if ierr = e.SetPayload(buf); ierr != nil {
+				return ierr
+			}
+			return nil
+		})
+
+		// collect log tail after marshal done
+		e.RegisterBeforeFlushCBs(func() error {
+			mgr.CommitListener.OnEndPrepareWAL(op.Txn)
+			return nil
+		})
+	}
+
+	e.RegisterAfterFlushCBs(func() error {
+		if err := op.Txn.WaitPrepared(op.ctx); err != nil {
+			panic(err)
+		}
+		if op.Is2PC() {
+			mgr.on2PCPrepared(op)
+		} else {
+			mgr.on1PCPrepared(op)
+		}
+		return nil
+	})
+}
+
+func (mgr *TxnManager) onFlushWal(items ...any) {
+	var entry entry2.Entry
+	var err error
 	for _, item := range items {
 		op := item.(*OpTxn)
 		store := op.Txn.GetStore()
-		store.TriggerTrace(txnif.TracePrepareWal)
-		var t1, t2, t3, t4, t5 time.Time
-		t1 = time.Now()
+		fmt.Println(store)
 		if op.Txn.GetError() == nil && op.Op == OpCommit || op.Op == OpPrepare {
-			if err := op.Txn.PrepareWAL(); err != nil {
+			if entry, err = op.Txn.PrepareWAL(); err != nil {
 				panic(err)
 			}
 
-			t2 = time.Now()
+			if entry == nil {
+				continue
+			}
+
+			mgr.registerLogEntryCBs(entry, op, true)
+			if err = op.Txn.GetStore().FlushWal(wal.GroupPrepare, entry); err != nil {
+				panic(err)
+			}
 
 			if !op.Txn.IsReplay() {
 				if !mgr.prevPrepareTSInPrepareWAL.IsEmpty() {
@@ -520,35 +564,66 @@ func (mgr *TxnManager) onPrepareWAL(items ...any) {
 				}
 				mgr.prevPrepareTSInPrepareWAL = op.Txn.GetPrepareTS()
 			}
-
-			mgr.CommitListener.OnEndPrepareWAL(op.Txn)
-			t3 = time.Now()
 		}
 
-		t4 = time.Now()
-		store.TriggerTrace(txnif.TracePreapredWait)
-		if _, err := mgr.FlushQueue.Enqueue(op); err != nil {
-			panic(err)
-		}
-		t5 = time.Now()
-
-		if t5.Sub(t1) > time.Second {
-			logutil.Warn(
-				"SLOW-LOG",
-				zap.String("txn", op.Txn.String()),
-				zap.Duration("prepare-wal-duration", t2.Sub(t1)),
-				zap.Duration("end-prepare-duration", t3.Sub(t2)),
-				zap.Duration("enqueue-flush-duration", t5.Sub(t4)),
-			)
-		}
+		mgr.registerLogEntryCBs(entry, op, false)
 	}
-	common.DoIfDebugEnabled(func() {
-		logutil.Debug("[prepareWAL]",
-			common.NameSpaceField("txns"),
-			common.DurationField(time.Since(now)),
-			common.CountField(len(items)))
-	})
 }
+
+//func (mgr *TxnManager) onPrepareWAL(items ...any) {
+//	now := time.Now()
+//
+//	for _, item := range items {
+//		op := item.(*OpTxn)
+//		store := op.Txn.GetStore()
+//		store.TriggerTrace(txnif.TracePrepareWal)
+//		var t1, t2, t3, t4, t5 time.Time
+//		t1 = time.Now()
+//		if op.Txn.GetError() == nil && op.Op == OpCommit || op.Op == OpPrepare {
+//			if err := op.Txn.PrepareWAL(); err != nil {
+//				panic(err)
+//			}
+//
+//			t2 = time.Now()
+//
+//			if !op.Txn.IsReplay() {
+//				if !mgr.prevPrepareTSInPrepareWAL.IsEmpty() {
+//					prepareTS := op.Txn.GetPrepareTS()
+//					if prepareTS.Less(&mgr.prevPrepareTSInPrepareWAL) {
+//						panic(fmt.Sprintf("timestamp rollback current %v, previous %v", op.Txn.GetPrepareTS().ToString(), mgr.prevPrepareTSInPrepareWAL.ToString()))
+//					}
+//				}
+//				mgr.prevPrepareTSInPrepareWAL = op.Txn.GetPrepareTS()
+//			}
+//
+//			mgr.CommitListener.OnEndPrepareWAL(op.Txn)
+//			t3 = time.Now()
+//		}
+//
+//		t4 = time.Now()
+//		store.TriggerTrace(txnif.TracePreapredWait)
+//		if _, err := mgr.FlushQueue.Enqueue(op); err != nil {
+//			panic(err)
+//		}
+//		t5 = time.Now()
+//
+//		if t5.Sub(t1) > time.Second {
+//			logutil.Warn(
+//				"SLOW-LOG",
+//				zap.String("txn", op.Txn.String()),
+//				zap.Duration("prepare-wal-duration", t2.Sub(t1)),
+//				zap.Duration("end-prepare-duration", t3.Sub(t2)),
+//				zap.Duration("enqueue-flush-duration", t5.Sub(t4)),
+//			)
+//		}
+//	}
+//	common.DoIfDebugEnabled(func() {
+//		logutil.Debug("[prepareWAL]",
+//			common.NameSpaceField("txns"),
+//			common.DurationField(time.Since(now)),
+//			common.CountField(len(items)))
+//	})
+//}
 
 // 1PC and 2PC
 func (mgr *TxnManager) dequeuePrepared(items ...any) {

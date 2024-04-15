@@ -50,6 +50,11 @@ type Entry interface {
 	GetInfoBuf() []byte
 	SetInfoBuf(buf []byte)
 
+	RegisterBeforeFlushCBs(cb func() error)
+	RegisterAfterFlushCBs(cb func() error)
+	ExecuteBeforeFlushCBs()
+	ExecuteAfterFlushCBs()
+
 	SetPayload([]byte) error
 	UnmarshalFromNode([]byte, bool) error
 
