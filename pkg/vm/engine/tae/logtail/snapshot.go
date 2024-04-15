@@ -101,23 +101,25 @@ func (sm *SnapshotMeta) Update(data *CheckpointData) *SnapshotMeta {
 	defer sm.Unlock()
 
 	insTable, _, _, _, delTableTxn := data.GetTblBatchs()
-	insAccIDVec := insTable.GetVectorByName(catalog2.SystemColAttr_AccID).GetDownstreamVector()
-	insTIDVec := insTable.GetVectorByName(catalog2.SystemRelAttr_ID).GetDownstreamVector()
-	insDBIDVec := insTable.GetVectorByName(catalog2.SystemRelAttr_DBID).GetDownstreamVector()
-	insCreateAtVec := insTable.GetVectorByName(catalog2.SystemRelAttr_CreateAt).GetDownstreamVector()
+	insAccIDs := vector.MustFixedCol[uint32](insTable.GetVectorByName(catalog2.SystemColAttr_AccID).GetDownstreamVector())
+	insTIDs := vector.MustFixedCol[uint64](insTable.GetVectorByName(catalog2.SystemRelAttr_ID).GetDownstreamVector())
+	insDBIDs := vector.MustFixedCol[uint64](insTable.GetVectorByName(catalog2.SystemRelAttr_DBID).GetDownstreamVector())
+	insCreateAts := vector.MustFixedCol[types.Timestamp](insTable.GetVectorByName(catalog2.SystemRelAttr_CreateAt).GetDownstreamVector())
 	for i := 0; i < insTable.Length(); i++ {
-		tableName := string(insTable.GetVectorByName(catalog2.SystemRelAttr_Name).Get(i).([]byte))
-		tid := vector.GetFixedAt[uint64](insTIDVec, i)
-		if sm.tid == 0 && tableName == "mo_snapshots" {
-			logutil.Infof("mo_snapshots: %d", tid)
-			sm.SetTid(tid)
+		tid := insTIDs[i]
+		if sm.tid == 0 {
+			tableName := string(insTable.GetVectorByName(catalog2.SystemRelAttr_Name).Get(i).([]byte))
+			if tableName == "mo_snapshots" {
+				logutil.Infof("mo_snapshots: %d", tid)
+				sm.SetTid(tid)
+			}
 		}
-		accID := vector.GetFixedAt[uint32](insAccIDVec, i)
+		accID := insAccIDs[i]
 		if sm.tables[accID] == nil {
 			sm.tables[accID] = make(map[uint64]*tableInfo)
 		}
-		dbid := vector.GetFixedAt[uint64](insDBIDVec, i)
-		create := vector.GetFixedAt[types.Timestamp](insCreateAtVec, i)
+		dbid := insDBIDs[i]
+		create := insCreateAts[i]
 		createAt := types.BuildTS(create.Unix(), 0)
 		if sm.tables[accID][tid] != nil {
 			continue
@@ -135,11 +137,11 @@ func (sm *SnapshotMeta) Update(data *CheckpointData) *SnapshotMeta {
 		}
 	}
 
-	delTableIDVec := delTableTxn.GetVectorByName(SnapshotAttr_TID).GetDownstreamVector()
-	delDropAtVec := delTableTxn.GetVectorByName(txnbase.SnapshotAttr_CommitTS).GetDownstreamVector()
+	delTableIDs := vector.MustFixedCol[uint64](delTableTxn.GetVectorByName(SnapshotAttr_TID).GetDownstreamVector())
+	delDropAts := vector.MustFixedCol[types.TS](delTableTxn.GetVectorByName(txnbase.SnapshotAttr_CommitTS).GetDownstreamVector())
 	for i := 0; i < delTableTxn.Length(); i++ {
-		tid := vector.GetFixedAt[uint64](delTableIDVec, i)
-		dropAt := vector.GetFixedAt[types.TS](delDropAtVec, i)
+		tid := delTableIDs[i]
+		dropAt := delDropAts[i]
 		table := sm.acctIndexes[tid]
 		table.deleteAt = dropAt
 		sm.acctIndexes[tid] = table
@@ -149,19 +151,19 @@ func (sm *SnapshotMeta) Update(data *CheckpointData) *SnapshotMeta {
 		return sm
 	}
 	ins := data.GetObjectBatchs()
-	insDeleteTSVec := ins.GetVectorByName(catalog.EntryNode_DeleteAt).GetDownstreamVector()
-	insCreateTSVec := ins.GetVectorByName(catalog.EntryNode_CreateAt).GetDownstreamVector()
-	insTableIDVec := ins.GetVectorByName(SnapshotAttr_TID).GetDownstreamVector()
+	insDeleteTSs := vector.MustFixedCol[types.TS](ins.GetVectorByName(catalog.EntryNode_DeleteAt).GetDownstreamVector())
+	insCreateTSs := vector.MustFixedCol[types.TS](ins.GetVectorByName(catalog.EntryNode_CreateAt).GetDownstreamVector())
+	insTableIDs := vector.MustFixedCol[uint64](ins.GetVectorByName(SnapshotAttr_TID).GetDownstreamVector())
 	for i := 0; i < ins.Length(); i++ {
-		table := vector.GetFixedAt[uint64](insTableIDVec, i)
+		table := insTableIDs[i]
 		if table != sm.tid {
 			continue
 		}
 		var objectStats objectio.ObjectStats
 		buf := ins.GetVectorByName(catalog.ObjectAttr_ObjectStats).Get(i).([]byte)
 		objectStats.UnMarshal(buf)
-		deleteTS := vector.GetFixedAt[types.TS](insDeleteTSVec, i)
-		createTS := vector.GetFixedAt[types.TS](insCreateTSVec, i)
+		deleteTS := insDeleteTSs[i]
+		createTS := insCreateTSs[i]
 		if sm.objects[objectStats.ObjectName().SegmentId()] == nil {
 			if !deleteTS.IsEmpty() {
 				continue
@@ -178,9 +180,9 @@ func (sm *SnapshotMeta) Update(data *CheckpointData) *SnapshotMeta {
 		delete(sm.objects, objectStats.ObjectName().SegmentId())
 	}
 	del, _, _, _ := data.GetBlkBatchs()
-	delBlockIDVec := del.GetVectorByName(catalog2.BlockMeta_ID).GetDownstreamVector()
+	delBlockIDs := vector.MustFixedCol[types.Blockid](del.GetVectorByName(catalog2.BlockMeta_ID).GetDownstreamVector())
 	for i := 0; i < del.Length(); i++ {
-		blockID := vector.GetFixedAt[types.Blockid](delBlockIDVec, i)
+		blockID := delBlockIDs[i]
 		deltaLoc := objectio.Location(del.GetVectorByName(catalog2.BlockMeta_DeltaLoc).Get(i).([]byte))
 		if sm.objects[*blockID.Segment()] != nil {
 			sm.objects[*blockID.Segment()].deltaLocation[uint32(blockID.Sequence())] = &deltaLoc
@@ -218,10 +220,12 @@ func (sm *SnapshotMeta) GetSnapshot(ctx context.Context, fs fileservice.FileServ
 				return nil, err
 			}
 			defer bat.Clean(mp)
+			tsList := vector.MustFixedCol[types.Timestamp](bat.Vecs[0])
+			acctList := vector.MustFixedCol[uint64](bat.Vecs[1])
 			for r := 0; r < bat.Vecs[0].Length(); r++ {
-				ts := vector.GetFixedAt[types.Timestamp](bat.Vecs[0], r)
+				ts := tsList[r]
 				snapTs := types.BuildTS(ts.Unix()*types.NanoSecsPerSec, 0)
-				acct := vector.GetFixedAt[uint64](bat.Vecs[1], r)
+				acct := acctList[r]
 				id := uint32(acct)
 				if snapshotList[id] == nil {
 					snapshotList[id] = containers.MakeVector(colTypes[0], mp)
@@ -306,17 +310,17 @@ func (sm *SnapshotMeta) SaveTableInfo(name string, fs fileservice.FileService) e
 }
 
 func (sm *SnapshotMeta) RebuildTableInfo(ins *containers.Batch) {
-	insTIDVec := ins.GetVectorByName(catalog.SnapshotAttr_TID).GetDownstreamVector()
-	insAccIDVec := ins.GetVectorByName(catalog2.SystemColAttr_AccID).GetDownstreamVector()
-	insDBIDVec := ins.GetVectorByName(catalog2.SystemRelAttr_DBID).GetDownstreamVector()
-	insCreateTSVec := ins.GetVectorByName(catalog2.SystemRelAttr_CreateAt).GetDownstreamVector()
-	insDeleteTSVec := ins.GetVectorByName(catalog.EntryNode_DeleteAt).GetDownstreamVector()
+	insTIDs := vector.MustFixedCol[uint64](ins.GetVectorByName(catalog.SnapshotAttr_TID).GetDownstreamVector())
+	insAccIDs := vector.MustFixedCol[uint32](ins.GetVectorByName(catalog2.SystemColAttr_AccID).GetDownstreamVector())
+	insDBIDs := vector.MustFixedCol[uint64](ins.GetVectorByName(catalog2.SystemRelAttr_DBID).GetDownstreamVector())
+	insCreateTSs := vector.MustFixedCol[types.TS](ins.GetVectorByName(catalog2.SystemRelAttr_CreateAt).GetDownstreamVector())
+	insDeleteTSs := vector.MustFixedCol[types.TS](ins.GetVectorByName(catalog.EntryNode_DeleteAt).GetDownstreamVector())
 	for i := 0; i < ins.Length(); i++ {
-		tid := vector.GetFixedAt[uint64](insTIDVec, i)
-		dbid := vector.GetFixedAt[uint64](insDBIDVec, i)
-		accid := vector.GetFixedAt[uint32](insAccIDVec, i)
-		createTS := vector.GetFixedAt[types.TS](insCreateTSVec, i)
-		deleteTS := vector.GetFixedAt[types.TS](insDeleteTSVec, i)
+		tid := insTIDs[i]
+		dbid := insDBIDs[i]
+		accid := insAccIDs[i]
+		createTS := insCreateTSs[i]
+		deleteTS := insDeleteTSs[i]
 		if sm.tables[accid] == nil {
 			sm.tables[accid] = make(map[uint64]*tableInfo)
 		}
@@ -333,12 +337,12 @@ func (sm *SnapshotMeta) RebuildTableInfo(ins *containers.Batch) {
 }
 
 func (sm *SnapshotMeta) Rebuild(ins *containers.Batch) {
-	insCreateTSVec := ins.GetVectorByName(catalog.EntryNode_CreateAt).GetDownstreamVector()
+	insCreateTSs := vector.MustFixedCol[types.TS](ins.GetVectorByName(catalog.EntryNode_CreateAt).GetDownstreamVector())
 	for i := 0; i < ins.Length(); i++ {
 		var objectStats objectio.ObjectStats
 		buf := ins.GetVectorByName(catalog.ObjectAttr_ObjectStats).Get(i).([]byte)
 		objectStats.UnMarshal(buf)
-		createTS := vector.GetFixedAt[types.TS](insCreateTSVec, i)
+		createTS := insCreateTSs[i]
 		if sm.tid == 0 {
 			tid := ins.GetVectorByName(SnapshotAttr_TID).Get(i).(uint64)
 			if tid == 0 {
