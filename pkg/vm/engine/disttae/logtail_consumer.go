@@ -1360,6 +1360,11 @@ func updatePartitionOfPush(
 		return err
 	}
 
+	//update the start and end of the partition.
+	if !lazyLoad && len(tl.CkpLocation) != 0 {
+
+	}
+
 	doneMutate()
 
 	return nil

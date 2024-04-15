@@ -21,6 +21,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
+	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -317,13 +319,18 @@ func (e *Engine) getOrCreateSnapCatalogCache(
 	}
 	//Notice that checkpoints must contain only one or zero global checkpoint
 	//followed by zero or multi continuous incremental checkpoints.
+	start := types.MaxTs()
+	end := types.TS{}
 	for _, ckp := range ckps {
-		loc := ckp.GetLocation().String()
+		locs := make([]string, 0)
+		locs = append(locs, ckp.GetLocation().String())
+		locs = append(locs, strconv.Itoa(int(ckp.GetVersion())))
+		locations := strings.Join(locs, ";")
 		//FIXME::pkSeqNum == 0?
 		if err := e.loadSnapCkpForTable(
 			ctx,
 			snapCata,
-			loc,
+			locations,
 			catalog.MO_DATABASE_ID,
 			catalog.MO_DATABASE,
 			catalog.MO_CATALOG_ID,
@@ -334,7 +341,7 @@ func (e *Engine) getOrCreateSnapCatalogCache(
 		if err := e.loadSnapCkpForTable(
 			ctx,
 			snapCata,
-			loc,
+			locations,
 			catalog.MO_TABLES_ID,
 			catalog.MO_TABLES,
 			catalog.MO_CATALOG_ID,
@@ -344,7 +351,7 @@ func (e *Engine) getOrCreateSnapCatalogCache(
 		if err := e.loadSnapCkpForTable(
 			ctx,
 			snapCata,
-			loc,
+			locations,
 			catalog.MO_COLUMNS_ID,
 			catalog.MO_COLUMNS,
 			catalog.MO_CATALOG_ID,
@@ -354,14 +361,25 @@ func (e *Engine) getOrCreateSnapCatalogCache(
 		}
 		//update start and end of snapCata.
 		if ckp.GetType() == checkpoint.ET_Global {
-			snapCata.UpdateStart(ckp.GetEnd())
+			start = ckp.GetEnd()
 			//FIXME::need to minus 5 minutes?
 		}
 		if ckp.GetType() == checkpoint.ET_Incremental {
-			snapCata.UpdateStart(ckp.GetStart())
-			snapCata.UpdateEnd(ckp.GetEnd())
+			ckpstart := ckp.GetStart()
+			if ckpstart.Less(&start) {
+				start = ckpstart
+			}
+			ckpend := ckp.GetEnd()
+			if ckpend.Greater(&end) {
+				end = ckpend
+			}
 		}
 	}
+	if end.IsEmpty() {
+		//only on global checkpoint.
+		end = start
+	}
+	snapCata.UpdateDuration(start, end)
 	e.snapCatalog.snaps = append(e.snapCatalog.snaps, snapCata)
 	return snapCata, nil
 }
@@ -413,11 +431,13 @@ func (e *Engine) getOrCreateSnapPart(
 	snap.ConsumeSnapCkps(ctx, ckps, func(
 		checkpoint *checkpoint.CheckpointEntry,
 		state *logtailreplay.PartitionState) error {
-		//FIXME::loc?
-		loc := checkpoint.GetLocation().String()
+		locs := make([]string, 0)
+		locs = append(locs, checkpoint.GetLocation().String())
+		locs = append(locs, strconv.Itoa(int(checkpoint.GetVersion())))
+		locations := strings.Join(locs, ";")
 		entries, closeCBs, err := logtail.LoadCheckpointEntries(
 			ctx,
-			loc,
+			locations,
 			tableId,
 			tblName,
 			databaseId,

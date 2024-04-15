@@ -57,34 +57,26 @@ func NewCatalog() *CatalogCache {
 func (cc *CatalogCache) UpdateDuration(start types.TS, end types.TS) {
 	cc.mu.Lock()
 	defer cc.mu.Unlock()
-	if start.Less(&cc.mu.start) {
-		cc.mu.start = start
-	}
-	if end.Greater(&cc.mu.end) {
-		cc.mu.end = end
-	}
+	cc.mu.start = start
+	cc.mu.end = end
 }
 
 func (cc *CatalogCache) UpdateStart(ts types.TS) {
 	cc.mu.Lock()
 	defer cc.mu.Unlock()
-	if ts.Less(&cc.mu.start) {
-		cc.mu.start = ts
-	}
+	cc.mu.start = ts
 }
 
 func (cc *CatalogCache) UpdateEnd(ts types.TS) {
 	cc.mu.Lock()
 	defer cc.mu.Unlock()
-	if ts.Greater(&cc.mu.end) {
-		cc.mu.end = ts
-	}
+	cc.mu.end = ts
 }
 
 func (cc *CatalogCache) CanServe(ts types.TS) bool {
 	cc.mu.Lock()
 	defer cc.mu.Unlock()
-	return ts.GreaterEq(&cc.mu.start) && ts.Less(&cc.mu.end)
+	return ts.GreaterEq(&cc.mu.start) && ts.LessEq(&cc.mu.end)
 }
 
 func (cc *CatalogCache) GC(ts timestamp.Timestamp) {

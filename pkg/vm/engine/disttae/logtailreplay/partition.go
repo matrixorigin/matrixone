@@ -34,7 +34,7 @@ type Partition struct {
 	// assuming checkpoints will be consumed once
 	checkpointConsumed atomic.Bool
 
-	//current partitionState can serve snapshot read only if start <= ts < end
+	//current partitionState can serve snapshot read only if start <= ts <= end
 	mu struct {
 		sync.Mutex
 		start types.TS
@@ -42,15 +42,10 @@ type Partition struct {
 	}
 }
 
-func (p *Partition) UpdateDuration(start types.TS, end types.TS) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-}
-
 func (p *Partition) CanServe(ts types.TS) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return ts.GreaterEq(&p.mu.start) && ts.Less(&p.mu.end)
+	return ts.GreaterEq(&p.mu.start) && ts.LessEq(&p.mu.end)
 }
 
 func NewPartition() *Partition {
@@ -107,6 +102,26 @@ func (p *Partition) checkValid() bool {
 	return p.mu.start.LessEq(&p.mu.end)
 }
 
+func (p *Partition) UpdateStart(ts types.TS) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.mu.start = ts
+}
+
+func (p *Partition) UpdateEnd(ts types.TS) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.mu.end = ts
+}
+
+// [start, end]
+func (p *Partition) UpdateDuration(start types.TS, end types.TS) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.mu.start = start
+	p.mu.end = end
+}
+
 func (p *Partition) ConsumeSnapCkps(
 	_ context.Context,
 	ckps []*checkpoint.CheckpointEntry,
@@ -120,25 +135,32 @@ func (p *Partition) ConsumeSnapCkps(
 	//Notice that checkpoints must contain only one or zero global checkpoint
 	//followed by zero or multi continuous incremental checkpoints.
 	state := p.state.Load()
+	start := types.MaxTs()
+	end := types.TS{}
 	for _, ckp := range ckps {
 		if err = fn(ckp, state); err != nil {
 			return
 		}
 		if ckp.GetType() == checkpoint.ET_Global {
-			p.mu.start = ckp.GetEnd()
+			start = ckp.GetEnd()
 			//FIXME::need to minus 5 minutes?
 		}
 		if ckp.GetType() == checkpoint.ET_Incremental {
-			start := ckp.GetStart()
-			if start.Less(&p.mu.start) {
-				p.mu.start = start
+			ckpstart := ckp.GetStart()
+			if ckpstart.Less(&start) {
+				start = ckpstart
 			}
-			end := ckp.GetEnd()
-			if end.Greater(&p.mu.end) {
-				p.mu.end = end
+			ckpend := ckp.GetEnd()
+			if ckpend.Greater(&end) {
+				end = ckpend
 			}
 		}
 	}
+	if end.IsEmpty() {
+		//only one global checkpoint.
+		end = start
+	}
+	p.UpdateDuration(start, end)
 	if !p.checkValid() {
 		panic("invalid checkpoint")
 	}
