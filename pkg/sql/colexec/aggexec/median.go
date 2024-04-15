@@ -45,6 +45,8 @@ type medianColumnExecSelf[T numeric | types.Decimal64 | types.Decimal128, R floa
 	arg sFixedArg[T]
 	ret aggFuncResult[R]
 
+	// groups stores the values of the column for each group.
+	// todo: it has a problem that same as the `clusterCentersExec.groupData` in `cluster_centers.go`
 	groups []*vector.Vector
 }
 

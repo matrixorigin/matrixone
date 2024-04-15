@@ -29,6 +29,8 @@ type AggBytesGetter func() []byte
 	the definition of aggregation's basic method.
 */
 
+// SingleAggFill1 ... SingleAggFill4
+// is the method how does single-column agg fill one value.
 type SingleAggFill1[from, to types.FixedSizeTExceptStrType] func(
 	exec SingleAggFromFixedRetFixed[from, to], value from, getter AggGetter[to], setter AggSetter[to]) error
 type SingleAggFill2[from types.FixedSizeTExceptStrType] func(
@@ -38,6 +40,8 @@ type SingleAggFill3[to types.FixedSizeTExceptStrType] func(
 type SingleAggFill4 func(
 	exec SingleAggFromVarRetVar, value []byte, getter AggBytesGetter, setter AggBytesSetter) error
 
+// SingleAggFillNull1 ... SingleAggFillNull4
+// is the method how does single-column agg fill one NULL value.
 type SingleAggFillNull1[from, to types.FixedSizeTExceptStrType] func(
 	exec SingleAggFromFixedRetFixed[from, to], getter AggGetter[to], setter AggSetter[to]) error
 type SingleAggFillNull2[from types.FixedSizeTExceptStrType] func(
@@ -47,6 +51,9 @@ type SingleAggFillNull3[to types.FixedSizeTExceptStrType] func(
 type SingleAggFillNull4 func(
 	exec SingleAggFromVarRetVar, getter AggBytesGetter, setter AggBytesSetter) error
 
+// SingleAggFills1 ... SingleAggFills4
+// is the method how does single-column agg fill multiple rows with the same value.
+// count is the number of rows, and isNull is the flag of NULL.
 type SingleAggFills1[from, to types.FixedSizeTExceptStrType] func(
 	exec SingleAggFromFixedRetFixed[from, to], value from, isNull bool, count int, getter AggGetter[to], setter AggSetter[to]) error
 type SingleAggFills2[from types.FixedSizeTExceptStrType] func(
@@ -56,6 +63,8 @@ type SingleAggFills3[to types.FixedSizeTExceptStrType] func(
 type SingleAggFills4 func(
 	exec SingleAggFromVarRetVar, value []byte, isNull bool, count int, getter AggBytesGetter, setter AggBytesSetter) error
 
+// SingleAggMerge1 ... SingleAggMerge4
+// is the method how does single-column agg merge two aggregation results.
 type SingleAggMerge1[from, to types.FixedSizeTExceptStrType] func(
 	exec1, exec2 SingleAggFromFixedRetFixed[from, to], getter1, getter2 AggGetter[to], setter AggSetter[to]) error
 type SingleAggMerge2[from types.FixedSizeTExceptStrType] func(
@@ -65,6 +74,8 @@ type SingleAggMerge3[to types.FixedSizeTExceptStrType] func(
 type SingleAggMerge4 func(
 	exec1, exec2 SingleAggFromVarRetVar, getter1, getter2 AggBytesGetter, setter AggBytesSetter) error
 
+// SingleAggFlush1 ... SingleAggFlush4
+// is the method how does single-column agg return the final result after all fill and merge operations.
 type SingleAggFlush1[from, to types.FixedSizeTExceptStrType] func(
 	exec SingleAggFromFixedRetFixed[from, to], getter AggGetter[to], setter AggSetter[to]) error
 type SingleAggFlush2[from types.FixedSizeTExceptStrType] func(
@@ -74,6 +85,8 @@ type SingleAggFlush3[to types.FixedSizeTExceptStrType] func(
 type SingleAggFlush4 func(
 	exec SingleAggFromVarRetVar, getter AggBytesGetter, setter AggBytesSetter) error
 
+// MultiAggFillNull1 ... MultiAggFlush1
+// is the method how does multi-column agg (which return type is not a variable-length type, like int64) fill null value, merge, and return the final result.
 type MultiAggFillNull1[to types.FixedSizeTExceptStrType] func(
 	exec MultiAggRetFixed[to]) error
 type rowValidForMultiAgg1[to types.FixedSizeTExceptStrType] func(
@@ -85,6 +98,8 @@ type MultiAggMerge1[to types.FixedSizeTExceptStrType] func(
 type MultiAggFlush1[to types.FixedSizeTExceptStrType] func(
 	exec MultiAggRetFixed[to], getter AggGetter[to], setter AggSetter[to]) error
 
+// MultiAggFillNull2 ... MultiAggFlush2
+// is the method how does multi-column agg (which return type is a variable-length type, like varchar) fill null value, merge, and return the final result.
 type MultiAggFillNull2 func(
 	exec MultiAggRetVar) error
 type rowValidForMultiAgg2 func(
@@ -96,7 +111,7 @@ type MultiAggMerge2 func(
 type MultiAggFlush2 func(
 	exec MultiAggRetVar, getter AggBytesGetter, setter AggBytesSetter) error
 
-// AggCanMarshal interface is used for multi-node communication.
+// AggCanMarshal interface is used for agg structures' multi-node communication.
 // each private structure of aggregation should implement the AggCanMarshal interface.
 // todo: change to deliver []byte directly, and agg developer choose how to use the []byte.
 type AggCanMarshal interface {

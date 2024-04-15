@@ -62,7 +62,8 @@ type clusterCentersExec struct {
 	arg sBytesArg
 	ret aggFuncBytesResult
 
-	// groupData hold float64 which was converted from the inputting []byte.
+	// groupData hold the inputting []byte.
+	// todo: there is a problem here, if the input is large, it will cause the memory overflow of one vector (memory usage > 1gb).
 	groupData []*vector.Vector
 
 	// Kmeans parameters.

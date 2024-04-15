@@ -19,7 +19,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
-// all the codes in this file were to new the single column aggregation executors.
+// all the codes in this file were to make the single column aggregation executor from agg information.
 
 func newSingleAggFuncExec1(
 	mg AggMemoryManager, info singleAggInfo, opt singleAggOptimizedInfo, impl aggImplementation) AggFuncExec {

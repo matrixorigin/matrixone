@@ -64,7 +64,6 @@ func (expr AggFuncExecExpression) GetExtraConfig() []byte {
 }
 
 // AggFuncExec is an interface to do execution for aggregation.
-// todo: use vector... to replace the []*vector.Vector may be better.
 type AggFuncExec interface {
 	marshal() ([]byte, error)
 	unmarshal(result []byte, groups [][]byte) error
@@ -75,6 +74,7 @@ type AggFuncExec interface {
 	// TypesInfo return the argument types and return type of the function.
 	TypesInfo() ([]types.Type, types.Type)
 
+	// GroupGrow is used to increase the aggregation's group size.
 	GroupGrow(more int) error
 
 	// Fill BulkFill and BatchFill add the value to the aggregation.
@@ -91,6 +91,7 @@ type AggFuncExec interface {
 
 	// SetExtraInformation add an additional information to agg executor.
 	// in most cases, it is used to set the partial result of the aggregation to speed up.
+	//
 	// but for the 'group_concat', it was a bad hack to use the method to set the separator.
 	// and for the 'cluster_centers', it was used to set the fields of this agg.
 	// todo: the old implementation is not good, we should use the vector.Vector to replace the any.
