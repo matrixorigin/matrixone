@@ -1606,8 +1606,8 @@ const (
 
 	getDbIdAndTypFormat         = `select dat_id,dat_type from mo_catalog.mo_database where datname = '%s' and account_id = %d;`
 	insertIntoMoPubsFormat      = `insert into mo_catalog.mo_pubs(pub_name,database_name,database_id,all_table,table_list,account_list,created_time,owner,creator,comment) values ('%s','%s',%d,%t,'%s','%s',now(),%d,%d,'%s');`
-	getPubInfoFormat            = `select account_list,comment from mo_catalog.mo_pubs where pub_name = '%s';`
-	updatePubInfoFormat         = `update mo_catalog.mo_pubs set account_list = '%s',comment = '%s', update_time = now() where pub_name = '%s';`
+	getPubInfoFormat            = `select account_list,comment,database_name,database_id from mo_catalog.mo_pubs where pub_name = '%s';`
+	updatePubInfoFormat         = `update mo_catalog.mo_pubs set account_list = '%s',comment = '%s', database_name = '%s', database_id = %d, update_time = now() where pub_name = '%s';`
 	dropPubFormat               = `delete from mo_catalog.mo_pubs where pub_name = '%s';`
 	getAccountIdAndStatusFormat = `select account_id,status from mo_catalog.mo_account where account_name = '%s';`
 	getPubInfoForSubFormat      = `select database_name,account_list from mo_catalog.mo_pubs where pub_name = "%s";`
@@ -2012,14 +2012,14 @@ func getSqlForGetPubInfo(ctx context.Context, pubName string, checkNameValid boo
 	return fmt.Sprintf(getPubInfoFormat, pubName), nil
 }
 
-func getSqlForUpdatePubInfo(ctx context.Context, pubName string, accountList string, comment string, checkNameValid bool) (string, error) {
+func getSqlForUpdatePubInfo(ctx context.Context, pubName string, accountList string, comment string, dbName string, dbId uint64, checkNameValid bool) (string, error) {
 	if checkNameValid {
 		err := inputNameIsInvalid(ctx, pubName)
 		if err != nil {
 			return "", err
 		}
 	}
-	return fmt.Sprintf(updatePubInfoFormat, accountList, comment, pubName), nil
+	return fmt.Sprintf(updatePubInfoFormat, accountList, comment, dbName, dbId, pubName), nil
 }
 
 func getSqlForDropPubInfo(ctx context.Context, pubName string, checkNameValid bool) (string, error) {
@@ -2751,7 +2751,7 @@ func normalizeName(ctx context.Context, name string) (string, error) {
 	return s, nil
 }
 
-func normalizeNameOfAccount(ctx context.Context, ca *CreateAccount) error {
+func normalizeNameOfAccount(ctx context.Context, ca *createAccount) error {
 	s := strings.TrimSpace(ca.Name)
 	if len(s) == 0 {
 		return moerr.NewInternalError(ctx, `the name "%s" is invalid`, ca.Name)
@@ -2830,13 +2830,26 @@ func finishTxn(ctx context.Context, bh BackgroundExec, err error) error {
 	return rollbackTxn()
 }
 
-func doAlterUser(ctx context.Context, ses *Session, au *tree.AlterUser) (err error) {
+type alterUser struct {
+	IfExists bool
+	User     *user
+	Role     *tree.Role
+	MiscOpt  tree.UserMiscOption
+	// comment or attribute
+	CommentOrAttribute tree.AccountCommentOrAttribute
+}
+
+type user struct {
+	Username  string
+	Hostname  string
+	AuthExist bool
+	IdentTyp  tree.AccountIdentifiedOption
+	IdentStr  string
+}
+
+func doAlterUser(ctx context.Context, ses *Session, au *alterUser) (err error) {
 	var sql string
 	var vr *verifiedRole
-	var user *tree.User
-	var userName string
-	var hostName string
-	var password string
 	var erArray []ExecResult
 	var encryption string
 	account := ses.GetTenantInfo()
@@ -2852,22 +2865,16 @@ func doAlterUser(ctx context.Context, ses *Session, au *tree.AlterUser) (err err
 	if au.CommentOrAttribute.Exist {
 		return moerr.NewInternalError(ctx, "not support alter comment or attribute")
 	}
-	if len(au.Users) != 1 {
-		return moerr.NewInternalError(ctx, "can only alter one user at a time")
-	}
-
-	err = normalizeNamesOfUsers(ctx, au.Users)
-	if err != nil {
-		return err
-	}
 
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
-	user = au.Users[0]
-	userName = user.Username
-	hostName = user.Hostname
-	password = user.AuthOption.Str
+	userName, err := normalizeName(ctx, au.User.Username)
+	if err != nil {
+		return err
+	}
+	hostName := au.User.Hostname
+	password := au.User.IdentStr
 	if len(password) == 0 {
 		return moerr.NewInternalError(ctx, "password is empty string")
 	}
@@ -2880,11 +2887,11 @@ func doAlterUser(ctx context.Context, ses *Session, au *tree.AlterUser) (err err
 		return err
 	}
 
-	if user.AuthOption == nil {
+	if !au.User.AuthExist {
 		return moerr.NewInternalError(ctx, "Operation ALTER USER failed for '%s'@'%s', alter Auth is nil", userName, hostName)
 	}
 
-	if user.AuthOption.Typ != tree.AccountIdentifiedByPassword {
+	if au.User.IdentTyp != tree.AccountIdentifiedByPassword {
 		return moerr.NewInternalError(ctx, "Operation ALTER USER failed for '%s'@'%s', only support alter Auth by identified by", userName, hostName)
 	}
 
@@ -2903,7 +2910,7 @@ func doAlterUser(ctx context.Context, ses *Session, au *tree.AlterUser) (err err
 		// false : return an error
 		// true : return and  do nothing
 		if !au.IfExists {
-			return moerr.NewInternalError(ctx, "Operation ALTER USER failed for '%s'@'%s', user does't exist", user.Username, user.Hostname)
+			return moerr.NewInternalError(ctx, "Operation ALTER USER failed for '%s'@'%s', user does't exist", userName, hostName)
 		} else {
 			return err
 		}
@@ -2960,7 +2967,22 @@ func doAlterUser(ctx context.Context, ses *Session, au *tree.AlterUser) (err err
 	return err
 }
 
-func doAlterAccount(ctx context.Context, ses *Session, aa *tree.AlterAccount) (err error) {
+type alterAccount struct {
+	IfExists bool
+	Name     string
+
+	AuthExist bool
+	AdminName string
+	IdentTyp  tree.AccountIdentifiedOption
+	IdentStr  string
+
+	// status_option or not
+	StatusOption tree.AccountStatus
+	// comment or not
+	Comment tree.AccountComment
+}
+
+func doAlterAccount(ctx context.Context, ses *Session, aa *alterAccount) (err error) {
 	var sql string
 	var erArray []ExecResult
 	var targetAccountId uint64
@@ -2974,7 +2996,7 @@ func doAlterAccount(ctx context.Context, ses *Session, aa *tree.AlterAccount) (e
 	}
 
 	optionBits := uint8(0)
-	if aa.AuthOption.Exist {
+	if aa.AuthExist {
 		optionBits |= 1
 	}
 	if aa.StatusOption.Exist {
@@ -2997,16 +3019,16 @@ func doAlterAccount(ctx context.Context, ses *Session, aa *tree.AlterAccount) (e
 		return err
 	}
 
-	if aa.AuthOption.Exist {
-		aa.AuthOption.AdminName, err = normalizeName(ctx, aa.AuthOption.AdminName)
+	if aa.AuthExist {
+		aa.AdminName, err = normalizeName(ctx, aa.AdminName)
 		if err != nil {
 			return err
 		}
-		if aa.AuthOption.IdentifiedType.Typ != tree.AccountIdentifiedByPassword {
+		if aa.IdentTyp != tree.AccountIdentifiedByPassword {
 			return moerr.NewInternalError(ctx, "only support identified by password")
 		}
 
-		if len(aa.AuthOption.IdentifiedType.Str) == 0 {
+		if len(aa.IdentStr) == 0 {
 			err = moerr.NewInternalError(ctx, "password is empty string")
 			return err
 		}
@@ -3077,12 +3099,12 @@ func doAlterAccount(ctx context.Context, ses *Session, aa *tree.AlterAccount) (e
 
 		if accountExist {
 			//Option 1: alter the password of admin for the account
-			if aa.AuthOption.Exist {
+			if aa.AuthExist {
 				//!!!NOTE!!!:switch into the target account's context, then update the table mo_user.
 				accountCtx := defines.AttachAccountId(ctx, uint32(targetAccountId))
 
 				//1, check the admin exists or not
-				sql, rtnErr = getSqlForPasswordOfUser(ctx, aa.AuthOption.AdminName)
+				sql, rtnErr = getSqlForPasswordOfUser(ctx, aa.AdminName)
 				if rtnErr != nil {
 					return rtnErr
 				}
@@ -3098,14 +3120,14 @@ func doAlterAccount(ctx context.Context, ses *Session, aa *tree.AlterAccount) (e
 				}
 
 				if !execResultArrayHasData(erArray) {
-					rtnErr = moerr.NewInternalError(accountCtx, "there is no user %s", aa.AuthOption.AdminName)
+					rtnErr = moerr.NewInternalError(accountCtx, "there is no user %s", aa.AdminName)
 					return
 				}
 
 				//2, update the password
 				//encryption the password
-				encryption := HashPassWord(aa.AuthOption.IdentifiedType.Str)
-				sql, rtnErr = getSqlForUpdatePasswordOfUser(ctx, encryption, aa.AuthOption.AdminName)
+				encryption := HashPassWord(aa.IdentStr)
+				sql, rtnErr = getSqlForUpdatePasswordOfUser(ctx, encryption, aa.AdminName)
 				if rtnErr != nil {
 					return rtnErr
 				}
@@ -3913,9 +3935,8 @@ func doCreatePublication(ctx context.Context, ses *Session, cp *tree.CreatePubli
 	const allTable = true
 	var (
 		sql         string
-		erArray     []ExecResult
-		datId       uint64
-		datType     string
+		dbId        uint64
+		dbType      string
 		tableList   string
 		accountList string
 		tenantInfo  *TenantInfo
@@ -3957,34 +3978,14 @@ func doCreatePublication(ctx context.Context, ses *Session, cp *tree.CreatePubli
 	}
 	bh.ClearExecResultSet()
 
-	sql, err = getSqlForGetDbIdAndType(ctx, pubDb, true, uint64(tenantInfo.TenantID))
-	if err != nil {
+	if dbId, dbType, err = getDbIdAndType(ctx, bh, tenantInfo, pubDb); err != nil {
 		return err
 	}
-	err = bh.Exec(ctx, sql)
-	if err != nil {
-		return err
-	}
-	erArray, err = getResultSet(ctx, bh)
-	if err != nil {
-		return err
-	}
-	if !execResultArrayHasData(erArray) {
-		return moerr.NewInternalError(ctx, "database '%s' does not exist", cp.Database)
-	}
-	datId, err = erArray[0].GetUint64(ctx, 0, 0)
-	if err != nil {
-		return err
-	}
-	datType, err = erArray[0].GetString(ctx, 0, 1)
-	if err != nil {
-		return err
-	}
-	if datType != "" { //TODO: check the dat_type
+	if dbType != "" { //TODO: check the dat_type
 		return moerr.NewInternalError(ctx, "database '%s' is not a user database", cp.Database)
 	}
-	bh.ClearExecResultSet()
-	sql, err = getSqlForInsertIntoMoPubs(ctx, string(cp.Name), pubDb, datId, allTable, tableList, accountList, tenantInfo.GetDefaultRoleID(), tenantInfo.GetUserID(), cp.Comment, true)
+
+	sql, err = getSqlForInsertIntoMoPubs(ctx, string(cp.Name), pubDb, dbId, allTable, tableList, accountList, tenantInfo.GetDefaultRoleID(), tenantInfo.GetUserID(), cp.Comment, true)
 	if err != nil {
 		return err
 	}
@@ -4003,6 +4004,9 @@ func doAlterPublication(ctx context.Context, ses *Session, ap *tree.AlterPublica
 		accountList    string
 		accountListSep []string
 		comment        string
+		dbName         string
+		dbId           uint64
+		dbType         string
 		sql            string
 		erArray        []ExecResult
 		tenantInfo     *TenantInfo
@@ -4022,6 +4026,7 @@ func doAlterPublication(ctx context.Context, ses *Session, ap *tree.AlterPublica
 		return err
 	}
 	bh.ClearExecResultSet()
+
 	sql, err = getSqlForGetPubInfo(ctx, string(ap.Name), true)
 	if err != nil {
 		return err
@@ -4037,17 +4042,13 @@ func doAlterPublication(ctx context.Context, ses *Session, ap *tree.AlterPublica
 	if !execResultArrayHasData(erArray) {
 		return moerr.NewInternalError(ctx, "publication '%s' does not exist", ap.Name)
 	}
+	bh.ClearExecResultSet()
 
-	accountList, err = erArray[0].GetString(ctx, 0, 0)
-	if err != nil {
+	// alter account
+	if accountList, err = erArray[0].GetString(ctx, 0, 0); err != nil {
 		return err
 	}
 	allAccount = accountList == "all"
-
-	comment, err = erArray[0].GetString(ctx, 0, 1)
-	if err != nil {
-		return err
-	}
 
 	if ap.AccountsSet != nil {
 		switch {
@@ -4097,19 +4098,43 @@ func doAlterPublication(ctx context.Context, ses *Session, ap *tree.AlterPublica
 			accountList = strings.Join(accountListSep, ",")
 		}
 	}
+
+	// alter comment
+	if comment, err = erArray[0].GetString(ctx, 0, 1); err != nil {
+		return err
+	}
+
 	if ap.Comment != "" {
 		comment = ap.Comment
 	}
-	sql, err = getSqlForUpdatePubInfo(ctx, string(ap.Name), accountList, comment, false)
+
+	// alter db
+	if dbName, err = erArray[0].GetString(ctx, 0, 2); err != nil {
+		return err
+	}
+	if dbId, err = erArray[0].GetUint64(ctx, 0, 3); err != nil {
+		return err
+	}
+
+	if ap.DbName != "" {
+		dbName = ap.DbName
+		if _, ok := sysDatabases[dbName]; ok {
+			return moerr.NewInternalError(ctx, "invalid database name '%s', not support publishing system database", dbName)
+		}
+
+		if dbId, dbType, err = getDbIdAndType(ctx, bh, tenantInfo, dbName); err != nil {
+			return err
+		}
+		if dbType != "" { //TODO: check the dat_type
+			return moerr.NewInternalError(ctx, "database '%s' is not a user database", dbName)
+		}
+	}
+
+	sql, err = getSqlForUpdatePubInfo(ctx, string(ap.Name), accountList, comment, dbName, dbId, false)
 	if err != nil {
 		return err
 	}
-	bh.ClearExecResultSet()
-	err = bh.Exec(ctx, sql)
-	if err != nil {
-		return err
-	}
-	return err
+	return bh.Exec(ctx, sql)
 }
 
 func doDropPublication(ctx context.Context, ses *Session, dp *tree.DropPublication) (err error) {
@@ -4165,8 +4190,13 @@ func doDropPublication(ctx context.Context, ses *Session, dp *tree.DropPublicati
 	return err
 }
 
+type dropAccount struct {
+	IfExists bool
+	Name     string
+}
+
 // doDropAccount accomplishes the DropAccount statement
-func doDropAccount(ctx context.Context, ses *Session, da *tree.DropAccount) (err error) {
+func doDropAccount(ctx context.Context, ses *Session, da *dropAccount) (err error) {
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
@@ -6043,7 +6073,8 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		kind = privilegeKindNone
 	case *tree.BackupStart:
 		objType = objectTypeNone
-		kind = privilegeKindNone
+		kind = privilegeKindSpecial
+		special = specialTagAdmin
 	case *tree.EmptyStmt:
 		objType = objectTypeNone
 		kind = privilegeKindNone
@@ -7597,6 +7628,11 @@ func authenticateUserCanExecuteStatementWithObjectTypeNone(ctx context.Context, 
 			return tenant.IsAdminRole(), nil
 		}
 
+		checkBackUpStartPrivilege := func() (bool, error) {
+			//only the moAdmin can execute the backup statement
+			return tenant.IsSysTenant(), nil
+		}
+
 		switch gp := stmt.(type) {
 		case *tree.Grant:
 			if gp.Typ == tree.GrantTypePrivilege {
@@ -7628,6 +7664,8 @@ func authenticateUserCanExecuteStatementWithObjectTypeNone(ctx context.Context, 
 			return tenant.IsMoAdminRole(), nil
 		case *tree.UpgradeStatement:
 			return tenant.IsMoAdminRole(), nil
+		case *tree.BackupStart:
+			return checkBackUpStartPrivilege()
 		}
 	}
 
@@ -7925,16 +7963,18 @@ func checkDatabaseExistsOrNot(ctx context.Context, bh BackgroundExec, dbName str
 	return false, nil
 }
 
-type CreateAccount struct {
+type createAccount struct {
 	IfNotExists  bool
 	Name         string
-	AuthOption   tree.AccountAuthOption
+	AdminName    string
+	IdentTyp     tree.AccountIdentifiedOption
+	IdentStr     string
 	StatusOption tree.AccountStatus
 	Comment      tree.AccountComment
 }
 
 // InitGeneralTenant initializes the application level tenant
-func InitGeneralTenant(ctx context.Context, ses *Session, ca *CreateAccount) (err error) {
+func InitGeneralTenant(ctx context.Context, ses *Session, ca *createAccount) (err error) {
 	var exists bool
 	var newTenant *TenantInfo
 	var newTenantCtx context.Context
@@ -7954,13 +7994,13 @@ func InitGeneralTenant(ctx context.Context, ses *Session, ca *CreateAccount) (er
 		return err
 	}
 
-	ca.AuthOption.AdminName, err = normalizeName(ctx, ca.AuthOption.AdminName)
+	ca.AdminName, err = normalizeName(ctx, ca.AdminName)
 	if err != nil {
 		return err
 	}
 
-	if ca.AuthOption.IdentifiedType.Typ == tree.AccountIdentifiedByPassword {
-		if len(ca.AuthOption.IdentifiedType.Str) == 0 {
+	if ca.IdentTyp == tree.AccountIdentifiedByPassword {
+		if len(ca.IdentStr) == 0 {
 			return moerr.NewInternalError(ctx, "password is empty string")
 		}
 	}
@@ -8078,7 +8118,7 @@ func InitGeneralTenant(ctx context.Context, ses *Session, ca *CreateAccount) (er
 }
 
 // createTablesInMoCatalogOfGeneralTenant creates catalog tables in the database mo_catalog.
-func createTablesInMoCatalogOfGeneralTenant(ctx context.Context, bh BackgroundExec, finalVersion string, ca *CreateAccount) (*TenantInfo, context.Context, error) {
+func createTablesInMoCatalogOfGeneralTenant(ctx context.Context, bh BackgroundExec, finalVersion string, ca *createAccount) (*TenantInfo, context.Context, error) {
 	var err error
 	var initMoAccount string
 	var erArray []ExecResult
@@ -8097,7 +8137,7 @@ func createTablesInMoCatalogOfGeneralTenant(ctx context.Context, bh BackgroundEx
 		return nil, nil, moerr.NewInternalError(ctx, "the account name is invalid")
 	}
 
-	if nameIsInvalid(ca.AuthOption.AdminName) {
+	if nameIsInvalid(ca.AdminName) {
 		return nil, nil, moerr.NewInternalError(ctx, "the admin name is invalid")
 	}
 
@@ -8152,7 +8192,7 @@ func createTablesInMoCatalogOfGeneralTenant(ctx context.Context, bh BackgroundEx
 
 	newTenant = &TenantInfo{
 		Tenant:        ca.Name,
-		User:          ca.AuthOption.AdminName,
+		User:          ca.AdminName,
 		DefaultRole:   accountAdminRoleName,
 		TenantID:      uint32(newTenantID),
 		UserID:        uint32(newUserId),
@@ -8163,7 +8203,7 @@ func createTablesInMoCatalogOfGeneralTenant(ctx context.Context, bh BackgroundEx
 	return newTenant, newTenantCtx, err
 }
 
-func createTablesInMoCatalogOfGeneralTenant2(bh BackgroundExec, ca *CreateAccount, newTenantCtx context.Context, newTenant *TenantInfo, pu *config.ParameterUnit) error {
+func createTablesInMoCatalogOfGeneralTenant2(bh BackgroundExec, ca *createAccount, newTenantCtx context.Context, newTenant *TenantInfo, pu *config.ParameterUnit) error {
 	var err error
 	var initDataSqls []string
 	newTenantCtx, span := trace.Debug(newTenantCtx, "createTablesInMoCatalogOfGeneralTenant2")
@@ -8191,12 +8231,12 @@ func createTablesInMoCatalogOfGeneralTenant2(bh BackgroundExec, ca *CreateAccoun
 	addSqlIntoSet(initMoRole2)
 
 	//step 3:add new user entry to the mo_user
-	if ca.AuthOption.IdentifiedType.Typ != tree.AccountIdentifiedByPassword {
+	if ca.IdentTyp != tree.AccountIdentifiedByPassword {
 		err = moerr.NewInternalError(newTenantCtx, "only support password verification now")
 		return err
 	}
-	name := ca.AuthOption.AdminName
-	password := ca.AuthOption.IdentifiedType.Str
+	name := ca.AdminName
+	password := ca.IdentStr
 	if len(password) == 0 {
 		err = moerr.NewInternalError(newTenantCtx, "password is empty string")
 		return err
@@ -8358,8 +8398,17 @@ func createSubscriptionDatabase(ctx context.Context, bh BackgroundExec, newTenan
 	return err
 }
 
+type createUser struct {
+	IfNotExists bool
+	Users       []*user
+	Role        *tree.Role
+	MiscOpt     tree.UserMiscOption
+	// comment or attribute
+	CommentOrAttribute tree.AccountCommentOrAttribute
+}
+
 // InitUser creates new user for the tenant
-func InitUser(ctx context.Context, ses *Session, tenant *TenantInfo, cu *tree.CreateUser) (err error) {
+func InitUser(ctx context.Context, ses *Session, tenant *TenantInfo, cu *createUser) (err error) {
 	var exists int
 	var erArray []ExecResult
 	var newUserId int64
@@ -8369,9 +8418,11 @@ func InitUser(ctx context.Context, ses *Session, tenant *TenantInfo, cu *tree.Cr
 	var sql string
 	var mp *mpool.MPool
 
-	err = normalizeNamesOfUsers(ctx, cu.Users)
-	if err != nil {
-		return err
+	for _, u := range cu.Users {
+		u.Username, err = normalizeName(ctx, u.Username)
+		if err != nil {
+			return err
+		}
 	}
 
 	if cu.Role != nil {
@@ -8502,15 +8553,15 @@ func InitUser(ctx context.Context, ses *Session, tenant *TenantInfo, cu *tree.Cr
 			return err
 		}
 
-		if user.AuthOption == nil {
+		if !user.AuthExist {
 			return moerr.NewInternalError(ctx, "the user %s misses the auth_option", user.Username)
 		}
 
-		if user.AuthOption.Typ != tree.AccountIdentifiedByPassword {
+		if user.IdentTyp != tree.AccountIdentifiedByPassword {
 			return moerr.NewInternalError(ctx, "only support password verification now")
 		}
 
-		password := user.AuthOption.Str
+		password := user.IdentStr
 		if len(password) == 0 {
 			return moerr.NewInternalError(ctx, "password is empty string")
 		}
@@ -9358,6 +9409,9 @@ func doGrantPrivilegeImplicitly(_ context.Context, ses *Session, stmt tree.State
 		return err
 	}
 	currentRole := tenantInfo.GetDefaultRole()
+	if len(currentRole) == 0 {
+		return err
+	}
 
 	// 1.first change to moadmin/accountAdmin
 	var tenantCtx context.Context
@@ -9405,6 +9459,9 @@ func doRevokePrivilegeImplicitly(_ context.Context, ses *Session, stmt tree.Stat
 		return err
 	}
 	currentRole := tenantInfo.GetDefaultRole()
+	if len(currentRole) == 0 {
+		return err
+	}
 
 	// 1.first change to moadmin/accountAdmin
 	var tenantCtx context.Context
@@ -9857,4 +9914,35 @@ func checkSnapShotExistOrNot(ctx context.Context, bh BackgroundExec, snapshotNam
 		return true, nil
 	}
 	return false, nil
+}
+
+func getDbIdAndType(ctx context.Context, bh BackgroundExec, tenantInfo *TenantInfo, dbName string) (dbId uint64, dbType string, err error) {
+	sql, err := getSqlForGetDbIdAndType(ctx, dbName, true, uint64(tenantInfo.TenantID))
+	if err != nil {
+		return
+	}
+	if bh.Exec(ctx, sql) != nil {
+		return
+	}
+	defer bh.ClearExecResultSet()
+
+	erArray, err := getResultSet(ctx, bh)
+	if err != nil {
+		return
+	}
+
+	if !execResultArrayHasData(erArray) {
+		err = moerr.NewInternalError(ctx, "database '%s' does not exist", dbName)
+		return
+	}
+
+	if dbId, err = erArray[0].GetUint64(ctx, 0, 0); err != nil {
+		return
+	}
+
+	if dbType, err = erArray[0].GetString(ctx, 0, 1); err != nil {
+		return
+	}
+
+	return
 }

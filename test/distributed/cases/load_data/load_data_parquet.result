@@ -1,0 +1,16 @@
+drop database if exists parq;
+create database parq;
+use parq;
+create table t1(id bigint,name varchar);
+load data infile {'filepath'='$resources/load_data/simple.parq', 'format'='parquet'} into table t1;
+select * from t1;
+id    name
+1    user1
+2    user2
+7    user7
+8    user8
+10    user10
+12    user12
+15    user15
+16    user16
+drop database parq;

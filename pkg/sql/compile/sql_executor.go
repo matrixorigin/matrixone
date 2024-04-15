@@ -17,8 +17,9 @@ package compile
 import (
 	"context"
 	"errors"
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 
 	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -320,8 +321,7 @@ func (exec *txnExecutor) Exec(
 	err = c.Compile(
 		exec.ctx,
 		pn,
-		nil,
-		func(a any, bat *batch.Batch) error {
+		func(bat *batch.Batch) error {
 			if bat != nil {
 				// the bat is valid only in current method. So we need copy data.
 				// FIXME: add a custom streaming apply handler to consume readed data. Now
