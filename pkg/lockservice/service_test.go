@@ -1050,6 +1050,211 @@ func TestDeadLockWith2Txn(t *testing.T) {
 	}
 }
 
+func TestLockSuccWithKeepBindTimeout(t *testing.T) {
+	runLockServiceTestsWithLevel(
+		t,
+		zapcore.DebugLevel,
+		[]string{"s1"},
+		time.Second*1,
+		func(alloc *lockTableAllocator, s []*service) {
+			l := s[0]
+
+			ctx, cancel := context.WithTimeout(
+				context.Background(),
+				time.Second*10)
+			defer cancel()
+			option := pb.LockOptions{
+				Granularity: pb.Granularity_Row,
+				Mode:        pb.LockMode_Exclusive,
+				Policy:      pb.WaitPolicy_Wait,
+			}
+
+			_, err := l.Lock(
+				ctx,
+				0,
+				[][]byte{{1}},
+				[]byte("txn1"),
+				option)
+			require.NoError(t, err)
+
+			err = l.remote.keeper.Close()
+			require.NoError(t, err)
+
+			time.Sleep(time.Second * 3)
+
+			p := alloc.GetLatest(0)
+			require.True(t, p.Valid)
+		},
+		nil,
+	)
+
+}
+
+func TestReLockSuccWithReStartCN(t *testing.T) {
+	runLockServiceTestsWithLevel(
+		t,
+		zapcore.DebugLevel,
+		[]string{"s1", "s2"},
+		time.Second*1,
+		func(alloc *lockTableAllocator, s []*service) {
+			l1 := s[0]
+			l2 := s[1]
+
+			ctx, cancel := context.WithTimeout(
+				context.Background(),
+				time.Second*100)
+			defer cancel()
+			option := pb.LockOptions{
+				Granularity: pb.Granularity_Row,
+				Mode:        pb.LockMode_Exclusive,
+				Policy:      pb.WaitPolicy_Wait,
+			}
+
+			_, err := l1.Lock(
+				ctx,
+				0,
+				[][]byte{{1}},
+				[]byte("txn1"),
+				option)
+			require.NoError(t, err)
+			require.NoError(t, l1.Unlock(ctx, []byte("txn1"), timestamp.Timestamp{}))
+
+			l1.mu.Lock()
+			l1.serviceID = getServiceIdentifier("s1", time.Now().UnixNano())
+			l1.mu.Unlock()
+			l1.tables.removeWithFilter(
+				func(table uint64, lt lockTable) bool {
+					return true
+				})
+
+			time.Sleep(time.Second * 10)
+
+			// should lock succ
+			_, err = l2.Lock(
+				ctx,
+				0,
+				[][]byte{{1}},
+				[]byte("txn2"),
+				option)
+			require.NoError(t, err)
+		},
+		nil,
+	)
+}
+
+func TestReLockSuccWithLockTableBindChanged(t *testing.T) {
+	runLockServiceTestsWithLevel(
+		t,
+		zapcore.DebugLevel,
+		[]string{"s1", "s2"},
+		time.Second*1,
+		func(alloc *lockTableAllocator, s []*service) {
+			l1 := s[0]
+			l2 := s[1]
+
+			ctx, cancel := context.WithTimeout(
+				context.Background(),
+				time.Second*10)
+			defer cancel()
+			option := pb.LockOptions{
+				Granularity: pb.Granularity_Row,
+				Mode:        pb.LockMode_Exclusive,
+				Policy:      pb.WaitPolicy_Wait,
+			}
+
+			_, err := l1.Lock(
+				ctx,
+				0,
+				[][]byte{{1}},
+				[]byte("txn1"),
+				option)
+			require.NoError(t, err)
+			require.NoError(t, l1.Unlock(ctx, []byte("txn1"), timestamp.Timestamp{}))
+
+			b := l1.tables.get(0).getBind()
+			r := &remoteLockTable{bind: b}
+			l1.tables.Lock()
+			l1.tables.tables[0] = r
+			l1.tables.Unlock()
+
+			// should lock failed
+			_, err = l2.Lock(
+				ctx,
+				0,
+				[][]byte{{1}},
+				[]byte("txn2"),
+				option)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged))
+
+			// should lock succ
+			_, err = l2.Lock(
+				ctx,
+				0,
+				[][]byte{{1}},
+				[]byte("txn2"),
+				option)
+			require.NoError(t, err)
+		},
+		nil,
+	)
+
+}
+
+func TestReLockSuccWithKeepBindTimeout(t *testing.T) {
+	runLockServiceTestsWithLevel(
+		t,
+		zapcore.DebugLevel,
+		[]string{"s1", "s2"},
+		time.Second*1,
+		func(alloc *lockTableAllocator, s []*service) {
+			l1 := s[0]
+			l2 := s[1]
+
+			ctx, cancel := context.WithTimeout(
+				context.Background(),
+				time.Second*10)
+			defer cancel()
+			option := pb.LockOptions{
+				Granularity: pb.Granularity_Row,
+				Mode:        pb.LockMode_Exclusive,
+				Policy:      pb.WaitPolicy_Wait,
+			}
+
+			_, err := l1.Lock(
+				ctx,
+				0,
+				[][]byte{{1}},
+				[]byte("txn1"),
+				option)
+			require.NoError(t, err)
+			require.NoError(t, l1.Unlock(ctx, []byte("txn1"), timestamp.Timestamp{}))
+
+			err = l1.remote.keeper.Close()
+			require.NoError(t, err)
+
+			time.Sleep(time.Second * 3)
+
+			p := alloc.GetLatest(0)
+			require.True(t, p.Valid)
+
+			l1.tables.removeWithFilter(func(key uint64, value lockTable) bool {
+				return true
+			})
+
+			// should lock succ
+			_, err = l2.Lock(
+				ctx,
+				0,
+				[][]byte{{1}},
+				[]byte("txn2"),
+				option)
+			require.NoError(t, err)
+		},
+		nil,
+	)
+
+}
+
 func TestLockResultWithNoConflict(t *testing.T) {
 	runLockServiceTests(
 		t,

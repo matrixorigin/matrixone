@@ -68,6 +68,8 @@ func (s *service) initRemoteHandler() {
 		s.handleRemoteGetWaitingList)
 	s.remote.server.RegisterMethodHandler(pb.Method_KeepRemoteLock,
 		s.handleKeepRemoteLock)
+	s.remote.server.RegisterMethodHandler(pb.Method_ValidateService,
+		s.handleValidateService)
 }
 
 func (s *service) handleRemoteLock(
@@ -166,6 +168,18 @@ func (s *service) handleRemoteUnlock(
 	writeResponse(ctx, cancel, resp, err, cs)
 }
 
+func (s *service) handleValidateService(
+	ctx context.Context,
+	cancel context.CancelFunc,
+	req *pb.Request,
+	resp *pb.Response,
+	cs morpc.ClientSession) {
+	resp.ValidateService = pb.ValidateServiceResponse{
+		OK: s.serviceID == req.ValidateService.ServiceID,
+	}
+	writeResponse(ctx, cancel, resp, nil, cs)
+}
+
 func (s *service) handleRemoteGetLock(
 	ctx context.Context,
 	cancel context.CancelFunc,
@@ -235,7 +249,10 @@ func (s *service) getLocalLockTable(
 		return nil, err
 	}
 	if l == nil {
-		return nil, ErrLockTableNotFound
+		l, err = s.getLockTableWithCreate(req.LockTable.Table, true)
+		if err != nil || l.getBind().Changed(req.LockTable) {
+			return nil, ErrLockTableNotFound
+		}
 	}
 	bind := l.getBind()
 	if bind.Changed(req.LockTable) {

@@ -40,6 +40,14 @@ func (l logOutputExecutor) Exec(ctx context.Context, s string, s2 ie.SessionOver
 	logutil.Info(s)
 	return nil
 }
+
+func (l logOutputExecutor) ExecTxn(ctx context.Context, sqls []string, s2 ie.SessionOverrideOptions) error {
+	for _, sql := range sqls {
+		logutil.Info(sql)
+	}
+	return nil
+}
+
 func (l logOutputExecutor) Query(ctx context.Context, s string, _ ie.SessionOverrideOptions) ie.InternalExecResult {
 	logutil.Info(s)
 	return nil

@@ -1688,5 +1688,35 @@ mix01    col3    DATE    YES
 mix01    col4    VARCHAR    YES
 mix01    col5    INT    YES
 drop table mix01;
+drop table if exists table01;
+begin;
+create table table01(col1 int, col2 decimal);
+insert into table01 values(100,200);
+alter table table01 modify column col1 float;
+commit;
+select * from table01;
+col1    col2
+100.0    200
+select col1 from table01;
+col1
+100.0
+drop table table01;
+drop table if exists t1;
+create table t1 (a int,b enum('abc','def','database'));
+insert into t1 values (1, 'abc');
+insert into t1 values (2, 'database');
+select * from t1;
+a    b
+1    abc
+2    database
+alter table t1 modify column b enum('abc','def','database') first;
+show create table t1;
+Table    Create Table
+t1    CREATE TABLE `t1` (\n`b` ENUM('abc','def','database') DEFAULT NULL,\n`a` INT DEFAULT NULL\n)
+select * from t1;
+b    a
+abc    1
+database    2
+drop table t1;
 drop database test;
 Can't drop database 'test'; database doesn't exist

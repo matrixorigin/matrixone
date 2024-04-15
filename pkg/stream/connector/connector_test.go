@@ -39,6 +39,13 @@ func (m *MockSQLExecutor) Exec(ctx context.Context, sql string, opts ie.SessionO
 	return nil
 }
 
+func (m *MockSQLExecutor) ExecTxn(ctx context.Context, sqls []string, opts ie.SessionOverrideOptions) error {
+	m.execCount++
+	m.executedSQLs = append(m.executedSQLs, sqls...)
+	m.wg.Done() // Decrement the WaitGroup counter after processing a message
+	return nil
+}
+
 func (m *MockSQLExecutor) Query(ctx context.Context, sql string, pts ie.SessionOverrideOptions) ie.InternalExecResult {
 	return nil
 }

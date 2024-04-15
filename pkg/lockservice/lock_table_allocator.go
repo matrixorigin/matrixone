@@ -33,6 +33,7 @@ type lockTableAllocator struct {
 	keepBindTimeout time.Duration
 	address         string
 	server          Server
+	client          Client
 
 	mu struct {
 		sync.RWMutex
@@ -50,6 +51,11 @@ func NewLockTableAllocator(
 		panic("invalid lock table bind timeout")
 	}
 
+	rpcClient, err := NewClient(cfg)
+	if err != nil {
+		panic(err)
+	}
+
 	logger := runtime.ProcessLevelRuntime().Logger()
 	tag := "lockservice.allocator"
 	la := &lockTableAllocator{
@@ -58,6 +64,7 @@ func NewLockTableAllocator(
 		stopper: stopper.NewStopper(tag,
 			stopper.WithLogger(logger.RawLogger().Named(tag))),
 		keepBindTimeout: keepBindTimeout,
+		client:          rpcClient,
 	}
 	la.mu.lockTables = make(map[uint64]pb.LockTable, 10240)
 	la.mu.services = make(map[string]*serviceBinds)
@@ -66,6 +73,7 @@ func NewLockTableAllocator(
 	}
 
 	la.initServer(cfg)
+	logLockAllocatorStartSucc()
 	return la
 }
 
@@ -124,9 +132,19 @@ func (l *lockTableAllocator) Valid(binds []pb.LockTable) []uint64 {
 
 func (l *lockTableAllocator) Close() error {
 	l.stopper.Stop()
-	err := l.server.Close()
-	l.logger.Debug("lock service allocator closed",
+	var err error
+	err1 := l.server.Close()
+	l.logger.Debug("lock service allocator server closed",
 		zap.Error(err))
+	if err1 != nil {
+		err = err1
+	}
+	err2 := l.client.Close()
+	l.logger.Debug("lock service allocator client closed",
+		zap.Error(err))
+	if err2 != nil {
+		err = err2
+	}
 	return err
 }
 
@@ -270,12 +288,33 @@ func (l *lockTableAllocator) checkInvalidBinds(ctx context.Context) {
 					zap.Int("count", len(timeoutBinds)))
 			}
 			for _, b := range timeoutBinds {
-				b.disable()
-				l.disableTableBinds(b)
+				if !l.validateService(b.getServiceID(), ctx) {
+					b.disable()
+					l.disableTableBinds(b)
+				}
 			}
 			timer.Reset(l.keepBindTimeout)
 		}
 	}
+}
+
+func (l *lockTableAllocator) validateService(serviceID string, ctx context.Context) bool {
+	req := acquireRequest()
+	defer releaseRequest(req)
+
+	req.Method = pb.Method_ValidateService
+	req.ValidateService.ServiceID = serviceID
+
+	ctx, cancel := context.WithTimeout(ctx, l.keepBindTimeout)
+	defer cancel()
+	resp, err := l.client.Send(ctx, req)
+	if err != nil {
+		logPingFailed(serviceID, err)
+		return false
+	}
+	defer releaseResponse(resp)
+
+	return resp.ValidateService.OK
 }
 
 // serviceBinds an instance of serviceBinds, recording the bindings of a lockservice
@@ -319,6 +358,12 @@ func (b *serviceBinds) bind(tableID uint64) bool {
 	}
 	b.tables[tableID] = struct{}{}
 	return true
+}
+
+func (b *serviceBinds) getServiceID() string {
+	b.RLock()
+	defer b.RUnlock()
+	return b.serviceID
 }
 
 func (b *serviceBinds) timeout(

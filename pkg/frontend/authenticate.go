@@ -251,7 +251,6 @@ func splitUserInput(ctx context.Context, userInput string, delimiter byte) (*Ten
 		}, nil
 	} else {
 		tenant := userInput[:p]
-		tenant = strings.TrimSpace(tenant)
 		if len(tenant) == 0 {
 			return &TenantInfo{}, moerr.NewInternalError(ctx, "invalid tenant name '%s'", tenant)
 		}
@@ -260,7 +259,6 @@ func splitUserInput(ctx context.Context, userInput string, delimiter byte) (*Ten
 		if p2 == -1 {
 			//tenant:user
 			user := userRole
-			user = strings.TrimSpace(user)
 			if len(user) == 0 {
 				return &TenantInfo{}, moerr.NewInternalError(ctx, "invalid user name '%s'", user)
 			}
@@ -271,12 +269,10 @@ func splitUserInput(ctx context.Context, userInput string, delimiter byte) (*Ten
 			}, nil
 		} else {
 			user := userRole[:p2]
-			user = strings.TrimSpace(user)
 			if len(user) == 0 {
 				return &TenantInfo{}, moerr.NewInternalError(ctx, "invalid user name '%s'", user)
 			}
 			role := userRole[p2+1:]
-			role = strings.TrimSpace(role)
 			if len(role) == 0 {
 				return &TenantInfo{}, moerr.NewInternalError(ctx, "invalid role name '%s'", role)
 			}
@@ -5883,7 +5879,8 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		kind = privilegeKindNone
 	case *tree.BackupStart:
 		objType = objectTypeNone
-		kind = privilegeKindNone
+		kind = privilegeKindSpecial
+		special = specialTagAdmin
 	case *tree.EmptyStmt:
 		objType = objectTypeNone
 		kind = privilegeKindNone
@@ -7433,6 +7430,11 @@ func authenticateUserCanExecuteStatementWithObjectTypeNone(ctx context.Context, 
 			return tenant.IsAdminRole(), nil
 		}
 
+		checkBackUpStartPrivilege := func() (bool, error) {
+			//only the moAdmin can execute the backup statement
+			return tenant.IsSysTenant(), nil
+		}
+
 		switch gp := stmt.(type) {
 		case *tree.Grant:
 			if gp.Typ == tree.GrantTypePrivilege {
@@ -7460,6 +7462,8 @@ func authenticateUserCanExecuteStatementWithObjectTypeNone(ctx context.Context, 
 			return checkRevokePrivilege()
 		case *tree.ShowAccounts:
 			return checkShowAccountsPrivilege()
+		case *tree.BackupStart:
+			return checkBackUpStartPrivilege()
 		}
 	}
 

@@ -18,13 +18,14 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/fagongzi/goetty/v2"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"reflect"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/fagongzi/goetty/v2"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 
@@ -60,18 +61,18 @@ func TestGetTenantInfo(t *testing.T) {
 			{":u1:r1", "{account tenant1:u1:r1 -- 0:0:0}", true},
 			{"tenant1:u1:", "{account tenant1:u1:moadmin -- 0:0:0}", true},
 			{"tenant1::r1", "{account tenant1::r1 -- 0:0:0}", true},
-			{"tenant1:    :r1", "{account tenant1::r1 -- 0:0:0}", true},
-			{"     : :r1", "{account tenant1::r1 -- 0:0:0}", true},
-			{"   tenant1   :   u1   :   r1    ", "{account tenant1:u1:r1 -- 0:0:0}", false},
+			{"tenant1:    :r1", "{account tenant1:    :r1 -- 0:0:0}", false},
+			{"     : :r1", "{account      : :r1 -- 0:0:0}", false},
+			{"   tenant1   :   u1   :   r1    ", "{account    tenant1   :   u1   :   r1     -- 0:0:0}", false},
 			{"u1", "{account sys:u1: -- 0:0:0}", false},
 			{"tenant1#u1", "{account tenant1#u1# -- 0#0#0}", false},
 			{"tenant1#u1#r1", "{account tenant1#u1#r1 -- 0#0#0}", false},
 			{"#u1#r1", "{account tenant1#u1#r1 -- 0#0#0}", true},
 			{"tenant1#u1#", "{account tenant1#u1#moadmin -- 0#0#0}", true},
 			{"tenant1##r1", "{account tenant1##r1 -- 0#0#0}", true},
-			{"tenant1#    #r1", "{account tenant1##r1 -- 0#0#0}", true},
-			{"     # #r1", "{account tenant1##r1 -- 0#0#0}", true},
-			{"   tenant1   #   u1   #   r1    ", "{account tenant1#u1#r1 -- 0#0#0}", false},
+			{"tenant1#    #r1", "{account tenant1#    #r1 -- 0#0#0}", false},
+			{"     # #r1", "{account      # #r1 -- 0#0#0}", false},
+			{"   tenant1   #   u1   #   r1    ", "{account    tenant1   #   u1   #   r1     -- 0#0#0}", false},
 		}
 
 		for _, arg := range args {
@@ -2408,6 +2409,50 @@ func Test_determineRevokePrivilege(t *testing.T) {
 			convey.So(err, convey.ShouldBeNil)
 			convey.So(ok, convey.ShouldBeFalse)
 		}
+	})
+}
+
+func TestBackUpStatementPrivilege(t *testing.T) {
+	convey.Convey("backup success", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+		stmt := &tree.BackupStart{}
+		priv := determinePrivilegeSetOfStatement(stmt)
+		ses := newSes(priv, ctrl)
+		tenant := &TenantInfo{
+			Tenant:        sysAccountName,
+			User:          rootName,
+			DefaultRole:   moAdminRoleName,
+			TenantID:      sysAccountID,
+			UserID:        rootID,
+			DefaultRoleID: moAdminRoleID,
+		}
+		ses.SetTenantInfo(tenant)
+
+		ok, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ses.GetRequestContext(), ses, stmt)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(ok, convey.ShouldBeTrue)
+	})
+
+	convey.Convey("backup fail", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+		stmt := &tree.BackupStart{}
+		priv := determinePrivilegeSetOfStatement(stmt)
+		ses := newSes(priv, ctrl)
+		tenant := &TenantInfo{
+			Tenant:        "test_account",
+			User:          "test_user",
+			DefaultRole:   "role1",
+			TenantID:      3001,
+			UserID:        3,
+			DefaultRoleID: 5,
+		}
+		ses.SetTenantInfo(tenant)
+
+		ok, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ses.GetRequestContext(), ses, stmt)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(ok, convey.ShouldBeFalse)
 	})
 }
 

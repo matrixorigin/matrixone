@@ -886,6 +886,7 @@ message DeleteCtx {
 	int32 partition_idx = 8;
 	int32 primary_key_idx = 9;
 	TableDef table_def 	= 10;
+	TruncateTable truncate_table = 11;
 }
 
 message Query {
@@ -1317,6 +1318,7 @@ message TruncateTable {
 	ClusterTable cluster_table = 5;
 	uint64 table_id = 6;
 	repeated uint64 foreign_tbl = 7;
+	bool	is_delete = 8;
 }
 
 message ClusterTable{

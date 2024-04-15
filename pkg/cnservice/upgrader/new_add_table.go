@@ -354,6 +354,7 @@ var processlistView = &table.Table{
 	Columns: []table.Column{
 		table.StringColumn("account", "the account name"),
 		table.StringColumn("client_host", "the ip:port of the client"),
+		table.StringColumn("proxy_host", "the ip:port on the proxy connection"),
 		table.StringColumn("command", "the COMMAND send by client"),
 		table.UInt64Column("conn_id", "the connection id of the tcp between client"),
 		table.StringColumn("db", "the database be used"),
@@ -371,9 +372,13 @@ var processlistView = &table.Table{
 		table.StringColumn("txn_id", "the id of the transaction"),
 		table.StringColumn("user", "the user name"),
 	},
-	CreateViewSql: "CREATE VIEW IF NOT EXISTS `information_schema`.`PROCESSLIST` AS SELECT * FROM PROCESSLIST() A;",
+	CreateViewSql: fmt.Sprintf("CREATE VIEW IF NOT EXISTS %s.PROCESSLIST AS "+
+		"select node_id, conn_id, session_id, account, user, host, db, "+
+		"session_start, command, info, txn_id, statement_id, statement_type, "+
+		"query_type, sql_source_type, query_start, client_host, role, proxy_host "+
+		"from PROCESSLIST() A", sysview.InformationDBConst),
 	//actually drop table here
-	CreateTableSql: "drop table if exists `information_schema`.`PROCESSLIST`;",
+	CreateTableSql: "drop view if exists `information_schema`.`PROCESSLIST`;",
 }
 
 var MoSessionsView = &table.Table{
@@ -512,6 +517,28 @@ var MoCacheView = &table.Table{
 	CreateTableSql: "drop view if exists `mo_catalog`.`mo_cache`;",
 }
 
+var ReferentialConstraintsView = &table.Table{
+	Account:  table.AccountAll,
+	Database: sysview.InformationDBConst,
+	Table:    "referential_constraints",
+	CreateViewSql: "CREATE VIEW information_schema.REFERENTIAL_CONSTRAINTS " +
+		"AS " +
+		"SELECT DISTINCT " +
+		"'def' AS CONSTRAINT_CATALOG, " +
+		"fk.db_name AS CONSTRAINT_SCHEMA, " +
+		"fk.constraint_name AS CONSTRAINT_NAME, " +
+		"'def' AS UNIQUE_CONSTRAINT_CATALOG, " +
+		"fk.refer_db_name AS UNIQUE_CONSTRAINT_SCHEMA, " +
+		"idx.type AS UNIQUE_CONSTRAINT_NAME," +
+		"'NONE' AS MATCH_OPTION, " +
+		"fk.on_update AS UPDATE_RULE, " +
+		"fk.on_delete AS DELETE_RULE, " +
+		"fk.table_name AS TABLE_NAME, " +
+		"fk.refer_table_name AS REFERENCED_TABLE_NAME " +
+		"FROM mo_catalog.mo_foreign_keys fk " +
+		"JOIN mo_catalog.mo_indexes idx ON (fk.refer_column_name = idx.column_name)",
+}
+
 var transactionMetricView = &table.Table{
 	Account:  table.AccountAll,
 	Database: catalog.MO_SYSTEM_METRICS,
@@ -522,8 +549,26 @@ var transactionMetricView = &table.Table{
 		"where `metric_name` = 'sql_statement_duration_total'",
 }
 
-var registeredViews = []*table.Table{processlistView, MoLocksView, MoVariablesView, MoTransactionsView, MoCacheView}
-var needUpgradeNewView = []*table.Table{transactionMetricView, PARTITIONSView, STATISTICSView, MoSessionsView, SqlStatementHotspotView, MoLocksView, MoConfigurationsView, MoVariablesView, MoTransactionsView, MoCacheView}
+var registeredViews = []*table.Table{
+	MoLocksView,
+	MoVariablesView,
+	MoTransactionsView,
+	MoCacheView,
+}
+
+var needUpgradeNewView = []*table.Table{
+	transactionMetricView,
+	PARTITIONSView,
+	STATISTICSView,
+	MoSessionsView,
+	SqlStatementHotspotView,
+	MoLocksView,
+	MoConfigurationsView,
+	MoVariablesView,
+	MoTransactionsView,
+	MoCacheView,
+	ReferentialConstraintsView,
+}
 
 var InformationSchemaSCHEMATA = &table.Table{
 	Account:  table.AccountAll,
@@ -537,6 +582,7 @@ var InformationSchemaSCHEMATA = &table.Table{
 		"if(true, NULL, '') AS SQL_PATH," +
 		"cast('NO' as varchar(3)) AS DEFAULT_ENCRYPTION " +
 		"FROM mo_catalog.mo_database where account_id = current_account_id() or (account_id = 0 and datname in ('mo_catalog'))",
+	CreateTableSql: "drop view if exists information_schema.SCHEMATA",
 }
 
 var InformationSchemaCOLUMNS = &table.Table{
@@ -567,6 +613,7 @@ var InformationSchemaCOLUMNS = &table.Table{
 		"cast('' as varchar(500)) as GENERATION_EXPRESSION,"+
 		"if(true, NULL, 0) as SRS_ID "+
 		"from mo_catalog.mo_columns where att_relname!='%s' and att_relname not like '%s' and attname != '%s'", catalog.MOAutoIncrTable, catalog.PrefixPriColName+"%", catalog.Row_ID),
+	CreateTableSql: "drop view if exists information_schema.COLUMNS",
 }
 
 var InformationSchemaPARTITIONS = &table.Table{
@@ -613,10 +660,48 @@ var InformationSchemaPARTITIONS = &table.Table{
 		"FROM `mo_catalog`.`mo_tables` `tbl` LEFT JOIN `mo_catalog`.`mo_table_partitions` `part` " +
 		"ON `part`.`table_id` = `tbl`.`rel_id` " +
 		"WHERE `tbl`.`partitioned` = 1;"),
+	CreateTableSql: "drop view if exists information_schema.PARTITIONS",
+}
+
+var InformationSchemaTABLES = &table.Table{
+	Account:  table.AccountAll,
+	Database: sysview.InformationDBConst,
+	Table:    "TABLES",
+	CreateViewSql: fmt.Sprintf("CREATE VIEW IF NOT EXISTS information_schema.TABLES AS "+
+		"SELECT 'def' AS TABLE_CATALOG,"+
+		"reldatabase AS TABLE_SCHEMA,"+
+		"relname AS TABLE_NAME,"+
+		"(case when relkind = 'v' and (reldatabase='mo_catalog' or reldatabase='information_schema') then 'SYSTEM VIEW' "+
+		"when relkind = 'v'  then 'VIEW' "+
+		"when relkind = 'e' then 'EXTERNAL TABLE' "+
+		"when relkind = 'r' then 'BASE TABLE' "+
+		"else 'INTERNAL TABLE' end) AS TABLE_TYPE,"+
+		"if(relkind = 'r','Tae',NULL) AS ENGINE,"+
+		"if(relkind = 'v',NULL,10) AS VERSION,"+
+		"'Compressed' AS ROW_FORMAT,"+
+		"if(relkind = 'v', NULL, 0) AS TABLE_ROWS,"+
+		"if(relkind = 'v', NULL, 0) AS AVG_ROW_LENGTH,"+
+		"if(relkind = 'v', NULL, 0) AS DATA_LENGTH,"+
+		"if(relkind = 'v', NULL, 0) AS MAX_DATA_LENGTH,"+
+		"if(relkind = 'v', NULL, 0) AS INDEX_LENGTH,"+
+		"if(relkind = 'v', NULL, 0) AS DATA_FREE,"+
+		"if(relkind = 'v', NULL, internal_auto_increment(reldatabase, relname)) AS `AUTO_INCREMENT`,"+
+		"created_time AS CREATE_TIME,"+
+		"if(relkind = 'v', NULL, created_time) AS UPDATE_TIME,"+
+		"if(relkind = 'v', NULL, created_time) AS CHECK_TIME,"+
+		"'utf8mb4_0900_ai_ci' AS TABLE_COLLATION,"+
+		"if(relkind = 'v', NULL, 0) AS CHECKSUM,"+
+		"if(relkind = 'v', NULL, if(partitioned = 0, '', cast('partitioned' as varchar(256)))) AS CREATE_OPTIONS,"+
+		"cast(rel_comment as text) AS TABLE_COMMENT "+
+		"FROM mo_catalog.mo_tables tbl "+
+		"WHERE tbl.account_id = current_account_id() and tbl.relname not like '%s' and tbl.relkind != '%s';", catalog.IndexTableNamePrefix+"%", catalog.SystemPartitionRel),
+	CreateTableSql: "drop view if exists information_schema.TABLES",
 }
 
 var needUpgradeExistingView = []*table.Table{
 	InformationSchemaSCHEMATA,
 	InformationSchemaCOLUMNS,
 	InformationSchemaPARTITIONS,
+	InformationSchemaTABLES,
+	processlistView,
 }

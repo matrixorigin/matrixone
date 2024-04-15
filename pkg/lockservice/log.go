@@ -289,6 +289,22 @@ func logAbortDeadLock(
 	}
 }
 
+func logLockServiceStartSucc(
+	serviceID string) {
+	logger := getWithSkipLogger()
+	if logger.Enabled(zap.ErrorLevel) {
+		logger.Info("lock service start successfully",
+			zap.String("serviceID", serviceID))
+	}
+}
+
+func logLockAllocatorStartSucc() {
+	logger := getWithSkipLogger()
+	if logger.Enabled(zap.ErrorLevel) {
+		logger.Info("lock allocator start successfully")
+	}
+}
+
 func logCheckDeadLockFailed(
 	waitingTxn, txn pb.WaitTxn,
 	err error) {
@@ -319,6 +335,17 @@ func logKeepRemoteLocksFailed(
 	if logger.Enabled(zap.ErrorLevel) {
 		logger.Error("failed to keep remote locks",
 			zap.String("bind", bind.DebugString()),
+			zap.Error(err))
+	}
+}
+
+func logPingFailed(
+	serviceID string,
+	err error) {
+	logger := getWithSkipLogger()
+	if logger.Enabled(zap.ErrorLevel) {
+		logger.Error("failed to ping lock service",
+			zap.String("serviceID", serviceID),
 			zap.Error(err))
 	}
 }
