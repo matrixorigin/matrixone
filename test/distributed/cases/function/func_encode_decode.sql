@@ -1,16 +1,15 @@
--- test encode/decode function
-SELECT encode('\xa7', 'hex');
-SELECT decode('616263', 'hex');
+-- test hex/unhex and to_base64/from_base64 function
+SELECT hex('\xa7');
+SELECT unhex('616263');
 
-SELECT encode('abc', 'hex'), decode('616263', 'hex');
-SELECT encode('abc', 'base64'), decode('YWJj', 'base64');
+SELECT hex('abc'), unhex('616263');
+SELECT to_base64('abc'), from_base64('YWJj');
 
-SELECT decode('invalid', 'hex');
-SELECT decode('invalid', 'base64');
+SELECT unhex('invalid');
+SELECT from_base64('invalid');
 
-SELECT encode('abc', 'fake');
-SELECT decode('abc', 'fake');
-
+SELECT TO_BASE64('abc'), FROM_BASE64(TO_BASE64('abc'));
+SELECT HEX('abc'),UNHEX(HEX('abc'));
 
 -- test serial() and serial_full()
 CREATE TABLE t1 (name varchar(255), age int);

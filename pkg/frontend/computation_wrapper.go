@@ -16,7 +16,6 @@ package frontend
 
 import (
 	"context"
-	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -68,7 +67,7 @@ func (ncw *NullComputationWrapper) GetColumns() ([]interface{}, error) {
 	return []interface{}{}, nil
 }
 
-func (ncw *NullComputationWrapper) Compile(requestCtx context.Context, u interface{}, fill func(interface{}, *batch.Batch) error) (interface{}, error) {
+func (ncw *NullComputationWrapper) Compile(requestCtx context.Context, fill func(*batch.Batch) error) (interface{}, error) {
 	return nil, nil
 }
 
@@ -96,7 +95,8 @@ type TxnComputationWrapper struct {
 	compile   *compile.Compile
 	runResult *util2.RunResult
 
-	uuid uuid.UUID
+	ifIsExeccute bool
+	uuid         uuid.UUID
 	//holds values of params in the PREPARE
 	paramVals []any
 }
@@ -117,7 +117,7 @@ func (cwft *TxnComputationWrapper) GetAst() tree.Statement {
 
 func (cwft *TxnComputationWrapper) Free() {
 	if cwft.stmt != nil {
-		if !strings.HasPrefix(cwft.ses.sql, "execute ") {
+		if !cwft.ifIsExeccute {
 			cwft.stmt.Free()
 			cwft.stmt = nil
 		}
@@ -200,7 +200,7 @@ func (cwft *TxnComputationWrapper) GetServerStatus() uint16 {
 	return cwft.ses.GetServerStatus()
 }
 
-func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interface{}, fill func(interface{}, *batch.Batch) error) (interface{}, error) {
+func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, fill func(*batch.Batch) error) (interface{}, error) {
 	var originSQL string
 	var span trace.Span
 	requestCtx, span = trace.Start(requestCtx, "TxnComputationWrapper.Compile",
@@ -277,14 +277,17 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 		originSQL = sql
 		cwft.plan = plan
 
+		cwft.stmt.Free()
 		// reset plan & stmt
 		cwft.stmt = stmt
+		cwft.ifIsExeccute = true
 		// reset some special stmt for execute statement
 		switch cwft.stmt.(type) {
 		case *tree.ShowTableStatus:
 			cwft.ses.showStmtType = ShowTableStatus
 			cwft.ses.SetData(nil)
-		case *tree.SetVar, *tree.ShowVariables, *tree.ShowErrors, *tree.ShowWarnings, *tree.CreateAccount:
+		case *tree.SetVar, *tree.ShowVariables, *tree.ShowErrors, *tree.ShowWarnings,
+			*tree.CreateAccount, *tree.AlterAccount, *tree.DropAccount:
 			return nil, nil
 		}
 
@@ -344,9 +347,9 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 	})
 
 	if _, ok := cwft.stmt.(*tree.ExplainAnalyze); ok {
-		fill = func(obj interface{}, bat *batch.Batch) error { return nil }
+		fill = func(bat *batch.Batch) error { return nil }
 	}
-	err = cwft.compile.Compile(txnCtx, cwft.plan, cwft.ses, fill)
+	err = cwft.compile.Compile(txnCtx, cwft.plan, fill)
 	if err != nil {
 		return nil, err
 	}

@@ -673,17 +673,15 @@ func (rb *remoteBackend) makeAllWaitingFutureFailed() {
 		ids = make([]uint64, 0, len(rb.mu.futures))
 		waitings = make([]*Future, 0, len(rb.mu.futures))
 		for id, f := range rb.mu.futures {
-			waitings = append(waitings, f)
-			ids = append(ids, id)
+			if f.waiting.Load() {
+				waitings = append(waitings, f)
+				ids = append(ids, id)
+			}
 		}
 	}()
 
 	for i, f := range waitings {
-		if f.waiting.Load() {
-			f.error(ids[i], backendClosed, nil)
-		} else {
-			f.messageSent(backendClosed)
-		}
+		f.error(ids[i], backendClosed, nil)
 	}
 }
 
@@ -1159,6 +1157,8 @@ func (s *stream) done(
 	}
 	if response != nil &&
 		message.streamSequence != s.lastReceivedSequence+1 {
+		s.rb.logger.Warn("sequence out of order", zap.Uint32("new", message.streamSequence),
+			zap.Uint32("last", s.lastReceivedSequence))
 		response = nil
 	}
 

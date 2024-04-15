@@ -42,3 +42,9 @@ func Test_rewriteDecimalTypeIfNecessary(t *testing.T) {
 	})
 	require.Equal(t, []int32{t4.Scale, t4.Width}, []int32{0, 18})
 }
+
+func Test_MakePlan2Vecf32ConstExprWithType(t *testing.T) {
+	t1 := MakePlan2Vecf32ConstExprWithType("[1,2,3]", 3)
+	actual := t1.Expr.(*plan.Expr_Lit).Lit.GetValue().(*plan.Literal_Sval).Sval
+	require.Equal(t, "[1,2,3]", actual)
+}

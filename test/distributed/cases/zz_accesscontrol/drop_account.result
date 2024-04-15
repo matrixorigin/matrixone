@@ -21,6 +21,13 @@ select account_name from mo_catalog.mo_account where account_name='drop_account_
 account_name
 create account drop_account_04 ADMIN_NAME 'root' IDENTIFIED BY '1234567890';
 drop account `drop_account_04`;
+create account if not exists drop_account_01 ADMIN_NAME 'root' IDENTIFIED BY '1234567890';
+PREPARE s1 FROM "drop account ?";
+set @a_var = 'drop_account_01';
+EXECUTE s1 USING @a_var;
+DEALLOCATE PREPARE s1;
+select account_name from mo_catalog.mo_account where account_name='drop_account_01';
+account_name
 drop account sys;
 internal error: can not delete the account sys
 drop accout abc;
