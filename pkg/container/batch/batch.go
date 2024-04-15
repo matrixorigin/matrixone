@@ -274,18 +274,18 @@ func (bat *Batch) Dup(mp *mpool.MPool) (*Batch, error) {
 	}
 	rbat.rowCount = bat.rowCount
 
-	if len(bat.Aggs) > 0 {
-		rbat.Aggs = make([]aggexec.AggFuncExec, len(bat.Aggs))
-		aggMemoryManager := aggexec.NewSimpleAggMemoryManager(mp)
-
-		for i, agg := range bat.Aggs {
-			rbat.Aggs[i], err = aggexec.CopyAggFuncExec(aggMemoryManager, agg)
-			if err != nil {
-				rbat.Clean(mp)
-				return nil, err
-			}
-		}
-	}
+	//if len(bat.Aggs) > 0 {
+	//	rbat.Aggs = make([]aggexec.AggFuncExec, len(bat.Aggs))
+	//	aggMemoryManager := aggexec.NewSimpleAggMemoryManager(mp)
+	//
+	//	for i, agg := range bat.Aggs {
+	//		rbat.Aggs[i], err = aggexec.CopyAggFuncExec(aggMemoryManager, agg)
+	//		if err != nil {
+	//			rbat.Clean(mp)
+	//			return nil, err
+	//		}
+	//	}
+	//}
 	// if bat.AuxData != nil {
 	// 	if m, ok := bat.AuxData.(*hashmap.JoinMap); ok {
 	// rbat.AuxData = &hashmap.JoinMap{
