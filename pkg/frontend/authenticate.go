@@ -9953,11 +9953,15 @@ func doResolveSnapshotTsWithSnapShotName(ctx context.Context, ses *Session, spNa
 	}
 
 	if execResultArrayHasData(erArray) {
-		snapshotTs, err = erArray[0].GetInt64(ctx, 0, 0)
+		snapshotTsValue, err := erArray[0].GetString(ctx, 0, 0)
 		if err != nil {
 			return 0, err
 		}
-		return snapshotTs, nil
+		parseSnapshotTs, err := types.ParseTimestamp(*&time.Local, snapshotTsValue, 0)
+		if err != nil {
+			return 0, err
+		}
+		return int64(parseSnapshotTs), nil
 	} else {
 		return 0, moerr.NewInternalError(ctx, "snapshot %s does not exist", spName)
 	}

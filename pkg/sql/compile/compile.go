@@ -2116,7 +2116,7 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node) (*Sco
 	for j, col := range n.TableDef.Cols {
 		attrs[j] = col.Name
 	}
-	if n.ScanTS != nil && !n.ScanTS.Equal(c.proc.TxnOperator.Txn().SnapshotTS) {
+	if n.ScanTS != nil && !n.ScanTS.Equal(timestamp.Timestamp{LogicalTime: 0, PhysicalTime: 0}) && !n.ScanTS.Equal(c.proc.TxnOperator.Txn().SnapshotTS) {
 		c.proc.TxnOperator.CloneSnapshotOp(*n.ScanTS)
 	}
 
