@@ -212,7 +212,6 @@ func (c *checkpointCleaner) Replay() error {
 		}
 	}
 	if acctFile != "" {
-		logutil.Infof("read acct file %s", GCMetaDir+acctFile)
 		err = c.snapshotMeta.ReadTableInfo(c.ctx, GCMetaDir+acctFile, c.fs.Service)
 		if err != nil {
 			return err
