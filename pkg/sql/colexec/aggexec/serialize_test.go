@@ -28,7 +28,7 @@ func testAggExecSerialize(exec AggFuncExec, checkFn func(src, dst AggFuncExec) e
 	if marshalErr != nil {
 		return marshalErr
 	}
-	newExec, unmarshalErr := UnmarshalAggFuncExec(ds)
+	newExec, unmarshalErr := UnmarshalAggFuncExec(nil, ds)
 	if unmarshalErr != nil {
 		return unmarshalErr
 	}

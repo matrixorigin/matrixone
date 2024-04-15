@@ -87,7 +87,7 @@ func (bat *Batch) UnmarshalBinary(data []byte) (err error) {
 	if len(rbat.AggInfos) > 0 {
 		bat.Aggs = make([]aggexec.AggFuncExec, len(rbat.AggInfos))
 		for i, info := range rbat.AggInfos {
-			if bat.Aggs[i], err = aggexec.UnmarshalAggFuncExec(info); err != nil {
+			if bat.Aggs[i], err = aggexec.UnmarshalAggFuncExec(nil, info); err != nil {
 				return err
 			}
 		}
@@ -244,13 +244,15 @@ func (bat *Batch) Log(tag string) {
 }
 
 func (bat *Batch) Dup(mp *mpool.MPool) (*Batch, error) {
+	var err error
+
 	rbat := NewWithSize(len(bat.Vecs))
 	rbat.SetAttributes(bat.Attrs)
 	rbat.Recursive = bat.Recursive
 	for j, vec := range bat.Vecs {
 		typ := *bat.GetVector(int32(j)).GetType()
 		rvec := vector.NewVec(typ)
-		if err := vector.GetUnionAllFunction(typ, mp)(rvec, vec); err != nil {
+		if err = vector.GetUnionAllFunction(typ, mp)(rvec, vec); err != nil {
 			rbat.Clean(mp)
 			return nil, err
 		}
@@ -258,12 +260,18 @@ func (bat *Batch) Dup(mp *mpool.MPool) (*Batch, error) {
 	}
 	rbat.rowCount = bat.rowCount
 
-	// if len(bat.Aggs) > 0 {
-	// 	rbat.Aggs = make([]agg.Agg[any], len(bat.Aggs))
-	// 	for i, agg := range bat.Aggs {
-	// 		rbat.Aggs[i] = agg.Dup(mp)
-	// 	}
-	// }
+	if len(bat.Aggs) > 0 {
+		rbat.Aggs = make([]aggexec.AggFuncExec, len(bat.Aggs))
+		aggMemoryManager := aggexec.NewSimpleAggMemoryManager(mp)
+
+		for i, agg := range bat.Aggs {
+			rbat.Aggs[i], err = aggexec.CopyAggFuncExec(aggMemoryManager, agg)
+			if err != nil {
+				rbat.Clean(mp)
+				return nil, err
+			}
+		}
+	}
 	// if bat.AuxData != nil {
 	// 	if m, ok := bat.AuxData.(*hashmap.JoinMap); ok {
 	// rbat.AuxData = &hashmap.JoinMap{

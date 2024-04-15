@@ -22,15 +22,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec/algos/kmeans"
 )
 
-var _ = MarshalAggFuncExec
-var _ = UnmarshalAggFuncExec
-
 func MarshalAggFuncExec(exec AggFuncExec) ([]byte, error) {
 	return exec.marshal()
 }
 
 // there must be 1 bug that, the result of unmarshal was read only. it cannot do any write operation.
 func UnmarshalAggFuncExec(
+	mg AggMemoryManager,
 	data []byte) (AggFuncExec, error) {
 	encoded := &EncodedAgg{}
 	if err := encoded.Unmarshal(data); err != nil {
@@ -39,7 +37,7 @@ func UnmarshalAggFuncExec(
 
 	info := encoded.GetInfo()
 
-	exec := MakeAgg(nil, info.Id, info.IsDistinct, info.Args...)
+	exec := MakeAgg(mg, info.Id, info.IsDistinct, info.Args...)
 
 	if encoded.GetExecType() == EncodedAggExecType_special_group_concat {
 		if len(encoded.Groups) > 0 && len(encoded.Groups[0]) > 0 {
@@ -52,6 +50,14 @@ func UnmarshalAggFuncExec(
 		return nil, err
 	}
 	return exec, nil
+}
+
+func CopyAggFuncExec(mg AggMemoryManager, exec AggFuncExec) (AggFuncExec, error) {
+	bs, err := MarshalAggFuncExec(exec)
+	if err != nil {
+		return nil, err
+	}
+	return UnmarshalAggFuncExec(mg, bs)
 }
 
 func (exec *singleAggFuncExec1[from, to]) marshal() ([]byte, error) {

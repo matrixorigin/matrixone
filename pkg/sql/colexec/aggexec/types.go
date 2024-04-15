@@ -130,6 +130,26 @@ type AggMemoryManager interface {
 	PutVector(v *vector.Vector)
 }
 
+type SimpleAggMemoryManager struct {
+	mp *mpool.MPool
+}
+
+func NewSimpleAggMemoryManager(mp *mpool.MPool) AggMemoryManager {
+	return SimpleAggMemoryManager{mp: mp}
+}
+
+func (m SimpleAggMemoryManager) Mp() *mpool.MPool {
+	return m.mp
+}
+
+func (m SimpleAggMemoryManager) GetVector(typ types.Type) *vector.Vector {
+	return vector.NewVec(typ)
+}
+
+func (m SimpleAggMemoryManager) PutVector(v *vector.Vector) {
+	v.Free(m.mp)
+}
+
 // MakeAgg is the only exporting method to create an aggregation function executor.
 // all the aggID should be registered before calling this function.
 func MakeAgg(
