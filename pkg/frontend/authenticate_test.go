@@ -11833,7 +11833,8 @@ func TestDoResolveSnapshotTsWithSnapShotName(t *testing.T) {
 		mrs := newMrsForPasswordOfUser([][]interface{}{{"2024-04-15 00:00:00"}})
 		bh.sql2result[sql] = mrs
 
-		_, err := doResolveSnapshotTsWithSnapShotName(ctx, ses, "test_sp")
+		ts, err := doResolveSnapshotTsWithSnapShotName(ctx, ses, "test_sp")
 		convey.So(err, convey.ShouldBeNil)
+		convey.So(ts, convey.ShouldEqual, 1713139200000000000)
 	})
 }

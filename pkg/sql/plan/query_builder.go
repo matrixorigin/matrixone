@@ -4058,11 +4058,12 @@ func (builder *QueryBuilder) resolveTsHint(tsExpr *tree.AtTimeStamp) (timestamp.
 			return timestamp.Timestamp{}, moerr.NewParseError(builder.GetContext(), "invalid timestamp hint")
 		} else {
 			if tsExpr.Type == tree.ATTIMESTAMPTIME {
-				ts, err := types.ParseTimestamp(time.Local, lit.Sval, 0)
+				ts, err := time.Parse("2006-01-02 15:04:05", lit.Sval)
 				if err != nil {
 					return timestamp.Timestamp{}, err
 				}
-				return timestamp.Timestamp{PhysicalTime: int64(ts)}, nil
+				tsNano := ts.UTC().UnixNano()
+				return timestamp.Timestamp{PhysicalTime: tsNano}, nil
 			} else if tsExpr.Type == tree.ATTIMESTAMPSNAPSHOT {
 				tsValue, err := builder.compCtx.ResolveSnapshotTsWithSnapShotName(lit.Sval)
 				if err != nil {

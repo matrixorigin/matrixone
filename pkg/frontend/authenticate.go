@@ -9957,11 +9957,13 @@ func doResolveSnapshotTsWithSnapShotName(ctx context.Context, ses *Session, spNa
 		if err != nil {
 			return 0, err
 		}
-		parseSnapshotTs, err := types.ParseTimestamp(time.Local, snapshotTsValue, 0)
+		parseSnapshotTs, err := time.Parse("2006-01-02 15:04:05", snapshotTsValue)
 		if err != nil {
 			return 0, err
 		}
-		return int64(parseSnapshotTs), nil
+		snapshotTs = parseSnapshotTs.UTC().UnixNano()
+
+		return snapshotTs, nil
 	} else {
 		return 0, moerr.NewInternalError(ctx, "snapshot %s does not exist", spName)
 	}
