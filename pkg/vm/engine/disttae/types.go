@@ -118,10 +118,6 @@ type IDGenerator interface {
 	AllocateIDByKey(ctx context.Context, key string) (uint64, error)
 }
 
-type snapParts struct {
-	sync.Mutex
-	snaps []*logtailreplay.Partition
-}
 type Engine struct {
 	sync.RWMutex
 	mp       *mpool.MPool
