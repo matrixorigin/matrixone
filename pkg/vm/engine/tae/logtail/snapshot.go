@@ -226,7 +226,6 @@ func (sm *SnapshotMeta) GetSnapshot(ctx context.Context, fs fileservice.FileServ
 				if snapshotList[id] == nil {
 					snapshotList[id] = containers.MakeVector(colTypes[0], mp)
 				}
-				logutil.Infof("acct: %d, snapts is %v", acct, snapTs.ToString())
 				err = vector.AppendFixed[types.TS](snapshotList[id].GetDownstreamVector(), snapTs, false, mp)
 				if err != nil {
 					return nil, err
@@ -427,7 +426,7 @@ func (sm *SnapshotMeta) ReadTableInfo(ctx context.Context, name string, fs files
 
 func (sm *SnapshotMeta) GetSnapshotList(SnapshotList map[uint32][]types.TS, tid uint64) []types.TS {
 	sm.RLock()
-	sm.RUnlock()
+	defer sm.RUnlock()
 	if sm.acctIndexes[tid] == nil {
 		return nil
 	}
@@ -437,7 +436,7 @@ func (sm *SnapshotMeta) GetSnapshotList(SnapshotList map[uint32][]types.TS, tid 
 
 func (sm *SnapshotMeta) MergeTableInfo(SnapshotList map[uint32][]types.TS) error {
 	sm.Lock()
-	sm.Unlock()
+	defer sm.Unlock()
 	if len(sm.tables) == 0 {
 		return nil
 	}
@@ -452,7 +451,6 @@ func (sm *SnapshotMeta) MergeTableInfo(SnapshotList map[uint32][]types.TS) error
 		}
 		for _, table := range tables {
 			if !table.deleteAt.IsEmpty() && !isSnapshotRefers(table, SnapshotList[accID]) {
-				logutil.Infof("MergeTableInfo: %d, create %v, drop %v", table.tid, table.createAt.ToString(), table.deleteAt.ToString())
 				delete(sm.tables[accID], table.tid)
 			}
 		}

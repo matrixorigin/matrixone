@@ -302,51 +302,42 @@ func (c *checkpointCleaner) mergeGCFile() error {
 		return err
 	}
 	deleteFiles := make([]string, 0)
+	mergeSnapAcctFile := func(name string, ts, max *types.TS, file *string) error {
+		if *file != "" {
+			if max.Less(ts) {
+				max = ts
+				err = c.fs.Delete(*file)
+				if err != nil {
+					logutil.Errorf("DelFiles failed: %v", err.Error())
+					return err
+				}
+				*file = GCMetaDir + name
+			} else {
+				err = c.fs.Delete(GCMetaDir + name)
+				if err != nil {
+					logutil.Errorf("DelFiles failed: %v", err.Error())
+					return err
+				}
+			}
+		} else {
+			*file = GCMetaDir + name
+			max = ts
+		}
+		return nil
+	}
 	for _, dir := range dirs {
 		_, ts, ext := blockio.DecodeGCMetadataFileName(dir.Name)
 		if ext == blockio.SnapshotExt {
-			if snapFile != "" {
-				if maxSnapEnd.Less(&ts) {
-					maxSnapEnd = ts
-					err = c.fs.Delete(snapFile)
-					if err != nil {
-						logutil.Errorf("DelFiles failed: %v", err.Error())
-						return err
-					}
-					snapFile = GCMetaDir + dir.Name
-				} else {
-					err = c.fs.Delete(GCMetaDir + dir.Name)
-					if err != nil {
-						logutil.Errorf("DelFiles failed: %v", err.Error())
-						return err
-					}
-				}
-			} else {
-				snapFile = GCMetaDir + dir.Name
-				maxSnapEnd = ts
+			err = mergeSnapAcctFile(dir.Name, &ts, &maxSnapEnd, &snapFile)
+			if err != nil {
+				return err
 			}
 			continue
 		}
 		if ext == blockio.AcctExt {
-			if acctFile != "" {
-				if maxAcctEnd.Less(&ts) {
-					maxAcctEnd = ts
-					err = c.fs.Delete(acctFile)
-					if err != nil {
-						logutil.Errorf("DelFiles failed: %v", err.Error())
-						return err
-					}
-					acctFile = GCMetaDir + dir.Name
-				} else {
-					err = c.fs.Delete(GCMetaDir + dir.Name)
-					if err != nil {
-						logutil.Errorf("DelFiles failed: %v", err.Error())
-						return err
-					}
-				}
-			} else {
-				acctFile = GCMetaDir + dir.Name
-				maxAcctEnd = ts
+			err = mergeSnapAcctFile(dir.Name, &ts, &maxAcctEnd, &acctFile)
+			if err != nil {
+				return err
 			}
 			continue
 		}
