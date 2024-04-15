@@ -47,6 +47,8 @@ type PartitionState struct {
 	//TODO:: It's transient, should be removed in future PR.
 	blockDeltas *btree.BTreeG[BlockDeltaEntry]
 	checkpoints []string
+	start       types.TS
+	end         types.TS
 
 	// index
 	primaryIndex *btree.BTreeG[*PrimaryIndexEntry]
@@ -302,6 +304,8 @@ func (p *PartitionState) Copy() *PartitionState {
 		dirtyBlocks:           p.dirtyBlocks.Copy(),
 		objectIndexByTS:       p.objectIndexByTS.Copy(),
 		shared:                p.shared,
+		start:                 p.start,
+		end:                   p.end,
 	}
 	if len(p.checkpoints) > 0 {
 		state.checkpoints = make([]string, len(p.checkpoints))
@@ -988,7 +992,20 @@ func (p *PartitionState) HandleMetadataDelete(
 	})
 }
 
-func (p *PartitionState) AppendCheckpoint(checkpoint string, partiton *Partition) {
+func (p *PartitionState) CacheCkpDuration(
+	start types.TS,
+	end types.TS,
+	partition *Partition) {
+	if partition.checkpointConsumed.Load() {
+		panic("checkpoints already consumed")
+	}
+	p.start = start
+	p.end = end
+}
+
+func (p *PartitionState) AppendCheckpoint(
+	checkpoint string,
+	partiton *Partition) {
 	if partiton.checkpointConsumed.Load() {
 		panic("checkpoints already consumed")
 	}

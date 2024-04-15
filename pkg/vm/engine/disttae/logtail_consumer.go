@@ -17,6 +17,7 @@ package disttae
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -190,6 +191,7 @@ func (c *PushClient) init(
 	// lock all.
 	// release subscribed lock when init finished.
 	// release subscriber lock when we received enough response from service.
+	c.receivedLogTailTime.e = e
 	c.receivedLogTailTime.ready.Store(false)
 	c.subscriber.setNotReady()
 	c.subscribed.mutex.Lock()
@@ -757,6 +759,7 @@ type syncLogTailTimestamp struct {
 	ready                  atomic.Bool
 	tList                  []atomic.Pointer[timestamp.Timestamp]
 	latestAppliedLogTailTS atomic.Pointer[timestamp.Timestamp]
+	e                      *Engine
 }
 
 func (r *syncLogTailTimestamp) initLogTailTimestamp(timestampWaiter client.TimestampWaiter) {
@@ -1334,10 +1337,20 @@ func updatePartitionOfPush(
 
 	state, doneMutate := partition.MutateState()
 
-	key := e.getLatestCatalogCache().GetTableById(dbId, tblId)
+	catache := e.getLatestCatalogCache()
+	key := catache.GetTableById(dbId, tblId)
+
+	var (
+		ckpStart types.TS
+		ckpEnd   types.TS
+	)
 
 	if lazyLoad {
 		if len(tl.CkpLocation) > 0 {
+			ckpStart, ckpEnd = parseCkpDuration(tl)
+			if !ckpStart.IsEmpty() && !ckpEnd.IsEmpty() {
+				state.CacheCkpDuration(ckpStart, ckpEnd, partition)
+			}
 			state.AppendCheckpoint(tl.CkpLocation, partition)
 		}
 
@@ -1348,11 +1361,12 @@ func updatePartitionOfPush(
 			state,
 			tl,
 		)
-		//TODO::lock and update start,end of latest partition.
-		//mu.lock
+
 	} else {
+		if len(tl.CkpLocation) > 0 {
+			ckpStart, ckpEnd = parseCkpDuration(tl)
+		}
 		err = consumeCkpsAndLogTail(ctx, key.PrimarySeqnum, e, state, tl, dbId, key.Id, key.Name)
-		//TODO::lock and update start,end of latest partition.
 	}
 
 	if err != nil {
@@ -1360,9 +1374,12 @@ func updatePartitionOfPush(
 		return err
 	}
 
-	//update the start and end of the partition.
+	//after consume checkpoints finished ,then update the start and end of the partition and catalog
 	if !lazyLoad && len(tl.CkpLocation) != 0 {
-
+		if !ckpStart.IsEmpty() && !ckpEnd.IsEmpty() {
+			partition.UpdateDuration(ckpStart, ckpEnd)
+			catache.UpdateDuration(ckpStart, ckpEnd)
+		}
 	}
 
 	doneMutate()
@@ -1378,6 +1395,24 @@ func consumeLogTail(
 	lt *logtail.TableLogtail,
 ) error {
 	return hackConsumeLogtail(ctx, primarySeqnum, engine, state, lt)
+}
+
+func parseCkpDuration(lt *logtail.TableLogtail) (start types.TS, end types.TS) {
+	locationsAndVersions := strings.Split(lt.CkpLocation, ";")
+	//check whether metLoc contains duration: [start, end]
+	if strings.Index(locationsAndVersions[len(locationsAndVersions)-1], "[") == -1 {
+		return
+	}
+
+	newlocs := locationsAndVersions[:len(locationsAndVersions)-1]
+	lt.CkpLocation = strings.Join(newlocs, ";")
+
+	duration := locationsAndVersions[len(locationsAndVersions)-1]
+	pos1 := strings.Index(duration, "[")
+	pos2 := strings.Index(duration, "]")
+	sub := duration[pos1+1 : pos2]
+	ds := strings.Split(sub, "_")
+	return types.StringToTS(ds[0]), types.StringToTS(ds[1])
 }
 
 func consumeCkpsAndLogTail(

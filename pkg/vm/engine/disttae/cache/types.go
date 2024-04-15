@@ -54,6 +54,7 @@ type CatalogCache struct {
 		start types.TS
 		end   types.TS
 	}
+	//tables and database is safe to be read concurrently.
 	tables    *tableCache
 	databases *databaseCache
 }

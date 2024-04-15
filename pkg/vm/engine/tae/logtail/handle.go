@@ -693,12 +693,6 @@ func LoadCheckpointEntries(
 		v2.LogTailLoadCheckpointDurationHistogram.Observe(time.Since(now).Seconds())
 	}()
 	locationsAndVersions := strings.Split(metLoc, ";")
-	//check whether metLoc contains duration :[start, end]
-	if strings.Index(locationsAndVersions[len(locationsAndVersions)-1], "[") != -1 {
-		//ds := locationsAndVersions[len(locationsAndVersions)-1]
-		//duration := strings.Split(ds, "_")
-		locationsAndVersions = locationsAndVersions[:len(locationsAndVersions)-1]
-	}
 
 	datas := make([]*CNCheckpointData, len(locationsAndVersions)/2)
 

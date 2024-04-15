@@ -105,13 +105,17 @@ func (p *Partition) checkValid() bool {
 func (p *Partition) UpdateStart(ts types.TS) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.mu.start = ts
+	if p.mu.start != types.MaxTs() {
+		p.mu.start = ts
+	}
 }
 
 func (p *Partition) UpdateEnd(ts types.TS) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.mu.end = ts
+	if p.mu.start != types.MaxTs() {
+		p.mu.end = ts
+	}
 }
 
 // [start, end]
@@ -203,8 +207,7 @@ func (p *Partition) ConsumeCheckpoints(
 		return err
 	}
 
-	//TODO:: lock and update partition's start and end.
-	//       notice that end maybe had been updated by consume log tails since lazily load checkpoints.
+	p.UpdateDuration(state.start, state.end)
 
 	if !p.state.CompareAndSwap(curState, state) {
 		panic("concurrent mutation")
