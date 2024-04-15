@@ -317,7 +317,7 @@ func NewDropUser(ife bool, u []*User) *DropUser {
 type DropAccount struct {
 	statementImpl
 	IfExists bool
-	Name     string
+	Name     Expr
 }
 
 func (node *DropAccount) Format(ctx *FmtCtx) {
@@ -326,7 +326,7 @@ func (node *DropAccount) Format(ctx *FmtCtx) {
 		ctx.WriteString(" if exists")
 	}
 	ctx.WriteString(" ")
-	ctx.WriteString(node.Name)
+	node.Name.Format(ctx)
 }
 
 func (node *DropAccount) GetStatementType() string { return "Drop Account" }
@@ -342,7 +342,7 @@ func (node *DropAccount) reset() {
 
 func (node DropAccount) TypeName() string { return "tree.DropAccount" }
 
-func NewDropAccount(ife bool, n string) *DropAccount {
+func NewDropAccount(ife bool, n Expr) *DropAccount {
 	dropAccount := reuse.Alloc[DropAccount](nil)
 	dropAccount.IfExists = ife
 	dropAccount.Name = n

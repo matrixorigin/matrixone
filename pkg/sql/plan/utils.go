@@ -1851,11 +1851,14 @@ func ResetPreparePlan(ctx CompilerContext, preparePlan *Plan) ([]*plan.ObjectRef
 	case *plan.Plan_Tcl:
 		return nil, nil, moerr.NewInvalidInput(ctx.GetContext(), "cannot prepare TCL and DCL statement")
 	case *plan.Plan_Dcl:
-		if pp.Dcl.GetDclType() == plan.DataControl_CREATE_ACCOUNT &&
-			pp.Dcl.GetCreateAccount().GetName().GetP() != nil {
-			return nil, []int32{int32(types.T_varchar)}, nil
+		switch pp.Dcl.GetDclType() {
+		case plan.DataControl_CREATE_ACCOUNT,
+			plan.DataControl_ALTER_ACCOUNT,
+			plan.DataControl_DROP_ACCOUNT:
+			return nil, pp.Dcl.GetOther().GetParamTypes(), nil
+		default:
+			return nil, nil, moerr.NewInvalidInput(ctx.GetContext(), "cannot prepare TCL and DCL statement")
 		}
-		return nil, nil, moerr.NewInvalidInput(ctx.GetContext(), "cannot prepare TCL and DCL statement")
 	case *plan.Plan_Ddl:
 		if pp.Ddl.Query != nil {
 			getParamRule := NewGetParamRule()
@@ -1894,6 +1897,29 @@ func ResetPreparePlan(ctx CompilerContext, preparePlan *Plan) ([]*plan.ObjectRef
 		}
 	}
 	return schemas, paramTypes, nil
+}
+
+func getParamTypes(params []tree.Expr, ctx CompilerContext, isPrepareStmt bool) ([]int32, error) {
+	paramTypes := make([]int32, 0, len(params))
+	for _, p := range params {
+		switch ast := p.(type) {
+		case *tree.NumVal:
+			if ast.ValType != tree.P_char {
+				return nil, moerr.NewInvalidInput(ctx.GetContext(), "unsupport value '%s'", ast.String())
+			}
+		case *tree.ParamExpr:
+			if !isPrepareStmt {
+				return nil, moerr.NewInvalidInput(ctx.GetContext(), "only prepare statement can use ? expr")
+			}
+			paramTypes = append(paramTypes, int32(types.T_varchar))
+			if ast.Offset != len(paramTypes) {
+				return nil, moerr.NewInternalError(ctx.GetContext(), "offset not match")
+			}
+		default:
+			return nil, moerr.NewInvalidInput(ctx.GetContext(), "unsupport value '%s'", ast.String())
+		}
+	}
+	return paramTypes, nil
 }
 
 // HasMoCtrl checks whether the expression has mo_ctrl(..,..,..)
@@ -1960,6 +1986,15 @@ func MakeFalseExpr() *Expr {
 				Value:  &plan.Literal_Bval{Bval: false},
 			},
 		},
+	}
+}
+
+func MakeRuntimeFilter(tag int32, matchPrefix bool, upperlimit int32, expr *Expr) *plan.RuntimeFilterSpec {
+	return &plan.RuntimeFilterSpec{
+		Tag:         tag,
+		UpperLimit:  upperlimit,
+		Expr:        expr,
+		MatchPrefix: matchPrefix,
 	}
 }
 

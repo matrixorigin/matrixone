@@ -898,3 +898,46 @@ func getRandomErrorRollbackWholeTxn() error {
 		panic(fmt.Sprintf("usp error code %d", arr[x]))
 	}
 }
+
+func unboxExprStr(ctx context.Context, expr tree.Expr) (string, error) {
+	if e, ok := expr.(*tree.NumVal); ok && e.ValType == tree.P_char {
+		return e.OrigString(), nil
+	}
+	return "", moerr.NewInternalError(ctx, "invalid expr type")
+}
+
+type strParamBinder struct {
+	ctx    context.Context
+	params *vector.Vector
+	err    error
+}
+
+func (b *strParamBinder) bind(e tree.Expr) string {
+	if b.err != nil {
+		return ""
+	}
+
+	switch val := e.(type) {
+	case *tree.NumVal:
+		return val.OrigString()
+	case *tree.ParamExpr:
+		return b.params.GetStringAt(val.Offset - 1)
+	default:
+		b.err = moerr.NewInternalError(b.ctx, "invalid params type %T", e)
+		return ""
+	}
+}
+
+func (b *strParamBinder) bindIdentStr(ident *tree.AccountIdentified) string {
+	if b.err != nil {
+		return ""
+	}
+
+	switch ident.Typ {
+	case tree.AccountIdentifiedByPassword,
+		tree.AccountIdentifiedWithSSL:
+		return b.bind(ident.Str)
+	default:
+		return ""
+	}
+}
