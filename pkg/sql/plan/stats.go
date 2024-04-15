@@ -993,7 +993,9 @@ func recalcStatsByRuntimeFilter(node *plan.Node, joinNode *plan.Node, runtimeFil
 	}
 	node.Stats.BlockNum = int32(node.Stats.Outcnt/2) + 1
 	if joinNode.JoinType == plan.Node_RIGHT || joinNode.BuildOnLeft {
-		node.Stats.ForceOneCN = true
+		if !joinNode.Stats.HashmapStats.Shuffle {
+			node.Stats.ForceOneCN = true
+		}
 	}
 }
 
