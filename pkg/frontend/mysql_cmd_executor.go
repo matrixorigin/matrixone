@@ -1570,36 +1570,34 @@ func (mce *MysqlCmdExecutor) handleDropUser(ctx context.Context, du *tree.DropUs
 }
 
 func (mce *MysqlCmdExecutor) handleAlterUser(ctx context.Context, st *tree.AlterUser) error {
-	if len(st.Users) != 1 {
-		return moerr.NewInternalError(ctx, "can only alter one user at a time")
-	}
-	su := st.Users[0]
-
-	u := &user{
-		Username: su.Username,
-		Hostname: su.Hostname,
-	}
-	if su.AuthOption != nil {
-		u.AuthExist = true
-		u.IdentTyp = su.AuthOption.Typ
-		switch u.IdentTyp {
-		case tree.AccountIdentifiedByPassword,
-			tree.AccountIdentifiedWithSSL:
-			var err error
-			u.IdentStr, err = unboxExprStr(ctx, su.AuthOption.Str)
-			if err != nil {
-				return err
-			}
-		}
-	}
-
 	au := &alterUser{
 		IfExists: st.IfExists,
-		User:     u,
+		Users:    make([]*user, 0, len(st.Users)),
 		Role:     st.Role,
 		MiscOpt:  st.MiscOpt,
 
 		CommentOrAttribute: st.CommentOrAttribute,
+	}
+
+	for _, su := range st.Users {
+		u := &user{
+			Username: su.Username,
+			Hostname: su.Hostname,
+		}
+		if su.AuthOption != nil {
+			u.AuthExist = true
+			u.IdentTyp = su.AuthOption.Typ
+			switch u.IdentTyp {
+			case tree.AccountIdentifiedByPassword,
+				tree.AccountIdentifiedWithSSL:
+				var err error
+				u.IdentStr, err = unboxExprStr(ctx, su.AuthOption.Str)
+				if err != nil {
+					return err
+				}
+			}
+		}
+		au.Users = append(au.Users, u)
 	}
 
 	return doAlterUser(ctx, mce.GetSession(), au)
