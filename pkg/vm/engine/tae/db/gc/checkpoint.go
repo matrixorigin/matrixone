@@ -152,6 +152,8 @@ func (c *checkpointCleaner) Replay() error {
 	minMergedEnd := types.TS{}
 	maxConsumedStart := types.TS{}
 	maxConsumedEnd := types.TS{}
+	maxSnapEnd := types.TS{}
+	maxAcctEnd := types.TS{}
 	var fullGCFile fileservice.DirEntry
 	// Get effective minMerged
 	var snapFile, acctFile string
@@ -166,10 +168,12 @@ func (c *checkpointCleaner) Replay() error {
 				fullGCFile = dir
 			}
 		}
-		if ext == blockio.SnapshotExt && maxConsumedEnd.Equal(&end) {
+		if ext == blockio.SnapshotExt && maxSnapEnd.Less(&end) {
+			maxSnapEnd = end
 			snapFile = dir.Name
 		}
-		if ext == blockio.AcctExt && maxConsumedEnd.Equal(&end) {
+		if ext == blockio.AcctExt && maxAcctEnd.Less(&end) {
+			maxAcctEnd = end
 			acctFile = dir.Name
 		}
 	}
@@ -179,7 +183,7 @@ func (c *checkpointCleaner) Replay() error {
 	}
 	for _, dir := range dirs {
 		start, end, ext := blockio.DecodeGCMetadataFileName(dir.Name)
-		if ext == blockio.GCFullExt || ext == blockio.SnapshotExt {
+		if ext == blockio.GCFullExt || ext == blockio.SnapshotExt || ext == blockio.AcctExt {
 			continue
 		}
 		if (maxConsumedStart.IsEmpty() || maxConsumedStart.Less(&end)) &&
@@ -208,6 +212,7 @@ func (c *checkpointCleaner) Replay() error {
 		}
 	}
 	if acctFile != "" {
+		logutil.Infof("read acct file %s", GCMetaDir+acctFile)
 		err = c.snapshotMeta.ReadTableInfo(c.ctx, GCMetaDir+acctFile, c.fs.Service)
 		if err != nil {
 			return err
@@ -289,14 +294,60 @@ func (c *checkpointCleaner) mergeGCFile() error {
 	if maxConsumed == nil {
 		return nil
 	}
+	maxSnapEnd := types.TS{}
+	maxAcctEnd := types.TS{}
+	var snapFile, acctFile string
 	dirs, err := c.fs.ListDir(GCMetaDir)
 	if err != nil {
 		return err
 	}
 	deleteFiles := make([]string, 0)
 	for _, dir := range dirs {
-		_, _, ext := blockio.DecodeGCMetadataFileName(dir.Name)
+		_, ts, ext := blockio.DecodeGCMetadataFileName(dir.Name)
 		if ext == blockio.SnapshotExt {
+			if snapFile != "" {
+				if maxSnapEnd.Less(&ts) {
+					maxSnapEnd = ts
+					err = c.fs.Delete(snapFile)
+					if err != nil {
+						logutil.Errorf("DelFiles failed: %v", err.Error())
+						return err
+					}
+					snapFile = GCMetaDir + dir.Name
+				} else {
+					err = c.fs.Delete(GCMetaDir + dir.Name)
+					if err != nil {
+						logutil.Errorf("DelFiles failed: %v", err.Error())
+						return err
+					}
+				}
+			} else {
+				snapFile = GCMetaDir + dir.Name
+				maxSnapEnd = ts
+			}
+			continue
+		}
+		if ext == blockio.AcctExt {
+			if acctFile != "" {
+				if maxAcctEnd.Less(&ts) {
+					maxAcctEnd = ts
+					err = c.fs.Delete(acctFile)
+					if err != nil {
+						logutil.Errorf("DelFiles failed: %v", err.Error())
+						return err
+					}
+					acctFile = GCMetaDir + dir.Name
+				} else {
+					err = c.fs.Delete(GCMetaDir + dir.Name)
+					if err != nil {
+						logutil.Errorf("DelFiles failed: %v", err.Error())
+						return err
+					}
+				}
+			} else {
+				acctFile = GCMetaDir + dir.Name
+				maxAcctEnd = ts
+			}
 			continue
 		}
 		_, end := blockio.DecodeCheckpointMetadataFileName(dir.Name)

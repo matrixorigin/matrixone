@@ -37,12 +37,14 @@ var (
 		catalog.EntryNode_CreateAt,
 		catalog.EntryNode_DeleteAt,
 		catalog2.BlockMeta_DeltaLoc,
+		SnapshotAttr_TID,
 	}
 	objectInfoSchemaTypes = []types.Type{
 		types.New(types.T_varchar, types.MaxVarcharLen, 0),
 		types.New(types.T_TS, types.MaxVarcharLen, 0),
 		types.New(types.T_TS, types.MaxVarcharLen, 0),
 		types.New(types.T_varchar, 5000, 0),
+		types.New(types.T_uint64, 0, 0),
 	}
 
 	tableInfoSchemaAttr = []string{
@@ -97,6 +99,52 @@ func NewSnapshotMeta() *SnapshotMeta {
 func (sm *SnapshotMeta) Update(data *CheckpointData) *SnapshotMeta {
 	sm.Lock()
 	defer sm.Unlock()
+
+	insTable, _, _, _, delTableTxn := data.GetTblBatchs()
+	insAccIDVec := insTable.GetVectorByName(catalog2.SystemColAttr_AccID).GetDownstreamVector()
+	insTIDVec := insTable.GetVectorByName(catalog2.SystemRelAttr_ID).GetDownstreamVector()
+	insDBIDVec := insTable.GetVectorByName(catalog2.SystemRelAttr_DBID).GetDownstreamVector()
+	insCreateAtVec := insTable.GetVectorByName(catalog2.SystemRelAttr_CreateAt).GetDownstreamVector()
+	for i := 0; i < insTable.Length(); i++ {
+		tableName := string(insTable.GetVectorByName(catalog2.SystemRelAttr_Name).Get(i).([]byte))
+		tid := vector.GetFixedAt[uint64](insTIDVec, i)
+		if sm.tid == 0 && tableName == "mo_snapshots" {
+			logutil.Infof("mo_snapshots: %d", tid)
+			sm.SetTid(tid)
+		}
+		accID := vector.GetFixedAt[uint32](insAccIDVec, i)
+		if sm.tables[accID] == nil {
+			sm.tables[accID] = make(map[uint64]*tableInfo)
+		}
+		dbid := vector.GetFixedAt[uint64](insDBIDVec, i)
+		create := vector.GetFixedAt[types.Timestamp](insCreateAtVec, i)
+		createAt := types.BuildTS(create.Unix()*types.NanoSecsPerSec, 0)
+		if sm.tables[accID][tid] != nil {
+			continue
+		}
+		table := &tableInfo{
+			accID:    accID,
+			dbID:     dbid,
+			tid:      tid,
+			createAt: createAt,
+		}
+		sm.tables[accID][tid] = table
+
+		if sm.acctIndexes[tid] == nil {
+			sm.acctIndexes[tid] = table
+		}
+	}
+
+	delTableIDVec := delTableTxn.GetVectorByName(SnapshotAttr_TID).GetDownstreamVector()
+	delDropAtVec := delTableTxn.GetVectorByName(txnbase.SnapshotAttr_CommitTS).GetDownstreamVector()
+	for i := 0; i < delTableTxn.Length(); i++ {
+		tid := vector.GetFixedAt[uint64](delTableIDVec, i)
+		dropAt := vector.GetFixedAt[types.TS](delDropAtVec, i)
+		table := sm.acctIndexes[tid]
+		table.deleteAt = dropAt
+		sm.acctIndexes[tid] = table
+		sm.tables[table.accID][tid] = table
+	}
 	if sm.tid == 0 {
 		return sm
 	}
@@ -129,58 +177,14 @@ func (sm *SnapshotMeta) Update(data *CheckpointData) *SnapshotMeta {
 		}
 		delete(sm.objects, objectStats.ObjectName().SegmentId())
 	}
-
 	del, _, _, _ := data.GetBlkBatchs()
 	delBlockIDVec := del.GetVectorByName(catalog2.BlockMeta_ID).GetDownstreamVector()
-	delDeltaVec := del.GetVectorByName(catalog2.BlockMeta_DeltaLoc).GetDownstreamVector()
 	for i := 0; i < del.Length(); i++ {
 		blockID := vector.GetFixedAt[types.Blockid](delBlockIDVec, i)
-		deltaLoc := vector.GetFixedAt[objectio.Location](delDeltaVec, i)
+		deltaLoc := objectio.Location(del.GetVectorByName(catalog2.BlockMeta_DeltaLoc).Get(i).([]byte))
 		if sm.objects[*blockID.Segment()] != nil {
 			sm.objects[*blockID.Segment()].deltaLocation[uint32(blockID.Sequence())] = &deltaLoc
 		}
-	}
-
-	insTable, _, _, _, delTableTxn := data.GetTblBatchs()
-	insAccIDVec := insTable.GetVectorByName(catalog2.SystemColAttr_AccID).GetDownstreamVector()
-	insTIDVec := insTable.GetVectorByName(catalog2.SystemRelAttr_ID).GetDownstreamVector()
-	insDBIDVec := insTable.GetVectorByName(catalog2.SystemRelAttr_DBID).GetDownstreamVector()
-	insCreateAtVec := insTable.GetVectorByName(catalog2.SystemRelAttr_CreateAt).GetDownstreamVector()
-	logutil.Infof("insTable length: %d", insTable.Length())
-	for i := 0; i < insTable.Length(); i++ {
-		accID := vector.GetFixedAt[uint32](insAccIDVec, i)
-		if sm.tables[accID] == nil {
-			sm.tables[accID] = make(map[uint64]*tableInfo)
-		}
-		tid := vector.GetFixedAt[uint64](insTIDVec, i)
-		dbid := vector.GetFixedAt[uint64](insDBIDVec, i)
-		create := vector.GetFixedAt[types.Timestamp](insCreateAtVec, i)
-		createAt := types.BuildTS(create.Unix(), 0)
-		if sm.tables[accID][tid] != nil {
-			continue
-		}
-		table := &tableInfo{
-			accID:    accID,
-			dbID:     dbid,
-			tid:      tid,
-			createAt: createAt,
-		}
-		sm.tables[accID][tid] = table
-
-		if sm.acctIndexes[tid] == nil {
-			sm.acctIndexes[tid] = table
-		}
-	}
-
-	delTableIDVec := delTableTxn.GetVectorByName(SnapshotAttr_TID).GetDownstreamVector()
-	delDropAtVec := delTableTxn.GetVectorByName(txnbase.SnapshotAttr_CommitTS).GetDownstreamVector()
-	for i := 0; i < delTableTxn.Length(); i++ {
-		tid := vector.GetFixedAt[uint64](delTableIDVec, i)
-		dropAt := vector.GetFixedAt[types.TS](delDropAtVec, i)
-		table := sm.acctIndexes[tid]
-		table.deleteAt = dropAt
-		sm.acctIndexes[tid] = table
-		sm.tables[table.accID][tid] = table
 	}
 	return nil
 }
@@ -190,10 +194,10 @@ func (sm *SnapshotMeta) GetSnapshot(ctx context.Context, fs fileservice.FileServ
 	objects := sm.objects
 	sm.RUnlock()
 	snapshotList := make(map[uint32]containers.Vector)
-	idxes := []uint16{0, 1}
+	idxes := []uint16{2, 7}
 	colTypes := []types.Type{
-		types.New(types.T_uint64, 0, 0),
 		types.New(types.T_TS, types.MaxVarcharLen, 0),
+		types.New(types.T_uint64, 0, 0),
 	}
 	for _, object := range objects {
 		location := object.stats.ObjectLocation()
@@ -215,13 +219,15 @@ func (sm *SnapshotMeta) GetSnapshot(ctx context.Context, fs fileservice.FileServ
 			}
 			defer bat.Clean(mp)
 			for r := 0; r < bat.Vecs[0].Length(); r++ {
-				acct := vector.GetFixedAt[uint64](bat.Vecs[0], r)
-				ts := vector.GetFixedAt[types.TS](bat.Vecs[1], r)
+				ts := vector.GetFixedAt[types.Timestamp](bat.Vecs[0], r)
+				snapTs := types.BuildTS(ts.Unix()*types.NanoSecsPerSec, 0)
+				acct := vector.GetFixedAt[uint64](bat.Vecs[1], r)
 				id := uint32(acct)
 				if snapshotList[id] == nil {
-					snapshotList[id] = containers.MakeVector(colTypes[1], mp)
+					snapshotList[id] = containers.MakeVector(colTypes[0], mp)
 				}
-				err = vector.AppendFixed[types.TS](snapshotList[id].GetDownstreamVector(), ts, false, mp)
+				logutil.Infof("acct: %d, snapts is %v", acct, snapTs.ToString())
+				err = vector.AppendFixed[types.TS](snapshotList[id].GetDownstreamVector(), snapTs, false, mp)
 				if err != nil {
 					return nil, err
 				}
@@ -255,6 +261,7 @@ func (sm *SnapshotMeta) SaveMeta(name string, fs fileservice.FileService) error 
 		} else {
 			bat.GetVectorByName(catalog2.BlockMeta_DeltaLoc).Append([]byte(*entry.deltaLocation[0]), false)
 		}
+		bat.GetVectorByName(SnapshotAttr_TID).Append(sm.tid, false)
 	}
 	defer bat.Close()
 	writer, err := objectio.NewObjectWriterSpecial(objectio.WriterGC, name, fs)
@@ -333,6 +340,13 @@ func (sm *SnapshotMeta) Rebuild(ins *containers.Batch) {
 		buf := ins.GetVectorByName(catalog.ObjectAttr_ObjectStats).Get(i).([]byte)
 		objectStats.UnMarshal(buf)
 		createTS := vector.GetFixedAt[types.TS](insCreateTSVec, i)
+		if sm.tid == 0 {
+			tid := ins.GetVectorByName(SnapshotAttr_TID).Get(i).(uint64)
+			if tid == 0 {
+				panic("tid is 0")
+			}
+			sm.SetTid(tid)
+		}
 		if sm.objects[objectStats.ObjectName().SegmentId()] == nil {
 			sm.objects[objectStats.ObjectName().SegmentId()] = &objectInfo{
 				stats:    objectStats,
@@ -386,8 +400,8 @@ func (sm *SnapshotMeta) ReadTableInfo(ctx context.Context, name string, fs files
 	if err != nil {
 		return err
 	}
-	idxes := make([]uint16, len(objectInfoSchemaAttr))
-	for i := range objectInfoSchemaAttr {
+	idxes := make([]uint16, len(tableInfoSchemaAttr))
+	for i := range tableInfoSchemaAttr {
 		idxes[i] = uint16(i)
 	}
 	mobat, release, err := reader.LoadColumns(ctx, idxes, nil, bs[0].GetID(), common.DebugAllocator)
@@ -397,7 +411,7 @@ func (sm *SnapshotMeta) ReadTableInfo(ctx context.Context, name string, fs files
 	defer release()
 	bat := containers.NewBatch()
 	defer bat.Close()
-	for i := range objectInfoSchemaAttr {
+	for i := range tableInfoSchemaAttr {
 		pkgVec := mobat.Vecs[i]
 		var vec containers.Vector
 		if pkgVec.Length() == 0 {
@@ -405,7 +419,7 @@ func (sm *SnapshotMeta) ReadTableInfo(ctx context.Context, name string, fs files
 		} else {
 			vec = containers.ToTNVector(pkgVec, common.DebugAllocator)
 		}
-		bat.AddVector(objectInfoSchemaAttr[i], vec)
+		bat.AddVector(tableInfoSchemaAttr[i], vec)
 	}
 	sm.RebuildTableInfo(bat)
 	return nil
@@ -438,6 +452,7 @@ func (sm *SnapshotMeta) MergeTableInfo(SnapshotList map[uint32][]types.TS) error
 		}
 		for _, table := range tables {
 			if !table.deleteAt.IsEmpty() && !isSnapshotRefers(table, SnapshotList[accID]) {
+				logutil.Infof("MergeTableInfo: %d, create %v, drop %v", table.tid, table.createAt.ToString(), table.deleteAt.ToString())
 				delete(sm.tables[accID], table.tid)
 			}
 		}

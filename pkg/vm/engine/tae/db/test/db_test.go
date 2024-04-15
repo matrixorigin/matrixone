@@ -6483,7 +6483,7 @@ func TestSnapshotGC(t *testing.T) {
 	pool, err := ants.NewPool(20)
 	assert.Nil(t, err)
 	defer pool.Release()
-	snapshots := make([]types.TS, 0)
+	snapshots := make([]types.Timestamp, 0)
 	var wg sync.WaitGroup
 	var snapWG sync.WaitGroup
 	snapWG.Add(1)
@@ -6496,7 +6496,7 @@ func TestSnapshotGC(t *testing.T) {
 			}
 			i++
 			time.Sleep(200 * time.Millisecond)
-			snapshot := types.BuildTS(time.Now().UTC().UnixNano(), 0)
+			snapshot := types.Timestamp(time.Now().Unix())
 			snapshots = append(snapshots, snapshot)
 		}
 	}()
@@ -6509,19 +6509,23 @@ func TestSnapshotGC(t *testing.T) {
 		assert.Nil(t, err)
 	}
 	snapWG.Wait()
-	for i, snapshot := range snapshots {
-		attrs := []string{"tid", "ts"}
-		vecTypes := []types.Type{types.T_uint64.ToType(), types.T_TS.ToType()}
+	for _, snapshot := range snapshots {
+		attrs := []string{"col0", "col1", "ts", "col3", "col4", "col5", "col6", "id"}
+		vecTypes := []types.Type{types.T_uint64.ToType(),
+			types.T_uint64.ToType(), types.T_timestamp.ToType(),
+			types.T_uint64.ToType(), types.T_uint64.ToType(), types.T_uint64.ToType(),
+			types.T_uint64.ToType(), types.T_uint64.ToType()}
 		opt := containers.Options{}
 		opt.Capacity = 0
 		data1 := containers.BuildBatch(attrs, vecTypes, opt)
-		if i == 2 {
-			data1.Vecs[0].Append(uint64(0), false)
-		} else {
-			data1.Vecs[0].Append(uint64(0), false)
-		}
-		logutil.Infof("add snapshot %v", snapshot.ToString())
-		data1.Vecs[1].Append(snapshot, false)
+		data1.Vecs[0].Append(uint64(0), false)
+		data1.Vecs[1].Append(uint64(0), false)
+		data1.Vecs[2].Append(snapshot, false)
+		data1.Vecs[3].Append(uint64(0), false)
+		data1.Vecs[4].Append(uint64(0), false)
+		data1.Vecs[5].Append(uint64(0), false)
+		data1.Vecs[6].Append(uint64(0), false)
+		data1.Vecs[7].Append(uint64(0), false)
 		txn1, _ := db.StartTxn(nil)
 		database, _ := txn1.GetDatabase("db")
 		rel, _ := database.GetRelationByName(snapshotSchema.Name)
