@@ -17,10 +17,10 @@ package lockservice
 import (
 	"bytes"
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"strings"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
@@ -49,6 +49,14 @@ func (s *service) initRemote() {
 	if err != nil {
 		panic(err)
 	}
+
+	s.activeTxnHolder = newMapBasedTxnHandler(
+		s.serviceID,
+		s.fsp,
+		func(sid string) bool {
+			return validateService(s.cfg.RemoteLockTimeout.Duration, sid, s.remote.client)
+		})
+
 	rpcServer, err := NewServer(
 		s.cfg.ListenAddress,
 		s.cfg.RPC)
@@ -365,7 +373,7 @@ func (s *service) unlockTimeoutRemoteTxn(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-timer.C:
-			timeoutTxns, wait = s.activeTxnHolder.getTimeoutRemoveTxn(
+			timeoutTxns = s.activeTxnHolder.getTimeoutRemoveTxn(
 				timeoutServices,
 				timeoutTxns,
 				s.cfg.RemoteLockTimeout.Duration)
@@ -377,9 +385,6 @@ func (s *service) unlockTimeoutRemoteTxn(ctx context.Context) {
 				}
 			}
 
-			if wait == 0 {
-				wait = s.cfg.RemoteLockTimeout.Duration
-			}
 			timer.Reset(wait)
 		}
 	}

@@ -74,6 +74,97 @@ func TestUnlockAfterTimeoutOnRemote(t *testing.T) {
 
 }
 
+func TestCannotUnlockAfterTimeoutOnRemoteWithCommunicationInterruption(t *testing.T) {
+	var pause atomic.Bool
+	remoteLockTimeout := time.Second
+	runLockServiceTestsWithAdjustConfig(
+		t,
+		[]string{"s1", "s2"},
+		time.Second*10,
+		func(alloc *lockTableAllocator, s []*service) {
+			l1 := s[0]
+			l2 := s[1]
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+			defer cancel()
+
+			txn1 := []byte{1}
+			txn2 := []byte{2}
+			table1 := uint64(1)
+
+			// table1 on l1
+			mustAddTestLock(t, ctx, l1, table1, txn1, [][]byte{{1}}, pb.Granularity_Row)
+
+			// txn2 lock row 2 on remote.
+			mustAddTestLock(t, ctx, l2, table1, txn2, [][]byte{{2}}, pb.Granularity_Row)
+
+			// skip all keep remote lock request and valid service request
+			pause.Store(true)
+
+			time.Sleep(remoteLockTimeout * 2)
+			txn := l1.activeTxnHolder.getActiveTxn(txn2, false, "")
+			assert.NotNil(t, txn)
+		},
+		func(c *Config) {
+			c.RemoteLockTimeout.Duration = remoteLockTimeout
+			c.KeepRemoteLockDuration.Duration = time.Millisecond * 100
+			c.RPC.BackendOptions = append(c.RPC.BackendOptions,
+				morpc.WithBackendFilter(
+					func(req morpc.Message, _ string) bool {
+						if m, ok := req.(*pb.Request); ok {
+							skip := pause.Load() &&
+								(m.Method == pb.Method_KeepRemoteLock ||
+									m.Method == pb.Method_ValidateService)
+							return !skip
+						}
+						return true
+					}))
+		},
+	)
+}
+
+func TestUnlockAfterTimeoutOnRemoteWithServiceRestart(t *testing.T) {
+	runLockServiceTestsWithAdjustConfig(
+		t,
+		[]string{"s1", "s2"},
+		time.Second*10,
+		func(alloc *lockTableAllocator, s []*service) {
+			l1 := s[0]
+			l2 := s[1]
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+			defer cancel()
+
+			txn1 := []byte{1}
+			txn2 := []byte{2}
+			table1 := uint64(1)
+
+			// table1 on l1
+			mustAddTestLock(t, ctx, l1, table1, txn1, [][]byte{{1}}, pb.Granularity_Row)
+
+			// txn2 lock row 2 on remote.
+			mustAddTestLock(t, ctx, l2, table1, txn2, [][]byte{{2}}, pb.Granularity_Row)
+
+			// l2 restart
+			assert.NoError(t, l2.Close())
+			cfg := l2.cfg
+			l22 := NewLockService(cfg)
+			defer l22.Close()
+
+			// wait until txn2 unlocked
+			for {
+				txn := l1.activeTxnHolder.getActiveTxn(txn2, false, "")
+				if txn == nil {
+					return
+				}
+				time.Sleep(time.Millisecond * 100)
+			}
+		},
+		func(c *Config) {
+			c.RemoteLockTimeout.Duration = time.Second
+			c.KeepRemoteLockDuration.Duration = time.Millisecond * 100
+		},
+	)
+}
+
 func TestLockBlockedOnRemote(t *testing.T) {
 	runLockServiceTests(
 		t,
@@ -231,7 +322,8 @@ func TestGetActiveTxnWithRemote(t *testing.T) {
 	reuse.RunReuseTests(func() {
 		hold := newMapBasedTxnHandler(
 			"s1",
-			newFixedSlicePool(16)).(*mapBasedTxnHolder)
+			newFixedSlicePool(16),
+			func(sid string) bool { return true }).(*mapBasedTxnHolder)
 		defer hold.close()
 
 		txnID := []byte("txn1")
@@ -251,7 +343,8 @@ func TestGetTimeoutRemoveTxn(t *testing.T) {
 	reuse.RunReuseTests(func() {
 		hold := newMapBasedTxnHandler(
 			"s1",
-			newFixedSlicePool(16)).(*mapBasedTxnHolder)
+			newFixedSlicePool(16),
+			func(sid string) bool { return false }).(*mapBasedTxnHolder)
 		defer hold.close()
 
 		txnID1 := []byte("txn1")
@@ -264,21 +357,24 @@ func TestGetTimeoutRemoveTxn(t *testing.T) {
 		hold.mu.remoteServices["s1"].Value.time = now.Add(-time.Second * 10)
 		hold.mu.remoteServices["s2"].Value.time = now.Add(-time.Second * 5)
 
-		txns, wait := hold.getTimeoutRemoveTxn(make(map[string]struct{}), nil, time.Second*20)
+		txns := hold.getTimeoutRemoveTxn(make(map[string]struct{}), nil, time.Second*20)
 		assert.Equal(t, 0, len(txns))
-		assert.NotEqual(t, time.Duration(0), wait)
 
 		// s1 timeout
-		txns, wait = hold.getTimeoutRemoveTxn(make(map[string]struct{}), nil, time.Second*8)
+		txns = hold.getTimeoutRemoveTxn(make(map[string]struct{}), nil, time.Second*8)
 		assert.Equal(t, 1, len(txns))
-		assert.NotEqual(t, time.Duration(0), wait)
-		assert.Equal(t, txnID1, txns[0])
+		hold.mu.RLock()
+		assert.Equal(t, 1, hold.mu.dequeue.Len())
+		assert.Equal(t, 1, len(hold.mu.remoteServices))
+		hold.mu.RUnlock()
 
 		// s2 timeout
-		txns, wait = hold.getTimeoutRemoveTxn(make(map[string]struct{}), nil, time.Second*2)
+		txns = hold.getTimeoutRemoveTxn(make(map[string]struct{}), nil, time.Second*2)
 		assert.Equal(t, 1, len(txns))
-		assert.Equal(t, time.Duration(0), wait)
-		assert.Equal(t, txnID2, txns[0])
+		hold.mu.RLock()
+		assert.Equal(t, 0, hold.mu.dequeue.Len())
+		assert.Equal(t, 0, len(hold.mu.remoteServices))
+		hold.mu.RUnlock()
 	})
 }
 
@@ -286,7 +382,8 @@ func TestKeepRemoteActiveTxn(t *testing.T) {
 	reuse.RunReuseTests(func() {
 		hold := newMapBasedTxnHandler(
 			"s1",
-			newFixedSlicePool(16)).(*mapBasedTxnHolder)
+			newFixedSlicePool(16),
+			func(sid string) bool { return false }).(*mapBasedTxnHolder)
 		defer hold.close()
 
 		txnID1 := []byte("txn1")

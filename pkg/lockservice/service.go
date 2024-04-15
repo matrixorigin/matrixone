@@ -18,11 +18,11 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"hash/crc64"
 	"sync"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
@@ -101,7 +101,6 @@ func NewLockService(
 	s.tableGroups = &lockTableHolders{service: s.serviceID, holders: map[uint32]*lockTableHolder{}}
 	s.mu.allocating = make(map[uint32]map[uint64]chan struct{})
 	s.mu.lockTableRef = make(map[uint32]map[uint64]uint64)
-	s.activeTxnHolder = newMapBasedTxnHandler(s.serviceID, s.fsp)
 	s.deadlockDetector = newDeadlockDetector(
 		s.fetchTxnWaitingList,
 		s.abortDeadlockTxn)
@@ -571,12 +570,13 @@ type activeTxnHolder interface {
 	getTimeoutRemoveTxn(
 		timeoutServices map[string]struct{},
 		timeoutTxns [][]byte,
-		maxKeepInterval time.Duration) ([][]byte, time.Duration)
+		maxKeepInterval time.Duration) [][]byte
 }
 
 type mapBasedTxnHolder struct {
 	serviceID string
 	fsp       *fixedSlicePool
+	valid     func(sid string) bool
 	mu        struct {
 		sync.RWMutex
 		// remoteServices known remote service
@@ -590,9 +590,12 @@ type mapBasedTxnHolder struct {
 
 func newMapBasedTxnHandler(
 	serviceID string,
-	fsp *fixedSlicePool) activeTxnHolder {
+	fsp *fixedSlicePool,
+	valid func(sid string) bool,
+) activeTxnHolder {
 	h := &mapBasedTxnHolder{}
 	h.fsp = fsp
+	h.valid = valid
 	h.serviceID = serviceID
 	h.mu.activeTxns = make(map[string]*activeTxn, 1024)
 	h.mu.activeTxnServices = make(map[string]string)
@@ -699,45 +702,55 @@ func (h *mapBasedTxnHolder) keepRemoteActiveTxn(remoteService string) {
 func (h *mapBasedTxnHolder) getTimeoutRemoveTxn(
 	timeoutServices map[string]struct{},
 	timeoutTxns [][]byte,
-	maxKeepInterval time.Duration) ([][]byte, time.Duration) {
+	maxKeepInterval time.Duration,
+) [][]byte {
 	timeoutTxns = timeoutTxns[:0]
 	for k := range timeoutServices {
 		delete(timeoutServices, k)
 	}
 
 	h.mu.Lock()
-	defer h.mu.Unlock()
-
 	now := time.Now()
-	idx := 0
-	wait := time.Duration(0)
 	h.mu.dequeue.Iter(0, func(r remote) bool {
 		v := now.Sub(r.time)
 		if v < maxKeepInterval {
-			wait = maxKeepInterval - v
 			return false
 		}
-		idx++
+		timeoutServices[r.id] = struct{}{}
 		return true
 	})
-	if removed := h.mu.dequeue.Drain(0, idx); removed != nil {
-		removed.Iter(0, func(r remote) bool {
-			timeoutServices[r.id] = struct{}{}
-			return true
-		})
+	h.mu.Unlock()
 
-		for txnKey := range h.mu.activeTxns {
-			remoteService := h.mu.activeTxnServices[txnKey]
-			if _, ok := timeoutServices[remoteService]; ok {
-				timeoutTxns = append(timeoutTxns, util.UnsafeStringToBytes(txnKey))
-			}
-		}
-
-		for k := range timeoutServices {
-			delete(h.mu.remoteServices, k)
+	for sid := range timeoutServices {
+		// skip maybe valid services
+		if h.valid(sid) {
+			delete(timeoutServices, sid)
 		}
 	}
-	return timeoutTxns, wait
+
+	if len(timeoutServices) == 0 {
+		return timeoutTxns
+	}
+
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	// all txns in the timeout services need to be removed
+	for txnKey := range h.mu.activeTxns {
+		remoteService := h.mu.activeTxnServices[txnKey]
+		if _, ok := timeoutServices[remoteService]; ok {
+			timeoutTxns = append(timeoutTxns, util.UnsafeStringToBytes(txnKey))
+		}
+	}
+
+	// clear
+	for k := range timeoutServices {
+		if e, ok := h.mu.remoteServices[k]; ok {
+			delete(h.mu.remoteServices, k)
+			h.mu.dequeue.Remove(e)
+		}
+	}
+	return timeoutTxns
 }
 
 func (h *mapBasedTxnHolder) close() {
