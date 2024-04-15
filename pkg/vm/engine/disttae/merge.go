@@ -16,8 +16,6 @@ package disttae
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -31,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -58,6 +57,9 @@ type CNMergeTask struct {
 
 	// auxiliaries
 	fs fileservice.FileService
+
+	blkCnts  []int
+	blkIters []*StatsBlkIter
 }
 
 func NewCNMergeTask(
@@ -68,13 +70,28 @@ func NewCNMergeTask(
 	sortkeyPos int,
 	sortkeyIsPK bool,
 	targets []logtailreplay.ObjectInfo,
-) *CNMergeTask {
+) (*CNMergeTask, error) {
 	proc := tbl.proc.Load()
 	attrs := make([]string, 0, len(tbl.seqnums))
 	for i := 0; i < len(tbl.tableDef.Cols)-1; i++ {
 		attrs = append(attrs, tbl.tableDef.Cols[i].Name)
 	}
 	fs := proc.FileService
+
+	blkCnts := make([]int, len(targets))
+	blkIters := make([]*StatsBlkIter, len(targets))
+	for i, objInfo := range targets {
+		blkCnts[i] = int(objInfo.BlkCnt())
+
+		loc := objInfo.ObjectLocation()
+		meta, err := objectio.FastLoadObjectMeta(ctx, &loc, false, fs)
+		if err != nil {
+			return nil, err
+		}
+
+		blkIters[i] = NewStatsBlkIter(&objInfo.ObjectStats, meta.MustDataMeta())
+	}
+
 	return &CNMergeTask{
 		ctx:         ctx,
 		host:        tbl,
@@ -89,27 +106,27 @@ func NewCNMergeTask(
 		sortkeyIsPK: sortkeyIsPK,
 		targets:     targets,
 		fs:          fs,
-	}
+		blkCnts:     blkCnts,
+		blkIters:    blkIters,
+	}, nil
 }
 
 func (t *CNMergeTask) GetObjectCnt() int {
 	return len(t.targets)
 }
 
-func (t *CNMergeTask) GetFs() fileservice.FileService {
-	return t.fs
-}
-
-func (t *CNMergeTask) GetSchema() *catalog.Schema {
-	panic("not implemented")
-}
-
 func (t *CNMergeTask) GetBlkCnts() []int {
-	panic("not implemented")
+	return t.blkCnts
 }
 
 func (t *CNMergeTask) GetAccBlkCnts() []int {
-	panic("not implemented")
+	accCnt := make([]int, 0, len(t.targets))
+	acc := 0
+	for _, objInfo := range t.targets {
+		accCnt = append(accCnt, acc)
+		acc += int(objInfo.BlkCnt())
+	}
+	return accCnt
 }
 
 func (t *CNMergeTask) GetObjLayout() (uint32, uint16) {
@@ -124,7 +141,24 @@ func (t *CNMergeTask) GetSortKeyType() types.Type {
 }
 
 func (t *CNMergeTask) LoadNextBatch(objIdx uint32) (*batch.Batch, *nulls.Nulls, func(), error) {
-	panic("not implemented")
+	iter := t.blkIters[objIdx]
+	if iter.Next() {
+		blk := iter.Entry()
+		// update delta location
+		obj := t.targets[objIdx]
+		blk.Sorted = obj.Sorted
+		blk.EntryState = obj.EntryState
+		blk.CommitTs = obj.CommitTS
+		if obj.HasDeltaLoc {
+			deltaLoc, commitTs, ok := t.state.GetBockDeltaLoc(blk.BlockID)
+			if ok {
+				blk.DeltaLoc = deltaLoc
+				blk.CommitTs = commitTs
+			}
+		}
+		return t.readblock(&blk)
+	}
+	return nil, nil, nil, mergesort.ErrNoMoreBlocks
 }
 
 func (t *CNMergeTask) GetCommitEntry() *api.MergeCommitEntry {
@@ -206,7 +240,7 @@ func (t *CNMergeTask) readAllData() ([]*batch.Batch, func(), []*nulls.Nulls, err
 					blk.CommitTs = commitTs
 				}
 			}
-			bat, releasef, delmask, err := t.readblock(&blk)
+			bat, delmask, releasef, err := t.readblock(&blk)
 			if err != nil {
 				innerErr = err
 				return false
@@ -229,7 +263,7 @@ func (t *CNMergeTask) readAllData() ([]*batch.Batch, func(), []*nulls.Nulls, err
 }
 
 // readblock reads block data. there is no rowid column, no ablk
-func (t *CNMergeTask) readblock(info *objectio.BlockInfo) (bat *batch.Batch, release func(), dels *nulls.Nulls, err error) {
+func (t *CNMergeTask) readblock(info *objectio.BlockInfo) (bat *batch.Batch, dels *nulls.Nulls, release func(), err error) {
 	// read data
 	bat, release, err = blockio.LoadColumns(t.ctx, t.colseqnums, t.coltypes, t.fs, info.MetaLocation(), t.proc.GetMPool(), fileservice.Policy(0))
 	if err != nil {

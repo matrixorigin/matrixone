@@ -2640,11 +2640,14 @@ func (tbl *txnTable) MergeObjects(ctx context.Context, objstats []objectio.Objec
 
 	tbl.ensureSeqnumsAndTypesExpectRowid()
 
-	taskHost := NewCNMergeTask(
+	taskHost, err := NewCNMergeTask(
 		ctx, tbl, snapshot, state, // context
 		sortkeyPos, sortkeyIsPK, // schema
 		objInfos, // targets
 	)
+	if err != nil {
+		return nil, err
+	}
 
 	err = mergesort.DoMergeAndWrite(ctx, sortkeyPos, int(options.DefaultBlockMaxRows), taskHost)
 	if err != nil {

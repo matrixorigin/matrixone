@@ -2,6 +2,7 @@ package mergesort
 
 import (
 	"context"
+	"errors"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -32,6 +33,7 @@ type merger[T any] struct {
 	bats   []releasableBatch
 	rowIdx []int64
 
+	objCnt           int
 	objBlkCnts       []int
 	totalBlkCnt      int
 	accObjBlkCnts    []int
@@ -53,6 +55,7 @@ func newMerger[T any](host MergeTaskHost, lessFunc lessFunc[T], sortKeyPos int, 
 	size := host.GetObjectCnt()
 	m := &merger[T]{
 		host:       host,
+		objCnt:     size,
 		bats:       make([]releasableBatch, size),
 		rowIdx:     make([]int64, size),
 		cols:       make([][]T, size),
@@ -77,7 +80,7 @@ func newMerger[T any](host MergeTaskHost, lessFunc lessFunc[T], sortKeyPos int, 
 }
 
 func (m *merger[T]) Merge() {
-	for i := 0; i < m.host.GetObjectCnt(); i++ {
+	for i := 0; i < m.objCnt; i++ {
 		if ok := m.loadBlk(uint32(i)); !ok {
 			return
 		}
@@ -110,6 +113,7 @@ func (m *merger[T]) Merge() {
 	for m.heap.Len() != 0 {
 		objIdx := m.nextPos()
 		if m.deletes[objIdx].Contains(uint64(m.rowIdx[objIdx])) {
+			// row is deleted
 			m.pushNewElem(objIdx)
 			continue
 		}
@@ -185,6 +189,9 @@ func (m *merger[T]) loadBlk(objIdx uint32) bool {
 		m.bats[objIdx].releaseF()
 	}
 	if err != nil {
+		if errors.Is(err, ErrNoMoreBlocks) {
+			return false
+		}
 		if m.loadedObjBlkCnts[objIdx] != m.objBlkCnts[objIdx] {
 			panic("channel closed unexpectedly")
 		}

@@ -35,6 +35,8 @@ import (
 	"go.uber.org/zap"
 )
 
+var ErrNoMoreBlocks = moerr.NewInternalErrorNoCtx("no more blocks")
+
 // DisposableVecPool bridge the gap between the vector pools in cn and tn
 type DisposableVecPool interface {
 	GetVector(*types.Type) (ret *vector.Vector, release func())

@@ -18,7 +18,6 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -215,14 +214,12 @@ func (task *mergeObjectsTask) PrepareData() ([]*batch.Batch, []*nulls.Nulls, fun
 	return batches, dels, releaseF, nil
 }
 
-var ErrNoMoreBlocks = moerr.NewInternalErrorNoCtx("no more blocks")
-
 func (task *mergeObjectsTask) LoadNextBatch(objIdx uint32) (*batch.Batch, *nulls.Nulls, func(), error) {
 	if objIdx >= uint32(len(task.mergedObjs)) {
 		panic("invalid objIdx")
 	}
 	if task.nMergedBlk[objIdx] >= task.blkCnt[objIdx] {
-		return nil, nil, nil, ErrNoMoreBlocks
+		return nil, nil, nil, mergesort.ErrNoMoreBlocks
 	}
 	var err error
 	var view *containers.BlockView
