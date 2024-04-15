@@ -513,8 +513,9 @@ message Stats {
 	double table_cnt = 5;
 	//for scan, selectivity means outcnt divide total count
 	double selectivity = 6;
+	bool forceOneCN = 7;
 
-	HashMapStats hashmapStats = 7;
+	HashMapStats hashmapStats = 8;
 }
 
 message RowsetExpr {
