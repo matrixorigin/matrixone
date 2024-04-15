@@ -373,7 +373,8 @@ type activeTxnHolder interface {
 type mapBasedTxnHolder struct {
 	serviceID string
 	fsp       *fixedSlicePool
-	valid     func(sid string) bool
+	valid     func(sid string) (bool, error)
+	notify    func([]pb.OrphanTxn) error
 	mu        struct {
 		sync.RWMutex
 		// remoteServices known remote service
@@ -388,11 +389,13 @@ type mapBasedTxnHolder struct {
 func newMapBasedTxnHandler(
 	serviceID string,
 	fsp *fixedSlicePool,
-	valid func(sid string) bool,
+	valid func(sid string) (bool, error),
+	notify func([]pb.OrphanTxn) error,
 ) activeTxnHolder {
 	h := &mapBasedTxnHolder{}
 	h.fsp = fsp
 	h.valid = valid
+	h.notify = notify
 	h.serviceID = serviceID
 	h.mu.activeTxns = make(map[string]*activeTxn, 1024)
 	h.mu.activeTxnServices = make(map[string]string)
@@ -470,10 +473,10 @@ func (h *mapBasedTxnHolder) keepRemoteActiveTxn(remoteService string) {
 
 func (h *mapBasedTxnHolder) getTimeoutRemoveTxn(
 	timeoutServices map[string]struct{},
-	timeoutTxns [][]byte,
+	needRemoved [][]byte,
 	maxKeepInterval time.Duration,
 ) [][]byte {
-	timeoutTxns = timeoutTxns[:0]
+	needRemoved = needRemoved[:0]
 	for k := range timeoutServices {
 		delete(timeoutServices, k)
 	}
@@ -490,15 +493,18 @@ func (h *mapBasedTxnHolder) getTimeoutRemoveTxn(
 	})
 	h.mu.Unlock()
 
+	var cannotCommit []pb.OrphanTxn
+	cannotCommitServices := make(map[string]int)
 	for sid := range timeoutServices {
 		// skip maybe valid services
-		if h.valid(sid) {
+		if ok, err := h.valid(sid); ok && err == nil {
 			delete(timeoutServices, sid)
+		} else {
+			// any error will be considered the txn cannot commit.
+			delete(timeoutServices, sid)
+			cannotCommit = append(cannotCommit, pb.OrphanTxn{Service: sid})
+			cannotCommitServices[sid] = len(cannotCommit) - 1
 		}
-	}
-
-	if len(timeoutServices) == 0 {
-		return timeoutTxns
 	}
 
 	h.mu.Lock()
@@ -507,8 +513,23 @@ func (h *mapBasedTxnHolder) getTimeoutRemoveTxn(
 	// all txns in the timeout services need to be removed
 	for txnKey := range h.mu.activeTxns {
 		remoteService := h.mu.activeTxnServices[txnKey]
+
+		if idx, ok := cannotCommitServices[remoteService]; ok {
+			cannotCommit[idx].Txn = append(cannotCommit[idx].Txn, util.UnsafeStringToBytes(txnKey))
+			continue
+		}
+
 		if _, ok := timeoutServices[remoteService]; ok {
-			timeoutTxns = append(timeoutTxns, util.UnsafeStringToBytes(txnKey))
+			needRemoved = append(needRemoved, util.UnsafeStringToBytes(txnKey))
+		}
+	}
+
+	if len(cannotCommit) > 0 {
+		if err := h.notify(cannotCommit); err == nil {
+			for sid, idx := range cannotCommitServices {
+				needRemoved = append(needRemoved, cannotCommit[idx].Txn...)
+				timeoutServices[sid] = struct{}{}
+			}
 		}
 	}
 
@@ -519,7 +540,7 @@ func (h *mapBasedTxnHolder) getTimeoutRemoveTxn(
 			h.mu.dequeue.Remove(e)
 		}
 	}
-	return timeoutTxns
+	return needRemoved
 }
 
 type remote struct {
