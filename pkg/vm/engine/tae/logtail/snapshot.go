@@ -118,7 +118,7 @@ func (sm *SnapshotMeta) Update(data *CheckpointData) *SnapshotMeta {
 		}
 		dbid := vector.GetFixedAt[uint64](insDBIDVec, i)
 		create := vector.GetFixedAt[types.Timestamp](insCreateAtVec, i)
-		createAt := types.BuildTS(create.Unix()*types.NanoSecsPerSec, 0)
+		createAt := types.BuildTS(create.Unix(), 0)
 		if sm.tables[accID][tid] != nil {
 			continue
 		}
