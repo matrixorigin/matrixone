@@ -246,6 +246,9 @@ const (
 	MO_DATABASE_ID = 1
 	MO_TABLES_ID   = 2
 	MO_COLUMNS_ID  = 3
+
+	// MO_RESERVED_MAX is the max reserved table ID.
+	MO_RESERVED_MAX = 100
 )
 
 // index use to update constraint

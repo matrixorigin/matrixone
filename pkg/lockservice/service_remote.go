@@ -31,13 +31,6 @@ func (s *service) initRemote() {
 	if err != nil {
 		panic(err)
 	}
-	s.activeTxnHolder = newMapBasedTxnHandler(
-		s.serviceID,
-		s.fsp,
-		func(sid string) bool {
-			return validateService(s.cfg.RemoteLockTimeout.Duration, sid, s.remote.client)
-		})
-
 	rpcServer, err := NewServer(
 		s.cfg.ListenAddress,
 		s.cfg.RPC)
@@ -335,7 +328,7 @@ func (s *service) unlockTimeoutRemoteTxn(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-timer.C:
-			timeoutTxns = s.activeTxnHolder.getTimeoutRemoveTxn(
+			timeoutTxns, wait = s.activeTxnHolder.getTimeoutRemoveTxn(
 				timeoutServices,
 				timeoutTxns,
 				s.cfg.RemoteLockTimeout.Duration)
@@ -345,6 +338,10 @@ func (s *service) unlockTimeoutRemoteTxn(ctx context.Context) {
 				for _, txnID := range timeoutTxns {
 					s.Unlock(ctx, txnID, timestamp.Timestamp{})
 				}
+			}
+
+			if wait == 0 {
+				wait = s.cfg.RemoteLockTimeout.Duration
 			}
 			timer.Reset(wait)
 		}

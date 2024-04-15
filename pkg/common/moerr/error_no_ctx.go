@@ -340,7 +340,3 @@ func NewTxnNeedRetryWithDefChangedNoCtx() *Error {
 func NewTxnCannotRetryNoCtx() *Error {
 	return newError(Context(), ErrTxnCannotRetry)
 }
-
-func NewRPCTimeoutNoCtx() *Error {
-	return NewRPCTimeout(Context())
-}

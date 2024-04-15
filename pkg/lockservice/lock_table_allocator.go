@@ -20,7 +20,6 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/log"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
@@ -289,7 +288,7 @@ func (l *lockTableAllocator) checkInvalidBinds(ctx context.Context) {
 					zap.Int("count", len(timeoutBinds)))
 			}
 			for _, b := range timeoutBinds {
-				if !validateService(l.keepBindTimeout, b.getServiceID(), l.client) {
+				if !l.validateService(b.getServiceID(), ctx) {
 					b.disable()
 					l.disableTableBinds(b)
 				}
@@ -297,6 +296,25 @@ func (l *lockTableAllocator) checkInvalidBinds(ctx context.Context) {
 			timer.Reset(l.keepBindTimeout)
 		}
 	}
+}
+
+func (l *lockTableAllocator) validateService(serviceID string, ctx context.Context) bool {
+	req := acquireRequest()
+	defer releaseRequest(req)
+
+	req.Method = pb.Method_ValidateService
+	req.ValidateService.ServiceID = serviceID
+
+	ctx, cancel := context.WithTimeout(ctx, l.keepBindTimeout)
+	defer cancel()
+	resp, err := l.client.Send(ctx, req)
+	if err != nil {
+		logPingFailed(serviceID, err)
+		return false
+	}
+	defer releaseResponse(resp)
+
+	return resp.ValidateService.OK
 }
 
 // serviceBinds an instance of serviceBinds, recording the bindings of a lockservice
@@ -409,34 +427,4 @@ func (l *lockTableAllocator) handleKeepLockTableBind(
 	cs morpc.ClientSession) {
 	resp.KeepLockTableBind.OK = l.KeepLockTableBind(req.KeepLockTableBind.ServiceID)
 	writeResponse(ctx, cancel, resp, nil, cs)
-}
-
-func validateService(
-	timeout time.Duration,
-	serviceID string,
-	client Client,
-) bool {
-	if timeout < defaultRPCTimeout {
-		timeout = defaultRPCTimeout
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-
-	req := acquireRequest()
-	defer releaseRequest(req)
-
-	req.Method = pb.Method_ValidateService
-	req.ValidateService.ServiceID = serviceID
-
-	resp, err := client.Send(ctx, req)
-	if err != nil {
-		logPingFailed(serviceID, err)
-		// can not connect to the service, means target service is down, otherwise
-		// we can not determine the service is valid or not.
-		return !(moerr.IsMoErrCode(err, moerr.ErrBackendCannotConnect) ||
-			moerr.IsMoErrCode(err, moerr.ErrNotSupported))
-	}
-	defer releaseResponse(resp)
-
-	return resp.ValidateService.OK
 }
