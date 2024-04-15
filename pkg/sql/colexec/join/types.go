@@ -75,9 +75,7 @@ type Argument struct {
 	Cond       *plan.Expr
 	Conditions [][]*plan.Expr
 	bat        *batch.Batch
-	lastpos    int
-	count      int
-	sel        int
+	lastrow    int
 
 	HashOnPK           bool
 	IsShuffle          bool
@@ -128,6 +126,10 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 
 		anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
 		anal.Alloc(ctr.maxAllocSize)
+	}
+	if arg.bat != nil {
+		proc.PutBatch(arg.bat)
+		arg.bat = nil
 	}
 }
 

@@ -16,13 +16,16 @@ package txnentries
 
 import (
 	"fmt"
+	"math"
 	"sync"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
@@ -41,8 +44,12 @@ type mergeObjectsEntry struct {
 	totalCreatedBlkCnt int
 	transMappings      *api.BlkTransferBooking
 
-	rt      *dbutils.Runtime
-	pageIds []*common.ID
+	rt                   *dbutils.Runtime
+	pageIds              []*common.ID
+	delTbls              []*model.TransDels
+	collectTs            types.TS
+	transCntBeforeCommit int
+	nextRoundDirties     map[*catalog.ObjectEntry]struct{}
 }
 
 func NewMergeObjectsEntry(
@@ -51,7 +58,7 @@ func NewMergeObjectsEntry(
 	droppedObjs, createdObjs []*catalog.ObjectEntry,
 	transMappings *api.BlkTransferBooking,
 	rt *dbutils.Runtime,
-) *mergeObjectsEntry {
+) (*mergeObjectsEntry, error) {
 	createdBlkCnt := make([]int, len(createdObjs))
 	totalCreatedBlkCnt := 0
 	for i, obj := range createdObjs {
@@ -68,8 +75,21 @@ func NewMergeObjectsEntry(
 		transMappings:      transMappings,
 		rt:                 rt,
 	}
+
+	if totalCreatedBlkCnt > 0 {
+		entry.delTbls = make([]*model.TransDels, totalCreatedBlkCnt)
+		entry.nextRoundDirties = make(map[*catalog.ObjectEntry]struct{})
+		entry.collectTs = rt.Now()
+		var err error
+		// phase 1 transfer
+		entry.transCntBeforeCommit, err = entry.collectDelsAndTransfer(entry.txn.GetStartTS(), entry.collectTs)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	entry.prepareTransferPage()
-	return entry
+	return entry, nil
 }
 
 func (entry *mergeObjectsEntry) prepareTransferPage() {
@@ -143,66 +163,76 @@ func (entry *mergeObjectsEntry) MakeCommand(csn uint32) (cmd txnif.TxnCmd, err e
 func (entry *mergeObjectsEntry) Set1PC()     {}
 func (entry *mergeObjectsEntry) Is1PC() bool { return false }
 
-func (entry *mergeObjectsEntry) transferBlockDeletes(
+// ATTENTION !!! (from, to] !!!
+func (entry *mergeObjectsEntry) transferObjectDeletes(
 	dropped *catalog.ObjectEntry,
 	created handle.Object,
-	delTbls []*model.TransDels,
-	blkidxStart int) (err error) {
+	from, to types.TS,
+	blkOffsetBase int) (transCnt int, err error) {
 
 	dataBlock := dropped.GetObjectData()
-	tblEntry := dropped.GetTable()
 
-	startTS := entry.txn.GetStartTS()
 	bat, _, err := dataBlock.CollectDeleteInRange(
 		entry.txn.GetContext(),
-		startTS.Next(),
-		entry.txn.GetPrepareTS(),
+		from.Next(),
+		to,
 		false,
 		common.MergeAllocator,
 	)
 	if err != nil {
-		return err
+		return
 	}
 	if bat == nil || bat.Length() == 0 {
-		return nil
+		return
 	}
 
-	tblEntry.Stats.Lock()
-	tblEntry.DeletedDirties = append(tblEntry.DeletedDirties, dropped)
-	tblEntry.Stats.Unlock()
+	entry.nextRoundDirties[dropped] = struct{}{}
+
 	rowid := vector.MustFixedCol[types.Rowid](bat.GetVectorByName(catalog.PhyAddrColumnName).GetDownstreamVector())
 	ts := vector.MustFixedCol[types.TS](bat.GetVectorByName(catalog.AttrCommitTs).GetDownstreamVector())
 
 	count := len(rowid)
-	if err != nil {
-		panic(err)
-	}
+	transCnt += count
 	for i := 0; i < count; i++ {
 		row := rowid[i].GetRowOffset()
-		blkOffset := rowid[i].GetBlockOffset()
-		mapping := entry.transMappings.Mappings[blkidxStart+int(blkOffset)].M
+		blkOffsetInObj := int(rowid[i].GetBlockOffset())
+		blkOffset := blkOffsetBase + blkOffsetInObj
+		mapping := entry.transMappings.Mappings[blkOffset].M
 		if len(mapping) == 0 {
-			panic("cannot tranfer empty block")
+			// this block had been all deleted, skip
+			// Note: it is possible that the block is empty, but not the object
+			continue
 		}
 		destpos, ok := mapping[int32(row)]
 		if !ok {
-			panic(fmt.Sprintf("%s find no transfer mapping for row %d", dropped.ID.String(), row))
+			_min, _max := int32(math.MaxInt32), int32(0)
+			for k := range mapping {
+				if k < _min {
+					_min = k
+				}
+				if k > _max {
+					_max = k
+				}
+			}
+			panic(fmt.Sprintf(
+				"%s-%d find no transfer mapping for row %d, mapping range (%d, %d)",
+				dropped.ID.String(), blkOffsetInObj, row, _min, _max))
 		}
-		if delTbls[destpos.Idx] == nil {
-			delTbls[destpos.Idx] = model.NewTransDels(entry.txn.GetPrepareTS())
+		if entry.delTbls[destpos.Idx] == nil {
+			entry.delTbls[destpos.Idx] = model.NewTransDels(entry.txn.GetPrepareTS())
 		}
-		delTbls[destpos.Idx].Mapping[int(destpos.Row)] = ts[i]
+		entry.delTbls[destpos.Idx].Mapping[int(destpos.Row)] = ts[i]
 		if err = created.RangeDelete(
 			uint16(destpos.Idx), uint32(destpos.Row), uint32(destpos.Row), handle.DT_MergeCompact, common.MergeAllocator,
 		); err != nil {
-			return err
+			return
 		}
 	}
 	return
 }
 
-func (entry *mergeObjectsEntry) PrepareCommit() (err error) {
-	delTbls := make([]*model.TransDels, entry.totalCreatedBlkCnt)
+// ATTENTION !!! (from, to] !!!
+func (entry *mergeObjectsEntry) collectDelsAndTransfer(from, to types.TS) (transCnt int, err error) {
 	if len(entry.createdBlkCnt) == 0 {
 		return
 	}
@@ -211,49 +241,72 @@ func (entry *mergeObjectsEntry) PrepareCommit() (err error) {
 		return
 	}
 
-	ids := make([]*common.ID, 0)
-
-	blkIdxStart := 0
-	k := 0
+	blksOffsetBase := 0
 	for _, dropped := range entry.droppedObjs {
-		hasMapping := false
-		for i := 0; i < dropped.BlockCnt(); i++ {
-			if len(entry.transMappings.Mappings[k+i].M) != 0 {
-				hasMapping = true
+		// handle object transfer
+		hasMappingInThisObj := false
+		blkCnt := dropped.BlockCnt()
+		for iblk := 0; iblk < blkCnt; iblk++ {
+			if len(entry.transMappings.Mappings[blksOffsetBase+iblk].M) != 0 {
+				hasMappingInThisObj = true
 				break
 			}
 		}
-		k += dropped.BlockCnt()
-		if !hasMapping {
-			blkIdxStart += dropped.BlockCnt()
+		if !hasMappingInThisObj {
+			// this object had been all deleted, skip
+			blksOffsetBase += dropped.BlockCnt()
 			continue
 		}
-		if err = entry.transferBlockDeletes(
-			dropped,
-			created,
-			delTbls,
-			blkIdxStart,
-		); err != nil {
-			break
+
+		cnt := 0
+		cnt, err = entry.transferObjectDeletes(dropped, created, from, to, blksOffsetBase)
+		if err != nil {
+			return
 		}
-		blkIdxStart += dropped.BlockCnt()
+		transCnt += cnt
+		blksOffsetBase += dropped.BlockCnt()
 	}
-	if k != len(entry.transMappings.Mappings) {
-		panic(fmt.Sprintf("bad length %v != %v", k, len(entry.transMappings.Mappings)))
+	return
+}
+
+func (entry *mergeObjectsEntry) PrepareCommit() (err error) {
+	inst := time.Now()
+	defer func() {
+		v2.TaskCommitMergeObjectsDurationHistogram.Observe(time.Since(inst).Seconds())
+	}()
+	if len(entry.createdBlkCnt) == 0 {
+		return
 	}
-	objID := entry.createdObjs[0].ID
-	if err == nil {
-		for i, delTbl := range delTbls {
-			if delTbl != nil {
-				destid := objectio.NewBlockidWithObjectID(&objID, uint16(i))
-				entry.rt.TransferDelsMap.SetDelsForBlk(*destid, delTbl)
-			}
-		}
-	}
+
+	// phase 2 transfer
+	transCnt, err := entry.collectDelsAndTransfer(entry.collectTs, entry.txn.GetPrepareTS())
 	if err != nil {
-		for _, id := range ids {
-			_ = entry.rt.TransferTable.DeletePage(id)
+		return nil
+	}
+
+	tblEntry := entry.droppedObjs[0].GetTable()
+	tblEntry.Stats.Lock()
+	for dropped := range entry.nextRoundDirties {
+		tblEntry.DeletedDirties = append(tblEntry.DeletedDirties, dropped)
+	}
+	tblEntry.Stats.Unlock()
+
+	objID := entry.createdObjs[0].ID
+	for i, delTbl := range entry.delTbls {
+		if delTbl != nil {
+			destid := objectio.NewBlockidWithObjectID(&objID, uint16(i))
+			entry.rt.TransferDelsMap.SetDelsForBlk(*destid, delTbl)
 		}
+	}
+	if totalTrans := transCnt + entry.transCntBeforeCommit; totalTrans > 0 {
+		logutil.Infof(
+			"[Mergeblocks] merge task (%s .. %s): on %d objects, transfer %v rows, %d in commit queue",
+			entry.txn.GetStartTS().ToString(),
+			entry.txn.GetPrepareTS().ToString(),
+			len(entry.nextRoundDirties),
+			totalTrans,
+			transCnt,
+		)
 	}
 
 	return

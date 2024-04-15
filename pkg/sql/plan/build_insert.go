@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -163,16 +164,48 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 			}
 			lastNodeId = builder.appendNode(aggNode, bindCtx)
 		}
-
+		// construct the attrs and insertColCount for on_duplicate_key node
+		attrs := make([]string, 0)
+		insertColCount := int32(0)
+		for _, col := range tableDef.Cols {
+			if col.Hidden && col.Name != catalog.FakePrimaryKeyColName {
+				continue
+			}
+			attrs = append(attrs, col.Name)
+			insertColCount++
+		}
+		for _, col := range tableDef.Cols {
+			attrs = append(attrs, col.Name)
+		}
+		attrs = append(attrs, catalog.Row_ID)
+		uniqueColWithIdx := GetUniqueColAndIdxFromTableDef(tableDef)
+		uniqueColCheckExpr, err := GenUniqueColCheckExpr(ctx.GetContext(), tableDef, uniqueColWithIdx, int(insertColCount))
+		if err != nil {
+			return nil, err
+		}
+		uniqueCol := make([]string, len(uniqueColWithIdx))
+		for i := range uniqueColWithIdx {
+			keys := make([]string, 0)
+			for k := range uniqueColWithIdx[i] {
+				keys = append(keys, k)
+			}
+			uniqueCol[i] = strings.Join(keys, ",")
+		}
 		onDuplicateKeyNode := &Node{
 			NodeType:    plan.Node_ON_DUPLICATE_KEY,
 			Children:    []int32{lastNodeId},
 			ProjectList: dupProjection,
 			OnDuplicateKey: &plan.OnDuplicateKeyCtx{
-				TableDef:        tableDef,
-				OnDuplicateIdx:  rewriteInfo.onDuplicateIdx,
-				OnDuplicateExpr: rewriteInfo.onDuplicateExpr,
-				IsIgnore:        rewriteInfo.onDuplicateIsIgnore,
+				Attrs:              attrs,
+				InsertColCount:     insertColCount,
+				UniqueColCheckExpr: uniqueColCheckExpr,
+				UniqueCols:         uniqueCol,
+				OnDuplicateIdx:     rewriteInfo.onDuplicateIdx,
+				OnDuplicateExpr:    rewriteInfo.onDuplicateExpr,
+				IsIgnore:           rewriteInfo.onDuplicateIsIgnore,
+				TableName:          tableDef.Name,
+				TableId:            tableDef.TblId,
+				TableVersion:       tableDef.Version,
 			},
 		}
 		lastNodeId = builder.appendNode(onDuplicateKeyNode, bindCtx)
@@ -241,7 +274,7 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 		upPlanCtx.insertColPos = insertColPos
 		upPlanCtx.updateColPosMap = updateColPosMap
 
-		err = buildUpdatePlans(ctx, builder, updateBindCtx, upPlanCtx)
+		err = buildUpdatePlans(ctx, builder, updateBindCtx, upPlanCtx, true)
 		if err != nil {
 			return nil, err
 		}

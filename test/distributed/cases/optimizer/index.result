@@ -1,3 +1,4 @@
+SET GLOBAL experimental_master_index = 1;
 drop database if exists d1;
 create database d1;
 use d1;
@@ -162,4 +163,15 @@ select * from t1 where a in ("Congress","Nightingale") and b="Lane" and c in("1"
 a    b    c
 Congress    Lane    1
 Nightingale    Lane    3
+drop table if exists t1;
+create table t1(a int primary key, b int unique key);
+insert into t1 select result, result from generate_series(1,10000)g;
+select mo_ctl('dn','flush','d1.t1');
+mo_ctl(dn, flush, d1.t1)
+{\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
+select * from t1 where b in (1,2) for update;
+a    b
+1    1
+2    2
 drop database if exists d1;
+SET GLOBAL experimental_master_index = 0;

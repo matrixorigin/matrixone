@@ -19,6 +19,8 @@ import (
 	"errors"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+
 	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -227,9 +229,31 @@ func (exec *txnExecutor) Use(db string) {
 func (exec *txnExecutor) Exec(
 	sql string,
 	statementOption executor.StatementOption) (executor.Result, error) {
+
+	//-----------------------------------------------------------------------------------------
+	// NOTE: This code is to restore tenantID information in the Context when temporarily switching tenants
+	// so that it can be restored to its original state after completing the task.
+	recoverAccount := func(exec *txnExecutor, accId uint32) {
+		exec.ctx = context.WithValue(exec.ctx, defines.TenantIDKey{}, accId)
+	}
+
+	if statementOption.HasAccountID() {
+		originAccountID := catalog.System_Account
+		if v := exec.ctx.Value(defines.TenantIDKey{}); v != nil {
+			originAccountID = v.(uint32)
+		}
+
+		exec.ctx = context.WithValue(exec.ctx,
+			defines.TenantIDKey{},
+			statementOption.AccountID())
+		// NOTE: Restore AccountID information in context.Context
+		defer recoverAccount(exec, originAccountID)
+	}
+	//-----------------------------------------------------------------------------------------
+
 	receiveAt := time.Now()
 
-	stmts, err := parsers.Parse(exec.ctx, dialect.MYSQL, sql, 1)
+	stmts, err := parsers.Parse(exec.ctx, dialect.MYSQL, sql, 1, 0)
 	defer func() {
 		for _, stmt := range stmts {
 			stmt.Free()
@@ -275,9 +299,10 @@ func (exec *txnExecutor) Exec(
 		proc.FreeVectors()
 	}()
 
-	pn, err := plan.BuildPlan(
-		exec.s.getCompileContext(exec.ctx, proc, exec.getDatabase()),
-		stmts[0], false)
+	compileContext := exec.s.getCompileContext(exec.ctx, proc, exec.getDatabase())
+	compileContext.SetRootSql(sql)
+
+	pn, err := plan.BuildPlan(compileContext, stmts[0], false)
 	if err != nil {
 		return executor.Result{}, err
 	}
@@ -296,8 +321,7 @@ func (exec *txnExecutor) Exec(
 	err = c.Compile(
 		exec.ctx,
 		pn,
-		nil,
-		func(a any, bat *batch.Batch) error {
+		func(bat *batch.Batch) error {
 			if bat != nil {
 				// the bat is valid only in current method. So we need copy data.
 				// FIXME: add a custom streaming apply handler to consume readed data. Now

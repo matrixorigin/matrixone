@@ -1466,8 +1466,7 @@ col1    col2
 {"x": "red"}    a
 {"x": [3, 5, 7]}    b
 alter table abnormal04 modify col1 float;
-You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 4 column 2 near " 
-)";
+invalid argument operator cast, bad value [JSON FLOAT]
 alter table abnormal04 modify col2 int;
 invalid argument cast to int, bad value a
 select * from abnormal04;
@@ -1702,4 +1701,21 @@ select col1 from table01;
 col1
 100.0
 drop table table01;
+drop table if exists t1;
+create table t1 (a int,b enum('abc','def','database'));
+insert into t1 values (1, 'abc');
+insert into t1 values (2, 'database');
+select * from t1;
+a    b
+1    abc
+2    database
+alter table t1 modify column b enum('abc','def','database') first;
+show create table t1;
+Table    Create Table
+t1    CREATE TABLE `t1` (\n`b` ENUM('abc','def','database') DEFAULT NULL,\n`a` INT DEFAULT NULL\n)
+select * from t1;
+b    a
+abc    1
+database    2
+drop table t1;
 drop database test;

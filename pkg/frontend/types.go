@@ -16,19 +16,31 @@ package frontend
 
 import (
 	"context"
+	"io"
+	"time"
 
 	"github.com/fagongzi/goetty/v2/buf"
+	"github.com/google/uuid"
+
+	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/txn/clock"
+	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage"
 	"github.com/matrixorigin/matrixone/pkg/util"
 )
 
@@ -55,7 +67,7 @@ type ComputationWrapper interface {
 
 	GetColumns() ([]interface{}, error)
 
-	Compile(requestCtx context.Context, u interface{}, fill func(interface{}, *batch.Batch) error) (interface{}, error)
+	Compile(requestCtx context.Context, fill func(*batch.Batch) error) (interface{}, error)
 
 	GetUUID() []byte
 
@@ -64,6 +76,7 @@ type ComputationWrapper interface {
 	GetLoadTag() bool
 
 	GetServerStatus() uint16
+	Clear()
 }
 
 type ColumnInfo interface {
@@ -137,6 +150,10 @@ func (icfl *InternalCmdFieldList) Format(ctx *tree.FmtCtx) {
 	ctx.WriteString(makeCmdFieldListSql(icfl.tableName))
 }
 
+func (icfl *InternalCmdFieldList) StmtKind() tree.StmtKind {
+	return tree.MakeStmtKind(tree.OUTPUT_STATUS, tree.RESP_BY_SITUATION, tree.EXEC_IN_FRONTEND)
+}
+
 func (icfl *InternalCmdFieldList) GetStatementType() string { return "InternalCmd" }
 func (icfl *InternalCmdFieldList) GetQueryType() string     { return tree.QueryTypeDQL }
 
@@ -165,9 +182,10 @@ type BackgroundExec interface {
 
 	GetExecResultBatches() []*batch.Batch
 	ClearExecResultBatches()
+	Clear()
 }
 
-var _ BackgroundExec = &BackgroundHandler{}
+var _ BackgroundExec = &backExec{}
 
 type unknownStatementType struct {
 	tree.StatementType
@@ -186,10 +204,10 @@ func getStatementType(stmt tree.Statement) tree.StatementType {
 }
 
 // TableInfoCache tableInfos of a database
-type TableInfoCache struct {
-	db         string
-	tableInfos map[string][]ColumnInfo
-}
+//type TableInfoCache struct {
+//	db         string
+//	tableInfos map[string][]ColumnInfo
+//}
 
 // outputPool outputs the data
 type outputPool interface {
@@ -248,4 +266,432 @@ func (s *SessionAllocator) Alloc(capacity int) []byte {
 
 func (s SessionAllocator) Free(bs []byte) {
 	s.mp.Free(bs)
+}
+
+var _ FeSession = &Session{}
+var _ FeSession = &backSession{}
+
+type FeSession interface {
+	GetRequestContext() context.Context
+	GetTimeZone() *time.Location
+	GetStatsCache() *plan2.StatsCache
+	GetUserName() string
+	GetSql() string
+	GetAccountId() uint32
+	GetTenantInfo() *TenantInfo
+	GetStorage() engine.Engine
+	GetBackgroundExec(ctx context.Context) BackgroundExec
+	GetRawBatchBackgroundExec(ctx context.Context) BackgroundExec
+	getGlobalSystemVariableValue(name string) (interface{}, error)
+	GetSessionVar(name string) (interface{}, error)
+	GetUserDefinedVar(name string) (SystemVariableType, *UserDefinedVar, error)
+	GetConnectContext() context.Context
+	IfInitedTempEngine() bool
+	GetTempTableStorage() *memorystorage.Storage
+	GetDebugString() string
+	GetFromRealUser() bool
+	getLastCommitTS() timestamp.Timestamp
+	GetTenantName() string
+	SetTxnId(i []byte)
+	GetTxnId() uuid.UUID
+	GetStmtId() uuid.UUID
+	GetSqlOfStmt() string
+	updateLastCommitTS(ts timestamp.Timestamp)
+	GetMysqlProtocol() MysqlProtocol
+	GetTxnHandler() *TxnHandler
+	GetDatabaseName() string
+	SetDatabaseName(db string)
+	GetMysqlResultSet() *MysqlResultSet
+	GetGlobalVar(name string) (interface{}, error)
+	SetNewResponse(category int, affectedRows uint64, cmd int, d interface{}, isLastStmt bool) *Response
+	GetTxnCompileCtx() *TxnCompilerContext
+	GetCmd() CommandType
+	IsBackgroundSession() bool
+	GetPrepareStmt(name string) (*PrepareStmt, error)
+	CountPayload(i int)
+	RemovePrepareStmt(name string)
+	SetShowStmtType(statement ShowStatementType)
+	SetSql(sql string)
+	GetMemPool() *mpool.MPool
+	GetProc() *process.Process
+	GetLastInsertID() uint64
+	GetSqlHelper() *SqlHelper
+	GetBuffer() *buffer.Buffer
+	GetStmtProfile() *process.StmtProfile
+	CopySeqToProc(proc *process.Process)
+	getQueryId(internal bool) []string
+	SetMysqlResultSet(mrs *MysqlResultSet)
+	GetConnectionID() uint32
+	SetRequestContext(ctx context.Context)
+	IsDerivedStmt() bool
+	SetAccountId(uint32)
+	SetPlan(plan *plan.Plan)
+	SetData([][]interface{})
+	GetIsInternal() bool
+	getCNLabels() map[string]string
+	SetTempTableStorage(getClock clock.Clock) (*metadata.TNService, error)
+	SetTempEngine(ctx context.Context, te engine.Engine) error
+	EnableInitTempEngine()
+	GetUpstream() FeSession
+	cleanCache()
+	getNextProcessId() string
+	GetSqlCount() uint64
+	addSqlCount(a uint64)
+	GetStmtInfo() *motrace.StatementInfo
+	GetTxnInfo() string
+	GetUUID() []byte
+	SendRows() int64
+	SetTStmt(stmt *motrace.StatementInfo)
+	GetUUIDString() string
+	DisableTrace() bool
+	Close()
+	Clear()
+}
+
+type ExecCtx struct {
+	prepareStmt *PrepareStmt
+	runResult   *util.RunResult
+	//stmt will be replaced by the Execute
+	stmt tree.Statement
+	//isLastStmt : true denotes the last statement in the query
+	isLastStmt bool
+	// tenant name
+	tenant          string
+	userName        string
+	sqlOfStmt       string
+	cw              ComputationWrapper
+	runner          ComputationRunner
+	loadLocalWriter *io.PipeWriter
+	proc            *process.Process
+	proto           MysqlProtocol
+}
+
+// TODO: shared component among the session implmentation
+type feSessionImpl struct {
+	pool          *mpool.MPool
+	proto         MysqlProtocol
+	buf           *buffer.Buffer
+	stmtProfile   process.StmtProfile
+	tenant        *TenantInfo
+	txnHandler    *TxnHandler
+	txnCompileCtx *TxnCompilerContext
+	mrs           *MysqlResultSet
+	//it gets the result set from the pipeline and send it to the client
+	outputCallback func(interface{}, *batch.Batch) error
+
+	//all the result set of executing the sql in background task
+	allResultSet []*MysqlResultSet
+	rs           *plan.ResultColDef
+
+	// result batches of executing the sql in background task
+	// set by func batchFetcher
+	resultBatches []*batch.Batch
+
+	//derivedStmt denotes the sql or statement that derived from the user input statement.
+	//a new internal statement derived from the statement the user input and executed during
+	// the execution of it in the same transaction.
+	//
+	//For instance
+	//	select nextval('seq_15')
+	//  nextval internally will derive two sql (a select and an update). the two sql are executed
+	//	in the same transaction.
+	derivedStmt bool
+
+	gSysVars *GlobalSystemVariables
+	// when starting a transaction in session, the snapshot ts of the transaction
+	// is to get a TN push to CN to get the maximum commitTS. but there is a problem,
+	// when the last transaction ends and the next one starts, it is possible that the
+	// log of the last transaction has not been pushed to CN, we need to wait until at
+	// least the commit of the last transaction log of the previous transaction arrives.
+	lastCommitTS timestamp.Timestamp
+	upstream     *Session
+	sql          string
+	accountId    uint32
+	label        map[string]string
+	timeZone     *time.Location
+
+	sqlCount     uint64
+	uuid         uuid.UUID
+	debugStr     string
+	disableTrace bool
+}
+
+func (ses *feSessionImpl) Close() {
+	ses.proto = nil
+	ses.mrs = nil
+	if ses.txnHandler != nil {
+		ses.txnHandler.ses = nil
+		ses.txnHandler = nil
+	}
+	if ses.txnCompileCtx != nil {
+		ses.txnCompileCtx.ses = nil
+		ses.txnCompileCtx = nil
+	}
+	ses.sql = ""
+	ses.gSysVars = nil
+	ses.allResultSet = nil
+	ses.tenant = nil
+	ses.debugStr = ""
+	ses.rs = nil
+	ses.ClearStmtProfile()
+	for _, bat := range ses.resultBatches {
+		bat.Clean(ses.pool)
+	}
+	if ses.buf != nil {
+		ses.buf.Free()
+		ses.buf = nil
+	}
+	ses.upstream = nil
+}
+
+func (ses *feSessionImpl) Clear() {
+	if ses == nil {
+		return
+	}
+	ses.ClearAllMysqlResultSet()
+	ses.ClearResultBatches()
+}
+
+func (ses *feSessionImpl) DisableTrace() bool {
+	return ses.disableTrace
+}
+
+func (ses *feSessionImpl) SetMemPool(mp *mpool.MPool) {
+	ses.pool = mp
+}
+
+func (ses *feSessionImpl) GetMemPool() *mpool.MPool {
+	return ses.pool
+}
+
+func (ses *feSessionImpl) GetMysqlProtocol() MysqlProtocol {
+	return ses.proto
+}
+
+func (ses *feSessionImpl) ReplaceProtocol(proto MysqlProtocol) MysqlProtocol {
+	old := ses.proto
+	ses.proto = proto
+	return old
+}
+
+func (ses *feSessionImpl) GetBuffer() *buffer.Buffer {
+	return ses.buf
+}
+
+func (ses *feSessionImpl) GetStmtProfile() *process.StmtProfile {
+	return &ses.stmtProfile
+}
+
+func (ses *feSessionImpl) ClearStmtProfile() {
+	ses.stmtProfile.Clear()
+}
+
+func (ses *feSessionImpl) SetTxnId(id []byte) {
+	ses.stmtProfile.SetTxnId(id)
+}
+
+func (ses *feSessionImpl) GetTxnId() uuid.UUID {
+	return ses.stmtProfile.GetTxnId()
+}
+
+func (ses *feSessionImpl) SetStmtId(id uuid.UUID) {
+	ses.stmtProfile.SetStmtId(id)
+}
+
+func (ses *feSessionImpl) GetStmtId() uuid.UUID {
+	return ses.stmtProfile.GetStmtId()
+}
+
+func (ses *feSessionImpl) SetStmtType(st string) {
+	ses.stmtProfile.SetStmtType(st)
+}
+
+func (ses *feSessionImpl) GetStmtType() string {
+	return ses.stmtProfile.GetStmtType()
+}
+
+func (ses *feSessionImpl) SetQueryType(qt string) {
+	ses.stmtProfile.SetQueryType(qt)
+}
+
+func (ses *feSessionImpl) GetQueryType() string {
+	return ses.stmtProfile.GetQueryType()
+}
+
+func (ses *feSessionImpl) SetSqlSourceType(st string) {
+	ses.stmtProfile.SetSqlSourceType(st)
+}
+
+func (ses *feSessionImpl) GetSqlSourceType() string {
+	return ses.stmtProfile.GetSqlSourceType()
+}
+
+func (ses *feSessionImpl) SetQueryStart(t time.Time) {
+	ses.stmtProfile.SetQueryStart(t)
+}
+
+func (ses *feSessionImpl) GetQueryStart() time.Time {
+	return ses.stmtProfile.GetQueryStart()
+}
+
+func (ses *feSessionImpl) SetSqlOfStmt(sot string) {
+	ses.stmtProfile.SetSqlOfStmt(sot)
+}
+
+func (ses *feSessionImpl) GetSqlOfStmt() string {
+	return ses.stmtProfile.GetSqlOfStmt()
+}
+
+func (ses *feSessionImpl) GetTenantInfo() *TenantInfo {
+	return ses.tenant
+}
+
+func (ses *feSessionImpl) SetTenantInfo(ti *TenantInfo) {
+	ses.tenant = ti
+}
+
+func (ses *feSessionImpl) GetTxnHandler() *TxnHandler {
+	return ses.txnHandler
+}
+
+func (ses *feSessionImpl) GetTxnCompileCtx() *TxnCompilerContext {
+	return ses.txnCompileCtx
+}
+
+func (ses *feSessionImpl) SetMysqlResultSet(mrs *MysqlResultSet) {
+	ses.mrs = mrs
+}
+
+func (ses *feSessionImpl) GetMysqlResultSet() *MysqlResultSet {
+	return ses.mrs
+}
+
+func (ses *feSessionImpl) SetOutputCallback(callback func(interface{}, *batch.Batch) error) {
+	ses.outputCallback = callback
+}
+
+func (ses *feSessionImpl) SetMysqlResultSetOfBackgroundTask(mrs *MysqlResultSet) {
+	if len(ses.allResultSet) == 0 {
+		ses.allResultSet = append(ses.allResultSet, mrs)
+	}
+}
+
+func (ses *feSessionImpl) GetAllMysqlResultSet() []*MysqlResultSet {
+	return ses.allResultSet
+}
+
+func (ses *feSessionImpl) ClearAllMysqlResultSet() {
+	if ses.allResultSet != nil {
+		ses.allResultSet = ses.allResultSet[:0]
+	}
+}
+
+func (ses *feSessionImpl) SaveResultSet() {
+	if len(ses.allResultSet) == 0 && ses.mrs != nil {
+		ses.allResultSet = []*MysqlResultSet{ses.mrs}
+	}
+}
+
+func (ses *feSessionImpl) IsDerivedStmt() bool {
+	return ses.derivedStmt
+}
+
+// ReplaceDerivedStmt sets the derivedStmt and returns the previous value.
+// if b is true, executing a derived statement.
+func (ses *feSessionImpl) ReplaceDerivedStmt(b bool) bool {
+	prev := ses.derivedStmt
+	ses.derivedStmt = b
+	return prev
+}
+
+func (ses *feSessionImpl) updateLastCommitTS(lastCommitTS timestamp.Timestamp) {
+	if lastCommitTS.Greater(ses.lastCommitTS) {
+		ses.lastCommitTS = lastCommitTS
+	}
+	if ses.upstream != nil {
+		ses.upstream.updateLastCommitTS(lastCommitTS)
+	}
+}
+
+func (ses *feSessionImpl) getLastCommitTS() timestamp.Timestamp {
+	minTS := ses.lastCommitTS
+	if ses.upstream != nil {
+		v := ses.upstream.getLastCommitTS()
+		if v.Greater(minTS) {
+			minTS = v
+		}
+	}
+	return minTS
+}
+
+func (ses *feSessionImpl) GetUpstream() FeSession {
+	return ses.upstream
+}
+
+// ClearResultBatches does not call Batch.Clear().
+func (ses *feSessionImpl) ClearResultBatches() {
+	ses.resultBatches = nil
+}
+
+func (ses *feSessionImpl) GetResultBatches() []*batch.Batch {
+	return ses.resultBatches
+}
+
+func (ses *feSessionImpl) AppendResultBatch(bat *batch.Batch) error {
+	copied, err := bat.Dup(ses.pool)
+	if err != nil {
+		return err
+	}
+	ses.resultBatches = append(ses.resultBatches, copied)
+	return nil
+}
+
+func (ses *feSessionImpl) GetGlobalSysVars() *GlobalSystemVariables {
+	return ses.gSysVars
+}
+
+func (ses *feSessionImpl) SetSql(sql string) {
+	ses.sql = sql
+}
+
+func (ses *feSessionImpl) GetSql() string {
+	return ses.sql
+}
+
+func (ses *feSessionImpl) GetAccountId() uint32 {
+	return ses.accountId
+}
+
+func (ses *feSessionImpl) SetAccountId(u uint32) {
+	ses.accountId = u
+}
+
+func (ses *feSessionImpl) SetTimeZone(loc *time.Location) {
+	ses.timeZone = loc
+}
+
+func (ses *feSessionImpl) GetTimeZone() *time.Location {
+	return ses.timeZone
+}
+
+func (ses *feSessionImpl) GetSqlCount() uint64 {
+	return ses.sqlCount
+}
+
+func (ses *feSessionImpl) addSqlCount(a uint64) {
+	ses.sqlCount += a
+}
+
+func (ses *feSessionImpl) GetUUID() []byte {
+	return ses.uuid[:]
+}
+
+func (ses *feSessionImpl) GetUUIDString() string {
+	return ses.uuid.String()
+}
+
+func (ses *Session) GetDebugString() string {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	return ses.debugStr
 }

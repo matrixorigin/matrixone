@@ -72,7 +72,7 @@ func buildTableUpdate(stmt *tree.Update, ctx CompilerContext, isPrepareStmt bool
 
 		updateBindCtx := NewBindContext(builder, nil)
 		beginIdx = beginIdx + upPlanCtx.updateColLength + len(tableDef.Cols)
-		err = buildUpdatePlans(ctx, builder, updateBindCtx, upPlanCtx)
+		err = buildUpdatePlans(ctx, builder, updateBindCtx, upPlanCtx, false)
 		if err != nil {
 			return nil, err
 		}
@@ -244,7 +244,7 @@ func selectUpdateTables(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.
 		}
 
 		// we don't known if update pk if tableDef.Pkey is nil. just set true and let check pk dup work
-		updatePkCol = tableDef.Pkey == nil || updatePkColCount > 0
+		updatePkCol = updatePkColCount > 0
 
 		// append  table.* to project list
 		upPlanCtx := getDmlPlanCtx()

@@ -84,8 +84,6 @@ type Argument struct {
 	bat        *batch.Batch
 	rbat       []*batch.Batch
 	lastpos    int
-	count      int
-	sel        int
 
 	IsMerger bool
 	Channel  chan *bitmap.Bitmap
@@ -152,6 +150,10 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 
 		anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
 		anal.Alloc(ctr.maxAllocSize)
+	}
+	if arg.bat != nil {
+		proc.PutBatch(arg.bat)
+		arg.bat = nil
 	}
 }
 

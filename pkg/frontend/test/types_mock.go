@@ -77,19 +77,31 @@ func (m *MockComputationWrapper) EXPECT() *MockComputationWrapperMockRecorder {
 	return m.recorder
 }
 
-// Compile mocks base method.
-func (m *MockComputationWrapper) Compile(requestCtx context.Context, u interface{}, fill func(interface{}, *batch.Batch) error) (interface{}, error) {
+// Clear mocks base method.
+func (m *MockComputationWrapper) Clear() {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Compile", requestCtx, u, fill)
+	m.ctrl.Call(m, "Clear")
+}
+
+// Clear indicates an expected call of Clear.
+func (mr *MockComputationWrapperMockRecorder) Clear() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Clear", reflect.TypeOf((*MockComputationWrapper)(nil).Clear))
+}
+
+// Compile mocks base method.
+func (m *MockComputationWrapper) Compile(requestCtx context.Context, fill func(*batch.Batch) error) (interface{}, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "Compile", requestCtx, fill)
 	ret0, _ := ret[0].(interface{})
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // Compile indicates an expected call of Compile.
-func (mr *MockComputationWrapperMockRecorder) Compile(requestCtx, u, fill interface{}) *gomock.Call {
+func (mr *MockComputationWrapperMockRecorder) Compile(requestCtx, fill interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Compile", reflect.TypeOf((*MockComputationWrapper)(nil).Compile), requestCtx, u, fill)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Compile", reflect.TypeOf((*MockComputationWrapper)(nil).Compile), requestCtx, fill)
 }
 
 // GetAst mocks base method.
@@ -395,6 +407,18 @@ func NewMockBackgroundExec(ctrl *gomock.Controller) *MockBackgroundExec {
 // EXPECT returns an object that allows the caller to indicate expected use.
 func (m *MockBackgroundExec) EXPECT() *MockBackgroundExecMockRecorder {
 	return m.recorder
+}
+
+// Clear mocks base method.
+func (m *MockBackgroundExec) Clear() {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "Clear")
+}
+
+// Clear indicates an expected call of Clear.
+func (mr *MockBackgroundExecMockRecorder) Clear() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Clear", reflect.TypeOf((*MockBackgroundExec)(nil).Clear))
 }
 
 // ClearExecResultBatches mocks base method.

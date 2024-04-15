@@ -345,7 +345,7 @@ func (s *server) startWriteLoop(cs *clientSession) error {
 						fields = append(fields, zap.String("client", cs.conn.RemoteAddress()))
 					}
 
-					written := 0
+					written := responses[:0]
 					timeout := time.Duration(0)
 					for _, f := range responses {
 						s.metrics.writeLatencyDurationHistogram.Observe(start.Sub(f.send.createAt).Seconds())
@@ -385,10 +385,10 @@ func (s *server) startWriteLoop(cs *clientSession) error {
 							f.messageSent(err)
 							return
 						}
-						written++
+						written = append(written, f)
 					}
 
-					if written > 0 {
+					if len(written) > 0 {
 						s.metrics.outputBytesCounter.Add(float64(cs.conn.OutBuf().Readable()))
 						err := cs.conn.Flush(timeout)
 						if err != nil {
@@ -413,7 +413,7 @@ func (s *server) startWriteLoop(cs *clientSession) error {
 						}
 					}
 
-					for _, f := range responses {
+					for _, f := range written {
 						f.messageSent(nil)
 					}
 					for _, f := range needClose {

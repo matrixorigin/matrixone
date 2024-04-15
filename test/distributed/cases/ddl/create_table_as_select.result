@@ -949,24 +949,17 @@ id    col1    col2    col3    col4    col5    col6    col7    col8    col9    co
 2    Value3    789    12.34    2023-10-25    true    orange    Yet another text    1979-01-01 01:01:01    Even more binary data    E
 12    Value1    123    45.67    2023-10-23    true    apple    This is a text    2019-01-01 01:01:01    Some binary data    C
 alter table table02 add column newcolumn int after col3, drop column col4;
-You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 8 column 14 near " ,
-`col7` TEXT ,
-`col8` TIMESTAMP ,
-`col9` BLOB ,
-`col10` CHAR(1) 
-)";
 show create table table02;
 Table    Create Table
-table02    CREATE TABLE `table02` (\n`id` INT NOT NULL AUTO_INCREMENT,\n`col1` VARCHAR(255) NOT NULL,\n`col2` INT DEFAULT NULL,\n`col3` DECIMAL(10,2) DEFAULT NULL,\n`col4` DATE DEFAULT NULL,\n`col5` BOOL DEFAULT NULL,\n`col6` ENUM('apple','banana','orange') DEFAULT NULL,\n`col7` TEXT DEFAULT NULL,\n`col8` TIMESTAMP DEFAULT NULL,\n`col9` BLOB DEFAULT NULL,\n`col10` CHAR(1) DEFAULT NULL\n)
+table02    CREATE TABLE `table02` (\n`id` INT NOT NULL AUTO_INCREMENT,\n`col1` VARCHAR(255) NOT NULL,\n`col2` INT DEFAULT NULL,\n`col3` DECIMAL(10,2) DEFAULT NULL,\n`newcolumn` INT DEFAULT NULL,\n`col5` BOOL DEFAULT NULL,\n`col6` ENUM('apple','banana','orange') DEFAULT NULL,\n`col7` TEXT DEFAULT NULL,\n`col8` TIMESTAMP DEFAULT NULL,\n`col9` BLOB DEFAULT NULL,\n`col10` CHAR(1) DEFAULT NULL\n)
 alter table table02 modify column newcolumn bigint;
-Unknown column 'newcolumn' in 'table02'
 desc table02;
 Field    Type    Null    Key    Default    Extra    Comment
 id    INT(32)    NO        null        
 col1    VARCHAR(255)    NO        null        
 col2    INT(32)    YES        null        
 col3    DECIMAL64(10)    YES        null        
-col4    DATE(0)    YES        null        
+newcolumn    BIGINT(64)    YES        null        
 col5    BOOL(0)    YES        null        
 col6    ENUM('apple','banana','orange')    YES        null        
 col7    TEXT(0)    YES        null        
@@ -974,12 +967,12 @@ col8    TIMESTAMP(0)    YES        null
 col9    BLOB(0)    YES        null        
 col10    CHAR(1)    YES        null        
 select * from table02;
-id    col1    col2    col3    col4    col5    col6    col7    col8    col9    col10
-2    Value3    789    12.34    2023-10-25    true    orange    Yet another text    1979-01-01 01:01:01    Even more binary data    E
-12    Value1    123    45.67    2023-10-23    true    apple    This is a text    2019-01-01 01:01:01    Some binary data    C
+id    col1    col2    col3    newcolumn    col5    col6    col7    col8    col9    col10
+2    Value3    789    12.34    null    true    orange    Yet another text    1979-01-01 01:01:01    Even more binary data    E
+12    Value1    123    45.67    null    true    apple    This is a text    2019-01-01 01:01:01    Some binary data    C
 truncate table02;
 select * from table02;
-id    col1    col2    col3    col4    col5    col6    col7    col8    col9    col10
+id    col1    col2    col3    newcolumn    col5    col6    col7    col8    col9    col10
 drop table table02;
 drop table table01;
 drop table if exists students;
@@ -1628,17 +1621,21 @@ grant show databases on account * to role_r1;
 grant connect on account * to role_r1;
 grant create table, drop table on database *.* to role_r1;
 grant show tables on database * to role_r1;
+use db1;
 drop table if exists t2;
 create table t2 as select * from t1;
-not connect to a database
+internal error: do not have privilege to execute the statement
 grant select on table * to role_r1;
 grant insert on table * to role_r1;
+use db1;
 drop table if exists t2;
 create table t2 as select * from t1;
-not connect to a database
+select * from t2;
+col1
+1
+2
 drop table t1;
 drop table t2;
-no such table db1.t2
 drop database db1;
 drop database if exists db2;
 create database db2;
@@ -1778,4 +1775,34 @@ drop user role_u2;
 drop database db;
 drop database db5;
 drop database db6;
+drop database if exists db7;
+create database db7;
+use db7;
+drop role if exists role_r1;
+drop user if exists role_u1;
+create role role_r1;
+create user role_u1 identified by '111' default role role_r1;
+drop table if exists t1;
+create table t1(col1 int);
+insert into t1 values(1);
+insert into t1 values(2);
+grant create database, drop database on account * to role_r1;
+grant show databases on account * to role_r1;
+grant connect on account * to role_r1;
+grant create table, drop table on database *.* to role_r1;
+grant show tables on database * to role_r1;
+drop table if exists t2;
+create table t2 as select * from t1;
+not connect to a database
+grant select on table * to role_r1;
+grant insert on table * to role_r1;
+drop table if exists t2;
+create table t2 as select * from t1;
+not connect to a database
+select * from t2;
+not connect to a database
+drop table t1;
+drop table t2;
+no such table db7.t2
+drop database db7;
 set @@global.lower_case_table_names = 1;

@@ -202,6 +202,14 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool) (*P
 		return buildShowStages(stmt, ctx)
 	case *tree.ShowSnapShots:
 		return buildShowSnapShots(stmt, ctx)
+	case *tree.CreateAccount:
+		return buildCreateAccount(stmt, ctx, isPrepareStmt)
+	case *tree.AlterAccount:
+		return buildAlterAccount(stmt, ctx, isPrepareStmt)
+	case *tree.DropAccount:
+		return buildDropAccount(stmt, ctx, isPrepareStmt)
+	case *tree.ShowAccountUpgrade:
+		return buildShowAccountUpgrade(stmt, ctx)
 	default:
 		return nil, moerr.NewInternalError(ctx.GetContext(), "statement: '%v'", tree.String(stmt, dialect.MYSQL))
 	}

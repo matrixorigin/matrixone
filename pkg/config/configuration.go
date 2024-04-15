@@ -550,6 +550,9 @@ type ObservabilityParameters struct {
 	// LabelSelector
 	LabelSelector map[string]string `toml:"labelSelector"`
 
+	// estimate tcp network packet cost
+	TCPPacket bool `toml:"tcpPacket"`
+
 	// for cu calculation
 	CU   OBCUConfig `toml:"cu"`
 	CUv1 OBCUConfig `toml:"cu_v1"`
@@ -583,6 +586,7 @@ func NewObservabilityParameters() *ObservabilityParameters {
 		SelectAggrThreshold:                toml.Duration{},
 		EnableStmtMerge:                    false,
 		LabelSelector:                      map[string]string{defaultLoggerLabelKey: defaultLoggerLabelVal}, /*role=logging_cn*/
+		TCPPacket:                          false,
 		CU:                                 *NewOBCUConfig(),
 		CUv1:                               *NewOBCUConfig(),
 		OBCollectorConfig:                  *NewOBCollectorConfig(),

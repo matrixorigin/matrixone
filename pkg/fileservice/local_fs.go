@@ -23,6 +23,7 @@ import (
 	"os"
 	pathpkg "path"
 	"path/filepath"
+	gotrace "runtime/trace"
 	"sort"
 	"strings"
 	"sync"
@@ -55,7 +56,7 @@ type LocalFS struct {
 
 	perfCounterSets []*perfcounter.CounterSet
 
-	ioLocks IOLocks
+	ioLocks *IOLocks
 }
 
 var _ FileService = new(LocalFS)
@@ -101,6 +102,7 @@ func NewLocalFS(
 		dirFiles:        make(map[string]*os.File),
 		asyncUpdate:     true,
 		perfCounterSets: perfCounterSets,
+		ioLocks:         NewIOLocks(),
 	}
 
 	if err := fs.initCaches(ctx, cacheConfig); err != nil {
@@ -301,18 +303,19 @@ func (l *LocalFS) Read(ctx context.Context, vector *IOVector) (err error) {
 	if len(vector.Entries) == 0 {
 		return moerr.NewEmptyVectorNoCtx()
 	}
+
+	stats := statistic.StatsInfoFromContext(ctx)
+
 	startLock := time.Now()
-	unlock, wait := l.ioLocks.Lock(IOLockKey{
-		File: vector.FilePath,
-	})
+	_, task := gotrace.NewTask(ctx, "LocalFS.Read: wait io lock")
+	unlock, wait := l.ioLocks.Lock(vector.ioLockKey())
 	if unlock != nil {
 		defer unlock()
 	} else {
 		wait()
 	}
-
-	stats := statistic.StatsInfoFromContext(ctx)
-	stats.AddLockTimeConsumption(time.Since(startLock))
+	task.End()
+	stats.AddLocalFSReadIOLockTimeConsumption(time.Since(startLock))
 
 	allocator := l.allocator
 	if vector.Policy.Any(SkipMemoryCache) {
@@ -391,16 +394,13 @@ func (l *LocalFS) ReadCache(ctx context.Context, vector *IOVector) (err error) {
 	}
 
 	startLock := time.Now()
-	unlock, wait := l.ioLocks.Lock(IOLockKey{
-		File: vector.FilePath,
-	})
-
+	unlock, wait := l.ioLocks.Lock(vector.ioLockKey())
 	if unlock != nil {
 		defer unlock()
 	} else {
 		wait()
 	}
-	statistic.StatsInfoFromContext(ctx).AddLockTimeConsumption(time.Since(startLock))
+	statistic.StatsInfoFromContext(ctx).AddLocalFSReadCacheIOLockTimeConsumption(time.Since(startLock))
 
 	for _, cache := range vector.Caches {
 		cache := cache
@@ -612,11 +612,13 @@ func (l *LocalFS) List(ctx context.Context, dirPath string) (ret []DirEntry, err
 		return nil, err
 	}
 
-	_, span := trace.Start(ctx, "LocalFS.List", trace.WithKind(trace.SpanKindLocalFSVis))
+	ctx, span := trace.Start(ctx, "LocalFS.List", trace.WithKind(trace.SpanKindLocalFSVis))
 	defer func() {
 		span.AddExtraFields([]zap.Field{zap.String("list", dirPath)}...)
 		span.End()
 	}()
+
+	_ = ctx
 
 	path, err := ParsePathAtService(dirPath, l.name)
 	if err != nil {
@@ -750,7 +752,7 @@ func (l *LocalFS) Delete(ctx context.Context, filePaths ...string) error {
 	)
 }
 
-func (l *LocalFS) deleteSingle(ctx context.Context, filePath string) error {
+func (l *LocalFS) deleteSingle(_ context.Context, filePath string) error {
 	path, err := ParsePathAtService(filePath, l.name)
 	if err != nil {
 		return err
