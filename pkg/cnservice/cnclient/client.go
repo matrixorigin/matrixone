@@ -29,7 +29,7 @@ import (
 
 const (
 	//@todo need to find out why rpc timeout, or move heartbeat check to another way.
-	defaultRPCTimeout = 120 * time.Second
+	defaultRPCTimeout = 1200000 * time.Second
 )
 
 // client each node will hold only one client.
