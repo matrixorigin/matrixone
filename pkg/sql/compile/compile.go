@@ -3662,6 +3662,13 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 	var partialResults []any
 	var partialResultTypes []types.T
 	var nodes engine.Nodes
+	var txnOp client.TxnOperator
+
+	if n.ScanTS != nil && !n.ScanTS.Equal(timestamp.Timestamp{LogicalTime: 0, PhysicalTime: 0}) && n.ScanTS.Less(c.proc.TxnOperator.Txn().SnapshotTS) {
+		txnOp = c.proc.TxnOperator.CloneSnapshotOp(*n.ScanTS)
+	} else {
+		txnOp = c.proc.TxnOperator
+	}
 
 	isPartitionTable := false
 	if n.TableDef.Partition != nil {
@@ -3678,14 +3685,18 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 	if util.TableIsLoggingTable(n.ObjRef.SchemaName, n.ObjRef.ObjName) {
 		ctx = defines.AttachAccountId(ctx, catalog.System_Account)
 	}
-	db, err = c.e.Database(ctx, n.ObjRef.SchemaName, c.proc.TxnOperator)
+
+	db, err = c.e.Database(ctx, n.ObjRef.SchemaName, txnOp)
 	if err != nil {
 		return nil, nil, nil, err
 	}
 	rel, err = db.Relation(ctx, n.TableDef.Name, c.proc)
 	if err != nil {
+		if txnOp.IsSnapOp() {
+			return nil, nil, nil, err
+		}
 		var e error // avoid contamination of error messages
-		db, e = c.e.Database(ctx, defines.TEMPORARY_DBNAME, c.proc.TxnOperator)
+		db, e = c.e.Database(ctx, defines.TEMPORARY_DBNAME, txnOp)
 		if e != nil {
 			return nil, nil, nil, err
 		}
