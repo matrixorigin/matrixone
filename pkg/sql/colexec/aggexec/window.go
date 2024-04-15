@@ -16,6 +16,7 @@ package aggexec
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
@@ -72,7 +73,7 @@ func (exec *singleWindowExec) marshal() ([]byte, error) {
 	return encoded.Marshal()
 }
 
-func (exec *singleWindowExec) unmarshal(result []byte, groups [][]byte) error {
+func (exec *singleWindowExec) unmarshal(mp *mpool.MPool, result []byte, groups [][]byte) error {
 	if len(exec.groups) > 0 {
 		exec.groups = make([][]int64, len(groups))
 		for i := range exec.groups {

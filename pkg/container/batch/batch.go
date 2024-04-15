@@ -74,20 +74,34 @@ func (bat *Batch) MarshalBinary() ([]byte, error) {
 }
 
 func (bat *Batch) UnmarshalBinary(data []byte) (err error) {
-	rbat := new(EncodeBatch)
+	return bat.unmarshalBinaryWithAnyMp(data, nil)
+}
 
-	if err = types.Decode(data, rbat); err != nil {
+func (bat *Batch) UnmarshalBinaryWithCopy(data []byte, mp *mpool.MPool) error {
+	return bat.unmarshalBinaryWithAnyMp(data, mp)
+}
+
+func (bat *Batch) unmarshalBinaryWithAnyMp(data []byte, mp *mpool.MPool) (err error) {
+	rbat := new(EncodeBatch)
+	if err = rbat.UnmarshalBinaryWithCopy(data, mp); err != nil {
 		return err
 	}
+
 	bat.Recursive = rbat.Recursive
 	bat.Cnt = 1
 	bat.rowCount = int(rbat.rowCount)
 	bat.Vecs = rbat.Vecs
 	bat.Attrs = append(bat.Attrs, rbat.Attrs...)
+
 	if len(rbat.AggInfos) > 0 {
 		bat.Aggs = make([]aggexec.AggFuncExec, len(rbat.AggInfos))
+		var aggMemoryManager aggexec.AggMemoryManager = nil
+		if mp != nil {
+			aggMemoryManager = aggexec.NewSimpleAggMemoryManager(mp)
+		}
+
 		for i, info := range rbat.AggInfos {
-			if bat.Aggs[i], err = aggexec.UnmarshalAggFuncExec(nil, info); err != nil {
+			if bat.Aggs[i], err = aggexec.UnmarshalAggFuncExec(aggMemoryManager, info); err != nil {
 				return err
 			}
 		}
@@ -366,7 +380,7 @@ func (bat *Batch) ReplaceVector(oldVec *vector.Vector, newVec *vector.Vector) {
 }
 
 func (bat *Batch) IsEmpty() bool {
-	return bat.rowCount == 0 && bat.AuxData == nil
+	return bat.rowCount == 0 && bat.AuxData == nil && len(bat.Aggs) == 0
 }
 
 func (bat *Batch) DupJmAuxData() (ret *hashmap.JoinMap) {

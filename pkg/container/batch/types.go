@@ -16,6 +16,7 @@ package batch
 
 import (
 	"bytes"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -90,6 +91,14 @@ func (m *EncodeBatch) MarshalBinary() ([]byte, error) {
 }
 
 func (m *EncodeBatch) UnmarshalBinary(data []byte) error {
+	return m.unmarshalBinaryWithAnyMp(data, nil)
+}
+
+func (m *EncodeBatch) UnmarshalBinaryWithCopy(data []byte, mp *mpool.MPool) error {
+	return m.unmarshalBinaryWithAnyMp(data, mp)
+}
+
+func (m *EncodeBatch) unmarshalBinaryWithAnyMp(data []byte, mp *mpool.MPool) error {
 	// types.DecodeXXX plays with raw pointer, so we make a copy of binary data
 	buf := make([]byte, len(data))
 	copy(buf, data)
@@ -106,12 +115,23 @@ func (m *EncodeBatch) UnmarshalBinary(data []byte) error {
 		size := types.DecodeInt32(buf[:4])
 		buf = buf[4:]
 
-		vec := new(vector.Vector)
-		if err := vec.UnmarshalBinary(buf[:size]); err != nil {
-			return err
+		vecs[i] = new(vector.Vector)
+		if mp == nil {
+			if err := vecs[i].UnmarshalBinary(buf[:size]); err != nil {
+				return err
+			}
+		} else {
+			if err := vecs[i].UnmarshalBinaryWithCopy(buf[:size], mp); err != nil {
+				for _, vec := range vecs {
+					if vec != nil {
+						vec.Free(mp)
+					}
+				}
+				return err
+			}
 		}
+
 		buf = buf[size:]
-		vecs[i] = vec
 	}
 	m.Vecs = vecs
 

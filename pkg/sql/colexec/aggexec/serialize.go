@@ -17,6 +17,7 @@ package aggexec
 import (
 	hll "github.com/axiomhq/hyperloglog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec/algos/kmeans"
@@ -44,7 +45,12 @@ func UnmarshalAggFuncExec(
 		}
 	}
 
-	if err := exec.unmarshal(encoded.Result, encoded.Groups); err != nil {
+	var mp *mpool.MPool = nil
+	if mg != nil {
+		mp = mg.Mp()
+	}
+
+	if err := exec.unmarshal(mp, encoded.Result, encoded.Groups); err != nil {
 		exec.Free()
 		return nil, err
 	}
@@ -79,7 +85,7 @@ func (exec *singleAggFuncExec1[from, to]) marshal() ([]byte, error) {
 	return encoded.Marshal()
 }
 
-func (exec *singleAggFuncExec1[from, to]) unmarshal(result []byte, groups [][]byte) error {
+func (exec *singleAggFuncExec1[from, to]) unmarshal(mp *mpool.MPool, result []byte, groups [][]byte) error {
 	exec.groups = make([]SingleAggFromFixedRetFixed[from, to], len(groups))
 	for i := range exec.groups {
 		exec.groups[i] = exec.gGroup()
@@ -108,7 +114,7 @@ func (exec *singleAggFuncExec2[from]) marshal() ([]byte, error) {
 	return encoded.Marshal()
 }
 
-func (exec *singleAggFuncExec2[from]) unmarshal(result []byte, groups [][]byte) error {
+func (exec *singleAggFuncExec2[from]) unmarshal(mp *mpool.MPool, result []byte, groups [][]byte) error {
 	exec.groups = make([]SingleAggFromFixedRetVar[from], len(groups))
 	for i := range exec.groups {
 		exec.groups[i] = exec.gGroup()
@@ -137,7 +143,7 @@ func (exec *singleAggFuncExec3[to]) marshal() ([]byte, error) {
 	return encoded.Marshal()
 }
 
-func (exec *singleAggFuncExec3[to]) unmarshal(result []byte, groups [][]byte) error {
+func (exec *singleAggFuncExec3[to]) unmarshal(mp *mpool.MPool, result []byte, groups [][]byte) error {
 	exec.groups = make([]SingleAggFromVarRetFixed[to], len(groups))
 	for i := range exec.groups {
 		exec.groups[i] = exec.gGroup()
@@ -166,7 +172,7 @@ func (exec *singleAggFuncExec4) marshal() ([]byte, error) {
 	return encoded.Marshal()
 }
 
-func (exec *singleAggFuncExec4) unmarshal(result []byte, groups [][]byte) error {
+func (exec *singleAggFuncExec4) unmarshal(mp *mpool.MPool, result []byte, groups [][]byte) error {
 	exec.groups = make([]SingleAggFromVarRetVar, len(groups))
 	for i := range exec.groups {
 		exec.groups[i] = exec.gGroup()
@@ -195,7 +201,7 @@ func (exec *multiAggFuncExec1[to]) marshal() ([]byte, error) {
 	return encoded.Marshal()
 }
 
-func (exec *multiAggFuncExec1[T]) unmarshal(result []byte, groups [][]byte) error {
+func (exec *multiAggFuncExec1[T]) unmarshal(mp *mpool.MPool, result []byte, groups [][]byte) error {
 	exec.groups = make([]MultiAggRetFixed[T], len(groups))
 	for i := range exec.groups {
 		exec.groups[i] = exec.gGroup()
@@ -224,7 +230,7 @@ func (exec *multiAggFuncExec2) marshal() ([]byte, error) {
 	return encoded.Marshal()
 }
 
-func (exec *multiAggFuncExec2) unmarshal(result []byte, groups [][]byte) error {
+func (exec *multiAggFuncExec2) unmarshal(mp *mpool.MPool, result []byte, groups [][]byte) error {
 	exec.groups = make([]MultiAggRetVar, len(groups))
 	for i := range exec.groups {
 		exec.groups[i] = exec.gGroup()
@@ -248,7 +254,7 @@ func (exec *groupConcatExec) marshal() ([]byte, error) {
 	return encoded.Marshal()
 }
 
-func (exec *groupConcatExec) unmarshal(result []byte, groups [][]byte) error {
+func (exec *groupConcatExec) unmarshal(mp *mpool.MPool, result []byte, groups [][]byte) error {
 	if err := exec.SetExtraInformation(groups[0], 0); err != nil {
 		return err
 	}
@@ -270,7 +276,7 @@ func (exec *countColumnExec) marshal() ([]byte, error) {
 	return encoded.Marshal()
 }
 
-func (exec *countColumnExec) unmarshal(result []byte, groups [][]byte) error {
+func (exec *countColumnExec) unmarshal(mp *mpool.MPool, result []byte, groups [][]byte) error {
 	return exec.ret.unmarshal(result)
 }
 
@@ -289,7 +295,7 @@ func (exec *countStarExec) marshal() ([]byte, error) {
 	return encoded.Marshal()
 }
 
-func (exec *countStarExec) unmarshal(result []byte, groups [][]byte) error {
+func (exec *countStarExec) unmarshal(mp *mpool.MPool, result []byte, groups [][]byte) error {
 	return exec.ret.unmarshal(result)
 }
 
@@ -318,7 +324,7 @@ func (exec *approxCountFixedExec[T]) marshal() ([]byte, error) {
 	return encoded.Marshal()
 }
 
-func (exec *approxCountFixedExec[T]) unmarshal(result []byte, groups [][]byte) error {
+func (exec *approxCountFixedExec[T]) unmarshal(mp *mpool.MPool, result []byte, groups [][]byte) error {
 	err := exec.ret.unmarshal(result)
 	if err != nil {
 		return err
@@ -360,7 +366,7 @@ func (exec *approxCountVarExec) marshal() ([]byte, error) {
 	return encoded.Marshal()
 }
 
-func (exec *approxCountVarExec) unmarshal(result []byte, groups [][]byte) error {
+func (exec *approxCountVarExec) unmarshal(mp *mpool.MPool, result []byte, groups [][]byte) error {
 	err := exec.ret.unmarshal(result)
 	if err != nil {
 		return err
@@ -401,12 +407,12 @@ func (exec *medianColumnExecSelf[T, R]) marshal() ([]byte, error) {
 	return encoded.Marshal()
 }
 
-func (exec *medianColumnExecSelf[T, R]) unmarshal(result []byte, groups [][]byte) error {
+func (exec *medianColumnExecSelf[T, R]) unmarshal(mp *mpool.MPool, result []byte, groups [][]byte) error {
 	if len(groups) > 0 {
 		exec.groups = make([]*vector.Vector, len(groups))
 		for i := range exec.groups {
 			exec.groups[i] = vector.NewVec(exec.singleAggInfo.argType)
-			if err := exec.groups[i].UnmarshalBinary(groups[i]); err != nil {
+			if err := vectorUnmarshal(exec.groups[i], groups[i], mp); err != nil {
 				return err
 			}
 		}
@@ -450,7 +456,7 @@ func (exec *clusterCentersExec) marshal() ([]byte, error) {
 	return encoded.Marshal()
 }
 
-func (exec *clusterCentersExec) unmarshal(result []byte, groups [][]byte) error {
+func (exec *clusterCentersExec) unmarshal(mp *mpool.MPool, result []byte, groups [][]byte) error {
 	if err := exec.ret.unmarshal(result); err != nil {
 		return err
 	}
@@ -458,7 +464,7 @@ func (exec *clusterCentersExec) unmarshal(result []byte, groups [][]byte) error 
 		exec.groupData = make([]*vector.Vector, len(groups)-1)
 		for i := range exec.groupData {
 			exec.groupData[i] = vector.NewVec(exec.singleAggInfo.argType)
-			if err := exec.groupData[i].UnmarshalBinary(groups[i]); err != nil {
+			if err := vectorUnmarshal(exec.groupData[i], groups[i], mp); err != nil {
 				return err
 			}
 		}

@@ -662,6 +662,6 @@ func Test_decodeBatch(t *testing.T) {
 	bat.SetRowCount(1)
 	data, err := types.Encode(bat)
 	require.Nil(t, err)
-	_, err = decodeBatch(mp, vp, data)
+	_, err = decodeBatch(mp, data)
 	require.Nil(t, err)
 }

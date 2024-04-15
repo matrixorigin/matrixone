@@ -32,7 +32,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
@@ -1703,31 +1702,12 @@ func convertToPlanAnalyzeInfo(info *process.AnalyzeInfo) *plan.AnalyzeInfo {
 }
 
 // func decodeBatch(proc *process.Process, data []byte) (*batch.Batch, error) {
-func decodeBatch(mp *mpool.MPool, vp engine.VectorPool, data []byte) (*batch.Batch, error) {
+func decodeBatch(mp *mpool.MPool, data []byte) (*batch.Batch, error) {
 	bat := new(batch.Batch)
-	err := types.Decode(data, bat)
-	if err != nil {
+	if err := bat.UnmarshalBinaryWithCopy(data, mp); err != nil {
 		return nil, err
 	}
-	if bat.IsEmpty() {
-		return batch.EmptyBatch, nil
-	}
-
-	// allocated memory of vec from mPool.
-	for i, vec := range bat.Vecs {
-		typ := *vec.GetType()
-		rvec := vector.NewVec(typ)
-		if vp != nil {
-			rvec = vp.GetVector(typ)
-		}
-		if err := vector.GetUnionAllFunction(typ, mp)(rvec, vec); err != nil {
-			bat.Clean(mp)
-			return nil, err
-		}
-		bat.Vecs[i] = rvec
-	}
-	bat.SetCnt(1)
-	return bat, err
+	return bat, nil
 }
 
 func (ctx *scopeContext) getRegister(id, idx int32) *process.WaitRegister {

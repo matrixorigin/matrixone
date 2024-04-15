@@ -1083,7 +1083,7 @@ func receiveMsgAndForward(proc *process.Process, receiveCh chan morpc.Message, f
 			if m.Checksum != crc32.ChecksumIEEE(dataBuffer) {
 				return moerr.NewInternalError(proc.Ctx, "Packages delivered by morpc is broken")
 			}
-			bat, err := decodeBatch(proc.Mp(), nil, dataBuffer)
+			bat, err := decodeBatch(proc.Mp(), dataBuffer)
 			if err != nil {
 				return err
 			}
