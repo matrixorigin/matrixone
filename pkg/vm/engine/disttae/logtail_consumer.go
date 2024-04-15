@@ -1400,7 +1400,7 @@ func consumeLogTail(
 func parseCkpDuration(lt *logtail.TableLogtail) (start types.TS, end types.TS) {
 	locationsAndVersions := strings.Split(lt.CkpLocation, ";")
 	//check whether metLoc contains duration: [start, end]
-	if strings.Index(locationsAndVersions[len(locationsAndVersions)-1], "[") == -1 {
+	if !strings.Contains(locationsAndVersions[len(locationsAndVersions)-1], "[") {
 		return
 	}
 

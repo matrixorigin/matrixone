@@ -64,7 +64,6 @@ func (tbl *txnTable) getTxn() *Transaction {
 	return tbl.db.getTxn()
 }
 
-// TODO:: error handling
 func (tbl *txnTable) Stats(ctx context.Context, sync bool) (*pb.StatsInfo, error) {
 	_, err := tbl.getPartitionState(ctx)
 	if err != nil {
@@ -1916,9 +1915,6 @@ func (tbl *txnTable) NewReader(ctx context.Context, num int, expr *plan.Expr, ra
 	blkArray := objectio.BlockInfoSlice(ranges)
 	if hasNull || plan2.IsFalseExpr(expr) {
 		return []engine.Reader{new(emptyReader)}, nil
-	}
-	if tbl.tableId == catalog.MO_TABLES_ID {
-		logutil.Infof("xxxx newreader table %s is MO_TABLES_ID, encodedPKlen:%d", tbl.tableName, len(encodedPK))
 	}
 	if blkArray.Len() == 0 {
 		return tbl.newMergeReader(ctx, num, expr, encodedPK, nil)

@@ -16,7 +16,6 @@ package disttae
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"runtime"
 	"strings"
@@ -110,11 +109,11 @@ func New(
 		sync.Mutex
 		snaps []*logtailreplay.Partition
 	})
-	e.stopper = *stopper.NewStopper("disttae-watermark-waiter", nil)
-	e.notifiedC = make(chan timestamp.Timestamp, 512)
-	if err := e.stopper.RunTask(e.waitWaterMark); err != nil {
-		panic(err)
-	}
+	//e.stopper = *stopper.NewStopper("disttae-watermark-waiter", nil)
+	//e.notifiedC = make(chan timestamp.Timestamp, 512)
+	//if err := e.stopper.RunTask(e.waitWaterMark); err != nil {
+	//	panic(err)
+	//}
 
 	pool, err := ants.NewPool(GCPoolSize)
 	if err != nil {
