@@ -256,15 +256,26 @@ func (sm *SnapshotMeta) SaveMeta(name string, fs fileservice.FileService) error 
 		bat.AddVector(attr, containers.MakeVector(objectInfoSchemaTypes[i], common.DebugAllocator))
 	}
 	for _, entry := range sm.objects {
-		bat.GetVectorByName(catalog.ObjectAttr_ObjectStats).Append(entry.stats[:], false)
-		bat.GetVectorByName(catalog.EntryNode_CreateAt).Append(entry.createAt, false)
-		bat.GetVectorByName(catalog.EntryNode_DeleteAt).Append(entry.deleteAt, false)
+		vector.AppendBytes(
+			bat.GetVectorByName(catalog.ObjectAttr_ObjectStats).GetDownstreamVector(),
+			entry.stats[:], false, common.DebugAllocator)
+		vector.AppendFixed[types.TS](
+			bat.GetVectorByName(catalog.EntryNode_CreateAt).GetDownstreamVector(),
+			entry.createAt, false, common.DebugAllocator)
+		vector.AppendFixed[types.TS](
+			bat.GetVectorByName(catalog.EntryNode_DeleteAt).GetDownstreamVector(),
+			entry.deleteAt, false, common.DebugAllocator)
 		if entry.deltaLocation[0] == nil {
-			bat.GetVectorByName(catalog2.BlockMeta_DeltaLoc).Append([]byte(objectio.Location{}), false)
+			vector.AppendBytes(
+				bat.GetVectorByName(catalog2.BlockMeta_DeltaLoc).GetDownstreamVector(),
+				[]byte(objectio.Location{}), false, common.DebugAllocator)
 		} else {
-			bat.GetVectorByName(catalog2.BlockMeta_DeltaLoc).Append([]byte(*entry.deltaLocation[0]), false)
+			vector.AppendBytes(bat.GetVectorByName(catalog2.BlockMeta_DeltaLoc).GetDownstreamVector(),
+				[]byte(*entry.deltaLocation[0]), false, common.DebugAllocator)
 		}
-		bat.GetVectorByName(SnapshotAttr_TID).Append(sm.tid, false)
+		vector.AppendFixed[uint64](
+			bat.GetVectorByName(SnapshotAttr_TID).GetDownstreamVector(),
+			sm.tid, false, common.DebugAllocator)
 	}
 	defer bat.Close()
 	writer, err := objectio.NewObjectWriterSpecial(objectio.WriterGC, name, fs)
@@ -289,11 +300,21 @@ func (sm *SnapshotMeta) SaveTableInfo(name string, fs fileservice.FileService) e
 	}
 	for _, entry := range sm.tables {
 		for _, table := range entry {
-			bat.GetVectorByName(catalog2.SystemColAttr_AccID).Append(table.accID, false)
-			bat.GetVectorByName(catalog2.SystemRelAttr_DBID).Append(table.dbID, false)
-			bat.GetVectorByName(SnapshotAttr_TID).Append(table.tid, false)
-			bat.GetVectorByName(catalog2.SystemRelAttr_CreateAt).Append(table.createAt, false)
-			bat.GetVectorByName(catalog.EntryNode_DeleteAt).Append(table.deleteAt, false)
+			vector.AppendFixed[uint32](
+				bat.GetVectorByName(catalog2.SystemColAttr_AccID).GetDownstreamVector(),
+				table.accID, false, common.DebugAllocator)
+			vector.AppendFixed[uint64](
+				bat.GetVectorByName(catalog2.SystemRelAttr_DBID).GetDownstreamVector(),
+				table.dbID, false, common.DebugAllocator)
+			vector.AppendFixed[uint64](
+				bat.GetVectorByName(SnapshotAttr_TID).GetDownstreamVector(),
+				table.tid, false, common.DebugAllocator)
+			vector.AppendFixed[types.TS](
+				bat.GetVectorByName(catalog2.SystemRelAttr_CreateAt).GetDownstreamVector(),
+				table.createAt, false, common.DebugAllocator)
+			vector.AppendFixed[types.TS](
+				bat.GetVectorByName(catalog.EntryNode_DeleteAt).GetDownstreamVector(),
+				table.deleteAt, false, common.DebugAllocator)
 		}
 	}
 	defer bat.Close()
@@ -337,6 +358,8 @@ func (sm *SnapshotMeta) RebuildTableInfo(ins *containers.Batch) {
 }
 
 func (sm *SnapshotMeta) Rebuild(ins *containers.Batch) {
+	sm.Lock()
+	defer sm.Unlock()
 	insCreateTSs := vector.MustFixedCol[types.TS](ins.GetVectorByName(catalog.EntryNode_CreateAt).GetDownstreamVector())
 	for i := 0; i < ins.Length(); i++ {
 		var objectStats objectio.ObjectStats

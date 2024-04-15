@@ -119,6 +119,8 @@ func (c *checkpointCleaner) GetMPool() *mpool.MPool {
 }
 
 func (c *checkpointCleaner) SetTid(tid uint64) {
+	c.snapshotMeta.Lock()
+	defer c.snapshotMeta.Unlock()
 	c.snapshotMeta.SetTid(tid)
 }
 
