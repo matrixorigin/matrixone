@@ -5102,11 +5102,11 @@ func (node *CreateAccount) Free() {
 
 type AccountAuthOption struct {
 	Equal          string
-	AdminName      string
+	AdminName      Expr
 	IdentifiedType AccountIdentified
 }
 
-func NewAccountAuthOption(e string, an string, it AccountIdentified) *AccountAuthOption {
+func NewAccountAuthOption(e string, an Expr, it AccountIdentified) *AccountAuthOption {
 	ao := reuse.Alloc[AccountAuthOption](nil)
 	ao.Equal = e
 	ao.AdminName = an
@@ -5121,7 +5121,10 @@ func (node *AccountAuthOption) Format(ctx *FmtCtx) {
 		ctx.WriteString(node.Equal)
 	}
 
-	ctx.WriteString(fmt.Sprintf(" '%s'", node.AdminName))
+	ctx.WriteString(" ")
+	quoteCtx := *ctx
+	quoteCtx.singleQuoteString = true
+	node.AdminName.Format(&quoteCtx)
 	node.IdentifiedType.Format(ctx)
 }
 
@@ -5145,10 +5148,10 @@ const (
 
 type AccountIdentified struct {
 	Typ AccountIdentifiedOption
-	Str string
+	Str Expr
 }
 
-func NewAccountIdentified(t AccountIdentifiedOption, s string) *AccountIdentified {
+func NewAccountIdentified(t AccountIdentifiedOption, s Expr) *AccountIdentified {
 	// ai := reuse.Alloc[AccountIdentified](nil)
 	ai := new(AccountIdentified)
 	ai.Typ = t
@@ -5157,13 +5160,23 @@ func NewAccountIdentified(t AccountIdentifiedOption, s string) *AccountIdentifie
 }
 
 func (node *AccountIdentified) Format(ctx *FmtCtx) {
+	_, isParam := node.Str.(*ParamExpr)
+
 	switch node.Typ {
 	case AccountIdentifiedByPassword:
-		ctx.WriteString(" identified by '******'")
+		if isParam {
+			ctx.WriteString(" identified by ?")
+		} else {
+			ctx.WriteString(" identified by '******'")
+		}
 	case AccountIdentifiedByRandomPassword:
 		ctx.WriteString(" identified by random password")
 	case AccountIdentifiedWithSSL:
-		ctx.WriteString(" identified with '******'")
+		if isParam {
+			ctx.WriteString(" identified with ?")
+		} else {
+			ctx.WriteString(" identified with '******'")
+		}
 	}
 }
 

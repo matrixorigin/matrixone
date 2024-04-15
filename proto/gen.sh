@@ -123,7 +123,7 @@ done
 for fp in $(find pkg -name protogen.sh)
 do
     cd $(dirname ${fp})
-    sh $(basename ${fp})
+    bash $(basename ${fp})
     cd - > /dev/null
 done
 
