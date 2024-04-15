@@ -57,6 +57,15 @@ func vectorAppendBytesWildly(v *vector.Vector, mp *mpool.MPool, value []byte) er
 	return nil
 }
 
+// vectorUnmarshal is instead of vector.UnmarshalBinary.
+// it will check if mp is nil first.
+func vectorUnmarshal(v *vector.Vector, data []byte, mp *mpool.MPool) error {
+	if mp == nil {
+		return v.UnmarshalBinary(data)
+	}
+	return v.UnmarshalBinaryWithCopy(data, mp)
+}
+
 func FromD64ToD128(v types.Decimal64) types.Decimal128 {
 	k := types.Decimal128{
 		B0_63:   uint64(v),

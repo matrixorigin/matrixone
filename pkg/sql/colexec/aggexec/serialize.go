@@ -26,7 +26,6 @@ func MarshalAggFuncExec(exec AggFuncExec) ([]byte, error) {
 	return exec.marshal()
 }
 
-// there must be 1 bug that, the result of unmarshal was read only. it cannot do any write operation.
 func UnmarshalAggFuncExec(
 	mg AggMemoryManager,
 	data []byte) (AggFuncExec, error) {

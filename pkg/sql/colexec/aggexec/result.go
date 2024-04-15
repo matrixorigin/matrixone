@@ -159,12 +159,17 @@ func (r *basicResult) unmarshal0(data []byte) error {
 	length := types.DecodeUint32(data[:4])
 	data = data[4:]
 
-	if err := r.res.UnmarshalBinary(data[:length]); err != nil {
+	var mp *mpool.MPool = nil
+	if r.mg != nil {
+		mp = r.mg.Mp()
+	}
+
+	if err := vectorUnmarshal(r.res, data[:length], mp); err != nil {
 		return err
 	}
 	data = data[length:]
-	if err := r.ess.UnmarshalBinary(data); err != nil {
-		r.res.Free(r.mp)
+	if err := vectorUnmarshal(r.ess, data, mp); err != nil {
+		r.res.Free(mp)
 		return err
 	}
 	r.empty = vector.MustFixedCol[bool](r.ess)
