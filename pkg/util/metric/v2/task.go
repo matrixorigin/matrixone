@@ -110,8 +110,6 @@ var (
 	TaskSelBlockHit        = taskSelectivityCounter.WithLabelValues("block_hit")
 	TaskSelColumnTotal     = taskSelectivityCounter.WithLabelValues("column_total")
 	TaskSelColumnHit       = taskSelectivityCounter.WithLabelValues("column_hit")
-
-	TaskFilterOutLoadDels = taskSelectivityCounter.WithLabelValues("skip_load")
 )
 
 var (

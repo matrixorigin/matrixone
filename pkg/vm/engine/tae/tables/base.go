@@ -22,7 +22,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
@@ -436,7 +435,6 @@ func (blk *baseObject) foreachPersistedDeletesCommittedInRange(
 				return
 			}
 		} else if deltalocStartTS.Less(&start) {
-			v2.TaskFilterOutLoadDels.Inc()
 			return
 		}
 
