@@ -2111,17 +2111,20 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node) (*Sco
 	var ts timestamp.Timestamp
 	var db engine.Database
 	var rel engine.Relation
+	var txnOp client.TxnOperator
 
 	attrs := make([]string, len(n.TableDef.Cols))
 	for j, col := range n.TableDef.Cols {
 		attrs[j] = col.Name
 	}
 	if n.ScanTS != nil && !n.ScanTS.Equal(timestamp.Timestamp{LogicalTime: 0, PhysicalTime: 0}) && !n.ScanTS.Equal(c.proc.TxnOperator.Txn().SnapshotTS) {
-		c.proc.TxnOperator.CloneSnapshotOp(*n.ScanTS)
+		txnOp = c.proc.TxnOperator.CloneSnapshotOp(*n.ScanTS)
+	} else {
+		txnOp = c.proc.TxnOperator
 	}
 
 	if c.proc != nil && c.proc.TxnOperator != nil {
-		ts = c.proc.TxnOperator.Txn().SnapshotTS
+		ts = txnOp.Txn().SnapshotTS
 	}
 	{
 		ctx := c.ctx
@@ -2131,14 +2134,14 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node) (*Sco
 		if n.ObjRef.PubInfo != nil {
 			ctx = defines.AttachAccountId(ctx, uint32(n.ObjRef.PubInfo.TenantId))
 		}
-		db, err = c.e.Database(ctx, n.ObjRef.SchemaName, c.proc.TxnOperator)
+		db, err = c.e.Database(ctx, n.ObjRef.SchemaName, txnOp)
 		if err != nil {
 			panic(err)
 		}
 		rel, err = db.Relation(ctx, n.TableDef.Name, c.proc)
 		if err != nil {
 			var e error // avoid contamination of error messages
-			db, e = c.e.Database(c.ctx, defines.TEMPORARY_DBNAME, c.proc.TxnOperator)
+			db, e = c.e.Database(c.ctx, defines.TEMPORARY_DBNAME, txnOp)
 			if e != nil {
 				panic(e)
 			}
