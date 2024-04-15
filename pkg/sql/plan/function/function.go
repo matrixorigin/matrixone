@@ -63,8 +63,6 @@ func initAllSupportedFunctions() {
 		}
 		allSupportedFunctions[fn.functionId] = fn
 	}
-
-	//agg.InitAggFramework(generateAggExecutorWithoutConfig, generateAggExecutor, GetFunctionIsWinOrderFunById)
 }
 
 func GetFunctionIsAggregateByName(name string) bool {

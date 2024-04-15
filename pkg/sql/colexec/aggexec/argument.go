@@ -31,12 +31,10 @@ type sBytesArg struct {
 func (arg *sFixedArg[T]) prepare(v *vector.Vector) {
 	arg.w = vector.GenerateFunctionFixedTypeParameter[T](v)
 }
-func (arg *sFixedArg[T]) collect() {}
 
 func (arg *sBytesArg) prepare(v *vector.Vector) {
 	arg.w = vector.GenerateFunctionStrParameter(v)
 }
-func (arg *sBytesArg) collect() {}
 
 // mArg1 and mArg2 are the interface of multi columns aggregation's argument.
 // mArg1 for agg whose return type is a fixed length type except string.

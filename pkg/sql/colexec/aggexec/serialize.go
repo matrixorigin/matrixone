@@ -57,6 +57,8 @@ func UnmarshalAggFuncExec(
 	return exec, nil
 }
 
+var _ = CopyAggFuncExec
+
 func CopyAggFuncExec(mg AggMemoryManager, exec AggFuncExec) (AggFuncExec, error) {
 	bs, err := MarshalAggFuncExec(exec)
 	if err != nil {
