@@ -65,24 +65,24 @@ func (tbl *txnTable) getTxn() *Transaction {
 }
 
 // TODO:: error handling
-func (tbl *txnTable) Stats(ctx context.Context, sync bool) *pb.StatsInfo {
+func (tbl *txnTable) Stats(ctx context.Context, sync bool) (*pb.StatsInfo, error) {
 	_, err := tbl.getPartitionState(ctx)
 	if err != nil {
 		logutil.Errorf("failed to get partition state of table %d: %v", tbl.tableId, err)
-		return nil
+		return nil, err
 	}
 	if !tbl.db.op.IsSnapOp() {
 		e := tbl.getEngine()
 		return e.Stats(ctx, pb.StatsInfoKey{
 			DatabaseID: tbl.db.databaseId,
 			TableID:    tbl.tableId,
-		}, sync)
+		}, sync), nil
 	}
 	info, err := tbl.stats(ctx)
 	if err != nil {
-		return nil
+		return nil, err
 	}
-	return info
+	return info, nil
 }
 
 func (tbl *txnTable) stats(ctx context.Context) (*pb.StatsInfo, error) {
@@ -99,18 +99,39 @@ func (tbl *txnTable) stats(ctx context.Context) (*pb.StatsInfo, error) {
 			logutil.Errorf("failed to unmarshal partition table: %v", err)
 			return nil, err
 		}
+		var cataChe *cache.CatalogCache
+		if !tbl.db.op.IsSnapOp() {
+			cataChe = e.getLatestCatalogCache()
+		} else {
+			cataChe, err = e.getOrCreateSnapCatalogCache(
+				ctx,
+				types.TimestampToTS(tbl.db.op.SnapshotTS()))
+			if err != nil {
+				return nil, err
+			}
+		}
 		for _, partitionTableName := range partitionInfo.PartitionTableNames {
-			partitionTable := e.catalog.GetTableByName(tbl.db.databaseId, partitionTableName)
+			partitionTable := cataChe.GetTableByName(
+				tbl.db.databaseId, partitionTableName)
 			partitionsTableDef = append(partitionsTableDef, partitionTable.TableDef)
+
 			var ps *logtailreplay.PartitionState
 			if !tbl.db.op.IsSnapOp() {
 				ps = e.getOrCreateLatestPart(tbl.db.databaseId, partitionTable.Id).Snapshot()
 			} else {
-				//TODO::
-				//ps, err = e.getOrCreateSnapPart(ctx, tbl.db.databaseId, partitionTable.Id).Snapshot()
-				//if err != nil {
-				//	return nil, err
-				//}
+				p, err := e.getOrCreateSnapPart(
+					ctx,
+					tbl.db.databaseId,
+					partitionTable.TableDef.GetDbName(),
+					partitionTable.Id,
+					partitionTable.TableDef.GetName(),
+					partitionTable.PrimarySeqnum,
+					types.TimestampToTS(tbl.db.op.SnapshotTS()),
+				)
+				if err != nil {
+					return nil, err
+				}
+				ps = p.Snapshot()
 			}
 			approxObjectNum += int64(ps.ApproxObjectsNum())
 		}
@@ -190,7 +211,7 @@ func (tbl *txnTable) Rows(ctx context.Context) (uint64, error) {
 	//	DatabaseID: tbl.db.databaseId,
 	//	TableID:    tbl.tableId,
 	//}, true)
-	s := tbl.Stats(ctx, true)
+	s, _ := tbl.Stats(ctx, true)
 	if s == nil {
 		return rows, nil
 	}
@@ -280,7 +301,7 @@ func (tbl *txnTable) Size(ctx context.Context, columnName string) (uint64, error
 	//	DatabaseID: tbl.db.databaseId,
 	//	TableID:    tbl.tableId,
 	//}, true)
-	s := tbl.Stats(ctx, true)
+	s, _ := tbl.Stats(ctx, true)
 	if s == nil {
 		return szInPart, nil
 	}
@@ -1409,6 +1430,9 @@ func (tbl *txnTable) CopyTableDef(ctx context.Context) *plan.TableDef {
 }
 
 func (tbl *txnTable) UpdateConstraint(ctx context.Context, c *engine.ConstraintDef) error {
+	if tbl.db.op.IsSnapOp() {
+		return moerr.NewInternalErrorNoCtx("cannot update table constraint in snapshot operation")
+	}
 	ct, err := c.MarshalBinary()
 	if err != nil {
 		return err
@@ -1430,6 +1454,9 @@ func (tbl *txnTable) UpdateConstraint(ctx context.Context, c *engine.ConstraintD
 }
 
 func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, constraint [][]byte) error {
+	if tbl.db.op.IsSnapOp() {
+		return moerr.NewInternalErrorNoCtx("cannot alter table in snapshot operation")
+	}
 	ct, err := c.MarshalBinary()
 	if err != nil {
 		return err
@@ -1454,6 +1481,9 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, co
 }
 
 func (tbl *txnTable) TableRenameInTxn(ctx context.Context, constraint [][]byte) error {
+	if tbl.db.op.IsSnapOp() {
+		return moerr.NewInternalErrorNoCtx("cannot rename table in snapshot operation")
+	}
 	// 1. delete cn metadata of table
 	accountId, userId, roleId, err := getAccessInfo(ctx)
 	if err != nil {
@@ -1493,7 +1523,7 @@ func (tbl *txnTable) TableRenameInTxn(ctx context.Context, constraint [][]byte) 
 			AccountId:  accountId,
 			Ts:         db.op.SnapshotTS(),
 		}
-		if ok := tbl.db.getTxn().engine.catalog.GetTable(item); !ok {
+		if ok := tbl.db.getTxn().engine.getLatestCatalogCache().GetTable(item); !ok {
 			return moerr.GetOkExpectedEOB()
 		}
 		id = item.Id
@@ -1679,6 +1709,9 @@ func (tbl *txnTable) GetHideKeys(ctx context.Context) ([]*engine.Attribute, erro
 }
 
 func (tbl *txnTable) Write(ctx context.Context, bat *batch.Batch) error {
+	if tbl.db.op.IsSnapOp() {
+		return moerr.NewInternalErrorNoCtx("write operation is not allowed in snapshot transaction")
+	}
 	if bat == nil || bat.RowCount() == 0 {
 		return nil
 	}
@@ -1721,6 +1754,9 @@ func (tbl *txnTable) Write(ctx context.Context, bat *batch.Batch) error {
 }
 
 func (tbl *txnTable) Update(ctx context.Context, bat *batch.Batch) error {
+	if tbl.db.op.IsSnapOp() {
+		return moerr.NewInternalErrorNoCtx("update operation is not allowed in snapshot transaction")
+	}
 	return nil
 }
 
@@ -1827,6 +1863,9 @@ func (tbl *txnTable) compaction(
 }
 
 func (tbl *txnTable) Delete(ctx context.Context, bat *batch.Batch, name string) error {
+	if tbl.db.op.IsSnapOp() {
+		return moerr.NewInternalErrorNoCtx("delete operation is not allowed in snapshot transaction")
+	}
 	//for S3 delete
 	if name != catalog.Row_ID {
 		return tbl.EnhanceDelete(bat, name)
@@ -2462,6 +2501,10 @@ func (tbl *txnTable) PrimaryKeysMayBeModified(
 	from types.TS,
 	to types.TS,
 	keysVector *vector.Vector) (bool, error) {
+	if tbl.db.op.IsSnapOp() {
+		return false,
+			moerr.NewInternalErrorNoCtx("primary key modification is not allowed in snapshot transaction")
+	}
 	part, err := tbl.getTxn().engine.lazyLoad(ctx, tbl)
 	if err != nil {
 		return false, err

@@ -90,7 +90,7 @@ type ClusterByDef struct {
 }
 
 type Statistics interface {
-	Stats(ctx context.Context, sync bool) *pb.StatsInfo
+	Stats(ctx context.Context, sync bool) (*pb.StatsInfo, error)
 	Rows(ctx context.Context) (uint64, error)
 	Size(ctx context.Context, columnName string) (uint64, error)
 }

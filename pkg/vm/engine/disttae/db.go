@@ -260,8 +260,108 @@ func (e *Engine) getLatestCatalogCache() *cache.CatalogCache {
 	return e.catalog
 }
 
-func (e *Engine) getOrCreateSnapCatalogCache() *cache.CatalogCache {
-	return e.catalog
+func (e *Engine) loadSnapCkpForTable(
+	ctx context.Context,
+	snapCatalog *cache.CatalogCache,
+	loc string,
+	tid uint64,
+	tblName string,
+	did uint64,
+	dbName string,
+	pkSeqNum int,
+) error {
+	entries, closeCBs, err := logtail.LoadCheckpointEntries(
+		ctx,
+		loc,
+		tid,
+		tblName,
+		did,
+		dbName,
+		e.mp,
+		e.fs)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		for _, cb := range closeCBs {
+			cb()
+		}
+	}()
+	for _, entry := range entries {
+		if err = consumeEntry(ctx, pkSeqNum, e, snapCatalog, nil, entry); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (e *Engine) getOrCreateSnapCatalogCache(
+	ctx context.Context,
+	ts types.TS) (*cache.CatalogCache, error) {
+	if e.catalog.CanServe(ts) {
+		return e.catalog, nil
+	}
+	e.snapCatalog.Lock()
+	defer e.snapCatalog.Unlock()
+	for _, snap := range e.snapCatalog.snaps {
+		if snap.CanServe(ts) {
+			return snap, nil
+		}
+	}
+	snapCata := cache.NewCatalog()
+	//TODO:: insert mo_tables, or mo_colunms, or mo_database, mo_catalog into snapCata.
+	//       ref to engine.init.
+	ckps, err := checkpoint.ListSnapshotCheckpoint(ctx, e.fs, ts, 0)
+	if err != nil {
+		return nil, err
+	}
+	for _, ckp := range ckps {
+		loc := ckp.GetLocation().String()
+		//FIXME::pkSeqNum == 0?
+		if err := e.loadSnapCkpForTable(
+			ctx,
+			snapCata,
+			loc,
+			catalog.MO_DATABASE_ID,
+			catalog.MO_DATABASE,
+			catalog.MO_CATALOG_ID,
+			catalog.MO_CATALOG,
+			0); err != nil {
+			return nil, err
+		}
+		if err := e.loadSnapCkpForTable(
+			ctx,
+			snapCata,
+			loc,
+			catalog.MO_TABLES_ID,
+			catalog.MO_TABLES,
+			catalog.MO_CATALOG_ID,
+			catalog.MO_CATALOG, 0); err != nil {
+			return nil, err
+		}
+		if err := e.loadSnapCkpForTable(
+			ctx,
+			snapCata,
+			loc,
+			catalog.MO_COLUMNS_ID,
+			catalog.MO_COLUMNS,
+			catalog.MO_CATALOG_ID,
+			catalog.MO_CATALOG,
+			0); err != nil {
+			return nil, err
+		}
+		//update start and end of snapCata.
+		if ckp.GetType() == checkpoint.ET_Global {
+			snapCata.UpdateStart(ckp.GetEnd())
+			//FIXME::need to minus 5 minutes?
+		}
+		if ckp.GetType() == checkpoint.ET_Incremental {
+			end := ckp.GetEnd()
+			snapCata.UpdateEnd(end)
+		}
+	}
+	e.snapCatalog.snaps = append(e.snapCatalog.snaps, snapCata)
+	return snapCata, nil
 }
 
 func (e *Engine) getOrCreateSnapPart(
@@ -311,6 +411,7 @@ func (e *Engine) getOrCreateSnapPart(
 	snap.ConsumeSnapCkps(ctx, ckps, func(
 		checkpoint *checkpoint.CheckpointEntry,
 		state *logtailreplay.PartitionState) error {
+		//FIXME::loc?
 		loc := checkpoint.GetLocation().String()
 		entries, closeCBs, err := logtail.LoadCheckpointEntries(
 			ctx,
@@ -376,7 +477,7 @@ func (e *Engine) lazyLoad(ctx context.Context, tbl *txnTable) (*logtailreplay.Pa
 				}
 			}()
 			for _, entry := range entries {
-				if err = consumeEntry(ctx, tbl.primarySeqnum, e, e.catalog, state, entry); err != nil {
+				if err = consumeEntry(ctx, tbl.primarySeqnum, e, e.getLatestCatalogCache(), state, entry); err != nil {
 					return err
 				}
 			}

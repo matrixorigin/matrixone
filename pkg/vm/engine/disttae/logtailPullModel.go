@@ -115,14 +115,14 @@ func consumeLogTailOfPull(
 
 	for _, e := range entries {
 		if err = consumeEntry(ctx, primarySeqnum,
-			engine, engine.catalog, state, e); err != nil {
+			engine, engine.getLatestCatalogCache(), state, e); err != nil {
 			return
 		}
 	}
 
 	for i := 0; i < len(logTail.Commands); i++ {
 		if err = consumeEntry(ctx, primarySeqnum,
-			engine, engine.catalog, state, logTail.Commands[i]); err != nil {
+			engine, engine.getLatestCatalogCache(), state, logTail.Commands[i]); err != nil {
 			return
 		}
 	}

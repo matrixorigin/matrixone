@@ -40,8 +40,8 @@ type Table struct {
 
 var _ engine.Relation = new(Table)
 
-func (t *Table) Stats(ctx context.Context, sync bool) *pb.StatsInfo {
-	return nil
+func (t *Table) Stats(ctx context.Context, sync bool) (*pb.StatsInfo, error) {
+	return nil, nil
 }
 
 func (t *Table) Rows(ctx context.Context) (uint64, error) {

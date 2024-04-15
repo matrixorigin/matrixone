@@ -389,7 +389,7 @@ func (gs *GlobalStats) updateTableStats(key pb.StatsInfoKey) {
 		gs.mu.cond.Broadcast()
 	}()
 
-	table := gs.engine.catalog.GetTableById(key.DatabaseID, key.TableID)
+	table := gs.engine.getLatestCatalogCache().GetTableById(key.DatabaseID, key.TableID)
 	// table or its definition is nil, means that the table is created but not committed yet.
 	if table == nil || table.TableDef == nil {
 		logutil.Errorf("cannot get table by ID %v", key)
@@ -406,7 +406,7 @@ func (gs *GlobalStats) updateTableStats(key pb.StatsInfoKey) {
 			return
 		}
 		for _, partitionTableName := range partitionInfo.PartitionTableNames {
-			partitionTable := gs.engine.catalog.GetTableByName(key.DatabaseID, partitionTableName)
+			partitionTable := gs.engine.getLatestCatalogCache().GetTableByName(key.DatabaseID, partitionTableName)
 			partitionsTableDef = append(partitionsTableDef, partitionTable.TableDef)
 			ps := gs.engine.getOrCreateLatestPart(key.DatabaseID, partitionTable.Id).Snapshot()
 			approxObjectNum += int64(ps.ApproxObjectsNum())

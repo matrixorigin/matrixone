@@ -1334,7 +1334,7 @@ func updatePartitionOfPush(
 
 	state, doneMutate := partition.MutateState()
 
-	key := e.catalog.GetTableById(dbId, tblId)
+	key := e.getLatestCatalogCache().GetTableById(dbId, tblId)
 
 	if lazyLoad {
 		if len(tl.CkpLocation) > 0 {
@@ -1401,7 +1401,7 @@ func consumeCkpsAndLogTail(
 	}()
 	for _, entry := range entries {
 		if err = consumeEntry(ctx, primarySeqnum,
-			engine, engine.catalog, state, entry); err != nil {
+			engine, engine.getLatestCatalogCache(), state, entry); err != nil {
 			return
 		}
 	}
@@ -1448,7 +1448,7 @@ func hackConsumeLogtail(
 				lt.Commands[i].EntryType = api.Entry_Delete
 			}
 			if err := consumeEntry(ctx, primarySeqnum,
-				engine, engine.catalog, state, &lt.Commands[i]); err != nil {
+				engine, engine.getLatestCatalogCache(), state, &lt.Commands[i]); err != nil {
 				return err
 			}
 		}
@@ -1480,7 +1480,7 @@ func hackConsumeLogtail(
 				lt.Commands[i].EntryType = api.Entry_Delete
 			}
 			if err := consumeEntry(ctx, primarySeqnum,
-				engine, engine.catalog, state, &lt.Commands[i]); err != nil {
+				engine, engine.getLatestCatalogCache(), state, &lt.Commands[i]); err != nil {
 				return err
 			}
 		}
@@ -1488,7 +1488,7 @@ func hackConsumeLogtail(
 	}
 	for i := 0; i < len(lt.Commands); i++ {
 		if err := consumeEntry(ctx, primarySeqnum,
-			engine, engine.catalog, state, &lt.Commands[i]); err != nil {
+			engine, engine.getLatestCatalogCache(), state, &lt.Commands[i]); err != nil {
 			return err
 		}
 	}
