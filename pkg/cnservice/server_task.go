@@ -131,8 +131,8 @@ func (s *service) upgrade() {
 	moServerCtx := context.WithValue(context.Background(), config.ParameterUnitKey, pu)
 
 	ug := &upgrader.Upgrader{
-		IEFactory: func() ie.InternalExecutor {
-			return frontend.NewInternalExecutor(pu, s.mo.GetRoutineManager().GetAutoIncrCacheManager())
+		IEFactory: func(isLimit bool) ie.InternalExecutor {
+			return frontend.NewInternalExecutor(pu, s.mo.GetRoutineManager().GetAutoIncrCacheManager(), isLimit)
 		},
 	}
 	ug.Upgrade(moServerCtx)
@@ -320,7 +320,7 @@ func (s *service) registerExecutorsLocked() {
 	pu.LockService = s.lockService
 	moServerCtx := context.WithValue(context.Background(), config.ParameterUnitKey, pu)
 	ieFactory := func() ie.InternalExecutor {
-		return frontend.NewInternalExecutor(pu, s.mo.GetRoutineManager().GetAutoIncrCacheManager())
+		return frontend.NewInternalExecutor(pu, s.mo.GetRoutineManager().GetAutoIncrCacheManager(), true)
 	}
 
 	ts, ok := s.task.holder.Get()

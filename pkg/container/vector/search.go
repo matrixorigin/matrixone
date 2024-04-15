@@ -160,3 +160,90 @@ func FixedSizedBinarySearchOffsetByValFactory[T any](vals []T, cmp func(T, T) in
 		return sels
 	}
 }
+
+func CollectOffsetsByPrefixEqFactory(val []byte) func(*Vector) []int32 {
+	return func(lvec *Vector) []int32 {
+		lvlen := lvec.Length()
+		if lvlen == 0 {
+			return nil
+		}
+		lcol, larea := MustVarlenaRawData(lvec)
+		start, _ := sort.Find(lvlen, func(i int) int {
+			return bytes.Compare(val, lcol[i].GetByteSlice(larea))
+		})
+		end := start
+		for end < lvlen && bytes.HasPrefix(lcol[end].GetByteSlice(larea), val) {
+			end++
+		}
+		if start == end {
+			return nil
+		}
+		sels := make([]int32, end-start)
+		for i := start; i < end; i++ {
+			sels[i-start] = int32(i)
+		}
+		return sels
+	}
+}
+
+func CollectOffsetsByPrefixBetweenFactory(lval, rval []byte) func(*Vector) []int32 {
+	return func(lvec *Vector) []int32 {
+		lvlen := lvec.Length()
+		if lvlen == 0 {
+			return nil
+		}
+		lcol, larea := MustVarlenaRawData(lvec)
+		start := sort.Search(lvlen, func(i int) bool {
+			return bytes.Compare(lcol[i].GetByteSlice(larea), lval) >= 0
+		})
+		if start == lvlen {
+			return nil
+		}
+		end := sort.Search(lvlen, func(i int) bool {
+			return types.PrefixCompare(lcol[i].GetByteSlice(larea), rval) > 0
+		})
+		if start == end {
+			return nil
+		}
+		sels := make([]int32, end-start)
+		for i := start; i < end; i++ {
+			sels[i-start] = int32(i)
+		}
+		return sels
+	}
+}
+
+func CollectOffsetsByPrefixInFactory(rvec *Vector) func(*Vector) []int32 {
+	return func(lvec *Vector) []int32 {
+		lvlen := lvec.Length()
+		if lvlen == 0 {
+			return nil
+		}
+
+		lcol, larea := MustVarlenaRawData(lvec)
+		rcol, rarea := MustVarlenaRawData(rvec)
+
+		rval := rcol[0].GetByteSlice(rarea)
+		rpos := 0
+		rvlen := rvec.Length()
+
+		sels := make([]int32, 0, rvlen)
+		for i := 0; i < lvlen; i++ {
+			lval := lcol[i].GetByteSlice(larea)
+			for types.PrefixCompare(lval, rval) > 0 {
+				rpos++
+				if rpos == rvlen {
+					return sels
+				}
+
+				rval = rcol[rpos].GetByteSlice(rarea)
+			}
+
+			if bytes.HasPrefix(lval, rval) {
+				sels = append(sels, int32(i))
+			}
+		}
+
+		return sels
+	}
+}

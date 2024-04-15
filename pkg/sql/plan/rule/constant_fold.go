@@ -321,18 +321,12 @@ func GetConstantValue(vec *vector.Vector, transAll bool, row uint64) *plan.Liter
 			},
 		}
 	case types.T_time:
-		if !transAll {
-			return nil
-		}
 		return &plan.Literal{
 			Value: &plan.Literal_Timeval{
 				Timeval: int64(vector.MustFixedCol[types.Time](vec)[row]),
 			},
 		}
 	case types.T_datetime:
-		if !transAll {
-			return nil
-		}
 		return &plan.Literal{
 			Value: &plan.Literal_Datetimeval{
 				Datetimeval: int64(vector.MustFixedCol[types.Datetime](vec)[row]),

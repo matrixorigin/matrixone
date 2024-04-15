@@ -17,12 +17,13 @@ package upgrader
 import (
 	"context"
 	"fmt"
+	"strings"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
-	"strings"
 )
 
 func ParseDataTypeToColType(dataType string) (table.ColType, error) {
@@ -38,6 +39,8 @@ func ParseDataTypeToColType(dataType string) (table.ColType, error) {
 		return table.TUint32, nil
 	case strings.EqualFold(dataTypeStr, "int"):
 		return table.TUint32, nil
+	case strings.EqualFold(dataTypeStr, "float"):
+		return table.TFloat32, nil
 	case strings.EqualFold(dataTypeStr, "double"):
 		return table.TFloat64, nil
 	case strings.EqualFold(dataTypeStr, "json"):
@@ -63,13 +66,6 @@ func attachAccount(ctx context.Context, tenant *frontend.TenantInfo) context.Con
 
 func makeOptions(tenant *frontend.TenantInfo) *ie.OptsBuilder {
 	return ie.NewOptsBuilder().AccountId(tenant.GetTenantID()).UserId(tenant.GetUserID()).DefaultRoleId(tenant.GetDefaultRoleID())
-}
-
-func appendSemicolon(s string) string {
-	if !strings.HasSuffix(s, ";") {
-		return s + ";"
-	}
-	return s
 }
 
 func convErrsToFormatMsg(errors []error) string {

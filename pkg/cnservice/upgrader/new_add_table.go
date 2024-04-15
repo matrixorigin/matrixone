@@ -372,7 +372,11 @@ var processlistView = &table.Table{
 		table.StringColumn("txn_id", "the id of the transaction"),
 		table.StringColumn("user", "the user name"),
 	},
-	CreateViewSql: "CREATE VIEW IF NOT EXISTS `information_schema`.`PROCESSLIST` AS SELECT * FROM PROCESSLIST() A;",
+	CreateViewSql: fmt.Sprintf("CREATE VIEW IF NOT EXISTS %s.PROCESSLIST AS "+
+		"select node_id, conn_id, session_id, account, user, host, db, "+
+		"session_start, command, info, txn_id, statement_id, statement_type, "+
+		"query_type, sql_source_type, query_start, client_host, role, proxy_host "+
+		"from PROCESSLIST() A", sysview.InformationDBConst),
 	//actually drop table here
 	CreateTableSql: "drop view if exists `information_schema`.`PROCESSLIST`;",
 }
@@ -545,8 +549,26 @@ var transactionMetricView = &table.Table{
 		"where `metric_name` = 'sql_statement_duration_total'",
 }
 
-var registeredViews = []*table.Table{processlistView, MoLocksView, MoVariablesView, MoTransactionsView, MoCacheView}
-var needUpgradeNewView = []*table.Table{transactionMetricView, PARTITIONSView, STATISTICSView, MoSessionsView, SqlStatementHotspotView, MoLocksView, MoConfigurationsView, MoVariablesView, MoTransactionsView, MoCacheView, ReferentialConstraintsView}
+var registeredViews = []*table.Table{
+	MoLocksView,
+	MoVariablesView,
+	MoTransactionsView,
+	MoCacheView,
+}
+
+var needUpgradeNewView = []*table.Table{
+	transactionMetricView,
+	PARTITIONSView,
+	STATISTICSView,
+	MoSessionsView,
+	SqlStatementHotspotView,
+	MoLocksView,
+	MoConfigurationsView,
+	MoVariablesView,
+	MoTransactionsView,
+	MoCacheView,
+	ReferentialConstraintsView,
+}
 
 var InformationSchemaSCHEMATA = &table.Table{
 	Account:  table.AccountAll,
@@ -560,6 +582,7 @@ var InformationSchemaSCHEMATA = &table.Table{
 		"if(true, NULL, '') AS SQL_PATH," +
 		"cast('NO' as varchar(3)) AS DEFAULT_ENCRYPTION " +
 		"FROM mo_catalog.mo_database where account_id = current_account_id() or (account_id = 0 and datname in ('mo_catalog'))",
+	CreateTableSql: "drop view if exists information_schema.SCHEMATA",
 }
 
 var InformationSchemaCOLUMNS = &table.Table{
@@ -590,6 +613,7 @@ var InformationSchemaCOLUMNS = &table.Table{
 		"cast('' as varchar(500)) as GENERATION_EXPRESSION,"+
 		"if(true, NULL, 0) as SRS_ID "+
 		"from mo_catalog.mo_columns where att_relname!='%s' and att_relname not like '%s' and attname != '%s'", catalog.MOAutoIncrTable, catalog.PrefixPriColName+"%", catalog.Row_ID),
+	CreateTableSql: "drop view if exists information_schema.COLUMNS",
 }
 
 var InformationSchemaPARTITIONS = &table.Table{
@@ -636,6 +660,7 @@ var InformationSchemaPARTITIONS = &table.Table{
 		"FROM `mo_catalog`.`mo_tables` `tbl` LEFT JOIN `mo_catalog`.`mo_table_partitions` `part` " +
 		"ON `part`.`table_id` = `tbl`.`rel_id` " +
 		"WHERE `tbl`.`partitioned` = 1;"),
+	CreateTableSql: "drop view if exists information_schema.PARTITIONS",
 }
 
 var InformationSchemaTABLES = &table.Table{
@@ -670,6 +695,7 @@ var InformationSchemaTABLES = &table.Table{
 		"cast(rel_comment as text) AS TABLE_COMMENT "+
 		"FROM mo_catalog.mo_tables tbl "+
 		"WHERE tbl.account_id = current_account_id() and tbl.relname not like '%s' and tbl.relkind != '%s';", catalog.IndexTableNamePrefix+"%", catalog.SystemPartitionRel),
+	CreateTableSql: "drop view if exists information_schema.TABLES",
 }
 
 var needUpgradeExistingView = []*table.Table{
@@ -677,4 +703,5 @@ var needUpgradeExistingView = []*table.Table{
 	InformationSchemaCOLUMNS,
 	InformationSchemaPARTITIONS,
 	InformationSchemaTABLES,
+	processlistView,
 }
