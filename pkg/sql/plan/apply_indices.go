@@ -845,6 +845,7 @@ func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node,
 			ObjRef:                 idxObjRef,
 			ParentObjRef:           DeepCopyObjectRef(leftChild.ObjRef),
 			BindingTags:            []int32{idxTag},
+			ScanTS:                 ts,
 			RuntimeFilterProbeList: []*plan.RuntimeFilterSpec{MakeRuntimeFilter(rfTag, len(condIdx) < numParts, 0, probeExpr)},
 		}, builder.ctxByNode[nodeID])
 
@@ -880,7 +881,6 @@ func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node,
 			Limit:    leftChild.Limit,
 			Offset:   leftChild.Offset,
 			OnList:   []*plan.Expr{pkJoinCond},
-			ScanTS:   ts,
 		}, builder.ctxByNode[nodeID])
 
 		leftChild.Limit, leftChild.Offset = nil, nil
