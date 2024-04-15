@@ -11830,7 +11830,7 @@ func TestDoResolveSnapshotTsWithSnapShotName(t *testing.T) {
 		bh.sql2result["rollback;"] = nil
 
 		sql, _ := getSqlForGetSnapshotTsWithSnapshotName(ctx, "test_sp")
-		mrs := newMrsForPasswordOfUser([][]interface{}{{10}})
+		mrs := newMrsForPasswordOfUser([][]interface{}{{"2024-04-15 00:00:00"}})
 		bh.sql2result[sql] = mrs
 
 		_, err := doResolveSnapshotTsWithSnapShotName(ctx, ses, "test_sp")
