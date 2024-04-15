@@ -2871,8 +2871,8 @@ func appendPreInsertUkPlan(
 			PreInsertUkCtx: &plan.PreInsertUkCtx{
 				Columns:  useColumns,
 				PkColumn: int32(pkColumn),
-				PkType:   originPkType,
-				UkType:   ukType,
+				PkType:   *originPkType,
+				UkType:   *ukType,
 			},
 		}
 	} else {
@@ -2885,8 +2885,8 @@ func appendPreInsertUkPlan(
 			PreInsertSkCtx: &plan.PreInsertUkCtx{
 				Columns:  useColumns,
 				PkColumn: int32(pkColumn),
-				PkType:   originPkType,
-				UkType:   ukType,
+				PkType:   *originPkType,
+				UkType:   *ukType,
 			},
 		}
 	}
