@@ -309,7 +309,7 @@ func (l *LocalFS) Read(ctx context.Context, vector *IOVector) (err error) {
 	} else {
 		wait()
 	}
-	
+
 	stats := statistic.StatsInfoFromContext(ctx)
 	stats.AddLocalFSReadIOLockTimeConsumption(time.Since(startLock))
 
