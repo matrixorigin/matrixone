@@ -30,9 +30,9 @@ import (
 const (
 	DefaultMinRowsQualified      = 40960
 	DefaultMaxRowsObj            = 8192 * 500
-	DefaultMinCNMergeSize        = 200  // MB
-	DefaultCNMergeMemControlHint = 8192 // MB
-	DefaultMaxMergeObjN          = 2
+	DefaultMinCNMergeSize        = 80000 // MB
+	DefaultCNMergeMemControlHint = 8192  // MB
+	DefaultMaxMergeObjN          = 4
 
 	Const1GBytes = 1 << 30
 	Const1MBytes = 1 << 20

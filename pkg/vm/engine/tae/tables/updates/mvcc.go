@@ -459,6 +459,14 @@ func (n *ObjectMVCCHandle) StringLocked(level common.PPLevel, depth int, prefix 
 	return s
 }
 
+func (n *ObjectMVCCHandle) StringBlkLocked(level common.PPLevel, depth int, prefix string, blkid int) string {
+	s := ""
+	if d, exist := n.deletes[uint16(blkid)]; exist {
+		s = fmt.Sprintf("%s%s", s, d.StringLocked(level, depth+1, prefix))
+	}
+	return s
+}
+
 func (n *ObjectMVCCHandle) GetDeleteCnt() uint32 {
 	cnt := uint32(0)
 	for _, deletes := range n.deletes {
@@ -473,6 +481,17 @@ func (n *ObjectMVCCHandle) HasDeleteIntentsPreparedIn(from, to types.TS) (found,
 			return
 		}
 	}
+	return
+}
+func (n *ObjectMVCCHandle) HasInMemoryDeleteIntentsPreparedInByBlock(blkID uint16, from, to types.TS) (found, isPersist bool) {
+	mvcc := n.deletes[blkID]
+	if mvcc == nil {
+		return false, false
+	}
+	if mvcc.deletes.mask.IsEmpty() {
+		return false, false
+	}
+	found, isPersist = mvcc.GetDeleteChain().HasDeleteIntentsPreparedInLocked(from, to)
 	return
 }
 
@@ -675,13 +694,17 @@ func (n *MVCCHandle) GetID() *common.ID {
 func (n *MVCCHandle) GetEntry() *catalog.ObjectEntry { return n.meta }
 
 func (n *MVCCHandle) StringLocked(level common.PPLevel, depth int, prefix string) string {
-	s := ""
 	inMemoryCount := 0
 	if n.deletes.DepthLocked() > 0 {
 		// s = fmt.Sprintf("%s%s", s, n.deletes.StringLocked())
 		inMemoryCount = n.deletes.mask.GetCardinality()
 	}
-	s = fmt.Sprintf("%sBLK[%d]InMem:%d", common.RepeatStr("\t", depth), n.blkID, inMemoryCount)
+	s := fmt.Sprintf("%sBLK[%d]InMem:%d\n", common.RepeatStr("\t", depth), n.blkID, inMemoryCount)
+	if level > common.PPL3 {
+		if imemChain := n.deletes.StringLocked(); imemChain != "" {
+			s = fmt.Sprintf("%s%s", s, imemChain)
+		}
+	}
 	if n.deltaloc.Depth() > 0 {
 		s = fmt.Sprintf("%s%s", s, n.deltaloc.StringLocked())
 	}
@@ -1019,7 +1042,7 @@ func (n *MVCCHandle) TryDeleteByDeltaloc(txn txnif.AsyncTxn, deltaLoc objectio.L
 	if err != nil {
 		return
 	}
-	bat, err := blockio.LoadTombstoneColumns(
+	bat, release, err := blockio.LoadTombstoneColumns(
 		txn.GetContext(),
 		[]uint16{0},
 		nil,
@@ -1027,6 +1050,7 @@ func (n *MVCCHandle) TryDeleteByDeltaloc(txn txnif.AsyncTxn, deltaLoc objectio.L
 		deltaLoc,
 		nil,
 	)
+	defer release()
 	if err == nil {
 		ok = true
 	}

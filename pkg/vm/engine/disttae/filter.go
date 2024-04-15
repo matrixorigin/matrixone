@@ -18,6 +18,7 @@ import (
 	"context"
 	"sort"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -25,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
@@ -96,6 +98,9 @@ func init() {
 }
 
 func isSortedKey(colDef *plan.ColDef) (isPK, isSorted bool) {
+	if colDef.Name == catalog.FakePrimaryKeyColName {
+		return false, false
+	}
 	isPK, isCluster := colDef.Primary, colDef.ClusterBy
 	isSorted = isPK || isCluster
 	return
@@ -120,9 +125,7 @@ func getConstBytesFromExpr(exprs []*plan.Expr, colDef *plan.ColDef, proc *proces
 	return vals, true
 }
 
-func mustColVecValueFromBinaryFuncExpr(
-	expr *plan.Expr_F, tableDef *plan.TableDef, proc *process.Process,
-) (*plan.Expr_Col, []byte, bool) {
+func mustColVecValueFromBinaryFuncExpr(expr *plan.Expr_F) (*plan.Expr_Col, []byte, bool) {
 	var (
 		colExpr *plan.Expr_Col
 		valExpr *plan.Expr
@@ -238,6 +241,7 @@ func CompileFilterExprs(
 		inMeta objectio.ObjectMeta,
 		inBF objectio.BloomFilter,
 	) (meta objectio.ObjectMeta, bf objectio.BloomFilter, err error) {
+		_, _ = inMeta, inBF
 		for _, op := range ops2 {
 			if meta != nil && bf != nil {
 				continue
@@ -756,7 +760,7 @@ func CompileFilterExpr(
 			}
 			// TODO: define seekOp
 		case "prefix_in":
-			colExpr, val, ok := mustColVecValueFromBinaryFuncExpr(exprImpl, tableDef, proc)
+			colExpr, val, ok := mustColVecValueFromBinaryFuncExpr(exprImpl)
 			if !ok {
 				canCompile = false
 				return
@@ -836,7 +840,7 @@ func CompileFilterExpr(
 			}
 
 		case "in":
-			colExpr, val, ok := mustColVecValueFromBinaryFuncExpr(exprImpl, tableDef, proc)
+			colExpr, val, ok := mustColVecValueFromBinaryFuncExpr(exprImpl)
 			if !ok {
 				canCompile = false
 				return
@@ -871,7 +875,8 @@ func CompileFilterExpr(
 				blkIdx int, blkMeta objectio.BlockObject, bf objectio.BloomFilter,
 			) (bool, bool, error) {
 				// TODO: define canQuickBreak
-				if !blkMeta.MustGetColumn(uint16(seqNum)).ZoneMap().AnyIn(vec) {
+				zm := blkMeta.MustGetColumn(uint16(seqNum)).ZoneMap()
+				if !zm.AnyIn(vec) {
 					return false, false, nil
 				}
 				if isPK {
@@ -880,7 +885,8 @@ func CompileFilterExpr(
 					if err := index.DecodeBloomFilter(blkBfIdx, blkBf); err != nil {
 						return false, false, err
 					}
-					if exist := blkBfIdx.MayContainsAny(vec); !exist {
+					lowerBound, upperBound := zm.SubVecIn(vec)
+					if exist := blkBfIdx.MayContainsAny(vec, lowerBound, upperBound); !exist {
 						return false, false, nil
 					}
 				}
@@ -1063,7 +1069,10 @@ func ExecuteBlockFilter(
 			}
 
 			if objStats.Rows() == 0 {
-				logutil.Fatalf("object stats has zero rows, detail: %s", obj.String())
+				logutil.Errorf("object stats has zero rows, isCommitted: %v, detail: %s",
+					isCommitted, obj.String())
+				util.EnableCoreDump()
+				util.CoreDump()
 			}
 
 			for ; pos < blockCnt; pos++ {

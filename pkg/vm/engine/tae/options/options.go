@@ -167,9 +167,8 @@ func (o *Options) FillDefaults(dirname string) *Options {
 	}
 
 	if o.MergeCfg == nil {
-		o.MergeCfg = &MergeConfig{}
+		o.MergeCfg = new(MergeConfig)
 	}
-
 	if o.MergeCfg.CNMergeMemControlHint == 0 {
 		o.MergeCfg.CNMergeMemControlHint = common.DefaultCNMergeMemControlHint * common.Const1MBytes
 	}

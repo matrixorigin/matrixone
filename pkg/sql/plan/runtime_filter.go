@@ -178,7 +178,7 @@ func (builder *QueryBuilder) generateRuntimeFilters(nodeID int32) {
 
 		col := probeExprs[0].GetCol()
 		inLimit := GetInFilterCardLimit()
-		if leftChild.TableDef.Pkey != nil && col.Name == leftChild.TableDef.Pkey.PkeyColName {
+		if leftChild.TableDef.Pkey != nil && leftChild.TableDef.Cols[col.ColPos].Name == leftChild.TableDef.Pkey.PkeyColName {
 			inLimit = GetInFilterCardLimitOnPK(leftChild.Stats.TableCnt)
 		}
 		node.RuntimeFilterBuildList = append(node.RuntimeFilterBuildList, &plan.RuntimeFilterSpec{
@@ -199,7 +199,7 @@ func (builder *QueryBuilder) generateRuntimeFilters(nodeID int32) {
 	}
 
 	tableDef := leftChild.TableDef
-	if tableDef.Pkey == nil || len(tableDef.Pkey.Names) < len(probeExprs) {
+	if len(tableDef.Pkey.Names) < len(probeExprs) {
 		return
 	}
 
@@ -214,14 +214,12 @@ func (builder *QueryBuilder) generateRuntimeFilters(nodeID int32) {
 	}
 
 	for i, expr := range probeExprs {
-		switch col := expr.Expr.(type) {
-		case *plan.Expr_Col:
-			if pos, ok := name2Pos[col.Col.Name]; ok {
-				col2Probe[pos] = i
-			}
-
-		default:
+		col := expr.GetCol()
+		if col == nil {
 			return
+		}
+		if pos, ok := name2Pos[tableDef.Cols[col.ColPos].Name]; ok {
+			col2Probe[pos] = i
 		}
 	}
 
@@ -242,7 +240,8 @@ func (builder *QueryBuilder) generateRuntimeFilters(nodeID int32) {
 	}
 
 	leftChild.RuntimeFilterProbeList = append(leftChild.RuntimeFilterProbeList, &plan.RuntimeFilterSpec{
-		Tag: rfTag,
+		Tag:         rfTag,
+		MatchPrefix: cnt < len(tableDef.Pkey.Names),
 		Expr: &plan.Expr{
 			Typ: tableDef.Cols[pkIdx].Typ,
 			Expr: &plan.Expr_Col{
@@ -270,9 +269,10 @@ func (builder *QueryBuilder) generateRuntimeFilters(nodeID int32) {
 
 	buildExpr, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", buildArgs)
 	node.RuntimeFilterBuildList = append(node.RuntimeFilterBuildList, &plan.RuntimeFilterSpec{
-		Tag:        rfTag,
-		UpperLimit: GetInFilterCardLimitOnPK(leftChild.Stats.TableCnt), // multicol pk, must hit all pk cols for now
-		Expr:       buildExpr,
+		Tag:         rfTag,
+		MatchPrefix: cnt < len(tableDef.Pkey.Names),
+		UpperLimit:  GetInFilterCardLimitOnPK(leftChild.Stats.TableCnt), // multicol pk, must hit all pk cols for now
+		Expr:        buildExpr,
 	})
 	recalcStatsByRuntimeFilter(leftChild, rightChild.Stats.Selectivity)
 }

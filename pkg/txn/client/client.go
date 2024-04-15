@@ -18,13 +18,13 @@ import (
 	"context"
 	"encoding/hex"
 	"math"
+	"runtime/debug"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
-	cutil "github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
@@ -302,9 +302,11 @@ func (client *txnClient) New(
 
 	ts, err := client.determineTxnSnapshot(minTS)
 	if err != nil {
+		_ = op.Rollback(ctx)
 		return nil, err
 	}
 	if err := op.UpdateSnapshot(ctx, ts); err != nil {
+		_ = op.Rollback(ctx)
 		return nil, err
 	}
 
@@ -489,8 +491,9 @@ func (client *txnClient) closeTxn(event TxnEvent) {
 		client.mu.Unlock()
 	}()
 
-	key := cutil.UnsafeBytesToString(txn.ID)
-	if op, ok := client.mu.activeTxns[key]; ok {
+	key := string(txn.ID)
+	op, ok := client.mu.activeTxns[key]
+	if ok {
 		v2.TxnLifeCycleDurationHistogram.Observe(time.Since(op.createAt).Seconds())
 
 		delete(client.mu.activeTxns, key)
@@ -513,6 +516,10 @@ func (client *txnClient) closeTxn(event TxnEvent) {
 				op.notifyActive()
 			}
 		}
+	} else {
+		util.GetLogger().Warn("txn closed",
+			zap.String("txn ID", hex.EncodeToString(txn.ID)),
+			zap.String("stack", string(debug.Stack())))
 	}
 }
 
@@ -520,7 +527,7 @@ func (client *txnClient) addActiveTxnLocked(op *txnOperator) {
 	if op.options.UserTxn() {
 		client.mu.users++
 	}
-	client.mu.activeTxns[cutil.UnsafeBytesToString(op.txnID)] = op
+	client.mu.activeTxns[string(op.txnID)] = op
 	client.addToLeakCheck(op)
 }
 

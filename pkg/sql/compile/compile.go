@@ -157,7 +157,6 @@ func (c *Compile) reset() {
 	c.scope = c.scope[:0]
 	c.proc.CleanValueScanBatchs()
 	c.pn = nil
-	c.u = nil
 	c.fill = nil
 	c.affectRows.Store(0)
 	c.addr = ""
@@ -224,7 +223,7 @@ func (c *Compile) SetTempEngine(ctx context.Context, te engine.Engine) {
 
 // Compile is the entrance of the compute-execute-layer.
 // It generates a scope (logic pipeline) for a query plan.
-func (c *Compile) Compile(ctx context.Context, pn *plan.Plan, u any, fill func(any, *batch.Batch) error) (err error) {
+func (c *Compile) Compile(ctx context.Context, pn *plan.Plan, fill func(*batch.Batch) error) (err error) {
 	start := time.Now()
 	defer func() {
 		v2.TxnStatementCompileDurationHistogram.Observe(time.Since(start).Seconds())
@@ -281,7 +280,6 @@ func (c *Compile) Compile(ctx context.Context, pn *plan.Plan, u any, fill func(a
 
 	// session info and callback function to write back query result.
 	// XXX u is really a bad name, I'm not sure if `session` or `user` will be more suitable.
-	c.u = u
 	c.fill = fill
 
 	c.pn = pn
@@ -553,7 +551,7 @@ func (c *Compile) prepareRetry(defChanged bool) (*Compile, error) {
 		}
 		c.pn = pn
 	}
-	if e = runC.Compile(c.proc.Ctx, c.pn, c.u, c.fill); e != nil {
+	if e = runC.Compile(c.proc.Ctx, c.pn, c.fill); e != nil {
 		return nil, e
 	}
 
@@ -626,7 +624,7 @@ func (c *Compile) runOnce() error {
 	}
 
 	// fuzzy filter not sure whether this insert / load obey duplicate constraints, need double check
-	if c.fuzzy != nil && c.fuzzy.cnt > 0 && err == nil {
+	if c.fuzzy != nil && c.fuzzy.cnt > 0 {
 		if c.fuzzy.cnt > 10 {
 			logutil.Warnf("fuzzy filter cnt is %d, may be too high", c.fuzzy.cnt)
 		}
@@ -639,7 +637,7 @@ func (c *Compile) runOnce() error {
 	//detect fk self refer
 	//update, insert
 	query := c.pn.GetQuery()
-	if err == nil && query != nil && (query.StmtType == plan.Query_INSERT ||
+	if query != nil && (query.StmtType == plan.Query_INSERT ||
 		query.StmtType == plan.Query_UPDATE) && len(query.GetDetectSqls()) != 0 {
 		err = detectFkSelfRefer(c, query.DetectSqls)
 	}
@@ -1059,7 +1057,6 @@ func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope, step int32) (*Sco
 		rs.Instructions = append(rs.Instructions, vm.Instruction{
 			Op: vm.Output,
 			Arg: output.NewArgument().
-				WithData(c.u).
 				WithFunc(c.fill),
 		})
 	}
@@ -1614,7 +1611,7 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 		currentFirstFlag := c.anal.isFirst
 		for i := range ss {
 			var lockOpArg *lockop.Argument
-			lockOpArg, err = constructLockOp(n, ss[i].Proc, c.e)
+			lockOpArg, err = constructLockOp(n, c.e)
 			if err != nil {
 				return nil, err
 			}
@@ -2756,7 +2753,7 @@ func (c *Compile) compileTimeWin(n *plan.Node, ss []*Scope) []*Scope {
 	rs.Instructions[0] = vm.Instruction{
 		Op:  vm.TimeWin,
 		Idx: c.anal.curr,
-		Arg: constructTimeWindow(c.ctx, n, c.proc),
+		Arg: constructTimeWindow(c.ctx, n),
 	}
 	return []*Scope{rs}
 }
@@ -2825,7 +2822,7 @@ func (c *Compile) compileFuzzyFilter(n *plan.Node, ns []*plan.Node, left []*Scop
 
 	rs.Instructions[0].Idx = c.anal.curr
 
-	arg := constructFuzzyFilter(c, n, ns[n.Children[0]], ns[n.Children[1]])
+	arg := constructFuzzyFilter(c, n, ns[n.Children[1]])
 
 	rs.appendInstruction(vm.Instruction{
 		Op:  vm.FuzzyFilter,
@@ -2843,13 +2840,12 @@ func (c *Compile) compileFuzzyFilter(n *plan.Node, ns []*plan.Node, left []*Scop
 	rs.appendInstruction(vm.Instruction{
 		Op: vm.Output,
 		Arg: output.NewArgument().
-			WithData(outData).
 			WithFunc(
-				func(data any, bat *batch.Batch) error {
+				func(bat *batch.Batch) error {
 					if bat == nil || bat.IsEmpty() {
 						return nil
 					}
-					c.fuzzy = data.(*fuzzyCheck)
+					c.fuzzy = outData
 					// the batch will contain the key that fuzzyCheck
 					if err := c.fuzzy.fill(c.ctx, bat); err != nil {
 						return err
@@ -3450,7 +3446,7 @@ func (c *Compile) newJoinBuildScope(s *Scope, ss []*Scope) *Scope {
 		regTransplant(s, rs, i+s.BuildIdx, i)
 	}
 
-	rs.appendInstruction(constructJoinBuildInstruction(c, s.Instructions[0], c.proc, s.ShuffleCnt, ss != nil))
+	rs.appendInstruction(constructJoinBuildInstruction(c, s.Instructions[0], s.ShuffleCnt, ss != nil))
 
 	if ss == nil { // unparallel, send the hashtable to join scope directly
 		s.Proc.Reg.MergeReceivers[s.BuildIdx] = &process.WaitRegister{

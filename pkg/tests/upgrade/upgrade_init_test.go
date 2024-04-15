@@ -111,7 +111,7 @@ func checkVersionUpgrades(
 	err = exec.ExecTxn(
 		ctx,
 		func(txn executor.TxnExecutor) error {
-			upgrades, err := versions.GetUpgradeVersions(version, txn, false, false)
+			upgrades, err := versions.GetUpgradeVersions(version, 0, txn, false, false)
 			require.NoError(t, err)
 			ck(upgrades)
 			return err
@@ -136,7 +136,7 @@ func waitVersionReady(
 		err := exec.ExecTxn(
 			ctx,
 			func(txn executor.TxnExecutor) error {
-				v, _, err := versions.GetVersionState(version, txn, false)
+				v, _, err := versions.GetVersionState(version, 0, txn, false)
 				if err != nil {
 					return err
 				}
@@ -286,5 +286,9 @@ func (h *testVersionHandle) HandleClusterUpgrade(ctx context.Context, txn execut
 }
 func (h *testVersionHandle) HandleTenantUpgrade(ctx context.Context, tenantID int32, txn executor.TxnExecutor) error {
 	h.callHandleTenantUpgrade.Add(1)
+	return nil
+}
+
+func (h *testVersionHandle) HandleCreateFrameworkDeps(txn executor.TxnExecutor) error {
 	return nil
 }

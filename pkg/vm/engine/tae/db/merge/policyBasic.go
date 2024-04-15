@@ -227,23 +227,35 @@ func (o *Basic) Revise(cpu, mem int64) ([]*catalog.ObjectEntry, TaskHostKind) {
 
 	dnosize, _, _ := estimateMergeConsume(dnobjs)
 
-	if isStandalone && mergeOnDNIfStandalone {
+	schedDN := func() ([]*catalog.ObjectEntry, TaskHostKind) {
 		if cpu > 85 {
 			if dnosize > 25*common.Const1MBytes {
 				logutil.Infof("mergeblocks skip big merge for high level cpu usage, %d", cpu)
 				return nil, TaskHostDN
 			}
 		}
-		return objs, TaskHostDN
+		return dnobjs, TaskHostDN
 	}
 
-	if common.RuntimeCNTakeOverAll.Load() || dnosize > int(common.RuntimeMinCNMergeSize.Load()) {
+	schedCN := func() ([]*catalog.ObjectEntry, TaskHostKind) {
 		cnobjs := o.controlMem(objs, int64(common.RuntimeCNMergeMemControl.Load()))
 		cnobjs = o.optimize(cnobjs)
 		return cnobjs, TaskHostCN
 	}
 
-	return objs, TaskHostDN
+	if isStandalone && mergeOnDNIfStandalone {
+		return schedDN()
+	}
+
+	// CNs come into the picture in two cases:
+	// 1.cluster deployed
+	// 2.standalone deployed but it's asked to merge on cn
+	if common.RuntimeCNTakeOverAll.Load() || dnosize > int(common.RuntimeMinCNMergeSize.Load()) {
+		return schedCN()
+	}
+
+	// CNs don't take over the task, leave it on dn.
+	return schedDN()
 }
 
 func (o *Basic) ConfigString() string {

@@ -58,15 +58,15 @@ type ObjectAppender interface {
 	Close()
 }
 
-type BlockReplayer interface {
+type ObjectReplayer interface {
 	OnReplayDelete(blkID uint16, node txnif.DeleteNode) (err error)
 	OnReplayAppend(node txnif.AppendNode) (err error)
 	OnReplayAppendPayload(bat *containers.Batch) (err error)
 }
 
-type Block interface {
+type Object interface {
 	CheckpointUnit
-	BlockReplayer
+	ObjectReplayer
 
 	DeletesInfo() string
 
@@ -98,14 +98,15 @@ type Block interface {
 
 	// check wether any delete intents with prepared ts within [from, to]
 	HasDeleteIntentsPreparedIn(from, to types.TS) (bool, bool)
+	HasDeleteIntentsPreparedInByBlock(blockID uint16, from, to types.TS) (bool, bool)
 
 	// check if all rows are committed before ts
-	// NOTE: here we assume that the block is visible to the ts
-	// if the block is an appendable block:
-	// 1. if the block is not frozen, return false
-	// 2. if the block is frozen and in-memory, check with the max ts committed
-	// 3. if the block is persisted, return false
-	// if the block is not an appendable block:
+	// NOTE: here we assume that the object is visible to the ts
+	// if the object is an appendable object:
+	// 1. if the object is not frozen, return false
+	// 2. if the object is frozen and in-memory, check with the max ts committed
+	// 3. if the object is persisted, return false
+	// if the object is not an appendable object:
 	// only check with the created ts
 	CoarseCheckAllRowsCommittedBefore(ts types.TS) bool
 
@@ -133,7 +134,7 @@ type Block interface {
 		sels []uint32,
 		mp *mpool.MPool,
 	) error
-	PPString(level common.PPLevel, depth int, prefix string) string
+	PPString(level common.PPLevel, depth int, prefix string, blkid int) string
 	EstimateMemSize() (int, int)
 	GetRuntime() *dbutils.Runtime
 
@@ -143,6 +144,7 @@ type Block interface {
 	UpgradeAllDeleteChain()
 	CollectAppendInRange(start, end types.TS, withAborted bool, mp *mpool.MPool) (*containers.BatchWithVersion, error)
 	CollectDeleteInRange(ctx context.Context, start, end types.TS, withAborted bool, mp *mpool.MPool) (*containers.Batch, *bitmap.Bitmap, error)
+	CollectDeleteInRangeByBlock(ctx context.Context, blkID uint16, start, end types.TS, withAborted bool, mp *mpool.MPool) (*containers.Batch, error)
 	PersistedCollectDeleteInRange(
 		ctx context.Context,
 		b *containers.Batch,
@@ -170,6 +172,7 @@ type Tombstone interface {
 	GetDeltaPersistedTS() types.TS
 	// GetOrCreateDeleteChain(blkID uint16) *updates.MVCCHandle
 	HasDeleteIntentsPreparedIn(from types.TS, to types.TS) (found bool, isPersist bool)
+	HasInMemoryDeleteIntentsPreparedInByBlock(blockID uint16, from, to types.TS) (bool, bool)
 	IsDeletedLocked(row uint32, txn txnif.TxnReader, blkID uint16) (bool, error)
 	SetDeletesListener(l func(uint64, types.TS) error)
 	StringLocked(level common.PPLevel, depth int, prefix string) string

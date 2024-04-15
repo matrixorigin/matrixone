@@ -129,6 +129,7 @@ const (
 	HEX_DECODE
 	HEX_ENCODE
 	HEX
+	UNHEX
 	IFF
 	IFNULL
 	ILIKE
@@ -200,6 +201,7 @@ const (
 	STDDEV_SAMPLE
 	SUBSTR
 	SUM
+	SYSDATE
 	GROUP_CONCAT
 	TAN
 	TO_DATE
@@ -466,6 +468,7 @@ var functionIdRegister = map[string]int32{
 	"concat":            CONCAT,
 	"current_timestamp": CURRENT_TIMESTAMP,
 	"now":               CURRENT_TIMESTAMP,
+	"sysdate":           SYSDATE,
 	"floor":             FLOOR,
 	"lpad":              LPAD,
 	"pi":                PI,
@@ -566,6 +569,7 @@ var functionIdRegister = map[string]int32{
 	"uuid":                           UUID,
 	"load_file":                      LOAD_FILE,
 	"hex":                            HEX,
+	"unhex":                          UNHEX,
 	"serial":                         SERIAL,
 	"serial_full":                    SERIAL_FULL,
 	"serial_extract":                 SERIAL_EXTRACT,

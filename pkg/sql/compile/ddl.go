@@ -1268,7 +1268,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 			return err
 		}
 
-		insertSQL2, err := makeInsertTablePartitionsSQL(c.e, c.ctx, c.proc, dbSource, newRelation)
+		insertSQL2, err := makeInsertTablePartitionsSQL(c.ctx, dbSource, newRelation)
 		if err != nil {
 			getLogger().Info("createTable",
 				zap.String("databaseName", c.db),
@@ -1498,6 +1498,12 @@ func (s *Scope) CreateIndex(c *Compile) error {
 }
 
 func (s *Scope) handleVectorIvfFlatIndex(c *Compile, indexDefs map[string]*plan.IndexDef, qryDatabase string, originalTableDef *plan.TableDef, indexInfo *plan.CreateTable) error {
+	if ok, err := s.isExperimentalEnabled(c, ivfFlatIndexFlag); err != nil {
+		return err
+	} else if !ok {
+		return moerr.NewInternalErrorNoCtx("IVF index is not enabled")
+	}
+
 	// 1. static check
 	if len(indexDefs) != 3 {
 		return moerr.NewInternalErrorNoCtx("invalid ivf index table definition")
@@ -1740,9 +1746,6 @@ func (s *Scope) removeChildTblIdFromParentTable(c *Compile, fkRelation engine.Re
 			break
 		}
 	}
-	if err != nil {
-		return err
-	}
 	return fkRelation.UpdateConstraint(c.ctx, oldCt)
 }
 
@@ -1917,9 +1920,6 @@ func (s *Scope) TruncateTable(c *Compile) error {
 				}
 				break
 			}
-		}
-		if err != nil {
-			return err
 		}
 		err = fkRelation.UpdateConstraint(c.ctx, oldCt)
 		if err != nil {

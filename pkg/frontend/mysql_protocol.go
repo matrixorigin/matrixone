@@ -456,6 +456,7 @@ func (mp *MysqlProtocolImpl) Quit() {
 	if mp.binaryNullBuffer != nil {
 		mp.binaryNullBuffer = nil
 	}
+	mp.ses = nil
 }
 
 func (mp *MysqlProtocolImpl) SetSession(ses *Session) {
@@ -1701,7 +1702,7 @@ func (mp *MysqlProtocolImpl) negotiateAuthenticationMethod(ctx context.Context) 
 // SERVER_QUERY_WAS_SLOW and SERVER_STATUS_NO_GOOD_INDEX_USED is not used in other modules,
 // so we use it to mark the packet MUST be OK/EOF.
 func extendStatus(old uint16) uint16 {
-	return old & SERVER_QUERY_WAS_SLOW & SERVER_STATUS_NO_GOOD_INDEX_USED
+	return old | SERVER_QUERY_WAS_SLOW | SERVER_STATUS_NO_GOOD_INDEX_USED
 }
 
 // make a OK packet
@@ -2778,9 +2779,9 @@ func (mp *MysqlProtocolImpl) receiveExtraInfo(rs goetty.IOSession) {
 		logDebugf(mp.GetDebugString(), "failed to set deadline for salt updating: %v", err)
 		return
 	}
-	ve := proxy.NewVersionedExtraInfo(proxy.Version0, nil)
+	var i proxy.ExtraInfo
 	reader := bufio.NewReader(rs.RawConn())
-	if err := ve.Decode(reader); err != nil {
+	if err := i.Decode(reader); err != nil {
 		// If the error is timeout, we treat it as normal case and do not update extra info.
 		if err, ok := err.(net.Error); ok && err.Timeout() {
 			logInfo(mp.ses, mp.GetDebugString(), "cannot get salt, maybe not use proxy",
@@ -2794,32 +2795,17 @@ func (mp *MysqlProtocolImpl) receiveExtraInfo(rs goetty.IOSession) {
 
 	// must from proxy if extraInfo is received
 	mp.GetSession().fromProxy = true
-	salt, ok := ve.ExtraInfo.GetSalt()
-	if ok {
-		mp.SetSalt(salt)
+	mp.SetSalt(i.Salt)
+	mp.connectionID = i.ConnectionID
+	ses := mp.GetSession()
+	ses.requestLabel = i.Label
+	if i.InternalConn {
+		ses.connType = ConnTypeInternal
 	} else {
-		logError(mp.ses, mp.GetDebugString(), "cannot get salt")
+		ses.connType = ConnTypeExternal
 	}
-	label, ok := ve.ExtraInfo.GetLabel()
-	if ok {
-		mp.GetSession().requestLabel = label.Labels
-	} else {
-		logError(mp.ses, mp.GetDebugString(), "cannot get label")
-	}
-	connID, ok := ve.ExtraInfo.GetConnectionID()
-	if ok {
-		if connID > 0 {
-			mp.connectionID = connID
-		}
-	}
-	internalConn, ok := ve.ExtraInfo.GetInternalConn()
-	if ok {
-		if internalConn {
-			mp.GetSession().connType = ConnTypeInternal
-		} else {
-			mp.GetSession().connType = ConnTypeExternal
-		}
-	}
+	ses.clientAddr = i.ClientAddr
+	ses.proxyAddr = mp.Peer()
 }
 
 /*

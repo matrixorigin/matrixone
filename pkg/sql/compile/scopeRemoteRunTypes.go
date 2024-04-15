@@ -17,11 +17,12 @@ package compile
 import (
 	"context"
 	"fmt"
-	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"hash/crc32"
 	"runtime"
 	"sync/atomic"
 	"time"
+
+	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 
@@ -121,7 +122,7 @@ func newMessageSenderOnClient(
 
 // XXX we can set a scope as argument directly next day.
 func (sender *messageSenderOnClient) send(
-	scopeData, procData []byte, messageType pipeline.Method) error {
+	scopeData, procData []byte, _ pipeline.Method) error {
 	sdLen := len(scopeData)
 	if sdLen <= maxMessageSizeToMoRpc {
 		message := cnclient.AcquireMessage()
@@ -395,7 +396,7 @@ func (receiver *messageReceiverOnServer) newCompile() *Compile {
 	c.proc.Ctx = perfcounter.WithCounterSet(c.proc.Ctx, c.counterSet)
 	c.ctx = defines.AttachAccountId(c.proc.Ctx, pHelper.accountId)
 
-	c.fill = func(_ any, b *batch.Batch) error {
+	c.fill = func(b *batch.Batch) error {
 		return receiver.sendBatch(b)
 	}
 

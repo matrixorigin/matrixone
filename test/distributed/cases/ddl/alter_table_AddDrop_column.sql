@@ -595,4 +595,21 @@ commit;
 select * from table02;
 select col1 from table02;
 drop table table02;
+
+-- alter table add enum column
+drop table if exists enum01;
+create table enum01 (id int);
+insert into enum01 values (1);
+alter table enum01 add column name enum ('A','B','C');
+show create table enum01;
+desc enum01;
+select * from enum01;
+insert into enum01 values (2,'B');
+insert into enum01 values (3,'D');
+select * from enum01;
+alter table enum01 drop column name;
+show create table enum01;
+select * from enum01;
+drop table enum01;
+
 drop database test;

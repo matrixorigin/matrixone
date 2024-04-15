@@ -465,7 +465,7 @@ func (tbl *txnTable) LoadDeletesForBlock(bid types.Blockid, offsets *[]int64) (e
 			if err != nil {
 				return err
 			}
-			rowIdBat, err := blockio.LoadTombstoneColumns(
+			rowIdBat, release, err := blockio.LoadTombstoneColumns(
 				tbl.db.txn.proc.Ctx,
 				[]uint16{0},
 				nil,
@@ -475,6 +475,7 @@ func (tbl *txnTable) LoadDeletesForBlock(bid types.Blockid, offsets *[]int64) (e
 			if err != nil {
 				return err
 			}
+			defer release()
 			rowIds := vector.MustFixedCol[types.Rowid](rowIdBat.GetVector(0))
 			for _, rowId := range rowIds {
 				_, offset := rowId.Decode()
@@ -505,7 +506,7 @@ func (tbl *txnTable) LoadDeletesForMemBlocksIn(
 				if err != nil {
 					return err
 				}
-				rowIdBat, err := blockio.LoadTombstoneColumns(
+				rowIdBat, release, err := blockio.LoadTombstoneColumns(
 					tbl.db.txn.proc.Ctx,
 					[]uint16{0},
 					nil,
@@ -515,13 +516,13 @@ func (tbl *txnTable) LoadDeletesForMemBlocksIn(
 				if err != nil {
 					return err
 				}
+				defer release()
 				rowIds := vector.MustFixedCol[types.Rowid](rowIdBat.GetVector(0))
 				for _, rowId := range rowIds {
 					if deletesRowId != nil {
 						deletesRowId[rowId] = 0
 					}
 				}
-				rowIdBat.Clean(tbl.db.txn.proc.GetMPool())
 			}
 		}
 
@@ -585,6 +586,9 @@ func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr) (ranges eng
 		v2.TxnTableRangeDurationHistogram.Observe(cost.Seconds())
 	}()
 
+	var blocks objectio.BlockInfoSlice
+	ranges = &blocks
+
 	// make sure we have the block infos snapshot
 	if err = tbl.UpdateObjectInfos(ctx); err != nil {
 		return
@@ -596,7 +600,6 @@ func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr) (ranges eng
 		return
 	}
 
-	var blocks objectio.BlockInfoSlice
 	blocks.AppendBlockInfo(objectio.EmptyBlockInfo)
 
 	if err = tbl.rangesOnePart(
@@ -609,7 +612,7 @@ func (tbl *txnTable) Ranges(ctx context.Context, exprs []*plan.Expr) (ranges eng
 	); err != nil {
 		return
 	}
-	ranges = &blocks
+
 	return
 }
 
@@ -892,7 +895,7 @@ func (tbl *txnTable) tryFastFilterBlocks(
 	outBlocks *objectio.BlockInfoSlice,
 	fs fileservice.FileService) (done bool, err error) {
 	// TODO: refactor this code if composite key can be pushdown
-	if tbl.tableDef.Pkey == nil || tbl.tableDef.Pkey.CompPkeyCol == nil {
+	if tbl.tableDef.Pkey.CompPkeyCol == nil {
 		return TryFastFilterBlocks(
 			tbl.db.txn.op.SnapshotTS(),
 			tbl.tableDef,
@@ -1057,7 +1060,8 @@ func (tbl *txnTable) tryFastRanges(
 				}
 				var exist bool
 				if isVec {
-					if exist = blkBfIdx.MayContainsAny(vec); !exist {
+					lowerBound, upperBound := zm.SubVecIn(vec)
+					if exist = blkBfIdx.MayContainsAny(vec, lowerBound, upperBound); !exist {
 						continue
 					}
 				} else {
@@ -1388,6 +1392,7 @@ func (tbl *txnTable) TableRenameInTxn(ctx context.Context, constraint [][]byte) 
 	}
 	databaseId := tbl.GetDBID(ctx)
 	db := tbl.db
+	oldTableName := tbl.tableName
 
 	var id uint64
 	var rowid types.Rowid
@@ -1552,6 +1557,21 @@ func (tbl *txnTable) TableRenameInTxn(ctx context.Context, constraint [][]byte) 
 	newkey := genTableKey(accountId, newtbl.tableName, databaseId)
 	newtbl.db.txn.addCreateTable(newkey, newtbl)
 	newtbl.db.txn.deletedTableMap.Delete(newkey)
+
+	//---------------------------------------------------------------------------------
+	for i := 0; i < len(newtbl.db.txn.writes); i++ {
+		if newtbl.db.txn.writes[i].tableId == catalog.MO_DATABASE_ID ||
+			newtbl.db.txn.writes[i].tableId == catalog.MO_TABLES_ID ||
+			newtbl.db.txn.writes[i].tableId == catalog.MO_COLUMNS_ID {
+			continue
+		}
+
+		if newtbl.db.txn.writes[i].tableName == oldTableName {
+			newtbl.db.txn.writes[i].tableName = tbl.tableName
+			logutil.Infof("copy table '%s' has been rename to '%s' in txn", oldTableName, tbl.tableName)
+		}
+	}
+	//---------------------------------------------------------------------------------
 	return nil
 }
 
@@ -1754,7 +1774,7 @@ func (tbl *txnTable) Delete(ctx context.Context, bat *batch.Batch, name string) 
 	return tbl.writeTnPartition(ctx, bat)
 }
 
-func (tbl *txnTable) writeTnPartition(ctx context.Context, bat *batch.Batch) error {
+func (tbl *txnTable) writeTnPartition(_ context.Context, bat *batch.Batch) error {
 	ibat, err := util.CopyBatch(bat, tbl.db.txn.proc)
 	if err != nil {
 		return err
@@ -1969,7 +1989,6 @@ func (tbl *txnTable) newBlockReader(
 		ctx,
 		fs,
 		tableDef,
-		tbl.primarySeqnum,
 		ts,
 		num,
 		expr,
@@ -2082,7 +2101,6 @@ func (tbl *txnTable) newReader(
 		ctx,
 		fs,
 		tbl.tableDef,
-		-1,
 		ts,
 		readerNumber-1,
 		expr,
@@ -2280,7 +2298,8 @@ func (tbl *txnTable) PKPersistedBetween(
 							return false
 						}
 						var exist bool
-						if exist = blkBfIdx.MayContainsAny(keys); !exist {
+						lowerBound, upperBound := blkMeta.MustGetColumn(uint16(primaryIdx)).ZoneMap().SubVecIn(keys)
+						if exist = blkBfIdx.MayContainsAny(keys, lowerBound, upperBound); !exist {
 							return true
 						}
 					}
@@ -2305,12 +2324,37 @@ func (tbl *txnTable) PKPersistedBetween(
 		return true, err
 	}
 
+	var filter blockio.ReadFilter
+	buildFilter := func() blockio.ReadFilter {
+		//keys must be sorted.
+		keys.InplaceSort()
+		bytes, _ := keys.MarshalBinary()
+		colExpr := newColumnExpr(0, plan2.MakePlan2Type(keys.GetType()), "pk")
+		inExpr := plan2.MakeInExpr(
+			tbl.proc.Load().Ctx,
+			colExpr,
+			int32(keys.Length()),
+			bytes,
+			false)
+
+		_, _, filter := getNonCompositePKSearchFuncByExpr(
+			inExpr,
+			"pk",
+			tbl.proc.Load())
+		return filter
+	}
+
+	var unsortedFilter blockio.ReadFilter
+	buildUnsortedFilter := func() blockio.ReadFilter {
+		return getNonSortedPKSearchFuncByPKVec(keys)
+	}
+
 	//read block ,check if keys exist in the block.
 	pkDef := tbl.tableDef.Cols[tbl.primaryIdx]
 	pkSeq := pkDef.Seqnum
 	pkType := types.T(pkDef.Typ.Id).ToType()
 	for _, blk := range candidateBlks {
-		bat, err := blockio.LoadColumns(
+		bat, release, err := blockio.LoadColumns(
 			ctx,
 			[]uint16{uint16(pkSeq)},
 			[]types.Type{pkType},
@@ -2322,23 +2366,23 @@ func (tbl *txnTable) PKPersistedBetween(
 		if err != nil {
 			return true, err
 		}
+		defer release()
 
-		colExpr := newColumnExpr(0, plan2.MakePlan2Type(keys.GetType()), "pk")
+		if !blk.Sorted {
+			if unsortedFilter == nil {
+				unsortedFilter = buildUnsortedFilter()
+			}
+			sels := unsortedFilter(bat.Vecs)
+			if len(sels) > 0 {
+				return true, nil
+			}
+			continue
+		}
 
-		keys.InplaceSort()
-		bytes, _ := keys.MarshalBinary()
-		inExpr := plan2.MakeInExpr(
-			tbl.proc.Load().Ctx,
-			colExpr,
-			int32(keys.Length()),
-			bytes,
-			false)
-
-		_, _, filter := getNonCompositePKSearchFuncByExpr(
-			inExpr,
-			"pk",
-			keys.GetType().Oid,
-			tbl.proc.Load())
+		//for sorted block, we can use binary search to find the keys.
+		if filter == nil {
+			filter = buildFilter()
+		}
 		sels := filter(bat.Vecs)
 		if len(sels) > 0 {
 			return true, nil
@@ -2371,13 +2415,14 @@ func (tbl *txnTable) PrimaryKeysMayBeModified(
 	if !flushed {
 		return false, nil
 	}
-	//need check pk whether exist on S3 block.
+	//for mo_tables, mo_database, mo_columns, pk always exist in memory.
 	if tbl.tableName == catalog.MO_DATABASE ||
 		tbl.tableName == catalog.MO_TABLES ||
 		tbl.tableName == catalog.MO_COLUMNS {
 		logutil.Warnf("mo table:%s always exist in memory", tbl.tableName)
 		return true, nil
 	}
+	//need check pk whether exist on S3 block.
 	return tbl.PKPersistedBetween(
 		snap,
 		from,

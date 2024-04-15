@@ -1,3 +1,4 @@
+SET GLOBAL experimental_ivf_index = 1;
 create table vector_index_01(a int primary key, b vecf32(128),c int,key c_k(c));
 create index idx01 using ivfflat on vector_index_01(b) lists=5 op_type "vector_l2_ops";
 insert into vector_index_01 values(9774 ,"[1, 0, 1, 6, 6, 17, 47, 39, 2, 0, 1, 25, 27, 10, 56, 130, 18, 5, 2, 6, 15, 2, 19, 130, 42, 28, 1, 1, 2, 1, 0, 5, 0, 2, 4, 4, 31, 34, 44, 35, 9, 3, 8, 11, 33, 12, 61, 130, 130, 17, 0, 1, 6, 2, 9, 130, 111, 36, 0, 0, 11, 9, 1, 12, 2, 100, 130, 28, 7, 2, 6, 7, 9, 27, 130, 83, 5, 0, 1, 18, 130, 130, 84, 9, 0, 0, 2, 24, 111, 24, 0, 1, 37, 24, 2, 10, 12, 62, 33, 3, 0, 0, 0, 1, 3, 16, 106, 28, 0, 0, 0, 0, 17, 46, 85, 10, 0, 0, 1, 4, 11, 4, 2, 2, 9, 14, 8, 8]",3),(9775,"[0, 1, 1, 3, 0, 3, 46, 20, 1, 4, 17, 9, 1, 17, 108, 15, 0, 3, 37, 17, 6, 15, 116, 16, 6, 1, 4, 7, 7, 7, 9, 6, 0, 8, 10, 4, 26, 129, 27, 9, 0, 0, 5, 2, 11, 129, 129, 12, 103, 4, 0, 0, 2, 31, 129, 129, 94, 4, 0, 0, 0, 3, 13, 42, 0, 15, 38, 2, 70, 129, 1, 0, 5, 10, 40, 12, 74, 129, 6, 1, 129, 39, 6, 1, 2, 22, 9, 33, 122, 13, 0, 0, 0, 0, 5, 23, 4, 11, 9, 12, 45, 38, 1, 0, 0, 4, 36, 38, 57, 32, 0, 0, 82, 22, 9, 5, 13, 11, 3, 94, 35, 3, 0, 0, 0, 1, 16, 97]",5),(9776,"[10, 3, 8, 5, 48, 26, 5, 16, 17, 0, 0, 2, 132, 53, 1, 16, 112, 6, 0, 0, 7, 2, 1, 48, 48, 15, 18, 31, 3, 0, 0, 9, 6, 10, 19, 27, 50, 46, 17, 9, 18, 1, 4, 48, 132, 23, 3, 5, 132, 9, 4, 3, 11, 0, 2, 46, 84, 12, 10, 10, 1, 0, 12, 76, 26, 22, 16, 26, 35, 15, 3, 16, 15, 1, 51, 132, 125, 8, 1, 2, 132, 51, 67, 91, 8, 0, 0, 30, 126, 39, 32, 38, 4, 0, 1, 12, 24, 2, 2, 2, 4, 7, 2, 19, 93, 19, 70, 92, 2, 3, 1, 21, 36, 58, 132, 94, 0, 0, 0, 0, 21, 25, 57, 48, 1, 0, 0, 1]",3);
@@ -64,10 +65,9 @@ internal error: invalid op_type. not of type 'vector_l2_ops'
 create table vector_index_04(a int primary key, b vecf32(3),c vecf32(4));
 insert into vector_index_04 values(1,"[56,23,6]","[0.25,0.14,0.88,0.0001]"),(2,"[77,45,3]","[1.25,5.25,8.699,4.25]"),(3,"[8,56,3]","[9.66,5.22,1.22,7.02]");
 create index idx01 using ivfflat on vector_index_04(c) lists=5 op_type "vector_l2_ops";
-create index idx02 using ivfflat on vector_index_04(c) lists=4 op_type "vector_l2_ops";
 show create table vector_index_04;
 Table    Create Table
-vector_index_04    CREATE TABLE `vector_index_04` (\n`a` INT NOT NULL,\n`b` VECF32(3) DEFAULT NULL,\n`c` VECF32(4) DEFAULT NULL,\nPRIMARY KEY (`a`),\nKEY `idx01` USING ivfflat (`c`) lists = 5  op_type 'vector_l2_ops' ,\nKEY `idx02` USING ivfflat (`c`) lists = 4  op_type 'vector_l2_ops' \n)
+vector_index_04    CREATE TABLE `vector_index_04` (\n`a` INT NOT NULL,\n`b` VECF32(3) DEFAULT NULL,\n`c` VECF32(4) DEFAULT NULL,\nPRIMARY KEY (`a`),\nKEY `idx01` USING ivfflat (`c`) lists = 5  op_type 'vector_l2_ops' \n)
 desc vector_index_04;
 Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    NO    PRI    null        
@@ -80,7 +80,7 @@ internal error: Can't REINDEX 'idx'; check that column/key exists
 alter table vector_index_04 alter reindex idx01 ivfflat lists=8;
 show create table vector_index_04;
 Table    Create Table
-vector_index_04    CREATE TABLE `vector_index_04` (\n`a` INT NOT NULL,\n`b` VECF32(3) DEFAULT NULL,\n`c` VECF32(4) DEFAULT NULL,\nPRIMARY KEY (`a`),\nKEY `idx01` USING ivfflat (`c`) lists = 8  op_type 'vector_l2_ops' ,\nKEY `idx02` USING ivfflat (`c`) lists = 4  op_type 'vector_l2_ops' \n)
+vector_index_04    CREATE TABLE `vector_index_04` (\n`a` INT NOT NULL,\n`b` VECF32(3) DEFAULT NULL,\n`c` VECF32(4) DEFAULT NULL,\nPRIMARY KEY (`a`),\nKEY `idx01` USING ivfflat (`c`) lists = 8  op_type 'vector_l2_ops' \n)
 desc vector_index_04;
 Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    NO    PRI    null        
@@ -89,8 +89,6 @@ c    VECF32(4)    YES    MUL    null
 select * from vector_index_04 order by L2_DISTANCE(c,"[9.6,57.22,19.2,78.02]") limit 3;
 a    b    c
 9    [8, 5.6, 13]    [9.6, 57.22, 19.2, 78.02]
-8    [17.7, 4.25, 3]    [1.215, 5.25, 8.9, 47.25]
-5    [177, 425, 30]    [11.25, 51.25, 80.699, 44.25]
 alter table vector_index_04 alter reindex idx01 ivfflat lists=3;
 create table vector_index_05(a int primary key, b vecf32(3),c vecf32(4));
 create index idx01 using ivfflat on vector_index_05(c) lists=4 op_type "vector_l2_ops";
@@ -151,29 +149,28 @@ select * from  vector_index_08;
 a    b    c
 insert into vector_index_08 values(9774 ,"[1, 0, 1, 6, 6, 17, 47, 39, 2, 0, 1, 25, 27, 10, 56, 130, 18, 5, 2, 6, 15, 2, 19, 130, 42, 28, 1, 1, 2, 1, 0, 5, 0, 2, 4, 4, 31, 34, 44, 35, 9, 3, 8, 11, 33, 12, 61, 130, 130, 17, 0, 1, 6, 2, 9, 130, 111, 36, 0, 0, 11, 9, 1, 12, 2, 100, 130, 28, 7, 2, 6, 7, 9, 27, 130, 83, 5, 0, 1, 18, 130, 130, 84, 9, 0, 0, 2, 24, 111, 24, 0, 1, 37, 24, 2, 10, 12, 62, 33, 3, 0, 0, 0, 1, 3, 16, 106, 28, 0, 0, 0, 0, 17, 46, 85, 10, 0, 0, 1, 4, 11, 4, 2, 2, 9, 14, 8, 8]",3),(9775,"[0, 1, 1, 3, 0, 3, 46, 20, 1, 4, 17, 9, 1, 17, 108, 15, 0, 3, 37, 17, 6, 15, 116, 16, 6, 1, 4, 7, 7, 7, 9, 6, 0, 8, 10, 4, 26, 129, 27, 9, 0, 0, 5, 2, 11, 129, 129, 12, 103, 4, 0, 0, 2, 31, 129, 129, 94, 4, 0, 0, 0, 3, 13, 42, 0, 15, 38, 2, 70, 129, 1, 0, 5, 10, 40, 12, 74, 129, 6, 1, 129, 39, 6, 1, 2, 22, 9, 33, 122, 13, 0, 0, 0, 0, 5, 23, 4, 11, 9, 12, 45, 38, 1, 0, 0, 4, 36, 38, 57, 32, 0, 0, 82, 22, 9, 5, 13, 11, 3, 94, 35, 3, 0, 0, 0, 1, 16, 97]",5),(9776,"[10, 3, 8, 5, 48, 26, 5, 16, 17, 0, 0, 2, 132, 53, 1, 16, 112, 6, 0, 0, 7, 2, 1, 48, 48, 15, 18, 31, 3, 0, 0, 9, 6, 10, 19, 27, 50, 46, 17, 9, 18, 1, 4, 48, 132, 23, 3, 5, 132, 9, 4, 3, 11, 0, 2, 46, 84, 12, 10, 10, 1, 0, 12, 76, 26, 22, 16, 26, 35, 15, 3, 16, 15, 1, 51, 132, 125, 8, 1, 2, 132, 51, 67, 91, 8, 0, 0, 30, 126, 39, 32, 38, 4, 0, 1, 12, 24, 2, 2, 2, 4, 7, 2, 19, 93, 19, 70, 92, 2, 3, 1, 21, 36, 58, 132, 94, 0, 0, 0, 0, 21, 25, 57, 48, 1, 0, 0, 1]",3);
 alter table vector_index_08 add column d vecf32(3) not null after c;
-no such table vector_index.__mo_index_secondary_018e5b40-2df3-7080-8788-e52bf869952d
 create index idx02 using ivfflat on vector_index_08(d) lists=3 op_type "vector_l2_ops";
-invalid input: column 'd' is not exist
 show create table vector_index_08;
 Table    Create Table
-vector_index_08    CREATE TABLE `vector_index_08` (\n`a` INT NOT NULL AUTO_INCREMENT,\n`b` VECF32(128) DEFAULT NULL,\n`c` INT DEFAULT NULL,\nPRIMARY KEY (`a`),\nKEY `c_k` (`c`),\nKEY `idx01` USING ivfflat (`b`) lists = 3  op_type 'vector_l2_ops' \n)
+vector_index_08    CREATE TABLE `vector_index_08` (\n`a` INT NOT NULL AUTO_INCREMENT,\n`b` VECF32(128) DEFAULT NULL,\n`c` INT DEFAULT NULL,\n`d` VECF32(3) NOT NULL,\nPRIMARY KEY (`a`),\nKEY `c_k` (`c`),\nKEY `idx01` USING ivfflat (`b`) lists = 3  op_type 'vector_l2_ops' ,\nKEY `idx02` USING ivfflat (`d`) lists = 3  op_type 'vector_l2_ops' \n)
 insert into vector_index_08(d) values ("[2.36,5.021,9.222]");
-Unknown column 'd' in 'vector_index_08'
 insert into vector_index_08(d) values ("[8.555,2.11,7.22]");
-Unknown column 'd' in 'vector_index_08'
-select * from vector_index_08 where a>9774 order by  L2_DISTANCE(c,"[1.02,0.2,3.2]") desc limit 3;
-invalid argument function l2_distance, bad value [INT VARCHAR]
+select * from vector_index_08 where a>9774 order by  L2_DISTANCE(d,"[1.02,0.2,3.2]") desc limit 2;
+a    b    c    d
+9778    null    null    [8.555, 2.11, 7.22]
+9777    null    null    [2.36, 5.021, 9.222]
 alter table vector_index_08 rename column d to e;
-Unknown column 'd' in 'vector_index_08'
-select * from vector_index_08 where a>9775 order by  L2_DISTANCE(c,"[1.02,0.2,3.2]") desc limit 2;
-invalid argument function l2_distance, bad value [INT VARCHAR]
-alter table vector_index_08 drop column d;
-Can't DROP 'd'; check that column/key exists
+select * from vector_index_08 where a>9775 order by  L2_DISTANCE(e,"[1.02,0.2,3.2]") desc limit 2;
+a    b    c    e
+9776    [10, 3, 8, 5, 48, 26, 5, 16, 17, 0, 0, 2, 132, 53, 1, 16, 112, 6, 0, 0, 7, 2, 1, 48, 48, 15, 18, 31, 3, 0, 0, 9, 6, 10, 19, 27, 50, 46, 17, 9, 18, 1, 4, 48, 132, 23, 3, 5, 132, 9, 4, 3, 11, 0, 2, 46, 84, 12, 10, 10, 1, 0, 12, 76, 26, 22, 16, 26, 35, 15, 3, 16, 15, 1, 51, 132, 125, 8, 1, 2, 132, 51, 67, 91, 8, 0, 0, 30, 126, 39, 32, 38, 4, 0, 1, 12, 24, 2, 2, 2, 4, 7, 2, 19, 93, 19, 70, 92, 2, 3, 1, 21, 36, 58, 132, 94, 0, 0, 0, 0, 21, 25, 57, 48, 1, 0, 0, 1]    3    [0, 0, 0]
+alter table vector_index_08 drop column e;
 select * from vector_index_08;
 a    b    c
-9774    [1, 0, 1, 6, 6, 17, 47, 39, 2, 0, 1, 25, 27, 10, 56, 130, 18, 5, 2, 6, 15, 2, 19, 130, 42, 28, 1, 1, 2, 1, 0, 5, 0, 2, 4, 4, 31, 34, 44, 35, 9, 3, 8, 11, 33, 12, 61, 130, 130, 17, 0, 1, 6, 2, 9, 130, 111, 36, 0, 0, 11, 9, 1, 12, 2, 100, 130, 28, 7, 2, 6, 7, 9, 27, 130, 83, 5, 0, 1, 18, 130, 130, 84, 9, 0, 0, 2, 24, 111, 24, 0, 1, 37, 24, 2, 10, 12, 62, 33, 3, 0, 0, 0, 1, 3, 16, 106, 28, 0, 0, 0, 0, 17, 46, 85, 10, 0, 0, 1, 4, 11, 4, 2, 2, 9, 14, 8, 8]    3
-9775    [0, 1, 1, 3, 0, 3, 46, 20, 1, 4, 17, 9, 1, 17, 108, 15, 0, 3, 37, 17, 6, 15, 116, 16, 6, 1, 4, 7, 7, 7, 9, 6, 0, 8, 10, 4, 26, 129, 27, 9, 0, 0, 5, 2, 11, 129, 129, 12, 103, 4, 0, 0, 2, 31, 129, 129, 94, 4, 0, 0, 0, 3, 13, 42, 0, 15, 38, 2, 70, 129, 1, 0, 5, 10, 40, 12, 74, 129, 6, 1, 129, 39, 6, 1, 2, 22, 9, 33, 122, 13, 0, 0, 0, 0, 5, 23, 4, 11, 9, 12, 45, 38, 1, 0, 0, 4, 36, 38, 57, 32, 0, 0, 82, 22, 9, 5, 13, 11, 3, 94, 35, 3, 0, 0, 0, 1, 16, 97]    5
-9776    [10, 3, 8, 5, 48, 26, 5, 16, 17, 0, 0, 2, 132, 53, 1, 16, 112, 6, 0, 0, 7, 2, 1, 48, 48, 15, 18, 31, 3, 0, 0, 9, 6, 10, 19, 27, 50, 46, 17, 9, 18, 1, 4, 48, 132, 23, 3, 5, 132, 9, 4, 3, 11, 0, 2, 46, 84, 12, 10, 10, 1, 0, 12, 76, 26, 22, 16, 26, 35, 15, 3, 16, 15, 1, 51, 132, 125, 8, 1, 2, 132, 51, 67, 91, 8, 0, 0, 30, 126, 39, 32, 38, 4, 0, 1, 12, 24, 2, 2, 2, 4, 7, 2, 19, 93, 19, 70, 92, 2, 3, 1, 21, 36, 58, 132, 94, 0, 0, 0, 0, 21, 25, 57, 48, 1, 0, 0, 1]    3
+9774    [1, 0, 1, 6, 6, 17, 47, 39, 2, 0, 1, 25, 27, 10, 56, 130, 18, 5, 2, 6, 15, 2, 19, 130, 42, 28, 1, 1, 2, 1, 0, 5, 0, 2, 4, 4, 31, 34, 44, 35, 9, 3, 8, 11, 33, 12, 61, 130, 130, 17, 0, 1, 6, 2, 9, 130, 111, 36, 0, 0, 11, 9, 1, 12, 2, 100, 130, 28, 7, 2, 6, 7, 9, 27, 130, 83, 5, 0, 1, 18, 130, 130, 84, 9, 0, 0, 2, 24, 111, 24, 0, 1, 37, 24, 2, 10, 12, 62, 33, 3, 0, 0, 0, 1, 3, 16, 106, 28, 0, 0, 0, 0, 17, 46, 85, 10, 0, 0, 1, 4, 11, 4, 2, 2, 9, 14, 8, 8]    3    [0, 0, 0]
+9775    [0, 1, 1, 3, 0, 3, 46, 20, 1, 4, 17, 9, 1, 17, 108, 15, 0, 3, 37, 17, 6, 15, 116, 16, 6, 1, 4, 7, 7, 7, 9, 6, 0, 8, 10, 4, 26, 129, 27, 9, 0, 0, 5, 2, 11, 129, 129, 12, 103, 4, 0, 0, 2, 31, 129, 129, 94, 4, 0, 0, 0, 3, 13, 42, 0, 15, 38, 2, 70, 129, 1, 0, 5, 10, 40, 12, 74, 129, 6, 1, 129, 39, 6, 1, 2, 22, 9, 33, 122, 13, 0, 0, 0, 0, 5, 23, 4, 11, 9, 12, 45, 38, 1, 0, 0, 4, 36, 38, 57, 32, 0, 0, 82, 22, 9, 5, 13, 11, 3, 94, 35, 3, 0, 0, 0, 1, 16, 97]    5    [0, 0, 0]
+9776    [10, 3, 8, 5, 48, 26, 5, 16, 17, 0, 0, 2, 132, 53, 1, 16, 112, 6, 0, 0, 7, 2, 1, 48, 48, 15, 18, 31, 3, 0, 0, 9, 6, 10, 19, 27, 50, 46, 17, 9, 18, 1, 4, 48, 132, 23, 3, 5, 132, 9, 4, 3, 11, 0, 2, 46, 84, 12, 10, 10, 1, 0, 12, 76, 26, 22, 16, 26, 35, 15, 3, 16, 15, 1, 51, 132, 125, 8, 1, 2, 132, 51, 67, 91, 8, 0, 0, 30, 126, 39, 32, 38, 4, 0, 1, 12, 24, 2, 2, 2, 4, 7, 2, 19, 93, 19, 70, 92, 2, 3, 1, 21, 36, 58, 132, 94, 0, 0, 0, 0, 21, 25, 57, 48, 1, 0, 0, 1]    3    [0, 0, 0]
+9777    null    null    [2.36, 5.021, 9.222]
+9778    null    null    [8.555, 2.11, 7.22]
 create table vector_index_09(a int primary key, b vecf32(128),c int,key c_k(c));
 create index idx01 using ivfflat on vector_index_09(b) lists=3 op_type "vector_l2_ops";
 insert into vector_index_09 values(9774 ,NULL,3),(9775,NULL,10);
@@ -257,3 +254,4 @@ show create table vector_index_10;
 Table    Create Table
 vector_index_10    CREATE TABLE `vector_index_10` (\n`a` INT NOT NULL,\n`b` VECF32(128) DEFAULT NULL,\n`c` INT DEFAULT NULL,\nPRIMARY KEY (`a`),\nKEY `c_k` (`c`),\nKEY `idx01` USING ivfflat (`b`) lists = 2  op_type 'vector_l2_ops' \n)
 drop table vector_index_10;
+SET GLOBAL experimental_ivf_index = 0;
