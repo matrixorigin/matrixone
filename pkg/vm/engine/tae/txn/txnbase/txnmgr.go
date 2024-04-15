@@ -244,7 +244,7 @@ func (mgr *TxnManager) EnqueueFlushing(op any) (err error) {
 
 func (mgr *TxnManager) heartbeat(ctx context.Context) {
 	defer mgr.wg.Done()
-	heartbeatTicker := time.NewTicker(time.Second * 1000)
+	heartbeatTicker := time.NewTicker(time.Millisecond * 2)
 	for {
 		select {
 		case <-mgr.ctx.Done():
@@ -498,30 +498,41 @@ func (mgr *TxnManager) dequeuePreparing(items ...any) {
 	})
 }
 
-func (mgr *TxnManager) registerLogEntryCBs(e entry2.Entry, op *OpTxn, doFlush bool) {
-	if doFlush {
-		// delay marshal to parallelize it
-		e.RegisterBeforeFlushCBs(func() error {
-			var buf []byte
-			var ierr error
-			if buf, ierr = op.Txn.GetStore().MarshalBinary(); ierr != nil {
-				return ierr
-			}
-
-			if ierr = e.SetPayload(buf); ierr != nil {
-				return ierr
-			}
-			return nil
-		})
-
-		// collect log tail after marshal done
-		e.RegisterBeforeFlushCBs(func() error {
-			mgr.CommitListener.OnEndPrepareWAL(op.Txn)
-			return nil
-		})
+func (mgr *TxnManager) registerLogEntryMarshalCB(e entry2.Entry, op *OpTxn) {
+	if e == nil {
+		return
 	}
 
-	e.RegisterAfterFlushCBs(func() error {
+	// delay marshal to parallelize it
+	e.RegisterBeforeFlushCBs(func() error {
+		var buf []byte
+		var ierr error
+		if buf, ierr = op.Txn.GetStore().MarshalBinary(); ierr != nil {
+			return ierr
+		}
+
+		if ierr = e.SetPayload(buf); ierr != nil {
+			return ierr
+		}
+		return nil
+	})
+}
+
+func (mgr *TxnManager) registerCollectLogTailCB(e entry2.Entry, op *OpTxn) {
+	if e == nil {
+		mgr.CommitListener.OnEndPrepareWAL(op.Txn)
+		return
+	}
+
+	// collect log tail after marshal done
+	e.RegisterBeforeFlushCBs(func() error {
+		mgr.CommitListener.OnEndPrepareWAL(op.Txn)
+		return nil
+	})
+}
+
+func (mgr *TxnManager) registerPostFlushCB(e entry2.Entry, op *OpTxn) {
+	postCallback := func() {
 		if err := op.Txn.WaitPrepared(op.ctx); err != nil {
 			panic(err)
 		}
@@ -530,6 +541,15 @@ func (mgr *TxnManager) registerLogEntryCBs(e entry2.Entry, op *OpTxn, doFlush bo
 		} else {
 			mgr.on1PCPrepared(op)
 		}
+	}
+
+	if e == nil {
+		postCallback()
+		return
+	}
+
+	e.RegisterAfterFlushCBs(func() error {
+		postCallback()
 		return nil
 	})
 }
@@ -540,17 +560,17 @@ func (mgr *TxnManager) onFlushWal(items ...any) {
 	for _, item := range items {
 		op := item.(*OpTxn)
 		store := op.Txn.GetStore()
-		fmt.Println(store)
+		if _, ok := store.(*heartbeatStore); !ok {
+			fmt.Printf("on flush wal: %T\n", store)
+		}
 		if op.Txn.GetError() == nil && op.Op == OpCommit || op.Op == OpPrepare {
 			if entry, err = op.Txn.PrepareWAL(); err != nil {
 				panic(err)
 			}
 
-			if entry == nil {
-				continue
-			}
+			mgr.registerLogEntryMarshalCB(entry, op)
+			mgr.registerCollectLogTailCB(entry, op)
 
-			mgr.registerLogEntryCBs(entry, op, true)
 			if err = op.Txn.GetStore().FlushWal(wal.GroupPrepare, entry); err != nil {
 				panic(err)
 			}
@@ -566,7 +586,7 @@ func (mgr *TxnManager) onFlushWal(items ...any) {
 			}
 		}
 
-		mgr.registerLogEntryCBs(entry, op, false)
+		mgr.registerPostFlushCB(entry, op)
 	}
 }
 
