@@ -1632,7 +1632,7 @@ func makeOneDeletePlan(
 		lockTarget := &plan.LockTarget{
 			TableId:            delNodeInfo.tableDef.TblId,
 			PrimaryColIdxInBat: int32(delNodeInfo.pkPos),
-			PrimaryColTyp:      delNodeInfo.pkTyp,
+			PrimaryColTyp:      *delNodeInfo.pkTyp,
 			RefreshTsIdxInBat:  -1, //unsupport now
 			// FilterColIdxInBat:  int32(delNodeInfo.partitionIdx),
 			LockTable: delNodeInfo.lockTable,
@@ -3537,7 +3537,7 @@ func makePreUpdateDeletePlan(
 	lockTarget := &plan.LockTarget{
 		TableId:            delCtx.tableDef.TblId,
 		PrimaryColIdxInBat: int32(pkPos),
-		PrimaryColTyp:      pkTyp,
+		PrimaryColTyp:      *pkTyp,
 		RefreshTsIdxInBat:  -1,
 		LockTable:          false,
 	}
@@ -3626,7 +3626,7 @@ func makePreUpdateDeletePlan(
 		lockTarget := &plan.LockTarget{
 			TableId:            delCtx.tableDef.TblId,
 			PrimaryColIdxInBat: newPkPos,
-			PrimaryColTyp:      pkTyp,
+			PrimaryColTyp:      *pkTyp,
 			RefreshTsIdxInBat:  -1, //unsupport now
 			LockTable:          false,
 		}
@@ -3716,7 +3716,7 @@ func appendLockNode(
 	lockTarget := &plan.LockTarget{
 		TableId:            tableDef.TblId,
 		PrimaryColIdxInBat: int32(pkPos),
-		PrimaryColTyp:      pkTyp,
+		PrimaryColTyp:      *pkTyp,
 		RefreshTsIdxInBat:  -1, //unsupport now
 		LockTable:          lockTable,
 		Block:              block,

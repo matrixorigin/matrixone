@@ -849,7 +849,7 @@ message ExternScan {
 message LockTarget {
 	uint64 table_id           	= 1;
 	int32 primary_col_idx_in_bat  = 2;
-	Type primary_col_typ          = 3;
+	Type primary_col_typ          = 3 [(gogoproto.nullable) = false];
 	int32 refresh_ts_idx_in_bat   = 4;
 	int32 filter_col_idx_in_bat   = 5;
 	bool lock_table 				= 6;
