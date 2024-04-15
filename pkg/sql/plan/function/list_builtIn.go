@@ -1434,10 +1434,9 @@ var supportedStringBuiltIns = []FuncNew{
 			},
 		},
 	},
-
-	// function `encode`
+	// to_base64
 	{
-		functionId: ENCODE,
+		functionId: TO_BASE64,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
 		checkFn:    fixedTypeMatch,
@@ -1445,40 +1444,40 @@ var supportedStringBuiltIns = []FuncNew{
 		Overloads: []overload{
 			{
 				overloadId: 0,
-				args:       []types.T{types.T_varchar, types.T_varchar},
+				args:       []types.T{types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_text.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return Encode
+					return ToBase64
 				},
 			},
 			{
 				overloadId: 1,
-				args:       []types.T{types.T_array_float32, types.T_varchar},
+				args:       []types.T{types.T_array_float32},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_text.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return Encode
+					return ToBase64
 				},
 			},
 			{
 				overloadId: 2,
-				args:       []types.T{types.T_array_float64, types.T_varchar},
+				args:       []types.T{types.T_array_float64},
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_text.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return Encode
+					return ToBase64
 				},
 			},
 		},
 	},
 
-	// function `decode`
+	// from_base64
 	{
-		functionId: DECODE,
+		functionId: FROM_BASE64,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
 		checkFn:    fixedTypeMatch,
@@ -1486,12 +1485,12 @@ var supportedStringBuiltIns = []FuncNew{
 		Overloads: []overload{
 			{
 				overloadId: 0,
-				args:       []types.T{types.T_varchar, types.T_varchar},
+				args:       []types.T{types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_blob.ToType()
+					return types.T_varchar.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return Decode
+					return FromBase64
 				},
 			},
 		},
@@ -2723,6 +2722,26 @@ var supportedMathBuiltIns = []FuncNew{
 					return HexUint64
 				},
 			},
+			{
+				overloadId: 4,
+				args:       []types.T{types.T_array_float32},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return HexArray
+				},
+			},
+			{
+				overloadId: 5,
+				args:       []types.T{types.T_array_float64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return HexArray
+				},
+			},
 		},
 	},
 
@@ -2738,7 +2757,7 @@ var supportedMathBuiltIns = []FuncNew{
 				overloadId: 0,
 				args:       []types.T{types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_blob.ToType()
+					return types.T_varchar.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
 					return Unhex
@@ -5912,8 +5931,8 @@ var supportedOthersBuiltIns = []FuncNew{
 									col, _ := columnNames.GetStrValue(i)
 									coltypes, _ := columnTypes.GetStrValue(i)
 									if !null2 {
-										tuples, _, _, err := types.DecodeTuple(value)
-										scales := make([]int32, len(coltypes))
+										tuples, _, schema, err := types.DecodeTuple(value)
+										scales := make([]int32, max(len(coltypes), len(schema)))
 										for j := range coltypes {
 											scales[j] = int32(coltypes[j])
 										}

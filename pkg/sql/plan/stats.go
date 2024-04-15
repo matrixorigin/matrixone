@@ -982,7 +982,7 @@ func foldTableScanFilters(proc *process.Process, qry *Query, nodeId int32) error
 	return nil
 }
 
-func recalcStatsByRuntimeFilter(node *plan.Node, runtimeFilterSel float64) {
+func recalcStatsByRuntimeFilter(node *plan.Node, joinNode *plan.Node, runtimeFilterSel float64) {
 	if node.NodeType != plan.Node_TABLE_SCAN {
 		return
 	}
@@ -992,6 +992,11 @@ func recalcStatsByRuntimeFilter(node *plan.Node, runtimeFilterSel float64) {
 		node.Stats.Cost = 1
 	}
 	node.Stats.BlockNum = int32(node.Stats.Outcnt/2) + 1
+	if joinNode.JoinType == plan.Node_RIGHT || joinNode.BuildOnLeft {
+		if !joinNode.Stats.HashmapStats.Shuffle {
+			node.Stats.ForceOneCN = true
+		}
+	}
 }
 
 func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
@@ -1031,11 +1036,11 @@ func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
 	stats.BlockNum = int32(float64(s.BlockNumber)*blockSel) + 1
 
 	// if there is a limit, outcnt is limit number
-	if node.Limit != nil && len(node.FilterList) == 0 {
+	if node.Limit != nil {
 		if cExpr, ok := node.Limit.Expr.(*plan.Expr_Lit); ok {
 			if c, ok := cExpr.Lit.Value.(*plan.Literal_I64Val); ok {
 				stats.Outcnt = float64(c.I64Val)
-				stats.BlockNum = int32((stats.Outcnt / DefaultBlockMaxRows) + 1)
+				stats.BlockNum = int32(((stats.Outcnt / stats.Selectivity) / DefaultBlockMaxRows) + 1)
 				stats.Cost = float64(stats.BlockNum * DefaultBlockMaxRows)
 			}
 		}
@@ -1240,6 +1245,7 @@ func DeepCopyStats(stats *plan.Stats) *plan.Stats {
 		TableCnt:     stats.TableCnt,
 		Selectivity:  stats.Selectivity,
 		HashmapStats: hashmapStats,
+		ForceOneCN:   stats.ForceOneCN,
 	}
 }
 

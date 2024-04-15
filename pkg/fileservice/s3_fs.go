@@ -264,7 +264,7 @@ func (s *S3FS) PrefetchFile(ctx context.Context, filePath string) error {
 	} else {
 		wait()
 	}
-	statistic.StatsInfoFromContext(ctx).AddLockTimeConsumption(time.Since(startLock))
+	statistic.StatsInfoFromContext(ctx).AddS3FSPrefetchFileIOLockTimeConsumption(time.Since(startLock))
 
 	// load to disk cache
 	if s.diskCache != nil {
@@ -410,7 +410,7 @@ func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
 		wait()
 	}
 	stats := statistic.StatsInfoFromContext(ctx)
-	stats.AddLockTimeConsumption(time.Since(startLock))
+	stats.AddS3FSReadIOLockTimeConsumption(time.Since(startLock))
 
 	allocator := s.allocator
 	if vector.Policy.Any(SkipMemoryCache) {
@@ -490,7 +490,7 @@ func (s *S3FS) ReadCache(ctx context.Context, vector *IOVector) (err error) {
 	} else {
 		wait()
 	}
-	statistic.StatsInfoFromContext(ctx).AddLockTimeConsumption(time.Since(startLock))
+	statistic.StatsInfoFromContext(ctx).AddS3FSReadCacheIOLockTimeConsumption(time.Since(startLock))
 
 	for _, cache := range vector.Caches {
 		cache := cache

@@ -148,16 +148,15 @@ func (c *Compile) reset() {
 	for i := range c.scope {
 		c.scope[i].release()
 	}
-	for i := range c.createdFuzzy {
-		c.createdFuzzy[i].release()
+	for i := range c.fuzzys {
+		c.fuzzys[i].release()
 	}
 
 	c.MessageBoard.Messages = c.MessageBoard.Messages[:0]
-	c.createdFuzzy = c.createdFuzzy[:0]
+	c.fuzzys = c.fuzzys[:0]
 	c.scope = c.scope[:0]
 	c.proc.CleanValueScanBatchs()
 	c.pn = nil
-	c.u = nil
 	c.fill = nil
 	c.affectRows.Store(0)
 	c.addr = ""
@@ -173,7 +172,6 @@ func (c *Compile) reset() {
 	c.cnList = c.cnList[:0]
 	c.stmt = nil
 	c.startAt = time.Time{}
-	c.fuzzy = nil
 	c.needLockMeta = false
 	c.isInternal = false
 	c.lastAllocID = 0
@@ -189,11 +187,6 @@ func (c *Compile) reset() {
 	}
 	for k := range c.cnLabel {
 		delete(c.cnLabel, k)
-	}
-	c.lock.Lock()
-	defer c.lock.Unlock()
-	for k := range c.runtimeFilterReceiverMap {
-		delete(c.runtimeFilterReceiverMap, k)
 	}
 }
 
@@ -224,7 +217,7 @@ func (c *Compile) SetTempEngine(ctx context.Context, te engine.Engine) {
 
 // Compile is the entrance of the compute-execute-layer.
 // It generates a scope (logic pipeline) for a query plan.
-func (c *Compile) Compile(ctx context.Context, pn *plan.Plan, u any, fill func(any, *batch.Batch) error) (err error) {
+func (c *Compile) Compile(ctx context.Context, pn *plan.Plan, fill func(*batch.Batch) error) (err error) {
 	start := time.Now()
 	defer func() {
 		v2.TxnStatementCompileDurationHistogram.Observe(time.Since(start).Seconds())
@@ -281,7 +274,6 @@ func (c *Compile) Compile(ctx context.Context, pn *plan.Plan, u any, fill func(a
 
 	// session info and callback function to write back query result.
 	// XXX u is really a bad name, I'm not sure if `session` or `user` will be more suitable.
-	c.u = u
 	c.fill = fill
 
 	c.pn = pn
@@ -553,7 +545,7 @@ func (c *Compile) prepareRetry(defChanged bool) (*Compile, error) {
 		}
 		c.pn = pn
 	}
-	if e = runC.Compile(c.proc.Ctx, c.pn, c.u, c.fill); e != nil {
+	if e = runC.Compile(c.proc.Ctx, c.pn, c.fill); e != nil {
 		return nil, e
 	}
 
@@ -575,6 +567,7 @@ func (c *Compile) canRetry(err error) bool {
 // run once
 func (c *Compile) runOnce() error {
 	var wg sync.WaitGroup
+	c.MessageBoard.Reset()
 	err := c.lockMetaTables()
 	if err != nil {
 		return err
@@ -626,14 +619,18 @@ func (c *Compile) runOnce() error {
 	}
 
 	// fuzzy filter not sure whether this insert / load obey duplicate constraints, need double check
-	if c.fuzzy != nil && c.fuzzy.cnt > 0 {
-		if c.fuzzy.cnt > 10 {
-			logutil.Warnf("fuzzy filter cnt is %d, may be too high", c.fuzzy.cnt)
+	if len(c.fuzzys) > 0 {
+		for _, f := range c.fuzzys {
+			if f != nil && f.cnt > 0 {
+				if f.cnt > 10 {
+					logutil.Warnf("fuzzy filter cnt is %d, may be too high", f.cnt)
+				}
+				err = f.backgroundSQLCheck(c)
+				if err != nil {
+					return err
+				}
+			}
 		}
-		err = c.fuzzy.backgroundSQLCheck(c)
-	}
-	if err != nil {
-		return err
 	}
 
 	//detect fk self refer
@@ -1059,7 +1056,6 @@ func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope, step int32) (*Sco
 		rs.Instructions = append(rs.Instructions, vm.Instruction{
 			Op: vm.Output,
 			Arg: output.NewArgument().
-				WithData(c.u).
 				WithFunc(c.fill),
 		})
 	}
@@ -2837,21 +2833,19 @@ func (c *Compile) compileFuzzyFilter(n *plan.Node, ns []*plan.Node, left []*Scop
 	if err != nil {
 		return nil, err
 	}
-	c.createdFuzzy = append(c.createdFuzzy, outData)
+	c.fuzzys = append(c.fuzzys, outData)
 	// wrap the collision key into c.fuzzy, for more information,
 	// please refer fuzzyCheck.go
 	rs.appendInstruction(vm.Instruction{
 		Op: vm.Output,
 		Arg: output.NewArgument().
-			WithData(outData).
 			WithFunc(
-				func(data any, bat *batch.Batch) error {
+				func(bat *batch.Batch) error {
 					if bat == nil || bat.IsEmpty() {
 						return nil
 					}
-					c.fuzzy = data.(*fuzzyCheck)
 					// the batch will contain the key that fuzzyCheck
-					if err := c.fuzzy.fill(c.ctx, bat); err != nil {
+					if err := outData.fill(c.ctx, bat); err != nil {
 						return err
 					}
 
@@ -4111,7 +4105,8 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 	}
 	// for multi cn in launch mode, put all payloads in current CN, maybe delete this in the future
 	// for an ordered scan, put all paylonds in current CN
-	if isLaunchMode(c.cnList) || len(n.OrderBy) > 0 {
+	// or sometimes force on one CN
+	if isLaunchMode(c.cnList) || len(n.OrderBy) > 0 || ranges.Len() < plan2.BlockNumForceOneCN || n.Stats.ForceOneCN {
 		return putBlocksInCurrentCN(c, ranges.GetAllBytes(), rel, n), partialResults, partialResultTypes, nil
 	}
 	// disttae engine

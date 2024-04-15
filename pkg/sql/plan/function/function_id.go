@@ -228,6 +228,8 @@ const (
 	SUBSTRING
 	ENCODE
 	DECODE
+	TO_BASE64
+	FROM_BASE64
 	SUBSTRING_INDEX
 	WEEK
 	WEEKDAY
@@ -570,6 +572,8 @@ var functionIdRegister = map[string]int32{
 	"load_file":                      LOAD_FILE,
 	"hex":                            HEX,
 	"unhex":                          UNHEX,
+	"to_base64":                      TO_BASE64,
+	"from_base64":                    FROM_BASE64,
 	"serial":                         SERIAL,
 	"serial_full":                    SERIAL_FULL,
 	"serial_extract":                 SERIAL_EXTRACT,
