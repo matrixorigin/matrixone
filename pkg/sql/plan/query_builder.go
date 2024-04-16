@@ -4061,6 +4061,9 @@ func (builder *QueryBuilder) resolveTsHint(tsExpr *tree.AtTimeStamp) (timestamp.
 					return timestamp.Timestamp{}, err
 				}
 				tsNano := ts.UTC().UnixNano()
+				if tsNano <= 0 {
+					return timestamp.Timestamp{}, moerr.NewInvalidArg(builder.GetContext(), "invalid timestamp value %s", lit.Sval)
+				}
 				return timestamp.Timestamp{PhysicalTime: tsNano}, nil
 			} else if tsExpr.Type == tree.ATTIMESTAMPSNAPSHOT {
 				tsValue, err := builder.compCtx.ResolveSnapshotTsWithSnapShotName(lit.Sval)
@@ -4071,6 +4074,9 @@ func (builder *QueryBuilder) resolveTsHint(tsExpr *tree.AtTimeStamp) (timestamp.
 			}
 		} else if lit, ok := exprLit.Lit.Value.(*plan.Literal_I64Val); ok {
 			if tsExpr.Type == tree.ATTIMESTAMPTIME {
+				if lit.I64Val <= 0 {
+					return timestamp.Timestamp{}, moerr.NewInvalidArg(builder.GetContext(), "invalid timestamp value %d", lit.I64Val)
+				}
 				return timestamp.Timestamp{PhysicalTime: lit.I64Val}, nil
 			} else if tsExpr.Type == tree.ATTIMESTAMPSNAPSHOT {
 				return timestamp.Timestamp{}, moerr.NewParseError(builder.GetContext(), "invalid timestamp hint for snapshot hint")
