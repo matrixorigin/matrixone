@@ -61,7 +61,8 @@ func startDynamicCluster(
 		if err := startProxyServiceCluster(ctx, cfg.ProxyServiceConfigsFiles, stopper, shutdownC); err != nil {
 			return err
 		}
-	} else {
+		// } else {
+
 		// TODO: make configurable for 6001
 		cnProxy = goetty.NewProxy("0.0.0.0:6001", logutil.GetGlobalLogger().Named("mysql-proxy"))
 		for i := 0; i < cfg.Dynamic.ServiceCount; i++ {
