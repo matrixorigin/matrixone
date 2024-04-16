@@ -93,7 +93,7 @@ func listMeta(ctx context.Context, fs fileservice.FileService, snapshot types.TS
 	})
 
 	for i, file := range metaFiles {
-		if snapshot.LessEq(&file.end) {
+		if snapshot.LessEq(&file.end) && file.start.IsEmpty(){
 			return metaFiles, i, nil
 		}
 	}
