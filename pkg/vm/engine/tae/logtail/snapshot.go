@@ -80,7 +80,6 @@ type objectInfo struct {
 	deltaLocation map[uint32]*objectio.Location
 	createAt      types.TS
 	deleteAt      types.TS
-	checkpointTS  types.TS
 }
 
 type SnapshotMeta struct {

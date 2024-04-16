@@ -309,20 +309,21 @@ func (c *checkpointCleaner) mergeGCFile() error {
 				max = ts
 				err = c.fs.Delete(*file)
 				if err != nil {
-					logutil.Errorf("DelFiles failed: %v", err.Error())
+					logutil.Errorf("DelFiles failed: %v, max: %v", err.Error(), max.ToString())
 					return err
 				}
 				*file = GCMetaDir + name
 			} else {
 				err = c.fs.Delete(GCMetaDir + name)
 				if err != nil {
-					logutil.Errorf("DelFiles failed: %v", err.Error())
+					logutil.Errorf("DelFiles failed: %v, max: %v", err.Error(), max.ToString())
 					return err
 				}
 			}
 		} else {
 			*file = GCMetaDir + name
 			max = ts
+			logutil.Debugf("mergeSnapAcctFile: %v, max: %v", name, max.ToString())
 		}
 		return nil
 	}
