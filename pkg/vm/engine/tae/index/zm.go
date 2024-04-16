@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -121,6 +122,11 @@ func (zm ZM) StringForCompose() string {
 
 func (zm ZM) String() string {
 	return zm.innerString(func(b []byte) string {
+		for _, c := range b {
+			if !strconv.IsPrint(rune(c)) {
+				return hex.EncodeToString(b)
+			}
+		}
 		return string(b)
 	})
 }
