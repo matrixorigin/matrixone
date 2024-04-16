@@ -53,9 +53,10 @@ message LockOptions {
   WaitPolicy          Policy            = 3;
   string              ForwardTo         = 4;
   bool                TableDefChanged   = 5;
-  uint32              Group             = 6;
-  Sharding            Sharding          = 7;
-  timestamp.Timestamp SnapShotTs        = 8 [(gogoproto.nullable) = false];
+  int64               RetryWait         = 6;
+  uint32              Group             = 7;
+  Sharding            Sharding          = 8;
+  timestamp.Timestamp SnapShotTs        = 9 [(gogoproto.nullable) = false];
 }
 
 // LockTable describes which CN manages a Table's Locks.
