@@ -17,7 +17,6 @@
 set -o nounset
 
 MO_WORKSPACE=$1
-SYSTEM_INIT_COMPLETED=$MO_WORKSPACE/mo-data/local/system_init_completed
 LAUNCH=$2
 PROXY=${3:-}
 
@@ -29,12 +28,11 @@ function launch_mo() {
 # this will wait mo all system init completed
 function wait_system_init() {
     for num in {1..300}  
-    do  
-        if [ -f "$SYSTEM_INIT_COMPLETED" ]; then
+    do
+        if MYSQL_PWD=111 mysql -h 127.0.0.1 -P 6001 -u dump -e "show databases;"; then
             echo "ok, cost $num seconds"
             return 0
-        fi 
-        echo "mo init not completed"
+        fi
         sleep 1
     done 
     return 1

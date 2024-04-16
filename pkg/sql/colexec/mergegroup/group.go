@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"runtime"
 )
 
 const argName = "merge_group"
@@ -201,6 +202,9 @@ func (ctr *container) processH8(bat *batch.Batch, proc *process.Process) error {
 		defer proc.PutBatch(bat)
 	}
 	for i := 0; i < count; i += hashmap.UnitLimit {
+		if i%(hashmap.UnitLimit*32) == 0 {
+			runtime.Gosched()
+		}
 		n := count - i
 		if n > hashmap.UnitLimit {
 			n = hashmap.UnitLimit
@@ -230,6 +234,9 @@ func (ctr *container) processHStr(bat *batch.Batch, proc *process.Process) error
 		defer proc.PutBatch(bat)
 	}
 	for i := 0; i < count; i += hashmap.UnitLimit { // batch
+		if i%(hashmap.UnitLimit*32) == 0 {
+			runtime.Gosched()
+		}
 		n := count - i
 		if n > hashmap.UnitLimit {
 			n = hashmap.UnitLimit

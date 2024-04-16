@@ -212,3 +212,76 @@ func buildSetVariables(stmt *tree.SetVar, ctx CompilerContext) (*Plan, error) {
 		},
 	}, nil
 }
+
+func buildCreateAccount(stmt *tree.CreateAccount, ctx CompilerContext, isPrepareStmt bool) (*Plan, error) {
+	params := []tree.Expr{
+		stmt.Name,
+		stmt.AuthOption.AdminName,
+		stmt.AuthOption.IdentifiedType.Str,
+	}
+	paramTypes, err := getParamTypes(params, ctx, isPrepareStmt)
+	if err != nil {
+		return nil, err
+	}
+
+	return &Plan{
+		Plan: &plan.Plan_Dcl{
+			Dcl: &plan.DataControl{
+				DclType: plan.DataControl_CREATE_ACCOUNT,
+				Control: &plan.DataControl_Other{
+					Other: &plan.OtherDCL{
+						ParamTypes: paramTypes,
+					},
+				},
+			},
+		},
+	}, nil
+}
+
+func buildAlterAccount(stmt *tree.AlterAccount, ctx CompilerContext, isPrepareStmt bool) (*Plan, error) {
+	params := []tree.Expr{
+		stmt.Name,
+		stmt.AuthOption.AdminName,
+		stmt.AuthOption.IdentifiedType.Str,
+	}
+	paramTypes, err := getParamTypes(params, ctx, isPrepareStmt)
+	if err != nil {
+		return nil, err
+	}
+
+	return &Plan{
+		Plan: &plan.Plan_Dcl{
+			Dcl: &plan.DataControl{
+				DclType: plan.DataControl_ALTER_ACCOUNT,
+				Control: &plan.DataControl_Other{
+					Other: &plan.OtherDCL{
+						ParamTypes: paramTypes,
+					},
+				},
+			},
+		},
+	}, nil
+}
+
+func buildDropAccount(stmt *tree.DropAccount, ctx CompilerContext, isPrepareStmt bool) (*Plan, error) {
+	params := []tree.Expr{
+		stmt.Name,
+	}
+	paramTypes, err := getParamTypes(params, ctx, isPrepareStmt)
+	if err != nil {
+		return nil, err
+	}
+
+	return &Plan{
+		Plan: &plan.Plan_Dcl{
+			Dcl: &plan.DataControl{
+				DclType: plan.DataControl_DROP_ACCOUNT,
+				Control: &plan.DataControl_Other{
+					Other: &plan.OtherDCL{
+						ParamTypes: paramTypes,
+					},
+				},
+			},
+		},
+	}, nil
+}

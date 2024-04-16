@@ -20,10 +20,10 @@ import (
 )
 
 func TestIOLock(t *testing.T) {
-	locks := new(IOLocks)
+	locks := NewIOLocks()
 	n := 1024
 	key := IOLockKey{
-		File: "foo",
+		Path: "foo",
 	}
 
 	wg := new(sync.WaitGroup)
@@ -58,4 +58,38 @@ func TestIOLock(t *testing.T) {
 			t.Fatalf("got %v", cs)
 		}
 	}
+}
+
+func BenchmarkIOLockNoContention(b *testing.B) {
+	locks := NewIOLocks()
+	key := IOLockKey{
+		Path: "foo",
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		unlock, wait := locks.Lock(key)
+		if unlock != nil {
+			unlock()
+		} else {
+			wait()
+		}
+	}
+}
+
+func BenchmarkIOLockParallel(b *testing.B) {
+	locks := NewIOLocks()
+	key := IOLockKey{
+		Path: "foo",
+	}
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			unlock, wait := locks.Lock(key)
+			if unlock != nil {
+				unlock()
+			} else {
+				wait()
+			}
+		}
+	})
 }

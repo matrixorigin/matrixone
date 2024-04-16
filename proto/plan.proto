@@ -512,8 +512,9 @@ message Stats {
 	double table_cnt = 5;
 	//for scan, selectivity means outcnt divide total count
 	double selectivity = 6;
+	bool forceOneCN = 7;
 
-	HashMapStats hashmapStats = 7;
+	HashMapStats hashmapStats = 8;
 }
 
 message RowsetExpr {
@@ -1009,6 +1010,9 @@ message DataControl {
 		PREPARE			= 4;
 		EXECUTE			= 5;
 		DEALLOCATE		= 6;
+		CREATE_ACCOUNT  = 7;
+		ALTER_ACCOUNT   = 8;
+		DROP_ACCOUNT    = 9;
 	}
 	//DataDefinition type
 	DclType dcl_type = 1;
@@ -1017,6 +1021,7 @@ message DataControl {
 		Prepare prepare 			= 3;
 		Execute execute				= 4;
 		Deallocate deallocate 		= 5;
+		OtherDCL other = 6;
 	}
 }
 
@@ -1056,7 +1061,7 @@ message DataDefinition {
 		DROP_SEQUENCE		= 31;
 		SHOW_SEQUENCES      = 32;
 		SHOW_CONNECTORS = 33;
-
+		SHOW_UPGRADE = 34;
 	}
 	//DataDefinition type
 	DdlType ddl_type = 1;
@@ -1393,6 +1398,10 @@ message Execute {
 
 message Deallocate {
 	string name			= 1;
+}
+
+message OtherDCL {
+	repeated int32 paramTypes = 1;
 }
 
 enum TableLockType {

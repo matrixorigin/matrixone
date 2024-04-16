@@ -33,7 +33,6 @@ require (
 	github.com/google/btree v1.1.2
 	github.com/google/gofuzz v1.2.0
 	github.com/google/gops v0.3.25
-	github.com/google/pprof v0.0.0-20230510103437-eeec1cb781c3
 	github.com/google/shlex v0.0.0-20191202100458-e7afc7fbc510
 	github.com/google/uuid v1.5.0
 	github.com/hashicorp/memberlist v0.3.1
@@ -46,8 +45,8 @@ require (
 	github.com/mohae/deepcopy v0.0.0-20170929034955-c48cc78d4826
 	github.com/nnsgmsone/mmap v0.0.0-20240320065159-dbdd196c4459
 	github.com/panjf2000/ants/v2 v2.7.4
-	github.com/petermattis/goid v0.0.0-20230518223814-80aa455d8761
-	github.com/pierrec/lz4/v4 v4.1.17
+	github.com/parquet-go/parquet-go v0.20.1
+	github.com/pierrec/lz4/v4 v4.1.18
 	github.com/pkg/errors v0.9.1
 	github.com/plar/go-adaptive-radix-tree v1.0.5
 	github.com/prashantv/gostub v1.1.0
@@ -75,18 +74,23 @@ require (
 
 require (
 	github.com/K-Phoen/sdk v0.12.3 // indirect
+	github.com/andybalholm/brotli v1.0.5 // indirect
 	github.com/cespare/xxhash v1.1.0 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
+	github.com/google/pprof v0.0.0-20230510103437-eeec1cb781c3 // indirect
 	github.com/gosimple/slug v1.13.1 // indirect
 	github.com/gosimple/unidecode v1.0.1 // indirect
 	github.com/jmespath/go-jmespath v0.4.0 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
+	github.com/mattn/go-runewidth v0.0.9 // indirect
 	github.com/minio/md5-simd v1.1.2 // indirect
 	github.com/minio/sha256-simd v1.0.1 // indirect
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
 	github.com/modern-go/reflect2 v1.0.2 // indirect
+	github.com/olekukonko/tablewriter v0.0.5 // indirect
 	github.com/opentracing/opentracing-go v1.2.1-0.20220228012449-10b1cf09e00b // indirect
 	github.com/rs/xid v1.5.0 // indirect
+	github.com/segmentio/encoding v0.3.6 // indirect
 	golang.org/x/crypto v0.14.0 // indirect
 	golang.org/x/text v0.13.0 // indirect
 	golang.org/x/time v0.3.0 // indirect
@@ -122,7 +126,7 @@ require (
 	github.com/dgryski/go-metro v0.0.0-20180109044635-280f6062b5bc // indirect
 	github.com/getsentry/sentry-go v0.12.0 // indirect
 	github.com/go-ole/go-ole v1.2.6 // indirect
-	github.com/golang/protobuf v1.5.3 // indirect
+	github.com/golang/protobuf v1.5.3
 	github.com/golang/snappy v0.0.4 // indirect
 	github.com/gopherjs/gopherjs v1.12.80 // indirect
 	github.com/hashicorp/errwrap v1.1.0 // indirect
