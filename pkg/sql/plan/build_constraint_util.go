@@ -1226,7 +1226,7 @@ func appendPrimaryConstrantPlan(
 			// make plan: sink_scan -> group_by -> filter  //check if pk is unique in rows
 			lastNodeId = appendSinkScanNode(builder, bindCtx, sourceStep)
 			pkColExpr := &plan.Expr{
-				Typ: *pkTyp,
+				Typ: pkTyp,
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
 						ColPos: int32(pkPos),
@@ -1288,7 +1288,7 @@ func appendPrimaryConstrantPlan(
 		if needCheck && useFuzzyFilter {
 			rfTag := builder.genNewMsgTag()
 			probeExpr := &plan.Expr{
-				Typ: *pkTyp,
+				Typ: pkTyp,
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
 						Name: tableDef.Pkey.PkeyColName,
@@ -1302,7 +1302,7 @@ func appendPrimaryConstrantPlan(
 				SourceStep: []int32{sourceStep},
 				ProjectList: []*Expr{
 					&plan.Expr{
-						Typ: *pkTyp,
+						Typ: pkTyp,
 						Expr: &plan.Expr_Col{
 							Col: &plan.ColRef{
 								ColPos: int32(pkPos),
@@ -1344,7 +1344,7 @@ func appendPrimaryConstrantPlan(
 				ObjRef:   objRef,
 				TableDef: scanTableDef,
 				ProjectList: []*Expr{{
-					Typ: *pkTyp,
+					Typ: pkTyp,
 					Expr: &plan.Expr_Col{
 						Col: &ColRef{
 							ColPos: int32(len(scanTableDef.Cols) - 1),
@@ -1396,7 +1396,7 @@ func appendPrimaryConstrantPlan(
 
 			if len(pkFilterExprs) == 0 {
 				buildExpr := &plan.Expr{
-					Typ: *pkTyp,
+					Typ: pkTyp,
 					Expr: &plan.Expr_Col{
 						Col: &plan.ColRef{
 							RelPos: 0,
@@ -1430,7 +1430,7 @@ func appendPrimaryConstrantPlan(
 				scanTableDef.Cols = []*plan.ColDef{DeepCopyColDef(tableDef.Cols[pkPos]), DeepCopyColDef(rowIdDef)}
 
 				scanPkExpr := &Expr{
-					Typ: *pkTyp,
+					Typ: pkTyp,
 					Expr: &plan.Expr_Col{
 						Col: &ColRef{
 							Name: tableDef.Pkey.PkeyColName,
@@ -1448,7 +1448,7 @@ func appendPrimaryConstrantPlan(
 				}
 
 				probeExpr := &plan.Expr{
-					Typ: *pkTyp,
+					Typ: pkTyp,
 					Expr: &plan.Expr_Col{
 						Col: &plan.ColRef{
 							Name: tableDef.Pkey.PkeyColName,
@@ -1466,7 +1466,7 @@ func appendPrimaryConstrantPlan(
 				rightId := builder.appendNode(scanNode, bindCtx)
 
 				pkColExpr := &Expr{
-					Typ: *pkTyp,
+					Typ: pkTyp,
 					Expr: &plan.Expr_Col{
 						Col: &ColRef{
 							RelPos: 1,
@@ -1476,7 +1476,7 @@ func appendPrimaryConstrantPlan(
 					},
 				}
 				rightExpr := &Expr{
-					Typ: *pkTyp,
+					Typ: pkTyp,
 					Expr: &plan.Expr_Col{
 						Col: &plan.ColRef{
 							Name: tableDef.Pkey.PkeyColName,
@@ -1508,7 +1508,7 @@ func appendPrimaryConstrantPlan(
 				}
 
 				buildExpr := &plan.Expr{
-					Typ: *pkTyp,
+					Typ: pkTyp,
 					Expr: &plan.Expr_Col{
 						Col: &plan.ColRef{
 							RelPos: 0,
