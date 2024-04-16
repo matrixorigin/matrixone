@@ -32,20 +32,20 @@ INSERT INTO test_snapshot_read2 select * from test_snapshot_read{snapshot = 'sna
 select count(*) test_snapshot_read2;
 test_snapshot_read2
 1
-select count(*) from mo_catalog.mo_tables;
+select count(*) from mo_catalog.mo_tables where reldatabase = 'snapshot_read';
 count(*)
-108
+2
 select sleep(1);
 sleep(1)
 0
 create snapshot snapshot_03 for account sys;
 drop table if exists test_snapshot_read2;
-select count(*) from mo_catalog.mo_tables;
+select count(*) from mo_catalog.mo_tables where reldatabase = 'snapshot_read';
 count(*)
-107
-select count(*) from mo_catalog.mo_tables{snapshot = 'snapshot_03'};
+1
+select count(*) from mo_catalog.mo_tables{snapshot = 'snapshot_03'} where reldatabase = 'snapshot_read';
 count(*)
-108
+2
 select count(*) from test_snapshot_read{timestamp = '3020-01-01 00:00:00'};
 count(*)
 90
