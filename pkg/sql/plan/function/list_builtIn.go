@@ -5488,6 +5488,29 @@ var supportedOthersBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `cast_nano_to_timestamp`
+	{
+		functionId: CAST_NANO_TO_TIMESTAMP,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId:      0,
+				args:            []types.T{types.T_int64},
+				volatile:        true,
+				realTimeRelated: true,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_timestamp.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return CastNanoToTimestamp
+				},
+			},
+		},
+	},
+
 	// function `mo_table_rows`
 	{
 		functionId: MO_TABLE_ROWS,

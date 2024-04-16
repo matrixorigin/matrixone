@@ -19,6 +19,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
@@ -26,8 +27,7 @@ var (
 	varcharType = types.T_varchar.ToType()
 )
 
-func (builder *QueryBuilder) applyIndicesForFiltersUsingMasterIndex(nodeID int32, scanNode *plan.Node,
-	cnt map[[2]int32]int, colMap map[[2]int32]*plan.Expr, indexDef *plan.IndexDef) int32 {
+func (builder *QueryBuilder) applyIndicesForFiltersUsingMasterIndex(nodeID int32, scanNode *plan.Node, indexDef *plan.IndexDef) int32 {
 
 	var pkPos = scanNode.TableDef.Name2ColIndex[scanNode.TableDef.Pkey.PkeyColName]
 	var pkType = scanNode.TableDef.Cols[pkPos].Typ
@@ -35,11 +35,13 @@ func (builder *QueryBuilder) applyIndicesForFiltersUsingMasterIndex(nodeID int32
 	var prevIndexPkCol *Expr
 	var prevLastNodeId int32
 	var lastNodeId int32
+
+	ts := scanNode.ScanTS
 	for i, filterExp := range scanNode.FilterList {
 		idxObjRef, idxTableDef := builder.compCtx.Resolve(scanNode.ObjRef.SchemaName, indexDef.IndexTableName)
 
 		// 1. SELECT pk from idx WHERE prefix_eq(`__mo_index_idx_col`,serial_full("a","value"))
-		currIdxProjTag, currScanId := makeIndexTblScan(builder, builder.ctxByNode[nodeID], filterExp, idxTableDef, idxObjRef)
+		currIdxProjTag, currScanId := makeIndexTblScan(builder, builder.ctxByNode[nodeID], filterExp, idxTableDef, idxObjRef, *ts)
 
 		// 2. (SELECT pk from idx1 WHERE prefix_eq(`__mo_index_idx_col`,serial_full("a","value1")) )
 		//    	INNER JOIN
@@ -116,7 +118,7 @@ func (builder *QueryBuilder) applyIndicesForFiltersUsingMasterIndex(nodeID int32
 }
 
 func makeIndexTblScan(builder *QueryBuilder, bindCtx *BindContext, filterExp *plan.Expr,
-	idxTableDef *TableDef, idxObjRef *ObjectRef) (int32, int32) {
+	idxTableDef *TableDef, idxObjRef *ObjectRef, scanTs timestamp.Timestamp) (int32, int32) {
 
 	// a. Scan * WHERE prefix_eq(`__mo_index_idx_col`,serial_full("a","value"))
 	idxScanTag := builder.genNewTag()
@@ -218,6 +220,7 @@ func makeIndexTblScan(builder *QueryBuilder, bindCtx *BindContext, filterExp *pl
 		ObjRef:      idxObjRef,
 		FilterList:  []*plan.Expr{filterList},
 		BindingTags: []int32{idxScanTag},
+		ScanTS:      &scanTs,
 	}, bindCtx)
 
 	// b. Project __mo_index_pk_col
