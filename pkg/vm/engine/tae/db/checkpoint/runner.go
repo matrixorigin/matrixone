@@ -948,7 +948,7 @@ func (r *runner) tryCompactTree(entry *logtail.DirtyTreeEntry, force bool) {
 		}
 	})
 
-	pressure := float64(totalSize) / 500 * common.Const1MBytes
+	pressure := float64(totalSize) / (500 * common.Const1MBytes)
 	if pressure > 1.0 {
 		pressure = 1.0
 	}
@@ -995,13 +995,14 @@ func (r *runner) tryCompactTree(entry *logtail.DirtyTreeEntry, force bool) {
 		ready := flushReady()
 		// debug log, delete later
 		if !stats.LastFlush.IsEmpty() && asize+dsize > 2*1000*1024 {
-			logutil.Infof("[flushtabletail] %v(%v) %v dels  FlushCountDown %v, flushReady %v, pressure %v",
+			logutil.Infof("[flushtabletail] %v(%v) %v dels  FlushCountDown %v, flushReady %v, pressure %v, totalsize %v",
 				table.GetLastestSchemaLocked().Name,
 				common.HumanReadableBytes(asize+dsize),
 				common.HumanReadableBytes(dsize),
 				time.Until(stats.FlushDeadline),
 				ready,
 				pressure,
+				totalSize,
 			)
 		}
 
