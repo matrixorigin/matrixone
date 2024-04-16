@@ -1055,7 +1055,8 @@ var (
 	        account_name varchar(300),
 			database_name varchar(5000),
 			table_name  varchar(5000),
-			obj_id bigint unsigned
+			obj_id bigint unsigned,
+			create_time bigint unsigned
 			);`,
 		`create table mo_pubs(
     		pub_name varchar(64) primary key,
@@ -1160,7 +1161,8 @@ var (
 		account_name,
 		database_name,
 		table_name,
-		obj_id) values ('%s','%s', '%s', '%s','%s',	'%s','%s', '%d');`
+		obj_id,
+		create_time) values ('%s', '%s', '%s', '%s', '%s', '%s', '%s', %d, %d);`
 
 	initMoUserDefinedFunctionFormat = `insert into mo_catalog.mo_user_defined_function(
 			name,
@@ -1605,7 +1607,7 @@ const (
 
 	checkSnapshotFormat = `select snapshot_id from mo_catalog.mo_snapshots where sname = "%s" order by snapshot_id;`
 
-	getSnapshotTsWithSnapshotNameFormat = `select ts from mo_catalog.mo_snapshots where sname = "%s" order by snapshot_id;`
+	getSnapshotTsWithSnapshotNameFormat = `select create_time from mo_catalog.mo_snapshots where sname = "%s" order by snapshot_id;`
 
 	getDbIdAndTypFormat         = `select dat_id,dat_type from mo_catalog.mo_database where datname = '%s' and account_id = %d;`
 	insertIntoMoPubsFormat      = `insert into mo_catalog.mo_pubs(pub_name,database_name,database_id,all_table,table_list,account_list,created_time,owner,creator,comment) values ('%s','%s',%d,%t,'%s','%s',now(),%d,%d,'%s');`
@@ -1717,12 +1719,12 @@ func getSqlForInsertIntoMoStages(ctx context.Context, stageName, url, credential
 	return fmt.Sprintf(insertIntoMoStages, stageName, url, credentials, status, createdTime, comment), nil
 }
 
-func getSqlForCreateSnapshot(ctx context.Context, snapshotId, snapshotName, ts, level, accountName, databaseName, tableName string, objectId uint64) (string, error) {
+func getSqlForCreateSnapshot(ctx context.Context, snapshotId, snapshotName, ts, level, accountName, databaseName, tableName string, objectId uint64, createTime int64) (string, error) {
 	err := inputNameIsInvalid(ctx, snapshotName)
 	if err != nil {
 		return "", err
 	}
-	return fmt.Sprintf(insertIntoMoSnapshots, snapshotId, snapshotName, ts, level, accountName, databaseName, tableName, objectId), nil
+	return fmt.Sprintf(insertIntoMoSnapshots, snapshotId, snapshotName, ts, level, accountName, databaseName, tableName, objectId, createTime), nil
 }
 
 func getSqlForDropStage(stageName string) string {
@@ -9844,9 +9846,9 @@ func doCreateSnapshot(ctx context.Context, ses *Session, stmt *tree.CreateSnapSh
 		// 2. get snapshot ts
 		// ts := ses.proc.TxnOperator.SnapshotTS()
 		// snapshotTs = ts.String()
-		snapshotTs = types.CurrentTimestamp().String2(time.UTC, 0)
+		snapshotTs = types.CurrentTimestamp().String2(time.Local, 0)
 
-		sql, err = getSqlForCreateSnapshot(ctx, snapshotId, snapshotName, snapshotTs, snapshotLevel.String(), string(stmt.Obeject.ObjName), databaseName, tableName, objId)
+		sql, err = getSqlForCreateSnapshot(ctx, snapshotId, snapshotName, snapshotTs, snapshotLevel.String(), string(stmt.Obeject.ObjName), databaseName, tableName, objId, time.Now().UTC().UnixNano())
 		if err != nil {
 			return err
 		}
@@ -9958,15 +9960,10 @@ func doResolveSnapshotTsWithSnapShotName(ctx context.Context, ses FeSession, spN
 	}
 
 	if execResultArrayHasData(erArray) {
-		snapshotTsValue, err := erArray[0].GetString(ctx, 0, 0)
+		snapshotTs, err := erArray[0].GetInt64(ctx, 0, 0)
 		if err != nil {
 			return 0, err
 		}
-		parseSnapshotTs, err := time.Parse("2006-01-02 15:04:05", snapshotTsValue)
-		if err != nil {
-			return 0, err
-		}
-		snapshotTs = parseSnapshotTs.UTC().UnixNano()
 
 		return snapshotTs, nil
 	} else {

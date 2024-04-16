@@ -11917,11 +11917,11 @@ func TestDoResolveSnapshotTsWithSnapShotName(t *testing.T) {
 		bh.sql2result["rollback;"] = nil
 
 		sql, _ := getSqlForGetSnapshotTsWithSnapshotName(ctx, "test_sp")
-		mrs := newMrsForPasswordOfUser([][]interface{}{{"2024-04-15 00:00:00"}})
+		mrs := newMrsForPasswordOfUser([][]interface{}{{1713235646865937000}})
 		bh.sql2result[sql] = mrs
 
 		ts, err := doResolveSnapshotTsWithSnapShotName(ctx, ses, "test_sp")
 		convey.So(err, convey.ShouldBeNil)
-		convey.So(ts, convey.ShouldEqual, 1713139200000000000)
+		convey.So(ts, convey.ShouldEqual, 1713235646865937000)
 	})
 }
