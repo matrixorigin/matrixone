@@ -57,6 +57,16 @@ func vectorAppendBytesWildly(v *vector.Vector, mp *mpool.MPool, value []byte) er
 	return nil
 }
 
+func vectorPreExtend(v *vector.Vector, newLen int, mp *mpool.MPool) error {
+	if newLen > v.Capacity() {
+		if err := v.PreExtend(10, mp); err != nil {
+			return err
+		}
+	}
+	v.SetLength(newLen)
+	return nil
+}
+
 // vectorUnmarshal is instead of vector.UnmarshalBinary.
 // it will check if mp is nil first.
 func vectorUnmarshal(v *vector.Vector, data []byte, mp *mpool.MPool) error {

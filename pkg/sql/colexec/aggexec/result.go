@@ -50,14 +50,12 @@ func (r *basicResult) init(
 
 func (r *basicResult) preExtend(more int) (oldLen, newLen int, err error) {
 	oldLen, newLen = r.res.Length(), r.res.Length()+more
-	if err = r.res.PreExtend(newLen, r.mp); err != nil {
+	if err = vectorPreExtend(r.res, newLen, r.mp); err != nil {
 		return oldLen, oldLen, err
 	}
-	if err = r.ess.PreExtend(newLen, r.mp); err != nil {
+	if err = vectorPreExtend(r.ess, newLen, r.mp); err != nil {
 		return oldLen, oldLen, err
 	}
-	r.res.SetLength(newLen)
-	r.ess.SetLength(newLen)
 
 	r.empty = vector.MustFixedCol[bool](r.ess)
 	for i := oldLen; i < newLen; i++ {
