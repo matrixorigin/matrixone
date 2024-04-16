@@ -17,10 +17,11 @@ package frontend
 import (
 	"testing"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
-	"github.com/stretchr/testify/require"
 )
 
 func TestExtractRowFromVector(t *testing.T) {

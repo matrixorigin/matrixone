@@ -313,7 +313,9 @@ func (m *mysqlTaskStorage) UpdateAsyncTask(ctx context.Context, tasks []task.Asy
 	n := 0
 	for _, t := range tasks {
 		err := func() error {
-			execResult := &task.ExecuteResult{}
+			execResult := &task.ExecuteResult{
+				Code: task.ResultCode_Success,
+			}
 			if t.ExecuteResult != nil {
 				execResult.Code = t.ExecuteResult.Code
 				execResult.Error = t.ExecuteResult.Error
@@ -778,7 +780,7 @@ func (m *mysqlTaskStorage) getDB() (*sql.DB, func() error, error) {
 
 func (m *mysqlTaskStorage) useDB(db *sql.DB) (err error) {
 	if err := db.Ping(); err != nil {
-		return errNotReady
+		return ErrNotReady
 	}
 	if _, err := db.Exec("use " + m.dbname); err != nil {
 		return errors.Join(err, db.Close())

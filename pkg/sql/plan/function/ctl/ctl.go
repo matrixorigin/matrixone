@@ -96,7 +96,7 @@ func MoCtl(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *pr
 	if err != nil {
 		return err
 	}
-	if command == InspectMethod {
+	if command == InspectMethod || command == MergeObjectsMethod {
 		obj := res.Data.([]any)[0].(*db.InspectResp)
 		err = rs.AppendBytes([]byte(obj.ConsoleString()), false)
 		return err
