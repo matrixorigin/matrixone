@@ -148,12 +148,12 @@ func (c *Compile) reset() {
 	for i := range c.scope {
 		c.scope[i].release()
 	}
-	for i := range c.createdFuzzy {
-		c.createdFuzzy[i].release()
+	for i := range c.fuzzys {
+		c.fuzzys[i].release()
 	}
 
 	c.MessageBoard.Messages = c.MessageBoard.Messages[:0]
-	c.createdFuzzy = c.createdFuzzy[:0]
+	c.fuzzys = c.fuzzys[:0]
 	c.scope = c.scope[:0]
 	c.proc.CleanValueScanBatchs()
 	c.pn = nil
@@ -172,7 +172,6 @@ func (c *Compile) reset() {
 	c.cnList = c.cnList[:0]
 	c.stmt = nil
 	c.startAt = time.Time{}
-	c.fuzzy = nil
 	c.needLockMeta = false
 	c.isInternal = false
 	c.lastAllocID = 0
@@ -620,14 +619,18 @@ func (c *Compile) runOnce() error {
 	}
 
 	// fuzzy filter not sure whether this insert / load obey duplicate constraints, need double check
-	if c.fuzzy != nil && c.fuzzy.cnt > 0 {
-		if c.fuzzy.cnt > 10 {
-			logutil.Warnf("fuzzy filter cnt is %d, may be too high", c.fuzzy.cnt)
+	if len(c.fuzzys) > 0 {
+		for _, f := range c.fuzzys {
+			if f != nil && f.cnt > 0 {
+				if f.cnt > 10 {
+					logutil.Warnf("fuzzy filter cnt is %d, may be too high", f.cnt)
+				}
+				err = f.backgroundSQLCheck(c)
+				if err != nil {
+					return err
+				}
+			}
 		}
-		err = c.fuzzy.backgroundSQLCheck(c)
-	}
-	if err != nil {
-		return err
 	}
 
 	//detect fk self refer
@@ -2107,13 +2110,25 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node) (*Sco
 	var ts timestamp.Timestamp
 	var db engine.Database
 	var rel engine.Relation
+	var txnOp client.TxnOperator
 
 	attrs := make([]string, len(n.TableDef.Cols))
 	for j, col := range n.TableDef.Cols {
 		attrs[j] = col.Name
 	}
+
+	if n.ScanTS != nil && !n.ScanTS.Equal(timestamp.Timestamp{LogicalTime: 0, PhysicalTime: 0}) {
+		if n.ScanTS.LessEq(c.proc.TxnOperator.Txn().SnapshotTS) {
+			txnOp = c.proc.TxnOperator.CloneSnapshotOp(*n.ScanTS)
+		} else {
+			return nil, moerr.NewInvalidInput(c.ctx, "scan timestamp is greater than current txn timestamp")
+		}
+	} else {
+		txnOp = c.proc.TxnOperator
+	}
+
 	if c.proc != nil && c.proc.TxnOperator != nil {
-		ts = c.proc.TxnOperator.Txn().SnapshotTS
+		ts = txnOp.Txn().SnapshotTS
 	}
 	{
 		ctx := c.ctx
@@ -2123,14 +2138,17 @@ func (c *Compile) compileTableScanWithNode(n *plan.Node, node engine.Node) (*Sco
 		if n.ObjRef.PubInfo != nil {
 			ctx = defines.AttachAccountId(ctx, uint32(n.ObjRef.PubInfo.TenantId))
 		}
-		db, err = c.e.Database(ctx, n.ObjRef.SchemaName, c.proc.TxnOperator)
+		db, err = c.e.Database(ctx, n.ObjRef.SchemaName, txnOp)
 		if err != nil {
 			panic(err)
 		}
 		rel, err = db.Relation(ctx, n.TableDef.Name, c.proc)
 		if err != nil {
+			if txnOp.IsSnapOp() {
+				return nil, err
+			}
 			var e error // avoid contamination of error messages
-			db, e = c.e.Database(c.ctx, defines.TEMPORARY_DBNAME, c.proc.TxnOperator)
+			db, e = c.e.Database(c.ctx, defines.TEMPORARY_DBNAME, txnOp)
 			if e != nil {
 				panic(e)
 			}
@@ -2830,7 +2848,7 @@ func (c *Compile) compileFuzzyFilter(n *plan.Node, ns []*plan.Node, left []*Scop
 	if err != nil {
 		return nil, err
 	}
-	c.createdFuzzy = append(c.createdFuzzy, outData)
+	c.fuzzys = append(c.fuzzys, outData)
 	// wrap the collision key into c.fuzzy, for more information,
 	// please refer fuzzyCheck.go
 	rs.appendInstruction(vm.Instruction{
@@ -2841,9 +2859,8 @@ func (c *Compile) compileFuzzyFilter(n *plan.Node, ns []*plan.Node, left []*Scop
 					if bat == nil || bat.IsEmpty() {
 						return nil
 					}
-					c.fuzzy = outData
 					// the batch will contain the key that fuzzyCheck
-					if err := c.fuzzy.fill(c.ctx, bat); err != nil {
+					if err := outData.fill(c.ctx, bat); err != nil {
 						return err
 					}
 
@@ -3650,6 +3667,17 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 	var partialResults []any
 	var partialResultTypes []types.T
 	var nodes engine.Nodes
+	var txnOp client.TxnOperator
+
+	if n.ScanTS != nil && !n.ScanTS.Equal(timestamp.Timestamp{LogicalTime: 0, PhysicalTime: 0}) {
+		if n.ScanTS.LessEq(c.proc.TxnOperator.Txn().SnapshotTS) {
+			txnOp = c.proc.TxnOperator.CloneSnapshotOp(*n.ScanTS)
+		} else {
+			return nil, nil, nil, moerr.NewInvalidInput(c.ctx, "scan timestamp is greater than current txn timestamp")
+		}
+	} else {
+		txnOp = c.proc.TxnOperator
+	}
 
 	isPartitionTable := false
 	if n.TableDef.Partition != nil {
@@ -3666,14 +3694,18 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 	if util.TableIsLoggingTable(n.ObjRef.SchemaName, n.ObjRef.ObjName) {
 		ctx = defines.AttachAccountId(ctx, catalog.System_Account)
 	}
-	db, err = c.e.Database(ctx, n.ObjRef.SchemaName, c.proc.TxnOperator)
+
+	db, err = c.e.Database(ctx, n.ObjRef.SchemaName, txnOp)
 	if err != nil {
 		return nil, nil, nil, err
 	}
 	rel, err = db.Relation(ctx, n.TableDef.Name, c.proc)
 	if err != nil {
+		if txnOp.IsSnapOp() {
+			return nil, nil, nil, err
+		}
 		var e error // avoid contamination of error messages
-		db, e = c.e.Database(ctx, defines.TEMPORARY_DBNAME, c.proc.TxnOperator)
+		db, e = c.e.Database(ctx, defines.TEMPORARY_DBNAME, txnOp)
 		if e != nil {
 			return nil, nil, nil, err
 		}
@@ -4103,7 +4135,8 @@ func (c *Compile) generateNodes(n *plan.Node) (engine.Nodes, []any, []types.T, e
 	}
 	// for multi cn in launch mode, put all payloads in current CN, maybe delete this in the future
 	// for an ordered scan, put all paylonds in current CN
-	if isLaunchMode(c.cnList) || len(n.OrderBy) > 0 {
+	// or sometimes force on one CN
+	if isLaunchMode(c.cnList) || len(n.OrderBy) > 0 || ranges.Len() < plan2.BlockNumForceOneCN || n.Stats.ForceOneCN {
 		return putBlocksInCurrentCN(c, ranges.GetAllBytes(), rel, n), partialResults, partialResultTypes, nil
 	}
 	// disttae engine

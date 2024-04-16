@@ -54,7 +54,7 @@ func (i *inspectContext) String() string   { return "" }
 func (i *inspectContext) Set(string) error { return nil }
 func (i *inspectContext) Type() string     { return "ictx" }
 
-func initCommand(ctx context.Context, inspectCtx *inspectContext) *cobra.Command {
+func initCommand(_ context.Context, inspectCtx *inspectContext) *cobra.Command {
 	rootCmd := &cobra.Command{
 		Use: "inspect",
 	}
@@ -73,7 +73,7 @@ func initCommand(ctx context.Context, inspectCtx *inspectContext) *cobra.Command
 	object := &objStatArg{}
 	rootCmd.AddCommand(object.PrepareCommand())
 
-	policy := &compactPolicyArg{}
+	policy := &mergePolicyArg{}
 	rootCmd.AddCommand(policy.PrepareCommand())
 
 	mmerge := &manuallyMergeArg{}
@@ -90,6 +90,9 @@ func initCommand(ctx context.Context, inspectCtx *inspectContext) *cobra.Command
 
 	renamecol := &RenameColArg{}
 	rootCmd.AddCommand(renamecol.PrepareCommand())
+
+	pstatus := &PolicyStatus{}
+	rootCmd.AddCommand(pstatus.PrepareCommand())
 
 	return rootCmd
 }
@@ -595,16 +598,17 @@ func (c *manuallyMergeArg) Run() error {
 	return nil
 }
 
-type compactPolicyArg struct {
+type mergePolicyArg struct {
 	ctx              *inspectContext
 	tbl              *catalog.TableEntry
 	maxMergeObjN     int32
 	minRowsQualified int32
 	maxRowsObj       int32
+	cnMinMergeSize   int32
 	hints            []api.MergeHint
 }
 
-func (c *compactPolicyArg) PrepareCommand() *cobra.Command {
+func (c *mergePolicyArg) PrepareCommand() *cobra.Command {
 	policyCmd := &cobra.Command{
 		Use:   "policy",
 		Short: "set merge policy for table",
@@ -613,11 +617,12 @@ func (c *compactPolicyArg) PrepareCommand() *cobra.Command {
 	policyCmd.Flags().StringP("target", "t", "*", "format: db.table")
 	policyCmd.Flags().Int32P("maxMergeObjN", "r", common.DefaultMaxMergeObjN, "max number of objects merged for one run")
 	policyCmd.Flags().Int32P("minRowsQualified", "m", common.DefaultMinRowsQualified, "objects which are less than minRowsQualified will be picked up to merge")
+	policyCmd.Flags().Int32P("minCNMergeSize", "c", common.DefaultMinCNMergeSize, "Merget task whose memory occupation exceeds minCNMergeSize will be moved to CN")
 	policyCmd.Flags().Int32SliceP("mergeHints", "n", []int32{0}, "hints to merge the table")
 	return policyCmd
 }
 
-func (c *compactPolicyArg) FromCommand(cmd *cobra.Command) (err error) {
+func (c *mergePolicyArg) FromCommand(cmd *cobra.Command) (err error) {
 	c.ctx = cmd.Flag("ictx").Value.(*inspectContext)
 
 	address, _ := cmd.Flags().GetString("target")
@@ -628,6 +633,7 @@ func (c *compactPolicyArg) FromCommand(cmd *cobra.Command) (err error) {
 	c.maxMergeObjN, _ = cmd.Flags().GetInt32("maxMergeObjN")
 	c.maxRowsObj, _ = cmd.Flags().GetInt32("maxRowsObj")
 	c.minRowsQualified, _ = cmd.Flags().GetInt32("minRowsQualified")
+	c.cnMinMergeSize, _ = cmd.Flags().GetInt32("minCNMergeSize")
 	hints, _ := cmd.Flags().GetInt32Slice("mergeHints")
 	for _, h := range hints {
 		if _, ok := api.MergeHint_name[h]; !ok {
@@ -638,21 +644,22 @@ func (c *compactPolicyArg) FromCommand(cmd *cobra.Command) (err error) {
 	return nil
 }
 
-func (c *compactPolicyArg) String() string {
+func (c *mergePolicyArg) String() string {
 	t := "*"
 	if c.tbl != nil {
 		t = fmt.Sprintf("%d-%s", c.tbl.ID, c.tbl.GetLastestSchemaLocked().Name)
 	}
 	return fmt.Sprintf(
-		"(%s) maxMergeObjN: %v, minRowsQualified: %v, hints: %v",
-		t, c.maxMergeObjN, c.minRowsQualified, c.hints,
+		"(%s) maxMergeObjN: %v, minRowsQualified: %v, cnSize: %vMB, hints: %v",
+		t, c.maxMergeObjN, c.minRowsQualified, c.cnMinMergeSize, c.hints,
 	)
 }
 
-func (c *compactPolicyArg) Run() error {
+func (c *mergePolicyArg) Run() error {
 	if c.tbl == nil {
 		common.RuntimeMaxMergeObjN.Store(c.maxMergeObjN)
 		common.RuntimeMinRowsQualified.Store(c.minRowsQualified)
+		common.RuntimeMinCNMergeSize.Store(uint64(c.cnMinMergeSize) * common.Const1MBytes)
 		if c.maxMergeObjN == 0 && c.minRowsQualified == 0 {
 			merge.StopMerge.Store(true)
 		} else {
@@ -664,6 +671,7 @@ func (c *compactPolicyArg) Run() error {
 			MergeMaxOneRun:   int(c.maxMergeObjN),
 			ObjectMinRows:    int(c.minRowsQualified),
 			MaxRowsMergedObj: int(c.maxRowsObj),
+			MinCNMergeSize:   uint64(c.cnMinMergeSize) * common.Const1MBytes,
 			MergeHints:       c.hints,
 		})
 	}
@@ -724,6 +732,44 @@ func (c *RenameColArg) Run() (err error) {
 		return err
 	}
 	return txn.Commit(context.Background())
+}
+
+type PolicyStatus struct {
+	ctx      *inspectContext
+	pruneId  uint64
+	pruneAgo time.Duration
+}
+
+func (c *PolicyStatus) FromCommand(cmd *cobra.Command) (err error) {
+	c.ctx = cmd.Flag("ictx").Value.(*inspectContext)
+	c.pruneAgo, _ = cmd.Flags().GetDuration("prune-ago")
+	c.pruneId, _ = cmd.Flags().GetUint64("prune-id")
+	return nil
+}
+
+func (c *PolicyStatus) PrepareCommand() *cobra.Command {
+	statusCmd := &cobra.Command{
+		Use:   "policy_status",
+		Short: "check cn merge status",
+		Run:   RunFactory(c),
+	}
+	statusCmd.Flags().DurationP("prune-ago", "a", 0, "prune objects by time ago")
+	statusCmd.Flags().Uint64P("prune-id", "i", 0, "prune objects by table id")
+	return statusCmd
+}
+
+func (c *PolicyStatus) String() string {
+	return fmt.Sprintf("policy status: prune %v ago, by id %v", c.pruneAgo, c.pruneId)
+}
+
+func (c *PolicyStatus) Run() (err error) {
+	if c.pruneAgo == 0 && c.pruneId == 0 {
+		c.ctx.resp.Payload = []byte(merge.ActiveCNObj.String())
+		return nil
+	} else {
+		merge.ActiveCNObj.Prune(c.pruneId, c.pruneAgo)
+		return nil
+	}
 }
 
 func parseBlkTarget(address string, tbl *catalog.TableEntry) (*catalog.ObjectEntry, int, error) {

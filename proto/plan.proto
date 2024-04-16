@@ -19,6 +19,7 @@ package plan;
 
 import "github.com/gogo/protobuf/gogoproto/gogo.proto";
 import "lock.proto";
+import "timestamp.proto";
 
 option go_package = "github.com/matrixorigin/matrixone/pkg/pb/plan";
 option (gogoproto.sizer_all) = false;
@@ -512,8 +513,9 @@ message Stats {
 	double table_cnt = 5;
 	//for scan, selectivity means outcnt divide total count
 	double selectivity = 6;
+	bool forceOneCN = 7;
 
-	HashMapStats hashmapStats = 7;
+	HashMapStats hashmapStats = 8;
 }
 
 message RowsetExpr {
@@ -834,6 +836,9 @@ message Node {
 	//for message
 	repeated msgHeader send_msg_list = 55;
 	repeated msgHeader recv_msg_list = 56;
+
+	// table_scan timestamp
+	timestamp.Timestamp scanTS = 57;
 }
 
 message ExternScan {
