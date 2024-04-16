@@ -16,7 +16,6 @@ package disttae
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"math"
 	"sync"
 	"sync/atomic"
@@ -148,8 +147,6 @@ type Engine struct {
 			snaps []*logtailreplay.Partition
 		}
 	}
-	stopper   stopper.Stopper
-	notifiedC chan timestamp.Timestamp
 
 	packerPool *fileservice.Pool[*types.Packer]
 

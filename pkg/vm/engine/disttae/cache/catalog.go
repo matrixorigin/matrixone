@@ -69,14 +69,6 @@ func (cc *CatalogCache) UpdateStart(ts types.TS) {
 	}
 }
 
-func (cc *CatalogCache) UpdateEnd(ts types.TS) {
-	cc.mu.Lock()
-	defer cc.mu.Unlock()
-	if cc.mu.start != types.MaxTs() {
-		cc.mu.end = ts
-	}
-}
-
 func (cc *CatalogCache) CanServe(ts types.TS) bool {
 	cc.mu.Lock()
 	defer cc.mu.Unlock()

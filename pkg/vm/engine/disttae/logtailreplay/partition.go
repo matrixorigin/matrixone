@@ -110,14 +110,6 @@ func (p *Partition) UpdateStart(ts types.TS) {
 	}
 }
 
-func (p *Partition) UpdateEnd(ts types.TS) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if p.mu.start != types.MaxTs() {
-		p.mu.end = ts
-	}
-}
-
 // [start, end]
 func (p *Partition) UpdateDuration(start types.TS, end types.TS) {
 	p.mu.Lock()

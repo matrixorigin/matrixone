@@ -694,6 +694,7 @@ func (c *PushClient) partitionStateGCTicker(ctx context.Context, e *Engine) {
 			logutil.Infof("%s GC partition_state %v", logTag, ts.ToString())
 			for ids, part := range parts {
 				part.Truncate(ctx, ids, ts)
+				part.UpdateStart(ts)
 			}
 		}
 	}()
