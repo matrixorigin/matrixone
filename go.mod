@@ -61,6 +61,7 @@ require (
 	github.com/stretchr/testify v1.8.4
 	github.com/tidwall/btree v1.6.0
 	github.com/tidwall/pretty v1.2.1
+	go.uber.org/automaxprocs v1.5.3
 	go.uber.org/ratelimit v0.2.0
 	go.uber.org/zap v1.24.0
 	golang.org/x/exp v0.0.0-20231006140011-7918f672742d

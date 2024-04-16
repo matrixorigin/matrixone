@@ -187,6 +187,8 @@ type runner struct {
 		checkpointSize      int
 
 		reservedWALEntryCount uint64
+
+		disableGC bool
 	}
 
 	ctx context.Context
@@ -348,6 +350,10 @@ func (r *runner) gcCheckpointEntries(ts types.TS) {
 	incrementals := r.GetAllIncrementalCheckpoints()
 	for _, incremental := range incrementals {
 		if incremental.LessEq(ts) {
+			if r.options.disableGC {
+				r.DeleteIncrementalEntry(incremental)
+				continue
+			}
 			err := incremental.GCEntry(r.rt.Fs)
 			if err != nil && !moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
 				logutil.Warnf("gc %v failed: %v", incremental.String(), err)
@@ -363,6 +369,10 @@ func (r *runner) gcCheckpointEntries(ts types.TS) {
 	globals := r.GetAllGlobalCheckpoints()
 	for _, global := range globals {
 		if global.LessEq(ts) {
+			if r.options.disableGC {
+				r.DeleteGlobalEntry(global)
+				continue
+			}
 			err := global.GCEntry(r.rt.Fs)
 			if err != nil && !moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
 				panic(err)
