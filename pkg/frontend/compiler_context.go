@@ -794,3 +794,8 @@ func makeResultMetaPath(accountName string, statementId string) string {
 func (tcc *TxnCompilerContext) ResolveSnapshotTsWithSnapShotName(snapshotName string) (int64, error) {
 	return doResolveSnapshotTsWithSnapShotName(tcc.GetContext(), tcc.GetSession(), snapshotName)
 }
+
+func (tcc *TxnCompilerContext) CheckTimeStampValid(ts int64) (bool, error) {
+	//return checkTimeStampValid(tcc.GetContext(), tcc.GetSession(), ts)
+	return false, nil
+}

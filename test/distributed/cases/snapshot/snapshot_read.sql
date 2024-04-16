@@ -102,19 +102,19 @@ INSERT INTO users (username, email, password) VALUES ('john_doe', 'john@example.
 INSERT INTO users (username, email, password) VALUES ('jane_smith', 'jane.smith@example.com', 'password123'),('alice_jones', 'alice.jones@gmail.com', 'ilovecats'),('bob_brown', 'bob.brown@yahoo.com', 'mysecretpassword'),('charlie_lee', 'charlie.lee@protonmail.ch', 'secure123'),('diana_wilson', 'diana.wilson@outlook.com', 'D1anaPass');
 INSERT INTO users (username, email, password) VALUES ('emily_adams', 'emily.adams@icloud.com', 'Em1Ly123'), ('francis_nguyen', 'francis.nguyen@domain.com', 'fNguyenPass'), ('grace_parker', 'grace.parker@server.com', 'G1race123'), ('henry_miller', 'henry.miller@company.org', 'hMillerSecret'), ('isabella_grant', 'isabella.grant@university.edu', 'iGrantPass');
 
-select * from users where email = 'john@example.com';
-select * from users where email = 'alice.jones@gmail.com';
+select id, username, email from users where email = 'john@example.com';
+select id, username, email from users where email = 'alice.jones@gmail.com';
 
 create snapshot sp_01 for account sys;
 
 DELETE FROM  users where email = 'john@example.com';
 UPDATE users SET password = 'newsecurepassword123' WHERE email = 'alice.jones@gmail.com';
 
-select * from users where email = 'john@example.com';
-select * from users where email = 'alice.jones@gmail.com';
+select id, username, email from users where email = 'john@example.com';
+select id, username, email from users where email = 'alice.jones@gmail.com';
 
-select * from users{snapshot = 'sp_01'} where email = 'john@example.com';
-select * from users {snapshot = 'sp_01'} where email = 'alice.jones@gmail.com';
+select id, username, email from users{snapshot = 'sp_01'} where email = 'john@example.com';
+select id, username, email from users {snapshot = 'sp_01'} where email = 'alice.jones@gmail.com';
 
 
 CREATE TABLE new_users (
@@ -128,7 +128,7 @@ CREATE TABLE new_users (
 insert into new_users select * from users{snapshot = 'sp_01'} where email = 'john@example.com';
 insert into new_users select * from users {snapshot = 'sp_01'} where email = 'alice.jones@gmail.com';
 
-select * from new_users;
+select id, username, email from new_users;
 
 drop snapshot sp_01;
 drop database if exists snapshot_read;

@@ -36,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 )
 
 func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext, isPrepareStatement bool) *QueryBuilder {
@@ -4064,7 +4065,12 @@ func (builder *QueryBuilder) resolveTsHint(tsExpr *tree.AtTimeStamp) (timestamp.
 				if tsNano <= 0 {
 					return timestamp.Timestamp{}, moerr.NewInvalidArg(builder.GetContext(), "invalid timestamp value %s", lit.Sval)
 				}
-				return timestamp.Timestamp{PhysicalTime: tsNano}, nil
+				if time.Now().UTC().UnixNano()-tsNano <= options.DefaultGCTTL.Nanoseconds() && 0 <= time.Now().UTC().UnixNano()-tsNano {
+					return timestamp.Timestamp{PhysicalTime: tsNano}, nil
+				} else {
+
+				}
+
 			} else if tsExpr.Type == tree.ATTIMESTAMPSNAPSHOT {
 				tsValue, err := builder.compCtx.ResolveSnapshotTsWithSnapShotName(lit.Sval)
 				if err != nil {
