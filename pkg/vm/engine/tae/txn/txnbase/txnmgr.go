@@ -525,10 +525,10 @@ func (mgr *TxnManager) registerCollectLogTailCB(e entry2.Entry, op *OpTxn) {
 	}
 
 	// collect log tail after marshal done
-	e.RegisterBeforeFlushCBs(func() error {
-		mgr.CommitListener.OnEndPrepareWAL(op.Txn)
-		return nil
-	})
+	//e.RegisterBeforeFlushCBs(func() error {
+	mgr.CommitListener.OnEndPrepareWAL(op.Txn)
+	//return nil
+	//})
 }
 
 func (mgr *TxnManager) registerPostFlushCB(e entry2.Entry, op *OpTxn) {
@@ -559,10 +559,6 @@ func (mgr *TxnManager) onFlushWal(items ...any) {
 	var err error
 	for _, item := range items {
 		op := item.(*OpTxn)
-		store := op.Txn.GetStore()
-		if _, ok := store.(*heartbeatStore); !ok {
-			fmt.Printf("on flush wal: %T\n", store)
-		}
 		if op.Txn.GetError() == nil && op.Op == OpCommit || op.Op == OpPrepare {
 			if entry, err = op.Txn.PrepareWAL(); err != nil {
 				panic(err)

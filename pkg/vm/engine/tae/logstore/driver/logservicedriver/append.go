@@ -36,7 +36,7 @@ func (d *LogServiceDriver) Append(e *entry.Entry) error {
 }
 
 func (d *LogServiceDriver) getAppender() *driverAppender {
-	if len(d.appendable.entry.entries) > 5 {
+	if len(d.appendable.entry.entries) > 15 {
 		d.appendAppender()
 	}
 	//if int(d.appendable.entry.payloadSize) > d.config.RecordSize {

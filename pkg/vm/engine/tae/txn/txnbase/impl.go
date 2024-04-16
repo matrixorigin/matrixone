@@ -16,7 +16,6 @@ package txnbase
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -60,12 +59,6 @@ func (txn *Txn) commit1PC(ctx context.Context, _ bool) (err error) {
 	txn.Add(1)
 	if err = txn.Freeze(); err == nil {
 		txn.GetStore().StartTrace()
-		store := txn.GetStore()
-
-		if _, ok := store.(*heartbeatStore); !ok {
-			fmt.Printf("commit 1PC: %T\n", store)
-		}
-
 		err = txn.Mgr.OnOpTxn(&OpTxn{
 			ctx: ctx,
 			Txn: txn,

@@ -21,15 +21,11 @@ import (
 	"sync/atomic"
 	"time"
 
-	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
-
-	"github.com/matrixorigin/matrixone/pkg/perfcounter"
-	"go.uber.org/zap"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/common/moprobe"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -705,11 +701,11 @@ func (store *txnStore) WaitPrepared(ctx context.Context) (err error) {
 			return
 		}
 	}
-	moprobe.WithRegion(ctx, moprobe.TxnStoreWaitWALFlush, func() {
+	if store.logEntry != nil {
 		if err = store.logEntry.WaitDone(); err != nil {
 			store.logEntry.Free()
 		}
-	})
+	}
 	store.wg.Wait()
 	return
 }
@@ -796,22 +792,6 @@ func (store *txnStore) PrepareWAL() (e entry.Entry, err error) {
 
 	if e != nil {
 		store.logEntry = e
-	}
-
-	t1 := time.Now()
-	//for _, db := range store.dbs {
-	//	if err = db.Apply1PCCommit(); err != nil {
-	//		return
-	//	}
-	//}
-
-	t2 := time.Now()
-	if t2.Sub(t1) > time.Millisecond*500 {
-		logutil.Warn(
-			"SLOW-LOG",
-			zap.String("txn", store.txn.String()),
-			zap.Duration("apply-1pc-commit-duration", t2.Sub(t1)),
-		)
 	}
 	return
 }
