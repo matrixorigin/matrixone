@@ -398,7 +398,7 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 		return err
 	}
 
-	numCpu := goruntime.NumCPU()
+	numCpu := goruntime.GOMAXPROCS(0)
 	var mcpu int
 
 	switch {
