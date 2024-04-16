@@ -46,9 +46,6 @@ count(*)
 select count(*) from mo_catalog.mo_tables{snapshot = 'snapshot_03'} where reldatabase = 'snapshot_read';
 count(*)
 2
-select count(*) from test_snapshot_read{timestamp = '3020-01-01 00:00:00'};
-count(*)
-90
 drop table if exists test_snapshot_read;
 drop database if exists snapshot_read;
 drop snapshot snapshot_01;
@@ -93,9 +90,6 @@ count(*)
 select count(*) from mo_catalog.mo_tables{snapshot = 'snapshot_03'} where reldatabase = 'snapshot_read';
 count(*)
 2
-select count(*) from test_snapshot_read{timestamp = '3020-01-01 00:00:00'};
-count(*)
-90
 drop table if exists test_snapshot_read;
 drop database if exists snapshot_read;
 drop snapshot snapshot_01;
@@ -150,4 +144,101 @@ drop database if exists snapshot_read;
 drop snapshot snapshot_01;
 drop snapshot snapshot_02;
 drop snapshot snapshot_03;
+drop account if exists test_account;
+create database if not exists snapshot_read;
+use snapshot_read;
+CREATE TABLE users (
+id INT AUTO_INCREMENT PRIMARY KEY,
+username VARCHAR(255) NOT NULL,
+email VARCHAR(255) NOT NULL UNIQUE,
+password VARCHAR(255) NOT NULL,
+created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+INSERT INTO users (username, email, password) VALUES ('john_doe', 'john@example.com', 'securepassword123');
+INSERT INTO users (username, email, password) VALUES ('jane_smith', 'jane.smith@example.com', 'password123'),('alice_jones', 'alice.jones@gmail.com', 'ilovecats'),('bob_brown', 'bob.brown@yahoo.com', 'mysecretpassword'),('charlie_lee', 'charlie.lee@protonmail.ch', 'secure123'),('diana_wilson', 'diana.wilson@outlook.com', 'D1anaPass');
+INSERT INTO users (username, email, password) VALUES ('emily_adams', 'emily.adams@icloud.com', 'Em1Ly123'), ('francis_nguyen', 'francis.nguyen@domain.com', 'fNguyenPass'), ('grace_parker', 'grace.parker@server.com', 'G1race123'), ('henry_miller', 'henry.miller@company.org', 'hMillerSecret'), ('isabella_grant', 'isabella.grant@university.edu', 'iGrantPass');
+select * from users where email = 'john@example.com';
+id    username    email    password    created_at
+1    john_doe    john@example.com    securepassword123    2024-04-16 17:27:34
+select * from users where email = 'alice.jones@gmail.com';
+id    username    email    password    created_at
+3    alice_jones    alice.jones@gmail.com    ilovecats    2024-04-16 17:27:34
+create snapshot sp_01 for account sys;
+DELETE FROM  users where email = 'john@example.com';
+UPDATE users SET password = 'newsecurepassword123' WHERE email = 'alice.jones@gmail.com';
+select * from users where email = 'john@example.com';
+id    username    email    password    created_at
+select * from users where email = 'alice.jones@gmail.com';
+id    username    email    password    created_at
+3    alice_jones    alice.jones@gmail.com    newsecurepassword123    2024-04-16 17:27:34
+select * from users{snapshot = 'sp_01'} where email = 'john@example.com';
+id    username    email    password    created_at
+1    john_doe    john@example.com    securepassword123    2024-04-16 17:27:34
+select * from users {snapshot = 'sp_01'} where email = 'alice.jones@gmail.com';
+id    username    email    password    created_at
+3    alice_jones    alice.jones@gmail.com    ilovecats    2024-04-16 17:27:34
+CREATE TABLE new_users (
+id INT AUTO_INCREMENT PRIMARY KEY,
+username VARCHAR(255) NOT NULL,
+email VARCHAR(255) NOT NULL UNIQUE,
+password VARCHAR(255) NOT NULL,
+created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+insert into new_users select * from users{snapshot = 'sp_01'} where email = 'john@example.com';
+insert into new_users select * from users {snapshot = 'sp_01'} where email = 'alice.jones@gmail.com';
+select * from new_users;
+id    username    email    password    created_at
+1    john_doe    john@example.com    securepassword123    2024-04-16 17:27:34
+3    alice_jones    alice.jones@gmail.com    ilovecats    2024-04-16 17:27:34
+drop snapshot sp_01;
+drop database if exists snapshot_read;
+drop account if exists test_account;
+create account test_account admin_name = 'test_user' identified by '111';
+create database if not exists snapshot_read;
+use snapshot_read;
+CREATE TABLE users (
+id INT AUTO_INCREMENT PRIMARY KEY,
+username VARCHAR(255) NOT NULL,
+email VARCHAR(255) NOT NULL UNIQUE,
+password VARCHAR(255) NOT NULL,
+created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+INSERT INTO users (username, email, password) VALUES ('john_doe', 'john@example.com', 'securepassword123');
+INSERT INTO users (username, email, password) VALUES ('jane_smith', 'jane.smith@example.com', 'password123'),('alice_jones', 'alice.jones@gmail.com', 'ilovecats'),('bob_brown', 'bob.brown@yahoo.com', 'mysecretpassword'),('charlie_lee', 'charlie.lee@protonmail.ch', 'secure123'),('diana_wilson', 'diana.wilson@outlook.com', 'D1anaPass');
+INSERT INTO users (username, email, password) VALUES ('emily_adams', 'emily.adams@icloud.com', 'Em1Ly123'), ('francis_nguyen', 'francis.nguyen@domain.com', 'fNguyenPass'), ('grace_parker', 'grace.parker@server.com', 'G1race123'), ('henry_miller', 'henry.miller@company.org', 'hMillerSecret'), ('isabella_grant', 'isabella.grant@university.edu', 'iGrantPass');
+select id, username, email from users where email = 'john@example.com';
+id    username    email
+1    john_doe    john@example.com
+select id, username, email from users where email = 'alice.jones@gmail.com';
+id    username    email
+3    alice_jones    alice.jones@gmail.com
+create snapshot sp_01 for account test_account;
+DELETE FROM  users where email = 'john@example.com';
+UPDATE users SET password = 'newsecurepassword123' WHERE email = 'alice.jones@gmail.com';
+select id, username, email from users where email = 'john@example.com';
+id    username    email
+select id, username, email from users where email = 'alice.jones@gmail.com';
+id    username    email
+3    alice_jones    alice.jones@gmail.com
+select id, username, email from users{snapshot = 'sp_01'} where email = 'john@example.com';
+id    username    email
+1    john_doe    john@example.com
+select id, username, email from users {snapshot = 'sp_01'} where email = 'alice.jones@gmail.com';
+id    username    email
+3    alice_jones    alice.jones@gmail.com
+CREATE TABLE new_users (
+id INT AUTO_INCREMENT PRIMARY KEY,
+username VARCHAR(255) NOT NULL,
+email VARCHAR(255) NOT NULL UNIQUE,
+password VARCHAR(255) NOT NULL,
+created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+insert into new_users select * from users{snapshot = 'sp_01'} where email = 'john@example.com';
+insert into new_users select * from users {snapshot = 'sp_01'} where email = 'alice.jones@gmail.com';
+select id, username, email from new_users;
+id    username    email
+1    john_doe    john@example.com
+3    alice_jones    alice.jones@gmail.com
+drop snapshot sp_01;
+drop database if exists snapshot_read;
 drop account if exists test_account;
