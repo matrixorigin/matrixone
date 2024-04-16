@@ -196,8 +196,6 @@ func (m *merger[T]) Merge(ctx context.Context) {
 	if blkCnt > 0 {
 		m.syncObject(ctx)
 	}
-
-	return
 }
 
 func (m *merger[T]) nextPos() uint32 {
