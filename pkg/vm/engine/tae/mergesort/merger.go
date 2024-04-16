@@ -1,19 +1,33 @@
+// Copyright 2024 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package mergesort
 
 import (
 	"context"
 	"errors"
-
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 )
 
 type Merger interface {
-	Merge()
+	Merge(context.Context)
 }
 
 type releasableBatch struct {
@@ -79,7 +93,7 @@ func newMerger[T any](host MergeTaskHost, lessFunc lessFunc[T], sortKeyPos int, 
 	return m
 }
 
-func (m *merger[T]) Merge() {
+func (m *merger[T]) Merge(ctx context.Context) {
 	for i := 0; i < m.objCnt; i++ {
 		if ok := m.loadBlk(uint32(i)); !ok {
 			return
@@ -111,6 +125,12 @@ func (m *merger[T]) Merge() {
 	bufferRowCnt := 0
 	commitEntry := m.host.GetCommitEntry()
 	for m.heap.Len() != 0 {
+		select {
+		case <-ctx.Done():
+			logutil.Errorf("merge task canceled")
+			return
+		default:
+		}
 		objIdx := m.nextPos()
 		if m.deletes[objIdx].Contains(uint64(m.rowIdx[objIdx])) {
 			// row is deleted
@@ -149,7 +169,8 @@ func (m *merger[T]) Merge() {
 
 			// write new object
 			if blkCnt == int(m.blkPerObj) {
-				m.syncObject(context.TODO())
+				// write object and reset writer
+				m.syncObject(ctx)
 				// reset writer after sync
 				blkCnt = 0
 				objCnt++
@@ -173,7 +194,7 @@ func (m *merger[T]) Merge() {
 		m.buffer.CleanOnlyData()
 	}
 	if blkCnt > 0 {
-		m.syncObject(context.TODO())
+		m.syncObject(ctx)
 	}
 
 	return

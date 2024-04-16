@@ -18,7 +18,6 @@ import (
 	"context"
 	"fmt"
 	"time"
-	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -60,12 +59,6 @@ type MergeTaskHost interface {
 
 func initTransferMapping(e *api.MergeCommitEntry, blkcnt int) {
 	e.Booking = NewBlkTransferBooking(blkcnt)
-}
-
-type MergeTicket struct {
-	DbID    uint64
-	TableID uint64
-	Targets []objectio.ObjectStats
 }
 
 func GetNewWriter(
@@ -183,7 +176,7 @@ func DoMergeAndWrite(
 				panic(fmt.Sprintf("unsupported type %s", typ.String()))
 			}
 		}
-		merger.Merge()
+		merger.Merge(ctx)
 
 		toObjsDesc := ""
 		for _, o := range commitEntry.CreatedObjs {
@@ -260,35 +253,9 @@ func DoMergeAndWrite(
 	sortedVecs, releaseF := getRetVecs(len(toLayout), toSortVecs[0].GetType(), mergehost)
 	defer releaseF()
 
-	var sortedIdx []uint32
-	if hasSortKey {
-		// mergesort is needed, allocate sortedidx and mapping
-		allocSz := totalRowCount * 4
-		// sortedIdx is used to shuffle other columns according to the order of the sort key
-		sortIdxNode, err := mpool.Alloc(allocSz)
-		if err != nil {
-			panic(err)
-		}
-		// sortedidx will be used to shuffle other column, defer free
-		defer mpool.Free(sortIdxNode)
-		sortedIdx = unsafe.Slice((*uint32)(unsafe.Pointer(&sortIdxNode[0])), totalRowCount)
-
-		mappingNode, err := mpool.Alloc(allocSz)
-		if err != nil {
-			panic(err)
-		}
-		mapping := unsafe.Slice((*uint32)(unsafe.Pointer(&mappingNode[0])), totalRowCount)
-
-		// modify sortidx and mapping
-		Merge(toSortVecs, sortedVecs, sortedIdx, mapping, fromLayout, toLayout, mpool)
-		UpdateMappingAfterMerge(commitEntry.Booking, mapping, fromLayout, toLayout)
-		// free mapping, which is never used again
-		mpool.Free(mappingNode)
-	} else {
-		// just do reshape, keep sortedIdx nil
-		Reshape(toSortVecs, sortedVecs, fromLayout, toLayout, mpool)
-		UpdateMappingAfterMerge(commitEntry.Booking, nil, fromLayout, toLayout)
-	}
+	// just do reshape, keep sortedIdx nil
+	Reshape(toSortVecs, sortedVecs, fromLayout, toLayout, mpool)
+	UpdateMappingAfterMerge(commitEntry.Booking, nil, fromLayout, toLayout)
 
 	// -------------------------- phase 2
 	phaseDesc = "merge sort, or reshape, the rest of columns"
@@ -331,11 +298,7 @@ func DoMergeAndWrite(
 			return moerr.NewInternalError(ctx, "written mismatch length %v %v", len(sortedVecs), len(outvecs))
 		}
 
-		if hasSortKey {
-			Multiplex(tempVecs, outvecs, sortedIdx, fromLayout, toLayout, mpool)
-		} else {
-			Reshape(tempVecs, outvecs, fromLayout, toLayout, mpool)
-		}
+		Reshape(tempVecs, outvecs, fromLayout, toLayout, mpool)
 
 		for j, vec := range outvecs {
 			writtenBatches[j].Vecs[i] = vec
