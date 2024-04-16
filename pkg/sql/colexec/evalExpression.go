@@ -155,7 +155,8 @@ func NewExpressionExecutor(proc *process.Process, planExpr *plan.Expr) (Expressi
 
 		executor := NewFunctionExpressionExecutor()
 		typ := types.New(types.T(planExpr.Typ.Id), planExpr.Typ.Width, planExpr.Typ.Scale)
-		if err = executor.Init(proc, len(t.F.Args), typ, overload.GetExecuteMethod()); err != nil {
+		fn1, fn2 := overload.GetExecuteMethod()
+		if err = executor.Init(proc, len(t.F.Args), typ, fn1, fn2); err != nil {
 			executor.Free()
 			return nil, err
 		}
@@ -295,6 +296,8 @@ type FunctionExpressionExecutor struct {
 		result vector.FunctionResultWrapper,
 		proc *process.Process,
 		length int) error
+
+	freeFn func() error
 }
 
 type ColumnExpressionExecutor struct {
@@ -461,11 +464,12 @@ func (expr *FunctionExpressionExecutor) Init(
 		result vector.FunctionResultWrapper,
 		proc *process.Process,
 		length int) error,
-	fn2 func() error) (err error) {
+	freeFn func() error) (err error) {
 	m := proc.Mp()
 
 	expr.m = m
 	expr.evalFn = fn
+	expr.freeFn = freeFn
 	expr.parameterResults = make([]*vector.Vector, parameterNum)
 	expr.parameterExecutor = make([]ExpressionExecutor, parameterNum)
 
@@ -514,6 +518,9 @@ func (expr *FunctionExpressionExecutor) Free() {
 		if p != nil {
 			p.Free()
 		}
+	}
+	if expr.freeFn != nil {
+		_ = expr.freeFn()
 	}
 	reuse.Free[FunctionExpressionExecutor](expr, nil)
 }
