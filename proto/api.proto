@@ -383,6 +383,7 @@ message BlkTransferBooking {
     repeated BlkTransMap mappings = 1[(gogoproto.nullable) = false];
 }
 
+
 message MergeCommitEntry {
     uint64 db_id = 1;
     uint64 tbl_id = 2;

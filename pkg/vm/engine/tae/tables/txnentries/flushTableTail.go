@@ -182,7 +182,7 @@ func (entry *flushTableTailEntry) collectDelsAndTransfer(from, to types.TS) (tra
 				panic(fmt.Sprintf("%s find no transfer mapping for row %d", blk.ID.String(), row))
 			}
 			if entry.delTbls[destpos.BlkIdx] == nil {
-			entry.delTbls[destpos.BlkIdx] = model.NewTransDels(entry.txn.GetPrepareTS())
+				entry.delTbls[destpos.BlkIdx] = model.NewTransDels(entry.txn.GetPrepareTS())
 			}
 			entry.delTbls[destpos.BlkIdx].Mapping[int(destpos.RowIdx)] = ts[i]
 			if err = entry.createdBlkHandles.RangeDelete(
