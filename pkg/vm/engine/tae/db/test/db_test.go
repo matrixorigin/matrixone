@@ -8249,9 +8249,8 @@ func TestSnapshotCheckpoint(t *testing.T) {
 	wg2.Wait()
 	tae.ForceCheckpoint()
 	tae.ForceCheckpoint()
-	snapshot2 := types.BuildTS(time.Now().UTC().UnixNano(), 0)
-	ins1, seg1 := testutil.GetUserTablesInsBatch(t, rel1.ID(), types.TS{}, snapshot2, db.Catalog)
-	ckps, err := checkpoint.ListSnapshotCheckpoint(ctx, db.Opts.Fs, snapshot, rel1.ID())
+	ins1, seg1 := testutil.GetUserTablesInsBatch(t, rel1.ID(), types.TS{}, snapshot, db.Catalog)
+	ckps, err := checkpoint.ListSnapshotCheckpoint(ctx, db.Opts.Fs, snapshot, rel1.ID(), checkpoint.SpecifiedCheckpoint)
 	assert.Nil(t, err)
 	var inslen, seglen int
 	for _, ckp := range ckps {
