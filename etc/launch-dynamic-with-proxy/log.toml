@@ -1,0 +1,12 @@
+# service node type, [DN|CN|LOG]
+service-type = "LOG"
+data-dir = "./mo-data"
+
+[log]
+level = "info"
+format = "console"
+max-size = 512
+
+
+[observability]
+statusPort = 7001

@@ -32,35 +32,36 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/google/uuid"
+	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 
-	"github.com/google/uuid"
-	"github.com/matrixorigin/matrixone/pkg/queryservice"
-
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/config"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
+	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/util/metric/mometric"
 	"github.com/matrixorigin/matrixone/pkg/util/sysview"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/route"
+
 	"github.com/tidwall/btree"
-	"go.uber.org/zap"
+
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 )
 
 type TenantInfo struct {
@@ -2751,7 +2752,7 @@ func normalizeName(ctx context.Context, name string) (string, error) {
 	return s, nil
 }
 
-func normalizeNameOfAccount(ctx context.Context, ca *CreateAccount) error {
+func normalizeNameOfAccount(ctx context.Context, ca *createAccount) error {
 	s := strings.TrimSpace(ca.Name)
 	if len(s) == 0 {
 		return moerr.NewInternalError(ctx, `the name "%s" is invalid`, ca.Name)
@@ -2830,13 +2831,26 @@ func finishTxn(ctx context.Context, bh BackgroundExec, err error) error {
 	return rollbackTxn()
 }
 
-func doAlterUser(ctx context.Context, ses *Session, au *tree.AlterUser) (err error) {
+type alterUser struct {
+	IfExists bool
+	User     *user
+	Role     *tree.Role
+	MiscOpt  tree.UserMiscOption
+	// comment or attribute
+	CommentOrAttribute tree.AccountCommentOrAttribute
+}
+
+type user struct {
+	Username  string
+	Hostname  string
+	AuthExist bool
+	IdentTyp  tree.AccountIdentifiedOption
+	IdentStr  string
+}
+
+func doAlterUser(ctx context.Context, ses *Session, au *alterUser) (err error) {
 	var sql string
 	var vr *verifiedRole
-	var user *tree.User
-	var userName string
-	var hostName string
-	var password string
 	var erArray []ExecResult
 	var encryption string
 	account := ses.GetTenantInfo()
@@ -2852,22 +2866,16 @@ func doAlterUser(ctx context.Context, ses *Session, au *tree.AlterUser) (err err
 	if au.CommentOrAttribute.Exist {
 		return moerr.NewInternalError(ctx, "not support alter comment or attribute")
 	}
-	if len(au.Users) != 1 {
-		return moerr.NewInternalError(ctx, "can only alter one user at a time")
-	}
-
-	err = normalizeNamesOfUsers(ctx, au.Users)
-	if err != nil {
-		return err
-	}
 
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
-	user = au.Users[0]
-	userName = user.Username
-	hostName = user.Hostname
-	password = user.AuthOption.Str
+	userName, err := normalizeName(ctx, au.User.Username)
+	if err != nil {
+		return err
+	}
+	hostName := au.User.Hostname
+	password := au.User.IdentStr
 	if len(password) == 0 {
 		return moerr.NewInternalError(ctx, "password is empty string")
 	}
@@ -2880,11 +2888,11 @@ func doAlterUser(ctx context.Context, ses *Session, au *tree.AlterUser) (err err
 		return err
 	}
 
-	if user.AuthOption == nil {
+	if !au.User.AuthExist {
 		return moerr.NewInternalError(ctx, "Operation ALTER USER failed for '%s'@'%s', alter Auth is nil", userName, hostName)
 	}
 
-	if user.AuthOption.Typ != tree.AccountIdentifiedByPassword {
+	if au.User.IdentTyp != tree.AccountIdentifiedByPassword {
 		return moerr.NewInternalError(ctx, "Operation ALTER USER failed for '%s'@'%s', only support alter Auth by identified by", userName, hostName)
 	}
 
@@ -2903,7 +2911,7 @@ func doAlterUser(ctx context.Context, ses *Session, au *tree.AlterUser) (err err
 		// false : return an error
 		// true : return and  do nothing
 		if !au.IfExists {
-			return moerr.NewInternalError(ctx, "Operation ALTER USER failed for '%s'@'%s', user does't exist", user.Username, user.Hostname)
+			return moerr.NewInternalError(ctx, "Operation ALTER USER failed for '%s'@'%s', user does't exist", userName, hostName)
 		} else {
 			return err
 		}
@@ -2960,7 +2968,22 @@ func doAlterUser(ctx context.Context, ses *Session, au *tree.AlterUser) (err err
 	return err
 }
 
-func doAlterAccount(ctx context.Context, ses *Session, aa *tree.AlterAccount) (err error) {
+type alterAccount struct {
+	IfExists bool
+	Name     string
+
+	AuthExist bool
+	AdminName string
+	IdentTyp  tree.AccountIdentifiedOption
+	IdentStr  string
+
+	// status_option or not
+	StatusOption tree.AccountStatus
+	// comment or not
+	Comment tree.AccountComment
+}
+
+func doAlterAccount(ctx context.Context, ses *Session, aa *alterAccount) (err error) {
 	var sql string
 	var erArray []ExecResult
 	var targetAccountId uint64
@@ -2974,7 +2997,7 @@ func doAlterAccount(ctx context.Context, ses *Session, aa *tree.AlterAccount) (e
 	}
 
 	optionBits := uint8(0)
-	if aa.AuthOption.Exist {
+	if aa.AuthExist {
 		optionBits |= 1
 	}
 	if aa.StatusOption.Exist {
@@ -2997,16 +3020,16 @@ func doAlterAccount(ctx context.Context, ses *Session, aa *tree.AlterAccount) (e
 		return err
 	}
 
-	if aa.AuthOption.Exist {
-		aa.AuthOption.AdminName, err = normalizeName(ctx, aa.AuthOption.AdminName)
+	if aa.AuthExist {
+		aa.AdminName, err = normalizeName(ctx, aa.AdminName)
 		if err != nil {
 			return err
 		}
-		if aa.AuthOption.IdentifiedType.Typ != tree.AccountIdentifiedByPassword {
+		if aa.IdentTyp != tree.AccountIdentifiedByPassword {
 			return moerr.NewInternalError(ctx, "only support identified by password")
 		}
 
-		if len(aa.AuthOption.IdentifiedType.Str) == 0 {
+		if len(aa.IdentStr) == 0 {
 			err = moerr.NewInternalError(ctx, "password is empty string")
 			return err
 		}
@@ -3077,12 +3100,12 @@ func doAlterAccount(ctx context.Context, ses *Session, aa *tree.AlterAccount) (e
 
 		if accountExist {
 			//Option 1: alter the password of admin for the account
-			if aa.AuthOption.Exist {
+			if aa.AuthExist {
 				//!!!NOTE!!!:switch into the target account's context, then update the table mo_user.
 				accountCtx := defines.AttachAccountId(ctx, uint32(targetAccountId))
 
 				//1, check the admin exists or not
-				sql, rtnErr = getSqlForPasswordOfUser(ctx, aa.AuthOption.AdminName)
+				sql, rtnErr = getSqlForPasswordOfUser(ctx, aa.AdminName)
 				if rtnErr != nil {
 					return rtnErr
 				}
@@ -3098,14 +3121,14 @@ func doAlterAccount(ctx context.Context, ses *Session, aa *tree.AlterAccount) (e
 				}
 
 				if !execResultArrayHasData(erArray) {
-					rtnErr = moerr.NewInternalError(accountCtx, "there is no user %s", aa.AuthOption.AdminName)
+					rtnErr = moerr.NewInternalError(accountCtx, "there is no user %s", aa.AdminName)
 					return
 				}
 
 				//2, update the password
 				//encryption the password
-				encryption := HashPassWord(aa.AuthOption.IdentifiedType.Str)
-				sql, rtnErr = getSqlForUpdatePasswordOfUser(ctx, encryption, aa.AuthOption.AdminName)
+				encryption := HashPassWord(aa.IdentStr)
+				sql, rtnErr = getSqlForUpdatePasswordOfUser(ctx, encryption, aa.AdminName)
 				if rtnErr != nil {
 					return rtnErr
 				}
@@ -3366,8 +3389,8 @@ func doSwitchRole(ctx context.Context, ses *Session, sr *tree.SetRole) (err erro
 	return err
 }
 
-func getSubscriptionMeta(ctx context.Context, dbName string, ses *Session, txn TxnOperator) (*plan.SubscriptionMeta, error) {
-	dbMeta, err := ses.GetParameterUnit().StorageEngine.Database(ctx, dbName, txn)
+func getSubscriptionMeta(ctx context.Context, dbName string, ses FeSession, txn TxnOperator) (*plan.SubscriptionMeta, error) {
+	dbMeta, err := getGlobalPu().StorageEngine.Database(ctx, dbName, txn)
 	if err != nil {
 		logutil.Errorf("Get Subscription database %s meta error: %s", dbName, err.Error())
 		return nil, moerr.NewNoDB(ctx)
@@ -3383,7 +3406,7 @@ func getSubscriptionMeta(ctx context.Context, dbName string, ses *Session, txn T
 	return nil, nil
 }
 
-func checkSubscriptionValidCommon(ctx context.Context, ses *Session, subName, accName, pubName string) (subs *plan.SubscriptionMeta, err error) {
+func checkSubscriptionValidCommon(ctx context.Context, ses FeSession, subName, accName, pubName string) (subs *plan.SubscriptionMeta, err error) {
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 	var (
@@ -3523,7 +3546,7 @@ func checkSubscriptionValidCommon(ctx context.Context, ses *Session, subName, ac
 	return subs, err
 }
 
-func checkSubscriptionValid(ctx context.Context, ses *Session, createSql string) (*plan.SubscriptionMeta, error) {
+func checkSubscriptionValid(ctx context.Context, ses FeSession, createSql string) (*plan.SubscriptionMeta, error) {
 	var (
 		err                       error
 		accName, pubName, subName string
@@ -3534,7 +3557,7 @@ func checkSubscriptionValid(ctx context.Context, ses *Session, createSql string)
 	return checkSubscriptionValidCommon(ctx, ses, subName, accName, pubName)
 }
 
-func isDbPublishing(ctx context.Context, dbName string, ses *Session) (ok bool, err error) {
+func isDbPublishing(ctx context.Context, dbName string, ses FeSession) (ok bool, err error) {
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 	var (
@@ -3866,6 +3889,7 @@ func doAlterStage(ctx context.Context, ses *Session, as *tree.AlterStage) (err e
 
 func doDropStage(ctx context.Context, ses *Session, ds *tree.DropStage) (err error) {
 	var sql string
+	//var err error
 	var stageExist bool
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
@@ -4168,14 +4192,20 @@ func doDropPublication(ctx context.Context, ses *Session, dp *tree.DropPublicati
 	return err
 }
 
+type dropAccount struct {
+	IfExists bool
+	Name     string
+}
+
 // doDropAccount accomplishes the DropAccount statement
-func doDropAccount(ctx context.Context, ses *Session, da *tree.DropAccount) (err error) {
+func doDropAccount(ctx context.Context, ses *Session, da *dropAccount) (err error) {
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
 	//set backgroundHandler's default schema
-	if handler, ok := bh.(*BackgroundHandler); ok {
-		handler.ses.Session.txnCompileCtx.dbName = catalog.MO_CATALOG
+	if handler, ok := bh.(*backExec); ok {
+		handler.backSes.
+			txnCompileCtx.dbName = catalog.MO_CATALOG
 	}
 
 	var sql, db, table string
@@ -4413,7 +4443,7 @@ func doDropAccount(ctx context.Context, ses *Session, da *tree.DropAccount) (err
 func postDropSuspendAccount(
 	ctx context.Context, ses *Session, accountName string, accountID int64, version uint64,
 ) (err error) {
-	qc := ses.GetParameterUnit().QueryClient
+	qc := getGlobalPu().QueryClient
 	if qc == nil {
 		return moerr.NewInternalError(ctx, "query client is not initialized")
 	}
@@ -4872,7 +4902,7 @@ func doDropProcedure(ctx context.Context, ses *Session, dp *tree.DropProcedure) 
 }
 
 // doRevokePrivilege accomplishes the RevokePrivilege statement
-func doRevokePrivilege(ctx context.Context, ses *Session, rp *tree.RevokePrivilege) (err error) {
+func doRevokePrivilege(ctx context.Context, ses FeSession, rp *tree.RevokePrivilege) (err error) {
 	var vr *verifiedRole
 	var objType objectType
 	var privLevel privilegeLevelType
@@ -5027,7 +5057,7 @@ func convertAstObjectTypeToObjectType(ctx context.Context, ot tree.ObjectType) (
 
 // checkPrivilegeObjectTypeAndPrivilegeLevel checks the relationship among the privilege type, the object type and the privilege level.
 // it returns the converted object type, the privilege level and the object id.
-func checkPrivilegeObjectTypeAndPrivilegeLevel(ctx context.Context, ses *Session, bh BackgroundExec,
+func checkPrivilegeObjectTypeAndPrivilegeLevel(ctx context.Context, ses FeSession, bh BackgroundExec,
 	ot tree.ObjectType, pl tree.PrivilegeLevel) (privilegeLevelType, int64, error) {
 	var privLevel privilegeLevelType
 	var objId int64
@@ -5137,7 +5167,7 @@ func matchPrivilegeTypeWithObjectType(ctx context.Context, privType PrivilegeTyp
 }
 
 // doGrantPrivilege accomplishes the GrantPrivilege statement
-func doGrantPrivilege(ctx context.Context, ses *Session, gp *tree.GrantPrivilege) (err error) {
+func doGrantPrivilege(ctx context.Context, ses FeSession, gp *tree.GrantPrivilege) (err error) {
 	var erArray []ExecResult
 	var roleId int64
 	var privType PrivilegeType
@@ -7734,13 +7764,15 @@ func InitSysTenantOld(ctx context.Context, aicm *defines.AutoIncrCacheManager, f
 	//Note: it is special here. The connection ctx here is ctx also.
 	//Actually, it is ok here. the ctx is moServerCtx instead of requestCtx
 	upstream := &Session{
-		connectCtx:           ctx,
-		autoIncrCacheManager: aicm,
-		protocol:             &FakeProtocol{},
-		seqCurValues:         make(map[uint64]string),
-		seqLastValue:         new(string),
+		feSessionImpl: feSessionImpl{
+			proto: &FakeProtocol{},
+		},
+		connectCtx: ctx,
+
+		seqCurValues: make(map[uint64]string),
+		seqLastValue: new(string),
 	}
-	bh := NewBackgroundHandler(ctx, upstream, mp, pu)
+	bh := NewBackgroundExec(ctx, upstream, mp)
 	defer bh.Close()
 
 	//USE the mo_catalog
@@ -7936,16 +7968,18 @@ func checkDatabaseExistsOrNot(ctx context.Context, bh BackgroundExec, dbName str
 	return false, nil
 }
 
-type CreateAccount struct {
+type createAccount struct {
 	IfNotExists  bool
 	Name         string
-	AuthOption   tree.AccountAuthOption
+	AdminName    string
+	IdentTyp     tree.AccountIdentifiedOption
+	IdentStr     string
 	StatusOption tree.AccountStatus
 	Comment      tree.AccountComment
 }
 
 // InitGeneralTenant initializes the application level tenant
-func InitGeneralTenant(ctx context.Context, ses *Session, ca *CreateAccount) (err error) {
+func InitGeneralTenant(ctx context.Context, ses *Session, ca *createAccount) (err error) {
 	var exists bool
 	var newTenant *TenantInfo
 	var newTenantCtx context.Context
@@ -7965,13 +7999,13 @@ func InitGeneralTenant(ctx context.Context, ses *Session, ca *CreateAccount) (er
 		return err
 	}
 
-	ca.AuthOption.AdminName, err = normalizeName(ctx, ca.AuthOption.AdminName)
+	ca.AdminName, err = normalizeName(ctx, ca.AdminName)
 	if err != nil {
 		return err
 	}
 
-	if ca.AuthOption.IdentifiedType.Typ == tree.AccountIdentifiedByPassword {
-		if len(ca.AuthOption.IdentifiedType.Str) == 0 {
+	if ca.IdentTyp == tree.AccountIdentifiedByPassword {
+		if len(ca.IdentStr) == 0 {
 			return moerr.NewInternalError(ctx, "password is empty string")
 		}
 	}
@@ -8060,7 +8094,7 @@ func InitGeneralTenant(ctx context.Context, ses *Session, ca *CreateAccount) (er
 		}
 
 		// create tables for new account
-		rtnErr = createTablesInMoCatalogOfGeneralTenant2(bh, ca, newTenantCtx, newTenant, ses.pu)
+		rtnErr = createTablesInMoCatalogOfGeneralTenant2(bh, ca, newTenantCtx, newTenant, getGlobalPu())
 		if rtnErr != nil {
 			return rtnErr
 		}
@@ -8089,7 +8123,7 @@ func InitGeneralTenant(ctx context.Context, ses *Session, ca *CreateAccount) (er
 }
 
 // createTablesInMoCatalogOfGeneralTenant creates catalog tables in the database mo_catalog.
-func createTablesInMoCatalogOfGeneralTenant(ctx context.Context, bh BackgroundExec, finalVersion string, ca *CreateAccount) (*TenantInfo, context.Context, error) {
+func createTablesInMoCatalogOfGeneralTenant(ctx context.Context, bh BackgroundExec, finalVersion string, ca *createAccount) (*TenantInfo, context.Context, error) {
 	var err error
 	var initMoAccount string
 	var erArray []ExecResult
@@ -8108,7 +8142,7 @@ func createTablesInMoCatalogOfGeneralTenant(ctx context.Context, bh BackgroundEx
 		return nil, nil, moerr.NewInternalError(ctx, "the account name is invalid")
 	}
 
-	if nameIsInvalid(ca.AuthOption.AdminName) {
+	if nameIsInvalid(ca.AdminName) {
 		return nil, nil, moerr.NewInternalError(ctx, "the admin name is invalid")
 	}
 
@@ -8163,7 +8197,7 @@ func createTablesInMoCatalogOfGeneralTenant(ctx context.Context, bh BackgroundEx
 
 	newTenant = &TenantInfo{
 		Tenant:        ca.Name,
-		User:          ca.AuthOption.AdminName,
+		User:          ca.AdminName,
 		DefaultRole:   accountAdminRoleName,
 		TenantID:      uint32(newTenantID),
 		UserID:        uint32(newUserId),
@@ -8174,7 +8208,7 @@ func createTablesInMoCatalogOfGeneralTenant(ctx context.Context, bh BackgroundEx
 	return newTenant, newTenantCtx, err
 }
 
-func createTablesInMoCatalogOfGeneralTenant2(bh BackgroundExec, ca *CreateAccount, newTenantCtx context.Context, newTenant *TenantInfo, pu *config.ParameterUnit) error {
+func createTablesInMoCatalogOfGeneralTenant2(bh BackgroundExec, ca *createAccount, newTenantCtx context.Context, newTenant *TenantInfo, pu *config.ParameterUnit) error {
 	var err error
 	var initDataSqls []string
 	newTenantCtx, span := trace.Debug(newTenantCtx, "createTablesInMoCatalogOfGeneralTenant2")
@@ -8202,12 +8236,12 @@ func createTablesInMoCatalogOfGeneralTenant2(bh BackgroundExec, ca *CreateAccoun
 	addSqlIntoSet(initMoRole2)
 
 	//step 3:add new user entry to the mo_user
-	if ca.AuthOption.IdentifiedType.Typ != tree.AccountIdentifiedByPassword {
+	if ca.IdentTyp != tree.AccountIdentifiedByPassword {
 		err = moerr.NewInternalError(newTenantCtx, "only support password verification now")
 		return err
 	}
-	name := ca.AuthOption.AdminName
-	password := ca.AuthOption.IdentifiedType.Str
+	name := ca.AdminName
+	password := ca.IdentStr
 	if len(password) == 0 {
 		err = moerr.NewInternalError(newTenantCtx, "password is empty string")
 		return err
@@ -8369,8 +8403,17 @@ func createSubscriptionDatabase(ctx context.Context, bh BackgroundExec, newTenan
 	return err
 }
 
+type createUser struct {
+	IfNotExists bool
+	Users       []*user
+	Role        *tree.Role
+	MiscOpt     tree.UserMiscOption
+	// comment or attribute
+	CommentOrAttribute tree.AccountCommentOrAttribute
+}
+
 // InitUser creates new user for the tenant
-func InitUser(ctx context.Context, ses *Session, tenant *TenantInfo, cu *tree.CreateUser) (err error) {
+func InitUser(ctx context.Context, ses *Session, tenant *TenantInfo, cu *createUser) (err error) {
 	var exists int
 	var erArray []ExecResult
 	var newUserId int64
@@ -8380,9 +8423,11 @@ func InitUser(ctx context.Context, ses *Session, tenant *TenantInfo, cu *tree.Cr
 	var sql string
 	var mp *mpool.MPool
 
-	err = normalizeNamesOfUsers(ctx, cu.Users)
-	if err != nil {
-		return err
+	for _, u := range cu.Users {
+		u.Username, err = normalizeName(ctx, u.Username)
+		if err != nil {
+			return err
+		}
 	}
 
 	if cu.Role != nil {
@@ -8513,15 +8558,15 @@ func InitUser(ctx context.Context, ses *Session, tenant *TenantInfo, cu *tree.Cr
 			return err
 		}
 
-		if user.AuthOption == nil {
+		if !user.AuthExist {
 			return moerr.NewInternalError(ctx, "the user %s misses the auth_option", user.Username)
 		}
 
-		if user.AuthOption.Typ != tree.AccountIdentifiedByPassword {
+		if user.IdentTyp != tree.AccountIdentifiedByPassword {
 			return moerr.NewInternalError(ctx, "only support password verification now")
 		}
 
-		password := user.AuthOption.Str
+		password := user.IdentStr
 		if len(password) == 0 {
 			return moerr.NewInternalError(ctx, "password is empty string")
 		}
@@ -8678,7 +8723,7 @@ func InitRole(ctx context.Context, ses *Session, tenant *TenantInfo, cr *tree.Cr
 	return err
 }
 
-func (mce *MysqlCmdExecutor) Upload(ctx context.Context, localPath string, storageDir string) (string, error) {
+func Upload(ctx context.Context, ses FeSession, localPath string, storageDir string) (string, error) {
 	loadLocalReader, loadLocalWriter := io.Pipe()
 
 	// watch and cancel
@@ -8699,7 +8744,7 @@ func (mce *MysqlCmdExecutor) Upload(ctx context.Context, localPath string, stora
 				Filepath: localPath,
 			},
 		}
-		return mce.processLoadLocal(ctx, param, loadLocalWriter)
+		return processLoadLocal(ctx, ses, param, loadLocalWriter)
 	})
 
 	// read from pipe and upload
@@ -8713,7 +8758,7 @@ func (mce *MysqlCmdExecutor) Upload(ctx context.Context, localPath string, stora
 		},
 	}
 
-	fileService := mce.ses.proc.FileService
+	fileService := getGlobalPu().FileService
 	_ = fileService.Delete(ctx, ioVector.FilePath)
 	err := fileService.Write(ctx, ioVector)
 	err = errors.Join(err, loadLocalErrGroup.Wait())
@@ -8724,7 +8769,7 @@ func (mce *MysqlCmdExecutor) Upload(ctx context.Context, localPath string, stora
 	return ioVector.FilePath, nil
 }
 
-func (mce *MysqlCmdExecutor) InitFunction(ctx context.Context, ses *Session, tenant *TenantInfo, cf *tree.CreateFunction) (err error) {
+func InitFunction(ctx context.Context, ses *Session, tenant *TenantInfo, cf *tree.CreateFunction) (err error) {
 	var initMoUdf string
 	var retTypeStr string
 	var dbName string
@@ -8839,7 +8884,7 @@ func (mce *MysqlCmdExecutor) InitFunction(ctx context.Context, ses *Session, ten
 			}
 			// upload
 			storageDir := string(cf.Name.Name.ObjectName) + "_" + strings.Join(typeList, "-") + "_"
-			cf.Body, err = mce.Upload(ctx, cf.Body, storageDir)
+			cf.Body, err = Upload(ctx, ses, cf.Body, storageDir)
 			if err != nil {
 				return err
 			}
@@ -9369,6 +9414,9 @@ func doGrantPrivilegeImplicitly(_ context.Context, ses *Session, stmt tree.State
 		return err
 	}
 	currentRole := tenantInfo.GetDefaultRole()
+	if len(currentRole) == 0 {
+		return err
+	}
 
 	// 1.first change to moadmin/accountAdmin
 	var tenantCtx context.Context
@@ -9416,6 +9464,9 @@ func doRevokePrivilegeImplicitly(_ context.Context, ses *Session, stmt tree.Stat
 		return err
 	}
 	currentRole := tenantInfo.GetDefaultRole()
+	if len(currentRole) == 0 {
+		return err
+	}
 
 	// 1.first change to moadmin/accountAdmin
 	var tenantCtx context.Context
@@ -9616,7 +9667,7 @@ func postAlterSessionStatus(
 	accountName string,
 	tenantId int64,
 	status string) error {
-	qc := ses.GetParameterUnit().QueryClient
+	qc := getGlobalPu().QueryClient
 	if qc == nil {
 		return moerr.NewInternalError(ctx, "query client is not initialized")
 	}

@@ -14,6 +14,7 @@ import (
 	types "github.com/matrixorigin/matrixone/pkg/container/types"
 	vector "github.com/matrixorigin/matrixone/pkg/container/vector"
 	objectio "github.com/matrixorigin/matrixone/pkg/objectio"
+	api "github.com/matrixorigin/matrixone/pkg/pb/api"
 	plan "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	statsinfo "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	timestamp "github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -541,6 +542,21 @@ func (mr *MockRelationMockRecorder) MaxAndMinValues(ctx interface{}) *gomock.Cal
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "MaxAndMinValues", reflect.TypeOf((*MockRelation)(nil).MaxAndMinValues), ctx)
 }
 
+// MergeObjects mocks base method.
+func (m *MockRelation) MergeObjects(ctx context.Context, objstats []objectio.ObjectStats) (*api.MergeCommitEntry, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "MergeObjects", ctx, objstats)
+	ret0, _ := ret[0].(*api.MergeCommitEntry)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// MergeObjects indicates an expected call of MergeObjects.
+func (mr *MockRelationMockRecorder) MergeObjects(ctx, objstats interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "MergeObjects", reflect.TypeOf((*MockRelation)(nil).MergeObjects), ctx, objstats)
+}
+
 // NewReader mocks base method.
 func (m *MockRelation) NewReader(arg0 context.Context, arg1 int, arg2 *plan.Expr, arg3 []byte, arg4 bool) ([]engine.Reader, error) {
 	m.ctrl.T.Helper()
@@ -700,20 +716,6 @@ func (m *MockRelation) UpdateConstraint(arg0 context.Context, arg1 *engine.Const
 func (mr *MockRelationMockRecorder) UpdateConstraint(arg0, arg1 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateConstraint", reflect.TypeOf((*MockRelation)(nil).UpdateConstraint), arg0, arg1)
-}
-
-// UpdateObjectInfos mocks base method.
-func (m *MockRelation) UpdateObjectInfos(arg0 context.Context) error {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "UpdateObjectInfos", arg0)
-	ret0, _ := ret[0].(error)
-	return ret0
-}
-
-// UpdateObjectInfos indicates an expected call of UpdateObjectInfos.
-func (mr *MockRelationMockRecorder) UpdateObjectInfos(arg0 interface{}) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateObjectInfos", reflect.TypeOf((*MockRelation)(nil).UpdateObjectInfos), arg0)
 }
 
 // Write mocks base method.

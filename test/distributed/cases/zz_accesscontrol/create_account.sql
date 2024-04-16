@@ -123,11 +123,23 @@ create account if not exists accout_Xingming_insert ADMIN_NAME 'root' IDENTIFIED
 select account_name from mo_catalog.mo_account where account_name='accout_xingming_insert';
 
 --9.CREATE ACCOUNT support prepared statement
-PREPARE s1 FROM "create account ? ADMIN_NAME 'admin' IDENTIFIED BY '111'";
+PREPARE s1 FROM "create account ? ADMIN_NAME ? IDENTIFIED BY ?";
 set @a_var = 'ccc';
-EXECUTE s1 USING @a_var;
-select account_name from mo_catalog.mo_account where account_name='ccc';
+set @b_var = 'admin';
+set @c_var = '111';
+EXECUTE s1 USING @a_var, @b_var, @c_var;
 DEALLOCATE PREPARE s1;
+select account_name from mo_catalog.mo_account where account_name='ccc';
+
+drop account ccc;
+PREPARE s1 FROM "create account ? ADMIN_NAME 'admin' IDENTIFIED BY ?";
+set @a_var = 'ccc';
+set @c_var = '222';
+EXECUTE s1 USING @a_var, @c_var;
+DEALLOCATE PREPARE s1;
+-- @session:id=3&user=ccc:admin&password=222
+select 1;
+-- @session
 
 drop account if exists `test@123456`;
 drop account if exists testaccount;

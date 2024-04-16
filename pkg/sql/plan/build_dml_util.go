@@ -162,7 +162,7 @@ func buildInsertPlans(
 }
 
 // buildUpdatePlans  build update plan.
-func buildUpdatePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindContext, updatePlanCtx *dmlPlanCtx) error {
+func buildUpdatePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindContext, updatePlanCtx *dmlPlanCtx, addAffectedRows bool) error {
 	var err error
 	// sink_scan -> project -> [agg] -> [filter] -> sink
 	lastNodeId := appendSinkScanNode(builder, bindCtx, updatePlanCtx.sourceStep)
@@ -236,7 +236,6 @@ func buildUpdatePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 	// build insert plan.
 	insertBindCtx := NewBindContext(builder, nil)
 	var partitionExpr *Expr
-	addAffectedRows := false
 	ifExistAutoPkCol := false
 	ifNeedCheckPkDup := true
 	var indexSourceColTypes []*plan.Type
@@ -1126,7 +1125,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 						upPlanCtx.isFkRecursionCall = true
 						upPlanCtx.updatePkCol = updatePk
 
-						err = buildUpdatePlans(ctx, builder, bindCtx, upPlanCtx)
+						err = buildUpdatePlans(ctx, builder, bindCtx, upPlanCtx, false)
 						putDmlPlanCtx(upPlanCtx)
 						if err != nil {
 							return err
@@ -1171,7 +1170,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 								upPlanCtx.isFkRecursionCall = true
 								upPlanCtx.updatePkCol = updatePk
 
-								err = buildUpdatePlans(ctx, builder, bindCtx, upPlanCtx)
+								err = buildUpdatePlans(ctx, builder, bindCtx, upPlanCtx, false)
 								putDmlPlanCtx(upPlanCtx)
 								if err != nil {
 									return err
@@ -2930,7 +2929,7 @@ func appendDeleteIndexTablePlan(
 	lastNodeId := baseNodeId
 	var err error
 	projectList := getProjectionByLastNodeForRightJoin(builder, lastNodeId)
-	rfTag := builder.genNewTag()
+	rfTag := builder.genNewMsgTag()
 
 	var rightRowIdPos int32 = -1
 	var rightPkPos int32 = -1
@@ -2952,25 +2951,23 @@ func appendDeleteIndexTablePlan(
 		}
 	}
 	pkTyp := uniqueTableDef.Cols[rightPkPos].Typ
-	leftId := builder.appendNode(&plan.Node{
-		NodeType:    plan.Node_TABLE_SCAN,
-		Stats:       &plan.Stats{},
-		ObjRef:      uniqueObjRef,
-		TableDef:    uniqueTableDef,
-		ProjectList: scanNodeProject,
-		RuntimeFilterProbeList: []*plan.RuntimeFilterSpec{
-			{
-				Tag: rfTag,
-				Expr: &plan.Expr{
-					Typ: pkTyp,
-					Expr: &plan.Expr_Col{
-						Col: &plan.ColRef{
-							Name: uniqueTableDef.Pkey.PkeyColName,
-						},
-					},
-				},
+
+	probeExpr := &plan.Expr{
+		Typ: pkTyp,
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{
+				Name: uniqueTableDef.Pkey.PkeyColName,
 			},
 		},
+	}
+
+	leftId := builder.appendNode(&plan.Node{
+		NodeType:               plan.Node_TABLE_SCAN,
+		Stats:                  &plan.Stats{},
+		ObjRef:                 uniqueObjRef,
+		TableDef:               uniqueTableDef,
+		ProjectList:            scanNodeProject,
+		RuntimeFilterProbeList: []*plan.RuntimeFilterSpec{MakeRuntimeFilter(rfTag, false, 0, probeExpr)},
 	}, bindCtx)
 
 	// append projection
@@ -3060,6 +3057,16 @@ func appendDeleteIndexTablePlan(
 	}
 	joinConds = []*Expr{condExpr}
 
+	buildExpr := &plan.Expr{
+		Typ: pkTyp,
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{
+				RelPos: 0,
+				ColPos: 0,
+			},
+		},
+	}
+
 	/*
 		For the hidden table of the secondary index, there will be no null situation, so there is no need to use right join
 		For why right join is needed, you can consider the following SQL :
@@ -3074,26 +3081,12 @@ func appendDeleteIndexTablePlan(
 	}
 
 	lastNodeId = builder.appendNode(&plan.Node{
-		NodeType:    plan.Node_JOIN,
-		Children:    []int32{leftId, lastNodeId},
-		JoinType:    joinType,
-		OnList:      joinConds,
-		ProjectList: projectList,
-		RuntimeFilterBuildList: []*plan.RuntimeFilterSpec{
-			{
-				Tag:        rfTag,
-				UpperLimit: GetInFilterCardLimitOnPK(builder.qry.Nodes[leftId].Stats.TableCnt),
-				Expr: &plan.Expr{
-					Typ: pkTyp,
-					Expr: &plan.Expr_Col{
-						Col: &plan.ColRef{
-							RelPos: 0,
-							ColPos: 0,
-						},
-					},
-				},
-			},
-		},
+		NodeType:               plan.Node_JOIN,
+		Children:               []int32{leftId, lastNodeId},
+		JoinType:               joinType,
+		OnList:                 joinConds,
+		ProjectList:            projectList,
+		RuntimeFilterBuildList: []*plan.RuntimeFilterSpec{MakeRuntimeFilter(rfTag, false, GetInFilterCardLimitOnPK(builder.qry.Nodes[leftId].Stats.TableCnt), buildExpr)},
 	}, bindCtx)
 	return lastNodeId, nil
 }

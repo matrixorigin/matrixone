@@ -56,10 +56,10 @@ func (s *taskService) CreateAsyncTask(ctx context.Context, value task.TaskMetada
 		select {
 		case <-ctx.Done():
 			s.rt.Logger().Error("create task timeout")
-			return errNotReady
+			return ErrNotReady
 		default:
 			if _, err := s.store.AddAsyncTask(ctx, newTaskFromMetadata(value)); err != nil {
-				if err == errNotReady {
+				if err == ErrNotReady {
 					time.Sleep(300 * time.Millisecond)
 					continue
 				}
@@ -80,10 +80,10 @@ func (s *taskService) CreateBatch(ctx context.Context, tasks []task.TaskMetadata
 		select {
 		case <-ctx.Done():
 			s.rt.Logger().Error("create task timeout")
-			return errNotReady
+			return ErrNotReady
 		default:
 			if _, err := s.store.AddAsyncTask(ctx, values...); err != nil {
-				if err == errNotReady {
+				if err == ErrNotReady {
 					time.Sleep(300 * time.Millisecond)
 					continue
 				}

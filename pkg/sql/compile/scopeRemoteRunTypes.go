@@ -170,6 +170,7 @@ func (sender *messageSenderOnClient) receiveMessage() (morpc.Message, error) {
 	case val, ok := <-sender.receiveCh:
 		if !ok || val == nil {
 			// ch close
+			logutil.Errorf("the stream is closed, ok: %v, val: %v", ok, val)
 			return nil, moerr.NewStreamClosed(sender.ctx)
 		}
 		return val, nil
@@ -399,9 +400,6 @@ func (receiver *messageReceiverOnServer) newCompile() *Compile {
 	c.fill = func(b *batch.Batch) error {
 		return receiver.sendBatch(b)
 	}
-
-	c.runtimeFilterReceiverMap = make(map[int32]*runtimeFilterReceiver)
-
 	return c
 }
 
