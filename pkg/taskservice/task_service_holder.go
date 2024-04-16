@@ -29,7 +29,7 @@ import (
 )
 
 var (
-	errNotReady = moerr.NewInvalidStateNoCtx("task store not ready")
+	ErrNotReady = moerr.NewInvalidStateNoCtx("task store not ready")
 )
 
 type taskServiceHolder struct {
@@ -176,7 +176,7 @@ func (s *refreshableTaskStorage) AddAsyncTask(ctx context.Context, tasks ...task
 	s.mu.RLock()
 	lastAddress := s.mu.lastAddress
 	if s.mu.store == nil {
-		err = errNotReady
+		err = ErrNotReady
 	} else {
 		v, err = s.mu.store.AddAsyncTask(ctx, tasks...)
 	}
@@ -193,7 +193,7 @@ func (s *refreshableTaskStorage) UpdateAsyncTask(ctx context.Context, tasks []ta
 	s.mu.RLock()
 	lastAddress := s.mu.lastAddress
 	if s.mu.store == nil {
-		err = errNotReady
+		err = ErrNotReady
 	} else {
 		v, err = s.mu.store.UpdateAsyncTask(ctx, tasks, conditions...)
 	}
@@ -210,7 +210,7 @@ func (s *refreshableTaskStorage) DeleteAsyncTask(ctx context.Context, conditions
 	s.mu.RLock()
 	lastAddress := s.mu.lastAddress
 	if s.mu.store == nil {
-		err = errNotReady
+		err = ErrNotReady
 	} else {
 		v, err = s.mu.store.DeleteAsyncTask(ctx, conditions...)
 	}
@@ -227,7 +227,7 @@ func (s *refreshableTaskStorage) QueryAsyncTask(ctx context.Context, conditions 
 	s.mu.RLock()
 	lastAddress := s.mu.lastAddress
 	if s.mu.store == nil {
-		err = errNotReady
+		err = ErrNotReady
 	} else {
 		v, err = s.mu.store.QueryAsyncTask(ctx, conditions...)
 	}
@@ -244,7 +244,7 @@ func (s *refreshableTaskStorage) AddCronTask(ctx context.Context, tasks ...task.
 	s.mu.RLock()
 	lastAddress := s.mu.lastAddress
 	if s.mu.store == nil {
-		err = errNotReady
+		err = ErrNotReady
 	} else {
 		v, err = s.mu.store.AddCronTask(ctx, tasks...)
 	}
@@ -261,7 +261,7 @@ func (s *refreshableTaskStorage) QueryCronTask(ctx context.Context, c ...Conditi
 	s.mu.RLock()
 	lastAddress := s.mu.lastAddress
 	if s.mu.store == nil {
-		err = errNotReady
+		err = ErrNotReady
 	} else {
 		v, err = s.mu.store.QueryCronTask(ctx, c...)
 	}
@@ -278,7 +278,7 @@ func (s *refreshableTaskStorage) UpdateCronTask(ctx context.Context, cronTask ta
 	s.mu.RLock()
 	lastAddress := s.mu.lastAddress
 	if s.mu.store == nil {
-		err = errNotReady
+		err = ErrNotReady
 	} else {
 		v, err = s.mu.store.UpdateCronTask(ctx, cronTask, task)
 	}
@@ -295,7 +295,7 @@ func (s *refreshableTaskStorage) AddDaemonTask(ctx context.Context, tasks ...tas
 	s.mu.RLock()
 	lastAddress := s.mu.lastAddress
 	if s.mu.store == nil {
-		err = errNotReady
+		err = ErrNotReady
 	} else {
 		v, err = s.mu.store.AddDaemonTask(ctx, tasks...)
 	}
@@ -312,7 +312,7 @@ func (s *refreshableTaskStorage) UpdateDaemonTask(ctx context.Context, tasks []t
 	s.mu.RLock()
 	lastAddress := s.mu.lastAddress
 	if s.mu.store == nil {
-		err = errNotReady
+		err = ErrNotReady
 	} else {
 		v, err = s.mu.store.UpdateDaemonTask(ctx, tasks, conditions...)
 	}
@@ -329,7 +329,7 @@ func (s *refreshableTaskStorage) DeleteDaemonTask(ctx context.Context, condition
 	s.mu.RLock()
 	lastAddress := s.mu.lastAddress
 	if s.mu.store == nil {
-		err = errNotReady
+		err = ErrNotReady
 	} else {
 		v, err = s.mu.store.DeleteDaemonTask(ctx, conditions...)
 	}
@@ -346,7 +346,7 @@ func (s *refreshableTaskStorage) QueryDaemonTask(ctx context.Context, conditions
 	s.mu.RLock()
 	lastAddress := s.mu.lastAddress
 	if s.mu.store == nil {
-		err = errNotReady
+		err = ErrNotReady
 	} else {
 		v, err = s.mu.store.QueryDaemonTask(ctx, conditions...)
 	}
@@ -363,7 +363,7 @@ func (s *refreshableTaskStorage) HeartbeatDaemonTask(ctx context.Context, tasks 
 	s.mu.RLock()
 	lastAddress := s.mu.lastAddress
 	if s.mu.store == nil {
-		err = errNotReady
+		err = ErrNotReady
 	} else {
 		v, err = s.mu.store.HeartbeatDaemonTask(ctx, tasks)
 	}
