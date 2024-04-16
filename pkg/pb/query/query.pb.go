@@ -14,12 +14,12 @@ import (
 	_ "github.com/gogo/protobuf/gogoproto"
 	proto "github.com/gogo/protobuf/proto"
 	github_com_gogo_protobuf_types "github.com/gogo/protobuf/types"
+	_ "github.com/golang/protobuf/ptypes/timestamp"
 	lock "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	statsinfo "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	status "github.com/matrixorigin/matrixone/pkg/pb/status"
 	timestamp "github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	txn "github.com/matrixorigin/matrixone/pkg/pb/txn"
-	_ "google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // Reference imports to suppress errors if they are not otherwise used.

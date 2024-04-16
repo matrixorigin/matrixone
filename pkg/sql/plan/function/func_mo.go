@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -145,9 +146,6 @@ func MoTableRows(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 					if err != nil {
 						return err
 					}
-					if err = prel.UpdateObjectInfos(ctx); err != nil {
-						return err
-					}
 					prows, err = prel.Rows(ctx)
 					if err != nil {
 						return err
@@ -155,9 +153,6 @@ func MoTableRows(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 					rows += prows
 				}
 			} else {
-				if err = rel.UpdateObjectInfos(ctx); err != nil {
-					return err
-				}
 				if rows, err = rel.Rows(ctx); err != nil {
 					return err
 				}
@@ -291,18 +286,12 @@ func getTableSize(ctx context.Context, db engine.Database, rel engine.Relation) 
 			if err != nil {
 				return 0, err
 			}
-			if err = prel.UpdateObjectInfos(ctx); err != nil {
-				return 0, err
-			}
 			if psize, err = prel.Size(ctx, AllColumns); err != nil {
 				return 0, err
 			}
 			size += psize
 		}
 	} else {
-		if err = rel.UpdateObjectInfos(ctx); err != nil {
-			return 0, err
-		}
 		if size, err = rel.Size(ctx, AllColumns); err != nil {
 			return 0, err
 		}
@@ -655,6 +644,33 @@ func CastIndexValueToIndex(ivecs []*vector.Vector, result vector.FunctionResultW
 			}
 
 			if err = rs.Append(index, false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// CastNanoToTimestamp returns timestamp according to the nano
+func CastNanoToTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	rs := vector.MustFunctionResult[types.Timestamp](result)
+	nanos := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[0])
+
+	layout := "2006-01-02 15:04:05"
+	for i := uint64(0); i < uint64(length); i++ {
+		unixNano, null := nanos.GetValue(i)
+		if null {
+			if err := rs.Append(types.Timestamp(0), true); err != nil {
+				return err
+			}
+		} else {
+			tm := time.Unix(0, unixNano)
+			str := tm.Format(layout)
+			t, err := types.ParseTimestamp(time.UTC, str, 0)
+			if err != nil {
+				return err
+			}
+			if err = rs.Append(t, false); err != nil {
 				return err
 			}
 		}

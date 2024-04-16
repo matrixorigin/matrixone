@@ -19,6 +19,7 @@ package plan;
 
 import "github.com/gogo/protobuf/gogoproto/gogo.proto";
 import "lock.proto";
+import "timestamp.proto";
 
 option go_package = "github.com/matrixorigin/matrixone/pkg/pb/plan";
 option (gogoproto.sizer_all) = false;
@@ -512,8 +513,9 @@ message Stats {
 	double table_cnt = 5;
 	//for scan, selectivity means outcnt divide total count
 	double selectivity = 6;
+	bool forceOneCN = 7;
 
-	HashMapStats hashmapStats = 7;
+	HashMapStats hashmapStats = 8;
 }
 
 message RowsetExpr {
@@ -834,6 +836,9 @@ message Node {
 	//for message
 	repeated msgHeader send_msg_list = 55;
 	repeated msgHeader recv_msg_list = 56;
+
+	// table_scan timestamp
+	timestamp.Timestamp scanTS = 57;
 }
 
 message ExternScan {
@@ -1010,6 +1015,8 @@ message DataControl {
 		EXECUTE			= 5;
 		DEALLOCATE		= 6;
 		CREATE_ACCOUNT  = 7;
+		ALTER_ACCOUNT   = 8;
+		DROP_ACCOUNT    = 9;
 	}
 	//DataDefinition type
 	DclType dcl_type = 1;
@@ -1018,7 +1025,7 @@ message DataControl {
 		Prepare prepare 			= 3;
 		Execute execute				= 4;
 		Deallocate deallocate 		= 5;
-		CreateAccount create_account = 6;
+		OtherDCL other = 6;
 	}
 }
 
@@ -1397,30 +1404,8 @@ message Deallocate {
 	string name			= 1;
 }
 
-enum AccountIdentifiedOption {
-	AccountIdentifiedUnknown = 0;
-	AccountIdentifiedByPassword = 1;
-	AccountIdentifiedByRandomPassword = 2;
-	AccountIdentifiedWithSSL = 3;
-}
-
-message AccountIdentified {
-	AccountIdentifiedOption Typ = 1;
-	string Str = 2;
-}
-
-enum AccountStatusOption {
-	AccountStatusOpen       = 0;
-	AccountStatusSuspend    = 1;
-	AccountStatusRestricted = 2;
-}
-
-message CreateAccount {
-	bool ifNotExists = 1;
-	Expr name = 2;
-	string adminName = 3;
-	AccountIdentified identified = 4;
-	AccountStatusOption status = 5;
+message OtherDCL {
+	repeated int32 paramTypes = 1;
 }
 
 enum TableLockType {

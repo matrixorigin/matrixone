@@ -149,7 +149,7 @@ func (s *sAggBitmapOr) MarshalBinary() ([]byte, error) {
 			bmpBinarySlice = append(bmpBinarySlice, bmpBinary)
 		}
 	}
-	return types.EncodeSliceWithCap(bmpBinarySlice), nil
+	return types.EncodeSlice(bmpBinarySlice), nil
 }
 func (s *sAggBitmapOr) UnmarshalBinary(bytes []byte) error {
 	bmpBinarySlice := types.DecodeSlice[[]byte](bytes)

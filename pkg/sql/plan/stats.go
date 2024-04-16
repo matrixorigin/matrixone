@@ -982,7 +982,7 @@ func foldTableScanFilters(proc *process.Process, qry *Query, nodeId int32) error
 	return nil
 }
 
-func recalcStatsByRuntimeFilter(node *plan.Node, runtimeFilterSel float64) {
+func recalcStatsByRuntimeFilter(node *plan.Node, joinNode *plan.Node, runtimeFilterSel float64) {
 	if node.NodeType != plan.Node_TABLE_SCAN {
 		return
 	}
@@ -992,6 +992,11 @@ func recalcStatsByRuntimeFilter(node *plan.Node, runtimeFilterSel float64) {
 		node.Stats.Cost = 1
 	}
 	node.Stats.BlockNum = int32(node.Stats.Outcnt/2) + 1
+	if joinNode.JoinType == plan.Node_RIGHT || joinNode.BuildOnLeft {
+		if !joinNode.Stats.HashmapStats.Shuffle {
+			node.Stats.ForceOneCN = true
+		}
+	}
 }
 
 func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
@@ -1240,6 +1245,7 @@ func DeepCopyStats(stats *plan.Stats) *plan.Stats {
 		TableCnt:     stats.TableCnt,
 		Selectivity:  stats.Selectivity,
 		HashmapStats: hashmapStats,
+		ForceOneCN:   stats.ForceOneCN,
 	}
 }
 

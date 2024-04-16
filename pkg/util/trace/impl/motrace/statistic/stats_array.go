@@ -262,7 +262,12 @@ type StatsInfo struct {
 	//S3ReadBytes             uint
 	//S3WriteBytes            uint
 
-	LockTimeConsumption int64
+	LocalFSReadIOLockTimeConsumption      int64
+	LocalFSReadCacheIOLockTimeConsumption int64
+
+	S3FSPrefetchFileIOLockTimeConsumption int64
+	S3FSReadIOLockTimeConsumption         int64
+	S3FSReadCacheIOLockTimeConsumption    int64
 
 	ParseStartTime     time.Time `json:"ParseStartTime"`
 	PlanStartTime      time.Time `json:"PlanStartTime"`
@@ -324,11 +329,46 @@ func (stats *StatsInfo) AddIOAccessTimeConsumption(d time.Duration) {
 	atomic.AddInt64(&stats.IOAccessTimeConsumption, int64(d))
 }
 
-func (stats *StatsInfo) AddLockTimeConsumption(d time.Duration) {
+func (stats *StatsInfo) AddLocalFSReadCacheIOLockTimeConsumption(d time.Duration) {
 	if stats == nil {
 		return
 	}
-	atomic.AddInt64(&stats.LockTimeConsumption, int64(d))
+	atomic.AddInt64(&stats.LocalFSReadCacheIOLockTimeConsumption, int64(d))
+}
+func (stats *StatsInfo) AddLocalFSReadIOLockTimeConsumption(d time.Duration) {
+	if stats == nil {
+		return
+	}
+	atomic.AddInt64(&stats.LocalFSReadIOLockTimeConsumption, int64(d))
+}
+func (stats *StatsInfo) AddS3FSPrefetchFileIOLockTimeConsumption(d time.Duration) {
+	if stats == nil {
+		return
+	}
+	atomic.AddInt64(&stats.S3FSPrefetchFileIOLockTimeConsumption, int64(d))
+}
+func (stats *StatsInfo) AddS3FSReadIOLockTimeConsumption(d time.Duration) {
+	if stats == nil {
+		return
+	}
+	atomic.AddInt64(&stats.S3FSReadIOLockTimeConsumption, int64(d))
+}
+func (stats *StatsInfo) AddS3FSReadCacheIOLockTimeConsumption(d time.Duration) {
+	if stats == nil {
+		return
+	}
+	atomic.AddInt64(&stats.S3FSReadCacheIOLockTimeConsumption, int64(d))
+}
+
+func (stats *StatsInfo) IOLockTimeConsumption() int64 {
+	if stats == nil {
+		return 0
+	}
+	return stats.LocalFSReadCacheIOLockTimeConsumption +
+		stats.LocalFSReadIOLockTimeConsumption +
+		stats.S3FSPrefetchFileIOLockTimeConsumption +
+		stats.S3FSReadCacheIOLockTimeConsumption +
+		stats.S3FSReadIOLockTimeConsumption
 }
 
 // reset StatsInfo into zero state
@@ -336,22 +376,7 @@ func (stats *StatsInfo) Reset() {
 	if stats == nil {
 		return
 	}
-	stats.ParseDuration = 0
-	stats.CompileDuration = 0
-	stats.PlanDuration = 0
-	stats.ExecutionDuration = 0
-
-	//stats.PipelineTimeConsumption = 0
-	//stats.PipelineBlockTimeConsumption = 0
-
-	//stats.S3AccessTimeConsumption = 0
-	//stats.S3ReadBytes = 0
-	//stats.S3WriteBytes = 0
-	stats.IOAccessTimeConsumption = 0
-	stats.LockTimeConsumption = 0
-	stats.CompileStartTime = time.Time{}
-	stats.PlanStartTime = time.Time{}
-
+	*stats = StatsInfo{}
 }
 
 func ContextWithStatsInfo(requestCtx context.Context, stats *StatsInfo) context.Context {
