@@ -61,6 +61,8 @@ func (cc *CatalogCache) UpdateDuration(start types.TS, end types.TS) {
 	cc.mu.end = end
 }
 
+var _ = (&CatalogCache{}).UpdateStart
+
 func (cc *CatalogCache) UpdateStart(ts types.TS) {
 	cc.mu.Lock()
 	defer cc.mu.Unlock()

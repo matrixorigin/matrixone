@@ -163,7 +163,7 @@ func (p *Partition) ConsumeSnapCkps(
 	return nil
 }
 
-func (p *Partition) ConsumeLatestCkps(
+func (p *Partition) ConsumeCheckpoints(
 	ctx context.Context,
 	fn func(
 		checkpoint string,

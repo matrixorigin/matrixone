@@ -478,7 +478,7 @@ func (e *Engine) lazyLoadLatestCkp(ctx context.Context, tbl *txnTable) (*logtail
 	part := e.getOrCreateLatestPart(tbl.db.databaseId, tbl.tableId)
 	cache := e.getLatestCatalogCache()
 
-	if err := part.ConsumeLatestCkps(
+	if err := part.ConsumeCheckpoints(
 		ctx,
 		func(checkpoint string, state *logtailreplay.PartitionState) error {
 			entries, closeCBs, err := logtail.LoadCheckpointEntries(
