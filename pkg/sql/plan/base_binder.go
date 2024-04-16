@@ -121,12 +121,12 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 		if err != nil {
 			return
 		}
-		var typ *Type
+		var typ Type
 		typ, err = getTypeFromAst(b.GetContext(), exprImpl.Type)
 		if err != nil {
 			return
 		}
-		expr, err = appendCastBeforeExpr(b.GetContext(), expr, typ)
+		expr, err = appendCastBeforeExpr(b.GetContext(), expr, &typ)
 
 	case *tree.BitCastExpr:
 		expr, err = b.bindFuncExprImplByAstExpr("bit_cast", []tree.Expr{astExpr}, depth)
@@ -1053,7 +1053,7 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 			return nil, err
 		}
 		typeExpr := &Expr{
-			Typ: *typ,
+			Typ: typ,
 			Expr: &plan.Expr_T{
 				T: &plan.TargetType{},
 			},
@@ -1081,7 +1081,7 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 			return nil, err
 		}
 		typeExpr := &Expr{
-			Typ: *typ,
+			Typ: typ,
 			Expr: &plan.Expr_T{
 				T: &plan.TargetType{},
 			},

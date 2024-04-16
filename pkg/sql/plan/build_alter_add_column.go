@@ -47,7 +47,7 @@ func AddColumn(ctx CompilerContext, alterPlan *plan.AlterTable, spec *tree.Alter
 	if err != nil {
 		return err
 	}
-	if err = checkAddColumnType(ctx.GetContext(), colType, newColName); err != nil {
+	if err = checkAddColumnType(ctx.GetContext(), &colType, newColName); err != nil {
 		return err
 	}
 	newCol, err := buildAddColumnAndConstraint(ctx, alterPlan, specNewColumn, colType)
@@ -82,7 +82,7 @@ func handleAddColumnPosition(ctx context.Context, tableDef *TableDef, newCol *Co
 	return nil
 }
 
-func buildAddColumnAndConstraint(ctx CompilerContext, alterPlan *plan.AlterTable, specNewColumn *tree.ColumnTableDef, colType *plan.Type) (*ColDef, error) {
+func buildAddColumnAndConstraint(ctx CompilerContext, alterPlan *plan.AlterTable, specNewColumn *tree.ColumnTableDef, colType plan.Type) (*ColDef, error) {
 	newColName := specNewColumn.Name.Parts[0]
 	// Check if the new column name is valid and conflicts with internal hidden columns
 	err := CheckColumnNameValid(ctx.GetContext(), newColName)
@@ -98,7 +98,7 @@ func buildAddColumnAndConstraint(ctx CompilerContext, alterPlan *plan.AlterTable
 		//Comment:  originalCol.Comment,
 		//OnUpdate: originalCol.OnUpdate,
 		Name: newColName,
-		Typ:  *colType,
+		Typ:  colType,
 		Alg:  plan.CompressType_Lz4,
 	}
 
@@ -107,7 +107,7 @@ func buildAddColumnAndConstraint(ctx CompilerContext, alterPlan *plan.AlterTable
 	for _, attr := range specNewColumn.Attributes {
 		switch attribute := attr.(type) {
 		case *tree.AttributePrimaryKey, *tree.AttributeKey:
-			err = checkPrimaryKeyPartType(ctx.GetContext(), colType, newColName)
+			err = checkPrimaryKeyPartType(ctx.GetContext(), &colType, newColName)
 			if err != nil {
 				return nil, err
 			}
@@ -136,7 +136,7 @@ func buildAddColumnAndConstraint(ctx CompilerContext, alterPlan *plan.AlterTable
 			}
 			newCol.Typ.AutoIncr = true
 		case *tree.AttributeUnique, *tree.AttributeUniqueKey:
-			err = checkUniqueKeyPartType(ctx.GetContext(), colType, newColName)
+			err = checkUniqueKeyPartType(ctx.GetContext(), &colType, newColName)
 			if err != nil {
 				return nil, err
 			}
@@ -163,14 +163,14 @@ func buildAddColumnAndConstraint(ctx CompilerContext, alterPlan *plan.AlterTable
 			}
 			alterPlan.CopyTableDef.Indexes = append(alterPlan.CopyTableDef.Indexes, indexDef)
 		case *tree.AttributeDefault, *tree.AttributeNull:
-			defaultValue, err := buildDefaultExpr(specNewColumn, colType, ctx.GetProcess())
+			defaultValue, err := buildDefaultExpr(specNewColumn, &colType, ctx.GetProcess())
 			if err != nil {
 				return nil, err
 			}
 			newCol.Default = defaultValue
 			hasDefaultValue = true
 		case *tree.AttributeOnUpdate:
-			onUpdateExpr, err := buildOnUpdate(specNewColumn, colType, ctx.GetProcess())
+			onUpdateExpr, err := buildOnUpdate(specNewColumn, &colType, ctx.GetProcess())
 			if err != nil {
 				return nil, err
 			}
@@ -183,7 +183,7 @@ func buildAddColumnAndConstraint(ctx CompilerContext, alterPlan *plan.AlterTable
 		return nil, moerr.NewErrInvalidDefault(ctx.GetContext(), specNewColumn.Name.Parts[0])
 	}
 	if !hasDefaultValue {
-		defaultValue, err := buildDefaultExpr(specNewColumn, colType, ctx.GetProcess())
+		defaultValue, err := buildDefaultExpr(specNewColumn, &colType, ctx.GetProcess())
 		if err != nil {
 			return nil, err
 		}

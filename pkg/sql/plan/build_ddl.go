@@ -319,7 +319,7 @@ func buildSourceDefs(stmt *tree.CreateSource, ctx CompilerContext, createStream 
 			col := &ColDef{
 				Name: colName,
 				Alg:  plan.CompressType_Lz4,
-				Typ:  *colType,
+				Typ:  colType,
 			}
 			colMap[colName] = col
 			for _, attr := range def.Attributes {
@@ -403,7 +403,7 @@ func buildSequenceTableDef(stmt *tree.CreateSequence, ctx CompilerContext, cs *p
 		cols[i] = &plan.ColDef{
 			Name: Sequence_cols_name[i],
 			Alg:  plan.CompressType_Lz4,
-			Typ:  *typ,
+			Typ:  typ,
 			Default: &plan.Default{
 				NullAbility:  true,
 				Expr:         nil,
@@ -475,14 +475,14 @@ func buildAlterSequenceTableDef(stmt *tree.AlterSequence, ctx CompilerContext, a
 	// sequence_value, maxvalue,minvalue,startvalue,increment,cycleornot,iscalled.
 	cols := make([]*plan.ColDef, len(Sequence_cols_name))
 
-	var typ *plan.Type
+	var typ plan.Type
 	var err error
 	if stmt.Type == nil {
 		_, tableDef := ctx.Resolve(as.GetDatabase(), as.TableDef.Name)
 		if tableDef == nil {
 			return moerr.NewInvalidInput(ctx.GetContext(), "no such sequence %s", as.TableDef.Name)
 		} else {
-			typ = &tableDef.Cols[0].Typ
+			typ = tableDef.Cols[0].Typ
 		}
 	} else {
 		typ, err = getTypeFromAst(ctx.GetContext(), stmt.Type.Type)
@@ -498,7 +498,7 @@ func buildAlterSequenceTableDef(stmt *tree.AlterSequence, ctx CompilerContext, a
 		cols[i] = &plan.ColDef{
 			Name: Sequence_cols_name[i],
 			Alg:  plan.CompressType_Lz4,
-			Typ:  *typ,
+			Typ:  typ,
 			Default: &plan.Default{
 				NullAbility:  true,
 				Expr:         nil,
@@ -1079,7 +1079,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 				primaryKeys = pks
 			}
 
-			defaultValue, err := buildDefaultExpr(def, colType, ctx.GetProcess())
+			defaultValue, err := buildDefaultExpr(def, &colType, ctx.GetProcess())
 			if err != nil {
 				return err
 			}
@@ -1087,7 +1087,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 				return moerr.NewInvalidInput(ctx.GetContext(), "invalid default value for '%s'", def.Name.Parts[0])
 			}
 
-			onUpdateExpr, err := buildOnUpdate(def, colType, ctx.GetProcess())
+			onUpdateExpr, err := buildOnUpdate(def, &colType, ctx.GetProcess())
 			if err != nil {
 				return err
 			}
@@ -1100,7 +1100,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 			col := &ColDef{
 				Name:     def.Name.Parts[0],
 				Alg:      plan.CompressType_Lz4,
-				Typ:      *colType,
+				Typ:      colType,
 				Default:  defaultValue,
 				OnUpdate: onUpdateExpr,
 				Comment:  comment,
@@ -1252,7 +1252,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 		colDef := &ColDef{
 			Name:    util.GetClusterTableAttributeName(),
 			Alg:     plan.CompressType_Lz4,
-			Typ:     *colType,
+			Typ:     colType,
 			NotNull: true,
 			Default: &plan.Default{
 				Expr: &Expr{
@@ -3140,7 +3140,7 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 				primaryKeys = pks
 			}
 
-			defaultValue, err := buildDefaultExpr(opt.Column, colType, ctx.GetProcess())
+			defaultValue, err := buildDefaultExpr(opt.Column, &colType, ctx.GetProcess())
 			if err != nil {
 				return nil, err
 			}
@@ -3148,7 +3148,7 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 				return nil, moerr.NewInvalidInput(ctx.GetContext(), "invalid default value for '%s'", opt.Column.Name.Parts[0])
 			}
 
-			onUpdateExpr, err := buildOnUpdate(opt.Column, colType, ctx.GetProcess())
+			onUpdateExpr, err := buildOnUpdate(opt.Column, &colType, ctx.GetProcess())
 			if err != nil {
 				return nil, err
 			}
@@ -3161,7 +3161,7 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 			col := &ColDef{
 				Name:     opt.Column.Name.Parts[0],
 				Alg:      plan.CompressType_Lz4,
-				Typ:      *colType,
+				Typ:      colType,
 				Default:  defaultValue,
 				OnUpdate: onUpdateExpr,
 				Comment:  comment,
@@ -3171,7 +3171,7 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 			if opt.Position.RelativeColumn != nil {
 				preName = opt.Position.RelativeColumn.Parts[0]
 			}
-			err = checkIsAddableColumn(tableDef, opt.Column.Name.Parts[0], colType, ctx)
+			err = checkIsAddableColumn(tableDef, opt.Column.Name.Parts[0], &colType, ctx)
 			if err != nil {
 				return nil, err
 			}
@@ -3180,7 +3180,7 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 					AddColumn: &plan.AlterAddColumn{
 						Name:    opt.Column.Name.Parts[0],
 						PreName: preName,
-						Type:    *colType,
+						Type:    colType,
 						Pos:     int32(opt.Position.Typ),
 					},
 				},

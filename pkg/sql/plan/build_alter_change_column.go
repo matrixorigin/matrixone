@@ -69,11 +69,11 @@ func ChangeColumn(ctx CompilerContext, alterPlan *plan.AlterTable, spec *tree.Al
 	}
 
 	// check if the newly added column type is valid
-	if err = checkAddColumnType(ctx.GetContext(), colType, newColName); err != nil {
+	if err = checkAddColumnType(ctx.GetContext(), &colType, newColName); err != nil {
 		return err
 	}
 
-	newCol, err := buildChangeColumnAndConstraint(ctx, alterPlan, col, specNewColumn, colType)
+	newCol, err := buildChangeColumnAndConstraint(ctx, alterPlan, col, specNewColumn, &colType)
 	if err != nil {
 		return err
 	}
