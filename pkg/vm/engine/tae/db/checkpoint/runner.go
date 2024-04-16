@@ -948,7 +948,7 @@ func (r *runner) tryCompactTree(entry *logtail.DirtyTreeEntry, force bool) {
 		}
 	})
 
-	pressure := float64(totalSize) / (500 * common.Const1MBytes)
+	pressure := float64(totalSize) / float64(common.RuntimeCNMergeMemControl.Load())
 	if pressure > 1.0 {
 		pressure = 1.0
 	}
@@ -1002,7 +1002,7 @@ func (r *runner) tryCompactTree(entry *logtail.DirtyTreeEntry, force bool) {
 				time.Until(stats.FlushDeadline),
 				ready,
 				pressure,
-				totalSize,
+				common.HumanReadableBytes(totalSize),
 			)
 		}
 
