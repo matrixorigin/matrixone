@@ -24,7 +24,7 @@ import (
 var (
 	defaultLockListenAddress      = "127.0.0.1:6003"
 	defaultMaxLockRowCount        = 1000000
-	defaultMaxFixedSliceSize      = 1 << 20 // 1mb
+	defaultMaxFixedSliceSize      = 1 << 20 * 10 // 10mb
 	defaultKeepRemoteLockDuration = time.Second
 	defaultKeepBindTimeout        = time.Second * 10
 )
@@ -35,6 +35,9 @@ type Config struct {
 	ServiceID string `toml:"-"`
 	// RPC rpc config
 	RPC morpc.Config `toml:"-"`
+
+	// TxnIterFunc used to iterate all active transactions in current cn
+	TxnIterFunc func(func([]byte) bool) `toml:"-"`
 
 	// ListenAddress lock service listen address for receiving lock requests
 	ListenAddress string `toml:"listen-address"`
@@ -62,6 +65,9 @@ type Config struct {
 	// continuously hold the bind, and if no hold request is received after the configured time,
 	// then all bindings for the service will fail.
 	KeepBindTimeout toml.Duration `toml:"keep-bind-timeout"`
+
+	// for testing
+	disconnectPeriod int `toml:"-"`
 }
 
 // Validate validate
