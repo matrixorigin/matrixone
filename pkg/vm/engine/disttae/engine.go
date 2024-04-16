@@ -109,11 +109,6 @@ func New(
 		sync.Mutex
 		snaps []*logtailreplay.Partition
 	})
-	//e.stopper = *stopper.NewStopper("disttae-watermark-waiter", nil)
-	//e.notifiedC = make(chan timestamp.Timestamp, 512)
-	//if err := e.stopper.RunTask(e.waitWaterMark); err != nil {
-	//	panic(err)
-	//}
 
 	pool, err := ants.NewPool(GCPoolSize)
 	if err != nil {
@@ -130,21 +125,6 @@ func New(
 	}
 
 	return e
-}
-
-func (e *Engine) notifyWaterMark(ts timestamp.Timestamp) {
-	e.notifiedC <- ts
-}
-
-func (e *Engine) waitWaterMark(ctx context.Context) {
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-e.notifiedC:
-
-		}
-	}
 }
 
 func (e *Engine) Create(ctx context.Context, name string, op client.TxnOperator) error {

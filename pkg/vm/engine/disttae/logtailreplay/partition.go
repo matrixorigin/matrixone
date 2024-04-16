@@ -147,7 +147,6 @@ func (p *Partition) ConsumeSnapCkps(
 		}
 		if ckp.GetType() == checkpoint.ET_Global {
 			start = ckp.GetEnd()
-			//FIXME::need to minus 5 minutes?
 		}
 		if ckp.GetType() == checkpoint.ET_Incremental {
 			ckpstart := ckp.GetStart()
@@ -172,7 +171,7 @@ func (p *Partition) ConsumeSnapCkps(
 	return nil
 }
 
-func (p *Partition) ConsumeCheckpoints(
+func (p *Partition) ConsumeLatestCkps(
 	ctx context.Context,
 	fn func(
 		checkpoint string,
@@ -207,7 +206,7 @@ func (p *Partition) ConsumeCheckpoints(
 		return err
 	}
 
-	p.UpdateDuration(state.start, state.end)
+	p.UpdateDuration(state.start, types.MaxTs())
 
 	if !p.state.CompareAndSwap(curState, state) {
 		panic("concurrent mutation")

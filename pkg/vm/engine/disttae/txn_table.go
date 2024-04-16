@@ -2312,7 +2312,7 @@ func (tbl *txnTable) updateLogtail(ctx context.Context) (err error) {
 		tbl.db.op.SnapshotTS()); err != nil {
 		return
 	}
-	if _, err = tbl.getTxn().engine.lazyLoad(ctx, tbl); err != nil {
+	if _, err = tbl.getTxn().engine.lazyLoadLatestCkp(ctx, tbl); err != nil {
 		return
 	}
 
@@ -2501,7 +2501,7 @@ func (tbl *txnTable) PrimaryKeysMayBeModified(
 		return false,
 			moerr.NewInternalErrorNoCtx("primary key modification is not allowed in snapshot transaction")
 	}
-	part, err := tbl.getTxn().engine.lazyLoad(ctx, tbl)
+	part, err := tbl.getTxn().engine.lazyLoadLatestCkp(ctx, tbl)
 	if err != nil {
 		return false, err
 	}

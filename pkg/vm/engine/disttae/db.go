@@ -362,7 +362,6 @@ func (e *Engine) getOrCreateSnapCatalogCache(
 		//update start and end of snapCata.
 		if ckp.GetType() == checkpoint.ET_Global {
 			start = ckp.GetEnd()
-			//FIXME::need to minus 5 minutes?
 		}
 		if ckp.GetType() == checkpoint.ET_Incremental {
 			ckpstart := ckp.GetStart()
@@ -475,10 +474,11 @@ func (e *Engine) getOrCreateLatestPart(databaseId, tableId uint64) *logtailrepla
 	return partition
 }
 
-func (e *Engine) lazyLoad(ctx context.Context, tbl *txnTable) (*logtailreplay.Partition, error) {
+func (e *Engine) lazyLoadLatestCkp(ctx context.Context, tbl *txnTable) (*logtailreplay.Partition, error) {
 	part := e.getOrCreateLatestPart(tbl.db.databaseId, tbl.tableId)
+	cache := e.getLatestCatalogCache()
 
-	if err := part.ConsumeCheckpoints(
+	if err := part.ConsumeLatestCkps(
 		ctx,
 		func(checkpoint string, state *logtailreplay.PartitionState) error {
 			entries, closeCBs, err := logtail.LoadCheckpointEntries(
@@ -499,7 +499,7 @@ func (e *Engine) lazyLoad(ctx context.Context, tbl *txnTable) (*logtailreplay.Pa
 				}
 			}()
 			for _, entry := range entries {
-				if err = consumeEntry(ctx, tbl.primarySeqnum, e, e.getLatestCatalogCache(), state, entry); err != nil {
+				if err = consumeEntry(ctx, tbl.primarySeqnum, e, cache, state, entry); err != nil {
 					return err
 				}
 			}

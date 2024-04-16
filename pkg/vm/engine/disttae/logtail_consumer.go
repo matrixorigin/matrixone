@@ -1347,6 +1347,7 @@ func updatePartitionOfPush(
 
 	if lazyLoad {
 		if len(tl.CkpLocation) > 0 {
+			//TODO::
 			ckpStart, ckpEnd = parseCkpDuration(tl)
 			if !ckpStart.IsEmpty() && !ckpEnd.IsEmpty() {
 				state.CacheCkpDuration(ckpStart, ckpEnd, partition)
@@ -1364,6 +1365,7 @@ func updatePartitionOfPush(
 
 	} else {
 		if len(tl.CkpLocation) > 0 {
+			//TODO::
 			ckpStart, ckpEnd = parseCkpDuration(tl)
 		}
 		err = consumeCkpsAndLogTail(ctx, key.PrimarySeqnum, e, state, tl, dbId, key.Id, key.Name)
@@ -1374,11 +1376,14 @@ func updatePartitionOfPush(
 		return err
 	}
 
-	//after consume checkpoints finished ,then update the start and end of the partition and catalog
+	//After consume checkpoints finished ,then update the start and end of
+	//the mo system table's partition and catalog.
 	if !lazyLoad && len(tl.CkpLocation) != 0 {
 		if !ckpStart.IsEmpty() && !ckpEnd.IsEmpty() {
-			partition.UpdateDuration(ckpStart, ckpEnd)
-			catache.UpdateDuration(ckpStart, ckpEnd)
+			partition.UpdateDuration(ckpStart, types.MaxTs())
+			//Notice that the checkpoint duration is same among all mo system tables,
+			//such as mo_databases, mo_tables, mo_columns.
+			catache.UpdateDuration(ckpStart, types.MaxTs())
 		}
 	}
 
