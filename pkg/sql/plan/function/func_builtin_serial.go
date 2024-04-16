@@ -45,6 +45,14 @@ func (op *opSerial) init(length int, mp *mpool.MPool) {
 }
 
 func (op *opSerial) Close() error {
+	if !op.isInit {
+		return nil
+	}
+
+	if op.ps == nil {
+		return nil
+	}
+
 	for _, p := range op.ps {
 		p.FreeMem()
 	}

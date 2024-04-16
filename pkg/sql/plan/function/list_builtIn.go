@@ -1265,7 +1265,7 @@ var supportedStringBuiltIns = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_varchar.ToType()
 				},
-				newOp: func() (executeLogicOfOverload, executeFreeOfOverload) {
+				newOp2Returns: func() (executeLogicOfOverload, executeFreeOfOverload) {
 					opSerial := newOpSerial()
 					return opSerial.BuiltInSerialFull, opSerial.Close
 				},

@@ -374,7 +374,9 @@ type overload struct {
 	retType func(parameters []types.Type) types.Type
 
 	// the execution logic.
-	newOp func() (executeLogicOfOverload, executeFreeOfOverload)
+	newOp func() executeLogicOfOverload
+
+	newOp2Returns func() (executeLogicOfOverload, executeFreeOfOverload)
 
 	// in fact, the function framework does not directly run aggregate functions and window functions.
 	// we use two flags to mark whether function is one of them.
@@ -412,8 +414,13 @@ func (ov *overload) CannotExecuteInParallel() bool {
 }
 
 func (ov *overload) GetExecuteMethod() (executeLogicOfOverload, executeFreeOfOverload) {
+	if ov.newOp2Returns != nil {
+		f1, f2 := ov.newOp2Returns()
+		return f1, f2
+	}
+
 	f := ov.newOp
-	return f()
+	return f(), nil
 }
 
 func (ov *overload) GetReturnTypeMethod() func(parameters []types.Type) types.Type {
