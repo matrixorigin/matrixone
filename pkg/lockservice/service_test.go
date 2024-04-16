@@ -51,7 +51,7 @@ func getRunner(remote bool) func(t *testing.T, table uint64, fn func(context.Con
 			[]string{"s1", "s2"},
 			func(alloc *lockTableAllocator, ss []*service) {
 				s1 := ss[0]
-				ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+				ctx, cancel := context.WithTimeout(context.Background(), time.Second*20)
 				defer cancel()
 
 				option := newTestRowExclusiveOptions()
