@@ -204,11 +204,8 @@ func (a *aggSumDecimal64) Init(set aggexec.AggSetter[types.Decimal128], arg type
 func FillAggSumDecimal64(
 	exec aggexec.SingleAggFromFixedRetFixed[types.Decimal64, types.Decimal128], value types.Decimal64, getter aggexec.AggGetter[types.Decimal128], setter aggexec.AggSetter[types.Decimal128]) error {
 	r, err := getter().Add64(value)
-	if err != nil {
-		return err
-	}
 	setter(r)
-	return nil
+	return err
 }
 
 func FillsAggSumDecimal64(
@@ -226,21 +223,16 @@ func FillsAggSumDecimal64(
 			return err
 		}
 		r, err = getter().Add128(r)
-		if err != nil {
-			return err
-		}
 		setter(r)
+		return err
 	}
 	return nil
 }
 func MergeAggSumDecimal64(
 	exec1, exec2 aggexec.SingleAggFromFixedRetFixed[types.Decimal64, types.Decimal128], getter1, getter2 aggexec.AggGetter[types.Decimal128], setter aggexec.AggSetter[types.Decimal128]) error {
 	r, err := getter1().Add128(getter2())
-	if err != nil {
-		return err
-	}
 	setter(r)
-	return nil
+	return err
 }
 
 type aggSumDecimal128 struct {
@@ -262,11 +254,8 @@ func (a *aggSumDecimal128) Init(set aggexec.AggSetter[types.Decimal128], arg typ
 func FillAggSumDecimal128(
 	exec aggexec.SingleAggFromFixedRetFixed[types.Decimal128, types.Decimal128], value types.Decimal128, getter aggexec.AggGetter[types.Decimal128], setter aggexec.AggSetter[types.Decimal128]) error {
 	r, err := getter().Add128(value)
-	if err != nil {
-		return err
-	}
 	setter(r)
-	return nil
+	return err
 }
 
 func FillsAggSumDecimal128(
@@ -279,10 +268,8 @@ func FillsAggSumDecimal128(
 			return err
 		}
 		r, err = getter().Add128(r)
-		if err != nil {
-			return err
-		}
 		setter(r)
+		return err
 	}
 	return nil
 }
@@ -290,9 +277,6 @@ func FillsAggSumDecimal128(
 func MergeAggSumDecimal128(
 	exec1, exec2 aggexec.SingleAggFromFixedRetFixed[types.Decimal128, types.Decimal128], getter1, getter2 aggexec.AggGetter[types.Decimal128], setter aggexec.AggSetter[types.Decimal128]) error {
 	r, err := getter1().Add128(getter2())
-	if err != nil {
-		return err
-	}
 	setter(r)
-	return nil
+	return err
 }

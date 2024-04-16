@@ -252,9 +252,7 @@ func FillAggAvgDecimal64(
 	a := exec.(*aggAvgDecimal64)
 	a.count++
 	r, err := getter().Add64(value)
-	if err == nil {
-		setter(r)
-	}
+	setter(r)
 	return err
 }
 func FillsAggAvgDecimal64(
@@ -282,9 +280,7 @@ func MergeAggAvgDecimal64(
 	a1 := exec1.(*aggAvgDecimal64)
 	a2 := exec2.(*aggAvgDecimal64)
 	r, err := getter1().Add128(getter2())
-	if err == nil {
-		setter(r)
-	}
+	setter(r)
 	a1.count += a2.count
 	return err
 }
@@ -332,9 +328,7 @@ func FillAggAvgDecimal128(
 	a := exec.(*aggAvgDecimal128)
 	a.count++
 	r, err := getter().Add128(value)
-	if err == nil {
-		setter(r)
-	}
+	setter(r)
 	return err
 }
 func FillsAggAvgDecimal128(
@@ -358,9 +352,7 @@ func MergeAggAvgDecimal128(
 	a1 := exec1.(*aggAvgDecimal128)
 	a2 := exec2.(*aggAvgDecimal128)
 	r, err := getter1().Add128(getter2())
-	if err == nil {
-		setter(r)
-	}
+	setter(r)
 	a1.count += a2.count
 	return err
 }
@@ -372,8 +364,6 @@ func FlushAggAvgDecimal128(
 		return nil
 	}
 	v, _, err := getter().Div(types.Decimal128{B0_63: uint64(a.count), B64_127: 0}, a.argScale, 0)
-	if err == nil {
-		setter(v)
-	}
+	setter(v)
 	return err
 }
