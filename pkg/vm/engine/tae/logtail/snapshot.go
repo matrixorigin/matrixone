@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"sync"
+	"time"
 )
 
 var (
@@ -45,6 +46,16 @@ var (
 		types.New(types.T_TS, types.MaxVarcharLen, 0),
 		types.New(types.T_varchar, 5000, 0),
 		types.New(types.T_uint64, 0, 0),
+	}
+
+	objectDeltaSchemaAttr = []string{
+		catalog2.BlockMeta_ID,
+		catalog2.BlockMeta_DeltaLoc,
+	}
+
+	objectDeltaSchemaTypes = []types.Type{
+		types.New(types.T_Blockid, 0, 0),
+		types.New(types.T_varchar, types.MaxVarcharLen, 0),
 	}
 
 	tableInfoSchemaAttr = []string{
@@ -185,6 +196,9 @@ func (sm *SnapshotMeta) Update(data *CheckpointData) *SnapshotMeta {
 		blockID := delBlockIDs[i]
 		deltaLoc := objectio.Location(del.GetVectorByName(catalog2.BlockMeta_DeltaLoc).Get(i).([]byte))
 		if sm.objects[*blockID.Segment()] != nil {
+			if sm.objects[*blockID.Segment()].deltaLocation == nil {
+				sm.objects[*blockID.Segment()].deltaLocation = make(map[uint32]*objectio.Location)
+			}
 			sm.objects[*blockID.Segment()].deltaLocation[uint32(blockID.Sequence())] = &deltaLoc
 		}
 	}
@@ -212,9 +226,11 @@ func (sm *SnapshotMeta) GetSnapshot(ctx context.Context, fs fileservice.FileServ
 				MetaLoc:   objectio.ObjectLocation(loc),
 			}
 			if object.deltaLocation[i] != nil {
+				logutil.Infof("deltaLoc: %v, id is %d", object.deltaLocation[i].String(), i)
 				blk.DeltaLoc = objectio.ObjectLocation(*object.deltaLocation[i])
 			}
-			bat, err := blockio.BlockRead(ctx, &blk, nil, idxes, colTypes, object.checkpointTS.ToTimestamp(),
+			checkpointTS := types.BuildTS(time.Now().UTC().UnixNano(), 0)
+			bat, err := blockio.BlockRead(ctx, &blk, nil, idxes, colTypes, checkpointTS.ToTimestamp(),
 				nil, nil, nil, fs, mp, nil, fileservice.Policy(0))
 			if err != nil {
 				return nil, err
@@ -230,6 +246,7 @@ func (sm *SnapshotMeta) GetSnapshot(ctx context.Context, fs fileservice.FileServ
 				if snapshotList[id] == nil {
 					snapshotList[id] = containers.MakeVector(colTypes[0], mp)
 				}
+				logutil.Infof("GetSnapshot: id %d, ts %v", id, snapTs.ToString())
 				err = vector.AppendFixed[types.TS](snapshotList[id].GetDownstreamVector(), snapTs, false, mp)
 				if err != nil {
 					return nil, err
@@ -255,6 +272,10 @@ func (sm *SnapshotMeta) SaveMeta(name string, fs fileservice.FileService) error 
 	for i, attr := range objectInfoSchemaAttr {
 		bat.AddVector(attr, containers.MakeVector(objectInfoSchemaTypes[i], common.DebugAllocator))
 	}
+	deltaBat := containers.NewBatch()
+	for i, attr := range objectDeltaSchemaAttr {
+		deltaBat.AddVector(attr, containers.MakeVector(objectDeltaSchemaTypes[i], common.DebugAllocator))
+	}
 	for _, entry := range sm.objects {
 		vector.AppendBytes(
 			bat.GetVectorByName(catalog.ObjectAttr_ObjectStats).GetDownstreamVector(),
@@ -265,25 +286,31 @@ func (sm *SnapshotMeta) SaveMeta(name string, fs fileservice.FileService) error 
 		vector.AppendFixed[types.TS](
 			bat.GetVectorByName(catalog.EntryNode_DeleteAt).GetDownstreamVector(),
 			entry.deleteAt, false, common.DebugAllocator)
-		if entry.deltaLocation[0] == nil {
-			vector.AppendBytes(
-				bat.GetVectorByName(catalog2.BlockMeta_DeltaLoc).GetDownstreamVector(),
-				[]byte(objectio.Location{}), false, common.DebugAllocator)
-		} else {
-			vector.AppendBytes(bat.GetVectorByName(catalog2.BlockMeta_DeltaLoc).GetDownstreamVector(),
-				[]byte(*entry.deltaLocation[0]), false, common.DebugAllocator)
+		for id, delta := range entry.deltaLocation {
+			blockID := objectio.BuildObjectBlockid(entry.stats.ObjectName(), uint16(id))
+			vector.AppendFixed[types.Blockid](deltaBat.GetVectorByName(catalog2.BlockMeta_ID).GetDownstreamVector(),
+				*blockID, false, common.DebugAllocator)
+			vector.AppendBytes(deltaBat.GetVectorByName(catalog2.BlockMeta_DeltaLoc).GetDownstreamVector(),
+				[]byte(*delta), false, common.DebugAllocator)
 		}
 		vector.AppendFixed[uint64](
 			bat.GetVectorByName(SnapshotAttr_TID).GetDownstreamVector(),
 			sm.tid, false, common.DebugAllocator)
 	}
 	defer bat.Close()
+	defer deltaBat.Close()
 	writer, err := objectio.NewObjectWriterSpecial(objectio.WriterGC, name, fs)
 	if err != nil {
 		return err
 	}
 	if _, err = writer.WriteWithoutSeqnum(containers.ToCNBatch(bat)); err != nil {
 		return err
+	}
+	if deltaBat.Length() > 0 {
+		logutil.Infof("deltaBat length is %d", deltaBat.Length())
+		if _, err = writer.WriteWithoutSeqnum(containers.ToCNBatch(deltaBat)); err != nil {
+			return err
+		}
 	}
 
 	_, err = writer.WriteEnd(context.Background())
@@ -383,6 +410,25 @@ func (sm *SnapshotMeta) Rebuild(ins *containers.Batch) {
 	}
 }
 
+func (sm *SnapshotMeta) RebuildDelta(ins *containers.Batch) {
+	sm.Lock()
+	defer sm.Unlock()
+	insBlockIDs := vector.MustFixedCol[types.Blockid](ins.GetVectorByName(catalog2.BlockMeta_ID).GetDownstreamVector())
+	for i := 0; i < ins.Length(); i++ {
+		blockID := insBlockIDs[i]
+		deltaLoc := objectio.Location(ins.GetVectorByName(catalog2.BlockMeta_DeltaLoc).Get(i).([]byte))
+		if sm.objects[*blockID.Segment()] != nil {
+			if sm.objects[*blockID.Segment()].deltaLocation == nil {
+				sm.objects[*blockID.Segment()].deltaLocation = make(map[uint32]*objectio.Location)
+			}
+			logutil.Infof("RebuildDelta: %v, loc is %v", blockID.String(), deltaLoc.String())
+			sm.objects[*blockID.Segment()].deltaLocation[uint32(blockID.Sequence())] = &deltaLoc
+		} else {
+			panic("blockID not found")
+		}
+	}
+}
+
 func (sm *SnapshotMeta) ReadMeta(ctx context.Context, name string, fs fileservice.FileService) error {
 	reader, err := blockio.NewFileReaderNoCache(fs, name)
 	if err != nil {
@@ -414,6 +460,33 @@ func (sm *SnapshotMeta) ReadMeta(ctx context.Context, name string, fs fileservic
 		bat.AddVector(objectInfoSchemaAttr[i], vec)
 	}
 	sm.Rebuild(bat)
+
+	if len(bs) == 1 {
+		return nil
+	}
+
+	idxes = make([]uint16, len(objectDeltaSchemaAttr))
+	for i := range objectDeltaSchemaAttr {
+		idxes[i] = uint16(i)
+	}
+	moDeltaBat, releaseDelta, err := reader.LoadColumns(ctx, idxes, nil, bs[1].GetID(), common.DebugAllocator)
+	if err != nil {
+		return err
+	}
+	defer releaseDelta()
+	deltaBat := containers.NewBatch()
+	defer deltaBat.Close()
+	for i := range objectDeltaSchemaAttr {
+		pkgVec := moDeltaBat.Vecs[i]
+		var vec containers.Vector
+		if pkgVec.Length() == 0 {
+			vec = containers.MakeVector(objectDeltaSchemaTypes[i], common.DebugAllocator)
+		} else {
+			vec = containers.ToTNVector(pkgVec, common.DebugAllocator)
+		}
+		deltaBat.AddVector(objectDeltaSchemaAttr[i], vec)
+	}
+	sm.RebuildDelta(deltaBat)
 	return nil
 }
 
@@ -472,6 +545,7 @@ func (sm *SnapshotMeta) MergeTableInfo(SnapshotList map[uint32][]types.TS) error
 			for _, table := range tables {
 				if !table.deleteAt.IsEmpty() {
 					delete(sm.tables[accID], table.tid)
+					delete(sm.acctIndexes, table.tid)
 				}
 			}
 			continue
@@ -479,6 +553,7 @@ func (sm *SnapshotMeta) MergeTableInfo(SnapshotList map[uint32][]types.TS) error
 		for _, table := range tables {
 			if !table.deleteAt.IsEmpty() && !isSnapshotRefers(table, SnapshotList[accID]) {
 				delete(sm.tables[accID], table.tid)
+				delete(sm.acctIndexes, table.tid)
 			}
 		}
 	}

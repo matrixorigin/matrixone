@@ -125,7 +125,7 @@ func (t *GCTable) SoftGC(table *GCTable, ts types.TS, snapShotList map[uint32]co
 			}
 			continue
 		}
-		if objectEntry == nil && entry.commitTS.Less(&ts) && !isSnapshotRefers(entry, tsList) {
+		if objectEntry == nil && entry.commitTS.Less(&ts) && !isSnapshotRefers(entry, tsList, name) {
 			gc = append(gc, name)
 			t.deleteObject(name)
 		}
@@ -133,7 +133,7 @@ func (t *GCTable) SoftGC(table *GCTable, ts types.TS, snapShotList map[uint32]co
 	return gc, snapList
 }
 
-func isSnapshotRefers(obj *ObjectEntry, snapVec []types.TS) bool {
+func isSnapshotRefers(obj *ObjectEntry, snapVec []types.TS, name string) bool {
 	if len(snapVec) == 0 {
 		return false
 	}
@@ -142,8 +142,8 @@ func isSnapshotRefers(obj *ObjectEntry, snapVec []types.TS) bool {
 		mid := left + (right-left)/2
 		snapTS := snapVec[mid]
 		if snapTS.GreaterEq(&obj.createTS) && (obj.dropTS.IsEmpty() || snapTS.Less(&obj.dropTS)) {
-			logutil.Infof("isSnapshotRefers: %s, create %v, drop %v",
-				snapTS.ToString(), obj.createTS.ToString(), obj.dropTS.ToString())
+			logutil.Infof("name: %v, isSnapshotRefers: %s, create %v, drop %v",
+				name, snapTS.ToString(), obj.createTS.ToString(), obj.dropTS.ToString())
 			return true
 		} else if snapTS.Less(&obj.createTS) {
 			left = mid + 1
