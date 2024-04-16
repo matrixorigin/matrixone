@@ -9931,7 +9931,7 @@ func checkSnapShotExistOrNot(ctx context.Context, bh BackgroundExec, snapshotNam
 	return false, nil
 }
 
-func doResolveSnapshotTsWithSnapShotName(ctx context.Context, ses *Session, spName string) (snapshotTs int64, err error) {
+func doResolveSnapshotTsWithSnapShotName(ctx context.Context, ses FeSession, spName string) (snapshotTs int64, err error) {
 	var sql string
 	var erArray []ExecResult
 	err = inputNameIsInvalid(ctx, spName)

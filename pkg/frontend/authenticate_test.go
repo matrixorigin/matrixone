@@ -11848,14 +11848,14 @@ func TestDoResolveSnapshotTsWithSnapShotName(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		setGlobalPu(pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		aicm := &defines.AutoIncrCacheManager{}
-		rm, _ := NewRoutineManager(ctx, pu, aicm)
+		rm, _ := NewRoutineManager(ctx)
 		ses.rm = rm
 
 		tenant := &TenantInfo{
@@ -11891,14 +11891,14 @@ func TestDoResolveSnapshotTsWithSnapShotName(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
 
 		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 		pu.SV.SetDefaultValues()
+		setGlobalPu(pu)
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		aicm := &defines.AutoIncrCacheManager{}
-		rm, _ := NewRoutineManager(ctx, pu, aicm)
+		rm, _ := NewRoutineManager(ctx)
 		ses.rm = rm
 
 		tenant := &TenantInfo{
