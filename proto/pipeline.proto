@@ -542,19 +542,3 @@ message UuidToRegIdx {
   bytes uuid = 2;
   string from_addr = 3;
 }
-
-message RuntimeFilter {
-  enum RuntimeFilterType {
-    IN = 0;
-    BITMAP = 1;
-    MIN_MAX = 2;
-    BINARY_FUSE = 3;
-
-    PASS = 100;
-    DROP = 101;
-  }
-
-  RuntimeFilterType typ = 1;
-  int32 card = 2;
-  bytes data = 3;
-}
