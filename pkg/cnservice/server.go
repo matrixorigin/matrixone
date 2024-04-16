@@ -18,13 +18,14 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
+	"io"
+	"sync"
+	"time"
+
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"go.uber.org/zap"
-	"io"
-	"sync"
-	"time"
 
 	"github.com/fagongzi/goetty/v2"
 	"github.com/matrixorigin/matrixone/pkg/bootstrap"
@@ -594,25 +595,24 @@ func (s *service) getTxnClient() (c client.TxnClient, err error) {
 		if s.cfg.Txn.EnableLeakCheck == 1 {
 			opts = append(opts, client.WithEnableLeakCheck(
 				s.cfg.Txn.MaxActiveAges.Duration,
-				func(txnID []byte, createAt time.Time, createBy string, options txn.TxnOptions) {
+				func(txnID []byte, createAt time.Time, createBy txn.TxnOptions) {
 					name, _ := uuid.NewV7()
 					profPath := catalog.BuildProfilePath("routine", name.String())
 
 					fields := []zap.Field{
 						zap.String("txn-id", hex.EncodeToString(txnID)),
 						zap.Time("create-at", createAt),
-						zap.String("create-by", createBy),
-						zap.String("options", options.String()),
+						zap.String("options", createBy.String()),
 						zap.String("profile", profPath),
 					}
-					if options.InRunSql {
+					if createBy.InRunSql {
 						//the txn runs sql in compile.Run() and doest not exist
 						v2.TxnLongRunningCounter.Inc()
 						runtime.DefaultRuntime().Logger().Error("found long running txn", fields...)
-					} else if options.InCommit {
+					} else if createBy.InCommit {
 						v2.TxnInCommitCounter.Inc()
 						runtime.DefaultRuntime().Logger().Error("found txn in commit", fields...)
-					} else if options.InRollback {
+					} else if createBy.InRollback {
 						v2.TxnInRollbackCounter.Inc()
 						runtime.DefaultRuntime().Logger().Error("found txn in rollback", fields...)
 					} else {

@@ -130,7 +130,6 @@ func (l *remoteLockTable) unlock(
 		l.serviceID,
 		txn,
 		l.bind)
-	st := time.Now()
 	for {
 		err := l.doUnlock(txn, commitTS)
 		if err == nil {
@@ -148,11 +147,7 @@ func (l *remoteLockTable) unlock(
 		// handleError returns nil meaning bind changed, then all locks
 		// will be released. If handleError returns any error, it means
 		// that the current bind is valid, retry unlock.
-		if err := l.handleError(txn.txnID, err, false); err == nil ||
-			!isRetryError(err) ||
-			// if retry cost > keepRemoteLockDuration, remote lock will
-			// dropped by timeout.
-			time.Since(st) > l.removeLockTimeout {
+		if err := l.handleError(txn.txnID, err, false); err == nil {
 			return
 		}
 	}
@@ -162,7 +157,6 @@ func (l *remoteLockTable) getLock(
 	key []byte,
 	txn pb.WaitTxn,
 	fn func(Lock)) {
-	st := time.Now()
 	for {
 		lock, ok, err := l.doGetLock(key, txn)
 		if err == nil {
@@ -174,11 +168,7 @@ func (l *remoteLockTable) getLock(
 		}
 
 		// why use loop is similar to unlock
-		if err = l.handleError(txn.TxnID, err, false); err == nil ||
-			!isRetryError(err) ||
-			// if retry cost > keepRemoteLockDuration, remote lock will
-			// dropped by timeout.
-			time.Since(st) > l.removeLockTimeout {
+		if err = l.handleError(txn.TxnID, err, false); err == nil {
 			return
 		}
 	}

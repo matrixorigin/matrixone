@@ -139,16 +139,27 @@ func (l *localLockTable) doLock(
 		c.txn.Lock()
 
 		logLocalLockWaitOnResult(c.txn, table, c.rows[c.idx], c.opts, c.w, v)
-		if v.err != nil {
-			// TODO: c.w's ref is 2, after close is 1. leak.
-			c.w.close()
-			c.done(v.err)
-			return
-		}
+
 		// txn closed between Unlock and get Lock again
-		if !bytes.Equal(oldTxnID, c.txn.txnID) {
+		e := v.err
+		if e == nil && (!bytes.Equal(oldTxnID, c.txn.txnID) ||
+			!bytes.Equal(c.w.txn.TxnID, oldTxnID)) {
+			e = ErrTxnNotFound
+		}
+
+		if e != nil {
+			c.closed = true
+			if len(c.w.conflictKey) > 0 &&
+				c.opts.Granularity == pb.Granularity_Row {
+				l.mu.Lock()
+				if c.w.conflictWith.closeFirstWaiter(c.w) {
+					l.mu.store.Delete(c.w.conflictKey)
+				}
+				l.mu.Unlock()
+			}
+
 			c.w.close()
-			c.done(ErrTxnNotFound)
+			c.done(e)
 			return
 		}
 
@@ -398,6 +409,8 @@ func (l *localLockTable) handleLockConflictLocked(
 	c *lockContext,
 	key []byte,
 	conflictWith Lock) {
+	c.w.conflictKey = key
+	c.w.conflictWith = conflictWith
 	c.w.waitFor = c.w.waitFor[:0]
 	for _, txn := range conflictWith.holders.txns {
 		c.w.waitFor = append(c.w.waitFor, txn.TxnID)
