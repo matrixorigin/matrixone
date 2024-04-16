@@ -990,14 +990,14 @@ func builtInHash(parameters []*vector.Vector, result vector.FunctionResultWrappe
 	return nil
 }
 
-// Serial have a similar function named SerialWithCompacted in the index_util
+// BuiltInSerial have a similar function named SerialWithCompacted in the index_util
 // Serial func is used by users, the function make true when input vec have ten
 // rows, the output vec is ten rows, when the vectors have null value, the output
 // vec will set the row null
 // for example:
 // input vec is [[1, 1, 1], [2, 2, null], [3, 3, 3]]
 // result vec is [serial(1, 2, 3), serial(1, 2, 3), null]
-func builtInSerial(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func (op *opSerial) BuiltInSerial(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	ps := types.NewPackerArray(length, proc.Mp())
 	defer func() {

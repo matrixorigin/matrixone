@@ -31,6 +31,12 @@ func newOpSerial() *opSerial {
 
 func (op *opSerial) tryExpand(length int, mp *mpool.MPool) {
 	if len(op.ps) < length {
+		// close the current packer array
+		for _, p := range op.ps {
+			p.FreeMem()
+		}
+
+		// create a new packer array with the new length
 		op.ps = types.NewPackerArray(length, mp)
 	}
 
