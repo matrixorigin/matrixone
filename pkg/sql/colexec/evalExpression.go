@@ -455,11 +455,13 @@ func (expr *FunctionExpressionExecutor) Init(
 	proc *process.Process,
 	parameterNum int,
 	retType types.Type,
+	//TODO: how to handle 2 function returns heres?
 	fn func(
 		params []*vector.Vector,
 		result vector.FunctionResultWrapper,
 		proc *process.Process,
-		length int) error) (err error) {
+		length int) error,
+	fn2 func() error) (err error) {
 	m := proc.Mp()
 
 	expr.m = m
@@ -1309,7 +1311,7 @@ func GetExprZoneMap(
 						ivecs[i] = vecs[arg.AuxId]
 					}
 				}
-				fn := overload.GetExecuteMethod()
+				fn, _ := overload.GetExecuteMethod()
 				typ := types.New(types.T(expr.Typ.Id), expr.Typ.Width, expr.Typ.Scale)
 
 				result := vector.NewFunctionResultWrapper(proc.GetVector, proc.PutVector, typ, proc.Mp())

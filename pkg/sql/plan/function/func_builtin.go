@@ -1030,29 +1030,24 @@ func builtInSerial(parameters []*vector.Vector, result vector.FunctionResultWrap
 	return nil
 }
 
-func BuiltInSerialFull(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+func (op *opSerial) BuiltInSerialFull(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 
 	rs := vector.MustFunctionResult[types.Varlena](result)
-	ps := types.NewPackerArray(length, proc.Mp())
-	defer func() {
-		for _, p := range ps {
-			p.FreeMem()
-		}
-	}()
+	op.init(length, proc.Mp())
 
 	for _, v := range parameters {
 		if v.IsConstNull() {
 			for i := 0; i < v.Length(); i++ {
-				ps[i].EncodeNull()
+				op.ps[i].EncodeNull()
 			}
 			continue
 		}
 
-		SerialHelper(v, nil, ps, true)
+		SerialHelper(v, nil, op.ps, true)
 	}
 
 	for i := uint64(0); i < uint64(length); i++ {
-		if err := rs.AppendBytes(ps[i].GetBuf(), false); err != nil {
+		if err := rs.AppendBytes(op.ps[i].GetBuf(), false); err != nil {
 			return err
 		}
 	}

@@ -203,7 +203,7 @@ func RunFunctionDirectly(proc *process.Process, overloadID int64, inputs []*vect
 		result.Free()
 		return nil, err
 	}
-	exec := f.GetExecuteMethod()
+	exec, _ := f.GetExecuteMethod()
 	if err = exec(inputs, result, proc, evaluateLength); err != nil {
 		result.Free()
 		return nil, err
@@ -345,6 +345,8 @@ type executeLogicOfOverload func(parameters []*vector.Vector,
 	result vector.FunctionResultWrapper,
 	proc *process.Process, length int) error
 
+type executeFreeOfOverload func() error
+
 type aggregationLogicOfOverload struct {
 	// agg related string for error message.
 	str string
@@ -372,7 +374,7 @@ type overload struct {
 	retType func(parameters []types.Type) types.Type
 
 	// the execution logic.
-	newOp func() executeLogicOfOverload
+	newOp func() (executeLogicOfOverload, executeFreeOfOverload)
 
 	// in fact, the function framework does not directly run aggregate functions and window functions.
 	// we use two flags to mark whether function is one of them.
@@ -409,7 +411,7 @@ func (ov *overload) CannotExecuteInParallel() bool {
 	return ov.cannotParallel
 }
 
-func (ov *overload) GetExecuteMethod() executeLogicOfOverload {
+func (ov *overload) GetExecuteMethod() (executeLogicOfOverload, executeFreeOfOverload) {
 	f := ov.newOp
 	return f()
 }
