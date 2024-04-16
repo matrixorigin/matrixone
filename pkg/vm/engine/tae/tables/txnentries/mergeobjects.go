@@ -131,6 +131,7 @@ func (entry *mergeObjectsEntry) PrepareRollback() (err error) {
 	entry.pageIds = nil
 	return
 }
+
 func (entry *mergeObjectsEntry) ApplyRollback() (err error) {
 	//TODO::?
 	return
@@ -225,7 +226,7 @@ func (entry *mergeObjectsEntry) transferObjectDeletes(
 		if err = created.RangeDelete(
 			uint16(destpos.Idx), uint32(destpos.Row), uint32(destpos.Row), handle.DT_MergeCompact, common.MergeAllocator,
 		); err != nil {
-			return
+			return 0, err
 		}
 	}
 	return
@@ -298,16 +299,14 @@ func (entry *mergeObjectsEntry) PrepareCommit() (err error) {
 			entry.rt.TransferDelsMap.SetDelsForBlk(*destid, delTbl)
 		}
 	}
-	if totalTrans := transCnt + entry.transCntBeforeCommit; totalTrans > 0 {
-		logutil.Infof(
-			"[Mergeblocks] merge task (%s .. %s): on %d objects, transfer %v rows, %d in commit queue",
-			entry.txn.GetStartTS().ToString(),
-			entry.txn.GetPrepareTS().ToString(),
-			len(entry.nextRoundDirties),
-			totalTrans,
-			transCnt,
-		)
-	}
+	logutil.Infof("mergeblocks commit %v, [%v,%v], trans %d on %d objects, %d in commit queue",
+		entry.relation.ID(),
+		entry.txn.GetStartTS().ToString(),
+		entry.txn.GetCommitTS().ToString(),
+		entry.transCntBeforeCommit+transCnt,
+		len(entry.nextRoundDirties),
+		transCnt,
+	)
 
 	return
 }
