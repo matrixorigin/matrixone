@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+	"fmt"
 	"sort"
 	"strconv"
 	"time"
@@ -46,7 +47,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -1714,6 +1718,22 @@ func (tbl *txnTable) EnhanceDelete(bat *batch.Batch, name string) error {
 	return nil
 }
 
+func (tbl *txnTable) ensureSeqnumsAndTypesExpectRowid() {
+	if tbl.seqnums != nil && tbl.typs != nil {
+		return
+	}
+	n := len(tbl.tableDef.Cols) - 1
+	idxs := make([]uint16, 0, n)
+	typs := make([]types.Type, 0, n)
+	for i := 0; i < len(tbl.tableDef.Cols)-1; i++ {
+		col := tbl.tableDef.Cols[i]
+		idxs = append(idxs, uint16(col.Seqnum))
+		typs = append(typs, vector.ProtoTypeToType(&col.Typ))
+	}
+	tbl.seqnums = idxs
+	tbl.typs = typs
+}
+
 // TODO:: do prefetch read and parallel compaction
 func (tbl *txnTable) compaction(
 	compactedBlks map[objectio.ObjectLocation][]int64) ([]objectio.BlockInfo, []objectio.ObjectStats, error) {
@@ -1724,18 +1744,7 @@ func (tbl *txnTable) compaction(
 	if err != nil {
 		return nil, nil, err
 	}
-	if tbl.seqnums == nil {
-		n := len(tbl.tableDef.Cols) - 1
-		idxs := make([]uint16, 0, n)
-		typs := make([]types.Type, 0, n)
-		for i := 0; i < len(tbl.tableDef.Cols)-1; i++ {
-			col := tbl.tableDef.Cols[i]
-			idxs = append(idxs, uint16(col.Seqnum))
-			typs = append(typs, vector.ProtoTypeToType(&col.Typ))
-		}
-		tbl.seqnums = idxs
-		tbl.typs = typs
-	}
+	tbl.ensureSeqnumsAndTypesExpectRowid()
 	s3writer.SetSeqnums(tbl.seqnums)
 
 	for blkmetaloc, deletes := range compactedBlks {
@@ -2597,4 +2606,91 @@ func (tbl *txnTable) readNewRowid(vec *vector.Vector, row int,
 
 func (tbl *txnTable) newPkFilter(pkExpr, constExpr *plan.Expr) (*plan.Expr, error) {
 	return plan2.BindFuncExprImplByPlanExpr(tbl.proc.Load().Ctx, "=", []*plan.Expr{pkExpr, constExpr})
+}
+
+func (tbl *txnTable) MergeObjects(ctx context.Context, objstats []objectio.ObjectStats) (*api.MergeCommitEntry, error) {
+	snapshot := types.TimestampToTS(tbl.getTxn().op.SnapshotTS())
+	state, err := tbl.getPartitionState(ctx)
+	if err != nil {
+		return nil, err
+	}
+	objInfos := make([]logtailreplay.ObjectInfo, 0, len(objstats))
+	for _, objstat := range objstats {
+		info, exist := state.GetObject(*objstat.ObjectShortName())
+		if !exist || (!info.DeleteTime.IsEmpty() && info.DeleteTime.LessEq(&snapshot)) {
+			logutil.Errorf("object not visible: %s", info.String())
+			return nil, moerr.NewInternalErrorNoCtx("object %s not exist", objstat.ObjectName().String())
+		}
+		objInfos = append(objInfos, info)
+	}
+
+	sortkeyPos := -1
+	sortkeyIsPK := false
+	if tbl.primaryIdx >= 0 && tbl.tableDef.Cols[tbl.primaryIdx].Name != catalog.FakePrimaryKeyColName {
+		if tbl.clusterByIdx < 0 {
+			sortkeyPos = tbl.primaryIdx
+			sortkeyIsPK = true
+		} else {
+			panic(fmt.Sprintf("bad schema pk %v, ck %v", tbl.primaryIdx, tbl.clusterByIdx))
+		}
+	} else if tbl.clusterByIdx >= 0 {
+		sortkeyPos = tbl.clusterByIdx
+		sortkeyIsPK = false
+	}
+
+	tbl.ensureSeqnumsAndTypesExpectRowid()
+
+	taskHost := NewCNMergeTask(
+		ctx, tbl, snapshot, state, // context
+		sortkeyPos, sortkeyIsPK, // schema
+		objInfos, // targets
+	)
+
+	err = mergesort.DoMergeAndWrite(ctx, sortkeyPos, int(options.DefaultBlockMaxRows), taskHost)
+	if err != nil {
+		return nil, err
+	}
+
+	// if transfer info is too large, write it down to s3
+	if size := taskHost.commitEntry.Booking.ProtoSize(); size > 60*common.Const1MBytes {
+		logutil.Infof("mergeblocks on cn: write s3 transfer info %v", common.HumanReadableBytes(size))
+		t := types.T_varchar.ToType()
+		v, releasev := taskHost.GetVector(&t)
+		defer releasev()
+		vectorRowCnt := 1
+		data, err := taskHost.commitEntry.Booking.Marshal()
+		if err != nil {
+			return taskHost.commitEntry, err
+		}
+		vector.AppendBytes(v, data, false, taskHost.GetMPool())
+		taskHost.commitEntry.Booking.Marshal()
+		name := objectio.BuildObjectName(objectio.NewSegmentid(), 0)
+		writer, err := blockio.NewBlockWriterNew(taskHost.fs, name, 0, nil)
+		if err != nil {
+			return taskHost.commitEntry, err
+		}
+
+		batch := batch.New(true, []string{"payload"})
+		batch.SetRowCount(vectorRowCnt)
+		batch.Vecs[0] = v
+		_, err = writer.WriteTombstoneBatch(batch)
+		if err != nil {
+			return taskHost.commitEntry, err
+		}
+		blocks, _, err := writer.Sync(ctx)
+		if err != nil {
+			return taskHost.commitEntry, err
+		}
+		location := blockio.EncodeLocation(
+			name,
+			blocks[0].GetExtent(),
+			uint32(vectorRowCnt),
+			blocks[0].GetID())
+		taskHost.commitEntry.BookingLoc = make([]byte, len(location))
+		copy(taskHost.commitEntry.BookingLoc[:], location[:])
+		taskHost.commitEntry.Booking = nil
+	}
+
+	// commit this to tn
+	return taskHost.commitEntry, nil
 }
