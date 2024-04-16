@@ -796,6 +796,5 @@ func (tcc *TxnCompilerContext) ResolveSnapshotTsWithSnapShotName(snapshotName st
 }
 
 func (tcc *TxnCompilerContext) CheckTimeStampValid(ts int64) (bool, error) {
-	//return checkTimeStampValid(tcc.GetContext(), tcc.GetSession(), ts)
-	return false, nil
+	return checkTimeStampValid(tcc.GetContext(), tcc.GetSession(), ts)
 }

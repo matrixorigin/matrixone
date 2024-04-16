@@ -4068,7 +4068,15 @@ func (builder *QueryBuilder) resolveTsHint(tsExpr *tree.AtTimeStamp) (timestamp.
 				if time.Now().UTC().UnixNano()-tsNano <= options.DefaultGCTTL.Nanoseconds() && 0 <= time.Now().UTC().UnixNano()-tsNano {
 					return timestamp.Timestamp{PhysicalTime: tsNano}, nil
 				} else {
-
+					valid, err := builder.compCtx.CheckTimeStampValid(tsNano)
+					if err != nil {
+						return timestamp.Timestamp{}, err
+					}
+					if valid {
+						return timestamp.Timestamp{PhysicalTime: tsNano}, nil
+					} else {
+						return timestamp.Timestamp{}, moerr.NewInvalidArg(builder.GetContext(), "invalid timestamp value %s", lit.Sval)
+					}
 				}
 
 			} else if tsExpr.Type == tree.ATTIMESTAMPSNAPSHOT {
