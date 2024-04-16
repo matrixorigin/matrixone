@@ -43,6 +43,8 @@ const (
 	// OkExpectedNotSafeToStartTransfer is not an error, but is expected
 	// phenomenon that the connection is not safe to transfer to other nodes.
 	OkExpectedNotSafeToStartTransfer uint16 = 6
+	//mysql client sends the COM_QUIT to the server before closing the connection.
+	MysqlClientQuit uint16 = 7
 
 	OkMax uint16 = 99
 
@@ -519,6 +521,13 @@ func (e *Error) Detail() string {
 	return e.detail
 }
 
+func (e *Error) Display() string {
+	if len(e.detail) == 0 {
+		return e.message
+	}
+	return fmt.Sprintf("%s: %s", e.message, e.detail)
+}
+
 func (e *Error) ErrorCode() uint16 {
 	return e.code
 }
@@ -572,6 +581,14 @@ func IsMoErrCode(e error, rc uint16) bool {
 		return false
 	}
 	return me.code == rc
+}
+
+func DowncastError(e error) *Error {
+	if err, ok := e.(*Error); ok {
+		return err
+	}
+	return newError(Context(), ErrInternal, "downcast error failed: %v", e)
+
 }
 
 // ConvertPanicError converts a runtime panic to internal error.
@@ -631,6 +648,7 @@ var errOkExpectedEOB = Error{OkExpectedEOB, 0, "ExpectedEOB", "00000", ""}
 var errOkExpectedDup = Error{OkExpectedDup, 0, "ExpectedDup", "00000", ""}
 var errOkExpectedPossibleDup = Error{OkExpectedPossibleDup, 0, "OkExpectedPossibleDup", "00000", ""}
 var errOkExpectedNotSafeToStartTransfer = Error{OkExpectedNotSafeToStartTransfer, 0, "OkExpectedNotSafeToStartTransfer", "00000", ""}
+var errMysqlClientQuit = Error{MysqlClientQuit, 0, "MysqlClientQuit", "00000", ""}
 
 /*
 GetOk is useless in general, should just use nil.
@@ -663,6 +681,10 @@ func GetOkExpectedPossibleDup() *Error {
 
 func GetOkExpectedNotSafeToStartTransfer() *Error {
 	return &errOkExpectedNotSafeToStartTransfer
+}
+
+func GetMysqlClientQuit() *Error {
+	return &errMysqlClientQuit
 }
 
 func NewInfo(ctx context.Context, msg string) *Error {
