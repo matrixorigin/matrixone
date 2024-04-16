@@ -17,6 +17,7 @@ package motrace
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"strings"
@@ -407,7 +408,7 @@ func (s *StatementInfo) FillRow(ctx context.Context, row *table.Row) {
 	row.Reset()
 	row.SetColumnVal(stmtIDCol, table.UuidField(s.StatementID[:]))
 	if !s.IsZeroTxnID() {
-		row.SetColumnVal(txnIDCol, table.UuidField(s.TransactionID[:]))
+		row.SetColumnVal(txnIDCol, table.StringField(hex.EncodeToString(s.TransactionID[:])))
 	}
 	row.SetColumnVal(sesIDCol, table.UuidField(s.SessionID[:]))
 	row.SetColumnVal(accountCol, table.StringField(s.Account))
@@ -575,7 +576,7 @@ func (s *StatementInfo) SetTxnID(id []byte) {
 }
 
 func (s *StatementInfo) IsZeroTxnID() bool {
-	return bytes.Equal(s.TransactionID[:], NilTxnID[:])
+	return s.TransactionID == NilTxnID
 }
 
 // Report do report statement info to the Collector.
