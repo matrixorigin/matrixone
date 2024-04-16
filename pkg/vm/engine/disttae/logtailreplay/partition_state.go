@@ -849,41 +849,42 @@ func (p *PartitionState) HandleMetadataInsert(
 				if !objEntry.CreateTime.IsEmpty() {
 					p.dataObjectsByCreateTS.Set(ObjectIndexByCreateTSEntry(objEntry))
 				}
-				return
-			}
-			objEntry = objPivot
-			objEntry.EntryState = entryStateVector[i]
-			objEntry.Sorted = sortedStateVector[i]
-			if !isEmptyDelta {
-				objEntry.HasDeltaLoc = true
-			}
-			objEntry.CommitTS = commitTimeVector[i]
-			createTS := createTimeVector[i]
-			// after blk is removed, create ts is empty
-			if !createTS.IsEmpty() {
-				objEntry.CreateTime = createTS
-			}
+			} else {
 
-			blkCnt := blockID.Sequence() + 1
-			if uint32(blkCnt) > objEntry.BlkCnt() {
-				objectio.SetObjectStatsBlkCnt(&objEntry.ObjectStats, uint32(blkCnt))
-			}
-
-			p.dataObjects.Set(objEntry)
-
-			if !objEntry.CreateTime.IsEmpty() {
-				p.dataObjectsByCreateTS.Set(ObjectIndexByCreateTSEntry(objEntry))
-			}
-
-			{
-				e := ObjectIndexByTSEntry{
-					Time:         createTimeVector[i],
-					ShortObjName: *objEntry.ObjectShortName(),
-					IsDelete:     false,
-
-					IsAppendable: objEntry.EntryState,
+				objEntry = objPivot
+				objEntry.EntryState = entryStateVector[i]
+				objEntry.Sorted = sortedStateVector[i]
+				if !isEmptyDelta {
+					objEntry.HasDeltaLoc = true
 				}
-				p.objectIndexByTS.Set(e)
+				objEntry.CommitTS = commitTimeVector[i]
+				createTS := createTimeVector[i]
+				// after blk is removed, create ts is empty
+				if !createTS.IsEmpty() {
+					objEntry.CreateTime = createTS
+				}
+
+				blkCnt := blockID.Sequence() + 1
+				if uint32(blkCnt) > objEntry.BlkCnt() {
+					objectio.SetObjectStatsBlkCnt(&objEntry.ObjectStats, uint32(blkCnt))
+				}
+
+				p.dataObjects.Set(objEntry)
+
+				if !objEntry.CreateTime.IsEmpty() {
+					p.dataObjectsByCreateTS.Set(ObjectIndexByCreateTSEntry(objEntry))
+				}
+
+				{
+					e := ObjectIndexByTSEntry{
+						Time:         createTimeVector[i],
+						ShortObjName: *objEntry.ObjectShortName(),
+						IsDelete:     false,
+
+						IsAppendable: objEntry.EntryState,
+					}
+					p.objectIndexByTS.Set(e)
+				}
 			}
 		}
 
