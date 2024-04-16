@@ -999,12 +999,7 @@ func builtInHash(parameters []*vector.Vector, result vector.FunctionResultWrappe
 // result vec is [serial(1, 2, 3), serial(1, 2, 3), null]
 func (op *opSerial) BuiltInSerial(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	rs := vector.MustFunctionResult[types.Varlena](result)
-	ps := types.NewPackerArray(length, proc.Mp())
-	defer func() {
-		for _, p := range ps {
-			p.FreeMem()
-		}
-	}()
+	op.tryExpand(length, proc.Mp())
 
 	bitMap := new(nulls.Nulls)
 
@@ -1013,16 +1008,18 @@ func (op *opSerial) BuiltInSerial(parameters []*vector.Vector, result vector.Fun
 			nulls.AddRange(rs.GetResultVector().GetNulls(), 0, uint64(length))
 			return nil
 		}
-		SerialHelper(v, bitMap, ps, false)
+		SerialHelper(v, bitMap, op.ps, false)
 	}
 
+	//NOTE: make sure to use uint64(length) instead of len(op.ps[i])
+	// as length of packer array could be larger than length of input vectors
 	for i := uint64(0); i < uint64(length); i++ {
 		if bitMap.Contains(i) {
 			if err := rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
 		} else {
-			if err := rs.AppendBytes(ps[i].GetBuf(), false); err != nil {
+			if err := rs.AppendBytes(op.ps[i].GetBuf(), false); err != nil {
 				return err
 			}
 		}
@@ -1046,6 +1043,8 @@ func (op *opSerial) BuiltInSerialFull(parameters []*vector.Vector, result vector
 		SerialHelper(v, nil, op.ps, true)
 	}
 
+	//NOTE: make sure to use uint64(length) instead of len(op.ps[i])
+	// as length of packer array could be larger than length of input vectors
 	for i := uint64(0); i < uint64(length); i++ {
 		if err := rs.AppendBytes(op.ps[i].GetBuf(), false); err != nil {
 			return err
