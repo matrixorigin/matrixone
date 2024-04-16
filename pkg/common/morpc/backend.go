@@ -132,6 +132,14 @@ func WithBackendFreeOrphansResponse(value func(Message)) BackendOption {
 	}
 }
 
+// WithDisconnectAfterRead used for testing. Close the connection
+// after read N messages.
+func WithDisconnectAfterRead(n int) BackendOption {
+	return func(rb *remoteBackend) {
+		rb.options.disconnectAfterRead = n
+	}
+}
+
 type remoteBackend struct {
 	remote       string
 	metrics      *metrics
@@ -151,16 +159,17 @@ type remoteBackend struct {
 	lastPingTime time.Time
 
 	options struct {
-		hasPayloadResponse bool
-		goettyOptions      []goetty.Option
-		connectTimeout     time.Duration
-		bufferSize         int
-		busySize           int
-		batchSendSize      int
-		streamBufferSize   int
-		filter             func(msg Message, backendAddr string) bool
-		readTimeout        time.Duration
-		freeResponse       func(Message)
+		hasPayloadResponse  bool
+		goettyOptions       []goetty.Option
+		connectTimeout      time.Duration
+		bufferSize          int
+		busySize            int
+		batchSendSize       int
+		streamBufferSize    int
+		disconnectAfterRead int
+		filter              func(msg Message, backendAddr string) bool
+		readTimeout         time.Duration
+		freeResponse        func(Message)
 	}
 
 	stateMu struct {
@@ -561,6 +570,7 @@ func (rb *remoteBackend) readLoop(ctx context.Context) {
 		}
 	}()
 
+	n := 0
 	for {
 		select {
 		case <-ctx.Done():
@@ -568,7 +578,8 @@ func (rb *remoteBackend) readLoop(ctx context.Context) {
 			return
 		default:
 			msg, err := rb.conn.Read(goetty.ReadOptions{Timeout: rb.options.readTimeout})
-			if err != nil {
+			n++
+			if err != nil || rb.options.disconnectAfterRead == n {
 				rb.logger.Error("read from backend failed", zap.Error(err))
 				rb.inactiveReadLoop()
 				rb.cancelActiveStreams()

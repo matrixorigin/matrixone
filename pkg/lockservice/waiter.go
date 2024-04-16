@@ -66,13 +66,15 @@ func (w waiter) TypeName() string {
 // lock to be released if a conflict is encountered.
 type waiter struct {
 	// belong to which txn
-	txn      pb.WaitTxn
-	waitFor  [][]byte
-	status   *atomic.Int32
-	refCount *atomic.Int32
-	c        chan notifyValue
-	event    event
-	waitAt   atomic.Value
+	txn          pb.WaitTxn
+	waitFor      [][]byte
+	conflictKey  []byte
+	conflictWith Lock
+	status       *atomic.Int32
+	refCount     *atomic.Int32
+	c            chan notifyValue
+	event        event
+	waitAt       atomic.Value
 
 	// just used for testing
 	beforeSwapStatusAdjustFunc func()
@@ -245,6 +247,8 @@ func (w *waiter) reset() {
 	w.txn = pb.WaitTxn{}
 	w.event = event{}
 	w.waitFor = w.waitFor[:0]
+	w.conflictKey = nil
+	w.conflictWith = Lock{}
 	w.setStatus(ready)
 }
 

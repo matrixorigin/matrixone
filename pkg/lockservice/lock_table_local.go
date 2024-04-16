@@ -146,12 +146,29 @@ func (l *localLockTable) doLock(
 		c.txn.Lock()
 
 		logLocalLockWaitOnResult(c.txn, table, c.rows[c.idx], c.opts, c.w, v)
-		if v.err != nil {
-			c.txn.clearBlocked(c.w)
+
+		// txn closed between Unlock and get Lock again
+		e := v.err
+		if e == nil && (!bytes.Equal(oldTxnID, c.txn.txnID) ||
+			!bytes.Equal(c.w.txn.TxnID, oldTxnID)) {
+			e = ErrTxnNotFound
+		}
+		if e != nil {
+			c.closed = true
+			if len(c.w.conflictKey) > 0 &&
+				c.opts.Granularity == pb.Granularity_Row {
+				l.mu.Lock()
+				if c.w.conflictWith.closeWaiter(c.w) {
+					l.mu.store.Delete(c.w.conflictKey)
+				}
+				l.mu.Unlock()
+			}
+
 			c.w.close()
-			c.done(v.err)
+			c.done(e)
 			return
 		}
+
 		// txn closed between Unlock and get Lock again
 		if !bytes.Equal(oldTxnID, c.txn.txnID) {
 			c.w.close()
@@ -436,6 +453,8 @@ func (l *localLockTable) handleLockConflictLocked(
 		return ErrLockConflict
 	}
 
+	c.w.conflictKey = key
+	c.w.conflictWith = conflictWith
 	c.w.waitFor = c.w.waitFor[:0]
 	for _, txn := range conflictWith.holders.txns {
 		c.w.waitFor = append(c.w.waitFor, txn.TxnID)

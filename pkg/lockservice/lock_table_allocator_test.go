@@ -204,7 +204,8 @@ func TestValid(t *testing.T) {
 		time.Hour,
 		func(a *lockTableAllocator) {
 			b := a.Get("s1", 0, 4, 0, pb.Sharding_None)
-			assert.Empty(t, a.Valid([]pb.LockTable{b}))
+			valid, _ := a.Valid("", []byte{}, []pb.LockTable{b})
+			assert.Empty(t, valid)
 		})
 }
 
@@ -215,7 +216,8 @@ func TestValidWithServiceInvalid(t *testing.T) {
 		func(a *lockTableAllocator) {
 			b := a.Get("s1", 0, 4, 0, pb.Sharding_None)
 			b.ServiceID = "s2"
-			assert.NotEmpty(t, a.Valid([]pb.LockTable{b}))
+			valid, _ := a.Valid("", []byte{}, []pb.LockTable{b})
+			assert.NotEmpty(t, valid)
 		})
 }
 
@@ -226,7 +228,8 @@ func TestValidWithVersionChanged(t *testing.T) {
 		func(a *lockTableAllocator) {
 			b := a.Get("s1", 0, 4, 0, pb.Sharding_None)
 			b.Version++
-			assert.NotEmpty(t, a.Valid([]pb.LockTable{b}))
+			valid, _ := a.Valid("", []byte{}, []pb.LockTable{b})
+			assert.NotEmpty(t, valid)
 		})
 }
 
@@ -266,7 +269,7 @@ func runValidBenchmark(b *testing.B, name string, tables int) {
 			for p.Next() {
 				v := rand.Intn(tables)
 				values[0] = binds[v]
-				a.Valid(values)
+				a.Valid("", []byte{}, values)
 			}
 		})
 	})

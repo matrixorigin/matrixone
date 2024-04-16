@@ -319,6 +319,10 @@ func NewDeadlockCheckBusyNoCtx() *Error {
 	return newError(Context(), ErrDeadlockCheckBusy)
 }
 
+func NewCannotCommitOrphanNoCtx() *Error {
+	return NewCannotCommitOrphan(Context())
+}
+
 func NewLockTableBindChangedNoCtx() *Error {
 	return newError(Context(), ErrLockTableBindChanged)
 }
