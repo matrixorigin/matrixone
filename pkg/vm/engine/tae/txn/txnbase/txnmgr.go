@@ -103,6 +103,8 @@ type TxnManager struct {
 		allocator *types.TsAlloctor
 	}
 
+	readyFlushWal []*OpTxn
+
 	// for debug
 	prevPrepareTS             types.TS
 	prevPrepareTSInPreparing  types.TS
@@ -500,6 +502,7 @@ func (mgr *TxnManager) dequeuePreparing(items ...any) {
 
 func (mgr *TxnManager) registerLogEntryMarshalCB(e entry2.Entry, op *OpTxn) {
 	if e == nil {
+		// heartbeat
 		return
 	}
 
@@ -519,10 +522,8 @@ func (mgr *TxnManager) registerLogEntryMarshalCB(e entry2.Entry, op *OpTxn) {
 }
 
 func (mgr *TxnManager) registerCollectLogTailCB(e entry2.Entry, op *OpTxn) {
-	if e == nil {
-		mgr.CommitListener.OnEndPrepareWAL(op.Txn)
-		return
-	}
+	// cannot delay this as callback since
+	// the logtail waterline logic.
 
 	// collect log tail after marshal done
 	//e.RegisterBeforeFlushCBs(func() error {
@@ -544,6 +545,7 @@ func (mgr *TxnManager) registerPostFlushCB(e entry2.Entry, op *OpTxn) {
 	}
 
 	if e == nil {
+		// rollback or heartbeat
 		postCallback()
 		return
 	}
@@ -567,8 +569,9 @@ func (mgr *TxnManager) onFlushWal(items ...any) {
 			mgr.registerLogEntryMarshalCB(entry, op)
 			mgr.registerCollectLogTailCB(entry, op)
 
-			if err = op.Txn.GetStore().FlushWal(wal.GroupPrepare, entry); err != nil {
-				panic(err)
+			if entry != nil {
+				// skip heartbeat
+				mgr.readyFlushWal = append(mgr.readyFlushWal, op)
 			}
 
 			if !op.Txn.IsReplay() {
@@ -581,9 +584,16 @@ func (mgr *TxnManager) onFlushWal(items ...any) {
 				mgr.prevPrepareTSInPrepareWAL = op.Txn.GetPrepareTS()
 			}
 		}
-
 		mgr.registerPostFlushCB(entry, op)
 	}
+
+	for _, op := range mgr.readyFlushWal {
+		if err = op.Txn.GetStore().FlushWal(wal.GroupPrepare); err != nil {
+			panic(err)
+		}
+	}
+
+	mgr.readyFlushWal = mgr.readyFlushWal[:0]
 }
 
 //func (mgr *TxnManager) onPrepareWAL(items ...any) {

@@ -191,9 +191,7 @@ func (r *replayer) AppendSkipCmd(skipMap map[uint64]uint64) {
 	recordEntry.meta.metaType = TReplay
 	recordEntry.cmd = cmd
 	size := recordEntry.prepareRecord()
-	defer func() {
-		recordEntry.doneFlushRecord()
-	}()
+	defer recordEntry.doneFlushRecord()
 
 	c, lsn := r.d.getClient()
 	r.appended = append(r.appended, lsn)

@@ -259,8 +259,9 @@ type TxnStore interface {
 	GetLSN() uint64
 	GetContext() context.Context
 	SetContext(context.Context)
-	FlushWal(uint32, entry.Entry) (err error)
+	FlushWal(uint32) (err error)
 	MarshalBinary() ([]byte, error)
+	//WaitMarshalDone()
 	BatchDedup(dbId, id uint64, pk containers.Vector) error
 
 	Append(ctx context.Context, dbId, id uint64, data *containers.Batch) error

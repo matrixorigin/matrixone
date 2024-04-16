@@ -180,13 +180,14 @@ func (store *txnStore) MarshalBinary() ([]byte, error) {
 	return store.cmdMgr.cmd.MarshalBinary()
 }
 
-func (store *txnStore) FlushWal(gid uint32, entry entry.Entry) (err error) {
-	store.cmdMgr.lsn, err = store.cmdMgr.driver.AppendEntry(gid, entry)
+func (store *txnStore) FlushWal(gid uint32) (err error) {
+	store.cmdMgr.lsn, err = store.cmdMgr.driver.AppendEntry(gid, store.logEntry)
 	for _, db := range store.dbs {
 		if err = db.Apply1PCCommit(); err != nil {
 			return
 		}
 	}
+
 	return err
 }
 

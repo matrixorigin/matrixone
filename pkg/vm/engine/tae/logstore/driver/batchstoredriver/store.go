@@ -164,10 +164,8 @@ func (bs *baseStore) onSyncs(batches ...any) {
 func (bs *baseStore) onEntries(entries ...any) {
 	for _, item := range entries {
 		e := item.(*entry.Entry)
-		// if e.IsPrintTime() {
-		// 	logutil.Infof("flush queue takes %dms", e.Duration().Milliseconds())
-		// 	e.StartTime()
-		// }
+		e.Entry.ExecuteBeforeFlushCBs()
+
 		var err error
 		appender := bs.file.GetAppender()
 		e.Ctx, err = appender.Prepare(e.GetSize(), e.Lsn)

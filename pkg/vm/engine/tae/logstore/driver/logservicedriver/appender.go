@@ -55,9 +55,6 @@ func (a *driverAppender) append(retryTimout, appendTimeout time.Duration) {
 	}()
 
 	size := a.entry.prepareRecord()
-	defer func() {
-		a.entry.doneFlushRecord()
-	}()
 
 	// if size > int(common.K)*20 { //todo
 	// 	panic(moerr.NewInternalError("record size %d, larger than max size 20K", size))

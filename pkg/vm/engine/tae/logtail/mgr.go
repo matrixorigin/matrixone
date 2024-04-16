@@ -117,6 +117,7 @@ func (mgr *Manager) onCollectTxnLogtails(items ...any) {
 			continue
 		}
 		builder := NewTxnLogtailRespBuilder(mgr.rt)
+
 		entries, closeCB := builder.CollectLogtail(txn)
 		txn.GetStore().DoneWaitEvent(1)
 		txnWithLogtails := &txnWithLogtails{
