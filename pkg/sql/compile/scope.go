@@ -17,11 +17,6 @@ package compile
 import (
 	"context"
 	"fmt"
-	"hash/crc32"
-	goruntime "runtime"
-	"runtime/debug"
-	"sync"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
@@ -60,7 +55,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/panjf2000/ants/v2"
+	_ "go.uber.org/automaxprocs"
 	"go.uber.org/zap"
+	"hash/crc32"
+	goruntime "runtime"
+	"runtime/debug"
+	"sync"
 )
 
 func newScope(magic magicType) *Scope {
@@ -398,7 +398,7 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 		return err
 	}
 
-	numCpu := goruntime.NumCPU()
+	numCpu := goruntime.GOMAXPROCS(0)
 	var mcpu int
 
 	switch {
