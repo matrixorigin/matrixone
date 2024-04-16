@@ -90,16 +90,19 @@ const (
 	ATTIMESTAMPNONE ATTimeStampType = iota
 	ATTIMESTAMPTIME
 	ATTIMESTAMPSNAPSHOT
+	ATMOTIMESTAMP
 )
 
 func (a ATTimeStampType) String() string {
 	switch a {
-	case ATTIMESTAMPNONE:
+	case ATTIMESTAMPNONE: // none
 		return "none"
-	case ATTIMESTAMPTIME:
+	case ATTIMESTAMPTIME: // format: {timestamp = expr}
 		return "timestamp"
-	case ATTIMESTAMPSNAPSHOT:
+	case ATTIMESTAMPSNAPSHOT: // format: {snapshot = expr}
 		return "snapshot"
+	case ATMOTIMESTAMP: // format: {mo-timestamp = expr}
+		return "mo-timestamp"
 	}
 	return "unknown"
 }

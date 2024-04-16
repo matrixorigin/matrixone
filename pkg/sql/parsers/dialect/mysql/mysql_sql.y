@@ -471,6 +471,9 @@ import (
 // Sample Related.
 %token <str> PERCENT SAMPLE
 
+// Snapshot READ
+%token <str> MO_TS
+
 %type <statement> stmt block_stmt block_type_stmt normal_stmt
 %type <statements> stmt_list stmt_list_return
 %type <statement> create_stmt insert_stmt delete_stmt drop_stmt alter_stmt truncate_table_stmt alter_sequence_stmt upgrade_stmt
@@ -8031,7 +8034,16 @@ table_name:
             Expr: $5,
         }
         $$ = tree.NewTableName(tree.Identifier($1.Compare()), prefix, atTs)
-    }    
+    }
+|   ident '{' MO_TS '=' expression '}'
+    {
+        prefix := tree.ObjectNamePrefix{ExplicitSchema: false}
+        atTs := &tree.AtTimeStamp{
+            Type: tree.ATMOTIMESTAMP,
+            Expr: $5,
+        }
+        $$ = tree.NewTableName(tree.Identifier($1.Compare()), prefix, atTs)
+    }
 |   ident '.' ident '{' TIMESTAMP '=' expression '}'
     {
         prefix := tree.ObjectNamePrefix{SchemaName: tree.Identifier($1.Compare()), ExplicitSchema: true}
@@ -8046,6 +8058,15 @@ table_name:
         prefix := tree.ObjectNamePrefix{SchemaName: tree.Identifier($1.Compare()), ExplicitSchema: true}
         atTs := &tree.AtTimeStamp{
             Type: tree.ATTIMESTAMPSNAPSHOT,
+            Expr: $7,
+        }
+        $$ = tree.NewTableName(tree.Identifier($3.Compare()), prefix, atTs)
+    }
+|   ident '.' ident '{' MO_TS '=' expression '}'
+    {
+        prefix := tree.ObjectNamePrefix{SchemaName: tree.Identifier($1.Compare()), ExplicitSchema: true}
+        atTs := &tree.AtTimeStamp{
+            Type: tree.ATMOTIMESTAMP,
             Expr: $7,
         }
         $$ = tree.NewTableName(tree.Identifier($3.Compare()), prefix, atTs)
@@ -11866,6 +11887,7 @@ non_reserved_keyword:
 |	SAMPLE
 |	PERCENT
 |	OWNERSHIP
+|   MO_TS
 
 func_not_keyword:
     DATE_ADD

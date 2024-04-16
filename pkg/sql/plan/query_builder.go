@@ -4071,6 +4071,14 @@ func (builder *QueryBuilder) resolveTsHint(tsExpr *tree.AtTimeStamp) (timestamp.
 					return timestamp.Timestamp{}, err
 				}
 				return timestamp.Timestamp{PhysicalTime: tsValue}, nil
+			} else if tsExpr.Type == tree.ATMOTIMESTAMP {
+				ts, err := timestamp.ParseTimestamp(lit.Sval)
+				if err != nil {
+					return timestamp.Timestamp{}, err
+				}
+				return ts, nil
+			} else {
+				return timestamp.Timestamp{}, moerr.NewParseError(builder.GetContext(), "invalid timestamp hint")
 			}
 		} else if lit, ok := exprLit.Lit.Value.(*plan.Literal_I64Val); ok {
 			if tsExpr.Type == tree.ATTIMESTAMPTIME {
