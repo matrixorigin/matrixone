@@ -44,6 +44,7 @@ var (
 	TraceSpanMethod        = "TRACESPAN"
 	CoreDumpMethod         = "COREDUMP"
 	InterceptCommitMethod  = "INTERCEPTCOMMIT"
+	MergeObjectsMethod     = "MERGEOBJECTS"
 
 	GetProtocolVersionMethod = "GETPROTOCOLVERSION"
 	SetProtocolVersionMethod = "SETPROTOCOLVERSION"
@@ -81,6 +82,7 @@ var (
 		TraceSpanMethod:        handleTraceSpan,
 		CoreDumpMethod:         handleCoreDump,
 		InterceptCommitMethod:  handleInterceptCommit(),
+		MergeObjectsMethod:     handleMerge(),
 
 		GetProtocolVersionMethod: handleGetProtocolVersion,
 		SetProtocolVersionMethod: handleSetProtocolVersion,
