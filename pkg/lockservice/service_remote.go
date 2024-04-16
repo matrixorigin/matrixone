@@ -42,6 +42,8 @@ var methodVersions = map[pb.Method]int64{
 	pb.Method_CanRestartService:  defines.MORPCVersion2,
 	pb.Method_RemainTxnInService: defines.MORPCVersion2,
 	pb.Method_ValidateService:    defines.MORPCVersion2,
+	pb.Method_CannotCommit:       defines.MORPCVersion2,
+	pb.Method_GetActiveTxn:       defines.MORPCVersion2,
 }
 
 func (s *service) initRemote() {
