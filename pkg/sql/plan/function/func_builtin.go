@@ -1033,7 +1033,7 @@ func builtInSerial(parameters []*vector.Vector, result vector.FunctionResultWrap
 func (op *opSerial) BuiltInSerialFull(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 
 	rs := vector.MustFunctionResult[types.Varlena](result)
-	op.init(length, proc.Mp())
+	op.tryExpand(length, proc.Mp())
 
 	for _, v := range parameters {
 		if v.IsConstNull() {

@@ -17,38 +17,29 @@ package function
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"sync"
 )
 
 type opSerial struct {
-	sync.Mutex
-	isInit bool
-	ps     []*types.Packer
+	ps []*types.Packer
 }
 
 func newOpSerial() *opSerial {
 	return &opSerial{
-		isInit: false,
-		ps:     make([]*types.Packer, 0),
+		ps: make([]*types.Packer, 0),
 	}
 }
 
-func (op *opSerial) init(length int, mp *mpool.MPool) {
-	op.Lock()
-	defer op.Unlock()
-
-	if op.isInit {
-		return
+func (op *opSerial) tryExpand(length int, mp *mpool.MPool) {
+	if len(op.ps) < length {
+		op.ps = types.NewPackerArray(length, mp)
 	}
-	op.ps = types.NewPackerArray(length, mp)
-	op.isInit = true
+
+	for _, p := range op.ps {
+		p.Reset()
+	}
 }
 
 func (op *opSerial) Close() error {
-	if !op.isInit {
-		return nil
-	}
-
 	if op.ps == nil {
 		return nil
 	}
