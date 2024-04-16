@@ -155,8 +155,8 @@ func NewExpressionExecutor(proc *process.Process, planExpr *plan.Expr) (Expressi
 
 		executor := NewFunctionExpressionExecutor()
 		typ := types.New(types.T(planExpr.Typ.Id), planExpr.Typ.Width, planExpr.Typ.Scale)
-		fn1, fn2 := overload.GetExecuteMethod()
-		if err = executor.Init(proc, len(t.F.Args), typ, fn1, fn2); err != nil {
+		fn, fnFree := overload.GetExecuteMethod()
+		if err = executor.Init(proc, len(t.F.Args), typ, fn, fnFree); err != nil {
 			executor.Free()
 			return nil, err
 		}
@@ -458,7 +458,6 @@ func (expr *FunctionExpressionExecutor) Init(
 	proc *process.Process,
 	parameterNum int,
 	retType types.Type,
-	//TODO: how to handle 2 function returns heres?
 	fn func(
 		params []*vector.Vector,
 		result vector.FunctionResultWrapper,
@@ -1318,7 +1317,7 @@ func GetExprZoneMap(
 						ivecs[i] = vecs[arg.AuxId]
 					}
 				}
-				fn, _ := overload.GetExecuteMethod()
+				fn, fnFree := overload.GetExecuteMethod()
 				typ := types.New(types.T(expr.Typ.Id), expr.Typ.Width, expr.Typ.Scale)
 
 				result := vector.NewFunctionResultWrapper(proc.GetVector, proc.PutVector, typ, proc.Mp())
@@ -1329,6 +1328,11 @@ func GetExprZoneMap(
 				if err = fn(ivecs, result, proc, 2); err != nil {
 					zms[expr.AuxId].Reset()
 					return zms[expr.AuxId]
+				}
+				if fnFree != nil {
+					// NOTE: fnFree is only applicable for serial and serial_full.
+					// if fnFree is not nil, then make sure to call it after fn() is done.
+					_ = fnFree()
 				}
 				zms[expr.AuxId] = index.VectorToZM(result.GetResultVector(), zms[expr.AuxId])
 				result.GetResultVector().Free(proc.Mp())
