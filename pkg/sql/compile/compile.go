@@ -1132,13 +1132,13 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 	n := ns[curNodeIdx]
 	switch n.NodeType {
 	case plan.Node_VALUE_SCAN:
-		var bat *batch.Batch
-		bat, err = constructValueScanBatch(ctx, c.proc, n)
-		if err != nil {
-			return nil, err
-		}
+		// var bat *batch.Batch
+		// bat, err = constructValueScanBatch(ctx, c.proc, n)
+		// if err != nil {
+		// 	return nil, err
+		// }
 		ds := newScope(Normal)
-		ds.DataSource = &Source{Bat: bat}
+		ds.DataSource = &Source{isConst: true, node: n}
 		ds.NodeInfo = engine.Node{Addr: c.addr, Mcpu: 1}
 		ds.Proc = process.NewWithAnalyze(c.proc, c.ctx, 0, c.anal.Nodes())
 		ss = c.compileSort(n, c.compileProjection(n, []*Scope{ds}))
@@ -1748,12 +1748,7 @@ func (c *Compile) constructScopeForExternal(addr string, parallel bool) *Scope {
 	ds.Proc = process.NewWithAnalyze(c.proc, c.ctx, 0, c.anal.Nodes())
 	c.proc.LoadTag = c.anal.qry.LoadTag
 	ds.Proc.LoadTag = true
-	bat := batch.NewWithSize(1)
-	{
-		bat.Vecs[0] = vector.NewConstNull(types.T_int64.ToType(), 1, c.proc.Mp())
-		bat.SetRowCount(1)
-	}
-	ds.DataSource = &Source{Bat: bat}
+	ds.DataSource = &Source{isConst: true}
 	return ds
 }
 
