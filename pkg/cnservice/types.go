@@ -253,6 +253,11 @@ type Config struct {
 
 	// PrimaryKeyCheck
 	PrimaryKeyCheck bool `toml:"primary-key-check"`
+	
+	// MaxLockCount is the maximum number of locks that can be held by a sql.
+	// If the number of locks on a single SQL may exceed this upper limit, 
+	// then directly try to obtain the lock on the entire table
+	MaxLockCount int `toml:"max-lock-count"`
 
 	// MaxPreparedStmtCount
 	MaxPreparedStmtCount int `toml:"max_prepared_stmt_count"`
@@ -390,6 +395,10 @@ func (c *Config) Validate() error {
 		plan.CNPrimaryCheck = true
 	} else {
 		plan.CNPrimaryCheck = false
+	}
+
+	if c.MaxLockCount != 0 {
+		plan.MaxLockCount = c.MaxLockCount
 	}
 
 	if c.MaxPreparedStmtCount > 0 {
