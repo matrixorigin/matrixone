@@ -187,10 +187,6 @@ func (s *service) Unlock(
 
 	s.wait()
 
-	// FIXME(fagongzi): too many mem alloc in trace
-	_, span := trace.Debug(ctx, "lockservice.unlock")
-	defer span.End()
-
 	txn := s.activeTxnHolder.deleteActiveTxn(txnID)
 	if txn == nil {
 		return nil

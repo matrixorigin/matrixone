@@ -97,6 +97,28 @@ func logLocalLockAdded(
 	}
 }
 
+func logHolderAdded(
+	c *lockContext,
+	lock Lock) {
+	logger := getWithSkipLogger()
+	if logger.Enabled(zap.DebugLevel) {
+		var waits [][]byte
+		lock.waiters.iter(func(v *waiter) bool {
+			waits = append(waits, v.txn.TxnID)
+			return true
+		})
+
+		logger.Debug("holder added",
+			txnField(c.txn),
+			zap.Uint64("table", c.result.LockedOn.Table),
+			bytesArrayField("rows", c.rows),
+			zap.String("opts", c.opts.DebugString()),
+			waitTxnArrayField("holders", lock.holders.txns),
+			bytesArrayField("waiters", waits),
+		)
+	}
+}
+
 func logLocalLockFailed(
 	txn *activeTxn,
 	tableID uint64,

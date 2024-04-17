@@ -67,6 +67,7 @@ func newLock(c *lockContext) Lock {
 	if c.opts.TableDefChanged {
 		l.value |= flagLockTableDefChanged
 	}
+	logHolderAdded(c, l)
 	return l
 }
 
@@ -78,6 +79,7 @@ func (l Lock) addWaiter(w *waiter) {
 func (l Lock) addHolder(c *lockContext) {
 	l.holders.add(c.waitTxn)
 	l.waiters.removeByTxnID(c.waitTxn.TxnID)
+	logHolderAdded(c, l)
 }
 
 func (l Lock) isEmpty() bool {
