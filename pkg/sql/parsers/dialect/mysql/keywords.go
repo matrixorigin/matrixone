@@ -625,5 +625,6 @@ func init() {
 		"bitmap_count":               BITMAP_COUNT,
 		"upgrade":                    UPGRADE,
 		"retry":                      RETRY,
+		"mo_ts":                      MO_TS,
 	}
 }
