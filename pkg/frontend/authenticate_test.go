@@ -11925,3 +11925,93 @@ func TestDoResolveSnapshotTsWithSnapShotName(t *testing.T) {
 		convey.So(ts, convey.ShouldEqual, 1713235646865937000)
 	})
 }
+
+func TestCheckTimeStampValid(t *testing.T) {
+	convey.Convey("checkTimeStampValid success", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		setGlobalPu(pu)
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		rm, _ := NewRoutineManager(ctx)
+		ses.rm = rm
+
+		tenant := &TenantInfo{
+			Tenant:        sysAccountName,
+			User:          rootName,
+			DefaultRole:   moAdminRoleName,
+			TenantID:      sysAccountID,
+			UserID:        rootID,
+			DefaultRoleID: moAdminRoleID,
+		}
+		ses.SetTenantInfo(tenant)
+
+		//no result set
+		bh.sql2result["begin;"] = nil
+		bh.sql2result["commit;"] = nil
+		bh.sql2result["rollback;"] = nil
+
+		sql := getSqlForCheckSnapshotTs(1713235646865937000)
+		mrs := newMrsForPasswordOfUser([][]interface{}{})
+		bh.sql2result[sql] = mrs
+
+		valid, err := checkTimeStampValid(ctx, ses, 1713235646865937000)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(valid, convey.ShouldBeFalse)
+	})
+
+	convey.Convey("checkTimeStampValid success", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		pu.SV.SetDefaultValues()
+		setGlobalPu(pu)
+		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+		rm, _ := NewRoutineManager(ctx)
+		ses.rm = rm
+
+		tenant := &TenantInfo{
+			Tenant:        sysAccountName,
+			User:          rootName,
+			DefaultRole:   moAdminRoleName,
+			TenantID:      sysAccountID,
+			UserID:        rootID,
+			DefaultRoleID: moAdminRoleID,
+		}
+		ses.SetTenantInfo(tenant)
+
+		//no result set
+		bh.sql2result["begin;"] = nil
+		bh.sql2result["commit;"] = nil
+		bh.sql2result["rollback;"] = nil
+
+		sql := getSqlForCheckSnapshotTs(1713235646865937000)
+		mrs := newMrsForPasswordOfUser([][]interface{}{{"018ee4cd-5991-7caa-b75d-f9290144bd9f"}})
+		bh.sql2result[sql] = mrs
+
+		valid, err := checkTimeStampValid(ctx, ses, 1713235646865937000)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(valid, convey.ShouldBeTrue)
+	})
+}

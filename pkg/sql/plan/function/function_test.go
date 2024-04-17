@@ -17,6 +17,7 @@ package function
 import (
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/stretchr/testify/assert"
@@ -277,4 +278,50 @@ func TestRunFunctionDirectly(t *testing.T) {
 		v.Free(proc.Mp())
 		require.Equal(t, startMp, proc.Mp().CurrNB())
 	}
+}
+
+func TestCastNanoToTimestamp(t *testing.T) {
+	inputs := []string{
+		"2021-04-13 08:00:00.000000099",
+		"2021-04-13 08:00:00.000000101",
+		"2021-04-13 08:00:00",
+	}
+	outputs := make([]int64, len(inputs))
+	for i, in := range inputs {
+		outputs[i] = convertStringToTimeUtcNano(in)
+	}
+
+	testCases := initCastNanoToTimestampTestCase(inputs, outputs)
+
+	proc := testutil.NewProcess()
+	for _, tc := range testCases {
+		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, CastNanoToTimestamp)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("err info is '%s'", info))
+	}
+
+}
+
+func initCastNanoToTimestampTestCase(inputs []string, outputs []int64) []tcTemp {
+	res := make([]tcTemp, len(inputs))
+	for i := range inputs {
+		res[i] = tcTemp{
+			info: fmt.Sprintf("case %d", i),
+			typ:  types.T_int64,
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{outputs[i]},
+					[]bool{false}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{inputs[i]},
+				[]bool{false}),
+		}
+	}
+	return res
+}
+
+func convertStringToTimeUtcNano(str string) int64 {
+	ts, _ := time.Parse("2006-01-02 15:04:05.999999999", str)
+	return ts.UTC().UnixNano()
 }

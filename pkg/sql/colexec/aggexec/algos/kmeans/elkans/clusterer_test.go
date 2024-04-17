@@ -440,8 +440,9 @@ func TestElkanClusterer_recalculateCentroids(t *testing.T) {
 				// Here we are only testing the working of recalculateCentroids() function.
 
 				got := ekm.recalculateCentroids()
-				if !assertx.InEpsilonF64Slices(tt.want.centroids, moarray.ToMoArrays[float64](got)) {
-					t.Errorf("centroids got = %v, want %v", moarray.ToMoArrays[float64](got), tt.want.centroids)
+				arrays, _ := moarray.ToMoArrays[float64](got)
+				if !assertx.InEpsilonF64Slices(tt.want.centroids, arrays) {
+					t.Errorf("centroids got = %v, want %v", arrays, tt.want.centroids)
 				}
 
 			} else if !ok {
