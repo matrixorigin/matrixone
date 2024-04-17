@@ -4057,7 +4057,7 @@ func (builder *QueryBuilder) resolveTsHint(tsExpr *tree.AtTimeStamp) (timestamp.
 	} else {
 		if lit, ok := exprLit.Lit.Value.(*plan.Literal_Sval); ok {
 			if tsExpr.Type == tree.ATTIMESTAMPTIME {
-				ts, err := time.Parse("2006-01-02 15:04:05", lit.Sval)
+				ts, err := time.Parse("2006-01-02 15:04:05.999999999", lit.Sval)
 				if err != nil {
 					return timestamp.Timestamp{}, err
 				}
