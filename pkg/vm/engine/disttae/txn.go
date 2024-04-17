@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/hex"
 	"math"
+	"sync"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -417,15 +418,22 @@ func (txn *Transaction) dumpBatchLocked(offset int) error {
 	txn.hasS3Op.Store(true)
 	mp := make(map[tableKey][]*batch.Batch)
 
+	lastTxnWritesIndex := offset
 	for i := offset; i < len(txn.writes); i++ {
 		if txn.writes[i].tableId == catalog.MO_DATABASE_ID ||
 			txn.writes[i].tableId == catalog.MO_TABLES_ID ||
 			txn.writes[i].tableId == catalog.MO_COLUMNS_ID {
+			txn.writes[lastTxnWritesIndex] = txn.writes[i]
+			lastTxnWritesIndex++
 			continue
 		}
 		if txn.writes[i].bat == nil || txn.writes[i].bat.RowCount() == 0 {
+			txn.writes[lastTxnWritesIndex] = txn.writes[i]
+			lastTxnWritesIndex++
 			continue
 		}
+
+		keepElement := true
 		if txn.writes[i].typ == INSERT && txn.writes[i].fileName == "" {
 			tbKey := tableKey{
 				accountId:  txn.writes[i].accountId,
@@ -444,14 +452,15 @@ func (txn *Transaction) dumpBatchLocked(offset int) error {
 			mp[tbKey] = append(mp[tbKey], newBat)
 			txn.toFreeBatches[tbKey] = append(txn.toFreeBatches[tbKey], bat)
 
-			// DON'T MODIFY THE IDX OF AN ENTRY IN LOG
-			// THIS IS VERY IMPORTANT FOR CN BLOCK COMPACTION
-			// maybe this will cause that the log increments unlimitedly
-			// txn.writes = append(txn.writes[:i], txn.writes[i+1:]...)
-			// i--
-			txn.writes[i].bat = nil
+			keepElement = false
+		}
+
+		if keepElement {
+			txn.writes[lastTxnWritesIndex] = txn.writes[i]
+			lastTxnWritesIndex++
 		}
 	}
+	txn.writes = txn.writes[:lastTxnWritesIndex]
 
 	for tbKey := range mp {
 		// scenario 2 for cn write s3, more info in the comment of S3Writer
@@ -489,7 +498,7 @@ func (txn *Transaction) dumpBatchLocked(offset int) error {
 		fileName := objectio.DecodeBlockInfo(
 			blockInfo.Vecs[0].GetBytesAt(0)).
 			MetaLocation().Name().String()
-		err = table.db.txn.WriteFileLocked(
+		err = table.getTxn().WriteFileLocked(
 			INSERT,
 			table.accountId,
 			table.db.databaseId,
@@ -498,7 +507,7 @@ func (txn *Transaction) dumpBatchLocked(offset int) error {
 			table.tableName,
 			fileName,
 			blockInfo,
-			table.db.txn.tnStores[0],
+			table.getTxn().tnStores[0],
 		)
 		if err != nil {
 			return err
@@ -851,7 +860,7 @@ func (txn *Transaction) compactionBlksLocked() error {
 					bat.GetVector(0),
 					objectio.EncodeBlockInfo(blkInfo),
 					false,
-					tbl.db.txn.proc.GetMPool())
+					tbl.getTxn().proc.GetMPool())
 			}
 
 			// append the object stats to bat
@@ -860,14 +869,14 @@ func (txn *Transaction) compactionBlksLocked() error {
 					continue
 				}
 				if err = vector.AppendBytes(bat.Vecs[1], stats[idx].Marshal(),
-					false, tbl.db.txn.proc.GetMPool()); err != nil {
+					false, tbl.getTxn().proc.GetMPool()); err != nil {
 					return err
 				}
 			}
 
 			bat.SetRowCount(len(createdBlks))
 			defer func() {
-				bat.Clean(tbl.db.txn.proc.GetMPool())
+				bat.Clean(tbl.getTxn().proc.GetMPool())
 			}()
 
 			err := txn.WriteFileLocked(
@@ -879,7 +888,7 @@ func (txn *Transaction) compactionBlksLocked() error {
 				tbl.tableName,
 				createdBlks[0].MetaLocation().Name().String(),
 				bat,
-				tbl.db.txn.tnStores[0],
+				tbl.getTxn().tnStores[0],
 			)
 			if err != nil {
 				return err
@@ -965,6 +974,7 @@ func (txn *Transaction) forEachTableWrites(databaseId uint64, tableId uint64, of
 // getCachedTable returns the cached table in this transaction if it exists, nil otherwise.
 // Before it gets the cached table, it checks whether the table is deleted by another
 // transaction by go through the delete tables slice, and advance its cachedIndex.
+// TODO::get snapshot table from cache for snapshot read
 func (txn *Transaction) getCachedTable(
 	k tableKey,
 ) *txnTable {
@@ -1108,13 +1118,13 @@ func (txn *Transaction) transferDeletesLocked() error {
 				return err
 			}
 			deleteObjs, createObjs := state.GetChangedObjsBetween(types.TimestampToTS(ts),
-				types.TimestampToTS(tbl.db.txn.op.SnapshotTS()))
+				types.TimestampToTS(tbl.db.op.SnapshotTS()))
 
 			trace.GetService().ApplyFlush(
-				tbl.db.txn.op.Txn().ID,
+				tbl.db.op.Txn().ID,
 				tbl.tableId,
 				ts,
-				tbl.db.txn.op.SnapshotTS(),
+				tbl.db.op.SnapshotTS(),
 				len(deleteObjs))
 
 			if len(deleteObjs) > 0 {
@@ -1132,4 +1142,39 @@ func (txn *Transaction) UpdateSnapshotWriteOffset() {
 	txn.Lock()
 	defer txn.Unlock()
 	txn.snapshotWriteOffset = len(txn.writes)
+}
+
+func (txn *Transaction) CloneSnapshotWS() client.Workspace {
+	ws := &Transaction{
+		proc:     txn.proc,
+		engine:   txn.engine,
+		tnStores: txn.tnStores,
+
+		tableCache: struct {
+			cachedIndex int
+			tableMap    *sync.Map
+		}{tableMap: new(sync.Map)},
+		databaseMap:     new(sync.Map),
+		createMap:       new(sync.Map),
+		deletedTableMap: new(sync.Map),
+		deletedBlocks: &deletedBlocks{
+			offsets: map[types.Blockid][]int64{},
+		},
+		cnBlkId_Pos:     map[types.Blockid]Pos{},
+		batchSelectList: make(map[*batch.Batch][]int64),
+		toFreeBatches:   make(map[tableKey][]*batch.Batch),
+	}
+
+	ws.blockId_tn_delete_metaLoc_batch = struct {
+		sync.RWMutex
+		data map[types.Blockid][]*batch.Batch
+	}{data: make(map[types.Blockid][]*batch.Batch)}
+
+	ws.readOnly.Store(true)
+
+	return ws
+}
+
+func (txn *Transaction) BindTxnOp(op client.TxnOperator) {
+	txn.op = op
 }

@@ -471,6 +471,9 @@ import (
 // Sample Related.
 %token <str> PERCENT SAMPLE
 
+// Snapshot READ
+%token <str> MO_TS
+
 %type <statement> stmt block_stmt block_type_stmt normal_stmt
 %type <statements> stmt_list stmt_list_return
 %type <statement> create_stmt insert_stmt delete_stmt drop_stmt alter_stmt truncate_table_stmt alter_sequence_stmt upgrade_stmt
@@ -531,6 +534,7 @@ import (
 %type <str> comment_opt view_list_opt view_opt security_opt view_tail check_type
 %type <subscriptionOption> subcription_opt
 %type <accountsSetOption> alter_publication_accounts_opt
+%type <str> alter_publication_db_name_opt
 
 %type <select> select_stmt select_no_parens
 %type <selectStatement> simple_select select_with_parens simple_select_clause
@@ -752,8 +756,8 @@ import (
 %type <str> explain_foramt_value trim_direction
 %type <str> priority_opt priority quick_opt ignore_opt wild_opt
 
-%type <str> account_name account_admin_name account_role_name
-%type <expr> account_name_or_param
+%type <str> account_name account_role_name
+%type <expr> account_name_or_param account_admin_name
 %type <accountAuthOption> account_auth_option
 %type <alterAccountAuthOption> alter_account_auth_option
 %type <accountIdentified> account_identified
@@ -2587,6 +2591,7 @@ prepareable_stmt:
 |   drop_stmt
 |   show_stmt
 |   update_stmt
+|   alter_account_stmt
 |   select_stmt
     {
         $$ = $1
@@ -3294,7 +3299,7 @@ visibility:
 
 
 alter_account_stmt:
-    ALTER ACCOUNT exists_opt account_name alter_account_auth_option account_status_option account_comment_opt
+    ALTER ACCOUNT exists_opt account_name_or_param alter_account_auth_option account_status_option account_comment_opt
     {
         var ifExists = $3
         var name = $4
@@ -4033,7 +4038,7 @@ drop_sequence_stmt:
     }
 
 drop_account_stmt:
-    DROP ACCOUNT exists_opt account_name
+    DROP ACCOUNT exists_opt account_name_or_param
     {
         var ifExists = $3
         var name = $4
@@ -5988,39 +5993,53 @@ account_auth_option:
 account_admin_name:
     STRING
     {
-    	$$ = $1
+        var Str = $1
+        $$ = tree.NewNumValWithType(constant.MakeString(Str), Str, false, tree.P_char)
     }
 |	ident
 	{
-		$$ = $1.Compare()
+		var Str = $1.Compare()
+        $$ = tree.NewNumValWithType(constant.MakeString(Str), Str, false, tree.P_char)
 	}
+|   VALUE_ARG
+    {
+        $$ = tree.NewParamExpr(yylex.(*Lexer).GetParamIndex())
+    }
 
 account_identified:
     IDENTIFIED BY STRING
     {
-        var Typ = tree.AccountIdentifiedByPassword
-        var Str = $3
         $$ = *tree.NewAccountIdentified(
-            Typ,
-            Str,
+            tree.AccountIdentifiedByPassword,
+            tree.NewNumValWithType(constant.MakeString($3), $3, false, tree.P_char),
+        )
+    }
+|   IDENTIFIED BY VALUE_ARG
+    {
+        $$ = *tree.NewAccountIdentified(
+            tree.AccountIdentifiedByPassword,
+            tree.NewParamExpr(yylex.(*Lexer).GetParamIndex()),
         )
     }
 |   IDENTIFIED BY RANDOM PASSWORD
     {
-        var Typ = tree.AccountIdentifiedByRandomPassword
-        var Str string
         $$ = *tree.NewAccountIdentified(
-            Typ,
-            Str,
+            tree.AccountIdentifiedByRandomPassword,
+            nil,
         )
     }
 |   IDENTIFIED WITH STRING
     {
-        var Typ = tree.AccountIdentifiedWithSSL
-        var Str = $3
         $$ = *tree.NewAccountIdentified(
-            Typ,
-            Str,
+            tree.AccountIdentifiedWithSSL,
+            tree.NewNumValWithType(constant.MakeString($3), $3, false, tree.P_char),
+        )
+    }
+|   IDENTIFIED WITH VALUE_ARG
+    {
+        $$ = *tree.NewAccountIdentified(
+            tree.AccountIdentifiedWithSSL,
+            tree.NewParamExpr(yylex.(*Lexer).GetParamIndex()),
         )
     }
 
@@ -6231,13 +6250,14 @@ alter_stage_stmt:
 
 
 alter_publication_stmt:
-    ALTER PUBLICATION exists_opt ident alter_publication_accounts_opt comment_opt
+    ALTER PUBLICATION exists_opt ident alter_publication_accounts_opt alter_publication_db_name_opt comment_opt
     {
         var ifExists = $3
         var name = tree.Identifier($4.Compare())
         var accountsSet = $5
-        var comment = $6
-        $$ = tree.NewAlterPublication(ifExists, name, accountsSet, comment)
+        var dbName = $6
+        var comment = $7
+        $$ = tree.NewAlterPublication(ifExists, name, accountsSet, dbName, comment)
     }
 
 alter_publication_accounts_opt:
@@ -6269,6 +6289,14 @@ alter_publication_accounts_opt:
 	    }
     }
 
+alter_publication_db_name_opt:
+    {
+	    $$ = ""
+    }
+    | DATABASE db_name
+    {
+	    $$ = $2
+    }
 
 drop_publication_stmt:
     DROP PUBLICATION exists_opt ident
@@ -6505,7 +6533,7 @@ user_identified:
     {
     $$ = &tree.AccountIdentified{
         Typ: tree.AccountIdentifiedByPassword,
-        Str: $3,
+        Str: tree.NewNumValWithType(constant.MakeString($3), $3, false, tree.P_char),
     }
     }
 |   IDENTIFIED BY RANDOM PASSWORD
@@ -6518,7 +6546,7 @@ user_identified:
     {
     $$ = &tree.AccountIdentified{
         Typ: tree.AccountIdentifiedWithSSL,
-        Str: $3,
+        Str: tree.NewNumValWithType(constant.MakeString($3), $3, false, tree.P_char),
     }
     }
 
@@ -7989,19 +8017,57 @@ table_name:
         prefix := tree.ObjectNamePrefix{SchemaName: tree.Identifier($1.Compare()), ExplicitSchema: true}
         $$ = tree.NewTableName(tree.Identifier($3.Compare()), prefix, nil)
     }
-|   ident '{' expression '}'
+|   ident '{' TIMESTAMP '=' expression '}'
     {
         prefix := tree.ObjectNamePrefix{ExplicitSchema: false}
         atTs := &tree.AtTimeStamp{
-            Expr: $3,
+            Type: tree.ATTIMESTAMPTIME,
+            Expr: $5,
         }
         $$ = tree.NewTableName(tree.Identifier($1.Compare()), prefix, atTs)
     }
-|   ident '.' ident '{' expression '}'
+|   ident '{' SNAPSHOT '=' expression '}'
+    {
+        prefix := tree.ObjectNamePrefix{ExplicitSchema: false}
+        atTs := &tree.AtTimeStamp{
+            Type: tree.ATTIMESTAMPSNAPSHOT,
+            Expr: $5,
+        }
+        $$ = tree.NewTableName(tree.Identifier($1.Compare()), prefix, atTs)
+    }
+|   ident '{' MO_TS '=' expression '}'
+    {
+        prefix := tree.ObjectNamePrefix{ExplicitSchema: false}
+        atTs := &tree.AtTimeStamp{
+            Type: tree.ATMOTIMESTAMP,
+            Expr: $5,
+        }
+        $$ = tree.NewTableName(tree.Identifier($1.Compare()), prefix, atTs)
+    }
+|   ident '.' ident '{' TIMESTAMP '=' expression '}'
     {
         prefix := tree.ObjectNamePrefix{SchemaName: tree.Identifier($1.Compare()), ExplicitSchema: true}
         atTs := &tree.AtTimeStamp{
-            Expr: $5,
+            Type: tree.ATTIMESTAMPTIME,
+            Expr: $7,
+        }
+        $$ = tree.NewTableName(tree.Identifier($3.Compare()), prefix, atTs)
+    }
+|   ident '.' ident '{' SNAPSHOT '=' expression '}'
+    {
+        prefix := tree.ObjectNamePrefix{SchemaName: tree.Identifier($1.Compare()), ExplicitSchema: true}
+        atTs := &tree.AtTimeStamp{
+            Type: tree.ATTIMESTAMPSNAPSHOT,
+            Expr: $7,
+        }
+        $$ = tree.NewTableName(tree.Identifier($3.Compare()), prefix, atTs)
+    }
+|   ident '.' ident '{' MO_TS '=' expression '}'
+    {
+        prefix := tree.ObjectNamePrefix{SchemaName: tree.Identifier($1.Compare()), ExplicitSchema: true}
+        atTs := &tree.AtTimeStamp{
+            Type: tree.ATMOTIMESTAMP,
+            Expr: $7,
         }
         $$ = tree.NewTableName(tree.Identifier($3.Compare()), prefix, atTs)
     }
@@ -11821,6 +11887,7 @@ non_reserved_keyword:
 |	SAMPLE
 |	PERCENT
 |	OWNERSHIP
+|   MO_TS
 
 func_not_keyword:
     DATE_ADD

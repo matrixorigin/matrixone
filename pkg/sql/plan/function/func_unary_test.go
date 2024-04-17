@@ -17,16 +17,18 @@ package function
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionUtil"
 	"math"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 type tcTemp struct {
@@ -1579,6 +1581,16 @@ func initHexStringTestCase() []tcTemp {
 				[]string{"48656c6c6f", "476f7068657221"},
 				[]bool{false, false}),
 		},
+		{
+			info: "test encode - string to hex",
+			inputs: []testutil.FunctionTestInput{testutil.NewFunctionTestInput(types.T_varchar.ToType(),
+				[]string{"", "abc", "a\nb", `a\nb`, "a\"b"},
+				[]bool{false, false, false, false, false}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"", "616263", "610a62", "615c6e62", "612262"},
+				[]bool{false, false, false, false, false}),
+		},
 	}
 }
 
@@ -1623,6 +1635,237 @@ func TestHexInt64(t *testing.T) {
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
 		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, HexInt64)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+// HexArray
+func initHexArrayTestCase() []tcTemp {
+
+	arrayF32Cases := []struct {
+		info  string
+		data  [][]float32
+		wants []string
+	}{
+		{
+			info: "test encode - array_float32 to hex",
+			data: [][]float32{
+				{0.34881967306137085, 0.0028086076490581036, 0.5752133727073669},
+				{0.95072953, 0.54392913, 0.30788785},
+				{0.98972348, 0.61145728, 0.27879944},
+				{0.37520402, 0.13316834, 0.94819581},
+			},
+			wants: []string{
+				"7e98b23e9e10383b2f41133f",
+				"0363733ff13e0b3f7aa39d3e",
+				"855e7d3f77881c3fcdbe8e3e",
+				"be1ac03e485d083ef6bc723f",
+			},
+		},
+	}
+
+	arrayF64Cases := []struct {
+		info  string
+		data  [][]float64
+		wants []string
+	}{
+		{
+			info: "test encode - array_float64 to hex",
+			data: [][]float64{
+				{0.34881967306137085, 0.0028086076490581036, 0.5752133727073669},
+			},
+			wants: []string{
+				"000000c00f53d63f000000c01302673f000000e02568e23f",
+			},
+		},
+	}
+
+	var testInputs = make([]tcTemp, 0, len(arrayF32Cases)+len(arrayF64Cases))
+
+	for _, c := range arrayF32Cases {
+
+		testInputs = append(testInputs, tcTemp{
+			info: c.info,
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_array_float32.ToType(), c.data, []bool{}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_text.ToType(), false, c.wants, []bool{}),
+		})
+	}
+
+	for _, c := range arrayF64Cases {
+
+		testInputs = append(testInputs, tcTemp{
+			info: c.info,
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_array_float64.ToType(), c.data, []bool{}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_text.ToType(), false, c.wants, []bool{}),
+		})
+	}
+
+	return testInputs
+
+}
+
+func TestHexArray(t *testing.T) {
+	testCases := initHexArrayTestCase()
+
+	proc := testutil.NewProcess()
+	for _, tc := range testCases {
+		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, HexArray)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+func initUnhexTestCase() []tcTemp {
+	return []tcTemp{
+		{
+			info: "test unhex",
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"616263", "610a62", "615c6e62", "612262", "e4bda0e5a5bd", "invalid", "", ""},
+					[]bool{false, false, false, false, false, false, false, true}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_blob.ToType(), false,
+				[]string{"abc", "a\nb", `a\nb`, "a\"b", "你好", "", "", ""},
+				[]bool{false, false, false, false, false, true, false, true}),
+		},
+		{
+			info: "test encode - hex to blob",
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"", "616263", "610a62", "615c6e62", "612262"},
+					[]bool{false, false, false, false, false}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_blob.ToType(), false,
+				[]string{"", "abc", "a\nb", `a\nb`, "a\"b"},
+				[]bool{false, false, false, false, false}),
+		},
+		{
+			info: "test encode -  hex to blob(array_float32)",
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{
+						"7e98b23e9e10383b2f41133f",
+						"0363733ff13e0b3f7aa39d3e",
+						"855e7d3f77881c3fcdbe8e3e",
+						"be1ac03e485d083ef6bc723f",
+					},
+					[]bool{false, false, false, false}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_blob.ToType(), false, []string{
+				functionUtil.QuickBytesToStr(types.ArrayToBytes([]float32{0.34881967306137085, 0.0028086076490581036, 0.5752133727073669})),
+				functionUtil.QuickBytesToStr(types.ArrayToBytes([]float32{0.95072953, 0.54392913, 0.30788785})),
+				functionUtil.QuickBytesToStr(types.ArrayToBytes([]float32{0.98972348, 0.61145728, 0.27879944})),
+				functionUtil.QuickBytesToStr(types.ArrayToBytes([]float32{0.37520402, 0.13316834, 0.94819581})),
+			}, []bool{false, false, false, false}),
+		},
+		{
+			info: "test encode - hex to blob(array_float64)",
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_varchar.ToType(), []string{
+					"000000c00f53d63f000000c01302673f000000e02568e23f",
+				}, []bool{false}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_blob.ToType(), false, []string{
+				functionUtil.QuickBytesToStr(types.ArrayToBytes([]float64{0.34881967306137085, 0.0028086076490581036, 0.5752133727073669})),
+			}, []bool{false}),
+		},
+	}
+}
+
+func TestUnhex(t *testing.T) {
+	testCases := initUnhexTestCase()
+
+	proc := testutil.NewProcess()
+	for _, tc := range testCases {
+		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, Unhex)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+// ToBase64
+func initToBase64TestCase() []tcTemp {
+	regularCases := []struct {
+		info  string
+		data  []string
+		wants []string
+	}{
+		{
+			info:  "test encode - string to base64",
+			data:  []string{"", "abc", "a\nb", `a\nb`, "a\"b"},
+			wants: []string{"", "YWJj", "YQpi", "YVxuYg==", "YSJi"},
+		},
+	}
+
+	var testInputs = make([]tcTemp, 0, len(regularCases))
+	for _, c := range regularCases {
+
+		testInputs = append(testInputs, tcTemp{
+			info: c.info,
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_varchar.ToType(), c.data, []bool{}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_text.ToType(), false, c.wants, []bool{}),
+		})
+	}
+
+	return testInputs
+
+}
+
+func TestToBase64(t *testing.T) {
+	testCases := initToBase64TestCase()
+
+	proc := testutil.NewProcess()
+	for _, tc := range testCases {
+		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, ToBase64)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+// FromBase64
+func initFromBase64TestCase() []tcTemp {
+	regularCases := []struct {
+		info  string
+		data  []string
+		wants []string
+	}{
+
+		{
+			info:  "test encode - base64 to blob",
+			data:  []string{"", "YWJj", "YQpi", "YSJi"},
+			wants: []string{"", "abc", "a\nb", "a\"b"},
+		},
+	}
+
+	var testInputs = make([]tcTemp, 0, len(regularCases))
+	for _, c := range regularCases {
+
+		testInputs = append(testInputs, tcTemp{
+			info: c.info,
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_varchar.ToType(), c.data, []bool{}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_blob.ToType(), false, c.wants, []bool{}),
+		})
+	}
+
+	return testInputs
+
+}
+
+func TestFromBase64(t *testing.T) {
+	testCases := initFromBase64TestCase()
+
+	proc := testutil.NewProcess()
+	for _, tc := range testCases {
+		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, FromBase64)
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}

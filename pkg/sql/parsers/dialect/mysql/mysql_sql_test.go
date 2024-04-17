@@ -1661,7 +1661,11 @@ var (
 			input:  "create account ? admin_name 'admin' identified with '123'",
 			output: "create account ? admin_name 'admin' identified with '******'",
 		}, {
+			input: "create account nihao admin_name ? identified by ?",
+		}, {
 			input: "drop account if exists abc",
+		}, {
+			input: "drop account ?",
 		}, {
 			input:  "alter account if exists nihao admin_name 'admin' identified by '123' open comment 'new account'",
 			output: "alter account if exists nihao admin_name 'admin' identified by '******' open comment 'new account'",
@@ -1678,6 +1682,8 @@ var (
 		}, {
 			input:  "alter account nihao admin_name 'admin' identified with '123'",
 			output: "alter account nihao admin_name 'admin' identified with '******'",
+		}, {
+			input: "alter account ? admin_name ? identified with ?",
 		}, {
 			input: "create user if not exists abc1 identified by '123', abc2 identified by '234', abc3 identified by '111' default role def_role " +
 				"password expire " +
@@ -2828,6 +2834,7 @@ func TestValid(t *testing.T) {
 		if tcase.output != out {
 			t.Errorf("Parsing failed. \nExpected/Got:\n%s\n%s", tcase.output, out)
 		}
+		ast.StmtKind()
 	}
 }
 

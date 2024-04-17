@@ -71,6 +71,13 @@ type LogtailCfg struct {
 	PageSize int32 `toml:"page-size"`
 }
 
+type MergeConfig struct {
+	CNMergeMemControlHint uint64
+	CNTakeOverAll         bool
+	CNTakeOverExceed      uint64
+	CNStandaloneTake      bool
+}
+
 type LogtailServerCfg struct {
 	RpcMaxMessageSize      int64
 	RpcEnableChecksum      bool

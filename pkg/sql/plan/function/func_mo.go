@@ -15,9 +15,12 @@
 package function
 
 import (
+	"bytes"
 	"context"
+	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -25,10 +28,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionUtil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"go.uber.org/zap"
 )
 
 const (
@@ -88,7 +93,19 @@ func MoTableRows(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 			dbo, err = e.Database(ctx, dbStr, txn)
 			if err != nil {
 				if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
-					return moerr.NewInvalidArgNoCtx("db not found when mo_table_rows", dbStr)
+					var buf bytes.Buffer
+					for j := uint64(0); j < uint64(length); j++ {
+						db2, _ := dbs.GetStrValue(j)
+						tbl2, _ := tbls.GetStrValue(j)
+
+						dbStr2 := functionUtil.QuickBytesToStr(db2)
+						tblStr2 := functionUtil.QuickBytesToStr(tbl2)
+
+						buf.WriteString(fmt.Sprintf("%s-%s; ", dbStr2, tblStr2))
+					}
+
+					logutil.Errorf(fmt.Sprintf("db not found when mo_table_size: %s-%s, extra: %s", dbStr, tblStr, buf.String()))
+					return moerr.NewInvalidArgNoCtx("db not found when mo_table_size", fmt.Sprintf("%s-%s", dbStr, tblStr))
 				}
 				return err
 			}
@@ -129,9 +146,6 @@ func MoTableRows(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 					if err != nil {
 						return err
 					}
-					if err = prel.UpdateObjectInfos(ctx); err != nil {
-						return err
-					}
 					prows, err = prel.Rows(ctx)
 					if err != nil {
 						return err
@@ -139,9 +153,6 @@ func MoTableRows(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 					rows += prows
 				}
 			} else {
-				if err = rel.UpdateObjectInfos(ctx); err != nil {
-					return err
-				}
 				if rows, err = rel.Rows(ctx); err != nil {
 					return err
 				}
@@ -168,21 +179,9 @@ func MoTableSize(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 	txn := proc.TxnOperator
 
 	var accountId uint32
-	var accSwitched bool
 	// XXX old code starts a new transaction.   why?
 	for i := uint64(0); i < uint64(length); i++ {
-		if accSwitched {
-			// consider this situation:
-			// 	 if a sql trys to gather all table's size in one query,
-			// 	 this will traverse all tables, including the cluster table, belongs
-			// 	 this account.
-			//   but if these tables in `tbls` has orders: xxx, cluster table, xxx, xxx, xxx.
-			//   the account id stored in proc.Ctx will be changed to system account id when process that cluster
-			//   table, and causing the last three tables can not be found when call the `engine.Database()`.
-			//   so should be first to switch bach the right account id here.
-			accSwitched = false
-			proc.Ctx = defines.AttachAccountId(proc.Ctx, accountId)
-		}
+		foolCtx := proc.Ctx
 
 		db, dbnull := dbs.GetStrValue(i)
 		tbl, tblnull := tbls.GetStrValue(i)
@@ -197,35 +196,50 @@ func MoTableSize(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 
 			if isClusterTable(dbStr, tblStr) {
 				//if it is the cluster table in the general account, switch into the sys account
-				accountId, err = defines.GetAccountId(proc.Ctx)
+				accountId, err = defines.GetAccountId(foolCtx)
 				if err != nil {
 					return err
 				}
 				if accountId != uint32(sysAccountID) {
-					accSwitched = true
-					proc.Ctx = defines.AttachAccountId(proc.Ctx, uint32(sysAccountID))
+					foolCtx = defines.AttachAccountId(foolCtx, uint32(sysAccountID))
 				}
 			}
-			ctx := proc.Ctx
 
 			var dbo engine.Database
-			dbo, err = e.Database(ctx, dbStr, txn)
+			dbo, err = e.Database(foolCtx, dbStr, txn)
 			if err != nil {
 				if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
-					return moerr.NewInvalidArgNoCtx("db not found when mo_table_size", dbStr)
+					var buf bytes.Buffer
+					for j := uint64(0); j < uint64(length); j++ {
+						db2, _ := dbs.GetStrValue(j)
+						tbl2, _ := tbls.GetStrValue(j)
+
+						dbStr2 := functionUtil.QuickBytesToStr(db2)
+						tblStr2 := functionUtil.QuickBytesToStr(tbl2)
+
+						buf.WriteString(fmt.Sprintf("%s#%s; ", dbStr2, tblStr2))
+					}
+
+					originalAccId, _ := defines.GetAccountId(proc.Ctx)
+					attachedAccId, _ := defines.GetAccountId(foolCtx)
+
+					logutil.Errorf(
+						fmt.Sprintf("db not found when mo_table_size: %s#%s, acc: %d-%d, extra: %s",
+							dbStr, tblStr, attachedAccId, originalAccId, buf.String()))
+					return moerr.NewInvalidArgNoCtx("db not found when mo_table_size", fmt.Sprintf("%s-%s", dbStr, tblStr))
 				}
 				return err
 			}
-			rel, err = dbo.Relation(ctx, tblStr, nil)
+			rel, err = dbo.Relation(foolCtx, tblStr, nil)
 			if err != nil {
 				return err
 			}
 
 			var oSize, iSize uint64
-			if oSize, err = originalTableSize(ctx, dbo, rel); err != nil {
+			if oSize, err = originalTableSize(foolCtx, dbo, rel); err != nil {
 				return err
 			}
-			if iSize, err = indexesTableSize(ctx, dbo, rel); err != nil {
+			if iSize, err = indexesTableSize(foolCtx, dbo, rel); err != nil {
 				return err
 			}
 
@@ -272,18 +286,12 @@ func getTableSize(ctx context.Context, db engine.Database, rel engine.Relation) 
 			if err != nil {
 				return 0, err
 			}
-			if err = prel.UpdateObjectInfos(ctx); err != nil {
-				return 0, err
-			}
 			if psize, err = prel.Size(ctx, AllColumns); err != nil {
 				return 0, err
 			}
 			size += psize
 		}
 	} else {
-		if err = rel.UpdateObjectInfos(ctx); err != nil {
-			return 0, err
-		}
 		if size, err = rel.Size(ctx, AllColumns); err != nil {
 			return 0, err
 		}
@@ -297,17 +305,30 @@ func indexesTableSize(ctx context.Context, db engine.Database, rel engine.Relati
 	var size uint64
 	for _, idef := range rel.GetTableDef(ctx).Indexes {
 		if irel, err = db.Relation(ctx, idef.IndexTableName, nil); err != nil {
-			return 0, err
+			logutil.Info("indexesTableSize->Relation",
+				zap.String("originTable", rel.GetTableName()),
+				zap.String("indexTableName", idef.IndexTableName),
+				zap.Error(err))
+			continue
 		}
 
 		if size, err = getTableSize(ctx, db, irel); err != nil {
-			return 0, err
+			logutil.Info("indexesTableSize->getTableSize",
+				zap.String("originTable", rel.GetTableName()),
+				zap.String("indexTableName", idef.IndexTableName),
+				zap.Error(err))
+			continue
 		}
 
 		totalSize += size
 	}
 
-	return totalSize, nil
+	// this is a quick fix for the issue of the indexTableName is empty.
+	// the empty indexTableName causes the `SQL parser err: table "" does not exist` err and
+	// then the mo_table_size call will fail.
+	// this fix does not fix the issue but only avoids the failure caused by it.
+	err = nil
+	return totalSize, err
 }
 
 // MoTableColMax return the max value of the column
@@ -623,6 +644,33 @@ func CastIndexValueToIndex(ivecs []*vector.Vector, result vector.FunctionResultW
 			}
 
 			if err = rs.Append(index, false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// CastNanoToTimestamp returns timestamp according to the nano
+func CastNanoToTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	rs := vector.MustFunctionResult[types.Timestamp](result)
+	nanos := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[0])
+
+	layout := "2006-01-02 15:04:05"
+	for i := uint64(0); i < uint64(length); i++ {
+		unixNano, null := nanos.GetValue(i)
+		if null {
+			if err := rs.Append(types.Timestamp(0), true); err != nil {
+				return err
+			}
+		} else {
+			tm := time.Unix(0, unixNano)
+			str := tm.Format(layout)
+			t, err := types.ParseTimestamp(time.UTC, str, 0)
+			if err != nil {
+				return err
+			}
+			if err = rs.Append(t, false); err != nil {
 				return err
 			}
 		}
