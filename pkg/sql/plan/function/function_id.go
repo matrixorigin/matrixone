@@ -210,6 +210,7 @@ const (
 	TRANSLATE
 	TRIM
 	UNIFORM
+	SHA1
 	SHA2
 	UTC_TIMESTAMP
 	UNIX_TIMESTAMP
@@ -646,6 +647,8 @@ var functionIdRegister = map[string]int32{
 	"to_lower":                       LOWER,
 	"lower":                          LOWER,
 	"lcase":                          LOWER,
+	"sha1":                           SHA1,
+	"sha":                            SHA1,
 
 	"summation":         SUMMATION,
 	"l1_norm":           L1_NORM,

@@ -16,6 +16,7 @@ package function
 
 import (
 	"context"
+	"crypto/sha1"
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
@@ -1403,5 +1404,17 @@ func BitmapCount(parameters []*vector.Vector, result vector.FunctionResultWrappe
 			return 0
 		}
 		return bmp.GetCardinality()
+	})
+}
+
+func SHA1Func(
+	parameters []*vector.Vector,
+	result vector.FunctionResultWrapper,
+	proc *process.Process,
+	length int,
+) error {
+	return opUnaryBytesToBytes(parameters, result, proc, length, func(v []byte) []byte {
+		sum := sha1.Sum(v)
+		return []byte(hex.EncodeToString(sum[:]))
 	})
 }
