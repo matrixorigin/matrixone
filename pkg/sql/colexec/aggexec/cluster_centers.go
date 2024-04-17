@@ -343,6 +343,9 @@ func (exec *clusterCentersExec) arraysToString(centers [][]float64) (res string,
 
 func (exec *clusterCentersExec) Free() {
 	exec.ret.free()
+	if exec.ret.mg == nil {
+		return
+	}
 	for _, v := range exec.groupData {
 		if v == nil {
 			continue

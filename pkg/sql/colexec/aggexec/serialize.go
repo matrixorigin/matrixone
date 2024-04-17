@@ -24,6 +24,9 @@ import (
 )
 
 func MarshalAggFuncExec(exec AggFuncExec) ([]byte, error) {
+	if exec.IsDistinct() {
+		return nil, moerr.NewInternalErrorNoCtx("marshal distinct agg exec is not supported")
+	}
 	return exec.marshal()
 }
 
