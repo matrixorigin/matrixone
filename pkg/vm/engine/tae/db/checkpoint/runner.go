@@ -1036,7 +1036,7 @@ func (r *runner) onDirtyEntries(entries ...any) {
 }
 
 func (r *runner) crontask(ctx context.Context) {
-	lag := 2 * time.Second
+	lag := 3 * time.Second
 	if r.options.maxFlushInterval < time.Second {
 		lag = 0 * time.Second
 	}
