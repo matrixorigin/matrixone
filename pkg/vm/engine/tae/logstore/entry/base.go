@@ -59,6 +59,7 @@ type Info struct {
 	Checkpoints []*CkpRanges
 	GroupLSN    uint64
 
+	LsnValid  bool
 	TargetLsn uint64
 	Info      any
 }

@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/pb/logtail"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -142,6 +143,9 @@ type txnStore struct {
 	writeOps    atomic.Uint32
 	tracer      *txnTracer
 
+	logTails        *[]logtail.TableLogtail
+	logTailsCloseCB func()
+
 	wg sync.WaitGroup
 }
 
@@ -180,14 +184,19 @@ func (store *txnStore) MarshalBinary() ([]byte, error) {
 	return store.cmdMgr.cmd.MarshalBinary()
 }
 
-func (store *txnStore) FlushWal(gid uint32) (err error) {
-	store.cmdMgr.lsn, err = store.cmdMgr.driver.AppendEntry(gid, store.logEntry)
-	for _, db := range store.dbs {
-		if err = db.Apply1PCCommit(); err != nil {
-			return
-		}
-	}
+func (store *txnStore) SetLogTails(tails *[]logtail.TableLogtail, closeCB func()) {
+	store.logTails, store.logTailsCloseCB = tails, closeCB
+}
 
+func (store *txnStore) GetLogTails() (*[]logtail.TableLogtail, func()) {
+	return store.logTails, store.logTailsCloseCB
+}
+
+func (store *txnStore) FlushWal(gid uint32) (err error) {
+	if store.cmdMgr == nil || store.cmdMgr.driver == nil {
+		return
+	}
+	_, err = store.cmdMgr.driver.AppendEntry(gid, store.logEntry)
 	return err
 }
 
@@ -785,15 +794,20 @@ func (store *txnStore) PrepareWAL() (e entry.Entry, err error) {
 	store.cmdMgr.cmd.SetTxn(store.txn)
 	e = entry.GetBase()
 
-	info := &entry.Info{
-		Group: wal.GroupPrepare,
-	}
-	e.SetInfo(info)
-	e.SetType(IOET_WALEntry_TxnRecord)
+	lsn := store.cmdMgr.driver.AllocateLSN(wal.GroupPrepare, e)
+	store.cmdMgr.lsn = lsn
 
+	e.SetType(IOET_WALEntry_TxnRecord)
 	if e != nil {
 		store.logEntry = e
 	}
+
+	for _, db := range store.dbs {
+		if err = db.Apply1PCCommit(); err != nil {
+			return
+		}
+	}
+
 	return
 }
 

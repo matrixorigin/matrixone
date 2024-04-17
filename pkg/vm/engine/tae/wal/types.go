@@ -41,4 +41,6 @@ type Driver interface {
 	Replay(handle store.ApplyHandle) error
 	Start()
 	Close() error
+
+	AllocateLSN(gid uint32, entry LogEntry) (lsn uint64)
 }

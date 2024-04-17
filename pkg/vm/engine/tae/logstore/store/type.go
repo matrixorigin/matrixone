@@ -33,6 +33,8 @@ type Store interface {
 	GetPendding(gid uint32) (cnt uint64)
 	GetCheckpointed(gid uint32) (lsn uint64)
 
+	AllocateLSN(gid uint32, entry entry.Entry) (lsn uint64)
+
 	Replay(h ApplyHandle) error
 	Close() error
 }

@@ -103,6 +103,10 @@ func (driver *walDriver) AppendEntry(group uint32, e LogEntry) (uint64, error) {
 	return id, err
 }
 
+func (driver *walDriver) AllocateLSN(gid uint32, entry LogEntry) (lsn uint64) {
+	return driver.impl.AllocateLSN(gid, entry)
+}
+
 func (driver *walDriver) Close() error {
 	driver.cancelfn()
 	if driver.own {

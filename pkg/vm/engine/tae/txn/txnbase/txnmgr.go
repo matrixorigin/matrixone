@@ -40,6 +40,7 @@ import (
 type TxnCommitListener interface {
 	OnBeginPrePrepare(txnif.AsyncTxn)
 	OnEndPrePrepare(txnif.AsyncTxn)
+	OnBeginPrepareWAL(txnif.AsyncTxn)
 	OnEndPrepareWAL(txnif.AsyncTxn)
 }
 
@@ -73,9 +74,16 @@ func (bl *batchTxnCommitListener) OnEndPrePrepare(txn txnif.AsyncTxn) {
 		l.OnEndPrePrepare(txn)
 	}
 }
+
 func (bl *batchTxnCommitListener) OnEndPrepareWAL(txn txnif.AsyncTxn) {
 	for _, l := range bl.listeners {
 		l.OnEndPrepareWAL(txn)
+	}
+}
+
+func (bl *batchTxnCommitListener) OnBeginPrepareWAL(txn txnif.AsyncTxn) {
+	for _, l := range bl.listeners {
+		l.OnBeginPrepareWAL(txn)
 	}
 }
 
@@ -103,8 +111,6 @@ type TxnManager struct {
 		allocator *types.TsAlloctor
 	}
 
-	readyFlushWal []*OpTxn
-
 	// for debug
 	prevPrepareTS             types.TS
 	prevPrepareTSInPreparing  types.TS
@@ -127,7 +133,7 @@ func NewTxnManager(txnStoreFactory TxnStoreFactory, txnFactory TxnFactory, clock
 	mgr.ts.allocator = types.NewTsAlloctor(clock)
 	mgr.initMaxCommittedTS()
 	pqueue := sm.NewSafeQueue(20000, 1000, mgr.dequeuePreparing)
-	prepareWALQueue := sm.NewSafeQueue(20000, 1000, mgr.onFlushWal)
+	prepareWALQueue := sm.NewSafeQueue(20000, 1000, nil)
 	mgr.FlushQueue = sm.NewSafeQueue(20000, 1000, mgr.dequeuePrepared)
 	mgr.PreparingSM = sm.NewStateMachine(new(sync.WaitGroup), mgr, pqueue, prepareWALQueue)
 
@@ -488,10 +494,10 @@ func (mgr *TxnManager) dequeuePreparing(items ...any) {
 		}
 
 		store.TriggerTrace(txnif.TracePrepareWalWait)
-		if err := mgr.EnqueueFlushing(op); err != nil {
-			panic(err)
-		}
+
+		mgr.onFlushWal(op)
 	}
+
 	common.DoIfDebugEnabled(func() {
 		logutil.Debug("[dequeuePreparing]",
 			common.NameSpaceField("txns"),
@@ -522,21 +528,27 @@ func (mgr *TxnManager) registerLogEntryMarshalCB(e entry2.Entry, op *OpTxn) {
 }
 
 func (mgr *TxnManager) registerCollectLogTailCB(e entry2.Entry, op *OpTxn) {
-	// cannot delay this as callback since
-	// the logtail waterline logic.
+	if e == nil {
+		mgr.CommitListener.OnBeginPrepareWAL(op.Txn)
+		mgr.CommitListener.OnEndPrepareWAL(op.Txn)
+		return
+	}
 
-	// collect log tail after marshal done
-	//e.RegisterBeforeFlushCBs(func() error {
+	// parallelize collecting log tail after the marshal done
+	e.RegisterBeforeFlushCBs(func() error {
+		mgr.CommitListener.OnBeginPrepareWAL(op.Txn)
+		return nil
+	})
+
+	// waiting flush wal done
 	mgr.CommitListener.OnEndPrepareWAL(op.Txn)
-	//return nil
-	//})
 }
 
-func (mgr *TxnManager) registerPostFlushCB(e entry2.Entry, op *OpTxn) {
+func (mgr *TxnManager) registerApplyCommitCB(e entry2.Entry, op *OpTxn) {
 	postCallback := func() {
-		if err := op.Txn.WaitPrepared(op.ctx); err != nil {
-			panic(err)
-		}
+		//if err := op.Txn.WaitPrepared(op.ctx); err != nil {
+		//	panic(err)
+		//}
 		if op.Is2PC() {
 			mgr.on2PCPrepared(op)
 		} else {
@@ -556,44 +568,44 @@ func (mgr *TxnManager) registerPostFlushCB(e entry2.Entry, op *OpTxn) {
 	})
 }
 
-func (mgr *TxnManager) onFlushWal(items ...any) {
+func (mgr *TxnManager) onFlushWal(op *OpTxn) {
 	var entry entry2.Entry
 	var err error
-	for _, item := range items {
-		op := item.(*OpTxn)
-		if op.Txn.GetError() == nil && op.Op == OpCommit || op.Op == OpPrepare {
-			if entry, err = op.Txn.PrepareWAL(); err != nil {
-				panic(err)
-			}
+	var doFlush bool
 
-			mgr.registerLogEntryMarshalCB(entry, op)
-			mgr.registerCollectLogTailCB(entry, op)
-
-			if entry != nil {
-				// skip heartbeat
-				mgr.readyFlushWal = append(mgr.readyFlushWal, op)
-			}
-
-			if !op.Txn.IsReplay() {
-				if !mgr.prevPrepareTSInPrepareWAL.IsEmpty() {
-					prepareTS := op.Txn.GetPrepareTS()
-					if prepareTS.Less(&mgr.prevPrepareTSInPrepareWAL) {
-						panic(fmt.Sprintf("timestamp rollback current %v, previous %v", op.Txn.GetPrepareTS().ToString(), mgr.prevPrepareTSInPrepareWAL.ToString()))
-					}
-				}
-				mgr.prevPrepareTSInPrepareWAL = op.Txn.GetPrepareTS()
-			}
+	if op.Txn.GetError() == nil && op.Op == OpCommit || op.Op == OpPrepare {
+		if op.Txn.IsReplay() {
+			x := 0
+			x++
 		}
-		mgr.registerPostFlushCB(entry, op)
-	}
 
-	for _, op := range mgr.readyFlushWal {
+		doFlush = true
+		// allocating lsn
+		if entry, err = op.Txn.PrepareWAL(); err != nil {
+			panic(err)
+		}
+
+		mgr.registerLogEntryMarshalCB(entry, op)
+		mgr.registerCollectLogTailCB(entry, op)
+
+		if !op.Txn.IsReplay() {
+			if !mgr.prevPrepareTSInPrepareWAL.IsEmpty() {
+				prepareTS := op.Txn.GetPrepareTS()
+				if prepareTS.Less(&mgr.prevPrepareTSInPrepareWAL) {
+					panic(fmt.Sprintf("timestamp rollback current %v, previous %v", op.Txn.GetPrepareTS().ToString(), mgr.prevPrepareTSInPrepareWAL.ToString()))
+				}
+			}
+			mgr.prevPrepareTSInPrepareWAL = op.Txn.GetPrepareTS()
+		}
+	}
+	mgr.registerApplyCommitCB(entry, op)
+
+	if doFlush {
+		// enqueue wal flush queue
 		if err = op.Txn.GetStore().FlushWal(wal.GroupPrepare); err != nil {
 			panic(err)
 		}
 	}
-
-	mgr.readyFlushWal = mgr.readyFlushWal[:0]
 }
 
 //func (mgr *TxnManager) onPrepareWAL(items ...any) {

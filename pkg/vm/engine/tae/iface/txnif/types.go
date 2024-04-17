@@ -16,6 +16,7 @@ package txnif
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/pb/logtail"
 	"io"
 	"sync"
 
@@ -261,7 +262,8 @@ type TxnStore interface {
 	SetContext(context.Context)
 	FlushWal(uint32) (err error)
 	MarshalBinary() ([]byte, error)
-	//WaitMarshalDone()
+	SetLogTails(*[]logtail.TableLogtail, func())
+	GetLogTails() (*[]logtail.TableLogtail, func())
 	BatchDedup(dbId, id uint64, pk containers.Vector) error
 
 	Append(ctx context.Context, dbId, id uint64, data *containers.Batch) error

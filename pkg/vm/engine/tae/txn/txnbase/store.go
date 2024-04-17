@@ -17,6 +17,7 @@ package txnbase
 import (
 	"context"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/pb/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
@@ -28,6 +29,9 @@ import (
 var NoopStoreFactory = func() txnif.TxnStore { return new(NoopTxnStore) }
 
 type NoopTxnStore struct{}
+
+func (store *NoopTxnStore) SetLogTails(*[]logtail.TableLogtail, func())    {}
+func (store *NoopTxnStore) GetLogTails() (*[]logtail.TableLogtail, func()) { return nil, nil }
 
 func (store *NoopTxnStore) MarshalBinary() ([]byte, error) { return nil, nil }
 func (store *NoopTxnStore) FlushWal(uint32) (err error)    { return nil }

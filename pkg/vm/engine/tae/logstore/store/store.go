@@ -106,6 +106,32 @@ func (w *StoreImpl) Append(gid uint32, e entry.Entry) (lsn uint64, err error) {
 	return
 }
 
+func (w *StoreImpl) AllocateLSN(gid uint32, entry entry.Entry) (lsn uint64) {
+	return w.generateLsn(gid, entry)
+}
+
+func (w *StoreImpl) generateLsn(gid uint32, e entry.Entry) (lsn uint64) {
+	v1 := e.GetInfo()
+	var info *entry.Info
+	if v1 == nil {
+		info = &entry.Info{}
+		e.SetInfo(info)
+	} else {
+		info = v1.(*entry.Info)
+	}
+
+	if info.LsnValid {
+		// already has lsn, no need to allocate again
+		return
+	}
+
+	lsn = w.allocateLsn(gid)
+	info.Group = gid
+	info.GroupLSN = lsn
+	info.LsnValid = true
+	return
+}
+
 func (w *StoreImpl) doAppend(gid uint32, e entry.Entry) (drEntry *driverEntry.Entry, lsn uint64, err error) {
 	if w.IsClosed() {
 		return nil, 0, sm.ErrClose
@@ -117,17 +143,7 @@ func (w *StoreImpl) doAppend(gid uint32, e entry.Entry) (drEntry *driverEntry.En
 		w.appendWg.Done()
 		return nil, 0, sm.ErrClose
 	}
-	lsn = w.allocateLsn(gid)
-	v1 := e.GetInfo()
-	var info *entry.Info
-	if v1 == nil {
-		info = &entry.Info{}
-		e.SetInfo(info)
-	} else {
-		info = v1.(*entry.Info)
-	}
-	info.Group = gid
-	info.GroupLSN = lsn
+	lsn = w.generateLsn(gid, e)
 	drEntry = driverEntry.NewEntry(e)
 	// e.DoneWithErr(nil)
 	// return
