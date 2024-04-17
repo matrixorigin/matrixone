@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"go.uber.org/zap"
 )
 
@@ -39,8 +40,12 @@ func NewIOLocks() *IOLocks {
 var slowIOWaitDuration = time.Second * 10
 
 func (i *IOLocks) waitFunc(key IOLockKey, ch chan struct{}) func() {
+	metric.IOLockCounterWait.Add(1)
 	return func() {
 		t0 := time.Now()
+		defer func() {
+			metric.IOLockDurationWait.Observe(time.Since(t0).Seconds())
+		}()
 		for {
 			timer := time.NewTimer(slowIOWaitDuration)
 			select {
@@ -72,7 +77,12 @@ func (i *IOLocks) Lock(key IOLockKey) (unlock func(), wait func()) {
 	}
 
 	// locked
+	metric.IOLockCounterLocked.Add(1)
+	t0 := time.Now()
 	return func() {
+		defer func() {
+			metric.IOLockDurationLocked.Observe(time.Since(t0).Seconds())
+		}()
 		i.locks.Delete(key)
 		close(ch)
 	}, nil
