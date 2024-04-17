@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
@@ -85,6 +86,7 @@ func TestSortBlockColumns(t *testing.T) {
 	columns, err := SortBlockColumns(vecSlice, 0, mocks.GetTestVectorPool())
 	require.NoError(t, err)
 	require.Equal(t, []int64{2, 0, 1}, columns)
+	require.Equal(t, []string{"a", "b", "c"}, vector.MustStrCol(vec.GetDownstreamVector()))
 
 	vecWithNull := containers.MakeVector(types.T_int32.ToType(), common.DefaultAllocator)
 	vecWithNull.Append(int32(1), false)
@@ -93,7 +95,9 @@ func TestSortBlockColumns(t *testing.T) {
 
 	vecSlice = []containers.Vector{vecWithNull}
 	columns, err = SortBlockColumns(vecSlice, 0, mocks.GetTestVectorPool())
+	require.NoError(t, err)
 	require.Equal(t, []int64{1, 0, 2}, columns)
+	require.Equal(t, []int32{0, 1, 3}, vector.MustFixedCol[int32](vecWithNull.GetDownstreamVector()))
 }
 
 func BenchmarkSortBlockColumns(b *testing.B) {
