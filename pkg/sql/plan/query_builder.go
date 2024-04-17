@@ -4063,7 +4063,7 @@ func (builder *QueryBuilder) resolveTsHint(tsExpr *tree.AtTimeStamp) (timestamp.
 				}
 				tsNano := ts.UTC().UnixNano()
 				if tsNano <= 0 {
-					return timestamp.Timestamp{}, moerr.NewInvalidArg(builder.GetContext(), "invalid timestamp value %s", lit.Sval)
+					return timestamp.Timestamp{}, moerr.NewInvalidArg(builder.GetContext(), "invalid timestamp value", lit.Sval)
 				}
 				if time.Now().UTC().UnixNano()-tsNano <= options.DefaultGCTTL.Nanoseconds() && 0 <= time.Now().UTC().UnixNano()-tsNano {
 					return timestamp.Timestamp{PhysicalTime: tsNano}, nil
@@ -4075,7 +4075,7 @@ func (builder *QueryBuilder) resolveTsHint(tsExpr *tree.AtTimeStamp) (timestamp.
 					if valid {
 						return timestamp.Timestamp{PhysicalTime: tsNano}, nil
 					} else {
-						return timestamp.Timestamp{}, moerr.NewInvalidArg(builder.GetContext(), "invalid timestamp value %s", lit.Sval)
+						return timestamp.Timestamp{}, moerr.NewInvalidArg(builder.GetContext(), "invalid timestamp value, no corresponding snapshot ", lit.Sval)
 					}
 				}
 
@@ -4092,19 +4092,19 @@ func (builder *QueryBuilder) resolveTsHint(tsExpr *tree.AtTimeStamp) (timestamp.
 				}
 				return ts, nil
 			} else {
-				return timestamp.Timestamp{}, moerr.NewParseError(builder.GetContext(), "invalid timestamp hint type %s", tsExpr.Type.String())
+				return timestamp.Timestamp{}, moerr.NewInvalidArg(builder.GetContext(), "invalid timestamp hint type", tsExpr.Type.String())
 			}
 		} else if lit, ok := exprLit.Lit.Value.(*plan.Literal_I64Val); ok {
 			if tsExpr.Type == tree.ATTIMESTAMPTIME {
 				if lit.I64Val <= 0 {
-					return timestamp.Timestamp{}, moerr.NewInvalidArg(builder.GetContext(), "invalid timestamp value %d", lit.I64Val)
+					return timestamp.Timestamp{}, moerr.NewInvalidArg(builder.GetContext(), "invalid timestamp value", lit.I64Val)
 				}
 				return timestamp.Timestamp{PhysicalTime: lit.I64Val}, nil
 			} else if tsExpr.Type == tree.ATTIMESTAMPSNAPSHOT {
-				return timestamp.Timestamp{}, moerr.NewParseError(builder.GetContext(), "invalid timestamp hint for snapshot hint %d", lit.I64Val)
+				return timestamp.Timestamp{}, moerr.NewInvalidArg(builder.GetContext(), "invalid timestamp hint for snapshot hint", lit.I64Val)
 			}
 		} else {
-			return timestamp.Timestamp{}, moerr.NewParseError(builder.GetContext(), "invalid timestamp hint")
+			return timestamp.Timestamp{}, moerr.NewInvalidArg(builder.GetContext(), "invalid input expr ", tsExpr.Expr.String())
 		}
 	}
 	return timestamp.Timestamp{}, nil
