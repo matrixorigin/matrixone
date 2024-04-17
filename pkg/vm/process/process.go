@@ -337,7 +337,7 @@ func (proc *Process) PutBatch(bat *batch.Batch) {
 	}
 	for _, agg := range bat.Aggs {
 		if agg != nil {
-			agg.Free(proc.Mp())
+			agg.Free()
 		}
 	}
 	bat.Vecs = nil
