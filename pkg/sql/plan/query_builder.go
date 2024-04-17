@@ -4092,7 +4092,7 @@ func (builder *QueryBuilder) resolveTsHint(tsExpr *tree.AtTimeStamp) (timestamp.
 				}
 				return ts, nil
 			} else {
-				return timestamp.Timestamp{}, moerr.NewParseError(builder.GetContext(), "invalid timestamp hint")
+				return timestamp.Timestamp{}, moerr.NewParseError(builder.GetContext(), "invalid timestamp hint type %s", tsExpr.Type.String())
 			}
 		} else if lit, ok := exprLit.Lit.Value.(*plan.Literal_I64Val); ok {
 			if tsExpr.Type == tree.ATTIMESTAMPTIME {
@@ -4101,7 +4101,7 @@ func (builder *QueryBuilder) resolveTsHint(tsExpr *tree.AtTimeStamp) (timestamp.
 				}
 				return timestamp.Timestamp{PhysicalTime: lit.I64Val}, nil
 			} else if tsExpr.Type == tree.ATTIMESTAMPSNAPSHOT {
-				return timestamp.Timestamp{}, moerr.NewParseError(builder.GetContext(), "invalid timestamp hint for snapshot hint")
+				return timestamp.Timestamp{}, moerr.NewParseError(builder.GetContext(), "invalid timestamp hint for snapshot hint %d", lit.I64Val)
 			}
 		} else {
 			return timestamp.Timestamp{}, moerr.NewParseError(builder.GetContext(), "invalid timestamp hint")
