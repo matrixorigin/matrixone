@@ -433,8 +433,8 @@ func TestCannotHungWithUnstableNetwork(t *testing.T) {
 
 			wg.Add(3)
 			go fn(s1, 0)
-			go fn(s2, 0)
-			go fn(s3, 0)
+			go fn(s2, 1)
+			go fn(s3, 2)
 
 			wg.Wait()
 		},
