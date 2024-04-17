@@ -125,6 +125,14 @@ func WithBackendMetrics(metrics *metrics) BackendOption {
 	}
 }
 
+// WithDisconnectPeriod used for testing. Close the connection
+// after every N messages received
+func WithDisconnectPeriod(n int) BackendOption {
+	return func(rb *remoteBackend) {
+		rb.options.disconnectPer = n
+	}
+}
+
 type remoteBackend struct {
 	remote       string
 	metrics      *metrics
@@ -153,6 +161,7 @@ type remoteBackend struct {
 		streamBufferSize   int
 		filter             func(msg Message, backendAddr string) bool
 		readTimeout        time.Duration
+		disconnectPer      int
 	}
 
 	stateMu struct {
@@ -552,6 +561,7 @@ func (rb *remoteBackend) readLoop(ctx context.Context) {
 		}
 	}()
 
+	n := uint64(0)
 	for {
 		select {
 		case <-ctx.Done():
@@ -567,6 +577,14 @@ func (rb *remoteBackend) readLoop(ctx context.Context) {
 				return
 			}
 			rb.metrics.receiveCounter.Inc()
+
+			n++
+			if rb.options.disconnectPer > 0 && n%uint64(rb.options.disconnectPer) == 0 {
+				rb.inactiveReadLoop()
+				rb.cancelActiveStreams()
+				rb.scheduleResetConn()
+				return
+			}
 
 			rb.active()
 
@@ -845,7 +863,7 @@ func (rb *remoteBackend) resetConn() error {
 			time.Sleep(sleep)
 			duration += sleep
 			if time.Since(start) > rb.options.connectTimeout {
-				return moerr.NewBackendCannotConnectNoCtx()
+				return moerr.NewRPCTimeoutNoCtx()
 			}
 			select {
 			case <-rb.ctx.Done():

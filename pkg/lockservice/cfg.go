@@ -36,6 +36,9 @@ type Config struct {
 	// RPC rpc config
 	RPC morpc.Config `toml:"-"`
 
+	// TxnIterFunc used to iterate all active transactions in current cn
+	TxnIterFunc func(func([]byte) bool) `toml:"-"`
+
 	// ListenAddress lock service listen address for receiving lock requests
 	ListenAddress string `toml:"listen-address"`
 	// ServiceAddress service address for communication, if this address is not set, use
@@ -62,6 +65,9 @@ type Config struct {
 	// continuously hold the bind, and if no hold request is received after the configured time,
 	// then all bindings for the service will fail.
 	KeepBindTimeout toml.Duration `toml:"keep-bind-timeout"`
+
+	// for testing
+	disconnectPeriod int `toml:"-"`
 }
 
 // Validate validate
