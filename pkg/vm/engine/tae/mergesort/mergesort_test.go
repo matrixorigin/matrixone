@@ -74,6 +74,43 @@ func TestSort2(t *testing.T) {
 		vec.Close()
 	}
 }
+
+func TestSortBlockColumns(t *testing.T) {
+	vec := containers.MakeVector(types.T_varchar.ToType(), common.DefaultAllocator)
+	vec.Append([]byte("b"), false)
+	vec.Append([]byte("c"), false)
+	vec.Append([]byte("a"), false)
+	vecSlice := []containers.Vector{vec}
+
+	columns, err := SortBlockColumns(vecSlice, 0, mocks.GetTestVectorPool())
+	require.NoError(t, err)
+	require.Equal(t, []int64{2, 0, 1}, columns)
+
+	vecWithNull := containers.MakeVector(types.T_int32.ToType(), common.DefaultAllocator)
+	vecWithNull.Append(int32(1), false)
+	vecWithNull.Append(int32(2), true)
+	vecWithNull.Append(int32(3), false)
+
+	vecSlice = []containers.Vector{vecWithNull}
+	columns, err = SortBlockColumns(vecSlice, 0, mocks.GetTestVectorPool())
+	require.Equal(t, []int64{1, 0, 2}, columns)
+}
+
+func BenchmarkSortBlockColumns(b *testing.B) {
+	vecTypes := types.MockColTypes()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		b.StopTimer()
+		var vecs []containers.Vector
+		for _, vecType := range vecTypes {
+			vec := containers.MockVector(vecType, 10000, false, nil)
+			vecs = []containers.Vector{vec}
+		}
+		b.StartTimer()
+		_, _ = SortBlockColumns(vecs, 0, mocks.GetTestVectorPool())
+	}
+}
+
 func TestMerge1(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	vecTypes := types.MockColTypes()
