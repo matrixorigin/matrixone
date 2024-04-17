@@ -20,9 +20,9 @@ import (
 
 type CStrParts [4]*CStr
 type CStr struct {
-	o string
-	c string
-	// quote bool
+	o      string
+	c      string
+	quoted bool // Has the token been processed with backquotes
 }
 
 func NewCStr(str string, lower int64) *CStr {
@@ -32,6 +32,15 @@ func NewCStr(str string, lower int64) *CStr {
 		return cs
 	}
 	cs.c = strings.ToLower(cs.o)
+	return cs
+}
+
+func NewCStrWithQuoted(str string, lower int64, quoted bool) *CStr {
+	cs := &CStr{
+		o:      str,
+		c:      str,
+		quoted: quoted,
+	}
 	return cs
 }
 

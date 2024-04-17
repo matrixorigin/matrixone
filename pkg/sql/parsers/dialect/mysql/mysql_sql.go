@@ -20102,7 +20102,7 @@ yydefault:
 		var yyLOCAL *tree.CStr
 //line mysql_sql.y:8412
 		{
-			yyLOCAL = tree.NewCStr(yyDollar[1].str, yylex.(*Lexer).lower)
+			yyLOCAL = tree.NewCStrWithQuoted(yyDollar[1].str, yylex.(*Lexer).lower, true)
 		}
 		yyVAL.union = yyLOCAL
 	case 1292:

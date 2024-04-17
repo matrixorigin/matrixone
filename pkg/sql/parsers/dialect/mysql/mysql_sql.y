@@ -8406,11 +8406,11 @@ column_name_unresolved:
 ident:
     ID
     {
-		$$ = tree.NewCStr($1, yylex.(*Lexer).lower)
+	$$ = tree.NewCStr($1, yylex.(*Lexer).lower)
     }
-|	QUOTE_ID
+|   QUOTE_ID
 	{
-    	$$ = tree.NewCStr($1, yylex.(*Lexer).lower)
+    	$$ = tree.NewCStrWithQuoted($1, yylex.(*Lexer).lower, true)
     }
 |   not_keyword
 	{

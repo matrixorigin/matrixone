@@ -35,8 +35,10 @@ var (
 		//output: "upgrade account acc1 with retry 5",
 		//input:  "upgrade account 'acc1'",
 		//output: "upgrade account acc1",
-		input:  "show upgrade",
-		output: "show upgrade",
+		//input:  "show upgrade",
+		//output: "show upgrade",
+		input:  "alter table `Tt1` modify column b int",
+		output: "alter table Tt1 modify column b int",
 	}
 )
 
@@ -56,28 +58,66 @@ func TestDebug(t *testing.T) {
 }
 
 var (
-	orginSQL = struct {
+	orginSQL = []struct {
 		input  string
 		output string
 	}{
-		input:  "select A from t1",
-		output: "select A from t1",
+		{
+			input:  "select A from t1",
+			output: "select A from t1",
+		},
+		{
+			input:  "alter table `Tt1` modify column b int",
+			output: "alter table Tt1 modify column b int",
+		},
+		{
+			input:  "SELECT `mgr`, `hiredate`, `sal`, `comm`, `deptno`, `empno`, `ename`, `job` FROM `db1`.`Emp`",
+			output: "select mgr, hiredate, sal, comm, deptno, empno, ename, job from db1.Emp",
+		},
+		{
+			input:  "select 'def' AS `TABLE_CATALOG`, `tbl`.`reldatabase` AS `TABLE_SCHEMA`, `tbl`.`relname` AS `TABLE_NAME`, `tbl`.`reldatabase` AS `INDEX_SCHEMA` from `mo_catalog`.`mo_tables` `tbl`",
+			output: "select def as TABLE_CATALOG, tbl.reldatabase as TABLE_SCHEMA, tbl.relname as TABLE_NAME, tbl.reldatabase as INDEX_SCHEMA from mo_catalog.mo_tables as tbl",
+		},
+		{
+			input:  "create table `MyTable`(col1 int not null primary key, `Col2` int not null)",
+			output: "create table MyTable (col1 int not null primary key, Col2 int not null)",
+		},
 	}
 )
 
 // character set latin1 NOT NULL default
+/*
+  In MySQL, using backquotes (\ `) to enclose table or field names tells the MySQL parser to process their contents as a whole,
+  without being interpreted as keyword or function names. The main functions of doing so are as follows:
+1. Use of reserved words and keywords: Reserved words or keywords can be used as table or field names.
+   As long as they are enclosed in back quotation marks, MySQL will not interpret them as reserved words or keywords, but as ordinary table or field names.
+
+2. Use of special characters and spaces: If the table or field name contains special characters or spaces,
+   they can be enclosed in back quotes to enable the MySQL parser to correctly recognize these characters.
+
+3. Case sensitive: MySQL is case insensitive by default, but if table or field names are enclosed in back quotation marks,
+   their original case form will be retained for precise matching.
+
+It should be noted that while using back quotes can bring convenience in some cases, excessive use may make the code difficult
+   to read and maintain. Therefore, it is recommended to use back quotes only when necessary to enclose table or field names.
+*/
+
 func TestOriginSQL(t *testing.T) {
-	if orginSQL.output == "" {
-		orginSQL.output = orginSQL.input
-	}
-	ast, err := ParseOne(context.TODO(), orginSQL.input, 0, 1)
-	if err != nil {
-		t.Errorf("Parse(%q) err: %v", orginSQL.input, err)
-		return
-	}
-	out := tree.String(ast, dialect.MYSQL)
-	if orginSQL.output != out {
-		t.Errorf("Parsing failed. \nExpected/Got:\n%s\n%s", orginSQL.output, out)
+	for _, tcase := range orginSQL {
+		if tcase.output == "" {
+			tcase.output = tcase.input
+		}
+
+		context := context.TODO()
+		ast, err := ParseOne(context, tcase.input, 0, 1)
+		if err != nil {
+			t.Errorf("Parse(%q) err: %v", tcase.input, err)
+			return
+		}
+		out := tree.String(ast, dialect.MYSQL)
+		if tcase.output != out {
+			t.Errorf("Parsing failed. \nExpected/Got:\n%s\n%s", tcase.output, out)
+		}
 	}
 }
 
