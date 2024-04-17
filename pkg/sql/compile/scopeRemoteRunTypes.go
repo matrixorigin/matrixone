@@ -34,7 +34,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
@@ -220,7 +219,7 @@ func (sender *messageSenderOnClient) receiveBatch() (bat *batch.Batch, over bool
 			return nil, false, moerr.NewInternalErrorNoCtx("Packages delivered by morpc is broken")
 		}
 
-		bat, err = decodeBatch(sender.c.proc.Mp(), sender.c.proc, dataBuffer)
+		bat, err = decodeBatch(sender.c.proc.Mp(), dataBuffer)
 		if err != nil {
 			return nil, false, err
 		}
@@ -424,10 +423,7 @@ func (receiver *messageReceiverOnServer) sendBatch(
 		return nil
 	}
 
-	// There is still a memory problem here. If row count is very small, but the cap of batch's vectors is very large,
-	// to encode will allocate a large memory.
-	// but I'm not sure how string type store data in vector, so I can't do a simple optimization like vec.col = vec.col[:len].
-	data, err := types.Encode(b)
+	data, err := b.MarshalBinary()
 	if err != nil {
 		return err
 	}
