@@ -2384,7 +2384,9 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 		if len(r.Parts[2]) > 0 {
 			schema = r.Parts[2]
 		}
-		pk := builder.compCtx.GetPrimaryKeyDef(schema, table)
+
+		// snapshot to fix
+		pk := builder.compCtx.GetPrimaryKeyDef(schema, table, timestamp.Timestamp{})
 		if len(pk) > 1 || pk[0].Name != r.Parts[0] {
 			return 0, moerr.NewNotSupported(builder.GetContext(), "%s is not primary key in time window", tree.String(col, dialect.MYSQL))
 		}
@@ -3451,11 +3453,6 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 			schema = ctx.defaultDatabase
 		}
 
-		schema, err = databaseIsValid(schema, builder.compCtx)
-		if err != nil {
-			return 0, err
-		}
-
 		if tbl.AtTsExpr != nil {
 			ts, err = builder.resolveTsHint(tbl.AtTsExpr)
 			if err != nil {
@@ -3463,7 +3460,12 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, p
 			}
 		}
 
-		obj, tableDef := builder.compCtx.Resolve(schema, table)
+		schema, err = databaseIsValid(schema, builder.compCtx, ts)
+		if err != nil {
+			return 0, err
+		}
+
+		obj, tableDef := builder.compCtx.Resolve(schema, table, ts)
 		if tableDef == nil {
 			return 0, moerr.NewParseError(builder.GetContext(), "table %q does not exist", table)
 		}

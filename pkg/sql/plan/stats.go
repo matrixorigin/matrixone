@@ -18,11 +18,12 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"math"
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -1009,7 +1010,8 @@ func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
 	if shouldReturnMinimalStats(node) {
 		return DefaultMinimalStats()
 	}
-	s, err := builder.compCtx.Stats(node.ObjRef)
+
+	s, err := builder.compCtx.Stats(node.ObjRef, *node.ScanTS)
 	if err != nil || s == nil {
 		return DefaultStats()
 	}

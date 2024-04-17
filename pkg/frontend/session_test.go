@@ -618,22 +618,23 @@ func TestSession_TxnCompilerContext(t *testing.T) {
 
 		ses := genSession(ctrl, pu, gSysVars)
 
+		var ts timestamp.Timestamp
 		tcc := ses.GetTxnCompileCtx()
 		defDBName := tcc.DefaultDatabase()
 		convey.So(defDBName, convey.ShouldEqual, "")
-		convey.So(tcc.DatabaseExists("abc"), convey.ShouldBeTrue)
+		convey.So(tcc.DatabaseExists("abc", ts), convey.ShouldBeTrue)
 
-		_, _, err := tcc.getRelation("abc", "t1", nil)
+		_, _, err := tcc.getRelation("abc", "t1", nil, ts)
 		convey.So(err, convey.ShouldBeNil)
 
-		object, tableRef := tcc.Resolve("abc", "t1")
+		object, tableRef := tcc.Resolve("abc", "t1", ts)
 		convey.So(object, convey.ShouldNotBeNil)
 		convey.So(tableRef, convey.ShouldNotBeNil)
 
-		pkd := tcc.GetPrimaryKeyDef("abc", "t1")
+		pkd := tcc.GetPrimaryKeyDef("abc", "t1", ts)
 		convey.So(len(pkd), convey.ShouldBeZeroValue)
 
-		stats, err := tcc.Stats(&plan2.ObjectRef{SchemaName: "abc", ObjName: "t1"})
+		stats, err := tcc.Stats(&plan2.ObjectRef{SchemaName: "abc", ObjName: "t1"}, ts)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(stats, convey.ShouldBeNil)
 	})

@@ -20,6 +20,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -75,11 +76,11 @@ type CompilerContext interface {
 	// Default database/schema in context
 	DefaultDatabase() string
 	// check if database exist
-	DatabaseExists(name string) bool
+	DatabaseExists(name string, ts timestamp.Timestamp) bool
 	// get table definition by database/schema
-	Resolve(schemaName string, tableName string) (*ObjectRef, *TableDef)
+	Resolve(schemaName string, tableName string, ts timestamp.Timestamp) (*ObjectRef, *TableDef)
 	// get table definition by table id
-	ResolveById(tableId uint64) (*ObjectRef, *TableDef)
+	ResolveById(tableId uint64, ts timestamp.Timestamp) (*ObjectRef, *TableDef)
 	// get the value of variable
 	ResolveVariable(varName string, isSystemVar, isGlobalVar bool) (interface{}, error)
 	// get the list of the account id
@@ -87,9 +88,9 @@ type CompilerContext interface {
 	// get the relevant information of udf
 	ResolveUdf(name string, args []*Expr) (*function.Udf, error)
 	// get the definition of primary key
-	GetPrimaryKeyDef(dbName string, tableName string) []*ColDef
+	GetPrimaryKeyDef(dbName string, tableName string, ts timestamp.Timestamp) []*ColDef
 	// get needed info for stats by table
-	Stats(obj *ObjectRef) (*pb.StatsInfo, error)
+	Stats(obj *ObjectRef, ts timestamp.Timestamp) (*pb.StatsInfo, error)
 	// get origin sql string of the root
 	GetRootSql() string
 	// get username of current session
@@ -98,7 +99,7 @@ type CompilerContext interface {
 	// GetContext get raw context.Context
 	GetContext() context.Context
 	// GetDatabaseId Get database id
-	GetDatabaseId(dbName string) (uint64, error)
+	GetDatabaseId(dbName string, ts timestamp.Timestamp) (uint64, error)
 
 	GetProcess() *process.Process
 
@@ -108,7 +109,7 @@ type CompilerContext interface {
 	// return: yes or no, dbName, viewName
 	GetBuildingAlterView() (bool, string, string)
 	GetStatsCache() *StatsCache
-	GetSubscriptionMeta(dbName string) (*SubscriptionMeta, error)
+	GetSubscriptionMeta(dbName string, ts timestamp.Timestamp) (*SubscriptionMeta, error)
 	CheckSubscriptionValid(subName, accName string, pubName string) error
 	SetQueryingSubscription(meta *SubscriptionMeta)
 	GetQueryingSubscription() *SubscriptionMeta

@@ -21,6 +21,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -75,10 +76,10 @@ func TestCompilerContext_Database(t *testing.T) {
 		engine: engine,
 	}
 
-	exists := c.DatabaseExists("")
+	exists := c.DatabaseExists("", timestamp.Timestamp{})
 	require.Equal(t, exists, true)
 
-	_, err := c.GetDatabaseId("")
+	_, err := c.GetDatabaseId("", timestamp.Timestamp{})
 	require.Nil(t, err)
 
 	sql := c.GetRootSql()

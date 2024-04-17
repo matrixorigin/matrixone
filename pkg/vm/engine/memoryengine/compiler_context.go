@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
@@ -91,7 +92,7 @@ func (c *CompilerContext) ResolveAccountIds(accountNames []string) ([]uint32, er
 	return []uint32{catalog.System_Account}, nil
 }
 
-func (*CompilerContext) Stats(obj *plan.ObjectRef) (*pb.StatsInfo, error) {
+func (*CompilerContext) Stats(obj *plan.ObjectRef, ts timestamp.Timestamp) (*pb.StatsInfo, error) {
 	return nil, nil
 }
 
@@ -99,7 +100,7 @@ func (*CompilerContext) GetStatsCache() *plan.StatsCache {
 	return nil
 }
 
-func (c *CompilerContext) GetSubscriptionMeta(dbName string) (*plan.SubscriptionMeta, error) {
+func (c *CompilerContext) GetSubscriptionMeta(dbName string, ts timestamp.Timestamp) (*plan.SubscriptionMeta, error) {
 	return nil, nil
 }
 
@@ -113,17 +114,31 @@ func (c *CompilerContext) GetQueryResultMeta(uuid string) ([]*plan.ColDef, strin
 	return nil, "", nil
 }
 
-func (c *CompilerContext) DatabaseExists(name string) bool {
+func (c *CompilerContext) DatabaseExists(name string, ts timestamp.Timestamp) bool {
+	var txnOpt client.TxnOperator
+	if !ts.Equal(timestamp.Timestamp{PhysicalTime: 0, LogicalTime: 0}) && ts.Less(c.txnOp.Txn().SnapshotTS) {
+		txnOpt = c.txnOp.CloneSnapshotOp(ts)
+	} else {
+		txnOpt = c.txnOp
+	}
+
 	_, err := c.engine.Database(
 		c.ctx,
 		name,
-		c.txnOp,
+		txnOpt,
 	)
 	return err == nil
 }
 
-func (c *CompilerContext) GetDatabaseId(dbName string) (uint64, error) {
-	database, err := c.engine.Database(c.ctx, dbName, c.txnOp)
+func (c *CompilerContext) GetDatabaseId(dbName string, ts timestamp.Timestamp) (uint64, error) {
+	var txnOpt client.TxnOperator
+	if !ts.Equal(timestamp.Timestamp{PhysicalTime: 0, LogicalTime: 0}) && ts.Less(c.txnOp.Txn().SnapshotTS) {
+		txnOpt = c.txnOp.CloneSnapshotOp(ts)
+	} else {
+		txnOpt = c.txnOp
+	}
+
+	database, err := c.engine.Database(c.ctx, dbName, txnOpt)
 	if err != nil {
 		return 0, err
 	}
@@ -138,8 +153,8 @@ func (c *CompilerContext) DefaultDatabase() string {
 	return c.defaultDB
 }
 
-func (c *CompilerContext) GetPrimaryKeyDef(dbName string, tableName string) (defs []*plan.ColDef) {
-	attrs, err := c.getTableAttrs(dbName, tableName)
+func (c *CompilerContext) GetPrimaryKeyDef(dbName string, tableName string, ts timestamp.Timestamp) (defs []*plan.ColDef) {
+	attrs, err := c.getTableAttrs(dbName, tableName, ts)
 	if err != nil {
 		panic(err)
 	}
@@ -168,15 +183,15 @@ func (c *CompilerContext) GetContext() context.Context {
 	return c.ctx
 }
 
-func (c *CompilerContext) ResolveById(tableId uint64) (objRef *plan.ObjectRef, tableDef *plan.TableDef) {
+func (c *CompilerContext) ResolveById(tableId uint64, ts timestamp.Timestamp) (objRef *plan.ObjectRef, tableDef *plan.TableDef) {
 	dbName, tableName, _ := c.engine.GetNameById(c.ctx, c.txnOp, tableId)
 	if dbName == "" || tableName == "" {
 		return nil, nil
 	}
-	return c.Resolve(dbName, tableName)
+	return c.Resolve(dbName, tableName, ts)
 }
 
-func (c *CompilerContext) Resolve(schemaName string, tableName string) (objRef *plan.ObjectRef, tableDef *plan.TableDef) {
+func (c *CompilerContext) Resolve(schemaName string, tableName string, ts timestamp.Timestamp) (objRef *plan.ObjectRef, tableDef *plan.TableDef) {
 	if schemaName == "" {
 		schemaName = c.defaultDB
 	}
@@ -191,7 +206,7 @@ func (c *CompilerContext) Resolve(schemaName string, tableName string) (objRef *
 		DbName: schemaName,
 	}
 
-	attrs, err := c.getTableAttrs(schemaName, tableName)
+	attrs, err := c.getTableAttrs(schemaName, tableName, ts)
 	if err != nil {
 		return nil, nil
 	}
@@ -226,11 +241,19 @@ func (*CompilerContext) ResolveVariable(varName string, isSystemVar bool, isGlob
 	return nil, nil
 }
 
-func (c *CompilerContext) getTableAttrs(dbName string, tableName string) (attrs []*engine.Attribute, err error) {
+func (c *CompilerContext) getTableAttrs(dbName string, tableName string, ts timestamp.Timestamp) (attrs []*engine.Attribute, err error) {
+	var txnOpt client.TxnOperator
+
+	if !ts.Equal(timestamp.Timestamp{PhysicalTime: 0, LogicalTime: 0}) && ts.Less(c.txnOp.Txn().SnapshotTS) {
+		txnOpt = c.txnOp.CloneSnapshotOp(ts)
+	} else {
+		txnOpt = c.txnOp
+	}
+
 	db, err := c.engine.Database(
 		c.ctx,
 		dbName,
-		c.txnOp,
+		txnOpt,
 	)
 	if err != nil {
 		return nil, err
