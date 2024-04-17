@@ -399,7 +399,7 @@ func TestCannotCommitTxnCanBeRemovedWithRestart(t *testing.T) {
 func TestCannotHungWithUnstableNetwork(t *testing.T) {
 	runLockServiceTestsWithLevel(
 		t,
-		zapcore.FatalLevel,
+		zapcore.DebugLevel,
 		[]string{"s1", "s2", "s3"},
 		time.Second*10,
 		func(alloc *lockTableAllocator, services []*service) {
