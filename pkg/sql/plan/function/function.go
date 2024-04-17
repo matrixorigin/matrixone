@@ -203,10 +203,15 @@ func RunFunctionDirectly(proc *process.Process, overloadID int64, inputs []*vect
 		result.Free()
 		return nil, err
 	}
-	exec := f.GetExecuteMethod()
+	exec, execFree := f.GetExecuteMethod()
 	if err = exec(inputs, result, proc, evaluateLength); err != nil {
 		result.Free()
 		return nil, err
+	}
+	if execFree != nil {
+		// NOTE: execFree is only applicable for serial and serial_full.
+		// if execFree is not nil, then make sure to call it after exec() is done.
+		_ = execFree()
 	}
 
 	vec := result.GetResultVector()
@@ -345,6 +350,12 @@ type executeLogicOfOverload func(parameters []*vector.Vector,
 	result vector.FunctionResultWrapper,
 	proc *process.Process, length int) error
 
+// executeFreeOfOverload is used to free the resources allocated by the execution logic.
+// It is mainly used in SERIAL and SERIAL_FULL.
+// NOTE: right now, we are not throwing an error when the free logic failed. However, it is still included
+// in case we need it in the future.
+type executeFreeOfOverload func() error
+
 type aggregationLogicOfOverload struct {
 	// agg related string for error message.
 	str string
@@ -373,6 +384,10 @@ type overload struct {
 
 	// the execution logic.
 	newOp func() executeLogicOfOverload
+
+	// the execution logic and free logic.
+	// NOTE: use either newOp or newOpWithFree.
+	newOpWithFree func() (executeLogicOfOverload, executeFreeOfOverload)
 
 	// in fact, the function framework does not directly run aggregate functions and window functions.
 	// we use two flags to mark whether function is one of them.
@@ -409,9 +424,14 @@ func (ov *overload) CannotExecuteInParallel() bool {
 	return ov.cannotParallel
 }
 
-func (ov *overload) GetExecuteMethod() executeLogicOfOverload {
-	f := ov.newOp
-	return f()
+func (ov *overload) GetExecuteMethod() (executeLogicOfOverload, executeFreeOfOverload) {
+	if ov.newOpWithFree != nil {
+		fn, fnFree := ov.newOpWithFree()
+		return fn, fnFree
+	}
+
+	fn := ov.newOp()
+	return fn, nil
 }
 
 func (ov *overload) GetReturnTypeMethod() func(parameters []types.Type) types.Type {
