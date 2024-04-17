@@ -27,10 +27,53 @@ import (
 )
 
 func (s *service) initRemote() {
+	if s.cfg.disconnectPeriod > 0 {
+		s.cfg.RPC.BackendOptions = append(s.cfg.RPC.BackendOptions,
+			morpc.WithDisconnectPeriod(s.cfg.disconnectPeriod))
+	}
+
 	rpcClient, err := NewClient(s.cfg.RPC)
 	if err != nil {
 		panic(err)
 	}
+	s.activeTxnHolder = newMapBasedTxnHandler(
+		s.serviceID,
+		s.fsp,
+		func(sid string) (bool, error) {
+			ok, err := validateService(s.cfg.RemoteLockTimeout.Duration, sid, s.remote.client)
+			if err == nil {
+				return ok, nil
+			}
+
+			// can retry error means we cannot determine whether the service
+			// is valid or not.
+			if isRetryError(err) {
+				return true, nil
+			}
+
+			// we determine that the service is invalid, and all associated
+			// transaction is marked as cannot commit on tn.
+			return false, err
+		},
+		func(txn []pb.OrphanTxn) error {
+			req := acquireRequest()
+			defer releaseRequest(req)
+
+			req.Method = pb.Method_CannotCommit
+			req.CannotCommit.OrphanTxnList = txn
+
+			ctx, cancel := context.WithTimeout(context.Background(), defaultRPCTimeout)
+			defer cancel()
+
+			resp, err := s.remote.client.Send(ctx, req)
+			if err != nil {
+				return err
+			}
+			releaseResponse(resp)
+			return nil
+		},
+	)
+
 	rpcServer, err := NewServer(
 		s.cfg.ListenAddress,
 		s.cfg.RPC)
@@ -70,6 +113,8 @@ func (s *service) initRemoteHandler() {
 		s.handleKeepRemoteLock)
 	s.remote.server.RegisterMethodHandler(pb.Method_ValidateService,
 		s.handleValidateService)
+	s.remote.server.RegisterMethodHandler(pb.Method_GetActiveTxn,
+		s.handleGetActiveTxn)
 }
 
 func (s *service) handleRemoteLock(
@@ -176,6 +221,22 @@ func (s *service) handleValidateService(
 	cs morpc.ClientSession) {
 	resp.ValidateService = pb.ValidateServiceResponse{
 		OK: s.serviceID == req.ValidateService.ServiceID,
+	}
+	writeResponse(ctx, cancel, resp, nil, cs)
+}
+
+func (s *service) handleGetActiveTxn(
+	ctx context.Context,
+	cancel context.CancelFunc,
+	req *pb.Request,
+	resp *pb.Response,
+	cs morpc.ClientSession) {
+	resp.GetActiveTxn.Valid = s.serviceID == req.GetActiveTxn.ServiceID
+	if resp.GetActiveTxn.Valid && s.cfg.TxnIterFunc != nil {
+		s.cfg.TxnIterFunc(func(txnID []byte) bool {
+			resp.GetActiveTxn.Txn = append(resp.GetActiveTxn.Txn, txnID)
+			return true
+		})
 	}
 	writeResponse(ctx, cancel, resp, nil, cs)
 }
@@ -328,7 +389,7 @@ func (s *service) unlockTimeoutRemoteTxn(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-timer.C:
-			timeoutTxns, wait = s.activeTxnHolder.getTimeoutRemoveTxn(
+			timeoutTxns = s.activeTxnHolder.getTimeoutRemoveTxn(
 				timeoutServices,
 				timeoutTxns,
 				s.cfg.RemoteLockTimeout.Duration)
@@ -338,10 +399,6 @@ func (s *service) unlockTimeoutRemoteTxn(ctx context.Context) {
 				for _, txnID := range timeoutTxns {
 					s.Unlock(ctx, txnID, timestamp.Timestamp{})
 				}
-			}
-
-			if wait == 0 {
-				wait = s.cfg.RemoteLockTimeout.Duration
 			}
 			timer.Reset(wait)
 		}
