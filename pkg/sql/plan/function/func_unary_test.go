@@ -17,10 +17,11 @@ package function
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionUtil"
 	"math"
 	"testing"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionUtil"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -1715,6 +1716,77 @@ func TestHexArray(t *testing.T) {
 	proc := testutil.NewProcess()
 	for _, tc := range testCases {
 		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, HexArray)
+		s, info := fcTC.Run()
+		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+func initMd5TestCase() []tcTemp {
+	return []tcTemp{
+		{
+			info: "test encode - string to md5",
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"", "abc", "abcd", "abc\b", "abc\"d", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+					[]bool{false, false, false, false, false, false}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_blob.ToType(), false,
+				[]string{
+					"d41d8cd98f00b204e9800998ecf8427e",
+					"900150983cd24fb0d6963f7d28e17f72",
+					"e2fc714c4727ee9395f324cd2e7f331f",
+					"c7fa18a56de1b25123523e8475ceb311",
+					"0671c72bd761b6ab47f5385798998780",
+					"5eca9bd3eb07c006cd43ae48dfde7fd3",
+				},
+				[]bool{false, false, false, false, false, false}),
+		},
+
+		{
+			info: "test int - string to md5",
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_int64.ToType(),
+					[]int64{0, 616263, 134564621, 000000000, 41645616, 521614},
+					[]bool{false, false, false, false, false, false}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_blob.ToType(), false,
+				[]string{
+					"cfcd208495d565ef66e7dff9f98764da",
+					"0e04049912772820000827e2da893ae2",
+					"19d4c83584472842ab834e0d1b610d45",
+					"cfcd208495d565ef66e7dff9f98764da",
+					"c7c0f50e3fbb8b704e6d0af8592615c3",
+					"d0c8e3a859c7a99aa64fc5b3164f6300",
+				},
+				[]bool{false, false, false, false, false, false}),
+		},
+		{
+			info: "test float - string to md5",
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_float64.ToType(),
+					[]float64{0.0, 0.616263, 0.134564621, 0.000000000, 0.41645616, 0.521614},
+					[]bool{false, false, false, false, false, false}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_blob.ToType(), false,
+				[]string{
+					"30565a8911a6bb487e3745c0ea3c8224",
+					"59b3d191443409620c199a14e8a10ffd",
+					"af5b1408280c209261fca320c246746f",
+					"c7be2277d7066a2fc71f8389b611f23f",
+					"4e2fdec9f0292c52af6b25fdf6e925fe",
+					"99cc874b3d002e0532abe2ec5f95480e",
+				},
+				[]bool{false, false, false, false, false, false}),
+		},
+	}
+}
+
+func TestMd5(t *testing.T) {
+	testCases := initMd5TestCase()
+
+	proc := testutil.NewProcess()
+	for _, tc := range testCases {
+		fcTC := testutil.NewFunctionTestCase(proc, tc.inputs, tc.expect, Md5)
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
