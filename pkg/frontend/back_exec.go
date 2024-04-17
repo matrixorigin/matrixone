@@ -990,7 +990,7 @@ func (sh *SqlHelper) GetCompilerContext() any {
 }
 
 func (sh *SqlHelper) GetSubscriptionMeta(dbName string) (*plan.SubscriptionMeta, error) {
-	return sh.ses.txnCompileCtx.GetSubscriptionMeta(dbName)
+	return sh.ses.txnCompileCtx.GetSubscriptionMeta(dbName, timestamp.Timestamp{})
 }
 
 // Made for sequence func. nextval, setval.

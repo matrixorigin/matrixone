@@ -67,7 +67,7 @@ func TestBuildTable_AlterView(t *testing.T) {
 	}
 	ctx := NewMockCompilerContext2(ctrl)
 	ctx.EXPECT().ResolveVariable(gomock.Any(), gomock.Any(), gomock.Any()).Return("", nil).AnyTimes()
-	ctx.EXPECT().Resolve(gomock.Any(), gomock.Any()).DoAndReturn(
+	ctx.EXPECT().Resolve(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
 		func(schemaName string, tableName string) (*ObjectRef, *TableDef) {
 			if schemaName == "" {
 				schemaName = "db"
@@ -77,9 +77,9 @@ func TestBuildTable_AlterView(t *testing.T) {
 		}).AnyTimes()
 	ctx.EXPECT().GetContext().Return(context.Background()).AnyTimes()
 	ctx.EXPECT().GetProcess().Return(nil).AnyTimes()
-	ctx.EXPECT().Stats(gomock.Any()).Return(nil, nil).AnyTimes()
+	ctx.EXPECT().Stats(gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
 	ctx.EXPECT().GetBuildingAlterView().Return(true, "db", "v").AnyTimes()
-	ctx.EXPECT().DatabaseExists(gomock.Any()).Return(true).AnyTimes()
+	ctx.EXPECT().DatabaseExists(gomock.Any(), gomock.Any()).Return(true).AnyTimes()
 
 	qb := NewQueryBuilder(plan.Query_SELECT, ctx, false)
 	tb := &tree.TableName{}

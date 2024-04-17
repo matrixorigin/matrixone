@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
@@ -247,7 +248,7 @@ func buildCreateSource(stmt *tree.CreateSource, ctx CompilerContext) (*Plan, err
 		createStream.Database = string(stmt.SourceName.SchemaName)
 	}
 
-	if sub, err := ctx.GetSubscriptionMeta(createStream.Database); err != nil {
+	if sub, err := ctx.GetSubscriptionMeta(createStream.Database, timestamp.Timestamp{}); err != nil {
 		return nil, err
 	} else if sub != nil {
 		return nil, moerr.NewInternalError(ctx.GetContext(), "cannot create stream in subscription database")
@@ -360,7 +361,7 @@ func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) 
 	if len(createTable.Database) == 0 {
 		createTable.Database = ctx.DefaultDatabase()
 	}
-	if sub, err := ctx.GetSubscriptionMeta(createTable.Database); err != nil {
+	if sub, err := ctx.GetSubscriptionMeta(createTable.Database, timestamp.Timestamp{}); err != nil {
 		return nil, err
 	} else if sub != nil {
 		return nil, moerr.NewInternalError(ctx.GetContext(), "cannot create view in subscription database")
@@ -478,7 +479,7 @@ func buildAlterSequenceTableDef(stmt *tree.AlterSequence, ctx CompilerContext, a
 	var typ *plan.Type
 	var err error
 	if stmt.Type == nil {
-		_, tableDef := ctx.Resolve(as.GetDatabase(), as.TableDef.Name)
+		_, tableDef := ctx.Resolve(as.GetDatabase(), as.TableDef.Name, timestamp.Timestamp{})
 		if tableDef == nil {
 			return moerr.NewInvalidInput(ctx.GetContext(), "no such sequence %s", as.TableDef.Name)
 		} else {
@@ -579,7 +580,7 @@ func buildDropSequence(stmt *tree.DropSequence, ctx CompilerContext) (*Plan, err
 	}
 	dropSequence.Table = string(stmt.Names[0].ObjectName)
 
-	obj, tableDef := ctx.Resolve(dropSequence.Database, dropSequence.Table)
+	obj, tableDef := ctx.Resolve(dropSequence.Database, dropSequence.Table, timestamp.Timestamp{})
 	if tableDef == nil || tableDef.TableType != catalog.SystemSequenceRel {
 		if !dropSequence.IfExists {
 			return nil, moerr.NewNoSuchSequence(ctx.GetContext(), dropSequence.Database, dropSequence.Table)
@@ -620,7 +621,7 @@ func buildAlterSequence(stmt *tree.AlterSequence, ctx CompilerContext) (*Plan, e
 		alterSequence.Database = string(stmt.Name.SchemaName)
 	}
 
-	if sub, err := ctx.GetSubscriptionMeta(alterSequence.Database); err != nil {
+	if sub, err := ctx.GetSubscriptionMeta(alterSequence.Database, timestamp.Timestamp{}); err != nil {
 		return nil, err
 	} else if sub != nil {
 		return nil, moerr.NewInternalError(ctx.GetContext(), "cannot alter sequence in subscription database")
@@ -657,7 +658,7 @@ func buildCreateSequence(stmt *tree.CreateSequence, ctx CompilerContext) (*Plan,
 		createSequence.Database = string(stmt.Name.SchemaName)
 	}
 
-	if sub, err := ctx.GetSubscriptionMeta(createSequence.Database); err != nil {
+	if sub, err := ctx.GetSubscriptionMeta(createSequence.Database, timestamp.Timestamp{}); err != nil {
 		return nil, err
 	} else if sub != nil {
 		return nil, moerr.NewInternalError(ctx.GetContext(), "cannot create sequence in subscription database")
@@ -711,7 +712,7 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 		return nil, moerr.NewPartitionNoTemporary(ctx.GetContext())
 	}
 
-	if sub, err := ctx.GetSubscriptionMeta(createTable.Database); err != nil {
+	if sub, err := ctx.GetSubscriptionMeta(createTable.Database, timestamp.Timestamp{}); err != nil {
 		return nil, err
 	} else if sub != nil {
 		return nil, moerr.NewInternalError(ctx.GetContext(), "cannot create table in subscription database")
@@ -2216,7 +2217,7 @@ func buildTruncateTable(stmt *tree.TruncateTable, ctx CompilerContext) (*Plan, e
 		truncateTable.Database = ctx.DefaultDatabase()
 	}
 	truncateTable.Table = string(stmt.Name.ObjectName)
-	obj, tableDef := ctx.Resolve(truncateTable.Database, truncateTable.Table)
+	obj, tableDef := ctx.Resolve(truncateTable.Database, truncateTable.Table, timestamp.Timestamp{})
 	if tableDef == nil {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), truncateTable.Database, truncateTable.Table)
 	} else {
@@ -2309,7 +2310,7 @@ func buildDropTable(stmt *tree.DropTable, ctx CompilerContext) (*Plan, error) {
 	}
 	dropTable.Table = string(stmt.Names[0].ObjectName)
 
-	obj, tableDef := ctx.Resolve(dropTable.Database, dropTable.Table)
+	obj, tableDef := ctx.Resolve(dropTable.Database, dropTable.Table, timestamp.Timestamp{})
 
 	if tableDef == nil {
 		if !dropTable.IfExists {
@@ -2425,7 +2426,7 @@ func buildDropView(stmt *tree.DropView, ctx CompilerContext) (*Plan, error) {
 	}
 	dropTable.Table = string(stmt.Names[0].ObjectName)
 
-	obj, tableDef := ctx.Resolve(dropTable.Database, dropTable.Table)
+	obj, tableDef := ctx.Resolve(dropTable.Database, dropTable.Table, timestamp.Timestamp{})
 	if tableDef == nil {
 		if !dropTable.IfExists {
 			return nil, moerr.NewBadView(ctx.GetContext(), dropTable.Database, dropTable.Table)
@@ -2498,8 +2499,8 @@ func buildDropDatabase(stmt *tree.DropDatabase, ctx CompilerContext) (*Plan, err
 		return nil, moerr.NewInternalError(ctx.GetContext(), "can not drop database '%v' which is publishing", dropDB.Database)
 	}
 
-	if ctx.DatabaseExists(string(stmt.Name)) {
-		databaseId, err := ctx.GetDatabaseId(string(stmt.Name))
+	if ctx.DatabaseExists(string(stmt.Name), timestamp.Timestamp{}) {
+		databaseId, err := ctx.GetDatabaseId(string(stmt.Name), timestamp.Timestamp{})
 		if err != nil {
 			return nil, err
 		}
@@ -2538,7 +2539,7 @@ func buildCreateIndex(stmt *tree.CreateIndex, ctx CompilerContext) (*Plan, error
 	}
 	// check table
 	tableName := string(stmt.Table.ObjectName)
-	obj, tableDef := ctx.Resolve(createIndex.Database, tableName)
+	obj, tableDef := ctx.Resolve(createIndex.Database, tableName, timestamp.Timestamp{})
 	if tableDef == nil {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), createIndex.Database, tableName)
 	}
@@ -2626,7 +2627,7 @@ func buildDropIndex(stmt *tree.DropIndex, ctx CompilerContext) (*Plan, error) {
 
 	// check table
 	dropIndex.Table = string(stmt.TableName.ObjectName)
-	obj, tableDef := ctx.Resolve(dropIndex.Database, dropIndex.Table)
+	obj, tableDef := ctx.Resolve(dropIndex.Database, dropIndex.Table, timestamp.Timestamp{})
 	if tableDef == nil {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), dropIndex.Database, dropIndex.Table)
 	}
@@ -2683,7 +2684,7 @@ func buildAlterView(stmt *tree.AlterView, ctx CompilerContext) (*Plan, error) {
 	}
 
 	//step 1: check the view exists or not
-	obj, oldViewDef := ctx.Resolve(alterView.Database, viewName)
+	obj, oldViewDef := ctx.Resolve(alterView.Database, viewName, timestamp.Timestamp{})
 	if oldViewDef == nil {
 		if !alterView.IfExists {
 			return nil, moerr.NewBadView(ctx.GetContext(),
@@ -2749,7 +2750,7 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 		databaseName = ctx.DefaultDatabase()
 	}
 
-	_, tableDef := ctx.Resolve(databaseName, tableName)
+	_, tableDef := ctx.Resolve(databaseName, tableName, timestamp.Timestamp{})
 	if tableDef == nil {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), databaseName, tableName)
 	}
@@ -2882,7 +2883,7 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 					detectSqls = append(detectSqls, sqls...)
 				} else {
 					//get table def of parent table
-					_, parentTableDef := ctx.Resolve(fkData.ParentDbName, fkData.ParentTableName)
+					_, parentTableDef := ctx.Resolve(fkData.ParentDbName, fkData.ParentTableName, timestamp.Timestamp{})
 					if parentTableDef == nil {
 						return nil, moerr.NewNoSuchTable(ctx.GetContext(), fkData.ParentDbName, fkData.ParentTableName)
 					}
@@ -3277,7 +3278,7 @@ func buildLockTables(stmt *tree.LockTableStmt, ctx CompilerContext) (*Plan, erro
 		}
 
 		//check table whether exist
-		obj, tableDef := ctx.Resolve(schemaName, tblName)
+		obj, tableDef := ctx.Resolve(schemaName, tblName, timestamp.Timestamp{})
 		if tableDef == nil {
 			return nil, moerr.NewNoSuchTable(ctx.GetContext(), schemaName, tblName)
 		}
@@ -3439,7 +3440,7 @@ func getForeignKeyData(ctx CompilerContext, dbName string, tableDef *TableDef, d
 	//make insert mo_foreign_keys
 	fkData.UpdateSql = getSqlForAddFk(dbName, tableDef.Name, &fkData)
 
-	_, parentTableDef := ctx.Resolve(parentDbName, parentTableName)
+	_, parentTableDef := ctx.Resolve(parentDbName, parentTableName, timestamp.Timestamp{})
 	if parentTableDef == nil {
 		enabled, err := IsForeignKeyChecksEnabled(ctx)
 		if err != nil {
@@ -3593,7 +3594,7 @@ func buildFkDataOfForwardRefer(ctx CompilerContext,
 		},
 	}
 	//1. get tableDef of the child table
-	_, childTableDef := ctx.Resolve(fkDefs[0].Db, fkDefs[0].Tbl)
+	_, childTableDef := ctx.Resolve(fkDefs[0].Db, fkDefs[0].Tbl, timestamp.Timestamp{})
 	if childTableDef == nil {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), fkDefs[0].Db, fkDefs[0].Tbl)
 	}

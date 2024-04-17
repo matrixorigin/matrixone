@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 )
@@ -37,7 +38,7 @@ func buildAlterTableCopy(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, err
 	if schemaName == "" {
 		schemaName = ctx.DefaultDatabase()
 	}
-	_, tableDef := ctx.Resolve(schemaName, tableName)
+	_, tableDef := ctx.Resolve(schemaName, tableName, timestamp.Timestamp{})
 	if tableDef == nil {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), schemaName, tableName)
 	}
@@ -370,7 +371,7 @@ func restoreDDL(ctx CompilerContext, tableDef *TableDef, schemaName string, tblN
 			for i, colId := range fk.Cols {
 				colNames[i] = colIdToName[colId]
 			}
-			_, fkTableDef := ctx.ResolveById(fk.ForeignTbl)
+			_, fkTableDef := ctx.ResolveById(fk.ForeignTbl, timestamp.Timestamp{})
 			fkColIdToName := make(map[uint64]string)
 			for _, col := range fkTableDef.Cols {
 				fkColIdToName[col.ColId] = col.Name
@@ -635,7 +636,7 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 	if schemaName == "" {
 		schemaName = ctx.DefaultDatabase()
 	}
-	objRef, tableDef := ctx.Resolve(schemaName, tableName)
+	objRef, tableDef := ctx.Resolve(schemaName, tableName, timestamp.Timestamp{})
 	if tableDef == nil {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), schemaName, tableName)
 	}

@@ -332,7 +332,7 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 			}
 
 			idxTag := builder.genNewTag()
-			idxObjRef, idxTableDef := builder.compCtx.Resolve(node.ObjRef.SchemaName, idxDef.IndexTableName)
+			idxObjRef, idxTableDef := builder.compCtx.Resolve(node.ObjRef.SchemaName, idxDef.IndexTableName, *ts)
 
 			builder.addNameByColRef(idxTag, idxTableDef)
 
@@ -495,7 +495,7 @@ END0:
 		}
 
 		idxTag := builder.genNewTag()
-		idxObjRef, idxTableDef := builder.compCtx.Resolve(node.ObjRef.SchemaName, idxDef.IndexTableName)
+		idxObjRef, idxTableDef := builder.compCtx.Resolve(node.ObjRef.SchemaName, idxDef.IndexTableName, *ts)
 
 		builder.addNameByColRef(idxTag, idxTableDef)
 
@@ -629,7 +629,7 @@ END0:
 
 		idxTag := builder.genNewTag()
 		idxDef := node.TableDef.Indexes[idxPos]
-		idxObjRef, idxTableDef := builder.compCtx.Resolve(node.ObjRef.SchemaName, idxDef.IndexTableName)
+		idxObjRef, idxTableDef := builder.compCtx.Resolve(node.ObjRef.SchemaName, idxDef.IndexTableName, *ts)
 
 		builder.addNameByColRef(idxTag, idxTableDef)
 
@@ -792,7 +792,7 @@ func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node,
 		}
 
 		idxTag := builder.genNewTag()
-		idxObjRef, idxTableDef := builder.compCtx.Resolve(leftChild.ObjRef.SchemaName, idxDef.IndexTableName)
+		idxObjRef, idxTableDef := builder.compCtx.Resolve(leftChild.ObjRef.SchemaName, idxDef.IndexTableName, *ts)
 
 		builder.addNameByColRef(idxTag, idxTableDef)
 
