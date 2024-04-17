@@ -61,9 +61,12 @@ func TestRandom_InitCentroids(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			r := NewRandomInitializer()
 			gonumVectors, _ := moarray.ToGonumVectors[float64](tt.args.vectors...)
-			if gotCentroids := r.InitCentroids(gonumVectors, tt.args.k); !reflect.DeepEqual(moarray.ToMoArrays[float64](gotCentroids), tt.wantCentroids) {
-				t.Errorf("InitCentroids() = %v, want %v", moarray.ToMoArrays[float64](gotCentroids), tt.wantCentroids)
+
+			gotCentroids := r.InitCentroids(gonumVectors, tt.args.k)
+			if arrays, _ := moarray.ToMoArrays[float64](gotCentroids); !reflect.DeepEqual(arrays, tt.wantCentroids) {
+				t.Errorf("InitCentroids() = %v, want %v", arrays, tt.wantCentroids)
 			}
+
 		})
 	}
 }
@@ -108,8 +111,10 @@ func TestKMeansPlusPlus_InitCentroids(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			r := NewKMeansPlusPlusInitializer(L2Distance)
 			gonumVectors, _ := moarray.ToGonumVectors[float64](tt.args.vectors...)
-			if gotCentroids := r.InitCentroids(gonumVectors, tt.args.k); !reflect.DeepEqual(moarray.ToMoArrays[float64](gotCentroids), tt.wantCentroids) {
-				t.Errorf("InitCentroids() = %v, want %v", moarray.ToMoArrays[float64](gotCentroids), tt.wantCentroids)
+
+			gotCentroids := r.InitCentroids(gonumVectors, tt.args.k)
+			if arrays, _ := moarray.ToMoArrays[float64](gotCentroids); !reflect.DeepEqual(arrays, tt.wantCentroids) {
+				t.Errorf("InitCentroids() = %v, want %v", arrays, tt.wantCentroids)
 			}
 		})
 	}
