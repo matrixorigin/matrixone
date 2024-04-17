@@ -440,8 +440,8 @@ func logUnlockTableOnRemoteFailed(
 	bind pb.LockTable,
 	err error) {
 	logger := getWithSkipLogger()
-	if logger.Enabled(zap.DebugLevel) {
-		logger.Debug("txn failed to unlock table on remote",
+	if logger.Enabled(zap.ErrorLevel) {
+		logger.Error("txn failed to unlock table on remote",
 			txnField(txn),
 			zap.String("bind", bind.DebugString()),
 			zap.Error(err))
