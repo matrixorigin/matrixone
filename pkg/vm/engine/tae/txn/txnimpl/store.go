@@ -798,9 +798,7 @@ func (store *txnStore) PrepareWAL() (e entry.Entry, err error) {
 	store.cmdMgr.lsn = lsn
 
 	e.SetType(IOET_WALEntry_TxnRecord)
-	if e != nil {
-		store.logEntry = e
-	}
+	store.logEntry = e
 
 	for _, db := range store.dbs {
 		if err = db.Apply1PCCommit(); err != nil {

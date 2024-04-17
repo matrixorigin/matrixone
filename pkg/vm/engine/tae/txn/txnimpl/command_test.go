@@ -77,6 +77,7 @@ func TestComposedCmd(t *testing.T) {
 }
 
 func TestComposedCmdMaxSize(t *testing.T) {
+	t.Skip("tn would not split cmd now")
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	composed := txnbase.NewComposedCmd(1280 + txnbase.CmdBufReserved)

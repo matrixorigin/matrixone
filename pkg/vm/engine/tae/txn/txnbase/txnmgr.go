@@ -252,7 +252,7 @@ func (mgr *TxnManager) EnqueueFlushing(op any) (err error) {
 
 func (mgr *TxnManager) heartbeat(ctx context.Context) {
 	defer mgr.wg.Done()
-	heartbeatTicker := time.NewTicker(time.Millisecond * 2)
+	heartbeatTicker := time.NewTicker(time.Millisecond * 200000)
 	for {
 		select {
 		case <-mgr.ctx.Done():
@@ -574,11 +574,6 @@ func (mgr *TxnManager) onFlushWal(op *OpTxn) {
 	var doFlush bool
 
 	if op.Txn.GetError() == nil && op.Op == OpCommit || op.Op == OpPrepare {
-		if op.Txn.IsReplay() {
-			x := 0
-			x++
-		}
-
 		doFlush = true
 		// allocating lsn
 		if entry, err = op.Txn.PrepareWAL(); err != nil {

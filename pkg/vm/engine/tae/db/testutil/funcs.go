@@ -17,6 +17,7 @@ package testutil
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 
@@ -183,6 +184,7 @@ func CheckAllColRowsByScan(t *testing.T, rel handle.Relation, expectRows int, ap
 func GetColumnRowsByScan(t *testing.T, rel handle.Relation, colIdx int, applyDelete bool) int {
 	rows := 0
 	ForEachColumnView(rel, colIdx, func(view *containers.ColumnView) (err error) {
+		fmt.Println(view.String())
 		if applyDelete {
 			view.ApplyDeletes()
 		}

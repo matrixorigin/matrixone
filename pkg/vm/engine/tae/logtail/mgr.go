@@ -141,9 +141,10 @@ func (mgr *Manager) onWaitTxnCommit(items ...any) {
 		txn.tails, txn.closeCB = txn.txn.GetStore().GetLogTails()
 		if txn.tails == nil {
 			//heartbeat txn
+			tmp := make([]logtail.TableLogtail, 0)
+			txn.tails = &tmp
 			txn.closeCB = (&TxnLogtailRespBuilder{}).Close
 		}
-
 		mgr.generateLogtailWithTxn(txn)
 	}
 }
@@ -174,10 +175,6 @@ func (mgr *Manager) generateLogtailWithTxn(txn *txnWithLogtails) {
 		})
 		callback.call(from.ToTimestamp(), to.ToTimestamp(), txn.closeCB, *txn.tails...)
 	} else {
-		if txn.closeCB == nil {
-			x := 0
-			x++
-		}
 		txn.closeCB()
 	}
 }
@@ -199,7 +196,6 @@ func (mgr *Manager) OnBeginPrepareWAL(txn txnif.AsyncTxn) {
 	builder := NewTxnLogtailRespBuilder(mgr.rt)
 	entries, closeCB := builder.CollectLogtail(txn)
 	txn.GetStore().SetLogTails(entries, closeCB)
-	fmt.Println(entries, closeCB)
 }
 
 func (mgr *Manager) OnEndPrepareWAL(txn txnif.AsyncTxn) {

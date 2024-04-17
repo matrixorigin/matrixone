@@ -457,11 +457,6 @@ func (cc *ComposedCmd) GetType() uint16 {
 func (cc *ComposedCmd) MarshalBinary() (buf []byte, err error) {
 	// cmdBuf only buffers the cmds.
 	var cmdBuf bytes.Buffer
-
-	if cc.LastPos < 0 {
-		cc.LastPos = 0
-	}
-	prevLastPos := cc.LastPos
 	if _, err = cc.WriteTo(&cmdBuf); err != nil {
 		return
 	}
@@ -476,12 +471,7 @@ func (cc *ComposedCmd) MarshalBinary() (buf []byte, err error) {
 	if _, err = headerBuf.Write(types.EncodeUint16(&ver)); err != nil {
 		return
 	}
-	var length uint32
-	if cc.LastPos == 0 {
-		length = uint32(len(cc.Cmds) - prevLastPos)
-	} else {
-		length = uint32(cc.LastPos - prevLastPos)
-	}
+	var length uint32 = uint32(len(cc.Cmds))
 	if _, err = headerBuf.Write(types.EncodeUint32(&length)); err != nil {
 		return
 	}
@@ -509,27 +499,29 @@ func (cc *ComposedCmd) UnmarshalBinary(buf []byte) (err error) {
 }
 
 func (cc *ComposedCmd) WriteTo(w io.Writer) (n int64, err error) {
-	for idx, cmd := range cc.Cmds[cc.LastPos:] {
+	for _, cmd := range cc.Cmds {
 		var buf []byte
 		var sn int64
 		if buf, err = cmd.MarshalBinary(); err != nil {
 			return
 		}
+		// tn would NOT split cmd now
+		//
 		// If the size cmd buffer is bigger than the limit, stop push items into
 		// the buffer and update cc.LastPos.
 		// We do the check before write the cmd to writer, there must be cmds
 		// that have not been pushed into the buffer. So do NOT need to set
 		// cc.LastPos to zero.
-		if n+int64(len(buf))+4 >= cc.CmdBufLimit {
-			cc.LastPos += idx
-			return
-		}
+		//if n+int64(len(buf))+4 >= cc.CmdBufLimit {
+		//	cc.LastPos += idx
+		//	return
+		//}
 		if sn, err = objectio.WriteBytes(buf, w); err != nil {
 			return
 		}
 		n += sn
 	}
-	cc.LastPos = 0
+	//cc.LastPos = 0
 	return
 }
 
