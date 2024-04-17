@@ -11,10 +11,10 @@ import (
 	gomock "github.com/golang/mock/gomock"
 	plan "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	statsinfo "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
+	timestamp "github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	tree "github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	function "github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	process "github.com/matrixorigin/matrixone/pkg/vm/process"
-	timestamp "github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 )
 
 // MockCompilerContext2 is a mock of CompilerContext interface.

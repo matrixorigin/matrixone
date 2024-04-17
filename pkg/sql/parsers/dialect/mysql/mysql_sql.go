@@ -13154,7 +13154,7 @@ yydefault:
 //line mysql_sql.y:3349
 		{
 			assignments := []*tree.VarAssignmentExpr{
-				&tree.VarAssignmentExpr{
+				{
 					System: true,
 					Global: true,
 					Name:   yyDollar[6].str,
@@ -13463,7 +13463,7 @@ yydefault:
 		{
 			s := &tree.ShowGrants{}
 			roles := []*tree.Role{
-				&tree.Role{UserName: yyDollar[5].cstrUnion().Compare()},
+				{UserName: yyDollar[5].cstrUnion().Compare()},
 			}
 			s.Roles = roles
 			s.ShowGrantType = tree.GrantForRole
