@@ -946,6 +946,10 @@ func (m *MockCompilerContext) ResolveSnapshotTsWithSnapShotName(snapshotName str
 	return 0, nil
 }
 
+func (m *MockCompilerContext) CheckTimeStampValid(ts int64) (bool, error) {
+	return false, nil
+}
+
 type MockOptimizer struct {
 	ctxt MockCompilerContext
 }
