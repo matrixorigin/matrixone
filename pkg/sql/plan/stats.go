@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
@@ -1011,7 +1012,11 @@ func calcScanStats(node *plan.Node, builder *QueryBuilder) *plan.Stats {
 		return DefaultMinimalStats()
 	}
 
-	s, err := builder.compCtx.Stats(node.ObjRef, *node.ScanTS)
+	ts := timestamp.Timestamp{}
+	if node.ScanTS != nil {
+		ts = *node.ScanTS
+	}
+	s, err := builder.compCtx.Stats(node.ObjRef, ts)
 	if err != nil || s == nil {
 		return DefaultStats()
 	}
