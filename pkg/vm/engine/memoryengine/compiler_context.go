@@ -60,6 +60,11 @@ func (c *CompilerContext) ResolveSnapshotTsWithSnapShotName(snapshotName string)
 	panic("implement me")
 }
 
+func (c *CompilerContext) CheckTimeStampValid(ts int64) (bool, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
 func (c *CompilerContext) SetQueryingSubscription(meta *plan.SubscriptionMeta) {
 	//TODO implement me
 	panic("implement me")
