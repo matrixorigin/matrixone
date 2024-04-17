@@ -40,7 +40,7 @@ const (
 	DefaultCheckpointMinCount           = int64(100)
 	DefaultCheckpointIncremetalInterval = time.Minute
 	DefaultCheckpointGlobalMinCount     = 10
-	DefaultGlobalVersionInterval        = time.Hour
+	DefaultGlobalVersionInterval        = 15 * time.Minute
 	DefaultGCCheckpointInterval         = time.Minute
 
 	DefaultScanGCInterval = time.Minute * 30

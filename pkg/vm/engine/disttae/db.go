@@ -313,7 +313,7 @@ func (e *Engine) getOrCreateSnapCatalogCache(
 	snapCata := cache.NewCatalog()
 	//TODO:: insert mo_tables, or mo_colunms, or mo_database, mo_catalog into snapCata.
 	//       ref to engine.init.
-	ckps, err := checkpoint.ListSnapshotCheckpoint(ctx, e.fs, ts, 0)
+	ckps, err := checkpoint.ListSnapshotCheckpoint(ctx, e.fs, ts, 0, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -423,7 +423,7 @@ func (e *Engine) getOrCreateSnapPart(
 	snap := logtailreplay.NewPartition()
 	//TODO::if tableId is mo_tables, or mo_colunms, or mo_database,
 	//      we should init the partition,ref to engine.init
-	ckps, err := checkpoint.ListSnapshotCheckpoint(ctx, e.fs, ts, tableId)
+	ckps, err := checkpoint.ListSnapshotCheckpoint(ctx, e.fs, ts, tableId, nil)
 	if err != nil {
 		return nil, err
 	}
