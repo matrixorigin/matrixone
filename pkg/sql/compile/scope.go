@@ -785,6 +785,9 @@ func newParallelScope(c *Compile, s *Scope, ss []*Scope) (*Scope, error) {
 			flg = true
 			idx = i
 			arg := in.Arg.(*group.Argument)
+			if arg.AnyDistinctAgg() {
+				continue
+			}
 			s.Instructions = s.Instructions[i:]
 			s.Instructions[0] = vm.Instruction{
 				Op:  vm.MergeGroup,
@@ -803,10 +806,9 @@ func newParallelScope(c *Compile, s *Scope, ss []*Scope) (*Scope, error) {
 					Idx:     in.Idx,
 					IsFirst: in.IsFirst,
 					Arg: group.NewArgument().
-						WithAggs(arg.Aggs).
 						WithExprs(arg.Exprs).
 						WithTypes(arg.Types).
-						WithMultiAggs(arg.MultiAggs),
+						WithAggsNew(arg.Aggs),
 
 					CnAddr:      in.CnAddr,
 					OperatorID:  in.OperatorID,
@@ -1088,7 +1090,7 @@ func receiveMsgAndForward(proc *process.Process, receiveCh chan morpc.Message, f
 			if m.Checksum != crc32.ChecksumIEEE(dataBuffer) {
 				return moerr.NewInternalError(proc.Ctx, "Packages delivered by morpc is broken")
 			}
-			bat, err := decodeBatch(proc.Mp(), nil, dataBuffer)
+			bat, err := decodeBatch(proc.Mp(), dataBuffer)
 			if err != nil {
 				return err
 			}
