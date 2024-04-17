@@ -16,10 +16,10 @@ package window
 
 import (
 	"bytes"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -27,8 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
-
-const Rows = 100
 
 // add unit tests for cases
 type winTestCase struct {
@@ -43,42 +41,58 @@ var (
 
 func init() {
 	tcs = []winTestCase{
-		newTestCase([]bool{false}, []types.Type{types.T_int8.ToType()}, []*plan.Expr{}, []agg.Aggregate{{Op: 0, E: newExpression(0)}}),
-		newTestCase([]bool{false}, []types.Type{types.T_int8.ToType()}, []*plan.Expr{newExpression(0)}, []agg.Aggregate{{Op: 0, E: newExpression(0)}}),
+		newTestCase([]bool{false}, []types.Type{types.T_int8.ToType()}, []*plan.Expr{}, []aggexec.AggFuncExecExpression{
+			aggexec.MakeAggFunctionExpression(0, false, []*plan.Expr{newExpression(0)}, nil),
+		}),
+		newTestCase([]bool{false}, []types.Type{types.T_int8.ToType()}, []*plan.Expr{newExpression(0)}, []aggexec.AggFuncExecExpression{
+			aggexec.MakeAggFunctionExpression(0, false, []*plan.Expr{newExpression(0)}, nil),
+		}),
 		newTestCase([]bool{false, true, false, true}, []types.Type{
 			types.T_int8.ToType(),
 			types.T_int16.ToType(),
-		}, []*plan.Expr{newExpression(0), newExpression(1)}, []agg.Aggregate{{Op: 0, E: newExpression(0)}}),
+		}, []*plan.Expr{newExpression(0), newExpression(1)}, []aggexec.AggFuncExecExpression{
+			aggexec.MakeAggFunctionExpression(0, false, []*plan.Expr{newExpression(0)}, nil),
+		}),
 		newTestCase([]bool{false, true, false, true}, []types.Type{
 			types.T_int8.ToType(),
 			types.T_int16.ToType(),
 			types.T_int32.ToType(),
 			types.T_int64.ToType(),
-		}, []*plan.Expr{newExpression(0), newExpression(3)}, []agg.Aggregate{{Op: 0, E: newExpression(0)}}),
+		}, []*plan.Expr{newExpression(0), newExpression(3)}, []aggexec.AggFuncExecExpression{
+			aggexec.MakeAggFunctionExpression(0, false, []*plan.Expr{newExpression(0)}, nil),
+		}),
 		newTestCase([]bool{false, true, false, true}, []types.Type{
 			types.T_int64.ToType(),
 			types.T_int64.ToType(),
 			types.T_int64.ToType(),
 			types.T_decimal128.ToType(),
-		}, []*plan.Expr{newExpression(1), newExpression(3)}, []agg.Aggregate{{Op: 0, E: newExpression(0)}}),
+		}, []*plan.Expr{newExpression(1), newExpression(3)}, []aggexec.AggFuncExecExpression{
+			aggexec.MakeAggFunctionExpression(0, false, []*plan.Expr{newExpression(0)}, nil),
+		}),
 		newTestCase([]bool{false, true, false, true}, []types.Type{
 			types.T_int64.ToType(),
 			types.T_int64.ToType(),
 			types.T_int64.ToType(),
 			types.T_decimal128.ToType(),
-		}, []*plan.Expr{newExpression(1), newExpression(2), newExpression(3)}, []agg.Aggregate{{Op: 0, E: newExpression(0)}}),
+		}, []*plan.Expr{newExpression(1), newExpression(2), newExpression(3)}, []aggexec.AggFuncExecExpression{
+			aggexec.MakeAggFunctionExpression(0, false, []*plan.Expr{newExpression(0)}, nil),
+		}),
 		newTestCase([]bool{false, true, false, true}, []types.Type{
 			types.T_int64.ToType(),
 			types.T_int64.ToType(),
 			types.New(types.T_varchar, 2, 0),
 			types.T_decimal128.ToType(),
-		}, []*plan.Expr{newExpression(1), newExpression(2), newExpression(3)}, []agg.Aggregate{{Op: 0, E: newExpression(0)}}),
+		}, []*plan.Expr{newExpression(1), newExpression(2), newExpression(3)}, []aggexec.AggFuncExecExpression{
+			aggexec.MakeAggFunctionExpression(0, false, []*plan.Expr{newExpression(0)}, nil),
+		}),
 		newTestCase([]bool{false, true, false, true}, []types.Type{
 			types.T_int64.ToType(),
 			types.T_int64.ToType(),
 			types.T_varchar.ToType(),
 			types.T_decimal128.ToType(),
-		}, []*plan.Expr{newExpression(1), newExpression(2), newExpression(3)}, []agg.Aggregate{{Op: 0, E: newExpression(0)}}),
+		}, []*plan.Expr{newExpression(1), newExpression(2), newExpression(3)}, []aggexec.AggFuncExecExpression{
+			aggexec.MakeAggFunctionExpression(0, false, []*plan.Expr{newExpression(0)}, nil),
+		}),
 	}
 }
 
@@ -89,7 +103,7 @@ func TestString(t *testing.T) {
 	}
 }
 
-func newTestCase(flgs []bool, ts []types.Type, exprs []*plan.Expr, aggs []agg.Aggregate) winTestCase {
+func newTestCase(flgs []bool, ts []types.Type, exprs []*plan.Expr, aggs []aggexec.AggFuncExecExpression) winTestCase {
 	for _, expr := range exprs {
 		if col, ok := expr.Expr.(*plan.Expr_Col); ok {
 			idx := col.Col.ColPos

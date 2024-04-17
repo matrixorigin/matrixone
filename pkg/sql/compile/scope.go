@@ -121,8 +121,13 @@ func (s *Scope) Run(c *Compile) (err error) {
 			id = s.DataSource.TableDef.TblId
 		}
 		p = pipeline.New(id, s.DataSource.Attributes, s.Instructions, s.Reg)
-		if s.DataSource.Bat != nil {
-			_, err = p.ConstRun(s.DataSource.Bat, s.Proc)
+		if s.DataSource.isConst {
+			var bat *batch.Batch
+			bat, err = constructValueScanBatch(s.Proc.Ctx, c.proc, s.DataSource.node)
+			if err != nil {
+				return
+			}
+			_, err = p.ConstRun(bat, s.Proc)
 		} else {
 			var tag int32
 			if s.DataSource.node != nil && len(s.DataSource.node.RecvMsgList) > 0 {
@@ -672,14 +677,10 @@ func (s *Scope) LoadRun(c *Compile) error {
 	mcpu := s.NodeInfo.Mcpu
 	ss := make([]*Scope, mcpu)
 	for i := 0; i < mcpu; i++ {
-		bat := batch.NewWithSize(1)
-		{
-			bat.SetRowCount(1)
-		}
 		ss[i] = newScope(Normal)
 		ss[i].NodeInfo = s.NodeInfo
 		ss[i].DataSource = &Source{
-			Bat: bat,
+			isConst: true,
 		}
 		ss[i].Proc = process.NewWithAnalyze(s.Proc, c.ctx, 0, c.anal.Nodes())
 	}
@@ -779,6 +780,9 @@ func newParallelScope(c *Compile, s *Scope, ss []*Scope) (*Scope, error) {
 			flg = true
 			idx = i
 			arg := in.Arg.(*group.Argument)
+			if arg.AnyDistinctAgg() {
+				continue
+			}
 			s.Instructions = s.Instructions[i:]
 			s.Instructions[0] = vm.Instruction{
 				Op:  vm.MergeGroup,
@@ -797,10 +801,9 @@ func newParallelScope(c *Compile, s *Scope, ss []*Scope) (*Scope, error) {
 					Idx:     in.Idx,
 					IsFirst: in.IsFirst,
 					Arg: group.NewArgument().
-						WithAggs(arg.Aggs).
 						WithExprs(arg.Exprs).
 						WithTypes(arg.Types).
-						WithMultiAggs(arg.MultiAggs),
+						WithAggsNew(arg.Aggs),
 
 					CnAddr:      in.CnAddr,
 					OperatorID:  in.OperatorID,
@@ -1082,7 +1085,7 @@ func receiveMsgAndForward(proc *process.Process, receiveCh chan morpc.Message, f
 			if m.Checksum != crc32.ChecksumIEEE(dataBuffer) {
 				return moerr.NewInternalError(proc.Ctx, "Packages delivered by morpc is broken")
 			}
-			bat, err := decodeBatch(proc.Mp(), nil, dataBuffer)
+			bat, err := decodeBatch(proc.Mp(), dataBuffer)
 			if err != nil {
 				return err
 			}

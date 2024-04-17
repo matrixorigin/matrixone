@@ -155,7 +155,8 @@ func NewExpressionExecutor(proc *process.Process, planExpr *plan.Expr) (Expressi
 
 		executor := NewFunctionExpressionExecutor()
 		typ := types.New(types.T(planExpr.Typ.Id), planExpr.Typ.Width, planExpr.Typ.Scale)
-		if err = executor.Init(proc, len(t.F.Args), typ, overload.GetExecuteMethod()); err != nil {
+		fn, fnFree := overload.GetExecuteMethod()
+		if err = executor.Init(proc, len(t.F.Args), typ, fn, fnFree); err != nil {
 			executor.Free()
 			return nil, err
 		}
@@ -295,6 +296,8 @@ type FunctionExpressionExecutor struct {
 		result vector.FunctionResultWrapper,
 		proc *process.Process,
 		length int) error
+
+	freeFn func() error
 }
 
 type ColumnExpressionExecutor struct {
@@ -459,11 +462,13 @@ func (expr *FunctionExpressionExecutor) Init(
 		params []*vector.Vector,
 		result vector.FunctionResultWrapper,
 		proc *process.Process,
-		length int) error) (err error) {
+		length int) error,
+	freeFn func() error) (err error) {
 	m := proc.Mp()
 
 	expr.m = m
 	expr.evalFn = fn
+	expr.freeFn = freeFn
 	expr.parameterResults = make([]*vector.Vector, parameterNum)
 	expr.parameterExecutor = make([]ExpressionExecutor, parameterNum)
 
@@ -512,6 +517,9 @@ func (expr *FunctionExpressionExecutor) Free() {
 		if p != nil {
 			p.Free()
 		}
+	}
+	if expr.freeFn != nil {
+		_ = expr.freeFn()
 	}
 	reuse.Free[FunctionExpressionExecutor](expr, nil)
 }
@@ -1309,20 +1317,37 @@ func GetExprZoneMap(
 						ivecs[i] = vecs[arg.AuxId]
 					}
 				}
-				fn := overload.GetExecuteMethod()
+				fn, fnFree := overload.GetExecuteMethod()
 				typ := types.New(types.T(expr.Typ.Id), expr.Typ.Width, expr.Typ.Scale)
 
 				result := vector.NewFunctionResultWrapper(proc.GetVector, proc.PutVector, typ, proc.Mp())
 				if err = result.PreExtendAndReset(2); err != nil {
 					zms[expr.AuxId].Reset()
+					result.Free()
+					if fnFree != nil {
+						// NOTE: fnFree is only applicable for serial and serial_full.
+						// if fnFree is not nil, then make sure to call it after fn() is done.
+						_ = fnFree()
+					}
 					return zms[expr.AuxId]
 				}
 				if err = fn(ivecs, result, proc, 2); err != nil {
 					zms[expr.AuxId].Reset()
+					result.Free()
+					if fnFree != nil {
+						// NOTE: fnFree is only applicable for serial and serial_full.
+						// if fnFree is not nil, then make sure to call it after fn() is done.
+						_ = fnFree()
+					}
 					return zms[expr.AuxId]
 				}
+				if fnFree != nil {
+					// NOTE: fnFree is only applicable for serial and serial_full.
+					// if fnFree is not nil, then make sure to call it after fn() is done.
+					_ = fnFree()
+				}
 				zms[expr.AuxId] = index.VectorToZM(result.GetResultVector(), zms[expr.AuxId])
-				result.GetResultVector().Free(proc.Mp())
+				result.Free()
 			}
 		}
 
