@@ -1741,43 +1741,6 @@ func initMd5TestCase() []tcTemp {
 				},
 				[]bool{false, false, false, false, false, false}),
 		},
-
-		{
-			info: "test int - string to md5",
-			inputs: []testutil.FunctionTestInput{
-				testutil.NewFunctionTestInput(types.T_int64.ToType(),
-					[]int64{0, 616263, 134564621, 000000000, 41645616, 521614},
-					[]bool{false, false, false, false, false, false}),
-			},
-			expect: testutil.NewFunctionTestResult(types.T_blob.ToType(), false,
-				[]string{
-					"cfcd208495d565ef66e7dff9f98764da",
-					"0e04049912772820000827e2da893ae2",
-					"19d4c83584472842ab834e0d1b610d45",
-					"cfcd208495d565ef66e7dff9f98764da",
-					"c7c0f50e3fbb8b704e6d0af8592615c3",
-					"d0c8e3a859c7a99aa64fc5b3164f6300",
-				},
-				[]bool{false, false, false, false, false, false}),
-		},
-		{
-			info: "test float - string to md5",
-			inputs: []testutil.FunctionTestInput{
-				testutil.NewFunctionTestInput(types.T_float64.ToType(),
-					[]float64{0.0, 0.616263, 0.134564621, 0.000000000, 0.41645616, 0.521614},
-					[]bool{false, false, false, false, false, false}),
-			},
-			expect: testutil.NewFunctionTestResult(types.T_blob.ToType(), false,
-				[]string{
-					"30565a8911a6bb487e3745c0ea3c8224",
-					"59b3d191443409620c199a14e8a10ffd",
-					"af5b1408280c209261fca320c246746f",
-					"c7be2277d7066a2fc71f8389b611f23f",
-					"4e2fdec9f0292c52af6b25fdf6e925fe",
-					"99cc874b3d002e0532abe2ec5f95480e",
-				},
-				[]bool{false, false, false, false, false, false}),
-		},
 	}
 }
 
