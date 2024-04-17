@@ -34,7 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice/memorycache"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
-	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"go.uber.org/zap"
@@ -173,7 +173,7 @@ func (l *LocalFS) Write(ctx context.Context, vector IOVector) error {
 		return err
 	}
 
-	v2.FSWriteLocalCounter.Add(float64(len(vector.Entries)))
+	metric.FSWriteLocalCounter.Add(float64(len(vector.Entries)))
 
 	var err error
 	var bytesWritten int
@@ -182,8 +182,8 @@ func (l *LocalFS) Write(ctx context.Context, vector IOVector) error {
 	defer func() {
 		// cover another func to catch the err when process Write
 		span.End(trace.WithFSReadWriteExtra(vector.FilePath, err, int64(bytesWritten)))
-		v2.LocalWriteIODurationHistogram.Observe(time.Since(start).Seconds())
-		v2.LocalWriteIOBytesHistogram.Observe(float64(bytesWritten))
+		metric.LocalWriteIODurationHistogram.Observe(time.Since(start).Seconds())
+		metric.LocalWriteIOBytesHistogram.Observe(float64(bytesWritten))
 	}()
 
 	path, err := ParsePathAtService(vector.FilePath, l.name)
@@ -296,8 +296,8 @@ func (l *LocalFS) Read(ctx context.Context, vector *IOVector) (err error) {
 	defer func() {
 		LocalReadIODuration := time.Since(start)
 
-		v2.LocalReadIODurationHistogram.Observe(LocalReadIODuration.Seconds())
-		v2.LocalReadIOBytesHistogram.Observe(float64(bytesCounter.Load()))
+		metric.LocalReadIODurationHistogram.Observe(LocalReadIODuration.Seconds())
+		metric.LocalReadIOBytesHistogram.Observe(float64(bytesCounter.Load()))
 	}()
 
 	if len(vector.Entries) == 0 {
