@@ -1,3 +1,4 @@
+-- @bvt:issue#14784
 create snapshot snapshot_01 for account sys;
 create database if not exists snapshot_read;
 use snapshot_read;
@@ -28,3 +29,4 @@ drop snapshot snapshot_02;
 drop database snapshot_read;
 -- @session
 drop account if exists test_account;
+-- @bvt:issue
