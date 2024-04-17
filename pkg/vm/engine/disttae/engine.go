@@ -254,6 +254,9 @@ func (e *Engine) Database(ctx context.Context, name string,
 	if !txn.op.IsSnapOp() {
 		catalog = e.getLatestCatalogCache()
 	} else {
+		if name == "test" {
+			logutil.Infof("xxxx Database-getOrCreateSnapCatalogCache: txn:%s", txn.op.Txn().DebugString())
+		}
 		catalog, err = e.getOrCreateSnapCatalogCache(
 			ctx,
 			types.TimestampToTS(txn.op.SnapshotTS()))

@@ -17,6 +17,7 @@ package logtailreplay
 import (
 	"bytes"
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"sync"
 	"sync/atomic"
@@ -178,6 +179,7 @@ func (p *Partition) ConsumeCheckpoints(
 	}
 	curState := p.state.Load()
 	if len(curState.checkpoints) == 0 {
+		p.UpdateDuration(types.TS{}, types.MaxTs())
 		return nil
 	}
 
@@ -189,6 +191,8 @@ func (p *Partition) ConsumeCheckpoints(
 
 	curState = p.state.Load()
 	if len(curState.checkpoints) == 0 {
+		logutil.Infof("xxxx impossible path")
+		p.UpdateDuration(types.TS{}, types.MaxTs())
 		return nil
 	}
 

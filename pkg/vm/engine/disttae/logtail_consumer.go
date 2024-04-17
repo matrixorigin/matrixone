@@ -1057,6 +1057,12 @@ func dispatchSubscribeResponse(
 		if err := e.consumeSubscribeResponse(ctx, response, false, receiveAt); err != nil {
 			return err
 		}
+		if len(lt.CkpLocation) == 0 {
+			p := e.getOrCreateLatestPart(tbl.DbId, tbl.TbId)
+			p.UpdateDuration(types.TS{}, types.MaxTs())
+			c := e.getLatestCatalogCache()
+			c.UpdateDuration(types.TS{}, types.MaxTs())
+		}
 		e.pClient.subscribed.setTableSubscribe(tbl.DbId, tbl.TbId)
 	} else {
 		routineIndex := tbl.TbId % consumerNumber
