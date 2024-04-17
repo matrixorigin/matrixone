@@ -653,7 +653,6 @@ func CastIndexValueToIndex(ivecs []*vector.Vector, result vector.FunctionResultW
 
 // CastNanoToTimestamp returns timestamp string according to the nano
 func CastNanoToTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
-	// rs is a varchar type
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	nanos := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[0])
 
@@ -665,7 +664,6 @@ func CastNanoToTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWra
 				return err
 			}
 		} else {
-			// convert to utc time
 			t := time.Unix(0, nano).UTC()
 			if err := rs.AppendBytes([]byte(t.Format(layout)), false); err != nil {
 				return err

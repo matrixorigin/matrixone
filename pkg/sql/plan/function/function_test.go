@@ -282,7 +282,9 @@ func TestRunFunctionDirectly(t *testing.T) {
 
 func TestCastNanoToTimestamp(t *testing.T) {
 	inputs := []string{
-		"2021-04-13 08:00:00.000000000",
+		"2021-04-13 08:00:00.000000099",
+		"2021-04-13 08:00:00.000000101",
+		"2021-04-13 08:00:00",
 	}
 	outputs := make([]int64, len(inputs))
 	for i, in := range inputs {
