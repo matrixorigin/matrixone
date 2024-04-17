@@ -535,7 +535,15 @@ func NewSession(proto MysqlProtocol, mp *mpool.MPool, gSysVars *GlobalSystemVari
 		getGlobalPu().HAKeeperClient,
 		getGlobalPu().UdfService,
 		globalAicm)
+
+	ses.proc.Lim.Size = getGlobalPu().SV.ProcessLimitationSize
+	ses.proc.Lim.BatchRows = getGlobalPu().SV.ProcessLimitationBatchRows
+	ses.proc.Lim.MaxMsgSize = getGlobalPu().SV.MaxMessageSize
+	ses.proc.Lim.PartitionRows = getGlobalPu().SV.ProcessLimitationPartitionRows
+
 	ses.proc.SetStmtProfile(&ses.stmtProfile)
+	ses.txnCompileCtx.SetProcess(ses.proc)
+	// ses.proc.SetResolveVariableFunc(ses.txnCompileCtx.ResolveVariable)
 
 	runtime.SetFinalizer(ses, func(ss *Session) {
 		ss.Close()
