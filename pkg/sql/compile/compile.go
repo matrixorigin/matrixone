@@ -1132,11 +1132,6 @@ func (c *Compile) compilePlanScope(ctx context.Context, step int32, curNodeIdx i
 	n := ns[curNodeIdx]
 	switch n.NodeType {
 	case plan.Node_VALUE_SCAN:
-		// var bat *batch.Batch
-		// bat, err = constructValueScanBatch(ctx, c.proc, n)
-		// if err != nil {
-		// 	return nil, err
-		// }
 		ds := newScope(Normal)
 		ds.DataSource = &Source{isConst: true, node: n}
 		ds.NodeInfo = engine.Node{Addr: c.addr, Mcpu: 1}

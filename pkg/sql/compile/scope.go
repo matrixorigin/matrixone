@@ -677,15 +677,10 @@ func (s *Scope) LoadRun(c *Compile) error {
 	mcpu := s.NodeInfo.Mcpu
 	ss := make([]*Scope, mcpu)
 	for i := 0; i < mcpu; i++ {
-		bat := batch.NewWithSize(1)
-		{
-			bat.SetRowCount(1)
-		}
 		ss[i] = newScope(Normal)
 		ss[i].NodeInfo = s.NodeInfo
 		ss[i].DataSource = &Source{
 			isConst: true,
-			Bat:     bat,
 		}
 		ss[i].Proc = process.NewWithAnalyze(s.Proc, c.ctx, 0, c.anal.Nodes())
 	}
