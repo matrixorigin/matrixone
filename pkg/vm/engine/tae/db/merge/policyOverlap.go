@@ -49,8 +49,8 @@ func (o *Overlap) OnObject(obj *catalog.ObjectEntry) {
 		if o.schema.Name == "bmsql_new_order" {
 			minv := sortKeyZonemap.GetMinBuf()
 			maxv := sortKeyZonemap.GetMaxBuf()
-			mint, _, _ := types.DecodeTuple(minv)
-			maxt, _, _ := types.DecodeTuple(maxv)
+			mint, _, _, _ := types.DecodeTuple(minv)
+			maxt, _, _, _ := types.DecodeTuple(maxv)
 			logutil.Infof("Mergeblocks %d %s %s", obj.SortHint, mint.ErrString(nil), maxt.ErrString(nil))
 		}
 	}
@@ -59,14 +59,14 @@ func (o *Overlap) OnObject(obj *catalog.ObjectEntry) {
 func (o *Overlap) SetConfig(*catalog.TableEntry, func() txnif.AsyncTxn, any) {}
 func (o *Overlap) GetConfig(*catalog.TableEntry) any                         { return nil }
 
-func (o *Overlap) Revise(cpu, mem int64) []*catalog.ObjectEntry {
+func (o *Overlap) Revise(cpu, mem int64) ([]*catalog.ObjectEntry, TaskHostKind) {
 	o.analyzer.analyze(o.schema.GetSingleSortKeyType().Oid, o.schema.Name)
-	return nil
+	return nil, TaskHostDN
 }
 
 func (o *Overlap) ResetForTable(entry *catalog.TableEntry) {
 	o.id = entry.ID
-	o.schema = entry.GetLastestSchema()
+	o.schema = entry.GetLastestSchemaLocked()
 	o.analyzer.reset()
 }
 
@@ -91,6 +91,8 @@ func (oi *OverlapInspector) push(point any, isOpen bool, entry *catalog.ObjectEn
 func (oi *OverlapInspector) analyze(t types.T, name string) {
 	sort.Slice(oi.units, func(i, j int) bool {
 		switch t {
+		case types.T_bit:
+			return oi.units[i].point.(uint64) < oi.units[j].point.(uint64)
 		case types.T_int8:
 			return oi.units[i].point.(int8) < oi.units[j].point.(int8)
 		case types.T_int16:
@@ -128,7 +130,9 @@ func (oi *OverlapInspector) analyze(t types.T, name string) {
 		case types.T_uuid:
 			return oi.units[i].point.(types.Uuid).Lt(oi.units[j].point.(types.Uuid))
 		case types.T_TS:
-			return oi.units[i].point.(types.TS).Less(oi.units[j].point.(types.TS))
+			ts1 := oi.units[i].point.(types.TS)
+			ts2 := oi.units[j].point.(types.TS)
+			return ts1.Less(&ts2)
 		case types.T_Rowid:
 			return oi.units[i].point.(types.Rowid).Less(oi.units[j].point.(types.Rowid))
 		case types.T_Blockid:

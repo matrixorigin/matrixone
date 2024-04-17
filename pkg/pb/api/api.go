@@ -19,29 +19,18 @@ import (
 
 var (
 	OpMethodName = map[OpCode]string{
-		OpCode_OpPing:          "Ping",
-		OpCode_OpFlush:         "Flush",
-		OpCode_OpCheckpoint:    "Checkpoint",
-		OpCode_OpInspect:       "Inspect",
-		OpCode_OpAddFaultPoint: "AddFaultPoint",
-		OpCode_OpBackup:        "Backup",
-		OpCode_OpTraceSpan:     "TraceSpan",
+		OpCode_OpPing:             "Ping",
+		OpCode_OpFlush:            "Flush",
+		OpCode_OpCheckpoint:       "Checkpoint",
+		OpCode_OpInspect:          "Inspect",
+		OpCode_OpAddFaultPoint:    "AddFaultPoint",
+		OpCode_OpBackup:           "Backup",
+		OpCode_OpTraceSpan:        "TraceSpan",
+		OpCode_OpGlobalCheckpoint: "GlobalCheckpoint",
+		OpCode_OpInterceptCommit:  "InterceptCommit",
+		OpCode_OpCommitMerge:      "CommitMerge",
 	}
 )
-
-func NewUpdatePolicyReq(minRowQ, maxObjOnerune, maxRowsMerged int, hints ...MergeHint) *AlterTableReq {
-	return &AlterTableReq{
-		Kind: AlterKind_UpdatePolicy,
-		Operation: &AlterTableReq_UpdatePolicy{
-			&AlterTablePolicy{
-				MinRowsQuailifed: uint32(minRowQ),
-				MaxObjOnerun:     uint32(maxObjOnerune),
-				MaxRowsMergedObj: uint32(maxRowsMerged),
-				Hints:            hints,
-			},
-		},
-	}
-}
 
 func NewUpdateConstraintReq(did, tid uint64, cstr string) *AlterTableReq {
 	return &AlterTableReq{
@@ -85,7 +74,7 @@ func NewAddColumnReq(did, tid uint64, name string, typ *plan.Type, insertAt int3
 			&AlterTableAddColumn{
 				Column: &plan.ColDef{
 					Name: name,
-					Typ:  typ,
+					Typ:  *typ,
 					Default: &plan.Default{
 						NullAbility:  true,
 						Expr:         nil,
@@ -125,6 +114,20 @@ func NewAddPartitionReq(did, tid uint64, partitionDef *plan.PartitionByDef) *Alt
 	}
 }
 
+func NewRenameColumnReq(did, tid uint64, oldname, newname string, seqnum uint32) *AlterTableReq {
+	return &AlterTableReq{
+		DbId:    did,
+		TableId: tid,
+		Kind:    AlterKind_RenameColumn,
+		Operation: &AlterTableReq_RenameCol{
+			&AlterTableRenameCol{
+				OldName:     oldname,
+				NewName:     newname,
+				SequenceNum: seqnum,
+			},
+		},
+	}
+}
 func (m *SyncLogTailReq) MarshalBinary() ([]byte, error) {
 	return m.Marshal()
 }
@@ -146,5 +149,13 @@ func (m *PrecommitWriteCmd) MarshalBinary() ([]byte, error) {
 }
 
 func (m *PrecommitWriteCmd) UnmarshalBinary(data []byte) error {
+	return m.Unmarshal(data)
+}
+
+func (m *MergeCommitEntry) MarshalBinary() ([]byte, error) {
+	return m.Marshal()
+}
+
+func (m *MergeCommitEntry) UnmarshalBinary(data []byte) error {
 	return m.Unmarshal(data)
 }

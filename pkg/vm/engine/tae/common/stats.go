@@ -28,19 +28,26 @@ import (
 )
 
 const (
-	DefaultMinRowsQualified = 40960
-	DefaultMaxRowsObj       = 8192 * 500
-	DefaultMaxMergeObjN     = 2
+	DefaultMinRowsQualified      = 40960
+	DefaultMaxRowsObj            = 8192 * 500
+	DefaultMinCNMergeSize        = 80000 // MB
+	DefaultCNMergeMemControlHint = 8192  // MB
+	DefaultMaxMergeObjN          = 4
 
 	Const1GBytes = 1 << 30
 	Const1MBytes = 1 << 20
 )
 
 var (
-	RuntimeMaxMergeObjN     atomic.Int32
-	RuntimeMinRowsQualified atomic.Int32
-	RuntimeMaxRowsObj       atomic.Int32
-	Epsilon                 float64
+	RuntimeMaxMergeObjN        atomic.Int32
+	RuntimeMinRowsQualified    atomic.Int32
+	RuntimeMaxRowsObj          atomic.Int32
+	RuntimeMinCNMergeSize      atomic.Uint64
+	RuntimeCNMergeMemControl   atomic.Uint64
+	RuntimeCNTakeOverAll       atomic.Bool
+	IsStandaloneBoost          atomic.Bool
+	ShouldStandaloneCNTakeOver atomic.Bool
+	Epsilon                    float64
 )
 
 func init() {
@@ -490,15 +497,9 @@ func HumanReadableBytes(bytes int) string {
 	return fmt.Sprintf("%.2fGB", float64(bytes)/1024/1024/1024)
 }
 
-func ShortSegId(x types.Uuid) string {
-	var shortuuid [8]byte
-	hex.Encode(shortuuid[:], x[:4])
-	return string(shortuuid[:])
-}
-
 func ShortObjId(x types.Objectid) string {
-	var shortuuid [8]byte
-	hex.Encode(shortuuid[:], x[:4])
+	var shortuuid [12]byte
+	hex.Encode(shortuuid[:], x[10:16])
 	return string(shortuuid[:])
 }
 

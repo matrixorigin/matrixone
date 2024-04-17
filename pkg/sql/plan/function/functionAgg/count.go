@@ -41,6 +41,8 @@ func newCount(overloadID int64, isCountStart bool, inputType types.Type, outputT
 	switch inputType.Oid {
 	case types.T_bool:
 		return newGenericCount[bool](overloadID, isCountStart, inputType, outputType, dist)
+	case types.T_bit:
+		return newGenericCount[uint64](overloadID, isCountStart, inputType, outputType, dist)
 	case types.T_uint8:
 		return newGenericCount[uint8](overloadID, isCountStart, inputType, outputType, dist)
 	case types.T_uint16:

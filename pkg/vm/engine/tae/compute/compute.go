@@ -153,6 +153,9 @@ func GetOffsetByVal(data containers.Vector, v any, skipmask *nulls.Bitmap) (offs
 	case types.T_bool:
 		vs := vector.MustFixedCol[bool](vec)
 		return GetOffsetWithFunc(vs, v.(bool), CompareBool, skipmask)
+	case types.T_bit:
+		vs := vector.MustFixedCol[uint64](vec)
+		return GetOffsetOfOrdered(vs, v.(uint64), skipmask)
 	case types.T_int8:
 		vs := vector.MustFixedCol[int8](vec)
 		return GetOffsetOfOrdered(vs, v.(int8), skipmask)

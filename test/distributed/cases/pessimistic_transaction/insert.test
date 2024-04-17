@@ -300,7 +300,7 @@ col6 smallint unsigned,
 col7 int unsigned,
 col8 bigint unsigned
 );
-load data infile '$resources/load_data/integer_numbers_3.csv' into table t1;
+load data infile '$resources/load_data/integer_numbers_3.csv' into table t1 fields terminated by ',';
 select * from t1;
 drop table t1;
 create database ssb;use ssb;
@@ -312,14 +312,14 @@ select mo_ctl('dn', 'flush', 'ssb.t2');
 select * from t2;
 drop table t2;
 create table t2(c1 int) cluster by c1;
-load data infile '$resources/load_data/integer.csv' into table t2;
+load data infile '$resources/load_data/integer.csv' into table t2 fields terminated by ',';
 select * from t2;
 -- @separator:table
 select mo_ctl('dn', 'flush', 'ssb.t2');
 select * from t2;
 drop table t2;
 create table t2(c1 int,c2 int) cluster by (c1,c2);
-load data infile '$resources/load_data/integer2.csv' into table t2;
+load data infile '$resources/load_data/integer2.csv' into table t2 fields terminated by ',';
 select * from t2;
 -- @separator:table
 select mo_ctl('dn', 'flush', 'ssb.t2');
@@ -327,3 +327,16 @@ select * from t2;
 drop table t2;
 drop database ssb;
 -- @bvt:issue
+drop table if exists indup_11;
+create table indup_11(a int, b varchar(20), primary key(a, b));
+insert into indup_11(a, b) values (1, "2");
+insert into indup_11(b, a) values ("2", 1);
+drop table indup_11;
+
+drop table if exists t4;
+create table t4(col1 int, col2 decimal, col3 smallint, primary key(col1, col3));
+insert into t4 (col1, col2, col3) values(6, 6, 8);
+insert into t4 (col2, col3, col1) values(2, 3, 1);
+insert into t4 (col3, col1) values (8, 6);
+select * from t4;
+drop table t4;

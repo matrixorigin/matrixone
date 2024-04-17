@@ -54,7 +54,7 @@ type container struct {
 
 	intHashMap *hashmap.IntHashMap
 	strHashMap *hashmap.StrHashMap
-	//idx        *index.LowCardinalityIndex
+	// idx        *index.LowCardinalityIndex
 
 	aggVecs           []evalVector
 	groupVecs         []evalVector
@@ -89,8 +89,11 @@ type Argument struct {
 	Aggs         []agg.Aggregate         // aggregations
 	MultiAggs    []group_concat.Argument // multiAggs, for now it's group_concat
 
-	info     *vm.OperatorInfo
-	children []vm.Operator
+	vm.OperatorBase
+}
+
+func (arg *Argument) GetOperatorBase() *vm.OperatorBase {
+	return &arg.OperatorBase
 }
 
 func init() {
@@ -106,7 +109,7 @@ func init() {
 	)
 }
 
-func (arg Argument) Name() string {
+func (arg Argument) TypeName() string {
 	return argName
 }
 
@@ -138,14 +141,6 @@ func (arg *Argument) Release() {
 	if arg != nil {
 		reuse.Free[Argument](arg, nil)
 	}
-}
-
-func (arg *Argument) SetInfo(info *vm.OperatorInfo) {
-	arg.info = info
-}
-
-func (arg *Argument) AppendChild(child vm.Operator) {
-	arg.children = append(arg.children, child)
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
@@ -189,6 +184,7 @@ func (ctr *container) cleanAggVectors() {
 		}
 		ctr.aggVecs[i].vec = nil
 	}
+	ctr.aggVecs = nil
 }
 
 func (ctr *container) cleanMultiAggVecs() {
@@ -209,6 +205,7 @@ func (ctr *container) cleanGroupVectors() {
 		}
 		ctr.groupVecs[i].vec = nil
 	}
+	ctr.groupVecs = nil
 }
 
 func (ctr *container) cleanHashMap() {

@@ -25,10 +25,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
-func Parse(ctx context.Context, sql string, lower int64) ([]tree.Statement, error) {
-	lexer := NewLexer(dialect.MYSQL, sql, lower)
+func Parse(ctx context.Context, sql string, lower int64, useOrigin int64) ([]tree.Statement, error) {
+	lexer := NewLexer(dialect.MYSQL, sql, lower, useOrigin)
 	defer PutScanner(lexer.scanner)
 	if yyParse(lexer) != 0 {
+		for _, s := range lexer.stmts {
+			s.Free()
+		}
 		return nil, lexer.scanner.LastError
 	}
 	if len(lexer.stmts) == 0 {
@@ -46,10 +49,13 @@ func Parse(ctx context.Context, sql string, lower int64) ([]tree.Statement, erro
 	return lexer.stmts, nil
 }
 
-func ParseOne(ctx context.Context, sql string, lower int64) (tree.Statement, error) {
-	lexer := NewLexer(dialect.MYSQL, sql, lower)
+func ParseOne(ctx context.Context, sql string, lower int64, useOrigin int64) (tree.Statement, error) {
+	lexer := NewLexer(dialect.MYSQL, sql, lower, useOrigin)
 	defer PutScanner(lexer.scanner)
 	if yyParse(lexer) != 0 {
+		for _, s := range lexer.stmts {
+			s.Free()
+		}
 		return nil, lexer.scanner.LastError
 	}
 	if len(lexer.stmts) != 1 {
@@ -63,13 +69,15 @@ type Lexer struct {
 	stmts      []tree.Statement
 	paramIndex int
 	lower      int64
+	useOrigin  int64
 }
 
-func NewLexer(dialectType dialect.DialectType, sql string, lower int64) *Lexer {
+func NewLexer(dialectType dialect.DialectType, sql string, lower int64, useOrigin int64) *Lexer {
 	return &Lexer{
 		scanner:    NewScanner(dialectType, sql),
 		paramIndex: 0,
 		lower:      lower,
+		useOrigin:  useOrigin,
 	}
 }
 
@@ -87,12 +95,6 @@ func (l *Lexer) Lex(lval *yySymType) int {
 		return l.toInt(lval, str)
 	case FLOAT:
 		return l.toFloat(lval, str)
-	case HEX:
-		return l.toHex(lval, str)
-	case HEXNUM:
-		return l.toHexNum(lval, str)
-	case BIT_LITERAL:
-		return l.toBit(lval, str)
 	}
 
 	lval.str = str
@@ -140,59 +142,4 @@ func (l *Lexer) toFloat(lval *yySymType, str string) int {
 	}
 	lval.item = fval
 	return FLOAT
-}
-
-func (l *Lexer) toHex(lval *yySymType, str string) int {
-	return HEX
-}
-
-// don't transfer 0xXXX to int,uint, all string([]byte),for example
-// 0x0616161 will be ' aaa'
-func (l *Lexer) toHexNum(lval *yySymType, str string) int {
-	// it won't be err, no need to process
-	// ival, err := strconv.ParseUint(str[2:], 16, 64)
-	// if err != nil {
-	// 	// TODO: toDecimal()
-	// 	//l.scanner.LastError = err
-	// 	lval.item = str
-	// 	return HEXNUM
-	// }
-	// switch {
-	// case ival <= math.MaxInt64:
-	// 	lval.item = int64(ival)
-	// default:
-	// 	lval.item = ival
-	// }
-	// lval.str = str
-	lval.str = str
-	return HEXNUM
-}
-
-func (l *Lexer) toBit(lval *yySymType, str string) int {
-	var (
-		ival uint64
-		err  error
-	)
-	if len(str) < 2 {
-		ival, err = strconv.ParseUint(str, 2, 64)
-	} else if str[1] == 'b' {
-		ival, err = strconv.ParseUint(str[2:], 2, 64)
-	} else {
-		ival, err = strconv.ParseUint(str, 2, 64)
-	}
-
-	if err != nil {
-		// TODO: toDecimal()
-		//l.scanner.LastError = err
-		lval.item = str
-		return BIT_LITERAL
-	}
-	switch {
-	case ival <= math.MaxInt64:
-		lval.item = int64(ival)
-	default:
-		lval.item = ival
-	}
-	lval.str = str
-	return BIT_LITERAL
 }

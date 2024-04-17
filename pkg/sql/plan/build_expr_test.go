@@ -386,7 +386,7 @@ func TestExpr_B(t *testing.T) {
 }
 
 func runOneExprStmt(opt Optimizer, t *testing.T, sql string) (*plan.Plan, error) {
-	stmts, err := mysql.Parse(opt.CurrentContext().GetContext(), sql, 1)
+	stmts, err := mysql.Parse(opt.CurrentContext().GetContext(), sql, 1, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -405,7 +405,7 @@ func runOneExprStmt(opt Optimizer, t *testing.T, sql string) (*plan.Plan, error)
 func makeTimeExpr(s string, p int32) *plan.Expr {
 	dt, _ := types.ParseTime(s, 0)
 	return &plan.Expr{
-		Typ: &plan.Type{
+		Typ: plan.Type{
 			Id:    int32(types.T_time),
 			Scale: p,
 		},
@@ -422,7 +422,7 @@ func makeTimeExpr(s string, p int32) *plan.Expr {
 func makeDateExpr(s string) *plan.Expr {
 	dt, _ := types.ParseDateCast(s)
 	return &plan.Expr{
-		Typ: &plan.Type{
+		Typ: plan.Type{
 			Id: int32(types.T_date),
 		},
 		Expr: &plan.Expr_Lit{
@@ -438,7 +438,7 @@ func makeDateExpr(s string) *plan.Expr {
 func makeTimestampExpr(s string, p int32, loc *time.Location) *plan.Expr {
 	dt, _ := types.ParseTimestamp(loc, s, p)
 	return &plan.Expr{
-		Typ: &plan.Type{
+		Typ: plan.Type{
 			Id: int32(types.T_timestamp),
 		},
 		Expr: &plan.Expr_Lit{
@@ -453,7 +453,7 @@ func makeTimestampExpr(s string, p int32, loc *time.Location) *plan.Expr {
 func makeDatetimeExpr(s string, p int32) *plan.Expr {
 	dt, _ := types.ParseDatetime(s, p)
 	return &plan.Expr{
-		Typ: &plan.Type{
+		Typ: plan.Type{
 			Id: int32(types.T_datetime),
 		},
 		Expr: &plan.Expr_Lit{

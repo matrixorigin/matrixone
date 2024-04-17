@@ -45,7 +45,6 @@ func (c *DashboardCreator) initTxnDashboard() error {
 			c.initTxnOnPrepareWALRow(),
 			c.initTxnBeforeCommitRow(),
 			c.initTxnDequeuePreparedRow(),
-			c.initTxnDequeuePreparingRow(),
 			c.initTxnRangesLoadedObjectMetaRow(),
 			c.initFastRangesRow(),
 			c.initRangesRow(),
@@ -162,6 +161,9 @@ func (c *DashboardCreator) initTxnOverviewRow() dashboard.Option {
 				`sum(rate(` + c.getMetricWithFilter("mo_txn_total", `type="user"`) + `[$interval]))`,
 				`sum(rate(` + c.getMetricWithFilter("mo_txn_total", `type="internal"`) + `[$interval]))`,
 				`sum(rate(` + c.getMetricWithFilter("mo_txn_total", `type="leak"`) + `[$interval]))`,
+				`sum(rate(` + c.getMetricWithFilter("mo_txn_total", `type="long-running"`) + `[$interval]))`,
+				`sum(rate(` + c.getMetricWithFilter("mo_txn_total", `type="stuck-in-commit"`) + `[$interval]))`,
+				`sum(rate(` + c.getMetricWithFilter("mo_txn_total", `type="stuck-in-rollback"`) + `[$interval]))`,
 				`sum(rate(` + c.getMetricWithFilter("mo_txn_statement_total", `type="total"`) + `[$interval]))`,
 				`sum(rate(` + c.getMetricWithFilter("mo_txn_statement_total", `type="retry"`) + `[$interval]))`,
 				`sum(rate(` + c.getMetricWithFilter("mo_txn_lock_total", `type="total"`) + `[$interval]))`,
@@ -172,6 +174,9 @@ func (c *DashboardCreator) initTxnOverviewRow() dashboard.Option {
 				"user-txn",
 				"internal-txn",
 				"leak",
+				"long-running",
+				"stuck-in-commit",
+				"stuck-in-rollback",
 				"statement",
 				"statement-retry",
 				"lock",
@@ -270,34 +275,25 @@ func (c *DashboardCreator) initTxnOnPrepareWALRow() dashboard.Option {
 		"txn on prepare wal duration",
 		c.getMultiHistogram(
 			[]string{
-				c.getMetricWithFilter("mo_txn_tn_side_duration_seconds_bucket", `step="on_prepare_wal_total"`),
-				c.getMetricWithFilter("mo_txn_tn_side_duration_seconds_bucket", `step="on_prepare_wal_prepare_wal"`),
-				c.getMetricWithFilter("mo_txn_tn_side_duration_seconds_bucket", `step="on_prepare_wal_end_prepare"`),
-				c.getMetricWithFilter("mo_txn_tn_side_duration_seconds_bucket", `step="on_prepare_wal_flush_queue"`),
+				c.getMetricWithFilter("mo_txn_tn_side_duration_seconds_bucket", `step="1-PreparingWait"`),
+				c.getMetricWithFilter("mo_txn_tn_side_duration_seconds_bucket", `step="2-Preparing"`),
+				c.getMetricWithFilter("mo_txn_tn_side_duration_seconds_bucket", `step="3-PrepareWalWait"`),
+				c.getMetricWithFilter("mo_txn_tn_side_duration_seconds_bucket", `step="4-PrepareWal"`),
+				c.getMetricWithFilter("mo_txn_tn_side_duration_seconds_bucket", `step="5-PreparedWait"`),
+				c.getMetricWithFilter("mo_txn_tn_side_duration_seconds_bucket", `step="6-Prepared"`),
 			},
 			[]string{
-				"total",
-				"prepare wal",
-				"end prepare",
-				"enqueue flush",
+				"1-PreparingWait",
+				"2-Preparing",
+				"3-PrepareWalWait",
+				"4-PrepareWal",
+				"5-PreparedWait",
+				"6-Prepared",
 			},
 			[]float64{0.80, 0.90, 0.95, 0.99},
 			[]float32{3, 3, 3, 3},
 			axis.Unit("s"),
 			axis.Min(0))...,
-	)
-}
-
-func (c *DashboardCreator) initTxnDequeuePreparingRow() dashboard.Option {
-	return dashboard.Row(
-		"txn dequeue preparing duration",
-		c.getHistogram(
-			"txn dequeue preparing duration",
-			c.getMetricWithFilter("mo_txn_tn_side_duration_seconds_bucket", `step="dequeue_preparing"`),
-			[]float64{0.50, 0.8, 0.90, 0.99},
-			12,
-			axis.Unit("s"),
-			axis.Min(0)),
 	)
 }
 
@@ -479,14 +475,10 @@ func (c *DashboardCreator) initTxnMpoolRow() dashboard.Option {
 		c.getMultiHistogram(
 			[]string{
 				c.getMetricWithFilter(`mo_txn_mpool_duration_seconds_bucket`, `type="new"`),
-				c.getMetricWithFilter(`mo_txn_mpool_duration_seconds_bucket`, `type="alloc"`),
-				c.getMetricWithFilter(`mo_txn_mpool_duration_seconds_bucket`, `type="free"`),
 				c.getMetricWithFilter(`mo_txn_mpool_duration_seconds_bucket`, `type="delete"`),
 			},
 			[]string{
 				"new",
-				"alloc",
-				"free",
 				"delete",
 			},
 			[]float64{0.50, 0.8, 0.90, 0.99},

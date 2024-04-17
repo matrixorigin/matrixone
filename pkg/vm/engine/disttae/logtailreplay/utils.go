@@ -37,7 +37,7 @@ func IsObjTable(name string) bool {
 	return objTableMatchRegexp.MatchString(name)
 }
 
-func mustVectorFromProto(v *api.Vector) *vector.Vector {
+func mustVectorFromProto(v api.Vector) *vector.Vector {
 	ret, err := vector.ProtoVectorToVector(v)
 	if err != nil {
 		panic(err)
@@ -45,7 +45,7 @@ func mustVectorFromProto(v *api.Vector) *vector.Vector {
 	return ret
 }
 
-func mustVectorToProto(v *vector.Vector) *api.Vector {
+func mustVectorToProto(v *vector.Vector) api.Vector {
 	ret, err := vector.VectorToProtoVector(v)
 	if err != nil {
 		panic(err)

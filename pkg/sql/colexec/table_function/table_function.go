@@ -38,14 +38,14 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		f bool
 		e error
 	)
-	idx := arg.info.Idx
+	idx := arg.GetIdx()
 
-	result, err := arg.children[0].Call(proc)
+	result, err := arg.GetChildren(0).Call(proc)
 	if err != nil {
 		return result, err
 	}
 
-	anal := proc.GetAnalyze(arg.info.Idx, arg.info.ParallelIdx, arg.info.ParallelMajor)
+	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
 	anal.Start()
 	defer anal.Stop()
 
@@ -124,7 +124,7 @@ func (arg *Argument) Prepare(proc *process.Process) error {
 
 	retSchema := make([]types.Type, len(tblArg.Rets))
 	for i := range tblArg.Rets {
-		retSchema[i] = dupType(tblArg.Rets[i].Typ)
+		retSchema[i] = dupType(&tblArg.Rets[i].Typ)
 	}
 	tblArg.retSchema = retSchema
 

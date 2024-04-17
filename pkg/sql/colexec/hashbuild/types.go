@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -37,11 +38,6 @@ const (
 	End
 )
 
-type evalVector struct {
-	executor colexec.ExpressionExecutor
-	vec      *vector.Vector
-}
-
 type container struct {
 	colexec.ReceiverOperator
 
@@ -50,17 +46,20 @@ type container struct {
 	hasNull            bool
 	isMerge            bool
 	multiSels          [][]int32
-	bat                *batch.Batch
+	batches            []*batch.Batch
+	batchIdx           int
+	tmpBatch           *batch.Batch
 	inputBatchRowCount int
 
-	evecs []evalVector
-	vecs  []*vector.Vector
+	executor []colexec.ExpressionExecutor
+	vecs     [][]*vector.Vector
 
 	intHashMap *hashmap.IntHashMap
 	strHashMap *hashmap.StrHashMap
 	keyWidth   int // keyWidth is the width of hash columns, it determines which hash map to use.
 
-	uniqueJoinKeys []*vector.Vector
+	uniqueJoinKeys  []*vector.Vector
+	runtimeFilterIn bool
 }
 
 type Argument struct {
@@ -74,13 +73,15 @@ type Argument struct {
 	Typs        []types.Type
 	Conditions  []*plan.Expr
 
-	HashOnPK             bool
-	NeedMergedBatch      bool
-	NeedAllocateSels     bool
-	RuntimeFilterSenders []*colexec.RuntimeFilterChan
+	HashOnPK          bool
+	NeedMergedBatch   bool
+	NeedAllocateSels  bool
+	RuntimeFilterSpec *pbplan.RuntimeFilterSpec
+	vm.OperatorBase
+}
 
-	Info     *vm.OperatorInfo
-	children []vm.Operator
+func (arg *Argument) GetOperatorBase() *vm.OperatorBase {
+	return &arg.OperatorBase
 }
 
 func init() {
@@ -96,7 +97,7 @@ func init() {
 	)
 }
 
-func (arg Argument) Name() string {
+func (arg Argument) TypeName() string {
 	return argName
 }
 
@@ -110,24 +111,11 @@ func (arg *Argument) Release() {
 	}
 }
 
-func (arg *Argument) SetRuntimeFilterSenders(rfs []*colexec.RuntimeFilterChan) {
-	arg.RuntimeFilterSenders = rfs
-}
-
-func (arg *Argument) SetInfo(info *vm.OperatorInfo) {
-	arg.Info = info
-}
-
-func (arg *Argument) AppendChild(child vm.Operator) {
-	arg.children = append(arg.children, child)
-}
-
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := arg.ctr
 	if ctr != nil {
-		mp := proc.Mp()
-		ctr.cleanBatch(mp)
-		ctr.cleanEvalVectors(mp)
+		ctr.cleanBatches(proc)
+		ctr.cleanEvalVectors(proc.Mp())
 		if !arg.NeedHashMap {
 			ctr.cleanHashMap()
 		}
@@ -140,19 +128,20 @@ func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error)
 	}
 }
 
-func (ctr *container) cleanBatch(mp *mpool.MPool) {
-	if ctr.bat != nil {
-		ctr.bat.Clean(mp)
-		ctr.bat = nil
+func (ctr *container) cleanBatches(proc *process.Process) {
+	for i := range ctr.batches {
+		proc.PutBatch(ctr.batches[i])
 	}
+	ctr.batches = nil
 }
 
 func (ctr *container) cleanEvalVectors(mp *mpool.MPool) {
-	for i := range ctr.evecs {
-		if ctr.evecs[i].executor != nil {
-			ctr.evecs[i].executor.Free()
+	for i := range ctr.executor {
+		if ctr.executor[i] != nil {
+			ctr.executor[i].Free()
 		}
 	}
+	ctr.executor = nil
 }
 
 func (ctr *container) cleanHashMap() {

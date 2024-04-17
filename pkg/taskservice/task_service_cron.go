@@ -41,6 +41,7 @@ type crons struct {
 
 func (s *taskService) StartScheduleCronTask() {
 	if !s.crons.state.canStart() {
+		s.rt.Logger().Info("cron task scheduler started or is stopping")
 		return
 	}
 
@@ -56,6 +57,7 @@ func (s *taskService) StartScheduleCronTask() {
 
 func (s *taskService) StopScheduleCronTask() {
 	if !s.crons.state.canStop() {
+		s.rt.Logger().Info("cron task scheduler stopped or is stopping")
 		return
 	}
 
@@ -70,6 +72,11 @@ func (s *taskService) StopScheduleCronTask() {
 }
 
 func (s *taskService) fetchCronTasks(ctx context.Context) {
+	s.rt.Logger().Info("start to fetch cron tasks")
+	defer func() {
+		s.rt.Logger().Info("stop to fetch cron tasks")
+	}()
+
 	ticker := time.NewTicker(fetchInterval)
 	defer ticker.Stop()
 
@@ -85,7 +92,7 @@ func (s *taskService) fetchCronTasks(ctx context.Context) {
 		if err != nil {
 			s.rt.Logger().Error("query cron tasks failed",
 				zap.Error(err))
-			break
+			continue
 		}
 
 		s.rt.Logger().Debug("new cron tasks fetched",
@@ -206,19 +213,28 @@ func (j *cronJob) Run() {
 
 func (j *cronJob) doRun() {
 	now := time.Now()
-	cronTask := j.task
+	cronTasks, err := j.s.QueryCronTask(context.Background(), WithCronTaskId(EQ, j.task.ID))
+	if err != nil {
+		j.s.rt.Logger().Error("failed to query cron task", zap.Error(err))
+		return
+	}
+	if len(cronTasks) != 1 {
+		j.s.rt.Logger().Panic(fmt.Sprintf("query cron_task_id = %d, return %d records", j.task.ID, len(cronTasks)))
+		return
+	}
+	cronTask := cronTasks[0]
 	cronTask.UpdateAt = now.UnixMilli()
 	cronTask.NextTime = j.schedule.Next(now).UnixMilli()
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 	defer cancel()
 
+	cronTask.TriggerTimes++
 	asyncTask := newTaskFromMetadata(cronTask.Metadata)
 	asyncTask.ParentTaskID = asyncTask.Metadata.ID
 	asyncTask.Metadata.ID = fmt.Sprintf("%s:%d", asyncTask.ParentTaskID, cronTask.TriggerTimes)
-	cronTask.TriggerTimes++
 
-	_, err := j.s.store.UpdateCronTask(ctx, cronTask, asyncTask)
+	_, err = j.s.store.UpdateCronTask(ctx, cronTask, asyncTask)
 	if err != nil {
 		j.s.rt.Logger().Error("trigger cron task failed",
 			zap.String("cron-task", j.task.DebugString()),

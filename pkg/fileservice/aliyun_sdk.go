@@ -87,26 +87,24 @@ func NewAliyunSDK(
 		zap.Any("arguments", args),
 	)
 
-	res, err := client.ListBuckets()
-	if err != nil {
-		return nil, err
-	}
-	for _, info := range res.Buckets {
-		if info.Name == args.Bucket {
-			bucket, err := client.Bucket(args.Bucket)
-			if err != nil {
-				return nil, err
-			}
-
-			return &AliyunSDK{
-				name:            args.Name,
-				bucket:          bucket,
-				perfCounterSets: perfCounterSets,
-			}, nil
+	if !args.NoBucketValidation {
+		// validate bucket
+		_, err := client.GetBucketInfo(args.Bucket)
+		if err != nil {
+			return nil, err
 		}
 	}
 
-	return nil, moerr.NewInvalidArgNoCtx("Bucket", args.Bucket)
+	bucket, err := client.Bucket(args.Bucket)
+	if err != nil {
+		return nil, err
+	}
+
+	return &AliyunSDK{
+		name:            args.Name,
+		bucket:          bucket,
+		perfCounterSets: perfCounterSets,
+	}, nil
 }
 
 var _ ObjectStorage = new(AliyunSDK)
@@ -166,6 +164,12 @@ func (a *AliyunSDK) Stat(
 	size int64,
 	err error,
 ) {
+
+	defer func() {
+		if a.is404(err) {
+			err = moerr.NewFileNotFoundNoCtx(key)
+		}
+	}()
 
 	if err := ctx.Err(); err != nil {
 		return 0, err
@@ -333,10 +337,6 @@ func (a *AliyunSDK) deleteSingle(ctx context.Context, key string) error {
 func (a *AliyunSDK) listObjects(ctx context.Context, prefix string, cont string) (oss.ListObjectsResultV2, error) {
 	ctx, task := gotrace.NewTask(ctx, "AliyunSDK.listObjects")
 	defer task.End()
-	t0 := time.Now()
-	defer func() {
-		FSProfileHandler.AddSample(time.Since(t0))
-	}()
 	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
 		counter.FileService.S3.List.Add(1)
 	}, a.perfCounterSets...)
@@ -366,10 +366,6 @@ func (a *AliyunSDK) listObjects(ctx context.Context, prefix string, cont string)
 func (a *AliyunSDK) statObject(ctx context.Context, key string) (http.Header, error) {
 	ctx, task := gotrace.NewTask(ctx, "AliyunSDK.statObject")
 	defer task.End()
-	t0 := time.Now()
-	defer func() {
-		FSProfileHandler.AddSample(time.Since(t0))
-	}()
 	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
 		counter.FileService.S3.Head.Add(1)
 	}, a.perfCounterSets...)
@@ -396,10 +392,6 @@ func (a *AliyunSDK) putObject(
 	defer catch(&err)
 	ctx, task := gotrace.NewTask(ctx, "AliyunSDK.putObject")
 	defer task.End()
-	t0 := time.Now()
-	defer func() {
-		FSProfileHandler.AddSample(time.Since(t0))
-	}()
 	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
 		counter.FileService.S3.Put.Add(1)
 	}, a.perfCounterSets...)
@@ -420,10 +412,6 @@ func (a *AliyunSDK) putObject(
 func (a *AliyunSDK) getObject(ctx context.Context, key string, min *int64, max *int64) (io.ReadCloser, error) {
 	ctx, task := gotrace.NewTask(ctx, "AliyunSDK.getObject")
 	defer task.End()
-	t0 := time.Now()
-	defer func() {
-		FSProfileHandler.AddSample(time.Since(t0))
-	}()
 	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
 		counter.FileService.S3.Get.Add(1)
 	}, a.perfCounterSets...)
@@ -468,10 +456,6 @@ func (a *AliyunSDK) getObject(ctx context.Context, key string, min *int64, max *
 func (a *AliyunSDK) deleteObject(ctx context.Context, key string) (bool, error) {
 	ctx, task := gotrace.NewTask(ctx, "AliyunSDK.deleteObject")
 	defer task.End()
-	t0 := time.Now()
-	defer func() {
-		FSProfileHandler.AddSample(time.Since(t0))
-	}()
 	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
 		counter.FileService.S3.Delete.Add(1)
 	}, a.perfCounterSets...)
@@ -494,10 +478,6 @@ func (a *AliyunSDK) deleteObject(ctx context.Context, key string) (bool, error) 
 func (a *AliyunSDK) deleteObjects(ctx context.Context, keys ...string) (bool, error) {
 	ctx, task := gotrace.NewTask(ctx, "AliyunSDK.deleteObjects")
 	defer task.End()
-	t0 := time.Now()
-	defer func() {
-		FSProfileHandler.AddSample(time.Since(t0))
-	}()
 	perfcounter.Update(ctx, func(counter *perfcounter.CounterSet) {
 		counter.FileService.S3.DeleteMulti.Add(1)
 	}, a.perfCounterSets...)
@@ -536,6 +516,9 @@ func (o ObjectStorageArguments) credentialProviderForAliyunSDK(
 ) (ret oss.CredentialsProvider, err error) {
 
 	defer func() {
+		if err != nil {
+			return
+		}
 		// chain assume role provider
 		if o.RoleARN != "" {
 			logutil.Info("with role arn")
@@ -578,6 +561,12 @@ func (o ObjectStorageArguments) credentialProviderForAliyunSDK(
 	}
 
 	if config.Type == nil {
+
+		if !o.shouldLoadDefaultCredentials() {
+			return nil, moerr.NewInvalidInputNoCtx(
+				"no valid credentials",
+			)
+		}
 
 		// check aws env
 		awsCredentials := awscredentials.NewEnvCredentials()

@@ -16,41 +16,35 @@ package compile
 
 import (
 	"fmt"
+	"strconv"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
-	"strconv"
+)
+
+const (
+	ivfFlatIndexFlag = "experimental_ivf_index"
+	masterIndexFlag  = "experimental_master_index"
 )
 
 func (s *Scope) handleUniqueIndexTable(c *Compile,
 	indexDef *plan.IndexDef, qryDatabase string,
 	originalTableDef *plan.TableDef, indexInfo *plan.CreateTable) error {
 
-	err := genNewUniqueIndexDuplicateCheck(c, qryDatabase, originalTableDef.Name, partsToColsStr(indexDef.Parts))
-	if err != nil {
-		return err
-	}
+	// the logic of detecting whether the unique constraint is violated does not need to be done separately,
+	// it will be processed when inserting into the hidden table.
 
-	err = s.createAndInsertForUniqueOrRegularIndexTable(c, indexDef, qryDatabase, originalTableDef, indexInfo)
-	if err != nil {
-		return err
-	}
-
-	return err
+	return s.createAndInsertForUniqueOrRegularIndexTable(c, indexDef, qryDatabase, originalTableDef, indexInfo)
 }
 
 func (s *Scope) handleRegularSecondaryIndexTable(c *Compile,
 	indexDef *plan.IndexDef, qryDatabase string,
 	originalTableDef *plan.TableDef, indexInfo *plan.CreateTable) error {
 
-	err := s.createAndInsertForUniqueOrRegularIndexTable(c, indexDef, qryDatabase, originalTableDef, indexInfo)
-	if err != nil {
-		return err
-	}
-
-	return err
+	return s.createAndInsertForUniqueOrRegularIndexTable(c, indexDef, qryDatabase, originalTableDef, indexInfo)
 }
 
 func (s *Scope) createAndInsertForUniqueOrRegularIndexTable(c *Compile, indexDef *plan.IndexDef,
@@ -74,8 +68,37 @@ func (s *Scope) createAndInsertForUniqueOrRegularIndexTable(c *Compile, indexDef
 	}
 	return nil
 }
+func (s *Scope) handleMasterIndexTable(c *Compile, indexDef *plan.IndexDef, qryDatabase string,
+	originalTableDef *plan.TableDef, indexInfo *plan.CreateTable) error {
 
-func (s *Scope) handleIndexAndPKColCount(c *Compile, indexDef *plan.IndexDef, qryDatabase string, originalTableDef *plan.TableDef) (int64, error) {
+	if ok, err := s.isExperimentalEnabled(c, masterIndexFlag); err != nil {
+		return err
+	} else if !ok {
+		return moerr.NewInternalErrorNoCtx("Master index is not enabled")
+	}
+
+	if len(indexInfo.GetIndexTables()) != 1 {
+		return moerr.NewInternalErrorNoCtx("index table count not equal to 1")
+	}
+
+	def := indexInfo.GetIndexTables()[0]
+	createSQL := genCreateIndexTableSql(def, indexDef, qryDatabase)
+	err := c.runSql(createSQL)
+	if err != nil {
+		return err
+	}
+
+	insertSQLs := genInsertIndexTableSqlForMasterIndex(originalTableDef, indexDef, qryDatabase)
+	for _, insertSQL := range insertSQLs {
+		err = c.runSql(insertSQL)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Scope) handleIndexColCount(c *Compile, indexDef *plan.IndexDef, qryDatabase string, originalTableDef *plan.TableDef) (int64, error) {
 
 	indexColumnName := indexDef.Parts[0]
 	countTotalSql := fmt.Sprintf("select count(`%s`) from `%s`.`%s`;",
@@ -88,7 +111,7 @@ func (s *Scope) handleIndexAndPKColCount(c *Compile, indexDef *plan.IndexDef, qr
 	}
 
 	var totalCnt int64
-	rs.ReadRows(func(cols []*vector.Vector) bool {
+	rs.ReadRows(func(_ int, cols []*vector.Vector) bool {
 		totalCnt = executor.GetFixedRows[int64](cols[0])[0]
 		return false
 	})
@@ -130,7 +153,7 @@ func (s *Scope) handleIvfIndexMetaTable(c *Compile, indexDef *plan.IndexDef, qry
 }
 
 func (s *Scope) handleIvfIndexCentroidsTable(c *Compile, indexDef *plan.IndexDef,
-	qryDatabase string, originalTableDef *plan.TableDef, totalCnt int64, metaTableName string) error {
+	qryDatabase string, originalTableDef *plan.TableDef, totalCnt int64, metadataTableName string) error {
 
 	// 1.a algo params
 	params, err := catalog.IndexParamsStringToMap(indexDef.IndexAlgoParams)
@@ -148,12 +171,20 @@ func (s *Scope) handleIvfIndexCentroidsTable(c *Compile, indexDef *plan.IndexDef
 	// 1.b init centroids table with default centroid, if centroids are not enough.
 	// NOTE: we can run re-index to improve the centroid quality.
 	if totalCnt == 0 || totalCnt < int64(centroidParamsLists) {
-		initSQL := fmt.Sprintf("insert into `%s`.`%s` (`%s`, `%s`, `%s`) VALUES(0,1,NULL);",
+		initSQL := fmt.Sprintf("INSERT INTO `%s`.`%s` (`%s`, `%s`, `%s`) "+
+			"SELECT "+
+			"(SELECT CAST(`%s` AS BIGINT) FROM `%s`.`%s` WHERE `%s` = 'version'), "+
+			"1, NULL;",
 			qryDatabase,
 			indexDef.IndexTableName,
 			catalog.SystemSI_IVFFLAT_TblCol_Centroids_version,
 			catalog.SystemSI_IVFFLAT_TblCol_Centroids_id,
 			catalog.SystemSI_IVFFLAT_TblCol_Centroids_centroid,
+
+			catalog.SystemSI_IVFFLAT_TblCol_Metadata_val,
+			qryDatabase,
+			metadataTableName,
+			catalog.SystemSI_IVFFLAT_TblCol_Metadata_key,
 		)
 		err := c.runSql(initSQL)
 		if err != nil {
@@ -165,7 +196,7 @@ func (s *Scope) handleIvfIndexCentroidsTable(c *Compile, indexDef *plan.IndexDef
 	// 2. Sampling SQL Logic
 	sampleCnt := catalog.CalcSampleCount(int64(centroidParamsLists), totalCnt)
 	indexColumnName := indexDef.Parts[0]
-	sampleSQL := fmt.Sprintf("(select sample(`%s`, %d rows) as `%s` from `%s`.`%s`)",
+	sampleSQL := fmt.Sprintf("(select sample(`%s`, %d rows, 'row') as `%s` from `%s`.`%s`)",
 		indexColumnName,
 		sampleCnt,
 		indexColumnName,
@@ -206,7 +237,7 @@ func (s *Scope) handleIvfIndexCentroidsTable(c *Compile, indexDef *plan.IndexDef
 		insertSQL,
 
 		catalog.SystemSI_IVFFLAT_TblCol_Metadata_val,
-		metaTableName,
+		metadataTableName,
 		catalog.SystemSI_IVFFLAT_TblCol_Metadata_key,
 
 		indexColumnName,
@@ -216,7 +247,18 @@ func (s *Scope) handleIvfIndexCentroidsTable(c *Compile, indexDef *plan.IndexDef
 		kmeansNormalize,
 		sampleSQL,
 	)
+
+	err = s.logTimestamp(c, qryDatabase, metadataTableName, "clustering_start")
+	if err != nil {
+		return err
+	}
+
 	err = c.runSql(clusterCentersSQL)
+	if err != nil {
+		return err
+	}
+
+	err = s.logTimestamp(c, qryDatabase, metadataTableName, "clustering_end")
 	if err != nil {
 		return err
 	}
@@ -243,6 +285,7 @@ func (s *Scope) handleIvfIndexEntriesTable(c *Compile, indexDef *plan.IndexDef, 
 	// 2. Original table's pkey name and value
 	var originalTblPkColsCommaSeperated string
 	var originalTblPkColMaySerial string
+	var originalTblPkColMaySerialColNameAlias = "__mo_org_tbl_pk_may_serial_col"
 	if originalTableDef.Pkey.PkeyColName == catalog.CPrimaryKeyColName {
 		for i, part := range originalTableDef.Pkey.Names {
 			if i > 0 {
@@ -258,12 +301,14 @@ func (s *Scope) handleIvfIndexEntriesTable(c *Compile, indexDef *plan.IndexDef, 
 
 	// 3. insert into entries table
 	indexColumnName := indexDef.Parts[0]
-	insertSQL := fmt.Sprintf("insert into `%s`.`%s` (`%s`, `%s`, `%s`) ",
+	insertSQL := fmt.Sprintf("insert into `%s`.`%s` (`%s`, `%s`, `%s`, `%s`) ",
 		qryDatabase,
 		indexDef.IndexTableName,
 		catalog.SystemSI_IVFFLAT_TblCol_Entries_version,
 		catalog.SystemSI_IVFFLAT_TblCol_Entries_id,
-		catalog.SystemSI_IVFFLAT_TblCol_Entries_pk)
+		catalog.SystemSI_IVFFLAT_TblCol_Entries_pk,
+		catalog.SystemSI_IVFFLAT_TblCol_Entries_entry,
+	)
 
 	// 4. centroids table with latest version
 	centroidsTableForCurrentVersionSql := fmt.Sprintf("(select * from "+
@@ -280,60 +325,194 @@ func (s *Scope) handleIvfIndexEntriesTable(c *Compile, indexDef *plan.IndexDef, 
 		centroidsTableName,
 	)
 
-	/*
-		Sample SQL:
-		SELECT `__mo_index_entries_tbl`.`__mo_index_centroid_version_fk`,
-		`__mo_index_entries_tbl`.`__mo_index_centroid_id_fk`,
-		`__mo_index_entries_tbl`.`__mo_index_table_pk` FROM
-		(
-		SELECT
-		centroids.`__mo_index_centroid_version` as __mo_index_centroid_version_fk,
-		centroids.`__mo_index_centroid_id` as __mo_index_centroid_id_fk,
-		tbl.id as __mo_index_table_pk,
-		ROW_NUMBER() OVER (PARTITION BY tbl.id ORDER BY l2_distance(centroids.__mo_index_centroid, normalize_l2(tbl.embedding) ) ) as `__mo_index_rn`
-		FROM tbl
-		CROSS JOIN
-		(select * from `__mo_index_secondary_ff6b099e-9b2f-11ee-9b85-723e89f7b974` where `__mo_index_centroid_version` = (select CAST(`__mo_index_val` as BIGINT) from `__mo_index_secondary_ff6b0890-9b2f-11ee-9b85-723e89f7b974` where `__mo_index_key` = 'version')) as centroids
-		)`__mo_index_entries_tbl` WHERE `__mo_index_entries_tbl`.`__mo_index_rn` = 1;
-	*/
-	// 5. final SQL
-	mappingSQL := fmt.Sprintf("%s "+
-		"SELECT `__mo_index_entries_tbl`.`__mo_index_centroid_version_fk`, "+
-		"`__mo_index_entries_tbl`.`__mo_index_centroid_id_fk`, "+
-		"`__mo_index_entries_tbl`.`__mo_index_table_pk` FROM "+
-		"("+
-		"SELECT "+
-		"`%s`.`%s` as `__mo_index_centroid_version_fk`,  "+
-		"`%s`.`%s` as `__mo_index_centroid_id_fk`, "+
-		"%s as `__mo_index_table_pk`, "+
-		"ROW_NUMBER() OVER (PARTITION BY %s ORDER BY %s(`%s`.`%s`, normalize_l2(%s.%s))) as `__mo_index_rn` "+
-		"FROM "+
-		" %s CROSS JOIN %s "+
-		") `__mo_index_entries_tbl` WHERE `__mo_index_entries_tbl`.`__mo_index_rn` = 1;",
-		insertSQL,
+	// 5. original table with normalized SK
+	normalizedVecColName := "__mo_org_tbl_norm_vec_col"
+	originalTableWithNormalizedSkSql := fmt.Sprintf("(select "+
+		"%s as `%s`, "+
+		"normalize_l2(`%s`.`%s`) as `%s` "+
+		" from `%s`.`%s`) as `%s`",
+		originalTblPkColMaySerial,
+		originalTblPkColMaySerialColNameAlias,
 
+		originalTableDef.Name,
+		indexColumnName,
+		normalizedVecColName,
+
+		qryDatabase,
+		originalTableDef.Name,
+		originalTableDef.Name,
+	)
+
+	// 6. find centroid_version, centroid_id and tbl_pk
+	joinedCentroidsId := "__mo_index_joined_centroid_id"
+	joinedNode := "__mo_index_tbl_join_centroids"
+	tblCrossJoinCentroids := fmt.Sprintf("(select "+
+		"`%s`.`%s` as `%s`, "+
+		"serial_extract( min( serial_full( %s(`%s`.`%s`, `%s`.`%s`), `%s`.`%s`)), 1 as bigint)  as `%s`, "+
+		"`%s`"+
+		"from %s CROSS JOIN %s group by `%s`, %s ) as `%s`",
 		centroidsTableName,
 		catalog.SystemSI_IVFFLAT_TblCol_Centroids_version,
-		centroidsTableName,
-		catalog.SystemSI_IVFFLAT_TblCol_Centroids_id,
-		// NOTE: no need to add tableName here, because it could be serial()
-		originalTblPkColMaySerial,
+		catalog.SystemSI_IVFFLAT_TblCol_Centroids_version,
 
-		originalTblPkColMaySerial,
 		algoParamsDistFn,
 		centroidsTableName,
 		catalog.SystemSI_IVFFLAT_TblCol_Centroids_centroid,
 		originalTableDef.Name,
-		indexColumnName,
+		normalizedVecColName,
+		centroidsTableName,
+		catalog.SystemSI_IVFFLAT_TblCol_Centroids_id,
+		joinedCentroidsId,
 
-		originalTableDef.Name,
+		originalTblPkColMaySerialColNameAlias, // NOTE: no need to add tableName here, because it could be serial()
+
+		originalTableWithNormalizedSkSql,
 		centroidsTableForCurrentVersionSql,
+		catalog.SystemSI_IVFFLAT_TblCol_Centroids_version,
+		originalTblPkColMaySerialColNameAlias,
+		joinedNode,
 	)
 
-	err = c.runSql(mappingSQL)
+	// 7. from table, get tbl_pk and embedding
+	originalTableWithPkAndEmbeddingSql := fmt.Sprintf("(select "+
+		"%s as `%s`, "+
+		"`%s`.`%s`"+
+		" from `%s`.`%s`) as `%s`",
+		originalTblPkColMaySerial,
+		originalTblPkColMaySerialColNameAlias,
+
+		originalTableDef.Name,
+		indexColumnName,
+
+		qryDatabase,
+		originalTableDef.Name,
+		originalTableDef.Name,
+	)
+
+	/*
+		Sample SQL:
+		INSERT INTO `a`.`__mo_index_secondary_018ebbd4-ebb7-7898-b0bb-3b133af1905e`
+		            (
+		                        `__mo_index_centroid_fk_version`,
+		                        `__mo_index_centroid_fk_id`,
+		                        `__mo_index_pri_col`,
+		                        `__mo_index_centroid_fk_entry`
+		            )
+		SELECT     `__mo_index_tbl_join_centroids`.`__mo_index_centroid_version` ,
+		           `__mo_index_tbl_join_centroids`.`__mo_index_joined_centroid_id` ,
+		           `__mo_index_tbl_join_centroids`.`__mo_org_tbl_pk_may_serial_col` ,
+		           `t1`.`b`
+		FROM       (
+		                  SELECT `t1`.`a` AS `__mo_org_tbl_pk_may_serial_col`,
+		                         `t1`.`b`
+		                  FROM   `a`.`t1`) AS `t1`
+		INNER JOIN
+		           (
+		                      SELECT     `centroids`.`__mo_index_centroid_version` AS `__mo_index_centroid_version`,
+		                                 serial_extract( min( serial_full( l2_distance(`centroids`.`__mo_index_centroid`, `t1`.`__mo_org_tbl_norm_vec_col`), `centroids`.`__mo_index_centroid_id`)), 1 AS bigint) AS `__mo_index_joined_centroid_id`,
+		                                 `__mo_org_tbl_pk_may_serial_col`
+		                      FROM       (
+		                                        SELECT `t1`.`a`               AS `__mo_org_tbl_pk_may_serial_col`,
+		                                               normalize_l2(`t1`.`b`) AS `__mo_org_tbl_norm_vec_col`,
+		                                        FROM   `a`.`t1`
+		                                 ) AS `t1`
+		                      CROSS JOIN
+		                                 (
+		                                        SELECT *
+		                                        FROM   `a`.`centroids`
+		                                        WHERE  `__mo_index_centroid_version` = ( SELECT cast(__mo_index_val AS bigint) FROM   `a`.`meta` WHERE  `__mo_index_key` = 'version')
+		                                 ) AS `centroids`
+		                      GROUP BY   `__mo_index_centroid_version`,
+		                                 __mo_org_tbl_pk_may_serial_col
+		            ) AS `__mo_index_tbl_join_centroids`
+
+		ON         `__mo_index_tbl_join_centroids`.`__mo_org_tbl_pk_may_serial_col` = `t1`.`__mo_org_tbl_pk_may_serial_col`;
+	*/
+	// 8. final SQL
+	tblInnerJoinPrevJoin := fmt.Sprintf("%s "+
+		"select "+
+		"`%s`.`%s` , "+
+		"`%s`.`%s` , "+
+		"`%s`.`%s` , "+
+		"`%s`.`%s`  "+
+		"from %s inner join %s "+
+		"on `%s`.`%s` = `%s`.`%s` "+
+		"order by `%s`.`%s`, `%s`.`%s` ;",
+		insertSQL,
+
+		joinedNode,
+		catalog.SystemSI_IVFFLAT_TblCol_Centroids_version,
+
+		joinedNode,
+		joinedCentroidsId,
+
+		joinedNode,
+		originalTblPkColMaySerialColNameAlias,
+
+		originalTableDef.Name,
+		indexColumnName,
+
+		originalTableWithPkAndEmbeddingSql,
+		tblCrossJoinCentroids,
+
+		joinedNode,
+		originalTblPkColMaySerialColNameAlias,
+		originalTableDef.Name,
+		originalTblPkColMaySerialColNameAlias,
+
+		// Without ORDER BY, we get 20QPS
+		// With    ORDER BY, we get 60QPS
+		// I think it's because there are lesser number of segments to scan during JOIN.
+		//TODO: need to revisit this once we have BlockFilter applied on the TableScan.
+		joinedNode,
+		catalog.SystemSI_IVFFLAT_TblCol_Centroids_version,
+		joinedNode,
+		joinedCentroidsId,
+	)
+
+	err = s.logTimestamp(c, qryDatabase, metadataTableName, "mapping_start")
+	if err != nil {
+		return err
+	}
+
+	err = c.runSql(tblInnerJoinPrevJoin)
+	if err != nil {
+		return err
+	}
+
+	err = s.logTimestamp(c, qryDatabase, metadataTableName, "mapping_end")
 	if err != nil {
 		return err
 	}
 
 	return nil
+}
+
+func (s *Scope) logTimestamp(c *Compile, qryDatabase, metadataTableName, metrics string) error {
+	return c.runSql(fmt.Sprintf("INSERT INTO `%s`.`%s` (%s, %s) "+
+		" VALUES ('%s', NOW()) "+
+		" ON DUPLICATE KEY UPDATE %s = NOW();",
+		qryDatabase,
+		metadataTableName,
+		catalog.SystemSI_IVFFLAT_TblCol_Metadata_key,
+		catalog.SystemSI_IVFFLAT_TblCol_Metadata_val,
+
+		metrics,
+
+		catalog.SystemSI_IVFFLAT_TblCol_Metadata_val,
+	))
+}
+
+func (s *Scope) isExperimentalEnabled(c *Compile, flag string) (bool, error) {
+
+	val, err := c.proc.GetResolveVariableFunc()(flag, true, false)
+	if err != nil {
+		return false, err
+	}
+
+	if val == nil {
+		return false, nil
+	}
+
+	return fmt.Sprintf("%v", val) == "1", nil
 }

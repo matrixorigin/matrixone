@@ -16,89 +16,74 @@ package queryservice
 
 import (
 	"context"
+	"sync"
 	"time"
-
-	"github.com/pkg/errors"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
-	"github.com/matrixorigin/matrixone/pkg/common/runtime"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/query"
+	"github.com/matrixorigin/matrixone/pkg/queryservice/client"
+	"github.com/pkg/errors"
 )
-
-var methodVersions = map[pb.CmdMethod]int64{
-	pb.CmdMethod_ShowProcessList:    defines.MORPCVersion1,
-	pb.CmdMethod_AlterAccount:       defines.MORPCVersion1,
-	pb.CmdMethod_KillConn:           defines.MORPCVersion1,
-	pb.CmdMethod_TraceSpan:          defines.MORPCVersion1,
-	pb.CmdMethod_GetLockInfo:        defines.MORPCVersion1,
-	pb.CmdMethod_GetTxnInfo:         defines.MORPCVersion1,
-	pb.CmdMethod_GetCacheInfo:       defines.MORPCVersion1,
-	pb.CmdMethod_SyncCommit:         defines.MORPCVersion1,
-	pb.CmdMethod_GetCommit:          defines.MORPCVersion1,
-	pb.CmdMethod_GetProtocolVersion: defines.MORPCMinVersion, // To make sure these methods are compatible with all versions.
-	pb.CmdMethod_SetProtocolVersion: defines.MORPCMinVersion,
-}
 
 // QueryService is used to send query request to another CN service.
 type QueryService interface {
-	// SendMessage send message to a query service.
-	SendMessage(ctx context.Context, address string, req *pb.Request) (*pb.Response, error)
-	// NewRequest creates a new request by cmd method.
-	NewRequest(pb.CmdMethod) *pb.Request
-	// Release releases the response.
-	Release(*pb.Response)
+	// ServiceID return the uuid of current CN service
+	ServiceID() string
 	// Start starts the service.
 	Start() error
 	// Close closes the service.
 	Close() error
 	// AddHandleFunc add message handler.
 	AddHandleFunc(method pb.CmdMethod, h func(context.Context, *pb.Request, *pb.Response) error, async bool)
-	// ServiceID return the uuid of current CN service
-	ServiceID() string
+	// SetReleaseFunc sets the release handler.
+	SetReleaseFunc(resp *pb.Response, f func())
 }
 
 // queryService is a query service started in CN service.
 type queryService struct {
 	// serviceID is the UUID of CN service.
 	serviceID string
-	client    morpc.RPCClient
 	handler   morpc.MessageHandler[*pb.Request, *pb.Response]
-	pool      morpc.MessagePool[*pb.Request, *pb.Response]
+
+	mu struct {
+		sync.Mutex
+		releaser map[*pb.Response]func()
+	}
 }
 
 // NewQueryService creates a new queryService instance.
 func NewQueryService(serviceID string, address string, cfg morpc.Config) (QueryService, error) {
 	serviceName := "query-service"
-	rt := runtime.ProcessLevelRuntime()
-	if rt == nil {
-		rt = runtime.DefaultRuntime()
+	qs := &queryService{
+		serviceID: serviceID,
 	}
-	logger := rt.Logger().Named(serviceName)
+
+	qs.mu.releaser = make(map[*pb.Response]func())
 
 	pool := morpc.NewMessagePool(
 		func() *pb.Request { return &pb.Request{} },
 		func() *pb.Response { return &pb.Response{} })
 
-	client, err := cfg.NewClient(
-		"query-client",
-		logger.RawLogger(),
-		func() morpc.Message { return pool.AcquireResponse() })
+	h, err := morpc.NewMessageHandler(serviceName, address, cfg, pool,
+		morpc.WithHandlerRespReleaseFunc[*pb.Request, *pb.Response](func(m morpc.Message) {
+			resp := m.(*pb.Response)
+			if resp.CmdMethod == pb.CmdMethod_GetCacheData {
+				qs.mu.Lock()
+				defer qs.mu.Unlock()
+				release, ok := qs.mu.releaser[resp]
+				if ok {
+					release()
+					delete(qs.mu.releaser, resp)
+				}
+			}
+			pool.ReleaseResponse(resp)
+		}),
+	)
 	if err != nil {
 		return nil, err
 	}
-
-	h, err := morpc.NewMessageHandler("query-server", address, cfg, pool)
-	if err != nil {
-		return nil, err
-	}
-	qs := &queryService{
-		serviceID: serviceID,
-		client:    client,
-		handler:   h,
-		pool:      pool,
-	}
+	qs.handler = h
 	qs.initHandleFunc()
 	return qs, nil
 }
@@ -108,44 +93,17 @@ func (s *queryService) AddHandleFunc(method pb.CmdMethod, h func(context.Context
 	s.handler.RegisterHandleFunc(uint32(method), h, async)
 }
 
+// SetReleaseFunc implements the QueryService interface.
+func (s *queryService) SetReleaseFunc(resp *pb.Response, f func()) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.mu.releaser[resp] = f
+}
+
 func (s *queryService) initHandleFunc() {
 	s.AddHandleFunc(pb.CmdMethod_GetProtocolVersion, handleGetProtocolVersion, false)
 	s.AddHandleFunc(pb.CmdMethod_SetProtocolVersion, handleSetProtocolVersion, false)
-}
-
-// SendMessage implements the QueryService interface.
-func (s *queryService) SendMessage(
-	ctx context.Context, address string, req *pb.Request,
-) (*pb.Response, error) {
-	if address == "" {
-		return nil, moerr.NewInternalError(ctx, "invalid CN query address %s", address)
-	}
-	if err := checkMethodVersion(ctx, req); err != nil {
-		return nil, err
-	}
-	f, err := s.client.Send(ctx, address, req)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-	v, err := f.Get()
-	if err != nil {
-		return nil, err
-	}
-	resp := v.(*pb.Response)
-	return s.unwrapResponseError(resp)
-}
-
-// NewRequest implements the QueryService interface.
-func (s *queryService) NewRequest(method pb.CmdMethod) *pb.Request {
-	req := s.pool.AcquireRequest()
-	req.CmdMethod = method
-	return req
-}
-
-// Release implements the QueryService interface.
-func (s *queryService) Release(resp *pb.Response) {
-	s.pool.ReleaseResponse(resp)
+	s.AddHandleFunc(pb.CmdMethod_CoreDumpConfig, handleCoreDumpConfig, false)
 }
 
 // Start implements the QueryService interface.
@@ -155,18 +113,7 @@ func (s *queryService) Start() error {
 
 // Close implements the QueryService interface.
 func (s *queryService) Close() error {
-	if err := s.client.Close(); err != nil {
-		return err
-	}
 	return s.handler.Close()
-}
-
-func (s *queryService) unwrapResponseError(resp *pb.Response) (*pb.Response, error) {
-	if err := resp.UnwrapError(); err != nil {
-		s.pool.ReleaseResponse(resp)
-		return nil, err
-	}
-	return resp, nil
 }
 
 func (s *queryService) ServiceID() string {
@@ -187,7 +134,7 @@ type nodeResponse struct {
 // handleInvalidResponse : invalid response handler
 func RequestMultipleCn(ctx context.Context,
 	nodes []string,
-	qs QueryService,
+	qc client.QueryClient,
 	genRequest func() *pb.Request,
 	handleValidResponse func(string, *pb.Response),
 	handleInvalidResponse func(string),
@@ -216,7 +163,7 @@ func RequestMultipleCn(ctx context.Context,
 			// gen request and send it
 			if genRequest != nil {
 				req := genRequest()
-				resp, err := qs.SendMessage(ctx, addr, req)
+				resp, err := qc.SendMessage(ctx, addr, req)
 				responseChan <- nodeResponse{nodeAddr: addr, response: resp, err: err}
 			}
 		}(node)
@@ -236,7 +183,7 @@ func RequestMultipleCn(ctx context.Context,
 						handleValidResponse(res.nodeAddr, queryResp)
 					}
 					if queryResp != nil {
-						qs.Release(queryResp)
+						qc.Release(queryResp)
 					}
 				} else {
 					if handleInvalidResponse != nil {
@@ -250,8 +197,4 @@ func RequestMultipleCn(ctx context.Context,
 		nodesLeft--
 	}
 	return retErr
-}
-
-func checkMethodVersion(ctx context.Context, req *pb.Request) error {
-	return runtime.CheckMethodVersion(ctx, methodVersions, req)
 }

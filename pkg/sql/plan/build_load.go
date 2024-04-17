@@ -26,17 +26,21 @@ import (
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
 
+const (
+	LoadParallelMinSize = 1 << 20
+)
+
 func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan, error) {
 	start := time.Now()
 	defer func() {
 		v2.TxnStatementBuildLoadHistogram.Observe(time.Since(start).Seconds())
 	}()
-	if stmt.Param.Tail.Lines != nil && stmt.Param.Tail.Lines.StartingBy != "" {
-		return nil, moerr.NewBadConfig(ctx.GetContext(), "load operation do not support StartingBy field.")
+	tblName := string(stmt.Table.ObjectName)
+	tblInfo, err := getDmlTableInfo(ctx, tree.TableExprs{stmt.Table}, nil, nil, "insert")
+	if err != nil {
+		return nil, err
 	}
-	if stmt.Param.Tail.Fields != nil && stmt.Param.Tail.Fields.EscapedBy != 0 {
-		return nil, moerr.NewBadConfig(ctx.GetContext(), "load operation do not support EscapedBy field.")
-	}
+
 	stmt.Param.Local = stmt.Local
 	fileName, err := checkFileExist(stmt.Param, ctx)
 	if err != nil {
@@ -44,11 +48,6 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 	}
 
 	if err := InitNullMap(stmt.Param, ctx); err != nil {
-		return nil, err
-	}
-	tblName := string(stmt.Table.ObjectName)
-	tblInfo, err := getDmlTableInfo(ctx, tree.TableExprs{stmt.Table}, nil, nil, "insert")
-	if err != nil {
 		return nil, err
 	}
 	tableDef := tblInfo.tableDefs[0]
@@ -75,6 +74,9 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 		return nil, err
 	}
 
+	if stmt.Param.FileSize < LoadParallelMinSize {
+		stmt.Param.Parallel = false
+	}
 	stmt.Param.Tail.ColumnList = nil
 	stmt.Param.LoadFile = true
 	if stmt.Param.ScanType != tree.INLINE {
@@ -90,8 +92,12 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 	terminated := ","
 	enclosedBy := []byte{0}
 	if stmt.Param.Tail.Fields != nil {
-		enclosedBy = []byte{stmt.Param.Tail.Fields.EnclosedBy}
-		terminated = stmt.Param.Tail.Fields.Terminated
+		if stmt.Param.Tail.Fields.EnclosedBy != nil {
+			enclosedBy = []byte{stmt.Param.Tail.Fields.EnclosedBy.Value}
+		}
+		if stmt.Param.Tail.Fields.Terminated != nil {
+			terminated = stmt.Param.Tail.Fields.Terminated.Value
+		}
 	}
 
 	externalScanNode := &plan.Node{
@@ -117,9 +123,12 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 		NodeType: plan.Node_PROJECT,
 		Stats:    &plan.Stats{},
 	}
-	isInsertWithoutAutoPkCol, err := getProjectNode(stmt, ctx, projectNode, tableDef)
+	ifExistAutoPkCol, err := getProjectNode(stmt, ctx, projectNode, tableDef)
 	if err != nil {
 		return nil, err
+	}
+	if stmt.Param.FileSize < LoadParallelMinSize {
+		stmt.Param.Parallel = false
 	}
 	if stmt.Param.Parallel && (getCompressType(stmt.Param, fileName) != tree.NOCOMPRESS || stmt.Local) {
 		projectNode.ProjectList = makeCastExpr(stmt, fileName, tableDef)
@@ -143,13 +152,12 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 
 	// append hidden column to tableDef
 	newTableDef := DeepCopyTableDef(tableDef, true)
-	checkInsertPkDup := false
-	err = buildInsertPlans(ctx, builder, bindCtx, objRef, newTableDef, lastNodeId, checkInsertPkDup, nil, nil, isInsertWithoutAutoPkCol)
+	err = buildInsertPlans(ctx, builder, bindCtx, nil, objRef, newTableDef, lastNodeId, ifExistAutoPkCol, nil)
 	if err != nil {
 		return nil, err
 	}
-	// go shuffle for loadif parallel
-	if stmt.Param.Parallel {
+	// use shuffle for load if parallel and no compress
+	if stmt.Param.Parallel && (getCompressType(stmt.Param, fileName) == tree.NOCOMPRESS) {
 		for i := range builder.qry.Nodes {
 			node := builder.qry.Nodes[i]
 			if node.NodeType == plan.Node_INSERT {
@@ -162,6 +170,12 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 	}
 
 	query := builder.qry
+	sqls, err := genSqlsForCheckFKSelfRefer(ctx.GetContext(),
+		objRef.SchemaName, newTableDef.Name, newTableDef.Cols, newTableDef.Fkeys)
+	if err != nil {
+		return nil, err
+	}
+	query.DetectSqls = sqls
 	reduceSinkSinkScanNodes(query)
 	query.StmtType = plan.Query_INSERT
 
@@ -193,22 +207,24 @@ func checkFileExist(param *tree.ExternParam, ctx CompilerContext) (string, error
 	if len(param.Filepath) == 0 {
 		return "", nil
 	}
-
-	fileList, _, err := ReadDir(param)
-	if err != nil {
-		return "", err
+	if err := StatFile(param); err != nil {
+		if moerror, ok := err.(*moerr.Error); ok {
+			if moerror.ErrorCode() == moerr.ErrFileNotFound {
+				return "", moerr.NewInvalidInput(ctx.GetContext(), "the file does not exist in load flow")
+			} else {
+				return "", moerror
+			}
+		}
+		return "", moerr.NewInternalError(ctx.GetContext(), err.Error())
 	}
-	if len(fileList) == 0 {
-		return "", moerr.NewInvalidInput(param.Ctx, "the file does not exist in load flow")
-	}
-	param.Ctx = nil
-	return fileList[0], nil
+	param.Init = true
+	return param.Filepath, nil
 }
 
 func getProjectNode(stmt *tree.Load, ctx CompilerContext, node *plan.Node, tableDef *TableDef) (bool, error) {
 	tblName := string(stmt.Table.ObjectName)
 	colToIndex := make(map[int32]string, 0)
-	isInsertWithoutAutoPkCol := false
+	ifExistAutoPkCol := false
 	if len(stmt.Param.Tail.ColumnList) == 0 {
 		for i := 0; i < len(tableDef.Cols); i++ {
 			colToIndex[int32(i)] = tableDef.Cols[i].Name
@@ -218,13 +234,13 @@ func getProjectNode(stmt *tree.Load, ctx CompilerContext, node *plan.Node, table
 			switch realCol := col.(type) {
 			case *tree.UnresolvedName:
 				if _, ok := tableDef.Name2ColIndex[realCol.Parts[0]]; !ok {
-					return isInsertWithoutAutoPkCol, moerr.NewInternalError(ctx.GetContext(), "column '%s' does not exist", realCol.Parts[0])
+					return ifExistAutoPkCol, moerr.NewInternalError(ctx.GetContext(), "column '%s' does not exist", realCol.Parts[0])
 				}
 				colToIndex[int32(i)] = realCol.Parts[0]
 			case *tree.VarExpr:
 				//NOTE:variable like '@abc' will be passed by.
 			default:
-				return isInsertWithoutAutoPkCol, moerr.NewInternalError(ctx.GetContext(), "unsupported column type %v", realCol)
+				return ifExistAutoPkCol, moerr.NewInternalError(ctx.GetContext(), "unsupported column type %v", realCol)
 			}
 		}
 	}
@@ -265,10 +281,10 @@ func getProjectNode(stmt *tree.Load, ctx CompilerContext, node *plan.Node, table
 		node.ProjectList[i] = tmp
 
 		if tableDef.Cols[i].Typ.AutoIncr && tableDef.Cols[i].Name == tableDef.Pkey.PkeyColName {
-			isInsertWithoutAutoPkCol = true
+			ifExistAutoPkCol = true
 		}
 	}
-	return isInsertWithoutAutoPkCol, nil
+	return ifExistAutoPkCol, nil
 }
 
 func InitNullMap(param *tree.ExternParam, ctx CompilerContext) error {
@@ -356,7 +372,7 @@ func makeCastExpr(stmt *tree.Load, fileName string, tableDef *TableDef) []*plan.
 	for i := 0; i < len(tableDef.Cols); i++ {
 		typ := tableDef.Cols[i].Typ
 		expr := &plan.Expr{
-			Typ: stringTyp,
+			Typ: *stringTyp,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: 0,
@@ -365,7 +381,7 @@ func makeCastExpr(stmt *tree.Load, fileName string, tableDef *TableDef) []*plan.
 			},
 		}
 
-		expr, _ = makePlan2CastExpr(stmt.Param.Ctx, expr, typ)
+		expr, _ = makePlan2CastExpr(stmt.Param.Ctx, expr, &typ)
 		ret = append(ret, expr)
 	}
 	return ret

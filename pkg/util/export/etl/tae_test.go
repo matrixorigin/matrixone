@@ -58,6 +58,7 @@ func TestTAEWriter_WriteElems(t *testing.T) {
 	require.Nil(t, err)
 	ctx := context.TODO()
 	fs := testutil.NewSharedFS()
+	defer fs.Close()
 
 	filepath := path.Join(t.TempDir(), "file.tae")
 	writer := NewTAEWriter(ctx, dummyAllTypeTable, mp, filepath, fs)
@@ -87,6 +88,7 @@ func TestTAEWriter_WriteElems(t *testing.T) {
 
 	r, err := NewTaeReader(context.TODO(), dummyAllTypeTable, filepath, file.Size, fs, mp)
 	require.Nil(t, err)
+	defer r.Close()
 
 	// read data
 	batchs, err := r.ReadAll(ctx)

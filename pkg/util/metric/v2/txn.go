@@ -26,9 +26,12 @@ var (
 			Name:      "total",
 			Help:      "Total number of txn created.",
 		}, []string{"type"})
-	TxnUserCounter     = txnCounter.WithLabelValues("user")
-	TxnInternalCounter = txnCounter.WithLabelValues("internal")
-	TxnLeakCounter     = txnCounter.WithLabelValues("leak")
+	TxnUserCounter        = txnCounter.WithLabelValues("user")
+	TxnInternalCounter    = txnCounter.WithLabelValues("internal")
+	TxnLeakCounter        = txnCounter.WithLabelValues("leak")
+	TxnLongRunningCounter = txnCounter.WithLabelValues("long running")
+	TxnInCommitCounter    = txnCounter.WithLabelValues("stuck in commit")
+	TxnInRollbackCounter  = txnCounter.WithLabelValues("stuck in rollback")
 
 	txnStatementCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
@@ -265,14 +268,15 @@ var (
 			Buckets:   getDurationBuckets(),
 		}, []string{"step"})
 
-	TxnOnPrepareWALPrepareWALDurationHistogram = txnTNSideDurationHistogram.WithLabelValues("on_prepare_wal_prepare_wal")
-	TxnOnPrepareWALEndPrepareDurationHistogram = txnTNSideDurationHistogram.WithLabelValues("on_prepare_wal_end_prepare")
-	TxnOnPrepareWALFlushQueueDurationHistogram = txnTNSideDurationHistogram.WithLabelValues("on_prepare_wal_flush_queue")
-	TxnOnPrepareWALTotalDurationHistogram      = txnTNSideDurationHistogram.WithLabelValues("on_prepare_wal_total")
+	TxnPreparingWaitDurationHistogram  = txnTNSideDurationHistogram.WithLabelValues("1-PreparingWait")
+	TxnPreparingDurationHistogram      = txnTNSideDurationHistogram.WithLabelValues("2-Preparing")
+	TxnPrepareWalWaitDurationHistogram = txnTNSideDurationHistogram.WithLabelValues("3-PrepareWalWait")
+	TxnPrepareWalDurationHistogram     = txnTNSideDurationHistogram.WithLabelValues("4-PrepareWal")
+	TxnPreparedWaitDurationHistogram   = txnTNSideDurationHistogram.WithLabelValues("5-PreparedWait")
+	TxnPreparedDurationHistogram       = txnTNSideDurationHistogram.WithLabelValues("6-Prepared")
 
-	TxnDequeuePreparingDurationHistogram = txnTNSideDurationHistogram.WithLabelValues("dequeue_preparing")
-	TxnDequeuePreparedDurationHistogram  = txnTNSideDurationHistogram.WithLabelValues("dequeue_prepared")
-	TxnBeforeCommitDurationHistogram     = txnTNSideDurationHistogram.WithLabelValues("before_txn_commit")
+	TxnDequeuePreparedDurationHistogram = txnTNSideDurationHistogram.WithLabelValues("dequeue_prepared")
+	TxnBeforeCommitDurationHistogram    = txnTNSideDurationHistogram.WithLabelValues("before_txn_commit")
 
 	txnMpoolDurationHistogram = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
@@ -283,8 +287,6 @@ var (
 			Buckets:   getDurationBuckets(),
 		}, []string{"type"})
 	TxnMpoolNewDurationHistogram    = txnMpoolDurationHistogram.WithLabelValues("new")
-	TxnMpoolAllocDurationHistogram  = txnMpoolDurationHistogram.WithLabelValues("alloc")
-	TxnMpoolFreeDurationHistogram   = txnMpoolDurationHistogram.WithLabelValues("free")
 	TxnMpoolDeleteDurationHistogram = txnMpoolDurationHistogram.WithLabelValues("delete")
 
 	txnReaderDurationHistogram = prometheus.NewHistogramVec(

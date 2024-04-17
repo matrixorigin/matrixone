@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"os"
 	"testing"
 	"time"
@@ -81,7 +82,7 @@ func init() {
 	}
 }
 
-func testPrint(_ interface{}, _ *batch.Batch) error {
+func testPrint(_ *batch.Batch) error {
 	return nil
 }
 
@@ -104,7 +105,10 @@ func (w *Ws) Rollback(ctx context.Context) error {
 	return nil
 }
 
-func (w *Ws) WriteOffset() uint64 {
+func (w *Ws) UpdateSnapshotWriteOffset() {
+}
+
+func (w *Ws) GetSnapshotWriteOffset() int {
 	return 0
 }
 
@@ -117,6 +121,13 @@ func (w *Ws) EndStatement()       {}
 func (w *Ws) IncrSQLCount()       {}
 func (w *Ws) GetSQLCount() uint64 { return 0 }
 
+func (w *Ws) CloneSnapshotWS() client.Workspace {
+	return nil
+}
+
+func (w *Ws) BindTxnOp(op client.TxnOperator) {
+}
+
 func TestCompile(t *testing.T) {
 	cnclient.NewCNClient("test", new(cnclient.ClientConfig))
 	ctrl := gomock.NewController(t)
@@ -127,7 +138,10 @@ func TestCompile(t *testing.T) {
 	txnOperator.EXPECT().GetWorkspace().Return(&Ws{}).AnyTimes()
 	txnOperator.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
 	txnOperator.EXPECT().ResetRetry(gomock.Any()).AnyTimes()
-
+	txnOperator.EXPECT().TxnOptions().Return(txn.TxnOptions{}).AnyTimes()
+	txnOperator.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()
+	txnOperator.EXPECT().EnterRunSql().Return().AnyTimes()
+	txnOperator.EXPECT().ExitRunSql().Return().AnyTimes()
 	txnClient := mock_frontend.NewMockTxnClient(ctrl)
 	txnClient.EXPECT().New(gomock.Any(), gomock.Any()).Return(txnOperator, nil).AnyTimes()
 	for _, tc := range tcs {
@@ -135,7 +149,7 @@ func TestCompile(t *testing.T) {
 		tc.proc.TxnOperator = txnOperator
 		tc.proc.Ctx = ctx
 		c := NewCompile("test", "test", tc.sql, "", "", ctx, tc.e, tc.proc, tc.stmt, false, nil, time.Now())
-		err := c.Compile(ctx, tc.pn, nil, testPrint)
+		err := c.Compile(ctx, tc.pn, testPrint)
 		require.NoError(t, err)
 		c.getAffectedRows()
 		_, err = c.Run(0)
@@ -156,7 +170,7 @@ func TestCompileWithFaults(t *testing.T) {
 	tc := newTestCase("select * from R join S on R.uid = S.uid", t)
 	tc.proc.Ctx = ctx
 	c := NewCompile("test", "test", tc.sql, "", "", ctx, tc.e, tc.proc, nil, false, nil, time.Now())
-	err := c.Compile(ctx, tc.pn, nil, testPrint)
+	err := c.Compile(ctx, tc.pn, testPrint)
 	require.NoError(t, err)
 	c.getAffectedRows()
 	_, err = c.Run(0)
@@ -167,7 +181,7 @@ func newTestCase(sql string, t *testing.T) compileTestCase {
 	proc := testutil.NewProcess()
 	proc.SessionInfo.Buf = buffer.New()
 	e, _, compilerCtx := testengine.New(defines.AttachAccountId(context.Background(), catalog.System_Account))
-	stmts, err := mysql.Parse(compilerCtx.GetContext(), sql, 1)
+	stmts, err := mysql.Parse(compilerCtx.GetContext(), sql, 1, 0)
 	require.NoError(t, err)
 	pn, err := plan2.BuildPlan(compilerCtx, stmts[0], false)
 	if err != nil {

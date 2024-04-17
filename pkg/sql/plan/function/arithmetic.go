@@ -38,7 +38,7 @@ func plusOperatorSupports(typ1, typ2 types.Type) bool {
 		return false
 	}
 	switch typ1.Oid {
-	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
+	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64, types.T_bit:
 	case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
 	case types.T_float32, types.T_float64:
 	case types.T_decimal64, types.T_decimal128:
@@ -61,7 +61,7 @@ func minusOperatorSupports(typ1, typ2 types.Type) bool {
 		return false
 	}
 	switch typ1.Oid {
-	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
+	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64, types.T_bit:
 	case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
 	case types.T_float32, types.T_float64:
 	case types.T_decimal64, types.T_decimal128:
@@ -84,7 +84,7 @@ func multiOperatorSupports(typ1, typ2 types.Type) bool {
 		return false
 	}
 	switch typ1.Oid {
-	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
+	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64, types.T_bit:
 	case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
 	case types.T_float32, types.T_float64:
 	case types.T_decimal64, types.T_decimal128:
@@ -133,7 +133,7 @@ func modOperatorSupports(typ1, typ2 types.Type) bool {
 		return false
 	}
 	switch typ1.Oid {
-	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
+	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64, types.T_bit:
 	case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
 	case types.T_float32, types.T_float64:
 	case types.T_decimal128, types.T_decimal64:
@@ -187,6 +187,10 @@ func plusFnVectorScalar(parameters []*vector.Vector, result vector.FunctionResul
 func plusFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	paramType := parameters[0].GetType()
 	switch paramType.Oid {
+	case types.T_bit:
+		return opBinaryFixedFixedToFixed[uint64, uint64, uint64](parameters, result, proc, length, func(v1, v2 uint64) uint64 {
+			return v1 + v2
+		})
 	case types.T_uint8:
 		return opBinaryFixedFixedToFixed[uint8, uint8, uint8](parameters, result, proc, length, func(v1, v2 uint8) uint8 {
 			return v1 + v2
@@ -256,6 +260,10 @@ func minusFnVectorScalar(parameters []*vector.Vector, result vector.FunctionResu
 func minusFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	paramType := parameters[0].GetType()
 	switch paramType.Oid {
+	case types.T_bit:
+		return opBinaryFixedFixedToFixed[uint64, uint64, uint64](parameters, result, proc, length, func(v1, v2 uint64) uint64 {
+			return v1 - v2
+		})
 	case types.T_uint8:
 		return opBinaryFixedFixedToFixed[uint8, uint8, uint8](parameters, result, proc, length, func(v1, v2 uint8) uint8 {
 			return v1 - v2
@@ -337,6 +345,10 @@ func multiFnVectorScalar(parameters []*vector.Vector, result vector.FunctionResu
 func multiFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	paramType := parameters[0].GetType()
 	switch paramType.Oid {
+	case types.T_bit:
+		return opBinaryFixedFixedToFixed[uint64, uint64, uint64](parameters, result, proc, length, func(v1, v2 uint64) uint64 {
+			return v1 * v2
+		})
 	case types.T_uint8:
 		return opBinaryFixedFixedToFixed[uint8, uint8, uint8](parameters, result, proc, length, func(v1, v2 uint8) uint8 {
 			return v1 * v2
@@ -450,6 +462,10 @@ func integerDivFn(parameters []*vector.Vector, result vector.FunctionResultWrapp
 func modFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
 	paramType := parameters[0].GetType()
 	switch paramType.Oid {
+	case types.T_bit:
+		return specialTemplateForModFunction[uint64](parameters, result, proc, length, func(v1, v2 uint64) uint64 {
+			return v1 % v2
+		})
 	case types.T_uint8:
 		return specialTemplateForModFunction[uint8](parameters, result, proc, length, func(v1, v2 uint8) uint8 {
 			return v1 % v2

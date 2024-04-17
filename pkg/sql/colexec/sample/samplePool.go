@@ -19,6 +19,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"math/rand"
@@ -37,6 +38,13 @@ type sPool struct {
 	// same as the Type attribute of sample.Argument.
 	typ     sPoolType
 	isMerge bool
+
+	// if true, the returned batch will contain a column which indicates the number of rows that have been seen.
+	outputRowCount bool
+
+	// a helper to adjust the row picked probability for merge sample.
+	baseRow           int64
+	probabilityFactor float64
 
 	// some fields for performance.
 	canCheckFull bool
@@ -65,12 +73,14 @@ const (
 	percentSamplePool
 )
 
-func newSamplePoolByRows(proc *process.Process, capacity int, sampleColumnCount int) *sPool {
+func newSamplePoolByRows(proc *process.Process, capacity int, sampleColumnCount int, outputRowSeen bool) *sPool {
 	return &sPool{
 		proc:           proc,
 		requireReorder: true,
 		typ:            rowSamplePool,
 		isMerge:        false,
+		outputRowCount: outputRowSeen,
+		baseRow:        0,
 		canCheckFull:   false,
 		capacity:       capacity,
 		columns:        make(sampleColumnList, sampleColumnCount),
@@ -83,18 +93,20 @@ func newSamplePoolByPercent(proc *process.Process, per float64, sampleColumnCoun
 		requireReorder: true,
 		typ:            percentSamplePool,
 		isMerge:        false,
+		outputRowCount: false,
 		canCheckFull:   false,
 		percents:       int(per * 100),
 		columns:        make(sampleColumnList, sampleColumnCount),
 	}
 }
 
-func newSamplePoolByRowsForMerge(proc *process.Process, capacity int, sampleColumnCount int) *sPool {
+func newSamplePoolByRowsForMerge(proc *process.Process, capacity int, sampleColumnCount int, outputRowSeen bool) *sPool {
 	return &sPool{
 		proc:           proc,
 		requireReorder: false,
 		typ:            rowSamplePool,
 		isMerge:        true,
+		outputRowCount: outputRowSeen,
 		canCheckFull:   false,
 		capacity:       capacity,
 		columns:        make(sampleColumnList, sampleColumnCount),
@@ -103,6 +115,39 @@ func newSamplePoolByRowsForMerge(proc *process.Process, capacity int, sampleColu
 
 func (s *sPool) setPerfFields(isGroupBy bool) {
 	s.canCheckFull = !isGroupBy && !s.isMerge && s.typ == rowSamplePool
+}
+
+// the base row will adjust the picked probability for each batch if this was a merge sample.
+// for example, the row from 1,000 rows data source will be picked more times than the row from 100 rows data source.
+func (s *sPool) updateProbabilityAdjustmentFactor(inputBatch *batch.Batch) {
+	if s.isMerge {
+		row := vector.GetFixedAt[int64](inputBatch.Vecs[len(inputBatch.Vecs)-1], 0)
+		if s.baseRow == 0 {
+			s.baseRow = row
+		}
+		s.probabilityFactor = float64(row) / float64(s.baseRow)
+	}
+	s.probabilityFactor = 1
+}
+
+// randWithFactor returns a random number between [0, seen) with a factor.
+// if factor > 1, the result will be more close to 0.
+// if factor < 1, the result will be more close to the number seen.
+func randWithFactor(fCap float64, seen int, factor float64) int {
+	r := rand.Intn(seen)
+	fr := float64(r)
+	fSeen := float64(seen)
+	if factor > 1 {
+		if fSeen-fr <= (fSeen-fCap)/factor {
+			return int(fr / fSeen * fCap)
+		}
+		return r
+	}
+
+	if fr < fCap*factor {
+		return int(fr / factor)
+	}
+	return seen
 }
 
 func (s *sPool) IsFull() bool {
@@ -234,9 +279,10 @@ func (s *sPool) sampleFromColumn(groupIndex int, sampleVec *vector.Vector, bat *
 
 	switch s.typ {
 	case rowSamplePool:
-		return s.sPools[groupIndex].addByRow(s.proc, s.columns[0], bat)
+		s.updateProbabilityAdjustmentFactor(bat)
+		return s.sPools[groupIndex].addRows(s.proc, s.columns[0], bat, s.probabilityFactor)
 	case percentSamplePool:
-		return s.sPools[groupIndex].addByPercent(s.proc, s.columns[0], bat, s.percents)
+		return s.sPools[groupIndex].addRowsByPercent(s.proc, s.columns[0], bat, s.percents)
 	}
 	return moerr.NewInternalErrorNoCtx("unexpected sample type %d", s.typ)
 }
@@ -252,9 +298,10 @@ func (s *sPool) sampleFromColumns(groupIndex int, sampleVectors []*vector.Vector
 
 	switch s.typ {
 	case rowSamplePool:
-		return s.mPools[groupIndex].addByRow(s.proc, s.columns, bat)
+		s.updateProbabilityAdjustmentFactor(bat)
+		return s.mPools[groupIndex].addRows(s.proc, s.columns, bat, s.probabilityFactor)
 	case percentSamplePool:
-		return s.mPools[groupIndex].addByPercent(s.proc, s.columns, bat, s.percents)
+		return s.mPools[groupIndex].addRowsByPercent(s.proc, s.columns, bat, s.percents)
 	}
 	return moerr.NewInternalErrorNoCtx("unexpected sample type %d", s.typ)
 }
@@ -276,6 +323,7 @@ func (s *sPool) batchSampleFromColumn(offset, length int, groupList []uint64, sa
 
 	switch s.typ {
 	case rowSamplePool:
+		s.updateProbabilityAdjustmentFactor(bat)
 		for _, v := range groupList[:length] {
 			if v == 0 {
 				continue
@@ -285,7 +333,7 @@ func (s *sPool) batchSampleFromColumn(offset, length int, groupList []uint64, sa
 			s.growSiPool(groupIndex)
 			groupIndex--
 
-			err = s.sPools[groupIndex].addRow(s.proc, mp, s.columns[0], bat, row)
+			err = s.sPools[groupIndex].addOneRow(s.proc, mp, s.columns[0], bat, row, s.probabilityFactor)
 			if err != nil {
 				return err
 			}
@@ -302,7 +350,7 @@ func (s *sPool) batchSampleFromColumn(offset, length int, groupList []uint64, sa
 			s.growSiPool(groupIndex)
 			groupIndex--
 
-			err = s.sPools[groupIndex].addRowByPercent(s.proc, mp, s.columns[0], bat, row, s.percents)
+			err = s.sPools[groupIndex].addOneRowByPercent(s.proc, mp, s.columns[0], bat, row, s.percents)
 			if err != nil {
 				return err
 			}
@@ -322,6 +370,7 @@ func (s *sPool) batchSampleFromColumns(offset, length int, groupList []uint64, s
 
 	switch s.typ {
 	case rowSamplePool:
+		s.updateProbabilityAdjustmentFactor(bat)
 		for _, v := range groupList[:length] {
 			if v == 0 {
 				continue
@@ -330,7 +379,7 @@ func (s *sPool) batchSampleFromColumns(offset, length int, groupList []uint64, s
 			s.growMulPool(groupIndex, len(sampleVectors))
 			groupIndex--
 
-			err = s.mPools[groupIndex].addRow(s.proc, mp, s.columns, bat, row)
+			err = s.mPools[groupIndex].addOneRow(s.proc, mp, s.columns, bat, row, s.probabilityFactor)
 			if err != nil {
 				return err
 			}
@@ -346,7 +395,7 @@ func (s *sPool) batchSampleFromColumns(offset, length int, groupList []uint64, s
 			s.growMulPool(groupIndex, len(sampleVectors))
 			groupIndex--
 
-			err = s.mPools[groupIndex].addRowByPercent(s.proc, mp, s.columns, bat, row, s.percents)
+			err = s.mPools[groupIndex].addOneRowByPercent(s.proc, mp, s.columns, bat, row, s.percents)
 			if err != nil {
 				return err
 			}
@@ -392,7 +441,7 @@ func (s *sPool) updateReused2(columns []*vector.Vector) {
 	}
 }
 
-func (s *sPool) Output(end bool) (bat *batch.Batch, err error) {
+func (s *sPool) Result(end bool) (bat *batch.Batch, err error) {
 	if !end {
 		if s.typ == rowSamplePool {
 			return batch.EmptyBatch, nil
@@ -400,15 +449,18 @@ func (s *sPool) Output(end bool) (bat *batch.Batch, err error) {
 	}
 
 	mp := s.proc.Mp()
+	seenRows := 0
 	if len(s.sPools) > 0 {
-		bat = s.sPools[0].data.output()
+		bat = s.sPools[0].data.flush()
+		seenRows += s.sPools[0].seen
 		if bat != nil {
 			for i := 1; i < len(s.sPools); i++ {
-				b := s.sPools[i].data.output()
+				b := s.sPools[i].data.flush()
 				if b == nil {
 					continue
 				}
 
+				seenRows += s.sPools[i].seen
 				bat, err = bat.Append(s.proc.Ctx, mp, b)
 				s.proc.PutBatch(b)
 				if err != nil {
@@ -418,14 +470,16 @@ func (s *sPool) Output(end bool) (bat *batch.Batch, err error) {
 			}
 		}
 	} else if len(s.mPools) > 0 {
-		bat = s.mPools[0].data.output()
+		bat = s.mPools[0].data.flush()
+		seenRows += s.mPools[0].seen
 
 		for i := 1; i < len(s.mPools); i++ {
-			b := s.mPools[i].data.output()
+			b := s.mPools[i].data.flush()
 			if b == nil {
 				continue
 			}
 
+			seenRows += s.mPools[i].seen
 			bat, err = bat.Append(s.proc.Ctx, mp, b)
 			s.proc.PutBatch(b)
 			if err != nil {
@@ -439,6 +493,16 @@ func (s *sPool) Output(end bool) (bat *batch.Batch, err error) {
 	if bat == nil && !end {
 		return batch.EmptyBatch, nil
 	}
+
+	if s.outputRowCount {
+		bat.Vecs = append(bat.Vecs, nil)
+		bat.Vecs[len(bat.Vecs)-1], err = vector.NewConstFixed[int64](types.T_int64.ToType(), int64(seenRows), bat.RowCount(), mp)
+		if err != nil {
+			s.proc.PutBatch(bat)
+			return nil, err
+		}
+	}
+
 	return bat, nil
 }
 
@@ -454,7 +518,7 @@ type singlePool struct {
 	data poolData
 }
 
-func (sp *singlePool) addByRow(proc *process.Process, column sampleColumn, bat *batch.Batch) error {
+func (sp *singlePool) addRows(proc *process.Process, column sampleColumn, bat *batch.Batch, factor float64) error {
 	k := bat.RowCount()
 	mp := proc.Mp()
 
@@ -561,6 +625,44 @@ func (sp *singlePool) addByRow(proc *process.Process, column sampleColumn, bat *
 
 	// after some append action, batch still has rows need to add.
 	var r int
+	if factor == 1 {
+		if column.anyNull() {
+			for i := randReplaceStart; i < k; i++ {
+				if column.isNull(i) {
+					err := sp.data.appendInvalidRow(proc, mp, bat, i)
+					if err != nil {
+						return err
+					}
+					continue
+				}
+				sp.seen++
+
+				r = rand.Intn(sp.seen)
+				if r < sp.capacity {
+					err := sp.data.replaceValidRow(mp, bat, r, i)
+					if err != nil {
+						return err
+					}
+				}
+			}
+		} else {
+			for i := randReplaceStart; i < k; i++ {
+				sp.seen++
+
+				r = rand.Intn(sp.seen)
+				if r < sp.capacity {
+					err := sp.data.replaceValidRow(mp, bat, r, i)
+					if err != nil {
+						return err
+					}
+				}
+			}
+		}
+
+		return nil
+	}
+
+	floatCapacity := float64(sp.capacity)
 	if column.anyNull() {
 		for i := randReplaceStart; i < k; i++ {
 			if column.isNull(i) {
@@ -572,7 +674,7 @@ func (sp *singlePool) addByRow(proc *process.Process, column sampleColumn, bat *
 			}
 			sp.seen++
 
-			r = rand.Intn(sp.seen)
+			r = randWithFactor(floatCapacity, sp.seen, factor)
 			if r < sp.capacity {
 				err := sp.data.replaceValidRow(mp, bat, r, i)
 				if err != nil {
@@ -584,7 +686,7 @@ func (sp *singlePool) addByRow(proc *process.Process, column sampleColumn, bat *
 		for i := randReplaceStart; i < k; i++ {
 			sp.seen++
 
-			r = rand.Intn(sp.seen)
+			r = randWithFactor(floatCapacity, sp.seen, factor)
 			if r < sp.capacity {
 				err := sp.data.replaceValidRow(mp, bat, r, i)
 				if err != nil {
@@ -596,7 +698,7 @@ func (sp *singlePool) addByRow(proc *process.Process, column sampleColumn, bat *
 	return nil
 }
 
-func (sp *singlePool) addByPercent(proc *process.Process, column sampleColumn, bat *batch.Batch, percent int) error {
+func (sp *singlePool) addRowsByPercent(proc *process.Process, column sampleColumn, bat *batch.Batch, percent int) error {
 	if percent == 0 {
 		return nil
 	}
@@ -628,7 +730,7 @@ func (sp *singlePool) addByPercent(proc *process.Process, column sampleColumn, b
 	return nil
 }
 
-func (sp *singlePool) addRow(proc *process.Process, mp *mpool.MPool, column sampleColumn, bat *batch.Batch, row int) (err error) {
+func (sp *singlePool) addOneRow(proc *process.Process, mp *mpool.MPool, column sampleColumn, bat *batch.Batch, row int, factor float64) (err error) {
 	if column.isNull(row) {
 		return sp.data.appendInvalidRow(proc, mp, bat, row)
 	}
@@ -638,7 +740,12 @@ func (sp *singlePool) addRow(proc *process.Process, mp *mpool.MPool, column samp
 		sp.space--
 		err = sp.data.appendValidRow(proc, mp, bat, row, 1)
 	} else {
-		r := rand.Intn(sp.seen)
+		var r int
+		if factor == 1 {
+			r = rand.Intn(sp.seen)
+		} else {
+			r = randWithFactor(float64(sp.capacity), sp.seen, factor)
+		}
 		if r < sp.capacity {
 			err = sp.data.replaceValidRow(mp, bat, r, row)
 		}
@@ -646,7 +753,7 @@ func (sp *singlePool) addRow(proc *process.Process, mp *mpool.MPool, column samp
 	return err
 }
 
-func (sp *singlePool) addRowByPercent(proc *process.Process, mp *mpool.MPool, column sampleColumn, bat *batch.Batch, row int, percent int) (err error) {
+func (sp *singlePool) addOneRowByPercent(proc *process.Process, mp *mpool.MPool, column sampleColumn, bat *batch.Batch, row int, percent int) (err error) {
 	if percent == 0 {
 		return
 	}
@@ -716,7 +823,7 @@ func (p *multiPool) tryReplaceValidRow(mp *mpool.MPool, columns sampleColumnList
 	return p.data.replaceValidRow(mp, bat, row1, row2)
 }
 
-func (p *multiPool) addByRow(proc *process.Process, columns sampleColumnList, bat *batch.Batch) (err error) {
+func (p *multiPool) addRows(proc *process.Process, columns sampleColumnList, bat *batch.Batch, factor float64) (err error) {
 	k := bat.RowCount()
 	var i = 0
 	if !p.full {
@@ -739,25 +846,44 @@ func (p *multiPool) addByRow(proc *process.Process, columns sampleColumnList, ba
 
 	var r int
 	mp := proc.Mp()
-	for ; i < k; i++ {
-		if columns.isAllNull(i) {
-			continue
-		}
-		p.seen++
+	if factor == 1 {
+		for ; i < k; i++ {
+			if columns.isAllNull(i) {
+				continue
+			}
+			p.seen++
 
-		r = rand.Intn(p.seen)
-		if r < p.have {
-			err = p.tryReplaceValidRow(mp, columns, bat, r, i)
-			if err != nil {
-				return err
+			r = rand.Intn(p.seen)
+			if r < p.have {
+				err = p.tryReplaceValidRow(mp, columns, bat, r, i)
+				if err != nil {
+					return err
+				}
+			}
+		}
+	} else {
+		fCap := float64(p.have)
+		for ; i < k; i++ {
+			if columns.isAllNull(i) {
+				continue
+			}
+			p.seen++
+
+			r = randWithFactor(fCap, p.seen, factor)
+			if r < p.have {
+				err = p.tryReplaceValidRow(mp, columns, bat, r, i)
+				if err != nil {
+					return err
+				}
 			}
 		}
 	}
+
 	p.full = p.isFull()
 	return nil
 }
 
-func (p *multiPool) addByPercent(proc *process.Process, columns sampleColumnList, bat *batch.Batch, percent int) (err error) {
+func (p *multiPool) addRowsByPercent(proc *process.Process, columns sampleColumnList, bat *batch.Batch, percent int) (err error) {
 	if percent == 0 {
 		return nil
 	}
@@ -778,7 +904,7 @@ func (p *multiPool) addByPercent(proc *process.Process, columns sampleColumnList
 	return nil
 }
 
-func (p *multiPool) addRow(proc *process.Process, mp *mpool.MPool, columns sampleColumnList, bat *batch.Batch, row int) (err error) {
+func (p *multiPool) addOneRow(proc *process.Process, mp *mpool.MPool, columns sampleColumnList, bat *batch.Batch, row int, factor float64) (err error) {
 	if columns.isAllNull(row) {
 		return p.data.appendInvalidRow(proc, mp, bat, row)
 	}
@@ -797,7 +923,13 @@ func (p *multiPool) addRow(proc *process.Process, mp *mpool.MPool, columns sampl
 		p.full = p.isFull()
 	} else {
 		p.seen++
-		r := rand.Intn(p.seen)
+
+		var r int
+		if factor == 1 {
+			r = rand.Intn(p.seen)
+		} else {
+			r = randWithFactor(float64(p.have), p.seen, factor)
+		}
 		if r < p.have {
 			err = p.tryReplaceValidRow(mp, columns, bat, r, row)
 			if err != nil {
@@ -808,7 +940,7 @@ func (p *multiPool) addRow(proc *process.Process, mp *mpool.MPool, columns sampl
 	return nil
 }
 
-func (p *multiPool) addRowByPercent(proc *process.Process, mp *mpool.MPool, columns sampleColumnList, bat *batch.Batch, row int, percent int) (err error) {
+func (p *multiPool) addOneRowByPercent(proc *process.Process, mp *mpool.MPool, columns sampleColumnList, bat *batch.Batch, row int, percent int) (err error) {
 	if percent == 0 {
 		return
 	}

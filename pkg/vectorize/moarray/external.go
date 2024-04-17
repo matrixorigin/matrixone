@@ -109,15 +109,15 @@ func InnerProduct[T types.RealNumbers](v1, v2 []T) (float64, error) {
 }
 
 func L2Distance[T types.RealNumbers](v1, v2 []T) (float64, error) {
-	vec, err := ToGonumVectors[T](v1, v2)
-	if err != nil {
-		return 0, err
+	if len(v1) != len(v2) {
+		return 0, moerr.NewArrayInvalidOpNoCtx(len(v1), len(v2))
 	}
-
-	diff := mat.NewVecDense(vec[0].Len(), nil)
-	diff.SubVec(vec[0], vec[1])
-
-	return math.Sqrt(mat.Dot(diff, diff)), nil
+	var sumOfSquares T
+	for i := range v1 {
+		difference := v1[i] - v2[i]
+		sumOfSquares += difference * difference
+	}
+	return math.Sqrt(float64(sumOfSquares)), nil
 }
 
 func CosineDistance[T types.RealNumbers](v1, v2 []T) (float64, error) {
@@ -200,7 +200,10 @@ func NormalizeL2[T types.RealNumbers](v1 []T) ([]T, error) {
 
 	norm := mat.Norm(vec, 2)
 	if norm == 0 {
-		return nil, moerr.NewInternalErrorNoCtx("normalize_l2: cannot normalize a zero vector")
+		// NOTE: don't throw error here. If you throw error, then when a zero vector comes in the Vector Index
+		// Mapping Query, the query will fail. Instead, return the same zero vector.
+		// This is consistent with FAISS:https://github.com/facebookresearch/faiss/blob/0716bde2500edb2e18509bf05f5dfa37bd698082/faiss/utils/distances.cpp#L97
+		return v1, nil
 	}
 
 	vec.ScaleVec(1/norm, vec)

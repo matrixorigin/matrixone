@@ -20,12 +20,13 @@ import (
 	"os"
 	"testing"
 
+	"github.com/prashantv/gostub"
+	"github.com/smartystreets/goconvey/convey"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/prashantv/gostub"
-	"github.com/smartystreets/goconvey/convey"
 )
 
 var colName1, colName2 = "DATABASE()", "VARIABLE_VALUE"
@@ -35,8 +36,14 @@ func Test_initExportFileParam(t *testing.T) {
 		mrs: &MysqlResultSet{},
 		ep: &ExportConfig{
 			userConfig: &tree.ExportParam{
-				Lines:  &tree.Lines{},
-				Fields: &tree.Fields{},
+				Lines: &tree.Lines{
+					TerminatedBy: &tree.Terminated{},
+				},
+				Fields: &tree.Fields{
+					Terminated: &tree.Terminated{},
+					EnclosedBy: &tree.EnclosedBy{},
+					EscapedBy:  &tree.EscapedBy{},
+				},
 			},
 		},
 	}
@@ -60,8 +67,14 @@ func Test_openNewFile(t *testing.T) {
 			mrs: &MysqlResultSet{},
 			ep: &ExportConfig{
 				userConfig: &tree.ExportParam{
-					Lines:    &tree.Lines{},
-					Fields:   &tree.Fields{},
+					Lines: &tree.Lines{
+						TerminatedBy: &tree.Terminated{},
+					},
+					Fields: &tree.Fields{
+						Terminated: &tree.Terminated{},
+						EnclosedBy: &tree.EnclosedBy{},
+						EscapedBy:  &tree.EscapedBy{},
+					},
 					Header:   true,
 					FilePath: "test/export.csv",
 				},
@@ -77,8 +90,14 @@ func Test_openNewFile(t *testing.T) {
 			mrs: &MysqlResultSet{},
 			ep: &ExportConfig{
 				userConfig: &tree.ExportParam{
-					Lines:    &tree.Lines{},
-					Fields:   &tree.Fields{},
+					Lines: &tree.Lines{
+						TerminatedBy: &tree.Terminated{},
+					},
+					Fields: &tree.Fields{
+						Terminated: &tree.Terminated{},
+						EnclosedBy: &tree.EnclosedBy{},
+						EscapedBy:  &tree.EscapedBy{},
+					},
 					Header:   true,
 					FilePath: "test/export.csv",
 				},
@@ -109,8 +128,14 @@ func Test_formatOutputString(t *testing.T) {
 			mrs: &MysqlResultSet{},
 			ep: &ExportConfig{
 				userConfig: &tree.ExportParam{
-					Lines:    &tree.Lines{},
-					Fields:   &tree.Fields{},
+					Lines: &tree.Lines{
+						TerminatedBy: &tree.Terminated{},
+					},
+					Fields: &tree.Fields{
+						Terminated: &tree.Terminated{},
+						EnclosedBy: &tree.EnclosedBy{},
+						EscapedBy:  &tree.EscapedBy{},
+					},
 					Header:   true,
 					FilePath: "test/export.csv",
 				},
@@ -133,8 +158,14 @@ func Test_writeToCSVFile(t *testing.T) {
 			mrs: &MysqlResultSet{},
 			ep: &ExportConfig{
 				userConfig: &tree.ExportParam{
-					Lines:    &tree.Lines{},
-					Fields:   &tree.Fields{},
+					Lines: &tree.Lines{
+						TerminatedBy: &tree.Terminated{},
+					},
+					Fields: &tree.Fields{
+						Terminated: &tree.Terminated{},
+						EnclosedBy: &tree.EnclosedBy{},
+						EscapedBy:  &tree.EscapedBy{},
+					},
 					Header:   true,
 					FilePath: "test/export.csv",
 				},
@@ -203,8 +234,14 @@ func Test_writeDataToCSVFile(t *testing.T) {
 			mrs: &MysqlResultSet{},
 			ep: &ExportConfig{
 				userConfig: &tree.ExportParam{
-					Lines:    &tree.Lines{},
-					Fields:   &tree.Fields{},
+					Lines: &tree.Lines{
+						TerminatedBy: &tree.Terminated{},
+					},
+					Fields: &tree.Fields{
+						Terminated: &tree.Terminated{},
+						EnclosedBy: &tree.EnclosedBy{},
+						EscapedBy:  &tree.EscapedBy{},
+					},
 					Header:   true,
 					FilePath: "test/export.csv",
 				},
@@ -231,8 +268,14 @@ func Test_exportDataToCSVFile(t *testing.T) {
 			mrs: &MysqlResultSet{},
 			ep: &ExportConfig{
 				userConfig: &tree.ExportParam{
-					Lines:    &tree.Lines{},
-					Fields:   &tree.Fields{},
+					Lines: &tree.Lines{
+						TerminatedBy: &tree.Terminated{},
+					},
+					Fields: &tree.Fields{
+						Terminated: &tree.Terminated{},
+						EnclosedBy: &tree.EnclosedBy{},
+						EscapedBy:  &tree.EscapedBy{},
+					},
 					Header:   true,
 					FilePath: "test/export.csv",
 				},
@@ -281,8 +324,14 @@ func Test_exportDataToCSVFile(t *testing.T) {
 			mrs: &MysqlResultSet{},
 			ep: &ExportConfig{
 				userConfig: &tree.ExportParam{
-					Lines:    &tree.Lines{},
-					Fields:   &tree.Fields{},
+					Lines: &tree.Lines{
+						TerminatedBy: &tree.Terminated{},
+					},
+					Fields: &tree.Fields{
+						Terminated: &tree.Terminated{},
+						EnclosedBy: &tree.EnclosedBy{},
+						EscapedBy:  &tree.EscapedBy{},
+					},
 					Header:   true,
 					FilePath: "test/export.csv",
 				},

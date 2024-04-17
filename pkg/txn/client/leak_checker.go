@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 )
 
 // leakChecker is used to detect leak txn which is not committed or aborted.
@@ -31,13 +32,13 @@ type leakChecker struct {
 	logger         *log.MOLogger
 	actives        []activeTxn
 	maxActiveAges  time.Duration
-	leakHandleFunc func(txnID []byte, createAt time.Time, createBy string)
+	leakHandleFunc func(txnID []byte, createAt time.Time, options txn.TxnOptions)
 	stopper        *stopper.Stopper
 }
 
 func newLeakCheck(
 	maxActiveAges time.Duration,
-	leakHandleFunc func(txnID []byte, createAt time.Time, createBy string)) *leakChecker {
+	leakHandleFunc func(txnID []byte, createAt time.Time, options txn.TxnOptions)) *leakChecker {
 	logger := runtime.DefaultRuntime().Logger()
 	return &leakChecker{
 		logger:         logger,
@@ -59,18 +60,16 @@ func (lc *leakChecker) close() {
 }
 
 func (lc *leakChecker) txnOpened(
+	txnOp *txnOperator,
 	txnID []byte,
-	createBy string) {
-	if createBy == "" {
-		createBy = "unknown"
-	}
-
+	options txn.TxnOptions) {
 	lc.Lock()
 	defer lc.Unlock()
 	lc.actives = append(lc.actives, activeTxn{
-		createBy: createBy,
+		options:  options,
 		id:       txnID,
 		createAt: time.Now(),
+		txnOp:    txnOp,
 	})
 }
 
@@ -94,25 +93,36 @@ func (lc *leakChecker) check(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-time.After(lc.maxActiveAges):
-			lc.doCheck()
+			if txn, ok := lc.doCheck(); ok {
+				lc.leakHandleFunc(txn.id, txn.createAt, txn.options)
+			}
 		}
 	}
 }
 
-func (lc *leakChecker) doCheck() {
+func (lc *leakChecker) doCheck() (activeTxn, bool) {
 	lc.RLock()
 	defer lc.RUnlock()
 
 	now := time.Now()
 	for _, txn := range lc.actives {
 		if now.Sub(txn.createAt) >= lc.maxActiveAges {
-			lc.leakHandleFunc(txn.id, txn.createAt, txn.createBy)
+			if txn.txnOp != nil {
+				txn.options.Counter = txn.txnOp.counter()
+				txn.options.InRunSql = txn.txnOp.inRunSql()
+				txn.options.InCommit = txn.txnOp.inCommit()
+				txn.options.InRollback = txn.txnOp.inRollback()
+				txn.options.SessionInfo = txn.txnOp.options.SessionInfo
+			}
+			return txn, true
 		}
 	}
+	return activeTxn{}, false
 }
 
 type activeTxn struct {
-	createBy string
+	options  txn.TxnOptions
 	id       []byte
 	createAt time.Time
+	txnOp    *txnOperator
 }

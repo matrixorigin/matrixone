@@ -102,7 +102,7 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(ctx context.Context, options *Ex
 		pname = "Window"
 	case plan.Node_TIME_WINDOW:
 		pname = "Time window"
-	case plan.Node_Fill:
+	case plan.Node_FILL:
 		pname = "Fill"
 	case plan.Node_BROADCAST:
 		pname = "Broadcast"
@@ -291,7 +291,7 @@ func (ndesc *NodeDescribeImpl) GetExtraInfo(ctx context.Context, options *Explai
 		lines = append(lines, groupByInfo)
 	}
 
-	if ndesc.Node.NodeType == plan.Node_Fill {
+	if ndesc.Node.NodeType == plan.Node_FILL {
 		fillCoslInfo, err := ndesc.GetFillColsInfo(ctx, options)
 		if err != nil {
 			return nil, err
@@ -305,7 +305,7 @@ func (ndesc *NodeDescribeImpl) GetExtraInfo(ctx context.Context, options *Explai
 	}
 
 	// Get Aggregate function info
-	if len(ndesc.Node.AggList) > 0 && ndesc.Node.NodeType != plan.Node_Fill {
+	if len(ndesc.Node.AggList) > 0 && ndesc.Node.NodeType != plan.Node_FILL {
 		var listInfo string
 		var err error
 		if ndesc.Node.NodeType == plan.Node_SAMPLE {
@@ -390,6 +390,22 @@ func (ndesc *NodeDescribeImpl) GetExtraInfo(ctx context.Context, options *Explai
 	//	}
 	//	lines = append(lines, "Set columns with("+updatedesc+")")
 	//}
+
+	if len(ndesc.Node.SendMsgList) > 0 {
+		msgInfo, err := ndesc.GetSendMessageInfo(ctx, options)
+		if err != nil {
+			return nil, err
+		}
+		lines = append(lines, msgInfo)
+	}
+
+	if len(ndesc.Node.RecvMsgList) > 0 {
+		msgInfo, err := ndesc.GetRecvMessageInfo(ctx, options)
+		if err != nil {
+			return nil, err
+		}
+		lines = append(lines, msgInfo)
+	}
 	return lines, nil
 }
 
@@ -543,6 +559,9 @@ func (ndesc *NodeDescribeImpl) GetRuntimeFilteProbeInfo(ctx context.Context, opt
 			if err != nil {
 				return "", err
 			}
+			if v.MatchPrefix {
+				buf.WriteString(" Match Prefix")
+			}
 		}
 	} else if options.Format == EXPLAIN_FORMAT_JSON {
 		return "", moerr.NewNYI(ctx, "explain format json")
@@ -566,6 +585,46 @@ func (ndesc *NodeDescribeImpl) GetRuntimeFilterBuildInfo(ctx context.Context, op
 			if err != nil {
 				return "", err
 			}
+		}
+	} else if options.Format == EXPLAIN_FORMAT_JSON {
+		return "", moerr.NewNYI(ctx, "explain format json")
+	} else if options.Format == EXPLAIN_FORMAT_DOT {
+		return "", moerr.NewNYI(ctx, "explain format dot")
+	}
+	return buf.String(), nil
+}
+
+func (ndesc *NodeDescribeImpl) GetSendMessageInfo(ctx context.Context, options *ExplainOptions) (string, error) {
+	buf := bytes.NewBuffer(make([]byte, 0, 300))
+	buf.WriteString("Send Message: ")
+	if options.Format == EXPLAIN_FORMAT_TEXT {
+		first := true
+		for _, v := range ndesc.Node.SendMsgList {
+			if !first {
+				buf.WriteString(", ")
+			}
+			first = false
+			describeMessage(v, buf)
+		}
+	} else if options.Format == EXPLAIN_FORMAT_JSON {
+		return "", moerr.NewNYI(ctx, "explain format json")
+	} else if options.Format == EXPLAIN_FORMAT_DOT {
+		return "", moerr.NewNYI(ctx, "explain format dot")
+	}
+	return buf.String(), nil
+}
+
+func (ndesc *NodeDescribeImpl) GetRecvMessageInfo(ctx context.Context, options *ExplainOptions) (string, error) {
+	buf := bytes.NewBuffer(make([]byte, 0, 300))
+	buf.WriteString("Recv Message: ")
+	if options.Format == EXPLAIN_FORMAT_TEXT {
+		first := true
+		for _, v := range ndesc.Node.RecvMsgList {
+			if !first {
+				buf.WriteString(", ")
+			}
+			first = false
+			describeMessage(v, buf)
 		}
 	} else if options.Format == EXPLAIN_FORMAT_JSON {
 		return "", moerr.NewNYI(ctx, "explain format json")

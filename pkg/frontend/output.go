@@ -17,11 +17,12 @@ package frontend
 import (
 	"context"
 
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"go.uber.org/zap"
 )
 
 var _ outputPool = &outputQueue{}
@@ -103,20 +104,17 @@ func (oq *outputQueue) getEmptyRow() ([]interface{}, error) {
 flush will force the data flushed into the protocol.
 */
 func (oq *outputQueue) flush() error {
+	oq.proto.DisableAutoFlush()
+	defer oq.proto.EnableAutoFlush()
+
 	if oq.rowIdx <= 0 {
 		return nil
 	}
 	if oq.ep.needExportToFile() {
-		rsLen := oq.rowIdx
 		if err := exportDataToCSVFile(oq); err != nil {
 			logError(oq.ses, oq.ses.GetDebugString(),
 				"Error occurred while exporting to CSV file",
 				zap.Error(err))
-			return err
-		}
-		resp := oq.ses.SetNewResponse(OkResponse, rsLen, int(COM_QUERY), "", 0, 1)
-		if err2 := oq.ses.GetMysqlProtocol().SendResponse(oq.ses.GetRequestContext(), resp); err2 != nil {
-			err := moerr.NewInternalError(oq.ses.GetRequestContext(), "routine send response failed. error:%v ", err2)
 			return err
 		}
 	} else {
@@ -146,7 +144,7 @@ func (oq *outputQueue) flush() error {
 // For the background execution, we need to make a copy of the bytes. Because the data
 // has been saved in the session. Later the data will be used but then the batch.Batch has
 // been returned to the pipeline and may be reused and changed by the pipeline.
-func extractRowFromEveryVector(ses *Session, dataSet *batch.Batch, j int, oq outputPool, needCopyBytes bool) ([]interface{}, error) {
+func extractRowFromEveryVector(ses FeSession, dataSet *batch.Batch, j int, oq outputPool, needCopyBytes bool) ([]interface{}, error) {
 	row, err := oq.getEmptyRow()
 	if err != nil {
 		return nil, err
@@ -172,7 +170,7 @@ func extractRowFromEveryVector(ses *Session, dataSet *batch.Batch, j int, oq out
 }
 
 // extractRowFromVector gets the rowIndex row from the i vector
-func extractRowFromVector(ses *Session, vec *vector.Vector, i int, row []interface{}, rowIndex int, needCopyBytes bool) error {
+func extractRowFromVector(ses FeSession, vec *vector.Vector, i int, row []interface{}, rowIndex int, needCopyBytes bool) error {
 	if vec.IsConstNull() || vec.GetNulls().Contains(uint64(rowIndex)) {
 		row[i] = nil
 		return nil
@@ -183,6 +181,8 @@ func extractRowFromVector(ses *Session, vec *vector.Vector, i int, row []interfa
 		row[i] = types.DecodeJson(copyBytes(vec.GetBytesAt(rowIndex), needCopyBytes))
 	case types.T_bool:
 		row[i] = vector.GetFixedAt[bool](vec, rowIndex)
+	case types.T_bit:
+		row[i] = vector.GetFixedAt[uint64](vec, rowIndex)
 	case types.T_int8:
 		row[i] = vector.GetFixedAt[int8](vec, rowIndex)
 	case types.T_uint8:
@@ -247,7 +247,7 @@ func extractRowFromVector(ses *Session, vec *vector.Vector, i int, row []interfa
 		logError(ses, ses.GetDebugString(),
 			"Failed to extract row from vector, unsupported type",
 			zap.Int("typeID", int(vec.GetType().Oid)))
-		return moerr.NewInternalError(ses.requestCtx, "extractRowFromVector : unsupported type %d", vec.GetType().Oid)
+		return moerr.NewInternalError(ses.GetRequestContext(), "extractRowFromVector : unsupported type %d", vec.GetType().Oid)
 	}
 	return nil
 }

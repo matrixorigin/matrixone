@@ -251,6 +251,6 @@ func roundUp(v int) int {
 	return v
 }
 
-func (cs cowSlice) Name() string {
+func (cs cowSlice) TypeName() string {
 	return "lockservice.cowSlice"
 }

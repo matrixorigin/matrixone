@@ -20,29 +20,24 @@ import (
 	"strings"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/cnservice/upgrader"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	moconnector "github.com/matrixorigin/matrixone/pkg/stream/connector"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/util"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/util/export"
 	db_holder "github.com/matrixorigin/matrixone/pkg/util/export/etl/db"
-	"github.com/matrixorigin/matrixone/pkg/util/file"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/matrixorigin/matrixone/pkg/util/metric/mometric"
-	"github.com/matrixorigin/matrixone/pkg/util/sysview"
-	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"go.uber.org/zap"
-)
-
-const (
-	defaultSystemInitTimeout = time.Minute * 5
 )
 
 func (s *service) adjustSQLAddress() {
@@ -80,10 +75,6 @@ func (s *service) initTaskServiceHolder() {
 				return s.task.storageFactory
 			})
 	}
-
-	if err := s.stopper.RunTask(s.waitSystemInitCompleted); err != nil {
-		panic(err)
-	}
 }
 
 func (s *service) createTaskService(command *logservicepb.CreateTaskService) {
@@ -115,27 +106,6 @@ func (s *service) initSqlWriterFactory() {
 func (s *service) createSQLLogger(command *logservicepb.CreateTaskService) {
 	frontend.SetSpecialUser(db_holder.MOLoggerUser, []byte(command.User.Password))
 	db_holder.SetSQLWriterDBUser(db_holder.MOLoggerUser, command.User.Password)
-}
-
-func (s *service) upgrade() {
-	pu := config.NewParameterUnit(
-		&s.cfg.Frontend,
-		nil,
-		nil,
-		nil)
-	pu.StorageEngine = s.storeEngine
-	pu.TxnClient = s._txnClient
-	s.cfg.Frontend.SetDefaultValues()
-	pu.FileService = s.fileService
-	pu.LockService = s.lockService
-	moServerCtx := context.WithValue(context.Background(), config.ParameterUnitKey, pu)
-
-	ug := &upgrader.Upgrader{
-		IEFactory: func() ie.InternalExecutor {
-			return frontend.NewInternalExecutor(pu, s.mo.GetRoutineManager().GetAutoIncrCacheManager())
-		},
-	}
-	ug.Upgrade(moServerCtx)
 }
 
 func (s *service) canClaimDaemonTask(taskAccount string) bool {
@@ -242,53 +212,6 @@ func (s *service) GetTaskService() (taskservice.TaskService, bool) {
 	return s.task.holder.Get()
 }
 
-func (s *service) WaitSystemInitCompleted(ctx context.Context) error {
-	s.waitSystemInitCompleted(ctx)
-	return ctx.Err()
-}
-
-func (s *service) waitSystemInitCompleted(ctx context.Context) {
-	defer logutil.LogAsyncTask(s.logger, "cnservice/wait-system-init-task")()
-
-	startAt := time.Now()
-	s.logger.Debug("wait all init task completed task started")
-	wait := func() {
-		time.Sleep(time.Second)
-	}
-	for {
-		select {
-		case <-ctx.Done():
-			s.logger.Debug("wait all init task completed task stopped")
-			return
-		default:
-			ts, ok := s.GetTaskService()
-			if ok {
-				tasks, err := ts.QueryAsyncTask(ctx,
-					taskservice.WithTaskExecutorCond(taskservice.EQ, task.TaskCode_SystemInit),
-					taskservice.WithTaskStatusCond(task.TaskStatus_Completed))
-				if err != nil {
-					s.logger.Error("wait all init task completed failed", zap.Error(err))
-					break
-				}
-				s.logger.Debug("waiting all init task completed",
-					zap.Int("completed", len(tasks)))
-				if len(tasks) > 0 {
-					if err := file.WriteFile(s.metadataFS,
-						"./system_init_completed",
-						[]byte("OK")); err != nil {
-						panic(err)
-					}
-					return
-				}
-			}
-		}
-		wait()
-		if time.Since(startAt) > defaultSystemInitTimeout {
-			panic("wait system init timeout")
-		}
-	}
-}
-
 func (s *service) stopTask() error {
 	defer logutil.LogClose(s.logger, "cnservice/task")()
 
@@ -318,40 +241,14 @@ func (s *service) registerExecutorsLocked() {
 	s.cfg.Frontend.SetDefaultValues()
 	pu.FileService = s.fileService
 	pu.LockService = s.lockService
-	moServerCtx := context.WithValue(context.Background(), config.ParameterUnitKey, pu)
 	ieFactory := func() ie.InternalExecutor {
-		return frontend.NewInternalExecutor(pu, s.mo.GetRoutineManager().GetAutoIncrCacheManager())
+		return frontend.NewInternalExecutor()
 	}
 
 	ts, ok := s.task.holder.Get()
 	if !ok {
 		panic(moerr.NewInternalErrorNoCtx("task Service not ok"))
 	}
-	s.task.runner.RegisterExecutor(task.TaskCode_SystemInit,
-		func(ctx context.Context, t task.Task) error {
-			if err := frontend.InitSysTenant(moServerCtx, s.mo.GetRoutineManager().GetAutoIncrCacheManager()); err != nil {
-				return err
-			}
-			if err := sysview.InitSchema(moServerCtx, ieFactory); err != nil {
-				return err
-			}
-			if err := mometric.InitSchema(moServerCtx, ieFactory); err != nil {
-				return err
-			}
-			if err := motrace.InitSchema(moServerCtx, ieFactory); err != nil {
-				return err
-			}
-			// init metric/log merge task cron rule
-			if err := export.CreateCronTask(moServerCtx, task.TaskCode_MetricLogMerge, ts); err != nil {
-				return err
-			}
-
-			// init metric task
-			if err := mometric.CreateCronTask(moServerCtx, task.TaskCode_MetricStorageUsage, ts); err != nil {
-				return err
-			}
-			return nil
-		})
 
 	// init metric/log merge task executor
 	s.task.runner.RegisterExecutor(task.TaskCode_MetricLogMerge,
@@ -362,4 +259,27 @@ func (s *service) registerExecutorsLocked() {
 	// streaming connector task
 	s.task.runner.RegisterExecutor(task.TaskCode_ConnectorKafkaSink,
 		moconnector.KafkaSinkConnectorExecutor(s.logger, ts, ieFactory, s.task.runner.Attach))
+	s.task.runner.RegisterExecutor(task.TaskCode_MergeObject,
+		func(ctx context.Context, task task.Task) error {
+			metadata := task.GetMetadata()
+			var mergeTask api.MergeTaskEntry
+			err := mergeTask.Unmarshal(metadata.Context)
+			if err != nil {
+				return err
+			}
+
+			objs := make([]string, len(mergeTask.ToMergeObjs))
+			for i, b := range mergeTask.ToMergeObjs {
+				stats := objectio.ObjectStats(b)
+				objs[i] = stats.ObjectName().String()
+			}
+			sql := fmt.Sprintf("select mo_ctl('DN', 'MERGEOBJECTS', '%s.%s %s')",
+				mergeTask.DbName, mergeTask.TableName, strings.Join(objs, ","))
+			ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
+			defer cancel()
+			opts := executor.Options{}.WithAccountID(mergeTask.AccountId).WithWaitCommittedLogApplied()
+			_, err = s.sqlExecutor.Exec(ctx, sql, opts)
+			return err
+		},
+	)
 }

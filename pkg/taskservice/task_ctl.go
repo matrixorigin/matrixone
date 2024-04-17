@@ -20,17 +20,14 @@ import (
 
 // TODO: refactor to use Export function
 var (
-	disableTaskFramework atomic.Value // bool
+	disableTaskFramework atomic.Bool // bool
 )
 
-// DebugCtlTaskFramwork disable task framework
-func DebugCtlTaskFramwork(disable bool) {
+// DebugCtlTaskFramework disable task framework
+func DebugCtlTaskFramework(disable bool) {
 	disableTaskFramework.Store(disable)
 }
 
 func taskFrameworkDisabled() bool {
-	if v := disableTaskFramework.Load(); v != nil {
-		return v.(bool)
-	}
-	return false
+	return disableTaskFramework.Load()
 }

@@ -54,6 +54,8 @@ const (
 	LoopAnti
 	Mark
 	LoopMark
+	IndexJoin
+	IndexBuild
 
 	Merge
 	MergeTop
@@ -117,6 +119,11 @@ type Instruction struct {
 	// flag for analyzeInfo record the row information
 	IsFirst bool
 	IsLast  bool
+
+	CnAddr      string
+	OperatorID  int32
+	ParallelID  int32
+	MaxParallel int32
 }
 
 type Operator interface {
@@ -133,14 +140,75 @@ type Operator interface {
 	//Call calls an operator.
 	Call(proc *process.Process) (CallResult, error)
 
-	//SetInfo set operator info
-	SetInfo(info *OperatorInfo)
-
-	//AppendChild append child to operator
-	AppendChild(child Operator)
-
 	//Release an operator
 	Release()
+
+	// OperatorBase methods
+	SetInfo(info *OperatorInfo)
+	AppendChild(child Operator)
+
+	GetOperatorBase() *OperatorBase
+}
+
+type OperatorBase struct {
+	OperatorInfo
+	Children []Operator
+}
+
+func (o *OperatorBase) SetInfo(info *OperatorInfo) {
+	o.OperatorInfo = *info
+}
+
+func (o *OperatorBase) NumChildren() int {
+	return len(o.Children)
+}
+
+func (o *OperatorBase) AppendChild(child Operator) {
+	o.Children = append(o.Children, child)
+}
+
+func (o *OperatorBase) SetChildren(children []Operator) {
+	o.Children = children
+}
+
+func (o *OperatorBase) GetChildren(idx int) Operator {
+	return o.Children[idx]
+}
+
+func (o *OperatorBase) GetCnAddr() string {
+	return o.CnAddr
+}
+
+func (o *OperatorBase) GetOperatorID() int32 {
+	return o.OperatorID
+}
+
+func (o *OperatorBase) GetParalleID() int32 {
+	return o.ParallelID
+}
+
+func (o *OperatorBase) GetMaxParallel() int32 {
+	return o.MaxParallel
+}
+
+func (o *OperatorBase) GetIdx() int {
+	return o.Idx
+}
+
+func (o *OperatorBase) GetParallelIdx() int {
+	return o.ParallelIdx
+}
+
+func (o *OperatorBase) GetParallelMajor() bool {
+	return o.ParallelMajor
+}
+
+func (o *OperatorBase) GetIsFirst() bool {
+	return o.IsFirst
+}
+
+func (o *OperatorBase) GetIsLast() bool {
+	return o.IsLast
 }
 
 var CancelResult = CallResult{
@@ -196,7 +264,21 @@ type OperatorInfo struct {
 	ParallelMajor bool
 	IsFirst       bool
 	IsLast        bool
+
+	CnAddr      string
+	OperatorID  int32
+	ParallelID  int32
+	MaxParallel int32
 }
+
+func (info OperatorInfo) GetAddress() process.MessageAddress {
+	return process.MessageAddress{
+		CnAddr:     info.CnAddr,
+		OperatorID: info.OperatorID,
+		ParallelID: info.ParallelID,
+	}
+}
+
 type Instructions []Instruction
 
 func (ins *Instruction) IsBrokenNode() bool {

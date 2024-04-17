@@ -18,9 +18,15 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
-	"os"
+	"io"
 	"sync"
 	"time"
+
+	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/matrixorigin/matrixone/pkg/util/profile"
+	"go.uber.org/zap"
 
 	"github.com/fagongzi/goetty/v2"
 	"github.com/matrixorigin/matrixone/pkg/bootstrap"
@@ -44,20 +50,19 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
+	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage"
+	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 	"github.com/matrixorigin/matrixone/pkg/udf"
 	"github.com/matrixorigin/matrixone/pkg/udf/pythonservice"
 	"github.com/matrixorigin/matrixone/pkg/util/address"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
-	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
-	"github.com/matrixorigin/matrixone/pkg/util/profile"
 	"github.com/matrixorigin/matrixone/pkg/util/status"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
-	"go.uber.org/zap"
 )
 
 func NewService(
@@ -77,6 +82,7 @@ func NewService(
 
 	configKVMap, _ := dumpCnConfig(*cfg)
 	options = append(options, WithConfigData(configKVMap))
+	options = append(options, WithBootstrapOptions(bootstrap.WithUpgradeTenantBatch(cfg.UpgradeTenantBatchSize)))
 
 	// get metadata fs
 	metadataFS, err := fileservice.Get[fileservice.ReplaceableFileService](fileService, defines.LocalFileServiceName)
@@ -103,17 +109,37 @@ func NewService(
 		addressMgr:  address.NewAddressManager(cfg.ServiceHost, cfg.PortBase),
 		gossipNode:  gossipNode,
 	}
+
+	srv.requestHandler = func(ctx context.Context,
+		cnAddr string,
+		message morpc.Message,
+		cs morpc.ClientSession,
+		engine engine.Engine,
+		fService fileservice.FileService,
+		lockService lockservice.LockService,
+		queryClient qclient.QueryClient,
+		hakeeper logservice.CNHAKeeperClient,
+		udfService udf.Service,
+		cli client.TxnClient,
+		aicm *defines.AutoIncrCacheManager,
+		messageAcquirer func() morpc.Message) error {
+		return nil
+	}
+
+	for _, opt := range options {
+		opt(srv)
+	}
+	srv.stopper = stopper.NewStopper("cn-service", stopper.WithLogger(srv.logger))
+
 	srv.registerServices()
 	if _, err = srv.getHAKeeperClient(); err != nil {
 		return nil, err
 	}
-	srv.initQueryService()
-
-	srv.stopper = stopper.NewStopper("cn-service", stopper.WithLogger(srv.logger))
-
-	if err := srv.initCacheServer(); err != nil {
+	if err := srv.initQueryService(); err != nil {
 		return nil, err
 	}
+
+	srv.stopper = stopper.NewStopper("cn-service", stopper.WithLogger(srv.logger))
 
 	if err := srv.initMetadata(); err != nil {
 		return nil, err
@@ -160,7 +186,7 @@ func NewService(
 	srv.pu = pu
 	srv.pu.LockService = srv.lockService
 	srv.pu.HAKeeperClient = srv._hakeeperClient
-	srv.pu.QueryService = srv.queryService
+	srv.pu.QueryClient = srv.queryClient
 	srv.pu.UdfService = srv.udfService
 	srv._txnClient = pu.TxnClient
 
@@ -196,7 +222,7 @@ func NewService(
 		engine engine.Engine,
 		fService fileservice.FileService,
 		lockService lockservice.LockService,
-		queryService queryservice.QueryService,
+		queryClient qclient.QueryClient,
 		hakeeper logservice.CNHAKeeperClient,
 		udfService udf.Service,
 		cli client.TxnClient,
@@ -219,26 +245,17 @@ func NewService(
 }
 
 func (s *service) Start() error {
-	s.initTaskServiceHolder()
 	s.initSqlWriterFactory()
 
 	if err := s.queryService.Start(); err != nil {
 		return err
 	}
 
-	if s.cacheServer != nil {
-		if err := s.cacheServer.Start(); err != nil {
-			return err
-		}
-	}
-
 	err := s.runMoServer()
 	if err != nil {
 		return err
 	}
-	if err := s.startCNStoreHeartbeat(); err != nil {
-		return err
-	}
+
 	return s.server.Start()
 }
 
@@ -246,6 +263,9 @@ func (s *service) Close() error {
 	defer logutil.LogClose(s.logger, "cnservice")()
 
 	s.stopper.Stop()
+	if err := s.bootstrapService.Close(); err != nil {
+		return err
+	}
 	if err := s.stopFrontend(); err != nil {
 		return err
 	}
@@ -257,15 +277,17 @@ func (s *service) Close() error {
 	}
 	// stop I/O pipeline
 	blockio.Stop()
-	if err := s.gossipNode.Leave(time.Second); err != nil {
-		return err
-	}
-	if s.cacheServer != nil {
-		if err := s.cacheServer.Close(); err != nil {
+
+	if s.gossipNode != nil {
+		if err := s.gossipNode.Leave(time.Second); err != nil {
 			return err
 		}
 	}
-	return s.server.Close()
+
+	if err := s.server.Close(); err != nil {
+		return err
+	}
+	return s.lockService.Close()
 }
 
 // ID implements the frontend.BaseService interface.
@@ -281,6 +303,33 @@ func (s *service) SQLAddress() string {
 // SessionMgr implements the frontend.BaseService interface.
 func (s *service) SessionMgr() *queryservice.SessionManager {
 	return s.sessionMgr
+}
+
+func (s *service) CheckTenantUpgrade(_ context.Context, tenantID int64) error {
+	finalVersion := s.GetFinalVersion()
+	tenantFetchFunc := func() (int32, string, error) {
+		return int32(tenantID), finalVersion, nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*30)
+	defer cancel()
+	if _, err := s.bootstrapService.MaybeUpgradeTenant(ctx, tenantFetchFunc, nil); err != nil {
+		return err
+	}
+	return nil
+}
+
+// UpgradeTenant Manual command tenant upgrade entrance
+func (s *service) UpgradeTenant(ctx context.Context, tenantName string, retryCount uint32, isALLAccount bool) error {
+	ctx, cancel := context.WithTimeout(ctx, time.Minute*120)
+	defer cancel()
+	if _, err := s.bootstrapService.UpgradeTenant(ctx, tenantName, retryCount, isALLAccount); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (s *service) GetFinalVersion() string {
+	return s.bootstrapService.GetFinalVersion()
 }
 
 func (s *service) stopFrontend() error {
@@ -317,6 +366,11 @@ func (s *service) stopRPCs() error {
 	}
 	if s.queryService != nil {
 		if err := s.queryService.Close(); err != nil {
+			return err
+		}
+	}
+	if s.queryClient != nil {
+		if err := s.queryClient.Close(); err != nil {
 			return err
 		}
 	}
@@ -359,6 +413,8 @@ func (s *service) handleRequest(
 
 	go func() {
 		defer value.Cancel()
+		s.pipelines.counter.Add(1)
+		defer s.pipelines.counter.Add(-1)
 		s.requestHandler(ctx,
 			s.pipelineServiceServiceAddr(),
 			req,
@@ -366,7 +422,7 @@ func (s *service) handleRequest(
 			s.storeEngine,
 			s.fileService,
 			s.lockService,
-			s.queryService,
+			s.queryClient,
 			s._hakeeperClient,
 			s.udfService,
 			s._txnClient,
@@ -445,6 +501,8 @@ func (s *service) serverShutdown(isgraceful bool) error {
 
 func (s *service) getHAKeeperClient() (client logservice.CNHAKeeperClient, err error) {
 	s.initHakeeperClientOnce.Do(func() {
+		s.hakeeperConnected = make(chan struct{})
+
 		ctx, cancel := context.WithTimeout(
 			context.Background(),
 			s.cfg.HAKeeper.DiscoveryTimeout.Duration,
@@ -461,6 +519,10 @@ func (s *service) getHAKeeperClient() (client logservice.CNHAKeeperClient, err e
 		ss, ok := runtime.ProcessLevelRuntime().GetGlobalVariables(runtime.StatusServer)
 		if ok {
 			ss.(*status.Server).SetHAKeeperClient(client)
+		}
+
+		if err = s.startCNStoreHeartbeat(); err != nil {
+			return
 		}
 	})
 	client = s._hakeeperClient
@@ -588,14 +650,31 @@ func (s *service) getTxnClient() (c client.TxnClient, err error) {
 		if s.cfg.Txn.EnableLeakCheck == 1 {
 			opts = append(opts, client.WithEnableLeakCheck(
 				s.cfg.Txn.MaxActiveAges.Duration,
-				func(txnID []byte, createAt time.Time, createBy string) {
-					// dump all goroutines to stderr
-					profile.ProfileGoroutine(os.Stderr, 2)
-					v2.TxnLeakCounter.Inc()
-					runtime.DefaultRuntime().Logger().Error("found leak txn",
+				func(txnID []byte, createAt time.Time, createBy txn.TxnOptions) {
+					name, _ := uuid.NewV7()
+					profPath := catalog.BuildProfilePath("routine", name.String())
+
+					fields := []zap.Field{
 						zap.String("txn-id", hex.EncodeToString(txnID)),
 						zap.Time("create-at", createAt),
-						zap.String("create-by", createBy))
+						zap.String("options", createBy.String()),
+						zap.String("profile", profPath),
+					}
+					if createBy.InRunSql {
+						//the txn runs sql in compile.Run() and doest not exist
+						v2.TxnLongRunningCounter.Inc()
+						runtime.DefaultRuntime().Logger().Error("found long running txn", fields...)
+					} else if createBy.InCommit {
+						v2.TxnInCommitCounter.Inc()
+						runtime.DefaultRuntime().Logger().Error("found txn in commit", fields...)
+					} else if createBy.InRollback {
+						v2.TxnInRollbackCounter.Inc()
+						runtime.DefaultRuntime().Logger().Error("found txn in rollback", fields...)
+					} else {
+						v2.TxnLeakCounter.Inc()
+						runtime.DefaultRuntime().Logger().Error("found leak txn", fields...)
+					}
+					s.saveProfile(profPath)
 				}))
 		}
 		if s.cfg.Txn.Limit > 0 {
@@ -606,11 +685,17 @@ func (s *service) getTxnClient() (c client.TxnClient, err error) {
 			opts = append(opts,
 				client.WithMaxActiveTxn(s.cfg.Txn.MaxActive))
 		}
-		opts = append(opts,
-			client.WithPKDedupCount(s.cfg.Txn.PkDedupCount))
+		if s.cfg.Txn.PkDedupCount > 0 {
+			opts = append(opts, client.WithCheckDup())
+		}
 		opts = append(opts,
 			client.WithLockService(s.lockService),
 			client.WithNormalStateNoWait(s.cfg.Txn.NormalStateNoWait),
+			client.WithTxnOpenedCallback([]func(op client.TxnOperator){
+				func(op client.TxnOperator) {
+					trace.GetService().TxnCreated(op)
+				},
+			}),
 		)
 		c = client.NewTxnClient(
 			sender,
@@ -623,7 +708,11 @@ func (s *service) getTxnClient() (c client.TxnClient, err error) {
 
 func (s *service) initLockService() {
 	cfg := s.getLockServiceConfig()
-	s.lockService = lockservice.NewLockService(cfg)
+	s.lockService = lockservice.NewLockService(
+		cfg,
+		lockservice.WithWait(func() {
+			<-s.hakeeperConnected
+		}))
 	runtime.ProcessLevelRuntime().SetGlobalVariables(runtime.LockService, s.lockService)
 	lockservice.SetLockServiceByServiceID(s.lockService.GetServiceID(), s.lockService)
 
@@ -631,6 +720,14 @@ func (s *service) initLockService() {
 	if ok {
 		ss.(*status.Server).SetLockService(s.cfg.UUID, s.lockService)
 	}
+}
+
+func (s *service) GetSQLExecutor() executor.SQLExecutor {
+	return s.sqlExecutor
+}
+
+func (s *service) GetBootstrapService() bootstrap.Service {
+	return s.bootstrapService
 }
 
 // put the waiting-next type msg into client session's cache and return directly
@@ -677,27 +774,21 @@ func handleAssemblePipeline(ctx context.Context, message morpc.Message, cs morpc
 }
 
 func (s *service) initInternalSQlExecutor(mp *mpool.MPool) {
-	exec := compile.NewSQLExecutor(
+	s.sqlExecutor = compile.NewSQLExecutor(
 		s.pipelineServiceServiceAddr(),
 		s.storeEngine,
 		mp,
 		s._txnClient,
 		s.fileService,
-		s.queryService,
+		s.queryClient,
 		s._hakeeperClient,
 		s.udfService,
 		s.aicm)
-	runtime.ProcessLevelRuntime().SetGlobalVariables(runtime.InternalSQLExecutor, exec)
+	runtime.ProcessLevelRuntime().SetGlobalVariables(runtime.InternalSQLExecutor, s.sqlExecutor)
 }
 
 func (s *service) initIncrService() {
-	rt := runtime.ProcessLevelRuntime()
-	v, ok := rt.GetGlobalVariables(runtime.InternalSQLExecutor)
-	if !ok {
-		panic("missing internal sql executor")
-	}
-
-	store, err := incrservice.NewSQLStore(v.(executor.SQLExecutor))
+	store, err := incrservice.NewSQLStore(s.sqlExecutor)
 	if err != nil {
 		panic(err)
 	}
@@ -706,46 +797,100 @@ func (s *service) initIncrService() {
 		store,
 		s.cfg.AutoIncrement)
 	runtime.ProcessLevelRuntime().SetGlobalVariables(
-		runtime.AutoIncrmentService,
+		runtime.AutoIncrementService,
 		incrService)
 	incrservice.SetAutoIncrementServiceByID(s.cfg.UUID, incrService)
 }
 
 func (s *service) bootstrap() error {
 	s.initIncrService()
-	rt := runtime.ProcessLevelRuntime()
-	v, ok := rt.GetGlobalVariables(runtime.InternalSQLExecutor)
-	if !ok {
-		panic("missing internal sql executor")
-	}
+	s.initTxnTraceService()
 
-	b := bootstrap.NewBootstrapper(
+	rt := runtime.ProcessLevelRuntime()
+	s.bootstrapService = bootstrap.NewService(
 		&locker{hakeeperClient: s._hakeeperClient},
 		rt.Clock(),
 		s._txnClient,
-		v.(executor.SQLExecutor))
+		s.sqlExecutor,
+		s.options.bootstrapOptions...)
 
-	return s.stopper.RunTask(func(ctx context.Context) {
-		ctx, cancel := context.WithTimeout(ctx, time.Minute*5)
-		defer cancel()
-		// bootstrap cannot fail. We panic here to make sure the service can not start.
-		// If bootstrap failed, need clean all data to retry.
-		if err := b.Bootstrap(ctx); err != nil {
-			panic(err)
-		}
-	})
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute*5)
+	ctx = context.WithValue(ctx, config.ParameterUnitKey, s.pu)
+	defer cancel()
+
+	// bootstrap cannot fail. We panic here to make sure the service can not start.
+	// If bootstrap failed, need clean all data to retry.
+	if err := s.bootstrapService.Bootstrap(ctx); err != nil {
+		panic(err)
+	}
+
+	if s.cfg.AutomaticUpgrade {
+		return s.stopper.RunTask(func(ctx context.Context) {
+			ctx, cancel := context.WithTimeout(ctx, time.Minute*120)
+			defer cancel()
+			if err := s.bootstrapService.BootstrapUpgrade(ctx); err != nil {
+				if err != context.Canceled {
+					runtime.DefaultRuntime().Logger().Error("bootstrap system automatic upgrade failed by: ", zap.Error(err))
+					//panic(err)
+				}
+			}
+		})
+	}
+	return nil
 }
 
-var (
-	bootstrapKey = "_mo_bootstrap"
-)
+func (s *service) initTxnTraceService() {
+	rt := runtime.ProcessLevelRuntime()
+	ts, err := trace.NewService(
+		s.options.traceDataPath,
+		s.cfg.UUID,
+		s._txnClient,
+		rt.Clock(),
+		s.sqlExecutor,
+		trace.WithEnable(s.cfg.Txn.Trace.Enable, s.cfg.Txn.Trace.Tables),
+		trace.WithBufferSize(s.cfg.Txn.Trace.BufferSize),
+		trace.WithFlushBytes(int(s.cfg.Txn.Trace.FlushBytes)),
+		trace.WithFlushDuration(s.cfg.Txn.Trace.FlushDuration.Duration))
+	if err != nil {
+		panic(err)
+	}
+	rt.SetGlobalVariables(runtime.TxnTraceService, ts)
+}
+
+func (s *service) saveProfile(profilePath string) {
+	reader, writer := io.Pipe()
+	go func() {
+		// dump all goroutines
+		_ = profile.ProfileGoroutine(writer, 2)
+		_ = writer.Close()
+	}()
+	writeVec := fileservice.IOVector{
+		FilePath: profilePath,
+		Entries: []fileservice.IOEntry{
+			{
+				Offset:         0,
+				ReaderForWrite: reader,
+				Size:           -1,
+			},
+		},
+	}
+	ctx, cancel := context.WithTimeout(context.TODO(), time.Minute*3)
+	defer cancel()
+	err := s.etlFS.Write(ctx, writeVec)
+	if err != nil {
+		logutil.Errorf("save profile %s failed. err:%v", profilePath, err)
+		return
+	}
+}
 
 type locker struct {
 	hakeeperClient logservice.CNHAKeeperClient
 }
 
-func (l *locker) Get(ctx context.Context) (bool, error) {
-	v, err := l.hakeeperClient.AllocateIDByKeyWithBatch(ctx, bootstrapKey, 1)
+func (l *locker) Get(
+	ctx context.Context,
+	key string) (bool, error) {
+	v, err := l.hakeeperClient.AllocateIDByKeyWithBatch(ctx, key, 1)
 	if err != nil {
 		return false, err
 	}

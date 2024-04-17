@@ -19,6 +19,9 @@ type Reset struct {
 	Name Identifier
 }
 
+func (node *Reset) Free() {
+}
+
 func (node *Reset) Format(ctx *FmtCtx) {
 	ctx.WriteString("reset")
 	ctx.WriteString(" prepare ")

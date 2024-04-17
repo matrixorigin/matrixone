@@ -20,27 +20,27 @@ import (
 	"fmt"
 	"math"
 	"math/rand"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
 	"unsafe"
 
+	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
-	"github.com/tidwall/btree"
-	"go.uber.org/zap"
-
-	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/tidwall/btree"
+	"go.uber.org/zap"
 )
 
 // 1. show accounts
@@ -230,7 +230,7 @@ func (c *StorageUsageCache) setUpdateTime(t time.Time) {
 	c.lastUpdate = t
 }
 
-func (c *StorageUsageCache) Update(usage UsageData) {
+func (c *StorageUsageCache) SetOrReplace(usage UsageData) {
 	c.data.Set(usage)
 	c.setUpdateTime(time.Now())
 }
@@ -384,6 +384,9 @@ func (m *TNUsageMemo) CacheLen() int {
 func (m *TNUsageMemo) MemoryUsed() float64 {
 	cacheUsed := m.cache.MemUsed() + m.newAccCache.MemUsed()
 	memoUsed := int(unsafe.Sizeof(TNUsageMemo{})) + len(m.reqTrace)*(12+int(unsafe.Sizeof(time.Time{})))
+	extraUsed := int(unsafe.Sizeof(UsageData{})) * (len(summaryLog[0]) + len(summaryLog[1]))
+
+	memoUsed += extraUsed
 	return cacheUsed + (float64(memoUsed)/1048576.0*1e6)/1e6
 }
 
@@ -436,13 +439,19 @@ func (m *TNUsageMemo) updateHelper(cache *StorageUsageCache, usage UsageData, de
 		usage.Size = size + usage.Size
 	}
 
-	cache.Update(usage)
+	cache.SetOrReplace(usage)
 }
 
-// Update does setting or updating
-func (m *TNUsageMemo) Update(usage UsageData, del bool) {
+// DeltaUpdate does setting or updating with delta size (delta.Size)
+func (m *TNUsageMemo) DeltaUpdate(delta UsageData, del bool) {
 	m.pending = true
-	m.updateHelper(m.cache, usage, del)
+	m.updateHelper(m.cache, delta, del)
+}
+
+// Replace replaces the old usage with newUsage
+func (m *TNUsageMemo) Replace(new UsageData) {
+	m.pending = true
+	m.cache.SetOrReplace(new)
 }
 
 func (m *TNUsageMemo) Delete(usage UsageData) {
@@ -518,7 +527,7 @@ func (m *TNUsageMemo) applyDeletes(
 func (m *TNUsageMemo) applySegInserts(inserts []UsageData, ckpData *CheckpointData, mp *mpool.MPool) {
 	for _, usage := range inserts {
 		appendToStorageUsageBat(ckpData, usage, false, mp)
-		m.Update(usage, false)
+		m.DeltaUpdate(usage, false)
 	}
 }
 
@@ -527,7 +536,7 @@ func (m *TNUsageMemo) applySegDeletes(deletes []UsageData, ckpData *CheckpointDa
 		// can not delete a non-exist usage, right?
 		if _, exist := m.cache.Get(usage); exist {
 			appendToStorageUsageBat(ckpData, usage, true, mp)
-			m.Update(usage, true)
+			m.DeltaUpdate(usage, true)
 		}
 	}
 }
@@ -640,7 +649,7 @@ func (m *TNUsageMemo) EstablishFromCKPs(c *catalog.Catalog) {
 		}
 		logutil.Info("[storage usage] replay:",
 			zap.String("remove old deleted db/tbl", buf.String()),
-			zap.Int("delayed %d tbl", len(m.pendingReplay.delayed)))
+			zap.Int("delayed tbl", len(m.pendingReplay.delayed)))
 	}()
 
 	for x := range m.pendingReplay.datas {
@@ -674,10 +683,14 @@ func (m *TNUsageMemo) EstablishFromCKPs(c *catalog.Catalog) {
 				if m.pendingReplay.delayed == nil {
 					m.pendingReplay.delayed = make(map[uint64]UsageData)
 				}
-				m.pendingReplay.delayed[usage.TblId] = usage
+				if old, ok := m.pendingReplay.delayed[usage.TblId]; !ok {
+					m.pendingReplay.delayed[usage.TblId] = usage
+				} else {
+					old.Size += usage.Size
+					m.pendingReplay.delayed[usage.TblId] = old
+				}
 			}
-
-			m.Update(usage, false)
+			m.DeltaUpdate(usage, false)
 		}
 
 		if m.pendingReplay.vers[x] < CheckpointVersion11 {
@@ -690,7 +703,7 @@ func (m *TNUsageMemo) EstablishFromCKPs(c *catalog.Catalog) {
 
 		for y := 0; y < len(accCol); y++ {
 			usage := UsageData{accCol[y], dbCol[y], tblCol[y], sizeCol[y]}
-			m.Update(usage, true)
+			m.DeltaUpdate(usage, true)
 		}
 	}
 
@@ -725,6 +738,9 @@ const UsageBatMetaTableId uint64 = StorageUsageMagic
 var lastInsUsage UsageData = zeroUsageData
 var lastDelUsage UsageData = zeroUsageData
 
+// 0: insert, 1: delete
+var summaryLog [2][]UsageData
+
 // this function will accumulate all size of one table into one row.
 // [acc1, db1, table1, size1]  \
 // [acc1, db1, table1, size2]    ===> [acc1, db1, table1, size1 + size2 + size3]
@@ -735,14 +751,28 @@ func appendToStorageUsageBat(data *CheckpointData, usage UsageData, del bool, mp
 		vector.AppendFixed[uint64](vecs[UsageAccID], usage.AccId, false, mp)
 		vector.AppendFixed[uint64](vecs[UsageDBID], usage.DbId, false, mp)
 		vector.AppendFixed[uint64](vecs[UsageTblID], usage.TblId, false, mp)
+
+		// new table
+		if del {
+			summaryLog[1] = append(summaryLog[1], usage)
+		} else {
+			summaryLog[0] = append(summaryLog[0], usage)
+		}
 	}
 
 	updateFunc := func(vecs []*vector.Vector, size uint64) {
 		vector.SetFixedAt[uint64](vecs[UsageSize], vecs[UsageSize].Length()-1, size)
+
+		if del {
+			summaryLog[1][len(summaryLog[1])-1].Size = size
+		} else {
+			summaryLog[0][len(summaryLog[0])-1].Size = size
+		}
 	}
 
 	tableChanged := func(last UsageData) bool {
-		return !(last.AccId == usage.AccId && last.DbId == usage.DbId && last.TblId == usage.TblId)
+		changed := !(last.AccId == usage.AccId && last.DbId == usage.DbId && last.TblId == usage.TblId)
+		return changed
 	}
 
 	entranceFunc := func(last *UsageData, batIdx uint16) {
@@ -797,41 +827,76 @@ func updateStorageUsageMeta(data *CheckpointData, tid uint64, start, end int32, 
 	}
 }
 
-func tryUpdateDataFromOldVersion(collector *GlobalCollector) string {
+// putCacheBack2Track correct the margin of error happened in incremental checkpoint
+func putCacheBack2Track(collector *BaseCollector) (string, int) {
 	memo := collector.UsageMemo
-	if len(memo.pendingReplay.delayed) == 0 {
-		return ""
-	}
 
 	var buf bytes.Buffer
 
-	tblChanges := make(map[uint64]int64)
+	tblChanges := make(map[[3]uint64]int64)
 
-	usages := objects2Usages(collector.Usage.SegDeletes)
+	usages := objects2Usages(collector.Usage.ObjDeletes)
 	for idx := range usages {
-		tblChanges[usages[idx].TblId] -= int64(usages[idx].Size)
+		uniqueTbl := [3]uint64{usages[idx].AccId, usages[idx].DbId, usages[idx].TblId}
+		tblChanges[uniqueTbl] -= int64(usages[idx].Size)
 	}
 
-	usages = objects2Usages(collector.Usage.SegInserts)
+	usages = objects2Usages(collector.Usage.ObjInserts)
 	for idx := range usages {
-		tblChanges[usages[idx].TblId] += int64(usages[idx].Size)
+		uniqueTbl := [3]uint64{usages[idx].AccId, usages[idx].DbId, usages[idx].TblId}
+		tblChanges[uniqueTbl] += int64(usages[idx].Size)
 	}
 
-	for id, size := range tblChanges {
+	delDbs := make(map[uint64]struct{})
+	delTbls := make(map[uint64]struct{})
+	for _, del := range collector.Usage.Deletes {
+		switch e := del.(type) {
+		case *catalog.DBEntry:
+			delDbs[e.ID] = struct{}{}
+		case *catalog.TableEntry:
+			delTbls[e.ID] = struct{}{}
+		}
+	}
+
+	if len(tblChanges) == 0 {
+		return "", 0
+	}
+
+	memo.GetCache().ClearForUpdate()
+
+	for uniqueTbl, size := range tblChanges {
 		if size <= 0 {
 			size = 0
 		}
-		if usage, ok := memo.pendingReplay.delayed[id]; ok {
-			memo.Update(usage, true)
-			usage.Size = uint64(size)
-			memo.Update(usage, false)
-			delete(memo.pendingReplay.delayed, id)
 
-			buf.WriteString(fmt.Sprintf("[u-tbl]%d_%d_%d_%d; ",
-				usage.AccId, usage.DbId, usage.TblId, usage.Size))
+		if _, ok := delDbs[uniqueTbl[1]]; ok {
+			continue
+		}
+
+		if _, ok := delTbls[uniqueTbl[2]]; ok {
+			continue
+		}
+
+		memo.Replace(UsageData{
+			Size:  uint64(size),
+			TblId: uniqueTbl[2],
+			DbId:  uniqueTbl[1],
+			AccId: uniqueTbl[0],
+		})
+
+		if len(memo.pendingReplay.delayed) == 0 {
+			continue
+		}
+
+		if usage, ok := memo.pendingReplay.delayed[uniqueTbl[2]]; ok {
+			buf.WriteString(fmt.Sprintf("[u-tbl]%d_%d_%d_(o)%d_(n)%d; ",
+				usage.AccId, usage.DbId, usage.TblId, usage.Size, size))
+
+			delete(memo.pendingReplay.delayed, uniqueTbl[2])
 		}
 	}
-	return buf.String()
+
+	return buf.String(), memo.CacheLen()
 }
 
 func applyChanges(collector *BaseCollector, tnUsageMemo *TNUsageMemo) string {
@@ -839,17 +904,62 @@ func applyChanges(collector *BaseCollector, tnUsageMemo *TNUsageMemo) string {
 
 	// must apply seg insert first
 	// step 1: apply seg insert (non-appendable, committed)
-	usage := objects2Usages(collector.Usage.SegInserts)
+	usage := objects2Usages(collector.Usage.ObjInserts)
 	tnUsageMemo.applySegInserts(usage, collector.data, collector.Allocator())
 
 	// step 2: apply db, tbl deletes
 	log := tnUsageMemo.applyDeletes(collector.Usage.Deletes, collector.data, collector.Allocator())
 
 	// step 3: apply seg deletes
-	usage = objects2Usages(collector.Usage.SegDeletes)
+	usage = objects2Usages(collector.Usage.ObjDeletes)
 	tnUsageMemo.applySegDeletes(usage, collector.data, collector.Allocator())
 
 	return log
+}
+
+func doSummary(ckp string, fields ...zap.Field) {
+	defer func() {
+		summaryLog[0] = summaryLog[0][:0]
+		summaryLog[1] = summaryLog[1][:0]
+
+		lastInsUsage = zeroUsageData
+		lastDelUsage = zeroUsageData
+	}()
+
+	sort.Slice(summaryLog[0], func(i, j int) bool { return usageLess(summaryLog[0][i], summaryLog[0][j]) })
+	sort.Slice(summaryLog[1], func(i, j int) bool { return usageLess(summaryLog[1][i], summaryLog[1][j]) })
+
+	var buf bytes.Buffer
+	buf.WriteString(fmt.Sprintf("\nCKP[%s]\t%s\n", ckp, time.Now().UTC().String()))
+
+	format := "\t%19d\t%19d\t%19d\t%19.6fmb"
+	accumulated := int64(0)
+
+	for idx := range summaryLog[0] {
+		buf.WriteString(fmt.Sprintf(format+" -> i\n",
+			summaryLog[0][idx].AccId,
+			summaryLog[0][idx].DbId,
+			summaryLog[0][idx].TblId,
+			float64(summaryLog[0][idx].Size)/(1024*1024)))
+
+		accumulated += int64(summaryLog[0][idx].Size)
+	}
+
+	for idx := range summaryLog[1] {
+		buf.WriteString(fmt.Sprintf(format+" -> d\n",
+			summaryLog[1][idx].AccId,
+			summaryLog[1][idx].DbId,
+			summaryLog[1][idx].TblId,
+			float64(summaryLog[1][idx].Size)/(1024*1024)))
+
+		accumulated -= int64(summaryLog[1][idx].Size)
+	}
+
+	buf.WriteString(fmt.Sprintf("accumulated size in this ckp: %19.6fmb, ",
+		float64(accumulated)/(1024*1024)))
+
+	fields = append(fields, zap.String("storage usage summary when ckp", buf.String()))
+	logutil.Info(fmt.Sprintf("storage usage [%s]", ckp), fields...)
 }
 
 func FillUsageBatOfGlobal(collector *GlobalCollector) {
@@ -857,34 +967,37 @@ func FillUsageBatOfGlobal(collector *GlobalCollector) {
 
 	collector.UsageMemo.EnterProcessing()
 	defer func() {
-		collector.UsageMemo.LeaveProcessing()
 		v2.TaskGCkpCollectUsageDurationHistogram.Observe(time.Since(start).Seconds())
+		collector.UsageMemo.LeaveProcessing()
 	}()
 
-	log1 := tryUpdateDataFromOldVersion(collector)
+	log1, cnt := putCacheBack2Track(collector.BaseCollector)
 	log2 := collector.UsageMemo.ClearDroppedAccounts(collector.Usage.ReservedAccIds)
 	collector.UsageMemo.replayIntoGCKP(collector)
 
-	logutil.Info("[storage usage] CKP[G]",
+	doSummary("G",
 		zap.String("update old data", log1),
+		zap.Int("tables back to track", cnt),
 		zap.String("accounts cleaned", log2))
 }
 
 func FillUsageBatOfIncremental(collector *IncrementalCollector) {
 	start := time.Now()
+	var memoryUsed float64
 
 	collector.UsageMemo.EnterProcessing()
 	defer func() {
-		collector.UsageMemo.LeaveProcessing()
-		v2.TaskStorageUsageCacheMemUsedGauge.Set(collector.UsageMemo.MemoryUsed())
+		v2.TaskStorageUsageCacheMemUsedGauge.Set(memoryUsed)
 		v2.TaskICkpCollectUsageDurationHistogram.Observe(time.Since(start).Seconds())
+		collector.UsageMemo.LeaveProcessing()
 	}()
 
 	log1 := applyChanges(collector.BaseCollector, collector.UsageMemo)
 	//log2 := applyTransfer(collector.BaseCollector, collector.UsageMemo)
 
-	logutil.Info("[storage usage] CKP[I]",
-		zap.Float64("cache mem used", collector.UsageMemo.MemoryUsed()),
+	memoryUsed = collector.UsageMemo.MemoryUsed()
+	doSummary("I",
+		zap.Float64("cache mem used", memoryUsed),
 		zap.String("applied deletes", log1))
 }
 
@@ -1088,13 +1201,13 @@ func CorrectUsageWrongPlacement(c *catalog.Catalog) (int, float64, error) {
 			anyTransferred++
 			transferredSize += float64(usages[idx].Size)
 
-			memo.Update(usages[idx], true)
+			memo.DeltaUpdate(usages[idx], true)
 			buf.WriteString(fmt.Sprintf("[td-tbl]%d_%d_%d_%d; ",
 				usages[idx].AccId, usages[idx].DbId, usages[idx].TblId, usages[idx].Size))
 			//memo.pendingTransfer.deletes = append(memo.pendingTransfer.deletes, usages[idx])
 
 			usages[idx].AccId = pairs[usages[idx].DbId]
-			memo.Update(usages[idx], false)
+			memo.DeltaUpdate(usages[idx], false)
 			buf.WriteString(fmt.Sprintf("[ti-tbl]%d_%d_%d_%d; ",
 				usages[idx].AccId, usages[idx].DbId, usages[idx].TblId, usages[idx].Size))
 			//memo.pendingTransfer.inserts = append(memo.pendingTransfer.inserts, usages[idx])
@@ -1106,4 +1219,44 @@ func CorrectUsageWrongPlacement(c *catalog.Catalog) (int, float64, error) {
 		zap.String(fmt.Sprintf("transferred %d tbl, %f mb", anyTransferred, transferredSize), buf.String()))
 
 	return anyTransferred, transferredSize, nil
+}
+
+func EliminateErrorsOnCache(c *catalog.Catalog, end types.TS) int {
+	collector := BaseCollector{}
+	loop := catalog.LoopProcessor{}
+	loop.ObjectFn = func(entry *catalog.ObjectEntry) error {
+		if entry.GetTable().GetDB().HasDropCommitted() || entry.GetTable().HasDropCommitted() {
+			return nil
+		}
+
+		if entry.IsAppendable() || !entry.IsCommitted() {
+			return nil
+		}
+
+		entry.Lock()
+		createTS := entry.GetCreatedAtLocked()
+		if createTS.GreaterEq(&end) {
+			entry.Unlock()
+			return nil
+		}
+		entry.Unlock()
+
+		if entry.HasDropCommitted() {
+			collector.Usage.ObjDeletes = append(collector.Usage.ObjDeletes, entry)
+		} else {
+			collector.Usage.ObjInserts = append(collector.Usage.ObjInserts, entry)
+		}
+
+		return nil
+	}
+
+	c.RecurLoop(&loop)
+
+	collector.UsageMemo = c.GetUsageMemo().(*TNUsageMemo)
+
+	collector.UsageMemo.EnterProcessing()
+	defer collector.UsageMemo.LeaveProcessing()
+	_, cnt := putCacheBack2Track(&collector)
+
+	return cnt
 }

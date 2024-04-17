@@ -54,7 +54,7 @@ var (
 	defaultColDefs = []*plan.ColDef{
 		{
 			Name: "col",
-			Typ: &plan.Type{
+			Typ: plan.Type{
 				Id:          int32(types.T_varchar),
 				NotNullable: false,
 				Width:       4,
@@ -62,14 +62,14 @@ var (
 		},
 		{
 			Name: "seq",
-			Typ: &plan.Type{
+			Typ: plan.Type{
 				Id:          int32(types.T_int32),
 				NotNullable: false,
 			},
 		},
 		{
 			Name: "key",
-			Typ: &plan.Type{
+			Typ: plan.Type{
 				Id:          int32(types.T_varchar),
 				NotNullable: false,
 				Width:       256,
@@ -77,7 +77,7 @@ var (
 		},
 		{
 			Name: "path",
-			Typ: &plan.Type{
+			Typ: plan.Type{
 				Id:          int32(types.T_varchar),
 				NotNullable: false,
 				Width:       256,
@@ -85,14 +85,14 @@ var (
 		},
 		{
 			Name: "index",
-			Typ: &plan.Type{
+			Typ: plan.Type{
 				Id:          int32(types.T_int32),
 				NotNullable: false,
 			},
 		},
 		{
 			Name: "value",
-			Typ: &plan.Type{
+			Typ: plan.Type{
 				Id:          int32(types.T_varchar),
 				NotNullable: false,
 				Width:       1024,
@@ -100,7 +100,7 @@ var (
 		},
 		{
 			Name: "this",
-			Typ: &plan.Type{
+			Typ: plan.Type{
 				Id:          int32(types.T_varchar),
 				NotNullable: false,
 				Width:       1024,
@@ -137,10 +137,12 @@ func newTestCase(m *mpool.MPool, attrs []string, jsons, paths []string, outers [
 			Attrs:    attrs,
 			Rets:     colDefs,
 			FuncName: "unnest",
-			info: &vm.OperatorInfo{
-				Idx:     0,
-				IsFirst: false,
-				IsLast:  false,
+			OperatorBase: vm.OperatorBase{
+				OperatorInfo: vm.OperatorInfo{
+					Idx:     0,
+					IsFirst: false,
+					IsLast:  false,
+				},
 			},
 		},
 		jsons:    jsons,
@@ -243,7 +245,7 @@ func makeConstInputExprs(jsons, paths []string, jsonType string, outers []bool) 
 		typeId = int32(types.T_json)
 	}
 	ret[0] = &plan.Expr{
-		Typ: &plan.Type{
+		Typ: plan.Type{
 			Id:    typeId,
 			Width: 256,
 		},
@@ -266,7 +268,7 @@ func makeColExprs(jsonType string, paths []string, outers []bool) []*plan.Expr {
 		typeId = int32(types.T_json)
 	}
 	ret[0] = &plan.Expr{
-		Typ: &plan.Type{
+		Typ: plan.Type{
 			Id: typeId,
 		},
 		Expr: &plan.Expr_Col{
@@ -281,7 +283,7 @@ func makeColExprs(jsonType string, paths []string, outers []bool) []*plan.Expr {
 
 func appendOtherExprs(ret []*plan.Expr, paths []string, outers []bool) []*plan.Expr {
 	ret[1] = &plan.Expr{
-		Typ: &plan.Type{
+		Typ: plan.Type{
 			Id:    int32(types.T_varchar),
 			Width: 256,
 		},
@@ -294,7 +296,7 @@ func appendOtherExprs(ret []*plan.Expr, paths []string, outers []bool) []*plan.E
 		},
 	}
 	ret[2] = &plan.Expr{
-		Typ: &plan.Type{
+		Typ: plan.Type{
 			Id: int32(types.T_bool),
 		},
 		Expr: &plan.Expr_Lit{
@@ -309,17 +311,12 @@ func appendOtherExprs(ret []*plan.Expr, paths []string, outers []bool) []*plan.E
 }
 
 func resetChildren(arg *Argument, bat *batch.Batch) {
-	if len(arg.children) == 0 {
-		arg.AppendChild(&value_scan.Argument{
-			Batchs: []*batch.Batch{bat},
+	arg.SetChildren(
+		[]vm.Operator{
+			&value_scan.Argument{
+				Batchs: []*batch.Batch{bat},
+			},
 		})
-
-	} else {
-		arg.children = arg.children[:0]
-		arg.AppendChild(&value_scan.Argument{
-			Batchs: []*batch.Batch{bat},
-		})
-	}
 }
 
 func cleanResult(result *vm.CallResult, proc *process.Process) {

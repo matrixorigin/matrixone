@@ -85,9 +85,9 @@ func CreatePool[T ReusableObject](
 
 	switch defaultSPI {
 	case SyncBased:
-		pools[v.Name()] = newSyncPoolBased(new, reset, opts)
+		pools[v.TypeName()] = newSyncPoolBased(new, reset, opts)
 	case MpoolBased:
-		pools[v.Name()] = newMpoolBased(mpool.MB*5, opts)
+		pools[v.TypeName()] = newMpoolBased(mpool.MB*5, opts)
 	}
 }
 
@@ -116,7 +116,7 @@ func Free[T ReusableObject](v *T, p Pool[T]) {
 }
 
 func get[T ReusableObject](v T) Pool[T] {
-	if pool, ok := pools[v.Name()]; ok {
+	if pool, ok := pools[v.TypeName()]; ok {
 		return pool.(Pool[T])
 	}
 	return nil

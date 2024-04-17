@@ -33,17 +33,49 @@ const (
 
 	// MOAutoIncrTable mo auto increment table name
 	MOAutoIncrTable = "mo_increment_columns"
+	// TableTailAttr are attrs in table tail
+	TableTailAttrCommitTs = "__mo_%1_commit_time"
+	TableTailAttrAborted  = "__mo_%1_aborted"
+	TableTailAttrPKVal    = "__mo_%1_pk_val"
+
+	MOAccountTable = "mo_account"
+	// MOVersionTable mo version table. This table records information about the
+	// versions of the MO cluster that have been upgraded. In other words, you can
+	// query this table to find out all the versions of the MO cluster that have
+	// been running.
+	MOVersionTable = "mo_version"
+	// MOUpgradeTable mo upgrade table. This table records the MO cluster version
+	// upgrade paths, including upgrade paths for intermediate versions that are
+	// upgraded across versions.
+	MOUpgradeTable = "mo_upgrade"
+	// MOUpgradeTenantTable MO is a cloud-native, multi-tenant database, and when
+	// versions are upgraded, it may be necessary to upgrade all tenant-related metadata.
+	// This table is used to record all the tenant records that need to be upgraded
+	MOUpgradeTenantTable = "mo_upgrade_tenant"
+
+	// MOForeignKeys saves the fk relationships
+	MOForeignKeys = "mo_foreign_keys"
+
+	// MoDataBaseConstrant =
 )
 
 var InternalColumns = map[string]int8{
-	Row_ID:                   0,
-	PrefixPriColName:         0,
-	PrefixCBColName:          0,
-	PrefixIndexTableName:     0,
-	CPrimaryKeyColName:       0,
-	FakePrimaryKeyColName:    0,
-	IndexTableIndexColName:   0,
-	IndexTablePrimaryColName: 0,
+	Row_ID:                                     0,
+	PrefixPriColName:                           0,
+	PrefixCBColName:                            0,
+	PrefixIndexTableName:                       0,
+	CPrimaryKeyColName:                         0,
+	FakePrimaryKeyColName:                      0,
+	IndexTableIndexColName:                     0,
+	IndexTablePrimaryColName:                   0,
+	SystemSI_IVFFLAT_TblCol_Metadata_key:       0,
+	SystemSI_IVFFLAT_TblCol_Metadata_val:       0,
+	SystemSI_IVFFLAT_TblCol_Centroids_version:  0,
+	SystemSI_IVFFLAT_TblCol_Centroids_id:       0,
+	SystemSI_IVFFLAT_TblCol_Centroids_centroid: 0,
+	SystemSI_IVFFLAT_TblCol_Entries_version:    0,
+	SystemSI_IVFFLAT_TblCol_Entries_id:         0,
+	SystemSI_IVFFLAT_TblCol_Entries_entry:      0,
 }
 
 var InternalTableNames = map[string]int8{
@@ -85,11 +117,17 @@ const (
 	// MOSysDaemonTask is the table name of daemon task table in mo_task.
 	MOSysDaemonTask = "sys_daemon_task"
 
+	// MOSysAsyncTask is the table name of async task table in mo_task.
+	MOSysAsyncTask = "sys_async_task"
+
 	// MOStages if the table name of mo_stages table in mo_cataglog.
 	MO_STAGES = "mo_stages"
 
 	// MO_PUBS publication meta table
 	MO_PUBS = "mo_pubs"
+
+	// MO_SNAPSHOTS
+	MO_SNAPSHOTS = "mo_snapshots"
 )
 
 const (
@@ -100,6 +138,7 @@ const (
 
 	MO_SYSTEM_METRICS = "system_metrics"
 	MO_METRIC         = "metric"
+	MO_SQL_STMT_CU    = "sql_statement_cu"
 
 	// default database name for catalog
 	MO_CATALOG  = "mo_catalog"
@@ -235,7 +274,12 @@ const (
 	// locks to the Lock operator in pessimistic transaction mode.
 	FakePrimaryKeyColName = "__mo_fake_pk_col"
 
-	/************ 1. IVF_FLAT Secondary Index ************/
+	/************ 1. Master Index  ************/
+
+	MasterIndexTableIndexColName   = IndexTableIndexColName
+	MasterIndexTablePrimaryColName = IndexTablePrimaryColName
+
+	/************ 2. IVF_FLAT Secondary Index ************/
 
 	// IVF_FLAT Table Types
 	SystemSI_IVFFLAT_TblType_Metadata  = "metadata"
@@ -255,6 +299,7 @@ const (
 	SystemSI_IVFFLAT_TblCol_Entries_version = "__mo_index_centroid_fk_version"
 	SystemSI_IVFFLAT_TblCol_Entries_id      = "__mo_index_centroid_fk_id"
 	SystemSI_IVFFLAT_TblCol_Entries_pk      = IndexTablePrimaryColName
+	SystemSI_IVFFLAT_TblCol_Entries_entry   = "__mo_index_centroid_fk_entry"
 )
 
 const (
@@ -692,18 +737,25 @@ var (
 	MoColumnsTableDefs = []engine.TableDef{}
 	// used by memengine or tae or cn
 	MoTableMetaDefs = []engine.TableDef{}
+
+	MoDatabaseConstraint = []byte{}
+	MoTableConstraint    = []byte{}
+	MoColumnConstraint   = []byte{}
 )
 
 var (
 	QueryResultPath     string
 	QueryResultMetaPath string
 	QueryResultMetaDir  string
+	//ProfileDir holds all profiles dumped by the runtime/pprof
+	ProfileDir string
 )
 
 func init() {
 	QueryResultPath = fileservice.JoinPath(defines.SharedFileServiceName, "/query_result/%s_%s_%d.blk")
 	QueryResultMetaPath = fileservice.JoinPath(defines.SharedFileServiceName, "/query_result_meta/%s_%s.blk")
 	QueryResultMetaDir = fileservice.JoinPath(defines.SharedFileServiceName, "/query_result_meta")
+	ProfileDir = fileservice.JoinPath(defines.ETLFileServiceName, "/profile")
 }
 
 const QueryResultName = "%s_%s_%d.blk"

@@ -19,15 +19,15 @@ import (
 	"encoding/json"
 	"strings"
 
-	"github.com/matrixorigin/matrixone/pkg/testutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 type MockCompilerContext struct {
@@ -40,6 +40,11 @@ type MockCompilerContext struct {
 
 	// ctx default: nil
 	ctx context.Context
+}
+
+func (m *MockCompilerContext) ReplacePlan(execPlan *plan.Execute) (*plan.Plan, tree.Statement, error) {
+	//TODO implement me
+	panic("implement me")
 }
 
 func (m *MockCompilerContext) CheckSubscriptionValid(subName, accName string, pubName string) error {
@@ -70,6 +75,8 @@ func (m *MockCompilerContext) ResolveVariable(varName string, isSystemVar, isGlo
 	} else {
 		vars["sql_mode"] = "ONLY_FULL_GROUP_BY"
 	}
+
+	vars["foreign_key_checks"] = int64(1)
 
 	if result, ok := vars[varName]; ok {
 		return result, nil
@@ -278,6 +285,7 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 			{"dat_createsql", types.T_varchar, false, 1024, 0},
 			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
 		},
+		pks: []int{0},
 	}
 	moSchema["mo_tables"] = &Schema{
 		cols: []col{
@@ -287,6 +295,7 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 			{"account_id", types.T_uint32, false, 0, 0},
 			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
 		},
+		pks: []int{0, 1},
 	}
 	moSchema["mo_columns"] = &Schema{
 		cols: []col{
@@ -311,8 +320,12 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 			{"att_is_hidden", types.T_bool, false, 0, 0},
 			{"attr_has_update", types.T_int8, false, 0, 0},
 			{"attr_update", types.T_varchar, false, 2048, 0},
+			{"att_attr_is_clusterby", types.T_int8, false, 0, 0},
+			{"attr_seqnum", types.T_int8, false, 0, 0},
+			{"attr_enum", types.T_varchar, false, 2048, 0},
 			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
 		},
+		pks: []int{0},
 	}
 	moSchema["mo_user"] = &Schema{
 		cols: []col{
@@ -329,6 +342,7 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 			{"default_role", types.T_int32, false, 50, 0},
 			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
 		},
+		pks: []int{0},
 	}
 
 	moSchema["mo_role_privs"] = &Schema{
@@ -368,6 +382,7 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 			{"database_collation", types.T_varchar, false, 64, 0},
 			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
 		},
+		pks: []int{0},
 	}
 
 	moSchema["mo_indexes"] = &Schema{
@@ -389,6 +404,7 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 			{"index_table_name", types.T_varchar, true, 50, 0},
 			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
 		},
+		pks: []int{0},
 	}
 
 	moSchema["mo_role"] = &Schema{
@@ -400,6 +416,7 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 			{"created_time", types.T_timestamp, false, 0, 0},
 			{"comments", types.T_varchar, false, 2048, 0},
 		},
+		pks: []int{0},
 	}
 
 	moSchema["mo_stages"] = &Schema{
@@ -412,6 +429,20 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 			{"created_time", types.T_timestamp, false, 0, 0},
 			{"comment", types.T_varchar, false, 2048, 0},
 		},
+	}
+
+	moSchema["mo_snapshots"] = &Schema{
+		cols: []col{
+			{"snapshot_id", types.T_uuid, false, 100, 0},
+			{"sname", types.T_varchar, false, 64, 0},
+			{"ts", types.T_int64, false, 50, 0},
+			{"level", types.T_enum, false, 50, 0},
+			{"account_name", types.T_varchar, false, 50, 0},
+			{"database_name", types.T_varchar, false, 50, 0},
+			{"table_name", types.T_varchar, false, 50, 0},
+			{"obj_id", types.T_uint64, false, 100, 0},
+		},
+		pks: []int{0},
 	}
 
 	//---------------------------------------------constraint test schema---------------------------------------------------------
@@ -641,7 +672,7 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 			for idx, col := range table.cols {
 				colDefs = append(colDefs, &ColDef{
 					ColId: uint64(idx),
-					Typ: &plan.Type{
+					Typ: plan.Type{
 						Id:          int32(col.Id),
 						NotNullable: !col.Nullable,
 						Width:       col.Width,
@@ -678,8 +709,23 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 			if len(table.pks) == 1 {
 				tableDef.Pkey = &plan.PrimaryKeyDef{
 					PkeyColName: colDefs[table.pks[0]].Name,
+					Cols:        []uint64{uint64(table.pks[0])},
 					Names:       []string{colDefs[table.pks[0]].Name},
 					CompPkeyCol: colDefs[table.pks[0]],
+				}
+			} else if len(table.pks) > 1 {
+				names := make([]string, len(table.pks))
+				cols := make([]uint64, len(table.pks))
+				for pkidx := range table.pks {
+					names = append(names, colDefs[table.pks[pkidx]].Name)
+					cols = append(cols, uint64(pkidx))
+				}
+				pkName := catalog.PrefixCBColName + "_" + tableName
+				tableDef.Pkey = &plan.PrimaryKeyDef{
+					PkeyColName: pkName,
+					Names:       names,
+					Cols:        cols,
+					CompPkeyCol: MakeHiddenColDefByName(pkName),
 				}
 			}
 
@@ -852,8 +898,8 @@ func (m *MockCompilerContext) GetPrimaryKeyDef(dbName string, tableName string) 
 	return defs
 }
 
-func (m *MockCompilerContext) Stats(obj *ObjectRef) bool {
-	return false
+func (m *MockCompilerContext) Stats(obj *ObjectRef) (*pb.StatsInfo, error) {
+	return nil, nil
 }
 
 func (m *MockCompilerContext) GetStatsCache() *StatsCache {
@@ -894,6 +940,10 @@ func (m *MockCompilerContext) GetQueryingSubscription() *SubscriptionMeta {
 }
 func (m *MockCompilerContext) IsPublishing(dbName string) (bool, error) {
 	return false, nil
+}
+
+func (m *MockCompilerContext) ResolveSnapshotTsWithSnapShotName(snapshotName string) (int64, error) {
+	return 0, nil
 }
 
 type MockOptimizer struct {

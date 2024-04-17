@@ -122,7 +122,7 @@ func (c *client) AsyncSend(ctx context.Context, request *pb.Request) (*morpc.Fut
 		switch request.Method {
 		case pb.Method_ForwardLock:
 			sid = getUUIDFromServiceIdentifier(request.Lock.Options.ForwardTo)
-			c.cluster.GetCNService(
+			c.cluster.GetCNServiceWithoutWorkingState(
 				clusterservice.NewServiceIDSelector(sid),
 				func(s metadata.CNService) bool {
 					address = s.LockServiceAddress
@@ -133,7 +133,15 @@ func (c *client) AsyncSend(ctx context.Context, request *pb.Request) (*morpc.Fut
 			pb.Method_GetTxnLock,
 			pb.Method_KeepRemoteLock:
 			sid = getUUIDFromServiceIdentifier(request.LockTable.ServiceID)
-			c.cluster.GetCNService(
+			c.cluster.GetCNServiceWithoutWorkingState(
+				clusterservice.NewServiceIDSelector(sid),
+				func(s metadata.CNService) bool {
+					address = s.LockServiceAddress
+					return false
+				})
+		case pb.Method_ValidateService:
+			sid := getUUIDFromServiceIdentifier(request.ValidateService.ServiceID)
+			c.cluster.GetCNServiceWithoutWorkingState(
 				clusterservice.NewServiceIDSelector(sid),
 				func(s metadata.CNService) bool {
 					address = s.LockServiceAddress
@@ -141,19 +149,17 @@ func (c *client) AsyncSend(ctx context.Context, request *pb.Request) (*morpc.Fut
 				})
 		case pb.Method_GetWaitingList:
 			sid = getUUIDFromServiceIdentifier(request.GetWaitingList.Txn.CreatedOn)
-			c.cluster.GetCNService(
+			c.cluster.GetCNServiceWithoutWorkingState(
 				clusterservice.NewServiceIDSelector(sid),
 				func(s metadata.CNService) bool {
 					address = s.LockServiceAddress
 					return false
 				})
 		default:
-			c.cluster.GetTNService(
-				clusterservice.NewSelector(),
-				func(d metadata.TNService) bool {
-					address = d.LockServiceAddress
-					return false
-				})
+			values := c.cluster.GetAllTNServices()
+			if len(values) > 0 {
+				address = values[0].LockServiceAddress
+			}
 		}
 		if address != "" {
 			break
@@ -164,7 +170,7 @@ func (c *client) AsyncSend(ctx context.Context, request *pb.Request) (*morpc.Fut
 	}
 	if address == "" {
 		var cns []string
-		c.cluster.GetCNService(
+		c.cluster.GetCNServiceWithoutWorkingState(
 			clusterservice.NewSelectAll(),
 			func(s metadata.CNService) bool {
 				cns = append(cns, s.ServiceID)
@@ -174,6 +180,7 @@ func (c *client) AsyncSend(ctx context.Context, request *pb.Request) (*morpc.Fut
 			zap.String("target", sid),
 			zap.Any("cns", cns),
 			zap.String("request", request.DebugString()))
+
 	}
 	return c.client.Send(ctx, address, request)
 }

@@ -17,6 +17,7 @@ package clusterservice
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/log"
@@ -29,11 +30,19 @@ import (
 
 // GetMOCluster get mo cluster from process level runtime
 func GetMOCluster() MOCluster {
-	v, ok := runtime.ProcessLevelRuntime().GetGlobalVariables(runtime.ClusterService)
-	if !ok {
-		panic("no mocluster service")
+	timeout := time.Second * 10
+	now := time.Now()
+	for {
+		v, ok := runtime.ProcessLevelRuntime().GetGlobalVariables(runtime.ClusterService)
+		if !ok {
+			if time.Since(now) > timeout {
+				panic("no mocluster service")
+			}
+			time.Sleep(time.Second)
+			continue
+		}
+		return v.(MOCluster)
 	}
-	return v.(MOCluster)
 }
 
 // Option options for create cluster
@@ -44,14 +53,10 @@ func WithServices(
 	cnServices []metadata.CNService,
 	tnServices []metadata.TNService) Option {
 	return func(c *cluster) {
-		c.mu.Lock()
-		defer c.mu.Unlock()
-		for _, s := range tnServices {
-			c.mu.tnServices[s.ServiceID] = s
-		}
-		for _, s := range cnServices {
-			c.mu.cnServices[s.ServiceID] = s
-		}
+		new := c.copyServices()
+		new.addCN(cnServices)
+		new.addTN(tnServices)
+		c.services.Store(new)
 	}
 }
 
@@ -70,12 +75,8 @@ type cluster struct {
 	forceRefreshC   chan struct{}
 	readyOnce       sync.Once
 	readyC          chan struct{}
-	mu              struct {
-		sync.RWMutex
-		cnServices map[string]metadata.CNService
-		tnServices map[string]metadata.TNService
-	}
-	options struct {
+	services        atomic.Pointer[services]
+	options         struct {
 		disableRefresh bool
 	}
 }
@@ -98,8 +99,8 @@ func NewMOCluster(
 		readyC:          make(chan struct{}),
 		refreshInterval: refreshInterval,
 	}
-	c.mu.cnServices = make(map[string]metadata.CNService, 1024)
-	c.mu.tnServices = make(map[string]metadata.TNService, 1024)
+
+	c.services.Store(&services{})
 
 	for _, opt := range opts {
 		opt(c)
@@ -119,9 +120,8 @@ func NewMOCluster(
 func (c *cluster) GetCNService(selector Selector, apply func(metadata.CNService) bool) {
 	c.waitReady()
 
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	for _, cn := range c.mu.cnServices {
+	s := c.services.Load()
+	for _, cn := range s.cn {
 		// If the all field is false, the work state of CN service MUST be
 		// working, and then we could do the filter job. If the state is not
 		// working, means that the CN may be marked as draining and is going
@@ -138,12 +138,24 @@ func (c *cluster) GetCNService(selector Selector, apply func(metadata.CNService)
 	}
 }
 
+func (c *cluster) GetCNServiceWithoutWorkingState(selector Selector, apply func(metadata.CNService) bool) {
+	c.waitReady()
+
+	s := c.services.Load()
+	for _, cn := range s.cn {
+		if selector.filterCN(cn) {
+			if !apply(cn) {
+				return
+			}
+		}
+	}
+}
+
 func (c *cluster) GetTNService(selector Selector, apply func(metadata.TNService) bool) {
 	c.waitReady()
 
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	for _, tn := range c.mu.tnServices {
+	s := c.services.Load()
+	for _, tn := range s.tn {
 		if selector.filterTN(tn) {
 			if !apply(tn) {
 				return
@@ -152,7 +164,16 @@ func (c *cluster) GetTNService(selector Selector, apply func(metadata.TNService)
 	}
 }
 
+func (c *cluster) GetAllTNServices() []metadata.TNService {
+	c.waitReady()
+	s := c.services.Load()
+	return s.tn
+}
+
 func (c *cluster) ForceRefresh(sync bool) {
+	if c.options.disableRefresh {
+		return
+	}
 	if sync {
 		c.refresh()
 		return
@@ -187,6 +208,24 @@ func (c *cluster) DebugUpdateCNLabel(uuid string, kvs map[string][]string) error
 		return err
 	}
 	return nil
+}
+
+func (c *cluster) RemoveCN(id string) {
+	new := c.copyServices()
+	values := new.cn[:0]
+	for _, s := range new.cn {
+		if s.ServiceID != id {
+			values = append(values, s)
+		}
+	}
+	new.cn = values
+	c.services.Store(new)
+}
+
+func (c *cluster) AddCN(s metadata.CNService) {
+	new := c.copyServices()
+	new.cn = append(new.cn, s)
+	c.services.Store(new)
 }
 
 func (c *cluster) waitReady() {
@@ -231,31 +270,35 @@ func (c *cluster) refresh() {
 		zap.Int("cn-count", len(details.CNStores)),
 		zap.Int("dn-count", len(details.TNStores)))
 
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	for k := range c.mu.cnServices {
-		delete(c.mu.cnServices, k)
-	}
-	for k := range c.mu.tnServices {
-		delete(c.mu.tnServices, k)
-	}
+	new := &services{}
 	for _, cn := range details.CNStores {
 		v := newCNService(cn)
-		c.mu.cnServices[cn.UUID] = v
+		new.addCN([]metadata.CNService{v})
 		if c.logger.Enabled(zap.DebugLevel) {
 			c.logger.Debug("cn service added", zap.String("cn", v.DebugString()))
 		}
 	}
 	for _, tn := range details.TNStores {
 		v := newTNService(tn)
-		c.mu.tnServices[tn.UUID] = v
+		new.addTN([]metadata.TNService{v})
 		if c.logger.Enabled(zap.DebugLevel) {
 			c.logger.Debug("dn service added", zap.String("dn", v.DebugString()))
 		}
 	}
+	c.services.Store(new)
 	c.readyOnce.Do(func() {
 		close(c.readyC)
 	})
+}
+
+func (c *cluster) copyServices() *services {
+	new := &services{}
+	old := c.services.Load()
+	if old != nil {
+		new.addCN(old.cn)
+		new.addTN(old.tn)
+	}
+	return new
 }
 
 func newCNService(cn logpb.CNStore) metadata.CNService {
@@ -286,4 +329,17 @@ func newTNService(tn logpb.TNStore) metadata.TNService {
 		})
 	}
 	return v
+}
+
+type services struct {
+	cn []metadata.CNService
+	tn []metadata.TNService
+}
+
+func (s *services) addCN(values []metadata.CNService) {
+	s.cn = append(s.cn, values...)
+}
+
+func (s *services) addTN(values []metadata.TNService) {
+	s.tn = append(s.tn, values...)
 }

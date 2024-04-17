@@ -147,6 +147,22 @@ func (cc *CatalogCache) GetTableById(databaseId, tblId uint64) *TableItem {
 	return rel
 }
 
+// GetTableByName returns the table item whose name is tableName in the database.
+func (cc *CatalogCache) GetTableByName(databaseID uint64, tableName string) *TableItem {
+	var rel *TableItem
+	key := &TableItem{
+		DatabaseId: databaseID,
+	}
+	cc.tables.data.Ascend(key, func(item *TableItem) bool {
+		if item.Name == tableName {
+			rel = item
+			return false
+		}
+		return true
+	})
+	return rel
+}
+
 func (cc *CatalogCache) Databases(accountId uint32, ts timestamp.Timestamp) []string {
 	var rs []string
 
@@ -283,6 +299,7 @@ func (cc *CatalogCache) GetDatabase(db *DatabaseItem) bool {
 			item.Name == db.Name {
 			find = true
 			db.Id = item.Id
+			db.Rowid = item.Rowid
 			db.CreateSql = item.CreateSql
 			db.Typ = item.Typ
 		}
@@ -653,7 +670,7 @@ func getTableDef(tblItem *TableItem, coldefs []engine.TableDef) *plan.TableDef {
 			cols = append(cols, &plan.ColDef{
 				ColId: attr.Attr.ID,
 				Name:  attr.Attr.Name,
-				Typ: &plan.Type{
+				Typ: plan.Type{
 					Id:          int32(attr.Attr.Type.Oid),
 					Width:       attr.Attr.Type.Width,
 					Scale:       attr.Attr.Type.Scale,

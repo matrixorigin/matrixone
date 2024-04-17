@@ -16,13 +16,15 @@ package cnservice
 
 import (
 	"context"
+
+	"github.com/matrixorigin/matrixone/pkg/bootstrap"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
-	"github.com/matrixorigin/matrixone/pkg/queryservice"
+	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/udf"
@@ -41,10 +43,23 @@ func WithLogger(logger *zap.Logger) Option {
 	}
 }
 
-// WithTaskStorageFactory setup the special task strorage factory
+// WithTaskStorageFactory setup the special task storage factory
 func WithTaskStorageFactory(factory taskservice.TaskStorageFactory) Option {
 	return func(s *service) {
 		s.task.storageFactory = factory
+	}
+}
+
+// WithBootstrapOptions setup bootstrap options
+func WithBootstrapOptions(options ...bootstrap.Option) Option {
+	return func(s *service) {
+		s.options.bootstrapOptions = options
+	}
+}
+
+func WithTxnTraceData(traceDataPath string) Option {
+	return func(s *service) {
+		s.options.traceDataPath = traceDataPath
 	}
 }
 
@@ -56,7 +71,7 @@ func WithMessageHandle(f func(ctx context.Context,
 	engine engine.Engine,
 	fs fileservice.FileService,
 	lockService lockservice.LockService,
-	queryService queryservice.QueryService,
+	queryClient qclient.QueryClient,
 	hakeeper logservice.CNHAKeeperClient,
 	udfService udf.Service,
 	cli client.TxnClient,

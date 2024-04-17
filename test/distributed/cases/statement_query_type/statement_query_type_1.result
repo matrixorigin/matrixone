@@ -1,0 +1,187 @@
+drop account if exists bvt_query_type_part1;
+create account if not exists `bvt_query_type_part1` ADMIN_NAME 'admin' IDENTIFIED BY '123456';
+create database statement_query_type;
+begin;
+commit;
+start transaction;
+rollback;
+drop database if exists test_db;
+create database test_db;
+use test_db;
+drop table if exists test_table;
+create table test_table(
+col1 int,
+col2 varchar
+);
+create view test_view as select * from test_table;
+show create database test_db;
+Database    Create Database
+test_db    CREATE DATABASE `test_db`
+show create table test_table;
+Table    Create Table
+test_table    CREATE TABLE `test_table` (\n`col1` INT DEFAULT NULL,\n`col2` VARCHAR(65535) DEFAULT NULL\n)
+show create view test_view;
+View    Create View    character_set_client    collation_connection
+test_view    create view test_view as select * from test_table;    utf8mb4    utf8mb4_general_ci
+show triggers;
+Trigger    Event    Table    Statement    Timing    Created    sql_mode    Definer    character_set_client    collation_connection    Database Collation
+show procedure status;
+Db    Name    Type    Definer    Modified    Created    Security_type    Comment    character_set_client    collation_connection    Database Collation
+show config;
+1
+show events;
+1
+show plugins;
+1
+show profiles;
+1
+show privileges;
+1
+show tables;
+Tables_in_test_db
+test_table
+test_view
+show collation like 'utf8mb4_general_ci';
+Collation    Charset    Id    Default    Compiled    Sortlen    Pad_attribute
+utf8mb4_general_ci    utf8mb4    45        Yes    1    PAD SPACE
+show collation like 'utf8mb4_general_ci%';
+Collation    Charset    Id    Default    Compiled    Sortlen    Pad_attribute
+utf8mb4_general_ci    utf8mb4    45        Yes    1    PAD SPACE
+show index from test_table;
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
+values row(1,1), row(2,2), row(3,3) order by column_0 desc;
+column_0    column_1
+3    3
+2    2
+1    1
+WITH cte1 AS (SELECT 1),cte2 AS (SELECT 2) SELECT * FROM cte1 join cte2;
+1    2
+1    2
+select * from unnest('{"a":1}') as f;
+col    seq    key    path    index    value    this
+UNNEST_DEFAULT    0    a    $.a    null    1    {"a": 1}
+insert into test_table values (1,'a'),(2,'b'),(3,'c');
+update test_table set col2='xxx' where col1=1;
+create account test_account admin_name = 'test_name' identified by '111' open comment 'tenant_test';
+internal error: do not have privilege to execute the statement
+create role test_role;
+create user user_name identified by 'password';
+create database if not exists db1;
+grant create table,drop table on database *.* to test_role;
+revoke test_role from user_name;
+drop user user_name;
+drop role test_role;
+drop account test_account;
+internal error: do not have privilege to execute the statement
+drop database db1;
+create database db2;
+create table table_2(
+col1 int,
+col2 varchar
+);
+create view view_2 as select * from table_2;
+create index index_table_2 on table_2(col1);
+drop index index_table_2 on table_2;
+drop view view_2;
+drop table table_2;
+drop database db2;
+drop table if exists test_01;
+create table test_01(a int, b varchar);
+show create table test_01;
+Table    Create Table
+test_01    CREATE TABLE `test_01` (\n`a` INT DEFAULT NULL,\n`b` VARCHAR(65535) DEFAULT NULL\n)
+explain select * from test_01;
+QUERY PLAN
+Project
+  ->  Table Scan on test_db.test_01
+delete from test_01 where a=1;
+truncate table test_01;
+drop table test_01;
+drop database test_db;
+use statement_query_type;
+create database test_db;
+begin;
+use test_db;
+create table test_table(
+col1 int,
+col2 varchar
+);
+create view test_view as select * from test_table;
+show create database test_db;
+Database    Create Database
+test_db    CREATE DATABASE `test_db`
+show create table test_table;
+Table    Create Table
+test_table    CREATE TABLE `test_table` (\n`col1` INT DEFAULT NULL,\n`col2` VARCHAR(65535) DEFAULT NULL\n)
+show triggers;
+Trigger    Event    Table    Statement    Timing    Created    sql_mode    Definer    character_set_client    collation_connection    Database Collation
+show procedure status;
+Db    Name    Type    Definer    Modified    Created    Security_type    Comment    character_set_client    collation_connection    Database Collation
+show config;
+1
+show events;
+1
+show plugins;
+1
+show profiles;
+1
+show privileges;
+1
+show tables;
+Tables_in_test_db
+test_table
+test_view
+show index from test_table;
+Table    Non_unique    Key_name    Seq_in_index    Column_name    Collation    Cardinality    Sub_part    Packed    Null    Index_type    Comment    Index_comment    Index_params    Visible    Expression
+values row(1,1), row(2,2), row(3,3) order by column_0 desc;
+column_0    column_1
+3    3
+2    2
+1    1
+WITH cte1 AS (SELECT 1),cte2 AS (SELECT 2) SELECT * FROM cte1 join cte2;
+1    2
+1    2
+select * from unnest('{"a":1}') as f;
+col    seq    key    path    index    value    this
+UNNEST_DEFAULT    0    a    $.a    null    1    {"a": 1}
+create account test_account admin_name = 'test_name' identified by '111' open comment 'tenant_test';
+internal error: do not have privilege to execute the statement
+create role test_role;
+internal error: administrative command is unsupported in transactions
+create user user_name identified by 'password';
+internal error: administrative command is unsupported in transactions
+create database if not exists db1;
+internal error: CREATE/DROP of database is not supported in transactions
+grant create table,drop table on database *.* to test_role;
+internal error: administrative command is unsupported in transactions
+revoke test_role from user_name;
+internal error: administrative command is unsupported in transactions
+drop user user_name;
+internal error: administrative command is unsupported in transactions
+drop role test_role;
+internal error: administrative command is unsupported in transactions
+drop account test_account;
+internal error: do not have privilege to execute the statement
+drop database db1;
+internal error: CREATE/DROP of database is not supported in transactions
+create database db2;
+internal error: CREATE/DROP of database is not supported in transactions
+create table table_2(
+col1 int,
+col2 varchar
+);
+create view view_2 as select * from table_2;
+create index index_table_2 on table_2(col1);
+drop index index_table_2 on table_2;
+drop view view_2;
+drop table table_2;
+drop database db2;
+internal error: CREATE/DROP of database is not supported in transactions
+prepare s1 from select * from test_table where col1=?;
+set @a=2;
+execute s1 using @a;
+col1    col2
+deallocate prepare s1;
+rollback;
+use system;
+drop account if exists bvt_query_type_part1;

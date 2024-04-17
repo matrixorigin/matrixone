@@ -25,7 +25,7 @@ import (
 
 /// sort things
 
-func sort[T any](col containers.Vector, lessFunc LessFunc[T], n int) SortSlice[T] {
+func sort[T any](col containers.Vector, lessFunc lessFunc[T], n int) SortSlice[T] {
 	dataWithIdx := NewSortSlice(n, lessFunc)
 	if col.HasNull() {
 		for i := 0; i < n; i++ {
@@ -46,7 +46,7 @@ func sort[T any](col containers.Vector, lessFunc LessFunc[T], n int) SortSlice[T
 	return dataWithIdx
 }
 
-func Sort[T any](col containers.Vector, lessFunc LessFunc[T], idx []int32) (ret containers.Vector) {
+func Sort[T any](col containers.Vector, lessFunc lessFunc[T], idx []int32) (ret containers.Vector) {
 	dataWithIdx := sort(col, lessFunc, len(idx))
 
 	// make col sorted
@@ -99,19 +99,19 @@ func mergeVarlen(
 	}
 
 	nBlk := len(col)
-	heap := NewHeapSlice(nBlk, bytesLess)
+	heap := newHeapSlice(nBlk, bytesLess)
 	for i := 0; i < nBlk; i++ {
 		if col[i].IsNull(0) {
-			heap.Append(HeapElem[[]byte]{isNull: true, src: uint32(i), next: 1})
+			heap.Append(heapElem[[]byte]{isNull: true, src: uint32(i), next: 1})
 		} else {
-			heap.Append(HeapElem[[]byte]{data: col[i].GetBytesAt(0), src: uint32(i), next: 1})
+			heap.Append(heapElem[[]byte]{data: col[i].GetBytesAt(0), src: uint32(i), next: 1})
 		}
 	}
 	heapInit(heap)
 	k := 0
 	for i := 0; i < len(toLayout); i++ {
 		for j := 0; j < int(toLayout[i]); j++ {
-			top := heapPop(&heap)
+			top := heapPop(heap)
 			// update sortidx and mapping for k-th sorted element
 			sortidx[k] = top.src
 			mapping[offset[top.src]+top.next-1] = uint32(k)
@@ -126,9 +126,9 @@ func mergeVarlen(
 			// find next element to heap
 			if int(top.next) < int(fromLayout[top.src]) {
 				if col[top.src].IsNull(uint64(top.next)) {
-					heapPush(&heap, HeapElem[[]byte]{isNull: true, src: top.src, next: top.next + 1})
+					heapPush(heap, heapElem[[]byte]{isNull: true, src: top.src, next: top.next + 1})
 				} else {
-					heapPush(&heap, HeapElem[[]byte]{data: col[top.src].GetBytesAt(int(top.next)), src: top.src, next: top.next + 1})
+					heapPush(heap, heapElem[[]byte]{data: col[top.src].GetBytesAt(int(top.next)), src: top.src, next: top.next + 1})
 				}
 			}
 		}
@@ -139,7 +139,7 @@ func mergeVarlen(
 func mergeFixed[T any](
 	col, ret []*vector.Vector,
 	sortidx, mapping []uint32,
-	lessFunc LessFunc[T],
+	lessFunc lessFunc[T],
 	fromLayout, toLayout []uint32,
 	m *mpool.MPool,
 ) {
@@ -150,12 +150,12 @@ func mergeFixed[T any](
 	}
 
 	nBlk := len(col)
-	heap := NewHeapSlice(nBlk, lessFunc)
+	heap := newHeapSlice(nBlk, lessFunc)
 	for i := 0; i < nBlk; i++ {
 		if col[i].IsNull(0) {
-			heap.Append(HeapElem[T]{isNull: true, src: uint32(i), next: 1})
+			heap.Append(heapElem[T]{isNull: true, src: uint32(i), next: 1})
 		} else {
-			heap.Append(HeapElem[T]{data: vector.GetFixedAt[T](col[i], 0), src: uint32(i), next: 1})
+			heap.Append(heapElem[T]{data: vector.GetFixedAt[T](col[i], 0), src: uint32(i), next: 1})
 		}
 	}
 	heapInit(heap)
@@ -163,7 +163,7 @@ func mergeFixed[T any](
 	k := 0
 	for i := 0; i < len(toLayout); i++ {
 		for j := 0; j < int(toLayout[i]); j++ {
-			top := heapPop(&heap)
+			top := heapPop(heap)
 			// update sortidx and mapping for k-th sorted element
 			sortidx[k] = top.src
 			mapping[offset[top.src]+top.next-1] = uint32(k)
@@ -178,9 +178,9 @@ func mergeFixed[T any](
 			// find next element to heap
 			if int(top.next) < int(fromLayout[top.src]) {
 				if col[top.src].IsNull(uint64(top.next)) {
-					heapPush(&heap, HeapElem[T]{isNull: true, src: top.src, next: top.next + 1})
+					heapPush(heap, heapElem[T]{isNull: true, src: top.src, next: top.next + 1})
 				} else {
-					heapPush(&heap, HeapElem[T]{data: vector.GetFixedAt[T](col[top.src], int(top.next)), src: top.src, next: top.next + 1})
+					heapPush(heap, heapElem[T]{data: vector.GetFixedAt[T](col[top.src], int(top.next)), src: top.src, next: top.next + 1})
 				}
 			}
 		}
@@ -215,6 +215,8 @@ func Merge(
 		switch typ.Oid {
 		case types.T_bool:
 			mergeFixed[bool](column, ret, sortidx, mapping, boolLess, fromLayout, toLayout, m)
+		case types.T_bit:
+			mergeFixed[uint64](column, ret, sortidx, mapping, numericLess[uint64], fromLayout, toLayout, m)
 		case types.T_int8:
 			mergeFixed[int8](column, ret, sortidx, mapping, numericLess[int8], fromLayout, toLayout, m)
 		case types.T_int16:
@@ -321,6 +323,8 @@ func Multiplex(
 		switch typ.Oid {
 		case types.T_bool:
 			multiplexFixed[bool](column, ret, src, fromLayout, toLayout, m)
+		case types.T_bit:
+			multiplexFixed[uint64](column, ret, src, fromLayout, toLayout, m)
 		case types.T_int8:
 			multiplexFixed[int8](column, ret, src, fromLayout, toLayout, m)
 		case types.T_int16:

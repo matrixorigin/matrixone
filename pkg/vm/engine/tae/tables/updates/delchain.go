@@ -86,6 +86,9 @@ func (chain *DeleteChain) StringLocked() string {
 		line++
 		return true
 	})
+	if line == 1 {
+		return ""
+	}
 	return msg
 }
 
@@ -296,7 +299,8 @@ func (chain *DeleteChain) CollectDeletesInRange(
 		chain.LoopChain(func(n *DeleteNode) bool {
 			// Merged node is a loop breaker
 			if n.IsMerged() {
-				if n.GetCommitTSLocked().Greater(endTs) {
+				commitTS := n.GetCommitTSLocked()
+				if commitTS.Greater(&endTs) {
 					return true
 				}
 				if mask == nil {
@@ -353,6 +357,8 @@ func (chain *DeleteChain) HasDeleteIntentsPreparedInLocked(from, to types.TS) (f
 	return
 }
 
+func (chain *DeleteChain) ResetPersistedMask() { chain.persistedMask = &nulls.Bitmap{} }
+
 func mergeDelete(mask *nulls.Bitmap, node *DeleteNode) {
 	if node == nil || node.mask == nil {
 		return
@@ -387,8 +393,8 @@ func (chain *DeleteChain) CollectDeletesLocked(
 					}
 				} else {
 					ts := txn.GetStartTS()
-					rt := chain.mvcc.meta.GetBlockData().GetRuntime()
-					tsMapping := rt.TransferDelsMap.GetDelsForBlk(chain.mvcc.meta.ID).Mapping
+					rt := chain.mvcc.meta.GetObjectData().GetRuntime()
+					tsMapping := rt.TransferDelsMap.GetDelsForBlk(*objectio.NewBlockidWithObjectID(&chain.mvcc.meta.ID, chain.mvcc.blkID)).Mapping
 					if tsMapping == nil {
 						logutil.Warnf("flushtabletail check special dels for %s, no tsMapping", chain.mvcc.meta.ID.String())
 						return true
@@ -401,7 +407,7 @@ func (chain *DeleteChain) CollectDeletesLocked(
 							continue
 						}
 						// if the ts can't see the del, then remove it from merged
-						if committs.Greater(ts) {
+						if committs.Greater(&ts) {
 							merged.Del(uint64(row))
 						}
 					}

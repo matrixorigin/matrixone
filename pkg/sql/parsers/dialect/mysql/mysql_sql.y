@@ -152,6 +152,8 @@ import (
     subPartition *tree.SubPartition
     subPartitions []*tree.SubPartition
 
+    upgrade_target *tree.Target
+
     subquery *tree.Subquery
     funcExpr *tree.FuncExpr
 
@@ -253,6 +255,9 @@ import (
     timeSliding *tree.Sliding
     timeFill *tree.Fill
     fillMode tree.FillMode
+
+    snapshotObject tree.ObejectInfo
+
 }
 
 %token LEX_ERROR
@@ -276,9 +281,9 @@ import (
 %right <str> '('
 %left <str> ')'
 %nonassoc LOWER_THAN_STRING
-%nonassoc <str> ID AT_ID AT_AT_ID STRING VALUE_ARG LIST_ARG COMMENT COMMENT_KEYWORD QUOTE_ID STAGE CREDENTIALS STAGES
-%token <item> INTEGRAL HEX BIT_LITERAL FLOAT
-%token <str>  HEXNUM
+%nonassoc <str> ID AT_ID AT_AT_ID STRING VALUE_ARG LIST_ARG COMMENT COMMENT_KEYWORD QUOTE_ID STAGE CREDENTIALS STAGES SNAPSHOTS
+%token <item> INTEGRAL HEX FLOAT
+%token <str>  HEXNUM BIT_LITERAL
 %token <str> NULL TRUE FALSE
 %nonassoc LOWER_THAN_CHARSET
 %nonassoc <str> CHARSET
@@ -347,7 +352,7 @@ import (
 %token <str> PROPERTIES
 
 // Secondary Index
-%token <str> PARSER VISIBLE INVISIBLE BTREE HASH RTREE BSI IVFFLAT
+%token <str> PARSER VISIBLE INVISIBLE BTREE HASH RTREE BSI IVFFLAT MASTER
 %token <str> ZONEMAP LEADING BOTH TRAILING UNKNOWN LISTS OP_TYPE REINDEX
 
 
@@ -416,14 +421,18 @@ import (
 // Match
 %token <str> MATCH AGAINST BOOLEAN LANGUAGE WITH QUERY EXPANSION WITHOUT VALIDATION
 
+// upgrade
+%token <str> UPGRADE RETRY
+
 // Built-in function
-%token <str> ADDDATE BIT_AND BIT_OR BIT_XOR CAST COUNT APPROX_COUNT APPROX_COUNT_DISTINCT
+%token <str> ADDDATE BIT_AND BIT_OR BIT_XOR CAST COUNT APPROX_COUNT APPROX_COUNT_DISTINCT SERIAL_EXTRACT
 %token <str> APPROX_PERCENTILE CURDATE CURTIME DATE_ADD DATE_SUB EXTRACT
 %token <str> GROUP_CONCAT MAX MID MIN NOW POSITION SESSION_USER STD STDDEV MEDIAN
 %token <str> CLUSTER_CENTERS KMEANS
 %token <str> STDDEV_POP STDDEV_SAMP SUBDATE SUBSTR SUBSTRING SUM SYSDATE
 %token <str> SYSTEM_USER TRANSLATE TRIM VARIANCE VAR_POP VAR_SAMP AVG RANK ROW_NUMBER
 %token <str> DENSE_RANK BIT_CAST
+%token <str> BITMAP_BIT_POSITION BITMAP_BUCKET_NUMBER BITMAP_COUNT BITMAP_CONSTRUCT_AGG BITMAP_OR_AGG
 
 // Sequence function
 %token <str> NEXTVAL SETVAL CURRVAL LASTVAL
@@ -448,7 +457,6 @@ import (
 // Call
 %token <str> CALL
 
-
 // Time window
 %token <str> PREV SLIDING FILL
 
@@ -463,16 +471,19 @@ import (
 // Sample Related.
 %token <str> PERCENT SAMPLE
 
+// Snapshot READ
+%token <str> MO_TS
+
 %type <statement> stmt block_stmt block_type_stmt normal_stmt
 %type <statements> stmt_list stmt_list_return
-%type <statement> create_stmt insert_stmt delete_stmt drop_stmt alter_stmt truncate_table_stmt alter_sequence_stmt
+%type <statement> create_stmt insert_stmt delete_stmt drop_stmt alter_stmt truncate_table_stmt alter_sequence_stmt upgrade_stmt
 %type <statement> delete_without_using_stmt delete_with_using_stmt
 %type <statement> drop_ddl_stmt drop_database_stmt drop_table_stmt drop_index_stmt drop_prepare_stmt drop_view_stmt drop_connector_stmt drop_function_stmt drop_procedure_stmt drop_sequence_stmt
 %type <statement> drop_account_stmt drop_role_stmt drop_user_stmt
 %type <statement> create_account_stmt create_user_stmt create_role_stmt
 %type <statement> create_ddl_stmt create_table_stmt create_database_stmt create_index_stmt create_view_stmt create_function_stmt create_extension_stmt create_procedure_stmt create_sequence_stmt
 %type <statement> create_source_stmt create_connector_stmt pause_daemon_task_stmt cancel_daemon_task_stmt resume_daemon_task_stmt
-%type <statement> show_stmt show_create_stmt show_columns_stmt show_databases_stmt show_target_filter_stmt show_table_status_stmt show_grants_stmt show_collation_stmt show_accounts_stmt show_roles_stmt show_stages_stmt
+%type <statement> show_stmt show_create_stmt show_columns_stmt show_databases_stmt show_target_filter_stmt show_table_status_stmt show_grants_stmt show_collation_stmt show_accounts_stmt show_roles_stmt show_stages_stmt show_snapshots_stmt show_upgrade_stmt
 %type <statement> show_tables_stmt show_sequences_stmt show_process_stmt show_errors_stmt show_warnings_stmt show_target
 %type <statement> show_procedure_status_stmt show_function_status_stmt show_node_list_stmt show_locks_stmt
 %type <statement> show_table_num_stmt show_column_num_stmt show_table_values_stmt show_table_size_stmt
@@ -518,10 +529,12 @@ import (
 %type <statement> loop_stmt iterate_stmt leave_stmt repeat_stmt while_stmt
 %type <statement> create_publication_stmt drop_publication_stmt alter_publication_stmt show_publications_stmt show_subscriptions_stmt
 %type <statement> create_stage_stmt drop_stage_stmt alter_stage_stmt
+%type <statement> create_snapshot_stmt drop_snapshot_stmt
 %type <str> urlparams
 %type <str> comment_opt view_list_opt view_opt security_opt view_tail check_type
 %type <subscriptionOption> subcription_opt
 %type <accountsSetOption> alter_publication_accounts_opt
+%type <str> alter_publication_db_name_opt
 
 %type <select> select_stmt select_no_parens
 %type <selectStatement> simple_select select_with_parens simple_select_clause
@@ -539,6 +552,7 @@ import (
 %type <identifierList> column_list column_list_opt partition_clause_opt partition_id_list insert_column_list accounts_list
 %type <joinCond> join_condition join_condition_opt on_expression_opt
 %type <selectLockInfo> select_lock_opt
+%type <upgrade_target> target
 
 %type <functionName> func_name
 %type <funcArgs> func_args_list_opt func_args_list
@@ -565,7 +579,7 @@ import (
 %type <columnAttribute> column_attribute_elem keys
 %type <columnAttributes> column_attribute_list column_attribute_list_opt
 %type <tableOptions> table_option_list_opt table_option_list source_option_list_opt source_option_list
-%type <str> charset_name storage_opt collate_name column_format storage_media algorithm_type able_type space_type lock_type with_type rename_type algorithm_type_2
+%type <str> charset_name storage_opt collate_name column_format storage_media algorithm_type able_type space_type lock_type with_type rename_type algorithm_type_2 load_charset
 %type <rowFormatType> row_format_options
 %type <int64Val> field_length_opt max_file_size_opt
 %type <matchType> match match_opt
@@ -675,7 +689,7 @@ import (
 %type <frameBound> frame_bound frame_bound_start
 %type <frameType> frame_type
 %type <str> fields_or_columns
-%type <int64Val> algorithm_opt partition_num_opt sub_partition_num_opt
+%type <int64Val> algorithm_opt partition_num_opt sub_partition_num_opt opt_retry
 %type <boolVal> linear_opt
 %type <partition> partition
 %type <partitions> partition_list_opt partition_list
@@ -742,7 +756,8 @@ import (
 %type <str> explain_foramt_value trim_direction
 %type <str> priority_opt priority quick_opt ignore_opt wild_opt
 
-%type <str> account_name account_admin_name account_role_name
+%type <str> account_name account_role_name
+%type <expr> account_name_or_param account_admin_name
 %type <accountAuthOption> account_auth_option
 %type <alterAccountAuthOption> alter_account_auth_option
 %type <accountIdentified> account_identified
@@ -755,6 +770,7 @@ import (
 %type <stageCredentials> stage_credentials_opt
 %type <userIdentified> user_identified user_identified_opt
 %type <accountRole> default_role_opt
+%type <snapshotObject> snapshot_object_opt
 
 %type <indexHintType> index_hint_type
 %type <indexHintScope> index_hint_scope
@@ -763,7 +779,7 @@ import (
 
 %token <str> KILL
 %type <killOption> kill_opt
-%token <str> BACKUP FILESYSTEM
+%token <str> BACKUP FILESYSTEM PARALLELISM
 %type <statementOption> statement_id_opt
 %token <str> QUERY_RESULT
 %type<tableLock> table_lock_elem
@@ -864,6 +880,7 @@ stmt:
 
 normal_stmt:
     create_stmt
+|   upgrade_stmt
 |   call_stmt
 |   mo_dump_stmt
 |   insert_stmt
@@ -894,25 +911,61 @@ normal_stmt:
         $$ = $1
     }
 |   kill_stmt
-|   backup_stmt
+|   backup_stmt   
+
 
 backup_stmt:
-    BACKUP STRING FILESYSTEM STRING
+    BACKUP STRING FILESYSTEM STRING PARALLELISM STRING
 	{
-		$$ = &tree.BackupStart{
-		    Timestamp: $2,
-		    IsS3 : false,
-		    Dir: $4,
-		}
+        var timestamp = $2
+        var isS3 = false
+        var dir = $4
+        var parallelism = $6
+        var option []string
+        $$ = tree.NewBackupStart(timestamp, isS3, dir, parallelism, option)
 	}
     | BACKUP STRING S3OPTION '{' infile_or_s3_params '}'
     {
-    	$$ = &tree.BackupStart{
-        	    Timestamp: $2,
-        	    IsS3 : true,
-        	    Option : $5,
-        	}
+        var timestamp = $2
+        var isS3 = true
+        var dir string
+        var parallelism string
+        var option = $5
+        $$ = tree.NewBackupStart(timestamp, isS3, dir, parallelism, option)
     }
+
+create_snapshot_stmt:
+    CREATE SNAPSHOT not_exists_opt ident FOR snapshot_object_opt
+    {
+        $$ = &tree.CreateSnapShot{
+            IfNotExists: $3,
+            Name: tree.Identifier($4.Compare()),
+            Obeject: $6,
+        }
+    }
+
+snapshot_object_opt:
+    CLUSTER
+    {
+        spLevel := tree.SnapshotLevelType{
+            Level: tree.SNAPSHOTLEVELCLUSTER,
+        }
+        $$ = tree.ObejectInfo{
+            SLevel: spLevel,
+            ObjName: "",
+        }
+    }
+|    ACCOUNT ident
+    {
+        spLevel := tree.SnapshotLevelType{
+            Level: tree.SNAPSHOTLEVELACCOUNT,
+        }
+        $$ = tree.ObejectInfo{
+            SLevel: spLevel,
+            ObjName: tree.Identifier($2.Compare()),
+        }
+    }
+
 
 kill_stmt:
     KILL kill_opt INTEGRAL statement_id_opt
@@ -925,7 +978,7 @@ kill_stmt:
 	    connectionId = uint64(v)
         default:
 	    yylex.Error("parse integral fail")
-	    return 1
+		goto ret1
         }
 
 	$$ = &tree.Kill{
@@ -1216,22 +1269,28 @@ parallel_opt:
             $$ = false
         } else {
             yylex.Error("error parallel flag")
-            return 1
+            goto ret1
         }
     }
 
 normal_ident:
     ident
     {
-        $$ = tree.SetUnresolvedName($1.Compare())
+        unResolve := tree.SetUnresolvedName($1.Compare())
+        unResolve.SetUnresolvedNameCStrParts(yylex.(*Lexer).useOrigin, $1.Origin())
+        $$ = unResolve
     }
 |   ident '.' ident
     {
-        $$ = tree.SetUnresolvedName($1.Compare(), $3.Compare())
+        unResolve := tree.SetUnresolvedName($1.Compare(), $3.Compare())
+        unResolve.SetUnresolvedNameCStrParts(yylex.(*Lexer).useOrigin, $1.Origin(), $3.Origin())
+        $$ = unResolve
     }
 |   ident '.' ident '.' ident
     {
-        $$ = tree.SetUnresolvedName($1.Compare(), $3.Compare(), $5.Compare())
+        unResolve := tree.SetUnresolvedName($1.Compare(), $3.Compare(), $5.Compare())
+        unResolve.SetUnresolvedNameCStrParts(yylex.(*Lexer).useOrigin, $1.Origin(), $3.Origin(), $5.Origin())
+        $$ = unResolve
     }
 
 columns_or_variable_list_opt:
@@ -1312,7 +1371,7 @@ system_variable:
            r = vs[0]
         } else {
             yylex.Error("variable syntax error")
-            return 1
+            goto ret1
         }
         $$ = &tree.VarExpr{
             Name: r,
@@ -1332,7 +1391,7 @@ user_variable:
 //           r = vs[0]
 //        } else {
 //            yylex.Error("variable syntax error")
-//            return 1
+//            goto ret1
 //        }
         $$ = &tree.VarExpr{
             Name: $1,
@@ -1362,14 +1421,18 @@ load_lines:
     {
         $$ = &tree.Lines{
             StartingBy: $2,
-            TerminatedBy: $3,
+            TerminatedBy: &tree.Terminated{
+                Value : $3,
+            },
         }
     }
 |   LINES lines_terminated starting_opt
     {
         $$ = &tree.Lines{
             StartingBy: $3,
-            TerminatedBy: $2,
+            TerminatedBy: &tree.Terminated{
+                Value : $2,
+	        },
         }
     }
 
@@ -1404,20 +1467,24 @@ load_fields:
 |   fields_or_columns field_item_list
     {
         res := &tree.Fields{
-            Terminated: "\t",
-            EscapedBy:    0,
+            Terminated: &tree.Terminated{
+                Value: "\t",
+            },
+            EnclosedBy: &tree.EnclosedBy{
+                Value: byte(0),
+            },
         }
         for _, f := range $2 {
-            if f.Terminated != "" {
+            if f.Terminated != nil {
                 res.Terminated = f.Terminated
             }
             if f.Optionally {
                 res.Optionally = f.Optionally
             }
-            if f.EnclosedBy != 0 {
+            if f.EnclosedBy != nil {
                 res.EnclosedBy = f.EnclosedBy
             }
-            if f.EscapedBy != 0 {
+            if f.EscapedBy != nil {
                 res.EscapedBy = f.EscapedBy
             }
         }
@@ -1438,7 +1505,9 @@ field_item:
     TERMINATED BY field_terminator
     {
         $$ = &tree.Fields{
-            Terminated: $3,
+            Terminated: &tree.Terminated{
+                Value: $3,
+            },
         }
     }
 |   OPTIONALLY ENCLOSED BY field_terminator
@@ -1446,7 +1515,7 @@ field_item:
         str := $4
         if str != "\\" && len(str) > 1 {
             yylex.Error("error field terminator")
-            return 1
+            goto ret1
         }
         var b byte
         if len(str) != 0 {
@@ -1456,7 +1525,9 @@ field_item:
         }
         $$ = &tree.Fields{
             Optionally: true,
-            EnclosedBy: b,
+            EnclosedBy: &tree.EnclosedBy{
+                Value: b,
+            },
         }
     }
 |   ENCLOSED BY field_terminator
@@ -1464,7 +1535,7 @@ field_item:
         str := $3
         if str != "\\" && len(str) > 1 {
             yylex.Error("error field terminator")
-            return 1
+            goto ret1
         }
         var b byte
         if len(str) != 0 {
@@ -1473,7 +1544,9 @@ field_item:
            b = 0
         }
         $$ = &tree.Fields{
-            EnclosedBy: b,
+            EnclosedBy: &tree.EnclosedBy{
+                Value: b,
+            },
         }
     }
 |   ESCAPED BY field_terminator
@@ -1481,7 +1554,7 @@ field_item:
         str := $3
         if str != "\\" && len(str) > 1 {
             yylex.Error("error field terminator")
-            return 1
+            goto ret1
         }
         var b byte
         if len(str) != 0 {
@@ -1490,7 +1563,9 @@ field_item:
            b = 0
         }
         $$ = &tree.Fields{
-            EscapedBy: b,
+            EscapedBy: &tree.EscapedBy{
+                Value: b,
+            },
         }
     }
 
@@ -1714,6 +1789,10 @@ priv_type:
         {
                 $$ = tree.PRIVILEGE_TYPE_STATIC_ALTER_ACCOUNT
         }
+|    UPGRADE ACCOUNT
+	{
+		$$ = tree.PRIVILEGE_TYPE_STATIC_UPGRADE_ACCOUNT
+	}
 |    ALL PRIVILEGES
     {
         $$ = tree.PRIVILEGE_TYPE_STATIC_ALL
@@ -2140,7 +2219,7 @@ var_assignment:
             r = vs[0]
         } else {
             yylex.Error("variable syntax error")
-            return 1
+            goto ret1
         }
         $$ = &tree.VarAssignmentExpr{
             System: false,
@@ -2163,7 +2242,7 @@ var_assignment:
             r = vs[0]
         } else {
             yylex.Error("variable syntax error")
-            return 1
+            goto ret1
         }
         $$ = &tree.VarAssignmentExpr{
             System: true,
@@ -2345,37 +2424,68 @@ begin_stmt:
 use_stmt:
     USE ident
     {
-        $$ = &tree.Use{
-            SecondaryRole: false,
-            Name: $2,
-        }
+        name := $2
+        secondaryRole := false
+        var secondaryRoleType tree.SecondaryRoleType = 0
+        var role *tree.Role
+        $$ = tree.NewUse(
+            name,
+            secondaryRole,
+            secondaryRoleType,
+            role,
+        )
     }
 |   USE
     {
-        $$ = &tree.Use{
-            SecondaryRole: false,
-        }
+        var name *tree.CStr
+        secondaryRole := false
+        var secondaryRoleType tree.SecondaryRoleType = 0
+        var role *tree.Role
+        $$ = tree.NewUse(
+            name,
+            secondaryRole,
+            secondaryRoleType,
+            role,
+        )
     }
 |   USE ROLE role_spec
     {
-    $$ = &tree.Use{
-        SecondaryRole: false,
-        Role: $3,
-    }
+        var name *tree.CStr
+        secondaryRole := false
+        var secondaryRoleType tree.SecondaryRoleType = 0
+        role := $3
+        $$ = tree.NewUse(
+            name,
+            secondaryRole,
+            secondaryRoleType,
+            role,
+        )
     }
 |   USE SECONDARY ROLE ALL
     {
-    $$ = &tree.Use{
-        SecondaryRole: true,
-        SecondaryRoleType: tree.SecondaryRoleTypeAll,
-    }
+        var name *tree.CStr
+        secondaryRole := true
+        secondaryRoleType := tree.SecondaryRoleTypeAll
+        var role *tree.Role
+        $$ = tree.NewUse(
+            name,
+            secondaryRole,
+            secondaryRoleType,
+            role,
+        )
     }
 |   USE SECONDARY ROLE NONE
     {
-    $$ = &tree.Use{
-        SecondaryRole: true,
-        SecondaryRoleType: tree.SecondaryRoleTypeNone,
-    }
+        var name *tree.CStr
+        secondaryRole := true
+        secondaryRoleType := tree.SecondaryRoleTypeNone
+        var role *tree.Role
+        $$ = tree.NewUse(
+            name,
+            secondaryRole,
+            secondaryRoleType,
+            role,
+        )
     }
 
 update_stmt:
@@ -2481,6 +2591,7 @@ prepareable_stmt:
 |   drop_stmt
 |   show_stmt
 |   update_stmt
+|   alter_account_stmt
 |   select_stmt
     {
         $$ = $1
@@ -2560,11 +2671,11 @@ explain_stmt:
     }
 |   explain_sym ANALYZE explainable_stmt
     {
-            explainStmt := tree.NewExplainAnalyze($3, "text")
-            optionElem := tree.MakeOptionElem("analyze", "NULL")
+        explainStmt := tree.NewExplainAnalyze($3, "text")
+        optionElem := tree.MakeOptionElem("analyze", "NULL")
         options := tree.MakeOptions(optionElem)
-    explainStmt.Options = options
-    $$ = explainStmt
+        explainStmt.Options = options
+        $$ = explainStmt
     }
 |   explain_sym ANALYZE VERBOSE explainable_stmt
     {
@@ -2579,14 +2690,44 @@ explain_stmt:
 |   explain_sym '(' utility_option_list ')' explainable_stmt
     {
         if tree.IsContainAnalyze($3) {
-             explainStmt := tree.NewExplainAnalyze($5, "text")
-         explainStmt.Options = $3
-         $$ = explainStmt
+            explainStmt := tree.NewExplainAnalyze($5, "text")
+            explainStmt.Options = $3
+            $$ = explainStmt
         } else {
-             explainStmt := tree.NewExplainStmt($5, "text")
-             explainStmt.Options = $3
-         $$ = explainStmt
+            explainStmt := tree.NewExplainStmt($5, "text")
+            explainStmt.Options = $3
+            $$ = explainStmt
         }
+    }
+|   explain_sym FORCE execute_stmt
+{
+    $$ = tree.NewExplainStmt($3, "text")
+}
+|   explain_sym VERBOSE FORCE execute_stmt
+    {
+        explainStmt := tree.NewExplainStmt($4, "text")
+        optionElem := tree.MakeOptionElem("verbose", "NULL")
+        options := tree.MakeOptions(optionElem)
+        explainStmt.Options = options
+        $$ = explainStmt
+    }
+|   explain_sym ANALYZE FORCE execute_stmt
+    {
+        explainStmt := tree.NewExplainAnalyze($4, "text")
+        optionElem := tree.MakeOptionElem("analyze", "NULL")
+        options := tree.MakeOptions(optionElem)
+        explainStmt.Options = options
+        $$ = explainStmt
+    }
+|   explain_sym ANALYZE VERBOSE FORCE execute_stmt
+    {
+        explainStmt := tree.NewExplainAnalyze($5, "text")
+        optionElem1 := tree.MakeOptionElem("analyze", "NULL")
+        optionElem2 := tree.MakeOptionElem("verbose", "NULL")
+        options := tree.MakeOptions(optionElem1)
+        options = append(options, optionElem2)
+        explainStmt.Options = options
+        $$ = explainStmt
     }
 
 explain_option_key:
@@ -2650,6 +2791,46 @@ analyze_stmt:
         $$ = tree.NewAnalyzeStmt($3, $5)
     }
 
+upgrade_stmt:
+    UPGRADE ACCOUNT target opt_retry
+    {
+        $$ = &tree.UpgradeStatement{
+        	Target: $3,
+        	Retry: $4,
+        }
+    }
+
+target:
+    STRING
+    {
+        $$ = &tree.Target{
+        	AccountName: $1,
+        	IsALLAccount: false,
+        }
+    }
+    | ALL
+    {
+        $$ = &tree.Target{
+        	AccountName: "",
+        	IsALLAccount: true,
+        }
+    }
+
+opt_retry:
+    {
+        $$ = -1
+    }
+|   WITH RETRY INTEGRAL
+    {
+    	res := $3.(int64)
+    	if res <= 0 {
+            yylex.Error("retry value can not less than 0")
+            $$ = -1
+        }
+        $$ = res
+    }
+
+
 alter_stmt:
     alter_user_stmt
 |   alter_account_stmt
@@ -2664,43 +2845,50 @@ alter_stmt:
 alter_sequence_stmt:
     ALTER SEQUENCE exists_opt table_name alter_as_datatype_opt increment_by_opt min_value_opt max_value_opt start_with_opt alter_cycle_opt
     {
-        $$ = &tree.AlterSequence{
-            IfExists: $3,
-            Name: $4,
-            Type: $5,
-            IncrementBy: $6,
-            MinValue: $7,
-            MaxValue: $8,
-            StartWith: $9,
-            Cycle: $10,
-        }
+        var ifExists = $3
+        var name = $4
+        var typ = $5
+        var incrementBy = $6
+        var minValue = $7
+        var maxValue = $8
+        var startWith = $9
+        var cycle = $10
+        $$ = tree.NewAlterSequence(
+            ifExists,
+            name,
+            typ,
+            incrementBy,
+            minValue,
+            maxValue,
+            startWith,
+            cycle,
+        )
     }
 
 alter_view_stmt:
     ALTER VIEW exists_opt table_name column_list_opt AS select_stmt
     {
-        $$ = &tree.AlterView{
-            Name: $4,
-            ColNames: $5,
-            AsSource: $7,
-            IfExists: $3,
-        }
+        var ifExists = $3
+        var name = $4
+        var colNames = $5
+        var asSource = $7
+        $$ = tree.NewAlterView(ifExists, name, colNames, asSource)
     }
 
 alter_table_stmt:
     ALTER TABLE table_name alter_option_list
     {
-        $$ = &tree.AlterTable{
-            Table: $3,
-            Options: $4,
-        }
+        var table = $3
+        alterTable := tree.NewAlterTable(table)
+        alterTable.Options = $4
+        $$ = alterTable
     }
 |   ALTER TABLE table_name alter_partition_option
     {
-         $$ = &tree.AlterTable{
-             Table: $3,
-	     PartitionOptions: $4,
-         }
+        var table = $3
+        alterTable := tree.NewAlterTable(table)
+        alterTable.PartitionOption = $4
+        $$ = alterTable
     }
 
 alter_option_list:
@@ -2714,59 +2902,76 @@ alter_option_list:
     }
 
 alter_partition_option:
-     partition_option
-     {
-	  $$ = $1
-     }
-|    PARTITION BY partition_method partition_num_opt sub_partition_opt partition_list_opt
-     {
-     	  $3.Num = uint64($4)
-     	  partitionDef := &tree.PartitionOption{
-	       PartBy:    *$3,
-	       SubPartBy:  $5,
-	       Partitions: $6,
-          }
-	  opt := &tree.AlterPartitionRedefinePartitionClause{
-	       PartitionOption: partitionDef,
-	  }
-	  $$ = tree.AlterPartitionOption(opt)
-     }
+    partition_option
+    {
+	    $$ = $1
+    }
+|   PARTITION BY partition_method partition_num_opt sub_partition_opt partition_list_opt
+    {
+     	$3.Num = uint64($4)
+        var PartBy =     $3
+	    var SubPartBy =  $5
+	    var Partitions = $6
+
+     	partitionDef := tree.NewPartitionOption(
+	        PartBy,
+	        SubPartBy,
+	        Partitions,
+        )
+
+        var typ tree.AlterPartitionOptionType
+
+	    opt := tree.NewAlterPartitionRedefinePartitionClause(
+            typ,
+	        partitionDef,
+	    )
+
+	    $$ = tree.AlterPartitionOption(opt)
+    }
 
 partition_option:
-      ADD PARTITION partition_list_opt
-      {
-	   opt := &tree.AlterPartitionAddPartitionClause{
-                Typ:        tree.AlterPartitionAddPartition,
-                Partitions: $3,
-           }
-           $$ = tree.AlterPartitionOption(opt)
-      }
-|     DROP PARTITION AllOrPartitionNameList
-      {
-	   opt := &tree.AlterPartitionDropPartitionClause{
-                Typ:            tree.AlterPartitionDropPartition,
-                PartitionNames: $3,
-           }
-           if $3 == nil {
-                opt.OnAllPartitions = true
-           } else {
-                opt.PartitionNames = $3
-           }
-           $$ = tree.AlterPartitionOption(opt)
-      }
+    ADD PARTITION partition_list_opt
+    {
+        var typ = tree.AlterPartitionAddPartition
+        var partitions = $3
+	    opt := tree.NewAlterPartitionAddPartitionClause(
+            typ,
+	        partitions,
+	    )
+        $$ = tree.AlterPartitionOption(opt)
+    }
+|    DROP PARTITION AllOrPartitionNameList
+    {
+        var typ = tree.AlterPartitionDropPartition
+        var partitionNames = $3
+        opt := tree.NewAlterPartitionDropPartitionClause(
+            typ,
+            partitionNames,
+        )
+
+        if $3 == nil {
+            opt.OnAllPartitions = true
+        } else {
+            opt.PartitionNames = $3
+        }
+        $$ = tree.AlterPartitionOption(opt)
+    }
 |     TRUNCATE PARTITION AllOrPartitionNameList
-      {
-	   opt := &tree.AlterPartitionTruncatePartitionClause{
-                Typ:            tree.AlterPartitionTruncatePartition,
-                PartitionNames: $3,
-           }
-           if $3 == nil {
-           	opt.OnAllPartitions = true
-           } else {
-           	opt.PartitionNames = $3
-           }
-           $$ = tree.AlterPartitionOption(opt)
-      }
+    {
+        var typ = tree.AlterPartitionTruncatePartition
+        var partitionNames = $3
+        opt := tree.NewAlterPartitionTruncatePartitionClause(
+            typ,
+            partitionNames,
+        )
+
+        if $3 == nil {
+            opt.OnAllPartitions = true
+        } else {
+            opt.PartitionNames = $3
+        }
+        $$ = tree.AlterPartitionOption(opt)
+    }
 
 AllOrPartitionNameList:
 	ALL
@@ -2774,14 +2979,14 @@ AllOrPartitionNameList:
 		$$ = nil
 	}
 |	PartitionNameList %prec LOWER_THAN_COMMA
-        {
-                $$ = $1
-        }
+    {
+        $$ = $1
+    }
 
 PartitionNameList:
 	ident
 	{
-	        $$ = tree.IdentifierList{tree.Identifier($1.Compare())}
+        $$ = tree.IdentifierList{tree.Identifier($1.Compare())}
 	}
 |	PartitionNameList ',' ident
 	{
@@ -2791,75 +2996,72 @@ PartitionNameList:
 alter_option:
     ADD table_elem_2
     {
-        opt := &tree.AlterOptionAdd{
-            Def:  $2,
-        }
+        var def = $2
+        opt := tree.NewAlterOptionAdd(def)
         $$ = tree.AlterTableOption(opt)
     }
 |    MODIFY column_keyword_opt column_def column_position
     {
-	opt := &tree.AlterTableModifyColumnClause{
-             Typ:           tree.AlterTableModifyColumn,
-             NewColumn:    $3,
-             Position:      $4,
-	}
-	$$ = tree.AlterTableOption(opt)
+        var typ  = tree.AlterTableModifyColumn
+        var newColumn  = $3
+        var position = $4
+        opt := tree.NewAlterTableModifyColumnClause(typ, newColumn, position)
+	    $$ = tree.AlterTableOption(opt)
     }
 |   CHANGE column_keyword_opt column_name column_def column_position
     {
-	opt := &tree.AlterTableChangeColumnClause{
-		Typ:          tree.AlterTableChangeColumn,
-		OldColumnName: $3,
-		NewColumn:    $4,
-		Position:      $5,
-	}
-	$$ = tree.AlterTableOption(opt)
+        // Type OldColumnName NewColumn Position
+        var typ = tree.AlterTableChangeColumn
+        var oldColumnName = $3
+        var newColumn = $4
+        var position = $5
+        opt := tree.NewAlterTableChangeColumnClause(typ, oldColumnName, newColumn, position)
+    	$$ = tree.AlterTableOption(opt)
     }
 |  RENAME COLUMN column_name TO column_name
     {
-    	opt := &tree.AlterTableRenameColumnClause{
-    		Typ:            tree.AlterTableRenameColumn,
-		OldColumnName: $3,
-		NewColumnName: $5,
-    	}
-	$$ = tree.AlterTableOption(opt)
+        var typ = tree.AlterTableRenameColumn
+        var oldColumnName = $3
+        var newColumnName = $5
+        opt := tree.NewAlterTableRenameColumnClause(typ, oldColumnName, newColumnName)
+	    $$ = tree.AlterTableOption(opt)
     }
 |  ALTER column_keyword_opt column_name SET DEFAULT bit_expr
     {
-	opt := &tree.AlterTableAlterColumnClause{
-		Typ:            tree.AlterTableAlterColumn,
-		ColumnName:    $3,
-		DefalutExpr:   tree.NewAttributeDefault($6),
-		OptionType:    tree.AlterColumnOptionSetDefault,
-	}
-	$$ = tree.AlterTableOption(opt)
+        var typ = tree.AlterTableAlterColumn
+        var columnName = $3
+        var defaultExpr = tree.NewAttributeDefault($6)
+        var visibility tree.VisibleType
+        var optionType = tree.AlterColumnOptionSetDefault
+        opt := tree.NewAlterTableAlterColumnClause(typ, columnName, defaultExpr, visibility, optionType)
+	    $$ = tree.AlterTableOption(opt)
     }
 |  ALTER column_keyword_opt column_name SET visibility
     {
-	opt := &tree.AlterTableAlterColumnClause{
-		Typ:         tree.AlterTableAlterColumn,
-		ColumnName:  $3,
-		Visibility:  $5,
-		OptionType: tree.AlterColumnOptionSetVisibility,
-	}
-	$$ = tree.AlterTableOption(opt)
+        var typ = tree.AlterTableAlterColumn
+        var columnName = $3
+        var defaultExpr = tree.NewAttributeDefault(nil)
+        var visibility = $5
+        var optionType = tree.AlterColumnOptionSetVisibility
+        opt := tree.NewAlterTableAlterColumnClause(typ, columnName, defaultExpr, visibility, optionType)
+	    $$ = tree.AlterTableOption(opt)
     }
 |  ALTER column_keyword_opt column_name DROP DEFAULT
     {
-	opt := &tree.AlterTableAlterColumnClause{
-		Typ:         	tree.AlterTableAlterColumn,
-		ColumnName:     $3,
-		OptionType:     tree.AlterColumnOptionDropDefault,
-        }
-	$$ = tree.AlterTableOption(opt)
+        var typ = tree.AlterTableAlterColumn
+        var columnName = $3
+        var defaultExpr = tree.NewAttributeDefault(nil)
+        var visibility tree.VisibleType
+        var optionType = tree.AlterColumnOptionDropDefault
+        opt := tree.NewAlterTableAlterColumnClause(typ, columnName, defaultExpr, visibility, optionType)
+	    $$ = tree.AlterTableOption(opt)
     }
 |  ORDER BY alter_column_order_list %prec LOWER_THAN_ORDER
     {
-    	opt := &tree.AlterTableOrderByColumnClause{
-                Typ:         	  tree.AlterTableOrderByColumn,
-        	AlterOrderByList: $3,
-        }
-	$$ = tree.AlterTableOption(opt)
+        var orderByClauseType = tree.AlterTableOrderByColumn
+        var orderByColumnList = $3
+        opt := tree.NewAlterTableOrderByColumnClause(orderByClauseType, orderByColumnList)
+	    $$ = tree.AlterTableOption(opt)
     }
 |   DROP alter_table_drop
     {
@@ -2879,18 +3081,16 @@ alter_option:
     }
 |   ADD column_keyword_opt column_def column_position
     {
-        $$ = tree.AlterTableOption(
-            &tree.AlterAddCol{
-                Column: $3,
-                Position: $4,
-            },
-        )
+        var column = $3
+        var position = $4
+        opt := tree.NewAlterAddCol(column, position)
+        $$ = tree.AlterTableOption(opt)
     }
 |   ALGORITHM equal_opt algorithm_type
     {
-        $$ = &tree.AlterOptionAlterCheck{
-            Type: $1,
-        }
+        var checkType = $1
+        var enforce bool
+        $$ = tree.NewAlterOptionAlterCheck(checkType, enforce)
     }
 |   default_opt charset_keyword equal_opt charset_name COLLATE equal_opt charset_name
     {
@@ -2967,121 +3167,124 @@ column_keyword_opt:
 
 column_position:
     {
-	$$ = &tree.ColumnPosition{
-	    Typ: tree.ColumnPositionNone,
-	}
+        var typ = tree.ColumnPositionNone;
+        var relativeColumn *tree.UnresolvedName
+        $$ = tree.NewColumnPosition(typ, relativeColumn);
     }
 |   FIRST
     {
-	$$ = &tree.ColumnPosition{
-	    Typ: tree.ColumnPositionFirst,
-	}
+        var typ = tree.ColumnPositionFirst;
+        var relativeColumn *tree.UnresolvedName
+        $$ = tree.NewColumnPosition(typ, relativeColumn);
     }
 |   AFTER column_name
     {
-	$$ = &tree.ColumnPosition{
-            Typ:            tree.ColumnPositionAfter,
-            RelativeColumn: $2,
-	}
+        var typ = tree.ColumnPositionAfter;
+        var relativeColumn = $2
+        $$ = tree.NewColumnPosition(typ, relativeColumn);
     }
 
 alter_column_order_list:
      alter_column_order
      {
-	 $$ = []*tree.AlterColumnOrder{$1}
+	    $$ = []*tree.AlterColumnOrder{$1}
      }
 |   alter_column_order_list ',' alter_column_order
     {
-	 $$ = append($1, $3)
+	    $$ = append($1, $3)
     }
 
 alter_column_order:
     column_name asc_desc_opt
     {
-	$$ = &tree.AlterColumnOrder{Column: $1, Direction: $2}
+        var column = $1
+        var direction = $2
+	    $$ = tree.NewAlterColumnOrder(column, direction)
     }
-
 
 alter_table_rename:
     table_name_unresolved
     {
-        $$ = &tree.AlterTableName{
-            Name: $1,
-        }
+        var name = $1
+        $$ = tree.NewAlterOptionTableName(name)
     }
 
 alter_table_drop:
     INDEX ident
     {
-        $$ = &tree.AlterOptionDrop{
-            Typ:  tree.AlterTableDropIndex,
-            Name: tree.Identifier($2.Compare()),
-        }
+        var dropType = tree.AlterTableDropIndex;
+        var name = tree.Identifier($2.Compare());
+        $$ = tree.NewAlterOptionDrop(dropType, name);
     }
 |   KEY ident
     {
-        $$ = &tree.AlterOptionDrop{
-            Typ:  tree.AlterTableDropKey,
-            Name: tree.Identifier($2.Compare()),
-        }
+        var dropType = tree.AlterTableDropKey;
+        var name = tree.Identifier($2.Compare());
+        $$ = tree.NewAlterOptionDrop(dropType, name);
     }
 |   ident
     {
-        $$ = &tree.AlterOptionDrop{
-            Typ:  tree.AlterTableDropColumn,
-            Name: tree.Identifier($1.Compare()),
-        }
+        var dropType = tree.AlterTableDropColumn;
+        var name = tree.Identifier($1.Compare());
+        $$ = tree.NewAlterOptionDrop(dropType, name);
     }
 |   COLUMN ident
     {
-        $$ = &tree.AlterOptionDrop{
-            Typ:  tree.AlterTableDropColumn,
-            Name: tree.Identifier($2.Compare()),
-        }
+        var dropType = tree.AlterTableDropColumn;
+        var name = tree.Identifier($2.Compare());
+        $$ = tree.NewAlterOptionDrop(dropType, name);
     }
 |   FOREIGN KEY ident
     {
-        $$ = &tree.AlterOptionDrop{
-            Typ:  tree.AlterTableDropForeignKey,
-            Name: tree.Identifier($3.Compare()),
-        }
+        var dropType = tree.AlterTableDropForeignKey;
+        var name = tree.Identifier($3.Compare());
+        $$ = tree.NewAlterOptionDrop(dropType, name);
+
     }
+|   CONSTRAINT ident
+        {
+            $$ = &tree.AlterOptionDrop{
+                Typ:  tree.AlterTableDropForeignKey,
+                Name: tree.Identifier($2.Compare()),
+            }
+        }
 |   PRIMARY KEY
     {
-        $$ = &tree.AlterOptionDrop{
-            Typ:  tree.AlterTableDropPrimaryKey,
-        }
+        var dropType = tree.AlterTableDropPrimaryKey;
+        var name = tree.Identifier("");
+        $$ = tree.NewAlterOptionDrop(dropType, name);
     }
 
 alter_table_alter:
     INDEX ident visibility
     {
-        $$ = &tree.AlterOptionAlterIndex{
-            Visibility:  $3,
-            Name: tree.Identifier($2.Compare()),
-        }
+        var indexName = tree.Identifier($2.Compare())
+        var visibility = $3
+        $$ = tree.NewAlterOptionAlterIndex(indexName, visibility)
     }
 | REINDEX ident IVFFLAT LISTS equal_opt INTEGRAL
-      {
-          $$ = &tree.AlterOptionAlterReIndex{
-	      KeyType : tree.INDEX_TYPE_IVFFLAT,
-              AlgoParamList: int64($6.(int64)),
-              Name: tree.Identifier($2.Compare()),
-          }
-      }
+    {
+    	val := int64($6.(int64))
+    	if val <= 0 {
+		yylex.Error("LISTS should be greater than 0")
+		return 1
+    	}
+        var keyType = tree.INDEX_TYPE_IVFFLAT
+        var algoParamList = val
+        var name = tree.Identifier($2.Compare())
+        $$ = tree.NewAlterOptionAlterReIndex(name, keyType, algoParamList)
+    }
 |   CHECK ident enforce
     {
-        $$ = &tree.AlterOptionAlterCheck{
-            Type: $1,
-            Enforce: $3,
-        }
+        var checkType = $1
+        var enforce = $3
+        $$ = tree.NewAlterOptionAlterCheck(checkType, enforce)
     }
 |   CONSTRAINT ident enforce
     {
-        $$ = &tree.AlterOptionAlterCheck{
-            Type: $1,
-            Enforce: $3,
-        }
+        var checkType = $1
+        var enforce = $3
+        $$ = tree.NewAlterOptionAlterCheck(checkType, enforce)
     }
 
 visibility:
@@ -3096,33 +3299,51 @@ visibility:
 
 
 alter_account_stmt:
-    ALTER ACCOUNT exists_opt account_name alter_account_auth_option account_status_option account_comment_opt
+    ALTER ACCOUNT exists_opt account_name_or_param alter_account_auth_option account_status_option account_comment_opt
     {
-        $$ = &tree.AlterAccount{
-            IfExists:$3,
-            Name:$4,
-            AuthOption:$5,
-            StatusOption:$6,
-            Comment:$7,
-        }
+        var ifExists = $3
+        var name = $4
+        var authOption = $5
+        var statusOption = $6
+        var comment = $7
+
+        $$ = tree.NewAlterAccount(
+            ifExists,
+            name,
+            authOption,
+            statusOption,
+            comment,
+        )
     }
 
 alter_database_config_stmt:
     ALTER DATABASE db_name SET MYSQL_COMPATIBILITY_MODE '=' STRING
     {
-        $$ = &tree.AlterDataBaseConfig{
-            DbName:$3,
-            UpdateConfig: $7,
-            IsAccountLevel: false,
-        }
+        var accountName = ""
+        var dbName = $3
+        var isAccountLevel = false
+        var updateConfig = $7
+
+        $$ = tree.NewAlterDataBaseConfig(
+            accountName,
+            dbName,
+            isAccountLevel,
+            updateConfig,
+        )
     }
 |   ALTER ACCOUNT CONFIG account_name SET MYSQL_COMPATIBILITY_MODE '=' STRING
     {
-        $$ = &tree.AlterDataBaseConfig{
-            AccountName:$4,
-            UpdateConfig: $8,
-            IsAccountLevel: true,
-        }
+        var accountName = $4
+        var dbName = ""
+        var isAccountLevel = true
+        var updateConfig = $8
+
+        $$ = tree.NewAlterDataBaseConfig(
+            accountName,
+            dbName,
+            isAccountLevel,
+            updateConfig,
+        )
     }
 |   ALTER ACCOUNT CONFIG SET MYSQL_COMPATIBILITY_MODE  var_name equal_or_assignment set_expr
     {
@@ -3156,13 +3377,15 @@ alter_account_auth_option:
 alter_user_stmt:
     ALTER USER exists_opt user_spec_list_of_create_user default_role_opt pwd_or_lck_opt user_comment_or_attribute_opt
     {
-        $$ = &tree.AlterUser{
-            IfExists: $3,
-            Users: $4,
-            Role: $5,
-            MiscOpt: $6,
-            CommentOrAttribute: $7,
-        }
+        // Create temporary variables with meaningful names
+        ifExists := $3
+        users := $4
+        role := $5
+        miscOpt := $6
+        commentOrAttribute := $7
+
+        // Use the temporary variables to call the function
+        $$ = tree.NewAlterUser(ifExists, users, role, miscOpt, commentOrAttribute)
     }
 
 default_role_opt:
@@ -3171,7 +3394,10 @@ default_role_opt:
     }
 |   DEFAULT ROLE account_role_name
     {
-        $$ = &tree.Role{UserName:$3}
+        var UserName = $3
+        $$ = tree.NewRole(
+            UserName,
+        )
     }
 
 exists_opt:
@@ -3205,67 +3431,82 @@ pwd_or_lck_opt:
 pwd_or_lck:
     UNLOCK
     {
-        $$ = &tree.UserMiscOptionAccountUnlock{}
+        $$ = tree.NewUserMiscOptionAccountUnlock()
     }
 |   LOCK
     {
-        $$ = &tree.UserMiscOptionAccountLock{}
+        $$ = tree.NewUserMiscOptionAccountLock()
     }
 |   pwd_expire
     {
-        $$ = &tree.UserMiscOptionPasswordExpireNone{}
+        $$ = tree.NewUserMiscOptionPasswordExpireNone()
     }
 |   pwd_expire INTERVAL INTEGRAL DAY
     {
-        $$ = &tree.UserMiscOptionPasswordExpireInterval{Value: $3.(int64)}
+        var Value = $3.(int64)
+        $$ = tree.NewUserMiscOptionPasswordExpireInterval(
+            Value,
+        )
     }
 |   pwd_expire NEVER
     {
-        $$ = &tree.UserMiscOptionPasswordExpireNever{}
+        $$ = tree.NewUserMiscOptionPasswordExpireNever()
     }
 |   pwd_expire DEFAULT
     {
-        $$ = &tree.UserMiscOptionPasswordExpireDefault{}
+        $$ = tree.NewUserMiscOptionPasswordExpireDefault()
     }
 |   PASSWORD HISTORY DEFAULT
     {
-        $$ = &tree.UserMiscOptionPasswordHistoryDefault{}
+        $$ = tree.NewUserMiscOptionPasswordHistoryDefault()
     }
 |   PASSWORD HISTORY INTEGRAL
     {
-        $$ = &tree.UserMiscOptionPasswordHistoryCount{Value: $3.(int64)}
+        var Value = $3.(int64)
+        $$ = tree.NewUserMiscOptionPasswordHistoryCount(
+            Value,
+        )
     }
 |   PASSWORD REUSE INTERVAL DEFAULT
     {
-        $$ = &tree.UserMiscOptionPasswordReuseIntervalDefault{}
+        $$ = tree.NewUserMiscOptionPasswordReuseIntervalDefault()
     }
 |   PASSWORD REUSE INTERVAL INTEGRAL DAY
     {
-        $$ = &tree.UserMiscOptionPasswordReuseIntervalCount{Value: $4.(int64)}
+        var Value = $4.(int64)
+        $$ = tree.NewUserMiscOptionPasswordReuseIntervalCount(
+            Value,
+        )
     }
 |   PASSWORD REQUIRE CURRENT
     {
-        $$ = &tree.UserMiscOptionPasswordRequireCurrentNone{}
+        $$ = tree.NewUserMiscOptionPasswordRequireCurrentNone()
     }
 |   PASSWORD REQUIRE CURRENT DEFAULT
     {
-        $$ = &tree.UserMiscOptionPasswordRequireCurrentDefault{}
+        $$ = tree.NewUserMiscOptionPasswordRequireCurrentDefault()
     }
 |   PASSWORD REQUIRE CURRENT OPTIONAL
     {
-        $$ = &tree.UserMiscOptionPasswordRequireCurrentOptional{}
+        $$ = tree.NewUserMiscOptionPasswordRequireCurrentOptional()
     }
 |   FAILED_LOGIN_ATTEMPTS INTEGRAL
     {
-        $$ = &tree.UserMiscOptionFailedLoginAttempts{Value: $2.(int64)}
+        var Value = $2.(int64)
+        $$ = tree.NewUserMiscOptionFailedLoginAttempts(
+            Value,
+        )
     }
 |   PASSWORD_LOCK_TIME INTEGRAL
     {
-        $$ = &tree.UserMiscOptionPasswordLockTimeCount{Value: $2.(int64)}
+        var Value = $2.(int64)
+        $$ = tree.NewUserMiscOptionPasswordLockTimeCount(
+            Value,
+        )
     }
 |   PASSWORD_LOCK_TIME UNBOUNDED
     {
-        $$ = &tree.UserMiscOptionPasswordLockTimeUnbounded{}
+        $$ = tree.NewUserMiscOptionPasswordLockTimeUnbounded()
     }
 
 pwd_expire:
@@ -3308,16 +3549,21 @@ show_stmt:
 |   show_table_values_stmt
 |   show_table_size_stmt
 |   show_accounts_stmt
+|   show_upgrade_stmt
 |   show_publications_stmt
 |   show_subscriptions_stmt
 |   show_servers_stmt
 |   show_stages_stmt
 |   show_connectors_stmt
+|   show_snapshots_stmt
 
 show_collation_stmt:
     SHOW COLLATION like_opt where_expression_opt
     {
-        $$ = &tree.ShowCollation{}
+        $$ = &tree.ShowCollation{
+            Like: $3,
+            Where: $4,
+        }
     }
 
 show_stages_stmt:
@@ -3325,6 +3571,14 @@ show_stages_stmt:
     {
         $$ = &tree.ShowStages{
             Like: $3,
+        }
+    }
+
+show_snapshots_stmt:
+    SHOW SNAPSHOTS  where_expression_opt
+    {
+        $$ = &tree.ShowSnapShots{
+            Where: $3,
         }
     }
 
@@ -3340,7 +3594,9 @@ show_grants_stmt:
 |   SHOW GRANTS FOR ROLE ident
     {
         s := &tree.ShowGrants{}
-        roles := []*tree.Role{tree.NewRole($5.Compare())}
+        roles := []*tree.Role{
+            &tree.Role{UserName: $5.Compare()},
+        }
         s.Roles = roles
         s.ShowGrantType = tree.GrantForRole
         $$ = s
@@ -3626,6 +3882,12 @@ show_publications_stmt:
 	$$ = &tree.ShowPublications{Like: $3}
     }
 
+show_upgrade_stmt:
+    SHOW UPGRADE
+    {
+    	$$ = &tree.ShowAccountUpgrade{}
+    }
+
 
 show_subscriptions_stmt:
     SHOW SUBSCRIPTIONS like_opt
@@ -3698,7 +3960,7 @@ show_create_stmt:
     }
 |   SHOW CREATE PUBLICATION db_name
     {
-	$$ = &tree.ShowCreatePublications{Name: $4}
+	    $$ = &tree.ShowCreatePublications{Name: $4}
     }
 
 show_servers_stmt:
@@ -3744,7 +4006,7 @@ truncate_table_stmt:
     }
 |   TRUNCATE TABLE table_name
     {
-	$$ = tree.NewTruncateTable($3)
+	    $$ = tree.NewTruncateTable($3)
     }
 
 drop_stmt:
@@ -3765,32 +4027,30 @@ drop_ddl_stmt:
 |   drop_procedure_stmt
 |   drop_stage_stmt
 |   drop_connector_stmt
+|   drop_snapshot_stmt
 
 drop_sequence_stmt:
     DROP SEQUENCE exists_opt table_name_list
     {
-        $$ = &tree.DropSequence{
-            IfExists: $3,
-            Names:   $4,
-        }
+        var ifExists = $3
+        var name = $4
+        $$ = tree.NewDropSequence(ifExists, name)
     }
 
 drop_account_stmt:
-    DROP ACCOUNT exists_opt account_name
+    DROP ACCOUNT exists_opt account_name_or_param
     {
-        $$ = &tree.DropAccount{
-            IfExists: $3,
-            Name: $4,
-        }
+        var ifExists = $3
+        var name = $4
+        $$ = tree.NewDropAccount(ifExists, name)
     }
 
 drop_user_stmt:
     DROP USER exists_opt drop_user_spec_list
     {
-        $$ = &tree.DropUser{
-            IfExists: $3,
-            Users: $4,
-        }
+        var ifExists = $3
+        var users = $4
+        $$ = tree.NewDropUser(ifExists, users)
     }
 
 drop_user_spec_list:
@@ -3806,61 +4066,75 @@ drop_user_spec_list:
 drop_user_spec:
     user_name
     {
-        $$ = &tree.User{
-            Username: $1.Username,
-            Hostname: $1.Hostname,
-        }
+        var Username = $1.Username
+        var Hostname = $1.Hostname
+        var AuthOption *tree.AccountIdentified
+        $$ = tree.NewUser(
+            Username,
+            Hostname,
+            AuthOption,
+        )
     }
 
 drop_role_stmt:
     DROP ROLE exists_opt role_spec_list
     {
-        $$ = &tree.DropRole{
-            IfExists: $3,
-            Roles: $4,
-        }
+        var ifExists = $3
+        var roles = $4
+        $$ = tree.NewDropRole(ifExists, roles)
     }
 
 drop_index_stmt:
     DROP INDEX exists_opt ident ON table_name
     {
-        $$ = &tree.DropIndex{
-            Name: tree.Identifier($4.Compare()),
-            TableName: $6,
-            IfExists: $3,
-        }
+        var name = tree.Identifier($4.Compare())
+        var tableName = $6
+        var ifExists = $3
+        $$ = tree.NewDropIndex(name, tableName, ifExists)
     }
 
 drop_table_stmt:
     DROP TABLE temporary_opt exists_opt table_name_list drop_table_opt
     {
-        $$ = &tree.DropTable{IfExists: $4, Names: $5}
+        var ifExists = $4
+        var names = $5
+        $$ = tree.NewDropTable(ifExists, names)
     }
 |   DROP SOURCE exists_opt table_name_list
     {
-        $$ = &tree.DropTable{IfExists: $3, Names: $4}
+        var ifExists = $3
+        var names = $4
+        $$ = tree.NewDropTable(ifExists, names)
     }
 
 drop_connector_stmt:
     DROP CONNECTOR exists_opt table_name_list
     {
-	$$ = &tree.DropConnector{IfExists: $3, Names: $4}
+        var ifExists = $3
+        var names = $4
+        $$ = tree.NewDropConnector(ifExists, names)
     }
 
 drop_view_stmt:
     DROP VIEW exists_opt table_name_list
     {
-        $$ = &tree.DropView{IfExists: $3, Names: $4}
+        var ifExists = $3
+        var names = $4
+        $$ = tree.NewDropView(ifExists, names)
     }
 
 drop_database_stmt:
     DROP DATABASE exists_opt ident
     {
-        $$ = &tree.DropDatabase{Name: tree.Identifier($4.Compare()), IfExists: $3}
+        var name = tree.Identifier($4.Compare())
+        var ifExists = $3
+        $$ = tree.NewDropDatabase(name, ifExists)
     }
 |   DROP SCHEMA exists_opt ident
     {
-        $$ = &tree.DropDatabase{Name: tree.Identifier($4.Compare()), IfExists: $3}
+        var name = tree.Identifier($4.Compare())
+        var ifExists = $3
+        $$ = tree.NewDropDatabase(name, ifExists)
     }
 
 drop_prepare_stmt:
@@ -3872,26 +4146,23 @@ drop_prepare_stmt:
 drop_function_stmt:
     DROP FUNCTION func_name '(' func_args_list_opt ')'
     {
-        $$ = &tree.DropFunction{
-            Name: $3,
-            Args: $5,
-        }
+        var name = $3
+        var args = $5
+        $$ = tree.NewDropFunction(name, args)
     }
 
 drop_procedure_stmt:
     DROP PROCEDURE proc_name
     {
-        $$ = &tree.DropProcedure{
-            Name: $3,
-            IfExists: false,
-        }
+        var name = $3
+        var ifExists = false
+        $$ = tree.NewDropProcedure(name, ifExists)
     }
 |    DROP PROCEDURE IF EXISTS proc_name
     {
-        $$ = &tree.DropProcedure{
-            Name: $5,
-            IfExists: true,
-        }
+        var name = $5
+        var ifExists = true
+        $$ = tree.NewDropProcedure(name, ifExists)
     }
 
 delete_stmt:
@@ -3962,12 +4233,12 @@ table_name_opt_wild:
     ident wild_opt
     {
         prefix := tree.ObjectNamePrefix{ExplicitSchema: false}
-        $$ = tree.NewTableName(tree.Identifier($1.Compare()), prefix)
+        $$ = tree.NewTableName(tree.Identifier($1.Compare()), prefix, nil)
     }
 |    ident '.' ident wild_opt
     {
         prefix := tree.ObjectNamePrefix{SchemaName: tree.Identifier($1.Compare()), ExplicitSchema: true}
-        $$ = tree.NewTableName(tree.Identifier($3.Compare()), prefix)
+        $$ = tree.NewTableName(tree.Identifier($3.Compare()), prefix, nil)
     }
 
 wild_opt:
@@ -4042,7 +4313,7 @@ replace_data:
 	{
 		if $2 == nil {
 			yylex.Error("the set list of replace can not be empty")
-			return 1
+			goto ret1
 		}
 		var identList tree.IdentifierList
 		var valueList tree.Exprs
@@ -4064,6 +4335,14 @@ insert_stmt:
         ins.Table = $2
         ins.PartitionNames = $3
         ins.OnDuplicateUpdate = $5
+        $$ = ins
+    }
+|   INSERT IGNORE into_table_name partition_clause_opt insert_data
+    {
+        ins := $5
+        ins.Table = $3
+        ins.PartitionNames = $4
+        ins.OnDuplicateUpdate = []*tree.UpdateExpr{nil}
         $$ = ins
     }
 
@@ -4117,7 +4396,7 @@ insert_data:
     {
         if $2 == nil {
             yylex.Error("the set list of insert can not be empty")
-            return 1
+            goto ret1
         }
         var identList tree.IdentifierList
         var valueList tree.Exprs
@@ -4279,15 +4558,23 @@ export_data_param_opt:
 export_fields:
     {
         $$ = &tree.Fields{
-            Terminated: ",",
-            EnclosedBy: '"',
+            Terminated: &tree.Terminated{
+                Value: ",",
+            },
+            EnclosedBy:  &tree.EnclosedBy{
+                Value: '"',
+            },
         }
     }
 |   FIELDS TERMINATED BY STRING
     {
         $$ = &tree.Fields{
-            Terminated: $4,
-            EnclosedBy: '"',
+            Terminated: &tree.Terminated{
+                Value: $4,
+            },
+            EnclosedBy:  &tree.EnclosedBy{
+                Value: '"',
+            },
         }
     }
 |   FIELDS TERMINATED BY STRING ENCLOSED BY field_terminator
@@ -4295,7 +4582,7 @@ export_fields:
         str := $7
         if str != "\\" && len(str) > 1 {
             yylex.Error("export1 error field terminator")
-            return 1
+            goto ret1
         }
         var b byte
         if len(str) != 0 {
@@ -4304,8 +4591,12 @@ export_fields:
            b = 0
         }
         $$ = &tree.Fields{
-            Terminated: $4,
-            EnclosedBy: b,
+            Terminated: &tree.Terminated{
+                Value: $4,
+            },
+            EnclosedBy:  &tree.EnclosedBy{
+                Value: b,
+            },
         }
     }
 |   FIELDS ENCLOSED BY field_terminator
@@ -4313,7 +4604,7 @@ export_fields:
         str := $4
         if str != "\\" && len(str) > 1 {
             yylex.Error("export2 error field terminator")
-            return 1
+            goto ret1
         }
         var b byte
         if len(str) != 0 {
@@ -4322,21 +4613,29 @@ export_fields:
            b = 0
         }
         $$ = &tree.Fields{
-            Terminated: ",",
-            EnclosedBy: b,
+            Terminated: &tree.Terminated{
+                Value: ",",
+            },
+            EnclosedBy:  &tree.EnclosedBy{
+                Value: b,
+            },
         }
     }
 
 export_lines_opt:
     {
         $$ = &tree.Lines{
-            TerminatedBy: "\n",
+            TerminatedBy: &tree.Terminated{
+                Value: "\n",
+            },
         }
     }
 |   LINES lines_terminated_opt
     {
         $$ = &tree.Lines{
-            TerminatedBy: $2,
+            TerminatedBy: &tree.Terminated{
+                Value: $2,
+            },
         }
     }
 
@@ -4353,7 +4652,7 @@ header_opt:
             $$ = false
         } else {
             yylex.Error("error header flag")
-            return 1
+            goto ret1
         }
     }
 
@@ -4446,7 +4745,7 @@ interval:
 		v, errStr := util.GetInt64($5)
         if errStr != "" {
            yylex.Error(errStr)
-           return 1
+           goto ret1
         }
 		$$ = &tree.Interval{
 			Col: $3,
@@ -4465,7 +4764,7 @@ sliding_opt:
         v, errStr := util.GetInt64($3)
         if errStr != "" {
             yylex.Error(errStr)
-            return 1
+            goto ret1
         }
 		$$ = &tree.Sliding{
         	Val: tree.NewNumValWithType(constant.MakeInt64(v), str, false, tree.P_int64),
@@ -4930,7 +5229,7 @@ select_expression:
 from_opt:
     {
         prefix := tree.ObjectNamePrefix{ExplicitSchema: false}
-        tn := tree.NewTableName(tree.Identifier(""), prefix)
+        tn := tree.NewTableName(tree.Identifier(""), prefix, nil)
         $$ = &tree.From{
             Tables: tree.TableExprs{&tree.AliasedTableExpr{Expr: tn}},
         }
@@ -5171,11 +5470,12 @@ table_function:
     {
         name := tree.SetUnresolvedName(strings.ToLower($1.Compare()))
         $$ = &tree.TableFunction{
-       	    Func: &tree.FuncExpr{
-        	Func: tree.FuncName2ResolvableFunctionReference(name),
-        	Exprs: $3,
-        	Type: tree.FUNC_TYPE_TABLE,
-            },
+       	        Func: &tree.FuncExpr{
+        	        Func: tree.FuncName2ResolvableFunctionReference(name),
+                    FuncName: tree.NewCStrUseOrigin($1.Origin(),yylex.(*Lexer).useOrigin),
+        	        Exprs: $3,
+        	        Type: tree.FUNC_TYPE_TABLE,
+                },
         }
     }
 
@@ -5333,6 +5633,7 @@ create_stmt:
 |   create_account_stmt
 |   create_publication_stmt
 |   create_stage_stmt
+|   create_snapshot_stmt
 
 create_ddl_stmt:
     create_table_stmt
@@ -5352,11 +5653,14 @@ create_ddl_stmt:
 create_extension_stmt:
     CREATE EXTENSION extension_lang AS extension_name FILE STRING
     {
-        $$ = &tree.CreateExtension{
-            Language: $3,
-            Name: tree.Identifier($5),
-            Filename: tree.Identifier($7),
-        }
+        var Language = $3
+        var Name = tree.Identifier($5)
+        var Filename = tree.Identifier($7)
+        $$ = tree.NewCreateExtension(
+            Language,
+            Name,
+            Filename,
+        )
     }
 
 extension_lang:
@@ -5374,11 +5678,14 @@ extension_name:
 create_procedure_stmt:
     CREATE PROCEDURE proc_name '(' proc_args_list_opt ')' STRING
     {
-        $$ = &tree.CreateProcedure{
-            Name: $3,
-            Args: $5,
-            Body: $7,
-        }
+        var Name = $3
+        var Args = $5
+        var Body = $7
+        $$ = tree.NewCreateProcedure(
+            Name,
+            Args,
+            Body,
+        )
     }
 
 proc_name:
@@ -5444,23 +5751,32 @@ create_function_stmt:
     {
     	if $13 == "" {
             yylex.Error("no function body error")
-            return 1
+            goto ret1
         }
         if $11 == "python" && $14 == "" {
             yylex.Error("no handler error")
-            return 1
+            goto ret1
         }
 
-        $$ = &tree.CreateFunction{
-            Replace: $2,
-            Name: $4,
-            Args: $6,
-            ReturnType: $9,
-            Language: $11,
-            Import: $12,
-            Body: $13,
-            Handler: $14,
-        }
+        var Replace = $2
+        var Name = $4
+        var Args = $6
+        var ReturnType = $9
+        var Language = $11
+        var Import = $12
+        var Body = $13
+        var Handler = $14
+
+        $$ = tree.NewCreateFunction(
+            Replace,
+            Name,
+            Args,
+            ReturnType,
+            Language,
+            Import,
+            Body,
+            Handler,
+        )
     }
 
 func_name:
@@ -5549,34 +5865,50 @@ func_handler:
 create_view_stmt:
     CREATE view_list_opt VIEW not_exists_opt table_name column_list_opt AS select_stmt view_tail
     {
-        $$ = &tree.CreateView{
-            Name: $5,
-            ColNames: $6,
-            AsSource: $8,
-            IfNotExists: $4,
-        }
+        var Replace bool
+        var Name = $5
+        var ColNames = $6
+        var AsSource = $8
+        var IfNotExists = $4
+        $$ = tree.NewCreateView(
+            Replace,
+            Name,
+            ColNames,
+            AsSource,
+            IfNotExists,
+        )
     }
 |   CREATE replace_opt VIEW not_exists_opt table_name column_list_opt AS select_stmt view_tail
     {
-        $$ = &tree.CreateView{
-            Replace: $2,
-            Name: $5,
-            ColNames: $6,
-            AsSource: $8,
-            IfNotExists: $4,
-        }
+        var Replace = $2
+        var Name = $5
+        var ColNames = $6
+        var AsSource = $8
+        var IfNotExists = $4
+        $$ = tree.NewCreateView(
+            Replace,
+            Name,
+            ColNames,
+            AsSource,
+            IfNotExists,
+        )
     }
 
 create_account_stmt:
-    CREATE ACCOUNT not_exists_opt account_name account_auth_option account_status_option account_comment_opt
+    CREATE ACCOUNT not_exists_opt account_name_or_param account_auth_option account_status_option account_comment_opt
     {
-   		$$ = &tree.CreateAccount{
-        	IfNotExists:$3,
-            Name:$4,
-            AuthOption:$5,
-            StatusOption:$6,
-            Comment:$7,
-    	}
+        var IfNotExists = $3
+        var Name = $4
+        var AuthOption = $5
+        var StatusOption = $6
+        var Comment = $7
+   		$$ = tree.NewCreateAccount(
+        	IfNotExists,
+            Name,
+            AuthOption,
+            StatusOption,
+            Comment,
+    	)
     }
 
 view_list_opt:
@@ -5634,125 +5966,176 @@ account_name:
     	$$ = $1.Compare()
     }
 
+account_name_or_param:
+    ident
+    {
+        var Str = $1.Compare()
+        $$ = tree.NewNumValWithType(constant.MakeString(Str), Str, false, tree.P_char)
+    }
+|   VALUE_ARG
+    {
+        $$ = tree.NewParamExpr(yylex.(*Lexer).GetParamIndex())
+    }
+
 account_auth_option:
     ADMIN_NAME equal_opt account_admin_name account_identified
     {
-        $$ = tree.AccountAuthOption{
-            Equal:$2,
-            AdminName:$3,
-            IdentifiedType:$4,
-        }
+        var Equal = $2
+        var AdminName = $3
+        var IdentifiedType = $4
+        $$ = *tree.NewAccountAuthOption(
+            Equal,
+            AdminName,
+            IdentifiedType,
+        )
     }
 
 account_admin_name:
     STRING
     {
-    	$$ = $1
+        var Str = $1
+        $$ = tree.NewNumValWithType(constant.MakeString(Str), Str, false, tree.P_char)
     }
 |	ident
 	{
-		$$ = $1.Compare()
+		var Str = $1.Compare()
+        $$ = tree.NewNumValWithType(constant.MakeString(Str), Str, false, tree.P_char)
 	}
+|   VALUE_ARG
+    {
+        $$ = tree.NewParamExpr(yylex.(*Lexer).GetParamIndex())
+    }
 
 account_identified:
     IDENTIFIED BY STRING
     {
-        $$ = tree.AccountIdentified{
-            Typ: tree.AccountIdentifiedByPassword,
-            Str: $3,
-        }
+        $$ = *tree.NewAccountIdentified(
+            tree.AccountIdentifiedByPassword,
+            tree.NewNumValWithType(constant.MakeString($3), $3, false, tree.P_char),
+        )
+    }
+|   IDENTIFIED BY VALUE_ARG
+    {
+        $$ = *tree.NewAccountIdentified(
+            tree.AccountIdentifiedByPassword,
+            tree.NewParamExpr(yylex.(*Lexer).GetParamIndex()),
+        )
     }
 |   IDENTIFIED BY RANDOM PASSWORD
     {
-        $$ = tree.AccountIdentified{
-            Typ: tree.AccountIdentifiedByRandomPassword,
-        }
+        $$ = *tree.NewAccountIdentified(
+            tree.AccountIdentifiedByRandomPassword,
+            nil,
+        )
     }
 |   IDENTIFIED WITH STRING
     {
-        $$ = tree.AccountIdentified{
-            Typ: tree.AccountIdentifiedWithSSL,
-            Str: $3,
-        }
+        $$ = *tree.NewAccountIdentified(
+            tree.AccountIdentifiedWithSSL,
+            tree.NewNumValWithType(constant.MakeString($3), $3, false, tree.P_char),
+        )
+    }
+|   IDENTIFIED WITH VALUE_ARG
+    {
+        $$ = *tree.NewAccountIdentified(
+            tree.AccountIdentifiedWithSSL,
+            tree.NewParamExpr(yylex.(*Lexer).GetParamIndex()),
+        )
     }
 
 account_status_option:
     {
-        $$ = tree.AccountStatus{
-            Exist: false,
-        }
+        as := tree.NewAccountStatus()
+        as.Exist = false
+        $$ = *as
     }
 |   OPEN
     {
-        $$ = tree.AccountStatus{
-            Exist: true,
-            Option: tree.AccountStatusOpen,
-        }
+        as := tree.NewAccountStatus()
+        as.Exist = true
+        as.Option = tree.AccountStatusOpen
+        $$ = *as
     }
 |   SUSPEND
     {
-        $$ = tree.AccountStatus{
-            Exist: true,
-            Option: tree.AccountStatusSuspend,
-        }
+        as := tree.NewAccountStatus()
+        as.Exist = true
+        as.Option = tree.AccountStatusSuspend
+        $$ = *as
     }
 |   RESTRICTED
     {
-        $$ = tree.AccountStatus{
-            Exist: true,
-            Option: tree.AccountStatusRestricted,
-        }
+        as := tree.NewAccountStatus()
+        as.Exist = true
+        as.Option = tree.AccountStatusRestricted
+        $$ = *as
     }
 
 account_comment_opt:
     {
-        $$ = tree.AccountComment{
-            Exist: false,
-        }
+        ac := tree.NewAccountComment()
+        ac.Exist = false
+        $$ = *ac
     }
 |   COMMENT_KEYWORD STRING
     {
-        $$ = tree.AccountComment{
-            Exist: true,
-            Comment: $2,
-        }
+        ac := tree.NewAccountComment()
+        ac.Exist = true
+        ac.Comment = $2
+        $$ = *ac
     }
 
 create_user_stmt:
     CREATE USER not_exists_opt user_spec_list_of_create_user default_role_opt pwd_or_lck_opt user_comment_or_attribute_opt
     {
-        $$ = &tree.CreateUser{
-            IfNotExists: $3,
-            Users: $4,
-            Role: $5,
-            MiscOpt: $6,
-            CommentOrAttribute: $7,
-        }
+        var IfNotExists = $3
+        var Users = $4
+        var Role = $5
+        var MiscOpt = $6
+        var CommentOrAttribute = $7
+        $$ = tree.NewCreateUser(
+            IfNotExists,
+            Users,
+            Role,
+            MiscOpt,
+            CommentOrAttribute,
+        )
     }
 
 create_publication_stmt:
     CREATE PUBLICATION not_exists_opt ident DATABASE ident alter_publication_accounts_opt comment_opt
     {
-	    $$ = &tree.CreatePublication{
-	        IfNotExists: $3,
-	        Name: tree.Identifier($4.Compare()),
-	        Database: tree.Identifier($6.Compare()),
-	        AccountsSet: $7,
-	        Comment: $8,
-	    }
+        var IfNotExists = $3
+        var Name = tree.Identifier($4.Compare())
+        var Database = tree.Identifier($6.Compare())
+        var AccountsSet = $7
+        var Comment = $8
+	    $$ = tree.NewCreatePublication(
+	        IfNotExists,
+	        Name,
+	        Database,
+	        AccountsSet,
+	        Comment,
+	    )
     }
 
 create_stage_stmt:
     CREATE STAGE not_exists_opt ident urlparams stage_credentials_opt stage_status_opt stage_comment_opt
     {
-        $$ = &tree.CreateStage{
-            IfNotExists: $3,
-            Name: tree.Identifier($4.Compare()),
-            Url: $5,
-            Credentials: $6,
-            Status: $7,
-            Comment: $8,
-        }
+        var IfNotExists = $3
+        var Name = tree.Identifier($4.Compare())
+        var Url = $5
+        var Credentials = $6
+        var Status = $7
+        var Comment = $8
+        $$ = tree.NewCreateStage(
+            IfNotExists,
+            Name,
+            Url,
+            Credentials,
+            Status,
+            Comment,
+        )
     }
 
 stage_status_opt:
@@ -5856,26 +6239,25 @@ comment_opt:
 alter_stage_stmt:
     ALTER STAGE exists_opt ident SET stage_url_opt stage_credentials_opt stage_status_opt stage_comment_opt
     {
-        $$ = &tree.AlterStage{
-            	IfNotExists: $3,
-	            Name: tree.Identifier($4.Compare()),
-	            UrlOption: $6,
-	            CredentialsOption: $7,
-	            StatusOption: $8,
-	            Comment: $9,
-        }
+        var ifNotExists = $3
+        var name = tree.Identifier($4.Compare())
+        var urlOption = $6
+        var credentialsOption = $7
+        var statusOption = $8
+        var comment = $9
+        $$ = tree.NewAlterStage(ifNotExists, name, urlOption, credentialsOption, statusOption, comment)
     }
 
 
 alter_publication_stmt:
-    ALTER PUBLICATION exists_opt ident alter_publication_accounts_opt comment_opt
+    ALTER PUBLICATION exists_opt ident alter_publication_accounts_opt alter_publication_db_name_opt comment_opt
     {
-	    $$ = &tree.AlterPublication{
-	        IfExists: $3,
-	        Name: tree.Identifier($4.Compare()),
-	        AccountsSet: $5,
-	        Comment: $6,
-	    }
+        var ifExists = $3
+        var name = tree.Identifier($4.Compare())
+        var accountsSet = $5
+        var dbName = $6
+        var comment = $7
+        $$ = tree.NewAlterPublication(ifExists, name, accountsSet, dbName, comment)
     }
 
 alter_publication_accounts_opt:
@@ -5907,23 +6289,37 @@ alter_publication_accounts_opt:
 	    }
     }
 
+alter_publication_db_name_opt:
+    {
+	    $$ = ""
+    }
+    | DATABASE db_name
+    {
+	    $$ = $2
+    }
 
 drop_publication_stmt:
-DROP PUBLICATION exists_opt ident
+    DROP PUBLICATION exists_opt ident
     {
-	    $$ = &tree.DropPublication{
-	        IfExists: $3,
-	        Name: tree.Identifier($4.Compare()),
-	    }
+        var ifExists = $3
+        var name = tree.Identifier($4.Compare())
+        $$ = tree.NewDropPublication(ifExists, name)
     }
 
 drop_stage_stmt:
-DROP STAGE exists_opt ident
+    DROP STAGE exists_opt ident
     {
-        $$ = &tree.DropStage{
-            IfNotExists: $3,
-	        Name: tree.Identifier($4.Compare()),
-        }
+        var ifNotExists = $3
+        var name = tree.Identifier($4.Compare())
+        $$ = tree.NewDropStage(ifNotExists, name)
+    }
+
+drop_snapshot_stmt:
+   DROP SNAPSHOT exists_opt ident
+   {
+        var ifExists = $3
+        var name = tree.Identifier($4.Compare())
+        $$ = tree.NewDropSnapShot(ifExists, name)
     }
 
 account_role_name:
@@ -5934,25 +6330,37 @@ account_role_name:
 
 user_comment_or_attribute_opt:
     {
-        $$ = tree.AccountCommentOrAttribute{
-            Exist: false,
-        }
+        var Exist = false
+        var IsComment bool
+        var Str string
+        $$ = *tree.NewAccountCommentOrAttribute(
+            Exist,
+            IsComment,
+            Str,
+        )
+
     }
 |   COMMENT_KEYWORD STRING
     {
-        $$ = tree.AccountCommentOrAttribute{
-            Exist: true,
-            IsComment: true,
-            Str: $2,
-        }
+        var Exist = true
+        var IsComment = true
+        var Str = $2
+        $$ = *tree.NewAccountCommentOrAttribute(
+            Exist,
+            IsComment,
+            Str,
+        )
     }
 |   ATTRIBUTE STRING
     {
-        $$ = tree.AccountCommentOrAttribute{
-            Exist: true,
-            IsComment: false,
-            Str: $2,
-        }
+        var Exist = true
+        var IsComment = false
+        var Str = $2
+        $$ = *tree.NewAccountCommentOrAttribute(
+            Exist,
+            IsComment,
+            Str,
+        )
     }
 
 //conn_options:
@@ -6064,11 +6472,14 @@ user_spec_list_of_create_user:
 user_spec_with_identified:
     user_name user_identified
     {
-        $$ = &tree.User{
-            Username: $1.Username,
-            Hostname: $1.Hostname,
-            AuthOption: $2,
-        }
+        var Username = $1.Username
+        var Hostname = $1.Hostname
+        var AuthOption = $2
+        $$ = tree.NewUser(
+            Username,
+            Hostname,
+            AuthOption,
+        )
     }
 
 user_spec_list:
@@ -6084,11 +6495,14 @@ user_spec_list:
 user_spec:
     user_name user_identified_opt
     {
-        $$ = &tree.User{
-            Username: $1.Username,
-            Hostname: $1.Hostname,
-            AuthOption: $2,
-        }
+        var Username = $1.Username
+        var Hostname = $1.Hostname
+        var AuthOption = $2
+        $$ = tree.NewUser(
+            Username,
+            Hostname,
+            AuthOption,
+        )
     }
 
 user_name:
@@ -6119,7 +6533,7 @@ user_identified:
     {
     $$ = &tree.AccountIdentified{
         Typ: tree.AccountIdentifiedByPassword,
-        Str: $3,
+        Str: tree.NewNumValWithType(constant.MakeString($3), $3, false, tree.P_char),
     }
     }
 |   IDENTIFIED BY RANDOM PASSWORD
@@ -6132,7 +6546,7 @@ user_identified:
     {
     $$ = &tree.AccountIdentified{
         Typ: tree.AccountIdentifiedWithSSL,
-        Str: $3,
+        Str: tree.NewNumValWithType(constant.MakeString($3), $3, false, tree.P_char),
     }
     }
 
@@ -6146,10 +6560,12 @@ name_string:
 create_role_stmt:
     CREATE ROLE not_exists_opt role_spec_list
     {
-        $$ = &tree.CreateRole{
-            IfNotExists: $3,
-            Roles: $4,
-        }
+        var IfNotExists = $3
+        var Roles = $4
+        $$ = tree.NewCreateRole(
+            IfNotExists,
+            Roles,
+        )
     }
 
 role_spec_list:
@@ -6165,16 +6581,11 @@ role_spec_list:
 role_spec:
     role_name
     {
-        $$ = &tree.Role{UserName: $1.Compare()}
+        var UserName = $1.Compare()
+        $$ = tree.NewRole(
+            UserName,
+        )
     }
-//|   name_string '@' name_string
-//    {
-//        $$ = &tree.Role{UserName: $1, HostName: $3}
-//    }
-//|   name_string AT_ID
-//    {
-//        $$ = &tree.Role{UserName: $1, HostName: $2}
-//    }
 
 role_name:
     ID
@@ -6212,21 +6623,31 @@ create_index_stmt:
     {
         var io *tree.IndexOption = nil
         if $11 == nil && $5 != tree.INDEX_TYPE_INVALID {
-            io = &tree.IndexOption{IType: $5}
+            io = tree.NewIndexOption()
+            io.IType = $5
         } else if $11 != nil{
             io = $11
             io.IType = $5
-        }else{
-	     io = &tree.IndexOption{IType: tree.INDEX_TYPE_INVALID}
-	 }
-        $$ = &tree.CreateIndex{
-            Name: tree.Identifier($4.Compare()),
-            Table: $7,
-            IndexCat: $2,
-            KeyParts: $9,
-            IndexOption: io,
-            MiscOption: nil,
-        }
+        } else {
+            io = tree.NewIndexOption()
+            io.IType = tree.INDEX_TYPE_INVALID
+	    }
+        var Name = tree.Identifier($4.Compare())
+        var Table = $7
+        var ifNotExists = false
+        var IndexCat = $2
+        var KeyParts = $9
+        var IndexOption = io
+        var MiscOption []tree.MiscOption
+        $$ = tree.NewCreateIndex(
+            Name,
+            Table,
+            ifNotExists,
+            IndexCat,
+            KeyParts,
+            IndexOption,
+            MiscOption,
+        )
     }
 
 index_option_list:
@@ -6261,31 +6682,51 @@ index_option_list:
 index_option:
     KEY_BLOCK_SIZE equal_opt INTEGRAL
     {
-        $$ = &tree.IndexOption{KeyBlockSize: uint64($3.(int64))}
+        io := tree.NewIndexOption()
+        io.KeyBlockSize = uint64($3.(int64))
+        $$ = io
     }
 |   LISTS equal_opt INTEGRAL
     {
-	$$ = &tree.IndexOption{AlgoParamList: int64($3.(int64))}
+    	val:= int64($3.(int64))
+    	if val <= 0 {
+    		yylex.Error("LISTS should be greater than 0")
+    		return 1
+    	}
+
+	io := tree.NewIndexOption()
+	io.AlgoParamList = val
+	$$ = io
     }
 |   OP_TYPE STRING
     {
-	$$ = &tree.IndexOption{AlgoParamVectorOpType: $2}
+        io := tree.NewIndexOption()
+        io.AlgoParamVectorOpType = $2
+        $$ = io
     }
 |   COMMENT_KEYWORD STRING
     {
-        $$ = &tree.IndexOption{Comment: $2}
+        io := tree.NewIndexOption()
+        io.Comment = $2
+        $$ = io
     }
 |   WITH PARSER ident
     {
-        $$ = &tree.IndexOption{ParserName: $3.Compare()}
+        io := tree.NewIndexOption()
+        io.ParserName = $3.Compare()
+        $$ = io
     }
 |   VISIBLE
     {
-        $$ = &tree.IndexOption{Visible: tree.VISIBLE_TYPE_VISIBLE}
+        io := tree.NewIndexOption()
+        io.Visible = tree.VISIBLE_TYPE_VISIBLE
+        $$ = io
     }
 |   INVISIBLE
     {
-        $$ = &tree.IndexOption{Visible: tree.VISIBLE_TYPE_INVISIBLE}
+        io := tree.NewIndexOption()
+        io.Visible = tree.VISIBLE_TYPE_INVISIBLE
+        $$ = io
     }
 
 index_column_list:
@@ -6302,11 +6743,29 @@ index_column:
     column_name length_opt asc_desc_opt
     {
         // Order is parsed but just ignored as MySQL dtree.
-        $$ = &tree.KeyPart{ColName: $1, Length: int($2), Direction: $3}
+        var ColName = $1
+        var Length = int($2)
+        var Direction = $3
+        var Expr tree.Expr
+        $$ = tree.NewKeyPart(
+            ColName,
+            Length, 
+            Direction,
+            Expr,
+        )
     }
 |   '(' expression ')' asc_desc_opt
     {
-        $$ = &tree.KeyPart{Expr: $2, Direction: $4}
+        var ColName *tree.UnresolvedName
+        var Length int
+        var Expr = $2
+        var Direction = $4
+        $$ = tree.NewKeyPart(
+            ColName,
+            Length,
+            Direction,
+            Expr,
+        )
     }
 
 using_opt:
@@ -6320,6 +6779,10 @@ using_opt:
 |   USING IVFFLAT
     {
 	$$ = tree.INDEX_TYPE_IVFFLAT
+    }
+|   USING MASTER
+    {
+	$$ = tree.INDEX_TYPE_MASTER
     }
 |   USING HASH
     {
@@ -6337,12 +6800,16 @@ using_opt:
 create_database_stmt:
     CREATE database_or_schema not_exists_opt ident subcription_opt create_option_list_opt
     {
-        $$ = &tree.CreateDatabase{
-            IfNotExists: $3,
-            Name: tree.Identifier($4.Compare()),
-            SubscriptionOption: $5,
-            CreateOptions: $6,
-        }
+        var IfNotExists = $3
+        var Name = tree.Identifier($4.Compare())
+        var SubscriptionOption = $5
+        var CreateOptions = $6
+        $$ = tree.NewCreateDatabase(
+            IfNotExists,
+            Name,
+            SubscriptionOption,
+            CreateOptions,
+        )
     }
 // CREATE comment_opt database_or_schema comment_opt not_exists_opt ident
 
@@ -6352,9 +6819,10 @@ subcription_opt:
     }
 |   FROM account_name PUBLICATION ident
     {
-   	$$ = &tree.SubscriptionOption{From: tree.Identifier($2), Publication: tree.Identifier($4.Compare())}
+        var From = tree.Identifier($2)
+        var Publication = tree.Identifier($4.Compare())
+   	    $$ = tree.NewSubscriptionOption(From, Publication)
     }
-
 
 database_or_schema:
     DATABASE
@@ -6391,15 +6859,26 @@ create_option_list:
 create_option:
     default_opt charset_keyword equal_opt charset_name
     {
-        $$ = &tree.CreateOptionCharset{IsDefault: $1, Charset: $4}
+        var IsDefault = $1
+        var Charset = $4
+        $$ = tree.NewCreateOptionCharset(
+            IsDefault,
+            Charset,
+        )
     }
 |   default_opt COLLATE equal_opt collate_name
     {
-        $$ = &tree.CreateOptionCollate{IsDefault: $1, Collate: $4}
+        var IsDefault = $1
+        var Collate = $4
+        $$ = tree.NewCreateOptionCollate(
+            IsDefault, 
+            Collate,
+        )
     }
 |   default_opt ENCRYPTION equal_opt STRING
     {
-        $$ = &tree.CreateOptionEncryption{Encrypt: $4}
+        var Encrypt = $4
+        $$ = tree.NewCreateOptionEncryption(Encrypt)
     }
 
 default_opt:
@@ -6414,10 +6893,12 @@ default_opt:
 create_connector_stmt:
     CREATE CONNECTOR FOR table_name WITH '(' connector_option_list ')'
     {
-        $$ = &tree.CreateConnector{
-            TableName: $4,
-            Options: $7,
-        }
+        var TableName = $4
+        var Options = $7
+        $$ = tree.NewCreateConnector(
+            TableName,
+            Options,
+        )
     }
 
 show_connectors_stmt:
@@ -6437,7 +6918,7 @@ pause_daemon_task_stmt:
     	    taskID = uint64(v)
         default:
     	    yylex.Error("parse integral fail")
-    	    return 1
+    	    goto ret1
         }
         $$ = &tree.PauseDaemonTask{
             TaskID: taskID,
@@ -6455,7 +6936,7 @@ cancel_daemon_task_stmt:
     	    taskID = uint64(v)
         default:
     	    yylex.Error("parse integral fail")
-    	    return 1
+    	    goto ret1
         }
         $$ = &tree.CancelDaemonTask{
             TaskID: taskID,
@@ -6473,7 +6954,7 @@ resume_daemon_task_stmt:
     	    taskID = uint64(v)
         default:
     	    yylex.Error("parse integral fail")
-    	    return 1
+    	    goto ret1
         }
         $$ = &tree.ResumeDaemonTask{
             TaskID: taskID,
@@ -6483,13 +6964,18 @@ resume_daemon_task_stmt:
 create_source_stmt:
     CREATE replace_opt SOURCE not_exists_opt table_name '(' table_elem_list_opt ')' source_option_list_opt
     {
-        $$ = &tree.CreateSource {
-            Replace: $2,
-            IfNotExists: $4,
-            SourceName: $5,
-            Defs: $7,
-            Options: $9,
-        }
+        var Replace = $2
+        var IfNotExists = $4
+        var SourceName = $5
+        var Defs = $7
+        var Options = $9
+        $$ = tree.NewCreateSource(
+            Replace,
+            IfNotExists,
+            SourceName,
+            Defs,
+            Options,
+        )
     }
 
 replace_opt:
@@ -6501,50 +6987,104 @@ replace_opt:
         $$ = true
     }
 
+
+
+
 create_table_stmt:
     CREATE temporary_opt TABLE not_exists_opt table_name '(' table_elem_list_opt ')' table_option_list_opt partition_by_opt cluster_by_opt
     {
-        $$ = &tree.CreateTable {
-            Temporary: $2,
-            IfNotExists: $4,
-            Table: *$5,
-            Defs: $7,
-            Options: $9,
-            PartitionOption: $10,
-            ClusterByOption: $11,
-        }
+        t := tree.NewCreateTable()
+        t.Temporary = $2
+        t.IfNotExists = $4
+        t.Table = *$5
+        t.Defs = $7
+        t.Options = $9
+        t.PartitionOption =$10
+        t.ClusterByOption =$11
+        $$ = t
     }
 |   CREATE EXTERNAL TABLE not_exists_opt table_name '(' table_elem_list_opt ')' load_param_opt_2
     {
-        $$ = &tree.CreateTable {
-            IfNotExists: $4,
-            Table: *$5,
-            Defs: $7,
-            Param: $9,
-        }
+        t := tree.NewCreateTable()
+        t.IfNotExists = $4
+        t.Table = *$5
+        t.Defs = $7
+        t.Param = $9
+        $$ = t
     }
 |   CREATE CLUSTER TABLE not_exists_opt table_name '(' table_elem_list_opt ')' table_option_list_opt partition_by_opt cluster_by_opt
     {
-        $$ = &tree.CreateTable {
-            IsClusterTable: true,
-            IfNotExists: $4,
-            Table: *$5,
-            Defs: $7,
-            Options: $9,
-            PartitionOption: $10,
-            ClusterByOption: $11,
-        }
+        t := tree.NewCreateTable()
+        t.IsClusterTable = true
+        t.IfNotExists = $4
+        t.Table = *$5
+        t.Defs = $7
+        t.Options = $9
+        t.PartitionOption = $10
+        t.ClusterByOption = $11
+        $$ = t
     }
 |   CREATE DYNAMIC TABLE not_exists_opt table_name AS select_stmt source_option_list_opt
     {
-        $$ = &tree.CreateTable {
-            IsDynamicTable: true,
-            IfNotExists: $4,
-            Table: *$5,
-            AsSource: $7,
-            DTOptions: $8,
-        }
+        t := tree.NewCreateTable()
+        t.IsDynamicTable = true
+        t.IfNotExists = $4
+        t.Table = *$5
+        t.AsSource = $7
+        t.DTOptions = $8
+        $$ = t
     }
+|   CREATE temporary_opt TABLE not_exists_opt table_name select_stmt
+    {
+        t := tree.NewCreateTable()
+        t.IsAsSelect = true
+        t.Temporary = $2
+        t.IfNotExists = $4
+        t.Table = *$5
+        t.AsSource = $6
+        $$ = t
+    }
+|   CREATE temporary_opt TABLE not_exists_opt table_name '(' table_elem_list_opt ')' select_stmt
+    {
+        t := tree.NewCreateTable()
+        t.IsAsSelect = true
+        t.Temporary = $2
+        t.IfNotExists = $4
+        t.Table = *$5
+        t.Defs = $7
+        t.AsSource = $9
+        $$ = t
+    }
+|   CREATE temporary_opt TABLE not_exists_opt table_name AS select_stmt
+    {
+        t := tree.NewCreateTable()
+        t.IsAsSelect = true
+        t.Temporary = $2
+        t.IfNotExists = $4
+        t.Table = *$5
+        t.AsSource = $7
+        $$ = t
+    }
+|   CREATE temporary_opt TABLE not_exists_opt table_name '(' table_elem_list_opt ')' AS select_stmt
+    {
+        t := tree.NewCreateTable()
+        t.IsAsSelect = true
+        t.Temporary = $2
+        t.IfNotExists = $4
+        t.Table = *$5
+        t.Defs = $7
+        t.AsSource = $10
+        $$ = t
+    }
+|   CREATE temporary_opt TABLE not_exists_opt table_name LIKE table_name
+    {
+        t := tree.NewCreateTable()
+        t.IsAsLike = true
+        t.Table = *$5
+        t.LikeTableName = *$7
+        $$ = t
+    }
+
 load_param_opt_2:
     load_param_opt tail_param_opt
     {
@@ -6632,29 +7172,48 @@ infile_or_s3_param:
     }
 
 tail_param_opt:
-    load_fields load_lines ignore_lines columns_or_variable_list_opt load_set_spec_opt
+    load_charset load_fields load_lines ignore_lines columns_or_variable_list_opt load_set_spec_opt
     {
         $$ = &tree.TailParameter{
-            Fields: $1,
-            Lines: $2,
-            IgnoredLines: uint64($3),
-            ColumnList: $4,
-            Assignments: $5,
+            Charset: $1,
+            Fields: $2,
+            Lines: $3,
+            IgnoredLines: uint64($4),
+            ColumnList: $5,
+            Assignments: $6,
         }
     }
+
+load_charset:
+    {
+        $$ = ""
+    }
+|   charset_keyword charset_name
+    {
+    	$$ = $2
+    }
+
 create_sequence_stmt:
     CREATE SEQUENCE not_exists_opt table_name as_datatype_opt increment_by_opt min_value_opt max_value_opt start_with_opt cycle_opt
     {
-        $$ = &tree.CreateSequence {
-            IfNotExists: $3,
-            Name: $4,
-            Type: $5,
-            IncrementBy: $6,
-            MinValue: $7,
-            MaxValue: $8,
-            StartWith: $9,
-            Cycle: $10,
-        }
+        var Name = $4
+        var Type = $5
+        var IfNotExists = $3
+        var IncrementBy = $6
+        var MinValue = $7
+        var MaxValue = $8
+        var StartWith = $9
+        var Cycle = $10
+        $$ = tree.NewCreateSequence(
+            Name,
+            Type,
+            IfNotExists,
+            IncrementBy,
+            MinValue,
+            MaxValue,
+            StartWith,
+            Cycle,
+        )
     }
 as_datatype_opt:
     {
@@ -6841,11 +7400,14 @@ partition_by_opt:
 |   PARTITION BY partition_method partition_num_opt sub_partition_opt partition_list_opt
     {
         $3.Num = uint64($4)
-        $$ = &tree.PartitionOption{
-            PartBy: *$3,
-            SubPartBy: $5,
-            Partitions: $6,
-        }
+        var PartBy = $3
+        var SubPartBy = $5
+        var Partitions = $6
+        $$ = tree.NewPartitionOption(
+            PartBy,
+            SubPartBy,
+            Partitions,
+        )
     }
 
 cluster_by_opt:
@@ -6854,16 +7416,18 @@ cluster_by_opt:
     }
 |   CLUSTER BY column_name
     {
-        $$ = &tree.ClusterByOption{
-            ColumnList : []*tree.UnresolvedName{$3},
-        }
+        var ColumnList = []*tree.UnresolvedName{$3}
+        $$ = tree.NewClusterByOption(
+            ColumnList,
+        )
 
     }
     | CLUSTER BY '(' column_name_list ')'
     {
-        $$ = &tree.ClusterByOption{
-            ColumnList : $4,
-        }
+        var ColumnList = $4
+        $$ = tree.NewClusterByOption(
+            ColumnList,
+        )
     }
 
 sub_partition_opt:
@@ -6872,11 +7436,14 @@ sub_partition_opt:
     }
 |   SUBPARTITION BY sub_partition_method sub_partition_num_opt
     {
-        $$ = &tree.PartitionBy{
-            IsSubPartition: true,
-            PType: $3,
-            Num: uint64($4),
-        }
+        var IsSubPartition = true
+        var PType = $3
+        var Num = uint64($4)
+        $$ = tree.NewPartitionBy2(
+            IsSubPartition,
+            PType,
+            Num,
+        )
     }
 
 partition_list_opt:
@@ -6901,21 +7468,29 @@ partition_list:
 partition:
     PARTITION ident values_opt sub_partition_list_opt
     {
-        $$ = &tree.Partition{
-            Name: tree.Identifier($2.Compare()),
-            Values: $3,
-            Options: nil,
-            Subs: $4,
-        }
+        var Name = tree.Identifier($2.Compare())
+        var Values = $3
+        var Options []tree.TableOption
+        var Subs = $4
+        $$ = tree.NewPartition(
+            Name,
+            Values,
+            Options,
+            Subs,
+        )
     }
 |   PARTITION ident values_opt partition_option_list sub_partition_list_opt
     {
-        $$ = &tree.Partition{
-            Name: tree.Identifier($2.Compare()),
-            Values: $3,
-            Options: $4,
-            Subs: $5,
-        }
+        var Name = tree.Identifier($2.Compare())
+        var Values = $3
+        var Options = $4
+        var Subs = $5
+        $$ = tree.NewPartition(
+            Name,
+            Values,
+            Options,
+            Subs,
+        )
     }
 
 sub_partition_list_opt:
@@ -6940,17 +7515,21 @@ sub_partition_list:
 sub_partition:
     SUBPARTITION ident
     {
-        $$ = &tree.SubPartition{
-            Name: tree.Identifier($2.Compare()),
-            Options: nil,
-        }
+        var Name = tree.Identifier($2.Compare())
+        var Options []tree.TableOption
+        $$ = tree.NewSubPartition(
+            Name,
+            Options,
+        )
     }
 |   SUBPARTITION ident partition_option_list
     {
-        $$ = &tree.SubPartition{
-            Name: tree.Identifier($2.Compare()),
-            Options: $3,
-        }
+        var Name = tree.Identifier($2.Compare())
+        var Options = $3
+        $$ = tree.NewSubPartition(
+            Name,
+            Options,
+        )
     }
 
 partition_option_list:
@@ -6970,15 +7549,20 @@ values_opt:
 |   VALUES LESS THAN MAXVALUE
     {
         expr := tree.NewMaxValue()
-        $$ = &tree.ValuesLessThan{ValueList: tree.Exprs{expr}}
+        var valueList = tree.Exprs{expr}
+        $$ = tree.NewValuesLessThan(valueList)
     }
 |   VALUES LESS THAN '(' value_expression_list ')'
     {
-        $$ = &tree.ValuesLessThan{ValueList: $5}
+        var valueList = $5
+        $$ = tree.NewValuesLessThan(valueList)
     }
 |   VALUES IN '(' value_expression_list ')'
     {
-    $$ = &tree.ValuesIn{ValueList: $4}
+        var valueList = $4
+        $$ = tree.NewValuesIn(
+            valueList,
+        )
     }
 
 sub_partition_num_opt:
@@ -6990,7 +7574,7 @@ sub_partition_num_opt:
         res := $2.(int64)
         if res == 0 {
             yylex.Error("partitions can not be 0")
-            return 1
+            goto ret1
         }
         $$ = res
     }
@@ -7004,7 +7588,7 @@ partition_num_opt:
         res := $2.(int64)
         if res == 0 {
             yylex.Error("partitions can not be 0")
-            return 1
+            goto ret1
         }
         $$ = res
     }
@@ -7012,66 +7596,66 @@ partition_num_opt:
 partition_method:
     RANGE '(' bit_expr ')'
     {
-        $$ = &tree.PartitionBy{
-            PType: &tree.RangeType{
-                Expr: $3,
-            },
-        }
+        rangeTyp := tree.NewRangeType()
+        rangeTyp.Expr = $3
+        $$ = tree.NewPartitionBy(
+            rangeTyp,
+        )
     }
 |   RANGE fields_or_columns '(' column_name_list ')'
     {
-        $$ = &tree.PartitionBy{
-            PType: &tree.RangeType{
-                ColumnList: $4,
-            },
-        }
+        rangeTyp := tree.NewRangeType()
+        rangeTyp.ColumnList = $4
+        $$ = tree.NewPartitionBy(
+            rangeTyp,
+        )
     }
 |   LIST '(' bit_expr ')'
     {
-        $$ = &tree.PartitionBy{
-            PType: &tree.ListType{
-                Expr: $3,
-            },
-        }
+        listTyp := tree.NewListType()
+        listTyp.Expr = $3
+        $$ = tree.NewPartitionBy(
+            listTyp,
+        )
     }
 |   LIST fields_or_columns '(' column_name_list ')'
     {
-        $$ = &tree.PartitionBy{
-            PType: &tree.ListType{
-                ColumnList: $4,
-            },
-        }
+        listTyp := tree.NewListType()
+        listTyp.ColumnList = $4
+        $$ = tree.NewPartitionBy(
+            listTyp,
+        )
     }
 |   sub_partition_method
 
 sub_partition_method:
     linear_opt KEY algorithm_opt '(' ')'
     {
-        $$ = &tree.PartitionBy{
-            PType: &tree.KeyType{
-                Linear: $1,
-                Algorithm: $3,
-            },
-        }
+        keyTyp := tree.NewKeyType()
+        keyTyp.Linear = $1
+        keyTyp.Algorithm = $3
+        $$ = tree.NewPartitionBy(
+            keyTyp,
+        )
     }
 |   linear_opt KEY algorithm_opt '(' column_name_list ')'
     {
-        $$ = &tree.PartitionBy{
-            PType: &tree.KeyType{
-                Linear: $1,
-                ColumnList: $5,
-                Algorithm: $3,
-            },
-        }
+        keyTyp := tree.NewKeyType()
+        keyTyp.Linear = $1
+        keyTyp.Algorithm = $3
+        keyTyp.ColumnList = $5
+        $$ = tree.NewPartitionBy(
+            keyTyp,
+        )
     }
 |   linear_opt HASH '(' bit_expr ')'
     {
-        $$ = &tree.PartitionBy{
-            PType: &tree.HashType{
-                Linear: $1,
-                Expr: $4,
-            },
-        }
+        Linear := $1
+        Expr := $4
+        hashTyp := tree.NewHashType(Linear, Expr)
+        $$ = tree.NewPartitionBy(
+            hashTyp,
+        )
     }
 
 algorithm_opt:
@@ -7105,11 +7689,21 @@ connector_option_list:
 connector_option:
 	ident equal_opt literal
     {
-        $$ = &tree.ConnectorOption{Key: tree.Identifier($1.Compare()), Val: $3}
+        var Key = tree.Identifier($1.Compare())
+        var Val = $3
+        $$ = tree.NewConnectorOption(
+            Key, 
+            Val,
+        )
     }
     |   STRING equal_opt literal
         {
-             $$ = &tree.ConnectorOption{Key: tree.Identifier($1), Val: $3}
+            var Key = tree.Identifier($1)
+            var Val = $3
+            $$ = tree.NewConnectorOption(
+                Key, 
+                Val,
+            )
         }
 
 source_option_list_opt:
@@ -7134,11 +7728,21 @@ source_option_list:
 source_option:
 	ident equal_opt literal
     {
-        $$ = &tree.CreateSourceWithOption{Key: tree.Identifier($1.Compare()), Val: $3}
+        var Key = tree.Identifier($1.Compare())
+        var Val = $3
+        $$ = tree.NewCreateSourceWithOption(
+            Key,
+            Val,
+        )
     }
 |   STRING equal_opt literal
     {
-         $$ = &tree.CreateSourceWithOption{Key: tree.Identifier($1), Val: $3}
+        var Key = tree.Identifier($1)
+        var Val = $3
+        $$ = tree.NewCreateSourceWithOption(
+            Key,
+            Val,
+        )
     }
 
 table_option_list_opt:
@@ -7244,11 +7848,15 @@ table_option:
     }
 |   PACK_KEYS equal_opt INTEGRAL
     {
-        $$ = &tree.TableOptionPackKeys{Value: $3.(int64)}
+        t := tree.NewTableOptionPackKeys()
+        t.Value = $3.(int64)
+        $$ = t
     }
 |   PACK_KEYS equal_opt DEFAULT
     {
-        $$ = &tree.TableOptionPackKeys{Default: true}
+        t := tree.NewTableOptionPackKeys()
+        t.Default = true
+        $$ = t
     }
 |   PASSWORD equal_opt STRING
     {
@@ -7268,43 +7876,56 @@ table_option:
     }
 |   STATS_AUTO_RECALC equal_opt INTEGRAL
     {
-        $$ = &tree.TableOptionStatsAutoRecalc{Value: uint64($3.(int64))}
+        t := tree.NewTableOptionStatsAutoRecalc()
+        t.Value = uint64($3.(int64))
+        $$ = t
     }
 |   STATS_AUTO_RECALC equal_opt DEFAULT
     {
-        $$ = &tree.TableOptionStatsAutoRecalc{Default: true}
+        t := tree.NewTableOptionStatsAutoRecalc()
+        t.Default = true
+        $$ = t
     }
 |   STATS_PERSISTENT equal_opt INTEGRAL
     {
-        $$ = &tree.TableOptionStatsPersistent{Value: uint64($3.(int64))}
+        t := tree.NewTableOptionStatsPersistent()
+        t.Value = uint64($3.(int64))
+        $$ = t
     }
 |   STATS_PERSISTENT equal_opt DEFAULT
     {
-        $$ = &tree.TableOptionStatsPersistent{Default: true}
+        t := tree.NewTableOptionStatsPersistent()
+        t.Default = true
+        $$ = t
     }
 |   STATS_SAMPLE_PAGES equal_opt INTEGRAL
     {
-        $$ = &tree.TableOptionStatsSamplePages{Value: uint64($3.(int64))}
+        t := tree.NewTableOptionStatsSamplePages()
+        t.Value = uint64($3.(int64))
+        $$ = t
     }
 |   STATS_SAMPLE_PAGES equal_opt DEFAULT
     {
-        $$ = &tree.TableOptionStatsSamplePages{Default: true}
+        t := tree.NewTableOptionStatsSamplePages()
+        t.Default = true
+        $$ = t
     }
 |   TABLESPACE equal_opt ident
     {
-        $$= tree.NewTableOptionTablespace($3.Compare(), "")
+        $$ = tree.NewTableOptionTablespace($3.Compare(), "")
     }
 |   storage_opt
     {
-        $$= tree.NewTableOptionTablespace("", $1)
+        $$ = tree.NewTableOptionTablespace("", $1)
     }
 |   UNION equal_opt '(' table_name_list ')'
     {
-        $$= tree.NewTableOptionUnion($4)
+        $$ = tree.NewTableOptionUnion($4)
     }
 |   PROPERTIES '(' properties_list ')'
     {
-        $$ = &tree.TableOptionProperties{Preperties: $3}
+        var Preperties = $3
+        $$ = tree.NewTableOptionProperties(Preperties)
     }
 
 properties_list:
@@ -7320,7 +7941,12 @@ properties_list:
 property_elem:
     STRING '=' STRING
     {
-        $$ = tree.Property{Key: $1, Value: $3}
+        var Key = $1
+        var Value = $3
+        $$ = *tree.NewProperty(
+            Key, 
+            Value,
+        )
     }
 
 storage_opt:
@@ -7384,12 +8010,66 @@ table_name:
     ident
     {
         prefix := tree.ObjectNamePrefix{ExplicitSchema: false}
-        $$ = tree.NewTableName(tree.Identifier($1.Compare()), prefix)
+        $$ = tree.NewTableName(tree.Identifier($1.Compare()), prefix, nil)
     }
 |   ident '.' ident
     {
         prefix := tree.ObjectNamePrefix{SchemaName: tree.Identifier($1.Compare()), ExplicitSchema: true}
-        $$ = tree.NewTableName(tree.Identifier($3.Compare()), prefix)
+        $$ = tree.NewTableName(tree.Identifier($3.Compare()), prefix, nil)
+    }
+|   ident '{' TIMESTAMP '=' expression '}'
+    {
+        prefix := tree.ObjectNamePrefix{ExplicitSchema: false}
+        atTs := &tree.AtTimeStamp{
+            Type: tree.ATTIMESTAMPTIME,
+            Expr: $5,
+        }
+        $$ = tree.NewTableName(tree.Identifier($1.Compare()), prefix, atTs)
+    }
+|   ident '{' SNAPSHOT '=' expression '}'
+    {
+        prefix := tree.ObjectNamePrefix{ExplicitSchema: false}
+        atTs := &tree.AtTimeStamp{
+            Type: tree.ATTIMESTAMPSNAPSHOT,
+            Expr: $5,
+        }
+        $$ = tree.NewTableName(tree.Identifier($1.Compare()), prefix, atTs)
+    }
+|   ident '{' MO_TS '=' expression '}'
+    {
+        prefix := tree.ObjectNamePrefix{ExplicitSchema: false}
+        atTs := &tree.AtTimeStamp{
+            Type: tree.ATMOTIMESTAMP,
+            Expr: $5,
+        }
+        $$ = tree.NewTableName(tree.Identifier($1.Compare()), prefix, atTs)
+    }
+|   ident '.' ident '{' TIMESTAMP '=' expression '}'
+    {
+        prefix := tree.ObjectNamePrefix{SchemaName: tree.Identifier($1.Compare()), ExplicitSchema: true}
+        atTs := &tree.AtTimeStamp{
+            Type: tree.ATTIMESTAMPTIME,
+            Expr: $7,
+        }
+        $$ = tree.NewTableName(tree.Identifier($3.Compare()), prefix, atTs)
+    }
+|   ident '.' ident '{' SNAPSHOT '=' expression '}'
+    {
+        prefix := tree.ObjectNamePrefix{SchemaName: tree.Identifier($1.Compare()), ExplicitSchema: true}
+        atTs := &tree.AtTimeStamp{
+            Type: tree.ATTIMESTAMPSNAPSHOT,
+            Expr: $7,
+        }
+        $$ = tree.NewTableName(tree.Identifier($3.Compare()), prefix, atTs)
+    }
+|   ident '.' ident '{' MO_TS '=' expression '}'
+    {
+        prefix := tree.ObjectNamePrefix{SchemaName: tree.Identifier($1.Compare()), ExplicitSchema: true}
+        atTs := &tree.AtTimeStamp{
+            Type: tree.ATMOTIMESTAMP,
+            Expr: $7,
+        }
+        $$ = tree.NewTableName(tree.Identifier($3.Compare()), prefix, atTs)
     }
 
 table_elem_list_opt:
@@ -7435,21 +8115,29 @@ table_elem_2:
 index_def:
     FULLTEXT key_or_index_opt index_name '(' index_column_list ')' index_option_list
     {
-        $$ = &tree.FullTextIndex{
-            KeyParts: $5,
-            Name: $3,
-            Empty: true,
-            IndexOption: $7,
-        }
+        var KeyParts = $5
+        var Name = $3
+        var Empty = true
+        var IndexOption = $7
+        $$ = tree.NewFullTextIndex(
+            KeyParts,
+            Name,
+            Empty,
+            IndexOption,
+        )
     }
 |   FULLTEXT key_or_index_opt index_name '(' index_column_list ')' USING index_type index_option_list
     {
-        $$ = &tree.FullTextIndex{
-            KeyParts: $5,
-            Name: $3,
-            Empty: true,
-            IndexOption: $9,
-        }
+        var KeyParts = $5
+        var Name = $3
+        var Empty = true
+        var IndexOption = $9
+        $$ = tree.NewFullTextIndex(
+            KeyParts,
+            Name,
+            Empty,
+            IndexOption,
+        )
     }
 |   key_or_index not_exists_opt index_name_and_type_opt '(' index_column_list ')' index_option_list
     {
@@ -7461,6 +8149,8 @@ index_def:
             	keyTyp = tree.INDEX_TYPE_BTREE
 	    case "ivfflat":
 		keyTyp = tree.INDEX_TYPE_IVFFLAT
+	    case "master":
+	    	keyTyp = tree.INDEX_TYPE_MASTER
             case "hash":
             	keyTyp = tree.INDEX_TYPE_HASH
 	    case "rtree":
@@ -7471,16 +8161,22 @@ index_def:
                 keyTyp = tree.INDEX_TYPE_BSI
             default:
                 yylex.Error("Invalid the type of index")
-                return 1
+                goto ret1
             }
         }
-        $$ = &tree.Index{
-            IfNotExists: $2,
-            KeyParts: $5,
-            Name: $3[0],
-            KeyType: keyTyp,
-            IndexOption: $7,
-        }
+
+        var IfNotExists = $2
+        var KeyParts = $5
+        var Name = $3[0]
+        var KeyType = keyTyp
+        var IndexOption = $7
+        $$ = tree.NewIndex(
+            IfNotExists,
+            KeyParts,
+            Name,
+            KeyType,
+            IndexOption,
+        )
     }
 |   key_or_index not_exists_opt index_name_and_type_opt '(' index_column_list ')' USING index_type index_option_list
     {
@@ -7492,6 +8188,8 @@ index_def:
 		keyTyp = tree.INDEX_TYPE_BTREE
 	     case "ivfflat":
 		keyTyp = tree.INDEX_TYPE_IVFFLAT
+	     case "master":
+        	keyTyp = tree.INDEX_TYPE_MASTER
 	     case "hash":
 		keyTyp = tree.INDEX_TYPE_HASH
 	     case "rtree":
@@ -7502,16 +8200,21 @@ index_def:
 		keyTyp = tree.INDEX_TYPE_BSI
             default:
                 yylex.Error("Invalid type of index")
-                return 1
+                goto ret1
             }
         }
-        $$ = &tree.Index{
-            IfNotExists: $2,
-            KeyParts: $5,
-            Name: $3[0],
-            KeyType: keyTyp,
-            IndexOption: $9,
-        }
+        var IfNotExists = $2
+        var KeyParts = $5
+        var Name = $3[0]
+        var KeyType = keyTyp
+        var IndexOption = $9
+        $$ = tree.NewIndex(
+            IfNotExists,
+            KeyParts,
+            Name,
+            KeyType,
+            IndexOption,
+        )
     }
 
 constaint_def:
@@ -7537,56 +8240,79 @@ constaint_def:
 constraint_elem:
     PRIMARY KEY index_name_and_type_opt '(' index_column_list ')' index_option_list
     {
-        $$ = &tree.PrimaryKeyIndex{
-            KeyParts: $5,
-            Name: $3[0],
-            Empty: $3[1] == "",
-            IndexOption: $7,
-        }
+        var KeyParts = $5
+        var Name = $3[0]
+        var Empty = $3[1] == ""
+        var IndexOption = $7
+        $$ = tree.NewPrimaryKeyIndex(
+            KeyParts,
+            Name,
+            Empty,
+            IndexOption,
+        )
     }
 |   PRIMARY KEY index_name_and_type_opt '(' index_column_list ')' USING index_type index_option_list
     {
-        $$ = &tree.PrimaryKeyIndex{
-            KeyParts: $5,
-            Name: $3[0],
-            Empty: $3[1] == "",
-            IndexOption: $9,
-        }
+        var KeyParts = $5
+        var Name = $3[0]
+        var Empty = $3[1] == ""
+        var IndexOption = $9
+        $$ = tree.NewPrimaryKeyIndex(
+            KeyParts,
+            Name,
+            Empty,
+            IndexOption,
+        )
     }
 |   UNIQUE key_or_index_opt index_name_and_type_opt '(' index_column_list ')' index_option_list
     {
-        $$ = &tree.UniqueIndex{
-            KeyParts: $5,
-            Name: $3[0],
-            Empty: $3[1] == "",
-            IndexOption: $7,
-        }
+        var KeyParts = $5
+        var Name = $3[0]
+        var Empty = $3[1] == ""
+        var IndexOption = $7
+        $$ = tree.NewUniqueIndex(
+            KeyParts,
+            Name,
+            Empty,
+            IndexOption,
+        )
     }
 |   UNIQUE key_or_index_opt index_name_and_type_opt '(' index_column_list ')' USING index_type index_option_list
     {
-        $$ = &tree.UniqueIndex{
-            KeyParts: $5,
-            Name: $3[0],
-            Empty: $3[1] == "",
-            IndexOption: $9,
-        }
+        var KeyParts = $5
+        var Name = $3[0]
+        var Empty = $3[1] == ""
+        var IndexOption = $9
+        $$ = tree.NewUniqueIndex(
+            KeyParts,
+            Name,
+            Empty,
+            IndexOption,
+        )
     }
 |   FOREIGN KEY not_exists_opt index_name '(' index_column_list ')' references_def
     {
-        $$ = &tree.ForeignKey{
-            IfNotExists: $3,
-            KeyParts: $6,
-            Name: $4,
-            Refer: $8,
-            Empty: true,
-        }
+        var IfNotExists = $3
+        var KeyParts = $6
+        var Name = $4
+        var Refer = $8
+        var Empty = true
+        $$ = tree.NewForeignKey(
+            IfNotExists,
+            KeyParts,
+            Name,
+            Refer,
+            Empty,
+        )
     }
 |   CHECK '(' expression ')' enforce_opt
     {
-        $$ = &tree.CheckIndex{
-            Expr: $3,
-            Enforced: $5,
-        }
+        var Expr = $3
+        var Enforced = $5
+        $$ = tree.NewCheckIndex(
+            Expr,
+            Enforced,
+        )
     }
 
 enforce_opt:
@@ -7634,6 +8360,7 @@ index_type:
 |   RTREE
 |   ZONEMAP
 |   IVFFLAT
+|   MASTER
 |   BSI
 
 insert_method_options:
@@ -7659,15 +8386,21 @@ column_def:
 column_name_unresolved:
     ident
     {
-        $$ = tree.SetUnresolvedName($1.Compare())
+        unResolve := tree.SetUnresolvedName($1.Compare())
+        unResolve.SetUnresolvedNameCStrParts(yylex.(*Lexer).useOrigin, $1.Origin())
+        $$ = unResolve
     }
 |   ident '.' ident
     {
-        $$ = tree.SetUnresolvedName($1.Compare(), $3.Compare())
+        unResolve := tree.SetUnresolvedName($1.Compare(), $3.Compare())
+        unResolve.SetUnresolvedNameCStrParts(yylex.(*Lexer).useOrigin, $1.Origin(), $3.Origin())
+        $$ = unResolve
     }
 |   ident '.' ident '.' ident
     {
-        $$ = tree.SetUnresolvedName($1.Compare(), $3.Compare(), $5.Compare())
+        unResolve := tree.SetUnresolvedName($1.Compare(), $3.Compare(), $5.Compare())
+        unResolve.SetUnresolvedNameCStrParts(yylex.(*Lexer).useOrigin, $1.Origin(), $3.Origin(), $5.Origin())
+        $$ = unResolve
     }
 
 ident:
@@ -7691,15 +8424,21 @@ ident:
 column_name:
     ident
     {
-        $$ = tree.SetUnresolvedName($1.Compare())
+        unResolve := tree.SetUnresolvedName($1.Compare())
+        unResolve.SetUnresolvedNameCStrParts(yylex.(*Lexer).useOrigin, $1.Origin())
+        $$ = unResolve
     }
 |   ident '.' ident
     {
-        $$ = tree.SetUnresolvedName($1.Compare(), $3.Compare())
+        unResolve := tree.SetUnresolvedName($1.Compare(), $3.Compare())
+        unResolve.SetUnresolvedNameCStrParts(yylex.(*Lexer).useOrigin, $1.Origin(), $3.Origin())
+        $$ = unResolve
     }
 |   ident '.' ident '.' ident
     {
-        $$ = tree.SetUnresolvedName($1.Compare(), $3.Compare(), $5.Compare())
+        unResolve := tree.SetUnresolvedName($1.Compare(), $3.Compare(), $5.Compare())
+        unResolve.SetUnresolvedNameCStrParts(yylex.(*Lexer).useOrigin, $1.Origin(), $3.Origin(), $5.Origin())
+        $$ = unResolve
     }
 
 column_attribute_list_opt:
@@ -7777,11 +8516,11 @@ column_attribute_elem:
     }
 |   constraint_keyword_opt CHECK '(' expression ')'
     {
-        $$ = tree.NewAttributeCheck($4, false, $1)
+        $$ = tree.NewAttributeCheckConstraint($4, false, $1)
     }
 |   constraint_keyword_opt CHECK '(' expression ')' enforce
     {
-        $$ = tree.NewAttributeCheck($4, $6, $1)
+        $$ = tree.NewAttributeCheckConstraint($4, $6, $1)
     }
 |   ON UPDATE name_datetime_scale datetime_scale_opt
     {
@@ -7792,6 +8531,7 @@ column_attribute_elem:
         }
         expr := &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStrUseOrigin($3,yylex.(*Lexer).useOrigin),
             Exprs: es,
         }
         $$ = tree.NewAttributeOnUpdate(expr)
@@ -7853,13 +8593,18 @@ constraint_keyword:
 references_def:
     REFERENCES table_name index_column_list_opt match_opt on_delete_update_opt
     {
-        $$ = &tree.AttributeReference{
-            TableName: $2,
-            KeyParts: $3,
-            Match: $4,
-            OnDelete: $5.OnDelete,
-            OnUpdate: $5.OnUpdate,
-        }
+        var TableName = $2
+        var KeyParts = $3
+        var Match = $4
+        var OnDelete = $5.OnDelete
+        var OnUpdate = $5.OnUpdate
+        $$ = tree.NewAttributeReference(
+            TableName,
+            KeyParts,
+            Match,
+            OnDelete,
+            OnUpdate,
+        )
     }
 
 on_delete_update_opt:
@@ -8056,7 +8801,7 @@ simple_expr:
     }
 |   '(' expression ')'
     {
-        $$ = tree.NewParenExpr($2)
+        $$ = tree.NewParentExpr($2)
     }
 |   '(' expression_list ',' expression ')'
     {
@@ -8077,6 +8822,48 @@ simple_expr:
 |   '!' simple_expr %prec UNARY
     {
         $$ = tree.NewUnaryExpr(tree.UNARY_MARK, $2)
+    }
+|   '{'  ident expression '}'
+    {   
+        hint := strings.ToLower($2.Compare())
+        switch hint {
+		case "d":
+            locale := ""
+            t := &tree.T{
+                InternalType: tree.InternalType{
+                   Family: tree.TimestampFamily,
+                   FamilyString: "DATETIME",
+                   Locale: &locale,
+                   Oid: uint32(defines.MYSQL_TYPE_DATETIME),
+                },
+            }
+            $$ = tree.NewCastExpr($3, t)
+        case "t":
+            locale := ""
+            t := &tree.T{
+                InternalType: tree.InternalType{
+                   Family: tree.TimeFamily,
+                   FamilyString: "TIME",
+                   Locale: &locale,
+                   Oid: uint32(defines.MYSQL_TYPE_TIME),
+               },
+            }    
+            $$ = tree.NewCastExpr($3, t)
+        case "ts":
+            locale := ""
+            t := &tree.T{
+                InternalType: tree.InternalType{
+                    Family: tree.TimestampFamily,
+                    FamilyString: "TIMESTAMP",
+                    Locale:  &locale,
+                    Oid: uint32(defines.MYSQL_TYPE_TIMESTAMP),
+                },
+            }
+            $$ = tree.NewCastExpr($3, t) 
+        default:
+            yylex.Error("Invalid type")
+            return 1
+        }
     }
 |   interval_expr
     {
@@ -8103,6 +8890,10 @@ simple_expr:
     {
         $$ = tree.NewCastExpr($3, $5)
     }
+|   SERIAL_EXTRACT '(' expression ',' expression AS mo_cast_type ')'
+    {
+	$$ = tree.NewSerialExtractExpr($3, $5, $7)
+    }
 |   BIT_CAST '(' expression AS mo_cast_type ')'
     {
         $$ = tree.NewBitCastExpr($3, $5)
@@ -8117,6 +8908,7 @@ simple_expr:
         es := tree.NewNumValWithType(constant.MakeString($5), $5, false, tree.P_char)
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStrUseOrigin($1,yylex.(*Lexer).useOrigin),
             Exprs: tree.Exprs{$3, es},
         }
     }
@@ -8142,7 +8934,11 @@ simple_expr:
     }
 |   sample_function_expr
     {
-	$$ = $1
+        $$ = $1
+    }
+|   simple_expr COLLATE collate_name
+    {
+        $$ = $1
     }
 
 function_call_window:
@@ -8151,6 +8947,7 @@ function_call_window:
         name := tree.SetUnresolvedName(strings.ToLower($1))
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStrUseOrigin($1,yylex.(*Lexer).useOrigin),
             WindowSpec: $4,
         }
     }
@@ -8159,6 +8956,7 @@ function_call_window:
         name := tree.SetUnresolvedName(strings.ToLower($1))
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStrUseOrigin($1,yylex.(*Lexer).useOrigin),
             WindowSpec: $4,
         }
     }
@@ -8167,6 +8965,7 @@ function_call_window:
         name := tree.SetUnresolvedName(strings.ToLower($1))
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStrUseOrigin($1,yylex.(*Lexer).useOrigin),
             WindowSpec: $4,
         }
     }
@@ -8175,19 +8974,29 @@ sample_function_expr:
     SAMPLE '(' '*' ',' INTEGRAL ROWS ')'
     {
 	v := int($5.(int64))
-	val, err := tree.NewSampleRowsFuncExpression(v, true, nil)
+	val, err := tree.NewSampleRowsFuncExpression(v, true, nil, "block")
 	if err != nil {
 	    yylex.Error(err.Error())
-	    return 1
+	    goto ret1
 	}
 	$$ = val
     }
+|   SAMPLE '(' '*' ',' INTEGRAL ROWS ',' STRING ')'
+        {
+    	v := int($5.(int64))
+    	val, err := tree.NewSampleRowsFuncExpression(v, true, nil, $8)
+    	if err != nil {
+    	    yylex.Error(err.Error())
+    	    goto ret1
+    	}
+    	$$ = val
+        }
 |   SAMPLE '(' '*' ',' INTEGRAL PERCENT ')'
     {
 	val, err := tree.NewSamplePercentFuncExpression1($5.(int64), true, nil)
 	if err != nil {
 	    yylex.Error(err.Error())
-	    return 1
+	    goto ret1
 	}
 	$$ = val
     }
@@ -8196,7 +9005,7 @@ sample_function_expr:
 	val, err := tree.NewSamplePercentFuncExpression2($5.(float64), true, nil)
 	if err != nil {
 	    yylex.Error(err.Error())
-	    return 1
+	    goto ret1
 	}
 	$$ = val
     }
@@ -8204,19 +9013,29 @@ sample_function_expr:
     SAMPLE '(' expression_list ',' INTEGRAL ROWS ')'
     {
     	v := int($5.(int64))
-    	val, err := tree.NewSampleRowsFuncExpression(v, false, $3)
+    	val, err := tree.NewSampleRowsFuncExpression(v, false, $3, "block")
     	if err != nil {
     	    yylex.Error(err.Error())
-    	    return 1
+    	    goto ret1
     	}
     	$$ = val
+    }
+|   SAMPLE '(' expression_list ',' INTEGRAL ROWS ',' STRING ')'
+    {
+	v := int($5.(int64))
+	val, err := tree.NewSampleRowsFuncExpression(v, false, $3, $8)
+	if err != nil {
+	    yylex.Error(err.Error())
+	    goto ret1
+	}
+	$$ = val
     }
 |   SAMPLE '(' expression_list ',' INTEGRAL PERCENT ')'
     {
         val, err := tree.NewSamplePercentFuncExpression1($5.(int64), false, $3)
         if err != nil {
             yylex.Error(err.Error())
-            return 1
+            goto ret1
         }
         $$ = val
     }
@@ -8225,7 +9044,7 @@ sample_function_expr:
         val, err := tree.NewSamplePercentFuncExpression2($5.(float64), false, $3)
         if err != nil {
             yylex.Error(err.Error())
-            return 1
+            goto ret1
         }
         $$ = val
     }
@@ -8581,6 +9400,7 @@ function_call_aggregate:
 	    name := tree.SetUnresolvedName(strings.ToLower($1))
 	        $$ = &tree.FuncExpr{
 	        Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStrUseOrigin($1,yylex.(*Lexer).useOrigin),
 	        Exprs: append($4,tree.NewNumValWithType(constant.MakeString($6), $6, false, tree.P_char)),
 	        Type: $3,
 	        WindowSpec: $8,
@@ -8592,6 +9412,7 @@ function_call_aggregate:
   	     name := tree.SetUnresolvedName(strings.ToLower($1))
 		$$ = &tree.FuncExpr{
 		Func: tree.FuncName2ResolvableFunctionReference(name),
+        FuncName: tree.NewCStrUseOrigin($1,yylex.(*Lexer).useOrigin),
 		Exprs: append($4,tree.NewNumValWithType(constant.MakeString($6), $6, false, tree.P_char)),
 		Type: $3,
 		WindowSpec: $8,
@@ -8603,6 +9424,7 @@ function_call_aggregate:
         name := tree.SetUnresolvedName(strings.ToLower($1))
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStrUseOrigin($1,yylex.(*Lexer).useOrigin),
             Exprs: tree.Exprs{$4},
             Type: $3,
             WindowSpec: $6,
@@ -8613,6 +9435,7 @@ function_call_aggregate:
         name := tree.SetUnresolvedName(strings.ToLower($1))
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStrUseOrigin($1,yylex.(*Lexer).useOrigin),
             Exprs: $4,
             Type: $3,
             WindowSpec: $6,
@@ -8624,6 +9447,7 @@ function_call_aggregate:
         es := tree.NewNumValWithType(constant.MakeString("*"), "*", false, tree.P_char)
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStrUseOrigin($1,yylex.(*Lexer).useOrigin),
             Exprs: tree.Exprs{es},
             WindowSpec: $5,
         }
@@ -8633,6 +9457,7 @@ function_call_aggregate:
         name := tree.SetUnresolvedName(strings.ToLower($1))
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStrUseOrigin($1,yylex.(*Lexer).useOrigin),
             Exprs: $3,
             WindowSpec: $5,
         }
@@ -8642,6 +9467,7 @@ function_call_aggregate:
         name := tree.SetUnresolvedName(strings.ToLower($1))
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStrUseOrigin($1,yylex.(*Lexer).useOrigin),
             Exprs: $3,
             WindowSpec: $5,
         }
@@ -8651,6 +9477,7 @@ function_call_aggregate:
         name := tree.SetUnresolvedName(strings.ToLower($1))
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStrUseOrigin($1,yylex.(*Lexer).useOrigin),
             Exprs: tree.Exprs{$4},
             Type: $3,
             WindowSpec: $6,
@@ -8661,6 +9488,7 @@ function_call_aggregate:
         name := tree.SetUnresolvedName(strings.ToLower($1))
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStrUseOrigin($1,yylex.(*Lexer).useOrigin),
             Exprs: tree.Exprs{$4},
             Type: $3,
             WindowSpec: $6,
@@ -8671,6 +9499,7 @@ function_call_aggregate:
         name := tree.SetUnresolvedName(strings.ToLower($1))
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStrUseOrigin($1,yylex.(*Lexer).useOrigin),
             Exprs: tree.Exprs{$4},
             Type: $3,
             WindowSpec: $6,
@@ -8681,6 +9510,7 @@ function_call_aggregate:
         name := tree.SetUnresolvedName(strings.ToLower($1))
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStrUseOrigin($1,yylex.(*Lexer).useOrigin),
             Exprs: $4,
             Type: $3,
             WindowSpec: $6,
@@ -8692,6 +9522,7 @@ function_call_aggregate:
         es := tree.NewNumValWithType(constant.MakeString("*"), "*", false, tree.P_char)
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStrUseOrigin($1,yylex.(*Lexer).useOrigin),
             Exprs: tree.Exprs{es},
             WindowSpec: $5,
         }
@@ -8701,6 +9532,7 @@ function_call_aggregate:
         name := tree.SetUnresolvedName(strings.ToLower($1))
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStrUseOrigin($1,yylex.(*Lexer).useOrigin),
             Exprs: tree.Exprs{$4},
             Type: $3,
             WindowSpec: $6,
@@ -8711,6 +9543,7 @@ function_call_aggregate:
         name := tree.SetUnresolvedName(strings.ToLower($1))
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStrUseOrigin($1,yylex.(*Lexer).useOrigin),
             Exprs: tree.Exprs{$4},
             Type: $3,
             WindowSpec: $6,
@@ -8721,6 +9554,7 @@ function_call_aggregate:
         name := tree.SetUnresolvedName(strings.ToLower($1))
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStrUseOrigin($1,yylex.(*Lexer).useOrigin),
             Exprs: tree.Exprs{$4},
             Type: $3,
             WindowSpec: $6,
@@ -8731,6 +9565,7 @@ function_call_aggregate:
         name := tree.SetUnresolvedName(strings.ToLower($1))
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStrUseOrigin($1,yylex.(*Lexer).useOrigin),
             Exprs: tree.Exprs{$4},
             Type: $3,
             WindowSpec: $6,
@@ -8741,6 +9576,7 @@ function_call_aggregate:
         name := tree.SetUnresolvedName(strings.ToLower($1))
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStrUseOrigin($1,yylex.(*Lexer).useOrigin),
             Exprs: tree.Exprs{$4},
             Type: $3,
             WindowSpec: $6,
@@ -8751,6 +9587,7 @@ function_call_aggregate:
         name := tree.SetUnresolvedName(strings.ToLower($1))
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStrUseOrigin($1,yylex.(*Lexer).useOrigin),
             Exprs: tree.Exprs{$4},
             Type: $3,
             WindowSpec: $6,
@@ -8761,6 +9598,7 @@ function_call_aggregate:
         name := tree.SetUnresolvedName(strings.ToLower($1))
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStrUseOrigin($1,yylex.(*Lexer).useOrigin),
             Exprs: tree.Exprs{$4},
             Type: $3,
             WindowSpec: $6,
@@ -8771,13 +9609,34 @@ function_call_aggregate:
 	name := tree.SetUnresolvedName(strings.ToLower($1))
 	$$ = &tree.FuncExpr{
 	    Func: tree.FuncName2ResolvableFunctionReference(name),
+        FuncName: tree.NewCStrUseOrigin($1,yylex.(*Lexer).useOrigin),
 	    Exprs: tree.Exprs{$4},
 	    Type: $3,
 	    WindowSpec: $6,
 	    }
     }
-
-
+|   BITMAP_CONSTRUCT_AGG '(' func_type_opt expression ')' window_spec_opt
+    {
+        name := tree.SetUnresolvedName(strings.ToLower($1))
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStrUseOrigin($1,yylex.(*Lexer).useOrigin),
+            Exprs: tree.Exprs{$4},
+            Type: $3,
+            WindowSpec: $6,
+        }
+    }
+|   BITMAP_OR_AGG '(' func_type_opt expression ')' window_spec_opt
+    {
+        name := tree.SetUnresolvedName(strings.ToLower($1))
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStrUseOrigin($1,yylex.(*Lexer).useOrigin),
+            Exprs: tree.Exprs{$4},
+            Type: $3,
+            WindowSpec: $6,
+        }
+    }
 
 std_dev_pop:
     STD
@@ -8790,6 +9649,7 @@ function_call_generic:
         name := tree.SetUnresolvedName(strings.ToLower($1))
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStrUseOrigin($1,yylex.(*Lexer).useOrigin),
             Exprs: $3,
         }
     }
@@ -8798,6 +9658,7 @@ function_call_generic:
         name := tree.SetUnresolvedName(strings.ToLower($1))
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStrUseOrigin($1,yylex.(*Lexer).useOrigin),
             Exprs: $3,
         }
     }
@@ -8806,6 +9667,7 @@ function_call_generic:
         name := tree.SetUnresolvedName(strings.ToLower($1))
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStrUseOrigin($1,yylex.(*Lexer).useOrigin),
             Exprs: tree.Exprs{$3, $5},
         }
     }
@@ -8814,6 +9676,7 @@ function_call_generic:
         name := tree.SetUnresolvedName(strings.ToLower($1))
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStrUseOrigin($1,yylex.(*Lexer).useOrigin),
             Exprs: tree.Exprs{$3, $5, $7},
         }
     }
@@ -8824,6 +9687,7 @@ function_call_generic:
         timeUinit := tree.NewNumValWithType(constant.MakeString(str), str, false, tree.P_char)
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStrUseOrigin($1,yylex.(*Lexer).useOrigin),
             Exprs: tree.Exprs{timeUinit, $5},
         }
     }
@@ -8832,6 +9696,7 @@ function_call_generic:
         name := tree.SetUnresolvedName(strings.ToLower($1))
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStrUseOrigin($1,yylex.(*Lexer).useOrigin),
             Exprs: $3,
         }
     }
@@ -8840,6 +9705,7 @@ function_call_generic:
         name := tree.SetUnresolvedName(strings.ToLower($1))
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStrUseOrigin($1,yylex.(*Lexer).useOrigin),
             Exprs: tree.Exprs{$4},
             Type: $3,
         }
@@ -8849,6 +9715,7 @@ function_call_generic:
         name := tree.SetUnresolvedName("nextval")
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStrUseOrigin($1,yylex.(*Lexer).useOrigin),
             Exprs: $3,
         }
     }
@@ -8857,6 +9724,7 @@ function_call_generic:
         name := tree.SetUnresolvedName("setval")
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStrUseOrigin($1,yylex.(*Lexer).useOrigin),
             Exprs: $3,
         }
     }
@@ -8865,6 +9733,7 @@ function_call_generic:
         name := tree.SetUnresolvedName("currval")
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStrUseOrigin($1,yylex.(*Lexer).useOrigin),
             Exprs: $3,
         }
     }
@@ -8873,6 +9742,7 @@ function_call_generic:
         name := tree.SetUnresolvedName("lastval")
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStrUseOrigin($1,yylex.(*Lexer).useOrigin),
             Exprs: nil,
         }
     }
@@ -8884,6 +9754,7 @@ function_call_generic:
         arg2 := tree.NewNumValWithType(constant.MakeString(" "), " ", false, tree.P_char)
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStrUseOrigin($1,yylex.(*Lexer).useOrigin),
             Exprs: tree.Exprs{arg0, arg1, arg2, $3},
         }
     }
@@ -8894,6 +9765,7 @@ function_call_generic:
         arg1 := tree.NewNumValWithType(constant.MakeString("both"), "both", false, tree.P_char)
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStrUseOrigin($1,yylex.(*Lexer).useOrigin),
             Exprs: tree.Exprs{arg0, arg1, $3, $5},
         }
     }
@@ -8906,6 +9778,7 @@ function_call_generic:
         arg2 := tree.NewNumValWithType(constant.MakeString(" "), " ", false, tree.P_char)
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStrUseOrigin($1,yylex.(*Lexer).useOrigin),
             Exprs: tree.Exprs{arg0, arg1, arg2, $5},
         }
     }
@@ -8917,6 +9790,7 @@ function_call_generic:
         arg1 := tree.NewNumValWithType(constant.MakeString(str), str, false, tree.P_char)
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStrUseOrigin($1,yylex.(*Lexer).useOrigin),
             Exprs: tree.Exprs{arg0, arg1, $4, $6},
         }
     }
@@ -8925,8 +9799,9 @@ function_call_generic:
         column := tree.SetUnresolvedName(strings.ToLower($3))
         name := tree.SetUnresolvedName(strings.ToLower($1))
     	$$ = &tree.FuncExpr{
-                    Func: tree.FuncName2ResolvableFunctionReference(name),
-                    Exprs: tree.Exprs{column},
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStrUseOrigin($1,yylex.(*Lexer).useOrigin),
+            Exprs: tree.Exprs{column},
         }
     }
 
@@ -8987,6 +9862,7 @@ function_call_nonkeyword:
         }
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStrUseOrigin($1,yylex.(*Lexer).useOrigin),
             Exprs: es,
         }
     }
@@ -8999,6 +9875,7 @@ function_call_nonkeyword:
         }
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStrUseOrigin($1,yylex.(*Lexer).useOrigin),
             Exprs: es,
         }
     }
@@ -9008,8 +9885,9 @@ function_call_nonkeyword:
         str := strings.ToLower($3)
         arg1 := tree.NewNumValWithType(constant.MakeString(str), str, false, tree.P_char)
 		$$ =  &tree.FuncExpr{
-             Func: tree.FuncName2ResolvableFunctionReference(name),
-             Exprs: tree.Exprs{arg1, $5, $7},
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStrUseOrigin($1,yylex.(*Lexer).useOrigin),
+            Exprs: tree.Exprs{arg1, $5, $7},
         }
 	}
 function_call_keyword:
@@ -9018,6 +9896,7 @@ function_call_keyword:
         name := tree.SetUnresolvedName(strings.ToLower($1))
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStrUseOrigin($1,yylex.(*Lexer).useOrigin),
             Exprs: $3,
         }
     }
@@ -9026,6 +9905,7 @@ function_call_keyword:
         name := tree.SetUnresolvedName(strings.ToLower($1))
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStrUseOrigin($1,yylex.(*Lexer).useOrigin),
         }
     }
 |    SCHEMA '('')'
@@ -9033,6 +9913,7 @@ function_call_keyword:
         name := tree.SetUnresolvedName(strings.ToLower($1))
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStrUseOrigin($1,yylex.(*Lexer).useOrigin),
         }
     }
 |   name_datetime_scale datetime_scale_opt
@@ -9044,6 +9925,7 @@ function_call_keyword:
         }
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStrUseOrigin($1,yylex.(*Lexer).useOrigin),
             Exprs: es,
         }
     }
@@ -9052,6 +9934,7 @@ function_call_keyword:
         name := tree.SetUnresolvedName("binary")
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStrUseOrigin($1,yylex.(*Lexer).useOrigin),
             Exprs: $3,
         }
     }
@@ -9062,6 +9945,7 @@ function_call_keyword:
         exprs[0] = $2
         $$ = &tree.FuncExpr{
            Func: tree.FuncName2ResolvableFunctionReference(name),
+           FuncName: tree.NewCStrUseOrigin($1,yylex.(*Lexer).useOrigin),
            Exprs: exprs,
         }
     }
@@ -9072,6 +9956,7 @@ function_call_keyword:
         exprs[0] = $2
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStrUseOrigin($1,yylex.(*Lexer).useOrigin),
             Exprs: exprs,
         }
     }
@@ -9080,6 +9965,7 @@ function_call_keyword:
         name := tree.SetUnresolvedName("char")
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStrUseOrigin($1,yylex.(*Lexer).useOrigin),
             Exprs: $3,
         }
     }
@@ -9091,6 +9977,7 @@ function_call_keyword:
         name := tree.SetUnresolvedName("char")
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStrUseOrigin($1,yylex.(*Lexer).useOrigin),
             Exprs: es,
         }
     }
@@ -9100,6 +9987,7 @@ function_call_keyword:
         name := tree.SetUnresolvedName("date")
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStrUseOrigin($1,yylex.(*Lexer).useOrigin),
             Exprs: tree.Exprs{val},
         }
     }
@@ -9109,6 +9997,7 @@ function_call_keyword:
         name := tree.SetUnresolvedName("time")
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStrUseOrigin($1,yylex.(*Lexer).useOrigin),
             Exprs: tree.Exprs{val},
         }
     }
@@ -9117,6 +10006,7 @@ function_call_keyword:
         name := tree.SetUnresolvedName("insert")
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStrUseOrigin($1,yylex.(*Lexer).useOrigin),
             Exprs: $3,
         }
     }
@@ -9127,6 +10017,7 @@ function_call_keyword:
         name := tree.SetUnresolvedName("mod")
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStrUseOrigin($1,yylex.(*Lexer).useOrigin),
             Exprs: es,
         }
     }
@@ -9135,6 +10026,7 @@ function_call_keyword:
         name := tree.SetUnresolvedName("password")
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStrUseOrigin($1,yylex.(*Lexer).useOrigin),
             Exprs: $3,
         }
     }
@@ -9144,7 +10036,35 @@ function_call_keyword:
         name := tree.SetUnresolvedName("timestamp")
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStrUseOrigin($1,yylex.(*Lexer).useOrigin),
             Exprs: tree.Exprs{val},
+        }
+    }
+|   BITMAP_BIT_POSITION '(' expression_list_opt ')'
+    {
+        name := tree.SetUnresolvedName(strings.ToLower($1))
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStrUseOrigin($1,yylex.(*Lexer).useOrigin),
+            Exprs: $3,
+        }
+    }
+|   BITMAP_BUCKET_NUMBER '(' expression_list_opt ')'
+    {
+        name := tree.SetUnresolvedName(strings.ToLower($1))
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStrUseOrigin($1,yylex.(*Lexer).useOrigin),
+            Exprs: $3,
+        }
+    }
+|   BITMAP_COUNT '(' expression_list_opt ')'
+    {
+        name := tree.SetUnresolvedName(strings.ToLower($1))
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStrUseOrigin($1,yylex.(*Lexer).useOrigin),
+            Exprs: $3,
         }
     }
 
@@ -9167,7 +10087,7 @@ datetime_scale:
         ival, errStr := util.GetInt64($2)
         if errStr != "" {
             yylex.Error(errStr)
-            return 1
+            goto ret1
         }
         str := fmt.Sprintf("%v", $2)
         $$ = tree.NewNumValWithType(constant.MakeInt64(ival), str, false, tree.P_int64)
@@ -9231,6 +10151,7 @@ interval_expr:
         arg2 := tree.NewNumValWithType(constant.MakeString(str), str, false, tree.P_char)
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStrUseOrigin($1,yylex.(*Lexer).useOrigin),
             Exprs: tree.Exprs{$2, arg2},
         }
     }
@@ -9297,8 +10218,9 @@ expression:
     {
         name := tree.SetUnresolvedName(strings.ToLower("concat"))
         $$ = &tree.FuncExpr{
-             Func: tree.FuncName2ResolvableFunctionReference(name),
-             Exprs: tree.Exprs{$1, $3},
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStrUseOrigin("concat",yylex.(*Lexer).useOrigin),
+            Exprs: tree.Exprs{$1, $3},
         }
     }
 |   expression XOR expression %prec XOR
@@ -9503,7 +10425,7 @@ num_literal:
             $$ = tree.NewNumValWithType(constant.MakeInt64(v), str, false, tree.P_int64)
         default:
             yylex.Error("parse integral fail")
-            return 1
+            goto ret1
         }
     }
 |   FLOAT
@@ -9531,7 +10453,7 @@ literal:
             $$ = tree.NewNumValWithType(constant.MakeInt64(v), str, false, tree.P_int64)
         default:
             yylex.Error("parse integral fail")
-            return 1
+            goto ret1
         }
     }
 |   FLOAT
@@ -9568,17 +10490,7 @@ literal:
     }
 |   BIT_LITERAL
     {
-        switch v := $1.(type) {
-        case uint64:
-            $$ = tree.NewNumValWithType(constant.MakeUint64(v), yylex.(*Lexer).scanner.LastToken, false, tree.P_uint64)
-        case int64:
-            $$ = tree.NewNumValWithType(constant.MakeInt64(v), yylex.(*Lexer).scanner.LastToken, false, tree.P_int64)
-        case string:
-            $$ = tree.NewNumValWithType(constant.MakeString(v), v, false, tree.P_bit)
-        default:
-            yylex.Error("parse integral fail")
-            return 1
-        }
+        $$ = tree.NewNumValWithType(constant.MakeString($1), $1, false, tree.P_bit)
     }
 |   VALUE_ARG
     {
@@ -9799,15 +10711,15 @@ decimal_type:
         locale := ""
         if $2.DisplayWith > 255 {
             yylex.Error("Display width for double out of range (max = 255)")
-            return 1
+            goto ret1
         }
         if $2.Scale > 30 {
             yylex.Error("Display scale for double out of range (max = 30)")
-            return 1
+            goto ret1
         }
         if $2.Scale != tree.NotDefineDec && $2.Scale > $2.DisplayWith {
             yylex.Error("For float(M,D), double(M,D) or decimal(M,D), M must be >= D (column 'a'))")
-                return 1
+                goto ret1
         }
         $$ = &tree.T{
             InternalType: tree.InternalType{
@@ -9826,15 +10738,15 @@ decimal_type:
         locale := ""
         if $2.DisplayWith > 255 {
             yylex.Error("Display width for float out of range (max = 255)")
-            return 1
+            goto ret1
         }
         if $2.Scale > 30 {
             yylex.Error("Display scale for float out of range (max = 30)")
-            return 1
+            goto ret1
         }
         if $2.Scale != tree.NotDefineDec && $2.Scale > $2.DisplayWith {
         	yylex.Error("For float(M,D), double(M,D) or decimal(M,D), M must be >= D (column 'a'))")
-        	return 1
+        	goto ret1
         }
         if $2.DisplayWith >= 24 {
             $$ = &tree.T{
@@ -9868,11 +10780,11 @@ decimal_type:
         locale := ""
         if $2.Scale != tree.NotDefineDec && $2.Scale > $2.DisplayWith {
         yylex.Error("For float(M,D), double(M,D) or decimal(M,D), M must be >= D (column 'a'))")
-        return 1
+        goto ret1
         }
         if $2.DisplayWith > 38 || $2.DisplayWith < 0 {
             yylex.Error("For decimal(M), M must between 0 and 38.")
-                return 1
+                goto ret1
         } else if $2.DisplayWith <= 16 {
             $$ = &tree.T{
             InternalType: tree.InternalType{
@@ -9904,11 +10816,11 @@ decimal_type:
         locale := ""
         if $2.Scale != tree.NotDefineDec && $2.Scale > $2.DisplayWith {
         yylex.Error("For float(M,D), double(M,D) or decimal(M,D), M must be >= D (column 'a'))")
-        return 1
+        goto ret1
         }
         if $2.DisplayWith > 38 || $2.DisplayWith < 0 {
             yylex.Error("For decimal(M), M must between 0 and 38.")
-                return 1
+                goto ret1
         } else if $2.DisplayWith <= 16 {
             $$ = &tree.T{
             InternalType: tree.InternalType{
@@ -9969,7 +10881,7 @@ time_type:
         locale := ""
         if $2 < 0 || $2 > 6 {
             yylex.Error("For Time(fsp), fsp must in [0, 6]")
-            return 1
+            goto ret1
         } else {
             $$ = &tree.T{
                 InternalType: tree.InternalType{
@@ -9989,7 +10901,7 @@ time_type:
         locale := ""
         if $2 < 0 || $2 > 6 {
             yylex.Error("For Timestamp(fsp), fsp must in [0, 6]")
-            return 1
+            goto ret1
         } else {
             $$ = &tree.T{
                 InternalType: tree.InternalType{
@@ -10009,7 +10921,7 @@ time_type:
         locale := ""
         if $2 < 0 || $2 > 6 {
             yylex.Error("For Datetime(fsp), fsp must in [0, 6]")
-            return 1
+            goto ret1
         } else {
             $$ = &tree.T{
                 InternalType: tree.InternalType{
@@ -10849,9 +11761,11 @@ non_reserved_keyword:
 |   DEFINER
 |   SQL
 |   STAGE
+|   SNAPSHOTS
 |   STAGES
 |   BACKUP
 |   FILESYSTEM
+|   PARALLELISM
 |	VALUE
 |	REFERENCE
 |	MODIFY
@@ -10860,10 +11774,10 @@ non_reserved_keyword:
 |	AUTOEXTEND_SIZE
 |	BSI
 |	BINDINGS
-|	UNDERSCORE_BINARY
 |	BOOLEAN
 |   BTREE
 |	IVFFLAT
+|	MASTER
 |	COALESCE
 |	CONNECT
 |	CIPHER
@@ -10973,6 +11887,7 @@ non_reserved_keyword:
 |	SAMPLE
 |	PERCENT
 |	OWNERSHIP
+|   MO_TS
 
 func_not_keyword:
     DATE_ADD
@@ -11032,7 +11947,12 @@ not_keyword:
 |   CURRVAL
 |   LASTVAL
 |   HEADERS
+|   SERIAL_EXTRACT
 |   BIT_CAST
+|   BITMAP_BIT_POSITION
+|   BITMAP_BUCKET_NUMBER
+|   BITMAP_COUNT
+
 
 //mo_keywords:
 //    PROPERTIES

@@ -14,6 +14,17 @@
 
 package tree
 
+import "github.com/matrixorigin/matrixone/pkg/common/reuse"
+
+func init() {
+	reuse.CreatePool[TruncateTable](
+		func() *TruncateTable { return &TruncateTable{} },
+		func(t *TruncateTable) { t.reset() },
+		reuse.DefaultOptions[TruncateTable](), //.
+	) //WithEnableChecker()
+
+}
+
 // truncate table statement
 type TruncateTable struct {
 	statementImpl
@@ -21,7 +32,9 @@ type TruncateTable struct {
 }
 
 func NewTruncateTable(name *TableName) *TruncateTable {
-	return &TruncateTable{Name: name}
+	truncate := reuse.Alloc[TruncateTable](nil)
+	truncate.Name = name
+	return truncate
 }
 
 func (node *TruncateTable) Format(ctx *FmtCtx) {
@@ -32,3 +45,16 @@ func (node *TruncateTable) Format(ctx *FmtCtx) {
 
 func (node *TruncateTable) GetStatementType() string { return "Truncate" }
 func (node *TruncateTable) GetQueryType() string     { return QueryTypeDDL }
+
+func (node *TruncateTable) Free() {
+	reuse.Free[TruncateTable](node, nil)
+}
+
+func (node *TruncateTable) reset() {
+	// if node.Name != nil {
+	// node.Name.Free()
+	// }
+	*node = TruncateTable{}
+}
+
+func (node TruncateTable) TypeName() string { return "tree.TruncateTable" }

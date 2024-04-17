@@ -98,13 +98,13 @@ func (e *CheckpointEntry) IsCommitted() bool {
 	return e.state == ST_Finished
 }
 func (e *CheckpointEntry) HasOverlap(from, to types.TS) bool {
-	if e.start.Greater(to) || e.end.Less(from) {
+	if e.start.Greater(&to) || e.end.Less(&from) {
 		return false
 	}
 	return true
 }
 func (e *CheckpointEntry) LessEq(ts types.TS) bool {
-	return e.end.LessEq(ts)
+	return e.end.LessEq(&ts)
 }
 func (e *CheckpointEntry) SetLocation(cn, tn objectio.Location) {
 	e.Lock()
@@ -276,12 +276,12 @@ func (e *CheckpointEntry) GetByTableID(ctx context.Context, fs *objectio.ObjectF
 func (e *CheckpointEntry) GCMetadata(fs *objectio.ObjectFS) error {
 	name := blockio.EncodeCheckpointMetadataFileName(CheckpointDir, PrefixMetadata, e.start, e.end)
 	err := fs.Delete(name)
-	logutil.Debugf("GC checkpoint metadata %v, err %v", e.String(), err)
+	logutil.Infof("GC checkpoint metadata %v, err %v", e.String(), err)
 	return err
 }
 
 func (e *CheckpointEntry) GCEntry(fs *objectio.ObjectFS) error {
 	err := fs.Delete(e.cnLocation.Name().String())
-	defer logutil.Debugf("GC checkpoint metadata %v, err %v", e.String(), err)
+	defer logutil.Infof("GC checkpoint entry %v, err %v", e.String(), err)
 	return err
 }

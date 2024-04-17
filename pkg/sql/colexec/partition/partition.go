@@ -72,7 +72,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	ap := arg
 	ctr := ap.ctr
 
-	anal := proc.GetAnalyze(arg.info.Idx, arg.info.ParallelIdx, arg.info.ParallelMajor)
+	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
 	anal.Start()
 	defer anal.Stop()
 	result := vm.NewCallResult()
@@ -248,7 +248,7 @@ func (ctr *container) pickSameRow(row int64, cols []*vector.Vector) (batIndex in
 	return j, hasSame
 }
 
-func (ctr *container) removeBatch(proc *process.Process, index int) {
+func (ctr *container) removeBatch(_ *process.Process, index int) {
 	//bat := ctr.batchList[index]
 	//cols := ctr.orderCols[index]
 

@@ -83,7 +83,9 @@ func newBatch(batchSize int, typs []types.Type, pool *mpool.MPool) *batch.Batch 
 			typ.Scale = 6
 		}
 		vec := vector.NewVec(typ)
-		vec.PreExtend(batchSize, pool)
+		if err := vec.PreExtend(batchSize, pool); err != nil {
+			panic(err)
+		}
 		vec.SetLength(batchSize)
 		//vec.SetOriginal(false)
 		batch.Vecs[i] = vec
@@ -310,6 +312,8 @@ type TAEReader struct {
 	batchs   []*batch.Batch
 	batchIdx int
 	rowIdx   int
+
+	release func()
 }
 
 // NewTaeReader returns a TAEReader.
@@ -336,10 +340,14 @@ func NewTaeReader(ctx context.Context, tbl *table.Table, filePath string, filesi
 }
 
 func (r *TAEReader) ReadAll(ctx context.Context) ([]*batch.Batch, error) {
-	ioVec, err := r.blockReader.LoadAllColumns(ctx, r.idxs, r.mp)
+	if r.release != nil {
+		panic("can only call once")
+	}
+	ioVec, release, err := r.blockReader.LoadAllColumns(ctx, r.idxs, r.mp)
 	if err != nil {
 		return nil, err
 	}
+	r.release = release
 	r.batchs = append(r.batchs, ioVec...)
 	return r.batchs, nil
 }
@@ -378,6 +386,9 @@ func (r *TAEReader) Close() {
 		r.batchs[idx] = nil
 	}
 	r.batchs = nil
+	if r.release != nil {
+		r.release()
+	}
 }
 
 func GetVectorArrayLen(ctx context.Context, vec *vector.Vector) (int, error) {

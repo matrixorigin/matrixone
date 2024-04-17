@@ -53,7 +53,7 @@ func (b *UpdateBinder) bindColRef(astExpr *tree.UnresolvedName, _ int32, _ bool)
 	for i, c := range b.cols {
 		if c.Name == col {
 			idx = i
-			typ = c.Typ
+			typ = &c.Typ
 			break
 		}
 	}
@@ -62,7 +62,7 @@ func (b *UpdateBinder) bindColRef(astExpr *tree.UnresolvedName, _ int32, _ bool)
 		return
 	}
 	expr = &plan.Expr{
-		Typ: typ,
+		Typ: *typ,
 	}
 	// a = a +1 ,  a = values(a) + 1.  'a' actually have different idx. you need replace to exact idx before eval expr.
 	// binder only check the column name exists.

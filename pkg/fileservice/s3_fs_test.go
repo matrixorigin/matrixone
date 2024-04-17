@@ -33,6 +33,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
@@ -126,6 +127,7 @@ func testS3FS(
 				DisabledCacheConfig,
 				nil,
 				true,
+				false,
 			)
 			assert.Nil(t, err)
 
@@ -154,6 +156,7 @@ func testS3FS(
 			DisabledCacheConfig,
 			nil,
 			true,
+			false,
 		)
 		assert.Nil(t, err)
 		var counterSet, counterSet2 perfcounter.CounterSet
@@ -183,6 +186,7 @@ func testS3FS(
 				},
 				nil,
 				false,
+				false,
 			)
 			assert.Nil(t, err)
 			return fs
@@ -207,6 +211,7 @@ func testS3FS(
 					DiskPath:       ptrTo(t.TempDir()),
 				},
 				nil,
+				false,
 				false,
 			)
 			assert.Nil(t, err)
@@ -457,19 +462,21 @@ func TestS3FSMinioServer(t *testing.T) {
 		cacheDir := t.TempDir()
 		testFileService(t, 0, func(name string) FileService {
 			ctx := context.Background()
-			fs, err := NewS3FSOnMinio(
+			fs, err := NewS3FS(
 				ctx,
 				ObjectStorageArguments{
 					Name:      name,
 					Endpoint:  endpoint,
 					Bucket:    "test",
 					KeyPrefix: time.Now().Format("2006-01-02.15:04:05.000000"),
+					IsMinio:   true,
 				},
 				CacheConfig{
 					DiskPath: ptrTo(cacheDir),
 				},
 				nil,
 				true,
+				false,
 			)
 			assert.Nil(t, err)
 			return fs
@@ -510,6 +517,7 @@ func BenchmarkS3FS(b *testing.B) {
 			},
 			nil,
 			true,
+			false,
 		)
 		assert.Nil(b, err)
 		return fs
@@ -542,6 +550,7 @@ func TestS3FSWithSubPath(t *testing.T) {
 			DisabledCacheConfig,
 			nil,
 			true,
+			false,
 		)
 		assert.Nil(t, err)
 		return SubPath(fs, "foo/")
@@ -619,6 +628,7 @@ func BenchmarkS3ConcurrentRead(b *testing.B) {
 		DisabledCacheConfig,
 		nil,
 		true,
+		false,
 	)
 	if err != nil {
 		b.Fatal(err)
@@ -746,6 +756,7 @@ func TestSequentialS3Read(t *testing.T) {
 		DisabledCacheConfig,
 		nil,
 		true,
+		false,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -814,6 +825,7 @@ func TestS3RestoreFromCache(t *testing.T) {
 			DiskPath: ptrTo(cacheDir),
 		},
 		nil,
+		false,
 		false,
 	)
 	assert.Nil(t, err)
@@ -910,6 +922,7 @@ func TestS3PrefetchFile(t *testing.T) {
 		},
 		nil,
 		false,
+		false,
 	)
 	assert.Nil(t, err)
 
@@ -957,25 +970,36 @@ func TestS3PrefetchFile(t *testing.T) {
 
 }
 
-func TestNewS3FSFromSpec(t *testing.T) {
+type S3CredentialTestCase struct {
+	Skip bool
+	ObjectStorageArguments
+}
+
+var s3CredentialTestCases = func() []S3CredentialTestCase {
 	content, err := os.ReadFile("s3_fs_test_new.xml")
 	if os.IsNotExist(err) {
-		t.Skip("no spec file, skip")
+		return nil
 	}
-	assert.Nil(t, err)
-
-	type Case struct {
-		Skip bool
-		ObjectStorageArguments
+	if err != nil {
+		panic(err)
 	}
 	var spec struct {
-		XMLName xml.Name `xml:"Spec"`
-		Cases   []Case   `xml:"Case"`
+		XMLName xml.Name               `xml:"Spec"`
+		Cases   []S3CredentialTestCase `xml:"Case"`
 	}
 	err = xml.Unmarshal(content, &spec)
-	assert.Nil(t, err)
+	if err != nil {
+		panic(err)
+	}
+	return spec.Cases
+}()
 
-	for _, kase := range spec.Cases {
+func TestNewS3FSFromSpec(t *testing.T) {
+	if len(s3CredentialTestCases) == 0 {
+		t.Skip("no case")
+	}
+
+	for _, kase := range s3CredentialTestCases {
 		if kase.Skip {
 			continue
 		}
@@ -989,11 +1013,47 @@ func TestNewS3FSFromSpec(t *testing.T) {
 				DisabledCacheConfig,
 				nil,
 				true,
+				false,
 			)
 			assert.Nil(t, err)
 			_ = fs
 
 		})
+
+		t.Run(kase.Name+" bad bucket", func(t *testing.T) {
+
+			args := kase.ObjectStorageArguments
+			args.Bucket = args.Bucket + "foobarbaz"
+			ctx := context.Background()
+			_, err := NewS3FS(
+				ctx,
+				args,
+				DisabledCacheConfig,
+				nil,
+				true,
+				false,
+			)
+			if err == nil {
+				t.Fatal("should fail")
+			}
+
+		})
 	}
 
+}
+
+func TestNewS3NoDefaultCredential(t *testing.T) {
+	ctx := context.Background()
+	_, err := NewS3FS(
+		ctx,
+		ObjectStorageArguments{
+			Endpoint: "aliyuncs.com",
+		},
+		DisabledCacheConfig,
+		nil,
+		true,
+		true,
+	)
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+	assert.True(t, strings.Contains(err.Error(), "no valid credentials"))
 }

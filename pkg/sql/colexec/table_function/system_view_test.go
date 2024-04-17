@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
+	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/prashantv/gostub"
@@ -40,6 +41,9 @@ import (
 var _ queryservice.QueryService = &mockQueryService{}
 
 type mockQueryService struct {
+}
+
+func (m *mockQueryService) SetReleaseFunc(_ *query.Response, _ func()) {
 }
 
 func (m *mockQueryService) SendMessage(ctx context.Context, address string, req *query.Request) (*query.Response, error) {
@@ -75,6 +79,9 @@ func (m *mockQueryService) Close() error {
 }
 
 func (m *mockQueryService) AddHandleFunc(method query.CmdMethod, h func(context.Context, *query.Request, *query.Response) error, async bool) {
+}
+
+func (m *mockQueryService) AddReleaseFunc(method query.CmdMethod, f func()) {
 }
 
 func (m *mockQueryService) ServiceID() string {
@@ -127,7 +134,7 @@ func Test_gettingInfo(t *testing.T) {
 	requestMultipleCnStubs := gostub.Stub(&requestMultipleCn,
 		func(ctx context.Context,
 			nodes []string,
-			qs queryservice.QueryService,
+			qt qclient.QueryClient,
 			genRequest func() *query.Request,
 			handleValidResponse func(string, *query.Response),
 			handleInvalidResponse func(string)) error {

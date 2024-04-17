@@ -51,7 +51,7 @@ func shouldAggPushDown(agg, join, leftChild, rightChild *plan.Node, builder *Que
 	if !ok {
 		return false
 	}
-	ndv := getColNdv(colGroupBy.Col, builder)
+	ndv := builder.getColNdv(colGroupBy.Col)
 	if ndv < 0 || ndv > join.Stats.Outcnt {
 		return false
 	}
@@ -285,9 +285,6 @@ func addAnyValueForNonPKInPlan(nodeID int32, exceptID int32, cols []*plan.Expr_C
 func applyAggPullup(rootID int32, join, agg, leftScan, rightScan *plan.Node, builder *QueryBuilder) bool {
 	//rightcol must be primary key of right table
 	// or we  add rowid in group by, implement this in the future
-	if rightScan.TableDef.Pkey == nil {
-		return false
-	}
 	pkNames := rightScan.TableDef.Pkey.Names
 
 	if len(join.OnList) != len(pkNames) || len(join.OnList) != len(agg.GroupBy) || !builder.IsEquiJoin(join) {

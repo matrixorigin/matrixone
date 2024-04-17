@@ -36,7 +36,7 @@ type container struct {
 	colexec.ReceiverOperator
 
 	state            int
-	checkConflictBat *batch.Batch //batch to check conflict
+	checkConflictBat *batch.Batch // batch to check conflict
 	rbat             *batch.Batch
 }
 
@@ -49,17 +49,23 @@ type Argument struct {
 	// Source       engine.Relation
 	// UniqueSource []engine.Relation
 	// Ref          *plan.ObjectRef
-	TableDef        *plan.TableDef
-	OnDuplicateIdx  []int32
-	OnDuplicateExpr map[string]*plan.Expr
+	Attrs              []string
+	InsertColCount     int32
+	UniqueColCheckExpr []*plan.Expr
+	UniqueCols         []string
+	OnDuplicateIdx     []int32
+	OnDuplicateExpr    map[string]*plan.Expr
 
 	IdxIdx []int32
 
 	ctr      *container
 	IsIgnore bool
 
-	info     *vm.OperatorInfo
-	children []vm.Operator
+	vm.OperatorBase
+}
+
+func (arg *Argument) GetOperatorBase() *vm.OperatorBase {
+	return &arg.OperatorBase
 }
 
 func init() {
@@ -75,7 +81,7 @@ func init() {
 	)
 }
 
-func (arg Argument) Name() string {
+func (arg Argument) TypeName() string {
 	return argName
 }
 
@@ -87,14 +93,6 @@ func (arg *Argument) Release() {
 	if arg != nil {
 		reuse.Free[Argument](arg, nil)
 	}
-}
-
-func (arg *Argument) SetInfo(info *vm.OperatorInfo) {
-	arg.info = info
-}
-
-func (arg *Argument) AppendChild(child vm.Operator) {
-	arg.children = append(arg.children, child)
 }
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {

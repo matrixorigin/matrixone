@@ -121,12 +121,18 @@ func (bat *Batch) UnmarshalBinary(data []byte) error {
 	return nil
 }
 
-func (bat *Batch) Shrink(sels []int64) {
-	if len(sels) == bat.rowCount {
-		return
+func (bat *Batch) Shrink(sels []int64, negate bool) {
+	if !negate {
+		if len(sels) == bat.rowCount {
+			return
+		}
 	}
 	for _, vec := range bat.Vecs {
-		vec.Shrink(sels, false)
+		vec.Shrink(sels, negate)
+	}
+	if negate {
+		bat.rowCount -= len(sels)
+		return
 	}
 	bat.rowCount = len(sels)
 }
@@ -303,6 +309,27 @@ func (bat *Batch) PreExtend(m *mpool.MPool, rows int) error {
 	return nil
 }
 
+func (bat *Batch) AppendWithCopy(ctx context.Context, mh *mpool.MPool, b *Batch) (*Batch, error) {
+	if bat == nil {
+		return b.Dup(mh)
+	}
+	if len(bat.Vecs) != len(b.Vecs) {
+		return nil, moerr.NewInternalError(ctx, "unexpected error happens in batch append")
+	}
+	if len(bat.Vecs) == 0 {
+		return bat, nil
+	}
+
+	for i := range bat.Vecs {
+		if err := bat.Vecs[i].UnionBatch(b.Vecs[i], 0, b.Vecs[i].Length(), nil, mh); err != nil {
+			return bat, err
+		}
+		bat.Vecs[i].SetSorted(false)
+	}
+	bat.rowCount += b.rowCount
+	return bat, nil
+}
+
 func (bat *Batch) Append(ctx context.Context, mh *mpool.MPool, b *Batch) (*Batch, error) {
 	if bat == nil {
 		return b, nil
@@ -318,6 +345,7 @@ func (bat *Batch) Append(ctx context.Context, mh *mpool.MPool, b *Batch) (*Batch
 		if err := bat.Vecs[i].UnionBatch(b.Vecs[i], 0, b.Vecs[i].Length(), nil, mh); err != nil {
 			return bat, err
 		}
+		bat.Vecs[i].SetSorted(false)
 	}
 	bat.rowCount += b.rowCount
 	return bat, nil
@@ -353,13 +381,6 @@ func (bat *Batch) ReplaceVector(oldVec *vector.Vector, newVec *vector.Vector) {
 			bat.SetVector(int32(i), newVec)
 		}
 	}
-}
-
-func (bat *Batch) AntiShrink(sels []int64) {
-	for _, vec := range bat.Vecs {
-		vec.Shrink(sels, true)
-	}
-	bat.rowCount -= len(sels)
 }
 
 func (bat *Batch) IsEmpty() bool {

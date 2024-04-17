@@ -64,6 +64,7 @@ func buildTableUpdate(stmt *tree.Update, ctx CompilerContext, isPrepareStmt bool
 	sourceStep = builder.appendStep(lastNodeId)
 
 	beginIdx := 0
+	var detectSqls []string
 	for i, tableDef := range tblInfo.tableDefs {
 		upPlanCtx := updatePlanCtxs[i]
 		upPlanCtx.beginIdx = beginIdx
@@ -71,16 +72,22 @@ func buildTableUpdate(stmt *tree.Update, ctx CompilerContext, isPrepareStmt bool
 
 		updateBindCtx := NewBindContext(builder, nil)
 		beginIdx = beginIdx + upPlanCtx.updateColLength + len(tableDef.Cols)
-		err = buildUpdatePlans(ctx, builder, updateBindCtx, upPlanCtx)
+		err = buildUpdatePlans(ctx, builder, updateBindCtx, upPlanCtx, false)
 		if err != nil {
 			return nil, err
 		}
 		putDmlPlanCtx(upPlanCtx)
+		sqls, err := genSqlsForCheckFKSelfRefer(ctx.GetContext(),
+			tblInfo.objRef[i].SchemaName, tableDef.Name, tableDef.Cols, tableDef.Fkeys)
+		if err != nil {
+			return nil, err
+		}
+		detectSqls = append(detectSqls, sqls...)
 	}
 	if err != nil {
 		return nil, err
 	}
-
+	query.DetectSqls = detectSqls
 	reduceSinkSinkScanNodes(query)
 	ReCalcQueryStats(builder, query)
 	query.StmtType = plan.Query_UPDATE
@@ -123,9 +130,16 @@ func rewriteUpdateQueryLastNode(builder *QueryBuilder, planCtxs []*dmlPlanCtx, l
 				if err != nil {
 					return err
 				}
-				lastNode.ProjectList[pos], err = forceCastExpr(builder.GetContext(), posExpr, col.Typ)
-				if err != nil {
-					return err
+				if col != nil && col.Typ.Id == int32(types.T_enum) {
+					lastNode.ProjectList[pos], err = funcCastForEnumType(builder.GetContext(), posExpr, &col.Typ)
+					if err != nil {
+						return err
+					}
+				} else {
+					lastNode.ProjectList[pos], err = forceCastExpr(builder.GetContext(), posExpr, &col.Typ)
+					if err != nil {
+						return err
+					}
 				}
 
 			} else {
@@ -134,9 +148,16 @@ func rewriteUpdateQueryLastNode(builder *QueryBuilder, planCtxs []*dmlPlanCtx, l
 					lastNode.ProjectList[pos] = col.OnUpdate.Expr
 				}
 
-				lastNode.ProjectList[pos], err = forceCastExpr(builder.GetContext(), lastNode.ProjectList[pos], col.Typ)
-				if err != nil {
-					return err
+				if col != nil && col.Typ.Id == int32(types.T_enum) {
+					lastNode.ProjectList[pos], err = funcCastForEnumType(builder.GetContext(), lastNode.ProjectList[pos], &col.Typ)
+					if err != nil {
+						return err
+					}
+				} else {
+					lastNode.ProjectList[pos], err = forceCastExpr(builder.GetContext(), lastNode.ProjectList[pos], &col.Typ)
+					if err != nil {
+						return err
+					}
 				}
 			}
 		}
@@ -188,7 +209,7 @@ func selectUpdateTables(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.
 		for colName, updateKey := range updateKeys {
 			for _, coldef := range tableDef.Cols {
 				if coldef.Name == colName && coldef.Typ.Id == int32(types.T_enum) {
-					binder := NewDefaultBinder(builder.GetContext(), nil, nil, coldef.Typ, nil)
+					binder := NewDefaultBinder(builder.GetContext(), nil, nil, &coldef.Typ, nil)
 					updateKeyExpr, err := binder.BindExpr(updateKey, 0, false)
 					if err != nil {
 						return 0, nil, err
@@ -223,7 +244,7 @@ func selectUpdateTables(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.
 		}
 
 		// we don't known if update pk if tableDef.Pkey is nil. just set true and let check pk dup work
-		updatePkCol = tableDef.Pkey == nil || updatePkColCount > 0
+		updatePkCol = updatePkColCount > 0
 
 		// append  table.* to project list
 		upPlanCtx := getDmlPlanCtx()
@@ -235,6 +256,7 @@ func selectUpdateTables(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.
 		upPlanCtx.rowIdPos = rowIdPos
 		upPlanCtx.updateColPosMap = updateColPosMap
 		upPlanCtx.allDelTableIDs = map[uint64]struct{}{}
+		upPlanCtx.allDelTables = map[FkReferKey]struct{}{}
 		upPlanCtx.checkInsertPkDup = true
 		upPlanCtx.updatePkCol = updatePkCol
 

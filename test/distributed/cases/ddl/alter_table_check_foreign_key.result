@@ -23,7 +23,7 @@ sal decimal(7,2) COMMENT '雇员的基本工资',
 comm decimal(7,2) COMMENT '奖金',
 deptno int unsigned COMMENT '所在部门',
 primary key(empno),
-FOREIGN KEY (deptno) REFERENCES dept(deptno)
+constraint `c1` FOREIGN KEY (deptno) REFERENCES dept(deptno)
 );
 INSERT INTO emp VALUES (7369,'SMITH','CLERK',7902,'1980-12-17',800,NULL,20);
 INSERT INTO emp VALUES (7499,'ALLEN','SALESMAN',7698,'1981-02-20',1600,300,30);
@@ -40,9 +40,9 @@ INSERT INTO emp VALUES (7900,'JAMES','CLERK',7698,'1981-12-03',950,NULL,30);
 INSERT INTO emp VALUES (7902,'FORD','ANALYST',7566,'1981-12-03',3000,NULL,20);
 INSERT INTO emp VALUES (7934,'MILLER','CLERK',7782,'1982-01-23',1300,NULL,10);
 alter table emp modify deptno varchar(20);
-Cannot change column 'deptno': used in a foreign key constraint ''
+Cannot change column 'deptno': used in a foreign key constraint 'c1'
 alter table emp modify deptno bigint;
-Cannot change column 'deptno': used in a foreign key constraint ''
+Cannot change column 'deptno': used in a foreign key constraint 'c1'
 alter table emp modify deptno int unsigned;
 desc emp;
 Field    Type    Null    Key    Default    Extra    Comment
@@ -66,9 +66,9 @@ sal    DECIMAL64(7)    YES        null        雇员的基本工资
 comm    DECIMAL64(7)    YES        null        奖金
 deptno    INT UNSIGNED(32)    YES    MUL    100        
 alter table emp change deptno deptid varchar(20);
-Cannot change column 'deptno': used in a foreign key constraint ''
+Cannot change column 'deptno': used in a foreign key constraint 'c1'
 alter table emp change deptno deptid bigint;
-Cannot change column 'deptno': used in a foreign key constraint ''
+Cannot change column 'deptno': used in a foreign key constraint 'c1'
 alter table emp change deptno deptid int unsigned;
 desc emp;
 Field    Type    Null    Key    Default    Extra    Comment
@@ -267,8 +267,8 @@ order_date datetime NOT NULL,
 PRIMARY KEY (no),
 INDEX(product_category, product_id),
 INDEX(customer_id),
-FOREIGN KEY (product_category, product_id) REFERENCES product (category, id) ON DELETE RESTRICT ON UPDATE CASCADE,
-FOREIGN KEY (customer_id) REFERENCES customer (id)
+constraint `c1` FOREIGN KEY (product_category, product_id) REFERENCES product (category, id) ON DELETE RESTRICT ON UPDATE CASCADE,
+constraint `c2` FOREIGN KEY (customer_id) REFERENCES customer (id)
 );
 INSERT INTO product_order VALUES (1, 10, 1, 1, '2016-12-02 15:41:39');
 INSERT INTO product_order VALUES (2, 10, 2, 2, '2016-12-01 15:42:42');
@@ -288,15 +288,15 @@ no    product_category    product_id    customer_id    order_date
 3    20    3    3    2016-12-06 15:43:26
 4    30    4    3    2016-12-31 15:43:26
 alter table product_order change product_category product_kind varchar(20);
-Cannot change column 'product_category': used in a foreign key constraint ''
+Cannot change column 'product_category': used in a foreign key constraint 'c1'
 alter table product_order change product_category product_kind bigint;
-Cannot change column 'product_category': used in a foreign key constraint ''
+Cannot change column 'product_category': used in a foreign key constraint 'c1'
 alter table product_order modify product_id varchar(20);
-Cannot change column 'product_id': used in a foreign key constraint ''
+Cannot change column 'product_id': used in a foreign key constraint 'c1'
 alter table product_order modify product_id bigint;
-Cannot change column 'product_id': used in a foreign key constraint ''
+Cannot change column 'product_id': used in a foreign key constraint 'c1'
 alter table product_order change product_category product_kind int unsigned;
-Cannot change column 'product_category': used in a foreign key constraint ''
+Cannot change column 'product_category': used in a foreign key constraint 'c1'
 alter table product_order change product_category product_kind int;
 desc product_order;
 Field    Type    Null    Key    Default    Extra    Comment
@@ -328,4 +328,38 @@ internal error: Cannot add or update a child row: a foreign key constraint fails
 drop table product_order;
 drop table customer;
 drop table product;
+drop table if exists organization;
+create table organization (
+id int auto_increment primary key,
+name varchar(255) not null ,
+parent_id int default null,
+foreign key (parent_id) references organization(id)
+);
+insert into organization (id, name, parent_id ) values (1, 'ceo', null);
+insert into organization (id, name, parent_id ) values (2, 'cto', null);
+insert into organization (id, name, parent_id ) values (3, 'dev', 2);
+insert into organization (id, name, parent_id ) values (4, 'test', 2);
+insert into organization (id, name, parent_id ) values (5, 'marketing', 1);
+insert into organization (id, name, parent_id ) values (6, 'finance', 1);
+select * from organization;
+id    name    parent_id
+1    ceo    null
+2    cto    null
+3    dev    2
+4    test    2
+5    marketing    1
+6    finance    1
+insert into organization (id, name, parent_id ) values (7, 'unknown', 99);
+Cannot add or update a child row: a foreign key constraint fails
+insert into organization (id, name ) values (8, 'unknown');
+select * from organization;
+id    name    parent_id
+1    ceo    null
+2    cto    null
+3    dev    2
+4    test    2
+5    marketing    1
+6    finance    1
+8    unknown    null
+drop table organization;
 drop database if exists db8;

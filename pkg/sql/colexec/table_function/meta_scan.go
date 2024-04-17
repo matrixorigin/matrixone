@@ -68,22 +68,22 @@ func metaScanCall(_ int, proc *process.Process, arg *Argument, result *vm.CallRe
 		}
 	}
 	// read meta's data
-	bats, err := reader.LoadAllColumns(proc.Ctx, idxs, common.DefaultAllocator)
+	bats, closeCB, err := reader.LoadAllColumns(proc.Ctx, idxs, common.DefaultAllocator)
 	if err != nil {
 		return false, err
 	}
-
+	defer func() {
+		if closeCB != nil {
+			closeCB()
+		}
+	}()
 	rbat = batch.NewWithSize(len(bats[0].Vecs))
 	metaVecs := rbat.Vecs
 	for i, vec := range bats[0].Vecs {
-		if vec.NeedDup() {
-			metaVecs[i], err = vec.Dup(proc.Mp())
-			if err != nil {
-				rbat.Clean(proc.Mp())
-				return false, err
-			}
-		} else {
-			metaVecs[i] = vec
+		metaVecs[i], err = vec.Dup(proc.Mp())
+		if err != nil {
+			rbat.Clean(proc.Mp())
+			return false, err
 		}
 	}
 	rbat.SetAttributes(catalog.MetaColNames)

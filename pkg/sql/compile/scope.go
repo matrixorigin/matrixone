@@ -17,11 +17,6 @@ package compile
 import (
 	"context"
 	"fmt"
-	"hash/crc32"
-	goruntime "runtime"
-	"runtime/debug"
-	"sync"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
@@ -30,12 +25,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	pbpipeline "github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/limit"
@@ -45,12 +40,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeoffset"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergetop"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/restrict"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/right"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightanti"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightsemi"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/sample"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -59,7 +55,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/panjf2000/ants/v2"
+	_ "go.uber.org/automaxprocs"
 	"go.uber.org/zap"
+	"hash/crc32"
+	goruntime "runtime"
+	"runtime/debug"
+	"sync"
 )
 
 func newScope(magic magicType) *Scope {
@@ -109,16 +110,24 @@ func (s *Scope) Run(c *Compile) (err error) {
 	s.Proc.Ctx = context.WithValue(s.Proc.Ctx, defines.EngineKey{}, c.e)
 	// DataSource == nil specify the empty scan
 	if s.DataSource == nil {
-		p = pipeline.New(nil, s.Instructions, s.Reg)
+		p = pipeline.New(0, nil, s.Instructions, s.Reg)
 		if _, err = p.ConstRun(nil, s.Proc); err != nil {
 			return err
 		}
 	} else {
-		p = pipeline.New(s.DataSource.Attributes, s.Instructions, s.Reg)
+		id := uint64(0)
+		if s.DataSource.TableDef != nil {
+			id = s.DataSource.TableDef.TblId
+		}
+		p = pipeline.New(id, s.DataSource.Attributes, s.Instructions, s.Reg)
 		if s.DataSource.Bat != nil {
 			_, err = p.ConstRun(s.DataSource.Bat, s.Proc)
 		} else {
-			_, err = p.Run(s.DataSource.R, s.Proc)
+			var tag int32
+			if s.DataSource.node != nil && len(s.DataSource.node.RecvMsgList) > 0 {
+				tag = s.DataSource.node.RecvMsgList[0].MsgTag
+			}
+			_, err = p.Run(s.DataSource.R, tag, s.Proc)
 		}
 	}
 
@@ -137,6 +146,19 @@ func (s *Scope) SetContextRecursively(ctx context.Context) {
 	newCtx := s.Proc.ResetContextFromParent(ctx)
 	for _, scope := range s.PreScopes {
 		scope.SetContextRecursively(newCtx)
+	}
+}
+
+func (s *Scope) SetOperatorInfoRecursively(cb func() int32) {
+	for i := 0; i < len(s.Instructions); i++ {
+		s.Instructions[i].CnAddr = s.NodeInfo.Addr
+		s.Instructions[i].OperatorID = cb()
+		s.Instructions[i].ParallelID = 0
+		s.Instructions[i].MaxParallel = 1
+	}
+
+	for _, scope := range s.PreScopes {
+		scope.SetOperatorInfoRecursively(cb)
 	}
 }
 
@@ -238,7 +260,7 @@ func (s *Scope) RemoteRun(c *Compile) error {
 			zap.String("local-address", c.addr),
 			zap.String("remote-address", s.NodeInfo.Addr))
 
-	p := pipeline.New(nil, s.Instructions, s.Reg)
+	p := pipeline.New(0, nil, s.Instructions, s.Reg)
 	err := s.remoteRun(c)
 	select {
 	case <-s.Proc.Ctx.Done():
@@ -264,6 +286,97 @@ func DeterminRuntimeDOP(cpunum, blocks int) int {
 	return cpunum
 }
 
+func (s *Scope) handleRuntimeFilter(c *Compile) error {
+	var err error
+	var inExprList []*plan.Expr
+	exprs := make([]*plan.Expr, 0, len(s.DataSource.RuntimeFilterSpecs))
+	filters := make([]process.RuntimeFilterMessage, 0, len(exprs))
+
+	if len(s.DataSource.RuntimeFilterSpecs) > 0 {
+		for _, spec := range s.DataSource.RuntimeFilterSpecs {
+			msgReceiver := c.proc.NewMessageReceiver([]int32{spec.Tag}, process.AddrBroadCastOnCurrentCN())
+			msgs := msgReceiver.ReceiveMessage(true)
+			for i := range msgs {
+				msg, ok := msgs[i].(process.RuntimeFilterMessage)
+				if !ok {
+					panic("expect runtime filter message, receive unknown message!")
+				}
+				switch msg.Typ {
+				case process.RuntimeFilter_PASS:
+					continue
+				case process.RuntimeFilter_DROP:
+					// FIXME: Should give an empty "Data" and then early return
+					s.NodeInfo.Data = nil
+					s.NodeInfo.NeedExpandRanges = false
+					s.DataSource.FilterExpr = plan2.MakeFalseExpr()
+					return nil
+				case process.RuntimeFilter_IN:
+					inExpr := plan2.MakeInExpr(c.ctx, spec.Expr, msg.Card, msg.Data, spec.MatchPrefix)
+					inExprList = append(inExprList, inExpr)
+
+					// TODO: implement BETWEEN expression
+				}
+				exprs = append(exprs, spec.Expr)
+				filters = append(filters, msg)
+			}
+			msgReceiver.Free()
+		}
+	}
+
+	for i := range inExprList {
+		fn := inExprList[i].GetF()
+		col := fn.Args[0].GetCol()
+		if col == nil {
+			panic("only support col in runtime filter's left child!")
+		}
+
+		newExpr := plan2.DeepCopyExpr(inExprList[i])
+		//put expr in reader
+		newExprList := []*plan.Expr{newExpr}
+		if s.DataSource.FilterExpr != nil {
+			newExprList = append(newExprList, s.DataSource.FilterExpr)
+		}
+		s.DataSource.FilterExpr = colexec.RewriteFilterExprList(newExprList)
+
+		isFilterOnPK := s.DataSource.TableDef.Pkey != nil && col.Name == s.DataSource.TableDef.Pkey.PkeyColName
+		if !isFilterOnPK {
+			// put expr in filter instruction
+			ins := s.Instructions[0]
+			arg, ok := ins.Arg.(*restrict.Argument)
+			if !ok {
+				panic("missing instruction for runtime filter!")
+			}
+			newExprList := []*plan.Expr{newExpr}
+			if arg.E != nil {
+				newExprList = append(newExprList, arg.E)
+			}
+			arg.E = colexec.RewriteFilterExprList(newExprList)
+		}
+	}
+
+	if s.NodeInfo.NeedExpandRanges {
+		if s.DataSource.node == nil {
+			panic("can not expand ranges on remote pipeline!")
+		}
+		newExprList := plan2.DeepCopyExprList(inExprList)
+		if len(s.DataSource.node.BlockFilterList) > 0 {
+			newExprList = append(newExprList, s.DataSource.node.BlockFilterList...)
+		}
+		ranges, err := c.expandRanges(s.DataSource.node, s.NodeInfo.Rel, newExprList)
+		if err != nil {
+			return err
+		}
+		s.NodeInfo.Data = append(s.NodeInfo.Data, ranges.GetAllBytes()...)
+		s.NodeInfo.NeedExpandRanges = false
+	} else if len(inExprList) > 0 {
+		s.NodeInfo.Data, err = ApplyRuntimeFilters(c.ctx, s.Proc, s.DataSource.TableDef, s.NodeInfo.Data, exprs, filters)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // ParallelRun try to execute the scope in parallel way.
 func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 	var rds []engine.Reader
@@ -280,111 +393,19 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 	}
 
 	var err error
-
-	if len(s.DataSource.RuntimeFilterSpecs) > 0 {
-		exprs := make([]*plan.Expr, 0, len(s.DataSource.RuntimeFilterSpecs))
-		filters := make([]*pbpipeline.RuntimeFilter, 0, len(exprs))
-
-		for _, spec := range s.DataSource.RuntimeFilterSpecs {
-			c.lock.RLock()
-			receiver, ok := c.runtimeFilterReceiverMap[spec.Tag]
-			c.lock.RUnlock()
-			if !ok {
-				continue
-			}
-
-		FOR_LOOP:
-			for i := 0; i < receiver.size; i++ {
-				select {
-				case <-s.Proc.Ctx.Done():
-					return nil
-
-				case filter := <-receiver.ch:
-					switch filter.Typ {
-					case pbpipeline.RuntimeFilter_PASS:
-						continue
-
-					case pbpipeline.RuntimeFilter_DROP:
-						exprs = nil
-						// FIXME: Should give an empty "Data" and then early return
-						s.NodeInfo.Data = s.NodeInfo.Data[:1]
-						break FOR_LOOP
-
-					case pbpipeline.RuntimeFilter_IN:
-						inExpr := &plan.Expr{
-							Typ: &plan.Type{
-								Id:          int32(types.T_bool),
-								NotNullable: spec.Expr.Typ.NotNullable,
-							},
-							Expr: &plan.Expr_F{
-								F: &plan.Function{
-									Func: &plan.ObjectRef{
-										Obj:     function.InFunctionEncodedID,
-										ObjName: function.InFunctionName,
-									},
-									Args: []*plan.Expr{
-										spec.Expr,
-										{
-											Typ: &plan.Type{
-												Id: int32(types.T_tuple),
-											},
-											Expr: &plan.Expr_Vec{
-												Vec: &plan.LiteralVec{
-													Len:  filter.Card,
-													Data: filter.Data,
-												},
-											},
-										},
-									},
-								},
-							},
-						}
-
-						if s.DataSource.Expr == nil {
-							s.DataSource.Expr = inExpr
-						} else {
-							s.DataSource.Expr = &plan.Expr{
-								Typ: &plan.Type{
-									Id:          int32(types.T_bool),
-									NotNullable: s.DataSource.Expr.Typ.NotNullable && inExpr.Typ.NotNullable,
-								},
-								Expr: &plan.Expr_F{
-									F: &plan.Function{
-										Func: &plan.ObjectRef{
-											Obj:     function.AndFunctionEncodedID,
-											ObjName: function.AndFunctionName,
-										},
-										Args: []*plan.Expr{
-											s.DataSource.Expr,
-											inExpr,
-										},
-									},
-								},
-							}
-						}
-
-						// TODO: implement BETWEEN expression
-					}
-
-					exprs = append(exprs, spec.Expr)
-					filters = append(filters, filter)
-				}
-			}
-		}
-
-		if len(exprs) > 0 {
-			s.NodeInfo.Data, err = ApplyRuntimeFilters(c.ctx, s.Proc, s.DataSource.TableDef, s.NodeInfo.Data, exprs, filters)
-			if err != nil {
-				return err
-			}
-		}
+	err = s.handleRuntimeFilter(c)
+	if err != nil {
+		return err
 	}
 
-	numCpu := goruntime.NumCPU()
+	numCpu := goruntime.GOMAXPROCS(0)
 	var mcpu int
 
 	switch {
 	case remote:
+		if len(s.DataSource.OrderBy) > 0 {
+			panic("ordered scan can't run on remote CN!")
+		}
 		ctx := c.ctx
 		if util.TableIsClusterTable(s.DataSource.TableDef.GetTableType()) {
 			ctx = defines.AttachAccountId(ctx, catalog.System_Account)
@@ -395,7 +416,7 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 		}
 		blkSlice := objectio.BlockInfoSlice(s.NodeInfo.Data)
 		mcpu = DeterminRuntimeDOP(numCpu, blkSlice.Len())
-		rds, err = c.e.NewBlockReader(ctx, mcpu, s.DataSource.Timestamp, s.DataSource.Expr,
+		rds, err = c.e.NewBlockReader(ctx, mcpu, s.DataSource.Timestamp, s.DataSource.FilterExpr,
 			s.NodeInfo.Data, s.DataSource.TableDef, c.proc)
 		if err != nil {
 			return err
@@ -413,12 +434,16 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 		default:
 			mcpu = 1
 		}
-		if rds, err = s.NodeInfo.Rel.NewReader(c.ctx, mcpu, s.DataSource.Expr, s.NodeInfo.Data); err != nil {
+		if len(s.DataSource.OrderBy) > 0 {
+			// ordered scan must run on only one parallel!
+			mcpu = 1
+		}
+		if rds, err = s.NodeInfo.Rel.NewReader(c.ctx, mcpu, s.DataSource.FilterExpr, s.NodeInfo.Data, len(s.DataSource.OrderBy) > 0); err != nil {
 			return err
 		}
 		s.NodeInfo.Data = nil
 
-	//FIXME:: s.NodeInfo.Rel == nil, partition table?
+	// FIXME:: s.NodeInfo.Rel == nil, partition table?
 	default:
 		var db engine.Database
 		var rel engine.Relation
@@ -453,19 +478,24 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 		default:
 			mcpu = 1
 		}
+		if len(s.DataSource.OrderBy) > 0 {
+			// ordered scan must run on only one parallel!
+			mcpu = 1
+		}
 		if rel.GetEngineType() == engine.Memory ||
 			s.DataSource.PartitionRelationNames == nil {
 			mainRds, err := rel.NewReader(
 				ctx,
 				mcpu,
-				s.DataSource.Expr,
-				s.NodeInfo.Data)
+				s.DataSource.FilterExpr,
+				s.NodeInfo.Data,
+				len(s.DataSource.OrderBy) > 0)
 			if err != nil {
 				return err
 			}
 			rds = append(rds, mainRds...)
 		} else {
-			//handle partition table.
+			// handle partition table.
 			blkArray := objectio.BlockInfoSlice(s.NodeInfo.Data)
 			dirtyRanges := make(map[int]objectio.BlockInfoSlice, 0)
 			cleanRanges := make(objectio.BlockInfoSlice, 0, blkArray.Len())
@@ -478,8 +508,7 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 						newRanges = append(newRanges, objectio.EmptyBlockInfoBytes...)
 						dirtyRanges[blkInfo.PartitionNum] = newRanges
 					}
-					dirtyRanges[blkInfo.PartitionNum] =
-						append(dirtyRanges[blkInfo.PartitionNum], ranges.GetBytes(i)...)
+					dirtyRanges[blkInfo.PartitionNum] = append(dirtyRanges[blkInfo.PartitionNum], ranges.GetBytes(i)...)
 					continue
 				}
 				cleanRanges = append(cleanRanges, ranges.GetBytes(i)...)
@@ -490,8 +519,9 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 				mainRds, err := rel.NewReader(
 					ctx,
 					mcpu,
-					s.DataSource.Expr,
-					cleanRanges)
+					s.DataSource.FilterExpr,
+					cleanRanges,
+					len(s.DataSource.OrderBy) > 0)
 				if err != nil {
 					return err
 				}
@@ -504,7 +534,7 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 				if err != nil {
 					return err
 				}
-				memRds, err := subrel.NewReader(c.ctx, mcpu, s.DataSource.Expr, dirtyRanges[num])
+				memRds, err := subrel.NewReader(c.ctx, mcpu, s.DataSource.FilterExpr, dirtyRanges[num], len(s.DataSource.OrderBy) > 0)
 				if err != nil {
 					return err
 				}
@@ -527,9 +557,13 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 	if mcpu == 1 {
 		s.Magic = Normal
 		s.DataSource.R = rds[0] // rds's length is equal to mcpu so it is safe to do it
+		s.DataSource.R.SetOrderBy(s.DataSource.OrderBy)
 		return s.Run(c)
 	}
 
+	if len(s.DataSource.OrderBy) > 0 {
+		panic("ordered scan must run on only one parallel!")
+	}
 	ss := make([]*Scope, mcpu)
 	for i := 0; i < mcpu; i++ {
 		ss[i] = newScope(Normal)
@@ -543,7 +577,7 @@ func (s *Scope) ParallelRun(c *Compile, remote bool) error {
 		}
 		ss[i].Proc = process.NewWithAnalyze(s.Proc, c.ctx, 0, c.anal.Nodes())
 	}
-	newScope, err := newParallelScope(s, ss)
+	newScope, err := newParallelScope(c, s, ss)
 	if err != nil {
 		ReleaseScopes(ss)
 		return err
@@ -580,7 +614,7 @@ func (s *Scope) JoinRun(c *Compile) error {
 	}
 	probe_scope, build_scope := c.newJoinProbeScope(s, ss), c.newJoinBuildScope(s, ss)
 	var err error
-	s, err = newParallelScope(s, ss)
+	s, err = newParallelScope(c, s, ss)
 	if err != nil {
 		ReleaseScopes(ss)
 		return err
@@ -648,7 +682,7 @@ func (s *Scope) LoadRun(c *Compile) error {
 		}
 		ss[i].Proc = process.NewWithAnalyze(s.Proc, c.ctx, 0, c.anal.Nodes())
 	}
-	newScope, err := newParallelScope(s, ss)
+	newScope, err := newParallelScope(c, s, ss)
 	if err != nil {
 		ReleaseScopes(ss)
 		return err
@@ -657,7 +691,7 @@ func (s *Scope) LoadRun(c *Compile) error {
 	return newScope.MergeRun(c)
 }
 
-func newParallelScope(s *Scope, ss []*Scope) (*Scope, error) {
+func newParallelScope(c *Compile, s *Scope, ss []*Scope) (*Scope, error) {
 	var flg bool
 
 	idx := 0
@@ -686,39 +720,29 @@ func newParallelScope(s *Scope, ss []*Scope) (*Scope, error) {
 				Arg: mergetop.NewArgument().
 					WithFs(arg.Fs).
 					WithLimit(arg.Limit),
+
+				CnAddr:      in.CnAddr,
+				OperatorID:  c.allocOperatorID(),
+				ParallelID:  0,
+				MaxParallel: 1,
 			}
 			for j := range ss {
+				newarg := top.NewArgument().WithFs(arg.Fs).WithLimit(arg.Limit)
+				newarg.TopValueTag = arg.TopValueTag
 				ss[j].appendInstruction(vm.Instruction{
-					Op:      vm.Top,
-					Idx:     in.Idx,
-					IsFirst: in.IsFirst,
-					Arg: top.NewArgument().
-						WithFs(arg.Fs).
-						WithLimit(arg.Limit),
+					Op:          vm.Top,
+					Idx:         in.Idx,
+					IsFirst:     in.IsFirst,
+					Arg:         newarg,
+					CnAddr:      in.CnAddr,
+					OperatorID:  in.OperatorID,
+					MaxParallel: int32(len(ss)),
+					ParallelID:  int32(j),
 				})
 			}
 			arg.Release()
-		//case vm.Order:
-		//	flg = true
-		//	arg := in.Arg.(*order.Argument)
-		//	s.Instructions = s.Instructions[i:]
-		//	s.Instructions[0] = vm.Instruction{
-		//		Op:  vm.MergeOrder,
-		//		Idx: in.Idx,
-		//		Arg: &mergeorder.Argument{
-		//			OrderBySpecs: arg.OrderBySpec,
-		//		},
-		//	}
-		//	for j := range ss {
-		//		ss[j].appendInstruction(vm.Instruction{
-		//			Op:      vm.Order,
-		//			Idx:     in.Idx,
-		//			IsFirst: in.IsFirst,
-		//			Arg: &order.Argument{
-		//				OrderBySpec: arg.OrderBySpec,
-		//			},
-		//		})
-		//	}
+		// case vm.Order:
+		// there is no need to do special merge for order, because the behavior of order is just sort for each batch.
 		case vm.Limit:
 			flg = true
 			idx = i
@@ -729,6 +753,11 @@ func newParallelScope(s *Scope, ss []*Scope) (*Scope, error) {
 				Idx: in.Idx,
 				Arg: mergelimit.NewArgument().
 					WithLimit(arg.Limit),
+
+				CnAddr:      in.CnAddr,
+				OperatorID:  c.allocOperatorID(),
+				ParallelID:  0,
+				MaxParallel: 1,
 			}
 			for j := range ss {
 				ss[j].appendInstruction(vm.Instruction{
@@ -737,6 +766,11 @@ func newParallelScope(s *Scope, ss []*Scope) (*Scope, error) {
 					IsFirst: in.IsFirst,
 					Arg: limit.NewArgument().
 						WithLimit(arg.Limit),
+
+					CnAddr:      in.CnAddr,
+					OperatorID:  in.OperatorID,
+					MaxParallel: int32(len(ss)),
+					ParallelID:  int32(j),
 				})
 			}
 			arg.Release()
@@ -750,6 +784,11 @@ func newParallelScope(s *Scope, ss []*Scope) (*Scope, error) {
 				Idx: in.Idx,
 				Arg: mergegroup.NewArgument().
 					WithNeedEval(false),
+
+				CnAddr:      in.CnAddr,
+				OperatorID:  c.allocOperatorID(),
+				ParallelID:  0,
+				MaxParallel: 1,
 			}
 			for j := range ss {
 				ss[j].appendInstruction(vm.Instruction{
@@ -761,6 +800,11 @@ func newParallelScope(s *Scope, ss []*Scope) (*Scope, error) {
 						WithExprs(arg.Exprs).
 						WithTypes(arg.Types).
 						WithMultiAggs(arg.MultiAggs),
+
+					CnAddr:      in.CnAddr,
+					OperatorID:  in.OperatorID,
+					MaxParallel: int32(len(ss)),
+					ParallelID:  int32(j),
 				})
 			}
 			arg.Release()
@@ -778,13 +822,23 @@ func newParallelScope(s *Scope, ss []*Scope) (*Scope, error) {
 						Op:      vm.Sample,
 						Idx:     in.Idx,
 						IsFirst: false,
-						Arg:     sample.NewMergeSample(arg),
+						Arg:     sample.NewMergeSample(arg, arg.NeedOutputRowSeen),
+
+						CnAddr:      in.CnAddr,
+						OperatorID:  c.allocOperatorID(),
+						ParallelID:  0,
+						MaxParallel: 1,
 					}
 				}
 				s.Instructions[0] = vm.Instruction{
 					Op:  vm.Merge,
 					Idx: s.Instructions[0].Idx,
 					Arg: merge.NewArgument(),
+
+					CnAddr:      in.CnAddr,
+					OperatorID:  c.allocOperatorID(),
+					ParallelID:  0,
+					MaxParallel: 1,
 				}
 
 				for j := range ss {
@@ -793,6 +847,11 @@ func newParallelScope(s *Scope, ss []*Scope) (*Scope, error) {
 						Idx:     in.Idx,
 						IsFirst: in.IsFirst,
 						Arg:     arg.SimpleDup(),
+
+						CnAddr:      in.CnAddr,
+						OperatorID:  in.OperatorID,
+						MaxParallel: int32(len(ss)),
+						ParallelID:  int32(j),
 					})
 				}
 			}
@@ -807,6 +866,11 @@ func newParallelScope(s *Scope, ss []*Scope) (*Scope, error) {
 				Idx: in.Idx,
 				Arg: mergeoffset.NewArgument().
 					WithOffset(arg.Offset),
+
+				CnAddr:      in.CnAddr,
+				OperatorID:  c.allocOperatorID(),
+				ParallelID:  0,
+				MaxParallel: 1,
 			}
 			for j := range ss {
 				ss[j].appendInstruction(vm.Instruction{
@@ -815,6 +879,11 @@ func newParallelScope(s *Scope, ss []*Scope) (*Scope, error) {
 					IsFirst: in.IsFirst,
 					Arg: offset.NewArgument().
 						WithOffset(arg.Offset),
+
+					CnAddr:      in.CnAddr,
+					OperatorID:  in.OperatorID,
+					MaxParallel: int32(len(ss)),
+					ParallelID:  int32(j),
 				})
 			}
 			arg.Release()
@@ -839,9 +908,14 @@ func newParallelScope(s *Scope, ss []*Scope) (*Scope, error) {
 			Op:  vm.Merge,
 			Idx: s.Instructions[0].Idx, // TODO: remove it
 			Arg: merge.NewArgument(),
+
+			CnAddr:      s.Instructions[0].CnAddr,
+			OperatorID:  c.allocOperatorID(),
+			ParallelID:  0,
+			MaxParallel: 1,
 		}
-		//Add log for cn panic which reported on issue 10656
-		//If you find this log is printed, please report the repro details
+		// Add log for cn panic which reported on issue 10656
+		// If you find this log is printed, please report the repro details
 		if len(s.Instructions) < 2 {
 			logutil.Error("the length of s.Instructions is too short!"+DebugShowScopes([]*Scope{s}),
 				zap.String("stack", string(debug.Stack())),
@@ -884,6 +958,11 @@ func newParallelScope(s *Scope, ss []*Scope) (*Scope, error) {
 				Op: vm.Connector,
 				Arg: connector.NewArgument().
 					WithReg(s.Proc.Reg.MergeReceivers[j]),
+
+				CnAddr:      ss[i].Instructions[0].CnAddr,
+				OperatorID:  c.allocOperatorID(),
+				ParallelID:  0,
+				MaxParallel: 1,
 			})
 			j++
 		}
@@ -922,6 +1001,8 @@ func (s *Scope) notifyAndReceiveFromRemote(errChan chan error) {
 
 			streamSender, errStream := cnclient.GetStreamSender(info.FromAddr)
 			if errStream != nil {
+				logutil.Errorf("Failed to get stream sender txnID=%s, err=%v",
+					s.Proc.TxnOperator.Txn().DebugString(), errStream)
 				closeWithError(errStream)
 				return
 			}
@@ -1040,6 +1121,6 @@ func (s *Scope) replace(c *Compile) error {
 	return nil
 }
 
-func (s Scope) Name() string {
+func (s Scope) TypeName() string {
 	return "compile.Scope"
 }

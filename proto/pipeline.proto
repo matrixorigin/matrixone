@@ -189,17 +189,19 @@ message PreInsertSecondaryIndex{
 }
 
 message OnDuplicateKey{
-  plan.TableDef table_def                   = 1;
-  repeated int32 on_duplicate_idx           = 2;
-  map<string, plan.Expr> on_duplicate_expr  = 3;
-  bool is_ignore                            = 4;
+  repeated string attrs = 1;
+  int32 insert_col_count = 2;
+  repeated plan.Expr unique_col_check_expr = 3;
+  repeated string unique_cols = 4;
+  repeated int32 on_duplicate_idx		= 5;
+  map<string, plan.Expr> on_duplicate_expr	= 6;
+  bool is_ignore 						= 7;
 }
 
 message FuzzyFilter {
   float N = 1;
   string PkName = 2;
   plan.Type PkTyp = 3;
-  repeated plan.RuntimeFilterSpec runtime_filter_build_list = 4;
 }
 
 message Join {
@@ -330,6 +332,12 @@ message Product {
   bool is_shuffle =4;
 }
 
+message IndexJoin {
+  repeated int32 result = 1;
+  repeated plan.Type  types = 2;
+  repeated plan.RuntimeFilterSpec runtime_filter_build_list = 3;
+}
+
 message TableFunction {
   repeated string attrs = 1;
   repeated plan.ColDef rets = 2;
@@ -433,6 +441,12 @@ message Instruction{
   PreInsertSecondaryIndex pre_insert_secondary_index  = 36;
   SampleFunc sample_func = 37;
   FuzzyFilter fuzzy_filter = 38;
+
+  string cn_addr = 39;
+  int32 operator_id = 40;
+  int32 parallel_id = 41;
+  int32 max_parallel = 42;
+  IndexJoin index_join = 43;
 }
 
 message AnalysisList {
@@ -527,20 +541,4 @@ message UuidToRegIdx {
   int32 idx = 1;
   bytes uuid = 2;
   string from_addr = 3;
-}
-
-message RuntimeFilter {
-  enum RuntimeFilterType {
-    IN = 0;
-    BITMAP = 1;
-    MIN_MAX = 2;
-    BINARY_FUSE = 3;
-
-    PASS = 100;
-    DROP = 101;
-  }
-
-  RuntimeFilterType typ = 1;
-  int32 card = 2;
-  bytes data = 3;
 }

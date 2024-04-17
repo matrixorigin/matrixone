@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -28,9 +29,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/log"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
+	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"go.uber.org/zap"
 )
@@ -91,12 +94,18 @@ type ClientConn interface {
 	// be sent to client because we are transferring CN server connection,
 	// and it is not the first time to build connection and login has been
 	// finished already.
-	// If handshake is false, ignore the handshake phase.
-	BuildConnWithServer(handshake bool) (ServerConn, error)
+	// prevAddr is empty if it is the first time to build connection with
+	// a cn server; otherwise, it is the address of the previous cn node
+	// when it is transferring connection and the handshake phase is ignored.
+	BuildConnWithServer(prevAddr string) (ServerConn, error)
 	// HandleEvent handles event that comes from tunnel data flow.
 	HandleEvent(ctx context.Context, e IEvent, resp chan<- []byte) error
 	// Close closes the client connection.
 	Close() error
+}
+
+type migration struct {
+	setVarStmts []string
 }
 
 // clientConn is the connection between proxy and client.
@@ -125,22 +134,19 @@ type clientConn struct {
 	router Router
 	// tun is the tunnel which this client connection belongs to.
 	tun *tunnel
-	// redoStmts keeps all the statements that need to re-execute in the
-	// new session after it is transferred. It should contain:
-	// 1. set variable stmts
-	// 2. prepare stmts
-	// 3. use stmts
-	redoStmts []internalStmt
 	// tlsConfig is the config of TLS.
 	tlsConfig *tls.Config
 	// tlsConnectTimeout is the TLS connect timeout value.
 	tlsConnectTimeout time.Duration
 	// ipNetList is the list of ip net, which is parsed from CIDRs.
 	ipNetList []*net.IPNet
+	// queryClient is used to send query request to CN servers.
+	queryClient qclient.QueryClient
 	// testHelper is used for testing.
 	testHelper struct {
 		connectToBackend func() (ServerConn, error)
 	}
+	migration migration
 }
 
 // internalStmt is used internally in proxy, which indicates the stmt
@@ -166,9 +172,15 @@ func newClientConn(
 	ipNetList []*net.IPNet,
 ) (ClientConn, error) {
 	var originIP net.IP
-	host, _, err := net.SplitHostPort(conn.RemoteAddress())
+	var port int
+	host, portStr, err := net.SplitHostPort(conn.RemoteAddress())
 	if err == nil {
 		originIP = net.ParseIP(host)
+		port, _ = strconv.Atoi(portStr)
+	}
+	qc, err := qclient.NewQueryClient(cfg.UUID, morpc.Config{})
+	if err != nil {
+		return nil, err
 	}
 	c := &clientConn{
 		ctx:            ctx,
@@ -180,11 +192,13 @@ func newClientConn(
 		router:         router,
 		tun:            tun,
 		clientInfo: clientInfo{
-			originIP: originIP,
+			originIP:   originIP,
+			originPort: uint16(port),
 		},
 		ipNetList: ipNetList,
 		// set the connection timeout value.
 		tlsConnectTimeout: cfg.TLSConnectTimeout.Duration,
+		queryClient:       qc,
 	}
 	c.connID, err = c.genConnID()
 	if err != nil {
@@ -247,8 +261,8 @@ func (c *clientConn) SendErrToClient(err error) {
 }
 
 // BuildConnWithServer implements the ClientConn interface.
-func (c *clientConn) BuildConnWithServer(handshake bool) (ServerConn, error) {
-	if handshake {
+func (c *clientConn) BuildConnWithServer(prevAddr string) (ServerConn, error) {
+	if prevAddr == "" {
 		// Step 1, proxy write initial handshake to client.
 		if err := c.writeInitialHandshake(); err != nil {
 			c.log.Debug("failed to write Handshake packet", zap.Error(err))
@@ -262,7 +276,7 @@ func (c *clientConn) BuildConnWithServer(handshake bool) (ServerConn, error) {
 		}
 	}
 	// Step 3, proxy connects to a CN server to build connection.
-	conn, err := c.connectToBackend(handshake)
+	conn, err := c.connectToBackend(prevAddr)
 	if err != nil {
 		c.log.Error("failed to connect to backend", zap.Error(err))
 		return nil, err
@@ -277,10 +291,6 @@ func (c *clientConn) HandleEvent(ctx context.Context, e IEvent, resp chan<- []by
 		return c.handleKillQuery(ev, resp)
 	case *setVarEvent:
 		return c.handleSetVar(ev)
-	case *prepareEvent:
-		return c.handlePrepare(ev)
-	case *initDBEvent:
-		return c.handleInitDB(ev)
 	default:
 	}
 	return nil
@@ -351,29 +361,17 @@ func (c *clientConn) handleKillQuery(e *killQueryEvent, resp chan<- []byte) erro
 
 // handleSetVar handles the set variable event.
 func (c *clientConn) handleSetVar(e *setVarEvent) error {
-	c.redoStmts = append(c.redoStmts, internalStmt{cmdType: cmdQuery, s: e.stmt})
-	return nil
-}
-
-// handleSetVar handles the prepare event.
-func (c *clientConn) handlePrepare(e *prepareEvent) error {
-	c.redoStmts = append(c.redoStmts, internalStmt{cmdType: cmdQuery, s: e.stmt})
-	return nil
-}
-
-// handleUse handles the use event.
-func (c *clientConn) handleInitDB(e *initDBEvent) error {
-	c.redoStmts = append(c.redoStmts, internalStmt{cmdType: cmdInitDB, s: "use " + e.db})
+	c.migration.setVarStmts = append(c.migration.setVarStmts, e.stmt)
 	return nil
 }
 
 // Close implements the ClientConn interface.
 func (c *clientConn) Close() error {
-	return nil
+	return c.queryClient.Close()
 }
 
 // connectToBackend connect to the real CN server.
-func (c *clientConn) connectToBackend(sendToClient bool) (ServerConn, error) {
+func (c *clientConn) connectToBackend(prevAdd string) (ServerConn, error) {
 	// Testing path.
 	if c.testHelper.connectToBackend != nil {
 		return c.testHelper.connectToBackend()
@@ -413,6 +411,7 @@ func (c *clientConn) connectToBackend(sendToClient bool) (ServerConn, error) {
 
 		// Update the internal connection.
 		cn.internalConn = containIP(c.ipNetList, c.clientInfo.originIP)
+		cn.clientAddr = fmt.Sprintf("%s:%d", c.clientInfo.originIP.String(), c.clientInfo.originPort)
 
 		// After select a CN server, we try to connect to it. If connect
 		// fails, and it is a retryable error, we reselect another CN server.
@@ -440,11 +439,18 @@ func (c *clientConn) connectToBackend(sendToClient bool) (ServerConn, error) {
 		}
 	}
 
-	if sendToClient {
+	if prevAdd == "" {
 		// r is the packet received from CN server, send r to client.
 		if err := c.mysqlProto.WritePacket(r[4:]); err != nil {
 			v2.ProxyConnectCommonFailCounter.Inc()
 			return nil, err
+		}
+	} else {
+		// The connection has been transferred to a new server, but migration fails,
+		// but we don't return error, which will cause unknown issue.
+		if err := c.migrateConn(prevAdd, sc); err != nil {
+			c.log.Error("failed to migrate connection information", zap.Error(err))
+			return sc, nil
 		}
 	}
 	if !isOKPacket(r) {
@@ -452,15 +458,6 @@ func (c *clientConn) connectToBackend(sendToClient bool) (ServerConn, error) {
 		return nil, withCode(moerr.NewInternalErrorNoCtx("access error"),
 			codeAuthFailed)
 	}
-
-	// Re-execute the statements.
-	for _, stmt := range c.redoStmts {
-		if _, err := sc.ExecStmt(stmt, nil); err != nil {
-			v2.ProxyConnectCommonFailCounter.Inc()
-			return nil, err
-		}
-	}
-
 	v2.ProxyConnectSuccessCounter.Inc()
 	return sc, nil
 }
@@ -475,6 +472,7 @@ func (c *clientConn) readPacket() (*frontend.Packet, error) {
 	if proxyAddr, ok := msg.(*ProxyAddr); ok {
 		if proxyAddr.SourceAddress != nil {
 			c.clientInfo.originIP = proxyAddr.SourceAddress
+			c.clientInfo.originPort = proxyAddr.SourcePort
 		}
 		return c.readPacket()
 	}

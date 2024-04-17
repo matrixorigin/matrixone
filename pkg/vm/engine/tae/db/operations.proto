@@ -53,6 +53,11 @@ message Checkpoint {
     int64 FlushDuration         = 1 [(gogoproto.casttype) = "time.Duration"];
 }
 
+message InterceptCommit {
+    option (gogoproto.typedecl) = false;
+    string TableName             = 1;
+}
+
 message InspectTN {
     option (gogoproto.typedecl) = false;
     AccessInfo AccessInfo       = 1 [(gogoproto.nullable) = false];
@@ -86,6 +91,24 @@ message TraceSpan {
     string cmd                  = 1;
     string spans       = 2;
     int64 threshold = 3;
+}
+
+message BlockMetaInfo {
+    option (gogoproto.typedecl)     = false;
+    repeated uint64 info            = 1;
+}
+
+message CkpMetaInfo {
+    option (gogoproto.typedecl)     = false;
+    uint32 version                  =1;
+    bytes location                 =2;
+}
+
+message StorageUsageResp_V0 {
+    option (gogoproto.typedecl)     = false;
+    bool Succeed                    = 1;
+    repeated CkpMetaInfo CkpEntries = 2;
+    repeated BlockMetaInfo BlockEntries   = 3;
 }
 
 message StorageUsageReq {

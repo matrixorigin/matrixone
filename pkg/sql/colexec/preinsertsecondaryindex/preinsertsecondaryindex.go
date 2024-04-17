@@ -40,7 +40,7 @@ func (arg *Argument) String(buf *bytes.Buffer) {
 	buf.WriteString(": pre processing insert secondary key")
 }
 
-func (arg *Argument) Prepare(_ *process.Process) error {
+func (arg *Argument) Prepare(proc *process.Process) error {
 	return nil
 }
 
@@ -49,11 +49,11 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	result, err := arg.children[0].Call(proc)
+	result, err := arg.GetChildren(0).Call(proc)
 	if err != nil {
 		return result, err
 	}
-	analy := proc.GetAnalyze(arg.info.Idx, arg.info.ParallelIdx, arg.info.ParallelMajor)
+	analy := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
 	analy.Start()
 	defer analy.Stop()
 
@@ -66,7 +66,6 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 
 	secondaryColumnPos := arg.PreInsertCtx.Columns
 	pkPos := int(arg.PreInsertCtx.PkColumn)
-	// tableDef := argument.PreInsertCtx.TableDef
 
 	if arg.buf != nil {
 		proc.PutBatch(arg.buf)
@@ -87,13 +86,16 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	// colCount >= 2 is more common.
 	if colCount == 1 {
 		pos := secondaryColumnPos[indexColPos]
-		vec, bitMap = util.CompactSingleIndexCol(inputBat.Vecs[pos], proc)
+		vec, bitMap, err = util.CompactSingleIndexCol(inputBat.Vecs[pos], proc)
+		if err != nil {
+			return result, err
+		}
 	} else {
 		vs := make([]*vector.Vector, colCount)
 		for vIdx, pIdx := range secondaryColumnPos {
 			vs[vIdx] = inputBat.Vecs[pIdx]
 		}
-		vec, bitMap, err = util.SerialWithoutCompacted(vs, proc)
+		vec, bitMap, err = util.SerialWithoutCompacted(vs, proc, &arg.packer)
 		if err != nil {
 			return result, err
 		}
@@ -101,14 +103,16 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	arg.buf.SetVector(indexColPos, vec)
 	arg.buf.SetRowCount(vec.Length())
 
-	vec = util.CompactPrimaryCol(inputBat.Vecs[pkPos], bitMap, proc)
+	vec, err = util.CompactPrimaryCol(inputBat.Vecs[pkPos], bitMap, proc)
+	if err != nil {
+		return result, err
+	}
 	arg.buf.SetVector(pkColPos, vec)
 
 	if isUpdate {
 		rowIdInBat := len(inputBat.Vecs) - 1
 		arg.buf.SetVector(rowIdColPos, proc.GetVector(*inputBat.Vecs[rowIdInBat].GetType()))
-		err := arg.buf.Vecs[rowIdColPos].UnionBatch(inputBat.Vecs[rowIdInBat], 0, inputBat.Vecs[rowIdInBat].Length(), nil, proc.Mp())
-		if err != nil {
+		if err = arg.buf.Vecs[rowIdColPos].UnionBatch(inputBat.Vecs[rowIdInBat], 0, inputBat.Vecs[rowIdInBat].Length(), nil, proc.Mp()); err != nil {
 			return result, err
 		}
 	}

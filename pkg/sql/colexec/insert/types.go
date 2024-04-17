@@ -44,8 +44,11 @@ type Argument struct {
 	ToWriteS3    bool // mark if this insert's target is S3 or not.
 	InsertCtx    *InsertCtx
 
-	info     *vm.OperatorInfo
-	children []vm.Operator
+	vm.OperatorBase
+}
+
+func (arg *Argument) GetOperatorBase() *vm.OperatorBase {
+	return &arg.OperatorBase
 }
 
 func init() {
@@ -61,7 +64,7 @@ func init() {
 	)
 }
 
-func (arg Argument) Name() string {
+func (arg Argument) TypeName() string {
 	return argName
 }
 
@@ -75,16 +78,8 @@ func (arg *Argument) Release() {
 	}
 }
 
-func (arg *Argument) SetInfo(info *vm.OperatorInfo) {
-	arg.info = info
-}
-
-func (arg *Argument) AppendChild(child vm.Operator) {
-	arg.children = append(arg.children, child)
-}
-
 type InsertCtx struct {
-	//insert data into Rel.
+	// insert data into Rel.
 	Rel                   engine.Relation
 	Ref                   *plan.ObjectRef
 	AddAffectedRows       bool

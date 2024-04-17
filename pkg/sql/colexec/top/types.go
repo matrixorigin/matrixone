@@ -19,6 +19,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/compare"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -35,17 +36,22 @@ type container struct {
 	cmps  []compare.Compare
 
 	executorsForOrderColumn []colexec.ExpressionExecutor
-
-	bat *batch.Batch
+	desc                    bool
+	topValueZM              objectio.ZoneMap
+	bat                     *batch.Batch
 }
 
 type Argument struct {
-	Limit int64
-	ctr   *container
-	Fs    []*plan.OrderBySpec
+	Limit       int64
+	TopValueTag int32
+	ctr         *container
+	Fs          []*plan.OrderBySpec
 
-	info     *vm.OperatorInfo
-	children []vm.Operator
+	vm.OperatorBase
+}
+
+func (arg *Argument) GetOperatorBase() *vm.OperatorBase {
+	return &arg.OperatorBase
 }
 
 func init() {
@@ -61,7 +67,7 @@ func init() {
 	)
 }
 
-func (arg Argument) Name() string {
+func (arg Argument) TypeName() string {
 	return argName
 }
 
@@ -85,19 +91,16 @@ func (arg *Argument) Release() {
 	}
 }
 
-func (arg *Argument) SetInfo(info *vm.OperatorInfo) {
-	arg.info = info
-}
-
-func (arg *Argument) AppendChild(child vm.Operator) {
-	arg.children = append(arg.children, child)
-}
-
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := arg.ctr
 	if ctr != nil {
 		mp := proc.Mp()
 		ctr.cleanBatch(mp)
+
+		for i := range ctr.executorsForOrderColumn {
+			ctr.executorsForOrderColumn[i].Free()
+		}
+		ctr.executorsForOrderColumn = nil
 	}
 }
 

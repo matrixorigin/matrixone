@@ -17,18 +17,20 @@ package external
 import (
 	"bufio"
 	"context"
-	"encoding/csv"
-	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"io"
 
+	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/util/csvparser"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"github.com/parquet-go/parquet-go"
 )
 
 var _ vm.Operator = new(Argument)
@@ -73,7 +75,8 @@ type ExParam struct {
 	Fileparam      *ExFileparam
 	Zoneparam      *ZonemapFileparam
 	Filter         *FilterParam
-	MoCsvLineArray [][]string
+	MoCsvLineArray [][]csvparser.Field
+	parqh          *ParquetHandler
 }
 
 type ExFileparam struct {
@@ -97,11 +100,16 @@ type FilterParam struct {
 }
 
 type Argument struct {
-	Es *ExternalParam
+	Es  *ExternalParam
+	buf *batch.Batch
 
-	info     *vm.OperatorInfo
-	children []vm.Operator
-	buf      *batch.Batch
+	maxAllocSize int
+
+	vm.OperatorBase
+}
+
+func (arg *Argument) GetOperatorBase() *vm.OperatorBase {
+	return &arg.OperatorBase
 }
 
 func init() {
@@ -117,7 +125,7 @@ func init() {
 	)
 }
 
-func (arg Argument) Name() string {
+func (arg Argument) TypeName() string {
 	return argName
 }
 
@@ -136,36 +144,82 @@ func (arg *Argument) Release() {
 	}
 }
 
-func (arg *Argument) SetInfo(info *vm.OperatorInfo) {
-	arg.info = info
-}
-
-func (arg *Argument) AppendChild(child vm.Operator) {
-	arg.children = append(arg.children, child)
-}
-
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	if arg.buf != nil {
 		arg.buf.Clean(proc.Mp())
 		arg.buf = nil
 	}
+	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
+	anal.Alloc(int64(arg.maxAllocSize))
 }
 
 type ParseLineHandler struct {
-	csvReader *csv.Reader
-	//batch
+	csvReader *csvparser.CSVParser
+	// batch
 	batchSize int
-	//mo csv
-	moCsvLineArray [][]string
+	// mo csv
+	moCsvLineArray [][]csvparser.Field
 }
 
-// NewReader returns a new Reader with options that reads from r.
-func newReaderWithOptions(r io.Reader, cma, cmnt rune, lazyQt, tls bool) *csv.Reader {
-	rCsv := csv.NewReader(bufio.NewReader(r))
-	rCsv.Comma = cma
-	rCsv.Comment = cmnt
-	rCsv.LazyQuotes = lazyQt
-	rCsv.TrimLeadingSpace = tls
-	rCsv.FieldsPerRecord = -1
-	return rCsv
+func newReaderWithParam(param *ExternalParam) (*csvparser.CSVParser, error) {
+	fieldsTerminatedBy := "\t"
+	fieldsEnclosedBy := "\""
+	fieldsEscapedBy := "\\"
+
+	linesTerminatedBy := "\n"
+	linesStartingBy := ""
+
+	if param.Extern.Tail.Fields != nil {
+		if terminated := param.Extern.Tail.Fields.Terminated; terminated != nil && terminated.Value != "" {
+			fieldsTerminatedBy = terminated.Value
+		}
+		if enclosed := param.Extern.Tail.Fields.EnclosedBy; enclosed != nil && enclosed.Value != 0 {
+			fieldsEnclosedBy = string(enclosed.Value)
+		}
+		if escaped := param.Extern.Tail.Fields.EscapedBy; escaped != nil {
+			if escaped.Value == 0 {
+				fieldsEscapedBy = ""
+			} else {
+				fieldsEscapedBy = string(escaped.Value)
+			}
+		}
+	}
+
+	if param.Extern.Tail.Lines != nil {
+		if terminated := param.Extern.Tail.Lines.TerminatedBy; terminated != nil && terminated.Value != "" {
+			linesTerminatedBy = param.Extern.Tail.Lines.TerminatedBy.Value
+		}
+		if param.Extern.Tail.Lines.StartingBy != "" {
+			linesStartingBy = param.Extern.Tail.Lines.StartingBy
+		}
+	}
+
+	if param.Extern.Format == tree.JSONLINE {
+		fieldsTerminatedBy = "\t"
+		fieldsEscapedBy = ""
+	}
+
+	config := csvparser.CSVConfig{
+		FieldsTerminatedBy: fieldsTerminatedBy,
+		FieldsEnclosedBy:   fieldsEnclosedBy,
+		FieldsEscapedBy:    fieldsEscapedBy,
+		LinesTerminatedBy:  linesTerminatedBy,
+		LinesStartingBy:    linesStartingBy,
+		NotNull:            false,
+		Null:               []string{`\N`},
+		UnescapedQuote:     true,
+		Comment:            '#',
+	}
+
+	return csvparser.NewCSVParser(&config, bufio.NewReader(param.reader), csvparser.ReadBlockSize, false, false)
 }
+
+type ParquetHandler struct {
+	file     *parquet.File
+	offset   int64
+	batchCnt int64
+	cols     []*parquet.Column
+	dataFn   []dataFn
+}
+
+type dataFn = func(page parquet.Page, proc *process.Process, vec *vector.Vector) error

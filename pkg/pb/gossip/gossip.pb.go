@@ -11,7 +11,9 @@ import (
 
 	_ "github.com/gogo/protobuf/gogoproto"
 	proto "github.com/gogo/protobuf/proto"
-	cache "github.com/matrixorigin/matrixone/pkg/pb/cache"
+	_ "github.com/golang/protobuf/ptypes/any"
+	query "github.com/matrixorigin/matrixone/pkg/pb/query"
+	statsinfo "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 )
 
 // Reference imports to suppress errors if they are not otherwise used.
@@ -53,9 +55,98 @@ func (Operation) EnumDescriptor() ([]byte, []int) {
 	return fileDescriptor_878fa4887b90140c, []int{0}
 }
 
+type GossipData struct {
+	// Types that are valid to be assigned to Data:
+	//	*GossipData_CacheKeyItem
+	//	*GossipData_StatsInfoKeyItem
+	Data                 isGossipData_Data `protobuf_oneof:"Data"`
+	XXX_NoUnkeyedLiteral struct{}          `json:"-"`
+	XXX_unrecognized     []byte            `json:"-"`
+	XXX_sizecache        int32             `json:"-"`
+}
+
+func (m *GossipData) Reset()         { *m = GossipData{} }
+func (m *GossipData) String() string { return proto.CompactTextString(m) }
+func (*GossipData) ProtoMessage()    {}
+func (*GossipData) Descriptor() ([]byte, []int) {
+	return fileDescriptor_878fa4887b90140c, []int{0}
+}
+func (m *GossipData) XXX_Unmarshal(b []byte) error {
+	return m.Unmarshal(b)
+}
+func (m *GossipData) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+	if deterministic {
+		return xxx_messageInfo_GossipData.Marshal(b, m, deterministic)
+	} else {
+		b = b[:cap(b)]
+		n, err := m.MarshalToSizedBuffer(b)
+		if err != nil {
+			return nil, err
+		}
+		return b[:n], nil
+	}
+}
+func (m *GossipData) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_GossipData.Merge(m, src)
+}
+func (m *GossipData) XXX_Size() int {
+	return m.Size()
+}
+func (m *GossipData) XXX_DiscardUnknown() {
+	xxx_messageInfo_GossipData.DiscardUnknown(m)
+}
+
+var xxx_messageInfo_GossipData proto.InternalMessageInfo
+
+type isGossipData_Data interface {
+	isGossipData_Data()
+	MarshalTo([]byte) (int, error)
+	Size() int
+}
+
+type GossipData_CacheKeyItem struct {
+	CacheKeyItem *CacheKeyItem `protobuf:"bytes,1,opt,name=CacheKeyItem,proto3,oneof" json:"CacheKeyItem,omitempty"`
+}
+type GossipData_StatsInfoKeyItem struct {
+	StatsInfoKeyItem *StatsInfoKeyItem `protobuf:"bytes,2,opt,name=StatsInfoKeyItem,proto3,oneof" json:"StatsInfoKeyItem,omitempty"`
+}
+
+func (*GossipData_CacheKeyItem) isGossipData_Data()     {}
+func (*GossipData_StatsInfoKeyItem) isGossipData_Data() {}
+
+func (m *GossipData) GetData() isGossipData_Data {
+	if m != nil {
+		return m.Data
+	}
+	return nil
+}
+
+func (m *GossipData) GetCacheKeyItem() *CacheKeyItem {
+	if x, ok := m.GetData().(*GossipData_CacheKeyItem); ok {
+		return x.CacheKeyItem
+	}
+	return nil
+}
+
+func (m *GossipData) GetStatsInfoKeyItem() *StatsInfoKeyItem {
+	if x, ok := m.GetData().(*GossipData_StatsInfoKeyItem); ok {
+		return x.StatsInfoKeyItem
+	}
+	return nil
+}
+
+// XXX_OneofWrappers is for the internal use of the proto package.
+func (*GossipData) XXX_OneofWrappers() []interface{} {
+	return []interface{}{
+		(*GossipData_CacheKeyItem)(nil),
+		(*GossipData_StatsInfoKeyItem)(nil),
+	}
+}
+
+// CacheKeyItem is the item of cache key for data in file-service.
 type CacheKeyItem struct {
 	Operation            Operation      `protobuf:"varint,1,opt,name=Operation,proto3,enum=gossip.Operation" json:"Operation,omitempty"`
-	CacheKey             cache.CacheKey `protobuf:"bytes,2,opt,name=CacheKey,proto3" json:"CacheKey"`
+	CacheKey             query.CacheKey `protobuf:"bytes,2,opt,name=CacheKey,proto3" json:"CacheKey"`
 	TargetAddress        string         `protobuf:"bytes,3,opt,name=TargetAddress,proto3" json:"TargetAddress,omitempty"`
 	XXX_NoUnkeyedLiteral struct{}       `json:"-"`
 	XXX_unrecognized     []byte         `json:"-"`
@@ -66,7 +157,7 @@ func (m *CacheKeyItem) Reset()         { *m = CacheKeyItem{} }
 func (m *CacheKeyItem) String() string { return proto.CompactTextString(m) }
 func (*CacheKeyItem) ProtoMessage()    {}
 func (*CacheKeyItem) Descriptor() ([]byte, []int) {
-	return fileDescriptor_878fa4887b90140c, []int{0}
+	return fileDescriptor_878fa4887b90140c, []int{1}
 }
 func (m *CacheKeyItem) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -102,11 +193,11 @@ func (m *CacheKeyItem) GetOperation() Operation {
 	return Operation_Unknown
 }
 
-func (m *CacheKeyItem) GetCacheKey() cache.CacheKey {
+func (m *CacheKeyItem) GetCacheKey() query.CacheKey {
 	if m != nil {
 		return m.CacheKey
 	}
-	return cache.CacheKey{}
+	return query.CacheKey{}
 }
 
 func (m *CacheKeyItem) GetTargetAddress() string {
@@ -116,34 +207,404 @@ func (m *CacheKeyItem) GetTargetAddress() string {
 	return ""
 }
 
+type StatsInfoKeyItem struct {
+	Operation            Operation              `protobuf:"varint,1,opt,name=Operation,proto3,enum=gossip.Operation" json:"Operation,omitempty"`
+	StatsInfoKey         statsinfo.StatsInfoKey `protobuf:"bytes,2,opt,name=StatsInfoKey,proto3" json:"StatsInfoKey"`
+	TargetAddress        string                 `protobuf:"bytes,3,opt,name=TargetAddress,proto3" json:"TargetAddress,omitempty"`
+	XXX_NoUnkeyedLiteral struct{}               `json:"-"`
+	XXX_unrecognized     []byte                 `json:"-"`
+	XXX_sizecache        int32                  `json:"-"`
+}
+
+func (m *StatsInfoKeyItem) Reset()         { *m = StatsInfoKeyItem{} }
+func (m *StatsInfoKeyItem) String() string { return proto.CompactTextString(m) }
+func (*StatsInfoKeyItem) ProtoMessage()    {}
+func (*StatsInfoKeyItem) Descriptor() ([]byte, []int) {
+	return fileDescriptor_878fa4887b90140c, []int{2}
+}
+func (m *StatsInfoKeyItem) XXX_Unmarshal(b []byte) error {
+	return m.Unmarshal(b)
+}
+func (m *StatsInfoKeyItem) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+	if deterministic {
+		return xxx_messageInfo_StatsInfoKeyItem.Marshal(b, m, deterministic)
+	} else {
+		b = b[:cap(b)]
+		n, err := m.MarshalToSizedBuffer(b)
+		if err != nil {
+			return nil, err
+		}
+		return b[:n], nil
+	}
+}
+func (m *StatsInfoKeyItem) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_StatsInfoKeyItem.Merge(m, src)
+}
+func (m *StatsInfoKeyItem) XXX_Size() int {
+	return m.Size()
+}
+func (m *StatsInfoKeyItem) XXX_DiscardUnknown() {
+	xxx_messageInfo_StatsInfoKeyItem.DiscardUnknown(m)
+}
+
+var xxx_messageInfo_StatsInfoKeyItem proto.InternalMessageInfo
+
+func (m *StatsInfoKeyItem) GetOperation() Operation {
+	if m != nil {
+		return m.Operation
+	}
+	return Operation_Unknown
+}
+
+func (m *StatsInfoKeyItem) GetStatsInfoKey() statsinfo.StatsInfoKey {
+	if m != nil {
+		return m.StatsInfoKey
+	}
+	return statsinfo.StatsInfoKey{}
+}
+
+func (m *StatsInfoKeyItem) GetTargetAddress() string {
+	if m != nil {
+		return m.TargetAddress
+	}
+	return ""
+}
+
+type LocalState struct {
+	CacheKeys            query.CacheKeys         `protobuf:"bytes,1,opt,name=CacheKeys,proto3" json:"CacheKeys"`
+	StatsInfoKeys        statsinfo.StatsInfoKeys `protobuf:"bytes,2,opt,name=StatsInfoKeys,proto3" json:"StatsInfoKeys"`
+	XXX_NoUnkeyedLiteral struct{}                `json:"-"`
+	XXX_unrecognized     []byte                  `json:"-"`
+	XXX_sizecache        int32                   `json:"-"`
+}
+
+func (m *LocalState) Reset()         { *m = LocalState{} }
+func (m *LocalState) String() string { return proto.CompactTextString(m) }
+func (*LocalState) ProtoMessage()    {}
+func (*LocalState) Descriptor() ([]byte, []int) {
+	return fileDescriptor_878fa4887b90140c, []int{3}
+}
+func (m *LocalState) XXX_Unmarshal(b []byte) error {
+	return m.Unmarshal(b)
+}
+func (m *LocalState) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+	if deterministic {
+		return xxx_messageInfo_LocalState.Marshal(b, m, deterministic)
+	} else {
+		b = b[:cap(b)]
+		n, err := m.MarshalToSizedBuffer(b)
+		if err != nil {
+			return nil, err
+		}
+		return b[:n], nil
+	}
+}
+func (m *LocalState) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_LocalState.Merge(m, src)
+}
+func (m *LocalState) XXX_Size() int {
+	return m.Size()
+}
+func (m *LocalState) XXX_DiscardUnknown() {
+	xxx_messageInfo_LocalState.DiscardUnknown(m)
+}
+
+var xxx_messageInfo_LocalState proto.InternalMessageInfo
+
+func (m *LocalState) GetCacheKeys() query.CacheKeys {
+	if m != nil {
+		return m.CacheKeys
+	}
+	return query.CacheKeys{}
+}
+
+func (m *LocalState) GetStatsInfoKeys() statsinfo.StatsInfoKeys {
+	if m != nil {
+		return m.StatsInfoKeys
+	}
+	return statsinfo.StatsInfoKeys{}
+}
+
+type TargetState struct {
+	Data                 map[string]*LocalState `protobuf:"bytes,1,rep,name=Data,proto3" json:"Data,omitempty" protobuf_key:"bytes,1,opt,name=key,proto3" protobuf_val:"bytes,2,opt,name=value,proto3"`
+	XXX_NoUnkeyedLiteral struct{}               `json:"-"`
+	XXX_unrecognized     []byte                 `json:"-"`
+	XXX_sizecache        int32                  `json:"-"`
+}
+
+func (m *TargetState) Reset()         { *m = TargetState{} }
+func (m *TargetState) String() string { return proto.CompactTextString(m) }
+func (*TargetState) ProtoMessage()    {}
+func (*TargetState) Descriptor() ([]byte, []int) {
+	return fileDescriptor_878fa4887b90140c, []int{4}
+}
+func (m *TargetState) XXX_Unmarshal(b []byte) error {
+	return m.Unmarshal(b)
+}
+func (m *TargetState) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+	if deterministic {
+		return xxx_messageInfo_TargetState.Marshal(b, m, deterministic)
+	} else {
+		b = b[:cap(b)]
+		n, err := m.MarshalToSizedBuffer(b)
+		if err != nil {
+			return nil, err
+		}
+		return b[:n], nil
+	}
+}
+func (m *TargetState) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_TargetState.Merge(m, src)
+}
+func (m *TargetState) XXX_Size() int {
+	return m.Size()
+}
+func (m *TargetState) XXX_DiscardUnknown() {
+	xxx_messageInfo_TargetState.DiscardUnknown(m)
+}
+
+var xxx_messageInfo_TargetState proto.InternalMessageInfo
+
+func (m *TargetState) GetData() map[string]*LocalState {
+	if m != nil {
+		return m.Data
+	}
+	return nil
+}
+
+type CommonItem struct {
+	Operation     Operation `protobuf:"varint,1,opt,name=Operation,proto3,enum=gossip.Operation" json:"Operation,omitempty"`
+	TargetAddress string    `protobuf:"bytes,2,opt,name=TargetAddress,proto3" json:"TargetAddress,omitempty"`
+	// Types that are valid to be assigned to Key:
+	//	*CommonItem_CacheKey
+	//	*CommonItem_StatsInfoKey
+	Key                  isCommonItem_Key `protobuf_oneof:"Key"`
+	XXX_NoUnkeyedLiteral struct{}         `json:"-"`
+	XXX_unrecognized     []byte           `json:"-"`
+	XXX_sizecache        int32            `json:"-"`
+}
+
+func (m *CommonItem) Reset()         { *m = CommonItem{} }
+func (m *CommonItem) String() string { return proto.CompactTextString(m) }
+func (*CommonItem) ProtoMessage()    {}
+func (*CommonItem) Descriptor() ([]byte, []int) {
+	return fileDescriptor_878fa4887b90140c, []int{5}
+}
+func (m *CommonItem) XXX_Unmarshal(b []byte) error {
+	return m.Unmarshal(b)
+}
+func (m *CommonItem) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+	if deterministic {
+		return xxx_messageInfo_CommonItem.Marshal(b, m, deterministic)
+	} else {
+		b = b[:cap(b)]
+		n, err := m.MarshalToSizedBuffer(b)
+		if err != nil {
+			return nil, err
+		}
+		return b[:n], nil
+	}
+}
+func (m *CommonItem) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_CommonItem.Merge(m, src)
+}
+func (m *CommonItem) XXX_Size() int {
+	return m.Size()
+}
+func (m *CommonItem) XXX_DiscardUnknown() {
+	xxx_messageInfo_CommonItem.DiscardUnknown(m)
+}
+
+var xxx_messageInfo_CommonItem proto.InternalMessageInfo
+
+type isCommonItem_Key interface {
+	isCommonItem_Key()
+	MarshalTo([]byte) (int, error)
+	Size() int
+}
+
+type CommonItem_CacheKey struct {
+	CacheKey *query.CacheKey `protobuf:"bytes,3,opt,name=CacheKey,proto3,oneof" json:"CacheKey,omitempty"`
+}
+type CommonItem_StatsInfoKey struct {
+	StatsInfoKey *statsinfo.StatsInfoKey `protobuf:"bytes,4,opt,name=StatsInfoKey,proto3,oneof" json:"StatsInfoKey,omitempty"`
+}
+
+func (*CommonItem_CacheKey) isCommonItem_Key()     {}
+func (*CommonItem_StatsInfoKey) isCommonItem_Key() {}
+
+func (m *CommonItem) GetKey() isCommonItem_Key {
+	if m != nil {
+		return m.Key
+	}
+	return nil
+}
+
+func (m *CommonItem) GetOperation() Operation {
+	if m != nil {
+		return m.Operation
+	}
+	return Operation_Unknown
+}
+
+func (m *CommonItem) GetTargetAddress() string {
+	if m != nil {
+		return m.TargetAddress
+	}
+	return ""
+}
+
+func (m *CommonItem) GetCacheKey() *query.CacheKey {
+	if x, ok := m.GetKey().(*CommonItem_CacheKey); ok {
+		return x.CacheKey
+	}
+	return nil
+}
+
+func (m *CommonItem) GetStatsInfoKey() *statsinfo.StatsInfoKey {
+	if x, ok := m.GetKey().(*CommonItem_StatsInfoKey); ok {
+		return x.StatsInfoKey
+	}
+	return nil
+}
+
+// XXX_OneofWrappers is for the internal use of the proto package.
+func (*CommonItem) XXX_OneofWrappers() []interface{} {
+	return []interface{}{
+		(*CommonItem_CacheKey)(nil),
+		(*CommonItem_StatsInfoKey)(nil),
+	}
+}
+
 func init() {
 	proto.RegisterEnum("gossip.Operation", Operation_name, Operation_value)
+	proto.RegisterType((*GossipData)(nil), "gossip.GossipData")
 	proto.RegisterType((*CacheKeyItem)(nil), "gossip.CacheKeyItem")
+	proto.RegisterType((*StatsInfoKeyItem)(nil), "gossip.StatsInfoKeyItem")
+	proto.RegisterType((*LocalState)(nil), "gossip.LocalState")
+	proto.RegisterType((*TargetState)(nil), "gossip.TargetState")
+	proto.RegisterMapType((map[string]*LocalState)(nil), "gossip.TargetState.DataEntry")
+	proto.RegisterType((*CommonItem)(nil), "gossip.CommonItem")
 }
 
 func init() { proto.RegisterFile("gossip.proto", fileDescriptor_878fa4887b90140c) }
 
 var fileDescriptor_878fa4887b90140c = []byte{
-	// 268 bytes of a gzipped FileDescriptorProto
-	0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0xe2, 0xe2, 0x49, 0xcf, 0x2f, 0x2e,
-	0xce, 0x2c, 0xd0, 0x2b, 0x28, 0xca, 0x2f, 0xc9, 0x17, 0x62, 0x83, 0xf0, 0xa4, 0x74, 0xd3, 0x33,
-	0x4b, 0x32, 0x4a, 0x93, 0xf4, 0x92, 0xf3, 0x73, 0xf5, 0xd3, 0xf3, 0xd3, 0xf3, 0xf5, 0xc1, 0xd2,
-	0x49, 0xa5, 0x69, 0x60, 0x1e, 0x98, 0x03, 0x66, 0x41, 0xb4, 0x49, 0x71, 0x27, 0x27, 0x26, 0x67,
-	0xa4, 0x42, 0x38, 0x4a, 0x33, 0x18, 0xb9, 0x78, 0x9c, 0x41, 0x7c, 0xef, 0xd4, 0x4a, 0xcf, 0x92,
-	0xd4, 0x5c, 0x21, 0x7d, 0x2e, 0x4e, 0xff, 0x82, 0xd4, 0xa2, 0xc4, 0x92, 0xcc, 0xfc, 0x3c, 0x09,
-	0x46, 0x05, 0x46, 0x0d, 0x3e, 0x23, 0x41, 0x3d, 0xa8, 0xb5, 0x70, 0x89, 0x20, 0x84, 0x1a, 0x21,
-	0x43, 0x2e, 0x0e, 0x98, 0x01, 0x12, 0x4c, 0x0a, 0x8c, 0x1a, 0xdc, 0x46, 0xfc, 0x7a, 0x10, 0x1b,
-	0x60, 0xc2, 0x4e, 0x2c, 0x27, 0xee, 0xc9, 0x33, 0x04, 0xc1, 0x95, 0x09, 0xa9, 0x70, 0xf1, 0x86,
-	0x24, 0x16, 0xa5, 0xa7, 0x96, 0x38, 0xa6, 0xa4, 0x14, 0xa5, 0x16, 0x17, 0x4b, 0x30, 0x2b, 0x30,
-	0x6a, 0x70, 0x06, 0xa1, 0x0a, 0x6a, 0xe9, 0x22, 0xb9, 0x44, 0x88, 0x9b, 0x8b, 0x3d, 0x34, 0x2f,
-	0x3b, 0x2f, 0xbf, 0x3c, 0x4f, 0x80, 0x41, 0x88, 0x9d, 0x8b, 0x39, 0x38, 0xb5, 0x44, 0x80, 0x51,
-	0x88, 0x8b, 0x8b, 0xcd, 0x25, 0x35, 0x27, 0xb5, 0x24, 0x55, 0x80, 0xc9, 0xc9, 0xf6, 0xc4, 0x23,
-	0x39, 0xc6, 0x0b, 0x8f, 0xe4, 0x18, 0x1f, 0x3c, 0x92, 0x63, 0x8c, 0xd2, 0x47, 0x0a, 0x93, 0xdc,
-	0xc4, 0x92, 0xa2, 0xcc, 0x8a, 0xfc, 0xa2, 0xcc, 0xf4, 0xcc, 0x3c, 0x18, 0x27, 0x2f, 0x55, 0xbf,
-	0x20, 0x3b, 0x5d, 0xbf, 0x20, 0x49, 0x1f, 0xe2, 0xb7, 0x24, 0x36, 0x70, 0x78, 0x18, 0x03, 0x02,
-	0x00, 0x00, 0xff, 0xff, 0xd2, 0xbf, 0x3f, 0xcf, 0x63, 0x01, 0x00, 0x00,
+	// 535 bytes of a gzipped FileDescriptorProto
+	0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0x9c, 0x54, 0xcd, 0x6e, 0xd3, 0x40,
+	0x10, 0xce, 0xc6, 0x6d, 0x8a, 0xc7, 0x29, 0x35, 0x2b, 0x24, 0x42, 0x24, 0x42, 0x14, 0x71, 0x88,
+	0x90, 0x62, 0xab, 0x81, 0x03, 0xaa, 0xd4, 0x43, 0xd3, 0x00, 0xa9, 0x82, 0x84, 0xe4, 0xc2, 0x85,
+	0xdb, 0x26, 0xdd, 0xb8, 0x56, 0xe2, 0x5d, 0x63, 0x6f, 0x00, 0xbf, 0x01, 0x17, 0xee, 0x3c, 0x04,
+	0x0f, 0xd2, 0x23, 0x47, 0x4e, 0x08, 0xe5, 0x49, 0x90, 0x7f, 0x36, 0x5e, 0x27, 0x11, 0x02, 0x6e,
+	0x3b, 0x33, 0xdf, 0x37, 0xf3, 0xcd, 0x8f, 0x16, 0xea, 0x2e, 0x8f, 0x22, 0x2f, 0xb0, 0x82, 0x90,
+	0x0b, 0x8e, 0x6b, 0x99, 0xd5, 0xbc, 0xef, 0x72, 0xee, 0x2e, 0xa8, 0x9d, 0x7a, 0x27, 0xcb, 0x99,
+	0x4d, 0x58, 0x9c, 0x41, 0x9a, 0x3d, 0xd7, 0x13, 0xd7, 0xcb, 0x89, 0x35, 0xe5, 0xbe, 0xed, 0x72,
+	0x97, 0x17, 0x98, 0xc4, 0x4a, 0x8d, 0xf4, 0x95, 0xc3, 0x8d, 0xf7, 0x4b, 0x1a, 0x4a, 0xee, 0x51,
+	0x24, 0x88, 0x88, 0x3c, 0x36, 0xcb, 0xa3, 0x9d, 0xaf, 0x08, 0xe0, 0x65, 0x5a, 0x72, 0x48, 0x04,
+	0xc1, 0x27, 0x50, 0x3f, 0x27, 0xd3, 0x6b, 0x3a, 0xa6, 0xf1, 0x85, 0xa0, 0x7e, 0x03, 0xb5, 0x51,
+	0xd7, 0xe8, 0xdf, 0xb5, 0x72, 0x8d, 0x6a, 0x6c, 0x54, 0x71, 0x4a, 0x58, 0xfc, 0x02, 0xcc, 0xcb,
+	0x24, 0xfb, 0x05, 0x9b, 0x71, 0xc9, 0xaf, 0xa6, 0xfc, 0x86, 0xe4, 0x6f, 0xc6, 0x47, 0x15, 0x67,
+	0x8b, 0x33, 0xa8, 0xc1, 0x5e, 0xa2, 0x25, 0x91, 0x56, 0x2e, 0x60, 0x83, 0xfe, 0x3a, 0xa0, 0x21,
+	0x11, 0x1e, 0x67, 0xa9, 0xb2, 0xdb, 0xfd, 0x3b, 0x32, 0xf3, 0x3a, 0xe0, 0x14, 0x18, 0x7c, 0x0c,
+	0xb7, 0x64, 0x82, 0x5c, 0xc9, 0x91, 0x95, 0x4d, 0x43, 0xba, 0x07, 0x7b, 0x37, 0x3f, 0x1f, 0x56,
+	0x9c, 0x35, 0x0c, 0x3f, 0x82, 0xc3, 0x37, 0x24, 0x74, 0xa9, 0x38, 0xbb, 0xba, 0x0a, 0x69, 0x14,
+	0x35, 0xb4, 0x36, 0xea, 0xea, 0x4e, 0xd9, 0xd9, 0xf9, 0x86, 0xb6, 0x7b, 0xfd, 0x77, 0x79, 0x67,
+	0x50, 0x57, 0x93, 0xe4, 0x12, 0xef, 0x59, 0xc5, 0x8e, 0xd4, 0x70, 0x2e, 0xb5, 0x44, 0xf9, 0x4b,
+	0xb9, 0x9f, 0x11, 0xc0, 0x2b, 0x3e, 0x25, 0x8b, 0x84, 0x4b, 0xf1, 0x53, 0xd0, 0x65, 0xbf, 0x51,
+	0xbe, 0x61, 0x73, 0x63, 0x2e, 0x51, 0x5e, 0xad, 0x00, 0xe2, 0x21, 0x1c, 0xaa, 0xa5, 0xa3, 0xf5,
+	0x6e, 0x77, 0xcb, 0x95, 0x19, 0xca, 0xa4, 0xce, 0x17, 0x04, 0x46, 0x26, 0x2e, 0xd3, 0x72, 0x9c,
+	0x2d, 0xbb, 0x81, 0xda, 0x5a, 0xd7, 0xe8, 0x3f, 0x90, 0xf3, 0x52, 0x20, 0x56, 0x12, 0x7f, 0xce,
+	0x44, 0x18, 0x3b, 0x29, 0xb4, 0x39, 0x06, 0x7d, 0xed, 0xc2, 0x26, 0x68, 0x73, 0x1a, 0xa7, 0x5d,
+	0xe8, 0x4e, 0xf2, 0xc4, 0x5d, 0xd8, 0xff, 0x40, 0x16, 0x4b, 0x9a, 0xeb, 0xc3, 0x32, 0x65, 0x31,
+	0x00, 0x27, 0x03, 0x9c, 0x54, 0x9f, 0xa1, 0xce, 0x0f, 0x04, 0x70, 0xce, 0x7d, 0x9f, 0xb3, 0xff,
+	0xdb, 0xe1, 0xd6, 0x02, 0xaa, 0x3b, 0x16, 0x80, 0x7b, 0xca, 0x21, 0x6a, 0x3b, 0x0f, 0x71, 0xa4,
+	0x1e, 0xe1, 0xe9, 0xc6, 0x61, 0xec, 0xfd, 0xf1, 0x30, 0x46, 0x1b, 0x47, 0x31, 0xd8, 0x07, 0x6d,
+	0x4c, 0xe3, 0xc7, 0x3d, 0xa5, 0x17, 0x6c, 0xc0, 0xc1, 0x5b, 0x36, 0x67, 0xfc, 0x23, 0x33, 0x2b,
+	0xf8, 0x00, 0xb4, 0x4b, 0x2a, 0x4c, 0x84, 0x01, 0x6a, 0x43, 0xba, 0xa0, 0x82, 0x9a, 0xd5, 0xc1,
+	0xe9, 0xcd, 0xaa, 0x85, 0xbe, 0xaf, 0x5a, 0xe8, 0xd7, 0xaa, 0x85, 0xde, 0xd9, 0xca, 0x27, 0xe3,
+	0x13, 0x11, 0x7a, 0x9f, 0x78, 0xe8, 0xb9, 0x1e, 0x93, 0x06, 0xa3, 0x76, 0x30, 0x77, 0xed, 0x60,
+	0x62, 0x67, 0xd3, 0x99, 0xd4, 0xd2, 0xff, 0xe4, 0xc9, 0xef, 0x00, 0x00, 0x00, 0xff, 0xff, 0xf3,
+	0xb0, 0xb9, 0x78, 0xcf, 0x04, 0x00, 0x00,
 }
 
+func (m *GossipData) Marshal() (dAtA []byte, err error) {
+	size := m.Size()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *GossipData) MarshalTo(dAtA []byte) (int, error) {
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *GossipData) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	_ = i
+	var l int
+	_ = l
+	if m.XXX_unrecognized != nil {
+		i -= len(m.XXX_unrecognized)
+		copy(dAtA[i:], m.XXX_unrecognized)
+	}
+	if m.Data != nil {
+		{
+			size := m.Data.Size()
+			i -= size
+			if _, err := m.Data.MarshalTo(dAtA[i:]); err != nil {
+				return 0, err
+			}
+		}
+	}
+	return len(dAtA) - i, nil
+}
+
+func (m *GossipData_CacheKeyItem) MarshalTo(dAtA []byte) (int, error) {
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *GossipData_CacheKeyItem) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	if m.CacheKeyItem != nil {
+		{
+			size, err := m.CacheKeyItem.MarshalToSizedBuffer(dAtA[:i])
+			if err != nil {
+				return 0, err
+			}
+			i -= size
+			i = encodeVarintGossip(dAtA, i, uint64(size))
+		}
+		i--
+		dAtA[i] = 0xa
+	}
+	return len(dAtA) - i, nil
+}
+func (m *GossipData_StatsInfoKeyItem) MarshalTo(dAtA []byte) (int, error) {
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *GossipData_StatsInfoKeyItem) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	if m.StatsInfoKeyItem != nil {
+		{
+			size, err := m.StatsInfoKeyItem.MarshalToSizedBuffer(dAtA[:i])
+			if err != nil {
+				return 0, err
+			}
+			i -= size
+			i = encodeVarintGossip(dAtA, i, uint64(size))
+		}
+		i--
+		dAtA[i] = 0x12
+	}
+	return len(dAtA) - i, nil
+}
 func (m *CacheKeyItem) Marshal() (dAtA []byte, err error) {
 	size := m.Size()
 	dAtA = make([]byte, size)
@@ -193,6 +654,245 @@ func (m *CacheKeyItem) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 	return len(dAtA) - i, nil
 }
 
+func (m *StatsInfoKeyItem) Marshal() (dAtA []byte, err error) {
+	size := m.Size()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *StatsInfoKeyItem) MarshalTo(dAtA []byte) (int, error) {
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *StatsInfoKeyItem) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	_ = i
+	var l int
+	_ = l
+	if m.XXX_unrecognized != nil {
+		i -= len(m.XXX_unrecognized)
+		copy(dAtA[i:], m.XXX_unrecognized)
+	}
+	if len(m.TargetAddress) > 0 {
+		i -= len(m.TargetAddress)
+		copy(dAtA[i:], m.TargetAddress)
+		i = encodeVarintGossip(dAtA, i, uint64(len(m.TargetAddress)))
+		i--
+		dAtA[i] = 0x1a
+	}
+	{
+		size, err := m.StatsInfoKey.MarshalToSizedBuffer(dAtA[:i])
+		if err != nil {
+			return 0, err
+		}
+		i -= size
+		i = encodeVarintGossip(dAtA, i, uint64(size))
+	}
+	i--
+	dAtA[i] = 0x12
+	if m.Operation != 0 {
+		i = encodeVarintGossip(dAtA, i, uint64(m.Operation))
+		i--
+		dAtA[i] = 0x8
+	}
+	return len(dAtA) - i, nil
+}
+
+func (m *LocalState) Marshal() (dAtA []byte, err error) {
+	size := m.Size()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *LocalState) MarshalTo(dAtA []byte) (int, error) {
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *LocalState) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	_ = i
+	var l int
+	_ = l
+	if m.XXX_unrecognized != nil {
+		i -= len(m.XXX_unrecognized)
+		copy(dAtA[i:], m.XXX_unrecognized)
+	}
+	{
+		size, err := m.StatsInfoKeys.MarshalToSizedBuffer(dAtA[:i])
+		if err != nil {
+			return 0, err
+		}
+		i -= size
+		i = encodeVarintGossip(dAtA, i, uint64(size))
+	}
+	i--
+	dAtA[i] = 0x12
+	{
+		size, err := m.CacheKeys.MarshalToSizedBuffer(dAtA[:i])
+		if err != nil {
+			return 0, err
+		}
+		i -= size
+		i = encodeVarintGossip(dAtA, i, uint64(size))
+	}
+	i--
+	dAtA[i] = 0xa
+	return len(dAtA) - i, nil
+}
+
+func (m *TargetState) Marshal() (dAtA []byte, err error) {
+	size := m.Size()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *TargetState) MarshalTo(dAtA []byte) (int, error) {
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *TargetState) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	_ = i
+	var l int
+	_ = l
+	if m.XXX_unrecognized != nil {
+		i -= len(m.XXX_unrecognized)
+		copy(dAtA[i:], m.XXX_unrecognized)
+	}
+	if len(m.Data) > 0 {
+		for k := range m.Data {
+			v := m.Data[k]
+			baseI := i
+			if v != nil {
+				{
+					size, err := v.MarshalToSizedBuffer(dAtA[:i])
+					if err != nil {
+						return 0, err
+					}
+					i -= size
+					i = encodeVarintGossip(dAtA, i, uint64(size))
+				}
+				i--
+				dAtA[i] = 0x12
+			}
+			i -= len(k)
+			copy(dAtA[i:], k)
+			i = encodeVarintGossip(dAtA, i, uint64(len(k)))
+			i--
+			dAtA[i] = 0xa
+			i = encodeVarintGossip(dAtA, i, uint64(baseI-i))
+			i--
+			dAtA[i] = 0xa
+		}
+	}
+	return len(dAtA) - i, nil
+}
+
+func (m *CommonItem) Marshal() (dAtA []byte, err error) {
+	size := m.Size()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *CommonItem) MarshalTo(dAtA []byte) (int, error) {
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *CommonItem) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	_ = i
+	var l int
+	_ = l
+	if m.XXX_unrecognized != nil {
+		i -= len(m.XXX_unrecognized)
+		copy(dAtA[i:], m.XXX_unrecognized)
+	}
+	if m.Key != nil {
+		{
+			size := m.Key.Size()
+			i -= size
+			if _, err := m.Key.MarshalTo(dAtA[i:]); err != nil {
+				return 0, err
+			}
+		}
+	}
+	if len(m.TargetAddress) > 0 {
+		i -= len(m.TargetAddress)
+		copy(dAtA[i:], m.TargetAddress)
+		i = encodeVarintGossip(dAtA, i, uint64(len(m.TargetAddress)))
+		i--
+		dAtA[i] = 0x12
+	}
+	if m.Operation != 0 {
+		i = encodeVarintGossip(dAtA, i, uint64(m.Operation))
+		i--
+		dAtA[i] = 0x8
+	}
+	return len(dAtA) - i, nil
+}
+
+func (m *CommonItem_CacheKey) MarshalTo(dAtA []byte) (int, error) {
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *CommonItem_CacheKey) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	if m.CacheKey != nil {
+		{
+			size, err := m.CacheKey.MarshalToSizedBuffer(dAtA[:i])
+			if err != nil {
+				return 0, err
+			}
+			i -= size
+			i = encodeVarintGossip(dAtA, i, uint64(size))
+		}
+		i--
+		dAtA[i] = 0x1a
+	}
+	return len(dAtA) - i, nil
+}
+func (m *CommonItem_StatsInfoKey) MarshalTo(dAtA []byte) (int, error) {
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *CommonItem_StatsInfoKey) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	if m.StatsInfoKey != nil {
+		{
+			size, err := m.StatsInfoKey.MarshalToSizedBuffer(dAtA[:i])
+			if err != nil {
+				return 0, err
+			}
+			i -= size
+			i = encodeVarintGossip(dAtA, i, uint64(size))
+		}
+		i--
+		dAtA[i] = 0x22
+	}
+	return len(dAtA) - i, nil
+}
 func encodeVarintGossip(dAtA []byte, offset int, v uint64) int {
 	offset -= sovGossip(v)
 	base := offset
@@ -203,6 +903,45 @@ func encodeVarintGossip(dAtA []byte, offset int, v uint64) int {
 	}
 	dAtA[offset] = uint8(v)
 	return base
+}
+func (m *GossipData) Size() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	if m.Data != nil {
+		n += m.Data.Size()
+	}
+	if m.XXX_unrecognized != nil {
+		n += len(m.XXX_unrecognized)
+	}
+	return n
+}
+
+func (m *GossipData_CacheKeyItem) Size() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	if m.CacheKeyItem != nil {
+		l = m.CacheKeyItem.Size()
+		n += 1 + l + sovGossip(uint64(l))
+	}
+	return n
+}
+func (m *GossipData_StatsInfoKeyItem) Size() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	if m.StatsInfoKeyItem != nil {
+		l = m.StatsInfoKeyItem.Size()
+		n += 1 + l + sovGossip(uint64(l))
+	}
+	return n
 }
 func (m *CacheKeyItem) Size() (n int) {
 	if m == nil {
@@ -225,11 +964,241 @@ func (m *CacheKeyItem) Size() (n int) {
 	return n
 }
 
+func (m *StatsInfoKeyItem) Size() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	if m.Operation != 0 {
+		n += 1 + sovGossip(uint64(m.Operation))
+	}
+	l = m.StatsInfoKey.Size()
+	n += 1 + l + sovGossip(uint64(l))
+	l = len(m.TargetAddress)
+	if l > 0 {
+		n += 1 + l + sovGossip(uint64(l))
+	}
+	if m.XXX_unrecognized != nil {
+		n += len(m.XXX_unrecognized)
+	}
+	return n
+}
+
+func (m *LocalState) Size() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	l = m.CacheKeys.Size()
+	n += 1 + l + sovGossip(uint64(l))
+	l = m.StatsInfoKeys.Size()
+	n += 1 + l + sovGossip(uint64(l))
+	if m.XXX_unrecognized != nil {
+		n += len(m.XXX_unrecognized)
+	}
+	return n
+}
+
+func (m *TargetState) Size() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	if len(m.Data) > 0 {
+		for k, v := range m.Data {
+			_ = k
+			_ = v
+			l = 0
+			if v != nil {
+				l = v.Size()
+				l += 1 + sovGossip(uint64(l))
+			}
+			mapEntrySize := 1 + len(k) + sovGossip(uint64(len(k))) + l
+			n += mapEntrySize + 1 + sovGossip(uint64(mapEntrySize))
+		}
+	}
+	if m.XXX_unrecognized != nil {
+		n += len(m.XXX_unrecognized)
+	}
+	return n
+}
+
+func (m *CommonItem) Size() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	if m.Operation != 0 {
+		n += 1 + sovGossip(uint64(m.Operation))
+	}
+	l = len(m.TargetAddress)
+	if l > 0 {
+		n += 1 + l + sovGossip(uint64(l))
+	}
+	if m.Key != nil {
+		n += m.Key.Size()
+	}
+	if m.XXX_unrecognized != nil {
+		n += len(m.XXX_unrecognized)
+	}
+	return n
+}
+
+func (m *CommonItem_CacheKey) Size() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	if m.CacheKey != nil {
+		l = m.CacheKey.Size()
+		n += 1 + l + sovGossip(uint64(l))
+	}
+	return n
+}
+func (m *CommonItem_StatsInfoKey) Size() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	if m.StatsInfoKey != nil {
+		l = m.StatsInfoKey.Size()
+		n += 1 + l + sovGossip(uint64(l))
+	}
+	return n
+}
+
 func sovGossip(x uint64) (n int) {
 	return (math_bits.Len64(x|1) + 6) / 7
 }
 func sozGossip(x uint64) (n int) {
 	return sovGossip(uint64((x << 1) ^ uint64((int64(x) >> 63))))
+}
+func (m *GossipData) Unmarshal(dAtA []byte) error {
+	l := len(dAtA)
+	iNdEx := 0
+	for iNdEx < l {
+		preIndex := iNdEx
+		var wire uint64
+		for shift := uint(0); ; shift += 7 {
+			if shift >= 64 {
+				return ErrIntOverflowGossip
+			}
+			if iNdEx >= l {
+				return io.ErrUnexpectedEOF
+			}
+			b := dAtA[iNdEx]
+			iNdEx++
+			wire |= uint64(b&0x7F) << shift
+			if b < 0x80 {
+				break
+			}
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		if wireType == 4 {
+			return fmt.Errorf("proto: GossipData: wiretype end group for non-group")
+		}
+		if fieldNum <= 0 {
+			return fmt.Errorf("proto: GossipData: illegal tag %d (wire type %d)", fieldNum, wire)
+		}
+		switch fieldNum {
+		case 1:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field CacheKeyItem", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowGossip
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthGossip
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthGossip
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			v := &CacheKeyItem{}
+			if err := v.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			m.Data = &GossipData_CacheKeyItem{v}
+			iNdEx = postIndex
+		case 2:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field StatsInfoKeyItem", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowGossip
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthGossip
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthGossip
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			v := &StatsInfoKeyItem{}
+			if err := v.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			m.Data = &GossipData_StatsInfoKeyItem{v}
+			iNdEx = postIndex
+		default:
+			iNdEx = preIndex
+			skippy, err := skipGossip(dAtA[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
+				return ErrInvalidLengthGossip
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.XXX_unrecognized = append(m.XXX_unrecognized, dAtA[iNdEx:iNdEx+skippy]...)
+			iNdEx += skippy
+		}
+	}
+
+	if iNdEx > l {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
 }
 func (m *CacheKeyItem) Unmarshal(dAtA []byte) error {
 	l := len(dAtA)
@@ -343,6 +1312,610 @@ func (m *CacheKeyItem) Unmarshal(dAtA []byte) error {
 				return io.ErrUnexpectedEOF
 			}
 			m.TargetAddress = string(dAtA[iNdEx:postIndex])
+			iNdEx = postIndex
+		default:
+			iNdEx = preIndex
+			skippy, err := skipGossip(dAtA[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
+				return ErrInvalidLengthGossip
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.XXX_unrecognized = append(m.XXX_unrecognized, dAtA[iNdEx:iNdEx+skippy]...)
+			iNdEx += skippy
+		}
+	}
+
+	if iNdEx > l {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
+func (m *StatsInfoKeyItem) Unmarshal(dAtA []byte) error {
+	l := len(dAtA)
+	iNdEx := 0
+	for iNdEx < l {
+		preIndex := iNdEx
+		var wire uint64
+		for shift := uint(0); ; shift += 7 {
+			if shift >= 64 {
+				return ErrIntOverflowGossip
+			}
+			if iNdEx >= l {
+				return io.ErrUnexpectedEOF
+			}
+			b := dAtA[iNdEx]
+			iNdEx++
+			wire |= uint64(b&0x7F) << shift
+			if b < 0x80 {
+				break
+			}
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		if wireType == 4 {
+			return fmt.Errorf("proto: StatsInfoKeyItem: wiretype end group for non-group")
+		}
+		if fieldNum <= 0 {
+			return fmt.Errorf("proto: StatsInfoKeyItem: illegal tag %d (wire type %d)", fieldNum, wire)
+		}
+		switch fieldNum {
+		case 1:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Operation", wireType)
+			}
+			m.Operation = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowGossip
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.Operation |= Operation(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		case 2:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field StatsInfoKey", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowGossip
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthGossip
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthGossip
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			if err := m.StatsInfoKey.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			iNdEx = postIndex
+		case 3:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field TargetAddress", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowGossip
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return ErrInvalidLengthGossip
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return ErrInvalidLengthGossip
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.TargetAddress = string(dAtA[iNdEx:postIndex])
+			iNdEx = postIndex
+		default:
+			iNdEx = preIndex
+			skippy, err := skipGossip(dAtA[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
+				return ErrInvalidLengthGossip
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.XXX_unrecognized = append(m.XXX_unrecognized, dAtA[iNdEx:iNdEx+skippy]...)
+			iNdEx += skippy
+		}
+	}
+
+	if iNdEx > l {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
+func (m *LocalState) Unmarshal(dAtA []byte) error {
+	l := len(dAtA)
+	iNdEx := 0
+	for iNdEx < l {
+		preIndex := iNdEx
+		var wire uint64
+		for shift := uint(0); ; shift += 7 {
+			if shift >= 64 {
+				return ErrIntOverflowGossip
+			}
+			if iNdEx >= l {
+				return io.ErrUnexpectedEOF
+			}
+			b := dAtA[iNdEx]
+			iNdEx++
+			wire |= uint64(b&0x7F) << shift
+			if b < 0x80 {
+				break
+			}
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		if wireType == 4 {
+			return fmt.Errorf("proto: LocalState: wiretype end group for non-group")
+		}
+		if fieldNum <= 0 {
+			return fmt.Errorf("proto: LocalState: illegal tag %d (wire type %d)", fieldNum, wire)
+		}
+		switch fieldNum {
+		case 1:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field CacheKeys", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowGossip
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthGossip
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthGossip
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			if err := m.CacheKeys.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			iNdEx = postIndex
+		case 2:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field StatsInfoKeys", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowGossip
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthGossip
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthGossip
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			if err := m.StatsInfoKeys.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			iNdEx = postIndex
+		default:
+			iNdEx = preIndex
+			skippy, err := skipGossip(dAtA[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
+				return ErrInvalidLengthGossip
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.XXX_unrecognized = append(m.XXX_unrecognized, dAtA[iNdEx:iNdEx+skippy]...)
+			iNdEx += skippy
+		}
+	}
+
+	if iNdEx > l {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
+func (m *TargetState) Unmarshal(dAtA []byte) error {
+	l := len(dAtA)
+	iNdEx := 0
+	for iNdEx < l {
+		preIndex := iNdEx
+		var wire uint64
+		for shift := uint(0); ; shift += 7 {
+			if shift >= 64 {
+				return ErrIntOverflowGossip
+			}
+			if iNdEx >= l {
+				return io.ErrUnexpectedEOF
+			}
+			b := dAtA[iNdEx]
+			iNdEx++
+			wire |= uint64(b&0x7F) << shift
+			if b < 0x80 {
+				break
+			}
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		if wireType == 4 {
+			return fmt.Errorf("proto: TargetState: wiretype end group for non-group")
+		}
+		if fieldNum <= 0 {
+			return fmt.Errorf("proto: TargetState: illegal tag %d (wire type %d)", fieldNum, wire)
+		}
+		switch fieldNum {
+		case 1:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Data", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowGossip
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthGossip
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthGossip
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			if m.Data == nil {
+				m.Data = make(map[string]*LocalState)
+			}
+			var mapkey string
+			var mapvalue *LocalState
+			for iNdEx < postIndex {
+				entryPreIndex := iNdEx
+				var wire uint64
+				for shift := uint(0); ; shift += 7 {
+					if shift >= 64 {
+						return ErrIntOverflowGossip
+					}
+					if iNdEx >= l {
+						return io.ErrUnexpectedEOF
+					}
+					b := dAtA[iNdEx]
+					iNdEx++
+					wire |= uint64(b&0x7F) << shift
+					if b < 0x80 {
+						break
+					}
+				}
+				fieldNum := int32(wire >> 3)
+				if fieldNum == 1 {
+					var stringLenmapkey uint64
+					for shift := uint(0); ; shift += 7 {
+						if shift >= 64 {
+							return ErrIntOverflowGossip
+						}
+						if iNdEx >= l {
+							return io.ErrUnexpectedEOF
+						}
+						b := dAtA[iNdEx]
+						iNdEx++
+						stringLenmapkey |= uint64(b&0x7F) << shift
+						if b < 0x80 {
+							break
+						}
+					}
+					intStringLenmapkey := int(stringLenmapkey)
+					if intStringLenmapkey < 0 {
+						return ErrInvalidLengthGossip
+					}
+					postStringIndexmapkey := iNdEx + intStringLenmapkey
+					if postStringIndexmapkey < 0 {
+						return ErrInvalidLengthGossip
+					}
+					if postStringIndexmapkey > l {
+						return io.ErrUnexpectedEOF
+					}
+					mapkey = string(dAtA[iNdEx:postStringIndexmapkey])
+					iNdEx = postStringIndexmapkey
+				} else if fieldNum == 2 {
+					var mapmsglen int
+					for shift := uint(0); ; shift += 7 {
+						if shift >= 64 {
+							return ErrIntOverflowGossip
+						}
+						if iNdEx >= l {
+							return io.ErrUnexpectedEOF
+						}
+						b := dAtA[iNdEx]
+						iNdEx++
+						mapmsglen |= int(b&0x7F) << shift
+						if b < 0x80 {
+							break
+						}
+					}
+					if mapmsglen < 0 {
+						return ErrInvalidLengthGossip
+					}
+					postmsgIndex := iNdEx + mapmsglen
+					if postmsgIndex < 0 {
+						return ErrInvalidLengthGossip
+					}
+					if postmsgIndex > l {
+						return io.ErrUnexpectedEOF
+					}
+					mapvalue = &LocalState{}
+					if err := mapvalue.Unmarshal(dAtA[iNdEx:postmsgIndex]); err != nil {
+						return err
+					}
+					iNdEx = postmsgIndex
+				} else {
+					iNdEx = entryPreIndex
+					skippy, err := skipGossip(dAtA[iNdEx:])
+					if err != nil {
+						return err
+					}
+					if (skippy < 0) || (iNdEx+skippy) < 0 {
+						return ErrInvalidLengthGossip
+					}
+					if (iNdEx + skippy) > postIndex {
+						return io.ErrUnexpectedEOF
+					}
+					iNdEx += skippy
+				}
+			}
+			m.Data[mapkey] = mapvalue
+			iNdEx = postIndex
+		default:
+			iNdEx = preIndex
+			skippy, err := skipGossip(dAtA[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
+				return ErrInvalidLengthGossip
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.XXX_unrecognized = append(m.XXX_unrecognized, dAtA[iNdEx:iNdEx+skippy]...)
+			iNdEx += skippy
+		}
+	}
+
+	if iNdEx > l {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
+func (m *CommonItem) Unmarshal(dAtA []byte) error {
+	l := len(dAtA)
+	iNdEx := 0
+	for iNdEx < l {
+		preIndex := iNdEx
+		var wire uint64
+		for shift := uint(0); ; shift += 7 {
+			if shift >= 64 {
+				return ErrIntOverflowGossip
+			}
+			if iNdEx >= l {
+				return io.ErrUnexpectedEOF
+			}
+			b := dAtA[iNdEx]
+			iNdEx++
+			wire |= uint64(b&0x7F) << shift
+			if b < 0x80 {
+				break
+			}
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		if wireType == 4 {
+			return fmt.Errorf("proto: CommonItem: wiretype end group for non-group")
+		}
+		if fieldNum <= 0 {
+			return fmt.Errorf("proto: CommonItem: illegal tag %d (wire type %d)", fieldNum, wire)
+		}
+		switch fieldNum {
+		case 1:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Operation", wireType)
+			}
+			m.Operation = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowGossip
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.Operation |= Operation(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		case 2:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field TargetAddress", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowGossip
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return ErrInvalidLengthGossip
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return ErrInvalidLengthGossip
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.TargetAddress = string(dAtA[iNdEx:postIndex])
+			iNdEx = postIndex
+		case 3:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field CacheKey", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowGossip
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthGossip
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthGossip
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			v := &query.CacheKey{}
+			if err := v.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			m.Key = &CommonItem_CacheKey{v}
+			iNdEx = postIndex
+		case 4:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field StatsInfoKey", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowGossip
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthGossip
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthGossip
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			v := &statsinfo.StatsInfoKey{}
+			if err := v.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			m.Key = &CommonItem_StatsInfoKey{v}
 			iNdEx = postIndex
 		default:
 			iNdEx = preIndex

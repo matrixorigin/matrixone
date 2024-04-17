@@ -392,7 +392,7 @@ func TestNormalizeL2(t *testing.T) {
 		{
 			name:    "Test1 - float32 - zero vector",
 			args:    args{argF32: []float32{0, 0, 0}},
-			wantErr: true,
+			wantF32: []float32{0, 0, 0},
 		},
 		{
 			name:    "Test1.b - float32",
@@ -407,7 +407,7 @@ func TestNormalizeL2(t *testing.T) {
 		{
 			name:    "Test2 - float64 - zero vector",
 			args:    args{argF64: []float64{0, 0, 0}},
-			wantErr: true,
+			wantF64: []float64{0, 0, 0},
 		},
 		{
 			name:    "Test3 - float64",

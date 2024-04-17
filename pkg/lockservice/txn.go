@@ -63,7 +63,7 @@ func newActiveTxn(
 	return txn
 }
 
-func (txn activeTxn) Name() string {
+func (txn activeTxn) TypeName() string {
 	return "lockservice.activeTxn"
 }
 
@@ -259,6 +259,21 @@ func (txn *activeTxn) setBlocked(w *waiter) {
 
 func (txn *activeTxn) isRemoteLocked() bool {
 	return txn.remoteService != ""
+}
+
+func (txn *activeTxn) incLockTableRef(m map[uint32]map[uint64]uint64, serviceID string) {
+	txn.RLock()
+	defer txn.RUnlock()
+	for _, h := range txn.lockHolders {
+		for _, l := range h.tableBinds {
+			if serviceID == l.ServiceID {
+				if _, ok := m[l.Group]; !ok {
+					m[l.Group] = make(map[uint64]uint64, 1024)
+				}
+				m[l.Group][l.Table]++
+			}
+		}
+	}
 }
 
 // ============================================================================================================================

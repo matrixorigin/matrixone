@@ -22,9 +22,10 @@ import (
 	"github.com/fagongzi/goetty/v2/buf"
 	"github.com/fagongzi/goetty/v2/codec/simple"
 	"github.com/golang/mock/gomock"
+	"github.com/smartystreets/goconvey/convey"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
-	"github.com/smartystreets/goconvey/convey"
 )
 
 func Test_protocol(t *testing.T) {
@@ -63,6 +64,7 @@ func Test_SendResponse(t *testing.T) {
 		ioses := mock_frontend.NewMockIOSession(ctrl)
 		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
 		ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		ioses.EXPECT().Flush(gomock.Any()).AnyTimes()
 
 		mp := &MysqlProtocolImpl{}
 		mp.io = iopackage

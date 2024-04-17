@@ -22,25 +22,25 @@ import (
 	"time"
 
 	"github.com/lni/goutils/leaktest"
-	"github.com/matrixorigin/matrixone/pkg/cacheservice"
-	"github.com/matrixorigin/matrixone/pkg/cacheservice/client"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
-	"github.com/matrixorigin/matrixone/pkg/pb/cache"
 	"github.com/matrixorigin/matrixone/pkg/pb/gossip"
+	"github.com/matrixorigin/matrixone/pkg/pb/query"
+	"github.com/matrixorigin/matrixone/pkg/queryservice"
+	"github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/stretchr/testify/assert"
 )
 
-type mockKeyRouter struct {
+type mockKeyRouter[K comparable] struct {
 	target string
 }
 
-func (r *mockKeyRouter) Target(_ CacheKey) string               { return r.target }
-func (r *mockKeyRouter) AddItem(_ CacheKey, _ gossip.Operation) {}
+func (r *mockKeyRouter[K]) Target(_ CacheKey) string    { return r.target }
+func (r *mockKeyRouter[K]) AddItem(_ gossip.CommonItem) {}
 
 type cacheFs struct {
-	cs cacheservice.CacheService
-	ct client.CacheClient
+	qs queryservice.QueryService
+	qt client.QueryClient
 	rc *RemoteCache
 	fs FileService
 }
@@ -73,6 +73,7 @@ func TestRemoteCache(t *testing.T) {
 		assert.NoError(t, err)
 		assert.Equal(t, 1, len(ioVec1.Entries))
 		assert.Equal(t, []byte{1, 2}, ioVec1.Entries[0].Data)
+		ioVec1.Release()
 
 		ioVec2 := &IOVector{
 			FilePath: "foo",
@@ -89,6 +90,8 @@ func TestRemoteCache(t *testing.T) {
 		assert.Equal(t, Bytes{1, 2}, ioVec2.Entries[0].CachedData)
 		assert.Equal(t, true, ioVec2.Entries[0].done)
 		assert.NotNil(t, ioVec2.Entries[0].fromCache)
+
+		sf1.fs.Close()
 	})
 }
 
@@ -107,48 +110,56 @@ func runTestWithTwoFileServices(t *testing.T, fn func(sf1 *cacheFs, sf2 *cacheFs
 	create := func(selfAddr, pairAddr string) *cacheFs {
 		dir := t.TempDir()
 		ctx := context.Background()
-		ct, err := client.NewCacheClient(client.ClientConfig{RPC: morpc.Config{}})
+		qt, err := client.NewQueryClient("", morpc.Config{})
 		assert.NoError(t, err)
-		assert.NotNil(t, ct)
+		assert.NotNil(t, qt)
 
-		keyRouter := &mockKeyRouter{target: pairAddr}
+		keyRouter := &mockKeyRouter[query.CacheKey]{target: pairAddr}
 		cacheCfg := CacheConfig{
 			RemoteCacheEnabled: true,
-			KeyRouterFactory: func() KeyRouter {
+			KeyRouterFactory: func() client.KeyRouter[query.CacheKey] {
 				return keyRouter
 			},
-			CacheClient: ct,
+			QueryClient: qt,
 		}
 		cacheCfg.setDefaults()
 		cacheCfg.SetRemoteCacheCallback()
 		fs, err := NewLocalFS(ctx, "local-"+selfAddr, dir, cacheCfg, nil)
 		assert.Nil(t, err)
 		assert.NotNil(t, fs)
-		cs, err := cacheservice.NewCacheServer(selfAddr, morpc.Config{})
+		qs, err := queryservice.NewQueryService("", selfAddr, morpc.Config{})
 		assert.NoError(t, err)
-		cs.AddHandleFunc(cache.CmdMethod_RemoteRead,
-			func(ctx context.Context, req *cache.Request, resp *cache.CacheResponse) error {
-				return HandleRemoteRead(ctx, fs, req, resp)
+		qs.AddHandleFunc(query.CmdMethod_GetCacheData,
+			func(ctx context.Context, req *query.Request, resp *query.Response) error {
+				wr := &query.WrappedResponse{
+					Response: resp,
+				}
+				err = HandleRemoteRead(ctx, fs, req, wr)
+				if err != nil {
+					return err
+				}
+				qs.SetReleaseFunc(resp, wr.ReleaseFunc)
+				return nil
 			},
 			false,
 		)
-		err = cs.Start()
+		err = qs.Start()
 		assert.NoError(t, err)
 
-		rc := NewRemoteCache(ct, func() KeyRouter { return keyRouter })
+		rc := NewRemoteCache(qt, func() client.KeyRouter[query.CacheKey] { return keyRouter })
 		assert.NotNil(t, rc)
-		return &cacheFs{cs: cs, rc: rc, fs: fs, ct: ct}
+		return &cacheFs{qs: qs, rc: rc, fs: fs, qt: qt}
 	}
 
 	cf1 := create(address1, address2)
 	defer func() {
-		assert.NoError(t, cf1.cs.Close())
-		assert.NoError(t, cf1.ct.Close())
+		assert.NoError(t, cf1.qs.Close())
+		assert.NoError(t, cf1.qt.Close())
 	}()
 	cf2 := create(address2, address1)
 	defer func() {
-		assert.NoError(t, cf2.cs.Close())
-		assert.NoError(t, cf2.ct.Close())
+		assert.NoError(t, cf2.qs.Close())
+		assert.NoError(t, cf2.qt.Close())
 	}()
 
 	fn(cf1, cf2)

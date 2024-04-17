@@ -47,7 +47,7 @@ func SetupAutoIncrService() {
 		runtime.SetupProcessLevelRuntime(rt)
 	}
 	rt.SetGlobalVariables(
-		runtime.AutoIncrmentService,
+		runtime.AutoIncrementService,
 		incrservice.NewIncrService(
 			"",
 			incrservice.NewMemStore(),
@@ -149,11 +149,7 @@ func NewBatchWithNulls(ts []types.Type, random bool, n int, m *mpool.MPool) *bat
 func NewBatchWithVectors(vs []*vector.Vector, zs []int64) *batch.Batch {
 	bat := batch.NewWithSize(len(vs))
 	if len(vs) > 0 {
-		l := vs[0].Length()
-		if zs == nil {
-			zs = MakeBatchZs(l, false)
-		}
-		bat.SetRowCount(len(zs))
+		bat.SetRowCount(vs[0].Length())
 		bat.Vecs = vs
 	}
 	return bat
@@ -166,6 +162,11 @@ func NewVector(n int, typ types.Type, m *mpool.MPool, random bool, Values interf
 			return NewBoolVector(n, typ, m, random, vs)
 		}
 		return NewBoolVector(n, typ, m, random, nil)
+	case types.T_bit:
+		if vs, ok := Values.([]uint64); ok {
+			return NewUInt64Vector(n, typ, m, random, vs)
+		}
+		return NewUInt64Vector(n, typ, m, random, nil)
 	case types.T_int8:
 		if vs, ok := Values.([]int8); ok {
 			return NewInt8Vector(n, typ, m, random, vs)

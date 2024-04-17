@@ -125,7 +125,7 @@ func (node *DeleteNode) IsNil() bool            { return node == nil }
 func (node *DeleteNode) GetPrepareTS() types.TS {
 	return node.TxnMVCCNode.GetPrepare()
 }
-func (node *DeleteNode) GetMeta() *catalog.BlockEntry { return node.chain.Load().mvcc.meta }
+func (node *DeleteNode) GetMeta() *catalog.ObjectEntry { return node.chain.Load().mvcc.meta }
 func (node *DeleteNode) GetID() *common.ID {
 	return node.id
 }
@@ -175,6 +175,10 @@ func (node *DeleteNode) IsDeletedLocked(row uint32) bool {
 	return node.mask.Contains(row)
 }
 
+func (node *DeleteNode) GetBlockID() *objectio.Blockid {
+	return objectio.NewBlockidWithObjectID(&node.GetMeta().ID, node.chain.Load().mvcc.blkID)
+}
+
 func (node *DeleteNode) RangeDeleteLocked(
 	start, end uint32, pk containers.Vector, mp *mpool.MPool,
 ) {
@@ -219,11 +223,6 @@ func (node *DeleteNode) GetCardinalityLocked() uint32 { return uint32(node.mask.
 func (node *DeleteNode) PrepareCommit() (err error) {
 	node.chain.Load().mvcc.Lock()
 	defer node.chain.Load().mvcc.Unlock()
-	if node.nt == NT_Persisted {
-		if found, _ := node.chain.Load().HasDeleteIntentsPreparedInLocked(node.Start, node.Txn.GetPrepareTS()); found {
-			return txnif.ErrTxnNeedRetry
-		}
-	}
 	_, err = node.TxnMVCCNode.PrepareCommit()
 	if err != nil {
 		return
@@ -261,23 +260,39 @@ func (node *DeleteNode) setPersistedRows() {
 	if node.nt != NT_Persisted {
 		panic("unsupport")
 	}
-	bat, err := blockio.LoadTombstoneColumns(
+	var closeFunc func()
+	var rowids containers.Vector
+	var vectors []containers.Vector
+	var err error
+	defer func() {
+		if closeFunc != nil {
+			closeFunc()
+		}
+		if rowids != nil {
+			rowids.Close()
+		}
+	}()
+	//Extend lifetime of vectors is within the function.
+	//No NeedCopy. closeFunc is required after use.
+	vectors, closeFunc, err = blockio.LoadTombstoneColumns2(
 		node.Txn.GetContext(),
 		[]uint16{0},
 		nil,
-		node.chain.Load().mvcc.meta.GetBlockData().GetFs().Service,
+		node.chain.Load().mvcc.meta.GetObjectData().GetFs().Service,
 		node.deltaloc,
+		false,
 		nil,
 	)
 	if err != nil {
 		for {
 			logutil.Warnf(fmt.Sprintf("load deletes failed, deltaloc: %s, err: %v", node.deltaloc.String(), err))
-			bat, err = blockio.LoadTombstoneColumns(
+			vectors, closeFunc, err = blockio.LoadTombstoneColumns2(
 				node.Txn.GetContext(),
 				[]uint16{0},
 				nil,
-				node.chain.Load().mvcc.meta.GetBlockData().GetFs().Service,
+				node.chain.Load().mvcc.meta.GetObjectData().GetFs().Service,
 				node.deltaloc,
+				false,
 				nil,
 			)
 			if err == nil {
@@ -286,8 +301,7 @@ func (node *DeleteNode) setPersistedRows() {
 		}
 	}
 	node.mask = roaring.NewBitmap()
-	rowids := containers.ToTNVector(bat.Vecs[0], common.MutMemAllocator)
-	defer rowids.Close()
+	rowids = vectors[0]
 	err = containers.ForeachVector(rowids, func(rowid types.Rowid, _ bool, row int) error {
 		offset := rowid.GetRowOffset()
 		node.mask.Add(offset)
@@ -484,7 +498,7 @@ func (node *DeleteNode) MakeCommand(id uint32) (cmd txnif.TxnCmd, err error) {
 	return
 }
 func (node *DeleteNode) GetPrefix() []byte {
-	return node.chain.Load().mvcc.meta.MakeKey()
+	return objectio.NewBlockidWithObjectID(&node.GetMeta().ID, node.chain.Load().mvcc.blkID)[:]
 }
 func (node *DeleteNode) Set1PC()     { node.TxnMVCCNode.Set1PC() }
 func (node *DeleteNode) Is1PC() bool { return node.TxnMVCCNode.Is1PC() }

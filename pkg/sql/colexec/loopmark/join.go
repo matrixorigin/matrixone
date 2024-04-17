@@ -54,7 +54,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(arg.info.Idx, arg.info.ParallelIdx, arg.info.ParallelMajor)
+	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
 	anal.Start()
 	defer anal.Stop()
 	ctr := arg.ctr
@@ -62,7 +62,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	for {
 		switch ctr.state {
 		case Build:
-			if err := ctr.build(arg, proc, anal); err != nil {
+			if err := ctr.build(proc, anal); err != nil {
 				return result, err
 			}
 			ctr.state = Probe
@@ -83,9 +83,9 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 				continue
 			}
 			if ctr.bat.RowCount() == 0 {
-				err = ctr.emptyProbe(bat, arg, proc, anal, arg.info.IsFirst, arg.info.IsLast, &result)
+				err = ctr.emptyProbe(bat, arg, proc, anal, arg.GetIsFirst(), arg.GetIsLast(), &result)
 			} else {
-				err = ctr.probe(bat, arg, proc, anal, arg.info.IsFirst, arg.info.IsLast, &result)
+				err = ctr.probe(bat, arg, proc, anal, arg.GetIsFirst(), arg.GetIsLast(), &result)
 			}
 			proc.PutBatch(bat)
 			return result, err
@@ -98,23 +98,25 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 }
 
-func (ctr *container) build(ap *Argument, proc *process.Process, anal process.Analyze) error {
-	bat, _, err := ctr.ReceiveFromSingleReg(1, anal)
-	if err != nil {
-		return err
-	}
-
-	if bat != nil {
-		if ctr.bat != nil {
-			proc.PutBatch(ctr.bat)
-			ctr.bat = nil
+func (ctr *container) build(proc *process.Process, anal process.Analyze) error {
+	for {
+		bat, _, err := ctr.ReceiveFromSingleReg(1, anal)
+		if err != nil {
+			return err
 		}
-		ctr.bat = bat
+		if bat == nil {
+			break
+		}
+		ctr.bat, err = ctr.bat.AppendWithCopy(proc.Ctx, proc.Mp(), bat)
+		if err != nil {
+			return err
+		}
+		proc.PutBatch(bat)
 	}
 	return nil
 }
 
-func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool, result *vm.CallResult) error {
+func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool, result *vm.CallResult) (err error) {
 	anal.Input(bat, isFirst)
 	if ctr.rbat != nil {
 		proc.PutBatch(ctr.rbat)
@@ -124,15 +126,15 @@ func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.P
 	count := bat.RowCount()
 	for i, rp := range ap.Result {
 		if rp >= 0 {
-			// rbat.Vecs[i] = bat.Vecs[rp]
-			// bat.Vecs[rp] = nil
 			typ := *bat.Vecs[rp].GetType()
 			ctr.rbat.Vecs[i] = proc.GetVector(typ)
-			if err := vector.GetUnionAllFunction(typ, proc.Mp())(ctr.rbat.Vecs[i], bat.Vecs[rp]); err != nil {
+			if err = vector.GetUnionAllFunction(typ, proc.Mp())(ctr.rbat.Vecs[i], bat.Vecs[rp]); err != nil {
 				return err
 			}
 		} else {
-			ctr.rbat.Vecs[i] = vector.NewConstFixed(types.T_bool.ToType(), false, count, proc.Mp())
+			if ctr.rbat.Vecs[i], err = vector.NewConstFixed(types.T_bool.ToType(), false, count, proc.Mp()); err != nil {
+				return err
+			}
 		}
 	}
 	ctr.rbat.AddRowCount(bat.RowCount())
@@ -153,7 +155,9 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 	for i, pos := range ap.Result {
 		if pos == -1 {
 			ctr.rbat.Vecs[i] = proc.GetVector(types.T_bool.ToType())
-			ctr.rbat.Vecs[i].PreExtend(bat.RowCount(), proc.Mp())
+			if err := ctr.rbat.Vecs[i].PreExtend(bat.RowCount(), proc.Mp()); err != nil {
+				return err
+			}
 			markPos = i
 			break
 		}
@@ -196,11 +200,14 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 			}
 		}
 		if hasTrue {
-			vector.AppendFixed(ctr.rbat.Vecs[markPos], true, false, proc.Mp())
+			err = vector.AppendFixed(ctr.rbat.Vecs[markPos], true, false, proc.Mp())
 		} else if hasNull {
-			vector.AppendFixed(ctr.rbat.Vecs[markPos], false, true, proc.Mp())
+			err = vector.AppendFixed(ctr.rbat.Vecs[markPos], false, true, proc.Mp())
 		} else {
-			vector.AppendFixed(ctr.rbat.Vecs[markPos], false, false, proc.Mp())
+			err = vector.AppendFixed(ctr.rbat.Vecs[markPos], false, false, proc.Mp())
+		}
+		if err != nil {
+			return err
 		}
 	}
 	for i, rp := range ap.Result {

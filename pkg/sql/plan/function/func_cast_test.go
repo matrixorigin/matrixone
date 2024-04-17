@@ -191,6 +191,14 @@ func initCastTestCase() []tcTemp {
 			},
 			expect: testutil.NewFunctionTestResult(types.T_array_float64.ToType(), false, [][]float64{{1, 2, 3}}, []bool{false}),
 		},
+		{
+			info: "bit to bit",
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_bit.ToType(), []uint64{23}, []bool{false}),
+				testutil.NewFunctionTestInput(types.T_bit.ToType(), []uint64{}, []bool{}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_bit.ToType(), false, []uint64{23}, []bool{false}),
+		},
 	}
 	castInt8ToOthers := []tcTemp{
 		// test cast int8 to others.
@@ -294,6 +302,15 @@ func initCastTestCase() []tcTemp {
 			expect: testutil.NewFunctionTestResult(types.T_decimal128.ToType(), false,
 				[]types.Decimal128{{B0_63: 125, B64_127: 0}, {B0_63: 0, B64_127: 0}},
 				[]bool{false, true}),
+		},
+		{
+			info: "int8 to bit",
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_int8.ToType(), []int8{125, 126, 0}, []bool{false, false, true}),
+				testutil.NewFunctionTestInput(types.T_bit.ToType(), []uint64{}, []bool{}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_bit.ToType(), false,
+				[]uint64{125, 126, 0}, []bool{false, false, true}),
 		},
 	}
 	castInt16ToOthers := []tcTemp{
@@ -399,6 +416,15 @@ func initCastTestCase() []tcTemp {
 				[]types.Decimal128{{B0_63: 125, B64_127: 0}, {B0_63: 0, B64_127: 0}},
 				[]bool{false, true}),
 		},
+		{
+			info: "int16 to bit",
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_int16.ToType(), []int16{125, 126, 0}, []bool{false, false, true}),
+				testutil.NewFunctionTestInput(types.T_bit.ToType(), []uint64{}, []bool{}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_bit.ToType(), false,
+				[]uint64{125, 126, 0}, []bool{false, false, true}),
+		},
 	}
 	castInt32ToOthers := []tcTemp{
 		// test cast int32 to others.
@@ -502,6 +528,15 @@ func initCastTestCase() []tcTemp {
 			expect: testutil.NewFunctionTestResult(types.T_decimal128.ToType(), false,
 				[]types.Decimal128{{B0_63: 125, B64_127: 0}, {B0_63: 0, B64_127: 0}},
 				[]bool{false, true}),
+		},
+		{
+			info: "int32 to bit",
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_int32.ToType(), []int32{125, 126, 0}, []bool{false, false, true}),
+				testutil.NewFunctionTestInput(types.T_bit.ToType(), []uint64{}, []bool{}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_bit.ToType(), false,
+				[]uint64{125, 126, 0}, []bool{false, false, true}),
 		},
 	}
 	castInt64ToOthers := []tcTemp{
@@ -607,6 +642,15 @@ func initCastTestCase() []tcTemp {
 				[]types.Decimal128{{B0_63: 125, B64_127: 0}, {B0_63: 0, B64_127: 0}},
 				[]bool{false, true}),
 		},
+		{
+			info: "int64 to bit",
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_int64.ToType(), []int64{125, 126, 0}, []bool{false, false, true}),
+				testutil.NewFunctionTestInput(types.T_bit.ToType(), []uint64{}, []bool{}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_bit.ToType(), false,
+				[]uint64{125, 126, 0}, []bool{false, false, true}),
+		},
 	}
 	castUint8ToOthers := []tcTemp{
 		// test cast uint8 to others.
@@ -710,6 +754,15 @@ func initCastTestCase() []tcTemp {
 			expect: testutil.NewFunctionTestResult(types.T_decimal128.ToType(), false,
 				[]types.Decimal128{{B0_63: 125, B64_127: 0}, {B0_63: 0, B64_127: 0}},
 				[]bool{false, true}),
+		},
+		{
+			info: "uint8 to bit",
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_uint8.ToType(), []uint8{125, 126, 0}, []bool{false, false, true}),
+				testutil.NewFunctionTestInput(types.T_bit.ToType(), []uint64{}, []bool{}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_bit.ToType(), false,
+				[]uint64{125, 126, 0}, []bool{false, false, true}),
 		},
 	}
 	castUint16ToOthers := []tcTemp{
@@ -815,6 +868,15 @@ func initCastTestCase() []tcTemp {
 				[]types.Decimal128{{B0_63: 125, B64_127: 0}, {B0_63: 0, B64_127: 0}},
 				[]bool{false, true}),
 		},
+		{
+			info: "uint16 to bit",
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_uint16.ToType(), []uint16{125, 126, 0}, []bool{false, false, true}),
+				testutil.NewFunctionTestInput(types.T_bit.ToType(), []uint64{}, []bool{}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_bit.ToType(), false,
+				[]uint64{125, 126, 0}, []bool{false, false, true}),
+		},
 	}
 	castUint32ToOthers := []tcTemp{
 		// test cast uint32 to others.
@@ -919,6 +981,15 @@ func initCastTestCase() []tcTemp {
 				[]types.Decimal128{{B0_63: 125, B64_127: 0}, {B0_63: 0, B64_127: 0}},
 				[]bool{false, true}),
 		},
+		{
+			info: "uint32 to bit",
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_uint32.ToType(), []uint32{125, 126, 0}, []bool{false, false, true}),
+				testutil.NewFunctionTestInput(types.T_bit.ToType(), []uint64{}, []bool{}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_bit.ToType(), false,
+				[]uint64{125, 126, 0}, []bool{false, false, true}),
+		},
 	}
 	castUint64ToOthers := []tcTemp{
 		// test cast uint64 to others.
@@ -1022,6 +1093,14 @@ func initCastTestCase() []tcTemp {
 			expect: testutil.NewFunctionTestResult(types.T_decimal128.ToType(), false,
 				[]types.Decimal128{{B0_63: 125, B64_127: 0}, {B0_63: 0, B64_127: 0}},
 				[]bool{false, true}),
+		},
+		{
+			info: "uint64 to bit",
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_uint64.ToType(), []uint64{125, 126, 0}, []bool{false, false, true}),
+				testutil.NewFunctionTestInput(types.New(types.T_bit, 5, 0), []uint64{}, []bool{}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_bit.ToType(), true, []uint64{}, []bool{}),
 		},
 	}
 	castFloat32ToOthers := []tcTemp{
@@ -1137,6 +1216,15 @@ func initCastTestCase() []tcTemp {
 				[]types.Decimal128{f1251ToDec128, {B0_63: 0, B64_127: 0}},
 				[]bool{false, true}),
 		},
+		{
+			info: "float32 to bit",
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_float32.ToType(), []float32{125.4999, 125.55555, 0}, []bool{false, false, true}),
+				testutil.NewFunctionTestInput(types.T_bit.ToType(), []uint64{}, []bool{}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_bit.ToType(), false,
+				[]uint64{125, 126, 0}, []bool{false, false, true}),
+		},
 	}
 	castFloat64ToOthers := []tcTemp{
 		// test cast float64 to others.
@@ -1250,6 +1338,15 @@ func initCastTestCase() []tcTemp {
 			expect: testutil.NewFunctionTestResult(types.New(types.T_decimal128, 8, 1), false,
 				[]types.Decimal128{f1251ToDec128, {B0_63: 0, B64_127: 0}},
 				[]bool{false, true}),
+		},
+		{
+			info: "float64 to bit",
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_float64.ToType(), []float64{125.4999, 125.55555, 0}, []bool{false, false, true}),
+				testutil.NewFunctionTestInput(types.T_bit.ToType(), []uint64{}, []bool{}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_bit.ToType(), false,
+				[]uint64{125, 126, 0}, []bool{false, false, true}),
 		},
 	}
 	castStrToOthers := []tcTemp{
@@ -1394,6 +1491,15 @@ func initCastTestCase() []tcTemp {
 			},
 			expect: testutil.NewFunctionTestResult(types.T_array_float64.ToType(), false, [][]float64{{1, 2, 3}, {4, 5, 6}}, []bool{false, false}),
 		},
+		{
+			info: "str type to bit",
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_varchar.ToType(), []string{"15", "ab"}, nil),
+				testutil.NewFunctionTestInput(types.T_bit.ToType(), []uint64{}, []bool{}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_bit.ToType(), false,
+				[]uint64{12597, 24930}, []bool{false, false}),
+		},
 	}
 	castDecToOthers := []tcTemp{
 		{
@@ -1519,7 +1625,109 @@ func initCastTestCase() []tcTemp {
 		},
 	}
 
+	castBitToOthers := []tcTemp{
+		// test cast bit to others.
+		{
+			info: "bit to int8",
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_bit.ToType(), []uint64{125, 256, 0}, []bool{false, false, true}),
+				testutil.NewFunctionTestInput(types.T_int8.ToType(), []int8{}, []bool{}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_int8.ToType(), true, []int8{}, []bool{}),
+		},
+		{
+			info: "bit to int16",
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_bit.ToType(), []uint64{125, 126, 0}, []bool{false, false, true}),
+				testutil.NewFunctionTestInput(types.T_int16.ToType(), []int16{}, []bool{}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_int16.ToType(), false,
+				[]int16{125, 126, 0}, []bool{false, false, true}),
+		},
+		{
+			info: "bit to int32",
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_bit.ToType(), []uint64{125, 126, 0}, []bool{false, false, true}),
+				testutil.NewFunctionTestInput(types.T_int32.ToType(), []int32{}, []bool{}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_int32.ToType(), false,
+				[]int32{125, 126, 0}, []bool{false, false, true}),
+		},
+		{
+			info: "bit to uint8",
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_bit.ToType(), []uint64{125, 126, 0}, []bool{false, false, true}),
+				testutil.NewFunctionTestInput(types.T_uint8.ToType(), []uint8{}, []bool{}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_uint8.ToType(), false,
+				[]uint8{125, 126, 0}, []bool{false, false, true}),
+		},
+		{
+			info: "bit to uint16",
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_bit.ToType(), []uint64{125, 126, 0}, []bool{false, false, true}),
+				testutil.NewFunctionTestInput(types.T_uint16.ToType(), []uint16{}, []bool{}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_uint16.ToType(), false,
+				[]uint16{125, 126, 0}, []bool{false, false, true}),
+		},
+		{
+			info: "bit to uint32",
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_bit.ToType(), []uint64{125, 126, 0}, []bool{false, false, true}),
+				testutil.NewFunctionTestInput(types.T_uint32.ToType(), []uint32{}, []bool{}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_uint32.ToType(), false,
+				[]uint32{125, 126, 0}, []bool{false, false, true}),
+		},
+		{
+			info: "bit to int64",
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_bit.ToType(), []uint64{125, 126, 0}, []bool{false, false, true}),
+				testutil.NewFunctionTestInput(types.T_int64.ToType(), []int64{}, []bool{}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_int64.ToType(), false,
+				[]int64{125, 126, 0}, []bool{false, false, true}),
+		},
+		{
+			info: "bit to float32",
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_bit.ToType(), []uint64{125, 126, 0}, []bool{false, false, true}),
+				testutil.NewFunctionTestInput(types.T_float32.ToType(), []float32{}, []bool{}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_float32.ToType(), false,
+				[]float32{125, 126, 0}, []bool{false, false, true}),
+		},
+		{
+			info: "bit to float64",
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_bit.ToType(), []uint64{125, 126, 0}, []bool{false, false, true}),
+				testutil.NewFunctionTestInput(types.T_float64.ToType(), []float64{}, []bool{}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_float64.ToType(), false,
+				[]float64{125, 126, 0}, []bool{false, false, true}),
+		},
+		{
+			info: "bit to decimal128",
+			inputs: []testutil.FunctionTestInput{
+				testutil.NewFunctionTestInput(types.T_bit.ToType(), []uint64{125, 0}, []bool{false, true}),
+				testutil.NewFunctionTestInput(types.T_decimal128.ToType(), []types.Decimal128{}, []bool{}),
+			},
+			expect: testutil.NewFunctionTestResult(types.T_decimal128.ToType(), false,
+				[]types.Decimal128{{B0_63: 125, B64_127: 0}, {B0_63: 0, B64_127: 0}},
+				[]bool{false, true}),
+		},
+	}
+
 	// init the testCases
+	testCases = append(testCases, castFloat64ToOthers...)
+	testCases = append(testCases, castFloat32ToOthers...)
+	testCases = append(testCases, castStrToOthers...)
+	testCases = append(testCases, castDecToOthers...)
+	testCases = append(testCases, castTimestampToOthers...)
+	testCases = append(testCases, castArrayFloat32ToOthers...)
+	testCases = append(testCases, castArrayFloat64ToOthers...)
+	testCases = append(testCases, castBitToOthers...)
 	testCases = append(testCases, castToSameTypeCases...)
 	testCases = append(testCases, castInt8ToOthers...)
 	testCases = append(testCases, castInt16ToOthers...)
@@ -1529,13 +1737,6 @@ func initCastTestCase() []tcTemp {
 	testCases = append(testCases, castUint16ToOthers...)
 	testCases = append(testCases, castUint32ToOthers...)
 	testCases = append(testCases, castUint64ToOthers...)
-	testCases = append(testCases, castFloat64ToOthers...)
-	testCases = append(testCases, castFloat32ToOthers...)
-	testCases = append(testCases, castStrToOthers...)
-	testCases = append(testCases, castDecToOthers...)
-	testCases = append(testCases, castTimestampToOthers...)
-	testCases = append(testCases, castArrayFloat32ToOthers...)
-	testCases = append(testCases, castArrayFloat64ToOthers...)
 
 	return testCases
 }

@@ -44,6 +44,9 @@ var (
 	ErrLockConflict = moerr.NewLockConflictNoCtx()
 )
 
+// Option lockservice option
+type Option func(s *service)
+
 // LockStorage the store that holds the locks, a storage instance is corresponding to
 // all the locks of a table. The LockStorage no need to be thread-safe.
 //
@@ -112,12 +115,14 @@ type LockService interface {
 	// GetWaitingList get special txnID's waiting list
 	GetWaitingList(ctx context.Context, txnID []byte) (bool, []pb.WaitTxn, error)
 	// ForceRefreshLockTableBinds force refresh all lock tables binds
-	ForceRefreshLockTableBinds(targets ...uint64)
+	ForceRefreshLockTableBinds(targets []uint64, matcher func(bind pb.LockTable) bool)
 	// GetLockTableBind returns lock table bind
 	GetLockTableBind(group uint32, tableID uint64) (pb.LockTable, error)
 	// IterLocks iter all locks on current lock service. len(keys) == 2 if is range lock,
 	// len(keys) == 1 if is row lock. And keys only valid in current iter func call.
 	IterLocks(func(tableID uint64, keys [][]byte, lock Lock) bool)
+	// CloseRemoteLockTable close lock table
+	CloseRemoteLockTable(group uint32, tableID, version uint64) (bool, error)
 }
 
 // lockTable is used to manage all locks of a Table. LockTable can be local or remote, as determined
@@ -173,6 +178,9 @@ type LockTableAllocator interface {
 	Valid(binds []pb.LockTable) []uint64
 	// Close close the lock table allocator
 	Close() error
+
+	// GetLatest get latest lock table bind
+	GetLatest(groupID uint32, tableID uint64) pb.LockTable
 }
 
 // LockTableKeeper is used to keep a heartbeat with the LockTableAllocator to keep the

@@ -56,13 +56,13 @@ func (pool *BatchPool) get() *batch.Batch {
 
 // for now, we won't do compaction for cn block
 type container struct {
-	blockId_bitmap                 map[string]*nulls.Nulls
-	partitionId_blockId_rowIdBatch map[int]map[string]*batch.Batch // PartitionId -> blockId -> RowIdBatch
-	partitionId_blockId_deltaLoc   map[int]map[string]*batch.Batch // PartitionId -> blockId -> MetaLocation
+	blockId_bitmap                 map[types.Blockid]*nulls.Nulls
+	partitionId_blockId_rowIdBatch map[int]map[types.Blockid]*batch.Batch // PartitionId -> blockId -> RowIdBatch
+	partitionId_blockId_deltaLoc   map[int]map[types.Blockid]*batch.Batch // PartitionId -> blockId -> MetaLocation
 	// don't flush cn block rowId and rawBatch
 	// we just do compaction for cn block in the
 	// future
-	blockId_type   map[string]int8
+	blockId_type   map[types.Blockid]int8
 	batch_size     uint32
 	deleted_length uint32
 	pool           *BatchPool
@@ -76,17 +76,20 @@ type Argument struct {
 	affectedRows uint64
 
 	// for delete filter below
-	// mp[segmentName] = 1 => txnWorkSpace,mp[segmentName] = 2 => CN Block
+	// mp[segmentId] = 1 => txnWorkSpace,mp[segmentId] = 2 => CN Block
 	SegmentMap   map[string]int32
 	RemoteDelete bool
 	IBucket      uint32
 	Nbucket      uint32
 	ctr          *container
 
-	info     *vm.OperatorInfo
-	children []vm.Operator
-
 	resBat *batch.Batch
+
+	vm.OperatorBase
+}
+
+func (arg *Argument) GetOperatorBase() *vm.OperatorBase {
+	return &arg.OperatorBase
 }
 
 func init() {
@@ -102,7 +105,7 @@ func init() {
 	)
 }
 
-func (arg Argument) Name() string {
+func (arg Argument) TypeName() string {
 	return argName
 }
 
@@ -114,14 +117,6 @@ func (arg *Argument) Release() {
 	if arg != nil {
 		reuse.Free[Argument](arg, nil)
 	}
-}
-
-func (arg *Argument) SetInfo(info *vm.OperatorInfo) {
-	arg.info = info
-}
-
-func (arg *Argument) AppendChild(child vm.Operator) {
-	arg.children = append(arg.children, child)
 }
 
 type DeleteCtx struct {
@@ -209,10 +204,10 @@ func (ctr *container) flush(proc *process.Process) (uint32, error) {
 		if err != nil {
 			return 0, err
 		}
-		blkids := make([]string, 0, len(blockId_rowIdBatch))
+		blkids := make([]types.Blockid, 0, len(blockId_rowIdBatch))
 		for blkid, bat := range blockId_rowIdBatch {
-			// don't flush cn block and RawBatch
-			if ctr.blockId_type[blkid] != 0 {
+			//Don't flush rowids belong to uncommitted cn block and raw data batch in txn's workspace.
+			if ctr.blockId_type[blkid] != RawRowIdBatch {
 				continue
 			}
 			err = s3writer.WriteBlock(bat, objectio.SchemaTombstone)
@@ -231,7 +226,7 @@ func (ctr *container) flush(proc *process.Process) (uint32, error) {
 		}
 		for i, blkInfo := range blkInfos {
 			if _, has := ctr.partitionId_blockId_deltaLoc[pidx]; !has {
-				ctr.partitionId_blockId_deltaLoc[pidx] = make(map[string]*batch.Batch)
+				ctr.partitionId_blockId_deltaLoc[pidx] = make(map[types.Blockid]*batch.Batch)
 			}
 			blockId_deltaLoc := ctr.partitionId_blockId_deltaLoc[pidx]
 			if _, ok := blockId_deltaLoc[blkids[i]]; !ok {
@@ -253,90 +248,61 @@ func collectBatchInfo(proc *process.Process, arg *Argument, destBatch *batch.Bat
 	arg.ctr.debug_len += uint32(len(vs))
 	for i, rowId := range vs {
 		blkid := rowId.CloneBlockID()
-		//		segid := rowId.CloneSegmentID()
+		segid := rowId.CloneSegmentID()
 		blkOffset := rowId.GetBlockOffset()
 		rowOffset := rowId.GetRowOffset()
 		if blkOffset%uint16(arg.Nbucket) != uint16(arg.IBucket) {
 			continue
 		}
-		arg.ctr.deleted_length += 1
-		// FIXME: string(blkid[:]) means heap allocation, just take the id type itself
-		str := string(blkid[:])
-		offsetFlag := false
-		if arg.ctr.blockId_bitmap[str] == nil {
-			arg.ctr.blockId_bitmap[str] = nulls.NewWithSize(int(options.DefaultBlockMaxRows))
+		if arg.ctr.blockId_bitmap[blkid] == nil {
+			arg.ctr.blockId_bitmap[blkid] = nulls.NewWithSize(int(options.DefaultBlockMaxRows))
 		}
-		bitmap = arg.ctr.blockId_bitmap[str]
+		bitmap = arg.ctr.blockId_bitmap[blkid]
 		if bitmap.Contains(uint64(rowOffset)) {
 			continue
 		} else {
 			bitmap.Add(uint64(rowOffset))
 		}
 
-		arg.ctr.blockId_type[str] = RawRowIdBatch
-		/* XXX why not only send the batch
-		   // FIXME: string(segid[:]) means heap allocation, just take the id type itself
-		   if arg.SegmentMap[string(segid[:])] == colexec.TxnWorkSpaceIdType {
-		   	arg.ctr.blockId_type[str] = RawBatchOffset
-		   	offsetFlag = true
-		   } else if arg.SegmentMap[string(segid[:])] == colexec.CnBlockIdType {
-		   	arg.ctr.blockId_type[str] = CNBlockOffset
-		   	offsetFlag = true
-		   } else {
-		   	arg.ctr.blockId_type[str] = RawRowIdBatch
-		   }
-		*/
+		arg.ctr.deleted_length += 1
+
+		if arg.SegmentMap[string(segid[:])] == colexec.TxnWorkSpaceIdType {
+			arg.ctr.blockId_type[blkid] = RawBatchOffset
+		} else if arg.SegmentMap[string(segid[:])] == colexec.CnBlockIdType {
+			arg.ctr.blockId_type[blkid] = CNBlockOffset
+		} else {
+			arg.ctr.blockId_type[blkid] = RawRowIdBatch
+		}
 
 		if _, ok := arg.ctr.partitionId_blockId_rowIdBatch[pIdx]; !ok {
-			blockIdRowIdBatchMap := make(map[string]*batch.Batch)
-			if !offsetFlag {
-				var tmpBat *batch.Batch
-				tmpBat = arg.ctr.pool.get()
-				if tmpBat == nil {
-					tmpBat = batch.New(false, []string{catalog.Row_ID, "pk"})
-					tmpBat.SetVector(0, proc.GetVector(types.T_Rowid.ToType()))
-					tmpBat.SetVector(1, proc.GetVector(*destBatch.GetVector(int32(pkIdx)).GetType()))
-				}
-				blockIdRowIdBatchMap[str] = tmpBat
-			} else {
-				tmpBat := batch.New(false, []string{catalog.BlockMetaOffset})
-				tmpBat.SetVector(0, proc.GetVector(types.T_int64.ToType()))
-				blockIdRowIdBatchMap[str] = tmpBat
+			blockIdRowIdBatchMap := make(map[types.Blockid]*batch.Batch)
+			var tmpBat *batch.Batch
+			tmpBat = arg.ctr.pool.get()
+			if tmpBat == nil {
+				tmpBat = batch.New(false, []string{catalog.Row_ID, "pk"})
+				tmpBat.SetVector(0, proc.GetVector(types.T_Rowid.ToType()))
+				tmpBat.SetVector(1, proc.GetVector(*destBatch.GetVector(int32(pkIdx)).GetType()))
 			}
+			blockIdRowIdBatchMap[blkid] = tmpBat
 			arg.ctr.partitionId_blockId_rowIdBatch[pIdx] = blockIdRowIdBatchMap
 		} else {
 			blockIdRowIdBatchMap := arg.ctr.partitionId_blockId_rowIdBatch[pIdx]
-			if _, ok := blockIdRowIdBatchMap[str]; !ok {
-				if !offsetFlag {
-					var bat *batch.Batch
-					bat = arg.ctr.pool.get()
-					if bat == nil {
-						bat = batch.New(false, []string{catalog.Row_ID, "pk"})
-						bat.SetVector(0, proc.GetVector(types.T_Rowid.ToType()))
-						bat.SetVector(1, proc.GetVector(*destBatch.GetVector(int32(pkIdx)).GetType()))
-					}
-					blockIdRowIdBatchMap[str] = bat
-				} else {
-					bat := batch.New(false, []string{catalog.BlockMetaOffset})
-					bat.SetVector(0, proc.GetVector(types.T_int64.ToType()))
-					blockIdRowIdBatchMap[str] = bat
+			if _, ok := blockIdRowIdBatchMap[blkid]; !ok {
+				var bat *batch.Batch
+				bat = arg.ctr.pool.get()
+				if bat == nil {
+					bat = batch.New(false, []string{catalog.Row_ID, "pk"})
+					bat.SetVector(0, proc.GetVector(types.T_Rowid.ToType()))
+					bat.SetVector(1, proc.GetVector(*destBatch.GetVector(int32(pkIdx)).GetType()))
 				}
+				blockIdRowIdBatchMap[blkid] = bat
 			}
 		}
+		rbat := arg.ctr.partitionId_blockId_rowIdBatch[pIdx][blkid]
+		pk := getNonNullValue(destBatch.GetVector(int32(pkIdx)), uint32(i))
+		vector.AppendFixed(rbat.GetVector(0), rowId, false, proc.GetMPool())
+		vector.AppendAny(rbat.GetVector(1), pk, false, proc.GetMPool())
 
-		rbat := arg.ctr.partitionId_blockId_rowIdBatch[pIdx][str]
-		offset := rowId.GetRowOffset()
-		if !offsetFlag {
-			pk := getNonNullValue(destBatch.GetVector(int32(pkIdx)), uint32(i))
-			vector.AppendFixed(rbat.GetVector(0), rowId, false, proc.GetMPool())
-			vector.AppendAny(rbat.GetVector(1), pk, false, proc.GetMPool())
-		} else {
-			vector.AppendFixed(rbat.GetVector(0), int64(offset), false, proc.GetMPool())
-		}
-		// add rowId size
-		if offsetFlag {
-			continue
-		}
 	}
 	var batchSize int
 	for _, bat := range arg.ctr.partitionId_blockId_rowIdBatch[pIdx] {
@@ -346,10 +312,11 @@ func collectBatchInfo(proc *process.Process, arg *Argument, destBatch *batch.Bat
 }
 
 func getNonNullValue(col *vector.Vector, row uint32) any {
-
 	switch col.GetType().Oid {
 	case types.T_bool:
 		return vector.GetFixedAt[bool](col, int(row))
+	case types.T_bit:
+		return vector.GetFixedAt[uint64](col, int(row))
 	case types.T_int8:
 		return vector.GetFixedAt[int8](col, int(row))
 	case types.T_int16:
@@ -396,7 +363,7 @@ func getNonNullValue(col *vector.Vector, row uint32) any {
 		types.T_array_float32, types.T_array_float64:
 		return col.GetBytesAt(int(row))
 	default:
-		//return vector.ErrVecTypeNotSupport
+		// return vector.ErrVecTypeNotSupport
 		panic(any("No Support"))
 	}
 }

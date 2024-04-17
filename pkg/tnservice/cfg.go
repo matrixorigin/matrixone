@@ -16,11 +16,12 @@ package tnservice
 
 import (
 	"context"
-	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
-	"github.com/matrixorigin/matrixone/pkg/util"
 	"path/filepath"
 	"strings"
 	"time"
+
+	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"github.com/matrixorigin/matrixone/pkg/util"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -52,6 +53,7 @@ var (
 	defaultReservedWALEntryCount = uint64(5000)
 
 	defaultRpcMaxMsgSize              = 1024 * mpool.KB
+	defaultRPCStreamPoisonTime        = 5 * time.Second
 	defaultLogtailCollectInterval     = 2 * time.Millisecond
 	defaultLogtailResponseSendTimeout = 10 * time.Second
 
@@ -116,11 +118,25 @@ type Config struct {
 		ReservedWALEntryCount uint64        `toml:"reserved-WAL-entry-count"`
 	}
 
+	GCCfg struct {
+		GCTTL          toml.Duration `toml:"gc-ttl"`
+		ScanGCInterval toml.Duration `toml:"scan-gc-interval"`
+		DisableGC      bool          `toml:"disable-gc"`
+	}
+
+	Merge struct {
+		CNTakeOverAll    bool          `toml:"offload-all"`
+		CNStandaloneTake bool          `toml:"offload-when-standalone"`
+		CNTakeOverExceed toml.ByteSize `toml:"offload-exceed"`
+		CNMergeMemHint   toml.ByteSize `toml:"offload-mem-hint"`
+	}
+
 	LogtailServer struct {
 		ListenAddress              string        `toml:"listen-address"`
 		ServiceAddress             string        `toml:"service-address"`
 		RpcMaxMessageSize          toml.ByteSize `toml:"rpc-max-message-size"`
 		RpcEnableChecksum          bool          `toml:"rpc-enable-checksum" user_setting:"advanced"`
+		LogtailRPCStreamPoisonTime toml.Duration `toml:"logtail-rpc-stream-poison-time"`
 		LogtailCollectInterval     toml.Duration `toml:"logtail-collect-interval"`
 		LogtailResponseSendTimeout toml.Duration `toml:"logtail-response-send-timeout"`
 	}
@@ -226,6 +242,7 @@ func (c *Config) Validate() error {
 	if c.Ckp.ReservedWALEntryCount == 0 {
 		c.Ckp.ReservedWALEntryCount = defaultReservedWALEntryCount
 	}
+
 	if c.LogtailServer.ListenAddress == "" {
 		c.LogtailServer.ListenAddress = defaultLogtailListenAddress
 	}
@@ -234,6 +251,9 @@ func (c *Config) Validate() error {
 	}
 	if c.LogtailServer.RpcMaxMessageSize <= 0 {
 		c.LogtailServer.RpcMaxMessageSize = toml.ByteSize(defaultRpcMaxMsgSize)
+	}
+	if c.LogtailServer.LogtailRPCStreamPoisonTime.Duration <= 0 {
+		c.LogtailServer.LogtailRPCStreamPoisonTime.Duration = defaultRPCStreamPoisonTime
 	}
 	if c.LogtailServer.LogtailCollectInterval.Duration <= 0 {
 		c.LogtailServer.LogtailCollectInterval.Duration = defaultLogtailCollectInterval
@@ -337,6 +357,9 @@ func (c *Config) SetDefaultValue() {
 	}
 	if c.LogtailServer.RpcMaxMessageSize <= 0 {
 		c.LogtailServer.RpcMaxMessageSize = toml.ByteSize(defaultRpcMaxMsgSize)
+	}
+	if c.LogtailServer.LogtailRPCStreamPoisonTime.Duration <= 0 {
+		c.LogtailServer.LogtailRPCStreamPoisonTime.Duration = defaultRPCStreamPoisonTime
 	}
 	if c.LogtailServer.LogtailCollectInterval.Duration <= 0 {
 		c.LogtailServer.LogtailCollectInterval.Duration = defaultLogtailCollectInterval

@@ -72,16 +72,16 @@ func resetGenerateSeriesState(proc *process.Process, arg *Argument) error {
 			if err != nil {
 				return err
 			}
-			startVec = vector.NewConstFixed(types.T_int64.ToType(), int64(1), 1, proc.Mp())
+			startVec, err = vector.NewConstFixed(types.T_int64.ToType(), int64(1), 1, proc.Mp())
 		} else {
 			startVec, err = arg.ctr.executorsForArgs[0].Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch})
 			if err != nil {
 				return err
 			}
 			endVec, err = arg.ctr.executorsForArgs[1].Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch})
-			if err != nil {
-				return err
-			}
+		}
+		if err != nil {
+			return err
 		}
 		if len(arg.Args) == 3 {
 			stepVec, err = arg.ctr.executorsForArgs[2].Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch})
@@ -136,8 +136,12 @@ func resetGenerateSeriesState(proc *process.Process, arg *Argument) error {
 			if err != nil {
 				return err
 			}
-			startVecTmp = vector.NewConstFixed(types.T_datetime.ToType(), startTmp, 1, proc.Mp())
-			endVecTmp = vector.NewConstFixed(types.T_datetime.ToType(), endTmp, 1, proc.Mp())
+			if startVecTmp, err = vector.NewConstFixed(types.T_datetime.ToType(), startTmp, 1, proc.Mp()); err != nil {
+				return err
+			}
+			if endVecTmp, err = vector.NewConstFixed(types.T_datetime.ToType(), endTmp, 1, proc.Mp()); err != nil {
+				return err
+			}
 
 			newStartSlice := vector.MustFixedCol[types.Datetime](startVecTmp)
 			newEndSlice := vector.MustFixedCol[types.Datetime](endVecTmp)

@@ -17,14 +17,17 @@ package memoryengine
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/catalog"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/util"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
@@ -39,11 +42,11 @@ type Table struct {
 
 var _ engine.Relation = new(Table)
 
-func (t *Table) Stats(ctx context.Context, partitionTables []any, statsInfoMap any) bool {
-	return false
+func (t *Table) Stats(ctx context.Context, sync bool) *pb.StatsInfo {
+	return nil
 }
 
-func (t *Table) Rows(ctx context.Context) (int64, error) {
+func (t *Table) Rows(ctx context.Context) (uint64, error) {
 	resps, err := DoTxnRequest[TableStatsResp](
 		ctx,
 		t.txnOperator,
@@ -58,10 +61,10 @@ func (t *Table) Rows(ctx context.Context) (int64, error) {
 		return 0, err
 	}
 	resp := resps[0]
-	return int64(resp.Rows), err
+	return uint64(resp.Rows), err
 }
 
-func (t *Table) Size(ctx context.Context, columnName string) (int64, error) {
+func (t *Table) Size(ctx context.Context, columnName string) (uint64, error) {
 	return 1, nil
 }
 
@@ -238,6 +241,9 @@ func (t *Table) TableDefs(ctx context.Context) ([]engine.TableDef, error) {
 	return defs, nil
 }
 
+func (t *Table) CopyTableDef(ctx context.Context) *plan.TableDef {
+	return t.GetTableDef(ctx)
+}
 func (t *Table) GetTableDef(ctx context.Context) *plan.TableDef {
 	engineDefs, err := t.TableDefs(ctx)
 	if err != nil {
@@ -262,7 +268,7 @@ func (t *Table) GetTableDef(ctx context.Context) *plan.TableDef {
 			col := &plan2.ColDef{
 				ColId: attr.Attr.ID,
 				Name:  attr.Attr.Name,
-				Typ: &plan2.Type{
+				Typ: plan2.Type{
 					Id:          int32(attr.Attr.Type.Oid),
 					Width:       attr.Attr.Type.Width,
 					Scale:       attr.Attr.Type.Scale,
@@ -411,6 +417,11 @@ func (t *Table) AlterTable(ctx context.Context, c *engine.ConstraintDef, constra
 	return nil
 }
 
+func (t *Table) TableRenameInTxn(ctx context.Context, constraint [][]byte) error {
+	// implement me
+	return nil
+}
+
 func (t *Table) Update(ctx context.Context, data *batch.Batch) error {
 	data.SetRowCount(data.RowCount())
 	shards, err := t.engine.shardPolicy.Batch(
@@ -530,4 +541,12 @@ func (t *Table) GetColumMetadataScanInfo(ctx context.Context, name string) ([]*p
 
 func (t *Table) PrimaryKeysMayBeModified(ctx context.Context, from types.TS, to types.TS, keyVector *vector.Vector) (bool, error) {
 	return true, nil
+}
+
+func (t *Table) ApproxObjectsNum(ctx context.Context) int {
+	return 0
+}
+
+func (t *Table) MergeObjects(ctx context.Context, objstats []objectio.ObjectStats) (*api.MergeCommitEntry, error) {
+	return nil, nil
 }

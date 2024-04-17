@@ -17,6 +17,7 @@ package lockservice
 import (
 	"bytes"
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"strings"
 	"time"
 
@@ -28,15 +29,19 @@ import (
 )
 
 var methodVersions = map[pb.Method]int64{
-	pb.Method_Lock:              defines.MORPCVersion1,
-	pb.Method_ForwardLock:       defines.MORPCVersion1,
-	pb.Method_Unlock:            defines.MORPCVersion1,
-	pb.Method_GetTxnLock:        defines.MORPCVersion1,
-	pb.Method_GetWaitingList:    defines.MORPCVersion1,
-	pb.Method_KeepRemoteLock:    defines.MORPCVersion1,
-	pb.Method_GetBind:           defines.MORPCVersion1,
-	pb.Method_KeepLockTableBind: defines.MORPCVersion1,
-	pb.Method_ForwardUnlock:     defines.MORPCVersion1,
+	pb.Method_Lock:               defines.MORPCVersion1,
+	pb.Method_ForwardLock:        defines.MORPCVersion1,
+	pb.Method_Unlock:             defines.MORPCVersion1,
+	pb.Method_GetTxnLock:         defines.MORPCVersion1,
+	pb.Method_GetWaitingList:     defines.MORPCVersion1,
+	pb.Method_KeepRemoteLock:     defines.MORPCVersion1,
+	pb.Method_GetBind:            defines.MORPCVersion1,
+	pb.Method_KeepLockTableBind:  defines.MORPCVersion1,
+	pb.Method_ForwardUnlock:      defines.MORPCVersion1,
+	pb.Method_SetRestartService:  defines.MORPCVersion2,
+	pb.Method_CanRestartService:  defines.MORPCVersion2,
+	pb.Method_RemainTxnInService: defines.MORPCVersion2,
+	pb.Method_ValidateService:    defines.MORPCVersion2,
 }
 
 func (s *service) initRemote() {
@@ -58,7 +63,8 @@ func (s *service) initRemote() {
 		rpcClient,
 		s.cfg.KeepBindDuration.Duration,
 		s.cfg.KeepRemoteLockDuration.Duration,
-		&s.tableGroups)
+		s.tableGroups,
+		s)
 	s.initRemoteHandler()
 	if err := s.remote.server.Start(); err != nil {
 		panic(err)
@@ -81,6 +87,8 @@ func (s *service) initRemoteHandler() {
 		s.handleRemoteGetWaitingList)
 	s.remote.server.RegisterMethodHandler(pb.Method_KeepRemoteLock,
 		s.handleKeepRemoteLock)
+	s.remote.server.RegisterMethodHandler(pb.Method_ValidateService,
+		s.handleValidateService)
 }
 
 func (s *service) handleRemoteLock(
@@ -89,6 +97,11 @@ func (s *service) handleRemoteLock(
 	req *pb.Request,
 	resp *pb.Response,
 	cs morpc.ClientSession) {
+	if !s.canLockOnServiceStatus(req.Lock.TxnID, req.Lock.Options, req.LockTable.Table, req.Lock.Rows) {
+		writeResponse(ctx, cancel, resp, moerr.NewRetryForCNRollingRestart(), cs)
+		return
+	}
+
 	l, err := s.getLocalLockTable(req, resp)
 	if err != nil ||
 		l == nil {
@@ -127,6 +140,11 @@ func (s *service) handleForwardLock(
 	req *pb.Request,
 	resp *pb.Response,
 	cs morpc.ClientSession) {
+	if !s.canLockOnServiceStatus(req.Lock.TxnID, req.Lock.Options, req.LockTable.Table, req.Lock.Rows) {
+		writeResponse(ctx, cancel, resp, moerr.NewRetryForCNRollingRestart(), cs)
+		return
+	}
+
 	l, err := s.getLockTable(
 		req.LockTable.Group,
 		req.LockTable.Table)
@@ -179,6 +197,18 @@ func (s *service) handleRemoteUnlock(
 	}
 	err = s.Unlock(ctx, req.Unlock.TxnID, req.Unlock.CommitTS, req.Unlock.Mutations...)
 	writeResponse(ctx, cancel, resp, err, cs)
+}
+
+func (s *service) handleValidateService(
+	ctx context.Context,
+	cancel context.CancelFunc,
+	req *pb.Request,
+	resp *pb.Response,
+	cs morpc.ClientSession) {
+	resp.ValidateService = pb.ValidateServiceResponse{
+		OK: s.serviceID == req.ValidateService.ServiceID,
+	}
+	writeResponse(ctx, cancel, resp, nil, cs)
 }
 
 func (s *service) handleRemoteGetLock(
@@ -252,7 +282,14 @@ func (s *service) getLocalLockTable(
 		return nil, err
 	}
 	if l == nil {
-		return nil, ErrLockTableNotFound
+		l, err = s.getLockTableWithCreate(
+			req.LockTable.Group,
+			req.LockTable.Table,
+			req.Lock.Rows,
+			req.Lock.Options.Sharding)
+		if err != nil || l.getBind().Changed(req.LockTable) {
+			return nil, ErrLockTableNotFound
+		}
 	}
 	bind := l.getBind()
 	if bind.Changed(req.LockTable) {
@@ -274,8 +311,13 @@ func (s *service) getLocalLockTable(
 		uuid := getUUIDFromServiceIdentifier(s.serviceID)
 		uuidRequest := getUUIDFromServiceIdentifier(bind.ServiceID)
 		if strings.EqualFold(uuid, uuidRequest) {
-			l.close()
-			s.getTables(bind.Group).Delete(bind.Table)
+			getLogger().Warn("stale bind found, handle remote lock on remote lock table instance",
+				zap.String("bind", bind.DebugString()))
+			// only remove old bind lock table
+			s.tableGroups.removeWithFilter(
+				func(table uint64, lt lockTable) bool {
+					return lt.getBind().Equal(bind)
+				})
 			return nil, ErrLockTableBindChanged
 		}
 

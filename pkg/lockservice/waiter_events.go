@@ -224,6 +224,6 @@ func (mw *waiterEvents) addToDeadlockCheck(w *waiter) error {
 	return nil
 }
 
-func (c lockContext) Name() string {
+func (c lockContext) TypeName() string {
 	return "lockservice.lockContext"
 }

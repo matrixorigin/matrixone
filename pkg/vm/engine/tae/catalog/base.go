@@ -155,7 +155,6 @@ func (be *BaseEntryImpl[T]) ConflictCheck(txn txnif.TxnReader) (err error) {
 	}
 	return
 }
-
 func (be *BaseEntryImpl[T]) getOrSetUpdateNode(txn txnif.TxnReader) (newNode bool, node *MVCCNode[T]) {
 	entry := be.GetLatestNodeLocked()
 	if entry.IsSameTxn(txn) {
@@ -180,7 +179,7 @@ func (be *BaseEntryImpl[T]) DeleteBefore(ts types.TS) bool {
 	if createAt.IsEmpty() {
 		return false
 	}
-	return createAt.Less(ts)
+	return createAt.Less(&ts)
 }
 
 func (be *BaseEntryImpl[T]) NeedWaitCommitting(startTS types.TS) (bool, txnif.TxnReader) {
@@ -255,7 +254,7 @@ func (be *BaseEntryImpl[T]) DeleteAfter(ts types.TS) bool {
 	if un == nil {
 		return false
 	}
-	return un.DeletedAt.Greater(ts)
+	return un.DeletedAt.Greater(&ts)
 }
 
 func (be *BaseEntryImpl[T]) CloneCommittedInRange(start, end types.TS) BaseEntry {

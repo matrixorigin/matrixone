@@ -19,20 +19,18 @@ import (
 	"math"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
-	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
-	"go.uber.org/zap"
-
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
-
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"go.uber.org/zap"
 )
 
 type ReadFilter = func([]*vector.Vector) []int32
@@ -48,10 +46,11 @@ func ReadByFilter(
 	fs fileservice.FileService,
 	mp *mpool.MPool,
 ) (sels []int32, err error) {
-	bat, err := LoadColumns(ctx, columns, colTypes, fs, info.MetaLocation(), mp, fileservice.Policy(0))
+	bat, release, err := LoadColumns(ctx, columns, colTypes, fs, info.MetaLocation(), mp, fileservice.Policy(0))
 	if err != nil {
 		return
 	}
+	defer release()
 	var deleteMask *nulls.Nulls
 
 	// merge persisted deletes
@@ -59,18 +58,20 @@ func ReadByFilter(
 		now := time.Now()
 		var persistedDeletes *batch.Batch
 		var persistedByCN bool
+		var release func()
 		// load from storage
-		if persistedDeletes, persistedByCN, err = ReadBlockDelete(ctx, info.DeltaLocation(), fs); err != nil {
+		if persistedDeletes, persistedByCN, release, err = ReadBlockDelete(ctx, info.DeltaLocation(), fs); err != nil {
 			return
 		}
+		defer release()
 		readcost := time.Since(now)
 		var rows *nulls.Nulls
 		var bisect time.Duration
 		if persistedByCN {
-			rows = evalDeleteRowsByTimestampForDeletesPersistedByCN(persistedDeletes, ts, info.CommitTs)
+			rows = EvalDeleteRowsByTimestampForDeletesPersistedByCN(persistedDeletes, ts, info.CommitTs)
 		} else {
 			nowx := time.Now()
-			rows = evalDeleteRowsByTimestamp(persistedDeletes, ts, &info.BlockID)
+			rows = EvalDeleteRowsByTimestamp(persistedDeletes, ts, &info.BlockID)
 			bisect = time.Since(nowx)
 		}
 		if rows != nil {
@@ -179,10 +180,11 @@ func BlockCompactionRead(
 	mp *mpool.MPool,
 ) (*batch.Batch, error) {
 
-	loaded, err := LoadColumns(ctx, seqnums, colTypes, fs, location, mp, fileservice.Policy(0))
+	loaded, release, err := LoadColumns(ctx, seqnums, colTypes, fs, location, mp, fileservice.Policy(0))
 	if err != nil {
 		return nil, err
 	}
+	defer release()
 	if len(deletes) == 0 {
 		return loaded, nil
 	}
@@ -226,14 +228,16 @@ func BlockReadInner(
 		deletedRows []int64
 		deleteMask  nulls.Bitmap
 		loaded      *batch.Batch
+		release     func()
 	)
 
 	// read block data from storage specified by meta location
-	if loaded, rowidPos, deleteMask, err = readBlockData(
+	if loaded, rowidPos, deleteMask, release, err = readBlockData(
 		ctx, columns, colTypes, info, ts, fs, mp, vp, policy,
 	); err != nil {
 		return
 	}
+	defer release()
 
 	// assemble result batch for return
 	result = batch.NewWithSize(len(loaded.Vecs))
@@ -281,21 +285,23 @@ func BlockReadInner(
 	if !info.DeltaLocation().IsEmpty() {
 		var deletes *batch.Batch
 		var persistedByCN bool
+		var release func()
 		now := time.Now()
 		// load from storage
-		if deletes, persistedByCN, err = ReadBlockDelete(ctx, info.DeltaLocation(), fs); err != nil {
+		if deletes, persistedByCN, release, err = ReadBlockDelete(ctx, info.DeltaLocation(), fs); err != nil {
 			return
 		}
+		defer release()
 		readcost := time.Since(now)
 
 		// eval delete rows by timestamp
 		var rows *nulls.Nulls
 		var bisect time.Duration
 		if persistedByCN {
-			rows = evalDeleteRowsByTimestampForDeletesPersistedByCN(deletes, ts, info.CommitTs)
+			rows = EvalDeleteRowsByTimestampForDeletesPersistedByCN(deletes, ts, info.CommitTs)
 		} else {
 			nowx := time.Now()
-			rows = evalDeleteRowsByTimestamp(deletes, ts, &info.BlockID)
+			rows = EvalDeleteRowsByTimestamp(deletes, ts, &info.BlockID)
 			bisect = time.Since(nowx)
 		}
 
@@ -441,7 +447,7 @@ func readBlockData(
 	m *mpool.MPool,
 	vp engine.VectorPool,
 	policy fileservice.Policy,
-) (bat *batch.Batch, rowidPos int, deleteMask nulls.Bitmap, err error) {
+) (bat *batch.Batch, rowidPos int, deleteMask nulls.Bitmap, release func(), err error) {
 	rowidPos, idxes, typs := getRowsIdIndex(colIndexes, colTypes)
 
 	readColumns := func(cols []uint16) (result *batch.Batch, loaded *batch.Batch, err error) {
@@ -449,10 +455,11 @@ func readBlockData(
 			// only read rowid column on non appendable block, return early
 			result = batch.NewWithSize(1)
 			// result.Vecs[0] = rowid
+			release = func() {}
 			return
 		}
 
-		if loaded, err = LoadColumns(ctx, cols, typs, fs, info.MetaLocation(), m, policy); err != nil {
+		if loaded, release, err = LoadColumns(ctx, cols, typs, fs, info.MetaLocation(), m, policy); err != nil {
 			return
 		}
 
@@ -481,7 +488,7 @@ func readBlockData(
 		aborts := vector.MustFixedCol[bool](loaded.Vecs[len(loaded.Vecs)-1])
 		commits := vector.MustFixedCol[types.TS](loaded.Vecs[len(loaded.Vecs)-2])
 		for i := 0; i < len(commits); i++ {
-			if aborts[i] || commits[i].Greater(ts) {
+			if aborts[i] || commits[i].Greater(&ts) {
 				deletes.Add(uint64(i))
 			}
 		}
@@ -499,19 +506,20 @@ func readBlockData(
 
 	return
 }
-func ReadBlockDelete(ctx context.Context, deltaloc objectio.Location, fs fileservice.FileService) (bat *batch.Batch, isPersistedByCN bool, err error) {
+
+func ReadBlockDelete(ctx context.Context, deltaloc objectio.Location, fs fileservice.FileService) (bat *batch.Batch, isPersistedByCN bool, release func(), err error) {
 	isPersistedByCN, err = persistedByCN(ctx, deltaloc, fs)
 	if err != nil {
 		return
 	}
 	if isPersistedByCN {
-		bat, err = LoadTombstoneColumns(ctx, []uint16{0, 1}, nil, fs, deltaloc, nil)
+		bat, release, err = LoadTombstoneColumns(ctx, []uint16{0, 1}, nil, fs, deltaloc, nil)
 		if err != nil {
 			return
 		}
 		return
 	} else {
-		bat, err = LoadTombstoneColumns(ctx, []uint16{0, 1, 2, 3}, nil, fs, deltaloc, nil)
+		bat, release, err = LoadTombstoneColumns(ctx, []uint16{0, 1, 2, 3}, nil, fs, deltaloc, nil)
 		if err != nil {
 			return
 		}
@@ -533,7 +541,7 @@ func persistedByCN(ctx context.Context, deltaloc objectio.Location, fs fileservi
 	return columnCount == 2, nil
 }
 
-func evalDeleteRowsByTimestamp(deletes *batch.Batch, ts types.TS, blockid *types.Blockid) (rows *nulls.Bitmap) {
+func EvalDeleteRowsByTimestamp(deletes *batch.Batch, ts types.TS, blockid *types.Blockid) (rows *nulls.Bitmap) {
 	if deletes == nil {
 		return
 	}
@@ -548,7 +556,7 @@ func evalDeleteRowsByTimestamp(deletes *batch.Batch, ts types.TS, blockid *types
 
 	for i := start; i < end; i++ {
 		abort := vector.GetFixedAt[bool](aborts, i)
-		if abort || tss[i].Greater(ts) {
+		if abort || tss[i].Greater(&ts) {
 			continue
 		}
 		row := rowids[i].GetRowOffset()
@@ -557,8 +565,8 @@ func evalDeleteRowsByTimestamp(deletes *batch.Batch, ts types.TS, blockid *types
 	return
 }
 
-func evalDeleteRowsByTimestampForDeletesPersistedByCN(deletes *batch.Batch, ts types.TS, committs types.TS) (rows *nulls.Bitmap) {
-	if deletes == nil || ts.Less(committs) {
+func EvalDeleteRowsByTimestampForDeletesPersistedByCN(deletes *batch.Batch, ts types.TS, committs types.TS) (rows *nulls.Bitmap) {
+	if deletes == nil || ts.Less(&committs) {
 		return
 	}
 	// record visible delete rows

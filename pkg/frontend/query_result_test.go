@@ -20,9 +20,13 @@ import (
 	"io"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/txn/clock"
+
 	"github.com/BurntSushi/toml"
 	"github.com/golang/mock/gomock"
 	"github.com/google/uuid"
+	"github.com/stretchr/testify/assert"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -38,7 +42,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"github.com/stretchr/testify/assert"
 )
 
 func newLocalETLFS(t *testing.T, fsName string) fileservice.FileService {
@@ -55,6 +58,7 @@ func newTestSession(t *testing.T, ctrl *gomock.Controller) *Session {
 	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
 	_, err = toml.DecodeFile("test/system_vars_config.toml", pu.SV)
 	assert.Nil(t, err)
+	pu.SV.SetDefaultValues()
 	pu.SV.SaveQueryResult = "on"
 	testPool, err = mpool.NewMPool("testPool", pu.SV.GuestMmuLimitation, mpool.NoFixed)
 	if err != nil {
@@ -62,7 +66,7 @@ func newTestSession(t *testing.T, ctrl *gomock.Controller) *Session {
 	}
 	//file service
 	pu.FileService = newLocalETLFS(t, defines.SharedFileServiceName)
-
+	setGlobalPu(pu)
 	//io session
 	ioses := mock_frontend.NewMockIOSession(ctrl)
 	ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
@@ -72,7 +76,9 @@ func newTestSession(t *testing.T, ctrl *gomock.Controller) *Session {
 
 	testutil.SetupAutoIncrService()
 	//new session
-	ses := NewSession(proto, testPool, pu, GSysVariables, true, nil, nil)
+	ses := NewSession(proto, testPool, GSysVariables, true, nil)
+	var c clock.Clock
+	_, _ = ses.SetTempTableStorage(c)
 	return ses
 }
 
@@ -115,7 +121,7 @@ func Test_saveQueryResultMeta(t *testing.T) {
 	}
 	ses.SetTenantInfo(tenant)
 	proc := testutil.NewProcess()
-	proc.FileService = ses.pu.FileService
+	proc.FileService = getGlobalPu().FileService
 	ses.GetTxnCompileCtx().SetProcess(proc)
 	ses.GetTxnCompileCtx().GetProcess().SessionInfo = process.SessionInfo{Account: sysAccountName}
 
@@ -130,7 +136,7 @@ func Test_saveQueryResultMeta(t *testing.T) {
 	for i, ty := range typs {
 		colDefs[i] = &plan.ColDef{
 			Name: fmt.Sprintf("a_%d", i),
-			Typ: &plan.Type{
+			Typ: plan.Type{
 				Id:    int32(ty.Oid),
 				Scale: ty.Scale,
 				Width: ty.Width,
@@ -148,7 +154,7 @@ func Test_saveQueryResultMeta(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	asts, err := parsers.Parse(ctx, dialect.MYSQL, "select a,b,c from t", 1)
+	asts, err := parsers.Parse(ctx, dialect.MYSQL, "select a,b,c from t", 1, 0)
 	assert.Nil(t, err)
 
 	ses.ast = asts[0]
@@ -192,11 +198,17 @@ func Test_saveQueryResultMeta(t *testing.T) {
 		QueryId:  testUUID.String(),
 		FilePath: exportFilePath,
 		Fields: &tree.Fields{
-			Terminated: ",",
-			EnclosedBy: '"',
+			Terminated: &tree.Terminated{
+				Value: ",",
+			},
+			EnclosedBy: &tree.EnclosedBy{
+				Value: '"',
+			},
 		},
 		Lines: &tree.Lines{
-			TerminatedBy: "\n",
+			TerminatedBy: &tree.Terminated{
+				Value: "\n",
+			},
 		},
 		MaxFileSize: 0,
 		Header:      false,
@@ -205,7 +217,7 @@ func Test_saveQueryResultMeta(t *testing.T) {
 	err = doDumpQueryResult(ctx, ses, ep)
 	assert.Nil(t, err)
 
-	fs := ses.GetParameterUnit().FileService
+	fs := getGlobalPu().FileService
 
 	//csvBuf := &bytes.Buffer{}
 	var r io.ReadCloser

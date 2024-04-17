@@ -23,9 +23,7 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -57,10 +55,9 @@ const (
 )
 
 var (
-	selectOriginTableConstraintFormat = "select serial(%s) from %s.%s group by serial(%s) having count(*) > 1 and serial(%s) is not null;"
 	// see the comment in fuzzyCheck func genCondition for the reason why has to be two SQLs
-	fuzzyNonCompoundCheck = "select %s from %s.%s where %s in (%s) group by %s having count(*) > 1 limit 1;"
-	fuzzyCompoundCheck    = "select serial(%s) from %s.%s where %s group by serial(%s) having count(*) > 1 limit 1;"
+	fuzzyNonCompoundCheck = "select %s from `%s`.`%s` where %s in (%s) group by %s having count(*) > 1 limit 1;"
+	fuzzyCompoundCheck    = "select serial(%s) from `%s`.`%s` where %s group by serial(%s) having count(*) > 1 limit 1;"
 )
 
 var (
@@ -69,6 +66,7 @@ var (
 	insertIntoSecondaryIndexTableWithPKeyFormat = "insert into  %s.`%s` select serial_full(%s), %s from %s.%s;"
 	insertIntoSingleIndexTableWithoutPKeyFormat = "insert into  %s.`%s` select (%s) from %s.%s where (%s) is not null;"
 	insertIntoIndexTableWithoutPKeyFormat       = "insert into  %s.`%s` select serial(%s) from %s.%s where serial(%s) is not null;"
+	insertIntoMasterIndexTableFormat            = "insert into  %s.`%s` select serial_full('%s', %s, %s), %s from %s.`%s`;"
 	createIndexTableForamt                      = "create table %s.`%s` (%s);"
 )
 
@@ -98,6 +96,8 @@ func genCreateIndexTableSql(indexTableDef *plan.TableDef, indexDef *plan.IndexDe
 		sql += planCol.Name + " "
 		typeId := types.T(planCol.Typ.Id)
 		switch typeId {
+		case types.T_bit:
+			sql += fmt.Sprintf("BIT(%d)", planCol.Typ.Width)
 		case types.T_char:
 			sql += fmt.Sprintf("CHAR(%d)", planCol.Typ.Width)
 		case types.T_varchar:
@@ -174,7 +174,7 @@ func genInsertIndexTableSql(originTableDef *plan.TableDef, indexDef *plan.IndexD
 	// insert data into index table
 	var insertSQL string
 	temp := partsToColsStr(indexDef.Parts)
-	if originTableDef.Pkey == nil || len(originTableDef.Pkey.PkeyColName) == 0 {
+	if len(originTableDef.Pkey.PkeyColName) == 0 {
 		if len(indexDef.Parts) == 1 {
 			insertSQL = fmt.Sprintf(insertIntoSingleIndexTableWithoutPKeyFormat, DBName, indexDef.IndexTableName, temp, DBName, originTableDef.Name, temp)
 		} else {
@@ -207,6 +207,36 @@ func genInsertIndexTableSql(originTableDef *plan.TableDef, indexDef *plan.IndexD
 		}
 	}
 	return insertSQL
+}
+
+// genInsertIndexTableSqlForMasterIndex: Create inserts for master index table
+func genInsertIndexTableSqlForMasterIndex(originTableDef *plan.TableDef, indexDef *plan.IndexDef, DBName string) []string {
+	// insert data into index table
+	var insertSQLs = make([]string, len(indexDef.Parts))
+
+	pkeyName := originTableDef.Pkey.PkeyColName
+	var pKeyMsg string
+	if pkeyName == catalog.CPrimaryKeyColName {
+		pKeyMsg = "serial("
+		for i, part := range originTableDef.Pkey.Names {
+			if i == 0 {
+				pKeyMsg += part
+			} else {
+				pKeyMsg += "," + part
+			}
+		}
+		pKeyMsg += ")"
+	} else {
+		pKeyMsg = pkeyName
+	}
+
+	for i, part := range indexDef.Parts {
+		insertSQLs[i] = fmt.Sprintf(insertIntoMasterIndexTableFormat,
+			DBName, indexDef.IndexTableName,
+			part, part, pKeyMsg, pKeyMsg, DBName, originTableDef.Name)
+	}
+
+	return insertSQLs
 }
 
 // genInsertMOIndexesSql: Generate an insert statement for insert index metadata into `mo_catalog.mo_indexes`
@@ -381,7 +411,7 @@ func makeInsertSingleIndexSQL(eg engine.Engine, proc *process.Process, databaseI
 	return insertMoIndexesSql, nil
 }
 
-func makeInsertTablePartitionsSQL(eg engine.Engine, ctx context.Context, proc *process.Process, dbSource engine.Database, relation engine.Relation) (string, error) {
+func makeInsertTablePartitionsSQL(ctx context.Context, dbSource engine.Database, relation engine.Relation) (string, error) {
 	if dbSource == nil || relation == nil {
 		return "", nil
 	}
@@ -414,17 +444,9 @@ func makeInsertMultiIndexSQL(eg engine.Engine, ctx context.Context, proc *proces
 	databaseId := dbSource.GetDatabaseId(ctx)
 	tableId := relation.GetTableID(ctx)
 
-	tableDefs, err := relation.TableDefs(ctx)
+	ct, err := GetConstraintDef(ctx, relation)
 	if err != nil {
 		return "", err
-	}
-
-	var ct *engine.ConstraintDef
-	for _, def := range tableDefs {
-		if constraintDef, ok := def.(*engine.ConstraintDef); ok {
-			ct = constraintDef
-			break
-		}
 	}
 	if ct == nil {
 		return "", nil
@@ -452,25 +474,6 @@ func makeInsertMultiIndexSQL(eg engine.Engine, ctx context.Context, proc *proces
 		return "", err
 	}
 	return insertMoIndexesSql, nil
-}
-
-func genNewUniqueIndexDuplicateCheck(c *Compile, database, table, cols string) error {
-	duplicateCheckSql := fmt.Sprintf(selectOriginTableConstraintFormat, cols, database, table, cols, cols)
-	res, err := c.runSqlWithResult(duplicateCheckSql)
-	if err != nil {
-		return err
-	}
-	defer res.Close()
-
-	res.ReadRows(func(colVecs []*vector.Vector) bool {
-		if t, e := types.Unpack(colVecs[0].GetBytesAt(0)); e != nil {
-			err = e
-		} else {
-			err = moerr.NewDuplicateEntry(c.ctx, t.ErrString(nil), cols)
-		}
-		return true
-	})
-	return err
 }
 
 func partsToColsStr(parts []string) string {
@@ -544,4 +547,28 @@ func genInsertMoTablePartitionsSql(databaseId string, tableId uint64, partitionB
 	}
 	buffer.WriteString(";")
 	return buffer.String()
+}
+
+func GetConstraintDef(ctx context.Context, rel engine.Relation) (*engine.ConstraintDef, error) {
+	defs, err := rel.TableDefs(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	return GetConstraintDefFromTableDefs(defs), nil
+}
+
+func GetConstraintDefFromTableDefs(defs []engine.TableDef) *engine.ConstraintDef {
+	var cstrDef *engine.ConstraintDef
+	for _, def := range defs {
+		if ct, ok := def.(*engine.ConstraintDef); ok {
+			cstrDef = ct
+			break
+		}
+	}
+	if cstrDef == nil {
+		cstrDef = &engine.ConstraintDef{}
+		cstrDef.Cts = make([]engine.Constraint, 0)
+	}
+	return cstrDef
 }

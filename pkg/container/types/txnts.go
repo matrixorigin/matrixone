@@ -20,9 +20,9 @@ import (
 	"math"
 	"strconv"
 	"strings"
-
 	"sync/atomic"
 	"time"
+	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
@@ -38,23 +38,29 @@ func (ts TS) Logical() uint32 {
 	return DecodeUint32(ts[:4])
 }
 
-func (ts TS) IsEmpty() bool {
-	return ts.Physical() == 0 && ts.Logical() == 0
+func (ts *TS) IsEmpty() bool {
+	p := DecodeInt64(ts[4:12])
+	if p != 0 {
+		return false
+	}
+	return DecodeInt64(ts[:4]) == 0
 }
-func (ts TS) Equal(rhs TS) bool {
-	return ts == rhs
+func (ts *TS) Equal(rhs *TS) bool {
+	return *ts == *rhs
 }
 
 // Compare physical first then logical.
-func (ts TS) Compare(rhs TS) int {
-	p1, p2 := ts.Physical(), rhs.Physical()
+func (ts *TS) Compare(rhs *TS) int {
+	p1 := *(*int64)(unsafe.Pointer(&ts[4]))
+	p2 := *(*int64)(unsafe.Pointer(&rhs[4]))
 	if p1 < p2 {
 		return -1
 	}
 	if p1 > p2 {
 		return 1
 	}
-	l1, l2 := ts.Logical(), rhs.Logical()
+	l1 := *(*uint32)(unsafe.Pointer(ts))
+	l2 := *(*uint32)(unsafe.Pointer(rhs))
 	if l1 < l2 {
 		return -1
 	}
@@ -64,16 +70,16 @@ func (ts TS) Compare(rhs TS) int {
 	return 1
 }
 
-func (ts TS) Less(rhs TS) bool {
+func (ts *TS) Less(rhs *TS) bool {
 	return ts.Compare(rhs) < 0
 }
-func (ts TS) LessEq(rhs TS) bool {
+func (ts *TS) LessEq(rhs *TS) bool {
 	return ts.Compare(rhs) <= 0
 }
-func (ts TS) Greater(rhs TS) bool {
+func (ts *TS) Greater(rhs *TS) bool {
 	return ts.Compare(rhs) > 0
 }
-func (ts TS) GreaterEq(rhs TS) bool {
+func (ts *TS) GreaterEq(rhs *TS) bool {
 	return ts.Compare(rhs) >= 0
 }
 
@@ -94,6 +100,11 @@ func BuildTS(p int64, l uint32) (ret TS) {
 	return
 }
 
+func BuildTSForTest(p int64, l uint32) *TS {
+	ts := BuildTS(p, l)
+	return &ts
+}
+
 func MaxTs() TS {
 	return BuildTS(math.MaxInt64, math.MaxUint32)
 }
@@ -106,12 +117,15 @@ func (ts TS) Prev() TS {
 	}
 	return BuildTS(p, l-1)
 }
-func (ts TS) Next() TS {
-	p, l := ts.Physical(), ts.Logical()
+
+func (ts *TS) Next() TS {
+	p, l := DecodeInt64(ts[4:12]), DecodeUint32(ts[:4])
 	if l == math.MaxUint32 {
-		return BuildTS(p+1, 0)
+		p += 1
+	} else {
+		l += 1
 	}
-	return BuildTS(p, l+1)
+	return BuildTS(p, l)
 }
 
 func (ts TS) ToString() string {
@@ -252,61 +266,37 @@ func (c *MockHLCClock) SetNodeID(id uint16) {
 	// nothing to do.
 }
 
-func MockColTypes(colCnt int) (ct []Type) {
-	for i := 0; i < colCnt; i++ {
-		var typ Type
-		switch i {
-		case 0:
-			typ = T_int8.ToType()
-		case 1:
-			typ = T_int16.ToType()
-		case 2:
-			typ = T_int32.ToType()
-		case 3:
-			typ = T_int64.ToType()
-		case 4:
-			typ = T_uint8.ToType()
-		case 5:
-			typ = T_uint16.ToType()
-		case 6:
-			typ = T_uint32.ToType()
-		case 7:
-			typ = T_uint64.ToType()
-		case 8:
-			typ = T_float32.ToType()
-		case 9:
-			typ = T_float64.ToType()
-		case 10:
-			typ = T_date.ToType()
-		case 11:
-			typ = T_datetime.ToType()
-		case 12:
-			typ = T_varchar.ToType()
-		case 13:
-			typ = T_char.ToType()
-		case 14:
-			typ = T_bool.ToType()
-			typ.Width = 8
-		case 15:
-			typ = T_timestamp.ToType()
-		case 16:
-			typ = T_decimal64.ToType()
-		case 17:
-			typ = T_decimal128.ToType()
-		case 18:
-			typ = T_binary.ToType()
-		case 19:
-			typ = T_varbinary.ToType()
-		case 20:
-			typ = T_enum.ToType()
-		case 21:
-			typ = T_array_float32.ToType()
-		case 22:
-			typ = T_array_float64.ToType()
-		}
-		ct = append(ct, typ)
-	}
-	return
+var columnTypes = []Type{
+	T_int8.ToType(),
+	T_int16.ToType(),
+	T_int32.ToType(),
+	T_int64.ToType(),
+	T_uint8.ToType(),
+	T_uint16.ToType(),
+	T_uint32.ToType(),
+	T_uint64.ToType(),
+	T_float32.ToType(),
+	T_float64.ToType(),
+	T_date.ToType(),
+	T_datetime.ToType(),
+	T_varchar.ToType(),
+	T_char.ToType(),
+	T_bool.ToType(),
+	T_timestamp.ToType(),
+	T_decimal64.ToType(),
+	T_decimal128.ToType(),
+	T_binary.ToType(),
+	T_varbinary.ToType(),
+	T_enum.ToType(),
+	T_array_float32.ToType(),
+	T_array_float64.ToType(),
+	T_bit.ToType(),
+}
+
+func MockColTypes() (ct []Type) {
+	// set type bool's width to 8
+	columnTypes[14].Width = 8
+	return columnTypes
 }
 
 func CompareTSTSAligned(a, b TS) int {

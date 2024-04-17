@@ -66,8 +66,11 @@ type Argument struct {
 	Types []types.Type
 	Aggs  []agg.Aggregate
 
-	info     *vm.OperatorInfo
-	children []vm.Operator
+	vm.OperatorBase
+}
+
+func (arg *Argument) GetOperatorBase() *vm.OperatorBase {
+	return &arg.OperatorBase
 }
 
 func init() {
@@ -83,7 +86,7 @@ func init() {
 	)
 }
 
-func (arg Argument) Name() string {
+func (arg Argument) TypeName() string {
 	return argName
 }
 
@@ -97,22 +100,14 @@ func (arg *Argument) Release() {
 	}
 }
 
-func (arg *Argument) SetInfo(info *vm.OperatorInfo) {
-	arg.info = info
-}
-
-func (arg *Argument) AppendChild(child vm.Operator) {
-	arg.children = append(arg.children, child)
-}
-
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := arg.ctr
 	if ctr != nil {
 		mp := proc.Mp()
 		ctr.FreeMergeTypeOperator(pipelineFailed)
 		ctr.cleanBatch(mp)
-		ctr.cleanAggVectors(mp)
-		ctr.cleanOrderVectors(mp)
+		ctr.cleanAggVectors()
+		ctr.cleanOrderVectors()
 	}
 }
 
@@ -123,20 +118,22 @@ func (ctr *container) cleanBatch(mp *mpool.MPool) {
 	}
 }
 
-func (ctr *container) cleanOrderVectors(_ *mpool.MPool) {
+func (ctr *container) cleanOrderVectors() {
 	for i := range ctr.orderVecs {
 		if ctr.orderVecs[i].executor != nil {
 			ctr.orderVecs[i].executor.Free()
 		}
 		ctr.orderVecs[i].vec = nil
 	}
+	ctr.orderVecs = nil
 }
 
-func (ctr *container) cleanAggVectors(_ *mpool.MPool) {
+func (ctr *container) cleanAggVectors() {
 	for i := range ctr.aggVecs {
 		if ctr.aggVecs[i].executor != nil {
 			ctr.aggVecs[i].executor.Free()
 		}
 		ctr.aggVecs[i].vec = nil
 	}
+	ctr.aggVecs = nil
 }

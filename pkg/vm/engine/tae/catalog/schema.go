@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"io"
 	"sort"
+	"strings"
 	"time"
 
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
@@ -134,6 +135,8 @@ type Schema struct {
 	SeqnumMap  map[uint16]int // seqnum -> logical idx
 	SortKey    *SortKey
 	PhyAddrKey *ColDef
+
+	isSecondaryIndexTable bool
 }
 
 func NewEmptySchema(name string) *Schema {
@@ -159,6 +162,10 @@ func (s *Schema) Clone() *Schema {
 	return ns
 }
 
+func (s *Schema) IsSecondaryIndexTable() bool {
+	return s.isSecondaryIndexTable
+}
+
 // ApplyAlterTable modify the schema in place. Unless you know what you are doing, it is
 // recommended to close schema first and then apply alter table.
 func (s *Schema) ApplyAlterTable(req *apipb.AlterTableReq) error {
@@ -168,11 +175,35 @@ func (s *Schema) ApplyAlterTable(req *apipb.AlterTableReq) error {
 		s.Extra.MaxRowsMergedObj = p.GetMaxObjOnerun()
 		s.Extra.MinRowsQuailifed = p.GetMinRowsQuailifed()
 		s.Extra.MaxObjOnerun = p.GetMaxObjOnerun()
+		s.Extra.MinCnMergeSize = p.GetMinCnMergeSize()
 		s.Extra.Hints = p.GetHints()
 	case apipb.AlterKind_UpdateConstraint:
 		s.Constraint = req.GetUpdateCstr().GetConstraints()
 	case apipb.AlterKind_UpdateComment:
 		s.Comment = req.GetUpdateComment().GetComment()
+	case apipb.AlterKind_RenameColumn:
+		rename := req.GetRenameCol()
+		var targetCol *ColDef
+		for _, def := range s.ColDefs {
+			if def.Name == rename.NewName {
+				return moerr.NewInternalErrorNoCtx("duplicate column %q", def.Name)
+			}
+			if def.Name == rename.OldName {
+				targetCol = def
+			}
+		}
+		if targetCol == nil {
+			return moerr.NewInternalErrorNoCtx("column %q not found", rename.OldName)
+		}
+		if targetCol.SeqNum != uint16(rename.SequenceNum) {
+			return moerr.NewInternalErrorNoCtx("unmatched seqnumn: %d != %d", targetCol.SeqNum, rename.SequenceNum)
+		}
+		targetCol.Name = rename.NewName
+		// a -> b, z -> a, m -> z
+		// only m column deletion should be sent to cn. a and z can be seen as update according to pk, <tid-colname>
+		s.Extra.DroppedAttrs = append(s.Extra.DroppedAttrs, rename.OldName)
+		s.removeDroppedName(rename.NewName)
+		logutil.Infof("[Alter] rename column %s %s %d", rename.OldName, rename.NewName, targetCol.SeqNum)
 	case apipb.AlterKind_AddColumn:
 		add := req.GetAddColumn()
 		logutil.Infof("[Alter] add column %s(%s)@%d", add.Column.Name, types.T(add.Column.Typ.Id), add.InsertPosition)
@@ -694,7 +725,7 @@ func colDefFromPlan(col *plan.ColDef, idx int, seqnum uint16) *ColDef {
 		Name:   col.Name,
 		Idx:    idx,
 		SeqNum: seqnum,
-		Type:   vector.ProtoTypeToType(col.Typ),
+		Type:   vector.ProtoTypeToType(&col.Typ),
 		Hidden: col.Hidden,
 		// PhyAddr false
 		// Null  later
@@ -897,6 +928,7 @@ func (s *Schema) Finalize(withoutPhyAddr bool) (err error) {
 		// schema has a primary key or a cluster by key, or nothing for now
 		panic("schema: multiple sort keys")
 	}
+	s.isSecondaryIndexTable = strings.Contains(s.Name, "__mo_index_secondary_")
 	return
 }
 
@@ -946,6 +978,21 @@ func MockSchema(colCnt int, pkIdx int) *Schema {
 			_ = schema.AppendCol(fmt.Sprintf("%s%d", prefix, i), types.T_int32.ToType())
 		}
 	}
+	schema.Constraint, _ = constraintDef.MarshalBinary()
+
+	_ = schema.Finalize(false)
+	return schema
+}
+
+func MockSnapShotSchema() *Schema {
+	schema := NewEmptySchema("mo_snapshot")
+
+	constraintDef := &engine.ConstraintDef{
+		Cts: make([]engine.Constraint, 0),
+	}
+
+	schema.AppendCol("tid", types.T_uint64.ToType())
+	schema.AppendCol("ts", types.T_TS.ToType())
 	schema.Constraint, _ = constraintDef.MarshalBinary()
 
 	_ = schema.Finalize(false)

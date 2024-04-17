@@ -50,6 +50,29 @@ func ToTNVector(v *movec.Vector, mp *mpool.MPool) Vector {
 	return vec
 }
 
+func CloneVector(src *movec.Vector, mp *mpool.MPool, vp *VectorPool) (Vector, error) {
+	var vec Vector
+	if vp != nil {
+		vec = vp.GetVector(src.GetType())
+		mp = vp.GetAllocator()
+		if err := src.CloneWindowTo(
+			vec.GetDownstreamVector(), 0, src.Length(), mp,
+		); err != nil {
+			vec.Close()
+			return nil, err
+		}
+	} else {
+		vec = MakeVector(*src.GetType(), mp)
+		if v, err := src.CloneWindow(0, src.Length(), mp); err != nil {
+			vec.Close()
+			return nil, err
+		} else {
+			vec.setDownstreamVector(v)
+		}
+	}
+	return vec, nil
+}
+
 // ### Get Functions
 
 // getNonNullValue Please don't merge it with GetValue(). Used in Vector for getting NonNullValue.
@@ -58,6 +81,8 @@ func getNonNullValue(col *movec.Vector, row uint32) any {
 	switch col.GetType().Oid {
 	case types.T_bool:
 		return movec.GetFixedAt[bool](col, int(row))
+	case types.T_bit:
+		return movec.GetFixedAt[uint64](col, int(row))
 	case types.T_int8:
 		return movec.GetFixedAt[int8](col, int(row))
 	case types.T_int16:
@@ -147,6 +172,8 @@ func UpdateValue(col *movec.Vector, row uint32, val any, isNull bool, mp *mpool.
 	switch col.GetType().Oid {
 	case types.T_bool:
 		GenericUpdateFixedValue[bool](col, row, val, isNull, mp)
+	case types.T_bit:
+		GenericUpdateFixedValue[uint64](col, row, val, isNull, mp)
 	case types.T_int8:
 		GenericUpdateFixedValue[int8](col, row, val, isNull, mp)
 	case types.T_int16:
@@ -288,6 +315,18 @@ func ForeachVectorWindow(
 		var op func(bool, bool, int) error
 		if op1 != nil {
 			op = op1.(func(bool, bool, int) error)
+		}
+		return ForeachWindowFixed(
+			col,
+			start,
+			length,
+			op,
+			op2,
+			sel)
+	case types.T_bit:
+		var op func(uint64, bool, int) error
+		if op1 != nil {
+			op = op1.(func(uint64, bool, int) error)
 		}
 		return ForeachWindowFixed(
 			col,

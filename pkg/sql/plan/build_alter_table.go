@@ -118,7 +118,7 @@ func buildAlterTableCopy(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, err
 			return nil, moerr.NewInvalidInput(ctx.GetContext(), "Do not support this stmt now. %v", spec)
 		case *tree.TableOptionComment:
 			return nil, moerr.NewInvalidInput(ctx.GetContext(), "Do not support this stmt now. %v", spec)
-		case *tree.AlterTableName:
+		case *tree.AlterOptionTableName:
 			return nil, moerr.NewInvalidInput(ctx.GetContext(), "Do not support this stmt now. %v", spec)
 		case *tree.AlterAddCol:
 			err = AddColumn(ctx, alterTablePlan, option, alterTableCtx)
@@ -142,7 +142,7 @@ func buildAlterTableCopy(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, err
 		}
 	}
 
-	createTmpDdl, err := restoreDDL(ctx, alterTablePlan.CopyTableDef, schemaName, alterTableCtx.copyTableName, true)
+	createTmpDdl, err := restoreDDL(ctx, alterTablePlan.CopyTableDef, schemaName, alterTableCtx.copyTableName, false)
 	if err != nil {
 		return nil, err
 	}
@@ -167,7 +167,9 @@ func buildAlterTableCopy(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, err
 	alterTablePlan.InsertDataSql = insertDml
 
 	alterTablePlan.ChangeTblColIdMap = alterTableCtx.changColDefMap
-
+	alterTablePlan.UpdateFkSqls = append(alterTablePlan.UpdateFkSqls, alterTableCtx.UpdateSqls...)
+	//delete copy table records from mo_catalog.mo_foreign_keys
+	alterTablePlan.UpdateFkSqls = append(alterTablePlan.UpdateFkSqls, getSqlForDeleteTable(schemaName, alterTableCtx.copyTableName))
 	return &Plan{
 		Plan: &plan.Plan_Ddl{
 			Ddl: &plan.DataDefinition{
@@ -246,11 +248,26 @@ func restoreDDL(ctx CompilerContext, tableDef *TableDef, schemaName string, tblN
 			typeStr = fmt.Sprintf("DECIMAL(%d,%d)", col.Typ.Width, col.Typ.Scale)
 		}
 		if typ.Oid == types.T_varchar || typ.Oid == types.T_char ||
-			typ.Oid == types.T_binary || typ.Oid == types.T_varbinary || typ.Oid.IsArrayRelate() {
+			typ.Oid == types.T_binary || typ.Oid == types.T_varbinary ||
+			typ.Oid.IsArrayRelate() || typ.Oid == types.T_bit {
 			typeStr += fmt.Sprintf("(%d)", col.Typ.Width)
 		}
 		if typ.Oid.IsFloat() && col.Typ.Scale != -1 {
 			typeStr += fmt.Sprintf("(%d,%d)", col.Typ.Width, col.Typ.Scale)
+		}
+
+		if typ.Oid.IsEnum() {
+			enumStr := col.GetTyp().Enumvalues
+			enums := strings.Split(enumStr, ",")
+			enumVal := ""
+			for i, enum := range enums {
+				if i == 0 {
+					enumVal += fmt.Sprintf("'%s'", enum)
+				} else {
+					enumVal += fmt.Sprintf(",'%s'", enum)
+				}
+			}
+			typeStr = fmt.Sprintf("ENUM(%s)", enumVal)
 		}
 
 		updateOpt := ""
@@ -429,29 +446,52 @@ func restoreDDL(ctx CompilerContext, tableDef *TableDef, schemaName string, tblN
 		}
 		createStr += fmt.Sprintf(" INFILE{'FILEPATH'='%s','COMPRESSION'='%s','FORMAT'='%s','JSONDATA'='%s'}", param.Filepath, param.CompressType, param.Format, param.JsonData)
 
-		escapedby := ""
-		if param.Tail.Fields.EscapedBy != byte(0) {
-			escapedby = fmt.Sprintf(" ESCAPED BY '%c'", param.Tail.Fields.EscapedBy)
+		fields := " FIELDS"
+		if param.Tail.Fields.Terminated != nil {
+			if param.Tail.Fields.Terminated.Value == "" {
+				fields += " TERMINATED BY \"\""
+			} else {
+				fields += fmt.Sprintf(" TERMINATED BY '%s'", param.Tail.Fields.Terminated.Value)
+			}
+		}
+		if param.Tail.Fields.EnclosedBy != nil {
+			if param.Tail.Fields.EnclosedBy.Value == byte(0) {
+				fields += " ENCLOSED BY ''"
+			} else if param.Tail.Fields.EnclosedBy.Value == byte('\\') {
+				fields += " ENCLOSED BY '\\\\'"
+			} else {
+				fields += fmt.Sprintf(" ENCLOSED BY '%c'", param.Tail.Fields.EnclosedBy.Value)
+			}
+		}
+		if param.Tail.Fields.EscapedBy != nil {
+			if param.Tail.Fields.EscapedBy.Value == byte(0) {
+				fields += " ESCAPED BY ''"
+			} else if param.Tail.Fields.EscapedBy.Value == byte('\\') {
+				fields += " ESCAPED BY '\\\\'"
+			} else {
+				fields += fmt.Sprintf(" ESCAPED BY '%c'", param.Tail.Fields.EscapedBy.Value)
+			}
 		}
 
-		line := ""
+		line := " LINES"
 		if param.Tail.Lines.StartingBy != "" {
-			line = fmt.Sprintf(" LINE STARTING BY '%s'", param.Tail.Lines.StartingBy)
+			line += fmt.Sprintf(" STARTING BY '%s'", param.Tail.Lines.StartingBy)
 		}
-		lineEnd := ""
-		if param.Tail.Lines.TerminatedBy == "\n" || param.Tail.Lines.TerminatedBy == "\r\n" {
-			lineEnd = " TERMINATED BY '\\\\n'"
-		} else {
-			lineEnd = fmt.Sprintf(" TERMINATED BY '%s'", param.Tail.Lines.TerminatedBy)
-		}
-		if len(line) > 0 {
-			line += lineEnd
-		} else {
-			line = " LINES" + lineEnd
+		if param.Tail.Lines.TerminatedBy != nil {
+			if param.Tail.Lines.TerminatedBy.Value == "\n" || param.Tail.Lines.TerminatedBy.Value == "\r\n" {
+				line += " TERMINATED BY '\\\\n'"
+			} else {
+				line += fmt.Sprintf(" TERMINATED BY '%s'", param.Tail.Lines.TerminatedBy)
+			}
 		}
 
-		createStr += fmt.Sprintf(" FIELDS TERMINATED BY '%s' ENCLOSED BY '%c'%s", param.Tail.Fields.Terminated, rune(param.Tail.Fields.EnclosedBy), escapedby)
-		createStr += line
+		if fields != " FIELDS" {
+			createStr += fields
+		}
+		if line != " LINES" {
+			createStr += line
+		}
+
 		if param.Tail.IgnoredLines > 0 {
 			createStr += fmt.Sprintf(" IGNORE %d LINES", param.Tail.IgnoredLines)
 		}
@@ -465,7 +505,12 @@ func restoreDDL(ctx CompilerContext, tableDef *TableDef, schemaName string, tblN
 		buf.WriteRune(ch)
 	}
 	sql := buf.String()
-	_, err := getRewriteSQLStmt(ctx, sql)
+	stmt, err := getRewriteSQLStmt(ctx, sql)
+	defer func() {
+		if stmt != nil {
+			stmt.Free()
+		}
+	}()
 	if err != nil {
 		return "", err
 	}
@@ -528,6 +573,7 @@ type AlterTableContext struct {
 	copyTableName   string
 	// key oldColId -> new ColDef
 	changColDefMap map[uint64]*ColDef
+	UpdateSqls     []string
 }
 
 type exprType int
@@ -617,7 +663,7 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 		return nil, moerr.NewInvalidInput(ctx.GetContext(), "can't add/drop column for partition table now")
 	}
 
-	if stmt.PartitionOptions != nil {
+	if stmt.PartitionOption != nil {
 		if stmt.Options != nil {
 			return nil, moerr.NewParseError(ctx.GetContext(), "Unsupported multi schema change")
 		}
@@ -672,7 +718,7 @@ func ResolveAlterTableAlgorithm(ctx context.Context, validAlterSpecs []tree.Alte
 			algorithm = plan.AlterTable_INPLACE
 		case *tree.TableOptionComment:
 			algorithm = plan.AlterTable_INPLACE
-		case *tree.AlterTableName:
+		case *tree.AlterOptionTableName:
 			algorithm = plan.AlterTable_INPLACE
 		case *tree.AlterAddCol:
 			algorithm = plan.AlterTable_COPY
@@ -713,7 +759,8 @@ func buildNotNullColumnVal(col *ColDef) string {
 		col.Typ.Id == int32(types.T_decimal64) ||
 		col.Typ.Id == int32(types.T_decimal128) ||
 		col.Typ.Id == int32(types.T_decimal256) ||
-		col.Typ.Id == int32(types.T_bool) {
+		col.Typ.Id == int32(types.T_bool) ||
+		col.Typ.Id == int32(types.T_bit) {
 		defaultValue = "0"
 	} else if col.Typ.Id == int32(types.T_varchar) ||
 		col.Typ.Id == int32(types.T_char) ||
@@ -735,6 +782,14 @@ func buildNotNullColumnVal(col *ColDef) string {
 	} else if col.Typ.Id == int32(types.T_enum) {
 		enumvalues := strings.Split(col.Typ.Enumvalues, ",")
 		defaultValue = enumvalues[0]
+	} else if col.Typ.Id == int32(types.T_array_float32) || col.Typ.Id == int32(types.T_array_float64) {
+		if col.Typ.Width > 0 {
+			zerosWithCommas := strings.Repeat("0,", int(col.Typ.Width)-1)
+			arrayAsString := zerosWithCommas + "0" // final zero
+			defaultValue = fmt.Sprintf("'[%s]'", arrayAsString)
+		} else {
+			defaultValue = "'[]'"
+		}
 	} else {
 		defaultValue = "null"
 	}

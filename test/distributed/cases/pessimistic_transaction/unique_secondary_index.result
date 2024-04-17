@@ -218,7 +218,7 @@ KEY `org_no` (`org_no`)
 show create table t_code_rule;
 Table    Create Table
 t_code_rule    CREATE TABLE `t_code_rule` (\n`code_id` BIGINT NOT NULL,\n`code_no` VARCHAR(50) NOT NULL,\n`org_no` VARCHAR(50) NOT NULL,\n`org_name` VARCHAR(50) NOT NULL,\n`ancestors` VARCHAR(255) NOT NULL,\n`code_rule_no` VARCHAR(50) NOT NULL,\n`code_rule_name` VARCHAR(50) NOT NULL,\n`code_name` VARCHAR(50) NOT NULL,\n`code_type` INT DEFAULT NULL,\n`split` VARCHAR(50) DEFAULT null,\n`remark` VARCHAR(255) DEFAULT NULL,\n`create_time` DATETIME NOT NULL,\n`create_user` VARCHAR(50) DEFAULT null,\n`last_update_time` DATETIME DEFAULT null,\n`last_update_user` VARCHAR(50) DEFAULT null,\n`is_system_code` VARCHAR(20) DEFAULT 'N',\nPRIMARY KEY (`code_id`),\nUNIQUE KEY `code_type` (`code_type`),\nKEY `code_no` (`code_no`),\nKEY `code_rule_no` (`code_rule_no`),\nKEY `org_no` (`org_no`)\n)
-load data infile  '$resources/load_data/unique_index_file.csv' into table t_code_rule ;
+load data infile  '$resources/load_data/unique_index_file.csv' into table t_code_rule  fields terminated by ',';
 select code_id,code_type,code_no,code_rule_no,org_no from t_code_rule;
 code_id    code_type    code_no    code_rule_no    org_no
 1000    30    18723    0000234    yy01
@@ -232,12 +232,12 @@ code_id    code_type    code_no    code_rule_no    org_no
 1008    null    2378    0000242    yy09
 1009    39    8744    0000243    yy10
 truncate table t_code_rule;
-load data infile  '$resources/load_data/unique_index_duplicate.csv' into table t_code_rule;
+load data infile  '$resources/load_data/unique_index_duplicate.csv' into table t_code_rule fields terminated by ',';
 Duplicate entry '30' for key '__mo_index_idx_col'
 select code_id,code_type,code_no,code_rule_no,org_no from t_code_rule;
 code_id    code_type    code_no    code_rule_no    org_no
 create table index_temp( col1 bigint(20) NOT NULL ,col2 varchar(50) NOT NULL,col3 varchar(50) NOT NULL,col4 varchar(50) NOT NULL,col5 varchar(255) NOT NULL,col6 varchar(50) NOT NULL,col7 varchar(50) NOT NULL,col8 varchar(50) NOT NULL,col9 int(11) ,col10 varchar(50) DEFAULT NULL,col11 varchar(255),col12 datetime NOT NULL,col13 varchar(50) DEFAULT NULL,col14 datetime DEFAULT NULL,col15 varchar(50) DEFAULT NULL,col16 varchar(20)  NOT NULL DEFAULT 'N');
-load data infile  '$resources/load_data/unique_index_file.csv' into table index_temp;
+load data infile  '$resources/load_data/unique_index_file.csv' into table index_temp fields terminated by ',';
 insert into t_code_rule select * from index_temp;
 select code_id,code_type,code_no,code_rule_no,org_no from t_code_rule;
 code_id    code_type    code_no    code_rule_no    org_no
@@ -252,7 +252,7 @@ code_id    code_type    code_no    code_rule_no    org_no
 1008    null    2378    0000242    yy09
 1009    39    8744    0000243    yy10
 truncate table index_temp;
-load data infile  '$resources/load_data/unique_index_duplicate.csv' into table index_temp;
+load data infile  '$resources/load_data/unique_index_duplicate.csv' into table index_temp fields terminated by ',';
 insert into t_code_rule select * from index_temp;
 (Duplicate entry ')([\d\D]*)(' for key '__mo_index_idx_col')
 create table index_table_04 (col1 bigint not null auto_increment,col2 varchar(25),col3 int,col4 varchar(50),primary key (col1),unique key m1(col2,col3),key num_id(col4));
@@ -547,9 +547,9 @@ col1    col2    col3    col4
 4    null    null    13
 drop index m2_index on create_index_18;
 create unique index m3_index on create_index_18(col2);
-Duplicate entry 'apple' for key 'col2'
+Duplicate entry 'apple' for key '__mo_index_idx_col'
 create unique index m4_index on create_index_18(col3);
-Duplicate entry '2' for key 'col3'
+Duplicate entry '2' for key '__mo_index_idx_col'
 create unique index m5_index on create_index_18(col4);
 select * from create_index_18;
 col1    col2    col3    col4
@@ -657,7 +657,6 @@ drop index varchar_index on trans_index_01;
 insert into trans_index_01 values (1,'13456789872',20.23,'5678'),(2,'13456789872',100.00,'23'),(3,NULL,100.00,'23');
 insert into trans_index_01 values (1,'13456789872',20.23,'5678'),(2,'13456789872',100.00,'23'),(3,NULL,100.00,'23');
 Duplicate entry '1' for key 'col1'
-Previous DML conflicts with existing constraints or data format. This transaction has to be aborted
 select * from trans_index_01;
 col1    col2    col3    col4
 1    13456789872    20.23    5678

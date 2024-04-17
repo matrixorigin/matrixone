@@ -54,7 +54,7 @@ func (i *inspectContext) String() string   { return "" }
 func (i *inspectContext) Set(string) error { return nil }
 func (i *inspectContext) Type() string     { return "ictx" }
 
-func initCommand(ctx context.Context, inspectCtx *inspectContext) *cobra.Command {
+func initCommand(_ context.Context, inspectCtx *inspectContext) *cobra.Command {
 	rootCmd := &cobra.Command{
 		Use: "inspect",
 	}
@@ -73,7 +73,7 @@ func initCommand(ctx context.Context, inspectCtx *inspectContext) *cobra.Command
 	object := &objStatArg{}
 	rootCmd.AddCommand(object.PrepareCommand())
 
-	policy := &compactPolicyArg{}
+	policy := &mergePolicyArg{}
 	rootCmd.AddCommand(policy.PrepareCommand())
 
 	mmerge := &manuallyMergeArg{}
@@ -87,6 +87,12 @@ func initCommand(ctx context.Context, inspectCtx *inspectContext) *cobra.Command
 
 	storage := &storageUsageHistoryArg{}
 	rootCmd.AddCommand(storage.PrepareCommand())
+
+	renamecol := &RenameColArg{}
+	rootCmd.AddCommand(renamecol.PrepareCommand())
+
+	pstatus := &PolicyStatus{}
+	rootCmd.AddCommand(pstatus.PrepareCommand())
 
 	return rootCmd
 }
@@ -141,21 +147,27 @@ func (c *catalogArg) PrepareCommand() *cobra.Command {
 	return catalogCmd
 }
 
+func switchPPL(count int) common.PPLevel {
+	switch count {
+	case 0:
+		return common.PPL0
+	case 1:
+		return common.PPL1
+	case 2:
+		return common.PPL2
+	case 3:
+		return common.PPL3
+	case 4:
+		return common.PPL4
+	default:
+		return common.PPL1
+	}
+}
+
 func (c *catalogArg) FromCommand(cmd *cobra.Command) (err error) {
 	c.ctx = cmd.Flag("ictx").Value.(*inspectContext)
 	count, _ := cmd.Flags().GetCount("verbose")
-	var lv common.PPLevel
-	switch count {
-	case 0:
-		lv = common.PPL0
-	case 1:
-		lv = common.PPL1
-	case 2:
-		lv = common.PPL2
-	case 3:
-		lv = common.PPL3
-	}
-	c.verbose = lv
+	c.verbose = switchPPL(count)
 
 	address, _ := cmd.Flags().GetString("target")
 	c.tbl, err = parseTableTarget(address, c.ctx.acinfo, c.ctx.db)
@@ -177,7 +189,7 @@ func (c *catalogArg) FromCommand(cmd *cobra.Command) (err error) {
 func (c *catalogArg) String() string {
 	t := "*"
 	if c.tbl != nil {
-		t = fmt.Sprintf("%d-%s", c.tbl.ID, c.tbl.GetLastestSchema().Name)
+		t = fmt.Sprintf("%d-%s", c.tbl.ID, c.tbl.GetLastestSchemaLocked().Name)
 	}
 	f := "nil"
 	if c.outfile != nil {
@@ -230,18 +242,7 @@ func (c *objStatArg) FromCommand(cmd *cobra.Command) (err error) {
 	c.start, _ = cmd.Flags().GetInt("start")
 	c.end, _ = cmd.Flags().GetInt("end")
 	count, _ := cmd.Flags().GetCount("verbose")
-	var lv common.PPLevel
-	switch count {
-	case 0:
-		lv = common.PPL0
-	case 1:
-		lv = common.PPL1
-	case 2:
-		lv = common.PPL2
-	case 3:
-		lv = common.PPL3
-	}
-	c.verbose = lv
+	c.verbose = switchPPL(count)
 	address, _ := cmd.Flags().GetString("target")
 	c.tbl, err = parseTableTarget(address, c.ctx.acinfo, c.ctx.db)
 	if err != nil {
@@ -253,7 +254,7 @@ func (c *objStatArg) FromCommand(cmd *cobra.Command) (err error) {
 func (c *objStatArg) String() string {
 	t := "*"
 	if c.tbl != nil {
-		t = fmt.Sprintf("%d-%s", c.tbl.ID, c.tbl.GetLastestSchema().Name)
+		t = fmt.Sprintf("%d-%s", c.tbl.ID, c.tbl.GetLastestSchemaLocked().Name)
 	}
 	return t
 }
@@ -294,7 +295,8 @@ type storageUsageHistoryArg struct {
 		accounts     map[uint64]struct{}
 	}
 
-	transfer bool
+	transfer        bool
+	eliminateErrors bool
 }
 
 func (c *storageUsageHistoryArg) PrepareCommand() *cobra.Command {
@@ -309,6 +311,7 @@ func (c *storageUsageHistoryArg) PrepareCommand() *cobra.Command {
 	// storage usage details in ckp
 	storageUsageCmd.Flags().StringP("detail", "d", "", "format: accId{.dbName{.tableName}}")
 	storageUsageCmd.Flags().StringP("transfer", "f", "", "format: *")
+	storageUsageCmd.Flags().StringP("eliminate_errors", "e", "", "format: *")
 	return storageUsageCmd
 }
 
@@ -350,6 +353,15 @@ func (c *storageUsageHistoryArg) FromCommand(cmd *cobra.Command) (err error) {
 		}
 	}
 
+	expr, _ = cmd.Flags().GetString("eliminate_errors")
+	if expr != "" {
+		if expr == "*" {
+			c.eliminateErrors = true
+		} else {
+			return moerr.NewInvalidArgNoCtx(expr, "`storage_usage -e *` expected")
+		}
+	}
+
 	return nil
 }
 
@@ -359,7 +371,9 @@ func (c *storageUsageHistoryArg) Run() (err error) {
 	} else if c.trace != nil {
 		return storageTrace(c)
 	} else if c.transfer {
-		return storageTransfer(c)
+		return storageUsageTransfer(c)
+	} else if c.eliminateErrors {
+		return storageUsageEliminateErrors(c)
 	}
 	return moerr.NewInvalidArgNoCtx("", c.ctx.args)
 }
@@ -401,7 +415,8 @@ func (c *manualyIgnoreArg) Run() error {
 type infoArg struct {
 	ctx     *inspectContext
 	tbl     *catalog.TableEntry
-	blk     *catalog.BlockEntry
+	obj     *catalog.ObjectEntry
+	blkn    int
 	verbose common.PPLevel
 }
 
@@ -413,25 +428,14 @@ func (c *infoArg) PrepareCommand() *cobra.Command {
 	}
 	cmd.Flags().CountP("verbose", "v", "verbose level")
 	cmd.Flags().StringP("target", "t", "*", "format: table-id")
-	cmd.Flags().StringP("blk", "b", "", "format: <objectId>_<fineN>_<blkN>")
+	cmd.Flags().StringP("blk", "b", "", "format: <objectId>_<fineN>_<blkn>")
 	return cmd
 }
 
 func (c *infoArg) FromCommand(cmd *cobra.Command) (err error) {
 	c.ctx = cmd.Flag("ictx").Value.(*inspectContext)
 	count, _ := cmd.Flags().GetCount("verbose")
-	var lv common.PPLevel
-	switch count {
-	case 0:
-		lv = common.PPL0
-	case 1:
-		lv = common.PPL1
-	case 2:
-		lv = common.PPL2
-	case 3:
-		lv = common.PPL3
-	}
-	c.verbose = lv
+	c.verbose = switchPPL(count)
 
 	address, _ := cmd.Flags().GetString("target")
 	c.tbl, err = parseTableTarget(address, c.ctx.acinfo, c.ctx.db)
@@ -443,7 +447,7 @@ func (c *infoArg) FromCommand(cmd *cobra.Command) (err error) {
 	}
 
 	baddress, _ := cmd.Flags().GetString("blk")
-	c.blk, err = parseBlkTarget(baddress, c.tbl)
+	c.obj, c.blkn, err = parseBlkTarget(baddress, c.tbl)
 	if err != nil {
 		return err
 	}
@@ -454,11 +458,11 @@ func (c *infoArg) FromCommand(cmd *cobra.Command) (err error) {
 func (c *infoArg) String() string {
 	t := "*"
 	if c.tbl != nil {
-		t = fmt.Sprintf("%d-%s", c.tbl.ID, c.tbl.GetLastestSchema().Name)
+		t = fmt.Sprintf("%d-%s", c.tbl.ID, c.tbl.GetLastestSchemaLocked().Name)
 	}
 
-	if c.blk != nil {
-		t = fmt.Sprintf("%s %s", t, c.blk.ID.String())
+	if c.obj != nil {
+		t = fmt.Sprintf("%s o-%s b-%d", t, c.obj.ID.String(), c.blkn)
 	}
 
 	return fmt.Sprintf("info: %v", t)
@@ -470,15 +474,34 @@ func (c *infoArg) Run() error {
 		b.WriteString(fmt.Sprintf("last_merge: %v\n", c.tbl.Stats.GetLastMerge().String()))
 		b.WriteString(fmt.Sprintf("last_flush: %v\n", c.tbl.Stats.GetLastFlush().ToString()))
 	}
-	if c.blk != nil {
+	if c.obj != nil {
 		b.WriteRune('\n')
-		b.WriteString(fmt.Sprintf("persisted_ts: %v\n", c.blk.GetDeltaPersistedTS().ToString()))
-		r, reason := c.blk.GetBlockData().PrepareCompactInfo()
-		rows := c.blk.GetBlockData().Rows()
-		dels := c.blk.GetBlockData().GetTotalChanges()
+		b.WriteString(fmt.Sprintf("persisted_ts: %v\n", c.obj.GetObjectData().GetDeltaPersistedTS().ToString()))
+		r, reason := c.obj.GetObjectData().PrepareCompactInfo()
+		rows, err := c.obj.GetObjectData().Rows()
+		if err != nil {
+			logutil.Warnf("get object rows failed, obj: %v, err %v", c.obj.ID.String(), err)
+		}
+		dels := c.obj.GetObjectData().GetTotalChanges()
 		b.WriteString(fmt.Sprintf("prepareCompact: %v, %q\n", r, reason))
 		b.WriteString(fmt.Sprintf("left rows: %v\n", rows-dels))
-		b.WriteString(fmt.Sprintf("ppstring: %v\n", c.blk.GetBlockData().PPString(c.verbose, 0, "")))
+		b.WriteString(fmt.Sprintf("ppstring: %v\n", c.obj.GetObjectData().PPString(c.verbose, 0, "", c.blkn)))
+
+		schema := c.obj.GetSchema()
+		if schema.HasSortKey() {
+			zm, err := c.obj.GetPKZoneMap(context.Background(), c.obj.GetObjectData().GetFs().Service)
+			var zmstr string
+			if err != nil {
+				zmstr = err.Error()
+			} else if c.verbose <= common.PPL1 {
+				zmstr = zm.String()
+			} else if c.verbose == common.PPL2 {
+				zmstr = zm.StringForCompose()
+			} else {
+				zmstr = zm.StringForHex()
+			}
+			b.WriteString(fmt.Sprintf("sort key zm: %v\n", zmstr))
+		}
 	}
 	c.ctx.resp.Payload = b.Bytes()
 	return nil
@@ -538,7 +561,7 @@ func (c *manuallyMergeArg) FromCommand(cmd *cobra.Command) (err error) {
 			return moerr.NewInvalidInputNoCtx("not found object %s", o)
 		}
 		for _, obj := range objects {
-			if !obj.IsActive() || obj.IsAppendable() || obj.GetNextObjectIndex() != 1 {
+			if !obj.IsActive() || obj.IsAppendable() {
 				return moerr.NewInvalidInputNoCtx("object is deleted or not a flushed one %s", o)
 			}
 			objs = append(objs, obj)
@@ -552,7 +575,7 @@ func (c *manuallyMergeArg) FromCommand(cmd *cobra.Command) (err error) {
 func (c *manuallyMergeArg) String() string {
 	t := "*"
 	if c.tbl != nil {
-		t = fmt.Sprintf("%d-%s", c.tbl.ID, c.tbl.GetLastestSchema().Name)
+		t = fmt.Sprintf("%d-%s", c.tbl.ID, c.tbl.GetLastestSchemaLocked().Name)
 	}
 
 	b := &bytes.Buffer{}
@@ -570,21 +593,22 @@ func (c *manuallyMergeArg) Run() error {
 	}
 	c.ctx.resp.Payload = []byte(fmt.Sprintf(
 		"success. see more to run select mo_ctl('dn', 'inspect', 'object -t %s.%s')\\G",
-		c.tbl.GetDB().GetName(), c.tbl.GetLastestSchema().Name,
+		c.tbl.GetDB().GetName(), c.tbl.GetLastestSchemaLocked().Name,
 	))
 	return nil
 }
 
-type compactPolicyArg struct {
+type mergePolicyArg struct {
 	ctx              *inspectContext
 	tbl              *catalog.TableEntry
 	maxMergeObjN     int32
 	minRowsQualified int32
 	maxRowsObj       int32
+	cnMinMergeSize   int32
 	hints            []api.MergeHint
 }
 
-func (c *compactPolicyArg) PrepareCommand() *cobra.Command {
+func (c *mergePolicyArg) PrepareCommand() *cobra.Command {
 	policyCmd := &cobra.Command{
 		Use:   "policy",
 		Short: "set merge policy for table",
@@ -593,11 +617,12 @@ func (c *compactPolicyArg) PrepareCommand() *cobra.Command {
 	policyCmd.Flags().StringP("target", "t", "*", "format: db.table")
 	policyCmd.Flags().Int32P("maxMergeObjN", "r", common.DefaultMaxMergeObjN, "max number of objects merged for one run")
 	policyCmd.Flags().Int32P("minRowsQualified", "m", common.DefaultMinRowsQualified, "objects which are less than minRowsQualified will be picked up to merge")
+	policyCmd.Flags().Int32P("minCNMergeSize", "c", common.DefaultMinCNMergeSize, "Merget task whose memory occupation exceeds minCNMergeSize will be moved to CN")
 	policyCmd.Flags().Int32SliceP("mergeHints", "n", []int32{0}, "hints to merge the table")
 	return policyCmd
 }
 
-func (c *compactPolicyArg) FromCommand(cmd *cobra.Command) (err error) {
+func (c *mergePolicyArg) FromCommand(cmd *cobra.Command) (err error) {
 	c.ctx = cmd.Flag("ictx").Value.(*inspectContext)
 
 	address, _ := cmd.Flags().GetString("target")
@@ -608,6 +633,7 @@ func (c *compactPolicyArg) FromCommand(cmd *cobra.Command) (err error) {
 	c.maxMergeObjN, _ = cmd.Flags().GetInt32("maxMergeObjN")
 	c.maxRowsObj, _ = cmd.Flags().GetInt32("maxRowsObj")
 	c.minRowsQualified, _ = cmd.Flags().GetInt32("minRowsQualified")
+	c.cnMinMergeSize, _ = cmd.Flags().GetInt32("minCNMergeSize")
 	hints, _ := cmd.Flags().GetInt32Slice("mergeHints")
 	for _, h := range hints {
 		if _, ok := api.MergeHint_name[h]; !ok {
@@ -618,21 +644,22 @@ func (c *compactPolicyArg) FromCommand(cmd *cobra.Command) (err error) {
 	return nil
 }
 
-func (c *compactPolicyArg) String() string {
+func (c *mergePolicyArg) String() string {
 	t := "*"
 	if c.tbl != nil {
-		t = fmt.Sprintf("%d-%s", c.tbl.ID, c.tbl.GetLastestSchema().Name)
+		t = fmt.Sprintf("%d-%s", c.tbl.ID, c.tbl.GetLastestSchemaLocked().Name)
 	}
 	return fmt.Sprintf(
-		"(%s) maxMergeObjN: %v, minRowsQualified: %v, hints: %v",
-		t, c.maxMergeObjN, c.minRowsQualified, c.hints,
+		"(%s) maxMergeObjN: %v, minRowsQualified: %v, cnSize: %vMB, hints: %v",
+		t, c.maxMergeObjN, c.minRowsQualified, c.cnMinMergeSize, c.hints,
 	)
 }
 
-func (c *compactPolicyArg) Run() error {
+func (c *mergePolicyArg) Run() error {
 	if c.tbl == nil {
 		common.RuntimeMaxMergeObjN.Store(c.maxMergeObjN)
 		common.RuntimeMinRowsQualified.Store(c.minRowsQualified)
+		common.RuntimeMinCNMergeSize.Store(uint64(c.cnMinMergeSize) * common.Const1MBytes)
 		if c.maxMergeObjN == 0 && c.minRowsQualified == 0 {
 			merge.StopMerge.Store(true)
 		} else {
@@ -644,6 +671,7 @@ func (c *compactPolicyArg) Run() error {
 			MergeMaxOneRun:   int(c.maxMergeObjN),
 			ObjectMinRows:    int(c.minRowsQualified),
 			MaxRowsMergedObj: int(c.maxRowsObj),
+			MinCNMergeSize:   uint64(c.cnMinMergeSize) * common.Const1MBytes,
 			MergeHints:       c.hints,
 		})
 	}
@@ -651,37 +679,126 @@ func (c *compactPolicyArg) Run() error {
 	return nil
 }
 
-func parseBlkTarget(address string, tbl *catalog.TableEntry) (*catalog.BlockEntry, error) {
+type RenameColArg struct {
+	ctx              *inspectContext
+	tbl              *catalog.TableEntry
+	oldName, newName string
+	seq              int
+}
+
+func (c *RenameColArg) FromCommand(cmd *cobra.Command) (err error) {
+	c.ctx = cmd.Flag("ictx").Value.(*inspectContext)
+	c.tbl, _ = parseTableTarget(cmd.Flag("target").Value.String(), c.ctx.acinfo, c.ctx.db)
+	c.oldName, _ = cmd.Flags().GetString("old")
+	c.newName, _ = cmd.Flags().GetString("new")
+	c.seq, _ = cmd.Flags().GetInt("seq")
+	return nil
+}
+
+func (c *RenameColArg) PrepareCommand() *cobra.Command {
+	renameColCmd := &cobra.Command{
+		Use:   "rename_col",
+		Short: "rename column",
+		Run:   RunFactory(c),
+	}
+	renameColCmd.Flags().StringP("target", "t", "*", "format: db.table")
+	renameColCmd.Flags().StringP("old", "o", "", "old column name")
+	renameColCmd.Flags().StringP("new", "n", "", "new column name")
+	renameColCmd.Flags().IntP("seq", "s", 0, "column seq")
+	return renameColCmd
+}
+
+func (c *RenameColArg) String() string {
+	return fmt.Sprintf("rename col: %v, %v,%v,%v", c.tbl.GetLastestSchemaLocked().Name, c.oldName, c.newName, c.seq)
+}
+
+func (c *RenameColArg) Run() (err error) {
+	txn, _ := c.ctx.db.StartTxn(nil)
+	defer func() {
+		if err != nil {
+			txn.Rollback(context.Background())
+		}
+	}()
+	dbHdl, err := txn.GetDatabase(c.tbl.GetDB().GetName())
+	if err != nil {
+		return err
+	}
+	tblHdl, err := dbHdl.GetRelationByName(c.tbl.GetLastestSchemaLocked().Name)
+	if err != nil {
+		return err
+	}
+	err = tblHdl.AlterTable(context.Background(), api.NewRenameColumnReq(0, 0, c.oldName, c.newName, uint32(c.seq)))
+	if err != nil {
+		return err
+	}
+	return txn.Commit(context.Background())
+}
+
+type PolicyStatus struct {
+	ctx      *inspectContext
+	pruneId  uint64
+	pruneAgo time.Duration
+}
+
+func (c *PolicyStatus) FromCommand(cmd *cobra.Command) (err error) {
+	c.ctx = cmd.Flag("ictx").Value.(*inspectContext)
+	c.pruneAgo, _ = cmd.Flags().GetDuration("prune-ago")
+	c.pruneId, _ = cmd.Flags().GetUint64("prune-id")
+	return nil
+}
+
+func (c *PolicyStatus) PrepareCommand() *cobra.Command {
+	statusCmd := &cobra.Command{
+		Use:   "policy_status",
+		Short: "check cn merge status",
+		Run:   RunFactory(c),
+	}
+	statusCmd.Flags().DurationP("prune-ago", "a", 0, "prune objects by time ago")
+	statusCmd.Flags().Uint64P("prune-id", "i", 0, "prune objects by table id")
+	return statusCmd
+}
+
+func (c *PolicyStatus) String() string {
+	return fmt.Sprintf("policy status: prune %v ago, by id %v", c.pruneAgo, c.pruneId)
+}
+
+func (c *PolicyStatus) Run() (err error) {
+	if c.pruneAgo == 0 && c.pruneId == 0 {
+		c.ctx.resp.Payload = []byte(merge.ActiveCNObj.String())
+		return nil
+	} else {
+		merge.ActiveCNObj.Prune(c.pruneId, c.pruneAgo)
+		return nil
+	}
+}
+
+func parseBlkTarget(address string, tbl *catalog.TableEntry) (*catalog.ObjectEntry, int, error) {
 	if address == "" {
-		return nil, nil
+		return nil, 0, nil
 	}
 	parts := strings.Split(address, "_")
 	if len(parts) != 3 {
-		return nil, moerr.NewInvalidInputNoCtx(fmt.Sprintf("invalid block address: %q", address))
+		return nil, 0, moerr.NewInvalidInputNoCtx(fmt.Sprintf("invalid block address: %q", address))
 	}
 	uid, err := types.ParseUuid(parts[0])
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	fn, err := strconv.Atoi(parts[1])
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	bn, err := strconv.Atoi(parts[2])
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	bid := objectio.NewBlockid(&uid, uint16(fn), uint16(bn))
 	objid := bid.Object()
-	sentry, err := tbl.GetObjectByID(objid)
+	oentry, err := tbl.GetObjectByID(objid)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
-	bentry, err := sentry.GetBlockEntryByID(bid)
-	if err != nil {
-		return nil, err
-	}
-	return bentry, nil
+	return oentry, bn, nil
 }
 
 func parseTableTarget(address string, ac *db.AccessInfo, db *db.DB) (*catalog.TableEntry, error) {
@@ -1091,7 +1208,7 @@ func storageTrace(c *storageUsageHistoryArg) (err error) {
 	return nil
 }
 
-func storageTransfer(c *storageUsageHistoryArg) (err error) {
+func storageUsageTransfer(c *storageUsageHistoryArg) (err error) {
 	cnt, size, err := logtail.CorrectUsageWrongPlacement(c.ctx.db.Catalog)
 	if err != nil {
 		return err
@@ -1099,4 +1216,16 @@ func storageTransfer(c *storageUsageHistoryArg) (err error) {
 
 	c.ctx.out.Write([]byte(fmt.Sprintf("transferred %d tbl, %f mb; ", cnt, size)))
 	return
+}
+
+func storageUsageEliminateErrors(c *storageUsageHistoryArg) (err error) {
+	entries := c.ctx.db.BGCheckpointRunner.GetAllCheckpoints()
+	if len(entries) == 0 {
+		return moerr.NewNotSupportedNoCtx("please execute this cmd after at least one checkpoint has been generated")
+	}
+	end := entries[len(entries)-1].GetEnd()
+	cnt := logtail.EliminateErrorsOnCache(c.ctx.db.Catalog, end)
+	c.ctx.out.Write([]byte(fmt.Sprintf("%d tables backed to the track. ", cnt)))
+
+	return nil
 }

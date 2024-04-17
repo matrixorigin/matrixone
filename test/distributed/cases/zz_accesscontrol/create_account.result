@@ -23,6 +23,7 @@ drop account if exists user_strip_01;
 drop account if exists account_1;
 drop account if exists aaa;
 drop account if exists account;
+drop account if exists ccc;
 create account `test@123456` ADMIN_NAME 'admin' IDENTIFIED BY '123456';
 internal error: the name "test@123456" is invalid
 select account_name from mo_catalog.mo_account where account_name='test@123456';
@@ -170,6 +171,7 @@ mo_mysql_compatibility_mode
 mo_pubs
 mo_stored_procedure
 mo_stages
+mo_snapshots
 mo_database
 mo_columns
 mo_sessions
@@ -178,6 +180,7 @@ mo_locks
 mo_variables
 mo_transactions
 mo_cache
+mo_foreign_keys
 select user_name,authentication_string,owner from mo_user;
 user_name    authentication_string    owner
 admin    *6BB4837EB74329105EE4568DDA7DC67ED2CA2AD9    2
@@ -234,6 +237,24 @@ create account if not exists accout_Xingming_insert ADMIN_NAME 'root' IDENTIFIED
 select account_name from mo_catalog.mo_account where account_name='accout_xingming_insert';
 account_name
 accout_xingming_insert
+PREPARE s1 FROM "create account ? ADMIN_NAME ? IDENTIFIED BY ?";
+set @a_var = 'ccc';
+set @b_var = 'admin';
+set @c_var = '111';
+EXECUTE s1 USING @a_var, @b_var, @c_var;
+DEALLOCATE PREPARE s1;
+select account_name from mo_catalog.mo_account where account_name='ccc';
+account_name
+ccc
+drop account ccc;
+PREPARE s1 FROM "create account ? ADMIN_NAME 'admin' IDENTIFIED BY ?";
+set @a_var = 'ccc';
+set @c_var = '222';
+EXECUTE s1 USING @a_var, @c_var;
+DEALLOCATE PREPARE s1;
+select 1;
+1
+1
 drop account if exists `test@123456`;
 drop account if exists testaccount;
 drop account if exists 123_acc;
@@ -258,4 +279,5 @@ drop account if exists user_strip_01;
 drop account if exists account_1;
 drop account if exists aaa;
 drop account if exists account;
+drop account if exists ccc;
 set global enable_privilege_cache = on;

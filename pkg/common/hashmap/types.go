@@ -74,7 +74,8 @@ type JoinMap struct {
 	ihm     *IntHashMap
 	hasNull bool
 
-	isDup bool
+	isDup            bool
+	runtimeFilter_In bool
 }
 
 // StrHashMap key is []byte, value is an uint64 value (starting from 1)

@@ -48,6 +48,7 @@ func init() {
 	initTraceMetrics()
 	initProxyMetrics()
 	initFrontendMetrics()
+	initPipelineMetrics()
 
 	registry.MustRegister(HeartbeatHistogram)
 	registry.MustRegister(HeartbeatFailureCounter)
@@ -157,6 +158,7 @@ func initRPCMetrics() {
 
 func initTraceMetrics() {
 	registry.MustRegister(traceCollectorDurationHistogram)
+	registry.MustRegister(traceNegativeCUCounter)
 }
 
 func initProxyMetrics() {
@@ -172,6 +174,12 @@ func initProxyMetrics() {
 
 func initFrontendMetrics() {
 	registry.MustRegister(acceptConnDurationHistogram)
+	registry.MustRegister(routineCounter)
+	registry.MustRegister(requestCounter)
+}
+
+func initPipelineMetrics() {
+	registry.MustRegister(PipelineServerDurationHistogram)
 }
 
 func getDurationBuckets() []float64 {

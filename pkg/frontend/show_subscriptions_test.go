@@ -22,14 +22,15 @@ import (
 	"time"
 
 	"github.com/golang/mock/gomock"
+	"github.com/prashantv/gostub"
+	"github.com/stretchr/testify/require"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/prashantv/gostub"
-	"github.com/stretchr/testify/require"
 )
 
 type mockedBackgroundHandler struct {
@@ -114,7 +115,7 @@ func (m *mockedBackgroundHandler) init(mp *mpool.MPool) {
 		"create database sub4 from account1 publication pub4",
 	}, nil, mp)
 	v11 := vector.NewVec(types.T_timestamp.ToType())
-	_ = vector.AppendFixedList(v11, []int64{1234568, 4234568}, nil, mp)
+	_ = vector.AppendFixedList(v11, []types.Timestamp{1234568, 4234568}, nil, mp)
 	b = &batch.Batch{Vecs: []*vector.Vector{v9, v10, v11}}
 	b.SetRowCount(2)
 	m.subBatches = []*batch.Batch{b}
@@ -164,11 +165,13 @@ func (m *mockedBackgroundHandler) initLike(mp *mpool.MPool) {
 		"create database sub4 from account1 publication pub4",
 	}, nil, mp)
 	v11 := vector.NewVec(types.T_timestamp.ToType())
-	_ = vector.AppendFixedList(v11, []int64{1234568, 4234568}, nil, mp)
+	_ = vector.AppendFixedList(v11, []types.Timestamp{1234568, 4234568}, nil, mp)
 	b = &batch.Batch{Vecs: []*vector.Vector{v9, v10, v11}}
 	b.SetRowCount(2)
 	m.subBatches = []*batch.Batch{b}
 }
+
+func (m *mockedBackgroundHandler) Clear() {}
 
 var _ BackgroundExec = &mockedBackgroundHandler{}
 
@@ -194,6 +197,7 @@ func TestDoShowSubscriptions(t *testing.T) {
 	ses.SetTimeZone(time.UTC)
 	ses.SetTenantInfo(tenant)
 	ses.SetMysqlResultSet(&MysqlResultSet{})
+	ses.connectCtx = ctx
 	defer ses.Close()
 
 	mp := ses.GetMemPool()

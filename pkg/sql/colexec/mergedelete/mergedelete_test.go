@@ -56,6 +56,8 @@ func TestMergeDelete(t *testing.T) {
 	}
 	bytes, err := metaLocBat0.MarshalBinary()
 	require.Nil(t, err)
+
+	vcu32, _ := vector.NewConstFixed(types.T_uint32.ToType(), uint32(15), 1, proc.GetMPool())
 	batch1 := &batch.Batch{
 		Attrs: []string{
 			catalog.BlockMeta_Delete_ID,
@@ -69,7 +71,7 @@ func TestMergeDelete(t *testing.T) {
 			testutil.MakeTextVector([]string{string(bytes)}, nil),
 			testutil.MakeInt8Vector([]int8{deletion.RawBatchOffset}, nil),
 			testutil.MakeInt32Vector([]int32{0}, nil),
-			vector.NewConstFixed(types.T_uint32.ToType(), uint32(15), 1, proc.GetMPool()),
+			vcu32,
 		},
 	}
 	batch1.SetRowCount(1)
@@ -123,6 +125,8 @@ func TestMergeDelete(t *testing.T) {
 	}
 	bytes3, err := metaLocBat3.MarshalBinary()
 	require.Nil(t, err)
+
+	vcu32_2, _ := vector.NewConstFixed(types.T_uint32.ToType(), uint32(45), 3, proc.GetMPool())
 	batch2 := &batch.Batch{
 		Attrs: []string{
 			catalog.BlockMeta_Delete_ID,
@@ -136,7 +140,7 @@ func TestMergeDelete(t *testing.T) {
 			testutil.MakeTextVector([]string{string(bytes1), string(bytes2), string(bytes3)}, nil),
 			testutil.MakeInt8Vector([]int8{deletion.RawRowIdBatch, deletion.CNBlockOffset, deletion.FlushDeltaLoc}, nil),
 			testutil.MakeInt32Vector([]int32{0, 0, 0}, nil),
-			vector.NewConstFixed(types.T_uint32.ToType(), uint32(45), 3, proc.GetMPool()),
+			vcu32_2,
 		},
 	}
 	batch2.SetRowCount(3)
@@ -144,14 +148,16 @@ func TestMergeDelete(t *testing.T) {
 	argument1 := Argument{
 		DelSource:    &mockRelation{},
 		AffectedRows: 0,
-		info: &vm.OperatorInfo{
-			Idx:     0,
-			IsFirst: false,
-			IsLast:  false,
+		OperatorBase: vm.OperatorBase{
+			OperatorInfo: vm.OperatorInfo{
+				Idx:     0,
+				IsFirst: false,
+				IsLast:  false,
+			},
 		},
 	}
 
-	argument1.Prepare(proc)
+	require.NoError(t, argument1.Prepare(proc))
 	resetChildren(&argument1, batch1)
 	_, err = argument1.Call(proc)
 	require.NoError(t, err)
@@ -206,15 +212,10 @@ func TestMergeDelete(t *testing.T) {
 }
 
 func resetChildren(arg *Argument, bat *batch.Batch) {
-	if len(arg.children) == 0 {
-		arg.AppendChild(&value_scan.Argument{
-			Batchs: []*batch.Batch{bat},
+	arg.SetChildren(
+		[]vm.Operator{
+			&value_scan.Argument{
+				Batchs: []*batch.Batch{bat},
+			},
 		})
-
-	} else {
-		arg.children = arg.children[:0]
-		arg.AppendChild(&value_scan.Argument{
-			Batchs: []*batch.Batch{bat},
-		})
-	}
 }

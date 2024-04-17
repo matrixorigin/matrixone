@@ -24,6 +24,7 @@ import (
 
 	gomock "github.com/golang/mock/gomock"
 	plan "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	statsinfo "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	tree "github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	function "github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	process "github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -284,6 +285,22 @@ func (mr *MockCompilerContext2MockRecorder) IsPublishing(dbName interface{}) *go
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "IsPublishing", reflect.TypeOf((*MockCompilerContext2)(nil).IsPublishing), dbName)
 }
 
+// ReplacePlan mocks base method.
+func (m *MockCompilerContext2) ReplacePlan(execPlan *plan.Execute) (*plan.Plan, tree.Statement, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ReplacePlan", execPlan)
+	ret0, _ := ret[0].(*plan.Plan)
+	ret1, _ := ret[1].(tree.Statement)
+	ret2, _ := ret[2].(error)
+	return ret0, ret1, ret2
+}
+
+// ReplacePlan indicates an expected call of ReplacePlan.
+func (mr *MockCompilerContext2MockRecorder) ReplacePlan(execPlan interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ReplacePlan", reflect.TypeOf((*MockCompilerContext2)(nil).ReplacePlan), execPlan)
+}
+
 // Resolve mocks base method.
 func (m *MockCompilerContext2) Resolve(schemaName, tableName string) (*plan.ObjectRef, *plan.TableDef) {
 	m.ctrl.T.Helper()
@@ -338,6 +355,21 @@ func (m *MockCompilerContext2) ResolveUdf(name string, args []*plan.Expr) (*func
 	return ret0, ret1
 }
 
+// ResolveSnapshotTsWithSnapShotName mocks base method.
+func (m *MockCompilerContext2) ResolveSnapshotTsWithSnapShotName(snapshotName string) (int64, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ResolveSnapshotTsWithSnapShotName", snapshotName)
+	ret0, _ := ret[0].(int64)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// ResolveSnapshotTsWithSnapShotName indicates an expected call of ResolveSnapshotTsWithSnapShotName.
+func (mr *MockCompilerContext2MockRecorder) ResolveSnapshotTsWithSnapShotName(snapshotName interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ResolveSnapshotTsWithSnapShotName", reflect.TypeOf((*MockCompilerContext)(nil).ResolveSnapshotTsWithSnapShotName), snapshotName)
+}
+
 // ResolveUdf indicates an expected call of ResolveUdf.
 func (mr *MockCompilerContext2MockRecorder) ResolveUdf(name, args interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
@@ -384,11 +416,12 @@ func (mr *MockCompilerContext2MockRecorder) SetQueryingSubscription(meta interfa
 }
 
 // Stats mocks base method.
-func (m *MockCompilerContext2) Stats(obj *plan.ObjectRef) bool {
+func (m *MockCompilerContext2) Stats(obj *plan.ObjectRef) (*statsinfo.StatsInfo, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "Stats", obj)
-	ret0, _ := ret[0].(bool)
-	return ret0
+	ret0, _ := ret[0].(*statsinfo.StatsInfo)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
 }
 
 // Stats indicates an expected call of Stats.

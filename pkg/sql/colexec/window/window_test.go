@@ -93,7 +93,7 @@ func newTestCase(flgs []bool, ts []types.Type, exprs []*plan.Expr, aggs []agg.Ag
 	for _, expr := range exprs {
 		if col, ok := expr.Expr.(*plan.Expr_Col); ok {
 			idx := col.Col.ColPos
-			expr.Typ = &plan.Type{
+			expr.Typ = plan.Type{
 				Id:    int32(ts[idx].Oid),
 				Width: ts[idx].Width,
 				Scale: ts[idx].Scale,
@@ -107,10 +107,12 @@ func newTestCase(flgs []bool, ts []types.Type, exprs []*plan.Expr, aggs []agg.Ag
 			WinSpecList: exprs,
 			Types:       ts,
 			Aggs:        aggs,
-			info: &vm.OperatorInfo{
-				Idx:     0,
-				IsFirst: false,
-				IsLast:  false,
+			OperatorBase: vm.OperatorBase{
+				OperatorInfo: vm.OperatorInfo{
+					Idx:     0,
+					IsFirst: false,
+					IsLast:  false,
+				},
 			},
 		},
 	}
@@ -118,7 +120,7 @@ func newTestCase(flgs []bool, ts []types.Type, exprs []*plan.Expr, aggs []agg.Ag
 
 func newExpression(pos int32) *plan.Expr {
 	return &plan.Expr{
-		Typ: new(plan.Type),
+		Typ: plan.Type{},
 		Expr: &plan.Expr_Col{
 			Col: &plan.ColRef{
 				ColPos: pos,
@@ -128,7 +130,7 @@ func newExpression(pos int32) *plan.Expr {
 }
 
 // create a new block based on the type information, flgs[i] == ture: has null
-// func newBatch(t *testing.T, flgs []bool, ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
+// func newBatch(ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
 // 	return testutil.NewBatch(ts, false, int(rows), proc.Mp())
 // }
 

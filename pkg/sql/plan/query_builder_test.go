@@ -43,7 +43,7 @@ func TestBuildTable_AlterView(t *testing.T) {
 			Cols: []*ColDef{
 				{
 					Name: "a",
-					Typ: &plan.Type{
+					Typ: plan.Type{
 						Id:    int32(types.T_varchar),
 						Width: types.MaxVarcharLen,
 						Table: "a",
@@ -77,7 +77,7 @@ func TestBuildTable_AlterView(t *testing.T) {
 		}).AnyTimes()
 	ctx.EXPECT().GetContext().Return(context.Background()).AnyTimes()
 	ctx.EXPECT().GetProcess().Return(nil).AnyTimes()
-	ctx.EXPECT().Stats(gomock.Any()).Return(false).AnyTimes()
+	ctx.EXPECT().Stats(gomock.Any()).Return(nil, nil).AnyTimes()
 	ctx.EXPECT().GetBuildingAlterView().Return(true, "db", "v").AnyTimes()
 	ctx.EXPECT().DatabaseExists(gomock.Any()).Return(true).AnyTimes()
 

@@ -28,6 +28,7 @@ const (
 	MoIndexDefaultAlgo = tree.INDEX_TYPE_INVALID // used by UniqueIndex or default SecondaryIndex
 	MoIndexBTreeAlgo   = tree.INDEX_TYPE_BTREE   // used for Mocking MySQL behaviour.
 	MoIndexIvfFlatAlgo = tree.INDEX_TYPE_IVFFLAT // used for IVF flat index on Vector/Array columns
+	MOIndexMasterAlgo  = tree.INDEX_TYPE_MASTER  // used for Master Index on VARCHAR columns
 )
 
 // ToLower is used for before comparing AlgoType and IndexAlgoParamOpType. Reason why they are strings
@@ -54,6 +55,11 @@ func IsRegularIndexAlgo(algo string) bool {
 func IsIvfIndexAlgo(algo string) bool {
 	_algo := ToLower(algo)
 	return _algo == MoIndexIvfFlatAlgo.ToString()
+}
+
+func IsMasterIndexAlgo(algo string) bool {
+	_algo := ToLower(algo)
+	return _algo == MOIndexMasterAlgo.ToString()
 }
 
 // ------------------------[START] IndexAlgoParams------------------------
@@ -165,11 +171,20 @@ func indexParamsToMap(def *tree.Index) (map[string]string, error) {
 	switch def.KeyType {
 	case tree.INDEX_TYPE_BTREE, tree.INDEX_TYPE_INVALID:
 		// do nothing
+	case tree.INDEX_TYPE_MASTER:
+		// do nothing
 	case tree.INDEX_TYPE_IVFFLAT:
-		if def.IndexOption.AlgoParamList <= 0 {
-			return nil, moerr.NewInternalErrorNoCtx("invalid list. list must be > 0")
-		} else {
+		if def.IndexOption.AlgoParamList == 0 {
+			// NOTE:
+			// 1. In the parser, we added the failure check for list=0 scenario. So if user tries to explicit
+			// set list=0, it will fail.
+			// 2. However, if user didn't use the list option (we will get it as 0 here), then we will
+			// set the default value as 1.
+			res[IndexAlgoParamLists] = strconv.FormatInt(1, 10)
+		} else if def.IndexOption.AlgoParamList > 0 {
 			res[IndexAlgoParamLists] = strconv.FormatInt(def.IndexOption.AlgoParamList, 10)
+		} else {
+			return nil, moerr.NewInternalErrorNoCtx("invalid list. list must be > 0")
 		}
 
 		if len(def.IndexOption.AlgoParamVectorOpType) > 0 {

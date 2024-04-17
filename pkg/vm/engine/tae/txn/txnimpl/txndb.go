@@ -113,7 +113,7 @@ func (db *txnDB) Append(ctx context.Context, id uint64, bat *containers.Batch) e
 	return table.Append(ctx, bat)
 }
 
-func (db *txnDB) AddBlksWithMetaLoc(
+func (db *txnDB) AddObjsWithMetaLoc(
 	ctx context.Context,
 	tid uint64,
 	stats containers.Vector) error {
@@ -124,7 +124,7 @@ func (db *txnDB) AddBlksWithMetaLoc(
 	if table.IsDeleted() {
 		return moerr.NewNotFoundNoCtx()
 	}
-	return table.AddBlksWithMetaLoc(ctx, stats)
+	return table.AddObjsWithMetaLoc(ctx, stats)
 }
 
 // func (db *txnDB) DeleteOne(table *txnTable, id *common.ID, row uint32, dt handle.DeleteType) (err error) {
@@ -313,12 +313,12 @@ func (db *txnDB) CreateObject(tid uint64, is1PC bool) (obj handle.Object, err er
 	}
 	return table.CreateObject(is1PC)
 }
-func (db *txnDB) CreateNonAppendableObject(tid uint64, is1PC bool) (obj handle.Object, err error) {
+func (db *txnDB) CreateNonAppendableObject(tid uint64, is1PC bool, opt *objectio.CreateObjOpt) (obj handle.Object, err error) {
 	var table *txnTable
 	if table, err = db.getOrSetTable(tid); err != nil {
 		return
 	}
-	return table.CreateNonAppendableObject(is1PC, nil)
+	return table.CreateNonAppendableObject(is1PC, opt)
 }
 
 func (db *txnDB) UpdateObjectStats(id *common.ID, stats *objectio.ObjectStats) error {
@@ -358,44 +358,6 @@ func (db *txnDB) getOrSetTable(id uint64) (table *txnTable, err error) {
 	return
 }
 
-func (db *txnDB) CreateNonAppendableBlock(id *common.ID, opts *objectio.CreateBlockOpt) (blk handle.Block, err error) {
-	var table *txnTable
-	if table, err = db.getOrSetTable(id.TableID); err != nil {
-		return
-	}
-	return table.CreateNonAppendableBlock(id.ObjectID(), opts)
-}
-
-func (db *txnDB) GetBlock(id *common.ID) (blk handle.Block, err error) {
-	var table *txnTable
-	if table, err = db.getOrSetTable(id.TableID); err != nil {
-		return
-	}
-	return table.GetBlock(id)
-}
-
-func (db *txnDB) CreateBlock(id *common.ID, is1PC bool) (blk handle.Block, err error) {
-	var table *txnTable
-	if table, err = db.getOrSetTable(id.TableID); err != nil {
-		return
-	}
-	return table.CreateBlock(id.ObjectID(), is1PC)
-}
-
-func (db *txnDB) SoftDeleteBlock(id *common.ID) (err error) {
-	var table *txnTable
-	if table, err = db.getOrSetTable(id.TableID); err != nil {
-		return
-	}
-	return table.SoftDeleteBlock(id)
-}
-func (db *txnDB) UpdateMetaLoc(id *common.ID, metaLoc objectio.Location) (err error) {
-	var table *txnTable
-	if table, err = db.getOrSetTable(id.TableID); err != nil {
-		return
-	}
-	return table.UpdateMetaLoc(id, metaLoc)
-}
 func (db *txnDB) UpdateDeltaLoc(id *common.ID, deltaLoc objectio.Location) (err error) {
 	var table *txnTable
 	if table, err = db.getOrSetTable(id.TableID); err != nil {

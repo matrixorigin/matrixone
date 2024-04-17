@@ -16,7 +16,6 @@ package anti
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -44,8 +43,9 @@ type container struct {
 
 	inBuckets []uint8
 
-	bat  *batch.Batch
-	rbat *batch.Batch
+	batches       []*batch.Batch
+	batchRowCount int
+	rbat          *batch.Batch
 
 	expr colexec.ExpressionExecutor
 
@@ -59,6 +59,8 @@ type container struct {
 	vecs            []*vector.Vector
 
 	mp *hashmap.JoinMap
+
+	maxAllocSize int64
 }
 
 type Argument struct {
@@ -74,8 +76,11 @@ type Argument struct {
 	bat        *batch.Batch
 	lastrow    int
 
-	info     *vm.OperatorInfo
-	children []vm.Operator
+	vm.OperatorBase
+}
+
+func (arg *Argument) GetOperatorBase() *vm.OperatorBase {
+	return &arg.OperatorBase
 }
 
 func init() {
@@ -91,7 +96,7 @@ func init() {
 	)
 }
 
-func (arg Argument) Name() string {
+func (arg Argument) TypeName() string {
 	return argName
 }
 
@@ -104,47 +109,43 @@ func (arg *Argument) Release() {
 		reuse.Free[Argument](arg, nil)
 	}
 }
-func (arg *Argument) SetInfo(info *vm.OperatorInfo) {
-	arg.info = info
-}
-
-func (arg *Argument) AppendChild(child vm.Operator) {
-	arg.children = append(arg.children, child)
-}
 
 func (arg *Argument) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := arg.ctr
 	if ctr != nil {
-		mp := proc.Mp()
-		ctr.cleanBatch(mp)
+		ctr.cleanBatch(proc)
 		ctr.cleanEvalVectors()
 		ctr.cleanHashMap()
 		ctr.cleanExprExecutor()
 		ctr.FreeAllReg()
+
+		anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
+		anal.Alloc(ctr.maxAllocSize)
 	}
 }
 
 func (ctr *container) cleanExprExecutor() {
 	if ctr.expr != nil {
 		ctr.expr.Free()
+		ctr.expr = nil
 	}
 }
 
-func (ctr *container) cleanBatch(mp *mpool.MPool) {
-	if ctr.bat != nil {
-		ctr.bat.Clean(mp)
-		ctr.bat = nil
+func (ctr *container) cleanBatch(proc *process.Process) {
+	for i := range ctr.batches {
+		proc.PutBatch(ctr.batches[i])
 	}
+	ctr.batches = nil
 	if ctr.rbat != nil {
-		ctr.rbat.Clean(mp)
+		proc.PutBatch(ctr.rbat)
 		ctr.rbat = nil
 	}
 	if ctr.joinBat1 != nil {
-		ctr.joinBat1.Clean(mp)
+		proc.PutBatch(ctr.joinBat1)
 		ctr.joinBat1 = nil
 	}
 	if ctr.joinBat2 != nil {
-		ctr.joinBat2.Clean(mp)
+		proc.PutBatch(ctr.joinBat2)
 		ctr.joinBat2 = nil
 	}
 }
@@ -160,4 +161,5 @@ func (ctr *container) cleanEvalVectors() {
 	for i := range ctr.executorForVecs {
 		ctr.executorForVecs[i].Free()
 	}
+	ctr.executorForVecs = nil
 }

@@ -16,33 +16,44 @@ package ctl
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 type serviceType string
 
-const (
+var (
 	tn serviceType = "DN"
 	cn serviceType = "CN"
 
-	PingMethod          = "PING"
-	FlushMethod         = "FLUSH"
-	TaskMethod          = "TASK"
-	UseSnapshotMethod   = "USESNAPSHOT"
-	GetSnapshotMethod   = "GETSNAPSHOT"
-	CheckpointMethod    = "CHECKPOINT"
-	ForceGCMethod       = "FORCEGC"
-	InspectMethod       = "INSPECT"
-	LabelMethod         = "LABEL"
-	SyncCommitMethod    = "SYNCCOMMIT"
-	AddFaultPointMethod = "ADDFAULTPOINT"
-	BackupMethod        = "BACKUP"
-	TraceSpanMethod     = "TRACESPAN"
+	PingMethod             = "PING"
+	FlushMethod            = "FLUSH"
+	TaskMethod             = "TASK"
+	UseSnapshotMethod      = "USESNAPSHOT"
+	GetSnapshotMethod      = "GETSNAPSHOT"
+	CheckpointMethod       = "CHECKPOINT"
+	GlobalCheckpointMethod = "GLOBALCHECKPOINT"
+	ForceGCMethod          = "FORCEGC"
+	InspectMethod          = "INSPECT"
+	LabelMethod            = "LABEL"
+	SyncCommitMethod       = "SYNCCOMMIT"
+	AddFaultPointMethod    = "ADDFAULTPOINT"
+	BackupMethod           = "BACKUP"
+	TraceSpanMethod        = "TRACESPAN"
+	CoreDumpMethod         = "COREDUMP"
+	InterceptCommitMethod  = "INTERCEPTCOMMIT"
+	MergeObjectsMethod     = "MERGEOBJECTS"
 
 	GetProtocolVersionMethod = "GETPROTOCOLVERSION"
 	SetProtocolVersionMethod = "SETPROTOCOLVERSION"
+
+	RemoveRemoteLockTable = strings.ToUpper("RemoveRemoteLockTable")
+	GetLatestBind         = strings.ToUpper("GetLatestBind")
+	UnsubscribeTable      = "UNSUBSCRIBE_TABLE"
+
+	HandleTxnTrace = strings.ToUpper("txn-trace")
 )
 
 var (
@@ -55,22 +66,30 @@ var (
 var (
 	// register all supported debug command here
 	supportedCmds = map[string]handleFunc{
-		PingMethod:          handlePing(),
-		FlushMethod:         handleFlush(),
-		TaskMethod:          handleTask,
-		UseSnapshotMethod:   handleUseSnapshotTS,
-		GetSnapshotMethod:   handleGetSnapshotTS,
-		CheckpointMethod:    handleCheckpoint(),
-		ForceGCMethod:       handleCNGC,
-		InspectMethod:       handleInspectTN(),
-		LabelMethod:         handleSetLabel,
-		SyncCommitMethod:    handleSyncCommit,
-		AddFaultPointMethod: handleAddFaultPoint(),
-		BackupMethod:        handleBackup(),
-		TraceSpanMethod:     handleTraceSpan,
+		PingMethod:             handlePing(),
+		FlushMethod:            handleFlush(),
+		TaskMethod:             handleTask,
+		UseSnapshotMethod:      handleUseSnapshotTS,
+		GetSnapshotMethod:      handleGetSnapshotTS,
+		CheckpointMethod:       handleCheckpoint(),
+		GlobalCheckpointMethod: handleGlobalCheckpoint(),
+		ForceGCMethod:          handleCNGC,
+		InspectMethod:          handleInspectTN(),
+		LabelMethod:            handleSetLabel,
+		SyncCommitMethod:       handleSyncCommit,
+		AddFaultPointMethod:    handleAddFaultPoint(),
+		BackupMethod:           handleBackup(),
+		TraceSpanMethod:        handleTraceSpan,
+		CoreDumpMethod:         handleCoreDump,
+		InterceptCommitMethod:  handleInterceptCommit(),
+		MergeObjectsMethod:     handleMerge(),
 
 		GetProtocolVersionMethod: handleGetProtocolVersion,
 		SetProtocolVersionMethod: handleSetProtocolVersion,
+		RemoveRemoteLockTable:    handleRemoveRemoteLockTable,
+		GetLatestBind:            handleGetLatestBind,
+		UnsubscribeTable:         handleUnsubscribeTable,
+		HandleTxnTrace:           handleTxnTrace,
 	}
 )
 

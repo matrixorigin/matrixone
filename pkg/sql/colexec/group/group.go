@@ -17,6 +17,7 @@ package group
 import (
 	"bytes"
 	"fmt"
+	"runtime"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -132,9 +133,23 @@ func (arg *Argument) Prepare(proc *process.Process) (err error) {
 			width := types.T(typ.Id).TypeLen()
 			if types.T(typ.Id).FixedLength() < 0 {
 				if typ.Width == 0 {
-					width = 128
+					switch types.T(typ.Id) {
+					case types.T_array_float32:
+						width = 128 * 4
+					case types.T_array_float64:
+						width = 128 * 8
+					default:
+						width = 128
+					}
 				} else {
-					width = int(typ.Width)
+					switch types.T(typ.Id) {
+					case types.T_array_float32:
+						width = int(typ.Width) * 4
+					case types.T_array_float64:
+						width = int(typ.Width) * 8
+					default:
+						width = int(typ.Width)
+					}
 				}
 			}
 			ctr.keyWidth += width
@@ -155,16 +170,16 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 
 	ap := arg
-	anal := proc.GetAnalyze(arg.info.Idx, arg.info.ParallelIdx, arg.info.ParallelMajor)
+	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
 	anal.Start()
 	defer anal.Stop()
 
 	// if operator has no group by clause.
 	if len(ap.Exprs) == 0 {
 		// if operator has no group by clause.
-		return ap.ctr.processWithoutGroup(ap, proc, anal, arg.info.IsFirst, arg.info.IsLast)
+		return ap.ctr.processWithoutGroup(ap, proc, anal, arg.GetIsFirst(), arg.GetIsLast())
 	}
-	return ap.ctr.processWithGroup(ap, proc, anal, arg.info.IsFirst, arg.info.IsLast)
+	return ap.ctr.processWithGroup(ap, proc, anal, arg.GetIsFirst(), arg.GetIsLast())
 }
 
 func (ctr *container) generateAggStructures(arg *Argument) error {
@@ -184,7 +199,7 @@ func (ctr *container) generateAggStructures(arg *Argument) error {
 func (ctr *container) processWithoutGroup(ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool) (vm.CallResult, error) {
 	if ctr.state == vm.Build {
 		for {
-			result, err := vm.ChildrenCall(ap.children[0], proc, anal)
+			result, err := vm.ChildrenCall(ap.GetChildren(0), proc, anal)
 			if err != nil {
 				return result, err
 			}
@@ -209,7 +224,7 @@ func (ctr *container) processWithoutGroup(ap *Argument, proc *process.Process, a
 				}
 			}
 
-			if err := ctr.processH0(bat); err != nil {
+			if err := ctr.processH0(); err != nil {
 				return result, err
 			}
 		}
@@ -261,7 +276,7 @@ func initCtrBatchForProcessWithoutGroup(ap *Argument, proc *process.Process, ctr
 func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool) (vm.CallResult, error) {
 	if ctr.state == vm.Build {
 		for {
-			result, err := vm.ChildrenCall(ap.children[0], proc, anal)
+			result, err := vm.ChildrenCall(ap.GetChildren(0), proc, anal)
 			if err != nil {
 				return result, err
 			}
@@ -378,7 +393,7 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 }
 
 // processH8 use whole batch to fill the aggregation.
-func (ctr *container) processH0(bat *batch.Batch) error {
+func (ctr *container) processH0() error {
 	ctr.bat.SetRowCount(1)
 
 	for i, ag := range ctr.bat.Aggs {
@@ -396,6 +411,9 @@ func (ctr *container) processH8(bat *batch.Batch, proc *process.Process) error {
 	count := bat.RowCount()
 	itr := ctr.intHashMap.NewIterator()
 	for i := 0; i < count; i += hashmap.UnitLimit {
+		if i%(hashmap.UnitLimit*32) == 0 {
+			runtime.Gosched()
+		}
 		n := count - i
 		if n > hashmap.UnitLimit {
 			n = hashmap.UnitLimit
@@ -405,7 +423,7 @@ func (ctr *container) processH8(bat *batch.Batch, proc *process.Process) error {
 		if err != nil {
 			return err
 		}
-		if err := ctr.batchFill(i, n, bat, vals, rows, proc); err != nil {
+		if err := ctr.batchFill(i, n, vals, rows, proc); err != nil {
 			return err
 		}
 	}
@@ -417,6 +435,9 @@ func (ctr *container) processHStr(bat *batch.Batch, proc *process.Process) error
 	count := bat.RowCount()
 	itr := ctr.strHashMap.NewIterator()
 	for i := 0; i < count; i += hashmap.UnitLimit { // batch
+		if i%(hashmap.UnitLimit*32) == 0 {
+			runtime.Gosched()
+		}
 		n := count - i
 		if n > hashmap.UnitLimit {
 			n = hashmap.UnitLimit
@@ -426,7 +447,7 @@ func (ctr *container) processHStr(bat *batch.Batch, proc *process.Process) error
 		if err != nil {
 			return err
 		}
-		if err := ctr.batchFill(i, n, bat, vals, rows, proc); err != nil {
+		if err := ctr.batchFill(i, n, vals, rows, proc); err != nil {
 			return err
 		}
 	}
@@ -487,7 +508,7 @@ func (ctr *container) processHIndex(bat *batch.Batch, proc *process.Process) err
 }
 */
 
-func (ctr *container) batchFill(i int, n int, bat *batch.Batch, vals []uint64, hashRows uint64, proc *process.Process) error {
+func (ctr *container) batchFill(i int, n int, vals []uint64, hashRows uint64, proc *process.Process) error {
 	cnt := 0
 	valCnt := 0
 	copy(ctr.inserted[:n], ctr.zInserted[:n])

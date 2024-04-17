@@ -188,8 +188,11 @@ func NewNoAvailableBackendNoCtx() *Error {
 	return newError(Context(), ErrNoAvailableBackend)
 }
 
-func NewBackendCannotConnectNoCtx() *Error {
-	return newError(Context(), ErrBackendCannotConnect)
+func NewBackendCannotConnectNoCtx(args ...any) *Error {
+	if len(args) == 0 {
+		return newError(Context(), ErrBackendCannotConnect, "none")
+	}
+	return newError(Context(), ErrBackendCannotConnect, args...)
 }
 
 func NewTxnClosedNoCtx(txnID []byte) *Error {
@@ -253,8 +256,10 @@ func NewTxnRWConflictNoCtx() *Error {
 	return newError(Context(), ErrTxnRWConflict)
 }
 
-func NewTxnWWConflictNoCtx() *Error {
-	return newError(Context(), ErrTxnWWConflict)
+func NewTxnWWConflictNoCtx(
+	tableID uint64,
+	s string) *Error {
+	return NewTxnWWConflict(Context(), tableID, s)
 }
 
 func NewTAENeedRetryNoCtx() *Error {
@@ -267,6 +272,14 @@ func NewTxnStaleNoCtx() *Error {
 
 func NewWaiterPausedNoCtx() *Error {
 	return newError(Context(), ErrWaiterPaused)
+}
+
+func NewRetryForCNRollingRestart() *Error {
+	return newError(Context(), ErrRetryForCNRollingRestart)
+}
+
+func NewNewTxnInCNRollingRestart() *Error {
+	return newError(Context(), ErrNewTxnInCNRollingRestart)
 }
 
 func NewNotFoundNoCtx() *Error {

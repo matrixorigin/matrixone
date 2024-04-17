@@ -30,15 +30,17 @@ enum OpCode {
     OpGetLogTail = 1000;
     OpPreCommit  = 1001;
 
-    // Debug
-    OpPing          = 2000;
-    OpFlush         = 2001;
-    OpCheckpoint    = 2003;
-    OpInspect       = 2004;
-    OpAddFaultPoint = 2005;
-    OpBackup        = 2006;
-    OpTraceSpan     = 2007;
-    OpStorageUsage  = 2008;
+    OpPing             = 2000;
+    OpFlush            = 2001;
+    OpCheckpoint       = 2003;
+    OpInspect          = 2004;
+    OpAddFaultPoint    = 2005;
+    OpBackup           = 2006;
+    OpTraceSpan        = 2007;
+    OpStorageUsage     = 2008;
+    OpGlobalCheckpoint = 2009;
+    OpInterceptCommit  = 2010;
+    OpCommitMerge      = 2011;
 }
 
 // TNPingRequest ping request
@@ -77,8 +79,8 @@ message Vector {
 };
 
 message Batch {
-    repeated string attrs = 1;
-    repeated Vector vecs  = 2;
+    repeated string attrs = 1 [(gogoproto.nullable) = false];
+    repeated Vector vecs  = 2 [(gogoproto.nullable) = false];
 };
 
 message TableID {
@@ -277,6 +279,7 @@ enum AlterKind {
     UpdateConstraint = 5;
     UpdatePolicy     = 6;
     AddPartition     = 7;
+    RenameColumn     = 8;
 }
 
 message AlterTablePolicy {
@@ -284,6 +287,7 @@ message AlterTablePolicy {
     uint32 max_obj_onerun = 2;
     uint32 max_rows_merged_obj = 3; 
     repeated MergeHint hints = 4;
+    uint64 min_cn_merge_size = 5;
 }
 
 message AlterTableConstraint {
@@ -297,6 +301,12 @@ message AlterTableComment {
 message AlterTableRenameTable {
     string old_name = 1;
     string new_name = 2;
+}
+
+message AlterTableRenameCol {
+    string old_name = 1;
+    string new_name = 2;
+    uint32 sequence_num = 3;  // used to double check
 }
 
 message AlterTableAddColumn {
@@ -327,6 +337,7 @@ message AlterTableReq {
         AlterTableConstraint update_cstr     = 8;
         AlterTablePolicy update_policy       = 9;
         AlterTableAddPartition add_partition = 10;
+        AlterTableRenameCol rename_col       = 11;
     }
 }
 
@@ -350,9 +361,50 @@ message SchemaExtra {
     uint32 max_obj_onerun = 6;
     uint32 max_rows_merged_obj = 7;
     repeated MergeHint hints = 8;
+    uint64 min_cn_merge_size = 9;
 }
 
 // Int64Map mainly used in unit test
 message Int64Map {
     map<int64, int64> m = 1;
+}
+
+message TransDestPos {
+    int32 objIdx = 1;
+    int32 blkIdx = 2;
+    int32 rowIdx = 3;
+}
+
+message BlkTransMap {
+    map<int32, TransDestPos> m = 1[(gogoproto.nullable) = false];
+}
+
+message BlkTransferBooking {
+    repeated BlkTransMap mappings = 1[(gogoproto.nullable) = false];
+}
+
+
+message MergeCommitEntry {
+    uint64 db_id = 1;
+    uint64 tbl_id = 2;
+    string table_name = 3;
+    timestamp.Timestamp start_ts = 4[(gogoproto.nullable) = false];
+    repeated bytes merged_objs = 5;
+    repeated bytes created_objs = 6;
+    BlkTransferBooking booking = 7;
+    bytes booking_loc = 8;
+    string err = 9;
+}
+
+message MergeTaskEntry {
+    uint64 db_id = 1;
+    uint64 tbl_id = 2;
+    string table_name = 3;
+    string db_name = 4;
+    // ObjectStats
+    repeated bytes to_merge_objs = 5;
+    uint64 estimated_mem_usage = 6;
+    uint32 account_id = 7;
+    uint32 user_id = 8;
+    uint32 role_id = 9;
 }

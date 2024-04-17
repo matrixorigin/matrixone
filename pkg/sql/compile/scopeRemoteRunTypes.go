@@ -22,6 +22,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
+
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 
 	"github.com/matrixorigin/matrixone/pkg/logservice"
@@ -40,7 +42,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
-	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/udf"
@@ -65,14 +66,14 @@ const (
 
 // cnInformation records service information to help handle messages.
 type cnInformation struct {
-	cnAddr       string
-	storeEngine  engine.Engine
-	fileService  fileservice.FileService
-	lockService  lockservice.LockService
-	queryService queryservice.QueryService
-	hakeeper     logservice.CNHAKeeperClient
-	udfService   udf.Service
-	aicm         *defines.AutoIncrCacheManager
+	cnAddr      string
+	storeEngine engine.Engine
+	fileService fileservice.FileService
+	lockService lockservice.LockService
+	queryClient qclient.QueryClient
+	hakeeper    logservice.CNHAKeeperClient
+	udfService  udf.Service
+	aicm        *defines.AutoIncrCacheManager
 }
 
 // processHelper records source process information to help
@@ -121,7 +122,7 @@ func newMessageSenderOnClient(
 
 // XXX we can set a scope as argument directly next day.
 func (sender *messageSenderOnClient) send(
-	scopeData, procData []byte, messageType pipeline.Method) error {
+	scopeData, procData []byte, _ pipeline.Method) error {
 	sdLen := len(scopeData)
 	if sdLen <= maxMessageSizeToMoRpc {
 		message := cnclient.AcquireMessage()
@@ -169,6 +170,7 @@ func (sender *messageSenderOnClient) receiveMessage() (morpc.Message, error) {
 	case val, ok := <-sender.receiveCh:
 		if !ok || val == nil {
 			// ch close
+			logutil.Errorf("the stream is closed, ok: %v, val: %v", ok, val)
 			return nil, moerr.NewStreamClosed(sender.ctx)
 		}
 		return val, nil
@@ -293,7 +295,7 @@ func newMessageReceiverOnServer(
 	storeEngine engine.Engine,
 	fileService fileservice.FileService,
 	lockService lockservice.LockService,
-	queryService queryservice.QueryService,
+	queryClient qclient.QueryClient,
 	hakeeper logservice.CNHAKeeperClient,
 	udfService udf.Service,
 	txnClient client.TxnClient,
@@ -309,14 +311,14 @@ func newMessageReceiverOnServer(
 		sequence:        0,
 	}
 	receiver.cnInformation = cnInformation{
-		cnAddr:       cnAddr,
-		storeEngine:  storeEngine,
-		fileService:  fileService,
-		lockService:  lockService,
-		queryService: queryService,
-		hakeeper:     hakeeper,
-		udfService:   udfService,
-		aicm:         aicm,
+		cnAddr:      cnAddr,
+		storeEngine: storeEngine,
+		fileService: fileService,
+		lockService: lockService,
+		queryClient: queryClient,
+		hakeeper:    hakeeper,
+		udfService:  udfService,
+		aicm:        aicm,
 	}
 
 	switch m.GetCmd() {
@@ -369,7 +371,7 @@ func (receiver *messageReceiverOnServer) newCompile() *Compile {
 		pHelper.txnOperator,
 		cnInfo.fileService,
 		cnInfo.lockService,
-		cnInfo.queryService,
+		cnInfo.queryClient,
 		cnInfo.hakeeper,
 		cnInfo.udfService,
 		cnInfo.aicm)
@@ -387,6 +389,7 @@ func (receiver *messageReceiverOnServer) newCompile() *Compile {
 
 	c := reuse.Alloc[Compile](nil)
 	c.proc = proc
+	c.proc.MessageBoard = c.MessageBoard
 	c.e = cnInfo.storeEngine
 	c.anal = newAnaylze()
 	c.anal.analInfos = proc.AnalInfos
@@ -394,12 +397,9 @@ func (receiver *messageReceiverOnServer) newCompile() *Compile {
 	c.proc.Ctx = perfcounter.WithCounterSet(c.proc.Ctx, c.counterSet)
 	c.ctx = defines.AttachAccountId(c.proc.Ctx, pHelper.accountId)
 
-	c.fill = func(_ any, b *batch.Batch) error {
+	c.fill = func(b *batch.Batch) error {
 		return receiver.sendBatch(b)
 	}
-
-	c.runtimeFilterReceiverMap = make(map[int32]*runtimeFilterReceiver)
-
 	return c
 }
 
@@ -538,17 +538,17 @@ func (receiver *messageReceiverOnServer) GetProcByUuid(uid uuid.UUID) (*process.
 	for {
 		select {
 		case <-getCtx.Done():
-			colexec.Srv.GetProcByUuid(uid, true)
+			colexec.Get().GetProcByUuid(uid, true)
 			getCancel()
 			return nil, moerr.NewInternalError(receiver.ctx, "get dispatch process by uuid timeout")
 
 		case <-receiver.ctx.Done():
-			colexec.Srv.GetProcByUuid(uid, true)
+			colexec.Get().GetProcByUuid(uid, true)
 			getCancel()
 			return nil, nil
 
 		default:
-			if opProc, ok = colexec.Srv.GetProcByUuid(uid, false); !ok {
+			if opProc, ok = colexec.Get().GetProcByUuid(uid, false); !ok {
 				// it's bad to call the Gosched() here.
 				// cut the HandleNotifyTimeout to 1ms, 1ms, 2ms, 3ms, 5ms, 8ms..., and use them as waiting time may be a better way.
 				runtime.Gosched()

@@ -147,7 +147,7 @@ func collectArgsType(ctx context.Context, tblInfo *plan.TableDef, exprs ...tree.
 		if column == nil {
 			return nil, moerr.NewBadFieldError(ctx, col.Parts[0], "partition function")
 		}
-		types = append(types, column.GetTyp().GetId())
+		types = append(types, column.GetTyp().Id)
 	}
 	return types, nil
 }
@@ -262,9 +262,9 @@ func checkPartitionColumnValue(binder *PartitionBinder, colType *Type, colExpr *
 		default:
 			return moerr.NewWrongTypeColumnValue(binder.GetContext())
 		}
-	case types.T_int8, types.T_int16, types.T_int32, types.T_int64, types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
+	case types.T_int8, types.T_int16, types.T_int32, types.T_int64, types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64, types.T_bit:
 		switch vkind {
-		case types.T_int8, types.T_int16, types.T_int32, types.T_int64, types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64, types.T_any:
+		case types.T_int8, types.T_int16, types.T_int32, types.T_int64, types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64, types.T_bit, types.T_any:
 		default:
 			return moerr.NewWrongTypeColumnValue(binder.GetContext())
 		}
@@ -317,7 +317,7 @@ func checkListPartitionValuesIsInt(binder *PartitionBinder, partition *tree.Part
 			}
 
 			switch types.T(evalExpr.Typ.Id) {
-			case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64, types.T_any:
+			case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64, types.T_bit, types.T_any:
 			case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
 				switch value := cval.Lit.Value.(type) {
 				case *plan.Literal_I8Val:
@@ -410,9 +410,9 @@ func checkRangeColumnsTypeAndValuesMatch(binder *PartitionBinder, partitionDef *
 					//return moerr.NewInternalError(binder.GetContext(), "Partition column values of incorrect type")
 					return moerr.NewWrongTypeColumnValue(binder.GetContext())
 				}
-			case types.T_int8, types.T_int16, types.T_int32, types.T_int64, types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
+			case types.T_int8, types.T_int16, types.T_int32, types.T_int64, types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64, types.T_bit:
 				switch types.T(vkind.Id) {
-				case types.T_int8, types.T_int16, types.T_int32, types.T_int64, types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64: //+types.T_null:
+				case types.T_int8, types.T_int16, types.T_int32, types.T_int64, types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64, types.T_bit: //+types.T_null:
 				default:
 					//return moerr.NewInternalError(binder.GetContext(), "Partition column values of incorrect type")
 					return moerr.NewWrongTypeColumnValue(binder.GetContext())
@@ -465,7 +465,7 @@ func checkPartitionValuesIsInt(binder *PartitionBinder, partition *tree.Partitio
 			}
 
 			switch types.T(evalExpr.Typ.Id) {
-			case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64, types.T_any:
+			case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64, types.T_bit, types.T_any:
 			case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
 				switch value := cval.Lit.Value.(type) {
 				case *plan.Literal_I8Val:
@@ -546,7 +546,7 @@ func formatListPartitionValue(binder *PartitionBinder, tblInfo *TableDef, pi *pl
 			if colInfo == nil {
 				return nil, moerr.NewFieldNotFoundPart(binder.GetContext())
 			}
-			colTps = append(colTps, colInfo.Typ)
+			colTps = append(colTps, &colInfo.Typ)
 		}
 	}
 
@@ -618,7 +618,7 @@ func collectColumnsType(partitionDef *plan.PartitionByDef) []*Type {
 	if len(partitionDef.PartitionColumns.Columns) > 0 {
 		colTypes := make([]*Type, 0, len(partitionDef.PartitionColumns.Columns))
 		for _, col := range partitionDef.PartitionColumns.Columns {
-			colTypes = append(colTypes, col.Typ)
+			colTypes = append(colTypes, &col.Typ)
 		}
 		return colTypes
 	}
@@ -675,7 +675,7 @@ func PartitionFuncConstantFold(bat *batch.Batch, e *plan.Expr, proc *process.Pro
 		}
 		defer vec.Free(proc.Mp())
 
-		colexec.SortInFilter(vec)
+		vec.InplaceSortAndCompact()
 		data, err := vec.MarshalBinary()
 		if err != nil {
 			return nil, err
@@ -978,12 +978,12 @@ func compareTwoRangeColumns(ctx context.Context, curr, prev *plan.PartitionItem,
 
 // evalPartitionBoolExpr Calculate the bool result of comparing the values of two range partition `less than value`
 func evalPartitionBoolExpr(ctx context.Context, lOriExpr *Expr, rOriExpr *Expr, colInfo *plan.ColDef, binder *PartitionBinder) (bool, error) {
-	lexpr, err := makePlan2CastExpr(ctx, lOriExpr, colInfo.Typ)
+	lexpr, err := makePlan2CastExpr(ctx, lOriExpr, &colInfo.Typ)
 	if err != nil {
 		return false, err
 	}
 
-	rexpr, err := makePlan2CastExpr(ctx, rOriExpr, colInfo.Typ)
+	rexpr, err := makePlan2CastExpr(ctx, rOriExpr, &colInfo.Typ)
 	if err != nil {
 		return false, err
 	}

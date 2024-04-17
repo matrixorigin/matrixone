@@ -14,10 +14,24 @@
 
 package tree
 
+import "github.com/matrixorigin/matrixone/pkg/common/reuse"
+
+func init() {
+	reuse.CreatePool[Deallocate](
+		func() *Deallocate { return &Deallocate{} },
+		func(d *Deallocate) { d.reset() },
+		reuse.DefaultOptions[Deallocate](), //.
+	) //WithEnableChecker()
+}
+
 type Deallocate struct {
 	Statement
 	IsDrop bool
 	Name   Identifier
+}
+
+func (node *Deallocate) Free() {
+	reuse.Free[Deallocate](node, nil)
 }
 
 func (node *Deallocate) Format(ctx *FmtCtx) {
@@ -33,9 +47,15 @@ func (node *Deallocate) Format(ctx *FmtCtx) {
 func (node *Deallocate) GetStatementType() string { return "Deallocate" }
 func (node *Deallocate) GetQueryType() string     { return QueryTypeOth }
 
+func (node Deallocate) TypeName() string { return "tree.Deallocate" }
+
+func (node *Deallocate) reset() {
+	*node = Deallocate{}
+}
+
 func NewDeallocate(name Identifier, isDrop bool) *Deallocate {
-	return &Deallocate{
-		IsDrop: isDrop,
-		Name:   name,
-	}
+	deallocate := reuse.Alloc[Deallocate](nil)
+	deallocate.IsDrop = isDrop
+	deallocate.Name = name
+	return deallocate
 }

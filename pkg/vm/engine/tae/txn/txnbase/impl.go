@@ -58,6 +58,7 @@ func (txn *Txn) commit1PC(ctx context.Context, _ bool) (err error) {
 	}
 	txn.Add(1)
 	if err = txn.Freeze(); err == nil {
+		txn.GetStore().StartTrace()
 		err = txn.Mgr.OnOpTxn(&OpTxn{
 			ctx: ctx,
 			Txn: txn,
@@ -69,7 +70,8 @@ func (txn *Txn) commit1PC(ctx context.Context, _ bool) (err error) {
 	if err != nil {
 		txn.SetError(err)
 		txn.Lock()
-		_ = txn.ToRollbackingLocked(txn.GetStartTS().Next())
+		ts := txn.GetStartTS()
+		_ = txn.ToRollbackingLocked(ts.Next())
 		txn.Unlock()
 		_ = txn.PrepareRollback()
 		_ = txn.ApplyRollback()

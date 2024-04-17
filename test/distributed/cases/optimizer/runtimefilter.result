@@ -1,0 +1,79 @@
+drop database if exists d1;
+create database d1;
+use d1;
+drop table if exists t1;
+create table t1(c1 int primary key, c2 int, c3 int);
+create table t2(c1 int primary key, c2 int, c3 int);
+insert into t1 select *,*,* from generate_series(1000000) g;
+insert into t2 select *,*,* from generate_series(1000000) g;
+select mo_ctl('dn', 'flush', 'd1.t1');
+mo_ctl(dn, flush, d1.t1)
+{\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
+select mo_ctl('dn', 'flush', 'd1.t2');
+mo_ctl(dn, flush, d1.t2)
+{\n  "method": "Flush",\n  "result": [\n    {\n      "returnStr": "OK"\n    }\n  ]\n}\n
+select Sleep(1);
+sleep(1)
+0
+explain select * from t1 where t1.c2 in( select c1 from t2 where t2.c2=1);
+QUERY PLAN
+Project
+  ->  Join
+        Join Type: SEMI   hashOnPK
+        Join Cond: (t1.c2 = t2.c1)
+        Runtime Filter Build: #[-1,0]
+        ->  Table Scan on d1.t1
+              Runtime Filter Probe: t1.c2
+        ->  Table Scan on d1.t2
+              Filter Cond: (t2.c2 = 1)
+              Block Filter Cond: (t2.c2 = 1)
+select * from t1 where t1.c2 in( select c1 from t2 where t2.c2=1);
+c1    c2    c3
+1    1    1
+explain select * from t1,t2 where t1.c1=t2.c1 and t2.c2=1;
+QUERY PLAN
+Project
+  ->  Join
+        Join Type: INNER   hashOnPK
+        Join Cond: (t1.c1 = t2.c1)
+        Runtime Filter Build: #[-1,0]
+        ->  Table Scan on d1.t1
+              Runtime Filter Probe: t1.c1
+        ->  Table Scan on d1.t2
+              Filter Cond: (t2.c2 = 1)
+              Block Filter Cond: (t2.c2 = 1)
+select * from t1,t2 where t1.c1=t2.c1 and t2.c2=1;
+c1    c2    c3    c1    c2    c3
+1    1    1    1    1    1
+select * from t1,t2 where t1.c1=t2.c1 and t2.c2 between 20 and 25;
+c1    c2    c3    c1    c2    c3
+20    20    20    20    20    20
+21    21    21    21    21    21
+22    22    22    22    22    22
+23    23    23    23    23    23
+24    24    24    24    24    24
+25    25    25    25    25    25
+explain select * from t1,t2 where t1.c2=t2.c1 and t2.c2=1;
+QUERY PLAN
+Project
+  ->  Join
+        Join Type: INNER   hashOnPK
+        Join Cond: (t1.c2 = t2.c1)
+        Runtime Filter Build: #[-1,0]
+        ->  Table Scan on d1.t1
+              Runtime Filter Probe: t1.c2
+        ->  Table Scan on d1.t2
+              Filter Cond: (t2.c2 = 1)
+              Block Filter Cond: (t2.c2 = 1)
+select * from t1,t2 where t1.c2=t2.c1 and t2.c2=1;
+c1    c2    c3    c1    c2    c3
+1    1    1    1    1    1
+select * from t1,t2 where t1.c2=t2.c1 and t2.c2 between 20 and 25;
+c1    c2    c3    c1    c2    c3
+20    20    20    20    20    20
+21    21    21    21    21    21
+22    22    22    22    22    22
+23    23    23    23    23    23
+24    24    24    24    24    24
+25    25    25    25    25    25
+drop database if exists d1;

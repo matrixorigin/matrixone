@@ -22,6 +22,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
@@ -40,7 +43,13 @@ type compilerContext struct {
 
 	buildAlterView       bool
 	dbOfView, nameOfView string
+	sql                  string
 	mu                   sync.Mutex
+}
+
+func (c *compilerContext) ReplacePlan(execPlan *planpb.Execute) (*planpb.Plan, tree.Statement, error) {
+	//TODO implement me
+	panic("implement me")
 }
 
 func (c *compilerContext) CheckSubscriptionValid(subName, accName string, pubName string) error {
@@ -48,6 +57,10 @@ func (c *compilerContext) CheckSubscriptionValid(subName, accName string, pubNam
 }
 
 func (c *compilerContext) IsPublishing(dbName string) (bool, error) {
+	panic("not supported in internal sql executor")
+}
+
+func (c *compilerContext) ResolveSnapshotTsWithSnapShotName(snapshotName string) (int64, error) {
 	panic("not supported in internal sql executor")
 }
 
@@ -80,16 +93,12 @@ func (c *compilerContext) ResolveAccountIds(accountNames []string) ([]uint32, er
 	panic("not supported in internal sql executor")
 }
 
-func (c *compilerContext) Stats(obj *plan.ObjectRef) bool {
+func (c *compilerContext) Stats(obj *plan.ObjectRef) (*pb.StatsInfo, error) {
 	t, err := c.getRelation(obj.GetSchemaName(), obj.GetObjName())
 	if err != nil {
-		return false
+		return nil, err
 	}
-	s := c.GetStatsCache().GetStatsInfoMap(t.GetTableID(c.ctx), true)
-	if s == nil {
-		return false
-	}
-	return t.Stats(c.ctx, nil, s)
+	return t.Stats(c.ctx, true), nil
 }
 
 func (c *compilerContext) GetStatsCache() *plan.StatsCache {
@@ -160,7 +169,7 @@ func (c *compilerContext) GetPrimaryKeyDef(
 	for _, key := range priKeys {
 		priDefs = append(priDefs, &plan.ColDef{
 			Name: key.Name,
-			Typ: &plan.Type{
+			Typ: plan.Type{
 				Id:    int32(key.Type.Oid),
 				Width: key.Type.Width,
 				Scale: key.Type.Scale,
@@ -172,7 +181,13 @@ func (c *compilerContext) GetPrimaryKeyDef(
 }
 
 func (c *compilerContext) GetRootSql() string {
-	return ""
+	return c.sql
+}
+
+func (c *compilerContext) SetRootSql(sql string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.sql = sql
 }
 
 func (c *compilerContext) GetUserName() string {
@@ -208,7 +223,7 @@ func (c *compilerContext) Resolve(dbName string, tableName string) (*plan.Object
 }
 
 func (c *compilerContext) ResolveVariable(varName string, isSystemVar bool, isGlobalVar bool) (interface{}, error) {
-	return "", nil
+	return nil, nil
 }
 
 func (c *compilerContext) SetBuildingAlterView(yesOrNo bool, dbName, viewName string) {
@@ -283,7 +298,7 @@ func (c *compilerContext) getTableDef(
 			col := &plan.ColDef{
 				ColId: attr.Attr.ID,
 				Name:  attr.Attr.Name,
-				Typ: &plan.Type{
+				Typ: plan.Type{
 					Id:          int32(attr.Attr.Type.Oid),
 					Width:       attr.Attr.Type.Width,
 					Scale:       attr.Attr.Type.Scale,
@@ -405,6 +420,7 @@ func (c *compilerContext) getTableDef(
 		ClusterBy:    clusterByDef,
 		Indexes:      indexes,
 		Version:      schemaVersion,
+		DbName:       dbName,
 	}
 	return obj, tableDef
 }

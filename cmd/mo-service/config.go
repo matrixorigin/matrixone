@@ -164,6 +164,9 @@ func NewConfig() *Config {
 		},
 		Observability: *config.NewObservabilityParameters(),
 		LogService:    logservice.DefaultConfig(),
+		CN: cnservice.Config{
+			AutomaticUpgrade: true,
+		},
 	}
 }
 
@@ -186,8 +189,14 @@ func parseFromString(data string, cfg any) error {
 }
 
 func (c *Config) validate() error {
-	if c.DataDir == "" {
-		c.DataDir = "./mo-data"
+	if c.DataDir == "" ||
+		c.DataDir == "./mo-data" ||
+		c.DataDir == "mo-data" {
+		path, err := os.Getwd()
+		if err != nil {
+			panic(err)
+		}
+		c.DataDir = filepath.Join(path, "mo-data")
 	}
 	if _, err := c.getServiceType(); err != nil {
 		return err
@@ -429,10 +438,15 @@ func (c *Config) getLogServiceConfig() logservice.Config {
 	logutil.Infof("hakeeper client cfg: %v", c.HAKeeperClient)
 	cfg.HAKeeperClientConfig = c.HAKeeperClient
 	cfg.DataDir = filepath.Join(c.DataDir, "logservice-data", cfg.UUID)
-	// Should sync directory structure with dragonboat.
-	hostname, err := os.Hostname()
-	if err != nil {
-		panic(fmt.Sprintf("cannot get hostname: %s", err))
+	var hostname string
+	var err error
+	hostname = cfg.ExplicitHostname
+	if len(hostname) == 0 {
+		// Should sync directory structure with dragonboat.
+		hostname, err = os.Hostname()
+		if err != nil {
+			panic(fmt.Sprintf("cannot get hostname: %s", err))
+		}
 	}
 	cfg.SnapshotExportDir = filepath.Join(cfg.DataDir, hostname,
 		fmt.Sprintf("%020d", cfg.DeploymentID), "exported-snapshot")
@@ -456,6 +470,9 @@ func (c *Config) getCNServiceConfig() cnservice.Config {
 	cfg := c.CN
 	cfg.HAKeeper.ClientConfig = c.HAKeeperClient
 	cfg.Frontend.SetLogAndVersion(&c.Log, version.Version)
+	if cfg.Txn.Trace.Dir == "" {
+		cfg.Txn.Trace.Dir = "trace"
+	}
 	return cfg
 }
 

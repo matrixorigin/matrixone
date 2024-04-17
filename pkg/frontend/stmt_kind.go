@@ -127,13 +127,16 @@ If it is Case4, Then
 
 	Create/Drop database commits current txn. a new txn for the next statement if needed.
 */
-func statementCanBeExecutedInUncommittedTransaction(ses *Session, stmt tree.Statement) (bool, error) {
+func statementCanBeExecutedInUncommittedTransaction(ses FeSession, stmt tree.Statement) (bool, error) {
 	switch st := stmt.(type) {
 	//ddl statement
 	case *tree.CreateTable, *tree.CreateIndex, *tree.CreateView, *tree.AlterView, *tree.AlterTable:
+		if createTblStmt, ok := stmt.(*tree.CreateTable); ok && createTblStmt.IsAsSelect {
+			return false, nil
+		}
 		return true, nil
 	case *tree.CreateDatabase, *tree.CreateSequence: //Case1, Case3 above
-		return ses.IsBackgroundSession() || !ses.OptionBitsIsSet(OPTION_BEGIN), nil
+		return ses.IsBackgroundSession() || !ses.GetTxnHandler().OptionBitsIsSet(OPTION_BEGIN), nil
 		//dml statement
 	case *tree.Insert, *tree.Update, *tree.Delete, *tree.Select, *tree.Load, *tree.MoDump, *tree.ValuesStatement, *tree.Replace:
 		return true, nil
@@ -169,6 +172,7 @@ func statementCanBeExecutedInUncommittedTransaction(ses *Session, stmt tree.Stat
 		*tree.ShowSubscriptions,
 		*tree.ShowCreatePublications,
 		*tree.ShowBackendServers,
+		*tree.ShowAccountUpgrade,
 		*tree.ShowConnectors:
 		return true, nil
 		//others
@@ -181,7 +185,10 @@ func statementCanBeExecutedInUncommittedTransaction(ses *Session, stmt tree.Stat
 		if err != nil {
 			return false, err
 		}
-		preStmt, err := mysql.ParseOne(ses.requestCtx, st.Sql, v.(int64))
+		preStmt, err := mysql.ParseOne(ses.GetRequestContext(), st.Sql, v.(int64), 0)
+		defer func() {
+			preStmt.Free()
+		}()
 		if err != nil {
 			return false, err
 		}
@@ -206,7 +213,9 @@ func statementCanBeExecutedInUncommittedTransaction(ses *Session, stmt tree.Stat
 		return true, nil
 	case *tree.DropDatabase, *tree.DropSequence: //Case1, Case3 above
 		//background transaction can execute the DROPxxx in one transaction
-		return ses.IsBackgroundSession() || !ses.OptionBitsIsSet(OPTION_BEGIN), nil
+		return ses.IsBackgroundSession() || !ses.GetTxnHandler().OptionBitsIsSet(OPTION_BEGIN), nil
+	case *tree.SetVar:
+		return true, nil
 	}
 
 	return false, nil

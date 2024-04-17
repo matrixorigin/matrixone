@@ -18,7 +18,6 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -46,10 +45,10 @@ func TestDeleteChain1(t *testing.T) {
 
 	db, _ := c.CreateDBEntry("db", "", "", nil)
 	table, _ := db.CreateTableEntry(schema, nil, nil)
-	obj, _ := table.CreateObject(nil, catalog.ES_Appendable, nil)
-	blk, _ := obj.CreateBlock(nil, catalog.ES_Appendable, nil, nil)
+	obj, _ := table.CreateObject(nil, catalog.ES_Appendable, nil, nil)
+	objHandle := NewObjectMVCCHandle(obj)
 
-	controller := NewMVCCHandle(blk)
+	controller := NewMVCCHandle(objHandle, 0)
 	chain := NewDeleteChain(nil, controller)
 	txn1 := new(txnbase.Txn)
 	txn1.TxnCtx = txnbase.NewTxnCtx(common.NewTxnIDAllocator().Alloc(), types.NextGlobalTsForTest(), types.TS{})
@@ -155,8 +154,14 @@ func TestDeleteChain1(t *testing.T) {
 func TestDeleteChain2(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
-	obj := objectio.NewObjectid()
-	controller := NewMVCCHandle(catalog.NewStandaloneBlock(nil, objectio.NewBlockidWithObjectID(obj, 0), types.TS{}))
+	schema := catalog.MockSchema(1, 0)
+	c := catalog.MockCatalog()
+	defer c.Close()
+	db, _ := c.CreateDBEntry("db", "", "", nil)
+	table, _ := db.CreateTableEntry(schema, nil, nil)
+	obj, _ := table.CreateObject(nil, catalog.ES_Appendable, nil, nil)
+	objHandle := NewObjectMVCCHandle(obj)
+	controller := NewMVCCHandle(objHandle, 0)
 	chain := NewDeleteChain(nil, controller)
 	mockPK := containers.MakeVector(types.New(types.T_uint8, 0, 0), common.DefaultAllocator)
 	for i := 0; i < 13; i++ {
@@ -214,12 +219,14 @@ func TestDeleteChain2(t *testing.T) {
 	assert.Equal(t, 8, mask.GetCardinality())
 
 	var startTs2 types.TS
-	mask, err = chain.CollectDeletesInRange(startTs2, txn3.GetCommitTS().Next(), nil)
+	commitTS := txn3.GetCommitTS()
+	mask, err = chain.CollectDeletesInRange(startTs2, commitTS.Next(), nil)
 	assert.NoError(t, err)
 	t.Log(mask.GetBitmap().String())
 	assert.Equal(t, 8, mask.GetCardinality())
 
-	mask, err = chain.CollectDeletesInRange(txn1.GetCommitTS(), txn3.GetCommitTS().Next(), nil)
+	commitTS = txn3.GetCommitTS()
+	mask, err = chain.CollectDeletesInRange(txn1.GetCommitTS(), commitTS.Next(), nil)
 	assert.NoError(t, err)
 	t.Log(mask.GetBitmap().String())
 	assert.Equal(t, 4, mask.GetCardinality())

@@ -17,14 +17,17 @@ package txnbase
 import (
 	"context"
 	"fmt"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/panjf2000/ants/v2"
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 
@@ -80,13 +83,11 @@ type TxnStoreFactory = func() txnif.TxnStore
 type TxnFactory = func(*TxnManager, txnif.TxnStore, []byte, types.TS, types.TS) txnif.AsyncTxn
 
 type TxnManager struct {
-	sync.RWMutex
 	sm.ClosedState
 	PreparingSM     sm.StateMachine
 	FlushQueue      sm.Queue
-	IDMap           map[string]txnif.AsyncTxn
+	IDMap           *sync.Map
 	IdAlloc         *common.TxnIDAllocator
-	TsAlloc         *types.TsAlloctor
 	MaxCommittedTS  atomic.Pointer[types.TS]
 	TxnStoreFactory TxnStoreFactory
 	TxnFactory      TxnFactory
@@ -95,6 +96,12 @@ type TxnManager struct {
 	ctx             context.Context
 	cancel          context.CancelFunc
 	wg              sync.WaitGroup
+	workers         *ants.Pool
+
+	ts struct {
+		mu        sync.Mutex
+		allocator *types.TsAlloctor
+	}
 
 	// for debug
 	prevPrepareTS             types.TS
@@ -107,15 +114,15 @@ func NewTxnManager(txnStoreFactory TxnStoreFactory, txnFactory TxnFactory, clock
 		txnFactory = DefaultTxnFactory
 	}
 	mgr := &TxnManager{
-		IDMap:           make(map[string]txnif.AsyncTxn),
+		IDMap:           new(sync.Map),
 		IdAlloc:         common.NewTxnIDAllocator(),
-		TsAlloc:         types.NewTsAlloctor(clock),
 		TxnStoreFactory: txnStoreFactory,
 		TxnFactory:      txnFactory,
 		Exception:       new(atomic.Value),
 		CommitListener:  newBatchCommitListener(),
 		wg:              sync.WaitGroup{},
 	}
+	mgr.ts.allocator = types.NewTsAlloctor(clock)
 	mgr.initMaxCommittedTS()
 	pqueue := sm.NewSafeQueue(20000, 1000, mgr.dequeuePreparing)
 	prepareWALQueue := sm.NewSafeQueue(20000, 1000, mgr.onPrepareWAL)
@@ -123,6 +130,7 @@ func NewTxnManager(txnStoreFactory TxnStoreFactory, txnFactory TxnFactory, clock
 	mgr.PreparingSM = sm.NewStateMachine(new(sync.WaitGroup), mgr, pqueue, prepareWALQueue)
 
 	mgr.ctx, mgr.cancel = context.WithCancel(context.Background())
+	mgr.workers, _ = ants.NewPool(runtime.NumCPU())
 	return mgr
 }
 
@@ -135,31 +143,21 @@ func (mgr *TxnManager) initMaxCommittedTS() {
 // all timestamps allocated before have been assigned to txn, which means those
 // txn are visible for the returned timestamp.
 func (mgr *TxnManager) Now() types.TS {
-	mgr.Lock()
-	defer mgr.Unlock()
-	return mgr.TsAlloc.Alloc()
+	mgr.ts.mu.Lock()
+	defer mgr.ts.mu.Unlock()
+	return mgr.ts.allocator.Alloc()
 }
 
 func (mgr *TxnManager) Init(prevTs types.TS) error {
 	logutil.Infof("init ts to %v", prevTs.ToString())
-	mgr.TsAlloc.SetStart(prevTs)
+	mgr.ts.allocator.SetStart(prevTs)
 	logutil.Debug("[INIT]", TxnMgrField(mgr))
 	return nil
 }
 
-func (mgr *TxnManager) StatMaxCommitTS() (ts types.TS) {
-	mgr.RLock()
-	ts = mgr.TsAlloc.Alloc()
-	mgr.RUnlock()
-	return
-}
-
 // Note: Replay should always runs in a single thread
 func (mgr *TxnManager) OnReplayTxn(txn txnif.AsyncTxn) (err error) {
-	mgr.Lock()
-	defer mgr.Unlock()
-	// TODO: idempotent check
-	mgr.IDMap[txn.GetID()] = txn
+	mgr.IDMap.Store(txn.GetID(), txn)
 	return
 }
 
@@ -170,34 +168,13 @@ func (mgr *TxnManager) StartTxn(info []byte) (txn txnif.AsyncTxn, err error) {
 		logutil.Warnf("StartTxn: %v", err)
 		return
 	}
-	mgr.Lock()
-	defer mgr.Unlock()
 	txnId := mgr.IdAlloc.Alloc()
 	startTs := *mgr.MaxCommittedTS.Load()
 
 	store := mgr.TxnStoreFactory()
 	txn = mgr.TxnFactory(mgr, store, txnId, startTs, types.TS{})
 	store.BindTxn(txn)
-	mgr.IDMap[string(txnId)] = txn
-	return
-}
-
-// StartTxn starts a local transaction initiated by DN
-func (mgr *TxnManager) StartTxnWithLatestTS(info []byte) (txn txnif.AsyncTxn, err error) {
-	if exp := mgr.Exception.Load(); exp != nil {
-		err = exp.(error)
-		logutil.Warnf("StartTxn: %v", err)
-		return
-	}
-	mgr.Lock()
-	defer mgr.Unlock()
-	txnId := mgr.IdAlloc.Alloc()
-	startTs := mgr.TsAlloc.Alloc()
-
-	store := mgr.TxnStoreFactory()
-	txn = mgr.TxnFactory(mgr, store, txnId, startTs, types.TS{})
-	store.BindTxn(txn)
-	mgr.IDMap[string(txnId)] = txn
+	mgr.IDMap.Store(util.UnsafeBytesToString(txnId), txn)
 	return
 }
 
@@ -210,13 +187,11 @@ func (mgr *TxnManager) StartTxnWithStartTSAndSnapshotTS(
 		logutil.Warnf("StartTxn: %v", err)
 		return
 	}
-	mgr.Lock()
-	defer mgr.Unlock()
 	store := mgr.TxnStoreFactory()
 	txnId := mgr.IdAlloc.Alloc()
 	txn = mgr.TxnFactory(mgr, store, txnId, startTS, snapshotTS)
 	store.BindTxn(txn)
-	mgr.IDMap[string(txnId)] = txn
+	mgr.IDMap.Store(util.UnsafeBytesToString(txnId), txn)
 	return
 }
 
@@ -230,28 +205,21 @@ func (mgr *TxnManager) GetOrCreateTxnWithMeta(
 		logutil.Warnf("StartTxn: %v", err)
 		return
 	}
-	mgr.Lock()
-	defer mgr.Unlock()
-	txn, ok := mgr.IDMap[string(id)]
-	if !ok {
+	if _, ok := mgr.IDMap.Load(util.UnsafeBytesToString(id)); !ok {
 		store := mgr.TxnStoreFactory()
 		txn = mgr.TxnFactory(mgr, store, id, ts, ts)
 		store.BindTxn(txn)
-		mgr.IDMap[string(id)] = txn
+		mgr.IDMap.Store(util.UnsafeBytesToString(id), txn)
 	}
 	return
 }
 
 func (mgr *TxnManager) DeleteTxn(id string) (err error) {
-	mgr.Lock()
-	defer mgr.Unlock()
-	txn := mgr.IDMap[id]
-	if txn == nil {
+	if _, ok := mgr.IDMap.LoadAndDelete(id); !ok {
 		err = moerr.NewTxnNotFoundNoCtx()
 		logutil.Warnf("Txn %s not found", id)
 		return
 	}
-	delete(mgr.IDMap, id)
 	return
 }
 
@@ -260,9 +228,10 @@ func (mgr *TxnManager) GetTxnByCtx(ctx []byte) txnif.AsyncTxn {
 }
 
 func (mgr *TxnManager) GetTxn(id string) txnif.AsyncTxn {
-	mgr.RLock()
-	defer mgr.RUnlock()
-	return mgr.IDMap[id]
+	if res, ok := mgr.IDMap.Load(id); ok {
+		return res.(txnif.AsyncTxn)
+	}
+	return nil
 }
 
 func (mgr *TxnManager) EnqueueFlushing(op any) (err error) {
@@ -294,11 +263,8 @@ func (mgr *TxnManager) newHeartbeatOpTxn(ctx context.Context) *OpTxn {
 		logutil.Warnf("StartTxn: %v", err)
 		return nil
 	}
-	mgr.Lock()
-	defer mgr.Unlock()
+	startTs := mgr.Now()
 	txnId := mgr.IdAlloc.Alloc()
-	startTs := mgr.TsAlloc.Alloc()
-
 	store := &heartbeatStore{}
 	txn := DefaultTxnFactory(mgr, store, txnId, startTs, types.TS{})
 	store.BindTxn(txn)
@@ -355,12 +321,12 @@ func (mgr *TxnManager) onBindPrepareTimeStamp(op *OpTxn) (ts types.TS) {
 		return
 	}
 
-	mgr.Lock()
-	defer mgr.Unlock()
+	mgr.ts.mu.Lock()
+	defer mgr.ts.mu.Unlock()
 
-	ts = mgr.TsAlloc.Alloc()
+	ts = mgr.ts.allocator.Alloc()
 	if !mgr.prevPrepareTS.IsEmpty() {
-		if ts.Less(mgr.prevPrepareTS) {
+		if ts.Less(&mgr.prevPrepareTS) {
 			panic(fmt.Sprintf("timestamp rollback current %v, previous %v", ts.ToString(), mgr.prevPrepareTS.ToString()))
 		}
 	}
@@ -445,8 +411,12 @@ func (mgr *TxnManager) on1PCPrepared(op *OpTxn) {
 	_ = op.Txn.WaitDone(err, isAbort)
 }
 func (mgr *TxnManager) OnCommitTxn(txn txnif.AsyncTxn) {
-	commitTS := txn.GetCommitTS()
-	mgr.MaxCommittedTS.Store(&commitTS)
+	new := txn.GetCommitTS()
+	for old := mgr.MaxCommittedTS.Load(); new.Greater(old); old = mgr.MaxCommittedTS.Load() {
+		if mgr.MaxCommittedTS.CompareAndSwap(old, &new) {
+			return
+		}
+	}
 }
 func (mgr *TxnManager) on2PCPrepared(op *OpTxn) {
 	var err error
@@ -478,7 +448,9 @@ func (mgr *TxnManager) dequeuePreparing(items ...any) {
 	now := time.Now()
 	for _, item := range items {
 		op := item.(*OpTxn)
-		t0 := time.Now()
+		store := op.Txn.GetStore()
+		store.TriggerTrace(txnif.TracePreparing)
+
 		// Idempotent check
 		if state := op.Txn.GetTxnState(false); state != txnif.TxnStateActive {
 			op.Txn.WaitDone(moerr.NewTxnNotActiveNoCtx(txnif.TxnStrState(state)), false)
@@ -502,18 +474,18 @@ func (mgr *TxnManager) dequeuePreparing(items ...any) {
 		}
 		if !op.Txn.IsReplay() {
 			if !mgr.prevPrepareTSInPreparing.IsEmpty() {
-				if op.Txn.GetPrepareTS().Less(mgr.prevPrepareTSInPreparing) {
+				prepareTS := op.Txn.GetPrepareTS()
+				if prepareTS.Less(&mgr.prevPrepareTSInPreparing) {
 					panic(fmt.Sprintf("timestamp rollback current %v, previous %v", op.Txn.GetPrepareTS().ToString(), mgr.prevPrepareTSInPreparing.ToString()))
 				}
 			}
 			mgr.prevPrepareTSInPreparing = op.Txn.GetPrepareTS()
 		}
 
+		store.TriggerTrace(txnif.TracePrepareWalWait)
 		if err := mgr.EnqueueFlushing(op); err != nil {
 			panic(err)
 		}
-
-		v2.TxnDequeuePreparingDurationHistogram.Observe(time.Since(t0).Seconds())
 	}
 	common.DoIfDebugEnabled(func() {
 		logutil.Debug("[dequeuePreparing]",
@@ -528,6 +500,8 @@ func (mgr *TxnManager) onPrepareWAL(items ...any) {
 
 	for _, item := range items {
 		op := item.(*OpTxn)
+		store := op.Txn.GetStore()
+		store.TriggerTrace(txnif.TracePrepareWal)
 		var t1, t2, t3, t4, t5 time.Time
 		t1 = time.Now()
 		if op.Txn.GetError() == nil && op.Op == OpCommit || op.Op == OpPrepare {
@@ -536,11 +510,11 @@ func (mgr *TxnManager) onPrepareWAL(items ...any) {
 			}
 
 			t2 = time.Now()
-			v2.TxnOnPrepareWALPrepareWALDurationHistogram.Observe(t2.Sub(t1).Seconds())
 
 			if !op.Txn.IsReplay() {
 				if !mgr.prevPrepareTSInPrepareWAL.IsEmpty() {
-					if op.Txn.GetPrepareTS().Less(mgr.prevPrepareTSInPrepareWAL) {
+					prepareTS := op.Txn.GetPrepareTS()
+					if prepareTS.Less(&mgr.prevPrepareTSInPrepareWAL) {
 						panic(fmt.Sprintf("timestamp rollback current %v, previous %v", op.Txn.GetPrepareTS().ToString(), mgr.prevPrepareTSInPrepareWAL.ToString()))
 					}
 				}
@@ -549,16 +523,14 @@ func (mgr *TxnManager) onPrepareWAL(items ...any) {
 
 			mgr.CommitListener.OnEndPrepareWAL(op.Txn)
 			t3 = time.Now()
-
-			v2.TxnOnPrepareWALEndPrepareDurationHistogram.Observe(t3.Sub(t2).Seconds())
 		}
 
 		t4 = time.Now()
+		store.TriggerTrace(txnif.TracePreapredWait)
 		if _, err := mgr.FlushQueue.Enqueue(op); err != nil {
 			panic(err)
 		}
 		t5 = time.Now()
-		v2.TxnOnPrepareWALFlushQueueDurationHistogram.Observe(t5.Sub(t4).Seconds())
 
 		if t5.Sub(t1) > time.Second {
 			logutil.Warn(
@@ -569,7 +541,6 @@ func (mgr *TxnManager) onPrepareWAL(items ...any) {
 				zap.Duration("enqueue-flush-duration", t5.Sub(t4)),
 			)
 		}
-		v2.TxnOnPrepareWALTotalDurationHistogram.Observe(t5.Sub(t1).Seconds())
 	}
 	common.DoIfDebugEnabled(func() {
 		logutil.Debug("[prepareWAL]",
@@ -581,24 +552,27 @@ func (mgr *TxnManager) onPrepareWAL(items ...any) {
 
 // 1PC and 2PC
 func (mgr *TxnManager) dequeuePrepared(items ...any) {
-	var err error
 	now := time.Now()
 	for _, item := range items {
 		op := item.(*OpTxn)
-		//Notice that WaitPrepared do nothing when op is OpRollback
-		t0 := time.Now()
-		if err = op.Txn.WaitPrepared(op.ctx); err != nil {
-			// v0.6 TODO: Error handling
-			panic(err)
-		}
+		store := op.Txn.GetStore()
+		store.TriggerTrace(txnif.TracePrepared)
+		mgr.workers.Submit(func() {
+			//Notice that WaitPrepared do nothing when op is OpRollback
+			t0 := time.Now()
+			if err := op.Txn.WaitPrepared(op.ctx); err != nil {
+				// v0.6 TODO: Error handling
+				panic(err)
+			}
 
-		if op.Is2PC() {
-			mgr.on2PCPrepared(op)
-		} else {
-			mgr.on1PCPrepared(op)
-		}
-		dequeuePreparedDuration := time.Since(t0)
-		v2.TxnDequeuePreparedDurationHistogram.Observe(dequeuePreparedDuration.Seconds())
+			if op.Is2PC() {
+				mgr.on2PCPrepared(op)
+			} else {
+				mgr.on1PCPrepared(op)
+			}
+			dequeuePreparedDuration := time.Since(t0)
+			v2.TxnDequeuePreparedDurationHistogram.Observe(dequeuePreparedDuration.Seconds())
+		})
 	}
 	common.DoIfDebugEnabled(func() {
 		logutil.Debug("[dequeuePrepared]",
@@ -621,15 +595,15 @@ func (mgr *TxnManager) OnException(new error) {
 // MinTSForTest is only be used in ut to ensure that
 // files that have been gc will not be used.
 func (mgr *TxnManager) MinTSForTest() types.TS {
-	mgr.RLock()
-	defer mgr.RUnlock()
 	minTS := types.MaxTs()
-	for _, txn := range mgr.IDMap {
+	mgr.IDMap.Range(func(key, value any) bool {
+		txn := value.(txnif.AsyncTxn)
 		startTS := txn.GetStartTS()
-		if startTS.Less(minTS) {
+		if startTS.Less(&minTS) {
 			minTS = startTS
 		}
-	}
+		return true
+	})
 	return minTS
 }
 
@@ -646,5 +620,6 @@ func (mgr *TxnManager) Stop() {
 	mgr.PreparingSM.Stop()
 	mgr.FlushQueue.Stop()
 	mgr.OnException(sm.ErrClose)
+	mgr.workers.Release()
 	logutil.Info("[Stop]", TxnMgrField(mgr))
 }

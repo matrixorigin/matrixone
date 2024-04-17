@@ -21,6 +21,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -36,12 +39,22 @@ type CompilerContext struct {
 	txnOp     client.TxnOperator
 }
 
+func (c *CompilerContext) ReplacePlan(execPlan *planpb.Execute) (*planpb.Plan, tree.Statement, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
 func (c *CompilerContext) CheckSubscriptionValid(subName, accName string, pubName string) error {
 	//TODO implement me
 	panic("implement me")
 }
 
 func (c *CompilerContext) IsPublishing(dbName string) (bool, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (c *CompilerContext) ResolveSnapshotTsWithSnapShotName(snapshotName string) (int64, error) {
 	//TODO implement me
 	panic("implement me")
 }
@@ -78,8 +91,8 @@ func (c *CompilerContext) ResolveAccountIds(accountNames []string) ([]uint32, er
 	return []uint32{catalog.System_Account}, nil
 }
 
-func (*CompilerContext) Stats(obj *plan.ObjectRef) bool {
-	return false
+func (*CompilerContext) Stats(obj *plan.ObjectRef) (*pb.StatsInfo, error) {
+	return nil, nil
 }
 
 func (*CompilerContext) GetStatsCache() *plan.StatsCache {
@@ -174,7 +187,8 @@ func (c *CompilerContext) Resolve(schemaName string, tableName string) (objRef *
 	}
 
 	tableDef = &plan.TableDef{
-		Name: tableName,
+		Name:   tableName,
+		DbName: schemaName,
 	}
 
 	attrs, err := c.getTableAttrs(schemaName, tableName)
@@ -209,7 +223,7 @@ func (c *CompilerContext) Resolve(schemaName string, tableName string) (objRef *
 }
 
 func (*CompilerContext) ResolveVariable(varName string, isSystemVar bool, isGlobalVar bool) (interface{}, error) {
-	return "", nil
+	return nil, nil
 }
 
 func (c *CompilerContext) getTableAttrs(dbName string, tableName string) (attrs []*engine.Attribute, err error) {
@@ -252,7 +266,7 @@ func engineAttrToPlanColDef(idx int, attr *engine.Attribute) *plan.ColDef {
 	return &plan.ColDef{
 		ColId: uint64(attr.ID),
 		Name:  attr.Name,
-		Typ: &plan.Type{
+		Typ: plan.Type{
 			Id:          int32(attr.Type.Oid),
 			NotNullable: attr.Default != nil && !(attr.Default.NullAbility),
 			Width:       attr.Type.Width,

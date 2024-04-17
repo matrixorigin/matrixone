@@ -16,6 +16,7 @@ package preinsert
 
 import (
 	"bytes"
+	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -26,7 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/vm"
-	"go.uber.org/zap"
 )
 
 const argName = "preinsert"
@@ -45,11 +45,11 @@ func (arg *Argument) Call(proc *proc) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	result, err := arg.children[0].Call(proc)
+	result, err := arg.GetChildren(0).Call(proc)
 	if err != nil {
 		return result, err
 	}
-	analy := proc.GetAnalyze(arg.info.Idx, arg.info.ParallelIdx, arg.info.ParallelMajor)
+	analy := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
 	analy.Start()
 	defer analy.Stop()
 
@@ -134,7 +134,7 @@ func genAutoIncrCol(bat *batch.Batch, proc *proc, arg *Argument) error {
 
 func genCompositePrimaryKey(bat *batch.Batch, proc *proc, tableDef *pb.TableDef) error {
 	// Check whether the composite primary key column is included
-	if tableDef.Pkey == nil || tableDef.Pkey.CompPkeyCol == nil {
+	if tableDef.Pkey.CompPkeyCol == nil {
 		return nil
 	}
 

@@ -30,16 +30,16 @@ split_part(12345*&+789*&dhejwfew2, *&, 2)
 +789
 SELECT split_part('.+0___=+. ','.',1);
 split_part(.+0___=+. , ., 1)
-null
+
 SELECT split_part('..','.',1);
 split_part(.., ., 1)
-null
+
 SELECT split_part('  ewfere..  ',' ',4);
 split_part(  ewfere..  ,  , 4)
-null
+
 SELECT split_part('','327832',1);
 split_part(, 327832, 1)
-null
+
 SELECT split_part(NULL,'.',6);
 split_part(null, ., 6)
 null
@@ -264,7 +264,7 @@ null    null
 iHHDIUWH*&*(UIJCSi    f
 null    null
 null    null
-null    &&n e89__+&&
+    &&n e89__+&&
 SELECT split_part(s1,delim,count1) FROM split_part_02 WHERE count2 IS NOT NULL;
 split_part(s1, delim, count1)
 null
@@ -298,7 +298,7 @@ null
 false
 null
 null
-null
+false
 SELECT endswith(split_part(s1,delim,6),'h)') FROM split_part_02;
 endswith(split_part(s1, delim, 6), h))
 null
@@ -322,7 +322,7 @@ null
 iSCJIU(*&*HWUIDHHi
 null
 null
-null
+
 DROP TABLE IF EXISTS split_part_03;
 DROP TABLE IF EXISTS split_part_04;
 CREATE TABLE split_part_03(

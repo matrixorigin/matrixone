@@ -35,6 +35,8 @@ func NewAggApproxCount(overloadID int64, dist bool, inputTypes []types.Type, out
 	switch inputTypes[0].Oid {
 	case types.T_bool:
 		return newGenericApprox[bool](overloadID, inputTypes[0], outputType, dist)
+	case types.T_bit:
+		return newGenericApprox[uint64](overloadID, inputTypes[0], outputType, dist)
 	case types.T_uint8:
 		return newGenericApprox[uint8](overloadID, inputTypes[0], outputType, dist)
 	case types.T_uint16:

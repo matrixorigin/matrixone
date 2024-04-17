@@ -9,7 +9,7 @@ hex(9223372036854775807)
 7FFFFFFFFFFFFFFF
 SELECT hex(-255);
 hex(-255)
--FF
+FFFFFFFFFFFFFF01
 SELECT hex("你好。");
 hex(你好。)
 e4bda0e5a5bde38082
@@ -23,5 +23,5 @@ SELECT hex(0x62);
 hex(0x62)
 62
 SELECT hex(b'1101100');
-hex(1101100)
-6C
+hex(0b1101100)
+6c

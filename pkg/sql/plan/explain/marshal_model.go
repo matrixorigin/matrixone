@@ -243,7 +243,7 @@ var nodeTypeToNameMap = map[plan2.Node_NodeType]string{
 	plan2.Node_PRE_INSERT_SK:    "Pre Insert 2nd Key",
 
 	plan2.Node_TIME_WINDOW:  "Time window",
-	plan2.Node_Fill:         "Fill",
+	plan2.Node_FILL:         "Fill",
 	plan2.Node_PARTITION:    "Partition",
 	plan2.Node_FUZZY_FILTER: "Fuzzy filter",
 }
@@ -257,6 +257,7 @@ const (
 	Label_Grouping_Keys             = "Grouping keys"
 	Label_Agg_Functions             = "Aggregate functions"
 	Label_Filter_Conditions         = "Filter conditions"
+	Label_Block_Filter_Conditions   = "Block Filter conditions"
 	Label_Join_Type                 = "Join type"
 	Label_Join_Conditions           = "Join conditions"
 	Label_Left_NodeId               = "Left node id"

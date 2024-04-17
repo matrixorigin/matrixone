@@ -266,14 +266,6 @@ func (l *localLockTable) unlock(
 				notifyValue{ts: commitTS})
 			logLockUnlocked(txn, key, lock)
 
-			if l.bind.OriginTable == 2 {
-				var buf bytes.Buffer
-				lock.waiters.iter(func(w *waiter) bool {
-					buf.WriteString(w.String())
-					buf.WriteString(" ")
-					return true
-				})
-			}
 			if lockCanRemoved {
 				v2.TxnHoldLockDurationHistogram.Observe(time.Since(lock.createAt).Seconds())
 				l.mu.store.Delete(key)

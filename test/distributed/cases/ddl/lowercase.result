@@ -25,11 +25,11 @@ INSERT INTO T1 VALUES(213823.12);
 INSERT INTO t1 VALUES(-45412.38920);
 SELECT * FROM t1;
 a
--45412.39
 213823.12
+-45412.39
 DROP TABLE T1;
 drop table IF EXISTS table01;
-CREATE external table table01(clo1 int,clo2 bigint)infile{"filepath"='$resources/external_table_file/aaa.csv'};
+CREATE external table table01(clo1 int,clo2 bigint)infile{"filepath"='$resources/external_table_file/aaa.csv'} fields terminated by ',';
 SELECT * FROM Table01;
 clo1    clo2
 1    2131420000000000
@@ -347,8 +347,8 @@ DROP VIEW IF EXISTS vie;
 CREATE TABLE TaB(Field int);
 CREATE VIEW ViE AS SELECT * FROM TAb;
 show CREATE TABLE VIe;
-View    Create View
-vie    CREATE VIEW ViE AS SELECT * FROM TAb;
+View    Create View    character_set_client    collation_connection
+vie    CREATE VIEW ViE AS SELECT * FROM TAb;    utf8mb4    utf8mb4_general_ci
 DROP VIEW vie;
 DROP table TAB;
 DROP TABLE IF EXISTS t13;
@@ -358,8 +358,8 @@ INSERT INTO t13 VALUES(1),(2),(3),(4);
 CREATE VIEW view01 AS SELECT * FROM t13;
 ALTER VIEW VIEW01 AS SELECT * FROM t13 WHERE a=1 or a = 2;
 show CREATE TABLE vieW01;
-View    Create View
-view01    CREATE VIEW VIEW01 AS SELECT * FROM t13 WHERE a=1 or a = 2;
+View    Create View    character_set_client    collation_connection
+view01    CREATE VIEW VIEW01 AS SELECT * FROM t13 WHERE a=1 or a = 2;    utf8mb4    utf8mb4_general_ci
 SELECT * FROM view01;
 a
 1
@@ -584,8 +584,8 @@ CREATE TABLE `TaB`(Field int);
 INSERT INTO TAB VALUES(10);
 CREATE VIEW `ViE` AS SELECT * FROM `TAb`;
 show CREATE TABLE `VIe`;
-View    Create View
-vie    CREATE VIEW `ViE` AS SELECT * FROM `TAb`;
+View    Create View    character_set_client    collation_connection
+vie    CREATE VIEW `ViE` AS SELECT * FROM `TAb`;    utf8mb4    utf8mb4_general_ci
 DROP view `VIE`;
 DROP table `TAB`;
 DROP TABLE IF EXISTS `t22`;
@@ -637,7 +637,7 @@ DROP DATABASE IF EXISTS `test08`;
 CREATE DATABASE `test08`;
 use  `test08`;
 DROP table IF EXISTS `table02`;
-CREATE external table `table02`(clo1 int,clo2 bigint)infile{"filepath"='$resources/external_table_file/aaa.csv'};
+CREATE external table `table02`(clo1 int,clo2 bigint)infile{"filepath"='$resources/external_table_file/aaa.csv'} fields terminated by ',';
 SELECT * FROM `Table02`;
 clo1    clo2
 1    2131420000000000

@@ -18,6 +18,7 @@ import (
 	"bytes"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -57,7 +58,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 		return vm.CancelResult, err
 	}
 
-	anal := proc.GetAnalyze(arg.info.Idx, arg.info.ParallelIdx, arg.info.ParallelMajor)
+	anal := proc.GetAnalyze(arg.GetIdx(), arg.GetParallelIdx(), arg.GetParallelMajor())
 	anal.Start()
 	defer anal.Stop()
 	ap := arg
@@ -66,7 +67,7 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	for {
 		switch ctr.state {
 		case Build:
-			if err := ctr.build(proc, anal); err != nil {
+			if err := ctr.build(anal); err != nil {
 				return result, err
 			}
 			if ctr.mp == nil && !arg.IsShuffle {
@@ -102,13 +103,15 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 				ap.lastrow = 0
 			}
 
-			if err := ctr.probe(ap, proc, anal, arg.info.IsFirst, arg.info.IsLast, &result); err != nil {
-				proc.PutBatch(ap.bat)
+			startrow := ap.lastrow
+			if err := ctr.probe(ap, proc, anal, arg.GetIsFirst(), arg.GetIsLast(), &result); err != nil {
 				return result, err
 			}
 			if ap.lastrow == 0 {
 				proc.PutBatch(ap.bat)
 				ap.bat = nil
+			} else if ap.lastrow == startrow {
+				return result, moerr.NewInternalErrorNoCtx("inner join hanging")
 			}
 			return result, nil
 
@@ -120,39 +123,45 @@ func (arg *Argument) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 }
 
-func (ctr *container) receiveHashMap(proc *process.Process, anal process.Analyze) error {
+func (ctr *container) receiveHashMap(anal process.Analyze) error {
 	bat, _, err := ctr.ReceiveFromSingleReg(1, anal)
 	if err != nil {
 		return err
 	}
 	if bat != nil && bat.AuxData != nil {
 		ctr.mp = bat.DupJmAuxData()
-		anal.Alloc(ctr.mp.Size())
+		ctr.maxAllocSize = max(ctr.maxAllocSize, ctr.mp.Size())
 	}
 	return nil
 }
 
-func (ctr *container) receiveBatch(proc *process.Process, anal process.Analyze) error {
-	bat, _, err := ctr.ReceiveFromSingleReg(1, anal)
-	if err != nil {
-		return err
-	}
-	if bat != nil {
-		if ctr.bat != nil {
-			proc.PutBatch(ctr.bat)
-			ctr.bat = nil
+func (ctr *container) receiveBatch(anal process.Analyze) error {
+	for {
+		bat, _, err := ctr.ReceiveFromSingleReg(1, anal)
+		if err != nil {
+			return err
 		}
-		ctr.bat = bat
+		if bat != nil {
+			ctr.batchRowCount += bat.RowCount()
+			ctr.batches = append(ctr.batches, bat)
+		} else {
+			break
+		}
+	}
+	for i := 0; i < len(ctr.batches)-1; i++ {
+		if ctr.batches[i].RowCount() != colexec.DefaultBatchSize {
+			panic("wrong batch received for hash build!")
+		}
 	}
 	return nil
 }
 
-func (ctr *container) build(proc *process.Process, anal process.Analyze) error {
-	err := ctr.receiveHashMap(proc, anal)
+func (ctr *container) build(anal process.Analyze) error {
+	err := ctr.receiveHashMap(anal)
 	if err != nil {
 		return err
 	}
-	return ctr.receiveBatch(proc, anal)
+	return ctr.receiveBatch(anal)
 }
 
 func (ctr *container) probe(ap *Argument, proc *process.Process, anal process.Analyze, isFirst bool, isLast bool, result *vm.CallResult) error {
@@ -169,7 +178,7 @@ func (ctr *container) probe(ap *Argument, proc *process.Process, anal process.An
 			// for inner join, if left batch is sorted , then output batch is sorted
 			ctr.rbat.Vecs[i].SetSorted(ap.bat.Vecs[rp.Pos].GetSorted())
 		} else {
-			ctr.rbat.Vecs[i] = proc.GetVector(*ctr.bat.Vecs[rp.Pos].GetType())
+			ctr.rbat.Vecs[i] = proc.GetVector(*ctr.batches[0].Vecs[rp.Pos].GetType())
 		}
 	}
 
@@ -179,8 +188,8 @@ func (ctr *container) probe(ap *Argument, proc *process.Process, anal process.An
 	if ctr.joinBat1 == nil {
 		ctr.joinBat1, ctr.cfs1 = colexec.NewJoinBatch(ap.bat, proc.Mp())
 	}
-	if ctr.joinBat2 == nil && ctr.bat != nil && ctr.bat.RowCount() != 0 {
-		ctr.joinBat2, ctr.cfs2 = colexec.NewJoinBatch(ctr.bat, proc.Mp())
+	if ctr.joinBat2 == nil && ctr.batchRowCount > 0 {
+		ctr.joinBat2, ctr.cfs2 = colexec.NewJoinBatch(ctr.batches[0], proc.Mp())
 	}
 
 	mSels := ctr.mp.Sels()
@@ -188,7 +197,7 @@ func (ctr *container) probe(ap *Argument, proc *process.Process, anal process.An
 	itr := ctr.mp.NewIterator()
 	rowCount := 0
 	for i := ap.lastrow; i < count; i += hashmap.UnitLimit {
-		if rowCount >= 8192 {
+		if rowCount >= colexec.DefaultBatchSize {
 			ctr.rbat.AddRowCount(rowCount)
 			anal.Output(ctr.rbat, isLast)
 			result.Batch = ctr.rbat
@@ -216,7 +225,8 @@ func (ctr *container) probe(ap *Argument, proc *process.Process, anal process.An
 								return err
 							}
 						} else {
-							if err := ctr.rbat.Vecs[j].UnionOne(ctr.bat.Vecs[rp.Pos], int64(idx), proc.Mp()); err != nil {
+							idx1, idx2 := idx/colexec.DefaultBatchSize, idx%colexec.DefaultBatchSize
+							if err := ctr.rbat.Vecs[j].UnionOne(ctr.batches[idx1].Vecs[rp.Pos], int64(idx2), proc.Mp()); err != nil {
 								return err
 							}
 						}
@@ -230,8 +240,11 @@ func (ctr *container) probe(ap *Argument, proc *process.Process, anal process.An
 								return err
 							}
 						} else {
-							if err := ctr.rbat.Vecs[j].Union(ctr.bat.Vecs[rp.Pos], sels, proc.Mp()); err != nil {
-								return err
+							for _, sel := range sels {
+								idx1, idx2 := sel/colexec.DefaultBatchSize, sel%colexec.DefaultBatchSize
+								if err := ctr.rbat.Vecs[j].UnionOne(ctr.batches[idx1].Vecs[rp.Pos], int64(idx2), proc.Mp()); err != nil {
+									return err
+								}
 							}
 						}
 					}
@@ -268,7 +281,8 @@ func (ctr *container) evalApCondForOneSel(bat, rbat *batch.Batch, ap *Argument, 
 		1, ctr.cfs1); err != nil {
 		return err
 	}
-	if err := colexec.SetJoinBatchValues(ctr.joinBat2, ctr.bat, sel,
+	idx1, idx2 := sel/colexec.DefaultBatchSize, sel%colexec.DefaultBatchSize
+	if err := colexec.SetJoinBatchValues(ctr.joinBat2, ctr.batches[idx1], idx2,
 		1, ctr.cfs2); err != nil {
 		return err
 	}
@@ -291,7 +305,7 @@ func (ctr *container) evalApCondForOneSel(bat, rbat *batch.Batch, ap *Argument, 
 				return err
 			}
 		} else {
-			if err := rbat.Vecs[j].UnionOne(ctr.bat.Vecs[rp.Pos], sel, proc.Mp()); err != nil {
+			if err := rbat.Vecs[j].UnionOne(ctr.batches[idx1].Vecs[rp.Pos], idx2, proc.Mp()); err != nil {
 				rbat.Clean(proc.Mp())
 				return err
 			}
@@ -304,7 +318,6 @@ func (ctr *container) evalJoinCondition(bat *batch.Batch, proc *process.Process)
 	for i := range ctr.evecs {
 		vec, err := ctr.evecs[i].executor.Eval(proc, []*batch.Batch{bat})
 		if err != nil {
-			ctr.cleanEvalVectors()
 			return err
 		}
 		ctr.vecs[i] = vec
