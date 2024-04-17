@@ -551,6 +551,9 @@ func logTxnCreated(txn *activeTxn) {
 }
 
 func txnField(txn *activeTxn) zap.Field {
+	if txn == nil {
+		return zap.String("txn", "nil")
+	}
 	return zap.String("txn",
 		fmt.Sprintf("%s(%s)",
 			hex.EncodeToString(txn.txnID),
