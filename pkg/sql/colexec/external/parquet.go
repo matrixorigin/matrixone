@@ -268,6 +268,119 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 				return appendFixed(vec, data.Double(), isNulls, proc.Mp())
 			}
 		}
+	case types.T_date:
+		// https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#date
+		if st.LogicalType().Date != nil {
+			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+				data := page.Data()
+				isNulls, err := mp.pageIsNulls(proc.Ctx, page)
+				if err != nil {
+					return err
+				}
+				bs, _ := data.Data()
+				ls := types.DecodeSlice[types.Date](bs)
+				if len(isNulls) == 0 {
+					return vector.AppendFixedList(vec, ls, nil, proc.Mp())
+				}
+				return appendFixed(vec, ls, isNulls, proc.Mp())
+			}
+		}
+	case types.T_timestamp:
+		// https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#timestamp
+		lt := st.LogicalType().Timestamp
+		if lt == nil || !lt.IsAdjustedToUTC {
+			break
+		}
+		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+			data := page.Data()
+			isNulls, err := mp.pageIsNulls(proc.Ctx, page)
+			if err != nil {
+				return err
+			}
+			ls := make([]types.Timestamp, page.NumValues())
+			switch {
+			case lt.Unit.Nanos != nil:
+				for i, n := range data.Int64() {
+					ls[i] = types.UnixNanoToTimestamp(n)
+				}
+			case lt.Unit.Micros != nil:
+				for i, n := range data.Int64() {
+					ls[i] = types.UnixMicroToTimestamp(n)
+				}
+			case lt.Unit.Millis != nil:
+				for i, n := range data.Int64() {
+					ls[i] = types.UnixMicroToTimestamp(n * 1000)
+				}
+			}
+			if len(isNulls) == 0 {
+				return vector.AppendFixedList(vec, ls, nil, proc.Mp())
+			}
+			return appendFixed(vec, ls, isNulls, proc.Mp())
+		}
+	case types.T_datetime:
+		lt := st.LogicalType().Timestamp
+		if lt == nil {
+			break
+		}
+		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+			data := page.Data()
+			isNulls, err := mp.pageIsNulls(proc.Ctx, page)
+			if err != nil {
+				return err
+			}
+			ls := make([]types.Datetime, page.NumValues())
+			switch {
+			case lt.Unit.Nanos != nil:
+				for i, n := range data.Int64() {
+					ls[i] = types.Datetime(types.UnixNanoToTimestamp(n))
+				}
+			case lt.Unit.Micros != nil:
+				for i, n := range data.Int64() {
+					ls[i] = types.Datetime(types.UnixMicroToTimestamp(n))
+				}
+			case lt.Unit.Millis != nil:
+				for i, n := range data.Int64() {
+					ls[i] = types.Datetime(types.UnixMicroToTimestamp(n * 1000))
+				}
+			}
+			if len(isNulls) == 0 {
+				return vector.AppendFixedList(vec, ls, nil, proc.Mp())
+			}
+			return appendFixed(vec, ls, isNulls, proc.Mp())
+		}
+	case types.T_time:
+		// https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#time
+		lt := st.LogicalType().Time
+		if lt == nil || !lt.IsAdjustedToUTC {
+			break
+		}
+		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+			data := page.Data()
+			isNulls, err := mp.pageIsNulls(proc.Ctx, page)
+			if err != nil {
+				return err
+			}
+			var ls []types.Time
+			switch {
+			case lt.Unit.Nanos != nil:
+				ls = make([]types.Time, page.NumValues())
+				for i, n := range data.Int64() {
+					ls[i] = types.Time(n / 1000)
+				}
+			case lt.Unit.Micros != nil:
+				bs, _ := data.Data()
+				ls = types.DecodeSlice[types.Time](bs)
+			case lt.Unit.Millis != nil:
+				ls = make([]types.Time, page.NumValues())
+				for i, n := range data.Int32() {
+					ls[i] = types.Time(n) * 1000
+				}
+			}
+			if len(isNulls) == 0 {
+				return vector.AppendFixedList(vec, ls, nil, proc.Mp())
+			}
+			return appendFixed(vec, ls, isNulls, proc.Mp())
+		}
 	case types.T_char, types.T_varchar:
 		if st.Kind() == parquet.ByteArray {
 			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {

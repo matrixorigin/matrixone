@@ -36,6 +36,7 @@ func Test_getMapper(t *testing.T) {
 			numValues int
 			values    encoding.Values
 			vType     types.T
+			expected  string
 		}{
 			{
 				typ:       parquet.BooleanType,
@@ -82,6 +83,55 @@ func Test_getMapper(t *testing.T) {
 				values:    encoding.FixedLenByteArrayValues([]byte("abcdef"), 3),
 				vType:     types.T_char,
 			},
+			{
+				typ:       parquet.Date().Type(),
+				numValues: 2,
+				values:    encoding.Int32Values([]int32{357, 1245}),
+				vType:     types.T_date,
+				expected:  "[0001-12-24 0004-05-30]",
+			},
+			{
+				typ:       parquet.Time(parquet.Nanosecond).Type(),
+				numValues: 2,
+				values:    encoding.Int64Values([]int64{18783_111111_111, 25783_222222_222}),
+				vType:     types.T_time,
+				expected:  "[05:13:03 07:09:43]",
+			},
+			{
+				typ:       parquet.Time(parquet.Microsecond).Type(),
+				numValues: 2,
+				values:    encoding.Int64Values([]int64{18783_111111, 25783_222222}),
+				vType:     types.T_time,
+				expected:  "[05:13:03 07:09:43]",
+			},
+			{
+				typ:       parquet.Time(parquet.Millisecond).Type(),
+				numValues: 2,
+				values:    encoding.Int32Values([]int32{18783_111, 25783_222}),
+				vType:     types.T_time,
+				expected:  "[05:13:03 07:09:43]",
+			},
+			{
+				typ:       parquet.Timestamp(parquet.Nanosecond).Type(),
+				numValues: 2,
+				values:    encoding.Int64Values([]int64{1713419514_111111_111, 1713429514_222222_222}),
+				vType:     types.T_timestamp,
+				expected:  "[2024-04-18 05:51:54.111111 UTC 2024-04-18 08:38:34.222222 UTC]",
+			},
+			{
+				typ:       parquet.Timestamp(parquet.Microsecond).Type(),
+				numValues: 2,
+				values:    encoding.Int64Values([]int64{1713419514_111111, 1713429514_222222}),
+				vType:     types.T_timestamp,
+				expected:  "[2024-04-18 05:51:54.111111 UTC 2024-04-18 08:38:34.222222 UTC]",
+			},
+			{
+				typ:       parquet.Timestamp(parquet.Millisecond).Type(),
+				numValues: 2,
+				values:    encoding.Int64Values([]int64{1713419514_111, 1713429514_222}),
+				vType:     types.T_timestamp,
+				expected:  "[2024-04-18 05:51:54.111000 UTC 2024-04-18 08:38:34.222000 UTC]",
+			},
 		}
 		for _, tc := range tests {
 			page := tc.typ.NewPage(0, tc.numValues, tc.values)
@@ -108,7 +158,11 @@ func Test_getMapper(t *testing.T) {
 				Id: int32(tc.vType),
 			}).mapping(page, proc, vec)
 			convey.So(err, convey.ShouldBeNil)
-			convey.So(vec.String(), convey.ShouldEqual, fmt.Sprint(values))
+			if tc.expected != "" {
+				convey.So(vec.String(), convey.ShouldEqual, tc.expected)
+			} else {
+				convey.So(vec.String(), convey.ShouldEqual, fmt.Sprint(values))
+			}
 		}
 	})
 }
