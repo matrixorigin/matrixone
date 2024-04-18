@@ -316,7 +316,7 @@ func Multiplex(
 func Reshape(column []*vector.Vector, ret []*vector.Vector, fromLayout, toLayout []uint32, m *mpool.MPool) {
 	fromIdx := 0
 	fromOffset := 0
-	sels := make([]int32, 0, toLayout[0])
+	typ := column[0].GetType()
 	for i := 0; i < len(toLayout); i++ {
 		toOffset := 0
 		for toOffset < int(toLayout[i]) {
@@ -333,11 +333,12 @@ func Reshape(column []*vector.Vector, ret []*vector.Vector, fromLayout, toLayout
 			} else {
 				length = int(toLayout[i]) - toOffset
 			}
-			sels = sels[:0]
-			for i := 0; i < length; i++ {
-				sels = append(sels, int32(fromOffset+i))
+			// get data from src and append to dest
+			window, err := column[fromIdx].Window(fromOffset, fromOffset+length)
+			if err != nil {
+				panic(err)
 			}
-			err := ret[i].Union(column[fromIdx], sels, m)
+			err = vector.GetUnionAllFunction(*typ, m)(ret[i], window)
 			if err != nil {
 				panic(err)
 			}
