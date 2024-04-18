@@ -1,4 +1,6 @@
 drop database if exists database01;
+drop database if exists test02;
+drop database if exists test03;
 drop account if exists test_tenant_1;
 create account test_tenant_1 admin_name 'test_account' identified by '111';
 show databases;
@@ -23,7 +25,7 @@ col1    col2
 create publication publication01 database database01 account test_tenant_1 comment 'publish database to account01';
 show publications;
 publication    database    create_time    update_time    sub_account    comments
-publication01    database01    2024-04-18 16:53:35    null    test_tenant_1    publish database to account01
+publication01    database01    2024-04-18 17:52:37    null    test_tenant_1    publish database to account01
 create database sub_database01 from sys publication publication01;
 show databases;
 Database
@@ -47,11 +49,14 @@ delete from table01 where col1 = 1;
 internal error: cannot insert/update/delete from public table
 update table01 set col1 = 100 where col2 = 2413242;
 internal error: cannot insert/update/delete from public table
+show table status;
+Name    Engine    Row_format    Rows    Avg_row_length    Data_length    Max_data_length    Index_length    Data_free    Auto_increment    Create_time    Update_time    Check_time    Collation    Checksum    Create_options    Comment    Role_id    Role_name
+table01    Tae    Dynamic    2    0    104    0    0    NULL    0    2024-04-18 17:52:37    NULL    NULL    utf-8    NULL            0    moadmin
 drop table table01;
 internal error: can not drop subscription table table01
 show subscriptions;
 pub_name    pub_account    pub_database    pub_time    sub_name    sub_time
-publication01    sys    database01    2024-04-18 16:53:35    sub_database01    2024-04-18 16:53:35
+publication01    sys    database01    2024-04-18 17:52:37    sub_database01    2024-04-18 17:52:37
 drop publication publication01;
 drop database database01;
 drop database if exists database01;
@@ -62,17 +67,16 @@ insert into t1 values (1, 1), (2, 2), (3, 3);
 create publication publication01 database database01;
 show publications;
 publication    database    create_time    update_time    sub_account    comments
-publication01    database01    2024-04-18 16:53:35    null    *    
+publication01    database01    2024-04-18 17:52:37    null    *    
 drop account if exists test_tenant_1;
 drop account if exists test_tenant_2;
-drop account if exists test_tenant_3;
 create account test_tenant_1 admin_name 'test_account' identified by '111';
 create account test_tenant_2 admin_name 'test_account' identified by '111';
 drop database if exists sub_database01;
 create database sub_database01 from sys publication publication01;
 show subscriptions;
 pub_name    pub_account    pub_database    pub_time    sub_name    sub_time
-publication01    sys    database01    2024-04-18 16:53:35    sub_database01    2024-04-18 16:53:37
+publication01    sys    database01    2024-04-18 17:52:37    sub_database01    2024-04-18 17:52:38
 use sub_database01;
 show tables;
 Tables_in_sub_database01
@@ -100,7 +104,7 @@ create database sub_database01 from sys publication publication01;
 database sub_database01 already exists
 show subscriptions;
 pub_name    pub_account    pub_database    pub_time    sub_name    sub_time
-publication01    sys    database01    2024-04-18 16:53:35    sub_database01    2024-04-18 16:53:37
+publication01    sys    database01    2024-04-18 17:52:37    sub_database01    2024-04-18 17:52:38
 use sub_database01;
 show tables;
 Tables_in_sub_database01
@@ -116,6 +120,7 @@ col1
 1
 2
 3
+drop publication publication01;
 drop database if exists database02;
 create database database02;
 use database02;
@@ -125,14 +130,12 @@ insert into table03 values ('a', 'data warehouse');
 create publication publication02 database database02;
 show publications;
 publication    database    create_time    update_time    sub_account    comments
-publication02    database02    2024-04-18 16:53:37    null    *    
-publication01    database01    2024-04-18 16:53:35    null    *    
+publication02    database02    2024-04-18 17:52:39    null    *    
 drop database if exists sub_database02;
 create database sub_database02 from sys publication publication02;
 show subscriptions all;
 pub_name    pub_account    pub_database    pub_time    sub_name    sub_time
-publication02    sys    database02    2024-04-18 16:53:37    sub_database02    2024-04-18 16:53:37
-publication01    sys    database01    2024-04-18 16:53:35    sub_database01    2024-04-18 16:53:37
+publication02    sys    database02    2024-04-18 17:52:39    sub_database02    2024-04-18 17:52:39
 use sub_database02;
 show tables;
 Tables_in_sub_database02
@@ -146,8 +149,7 @@ create database sub_database02 from sys publication publication02;
 database sub_database02 already exists
 show subscriptions all;
 pub_name    pub_account    pub_database    pub_time    sub_name    sub_time
-publication02    sys    database02    2024-04-18 16:53:37    sub_database02    2024-04-18 16:53:37
-publication01    sys    database01    2024-04-18 16:53:35    sub_database01    2024-04-18 16:53:37
+publication02    sys    database02    2024-04-18 17:52:39    sub_database02    2024-04-18 17:52:39
 use sub_database02;
 show tables;
 Tables_in_sub_database02
@@ -156,6 +158,10 @@ select * from table03;
 col1    col2
 1    database
 a    data warehouse
+show table status;
+Name    Engine    Row_format    Rows    Avg_row_length    Data_length    Max_data_length    Index_length    Data_free    Auto_increment    Create_time    Update_time    Check_time    Collation    Checksum    Create_options    Comment    Role_id    Role_name
+table03    Tae    Dynamic    2    0    160    0    0    NULL    0    2024-04-18 17:52:39    NULL    NULL    utf-8    NULL            0    moadmin
+drop publication publication02;
 drop database if exists database03;
 create database database03;
 use database03;
@@ -165,16 +171,12 @@ insert into table01 values (-1),(1),(2);
 create publication publication03 database database03 account test_tenant_1;
 show publications;
 publication    database    create_time    update_time    sub_account    comments
-publication03    database03    2024-04-18 16:53:38    null    test_tenant_1    
-publication02    database02    2024-04-18 16:53:37    null    *    
-publication01    database01    2024-04-18 16:53:35    null    *    
+publication03    database03    2024-04-18 17:52:39    null    test_tenant_1    
 drop database if exists sub_database03;
 create database sub_database03 from sys publication publication03;
 show subscriptions all;
 pub_name    pub_account    pub_database    pub_time    sub_name    sub_time
-publication03    sys    database03    2024-04-18 16:53:38    sub_database03    2024-04-18 16:53:38
-publication02    sys    database02    2024-04-18 16:53:37    sub_database02    2024-04-18 16:53:37
-publication01    sys    database01    2024-04-18 16:53:35    sub_database01    2024-04-18 16:53:37
+publication03    sys    database03    2024-04-18 17:52:39    sub_database03    2024-04-18 17:52:39
 use sub_database03;
 show tables;
 Tables_in_sub_database03
@@ -184,22 +186,19 @@ col1
 -1
 1
 2
+show table status;
+Name    Engine    Row_format    Rows    Avg_row_length    Data_length    Max_data_length    Index_length    Data_free    Auto_increment    Create_time    Update_time    Check_time    Collation    Checksum    Create_options    Comment    Role_id    Role_name
+table01    Tae    Dynamic    3    0    108    0    0    NULL    0    2024-04-18 17:52:39    NULL    NULL    utf-8    NULL            0    moadmin
 show subscriptions all;
 pub_name    pub_account    pub_database    pub_time    sub_name    sub_time
-publication03    sys    database03    2024-04-18 16:53:38    sub_database03    2024-04-18 16:53:38
-publication02    sys    database02    2024-04-18 16:53:37    sub_database02    2024-04-18 16:53:37
-publication01    sys    database01    2024-04-18 16:53:35    sub_database01    2024-04-18 16:53:37
+publication03    sys    database03    2024-04-18 17:52:39    sub_database03    2024-04-18 17:52:39
 alter publication publication03 account all;
 show publications;
 publication    database    create_time    update_time    sub_account    comments
-publication03    database03    2024-04-18 16:53:38    2024-04-18 16:53:38    *    
-publication02    database02    2024-04-18 16:53:37    null    *    
-publication01    database01    2024-04-18 16:53:35    null    *    
+publication03    database03    2024-04-18 17:52:39    2024-04-18 17:52:39    *    
 show subscriptions all;
 pub_name    pub_account    pub_database    pub_time    sub_name    sub_time
-publication03    sys    database03    2024-04-18 16:53:38    sub_database03    2024-04-18 16:53:38
-publication02    sys    database02    2024-04-18 16:53:37    sub_database02    2024-04-18 16:53:37
-publication01    sys    database01    2024-04-18 16:53:35    sub_database01    2024-04-18 16:53:37
+publication03    sys    database03    2024-04-18 17:52:39    sub_database03    2024-04-18 17:52:39
 create database sub_database03 from sys publication publication03;
 database sub_database03 already exists
 use sub_database03;
@@ -211,11 +210,9 @@ col1
 -1
 1
 2
-drop publication publication01;
+drop publication publication03;
 show publications;
 publication    database    create_time    update_time    sub_account    comments
-publication03    database03    2024-04-18 16:53:38    2024-04-18 16:53:38    *    
-publication02    database02    2024-04-18 16:53:37    null    *    
 use sub_database01;
 internal error: there is no publication publication01
 drop database if exists republication01;
@@ -228,9 +225,7 @@ drop database if exists resub01;
 create database resub01 from sys publication publication01;
 show subscriptions all;
 pub_name    pub_account    pub_database    pub_time    sub_name    sub_time
-publication03    sys    database03    2024-04-18 16:53:38    sub_database03    2024-04-18 16:53:38
-publication01    sys    republication01    2024-04-18 16:53:38    resub01    2024-04-18 16:53:38
-publication02    sys    database02    2024-04-18 16:53:37    sub_database02    2024-04-18 16:53:37
+publication01    sys    republication01    2024-04-18 17:52:39    resub01    2024-04-18 17:52:40
 use sub_database01;
 alter publication publication01 database database03;
 use resub01;
@@ -242,17 +237,16 @@ col1
 -1
 1
 2
+show table status;
+Name    Engine    Row_format    Rows    Avg_row_length    Data_length    Max_data_length    Index_length    Data_free    Auto_increment    Create_time    Update_time    Check_time    Collation    Checksum    Create_options    Comment    Role_id    Role_name
+table01    Tae    Dynamic    3    0    108    0    0    NULL    0    2024-04-18 17:52:39    NULL    NULL    utf-8    NULL            0    moadmin
 alter publication publication01 database republication01;
 show publications;
 publication    database    create_time    update_time    sub_account    comments
-publication01    republication01    2024-04-18 16:53:38    2024-04-18 16:53:38    test_tenant_1    republish
-publication03    database03    2024-04-18 16:53:38    2024-04-18 16:53:38    *    
-publication02    database02    2024-04-18 16:53:37    null    *    
+publication01    republication01    2024-04-18 17:52:39    2024-04-18 17:52:40    test_tenant_1    republish
 show subscriptions all;
 pub_name    pub_account    pub_database    pub_time    sub_name    sub_time
-publication03    sys    database03    2024-04-18 16:53:38    sub_database03    2024-04-18 16:53:38
-publication01    sys    republication01    2024-04-18 16:53:38    resub01    2024-04-18 16:53:38
-publication02    sys    database02    2024-04-18 16:53:37    sub_database02    2024-04-18 16:53:37
+publication01    sys    republication01    2024-04-18 17:52:39    resub01    2024-04-18 17:52:40
 use resub01;
 show tables;
 Tables_in_resub01
@@ -261,8 +255,6 @@ select * from repub01;
 col1
 1
 drop publication publication01;
-drop publication publication02;
-drop publication publication03;
 drop database database01;
 drop database database02;
 drop database database03;

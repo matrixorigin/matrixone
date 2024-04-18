@@ -1,5 +1,6 @@
 drop database if exists database01;
-
+drop database if exists test02;
+drop database if exists test03;
 -- create tenant
 drop account if exists test_tenant_1;
 create account test_tenant_1 admin_name 'test_account' identified by '111';
@@ -28,6 +29,8 @@ select * from table01;
 truncate table table01;
 delete from table01 where col1 = 1;
 update table01 set col1 = 100 where col2 = 2413242;
+-- @ignore:10,11,12
+show table status;
 drop table table01;
 -- @ignore:3,5
 show subscriptions;
@@ -48,7 +51,6 @@ show publications;
 
 drop account if exists test_tenant_1;
 drop account if exists test_tenant_2;
-drop account if exists test_tenant_3;
 create account test_tenant_1 admin_name 'test_account' identified by '111';
 create account test_tenant_2 admin_name 'test_account' identified by '111';
 
@@ -82,6 +84,7 @@ show tables;
 select * from t1;
 select * from t2;
 -- @session
+drop publication publication01;
 
 drop database if exists database02;
 create database database02;
@@ -111,7 +114,10 @@ show subscriptions all;
 use sub_database02;
 show tables;
 select * from table03;
+-- @ignore:10,11,12
+show table status;
 -- @session
+drop publication publication02;
 
 drop database if exists database03;
 create database database03;
@@ -131,6 +137,8 @@ show subscriptions all;
 use sub_database03;
 show tables;
 select * from table01;
+-- @ignore:10,11,12
+show table status;
 -- @session
 
 -- @session:id=4&user=test_tenant_2:test_account&password=111
@@ -152,7 +160,7 @@ show tables;
 select * from table01;
 -- @session
 
-drop publication publication01;
+drop publication publication03;
 -- @ignore:2,3
 show publications;
 
@@ -181,6 +189,8 @@ alter publication publication01 database database03;
 use resub01;
 show tables;
 select * from table01;
+-- @ignore:10,11,12
+show table status;
 -- @session
 
 alter publication publication01 database republication01;
@@ -196,8 +206,6 @@ select * from repub01;
 -- @session
 
 drop publication publication01;
-drop publication publication02;
-drop publication publication03;
 
 drop database database01;
 drop database database02;
