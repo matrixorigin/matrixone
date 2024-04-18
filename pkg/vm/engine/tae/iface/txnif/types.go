@@ -16,22 +16,20 @@ package txnif
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/pb/logtail"
 	"io"
 	"sync"
 
-	"github.com/matrixorigin/matrixone/pkg/objectio"
-
+	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
-
-	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/pb/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 )
 
 var (

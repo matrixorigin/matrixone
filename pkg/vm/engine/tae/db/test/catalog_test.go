@@ -16,7 +16,6 @@ package test
 
 import (
 	"context"
-	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -44,7 +43,6 @@ func TestCatalog1(t *testing.T) {
 	schema := catalog.MockSchema(1, 0)
 
 	txn, _, rel := testutil.CreateRelationNoCommit(t, db, testutil.DefaultTestDB, schema, true)
-	fmt.Printf("%T\n", txn.GetStore())
 	// relMeta := rel.GetMeta().(*catalog.TableEntry)
 	obj, err := rel.CreateNonAppendableObject(false, nil)
 	assert.Nil(t, err)

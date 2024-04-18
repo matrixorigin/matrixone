@@ -17,8 +17,6 @@ package txnbase
 import (
 	"context"
 	"fmt"
-	entry2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -27,14 +25,15 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
-	"github.com/panjf2000/ants/v2"
-
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	entry2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/sm"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
+	"github.com/panjf2000/ants/v2"
 )
 
 type TxnCommitListener interface {
@@ -252,7 +251,7 @@ func (mgr *TxnManager) EnqueueFlushing(op any) (err error) {
 
 func (mgr *TxnManager) heartbeat(ctx context.Context) {
 	defer mgr.wg.Done()
-	heartbeatTicker := time.NewTicker(time.Millisecond * 200000)
+	heartbeatTicker := time.NewTicker(time.Millisecond * 2)
 	for {
 		select {
 		case <-mgr.ctx.Done():
@@ -602,61 +601,6 @@ func (mgr *TxnManager) onFlushWal(op *OpTxn) {
 		}
 	}
 }
-
-//func (mgr *TxnManager) onPrepareWAL(items ...any) {
-//	now := time.Now()
-//
-//	for _, item := range items {
-//		op := item.(*OpTxn)
-//		store := op.Txn.GetStore()
-//		store.TriggerTrace(txnif.TracePrepareWal)
-//		var t1, t2, t3, t4, t5 time.Time
-//		t1 = time.Now()
-//		if op.Txn.GetError() == nil && op.Op == OpCommit || op.Op == OpPrepare {
-//			if err := op.Txn.PrepareWAL(); err != nil {
-//				panic(err)
-//			}
-//
-//			t2 = time.Now()
-//
-//			if !op.Txn.IsReplay() {
-//				if !mgr.prevPrepareTSInPrepareWAL.IsEmpty() {
-//					prepareTS := op.Txn.GetPrepareTS()
-//					if prepareTS.Less(&mgr.prevPrepareTSInPrepareWAL) {
-//						panic(fmt.Sprintf("timestamp rollback current %v, previous %v", op.Txn.GetPrepareTS().ToString(), mgr.prevPrepareTSInPrepareWAL.ToString()))
-//					}
-//				}
-//				mgr.prevPrepareTSInPrepareWAL = op.Txn.GetPrepareTS()
-//			}
-//
-//			mgr.CommitListener.OnEndPrepareWAL(op.Txn)
-//			t3 = time.Now()
-//		}
-//
-//		t4 = time.Now()
-//		store.TriggerTrace(txnif.TracePreapredWait)
-//		if _, err := mgr.FlushQueue.Enqueue(op); err != nil {
-//			panic(err)
-//		}
-//		t5 = time.Now()
-//
-//		if t5.Sub(t1) > time.Second {
-//			logutil.Warn(
-//				"SLOW-LOG",
-//				zap.String("txn", op.Txn.String()),
-//				zap.Duration("prepare-wal-duration", t2.Sub(t1)),
-//				zap.Duration("end-prepare-duration", t3.Sub(t2)),
-//				zap.Duration("enqueue-flush-duration", t5.Sub(t4)),
-//			)
-//		}
-//	}
-//	common.DoIfDebugEnabled(func() {
-//		logutil.Debug("[prepareWAL]",
-//			common.NameSpaceField("txns"),
-//			common.DurationField(time.Since(now)),
-//			common.CountField(len(items)))
-//	})
-//}
 
 // 1PC and 2PC
 func (mgr *TxnManager) dequeuePrepared(items ...any) {
