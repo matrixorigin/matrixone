@@ -25,7 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -49,7 +48,9 @@ func ifNeedLockWholeTable(builder *QueryBuilder, lastNodeId int32) bool {
 	if lastNode == nil {
 		return false
 	}
-	if lastNode.Stats.Outcnt > lockservice.MaxLockCount {
+	lockconfig := builder.compCtx.GetProcess().LockService.GetConfig()
+
+	if lastNode.Stats.Outcnt > float64(lockconfig.MaxLockRowCount) {
 		return true
 	}
 	return false
