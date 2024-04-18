@@ -506,7 +506,7 @@ import (
 %type <statement> mo_dump_stmt
 %type <statement> load_extension_stmt
 %type <statement> kill_stmt
-%type <statement> backup_stmt
+%type <statement> backup_stmt snapshot_restore_stmt
 %type <rowsExprs> row_constructor_list
 %type <exprs>  row_constructor
 %type <exportParm> export_data_param_opt
@@ -779,7 +779,7 @@ import (
 
 %token <str> KILL
 %type <killOption> kill_opt
-%token <str> BACKUP FILESYSTEM PARALLELISM
+%token <str> BACKUP FILESYSTEM PARALLELISM RESTORE NEWACCOUNT
 %type <statementOption> statement_id_opt
 %token <str> QUERY_RESULT
 %type<tableLock> table_lock_elem
@@ -911,7 +911,8 @@ normal_stmt:
         $$ = $1
     }
 |   kill_stmt
-|   backup_stmt   
+|   backup_stmt
+|   snapshot_restore_stmt
 
 
 backup_stmt:
@@ -963,6 +964,80 @@ snapshot_object_opt:
         $$ = tree.ObejectInfo{
             SLevel: spLevel,
             ObjName: tree.Identifier($2.Compare()),
+        }
+    }
+
+
+snapshot_restore_stmt:
+    RESTORE CLUSTER FROM SNAPSHOT ident
+    {
+        $$ = &tree.RestoreSnapShot{
+            Level: tree.RESTORELEVELCLUSTER,
+            SnapShotName: tree.Identifier($5.ToLower()),
+        }
+
+    }
+|   RESTORE ACCOUNT ident FROM SNAPSHOT ident
+    {
+        $$ = &tree.RestoreSnapShot{
+            Level: tree.RESTORELEVELACCOUNT,
+            AccountName:tree.Identifier($3.ToLower()),
+            SnapShotName:tree.Identifier($6.ToLower()),
+        }
+    }
+|   RESTORE ACCOUNT ident DATABASE ident FROM SNAPSHOT ident
+    {
+        $$ = &tree.RestoreSnapShot{
+            Level: tree.RESTORELEVELDATABASE,
+            AccountName: tree.Identifier($3.ToLower()),
+            DatabaseName: tree.Identifier($5.ToLower()),
+            SnapShotName: tree.Identifier($8.ToLower()),
+        }
+    }
+|   RESTORE ACCOUNT ident DATABASE ident TABLE table_name FROM SNAPSHOT ident
+    {
+        $$ = &tree.RestoreSnapShot{
+            Level: tree.RESTORELEVELTABLE,
+            AccountName: tree.Identifier($3.ToLower()),
+            DatabaseName: tree.Identifier($5.ToLower()),
+            TableName: *$7,
+            SnapShotName: tree.Identifier($10.ToLower()),
+        }
+    }
+|   RESTORE ACCOUNT ident FROM SNAPSHOT ident TO NEWACCOUNT ident account_auth_option
+    {
+        $$ = &tree.RestoreSnapShot{ 
+            Level: tree.RESTORELEVELACCOUNT,
+            AccountName: tree.Identifier($3.ToLower()),
+            SnapShotName: tree.Identifier($6.ToLower()),
+            IsToNewAccount: true,
+            NewAccountName: tree.Identifier($9.ToLower()),
+            AuthOption: $10,
+        }
+    }
+|   RESTORE ACCOUNT ident DATABASE ident FROM SNAPSHOT ident TO NEWACCOUNT ident account_auth_option
+    {
+        $$ = &tree.RestoreSnapShot{
+            Level: tree.RESTORELEVELDATABASE,
+            AccountName: tree.Identifier($3.ToLower()),
+            DatabaseName: tree.Identifier($5.ToLower()),
+            SnapShotName: tree.Identifier($8.ToLower()),
+            IsToNewAccount: true,
+            NewAccountName: tree.Identifier($11.ToLower()),
+            AuthOption: $12,
+        }
+    }
+|   RESTORE ACCOUNT ident DATABASE ident TABLE table_name FROM SNAPSHOT ident  TO NEWACCOUNT ident account_auth_option
+    {
+        $$ = &tree.RestoreSnapShot{
+            Level: tree.RESTORELEVELTABLE,
+            AccountName: tree.Identifier($3.ToLower()),
+            DatabaseName: tree.Identifier($5.ToLower()),
+            TableName: *$7,
+            SnapShotName: tree.Identifier($10.ToLower()),
+            IsToNewAccount: true,
+            NewAccountName: tree.Identifier($13.ToLower()),
+            AuthOption: $14,
         }
     }
 
@@ -11786,6 +11861,8 @@ non_reserved_keyword:
 |   SNAPSHOTS
 |   STAGES
 |   BACKUP
+|   RESTORE
+|   NEWACCOUNT
 |   FILESYSTEM
 |   PARALLELISM
 |	VALUE

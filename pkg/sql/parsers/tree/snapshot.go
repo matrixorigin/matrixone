@@ -140,3 +140,72 @@ func (node *ShowSnapShots) Format(ctx *FmtCtx) {
 func (node *ShowSnapShots) GetStatementType() string { return "Show Snapshot" }
 
 func (node *ShowSnapShots) GetQueryType() string { return QueryTypeDQL }
+
+type RestoreLevel int
+
+const (
+	RESTORELEVELCLUSTER RestoreLevel = iota
+	RESTORELEVELACCOUNT
+	RESTORELEVELDATABASE
+	RESTORELEVELTABLE
+)
+
+func (s RestoreLevel) String() string {
+	switch s {
+	case RESTORELEVELCLUSTER:
+		return "cluster"
+	case RESTORELEVELACCOUNT:
+		return "account"
+	case RESTORELEVELDATABASE:
+		return "database"
+	case RESTORELEVELTABLE:
+		return "table"
+	}
+	return "unknown"
+}
+
+type RestoreSnapShot struct {
+	statementImpl
+
+	Level        RestoreLevel
+	AccountName  Identifier // account name
+	DatabaseName Identifier // database name
+	TableName    TableName  // table name
+	SnapShotName Identifier // snapshot name
+
+	IsToNewAccount bool
+	NewAccountName Identifier // new account name
+	AuthOption     AccountAuthOption
+}
+
+func (node *RestoreSnapShot) Format(ctx *FmtCtx) {
+	ctx.WriteString("restore ")
+	switch node.Level {
+	case RESTORELEVELCLUSTER:
+		ctx.WriteString("cluster")
+	case RESTORELEVELACCOUNT:
+		ctx.WriteString("account ")
+		node.AccountName.Format(ctx)
+	case RESTORELEVELDATABASE:
+		ctx.WriteString("account ")
+		node.AccountName.Format(ctx)
+		ctx.WriteString("database ")
+		node.DatabaseName.Format(ctx)
+	case RESTORELEVELTABLE:
+		ctx.WriteString("account ")
+		node.AccountName.Format(ctx)
+		ctx.WriteString("database ")
+		node.DatabaseName.Format(ctx)
+		ctx.WriteString("table ")
+		node.TableName.Format(ctx)
+	}
+
+	if node.IsToNewAccount {
+		ctx.WriteString(" to account ")
+		node.NewAccountName.Format(ctx)
+	}
+}
+
+func (node *RestoreSnapShot) GetStatementType() string { return "Restore Snapshot" }
+
+func (node *RestoreSnapShot) GetQueryType() string { return QueryTypeOth }
